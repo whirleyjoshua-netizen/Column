@@ -1,0 +1,56 @@
+{
+  "name": "column-desktop",
+  "productName": "Column",
+  "version": "0.1.0",
+  "description": "Drop anything. It shows up on every device.",
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder",
+    "dist:mac": "electron-builder --mac",
+    "dist:win": "electron-builder --win",
+    "dist:linux": "electron-builder --linux"
+  },
+  "devDependencies": {
+    "electron": "^44.7.2",
+    "electron-builder": "^26.15.3"
+  },
+  "build": {
+    "appId": "app.column.desktop",
+    "files": [
+      "main.js",
+      "preload.js",
+      "icon.js",
+      "setup.html"
+    ],
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
+      ],
+      "category": "public.app-category.productivity"
+    },
+    "win": {
+      "target": "nsis"
+    },
+    "linux": {
+      "target": "AppImage",
+      "category": "Utility"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "whirleyjoshua-netizen",
+      "repo": "Column",
+      "releaseType": "release"
+    }
+  },
+  "allowScripts": {
+    "electron@44.7.2": true
+  }
+}

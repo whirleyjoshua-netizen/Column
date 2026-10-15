@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Column</title>
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" href="/favicon.png">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+  <meta name="theme-color" content="#111115">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div id="login" class="login hidden">
+    <form id="loginForm" autocomplete="on" novalidate>
+      <img class="logo" src="/icon-128.png" alt="">
+      <h1>Column</h1>
+      <p class="sub">Drop anything. It shows up on every device.</p>
+      <div class="seg" id="modeSeg">
+        <button type="button" data-mode="join" class="on">Sign in</button>
+        <button type="button" data-mode="create">Create new</button>
+      </div>
+      <label>Account or team name<input name="workspace" required autocomplete="organization" placeholder="e.g. josh or premier-studio"></label>
+      <label>Passphrase<input name="passphrase" type="password" required minlength="4" autocomplete="current-password"></label>
+      <div class="row2">
+        <label>Your name<input name="name" placeholder="Josh" autocomplete="given-name"></label>
+        <label>This device<input name="device" placeholder="MacBook"></label>
+      </div>
+      <button class="primary" type="submit" id="loginBtn">Sign in</button>
+      <p class="err" id="loginErr"></p>
+    </form>
+  </div>
+
+  <div id="app" class="app hidden">
+    <header class="bar">
+      <div class="ws" title="Account / team">
+        <span class="live" id="liveDot"></span>
+        <span id="wsName"></span>
+      </div>
+      <div class="devices" id="devices"></div>
+      <button class="icon-btn" id="settingsBtn" title="Settings" aria-label="Settings">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+      </button>
+    </header>
+    <main class="panes" id="panes"></main>
+    <aside id="settings" class="settings hidden"></aside>
+  </div>
+
+  <div id="preview" class="preview hidden"></div>
+  <div id="menu" class="menu hidden"></div>
+  <div id="toasts" class="toasts"></div>
+  <input type="file" id="filePick" multiple hidden>
+  <script src="/app.js"></script>
+</body>
+</html>

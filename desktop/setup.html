@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
+  <title>Column</title>
+  <style>
+    :root { --bg:#111115; --panel:#18181d; --line:#2a2a32; --text:#ececf1; --muted:#8b8b98; --accent:#8b7cff; --danger:#ff6b6b; color-scheme: dark; }
+    @media (prefers-color-scheme: light) { :root { --bg:#f6f6f8; --panel:#fff; --line:#e4e4ea; --text:#17171c; --muted:#6b6b78; --accent:#6b5cf0; color-scheme: light; } }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; }
+    body { background: var(--bg); color: var(--text); font: 13px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; display: grid; place-items: center; padding: 16px; -webkit-app-region: drag; }
+    form { width: 100%; max-width: 300px; display: flex; flex-direction: column; gap: 10px; -webkit-app-region: no-drag; }
+    h1 { margin: 0; font-size: 18px; text-align: center; }
+    p { margin: 0 0 6px; color: var(--muted); text-align: center; }
+    input { background: var(--panel); border: 1px solid var(--line); border-radius: 9px; padding: 9px 10px; color: inherit; font: inherit; outline: none; }
+    input:focus { border-color: var(--accent); }
+    button { background: var(--accent); color: #fff; border: 0; border-radius: 9px; padding: 10px; font: inherit; font-weight: 600; cursor: pointer; }
+    button:disabled { opacity: .6; }
+    .err { color: var(--danger); font-size: 12px; text-align: center; min-height: 1em; }
+    small { color: var(--muted); font-size: 11px; text-align: center; }
+  </style>
+</head>
+<body>
+  <form id="f">
+    <h1>Connect Column</h1>
+    <p>Where is your Column server?</p>
+    <input id="url" placeholder="http://localhost:4747" autofocus>
+    <button id="go">Connect</button>
+    <div class="err" id="err"></div>
+    <small>Running the server on this computer? Use http://localhost:4747.<br>On another machine, use the "Other devices" address it prints.</small>
+  </form>
+  <script>
+    const q = new URLSearchParams(location.search);
+    const url = document.getElementById('url');
+    url.value = q.get('server') || 'http://localhost:4747';
+    document.getElementById('err').textContent = q.get('error') || '';
+    document.getElementById('f').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const go = document.getElementById('go');
+      go.disabled = true;
+      document.getElementById('err').textContent = '';
+      try {
+        await window.columnDesktop.connect(url.value);
+      } catch (err) {
+        document.getElementById('err').textContent = String(err.message || err).replace(/^Error invoking remote method 'connect': (Error: )?/, '');
+        go.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>
