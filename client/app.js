@@ -52,7 +52,7 @@
     notify: store.get('notify', false),
     desktopCfg: {},
     internalDrag: false,
-    loginMode: 'join',
+    loginMode: 'signin',
     entries: [],
     tasks: [],
     tab: 'day',
@@ -193,31 +193,47 @@
     f.name.value = store.get('name', '');
     f.device.value = store.get('device', guessDevice());
     f.workspace.value = store.get('lastWorkspace', '');
-    (f.workspace.value ? f.passphrase : f.workspace).focus();
+    setLoginMode(S.loginMode);
+    (!f.workspace.value ? f.workspace : !f.name.value ? f.name : f.password).focus();
   }
 
+  const LOGIN_MODES = {
+    signin: { btn: 'Sign in', hint: '' },
+    join: { btn: 'Join team', hint: 'New to a team? Ask someone on it for the invite code, then choose your own password.' },
+    create: { btn: 'Create team', hint: 'Start a new team. You’ll get an invite code to share in Settings.' },
+  };
+  function setLoginMode(mode) {
+    S.loginMode = mode;
+    for (const x of $('#modeSeg').children) x.classList.toggle('on', x.dataset.mode === mode);
+    $('#loginBtn').textContent = LOGIN_MODES[mode].btn;
+    $('#modeHint').textContent = LOGIN_MODES[mode].hint;
+    $('#modeHint').classList.toggle('hidden', !LOGIN_MODES[mode].hint);
+    $('#codeField').classList.toggle('hidden', mode !== 'join');
+    $('#loginForm').password.autocomplete = mode === 'signin' ? 'current-password' : 'new-password';
+    $('#loginErr').textContent = '';
+  }
   $('#modeSeg').addEventListener('click', (e) => {
     const b = e.target.closest('button');
-    if (!b) return;
-    S.loginMode = b.dataset.mode;
-    for (const x of $('#modeSeg').children) x.classList.toggle('on', x === b);
-    $('#loginBtn').textContent = S.loginMode === 'create' ? 'Create & sign in' : 'Sign in';
-    $('#loginErr').textContent = '';
+    if (b) setLoginMode(b.dataset.mode);
   });
 
   $('#loginForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     const f = e.target;
     $('#loginErr').textContent = '';
-    if (!f.workspace.value.trim()) return void ($('#loginErr').textContent = 'Enter an account or team name.');
-    if (f.passphrase.value.length < 4) return void ($('#loginErr').textContent = 'Passphrase must be at least 4 characters.');
+    const err = (msg) => void ($('#loginErr').textContent = msg);
+    if (!f.workspace.value.trim()) return err('Enter a team name.');
+    if (!f.name.value.trim()) return err('Enter your name.');
+    if (f.password.value.length < 6) return err('Password must be at least 6 characters.');
+    if (S.loginMode === 'join' && !f.code.value.trim()) return err('Enter the invite code.');
     $('#loginBtn').disabled = true;
     try {
       const body = {
         mode: S.loginMode,
         workspace: f.workspace.value,
-        passphrase: f.passphrase.value,
-        name: f.name.value || 'Me',
+        password: f.password.value,
+        code: f.code.value,
+        name: f.name.value.trim(),
         device: f.device.value || guessDevice(),
         deviceId: S.deviceId,
       };
@@ -227,7 +243,8 @@
       store.set('name', body.name);
       store.set('device', body.device);
       store.set('lastWorkspace', body.workspace);
-      f.passphrase.value = '';
+      f.password.value = '';
+      f.code.value = '';
       await start();
     } catch (err) {
       $('#loginErr').textContent = err.message;
@@ -264,8 +281,12 @@
       hadConnection = true;
     };
     s.onmessage = (e) => handle(JSON.parse(e.data));
-    s.onclose = () => {
+    s.onclose = (e) => {
       if (sock !== s) return;
+      if (e.code === 4001) {
+        toast('You were signed out of this team');
+        return signOutLocal();
+      }
       $('#liveDot').classList.remove('on');
       $('#liveDot').title = 'Reconnecting…';
       if (S.token) setTimeout(connect, Math.min(10000, 500 * 2 ** retry++));
@@ -320,6 +341,8 @@
     } else if (msg.type === 'presence') {
       S.online = msg.devices;
       renderDevices();
+      const settings = $('#settings');
+      if (!settings.classList.contains('hidden') && !settings.contains(document.activeElement)) renderSettings();
     }
   }
 
@@ -634,8 +657,11 @@
     return el;
   }
 
+  // Yours from any device. Items from before per-person logins only know their device.
+  const isMine = (it) => (it.memberId ? it.memberId === S.me?.memberId : it.deviceId === S.deviceId);
+
   function messageEl(it) {
-    const mine = it.deviceId === S.deviceId;
+    const mine = isMine(it);
     const links = linksIn(it.text);
     const text = links.length ? stripLinks(it.text) : it.text;
     return h('article', { class: 'msg' + (mine ? ' mine' : '') },
@@ -1784,7 +1810,7 @@
   function unread(view) {
     const ch = viewChannel(view);
     const seen = C.lastRead[view] ?? C.since;
-    return S.items.filter((x) => (x.channelId || null) === ch && x.createdAt > seen && x.deviceId !== S.deviceId && (ch || x.type === 'message')).length;
+    return S.items.filter((x) => (x.channelId || null) === ch && x.createdAt > seen && !isMine(x) && (ch || x.type === 'message')).length;
   }
   function markRead() {
     if (S.tab !== 'chat' || document.hidden) return;
@@ -2024,14 +2050,69 @@
     }
     s.append(dev);
 
+    // People
+    const me = ws.members.find((x) => x.id === S.me.memberId);
+    const owner = me?.role === 'owner';
+    const onlineIds = new Set(S.online.map((d) => d.memberId));
+    const peopleCall = (method, path, body) => api(method, path, body).then((w) => { S.workspace = w; renderSettings(); }).catch((e) => toast(e.message));
+    const people = h('section', {}, h('h3', {}, `People · ${ws.members.length}`));
+    const sorted = [...ws.members].sort((a, b) => (b.id === me?.id) - (a.id === me?.id) || a.name.localeCompare(b.name));
+    for (const mb of sorted) {
+      const you = mb.id === me?.id;
+      const notes = [mb.role === 'owner' ? 'Owner' : 'Member', mb.hasPassword ? null : 'no password yet', onlineIds.has(mb.id) ? 'online' : null].filter(Boolean).join(' · ');
+      const row = h('div', { class: 'srow person' },
+        h('span', {}, h('span', { class: 'live' + (onlineIds.has(mb.id) ? ' on' : '') }), mb.name, you ? ' (you)' : '', h('small', {}, notes)));
+      if (owner && !you) {
+        row.append(h('button', { class: 'icon-btn', 'aria-label': 'Options for ' + mb.name, html: I.more, onclick: (e) => openMenu(e.currentTarget, [
+          mb.role === 'owner'
+            ? { label: 'Make member', run: () => peopleCall('PATCH', '/members/' + mb.id, { role: 'member' }) }
+            : { label: 'Make owner', run: () => peopleCall('PATCH', '/members/' + mb.id, { role: 'owner' }) },
+          { label: 'Reset password', danger: true, run: () => peopleCall('POST', `/members/${mb.id}/reset`).then(() => toast(`${mb.name} is signed out. They can set a new password with Join team.`)) },
+          { label: 'Remove from team', danger: true, run: () => peopleCall('DELETE', '/members/' + mb.id) },
+        ]) }));
+      }
+      people.append(row);
+    }
+    const inviteText = () => `Join “${ws.name}” on Column\n${location.origin}\nChoose Join team · Team: ${ws.name} · Invite code: ${ws.inviteCode}`;
+    const newCode = h('button', { class: 'btn', 'data-label': '1', title: 'The old code stops working' }, ws.inviteCode ? 'New code' : 'Make an invite code');
+    newCode.addEventListener('click', () => (ws.inviteCode ? confirmClick(newCode, () => peopleCall('POST', '/invite')) : peopleCall('POST', '/invite')));
+    people.append(
+      ws.inviteCode
+        ? h('p', { style: 'margin-top:10px' }, 'Invite code: ', h('code', {}, ws.inviteCode))
+        : h('p', { style: 'margin-top:10px' }, 'The old team passphrase works as the invite code.' + (owner ? ' Make a code to replace it.' : '')),
+      h('p', {}, 'New people open ', h('code', {}, location.origin), ', choose ', h('b', {}, 'Join team'), ', and enter the team name and code. Removing someone signs them out; make a new code too if they still know it.'),
+      h('div', { class: 'btns' },
+        ws.inviteCode ? h('button', { class: 'btn', onclick: () => copyText(inviteText()) }, 'Copy invite') : null,
+        owner ? newCode : null)
+    );
+    s.append(people);
+
+    // Your password
+    const cur = h('input', { type: 'password', placeholder: 'Current password', autocomplete: 'current-password' });
+    const next = h('input', { type: 'password', placeholder: me?.hasPassword ? 'New password' : 'Choose a password', autocomplete: 'new-password' });
+    const savePw = async () => {
+      try {
+        S.workspace = await api('POST', '/members/me/password', { current: cur.value, next: next.value });
+        toast('Password saved');
+        renderSettings();
+      } catch (e) {
+        toast(e.message);
+      }
+    };
+    next.addEventListener('keydown', (e) => e.key === 'Enter' && savePw());
+    s.append(h('section', {}, h('h3', {}, 'Your password'),
+      me?.hasPassword ? null : h('p', { class: 'warn' }, 'You don’t have a password yet. Set one so you can sign in on new devices.'),
+      me?.hasPassword ? h('div', { class: 'stack-row' }, cur) : null,
+      h('div', { class: 'stack-row' }, next, h('button', { class: 'btn', onclick: savePw }, 'Save'))));
+
     // Account
-    const devices = S.online.map((d) => `${d.device}${d.deviceId === S.deviceId ? ' (this)' : ''}`).join(', ');
+    const devices = S.online.filter((d) => d.memberId === S.me.memberId).map((d) => `${d.device}${d.deviceId === S.deviceId ? ' (this)' : ''}`).join(', ');
     const clearBtn = h('button', { class: 'btn danger', 'data-label': '1' }, 'Clear unpinned items');
     clearBtn.addEventListener('click', () => confirmClick(clearBtn, () => api('POST', '/clear').then(() => toast('Cleared')).catch((e) => toast(e.message))));
     s.append(h('section', {}, h('h3', {}, 'Account'),
       h('p', {}, 'Signed in to ', h('b', {}, ws.name), ` as ${S.me.member} on ${S.me.device}.`),
-      h('p', {}, 'Online now: ', devices || '—'),
-      h('p', {}, 'To add another computer, phone or teammate: open ', h('code', {}, location.origin), ` and sign in to “${ws.name}” with the same passphrase. On a phone, use “Add to Home Screen” to keep it as an app.`),
+      h('p', {}, 'Your devices online: ', devices || '—'),
+      h('p', {}, 'To add another computer or phone, open ', h('code', {}, location.origin), ' and sign in with your name and password. On a phone, use “Add to Home Screen” to keep it as an app.'),
       h('div', { class: 'btns' },
         h('button', { class: 'btn', onclick: () => copyText(location.origin) }, 'Copy link'),
         clearBtn,

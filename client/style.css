@@ -468,3 +468,9 @@ button.ln-chip:hover, .ln-task:hover { background: var(--card-hover); }
 .pk-label { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pk-sub { color: var(--muted); font-size: 11px; flex: none; }
 .pk-none { color: var(--muted); font-size: 12px; padding: 10px; text-align: center; }
+
+/* people */
+.login .hint { margin: -2px 0 0; color: var(--muted); font-size: 12px; text-align: center; line-height: 1.45; }
+.person .live { display: inline-block; vertical-align: 1px; margin-right: 7px; }
+.person .icon-btn svg { width: 16px; height: 16px; }
+.settings .warn { color: var(--text); background: var(--accent-soft); border-radius: 8px; padding: 7px 10px; }

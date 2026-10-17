@@ -20,15 +20,16 @@
       <h1>Column</h1>
       <p class="sub">Drop anything. It shows up on every device.</p>
       <div class="seg" id="modeSeg">
-        <button type="button" data-mode="join" class="on">Sign in</button>
-        <button type="button" data-mode="create">Create new</button>
+        <button type="button" data-mode="signin" class="on">Sign in</button>
+        <button type="button" data-mode="join">Join team</button>
+        <button type="button" data-mode="create">Create team</button>
       </div>
-      <label>Account or team name<input name="workspace" required autocomplete="organization" placeholder="e.g. josh or premier-studio"></label>
-      <label>Passphrase<input name="passphrase" type="password" required minlength="4" autocomplete="current-password"></label>
-      <div class="row2">
-        <label>Your name<input name="name" placeholder="Josh" autocomplete="given-name"></label>
-        <label>This device<input name="device" placeholder="MacBook"></label>
-      </div>
+      <p class="hint" id="modeHint"></p>
+      <label>Team name<input name="workspace" required autocomplete="organization" placeholder="e.g. premier-studio"></label>
+      <label>Your name<input name="name" required autocomplete="username" placeholder="Josh"></label>
+      <label>Password<input name="password" type="password" required minlength="6" autocomplete="current-password"></label>
+      <label id="codeField" class="hidden">Invite code<input name="code" autocomplete="off" placeholder="From someone on the team"></label>
+      <label>This device<input name="device" placeholder="MacBook"></label>
       <button class="primary" type="submit" id="loginBtn">Sign in</button>
       <p class="err" id="loginErr"></p>
     </form>

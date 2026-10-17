@@ -84,12 +84,79 @@ async function readJson(req, limit = 1_000_000) {
 function authFrom(req, url) {
   const h = req.headers.authorization || '';
   const token = h.startsWith('Bearer ') ? h.slice(7) : url.searchParams.get('t');
-  const session = token && db.tokens[token];
-  if (!session || !db.workspaces[session.wsId]) return null;
-  return { token, ...session, ws: db.workspaces[session.wsId] };
+  const session = token ? db.tokens[token] : null;
+  const ws = session ? db.workspaces[session.wsId] : null;
+  const member = ws?.members.find((x) => x.id === session.memberId);
+  if (!member) return null;
+  return { token, ...session, ws, memberId: member.id, member: member.name, role: member.role };
 }
 
-const publicWorkspace = (ws) => ({ id: ws.id, name: ws.name, settings: ws.settings, stacks: ws.stacks, channels: ws.channels, chatFolders: ws.chatFolders });
+// ---------- people ----------
+// Everyone signs in with their own name + password. New people join with the team's invite code.
+const nameKey = (s) => String(s || '').trim().toLowerCase().replace(/\s+/g, ' ');
+const codeKey = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+function newInviteCode() {
+  const abc = 'abcdefghjkmnpqrstuvwxyz23456789';
+  const c = Array.from(crypto.randomBytes(8), (b) => abc[b % abc.length]).join('');
+  return `${c.slice(0, 4)}-${c.slice(4)}`;
+}
+function newMember(ws, name, role) {
+  const m = { id: rid(8), name, nameKey: nameKey(name), role, salt: null, hash: null, createdAt: Date.now() };
+  ws.members.push(m);
+  return m;
+}
+function setPassword(m, pass) {
+  m.salt = rid(16);
+  m.hash = hashPass(pass, m.salt);
+}
+function checkHash(pass, salt, hash) {
+  return crypto.timingSafeEqual(Buffer.from(hashPass(pass, salt), 'hex'), Buffer.from(hash, 'hex'));
+}
+function checkInvite(ws, code) {
+  if (ws.inviteCode) {
+    const a = crypto.createHash('sha256').update(codeKey(code)).digest();
+    return crypto.timingSafeEqual(a, crypto.createHash('sha256').update(codeKey(ws.inviteCode)).digest());
+  }
+  // Teams from before per-person logins: the old shared passphrase works until an owner makes a code.
+  return !!ws.hash && checkHash(String(code || ''), ws.salt, ws.hash);
+}
+// A team with no owner (upgraded from shared passphrase) gets one: the first person to set a password.
+function ensureOwner(ws, m) {
+  if (!ws.members.some((x) => x.role === 'owner')) m.role = 'owner';
+}
+function signOutMember(ws, memberId) {
+  for (const [tok, sess] of Object.entries(db.tokens)) if (sess.memberId === memberId) delete db.tokens[tok];
+  for (const s of sockets.get(ws.id) || []) if (s.meta.memberId === memberId) s.close(4001, 'Signed out');
+}
+const publicMember = (m) => ({ id: m.id, name: m.name, role: m.role, hasPassword: !!m.hash });
+
+const publicWorkspace = (ws) => ({
+  id: ws.id,
+  name: ws.name,
+  settings: ws.settings,
+  stacks: ws.stacks,
+  channels: ws.channels,
+  chatFolders: ws.chatFolders,
+  members: ws.members.map(publicMember),
+  inviteCode: ws.inviteCode,
+});
+
+// Shared-passphrase teams become per-person: everyone who has signed in or posted becomes a member with no
+// password yet. Their devices stay signed in; on new devices they set a password with Join team.
+function migratePeople() {
+  for (const ws of Object.values(db.workspaces)) {
+    if (ws.members) continue;
+    ws.members = [];
+    ws.inviteCode = null;
+    const memberFor = (name) => {
+      const n = String(name || '').trim().slice(0, 40) || 'Me';
+      return ws.members.find((x) => x.nameKey === nameKey(n)) || newMember(ws, n, 'member');
+    };
+    for (const sess of Object.values(db.tokens)) if (sess.wsId === ws.id) sess.memberId = memberFor(sess.member).id;
+    for (const it of Object.values(db.items)) if (it.wsId === ws.id && it.by) it.memberId = memberFor(it.by).id;
+  }
+  save();
+}
 
 function publicItem(it) {
   const { wsId, files, ...rest } = it;
@@ -221,6 +288,7 @@ function baseItem(auth, fields) {
     id: rid(),
     wsId: auth.wsId,
     by: auth.member,
+    memberId: auth.memberId,
     device: auth.device,
     deviceId: auth.deviceId,
     createdAt: Date.now(),
@@ -274,7 +342,7 @@ function broadcast(wsId, msg) {
 
 function presence(wsId) {
   const seen = new Map();
-  for (const s of sockets.get(wsId) || []) seen.set(s.meta.deviceId, { deviceId: s.meta.deviceId, device: s.meta.device, member: s.meta.member });
+  for (const s of sockets.get(wsId) || []) seen.set(s.meta.deviceId, { deviceId: s.meta.deviceId, device: s.meta.device, member: s.meta.member, memberId: s.meta.memberId });
   broadcast(wsId, { type: 'presence', devices: [...seen.values()] });
 }
 
@@ -293,41 +361,56 @@ async function api(req, res, url) {
   if (a === 'health') return send(res, 200, { ok: true, app: 'column' });
 
   if (a === 'auth' && m === 'POST') {
-    const { workspace, passphrase, name, device, deviceId, mode } = await readJson(req);
+    const { workspace, password, code, name, device, deviceId, mode } = await readJson(req);
     const slug = slugify(workspace);
-    if (!slug || slug.length > 60) return send(res, 400, { error: 'Enter an account or team name.' });
-    if (!passphrase || String(passphrase).length < 4) return send(res, 400, { error: 'Passphrase must be at least 4 characters.' });
+    if (!slug || slug.length > 60) return send(res, 400, { error: 'Enter a team name.' });
+    const who = String(name || '').trim().slice(0, 40);
+    if (!who) return send(res, 400, { error: 'Enter your name.' });
+    if (!password || String(password).length < 6) return send(res, 400, { error: 'Password must be at least 6 characters.' });
     let ws = Object.values(db.workspaces).find((w) => w.slug === slug);
+    let member;
     if (mode === 'create') {
-      if (ws) return send(res, 409, { error: 'That name is taken. Join it instead, or pick another name.' });
-      const salt = rid(16);
+      if (ws) return send(res, 409, { error: 'That team name is taken. Join it instead, or pick another name.' });
       ws = {
         id: rid(),
         name: String(workspace).trim(),
         slug,
-        salt,
-        hash: hashPass(passphrase, salt),
         createdAt: Date.now(),
         settings: { expireHours: 0 },
         stacks: [],
         channels: [],
         chatFolders: [],
+        members: [],
+        inviteCode: newInviteCode(),
       };
       db.workspaces[ws.id] = ws;
+      member = newMember(ws, who, 'owner');
+      setPassword(member, password);
     } else {
-      if (!ws) return send(res, 404, { error: 'No account or team with that name. Create it instead?' });
-      const ok = crypto.timingSafeEqual(Buffer.from(hashPass(passphrase, ws.salt), 'hex'), Buffer.from(ws.hash, 'hex'));
-      if (!ok) return send(res, 401, { error: 'Wrong passphrase.' });
+      if (!ws) return send(res, 404, { error: 'No team with that name. Create it instead?' });
+      member = ws.members.find((x) => x.nameKey === nameKey(who));
+      if (mode === 'join') {
+        if (!checkInvite(ws, code)) return send(res, 401, { error: 'Wrong invite code.' });
+        if (member?.hash) return send(res, 409, { error: 'Someone here already uses that name. Sign in instead, or pick another name.' });
+        member ||= newMember(ws, who, 'member');
+        setPassword(member, password);
+        ensureOwner(ws, member);
+      } else {
+        if (!member) return send(res, 404, { error: `No one called “${who}” in ${ws.name}. New here? Use Join team with the invite code.` });
+        if (!member.hash) return send(res, 401, { error: 'No password set for this name yet. Use Join team with the invite code to set one.' });
+        if (!checkHash(password, member.salt, member.hash)) return send(res, 401, { error: 'Wrong password.' });
+      }
     }
     const token = rid(24);
     db.tokens[token] = {
       wsId: ws.id,
-      member: String(name || 'Me').trim().slice(0, 40) || 'Me',
+      memberId: member.id,
       device: String(device || 'Device').trim().slice(0, 40) || 'Device',
       deviceId: String(deviceId || rid()).slice(0, 64),
       createdAt: Date.now(),
     };
     save();
+    if (mode !== 'signin') broadcast(ws.id, { type: 'workspace', workspace: publicWorkspace(ws) });
     return send(res, 200, { token, workspace: publicWorkspace(ws) });
   }
 
@@ -348,7 +431,7 @@ async function api(req, res, url) {
       .map(publicItem);
     return send(res, 200, {
       workspace: publicWorkspace(ws),
-      me: { member: auth.member, device: auth.device, deviceId: auth.deviceId },
+      me: { memberId: auth.memberId, member: auth.member, device: auth.device, deviceId: auth.deviceId },
       items,
       entries: Object.values(db.entries).filter((e) => e.wsId === ws.id).map(publicEntry),
       tasks: Object.values(db.tasks).filter((t) => t.wsId === ws.id).map(publicTask),
@@ -420,6 +503,43 @@ async function api(req, res, url) {
       return send(res, 200, { ok: true });
     }
     return send(res, 405, { error: 'Method not allowed' });
+  }
+
+  if (a === 'members') {
+    if (b === 'me' && c === 'password' && m === 'POST') {
+      const { current, next } = await readJson(req);
+      const me = ws.members.find((x) => x.id === auth.memberId);
+      if (me.hash && !checkHash(String(current || ''), me.salt, me.hash)) return send(res, 401, { error: 'Current password is wrong.' });
+      if (String(next || '').length < 6) return send(res, 400, { error: 'Password must be at least 6 characters.' });
+      setPassword(me, String(next));
+      ensureOwner(ws, me);
+    } else {
+      if (auth.role !== 'owner') return send(res, 403, { error: 'Only team owners can do that.' });
+      const target = b && ws.members.find((x) => x.id === b);
+      if (!target) return send(res, 404, { error: 'Not found' });
+      if (target.id === auth.memberId) return send(res, 400, { error: 'You can’t do that to yourself.' });
+      if (m === 'DELETE') {
+        ws.members = ws.members.filter((x) => x !== target);
+        signOutMember(ws, target.id);
+      } else if (c === 'reset' && m === 'POST') {
+        target.salt = target.hash = null;
+        signOutMember(ws, target.id);
+      } else if (m === 'PATCH') {
+        const { role } = await readJson(req);
+        if (role === 'owner' || role === 'member') target.role = role;
+      } else return send(res, 405, { error: 'Method not allowed' });
+    }
+    save();
+    broadcast(ws.id, { type: 'workspace', workspace: publicWorkspace(ws) });
+    return send(res, 200, publicWorkspace(ws));
+  }
+
+  if (a === 'invite' && m === 'POST') {
+    if (auth.role !== 'owner') return send(res, 403, { error: 'Only team owners can do that.' });
+    ws.inviteCode = newInviteCode();
+    save();
+    broadcast(ws.id, { type: 'workspace', workspace: publicWorkspace(ws) });
+    return send(res, 200, publicWorkspace(ws));
   }
 
   if (a === 'workspace' && m === 'PATCH') {
@@ -663,7 +783,7 @@ server.on('upgrade', (req, socket, head) => {
     return socket.destroy();
   }
   wss.handleUpgrade(req, socket, head, (s) => {
-    s.meta = { wsId: auth.wsId, member: auth.member, device: auth.device, deviceId: auth.deviceId };
+    s.meta = { wsId: auth.wsId, memberId: auth.memberId, member: auth.member, device: auth.device, deviceId: auth.deviceId };
     s.alive = true;
     s.on('pong', () => (s.alive = true));
     if (!sockets.has(auth.wsId)) sockets.set(auth.wsId, new Set());
@@ -704,6 +824,7 @@ setInterval(() => {
   }
 }, 60_000);
 
+migratePeople();
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`\n  Column server running\n`);
   console.log(`  This machine:   http://localhost:${PORT}`);

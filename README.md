@@ -20,7 +20,7 @@ npm run desktop      # in a second terminal: opens the column (connect to http:/
 
 - **Other computers:** run `npm run desktop` there and connect to the "Other devices" address the server prints, or just open that address in a browser.
 - **Phones:** open that address in Safari/Chrome → Share → *Add to Home Screen*.
-- First time: choose **Create new**, pick an account/team name and passphrase. Every other device or teammate uses **Sign in** with the same name and passphrase.
+- First time: choose **Create team**, pick a team name, your name and a password. Teammates choose **Join team** with the invite code from ⚙ Settings → People and pick their own password. On your other devices, **Sign in** with your name and password.
 
 ## Using it
 
