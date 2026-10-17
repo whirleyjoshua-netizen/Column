@@ -27,7 +27,7 @@ npm run desktop      # in a second terminal: opens the column (connect to http:/
 - Drag files, folders, photos, music or video into the column, or paste (⌘V / Ctrl+V), or tap **+**.
 - Drag a card out to your desktop/Finder/Explorer to get the file. Folders come out as folders (desktop app) or a .zip (browser).
 - Click a card to preview it (images, video, audio, PDF, text). Hover a card to download, pin, move to a stack, or delete.
-- ⚙ Settings: split into two columns (files | chat), create stacks (folders), auto-clear old items, notifications, always-on-top, auto-save incoming files, open at login.
+- ⚙ Settings: split into two columns, create stacks (folders), auto-clear old items, notifications, always-on-top, auto-save incoming files, open at login.
 - Show/hide: ⌘⇧Space (Mac) / Ctrl+Shift+Space (Windows/Linux), or the menu-bar/tray icon.
 
 ## Making it work anywhere (not just on your Wi-Fi)

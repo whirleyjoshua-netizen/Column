@@ -45,11 +45,19 @@
         <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
       </button>
     </header>
-    <main class="panes" id="panes"></main>
+    <nav class="tabs" id="tabs">
+      <button data-tab="day" class="on">Day</button>
+      <button data-tab="column">Column</button>
+      <button data-tab="chat">Chat</button>
+    </nav>
+    <section id="day" class="day"></section>
+    <main class="panes hidden" id="panes"></main>
+    <section id="chat" class="chat hidden"></section>
     <aside id="settings" class="settings hidden"></aside>
   </div>
 
   <div id="preview" class="preview hidden"></div>
+  <div id="sheet" class="sheet-wrap hidden"></div>
   <div id="menu" class="menu hidden"></div>
   <div id="toasts" class="toasts"></div>
   <input type="file" id="filePick" multiple hidden>
