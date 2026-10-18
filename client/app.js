@@ -85,6 +85,7 @@
     task: svg('<rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8.5 12l2.5 2.5 4.5-5"/>'),
     smile: svg('<circle cx="12" cy="12" r="9"/><path d="M8.5 14.5a4 4 0 0 0 7 0M9 9.5h.01M15 9.5h.01"/>'),
     reply: svg('<path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.4A8 8 0 1 1 21 12z"/>'),
+    search: svg('<circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/>'),
     reveal: svg('<path d="M14 3h7v7M10 14 21 3M19 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h5"/>'),
   };
 
@@ -2003,7 +2004,8 @@
     C.main = h('div', { class: 'ch-main' },
       h('div', { class: 'ch-head' },
         h('button', { class: 'icon-btn ch-menu', 'aria-label': 'Feeds', html: I.menu, onclick: () => root.classList.toggle('side-open') }),
-        C.title
+        C.title,
+        h('button', { class: 'icon-btn ch-search', title: 'Search  (⌘K)', 'aria-label': 'Search', html: I.search, onclick: () => openPalette() })
       )
     );
     root.append(C.side, h('div', { class: 'ch-scrim', onclick: () => root.classList.remove('side-open') }), C.main);
@@ -2068,6 +2070,105 @@
     const root = id && S.items.find((x) => x.id === id);
     if (id && (!root || (root.channelId ? 'ch:' + root.channelId : 'chat') !== C.view)) closeThread();
   }
+
+  // ---------- ⌘K: jump to a feed, or search messages, files, tasks and stacks ----------
+  let palette = null;
+  function closePalette() {
+    palette?.remove();
+    palette = null;
+  }
+
+  // Open the feed (or thread) holding a message and flash it.
+  function jumpTo(it) {
+    if (it.parentId) openThread(it.parentId);
+    else {
+      setTab('chat');
+      openChannel(it.channelId ? 'ch:' + it.channelId : 'chat');
+    }
+    const pane = it.parentId ? C.thread : C.pane;
+    const el = pane?._cards.get(it.id);
+    if (!el) return;
+    el.scrollIntoView({ block: 'center' });
+    el.classList.remove('flash');
+    void el.offsetWidth;
+    el.classList.add('flash');
+  }
+
+  function openPalette() {
+    if (palette) return closePalette();
+    const q = h('input', { class: 'pk-q', placeholder: 'Jump to a feed, or search everything…', spellcheck: 'false', 'aria-label': 'Search' });
+    const list = h('div', { class: 'pk-list' });
+    let rows = [], sel = 0;
+    const go = (r) => { closePalette(); r?.run(); };
+    const mark = (text, s) => {
+      const t = text.replace(/\s+/g, ' ').trim();
+      const i = s ? t.toLowerCase().indexOf(s) : -1;
+      const from = Math.max(0, i - 30);
+      const part = (from ? '…' : '') + t.slice(from, from + 140);
+      return s ? esc(part).replace(new RegExp(reEsc(esc(s)), 'gi'), (m) => `<mark>${m}</mark>`) : esc(part);
+    };
+    const feedOf = (it) => '#' + (channelById(it.channelId)?.name || 'general');
+    const draw = () => {
+      const s = q.value.trim().toLowerCase();
+      const hit = (t) => !s || (t || '').toLowerCase().includes(s);
+      const feeds = [['chat', 'general'], ...S.workspace.channels.map((c) => ['ch:' + c.id, c.name])].filter(([, n]) => hit(n));
+      const groups = [
+        ['Feeds', feeds.map(([v, n]) => ({ icon: h('span', { class: 'pk-ic pk-hash' }, '#'), label: n, sub: unread(v) ? `${unread(v)} new` : '', run: () => { setTab('chat'); openChannel(v); } }))],
+      ];
+      if (s) {
+        const msgs = S.items.filter((x) => x.type === 'message' && hit(plainText(x.text))).sort((a, b) => b.createdAt - a.createdAt);
+        groups.push(
+          ['Messages', msgs.slice(0, 30).map((x) => ({ icon: h('span', { class: 'pk-ic at-ic' }, (x.by || '?').slice(0, 1).toUpperCase()),
+            html: mark(plainText(x.text), s), sub: `${isMine(x) ? 'You' : x.by} · ${feedOf(x)}${x.parentId ? ' thread' : ''} · ${ago(x.createdAt)}`, two: true, run: () => jumpTo(x) }))],
+          ['Files', S.items.filter((x) => (x.type === 'file' || x.type === 'folder') && hit(x.name)).sort((a, b) => b.createdAt - a.createdAt).slice(0, 10)
+            .map((x) => ({ icon: h('span', { class: 'pk-ic', html: x.type === 'folder' ? I.folder : I.link }), label: x.name, sub: fmtSize(x.size), run: () => openPreview(x) }))],
+          ['Notes', S.items.filter((x) => x.type === 'text' && hit(x.text)).sort((a, b) => b.createdAt - a.createdAt).slice(0, 10)
+            .map((x) => ({ icon: h('span', { class: 'pk-ic', html: I.copy }), html: mark(x.text, s), sub: ago(x.createdAt), two: true, run: () => openPreview(x) }))],
+          ['Tasks', S.tasks.filter((t) => hit(t.text)).slice(0, 10)
+            .map((t) => ({ icon: h('span', { class: 'pk-ic', html: I.task }), label: t.text, sub: t.done ? 'done' : taskSlot(t)?.label, run: showTasks }))],
+          ['Stacks', S.workspace.stacks.filter((x) => hit(x.name))
+            .map((x) => ({ icon: h('span', { class: 'pk-ic', html: I.stack }), label: x.name, sub: `${stackCount(x.id)} items`, run: () => showStack(x.id) }))],
+        );
+      }
+      rows = [];
+      list.replaceChildren();
+      for (const [title, all] of groups) {
+        if (!all.length) continue;
+        list.append(h('div', { class: 'mh' }, title));
+        for (const r of all) {
+          const i = rows.length;
+          rows.push(r);
+          const label = r.html != null ? h('span', { class: 'pk-label', html: r.html }) : h('span', { class: 'pk-label' }, r.label);
+          list.append(h('button', { class: 'pk-row' + (i === sel ? ' on' : '') + (r.two ? ' two' : ''), onclick: () => go(r), onpointermove: () => { if (sel !== i) { sel = i; list.querySelector('.pk-row.on')?.classList.remove('on'); list.querySelectorAll('.pk-row')[i].classList.add('on'); } } },
+            r.icon, r.two ? h('span', { class: 'pk-two' }, label, h('span', { class: 'pk-sub' }, r.sub)) : [label, r.sub ? h('span', { class: 'pk-sub' }, r.sub) : null]));
+        }
+      }
+      if (!rows.length) list.append(h('div', { class: 'pk-none' }, 'Nothing matches'));
+      list.querySelector('.pk-row.on')?.scrollIntoView({ block: 'nearest' });
+    };
+    q.addEventListener('input', () => { sel = 0; draw(); });
+    q.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        sel = (sel + (e.key === 'ArrowDown' ? 1 : -1) + rows.length) % (rows.length || 1);
+        draw();
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        go(rows[sel]);
+      } else if (e.key === 'Escape') closePalette();
+    });
+    palette = h('div', { class: 'palette', onpointerdown: (e) => { if (e.target === palette) closePalette(); } },
+      h('div', { class: 'pal-box' }, q, list, h('div', { class: 'pal-foot' }, '↑↓ to move · ↵ to open · esc to close')));
+    document.body.append(palette);
+    draw();
+    q.focus();
+  }
+  document.addEventListener('keydown', (e) => {
+    if (e.key.toLowerCase() === 'k' && (e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && S.workspace && !$('#app').classList.contains('hidden')) {
+      e.preventDefault();
+      openPalette();
+    }
+  });
 
   function chanRow(view, name) {
     const n = view === C.view ? 0 : unread(view);
