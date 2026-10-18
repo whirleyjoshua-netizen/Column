@@ -531,3 +531,15 @@ button.ln-chip:hover, .ln-task:hover { background: var(--card-hover); }
 .ch-search svg { width: 16px; height: 16px; }
 .msg.flash .bubble { animation: flash 1.4s ease-out; }
 @keyframes flash { 0%, 40% { box-shadow: 0 0 0 3px #f5b942; } 100% { box-shadow: 0 0 0 3px transparent; } }
+
+/* task due dates + priority */
+.due, .prio { flex: none; border: 0; border-radius: 999px; font-size: 11px; padding: 2px 8px; white-space: nowrap; background: var(--card); color: var(--muted); }
+.due.today { color: var(--accent); background: color-mix(in srgb, var(--accent) 15%, transparent); }
+.due.late { color: var(--danger); background: rgba(255, 107, 107, 0.13); }
+.prio { padding: 1px 5px; font-weight: 800; letter-spacing: -0.5px; background: none; }
+.pr-1 { --pc: #5aa9ff; }
+.pr-2 { --pc: #f5b942; }
+.pr-3 { --pc: var(--danger); }
+.prio[class*="pr-"] { color: var(--pc); }
+.check[class*="pr-"]:not(.on) { border-color: var(--pc); }
+.date-pop { position: fixed; z-index: 61; width: 1px; height: 1px; opacity: 0; padding: 0; border: 0; }

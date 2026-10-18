@@ -203,6 +203,11 @@ const publicTask = publicEntry;
 
 function applyTask(t, body) {
   if (body.text !== undefined) t.text = String(body.text || '').trim().slice(0, 5000);
+  if (body.due !== undefined) {
+    if (body.due !== null && !/^\d{4}-\d{2}-\d{2}$/.test(body.due)) throw badRequest('Bad due date.');
+    t.due = body.due;
+  }
+  if (body.priority !== undefined) t.priority = Math.max(0, Math.min(3, Math.round(Number(body.priority)) || 0));
   if (body.done !== undefined) {
     t.done = !!body.done;
     t.doneAt = t.done ? Date.now() : null;
@@ -468,7 +473,7 @@ async function api(req, res, url) {
 
   if (a === 'tasks') {
     if (m === 'POST' && !b) {
-      const t = applyTask({ id: rid(), wsId: ws.id, by: auth.member, createdAt: Date.now(), text: '', done: false, doneAt: null }, await readJson(req, 50_000));
+      const t = applyTask({ id: rid(), wsId: ws.id, by: auth.member, createdAt: Date.now(), text: '', done: false, doneAt: null, due: null, priority: 0 }, await readJson(req, 50_000));
       db.tasks[t.id] = t;
       save();
       broadcast(ws.id, { type: 'task', task: publicTask(t) });

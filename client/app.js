@@ -86,6 +86,8 @@
     smile: svg('<circle cx="12" cy="12" r="9"/><path d="M8.5 14.5a4 4 0 0 0 7 0M9 9.5h.01M15 9.5h.01"/>'),
     reply: svg('<path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.4A8 8 0 1 1 21 12z"/>'),
     search: svg('<circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/>'),
+    flag: svg('<path d="M5 21V4M5 4h11l-2 4 2 4H5"/>'),
+    cal: svg('<rect x="3.5" y="5" width="17" height="15" rx="2"/><path d="M3.5 10h17M8 3v4M16 3v4"/>'),
     reveal: svg('<path d="M14 3h7v7M10 14 21 3M19 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h5"/>'),
   };
 
@@ -1615,7 +1617,15 @@
     const keep = D.scroll.scrollTop;
     const parts = [];
 
-    if (anytime.length || !entries.length) {
+    // Tasks due this day (plus overdue ones, carried over to today) that aren't on the schedule yet.
+    const onDay = new Set(entries.map((e) => e.taskId).filter(Boolean));
+    const due = S.tasks.filter((t) => !t.done && !onDay.has(t.id) && (t.due === k || (isToday && isOverdue(t)))).sort((a, b) => (a.due < b.due ? -1 : a.due > b.due ? 1 : byPrio(a, b)));
+    if (due.length) {
+      const late = due.filter(isOverdue);
+      parts.push(h('div', { class: 'anytime tasks' }, h('div', { class: 'any-h' }, 'Due', late.length ? moveToToday(late) : null), due.map(taskRow)));
+    }
+
+    if (anytime.length || (!entries.length && !due.length)) {
       const sec = h('div', { class: 'anytime' }, h('div', { class: 'any-h' }, 'Anytime'));
       for (const e of anytime) {
         sec.append(h('div', { class: 'any-row' + (e.done ? ' done' : ''), onclick: () => openSheet(e) }, checkEl(e), h('span', { class: 'p-text' }, e.taskId ? h('span', { class: 'is-task', html: I.task, title: 'Linked task' }) : null, e.text)));
@@ -1696,6 +1706,52 @@
     return { e, label: dayName(e.date) + (e.start != null ? ' ' + fmtTime(e.start) : ''), more: slots.length - 1 };
   }
 
+  // ----- due dates + priority -----
+  const PRIO = ['None', 'Low', 'Medium', 'High'];
+  const byPrio = (a, b) => (b.priority || 0) - (a.priority || 0) || a.createdAt - b.createdAt;
+  // Short label: Today / Tomorrow / Yesterday / Fri / Oct 20.
+  function dueLabel(k) {
+    const rel = fmtDay(k).rel;
+    if (rel) return rel;
+    const days = Math.round((keyDate(k) - keyDate(todayKey())) / 864e5);
+    const d = keyDate(k);
+    return days > 0 && days < 7 ? d.toLocaleDateString(undefined, { weekday: 'short' }) : d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  }
+  const isOverdue = (t) => !t.done && t.due && t.due < todayKey();
+
+  function dueMenu(anchor, t) {
+    const set = (due) => patchTask(t, { due });
+    const today = todayKey();
+    openMenu(anchor, [
+      { head: 'Due' },
+      { label: 'Today', on: t.due === today, run: () => set(today) },
+      { label: 'Tomorrow', on: t.due === addDays(today, 1), run: () => set(addDays(today, 1)) },
+      { label: 'Next week', on: t.due === addDays(today, 7), run: () => set(addDays(today, 7)) },
+      { label: 'Pick a date…', run: () => {
+        const inp = h('input', { type: 'date', class: 'date-pop', value: t.due || today });
+        const r = anchor.getBoundingClientRect();
+        inp.style.cssText = `left:${r.left}px;top:${r.bottom}px`;
+        inp.addEventListener('change', () => { if (inp.value) set(inp.value); inp.remove(); });
+        inp.addEventListener('blur', () => setTimeout(() => inp.remove(), 300));
+        document.body.append(inp);
+        try { inp.showPicker(); } catch { inp.focus(); }
+      } },
+      ...(t.due ? [{ label: 'No due date', run: () => set(null) }] : []),
+    ]);
+  }
+  function prioMenu(anchor, t) {
+    openMenu(anchor, [{ head: 'Priority' }, ...[3, 2, 1, 0].map((p) => ({ label: PRIO[p], on: (t.priority || 0) === p, run: () => patchTask(t, { priority: p }) }))]);
+  }
+
+  // Quick add for tasks: "Pay rent friday !!" → due Friday, medium priority. !/!!/!!! = low/medium/high.
+  function parseTask(raw) {
+    let text = raw;
+    let priority = 0;
+    text = text.replace(/(^|\s)(!{1,3})(?=\s|$)/, (_, pre, bangs) => { priority = bangs.length; return pre; });
+    const p = parseQuick(text, null);
+    return { text: p.date && p.start == null ? p.text : text.trim() || raw.trim(), due: p.date, priority };
+  }
+
   function editTaskText(span, t) {
     inlineEdit(span, { value: t.text, placeholder: 'Task', onDone: (text) => text && text !== t.text && patchTask(t, { text }) });
   }
@@ -1715,32 +1771,51 @@
         toast(er.message);
       }
     }));
+    const pr = t.priority || 0;
     return h('div', { class: 'any-row task-row' + (t.done ? ' done' : '') },
       h('button', {
-        class: 'check' + (t.done ? ' on' : ''),
+        class: 'check' + (t.done ? ' on' : '') + (pr ? ' pr-' + pr : ''),
         html: I.check,
         'aria-label': t.done ? 'Mark not done' : 'Mark done',
         onclick: () => patchTask(t, { done: !t.done }),
       }),
+      pr && !t.done ? h('button', { class: 'prio pr-' + pr, title: PRIO[pr] + ' priority', onclick: (ev) => prioMenu(ev.currentTarget, t) }, '!'.repeat(pr)) : null,
       text,
+      t.due && !t.done ? h('button', { class: 'due' + (isOverdue(t) ? ' late' : t.due === todayKey() ? ' today' : ''), title: 'Due ' + dayName(t.due), onclick: (ev) => dueMenu(ev.currentTarget, t) }, dueLabel(t.due)) : null,
       slot ? h('button', { class: 'slot', title: 'Show on schedule', onclick: () => { D.sub = 'schedule'; store.set('daySub', 'schedule'); goDay(slot.e.date); } },
         slot.label + (slot.more ? ` +${slot.more}` : '')) : null,
-      t.done ? null : btn(I.clock, 'Put on schedule', () => openSheet({ text: t.text, taskId: t.id, date: D.date })),
+      t.done || t.due ? null : btn(I.cal, 'Due date', (b) => dueMenu(b, t)),
+      t.done || pr ? null : btn(I.flag, 'Priority', (b) => prioMenu(b, t)),
+      t.done ? null : btn(I.clock, 'Put on schedule', () => openSheet({ text: t.text, taskId: t.id, date: t.due && D.sub === 'tasks' ? t.due : D.date })),
       btn(I.share, 'Share to chat', (b) => shareMenu(b, linkToken('task', t.id))),
       del
     );
   }
 
+  function moveToToday(list) {
+    const b = h('button', { class: 'link' }, 'Move to today');
+    b.addEventListener('click', () => { for (const t of list) patchTask(t, { due: todayKey() }); });
+    return b;
+  }
+
   function renderTasks() {
     const keep = D.scroll.scrollTop;
-    const open = S.tasks.filter((t) => !t.done).sort((a, b) => a.createdAt - b.createdAt);
+    const open = S.tasks.filter((t) => !t.done).sort(byPrio);
     const done = S.tasks.filter((t) => t.done).sort((a, b) => (b.doneAt || 0) - (a.doneAt || 0));
+    const today = todayKey();
     const parts = [];
-    const sec = h('div', { class: 'anytime tasks' }, h('div', { class: 'any-h' }, 'To do'), open.map(taskRow));
+    const group = (title, list, extra) => list.length && parts.push(h('div', { class: 'anytime tasks' }, h('div', { class: 'any-h' }, title, extra || null), list.map(taskRow)));
+    const late = open.filter(isOverdue);
+    group(`Overdue · ${late.length}`, late, late.length ? moveToToday(late) : null);
+    if (open.some((t) => t.due)) {
+      group('Today', open.filter((t) => t.due === today));
+      group('Upcoming', open.filter((t) => t.due > today).sort((a, b) => (a.due < b.due ? -1 : a.due > b.due ? 1 : byPrio(a, b))));
+      group('No date', open.filter((t) => !t.due));
+    } else group('To do', open);
     if (!open.length) {
-      sec.append(h('p', { class: 'day-hint' }, done.length ? 'All done.' : 'No tasks yet. Type below to add one, then tap the clock to put it on your schedule.'));
+      parts.push(h('div', { class: 'anytime tasks' }, h('div', { class: 'any-h' }, 'To do'),
+        h('p', { class: 'day-hint' }, done.length ? 'All done.' : 'No tasks yet. Type below, like “Pay rent friday !!” (! low, !! medium, !!! high), then tap the clock to put it on your schedule.')));
     }
-    parts.push(sec);
     if (done.length) {
       const clear = h('button', { class: 'link', 'data-label': '1' }, 'Clear');
       clear.addEventListener('click', () => confirmClick(clear, async () => {
@@ -1758,7 +1833,13 @@
     const update = () => {
       ta.style.height = '';
       ta.style.height = Math.min(ta.scrollHeight + 2, 120) + 'px';
-      if (!ta.value.trim() || D.sub === 'tasks') return hint.classList.add('hidden');
+      if (!ta.value.trim()) return hint.classList.add('hidden');
+      if (D.sub === 'tasks') {
+        const t = parseTask(ta.value);
+        if (!t.due && !t.priority) return hint.classList.add('hidden');
+        hint.classList.remove('hidden');
+        return hint.replaceChildren(h('b', {}, 'Task'), t.due ? ` · due ${dayName(t.due)}` : '', t.priority ? ` · ${PRIO[t.priority]} priority` : '', h('span', {}, ' ↵'));
+      }
       const p = parseQuick(ta.value, D.date);
       hint.classList.remove('hidden');
       const when = p.start == null ? 'anytime' : p.end == null ? fmtTime(p.start) : `${fmtTime(p.start)} – ${fmtTime(p.end)}`;
@@ -1771,7 +1852,7 @@
         ta.value = '';
         update();
         try {
-          upsertTask(await api('POST', '/tasks', { text: raw.trim() }));
+          upsertTask(await api('POST', '/tasks', parseTask(raw)));
           renderDay();
         } catch (e) {
           ta.value = raw;
