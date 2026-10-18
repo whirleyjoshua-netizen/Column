@@ -543,3 +543,5 @@ button.ln-chip:hover, .ln-task:hover { background: var(--card-hover); }
 .prio[class*="pr-"] { color: var(--pc); }
 .check[class*="pr-"]:not(.on) { border-color: var(--pc); }
 .date-pop { position: fixed; z-index: 61; width: 1px; height: 1px; opacity: 0; padding: 0; border: 0; }
+.due .rep { display: inline-grid; vertical-align: -2px; margin-right: 3px; }
+.due .rep svg { width: 11px; height: 11px; }

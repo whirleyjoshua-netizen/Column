@@ -167,6 +167,9 @@ function publicItem(it) {
 // Day planner entries: a note (start only, or no time = "anytime") or a block (start + end).
 // Times are minutes from midnight in the user's local day; date is YYYY-MM-DD.
 const COLORS = ['violet', 'blue', 'green', 'amber', 'rose'];
+const REPEATS = ['daily', 'weekdays', 'weekly', 'monthly'];
+const isDay = (v) => /^\d{4}-\d{2}-\d{2}$/.test(String(v));
+const dayList = (v) => (Array.isArray(v) ? [...new Set(v.filter(isDay))].sort().slice(-1000) : []);
 const badRequest = (msg) => Object.assign(new Error(msg), { status: 400 });
 
 function publicEntry(e) {
@@ -190,6 +193,10 @@ function applyEntry(e, body) {
   if (body.end !== undefined) e.end = minutes(body.end, 1440);
   if (body.done !== undefined) e.done = !!body.done;
   if (body.color !== undefined) e.color = COLORS.includes(body.color) ? body.color : null;
+  // A repeating entry is one series: skip = dates removed from it, doneOn = dates checked off.
+  if (body.repeat !== undefined) e.repeat = REPEATS.includes(body.repeat) ? body.repeat : null;
+  if (body.skip !== undefined) e.skip = dayList(body.skip);
+  if (body.doneOn !== undefined) e.doneOn = dayList(body.doneOn);
   if (body.taskId !== undefined) e.taskId = body.taskId && db.tasks[body.taskId]?.wsId === e.wsId ? body.taskId : null;
   if (e.start == null) e.end = null;
   if (e.end != null && e.end <= e.start) throw badRequest('End time must be after the start.');
@@ -207,6 +214,7 @@ function applyTask(t, body) {
     if (body.due !== null && !/^\d{4}-\d{2}-\d{2}$/.test(body.due)) throw badRequest('Bad due date.');
     t.due = body.due;
   }
+  if (body.repeat !== undefined) t.repeat = REPEATS.includes(body.repeat) ? body.repeat : null;
   if (body.priority !== undefined) t.priority = Math.max(0, Math.min(3, Math.round(Number(body.priority)) || 0));
   if (body.done !== undefined) {
     t.done = !!body.done;

@@ -88,6 +88,7 @@
     search: svg('<circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/>'),
     flag: svg('<path d="M5 21V4M5 4h11l-2 4 2 4H5"/>'),
     cal: svg('<rect x="3.5" y="5" width="17" height="15" rx="2"/><path d="M3.5 10h17M8 3v4M16 3v4"/>'),
+    repeat: svg('<path d="M17 2l3 3-3 3"/><path d="M4 11V9a4 4 0 0 1 4-4h12M7 22l-3-3 3-3"/><path d="M20 13v2a4 4 0 0 1-4 4H4"/>'),
     reveal: svg('<path d="M14 3h7v7M10 14 21 3M19 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h5"/>'),
   };
 
@@ -1379,6 +1380,35 @@
   }
   const dayName = (k) => fmtDay(k).rel || fmtDay(k).long;
 
+  // ----- repeats: 'daily' | 'weekdays' | 'weekly' | 'monthly', anchored on the first date -----
+  function repeatHits(rule, anchor, k) {
+    if (!rule || k < anchor) return k === anchor;
+    const a = keyDate(anchor), d = keyDate(k);
+    if (rule === 'daily') return true;
+    if (rule === 'weekdays') return d.getDay() > 0 && d.getDay() < 6;
+    if (rule === 'weekly') return d.getDay() === a.getDay();
+    if (rule === 'monthly') return d.getDate() === a.getDate();
+    return false;
+  }
+  function nextRepeat(rule, anchor, after) {
+    for (let k = addDays(after, 1), i = 0; i < 400; k = addDays(k, 1), i++) if (repeatHits(rule, anchor, k)) return k;
+    return null;
+  }
+  function repeatLabel(rule, anchor) {
+    const d = keyDate(anchor);
+    if (rule === 'daily') return 'Every day';
+    if (rule === 'weekdays') return 'Every weekday';
+    if (rule === 'weekly') return 'Every ' + d.toLocaleDateString(undefined, { weekday: 'long' });
+    if (rule === 'monthly') return `Monthly on the ${d.getDate()}${[, 'st', 'nd', 'rd'][d.getDate() % 10 * (Math.floor(d.getDate() / 10) !== 1)] || 'th'}`;
+    return 'Never';
+  }
+  const REPEATS = [null, 'daily', 'weekdays', 'weekly', 'monthly'];
+
+  // An entry as it appears on day k: repeating ones take that date and their per-day done state.
+  const occursOn = (e, k) => repeatHits(e.repeat, e.date, k) && !(e.skip || []).includes(k);
+  const occurrence = (e, k) => (e.repeat ? { ...e, date: k, seriesDate: e.date, done: (e.doneOn || []).includes(k) } : e);
+  const entriesOn = (k) => S.entries.filter((e) => occursOn(e, k)).map((e) => linked(occurrence(e, k)));
+
   function upsertEntry(e) {
     const i = S.entries.findIndex((x) => x.id === e.id);
     if (i >= 0) S.entries[i] = e;
@@ -1394,7 +1424,7 @@
   // A schedule entry linked to a task shows the task's current text and done state.
   function linked(e) {
     const t = taskById(e.taskId);
-    return t ? { ...e, text: t.text, done: t.done } : e;
+    return t ? { ...e, text: t.text, done: e.repeat ? e.done : t.done } : e;
   }
 
   // Quick capture: "Call Sam at 3pm", "10-12 Marketing", "email Dana tomorrow 9am", "gym friday 6-7pm".
@@ -1469,6 +1499,8 @@
     return { text: title, date, start, end };
   }
 
+  const repeatMark = (e) => (e.repeat ? h('span', { class: 'is-task', html: I.repeat, title: repeatLabel(e.repeat, e.seriesDate || e.date) }) : null);
+
   // ----- view state -----
   const D = { date: todayKey(), scrolledFor: null, sub: store.get('daySub', 'schedule') };
 
@@ -1537,12 +1569,25 @@
   }
 
   function toggleDone(e) {
+    const base = S.entries.find((x) => x.id === e.id) || e;
+    if (e.repeat) {
+      const on = base.doneOn || [];
+      return patchEntry(base, { doneOn: on.includes(e.date) ? on.filter((d) => d !== e.date) : [...on, e.date] });
+    }
     const t = taskById(e.taskId);
     if (t) patchTask(t, { done: !t.done });
-    else patchEntry(e, { done: !e.done });
+    else patchEntry(base, { done: !e.done });
   }
 
   async function patchTask(t, changes) {
+    if (changes.done && t.repeat) {
+      const from = t.due || todayKey();
+      const due = nextRepeat(t.repeat, from, from > todayKey() ? from : todayKey());
+      if (due) {
+        changes = { due };
+        toast(`Done · next one ${dayName(due)}`);
+      }
+    }
     upsertTask({ ...t, ...changes });
     renderDay();
     refreshLinks();
@@ -1607,7 +1652,7 @@
     D.pick.value = k;
     D.todayBtn.classList.toggle('hidden', isToday);
 
-    const entries = S.entries.filter((e) => e.date === k).map(linked);
+    const entries = entriesOn(k);
     const anytime = entries.filter((e) => e.start == null).sort((a, b) => a.done - b.done || a.createdAt - b.createdAt);
     const blocks = entries.filter((e) => e.start != null && e.end != null).sort((a, b) => a.start - b.start || b.end - a.end);
     const pins = entries.filter((e) => e.start != null && e.end == null).sort((a, b) => a.start - b.start);
@@ -1628,7 +1673,7 @@
     if (anytime.length || (!entries.length && !due.length)) {
       const sec = h('div', { class: 'anytime' }, h('div', { class: 'any-h' }, 'Anytime'));
       for (const e of anytime) {
-        sec.append(h('div', { class: 'any-row' + (e.done ? ' done' : ''), onclick: () => openSheet(e) }, checkEl(e), h('span', { class: 'p-text' }, e.taskId ? h('span', { class: 'is-task', html: I.task, title: 'Linked task' }) : null, e.text)));
+        sec.append(h('div', { class: 'any-row' + (e.done ? ' done' : ''), onclick: () => openSheet(e) }, checkEl(e), h('span', { class: 'p-text' }, e.taskId ? h('span', { class: 'is-task', html: I.task, title: 'Linked task' }) : null, repeatMark(e), e.text)));
       }
       if (!entries.length) {
         sec.append(h('p', { class: 'day-hint' }, 'Nothing planned. Type below, like “10-12 Marketing” or “Call Sam at 3pm”, or tap a time on the timeline.'));
@@ -1651,7 +1696,7 @@
         style: `top:${top + 1}px;height:${ht - 2}px;left:calc(var(--gut) + (100% - var(--gut) - 6px) * ${col / n});width:calc((100% - var(--gut) - 6px) / ${n} - 3px)`,
         onclick: (ev) => { ev.stopPropagation(); openSheet(b); },
       },
-        h('div', { class: 'b-title' }, b.taskId ? h('span', { class: 'is-task', html: I.task, title: 'Linked task' }) : null, b.text),
+        h('div', { class: 'b-title' }, b.taskId ? h('span', { class: 'is-task', html: I.task, title: 'Linked task' }) : null, repeatMark(b), b.text),
         h('div', { class: 'b-time' }, `${fmtTime(b.start)} – ${fmtTime(b.end)}`)
       );
       tl.append(el);
@@ -1673,7 +1718,7 @@
       tl.append(h('div', { class: 'pin' + (p.done ? ' done' : ''), style: `top:${top}px`, onclick: (ev) => { ev.stopPropagation(); openSheet(p); } },
         checkEl(p),
         h('span', { class: 'p-time' }, fmtTime(p.start)),
-        h('span', { class: 'p-text' }, p.taskId ? h('span', { class: 'is-task', html: I.task, title: 'Linked task' }) : null, p.text)
+        h('span', { class: 'p-text' }, p.taskId ? h('span', { class: 'is-task', html: I.task, title: 'Linked task' }) : null, repeatMark(p), p.text)
       ));
     }
 
@@ -1736,7 +1781,9 @@
         document.body.append(inp);
         try { inp.showPicker(); } catch { inp.focus(); }
       } },
-      ...(t.due ? [{ label: 'No due date', run: () => set(null) }] : []),
+      ...(t.due ? [{ label: 'No due date', run: () => patchTask(t, { due: null, repeat: null }) }] : []),
+      { head: 'Repeat' },
+      ...REPEATS.map((r) => ({ label: repeatLabel(r, t.due || today), on: (t.repeat || null) === r, run: () => patchTask(t, r && !t.due ? { repeat: r, due: today } : { repeat: r }) })),
     ]);
   }
   function prioMenu(anchor, t) {
@@ -1781,7 +1828,8 @@
       }),
       pr && !t.done ? h('button', { class: 'prio pr-' + pr, title: PRIO[pr] + ' priority', onclick: (ev) => prioMenu(ev.currentTarget, t) }, '!'.repeat(pr)) : null,
       text,
-      t.due && !t.done ? h('button', { class: 'due' + (isOverdue(t) ? ' late' : t.due === todayKey() ? ' today' : ''), title: 'Due ' + dayName(t.due), onclick: (ev) => dueMenu(ev.currentTarget, t) }, dueLabel(t.due)) : null,
+      t.due && !t.done ? h('button', { class: 'due' + (isOverdue(t) ? ' late' : t.due === todayKey() ? ' today' : ''), title: 'Due ' + dayName(t.due) + (t.repeat ? ' · ' + repeatLabel(t.repeat, t.due) : ''), onclick: (ev) => dueMenu(ev.currentTarget, t) },
+        t.repeat ? h('span', { class: 'rep', html: I.repeat }) : null, dueLabel(t.due)) : null,
       slot ? h('button', { class: 'slot', title: 'Show on schedule', onclick: () => { D.sub = 'schedule'; store.set('daySub', 'schedule'); goDay(slot.e.date); } },
         slot.label + (slot.more ? ` +${slot.more}` : '')) : null,
       t.done || t.due ? null : btn(I.cal, 'Due date', (b) => dueMenu(b, t)),
@@ -1917,7 +1965,16 @@
     };
     const text = h('textarea', { rows: 3, placeholder: 'What do you need to do or remember?' });
     text.value = entry.text || '';
-    const date = h('input', { type: 'date', value: entry.date || D.date });
+    // For a repeating entry the sheet edits the whole series, so the date is the series start.
+    const date = h('input', { type: 'date', value: entry.seriesDate || entry.date || D.date });
+    const repeat = h('select', {});
+    const drawRepeat = () => {
+      const keep = repeat.value || entry.repeat || '';
+      repeat.replaceChildren(...REPEATS.map((r) => h('option', { value: r || '' }, repeatLabel(r, date.value || D.date))));
+      repeat.value = keep;
+    };
+    drawRepeat();
+    date.addEventListener('change', drawRepeat);
     const start = h('input', { type: 'time', step: 300, value: toHM(entry.start) });
     const end = h('input', { type: 'time', step: 300, value: entry.end == null ? '' : toHM(entry.end) });
     const err = h('p', { class: 'err' });
@@ -1949,7 +2006,7 @@
 
     const save = async () => {
       err.textContent = '';
-      const body = { text: text.value.trim(), date: date.value, start: fromHM(start.value), end: start.value ? fromHM(end.value) : null, color, taskId: taskSel ? taskSel.value || null : entry.taskId || null };
+      const body = { text: text.value.trim(), date: date.value, start: fromHM(start.value), end: start.value ? fromHM(end.value) : null, color, taskId: taskSel ? taskSel.value || null : entry.taskId || null, repeat: repeat.value || null };
       if (!body.text) return void (err.textContent = 'Write something first.');
       if (!body.date) return void (err.textContent = 'Pick a day.');
       if (body.end != null && body.end <= body.start) return void (err.textContent = 'End time must be after the start.');
@@ -1960,7 +2017,7 @@
         if (t && t.text !== body.text) patchTask(t, { text: body.text });
         closeSheet();
         if (S.tab !== 'day') setTab('day');
-        if (saved.date !== D.date || D.sub !== 'schedule') {
+        if (!occursOn(saved, D.date) || D.sub !== 'schedule') {
           toast(`Saved to ${dayName(saved.date)}${saved.start != null ? ' ' + fmtTime(saved.start) : ''}`, { label: 'Show', run: () => { D.sub = 'schedule'; store.set('daySub', 'schedule'); goDay(saved.date); } });
         }
         renderDay();
@@ -1975,7 +2032,7 @@
 
     const btns = h('div', { class: 'btns' });
     if (!isNew) {
-      const del = h('button', { class: 'btn danger', 'data-label': '1' }, 'Delete');
+      const del = h('button', { class: 'btn danger', 'data-label': '1' }, entry.repeat ? 'Delete all' : 'Delete');
       del.addEventListener('click', () => confirmClick(del, async () => {
         try {
           await api('DELETE', '/entries/' + entry.id);
@@ -1986,6 +2043,10 @@
           err.textContent = e.message;
         }
       }));
+      if (entry.repeat) {
+        const base = S.entries.find((x) => x.id === entry.id);
+        btns.append(h('button', { class: 'btn', onclick: () => { closeSheet(); patchEntry(base, { skip: [...(base.skip || []), entry.date] }); } }, 'Delete this one'));
+      }
       btns.append(del, h('button', { class: 'btn', onclick: () => { closeSheet(); toggleDone(entry); } }, entry.done ? 'Not done' : 'Mark done'));
     }
     btns.append(h('span', { style: 'flex:1' }), h('button', { class: 'btn primary-btn', onclick: save }, isNew ? 'Add' : 'Save'));
@@ -1997,7 +2058,7 @@
         h('button', { class: 'icon-btn', html: I.close, 'aria-label': 'Close', onclick: closeSheet })),
       text,
       taskSel ? h('label', {}, 'Task', taskSel) : null,
-      h('label', {}, 'Day', date),
+      h('div', { class: 'row2' }, h('label', {}, entry.repeat ? 'Starts' : 'Day', date), h('label', {}, 'Repeat', repeat)),
       h('div', { class: 'row2' }, h('label', {}, 'Time', start), h('label', {}, 'Until (optional)', end)),
       h('div', { class: 'sheet-tip' }, h('span', {}, 'No time = anytime note. Add an end time to block out time.'), clearTime),
       h('label', {}, 'Color', sw),
@@ -2028,8 +2089,8 @@
     if (!S.token) return;
     const k = todayKey();
     const n = nowMin();
-    for (const e of S.entries.map(linked)) {
-      if (e.date !== k || e.start == null || e.done) continue;
+    for (const e of entriesOn(k)) {
+      if (e.start == null || e.done) continue;
       const key = `${e.id}@${e.date}@${e.start}`;
       if (fired.has(key) || n < e.start || n > e.start + 2) continue;
       fired.add(key);
