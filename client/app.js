@@ -354,7 +354,7 @@
       const body = it.type === 'message' ? plainText(it.text).slice(0, 140) : it.type === 'text' ? it.text.slice(0, 140) : `${it.name}${it.size ? ' · ' + fmtSize(it.size) : ''}`;
       try {
         const ch = channelById(it.channelId);
-        new Notification(`${it.by}${ch ? ' in #' + ch.name : ''} · ${it.device}`, { body, icon: '/icon-128.png', silent: false });
+        new Notification(`${it.by}${mentionsMe(it) ? ' mentioned you' : ''}${ch ? ' in #' + ch.name : ''} · ${it.device}`, { body, icon: '/icon-128.png', silent: false });
       } catch {}
     }
     if (desktop && S.desktopCfg.autoSave && (it.type === 'file' || it.type === 'folder')) {
@@ -486,7 +486,9 @@
         toast(e.message);
       }
     };
+    let mentionKey = () => false;
     ta.addEventListener('keydown', (e) => {
+      if (mentionKey(e)) return;
       if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
         e.preventDefault();
         sendIt();
@@ -512,6 +514,7 @@
     if (!chat) return h('div', { class: 'composer' }, add, ta);
     const linkBtn = h('button', { class: 'add link-btn', title: 'Link a stack, file or task  ([[)', 'aria-label': 'Link a stack, file or task', html: I.link, onclick: () => openPicker(wrap, addLink) });
     const wrap = h('div', { class: 'composer-wrap' }, tray, h('div', { class: 'composer' }, viewThread(view) ? null : add, linkBtn, ta));
+    mentionKey = mentionAuto(wrap, ta);
     return wrap;
   }
 
@@ -681,6 +684,76 @@
   const amOwner = () => S.workspace?.members?.find((m) => m.id === S.me?.memberId)?.role === 'owner';
   const memberName = (id) => (id === S.me?.memberId ? 'You' : S.workspace?.members?.find((m) => m.id === id)?.name || 'Someone');
 
+  // ---------- @mentions: plain "@Name" in the text, so edits and copies just work. @here is everyone. ----------
+  const reEsc = (t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const mentionNames = () => ['here', ...(S.workspace?.members || []).map((m) => m.name)].sort((a, b) => b.length - a.length);
+  const mentionRe = (names, flags) => new RegExp(`(^|[\\s(])@(${names.map(reEsc).join('|')})(?![\\w])`, flags);
+  function mentionsMe(it) {
+    if (it.type !== 'message' || isMine(it) || !it.text.includes('@')) return false;
+    const me = S.workspace?.members?.find((m) => m.id === S.me?.memberId);
+    return mentionRe(['here', ...(me ? [me.name] : [])], 'i').test(it.text);
+  }
+  // Highlight mentions in already-escaped message html.
+  function mentionify(html) {
+    if (!html.includes('@')) return html;
+    const me = S.workspace?.members?.find((m) => m.id === S.me?.memberId)?.name.toLowerCase();
+    return html.replace(mentionRe(mentionNames().map(esc), 'gi'), (_, pre, name) => {
+      const self = name.toLowerCase() === 'here' || esc(me || '') === name.toLowerCase();
+      return `${pre}<span class="mention${self ? ' me' : ''}">@${name}</span>`;
+    });
+  }
+
+  // Autocomplete for "@" in a chat composer. Returns a keydown hook; true means it used the key.
+  function mentionAuto(wrap, ta) {
+    let pop = null, rows = [], sel = 0, at = -1;
+    const close = () => { pop?.remove(); pop = null; };
+    const pick = (name) => {
+      const end = ta.selectionStart;
+      ta.value = ta.value.slice(0, at) + '@' + name + ' ' + ta.value.slice(end);
+      const caret = at + name.length + 2;
+      ta.setSelectionRange(caret, caret);
+      close();
+      ta.focus();
+    };
+    const draw = () => {
+      pop.replaceChildren(h('div', { class: 'mh' }, 'Mention'), ...rows.map((r, i) =>
+        h('button', { class: 'pk-row' + (i === sel ? ' on' : ''), onpointerdown: (e) => { e.preventDefault(); pick(r.name); } },
+          h('span', { class: 'pk-ic at-ic' }, r.here ? '@' : r.name.slice(0, 1).toUpperCase()),
+          h('span', { class: 'pk-label' }, r.here ? '@here' : r.name),
+          h('span', { class: 'pk-sub' }, r.here ? 'everyone in the team' : r.online ? 'online' : ''))));
+    };
+    ta.addEventListener('input', () => {
+      const before = ta.value.slice(0, ta.selectionStart);
+      const m = before.match(/(^|\s)@([^\s@]{0,30})$/);
+      if (!m) return close();
+      at = before.length - m[2].length - 1;
+      const q = m[2].toLowerCase();
+      const hit = (n) => n.toLowerCase().split(/\s+/).some((w) => w.startsWith(q)) || n.toLowerCase().startsWith(q);
+      rows = [
+        ...(S.workspace?.members || []).filter((x) => x.id !== S.me?.memberId && hit(x.name))
+          .map((x) => ({ name: x.name, online: S.online?.some((d) => d.memberId === x.id) })),
+        ...('here'.startsWith(q) ? [{ name: 'here', here: true }] : []),
+      ].slice(0, 8);
+      if (!rows.length) return close();
+      sel = 0;
+      if (!pop) wrap.append((pop = h('div', { class: 'picker mention-pop' })));
+      draw();
+    });
+    ta.addEventListener('blur', close);
+    return (e) => {
+      if (!pop) return false;
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        sel = (sel + (e.key === 'ArrowDown' ? 1 : -1) + rows.length) % rows.length;
+        draw();
+      } else if (e.key === 'Enter' || e.key === 'Tab') pick(rows[sel].name);
+      else if (e.key === 'Escape') close();
+      else return false;
+      e.preventDefault();
+      e.stopPropagation();
+      return true;
+    };
+  }
+
   const repliesTo = (id) => S.items.filter((x) => x.parentId === id);
   const threadKey = (it) => { const r = repliesTo(it.id); return r.length ? r.length + ':' + Math.max(...r.map((x) => x.createdAt)) : ''; };
 
@@ -696,12 +769,13 @@
 
   function messageEl(it, view = '') {
     const mine = isMine(it);
+    const atMe = mentionsMe(it);
     const links = linksIn(it.text);
     const text = links.length ? stripLinks(it.text) : it.text;
-    return h('article', { class: 'msg' + (mine ? ' mine' : '') },
+    return h('article', { class: 'msg' + (mine ? ' mine' : '') + (atMe ? ' at-me' : '') },
       h('div', { class: 'who' }, `${mine ? 'You' : it.by} · ${it.device} · `, h('span', { 'data-ago': it.createdAt }, ago(it.createdAt)),
         it.editedAt ? h('span', { class: 'edited', title: 'Edited ' + new Date(it.editedAt).toLocaleString() }, ' · edited') : null),
-      text ? h('div', { class: 'bubble', html: linkify(text) }) : null,
+      text ? h('div', { class: 'bubble', html: mentionify(linkify(text)) }) : null,
       links.length ? h('div', { class: 'links' }, links.map(linkEl)) : null,
       reactsEl(it),
       threadEl(it, view),
@@ -1904,11 +1978,13 @@
   };
   store.set('chatSince', C.since);
 
-  function unread(view) {
+  const unread = (view) => unreadItems(view).length;
+  function unreadItems(view) {
     const ch = viewChannel(view);
     const seen = C.lastRead[view] ?? C.since;
-    return S.items.filter((x) => (x.channelId || null) === ch && !x.parentId && x.createdAt > seen && !isMine(x) && (ch || x.type === 'message')).length;
+    return S.items.filter((x) => (x.channelId || null) === ch && x.createdAt > seen && !isMine(x) && (ch || x.type === 'message') && (!x.parentId || mentionsMe(x)));
   }
+  const unreadAt = (view) => unreadItems(view).some(mentionsMe);
   function markRead() {
     if (S.tab !== 'chat' || document.hidden) return;
     C.lastRead[C.view] = Date.now();
@@ -1999,7 +2075,7 @@
     const row = h('div', { class: 'ch-row' + (view === C.view ? ' on' : '') + (n ? ' unread' : ''), onclick: () => openChannel(view) },
       h('span', { class: 'hash' }, '#'),
       h('span', { class: 'ch-name' }, name),
-      n ? h('span', { class: 'badge' }, n > 99 ? '99+' : n) : null,
+      n ? h('span', { class: 'badge' + (unreadAt(view) ? ' at' : '') }, (unreadAt(view) ? '@' : '') + (n > 99 ? '99+' : n)) : null,
       ch ? h('button', { class: 'ch-more', 'aria-label': 'Feed options', html: I.more, onclick: (e) => { e.stopPropagation(); channelMenu(ch, e.currentTarget, row); } }) : null
     );
     return row;
