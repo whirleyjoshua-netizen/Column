@@ -200,6 +200,17 @@ function migratePeople() {
   save();
 }
 
+// The Day became personal: each existing entry goes to whoever made it (by device, then name), else the team owner.
+function migrateDay() {
+  for (const e of Object.values(db.entries)) {
+    if (e.memberId) continue;
+    const ws = db.workspaces[e.wsId];
+    const byDevice = Object.values(db.tokens).find((x) => x.wsId === e.wsId && x.deviceId && x.deviceId === e.deviceId)?.memberId;
+    e.memberId = (ws?.members?.some((m) => m.id === byDevice) && byDevice) || ws?.members?.find((m) => m.nameKey === nameKey(e.by))?.id || ws?.members?.find((m) => m.role === 'owner')?.id || null;
+  }
+  save();
+}
+
 function publicItem(it) {
   const { wsId, files, ...rest } = it;
   if (files) rest.files = files.map((f, i) => ({ i, relPath: f.relPath, size: f.size }));
@@ -523,8 +534,8 @@ function campaignOf(kind, x) {
   }
   return null;
 }
-// Events pulled in from someone's own calendar are theirs alone.
-const seesEntry = (e, memberId) => !e?.cal?.imported || e.memberId === memberId;
+// Each person's Day is their own: entries, and the calendar events pulled into them, are seen only by them.
+const seesEntry = (e, memberId) => !e || e.memberId === memberId;
 const canSee = (auth, kind, x) => seesCampaign(campaignOf(kind, x), auth.memberId) && (kind !== 'item' || seesFeed(feedOfItem(x), auth.memberId)) && (kind !== 'entry' || seesEntry(x, auth.memberId));
 function campaignOfMsg(msg) {
   if (msg.item) return campaignOf('item', db.items[msg.item.id]);
@@ -602,7 +613,7 @@ function deleteTask(t) {
     if (priv) {
       // Its slot on the schedule was private too, so it goes rather than turning visible.
       delete db.entries[e.id];
-      broadcast(t.wsId, { type: 'entry:remove', id: e.id });
+      broadcast(t.wsId, { type: 'entry:remove', id: e.id, forMember: e.memberId });
     } else {
       e.taskId = null;
       broadcast(t.wsId, { type: 'entry', entry: publicEntry(e) });
@@ -871,7 +882,7 @@ function setEntry(e, fields) {
 }
 function dropEntry(e) {
   delete db.entries[e.id];
-  broadcast(e.wsId, { type: 'entry:remove', id: e.id });
+  broadcast(e.wsId, { type: 'entry:remove', id: e.id, forMember: e.memberId });
 }
 
 async function syncCalendar(conn) {
@@ -1229,7 +1240,7 @@ function agentSystem(ag, ws, member) {
   const L = localNow(ag.tz, Date.now());
   const day = new Date(L.date + 'T12:00:00Z').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
   return [
-    `You are ${ag.name}, an assistant inside Column, a team workspace with a Day planner (schedule and tasks), Campaigns (projects with goals, tasks and a log of calls and emails) and Chat. You work for ${member.name} on the team ${ws.name}.`,
+    `You are ${ag.name}, an assistant inside Column, a team workspace with a Day planner (each person’s own schedule, which only they see, plus the team’s tasks), Campaigns (projects with goals, tasks and a log of calls and emails) and Chat. You work for ${member.name} on the team ${ws.name}.`,
     'Stay on Column work: keeping their day on track, planning and researching campaigns, and managing tasks. If asked for something unrelated, say briefly that it’s outside what you do here.',
     ag.write ? 'Use your tools to make the changes the job needs instead of only describing them, then say briefly what you changed.' : 'You can look at things but not change them. Suggest changes for them to make.',
     ag.can.web ? 'Search the web when you need facts about people, companies or markets, and name your sources. Never invent leads, contacts or numbers.' : 'You can’t browse the web. Never invent leads, contacts or numbers.',
@@ -1408,7 +1419,7 @@ async function api(req, res, url) {
     if (m === 'DELETE') {
       delete db.entries[e.id];
       save();
-      broadcast(ws.id, { type: 'entry:remove', id: e.id });
+      broadcast(ws.id, { type: 'entry:remove', id: e.id, forMember: e.memberId });
       pushEntry(e, 'delete');
       return send(res, 200, { ok: true });
     }
@@ -2148,6 +2159,7 @@ setInterval(runSchedules, 30_000);
 setInterval(syncAllCalendars, 30_000);
 
 migratePeople();
+migrateDay();
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`\n  Column server running\n`);
   console.log(`  This machine:   http://localhost:${PORT}`);
