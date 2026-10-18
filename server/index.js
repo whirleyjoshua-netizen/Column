@@ -22,7 +22,7 @@ const CLIENT_DIR = path.resolve(__dirname, '..', 'client');
 fs.mkdirSync(FILES_DIR, { recursive: true });
 
 // ---------- persistence (a JSON file is plenty for personal/small-team use) ----------
-let db = { workspaces: {}, tokens: {}, items: {}, entries: {}, tasks: {}, uploads: {} };
+let db = { workspaces: {}, tokens: {}, items: {}, entries: {}, tasks: {}, uploads: {}, campaigns: {}, goals: {}, attempts: {} };
 try {
   db = { ...db, ...JSON.parse(fs.readFileSync(DB_PATH, 'utf8')) };
 } catch {}
@@ -130,12 +130,13 @@ function signOutMember(ws, memberId) {
 }
 const publicMember = (m) => ({ id: m.id, name: m.name, role: m.role, hasPassword: !!m.hash });
 
-const publicWorkspace = (ws) => ({
+// A private campaign's feed and stack are hidden from people outside it.
+const publicWorkspace = (ws, memberId) => ({
   id: ws.id,
   name: ws.name,
   settings: ws.settings,
-  stacks: ws.stacks,
-  channels: ws.channels,
+  stacks: ws.stacks.filter((x) => seesCampaign(x.campaignId, memberId)),
+  channels: ws.channels.filter((x) => seesCampaign(x.campaignId, memberId)),
   chatFolders: ws.chatFolders,
   members: ws.members.map(publicMember),
   inviteCode: ws.inviteCode,
@@ -215,6 +216,9 @@ function applyTask(t, body) {
     t.due = body.due;
   }
   if (body.repeat !== undefined) t.repeat = REPEATS.includes(body.repeat) ? body.repeat : null;
+  if (body.goalId !== undefined) t.goalId = body.goalId && db.goals[body.goalId]?.wsId === t.wsId ? body.goalId : null;
+  if (body.assigneeId !== undefined) t.assigneeId = body.assigneeId && db.workspaces[t.wsId]?.members.some((m) => m.id === body.assigneeId) ? body.assigneeId : null;
+  if (body.report !== undefined) t.report = !!body.report;
   if (body.priority !== undefined) t.priority = Math.max(0, Math.min(3, Math.round(Number(body.priority)) || 0));
   if (body.done !== undefined) {
     t.done = !!body.done;
@@ -406,13 +410,15 @@ function pinLinked(ws, text) {
   save();
 }
 
-function validStack(ws, stackId) {
-  return stackId && ws.stacks.some((s) => s.id === stackId) ? stackId : null;
+function validStack(ws, stackId, memberId) {
+  const st = stackId && ws.stacks.find((s) => s.id === stackId);
+  return st && seesCampaign(st.campaignId, memberId) ? stackId : null;
 }
 
 // Chat feeds (#channels), optionally grouped into folders. Items with a channelId live only in that feed.
-function validChannel(ws, channelId) {
-  return channelId && ws.channels.some((c) => c.id === channelId) ? channelId : null;
+function validChannel(ws, channelId, memberId) {
+  const ch = channelId && ws.channels.find((c) => c.id === channelId);
+  return ch && seesCampaign(ch.campaignId, memberId) ? channelId : null;
 }
 function validChatFolder(ws, folderId) {
   return folderId && ws.chatFolders.some((f) => f.id === folderId) ? folderId : null;
@@ -430,8 +436,122 @@ const sockets = new Map(); // wsId -> Set<socket>
 function broadcast(wsId, msg) {
   const set = sockets.get(wsId);
   if (!set) return;
+  if (msg.type === 'workspace') {
+    const ws = db.workspaces[wsId];
+    for (const s of set) if (s.readyState === 1) s.send(JSON.stringify({ type: 'workspace', workspace: publicWorkspace(ws, s.meta.memberId) }));
+    return;
+  }
+  const campaignId = campaignOfMsg(msg);
   const data = JSON.stringify(msg);
-  for (const s of set) if (s.readyState === 1) s.send(data);
+  for (const s of set) if (s.readyState === 1 && seesCampaign(campaignId, s.meta.memberId)) s.send(data);
+}
+
+// ---------- campaigns: campaign → goals → tasks, plus logged attempts (each call or email and its outcome) ----------
+// Private campaigns, with their goals, tasks, attempts, feed, stack and schedule slots, are only visible to their members.
+const OUTCOMES = ['No answer', 'Not interested', 'Interested', 'Booked'];
+function seesCampaign(campaignId, memberId) {
+  const c = campaignId && db.campaigns[campaignId];
+  return !c || !c.private || c.ownerId === memberId || c.memberIds.includes(memberId);
+}
+function campaignOf(kind, x) {
+  if (!x) return null;
+  const ws = db.workspaces[x.wsId];
+  if (kind === 'campaign') return x.id;
+  if (kind === 'goal' || kind === 'attempt') return x.campaignId;
+  if (kind === 'task') return x.goalId ? db.goals[x.goalId]?.campaignId || null : null;
+  if (kind === 'entry') return x.taskId ? campaignOf('task', db.tasks[x.taskId]) : null;
+  if (kind === 'item') {
+    const top = x.parentId ? db.items[x.parentId] || x : x;
+    return ws?.channels.find((c) => c.id === top.channelId)?.campaignId || ws?.stacks.find((st) => st.id === top.stackId)?.campaignId || null;
+  }
+  return null;
+}
+const canSee = (auth, kind, x) => seesCampaign(campaignOf(kind, x), auth.memberId);
+function campaignOfMsg(msg) {
+  if (msg.item) return campaignOf('item', db.items[msg.item.id]);
+  if (msg.task) return campaignOf('task', msg.task);
+  if (msg.entry) return campaignOf('entry', msg.entry);
+  if (msg.campaign) return msg.campaign.id;
+  if (msg.goal) return msg.goal.campaignId;
+  if (msg.attempt) return msg.attempt.campaignId;
+  return null;
+}
+
+const publicCampaign = ({ wsId, ...c }) => c;
+const publicGoal = ({ wsId, ...g }) => g;
+const publicAttempt = ({ wsId, ...x }) => x;
+const isDate = (v) => v === null || /^\d{4}-\d{2}-\d{2}$/.test(String(v));
+
+function applyCampaign(c, body, ws, auth) {
+  if (body.name !== undefined) c.name = String(body.name || '').trim().slice(0, 80);
+  if (body.brief !== undefined) c.brief = String(body.brief || '').slice(0, 20_000);
+  for (const k of ['start', 'end']) {
+    if (body[k] === undefined) continue;
+    if (!isDate(body[k] || null)) throw badRequest('Bad date');
+    c[k] = body[k] || null;
+  }
+  if (body.color !== undefined) c.color = COLORS.includes(body.color) ? body.color : 'violet';
+  if (body.status !== undefined && ['active', 'paused', 'done'].includes(body.status)) c.status = body.status;
+  if (body.lastReportAt !== undefined) c.lastReportAt = Number(body.lastReportAt) || null;
+  if (body.outcomes !== undefined) {
+    const list = [...new Set((Array.isArray(body.outcomes) ? body.outcomes : []).map((o) => String(o).trim().slice(0, 40)).filter(Boolean))].slice(0, 12);
+    if (list.length) c.outcomes = list;
+  }
+  // Only the person who made it decides who can see it.
+  if ((body.private !== undefined || body.memberIds !== undefined) && c.ownerId && c.ownerId !== auth.memberId) throw Object.assign(new Error('Only the campaign owner can change who sees it.'), { status: 403 });
+  if (body.private !== undefined) c.private = !!body.private;
+  if (body.memberIds !== undefined) c.memberIds = (Array.isArray(body.memberIds) ? body.memberIds : []).filter((id) => ws.members.some((m) => m.id === id) && id !== c.ownerId);
+  if (c.end && c.start && c.end < c.start) throw badRequest('The end date is before the start.');
+  if (!c.name) throw badRequest('Give it a name.');
+  return c;
+}
+
+function applyGoal(g, body, c) {
+  if (body.title !== undefined) g.title = String(body.title || '').trim().slice(0, 200);
+  if (body.due !== undefined) {
+    if (!isDate(body.due || null)) throw badRequest('Bad date');
+    g.due = body.due || null;
+  }
+  if (body.kind !== undefined) g.kind = body.kind === 'count' ? 'count' : 'tasks';
+  if (body.target !== undefined) g.target = Math.max(1, Math.min(1_000_000, Math.round(Number(body.target)) || 1));
+  // What counts toward a count goal: every attempt (null) or only these outcomes.
+  if (body.counts !== undefined) g.counts = Array.isArray(body.counts) ? body.counts.filter((o) => c.outcomes.includes(o)) : null;
+  if (body.order !== undefined) g.order = Number(body.order) || 0;
+  if (!g.title) throw badRequest('Give the goal a name.');
+  return g;
+}
+
+// Everything that belongs to a campaign goes with it.
+function deleteGoal(g) {
+  for (const t of Object.values(db.tasks)) if (t.goalId === g.id) deleteTask(t);
+  for (const x of Object.values(db.attempts)) if (x.goalId === g.id) delete db.attempts[x.id];
+  delete db.goals[g.id];
+  broadcast(g.wsId, { type: 'goal:remove', id: g.id });
+}
+function deleteTask(t) {
+  const priv = campaignOf('task', t) && db.campaigns[campaignOf('task', t)]?.private;
+  for (const e of Object.values(db.entries)) {
+    if (e.taskId !== t.id) continue;
+    if (priv) {
+      // Its slot on the schedule was private too, so it goes rather than turning visible.
+      delete db.entries[e.id];
+      broadcast(t.wsId, { type: 'entry:remove', id: e.id });
+    } else {
+      e.taskId = null;
+      broadcast(t.wsId, { type: 'entry', entry: publicEntry(e) });
+    }
+  }
+  delete db.tasks[t.id];
+  broadcast(t.wsId, { type: 'task:remove', id: t.id });
+}
+function deleteCampaign(ws, c) {
+  for (const g of Object.values(db.goals)) if (g.campaignId === c.id) deleteGoal(g);
+  for (const it of Object.values(db.items)) if (it.wsId === ws.id && campaignOf('item', it) === c.id) deleteItem(it.id);
+  ws.channels = ws.channels.filter((x) => x.campaignId !== c.id);
+  ws.stacks = ws.stacks.filter((x) => x.campaignId !== c.id);
+  delete db.campaigns[c.id];
+  broadcast(ws.id, { type: 'campaign:remove', id: c.id });
+  broadcast(ws.id, { type: 'workspace' });
 }
 
 function presence(wsId) {
@@ -504,8 +624,8 @@ async function api(req, res, url) {
       createdAt: Date.now(),
     };
     save();
-    if (mode !== 'signin') broadcast(ws.id, { type: 'workspace', workspace: publicWorkspace(ws) });
-    return send(res, 200, { token, workspace: publicWorkspace(ws) });
+    if (mode !== 'signin') broadcast(ws.id, { type: 'workspace' });
+    return send(res, 200, { token, workspace: publicWorkspace(ws, member.id) });
   }
 
   const auth = authFrom(req, url);
@@ -520,15 +640,18 @@ async function api(req, res, url) {
 
   if (a === 'state' && m === 'GET') {
     const items = Object.values(db.items)
-      .filter((it) => it.wsId === ws.id && it.status === 'ready')
+      .filter((it) => it.wsId === ws.id && it.status === 'ready' && canSee(auth, 'item', it))
       .sort((x, y) => x.createdAt - y.createdAt)
       .map(publicItem);
     return send(res, 200, {
-      workspace: publicWorkspace(ws),
+      workspace: publicWorkspace(ws, auth.memberId),
       me: { memberId: auth.memberId, member: auth.member, device: auth.device, deviceId: auth.deviceId },
       items,
-      entries: Object.values(db.entries).filter((e) => e.wsId === ws.id).map(publicEntry),
-      tasks: Object.values(db.tasks).filter((t) => t.wsId === ws.id).map(publicTask),
+      entries: Object.values(db.entries).filter((e) => e.wsId === ws.id && canSee(auth, 'entry', e)).map(publicEntry),
+      tasks: Object.values(db.tasks).filter((t) => t.wsId === ws.id && canSee(auth, 'task', t)).map(publicTask),
+      campaigns: Object.values(db.campaigns).filter((c) => c.wsId === ws.id && canSee(auth, 'campaign', c)).map(publicCampaign),
+      goals: Object.values(db.goals).filter((g) => g.wsId === ws.id && canSee(auth, 'goal', g)).map(publicGoal),
+      attempts: Object.values(db.attempts).filter((x) => x.wsId === ws.id && canSee(auth, 'attempt', x)).map(publicAttempt),
     });
   }
 
@@ -542,7 +665,7 @@ async function api(req, res, url) {
       return send(res, 200, publicEntry(e));
     }
     const e = b && db.entries[b];
-    if (!e || e.wsId !== ws.id) return send(res, 404, { error: 'Not found' });
+    if (!e || e.wsId !== ws.id || !canSee(auth, 'entry', e)) return send(res, 404, { error: 'Not found' });
     if (m === 'PATCH') {
       const next = applyEntry({ ...e }, await readJson(req, 50_000));
       db.entries[e.id] = next;
@@ -561,16 +684,18 @@ async function api(req, res, url) {
 
   if (a === 'tasks') {
     if (m === 'POST' && !b) {
-      const t = applyTask({ id: rid(), wsId: ws.id, by: auth.member, createdAt: Date.now(), text: '', done: false, doneAt: null, due: null, priority: 0 }, await readJson(req, 50_000));
+      const t = applyTask({ id: rid(), wsId: ws.id, by: auth.member, createdAt: Date.now(), text: '', done: false, doneAt: null, due: null, priority: 0, goalId: null, assigneeId: null }, await readJson(req, 50_000));
+      if (!canSee(auth, 'task', t)) return send(res, 404, { error: 'Goal not found' });
       db.tasks[t.id] = t;
       save();
       broadcast(ws.id, { type: 'task', task: publicTask(t) });
       return send(res, 200, publicTask(t));
     }
     const t = b && db.tasks[b];
-    if (!t || t.wsId !== ws.id) return send(res, 404, { error: 'Not found' });
+    if (!t || t.wsId !== ws.id || !canSee(auth, 'task', t)) return send(res, 404, { error: 'Not found' });
     if (m === 'PATCH') {
       const next = applyTask({ ...t }, await readJson(req, 50_000));
+      if (!canSee(auth, 'task', next)) return send(res, 404, { error: 'Goal not found' });
       db.tasks[t.id] = next;
       // Keep linked entries' own copy current so they still read right if the task is deleted later.
       for (const e of Object.values(db.entries)) {
@@ -585,15 +710,117 @@ async function api(req, res, url) {
       return send(res, 200, publicTask(next));
     }
     if (m === 'DELETE') {
-      delete db.tasks[t.id];
-      for (const e of Object.values(db.entries)) {
-        if (e.taskId === t.id) {
-          e.taskId = null;
-          broadcast(ws.id, { type: 'entry', entry: publicEntry(e) });
-        }
+      deleteTask(t);
+      save();
+      return send(res, 200, { ok: true });
+    }
+    return send(res, 405, { error: 'Method not allowed' });
+  }
+
+  if (a === 'campaigns') {
+    if (m === 'POST' && !b) {
+      const body = await readJson(req, 100_000);
+      const c = applyCampaign({ id: rid(), wsId: ws.id, ownerId: auth.memberId, by: auth.member, createdAt: Date.now(), name: '', brief: '', start: null, end: null, color: 'violet', status: 'active', private: false, memberIds: [], outcomes: [...OUTCOMES], lastReportAt: null }, body, ws, auth);
+      // Its own feed (in a "Campaigns" chat folder) and its own stack for files.
+      let folder = ws.chatFolders.find((f) => f.campaigns);
+      if (!folder) ws.chatFolders.push((folder = { id: rid(8), name: 'Campaigns', campaigns: true }));
+      const ch = { id: rid(8), name: channelName(ws, c.name), folderId: folder.id, campaignId: c.id };
+      const st = { id: rid(8), name: c.name.slice(0, 40), campaignId: c.id };
+      ws.channels.push(ch);
+      ws.stacks.push(st);
+      c.channelId = ch.id;
+      c.stackId = st.id;
+      db.campaigns[c.id] = c;
+      save();
+      broadcast(ws.id, { type: 'campaign', campaign: publicCampaign(c) });
+      broadcast(ws.id, { type: 'workspace' });
+      return send(res, 200, publicCampaign(c));
+    }
+    const c = b && db.campaigns[b];
+    if (!c || c.wsId !== ws.id || !canSee(auth, 'campaign', c)) return send(res, 404, { error: 'Not found' });
+    if (m === 'PATCH') {
+      const body = await readJson(req, 100_000);
+      const was = JSON.stringify([c.private, c.memberIds]);
+      const next = applyCampaign({ ...c, memberIds: [...c.memberIds] }, body, ws, auth);
+      db.campaigns[c.id] = next;
+      if (body.name !== undefined) {
+        const st = ws.stacks.find((x) => x.id === c.stackId);
+        if (st) st.name = next.name.slice(0, 40);
       }
       save();
-      broadcast(ws.id, { type: 'task:remove', id: t.id });
+      // Who can see it changed: everyone reloads so it appears or disappears cleanly.
+      if (was !== JSON.stringify([next.private, next.memberIds])) broadcast(ws.id, { type: 'resync' });
+      else {
+        broadcast(ws.id, { type: 'campaign', campaign: publicCampaign(next) });
+        if (body.name !== undefined) broadcast(ws.id, { type: 'workspace' });
+      }
+      return send(res, 200, publicCampaign(next));
+    }
+    if (m === 'DELETE') {
+      if (c.ownerId !== auth.memberId && auth.role !== 'owner') return send(res, 403, { error: 'Only the campaign owner can delete it.' });
+      deleteCampaign(ws, c);
+      save();
+      return send(res, 200, { ok: true });
+    }
+    return send(res, 405, { error: 'Method not allowed' });
+  }
+
+  if (a === 'goals') {
+    if (m === 'POST' && !b) {
+      const body = await readJson(req, 50_000);
+      const c = db.campaigns[body.campaignId];
+      if (!c || c.wsId !== ws.id || !canSee(auth, 'campaign', c)) return send(res, 404, { error: 'Campaign not found' });
+      const order = Math.max(0, ...Object.values(db.goals).filter((g) => g.campaignId === c.id).map((g) => g.order || 0)) + 1;
+      const g = applyGoal({ id: rid(), wsId: ws.id, campaignId: c.id, by: auth.member, createdAt: Date.now(), title: '', due: null, kind: 'tasks', target: 10, counts: null, order }, body, c);
+      db.goals[g.id] = g;
+      save();
+      broadcast(ws.id, { type: 'goal', goal: publicGoal(g) });
+      return send(res, 200, publicGoal(g));
+    }
+    const g = b && db.goals[b];
+    if (!g || g.wsId !== ws.id || !canSee(auth, 'goal', g)) return send(res, 404, { error: 'Not found' });
+    if (m === 'PATCH') {
+      const next = applyGoal({ ...g }, await readJson(req, 50_000), db.campaigns[g.campaignId]);
+      db.goals[g.id] = next;
+      save();
+      broadcast(ws.id, { type: 'goal', goal: publicGoal(next) });
+      return send(res, 200, publicGoal(next));
+    }
+    if (m === 'DELETE') {
+      deleteGoal(g);
+      save();
+      return send(res, 200, { ok: true });
+    }
+    return send(res, 405, { error: 'Method not allowed' });
+  }
+
+  // One logged call/email/visit and how it went.
+  if (a === 'attempts') {
+    if (m === 'POST' && !b) {
+      const body = await readJson(req, 50_000);
+      const g = db.goals[body.goalId];
+      if (!g || g.wsId !== ws.id || !canSee(auth, 'goal', g)) return send(res, 404, { error: 'Goal not found' });
+      const c = db.campaigns[g.campaignId];
+      const outcome = String(body.outcome || '');
+      if (!c.outcomes.includes(outcome)) return send(res, 400, { error: 'Pick an outcome' });
+      const t = body.taskId && db.tasks[body.taskId];
+      const x = {
+        id: rid(), wsId: ws.id, campaignId: c.id, goalId: g.id, taskId: t && t.goalId === g.id ? t.id : null,
+        memberId: auth.memberId, by: auth.member, at: Date.now(), outcome,
+        contact: String(body.contact || '').trim().slice(0, 200), note: String(body.note || '').trim().slice(0, 2000),
+      };
+      db.attempts[x.id] = x;
+      save();
+      broadcast(ws.id, { type: 'attempt', attempt: publicAttempt(x) });
+      return send(res, 200, publicAttempt(x));
+    }
+    const x = b && db.attempts[b];
+    if (!x || x.wsId !== ws.id || !canSee(auth, 'attempt', x)) return send(res, 404, { error: 'Not found' });
+    if (m === 'DELETE') {
+      if (x.memberId !== auth.memberId && db.campaigns[x.campaignId]?.ownerId !== auth.memberId) return send(res, 403, { error: 'You can only remove your own entries.' });
+      delete db.attempts[x.id];
+      save();
+      broadcast(ws.id, { type: 'attempt:remove', id: x.id });
       return send(res, 200, { ok: true });
     }
     return send(res, 405, { error: 'Method not allowed' });
@@ -624,24 +851,24 @@ async function api(req, res, url) {
       } else return send(res, 405, { error: 'Method not allowed' });
     }
     save();
-    broadcast(ws.id, { type: 'workspace', workspace: publicWorkspace(ws) });
-    return send(res, 200, publicWorkspace(ws));
+    broadcast(ws.id, { type: 'workspace' });
+    return send(res, 200, publicWorkspace(ws, auth.memberId));
   }
 
   if (a === 'invite' && m === 'POST') {
     if (auth.role !== 'owner') return send(res, 403, { error: 'Only team owners can do that.' });
     ws.inviteCode = newInviteCode();
     save();
-    broadcast(ws.id, { type: 'workspace', workspace: publicWorkspace(ws) });
-    return send(res, 200, publicWorkspace(ws));
+    broadcast(ws.id, { type: 'workspace' });
+    return send(res, 200, publicWorkspace(ws, auth.memberId));
   }
 
   if (a === 'workspace' && m === 'PATCH') {
     const body = await readJson(req);
     if (body.expireHours !== undefined) ws.settings.expireHours = Math.max(0, Number(body.expireHours) || 0);
     save();
-    broadcast(ws.id, { type: 'workspace', workspace: publicWorkspace(ws) });
-    return send(res, 200, publicWorkspace(ws));
+    broadcast(ws.id, { type: 'workspace' });
+    return send(res, 200, publicWorkspace(ws, auth.memberId));
   }
 
   if (a === 'stacks') {
@@ -656,6 +883,7 @@ async function api(req, res, url) {
       const s = ws.stacks.find((x) => x.id === b);
       if (s && String(name || '').trim()) s.name = String(name).trim().slice(0, 40);
     } else if (m === 'DELETE' && b) {
+      if (ws.stacks.find((x) => x.id === b)?.campaignId) return send(res, 400, { error: 'This stack belongs to a campaign. Delete the campaign instead.' });
       ws.stacks = ws.stacks.filter((x) => x.id !== b);
       for (const it of Object.values(db.items)) {
         if (it.wsId === ws.id && it.stackId === b) {
@@ -665,8 +893,8 @@ async function api(req, res, url) {
       }
     } else return send(res, 405, { error: 'Method not allowed' });
     save();
-    broadcast(ws.id, { type: 'workspace', workspace: publicWorkspace(ws) });
-    return send(res, 200, publicWorkspace(ws));
+    broadcast(ws.id, { type: 'workspace' });
+    return send(res, 200, publicWorkspace(ws, auth.memberId));
   }
 
   if (a === 'channels') {
@@ -680,12 +908,13 @@ async function api(req, res, url) {
       if (body.name !== undefined) ch.name = channelName(ws, body.name, ch.id);
       if (body.folderId !== undefined) ch.folderId = validChatFolder(ws, body.folderId);
     } else if (m === 'DELETE' && b) {
+      if (ws.channels.find((x) => x.id === b)?.campaignId) return send(res, 400, { error: 'This feed belongs to a campaign. Delete the campaign instead.' });
       ws.channels = ws.channels.filter((x) => x.id !== b);
       for (const it of Object.values(db.items)) if (it.wsId === ws.id && it.channelId === b) deleteItem(it.id);
     } else return send(res, 405, { error: 'Method not allowed' });
     save();
-    broadcast(ws.id, { type: 'workspace', workspace: publicWorkspace(ws) });
-    return send(res, 200, publicWorkspace(ws));
+    broadcast(ws.id, { type: 'workspace' });
+    return send(res, 200, publicWorkspace(ws, auth.memberId));
   }
 
   if (a === 'chat-folders') {
@@ -703,8 +932,8 @@ async function api(req, res, url) {
       for (const ch of ws.channels) if (ch.folderId === b) ch.folderId = null;
     } else return send(res, 405, { error: 'Method not allowed' });
     save();
-    broadcast(ws.id, { type: 'workspace', workspace: publicWorkspace(ws) });
-    return send(res, 200, publicWorkspace(ws));
+    broadcast(ws.id, { type: 'workspace' });
+    return send(res, 200, publicWorkspace(ws, auth.memberId));
   }
 
   if (a === 'items') {
@@ -715,16 +944,17 @@ async function api(req, res, url) {
       if (!t.trim()) return send(res, 400, { error: 'Empty' });
       // A reply lives in its parent's thread and feed. Threads are one level deep.
       const parent = parentId ? db.items[parentId] : null;
-      if (parentId && (type !== 'message' || !parent || parent.wsId !== ws.id || parent.type !== 'message' || parent.parentId)) {
+      if (parentId && (type !== 'message' || !parent || parent.wsId !== ws.id || parent.type !== 'message' || parent.parentId || !canSee(auth, 'item', parent))) {
         return send(res, 400, { error: 'That thread is gone' });
       }
-      const where = parent ? { parentId: parent.id, channelId: parent.channelId || null } : { stackId: validStack(ws, stackId), channelId: validChannel(ws, channelId) };
+      const where = parent ? { parentId: parent.id, channelId: parent.channelId || null } : { stackId: validStack(ws, stackId, auth.memberId), channelId: validChannel(ws, channelId, auth.memberId) };
+      if (!parent && channelId && !where.channelId) return send(res, 404, { error: 'Feed not found' });
       const item = addItem(baseItem(auth, { type, text: t, ...where }));
       if (type === 'message') pinLinked(ws, t);
       return send(res, 200, publicItem(item));
     }
     const it = b && db.items[b];
-    if (!it || it.wsId !== ws.id) return send(res, 404, { error: 'Not found' });
+    if (!it || it.wsId !== ws.id || !canSee(auth, 'item', it)) return send(res, 404, { error: 'Not found' });
     // Messages: only the author edits; the author or an owner deletes.
     const own = it.memberId ? it.memberId === auth.memberId : it.deviceId === auth.deviceId;
     if (c === 'react' && m === 'POST' && it.type === 'message') {
@@ -765,7 +995,7 @@ async function api(req, res, url) {
         }
       }
       if (body.pinned !== undefined) it.pinned = !!body.pinned;
-      if (body.stackId !== undefined) it.stackId = validStack(ws, body.stackId);
+      if (body.stackId !== undefined) it.stackId = validStack(ws, body.stackId, auth.memberId);
       if (body.name !== undefined && (it.type === 'file' || it.type === 'folder')) {
         const name = String(body.name).trim().replace(/[\/\\]/g, '_').slice(0, 255);
         if (!name) return send(res, 400, { error: 'Name required' });
@@ -783,7 +1013,7 @@ async function api(req, res, url) {
   }
 
   if (a === 'clear' && m === 'POST') {
-    for (const it of Object.values(db.items)) if (it.wsId === ws.id && !it.pinned) deleteItem(it.id);
+    for (const it of Object.values(db.items)) if (it.wsId === ws.id && !it.pinned && canSee(auth, 'item', it)) deleteItem(it.id);
     return send(res, 200, { ok: true });
   }
 
@@ -799,7 +1029,7 @@ async function api(req, res, url) {
         if (!folder || folder.wsId !== ws.id || folder.type !== 'folder' || folder.status !== 'uploading') return send(res, 404, { error: 'Folder not found' });
         target = { folder: folder.id, relPath: cleanRel(body.relPath), mtime: Number(body.mtime) || Date.now() };
       } else {
-        target = { name: cleanName(body.name), type: String(body.type || '').slice(0, 200), stackId: validStack(ws, body.stackId), channelId: validChannel(ws, body.channelId) };
+        target = { name: cleanName(body.name), type: String(body.type || '').slice(0, 200), stackId: validStack(ws, body.stackId, auth.memberId), channelId: validChannel(ws, body.channelId, auth.memberId) };
       }
       const up = { id: rid(), wsId: ws.id, size, received: 0, crc: 0, touched: Date.now(), ...target };
       await fsp.writeFile(partPath(up), '');
@@ -862,8 +1092,8 @@ async function api(req, res, url) {
       const item = addItem({
         ...baseItem(auth, { type: 'file', name: up.name, size: up.size, mime: mimeFor(up.name, up.type) }),
         id,
-        stackId: validStack(ws, up.stackId),
-        channelId: validChannel(ws, up.channelId),
+        stackId: validStack(ws, up.stackId, auth.memberId),
+        channelId: validChannel(ws, up.channelId, auth.memberId),
       });
       return send(res, 200, publicItem(item));
     }
@@ -895,8 +1125,8 @@ async function api(req, res, url) {
     const item = addItem({
       ...baseItem(auth, { type: 'file', name, size, mime: mimeFor(name, url.searchParams.get('type')) }),
       id,
-      stackId: validStack(ws, url.searchParams.get('stackId')),
-      channelId: validChannel(ws, url.searchParams.get('channelId')),
+      stackId: validStack(ws, url.searchParams.get('stackId'), auth.memberId),
+      channelId: validChannel(ws, url.searchParams.get('channelId'), auth.memberId),
     });
     return send(res, 200, publicItem(item));
   }
@@ -911,14 +1141,14 @@ async function api(req, res, url) {
           size: 0,
           files: [],
           status: 'uploading',
-          stackId: validStack(ws, stackId),
-          channelId: validChannel(ws, channelId),
+          stackId: validStack(ws, stackId, auth.memberId),
+          channelId: validChannel(ws, channelId, auth.memberId),
         })
       );
       return send(res, 200, { id: item.id });
     }
     const folder = b && db.items[b];
-    if (!folder || folder.wsId !== ws.id || folder.type !== 'folder') return send(res, 404, { error: 'Not found' });
+    if (!folder || folder.wsId !== ws.id || folder.type !== 'folder' || !canSee(auth, 'item', folder)) return send(res, 404, { error: 'Not found' });
     if (c === 'done' && m === 'POST') {
       folder.status = 'ready';
       folder.createdAt = Date.now();
@@ -937,7 +1167,7 @@ async function api(req, res, url) {
 
   if (a === 'files' && b && (m === 'GET' || m === 'HEAD')) {
     const it = db.items[b];
-    if (!it || it.wsId !== ws.id || it.type !== 'file') return send(res, 404, { error: 'Not found' });
+    if (!it || it.wsId !== ws.id || it.type !== 'file' || !canSee(auth, 'item', it)) return send(res, 404, { error: 'Not found' });
     return serveFile(req, res, path.join(FILES_DIR, it.id), { name: it.name, mime: it.mime, download: url.searchParams.has('dl') });
   }
 
