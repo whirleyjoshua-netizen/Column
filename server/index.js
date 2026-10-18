@@ -625,8 +625,33 @@ async function api(req, res, url) {
     }
     const it = b && db.items[b];
     if (!it || it.wsId !== ws.id) return send(res, 404, { error: 'Not found' });
+    // Messages: only the author edits; the author or an owner deletes.
+    const own = it.memberId ? it.memberId === auth.memberId : it.deviceId === auth.deviceId;
+    if (c === 'react' && m === 'POST' && it.type === 'message') {
+      const emoji = String((await readJson(req)).emoji || '').trim();
+      if (!emoji || emoji.length > 16) return send(res, 400, { error: 'Bad emoji' });
+      const r = (it.reactions ||= {});
+      const who = r[emoji] || [];
+      r[emoji] = who.includes(auth.memberId) ? who.filter((x) => x !== auth.memberId) : [...who, auth.memberId];
+      if (!r[emoji].length) delete r[emoji];
+      if (Object.keys(r).length > 40) return send(res, 400, { error: 'Too many reactions' });
+      save();
+      broadcast(ws.id, { type: 'item:update', item: publicItem(it) });
+      return send(res, 200, publicItem(it));
+    }
+    if (c) return send(res, 404, { error: 'Not found' });
     if (m === 'PATCH') {
-      const body = await readJson(req);
+      const body = await readJson(req, 300_000);
+      if (body.text !== undefined) {
+        if (it.type !== 'message' || !own) return send(res, 403, { error: 'You can only edit your own messages.' });
+        const t = String(body.text).slice(0, 200_000);
+        if (!t.trim()) return send(res, 400, { error: 'Empty' });
+        if (t !== it.text) {
+          it.text = t;
+          it.editedAt = Date.now();
+          pinLinked(ws, t);
+        }
+      }
       if (body.pinned !== undefined) it.pinned = !!body.pinned;
       if (body.stackId !== undefined) it.stackId = validStack(ws, body.stackId);
       if (body.name !== undefined && (it.type === 'file' || it.type === 'folder')) {
@@ -639,6 +664,7 @@ async function api(req, res, url) {
       return send(res, 200, publicItem(it));
     }
     if (m === 'DELETE') {
+      if (it.type === 'message' && !own && auth.role !== 'owner') return send(res, 403, { error: 'You can only delete your own messages.' });
       deleteItem(it.id);
       return send(res, 200, { ok: true });
     }

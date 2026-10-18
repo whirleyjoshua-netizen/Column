@@ -474,3 +474,21 @@ button.ln-chip:hover, .ln-task:hover { background: var(--card-hover); }
 .person .live { display: inline-block; vertical-align: 1px; margin-right: 7px; }
 .person .icon-btn svg { width: 16px; height: 16px; }
 .settings .warn { color: var(--text); background: var(--accent-soft); border-radius: 8px; padding: 7px 10px; }
+
+/* reactions + message editing */
+.reacts { display: flex; flex-wrap: wrap; gap: 4px; margin: 3px 2px 0; }
+.msg.mine .reacts { justify-content: flex-end; }
+.react { display: inline-flex; align-items: center; gap: 4px; background: var(--card); border: 1px solid var(--line); border-radius: 999px; padding: 1px 7px; font-size: 12px; line-height: 18px; color: var(--text); }
+.react span { font-size: 11px; color: var(--muted); }
+.react:hover { background: var(--card-hover); }
+.react.on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 16%, var(--card)); }
+.react.on span { color: var(--accent); }
+.menu .emoji-row { display: flex; gap: 2px; }
+.menu .emoji-row button { width: 32px; height: 32px; padding: 0; text-align: center; font-size: 18px; }
+.msg .edited { opacity: 0.8; }
+.msg.editing { max-width: 100%; width: 100%; }
+.msg.editing .actions { display: none; }
+.edit-box { width: 100%; }
+.msg-edit { width: 100%; resize: none; min-height: 34px; max-height: 240px; line-height: 1.35; padding: 7px 10px; border-radius: 12px; border: 1px solid var(--accent); }
+.edit-hint { font-size: 10.5px; color: var(--muted); margin: 2px 6px 0; }
+.msg.mine .edit-hint { text-align: right; }

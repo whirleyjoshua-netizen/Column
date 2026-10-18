@@ -83,6 +83,7 @@
     plus: svg('<path d="M12 5v14M5 12h14"/>'),
     down: svg('<path d="M6 9l6 6 6-6"/>'),
     task: svg('<rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8.5 12l2.5 2.5 4.5-5"/>'),
+    smile: svg('<circle cx="12" cy="12" r="9"/><path d="M8.5 14.5a4 4 0 0 0 7 0M9 9.5h.01M15 9.5h.01"/>'),
     reveal: svg('<path d="M14 3h7v7M10 14 21 3M19 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h5"/>'),
   };
 
@@ -484,6 +485,11 @@
       if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
         e.preventDefault();
         sendIt();
+      } else if (e.key === 'ArrowUp' && chat && !ta.value) {
+        // Up in an empty box edits your last message, like Slack.
+        const last = itemsFor(view).filter((x) => x.type === 'message' && isMine(x)).sort((x, y) => y.createdAt - x.createdAt)[0];
+        const el = last && pane._cards.get(last.id);
+        if (el) { e.preventDefault(); el.scrollIntoView({ block: 'nearest' }); editMessage(el, last); }
       }
     });
     ta.addEventListener('input', () => {
@@ -519,7 +525,7 @@
     const want = [];
     for (const it of items) {
       let el = pane._cards.get(it.id);
-      if (!el || el._item !== it || force) {
+      if (!el || ((el._item !== it || force) && !el._editing)) {
         const fresh = it.type === 'message' ? messageEl(it) : cardEl(it);
         if (el) el.replaceWith(fresh);
         el = fresh;
@@ -569,6 +575,7 @@
     const a = h('div', { class: 'actions' });
     const btn = (icon, title, fn, cls) => h('button', { title, 'aria-label': title, class: cls, html: icon, onclick: (e) => { e.stopPropagation(); fn(e.currentTarget, e); } });
     if (it.type === 'file' || it.type === 'folder') a.append(btn(I.download, it.type === 'folder' ? 'Download (.zip)' : 'Download', () => download(it)));
+    if (it.type === 'message') a.append(btn(I.smile, 'React', (b) => reactMenu(b, it)));
     if (it.type === 'text' || it.type === 'message') {
       a.append(btn(I.copy, 'Copy', () => copyText(it.type === 'message' ? plainText(it.text) : it.text)));
       a.append(btn(I.clock, 'Add to my day', () => openSheet({ text: it.text.slice(0, 5000), date: todayKey() })));
@@ -579,7 +586,10 @@
       a.append(btn(I.pin, it.pinned ? 'Unpin' : 'Pin (never auto-clear)', () => api('PATCH', '/items/' + it.id, { pinned: !it.pinned }).catch((e) => toast(e.message)), it.pinned ? 'on' : null));
       if (!it.channelId) a.append(btn(I.stack, 'Move to stack', (b) => stackMenu(it, b)));
     }
-    a.append(btn(I.trash, 'Delete everywhere', (b) => confirmClick(b, () => api('DELETE', '/items/' + it.id).catch((e) => toast(e.message)))));
+    if (it.type === 'message' && isMine(it)) a.append(btn(I.edit, 'Edit', (b) => editMessage(b.closest('.msg'), it)));
+    if (it.type !== 'message' || isMine(it) || amOwner()) {
+      a.append(btn(I.trash, it.type === 'message' ? 'Delete message' : 'Delete everywhere', (b) => confirmClick(b, () => api('DELETE', '/items/' + it.id).catch((e) => toast(e.message)))));
+    }
     return a;
   }
 
@@ -660,16 +670,78 @@
   // Yours from any device. Items from before per-person logins only know their device.
   const isMine = (it) => (it.memberId ? it.memberId === S.me?.memberId : it.deviceId === S.deviceId);
 
+  const amOwner = () => S.workspace?.members?.find((m) => m.id === S.me?.memberId)?.role === 'owner';
+  const memberName = (id) => (id === S.me?.memberId ? 'You' : S.workspace?.members?.find((m) => m.id === id)?.name || 'Someone');
+
   function messageEl(it) {
     const mine = isMine(it);
     const links = linksIn(it.text);
     const text = links.length ? stripLinks(it.text) : it.text;
     return h('article', { class: 'msg' + (mine ? ' mine' : '') },
-      h('div', { class: 'who' }, `${mine ? 'You' : it.by} · ${it.device} · `, h('span', { 'data-ago': it.createdAt }, ago(it.createdAt))),
+      h('div', { class: 'who' }, `${mine ? 'You' : it.by} · ${it.device} · `, h('span', { 'data-ago': it.createdAt }, ago(it.createdAt)),
+        it.editedAt ? h('span', { class: 'edited', title: 'Edited ' + new Date(it.editedAt).toLocaleString() }, ' · edited') : null),
       text ? h('div', { class: 'bubble', html: linkify(text) }) : null,
       links.length ? h('div', { class: 'links' }, links.map(linkEl)) : null,
+      reactsEl(it),
       actionsEl(it)
     );
+  }
+
+  // ---------- reactions + editing ----------
+  const EMOJI = ['👍', '❤️', '😂', '🎉', '👀', '🙏', '✅', '🔥'];
+  const react = (it, emoji) => api('POST', `/items/${it.id}/react`, { emoji }).catch((e) => toast(e.message));
+
+  function reactsEl(it) {
+    const r = Object.entries(it.reactions || {});
+    if (!r.length) return null;
+    return h('div', { class: 'reacts' }, r.map(([emoji, who]) =>
+      h('button', { class: 'react' + (who.includes(S.me?.memberId) ? ' on' : ''), title: who.map(memberName).join(', '), onclick: () => react(it, emoji) },
+        emoji, h('span', {}, String(who.length)))));
+  }
+
+  function reactMenu(anchor, it) {
+    openMenu(anchor, [{ emojis: EMOJI, run: (emoji) => react(it, emoji) }]);
+  }
+
+  // Edit a message in place. Links stay attached; only the words are edited.
+  function editMessage(el, it) {
+    if (!el || el._editing) return;
+    const links = linksIn(it.text);
+    const old = links.length ? stripLinks(it.text) : it.text;
+    const bubble = el.querySelector('.bubble');
+    const ta = h('textarea', { class: 'msg-edit', rows: 1, 'aria-label': 'Edit message' });
+    ta.value = old;
+    const hint = h('div', { class: 'edit-hint' }, 'Enter to save · Esc to cancel');
+    const box = h('div', { class: 'edit-box' }, ta, hint);
+    el._editing = true;
+    el.classList.add('editing');
+    if (bubble) bubble.replaceWith(box);
+    else el.querySelector('.who').after(box);
+    const grow = () => { ta.style.height = ''; ta.style.height = Math.min(ta.scrollHeight + 2, 240) + 'px'; };
+    const finish = (save) => {
+      if (!el._editing) return;
+      el._editing = false;
+      const next = ta.value.trim();
+      if (save && !next && !links.length) {
+        el._editing = true;
+        return toast('A message can’t be empty — delete it instead.');
+      }
+      el._item = null; // redraw on the next render
+      render();
+      if (!save || next === old.trim()) return;
+      const text = [next, links.map((l) => linkToken(l.type, l.id)).join(' ')].filter(Boolean).join('\n');
+      api('PATCH', '/items/' + it.id, { text }).catch((e) => toast(e.message));
+    };
+    ta.addEventListener('keydown', (e) => {
+      e.stopPropagation();
+      if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); finish(true); }
+      else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+    });
+    ta.addEventListener('input', grow);
+    ta.addEventListener('blur', () => setTimeout(() => finish(true), 0));
+    ta.focus();
+    ta.setSelectionRange(ta.value.length, ta.value.length);
+    grow();
   }
 
   // ---------- links in chat: [[file:<id>]], [[stack:<id>]], [[task:<id>]] ----------
@@ -741,7 +813,7 @@
     for (const pane of document.querySelectorAll('.pane')) {
       for (const [id, el] of pane._cards) {
         const it = el._item;
-        if (it?.type !== 'message' || !it.text.includes('[[')) continue;
+        if (it?.type !== 'message' || !it.text.includes('[[') || el._editing) continue;
         const fresh = messageEl(it);
         fresh._item = it;
         el.replaceWith(fresh);
@@ -904,6 +976,7 @@
     for (const r of rows) {
       if (r.head) menu.append(h('div', { class: 'mh' }, r.head));
       else if (r.note) menu.append(h('div', { class: 'mh', style: 'text-transform:none' }, r.note));
+      else if (r.emojis) menu.append(h('div', { class: 'emoji-row' }, r.emojis.map((e) => h('button', { 'aria-label': 'React ' + e, onclick: () => { hideMenu(); r.run(e); } }, e))));
       else {
         const b = h('button', { class: (r.on ? 'on' : '') + (r.danger ? ' danger' : ''), 'data-label': r.danger ? '1' : null }, r.label);
         b.addEventListener('click', () => (r.danger ? confirmClick(b, () => { hideMenu(); r.run(); }) : (hideMenu(), r.run())));
@@ -913,7 +986,8 @@
     menu.classList.remove('hidden');
     const r = anchor.getBoundingClientRect();
     const mw = menu.offsetWidth, mh = menu.offsetHeight;
-    menu.style.left = Math.max(8, Math.min(r.right - mw, innerWidth - mw - 8)) + 'px';
+    const x = r.left + r.right < innerWidth ? r.left : r.right - mw; // open toward the roomier side
+    menu.style.left = Math.max(8, Math.min(x, innerWidth - mw - 8)) + 'px';
     menu.style.top = (r.bottom + mh + 8 > innerHeight ? r.top - mh - 4 : r.bottom + 4) + 'px';
   }
 
