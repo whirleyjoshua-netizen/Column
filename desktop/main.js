@@ -18,7 +18,7 @@ if (!app.requestSingleInstanceLock()) app.quit();
 
 // ---------- config ----------
 const CFG_PATH = path.join(app.getPath('userData'), 'config.json');
-let cfg = { serverUrl: null, alwaysOnTop: false, autoSave: false, openAtLogin: false, panes: 1 };
+let cfg = { serverUrl: null, alwaysOnTop: false, autoSave: false, openAtLogin: false, panes: 1, trayNext: true };
 try {
   cfg = { ...cfg, ...JSON.parse(fs.readFileSync(CFG_PATH, 'utf8')) };
 } catch {}
@@ -134,27 +134,49 @@ function setWidth(panes) {
   win.setBounds({ x: right - target, y: b.y, width: target, height: b.height }, true);
 }
 
+// What's on now / next today, sent by the page: { title, items: [{ label }] }.
+let next = null;
+function openDay() {
+  win?.show();
+  win?.focus();
+  win?.webContents.send('open-day');
+}
+function updateTray() {
+  if (!tray) return;
+  const title = cfg.trayNext && next?.title ? next.title : '';
+  if (isMac) tray.setTitle(title ? ' ' + title : '', { fontType: 'monospacedDigit' });
+  tray.setToolTip(title ? `Column · ${title}` : 'Column');
+  if (!isMac) tray.setContextMenu(trayMenu());
+}
+
+function trayMenu() {
+  const today = next?.items?.length
+    ? [{ label: 'Today', enabled: false }, ...next.items.slice(0, 8).map((i) => ({ label: i.label, click: openDay })), { type: 'separator' }]
+    : [];
+  return Menu.buildFromTemplate([
+    ...today,
+    { label: win?.isVisible() ? 'Hide Column' : 'Show Column', click: toggle },
+    { label: 'Always on top', type: 'checkbox', checked: cfg.alwaysOnTop, click: (i) => applyCfg({ alwaysOnTop: i.checked }) },
+    { label: 'Open Downloads/Column', click: openSaveDir },
+    { label: 'Change server…', click: () => { win.show(); loadSetup(); } },
+    { type: 'separator' },
+    { label: 'Quit Column', click: () => { quitting = true; app.quit(); } },
+  ]);
+}
+
 function buildTray() {
   tray = new Tray(trayIcon());
   tray.setToolTip('Column');
-  const menu = () =>
-    Menu.buildFromTemplate([
-      { label: win?.isVisible() ? 'Hide Column' : 'Show Column', click: toggle },
-      { label: 'Always on top', type: 'checkbox', checked: cfg.alwaysOnTop, click: (i) => applyCfg({ alwaysOnTop: i.checked }) },
-      { label: 'Open Downloads/Column', click: openSaveDir },
-      { label: 'Change server…', click: () => { win.show(); loadSetup(); } },
-      { type: 'separator' },
-      { label: 'Quit Column', click: () => { quitting = true; app.quit(); } },
-    ]);
   tray.on('click', toggle);
-  tray.on('right-click', () => tray.popUpContextMenu(menu()));
-  if (!isMac) tray.setContextMenu(menu()); // Windows/Linux: right-click menu
+  tray.on('right-click', () => tray.popUpContextMenu(trayMenu()));
+  updateTray(); // Windows/Linux: sets the right-click menu
 }
 
 function applyCfg(patch) {
   cfg = { ...cfg, ...patch };
   if ('alwaysOnTop' in patch) win?.setAlwaysOnTop(!!cfg.alwaysOnTop, 'floating');
   if ('openAtLogin' in patch) app.setLoginItemSettings({ openAtLogin: !!cfg.openAtLogin, openAsHidden: true });
+  if ('trayNext' in patch) updateTray();
   saveCfg();
 }
 
@@ -241,6 +263,10 @@ ipcMain.on('reveal', (_e, p) => p && shell.showItemInFolder(p));
 ipcMain.on('open-folder', openSaveDir);
 ipcMain.on('copy-text', (_e, text) => clipboard.writeText(String(text || '')));
 ipcMain.on('change-server', () => loadSetup());
+ipcMain.on('set-next', (_e, info) => {
+  next = info && typeof info === 'object' ? { title: String(info.title || '').slice(0, 60), items: (info.items || []).slice(0, 8).map((i) => ({ label: String(i.label || '').slice(0, 80) })) } : null;
+  updateTray();
+});
 ipcMain.handle('connect', async (_e, raw) => {
   let url = String(raw || '').trim().replace(/\/+$/, '');
   if (!/^https?:\/\//.test(url)) url = 'http://' + url;

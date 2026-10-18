@@ -15,4 +15,6 @@ contextBridge.exposeInMainWorld('columnDesktop', {
   copyText: (text) => ipcRenderer.send('copy-text', text),
   changeServer: () => ipcRenderer.send('change-server'),
   connect: (url) => ipcRenderer.invoke('connect', url),
+  setNext: (info) => ipcRenderer.send('set-next', info),
+  onOpenDay: (fn) => ipcRenderer.on('open-day', () => fn()),
 });

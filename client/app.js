@@ -1640,6 +1640,7 @@
 
   function renderDay() {
     if (!S.workspace || D.dragging) return;
+    sendNext();
     if (!D.scroll) buildDay();
     for (const b of D.seg.children) b.classList.toggle('on', b.dataset.sub === D.sub);
     D.head.classList.toggle('hidden', D.sub !== 'schedule');
@@ -2222,7 +2223,30 @@
       }
     }
   }
+  // Desktop menu bar: what's on now, else what's next today, plus the rest of today for the tray menu.
+  let lastNext = '';
+  function sendNext() {
+    if (!desktop?.setNext || !S.workspace) return;
+    const n = nowMin();
+    const short = (t) => (t.length > 22 ? t.slice(0, 21) + '…' : t);
+    const today = entriesOn(todayKey()).filter((e) => e.start != null && !e.done).sort((a, b) => a.start - b.start);
+    const now = today.find((e) => e.end != null && e.start <= n && n < e.end);
+    const up = today.find((e) => e.start > n);
+    const title = now ? `${short(now.text)} · til ${fmtTime(now.end)}` : up ? `${fmtTime(up.start)} ${short(up.text)}` : '';
+    const items = today.filter((e) => (e.end ?? e.start + 1) > n).map((e) => ({ label: `${fmtTime(e.start)}${e.end != null ? '–' + fmtTime(e.end) : ''}  ${e.text}` }));
+    const msg = JSON.stringify({ title, items });
+    if (msg === lastNext) return;
+    lastNext = msg;
+    desktop.setNext({ title, items });
+  }
+  desktop?.onOpenDay?.(() => {
+    setTab('day');
+    if (D.sub !== 'schedule') setSub('schedule');
+    goDay(todayKey());
+  });
+
   setInterval(() => {
+    sendNext();
     checkReminders();
     if (S.tab === 'day' && D.sub === 'schedule' && D.scroll) renderDay(); // move the "now" line
   }, 30_000);
@@ -2611,6 +2635,7 @@
         toggleRow('Always on top', 'Keep the column above other windows', S.desktopCfg.alwaysOnTop, (on) => { S.desktopCfg.alwaysOnTop = on; desktop.setConfig({ alwaysOnTop: on }); }),
         toggleRow('Auto-save incoming files', 'Copy everything that arrives into Downloads/Column', S.desktopCfg.autoSave, (on) => { S.desktopCfg.autoSave = on; desktop.setConfig({ autoSave: on }); }),
         toggleRow('Open at login', null, S.desktopCfg.openAtLogin, (on) => { S.desktopCfg.openAtLogin = on; desktop.setConfig({ openAtLogin: on }); }),
+        desktop.setNext && desktop.platform === 'darwin' ? toggleRow('Next event in menu bar', 'Show what’s on now or next beside the menu-bar icon', S.desktopCfg.trayNext !== false, (on) => { S.desktopCfg.trayNext = on; desktop.setConfig({ trayNext: on }); }) : null,
         h('div', { class: 'srow' }, h('span', {}, 'Show / hide', h('small', {}, desktop.platform === 'darwin' ? '⌘ ⇧ Space, or the menu bar icon' : 'Ctrl + Shift + Space, or the tray icon'))),
         h('div', { class: 'btns', style: 'margin-top:8px' },
           h('button', { class: 'btn', onclick: () => desktop.openFolder() }, 'Open Downloads/Column'),
