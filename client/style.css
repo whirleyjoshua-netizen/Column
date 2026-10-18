@@ -660,3 +660,26 @@ button.oc:hover { background: color-mix(in srgb, var(--oc) 30%, transparent); }
 .cal-btns { display: flex; gap: 6px; flex: none; }
 .cal-sec small.err { color: var(--danger, #e5484d); }
 .cal-add { display: flex; flex-wrap: wrap; gap: 8px; }
+
+/* Agents */
+.agents { display: flex; flex-direction: column; }
+.ag-head-btns { display: flex; gap: 6px; }
+.ag-intro { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; font-size: 13px; }
+.ag-intro p { color: var(--muted); margin: 6px 0 10px; line-height: 1.45; }
+.ag-view { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.ag-thread { flex: 1; min-height: 120px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; padding: 6px 2px 10px; }
+.ag-msg { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; max-width: 92%; }
+.ag-msg.me { align-self: flex-end; align-items: flex-end; }
+.ag-msg small { font-size: 10.5px; color: var(--muted); }
+.ag-bubble { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 8px 11px; font-size: 13px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
+.ag-msg.me .ag-bubble { background: var(--card-hover); }
+.ag-bubble.err { color: var(--danger); border-color: var(--danger); }
+.ag-actions { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--muted); }
+.ag-actions li { display: flex; gap: 5px; align-items: center; } .ag-actions svg { width: 12px; height: 12px; color: var(--accent, #8b7cff); flex: none; }
+.ag-status { min-height: 18px; font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 6px; padding: 0 4px 6px; }
+.ag-dots { width: 7px; height: 7px; border-radius: 50%; background: currentColor; animation: ag-pulse 1s infinite alternate; }
+@keyframes ag-pulse { from { opacity: 0.25; } to { opacity: 1; } }
+.ag-compose { display: flex; flex-direction: column; gap: 6px; border-top: 1px solid var(--line); padding-top: 8px; }
+.ag-compose textarea { width: 100%; resize: vertical; }
+.ag-compose-btns { display: flex; justify-content: flex-end; gap: 6px; }
+.ag-key { display: flex; gap: 6px; min-width: 0; } .ag-key input { width: 180px; min-width: 0; }

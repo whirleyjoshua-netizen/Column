@@ -7,11 +7,13 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import zlib from 'node:zlib';
 import { pipeline } from 'node:stream/promises';
+import { Readable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 import { streamZip, zipSize } from './zip.js';
 import { iconPng } from './png.js';
 import { providers as calProviders } from './calendar.js';
+import { llms, llmError } from './llm.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 4747);
@@ -25,10 +27,13 @@ const PUBLIC_URL = (process.env.PUBLIC_URL || `http://localhost:${PORT}`).replac
 fs.mkdirSync(FILES_DIR, { recursive: true });
 
 // ---------- persistence (a JSON file is plenty for personal/small-team use) ----------
-let db = { workspaces: {}, tokens: {}, items: {}, entries: {}, tasks: {}, uploads: {}, campaigns: {}, goals: {}, attempts: {}, templates: {}, calendars: {} };
+let db = { workspaces: {}, tokens: {}, items: {}, entries: {}, tasks: {}, uploads: {}, campaigns: {}, goals: {}, attempts: {}, templates: {}, calendars: {}, agents: {}, agentKeys: {} };
 try {
   db = { ...db, ...JSON.parse(fs.readFileSync(DB_PATH, 'utf8')) };
 } catch {}
+// An agent's sign-in lasts one run; any left from a restart mid-run go.
+for (const [tok, sess] of Object.entries(db.tokens)) if (sess.agentId) delete db.tokens[tok];
+for (const a of Object.values(db.agents)) if (a.status === 'running') a.status = 'idle';
 for (const ws of Object.values(db.workspaces)) {
   ws.channels ||= [];
   ws.chatFolders ||= [];
@@ -731,25 +736,41 @@ function runTemplate(tpl, { date, time, by }) {
 }
 
 // Fires each slot once, when its time comes in the schedule's time zone. A slot missed by more than 6 hours (server was off) is skipped.
+// x: anything with { auto, slots, tz, since, ran }; marks the slots it returns as run.
+function dueSlots(x, now) {
+  if (!x.auto || !x.slots?.length || !db.workspaces[x.wsId]) return [];
+  const L = localNow(x.tz, now);
+  const today = x.slots.filter((s) => s.days.includes(L.dow));
+  const due = [];
+  for (const time of new Set(today.map((s) => s.time))) {
+    const [hh, mm] = time.split(':').map(Number);
+    const at = now - (L.min - (hh * 60 + mm)) * 60_000;
+    const key = `${L.date} ${time}`;
+    if (at > now || at < x.since || now - at > 6 * 3600_000 || x.ran.includes(key)) continue;
+    x.ran = [...x.ran, key].slice(-60);
+    due.push({ date: L.date, time, several: today.length > 1 });
+  }
+  return due;
+}
 function runSchedules() {
   const now = Date.now();
+  let ran = false;
   for (const tpl of Object.values(db.templates)) {
-    if (!tpl.auto || !tpl.slots.length || !db.workspaces[tpl.wsId]) continue;
-    const L = localNow(tpl.tz, now);
-    const today = tpl.slots.filter((x) => x.days.includes(L.dow));
-    for (const time of new Set(today.map((x) => x.time))) {
-      const [hh, mm] = time.split(':').map(Number);
-      const at = now - (L.min - (hh * 60 + mm)) * 60_000;
-      const key = `${L.date} ${time}`;
-      if (at > now || at < tpl.since || now - at > 6 * 3600_000 || tpl.ran.includes(key)) continue;
-      tpl.ran = [...tpl.ran, key].slice(-60);
+    for (const slot of dueSlots(tpl, now)) {
+      ran = true;
       try {
-        runTemplate(tpl, { date: L.date, time: today.length > 1 ? time : null });
+        runTemplate(tpl, { date: slot.date, time: slot.several ? slot.time : null });
       } catch (e) {
         console.error('Scheduled campaign failed:', e);
       }
     }
   }
+  for (const ag of Object.values(db.agents)) {
+    if (!dueSlots(ag, now).length) continue;
+    ran = true;
+    runAgent(ag, ag.routine || 'Do your routine.', 'schedule').catch((e) => console.error('Scheduled agent failed:', e));
+  }
+  if (ran) save();
 }
 
 function presence(wsId) {
@@ -970,6 +991,302 @@ function disconnectCalendar(conn) {
   delete db.calendars[conn.id];
   save();
   broadcast(conn.wsId, { type: 'calendars', forMember: conn.memberId });
+}
+
+// ---------- agents: each person's own, on their own API key ----------
+// An agent works inside Column only: your day, tasks, campaigns, chat, plus web research. It acts as you,
+// through the same API you use, so it sees and changes only what you can. Runs are a chat thread: you
+// message it, or its routine runs on a weekly schedule like saved campaigns do.
+const AGENT_PRESETS = {
+  day: {
+    name: 'Day planner', icon: 'cal',
+    instructions: 'Plan my day around my meetings. Put my most important open tasks into time blocks, leave short breaks, and don’t overbook. If overdue tasks won’t fit today, move them to a realistic day.',
+    routine: 'Plan my day.', slots: [{ days: [1, 2, 3, 4, 5], time: '08:00' }], auto: false,
+    can: { day: true, campaigns: true, chat: false, web: false }, write: true,
+  },
+  review: {
+    name: 'End-of-day review', icon: 'check',
+    instructions: 'At the end of the day, look at what got done and what didn’t. Move unfinished tasks to a sensible day, and tell me what to start with tomorrow.',
+    routine: 'Review my day.', slots: [{ days: [1, 2, 3, 4, 5], time: '17:30' }], auto: false,
+    can: { day: true, campaigns: true, chat: false, web: false }, write: true,
+  },
+  research: {
+    name: 'Campaign researcher', icon: 'search',
+    instructions: 'Help me plan and research campaigns: find leads, facts and angles, then turn them into goals and tasks. Put findings in the campaign brief with sources.',
+    routine: '', slots: [], auto: false,
+    can: { day: false, campaigns: true, chat: true, web: true }, write: true,
+  },
+  custom: {
+    name: 'New agent', icon: 'smile', instructions: '', routine: '', slots: [], auto: false,
+    can: { day: true, campaigns: true, chat: false, web: false }, write: false,
+  },
+};
+const THREAD_MAX = 100;
+const HISTORY_SENT = 24; // messages of the thread the model sees each turn
+const publicAgent = ({ wsId, ran, ...x }) => x;
+function agentState(ws, memberId) {
+  const keys = db.agentKeys[`${ws.id}:${memberId}`] || {};
+  return {
+    agents: Object.values(db.agents).filter((x) => x.wsId === ws.id && x.memberId === memberId).sort((x, y) => x.createdAt - y.createdAt).map(publicAgent),
+    keys: Object.fromEntries(Object.entries(keys).map(([k, v]) => [k, { last4: v.last4, models: v.models, savedAt: v.savedAt }])),
+    providers: Object.fromEntries(Object.entries(llms).map(([k, p]) => [k, p.name])),
+    presets: Object.fromEntries(Object.entries(AGENT_PRESETS).map(([k, p]) => [k, { name: p.name, instructions: p.instructions }])),
+  };
+}
+function applyAgent(ag, body, keys) {
+  if (body.name !== undefined) ag.name = String(body.name || '').trim().slice(0, 60);
+  if (body.instructions !== undefined) ag.instructions = String(body.instructions || '').slice(0, 8000);
+  if (body.routine !== undefined) ag.routine = String(body.routine || '').slice(0, 2000);
+  if (body.provider !== undefined) {
+    if (!keys[body.provider]) throw badRequest('Add a key for that provider first.');
+    if (body.provider !== ag.provider) ag.model = llms[body.provider].pick(keys[body.provider].models);
+    ag.provider = body.provider;
+  }
+  if (body.model !== undefined && keys[ag.provider]?.models.some((x) => x.id === body.model)) ag.model = body.model;
+  if (body.can && typeof body.can === 'object') for (const k of ['day', 'campaigns', 'chat', 'web']) if (body.can[k] !== undefined) ag.can[k] = !!body.can[k];
+  if (body.write !== undefined) ag.write = !!body.write;
+  if (body.tz !== undefined) ag.tz = validTz(body.tz);
+  if (body.slots !== undefined || body.auto !== undefined) {
+    if (body.slots !== undefined) ag.slots = slotList(body.slots);
+    if (body.auto !== undefined) ag.auto = !!body.auto;
+    ag.since = Date.now();
+  }
+  if (!ag.name) throw badRequest('Give it a name.');
+  return ag;
+}
+
+// Calls this server's own API as a signed-in person, so agents get exactly the rules people do.
+async function asMember(token, method, pathname, body) {
+  const req = Readable.from(body ? [Buffer.from(JSON.stringify(body))] : []);
+  Object.assign(req, { method, url: '/api' + pathname, headers: { authorization: 'Bearer ' + token } });
+  let status = 200;
+  let out = '';
+  const res = { headersSent: false, setHeader() {}, writeHead(code) { status = code; this.headersSent = true; }, end(b) { out = b ? String(b) : ''; } };
+  try {
+    await api(req, res, new URL('http://x/api' + pathname));
+  } catch (e) {
+    throw new Error(e.status ? e.message : 'Server error');
+  }
+  const data = out ? JSON.parse(out) : null;
+  if (status >= 400) throw new Error(data?.error || 'Failed');
+  return data;
+}
+
+// Repeating entries, the way the Day view shows them.
+function repeatHits(rule, anchor, k) {
+  if (!rule || k < anchor) return k === anchor;
+  const a = new Date(anchor + 'T12:00:00Z');
+  const d = new Date(k + 'T12:00:00Z');
+  if (rule === 'daily') return true;
+  if (rule === 'weekdays') return d.getUTCDay() > 0 && d.getUTCDay() < 6;
+  if (rule === 'weekly') return d.getUTCDay() === a.getUTCDay();
+  if (rule === 'monthly') return d.getUTCDate() === a.getUTCDate();
+  return false;
+}
+const hm = (m) => (m == null ? null : `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`);
+function minutes(v) {
+  if (v === null || v === undefined || v === '') return null;
+  const x = String(v).match(/^(\d{1,2}):(\d{2})$/);
+  if (!x || Number(x[1]) > 24 || Number(x[2]) > 59) throw new Error('Use 24-hour HH:MM times, like 09:30.');
+  return Number(x[1]) * 60 + Number(x[2]);
+}
+
+const S_ = (description, extra = {}) => ({ type: 'string', description, ...extra });
+const DATE = S_('YYYY-MM-DD');
+const TIME = S_('24-hour HH:MM');
+const obj = (properties, required = []) => ({ type: 'object', properties, required });
+// The tools, by group. write: changes something (left out when the agent may only look).
+const AGENT_TOOLS = [
+  { group: 'any', name: 'list_people', description: 'Everyone on the team, for assigning work.', parameters: obj({}) },
+  { group: 'day', name: 'get_day', description: 'One day: schedule entries (blocks have start and end; notes only a start; anytime items neither), calendar events, and tasks due that day or overdue.', parameters: obj({ date: DATE }) },
+  { group: 'day', name: 'list_tasks', description: 'Tasks, optionally only open ones and only those assigned to me.', parameters: obj({ open_only: { type: 'boolean' }, mine_only: { type: 'boolean' } }) },
+  { group: 'day', write: true, name: 'add_block', description: 'Add to the schedule. With start and end it is a time block; start only is a note; neither is an "anytime" item.', parameters: obj({ text: S_('What it is'), date: DATE, start: TIME, end: TIME }, ['text', 'date']) },
+  { group: 'day', write: true, name: 'update_block', description: 'Change a schedule entry. For a repeating entry this changes the whole series.', parameters: obj({ id: S_('Entry id'), text: { type: 'string' }, date: DATE, start: TIME, end: TIME, done: { type: 'boolean' } }, ['id']) },
+  { group: 'day', write: true, name: 'remove_block', description: 'Delete a schedule entry. Deleting a calendar event also deletes it from the calendar.', parameters: obj({ id: S_('Entry id') }, ['id']) },
+  { group: 'day', write: true, name: 'add_task', description: 'Add a task. goal_id puts it under a campaign goal. assignee is a person’s name or id.', parameters: obj({ text: { type: 'string' }, due: DATE, priority: { type: 'integer', description: '0 none, 1 low, 2 medium, 3 high' }, goal_id: { type: 'string' }, assignee: { type: 'string' } }, ['text']) },
+  { group: 'day', write: true, name: 'update_task', description: 'Change a task: text, due date, priority, done, assignee ("" for nobody).', parameters: obj({ id: { type: 'string' }, text: { type: 'string' }, due: S_('YYYY-MM-DD, or "" for no date'), priority: { type: 'integer' }, done: { type: 'boolean' }, assignee: { type: 'string' } }, ['id']) },
+  { group: 'campaigns', name: 'list_campaigns', description: 'All campaigns I can see, with status, dates, who is responsible and progress.', parameters: obj({}) },
+  { group: 'campaigns', name: 'get_campaign', description: 'One campaign: brief, goals and their tasks, what is logged and the latest logged calls/emails.', parameters: obj({ id: { type: 'string' } }, ['id']) },
+  { group: 'campaigns', write: true, name: 'update_campaign', description: 'Change a campaign’s brief (replaces it; keep what is worth keeping) or status (active, paused, done).', parameters: obj({ id: { type: 'string' }, brief: { type: 'string' }, status: { type: 'string', enum: ['active', 'paused', 'done'] } }, ['id']) },
+  { group: 'campaigns', write: true, name: 'add_goal', description: 'Add a goal to a campaign. kind "tasks" is done when its tasks are; "count" counts logged calls/emails up to target.', parameters: obj({ campaign_id: { type: 'string' }, title: { type: 'string' }, due: DATE, kind: { type: 'string', enum: ['tasks', 'count'] }, target: { type: 'integer' } }, ['campaign_id', 'title']) },
+  { group: 'chat', write: true, name: 'post_message', description: 'Post in a chat feed I am in. feed is its name without #; leave it out for #general.', parameters: obj({ text: { type: 'string' }, feed: { type: 'string' } }, ['text']) },
+];
+
+function agentTools(ag, token, actions) {
+  const list = AGENT_TOOLS.filter((t) => (t.group === 'any' || ag.can[t.group]) && (!t.write || ag.write));
+  const state = () => asMember(token, 'GET', '/state');
+  const did = (label) => actions.push(label.slice(0, 160));
+  const person = async (who) => {
+    if (who === undefined) return undefined;
+    if (who === '' || who === null) return null;
+    const { workspace } = await state();
+    const m = workspace.members.find((x) => x.id === who || x.name.toLowerCase() === String(who).toLowerCase()) || workspace.members.find((x) => x.name.toLowerCase().split(/\s+/)[0] === String(who).toLowerCase());
+    if (!m) throw new Error(`No one called ${who} on the team.`);
+    return m.id;
+  };
+  const entryOut = (e, k) => ({ id: e.id, text: e.text, start: hm(e.start), end: hm(e.end), done: e.repeat ? (e.doneOn || []).includes(k) : !!e.done, ...(e.repeat ? { repeats: e.repeat } : {}), ...(e.cal?.imported ? { calendar_event: true } : {}) });
+  const taskOut = (t, st) => {
+    const g = t.goalId && st.goals.find((x) => x.id === t.goalId);
+    const c = g && st.campaigns.find((x) => x.id === g.campaignId);
+    const who = t.assigneeId && st.workspace.members.find((x) => x.id === t.assigneeId);
+    return { id: t.id, text: t.text, due: t.due || null, priority: t.priority || 0, done: !!t.done, ...(who ? { assignee: who.name } : {}), ...(c ? { campaign: c.name, goal: g.title } : {}) };
+  };
+  const run = {
+    async list_people() {
+      return (await state()).workspace.members.map((x) => ({ id: x.id, name: x.name, ...(x.id === ag.memberId ? { me: true } : {}) }));
+    },
+    async get_day({ date }) {
+      const k = isDay(date) ? date : localNow(ag.tz, Date.now()).date;
+      const st = await state();
+      const entries = st.entries.filter((e) => repeatHits(e.repeat, e.date, k) && !(e.skip || []).includes(k)).sort((x, y) => (x.start ?? -1) - (y.start ?? -1)).map((e) => entryOut(e, k));
+      const mine = (t) => !t.assigneeId || t.assigneeId === ag.memberId;
+      return {
+        date: k, weekday: new Date(k + 'T12:00:00Z').toLocaleDateString('en-US', { weekday: 'long', timeZone: 'UTC' }), entries,
+        tasks_due: st.tasks.filter((t) => !t.done && t.due === k && mine(t)).map((t) => taskOut(t, st)),
+        overdue: st.tasks.filter((t) => !t.done && t.due && t.due < k && mine(t)).map((t) => taskOut(t, st)),
+      };
+    },
+    async list_tasks({ open_only, mine_only }) {
+      const st = await state();
+      return st.tasks.filter((t) => (!open_only || !t.done) && (!mine_only || t.assigneeId === ag.memberId)).slice(-200).map((t) => taskOut(t, st));
+    },
+    async add_block({ text, date, start, end }) {
+      const e = await asMember(token, 'POST', '/entries', { text, date, start: minutes(start), end: minutes(end) });
+      did(`Added ${start ? hm(e.start) + (e.end != null ? '–' + hm(e.end) : '') + ' ' : ''}“${e.text}” on ${e.date}`);
+      return entryOut(e, e.date);
+    },
+    async update_block({ id, text, date, start, end, done }) {
+      const body = { ...(text !== undefined ? { text } : {}), ...(date !== undefined ? { date } : {}), ...(start !== undefined ? { start: minutes(start) } : {}), ...(end !== undefined ? { end: minutes(end) } : {}), ...(done !== undefined ? { done } : {}) };
+      const e = await asMember(token, 'PATCH', '/entries/' + id, body);
+      did(`Changed “${e.text}”${e.start != null ? ' to ' + hm(e.start) + (e.end != null ? '–' + hm(e.end) : '') : ''} on ${e.date}`);
+      return entryOut(e, e.date);
+    },
+    async remove_block({ id }) {
+      const e = db.entries[id];
+      await asMember(token, 'DELETE', '/entries/' + id);
+      did(`Removed “${e?.text || 'entry'}”`);
+      return { ok: true };
+    },
+    async add_task({ text, due, priority, goal_id, assignee }) {
+      const t = await asMember(token, 'POST', '/tasks', { text, due: due || null, priority: priority || 0, goalId: goal_id || null, assigneeId: (await person(assignee)) ?? null });
+      did(`Added task “${t.text}”${t.due ? ' due ' + t.due : ''}`);
+      return { id: t.id, text: t.text, due: t.due };
+    },
+    async update_task({ id, text, due, priority, done, assignee }) {
+      const who = await person(assignee);
+      const body = { ...(text !== undefined ? { text } : {}), ...(due !== undefined ? { due: due || null } : {}), ...(priority !== undefined ? { priority } : {}), ...(done !== undefined ? { done } : {}), ...(who !== undefined ? { assigneeId: who } : {}) };
+      const t = await asMember(token, 'PATCH', '/tasks/' + id, body);
+      did(done ? `Checked off “${t.text}”` : `Updated task “${t.text}”${due !== undefined ? (t.due ? ' → ' + t.due : ' (no date)') : ''}`);
+      return { id: t.id, text: t.text, due: t.due, done: t.done };
+    },
+    async list_campaigns() {
+      const st = await state();
+      return st.campaigns.map((c) => {
+        const gs = st.goals.filter((g) => g.campaignId === c.id);
+        const ts = st.tasks.filter((t) => gs.some((g) => g.id === t.goalId));
+        const who = c.assigneeId && st.workspace.members.find((x) => x.id === c.assigneeId);
+        return { id: c.id, name: c.name, status: c.status, start: c.start, end: c.end, ...(who ? { responsible: who.name } : {}), goals: gs.length, tasks_done: `${ts.filter((t) => t.done).length}/${ts.length}`, logged: st.attempts.filter((x) => x.campaignId === c.id).length };
+      });
+    },
+    async get_campaign({ id }) {
+      const st = await state();
+      const c = st.campaigns.find((x) => x.id === id || x.name.toLowerCase() === String(id).toLowerCase());
+      if (!c) throw new Error('No campaign with that id.');
+      const log = st.attempts.filter((x) => x.campaignId === c.id).sort((x, y) => y.at - x.at);
+      const counts = {};
+      for (const x of log) counts[x.outcome] = (counts[x.outcome] || 0) + 1;
+      return {
+        id: c.id, name: c.name, brief: c.brief, status: c.status, start: c.start, end: c.end, outcomes: c.outcomes, methods: c.methods,
+        goals: st.goals.filter((g) => g.campaignId === c.id).map((g) => ({ id: g.id, title: g.title, due: g.due, kind: g.kind, target: g.kind === 'count' ? g.target : undefined, tasks: st.tasks.filter((t) => t.goalId === g.id).map((t) => taskOut(t, st)) })),
+        logged_by_outcome: counts,
+        latest_logged: log.slice(0, 20).map((x) => ({ when: new Date(x.at).toISOString().slice(0, 10), by: x.by, method: x.method, outcome: x.outcome, contact: x.contact, note: x.note })),
+      };
+    },
+    async update_campaign({ id, brief, status }) {
+      const c = await asMember(token, 'PATCH', '/campaigns/' + id, { ...(brief !== undefined ? { brief } : {}), ...(status !== undefined ? { status } : {}) });
+      did(brief !== undefined ? `Updated the brief of ${c.name}` : `Marked ${c.name} ${c.status}`);
+      return { ok: true };
+    },
+    async add_goal({ campaign_id, title, due, kind, target }) {
+      const g = await asMember(token, 'POST', '/goals', { campaignId: campaign_id, title, due: due || null, kind: kind || 'tasks', target: target || 10 });
+      did(`Added goal “${g.title}”`);
+      return { id: g.id, title: g.title };
+    },
+    async post_message({ text, feed }) {
+      const { workspace } = await state();
+      const name = String(feed || '').replace(/^#/, '').toLowerCase();
+      const ch = name && name !== 'general' ? workspace.channels.find((x) => x.name === name) : null;
+      if (name && name !== 'general' && !ch) throw new Error(`No feed called #${name} that I’m in.`);
+      await asMember(token, 'POST', '/items', { type: 'message', text, channelId: ch?.id || null });
+      did(`Posted in #${ch?.name || 'general'}`);
+      return { ok: true };
+    },
+  };
+  return { list, exec: (name, args) => (run[name] && list.some((t) => t.name === name) ? run[name](args || {}) : Promise.reject(new Error('No such tool'))) };
+}
+
+function agentSystem(ag, ws, member) {
+  const L = localNow(ag.tz, Date.now());
+  const day = new Date(L.date + 'T12:00:00Z').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
+  return [
+    `You are ${ag.name}, an assistant inside Column, a team workspace with a Day planner (schedule and tasks), Campaigns (projects with goals, tasks and a log of calls and emails) and Chat. You work for ${member.name} on the team ${ws.name}.`,
+    'Stay on Column work: keeping their day on track, planning and researching campaigns, and managing tasks. If asked for something unrelated, say briefly that it’s outside what you do here.',
+    ag.write ? 'Use your tools to make the changes the job needs instead of only describing them, then say briefly what you changed.' : 'You can look at things but not change them. Suggest changes for them to make.',
+    ag.can.web ? 'Search the web when you need facts about people, companies or markets, and name your sources. Never invent leads, contacts or numbers.' : 'You can’t browse the web. Never invent leads, contacts or numbers.',
+    'Keep replies short and easy to scan: a line or two, or a short list.',
+    ag.instructions ? `\nTheir instructions for you:\n${ag.instructions}` : '',
+    `\nTimes are 24-hour HH:MM in ${ag.tz}. Right now it is ${hm(L.min)} on ${day} (${L.date}).`,
+  ].filter(Boolean).join('\n');
+}
+
+async function runAgent(ag, text, trigger) {
+  if (ag.status === 'running') return;
+  const ws = db.workspaces[ag.wsId];
+  const member = ws?.members.find((x) => x.id === ag.memberId);
+  if (!member) return;
+  const update = () => broadcast(ws.id, { type: 'agent', agent: publicAgent(ag), forMember: ag.memberId });
+  ag.thread.push({ role: 'user', text, at: Date.now(), ...(trigger !== 'chat' ? { trigger } : {}) });
+  ag.status = 'running';
+  ag.step = null;
+  update();
+  const actions = [];
+  const token = rid(24);
+  db.tokens[token] = { wsId: ws.id, memberId: member.id, device: ag.name, deviceId: 'agent:' + ag.id, agentId: ag.id, createdAt: Date.now() };
+  try {
+    const keyRec = db.agentKeys[`${ws.id}:${member.id}`]?.[ag.provider];
+    if (!keyRec) throw Object.assign(new Error('No API key for ' + llms[ag.provider].name + '. Add one in Agents → API keys.'), { mine: true });
+    const { list, exec } = agentTools(ag, token, actions);
+    // Plain text turns, alternating (a failed run leaves two user messages in a row).
+    const history = [];
+    for (const m of ag.thread.filter((x) => x.text).slice(-HISTORY_SENT)) {
+      const text = m.text + (m.actions?.length ? `\n\n(Changes made: ${m.actions.join('; ')})` : '');
+      if (history.at(-1)?.role === m.role) history.at(-1).text += '\n\n' + text;
+      else history.push({ role: m.role, text });
+    }
+    while (history.length && history[0].role !== 'user') history.shift();
+    const steps = { get_day: 'Looking at the day', list_tasks: 'Checking tasks', list_campaigns: 'Looking at campaigns', get_campaign: 'Reading the campaign', web_search: 'Searching the web', list_people: 'Checking the team' };
+    const out = await llms[ag.provider].run({
+      key: unseal(keyRec.sealed).key, model: ag.model, system: agentSystem(ag, ws, member),
+      history,
+      tools: list.map(({ name, description, parameters }) => ({ name, description, parameters })), web: ag.can.web, exec,
+      onStep: (name) => {
+        ag.step = steps[name] || 'Making changes';
+        update();
+      },
+    });
+    ag.thread.push({ role: 'assistant', text: out.text || 'Done.', at: Date.now(), actions, ...(trigger !== 'chat' ? { trigger } : {}) });
+  } catch (e) {
+    if (!e.mine) console.error(`Agent ${ag.id}:`, e.message);
+    ag.thread.push({ role: 'assistant', text: '', error: e.mine ? e.message : llmError(e), at: Date.now(), actions });
+  } finally {
+    delete db.tokens[token];
+    ag.status = 'idle';
+    ag.step = null;
+    ag.lastRunAt = Date.now();
+    ag.thread = ag.thread.slice(-THREAD_MAX);
+    save();
+    update();
+  }
 }
 
 // ---------- icons ----------
@@ -1208,6 +1525,62 @@ async function api(req, res, url) {
       return send(res, 200, { ok: true });
     }
     return send(res, 405, { error: 'Method not allowed' });
+  }
+
+  // Your own agents and API keys. Nobody else on the team sees them.
+  if (a === 'agents') {
+    const keys = (db.agentKeys[`${ws.id}:${auth.memberId}`] ||= {});
+    const body = m === 'GET' || m === 'DELETE' ? {} : await readJson(req, 100_000);
+    if (b === 'keys' && c) {
+      const p = llms[c];
+      if (!p) return send(res, 404, { error: 'Unknown provider' });
+      if (m === 'PUT') {
+        const key = String(body.key || '').trim();
+        if (key.length < 10 || key.length > 400) return send(res, 400, { error: 'That doesn’t look like an API key.' });
+        let models;
+        try {
+          models = await p.models(key);
+        } catch (e) {
+          return send(res, 400, { error: llmError(e) });
+        }
+        if (!models.length) return send(res, 400, { error: 'This key can’t use any chat models.' });
+        keys[c] = { sealed: seal({ key }), last4: key.slice(-4), models, savedAt: Date.now() };
+      } else if (m === 'DELETE') delete keys[c];
+      else return send(res, 405, { error: 'Method not allowed' });
+      save();
+      return send(res, 200, agentState(ws, auth.memberId));
+    }
+    if (m === 'GET' && !b) return send(res, 200, agentState(ws, auth.memberId));
+    if (m === 'POST' && !b) {
+      const preset = AGENT_PRESETS[body.preset] || AGENT_PRESETS.custom;
+      const provider = Object.keys(llms).find((k) => k === body.provider && keys[k]) || Object.keys(llms).find((k) => keys[k]);
+      if (!provider) return send(res, 400, { error: 'Add an API key first.' });
+      const ag = applyAgent({ id: rid(), wsId: ws.id, memberId: auth.memberId, createdAt: Date.now(), ...structuredClone(preset), provider, model: llms[provider].pick(keys[provider].models), tz: validTz(body.tz), since: Date.now(), ran: [], thread: [], status: 'idle', step: null, lastRunAt: null }, body, keys);
+      db.agents[ag.id] = ag;
+      save();
+      return send(res, 200, publicAgent(ag));
+    }
+    const ag = b && db.agents[b];
+    if (!ag || ag.wsId !== ws.id || ag.memberId !== auth.memberId) return send(res, 404, { error: 'Not found' });
+    if (m === 'POST' && (c === 'message' || c === 'run')) {
+      if (ag.status === 'running') return send(res, 409, { error: 'It’s still working on the last one.' });
+      const text = c === 'run' ? ag.routine || 'Do your routine.' : String(body.text || '').trim().slice(0, 8000);
+      if (!text) return send(res, 400, { error: 'Empty' });
+      runAgent(ag, text, c === 'run' ? 'routine' : 'chat').catch((e) => console.error('Agent run failed:', e));
+      return send(res, 200, publicAgent(ag));
+    }
+    if (m === 'POST' && c === 'clear') {
+      if (ag.status === 'running') return send(res, 409, { error: 'It’s still working.' });
+      ag.thread = [];
+    } else if (m === 'PATCH' && !c) applyAgent(ag, body, keys);
+    else if (m === 'DELETE' && !c) {
+      delete db.agents[ag.id];
+      save();
+      return send(res, 200, { ok: true });
+    } else return send(res, 405, { error: 'Method not allowed' });
+    save();
+    broadcast(ws.id, { type: 'agent', agent: publicAgent(ag), forMember: ag.memberId });
+    return send(res, 200, publicAgent(ag));
   }
 
   if (a === 'templates') {
