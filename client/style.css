@@ -642,3 +642,14 @@ button.oc:hover { background: color-mix(in srgb, var(--oc) 30%, transparent); }
 .plan-row { display: flex; gap: 8px; color: var(--muted); }
 .plan-row span { width: 70px; flex: none; color: var(--accent); }
 .ch-lock { display: inline-grid; color: var(--muted); } .ch-lock svg { width: 11px; height: 11px; }
+
+/* Saved campaigns */
+.tpl-row { display: flex; align-items: center; gap: 8px; background: var(--panel); border: 1px dashed var(--line); border-radius: var(--radius); padding: 9px 10px; margin-bottom: 8px; }
+.tpl-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.tpl-main small { font-size: 11px; color: var(--muted); }
+.tpl-slots { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+.tpl-slot { display: flex; align-items: center; gap: 8px; width: 100%; }
+.tpl-days { flex: 1; } .tpl-days button { padding: 5px 0; }
+.tpl-slot input[type="time"] { width: auto; }
+.pill-btn { font: inherit; color: inherit; cursor: pointer; } .pill-btn:hover { background: var(--card-hover); }
+.pill-btn .av { width: 15px; height: 15px; font-size: 9px; }

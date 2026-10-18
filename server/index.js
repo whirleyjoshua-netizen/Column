@@ -22,7 +22,7 @@ const CLIENT_DIR = path.resolve(__dirname, '..', 'client');
 fs.mkdirSync(FILES_DIR, { recursive: true });
 
 // ---------- persistence (a JSON file is plenty for personal/small-team use) ----------
-let db = { workspaces: {}, tokens: {}, items: {}, entries: {}, tasks: {}, uploads: {}, campaigns: {}, goals: {}, attempts: {} };
+let db = { workspaces: {}, tokens: {}, items: {}, entries: {}, tasks: {}, uploads: {}, campaigns: {}, goals: {}, attempts: {}, templates: {} };
 try {
   db = { ...db, ...JSON.parse(fs.readFileSync(DB_PATH, 'utf8')) };
 } catch {}
@@ -444,7 +444,7 @@ function validChatFolder(ws, folderId) {
   return folderId && ws.chatFolders.some((f) => f.id === folderId) ? folderId : null;
 }
 function channelName(ws, raw, selfId) {
-  const n = String(raw || '').trim().toLowerCase().replace(/^#+/, '').replace(/\s+/g, '-').replace(/[^a-z0-9_-]/g, '').slice(0, 40);
+  const n = String(raw || '').trim().toLowerCase().replace(/^#+/, '').replace(/\s+/g, '-').replace(/[^a-z0-9_-]/g, '').replace(/-{2,}/g, '-').slice(0, 40);
   if (!n) throw badRequest('Name required');
   if (n === 'general' || ws.channels.some((c) => c.name === n && c.id !== selfId)) throw Object.assign(new Error(`#${n} already exists.`), { status: 409 });
   return n;
@@ -464,7 +464,7 @@ function broadcast(wsId, msg) {
   const campaignId = campaignOfMsg(msg);
   const feed = msg.item && db.items[msg.item.id] ? feedOfItem(db.items[msg.item.id]) : null;
   const data = JSON.stringify(msg);
-  for (const s of set) if (s.readyState === 1 && seesCampaign(campaignId, s.meta.memberId) && seesFeed(feed, s.meta.memberId)) s.send(data);
+  for (const s of set) if (s.readyState === 1 && seesCampaign(campaignId, s.meta.memberId) && seesFeed(feed, s.meta.memberId) && seesTemplate(msg.template, s.meta.memberId)) s.send(data);
 }
 
 // ---------- campaigns: campaign → goals → tasks, plus logged attempts (each call or email and its outcome) ----------
@@ -474,7 +474,7 @@ const METHODS = ['Call', 'Email'];
 const labelList = (v, max) => [...new Set((Array.isArray(v) ? v : []).map((o) => String(o).trim().slice(0, 40)).filter(Boolean))].slice(0, max);
 function seesCampaign(campaignId, memberId) {
   const c = campaignId && db.campaigns[campaignId];
-  return !c || !c.private || c.ownerId === memberId || c.memberIds.includes(memberId);
+  return !c || !c.private || c.ownerId === memberId || c.assigneeId === memberId || c.memberIds.includes(memberId);
 }
 function campaignOf(kind, x) {
   if (!x) return null;
@@ -499,6 +499,11 @@ function campaignOfMsg(msg) {
   if (msg.attempt) return msg.attempt.campaignId;
   return null;
 }
+// A saved campaign is private when the campaign it came from was.
+function seesTemplate(t, memberId) {
+  const c = t?.campaign;
+  return !c || !c.private || t.ownerId === memberId || t.assigneeId === memberId || c.memberIds.includes(memberId);
+}
 
 const publicCampaign = ({ wsId, ...c }) => c;
 const publicGoal = ({ wsId, ...g }) => g;
@@ -521,6 +526,8 @@ function applyCampaign(c, body, ws, auth) {
     if (list.length) c.outcomes = list;
   }
   if (body.methods !== undefined) c.methods = labelList(body.methods, 8);
+  // The one person responsible for it, like a work order.
+  if (body.assigneeId !== undefined) c.assigneeId = body.assigneeId && ws.members.some((m) => m.id === body.assigneeId) ? body.assigneeId : null;
   // Only the person who made it decides who can see it.
   if ((body.private !== undefined || body.memberIds !== undefined) && c.ownerId && c.ownerId !== auth.memberId) throw Object.assign(new Error('Only the campaign owner can change who sees it.'), { status: 403 });
   if (body.private !== undefined) c.private = !!body.private;
@@ -577,6 +584,141 @@ function deleteCampaign(ws, c) {
   delete db.campaigns[c.id];
   broadcast(ws.id, { type: 'campaign:remove', id: c.id });
   broadcast(ws.id, { type: 'workspace' });
+}
+
+// A campaign gets its own feed (in a "Campaigns" chat folder) and its own stack for files.
+// owner: { memberId, member } of whoever it belongs to. extra: fields set before anyone hears about it.
+function createCampaign(ws, owner, body, extra = {}) {
+  const c = applyCampaign({ id: rid(), wsId: ws.id, ownerId: owner.memberId, by: owner.member, createdAt: Date.now(), name: '', brief: '', start: null, end: null, color: 'violet', status: 'active', private: false, memberIds: [], assigneeId: null, outcomes: [...OUTCOMES], methods: [...METHODS], lastReportAt: null }, body, ws, owner);
+  let folder = ws.chatFolders.find((f) => f.campaigns);
+  if (!folder) ws.chatFolders.push((folder = { id: rid(8), name: 'Campaigns', campaigns: true }));
+  const ch = { id: rid(8), name: freeChannelName(ws, c.name), folderId: folder.id, campaignId: c.id };
+  const st = { id: rid(8), name: c.name.slice(0, 40), campaignId: c.id };
+  ws.channels.push(ch);
+  ws.stacks.push(st);
+  c.channelId = ch.id;
+  c.stackId = st.id;
+  c.assignedBy = c.assigneeId ? owner.memberId : null;
+  Object.assign(c, extra);
+  db.campaigns[c.id] = c;
+  save();
+  broadcast(ws.id, { type: 'campaign', campaign: publicCampaign(c) });
+  broadcast(ws.id, { type: 'workspace' });
+  return c;
+}
+// Repeat runs share a name, so their feeds get -2, -3…
+function freeChannelName(ws, raw) {
+  for (let i = 1; ; i++) {
+    try {
+      return channelName(ws, i === 1 ? raw : `${String(raw).slice(0, 34)}-${i}`);
+    } catch (e) {
+      if (e.status !== 409 || i > 500) throw e;
+    }
+  }
+}
+
+// ---------- saved campaigns: a campaign's setup, goals and tasks, run again by hand or on a weekly schedule ----------
+// Dates are kept as days from the start, so each run lands on its own day. Each run is a new campaign.
+const dayKey = (d) => d.toISOString().slice(0, 10);
+const addDays = (key, n) => dayKey(new Date(Date.parse(key + 'T00:00:00Z') + n * 864e5));
+const daysBetween = (a, b) => Math.round((Date.parse(b + 'T00:00:00Z') - Date.parse(a + 'T00:00:00Z')) / 864e5);
+const publicTemplate = ({ wsId, ran, ...t }) => t;
+
+function snapshotCampaign(c) {
+  const rel = (key) => (key && c.start ? daysBetween(c.start, key) : null);
+  return {
+    campaign: { brief: c.brief, color: c.color, outcomes: c.outcomes, methods: c.methods, private: c.private, memberIds: c.memberIds, days: c.start && c.end ? daysBetween(c.start, c.end) : null },
+    goals: Object.values(db.goals).filter((g) => g.campaignId === c.id).sort((a, b) => (a.order || 0) - (b.order || 0)).map((g) => ({
+      title: g.title, kind: g.kind, target: g.target, counts: g.counts, methods: g.methods || null, order: g.order, dueIn: rel(g.due),
+      tasks: Object.values(db.tasks).filter((t) => t.goalId === g.id).sort((a, b) => a.createdAt - b.createdAt).map((t) => ({ text: t.text, priority: t.priority, dueIn: rel(t.due), assigneeId: t.assigneeId || null, report: !!t.report })),
+    })),
+  };
+}
+
+// Weekly slots: each is some weekdays (0 = Sunday) at a time, e.g. Mon/Wed/Fri at 09:00.
+function slotList(v) {
+  return (Array.isArray(v) ? v : []).slice(0, 30).map((x) => ({
+    days: [...new Set((Array.isArray(x?.days) ? x.days : []).map(Number).filter((d) => Number.isInteger(d) && d >= 0 && d <= 6))].sort(),
+    time: /^([01]\d|2[0-3]):[0-5]\d$/.test(String(x?.time)) ? x.time : '09:00',
+  })).filter((x) => x.days.length);
+}
+function validTz(tz) {
+  try {
+    return new Intl.DateTimeFormat('en-US', { timeZone: String(tz) }).resolvedOptions().timeZone;
+  } catch {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone;
+  }
+}
+// The wall clock in the schedule's time zone: date, weekday and minutes since midnight.
+function localNow(tz, now) {
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit', weekday: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(now).map((x) => [x.type, x.value]));
+  return { date: `${p.year}-${p.month}-${p.day}`, dow: ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(p.weekday), min: Number(p.hour) * 60 + Number(p.minute) };
+}
+
+function applyTemplate(t, body, ws) {
+  if (body.name !== undefined) t.name = String(body.name || '').trim().slice(0, 80);
+  if (body.assigneeId !== undefined) t.assigneeId = body.assigneeId && ws.members.some((m) => m.id === body.assigneeId) ? body.assigneeId : null;
+  if (body.tz !== undefined) t.tz = validTz(body.tz);
+  if (body.slots !== undefined || body.auto !== undefined) {
+    if (body.slots !== undefined) t.slots = slotList(body.slots);
+    if (body.auto !== undefined) t.auto = !!body.auto;
+    t.since = Date.now(); // a slot earlier today doesn't fire just because the schedule was edited
+  }
+  if (!t.name) throw badRequest('Give it a name.');
+  return t;
+}
+
+// Makes a new campaign from a saved one. date: its start day; time: set for scheduled runs.
+function runTemplate(tpl, { date, time, by }) {
+  const ws = db.workspaces[tpl.wsId];
+  const ownerM = ws.members.find((m) => m.id === tpl.ownerId) || ws.members.find((m) => m.role === 'owner');
+  const owner = { memberId: ownerM.id, member: ownerM.name };
+  const label = new Date(date + 'T12:00:00Z').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' });
+  const k = tpl.campaign;
+  const c = createCampaign(ws, owner, {
+    name: `${tpl.name} · ${label}${time ? ' ' + time : ''}`.slice(0, 80), brief: k.brief, color: k.color, outcomes: k.outcomes, methods: k.methods,
+    private: k.private, memberIds: k.memberIds, start: date, end: k.days != null ? addDays(date, k.days) : null, assigneeId: tpl.assigneeId,
+  }, { templateId: tpl.id, assignedBy: by || null }); // who handed it out: whoever started it, or nobody for a scheduled run
+  const due = (n) => (n == null ? null : addDays(date, n));
+  for (const sg of tpl.goals) {
+    const g = applyGoal({ id: rid(), wsId: ws.id, campaignId: c.id, by: owner.member, createdAt: Date.now(), title: '', due: null, kind: 'tasks', target: 10, counts: null, order: 0 },
+      { title: sg.title, kind: sg.kind, target: sg.target, counts: sg.counts, methods: sg.methods, order: sg.order, due: due(sg.dueIn) }, c);
+    db.goals[g.id] = g;
+    broadcast(ws.id, { type: 'goal', goal: publicGoal(g) });
+    for (const st of sg.tasks) {
+      const t = applyTask({ id: rid(), wsId: ws.id, by: owner.member, createdAt: Date.now(), text: '', done: false, doneAt: null, due: null, priority: 0, goalId: g.id, assigneeId: null },
+        { text: st.text, priority: st.priority, due: due(st.dueIn), assigneeId: st.assigneeId, report: st.report });
+      if (t.assigneeId) t.assignedBy = by || null;
+      db.tasks[t.id] = t;
+      broadcast(ws.id, { type: 'task', task: publicTask(t) });
+    }
+  }
+  tpl.lastRunAt = Date.now();
+  save();
+  broadcast(ws.id, { type: 'template', template: publicTemplate(tpl) });
+  return c;
+}
+
+// Fires each slot once, when its time comes in the schedule's time zone. A slot missed by more than 6 hours (server was off) is skipped.
+function runSchedules() {
+  const now = Date.now();
+  for (const tpl of Object.values(db.templates)) {
+    if (!tpl.auto || !tpl.slots.length || !db.workspaces[tpl.wsId]) continue;
+    const L = localNow(tpl.tz, now);
+    const today = tpl.slots.filter((x) => x.days.includes(L.dow));
+    for (const time of new Set(today.map((x) => x.time))) {
+      const [hh, mm] = time.split(':').map(Number);
+      const at = now - (L.min - (hh * 60 + mm)) * 60_000;
+      const key = `${L.date} ${time}`;
+      if (at > now || at < tpl.since || now - at > 6 * 3600_000 || tpl.ran.includes(key)) continue;
+      tpl.ran = [...tpl.ran, key].slice(-60);
+      try {
+        runTemplate(tpl, { date: L.date, time: today.length > 1 ? time : null });
+      } catch (e) {
+        console.error('Scheduled campaign failed:', e);
+      }
+    }
+  }
 }
 
 function presence(wsId) {
@@ -677,6 +819,7 @@ async function api(req, res, url) {
       campaigns: Object.values(db.campaigns).filter((c) => c.wsId === ws.id && canSee(auth, 'campaign', c)).map(publicCampaign),
       goals: Object.values(db.goals).filter((g) => g.wsId === ws.id && canSee(auth, 'goal', g)).map(publicGoal),
       attempts: Object.values(db.attempts).filter((x) => x.wsId === ws.id && canSee(auth, 'attempt', x)).map(publicAttempt),
+      templates: Object.values(db.templates).filter((t) => t.wsId === ws.id && seesTemplate(t, auth.memberId)).map(publicTemplate),
     });
   }
 
@@ -747,29 +890,16 @@ async function api(req, res, url) {
 
   if (a === 'campaigns') {
     if (m === 'POST' && !b) {
-      const body = await readJson(req, 100_000);
-      const c = applyCampaign({ id: rid(), wsId: ws.id, ownerId: auth.memberId, by: auth.member, createdAt: Date.now(), name: '', brief: '', start: null, end: null, color: 'violet', status: 'active', private: false, memberIds: [], outcomes: [...OUTCOMES], methods: [...METHODS], lastReportAt: null }, body, ws, auth);
-      // Its own feed (in a "Campaigns" chat folder) and its own stack for files.
-      let folder = ws.chatFolders.find((f) => f.campaigns);
-      if (!folder) ws.chatFolders.push((folder = { id: rid(8), name: 'Campaigns', campaigns: true }));
-      const ch = { id: rid(8), name: channelName(ws, c.name), folderId: folder.id, campaignId: c.id };
-      const st = { id: rid(8), name: c.name.slice(0, 40), campaignId: c.id };
-      ws.channels.push(ch);
-      ws.stacks.push(st);
-      c.channelId = ch.id;
-      c.stackId = st.id;
-      db.campaigns[c.id] = c;
-      save();
-      broadcast(ws.id, { type: 'campaign', campaign: publicCampaign(c) });
-      broadcast(ws.id, { type: 'workspace' });
+      const c = createCampaign(ws, auth, await readJson(req, 100_000));
       return send(res, 200, publicCampaign(c));
     }
     const c = b && db.campaigns[b];
     if (!c || c.wsId !== ws.id || !canSee(auth, 'campaign', c)) return send(res, 404, { error: 'Not found' });
     if (m === 'PATCH') {
       const body = await readJson(req, 100_000);
-      const was = JSON.stringify([c.private, c.memberIds]);
+      const was = JSON.stringify([c.private, c.memberIds, c.assigneeId]);
       const next = applyCampaign({ ...c, memberIds: [...c.memberIds] }, body, ws, auth);
+      if (next.assigneeId !== c.assigneeId) next.assignedBy = next.assigneeId ? auth.memberId : null;
       db.campaigns[c.id] = next;
       if (body.name !== undefined) {
         const st = ws.stacks.find((x) => x.id === c.stackId);
@@ -777,8 +907,11 @@ async function api(req, res, url) {
       }
       save();
       // Who can see it changed: everyone reloads so it appears or disappears cleanly.
-      if (was !== JSON.stringify([next.private, next.memberIds])) broadcast(ws.id, { type: 'resync' });
-      else {
+      // The campaign itself goes first so a new assignee is told it's theirs.
+      if (was !== JSON.stringify([next.private, next.memberIds, next.assigneeId])) {
+        broadcast(ws.id, { type: 'campaign', campaign: publicCampaign(next) });
+        if (next.private) broadcast(ws.id, { type: 'resync' });
+      } else {
         broadcast(ws.id, { type: 'campaign', campaign: publicCampaign(next) });
         if (body.name !== undefined) broadcast(ws.id, { type: 'workspace' });
       }
@@ -788,6 +921,43 @@ async function api(req, res, url) {
       if (c.ownerId !== auth.memberId && auth.role !== 'owner') return send(res, 403, { error: 'Only the campaign owner can delete it.' });
       deleteCampaign(ws, c);
       save();
+      return send(res, 200, { ok: true });
+    }
+    return send(res, 405, { error: 'Method not allowed' });
+  }
+
+  if (a === 'templates') {
+    if (m === 'POST' && !b) {
+      const body = await readJson(req, 50_000);
+      const c = db.campaigns[body.campaignId];
+      if (!c || c.wsId !== ws.id || !canSee(auth, 'campaign', c)) return send(res, 404, { error: 'Campaign not found' });
+      const t = applyTemplate({ id: rid(), wsId: ws.id, ownerId: auth.memberId, by: auth.member, createdAt: Date.now(), name: body.name || c.name, assigneeId: c.assigneeId || null, tz: validTz(body.tz), slots: [], auto: false, since: Date.now(), ran: [], lastRunAt: null, ...snapshotCampaign(c) }, body, ws);
+      db.templates[t.id] = t;
+      save();
+      broadcast(ws.id, { type: 'template', template: publicTemplate(t) });
+      return send(res, 200, publicTemplate(t));
+    }
+    const t = b && db.templates[b];
+    if (!t || t.wsId !== ws.id || !seesTemplate(t, auth.memberId)) return send(res, 404, { error: 'Not found' });
+    if (c === 'run' && m === 'POST') {
+      const { date, tz } = await readJson(req);
+      const camp = runTemplate(t, { date: isDay(date) ? date : localNow(validTz(tz || t.tz), Date.now()).date, by: auth.memberId });
+      return send(res, 200, publicCampaign(camp));
+    }
+    if (c) return send(res, 404, { error: 'Not found' });
+    if (t.ownerId !== auth.memberId && auth.role !== 'owner') return send(res, 403, { error: 'Only the person who saved it can change it.' });
+    if (m === 'PATCH') {
+      const was = t.assigneeId;
+      applyTemplate(t, await readJson(req, 50_000), ws);
+      save();
+      if (was !== t.assigneeId && t.campaign.private) broadcast(ws.id, { type: 'resync' });
+      else broadcast(ws.id, { type: 'template', template: publicTemplate(t) });
+      return send(res, 200, publicTemplate(t));
+    }
+    if (m === 'DELETE') {
+      delete db.templates[t.id];
+      save();
+      broadcast(ws.id, { type: 'template:remove', id: t.id });
       return send(res, 200, { ok: true });
     }
     return send(res, 405, { error: 'Method not allowed' });
@@ -1312,6 +1482,8 @@ setInterval(() => {
   }
   for (const up of Object.values(db.uploads)) if (now - up.touched > 24 * 3600_000 || !db.workspaces[up.wsId]) dropUpload(up);
 }, 60_000);
+
+setInterval(runSchedules, 30_000);
 
 migratePeople();
 server.listen(PORT, '0.0.0.0', () => {

@@ -354,6 +354,7 @@
       const list = { campaign: S.campaigns, goal: S.goals, attempt: S.attempts }[msg.type];
       const x = msg[msg.type];
       const i = list.findIndex((y) => y.id === x.id);
+      if (msg.type === 'campaign' && x.assigneeId === S.me?.memberId && list[i]?.assigneeId !== x.assigneeId && x.assignedBy !== S.me?.memberId) assignedToMe(x, 'campaign');
       if (i >= 0) list[i] = x;
       else list.push(x);
       renderCamps();
@@ -365,6 +366,12 @@
       renderCamps();
       renderDay();
       refreshLinks();
+    } else if (msg.type === 'template') {
+      upsertTemplate(msg.template);
+      renderCamps();
+    } else if (msg.type === 'template:remove') {
+      S.templates = S.templates.filter((y) => y.id !== msg.id);
+      renderCamps();
     } else if (msg.type === 'resync') {
       // Who can see a private campaign or feed changed.
       loadState().catch(() => {});
@@ -390,23 +397,31 @@
   }
 
   // Someone else gave me a task: a toast here, and a system notification if the app is in the background.
-  // Tasks that arrive together (Plan it out makes many at once) become one notice.
+  // Same for a campaign I'm made responsible for. Things that arrive together (Plan it out, or a campaign
+  // with its tasks) become one notice. Nobody assigned it = a saved campaign started on its schedule.
   let assignedBatch = [];
-  function assignedToMe(t) {
-    assignedBatch.push(t);
+  function assignedToMe(x, kind = 'task') {
+    assignedBatch.push({ kind, x });
     if (assignedBatch.length === 1) setTimeout(flushAssigned, 800);
   }
   function flushAssigned() {
     const list = assignedBatch;
     assignedBatch = [];
-    const who = [...new Set(list.map((t) => memberName(t.assignedBy)))].join(', ');
-    const title = list.length === 1 ? `${who} assigned you a task` : `${who} assigned you ${list.length} tasks`;
-    const body = list.length === 1 ? list[0].text.slice(0, 140) + (list[0].due ? ` · due ${list[0].due}` : '') : list.slice(0, 3).map((t) => t.text.slice(0, 60)).join(' · ') + (list.length > 3 ? ' …' : '');
-    toast(`${title}: ${body}`, { label: 'Show', run: showTasks });
+    const camps = list.filter((a) => a.kind === 'campaign').map((a) => a.x);
+    const tasks = list.filter((a) => a.kind === 'task').map((a) => a.x);
+    const by = [...new Set(list.map((a) => a.x.assignedBy).filter(Boolean).map(memberName))].join(', ');
+    const plural = (n, one) => (n === 1 ? 'a ' + one : `${n} ${one}s`);
+    const what = camps.length ? plural(camps.length, 'campaign') : plural(tasks.length, 'task');
+    const title = by ? `${by} assigned you ${what}` : `Scheduled: ${what} for you`;
+    const body = camps.length ? camps.map((c) => c.name).join(' · ') + (tasks.length ? ` · ${plural(tasks.length, 'task')}` : '')
+      : tasks.length === 1 ? tasks[0].text.slice(0, 140) + (tasks[0].due ? ` · due ${tasks[0].due}` : '')
+      : tasks.slice(0, 3).map((t) => t.text.slice(0, 60)).join(' · ') + (tasks.length > 3 ? ' …' : '');
+    const show = camps.length ? () => openCampaign(camps[0].id) : showTasks;
+    toast(`${title}: ${body}`, { label: 'Show', run: show });
     if (S.notify && document.hidden && 'Notification' in window && Notification.permission === 'granted') {
       try {
         const n = new Notification(title, { body, icon: '/icon-128.png', silent: false });
-        n.onclick = () => { window.focus(); showTasks(); };
+        n.onclick = () => { window.focus(); show(); };
       } catch {}
     }
   }
@@ -421,6 +436,7 @@
     S.campaigns = st.campaigns || [];
     S.goals = st.goals || [];
     S.attempts = st.attempts || [];
+    S.templates = st.templates || [];
     S.panes = S.panes.map((v) => (v.startsWith('stack:') && !stackById(v.slice(6)) ? 'files' : v));
     $('#wsName').textContent = S.workspace.name;
     document.title = `${S.workspace.name} · Column`;
@@ -2441,7 +2457,7 @@
   }, 30_000);
 
   // ---------- campaigns: campaign → goals → tasks, with logged attempts ----------
-  const K = { open: store.get('campOpen', null), logOpen: null, showAll: {}, stale: false };
+  const K = { open: store.get('campOpen', null), mine: store.get('campsMine', false), logOpen: null, showAll: {}, stale: false };
   const campById = (id) => id && S.campaigns?.find((c) => c.id === id);
   const goalById = (id) => id && S.goals?.find((g) => g.id === id);
   const goalsOf = (cid) => S.goals.filter((g) => g.campaignId === cid).sort((a, b) => (a.order || 0) - (b.order || 0) || a.createdAt - b.createdAt);
@@ -2497,7 +2513,7 @@
   $('#camps').addEventListener('focusout', () => setTimeout(() => K.stale && renderCamps(), 0));
 
   function campaignList() {
-    const all = [...S.campaigns].sort((a, b) => (a.end || '9999') < (b.end || '9999') ? -1 : 1);
+    const all = [...S.campaigns].filter((c) => !K.mine || c.assigneeId === S.me?.memberId).sort((a, b) => (a.end || '9999') < (b.end || '9999') ? -1 : 1);
     const live = all.filter((c) => c.status !== 'done');
     const done = all.filter((c) => c.status === 'done');
     const card = (c) => {
@@ -2507,12 +2523,104 @@
       return h('button', { class: 'camp-card c-' + c.color + (c.status === 'paused' ? ' paused' : ''), onclick: () => openCampaign(c.id) },
         h('div', { class: 'cc-top' }, h('b', {}, c.name), c.private ? h('span', { class: 'cc-lock', html: I.lock, title: 'Private' }) : null, h('span', { class: 'cc-pct' }, Math.round(p * 100) + '%')),
         bar(p, c.color),
-        h('div', { class: 'cc-sub' }, [campDates(c), `${gs.length} goal${gs.length === 1 ? '' : 's'}`, mine ? `${mine} for you` : '', c.status === 'paused' ? 'paused' : ''].filter(Boolean).join(' · ')));
+        h('div', { class: 'cc-sub' }, [c.assigneeId ? '→ ' + memberName(c.assigneeId) : '', campDates(c), `${gs.length} goal${gs.length === 1 ? '' : 's'}`, mine ? `${mine} for you` : '', c.status === 'paused' ? 'paused' : ''].filter(Boolean).join(' · ')));
     };
+    const setMine = (on) => { K.mine = on; store.set('campsMine', on); renderCamps(); };
+    const tpls = [...S.templates].sort((a, b) => a.name.localeCompare(b.name));
     return h('div', { class: 'camp-list' },
       h('div', { class: 'camp-h' }, h('b', {}, 'Campaigns'), h('button', { class: 'btn small primary-btn', onclick: () => campaignSheet() }, '+ New')),
-      live.length ? live.map(card) : h('p', { class: 'day-hint camp-empty' }, done.length ? 'Nothing running right now.' : 'A campaign is a project with goals, and goals are made of tasks. Make one for an outreach push, a launch, anything with a finish line.'),
-      done.length ? h('details', { class: 'camp-done' }, h('summary', {}, `Finished · ${done.length}`), done.map(card)) : null);
+      S.campaigns.some((c) => c.assigneeId) ? h('div', { class: 'seg mine-seg' },
+        h('button', { class: K.mine ? '' : 'on', onclick: () => setMine(false) }, 'All campaigns'),
+        h('button', { class: K.mine ? 'on' : '', onclick: () => setMine(true) }, 'Assigned to me')) : null,
+      live.length ? live.map(card) : h('p', { class: 'day-hint camp-empty' }, K.mine ? 'Nothing assigned to you right now.' : done.length ? 'Nothing running right now.' : 'A campaign is a project with goals, and goals are made of tasks. Make one for an outreach push, a launch, anything with a finish line.'),
+      done.length ? h('details', { class: 'camp-done' }, h('summary', {}, `Finished · ${done.length}`), done.map(card)) : null,
+      tpls.length ? h('div', { class: 'any-h camp-goals-h' }, 'Saved campaigns') : null,
+      tpls.map(templateRow));
+  }
+
+  // ----- saved campaigns: run again by hand or on a weekly schedule -----
+  const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const hhmm = (t) => fmtTime(Number(t.slice(0, 2)) * 60 + Number(t.slice(3)));
+  function upsertTemplate(t) {
+    const i = S.templates.findIndex((x) => x.id === t.id);
+    if (i >= 0) S.templates[i] = t;
+    else S.templates.push(t);
+  }
+  function scheduleText(t) {
+    if (!t.auto || !t.slots.length) return 'Start by hand';
+    const days = (d) => (d.length === 7 ? 'Every day' : d.join() === '1,2,3,4,5' ? 'Weekdays' : d.map((x) => DOW[x]).join('/'));
+    return t.slots.map((x) => `${days(x.days)} ${hhmm(x.time)}`).join(', ');
+  }
+  const canEditTemplate = (t) => t.ownerId === S.me?.memberId || amOwner();
+  async function runTemplate(t) {
+    try {
+      const c = await api('POST', `/templates/${t.id}/run`, { date: todayKey() });
+      if (!campById(c.id)) S.campaigns.push(c);
+      openCampaign(c.id);
+    } catch (e) {
+      toast(e.message);
+    }
+  }
+  function templateRow(t) {
+    return h('div', { class: 'tpl-row' },
+      h('div', { class: 'tpl-main' }, h('b', {}, t.name),
+        h('small', {}, [scheduleText(t), t.assigneeId ? '→ ' + memberName(t.assigneeId) : '', `${t.goals.length} goal${t.goals.length === 1 ? '' : 's'}`].filter(Boolean).join(' · '))),
+      h('button', { class: 'btn small', onclick: () => runTemplate(t) }, 'Start now'),
+      canEditTemplate(t) ? h('button', { class: 'icon-btn', 'aria-label': 'Saved campaign options', html: I.more, onclick: (e) => openMenu(e.currentTarget, [
+        { label: 'Schedule and details…', run: () => templateSheet(t) },
+        { label: 'Delete saved campaign', danger: true, run: () => api('DELETE', '/templates/' + t.id).catch((er) => toast(er.message)) },
+      ]) }) : null);
+  }
+  async function saveTemplate(c) {
+    try {
+      const t = await api('POST', '/templates', { campaignId: c.id, name: c.name.replace(/ · .*$/, ''), tz: Intl.DateTimeFormat().resolvedOptions().timeZone });
+      upsertTemplate(t);
+      templateSheet(t, true);
+    } catch (e) {
+      toast(e.message);
+    }
+  }
+  function assigneeSelect(id) {
+    const sel = h('select', {}, h('option', { value: '' }, 'Nobody'), S.workspace.members.map((m) => h('option', { value: m.id }, m.id === S.me?.memberId ? `${m.name} (you)` : m.name)));
+    sel.value = id || '';
+    return sel;
+  }
+  const plural = (n, one) => `${n} ${one}${n === 1 ? '' : 's'}`;
+  function templateSheet(t, fresh) {
+    const name = h('input', { value: t.name });
+    const who = assigneeSelect(t.assigneeId);
+    const auto = h('input', { type: 'checkbox' });
+    auto.checked = !!t.auto;
+    const slots = t.slots.length ? t.slots.map((x) => ({ days: [...x.days], time: x.time })) : [{ days: [1, 2, 3, 4, 5], time: '09:00' }];
+    const box = h('div', { class: 'tpl-slots' + (auto.checked ? '' : ' hidden') });
+    const draw = () => box.replaceChildren(
+      ...slots.map((x, i) => {
+        const time = h('input', { type: 'time', value: x.time });
+        time.addEventListener('change', () => { x.time = time.value || '09:00'; });
+        return h('div', { class: 'tpl-slot' },
+          h('div', { class: 'seg tpl-days' }, DOW.map((d, n) => h('button', { type: 'button', class: x.days.includes(n) ? 'on' : '', title: d, onclick: () => {
+            x.days = x.days.includes(n) ? x.days.filter((y) => y !== n) : [...x.days, n].sort();
+            draw();
+          } }, d[0]))),
+          time,
+          h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Remove time', html: I.close, onclick: () => { slots.splice(i, 1); draw(); } }));
+      }),
+      h('button', { type: 'button', class: 'link', onclick: () => { slots.push({ days: [1], time: '09:00' }); draw(); } }, '+ Add a time'),
+      h('small', { class: 'day-hint' }, `Each time makes a new campaign, starting that day. Times are ${t.tz.replace(/_/g, ' ')} time.`));
+    draw();
+    auto.addEventListener('change', () => box.classList.toggle('hidden', !auto.checked));
+    sheet(fresh ? 'Saved. Run it again when?' : 'Saved campaign', [
+      h('label', {}, 'Name', name),
+      h('label', {}, 'Responsible', who),
+      h('small', { class: 'day-hint' }, `Keeps its ${plural(t.goals.length, 'goal')} and ${plural(t.goals.reduce((n, g) => n + g.tasks.length, 0), 'task')}, with due dates counted from each run’s start. Start it by hand any time from Campaigns.`),
+      h('label', { class: 'pick' }, auto, 'Also start it automatically'),
+      box,
+    ], async () => {
+      const keep = slots.filter((x) => x.days.length);
+      if (auto.checked && !keep.length) throw new Error('Pick at least one day.');
+      upsertTemplate(await api('PATCH', '/templates/' + t.id, { name: name.value, assigneeId: who.value || null, auto: auto.checked, slots: keep }));
+      renderCamps();
+    });
   }
 
   function campaignView(c) {
@@ -2521,7 +2629,7 @@
     const ch = S.workspace.channels.find((x) => x.id === c.channelId);
     const st = S.workspace.stacks.find((x) => x.id === c.stackId);
     const files = st ? stackCount(st.id) : 0;
-    const who = c.private ? [c.ownerId, ...c.memberIds] : null;
+    const who = c.private ? [...new Set([c.ownerId, ...c.memberIds, c.assigneeId].filter(Boolean))] : null;
     const brief = h('div', { class: 'camp-brief' + (c.brief ? '' : ' empty'), title: 'Click to edit', html: c.brief ? linkify(c.brief) : 'Add a brief: the goal, who it’s for, how you’ll know it worked…' });
     brief.addEventListener('click', (e) => {
       if (e.target.closest('a')) return;
@@ -2545,6 +2653,7 @@
         h('button', { class: 'icon-btn', 'aria-label': 'Campaign options', html: I.more, onclick: (e) => campaignMenu(e.currentTarget, c) })),
       h('div', { class: 'camp-meta' },
         campDates(c) ? h('span', {}, campDates(c)) : null,
+        h('button', { class: 'pill pill-btn', title: 'Who’s responsible', onclick: (e) => assignCampaignMenu(e.currentTarget, c) }, c.assigneeId ? avatar(c.assigneeId) : null, c.assigneeId ? memberName(c.assigneeId) : 'Assign to…'),
         c.status !== 'active' ? h('span', { class: 'pill' }, c.status === 'done' ? 'Finished' : 'Paused') : null,
         who ? h('span', { class: 'pill', title: who.map(memberName).join(', ') }, h('span', { class: 'is-task', html: I.lock }), `Private · ${who.length}`) : null),
       h('div', { class: 'camp-total' }, bar(p, c.color), h('span', {}, Math.round(p * 100) + '%')),
@@ -2626,10 +2735,19 @@
       list);
   }
 
+  function assignCampaignMenu(anchor, c) {
+    openMenu(anchor, [
+      { head: 'Responsible' },
+      { label: 'Nobody', on: !c.assigneeId, run: () => api('PATCH', '/campaigns/' + c.id, { assigneeId: null }).catch((e) => toast(e.message)) },
+      ...S.workspace.members.map((m) => ({ label: m.id === S.me?.memberId ? `${m.name} (you)` : m.name, on: c.assigneeId === m.id, run: () => api('PATCH', '/campaigns/' + c.id, { assigneeId: m.id }).catch((e) => toast(e.message)) })),
+    ]);
+  }
   function campaignMenu(anchor, c) {
     const owner = c.ownerId === S.me?.memberId;
     openMenu(anchor, [
       { label: 'Edit details…', run: () => campaignSheet(c) },
+      { label: c.assigneeId ? `Responsible: ${memberName(c.assigneeId)}…` : 'Assign to…', run: () => assignCampaignMenu(anchor, c) },
+      { label: 'Save to run again…', run: () => saveTemplate(c) },
       { label: 'What to log…', run: () => outcomesSheet(c) },
       { label: 'Write a report', run: () => openReport(c) },
       { label: 'Share to chat…', run: () => shareMenu(anchor, linkToken('campaign', c.id)) },
@@ -2689,15 +2807,17 @@
     });
     const people = h('div', { class: 'picks' + (priv.checked ? '' : ' hidden') }, picks.length ? picks : h('small', {}, 'Nobody else on the team yet.'));
     priv.addEventListener('change', () => people.classList.toggle('hidden', !priv.checked));
+    const who = assigneeSelect(c?.assigneeId);
     sheet(c ? 'Campaign details' : 'New campaign', [
       h('label', {}, 'Name', name),
       h('label', {}, 'Brief', brief),
       h('div', { class: 'row2' }, h('label', {}, 'Starts', start), h('label', {}, 'Ends (optional)', end)),
       h('label', {}, 'Color', sw),
+      h('label', {}, 'Responsible', who),
       owner ? h('label', { class: 'pick' }, priv, 'Private: only people I choose can see it') : (c?.private ? h('small', { class: 'day-hint' }, 'Private. The campaign owner chooses who sees it.') : null),
       owner ? people : null,
     ], async () => {
-      const body = { name: name.value, brief: brief.value, start: start.value || null, end: end.value || null, color };
+      const body = { name: name.value, brief: brief.value, start: start.value || null, end: end.value || null, color, assigneeId: who.value || null };
       if (owner) Object.assign(body, { private: priv.checked, memberIds: picks.map((l) => l.firstChild).filter((cb) => cb.checked).map((cb) => cb.value) });
       const saved = c ? await api('PATCH', '/campaigns/' + c.id, body) : await api('POST', '/campaigns', body);
       const i = S.campaigns.findIndex((x) => x.id === saved.id);
@@ -3246,7 +3366,7 @@
     // This device
     const dev = h('section', {}, h('h3', {}, 'This device'));
     if ('Notification' in window) {
-      dev.append(toggleRow('Notifications', 'When something arrives from another device, or someone assigns you a task', S.notify && Notification.permission === 'granted', async (on, input) => {
+      dev.append(toggleRow('Notifications', 'When something arrives from another device, or a task or campaign is assigned to you', S.notify && Notification.permission === 'granted', async (on, input) => {
         if (on && Notification.permission !== 'granted') {
           const p = await Notification.requestPermission();
           if (p !== 'granted') { input.checked = false; toast('Notifications blocked by the system'); return; }
