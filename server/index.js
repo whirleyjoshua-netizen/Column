@@ -46,14 +46,33 @@ for (const ws of Object.values(db.workspaces)) {
   }
 }
 
+// Writes wait for a 200 ms lull so bursts become one write, but never longer than 2 s behind,
+// so steady activity can't hold changes in memory indefinitely.
 let saveTimer = null;
-function save() {
+let dirtySince = 0;
+function writeNow() {
   clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => {
-    const tmp = DB_PATH + '.tmp';
-    fs.writeFileSync(tmp, JSON.stringify(db));
-    fs.renameSync(tmp, DB_PATH);
-  }, 200);
+  saveTimer = null;
+  if (!dirtySince) return;
+  dirtySince = 0;
+  const tmp = DB_PATH + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify(db));
+  fs.renameSync(tmp, DB_PATH);
+}
+function save() {
+  dirtySince ||= Date.now();
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(writeNow, Math.max(0, Math.min(200, dirtySince + 2000 - Date.now())));
+}
+// On shutdown, write anything still waiting.
+for (const sig of ['SIGINT', 'SIGTERM']) {
+  process.on(sig, () => {
+    try {
+      writeNow();
+    } finally {
+      process.exit(0);
+    }
+  });
 }
 
 const rid = (n = 12) => crypto.randomBytes(n).toString('base64url');
@@ -1085,7 +1104,11 @@ const AGENT_PRESETS = {
 };
 const THREAD_MAX = 100;
 const HISTORY_SENT = 24; // messages of the thread the model sees each turn
-const publicAgent = ({ wsId, ran, ...x }) => x;
+const publicAgent = ({ wsId, ran, ...x }) => ({ ...x, notes: x.notes || [] });
+// An agent's notes: lasting things it has learned (or been told) to keep, sent with every run.
+const NOTES_MAX = 40;
+const NOTE_LEN = 400;
+const noteText = (v) => String(v || '').replace(/\s+/g, ' ').trim().slice(0, NOTE_LEN);
 function agentState(ws, memberId) {
   const keys = db.agentKeys[`${ws.id}:${memberId}`] || {};
   return {
@@ -1107,6 +1130,12 @@ function applyAgent(ag, body, keys) {
   if (body.model !== undefined && keys[ag.provider]?.models.some((x) => x.id === body.model)) ag.model = body.model;
   if (body.can && typeof body.can === 'object') for (const k of ['day', 'campaigns', 'chat', 'web']) if (body.can[k] !== undefined) ag.can[k] = !!body.can[k];
   if (body.write !== undefined) ag.write = !!body.write;
+  if (Array.isArray(body.notes)) {
+    // The whole list as edited; notes keep their ids so the agent's references stay valid.
+    const had = new Map((ag.notes || []).map((n) => [n.id, n]));
+    ag.notes = body.notes.map((n) => ({ old: had.get(n?.id), text: noteText(n?.text) })).filter((n) => n.text).slice(0, NOTES_MAX)
+      .map(({ old, text }) => (old && old.text === text ? old : { id: old?.id || rid(4), text, at: Date.now(), by: 'you' }));
+  }
   if (body.tz !== undefined) ag.tz = validTz(body.tz);
   if (body.slots !== undefined || body.auto !== undefined) {
     if (body.slots !== undefined) ag.slots = slotList(body.slots);
@@ -1160,6 +1189,8 @@ const obj = (properties, required = []) => ({ type: 'object', properties, requir
 // The tools, by group. write: changes something (left out when the agent may only look).
 const AGENT_TOOLS = [
   { group: 'any', name: 'list_people', description: 'Everyone on the team, for assigning work.', parameters: obj({}) },
+  { group: 'any', name: 'remember', description: 'Save a note to your memory for future conversations: a lasting preference, fact or decision (e.g. "Prefers calls before 11:00", "Austin leads come from the Chamber of Commerce list"). Not one-off details. Keep each note short and self-contained.', parameters: obj({ note: { type: 'string' } }, ['note']) },
+  { group: 'any', name: 'forget', description: 'Remove a note from your memory that is wrong or no longer true, by its id.', parameters: obj({ id: { type: 'string' } }, ['id']) },
   { group: 'any', name: 'get_brand', description: 'The team’s brand and culture: mission, core values, tone of voice, what the business does and who it serves, brand colours (hex) and a link to the logo. Use it before writing or planning anything customers will see.', parameters: obj({}) },
   { group: 'day', name: 'get_day', description: 'One day: schedule entries (blocks have start and end; notes only a start; anytime items neither), calendar events, and tasks due that day or overdue.', parameters: obj({ date: DATE }) },
   { group: 'day', name: 'list_tasks', description: 'Tasks, optionally only open ones and only those assigned to me.', parameters: obj({ open_only: { type: 'boolean' }, mine_only: { type: 'boolean' } }) },
@@ -1195,6 +1226,24 @@ function agentTools(ag, token, actions) {
     return { id: t.id, text: t.text, due: t.due || null, priority: t.priority || 0, done: !!t.done, ...(who ? { assignee: who.name } : {}), ...(c ? { campaign: c.name, goal: g.title } : {}) };
   };
   const run = {
+    async remember({ note }) {
+      const text = noteText(note);
+      if (!text) throw new Error('The note is empty.');
+      ag.notes ||= [];
+      if (ag.notes.some((n) => n.text.toLowerCase() === text.toLowerCase())) return { ok: true, already: true };
+      if (ag.notes.length >= NOTES_MAX) throw new Error(`Memory is full (${NOTES_MAX} notes). Forget one that matters less first.`);
+      const n = { id: rid(4), text, at: Date.now(), by: 'agent' };
+      ag.notes.push(n);
+      did(`Remembered: ${text}`);
+      return { ok: true, id: n.id };
+    },
+    async forget({ id }) {
+      const n = (ag.notes || []).find((x) => x.id === id);
+      if (!n) throw new Error(`No note with id ${id}.`);
+      ag.notes = ag.notes.filter((x) => x !== n);
+      did(`Forgot: ${n.text}`);
+      return { ok: true };
+    },
     async get_brand() {
       const { workspace } = await state();
       const b = workspace.brand;
@@ -1300,13 +1349,21 @@ function agentSystem(ag, ws, member) {
   return [
     `You are ${ag.name}, an assistant inside Column, a team workspace with a Day planner (each person’s own schedule, which only they see, plus the team’s tasks), Campaigns (projects with goals, tasks and a log of calls and emails) and Chat. You work for ${member.name} on the team ${ws.name}.`,
     'Stay on Column work: keeping their day on track, planning and researching campaigns, and managing tasks. If asked for something unrelated, say briefly that it’s outside what you do here.',
-    ag.write ? 'Use your tools to make the changes the job needs instead of only describing them, then say briefly what you changed.' : 'You can look at things but not change them. Suggest changes for them to make.',
+    ag.write ? 'Use your tools to make the changes the job needs instead of only describing them, then say briefly what you changed.' : 'You can look at things in Column but not change them, so suggest changes for them to make. Your own memory is yours to keep up to date.',
     ag.can.web ? 'Search the web when you need facts about people, companies or markets, and name your sources. Never invent leads, contacts or numbers.' : 'You can’t browse the web. Never invent leads, contacts or numbers.',
     'Keep replies short and easy to scan: a line or two, or a short list.',
     brandPrompt(ws),
+    notesPrompt(ag),
     ag.instructions ? `\nTheir instructions for you:\n${ag.instructions}` : '',
     `\nTimes are 24-hour HH:MM in ${ag.tz}. Right now it is ${hm(L.min)} on ${day} (${L.date}).`,
   ].filter(Boolean).join('\n');
+}
+
+function notesPrompt(ag) {
+  const notes = ag.notes || [];
+  if (!notes.length) return '\nYou have a memory that lasts between conversations. When you learn something worth knowing next time (a preference, a standing fact, a decision), save it with remember.';
+  return [`\nYour memory: notes kept from earlier conversations (id in brackets). Use them. Save new lasting things with remember; forget notes that turn out wrong or out of date.`,
+    ...notes.map((n) => `[${n.id}] ${n.text}`)].join('\n');
 }
 
 async function runAgent(ag, text, trigger) {
@@ -1334,7 +1391,7 @@ async function runAgent(ag, text, trigger) {
       else history.push({ role: m.role, text });
     }
     while (history.length && history[0].role !== 'user') history.shift();
-    const steps = { get_day: 'Looking at the day', list_tasks: 'Checking tasks', list_campaigns: 'Looking at campaigns', get_campaign: 'Reading the campaign', web_search: 'Searching the web', list_people: 'Checking the team', get_brand: 'Checking the brand' };
+    const steps = { get_day: 'Looking at the day', list_tasks: 'Checking tasks', list_campaigns: 'Looking at campaigns', get_campaign: 'Reading the campaign', web_search: 'Searching the web', list_people: 'Checking the team', get_brand: 'Checking the brand', remember: 'Noting that', forget: 'Updating notes' };
     const out = await llms[ag.provider].run({
       key: unseal(keyRec.sealed).key, model: ag.model, system: agentSystem(ag, ws, member),
       history,

@@ -701,3 +701,9 @@ button.oc:hover { background: color-mix(in srgb, var(--oc) 30%, transparent); }
 .brand-color input:not([type]) { flex: 1; min-width: 0; padding: 6px 9px; }
 .brand-color code { font-family: var(--mono); font-size: 11px; color: var(--muted); }
 .brand-color .t-btn { opacity: 1; }
+.ag-notes { display: flex; flex-direction: column; gap: 8px; }
+.ag-note { display: grid; grid-template-columns: 1fr auto; gap: 2px 6px; align-items: start; }
+.ag-note textarea { min-height: 40px; }
+.ag-note small { grid-column: 1; font-size: 10.5px; color: var(--muted); }
+.ag-note .t-btn { opacity: 1; margin-top: 6px; }
+.ag-add-note { align-self: flex-start; }

@@ -3461,6 +3461,7 @@
         title,
         h('button', { class: 'icon-btn', 'aria-label': 'Agent options', html: I.more, onclick: (e) => openMenu(e.currentTarget, [
           { label: 'Settings…', run: () => agentSheet(agentById(a.id)) },
+          { label: 'Memory…', run: () => notesSheet(agentById(a.id)) },
           { label: 'Clear conversation', run: () => api('POST', `/agents/${a.id}/clear`).then(agentUpdated).catch((er) => toast(er.message)) },
           { label: 'Delete agent', danger: true, run: () => api('DELETE', '/agents/' + a.id).then(() => { G.data.agents = G.data.agents.filter((x) => x.id !== a.id); openAgent(null); }).catch((er) => toast(er.message)) },
         ]) })),
@@ -3472,7 +3473,8 @@
       meta.replaceChildren(
         h('span', { class: 'pill' }, `${providerName(x.provider)} · ${modelName(x)}`),
         h('span', { class: 'pill' }, x.auto && x.slots.length ? scheduleText(x) : 'On demand'),
-        h('span', { class: 'pill' }, canText(x)));
+        h('span', { class: 'pill' }, canText(x)),
+        h('button', { class: 'pill pill-btn', title: 'What it remembers between conversations', onclick: () => notesSheet(agentById(x.id)) }, x.notes.length ? `Memory · ${x.notes.length}` : 'Memory'));
       routineBtn.classList.toggle('hidden', !x.routine);
       routineBtn.disabled = sendBtn.disabled = x.status === 'running';
       list.replaceChildren(...(x.thread.length ? x.thread.map(agentMsg) : [h('p', { class: 'day-hint' }, x.routine ? `Message it, or press Run routine (“${x.routine}”).` : 'Message it to get started.')]));
@@ -3533,6 +3535,33 @@
         name: name.value, provider: provider.value, model: model.value, instructions: instructions.value, routine: routine.value,
         can: Object.fromEntries(Object.entries(can).map(([k, el]) => [k, el.checked])), write: write.checked, tz: myTz(), ...sched.value(),
       }));
+    });
+  }
+
+  // What an agent keeps between conversations. It adds notes itself; you can edit or remove any.
+  function notesSheet(a) {
+    const list = h('div', { class: 'ag-notes' });
+    const row = (n) => {
+      const t = h('textarea', { rows: 2, maxlength: 400, placeholder: 'e.g. I like calls before 11am' });
+      t.value = n.text;
+      const el = h('div', { class: 'ag-note' }, t, h('button', { type: 'button', class: 't-btn', 'aria-label': 'Remove note', html: I.close, onclick: () => el.remove() }));
+      el._id = n.id;
+      el._text = () => t.value;
+      if (n.by === 'agent') el.append(h('small', {}, `Saved by ${a.name}${n.at ? ' · ' + ago(n.at) : ''}`));
+      return el;
+    };
+    list.append(...a.notes.map(row));
+    const add = h('button', { type: 'button', class: 'btn small ag-add-note', onclick: () => {
+      if (list.children.length >= 40) return toast('That’s the most it can keep (40).');
+      const el = row({ text: '' });
+      list.append(el);
+      el.querySelector('textarea').focus();
+    } }, '+ Add a note');
+    sheet(`${a.name}’s memory`, [
+      h('p', { class: 'day-hint' }, 'Notes it keeps between conversations and reads every time it runs. It saves things it learns on its own; you can add, change or remove any. Clearing the conversation keeps these.'),
+      list, add,
+    ], async () => {
+      agentUpdated(await api('PATCH', '/agents/' + a.id, { notes: [...list.children].map((el) => ({ id: el._id, text: el._text() })) }));
     });
   }
 
