@@ -545,3 +545,13 @@ button.ln-chip:hover, .ln-task:hover { background: var(--card-hover); }
 .date-pop { position: fixed; z-index: 61; width: 1px; height: 1px; opacity: 0; padding: 0; border: 0; }
 .due .rep { display: inline-grid; vertical-align: -2px; margin-right: 3px; }
 .due .rep svg { width: 11px; height: 11px; }
+
+/* dragging on the timeline */
+.block { cursor: grab; }
+.b-resize { position: absolute; left: 0; right: 0; bottom: 0; height: 7px; cursor: ns-resize; }
+.block.dragging, .pin.dragging { z-index: 6; box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35); animation: none; opacity: 0.95; }
+body.is-dragging, body.is-dragging * { user-select: none; -webkit-user-select: none; cursor: grabbing !important; }
+.drag-ghost { position: fixed; left: 0; top: 0; z-index: 90; pointer-events: none; background: var(--accent); color: #fff; font-size: 12px; font-weight: 600; padding: 5px 10px; border-radius: 8px; box-shadow: 0 8px 20px rgba(0, 0, 0, 0.35); max-width: 240px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.drop-line { position: absolute; left: var(--gut); right: 0; height: 0; border-top: 2px solid var(--accent); z-index: 7; pointer-events: none; }
+.drop-line span { position: absolute; right: 4px; top: -18px; font-size: 10.5px; font-weight: 700; color: var(--accent); background: var(--bg); padding: 0 4px; border-radius: 4px; }
+.task-row:not(.done), .anytime:not(.tasks) .any-row { cursor: grab; }

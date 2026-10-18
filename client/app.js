@@ -1639,7 +1639,7 @@
   }
 
   function renderDay() {
-    if (!S.workspace) return;
+    if (!S.workspace || D.dragging) return;
     if (!D.scroll) buildDay();
     for (const b of D.seg.children) b.classList.toggle('on', b.dataset.sub === D.sub);
     D.head.classList.toggle('hidden', D.sub !== 'schedule');
@@ -1673,7 +1673,8 @@
     if (anytime.length || (!entries.length && !due.length)) {
       const sec = h('div', { class: 'anytime' }, h('div', { class: 'any-h' }, 'Anytime'));
       for (const e of anytime) {
-        sec.append(h('div', { class: 'any-row' + (e.done ? ' done' : ''), onclick: () => openSheet(e) }, checkEl(e), h('span', { class: 'p-text' }, e.taskId ? h('span', { class: 'is-task', html: I.task, title: 'Linked task' }) : null, repeatMark(e), e.text)));
+        sec.append(h('div', { class: 'any-row' + (e.done ? ' done' : ''), onclick: () => openSheet(e),
+          onpointerdown: (ev) => dragToTimeline(ev, e.text, (k, m) => patchEntry(S.entries.find((x) => x.id === e.id), { start: m, ...(e.repeat ? {} : { date: k }) })) }, checkEl(e), h('span', { class: 'p-text' }, e.taskId ? h('span', { class: 'is-task', html: I.task, title: 'Linked task' }) : null, repeatMark(e), e.text)));
       }
       if (!entries.length) {
         sec.append(h('p', { class: 'day-hint' }, 'Nothing planned. Type below, like “10-12 Marketing” or “Call Sam at 3pm”, or tap a time on the timeline.'));
@@ -1697,8 +1698,10 @@
         onclick: (ev) => { ev.stopPropagation(); openSheet(b); },
       },
         h('div', { class: 'b-title' }, b.taskId ? h('span', { class: 'is-task', html: I.task, title: 'Linked task' }) : null, repeatMark(b), b.text),
-        h('div', { class: 'b-time' }, `${fmtTime(b.start)} – ${fmtTime(b.end)}`)
+        h('div', { class: 'b-time' }, `${fmtTime(b.start)} – ${fmtTime(b.end)}`),
+        h('div', { class: 'b-resize', title: 'Drag to change the end time' })
       );
+      el.addEventListener('pointerdown', (ev) => dragTime(ev, b, el, ev.target.closest('.b-resize') ? 'end' : 'move'));
       tl.append(el);
     }
 
@@ -1715,14 +1718,17 @@
         }
       }
       last = top + 24;
-      tl.append(h('div', { class: 'pin' + (p.done ? ' done' : ''), style: `top:${top}px`, onclick: (ev) => { ev.stopPropagation(); openSheet(p); } },
+      const pin = h('div', { class: 'pin' + (p.done ? ' done' : ''), style: `top:${top}px`, onclick: (ev) => { ev.stopPropagation(); openSheet(p); } },
         checkEl(p),
         h('span', { class: 'p-time' }, fmtTime(p.start)),
         h('span', { class: 'p-text' }, p.taskId ? h('span', { class: 'is-task', html: I.task, title: 'Linked task' }) : null, repeatMark(p), p.text)
-      ));
+      );
+      pin.addEventListener('pointerdown', (ev) => dragTime(ev, p, pin, 'pin'));
+      tl.append(pin);
     }
 
     if (isToday) tl.append(h('div', { class: 'now', style: `top:${y(nowMin())}px` }));
+    tl._h0 = h0;
 
     tl.addEventListener('click', (ev) => {
       if (ev.target.closest('.block, .pin')) return;
@@ -1739,6 +1745,116 @@
       const target = isToday ? nowMin() - 60 : first ? first.start - 30 : 8 * 60;
       D.scroll.scrollTop = tl.offsetTop + y(Math.max(h0 * 60, target)) - 8;
     } else D.scroll.scrollTop = keep;
+  }
+
+  // ----- dragging on the timeline (mouse and pen; touch keeps scrolling) -----
+  // Calls onMove(event, dx, dy) once the pointer has moved a few px, then onEnd(event) and eats the click.
+  function pointerDrag(ev, { onStart, onMove, onEnd }) {
+    if (ev.button !== 0 || ev.pointerType === 'touch' || ev.target.closest('button, input, textarea, select, .rename')) return;
+    const x0 = ev.clientX, y0 = ev.clientY;
+    let on = false;
+    const move = (e) => {
+      if (!on && Math.hypot(e.clientX - x0, e.clientY - y0) < 5) return;
+      if (!on) { on = true; onStart?.(); document.body.classList.add('is-dragging'); }
+      e.preventDefault();
+      onMove(e, e.clientX - x0, e.clientY - y0);
+    };
+    const stop = () => {
+      removeEventListener('pointermove', move);
+      removeEventListener('pointerup', up);
+      removeEventListener('pointercancel', cancel);
+      document.body.classList.remove('is-dragging');
+    };
+    const up = (e) => {
+      stop();
+      if (!on) return;
+      const eat = (c) => { c.stopPropagation(); c.preventDefault(); };
+      addEventListener('click', eat, { capture: true, once: true });
+      setTimeout(() => removeEventListener('click', eat, { capture: true }), 100);
+      onEnd(e);
+    };
+    const cancel = () => { stop(); if (on) onEnd(null); };
+    addEventListener('pointermove', move);
+    addEventListener('pointerup', up);
+    addEventListener('pointercancel', cancel);
+  }
+  const snap = (dy) => Math.round(((dy / HOUR) * 60) / 15) * 15;
+  const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, n));
+
+  // Move a block or timed note, or drag a block's bottom edge to change when it ends. Moves the whole series for repeats.
+  function dragTime(ev, e, el, mode) {
+    const base = S.entries.find((x) => x.id === e.id);
+    if (!base) return;
+    const top0 = el.offsetTop, h0 = el.offsetHeight;
+    const dur = mode === 'pin' ? 0 : e.end - e.start;
+    let start = e.start, end = e.end;
+    const label = el.querySelector(mode === 'pin' ? '.p-time' : '.b-time');
+    pointerDrag(ev, {
+      onStart: () => { D.dragging = true; el.classList.add('dragging'); },
+      onMove: (_, dx, dy) => {
+        const d = snap(dy);
+        if (mode === 'end') {
+          end = clamp(e.end + d, e.start + 15, 1440);
+          el.style.height = h0 + ((end - e.end) / 60) * HOUR + 'px';
+        } else {
+          start = clamp(e.start + d, 0, mode === 'pin' ? 1439 : 1440 - dur);
+          if (mode !== 'pin') end = start + dur;
+          el.style.top = top0 + ((start - e.start) / 60) * HOUR + 'px';
+        }
+        label.textContent = mode === 'pin' ? fmtTime(start) : `${fmtTime(start)} – ${fmtTime(end)}`;
+      },
+      onEnd: (up) => {
+        D.dragging = false;
+        el.classList.remove('dragging');
+        if (!up || (start === e.start && end === e.end)) return renderDay();
+        patchEntry(base, mode === 'pin' ? { start } : { start, end });
+      },
+    });
+  }
+
+  // Drag a task or an anytime note onto the timeline. From the Tasks tab, hovering the Schedule tab switches to it.
+  function dragToTimeline(ev, text, drop) {
+    let ghost = null, line = null, at = null;
+    pointerDrag(ev, {
+      onStart: () => {
+        ghost = h('div', { class: 'drag-ghost' }, text.slice(0, 60));
+        line = h('div', { class: 'drop-line' }, h('span'));
+        document.body.append(ghost);
+      },
+      onMove: (e) => {
+        ghost.style.transform = `translate(${e.clientX + 12}px, ${e.clientY + 8}px)`;
+        const tab = document.elementFromPoint(e.clientX, e.clientY)?.closest('[data-sub="schedule"]');
+        if (tab && D.sub !== 'schedule') setSub('schedule');
+        const tl = D.scroll.querySelector('.timeline');
+        const r = tl?.getBoundingClientRect();
+        const sr = D.scroll.getBoundingClientRect();
+        at = null;
+        if (r && e.clientX >= r.left && e.clientX <= r.right && e.clientY >= Math.max(r.top, sr.top) && e.clientY <= Math.min(r.bottom, sr.bottom)) {
+          at = clamp(snap(e.clientY - r.top) + tl._h0 * 60, 0, 1425);
+          line.style.top = ((at - tl._h0 * 60) / 60) * HOUR + 'px';
+          line.firstChild.textContent = fmtTime(at);
+          if (line.parentNode !== tl) tl.append(line);
+        } else line.remove();
+        // Scroll the day when dragging near its top or bottom edge.
+        if (e.clientY < sr.top + 30) D.scroll.scrollTop -= 12;
+        else if (e.clientY > sr.bottom - 30 && e.clientY < sr.bottom + 40) D.scroll.scrollTop += 12;
+      },
+      onEnd: (up) => {
+        ghost.remove();
+        line.remove();
+        if (up && at != null) drop(D.date, at);
+      },
+    });
+  }
+
+  // A dropped task becomes a 30 minute block linked to it.
+  async function scheduleTask(t, k, m) {
+    try {
+      upsertEntry(await api('POST', '/entries', { text: t.text, taskId: t.id, date: k, start: m, end: Math.min(m + 30, 1440) }));
+      renderDay();
+    } catch (e) {
+      toast(e.message);
+    }
   }
 
   // When a task is on the schedule: the next upcoming slot, else the most recent one.
@@ -1819,7 +1935,8 @@
       }
     }));
     const pr = t.priority || 0;
-    return h('div', { class: 'any-row task-row' + (t.done ? ' done' : '') },
+    return h('div', { class: 'any-row task-row' + (t.done ? ' done' : ''),
+      onpointerdown: (ev) => !t.done && dragToTimeline(ev, t.text, (k, m) => scheduleTask(t, k, m)) },
       h('button', {
         class: 'check' + (t.done ? ' on' : '') + (pr ? ' pr-' + pr : ''),
         html: I.check,
