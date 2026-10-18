@@ -711,6 +711,7 @@ async function api(req, res, url) {
     if (m === 'POST' && !b) {
       const t = applyTask({ id: rid(), wsId: ws.id, by: auth.member, createdAt: Date.now(), text: '', done: false, doneAt: null, due: null, priority: 0, goalId: null, assigneeId: null }, await readJson(req, 50_000));
       if (!canSee(auth, 'task', t)) return send(res, 404, { error: 'Goal not found' });
+      if (t.assigneeId) t.assignedBy = auth.memberId;
       db.tasks[t.id] = t;
       save();
       broadcast(ws.id, { type: 'task', task: publicTask(t) });
@@ -721,6 +722,8 @@ async function api(req, res, url) {
     if (m === 'PATCH') {
       const next = applyTask({ ...t }, await readJson(req, 50_000));
       if (!canSee(auth, 'task', next)) return send(res, 404, { error: 'Goal not found' });
+      // Who handed it over, so the new assignee can be told.
+      if (next.assigneeId !== t.assigneeId) next.assignedBy = next.assigneeId ? auth.memberId : null;
       db.tasks[t.id] = next;
       // Keep linked entries' own copy current so they still read right if the task is deleted later.
       for (const e of Object.values(db.entries)) {

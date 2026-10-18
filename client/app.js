@@ -341,7 +341,9 @@
       S.entries = S.entries.filter((x) => x.id !== msg.id);
       renderDay();
     } else if (msg.type === 'task') {
+      const was = taskById(msg.task.id);
       upsertTask(msg.task);
+      if (msg.task.assigneeId === S.me?.memberId && was?.assigneeId !== msg.task.assigneeId && msg.task.assignedBy !== S.me?.memberId) assignedToMe(msg.task);
       renderDay();
       refreshLinks();
     } else if (msg.type === 'task:remove') {
@@ -384,6 +386,28 @@
     }
     if (desktop && S.desktopCfg.autoSave && (it.type === 'file' || it.type === 'folder')) {
       desktop.save(desktopInfo(it)).catch(() => {});
+    }
+  }
+
+  // Someone else gave me a task: a toast here, and a system notification if the app is in the background.
+  // Tasks that arrive together (Plan it out makes many at once) become one notice.
+  let assignedBatch = [];
+  function assignedToMe(t) {
+    assignedBatch.push(t);
+    if (assignedBatch.length === 1) setTimeout(flushAssigned, 800);
+  }
+  function flushAssigned() {
+    const list = assignedBatch;
+    assignedBatch = [];
+    const who = [...new Set(list.map((t) => memberName(t.assignedBy)))].join(', ');
+    const title = list.length === 1 ? `${who} assigned you a task` : `${who} assigned you ${list.length} tasks`;
+    const body = list.length === 1 ? list[0].text.slice(0, 140) + (list[0].due ? ` · due ${list[0].due}` : '') : list.slice(0, 3).map((t) => t.text.slice(0, 60)).join(' · ') + (list.length > 3 ? ' …' : '');
+    toast(`${title}: ${body}`, { label: 'Show', run: showTasks });
+    if (S.notify && document.hidden && 'Notification' in window && Notification.permission === 'granted') {
+      try {
+        const n = new Notification(title, { body, icon: '/icon-128.png', silent: false });
+        n.onclick = () => { window.focus(); showTasks(); };
+      } catch {}
     }
   }
 
@@ -3222,7 +3246,7 @@
     // This device
     const dev = h('section', {}, h('h3', {}, 'This device'));
     if ('Notification' in window) {
-      dev.append(toggleRow('Notifications', 'When something arrives from another device', S.notify && Notification.permission === 'granted', async (on, input) => {
+      dev.append(toggleRow('Notifications', 'When something arrives from another device, or someone assigns you a task', S.notify && Notification.permission === 'granted', async (on, input) => {
         if (on && Notification.permission !== 'granted') {
           const p = await Notification.requestPermission();
           if (p !== 'granted') { input.checked = false; toast('Notifications blocked by the system'); return; }
