@@ -22,7 +22,7 @@ const CLIENT_DIR = path.resolve(__dirname, '..', 'client');
 fs.mkdirSync(FILES_DIR, { recursive: true });
 
 // ---------- persistence (a JSON file is plenty for personal/small-team use) ----------
-let db = { workspaces: {}, tokens: {}, items: {}, entries: {}, tasks: {} };
+let db = { workspaces: {}, tokens: {}, items: {}, entries: {}, tasks: {}, uploads: {} };
 try {
   db = { ...db, ...JSON.parse(fs.readFileSync(DB_PATH, 'utf8')) };
 } catch {}
@@ -273,6 +273,18 @@ async function receiveUpload(req, dest) {
     throw Object.assign(new Error('Upload interrupted'), { status: 400 });
   }
   return { size, crc };
+}
+
+// Folder-relative path with no way to climb out of the folder.
+const cleanRel = (p) => String(p || 'file').replace(/\\/g, '/').split('/').filter((x) => x && x !== '.' && x !== '..').join('/') || 'file';
+const cleanName = (n) => String(n || 'file').replace(/[\/\\]/g, '_').slice(0, 255);
+
+// Resumable uploads: a session holds the bytes received so far in FILES_DIR/.part-<id>.
+const partPath = (up) => path.join(FILES_DIR, '.part-' + up.id);
+function dropUpload(up) {
+  delete db.uploads[up.id];
+  fsp.rm(partPath(up), { force: true }).catch(() => {});
+  save();
 }
 
 function removeItemFiles(it) {
@@ -695,6 +707,92 @@ async function api(req, res, url) {
     return send(res, 200, { ok: true });
   }
 
+  // Big files: POST /uploads to open a session, PUT chunks at ?offset=, GET to ask how far it got, POST done.
+  if (a === 'uploads') {
+    if (m === 'POST' && !b) {
+      const body = await readJson(req);
+      const size = Math.floor(Number(body.size));
+      if (!Number.isFinite(size) || size < 0) return send(res, 400, { error: 'Bad size' });
+      let target;
+      if (body.folder) {
+        const folder = db.items[body.folder];
+        if (!folder || folder.wsId !== ws.id || folder.type !== 'folder' || folder.status !== 'uploading') return send(res, 404, { error: 'Folder not found' });
+        target = { folder: folder.id, relPath: cleanRel(body.relPath), mtime: Number(body.mtime) || Date.now() };
+      } else {
+        target = { name: cleanName(body.name), type: String(body.type || '').slice(0, 200), stackId: validStack(ws, body.stackId), channelId: validChannel(ws, body.channelId) };
+      }
+      const up = { id: rid(), wsId: ws.id, size, received: 0, crc: 0, touched: Date.now(), ...target };
+      await fsp.writeFile(partPath(up), '');
+      db.uploads[up.id] = up;
+      save();
+      return send(res, 200, { id: up.id, offset: 0 });
+    }
+    const up = b && db.uploads[b];
+    if (!up || up.wsId !== ws.id) {
+      req.resume();
+      return send(res, 404, { error: 'Upload expired, try again' });
+    }
+    if (m === 'GET' && !c) return send(res, 200, { offset: up.received, size: up.size });
+    if (m === 'PUT' && !c) {
+      if (Number(url.searchParams.get('offset')) !== up.received) {
+        req.resume();
+        return send(res, 409, { error: 'Wrong offset', offset: up.received });
+      }
+      // Cut off whatever an interrupted chunk left behind, then append this one.
+      await fsp.truncate(partPath(up), up.received);
+      let n = 0;
+      let crc = up.crc;
+      req.on('data', (chunk) => {
+        n += chunk.length;
+        crc = zlib.crc32(chunk, crc);
+      });
+      try {
+        await pipeline(req, fs.createWriteStream(partPath(up), { flags: 'a' }));
+      } catch {
+        return send(res, 400, { error: 'Chunk interrupted', offset: up.received });
+      }
+      if (up.received + n > up.size) {
+        await fsp.truncate(partPath(up), up.received);
+        return send(res, 400, { error: 'More data than expected', offset: up.received });
+      }
+      up.received += n;
+      up.crc = crc;
+      up.touched = Date.now();
+      save();
+      return send(res, 200, { offset: up.received });
+    }
+    if (c === 'done' && m === 'POST') {
+      if (up.received !== up.size) return send(res, 409, { error: 'Upload incomplete', offset: up.received });
+      const id = rid();
+      if (up.folder) {
+        const folder = db.items[up.folder];
+        if (!folder || folder.status !== 'uploading') {
+          dropUpload(up);
+          return send(res, 404, { error: 'Folder not found' });
+        }
+        await fsp.rename(partPath(up), path.join(FILES_DIR, id));
+        delete db.uploads[up.id];
+        folder.files.push({ fid: id, relPath: up.relPath, size: up.size, crc: up.crc, mtime: up.mtime });
+        folder.size = folder.files.reduce((t, f) => t + f.size, 0);
+        save();
+        return send(res, 200, { ok: true });
+      }
+      await fsp.rename(partPath(up), path.join(FILES_DIR, id));
+      delete db.uploads[up.id];
+      const item = addItem({
+        ...baseItem(auth, { type: 'file', name: up.name, size: up.size, mime: mimeFor(up.name, up.type) }),
+        id,
+        stackId: validStack(ws, up.stackId),
+        channelId: validChannel(ws, up.channelId),
+      });
+      return send(res, 200, publicItem(item));
+    }
+    if (m === 'DELETE' && !c) {
+      dropUpload(up);
+      return send(res, 200, { ok: true });
+    }
+  }
+
   // Single file: PUT raw body. Folder file: PUT with ?folder=<id>&relPath=...
   if (a === 'upload' && (m === 'PUT' || m === 'POST')) {
     const folderId = url.searchParams.get('folder');
@@ -703,11 +801,7 @@ async function api(req, res, url) {
       if (!folder || folder.wsId !== ws.id || folder.type !== 'folder' || folder.status !== 'uploading') {
         return send(res, 404, { error: 'Folder not found' });
       }
-      const relPath = String(url.searchParams.get('relPath') || 'file')
-        .replace(/\\/g, '/')
-        .split('/')
-        .filter((p) => p && p !== '.' && p !== '..')
-        .join('/');
+      const relPath = cleanRel(url.searchParams.get('relPath'));
       const fid = rid();
       const { size, crc } = await receiveUpload(req, path.join(FILES_DIR, fid));
       folder.files.push({ fid, relPath, size, crc, mtime: Number(url.searchParams.get('mtime')) || Date.now() });
@@ -715,7 +809,7 @@ async function api(req, res, url) {
       save();
       return send(res, 200, { ok: true });
     }
-    const name = String(url.searchParams.get('name') || 'file').replace(/[\/\\]/g, '_').slice(0, 255);
+    const name = cleanName(url.searchParams.get('name'));
     const id = rid();
     const { size } = await receiveUpload(req, path.join(FILES_DIR, id));
     const item = addItem({
@@ -868,6 +962,7 @@ setInterval(() => {
     const h = ws.settings.expireHours;
     if (h > 0 && !it.pinned && it.status === 'ready' && now - it.createdAt > h * 3600_000) deleteItem(it.id);
   }
+  for (const up of Object.values(db.uploads)) if (now - up.touched > 24 * 3600_000 || !db.workspaces[up.wsId]) dropUpload(up);
 }, 60_000);
 
 migratePeople();

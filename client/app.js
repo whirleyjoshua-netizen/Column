@@ -1011,7 +1011,7 @@
   function updateUpload(u) {
     for (const el of Object.values(u.els || {})) {
       el.querySelector('i').style.width = Math.round((u.loaded / (u.size || 1)) * 100) + '%';
-      el.querySelector('.sub').textContent = `Uploading… ${fmtSize(u.loaded)} of ${fmtSize(u.size)}`;
+      el.querySelector('.sub').textContent = u.retrying ? `Connection lost · will resume at ${fmtSize(u.loaded)}` : `Uploading… ${fmtSize(u.loaded)} of ${fmtSize(u.size)}`;
     }
   }
 
@@ -1298,11 +1298,46 @@
       xhr.onload = () => {
         let data = {};
         try { data = JSON.parse(xhr.responseText); } catch {}
-        xhr.status < 300 ? resolve(data) : reject(new Error(data.error || 'HTTP ' + xhr.status));
+        xhr.status < 300 ? resolve(data) : reject(Object.assign(new Error(data.error || 'HTTP ' + xhr.status), { status: xhr.status }));
       };
-      xhr.onerror = () => reject(new Error('Network error'));
+      xhr.onerror = () => reject(Object.assign(new Error('Network error'), { status: 0 }));
       xhr.send(file);
     });
+  }
+
+  // Files over CHUNK go up in pieces. If the connection drops, wait (or until we're back online),
+  // ask the server how much it has, and carry on from there.
+  const CHUNK = 8 * 1024 * 1024;
+  const waitRetry = (ms) => new Promise((resolve) => {
+    const done = () => { clearTimeout(t); removeEventListener('online', done); resolve(); };
+    const t = navigator.onLine ? setTimeout(done, ms) : null;
+    addEventListener('online', done);
+  });
+  async function putResumable(file, init, onProgress, u) {
+    const { id } = await api('POST', '/uploads', { ...init, size: file.size });
+    let offset = 0;
+    let fails = 0;
+    const setRetrying = (on) => { if (u && !!u.retrying !== on) { u.retrying = on; updateUpload(u); } };
+    while (offset < file.size) {
+      try {
+        const from = offset;
+        const r = await put(`/api/uploads/${id}?offset=${from}`, file.slice(from, Math.min(from + CHUNK, file.size)), (n) => onProgress(from + n));
+        offset = r.offset;
+        fails = 0;
+        setRetrying(false);
+      } catch (e) {
+        if (e.status === 404 || e.status === 401 || e.status === 403 || ++fails > 15) throw e;
+        setRetrying(true);
+        await waitRetry(Math.min(30_000, 1000 * 2 ** (fails - 1)));
+        offset = await fetch(`/api/uploads/${id}`, { headers: { Authorization: 'Bearer ' + S.token } })
+          .then((r) => (r.ok ? r.json() : Promise.reject(Object.assign(new Error('Upload expired, try again'), { status: r.status }))))
+          .then((d) => d.offset)
+          .catch((er) => { if (er.status === 404) throw er; return offset; });
+        onProgress(offset);
+      }
+    }
+    setRetrying(false);
+    return api('POST', `/uploads/${id}/done`);
   }
 
   // dest: { stackId, channelId }, where the upload lands.
@@ -1311,8 +1346,11 @@
     S.uploads.set(u.key, u);
     render();
     try {
+      const progress = (n) => { u.loaded = n; updateUpload(u); };
       const qs = new URLSearchParams({ name: file.name, type: file.type || '', ...(dest.stackId ? { stackId: dest.stackId } : {}), ...(dest.channelId ? { channelId: dest.channelId } : {}) });
-      const item = await put('/api/upload?' + qs, file, (n) => { u.loaded = n; updateUpload(u); });
+      const item = file.size > CHUNK
+        ? await putResumable(file, { name: file.name, type: file.type || '', stackId: dest.stackId || null, channelId: dest.channelId || null }, progress, u)
+        : await put('/api/upload?' + qs, file, progress);
       upsert(item);
     } finally {
       S.uploads.delete(u.key);
@@ -1334,7 +1372,9 @@
           const f = next.shift();
           let last = 0;
           const qs = new URLSearchParams({ folder: id, relPath: f.relPath, mtime: f.file.lastModified || '' });
-          await put('/api/upload?' + qs, f.file, (n) => { done += n - last; last = n; u.loaded = done; updateUpload(u); });
+          const progress = (n) => { done += n - last; last = n; u.loaded = done; updateUpload(u); };
+          if (f.file.size > CHUNK) await putResumable(f.file, { folder: id, relPath: f.relPath, mtime: f.file.lastModified || null }, progress, u);
+          else await put('/api/upload?' + qs, f.file, progress);
           done += f.file.size - last;
         }
       };
