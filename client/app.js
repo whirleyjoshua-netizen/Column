@@ -327,6 +327,7 @@
       chatChanged();
     } else if (msg.type === 'workspace') {
       S.workspace = msg.workspace;
+      applyBrand();
       refreshLinks();
       S.panes = S.panes.map((v) => (v.startsWith('stack:') && !stackById(v.slice(6)) ? 'files' : v));
       buildPanes();
@@ -444,6 +445,7 @@
     S.panes = S.panes.map((v) => (v.startsWith('stack:') && !stackById(v.slice(6)) ? 'files' : v));
     $('#wsName').textContent = S.workspace.name;
     document.title = `${S.workspace.name} · Column`;
+    applyBrand();
     buildPanes();
     renderDay();
     renderCamps();
@@ -3585,6 +3587,135 @@
     const box = $('#settings .cal-sec');
     if (box) box.replaceWith(calendarSection());
   }
+  // ---------- brand & culture: set by team owners; brands the app and guides every agent ----------
+  const isOwner = () => S.workspace.members.find((x) => x.id === S.me?.memberId)?.role === 'owner';
+  function applyBrand() {
+    const b = S.workspace?.brand;
+    const root = document.documentElement.style;
+    if (b?.accent) {
+      // Very light brand colours are deepened so white text on them stays readable.
+      const n = parseInt(b.accent.slice(1), 16);
+      const lum = (0.2126 * (n >> 16) + 0.7152 * ((n >> 8) & 255) + 0.0722 * (n & 255)) / 255;
+      root.setProperty('--accent', lum > 0.6 ? `color-mix(in srgb, ${b.accent} 70%, #000)` : b.accent);
+      root.setProperty('--accent-soft', `color-mix(in srgb, ${b.accent} 15%, transparent)`);
+    } else {
+      root.removeProperty('--accent');
+      root.removeProperty('--accent-soft');
+    }
+    const logo = $('#wsLogo');
+    logo.classList.toggle('hidden', !b?.logo);
+    if (b?.logo && logo.getAttribute('src') !== b.logo) logo.src = b.logo;
+  }
+
+  function brandSection() {
+    const b = S.workspace.brand;
+    const owner = isOwner();
+    const set = b.mission || b.values || b.tone || b.about || b.colors.length || b.logo;
+    const sec = h('section', {}, h('h3', {}, 'Brand & culture'));
+    if (set) {
+      sec.append(h('div', { class: 'brand-sum' },
+        b.logo ? h('img', { class: 'brand-logo', src: b.logo, alt: '' }) : null,
+        h('div', { class: 'brand-txt' },
+          b.mission ? h('p', { class: 'brand-mission' }, b.mission) : h('p', {}, 'No mission statement yet.'),
+          b.colors.length ? h('div', { class: 'brand-sw' }, b.colors.map((x) => h('span', { class: 'brand-dot' + (x.hex === b.accent ? ' on' : ''), style: `background:${x.hex}`, title: (x.name ? x.name + ' ' : '') + x.hex + (x.hex === b.accent ? ' · app colour' : '') }))) : null)));
+    } else {
+      sec.append(h('p', {}, owner
+        ? 'Set your mission, values, tone of voice, logo and colours. Every agent on the team follows them, and your logo and colour brand Column for everyone.'
+        : 'Your team owner hasn’t set the brand up yet.'));
+    }
+    if (owner || set) sec.append(h('button', { class: 'btn', onclick: brandSheet }, owner ? (set ? 'Edit brand & culture' : 'Set up brand & culture') : 'View all'));
+    return sec;
+  }
+
+  function brandSheet() {
+    const b = S.workspace.brand;
+    const owner = isOwner();
+    const area = (v, rows, placeholder) => {
+      const t = h('textarea', { rows, placeholder, ...(owner ? {} : { readonly: '' }) });
+      t.value = v || '';
+      return t;
+    };
+    const mission = area(b.mission, 2, 'Why the business exists, in a sentence or two.');
+    const values = area(b.values, 4, 'One per line, e.g.\nCustomers first: we call back the same day\nNo jargon');
+    const tone = area(b.tone, 4, 'How you sound. e.g. Warm and direct. Short sentences. Never pushy. We say “we”, not “the company”.');
+    const about = area(b.about, 4, 'What you sell, who to, where, and what makes you different.');
+
+    // Logo uploads straight away; everything else saves with the button.
+    const logoImg = h('img', { class: 'brand-logo big' + (b.logo ? '' : ' hidden'), alt: '' });
+    if (b.logo) logoImg.src = b.logo;
+    const file = h('input', { type: 'file', accept: 'image/png,image/jpeg,image/gif,image/webp', class: 'hidden' });
+    const rmLogo = h('button', { type: 'button', class: 'btn small danger' + (b.logo ? '' : ' hidden') }, 'Remove');
+    const upLogo = h('button', { type: 'button', class: 'btn small', onclick: () => file.click() }, b.logo ? 'Replace' : 'Upload logo');
+    const showLogo = (w) => {
+      S.workspace = w;
+      applyBrand();
+      const l = w.brand.logo;
+      logoImg.classList.toggle('hidden', !l);
+      if (l) logoImg.src = l;
+      rmLogo.classList.toggle('hidden', !l);
+      upLogo.textContent = l ? 'Replace' : 'Upload logo';
+    };
+    file.addEventListener('change', () => {
+      const f = file.files[0];
+      file.value = '';
+      if (!f) return;
+      if (f.size > 2_000_000) return toast('Keep the logo under 2 MB.');
+      const r = new FileReader();
+      r.onload = () => api('PUT', '/brand/logo', { data: r.result }).then(showLogo).catch((e) => toast(e.message));
+      r.readAsDataURL(f);
+    });
+    rmLogo.addEventListener('click', () => confirmClick(rmLogo, () => api('DELETE', '/brand/logo').then(showLogo).catch((e) => toast(e.message))));
+
+    // Brand colours, and which one (if any) becomes the app's accent.
+    let colors = b.colors.map((x) => ({ ...x }));
+    let accent = b.accent;
+    const list = h('div', { class: 'brand-colors' });
+    const accentSel = h('select');
+    const drawColors = () => {
+      list.replaceChildren(...colors.map((x, i) => {
+        const pick = h('input', { type: 'color', value: x.hex, ...(owner ? {} : { disabled: '' }) });
+        const name = h('input', { value: x.name, placeholder: 'Name, e.g. Navy', ...(owner ? {} : { readonly: '' }) });
+        pick.addEventListener('input', () => {
+          if (accent === x.hex) accent = pick.value;
+          x.hex = pick.value;
+          drawAccent();
+        });
+        name.addEventListener('input', () => { x.name = name.value; drawAccent(); });
+        return h('div', { class: 'brand-color' }, pick, name, h('code', {}, x.hex), owner ? h('button', { type: 'button', class: 't-btn', 'aria-label': 'Remove colour', html: I.close, onclick: () => {
+          if (accent === x.hex) accent = null;
+          colors.splice(i, 1);
+          drawColors();
+        } }) : null);
+      }), ...(owner && colors.length < 8 ? [h('button', { type: 'button', class: 'btn small', onclick: () => { colors.push({ hex: '#6b5cf0', name: '' }); drawColors(); } }, '+ Add colour')] : []));
+      drawAccent();
+    };
+    const drawAccent = () => {
+      accentSel.replaceChildren(h('option', { value: '' }, 'Column’s default'), ...colors.map((x) => h('option', { value: x.hex }, (x.name || 'Colour') + ' ' + x.hex)));
+      accentSel.value = colors.some((x) => x.hex === accent) ? accent : '';
+      accentSel.disabled = !owner;
+    };
+    accentSel.addEventListener('change', () => { accent = accentSel.value || null; });
+    drawColors();
+
+    sheet('Brand & culture', [
+      h('p', { class: 'day-hint' }, owner
+        ? 'Every agent on the team writes and plans with this. Mission, values and tone go into everything they do; the rest they look up when a task needs it.'
+        : 'Set by your team owner. Every agent on the team follows it.'),
+      h('label', {}, 'Logo', h('div', { class: 'brand-logo-row' }, logoImg, owner ? h('span', { class: 'btns' }, upLogo, rmLogo, file) : (b.logo ? null : h('small', {}, 'None yet')))),
+      h('label', {}, 'Mission statement', mission),
+      h('label', {}, 'Core values', values),
+      h('label', {}, 'Tone of voice', tone),
+      h('label', {}, 'About the business', about),
+      h('label', {}, 'Brand colours', list),
+      h('label', {}, 'App colour', accentSel, h('small', {}, 'Buttons, links and highlights in Column, for everyone on the team.')),
+    ], async () => {
+      if (!owner) return;
+      S.workspace = await api('PATCH', '/brand', { mission: mission.value, values: values.value, tone: tone.value, about: about.value, colors, accent });
+      applyBrand();
+      if (!$('#settings').classList.contains('hidden')) renderSettings();
+    }, owner ? 'Save' : 'Close');
+  }
+
   function calendarSection() {
     const sec = h('section', { class: 'cal-sec' }, h('h3', {}, 'Calendars'));
     const c = S.cals;
@@ -3646,6 +3777,8 @@
     );
     s.append(h('section', {}, h('h3', {}, 'Layout'), seg,
       h('p', { style: 'margin-top:8px;font-size:11.5px' }, 'Use the tabs at the top of each column to switch what it shows: everything, files, or a stack.')));
+
+    s.append(brandSection());
 
     // Stacks
     const stackSec = h('section', {}, h('h3', {}, 'Stacks (folders)'));

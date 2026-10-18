@@ -683,3 +683,21 @@ button.oc:hover { background: color-mix(in srgb, var(--oc) 30%, transparent); }
 .ag-compose textarea { width: 100%; resize: vertical; }
 .ag-compose-btns { display: flex; justify-content: flex-end; gap: 6px; }
 .ag-key { display: flex; gap: 6px; min-width: 0; } .ag-key input { width: 180px; min-width: 0; }
+
+/* brand & culture */
+.ws-logo { height: 20px; max-width: 90px; object-fit: contain; border-radius: 4px; flex: none; }
+.brand-sum { display: flex; gap: 12px; align-items: flex-start; margin-bottom: 10px; }
+.brand-txt { min-width: 0; flex: 1; }
+.settings .brand-mission { color: var(--text); margin-bottom: 6px; }
+.brand-logo { width: 44px; height: 44px; object-fit: contain; border-radius: 8px; background: var(--panel); border: 1px solid var(--line); flex: none; }
+.brand-logo.big { width: 64px; height: 64px; }
+.brand-logo-row { display: flex; align-items: center; gap: 12px; }
+.brand-sw { display: flex; gap: 6px; flex-wrap: wrap; }
+.brand-dot { width: 18px; height: 18px; border-radius: 50%; border: 1px solid var(--line); }
+.brand-dot.on { outline: 2px solid var(--text); outline-offset: 2px; }
+.brand-colors { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+.brand-color { display: flex; align-items: center; gap: 8px; width: 100%; }
+.brand-color input[type="color"] { width: 34px; height: 30px; padding: 2px; border-radius: 7px; flex: none; cursor: pointer; }
+.brand-color input:not([type]) { flex: 1; min-width: 0; padding: 6px 9px; }
+.brand-color code { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+.brand-color .t-btn { opacity: 1; }

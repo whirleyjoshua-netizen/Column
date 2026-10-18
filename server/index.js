@@ -181,7 +181,54 @@ const publicWorkspace = (ws, memberId) => ({
   chatFolders: ws.chatFolders,
   members: ws.members.map(publicMember),
   inviteCode: ws.inviteCode,
+  brand: publicBrand(ws),
 });
+
+// ---------- brand & culture: the team's voice, beliefs and look ----------
+// Owners set it; everyone sees it. Agents follow it, and the logo and accent colour brand the app and share pages.
+const BRAND_TEXT = { mission: 1000, values: 3000, tone: 3000, about: 6000 };
+const isHex = (v) => /^#[0-9a-f]{6}$/i.test(String(v));
+const brandOf = (ws) => ({ mission: '', values: '', tone: '', about: '', colors: [], accent: null, logo: null, ...ws.brand });
+const logoPath = (logo) => path.join(FILES_DIR, 'brand-' + logo.id);
+const logoUrl = (logo) => logo && `/brand/${logo.id}`;
+const publicBrand = (ws) => ({ ...brandOf(ws), logo: logoUrl(ws.brand?.logo) || null });
+function applyBrand(ws, body) {
+  const b = brandOf(ws);
+  for (const [k, max] of Object.entries(BRAND_TEXT)) if (body[k] !== undefined) b[k] = String(body[k] || '').trim().slice(0, max);
+  if (body.colors !== undefined) {
+    b.colors = (Array.isArray(body.colors) ? body.colors : []).filter((x) => isHex(x?.hex)).slice(0, 8)
+      .map((x) => ({ hex: x.hex.toLowerCase(), name: String(x.name || '').trim().slice(0, 30) }));
+  }
+  if (body.accent !== undefined) b.accent = isHex(body.accent) ? body.accent.toLowerCase() : null;
+  ws.brand = b;
+}
+// Only raster images: an SVG served from this origin could run script.
+function imageType(buf) {
+  if (buf.length > 8 && buf.readUInt32BE(0) === 0x89504e47) return 'image/png';
+  if (buf.length > 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return 'image/jpeg';
+  if (buf.length > 6 && buf.toString('latin1', 0, 4) === 'GIF8') return 'image/gif';
+  if (buf.length > 12 && buf.toString('latin1', 0, 4) === 'RIFF' && buf.toString('latin1', 8, 12) === 'WEBP') return 'image/webp';
+  return null;
+}
+function serveLogo(req, res, url) {
+  const id = url.pathname.slice('/brand/'.length);
+  const ws = /^[\w-]{8,40}$/.test(id) && Object.values(db.workspaces).find((x) => x.brand?.logo?.id === id);
+  if (!ws) return send(res, 404, 'Not found');
+  fs.readFile(logoPath(ws.brand.logo), (err, data) => {
+    if (err) return send(res, 404, 'Not found');
+    // A new upload gets a new id, so this address never changes content.
+    send(res, 200, data, { 'Content-Type': ws.brand.logo.mime, 'Cache-Control': 'public, max-age=31536000, immutable', 'X-Content-Type-Options': 'nosniff' });
+  });
+}
+// The short parts go into every agent's instructions; the rest is one get_brand call away.
+function brandPrompt(ws) {
+  const b = brandOf(ws);
+  const lines = [b.mission && `Mission: ${b.mission}`, b.values && `Core values:\n${b.values}`, b.tone && `Tone of voice:\n${b.tone}`].filter(Boolean);
+  const more = b.about || b.colors.length || b.logo;
+  if (!lines.length && !more) return '';
+  return [`\nThe team’s brand and culture. Follow it in anything you write or plan for them, especially anything customers will see:`, ...lines,
+    more ? 'Call get_brand for what the business does and who it serves, its brand colours and its logo.' : ''].filter(Boolean).join('\n');
+}
 
 // Shared-passphrase teams become per-person: everyone who has signed in or posted becomes a member with no
 // password yet. Their devices stay signed in; on new devices they set a password with Join team.
@@ -413,6 +460,7 @@ function fmtBytes(n) {
 function serveShare(req, res, url) {
   const [, token, part] = url.pathname.split('/').filter(Boolean);
   const it = token && sharedItem(token);
+  const brand = it && db.workspaces[it.wsId] ? { ...brandOf(db.workspaces[it.wsId]), team: db.workspaces[it.wsId].name } : null;
   const headers = { 'X-Robots-Tag': 'noindex', 'Referrer-Policy': 'no-referrer', 'Cache-Control': 'no-store' };
   for (const [k, v] of Object.entries(headers)) res.setHeader(k, v);
   if (!it) return sharePage(res, 404, '<h1>Link not available</h1><p>This link has expired or was turned off.</p>');
@@ -429,10 +477,12 @@ function serveShare(req, res, url) {
   const detail = it.type === 'folder' ? `Folder · ${it.files.length} file${it.files.length === 1 ? '' : 's'} · ${fmtBytes(it.size)}` : fmtBytes(it.size);
   const until = it.share.expiresAt ? ` · link expires ${new Date(it.share.expiresAt).toUTCString().slice(0, 16)}` : '';
   sharePage(res, 200, `${preview}<h1>${escHtml(it.name)}</h1><p>${detail}${until}</p>
-    <a class="dl" href="${it.type === 'folder' ? base + '/zip' : src + '?dl=1'}">Download${it.type === 'folder' ? ' (.zip)' : ''}</a>`, it.name);
+    <a class="dl" href="${it.type === 'folder' ? base + '/zip' : src + '?dl=1'}">Download${it.type === 'folder' ? ' (.zip)' : ''}</a>`, it.name, brand);
 }
 
-function sharePage(res, code, body, title = 'Column') {
+function sharePage(res, code, body, title = 'Column', brand = null) {
+  const top = brand?.logo ? `<img class="brand" src="${logoUrl(brand.logo)}" alt="${escHtml(brand.team)}">` : '';
+  const from = brand ? `Shared by ${escHtml(brand.team)} with Column` : 'Shared with Column';
   res.writeHead(code, {
     'Content-Type': 'text/html; charset=utf-8',
     'Content-Security-Policy': "default-src 'none'; img-src 'self'; media-src 'self'; style-src 'unsafe-inline'",
@@ -445,9 +495,10 @@ body{margin:0;min-height:100vh;display:grid;place-items:center;background:var(--
 main{background:var(--card);border-radius:16px;padding:24px;width:min(560px,100%);box-shadow:0 10px 40px rgba(0,0,0,.12);text-align:center}
 img,video{max-width:100%;max-height:60vh;border-radius:10px;display:block;margin:0 auto 16px}audio{width:100%;margin-bottom:16px}
 h1{font-size:18px;margin:0 0 4px;word-break:break-word}p{color:var(--muted);margin:0 0 18px;font-size:13px}
+.brand{max-height:44px;max-width:180px;border-radius:6px;margin:0 auto 18px}${brand?.accent ? `:root{--accent:${brand.accent}}` : ''}
 .dl{display:inline-block;background:var(--accent);color:#fff;text-decoration:none;font-weight:600;padding:10px 22px;border-radius:10px}
 footer{margin-top:18px;font-size:11.5px;color:var(--muted)}
-</style></head><body><main>${body}<footer>Shared with Column</footer></main></body></html>`);
+</style></head><body><main>${top}${body}<footer>${from}</footer></main></body></html>`);
 }
 
 // Messages link to things as [[file:<id>]], [[stack:<id>]], [[task:<id>]]. A linked file is pinned so auto-clear never breaks the link.
@@ -1109,6 +1160,7 @@ const obj = (properties, required = []) => ({ type: 'object', properties, requir
 // The tools, by group. write: changes something (left out when the agent may only look).
 const AGENT_TOOLS = [
   { group: 'any', name: 'list_people', description: 'Everyone on the team, for assigning work.', parameters: obj({}) },
+  { group: 'any', name: 'get_brand', description: 'The team’s brand and culture: mission, core values, tone of voice, what the business does and who it serves, brand colours (hex) and a link to the logo. Use it before writing or planning anything customers will see.', parameters: obj({}) },
   { group: 'day', name: 'get_day', description: 'One day: schedule entries (blocks have start and end; notes only a start; anytime items neither), calendar events, and tasks due that day or overdue.', parameters: obj({ date: DATE }) },
   { group: 'day', name: 'list_tasks', description: 'Tasks, optionally only open ones and only those assigned to me.', parameters: obj({ open_only: { type: 'boolean' }, mine_only: { type: 'boolean' } }) },
   { group: 'day', write: true, name: 'add_block', description: 'Add to the schedule. With start and end it is a time block; start only is a note; neither is an "anytime" item.', parameters: obj({ text: S_('What it is'), date: DATE, start: TIME, end: TIME }, ['text', 'date']) },
@@ -1143,6 +1195,12 @@ function agentTools(ag, token, actions) {
     return { id: t.id, text: t.text, due: t.due || null, priority: t.priority || 0, done: !!t.done, ...(who ? { assignee: who.name } : {}), ...(c ? { campaign: c.name, goal: g.title } : {}) };
   };
   const run = {
+    async get_brand() {
+      const { workspace } = await state();
+      const b = workspace.brand;
+      if (!b.mission && !b.values && !b.tone && !b.about && !b.colors.length && !b.logo) return { note: 'The team hasn’t set up its brand yet (Settings → Brand & culture, team owners only).' };
+      return { team: workspace.name, mission: b.mission, core_values: b.values, tone_of_voice: b.tone, about: b.about, colors: b.colors, app_accent: b.accent, logo: b.logo ? PUBLIC_URL + b.logo : null };
+    },
     async list_people() {
       return (await state()).workspace.members.map((x) => ({ id: x.id, name: x.name, ...(x.id === ag.memberId ? { me: true } : {}) }));
     },
@@ -1245,6 +1303,7 @@ function agentSystem(ag, ws, member) {
     ag.write ? 'Use your tools to make the changes the job needs instead of only describing them, then say briefly what you changed.' : 'You can look at things but not change them. Suggest changes for them to make.',
     ag.can.web ? 'Search the web when you need facts about people, companies or markets, and name your sources. Never invent leads, contacts or numbers.' : 'You can’t browse the web. Never invent leads, contacts or numbers.',
     'Keep replies short and easy to scan: a line or two, or a short list.',
+    brandPrompt(ws),
     ag.instructions ? `\nTheir instructions for you:\n${ag.instructions}` : '',
     `\nTimes are 24-hour HH:MM in ${ag.tz}. Right now it is ${hm(L.min)} on ${day} (${L.date}).`,
   ].filter(Boolean).join('\n');
@@ -1275,7 +1334,7 @@ async function runAgent(ag, text, trigger) {
       else history.push({ role: m.role, text });
     }
     while (history.length && history[0].role !== 'user') history.shift();
-    const steps = { get_day: 'Looking at the day', list_tasks: 'Checking tasks', list_campaigns: 'Looking at campaigns', get_campaign: 'Reading the campaign', web_search: 'Searching the web', list_people: 'Checking the team' };
+    const steps = { get_day: 'Looking at the day', list_tasks: 'Checking tasks', list_campaigns: 'Looking at campaigns', get_campaign: 'Reading the campaign', web_search: 'Searching the web', list_people: 'Checking the team', get_brand: 'Checking the brand' };
     const out = await llms[ag.provider].run({
       key: unseal(keyRec.sealed).key, model: ag.model, system: agentSystem(ag, ws, member),
       history,
@@ -1729,6 +1788,33 @@ async function api(req, res, url) {
     return send(res, 200, publicWorkspace(ws, auth.memberId));
   }
 
+  if (a === 'brand') {
+    if (auth.role !== 'owner') return send(res, 403, { error: 'Only team owners can change the brand.' });
+    const old = ws.brand?.logo;
+    if (m === 'PATCH' && !b) {
+      applyBrand(ws, await readJson(req, 100_000));
+    } else if (b === 'logo' && m === 'PUT') {
+      const { data } = await readJson(req, 3_000_000);
+      const buf = Buffer.from(String(data || '').replace(/^data:[^,]*,/, ''), 'base64');
+      const mime = imageType(buf);
+      if (!mime) return send(res, 400, { error: 'Use a PNG, JPEG, GIF or WebP image.' });
+      if (buf.length > 2_000_000) return send(res, 400, { error: 'Keep the logo under 2 MB.' });
+      const logo = { id: rid(), mime };
+      await fsp.writeFile(logoPath(logo), buf);
+      applyBrand(ws, {});
+      ws.brand.logo = logo;
+    } else if (b === 'logo' && m === 'DELETE') {
+      applyBrand(ws, {});
+      ws.brand.logo = null;
+    } else return send(res, 405, { error: 'Method not allowed' });
+    if (old && old.id !== ws.brand.logo?.id) fsp.rm(logoPath(old), { force: true }).catch(() => {});
+    ws.brand.updatedAt = Date.now();
+    ws.brand.updatedBy = auth.memberId;
+    save();
+    broadcast(ws.id, { type: 'workspace' });
+    return send(res, 200, publicWorkspace(ws, auth.memberId));
+  }
+
   if (a === 'workspace' && m === 'PATCH') {
     const body = await readJson(req);
     if (body.expireHours !== undefined) ws.settings.expireHours = Math.max(0, Number(body.expireHours) || 0);
@@ -2090,6 +2176,7 @@ const server = http.createServer(async (req, res) => {
     return;
   }
   if (url.pathname.startsWith('/s/') && (req.method === 'GET' || req.method === 'HEAD')) return serveShare(req, res, url);
+  if (url.pathname.startsWith('/brand/') && (req.method === 'GET' || req.method === 'HEAD')) return serveLogo(req, res, url);
   if (url.pathname.startsWith('/oauth/')) return oauthCallback(req, res, url).catch((e) => {
     console.error(e);
     if (!res.headersSent) send(res, 500, 'Something went wrong connecting your calendar.');
