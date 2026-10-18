@@ -356,11 +356,13 @@
       else list.push(x);
       renderCamps();
       renderDay();
+      refreshLinks();
     } else if (msg.type === 'campaign:remove' || msg.type === 'goal:remove' || msg.type === 'attempt:remove') {
       const key = { 'campaign:remove': 'campaigns', 'goal:remove': 'goals', 'attempt:remove': 'attempts' }[msg.type];
       S[key] = S[key].filter((y) => y.id !== msg.id);
       renderCamps();
       renderDay();
+      refreshLinks();
     } else if (msg.type === 'resync') {
       // Who can see a private campaign changed.
       loadState().catch(() => {});
@@ -486,7 +488,7 @@
     const tray = h('div', { class: 'tray hidden' });
     const drawTray = () => {
       tray.replaceChildren(...links.map((l, i) => h('span', { class: 'tray-chip' },
-        h('span', { class: 'ln-ic', html: l.type === 'stack' ? I.stack : l.type === 'task' ? I.task : I.link }),
+        h('span', { class: 'ln-ic', html: l.type === 'stack' ? I.stack : l.type === 'task' ? I.task : l.type === 'campaign' ? I.target : I.link }),
         h('span', { class: 'ln-text' }, linkName(l)),
         h('button', { 'aria-label': 'Remove', html: I.close, onclick: () => { links.splice(i, 1); drawTray(); } }))));
       tray.classList.toggle('hidden', !links.length);
@@ -871,7 +873,7 @@
 
   // ---------- links in chat: [[file:<id>]], [[stack:<id>]], [[task:<id>]] ----------
   // They point at the live thing, so renames, ticks and deletes show up in old messages too.
-  const LINK_RE = /\[\[(file|stack|task):([\w-]+)\]\]/g;
+  const LINK_RE = /\[\[(file|stack|task|campaign):([\w-]+)\]\]/g;
   const linkToken = (type, id) => `[[${type}:${id}]]`;
   const linksIn = (text) => [...text.matchAll(LINK_RE)].map(([, type, id]) => ({ type, id }));
   const stripLinks = (text) => text.replace(LINK_RE, '').trim();
@@ -881,6 +883,7 @@
   function linkName({ type, id }) {
     if (type === 'file') return linkedFile(id)?.name || 'Removed file';
     if (type === 'stack') return stackById(id)?.name || 'Removed stack';
+    if (type === 'campaign') return campById(id)?.name || 'Campaign';
     return taskById(id)?.text || 'Deleted task';
   }
   // Message text with links spelled out, for notifications and copying.
@@ -923,6 +926,13 @@
       const n = stackCount(id);
       return h('button', { class: 'ln ln-chip', title: 'Open stack', onclick: () => showStack(id) },
         h('span', { class: 'ln-ic', html: I.stack }), h('span', { class: 'ln-text' }, st.name), h('span', { class: 'ln-sub' }, `${n} item${n === 1 ? '' : 's'}`));
+    }
+    if (type === 'campaign') {
+      const c = campById(id);
+      if (!c) return gone('Campaign not available');
+      const p = campProgress(c);
+      return h('button', { class: 'ln ln-chip ln-camp c-' + c.color, title: 'Open campaign', onclick: () => openCampaign(id) },
+        h('span', { class: 'ln-ic', html: I.target }), h('span', { class: 'ln-text' }, c.name), bar(p, c.color), h('span', { class: 'ln-sub' }, Math.round(p * 100) + '%'));
     }
     const t = taskById(id);
     if (!t) return gone('Task was deleted');
@@ -974,6 +984,7 @@
         ['Stacks', S.workspace.stacks.filter((x) => hit(x.name)).map((x) => ({ type: 'stack', id: x.id, label: x.name, icon: I.stack, sub: `${stackCount(x.id)} item${stackCount(x.id) === 1 ? '' : 's'}` }))],
         ['Files & images', S.items.filter((x) => (x.type === 'file' || x.type === 'folder') && hit(x.name)).sort((a, b) => b.createdAt - a.createdAt)
           .map((x) => ({ type: 'file', id: x.id, label: x.name, it: x, sub: fmtSize(x.size) }))],
+        ['Campaigns', S.campaigns.filter((c) => hit(c.name)).map((c) => ({ type: 'campaign', id: c.id, label: c.name, icon: I.target, sub: Math.round(campProgress(c) * 100) + '%' }))],
         ['Tasks', S.tasks.filter((t) => hit(t.text)).sort((a, b) => a.done - b.done || b.createdAt - a.createdAt)
           .map((t) => ({ type: 'task', id: t.id, label: t.text, icon: I.task, sub: t.done ? 'done' : taskSlot(t)?.label }))],
       ];
@@ -2597,6 +2608,7 @@
       { label: 'Edit details…', run: () => campaignSheet(c) },
       { label: 'What to log…', run: () => outcomesSheet(c) },
       { label: 'Write a report', run: () => openReport(c) },
+      { label: 'Share to chat…', run: () => shareMenu(anchor, linkToken('campaign', c.id)) },
       c.status === 'active' ? { label: 'Pause', run: () => api('PATCH', '/campaigns/' + c.id, { status: 'paused' }).catch((e) => toast(e.message)) } : { label: 'Make active', run: () => api('PATCH', '/campaigns/' + c.id, { status: 'active' }).catch((e) => toast(e.message)) },
       c.status !== 'done' ? { label: 'Mark finished', run: () => api('PATCH', '/campaigns/' + c.id, { status: 'done' }).catch((e) => toast(e.message)) } : { note: 'Finished' },
       ...(owner || amOwner() ? [{ label: 'Delete campaign and everything in it', danger: true, run: () => api('DELETE', '/campaigns/' + c.id).then(() => openCampaign(null)).catch((e) => toast(e.message)) }] : []),
@@ -2604,6 +2616,7 @@
   }
   function goalOptions(anchor, c, g) {
     openMenu(anchor, [
+      { label: 'Plan it out…', run: () => planSheet(c, g) },
       { label: 'Edit goal…', run: () => goalSheet(c, g) },
       { label: 'Delete goal and its tasks', danger: true, run: () => api('DELETE', '/goals/' + g.id).catch((e) => toast(e.message)) },
     ]);
@@ -2711,6 +2724,67 @@
     }, g ? 'Save' : 'Add goal');
   }
 
+  // "Plan it out": a list (areas, leads, batches) becomes one dated task each, spread over the days you pick.
+  function planSheet(c, g) {
+    const list = h('textarea', { rows: 6, placeholder: 'Pearl District\nOld Town\nNob Hill\n…' });
+    const pattern = h('input', { value: 'Call {}', placeholder: 'Call {}' });
+    const start = h('input', { type: 'date', value: [todayKey(), c.start].filter(Boolean).sort().pop() });
+    const perDay = h('input', { type: 'number', min: 1, max: 50, value: 1 });
+    const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((d, i) => {
+      const cb = h('input', { type: 'checkbox', value: (i + 1) % 7 });
+      cb.checked = i < 5;
+      return h('label', { class: 'pick' }, cb, d);
+    });
+    const who = h('select', {}, h('option', { value: '' }, 'Nobody'), h('option', { value: '*' }, 'Take turns'), S.workspace.members.map((m) => h('option', { value: m.id }, m.name)));
+    const report = h('input', { type: 'checkbox' });
+    report.checked = true;
+    const preview = h('div', { class: 'report-stats plan-preview' });
+    const plan = () => {
+      const items = list.value.split('\n').map((x) => x.trim()).filter(Boolean).slice(0, 200);
+      const ok = new Set(days.map((l) => l.firstChild).filter((cb) => cb.checked).map((cb) => Number(cb.value)));
+      const n = Math.max(1, Math.min(50, Number(perDay.value) || 1));
+      const out = [];
+      let k = start.value || todayKey();
+      for (let guard = 0; ok.size && out.length < items.length && guard < 800; guard++, k = addDays(k, 1)) {
+        if (!ok.has(keyDate(k).getDay())) continue;
+        for (let j = 0; j < n && out.length < items.length; j++) {
+          const it = items[out.length];
+          out.push({ text: pattern.value.includes('{}') ? pattern.value.replace('{}', it) : `${pattern.value} ${it}`.trim(), due: k });
+        }
+      }
+      return out;
+    };
+    const draw = () => {
+      const p = plan();
+      preview.replaceChildren(...(p.length
+        ? [h('div', {}, h('b', {}, `${p.length} task${p.length === 1 ? '' : 's'}`), `, ${dueLabel(p[0].due)} → ${dueLabel(p[p.length - 1].due)}`),
+          ...p.slice(0, 4).map((x) => h('div', { class: 'plan-row' }, h('span', {}, dueLabel(x.due)), x.text)),
+          p.length > 4 ? h('div', { class: 'plan-row' }, '…') : null]
+        : [h('div', {}, 'Add one line per area, lead or batch.')]));
+    };
+    for (const el of [list, pattern, start, perDay, ...days.map((l) => l.firstChild)]) el.addEventListener('input', draw);
+    draw();
+    sheet(`Plan it out · ${g.title}`, [
+      h('label', {}, 'One per line', list),
+      h('div', { class: 'row2' }, h('label', {}, 'Task ({} = each line)', pattern), h('label', {}, 'Starting', start)),
+      h('div', { class: 'picks' }, days),
+      h('div', { class: 'row2' }, h('label', {}, 'Per day', perDay), h('label', {}, 'Assign to', who)),
+      h('label', { class: 'pick' }, report, 'Add a “Report findings” task on the last day'),
+      preview,
+    ], async () => {
+      const p = plan();
+      if (!p.length) throw new Error('Add at least one line.');
+      const people = S.workspace.members.map((m) => m.id);
+      for (const [i, x] of p.entries()) {
+        const assigneeId = who.value === '*' ? people[i % people.length] : who.value || null;
+        upsertTask(await api('POST', '/tasks', { ...x, goalId: g.id, assigneeId }));
+      }
+      if (report.checked) upsertTask(await api('POST', '/tasks', { text: 'Report findings', due: p[p.length - 1].due, goalId: g.id, report: true, assigneeId: who.value && who.value !== '*' ? who.value : null }));
+      toast(`Added ${p.length} task${p.length === 1 ? '' : 's'}`);
+      renderCamps();
+    }, 'Add tasks');
+  }
+
   function outcomesSheet(c) {
     const ta = h('textarea', { rows: 5 });
     ta.value = c.outcomes.join('\n');
@@ -2749,7 +2823,7 @@
       h('div', { class: 'report-stats' }, stats.map((l) => h('div', {}, l))),
       h('label', {}, 'Findings', notes),
     ].filter(Boolean), async () => {
-      const text = [`📋 Report · ${c.name}`, ...stats, notes.value.trim() ? '\n' + notes.value.trim() : ''].filter(Boolean).join('\n');
+      const text = [`📋 Report · ${c.name}`, ...stats, notes.value.trim() ? '\n' + notes.value.trim() : '', linkToken('campaign', c.id)].filter(Boolean).join('\n');
       await api('POST', '/items', { type: 'message', text, channelId: c.channelId });
       await api('PATCH', '/campaigns/' + c.id, { lastReportAt: Date.now() });
       if (task) await patchTask(task, { done: true }, { reported: true });
@@ -2913,8 +2987,10 @@
             .map((x) => ({ icon: h('span', { class: 'pk-ic', html: x.type === 'folder' ? I.folder : I.link }), label: x.name, sub: fmtSize(x.size), run: () => openPreview(x) }))],
           ['Notes', S.items.filter((x) => x.type === 'text' && hit(x.text)).sort((a, b) => b.createdAt - a.createdAt).slice(0, 10)
             .map((x) => ({ icon: h('span', { class: 'pk-ic', html: I.copy }), html: mark(x.text, s), sub: ago(x.createdAt), two: true, run: () => openPreview(x) }))],
+          ['Campaigns', [...S.campaigns.filter((c) => hit(c.name) || hit(c.brief)).map((c) => ({ icon: h('span', { class: 'pk-ic', html: I.target }), label: c.name, sub: Math.round(campProgress(c) * 100) + '%', run: () => openCampaign(c.id) })),
+            ...S.goals.filter((g) => hit(g.title)).slice(0, 10).map((g) => ({ icon: h('span', { class: 'pk-ic', html: I.target }), label: g.title, sub: `${campById(g.campaignId)?.name} · ${goalProgress(g).label}`, run: () => openCampaign(g.campaignId) }))]],
           ['Tasks', S.tasks.filter((t) => hit(t.text)).slice(0, 10)
-            .map((t) => ({ icon: h('span', { class: 'pk-ic', html: I.task }), label: t.text, sub: t.done ? 'done' : taskSlot(t)?.label, run: showTasks }))],
+            .map((t) => ({ icon: h('span', { class: 'pk-ic', html: I.task }), label: t.text, sub: t.done ? 'done' : taskSlot(t)?.label, run: () => (goalById(t.goalId) ? openCampaign(goalById(t.goalId).campaignId) : showTasks()) }))],
           ['Stacks', S.workspace.stacks.filter((x) => hit(x.name))
             .map((x) => ({ icon: h('span', { class: 'pk-ic', html: I.stack }), label: x.name, sub: `${stackCount(x.id)} items`, run: () => showStack(x.id) }))],
         );
@@ -2965,6 +3041,7 @@
     const row = h('div', { class: 'ch-row' + (view === C.view ? ' on' : '') + (n ? ' unread' : ''), onclick: () => openChannel(view) },
       h('span', { class: 'hash' }, '#'),
       h('span', { class: 'ch-name' }, name),
+      campById(ch?.campaignId)?.private ? h('span', { class: 'ch-lock', title: 'Private campaign', html: I.lock }) : null,
       n ? h('span', { class: 'badge' + (unreadAt(view) ? ' at' : '') }, (unreadAt(view) ? '@' : '') + (n > 99 ? '99+' : n)) : null,
       ch ? h('button', { class: 'ch-more', 'aria-label': 'Feed options', html: I.more, onclick: (e) => { e.stopPropagation(); channelMenu(ch, e.currentTarget, row); } }) : null
     );

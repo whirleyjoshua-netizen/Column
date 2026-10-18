@@ -399,7 +399,7 @@ footer{margin-top:18px;font-size:11.5px;color:var(--muted)}
 }
 
 // Messages link to things as [[file:<id>]], [[stack:<id>]], [[task:<id>]]. A linked file is pinned so auto-clear never breaks the link.
-const LINK_RE = /\[\[(file|stack|task):([\w-]+)\]\]/g;
+const LINK_RE = /\[\[(file|stack|task|campaign):([\w-]+)\]\]/g;
 function pinLinked(ws, text) {
   for (const [, kind, id] of text.matchAll(LINK_RE)) {
     const it = kind === 'file' && db.items[id];
@@ -449,6 +449,8 @@ function broadcast(wsId, msg) {
 // ---------- campaigns: campaign → goals → tasks, plus logged attempts (each call or email and its outcome) ----------
 // Private campaigns, with their goals, tasks, attempts, feed, stack and schedule slots, are only visible to their members.
 const OUTCOMES = ['No answer', 'Not interested', 'Interested', 'Booked'];
+const METHODS = ['Call', 'Email'];
+const labelList = (v, max) => [...new Set((Array.isArray(v) ? v : []).map((o) => String(o).trim().slice(0, 40)).filter(Boolean))].slice(0, max);
 function seesCampaign(campaignId, memberId) {
   const c = campaignId && db.campaigns[campaignId];
   return !c || !c.private || c.ownerId === memberId || c.memberIds.includes(memberId);
@@ -494,9 +496,10 @@ function applyCampaign(c, body, ws, auth) {
   if (body.status !== undefined && ['active', 'paused', 'done'].includes(body.status)) c.status = body.status;
   if (body.lastReportAt !== undefined) c.lastReportAt = Number(body.lastReportAt) || null;
   if (body.outcomes !== undefined) {
-    const list = [...new Set((Array.isArray(body.outcomes) ? body.outcomes : []).map((o) => String(o).trim().slice(0, 40)).filter(Boolean))].slice(0, 12);
+    const list = labelList(body.outcomes, 12);
     if (list.length) c.outcomes = list;
   }
+  if (body.methods !== undefined) c.methods = labelList(body.methods, 8);
   // Only the person who made it decides who can see it.
   if ((body.private !== undefined || body.memberIds !== undefined) && c.ownerId && c.ownerId !== auth.memberId) throw Object.assign(new Error('Only the campaign owner can change who sees it.'), { status: 403 });
   if (body.private !== undefined) c.private = !!body.private;
@@ -514,8 +517,9 @@ function applyGoal(g, body, c) {
   }
   if (body.kind !== undefined) g.kind = body.kind === 'count' ? 'count' : 'tasks';
   if (body.target !== undefined) g.target = Math.max(1, Math.min(1_000_000, Math.round(Number(body.target)) || 1));
-  // What counts toward a count goal: every attempt (null) or only these outcomes.
+  // A count goal counts the campaign's logged attempts, optionally only these outcomes and methods (empty = all).
   if (body.counts !== undefined) g.counts = Array.isArray(body.counts) ? body.counts.filter((o) => c.outcomes.includes(o)) : null;
+  if (body.methods !== undefined) g.methods = Array.isArray(body.methods) ? body.methods.filter((o) => (c.methods || []).includes(o)) : null;
   if (body.order !== undefined) g.order = Number(body.order) || 0;
   if (!g.title) throw badRequest('Give the goal a name.');
   return g;
@@ -524,7 +528,6 @@ function applyGoal(g, body, c) {
 // Everything that belongs to a campaign goes with it.
 function deleteGoal(g) {
   for (const t of Object.values(db.tasks)) if (t.goalId === g.id) deleteTask(t);
-  for (const x of Object.values(db.attempts)) if (x.goalId === g.id) delete db.attempts[x.id];
   delete db.goals[g.id];
   broadcast(g.wsId, { type: 'goal:remove', id: g.id });
 }
@@ -546,6 +549,7 @@ function deleteTask(t) {
 }
 function deleteCampaign(ws, c) {
   for (const g of Object.values(db.goals)) if (g.campaignId === c.id) deleteGoal(g);
+  for (const x of Object.values(db.attempts)) if (x.campaignId === c.id) delete db.attempts[x.id];
   for (const it of Object.values(db.items)) if (it.wsId === ws.id && campaignOf('item', it) === c.id) deleteItem(it.id);
   ws.channels = ws.channels.filter((x) => x.campaignId !== c.id);
   ws.stacks = ws.stacks.filter((x) => x.campaignId !== c.id);
@@ -720,7 +724,7 @@ async function api(req, res, url) {
   if (a === 'campaigns') {
     if (m === 'POST' && !b) {
       const body = await readJson(req, 100_000);
-      const c = applyCampaign({ id: rid(), wsId: ws.id, ownerId: auth.memberId, by: auth.member, createdAt: Date.now(), name: '', brief: '', start: null, end: null, color: 'violet', status: 'active', private: false, memberIds: [], outcomes: [...OUTCOMES], lastReportAt: null }, body, ws, auth);
+      const c = applyCampaign({ id: rid(), wsId: ws.id, ownerId: auth.memberId, by: auth.member, createdAt: Date.now(), name: '', brief: '', start: null, end: null, color: 'violet', status: 'active', private: false, memberIds: [], outcomes: [...OUTCOMES], methods: [...METHODS], lastReportAt: null }, body, ws, auth);
       // Its own feed (in a "Campaigns" chat folder) and its own stack for files.
       let folder = ws.chatFolders.find((f) => f.campaigns);
       if (!folder) ws.chatFolders.push((folder = { id: rid(8), name: 'Campaigns', campaigns: true }));
@@ -798,14 +802,14 @@ async function api(req, res, url) {
   if (a === 'attempts') {
     if (m === 'POST' && !b) {
       const body = await readJson(req, 50_000);
-      const g = db.goals[body.goalId];
-      if (!g || g.wsId !== ws.id || !canSee(auth, 'goal', g)) return send(res, 404, { error: 'Goal not found' });
-      const c = db.campaigns[g.campaignId];
+      const c = db.campaigns[body.campaignId];
+      if (!c || c.wsId !== ws.id || !canSee(auth, 'campaign', c)) return send(res, 404, { error: 'Campaign not found' });
       const outcome = String(body.outcome || '');
       if (!c.outcomes.includes(outcome)) return send(res, 400, { error: 'Pick an outcome' });
+      const method = (c.methods || []).includes(body.method) ? body.method : null;
       const t = body.taskId && db.tasks[body.taskId];
       const x = {
-        id: rid(), wsId: ws.id, campaignId: c.id, goalId: g.id, taskId: t && t.goalId === g.id ? t.id : null,
+        id: rid(), wsId: ws.id, campaignId: c.id, method, taskId: t && campaignOf('task', t) === c.id ? t.id : null,
         memberId: auth.memberId, by: auth.member, at: Date.now(), outcome,
         contact: String(body.contact || '').trim().slice(0, 200), note: String(body.note || '').trim().slice(0, 2000),
       };

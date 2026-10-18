@@ -635,3 +635,10 @@ button.oc:hover { background: color-mix(in srgb, var(--oc) 30%, transparent); }
 .tabs button { padding: 5px 2px; }
 .attempts .link { align-self: flex-start; margin-top: 2px; }
 @media (max-width: 380px) { .tabs button { font-size: 12px; letter-spacing: -0.15px; } }
+.ln-camp { min-width: 200px; }
+.ln-camp .pbar { min-width: 50px; height: 5px; }
+.ln-camp .ln-text { flex: none; max-width: 150px; }
+.plan-preview { gap: 2px; }
+.plan-row { display: flex; gap: 8px; color: var(--muted); }
+.plan-row span { width: 70px; flex: none; color: var(--accent); }
+.ch-lock { display: inline-grid; color: var(--muted); } .ch-lock svg { width: 11px; height: 11px; }
