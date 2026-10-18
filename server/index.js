@@ -270,6 +270,7 @@ function removeItemFiles(it) {
 function deleteItem(id) {
   const it = db.items[id];
   if (!it) return;
+  if (it.type === 'message') for (const r of Object.values(db.items)) if (r.parentId === id) deleteItem(r.id);
   removeItemFiles(it);
   delete db.items[id];
   save();
@@ -615,11 +616,17 @@ async function api(req, res, url) {
 
   if (a === 'items') {
     if (m === 'POST' && !b) {
-      const { type, text, stackId, channelId } = await readJson(req, 300_000);
+      const { type, text, stackId, channelId, parentId } = await readJson(req, 300_000);
       if (!['text', 'message'].includes(type)) return send(res, 400, { error: 'Bad type' });
       const t = String(text || '').slice(0, 200_000);
       if (!t.trim()) return send(res, 400, { error: 'Empty' });
-      const item = addItem(baseItem(auth, { type, text: t, stackId: validStack(ws, stackId), channelId: validChannel(ws, channelId) }));
+      // A reply lives in its parent's thread and feed. Threads are one level deep.
+      const parent = parentId ? db.items[parentId] : null;
+      if (parentId && (type !== 'message' || !parent || parent.wsId !== ws.id || parent.type !== 'message' || parent.parentId)) {
+        return send(res, 400, { error: 'That thread is gone' });
+      }
+      const where = parent ? { parentId: parent.id, channelId: parent.channelId || null } : { stackId: validStack(ws, stackId), channelId: validChannel(ws, channelId) };
+      const item = addItem(baseItem(auth, { type, text: t, ...where }));
       if (type === 'message') pinLinked(ws, t);
       return send(res, 200, publicItem(item));
     }

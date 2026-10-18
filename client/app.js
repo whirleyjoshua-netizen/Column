@@ -84,6 +84,7 @@
     down: svg('<path d="M6 9l6 6 6-6"/>'),
     task: svg('<rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8.5 12l2.5 2.5 4.5-5"/>'),
     smile: svg('<circle cx="12" cy="12" r="9"/><path d="M8.5 14.5a4 4 0 0 0 7 0M9 9.5h.01M15 9.5h.01"/>'),
+    reply: svg('<path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.4A8 8 0 1 1 21 12z"/>'),
     reveal: svg('<path d="M14 3h7v7M10 14 21 3M19 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h5"/>'),
   };
 
@@ -313,6 +314,7 @@
       refreshLinks();
     } else if (msg.type === 'item:remove') {
       S.items = S.items.filter((x) => x.id !== msg.id);
+      checkThread();
       render();
       refreshLinks();
       chatChanged();
@@ -398,13 +400,16 @@
   const viewLabel = (v) => (v.startsWith('stack:') ? stackById(v.slice(6))?.name || 'Stack' : VIEWS[v]);
   const viewStack = (v) => (v.startsWith('stack:') ? v.slice(6) : null);
   const viewChannel = (v) => (v.startsWith('ch:') ? v.slice(3) : null);
-  const destOf = (v) => ({ stackId: viewStack(v), channelId: viewChannel(v) });
-  const isChatView = (v) => v === 'chat' || v.startsWith('ch:');
+  const viewThread = (v) => (v.startsWith('th:') ? v.slice(3) : null);
+  const destOf = (v) => (viewThread(v) ? { parentId: viewThread(v) } : { stackId: viewStack(v), channelId: viewChannel(v) });
+  const isChatView = (v) => v === 'chat' || v.startsWith('ch:') || v.startsWith('th:');
   const newestAtBottom = (v) => v === 'all' || isChatView(v);
 
   function itemsFor(view) {
+    const th = viewThread(view);
+    if (th) return S.items.filter((x) => x.id === th || x.parentId === th).sort((a, b) => a.createdAt - b.createdAt);
     const ch = viewChannel(view);
-    let list = S.items.filter((x) => (x.channelId || null) === ch);
+    let list = S.items.filter((x) => (x.channelId || null) === ch && !x.parentId);
     if (view === 'files') list = list.filter((x) => x.type !== 'message');
     else if (view === 'chat') list = list.filter((x) => x.type === 'message');
     else if (view.startsWith('stack:')) list = list.filter((x) => x.stackId === viewStack(view));
@@ -448,7 +453,7 @@
   function composer(pane) {
     const view = pane._view;
     const chan = channelById(viewChannel(view));
-    const ta = h('textarea', { rows: 1, placeholder: chan ? `Message #${chan.name}` : view === 'chat' && S.tab === 'chat' ? 'Message #general' : isChatView(view) || view === 'all' ? 'Message…' : 'Paste or type a note…' });
+    const ta = h('textarea', { rows: 1, placeholder: viewThread(view) ? 'Reply…' : chan ? `Message #${chan.name}` : view === 'chat' && S.tab === 'chat' ? 'Message #general' : isChatView(view) || view === 'all' ? 'Message…' : 'Paste or type a note…' });
     const chat = isChatView(view);
     const links = []; // picked but not sent yet
     const tray = h('div', { class: 'tray hidden' });
@@ -506,7 +511,7 @@
     const add = h('button', { class: 'add', title: 'Add files', onclick: () => pickFiles(destOf(view)) }, '+');
     if (!chat) return h('div', { class: 'composer' }, add, ta);
     const linkBtn = h('button', { class: 'add link-btn', title: 'Link a stack, file or task  ([[)', 'aria-label': 'Link a stack, file or task', html: I.link, onclick: () => openPicker(wrap, addLink) });
-    const wrap = h('div', { class: 'composer-wrap' }, tray, h('div', { class: 'composer' }, add, linkBtn, ta));
+    const wrap = h('div', { class: 'composer-wrap' }, tray, h('div', { class: 'composer' }, viewThread(view) ? null : add, linkBtn, ta));
     return wrap;
   }
 
@@ -519,17 +524,19 @@
     const view = pane._view;
     const list = pane._list;
     const items = itemsFor(view);
-    const uploads = view === 'chat' ? [] : [...S.uploads.values()].filter((u) => (u.channelId || null) === viewChannel(view) && (!viewStack(view) || u.stackId === viewStack(view)));
+    const uploads = view === 'chat' || viewThread(view) ? [] : [...S.uploads.values()].filter((u) => (u.channelId || null) === viewChannel(view) && (!viewStack(view) || u.stackId === viewStack(view)));
     const atBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 60;
 
     const want = [];
     for (const it of items) {
       let el = pane._cards.get(it.id);
-      if (!el || ((el._item !== it || force) && !el._editing)) {
-        const fresh = it.type === 'message' ? messageEl(it) : cardEl(it);
+      const key = it.type === 'message' ? threadKey(it) : '';
+      if (!el || ((el._item !== it || el._key !== key || force) && !el._editing)) {
+        const fresh = it.type === 'message' ? messageEl(it, view) : cardEl(it);
         if (el) el.replaceWith(fresh);
         el = fresh;
         el._item = it;
+        el._key = key;
         pane._cards.set(it.id, el);
       }
       want.push(el);
@@ -571,11 +578,12 @@
     return el;
   }
 
-  function actionsEl(it) {
+  function actionsEl(it, view = '') {
     const a = h('div', { class: 'actions' });
     const btn = (icon, title, fn, cls) => h('button', { title, 'aria-label': title, class: cls, html: icon, onclick: (e) => { e.stopPropagation(); fn(e.currentTarget, e); } });
     if (it.type === 'file' || it.type === 'folder') a.append(btn(I.download, it.type === 'folder' ? 'Download (.zip)' : 'Download', () => download(it)));
     if (it.type === 'message') a.append(btn(I.smile, 'React', (b) => reactMenu(b, it)));
+    if (it.type === 'message' && !it.parentId && !viewThread(view)) a.append(btn(I.reply, 'Reply in thread', () => openThread(it.id)));
     if (it.type === 'text' || it.type === 'message') {
       a.append(btn(I.copy, 'Copy', () => copyText(it.type === 'message' ? plainText(it.text) : it.text)));
       a.append(btn(I.clock, 'Add to my day', () => openSheet({ text: it.text.slice(0, 5000), date: todayKey() })));
@@ -673,7 +681,20 @@
   const amOwner = () => S.workspace?.members?.find((m) => m.id === S.me?.memberId)?.role === 'owner';
   const memberName = (id) => (id === S.me?.memberId ? 'You' : S.workspace?.members?.find((m) => m.id === id)?.name || 'Someone');
 
-  function messageEl(it) {
+  const repliesTo = (id) => S.items.filter((x) => x.parentId === id);
+  const threadKey = (it) => { const r = repliesTo(it.id); return r.length ? r.length + ':' + Math.max(...r.map((x) => x.createdAt)) : ''; };
+
+  // In a thread pane the parent shows on top and doesn't link to itself.
+  function threadEl(it, view) {
+    const r = repliesTo(it.id);
+    if (!r.length || viewThread(view)) return null;
+    const last = Math.max(...r.map((x) => x.createdAt));
+    const who = [...new Set(r.map((x) => (isMine(x) ? 'You' : x.by)))].slice(0, 3).join(', ');
+    return h('button', { class: 'thread-link', onclick: () => openThread(it.id) },
+      h('b', {}, `${r.length} repl${r.length === 1 ? 'y' : 'ies'}`), ` · ${who} · `, h('span', { 'data-ago': last }, ago(last)));
+  }
+
+  function messageEl(it, view = '') {
     const mine = isMine(it);
     const links = linksIn(it.text);
     const text = links.length ? stripLinks(it.text) : it.text;
@@ -683,7 +704,8 @@
       text ? h('div', { class: 'bubble', html: linkify(text) }) : null,
       links.length ? h('div', { class: 'links' }, links.map(linkEl)) : null,
       reactsEl(it),
-      actionsEl(it)
+      threadEl(it, view),
+      actionsEl(it, view)
     );
   }
 
@@ -814,8 +836,9 @@
       for (const [id, el] of pane._cards) {
         const it = el._item;
         if (it?.type !== 'message' || !it.text.includes('[[') || el._editing) continue;
-        const fresh = messageEl(it);
+        const fresh = messageEl(it, pane._view);
         fresh._item = it;
+        fresh._key = el._key;
         el.replaceWith(fresh);
         pane._cards.set(id, fresh);
       }
@@ -1884,7 +1907,7 @@
   function unread(view) {
     const ch = viewChannel(view);
     const seen = C.lastRead[view] ?? C.since;
-    return S.items.filter((x) => (x.channelId || null) === ch && x.createdAt > seen && !isMine(x) && (ch || x.type === 'message')).length;
+    return S.items.filter((x) => (x.channelId || null) === ch && !x.parentId && x.createdAt > seen && !isMine(x) && (ch || x.type === 'message')).length;
   }
   function markRead() {
     if (S.tab !== 'chat' || document.hidden) return;
@@ -1930,7 +1953,44 @@
     const ch = channelById(viewChannel(view));
     C.title.replaceChildren(h('span', { class: 'hash' }, '#'), ch ? ch.name : 'general');
     $('#chat').classList.remove('side-open');
+    checkThread();
     chatChanged();
+  }
+
+  // Thread panel beside the feed (over it when narrow). Its pane renders like any other.
+  function openThread(id) {
+    const root = S.items.find((x) => x.id === id);
+    if (!root) return;
+    if (S.tab !== 'chat') setTab('chat');
+    const feed = root.channelId ? 'ch:' + root.channelId : 'chat';
+    if (C.view !== feed) openChannel(feed);
+    if (C.thread?._view === 'th:' + id) return C.thread.querySelector('textarea')?.focus();
+    closeThread();
+    const pane = h('section', { class: 'pane chat-pane', 'data-i': 't' });
+    pane._view = 'th:' + id;
+    pane._cards = new Map();
+    pane._list = h('div', { class: 'list bottom' });
+    pane.append(pane._list, composer(pane));
+    const ch = channelById(root.channelId);
+    C.threadBox = h('aside', { class: 'ch-thread' },
+      h('div', { class: 'ch-head' },
+        h('div', { class: 'ch-title' }, 'Thread', h('span', { class: 'th-in' }, ' in #' + (ch ? ch.name : 'general'))),
+        h('button', { class: 'icon-btn th-close', 'aria-label': 'Close thread', html: I.close, onclick: closeThread })),
+      pane);
+    $('#chat').append(C.threadBox);
+    C.thread = pane;
+    renderPane(pane, true);
+    pane.querySelector('textarea').focus();
+  }
+  function closeThread() {
+    C.threadBox?.remove();
+    C.threadBox = C.thread = null;
+  }
+  // The parent was deleted, or we moved to another feed.
+  function checkThread() {
+    const id = C.thread && viewThread(C.thread._view);
+    const root = id && S.items.find((x) => x.id === id);
+    if (id && (!root || (root.channelId ? 'ch:' + root.channelId : 'chat') !== C.view)) closeThread();
   }
 
   function chanRow(view, name) {
