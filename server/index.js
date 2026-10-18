@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 import { streamZip, zipSize } from './zip.js';
 import { iconPng } from './png.js';
+import { providers as calProviders } from './calendar.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 4747);
@@ -18,11 +19,13 @@ const DATA_DIR = path.resolve(process.env.DATA_DIR || path.join(__dirname, 'data
 const FILES_DIR = path.join(DATA_DIR, 'files');
 const DB_PATH = path.join(DATA_DIR, 'db.json');
 const CLIENT_DIR = path.resolve(__dirname, '..', 'client');
+// Where browsers reach this server; sign-in providers send people back here.
+const PUBLIC_URL = (process.env.PUBLIC_URL || `http://localhost:${PORT}`).replace(/\/$/, '');
 
 fs.mkdirSync(FILES_DIR, { recursive: true });
 
 // ---------- persistence (a JSON file is plenty for personal/small-team use) ----------
-let db = { workspaces: {}, tokens: {}, items: {}, entries: {}, tasks: {}, uploads: {}, campaigns: {}, goals: {}, attempts: {}, templates: {} };
+let db = { workspaces: {}, tokens: {}, items: {}, entries: {}, tasks: {}, uploads: {}, campaigns: {}, goals: {}, attempts: {}, templates: {}, calendars: {} };
 try {
   db = { ...db, ...JSON.parse(fs.readFileSync(DB_PATH, 'utf8')) };
 } catch {}
@@ -49,6 +52,32 @@ function save() {
 }
 
 const rid = (n = 12) => crypto.randomBytes(n).toString('base64url');
+
+// Secrets at rest (calendar tokens, API keys) are sealed with AES-256-GCM. The key is COLUMN_SECRET,
+// or a random key kept next to the data on first run. Lose the key and connections need redoing.
+const SECRET = (() => {
+  if (process.env.COLUMN_SECRET) return crypto.createHash('sha256').update(process.env.COLUMN_SECRET).digest();
+  const file = path.join(DATA_DIR, 'secret.key');
+  try {
+    return Buffer.from(fs.readFileSync(file, 'utf8').trim(), 'hex');
+  } catch {
+    const key = crypto.randomBytes(32);
+    fs.writeFileSync(file, key.toString('hex'), { mode: 0o600 });
+    return key;
+  }
+})();
+function seal(obj) {
+  const iv = crypto.randomBytes(12);
+  const c = crypto.createCipheriv('aes-256-gcm', SECRET, iv);
+  const ct = Buffer.concat([c.update(JSON.stringify(obj), 'utf8'), c.final()]);
+  return Buffer.concat([iv, c.getAuthTag(), ct]).toString('base64url');
+}
+function unseal(str) {
+  const b = Buffer.from(str, 'base64url');
+  const d = crypto.createDecipheriv('aes-256-gcm', SECRET, b.subarray(0, 12));
+  d.setAuthTag(b.subarray(12, 28));
+  return JSON.parse(Buffer.concat([d.update(b.subarray(28)), d.final()]).toString('utf8'));
+}
 const slugify = (s) => String(s || '').trim().toLowerCase().replace(/\s+/g, ' ');
 
 function hashPass(pass, salt) {
@@ -464,7 +493,7 @@ function broadcast(wsId, msg) {
   const campaignId = campaignOfMsg(msg);
   const feed = msg.item && db.items[msg.item.id] ? feedOfItem(db.items[msg.item.id]) : null;
   const data = JSON.stringify(msg);
-  for (const s of set) if (s.readyState === 1 && seesCampaign(campaignId, s.meta.memberId) && seesFeed(feed, s.meta.memberId) && seesTemplate(msg.template, s.meta.memberId)) s.send(data);
+  for (const s of set) if (s.readyState === 1 && seesCampaign(campaignId, s.meta.memberId) && seesFeed(feed, s.meta.memberId) && seesTemplate(msg.template, s.meta.memberId) && seesEntry(msg.entry, s.meta.memberId) && (!msg.forMember || msg.forMember === s.meta.memberId)) s.send(data);
 }
 
 // ---------- campaigns: campaign → goals → tasks, plus logged attempts (each call or email and its outcome) ----------
@@ -489,7 +518,9 @@ function campaignOf(kind, x) {
   }
   return null;
 }
-const canSee = (auth, kind, x) => seesCampaign(campaignOf(kind, x), auth.memberId) && (kind !== 'item' || seesFeed(feedOfItem(x), auth.memberId));
+// Events pulled in from someone's own calendar are theirs alone.
+const seesEntry = (e, memberId) => !e?.cal?.imported || e.memberId === memberId;
+const canSee = (auth, kind, x) => seesCampaign(campaignOf(kind, x), auth.memberId) && (kind !== 'item' || seesFeed(feedOfItem(x), auth.memberId)) && (kind !== 'entry' || seesEntry(x, auth.memberId));
 function campaignOfMsg(msg) {
   if (msg.item) return campaignOf('item', db.items[msg.item.id]);
   if (msg.task) return campaignOf('task', msg.task);
@@ -727,6 +758,220 @@ function presence(wsId) {
   broadcast(wsId, { type: 'presence', devices: [...seen.values()] });
 }
 
+// ---------- calendars: Google / Outlook, both ways ----------
+// Events from the calendars you switch on become entries in your Day that only you see (cal.imported).
+// Blocks you add in Column go to the calendar you pick (writeCalId) and stay linked (cal, not imported),
+// so an edit or delete on either side follows to the other. Repeating entries and events spanning
+// several days stay one-way for now.
+const oauthPending = new Map(); // state -> who is connecting
+const publicCalendarConn = ({ tokens, wsId, ...x }) => x;
+const SYNC_EVERY = 3 * 60_000;
+const syncing = new Set();
+const pushing = new Map(); // connId -> writes in flight; a pull waits so it doesn't import our own new event
+
+async function oauthCallback(req, res, url) {
+  const provider = url.pathname.split('/')[2];
+  const p = calProviders[provider];
+  const pend = oauthPending.get(url.searchParams.get('state') || '');
+  const page = (title, msg) => send(res, 200, `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${title}</title><body style="font:15px system-ui;background:#111;color:#eee;display:grid;place-items:center;height:90vh;text-align:center"><div><h2>${title}</h2><p>${msg}</p></div></body>`, { 'Content-Type': 'text/html; charset=utf-8' });
+  if (!p || !pend || pend.provider !== provider || pend.exp < Date.now()) return page('Link expired', 'Start again from Column → Settings → Calendars.');
+  oauthPending.delete(url.searchParams.get('state'));
+  if (url.searchParams.get('error')) return page('Not connected', 'Calendar access wasn’t granted. You can close this window.');
+  const ws = db.workspaces[pend.wsId];
+  if (!ws?.members.some((m) => m.id === pend.memberId)) return page('Not connected', 'You’re no longer on that team.');
+  const tok = await p.exchange(url.searchParams.get('code'), `${PUBLIC_URL}/oauth/${provider}/callback`);
+  if (!tok.refresh) return page('Not connected', `${p.name} didn’t allow offline access. Try connecting again.`);
+  const account = await p.account(tok.access);
+  const cals = await p.calendars(tok.access);
+  // Reconnecting the same account keeps its settings and links.
+  let conn = Object.values(db.calendars).find((x) => x.wsId === ws.id && x.memberId === pend.memberId && x.provider === provider && x.account === account);
+  if (!conn) {
+    const primary = cals.find((x) => x.primary) || cals[0];
+    conn = { id: rid(), wsId: ws.id, memberId: pend.memberId, provider, account, tz: pend.tz, calendars: [], writeCalId: primary?.canWrite ? primary.id : null, createdAt: Date.now(), lastSync: 0, error: null };
+    db.calendars[conn.id] = conn;
+  }
+  const was = new Map(conn.calendars.map((x) => [x.id, x.on]));
+  conn.calendars = cals.map((x) => ({ ...x, on: was.has(x.id) ? was.get(x.id) : x.primary }));
+  conn.tokens = seal(tok);
+  conn.error = null;
+  conn.lastSync = 0;
+  save();
+  broadcast(ws.id, { type: 'calendars', forMember: pend.memberId });
+  syncCalendar(conn).catch(() => {});
+  return page(`${p.name} connected`, `${account} is linked to Column. You can close this window.`);
+}
+
+async function calToken(conn) {
+  let tok = unseal(conn.tokens);
+  if (Date.now() > tok.expires) {
+    tok = await calProviders[conn.provider].refresh(tok);
+    conn.tokens = seal(tok);
+    save();
+  }
+  return tok.access;
+}
+function calFailed(conn, e) {
+  conn.error = e.auth ? 'Sign-in expired. Reconnect this calendar.' : 'Couldn’t reach the calendar: ' + String(e.message || e).slice(0, 200);
+  if (!e.auth) console.error(`Calendar ${conn.provider} ${conn.id}:`, e.message);
+  save();
+  broadcast(conn.wsId, { type: 'calendars', forMember: conn.memberId });
+}
+
+// An event as Day entries: one per day it touches (most are one). Times are minutes in the calendar's zone.
+function eventPieces(ev, tz) {
+  const out = [];
+  if (ev.allDay) {
+    for (let d = ev.start; d < ev.end && out.length < 14; d = addDays(d, 1)) out.push({ date: d, start: null, end: null });
+    if (!out.length) out.push({ date: ev.start, start: null, end: null });
+  } else {
+    const a = localNow(tz, ev.start.getTime());
+    const z = localNow(tz, ev.end.getTime());
+    if (a.date === z.date || (z.min === 0 && addDays(a.date, 1) === z.date)) out.push({ date: a.date, start: a.min, end: z.date === a.date ? Math.max(z.min, a.min) : 1440 });
+    else {
+      out.push({ date: a.date, start: a.min, end: 1440 });
+      for (let d = addDays(a.date, 1); d < z.date && out.length < 14; d = addDays(d, 1)) out.push({ date: d, start: null, end: null });
+      if (z.min > 0) out.push({ date: z.date, start: 0, end: z.min });
+    }
+  }
+  return out.map((x) => ({ ...x, text: ev.title.slice(0, 5000) }));
+}
+// A Column entry as an event, in wall-clock time.
+function entryEvent(e, tz) {
+  const t = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}:00`;
+  if (e.start == null) return { title: e.text, allDay: true, start: e.date, end: addDays(e.date, 1), tz };
+  const end = e.end != null && e.end > e.start ? e.end : Math.min(1440, e.start + 30);
+  return { title: e.text, allDay: false, start: `${e.date}T${t(e.start)}`, end: end >= 1440 ? `${addDays(e.date, 1)}T00:00:00` : `${e.date}T${t(end)}`, tz };
+}
+function setEntry(e, fields) {
+  const changed = Object.entries(fields).some(([k, v]) => e[k] !== v);
+  if (!changed) return;
+  Object.assign(e, fields);
+  broadcast(e.wsId, { type: 'entry', entry: publicEntry(e) });
+}
+function dropEntry(e) {
+  delete db.entries[e.id];
+  broadcast(e.wsId, { type: 'entry:remove', id: e.id });
+}
+
+async function syncCalendar(conn) {
+  if (syncing.has(conn.id) || pushing.get(conn.id) || !db.calendars[conn.id]) return;
+  const ws = db.workspaces[conn.wsId];
+  const who = ws?.members.find((m) => m.id === conn.memberId);
+  if (!who) return disconnectCalendar(conn); // they left the team
+  syncing.add(conn.id);
+  try {
+    const p = calProviders[conn.provider];
+    const token = await calToken(conn);
+    const today = localNow(conn.tz, Date.now()).date;
+    const fromKey = addDays(today, -7);
+    const toKey = addDays(today, 60);
+    const from = new Date(Date.parse(fromKey + 'T00:00:00Z') - 14 * 3600_000);
+    const to = new Date(Date.parse(toKey + 'T00:00:00Z') + 14 * 3600_000);
+    const inWindow = (e) => e.date >= fromKey && e.date < toKey;
+    for (const cal of conn.calendars) {
+      const linked = Object.values(db.entries).filter((e) => e.cal?.connId === conn.id && e.cal.calId === cal.id);
+      if (!cal.on) for (const e of linked) if (e.cal.imported) dropEntry(e);
+      if (!cal.on && cal.id !== conn.writeCalId && !linked.some((e) => !e.cal.imported)) continue;
+      const events = await p.events(token, cal.id, from, to);
+      const byId = new Map(events.map((ev) => [ev.id, ev]));
+      // Blocks made in Column: follow edits and deletes made in the calendar.
+      const ours = new Set();
+      for (const e of linked.filter((x) => !x.cal.imported)) {
+        ours.add(e.cal.eventId);
+        const ev = byId.get(e.cal.eventId);
+        if (!ev) {
+          if (inWindow(e)) dropEntry(e);
+          continue;
+        }
+        const [piece] = eventPieces(ev, conn.tz);
+        if (!e.repeat) setEntry(e, piece);
+      }
+      if (!cal.on) continue;
+      // Everything else in the calendar: your private copies.
+      const have = new Map(linked.filter((x) => x.cal.imported).map((e) => [`${e.cal.eventId}|${e.date}`, e]));
+      for (const ev of events) {
+        if (ours.has(ev.id)) continue;
+        const pieces = eventPieces(ev, conn.tz);
+        for (const piece of pieces) {
+          const key = `${ev.id}|${piece.date}`;
+          const e = have.get(key);
+          have.delete(key);
+          if (e) setEntry(e, { ...piece, cal: e.cal.span === pieces.length > 1 ? e.cal : { ...e.cal, span: pieces.length > 1 } });
+          else {
+            const n = { id: rid(), wsId: ws.id, memberId: conn.memberId, by: who?.name || '', createdAt: Date.now(), ...piece, done: false, color: null, taskId: null, cal: { connId: conn.id, calId: cal.id, eventId: ev.id, imported: true, span: pieces.length > 1 } };
+            db.entries[n.id] = n;
+            broadcast(ws.id, { type: 'entry', entry: publicEntry(n) });
+          }
+        }
+      }
+      for (const e of have.values()) if (inWindow(e)) dropEntry(e);
+    }
+    conn.lastSync = Date.now();
+    conn.error = null;
+    save();
+    broadcast(conn.wsId, { type: 'calendars', forMember: conn.memberId });
+  } catch (e) {
+    calFailed(conn, e);
+  } finally {
+    syncing.delete(conn.id);
+  }
+}
+function syncAllCalendars() {
+  for (const conn of Object.values(db.calendars)) {
+    if (conn.error?.startsWith('Sign-in') || Date.now() - (conn.lastSync || 0) < SYNC_EVERY) continue;
+    syncCalendar(conn).catch(() => {});
+  }
+}
+
+// After an entry is saved or deleted in Column, send it to the calendar it's linked to (or, for a new
+// block, to its maker's chosen calendar). Runs after the response; failures show on the connection.
+async function pushEntry(ref, action) {
+  const e = action === 'delete' ? ref : db.entries[ref];
+  if (!e || (e.cal?.span)) return;
+  let conn = e.cal ? db.calendars[e.cal.connId] : null;
+  if (!e.cal) {
+    if (action === 'delete' || e.repeat || e.start == null || e.end == null || !e.memberId) return;
+    conn = Object.values(db.calendars).find((x) => x.wsId === e.wsId && x.memberId === e.memberId && x.writeCalId && !x.error);
+  }
+  if (!conn) return;
+  if (e.cal && e.repeat && action !== 'delete') return;
+  const p = calProviders[conn.provider];
+  pushing.set(conn.id, (pushing.get(conn.id) || 0) + 1);
+  try {
+    const token = await calToken(conn);
+    if (action === 'delete') await p.remove(token, e.cal.calId, e.cal.eventId);
+    else if (e.cal) await p.update(token, e.cal.calId, e.cal.eventId, entryEvent(e, conn.tz));
+    else {
+      const eventId = await p.create(token, conn.writeCalId, entryEvent(e, conn.tz));
+      const cur = db.entries[e.id];
+      if (cur) {
+        cur.cal = { connId: conn.id, calId: conn.writeCalId, eventId, imported: false };
+        save();
+        broadcast(cur.wsId, { type: 'entry', entry: publicEntry(cur) });
+      }
+    }
+  } catch (err) {
+    calFailed(conn, err);
+  } finally {
+    pushing.set(conn.id, pushing.get(conn.id) - 1);
+  }
+}
+
+// Your private copies go; blocks made in Column stay, just no longer linked.
+function disconnectCalendar(conn) {
+  for (const e of Object.values(db.entries)) {
+    if (e.cal?.connId !== conn.id) continue;
+    if (e.cal.imported) dropEntry(e);
+    else {
+      delete e.cal;
+      broadcast(e.wsId, { type: 'entry', entry: publicEntry(e) });
+    }
+  }
+  delete db.calendars[conn.id];
+  save();
+  broadcast(conn.wsId, { type: 'calendars', forMember: conn.memberId });
+}
+
 // ---------- icons ----------
 const iconCache = {};
 function icon(size) {
@@ -826,10 +1071,11 @@ async function api(req, res, url) {
   if (a === 'entries') {
     if (m === 'POST' && !b) {
       const body = await readJson(req, 50_000);
-      const e = applyEntry({ id: rid(), wsId: ws.id, by: auth.member, deviceId: auth.deviceId, createdAt: Date.now(), text: '', date: null, start: null, end: null, done: false, color: null, taskId: null }, body);
+      const e = applyEntry({ id: rid(), wsId: ws.id, memberId: auth.memberId, by: auth.member, deviceId: auth.deviceId, createdAt: Date.now(), text: '', date: null, start: null, end: null, done: false, color: null, taskId: null }, body);
       db.entries[e.id] = e;
       save();
       broadcast(ws.id, { type: 'entry', entry: publicEntry(e) });
+      pushEntry(e.id, 'save');
       return send(res, 200, publicEntry(e));
     }
     const e = b && db.entries[b];
@@ -839,12 +1085,14 @@ async function api(req, res, url) {
       db.entries[e.id] = next;
       save();
       broadcast(ws.id, { type: 'entry', entry: publicEntry(next) });
+      pushEntry(e.id, 'save');
       return send(res, 200, publicEntry(next));
     }
     if (m === 'DELETE') {
       delete db.entries[e.id];
       save();
       broadcast(ws.id, { type: 'entry:remove', id: e.id });
+      pushEntry(e, 'delete');
       return send(res, 200, { ok: true });
     }
     return send(res, 405, { error: 'Method not allowed' });
@@ -921,6 +1169,42 @@ async function api(req, res, url) {
       if (c.ownerId !== auth.memberId && auth.role !== 'owner') return send(res, 403, { error: 'Only the campaign owner can delete it.' });
       deleteCampaign(ws, c);
       save();
+      return send(res, 200, { ok: true });
+    }
+    return send(res, 405, { error: 'Method not allowed' });
+  }
+
+  // Your own connected calendars. Nobody else on the team sees them or their events.
+  if (a === 'calendars') {
+    const mine = () => Object.values(db.calendars).filter((x) => x.wsId === ws.id && x.memberId === auth.memberId).map(publicCalendarConn);
+    if (m === 'GET' && !b) return send(res, 200, { providers: Object.fromEntries(Object.entries(calProviders).map(([k, p]) => [k, p.configured()])), connections: mine(), redirect: PUBLIC_URL + '/oauth/<provider>/callback' });
+    if (m === 'POST' && b === 'connect') {
+      const { provider, tz } = await readJson(req);
+      const p = calProviders[provider];
+      if (!p) return send(res, 400, { error: 'Unknown calendar' });
+      if (!p.configured()) return send(res, 400, { error: `${p.name} isn’t set up on this server yet.` });
+      const state = rid(18);
+      oauthPending.set(state, { wsId: ws.id, memberId: auth.memberId, provider, tz: validTz(tz), exp: Date.now() + 15 * 60_000 });
+      return send(res, 200, { url: p.authUrl(`${PUBLIC_URL}/oauth/${provider}/callback`, state) });
+    }
+    const conn = b && db.calendars[b];
+    if (!conn || conn.wsId !== ws.id || conn.memberId !== auth.memberId) return send(res, 404, { error: 'Not found' });
+    if (m === 'POST' && c === 'sync') {
+      conn.lastSync = 0;
+      await syncCalendar(conn);
+      return send(res, 200, publicCalendarConn(conn));
+    }
+    if (m === 'PATCH' && !c) {
+      const body = await readJson(req);
+      if (body.on && typeof body.on === 'object') for (const cal of conn.calendars) if (body.on[cal.id] !== undefined) cal.on = !!body.on[cal.id];
+      if (body.writeCalId !== undefined) conn.writeCalId = conn.calendars.some((x) => x.id === body.writeCalId && x.canWrite) ? body.writeCalId : null;
+      if (body.tz !== undefined) conn.tz = validTz(body.tz);
+      save();
+      await syncCalendar(conn).catch(() => {});
+      return send(res, 200, publicCalendarConn(conn));
+    }
+    if (m === 'DELETE' && !c) {
+      disconnectCalendar(conn);
       return send(res, 200, { ok: true });
     }
     return send(res, 405, { error: 'Method not allowed' });
@@ -1422,6 +1706,10 @@ const server = http.createServer(async (req, res) => {
     return;
   }
   if (url.pathname.startsWith('/s/') && (req.method === 'GET' || req.method === 'HEAD')) return serveShare(req, res, url);
+  if (url.pathname.startsWith('/oauth/')) return oauthCallback(req, res, url).catch((e) => {
+    console.error(e);
+    if (!res.headersSent) send(res, 500, 'Something went wrong connecting your calendar.');
+  });
   serveStatic(req, res, url);
 });
 
@@ -1484,6 +1772,7 @@ setInterval(() => {
 }, 60_000);
 
 setInterval(runSchedules, 30_000);
+setInterval(syncAllCalendars, 30_000);
 
 migratePeople();
 server.listen(PORT, '0.0.0.0', () => {

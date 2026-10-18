@@ -375,6 +375,8 @@
     } else if (msg.type === 'resync') {
       // Who can see a private campaign or feed changed.
       loadState().catch(() => {});
+    } else if (msg.type === 'calendars') {
+      if (!$('#settings').classList.contains('hidden')) loadCalendars();
     } else if (msg.type === 'presence') {
       S.online = msg.devices;
       renderDevices();
@@ -1647,7 +1649,10 @@
     return { text: title, date, start, end };
   }
 
-  const repeatMark = (e) => (e.repeat ? h('span', { class: 'is-task', html: I.repeat, title: repeatLabel(e.repeat, e.seriesDate || e.date) }) : null);
+  const repeatMark = (e) => [
+    e.cal ? h('span', { class: 'is-task', html: I.cal, title: e.cal.imported ? 'From your calendar (only you see this)' : 'Also on your calendar' }) : null,
+    e.repeat ? h('span', { class: 'is-task', html: I.repeat, title: repeatLabel(e.repeat, e.seriesDate || e.date) }) : null,
+  ];
 
   // ----- view state -----
   const D = { date: todayKey(), scrolledFor: null, sub: store.get('daySub', 'schedule'), mine: store.get('tasksMine', false) };
@@ -3320,6 +3325,66 @@
     return h('div', { class: 'srow' }, h('span', {}, label, hint ? h('small', {}, hint) : null), h('label', { class: 'toggle' }, input, h('i')));
   }
 
+  // ----- connected calendars (each person's own) -----
+  const CAL_NAMES = { google: 'Google Calendar', microsoft: 'Outlook' };
+  const myTz = () => Intl.DateTimeFormat().resolvedOptions().timeZone;
+  async function loadCalendars() {
+    try {
+      S.cals = await api('GET', '/calendars');
+    } catch {
+      return;
+    }
+    const box = $('#settings .cal-sec');
+    if (box) box.replaceWith(calendarSection());
+  }
+  function calendarSection() {
+    const sec = h('section', { class: 'cal-sec' }, h('h3', {}, 'Calendars'));
+    const c = S.cals;
+    if (!c) {
+      sec.append(h('p', { class: 'day-hint' }, 'Loading…'));
+      return sec;
+    }
+    for (const conn of c.connections) {
+      const synced = conn.error ? h('small', { class: 'err' }, conn.error) : h('small', {}, conn.lastSync ? `Synced ${ago(conn.lastSync)}` : 'Syncing…');
+      const sync = h('button', { class: 'btn small' }, 'Sync now');
+      sync.addEventListener('click', async () => {
+        sync.disabled = true;
+        await api('POST', `/calendars/${conn.id}/sync`).catch((e) => toast(e.message));
+        loadCalendars();
+      });
+      const del = h('button', { class: 'btn small danger' }, 'Disconnect');
+      del.addEventListener('click', () => confirmClick(del, () => api('DELETE', '/calendars/' + conn.id).then(loadCalendars).catch((e) => toast(e.message))));
+      const shows = conn.calendars.map((cal) => {
+        const cb = h('input', { type: 'checkbox' });
+        cb.checked = cal.on;
+        cb.addEventListener('change', () => api('PATCH', '/calendars/' + conn.id, { on: { [cal.id]: cb.checked } }).then(loadCalendars).catch((e) => toast(e.message)));
+        return h('label', { class: 'pick' }, cb, cal.name);
+      });
+      const write = h('select', {}, h('option', { value: '' }, 'Don’t add them'), conn.calendars.filter((x) => x.canWrite).map((x) => h('option', { value: x.id }, x.name)));
+      write.value = conn.writeCalId || '';
+      write.addEventListener('change', () => api('PATCH', '/calendars/' + conn.id, { writeCalId: write.value || null }).then(loadCalendars).catch((e) => toast(e.message)));
+      sec.append(h('div', { class: 'cal-conn' },
+        h('div', { class: 'srow' }, h('span', {}, `${CAL_NAMES[conn.provider]} · ${conn.account}`, synced), h('span', { class: 'cal-btns' }, sync, del)),
+        h('div', { class: 'picks-h' }, 'Show in my Day'),
+        h('div', { class: 'picks' }, shows),
+        h('div', { class: 'srow' }, h('span', {}, 'Add blocks I make in Column to', h('small', {}, 'Blocks with a start and end time. Edits and deletes follow both ways.')), write)));
+    }
+    const ready = Object.entries(c.providers).filter(([, on]) => on);
+    if (ready.length) {
+      sec.append(h('div', { class: 'cal-add' }, ready.map(([k]) => h('button', { class: 'btn', onclick: async () => {
+        try {
+          const { url } = await api('POST', '/calendars/connect', { provider: k, tz: myTz() });
+          window.open(url, '_blank');
+          toast('Finish signing in in your browser. Your calendar shows up here when it’s done.');
+        } catch (e) {
+          toast(e.message);
+        }
+      } }, (c.connections.some((x) => x.provider === k) ? '+ Another ' : 'Connect ') + CAL_NAMES[k]))));
+    } else sec.append(h('p', { class: 'day-hint' }, 'Calendar sign-in isn’t set up on this server yet. See “Calendars” in the README.'));
+    sec.append(h('p', { style: 'margin-top:8px;font-size:11.5px' }, 'Only you see events from your calendars. Your team sees what you add in Column as usual.'));
+    return sec;
+  }
+
   function renderSettings() {
     const s = $('#settings');
     const ws = S.workspace;
@@ -3362,6 +3427,9 @@
     sel.addEventListener('change', () => api('PATCH', '/workspace', { expireHours: Number(sel.value) }).catch((e) => toast(e.message)));
     s.append(h('section', {}, h('h3', {}, 'Auto-clear'),
       h('div', { class: 'srow' }, h('span', {}, 'Remove items', h('small', {}, 'Pinned items are always kept')), sel)));
+
+    s.append(calendarSection());
+    loadCalendars();
 
     // This device
     const dev = h('section', {}, h('h3', {}, 'This device'));

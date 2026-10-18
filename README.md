@@ -39,7 +39,38 @@ To reach it from anywhere, either:
 2. **Host the server** on Railway, Fly.io, Render or a VPS. It's one Node process; set `DATA_DIR` to a persistent volume
    and put it behind HTTPS. Then point every device at that URL.
 
-Env vars: `PORT` (default 4747), `DATA_DIR` (default `server/data`).
+Env vars: `PORT` (default 4747), `DATA_DIR` (default `server/data`), `PUBLIC_URL` (the address browsers use to reach the
+server, e.g. `https://column.example.com`; default `http://localhost:4747`), `COLUMN_SECRET` (encrypts calendar sign-ins at
+rest; if unset, a random key is created at `DATA_DIR/secret.key`. Back it up with the data, or everyone reconnects).
+
+## Calendars (Google / Outlook)
+
+Everyone connects their own calendars in ⚙ Settings → Calendars. Events show in their Day (only they see them), and blocks
+they make in Column go to the calendar they pick. Edits and deletes follow both ways. The server needs an app registration
+with each provider. The sign-in comes back to `PUBLIC_URL/oauth/<provider>/callback`, so register exactly that address.
+Until the server is hosted, use `http://localhost:4747` and connect from the machine running the server. Google and Microsoft
+only allow `localhost` or `https://` addresses, not Wi-Fi IPs.
+
+**Google Calendar:** in [Google Cloud Console](https://console.cloud.google.com/):
+1. Create a project, then *APIs & Services → Library → Google Calendar API → Enable*.
+2. *OAuth consent screen*: External, add your email as a test user, and add the scopes
+   `.../auth/calendar.events` and `.../auth/calendar.calendarlist.readonly`.
+3. *Credentials → Create credentials → OAuth client ID → Web application*. Add the redirect URI
+   `http://localhost:4747/oauth/google/callback` (and your hosted `https://…/oauth/google/callback` later).
+4. Start the server with `GOOGLE_CLIENT_ID=… GOOGLE_CLIENT_SECRET=… npm run server`.
+
+While the app is in *Testing*, only the test users you list (up to 100) can connect, which is fine for a beta. Public launch needs
+Google's verification for the calendar scopes.
+
+**Outlook / Microsoft 365:** in [Azure portal → App registrations](https://portal.azure.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade):
+1. *New registration*: "Accounts in any organizational directory and personal Microsoft accounts", redirect URI (Web)
+   `http://localhost:4747/oauth/microsoft/callback`.
+2. *Certificates & secrets → New client secret*; copy the value.
+3. *API permissions → Microsoft Graph → Delegated*: `Calendars.ReadWrite`, `User.Read`, `offline_access`.
+4. Start the server with `MS_CLIENT_ID=… MS_CLIENT_SECRET=…` (optionally `MS_TENANT` to allow only one organization).
+
+Sync pulls 7 days back to 60 days ahead, every 3 minutes (or *Sync now*). Repeating Column entries and multi-day events
+stay one-way for now.
 
 ## Build installers
 

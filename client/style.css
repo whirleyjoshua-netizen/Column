@@ -653,3 +653,10 @@ button.oc:hover { background: color-mix(in srgb, var(--oc) 30%, transparent); }
 .tpl-slot input[type="time"] { width: auto; }
 .pill-btn { font: inherit; color: inherit; cursor: pointer; } .pill-btn:hover { background: var(--card-hover); }
 .pill-btn .av { width: 15px; height: 15px; font-size: 9px; }
+
+/* Connected calendars */
+.cal-conn { border: 1px solid var(--line); border-radius: var(--radius); padding: 2px 10px 8px; margin-bottom: 10px; }
+.cal-conn .picks { margin-bottom: 4px; }
+.cal-btns { display: flex; gap: 6px; flex: none; }
+.cal-sec small.err { color: var(--danger, #e5484d); }
+.cal-add { display: flex; flex-wrap: wrap; gap: 8px; }
