@@ -89,6 +89,9 @@
     flag: svg('<path d="M5 21V4M5 4h11l-2 4 2 4H5"/>'),
     cal: svg('<rect x="3.5" y="5" width="17" height="15" rx="2"/><path d="M3.5 10h17M8 3v4M16 3v4"/>'),
     repeat: svg('<path d="M17 2l3 3-3 3"/><path d="M4 11V9a4 4 0 0 1 4-4h12M7 22l-3-3 3-3"/><path d="M20 13v2a4 4 0 0 1-4 4H4"/>'),
+    target: svg('<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="4.5"/><circle cx="12" cy="12" r="0.8"/>'),
+    lock: svg('<rect x="5" y="10.5" width="14" height="10" rx="2"/><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"/>'),
+    back: svg('<path d="M15 18l-6-6 6-6"/>'),
     reveal: svg('<path d="M14 3h7v7M10 14 21 3M19 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h5"/>'),
   };
 
@@ -345,6 +348,22 @@
       S.tasks = S.tasks.filter((x) => x.id !== msg.id);
       renderDay();
       refreshLinks();
+    } else if (msg.type === 'campaign' || msg.type === 'goal' || msg.type === 'attempt') {
+      const list = { campaign: S.campaigns, goal: S.goals, attempt: S.attempts }[msg.type];
+      const x = msg[msg.type];
+      const i = list.findIndex((y) => y.id === x.id);
+      if (i >= 0) list[i] = x;
+      else list.push(x);
+      renderCamps();
+      renderDay();
+    } else if (msg.type === 'campaign:remove' || msg.type === 'goal:remove' || msg.type === 'attempt:remove') {
+      const key = { 'campaign:remove': 'campaigns', 'goal:remove': 'goals', 'attempt:remove': 'attempts' }[msg.type];
+      S[key] = S[key].filter((y) => y.id !== msg.id);
+      renderCamps();
+      renderDay();
+    } else if (msg.type === 'resync') {
+      // Who can see a private campaign changed.
+      loadState().catch(() => {});
     } else if (msg.type === 'presence') {
       S.online = msg.devices;
       renderDevices();
@@ -373,11 +392,15 @@
     S.items = st.items;
     S.entries = st.entries || [];
     S.tasks = st.tasks || [];
+    S.campaigns = st.campaigns || [];
+    S.goals = st.goals || [];
+    S.attempts = st.attempts || [];
     S.panes = S.panes.map((v) => (v.startsWith('stack:') && !stackById(v.slice(6)) ? 'files' : v));
     $('#wsName').textContent = S.workspace.name;
     document.title = `${S.workspace.name} · Column`;
     buildPanes();
     renderDay();
+    renderCamps();
     if (S.tab === 'chat') openChannel(C.view);
     else renderChatSide();
   }
@@ -1576,7 +1599,7 @@
   const repeatMark = (e) => (e.repeat ? h('span', { class: 'is-task', html: I.repeat, title: repeatLabel(e.repeat, e.seriesDate || e.date) }) : null);
 
   // ----- view state -----
-  const D = { date: todayKey(), scrolledFor: null, sub: store.get('daySub', 'schedule') };
+  const D = { date: todayKey(), scrolledFor: null, sub: store.get('daySub', 'schedule'), mine: store.get('tasksMine', false) };
 
   function setSub(sub) {
     D.sub = sub;
@@ -1591,6 +1614,8 @@
     $('#day').classList.toggle('hidden', tab !== 'day');
     $('#panes').classList.toggle('hidden', tab !== 'column');
     $('#chat').classList.toggle('hidden', tab !== 'chat');
+    $('#camps').classList.toggle('hidden', tab !== 'camps');
+    if (tab === 'camps') renderCamps();
     if (tab === 'day') renderDay();
     if (tab === 'chat') openChannel(C.view);
   }
@@ -1653,7 +1678,8 @@
     else patchEntry(base, { done: !e.done });
   }
 
-  async function patchTask(t, changes) {
+  async function patchTask(t, changes, { reported } = {}) {
+    if (changes.done && t.report && !t.done && !reported && goalById(t.goalId)) return openReport(campById(goalById(t.goalId).campaignId), t);
     if (changes.done && t.repeat) {
       const from = t.due || todayKey();
       const due = nextRepeat(t.repeat, from, from > todayKey() ? from : todayKey());
@@ -1715,6 +1741,7 @@
   function renderDay() {
     if (!S.workspace || D.dragging) return;
     sendNext();
+    if (S.tab === 'camps') renderCamps();
     if (!D.scroll) buildDay();
     for (const b of D.seg.children) b.classList.toggle('on', b.dataset.sub === D.sub);
     D.head.classList.toggle('hidden', D.sub !== 'schedule');
@@ -1739,7 +1766,7 @@
 
     // Tasks due this day (plus overdue ones, carried over to today) that aren't on the schedule yet.
     const onDay = new Set(entries.map((e) => e.taskId).filter(Boolean));
-    const due = S.tasks.filter((t) => !t.done && !onDay.has(t.id) && (t.due === k || (isToday && isOverdue(t)))).sort((a, b) => (a.due < b.due ? -1 : a.due > b.due ? 1 : byPrio(a, b)));
+    const due = S.tasks.filter((t) => !t.done && forMe(t) && !onDay.has(t.id) && (t.due === k || (isToday && isOverdue(t)))).sort((a, b) => (a.due < b.due ? -1 : a.due > b.due ? 1 : byPrio(a, b)));
     if (due.length) {
       const late = due.filter(isOverdue);
       parts.push(h('div', { class: 'anytime tasks' }, h('div', { class: 'any-h' }, 'Due', late.length ? moveToToday(late) : null), due.map(taskRow)));
@@ -1986,29 +2013,28 @@
     let text = raw;
     let priority = 0;
     text = text.replace(/(^|\s)(!{1,3})(?=\s|$)/, (_, pre, bangs) => { priority = bangs.length; return pre; });
+    let assigneeId;
+    text = text.replace(/(^|\s)@([^\s@]+)(?=\s|$)/, (all, pre, who) => {
+      const m = (S.workspace?.members || []).find((x) => x.name.toLowerCase() === who.toLowerCase() || x.name.toLowerCase().split(/\s+/)[0] === who.toLowerCase());
+      if (!m) return all;
+      assigneeId = m.id;
+      return pre;
+    });
     const p = parseQuick(text, null);
-    return { text: p.date && p.start == null ? p.text : text.trim() || raw.trim(), due: p.date, priority };
+    return { text: p.date && p.start == null ? p.text : text.trim() || raw.trim(), due: p.date, priority, ...(assigneeId ? { assigneeId } : {}) };
   }
 
   function editTaskText(span, t) {
     inlineEdit(span, { value: t.text, placeholder: 'Task', onDone: (text) => text && text !== t.text && patchTask(t, { text }) });
   }
 
-  function taskRow(t) {
-    const text = h('span', { class: 'p-text', title: 'Click to edit' }, t.text);
+  function taskRow(t, { inCampaign } = {}) {
+    const text = h('span', { class: 'p-text', title: 'Click to edit' }, t.report ? h('span', { class: 'is-task', title: 'Report: ticking it asks for your findings', html: I.copy }) : null, t.text);
     text.addEventListener('click', () => editTaskText(text, t));
     const slot = taskSlot(t);
     const btn = (icon, title, fn) => h('button', { class: 't-btn', title, 'aria-label': title, html: icon, onclick: (ev) => { ev.stopPropagation(); fn(ev.currentTarget); } });
-    const del = btn(I.trash, 'Delete task', (b) => confirmClick(b, async () => {
-      try {
-        await api('DELETE', '/tasks/' + t.id);
-        S.tasks = S.tasks.filter((x) => x.id !== t.id);
-        for (const e of S.entries) if (e.taskId === t.id) e.taskId = null;
-        renderDay();
-      } catch (er) {
-        toast(er.message);
-      }
-    }));
+    const g = goalById(t.goalId);
+    const camp = g && campById(g.campaignId);
     const pr = t.priority || 0;
     return h('div', { class: 'any-row task-row' + (t.done ? ' done' : ''),
       onpointerdown: (ev) => !t.done && dragToTimeline(ev, t.text, (k, m) => scheduleTask(t, k, m)) },
@@ -2022,15 +2048,62 @@
       text,
       t.due && !t.done ? h('button', { class: 'due' + (isOverdue(t) ? ' late' : t.due === todayKey() ? ' today' : ''), title: 'Due ' + dayName(t.due) + (t.repeat ? ' · ' + repeatLabel(t.repeat, t.due) : ''), onclick: (ev) => dueMenu(ev.currentTarget, t) },
         t.repeat ? h('span', { class: 'rep', html: I.repeat }) : null, dueLabel(t.due)) : null,
-      slot ? h('button', { class: 'slot', title: 'Show on schedule', onclick: () => { D.sub = 'schedule'; store.set('daySub', 'schedule'); goDay(slot.e.date); } },
+      slot ? h('button', { class: 'slot', title: 'Show on schedule', onclick: () => { D.sub = 'schedule'; store.set('daySub', 'schedule'); setTab('day'); goDay(slot.e.date); } },
         slot.label + (slot.more ? ` +${slot.more}` : '')) : null,
-      t.done || t.due ? null : btn(I.cal, 'Due date', (b) => dueMenu(b, t)),
-      t.done || pr ? null : btn(I.flag, 'Priority', (b) => prioMenu(b, t)),
+      camp && !inCampaign ? h('button', { class: 'camp-chip c-' + camp.color, title: `${camp.name} · ${g.title}`, onclick: () => openCampaign(camp.id) }, camp.name) : null,
+      t.assigneeId ? avatar(t.assigneeId) : null,
       t.done ? null : btn(I.clock, 'Put on schedule', () => openSheet({ text: t.text, taskId: t.id, date: t.due && D.sub === 'tasks' ? t.due : D.date })),
-      btn(I.share, 'Share to chat', (b) => shareMenu(b, linkToken('task', t.id))),
-      del
+      btn(I.more, 'More', (b) => taskMenu(b, t))
     );
   }
+
+  function taskMenu(anchor, t) {
+    const g = goalById(t.goalId);
+    openMenu(anchor, [
+      { label: t.due ? `Due ${dueLabel(t.due)}…` : 'Due date…', run: () => dueMenu(anchor, t) },
+      { label: t.priority ? `${PRIO[t.priority]} priority…` : 'Priority…', run: () => prioMenu(anchor, t) },
+      { label: t.assigneeId ? `Assigned to ${memberName(t.assigneeId)}…` : 'Assign to…', run: () => assignMenu(anchor, t) },
+      { label: g ? `Goal: ${g.title}…` : 'Add to a goal…', run: () => goalMenu(anchor, t) },
+      ...(g ? [{ label: t.report ? 'Stop asking for a report' : 'Ask for a report when done', run: () => patchTask(t, { report: !t.report }) }] : []),
+      { label: 'Share to chat…', run: () => shareMenu(anchor, linkToken('task', t.id)) },
+      { label: 'Delete task', danger: true, run: async () => {
+        try {
+          await api('DELETE', '/tasks/' + t.id);
+          S.tasks = S.tasks.filter((x) => x.id !== t.id);
+          for (const e of S.entries) if (e.taskId === t.id) e.taskId = null;
+          renderDay();
+        } catch (er) {
+          toast(er.message);
+        }
+      } },
+    ]);
+  }
+  function assignMenu(anchor, t) {
+    openMenu(anchor, [
+      { head: 'Assign to' },
+      { label: 'Nobody', on: !t.assigneeId, run: () => patchTask(t, { assigneeId: null }) },
+      ...S.workspace.members.map((m) => ({ label: m.id === S.me?.memberId ? `${m.name} (you)` : m.name, on: t.assigneeId === m.id, run: () => patchTask(t, { assigneeId: m.id }) })),
+    ]);
+  }
+  function goalMenu(anchor, t) {
+    const rows = [{ head: 'Goal' }, { label: 'No goal', on: !t.goalId, run: () => patchTask(t, { goalId: null, report: false }) }];
+    for (const c of S.campaigns.filter((x) => x.status !== 'done')) {
+      const goals = goalsOf(c.id);
+      if (!goals.length) continue;
+      rows.push({ head: c.name }, ...goals.map((g) => ({ label: g.title, on: t.goalId === g.id, run: () => patchTask(t, { goalId: g.id }) })));
+    }
+    if (rows.length === 2) rows.push({ note: 'Make a campaign with goals first' });
+    openMenu(anchor, rows);
+  }
+
+  // Small round initial for a teammate.
+  function avatar(memberId, size) {
+    const name = memberName(memberId);
+    const hue = [...String(memberId)].reduce((n, ch) => n + ch.charCodeAt(0), 0) % 360;
+    return h('span', { class: 'av' + (size ? ' ' + size : ''), title: name, style: `--h:${hue}` }, name === 'You' ? (S.workspace?.members.find((m) => m.id === memberId)?.name || 'Y')[0].toUpperCase() : name[0].toUpperCase());
+  }
+  // Tasks on my day: mine, or nobody's.
+  const forMe = (t) => !t.assigneeId || t.assigneeId === S.me?.memberId;
 
   function moveToToday(list) {
     const b = h('button', { class: 'link' }, 'Move to today');
@@ -2040,10 +2113,17 @@
 
   function renderTasks() {
     const keep = D.scroll.scrollTop;
-    const open = S.tasks.filter((t) => !t.done).sort(byPrio);
-    const done = S.tasks.filter((t) => t.done).sort((a, b) => (b.doneAt || 0) - (a.doneAt || 0));
+    const mineOnly = D.mine;
+    const shown = S.tasks.filter((t) => !mineOnly || t.assigneeId === S.me?.memberId);
+    const open = shown.filter((t) => !t.done).sort(byPrio);
+    const done = shown.filter((t) => t.done).sort((a, b) => (b.doneAt || 0) - (a.doneAt || 0));
     const today = todayKey();
     const parts = [];
+    if (S.tasks.some((t) => t.assigneeId)) {
+      parts.push(h('div', { class: 'seg mine-seg' },
+        h('button', { class: mineOnly ? '' : 'on', onclick: () => { D.mine = false; store.set('tasksMine', false); renderDay(); } }, 'All tasks'),
+        h('button', { class: mineOnly ? 'on' : '', onclick: () => { D.mine = true; store.set('tasksMine', true); renderDay(); } }, 'Assigned to me')));
+    }
     const group = (title, list, extra) => list.length && parts.push(h('div', { class: 'anytime tasks' }, h('div', { class: 'any-h' }, title, extra || null), list.map(taskRow)));
     const late = open.filter(isOverdue);
     group(`Overdue · ${late.length}`, late, late.length ? moveToToday(late) : null);
@@ -2054,7 +2134,7 @@
     } else group('To do', open);
     if (!open.length) {
       parts.push(h('div', { class: 'anytime tasks' }, h('div', { class: 'any-h' }, 'To do'),
-        h('p', { class: 'day-hint' }, done.length ? 'All done.' : 'No tasks yet. Type below, like “Pay rent friday !!” (! low, !! medium, !!! high), then tap the clock to put it on your schedule.')));
+        h('p', { class: 'day-hint' }, mineOnly ? 'Nothing assigned to you.' : done.length ? 'All done.' : 'No tasks yet. Type below, like “Pay rent friday !!” (! low, !! medium, !!! high), then tap the clock to put it on your schedule.')));
     }
     if (done.length) {
       const clear = h('button', { class: 'link', 'data-label': '1' }, 'Clear');
@@ -2324,6 +2404,358 @@
     checkReminders();
     if (S.tab === 'day' && D.sub === 'schedule' && D.scroll) renderDay(); // move the "now" line
   }, 30_000);
+
+  // ---------- campaigns: campaign → goals → tasks, with logged attempts ----------
+  const K = { open: store.get('campOpen', null), logOpen: null, showAll: {}, stale: false };
+  const campById = (id) => id && S.campaigns?.find((c) => c.id === id);
+  const goalById = (id) => id && S.goals?.find((g) => g.id === id);
+  const goalsOf = (cid) => S.goals.filter((g) => g.campaignId === cid).sort((a, b) => (a.order || 0) - (b.order || 0) || a.createdAt - b.createdAt);
+  const tasksOf = (gid) => S.tasks.filter((t) => t.goalId === gid);
+  const attemptsIn = (cid) => S.attempts.filter((x) => x.campaignId === cid).sort((a, b) => b.at - a.at);
+  // Count goals count the campaign's log, filtered by outcome and method.
+  const countsFor = (g, x) => (!g.counts?.length || g.counts.includes(x.outcome)) && (!g.methods?.length || g.methods.includes(x.method));
+  function goalProgress(g) {
+    if (g.kind === 'count') {
+      const n = attemptsIn(g.campaignId).filter((x) => countsFor(g, x)).length;
+      const what = [g.counts?.length ? g.counts.join(' / ').toLowerCase() : '', g.methods?.length ? g.methods.join(' / ').toLowerCase() + 's' : g.counts?.length ? '' : 'logged'].filter(Boolean).join(' ');
+      return { n, of: g.target, frac: Math.min(1, n / g.target), label: `${n} / ${g.target} ${what}` };
+    }
+    const ts = tasksOf(g.id);
+    const n = ts.filter((t) => t.done).length;
+    return { n, of: ts.length, frac: ts.length ? n / ts.length : 0, label: ts.length ? `${n} / ${ts.length} tasks` : 'No tasks yet' };
+  }
+  function campProgress(c) {
+    const gs = goalsOf(c.id);
+    return gs.length ? gs.reduce((s, g) => s + goalProgress(g).frac, 0) / gs.length : 0;
+  }
+  const bar = (frac, color) => h('div', { class: 'pbar c-' + (color || 'violet') }, h('i', { style: `width:${Math.round(frac * 100)}%` }));
+  function campDates(c) {
+    const f = (k) => keyDate(k).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+    const range = c.start && c.end ? `${f(c.start)} – ${f(c.end)}` : c.start ? `From ${f(c.start)}` : c.end ? `Until ${f(c.end)}` : '';
+    if (!c.end || c.status === 'done') return range;
+    const left = Math.round((keyDate(c.end) - keyDate(todayKey())) / 864e5);
+    return `${range} · ${left > 1 ? left + ' days left' : left === 1 ? 'ends tomorrow' : left === 0 ? 'ends today' : 'ended'}`;
+  }
+
+  function openCampaign(id) {
+    K.open = id;
+    store.set('campOpen', id);
+    if (S.tab !== 'camps') setTab('camps');
+    else renderCamps();
+    $('#camps').scrollTop = 0;
+  }
+
+  // Re-render, unless someone is typing in here; then wait until they're done.
+  function renderCamps() {
+    const root = $('#camps');
+    if (!S.workspace || S.tab !== 'camps') return;
+    if (root.contains(document.activeElement) && document.activeElement.matches('input, textarea, select')) {
+      K.stale = true;
+      return;
+    }
+    K.stale = false;
+    const keep = root.scrollTop;
+    const c = campById(K.open);
+    root.replaceChildren(c ? campaignView(c) : campaignList());
+    root.scrollTop = keep;
+  }
+  $('#camps').addEventListener('focusout', () => setTimeout(() => K.stale && renderCamps(), 0));
+
+  function campaignList() {
+    const all = [...S.campaigns].sort((a, b) => (a.end || '9999') < (b.end || '9999') ? -1 : 1);
+    const live = all.filter((c) => c.status !== 'done');
+    const done = all.filter((c) => c.status === 'done');
+    const card = (c) => {
+      const p = campProgress(c);
+      const gs = goalsOf(c.id);
+      const mine = gs.flatMap((g) => tasksOf(g.id)).filter((t) => !t.done && t.assigneeId === S.me?.memberId).length;
+      return h('button', { class: 'camp-card c-' + c.color + (c.status === 'paused' ? ' paused' : ''), onclick: () => openCampaign(c.id) },
+        h('div', { class: 'cc-top' }, h('b', {}, c.name), c.private ? h('span', { class: 'cc-lock', html: I.lock, title: 'Private' }) : null, h('span', { class: 'cc-pct' }, Math.round(p * 100) + '%')),
+        bar(p, c.color),
+        h('div', { class: 'cc-sub' }, [campDates(c), `${gs.length} goal${gs.length === 1 ? '' : 's'}`, mine ? `${mine} for you` : '', c.status === 'paused' ? 'paused' : ''].filter(Boolean).join(' · ')));
+    };
+    return h('div', { class: 'camp-list' },
+      h('div', { class: 'camp-h' }, h('b', {}, 'Campaigns'), h('button', { class: 'btn small primary-btn', onclick: () => campaignSheet() }, '+ New')),
+      live.length ? live.map(card) : h('p', { class: 'day-hint camp-empty' }, done.length ? 'Nothing running right now.' : 'A campaign is a project with goals, and goals are made of tasks. Make one for an outreach push, a launch, anything with a finish line.'),
+      done.length ? h('details', { class: 'camp-done' }, h('summary', {}, `Finished · ${done.length}`), done.map(card)) : null);
+  }
+
+  function campaignView(c) {
+    const p = campProgress(c);
+    const goals = goalsOf(c.id);
+    const ch = S.workspace.channels.find((x) => x.id === c.channelId);
+    const st = S.workspace.stacks.find((x) => x.id === c.stackId);
+    const files = st ? stackCount(st.id) : 0;
+    const who = c.private ? [c.ownerId, ...c.memberIds] : null;
+    const brief = h('div', { class: 'camp-brief' + (c.brief ? '' : ' empty'), title: 'Click to edit', html: c.brief ? linkify(c.brief) : 'Add a brief: the goal, who it’s for, how you’ll know it worked…' });
+    brief.addEventListener('click', (e) => {
+      if (e.target.closest('a')) return;
+      const ta = h('textarea', { class: 'camp-brief-edit', rows: 5 });
+      ta.value = c.brief || '';
+      const done = () => {
+        if (ta.value !== (c.brief || '')) api('PATCH', '/campaigns/' + c.id, { brief: ta.value }).catch((er) => toast(er.message));
+        c.brief = ta.value;
+        ta.replaceWith(brief);
+        renderCamps();
+      };
+      ta.addEventListener('blur', done);
+      ta.addEventListener('keydown', (ev) => { if (ev.key === 'Escape') { ta.value = c.brief || ''; ta.blur(); } });
+      brief.replaceWith(ta);
+      ta.focus();
+    });
+    return h('div', { class: 'camp-view' },
+      h('div', { class: 'camp-top' },
+        h('button', { class: 'icon-btn', 'aria-label': 'All campaigns', html: I.back, onclick: () => openCampaign(null) }),
+        h('b', { class: 'camp-name' }, c.name),
+        h('button', { class: 'icon-btn', 'aria-label': 'Campaign options', html: I.more, onclick: (e) => campaignMenu(e.currentTarget, c) })),
+      h('div', { class: 'camp-meta' },
+        campDates(c) ? h('span', {}, campDates(c)) : null,
+        c.status !== 'active' ? h('span', { class: 'pill' }, c.status === 'done' ? 'Finished' : 'Paused') : null,
+        who ? h('span', { class: 'pill', title: who.map(memberName).join(', ') }, h('span', { class: 'is-task', html: I.lock }), `Private · ${who.length}`) : null),
+      h('div', { class: 'camp-total' }, bar(p, c.color), h('span', {}, Math.round(p * 100) + '%')),
+      brief,
+      h('div', { class: 'camp-links' },
+        ch ? h('button', { class: 'btn small', onclick: () => { setTab('chat'); openChannel('ch:' + ch.id); } }, '# ' + ch.name) : null,
+        st ? h('button', { class: 'btn small', onclick: () => showStack(st.id) }, `Files · ${files}`) : null,
+        h('button', { class: 'btn small', onclick: () => openReport(c) }, 'Write a report')),
+      h('div', { class: 'any-h camp-goals-h' }, 'Log'),
+      logBox(c),
+      h('div', { class: 'any-h camp-goals-h' }, 'Goals'),
+      goals.map((g) => goalCard(c, g)),
+      h('button', { class: 'add-goal', onclick: () => goalSheet(c) }, '+ Add a goal'));
+  }
+
+  function goalCard(c, g) {
+    const pg = goalProgress(g);
+    const tasks = tasksOf(g.id).sort((a, b) => a.done - b.done || ((a.due || '9') < (b.due || '9') ? -1 : (a.due || '9') > (b.due || '9') ? 1 : a.createdAt - b.createdAt));
+    const add = h('input', { class: 'goal-add', placeholder: 'Add a task… “Call Old Town monday @Sam”', 'aria-label': 'Add a task to this goal' });
+    add.addEventListener('keydown', async (e) => {
+      if (e.key !== 'Enter' || !add.value.trim()) return;
+      const raw = add.value;
+      add.value = '';
+      try {
+        upsertTask(await api('POST', '/tasks', { ...parseTask(raw), goalId: g.id }));
+        add.focus();
+        K.stale = true;
+      } catch (er) {
+        add.value = raw;
+        toast(er.message);
+      }
+    });
+    const el = h('div', { class: 'goal' },
+      h('div', { class: 'goal-top' },
+        h('span', { class: 'goal-ic', html: g.kind === 'count' ? I.target : I.task }),
+        h('b', { class: 'goal-title' }, g.title),
+        g.due ? h('span', { class: 'due' + (g.due < todayKey() && pg.frac < 1 ? ' late' : '') }, dueLabel(g.due)) : null,
+        h('button', { class: 't-btn', 'aria-label': 'Goal options', html: I.more, onclick: (e) => goalOptions(e.currentTarget, c, g) })),
+      h('div', { class: 'goal-prog' }, bar(pg.frac, c.color), h('span', {}, pg.label)));
+    if (tasks.length) el.append(h('div', { class: 'goal-tasks' }, tasks.map((t) => taskRow(t, { inCampaign: true }))));
+    el.append(add);
+    return el;
+  }
+
+  // Log one attempt: how (call, email…), who (optional), then tap how it went. Every count goal reads from this log.
+  function logBox(c) {
+    const open = K.logOpen === c.id;
+    const recent = attemptsIn(c.id);
+    const showN = K.showAll[c.id] ? 50 : 3;
+    const methods = c.methods || [];
+    if (!methods.includes(K.method)) K.method = methods[0] || null;
+    const list = recent.length ? h('div', { class: 'attempts' },
+      recent.slice(0, showN).map((x) => h('div', { class: 'attempt' },
+        h('span', { class: 'oc oc-' + c.outcomes.indexOf(x.outcome) }, x.outcome),
+        h('span', { class: 'att-who' }, x.method ? h('small', {}, x.method + ' · ') : null, x.contact || '—', x.note ? h('small', {}, ' · ' + x.note) : null),
+        h('span', { class: 'att-by' }, `${x.memberId === S.me?.memberId ? 'You' : x.by} · `, h('span', { 'data-ago': x.at }, ago(x.at))),
+        x.memberId === S.me?.memberId || c.ownerId === S.me?.memberId ? h('button', { class: 't-btn', 'aria-label': 'Remove', html: I.close, onclick: () => api('DELETE', '/attempts/' + x.id).catch((e) => toast(e.message)) }) : null)),
+      recent.length > 3 ? h('button', { class: 'link', onclick: () => { K.showAll[c.id] = !K.showAll[c.id]; renderCamps(); } }, K.showAll[c.id] ? 'Show less' : `Show all ${recent.length}`) : null) : null;
+    if (!open) return h('div', { class: 'logbox' }, h('button', { class: 'btn small log-btn', onclick: () => { K.logOpen = c.id; renderCamps(); $('#camps .log-contact')?.focus(); } }, `+ Log ${methods.length ? methods.map((m) => (/^[aeiou]/i.test(m) ? 'an ' : 'a ') + m.toLowerCase()).join(' or ') : 'an attempt'}`), list);
+    const contact = h('input', { class: 'log-contact', placeholder: 'Who? (business, person, area)', 'aria-label': 'Who you reached' });
+    const note = h('input', { class: 'log-note', placeholder: 'Note (optional)', 'aria-label': 'Note' });
+    const log = async (outcome) => {
+      try {
+        const x = await api('POST', '/attempts', { campaignId: c.id, method: K.method, outcome, contact: contact.value, note: note.value });
+        if (!S.attempts.some((y) => y.id === x.id)) S.attempts.push(x);
+        contact.value = note.value = '';
+        toast(`Logged · ${outcome}`);
+        renderCamps();
+        $('#camps .log-contact')?.focus();
+      } catch (e) {
+        toast(e.message);
+      }
+    };
+    return h('div', { class: 'logbox open' },
+      methods.length > 1 ? h('div', { class: 'seg log-methods' }, methods.map((m) => h('button', { class: m === K.method ? 'on' : '', onclick: () => { K.method = m; renderCamps(); $('#camps .log-contact')?.focus(); } }, m))) : null,
+      h('div', { class: 'log-row' }, contact, h('button', { class: 't-btn', 'aria-label': 'Close', html: I.close, onclick: () => { K.logOpen = null; renderCamps(); } })),
+      note,
+      h('div', { class: 'log-outcomes' }, c.outcomes.map((o, i) => h('button', { class: 'oc oc-' + i, onclick: () => log(o) }, o))),
+      list);
+  }
+
+  function campaignMenu(anchor, c) {
+    const owner = c.ownerId === S.me?.memberId;
+    openMenu(anchor, [
+      { label: 'Edit details…', run: () => campaignSheet(c) },
+      { label: 'What to log…', run: () => outcomesSheet(c) },
+      { label: 'Write a report', run: () => openReport(c) },
+      c.status === 'active' ? { label: 'Pause', run: () => api('PATCH', '/campaigns/' + c.id, { status: 'paused' }).catch((e) => toast(e.message)) } : { label: 'Make active', run: () => api('PATCH', '/campaigns/' + c.id, { status: 'active' }).catch((e) => toast(e.message)) },
+      c.status !== 'done' ? { label: 'Mark finished', run: () => api('PATCH', '/campaigns/' + c.id, { status: 'done' }).catch((e) => toast(e.message)) } : { note: 'Finished' },
+      ...(owner || amOwner() ? [{ label: 'Delete campaign and everything in it', danger: true, run: () => api('DELETE', '/campaigns/' + c.id).then(() => openCampaign(null)).catch((e) => toast(e.message)) }] : []),
+    ]);
+  }
+  function goalOptions(anchor, c, g) {
+    openMenu(anchor, [
+      { label: 'Edit goal…', run: () => goalSheet(c, g) },
+      { label: 'Delete goal and its tasks', danger: true, run: () => api('DELETE', '/goals/' + g.id).catch((e) => toast(e.message)) },
+    ]);
+  }
+
+  // ----- sheets: campaign details, goal, outcomes, report -----
+  function sheet(title, body, onSave, saveLabel = 'Save') {
+    const wrap = $('#sheet');
+    const err = h('p', { class: 'err' });
+    const save = async () => {
+      err.textContent = '';
+      try {
+        await onSave();
+        closeSheet();
+      } catch (e) {
+        err.textContent = e.message;
+      }
+    };
+    wrap.innerHTML = '';
+    wrap.onclick = (e) => { if (e.target === wrap) closeSheet(); };
+    wrap.append(h('div', { class: 'sheet' },
+      h('h2', {}, title, h('button', { class: 'icon-btn', html: I.close, 'aria-label': 'Close', onclick: closeSheet })),
+      ...body, err,
+      h('div', { class: 'btns' }, h('span', { style: 'flex:1' }), h('button', { class: 'btn primary-btn', onclick: save }, saveLabel))));
+    wrap.classList.remove('hidden');
+    wrap.querySelector('input, textarea')?.focus();
+  }
+
+  function campaignSheet(c) {
+    const name = h('input', { value: c?.name || '', placeholder: 'Q4 outreach' });
+    const brief = h('textarea', { rows: 4, placeholder: 'What’s the goal? Who’s it for? How will you know it worked?' });
+    brief.value = c?.brief || '';
+    const start = h('input', { type: 'date', value: c?.start || todayKey() });
+    const end = h('input', { type: 'date', value: c?.end || '' });
+    let color = c?.color || COLORS[S.campaigns.length % COLORS.length];
+    const sw = h('div', { class: 'swatches' }, COLORS.map((col) => h('button', { type: 'button', class: `sw c-${col}${col === color ? ' on' : ''}`, 'aria-label': col,
+      onclick: (e) => { color = col; for (const x of sw.children) x.classList.toggle('on', x === e.currentTarget); } })));
+    const owner = !c || c.ownerId === S.me?.memberId;
+    const priv = h('input', { type: 'checkbox' });
+    priv.checked = !!c?.private;
+    const others = S.workspace.members.filter((m) => m.id !== (c?.ownerId || S.me?.memberId));
+    const picks = others.map((m) => {
+      const cb = h('input', { type: 'checkbox', value: m.id });
+      cb.checked = !!c?.memberIds.includes(m.id);
+      return h('label', { class: 'pick' }, cb, m.name);
+    });
+    const people = h('div', { class: 'picks' + (priv.checked ? '' : ' hidden') }, picks.length ? picks : h('small', {}, 'Nobody else on the team yet.'));
+    priv.addEventListener('change', () => people.classList.toggle('hidden', !priv.checked));
+    sheet(c ? 'Campaign details' : 'New campaign', [
+      h('label', {}, 'Name', name),
+      h('label', {}, 'Brief', brief),
+      h('div', { class: 'row2' }, h('label', {}, 'Starts', start), h('label', {}, 'Ends (optional)', end)),
+      h('label', {}, 'Color', sw),
+      owner ? h('label', { class: 'pick' }, priv, 'Private: only people I choose can see it') : (c?.private ? h('small', { class: 'day-hint' }, 'Private. The campaign owner chooses who sees it.') : null),
+      owner ? people : null,
+    ], async () => {
+      const body = { name: name.value, brief: brief.value, start: start.value || null, end: end.value || null, color };
+      if (owner) Object.assign(body, { private: priv.checked, memberIds: picks.map((l) => l.firstChild).filter((cb) => cb.checked).map((cb) => cb.value) });
+      const saved = c ? await api('PATCH', '/campaigns/' + c.id, body) : await api('POST', '/campaigns', body);
+      const i = S.campaigns.findIndex((x) => x.id === saved.id);
+      if (i >= 0) S.campaigns[i] = saved;
+      else S.campaigns.push(saved);
+      openCampaign(saved.id);
+    }, c ? 'Save' : 'Create');
+  }
+
+  function goalSheet(c, g) {
+    const title = h('input', { value: g?.title || '', placeholder: 'Book 20 meetings downtown' });
+    const due = h('input', { type: 'date', value: g?.due || '' });
+    const kind = h('select', {}, h('option', { value: 'tasks' }, 'Checking off its tasks'), h('option', { value: 'count' }, 'Counting logged attempts'));
+    kind.value = g?.kind || 'tasks';
+    const target = h('input', { type: 'number', min: 1, value: g?.target || 20 });
+    const boxes = c.outcomes.map((o) => {
+      const cb = h('input', { type: 'checkbox', value: o });
+      cb.checked = !!g?.counts?.includes(o);
+      return h('label', { class: 'pick' }, cb, o);
+    });
+    const mboxes = (c.methods || []).map((o) => {
+      const cb = h('input', { type: 'checkbox', value: o });
+      cb.checked = !!g?.methods?.includes(o);
+      return h('label', { class: 'pick' }, cb, o);
+    });
+    const countOpts = h('div', { class: 'count-opts' },
+      h('label', {}, 'Target', target),
+      mboxes.length ? h('div', { class: 'picks-h' }, 'Count which? (none ticked = all)') : null,
+      mboxes.length ? h('div', { class: 'picks' }, mboxes) : null,
+      h('div', { class: 'picks-h' }, 'With which outcome? (none ticked = any)'),
+      h('div', { class: 'picks' }, boxes));
+    const sync = () => countOpts.classList.toggle('hidden', kind.value !== 'count');
+    kind.addEventListener('change', sync);
+    sync();
+    sheet(g ? 'Edit goal' : 'New goal', [
+      h('label', {}, 'Goal', title),
+      h('div', { class: 'row2' }, h('label', {}, 'Progress by', kind), h('label', {}, 'Due (optional)', due)),
+      countOpts,
+    ], async () => {
+      const counts = boxes.map((l) => l.firstChild).filter((cb) => cb.checked).map((cb) => cb.value);
+      const methods = mboxes.map((l) => l.firstChild).filter((cb) => cb.checked).map((cb) => cb.value);
+      const body = { title: title.value, due: due.value || null, kind: kind.value, target: Number(target.value), counts: counts.length ? counts : null, methods: methods.length ? methods : null };
+      const saved = g ? await api('PATCH', '/goals/' + g.id, body) : await api('POST', '/goals', { ...body, campaignId: c.id });
+      const i = S.goals.findIndex((x) => x.id === saved.id);
+      if (i >= 0) S.goals[i] = saved;
+      else S.goals.push(saved);
+      renderCamps();
+    }, g ? 'Save' : 'Add goal');
+  }
+
+  function outcomesSheet(c) {
+    const ta = h('textarea', { rows: 5 });
+    ta.value = c.outcomes.join('\n');
+    const ms = h('textarea', { rows: 3 });
+    ms.value = (c.methods || []).join('\n');
+    sheet('What to log', [
+      h('label', {}, 'Ways you reach people (one per line)', ms),
+      h('label', {}, 'Outcomes (one per line; these are the buttons you tap)', ta),
+    ], async () => {
+      const saved = await api('PATCH', '/campaigns/' + c.id, { outcomes: ta.value.split('\n'), methods: ms.value.split('\n') });
+      Object.assign(c, saved);
+      renderCamps();
+    });
+  }
+
+  // A report: numbers since the last one are filled in from the log, you add what you found. Posts to the campaign feed.
+  function openReport(c, task) {
+    if (!c) return;
+    const since = c.lastReportAt || (c.start ? keyDate(c.start).getTime() : 0);
+    const xs = S.attempts.filter((x) => x.campaignId === c.id && x.at > since);
+    const by = (key) => Object.entries(xs.reduce((m, x) => ((m[x[key]] = (m[x[key]] || 0) + 1), m), {})).sort((a, b) => b[1] - a[1]);
+    const outcomes = by('outcome').map(([o, n]) => `${o} ${n}`).join(' · ');
+    const methods = xs.some((x) => x.method) ? by('method').filter(([m]) => m !== 'null').map(([m, n]) => `${m} ${n}`).join(' · ') : '';
+    const people = by('by').map(([p, n]) => `${p} ${n}`).join(' · ');
+    const sinceTxt = since ? new Date(since).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : 'the start';
+    const goals = goalsOf(c.id).map((g) => `${g.title}: ${goalProgress(g).label}`);
+    const stats = [
+      xs.length ? `${xs.length} attempt${xs.length === 1 ? '' : 's'} since ${sinceTxt}: ${outcomes}` : `No attempts logged since ${sinceTxt}`,
+      methods ? `How: ${methods}` : '',
+      xs.length && people ? `By: ${people}` : '',
+      ...goals,
+    ].filter(Boolean);
+    const notes = h('textarea', { rows: 5, placeholder: 'What did you find? What’s working, what isn’t, what’s next?' });
+    sheet(`Report · ${c.name}`, [
+      task ? h('p', { class: 'day-hint' }, `Finishes “${task.text}”.`) : null,
+      h('div', { class: 'report-stats' }, stats.map((l) => h('div', {}, l))),
+      h('label', {}, 'Findings', notes),
+    ].filter(Boolean), async () => {
+      const text = [`📋 Report · ${c.name}`, ...stats, notes.value.trim() ? '\n' + notes.value.trim() : ''].filter(Boolean).join('\n');
+      await api('POST', '/items', { type: 'message', text, channelId: c.channelId });
+      await api('PATCH', '/campaigns/' + c.id, { lastReportAt: Date.now() });
+      if (task) await patchTask(task, { done: true }, { reported: true });
+      toast(`Posted to #${S.workspace.channels.find((x) => x.id === c.channelId)?.name || 'feed'}`, { label: 'Show', run: () => { setTab('chat'); openChannel('ch:' + c.channelId); } });
+    }, 'Post report');
+  }
 
   // ---------- chat: #feeds in folders, Slack style ----------
   const channelById = (id) => id && S.workspace?.channels?.find((c) => c.id === id);
