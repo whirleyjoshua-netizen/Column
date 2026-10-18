@@ -29,6 +29,13 @@ try {
 for (const ws of Object.values(db.workspaces)) {
   ws.channels ||= [];
   ws.chatFolders ||= [];
+  // Feeds became invite-only: everyone already on the team keeps the feeds they had.
+  const owner = ws.members?.find((m) => m.role === 'owner');
+  for (const ch of ws.channels) {
+    if (ch.campaignId || ch.memberIds || !owner) continue;
+    ch.ownerId = owner.id;
+    ch.memberIds = ws.members.filter((m) => m !== owner).map((m) => m.id);
+  }
 }
 
 let saveTimer = null;
@@ -130,13 +137,13 @@ function signOutMember(ws, memberId) {
 }
 const publicMember = (m) => ({ id: m.id, name: m.name, role: m.role, hasPassword: !!m.hash });
 
-// A private campaign's feed and stack are hidden from people outside it.
+// A private campaign's feed and stack are hidden from people outside it, and so is a feed you weren't invited to.
 const publicWorkspace = (ws, memberId) => ({
   id: ws.id,
   name: ws.name,
   settings: ws.settings,
   stacks: ws.stacks.filter((x) => seesCampaign(x.campaignId, memberId)),
-  channels: ws.channels.filter((x) => seesCampaign(x.campaignId, memberId)),
+  channels: ws.channels.filter((x) => seesFeed(x, memberId)),
   chatFolders: ws.chatFolders,
   members: ws.members.map(publicMember),
   inviteCode: ws.inviteCode,
@@ -416,9 +423,22 @@ function validStack(ws, stackId, memberId) {
 }
 
 // Chat feeds (#channels), optionally grouped into folders. Items with a channelId live only in that feed.
+// A feed is invite-only: its creator and the people they add. A campaign's feed follows the campaign instead.
+// #general (no channelId) is the whole team's.
+function seesFeed(ch, memberId) {
+  if (!ch) return true;
+  if (ch.campaignId) return seesCampaign(ch.campaignId, memberId);
+  return !ch.memberIds || ch.ownerId === memberId || ch.memberIds.includes(memberId);
+}
+function feedOfItem(it) {
+  const top = it.parentId ? db.items[it.parentId] || it : it;
+  return top.channelId ? db.workspaces[it.wsId]?.channels.find((c) => c.id === top.channelId) : null;
+}
+const managesFeed = (ch, auth) => ch.ownerId === auth.memberId || auth.role === 'owner';
+const feedMembers = (ws, ch, ids) => [...new Set(Array.isArray(ids) ? ids : [])].filter((id) => id !== ch.ownerId && ws.members.some((m) => m.id === id));
 function validChannel(ws, channelId, memberId) {
   const ch = channelId && ws.channels.find((c) => c.id === channelId);
-  return ch && seesCampaign(ch.campaignId, memberId) ? channelId : null;
+  return ch && seesFeed(ch, memberId) ? channelId : null;
 }
 function validChatFolder(ws, folderId) {
   return folderId && ws.chatFolders.some((f) => f.id === folderId) ? folderId : null;
@@ -442,8 +462,9 @@ function broadcast(wsId, msg) {
     return;
   }
   const campaignId = campaignOfMsg(msg);
+  const feed = msg.item && db.items[msg.item.id] ? feedOfItem(db.items[msg.item.id]) : null;
   const data = JSON.stringify(msg);
-  for (const s of set) if (s.readyState === 1 && seesCampaign(campaignId, s.meta.memberId)) s.send(data);
+  for (const s of set) if (s.readyState === 1 && seesCampaign(campaignId, s.meta.memberId) && seesFeed(feed, s.meta.memberId)) s.send(data);
 }
 
 // ---------- campaigns: campaign → goals → tasks, plus logged attempts (each call or email and its outcome) ----------
@@ -468,7 +489,7 @@ function campaignOf(kind, x) {
   }
   return null;
 }
-const canSee = (auth, kind, x) => seesCampaign(campaignOf(kind, x), auth.memberId);
+const canSee = (auth, kind, x) => seesCampaign(campaignOf(kind, x), auth.memberId) && (kind !== 'item' || seesFeed(feedOfItem(x), auth.memberId));
 function campaignOfMsg(msg) {
   if (msg.item) return campaignOf('item', db.items[msg.item.id]);
   if (msg.task) return campaignOf('task', msg.task);
@@ -902,22 +923,39 @@ async function api(req, res, url) {
   }
 
   if (a === 'channels') {
+    let resync = false;
     if (m === 'POST' && !b) {
-      const { name, folderId } = await readJson(req);
-      ws.channels.push({ id: rid(8), name: channelName(ws, name), folderId: validChatFolder(ws, folderId) });
-    } else if (m === 'PATCH' && b) {
-      const body = await readJson(req);
-      const ch = ws.channels.find((x) => x.id === b);
-      if (!ch) return send(res, 404, { error: 'Not found' });
-      if (body.name !== undefined) ch.name = channelName(ws, body.name, ch.id);
-      if (body.folderId !== undefined) ch.folderId = validChatFolder(ws, body.folderId);
-    } else if (m === 'DELETE' && b) {
-      if (ws.channels.find((x) => x.id === b)?.campaignId) return send(res, 400, { error: 'This feed belongs to a campaign. Delete the campaign instead.' });
-      ws.channels = ws.channels.filter((x) => x.id !== b);
-      for (const it of Object.values(db.items)) if (it.wsId === ws.id && it.channelId === b) deleteItem(it.id);
-    } else return send(res, 405, { error: 'Method not allowed' });
+      const { name, folderId, memberIds } = await readJson(req);
+      const ch = { id: rid(8), name: channelName(ws, name), folderId: validChatFolder(ws, folderId), ownerId: auth.memberId };
+      ch.memberIds = feedMembers(ws, ch, memberIds);
+      ws.channels.push(ch);
+    } else {
+      const ch = b && ws.channels.find((x) => x.id === b);
+      if (!ch || !seesFeed(ch, auth.memberId)) return send(res, 404, { error: 'Not found' });
+      if (m === 'POST' && c === 'leave') {
+        if (ch.campaignId || !ch.memberIds?.includes(auth.memberId)) return send(res, 400, { error: 'You can’t leave this feed.' });
+        ch.memberIds = ch.memberIds.filter((id) => id !== auth.memberId);
+        resync = true;
+      } else if (m === 'PATCH' && !c) {
+        const body = await readJson(req);
+        if (body.name !== undefined) ch.name = channelName(ws, body.name, ch.id);
+        if (body.folderId !== undefined) ch.folderId = validChatFolder(ws, body.folderId);
+        if (body.memberIds !== undefined) {
+          if (ch.campaignId) return send(res, 400, { error: 'This feed follows its campaign. Change who sees the campaign instead.' });
+          if (!managesFeed(ch, auth)) return send(res, 403, { error: 'Only the person who made this feed can change who’s in it.' });
+          ch.memberIds = feedMembers(ws, ch, body.memberIds);
+          resync = true;
+        }
+      } else if (m === 'DELETE' && !c) {
+        if (ch.campaignId) return send(res, 400, { error: 'This feed belongs to a campaign. Delete the campaign instead.' });
+        if (ch.ownerId && !managesFeed(ch, auth)) return send(res, 403, { error: 'Only the person who made this feed can delete it.' });
+        ws.channels = ws.channels.filter((x) => x.id !== b);
+        for (const it of Object.values(db.items)) if (it.wsId === ws.id && it.channelId === b) deleteItem(it.id);
+      } else return send(res, 405, { error: 'Method not allowed' });
+    }
     save();
-    broadcast(ws.id, { type: 'workspace' });
+    // Who's in a feed changed: everyone reloads so it and its messages appear or disappear cleanly.
+    broadcast(ws.id, { type: resync ? 'resync' : 'workspace' });
     return send(res, 200, publicWorkspace(ws, auth.memberId));
   }
 

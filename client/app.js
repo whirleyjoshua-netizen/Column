@@ -364,7 +364,7 @@
       renderDay();
       refreshLinks();
     } else if (msg.type === 'resync') {
-      // Who can see a private campaign changed.
+      // Who can see a private campaign or feed changed.
       loadState().catch(() => {});
     } else if (msg.type === 'presence') {
       S.online = msg.devices;
@@ -3041,7 +3041,8 @@
     const row = h('div', { class: 'ch-row' + (view === C.view ? ' on' : '') + (n ? ' unread' : ''), onclick: () => openChannel(view) },
       h('span', { class: 'hash' }, '#'),
       h('span', { class: 'ch-name' }, name),
-      campById(ch?.campaignId)?.private ? h('span', { class: 'ch-lock', title: 'Private campaign', html: I.lock }) : null,
+      campById(ch?.campaignId)?.private ? h('span', { class: 'ch-lock', title: 'Private campaign', html: I.lock })
+        : ch?.memberIds ? h('span', { class: 'ch-lock', title: 'Invite only: ' + [ch.ownerId, ...ch.memberIds].map(memberName).join(', '), html: I.lock }) : null,
       n ? h('span', { class: 'badge' + (unreadAt(view) ? ' at' : '') }, (unreadAt(view) ? '@' : '') + (n > 99 ? '99+' : n)) : null,
       ch ? h('button', { class: 'ch-more', 'aria-label': 'Feed options', html: I.more, onclick: (e) => { e.stopPropagation(); channelMenu(ch, e.currentTarget, row); } }) : null
     );
@@ -3063,12 +3064,37 @@
     askName(anchorRow, 'new-feed', async (name) => {
       const ws = await wsCall('POST', '/channels', { name, folderId });
       const ch = ws?.channels[ws.channels.length - 1];
-      if (ch) openChannel('ch:' + ch.id);
+      if (!ch) return;
+      openChannel('ch:' + ch.id);
+      // Feeds are invite-only, so straight on to who's in it.
+      if (S.workspace.members.length > 1) feedPeopleSheet(ch);
     }, !!folderId);
   }
 
+  function feedPeopleSheet(ch) {
+    const picks = S.workspace.members.filter((m) => m.id !== ch.ownerId).map((m) => {
+      const cb = h('input', { type: 'checkbox', value: m.id });
+      cb.checked = ch.memberIds.includes(m.id);
+      return h('label', { class: 'pick' }, cb, m.name);
+    });
+    sheet('Who’s in #' + ch.name, [
+      h('small', { class: 'day-hint' }, `Only the people you pick (and ${memberName(ch.ownerId) === 'You' ? 'you' : memberName(ch.ownerId)}) can see this feed and its messages.`),
+      h('div', { class: 'picks' }, picks.length ? picks : h('small', {}, 'Nobody else on the team yet.')),
+    ], async () => {
+      const memberIds = picks.map((l) => l.firstChild).filter((cb) => cb.checked).map((cb) => cb.value);
+      S.workspace = await api('PATCH', '/channels/' + ch.id, { memberIds });
+      renderChatSide();
+    });
+  }
+
   function channelMenu(ch, anchor, row) {
+    const manages = ch.ownerId === S.me?.memberId || S.workspace.members.find((m) => m.id === S.me?.memberId)?.role === 'owner';
+    const people = !ch.memberIds ? []
+      : manages ? [{ label: 'People…', run: () => feedPeopleSheet(ch) }]
+      : [{ note: 'In this feed: ' + [ch.ownerId, ...ch.memberIds].map(memberName).join(', ') },
+         { label: 'Leave feed', danger: true, run: () => wsCall('POST', '/channels/' + ch.id + '/leave') }];
     openMenu(anchor, [
+      ...people,
       { label: 'Rename', run: () => {
         const nameEl = row.querySelector('.ch-name');
         inlineEdit(nameEl, { value: ch.name, onDone: (name) => name && name !== ch.name && wsCall('PATCH', '/channels/' + ch.id, { name }) });
@@ -3076,8 +3102,7 @@
       { head: 'Move to folder' },
       { label: 'No folder', on: !ch.folderId, run: () => wsCall('PATCH', '/channels/' + ch.id, { folderId: null }) },
       ...S.workspace.chatFolders.map((f) => ({ label: f.name, on: ch.folderId === f.id, run: () => wsCall('PATCH', '/channels/' + ch.id, { folderId: f.id }) })),
-      { head: '' },
-      { label: 'Delete feed and its messages', danger: true, run: () => wsCall('DELETE', '/channels/' + ch.id) },
+      ...(ch.campaignId || (ch.ownerId && !manages) ? [] : [{ head: '' }, { label: 'Delete feed and its messages', danger: true, run: () => wsCall('DELETE', '/channels/' + ch.id) }]),
     ]);
   }
 
