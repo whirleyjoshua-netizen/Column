@@ -326,6 +326,74 @@ function baseItem(auth, fields) {
   };
 }
 
+function sendZip(req, res, folder) {
+  const entries = folder.files.map((f) => ({
+    name: `${folder.name}/${f.relPath}`,
+    path: path.join(FILES_DIR, f.fid),
+    size: f.size,
+    crc: f.crc,
+    mtime: f.mtime,
+  }));
+  res.writeHead(200, {
+    'Content-Type': 'application/zip',
+    'Content-Length': zipSize(entries),
+    'Content-Disposition': contentDisposition('attachment', `${folder.name}.zip`),
+  });
+  if (req.method === 'HEAD') return res.end();
+  return streamZip(res, entries).catch(() => res.destroy());
+}
+
+// ---------- public share links: /s/<token> is a download page for one file or folder, no sign-in ----------
+const liveShare = (it) => it?.share && (!it.share.expiresAt || it.share.expiresAt > Date.now());
+const sharedItem = (token) => Object.values(db.items).find((it) => it.share?.token === token && liveShare(it) && it.status === 'ready');
+const escHtml = (t) => String(t).replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch]);
+function fmtBytes(n) {
+  const u = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let i = 0;
+  while (n >= 1024 && i < u.length - 1) (n /= 1024), i++;
+  return (i && n < 10 ? n.toFixed(1) : Math.round(n)) + ' ' + u[i];
+}
+
+function serveShare(req, res, url) {
+  const [, token, part] = url.pathname.split('/').filter(Boolean);
+  const it = token && sharedItem(token);
+  const headers = { 'X-Robots-Tag': 'noindex', 'Referrer-Policy': 'no-referrer', 'Cache-Control': 'no-store' };
+  for (const [k, v] of Object.entries(headers)) res.setHeader(k, v);
+  if (!it) return sharePage(res, 404, '<h1>Link not available</h1><p>This link has expired or was turned off.</p>');
+  if (part === 'file' && it.type === 'file') return serveFile(req, res, path.join(FILES_DIR, it.id), { name: it.name, mime: it.mime, download: url.searchParams.has('dl') });
+  if (part === 'zip' && it.type === 'folder') return sendZip(req, res, it);
+  if (part) return sharePage(res, 404, '<h1>Not found</h1>');
+  const base = `/s/${token}`;
+  const mime = it.mime || '';
+  const src = `${base}/file`;
+  const preview = it.type !== 'file' ? ''
+    : /^image\/(png|jpe?g|gif|webp|avif|bmp)$/.test(mime) ? `<img src="${src}" alt="">`
+    : /^video\/(mp4|webm|quicktime)$/.test(mime) ? `<video src="${src}" controls playsinline preload="metadata"></video>`
+    : mime.startsWith('audio/') ? `<audio src="${src}" controls preload="metadata"></audio>` : '';
+  const detail = it.type === 'folder' ? `Folder · ${it.files.length} file${it.files.length === 1 ? '' : 's'} · ${fmtBytes(it.size)}` : fmtBytes(it.size);
+  const until = it.share.expiresAt ? ` · link expires ${new Date(it.share.expiresAt).toUTCString().slice(0, 16)}` : '';
+  sharePage(res, 200, `${preview}<h1>${escHtml(it.name)}</h1><p>${detail}${until}</p>
+    <a class="dl" href="${it.type === 'folder' ? base + '/zip' : src + '?dl=1'}">Download${it.type === 'folder' ? ' (.zip)' : ''}</a>`, it.name);
+}
+
+function sharePage(res, code, body, title = 'Column') {
+  res.writeHead(code, {
+    'Content-Type': 'text/html; charset=utf-8',
+    'Content-Security-Policy': "default-src 'none'; img-src 'self'; media-src 'self'; style-src 'unsafe-inline'",
+  });
+  res.end(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${escHtml(title)}</title><style>
+:root{color-scheme:light dark;--bg:#f6f6f8;--card:#fff;--text:#16161a;--muted:#6b6b76;--accent:#7c6cf6}
+@media (prefers-color-scheme:dark){:root{--bg:#111115;--card:#1a1a20;--text:#ececf1;--muted:#8d8d99}}
+body{margin:0;min-height:100vh;display:grid;place-items:center;background:var(--bg);color:var(--text);font:15px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;padding:16px;box-sizing:border-box}
+main{background:var(--card);border-radius:16px;padding:24px;width:min(560px,100%);box-shadow:0 10px 40px rgba(0,0,0,.12);text-align:center}
+img,video{max-width:100%;max-height:60vh;border-radius:10px;display:block;margin:0 auto 16px}audio{width:100%;margin-bottom:16px}
+h1{font-size:18px;margin:0 0 4px;word-break:break-word}p{color:var(--muted);margin:0 0 18px;font-size:13px}
+.dl{display:inline-block;background:var(--accent);color:#fff;text-decoration:none;font-weight:600;padding:10px 22px;border-radius:10px}
+footer{margin-top:18px;font-size:11.5px;color:var(--muted)}
+</style></head><body><main>${body}<footer>Shared with Column</footer></main></body></html>`);
+}
+
 // Messages link to things as [[file:<id>]], [[stack:<id>]], [[task:<id>]]. A linked file is pinned so auto-clear never breaks the link.
 const LINK_RE = /\[\[(file|stack|task):([\w-]+)\]\]/g;
 function pinLinked(ws, text) {
@@ -671,6 +739,18 @@ async function api(req, res, url) {
       broadcast(ws.id, { type: 'item:update', item: publicItem(it) });
       return send(res, 200, publicItem(it));
     }
+    if (c === 'share' && (it.type === 'file' || it.type === 'folder')) {
+      if (m === 'POST') {
+        const { hours } = await readJson(req);
+        const h = Number(hours) > 0 ? Math.min(Number(hours), 24 * 365) : null;
+        it.share = { token: crypto.randomBytes(18).toString('base64url'), createdAt: Date.now(), expiresAt: h ? Date.now() + h * 3600_000 : null, by: auth.member };
+        it.pinned = true; // auto-clear must not break the link
+      } else if (m === 'DELETE') it.share = null;
+      else return send(res, 405, { error: 'Method not allowed' });
+      save();
+      broadcast(ws.id, { type: 'item:update', item: publicItem(it) });
+      return send(res, 200, publicItem(it));
+    }
     if (c) return send(res, 404, { error: 'Not found' });
     if (m === 'PATCH') {
       const body = await readJson(req, 300_000);
@@ -846,22 +926,7 @@ async function api(req, res, url) {
       broadcast(ws.id, { type: 'item:add', item: publicItem(folder) });
       return send(res, 200, publicItem(folder));
     }
-    if (c === 'zip' && (m === 'GET' || m === 'HEAD')) {
-      const entries = folder.files.map((f) => ({
-        name: `${folder.name}/${f.relPath}`,
-        path: path.join(FILES_DIR, f.fid),
-        size: f.size,
-        crc: f.crc,
-        mtime: f.mtime,
-      }));
-      res.writeHead(200, {
-        'Content-Type': 'application/zip',
-        'Content-Length': zipSize(entries),
-        'Content-Disposition': contentDisposition('attachment', `${folder.name}.zip`),
-      });
-      if (m === 'HEAD') return res.end();
-      return streamZip(res, entries).catch(() => res.destroy());
-    }
+    if (c === 'zip' && (m === 'GET' || m === 'HEAD')) return sendZip(req, res, folder);
     if (c === 'files' && d !== undefined && (m === 'GET' || m === 'HEAD')) {
       const f = folder.files[Number(d)];
       if (!f) return send(res, 404, { error: 'Not found' });
@@ -911,6 +976,7 @@ const server = http.createServer(async (req, res) => {
     }
     return;
   }
+  if (url.pathname.startsWith('/s/') && (req.method === 'GET' || req.method === 'HEAD')) return serveShare(req, res, url);
   serveStatic(req, res, url);
 });
 
@@ -961,6 +1027,13 @@ setInterval(() => {
     if (it.status === 'uploading' && now - it.createdAt > 24 * 3600_000) deleteItem(it.id);
     const h = ws.settings.expireHours;
     if (h > 0 && !it.pinned && it.status === 'ready' && now - it.createdAt > h * 3600_000) deleteItem(it.id);
+  }
+  for (const it of Object.values(db.items)) {
+    if (it.share && !liveShare(it)) {
+      it.share = null;
+      save();
+      broadcast(it.wsId, { type: 'item:update', item: publicItem(it) });
+    }
   }
   for (const up of Object.values(db.uploads)) if (now - up.touched > 24 * 3600_000 || !db.workspaces[up.wsId]) dropUpload(up);
 }, 60_000);

@@ -582,6 +582,7 @@
     const el = h('div', { class: 'sub' });
     bits.forEach((b, i) => { if (i) el.append(' · '); el.append(b); });
     if (it.stackId && stackById(it.stackId)) el.append(' · ', stackById(it.stackId).name);
+    if (it.share) el.append(' · ', h('span', { class: 'shared', title: 'Anyone with the link can download this' }, 'public link'));
     return el;
   }
 
@@ -596,6 +597,7 @@
       a.append(btn(I.clock, 'Add to my day', () => openSheet({ text: it.text.slice(0, 5000), date: todayKey() })));
     }
     if (it.type === 'file' || it.type === 'folder') a.append(btn(I.share, 'Share to chat', (b) => shareMenu(b, linkToken('file', it.id))));
+    if (it.type === 'file' || it.type === 'folder') a.append(btn(I.link, it.share ? 'Public link' : 'Make a public link', (b) => publicLinkMenu(b, it), it.share ? 'on' : null));
     if (it.type === 'file' || it.type === 'folder') a.append(btn(I.edit, 'Rename', (b) => startRename(b.closest('.card'), it)));
     if (it.type !== 'message') {
       a.append(btn(I.pin, it.pinned ? 'Unpin' : 'Pin (never auto-clear)', () => api('PATCH', '/items/' + it.id, { pinned: !it.pinned }).catch((e) => toast(e.message)), it.pinned ? 'on' : null));
@@ -1090,6 +1092,38 @@
     const x = r.left + r.right < innerWidth ? r.left : r.right - mw; // open toward the roomier side
     menu.style.left = Math.max(8, Math.min(x, innerWidth - mw - 8)) + 'px';
     menu.style.top = (r.bottom + mh + 8 > innerHeight ? r.top - mh - 4 : r.bottom + 4) + 'px';
+  }
+
+  // Public download links. They work for anyone who can reach this server.
+  const shareUrl = (it) => `${location.origin}/s/${it.share.token}`;
+  function publicLinkMenu(anchor, it) {
+    const make = async (hours) => {
+      try {
+        const next = await api('POST', `/items/${it.id}/share`, { hours });
+        upsert(next);
+        render();
+        copyText(shareUrl(next));
+      } catch (e) {
+        toast(e.message);
+      }
+    };
+    if (!it.share) {
+      return openMenu(anchor, [
+        { head: 'Public link' },
+        { note: 'Anyone with the link can download it, without signing in.' },
+        { label: 'Create link', run: () => make(null) },
+        { label: 'Link that expires in 1 day', run: () => make(24) },
+        { label: 'Link that expires in 7 days', run: () => make(24 * 7) },
+      ]);
+    }
+    openMenu(anchor, [
+      { head: 'Public link' },
+      { note: it.share.expiresAt ? `Expires ${new Date(it.share.expiresAt).toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}` : 'Never expires' },
+      { label: 'Copy link', run: () => copyText(shareUrl(it)) },
+      { label: 'Open link', run: () => window.open(shareUrl(it), '_blank', 'noopener') },
+      { label: 'New link (old one stops working)', run: () => make(it.share.expiresAt ? Math.max(1, (it.share.expiresAt - Date.now()) / 3600_000) : null) },
+      { label: 'Stop sharing', danger: true, run: () => api('DELETE', `/items/${it.id}/share`).then((x) => { upsert(x); render(); toast('Link turned off'); }).catch((e) => toast(e.message)) },
+    ]);
   }
 
   function stackMenu(it, anchor) {

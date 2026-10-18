@@ -555,3 +555,4 @@ body.is-dragging, body.is-dragging * { user-select: none; -webkit-user-select: n
 .drop-line { position: absolute; left: var(--gut); right: 0; height: 0; border-top: 2px solid var(--accent); z-index: 7; pointer-events: none; }
 .drop-line span { position: absolute; right: 4px; top: -18px; font-size: 10.5px; font-weight: 700; color: var(--accent); background: var(--bg); padding: 0 4px; border-radius: 4px; }
 .task-row:not(.done), .anytime:not(.tasks) .any-row { cursor: grab; }
+.sub .shared { color: var(--accent); }
