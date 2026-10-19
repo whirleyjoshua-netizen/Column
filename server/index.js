@@ -49,9 +49,11 @@ for (const ws of Object.values(db.workspaces)) {
 // Writes wait for a 200 ms lull so bursts become one write, but never longer than 2 s behind,
 // so steady activity can't hold changes in memory indefinitely.
 let saveTimer = null;
+let importing = false; // while another Column's data is being unpacked over this one, nothing is written
 let dirtySince = 0;
 function writeNow() {
   clearTimeout(saveTimer);
+  if (importing) return;
   saveTimer = null;
   if (!dirtySince) return;
   dirtySince = 0;
@@ -60,6 +62,7 @@ function writeNow() {
   fs.renameSync(tmp, DB_PATH);
 }
 function save() {
+  if (importing) return;
   dirtySince ||= Date.now();
   clearTimeout(saveTimer);
   saveTimer = setTimeout(writeNow, Math.max(0, Math.min(200, dirtySince + 2000 - Date.now())));
@@ -123,6 +126,30 @@ function send(res, code, body, headers = {}) {
   const isObj = typeof body === 'object' && !Buffer.isBuffer(body);
   res.writeHead(code, { 'Content-Type': isObj ? 'application/json' : 'text/plain', ...headers });
   res.end(isObj ? JSON.stringify(body) : body);
+}
+
+// ---------- sign-in limits: wrong passwords and invite codes, counted per address and per name ----------
+// Behind a host's proxy (TRUST_PROXY=1) the address is the first one in X-Forwarded-For.
+const LOGIN_TRIES = 10;
+const LOGIN_WINDOW = 15 * 60_000;
+const loginFails = new Map(); // key -> { n, since }
+const clientIp = (req) => (process.env.TRUST_PROXY ? String(req.headers['x-forwarded-for'] || '').split(',')[0].trim() : '') || req.socket.remoteAddress || '?';
+function loginBlocked(keys) {
+  const now = Date.now();
+  return keys.some((k) => {
+    const f = loginFails.get(k);
+    if (f && now - f.since > LOGIN_WINDOW) loginFails.delete(k);
+    return f && now - f.since <= LOGIN_WINDOW && f.n >= LOGIN_TRIES;
+  });
+}
+function loginFailed(keys) {
+  const now = Date.now();
+  for (const k of keys) {
+    const f = loginFails.get(k);
+    if (!f || now - f.since > LOGIN_WINDOW) loginFails.set(k, { n: 1, since: now });
+    else f.n++;
+  }
+  if (loginFails.size > 50_000) loginFails.clear();
 }
 
 async function readJson(req, limit = 1_000_000) {
@@ -1715,6 +1742,12 @@ async function api(req, res, url) {
     if (!slug || slug.length > 60) return send(res, 400, { error: 'Enter a team name.' });
     const who = String(name || '').trim().slice(0, 40);
     if (!who) return send(res, 400, { error: 'Enter your name.' });
+    const tries = ['ip:' + clientIp(req), `name:${slug}:${nameKey(who)}`];
+    if (loginBlocked(tries)) return send(res, 429, { error: 'Too many wrong tries. Wait 15 minutes, then try again.' });
+    const refuse = (msg) => {
+      loginFailed(tries);
+      return send(res, 401, { error: msg });
+    };
     if (!password || String(password).length < 6) return send(res, 400, { error: 'Password must be at least 6 characters.' });
     let ws = Object.values(db.workspaces).find((w) => w.slug === slug);
     let member;
@@ -1739,7 +1772,7 @@ async function api(req, res, url) {
       if (!ws) return send(res, 404, { error: 'No team with that name. Create it instead?' });
       member = ws.members.find((x) => x.nameKey === nameKey(who));
       if (mode === 'join') {
-        if (!checkInvite(ws, code)) return send(res, 401, { error: 'Wrong invite code.' });
+        if (!checkInvite(ws, code)) return refuse('Wrong invite code.');
         if (member?.hash) return send(res, 409, { error: 'Someone here already uses that name. Sign in instead, or pick another name.' });
         member ||= newMember(ws, who, 'member');
         setPassword(member, password);
@@ -1747,7 +1780,7 @@ async function api(req, res, url) {
       } else {
         if (!member) return send(res, 404, { error: `No one called “${who}” in ${ws.name}. New here? Use Join team with the invite code.` });
         if (!member.hash) return send(res, 401, { error: 'No password set for this name yet. Use Join team with the invite code to set one.' });
-        if (!checkHash(password, member.salt, member.hash)) return send(res, 401, { error: 'Wrong password.' });
+        if (!checkHash(password, member.salt, member.hash)) return refuse('Wrong password.');
       }
     }
     const token = rid(24);
@@ -2874,6 +2907,35 @@ function serveStatic(req, res, url) {
   });
 }
 
+// ---------- moving in: a one-time upload of another Column's data folder ----------
+// Only when IMPORT_TOKEN is set (24+ characters) and this Column has no teams yet. The body is a .tar.gz
+// of the data folder (db.json, secret.key, files/). Afterwards the server exits so the host restarts it
+// on the new data; then remove IMPORT_TOKEN.
+async function importData(req, res) {
+  const token = process.env.IMPORT_TOKEN || '';
+  const given = String(req.headers.authorization || '').replace(/^Bearer /, '');
+  const same = token.length >= 24 && given.length === token.length && crypto.timingSafeEqual(Buffer.from(given), Buffer.from(token));
+  if (!same) return send(res, 404, 'Not found');
+  if (importing || Object.keys(db.workspaces).length) return send(res, 409, { error: 'This Column already has data.' });
+  importing = true;
+  clearTimeout(saveTimer);
+  dirtySince = 0;
+  const { spawn } = await import('node:child_process');
+  const tar = spawn('tar', ['-xzf', '-', '--no-same-owner', '-C', DATA_DIR], { stdio: ['pipe', 'ignore', 'pipe'] });
+  let err = '';
+  tar.stderr.on('data', (d) => (err += d));
+  req.pipe(tar.stdin);
+  tar.on('close', (code) => {
+    if (code !== 0) {
+      importing = false;
+      return send(res, 500, { error: 'Unpacking failed: ' + err.slice(0, 300) });
+    }
+    send(res, 200, { ok: true, restarting: true });
+    console.log('Imported data. Restarting to load it.');
+    setTimeout(() => process.exit(1), 500);
+  });
+}
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://x');
   if (url.pathname.startsWith('/api/')) {
@@ -2890,6 +2952,7 @@ const server = http.createServer(async (req, res) => {
     }
     return;
   }
+  if (url.pathname === '/import' && req.method === 'POST') return importData(req, res);
   if (url.pathname.startsWith('/s/') && (req.method === 'GET' || req.method === 'HEAD')) return serveShare(req, res, url);
   if (url.pathname.startsWith('/brand/') && (req.method === 'GET' || req.method === 'HEAD')) return serveLogo(req, res, url);
   if (url.pathname.startsWith('/oauth/')) return oauthCallback(req, res, url).catch((e) => {
@@ -2962,6 +3025,24 @@ setInterval(syncAllCalendars, 30_000);
 setInterval(syncAllPss, 60_000);
 setInterval(mailTick, MAIL_GAP);
 setInterval(runAutopay, 10 * 60_000);
+
+// ---------- backups: a copy of the data file each day, the last 14 kept next to it ----------
+// They guard against a bad write or a mistake; the host's volume backups guard against losing the disk.
+const BACKUP_DIR = path.join(DATA_DIR, 'backups');
+function backupDb() {
+  try {
+    fs.mkdirSync(BACKUP_DIR, { recursive: true });
+    const file = path.join(BACKUP_DIR, `db-${dayKey(new Date())}.json`);
+    if (fs.existsSync(file) || !fs.existsSync(DB_PATH)) return;
+    writeNow();
+    fs.copyFileSync(DB_PATH, file);
+    for (const old of fs.readdirSync(BACKUP_DIR).filter((f) => /^db-\d{4}-\d{2}-\d{2}\.json$/.test(f)).sort().slice(0, -14)) fs.rmSync(path.join(BACKUP_DIR, old));
+  } catch (e) {
+    console.error('Backup failed:', e.message);
+  }
+}
+setInterval(backupDb, 60 * 60_000);
+backupDb();
 // A recording whose page went away (closed, crashed) is wrapped up with what arrived.
 setInterval(() => {
   for (const x of Object.values(db.meetings)) {

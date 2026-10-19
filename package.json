@@ -5,5 +5,8 @@
     "setup": "npm --prefix server install && npm --prefix desktop install",
     "server": "npm --prefix server start",
     "desktop": "npm --prefix desktop start"
+  },
+  "engines": {
+    "node": ">=22"
   }
 }
