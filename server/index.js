@@ -27,7 +27,7 @@ const PUBLIC_URL = (process.env.PUBLIC_URL || `http://localhost:${PORT}`).replac
 fs.mkdirSync(FILES_DIR, { recursive: true });
 
 // ---------- persistence (a JSON file is plenty for personal/small-team use) ----------
-let db = { workspaces: {}, tokens: {}, items: {}, entries: {}, tasks: {}, uploads: {}, campaigns: {}, goals: {}, attempts: {}, templates: {}, calendars: {}, agents: {}, agentKeys: {} };
+let db = { workspaces: {}, tokens: {}, items: {}, entries: {}, tasks: {}, uploads: {}, campaigns: {}, goals: {}, attempts: {}, lists: {}, templates: {}, calendars: {}, agents: {}, agentKeys: {} };
 try {
   db = { ...db, ...JSON.parse(fs.readFileSync(DB_PATH, 'utf8')) };
 } catch {}
@@ -399,6 +399,7 @@ async function receiveUpload(req, dest) {
 
 // Folder-relative path with no way to climb out of the folder.
 const cleanRel = (p) => String(p || 'file').replace(/\\/g, '/').split('/').filter((x) => x && x !== '.' && x !== '..').join('/') || 'file';
+const isTextFile = (it) => (it.mime || '').startsWith('text/') || /\.(json|js|ts|css|html|md|csv|tsv|txt|log|py|sh|ya?ml|xml)$/i.test(it.name);
 const cleanName = (n) => String(n || 'file').replace(/[\/\\]/g, '_').slice(0, 255);
 
 // Resumable uploads: a session holds the bytes received so far in FILES_DIR/.part-<id>.
@@ -595,7 +596,7 @@ function campaignOf(kind, x) {
   if (!x) return null;
   const ws = db.workspaces[x.wsId];
   if (kind === 'campaign') return x.id;
-  if (kind === 'goal' || kind === 'attempt') return x.campaignId;
+  if (kind === 'goal' || kind === 'attempt' || kind === 'list') return x.campaignId;
   if (kind === 'task') return x.goalId ? db.goals[x.goalId]?.campaignId || null : null;
   if (kind === 'entry') return x.taskId ? campaignOf('task', db.tasks[x.taskId]) : null;
   if (kind === 'item') {
@@ -614,6 +615,7 @@ function campaignOfMsg(msg) {
   if (msg.campaign) return msg.campaign.id;
   if (msg.goal) return msg.goal.campaignId;
   if (msg.attempt) return msg.attempt.campaignId;
+  if (msg.list) return msg.list.campaignId;
   return null;
 }
 // A saved campaign is private when the campaign it came from was.
@@ -625,6 +627,7 @@ function seesTemplate(t, memberId) {
 const publicCampaign = ({ wsId, ...c }) => c;
 const publicGoal = ({ wsId, ...g }) => g;
 const publicAttempt = ({ wsId, ...x }) => x;
+const publicList = ({ wsId, ...l }) => l;
 const isDate = (v) => v === null || /^\d{4}-\d{2}-\d{2}$/.test(String(v));
 
 function applyCampaign(c, body, ws, auth) {
@@ -670,6 +673,26 @@ function applyGoal(g, body, c) {
   return g;
 }
 
+// A call list: a spreadsheet of prospects dropped on a campaign. Each logged call can name the row it was for,
+// and a row's latest logged outcome is where that prospect stands. The file it came from stays in the campaign's stack.
+const LIST_ROWS = 5000;
+function applyList(l, body) {
+  if (body.name !== undefined) l.name = String(body.name || '').trim().slice(0, 80) || 'List';
+  if (body.columns !== undefined) l.columns = (Array.isArray(body.columns) ? body.columns : []).slice(0, 30).map((x, i) => String(x ?? '').trim().slice(0, 60) || `Column ${i + 1}`);
+  if (body.rows !== undefined) {
+    if (!Array.isArray(body.rows) || body.rows.length > LIST_ROWS) throw badRequest(`A list can have up to ${LIST_ROWS} rows.`);
+    // Rows keep their ids across edits so the calls logged against them still point at them.
+    const seen = new Set();
+    l.rows = body.rows.map((r) => {
+      const id = typeof r?.id === 'string' && /^[\w-]{4,20}$/.test(r.id) && !seen.has(r.id) ? r.id : rid(6);
+      seen.add(id);
+      return { id, cells: l.columns.map((_, i) => String(r?.cells?.[i] ?? '').trim().slice(0, 300)) };
+    }).filter((r) => r.cells.some(Boolean));
+  }
+  if (!l.rows.length) throw badRequest('That list has no rows.');
+  return l;
+}
+
 // Everything that belongs to a campaign goes with it.
 function deleteGoal(g) {
   for (const t of Object.values(db.tasks)) if (t.goalId === g.id) deleteTask(t);
@@ -695,6 +718,7 @@ function deleteTask(t) {
 function deleteCampaign(ws, c) {
   for (const g of Object.values(db.goals)) if (g.campaignId === c.id) deleteGoal(g);
   for (const x of Object.values(db.attempts)) if (x.campaignId === c.id) delete db.attempts[x.id];
+  for (const l of Object.values(db.lists)) if (l.campaignId === c.id) delete db.lists[l.id];
   for (const it of Object.values(db.items)) if (it.wsId === ws.id && campaignOf('item', it) === c.id) deleteItem(it.id);
   ws.channels = ws.channels.filter((x) => x.campaignId !== c.id);
   ws.stacks = ws.stacks.filter((x) => x.campaignId !== c.id);
@@ -1508,6 +1532,7 @@ async function api(req, res, url) {
       campaigns: Object.values(db.campaigns).filter((c) => c.wsId === ws.id && canSee(auth, 'campaign', c)).map(publicCampaign),
       goals: Object.values(db.goals).filter((g) => g.wsId === ws.id && canSee(auth, 'goal', g)).map(publicGoal),
       attempts: Object.values(db.attempts).filter((x) => x.wsId === ws.id && canSee(auth, 'attempt', x)).map(publicAttempt),
+      lists: Object.values(db.lists).filter((l) => l.wsId === ws.id && canSee(auth, 'list', l)).map(publicList),
       templates: Object.values(db.templates).filter((t) => t.wsId === ws.id && seesTemplate(t, auth.memberId)).map(publicTemplate),
     });
   }
@@ -1786,8 +1811,11 @@ async function api(req, res, url) {
       if (!c.outcomes.includes(outcome)) return send(res, 400, { error: 'Pick an outcome' });
       const method = (c.methods || []).includes(body.method) ? body.method : null;
       const t = body.taskId && db.tasks[body.taskId];
+      const l = body.listId && db.lists[body.listId];
+      const row = l && l.campaignId === c.id && l.rows.find((r) => r.id === body.rowId);
       const x = {
         id: rid(), wsId: ws.id, campaignId: c.id, method, taskId: t && campaignOf('task', t) === c.id ? t.id : null,
+        listId: row ? l.id : null, rowId: row ? row.id : null,
         memberId: auth.memberId, by: auth.member, at: Date.now(), outcome,
         contact: String(body.contact || '').trim().slice(0, 200), note: String(body.note || '').trim().slice(0, 2000),
       };
@@ -1803,6 +1831,37 @@ async function api(req, res, url) {
       delete db.attempts[x.id];
       save();
       broadcast(ws.id, { type: 'attempt:remove', id: x.id });
+      return send(res, 200, { ok: true });
+    }
+    return send(res, 405, { error: 'Method not allowed' });
+  }
+
+  if (a === 'lists') {
+    if (m === 'POST' && !b) {
+      const body = await readJson(req, 8_000_000);
+      const c = db.campaigns[body.campaignId];
+      if (!c || c.wsId !== ws.id || !canSee(auth, 'campaign', c)) return send(res, 404, { error: 'Campaign not found' });
+      const file = body.itemId && db.items[body.itemId];
+      const l = applyList({ id: rid(), wsId: ws.id, campaignId: c.id, itemId: file && file.wsId === ws.id ? file.id : null, by: auth.member, createdAt: Date.now(), name: '', columns: [], rows: [] }, { name: 'List', ...body });
+      db.lists[l.id] = l;
+      save();
+      broadcast(ws.id, { type: 'list', list: publicList(l) });
+      return send(res, 200, publicList(l));
+    }
+    const l = b && db.lists[b];
+    if (!l || l.wsId !== ws.id || !canSee(auth, 'list', l)) return send(res, 404, { error: 'Not found' });
+    if (m === 'PATCH') {
+      const next = applyList({ ...l }, await readJson(req, 8_000_000));
+      db.lists[l.id] = next;
+      save();
+      broadcast(ws.id, { type: 'list', list: publicList(next) });
+      return send(res, 200, publicList(next));
+    }
+    // Calls logged against it stay in the log.
+    if (m === 'DELETE') {
+      delete db.lists[l.id];
+      save();
+      broadcast(ws.id, { type: 'list:remove', id: l.id });
       return send(res, 200, { ok: true });
     }
     return send(res, 405, { error: 'Method not allowed' });
@@ -2189,6 +2248,24 @@ async function api(req, res, url) {
       const name = path.basename(f.relPath);
       return serveFile(req, res, path.join(FILES_DIR, f.fid), { name, mime: mimeFor(name), download: url.searchParams.has('dl') });
     }
+  }
+
+  // Saves an edited text file in place.
+  if (a === 'files' && b && m === 'PUT') {
+    const it = db.items[b];
+    if (!it || it.wsId !== ws.id || it.type !== 'file' || !canSee(auth, 'item', it)) return send(res, 404, { error: 'Not found' });
+    if (!isTextFile(it)) return send(res, 400, { error: 'Only text files can be edited here.' });
+    const tmp = path.join(FILES_DIR, '.edit-' + rid());
+    const { size } = await receiveUpload(req, tmp);
+    if (size > 5_000_000) {
+      await fsp.rm(tmp, { force: true });
+      return send(res, 413, { error: 'Too big to edit here' });
+    }
+    await fsp.rename(tmp, path.join(FILES_DIR, it.id));
+    Object.assign(it, { size, editedAt: Date.now(), editedBy: auth.member });
+    save();
+    broadcast(ws.id, { type: 'item:update', item: publicItem(it) });
+    return send(res, 200, publicItem(it));
   }
 
   if (a === 'files' && b && (m === 'GET' || m === 'HEAD')) {

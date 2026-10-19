@@ -707,3 +707,36 @@ button.oc:hover { background: color-mix(in srgb, var(--oc) 30%, transparent); }
 .ag-note small { grid-column: 1; font-size: 10.5px; color: var(--muted); }
 .ag-note .t-btn { opacity: 1; margin-top: 6px; }
 .ag-add-note { align-self: flex-start; }
+
+/* call lists and files on a campaign */
+.camps.dropping { outline: 2px dashed var(--accent); outline-offset: -4px; background: var(--accent-soft); }
+.clist-name { background: none; border: 0; padding: 0; text-align: left; color: inherit; font-weight: 700; cursor: pointer; }
+.clist .link { margin-top: 2px; }
+.clist-seg { margin: 4px 0 6px; }
+.clist-seg button { padding: 3px; font-size: 12px; }
+.clist-q { margin: 0 0 6px; }
+.clist-rows { display: flex; flex-direction: column; margin: 0 -2px; }
+.crow { display: flex; align-items: center; gap: 8px; padding: 5px 2px; border-top: 1px solid var(--line); font-size: 12.5px; }
+.crow:first-child { border-top: 0; }
+.crow .oc { font-size: 10.5px; padding: 1px 7px; flex: none; }
+.crow .btn { flex: none; }
+.crow-who { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.crow-who b, .crow-who small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.crow-who small { color: var(--muted); display: flex; gap: 8px; }
+.crow-who a { color: var(--accent); text-decoration: none; }
+.log-who { position: relative; }
+.log-picked { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 5px 8px; font-size: 12.5px; }
+.log-sugg { position: absolute; left: 0; right: 0; top: calc(100% + 3px); z-index: 5; background: var(--card); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18); padding: 4px; display: flex; flex-direction: column; }
+.log-sugg-h { color: var(--muted); font-size: 10.5px; padding: 2px 6px; }
+.log-sugg button { display: flex; align-items: center; gap: 8px; background: none; border: 0; border-radius: 6px; padding: 5px 6px; text-align: left; font-size: 12.5px; color: inherit; }
+.log-sugg button:hover { background: var(--card-hover); }
+.log-sugg button small { flex: 1; min-width: 0; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.log-sugg .oc { font-size: 10.5px; padding: 1px 7px; }
+.camp-files { display: flex; flex-direction: column; gap: 2px; margin-bottom: 14px; }
+.camp-files .add-goal { margin-top: 4px; padding: 7px; }
+.cfile { display: flex; align-items: center; gap: 8px; background: none; border: 0; border-radius: 8px; padding: 5px 6px; text-align: left; color: inherit; font-size: 12.5px; }
+.cfile:hover { background: var(--card-hover); }
+.cfile-ext { flex: none; min-width: 34px; text-align: center; font-size: 9.5px; font-weight: 700; color: var(--accent); background: var(--accent-soft); border-radius: 5px; padding: 3px 4px; }
+.cfile-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cfile small { flex: none; color: var(--muted); font-size: 11px; }
+.preview .pv-edit { width: 100%; max-width: 900px; flex: 1; min-height: 0; box-sizing: border-box; background: var(--panel); color: var(--text); padding: 14px; border-radius: 10px; font-family: var(--mono); font-size: 12px; resize: none; }

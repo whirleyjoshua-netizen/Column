@@ -126,7 +126,7 @@
     if (/^video\/(mp4|webm|quicktime)$/.test(m)) return 'video';
     if (m.startsWith('audio/')) return 'audio';
     if (m === 'application/pdf') return 'pdf';
-    if (m.startsWith('text/') || /^(json|js|ts|css|html|md|csv|log|py|sh|yml|yaml|xml)$/i.test(ext(it.name))) return 'textfile';
+    if (m.startsWith('text/') || /^(json|js|ts|css|html|md|csv|tsv|txt|log|py|sh|yml|yaml|xml)$/i.test(ext(it.name))) return 'textfile';
     return 'file';
   }
   function guessDevice() {
@@ -313,16 +313,19 @@
       const isNew = !S.items.some((x) => x.id === msg.item.id);
       upsert(msg.item);
       render();
+      renderCamps();
       chatChanged();
       if (isNew && msg.item.deviceId !== S.deviceId) incoming(msg.item);
     } else if (msg.type === 'item:update') {
       upsert(msg.item);
       render();
+      renderCamps();
       refreshLinks();
     } else if (msg.type === 'item:remove') {
       S.items = S.items.filter((x) => x.id !== msg.id);
       checkThread();
       render();
+      renderCamps();
       refreshLinks();
       chatChanged();
     } else if (msg.type === 'workspace') {
@@ -351,8 +354,8 @@
       S.tasks = S.tasks.filter((x) => x.id !== msg.id);
       renderDay();
       refreshLinks();
-    } else if (msg.type === 'campaign' || msg.type === 'goal' || msg.type === 'attempt') {
-      const list = { campaign: S.campaigns, goal: S.goals, attempt: S.attempts }[msg.type];
+    } else if (msg.type === 'campaign' || msg.type === 'goal' || msg.type === 'attempt' || msg.type === 'list') {
+      const list = { campaign: S.campaigns, goal: S.goals, attempt: S.attempts, list: S.lists }[msg.type];
       const x = msg[msg.type];
       const i = list.findIndex((y) => y.id === x.id);
       if (msg.type === 'campaign' && x.assigneeId === S.me?.memberId && list[i]?.assigneeId !== x.assigneeId && x.assignedBy !== S.me?.memberId) assignedToMe(x, 'campaign');
@@ -361,8 +364,8 @@
       renderCamps();
       renderDay();
       refreshLinks();
-    } else if (msg.type === 'campaign:remove' || msg.type === 'goal:remove' || msg.type === 'attempt:remove') {
-      const key = { 'campaign:remove': 'campaigns', 'goal:remove': 'goals', 'attempt:remove': 'attempts' }[msg.type];
+    } else if (msg.type === 'campaign:remove' || msg.type === 'goal:remove' || msg.type === 'attempt:remove' || msg.type === 'list:remove') {
+      const key = { 'campaign:remove': 'campaigns', 'goal:remove': 'goals', 'attempt:remove': 'attempts', 'list:remove': 'lists' }[msg.type];
       S[key] = S[key].filter((y) => y.id !== msg.id);
       renderCamps();
       renderDay();
@@ -441,6 +444,7 @@
     S.campaigns = st.campaigns || [];
     S.goals = st.goals || [];
     S.attempts = st.attempts || [];
+    S.lists = st.lists || [];
     S.templates = st.templates || [];
     S.panes = S.panes.map((v) => (v.startsWith('stack:') && !stackById(v.slice(6)) ? 'files' : v));
     $('#wsName').textContent = S.workspace.name;
@@ -1234,7 +1238,10 @@
     else if (k === 'textfile') {
       const pre = h('pre', {}, 'Loading…');
       pv.append(pre);
-      fetch(fileUrl(it)).then((r) => r.text()).then((txt) => (pre.textContent = txt.slice(0, 500_000))).catch(() => (pre.textContent = 'Could not load'));
+      fetch(fileUrl(it)).then((r) => r.text()).then((txt) => {
+        pre.textContent = txt.slice(0, 500_000);
+        if (it.size <= 500_000) $('.pv-bar', pv)?.prepend(editText(it, pre, txt));
+      }).catch(() => (pre.textContent = 'Could not load'));
     } else if (k === 'folder') {
       pv.append(h('div', { class: 'flist' }, it.files.map((f) =>
         h('a', { href: fileUrl(it, { idx: f.i, dl: true }), download: f.relPath.split('/').pop() }, h('span', {}, f.relPath), h('small', {}, fmtSize(f.size)))
@@ -1246,6 +1253,34 @@
       pv.append(h('div', { class: 'pv-bar' }, h('span', {}, it.name), h('button', { class: 'btn', onclick: () => download(it) }, it.type === 'folder' ? 'Download all (.zip)' : 'Download')));
     }
     pv.classList.remove('hidden');
+  }
+  // Edit a text file in place. If it's a campaign's call list, the list follows the edit.
+  function editText(it, pre, txt) {
+    const ta = h('textarea', { class: 'pv-edit', spellcheck: 'false' });
+    const btn = h('button', { class: 'btn' }, 'Edit');
+    btn.onclick = async () => {
+      if (!ta.isConnected) {
+        ta.value = txt;
+        pre.replaceWith(ta);
+        ta.focus();
+        btn.textContent = 'Save';
+        return;
+      }
+      btn.disabled = true;
+      try {
+        upsert(await put('/api/files/' + it.id, new Blob([ta.value]), () => {}));
+        const l = S.lists.find((x) => x.itemId === it.id);
+        if (l) await syncList(l, new File([ta.value], it.name, { type: it.mime }));
+        toast(l ? 'Saved · call list updated' : 'Saved');
+        txt = pre.textContent = ta.value;
+        ta.replaceWith(pre);
+        btn.textContent = 'Edit';
+      } catch (er) {
+        toast(er.message);
+      }
+      btn.disabled = false;
+    };
+    return btn;
   }
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
@@ -1290,8 +1325,10 @@
     return target?.closest?.('.pane') || (S.tab === 'chat' ? C.pane : document.querySelector('#panes .pane'));
   }
   function clearDropping() {
-    document.querySelectorAll('.pane.dropping').forEach((p) => p.classList.remove('dropping'));
+    document.querySelectorAll('.dropping').forEach((p) => p.classList.remove('dropping'));
   }
+  // An open campaign takes the drop itself: files go to its stack, and lists become call lists.
+  const dropCampaign = () => S.tab === 'camps' && campById(K.open);
   window.addEventListener('dragenter', (e) => {
     if (S.internalDrag || !S.token) return;
     if (S.tab === 'day' && hasFiles(e.dataTransfer)) setTab('column');
@@ -1301,6 +1338,7 @@
   window.addEventListener('dragover', (e) => {
     if (S.internalDrag || !S.token) return;
     e.preventDefault();
+    if (dropCampaign()) return $('#camps').classList.add('dropping');
     const pane = paneAt(e.target);
     if (!pane) return;
     if (!pane.classList.contains('dropping')) {
@@ -1319,10 +1357,26 @@
     dragDepth = 0;
     clearDropping();
     if (S.internalDrag || !S.token) return;
+    const dt = e.dataTransfer;
+    const camp = dropCampaign();
+    if (camp) {
+      if (!hasFiles(dt)) return;
+      const entries = [...dt.items].filter((i) => i.kind === 'file').map((i) => i.webkitGetAsEntry?.()).filter(Boolean);
+      if (!entries.length) return [...dt.files].forEach((f) => queue(() => addToCampaign(camp, f)));
+      for (const entry of entries) {
+        if (entry.isDirectory) {
+          const files = await walk(entry, '');
+          queue(() => uploadFolder(entry.name, files, { stackId: camp.stackId }));
+        } else {
+          const f = await new Promise((res, rej) => entry.file(res, rej));
+          queue(() => addToCampaign(camp, f));
+        }
+      }
+      return;
+    }
     const pane = paneAt(e.target);
     const view = pane?._view || 'all';
     const dest = destOf(view);
-    const dt = e.dataTransfer;
     if (hasFiles(dt)) {
       const entries = [...dt.items].filter((i) => i.kind === 'file').map((i) => i.webkitGetAsEntry?.()).filter(Boolean);
       const plainFiles = [...dt.files];
@@ -1459,10 +1513,11 @@
     const u = { key: newId(), name: file.name, size: file.size, loaded: 0, ...dest };
     S.uploads.set(u.key, u);
     render();
+    let item;
     try {
       const progress = (n) => { u.loaded = n; updateUpload(u); };
       const qs = new URLSearchParams({ name: file.name, type: file.type || '', ...(dest.stackId ? { stackId: dest.stackId } : {}), ...(dest.channelId ? { channelId: dest.channelId } : {}) });
-      const item = file.size > CHUNK
+      item = file.size > CHUNK
         ? await putResumable(file, { name: file.name, type: file.type || '', stackId: dest.stackId || null, channelId: dest.channelId || null }, progress, u)
         : await put('/api/upload?' + qs, file, progress);
       upsert(item);
@@ -1470,6 +1525,7 @@
       S.uploads.delete(u.key);
       render();
     }
+    return item;
   }
 
   async function uploadFolder(name, files, dest) {
@@ -2468,7 +2524,7 @@
   }, 30_000);
 
   // ---------- campaigns: campaign → goals → tasks, with logged attempts ----------
-  const K = { open: store.get('campOpen', null), mine: store.get('campsMine', false), logOpen: null, showAll: {}, stale: false };
+  const K = { open: store.get('campOpen', null), mine: store.get('campsMine', false), logOpen: null, showAll: {}, stale: false, pick: null, listOpen: null, listShow: {}, listN: {} };
   const campById = (id) => id && S.campaigns?.find((c) => c.id === id);
   const goalById = (id) => id && S.goals?.find((g) => g.id === id);
   const goalsOf = (cid) => S.goals.filter((g) => g.campaignId === cid).sort((a, b) => (a.order || 0) - (b.order || 0) || a.createdAt - b.createdAt);
@@ -2686,6 +2742,9 @@
         h('button', { class: 'btn small', onclick: () => openReport(c) }, 'Write a report')),
       h('div', { class: 'any-h camp-goals-h' }, 'Log'),
       logBox(c),
+      h('div', { class: 'any-h camp-goals-h' }, 'Lists & files'),
+      listsOf(c.id).map((l) => listCard(c, l)),
+      campFiles(c),
       h('div', { class: 'any-h camp-goals-h' }, 'Goals'),
       goals.map((g) => goalCard(c, g)),
       h('button', { class: 'add-goal', onclick: () => goalSheet(c) }, '+ Add a goal'));
@@ -2720,7 +2779,253 @@
     return el;
   }
 
-  // Log one attempt: how (call, email…), who (optional), then tap how it went. Every count goal reads from this log.
+  // ----- call lists: a spreadsheet of prospects dropped on a campaign -----
+  // CSV, TSV and Excel files with rows become lists; anything else is just attached. The file stays in the stack.
+  const LIST_MAX = 5000;
+  const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  const isPhone = (v) => /^\+?[\d\s().\-\/]+$/.test(v) && v.replace(/\D/g, '').length >= 7;
+  const listsOf = (cid) => S.lists.filter((l) => l.campaignId === cid).sort((a, b) => a.createdAt - b.createdAt);
+  function upsertList(l) {
+    const i = S.lists.findIndex((x) => x.id === l.id);
+    if (i >= 0) S.lists[i] = l;
+    else S.lists.push(l);
+  }
+
+  function parseDelimited(text) {
+    text = text.replace(/^﻿/, '');
+    const line = text.slice(0, text.search(/\r?\n|$/));
+    const d = ['\t', ',', ';'].sort((a, b) => line.split(b).length - line.split(a).length)[0];
+    const rows = [];
+    let row = [], cell = '', q = false;
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i];
+      if (q) {
+        if (ch !== '"') cell += ch;
+        else if (text[i + 1] === '"') cell += text[++i];
+        else q = false;
+      } else if (ch === '"' && !cell) q = true;
+      else if (ch === d) { row.push(cell); cell = ''; }
+      else if (ch === '\n' || ch === '\r') {
+        if (ch === '\r' && text[i + 1] === '\n') i++;
+        row.push(cell);
+        rows.push(row);
+        row = [];
+        cell = '';
+      } else cell += ch;
+    }
+    if (cell || row.length) rows.push([...row, cell]);
+    return rows;
+  }
+
+  // Just enough of zip to read a spreadsheet: the central directory, then inflate the parts asked for.
+  function unzip(buf) {
+    const dv = new DataView(buf);
+    let end = buf.byteLength - 22;
+    while (end >= 0 && dv.getUint32(end, true) !== 0x06054b50) end--;
+    if (end < 0) throw new Error('Not a zip file');
+    const out = {};
+    let p = dv.getUint32(end + 16, true);
+    for (let n = dv.getUint16(end + 10, true); n > 0; n--) {
+      const method = dv.getUint16(p + 10, true), size = dv.getUint32(p + 20, true), local = dv.getUint32(p + 42, true);
+      const nameLen = dv.getUint16(p + 28, true);
+      const name = new TextDecoder().decode(new Uint8Array(buf, p + 46, nameLen));
+      out[name] = () => {
+        const data = new Uint8Array(buf, local + 30 + dv.getUint16(local + 26, true) + dv.getUint16(local + 28, true), size);
+        if (method === 0) return Promise.resolve(new TextDecoder().decode(data));
+        return new Response(new Blob([data]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).text();
+      };
+      p += 46 + nameLen + dv.getUint16(p + 30, true) + dv.getUint16(p + 32, true);
+    }
+    return out;
+  }
+  // The first sheet of an .xlsx, as rows of text.
+  async function readXlsx(file) {
+    const z = unzip(await file.arrayBuffer());
+    const xml = async (name) => z[name] ? new DOMParser().parseFromString(await z[name](), 'application/xml') : null;
+    const tags = (el, tag) => (el ? [...el.getElementsByTagNameNS('*', tag)] : []);
+    const text = (el) => tags(el, 't').map((t) => t.textContent).join('');
+    const [wb, rels, ss] = await Promise.all([xml('xl/workbook.xml'), xml('xl/_rels/workbook.xml.rels'), xml('xl/sharedStrings.xml')]);
+    const relId = tags(wb, 'sheet')[0]?.getAttribute('r:id');
+    const target = tags(rels, 'Relationship').find((r) => r.getAttribute('Id') === relId)?.getAttribute('Target');
+    const sheet = await xml(target ? (target.startsWith('/') ? target.slice(1) : 'xl/' + target) : 'xl/worksheets/sheet1.xml');
+    const strings = tags(ss, 'si').map(text);
+    return tags(sheet, 'row').map((r) => {
+      const row = [];
+      for (const c of tags(r, 'c')) {
+        const col = [...(c.getAttribute('r') || '').replace(/\d+$/, '')].reduce((n, ch) => n * 26 + ch.charCodeAt(0) - 64, 0) - 1;
+        const v = tags(c, 'v')[0]?.textContent ?? '';
+        const t = c.getAttribute('t');
+        row[col >= 0 ? col : row.length] = t === 's' ? strings[+v] ?? '' : t === 'inlineStr' ? text(c) : t === 'b' ? (v === '1' ? 'TRUE' : 'FALSE') : v;
+      }
+      return [...row].map((x) => x ?? '');
+    });
+  }
+
+  // { columns, rows: [{ cells }] }, or null when the file isn't a list.
+  async function readList(file) {
+    let rows;
+    if (/\.xlsx$/i.test(file.name)) rows = await readXlsx(file);
+    else if (/\.(csv|tsv)$/i.test(file.name) || /^text\/(csv|tab-separated-values)$/.test(file.type)) rows = parseDelimited(await file.text());
+    else return null;
+    rows = rows.map((r) => r.map((x) => String(x ?? '').trim())).filter((r) => r.some(Boolean));
+    const width = Math.min(30, Math.max(0, ...rows.map((r) => r.map(Boolean).lastIndexOf(true) + 1)));
+    if (!width || !rows.length) return null;
+    // A first row that holds an email or phone number is a prospect, not headings.
+    const header = !rows[0].some((x) => EMAIL_RE.test(x) || isPhone(x)) && rows.length > 1;
+    const columns = header ? rows[0].slice(0, width).map((x, i) => x || `Column ${i + 1}`) : Array.from({ length: width }, (_, i) => `Column ${i + 1}`);
+    const data = rows.slice(header ? 1 : 0).map((r) => ({ cells: columns.map((_, i) => r[i] || '') }));
+    return data.length ? { columns, rows: data } : null;
+  }
+
+  // Which columns say who a row is and how to reach them, from the headings or, failing that, the values.
+  function listFields(l) {
+    const taken = [];
+    const col = (re) => {
+      const i = l.columns.findIndex((c, j) => re.test(c) && !taken.includes(j));
+      if (i >= 0) taken.push(i);
+      return i;
+    };
+    const byValue = (test) => l.columns.findIndex((_, i) => {
+      const vals = l.rows.slice(0, 20).map((r) => r.cells[i]).filter(Boolean);
+      return vals.length && vals.filter(test).length >= vals.length / 2;
+    });
+    const first = col(/^first|given/i), last = col(/^(last|sur)|family/i);
+    const company = col(/company|business|organi[sz]ation|account|firm|store|shop|practice|venue|brand/i);
+    const name = col(/name|contact|person|prospect|lead|owner/i);
+    const pc = col(/phone|mobile|cell|tel\b|telephone/i), ec = col(/e-?mail/i);
+    const phone = pc >= 0 ? pc : byValue(isPhone), email = ec >= 0 ? ec : byValue((v) => EMAIL_RE.test(v));
+    return {
+      phone, email,
+      who: (r) => {
+        const person = first >= 0 || last >= 0 ? [r.cells[first], r.cells[last]].filter(Boolean).join(' ') : r.cells[name] || '';
+        return [person, r.cells[company]].filter(Boolean).join(' · ') || r.cells.find((x, i) => x && i !== phone && i !== email) || r.cells.find(Boolean) || '—';
+      },
+    };
+  }
+  // Where each prospect stands: the latest call or email logged against their row.
+  function rowStatus(l) {
+    const m = new Map();
+    for (const x of S.attempts) if (x.listId === l.id && !(m.get(x.rowId)?.at > x.at)) m.set(x.rowId, x);
+    return m;
+  }
+  const reachLinks = (f, r) => [
+    f.phone >= 0 && r.cells[f.phone] ? h('a', { href: 'tel:' + r.cells[f.phone].replace(/[^\d+]/g, ''), onclick: (e) => e.stopPropagation() }, r.cells[f.phone]) : null,
+    f.email >= 0 && r.cells[f.email] ? h('a', { href: 'mailto:' + r.cells[f.email], onclick: (e) => e.stopPropagation() }, r.cells[f.email]) : null,
+  ].filter(Boolean);
+
+  async function addToCampaign(c, file) {
+    let list = null;
+    try {
+      list = await readList(file);
+    } catch {}
+    const item = await uploadFile(file, { stackId: c.stackId });
+    if (!list) return toast(`Attached to ${c.name}`);
+    if (list.rows.length > LIST_MAX) {
+      toast(`Only the first ${LIST_MAX} rows were added`);
+      list.rows.length = LIST_MAX;
+    }
+    const l = await api('POST', '/lists', { campaignId: c.id, itemId: item?.id, name: file.name.replace(/\.[^.]+$/, ''), ...list });
+    upsertList(l);
+    K.listOpen = l.id;
+    renderCamps();
+    toast(`${plural(l.rows.length, 'prospect')} ready to call`, { label: 'Just attach it', run: () => api('DELETE', '/lists/' + l.id).catch((e) => toast(e.message)) });
+  }
+  function pickCampaignFiles(c) {
+    const inp = $('#filePick');
+    inp.value = '';
+    inp.onchange = () => [...inp.files].forEach((f) => queue(() => addToCampaign(c, f)));
+    inp.click();
+  }
+  // Re-reads an edited list file. Rows keep their ids, matched by who they are, so their logged calls stay with them.
+  async function syncList(l, file) {
+    const next = await readList(file);
+    if (!next) return;
+    const was = listFields(l), now = listFields(next);
+    const ids = new Map(l.rows.map((r) => [was.who(r).toLowerCase(), r.id]));
+    for (const r of next.rows) {
+      const key = now.who(r).toLowerCase();
+      if (ids.has(key)) r.id = ids.get(key);
+      ids.delete(key);
+    }
+    upsertList(await api('PATCH', '/lists/' + l.id, { columns: next.columns, rows: next.rows.slice(0, LIST_MAX) }));
+    renderCamps();
+  }
+
+  function listCard(c, l) {
+    const f = listFields(l);
+    const st = rowStatus(l);
+    const reached = l.rows.filter((r) => st.has(r.id)).length;
+    const open = K.listOpen === l.id;
+    const toggle = () => { K.listOpen = open ? null : l.id; renderCamps(); };
+    const el = h('div', { class: 'goal clist' },
+      h('div', { class: 'goal-top' },
+        h('span', { class: 'goal-ic', html: I.menu }),
+        h('button', { class: 'goal-title clist-name', onclick: toggle }, l.name),
+        h('button', { class: 't-btn', 'aria-label': 'List options', html: I.more, onclick: (e) => listMenu(e.currentTarget, c, l) })),
+      h('div', { class: 'goal-prog' }, bar(reached / l.rows.length, c.color), h('span', {}, `${reached} / ${l.rows.length} contacted`)));
+    if (!open) {
+      el.append(h('button', { class: 'link', onclick: toggle }, `Show ${plural(l.rows.length, 'prospect')}`));
+      return el;
+    }
+    const show = K.listShow[l.id] || 'todo';
+    const q = h('input', { class: 'goal-add clist-q', placeholder: 'Search this list', 'aria-label': 'Search this list' });
+    const box = h('div', { class: 'clist-rows' });
+    const draw = () => {
+      const needle = q.value.trim().toLowerCase();
+      const rows = l.rows.filter((r) => (show === 'all' || (show === 'todo') === !st.has(r.id)) && (!needle || r.cells.some((x) => x.toLowerCase().includes(needle))));
+      const n = K.listN[l.id] || 50;
+      box.replaceChildren(...[
+        ...rows.slice(0, n).map((r) => {
+          const x = st.get(r.id);
+          return h('div', { class: 'crow' },
+            h('div', { class: 'crow-who' }, h('b', {}, f.who(r)), h('small', {}, reachLinks(f, r))),
+            x ? h('span', { class: 'oc oc-' + c.outcomes.indexOf(x.outcome), title: `${x.method ? x.method + ' · ' : ''}${x.by} · ${ago(x.at)}` }, x.outcome) : null,
+            h('button', { class: 'btn small', onclick: () => logRow(c, l, r) }, 'Log'));
+        }),
+        rows.length > n ? h('button', { class: 'link', onclick: () => { K.listN[l.id] = n + 100; draw(); } }, `Show more (${rows.length - n} left)`) : null,
+        rows.length ? null : h('p', { class: 'day-hint' }, needle ? 'No matches' : show === 'todo' ? 'Everyone on this list has been contacted.' : 'Nobody contacted yet.'),
+      ].filter(Boolean));
+    };
+    q.addEventListener('input', draw);
+    const tab = (k, label) => h('button', { class: show === k ? 'on' : '', onclick: () => { K.listShow[l.id] = k; renderCamps(); } }, label);
+    draw();
+    el.append(...[
+      h('div', { class: 'seg clist-seg' }, tab('todo', `To contact · ${l.rows.length - reached}`), tab('done', `Contacted · ${reached}`), tab('all', 'All')),
+      l.rows.length > 8 ? q : null,
+      box,
+      h('button', { class: 'link', onclick: toggle }, 'Hide list'),
+    ].filter(Boolean));
+    return el;
+  }
+  function listMenu(anchor, c, l) {
+    const file = l.itemId && S.items.find((x) => x.id === l.itemId);
+    openMenu(anchor, [
+      file ? { label: kind(file) === 'textfile' ? 'Open or edit the file' : 'Open the file', run: () => openPreview(file) } : null,
+      { label: 'Remove list (the file and the log stay)', danger: true, run: () => api('DELETE', '/lists/' + l.id).catch((e) => toast(e.message)) },
+    ].filter(Boolean));
+  }
+  function logRow(c, l, r) {
+    K.logOpen = c.id;
+    K.pick = { listId: l.id, rowId: r.id };
+    renderCamps();
+    $('#camps .logbox')?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    $('#camps .log-note')?.focus();
+  }
+
+  // The campaign's files: tap to open, text files can be edited there.
+  function campFiles(c) {
+    const files = S.items.filter((it) => it.stackId === c.stackId && (it.type === 'file' || it.type === 'folder')).sort((a, b) => b.createdAt - a.createdAt);
+    return h('div', { class: 'camp-files' },
+      files.slice(0, 6).map((it) => h('button', { class: 'cfile', onclick: () => openPreview(it) },
+        h('span', { class: 'cfile-ext' }, it.type === 'folder' ? 'DIR' : ext(it.name) || 'FILE'),
+        h('span', { class: 'cfile-name' }, it.name),
+        h('small', {}, `${fmtSize(it.size)} · `, h('span', { 'data-ago': it.editedAt || it.createdAt }, ago(it.editedAt || it.createdAt))))),
+      files.length > 6 ? h('button', { class: 'link', onclick: () => showStack(c.stackId) }, `All ${files.length} files`) : null,
+      h('button', { class: 'add-goal', onclick: () => pickCampaignFiles(c) }, '+ Add a call list or file', h('small', {}, ' · or drop one here')));
+  }
+
+  // Log one attempt: how (call, email…), who (optional, or picked from a call list), then tap how it went.
+  // Every count goal reads from this log.
   function logBox(c) {
     const open = K.logOpen === c.id;
     const recent = attemptsIn(c.id);
@@ -2735,13 +3040,48 @@
         x.memberId === S.me?.memberId || c.ownerId === S.me?.memberId ? h('button', { class: 't-btn', 'aria-label': 'Remove', html: I.close, onclick: () => api('DELETE', '/attempts/' + x.id).catch((e) => toast(e.message)) }) : null)),
       recent.length > 3 ? h('button', { class: 'link', onclick: () => { K.showAll[c.id] = !K.showAll[c.id]; renderCamps(); } }, K.showAll[c.id] ? 'Show less' : `Show all ${recent.length}`) : null) : null;
     if (!open) return h('div', { class: 'logbox' }, h('button', { class: 'btn small log-btn', onclick: () => { K.logOpen = c.id; renderCamps(); $('#camps .log-contact')?.focus(); } }, `+ Log ${methods.length ? methods.map((m) => (/^[aeiou]/i.test(m) ? 'an ' : 'a ') + m.toLowerCase()).join(' or ') : 'an attempt'}`), list);
-    const contact = h('input', { class: 'log-contact', placeholder: 'Who? (business, person, area)', 'aria-label': 'Who you reached' });
+    const lists = listsOf(c.id);
+    const pl = K.pick && lists.find((l) => l.id === K.pick.listId);
+    const picked = pl && pl.rows.find((r) => r.id === K.pick.rowId);
+    if (!picked) K.pick = null;
+    const contact = h('input', { class: 'log-contact', placeholder: lists.length ? 'Who? Search your list, or type a name' : 'Who? (business, person, area)', 'aria-label': 'Who you reached' });
     const note = h('input', { class: 'log-note', placeholder: 'Note (optional)', 'aria-label': 'Note' });
+    // Prospects matching what's typed; with nothing typed, the next few not yet contacted.
+    const sugg = h('div', { class: 'log-sugg hidden' });
+    const suggest = () => {
+      const needle = contact.value.trim().toLowerCase();
+      const hits = [];
+      for (const l of lists) {
+        const f = listFields(l), st = rowStatus(l);
+        for (const r of l.rows) {
+          if (needle ? r.cells.some((x) => x.toLowerCase().includes(needle)) : !st.has(r.id)) hits.push({ l, r, f, x: st.get(r.id) });
+          if (hits.length >= 40) break;
+        }
+      }
+      hits.sort((a, b) => !!a.x - !!b.x);
+      sugg.replaceChildren(
+        h('small', { class: 'log-sugg-h' }, needle ? (hits.length ? 'From your lists' : 'Not on your lists') : 'Up next'),
+        ...hits.slice(0, 6).map(({ l, r, f, x }) => h('button', {
+          onpointerdown: (e) => { e.preventDefault(); K.pick = { listId: l.id, rowId: r.id }; contact.blur(); renderCamps(); $('#camps .log-note')?.focus(); },
+        }, h('b', {}, f.who(r)), h('small', {}, [r.cells[f.phone], r.cells[f.email]].filter(Boolean).join(' · ')), x ? h('span', { class: 'oc oc-' + c.outcomes.indexOf(x.outcome) }, x.outcome) : null)));
+      sugg.classList.toggle('hidden', !lists.length || (!hits.length && !needle));
+    };
+    contact.addEventListener('input', suggest);
+    contact.addEventListener('focus', suggest);
+    contact.addEventListener('blur', () => sugg.classList.add('hidden'));
+    contact.addEventListener('keydown', (e) => { if (e.key === 'Escape') sugg.classList.add('hidden'); });
+    const f = picked && listFields(pl);
+    const who = picked
+      ? h('div', { class: 'log-row log-picked' },
+          h('div', { class: 'crow-who' }, h('b', {}, f.who(picked)), h('small', {}, reachLinks(f, picked))),
+          h('button', { class: 't-btn', 'aria-label': 'Pick someone else', html: I.close, onclick: () => { K.pick = null; renderCamps(); $('#camps .log-contact')?.focus(); } }))
+      : h('div', { class: 'log-row' }, contact, h('button', { class: 't-btn', 'aria-label': 'Close', html: I.close, onclick: () => { K.logOpen = null; renderCamps(); } }));
     const log = async (outcome) => {
       try {
-        const x = await api('POST', '/attempts', { campaignId: c.id, method: K.method, outcome, contact: contact.value, note: note.value });
+        const x = await api('POST', '/attempts', { campaignId: c.id, method: K.method, outcome, contact: picked ? f.who(picked) : contact.value, note: note.value, ...(picked ? K.pick : {}) });
         if (!S.attempts.some((y) => y.id === x.id)) S.attempts.push(x);
         contact.value = note.value = '';
+        K.pick = null;
         toast(`Logged · ${outcome}`);
         renderCamps();
         $('#camps .log-contact')?.focus();
@@ -2751,7 +3091,7 @@
     };
     return h('div', { class: 'logbox open' },
       methods.length > 1 ? h('div', { class: 'seg log-methods' }, methods.map((m) => h('button', { class: m === K.method ? 'on' : '', onclick: () => { K.method = m; renderCamps(); $('#camps .log-contact')?.focus(); } }, m))) : null,
-      h('div', { class: 'log-row' }, contact, h('button', { class: 't-btn', 'aria-label': 'Close', html: I.close, onclick: () => { K.logOpen = null; renderCamps(); } })),
+      h('div', { class: 'log-who' }, who, picked ? null : sugg),
       note,
       h('div', { class: 'log-outcomes' }, c.outcomes.map((o, i) => h('button', { class: 'oc oc-' + i, onclick: () => log(o) }, o))),
       list);
