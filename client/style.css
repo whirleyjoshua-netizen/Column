@@ -244,6 +244,16 @@ body.platform-darwin .bar { padding-left: 76px; }
 .preview audio { width: 100%; max-width: 420px; }
 .preview .pv-bar { color: #fff; display: flex; gap: 8px; align-items: center; max-width: 100%; }
 .preview .pv-bar span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.preview .docx { background: var(--panel); color: var(--text); padding: 18px 22px; border-radius: 10px; width: 100%; max-width: 820px; max-height: calc(100% - 60px); box-sizing: border-box; overflow: auto; font-size: 14px; line-height: 1.55; white-space: pre-wrap; user-select: text; -webkit-user-select: text; }
+.preview .docx > :first-child { margin-top: 0; }
+.preview .docx p { margin: 0 0 0.5em; }
+.preview .docx h1, .preview .docx h2 { font-size: 1.35em; margin: 0.8em 0 0.4em; }
+.preview .docx h3, .preview .docx h4, .preview .docx h5, .preview .docx h6 { font-size: 1.1em; margin: 0.7em 0 0.3em; }
+.preview .docx ul, .preview .docx ol { margin: 0 0 0.6em; padding-left: 1.6em; white-space: normal; }
+.preview .docx table { border-collapse: collapse; margin: 0 0 0.8em; white-space: normal; }
+.preview .docx td { border: 1px solid var(--line); padding: 5px 8px; vertical-align: top; }
+.preview .docx td p { margin: 0; }
+.preview .docx a { color: var(--accent); }
 .preview .close { position: absolute; top: 10px; right: 10px; color: #fff; }
 .preview .flist { background: var(--panel); border-radius: 10px; width: 100%; max-width: 480px; max-height: calc(100% - 60px); overflow: auto; padding: 6px; }
 .preview .flist a { display: flex; justify-content: space-between; gap: 10px; padding: 6px 8px; border-radius: 6px; color: var(--text); text-decoration: none; }
@@ -700,6 +710,15 @@ button.oc:hover { background: color-mix(in srgb, var(--oc) 30%, transparent); }
 .camps.dropping { outline: 2px dashed var(--accent); outline-offset: -4px; background: var(--accent-soft); }
 .clist-name { background: none; border: 0; padding: 0; text-align: left; color: inherit; font-weight: 700; cursor: pointer; }
 .clist .link { margin-top: 2px; }
+.clist > .goal-top { cursor: grab; }
+.clist > .goal-top:active { cursor: grabbing; }
+.list-drag .goal:not(.clist) { outline: 1px dashed var(--accent); outline-offset: -1px; }
+.goal.list-over { outline: 2px solid var(--accent); background: var(--accent-soft); }
+.list-chip { flex: none; display: inline-flex; align-items: center; gap: 3px; border: 0; border-radius: 99px; padding: 2px 7px; font-size: 10.5px; font-weight: 600; font-variant-numeric: tabular-nums; background: var(--accent-soft); color: var(--accent); cursor: pointer; }
+.list-chip span { display: inline-grid; }
+.list-chip svg { width: 11px; height: 11px; }
+.list-chip.full { background: color-mix(in srgb, var(--muted) 15%, transparent); color: var(--muted); }
+.task-list { margin: 2px 2px 8px 26px; padding-left: 8px; border-left: 2px solid var(--line); }
 .clist-seg { margin: 4px 0 6px; }
 .clist-seg button { padding: 3px; font-size: 12px; }
 .clist-q { margin: 0 0 6px; }
@@ -720,18 +739,18 @@ button.oc:hover { background: color-mix(in srgb, var(--oc) 30%, transparent); }
 .log-sugg button:hover { background: var(--card-hover); }
 .log-sugg button small { flex: 1; min-width: 0; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .log-sugg .oc { font-size: 10.5px; padding: 1px 7px; }
-.camp-files { display: flex; flex-direction: column; gap: 2px; margin-bottom: 14px; }
-.camp-files .add-goal { margin-top: 4px; padding: 7px; }
-.cfile { display: flex; align-items: center; gap: 4px; border-radius: 8px; }
-.cfile:hover { background: var(--card-hover); }
-.cfile-open { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; background: none; border: 0; padding: 5px 6px; text-align: left; color: inherit; font-size: 12.5px; }
-.cfile .t-btn { opacity: 1; }
-.cfile-ext { flex: none; min-width: 34px; text-align: center; font-size: 9.5px; font-weight: 700; color: var(--accent); background: var(--accent-soft); border-radius: 5px; padding: 3px 4px; }
-.cfile-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.cfile small { flex: none; color: var(--muted); font-size: 11px; }
+.mfile { display: flex; align-items: center; gap: 8px; max-width: 280px; }
+.mfile-ext { flex: none; min-width: 34px; text-align: center; font-size: 9.5px; font-weight: 700; color: var(--accent); background: var(--accent-soft); border-radius: 5px; padding: 3px 4px; }
+.mfile-when { flex: none; margin-left: auto; color: var(--muted); font-size: 11px; }
+.note-win { position: fixed; z-index: 55; right: 16px; bottom: 16px; width: min(380px, calc(100vw - 32px)); background: var(--panel); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 14px 40px rgba(0, 0, 0, 0.4); display: flex; flex-direction: column; animation: pop 0.15s; }
+.note-top { display: flex; align-items: center; gap: 8px; padding: 6px 6px 6px 12px; border-bottom: 1px solid var(--line); font-size: 12.5px; }
+.note-camp { flex: 1; min-width: 0; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.note-status { flex: none; color: var(--muted); font-size: 11px; }
+.note-ta { min-height: 180px; height: 220px; resize: vertical; border: 0; background: none; padding: 10px 12px; font: inherit; font-size: 13px; line-height: 1.45; color: inherit; outline: none; }
+.mfile-name { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .preview .pv-edit { width: 100%; max-width: 900px; flex: 1; min-height: 0; box-sizing: border-box; background: var(--panel); color: var(--text); padding: 14px; border-radius: 10px; font-family: var(--mono); font-size: 12px; resize: none; }
 
 /* a file popped out into its own window */
 body.viewer .preview { background: var(--bg); padding: 12px; animation: none; }
 body.viewer .preview .pv-bar { color: var(--text); }
-body.viewer .preview pre, body.viewer .preview .pv-edit { flex: 1; width: 100%; max-width: 900px; max-height: none; font-size: 14px; line-height: 1.55; }
+body.viewer .preview pre, body.viewer .preview .pv-edit, body.viewer .preview .docx { flex: 1; width: 100%; max-width: 900px; max-height: none; font-size: 14px; line-height: 1.55; }

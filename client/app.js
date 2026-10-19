@@ -126,6 +126,7 @@
     if (/^video\/(mp4|webm|quicktime)$/.test(m)) return 'video';
     if (m.startsWith('audio/')) return 'audio';
     if (m === 'application/pdf') return 'pdf';
+    if (ext(it.name) === 'DOCX' || m === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') return 'docx';
     if (m.startsWith('text/') || /^(json|js|ts|css|html|md|csv|tsv|txt|log|py|sh|yml|yaml|xml)$/i.test(ext(it.name))) return 'textfile';
     return 'file';
   }
@@ -1255,6 +1256,12 @@
     else if (k === 'audio') pv.append(h('div', { style: 'color:#fff;font-size:15px' }, it.name), h('audio', { src: fileUrl(it), controls: true, autoplay: true }));
     else if (k === 'pdf') pv.append(h('iframe', { src: fileUrl(it) }));
     else if (k === 'text') pv.append(h('pre', { html: linkify(it.text) }));
+    else if (k === 'docx') {
+      const box = h('div', { class: 'docx' }, 'Loading…');
+      pv.append(box);
+      fetch(fileUrl(it)).then((r) => r.arrayBuffer()).then(renderDocx).then((doc) => box.replaceChildren(...doc.childNodes))
+        .catch(() => box.replaceChildren('Couldn’t read this document. Download it to open it in Word.'));
+    }
     else if (k === 'textfile') {
       const pre = h('pre', {}, 'Loading…');
       pv.append(pre);
@@ -1294,6 +1301,89 @@
       pv.classList.remove('hidden');
     }
   }
+  // A Word document as readable HTML: paragraphs, headings, bold/italic/underline, lists, tables and links.
+  // Read only. It's built from elements, never from the file's own markup, so a document can't run anything.
+  async function renderDocx(buf) {
+    const z = unzip(buf);
+    const read = async (name) => (z[name] ? new DOMParser().parseFromString(await z[name](), 'application/xml') : null);
+    const [doc, rels, numbering] = await Promise.all([read('word/document.xml'), read('word/_rels/document.xml.rels'), read('word/numbering.xml')]);
+    const body = doc?.getElementsByTagNameNS('*', 'body')[0];
+    if (!body) throw new Error('Not a Word document');
+    const kids = (el, tag) => (el ? [...el.children].filter((c) => c.localName === tag) : []);
+    const val = (el) => el?.getAttribute('w:val') ?? null;
+    const all = (doc, tag) => (doc ? [...doc.getElementsByTagNameNS('*', tag)] : []);
+    const links = new Map(all(rels, 'Relationship').map((r) => [r.getAttribute('Id'), r.getAttribute('Target')]));
+    // Bullet or numbered: numId → its abstract numbering → that level's format.
+    const listFmt = (numId, lvl) => {
+      const abs = val(kids(all(numbering, 'num').find((n) => n.getAttribute('w:numId') === numId), 'abstractNumId')[0]);
+      const def = all(numbering, 'abstractNum').find((a) => a.getAttribute('w:abstractNumId') === abs);
+      return val(kids(kids(def, 'lvl').find((l) => l.getAttribute('w:ilvl') === String(lvl)), 'numFmt')[0]);
+    };
+    const on = (rPr, tag) => {
+      const e = kids(rPr, tag)[0];
+      return !!e && !/^(0|false|none)$/.test(val(e) || '');
+    };
+    const runs = (el, out) => {
+      for (const c of el.children) {
+        if (c.localName === 'r') {
+          let node = document.createDocumentFragment();
+          for (const x of c.children) {
+            if (x.localName === 't') node.append(x.textContent);
+            else if (x.localName === 'tab') node.append('\t');
+            else if (x.localName === 'br' || x.localName === 'cr') node.append(h('br'));
+          }
+          const rPr = kids(c, 'rPr')[0];
+          for (const [tag, wrap] of [['b', 'b'], ['i', 'i'], ['u', 'u'], ['strike', 's']]) if (on(rPr, tag)) node = h(wrap, {}, node);
+          out.append(node);
+        } else if (c.localName === 'hyperlink') {
+          const href = links.get(c.getAttribute('r:id')) || '';
+          const a = /^(https?:|mailto:|tel:)/i.test(href) ? h('a', { href, target: '_blank', rel: 'noopener' }) : h('span');
+          runs(c, a);
+          out.append(a);
+        } else if (['ins', 'smartTag', 'fldSimple', 'sdt', 'sdtContent'].includes(c.localName)) runs(c, out);
+      }
+    };
+    const blocks = (parent, into) => {
+      let list = null;
+      for (const c of parent.children) {
+        if (c.localName === 'p') {
+          const pPr = kids(c, 'pPr')[0];
+          const head = /^(Title|Heading([1-6]))$/i.exec(val(kids(pPr, 'pStyle')[0]) || '');
+          const el = h(head ? (head[2] ? 'h' + Math.min(6, +head[2] + 1) : 'h1') : 'p');
+          const align = val(kids(pPr, 'jc')[0]);
+          if (align === 'center' || align === 'right') el.style.textAlign = align;
+          runs(c, el);
+          const num = kids(pPr, 'numPr')[0];
+          if (num) {
+            const lvl = Number(val(kids(num, 'ilvl')[0])) || 0;
+            const ordered = listFmt(val(kids(num, 'numId')[0]), lvl) !== 'bullet';
+            if (!list || list.ordered !== ordered) into.append((list = { ordered, el: h(ordered ? 'ol' : 'ul') }).el);
+            const li = h('li', {}, ...el.childNodes);
+            if (lvl) li.style.marginLeft = lvl * 1.5 + 'em';
+            list.el.append(li);
+            continue;
+          }
+          list = null;
+          // An empty paragraph is a blank line.
+          into.append(el.childNodes.length ? el : h('p', {}, h('br')));
+        } else if (c.localName === 'tbl') {
+          list = null;
+          into.append(h('table', {}, kids(c, 'tr').map((tr) => h('tr', {}, kids(tr, 'tc').map((tc) => {
+            const td = h('td');
+            blocks(tc, td);
+            return td;
+          })))));
+        } else if (c.localName === 'sdt') {
+          list = null;
+          blocks(kids(c, 'sdtContent')[0] || c, into);
+        }
+      }
+    };
+    const out = h('div');
+    blocks(body, out);
+    return out;
+  }
+
   // Edit a text file in place. If it's a campaign's call list, the list follows the edit.
   function editText(it, pre, txt) {
     const ta = h('textarea', { class: 'pv-edit', spellcheck: 'false' });
@@ -2192,6 +2282,17 @@
     const g = goalById(t.goalId);
     const camp = g && campById(g.campaignId);
     const pr = t.priority || 0;
+    const list = listOfTask(t);
+    const reached = list && list.rows.filter((r) => rowStatus(list).has(r.id)).length;
+    const openList = () => {
+      const key = 'task:' + t.id;
+      if (inCampaign) {
+        K.listOpen = K.listOpen === key ? null : key;
+        return renderCamps();
+      }
+      K.listOpen = key;
+      openCampaign(camp.id);
+    };
     return h('div', { class: 'any-row task-row' + (t.done ? ' done' : ''),
       onpointerdown: (ev) => !t.done && dragToTimeline(ev, t.text, (k, m) => scheduleTask(t, k, m)) },
       h('button', {
@@ -2206,6 +2307,8 @@
         t.repeat ? h('span', { class: 'rep', html: I.repeat }) : null, dueLabel(t.due)) : null,
       slot ? h('button', { class: 'slot', title: 'Show on schedule', onclick: () => { D.sub = 'schedule'; store.set('daySub', 'schedule'); setTab('day'); goDay(slot.e.date); } },
         slot.label + (slot.more ? ` +${slot.more}` : '')) : null,
+      list ? h('button', { class: 'list-chip' + (reached === list.rows.length ? ' full' : ''), title: `${list.name}: ${reached} of ${list.rows.length} contacted · click to open`, onclick: (ev) => { ev.stopPropagation(); openList(); } },
+        h('span', { html: I.menu }), `${reached}/${list.rows.length}`) : null,
       camp && !inCampaign ? h('button', { class: 'camp-chip c-' + camp.color, title: `${camp.name} · ${g.title}`, onclick: () => openCampaign(camp.id) }, camp.name) : null,
       t.assigneeId ? avatar(t.assigneeId) : null,
       t.done ? null : btn(I.clock, 'Put on schedule', () => openSheet({ text: t.text, taskId: t.id, date: t.due && D.sub === 'tasks' ? t.due : D.date })),
@@ -2562,11 +2665,14 @@
   }, 30_000);
 
   // ---------- campaigns: campaign → goals → tasks, with logged attempts ----------
-  const K = { open: store.get('campOpen', null), mine: store.get('campsMine', false), logOpen: null, showAll: {}, stale: false, pick: null, listOpen: null, listShow: {}, listN: {} };
+  const K = { open: store.get('campOpen', null), mine: store.get('campsMine', false), logOpen: null, showAll: {}, stale: false, pick: null, listOpen: null, listShow: {}, listN: {}, dragList: null };
   const campById = (id) => id && S.campaigns?.find((c) => c.id === id);
   const goalById = (id) => id && S.goals?.find((g) => g.id === id);
   const goalsOf = (cid) => S.goals.filter((g) => g.campaignId === cid).sort((a, b) => (a.order || 0) - (b.order || 0) || a.createdAt - b.createdAt);
   const tasksOf = (gid) => S.tasks.filter((t) => t.goalId === gid);
+  const listOfTask = (t) => t.listId && S.lists.find((l) => l.id === t.listId);
+  // A list dragged onto a goal lives there, under its task, until the task is deleted.
+  const onGoal = (l) => S.tasks.some((t) => t.listId === l.id && goalById(t.goalId)?.campaignId === l.campaignId);
   const attemptsIn = (cid) => S.attempts.filter((x) => x.campaignId === cid).sort((a, b) => b.at - a.at);
   // Count goals count the campaign's log, filtered by outcome and method.
   const countsFor = (g, x) => (!g.counts?.length || g.counts.includes(x.outcome)) && (!g.methods?.length || g.methods.includes(x.method));
@@ -2744,7 +2850,9 @@
     const goals = goalsOf(c.id);
     const ch = S.workspace.channels.find((x) => x.id === c.channelId);
     const st = S.workspace.stacks.find((x) => x.id === c.stackId);
-    const files = st ? stackCount(st.id) : 0;
+    const files = S.items.filter((it) => it.stackId === c.stackId && (it.type === 'file' || it.type === 'folder')).length;
+    const notes = notesOf(c).length;
+    const lists = listsOf(c.id).filter((l) => !onGoal(l));
     const who = c.private ? [...new Set([c.ownerId, ...c.memberIds, c.assigneeId].filter(Boolean))] : null;
     const brief = h('div', { class: 'camp-brief' + (c.brief ? '' : ' empty'), title: 'Click to edit', html: c.brief ? linkify(c.brief) : 'Add a brief: the goal, who it’s for, how you’ll know it worked…' });
     brief.addEventListener('click', (e) => {
@@ -2776,13 +2884,13 @@
       brief,
       h('div', { class: 'camp-links' },
         ch ? h('button', { class: 'btn small', onclick: () => { setTab('chat'); openChannel('ch:' + ch.id); } }, '# ' + ch.name) : null,
-        st ? h('button', { class: 'btn small', onclick: () => showStack(st.id) }, `Files · ${files}`) : null,
+        st ? h('button', { class: 'btn small', title: 'Open a file, add one, or go to the stack', onclick: (e) => filesMenu(e.currentTarget, c) }, `Files · ${files} ▾`) : null,
+        st ? h('button', { class: 'btn small', title: 'Jot a quick note, or open one', onclick: (e) => notesMenu(e.currentTarget, c) }, `Notes · ${notes} ▾`) : null,
         h('button', { class: 'btn small', onclick: () => openReport(c) }, 'Write a report')),
       h('div', { class: 'any-h camp-goals-h' }, 'Log'),
       logBox(c),
-      h('div', { class: 'any-h camp-goals-h' }, 'Lists & files'),
-      listsOf(c.id).map((l) => listCard(c, l)),
-      campFiles(c),
+      lists.length ? h('div', { class: 'any-h camp-goals-h' }, 'Call lists') : null,
+      lists.map((l) => listCard(c, l)),
       h('div', { class: 'any-h camp-goals-h' }, 'Goals'),
       goals.map((g) => goalCard(c, g)),
       h('div', { class: 'goal-btns' },
@@ -2814,8 +2922,27 @@
         g.due ? h('span', { class: 'due' + (g.due < todayKey() && pg.frac < 1 ? ' late' : '') }, dueLabel(g.due)) : null,
         h('button', { class: 't-btn', 'aria-label': 'Goal options', html: I.more, onclick: (e) => goalOptions(e.currentTarget, c, g) })),
       h('div', { class: 'goal-prog' }, bar(pg.frac, c.color), h('span', {}, pg.label)));
-    if (tasks.length) el.append(h('div', { class: 'goal-tasks' }, tasks.map((t) => taskRow(t, { inCampaign: true }))));
+    if (tasks.length) el.append(h('div', { class: 'goal-tasks' }, tasks.flatMap((t) => {
+      const l = listOfTask(t);
+      const close = () => { K.listOpen = null; renderCamps(); };
+      return [taskRow(t, { inCampaign: true }), l && K.listOpen === 'task:' + t.id ? h('div', { class: 'task-list' }, listBody(c, l, close)) : null];
+    }).filter(Boolean)));
     el.append(add);
+    el.addEventListener('dragover', (e) => {
+      if (!K.dragList || K.dragList.campaignId !== c.id) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'link';
+      el.classList.add('list-over');
+    });
+    el.addEventListener('dragleave', (e) => !el.contains(e.relatedTarget) && el.classList.remove('list-over'));
+    el.addEventListener('drop', (e) => {
+      const l = K.dragList;
+      if (!l) return;
+      e.preventDefault();
+      e.stopPropagation();
+      el.classList.remove('list-over');
+      listToGoal(l, g);
+    });
     return el;
   }
 
@@ -2992,21 +3119,39 @@
   }
 
   function listCard(c, l) {
-    const f = listFields(l);
     const st = rowStatus(l);
     const reached = l.rows.filter((r) => st.has(r.id)).length;
     const open = K.listOpen === l.id;
     const toggle = () => { K.listOpen = open ? null : l.id; renderCamps(); };
     const el = h('div', { class: 'goal clist' },
-      h('div', { class: 'goal-top' },
-        h('span', { class: 'goal-ic', html: I.menu }),
+      h('div', { class: 'goal-top', draggable: 'true', title: 'Drag onto a goal to make it a task' },
+        h('span', { class: 'goal-ic grip', html: I.menu }),
         h('button', { class: 'goal-title clist-name', onclick: toggle }, l.name),
         h('button', { class: 't-btn', 'aria-label': 'List options', html: I.more, onclick: (e) => listMenu(e.currentTarget, c, l) })),
       h('div', { class: 'goal-prog' }, bar(reached / l.rows.length, c.color), h('span', {}, `${reached} / ${l.rows.length} contacted`)));
-    if (!open) {
-      el.append(h('button', { class: 'link', onclick: toggle }, `Show ${plural(l.rows.length, 'prospect')}`));
-      return el;
-    }
+    const top = el.firstChild;
+    top.addEventListener('dragstart', (e) => {
+      S.internalDrag = true;
+      K.dragList = l;
+      e.dataTransfer.effectAllowed = 'link';
+      e.dataTransfer.setData('text/plain', l.name);
+      e.dataTransfer.setDragImage(el, 20, 14);
+      $('#camps').classList.add('list-drag');
+    });
+    top.addEventListener('dragend', () => {
+      S.internalDrag = false;
+      K.dragList = null;
+      $('#camps').classList.remove('list-drag');
+      document.querySelectorAll('.goal.list-over').forEach((g) => g.classList.remove('list-over'));
+    });
+    el.append(...(open ? listBody(c, l, toggle) : [h('button', { class: 'link', onclick: toggle }, `Show ${plural(l.rows.length, 'prospect')}`)]));
+    return el;
+  }
+  // The prospects themselves, with To contact / Contacted tabs and a Log button on each.
+  function listBody(c, l, close) {
+    const f = listFields(l);
+    const st = rowStatus(l);
+    const reached = l.rows.filter((r) => st.has(r.id)).length;
     const show = K.listShow[l.id] || 'todo';
     const q = h('input', { class: 'goal-add clist-q', placeholder: 'Search this list', 'aria-label': 'Search this list' });
     const box = h('div', { class: 'clist-rows' });
@@ -3029,18 +3174,32 @@
     q.addEventListener('input', draw);
     const tab = (k, label) => h('button', { class: show === k ? 'on' : '', onclick: () => { K.listShow[l.id] = k; renderCamps(); } }, label);
     draw();
-    el.append(...[
+    return [
       h('div', { class: 'seg clist-seg' }, tab('todo', `To contact · ${l.rows.length - reached}`), tab('done', `Contacted · ${reached}`), tab('all', 'All')),
       l.rows.length > 8 ? q : null,
       box,
-      h('button', { class: 'link', onclick: toggle }, 'Hide list'),
-    ].filter(Boolean));
-    return el;
+      h('button', { class: 'link', onclick: close }, 'Hide list'),
+    ].filter(Boolean);
+  }
+  // Working through a list becomes a task on a goal. The task shows how far through the list you are.
+  async function listToGoal(l, g) {
+    const had = tasksOf(g.id).find((t) => t.listId === l.id);
+    if (had) return toast(`${l.name} is already a task on ${g.title}`);
+    try {
+      const t = await api('POST', '/tasks', { text: `Call ${l.name}`, goalId: g.id, listId: l.id });
+      upsertTask(t);
+      K.listOpen = 'task:' + t.id;
+      renderCamps();
+      toast(`Moved to ${g.title}`);
+    } catch (e) {
+      toast(e.message);
+    }
   }
   function listMenu(anchor, c, l) {
     const file = l.itemId && S.items.find((x) => x.id === l.itemId);
     openMenu(anchor, [
       file ? { label: kind(file) === 'textfile' ? 'Open or edit the file' : 'Open the file', run: () => openPreview(file) } : null,
+      ...(goalsOf(c.id).length ? [{ head: 'Add as a task to' }, ...goalsOf(c.id).map((g) => ({ label: g.title, run: () => listToGoal(l, g) }))] : []),
       { label: 'Remove list (the file and the log stay)', danger: true, run: () => api('DELETE', '/lists/' + l.id).catch((e) => toast(e.message)) },
     ].filter(Boolean));
   }
@@ -3052,18 +3211,78 @@
     $('#camps .log-note')?.focus();
   }
 
-  // The campaign's files: tap to open, text files can be edited there.
-  function campFiles(c) {
-    const files = S.items.filter((it) => it.stackId === c.stackId && (it.type === 'file' || it.type === 'folder')).sort((a, b) => b.createdAt - a.createdAt);
-    return h('div', { class: 'camp-files' },
-      files.slice(0, 6).map((it) => h('div', { class: 'cfile' },
-        h('button', { class: 'cfile-open', onclick: () => openPreview(it) },
-          h('span', { class: 'cfile-ext' }, it.type === 'folder' ? 'DIR' : ext(it.name) || 'FILE'),
-          h('span', { class: 'cfile-name' }, it.name),
-          h('small', {}, `${fmtSize(it.size)} · `, h('span', { 'data-ago': it.editedAt || it.createdAt }, ago(it.editedAt || it.createdAt)))),
-        it.type === 'file' ? h('button', { class: 't-btn', title: 'Open in new window', 'aria-label': `Open ${it.name} in a new window`, html: I.reveal, onclick: () => popOut(it) }) : null)),
-      files.length > 6 ? h('button', { class: 'link', onclick: () => showStack(c.stackId) }, `All ${files.length} files`) : null,
-      h('button', { class: 'add-goal', onclick: () => pickCampaignFiles(c) }, '+ Add a call list or file', h('small', {}, ' · or drop one here')));
+  // Notes are text cards in the campaign's stack, so they sit in the stack next to its files.
+  const notesOf = (c) => S.items.filter((it) => it.stackId === c.stackId && it.type === 'text').sort((a, b) => (b.editedAt || b.createdAt) - (a.editedAt || a.createdAt));
+  const noteTitle = (it) => it.text.trim().split('\n')[0].slice(0, 60) || 'Empty note';
+  function notesMenu(anchor, c) {
+    const notes = notesOf(c);
+    openMenu(anchor, [
+      { label: '+ New note', run: () => noteWin(c) },
+      ...(notes.length ? [{ head: 'Recent notes' }] : []),
+      ...notes.slice(0, 8).map((it) => ({ label: h('span', { class: 'mfile' }, h('span', { class: 'mfile-name' }, noteTitle(it)), h('small', { class: 'mfile-when' }, ago(it.editedAt || it.createdAt))), run: () => noteWin(c, it) })),
+      { label: notes.length > 8 ? `Go to the stack · all ${notes.length} notes` : 'Go to the stack', run: () => showStack(c.stackId) },
+    ]);
+  }
+  // A small window that floats over Column, so you can jot while the list stays in view. It saves as you type.
+  function noteWin(c, it = null) {
+    $('.note-win')?._close();
+    const ta = h('textarea', { class: 'note-ta', placeholder: 'Jot something…', 'aria-label': 'Note' });
+    ta.value = it?.text || '';
+    const status = h('small', { class: 'note-status' }, it ? 'Saved' : '');
+    let saved = ta.value, timer = null, saving = Promise.resolve();
+    const flush = () => {
+      clearTimeout(timer);
+      const text = ta.value;
+      if (text === saved || !text.trim()) return saving;
+      saved = text;
+      status.textContent = 'Saving…';
+      saving = saving.then(async () => {
+        try {
+          it = it ? await api('PATCH', '/items/' + it.id, { text }) : await api('POST', '/items', { type: 'text', text, stackId: c.stackId });
+          if (it?.id) upsert(it);
+          status.textContent = 'Saved';
+        } catch (e) {
+          saved = null;
+          status.textContent = 'Not saved';
+          toast(e.message);
+        }
+      });
+      return saving;
+    };
+    ta.addEventListener('input', () => {
+      status.textContent = '';
+      clearTimeout(timer);
+      timer = setTimeout(flush, 600);
+    });
+    const close = async () => {
+      await flush();
+      win.remove();
+      renderCamps();
+    };
+    ta.addEventListener('keydown', (e) => e.key === 'Escape' && close());
+    const win = h('div', { class: 'note-win', role: 'dialog', 'aria-label': 'Quick note' },
+      h('div', { class: 'note-top' },
+        h('b', {}, 'Note'), h('span', { class: 'note-camp' }, c.name), status,
+        h('button', { class: 'icon-btn', 'aria-label': 'Close note', html: I.close, onclick: close })),
+      ta);
+    win._close = close;
+    document.body.append(win);
+    ta.focus();
+    ta.setSelectionRange(ta.value.length, ta.value.length);
+  }
+
+  // The Files button: the campaign's newest files to open, a way to add one, and the whole stack.
+  function filesMenu(anchor, c) {
+    const files = S.items.filter((it) => it.stackId === c.stackId && (it.type === 'file' || it.type === 'folder')).sort((a, b) => (b.editedAt || b.createdAt) - (a.editedAt || a.createdAt));
+    openMenu(anchor, [
+      ...(files.length ? [{ head: 'Recent files' }] : [{ note: 'No files yet. Drop one on this campaign.' }]),
+      ...files.slice(0, 8).map((it) => ({
+        label: h('span', { class: 'mfile' }, h('span', { class: 'mfile-ext' }, it.type === 'folder' ? 'DIR' : ext(it.name) || 'FILE'), h('span', { class: 'mfile-name' }, it.name)),
+        run: () => (it.type === 'folder' ? showStack(c.stackId) : openPreview(it)),
+      })),
+      { label: '+ Add a call list or file…', run: () => pickCampaignFiles(c) },
+      { label: files.length > 8 ? `Go to the stack · all ${files.length} files` : 'Go to the stack', run: () => showStack(c.stackId) },
+    ]);
   }
 
   // Log one attempt: how (call, email…), who (optional, or picked from a call list), then tap how it went.

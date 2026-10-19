@@ -333,6 +333,11 @@ function applyTask(t, body) {
   }
   if (body.repeat !== undefined) t.repeat = REPEATS.includes(body.repeat) ? body.repeat : null;
   if (body.goalId !== undefined) t.goalId = body.goalId && db.goals[body.goalId]?.wsId === t.wsId ? body.goalId : null;
+  // A call list worked as this task. It has to belong to the goal's campaign.
+  if (body.listId !== undefined || body.goalId !== undefined) {
+    const l = db.lists[body.listId !== undefined ? body.listId : t.listId];
+    t.listId = l && l.campaignId === db.goals[t.goalId]?.campaignId ? l.id : null;
+  }
   if (body.assigneeId !== undefined) t.assigneeId = body.assigneeId && db.workspaces[t.wsId]?.members.some((m) => m.id === body.assigneeId) ? body.assigneeId : null;
   if (body.report !== undefined) t.report = !!body.report;
   if (body.priority !== undefined) t.priority = Math.max(0, Math.min(3, Math.round(Number(body.priority)) || 0));
@@ -1812,7 +1817,8 @@ async function api(req, res, url) {
     if (m === 'PATCH') {
       const body = await readJson(req, 300_000);
       if (body.text !== undefined) {
-        if (it.type !== 'message' || !own) return send(res, 403, { error: 'You can only edit your own messages.' });
+        // Notes (text cards) are shared, like text files. Messages belong to whoever sent them.
+        if (it.type !== 'text' && (it.type !== 'message' || !own)) return send(res, 403, { error: 'You can only edit your own messages.' });
         const t = String(body.text).slice(0, 200_000);
         if (!t.trim()) return send(res, 400, { error: 'Empty' });
         if (t !== it.text) {
