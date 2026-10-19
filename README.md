@@ -66,7 +66,7 @@ Google's verification for the calendar scopes.
 1. *New registration*: "Accounts in any organizational directory and personal Microsoft accounts", redirect URI (Web)
    `http://localhost:4747/oauth/microsoft/callback`.
 2. *Certificates & secrets → New client secret*; copy the value.
-3. *API permissions → Microsoft Graph → Delegated*: `Calendars.ReadWrite`, `User.Read`, `offline_access`.
+3. *API permissions → Microsoft Graph → Delegated*: `Calendars.ReadWrite`, `User.Read`, `offline_access`, and `Mail.Send` for campaign email (only asked for when an owner connects Outlook to send email).
 4. Start the server with `MS_CLIENT_ID=… MS_CLIENT_SECRET=…` (optionally `MS_TENANT` to allow only one organization).
 
 Sync pulls 7 days back to 60 days ahead, every 3 minutes (or *Sync now*). Repeating Column entries and multi-day events

@@ -5,18 +5,19 @@
 
 const env = (k) => process.env[k] || '';
 
-async function call(url, { method = 'GET', token, body, form, headers = {} } = {}) {
+async function call(url, { method = 'GET', token, body, form, raw, headers = {} } = {}) {
   const res = await fetch(url, {
     method,
     headers: {
       ...(token ? { Authorization: 'Bearer ' + token } : {}),
       ...(body ? { 'Content-Type': 'application/json' } : {}),
       ...(form ? { 'Content-Type': 'application/x-www-form-urlencoded' } : {}),
+      ...(raw ? { 'Content-Type': 'text/plain' } : {}),
       ...headers,
     },
-    body: body ? JSON.stringify(body) : form ? new URLSearchParams(form) : undefined,
+    body: body ? JSON.stringify(body) : form ? new URLSearchParams(form) : raw,
   });
-  if (res.status === 204 || (method === 'DELETE' && (res.status === 404 || res.status === 410))) return null;
+  if (res.status === 202 || res.status === 204 || (method === 'DELETE' && (res.status === 404 || res.status === 410))) return null;
   const text = await res.text();
   let data = null;
   try {
@@ -84,22 +85,32 @@ const google = {
   },
 };
 
-const GRAPH = 'https://graph.microsoft.com/v1.0';
+// MS_GRAPH points Column at a stand-in for Microsoft Graph when testing.
+const GRAPH = env('MS_GRAPH') || 'https://graph.microsoft.com/v1.0';
 const MS_SCOPE = 'offline_access openid email User.Read Calendars.ReadWrite';
+// Sending email is asked for only when someone connects Outlook to send campaign emails.
+const MS_MAIL_SCOPE = MS_SCOPE + ' Mail.Send';
 const msTenant = () => env('MS_TENANT') || 'common';
 const microsoft = {
   name: 'Outlook',
   configured: () => !!(env('MS_CLIENT_ID') && env('MS_CLIENT_SECRET')),
-  authUrl: (redirect, state) => `https://login.microsoftonline.com/${msTenant()}/oauth2/v2.0/authorize?` + new URLSearchParams({
-    client_id: env('MS_CLIENT_ID'), redirect_uri: redirect, response_type: 'code', response_mode: 'query', state, scope: MS_SCOPE, prompt: 'select_account',
+  authUrl: (redirect, state, mail) => `https://login.microsoftonline.com/${msTenant()}/oauth2/v2.0/authorize?` + new URLSearchParams({
+    client_id: env('MS_CLIENT_ID'), redirect_uri: redirect, response_type: 'code', response_mode: 'query', state, scope: mail ? MS_MAIL_SCOPE : MS_SCOPE, prompt: 'select_account',
   }),
-  async exchange(code, redirect) {
-    const t = await call(`https://login.microsoftonline.com/${msTenant()}/oauth2/v2.0/token`, { method: 'POST', form: { code, redirect_uri: redirect, grant_type: 'authorization_code', client_id: env('MS_CLIENT_ID'), client_secret: env('MS_CLIENT_SECRET'), scope: MS_SCOPE } });
-    return { access: t.access_token, refresh: t.refresh_token, expires: Date.now() + (t.expires_in - 60) * 1000 };
+  // The scope granted is kept, so a refresh asks for the same (with Mail.Send if it was given).
+  async exchange(code, redirect, mail) {
+    const scope = mail ? MS_MAIL_SCOPE : MS_SCOPE;
+    const t = await call(`https://login.microsoftonline.com/${msTenant()}/oauth2/v2.0/token`, { method: 'POST', form: { code, redirect_uri: redirect, grant_type: 'authorization_code', client_id: env('MS_CLIENT_ID'), client_secret: env('MS_CLIENT_SECRET'), scope } });
+    const mailOk = /(^|\s|\/)Mail\.Send(\s|$)/i.test(t.scope || '');
+    return { access: t.access_token, refresh: t.refresh_token, expires: Date.now() + (t.expires_in - 60) * 1000, scope: mailOk ? MS_MAIL_SCOPE : MS_SCOPE, mail: mailOk };
   },
   async refresh(tok) {
-    const t = await call(`https://login.microsoftonline.com/${msTenant()}/oauth2/v2.0/token`, { method: 'POST', form: { refresh_token: tok.refresh, grant_type: 'refresh_token', client_id: env('MS_CLIENT_ID'), client_secret: env('MS_CLIENT_SECRET'), scope: MS_SCOPE } });
-    return { access: t.access_token, refresh: t.refresh_token || tok.refresh, expires: Date.now() + (t.expires_in - 60) * 1000 };
+    const t = await call(`https://login.microsoftonline.com/${msTenant()}/oauth2/v2.0/token`, { method: 'POST', form: { refresh_token: tok.refresh, grant_type: 'refresh_token', client_id: env('MS_CLIENT_ID'), client_secret: env('MS_CLIENT_SECRET'), scope: tok.scope || MS_SCOPE } });
+    return { access: t.access_token, refresh: t.refresh_token || tok.refresh, expires: Date.now() + (t.expires_in - 60) * 1000, scope: tok.scope };
+  },
+  // A whole message as MIME (base64), so headers like List-Unsubscribe go out as written. Saved to Sent Items.
+  async sendMail(token, mime) {
+    await call(GRAPH + '/me/sendMail', { method: 'POST', token, raw: Buffer.from(mime).toString('base64') });
   },
   async account(token) {
     const me = await call(GRAPH + '/me?$select=mail,userPrincipalName', { token });

@@ -888,3 +888,17 @@ body.viewer .preview pre, body.viewer .preview .pv-edit, body.viewer .preview .d
 .contact-top { display: flex; align-items: baseline; gap: 8px; justify-content: space-between; }
 .contact small { color: var(--muted); overflow-wrap: anywhere; }
 .contact-reach { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+
+/* campaign email */
+.mail-fresh { align-self: end; padding-bottom: 8px; }
+.mail-who { margin: -2px 0 0; }
+.mail-tools { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.mail-preview { white-space: pre-wrap; font: 12px/1.5 inherit; font-family: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px; margin: 0; max-height: 240px; overflow: auto; }
+.sends { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+.send { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; }
+.send.paused { border-color: var(--warn, #c9a227); }
+.send-top { display: flex; align-items: center; gap: 8px; }
+.send-what { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; }
+.send-what small { color: var(--muted); }
+.send-bad { font-size: 12px; }
+.send .t-btn { opacity: 1; }

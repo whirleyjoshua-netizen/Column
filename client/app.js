@@ -392,6 +392,14 @@
       if (!$('#settings').classList.contains('hidden')) loadCalendars();
     } else if (msg.type === 'pss') {
       loadPss();
+    } else if (msg.type === 'mail') {
+      loadPss();
+    } else if (msg.type === 'send' && S.mail) {
+      S.mail.sends = [msg.send, ...S.mail.sends.filter((x) => x.id !== msg.send.id)];
+      renderCamps();
+    } else if (msg.type === 'send:remove' && S.mail) {
+      S.mail.sends = S.mail.sends.filter((x) => x.id !== msg.id);
+      renderCamps();
     } else if (msg.type === 'presence') {
       S.online = msg.devices;
       renderDevices();
@@ -2676,7 +2684,7 @@
   }, 30_000);
 
   // ---------- campaigns: campaign → goals → tasks, with logged attempts ----------
-  const K = { open: store.get('campOpen', null), mine: store.get('campsMine', false), logOpen: null, showAll: {}, stale: false, pick: null, listOpen: null, listShow: {}, listN: {}, dragList: null, logFrom: {}, book: null, dock: store.get('dock', null), dockSize: store.get('dockSize', 0.45), dockMin: false, refQ: {}, noteDraft: {}, runOpen: null, noteRow: null, answers: {}, askOpen: false, ansOpen: {}, lead: null };
+  const K = { open: store.get('campOpen', null), mine: store.get('campsMine', false), logOpen: null, showAll: {}, stale: false, pick: null, listOpen: null, listShow: {}, listN: {}, dragList: null, logFrom: {}, book: null, dock: store.get('dock', null), dockSize: store.get('dockSize', 0.45), dockMin: false, refQ: {}, noteDraft: {}, runOpen: null, noteRow: null, answers: {}, askOpen: false, ansOpen: {}, lead: null, mailDraft: {}, sendHide: new Set(store.get('sendHide', [])) };
   const campById = (id) => id && S.campaigns?.find((c) => c.id === id);
   const goalById = (id) => id && S.goals?.find((g) => g.id === id);
   const goalsOf = (cid) => S.goals.filter((g) => g.campaignId === cid).sort((a, b) => (a.order || 0) - (b.order || 0) || a.createdAt - b.createdAt);
@@ -2899,7 +2907,9 @@
         st ? h('button', { class: 'btn small', title: 'Open a file, add one, or go to the stack', onclick: (e) => filesMenu(e.currentTarget, c) }, `Files · ${files} ▾`) : null,
         st ? h('button', { class: 'btn small', title: 'Jot a quick note, or open one', onclick: (e) => notesMenu(e.currentTarget, c) }, `Notes · ${notes} ▾`) : null,
         h('button', { class: 'btn small' + (K.logOpen === c.id ? ' on' : ''), onclick: () => openLog(c) }, 'Log'),
+        S.mail ? h('button', { class: 'btn small', title: 'Email everyone on a list, each person separately', onclick: () => emailSheet(c) }, 'Email') : null,
         h('button', { class: 'btn small', onclick: () => openReport(c) }, 'Write a report')),
+      sendBars(c),
       h('div', { class: 'any-h camp-goals-h' }, 'Log'),
       logBox(c),
       lists.length ? h('div', { class: 'any-h camp-goals-h' }, 'Lists & docs') : null,
@@ -3076,6 +3086,11 @@
     const phone = pc >= 0 ? pc : byValue(isPhone), email = ec >= 0 ? ec : byValue((v) => EMAIL_RE.test(v));
     return {
       phone, email,
+      // A first name to greet them by, or '' when there's only a business.
+      first: (r) => {
+        const w = String((first >= 0 ? r.cells[first] : name >= 0 ? r.cells[name] : '') || '').trim().split(/\s+/)[0];
+        return /^\p{L}[\p{L}'’-]*$/u.test(w) ? w : '';
+      },
       who: (r) => {
         const person = first >= 0 || last >= 0 ? [r.cells[first], r.cells[last]].filter(Boolean).join(' ') : r.cells[name] || '';
         return [person, r.cells[company]].filter(Boolean).join(' · ') || r.cells.find((x, i) => x && i !== phone && i !== email) || r.cells.find(Boolean) || '—';
@@ -3836,6 +3851,7 @@
       file ? { label: 'Use as…', run: () => useSheet(c, file) } : null,
       k === 'tracker' ? { label: 'Edit stages…', run: () => stagesSheet(l) } : null,
       l.live && S.pss?.connected ? { label: 'Change who’s on it…', run: () => liveSheet(c, l) } : null,
+      S.mail && k === 'calls' && listFields(l).email >= 0 ? { label: 'Email this list…', run: () => emailSheet(c, l) } : null,
       ...(draggableKind(l) && goalsOf(c.id).length ? [{ head: k === 'checklist' ? 'Run it as a task on' : 'Add as a task to' }, ...goalsOf(c.id).map((g) => ({ label: g.title, run: () => listToGoal(l, g) }))] : []),
       { label: file ? 'Remove (the file stays)' : 'Remove', danger: true, run: () => api('DELETE', '/lists/' + l.id).catch((e) => toast(e.message)) },
     ].filter(Boolean));
@@ -4968,12 +4984,14 @@
   const stageLabel = (s) => { const t = String(s || '').replace(/_/g, ' '); return t.charAt(0).toUpperCase() + t.slice(1); };
   async function loadPss() {
     if (!S.workspace || !amOwner()) {
-      S.pss = S.contacts = null;
+      S.pss = S.contacts = S.mail = null;
       return;
     }
     try {
       S.pss = await api('GET', '/pss');
       S.contacts = S.pss.connected ? (await api('GET', '/pss/contacts')).leads : null;
+      S.mail = S.pss.connected ? await api('GET', '/mail') : null;
+      renderCamps();
     } catch {
       return;
     }
@@ -5101,6 +5119,135 @@
       renderCamps();
       if (!l) toast(`Added ${x.name} · ${x.rows.length} lead${x.rows.length === 1 ? '' : 's'}`);
     }, l ? 'Save' : 'Add to campaign');
+  }
+
+  // ----- campaign email: each person gets their own, from your Outlook -----
+  const MAIL_RE = /^[^\s@<>",;]+@[^\s@<>",;]+\.[a-z]{2,}$/i;
+  // Who on a list gets it, and who doesn't and why. The server checks it all again.
+  function mailPeople(l, fresh) {
+    const f = listFields(l), st = rowStatus(l);
+    const no = new Set((S.contacts || []).filter((x) => x.dne).map((x) => x.email.toLowerCase()));
+    const out = { to: [], none: 0, unsub: 0, dup: 0, done: 0 };
+    const seen = new Set();
+    for (const r of l.rows) {
+      const email = String(r.cells[f.email] || '').trim().toLowerCase();
+      if (!MAIL_RE.test(email)) out.none++;
+      else if (seen.has(email)) out.dup++;
+      else if (seen.add(email) && (r.dne || no.has(email))) out.unsub++;
+      else if (fresh && st.has(r.id)) out.done++;
+      else out.to.push({ rowId: r.id, email, name: f.who(r) === '—' ? '' : f.who(r), first: f.first(r) });
+    }
+    return out;
+  }
+  const mergeText = (t, r) => t.replace(/\{\s*first\s*name\s*\}/gi, r?.first || 'there').replace(/\{\s*name\s*\}/gi, r?.name || 'there');
+  function emailSheet(c, l0) {
+    const m = S.mail;
+    if (!m) return;
+    const lists = listsOf(c.id).filter((l) => kindOf(l) === 'calls' && listFields(l).email >= 0);
+    if (!m.from) {
+      const go = h('button', { class: 'btn primary-btn' }, 'Connect Outlook');
+      go.addEventListener('click', async () => {
+        try {
+          const { url } = await api('POST', '/calendars/connect', { provider: 'microsoft', tz: myTz(), mail: true });
+          window.open(url, '_blank');
+          toast('Finish signing in in your browser, then press Email again.');
+          closeSheet();
+        } catch (e) {
+          toast(e.message);
+        }
+      });
+      return sheet('Email from Outlook', [
+        h('p', { class: 'day-hint' }, 'Campaign emails go out from your own Outlook, so replies land in your inbox and they show in your Sent folder. Connect it once and allow Column to send email for you.'),
+        m.canConnect ? go : h('p', { class: 'day-hint' }, 'Outlook sign-in isn’t set up on this server yet. See “Calendars” in the README.'),
+      ], () => {}, 'Close');
+    }
+    if (!lists.length) return toast('Add a call list with email addresses to this campaign first.');
+    const draft = (K.mailDraft[c.id] ||= { listId: (l0 || lists[0]).id, subject: '', body: '', fresh: false });
+    if (l0) draft.listId = l0.id;
+    if (!lists.some((l) => l.id === draft.listId)) draft.listId = lists[0].id;
+    const pick = h('select', { 'aria-label': 'List' }, lists.map((l) => h('option', { value: l.id, selected: l.id === draft.listId }, l.name)));
+    const fresh = h('input', { type: 'checkbox', checked: draft.fresh });
+    const who = h('p', { class: 'day-hint mail-who' });
+    const subject = h('input', { value: draft.subject, placeholder: 'Subject', 'aria-label': 'Subject', maxlength: 200 });
+    const body = h('textarea', { rows: 8, placeholder: 'Hi {first name},\n\n…', 'aria-label': 'Message' });
+    body.value = draft.body;
+    const footer = h('textarea', { rows: 2, placeholder: 'Premier Shade Solutions\n123 Main St, Henderson, NV 89002', 'aria-label': 'Footer' });
+    footer.value = m.footer || '';
+    const preview = h('pre', { class: 'mail-preview hidden' });
+    const people = () => mailPeople(lists.find((l) => l.id === pick.value), fresh.checked);
+    let armed = false;
+    const update = () => {
+      Object.assign(draft, { listId: pick.value, subject: subject.value, body: body.value, fresh: fresh.checked });
+      const p = people();
+      const skip = [p.unsub && `${p.unsub} unsubscribed`, p.none && `${p.none} without an email`, p.dup && `${p.dup} repeated`, p.done && `${p.done} already contacted`].filter(Boolean);
+      who.textContent = `${p.to.length} ${p.to.length === 1 ? 'person' : 'people'}` + (skip.length ? ` · leaving out ${skip.join(', ')}` : '');
+      const r = p.to[0];
+      preview.textContent = `To: ${r ? (r.name ? `${r.name} <${r.email}>` : r.email) : '—'}\nSubject: ${mergeText(subject.value, r)}\n\n${mergeText(body.value, r).trim()}\n\n--\n${footer.value.trim() || '(your business and mailing address)'}\nDon’t want these emails? Unsubscribe: (their own link)`;
+      const btn = $('#sheet .btns .primary-btn');
+      if (btn) btn.textContent = armed ? `Yes, send ${p.to.length} now` : `Send to ${p.to.length}`;
+    };
+    for (const el of [pick, fresh, subject, body, footer]) el.addEventListener(el.tagName === 'SELECT' || el.type === 'checkbox' ? 'change' : 'input', () => { armed = false; update(); });
+    const payload = () => ({ subject: subject.value, body: body.value, footer: footer.value });
+    const test = h('button', { class: 'btn small' }, 'Send me a test');
+    test.addEventListener('click', async () => {
+      test.disabled = true;
+      try {
+        const r = await api('POST', '/mail/test', { ...payload(), sample: people().to[0] });
+        S.mail.footer = footer.value.trim();
+        toast(`Test sent to ${r.to}`);
+      } catch (e) {
+        toast(e.message);
+      }
+      test.disabled = false;
+    });
+    sheet('Email a list', [
+      h('p', { class: 'day-hint' }, `From ${m.from}. Each person gets their own email, addressed only to them.`),
+      h('div', { class: 'row2' }, h('label', {}, 'To', pick), h('label', { class: 'pick mail-fresh' }, fresh, 'Only people not contacted yet')),
+      who,
+      h('label', {}, 'Subject', subject),
+      h('label', {}, 'Message', body),
+      h('small', { class: 'day-hint' }, '{first name} becomes each person’s first name, or “there” when the list doesn’t have one.'),
+      h('label', {}, 'Footer: your business and mailing address', footer),
+      h('small', { class: 'day-hint' }, 'Every email ends with this and the person’s own unsubscribe link. Anyone on the PSS do-not-contact list is left out.'),
+      h('div', { class: 'mail-tools' }, h('button', { class: 'link', onclick: () => preview.classList.toggle('hidden') }, 'Preview'), test),
+      preview,
+    ], async () => {
+      const p = people();
+      if (!p.to.length) throw new Error('Nobody on that list can be emailed.');
+      if (!armed) {
+        armed = true;
+        update();
+        throw new Error(`Check it over: ${p.to.length} emails go out from ${m.from}, one every few seconds. Press again to send.`);
+      }
+      const x = await api('POST', '/mail/sends', { campaignId: c.id, listId: pick.value, to: p.to, ...payload() });
+      S.mail.sends = [x, ...S.mail.sends.filter((y) => y.id !== x.id)];
+      S.mail.footer = footer.value.trim();
+      delete K.mailDraft[c.id];
+      renderCamps();
+      toast(`Sending ${x.total} emails`);
+    }, 'Send');
+    update();
+  }
+  // Progress of each email going out from this campaign, and how the last one went.
+  function sendBars(c) {
+    const xs = (S.mail?.sends || []).filter((x) => x.campaignId === c.id && (x.status === 'sending' || x.status === 'paused' || !K.sendHide.has(x.id)) && (x.status === 'sending' || x.status === 'paused' || Date.now() - (x.doneAt || 0) < 7 * 864e5));
+    if (!xs.length) return null;
+    const act = (x, what) => api('POST', `/mail/sends/${x.id}/${what}`).catch((e) => toast(e.message));
+    const hide = (x) => { K.sendHide.add(x.id); store.set('sendHide', [...K.sendHide].slice(-100)); renderCamps(); };
+    return h('div', { class: 'sends' }, xs.slice(0, 3).map((x) => {
+      const n = x.sent + x.failed + x.skipped;
+      const state = x.status === 'sending' ? `${x.sent} of ${x.total} sent` : x.status === 'paused' ? `Paused at ${x.sent} of ${x.total}` : x.status === 'stopped' ? `Stopped · ${x.sent} of ${x.total} sent` : `Sent ${x.sent} of ${x.total}`;
+      const bad = x.failed + x.skipped;
+      return h('div', { class: 'send' + (x.status === 'paused' ? ' paused' : '') },
+        h('div', { class: 'send-top' },
+          h('span', { class: 'send-what' }, h('b', {}, x.subject), h('small', {}, ' · ' + state),
+            bad ? h('button', { class: 'link send-bad', onclick: (e) => openMenu(e.currentTarget, [{ head: 'Not sent' }, ...x.problems.map((y) => ({ note: `${y.name || y.email} · ${y.why || ''}` }))]) }, ` · ${bad} not sent`) : null),
+          x.status === 'sending' ? h('button', { class: 'btn small', onclick: () => act(x, 'stop') }, 'Stop')
+            : x.status === 'paused' ? [h('button', { class: 'btn small primary-btn', onclick: () => act(x, 'resume') }, 'Resume'), h('button', { class: 'btn small', onclick: () => act(x, 'stop') }, 'Stop')]
+            : h('button', { class: 't-btn', 'aria-label': 'Hide', html: I.close, onclick: () => hide(x) })),
+        x.error ? h('small', { class: 'err' }, x.error) : null,
+        x.status === 'sending' || x.status === 'paused' ? bar(n / x.total, c.color) : null);
+    }));
   }
 
   // ----- connected calendars (each person's own) -----
