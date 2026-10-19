@@ -1,6 +1,6 @@
-// The AI providers agents can run on, with each person's own API key: Claude, OpenAI, Gemini.
-// Each provider runs one agent turn as its own tool-use loop and returns the final reply. The thread
-// between turns is plain text, so an agent can switch provider without carrying provider-specific state.
+// The AI providers Column's smart buttons run on, with each person's own API key: Claude, OpenAI, Gemini.
+// Each provider runs one turn as its own tool-use loop and returns the final reply. complete() is the
+// plain case: one prompt in, text out, no tools.
 //
 // run({ key, model, system, history, tools, web, exec, onStep }) -> { text, refused? }
 //   history: [{ role: 'user' | 'assistant', text }], ending with the new user message
@@ -42,7 +42,7 @@ const claude = {
     const messages = history.map((m) => ({ role: m.role, content: m.text }));
     let text = '';
     for (let step = 0; step < MAX_STEPS; step++) {
-      const params = { model, max_tokens: 16000, system, tools: defs, messages, ...(HAS_EFFORT.test(model) ? { output_config: { effort: 'medium' } } : {}) };
+      const params = { model, max_tokens: 16000, system, ...(defs.length ? { tools: defs } : {}), messages, ...(HAS_EFFORT.test(model) ? { output_config: { effort: 'medium' } } : {}) };
       const res = FALLBACK.has(model)
         ? await client.beta.messages.create({ ...params, betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default' })
         : await client.messages.create(params);
@@ -90,7 +90,7 @@ const openai = {
     let prev = null;
     let text = '';
     for (let step = 0; step < MAX_STEPS; step++) {
-      const res = await openaiCall(key, '/responses', { model, instructions: system, input, tools: defs, ...(prev ? { previous_response_id: prev } : {}) });
+      const res = await openaiCall(key, '/responses', { model, instructions: system, input, ...(defs.length ? { tools: defs } : {}), ...(prev ? { previous_response_id: prev } : {}) });
       prev = res.id;
       const said = res.output.filter((o) => o.type === 'message').flatMap((o) => o.content).filter((c) => c.type === 'output_text').map((c) => c.text).join('');
       if (said.trim()) text = said;
@@ -146,7 +146,7 @@ const gemini = {
       const d = await geminiCall(key, `/models/${model}:generateContent`, {
         systemInstruction: { parts: [{ text: system }] },
         contents,
-        tools: [{ functionDeclarations: all.map((t) => ({ name: t.name, description: t.description, parameters: t.parameters })) }],
+        ...(all.length ? { tools: [{ functionDeclarations: all.map((t) => ({ name: t.name, description: t.description, parameters: t.parameters })) }] } : {}),
       });
       const c = d.candidates?.[0];
       if (!c?.content) return { text: text || (c?.finishReason === 'SAFETY' ? 'I can’t help with that one.' : 'No reply.'), refused: c?.finishReason === 'SAFETY' };
@@ -170,13 +170,20 @@ const gemini = {
 
 export const llms = { anthropic: claude, openai, gemini };
 
+// One prompt, one reply.
+export async function complete(provider, { key, model, system, prompt }) {
+  const out = await provider.run({ key, model, system, history: [{ role: 'user', text: prompt }], tools: [], web: false, exec: () => Promise.reject(new Error('No tools')) });
+  if (out.refused) throw new Error(out.text);
+  return out.text;
+}
+
 // A provider's error, worded for the person who owns the key.
 export function llmError(e) {
   const s = e.status;
-  if (s === 401 || s === 403 || e instanceof Anthropic.AuthenticationError || e instanceof Anthropic.PermissionDeniedError) return 'The API key was rejected. Check it in Agents → API keys.';
+  if (s === 401 || s === 403 || e instanceof Anthropic.AuthenticationError || e instanceof Anthropic.PermissionDeniedError) return 'Your AI key was rejected. Check it in Settings → AI.';
   if (s === 429 || e instanceof Anthropic.RateLimitError) return 'The provider is rate limiting this key right now. Try again in a minute.';
-  if (s === 404 || e instanceof Anthropic.NotFoundError) return 'That model isn’t available to this key. Pick another in the agent’s settings.';
+  if (s === 404 || e instanceof Anthropic.NotFoundError) return 'That model isn’t available to your key. Pick another in Settings → AI.';
   if (s === 400 || e instanceof Anthropic.BadRequestError) return 'The provider rejected the request: ' + clip(String(e.message), 300);
   if (e instanceof Anthropic.APIConnectionError) return 'Couldn’t reach the provider.';
-  return 'The agent hit an error: ' + clip(String(e.message || e), 300);
+  return 'The AI request failed: ' + clip(String(e.message || e), 300);
 }

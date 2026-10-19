@@ -379,8 +379,6 @@
     } else if (msg.type === 'resync') {
       // Who can see a private campaign or feed changed.
       loadState().catch(() => {});
-    } else if (msg.type === 'agent') {
-      agentUpdated(msg.agent);
     } else if (msg.type === 'calendars') {
       if (!$('#settings').classList.contains('hidden')) loadCalendars();
     } else if (msg.type === 'presence') {
@@ -1731,9 +1729,7 @@
     $('#panes').classList.toggle('hidden', tab !== 'column');
     $('#chat').classList.toggle('hidden', tab !== 'chat');
     $('#camps').classList.toggle('hidden', tab !== 'camps');
-    $('#agents').classList.toggle('hidden', tab !== 'agents');
     if (tab === 'camps') renderCamps();
-    if (tab === 'agents') renderAgents();
     if (tab === 'day') renderDay();
     if (tab === 'chat') openChannel(C.view);
   }
@@ -2669,7 +2665,7 @@
     });
   }
 
-  // Weekly times: each row is some weekdays at a time. x: { auto, slots, tz }. Used by saved campaigns and agents.
+  // Weekly times: each row is some weekdays at a time. x: { auto, slots, tz }. Used by saved campaigns.
   function slotEditor(x, hint) {
     const auto = h('input', { type: 'checkbox' });
     auto.checked = !!x.auto;
@@ -2747,7 +2743,9 @@
       campFiles(c),
       h('div', { class: 'any-h camp-goals-h' }, 'Goals'),
       goals.map((g) => goalCard(c, g)),
-      h('button', { class: 'add-goal', onclick: () => goalSheet(c) }, '+ Add a goal'));
+      h('div', { class: 'goal-btns' },
+        h('button', { class: 'add-goal', onclick: () => goalSheet(c) }, '+ Add a goal'),
+        h('button', { class: 'add-goal ai-btn', title: 'Draft goals and tasks from the brief', onclick: (e) => suggestPlan(c, e.currentTarget) }, '✨ Suggest from the brief')));
   }
 
   function goalCard(c, g) {
@@ -3323,11 +3321,17 @@
       xs.length && people ? `By: ${people}` : '',
       ...goals,
     ].filter(Boolean);
-    const notes = h('textarea', { rows: 5, placeholder: 'What did you find? What’s working, what isn’t, what’s next?' });
+    const notes = h('textarea', { rows: 6, placeholder: 'What did you find? What’s working, what isn’t, what’s next?' });
+    const draft = h('button', { type: 'button', class: 'btn small ai-btn' }, '✨ Draft from the log');
+    draft.addEventListener('click', async () => {
+      const r = await aiRun(draft, 'report', { campaignId: c.id, since, stats });
+      if (r) notes.value = notes.value.trim() ? `${notes.value.trim()}\n\n${r.text}` : r.text;
+    });
     sheet(`Report · ${c.name}`, [
       task ? h('p', { class: 'day-hint' }, `Finishes “${task.text}”.`) : null,
       h('div', { class: 'report-stats' }, stats.map((l) => h('div', {}, l))),
-      h('label', {}, 'Findings', notes),
+      h('div', { class: 'report-findings-h' }, h('span', {}, 'Findings'), draft),
+      notes,
     ].filter(Boolean), async () => {
       const text = [`📋 Report · ${c.name}`, ...stats, notes.value.trim() ? '\n' + notes.value.trim() : '', linkToken('campaign', c.id)].filter(Boolean).join('\n');
       await api('POST', '/items', { type: 'message', text, channelId: c.channelId });
@@ -3674,6 +3678,12 @@
     if (s.classList.toggle('hidden')) return;
     renderSettings();
   });
+  // Opens Settings at the AI keys, for a smart button that needs one.
+  function openSettings() {
+    $('#settings').classList.remove('hidden');
+    renderSettings();
+    $('#settings .ai-sec')?.scrollIntoView({ block: 'start' });
+  }
 
   function toggleRow(label, hint, checked, onChange) {
     const input = h('input', { type: 'checkbox' });
@@ -3682,266 +3692,107 @@
     return h('div', { class: 'srow' }, h('span', {}, label, hint ? h('small', {}, hint) : null), h('label', { class: 'toggle' }, input, h('i')));
   }
 
-  // ---------- agents: your own, on your own API key ----------
-  const G = { open: store.get('agentOpen', null), view: null };
-  const agentById = (id) => id && G.data?.agents.find((a) => a.id === id);
-  async function loadAgents() {
+  // ---------- AI: smart buttons on your own API key ----------
+  // Drafts for you to check: a report's findings, a campaign plan. Nothing changes until you accept it.
+  async function loadAi() {
     try {
-      G.data = await api('GET', '/agents');
+      S.ai = await api('GET', '/ai');
+    } catch {
+      return;
+    }
+    $('#settings .ai-sec')?.replaceWith(aiSection());
+  }
+  // Runs a smart button: shows it working, and points to Settings when there's no key yet.
+  async function aiRun(btn, path, body) {
+    const label = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'Thinking…';
+    try {
+      return await api('POST', '/ai/' + path, body);
     } catch (e) {
-      toast(e.message);
+      if (/Settings → AI/.test(e.message)) toast(e.message, { label: 'Open Settings', run: () => { closeSheet(); openSettings(); } });
+      else toast(e.message);
+      return null;
+    } finally {
+      btn.disabled = false;
+      btn.textContent = label;
     }
   }
-  function openAgent(id) {
-    G.open = id;
-    store.set('agentOpen', id);
-    G.view = null;
-    if (S.tab !== 'agents') setTab('agents');
-    else renderAgents();
-  }
-  function agentUpdated(a) {
-    if (!G.data) return;
-    const i = G.data.agents.findIndex((x) => x.id === a.id);
-    const was = G.data.agents[i];
-    if (i >= 0) G.data.agents[i] = a;
-    else G.data.agents.push(a);
-    // A routine that ran on its own finished: say so unless it's on screen.
-    const last = a.thread.at(-1);
-    if (was?.status === 'running' && a.status === 'idle' && last?.trigger === 'schedule' && !(S.tab === 'agents' && G.open === a.id && !document.hidden)) {
-      const title = `${a.name} finished`;
-      const body = last.error || (last.actions?.length ? `${plural(last.actions.length, 'change')}. ` : '') + plainText(last.text || '').slice(0, 120);
-      toast(`${title}: ${body}`, { label: 'Show', run: () => openAgent(a.id) });
-      if (S.notify && document.hidden && 'Notification' in window && Notification.permission === 'granted') {
+  function aiSection() {
+    const sec = h('section', { class: 'ai-sec' }, h('h3', {}, 'AI'));
+    const ai = S.ai;
+    if (!ai) {
+      sec.append(h('p', { class: 'day-hint' }, 'Loading…'));
+      return sec;
+    }
+    sec.append(h('p', { class: 'day-hint' }, 'Smart buttons draft campaign reports and plans for you to check. They use your own key from Anthropic (Claude), OpenAI or Google (Gemini), and that provider bills you for what you use. Keys are stored encrypted on your team’s server and never sent back to the app.'));
+    for (const [k, label] of Object.entries(ai.providers)) {
+      const saved = ai.keys[k];
+      const input = h('input', { type: 'password', placeholder: 'Paste your API key', autocomplete: 'off' });
+      const save = h('button', { class: 'btn small primary-btn' }, 'Save');
+      save.addEventListener('click', async () => {
+        save.disabled = true;
+        save.textContent = 'Checking…';
         try {
-          const n = new Notification(title, { body, icon: '/icon-128.png' });
-          n.onclick = () => { window.focus(); openAgent(a.id); };
-        } catch {}
-      }
-    }
-    if (S.tab === 'agents') renderAgents();
-  }
-
-  async function renderAgents() {
-    const root = $('#agents');
-    if (!S.workspace) return;
-    if (!G.data) {
-      root.replaceChildren(h('p', { class: 'day-hint camp-empty' }, 'Loading…'));
-      await loadAgents();
-      if (!G.data) return;
-    }
-    const a = agentById(G.open);
-    if (a && G.view?._id === a.id) return G.view._update(a); // keep what's being typed
-    G.view = a ? agentView(a) : null;
-    root.replaceChildren(G.view || agentList());
-  }
-
-  // Replies use a little markdown: **bold**, lists and links.
-  const agentHtml = (t) => linkify(t).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/^#{1,4} (.+)$/gm, '<b>$1</b>').replace(/^[-*] /gm, '• ');
-  const providerName = (k) => G.data.providers[k] || k;
-  const modelName = (a) => G.data.keys[a.provider]?.models.find((m) => m.id === a.model)?.name || a.model;
-  const canText = (a) => [a.can.day && 'Day & tasks', a.can.campaigns && 'Campaigns', a.can.chat && 'Chat', a.can.web && 'Web'].filter(Boolean).join(', ') + (a.write ? '' : ' · look only');
-
-  function agentList() {
-    const keys = Object.keys(G.data.keys);
-    const card = (a) => h('button', { class: 'camp-card c-violet', onclick: () => openAgent(a.id) },
-      h('div', { class: 'cc-top' }, h('b', {}, a.name), a.status === 'running' ? h('span', { class: 'cc-pct' }, 'Working…') : null),
-      h('div', { class: 'cc-sub' }, [modelName(a), a.auto && a.slots.length ? scheduleText(a) : 'On demand', a.lastRunAt ? 'ran ' + ago(a.lastRunAt) : ''].filter(Boolean).join(' · ')));
-    return h('div', { class: 'camp-list' },
-      h('div', { class: 'camp-h' }, h('b', {}, 'Agents'), h('span', { class: 'ag-head-btns' },
-        h('button', { class: 'btn small', onclick: keysSheet }, 'API keys'),
-        keys.length ? h('button', { class: 'btn small primary-btn', onclick: (e) => newAgentMenu(e.currentTarget) }, '+ New') : null)),
-      !keys.length ? h('div', { class: 'ag-intro' },
-        h('b', {}, 'Agents that help run your day and your campaigns'),
-        h('p', {}, 'They plan your day around your meetings, keep tasks moving, and research and plan campaigns. They work inside Column with what you can see, and run when you ask or on a schedule.'),
-        h('p', {}, 'They use your own API key from Anthropic (Claude), OpenAI or Google (Gemini), so usage is billed to you by that provider. Your key is stored encrypted and only your agents use it.'),
-        h('button', { class: 'btn primary-btn', onclick: keysSheet }, 'Add an API key'))
-        : G.data.agents.length ? G.data.agents.map(card)
-        : h('p', { class: 'day-hint camp-empty' }, 'No agents yet. Start with a Day planner: it lays out your day each morning.'));
-  }
-
-  function newAgentMenu(anchor) {
-    openMenu(anchor, Object.entries(G.data.presets).map(([k, p]) => ({ label: p.name, run: async () => {
-      try {
-        const a = await api('POST', '/agents', { preset: k, tz: myTz() });
-        G.data.agents.push(a);
-        openAgent(a.id);
-        agentSheet(a);
-      } catch (e) {
-        toast(e.message);
-      }
-    } })));
-  }
-
-  function agentView(a) {
-    const list = h('div', { class: 'ag-thread' });
-    const status = h('div', { class: 'ag-status' });
-    const meta = h('div', { class: 'camp-meta' });
-    const input = h('textarea', { rows: 2, placeholder: `Ask ${a.name}…  e.g. “Plan my day”, “Research coffee shops in Austin for the outreach campaign”` });
-    const send = async (text) => {
-      if (!text.trim()) return;
-      try {
-        agentUpdated(await api('POST', `/agents/${a.id}/message`, { text }));
-        input.value = '';
-      } catch (e) {
-        toast(e.message);
-      }
-    };
-    input.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && !e.shiftKey) {
-        e.preventDefault();
-        send(input.value);
-      }
-    });
-    const sendBtn = h('button', { class: 'btn primary-btn', onclick: () => send(input.value) }, 'Send');
-    const routineBtn = h('button', { class: 'btn small', onclick: () => api('POST', `/agents/${a.id}/run`).then(agentUpdated).catch((e) => toast(e.message)) }, 'Run routine');
-    const title = h('b', { class: 'camp-name' });
-    const view = h('div', { class: 'camp-view ag-view' },
-      h('div', { class: 'camp-top' },
-        h('button', { class: 'icon-btn', 'aria-label': 'All agents', html: I.back, onclick: () => openAgent(null) }),
-        title,
-        h('button', { class: 'icon-btn', 'aria-label': 'Agent options', html: I.more, onclick: (e) => openMenu(e.currentTarget, [
-          { label: 'Settings…', run: () => agentSheet(agentById(a.id)) },
-          { label: 'Memory…', run: () => notesSheet(agentById(a.id)) },
-          { label: 'Clear conversation', run: () => api('POST', `/agents/${a.id}/clear`).then(agentUpdated).catch((er) => toast(er.message)) },
-          { label: 'Delete agent', danger: true, run: () => api('DELETE', '/agents/' + a.id).then(() => { G.data.agents = G.data.agents.filter((x) => x.id !== a.id); openAgent(null); }).catch((er) => toast(er.message)) },
-        ]) })),
-      meta, list, status,
-      h('div', { class: 'ag-compose' }, input, h('div', { class: 'ag-compose-btns' }, routineBtn, sendBtn)));
-    view._id = a.id;
-    view._update = (x) => {
-      title.textContent = x.name;
-      meta.replaceChildren(
-        h('span', { class: 'pill' }, `${providerName(x.provider)} · ${modelName(x)}`),
-        h('span', { class: 'pill' }, x.auto && x.slots.length ? scheduleText(x) : 'On demand'),
-        h('span', { class: 'pill' }, canText(x)),
-        h('button', { class: 'pill pill-btn', title: 'What it remembers between conversations', onclick: () => notesSheet(agentById(x.id)) }, x.notes.length ? `Memory · ${x.notes.length}` : 'Memory'));
-      routineBtn.classList.toggle('hidden', !x.routine);
-      routineBtn.disabled = sendBtn.disabled = x.status === 'running';
-      list.replaceChildren(...(x.thread.length ? x.thread.map(agentMsg) : [h('p', { class: 'day-hint' }, x.routine ? `Message it, or press Run routine (“${x.routine}”).` : 'Message it to get started.')]));
-      status.replaceChildren(...(x.status === 'running' ? [h('span', { class: 'ag-dots' }), (x.step || 'Thinking') + '…'] : []));
-      list.scrollTop = list.scrollHeight;
-    };
-    view._update(a);
-    setTimeout(() => (list.scrollTop = list.scrollHeight), 0);
-    return view;
-  }
-  function agentMsg(m) {
-    const label = m.trigger === 'schedule' ? 'On schedule' : m.trigger === 'routine' ? 'Routine' : null;
-    if (m.role === 'user') return h('div', { class: 'ag-msg me' }, label ? h('small', {}, label) : null, h('div', { class: 'ag-bubble' }, m.text));
-    return h('div', { class: 'ag-msg' },
-      m.actions?.length ? h('ul', { class: 'ag-actions' }, m.actions.map((x) => h('li', {}, h('span', { html: I.check }), x))) : null,
-      m.error ? h('div', { class: 'ag-bubble err' }, m.error) : h('div', { class: 'ag-bubble', html: agentHtml(m.text) }),
-      h('small', {}, new Date(m.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })));
-  }
-
-  function agentSheet(a) {
-    const keys = G.data.keys;
-    const name = h('input', { value: a.name });
-    const provider = h('select', {}, Object.keys(keys).map((k) => h('option', { value: k }, providerName(k))));
-    provider.value = a.provider;
-    const model = h('select');
-    const fillModels = () => {
-      const ms = keys[provider.value]?.models || [];
-      model.replaceChildren(...ms.map((m) => h('option', { value: m.id }, m.name)));
-      model.value = provider.value === a.provider ? a.model : ms[0]?.id || '';
-    };
-    fillModels();
-    provider.addEventListener('change', fillModels);
-    const instructions = h('textarea', { rows: 5, placeholder: 'What it’s for and how you like things done.' });
-    instructions.value = a.instructions;
-    const routine = h('textarea', { rows: 2, placeholder: 'e.g. Plan my day.' });
-    routine.value = a.routine;
-    const can = {};
-    const box = (k, label) => {
-      can[k] = h('input', { type: 'checkbox' });
-      can[k].checked = !!a.can[k];
-      return h('label', { class: 'pick' }, can[k], label);
-    };
-    const write = h('input', { type: 'checkbox' });
-    write.checked = !!a.write;
-    const sched = slotEditor(a, 'Each time it runs its routine.');
-    sheet('Agent settings', [
-      h('label', {}, 'Name', name),
-      h('div', { class: 'row2' }, h('label', {}, 'Provider', provider), h('label', {}, 'Model', model)),
-      h('label', {}, 'Instructions', instructions),
-      h('label', {}, 'Routine: what it does when it runs on its own', routine),
-      h('div', { class: 'picks-h' }, 'It can work with'),
-      h('div', { class: 'picks' }, box('day', 'My day & tasks'), box('campaigns', 'Campaigns'), box('chat', 'Post in chat'), box('web', 'Search the web')),
-      h('label', { class: 'pick' }, write, 'Let it make changes (otherwise it only looks and suggests)'),
-      h('label', { class: 'pick' }, sched.auto, 'Run its routine on a schedule'),
-      sched.box,
-    ], async () => {
-      agentUpdated(await api('PATCH', '/agents/' + a.id, {
-        name: name.value, provider: provider.value, model: model.value, instructions: instructions.value, routine: routine.value,
-        can: Object.fromEntries(Object.entries(can).map(([k, el]) => [k, el.checked])), write: write.checked, tz: myTz(), ...sched.value(),
+          S.ai = await api('PUT', '/ai/keys/' + k, { key: input.value });
+          sec.replaceWith(aiSection());
+        } catch (e) {
+          toast(e.message);
+          save.disabled = false;
+          save.textContent = 'Save';
+        }
+      });
+      const remove = h('button', { class: 'btn small danger' }, 'Remove');
+      remove.addEventListener('click', () => confirmClick(remove, async () => {
+        S.ai = await api('DELETE', '/ai/keys/' + k).catch((e) => (toast(e.message), S.ai));
+        sec.replaceWith(aiSection());
       }));
-    });
+      sec.append(h('div', { class: 'srow' },
+        h('span', {}, label, h('small', {}, saved ? `Saved ····${saved.last4}` : 'Not added')),
+        saved ? remove : h('span', { class: 'ai-key' }, input, save)));
+    }
+    if (ai.provider) {
+      const set = (body) => api('PATCH', '/ai', body).then((x) => { S.ai = x; sec.replaceWith(aiSection()); }).catch((e) => toast(e.message));
+      const prov = h('select', {}, Object.keys(ai.keys).map((k) => h('option', { value: k, selected: k === ai.provider }, ai.providers[k])));
+      prov.addEventListener('change', () => set({ provider: prov.value }));
+      const model = h('select', {}, ai.keys[ai.provider].models.map((m) => h('option', { value: m.id, selected: m.id === ai.model }, m.name)));
+      model.addEventListener('change', () => set({ model: model.value }));
+      sec.append(h('div', { class: 'srow' }, h('span', {}, 'Use'), h('span', { class: 'ai-key' }, Object.keys(ai.keys).length > 1 ? prov : null, model)));
+    }
+    return sec;
   }
 
-  // What an agent keeps between conversations. It adds notes itself; you can edit or remove any.
-  function notesSheet(a) {
-    const list = h('div', { class: 'ag-notes' });
-    const row = (n) => {
-      const t = h('textarea', { rows: 2, maxlength: 400, placeholder: 'e.g. I like calls before 11am' });
-      t.value = n.text;
-      const el = h('div', { class: 'ag-note' }, t, h('button', { type: 'button', class: 't-btn', 'aria-label': 'Remove note', html: I.close, onclick: () => el.remove() }));
-      el._id = n.id;
-      el._text = () => t.value;
-      if (n.by === 'agent') el.append(h('small', {}, `Saved by ${a.name}${n.at ? ' · ' + ago(n.at) : ''}`));
-      return el;
-    };
-    list.append(...a.notes.map(row));
-    const add = h('button', { type: 'button', class: 'btn small ag-add-note', onclick: () => {
-      if (list.children.length >= 40) return toast('That’s the most it can keep (40).');
-      const el = row({ text: '' });
-      list.append(el);
-      el.querySelector('textarea').focus();
-    } }, '+ Add a note');
-    sheet(`${a.name}’s memory`, [
-      h('p', { class: 'day-hint' }, 'Notes it keeps between conversations and reads every time it runs. It saves things it learns on its own; you can add, change or remove any. Clearing the conversation keeps these.'),
-      list, add,
+  // Goals and tasks drafted from the brief. Tick what to keep, then add it.
+  async function suggestPlan(c, btn) {
+    if (!c.brief?.trim()) return toast('Write a brief first: the plan is made from it.');
+    const r = await aiRun(btn, 'plan', { campaignId: c.id, today: todayKey() });
+    if (!r) return;
+    const picks = r.goals.map((g) => {
+      const gb = h('input', { type: 'checkbox', checked: true });
+      const tbs = g.tasks.map((t) => ({ t, cb: h('input', { type: 'checkbox', checked: true }) }));
+      gb.addEventListener('change', () => tbs.forEach((x) => (x.cb.disabled = !gb.checked)));
+      const what = g.kind === 'count' ? `Count ${g.target} ${[g.counts.join(' / '), g.methods.length ? g.methods.join(' / ').toLowerCase() + 's' : 'logged'].filter(Boolean).join(' ').toLowerCase()}` : 'Done when its tasks are';
+      const el = h('div', { class: 'plan-goal' },
+        h('label', { class: 'pick' }, gb, h('b', {}, g.title)),
+        h('small', { class: 'day-hint' }, what + (g.due ? ` · by ${dueLabel(g.due)}` : '')),
+        tbs.map(({ t, cb }) => h('label', { class: 'pick plan-task' }, cb, t.text, t.due ? h('small', {}, ' · ' + dueLabel(t.due)) : null)));
+      return { g, gb, tbs, el };
+    });
+    sheet('Suggested plan', [
+      h('p', { class: 'day-hint' }, 'Drafted from the brief. Untick anything you don’t want; you can edit everything after.'),
+      ...picks.map((p) => p.el),
     ], async () => {
-      agentUpdated(await api('PATCH', '/agents/' + a.id, { notes: [...list.children].map((el) => ({ id: el._id, text: el._text() })) }));
-    });
-  }
-
-  function keysSheet() {
-    const rows = Object.entries(G.data.providers).map(([k, label]) => {
-      const row = h('div', { class: 'srow' });
-      const draw = () => {
-        const saved = G.data.keys[k];
-        const input = h('input', { type: 'password', placeholder: 'Paste your API key', autocomplete: 'off' });
-        const save = h('button', { class: 'btn small primary-btn' }, 'Save');
-        save.addEventListener('click', async () => {
-          save.disabled = true;
-          save.textContent = 'Checking…';
-          try {
-            G.data = { ...G.data, ...(await api('PUT', '/agents/keys/' + k, { key: input.value })) };
-            draw();
-            if (S.tab === 'agents') renderAgents();
-          } catch (e) {
-            toast(e.message);
-            save.disabled = false;
-            save.textContent = 'Save';
-          }
-        });
-        const remove = h('button', { class: 'btn small danger' }, 'Remove');
-        remove.addEventListener('click', () => confirmClick(remove, async () => {
-          G.data = { ...G.data, ...(await api('DELETE', '/agents/keys/' + k).catch((e) => toast(e.message))) };
-          draw();
-          if (S.tab === 'agents') renderAgents();
-        }));
-        row.replaceChildren(
-          h('span', {}, label, h('small', {}, saved ? `Saved ····${saved.last4} · ${plural(saved.models.length, 'model')}` : 'Not added')),
-          saved ? remove : h('span', { class: 'ag-key' }, input, save));
-      };
-      draw();
-      return row;
-    });
-    sheet('API keys', [
-      h('small', { class: 'day-hint' }, 'Your agents use your own key, and the provider bills you for what they use. Keys are stored encrypted on your team’s server and never sent back to the app. Get one from console.anthropic.com, platform.openai.com or aistudio.google.com.'),
-      ...rows,
-    ], async () => {}, 'Done');
+      let n = 0;
+      for (const { g, gb, tbs } of picks) {
+        if (!gb.checked) continue;
+        const goal = await api('POST', '/goals', { campaignId: c.id, title: g.title, kind: g.kind, due: g.due, ...(g.kind === 'count' ? { target: g.target, counts: g.counts, methods: g.methods } : {}) });
+        if (!S.goals.some((x) => x.id === goal.id)) S.goals.push(goal);
+        for (const { t, cb } of tbs) if (cb.checked) upsertTask(await api('POST', '/tasks', { text: t.text, due: t.due, goalId: goal.id }));
+        n++;
+      }
+      renderCamps();
+      if (n) toast(`Added ${plural(n, 'goal')}`);
+    }, 'Add to campaign');
   }
 
   // ----- connected calendars (each person's own) -----
@@ -3956,7 +3807,7 @@
     const box = $('#settings .cal-sec');
     if (box) box.replaceWith(calendarSection());
   }
-  // ---------- brand & culture: set by team owners; brands the app and guides every agent ----------
+  // ---------- brand & culture: set by team owners; brands the app and guides AI drafts ----------
   const isOwner = () => S.workspace.members.find((x) => x.id === S.me?.memberId)?.role === 'owner';
   function applyBrand() {
     const b = S.workspace?.brand;
@@ -3989,7 +3840,7 @@
           b.colors.length ? h('div', { class: 'brand-sw' }, b.colors.map((x) => h('span', { class: 'brand-dot' + (x.hex === b.accent ? ' on' : ''), style: `background:${x.hex}`, title: (x.name ? x.name + ' ' : '') + x.hex + (x.hex === b.accent ? ' · app colour' : '') }))) : null)));
     } else {
       sec.append(h('p', {}, owner
-        ? 'Set your mission, values, tone of voice, logo and colours. Every agent on the team follows them, and your logo and colour brand Column for everyone.'
+        ? 'Set your mission, values, tone of voice, logo and colours. AI drafts follow them, and your logo and colour brand Column for everyone.'
         : 'Your team owner hasn’t set the brand up yet.'));
     }
     if (owner || set) sec.append(h('button', { class: 'btn', onclick: brandSheet }, owner ? (set ? 'Edit brand & culture' : 'Set up brand & culture') : 'View all'));
@@ -4068,8 +3919,8 @@
 
     sheet('Brand & culture', [
       h('p', { class: 'day-hint' }, owner
-        ? 'Every agent on the team writes and plans with this. Mission, values and tone go into everything they do; the rest they look up when a task needs it.'
-        : 'Set by your team owner. Every agent on the team follows it.'),
+        ? 'Everything AI drafts for the team (reports, plans) follows this.'
+        : 'Set by your team owner. Everything AI drafts for the team follows it.'),
       h('label', {}, 'Logo', h('div', { class: 'brand-logo-row' }, logoImg, owner ? h('span', { class: 'btns' }, upLogo, rmLogo, file) : (b.logo ? null : h('small', {}, 'None yet')))),
       h('label', {}, 'Mission statement', mission),
       h('label', {}, 'Core values', values),
@@ -4180,6 +4031,8 @@
 
     s.append(calendarSection());
     loadCalendars();
+    s.append(aiSection());
+    loadAi();
 
     // This device
     const dev = h('section', {}, h('h3', {}, 'This device'));
