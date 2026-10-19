@@ -875,3 +875,16 @@ body.viewer .preview pre, body.viewer .preview .pv-edit, body.viewer .preview .d
   .dock.min .dock-title, .dock.min .dock-head > :not(.t-btn) { display: none; }
   .dock.min .dock-head { flex-direction: column; padding: 6px 2px; border: 0; }
 }
+
+/* PSS admin: contacts and live lists */
+.pss-form { display: flex; flex-direction: column; gap: 6px; } .pss-form input[type=url] { width: 100%; }
+.clist-live { flex: none; font-size: 10px; font-weight: 600; letter-spacing: .03em; text-transform: uppercase; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 0 6px; line-height: 16px; }
+.lead-stage { flex: none; font-size: 11px; color: var(--muted); }
+.live-field { display: flex; flex-direction: column; gap: 5px; color: var(--muted); font-size: 12px; }
+.live-stages { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 4px 10px; }
+.contacts-bar { display: flex; gap: 6px; } .contacts-bar input { flex: 1; min-width: 0; } .contacts-bar select { max-width: 45%; }
+.contacts { display: flex; flex-direction: column; max-height: 55vh; overflow: auto; margin: 0 -4px; }
+.contact { display: flex; flex-direction: column; gap: 2px; padding: 8px 4px; border-top: 1px solid var(--line); min-width: 0; }
+.contact-top { display: flex; align-items: baseline; gap: 8px; justify-content: space-between; }
+.contact small { color: var(--muted); overflow-wrap: anywhere; }
+.contact-reach { display: flex; flex-wrap: wrap; gap: 4px 12px; }

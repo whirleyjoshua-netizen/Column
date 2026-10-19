@@ -390,6 +390,8 @@
       loadState().catch(() => {});
     } else if (msg.type === 'calendars') {
       if (!$('#settings').classList.contains('hidden')) loadCalendars();
+    } else if (msg.type === 'pss') {
+      loadPss();
     } else if (msg.type === 'presence') {
       S.online = msg.devices;
       renderDevices();
@@ -467,6 +469,7 @@
     S.attempts = st.attempts || [];
     S.lists = st.lists || [];
     S.templates = st.templates || [];
+    loadPss();
     S.panes = S.panes.map((v) => (v.startsWith('stack:') && !stackById(v.slice(6)) ? 'files' : v));
     $('#wsName').textContent = S.workspace.name;
     document.title = `${S.workspace.name} · Column`;
@@ -2673,7 +2676,7 @@
   }, 30_000);
 
   // ---------- campaigns: campaign → goals → tasks, with logged attempts ----------
-  const K = { open: store.get('campOpen', null), mine: store.get('campsMine', false), logOpen: null, showAll: {}, stale: false, pick: null, listOpen: null, listShow: {}, listN: {}, dragList: null, logFrom: {}, book: null, dock: store.get('dock', null), dockSize: store.get('dockSize', 0.45), dockMin: false, refQ: {}, noteDraft: {}, runOpen: null, noteRow: null, answers: {}, askOpen: false, ansOpen: {} };
+  const K = { open: store.get('campOpen', null), mine: store.get('campsMine', false), logOpen: null, showAll: {}, stale: false, pick: null, listOpen: null, listShow: {}, listN: {}, dragList: null, logFrom: {}, book: null, dock: store.get('dock', null), dockSize: store.get('dockSize', 0.45), dockMin: false, refQ: {}, noteDraft: {}, runOpen: null, noteRow: null, answers: {}, askOpen: false, ansOpen: {}, lead: null };
   const campById = (id) => id && S.campaigns?.find((c) => c.id === id);
   const goalById = (id) => id && S.goals?.find((g) => g.id === id);
   const goalsOf = (cid) => S.goals.filter((g) => g.campaignId === cid).sort((a, b) => (a.order || 0) - (b.order || 0) || a.createdAt - b.createdAt);
@@ -3498,6 +3501,7 @@
       h('div', { class: 'goal-top', draggable: drag ? 'true' : null, title: drag ? 'Drag onto a goal to make it a task' : null },
         h('span', { class: 'goal-ic', html: KIND_ICON[k] }),
         h('button', { class: 'goal-title clist-name', onclick: click }, l.name),
+        l.live ? h('small', { class: 'clist-live', title: 'Kept in step with PSS' + (l.syncedAt ? ` · updated ${ago(l.syncedAt)}` : '') }, 'Live') : null,
         h('small', { class: 'clist-meta' + (p.late ? ' late' : '') }, p.label),
         h('button', { class: 't-btn', 'aria-label': 'Options', html: I.more, onclick: (e) => listMenu(e.currentTarget, c, l) })),
       p.of ? bar(p.n / p.of, c.color) : null);
@@ -3831,8 +3835,9 @@
       file ? { label: kind(file) === 'textfile' ? 'Open or edit the file' : 'Open the file', run: () => openPreview(file) } : null,
       file ? { label: 'Use as…', run: () => useSheet(c, file) } : null,
       k === 'tracker' ? { label: 'Edit stages…', run: () => stagesSheet(l) } : null,
+      l.live && S.pss?.connected ? { label: 'Change who’s on it…', run: () => liveSheet(c, l) } : null,
       ...(draggableKind(l) && goalsOf(c.id).length ? [{ head: k === 'checklist' ? 'Run it as a task on' : 'Add as a task to' }, ...goalsOf(c.id).map((g) => ({ label: g.title, run: () => listToGoal(l, g) }))] : []),
-      { label: 'Remove (the file stays)', danger: true, run: () => api('DELETE', '/lists/' + l.id).catch((e) => toast(e.message)) },
+      { label: file ? 'Remove (the file stays)' : 'Remove', danger: true, run: () => api('DELETE', '/lists/' + l.id).catch((e) => toast(e.message)) },
     ].filter(Boolean));
   }
   function logRow(c, l, r) {
@@ -4099,8 +4104,9 @@
         run: () => (it.type === 'folder' ? showStack(c.stackId) : docKind(it) || kind(it) === 'pdf' ? dockOpen(c, { type: 'file', id: it.id }) : openPreview(it)),
       })),
       { label: '+ Add a call list or file…', run: () => pickCampaignFiles(c) },
+      S.pss?.connected ? { label: '+ Live list from PSS…', run: () => liveSheet(c) } : null,
       { label: files.length > 8 ? `Go to the stack · all ${files.length} files` : 'Go to the stack', run: () => showStack(c.stackId) },
-    ]);
+    ].filter(Boolean));
   }
 
   // Log one attempt: how (call, email…), who (optional, or picked from a call list), then tap how it went.
@@ -4129,7 +4135,8 @@
     const pl = K.pick && all.find((l) => l.id === K.pick.listId);
     const picked = pl && pl.rows.find((r) => r.id === K.pick.rowId);
     if (!picked) K.pick = null;
-    const contact = h('input', { class: 'log-contact', placeholder: lists.length ? `Who? Search ${lists[0].name}, or type a name` : 'Who? (business, person, area)', 'aria-label': 'Who you reached' });
+    const leads = !lists.length && S.contacts?.length ? S.contacts : null;
+    const contact = h('input', { class: 'log-contact', placeholder: lists.length ? `Who? Search ${lists[0].name}, or type a name` : leads ? 'Who? Search PSS contacts, or type a name' : 'Who? (business, person, area)', 'aria-label': 'Who you reached' });
     const note = h('input', { class: 'log-note', placeholder: 'Note (optional)', 'aria-label': 'Note' });
     note.value = K.noteDraft[c.id] || '';
     note.addEventListener('input', () => (K.noteDraft[c.id] = note.value));
@@ -4149,6 +4156,15 @@
     const sugg = h('div', { class: 'log-sugg hidden' });
     const suggest = () => {
       const needle = contact.value.trim().toLowerCase();
+      // Logging blank, an owner can pick from PSS's leads.
+      if (leads) {
+        const found = needle.length < 2 ? [] : leads.filter((x) => [x.name, x.phone, x.email, x.city].some((v) => v.toLowerCase().includes(needle))).slice(0, 6);
+        sugg.replaceChildren(h('small', { class: 'log-sugg-h' }, 'From PSS'), ...found.map((x) => h('button', {
+          onpointerdown: (e) => { e.preventDefault(); contact.value = x.name; K.lead = x.id; sugg.classList.add('hidden'); note.focus(); },
+        }, h('b', {}, x.name), h('small', {}, [x.phone, x.email, x.city].filter(Boolean).join(' · ')), h('span', { class: 'lead-stage' }, stageLabel(x.stage)))));
+        sugg.classList.toggle('hidden', !found.length);
+        return;
+      }
       const hits = [];
       for (const l of lists) {
         const f = listFields(l), st = rowStatus(l);
@@ -4178,9 +4194,10 @@
     const bk = K.book;
     const log = async (outcome) => {
       const name = picked ? f.who(picked) : contact.value.trim();
+      const leadId = !picked && K.lead && S.contacts?.find((x) => x.id === K.lead)?.name === name ? K.lead : undefined;
       if (bk && (!bk.date || !bk.time)) return toast('Pick a day and time for the meeting');
       try {
-        const x = await api('POST', '/attempts', { campaignId: c.id, method: K.method, outcome, contact: name, note: note.value, answers: qs.filter((x) => ans[x.id]?.trim()).map((x) => ({ q: x.q, a: ans[x.id] })), ...(picked ? K.pick : {}) });
+        const x = await api('POST', '/attempts', { campaignId: c.id, method: K.method, outcome, contact: name, note: note.value, answers: qs.filter((x) => ans[x.id]?.trim()).map((x) => ({ q: x.q, a: ans[x.id] })), leadId, ...(picked ? K.pick : {}) });
         if (!S.attempts.some((y) => y.id === x.id)) S.attempts.push(x);
         let booked = '';
         if (bk) {
@@ -4194,7 +4211,7 @@
         contact.value = note.value = '';
         K.noteDraft[c.id] = '';
         K.answers[c.id] = {};
-        K.pick = null;
+        K.pick = K.lead = null;
         toast(`Logged · ${outcome}${booked}`);
         renderCamps();
         $('#camps .log-contact')?.focus();
@@ -4943,6 +4960,149 @@
     }, 'Add to campaign');
   }
 
+  // ---------- PSS admin: the business site's leads (owners only) ----------
+  // Column reads them every 15 minutes. Owners can browse them, make live call lists from them, and pick
+  // them in the Log. Nothing here changes PSS.
+  const PSS_STAGES = ['new', 'contacted', 'visit_booked', 'quoted', 'approved', 'signed', 'sold', 'measure', 'ordered', 'installed', 'completed', 'lost'];
+  const stagesIn = (all) => [...new Set(all.map((x) => x.stage))].sort((a, b) => (PSS_STAGES.indexOf(a) + 1 || 99) - (PSS_STAGES.indexOf(b) + 1 || 99));
+  const stageLabel = (s) => { const t = String(s || '').replace(/_/g, ' '); return t.charAt(0).toUpperCase() + t.slice(1); };
+  async function loadPss() {
+    if (!S.workspace || !amOwner()) {
+      S.pss = S.contacts = null;
+      return;
+    }
+    try {
+      S.pss = await api('GET', '/pss');
+      S.contacts = S.pss.connected ? (await api('GET', '/pss/contacts')).leads : null;
+    } catch {
+      return;
+    }
+    const sec = $('#settings .pss-sec');
+    if (sec && !sec.contains(document.activeElement)) sec.replaceWith(pssSection());
+  }
+  function pssSection() {
+    const sec = h('section', { class: 'pss-sec' }, h('h3', {}, 'PSS admin'));
+    const p = S.pss;
+    if (!p) {
+      sec.append(h('p', { class: 'day-hint' }, 'Loading…'));
+      return sec;
+    }
+    const redo = (x) => { S.pss = x; sec.replaceWith(pssSection()); };
+    if (!p.connected) {
+      const url = h('input', { type: 'url', placeholder: 'https://premiershadesolutions.com', value: 'https://premiershadesolutions.com', autocomplete: 'off' });
+      const key = h('input', { type: 'password', placeholder: 'Paste the key from PSS', autocomplete: 'off' });
+      const go = h('button', { class: 'btn small primary-btn' }, 'Connect');
+      go.addEventListener('click', async () => {
+        go.disabled = true;
+        go.textContent = 'Connecting…';
+        try {
+          redo(await api('PUT', '/pss', { url: url.value, key: key.value }));
+          loadPss();
+        } catch (e) {
+          toast(e.message);
+          go.disabled = false;
+          go.textContent = 'Connect';
+        }
+      });
+      sec.append(h('p', { class: 'day-hint' }, 'Brings every lead’s name, phone, email, address, stage and source over from PSS, and keeps them current. Only team owners see them. In PSS admin, open Settings → Marketing → Column → Connect Column, and paste the key here.'),
+        h('div', { class: 'pss-form' }, url, h('span', { class: 'ai-key' }, key, go)));
+      return sec;
+    }
+    const sync = h('button', { class: 'btn small' }, p.syncing ? 'Syncing…' : 'Sync now');
+    sync.disabled = !!p.syncing;
+    sync.addEventListener('click', async () => {
+      sync.disabled = true;
+      sync.textContent = 'Syncing…';
+      try {
+        redo(await api('POST', '/pss/sync'));
+        loadPss();
+      } catch (e) {
+        toast(e.message);
+      }
+    });
+    const off = h('button', { class: 'btn small danger' }, 'Disconnect');
+    off.addEventListener('click', () => confirmClick(off, async () => {
+      redo(await api('DELETE', '/pss').catch((e) => (toast(e.message), S.pss)));
+      S.contacts = null;
+      renderCamps();
+    }));
+    sec.append(
+      h('div', { class: 'srow' }, h('span', {}, new URL(p.url).host, h('small', {}, `Key ····${p.last4} · connected by ${p.by}`)), off),
+      h('div', { class: 'srow' },
+        h('span', {}, `${p.count.toLocaleString()} contact${p.count === 1 ? '' : 's'}`,
+          h('small', { class: p.error ? 'err' : null }, p.error ? p.error : p.syncedAt ? [`Updated `, h('span', { 'data-ago': p.syncedAt }, ago(p.syncedAt)), p.dne ? ` · ${p.dne} don’t want email` : ''] : 'Not synced yet')),
+        h('span', { class: 'ai-key' }, p.count ? h('button', { class: 'btn small', onclick: () => contactsSheet() }, 'Contacts') : null, sync)));
+    return sec;
+  }
+  function contactsSheet() {
+    const all = [...(S.contacts || [])].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+    const q = h('input', { type: 'search', placeholder: 'Search name, phone, email, city', 'aria-label': 'Search contacts' });
+    const stage = h('select', { 'aria-label': 'Stage' }, h('option', { value: '' }, 'All stages'),
+      stagesIn(all).map((v) => h('option', { value: v }, `${stageLabel(v)} · ${all.filter((x) => x.stage === v).length}`)));
+    const count = h('p', { class: 'day-hint' });
+    const box = h('div', { class: 'contacts' });
+    const show = () => {
+      const n = q.value.trim().toLowerCase();
+      const hits = all.filter((x) => (!stage.value || x.stage === stage.value) && (!n || [x.name, x.phone, x.email, x.city, x.address].some((v) => v.toLowerCase().includes(n))));
+      count.textContent = hits.length === all.length ? `${all.length.toLocaleString()} contacts` : `${hits.length.toLocaleString()} of ${all.length.toLocaleString()}`;
+      box.replaceChildren(...hits.slice(0, 150).map((x) => h('div', { class: 'contact' },
+        h('div', { class: 'contact-top' }, h('b', {}, x.name || '—'), h('span', { class: 'lead-stage' }, stageLabel(x.stage))),
+        h('small', {}, [x.address, x.city, x.source, x.assignedTo ? '→ ' + x.assignedTo : ''].filter(Boolean).join(' · ')),
+        h('small', { class: 'contact-reach' },
+          x.phone ? h('a', { href: 'tel:' + x.phone.replace(/[^\d+]/g, '') }, x.phone) : null,
+          x.email ? (x.dne ? h('span', { title: 'On the do-not-contact list' }, h('s', {}, x.email), ' · unsubscribed') : h('a', { href: 'mailto:' + x.email }, x.email)) : null))),
+        hits.length > 150 ? h('p', { class: 'day-hint' }, 'Showing the first 150. Search to narrow it down.') : null);
+    };
+    q.addEventListener('input', show);
+    stage.addEventListener('change', show);
+    show();
+    sheet('Contacts from PSS', [h('div', { class: 'contacts-bar' }, q, stage), count, box], () => {}, 'Done');
+  }
+  // A call list of the leads that match, kept in step with PSS.
+  const LIVE_DAYS = [[0, 'Any time'], [30, 'Last 30 days'], [90, 'Last 90 days'], [180, 'Last 6 months'], [365, 'Last year']];
+  function liveMatch(f, x, now) {
+    const same = (a, b) => a.trim().toLowerCase() === b.trim().toLowerCase();
+    return (!f.stages.length || f.stages.includes(x.stage)) && (!f.cities.length || f.cities.some((c) => same(c, x.city)))
+      && (!f.sources.length || f.sources.some((v) => same(v, x.source))) && (!f.days || (x.createdAt || 0) >= now - f.days * 864e5)
+      && (f.need !== 'phone' || !!x.phone) && (f.need !== 'email' || (!!x.email && !x.dne));
+  }
+  function liveSheet(c, l) {
+    const all = S.contacts || [];
+    const f = l?.live || { stages: [], cities: [], sources: [], days: 0, need: null };
+    const name = h('input', { value: l?.name || '', placeholder: 'Quoted, not sold' });
+    const byCount = (key) => [...all.reduce((m, x) => (x[key] ? m.set(x[key], (m.get(x[key]) || 0) + 1) : m), new Map())].sort((a, b) => b[1] - a[1]);
+    const stages = stagesIn(all).map((v) => ({ v, cb: h('input', { type: 'checkbox', checked: f.stages.includes(v) }) }));
+    const one = (key, any, picked) => h('select', {}, h('option', { value: '' }, any), byCount(key).map(([v, n]) => h('option', { value: v, selected: picked.some((x) => x.toLowerCase() === v.toLowerCase()) }, `${v} · ${n}`)));
+    const city = one('city', 'Any city', f.cities), source = one('source', 'Any source', f.sources);
+    const days = h('select', {}, LIVE_DAYS.map(([v, t]) => h('option', { value: v, selected: f.days === v }, t)));
+    const need = h('select', {}, [['', 'Anyone'], ['phone', 'Has a phone number'], ['email', 'Can be emailed']].map(([v, t]) => h('option', { value: v, selected: (f.need || '') === v }, t)));
+    const count = h('p', { class: 'day-hint live-count' });
+    const read = () => ({ stages: stages.filter((x) => x.cb.checked).map((x) => x.v), cities: city.value ? [city.value] : [], sources: source.value ? [source.value] : [], days: Number(days.value), need: need.value || null });
+    const update = () => {
+      const n = all.filter((x) => liveMatch(read(), x, Date.now())).length;
+      count.textContent = `${n.toLocaleString()} lead${n === 1 ? '' : 's'} right now. New matches join by themselves; anyone who stops matching leaves.`;
+    };
+    for (const el of [city, source, days, need, ...stages.map((x) => x.cb)]) el.addEventListener('change', update);
+    update();
+    sheet(l ? 'Who’s on this list' : 'Live list from PSS', [
+      h('label', {}, 'Name', name),
+      h('div', { class: 'live-field' }, 'Stage', h('div', { class: 'live-stages' }, stages.map((x) => h('label', { class: 'pick' }, x.cb, stageLabel(x.v))))),
+      h('div', { class: 'row2' }, h('label', {}, 'City', city), h('label', {}, 'Source', source)),
+      h('div', { class: 'row2' }, h('label', {}, 'Added', days), h('label', {}, 'Who', need)),
+      count,
+      l ? null : h('p', { class: 'day-hint' }, 'Everyone in this campaign will see these contacts.'),
+    ], async () => {
+      const body = { name: name.value.trim() || 'PSS leads', live: read() };
+      const x = l ? await api('PATCH', '/lists/' + l.id, body) : await api('POST', '/lists', { campaignId: c.id, ...body });
+      const i = S.lists.findIndex((y) => y.id === x.id);
+      if (i >= 0) S.lists[i] = x;
+      else S.lists.push(x);
+      K.listOpen = x.id;
+      renderCamps();
+      if (!l) toast(`Added ${x.name} · ${x.rows.length} lead${x.rows.length === 1 ? '' : 's'}`);
+    }, l ? 'Save' : 'Add to campaign');
+  }
+
   // ----- connected calendars (each person's own) -----
   const CAL_NAMES = { google: 'Google Calendar', microsoft: 'Outlook' };
   const myTz = () => Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -5181,6 +5341,7 @@
     loadCalendars();
     s.append(aiSection());
     loadAi();
+    if (isOwner()) s.append(pssSection());
 
     // This device
     const dev = h('section', {}, h('h3', {}, 'This device'));

@@ -26,7 +26,7 @@ const PUBLIC_URL = (process.env.PUBLIC_URL || `http://localhost:${PORT}`).replac
 fs.mkdirSync(FILES_DIR, { recursive: true });
 
 // ---------- persistence (a JSON file is plenty for personal/small-team use) ----------
-let db = { workspaces: {}, tokens: {}, items: {}, entries: {}, tasks: {}, uploads: {}, campaigns: {}, goals: {}, attempts: {}, lists: {}, templates: {}, calendars: {}, ai: {} };
+let db = { workspaces: {}, tokens: {}, items: {}, entries: {}, tasks: {}, uploads: {}, campaigns: {}, goals: {}, attempts: {}, lists: {}, templates: {}, calendars: {}, ai: {}, pss: {} };
 try {
   db = { ...db, ...JSON.parse(fs.readFileSync(DB_PATH, 'utf8')) };
 } catch {}
@@ -577,6 +577,7 @@ function channelName(ws, raw, selfId) {
 // ---------- realtime ----------
 const sockets = new Map(); // wsId -> Set<socket>
 
+const isOwnerId = (wsId, memberId) => db.workspaces[wsId]?.members.some((m) => m.id === memberId && m.role === 'owner');
 function broadcast(wsId, msg) {
   const set = sockets.get(wsId);
   if (!set) return;
@@ -588,7 +589,7 @@ function broadcast(wsId, msg) {
   const campaignId = campaignOfMsg(msg);
   const feed = msg.item && db.items[msg.item.id] ? feedOfItem(db.items[msg.item.id]) : null;
   const data = JSON.stringify(msg);
-  for (const s of set) if (s.readyState === 1 && seesCampaign(campaignId, s.meta.memberId) && seesFeed(feed, s.meta.memberId) && seesTemplate(msg.template, s.meta.memberId) && seesEntry(msg.entry, s.meta.memberId) && (!msg.forMember || msg.forMember === s.meta.memberId)) s.send(data);
+  for (const s of set) if (s.readyState === 1 && seesCampaign(campaignId, s.meta.memberId) && seesFeed(feed, s.meta.memberId) && seesTemplate(msg.template, s.meta.memberId) && seesEntry(msg.entry, s.meta.memberId) && (!msg.forMember || msg.forMember === s.meta.memberId) && (!msg.forOwners || isOwnerId(wsId, s.meta.memberId))) s.send(data);
 }
 
 // ---------- campaigns: campaign → goals → tasks, plus logged attempts (each call or email and its outcome) ----------
@@ -723,7 +724,7 @@ function applyList(l, body) {
       return row;
     }).filter((r) => r.cells.some(Boolean));
   }
-  if (!l.rows.length) throw badRequest('That list has no rows.');
+  if (!l.rows.length && !l.live) throw badRequest('That list has no rows.');
   return l;
 }
 
@@ -1127,6 +1128,143 @@ function disconnectCalendar(conn) {
   broadcast(conn.wsId, { type: 'calendars', forMember: conn.memberId });
 }
 
+// ---------- PSS admin: the business site's leads and do-not-contact list ----------
+// Read-only, with a key an owner makes in PSS (Settings → Marketing → Column), stored sealed. Only owners
+// see the contacts. A live list puts the leads that match a filter on a campaign as a call list, kept in
+// step with PSS: everyone in that campaign sees its rows, which is the owner's call when they make one.
+const PSS_EVERY = 15 * 60_000;
+const PSS_PAGES = 200;
+const PSS_STAGES = ['new', 'contacted', 'visit_booked', 'quoted', 'approved', 'signed', 'sold', 'measure', 'ordered', 'installed', 'completed', 'lost'];
+const LIVE_COLS = ['Name', 'Phone', 'Email', 'Address', 'City', 'Stage', 'Source'];
+const LIVE_DAYS = [0, 30, 90, 180, 365];
+const pssBusy = new Map();
+const stageLabel = (s) => { const t = String(s || '').replace(/_/g, ' '); return t.charAt(0).toUpperCase() + t.slice(1); };
+const sameText = (a, b) => String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
+// The site's address: https, or http on this machine for testing.
+function pssUrl(v) {
+  let u;
+  try {
+    u = new URL(String(v || '').trim());
+  } catch {
+    return null;
+  }
+  const local = ['localhost', '127.0.0.1', '[::1]'].includes(u.hostname);
+  return u.protocol === 'https:' || (local && u.protocol === 'http:') ? u.origin : null;
+}
+async function pssGet(url, key, route) {
+  let r;
+  try {
+    r = await fetch(url + route, { headers: { authorization: `Bearer ${key}` }, redirect: 'error', signal: AbortSignal.timeout(20_000) });
+  } catch {
+    throw badRequest(`Couldn’t reach ${new URL(url).host}. Check the address.`);
+  }
+  if (r.status === 401) throw badRequest('PSS didn’t accept the key. Make a new one in PSS admin → Settings → Marketing → Column.');
+  if (r.status === 404) throw badRequest('That site doesn’t have the Column connection yet. Check the address, or deploy PSS first.');
+  if (!r.ok) throw badRequest(`PSS answered with an error (${r.status}). Try again in a minute.`);
+  return r.json();
+}
+const pssLead = (x) => ({
+  id: cleanText(x?.id, 40), name: cleanText(x?.name, 200), email: cleanText(x?.email, 200), phone: cleanText(x?.phone, 60),
+  address: cleanText(x?.address, 300), city: cleanText(x?.city, 80), source: cleanText(x?.source, 80), stage: cleanText(x?.stage, 40),
+  lostReason: cleanText(x?.lost_reason, 300), assignedTo: cleanText(x?.assigned_to, 80),
+  createdAt: Date.parse(x?.created_at) || null, stageChangedAt: Date.parse(x?.stage_changed_at) || null,
+  dne: !!x?.do_not_email, unsub: /^https:\/\/\S+$/.test(x?.unsubscribe_url || '') ? x.unsubscribe_url.slice(0, 300) : null,
+});
+function pssState(ws) {
+  const p = db.pss[ws.id];
+  if (!p) return { connected: false };
+  return { connected: true, url: p.url, last4: p.last4, by: p.by, at: p.at, syncedAt: p.syncedAt || null, error: p.error || null, count: p.leads?.length || 0, dne: (p.leads || []).filter((x) => x.dne).length, syncing: pssBusy.has(ws.id) };
+}
+// A live list's filter. Empty means any.
+function applyLive(v) {
+  const pick = (a, ok) => [...new Set((Array.isArray(a) ? a : []).map((x) => cleanText(x, 80)).filter(ok))].slice(0, 40);
+  return {
+    stages: pick(v?.stages, (x) => PSS_STAGES.includes(x)),
+    cities: pick(v?.cities, Boolean),
+    sources: pick(v?.sources, Boolean),
+    days: LIVE_DAYS.includes(Number(v?.days)) ? Number(v.days) : 0,
+    need: ['phone', 'email'].includes(v?.need) ? v.need : null,
+  };
+}
+function liveMatch(f, x, now) {
+  return (!f.stages.length || f.stages.includes(x.stage))
+    && (!f.cities.length || f.cities.some((c) => sameText(c, x.city)))
+    && (!f.sources.length || f.sources.some((s) => sameText(s, x.source)))
+    && (!f.days || (x.createdAt || 0) >= now - f.days * 864e5)
+    && (f.need !== 'phone' || !!x.phone)
+    && (f.need !== 'email' || (!!x.email && !x.dne));
+}
+// Rows are keyed by the lead, so calls logged against one, and its tracker stage, stay with it across syncs.
+const leadRowId = (id) => 'L' + crypto.createHash('sha256').update(id).digest('base64url').slice(0, 11);
+function fillLive(l) {
+  const p = db.pss[l.wsId];
+  if (!p) return l;
+  const now = Date.now();
+  const was = new Map((l.rows || []).map((r) => [r.id, r]));
+  l.columns = LIVE_COLS;
+  l.rows = (p.leads || []).filter((x) => liveMatch(l.live, x, now)).slice(0, LIST_ROWS).map((x) => {
+    const row = { id: leadRowId(x.id), leadId: x.id, cells: [x.name, x.phone, x.email, x.address, x.city, stageLabel(x.stage), x.source] };
+    if (x.dne) row.dne = true;
+    const old = was.get(row.id);
+    for (const k of ['stage', 'note', 'by', 'at']) if (old?.[k] !== undefined) row[k] = old[k];
+    return row;
+  });
+  l.syncedAt = p.syncedAt || null;
+  return l;
+}
+// Reads every lead, a page at a time, then the do-not-contact list, and refreshes the live lists.
+async function syncPss(ws) {
+  const p = db.pss[ws.id];
+  if (!p) return;
+  if (pssBusy.has(ws.id)) return pssBusy.get(ws.id);
+  const run = (async () => {
+    try {
+      const key = unseal(p.sealed).key;
+      const leads = [];
+      let after = null;
+      for (let i = 0; ; i++) {
+        if (i >= PSS_PAGES) throw new Error('PSS has more leads than Column can hold.');
+        const page = await pssGet(p.url, key, '/api/column/leads' + (after ? '?after=' + encodeURIComponent(after) : ''));
+        leads.push(...(Array.isArray(page.leads) ? page.leads : []).map(pssLead).filter((x) => x.id));
+        if (!page.next) break;
+        after = page.next;
+      }
+      const mail = await pssGet(p.url, key, '/api/column/email');
+      if (db.pss[ws.id] !== p) return;
+      p.leads = leads;
+      p.dne = (Array.isArray(mail.do_not_email) ? mail.do_not_email : []).map((x) => cleanText(x, 200).toLowerCase()).filter(Boolean);
+      // Someone who unsubscribed by address but whose lead says otherwise is still not emailed.
+      const no = new Set(p.dne);
+      for (const x of leads) if (no.has(x.email.toLowerCase())) x.dne = true;
+      p.syncedAt = Date.now();
+      p.error = null;
+      for (const l of Object.values(db.lists)) {
+        if (l.wsId !== ws.id || !l.live) continue;
+        fillLive(l);
+        broadcast(ws.id, { type: 'list', list: publicList(l) });
+      }
+    } catch (e) {
+      if (db.pss[ws.id] === p) p.error = e.message;
+      console.error('PSS sync failed:', e.message);
+    } finally {
+      p.tried = Date.now();
+      pssBusy.delete(ws.id);
+      save();
+      broadcast(ws.id, { type: 'pss', forOwners: true });
+    }
+  })();
+  pssBusy.set(ws.id, run);
+  broadcast(ws.id, { type: 'pss', forOwners: true });
+  return run;
+}
+function syncAllPss() {
+  for (const [wsId, p] of Object.entries(db.pss)) {
+    const ws = db.workspaces[wsId];
+    if (!ws) delete db.pss[wsId];
+    else if (Date.now() - (p.tried || 0) >= PSS_EVERY) syncPss(ws);
+  }
+}
+
 // ---------- AI: smart buttons on each person's own API key ----------
 // Each one drafts something for a person to check (a report, a plan) and changes nothing by itself.
 // Keys are stored sealed, per person, and never sent back to the app.
@@ -1472,6 +1610,40 @@ async function api(req, res, url) {
     return send(res, 405, { error: 'Method not allowed' });
   }
 
+  // The PSS admin connection and its contacts. Owners only.
+  if (a === 'pss') {
+    if (auth.role !== 'owner') return send(res, 403, { error: 'Only team owners can do that.' });
+    if (m === 'GET' && !b) return send(res, 200, pssState(ws));
+    if (m === 'PUT' && !b) {
+      const body = await readJson(req);
+      const url = pssUrl(body.url);
+      const key = String(body.key || '').trim();
+      if (!url) return send(res, 400, { error: 'Use the site’s https address, like https://premiershadesolutions.com' });
+      if (!/^[\w-]{20,200}$/.test(key)) return send(res, 400, { error: 'That doesn’t look like a PSS key.' });
+      await pssGet(url, key, '/api/column/leads?limit=1');
+      db.pss[ws.id] = { url, sealed: seal({ key }), last4: key.slice(-4), by: auth.member, at: Date.now(), leads: [], dne: [] };
+      await syncPss(ws);
+      return send(res, 200, pssState(ws));
+    }
+    if (!db.pss[ws.id]) return send(res, 404, { error: 'PSS isn’t connected.' });
+    if (m === 'POST' && b === 'sync') {
+      await syncPss(ws);
+      return send(res, 200, pssState(ws));
+    }
+    if (m === 'GET' && b === 'contacts') {
+      const p = db.pss[ws.id];
+      return send(res, 200, { syncedAt: p.syncedAt || null, stages: PSS_STAGES, leads: p.leads || [] });
+    }
+    // Live lists stop updating and keep the rows they had.
+    if (m === 'DELETE' && !b) {
+      delete db.pss[ws.id];
+      save();
+      broadcast(ws.id, { type: 'pss', forOwners: true });
+      return send(res, 200, pssState(ws));
+    }
+    return send(res, 405, { error: 'Method not allowed' });
+  }
+
   // Your own AI key and model, and the smart buttons that use them. Nobody else on the team sees your key.
   if (a === 'ai') {
     const ai = aiOf(ws.id, auth.memberId);
@@ -1594,6 +1766,8 @@ async function api(req, res, url) {
       const x = {
         id: rid(), wsId: ws.id, campaignId: c.id, method, taskId: t && campaignOf('task', t) === c.id ? t.id : null,
         listId: row ? l.id : null, rowId: row ? row.id : null,
+        // The PSS lead it was, from a live list's row, or picked by an owner from the contacts.
+        leadId: row?.leadId || (auth.role === 'owner' && db.pss[ws.id]?.leads?.some((y) => y.id === body.leadId) ? body.leadId : null),
         memberId: auth.memberId, by: auth.member, at: Date.now(), outcome,
         contact: String(body.contact || '').trim().slice(0, 200), note: String(body.note || '').trim().slice(0, 2000),
         // Answers to the campaign's question form, asked on this call.
@@ -1622,7 +1796,12 @@ async function api(req, res, url) {
       const c = db.campaigns[body.campaignId];
       if (!c || c.wsId !== ws.id || !canSee(auth, 'campaign', c)) return send(res, 404, { error: 'Campaign not found' });
       const file = body.itemId && db.items[body.itemId];
-      const l = applyList({ id: rid(), wsId: ws.id, campaignId: c.id, itemId: file && file.wsId === ws.id ? file.id : null, by: auth.member, createdAt: Date.now(), name: '', columns: [], rows: [] }, { name: 'List', ...body });
+      let l;
+      if (body.live) {
+        if (auth.role !== 'owner') return send(res, 403, { error: 'Only team owners can make lists from PSS.' });
+        if (!db.pss[ws.id]) return send(res, 400, { error: 'Connect PSS in Settings first.' });
+        l = fillLive(applyList({ id: rid(), wsId: ws.id, campaignId: c.id, itemId: null, by: auth.member, createdAt: Date.now(), kind: 'calls', live: applyLive(body.live), columns: [], rows: [] }, { name: body.name || 'PSS leads' }));
+      } else l = applyList({ id: rid(), wsId: ws.id, campaignId: c.id, itemId: file && file.wsId === ws.id ? file.id : null, by: auth.member, createdAt: Date.now(), name: '', columns: [], rows: [] }, { name: 'List', ...body });
       db.lists[l.id] = l;
       save();
       broadcast(ws.id, { type: 'list', list: publicList(l) });
@@ -1695,7 +1874,17 @@ async function api(req, res, url) {
     }
     if (c) return send(res, 404, { error: 'Not found' });
     if (m === 'PATCH') {
-      const next = applyList({ ...l }, await readJson(req, 8_000_000));
+      const body = await readJson(req, 8_000_000);
+      // A live list's rows come from PSS: only its name and (by an owner) its filter change.
+      if (l.live) {
+        if (body.live !== undefined && auth.role !== 'owner') return send(res, 403, { error: 'Only team owners can change what a PSS list shows.' });
+        const next = fillLive(applyList({ ...l, live: body.live !== undefined ? applyLive(body.live) : l.live }, { name: body.name }));
+        db.lists[l.id] = next;
+        save();
+        broadcast(ws.id, { type: 'list', list: publicList(next) });
+        return send(res, 200, publicList(next));
+      }
+      const next = applyList({ ...l }, body);
       db.lists[l.id] = next;
       save();
       broadcast(ws.id, { type: 'list', list: publicList(next) });
@@ -2237,6 +2426,7 @@ setInterval(() => {
 
 setInterval(runSchedules, 30_000);
 setInterval(syncAllCalendars, 30_000);
+setInterval(syncAllPss, 60_000);
 
 migratePeople();
 migrateDay();
