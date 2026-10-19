@@ -3,3 +3,4 @@ server/data/
 desktop/dist/
 .DS_Store
 server/.env
+.railway/node_modules/
