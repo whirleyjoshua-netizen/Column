@@ -1159,9 +1159,10 @@ function disconnectCalendar(conn) {
 }
 
 // ---------- PSS admin: the business site's leads and do-not-contact list ----------
-// Read-only, with a key an owner makes in PSS (Settings → Marketing → Column), stored sealed. Only owners
+// With a key an owner makes in PSS (Settings → Marketing → Column), stored sealed. Only owners
 // see the contacts. A live list puts the leads that match a filter on a campaign as a call list, kept in
 // step with PSS: everyone in that campaign sees its rows, which is the owner's call when they make one.
+// Calls and emails logged against a lead go back to PSS, onto that lead's timeline (pushPss).
 const PSS_EVERY = 15 * 60_000;
 const PSS_PAGES = 200;
 const PSS_STAGES = ['new', 'contacted', 'visit_booked', 'quoted', 'approved', 'signed', 'sold', 'measure', 'ordered', 'installed', 'completed', 'lost'];
@@ -1181,10 +1182,13 @@ function pssUrl(v) {
   const local = ['localhost', '127.0.0.1', '[::1]'].includes(u.hostname);
   return u.protocol === 'https:' || (local && u.protocol === 'http:') ? u.origin : null;
 }
-async function pssGet(url, key, route) {
+async function pssGet(url, key, route, body) {
   let r;
   try {
-    r = await fetch(url + route, { headers: { authorization: `Bearer ${key}` }, redirect: 'error', signal: AbortSignal.timeout(20_000) });
+    r = await fetch(url + route, {
+      method: body ? 'POST' : 'GET', redirect: 'error', signal: AbortSignal.timeout(20_000),
+      headers: { authorization: `Bearer ${key}`, ...(body ? { 'content-type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined,
+    });
   } catch {
     throw badRequest(`Couldn’t reach ${new URL(url).host}. Check the address.`);
   }
@@ -1203,7 +1207,10 @@ const pssLead = (x) => ({
 function pssState(ws) {
   const p = db.pss[ws.id];
   if (!p) return { connected: false };
-  return { connected: true, url: p.url, last4: p.last4, by: p.by, at: p.at, syncedAt: p.syncedAt || null, error: p.error || null, count: p.leads?.length || 0, dne: (p.leads || []).filter((x) => x.dne).length, syncing: pssBusy.has(ws.id) };
+  return {
+    connected: true, url: p.url, last4: p.last4, by: p.by, at: p.at, syncedAt: p.syncedAt || null, error: p.error || null, count: p.leads?.length || 0, dne: (p.leads || []).filter((x) => x.dne).length, syncing: pssBusy.has(ws.id),
+    pushedAt: p.pushedAt || null, pushError: p.pushError || null, waiting: toPush(ws.id).length,
+  };
 }
 // A live list's filter. Empty means any.
 function applyLive(v) {
@@ -1268,6 +1275,7 @@ async function syncPss(ws) {
       for (const x of leads) if (no.has(x.email.toLowerCase())) x.dne = true;
       p.syncedAt = Date.now();
       p.error = null;
+      pushPss(ws);
       for (const l of Object.values(db.lists)) {
         if (l.wsId !== ws.id || !l.live) continue;
         fillLive(l);
@@ -1293,6 +1301,52 @@ function syncAllPss() {
     if (!ws) delete db.pss[wsId];
     else if (Date.now() - (p.tried || 0) >= PSS_EVERY) syncPss(ws);
   }
+}
+
+// Calls and emails logged against a PSS lead that PSS doesn't have yet, oldest first. Each is marked once
+// PSS has it (or once PSS says the lead is gone), so it's sent once; PSS ignores a repeat anyway.
+const PSS_BATCH = 100;
+const pssPushing = new Set();
+const pssSoon = new Map();
+const toPush = (wsId) => Object.values(db.attempts).filter((x) => x.wsId === wsId && x.leadId && !x.pss).sort((a, b) => a.at - b.at);
+async function pushPss(ws) {
+  const p = db.pss[ws.id];
+  if (!p || pssPushing.has(ws.id)) return;
+  pssPushing.add(ws.id);
+  try {
+    const key = unseal(p.sealed).key;
+    for (let left = toPush(ws.id); left.length; left = toPush(ws.id)) {
+      const batch = left.slice(0, PSS_BATCH);
+      const r = await pssGet(p.url, key, '/api/column/events', {
+        events: batch.map((x) => ({
+          id: x.id, lead_id: x.leadId, method: x.method === 'Email' ? 'email' : 'call', outcome: x.outcome, note: x.note || '',
+          campaign: (db.campaigns[x.campaignId]?.name || '').slice(0, 120), by: x.by || 'Column', at: new Date(x.at).toISOString(),
+        })),
+      });
+      const done = new Map([...(r.saved || []).map((id) => [id, 'sent']), ...(r.missing || []).map((id) => [id, 'gone'])]);
+      for (const x of batch) if (done.has(x.id) && db.attempts[x.id]) db.attempts[x.id].pss = done.get(x.id);
+      if (db.pss[ws.id] !== p) return;
+      p.pushedAt = Date.now();
+      p.pushError = null;
+      save();
+      if (!batch.some((x) => done.has(x.id))) break;
+    }
+  } catch (e) {
+    if (db.pss[ws.id] === p) p.pushError = /doesn’t have the Column connection/.test(e.message) ? 'PSS needs its latest update before calls can show up there.' : e.message;
+    console.error('PSS push failed:', e.message);
+    save();
+  } finally {
+    pssPushing.delete(ws.id);
+    broadcast(ws.id, { type: 'pss', forOwners: true });
+  }
+}
+// Soon after a call is logged, in case a few come in together.
+function pushPssSoon(wsId) {
+  if (!db.pss[wsId] || pssSoon.has(wsId)) return;
+  pssSoon.set(wsId, setTimeout(() => {
+    pssSoon.delete(wsId);
+    if (db.workspaces[wsId]) pushPss(db.workspaces[wsId]);
+  }, 5_000));
 }
 
 // ---------- bills: what's owed and when, personal or business ----------
@@ -1471,6 +1525,7 @@ async function mailOne(x) {
         };
         db.attempts[a.id] = a;
         broadcast(x.wsId, { type: 'attempt', attempt: publicAttempt(a) });
+        if (a.leadId) pushPssSoon(x.wsId);
       }
       r.tries = 0;
     } catch (e) {
@@ -2342,6 +2397,7 @@ async function api(req, res, url) {
       db.attempts[x.id] = x;
       save();
       broadcast(ws.id, { type: 'attempt', attempt: publicAttempt(x) });
+      if (x.leadId) pushPssSoon(ws.id);
       return send(res, 200, publicAttempt(x));
     }
     const x = b && db.attempts[b];

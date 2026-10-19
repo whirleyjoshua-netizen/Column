@@ -5066,7 +5066,14 @@
       h('div', { class: 'srow' },
         h('span', {}, `${p.count.toLocaleString()} contact${p.count === 1 ? '' : 's'}`,
           h('small', { class: p.error ? 'err' : null }, p.error ? p.error : p.syncedAt ? [`Updated `, h('span', { 'data-ago': p.syncedAt }, ago(p.syncedAt)), p.dne ? ` · ${p.dne} don’t want email` : ''] : 'Not synced yet')),
-        h('span', { class: 'ai-key' }, p.count ? h('button', { class: 'btn small', onclick: () => openTool('contacts') }, 'Contacts') : null, sync)));
+        h('span', { class: 'ai-key' }, p.count ? h('button', { class: 'btn small', onclick: () => openTool('contacts') }, 'Contacts') : null, sync)),
+      // Calls and emails logged against a PSS contact go onto their timeline in PSS.
+      h('div', { class: 'srow' },
+        h('span', {}, 'Calls and emails go to PSS',
+          h('small', { class: p.pushError ? 'err' : null }, p.pushError ? p.pushError
+            : p.waiting ? `${p.waiting} waiting to send`
+            : p.pushedAt ? ['Up to date · last sent ', h('span', { 'data-ago': p.pushedAt }, ago(p.pushedAt))]
+            : 'Logged against a contact, they show up on that lead in PSS'))));
     return sec;
   }
   // Everyone in PSS, kept current. Tick people to email them.
