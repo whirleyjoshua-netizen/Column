@@ -145,7 +145,8 @@
     let p;
     if (it.type === 'folder') p = idx == null ? `/api/folders/${it.id}/zip` : `/api/folders/${it.id}/files/${idx}`;
     else p = `/api/files/${it.id}`;
-    return `${p}?t=${t()}${dl ? '&dl=1' : ''}`;
+    // Files are cached as never changing, so an edited one gets a new address.
+    return `${p}?t=${t()}${it.editedAt ? '&v=' + it.editedAt : ''}${dl ? '&dl=1' : ''}`;
   }
   function desktopInfo(it) {
     return {
@@ -318,11 +319,13 @@
       if (isNew && msg.item.deviceId !== S.deviceId) incoming(msg.item);
     } else if (msg.type === 'item:update') {
       upsert(msg.item);
+      if (msg.item.id === VIEW_ID && !$('#preview .pv-edit')) openPreview(msg.item, { standalone: true });
       render();
       renderCamps();
       refreshLinks();
     } else if (msg.type === 'item:remove') {
       S.items = S.items.filter((x) => x.id !== msg.id);
+      if (msg.id === VIEW_ID) openViewer();
       checkThread();
       render();
       renderCamps();
@@ -478,6 +481,10 @@
       toast('Could not reach server, retrying…');
       setTimeout(start, 3000);
       return;
+    }
+    if (VIEW_ID) {
+      openViewer();
+      return connect();
     }
     $('#login').classList.add('hidden');
     $('#app').classList.remove('hidden');
@@ -1235,13 +1242,14 @@
   document.addEventListener('pointerdown', (e) => { if (!e.target.closest('#menu')) hideMenu(); });
 
   // ---------- preview ----------
-  function openPreview(it) {
+  // standalone: the whole page is this file (a window of its own), so there's nothing to close back to.
+  function openPreview(it, { standalone = false } = {}) {
     const pv = $('#preview');
     pv.innerHTML = '';
     const k = kind(it);
     const close = () => { pv.classList.add('hidden'); pv.innerHTML = ''; };
-    pv.onclick = (e) => { if (e.target === pv) close(); };
-    pv.append(h('button', { class: 'icon-btn close', html: I.close, onclick: close, 'aria-label': 'Close' }));
+    pv.onclick = (e) => { if (e.target === pv && !standalone) close(); };
+    if (!standalone) pv.append(h('button', { class: 'icon-btn close', html: I.close, onclick: close, 'aria-label': 'Close' }));
     if (k === 'image') pv.append(h('img', { src: fileUrl(it), alt: it.name }));
     else if (k === 'video') pv.append(h('video', { src: fileUrl(it), controls: true, autoplay: true, playsinline: true }));
     else if (k === 'audio') pv.append(h('div', { style: 'color:#fff;font-size:15px' }, it.name), h('audio', { src: fileUrl(it), controls: true, autoplay: true }));
@@ -1261,10 +1269,30 @@
     } else {
       pv.append(h('div', { style: 'color:#fff;text-align:center' }, h('div', { style: 'font-size:40px;font-weight:700;opacity:.5' }, ext(it.name) || 'FILE'), it.name, h('br'), fmtSize(it.size)));
     }
-    if (it.type !== 'text') {
-      pv.append(h('div', { class: 'pv-bar' }, h('span', {}, it.name), h('button', { class: 'btn', onclick: () => download(it) }, it.type === 'folder' ? 'Download all (.zip)' : 'Download')));
-    }
+    pv.append(h('div', { class: 'pv-bar' },
+      it.type !== 'text' ? h('span', {}, it.name) : null,
+      standalone ? null : h('button', { class: 'btn', title: 'Keep it open next to Column', onclick: () => { close(); popOut(it); } }, 'Open in new window'),
+      it.type !== 'text' ? h('button', { class: 'btn', onclick: () => download(it) }, it.type === 'folder' ? 'Download all (.zip)' : 'Download') : null));
     pv.classList.remove('hidden');
+  }
+  // A file in a window of its own, e.g. your call script beside the call list. Each file gets one window.
+  function popOut(it) {
+    const w = window.open('/?view=' + encodeURIComponent(it.id), 'column-view-' + it.id, 'popup,width=760,height=900');
+    if (!w) toast('Your browser blocked the window. Allow pop-ups for Column and try again.');
+  }
+  // This page is a popped-out file (/?view=<id>): show just that file, kept up to date.
+  const VIEW_ID = new URLSearchParams(location.search).get('view');
+  function openViewer() {
+    document.body.classList.add('viewer');
+    $('#login').classList.add('hidden');
+    const it = S.items.find((x) => x.id === VIEW_ID);
+    document.title = it ? `${it.name || 'Note'} · Column` : 'Column';
+    if (it) openPreview(it, { standalone: true });
+    else {
+      const pv = $('#preview');
+      pv.replaceChildren(h('p', { class: 'day-hint' }, 'This file isn’t available any more.'));
+      pv.classList.remove('hidden');
+    }
   }
   // Edit a text file in place. If it's a campaign's call list, the list follows the edit.
   function editText(it, pre, txt) {
@@ -1297,7 +1325,7 @@
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
       if (!$('#sheet').classList.contains('hidden')) closeSheet();
-      else if (!$('#preview').classList.contains('hidden')) { $('#preview').classList.add('hidden'); $('#preview').innerHTML = ''; }
+      else if (!$('#preview').classList.contains('hidden') && !VIEW_ID) { $('#preview').classList.add('hidden'); $('#preview').innerHTML = ''; }
       else if (!$('#settings').classList.contains('hidden')) $('#settings').classList.add('hidden');
       hideMenu();
     }
@@ -3028,10 +3056,12 @@
   function campFiles(c) {
     const files = S.items.filter((it) => it.stackId === c.stackId && (it.type === 'file' || it.type === 'folder')).sort((a, b) => b.createdAt - a.createdAt);
     return h('div', { class: 'camp-files' },
-      files.slice(0, 6).map((it) => h('button', { class: 'cfile', onclick: () => openPreview(it) },
-        h('span', { class: 'cfile-ext' }, it.type === 'folder' ? 'DIR' : ext(it.name) || 'FILE'),
-        h('span', { class: 'cfile-name' }, it.name),
-        h('small', {}, `${fmtSize(it.size)} · `, h('span', { 'data-ago': it.editedAt || it.createdAt }, ago(it.editedAt || it.createdAt))))),
+      files.slice(0, 6).map((it) => h('div', { class: 'cfile' },
+        h('button', { class: 'cfile-open', onclick: () => openPreview(it) },
+          h('span', { class: 'cfile-ext' }, it.type === 'folder' ? 'DIR' : ext(it.name) || 'FILE'),
+          h('span', { class: 'cfile-name' }, it.name),
+          h('small', {}, `${fmtSize(it.size)} · `, h('span', { 'data-ago': it.editedAt || it.createdAt }, ago(it.editedAt || it.createdAt)))),
+        it.type === 'file' ? h('button', { class: 't-btn', title: 'Open in new window', 'aria-label': `Open ${it.name} in a new window`, html: I.reveal, onclick: () => popOut(it) }) : null)),
       files.length > 6 ? h('button', { class: 'link', onclick: () => showStack(c.stackId) }, `All ${files.length} files`) : null,
       h('button', { class: 'add-goal', onclick: () => pickCampaignFiles(c) }, '+ Add a call list or file', h('small', {}, ' · or drop one here')));
   }

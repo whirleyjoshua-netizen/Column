@@ -722,9 +722,16 @@ button.oc:hover { background: color-mix(in srgb, var(--oc) 30%, transparent); }
 .log-sugg .oc { font-size: 10.5px; padding: 1px 7px; }
 .camp-files { display: flex; flex-direction: column; gap: 2px; margin-bottom: 14px; }
 .camp-files .add-goal { margin-top: 4px; padding: 7px; }
-.cfile { display: flex; align-items: center; gap: 8px; background: none; border: 0; border-radius: 8px; padding: 5px 6px; text-align: left; color: inherit; font-size: 12.5px; }
+.cfile { display: flex; align-items: center; gap: 4px; border-radius: 8px; }
 .cfile:hover { background: var(--card-hover); }
+.cfile-open { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; background: none; border: 0; padding: 5px 6px; text-align: left; color: inherit; font-size: 12.5px; }
+.cfile .t-btn { opacity: 1; }
 .cfile-ext { flex: none; min-width: 34px; text-align: center; font-size: 9.5px; font-weight: 700; color: var(--accent); background: var(--accent-soft); border-radius: 5px; padding: 3px 4px; }
 .cfile-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .cfile small { flex: none; color: var(--muted); font-size: 11px; }
 .preview .pv-edit { width: 100%; max-width: 900px; flex: 1; min-height: 0; box-sizing: border-box; background: var(--panel); color: var(--text); padding: 14px; border-radius: 10px; font-family: var(--mono); font-size: 12px; resize: none; }
+
+/* a file popped out into its own window */
+body.viewer .preview { background: var(--bg); padding: 12px; animation: none; }
+body.viewer .preview .pv-bar { color: var(--text); }
+body.viewer .preview pre, body.viewer .preview .pv-edit { flex: 1; width: 100%; max-width: 900px; max-height: none; font-size: 14px; line-height: 1.55; }

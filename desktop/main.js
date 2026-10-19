@@ -89,10 +89,34 @@ function createWindow() {
       win.hide();
     }
   });
-  // Links open in the real browser, never inside the column.
+  // Links open in the real browser, never inside the column. A file popped out of Column (/?view=<id>)
+  // gets a window of its own instead, next to the column.
   win.webContents.setWindowOpenHandler(({ url }) => {
+    if (cfg.serverUrl && url.startsWith(cfg.serverUrl) && new URL(url).searchParams.has('view')) {
+      const { workArea } = screen.getPrimaryDisplay();
+      const width = Math.min(760, workArea.width - win.getBounds().width);
+      return {
+        action: 'allow',
+        overrideBrowserWindowOptions: {
+          width: Math.max(420, width), height: Math.min(900, workArea.height), x: workArea.x + Math.max(0, win.getBounds().x - workArea.x - Math.max(420, width)), y: workArea.y,
+          title: 'Column', icon: appIcon, backgroundColor: '#111115', autoHideMenuBar: true,
+          webPreferences: { contextIsolation: true, nodeIntegration: false },
+        },
+      };
+    }
     shell.openExternal(url);
     return { action: 'deny' };
+  });
+  // Links inside a popped-out file open in the real browser too.
+  win.webContents.on('did-create-window', (child) => {
+    child.webContents.setWindowOpenHandler(({ url }) => {
+      shell.openExternal(url);
+      return { action: 'deny' };
+    });
+    child.webContents.on('will-navigate', (e, url) => {
+      e.preventDefault();
+      shell.openExternal(url);
+    });
   });
   win.webContents.on('will-navigate', (e, url) => {
     if (cfg.serverUrl && !url.startsWith(cfg.serverUrl) && !url.startsWith('file:')) {
