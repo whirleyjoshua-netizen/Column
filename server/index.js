@@ -26,7 +26,7 @@ const PUBLIC_URL = (process.env.PUBLIC_URL || `http://localhost:${PORT}`).replac
 fs.mkdirSync(FILES_DIR, { recursive: true });
 
 // ---------- persistence (a JSON file is plenty for personal/small-team use) ----------
-let db = { workspaces: {}, tokens: {}, items: {}, entries: {}, tasks: {}, uploads: {}, campaigns: {}, goals: {}, attempts: {}, lists: {}, templates: {}, calendars: {}, ai: {}, pss: {}, sends: {}, bills: {} };
+let db = { workspaces: {}, tokens: {}, items: {}, entries: {}, tasks: {}, uploads: {}, campaigns: {}, goals: {}, attempts: {}, lists: {}, templates: {}, calendars: {}, ai: {}, pss: {}, sends: {}, bills: {}, meetings: {} };
 try {
   db = { ...db, ...JSON.parse(fs.readFileSync(DB_PATH, 'utf8')) };
 } catch {}
@@ -1533,6 +1533,127 @@ async function aiReport(ws, auth, c, body) {
   return { text: text.trim() };
 }
 
+// ---------- meeting notes: record a call, transcribe it, draft notes that tie into campaigns ----------
+// The recording streams up in pieces while it runs and is only the recorder's. Transcribing needs an
+// OpenAI or Gemini key (Claude doesn't take audio); the notes are drafted with whichever AI the person
+// picked. Nothing goes into a campaign until they accept the draft, and the audio is deleted then.
+const MEET_MAX = 26_000_000;
+const meetPath = (x) => path.join(FILES_DIR, `meet-${x.id}.webm`);
+const publicMeeting = ({ wsId, ...x }) => x;
+const meetNews = (x) => broadcast(x.wsId, { type: 'meeting', meeting: publicMeeting(x), forMember: x.memberId });
+async function readRaw(req, limit) {
+  const chunks = [];
+  let size = 0;
+  for await (const c of req) {
+    size += c.length;
+    if (size > limit) throw Object.assign(new Error('Too large'), { status: 413 });
+    chunks.push(c);
+  }
+  return Buffer.concat(chunks);
+}
+async function transcribe(ai, file) {
+  const buf = await fs.promises.readFile(file);
+  if (ai.keys.openai) {
+    const key = unseal(ai.keys.openai.sealed).key;
+    let last;
+    for (const model of ['gpt-4o-transcribe', 'whisper-1']) {
+      const form = new FormData();
+      form.append('file', new Blob([buf], { type: 'audio/webm' }), 'meeting.webm');
+      form.append('model', model);
+      form.append('response_format', 'json');
+      const r = await fetch('https://api.openai.com/v1/audio/transcriptions', { method: 'POST', headers: { Authorization: 'Bearer ' + key }, body: form, signal: AbortSignal.timeout(15 * 60_000) });
+      const d = await r.json().catch(() => null);
+      if (r.ok) return String(d?.text || '');
+      last = Object.assign(new Error(d?.error?.message || r.statusText), { status: r.status });
+      if (r.status === 401 || r.status === 429) break;
+    }
+    throw last;
+  }
+  if (ai.keys.gemini) {
+    const key = unseal(ai.keys.gemini.sealed).key;
+    const base = 'https://generativelanguage.googleapis.com';
+    const start = await fetch(`${base}/upload/v1beta/files`, { method: 'POST', headers: { 'x-goog-api-key': key, 'X-Goog-Upload-Protocol': 'resumable', 'X-Goog-Upload-Command': 'start', 'X-Goog-Upload-Header-Content-Length': String(buf.length), 'X-Goog-Upload-Header-Content-Type': 'audio/webm', 'Content-Type': 'application/json' }, body: JSON.stringify({ file: { display_name: 'meeting' } }) });
+    if (!start.ok) throw Object.assign(new Error((await start.json().catch(() => null))?.error?.message || start.statusText), { status: start.status });
+    const up = await fetch(start.headers.get('x-goog-upload-url'), { method: 'POST', headers: { 'X-Goog-Upload-Offset': '0', 'X-Goog-Upload-Command': 'upload, finalize' }, body: buf });
+    let file = (await up.json()).file;
+    for (let i = 0; i < 60 && file.state === 'PROCESSING'; i++) {
+      await new Promise((r) => setTimeout(r, 2000));
+      file = await (await fetch(`${base}/v1beta/${file.name}`, { headers: { 'x-goog-api-key': key } })).json();
+    }
+    const models = ai.keys.gemini.models || [];
+    const model = (models.find((m) => /^gemini-[\d.]+-flash$/.test(m.id)) || models.find((m) => /flash/.test(m.id)) || models[0])?.id || 'gemini-2.5-flash';
+    const r = await fetch(`${base}/v1beta/models/${model}:generateContent`, { method: 'POST', headers: { 'x-goog-api-key': key, 'Content-Type': 'application/json' }, body: JSON.stringify({ contents: [{ role: 'user', parts: [{ file_data: { mime_type: 'audio/webm', file_uri: file.uri } }, { text: 'Transcribe this meeting recording word for word. Start a new paragraph when the speaker changes, labelled "Speaker 1:", "Speaker 2:" and so on. Reply with the transcript only.' }] }] }) });
+    const d = await r.json().catch(() => null);
+    fetch(`${base}/v1beta/${file.name}`, { method: 'DELETE', headers: { 'x-goog-api-key': key } }).catch(() => {});
+    if (!r.ok) throw Object.assign(new Error(d?.error?.message || r.statusText), { status: r.status });
+    return (d.candidates?.[0]?.content?.parts || []).map((p) => p.text || '').join('');
+  }
+  throw badRequest('Transcribing needs an OpenAI or Gemini key. Add one in Settings → AI.');
+}
+// Notes, decisions and next steps from the transcript, tied to the campaigns, goals and PSS leads it mentions.
+async function draftMeeting(ws, x) {
+  const auth = { memberId: x.memberId, role: ws.members.find((m) => m.id === x.memberId)?.role };
+  const camps = Object.values(db.campaigns).filter((c) => c.wsId === ws.id && c.status !== 'done' && canSee(auth, 'campaign', c));
+  const said = x.transcript.toLowerCase();
+  // Only leads named in the call go to the AI, and only for owners (who can see them).
+  const leads = auth.role === 'owner' ? (db.pss[ws.id]?.leads || []).filter((l) => l.name.length > 3 && said.includes(l.name.toLowerCase())).slice(0, 10) : [];
+  const prompt = [
+    `Meeting: ${x.title || 'Untitled'} on ${fmtDay(x.startedAt)}, ${Math.round(((x.endedAt || x.startedAt) - x.startedAt) / 60000)} minutes. Recorded by ${x.by}.`,
+    camps.length ? `Campaigns it might belong to:
+${camps.slice(0, 30).map((c) => `- id ${c.id}: ${c.name}${c.brief ? ` · ${clipText(c.brief, 200)}` : ''}
+  outcomes: ${c.outcomes.join(', ')}
+  goals: ${Object.values(db.goals).filter((g) => g.campaignId === c.id).map((g) => `${g.id} "${clipText(g.title, 80)}"`).join(', ') || 'none'}`).join('\n')}` : 'No campaigns.',
+    leads.length ? `Leads from the CRM named in the call:
+${leads.map((l) => `- id ${l.id}: ${l.name}, stage ${l.stage}${l.city ? ', ' + l.city : ''}`).join('\n')}` : '',
+    `Transcript:
+${clipText(x.transcript, 120_000)}`,
+  ].filter(Boolean).join('\n\n');
+  const text = await aiAsk(ws, x.memberId,
+    'You turn a meeting transcript into notes for the person who recorded it. Write a short title, a summary of 3 to 8 plain bullet lines, ' +
+    'the decisions made, and the action items as concrete tasks (with a due date YYYY-MM-DD only when one was said, and who if named). ' +
+    'If the meeting clearly belongs to one of the campaigns listed, give its id, the goal id each action fits (or null), the outcome from that ' +
+    'campaign’s outcomes that fits best, and who was met. Use only what was said: never invent names, numbers, dates or commitments. ' +
+    'If nothing fits a campaign, use null. Reply with JSON only: {"title":"","summary":[""],"decisions":[""],"actions":[{"text":"","due":null,"who":null,"goalId":null}],' +
+    '"campaignId":null,"outcome":null,"contact":null,"leadId":null}',
+    prompt);
+  const j = replyJson(text);
+  const camp = camps.find((c) => c.id === j.campaignId) || null;
+  const goalIds = new Set(camp ? Object.values(db.goals).filter((g) => g.campaignId === camp.id).map((g) => g.id) : []);
+  const lines = (v, n, len) => (Array.isArray(v) ? v : []).map((t) => cleanText(t, len)).filter(Boolean).slice(0, n);
+  return {
+    title: cleanText(j.title, 120) || x.title || 'Meeting',
+    summary: lines(j.summary, 12, 400),
+    decisions: lines(j.decisions, 12, 300),
+    actions: (Array.isArray(j.actions) ? j.actions : []).slice(0, 20).map((a) => ({
+      text: cleanText(a?.text, 300), due: isDay(a?.due) ? a.due : null, who: cleanText(a?.who, 60) || null, goalId: goalIds.has(a?.goalId) ? a.goalId : null,
+    })).filter((a) => a.text),
+    campaignId: camp?.id || null,
+    outcome: camp && camp.outcomes.includes(j.outcome) ? j.outcome : null,
+    contact: cleanText(j.contact, 120) || null,
+    leadId: leads.some((l) => l.id === j.leadId) ? j.leadId : null,
+  };
+}
+async function processMeeting(x) {
+  const ws = db.workspaces[x.wsId];
+  try {
+    x.status = 'transcribing';
+    meetNews(x);
+    if (!x.transcript) x.transcript = (await transcribe(aiOf(ws.id, x.memberId), meetPath(x))).trim();
+    if (!x.transcript) throw badRequest('Nothing was heard in the recording.');
+    x.status = 'drafting';
+    meetNews(x);
+    x.draft = await draftMeeting(ws, x);
+    x.status = 'ready';
+    x.error = null;
+  } catch (e) {
+    console.error('Meeting notes failed:', e.message);
+    x.status = 'failed';
+    x.error = e.status === 400 ? e.message : e.status ? llmError(e) : 'Something went wrong making the notes. Try again.';
+  }
+  save();
+  meetNews(x);
+}
+
 // Goals and tasks drafted from the brief, for the person to tick and add.
 async function aiPlan(ws, auth, c, body) {
   if (!c.brief.trim()) throw badRequest('Write a brief first: the plan is made from it.');
@@ -1807,6 +1928,75 @@ async function api(req, res, url) {
     }
     if (m === 'DELETE' && !c) {
       disconnectCalendar(conn);
+      return send(res, 200, { ok: true });
+    }
+    return send(res, 405, { error: 'Method not allowed' });
+  }
+
+  // Your meeting recordings and their notes. Only yours.
+  if (a === 'meetings') {
+    const mine = () => Object.values(db.meetings).filter((x) => x.wsId === ws.id && x.memberId === auth.memberId).sort((p, q) => q.startedAt - p.startedAt);
+    if (m === 'GET' && !b) return send(res, 200, mine().slice(0, 50).map(publicMeeting));
+    if (m === 'POST' && !b) {
+      const body = await readJson(req);
+      if (mine().some((x) => x.status === 'recording' && Date.now() - x.touched < 60_000)) return send(res, 409, { error: 'You’re already recording a meeting.' });
+      const e = body.entryId && db.entries[body.entryId];
+      const x = { id: rid(), wsId: ws.id, memberId: auth.memberId, by: auth.member, title: cleanText(body.title, 120) || 'Meeting', entryId: e && e.wsId === ws.id ? e.id : null, startedAt: Date.now(), touched: Date.now(), endedAt: null, bytes: 0, seq: 0, mic: !!body.mic, call: !!body.call, status: 'recording', transcript: '', draft: null, error: null };
+      db.meetings[x.id] = x;
+      await fs.promises.writeFile(meetPath(x), '');
+      save();
+      meetNews(x);
+      return send(res, 200, publicMeeting(x));
+    }
+    const x = b && db.meetings[b];
+    if (!x || x.wsId !== ws.id || x.memberId !== auth.memberId) return send(res, 404, { error: 'Not found' });
+    // Pieces arrive in order; a piece sent twice (a retry) is ignored.
+    if (m === 'PUT' && c === 'audio') {
+      if (x.status !== 'recording') return send(res, 409, { error: 'This recording has stopped.' });
+      const seq = Number(url.searchParams.get('seq'));
+      const buf = await readRaw(req, 4_000_000);
+      if (seq < x.seq) return send(res, 200, { bytes: x.bytes });
+      if (seq !== x.seq) return send(res, 409, { error: 'Out of order', seq: x.seq });
+      if (x.bytes + buf.length > MEET_MAX) return send(res, 413, { error: 'The recording is as long as it can be.' });
+      await fs.promises.appendFile(meetPath(x), buf);
+      x.bytes += buf.length;
+      x.seq++;
+      x.touched = Date.now();
+      return send(res, 200, { bytes: x.bytes });
+    }
+    if (m === 'POST' && c === 'stop') {
+      if (x.status !== 'recording') return send(res, 409, { error: 'Already stopped.' });
+      x.endedAt = Date.now();
+      if (x.bytes < 2000) {
+        x.status = 'failed';
+        x.error = 'Nothing was recorded.';
+        await fs.promises.rm(meetPath(x), { force: true });
+      } else processMeeting(x);
+      save();
+      meetNews(x);
+      return send(res, 200, publicMeeting(x));
+    }
+    if (m === 'POST' && c === 'retry' && x.status === 'failed' && (x.transcript || x.bytes >= 2000)) {
+      processMeeting(x);
+      return send(res, 200, publicMeeting(x));
+    }
+    // Accepted: the notes went where the person chose, and the audio goes.
+    if (m === 'POST' && c === 'saved') {
+      const body = await readJson(req);
+      x.status = 'saved';
+      x.savedAt = Date.now();
+      x.noteId = typeof body.noteId === 'string' ? body.noteId.slice(0, 40) : null;
+      x.campaignId = db.campaigns[body.campaignId]?.wsId === ws.id ? body.campaignId : null;
+      await fs.promises.rm(meetPath(x), { force: true });
+      save();
+      meetNews(x);
+      return send(res, 200, publicMeeting(x));
+    }
+    if (m === 'DELETE' && !c) {
+      await fs.promises.rm(meetPath(x), { force: true });
+      delete db.meetings[x.id];
+      save();
+      broadcast(ws.id, { type: 'meeting:remove', id: x.id, forMember: x.memberId });
       return send(res, 200, { ok: true });
     }
     return send(res, 405, { error: 'Method not allowed' });
@@ -2762,6 +2952,21 @@ setInterval(syncAllCalendars, 30_000);
 setInterval(syncAllPss, 60_000);
 setInterval(mailTick, MAIL_GAP);
 setInterval(runAutopay, 10 * 60_000);
+// A recording whose page went away (closed, crashed) is wrapped up with what arrived.
+setInterval(() => {
+  for (const x of Object.values(db.meetings)) {
+    if (x.status !== 'recording' || Date.now() - x.touched < 2 * 60_000) continue;
+    x.endedAt = x.touched;
+    if (x.bytes >= 2000) processMeeting(x);
+    else {
+      x.status = 'failed';
+      x.error = 'Nothing was recorded.';
+      fs.promises.rm(meetPath(x), { force: true }).catch(() => {});
+      save();
+      meetNews(x);
+    }
+  }
+}, 60_000);
 runAutopay();
 
 migratePeople();

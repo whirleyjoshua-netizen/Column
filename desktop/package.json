@@ -34,7 +34,11 @@
           ]
         }
       ],
-      "category": "public.app-category.productivity"
+      "category": "public.app-category.productivity",
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "Column records your microphone when you record a meeting.",
+        "NSAudioCaptureUsageDescription": "Column records your computer's sound when you record a meeting, so both sides of a call are heard."
+      }
     },
     "win": {
       "target": "nsis"

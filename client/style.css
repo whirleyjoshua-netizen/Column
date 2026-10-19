@@ -922,3 +922,21 @@ body.viewer .preview pre, body.viewer .preview .pv-edit, body.viewer .preview .d
 .bill-paid { margin-top: 18px; } .bill-paid summary { color: var(--muted); font-size: 12px; cursor: pointer; }
 .bill-hist { display: flex; justify-content: space-between; gap: 10px; padding: 6px 4px; font-size: 12.5px; border-top: 1px solid var(--line); font-variant-numeric: tabular-nums; }
 .bill-hist small { color: var(--muted); }
+
+/* meeting notes */
+.b-rec { position: absolute; right: 6px; bottom: 4px; border: 0; border-radius: 99px; padding: 1px 8px; font-size: 11px; font-weight: 600; color: #fff; background: rgba(229, 72, 77, 0.9); cursor: pointer; }
+.block.short .b-rec { position: static; flex: none; }
+.rec { position: fixed; left: 50%; bottom: 72px; transform: translateX(-50%); z-index: 40; display: flex; align-items: center; gap: 8px; max-width: calc(100% - 32px); padding: 6px 6px 6px 12px; border-radius: 99px; background: var(--panel); border: 1px solid var(--line); box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35); font-size: 12.5px; }
+.rec b { font-variant-numeric: tabular-nums; }
+.rec-what { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .rec-what small { color: var(--muted); }
+.rec-dot { width: 8px; height: 8px; border-radius: 50%; background: #e5484d; flex: none; animation: recpulse 1.4s ease-in-out infinite; }
+@keyframes recpulse { 50% { opacity: 0.35; } }
+.rec-spin { width: 12px; height: 12px; flex: none; border-radius: 50%; border: 2px solid var(--line); border-top-color: var(--accent); animation: recspin 0.8s linear infinite; }
+@keyframes recspin { to { transform: rotate(360deg); } }
+.rec:not(.on):not(:has(button)) { padding-right: 14px; }
+.meet-acts { display: flex; flex-direction: column; gap: 6px; }
+.meet-act { display: flex; align-items: center; gap: 8px; } .meet-act .pick { flex: 1; min-width: 0; } .meet-act .pick small { color: var(--muted); }
+.meet-act select { max-width: 40%; }
+.meet-log { display: flex; flex-direction: column; gap: 6px; }
+.meet-tx summary { color: var(--muted); font-size: 12px; cursor: pointer; }
+.meet-tx pre { white-space: pre-wrap; font-family: inherit; font-size: 12.5px; line-height: 1.5; max-height: 260px; overflow: auto; margin: 6px 0 0; color: var(--text); }

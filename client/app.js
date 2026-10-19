@@ -390,6 +390,13 @@
       loadState().catch(() => {});
     } else if (msg.type === 'calendars') {
       if (!$('#settings').classList.contains('hidden')) loadCalendars();
+    } else if (msg.type === 'meeting' || msg.type === 'meeting:remove') {
+      const was = (S.meetings || []).find((x) => x.id === (msg.meeting?.id || msg.id));
+      S.meetings = (S.meetings || []).filter((x) => x.id !== (msg.meeting?.id || msg.id));
+      if (msg.meeting) S.meetings.unshift(msg.meeting);
+      if (msg.meeting?.status === 'ready' && was?.status !== 'ready') toast('Meeting notes are ready', { label: 'Review', run: () => meetingSheet(msg.meeting) });
+      renderRec();
+      renderTool();
     } else if (msg.type === 'bill' || msg.type === 'bill:remove') {
       S.bills = S.bills.filter((x) => x.id !== (msg.bill?.id || msg.id));
       if (msg.type === 'bill') S.bills.push(msg.bill);
@@ -483,6 +490,7 @@
     S.lists = st.lists || [];
     S.templates = st.templates || [];
     S.bills = st.bills || [];
+    api('GET', '/meetings').then((x) => { S.meetings = x; renderRec(); }).catch(() => {});
     loadPss();
     S.panes = S.panes.map((v) => (v.startsWith('stack:') && !stackById(v.slice(6)) ? 'files' : v));
     $('#wsName').textContent = S.workspace.name;
@@ -2073,6 +2081,7 @@
       },
         h('div', { class: 'b-title' }, b.taskId ? h('span', { class: 'is-task', html: I.task, title: 'Linked task' }) : null, repeatMark(b), b.text),
         h('div', { class: 'b-time' }, `${fmtTime(b.start)} – ${fmtTime(b.end)}`),
+        isToday && !R.on && nowMin() >= b.start - 10 && nowMin() < b.end ? h('button', { class: 'b-rec', title: 'Record this meeting and get notes', onclick: (ev) => { ev.stopPropagation(); askRecord(b.text.split('\n')[0], b.id); } }, '● Record') : null,
         h('div', { class: 'b-resize', title: 'Drag to change the end time' })
       );
       el.addEventListener('pointerdown', (ev) => dragTime(ev, b, el, ev.target.closest('.b-resize') ? 'end' : 'move'));
@@ -5130,14 +5139,16 @@
   }
 
   // ---------- tools: small apps that open in a drawer, so the tabs stay as they are ----------
-  const TOOLS = { bills: { name: 'Bills', render: billsTool } };
+  const TOOLS = { bills: { name: 'Bills', render: billsTool }, meetings: { name: 'Meeting notes', render: meetingsTool } };
   let toolOpen = null;
   $('#toolsBtn').addEventListener('click', (e) => {
     const soon = billsSoon().length;
     openMenu(e.currentTarget, [
       { head: 'Tools' },
       { label: h('span', { class: 'tool-item' }, 'Bills', soon ? h('small', {}, `${soon} due soon`) : null), on: toolOpen === 'bills', run: () => openTool('bills') },
-    ]);
+      { label: 'Meeting notes', on: toolOpen === 'meetings', run: () => openTool('meetings') },
+      R.on ? null : { label: '● Record a meeting', run: () => askRecord('') },
+    ].filter(Boolean));
   });
   function openTool(name) {
     toolOpen = name;
@@ -5252,6 +5263,194 @@
       renderDay();
       renderTool();
     }, b ? 'Save' : 'Add bill');
+  }
+
+  // ----- meeting notes: record a call, then review notes drafted from it -----
+  // Records the microphone plus, when shared, the call's own sound, mixed into one track and sent up in
+  // 10-second pieces as it goes, so closing the window loses at most the last few seconds.
+  const R = { on: null };
+  const REC_MAX = 115 * 60_000;
+  const MEET_STATE = { recording: 'Recording', transcribing: 'Transcribing…', drafting: 'Writing notes…', ready: 'Ready to review', failed: 'Didn’t work', saved: 'Saved' };
+  function askRecord(title, entryId) {
+    if (R.on) return toast('Already recording');
+    if (!navigator.mediaDevices?.getUserMedia) return toast('Recording works in the Column desktop app, or in a browser on this computer.');
+    const name = h('input', { value: title || '', placeholder: 'Meeting with…' });
+    sheet('Record a meeting', [
+      h('label', {}, 'What is it', name),
+      h('p', { class: 'day-hint' }, desktop ? 'Column records your microphone and the sound from your computer, so both sides of the call are heard.' : 'Column records your microphone. Next, pick the window or tab with the call and turn on “Share audio” so the other side is heard too.'),
+      h('p', { class: 'day-hint' }, 'Let everyone on the call know you’re recording. When you stop, you’ll get a summary and next steps to check before anything is saved.'),
+    ], () => startRecording(name.value.trim() || 'Meeting', entryId), 'Start recording');
+  }
+  async function startRecording(title, entryId) {
+    let mic, call;
+    try {
+      mic = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+    } catch {
+      throw new Error('Column can’t use the microphone. Allow it in your browser or system settings, then try again.');
+    }
+    try {
+      const d = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true, systemAudio: 'include', selfBrowserSurface: 'exclude' });
+      for (const t of d.getVideoTracks()) t.stop();
+      if (d.getAudioTracks().length) call = d;
+    } catch {}
+    const ctx = new AudioContext();
+    const dest = ctx.createMediaStreamDestination();
+    for (const st of [mic, call].filter(Boolean)) ctx.createMediaStreamSource(st).connect(dest);
+    await ctx.resume().catch(() => {});
+    let meeting;
+    try {
+      meeting = await api('POST', '/meetings', { title, entryId, mic: true, call: !!call });
+    } catch (e) {
+      for (const st of [mic, call].filter(Boolean)) st.getTracks().forEach((t) => t.stop());
+      ctx.close();
+      throw e;
+    }
+    const type = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' : 'audio/webm';
+    const rec = new MediaRecorder(dest.stream, { mimeType: type, audioBitsPerSecond: 24000 });
+    const r = (R.on = { meeting, rec, ctx, streams: [mic, call].filter(Boolean), seq: 0, chain: Promise.resolve(), started: Date.now(), call: !!call, failed: false });
+    rec.ondataavailable = (e) => {
+      if (!e.data.size) return;
+      const n = r.seq++;
+      r.chain = r.chain.then(() => sendPiece(r, e.data, n));
+    };
+    rec.onstop = () => { r.chain = r.chain.then(() => api('POST', `/meetings/${meeting.id}/stop`)).then((x) => upsertMeeting(x)).catch((e) => toast(e.message)); };
+    rec.start(10_000);
+    r.timer = setTimeout(() => { toast('Recordings stop at about two hours'); stopRecording(); }, REC_MAX);
+    r.tick = setInterval(renderRec, 1000);
+    r.bytes = 0;
+    // A silent recorder (audio blocked, no microphone signal) shows up as nothing arriving.
+    r.check = setTimeout(() => { if (R.on === r && !r.bytes) toast('Nothing is being recorded yet. Check the microphone, then stop and start again.'); }, 15_000);
+    call?.getAudioTracks()[0]?.addEventListener('ended', () => { r.call = false; renderRec(); toast('Call sound stopped. Still recording your microphone.'); });
+    if (!call) toast('Recording your microphone only');
+    upsertMeeting(meeting);
+    renderDay();
+  }
+  async function sendPiece(r, blob, n) {
+    for (let i = 0; i < 4; i++) {
+      try {
+        const res = await fetch(`/api/meetings/${r.meeting.id}/audio?seq=${n}`, { method: 'PUT', headers: { Authorization: 'Bearer ' + S.token }, body: blob });
+        if (res.ok) return void (r.bytes += blob.size);
+        if (res.status === 413) return stopRecording();
+      } catch {}
+      await new Promise((ok) => setTimeout(ok, 2000 * (i + 1)));
+    }
+    if (!r.failed) toast('Part of the recording didn’t upload. Check the connection.');
+    r.failed = true;
+  }
+  function stopRecording() {
+    const r = R.on;
+    if (!r) return;
+    R.on = null;
+    clearTimeout(r.timer);
+    clearTimeout(r.check);
+    clearInterval(r.tick);
+    if (r.rec.state !== 'inactive') r.rec.stop();
+    for (const st of r.streams) st.getTracks().forEach((t) => t.stop());
+    r.ctx.close();
+    renderRec();
+    renderDay();
+  }
+  function upsertMeeting(x) {
+    S.meetings = [x, ...(S.meetings || []).filter((y) => y.id !== x.id)];
+    renderRec();
+    renderTool();
+  }
+  // The floating pill: recording time and Stop, then progress, then "Review" when the notes are ready.
+  function renderRec() {
+    let el = $('#rec');
+    const busy = (S.meetings || []).find((x) => x.status === 'transcribing' || x.status === 'drafting');
+    const ready = (S.meetings || []).filter((x) => x.status === 'ready');
+    if (!R.on && !busy && !ready.length) return el?.remove();
+    if (!el) document.body.append((el = h('div', { id: 'rec', class: 'rec' })));
+    if (R.on) {
+      const s = Math.floor((Date.now() - R.on.started) / 1000);
+      el.className = 'rec on';
+      return el.replaceChildren(h('span', { class: 'rec-dot' }), h('b', {}, `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`),
+        h('span', { class: 'rec-what' }, R.on.meeting.title, h('small', {}, R.on.call ? ' · mic + call' : ' · mic only')),
+        h('button', { class: 'btn small', onclick: stopRecording }, 'Stop'));
+    }
+    el.className = 'rec';
+    if (busy) return el.replaceChildren(h('span', { class: 'rec-spin' }), h('span', { class: 'rec-what' }, busy.title, h('small', {}, ' · ' + MEET_STATE[busy.status])));
+    el.replaceChildren(h('span', { class: 'rec-what' }, ready.length > 1 ? `${ready.length} meetings` : ready[0].title, h('small', {}, ' · notes ready')),
+      h('button', { class: 'btn small primary-btn', onclick: () => meetingSheet(ready[0]) }, 'Review'));
+  }
+  function meetingsTool() {
+    const xs = S.meetings || [];
+    return [
+      R.on ? null : h('button', { class: 'add-goal', onclick: () => askRecord('') }, '● Record a meeting'),
+      xs.length ? null : h('p', { class: 'day-hint' }, 'Record a call and Column writes the notes: a summary, decisions and next steps, tied to the right campaign. Meetings happening now also get a Record button on your Day.'),
+      ...xs.map((x) => h('div', { class: 'bill', onclick: () => meetingSheet(x) },
+        h('span', { class: 'bill-name' }, x.draft?.title || x.title, h('small', {}, `${new Date(x.startedAt).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })} · ${Math.max(1, Math.round(((x.endedAt || Date.now()) - x.startedAt) / 60000))} min`)),
+        h('span', { class: 'bill-right' }, h('small', { class: x.status === 'failed' ? 'late' : null }, MEET_STATE[x.status])))),
+    ];
+  }
+  function meetingSheet(x) {
+    x = (S.meetings || []).find((y) => y.id === x.id) || x;
+    const del = h('button', { class: 'btn small danger', 'data-label': '1' }, 'Delete recording and notes');
+    del.addEventListener('click', () => confirmClick(del, async () => {
+      await api('DELETE', '/meetings/' + x.id).catch((e) => toast(e.message));
+      S.meetings = S.meetings.filter((y) => y.id !== x.id);
+      closeSheet();
+      renderRec();
+      renderTool();
+    }));
+    if (x.status === 'saved') {
+      const note = x.noteId && S.items.find((it) => it.id === x.noteId);
+      if (note) return openPreview(note);
+      return sheet(x.title, [h('p', { class: 'day-hint' }, 'These notes were saved, and the note has since been removed.'), del], () => {}, 'Close');
+    }
+    if (x.status !== 'ready') {
+      const retry = x.status === 'failed' ? h('button', { class: 'btn small', onclick: () => api('POST', `/meetings/${x.id}/retry`).then((y) => { upsertMeeting(y); closeSheet(); }).catch((e) => toast(e.message)) }, 'Try again') : null;
+      return sheet(x.title, [h('p', { class: x.status === 'failed' ? 'err' : 'day-hint', style: 'text-align:left' }, x.status === 'failed' ? x.error || 'Didn’t work.' : MEET_STATE[x.status]), h('div', { class: 'btns' }, retry, del)], () => {}, 'Close');
+    }
+    const d = x.draft;
+    const camps = S.campaigns.filter((c) => c.status !== 'done');
+    const title = h('input', { value: d.title });
+    const body = h('textarea', { rows: 9 });
+    body.value = [...d.summary.map((t) => '- ' + t), ...(d.decisions.length ? ['', 'Decided', ...d.decisions.map((t) => '- ' + t)] : [])].join('\n');
+    const camp = h('select', {}, h('option', { value: '' }, 'No campaign · keep it in my notes'), camps.map((c) => h('option', { value: c.id, selected: c.id === d.campaignId }, c.name)));
+    const actBox = h('div', { class: 'meet-acts' });
+    const acts = d.actions.map((a) => ({ a, cb: h('input', { type: 'checkbox', checked: true }), goal: h('select', { 'aria-label': 'Goal' }) }));
+    const logRow = h('div', { class: 'meet-log' });
+    const logOn = h('input', { type: 'checkbox', checked: !!d.outcome });
+    const contact = h('input', { value: d.contact || '', placeholder: 'Who you met', 'aria-label': 'Who you met' });
+    const outcome = h('select', { 'aria-label': 'Outcome' });
+    const fill = () => {
+      const c = campById(camp.value);
+      for (const { a, goal } of acts) {
+        goal.replaceChildren(h('option', { value: '' }, c ? 'My tasks' : 'My tasks'), ...(c ? goalsOf(c.id).map((g) => h('option', { value: g.id, selected: g.id === a.goalId }, g.title)) : []));
+        goal.disabled = !c;
+      }
+      outcome.replaceChildren(...(c ? c.outcomes.map((o) => h('option', { value: o, selected: o === d.outcome }, o)) : []));
+      logRow.classList.toggle('hidden', !c);
+    };
+    camp.addEventListener('change', fill);
+    fill();
+    actBox.append(...acts.map(({ a, cb, goal }) => h('div', { class: 'meet-act' }, h('label', { class: 'pick' }, cb, h('span', {}, a.text, a.due || a.who ? h('small', {}, ` · ${[a.who, a.due && dueLabel(a.due)].filter(Boolean).join(' · ')}`) : null)), goal)));
+    logRow.append(h('label', { class: 'pick' }, logOn, 'Log it in the campaign'), h('div', { class: 'row2' }, contact, outcome));
+    sheet('Meeting notes', [
+      h('label', {}, 'Title', title),
+      h('label', {}, 'Notes', body),
+      h('label', {}, 'Goes with', camp),
+      acts.length ? h('div', { class: 'live-field' }, 'Next steps · ticked ones become tasks', actBox) : null,
+      logRow,
+      x.transcript ? h('details', { class: 'meet-tx' }, h('summary', {}, 'Transcript'), h('pre', {}, x.transcript)) : null,
+      del,
+    ], async () => {
+      const c = campById(camp.value);
+      const keep = acts.filter((y) => y.cb.checked);
+      const text = [title.value.trim() || 'Meeting', new Date(x.startedAt).toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit' }), '', body.value.trim(), ...(keep.length ? ['', 'Next steps', ...keep.map(({ a }) => '- ' + a.text)] : [])].join('\n');
+      const note = await api('POST', '/items', { type: 'text', text, stackId: c?.stackId || null });
+      await api('PATCH', '/items/' + note.id, { pinned: true }).catch(() => {});
+      for (const { a, goal } of keep) upsertTask(await api('POST', '/tasks', { text: a.text, due: a.due, goalId: c && goal.value ? goal.value : null, assigneeId: a.who ? memberByName(a.who) : null }));
+      if (c && logOn.checked && outcome.value) {
+        const at = await api('POST', '/attempts', { campaignId: c.id, method: c.methods?.includes('Meeting') ? 'Meeting' : null, outcome: outcome.value, contact: contact.value.trim(), note: title.value.trim(), leadId: d.leadId || undefined });
+        if (!S.attempts.some((y) => y.id === at.id)) S.attempts.push(at);
+      }
+      upsertMeeting(await api('POST', `/meetings/${x.id}/saved`, { noteId: note.id, campaignId: c?.id || null }));
+      renderCamps();
+      toast(`Saved the notes${keep.length ? ` · ${keep.length} task${keep.length === 1 ? '' : 's'}` : ''}${c ? ' · ' + c.name : ''}`);
+    }, 'Save notes');
   }
 
   // ----- campaign email: each person gets their own, from your Outlook -----

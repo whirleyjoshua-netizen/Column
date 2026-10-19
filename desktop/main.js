@@ -1,6 +1,6 @@
 // Column desktop shell: a slim window docked to the screen edge, tray/menu-bar icon,
 // global hotkey, and native drag-out of files to Finder/Explorer/desktop.
-const { app, BrowserWindow, Tray, Menu, globalShortcut, ipcMain, nativeImage, screen, shell, clipboard } = require('electron');
+const { app, BrowserWindow, Tray, Menu, globalShortcut, ipcMain, nativeImage, screen, shell, clipboard, session, desktopCapturer } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 const fsp = require('node:fs/promises');
@@ -15,12 +15,20 @@ const HOTKEY = 'CommandOrControl+Shift+Space';
 const PREFETCH_LIMIT = 500 * 1024 * 1024;
 
 if (!app.requestSingleInstanceLock()) app.quit();
+// Meeting recording hears the computer's own sound (the other side of a call). On macOS that's
+// ScreenCaptureKit's system audio, which macOS asks permission for once.
+if (isMac) app.commandLine.appendSwitch('enable-features', 'MacLoopbackAudioForScreenShare,MacSckSystemAudioLoopbackOverride');
 
 // ---------- config ----------
 const CFG_PATH = path.join(app.getPath('userData'), 'config.json');
 let cfg = { serverUrl: null, alwaysOnTop: false, autoSave: false, openAtLogin: false, panes: 1, trayNext: true };
 try {
   cfg = { ...cfg, ...JSON.parse(fs.readFileSync(CFG_PATH, 'utf8')) };
+} catch {}
+// The microphone only works on secure pages; a Column server on the local network is plain http.
+try {
+  const u = cfg.serverUrl && new URL(cfg.serverUrl);
+  if (u && u.protocol === 'http:' && u.hostname !== 'localhost' && u.hostname !== '127.0.0.1') app.commandLine.appendSwitch('unsafely-treat-insecure-origin-as-secure', u.origin);
 } catch {}
 function saveCfg() {
   fs.mkdirSync(path.dirname(CFG_PATH), { recursive: true });
@@ -309,6 +317,11 @@ app.on('second-instance', () => {
 });
 app.whenReady().then(() => {
   if (isMac) app.dock.setIcon(appIcon);
+  // A Column page asking for the screen gets the computer's sound with no picker: it only ever asks
+  // to record a meeting, and throws the picture away.
+  session.defaultSession.setDisplayMediaRequestHandler((_req, cb) => {
+    desktopCapturer.getSources({ types: ['screen'] }).then((s) => cb(s[0] ? { video: s[0], audio: 'loopback' } : {})).catch(() => cb({}));
+  });
   fs.rmSync(CACHE_DIR, { recursive: true, force: true });
   log('starting', `displays=${JSON.stringify(screen.getAllDisplays().map((d) => d.workArea))}`);
   createWindow();
