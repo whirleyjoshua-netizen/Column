@@ -432,8 +432,22 @@
     }
   }
 
+  // Column was updated on the server: reload into the new version, now if nothing's being typed, else when asked.
+  let updateOffered = false;
+  function newVersion() {
+    const typing = document.activeElement?.matches?.('input, textarea, [contenteditable]') && document.activeElement.value !== '';
+    if (document.hidden || !typing) return location.reload();
+    if (updateOffered) return;
+    updateOffered = true;
+    toast('Column was updated', { label: 'Reload', run: () => location.reload() });
+    // Otherwise it reloads the next time the window is hidden.
+    document.addEventListener('visibilitychange', () => document.hidden && location.reload());
+  }
+
   async function loadState() {
     const st = await api('GET', '/state');
+    if (st.version && S.version && st.version !== S.version) return newVersion();
+    S.version ||= st.version;
     S.workspace = st.workspace;
     S.me = st.me;
     S.items = st.items;

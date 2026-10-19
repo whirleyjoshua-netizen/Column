@@ -1290,6 +1290,7 @@ async function api(req, res, url) {
       attempts: Object.values(db.attempts).filter((x) => x.wsId === ws.id && canSee(auth, 'attempt', x)).map(publicAttempt),
       lists: Object.values(db.lists).filter((l) => l.wsId === ws.id && canSee(auth, 'list', l)).map(publicList),
       templates: Object.values(db.templates).filter((t) => t.wsId === ws.id && seesTemplate(t, auth.memberId)).map(publicTemplate),
+      version: clientVersion(),
     });
   }
 
@@ -2016,6 +2017,20 @@ async function api(req, res, url) {
   }
 
   return send(res, 404, { error: 'Unknown endpoint' });
+}
+
+// A fingerprint of the app's files. Open windows compare it when they reconnect and reload when it changes,
+// so devices that stay open (like the desktop app in the tray) pick up updates.
+let clientVer = { key: '', hash: '' };
+function clientVersion() {
+  const files = ['index.html', 'app.js', 'style.css'].map((f) => path.join(CLIENT_DIR, f));
+  const key = files.map((f) => fs.statSync(f, { throwIfNoEntry: false })?.mtimeMs || 0).join(':');
+  if (key !== clientVer.key) {
+    const h = crypto.createHash('sha256');
+    for (const f of files) h.update(fs.existsSync(f) ? fs.readFileSync(f) : '');
+    clientVer = { key, hash: h.digest('hex').slice(0, 12) };
+  }
+  return clientVer.hash;
 }
 
 function serveStatic(req, res, url) {
