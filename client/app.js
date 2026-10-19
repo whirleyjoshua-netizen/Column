@@ -2665,7 +2665,7 @@
   }, 30_000);
 
   // ---------- campaigns: campaign → goals → tasks, with logged attempts ----------
-  const K = { open: store.get('campOpen', null), mine: store.get('campsMine', false), logOpen: null, showAll: {}, stale: false, pick: null, listOpen: null, listShow: {}, listN: {}, dragList: null };
+  const K = { open: store.get('campOpen', null), mine: store.get('campsMine', false), logOpen: null, showAll: {}, stale: false, pick: null, listOpen: null, listShow: {}, listN: {}, dragList: null, logFrom: {}, book: null };
   const campById = (id) => id && S.campaigns?.find((c) => c.id === id);
   const goalById = (id) => id && S.goals?.find((g) => g.id === id);
   const goalsOf = (cid) => S.goals.filter((g) => g.campaignId === cid).sort((a, b) => (a.order || 0) - (b.order || 0) || a.createdAt - b.createdAt);
@@ -2886,6 +2886,7 @@
         ch ? h('button', { class: 'btn small', onclick: () => { setTab('chat'); openChannel('ch:' + ch.id); } }, '# ' + ch.name) : null,
         st ? h('button', { class: 'btn small', title: 'Open a file, add one, or go to the stack', onclick: (e) => filesMenu(e.currentTarget, c) }, `Files · ${files} ▾`) : null,
         st ? h('button', { class: 'btn small', title: 'Jot a quick note, or open one', onclick: (e) => notesMenu(e.currentTarget, c) }, `Notes · ${notes} ▾`) : null,
+        h('button', { class: 'btn small' + (K.logOpen === c.id ? ' on' : ''), onclick: () => openLog(c) }, 'Log'),
         h('button', { class: 'btn small', onclick: () => openReport(c) }, 'Write a report')),
       h('div', { class: 'any-h camp-goals-h' }, 'Log'),
       logBox(c),
@@ -3205,6 +3206,7 @@
   }
   function logRow(c, l, r) {
     K.logOpen = c.id;
+    K.logFrom[c.id] = l.id;
     K.pick = { listId: l.id, rowId: r.id };
     renderCamps();
     $('#camps .logbox')?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
@@ -3300,12 +3302,16 @@
         h('span', { class: 'att-by' }, `${x.memberId === S.me?.memberId ? 'You' : x.by} · `, h('span', { 'data-ago': x.at }, ago(x.at))),
         x.memberId === S.me?.memberId || c.ownerId === S.me?.memberId ? h('button', { class: 't-btn', 'aria-label': 'Remove', html: I.close, onclick: () => api('DELETE', '/attempts/' + x.id).catch((e) => toast(e.message)) }) : null)),
       recent.length > 3 ? h('button', { class: 'link', onclick: () => { K.showAll[c.id] = !K.showAll[c.id]; renderCamps(); } }, K.showAll[c.id] ? 'Show less' : `Show all ${recent.length}`) : null) : null;
-    if (!open) return h('div', { class: 'logbox' }, h('button', { class: 'btn small log-btn', onclick: () => { K.logOpen = c.id; renderCamps(); $('#camps .log-contact')?.focus(); } }, `+ Log ${methods.length ? methods.map((m) => (/^[aeiou]/i.test(m) ? 'an ' : 'a ') + m.toLowerCase()).join(' or ') : 'an attempt'}`), list);
-    const lists = listsOf(c.id);
-    const pl = K.pick && lists.find((l) => l.id === K.pick.listId);
+    if (!open) return h('div', { class: 'logbox' }, list || h('p', { class: 'day-hint' }, 'Nothing logged yet. Tap Log above after a call or email.'));
+    // Log against one of the campaign's lists, or blank for anyone else.
+    const all = listsOf(c.id);
+    if (K.logFrom[c.id] !== 'blank' && !all.some((l) => l.id === K.logFrom[c.id])) K.logFrom[c.id] = all[0]?.id || 'blank';
+    const from = K.logFrom[c.id];
+    const lists = all.filter((l) => l.id === from);
+    const pl = K.pick && all.find((l) => l.id === K.pick.listId);
     const picked = pl && pl.rows.find((r) => r.id === K.pick.rowId);
     if (!picked) K.pick = null;
-    const contact = h('input', { class: 'log-contact', placeholder: lists.length ? 'Who? Search your list, or type a name' : 'Who? (business, person, area)', 'aria-label': 'Who you reached' });
+    const contact = h('input', { class: 'log-contact', placeholder: lists.length ? `Who? Search ${lists[0].name}, or type a name` : 'Who? (business, person, area)', 'aria-label': 'Who you reached' });
     const note = h('input', { class: 'log-note', placeholder: 'Note (optional)', 'aria-label': 'Note' });
     // Prospects matching what's typed; with nothing typed, the next few not yet contacted.
     const sugg = h('div', { class: 'log-sugg hidden' });
@@ -3321,7 +3327,7 @@
       }
       hits.sort((a, b) => !!a.x - !!b.x);
       sugg.replaceChildren(
-        h('small', { class: 'log-sugg-h' }, needle ? (hits.length ? 'From your lists' : 'Not on your lists') : 'Up next'),
+        h('small', { class: 'log-sugg-h' }, needle ? (hits.length ? 'From ' + lists[0].name : 'Not on ' + lists[0].name) : 'Up next'),
         ...hits.slice(0, 6).map(({ l, r, f, x }) => h('button', {
           onpointerdown: (e) => { e.preventDefault(); K.pick = { listId: l.id, rowId: r.id }; contact.blur(); renderCamps(); $('#camps .log-note')?.focus(); },
         }, h('b', {}, f.who(r)), h('small', {}, [r.cells[f.phone], r.cells[f.email]].filter(Boolean).join(' · ')), x ? h('span', { class: 'oc oc-' + c.outcomes.indexOf(x.outcome) }, x.outcome) : null)));
@@ -3336,26 +3342,69 @@
       ? h('div', { class: 'log-row log-picked' },
           h('div', { class: 'crow-who' }, h('b', {}, f.who(picked)), h('small', {}, reachLinks(f, picked))),
           h('button', { class: 't-btn', 'aria-label': 'Pick someone else', html: I.close, onclick: () => { K.pick = null; renderCamps(); $('#camps .log-contact')?.focus(); } }))
-      : h('div', { class: 'log-row' }, contact, h('button', { class: 't-btn', 'aria-label': 'Close', html: I.close, onclick: () => { K.logOpen = null; renderCamps(); } }));
+      : h('div', { class: 'log-row' }, contact, h('button', { class: 't-btn', 'aria-label': 'Close', html: I.close, onclick: () => { K.logOpen = null; K.book = null; renderCamps(); } }));
+    const bk = K.book;
     const log = async (outcome) => {
+      const name = picked ? f.who(picked) : contact.value.trim();
+      if (bk && (!bk.date || !bk.time)) return toast('Pick a day and time for the meeting');
       try {
-        const x = await api('POST', '/attempts', { campaignId: c.id, method: K.method, outcome, contact: picked ? f.who(picked) : contact.value, note: note.value, ...(picked ? K.pick : {}) });
+        const x = await api('POST', '/attempts', { campaignId: c.id, method: K.method, outcome, contact: name, note: note.value, ...(picked ? K.pick : {}) });
         if (!S.attempts.some((y) => y.id === x.id)) S.attempts.push(x);
+        let booked = '';
+        if (bk) {
+          const [hh, mm] = bk.time.split(':').map(Number);
+          const start = hh * 60 + mm;
+          const e = await api('POST', '/entries', { text: `${name ? 'Meeting with ' + name : 'Meeting'} · ${c.name}${note.value.trim() ? '\n' + note.value.trim() : ''}`, date: bk.date, start, end: Math.min(1440, start + bk.mins), color: c.color });
+          upsertEntry(e);
+          booked = ` · on your schedule ${fmtDay(bk.date).rel || fmtDay(bk.date).long} ${fmtTime(start)}`;
+          K.book = null;
+        }
         contact.value = note.value = '';
         K.pick = null;
-        toast(`Logged · ${outcome}`);
+        toast(`Logged · ${outcome}${booked}`);
         renderCamps();
         $('#camps .log-contact')?.focus();
       } catch (e) {
         toast(e.message);
       }
     };
+    // Book a meeting straight onto the schedule. A timed block also goes to your connected calendar.
+    if (bk && !S.cals) loadCalendars().then(() => K.book && renderCamps());
+    const cal = S.cals?.connections.find((x) => x.writeCalId && !x.error);
+    const field = (el, key) => {
+      el.value = bk[key];
+      el.addEventListener('change', () => (bk[key] = key === 'mins' ? Number(el.value) : el.value));
+      return el;
+    };
+    const booking = bk
+      ? h('div', { class: 'log-book' },
+          h('div', { class: 'log-book-row' },
+            field(h('input', { type: 'date', 'aria-label': 'Meeting day' }), 'date'),
+            field(h('input', { type: 'time', step: 900, 'aria-label': 'Meeting time' }), 'time'),
+            field(h('select', { 'aria-label': 'How long' }, [15, 30, 45, 60, 90].map((n) => h('option', { value: n }, n < 60 ? `${n} min` : `${n / 60} hr`.replace('1.5 hr', '1½ hr')))), 'mins'),
+            h('button', { class: 't-btn', 'aria-label': 'Don’t book', html: I.close, onclick: () => { K.book = null; document.activeElement?.blur(); renderCamps(); } })),
+          h('small', { class: 'day-hint' }, `Goes on your schedule${cal ? ` and ${CAL_NAMES[cal.provider]}` : ''} when you tap how it went.`))
+      : h('button', { class: 'link log-book-btn', onclick: () => { K.book = { date: todayKey(), time: '', mins: 30 }; document.activeElement?.blur(); renderCamps(); } }, '+ Book a meeting');
+    const sources = all.length
+      ? h('div', { class: 'seg log-from' }, [...all.map((l) => [l.id, l.name]), ['blank', 'Blank']].map(([id, label]) =>
+          h('button', { class: id === from ? 'on' : '', title: id === 'blank' ? 'Log someone who isn’t on a list' : 'Log from ' + label, onclick: () => { K.logFrom[c.id] = id; K.pick = null; document.activeElement?.blur(); renderCamps(); $('#camps .log-contact')?.focus(); } }, label)))
+      : null;
     return h('div', { class: 'logbox open' },
+      sources,
       methods.length > 1 ? h('div', { class: 'seg log-methods' }, methods.map((m) => h('button', { class: m === K.method ? 'on' : '', onclick: () => { K.method = m; renderCamps(); $('#camps .log-contact')?.focus(); } }, m))) : null,
       h('div', { class: 'log-who' }, who, picked ? null : sugg),
       note,
+      booking,
       h('div', { class: 'log-outcomes' }, c.outcomes.map((o, i) => h('button', { class: 'oc oc-' + i, onclick: () => log(o) }, o))),
       list);
+  }
+
+  function openLog(c) {
+    K.logOpen = K.logOpen === c.id ? null : c.id;
+    if (!K.logOpen) K.book = null;
+    renderCamps();
+    $('#camps .logbox')?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    $('#camps .log-contact')?.focus();
   }
 
   function assignCampaignMenu(anchor, c) {

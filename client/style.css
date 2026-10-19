@@ -640,7 +640,13 @@ button.oc:hover { background: color-mix(in srgb, var(--oc) 30%, transparent); }
 .report-stats { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; font-size: 12.5px; display: flex; flex-direction: column; gap: 3px; }
 .log-methods button { padding: 3px; font-size: 12px; }
 .logbox:not(.open) { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; }
-.logbox:not(.open) .log-btn { align-self: flex-start; }
+.log-from { flex-wrap: wrap; }
+.log-from button { flex: 1 1 auto; padding: 3px 8px; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.log-book-btn { align-self: flex-start; font-size: 12px; }
+.log-book { display: flex; flex-direction: column; gap: 4px; }
+.log-book-row { display: flex; align-items: center; gap: 6px; }
+.log-book-row input, .log-book-row select { min-width: 0; flex: 1; font-size: 12.5px; padding: 5px 7px; }
+.log-book .day-hint { margin: 0; }
 .logbox.open { margin-bottom: 12px; }
 .tabs button { padding: 5px 2px; }
 .attempts .link { align-self: flex-start; margin-top: 2px; }
@@ -754,3 +760,4 @@ button.oc:hover { background: color-mix(in srgb, var(--oc) 30%, transparent); }
 body.viewer .preview { background: var(--bg); padding: 12px; animation: none; }
 body.viewer .preview .pv-bar { color: var(--text); }
 body.viewer .preview pre, body.viewer .preview .pv-edit, body.viewer .preview .docx { flex: 1; width: 100%; max-width: 900px; max-height: none; font-size: 14px; line-height: 1.55; }
+.camp-links .btn.on { border-color: var(--accent); color: var(--accent); }
