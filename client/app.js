@@ -390,6 +390,11 @@
       loadState().catch(() => {});
     } else if (msg.type === 'calendars') {
       if (!$('#settings').classList.contains('hidden')) loadCalendars();
+    } else if (msg.type === 'bill' || msg.type === 'bill:remove') {
+      S.bills = S.bills.filter((x) => x.id !== (msg.bill?.id || msg.id));
+      if (msg.type === 'bill') S.bills.push(msg.bill);
+      renderDay();
+      renderTool();
     } else if (msg.type === 'pss') {
       loadPss();
     } else if (msg.type === 'mail') {
@@ -477,6 +482,7 @@
     S.attempts = st.attempts || [];
     S.lists = st.lists || [];
     S.templates = st.templates || [];
+    S.bills = st.bills || [];
     loadPss();
     S.panes = S.panes.map((v) => (v.startsWith('stack:') && !stackById(v.slice(6)) ? 'files' : v));
     $('#wsName').textContent = S.workspace.name;
@@ -2032,9 +2038,10 @@
     // Tasks due this day (plus overdue ones, carried over to today) that aren't on the schedule yet.
     const onDay = new Set(entries.map((e) => e.taskId).filter(Boolean));
     const due = S.tasks.filter((t) => !t.done && forMe(t) && !onDay.has(t.id) && (t.due === k || (isToday && isOverdue(t)))).sort((a, b) => (a.due < b.due ? -1 : a.due > b.due ? 1 : byPrio(a, b)));
-    if (due.length) {
+    const bills = billsDueOn(k);
+    if (due.length || bills.length) {
       const late = due.filter(isOverdue);
-      parts.push(h('div', { class: 'anytime tasks' }, h('div', { class: 'any-h' }, 'Due', late.length ? moveToToday(late) : null), due.map(taskRow)));
+      parts.push(h('div', { class: 'anytime tasks' }, h('div', { class: 'any-h' }, 'Due', late.length ? moveToToday(late) : null), due.map(taskRow), bills.map(billDayRow)));
     }
 
     if (anytime.length || (!entries.length && !due.length)) {
@@ -4855,6 +4862,7 @@
 
   // ---------- settings ----------
   $('#settingsBtn').addEventListener('click', () => {
+    closeTool();
     const s = $('#settings');
     if (s.classList.toggle('hidden')) return;
     renderSettings();
@@ -5119,6 +5127,131 @@
       renderCamps();
       if (!l) toast(`Added ${x.name} · ${x.rows.length} lead${x.rows.length === 1 ? '' : 's'}`);
     }, l ? 'Save' : 'Add to campaign');
+  }
+
+  // ---------- tools: small apps that open in a drawer, so the tabs stay as they are ----------
+  const TOOLS = { bills: { name: 'Bills', render: billsTool } };
+  let toolOpen = null;
+  $('#toolsBtn').addEventListener('click', (e) => {
+    const soon = billsSoon().length;
+    openMenu(e.currentTarget, [
+      { head: 'Tools' },
+      { label: h('span', { class: 'tool-item' }, 'Bills', soon ? h('small', {}, `${soon} due soon`) : null), on: toolOpen === 'bills', run: () => openTool('bills') },
+    ]);
+  });
+  function openTool(name) {
+    toolOpen = name;
+    $('#settings').classList.add('hidden');
+    $('#tool').classList.remove('hidden');
+    renderTool();
+  }
+  function closeTool() {
+    toolOpen = null;
+    $('#tool').classList.add('hidden');
+  }
+  function renderTool() {
+    const el = $('#tool');
+    if (!toolOpen || el.classList.contains('hidden')) return;
+    if (el.contains(document.activeElement) && document.activeElement.matches('input, textarea, select')) return;
+    const keep = el.scrollTop;
+    el.replaceChildren(h('h2', {}, TOOLS[toolOpen].name, h('button', { class: 'icon-btn', html: I.close, 'aria-label': 'Close', onclick: closeTool })), ...TOOLS[toolOpen].render().filter(Boolean));
+    el.scrollTop = keep;
+  }
+
+  // ----- bills -----
+  const money = (cents) => (cents / 100).toLocaleString(undefined, { style: 'currency', currency: 'USD', minimumFractionDigits: cents % 100 ? 2 : 0 });
+  const BILL_REPEATS = [['monthly', 'Every month'], ['weekly', 'Every week'], ['quarterly', 'Every 3 months'], ['yearly', 'Every year'], ['once', 'Just once']];
+  const PER_MONTH = { weekly: 52 / 12, monthly: 1, quarterly: 1 / 3, yearly: 1 / 12, once: 0 };
+  const billsLive = () => (S.bills || []).filter((b) => !b.done);
+  const billsSoon = () => billsLive().filter((b) => b.due <= addDays(todayKey(), 7));
+  // A bill shows on the day it's due; on today, so do any that are late.
+  const billsDueOn = (k) => billsLive().filter((b) => b.due === k || (k === todayKey() && b.due < k)).sort((a, b) => (a.due < b.due ? -1 : 1));
+  const billLate = (b) => !b.done && b.due < todayKey();
+  async function payBill(b, undo) {
+    try {
+      const x = await api('POST', `/bills/${b.id}/paid`, undo ? { undo: true } : {});
+      S.bills = S.bills.map((y) => (y.id === x.id ? x : y));
+      renderDay();
+      renderTool();
+      if (!undo) toast(`Paid ${b.name} · ${money(b.amount)}` + (x.done ? '' : ` · next due ${dueLabel(x.due)}`), { label: 'Undo', run: () => payBill(x, true) });
+    } catch (e) {
+      toast(e.message);
+    }
+  }
+  function billDayRow(b) {
+    return h('div', { class: 'any-row bill-day' + (billLate(b) ? ' late' : ''), onclick: () => openTool('bills') },
+      h('button', { class: 'check', html: I.check, title: 'Mark paid', 'aria-label': 'Mark paid', onclick: (ev) => { ev.stopPropagation(); payBill(b); } }),
+      h('span', { class: 'p-text' }, b.name, h('small', { class: 'bill-amt' }, ' · ' + money(b.amount)),
+        b.autopay ? h('small', { class: 'bill-tag' }, 'autopay') : null,
+        billLate(b) ? h('small', { class: 'bill-tag late' }, `due ${dueLabel(b.due)}`) : null));
+  }
+  function billRow(b) {
+    const late = billLate(b);
+    return h('div', { class: 'bill' + (late ? ' late' : ''), onclick: () => billSheet(b) },
+      h('button', { class: 'check', html: I.check, title: 'Mark paid', 'aria-label': 'Mark paid', onclick: (ev) => { ev.stopPropagation(); payBill(b); } }),
+      h('span', { class: 'bill-name' }, b.name,
+        h('small', {}, [b.scope === 'business' ? 'Business' : null, b.autopay ? 'Autopay' : null, b.repeat === 'once' ? null : BILL_REPEATS.find((r) => r[0] === b.repeat)?.[1].toLowerCase()].filter(Boolean).join(' · '))),
+      h('span', { class: 'bill-right' }, h('b', {}, money(b.amount)), h('small', { class: late ? 'late' : null }, late ? `late · ${dueLabel(b.due)}` : dueLabel(b.due))));
+  }
+  let billScope = store.get('billScope', 'all');
+  function billsTool() {
+    const all = billsLive().filter((b) => billScope === 'all' || b.scope === billScope).sort((a, b) => (a.due < b.due ? -1 : a.due > b.due ? 1 : a.name.localeCompare(b.name)));
+    const today = todayKey();
+    const groups = [
+      ['Late', all.filter((b) => b.due < today)],
+      ['Next 7 days', all.filter((b) => b.due >= today && b.due <= addDays(today, 7))],
+      ['Later', all.filter((b) => b.due > addDays(today, 7))],
+    ].filter(([, xs]) => xs.length);
+    const perMonth = (xs) => Math.round(xs.reduce((n, b) => n + b.amount * PER_MONTH[b.repeat], 0));
+    const in30 = all.filter((b) => b.due <= addDays(today, 30)).reduce((n, b) => n + b.amount, 0);
+    const mine = billsLive();
+    const hasBiz = mine.some((b) => b.scope === 'business');
+    const set = (v) => { billScope = v; store.set('billScope', v); renderTool(); };
+    const paid = (S.bills || []).flatMap((b) => (b.paid || []).map((p) => ({ b, p }))).filter(({ b }) => billScope === 'all' || b.scope === billScope).sort((x, y) => y.p.at - x.p.at).slice(0, 12);
+    return [
+      hasBiz ? h('div', { class: 'seg' }, [['all', 'All'], ['personal', 'Personal'], ['business', 'Business']].map(([v, t]) => h('button', { class: billScope === v ? 'on' : null, onclick: () => set(v) }, t))) : null,
+      all.length ? h('div', { class: 'bill-sum' },
+        h('div', {}, h('small', {}, 'Due in the next 30 days'), h('b', {}, money(in30))),
+        h('div', {}, h('small', {}, 'A month, on average'), h('b', {}, money(perMonth(all))),
+          hasBiz && billScope === 'all' ? h('small', {}, `${money(perMonth(all.filter((b) => b.scope === 'personal')))} personal · ${money(perMonth(all.filter((b) => b.scope === 'business')))} business`) : null)) : null,
+      ...groups.map(([t, xs]) => h('section', {}, h('h3', { class: t === 'Late' ? 'late' : null }, t), xs.map(billRow))),
+      h('button', { class: 'add-goal', onclick: () => billSheet() }, '+ Add a bill'),
+      all.length ? null : h('p', { class: 'day-hint' }, 'Add what you pay and when. Each bill shows on your Day when it’s due, and ticking it moves it to the next one. Personal bills are only yours; business bills are shared with the team’s owners.'),
+      paid.length ? h('details', { class: 'bill-paid' }, h('summary', {}, 'Paid recently'),
+        paid.map(({ b, p }) => h('div', { class: 'bill-hist' }, h('span', {}, b.name, h('small', {}, ` · due ${dueLabel(p.due)}${p.auto ? ' · autopay' : ''}`)), h('span', {}, money(p.amount))))) : null,
+    ];
+  }
+  function billSheet(b) {
+    const name = h('input', { value: b?.name || '', placeholder: 'Electric, Rent, Truck loan…' });
+    const amount = h('input', { value: b ? (b.amount / 100).toFixed(2) : '', placeholder: '0.00', inputmode: 'decimal' });
+    const due = h('input', { type: 'date', value: b?.due || todayKey() });
+    const repeat = h('select', {}, BILL_REPEATS.map(([v, t]) => h('option', { value: v, selected: (b?.repeat || 'monthly') === v }, t)));
+    const mineOrNew = !b || b.memberId === S.me?.memberId;
+    const scope = h('select', { disabled: !mineOrNew || (!amOwner() && b?.scope !== 'business') }, h('option', { value: 'personal' }, 'Personal · only you'), h('option', { value: 'business', selected: b?.scope === 'business' }, 'Business · shared with owners'));
+    const autopay = h('input', { type: 'checkbox', checked: !!b?.autopay });
+    const note = h('input', { value: b?.note || '', placeholder: 'Account number, how you pay… (optional)' });
+    const del = b ? h('button', { class: 'btn small danger', 'data-label': '1' }, 'Delete bill') : null;
+    del?.addEventListener('click', () => confirmClick(del, async () => {
+      await api('DELETE', '/bills/' + b.id).catch((e) => toast(e.message));
+      S.bills = S.bills.filter((x) => x.id !== b.id);
+      closeSheet();
+      renderDay();
+      renderTool();
+    }));
+    sheet(b ? 'Edit bill' : 'New bill', [
+      h('label', {}, 'Name', name),
+      h('div', { class: 'row2' }, h('label', {}, 'Amount ($)', amount), h('label', {}, b ? 'Next due' : 'Due', due)),
+      h('div', { class: 'row2' }, h('label', {}, 'Repeats', repeat), h('label', {}, 'Kind', scope)),
+      h('label', { class: 'pick' }, autopay, 'Autopay: mark it paid by itself after it’s due'),
+      h('label', {}, 'Note', note),
+      del,
+    ], async () => {
+      const body = { name: name.value, amount: amount.value, due: due.value, repeat: repeat.value, autopay: autopay.checked, note: note.value, tz: myTz(), ...(mineOrNew ? { scope: scope.value } : {}) };
+      const x = b ? await api('PATCH', '/bills/' + b.id, body) : await api('POST', '/bills', body);
+      S.bills = [...S.bills.filter((y) => y.id !== x.id), x];
+      renderDay();
+      renderTool();
+    }, b ? 'Save' : 'Add bill');
   }
 
   // ----- campaign email: each person gets their own, from your Outlook -----

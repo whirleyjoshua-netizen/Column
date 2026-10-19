@@ -26,7 +26,7 @@ const PUBLIC_URL = (process.env.PUBLIC_URL || `http://localhost:${PORT}`).replac
 fs.mkdirSync(FILES_DIR, { recursive: true });
 
 // ---------- persistence (a JSON file is plenty for personal/small-team use) ----------
-let db = { workspaces: {}, tokens: {}, items: {}, entries: {}, tasks: {}, uploads: {}, campaigns: {}, goals: {}, attempts: {}, lists: {}, templates: {}, calendars: {}, ai: {}, pss: {}, sends: {} };
+let db = { workspaces: {}, tokens: {}, items: {}, entries: {}, tasks: {}, uploads: {}, campaigns: {}, goals: {}, attempts: {}, lists: {}, templates: {}, calendars: {}, ai: {}, pss: {}, sends: {}, bills: {} };
 try {
   db = { ...db, ...JSON.parse(fs.readFileSync(DB_PATH, 'utf8')) };
 } catch {}
@@ -589,7 +589,7 @@ function broadcast(wsId, msg) {
   const campaignId = campaignOfMsg(msg);
   const feed = msg.item && db.items[msg.item.id] ? feedOfItem(db.items[msg.item.id]) : null;
   const data = JSON.stringify(msg);
-  for (const s of set) if (s.readyState === 1 && seesCampaign(campaignId, s.meta.memberId) && seesFeed(feed, s.meta.memberId) && seesTemplate(msg.template, s.meta.memberId) && seesEntry(msg.entry, s.meta.memberId) && (!msg.forMember || msg.forMember === s.meta.memberId) && (!msg.forOwners || isOwnerId(wsId, s.meta.memberId))) s.send(data);
+  for (const s of set) if (s.readyState === 1 && seesCampaign(campaignId, s.meta.memberId) && seesFeed(feed, s.meta.memberId) && seesTemplate(msg.template, s.meta.memberId) && seesEntry(msg.entry, s.meta.memberId) && (!msg.forMember || msg.forMember === s.meta.memberId) && (!msg.forOwners || isOwnerId(wsId, s.meta.memberId)) && (!msg.bill || seesBill(wsId, msg.bill, s.meta.memberId))) s.send(data);
 }
 
 // ---------- campaigns: campaign → goals → tasks, plus logged attempts (each call or email and its outcome) ----------
@@ -1268,6 +1268,69 @@ function syncAllPss() {
   }
 }
 
+// ---------- bills: what's owed and when, personal or business ----------
+// A personal bill is only its owner's. A business bill is also seen, and paid, by the team's owners.
+// Each bill keeps its next due date; paying it moves that on by its repeat. Autopay bills mark
+// themselves paid the day after they're due.
+const BILL_REPEATS = ['once', 'weekly', 'monthly', 'quarterly', 'yearly'];
+const BILL_HISTORY = 60;
+const seesBill = (wsId, b, memberId) => b.memberId === memberId || (b.scope === 'business' && isOwnerId(wsId, memberId));
+const publicBill = ({ wsId, ...b }) => b;
+const validDay = (v) => (/^\d{4}-\d{2}-\d{2}$/.test(String(v)) && !Number.isNaN(Date.parse(v + 'T00:00:00Z')) ? v : null);
+// The next due date after `due`, keeping the original day of the month (the 31st stays the 31st, or the month's last day).
+function nextDue(b, due) {
+  if (b.repeat === 'weekly') return addDays(due, 7);
+  const months = { monthly: 1, quarterly: 3, yearly: 12 }[b.repeat];
+  if (!months) return null;
+  const [y, mo] = due.split('-').map(Number);
+  const t = new Date(Date.UTC(y, mo - 1 + months, 1));
+  const last = new Date(Date.UTC(t.getUTCFullYear(), t.getUTCMonth() + 1, 0)).getUTCDate();
+  return dayKey(new Date(Date.UTC(t.getUTCFullYear(), t.getUTCMonth(), Math.min(b.dom || Number(due.slice(8)), last))));
+}
+function applyBill(b, body) {
+  if (body.name !== undefined) b.name = cleanText(body.name, 80);
+  if (!b.name) throw badRequest('Give the bill a name.');
+  if (body.amount !== undefined) {
+    const n = Math.round(Number(String(body.amount).replace(/[$,\s]/g, '')) * 100);
+    if (!Number.isFinite(n) || n < 0 || n > 1e11) throw badRequest('Enter the amount, like 142.50');
+    b.amount = n;
+  }
+  if (body.repeat !== undefined) b.repeat = BILL_REPEATS.includes(body.repeat) ? body.repeat : 'monthly';
+  if (body.due !== undefined) {
+    b.due = validDay(body.due);
+    if (!b.due) throw badRequest('Pick the date it’s due.');
+    b.dom = Number(b.due.slice(8));
+    b.done = false;
+  }
+  if (body.scope !== undefined) b.scope = body.scope === 'business' ? 'business' : 'personal';
+  if (body.autopay !== undefined) b.autopay = !!body.autopay;
+  if (body.note !== undefined) b.note = cleanText(body.note, 1000);
+  if (body.tz !== undefined) b.tz = validTz(body.tz);
+  return b;
+}
+// Pays the bill due now: it goes into the history and the next due date comes up.
+function payBill(b, by, auto) {
+  b.paid = [{ due: b.due, at: Date.now(), amount: b.amount, by, auto: !!auto }, ...(b.paid || [])].slice(0, BILL_HISTORY);
+  const next = nextDue(b, b.due);
+  if (next) b.due = next;
+  else b.done = true;
+}
+function billNews(b) {
+  broadcast(b.wsId, { type: 'bill', bill: publicBill(b) });
+}
+function runAutopay() {
+  for (const b of Object.values(db.bills)) {
+    if (!b.autopay || b.done) continue;
+    const today = localNow(b.tz || validTz(), Date.now()).date;
+    let n = 0;
+    while (!b.done && b.due < today && n++ < 60) payBill(b, 'Autopay', true);
+    if (n) {
+      save();
+      billNews(b);
+    }
+  }
+}
+
 // ---------- campaign email: one email to each person, from an owner's own Outlook ----------
 // Never BCC: each person gets their own message, addressed only to them. Every email carries the team's
 // mailing address and that person's unsubscribe link from PSS (and List-Unsubscribe headers), and anyone
@@ -1601,6 +1664,7 @@ async function api(req, res, url) {
       attempts: Object.values(db.attempts).filter((x) => x.wsId === ws.id && canSee(auth, 'attempt', x)).map(publicAttempt),
       lists: Object.values(db.lists).filter((l) => l.wsId === ws.id && canSee(auth, 'list', l)).map(publicList),
       templates: Object.values(db.templates).filter((t) => t.wsId === ws.id && seesTemplate(t, auth.memberId)).map(publicTemplate),
+      bills: Object.values(db.bills).filter((x) => x.wsId === ws.id && seesBill(ws.id, x, auth.memberId)).map(publicBill),
       version: clientVersion(),
     });
   }
@@ -1746,6 +1810,47 @@ async function api(req, res, url) {
       return send(res, 200, { ok: true });
     }
     return send(res, 405, { error: 'Method not allowed' });
+  }
+
+  // Bills: yours, and the business's if you're an owner.
+  if (a === 'bills') {
+    if (m === 'POST' && !b) {
+      const body = await readJson(req, 20_000);
+      const x = applyBill({ id: rid(), wsId: ws.id, memberId: auth.memberId, by: auth.member, createdAt: Date.now(), name: '', amount: 0, repeat: 'monthly', scope: 'personal', autopay: false, note: '', paid: [], done: false, tz: validTz() }, { repeat: 'monthly', ...body });
+      if (!x.due) return send(res, 400, { error: 'Pick the date it’s due.' });
+      if (x.scope === 'business' && auth.role !== 'owner') x.scope = 'personal';
+      db.bills[x.id] = x;
+      runAutopay();
+      save();
+      billNews(x);
+      return send(res, 200, publicBill(x));
+    }
+    const x = b && db.bills[b];
+    if (!x || x.wsId !== ws.id || !seesBill(ws.id, x, auth.memberId)) return send(res, 404, { error: 'Not found' });
+    const body = m === 'DELETE' ? {} : await readJson(req, 20_000);
+    if (m === 'PATCH' && !c) {
+      // Only its owner moves a bill between personal and business.
+      if (body.scope !== undefined && x.memberId !== auth.memberId) delete body.scope;
+      if (body.scope === 'business' && auth.role !== 'owner') return send(res, 403, { error: 'Only team owners keep business bills.' });
+      applyBill(x, body);
+    } else if (m === 'POST' && c === 'paid') {
+      if (body.undo) {
+        const last = x.paid?.[0];
+        if (!last) return send(res, 400, { error: 'Nothing to undo.' });
+        x.paid.shift();
+        x.due = last.due;
+        x.done = false;
+      } else if (x.done) return send(res, 400, { error: 'That bill is already paid.' });
+      else payBill(x, auth.member, false);
+    } else if (m === 'DELETE' && !c) {
+      delete db.bills[x.id];
+      save();
+      broadcast(ws.id, { type: 'bill:remove', id: x.id, bill: publicBill(x) });
+      return send(res, 200, { ok: true });
+    } else return send(res, 405, { error: 'Method not allowed' });
+    save();
+    billNews(x);
+    return send(res, 200, publicBill(x));
   }
 
   // Campaign email from your own Outlook. Owners only, since it reaches the PSS contacts.
@@ -2656,6 +2761,8 @@ setInterval(runSchedules, 30_000);
 setInterval(syncAllCalendars, 30_000);
 setInterval(syncAllPss, 60_000);
 setInterval(mailTick, MAIL_GAP);
+setInterval(runAutopay, 10 * 60_000);
+runAutopay();
 
 migratePeople();
 migrateDay();
