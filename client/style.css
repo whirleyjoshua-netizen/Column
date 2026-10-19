@@ -940,3 +940,25 @@ body.viewer .preview pre, body.viewer .preview .pv-edit, body.viewer .preview .d
 .meet-log { display: flex; flex-direction: column; gap: 6px; }
 .meet-tx summary { color: var(--muted); font-size: 12px; cursor: pointer; }
 .meet-tx pre { white-space: pre-wrap; font-family: inherit; font-size: 12.5px; line-height: 1.5; max-height: 260px; overflow: auto; margin: 6px 0 0; color: var(--text); }
+
+/* tools: contacts and email */
+.contacts.contacts-tool { max-height: none; overflow: visible; margin: 0; }
+.contact-row { flex-direction: row; align-items: flex-start; gap: 10px; }
+.contact-row > input { margin-top: 3px; flex: none; }
+.contact-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.contacts-act { position: sticky; bottom: -30px; display: flex; align-items: center; gap: 10px; margin: 10px -14px -30px; padding: 10px 14px 14px; background: var(--bg); border-top: 1px solid var(--line); }
+.contacts-act span { flex: 1; font-size: 12.5px; }
+.contact-pick { padding: 4px 0; } .contact-pick small { color: var(--muted); }
+.tool section.mail-to, .tool section.mail-form { display: flex; flex-direction: column; gap: 8px; }
+.tool .mail-form label { display: flex; flex-direction: column; gap: 5px; color: var(--muted); font-size: 12px; }
+.mail-add { display: flex; flex-wrap: wrap; gap: 6px; }
+.mail-person { display: flex; align-items: center; gap: 8px; padding: 4px 2px; border-top: 1px solid var(--line); font-size: 12.5px; }
+.mail-person span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mail-person small { color: var(--muted); }
+.mail-person.out { opacity: 0.5; text-decoration: line-through; }
+.mail-person .t-btn { opacity: 1; }
+.mail-clear { align-self: flex-start; font-size: 12px; }
+.mail-send { display: flex; align-items: center; justify-content: flex-end; gap: 10px; margin-top: 6px; }
+.mail-warn { flex: 1; }
+.tool .sends { margin: 0 0 14px; }
+.mail-to .link { align-self: flex-start; font-size: 12px; }

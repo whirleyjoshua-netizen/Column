@@ -409,6 +409,7 @@
     } else if (msg.type === 'send' && S.mail) {
       S.mail.sends = [msg.send, ...S.mail.sends.filter((x) => x.id !== msg.send.id)];
       renderCamps();
+      renderTool();
     } else if (msg.type === 'send:remove' && S.mail) {
       S.mail.sends = S.mail.sends.filter((x) => x.id !== msg.id);
       renderCamps();
@@ -2923,7 +2924,6 @@
         st ? h('button', { class: 'btn small', title: 'Open a file, add one, or go to the stack', onclick: (e) => filesMenu(e.currentTarget, c) }, `Files · ${files} ▾`) : null,
         st ? h('button', { class: 'btn small', title: 'Jot a quick note, or open one', onclick: (e) => notesMenu(e.currentTarget, c) }, `Notes · ${notes} ▾`) : null,
         h('button', { class: 'btn small' + (K.logOpen === c.id ? ' on' : ''), onclick: () => openLog(c) }, 'Log'),
-        S.mail ? h('button', { class: 'btn small', title: 'Email everyone on a list, each person separately', onclick: () => emailSheet(c) }, 'Email') : null,
         h('button', { class: 'btn small', onclick: () => openReport(c) }, 'Write a report')),
       sendBars(c),
       h('div', { class: 'any-h camp-goals-h' }, 'Log'),
@@ -3867,7 +3867,7 @@
       file ? { label: 'Use as…', run: () => useSheet(c, file) } : null,
       k === 'tracker' ? { label: 'Edit stages…', run: () => stagesSheet(l) } : null,
       l.live && S.pss?.connected ? { label: 'Change who’s on it…', run: () => liveSheet(c, l) } : null,
-      S.mail && k === 'calls' && listFields(l).email >= 0 ? { label: 'Email this list…', run: () => emailSheet(c, l) } : null,
+      S.mail && k === 'calls' && listFields(l).email >= 0 ? { label: 'Email this list…', run: () => { const f = listFields(l); emailTo(l.rows.filter((r) => !r.dne).map((r) => ({ email: r.cells[f.email], name: f.who(r) === '—' ? '' : f.who(r), first: f.first(r), listId: l.id, rowId: r.id }))); } } : null,
       ...(draggableKind(l) && goalsOf(c.id).length ? [{ head: k === 'checklist' ? 'Run it as a task on' : 'Add as a task to' }, ...goalsOf(c.id).map((g) => ({ label: g.title, run: () => listToGoal(l, g) }))] : []),
       { label: file ? 'Remove (the file stays)' : 'Remove', danger: true, run: () => api('DELETE', '/lists/' + l.id).catch((e) => toast(e.message)) },
     ].filter(Boolean));
@@ -4136,7 +4136,6 @@
         run: () => (it.type === 'folder' ? showStack(c.stackId) : docKind(it) || kind(it) === 'pdf' ? dockOpen(c, { type: 'file', id: it.id }) : openPreview(it)),
       })),
       { label: '+ Add a call list or file…', run: () => pickCampaignFiles(c) },
-      S.pss?.connected ? { label: '+ Live list from PSS…', run: () => liveSheet(c) } : null,
       { label: files.length > 8 ? `Go to the stack · all ${files.length} files` : 'Go to the stack', run: () => showStack(c.stackId) },
     ].filter(Boolean));
   }
@@ -5009,6 +5008,7 @@
       S.contacts = S.pss.connected ? (await api('GET', '/pss/contacts')).leads : null;
       S.mail = S.pss.connected ? await api('GET', '/mail') : null;
       renderCamps();
+      renderTool();
     } catch {
       return;
     }
@@ -5066,32 +5066,50 @@
       h('div', { class: 'srow' },
         h('span', {}, `${p.count.toLocaleString()} contact${p.count === 1 ? '' : 's'}`,
           h('small', { class: p.error ? 'err' : null }, p.error ? p.error : p.syncedAt ? [`Updated `, h('span', { 'data-ago': p.syncedAt }, ago(p.syncedAt)), p.dne ? ` · ${p.dne} don’t want email` : ''] : 'Not synced yet')),
-        h('span', { class: 'ai-key' }, p.count ? h('button', { class: 'btn small', onclick: () => contactsSheet() }, 'Contacts') : null, sync)));
+        h('span', { class: 'ai-key' }, p.count ? h('button', { class: 'btn small', onclick: () => openTool('contacts') }, 'Contacts') : null, sync)));
     return sec;
   }
-  function contactsSheet() {
+  // Everyone in PSS, kept current. Tick people to email them.
+  const CT = { q: '', stage: '', picked: new Set() };
+  function contactsTool() {
+    if (!S.pss?.connected) return [h('p', { class: 'day-hint' }, 'Connect PSS admin in Settings to bring your leads and customers here. They stay current with your website.'), h('button', { class: 'btn small', onclick: () => { closeTool(); openSettings(); } }, 'Open Settings')];
     const all = [...(S.contacts || [])].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
-    const q = h('input', { type: 'search', placeholder: 'Search name, phone, email, city', 'aria-label': 'Search contacts' });
-    const stage = h('select', { 'aria-label': 'Stage' }, h('option', { value: '' }, 'All stages'),
-      stagesIn(all).map((v) => h('option', { value: v }, `${stageLabel(v)} · ${all.filter((x) => x.stage === v).length}`)));
+    const q = h('input', { type: 'search', value: CT.q, placeholder: 'Search name, phone, email, city', 'aria-label': 'Search contacts' });
+    const stage = h('select', { 'aria-label': 'Stage' }, h('option', { value: '' }, 'All stages'), stagesIn(all).map((v) => h('option', { value: v, selected: CT.stage === v }, `${stageLabel(v)} · ${all.filter((x) => x.stage === v).length}`)));
     const count = h('p', { class: 'day-hint' });
-    const box = h('div', { class: 'contacts' });
+    const box = h('div', { class: 'contacts contacts-tool' });
+    const bar = h('div', { class: 'contacts-act hidden' });
+    const no = noEmail();
+    const act = () => {
+      const n = CT.picked.size;
+      bar.classList.toggle('hidden', !n);
+      bar.replaceChildren(h('span', {}, `${n} selected`), h('button', { class: 'link', onclick: () => { CT.picked.clear(); show(); } }, 'Clear'),
+        h('button', { class: 'btn small primary-btn', onclick: () => { const ps = all.filter((x) => CT.picked.has(x.id)); CT.picked.clear(); emailTo(ps.map((x) => ({ email: x.email, name: x.name, leadId: x.id }))); } }, `Email ${n}`));
+    };
     const show = () => {
+      CT.q = q.value;
+      CT.stage = stage.value;
       const n = q.value.trim().toLowerCase();
       const hits = all.filter((x) => (!stage.value || x.stage === stage.value) && (!n || [x.name, x.phone, x.email, x.city, x.address].some((v) => v.toLowerCase().includes(n))));
       count.textContent = hits.length === all.length ? `${all.length.toLocaleString()} contacts` : `${hits.length.toLocaleString()} of ${all.length.toLocaleString()}`;
-      box.replaceChildren(...hits.slice(0, 150).map((x) => h('div', { class: 'contact' },
-        h('div', { class: 'contact-top' }, h('b', {}, x.name || '—'), h('span', { class: 'lead-stage' }, stageLabel(x.stage))),
-        h('small', {}, [x.address, x.city, x.source, x.assignedTo ? '→ ' + x.assignedTo : ''].filter(Boolean).join(' · ')),
-        h('small', { class: 'contact-reach' },
-          x.phone ? h('a', { href: 'tel:' + x.phone.replace(/[^\d+]/g, '') }, x.phone) : null,
-          x.email ? (x.dne ? h('span', { title: 'On the do-not-contact list' }, h('s', {}, x.email), ' · unsubscribed') : h('a', { href: 'mailto:' + x.email }, x.email)) : null))),
-        hits.length > 150 ? h('p', { class: 'day-hint' }, 'Showing the first 150. Search to narrow it down.') : null);
+      box.replaceChildren(...hits.slice(0, 150).map((x) => {
+        const can = MAIL_RE.test(x.email.trim()) && !no.has(x.email.toLowerCase());
+        const cb = h('input', { type: 'checkbox', checked: CT.picked.has(x.id), disabled: !can, title: can ? 'Select to email' : x.email ? 'Unsubscribed' : 'No email address', 'aria-label': 'Select ' + x.name });
+        cb.addEventListener('change', () => { if (cb.checked) CT.picked.add(x.id); else CT.picked.delete(x.id); act(); });
+        return h('div', { class: 'contact contact-row' }, cb,
+          h('div', { class: 'contact-main' },
+            h('div', { class: 'contact-top' }, h('b', {}, x.name || '—'), h('span', { class: 'lead-stage' }, stageLabel(x.stage))),
+            h('small', {}, [x.address, x.city, x.source, x.assignedTo ? '→ ' + x.assignedTo : ''].filter(Boolean).join(' · ')),
+            h('small', { class: 'contact-reach' },
+              x.phone ? h('a', { href: 'tel:' + x.phone.replace(/[^\d+]/g, '') }, x.phone) : null,
+              x.email ? (x.dne ? h('span', { title: 'On the do-not-contact list' }, h('s', {}, x.email), ' · unsubscribed') : h('a', { href: 'mailto:' + x.email }, x.email)) : null)));
+      }), hits.length > 150 ? h('p', { class: 'day-hint' }, 'Showing the newest 150. Search to narrow it down.') : null);
+      act();
     };
     q.addEventListener('input', show);
     stage.addEventListener('change', show);
     show();
-    sheet('Contacts from PSS', [h('div', { class: 'contacts-bar' }, q, stage), count, box], () => {}, 'Done');
+    return [h('div', { class: 'contacts-bar' }, q, stage), count, box, bar];
   }
   // A call list of the leads that match, kept in step with PSS.
   const LIVE_DAYS = [[0, 'Any time'], [30, 'Last 30 days'], [90, 'Last 90 days'], [180, 'Last 6 months'], [365, 'Last year']];
@@ -5139,13 +5157,15 @@
   }
 
   // ---------- tools: small apps that open in a drawer, so the tabs stay as they are ----------
-  const TOOLS = { bills: { name: 'Bills', render: billsTool }, meetings: { name: 'Meeting notes', render: meetingsTool } };
+  const TOOLS = { bills: { name: 'Bills', render: billsTool }, contacts: { name: 'Contacts', render: contactsTool }, email: { name: 'Email', render: emailTool }, meetings: { name: 'Meeting notes', render: meetingsTool } };
   let toolOpen = null;
   $('#toolsBtn').addEventListener('click', (e) => {
     const soon = billsSoon().length;
     openMenu(e.currentTarget, [
       { head: 'Tools' },
       { label: h('span', { class: 'tool-item' }, 'Bills', soon ? h('small', {}, `${soon} due soon`) : null), on: toolOpen === 'bills', run: () => openTool('bills') },
+      amOwner() ? { label: h('span', { class: 'tool-item' }, 'Contacts', S.contacts?.length ? h('small', {}, S.contacts.length.toLocaleString()) : null), on: toolOpen === 'contacts', run: () => openTool('contacts') } : null,
+      amOwner() ? { label: h('span', { class: 'tool-item' }, 'Email', (S.mail?.sends || []).some((x) => x.status === 'sending') ? h('small', {}, 'sending…') : null), on: toolOpen === 'email', run: () => openTool('email') } : null,
       { label: 'Meeting notes', on: toolOpen === 'meetings', run: () => openTool('meetings') },
       R.on ? null : { label: '● Record a meeting', run: () => askRecord('') },
     ].filter(Boolean));
@@ -5453,119 +5473,227 @@
     }, 'Save notes');
   }
 
-  // ----- campaign email: each person gets their own, from your Outlook -----
+  // ----- Email: one email to each person, from your Outlook -----
+  // Who gets it is built up from Contacts, a list, or addresses typed or pasted in, and can be logged in a
+  // campaign. Each person gets their own email, addressed only to them.
   const MAIL_RE = /^[^\s@<>",;]+@[^\s@<>",;]+\.[a-z]{2,}$/i;
-  // Who on a list gets it, and who doesn't and why. The server checks it all again.
-  function mailPeople(l, fresh) {
-    const f = listFields(l), st = rowStatus(l);
-    const no = new Set((S.contacts || []).filter((x) => x.dne).map((x) => x.email.toLowerCase()));
-    const out = { to: [], none: 0, unsub: 0, dup: 0, done: 0 };
-    const seen = new Set();
-    for (const r of l.rows) {
-      const email = String(r.cells[f.email] || '').trim().toLowerCase();
-      if (!MAIL_RE.test(email)) out.none++;
-      else if (seen.has(email)) out.dup++;
-      else if (seen.add(email) && (r.dne || no.has(email))) out.unsub++;
-      else if (fresh && st.has(r.id)) out.done++;
-      else out.to.push({ rowId: r.id, email, name: f.who(r) === '—' ? '' : f.who(r), first: f.first(r) });
+  const M = { to: [], subject: '', body: '', campaignId: '', showAll: false, armed: false, preview: false };
+  const mergeText = (t, r) => t.replace(/\{\s*first\s*name\s*\}/gi, r?.first || 'there').replace(/\{\s*name\s*\}/gi, r?.name || 'there');
+  const firstOf = (name) => {
+    const w = String(name || '').trim().split(/\s+/)[0];
+    return /^\p{L}[\p{L}'’-]*$/u.test(w) ? w : '';
+  };
+  const noEmail = () => new Set((S.contacts || []).filter((x) => x.dne).map((x) => x.email.toLowerCase()));
+  // Adds people, each address once. Returns how many were new.
+  function mailAdd(people) {
+    const have = new Set(M.to.map((r) => r.email));
+    let n = 0;
+    for (const p of people) {
+      const email = String(p.email || '').trim().toLowerCase();
+      if (!MAIL_RE.test(email) || have.has(email)) continue;
+      have.add(email);
+      M.to.push({ ...p, email, name: p.name || '', first: p.first ?? firstOf(p.name) });
+      n++;
+    }
+    M.armed = false;
+    return n;
+  }
+  function emailTo(people) {
+    const n = mailAdd(people);
+    openTool('email');
+    toast(n ? `Added ${n} to the email` : 'They’re already on it');
+  }
+  // Addresses from pasted text or a file: "Name <a@b.co>", CSV rows, or bare addresses.
+  function readAddresses(text) {
+    const out = [];
+    for (const line of String(text).split(/\r?\n/)) {
+      const cells = line.split(/[,;\t]/).map((x) => x.trim().replace(/^"|"$/g, ''));
+      for (const m of line.matchAll(/(?:"?([^"<>,;\t]*?)"?\s*<)?([^\s<>",;]+@[^\s<>",;]+\.[a-z]{2,})>?/gi)) {
+        const name = (m[1] || '').trim() || cells.find((x) => x && !x.includes('@') && !/^[\d\s()+.-]{7,}$/.test(x) && x.length < 60) || '';
+        out.push({ email: m[2], name });
+      }
     }
     return out;
   }
-  const mergeText = (t, r) => t.replace(/\{\s*first\s*name\s*\}/gi, r?.first || 'there').replace(/\{\s*name\s*\}/gi, r?.name || 'there');
-  function emailSheet(c, l0) {
+  function pickContacts() {
+    const no = noEmail();
+    const all = (S.contacts || []).filter((x) => MAIL_RE.test(x.email.trim()) && !no.has(x.email.toLowerCase())).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+    const q = h('input', { type: 'search', placeholder: 'Search name, email, city', 'aria-label': 'Search contacts' });
+    const stage = h('select', { 'aria-label': 'Stage' }, h('option', { value: '' }, 'All stages'), stagesIn(all).map((v) => h('option', { value: v }, `${stageLabel(v)} · ${all.filter((x) => x.stage === v).length}`)));
+    const picked = new Set();
+    const box = h('div', { class: 'contacts' });
+    const allBox = h('input', { type: 'checkbox' });
+    const hits = () => {
+      const n = q.value.trim().toLowerCase();
+      return all.filter((x) => (!stage.value || x.stage === stage.value) && (!n || [x.name, x.email, x.city].some((v) => v.toLowerCase().includes(n))));
+    };
+    const label = () => { const b = $('#sheet .btns .primary-btn'); if (b) b.textContent = picked.size ? `Add ${picked.size}` : 'Add'; };
+    const show = () => {
+      const xs = hits();
+      allBox.checked = xs.length > 0 && xs.every((x) => picked.has(x.id));
+      box.replaceChildren(...xs.slice(0, 300).map((x) => {
+        const cb = h('input', { type: 'checkbox', checked: picked.has(x.id) });
+        cb.addEventListener('change', () => { if (cb.checked) picked.add(x.id); else picked.delete(x.id); label(); });
+        return h('label', { class: 'pick contact-pick' }, cb, h('span', {}, h('b', {}, x.name || x.email), h('small', {}, ` · ${x.email} · ${stageLabel(x.stage)}`)));
+      }), xs.length > 300 ? h('p', { class: 'day-hint' }, `Showing 300 of ${xs.length}. “Select all” takes all ${xs.length}.`) : null);
+    };
+    allBox.addEventListener('change', () => { for (const x of hits()) allBox.checked ? picked.add(x.id) : picked.delete(x.id); show(); label(); });
+    q.addEventListener('input', show);
+    stage.addEventListener('change', show);
+    show();
+    sheet('Add from Contacts', [
+      h('div', { class: 'contacts-bar' }, q, stage),
+      h('label', { class: 'pick' }, allBox, 'Select all shown'),
+      box,
+      h('p', { class: 'day-hint' }, 'Only contacts with an email address who haven’t unsubscribed are here.'),
+    ], () => {
+      mailAdd(all.filter((x) => picked.has(x.id)).map((x) => ({ email: x.email, name: x.name, leadId: x.id })));
+      renderTool();
+    }, 'Add');
+  }
+  function pickList() {
+    const lists = S.lists.filter((l) => kindOf(l) === 'calls' && listFields(l).email >= 0 && campById(l.campaignId));
+    if (!lists.length) return toast('None of your campaigns has a list with email addresses yet.');
+    const pick = h('select', {}, lists.map((l) => h('option', { value: l.id }, `${l.name} · ${campById(l.campaignId).name}`)));
+    const fresh = h('input', { type: 'checkbox' });
+    const info = h('p', { class: 'day-hint' });
+    const people = () => {
+      const l = lists.find((x) => x.id === pick.value), f = listFields(l), st = rowStatus(l);
+      return l.rows.filter((r) => !(fresh.checked && st.has(r.id))).map((r) => ({ email: r.cells[f.email], name: f.who(r) === '—' ? '' : f.who(r), first: f.first(r), listId: l.id, rowId: r.id, dne: r.dne }))
+        .filter((p) => MAIL_RE.test(String(p.email || '').trim()) && !p.dne);
+    };
+    const update = () => (info.textContent = `${people().length} with an email address`);
+    pick.addEventListener('change', update);
+    fresh.addEventListener('change', update);
+    update();
+    sheet('Add from a list', [h('label', {}, 'List', pick), h('label', { class: 'pick' }, fresh, 'Only people not contacted yet'), info], () => {
+      mailAdd(people());
+      renderTool();
+    }, 'Add');
+  }
+  function pickTyped() {
+    const ta = h('textarea', { rows: 6, placeholder: 'pat@example.com\nSam Lee <sam@example.com>\nor paste rows from a spreadsheet' });
+    const file = h('input', { type: 'file', accept: '.csv,.txt,text/csv,text/plain', class: 'hidden' });
+    const info = h('p', { class: 'day-hint' });
+    const update = () => (info.textContent = `${readAddresses(ta.value).length} address${readAddresses(ta.value).length === 1 ? '' : 'es'} found`);
+    ta.addEventListener('input', update);
+    file.addEventListener('change', async () => {
+      const f = file.files[0];
+      if (f) ta.value = [ta.value.trim(), (await f.text()).slice(0, 2_000_000)].filter(Boolean).join('\n');
+      update();
+    });
+    update();
+    sheet('Type or paste addresses', [ta, h('div', { class: 'mail-tools' }, info, h('button', { class: 'btn small', onclick: () => file.click() }, 'Choose a file…')), file], () => {
+      mailAdd(readAddresses(ta.value));
+      renderTool();
+    }, 'Add');
+  }
+  function emailTool() {
     const m = S.mail;
-    if (!m) return;
-    const lists = listsOf(c.id).filter((l) => kindOf(l) === 'calls' && listFields(l).email >= 0);
+    if (!S.pss?.connected) return [h('p', { class: 'day-hint' }, 'Connect PSS admin in Settings first. Every email carries an unsubscribe link, and those come from your website.'), h('button', { class: 'btn small', onclick: () => { closeTool(); openSettings(); } }, 'Open Settings')];
+    if (!m) return [h('p', { class: 'day-hint' }, 'Loading…')];
     if (!m.from) {
       const go = h('button', { class: 'btn primary-btn' }, 'Connect Outlook');
       go.addEventListener('click', async () => {
         try {
           const { url } = await api('POST', '/calendars/connect', { provider: 'microsoft', tz: myTz(), mail: true });
           window.open(url, '_blank');
-          toast('Finish signing in in your browser, then press Email again.');
-          closeSheet();
+          toast('Finish signing in in your browser. This updates when it’s done.');
         } catch (e) {
           toast(e.message);
         }
       });
-      return sheet('Email from Outlook', [
-        h('p', { class: 'day-hint' }, 'Campaign emails go out from your own Outlook, so replies land in your inbox and they show in your Sent folder. Connect it once and allow Column to send email for you.'),
-        m.canConnect ? go : h('p', { class: 'day-hint' }, 'Outlook sign-in isn’t set up on this server yet. See “Calendars” in the README.'),
-      ], () => {}, 'Close');
+      return [h('p', { class: 'day-hint' }, 'Emails go out from your own Outlook, so replies land in your inbox and they show in your Sent folder. Connect it once and allow Column to send email for you.'),
+        m.canConnect ? go : h('p', { class: 'day-hint' }, 'Outlook sign-in isn’t set up on this server yet. See “Calendars” in the README.'), sendBars(null)];
     }
-    if (!lists.length) return toast('Add a call list with email addresses to this campaign first.');
-    const draft = (K.mailDraft[c.id] ||= { listId: (l0 || lists[0]).id, subject: '', body: '', fresh: false });
-    if (l0) draft.listId = l0.id;
-    if (!lists.some((l) => l.id === draft.listId)) draft.listId = lists[0].id;
-    const pick = h('select', { 'aria-label': 'List' }, lists.map((l) => h('option', { value: l.id, selected: l.id === draft.listId }, l.name)));
-    const fresh = h('input', { type: 'checkbox', checked: draft.fresh });
-    const who = h('p', { class: 'day-hint mail-who' });
-    const subject = h('input', { value: draft.subject, placeholder: 'Subject', 'aria-label': 'Subject', maxlength: 200 });
+    const no = noEmail();
+    const out = M.to.filter((r) => no.has(r.email));
+    const to = M.to.filter((r) => !no.has(r.email));
+    const rerender = () => { document.activeElement?.blur(); renderTool(); };
+    const shown = M.showAll ? M.to : M.to.slice(0, 6);
+    const subject = h('input', { value: M.subject, placeholder: 'Subject', 'aria-label': 'Subject', maxlength: 200 });
     const body = h('textarea', { rows: 8, placeholder: 'Hi {first name},\n\n…', 'aria-label': 'Message' });
-    body.value = draft.body;
+    body.value = M.body;
     const footer = h('textarea', { rows: 2, placeholder: 'Premier Shade Solutions\n123 Main St, Henderson, NV 89002', 'aria-label': 'Footer' });
     footer.value = m.footer || '';
-    const preview = h('pre', { class: 'mail-preview hidden' });
-    const people = () => mailPeople(lists.find((l) => l.id === pick.value), fresh.checked);
-    let armed = false;
+    const camp = h('select', { 'aria-label': 'Log it in' }, h('option', { value: '' }, 'Don’t log it'), S.campaigns.filter((c) => c.status !== 'done').map((c) => h('option', { value: c.id, selected: c.id === M.campaignId }, c.name)));
+    const preview = h('pre', { class: 'mail-preview' + (M.preview ? '' : ' hidden') });
+    const sendBtn = h('button', { class: 'btn primary-btn' });
+    const warn = h('small', { class: 'day-hint mail-warn' });
     const update = () => {
-      Object.assign(draft, { listId: pick.value, subject: subject.value, body: body.value, fresh: fresh.checked });
-      const p = people();
-      const skip = [p.unsub && `${p.unsub} unsubscribed`, p.none && `${p.none} without an email`, p.dup && `${p.dup} repeated`, p.done && `${p.done} already contacted`].filter(Boolean);
-      who.textContent = `${p.to.length} ${p.to.length === 1 ? 'person' : 'people'}` + (skip.length ? ` · leaving out ${skip.join(', ')}` : '');
-      const r = p.to[0];
+      Object.assign(M, { subject: subject.value, body: body.value, campaignId: camp.value });
+      m.footer = footer.value;
+      const r = to[0];
       preview.textContent = `To: ${r ? (r.name ? `${r.name} <${r.email}>` : r.email) : '—'}\nSubject: ${mergeText(subject.value, r)}\n\n${mergeText(body.value, r).trim()}\n\n--\n${footer.value.trim() || '(your business and mailing address)'}\nDon’t want these emails? Unsubscribe: (their own link)`;
-      const btn = $('#sheet .btns .primary-btn');
-      if (btn) btn.textContent = armed ? `Yes, send ${p.to.length} now` : `Send to ${p.to.length}`;
+      sendBtn.textContent = M.armed ? `Yes, send ${to.length} now` : `Send to ${to.length}`;
+      sendBtn.disabled = !to.length;
+      warn.textContent = M.armed ? `${to.length} emails go out from ${m.from}, one every few seconds. You can stop it.` : '';
     };
-    for (const el of [pick, fresh, subject, body, footer]) el.addEventListener(el.tagName === 'SELECT' || el.type === 'checkbox' ? 'change' : 'input', () => { armed = false; update(); });
+    for (const el of [subject, body, footer]) el.addEventListener('input', () => { M.armed = false; update(); });
+    camp.addEventListener('change', update);
     const payload = () => ({ subject: subject.value, body: body.value, footer: footer.value });
     const test = h('button', { class: 'btn small' }, 'Send me a test');
     test.addEventListener('click', async () => {
       test.disabled = true;
       try {
-        const r = await api('POST', '/mail/test', { ...payload(), sample: people().to[0] });
-        S.mail.footer = footer.value.trim();
-        toast(`Test sent to ${r.to}`);
+        toast(`Test sent to ${(await api('POST', '/mail/test', { ...payload(), sample: to[0] })).to}`);
       } catch (e) {
         toast(e.message);
       }
       test.disabled = false;
     });
-    sheet('Email a list', [
-      h('p', { class: 'day-hint' }, `From ${m.from}. Each person gets their own email, addressed only to them.`),
-      h('div', { class: 'row2' }, h('label', {}, 'To', pick), h('label', { class: 'pick mail-fresh' }, fresh, 'Only people not contacted yet')),
-      who,
-      h('label', {}, 'Subject', subject),
-      h('label', {}, 'Message', body),
-      h('small', { class: 'day-hint' }, '{first name} becomes each person’s first name, or “there” when the list doesn’t have one.'),
-      h('label', {}, 'Footer: your business and mailing address', footer),
-      h('small', { class: 'day-hint' }, 'Every email ends with this and the person’s own unsubscribe link. Anyone on the PSS do-not-contact list is left out.'),
-      h('div', { class: 'mail-tools' }, h('button', { class: 'link', onclick: () => preview.classList.toggle('hidden') }, 'Preview'), test),
-      preview,
-    ], async () => {
-      const p = people();
-      if (!p.to.length) throw new Error('Nobody on that list can be emailed.');
-      if (!armed) {
-        armed = true;
-        update();
-        throw new Error(`Check it over: ${p.to.length} emails go out from ${m.from}, one every few seconds. Press again to send.`);
+    sendBtn.addEventListener('click', async () => {
+      if (!subject.value.trim() || !body.value.trim()) return toast('Add a subject and a message');
+      if (!M.armed) {
+        M.armed = true;
+        return update();
       }
-      const x = await api('POST', '/mail/sends', { campaignId: c.id, listId: pick.value, to: p.to, ...payload() });
-      S.mail.sends = [x, ...S.mail.sends.filter((y) => y.id !== x.id)];
-      S.mail.footer = footer.value.trim();
-      delete K.mailDraft[c.id];
-      renderCamps();
-      toast(`Sending ${x.total} emails`);
-    }, 'Send');
+      sendBtn.disabled = true;
+      try {
+        const x = await api('POST', '/mail/sends', { ...payload(), campaignId: camp.value || null, to });
+        S.mail.sends = [x, ...S.mail.sends.filter((y) => y.id !== x.id)];
+        Object.assign(M, { to: [], subject: '', body: '', armed: false, preview: false });
+        toast(`Sending ${x.total} emails`);
+        rerender();
+      } catch (e) {
+        toast(e.message);
+        sendBtn.disabled = false;
+      }
+    });
     update();
+    return [
+      sendBars(null),
+      h('p', { class: 'day-hint' }, `From ${m.from}. Each person gets their own email, addressed only to them.`),
+      h('section', { class: 'mail-to' },
+        h('h3', {}, M.to.length ? `To · ${to.length} ${to.length === 1 ? 'person' : 'people'}` : 'To'),
+        h('div', { class: 'mail-add' },
+          S.contacts?.length ? h('button', { class: 'btn small', onclick: pickContacts }, '+ Contacts') : null,
+          h('button', { class: 'btn small', onclick: pickList }, '+ From a list'),
+          h('button', { class: 'btn small', onclick: pickTyped }, '+ Type or paste')),
+        out.length ? h('small', { class: 'day-hint' }, `${out.length} unsubscribed, so they’re left out.`) : null,
+        shown.map((r) => h('div', { class: 'mail-person' + (no.has(r.email) ? ' out' : '') },
+          h('span', {}, r.name ? h('b', {}, r.name) : null, h('small', {}, (r.name ? ' · ' : '') + r.email)),
+          h('button', { class: 't-btn', 'aria-label': 'Remove', html: I.close, onclick: () => { M.to = M.to.filter((y) => y !== r); M.armed = false; rerender(); } }))),
+        M.to.length > 6 ? h('button', { class: 'link', onclick: () => { M.showAll = !M.showAll; rerender(); } }, M.showAll ? 'Show fewer' : `Show all ${M.to.length}`) : null,
+        M.to.length ? h('button', { class: 'link mail-clear', onclick: () => { M.to = []; rerender(); } }, 'Clear') : null),
+      h('section', { class: 'mail-form' },
+        h('label', {}, 'Subject', subject),
+        h('label', {}, 'Message', body),
+        h('small', { class: 'day-hint' }, '{first name} becomes each person’s first name, or “there” when there isn’t one.'),
+        h('label', {}, 'Footer: your business and mailing address', footer),
+        h('small', { class: 'day-hint' }, 'Every email ends with this and the person’s own unsubscribe link.'),
+        h('label', {}, 'Log each email in a campaign', camp),
+        h('div', { class: 'mail-tools' }, h('button', { class: 'link', onclick: () => { M.preview = !M.preview; preview.classList.toggle('hidden', !M.preview); } }, 'Preview'), test),
+        preview,
+        h('div', { class: 'mail-send' }, warn, sendBtn)),
+    ];
   }
-  // Progress of each email going out from this campaign, and how the last one went.
+  // Email going out, and how the last ones went: a campaign's own, or all of them (c = null).
   function sendBars(c) {
-    const xs = (S.mail?.sends || []).filter((x) => x.campaignId === c.id && (x.status === 'sending' || x.status === 'paused' || !K.sendHide.has(x.id)) && (x.status === 'sending' || x.status === 'paused' || Date.now() - (x.doneAt || 0) < 7 * 864e5));
+    const xs = (S.mail?.sends || []).filter((x) => (!c || x.campaignId === c.id) && (x.status === 'sending' || x.status === 'paused' || (!K.sendHide.has(x.id) && Date.now() - (x.doneAt || 0) < 7 * 864e5)));
     if (!xs.length) return null;
     const act = (x, what) => api('POST', `/mail/sends/${x.id}/${what}`).catch((e) => toast(e.message));
-    const hide = (x) => { K.sendHide.add(x.id); store.set('sendHide', [...K.sendHide].slice(-100)); renderCamps(); };
+    const hide = (x) => { K.sendHide.add(x.id); store.set('sendHide', [...K.sendHide].slice(-100)); renderCamps(); renderTool(); };
     return h('div', { class: 'sends' }, xs.slice(0, 3).map((x) => {
       const n = x.sent + x.failed + x.skipped;
       const state = x.status === 'sending' ? `${x.sent} of ${x.total} sent` : x.status === 'paused' ? `Paused at ${x.sent} of ${x.total}` : x.status === 'stopped' ? `Stopped · ${x.sent} of ${x.total} sent` : `Sent ${x.sent} of ${x.total}`;
@@ -5578,7 +5706,7 @@
             : x.status === 'paused' ? [h('button', { class: 'btn small primary-btn', onclick: () => act(x, 'resume') }, 'Resume'), h('button', { class: 'btn small', onclick: () => act(x, 'stop') }, 'Stop')]
             : h('button', { class: 't-btn', 'aria-label': 'Hide', html: I.close, onclick: () => hide(x) })),
         x.error ? h('small', { class: 'err' }, x.error) : null,
-        x.status === 'sending' || x.status === 'paused' ? bar(n / x.total, c.color) : null);
+        x.status === 'sending' || x.status === 'paused' ? bar(n / x.total, (c || campById(x.campaignId))?.color || 'violet') : null);
     }));
   }
 

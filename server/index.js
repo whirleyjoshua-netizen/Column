@@ -1412,8 +1412,8 @@ async function mailTick() {
 }
 async function mailOne(x) {
   const r = x.to.find((y) => y.status === 'queued');
-  const c = db.campaigns[x.campaignId];
-  if (!r || !c) {
+  const c = x.campaignId ? db.campaigns[x.campaignId] : null;
+  if (!r) {
     sendFinish(x);
     save();
     return sendNews(x);
@@ -1433,14 +1433,18 @@ async function mailOne(x) {
       await calProviders.microsoft.sendMail(await calToken(conn), mailMime(conn.account, r, merge(x.subject, r), mailBody(x, r, r.unsub), r.unsub));
       r.status = 'sent';
       r.at = Date.now();
-      const a = {
-        id: rid(), wsId: x.wsId, campaignId: c.id, method: (c.methods || []).includes('Email') ? 'Email' : null, taskId: null,
-        listId: x.listId && db.lists[x.listId]?.rows.some((y) => y.id === r.rowId) ? x.listId : null, rowId: r.rowId || null, leadId: r.leadId || null,
-        memberId: x.memberId, by: x.by, at: r.at, outcome: 'Sent', contact: (r.name || r.email).slice(0, 200), note: merge(x.subject, r).slice(0, 2000), answers: [], sendId: x.id,
-      };
-      if (!a.listId) a.rowId = null;
-      db.attempts[a.id] = a;
-      broadcast(x.wsId, { type: 'attempt', attempt: publicAttempt(a) });
+      // Logged in the campaign it was sent for; against the list row too when that list is the campaign's.
+      if (c) {
+        const listId = r.listId || x.listId;
+        const onList = listId && db.lists[listId]?.campaignId === c.id && db.lists[listId].rows.some((y) => y.id === r.rowId);
+        const a = {
+          id: rid(), wsId: x.wsId, campaignId: c.id, method: (c.methods || []).includes('Email') ? 'Email' : null, taskId: null,
+          listId: onList ? listId : null, rowId: onList ? r.rowId : null, leadId: r.leadId || null,
+          memberId: x.memberId, by: x.by, at: r.at, outcome: 'Sent', contact: (r.name || r.email).slice(0, 200), note: merge(x.subject, r).slice(0, 2000), answers: [], sendId: x.id,
+        };
+        db.attempts[a.id] = a;
+        broadcast(x.wsId, { type: 'attempt', attempt: publicAttempt(a) });
+      }
       r.tries = 0;
     } catch (e) {
       if (e.auth) {
@@ -2077,29 +2081,35 @@ async function api(req, res, url) {
         save();
         return send(res, 200, { to: conn.account });
       }
-      const camp = db.campaigns[body.campaignId];
-      if (!camp || camp.wsId !== ws.id || !canSee(auth, 'campaign', camp)) return send(res, 404, { error: 'Campaign not found' });
-      const l = body.listId && db.lists[body.listId];
-      if (!l || l.campaignId !== camp.id) return send(res, 404, { error: 'List not found' });
+      // A campaign is optional: with one, each email is logged there.
+      const camp = body.campaignId ? db.campaigns[body.campaignId] : null;
+      if (body.campaignId && (!camp || camp.wsId !== ws.id || !canSee(auth, 'campaign', camp))) return send(res, 404, { error: 'Campaign not found' });
       if (Object.values(db.sends).some((x) => x.connId === conn.id && x.status === 'sending')) return send(res, 409, { error: 'An email is still going out from your Outlook. Wait for it, or stop it, first.' });
-      // Each person once, only rows of this list whose cells hold that address, and nobody who unsubscribed.
+      // Each person once, and nobody who unsubscribed. People can come from PSS contacts (by lead), a list's
+      // row (which must hold that address), or be typed in.
       const no = doNotEmail(ws.id);
+      const leads = new Map((db.pss[ws.id]?.leads || []).map((y) => [y.id, y]));
       const seen = new Set();
       const to = [];
       for (const r of (Array.isArray(body.to) ? body.to : []).slice(0, MAIL_MAX * 2)) {
         const email = cleanText(r?.email, 200).toLowerCase();
-        const row = l.rows.find((y) => y.id === r?.rowId);
-        if (!row || !EMAIL_RE.test(email) || seen.has(email) || !row.cells.some((v) => v.trim().toLowerCase() === email)) continue;
+        if (!EMAIL_RE.test(email) || seen.has(email)) continue;
+        const l = r?.listId && db.lists[r.listId];
+        const row = l && l.wsId === ws.id && canSee(auth, 'list', l) ? l.rows.find((y) => y.id === r.rowId && y.cells.some((v) => v.trim().toLowerCase() === email)) : null;
+        const lead = leads.get(r?.leadId);
         seen.add(email);
-        if (no.has(email) || row.dne) continue;
-        to.push({ email, name: cleanText(r.name, 200), first: cleanText(r.first, 80), rowId: row.id, leadId: row.leadId || null, status: 'queued' });
+        if (no.has(email) || row?.dne || lead?.dne) continue;
+        to.push({
+          email, name: cleanText(r.name, 200), first: cleanText(r.first, 80),
+          listId: row ? l.id : null, rowId: row ? row.id : null, leadId: lead && lead.email.toLowerCase() === email ? lead.id : row?.leadId || null, status: 'queued',
+        });
       }
-      if (!to.length) return send(res, 400, { error: 'Nobody on that list can be emailed.' });
+      if (!to.length) return send(res, 400, { error: 'Nobody here can be emailed.' });
       if (to.length > MAIL_MAX) return send(res, 400, { error: `Send to up to ${MAIL_MAX} people at a time.` });
       const links = await unsubLinks(ws.id, to.map((r) => r.email));
       for (const r of to) r.unsub = links[r.email] || null;
       if (to.some((r) => !r.unsub)) return send(res, 502, { error: 'PSS didn’t give an unsubscribe link for everyone. Nothing was sent.' });
-      const x = { id: rid(), wsId: ws.id, campaignId: camp.id, listId: l.id, memberId: auth.memberId, by: auth.member, connId: conn.id, from: conn.account, subject, body: text, footer, createdAt: Date.now(), status: 'sending', to };
+      const x = { id: rid(), wsId: ws.id, campaignId: camp?.id || null, listId: null, memberId: auth.memberId, by: auth.member, connId: conn.id, from: conn.account, subject, body: text, footer, createdAt: Date.now(), status: 'sending', to };
       db.sends[x.id] = x;
       // Old batches go, oldest first; the emails they logged stay in the campaign.
       const mine = Object.values(db.sends).filter((y) => y.wsId === ws.id && y.status !== 'sending').sort((p, q) => q.createdAt - p.createdAt);
