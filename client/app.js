@@ -64,6 +64,11 @@
   const svg = (d) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
   const I = {
     download: svg('<path d="M12 4v11M7 10l5 5 5-5M5 20h14"/>'),
+    doc: svg('<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h6"/>'),
+    grid: svg('<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18M3 15h18M10 4v16"/>'),
+    ask: svg('<circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.7.3-1 .9-1 1.7M12 17h.01"/>'),
+    stages: svg('<rect x="3" y="5" width="5" height="14" rx="1.5"/><rect x="10" y="5" width="5" height="9" rx="1.5"/><rect x="17" y="5" width="4" height="5" rx="1.5"/>'),
+    side: svg('<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M14 4v16"/>'),
     copy: svg('<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h8"/>'),
     pin: svg('<path d="M12 17v5M8 3h8l-1 6 3 4H6l3-4z"/>'),
     stack: svg('<path d="M3 7l9-4 9 4-9 4zM3 12l9 4 9-4M3 17l9 4 9-4"/>'),
@@ -1278,7 +1283,10 @@
     }
     pv.append(h('div', { class: 'pv-bar' },
       it.type !== 'text' ? h('span', {}, it.name) : null,
-      standalone ? null : h('button', { class: 'btn', title: 'Keep it open next to Column', onclick: () => { close(); popOut(it); } }, 'Open in new window'),
+      standalone ? null : campOfItem(it) && it.type === 'file'
+        ? h('button', { class: 'btn', title: 'Keep it open beside the campaign', onclick: () => { close(); dockOpen(campOfItem(it), { type: 'file', id: it.id }); } }, 'Keep beside')
+        : h('button', { class: 'btn', title: 'Keep it open next to Column', onclick: () => { close(); popOut(it); } }, 'Open in new window'),
+      !standalone && campOfItem(it) && it.type === 'file' ? h('button', { class: 'btn', onclick: () => { close(); useSheet(campOfItem(it), it); } }, 'Use as…') : null,
       it.type !== 'text' ? h('button', { class: 'btn', onclick: () => download(it) }, it.type === 'folder' ? 'Download all (.zip)' : 'Download') : null));
     pv.classList.remove('hidden');
   }
@@ -1860,7 +1868,7 @@
     $('#day').classList.toggle('hidden', tab !== 'day');
     $('#panes').classList.toggle('hidden', tab !== 'column');
     $('#chat').classList.toggle('hidden', tab !== 'chat');
-    $('#camps').classList.toggle('hidden', tab !== 'camps');
+    $('#campsWrap').classList.toggle('hidden', tab !== 'camps');
     if (tab === 'camps') renderCamps();
     if (tab === 'day') renderDay();
     if (tab === 'chat') openChannel(C.view);
@@ -2283,7 +2291,7 @@
     const camp = g && campById(g.campaignId);
     const pr = t.priority || 0;
     const list = listOfTask(t);
-    const reached = list && list.rows.filter((r) => rowStatus(list).has(r.id)).length;
+    const lp = list && listProgress(list, t.runId);
     const openList = () => {
       const key = 'task:' + t.id;
       if (inCampaign) {
@@ -2307,8 +2315,8 @@
         t.repeat ? h('span', { class: 'rep', html: I.repeat }) : null, dueLabel(t.due)) : null,
       slot ? h('button', { class: 'slot', title: 'Show on schedule', onclick: () => { D.sub = 'schedule'; store.set('daySub', 'schedule'); setTab('day'); goDay(slot.e.date); } },
         slot.label + (slot.more ? ` +${slot.more}` : '')) : null,
-      list ? h('button', { class: 'list-chip' + (reached === list.rows.length ? ' full' : ''), title: `${list.name}: ${reached} of ${list.rows.length} contacted · click to open`, onclick: (ev) => { ev.stopPropagation(); openList(); } },
-        h('span', { html: I.menu }), `${reached}/${list.rows.length}`) : null,
+      lp ? h('button', { class: 'list-chip' + (lp.of && lp.n === lp.of ? ' full' : ''), title: `${list.name}: ${lp.label} · click to open`, onclick: (ev) => { ev.stopPropagation(); openList(); } },
+        h('span', { html: KIND_ICON[list.kind || 'calls'] }), lp.of ? `${lp.n}/${lp.of}` : '') : null,
       camp && !inCampaign ? h('button', { class: 'camp-chip c-' + camp.color, title: `${camp.name} · ${g.title}`, onclick: () => openCampaign(camp.id) }, camp.name) : null,
       t.assigneeId ? avatar(t.assigneeId) : null,
       t.done ? null : btn(I.clock, 'Put on schedule', () => openSheet({ text: t.text, taskId: t.id, date: t.due && D.sub === 'tasks' ? t.due : D.date })),
@@ -2665,14 +2673,14 @@
   }, 30_000);
 
   // ---------- campaigns: campaign → goals → tasks, with logged attempts ----------
-  const K = { open: store.get('campOpen', null), mine: store.get('campsMine', false), logOpen: null, showAll: {}, stale: false, pick: null, listOpen: null, listShow: {}, listN: {}, dragList: null, logFrom: {}, book: null };
+  const K = { open: store.get('campOpen', null), mine: store.get('campsMine', false), logOpen: null, showAll: {}, stale: false, pick: null, listOpen: null, listShow: {}, listN: {}, dragList: null, logFrom: {}, book: null, dock: store.get('dock', null), dockSize: store.get('dockSize', 0.45), dockMin: false, refQ: {}, noteDraft: {}, runOpen: null, noteRow: null, answers: {}, askOpen: false, ansOpen: {} };
   const campById = (id) => id && S.campaigns?.find((c) => c.id === id);
   const goalById = (id) => id && S.goals?.find((g) => g.id === id);
   const goalsOf = (cid) => S.goals.filter((g) => g.campaignId === cid).sort((a, b) => (a.order || 0) - (b.order || 0) || a.createdAt - b.createdAt);
   const tasksOf = (gid) => S.tasks.filter((t) => t.goalId === gid);
   const listOfTask = (t) => t.listId && S.lists.find((l) => l.id === t.listId);
   // A list dragged onto a goal lives there, under its task, until the task is deleted.
-  const onGoal = (l) => S.tasks.some((t) => t.listId === l.id && goalById(t.goalId)?.campaignId === l.campaignId);
+  const onGoal = (l) => ['calls', 'tracker'].includes(l.kind || 'calls') && S.tasks.some((t) => t.listId === l.id && goalById(t.goalId)?.campaignId === l.campaignId);
   const attemptsIn = (cid) => S.attempts.filter((x) => x.campaignId === cid).sort((a, b) => b.at - a.at);
   // Count goals count the campaign's log, filtered by outcome and method.
   const countsFor = (g, x) => (!g.counts?.length || g.counts.includes(x.outcome)) && (!g.methods?.length || g.methods.includes(x.method));
@@ -2719,6 +2727,7 @@
     const keep = root.scrollTop;
     const c = campById(K.open);
     root.replaceChildren(c ? campaignView(c) : campaignList());
+    renderDock();
     root.scrollTop = keep;
   }
   $('#camps').addEventListener('focusout', () => setTimeout(() => K.stale && renderCamps(), 0));
@@ -2890,7 +2899,7 @@
         h('button', { class: 'btn small', onclick: () => openReport(c) }, 'Write a report')),
       h('div', { class: 'any-h camp-goals-h' }, 'Log'),
       logBox(c),
-      lists.length ? h('div', { class: 'any-h camp-goals-h' }, 'Call lists') : null,
+      lists.length ? h('div', { class: 'any-h camp-goals-h' }, 'Lists & docs') : null,
       lists.map((l) => listCard(c, l)),
       h('div', { class: 'any-h camp-goals-h' }, 'Goals'),
       goals.map((g) => goalCard(c, g)),
@@ -2926,7 +2935,7 @@
     if (tasks.length) el.append(h('div', { class: 'goal-tasks' }, tasks.flatMap((t) => {
       const l = listOfTask(t);
       const close = () => { K.listOpen = null; renderCamps(); };
-      return [taskRow(t, { inCampaign: true }), l && K.listOpen === 'task:' + t.id ? h('div', { class: 'task-list' }, listBody(c, l, close)) : null];
+      return [taskRow(t, { inCampaign: true }), l && K.listOpen === 'task:' + t.id ? h('div', { class: 'task-list' }, taskListBody(c, l, t, close)) : null];
     }).filter(Boolean)));
     el.append(add);
     el.addEventListener('dragover', (e) => {
@@ -2951,7 +2960,7 @@
   // CSV, TSV and Excel files with rows become lists; anything else is just attached. The file stays in the stack.
   const LIST_MAX = 5000;
   const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-  const isPhone = (v) => /^\+?[\d\s().\-\/]+$/.test(v) && v.replace(/\D/g, '').length >= 7;
+  const isPhone = (v) => /^\+?[\d\s().\-\/]+$/.test(v) && v.replace(/\D/g, '').length >= 7 && !/^\d{1,4}[-/.]\d{1,2}[-/.]\d{1,4}$/.test(v.trim());
   const listsOf = (cid) => S.lists.filter((l) => l.campaignId === cid).sort((a, b) => a.createdAt - b.createdAt);
   function upsertList(l) {
     const i = S.lists.findIndex((x) => x.id === l.id);
@@ -3081,32 +3090,351 @@
     f.email >= 0 && r.cells[f.email] ? h('a', { href: 'mailto:' + r.cells[f.email], onclick: (e) => e.stopPropagation() }, r.cells[f.email]) : null,
   ].filter(Boolean);
 
-  async function addToCampaign(c, file) {
+  // ----- interactive files: what a file dropped on a campaign is, and what it can become -----
+  const STATUS_RE = /^(status|stage|state|pipeline|progress|phase)$/i;
+  const TASK_RE = /task|to-?do|action|deliverable|activity|^item$|^title$|^what$/i;
+  const DUE_RE = /due|deadline|by when|^date$|^when$/i;
+  const OWNER_RE = /owner|assignee|assigned|responsible|^who$|staff|employee|person|^name$/i;
+  const DATE_RE = /date|^day$|^when$/i;
+  const START_RE = /start|time|^from$|begins|shift/i;
+  const END_RE = /end|^to$|until|finish/i;
+  const TITLE_RE = /title|event|shift|role|position|summary|subject|what|task|activity/i;
+  const QTY_RE = /qty|quantity|stock|on hand|inventory|units|^count$/i;
+  const DONE_RE = /^(done|complete|completed|closed|paid|hired|won|delivered|shipped|finished|resolved|signed)$/i;
+  const OBJ_RE = /objection|rebuttal|push ?back|concern|if they say/i;
+  const USES = {
+    calls: ['Call list', 'Call or email each row and log how it went'],
+    tracker: ['Tracker', 'Move each row through stages, like applied → hired or sent → paid'],
+    reference: ['Reference', 'A searchable sheet to keep beside your work: prices, products, stock'],
+    tasks: ['Tasks', 'Add each row as a task on a goal'],
+    schedule: ['Schedule', 'Put each row on your schedule, and your connected calendar'],
+    checklist: ['Checklist', 'Tick through the steps, as many times as you need'],
+    agenda: ['Meeting agenda', 'Run a meeting item by item, with a timer and notes'],
+    form: ['Questions', 'Ask them on each call; the answers are saved in the log'],
+    script: ['Keep beside', 'Open it in a panel next to the campaign, like a call script'],
+    file: ['Just a file', 'Keep it in the campaign’s files'],
+  };
+  const TABLE_KINDS = ['calls', 'tracker', 'reference'];
+  const KIND_ICON = { calls: I.menu, tracker: I.stages, reference: I.grid, checklist: I.check, form: I.ask };
+  const kindOf = (l) => l.kind || 'calls';
+  const useOf = (l) => (l ? (kindOf(l) === 'checklist' && l.agenda ? 'agenda' : kindOf(l)) : 'file');
+  const colOf = (cols, re) => cols.findIndex((c) => re.test(c));
+  // A column whose filled cells mostly pass the test.
+  const colWhere = (t, re, test) => t.columns.findIndex((c, i) => {
+    if (!re.test(c)) return false;
+    const vals = t.rows.slice(0, 30).map((r) => r.cells[i]).filter(Boolean);
+    return vals.length && vals.filter(test).length >= vals.length / 2;
+  });
+
+  // A date in a cell: 2026-10-21, 10/21/2026, 21.10.2026, Oct 21, or an Excel day number.
+  function cellDate(v) {
+    v = String(v || '').trim();
+    if (!v) return null;
+    const make = (y, mo, d) => (mo >= 1 && mo <= 12 && d >= 1 && d <= 31 ? dayKey(new Date(y, mo - 1, d)) : null);
+    let m;
+    if ((m = /^(\d{4})-(\d{1,2})-(\d{1,2})/.exec(v))) return make(+m[1], +m[2], +m[3]);
+    if ((m = /^(\d{1,2})[/.](\d{1,2})[/.](\d{2,4})$/.exec(v))) {
+      const y = m[3].length === 2 ? 2000 + +m[3] : +m[3];
+      // Dots are day first (21.10.2026). Slashes are month first, unless that can't be.
+      return v.includes('.') || +m[1] > 12 ? make(y, +m[2], +m[1]) : make(y, +m[1], +m[2]);
+    }
+    if (/^\d{5}(\.\d+)?$/.test(v) && +v > 30000 && +v < 80000) {
+      const d = new Date(Date.UTC(1899, 11, 30) + Math.floor(+v) * 864e5);
+      return make(d.getUTCFullYear(), d.getUTCMonth() + 1, d.getUTCDate());
+    }
+    if (/[a-z]{3}/i.test(v)) {
+      let t = Date.parse(v);
+      if (isNaN(t)) t = Date.parse(`${v} ${new Date().getFullYear()}`);
+      if (!isNaN(t)) return dayKey(new Date(t));
+    }
+    return null;
+  }
+  // A time in a cell, as minutes after midnight: 9:30, 9:30 AM, 9am, 14:00, or Excel's fraction of a day.
+  function cellTime(v) {
+    v = String(v || '').trim().toLowerCase().replace(/\./g, '');
+    if (!v) return null;
+    const m = /^(\d{1,2})(?::(\d{2}))?(?::\d{2})?\s*(am|pm|a|p)?$/.exec(v);
+    if (!m) return null;
+    let hh = +m[1];
+    const mm = +(m[2] || 0);
+    if (m[3]) {
+      hh %= 12;
+      if (m[3][0] === 'p') hh += 12;
+    } else if (!m[2] && hh > 23) return null;
+    return hh < 24 && mm < 60 ? hh * 60 + mm : null;
+  }
+  const dayFraction = (v) => (/^0?\.\d+$/.test(String(v).trim()) ? Math.round(+v * 1440) % 1440 : null);
+  // "9:00–17:30" in one cell, or just a start.
+  function cellRange(v) {
+    const frac = dayFraction(v);
+    if (frac != null) return [frac, null];
+    const p = String(v || '').split(/\s*(?:–|—|-|\bto\b)\s*/i);
+    if (p.length === 2) {
+      const a = cellTime(p[0]);
+      let b = cellTime(p[1]);
+      if (a != null && b != null) {
+        if (b <= a && b + 720 <= 1440) b += 720;
+        return [a, b > a ? b : null];
+      }
+    }
+    const a = cellTime(v);
+    return a == null ? null : [a, null];
+  }
+
+  // A contact card file (.vcf) as a call list.
+  function readVcf(text) {
+    const rows = [];
+    for (const card of text.replace(/\r?\n[ \t]/g, '').split(/BEGIN:VCARD/i).slice(1)) {
+      const get = (key) => {
+        const m = new RegExp(`^(?:[\\w-]+\\.)?${key}(?:;[^:\\n]*)?:(.*)$`, 'im').exec(card);
+        return m ? m[1].replace(/\\([,;\\])/g, '$1').replace(/\\n/gi, ' ').trim() : '';
+      };
+      const n = get('N').split(';');
+      rows.push({ cells: [get('FN') || [n[1], n[0]].filter(Boolean).join(' '), get('ORG').split(';')[0], get('TEL'), get('EMAIL')] });
+    }
+    return rows.length ? { columns: ['Name', 'Company', 'Phone', 'Email'], rows } : null;
+  }
+  // Events in a calendar file (.ics). Times with a time zone name are read as local time.
+  function readIcs(text) {
+    const out = [];
+    let ev = null;
+    const when = (v) => {
+      const m = /^(\d{4})(\d{2})(\d{2})(?:T(\d{2})(\d{2})\d{0,2}(Z)?)?/.exec(v);
+      if (!m) return null;
+      if (!m[4]) return { date: `${m[1]}-${m[2]}-${m[3]}`, min: null };
+      const d = m[6] ? new Date(Date.UTC(+m[1], m[2] - 1, +m[3], +m[4], +m[5])) : new Date(+m[1], m[2] - 1, +m[3], +m[4], +m[5]);
+      return { date: dayKey(d), min: d.getHours() * 60 + d.getMinutes() };
+    };
+    for (const line of text.replace(/\r?\n[ \t]/g, '').split(/\r?\n/)) {
+      if (/^BEGIN:VEVENT/i.test(line)) ev = {};
+      else if (/^END:VEVENT/i.test(line)) {
+        if (ev?.start) out.push(ev);
+        ev = null;
+      } else if (ev) {
+        const i = line.indexOf(':');
+        if (i < 0) continue;
+        const key = line.slice(0, i).split(';')[0].toUpperCase(), val = line.slice(i + 1);
+        if (key === 'SUMMARY') ev.title = val.replace(/\\([,;\\])/g, '$1').replace(/\\n/gi, ' ').trim();
+        else if (key === 'DTSTART') ev.start = when(val);
+        else if (key === 'DTEND') ev.end = when(val);
+      }
+    }
+    return out.slice(0, 500).map((e) => {
+      const s = e.start.min;
+      const end = s == null ? null : e.end && e.end.date === e.start.date ? e.end.min : e.end ? 1440 : s + 60;
+      return { title: (e.title || 'Event').slice(0, 300), date: e.start.date, start: s, end: s == null ? null : Math.min(1440, end > s ? end : s + 30) };
+    });
+  }
+
+  // Markdown or plain text as a readable document: headings, lists, checkboxes and **bold**.
+  function renderText(txt) {
+    const out = h('div');
     let list = null;
+    const inline = (s) => s.split(/\*\*(.+?)\*\*/).map((x, i) => (i % 2 ? h('b', {}, x) : x));
+    for (const raw of txt.replace(/\r/g, '').split('\n')) {
+      const line = raw.trimEnd();
+      if (!line.trim()) {
+        list = null;
+        continue;
+      }
+      let m;
+      if ((m = /^(#{1,6})\s+(.*)$/.exec(line))) {
+        list = null;
+        out.append(h('h' + Math.min(6, m[1].length + 1), {}, inline(m[2])));
+        continue;
+      }
+      const box = /^\s*(?:[-*•+]\s+)?\[([ xX]?)\]\s+(.*)$/.exec(line);
+      const item = box || /^\s*(?:([-*•+])|(\d+)[.)])\s+(.*)$/.exec(line);
+      if (item) {
+        const ordered = !box && !!item[2];
+        if (!list || list.ordered !== ordered) out.append((list = { ordered, el: h(ordered ? 'ol' : 'ul') }).el);
+        list.el.append(h('li', box ? { 'data-box': '1' } : {}, inline(box ? box[2] : item[3])));
+        continue;
+      }
+      list = null;
+      // In a plain text file, a short line ending in a colon reads as a heading.
+      out.append(/^[^.?!]{2,60}:$/.test(line.trim()) ? h('h3', {}, line.trim().slice(0, -1)) : h('p', {}, inline(line)));
+    }
+    return out;
+  }
+  const docKind = (it) => {
+    if (kind(it) === 'docx') return 'docx';
+    return kind(it) === 'textfile' && (/^(MD|MARKDOWN|TXT|TEXT)$/.test(ext(it.name)) || /^text\/(plain|markdown)$/.test(it.mime || '')) ? 'text' : null;
+  };
+  const fileBufs = new Map();
+  function fileBuf(it) {
+    const key = it.id + ':' + (it.editedAt || it.createdAt);
+    if (!fileBufs.has(key)) fileBufs.set(key, fetch(fileUrl(it)).then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error('Couldn’t load the file')))));
+    return fileBufs.get(key);
+  }
+  async function docDom(it) {
+    const buf = await fileBuf(it);
+    return docKind(it) === 'docx' ? renderDocx(buf) : renderText(new TextDecoder().decode(buf));
+  }
+  // The steps, questions and headings in a document.
+  function docParts(dom) {
+    let section = '', boxes = 0;
+    const steps = [], paras = [], questions = [], heads = [];
+    for (const el of dom.querySelectorAll('h1,h2,h3,h4,h5,h6,li,p')) {
+      if (el.tagName === 'P' && el.closest('li')) continue;
+      let text = el.textContent.replace(/\s+/g, ' ').trim();
+      if (!text) continue;
+      if (/^H\d$/.test(el.tagName)) {
+        section = text.slice(0, 120);
+        heads.push(text);
+        continue;
+      }
+      if (/^[☐☑☒□✓✔]\s*/.test(text) || el.dataset.box) {
+        boxes++;
+        text = text.replace(/^[☐☑☒□✓✔]\s*/, '');
+      }
+      const mins = /\b(\d{1,3})\s*(?:min(?:ute)?s?|m)\b/i.exec(text);
+      const row = { cells: [text.slice(0, 300)], section, ...(mins ? { mins: +mins[1] } : {}) };
+      if (el.tagName === 'LI') steps.push(row);
+      else if (text.length <= 300) paras.push(row);
+      if (/\?\s*$/.test(text)) questions.push({ cells: [text.slice(0, 300)], section });
+    }
+    return { steps, paras, questions, heads, boxes };
+  }
+  function tableGuess(t) {
+    const f = listFields(t);
+    if (f.phone >= 0 || f.email >= 0) return 'calls';
+    if (colOf(t.columns, STATUS_RE) >= 0) return 'tracker';
+    if (colOf(t.columns, TASK_RE) >= 0 && (colOf(t.columns, DUE_RE) >= 0 || colOf(t.columns, OWNER_RE) >= 0)) return 'tasks';
+    if (colWhere(t, DATE_RE, cellDate) >= 0 && colWhere(t, START_RE, (v) => cellRange(v)) >= 0) return 'schedule';
+    return 'reference';
+  }
+  // What a file is and what it can be used as: { table | events | doc, uses, guess }, or null for any other file.
+  async function analyze(file) {
+    const name = file.name.toLowerCase();
+    if (/\.ics$/.test(name) || file.type === 'text/calendar') {
+      const events = readIcs(await file.text());
+      return events.length ? { events, uses: ['schedule', 'file'], guess: 'schedule' } : null;
+    }
+    const table = /\.vcf$/.test(name) || /^text\/(x-)?vcard$/.test(file.type) ? readVcf(await file.text()) : await readList(file);
+    if (table) {
+      if (table.rows.length > LIST_MAX) {
+        toast(`Only the first ${LIST_MAX} rows are used`);
+        table.rows.length = LIST_MAX;
+      }
+      return { table, uses: ['calls', 'tracker', 'reference', 'tasks', 'schedule', 'file'], guess: tableGuess(table) };
+    }
+    const isDocx = /\.docx$/.test(name);
+    if (!isDocx && !/\.(md|markdown|txt)$/.test(name) && !/^text\/(plain|markdown)$/.test(file.type)) return null;
+    const parts = docParts(isDocx ? await renderDocx(await file.arrayBuffer()) : renderText(await file.text()));
+    const items = parts.steps.length >= 2 ? parts.steps : parts.paras;
+    const uses = [...(items.length >= 2 ? ['checklist', 'agenda'] : []), ...(parts.questions.length ? ['form'] : []), 'script', 'file'];
+    let guess = 'file';
+    if (/agenda/.test(name) && uses.includes('agenda')) guess = 'agenda';
+    else if ((/checklist|sop|procedure|onboarding|routine|inspection|process|steps|to-?do/.test(name) || parts.boxes >= 2) && uses.includes('checklist')) guess = 'checklist';
+    else if (parts.questions.length >= 3 && (/question|intake|discovery|survey|interview|qualif/.test(name) || parts.questions.length >= 0.6 * items.length)) guess = 'form';
+    else if (/script|pitch|talk.?track|call.?guide|objection/.test(name)) guess = 'script';
+    return { doc: { ...parts, items }, uses, guess };
+  }
+  const analyzeItem = async (it) => analyze(new File([await fileBuf(it)], it.name, { type: it.mime || '' }));
+  const campOfItem = (it) => it?.stackId && S.campaigns.find((c) => c.stackId === it.stackId);
+
+  // Stages from a table's status column, finished-sounding ones last. Each row starts at its status.
+  function trackerRows(t) {
+    const i = colOf(t.columns, STATUS_RE);
+    const seen = [];
+    if (i >= 0) for (const r of t.rows) if (r.cells[i] && !seen.some((s) => s.toLowerCase() === r.cells[i].toLowerCase()) && seen.length < 12) seen.push(r.cells[i]);
+    const stages = seen.length >= 2 ? [...seen.filter((s) => !DONE_RE.test(s)), ...seen.filter((s) => DONE_RE.test(s))] : ['To do', 'In progress', 'Done'];
+    const at = (r) => (i >= 0 && stages.find((s) => s.toLowerCase() === (r.cells[i] || '').toLowerCase())) || stages[0];
+    return { stages, rows: t.rows.map((r) => ({ ...r, stage: at(r) })) };
+  }
+
+  async function addToCampaign(c, file) {
+    let a = null;
     try {
-      list = await readList(file);
+      a = await analyze(file);
     } catch {}
     const item = await uploadFile(file, { stackId: c.stackId });
-    if (!list) return toast(`Attached to ${c.name}`);
-    if (list.rows.length > LIST_MAX) {
-      toast(`Only the first ${LIST_MAX} rows were added`);
-      list.rows.length = LIST_MAX;
+    if (!item) return;
+    if (!a) return toast(`Attached to ${c.name}`);
+    try {
+      await useAs(c, item, a, a.guess, null, true);
+    } catch (e) {
+      toast(e.message);
     }
-    const l = await api('POST', '/lists', { campaignId: c.id, itemId: item?.id, name: file.name.replace(/\.[^.]+$/, ''), ...list });
-    upsertList(l);
-    K.listOpen = l.id;
+  }
+  // Makes a campaign file into one of its uses, replacing what it was before. Calls logged against a list stay in the log.
+  async function useAs(c, item, a, use, cur = null, auto = false) {
+    const name = item.name.replace(/\.[^.]+$/, '');
+    const base = { campaignId: c.id, itemId: item.id, name: cur?.name || name };
+    let l = null;
+    if (TABLE_KINDS.includes(use)) {
+      const extra = use === 'tracker' ? trackerRows(cur && TABLE_KINDS.includes(kindOf(cur)) ? cur : a.table) : {};
+      l = cur && TABLE_KINDS.includes(kindOf(cur))
+        ? await api('PATCH', '/lists/' + cur.id, { kind: use, ...extra })
+        : await api('POST', '/lists', { ...base, kind: use, columns: a.table.columns, rows: a.table.rows, ...extra });
+    } else if (['checklist', 'agenda', 'form'].includes(use)) {
+      const rows = (use === 'form' ? a.doc.questions : a.doc.items).slice(0, 500);
+      l = await api('POST', '/lists', { ...base, kind: use === 'form' ? 'form' : 'checklist', agenda: use === 'agenda', columns: [use === 'form' ? 'Question' : 'Step'], rows });
+    }
+    if (cur && cur.id !== l?.id) {
+      await api('DELETE', '/lists/' + cur.id);
+      S.lists = S.lists.filter((x) => x.id !== cur.id);
+    }
+    if (l) {
+      upsertList(l);
+      K.listOpen = ['calls', 'tracker', 'checklist'].includes(use === 'agenda' ? 'checklist' : use) ? l.id : K.listOpen;
+    }
+    if (use === 'reference' || use === 'script') dockOpen(c, use === 'script' ? { type: 'file', id: item.id } : { type: 'list', id: l.id });
     renderCamps();
-    toast(`${plural(l.rows.length, 'prospect')} ready to call`, { label: 'Just attach it', run: () => api('DELETE', '/lists/' + l.id).catch((e) => toast(e.message)) });
+    if (use === 'tasks') return setTimeout(() => tasksSheet(c, a.table, name));
+    if (use === 'schedule') return setTimeout(() => scheduleSheet(c, a, name));
+    const n = l?.rows.length || 0;
+    const said = {
+      calls: `${plural(n, 'prospect')} ready to call`,
+      tracker: `Tracker with ${plural(n, 'row')} in ${plural(l?.stages?.length || 0, 'stage')}`,
+      reference: `${name} is beside the campaign`,
+      checklist: `Checklist with ${plural(n, 'step')}`,
+      agenda: `Agenda with ${plural(n, 'item')}`,
+      form: `${plural(n, 'question')} added to the Log`,
+      script: `${name} is beside the campaign`,
+      file: auto ? `Attached to ${c.name}` : 'Kept as a file',
+    }[use];
+    toast(said, a.uses.length > 2 || use !== 'file' ? { label: auto && use === 'file' ? 'Use as…' : 'Change', run: () => useSheet(c, item) } : undefined);
   }
-  function pickCampaignFiles(c) {
-    const inp = $('#filePick');
-    inp.value = '';
-    inp.onchange = () => [...inp.files].forEach((f) => queue(() => addToCampaign(c, f)));
-    inp.click();
+  async function useSheet(c, item) {
+    const cur = S.lists.find((l) => l.itemId === item.id && l.campaignId === c.id);
+    let a = null;
+    try {
+      a = await analyzeItem(item);
+    } catch {}
+    if (!a) return toast('This file can only be opened. It stays in the campaign’s files.');
+    const now = useOf(cur);
+    let pick = now;
+    const opts = h('div', { class: 'use-opts' }, a.uses.map((u) => {
+      const r = h('input', { type: 'radio', name: 'use', value: u });
+      r.checked = u === now;
+      r.addEventListener('change', () => (pick = u));
+      return h('label', { class: 'use-opt' }, r, h('span', {}, h('b', {}, USES[u][0], u === now ? h('small', {}, ' · now') : null), h('small', {}, USES[u][1])));
+    }));
+    const keep = cur && kindOf(cur) === 'calls' ? h('p', { class: 'day-hint' }, 'Calls already logged stay in the log.') : null;
+    sheet(`Use “${item.name}” as`, [opts, keep], () => {
+      if (pick === now && !['script', 'reference'].includes(pick)) return;
+      setTimeout(() => useAs(c, item, a, pick, cur).catch((e) => toast(e.message)));
+    }, 'Use');
   }
-  // Re-reads an edited list file. Rows keep their ids, matched by who they are, so their logged calls stay with them.
+
+  // Re-reads an edited file. Rows keep their ids (matched by who they are, or by a step's words), so what's logged against them stays.
   async function syncList(l, file) {
-    const next = await readList(file);
+    if (kindOf(l) === 'checklist' || kindOf(l) === 'form') {
+      const a = await analyze(file).catch(() => null);
+      const rows = a?.doc && (kindOf(l) === 'form' ? a.doc.questions : a.doc.items);
+      if (!rows?.length) return;
+      const ids = new Map(l.rows.map((r) => [r.cells[0].toLowerCase(), r.id]));
+      for (const r of rows) {
+        const id = ids.get(r.cells[0].toLowerCase());
+        if (id) r.id = id;
+        ids.delete(r.cells[0].toLowerCase());
+      }
+      upsertList(await api('PATCH', '/lists/' + l.id, { rows: rows.slice(0, 500) }));
+      return renderCamps();
+    }
+    const next = /\.vcf$/i.test(file.name) ? readVcf(await file.text()) : await readList(file);
     if (!next) return;
     const was = listFields(l), now = listFields(next);
     const ids = new Map(l.rows.map((r) => [was.who(r).toLowerCase(), r.id]));
@@ -3118,36 +3446,86 @@
     upsertList(await api('PATCH', '/lists/' + l.id, { columns: next.columns, rows: next.rows.slice(0, LIST_MAX) }));
     renderCamps();
   }
+  function pickCampaignFiles(c) {
+    const inp = $('#filePick');
+    inp.value = '';
+    inp.onchange = () => [...inp.files].forEach((f) => queue(() => addToCampaign(c, f)));
+    inp.click();
+  }
+
+  // ----- the campaign's lists and docs -----
+  const stageOf = (l, r) => (l.stages?.includes(r.stage) ? r.stage : l.stages?.[0]);
+  function overdue(l) {
+    const i = colOf(l.columns, DUE_RE), t = todayKey(), last = l.stages.at(-1);
+    return i < 0 ? [] : l.rows.filter((r) => stageOf(l, r) !== last && (cellDate(r.cells[i]) || '9') < t);
+  }
+  // How far along a list is: { n, of, label }. A checklist task counts the ticks of its own run.
+  function listProgress(l, runId) {
+    const k = kindOf(l), of = l.rows.length;
+    if (k === 'calls') {
+      const st = rowStatus(l);
+      const n = l.rows.filter((r) => st.has(r.id)).length;
+      return { n, of, label: `${n}/${of} contacted` };
+    }
+    if (k === 'tracker') {
+      const last = l.stages.at(-1);
+      const n = l.rows.filter((r) => stageOf(l, r) === last).length;
+      const late = overdue(l).length;
+      return { n, of, late, label: `${n}/${of} ${last.toLowerCase()}${late ? ` · ${late} overdue` : ''}` };
+    }
+    if (k === 'checklist') {
+      const run = runId && l.runs?.find((r) => r.id === runId);
+      if (run) {
+        const n = l.rows.filter((r) => run.ticks[r.id]).length;
+        return { n, of, label: `${n}/${of}` };
+      }
+      const open = (l.runs || []).filter((r) => !r.doneAt).length;
+      return { label: plural(of, l.agenda ? 'item' : 'step') + (l.runs?.length ? ` · ${open ? `${open} open` : plural(l.runs.length, 'run')}` : '') };
+    }
+    if (k === 'reference') return { label: plural(of, 'row') };
+    return { label: `${plural(of, 'question')} · in the Log` };
+  }
+  const draggableKind = (l) => ['calls', 'tracker', 'checklist'].includes(kindOf(l));
 
   function listCard(c, l) {
-    const st = rowStatus(l);
-    const reached = l.rows.filter((r) => st.has(r.id)).length;
+    const k = kindOf(l);
+    const p = listProgress(l);
     const open = K.listOpen === l.id;
-    const toggle = () => { K.listOpen = open ? null : l.id; renderCamps(); };
-    const el = h('div', { class: 'goal clist' },
-      h('div', { class: 'goal-top', draggable: 'true', title: 'Drag onto a goal to make it a task' },
-        h('span', { class: 'goal-ic grip', html: I.menu }),
-        h('button', { class: 'goal-title clist-name', onclick: toggle }, l.name),
-        h('button', { class: 't-btn', 'aria-label': 'List options', html: I.more, onclick: (e) => listMenu(e.currentTarget, c, l) })),
-      h('div', { class: 'goal-prog' }, bar(reached / l.rows.length, c.color), h('span', {}, `${reached} / ${l.rows.length} contacted`)));
-    const top = el.firstChild;
-    top.addEventListener('dragstart', (e) => {
-      S.internalDrag = true;
-      K.dragList = l;
-      e.dataTransfer.effectAllowed = 'link';
-      e.dataTransfer.setData('text/plain', l.name);
-      e.dataTransfer.setDragImage(el, 20, 14);
-      $('#camps').classList.add('list-drag');
-    });
-    top.addEventListener('dragend', () => {
-      S.internalDrag = false;
-      K.dragList = null;
-      $('#camps').classList.remove('list-drag');
-      document.querySelectorAll('.goal.list-over').forEach((g) => g.classList.remove('list-over'));
-    });
-    el.append(...(open ? listBody(c, l, toggle) : [h('button', { class: 'link', onclick: toggle }, `Show ${plural(l.rows.length, 'prospect')}`)]));
+    const toggle = () => { K.listOpen = open ? null : l.id; K.runOpen = null; renderCamps(); };
+    const click = k === 'reference' ? () => dockOpen(c, { type: 'list', id: l.id }) : k === 'form' ? () => openLog(c, { ask: true }) : toggle;
+    const drag = draggableKind(l);
+    const el = h('div', { class: `goal clist k-${k}${open ? ' open' : ''}` },
+      h('div', { class: 'goal-top', draggable: drag ? 'true' : null, title: drag ? 'Drag onto a goal to make it a task' : null },
+        h('span', { class: 'goal-ic', html: KIND_ICON[k] }),
+        h('button', { class: 'goal-title clist-name', onclick: click }, l.name),
+        h('small', { class: 'clist-meta' + (p.late ? ' late' : '') }, p.label),
+        h('button', { class: 't-btn', 'aria-label': 'Options', html: I.more, onclick: (e) => listMenu(e.currentTarget, c, l) })),
+      p.of ? bar(p.n / p.of, c.color) : null);
+    if (drag) {
+      const top = el.firstChild;
+      top.addEventListener('dragstart', (e) => {
+        S.internalDrag = true;
+        K.dragList = l;
+        e.dataTransfer.effectAllowed = 'link';
+        e.dataTransfer.setData('text/plain', l.name);
+        e.dataTransfer.setDragImage(el, 20, 14);
+        $('#camps').classList.add('list-drag');
+      });
+      top.addEventListener('dragend', () => {
+        S.internalDrag = false;
+        K.dragList = null;
+        $('#camps').classList.remove('list-drag');
+        document.querySelectorAll('.goal.list-over').forEach((g) => g.classList.remove('list-over'));
+      });
+    }
+    if (open) el.append(h('div', { class: 'clist-body' }, k === 'tracker' ? trackerBody(c, l, toggle) : k === 'checklist' ? checklistBody(c, l, toggle) : listBody(c, l, toggle)));
     return el;
   }
+  // What a list shows when it's opened under a goal's task.
+  const taskListBody = (c, l, t, close) => (kindOf(l) === 'checklist'
+    ? (l.runs.find((r) => r.id === t.runId) ? runView(c, l, l.runs.find((r) => r.id === t.runId)) : h('p', { class: 'day-hint' }, 'This run was deleted.'))
+    : kindOf(l) === 'tracker' ? trackerBody(c, l, close) : listBody(c, l, close));
+
   // The prospects themselves, with To contact / Contacted tabs and a Log button on each.
   function listBody(c, l, close) {
     const f = listFields(l);
@@ -3179,29 +3557,282 @@
       h('div', { class: 'seg clist-seg' }, tab('todo', `To contact · ${l.rows.length - reached}`), tab('done', `Contacted · ${reached}`), tab('all', 'All')),
       l.rows.length > 8 ? q : null,
       box,
-      h('button', { class: 'link', onclick: close }, 'Hide list'),
+      h('button', { class: 'link', onclick: close }, 'Hide'),
     ].filter(Boolean);
   }
-  // Working through a list becomes a task on a goal. The task shows how far through the list you are.
-  async function listToGoal(l, g) {
-    const had = tasksOf(g.id).find((t) => t.listId === l.id);
-    if (had) return toast(`${l.name} is already a task on ${g.title}`);
+
+  // A tracker: rows moving through stages. Tap a row's stage to move it.
+  function trackerBody(c, l, close) {
+    const f = listFields(l);
+    const last = l.stages.at(-1);
+    const si = colOf(l.columns, STATUS_RE);
+    const late = new Set(overdue(l).map((r) => r.id));
+    const counts = new Map(l.stages.map((s) => [s, 0]));
+    for (const r of l.rows) counts.set(stageOf(l, r), counts.get(stageOf(l, r)) + 1);
+    const show = K.listShow[l.id] || 'open';
+    const q = h('input', { class: 'goal-add clist-q', placeholder: 'Search', 'aria-label': 'Search this tracker' });
+    const box = h('div', { class: 'clist-rows' });
+    const match = (r) => (show === 'all' ? true : show === 'open' ? stageOf(l, r) !== last : show === 'late' ? late.has(r.id) : stageOf(l, r) === show);
+    const draw = () => {
+      const needle = q.value.trim().toLowerCase();
+      const rows = l.rows.filter((r) => match(r) && (!needle || r.cells.some((x) => x.toLowerCase().includes(needle)) || (r.note || '').toLowerCase().includes(needle)));
+      const n = K.listN[l.id] || 50;
+      box.replaceChildren(...[
+        ...rows.slice(0, n).map((r) => trackRow(l, r, f, si, late.has(r.id))),
+        rows.length > n ? h('button', { class: 'link', onclick: () => { K.listN[l.id] = n + 100; draw(); } }, `Show more (${rows.length - n} left)`) : null,
+        rows.length ? null : h('p', { class: 'day-hint' }, needle ? 'No matches' : show === 'open' ? `Everything is ${last.toLowerCase()}.` : 'Nothing here.'),
+      ].filter(Boolean));
+    };
+    q.addEventListener('input', draw);
+    const chip = (k, label, n, cls = '') => h('button', { class: (show === k ? 'on ' : '') + cls, onclick: () => { K.listShow[l.id] = k; renderCamps(); } }, label, h('small', {}, ' ' + n));
+    draw();
+    return [
+      h('div', { class: 'tchips' },
+        chip('open', 'Open', l.rows.length - counts.get(last)),
+        l.stages.map((s) => chip(s, s, counts.get(s))),
+        late.size ? chip('late', 'Overdue', late.size, 'late') : null,
+        chip('all', 'All', l.rows.length)),
+      l.rows.length > 8 ? q : null,
+      box,
+      h('button', { class: 'link', onclick: close }, 'Hide'),
+    ].filter(Boolean);
+  }
+  function trackRow(l, r, f, si, late) {
+    const who = f.who(r);
+    const sub = r.cells.filter((x, i) => x && i !== si && !who.includes(x)).slice(0, 2).join(' · ');
+    const st = stageOf(l, r), i = l.stages.indexOf(st);
+    const noting = K.noteRow === r.id;
+    const row = h('div', { class: 'crow trow' },
+      h('div', { class: 'crow-who' }, h('b', {}, who), sub ? h('small', {}, sub) : null, r.note && !noting ? h('small', { class: 'trow-note' }, r.note) : null),
+      late ? h('span', { class: 'due late' }, 'Overdue') : null,
+      h('button', { class: `stage s-${Math.min(i, 5)}${st === l.stages.at(-1) ? ' last' : ''}`, title: 'Move to another stage', onclick: (e) => stageMenu(e.currentTarget, l, r) }, st),
+      h('button', { class: 't-btn', title: r.note ? 'Edit note' : 'Add a note', 'aria-label': 'Note', html: I.edit, onclick: () => { K.noteRow = noting ? null : r.id; renderCamps(); $('#camps .row-note')?.focus(); } }));
+    if (!noting) return row;
+    const inp = h('input', { class: 'goal-add row-note', placeholder: 'Note · Enter to save', 'aria-label': 'Note' });
+    inp.value = r.note || '';
+    const save = () => {
+      K.noteRow = null;
+      if (inp.value.trim() !== (r.note || '')) patchRow(l, r, { note: inp.value });
+      else setTimeout(renderCamps);
+    };
+    inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') inp.blur(); if (e.key === 'Escape') { inp.value = r.note || ''; inp.blur(); } });
+    inp.addEventListener('blur', save);
+    return h('div', { class: 'trow-wrap' }, row, inp);
+  }
+  async function patchRow(l, r, body) {
+    Object.assign(r, body);
+    renderCamps();
     try {
-      const t = await api('POST', '/tasks', { text: `Call ${l.name}`, goalId: g.id, listId: l.id });
+      upsertList(await api('PATCH', `/lists/${l.id}/rows/${r.id}`, body));
+    } catch (e) {
+      toast(e.message);
+    }
+    renderCamps();
+    renderDock();
+  }
+  function stageMenu(anchor, l, r) {
+    openMenu(anchor, [
+      { head: 'Move to' },
+      ...l.stages.map((s) => ({ label: s, on: stageOf(l, r) === s, run: () => patchRow(l, r, { stage: s }) })),
+      { label: 'Edit stages…', run: () => stagesSheet(l) },
+    ]);
+  }
+  function stagesSheet(l) {
+    const ta = h('textarea', { rows: 6 });
+    ta.value = l.stages.join('\n');
+    sheet('Stages', [h('label', {}, 'One per line, in order. The last one counts as done.', ta)], async () => {
+      const next = ta.value.split('\n').map((x) => x.trim()).filter(Boolean);
+      if (next.length < 2) throw new Error('Add at least two stages.');
+      // Same number of stages: a rename, so each row keeps its place.
+      const rows = next.length === l.stages.length ? l.rows.map((r) => ({ id: r.id, cells: r.cells, stage: next[l.stages.indexOf(stageOf(l, r))] })) : undefined;
+      upsertList(await api('PATCH', '/lists/' + l.id, { stages: next, ...(rows ? { rows } : {}) }));
+      renderCamps();
+    });
+  }
+
+  // A reference sheet, kept beside the campaign: search it, tap a value to copy it, count stock up and down.
+  function refPanel(l) {
+    const qi = colWhere(l, QTY_RE, (v) => /^-?\d+(\.\d+)?$/.test(v));
+    const q = h('input', { class: 'goal-add dock-q', placeholder: `Search ${l.name}`, 'aria-label': 'Search' });
+    q.value = K.refQ[l.id] || '';
+    const box = h('div', { class: 'ref-rows' });
+    const draw = () => {
+      K.refQ[l.id] = q.value;
+      const needle = q.value.trim().toLowerCase();
+      const rows = l.rows.filter((r) => !needle || r.cells.some((x) => x.toLowerCase().includes(needle)));
+      box.replaceChildren(...[
+        ...rows.slice(0, 200).map((r) => h('div', { class: 'ref-row' },
+          h('div', { class: 'ref-cells' }, r.cells.map((x, i) => (x && i !== qi
+            ? h('button', { class: 'ref-cell' + (i ? '' : ' first'), title: `${l.columns[i]} · tap to copy`, onclick: () => copyText(x) }, i ? h('small', {}, l.columns[i]) : null, x)
+            : null))),
+          qi >= 0 ? h('div', { class: 'stepper' },
+            h('button', { 'aria-label': 'One less', onclick: () => patchRow(l, r, { cell: { i: qi, v: String(Math.max(0, Number(r.cells[qi] || 0) - 1)) } }) }, '−'),
+            h('b', { title: l.columns[qi] }, r.cells[qi] || '0'),
+            h('button', { 'aria-label': 'One more', onclick: () => patchRow(l, r, { cell: { i: qi, v: String(Number(r.cells[qi] || 0) + 1) } }) }, '+')) : null)),
+        rows.length > 200 ? h('p', { class: 'day-hint' }, `${rows.length - 200} more · search to narrow it down`) : null,
+        rows.length ? null : h('p', { class: 'day-hint' }, 'No matches'),
+      ].filter(Boolean));
+    };
+    q.addEventListener('input', draw);
+    draw();
+    return [q, box];
+  }
+
+  // A checklist: its runs, newest open ones first. Each run keeps its own ticks.
+  function checklistBody(c, l, close) {
+    const runs = [...l.runs].sort((a, b) => !!a.doneAt - !!b.doneAt || b.createdAt - a.createdAt);
+    const all = K.showAll['runs:' + l.id];
+    const add = h('input', { class: 'goal-add', placeholder: l.agenda ? 'Start a meeting… “Monday standup”' : 'Start a run… “Acme onboarding”', 'aria-label': 'Start a run' });
+    add.addEventListener('keydown', (e) => e.key === 'Enter' && add.value.trim() && startRun(l, add.value.trim()));
+    return [
+      ...(all ? runs : runs.slice(0, 5)).map((run) => {
+        const n = l.rows.filter((r) => run.ticks[r.id]).length;
+        const open = K.runOpen === run.id;
+        return h('div', { class: 'run' + (open ? ' open' : '') + (run.doneAt ? ' finished' : '') },
+          h('button', { class: 'run-top', onclick: () => { K.runOpen = open ? null : run.id; renderCamps(); } },
+            h('span', { class: 'run-name' }, run.name),
+            h('small', {}, run.doneAt ? `Finished ${ago(run.doneAt)}` : run.cur ? 'In progress' : `${n}/${l.rows.length}`)),
+          open ? runView(c, l, run) : null);
+      }),
+      runs.length > 5 ? h('button', { class: 'link', onclick: () => { K.showAll['runs:' + l.id] = !all; renderCamps(); } }, all ? 'Show fewer' : `All ${runs.length} runs`) : null,
+      add,
+      runs.length ? null : h('p', { class: 'day-hint' }, l.agenda ? 'Each meeting keeps its own notes and timings.' : 'Each run keeps its own ticks, so the same checklist works for every client or shift.'),
+      h('button', { class: 'link', onclick: close }, 'Hide'),
+    ].filter(Boolean);
+  }
+  async function startRun(l, name) {
+    try {
+      const { list, run } = await api('POST', `/lists/${l.id}/runs`, { name });
+      upsertList(list);
+      K.runOpen = run.id;
+      renderCamps();
+      return run;
+    } catch (e) {
+      toast(e.message);
+    }
+  }
+  function patchRun(l, run, body) {
+    if (body.tick) {
+      if (body.tick.on) run.ticks[body.tick.rowId] = { by: memberName(S.me?.memberId) || 'You', at: Date.now() };
+      else delete run.ticks[body.tick.rowId];
+    }
+    if (body.cur !== undefined) run.cur = body.cur ? { rowId: body.cur, at: Date.now() } : null;
+    if (body.done !== undefined) run.doneAt = body.done ? Date.now() : null;
+    renderCamps();
+    api('PATCH', `/lists/${l.id}/runs/${run.id}`, body).then((x) => { upsertList(x); renderCamps(); }).catch((e) => toast(e.message));
+  }
+  // One run, step by step. An agenda also has the item being discussed, with a timer against its planned minutes.
+  function runView(c, l, run) {
+    const n = l.rows.filter((r) => run.ticks[r.id]).length;
+    const cur = l.agenda && run.cur && l.rows.find((r) => r.id === run.cur.rowId);
+    const parts = [];
+    if (l.agenda && !run.doneAt) {
+      const next = l.rows[cur ? l.rows.indexOf(cur) + 1 : 0];
+      const planned = l.rows.reduce((s, r) => s + (r.mins || 0), 0);
+      parts.push(h('div', { class: 'agenda-bar' },
+        cur ? h('span', {}, h('b', { class: 'agenda-timer', 'data-since': run.cur.at, 'data-mins': cur.mins || '' }, clock(Date.now() - run.cur.at)), cur.mins ? h('small', {}, ` of ${cur.mins} min`) : null)
+          : h('small', {}, planned ? `${planned} min planned` : plural(l.rows.length, 'item')),
+        h('button', { class: 'btn small primary-btn', onclick: () => patchRun(l, run, { cur: cur ? next?.id || null : l.rows[0].id, ...(cur ? { tick: { rowId: cur.id, on: true } } : {}), ...(cur && !next ? { done: true } : {}) }) },
+          !cur ? 'Start meeting' : next ? 'Next item' : 'End meeting')));
+    }
+    let section = null;
+    for (const r of l.rows) {
+      if (r.section && r.section !== section) parts.push(h('div', { class: 'run-sec' }, (section = r.section)));
+      const t = run.ticks[r.id];
+      const isCur = cur?.id === r.id;
+      const key = run.id + ':' + r.id;
+      const noting = isCur || K.noteRow === key;
+      let note = null;
+      if (noting) {
+        note = h('textarea', { class: 'step-note-in', rows: isCur ? 3 : 2, placeholder: isCur ? 'Notes · start a line with “Action:” to make it a task' : 'Note', 'aria-label': 'Note' });
+        note.value = run.notes[r.id] || '';
+        note.addEventListener('blur', () => {
+          if (!isCur) K.noteRow = null;
+          if (note.value.trim() !== (run.notes[r.id] || '')) {
+            run.notes[r.id] = note.value.trim();
+            patchRun(l, run, { note: { rowId: r.id, text: note.value } });
+          } else setTimeout(renderCamps);
+        });
+      }
+      parts.push(h('div', { class: 'step' + (t ? ' done' : '') + (isCur ? ' cur' : '') },
+        h('button', { class: 'check' + (t ? ' on' : ''), html: I.check, 'aria-label': t ? 'Untick' : 'Tick', onclick: () => patchRun(l, run, { tick: { rowId: r.id, on: !t } }) }),
+        h('div', { class: 'step-body' },
+          h('span', { class: 'step-text', title: l.agenda ? 'Discuss this now' : 'Add a note', onclick: () => { if (l.agenda && !run.doneAt) patchRun(l, run, { cur: r.id }); else { K.noteRow = noting ? null : key; renderCamps(); $('#camps .step-note-in')?.focus(); } } }, r.cells[0]),
+          t ? h('small', {}, `${t.by} · ${ago(t.at)}`) : null,
+          run.notes[r.id] && !noting ? h('small', { class: 'step-note' }, run.notes[r.id]) : null,
+          note),
+        l.agenda && r.mins ? h('small', { class: 'step-mins' }, r.mins + 'm') : null));
+    }
+    // Lines in the notes that start with "Action:" become tasks.
+    const actions = Object.values(run.notes).flatMap((x) => x.split('\n').map((y) => /^\s*(?:action|todo|to do|next step)s?\s*[:\-–]\s*(.+)/i.exec(y)?.[1]?.trim()).filter(Boolean));
+    parts.push(h('div', { class: 'run-foot' },
+      h('small', {}, `${n} of ${l.rows.length} done`),
+      actions.length ? h('button', { class: 'btn small', onclick: (e) => actionsMenu(e.currentTarget, c, actions) }, `Make ${plural(actions.length, 'task')}`) : null,
+      l.agenda && !run.doneAt ? null : h('button', { class: 'btn small', onclick: () => patchRun(l, run, { done: !run.doneAt, ...(run.doneAt ? {} : { cur: null }) }) }, run.doneAt ? 'Reopen' : 'Finish'),
+      h('button', { class: 't-btn', 'aria-label': 'Run options', html: I.more, onclick: (e) => runMenu(e.currentTarget, l, run) })));
+    return h('div', { class: 'run-view' }, parts);
+  }
+  const clock = (ms) => {
+    const s = Math.max(0, Math.floor(ms / 1000));
+    return `${Math.floor(s / 60)}:${pad2(s % 60)}`;
+  };
+  setInterval(() => {
+    for (const el of document.querySelectorAll('.agenda-timer[data-since]')) {
+      const ms = Date.now() - Number(el.dataset.since);
+      el.textContent = clock(ms);
+      el.classList.toggle('over', !!el.dataset.mins && ms > el.dataset.mins * 60000);
+    }
+  }, 1000);
+  function actionsMenu(anchor, c, actions) {
+    const make = async (goalId) => {
+      try {
+        for (const text of actions) upsertTask(await api('POST', '/tasks', { ...parseTask(text), goalId }));
+        toast(`Added ${plural(actions.length, 'task')}`);
+        renderCamps();
+      } catch (e) {
+        toast(e.message);
+      }
+    };
+    openMenu(anchor, [{ head: 'Add the tasks to' }, ...goalsOf(c.id).map((g) => ({ label: g.title, run: () => make(g.id) })), { label: 'My tasks (no goal)', run: () => make(null) }]);
+  }
+  function runMenu(anchor, l, run) {
+    openMenu(anchor, [
+      { label: 'Rename…', run: () => {
+        const name = h('input', { value: run.name });
+        sheet('Rename', [h('label', {}, 'Name', name)], async () => upsertList(await api('PATCH', `/lists/${l.id}/runs/${run.id}`, { name: name.value })));
+      } },
+      { label: 'Delete this run', danger: true, run: () => api('DELETE', `/lists/${l.id}/runs/${run.id}`).then((x) => { upsertList(x); renderCamps(); }).catch((e) => toast(e.message)) },
+    ]);
+  }
+
+  // Working through a list becomes a task on a goal: a call list or tracker moves there; a checklist starts a run for it.
+  async function listToGoal(l, g) {
+    try {
+      let body = { text: kindOf(l) === 'calls' ? `Call ${l.name}` : l.name, goalId: g.id, listId: l.id };
+      if (kindOf(l) === 'checklist') {
+        const { list, run } = await api('POST', `/lists/${l.id}/runs`, { name: `${l.name} · ${g.title}` });
+        upsertList(list);
+        body = { ...body, runId: run.id };
+      } else if (tasksOf(g.id).some((t) => t.listId === l.id)) return toast(`${l.name} is already a task on ${g.title}`);
+      const t = await api('POST', '/tasks', body);
       upsertTask(t);
       K.listOpen = 'task:' + t.id;
       renderCamps();
-      toast(`Moved to ${g.title}`);
+      toast(kindOf(l) === 'checklist' ? `Started a run on ${g.title}` : `Moved to ${g.title}`);
     } catch (e) {
       toast(e.message);
     }
   }
   function listMenu(anchor, c, l) {
     const file = l.itemId && S.items.find((x) => x.id === l.itemId);
+    const k = kindOf(l);
     openMenu(anchor, [
+      k === 'reference' ? { label: 'Keep beside', run: () => dockOpen(c, { type: 'list', id: l.id }) } : null,
       file ? { label: kind(file) === 'textfile' ? 'Open or edit the file' : 'Open the file', run: () => openPreview(file) } : null,
-      ...(goalsOf(c.id).length ? [{ head: 'Add as a task to' }, ...goalsOf(c.id).map((g) => ({ label: g.title, run: () => listToGoal(l, g) }))] : []),
-      { label: 'Remove list (the file and the log stay)', danger: true, run: () => api('DELETE', '/lists/' + l.id).catch((e) => toast(e.message)) },
+      file ? { label: 'Use as…', run: () => useSheet(c, file) } : null,
+      k === 'tracker' ? { label: 'Edit stages…', run: () => stagesSheet(l) } : null,
+      ...(draggableKind(l) && goalsOf(c.id).length ? [{ head: k === 'checklist' ? 'Run it as a task on' : 'Add as a task to' }, ...goalsOf(c.id).map((g) => ({ label: g.title, run: () => listToGoal(l, g) }))] : []),
+      { label: 'Remove (the file stays)', danger: true, run: () => api('DELETE', '/lists/' + l.id).catch((e) => toast(e.message)) },
     ].filter(Boolean));
   }
   function logRow(c, l, r) {
@@ -3211,6 +3842,191 @@
     renderCamps();
     $('#camps .logbox')?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
     $('#camps .log-note')?.focus();
+  }
+
+  // ----- tables into tasks or onto the schedule -----
+  const pickCol = (t, re, none) => {
+    const s = h('select', {}, none ? h('option', { value: '-1' }, none) : null, t.columns.map((col, i) => h('option', { value: String(i) }, col)));
+    const i = typeof re === 'number' ? re : colOf(t.columns, re);
+    s.value = String(i >= 0 ? i : none ? -1 : 0);
+    return s;
+  };
+  const memberByName = (v) => {
+    v = String(v || '').trim().toLowerCase();
+    if (!v) return null;
+    const ms = S.workspace.members;
+    return (ms.find((m) => m.name.toLowerCase() === v) || ms.find((m) => m.name.toLowerCase().split(' ')[0] === v.split(' ')[0]))?.id || null;
+  };
+  function tasksSheet(c, t, name) {
+    const what = pickCol(t, TASK_RE), due = pickCol(t, DUE_RE, 'No due dates'), who = pickCol(t, OWNER_RE, 'Nobody');
+    const goal = h('select', {}, h('option', { value: '' }, `New goal: ${name}`), goalsOf(c.id).map((g) => h('option', { value: g.id }, g.title)));
+    const info = h('p', { class: 'day-hint' });
+    const build = () => t.rows.map((r) => ({
+      text: r.cells[+what.value] || '',
+      due: +due.value >= 0 ? cellDate(r.cells[+due.value]) : null,
+      assigneeId: +who.value >= 0 ? memberByName(r.cells[+who.value]) : null,
+    })).filter((x) => x.text.trim()).slice(0, 300);
+    const sync = () => {
+      const list = build();
+      info.textContent = [plural(list.length, 'task'), `${list.filter((x) => x.due).length} with due dates`, `${list.filter((x) => x.assigneeId).length} assigned`].join(' · ') + (t.rows.length > 300 ? ' · the first 300' : '');
+    };
+    for (const s of [what, due, who]) s.addEventListener('change', sync);
+    sync();
+    sheet(`Tasks from ${name}`, [h('label', {}, 'Task', what), h('div', { class: 'row2' }, h('label', {}, 'Due', due), h('label', {}, 'Assigned to', who)), h('label', {}, 'Goal', goal), info], async () => {
+      const list = build();
+      if (!list.length) throw new Error('That column has no tasks in it.');
+      let gid = goal.value;
+      if (!gid) {
+        const g = await api('POST', '/goals', { campaignId: c.id, title: name, kind: 'tasks' });
+        if (!S.goals.some((x) => x.id === g.id)) S.goals.push(g);
+        gid = g.id;
+      }
+      for (const x of list) upsertTask(await api('POST', '/tasks', { ...x, goalId: gid }));
+      renderCamps();
+      toast(`Added ${plural(list.length, 'task')}`);
+    }, 'Add tasks');
+  }
+  // Rows (or a calendar file's events) as blocks on your schedule. Timed blocks also go to your connected calendar.
+  function scheduleSheet(c, a, name) {
+    const t = a.table;
+    const fmt = (e) => `${fmtDay(e.date).rel || keyDate(e.date).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })} · ${e.start == null ? 'all day' : fmtTime(e.start) + (e.end ? '–' + fmtTime(e.end) : '')} · ${e.title}`;
+    const info = h('p', { class: 'day-hint' }), prev = h('div', { class: 'sched-prev' });
+    let build = () => a.events;
+    const fields = [];
+    if (t) {
+      const title = pickCol(t, TITLE_RE, `“${name}”`), date = pickCol(t, colWhere(t, DATE_RE, cellDate)), start = pickCol(t, colWhere(t, START_RE, (v) => cellRange(v)), 'No times (all day)'), end = pickCol(t, colWhere(t, END_RE, (v) => cellRange(v)), 'An hour after the start');
+      const pc = colOf(t.columns, OWNER_RE);
+      const names = pc >= 0 ? [...new Set(t.rows.map((r) => r.cells[pc]).filter(Boolean))].sort() : [];
+      const whose = h('select', {}, h('option', { value: '' }, 'Everyone'), names.map((n) => h('option', { value: n }, n)));
+      whose.value = names.find((n) => memberByName(n) === S.me?.memberId) || '';
+      build = () => t.rows.filter((r) => !whose.value || r.cells[pc] === whose.value).map((r) => {
+        const range = +start.value >= 0 ? cellRange(r.cells[+start.value]) : null;
+        const s = range?.[0] ?? null;
+        const e = s == null ? null : +end.value >= 0 ? cellRange(r.cells[+end.value])?.[0] ?? null : range[1];
+        const who = pc >= 0 && !whose.value && r.cells[pc] && +title.value !== pc ? ` · ${r.cells[pc]}` : '';
+        return { title: ((+title.value >= 0 && r.cells[+title.value]) || name) + who, date: cellDate(r.cells[+date.value]), start: s, end: s == null ? null : Math.min(1440, e > s ? e : s + 60) };
+      }).filter((e) => e.date);
+      for (const s of [title, date, start, end, whose]) s.addEventListener('change', () => sync());
+      fields.push(h('div', { class: 'row2' }, h('label', {}, 'What', title), h('label', {}, 'Day', date)), h('div', { class: 'row2' }, h('label', {}, 'Starts', start), h('label', {}, 'Ends', end)));
+      if (names.length) fields.push(h('label', {}, 'Whose rows', whose));
+    }
+    const sync = () => {
+      const list = build();
+      info.textContent = list.length ? `${plural(Math.min(list.length, 200), 'block')} for your schedule${list.length > 200 ? ' (the first 200)' : ''}` : 'No dates found. Pick the column with the days.';
+      prev.replaceChildren(...list.slice(0, 4).map((e) => h('div', {}, fmt(e))), list.length > 4 ? h('div', { class: 'day-hint' }, `…and ${list.length - 4} more`) : '');
+    };
+    sync();
+    sheet(`Schedule from ${name}`, [...fields, info, prev], async () => {
+      const list = build().slice(0, 200);
+      if (!list.length) throw new Error('No dates found.');
+      for (const e of list) upsertEntry(await api('POST', '/entries', { text: e.title, date: e.date, start: e.start, end: e.end, color: c.color }));
+      renderDay();
+      toast(`Added ${plural(list.length, 'block')} to your schedule`);
+    }, 'Add to schedule');
+  }
+
+  // ----- kept beside: a document or reference sheet docked next to the campaign -----
+  function dockOpen(c, what) {
+    K.dock = { cid: c.id, ...what };
+    K.dockMin = false;
+    store.set('dock', K.dock);
+    if (S.tab !== 'camps' || K.open !== c.id) openCampaign(c.id);
+    renderDock(true);
+  }
+  function dockClose() {
+    K.dock = null;
+    store.set('dock', null);
+    renderDock(true);
+  }
+  // Adds a line from the script (say, an objection) to the note of the call being logged.
+  function addToNote(c, text) {
+    K.noteDraft[c.id] = [K.noteDraft[c.id], text].filter(Boolean).join(' · ');
+    K.logOpen = c.id;
+    const inp = $('#camps .log-note');
+    if (inp) inp.value = K.noteDraft[c.id];
+    else renderCamps();
+    toast('Added to the log note');
+  }
+  let dockKey = null;
+  function renderDock(force) {
+    const el = $('#dock');
+    const d = K.dock;
+    const c = d && S.tab === 'camps' && K.open === d.cid && campById(d.cid);
+    const it = c && d.type === 'file' && S.items.find((x) => x.id === d.id);
+    const l = c && d.type === 'list' && S.lists.find((x) => x.id === d.id);
+    const on = !!(it || l);
+    el.classList.toggle('hidden', !on);
+    el.classList.toggle('min', on && !!K.dockMin);
+    $('#campsWrap').classList.toggle('docked', on);
+    if (!on) {
+      dockKey = null;
+      el.replaceChildren();
+      return;
+    }
+    el.style.flexBasis = K.dockMin ? '' : (K.dockSize || 0.45) * 100 + '%';
+    const key = it ? `f:${it.id}:${it.editedAt || it.createdAt}` : `l:${l.id}`;
+    // A list redraws in place when it changes, unless someone is typing in it.
+    if (key === dockKey && !force && (it || el.contains(document.activeElement))) return;
+    const keep = $('.dock-body', el)?.scrollTop || 0;
+    dockKey = key;
+    const body = h('div', { class: 'dock-body' });
+    const chips = h('div', { class: 'dock-chips' });
+    const grip = h('div', { class: 'dock-grip', title: 'Drag to resize' });
+    grip.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      const box = $('#campsWrap').getBoundingClientRect();
+      const side = getComputedStyle($('#campsWrap')).flexDirection === 'row';
+      const move = (ev) => {
+        K.dockSize = Math.min(0.8, Math.max(0.2, side ? (box.right - ev.clientX) / box.width : (box.bottom - ev.clientY) / box.height));
+        el.style.flexBasis = K.dockSize * 100 + '%';
+      };
+      const up = () => {
+        removeEventListener('pointermove', move);
+        removeEventListener('pointerup', up);
+        store.set('dockSize', K.dockSize);
+      };
+      addEventListener('pointermove', move);
+      addEventListener('pointerup', up);
+    });
+    el.replaceChildren(grip,
+      h('div', { class: 'dock-head' },
+        h('span', { class: 'dock-ic', html: it ? I.doc : I.grid }),
+        h('b', { class: 'dock-title', title: it ? it.name : l.name }, it ? it.name : l.name),
+        it ? h('button', { class: 't-btn', title: 'Open in its own window', 'aria-label': 'Open in its own window', html: I.reveal, onclick: () => popOut(it) }) : null,
+        h('button', { class: 't-btn', title: K.dockMin ? 'Show' : 'Shrink', 'aria-label': K.dockMin ? 'Show' : 'Shrink', html: I.down, style: K.dockMin ? 'transform:rotate(180deg)' : null, onclick: () => { K.dockMin = !K.dockMin; renderDock(true); } }),
+        h('button', { class: 't-btn', title: 'Close', 'aria-label': 'Close', html: I.close, onclick: dockClose })),
+      chips, body);
+    if (l) {
+      body.append(...refPanel(l));
+      body.scrollTop = keep;
+      return;
+    }
+    const k = kind(it);
+    if (k === 'pdf') return body.append(h('iframe', { src: fileUrl(it), title: it.name }));
+    if (k === 'image') return body.append(h('img', { src: fileUrl(it), alt: it.name }));
+    if (!docKind(it) && k !== 'textfile') return body.append(h('p', { class: 'day-hint' }, 'This file can’t be shown here.'), h('button', { class: 'btn small', onclick: () => download(it) }, 'Download'));
+    body.append(h('p', { class: 'day-hint' }, 'Loading…'));
+    (docKind(it) ? docDom(it) : fileBuf(it).then((b) => h('div', {}, h('pre', {}, new TextDecoder().decode(b).slice(0, 500_000))))).then((dom) => {
+      if (dockKey !== key) return;
+      const doc = h('div', { class: 'docx dock-doc' }, ...dom.childNodes);
+      body.replaceChildren(doc);
+      body.scrollTop = keep;
+      // Headings become jumps. Under an "Objections" heading, tapping a line adds it to the log note.
+      const heads = [...doc.querySelectorAll('h1,h2,h3,h4,h5,h6')];
+      if (heads.length >= 2) chips.replaceChildren(...heads.slice(0, 30).map((hd) => h('button', { onclick: () => hd.scrollIntoView({ block: 'start', behavior: 'smooth' }) }, hd.textContent.trim().slice(0, 40))));
+      let obj = false;
+      for (const x of doc.querySelectorAll('h1,h2,h3,h4,h5,h6,li,p')) {
+        if (/^H\d$/.test(x.tagName)) obj = OBJ_RE.test(x.textContent);
+        else if (obj && !(x.tagName === 'P' && x.closest('li')) && x.textContent.trim()) {
+          x.classList.add('tap-add');
+          x.title = 'Tap to add to the log note';
+          x.addEventListener('click', (e) => {
+            if (e.target.closest('a')) return;
+            addToNote(c, x.textContent.replace(/\s+/g, ' ').trim().slice(0, 200));
+          });
+        }
+      }
+    }).catch(() => body.replaceChildren(h('p', { class: 'day-hint' }, 'Couldn’t read this file.')));
   }
 
   // Notes are text cards in the campaign's stack, so they sit in the stack next to its files.
@@ -3280,7 +4096,7 @@
       ...(files.length ? [{ head: 'Recent files' }] : [{ note: 'No files yet. Drop one on this campaign.' }]),
       ...files.slice(0, 8).map((it) => ({
         label: h('span', { class: 'mfile' }, h('span', { class: 'mfile-ext' }, it.type === 'folder' ? 'DIR' : ext(it.name) || 'FILE'), h('span', { class: 'mfile-name' }, it.name)),
-        run: () => (it.type === 'folder' ? showStack(c.stackId) : openPreview(it)),
+        run: () => (it.type === 'folder' ? showStack(c.stackId) : docKind(it) || kind(it) === 'pdf' ? dockOpen(c, { type: 'file', id: it.id }) : openPreview(it)),
       })),
       { label: '+ Add a call list or file…', run: () => pickCampaignFiles(c) },
       { label: files.length > 8 ? `Go to the stack · all ${files.length} files` : 'Go to the stack', run: () => showStack(c.stackId) },
@@ -3296,15 +4112,17 @@
     const methods = c.methods || [];
     if (!methods.includes(K.method)) K.method = methods[0] || null;
     const list = recent.length ? h('div', { class: 'attempts' },
-      recent.slice(0, showN).map((x) => h('div', { class: 'attempt' },
+      recent.slice(0, showN).flatMap((x) => [h('div', { class: 'attempt' },
         h('span', { class: 'oc oc-' + c.outcomes.indexOf(x.outcome) }, x.outcome),
-        h('span', { class: 'att-who' }, x.method ? h('small', {}, x.method + ' · ') : null, x.contact || '—', x.note ? h('small', {}, ' · ' + x.note) : null),
+        h('span', { class: 'att-who' }, x.method ? h('small', {}, x.method + ' · ') : null, x.contact || '—', x.note ? h('small', {}, ' · ' + x.note) : null,
+          x.answers?.length ? h('button', { class: 'link att-ans-btn', onclick: () => { K.ansOpen[x.id] = !K.ansOpen[x.id]; renderCamps(); } }, ` · ${plural(x.answers.length, 'answer')}`) : null),
         h('span', { class: 'att-by' }, `${x.memberId === S.me?.memberId ? 'You' : x.by} · `, h('span', { 'data-ago': x.at }, ago(x.at))),
-        x.memberId === S.me?.memberId || c.ownerId === S.me?.memberId ? h('button', { class: 't-btn', 'aria-label': 'Remove', html: I.close, onclick: () => api('DELETE', '/attempts/' + x.id).catch((e) => toast(e.message)) }) : null)),
+        x.memberId === S.me?.memberId || c.ownerId === S.me?.memberId ? h('button', { class: 't-btn', 'aria-label': 'Remove', html: I.close, onclick: () => api('DELETE', '/attempts/' + x.id).catch((e) => toast(e.message)) }) : null),
+        K.ansOpen[x.id] ? h('div', { class: 'att-ans' }, x.answers.map((y) => h('div', {}, h('small', {}, y.q), y.a))) : null]).filter(Boolean),
       recent.length > 3 ? h('button', { class: 'link', onclick: () => { K.showAll[c.id] = !K.showAll[c.id]; renderCamps(); } }, K.showAll[c.id] ? 'Show less' : `Show all ${recent.length}`) : null) : null;
     if (!open) return h('div', { class: 'logbox' }, list || h('p', { class: 'day-hint' }, 'Nothing logged yet. Tap Log above after a call or email.'));
     // Log against one of the campaign's lists, or blank for anyone else.
-    const all = listsOf(c.id);
+    const all = listsOf(c.id).filter((l) => (l.kind || 'calls') === 'calls');
     if (K.logFrom[c.id] !== 'blank' && !all.some((l) => l.id === K.logFrom[c.id])) K.logFrom[c.id] = all[0]?.id || 'blank';
     const from = K.logFrom[c.id];
     const lists = all.filter((l) => l.id === from);
@@ -3313,6 +4131,20 @@
     if (!picked) K.pick = null;
     const contact = h('input', { class: 'log-contact', placeholder: lists.length ? `Who? Search ${lists[0].name}, or type a name` : 'Who? (business, person, area)', 'aria-label': 'Who you reached' });
     const note = h('input', { class: 'log-note', placeholder: 'Note (optional)', 'aria-label': 'Note' });
+    note.value = K.noteDraft[c.id] || '';
+    note.addEventListener('input', () => (K.noteDraft[c.id] = note.value));
+    // The campaign's questions, answered on this call and saved with it.
+    const qs = listsOf(c.id).filter((l) => l.kind === 'form').flatMap((l) => l.rows.map((r) => ({ id: r.id, q: r.cells[0] })));
+    const ans = (K.answers[c.id] ||= {});
+    const answered = qs.filter((x) => ans[x.id]?.trim()).length;
+    const ask = qs.length ? h('div', { class: 'log-ask' },
+      h('button', { class: 'link log-ask-btn', onclick: () => { K.askOpen = !K.askOpen; document.activeElement?.blur(); renderCamps(); } }, `${K.askOpen ? '▾' : '▸'} Questions · ${answered}/${qs.length}`),
+      K.askOpen ? qs.map((x) => {
+        const ta = h('textarea', { rows: 1, class: 'log-ans', placeholder: 'Answer', 'aria-label': x.q });
+        ta.value = ans[x.id] || '';
+        ta.addEventListener('input', () => (ans[x.id] = ta.value));
+        return h('label', { class: 'log-q' }, h('span', {}, x.q), ta);
+      }) : null) : null;
     // Prospects matching what's typed; with nothing typed, the next few not yet contacted.
     const sugg = h('div', { class: 'log-sugg hidden' });
     const suggest = () => {
@@ -3348,7 +4180,7 @@
       const name = picked ? f.who(picked) : contact.value.trim();
       if (bk && (!bk.date || !bk.time)) return toast('Pick a day and time for the meeting');
       try {
-        const x = await api('POST', '/attempts', { campaignId: c.id, method: K.method, outcome, contact: name, note: note.value, ...(picked ? K.pick : {}) });
+        const x = await api('POST', '/attempts', { campaignId: c.id, method: K.method, outcome, contact: name, note: note.value, answers: qs.filter((x) => ans[x.id]?.trim()).map((x) => ({ q: x.q, a: ans[x.id] })), ...(picked ? K.pick : {}) });
         if (!S.attempts.some((y) => y.id === x.id)) S.attempts.push(x);
         let booked = '';
         if (bk) {
@@ -3360,6 +4192,8 @@
           K.book = null;
         }
         contact.value = note.value = '';
+        K.noteDraft[c.id] = '';
+        K.answers[c.id] = {};
         K.pick = null;
         toast(`Logged · ${outcome}${booked}`);
         renderCamps();
@@ -3394,13 +4228,15 @@
       methods.length > 1 ? h('div', { class: 'seg log-methods' }, methods.map((m) => h('button', { class: m === K.method ? 'on' : '', onclick: () => { K.method = m; renderCamps(); $('#camps .log-contact')?.focus(); } }, m))) : null,
       h('div', { class: 'log-who' }, who, picked ? null : sugg),
       note,
+      ask,
       booking,
       h('div', { class: 'log-outcomes' }, c.outcomes.map((o, i) => h('button', { class: 'oc oc-' + i, onclick: () => log(o) }, o))),
       list);
   }
 
-  function openLog(c) {
-    K.logOpen = K.logOpen === c.id ? null : c.id;
+  function openLog(c, { ask = false } = {}) {
+    K.logOpen = ask || K.logOpen !== c.id ? c.id : null;
+    if (ask) K.askOpen = true;
     if (!K.logOpen) K.book = null;
     renderCamps();
     $('#camps .logbox')?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });

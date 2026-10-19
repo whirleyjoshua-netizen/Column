@@ -338,6 +338,11 @@ function applyTask(t, body) {
     const l = db.lists[body.listId !== undefined ? body.listId : t.listId];
     t.listId = l && l.campaignId === db.goals[t.goalId]?.campaignId ? l.id : null;
   }
+  // A checklist task works one run of it.
+  if (body.runId !== undefined || body.listId !== undefined || body.goalId !== undefined) {
+    const id = body.runId !== undefined ? body.runId : t.runId;
+    t.runId = id && db.lists[t.listId]?.runs?.some((r) => r.id === id) ? id : null;
+  }
   if (body.assigneeId !== undefined) t.assigneeId = body.assigneeId && db.workspaces[t.wsId]?.members.some((m) => m.id === body.assigneeId) ? body.assigneeId : null;
   if (body.report !== undefined) t.report = !!body.report;
   if (body.priority !== undefined) t.priority = Math.max(0, Math.min(3, Math.round(Number(body.priority)) || 0));
@@ -678,18 +683,44 @@ function applyGoal(g, body, c) {
 
 // A call list: a spreadsheet of prospects dropped on a campaign. Each logged call can name the row it was for,
 // and a row's latest logged outcome is where that prospect stands. The file it came from stays in the campaign's stack.
+// A list is a file made interactive. Its kind says how it's worked:
+//   calls      prospects to call or email; where each stands comes from the log
+//   tracker    rows moved through stages (hiring, invoices, orders…)
+//   reference  a lookup sheet: price list, catalogue, inventory (quantities can be changed)
+//   checklist  steps run many times, each run with its own ticks (agenda: with timings)
+//   form       questions answered for each call or email in the log
 const LIST_ROWS = 5000;
+const LIST_KINDS = ['calls', 'tracker', 'reference', 'checklist', 'form'];
+const RUNS = 300;
+const cleanText = (v, n) => String(v ?? '').trim().slice(0, n);
 function applyList(l, body) {
   if (body.name !== undefined) l.name = String(body.name || '').trim().slice(0, 80) || 'List';
+  if (body.kind !== undefined) l.kind = LIST_KINDS.includes(body.kind) ? body.kind : 'calls';
+  l.kind ||= 'calls';
+  if (body.agenda !== undefined) l.agenda = !!body.agenda;
+  if (body.stages !== undefined) {
+    const seen = new Set();
+    l.stages = (Array.isArray(body.stages) ? body.stages : []).map((x) => cleanText(x, 40)).filter((x) => x && !seen.has(x.toLowerCase()) && seen.add(x.toLowerCase())).slice(0, 12);
+  }
+  if (l.kind === 'tracker' && !(l.stages || []).length) l.stages = ['To do', 'In progress', 'Done'];
+  if (l.kind === 'checklist') l.runs ||= [];
   if (body.columns !== undefined) l.columns = (Array.isArray(body.columns) ? body.columns : []).slice(0, 30).map((x, i) => String(x ?? '').trim().slice(0, 60) || `Column ${i + 1}`);
   if (body.rows !== undefined) {
     if (!Array.isArray(body.rows) || body.rows.length > LIST_ROWS) throw badRequest(`A list can have up to ${LIST_ROWS} rows.`);
     // Rows keep their ids across edits so the calls logged against them still point at them.
     const seen = new Set();
+    const was = new Map((l.rows || []).map((r) => [r.id, r]));
     l.rows = body.rows.map((r) => {
       const id = typeof r?.id === 'string' && /^[\w-]{4,20}$/.test(r.id) && !seen.has(r.id) ? r.id : rid(6);
       seen.add(id);
-      return { id, cells: l.columns.map((_, i) => String(r?.cells?.[i] ?? '').trim().slice(0, 300)) };
+      const row = { id, cells: l.columns.map((_, i) => String(r?.cells?.[i] ?? '').trim().slice(0, 300)) };
+      // Steps keep their section and planned minutes; a tracker row keeps its stage and note through edits.
+      if (r?.section) row.section = cleanText(r.section, 120);
+      if (Number(r?.mins) > 0) row.mins = Math.min(600, Math.round(Number(r.mins)));
+      const old = was.get(id);
+      for (const k of ['stage', 'note', 'by', 'at']) if (old?.[k] !== undefined) row[k] = old[k];
+      if (r?.stage !== undefined) row.stage = cleanText(r.stage, 40) || null;
+      return row;
     }).filter((r) => r.cells.some(Boolean));
   }
   if (!l.rows.length) throw badRequest('That list has no rows.');
@@ -1151,7 +1182,7 @@ async function aiReport(ws, auth, c, body) {
     `Campaign: ${c.name}`,
     c.brief ? `Brief:\n${clipText(c.brief, 4000)}` : 'No brief.',
     `Numbers (already shown above the findings, don't repeat them as a list):\n${(Array.isArray(body.stats) ? body.stats : []).map((x) => '- ' + clipText(x, 300)).join('\n')}`,
-    log.length ? `Calls and emails logged since the last report (oldest first):\n${log.slice(-300).map((x) => `- ${fmtDay(x.at)} ${x.method || ''} ${x.contact || '(no name)'}: ${x.outcome}${x.note ? ` · ${clipText(x.note, 300)}` : ''} (${x.by})`).join('\n')}` : 'Nothing logged since the last report.',
+    log.length ? `Calls and emails logged since the last report (oldest first):\n${log.slice(-300).map((x) => `- ${fmtDay(x.at)} ${x.method || ''} ${x.contact || '(no name)'}: ${x.outcome}${x.note ? ` · ${clipText(x.note, 300)}` : ''}${(x.answers || []).map((y) => ` · ${clipText(y.q, 80)} ${clipText(y.a, 200)}`).join('')} (${x.by})`).join('\n')}` : 'Nothing logged since the last report.',
     done.length ? `Tasks finished:\n${done.slice(-50).map((t) => '- ' + clipText(t.text, 200)).join('\n')}` : '',
     open.length ? `Tasks still open:\n${open.slice(0, 50).map((t) => `- ${clipText(t.text, 200)}${t.due ? ` (due ${t.due})` : ''}`).join('\n')}` : '',
   ].filter(Boolean).join('\n\n');
@@ -1565,6 +1596,8 @@ async function api(req, res, url) {
         listId: row ? l.id : null, rowId: row ? row.id : null,
         memberId: auth.memberId, by: auth.member, at: Date.now(), outcome,
         contact: String(body.contact || '').trim().slice(0, 200), note: String(body.note || '').trim().slice(0, 2000),
+        // Answers to the campaign's question form, asked on this call.
+        answers: (Array.isArray(body.answers) ? body.answers : []).slice(0, 40).map((x) => ({ q: cleanText(x?.q, 300), a: cleanText(x?.a, 2000) })).filter((x) => x.q && x.a),
       };
       db.attempts[x.id] = x;
       save();
@@ -1597,6 +1630,70 @@ async function api(req, res, url) {
     }
     const l = b && db.lists[b];
     if (!l || l.wsId !== ws.id || !canSee(auth, 'list', l)) return send(res, 404, { error: 'Not found' });
+    const done = () => {
+      save();
+      broadcast(ws.id, { type: 'list', list: publicList(l) });
+      return send(res, 200, publicList(l));
+    };
+    // One row: its stage and note (trackers), or a cell (a quantity on a reference sheet).
+    if (c === 'rows' && d && m === 'PATCH') {
+      const row = l.rows.find((r) => r.id === d);
+      if (!row) return send(res, 404, { error: 'Not found' });
+      const body = await readJson(req, 20_000);
+      if (body.stage !== undefined) row.stage = (l.stages || []).includes(body.stage) ? body.stage : null;
+      if (body.note !== undefined) row.note = cleanText(body.note, 2000);
+      if (body.cell !== undefined) {
+        const i = Number(body.cell?.i);
+        if (!(i >= 0 && i < l.columns.length)) return send(res, 400, { error: 'Bad column' });
+        row.cells[i] = cleanText(body.cell.v, 300);
+      }
+      row.by = auth.member;
+      row.at = Date.now();
+      return done();
+    }
+    // Checklist runs: each time the checklist is worked through, with its own ticks and notes.
+    if (c === 'runs' && l.kind === 'checklist') {
+      l.runs ||= [];
+      if (m === 'POST' && !d) {
+        if (l.runs.length >= RUNS) return send(res, 400, { error: `A checklist keeps up to ${RUNS} runs. Delete some old ones first.` });
+        const body = await readJson(req, 20_000);
+        const run = { id: rid(8), name: cleanText(body.name, 80) || l.name, by: auth.member, createdAt: Date.now(), ticks: {}, notes: {}, cur: null, doneAt: null };
+        l.runs.push(run);
+        save();
+        broadcast(ws.id, { type: 'list', list: publicList(l) });
+        return send(res, 200, { list: publicList(l), run });
+      }
+      const run = d && l.runs.find((r) => r.id === d);
+      if (!run) return send(res, 404, { error: 'Not found' });
+      if (m === 'PATCH') {
+        const body = await readJson(req, 50_000);
+        const step = (id) => l.rows.some((r) => r.id === id);
+        if (body.name !== undefined) run.name = cleanText(body.name, 80) || run.name;
+        if (body.tick && step(body.tick.rowId)) {
+          if (body.tick.on) run.ticks[body.tick.rowId] = { by: auth.member, at: Date.now() };
+          else delete run.ticks[body.tick.rowId];
+        }
+        if (body.note && step(body.note.rowId)) {
+          const t = cleanText(body.note.text, 4000);
+          if (t) run.notes[body.note.rowId] = t;
+          else delete run.notes[body.note.rowId];
+        }
+        // The agenda item being discussed right now, and since when.
+        if (body.cur !== undefined) run.cur = body.cur && step(body.cur) ? { rowId: body.cur, at: Date.now() } : null;
+        if (body.done !== undefined) run.doneAt = body.done ? Date.now() : null;
+        return done();
+      }
+      if (m === 'DELETE') {
+        l.runs = l.runs.filter((r) => r !== run);
+        for (const t of Object.values(db.tasks)) {
+          if (t.runId !== run.id) continue;
+          t.runId = null;
+          broadcast(ws.id, { type: 'task', task: publicTask(t) });
+        }
+        return done();
+      }
+    }
+    if (c) return send(res, 404, { error: 'Not found' });
     if (m === 'PATCH') {
       const next = applyList({ ...l }, await readJson(req, 8_000_000));
       db.lists[l.id] = next;
