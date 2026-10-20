@@ -338,7 +338,9 @@
       refreshLinks();
       chatChanged();
     } else if (msg.type === 'workspace') {
+      const mailWas = !!S.workspace?.settings?.memberEmail;
       S.workspace = msg.workspace;
+      if (mailWas !== !!S.workspace.settings?.memberEmail) loadPss();
       applyBrand();
       refreshLinks();
       S.panes = S.panes.map((v) => (v.startsWith('stack:') && !stackById(v.slice(6)) ? 'files' : v));
@@ -3959,7 +3961,7 @@
       file ? { label: 'Use as…', run: () => useSheet(c, file) } : null,
       k === 'tracker' ? { label: 'Edit stages…', run: () => stagesSheet(l) } : null,
       l.live && S.pss?.connected ? { label: 'Change who’s on it…', run: () => liveSheet(c, l) } : null,
-      S.mail && k === 'calls' && listFields(l).email >= 0 ? { label: 'Email this list…', run: () => { const f = listFields(l); emailTo(l.rows.filter((r) => !r.dne).map((r) => ({ email: r.cells[f.email], name: f.who(r) === '—' ? '' : f.who(r), first: f.first(r), listId: l.id, rowId: r.id }))); } } : null,
+      S.mail && k === 'calls' && listFields(l).email >= 0 && (amOwner() || myCampaign(c)) ? { label: 'Email this list…', run: () => { const f = listFields(l); emailTo(l.rows.filter((r) => !r.dne).map((r) => ({ email: r.cells[f.email], name: f.who(r) === '—' ? '' : f.who(r), first: f.first(r), listId: l.id, rowId: r.id }))); } } : null,
       ...(draggableKind(l) && goalsOf(c.id).length ? [{ head: k === 'checklist' ? 'Run it as a task on' : 'Add as a task to' }, ...goalsOf(c.id).map((g) => ({ label: g.title, run: () => listToGoal(l, g) }))] : []),
       { label: file ? 'Remove (the file stays)' : 'Remove', danger: true, run: () => api('DELETE', '/lists/' + l.id).catch((e) => toast(e.message)) },
     ].filter(Boolean));
@@ -5095,6 +5097,10 @@
   async function loadPss() {
     if (!S.workspace || !amOwner()) {
       S.pss = S.contacts = S.mail = null;
+      // Members get Email when an owner allows it.
+      if (S.workspace && mayEmail()) S.mail = await api('GET', '/mail').catch(() => null);
+      renderCamps();
+      renderTool();
       return;
     }
     try {
@@ -5266,7 +5272,7 @@
       { head: 'Tools' },
       { label: h('span', { class: 'tool-item' }, 'Bills', soon ? h('small', {}, `${soon} due soon`) : null), on: toolOpen === 'bills', run: () => openTool('bills') },
       amOwner() ? { label: h('span', { class: 'tool-item' }, 'Contacts', S.contacts?.length ? h('small', {}, S.contacts.length.toLocaleString()) : null), on: toolOpen === 'contacts', run: () => openTool('contacts') } : null,
-      amOwner() ? { label: h('span', { class: 'tool-item' }, 'Email', (S.mail?.sends || []).some((x) => x.status === 'sending') ? h('small', {}, 'sending…') : null), on: toolOpen === 'email', run: () => openTool('email') } : null,
+      mayEmail() ? { label: h('span', { class: 'tool-item' }, 'Email', (S.mail?.sends || []).some((x) => x.status === 'sending') ? h('small', {}, 'sending…') : null), on: toolOpen === 'email', run: () => openTool('email') } : null,
       { label: 'Meeting notes', on: toolOpen === 'meetings', run: () => openTool('meetings') },
       R.on ? null : { label: '● Record a meeting', run: () => askRecord('') },
     ].filter(Boolean));
@@ -5584,6 +5590,11 @@
     const w = String(name || '').trim().split(/\s+/)[0];
     return /^\p{L}[\p{L}'’-]*$/u.test(w) ? w : '';
   };
+  // Owners always; members when an owner turns it on in Settings, and then only for lists in their own campaigns
+  // (ones they made, run, are invited to, or have a task in). The server checks the same.
+  const mayEmail = () => amOwner() || !!S.workspace?.settings?.memberEmail;
+  const myCampaign = (c) => !!c && (c.ownerId === S.me?.memberId || c.assigneeId === S.me?.memberId || (c.memberIds || []).includes(S.me?.memberId)
+    || S.tasks.some((t) => t.assigneeId === S.me?.memberId && goalById(t.goalId)?.campaignId === c.id));
   const noEmail = () => new Set((S.contacts || []).filter((x) => x.dne).map((x) => x.email.toLowerCase()));
   // Adds people, each address once. Returns how many were new.
   function mailAdd(people) {
@@ -5653,7 +5664,7 @@
     }, 'Add');
   }
   function pickList() {
-    const lists = S.lists.filter((l) => kindOf(l) === 'calls' && listFields(l).email >= 0 && campById(l.campaignId));
+    const lists = S.lists.filter((l) => kindOf(l) === 'calls' && listFields(l).email >= 0 && campById(l.campaignId) && (amOwner() || myCampaign(campById(l.campaignId))));
     if (!lists.length) return toast('None of your campaigns has a list with email addresses yet.');
     const pick = h('select', {}, lists.map((l) => h('option', { value: l.id }, `${l.name} · ${campById(l.campaignId).name}`)));
     const fresh = h('input', { type: 'checkbox' });
@@ -5691,7 +5702,8 @@
   }
   function emailTool() {
     const m = S.mail;
-    if (!S.pss?.connected) return [h('p', { class: 'day-hint' }, 'Connect PSS admin in Settings first. Every email carries an unsubscribe link, and those come from your website.'), h('button', { class: 'btn small', onclick: () => { closeTool(); openSettings(); } }, 'Open Settings')];
+    if (!amOwner() && m && !m.pss) return [h('p', { class: 'day-hint' }, 'Email needs PSS admin connected, for the unsubscribe links. Ask a team owner to connect it in Settings.')];
+    if (amOwner() && !S.pss?.connected) return [h('p', { class: 'day-hint' }, 'Connect PSS admin in Settings first. Every email carries an unsubscribe link, and those come from your website.'), h('button', { class: 'btn small', onclick: () => { closeTool(); openSettings(); } }, 'Open Settings')];
     if (!m) return [h('p', { class: 'day-hint' }, 'Loading…')];
     if (!m.from) {
       const go = h('button', { class: 'btn primary-btn' }, 'Connect Outlook');
@@ -5717,7 +5729,8 @@
     body.value = M.body;
     const footer = h('textarea', { rows: 2, placeholder: 'Premier Shade Solutions\n123 Main St, Henderson, NV 89002', 'aria-label': 'Footer' });
     footer.value = m.footer || '';
-    const camp = h('select', { 'aria-label': 'Log it in' }, h('option', { value: '' }, 'Don’t log it'), S.campaigns.filter((c) => c.status !== 'done').map((c) => h('option', { value: c.id, selected: c.id === M.campaignId }, c.name)));
+    if (!amOwner()) footer.readOnly = true;
+    const camp = h('select', { 'aria-label': 'Log it in' }, h('option', { value: '' }, 'Don’t log it'), S.campaigns.filter((c) => c.status !== 'done' && (amOwner() || myCampaign(c))).map((c) => h('option', { value: c.id, selected: c.id === M.campaignId }, c.name)));
     const preview = h('pre', { class: 'mail-preview' + (M.preview ? '' : ' hidden') });
     const sendBtn = h('button', { class: 'btn primary-btn' });
     const warn = h('small', { class: 'day-hint mail-warn' });
@@ -5770,7 +5783,7 @@
         h('div', { class: 'mail-add' },
           S.contacts?.length ? h('button', { class: 'btn small', onclick: pickContacts }, '+ Contacts') : null,
           h('button', { class: 'btn small', onclick: pickList }, '+ From a list'),
-          h('button', { class: 'btn small', onclick: pickTyped }, '+ Type or paste')),
+          amOwner() ? h('button', { class: 'btn small', onclick: pickTyped }, '+ Type or paste') : null),
         out.length ? h('small', { class: 'day-hint' }, `${out.length} unsubscribed, so they’re left out.`) : null,
         shown.map((r) => h('div', { class: 'mail-person' + (no.has(r.email) ? ' out' : '') },
           h('span', {}, r.name ? h('b', {}, r.name) : null, h('small', {}, (r.name ? ' · ' : '') + r.email)),
@@ -5782,7 +5795,7 @@
         h('label', {}, 'Message', body),
         h('small', { class: 'day-hint' }, '{first name} becomes each person’s first name, or “there” when there isn’t one.'),
         h('label', {}, 'Footer: your business and mailing address', footer),
-        h('small', { class: 'day-hint' }, 'Every email ends with this and the person’s own unsubscribe link.'),
+        h('small', { class: 'day-hint' }, amOwner() ? 'Every email ends with this and the person’s own unsubscribe link.' : 'Every email ends with this and the person’s own unsubscribe link. Team owners set the footer.'),
         h('label', {}, 'Log each email in a campaign', camp),
         h('div', { class: 'mail-tools' }, h('button', { class: 'link', onclick: () => { M.preview = !M.preview; preview.classList.toggle('hidden', !M.preview); } }, 'Preview'), test),
         preview,
@@ -6045,6 +6058,11 @@
     s.append(h('section', {}, h('h3', {}, 'Auto-clear'),
       h('div', { class: 'srow' }, h('span', {}, 'Remove items', h('small', {}, 'Pinned items are always kept')), sel)));
 
+    if (isOwner()) {
+      s.append(h('section', {}, h('h3', {}, 'Team'),
+        toggleRow('Members can send campaign email', 'From their own Outlook, to people on lists in their own campaigns. Owners can always send.', !!ws.settings.memberEmail,
+          (on) => api('PATCH', '/workspace', { memberEmail: on }).catch((e) => toast(e.message)))));
+    }
     s.append(calendarSection());
     loadCalendars();
     s.append(aiSection());

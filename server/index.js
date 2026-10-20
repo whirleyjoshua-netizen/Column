@@ -1522,7 +1522,14 @@ function publicSend(x) {
     problems: x.to.filter((r) => r.status === 'failed' || r.status === 'skipped').slice(0, 50).map((r) => ({ email: r.email, name: r.name, why: r.error })),
   };
 }
-const sendNews = (x) => broadcast(x.wsId, { type: 'send', send: publicSend(x), forOwners: true });
+// Owners see every send; a member who sent one sees their own.
+function sendNews(x) {
+  broadcast(x.wsId, { type: 'send', send: publicSend(x), forOwners: true });
+  if (!isOwnerId(x.wsId, x.memberId)) broadcast(x.wsId, { type: 'send', send: publicSend(x), forMember: x.memberId });
+}
+// A member's own campaigns: ones they made, run, are invited to, or have a task in.
+const onCampaign = (c, memberId) => c.ownerId === memberId || c.assigneeId === memberId || (c.memberIds || []).includes(memberId)
+  || Object.values(db.tasks).some((t) => t.assigneeId === memberId && campaignOf('task', t) === c.id);
 function sendFinish(x) {
   x.status = 'done';
   x.doneAt = Date.now();
@@ -2191,14 +2198,18 @@ async function api(req, res, url) {
 
   // Campaign email from your own Outlook. Owners only, since it reaches the PSS contacts.
   if (a === 'mail') {
-    if (auth.role !== 'owner') return send(res, 403, { error: 'Only team owners can send campaign email.' });
+    // Owners, and members when an owner allows it in Settings. Members email only rows of lists in their own
+    // campaigns, with the team's footer, and see only their own sends.
+    const owner = auth.role === 'owner';
+    if (!owner && !ws.settings.memberEmail) return send(res, 403, { error: 'Only team owners can send campaign email. An owner can let members send it in Settings.' });
     const conn = mailConn(ws.id, auth.memberId);
     const body = m === 'GET' ? {} : await readJson(req, 2_000_000);
     if (m === 'GET' && !b) {
-      const sends = Object.values(db.sends).filter((x) => x.wsId === ws.id).sort((p, q) => q.createdAt - p.createdAt).slice(0, MAIL_KEEP).map(publicSend);
+      const sends = Object.values(db.sends).filter((x) => x.wsId === ws.id && (owner || x.memberId === auth.memberId)).sort((p, q) => q.createdAt - p.createdAt).slice(0, MAIL_KEEP).map(publicSend);
       return send(res, 200, { from: conn?.account || null, canConnect: calProviders.microsoft.configured(), footer: ws.mailFooter || '', pss: !!db.pss[ws.id], sends });
     }
     if (m === 'PUT' && b === 'footer') {
+      if (!owner) return send(res, 403, { error: 'Only team owners can change the footer.' });
       ws.mailFooter = mailFooter(body.footer);
       save();
       return send(res, 200, { footer: ws.mailFooter });
@@ -2209,7 +2220,8 @@ async function api(req, res, url) {
       if (!conn) return send(res, 400, { error: 'Connect Outlook to send from it first.' });
       if (!subject) return send(res, 400, { error: 'Add a subject.' });
       if (!text.trim()) return send(res, 400, { error: 'Write the message.' });
-      const footer = mailFooter(body.footer ?? ws.mailFooter);
+      const footer = owner ? mailFooter(body.footer ?? ws.mailFooter) : ws.mailFooter || '';
+      if (!owner && !footer.trim()) return send(res, 400, { error: 'An owner needs to add the team’s footer (business and mailing address) first.' });
       if (footer !== ws.mailFooter) ws.mailFooter = footer;
       // A test comes to you, merged with the first person's name, with a placeholder unsubscribe link.
       if (b === 'test') {
@@ -2239,6 +2251,7 @@ async function api(req, res, url) {
         const l = r?.listId && db.lists[r.listId];
         const row = l && l.wsId === ws.id && canSee(auth, 'list', l) ? l.rows.find((y) => y.id === r.rowId && y.cells.some((v) => v.trim().toLowerCase() === email)) : null;
         const lead = leads.get(r?.leadId);
+        if (!owner && !(row && onCampaign(db.campaigns[l.campaignId] || {}, auth.memberId))) continue;
         seen.add(email);
         if (no.has(email) || row?.dne || lead?.dne) continue;
         to.push({
@@ -2246,7 +2259,7 @@ async function api(req, res, url) {
           listId: row ? l.id : null, rowId: row ? row.id : null, leadId: lead && lead.email.toLowerCase() === email ? lead.id : row?.leadId || null, status: 'queued',
         });
       }
-      if (!to.length) return send(res, 400, { error: 'Nobody here can be emailed.' });
+      if (!to.length) return send(res, 400, { error: owner ? 'Nobody here can be emailed.' : 'Nobody here can be emailed. Members can email people on lists in their own campaigns.' });
       if (to.length > MAIL_MAX) return send(res, 400, { error: `Send to up to ${MAIL_MAX} people at a time.` });
       const links = await unsubLinks(ws.id, to.map((r) => r.email));
       for (const r of to) r.unsub = links[r.email] || null;
@@ -2261,7 +2274,7 @@ async function api(req, res, url) {
       return send(res, 200, publicSend(x));
     }
     const x = b === 'sends' && c && db.sends[c];
-    if (!x || x.wsId !== ws.id) return send(res, 404, { error: 'Not found' });
+    if (!x || x.wsId !== ws.id || (!owner && x.memberId !== auth.memberId)) return send(res, 404, { error: 'Not found' });
     if (m === 'POST' && d === 'stop' && (x.status === 'sending' || x.status === 'paused')) {
       for (const r of x.to) if (r.status === 'queued') r.status = 'stopped';
       x.status = 'stopped';
@@ -2278,6 +2291,7 @@ async function api(req, res, url) {
       delete db.sends[x.id];
       save();
       broadcast(ws.id, { type: 'send:remove', id: x.id, forOwners: true });
+      if (!isOwnerId(ws.id, x.memberId)) broadcast(ws.id, { type: 'send:remove', id: x.id, forMember: x.memberId });
       return send(res, 200, { ok: true });
     } else return send(res, 400, { error: 'That can’t be done now.' });
     save();
@@ -2648,6 +2662,10 @@ async function api(req, res, url) {
   if (a === 'workspace' && m === 'PATCH') {
     const body = await readJson(req);
     if (body.expireHours !== undefined) ws.settings.expireHours = Math.max(0, Number(body.expireHours) || 0);
+    if (body.memberEmail !== undefined) {
+      if (auth.role !== 'owner') return send(res, 403, { error: 'Only team owners can change who sends campaign email.' });
+      ws.settings.memberEmail = !!body.memberEmail;
+    }
     save();
     broadcast(ws.id, { type: 'workspace' });
     return send(res, 200, publicWorkspace(ws, auth.memberId));
