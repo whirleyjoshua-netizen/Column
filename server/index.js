@@ -26,7 +26,7 @@ const PUBLIC_URL = (process.env.PUBLIC_URL || `http://localhost:${PORT}`).replac
 fs.mkdirSync(FILES_DIR, { recursive: true });
 
 // ---------- persistence (a JSON file is plenty for personal/small-team use) ----------
-let db = { workspaces: {}, tokens: {}, items: {}, entries: {}, tasks: {}, uploads: {}, campaigns: {}, goals: {}, attempts: {}, lists: {}, templates: {}, calendars: {}, ai: {}, pss: {}, sends: {}, bills: {}, meetings: {} };
+let db = { workspaces: {}, tokens: {}, items: {}, entries: {}, tasks: {}, uploads: {}, campaigns: {}, goals: {}, attempts: {}, lists: {}, templates: {}, calendars: {}, ai: {}, pss: {}, sends: {}, bills: {}, meetings: {}, plans: {} };
 try {
   db = { ...db, ...JSON.parse(fs.readFileSync(DB_PATH, 'utf8')) };
 } catch {}
@@ -1412,6 +1412,47 @@ function runAutopay() {
   }
 }
 
+// ---------- planner: work out the goal and what it needs before it becomes a campaign ----------
+// A plan is its maker's own: the end goal, the steps to it (each with its tasks), and what's needed
+// to start: a thing in Column, PSS leads, a pasted list, or just a note to tick off. Making it a
+// campaign happens in the browser, through the usual campaign, goal, task and list routes.
+const PLAN_LINKS = ['file', 'stack', 'campaign', 'task'];
+const publicPlan = ({ wsId, ...p }) => p;
+const planId = (v) => (typeof v === 'string' && /^[\w-]{4,20}$/.test(v) ? v : rid(6));
+function planLink(v) {
+  if (!v || typeof v !== 'object') return null;
+  if (PLAN_LINKS.includes(v.type) && typeof v.id === 'string') return { type: v.type, id: v.id.slice(0, 40) };
+  if (v.type === 'live') return { type: 'live', live: applyLive(v.live) };
+  if (v.type === 'rows') {
+    const columns = (Array.isArray(v.columns) ? v.columns : []).slice(0, 30).map((x, i) => cleanText(x, 60) || `Column ${i + 1}`);
+    if (!Array.isArray(v.rows) || v.rows.length > LIST_ROWS) throw badRequest(`A list can have up to ${LIST_ROWS} rows.`);
+    const rows = v.rows.map((r) => ({ cells: columns.map((_, i) => cleanText(r?.cells?.[i], 300)) })).filter((r) => r.cells.some(Boolean));
+    return rows.length ? { type: 'rows', columns, rows } : null;
+  }
+  return null;
+}
+function applyPlan(p, body) {
+  if (body.name !== undefined) p.name = cleanText(body.name, 80) || 'Untitled plan';
+  if (body.goal !== undefined) p.goal = cleanText(body.goal, 2000);
+  if (body.notes !== undefined) p.notes = cleanText(body.notes, 20000);
+  if (body.due !== undefined) p.due = body.due ? validDay(body.due) : null;
+  if (body.steps !== undefined) {
+    p.steps = (Array.isArray(body.steps) ? body.steps : []).slice(0, 30).map((x) => ({
+      id: planId(x?.id), title: cleanText(x?.title, 200), due: x?.due ? validDay(x.due) : null,
+      tasks: (Array.isArray(x?.tasks) ? x.tasks : []).slice(0, 50).map((t) => ({ id: planId(t?.id), text: cleanText(t?.text, 500) })),
+    }));
+  }
+  if (body.needs !== undefined) {
+    p.needs = (Array.isArray(body.needs) ? body.needs : []).slice(0, 40).map((x) => ({ id: planId(x?.id), text: cleanText(x?.text, 300), done: !!x?.done, link: planLink(x?.link) }));
+  }
+  if (body.campaignId !== undefined) p.campaignId = typeof body.campaignId === 'string' && db.campaigns[body.campaignId]?.wsId === p.wsId ? body.campaignId : null;
+  p.updatedAt = Date.now();
+  return p;
+}
+function planNews(p) {
+  broadcast(p.wsId, { type: 'plan', plan: publicPlan(p), forMember: p.memberId });
+}
+
 // ---------- campaign email: one email to each person, from an owner's own Outlook ----------
 // Never BCC: each person gets their own message, addressed only to them. Every email carries the team's
 // mailing address and that person's unsubscribe link from PSS (and List-Unsubscribe headers), and anyone
@@ -2133,6 +2174,35 @@ async function api(req, res, url) {
     save();
     billNews(x);
     return send(res, 200, publicBill(x));
+  }
+
+  // Plans: only yours.
+  if (a === 'plans') {
+    const mine = () => Object.values(db.plans).filter((x) => x.wsId === ws.id && x.memberId === auth.memberId).sort((p, q) => q.updatedAt - p.updatedAt);
+    if (m === 'GET' && !b) return send(res, 200, mine().map(publicPlan));
+    if (m === 'POST' && !b) {
+      if (mine().length >= 200) return send(res, 400, { error: 'You can keep up to 200 plans. Delete some old ones first.' });
+      const x = applyPlan({ id: rid(), wsId: ws.id, memberId: auth.memberId, by: auth.member, createdAt: Date.now(), name: 'Untitled plan', goal: '', notes: '', due: null, steps: [], needs: [], campaignId: null }, await readJson(req, 4_000_000));
+      db.plans[x.id] = x;
+      save();
+      planNews(x);
+      return send(res, 200, publicPlan(x));
+    }
+    const x = b && db.plans[b];
+    if (!x || x.wsId !== ws.id || x.memberId !== auth.memberId) return send(res, 404, { error: 'Not found' });
+    if (m === 'PATCH') {
+      applyPlan(x, await readJson(req, 4_000_000));
+      save();
+      planNews(x);
+      return send(res, 200, publicPlan(x));
+    }
+    if (m === 'DELETE') {
+      delete db.plans[x.id];
+      save();
+      broadcast(ws.id, { type: 'plan:remove', id: x.id, forMember: x.memberId });
+      return send(res, 200, { ok: true });
+    }
+    return send(res, 405, { error: 'Method not allowed' });
   }
 
   // Campaign email from your own Outlook. Owners only, since it reaches the PSS contacts.

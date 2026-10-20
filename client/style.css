@@ -962,3 +962,32 @@ body.viewer .preview pre, body.viewer .preview .pv-edit, body.viewer .preview .d
 .mail-warn { flex: 1; }
 .tool .sends { margin: 0 0 14px; }
 .mail-to .link { align-self: flex-start; font-size: 12px; }
+
+/* planner */
+.plan-row .bill-name small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.plan-ok { color: var(--ok, #30a46c) !important; }
+.plan-back { margin-bottom: 10px; }
+.tool .plan-name { width: 100%; font-size: 18px; font-weight: 600; border: 0; background: none; padding: 4px 0; margin-bottom: 8px; color: var(--text); }
+.tool .plan-name:focus { outline: none; border-bottom: 1px solid var(--line); }
+.tool .plan-goal-row, .tool .plan-notes { margin-bottom: 14px; }
+.plan-goal-row { grid-template-columns: 1fr 150px; align-items: start; }
+.plan-goal-row label, .plan-notes { display: flex; flex-direction: column; gap: 5px; color: var(--muted); font-size: 12px; min-width: 0; }
+.plan-goal-row textarea, .plan-notes textarea { width: 100%; resize: vertical; min-height: 54px; color: var(--text); font-size: 13.5px; }
+.plan-step, .plan-need { display: flex; flex-direction: column; gap: 4px; padding: 8px 0; border-top: 1px solid var(--line); }
+.plan-step-top, .plan-need-top, .plan-task-row { display: flex; align-items: center; gap: 6px; }
+.plan-step-top input[type='text'], .plan-step-title, .plan-need-text, .plan-task { flex: 1; min-width: 0; }
+.plan-step-top input[type='date'] { width: 130px; flex: none; }
+.plan-num { flex: none; width: 20px; height: 20px; border-radius: 99px; display: grid; place-items: center; font-size: 11px; color: var(--muted); border: 1px solid var(--line); }
+.plan-task-row { margin-left: 26px; }
+.plan-task { font-size: 13px; }
+.plan-add-task { align-self: flex-start; margin-left: 26px; font-size: 12px; }
+.plan-dot { flex: none; width: 10px; height: 10px; margin: 0 5px; border-radius: 99px; border: 2px solid var(--muted); }
+.plan-need.ready .plan-dot { background: var(--ok, #30a46c); border-color: var(--ok, #30a46c); }
+.plan-need.ready .plan-need-text { color: var(--muted); }
+.plan-link { margin-left: 30px; }
+.plan-pick { position: relative; }
+.plan-pick .picker { top: 4px; bottom: auto; }
+.plan-count { font-weight: normal; color: var(--muted); }
+.plan-foot { margin-top: 14px; align-items: center; }
+.plan-make { margin: 0 0 8px; padding-left: 18px; font-size: 13px; line-height: 1.6; }
+.plan-paste { font-family: ui-monospace, Menlo, monospace; font-size: 12px; }

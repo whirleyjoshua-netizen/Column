@@ -397,6 +397,11 @@
       if (msg.meeting?.status === 'ready' && was?.status !== 'ready') toast('Meeting notes are ready', { label: 'Review', run: () => meetingSheet(msg.meeting) });
       renderRec();
       renderTool();
+    } else if (msg.type === 'plan' || msg.type === 'plan:remove') {
+      if (msg.plan && msg.plan.id === PL.dirty) return;
+      S.plans = (S.plans || []).filter((x) => x.id !== (msg.plan?.id || msg.id));
+      if (msg.plan) S.plans.unshift(msg.plan);
+      renderTool();
     } else if (msg.type === 'bill' || msg.type === 'bill:remove') {
       S.bills = S.bills.filter((x) => x.id !== (msg.bill?.id || msg.id));
       if (msg.type === 'bill') S.bills.push(msg.bill);
@@ -492,6 +497,7 @@
     S.templates = st.templates || [];
     S.bills = st.bills || [];
     api('GET', '/meetings').then((x) => { S.meetings = x; renderRec(); }).catch(() => {});
+    api('GET', '/plans').then((x) => { S.plans = x; renderTool(); }).catch(() => {});
     loadPss();
     S.panes = S.panes.map((v) => (v.startsWith('stack:') && !stackById(v.slice(6)) ? 'files' : v));
     $('#wsName').textContent = S.workspace.name;
@@ -5126,7 +5132,8 @@
       && (!f.sources.length || f.sources.some((v) => same(v, x.source))) && (!f.days || (x.createdAt || 0) >= now - f.days * 864e5)
       && (f.need !== 'phone' || !!x.phone) && (f.need !== 'email' || (!!x.email && !x.dne));
   }
-  function liveSheet(c, l) {
+  // With onPick, the filter is handed back instead of saved as a list (the Planner keeps it until it's a campaign).
+  function liveSheet(c, l, onPick) {
     const all = S.contacts || [];
     const f = l?.live || { stages: [], cities: [], sources: [], days: 0, need: null };
     const name = h('input', { value: l?.name || '', placeholder: 'Quoted, not sold' });
@@ -5150,9 +5157,10 @@
       h('div', { class: 'row2' }, h('label', {}, 'City', city), h('label', {}, 'Source', source)),
       h('div', { class: 'row2' }, h('label', {}, 'Added', days), h('label', {}, 'Who', need)),
       count,
-      l ? null : h('p', { class: 'day-hint' }, 'Everyone in this campaign will see these contacts.'),
+      l || onPick ? null : h('p', { class: 'day-hint' }, 'Everyone in this campaign will see these contacts.'),
     ], async () => {
       const body = { name: name.value.trim() || 'PSS leads', live: read() };
+      if (onPick) return onPick(body);
       const x = l ? await api('PATCH', '/lists/' + l.id, body) : await api('POST', '/lists', { campaignId: c.id, ...body });
       const i = S.lists.findIndex((y) => y.id === x.id);
       if (i >= 0) S.lists[i] = x;
@@ -5164,7 +5172,7 @@
   }
 
   // ---------- tools: small apps that open in a drawer, so the tabs stay as they are ----------
-  const TOOLS = { bills: { name: 'Bills', render: billsTool }, contacts: { name: 'Contacts', render: contactsTool }, email: { name: 'Email', render: emailTool }, meetings: { name: 'Meeting notes', render: meetingsTool } };
+  const TOOLS = { bills: { name: 'Bills', render: billsTool }, contacts: { name: 'Contacts', render: contactsTool }, email: { name: 'Email', render: emailTool }, meetings: { name: 'Meeting notes', render: meetingsTool }, planner: { name: 'Planner', render: plannerTool } };
   let toolOpen = null;
   $('#toolsBtn').addEventListener('click', (e) => {
     const soon = billsSoon().length;
@@ -5174,6 +5182,7 @@
       amOwner() ? { label: h('span', { class: 'tool-item' }, 'Contacts', S.contacts?.length ? h('small', {}, S.contacts.length.toLocaleString()) : null), on: toolOpen === 'contacts', run: () => openTool('contacts') } : null,
       amOwner() ? { label: h('span', { class: 'tool-item' }, 'Email', (S.mail?.sends || []).some((x) => x.status === 'sending') ? h('small', {}, 'sending…') : null), on: toolOpen === 'email', run: () => openTool('email') } : null,
       { label: 'Meeting notes', on: toolOpen === 'meetings', run: () => openTool('meetings') },
+      { label: 'Planner', on: toolOpen === 'planner', run: () => openTool('planner') },
       R.on ? null : { label: '● Record a meeting', run: () => askRecord('') },
     ].filter(Boolean));
   });
@@ -5194,6 +5203,227 @@
     const keep = el.scrollTop;
     el.replaceChildren(h('h2', {}, TOOLS[toolOpen].name, h('button', { class: 'icon-btn', html: I.close, 'aria-label': 'Close', onclick: closeTool })), ...TOOLS[toolOpen].render().filter(Boolean));
     el.scrollTop = keep;
+  }
+
+  // ----- planner: the end goal, the steps to it, and what's needed before it can start -----
+  // A plan is yours alone until "Make it a campaign": its steps become goals with their tasks, its lists
+  // become call lists, its files are put to use, and anything still missing becomes a "Before you start" goal.
+  const PL = { open: null, timer: null, dirty: null, seq: 0 };
+  const planById = (id) => (S.plans || []).find((x) => x.id === id);
+  const planUid = () => Math.random().toString(36).slice(2, 10);
+  // Whether a need is in hand: a link is ready when what it points at is there; a plain note when it's ticked.
+  function needState(n) {
+    const l = n.link;
+    if (!l) return { ready: n.done };
+    if (l.type === 'live') {
+      if (!S.contacts) return { ready: true, sub: 'Leads from PSS' };
+      const k = S.contacts.filter((x) => liveMatch(l.live, x, Date.now())).length;
+      return { ready: k > 0, sub: `${plural(k, 'lead')} from PSS right now` };
+    }
+    if (l.type === 'rows') return { ready: true, sub: plural(l.rows.length, 'row') };
+    const there = l.type === 'file' ? linkedFile(l.id) : l.type === 'stack' ? stackById(l.id) : l.type === 'campaign' ? campById(l.id) : taskById(l.id);
+    return { ready: !!there };
+  }
+  const planReady = (p) => { const ns = p.needs.filter((n) => n.text || n.link); return [ns.filter((n) => needState(n).ready).length, ns.length]; };
+  // Saves shortly after the last change. Until it's saved, news of this plan from the server is ignored so it can't undo typing.
+  function savePlan(p) {
+    const n = ++PL.seq;
+    PL.dirty = p.id;
+    clearTimeout(PL.timer);
+    PL.timer = setTimeout(async () => {
+      await api('PATCH', '/plans/' + p.id, { name: p.name, goal: p.goal, due: p.due, notes: p.notes, steps: p.steps, needs: p.needs }).catch((e) => toast(e.message));
+      if (n === PL.seq) PL.dirty = null;
+    }, 500);
+  }
+  const redrawPlan = () => { document.activeElement?.blur?.(); renderTool(); };
+  async function newPlan() {
+    try {
+      const x = await api('POST', '/plans', { name: 'Untitled plan', steps: [{ title: '', tasks: [] }], needs: [{ text: '' }] });
+      S.plans = [x, ...(S.plans || []).filter((y) => y.id !== x.id)];
+      PL.open = x.id;
+      renderTool();
+      $('#tool .plan-name')?.select();
+    } catch (e) {
+      toast(e.message);
+    }
+  }
+  function plannerTool() {
+    const p = PL.open && planById(PL.open);
+    if (p) return planView(p);
+    PL.open = null;
+    const all = S.plans || [];
+    return [
+      ...all.map((x) => {
+        const [r, n] = planReady(x);
+        const c = campById(x.campaignId);
+        return h('div', { class: 'bill plan-row', onclick: () => { PL.open = x.id; renderTool(); } },
+          h('span', { class: 'bill-name' }, x.name, h('small', {}, x.goal || 'No end goal yet')),
+          h('span', { class: 'bill-right' }, c ? h('small', {}, '→ ' + c.name) : n ? h('small', { class: r === n ? 'plan-ok' : null }, `${r} of ${n} ready`) : null, x.due ? h('small', {}, 'by ' + dueLabel(x.due)) : null));
+      }),
+      h('button', { class: 'add-goal', onclick: newPlan }, '+ New plan'),
+      all.length ? null : h('p', { class: 'day-hint' }, 'Start from where you want to end up. Write the goal, the steps to it, and what you need before you can start, like a list of prospects or a script. Link what’s already in Column. When it’s ready, make it a campaign: the steps become its goals and tasks, and the lists become its call lists.'),
+    ];
+  }
+  function planView(p) {
+    const set = (k) => (e) => { p[k] = e.target.value; savePlan(p); };
+    const name = h('input', { class: 'plan-name', value: p.name, 'aria-label': 'Plan name', onchange: set('name') });
+    const goal = h('textarea', { rows: 2, placeholder: 'Where you want to end up. 10 booked installs, a full call list, a new hire…', onchange: set('goal') });
+    goal.value = p.goal;
+    const due = h('input', { type: 'date', value: p.due || '', onchange: (e) => { p.due = e.target.value || null; savePlan(p); } });
+    const notes = h('textarea', { rows: 4, placeholder: 'Anything else: ideas, numbers, who to ask… (optional)', onchange: set('notes') });
+    notes.value = p.notes;
+    const c = campById(p.campaignId);
+    const [r, n] = planReady(p);
+    const del = h('button', { class: 'btn small danger', 'data-label': '1' }, 'Delete plan');
+    del.addEventListener('click', () => confirmClick(del, async () => {
+      clearTimeout(PL.timer);
+      await api('DELETE', '/plans/' + p.id).catch((e) => toast(e.message));
+      S.plans = S.plans.filter((x) => x.id !== p.id);
+      PL.open = null;
+      renderTool();
+    }));
+    return [
+      h('button', { class: 'link plan-back', onclick: () => { PL.open = null; redrawPlan(); } }, '← All plans'),
+      name,
+      h('div', { class: 'row2 plan-goal-row' }, h('label', {}, 'End goal', goal), h('label', {}, 'By', due)),
+      h('section', {}, h('h3', {}, 'Steps to get there'),
+        p.steps.map((st, i) => planStep(p, st, i)),
+        h('button', { class: 'add-goal', onclick: () => { p.steps.push({ id: planUid(), title: '', due: null, tasks: [] }); savePlan(p); redrawPlan(); [...document.querySelectorAll('#tool .plan-step-title')].at(-1)?.focus(); } }, '+ Add a step')),
+      h('section', {}, h('h3', {}, 'What you need', n ? h('small', { class: 'plan-count' + (r === n ? ' plan-ok' : '') }, ` · ${r} of ${n} ready`) : null),
+        p.needs.map((x, i) => planNeed(p, x, i)),
+        h('button', { class: 'add-goal', onclick: () => { p.needs.push({ id: planUid(), text: '', done: false, link: null }); savePlan(p); redrawPlan(); [...document.querySelectorAll('#tool .plan-need-text')].at(-1)?.focus(); } }, '+ Add something you need')),
+      h('label', { class: 'plan-notes' }, 'Notes', notes),
+      h('div', { class: 'btns plan-foot' }, del, h('span', { style: 'flex:1' }),
+        c ? h('button', { class: 'btn', onclick: () => { closeTool(); openCampaign(c.id); } }, 'Open ' + c.name)
+          : h('button', { class: 'btn primary-btn', onclick: () => planToCampaign(p) }, p.campaignId ? 'Make it a campaign again' : 'Make it a campaign')),
+    ];
+  }
+  function planStep(p, st, i) {
+    const title = h('input', { class: 'plan-step-title', value: st.title, placeholder: i ? 'Next step' : 'First step, e.g. Build the prospect list', onchange: (e) => { st.title = e.target.value; savePlan(p); } });
+    const due = h('input', { type: 'date', value: st.due || '', title: 'Done by', 'aria-label': 'Done by', onchange: (e) => { st.due = e.target.value || null; savePlan(p); } });
+    const task = (t, j) => h('div', { class: 'plan-task-row' },
+      h('input', { class: 'plan-task', value: t.text, placeholder: 'Task', onchange: (e) => { t.text = e.target.value; savePlan(p); },
+        onkeydown: (e) => { if (e.key === 'Enter') { e.preventDefault(); t.text = e.target.value; addTask(j + 1); } } }),
+      h('button', { class: 'icon-btn', html: I.close, title: 'Remove task', 'aria-label': 'Remove task', onclick: () => { st.tasks.splice(j, 1); savePlan(p); redrawPlan(); } }));
+    const addTask = (at) => {
+      st.tasks.splice(at, 0, { id: planUid(), text: '' });
+      savePlan(p);
+      redrawPlan();
+      document.querySelectorAll('#tool .plan-step')[i]?.querySelectorAll('.plan-task')[at]?.focus();
+    };
+    return h('div', { class: 'plan-step' },
+      h('div', { class: 'plan-step-top' }, h('span', { class: 'plan-num' }, i + 1), title, due,
+        h('button', { class: 'icon-btn', html: I.close, title: 'Remove step', 'aria-label': 'Remove step', onclick: () => { p.steps.splice(i, 1); savePlan(p); redrawPlan(); } })),
+      st.tasks.map(task),
+      h('button', { class: 'link plan-add-task', onclick: () => addTask(st.tasks.length) }, '+ Task'));
+  }
+  function planNeed(p, x, i) {
+    const s = needState(x);
+    const setLink = (link, text) => { x.link = link; if (text && !x.text) x.text = text; savePlan(p); redrawPlan(); };
+    const text = h('input', { class: 'plan-need-text', value: x.text, placeholder: i ? 'Something else you need' : 'e.g. 300 prospects to call', onchange: (e) => { x.text = e.target.value; savePlan(p); } });
+    const pick = h('div', { class: 'plan-pick' });
+    const l = x.link;
+    const shown = !l ? null
+      : l.type === 'live' ? h('button', { class: 'ln ln-chip', title: 'Change who’s on it', onclick: () => amOwner() && liveSheet(null, { name: x.text, live: l.live }, (b) => setLink({ type: 'live', live: b.live }, b.name)) }, h('span', { class: 'ln-ic', html: I.target }), h('span', { class: 'ln-text' }, 'PSS leads'), h('span', { class: 'ln-sub' }, s.sub))
+      : l.type === 'rows' ? h('button', { class: 'ln ln-chip', title: 'Edit the list', onclick: () => pasteSheet(x, (link) => setLink(link)) }, h('span', { class: 'ln-ic', html: I.task }), h('span', { class: 'ln-text' }, l.columns.join(' · ')), h('span', { class: 'ln-sub' }, s.sub))
+      : linkEl(l);
+    const menu = (e) => openMenu(e.currentTarget, [
+      { head: 'Get it from' },
+      { label: 'Something in Column…', run: () => openPicker(pick, (r) => setLink({ type: r.type, id: r.id }, r.label)) },
+      amOwner() && S.pss?.connected ? { label: 'Leads from PSS…', run: () => liveSheet(null, l?.type === 'live' ? { name: x.text, live: l.live } : null, (b) => setLink({ type: 'live', live: b.live }, b.name)) } : null,
+      { label: l?.type === 'rows' ? 'Edit the list…' : 'Type or paste a list…', run: () => pasteSheet(x, (link) => setLink(link)) },
+      l ? { label: 'Unlink', run: () => setLink(null) } : null,
+      { label: 'Remove', run: () => { p.needs.splice(i, 1); savePlan(p); redrawPlan(); } },
+    ].filter(Boolean));
+    return h('div', { class: 'plan-need' + (s.ready ? ' ready' : '') },
+      h('div', { class: 'plan-need-top' },
+        l ? h('span', { class: 'plan-dot', title: s.ready ? 'Ready' : 'Missing' })
+          : h('button', { class: 'check' + (x.done ? ' on' : ''), html: I.check, 'aria-label': x.done ? 'Not got it yet' : 'Got it', title: x.done ? 'Got it' : 'Tick when you have it', onclick: () => { x.done = !x.done; savePlan(p); redrawPlan(); } }),
+        text,
+        h('button', { class: 'btn small', onclick: menu }, l ? 'Change' : 'Link…')),
+      shown ? h('div', { class: 'plan-link' }, shown) : null,
+      pick);
+  }
+  // A list typed or pasted into the plan (from a spreadsheet, or one name per line). It becomes a call list.
+  function pasteSheet(x, done) {
+    const l = x.link?.type === 'rows' ? x.link : null;
+    const ta = h('textarea', { rows: 10, class: 'plan-paste', placeholder: 'One per line: name, phone, email…\nOr copy the rows from a spreadsheet and paste them here.' });
+    ta.value = l ? [l.columns, ...l.rows.map((r) => r.cells)].map((r) => r.join('\t')).join('\n') : '';
+    const head = h('input', { type: 'checkbox', checked: !!l });
+    const hint = h('p', { class: 'day-hint' });
+    const read = () => {
+      const all = parseDelimited(ta.value.trim()).filter((r) => r.some((v) => v.trim()));
+      const width = Math.max(1, ...all.map((r) => r.length));
+      const columns = head.checked && all.length ? all[0] : Array.from({ length: width }, (_, i) => (i ? `Column ${i + 1}` : 'Name'));
+      return { type: 'rows', columns: columns.slice(0, width), rows: (head.checked ? all.slice(1) : all).map((cells) => ({ cells })) };
+    };
+    const update = () => {
+      if (!l && !head._touched) head.checked = /\b(name|phone|email|company|address|city)\b/i.test(ta.value.split('\n')[0] || '');
+      const r = read();
+      hint.textContent = r.rows.length ? `${plural(r.rows.length, 'row')} · ${r.columns.join(', ')}` : '';
+    };
+    ta.addEventListener('input', update);
+    head.addEventListener('change', () => { head._touched = true; update(); });
+    update();
+    sheet(l ? 'Edit the list' : 'Type or paste a list', [ta, h('label', { class: 'pick' }, head, 'The first line is the column names'), hint], () => {
+      const r = read();
+      if (!r.rows.length) throw new Error('Nothing in the list yet.');
+      done(r);
+    });
+  }
+  // Makes the campaign: the brief from the goal and notes, a goal per step, call lists from the lists and
+  // PSS leads, files put to use, and whatever's still missing as tasks to do first.
+  function planToCampaign(p) {
+    const steps = p.steps.filter((st) => st.title.trim() || st.tasks.some((t) => t.text.trim()));
+    const missing = p.needs.filter((x) => x.text.trim() && !needState(x).ready);
+    const lists = p.needs.filter((x) => x.link?.type === 'rows' || (x.link?.type === 'live' && amOwner()));
+    const files = p.needs.filter((x) => x.link?.type === 'file' && linkedFile(x.link.id)?.type === 'file');
+    const tasks = steps.reduce((k, st) => k + st.tasks.filter((t) => t.text.trim()).length, 0);
+    const lines = [
+      `A campaign called “${p.name}”${p.due ? `, ending ${dueLabel(p.due)}` : ''}, with the end goal${p.notes.trim() ? ' and notes' : ''} as its brief`,
+      steps.length ? `${plural(steps.length, 'goal')}, one per step${tasks ? `, with ${plural(tasks, 'task')}` : ''}` : null,
+      missing.length ? `A “Before you start” goal with ${plural(missing.length, 'task')}, for what you don’t have yet` : null,
+      ...lists.map((x) => `Call list: ${x.text || (x.link.type === 'live' ? 'PSS leads' : 'List')}`),
+      ...files.map((x) => `${linkedFile(x.link.id).name}, put to use in the campaign`),
+    ].filter(Boolean);
+    sheet('Make it a campaign', [
+      h('p', { class: 'day-hint' }, 'This makes:'),
+      h('ul', { class: 'plan-make' }, lines.map((t) => h('li', {}, t))),
+      h('p', { class: 'day-hint' }, 'You can change everything after. The plan stays here.'),
+    ], () => { setTimeout(() => makeFromPlan(p, { steps, missing, lists, files })); }, 'Make campaign');
+  }
+  async function makeFromPlan(p, { steps, missing, lists, files }) {
+    try {
+      const today = todayKey();
+      const c = await api('POST', '/campaigns', { name: p.name, brief: [p.goal, p.notes].map((t) => t.trim()).filter(Boolean).join('\n\n'), start: !p.due || p.due >= today ? today : null, end: p.due || null });
+      if (!S.campaigns.some((x) => x.id === c.id)) S.campaigns.push(c);
+      const goal = async (title, due, items) => {
+        const g = await api('POST', '/goals', { campaignId: c.id, title, kind: 'tasks', due: due || null });
+        if (!S.goals.some((x) => x.id === g.id)) S.goals.push(g);
+        for (const t of items) upsertTask(await api('POST', '/tasks', { text: t, due: due || null, goalId: g.id }));
+      };
+      if (missing.length) await goal('Before you start', null, missing.map((x) => x.text.trim()));
+      for (const st of steps) await goal(st.title.trim() || 'Step', st.due, st.tasks.map((t) => t.text.trim()).filter(Boolean));
+      for (const x of lists) {
+        const l = x.link.type === 'live'
+          ? await api('POST', '/lists', { campaignId: c.id, name: x.text || 'PSS leads', live: x.link.live })
+          : await api('POST', '/lists', { campaignId: c.id, name: x.text || 'Call list', kind: 'calls', columns: x.link.columns, rows: x.link.rows });
+        upsertList(l);
+      }
+      for (const x of files) {
+        const it = linkedFile(x.link.id);
+        const a = await analyzeItem(it).catch(() => null);
+        if (a) await useAs(c, it, a, a.guess, null, true).catch(() => {});
+      }
+      p.campaignId = c.id;
+      const saved = await api('PATCH', '/plans/' + p.id, { campaignId: c.id });
+      S.plans = S.plans.map((y) => (y.id === saved.id ? saved : y));
+      closeTool();
+      openCampaign(c.id);
+      toast(`${c.name} is ready`);
+    } catch (e) {
+      toast(e.message);
+    }
   }
 
   // ----- bills -----
