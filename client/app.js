@@ -50,6 +50,7 @@
     uploads: new Map(),
     panes: store.get('panes', ['all']).map((v) => (v === 'chat' ? 'all' : v)), // chat moved to its own tab
     notify: store.get('notify', false),
+    setTab: store.get('setTab', 'general'),
     desktopCfg: {},
     internalDrag: false,
     loginMode: 'signin',
@@ -404,6 +405,16 @@
       if (msg.type === 'bill') S.bills.push(msg.bill);
       renderDay();
       renderTool();
+    } else if (msg.type === 'money' || msg.type === 'money:remove') {
+      S.money = (S.money || []).filter((x) => x.id !== (msg.money?.id || msg.id));
+      if (msg.money) S.money.push(msg.money);
+      renderDay();
+      renderTool();
+    } else if (msg.type === 'budget' || msg.type === 'budget:remove') {
+      S.budgets = (S.budgets || []).filter((x) => x.id !== (msg.budget?.id || msg.id));
+      if (msg.budget) S.budgets.push(msg.budget);
+      renderDay();
+      renderTool();
     } else if (msg.type === 'pss') {
       loadPss();
     } else if (msg.type === 'mail') {
@@ -493,6 +504,8 @@
     S.lists = st.lists || [];
     S.templates = st.templates || [];
     S.bills = st.bills || [];
+    S.money = st.money || [];
+    S.budgets = st.budgets || [];
     api('GET', '/meetings').then((x) => { S.meetings = x; renderRec(); }).catch(() => {});
     loadPss();
     S.panes = S.panes.map((v) => (v.startsWith('stack:') && !stackById(v.slice(6)) ? 'files' : v));
@@ -2050,9 +2063,10 @@
     const onDay = new Set(entries.map((e) => e.taskId).filter(Boolean));
     const due = S.tasks.filter((t) => !t.done && forMe(t) && !onDay.has(t.id) && (t.due === k || (isToday && isOverdue(t)))).sort((a, b) => (a.due < b.due ? -1 : a.due > b.due ? 1 : byPrio(a, b)));
     const bills = billsDueOn(k);
-    if (due.length || bills.length) {
+    const tight = isToday ? budgetAlerts() : [];
+    if (due.length || bills.length || tight.length) {
       const late = due.filter(isOverdue);
-      parts.push(h('div', { class: 'anytime tasks' }, h('div', { class: 'any-h' }, 'Due', late.length ? moveToToday(late) : null), due.map(taskRow), bills.map(billDayRow)));
+      parts.push(h('div', { class: 'anytime tasks' }, h('div', { class: 'any-h' }, 'Due', late.length ? moveToToday(late) : null), due.map(taskRow), bills.map(billDayRow), tight.map(budgetDayRow)));
     }
 
     if (anytime.length || (!entries.length && !due.length)) {
@@ -2725,6 +2739,10 @@
   // Count goals count the campaign's log, filtered by outcome and method.
   const countsFor = (g, x) => (!g.counts?.length || g.counts.includes(x.outcome)) && (!g.methods?.length || g.methods.includes(x.method));
   function goalProgress(g) {
+    if (g.kind === 'money') {
+      const n = Math.max(0, g.saved || 0), of = g.target * 100;
+      return { n, of, frac: Math.min(1, n / of), label: `${money(n)} of ${money(of)}` };
+    }
     if (g.kind === 'count') {
       const n = attemptsIn(g.campaignId).filter((x) => countsFor(g, x)).length;
       const what = [g.counts?.length ? g.counts.join(' / ').toLowerCase() : '', g.methods?.length ? g.methods.join(' / ').toLowerCase() + 's' : g.counts?.length ? '' : 'logged'].filter(Boolean).join(' ');
@@ -3009,6 +3027,10 @@
         c.inOrder ? h('span', { class: 'pill', title: 'Goals and tasks open one at a time, top to bottom' }, 'In order') : null,
         who ? h('span', { class: 'pill', title: who.map(memberName).join(', ') }, h('span', { class: 'is-task', html: I.lock }), `Private · ${who.length}`) : null),
       h('div', { class: 'camp-total' }, bar(p, c.color), h('span', {}, Math.round(p * 100) + '%')),
+      c.money ? h('div', { class: 'camp-money', onclick: () => { FIN.tab = 'flow'; FIN.campaign = c.id; openTool('bills'); } },
+        c.money.spent ? h('span', {}, 'Spent ', h('b', {}, money(c.money.spent))) : null,
+        c.money.earned ? h('span', {}, 'Brought in ', h('b', {}, money(c.money.earned))) : null,
+        c.money.spent && c.money.earned ? h('span', { class: c.money.earned >= c.money.spent ? 'up' : 'down' }, c.money.earned >= c.money.spent ? `+${money(c.money.earned - c.money.spent)}` : `−${money(c.money.spent - c.money.earned)}`) : null) : null,
       brief,
       h('div', { class: 'camp-links' },
         ch ? h('button', { class: 'btn small', onclick: () => { setTab('chat'); openChannel('ch:' + ch.id); } }, '# ' + ch.name) : null,
@@ -3049,7 +3071,7 @@
     const el = h('div', { class: 'goal' + (waits ? ' waiting' : ''), 'data-id': g.id, title: waits ? `Opens when “${waits.title}” is met · this campaign is worked in order` : null },
       h('div', { class: 'goal-top' },
         grip((ev) => sortDrag(ev, el, '.goal', (ids) => saveOrder(S.goals, 'order', ids, '/goals/'))),
-        h('span', { class: 'goal-ic', html: g.kind === 'count' ? I.target : I.task }),
+        h('span', { class: 'goal-ic', html: g.kind === 'task' || g.kind === 'tasks' || !g.kind ? I.task : I.target }),
         h('b', { class: 'goal-title' }, g.title),
         stepTag(g),
         g.due ? h('span', { class: 'due' + (g.due < todayKey() && pg.frac < 1 ? ' late' : '') }, dueLabel(g.due)) : null,
@@ -4482,7 +4504,7 @@
   function goalSheet(c, g) {
     const title = h('input', { value: g?.title || '', placeholder: 'Book 20 meetings downtown' });
     const due = h('input', { type: 'date', value: g?.due || '' });
-    const kind = h('select', {}, h('option', { value: 'tasks' }, 'Checking off its tasks'), h('option', { value: 'count' }, 'Counting logged attempts'));
+    const kind = h('select', {}, h('option', { value: 'tasks' }, 'Checking off its tasks'), h('option', { value: 'count' }, 'Counting logged attempts'), h('option', { value: 'money' }, 'Saving or earning money'));
     kind.value = g?.kind || 'tasks';
     const target = h('input', { type: 'number', min: 1, value: g?.target || 20 });
     const boxes = c.outcomes.map((o) => {
@@ -4501,17 +4523,25 @@
       mboxes.length ? h('div', { class: 'picks' }, mboxes) : null,
       h('div', { class: 'picks-h' }, 'With which outcome? (none ticked = any)'),
       h('div', { class: 'picks' }, boxes));
-    const sync = () => countOpts.classList.toggle('hidden', kind.value !== 'count');
+    // A money goal fills from Finance: tag money in (or out) to it there.
+    const amount = h('input', { value: g?.kind === 'money' ? g.target : '', placeholder: '5000', inputmode: 'decimal' });
+    const moneyOpts = h('div', { class: 'count-opts' }, h('label', {}, 'Amount ($)', amount),
+      h('p', { class: 'day-hint' }, 'It fills up from Finance: add money in and pick this goal, and money out tagged to it counts against it.'));
+    const sync = () => {
+      countOpts.classList.toggle('hidden', kind.value !== 'count');
+      moneyOpts.classList.toggle('hidden', kind.value !== 'money');
+    };
     kind.addEventListener('change', sync);
     sync();
     sheet(g ? 'Edit goal' : 'New goal', [
       h('label', {}, 'Goal', title),
       h('div', { class: 'row2' }, h('label', {}, 'Progress by', kind), h('label', {}, 'Due (optional)', due)),
       countOpts,
+      moneyOpts,
     ], async () => {
       const counts = boxes.map((l) => l.firstChild).filter((cb) => cb.checked).map((cb) => cb.value);
       const methods = mboxes.map((l) => l.firstChild).filter((cb) => cb.checked).map((cb) => cb.value);
-      const body = { title: title.value, due: due.value || null, kind: kind.value, target: Number(target.value), counts: counts.length ? counts : null, methods: methods.length ? methods : null };
+      const body = { title: title.value, due: due.value || null, kind: kind.value, target: kind.value === 'money' ? amount.value : Number(target.value), counts: counts.length ? counts : null, methods: methods.length ? methods : null };
       const saved = g ? await api('PATCH', '/goals/' + g.id, body) : await api('POST', '/goals', { ...body, campaignId: c.id });
       const i = S.goals.findIndex((x) => x.id === saved.id);
       if (i >= 0) S.goals[i] = saved;
@@ -4971,11 +5001,12 @@
     if (s.classList.toggle('hidden')) return;
     renderSettings();
   });
-  // Opens Settings at the AI keys, for a smart button that needs one.
-  function openSettings() {
+  // Opens Settings on one of its tabs, scrolled to a section: the AI keys, unless told otherwise.
+  function openSettings(tab = 'connections', at = '.ai-sec') {
+    S.setTab = tab;
     $('#settings').classList.remove('hidden');
     renderSettings();
-    $('#settings .ai-sec')?.scrollIntoView({ block: 'start' });
+    $('#settings ' + at)?.scrollIntoView({ block: 'start' });
   }
 
   function toggleRow(label, hint, checked, onChange) {
@@ -5179,7 +5210,7 @@
   // Everyone in PSS, kept current. Tick people to email them.
   const CT = { q: '', stage: '', picked: new Set() };
   function contactsTool() {
-    if (!S.pss?.connected) return [h('p', { class: 'day-hint' }, 'Connect PSS admin in Settings to bring your leads and customers here. They stay current with your website.'), h('button', { class: 'btn small', onclick: () => { closeTool(); openSettings(); } }, 'Open Settings')];
+    if (!S.pss?.connected) return [h('p', { class: 'day-hint' }, 'Connect PSS admin in Settings to bring your leads and customers here. They stay current with your website.'), h('button', { class: 'btn small', onclick: () => { closeTool(); openSettings('connections', '.pss-sec'); } }, 'Open Settings')];
     const all = [...(S.contacts || [])].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
     const q = h('input', { type: 'search', value: CT.q, placeholder: 'Search name, phone, email, city', 'aria-label': 'Search contacts' });
     const stage = h('select', { 'aria-label': 'Stage' }, h('option', { value: '' }, 'All stages'), stagesIn(all).map((v) => h('option', { value: v, selected: CT.stage === v }, `${stageLabel(v)} · ${all.filter((x) => x.stage === v).length}`)));
@@ -5264,13 +5295,14 @@
   }
 
   // ---------- tools: small apps that open in a drawer, so the tabs stay as they are ----------
-  const TOOLS = { bills: { name: 'Bills', render: billsTool }, contacts: { name: 'Contacts', render: contactsTool }, email: { name: 'Email', render: emailTool }, meetings: { name: 'Meeting notes', render: meetingsTool } };
+  const TOOLS = { bills: { name: 'Finance', render: financeTool }, contacts: { name: 'Contacts', render: contactsTool }, email: { name: 'Email', render: emailTool }, meetings: { name: 'Meeting notes', render: meetingsTool } };
   let toolOpen = null;
   $('#toolsBtn').addEventListener('click', (e) => {
     const soon = billsSoon().length;
+    const tight = budgetAlerts().length;
     openMenu(e.currentTarget, [
       { head: 'Tools' },
-      { label: h('span', { class: 'tool-item' }, 'Bills', soon ? h('small', {}, `${soon} due soon`) : null), on: toolOpen === 'bills', run: () => openTool('bills') },
+      { label: h('span', { class: 'tool-item' }, 'Finance', soon || tight ? h('small', {}, [soon ? `${soon} due soon` : '', tight ? `${tight} budget${tight === 1 ? '' : 's'} nearly used` : ''].filter(Boolean).join(' · ')) : null), on: toolOpen === 'bills', run: () => openTool('bills') },
       amOwner() ? { label: h('span', { class: 'tool-item' }, 'Contacts', S.contacts?.length ? h('small', {}, S.contacts.length.toLocaleString()) : null), on: toolOpen === 'contacts', run: () => openTool('contacts') } : null,
       mayEmail() ? { label: h('span', { class: 'tool-item' }, 'Email', (S.mail?.sends || []).some((x) => x.status === 'sending') ? h('small', {}, 'sending…') : null), on: toolOpen === 'email', run: () => openTool('email') } : null,
       { label: 'Meeting notes', on: toolOpen === 'meetings', run: () => openTool('meetings') },
@@ -5332,7 +5364,7 @@
       h('span', { class: 'bill-right' }, h('b', {}, money(b.amount)), h('small', { class: late ? 'late' : null }, late ? `late · ${dueLabel(b.due)}` : dueLabel(b.due))));
   }
   let billScope = store.get('billScope', 'all');
-  function billsTool() {
+  function billsTab() {
     const all = billsLive().filter((b) => billScope === 'all' || b.scope === billScope).sort((a, b) => (a.due < b.due ? -1 : a.due > b.due ? 1 : a.name.localeCompare(b.name)));
     const today = todayKey();
     const groups = [
@@ -5344,17 +5376,15 @@
     const in30 = all.filter((b) => b.due <= addDays(today, 30)).reduce((n, b) => n + b.amount, 0);
     const mine = billsLive();
     const hasBiz = mine.some((b) => b.scope === 'business');
-    const set = (v) => { billScope = v; store.set('billScope', v); renderTool(); };
     const paid = (S.bills || []).flatMap((b) => (b.paid || []).map((p) => ({ b, p }))).filter(({ b }) => billScope === 'all' || b.scope === billScope).sort((x, y) => y.p.at - x.p.at).slice(0, 12);
     return [
-      hasBiz ? h('div', { class: 'seg' }, [['all', 'All'], ['personal', 'Personal'], ['business', 'Business']].map(([v, t]) => h('button', { class: billScope === v ? 'on' : null, onclick: () => set(v) }, t))) : null,
       all.length ? h('div', { class: 'bill-sum' },
         h('div', {}, h('small', {}, 'Due in the next 30 days'), h('b', {}, money(in30))),
         h('div', {}, h('small', {}, 'A month, on average'), h('b', {}, money(perMonth(all))),
           hasBiz && billScope === 'all' ? h('small', {}, `${money(perMonth(all.filter((b) => b.scope === 'personal')))} personal · ${money(perMonth(all.filter((b) => b.scope === 'business')))} business`) : null)) : null,
       ...groups.map(([t, xs]) => h('section', {}, h('h3', { class: t === 'Late' ? 'late' : null }, t), xs.map(billRow))),
       h('button', { class: 'add-goal', onclick: () => billSheet() }, '+ Add a bill'),
-      all.length ? null : h('p', { class: 'day-hint' }, 'Add what you pay and when. Each bill shows on your Day when it’s due, and ticking it moves it to the next one. Personal bills are only yours; business bills are shared with the team’s owners.'),
+      all.length ? null : h('p', { class: 'day-hint' }, 'Add what you pay and when. Each bill shows on your Day when it’s due, and ticking it records the payment as spending and moves it to the next one. Personal bills are only yours; business bills are shared with the team’s owners.'),
       paid.length ? h('details', { class: 'bill-paid' }, h('summary', {}, 'Paid recently'),
         paid.map(({ b, p }) => h('div', { class: 'bill-hist' }, h('span', {}, b.name, h('small', {}, ` · due ${dueLabel(p.due)}${p.auto ? ' · autopay' : ''}`)), h('span', {}, money(p.amount))))) : null,
     ];
@@ -5368,6 +5398,7 @@
     const scope = h('select', { disabled: !mineOrNew || (!amOwner() && b?.scope !== 'business') }, h('option', { value: 'personal' }, 'Personal · only you'), h('option', { value: 'business', selected: b?.scope === 'business' }, 'Business · shared with owners'));
     const autopay = h('input', { type: 'checkbox', checked: !!b?.autopay });
     const note = h('input', { value: b?.note || '', placeholder: 'Account number, how you pay… (optional)' });
+    const cat = catInput('out', b?.category || 'Bills');
     const del = b ? h('button', { class: 'btn small danger', 'data-label': '1' }, 'Delete bill') : null;
     del?.addEventListener('click', () => confirmClick(del, async () => {
       await api('DELETE', '/bills/' + b.id).catch((e) => toast(e.message));
@@ -5381,15 +5412,330 @@
       h('div', { class: 'row2' }, h('label', {}, 'Amount ($)', amount), h('label', {}, b ? 'Next due' : 'Due', due)),
       h('div', { class: 'row2' }, h('label', {}, 'Repeats', repeat), h('label', {}, 'Kind', scope)),
       h('label', { class: 'pick' }, autopay, 'Autopay: mark it paid by itself after it’s due'),
+      h('label', {}, 'Category', cat, h('small', { class: 'hint' }, 'When it’s paid, it counts as spending in this category.')),
       h('label', {}, 'Note', note),
       del,
     ], async () => {
-      const body = { name: name.value, amount: amount.value, due: due.value, repeat: repeat.value, autopay: autopay.checked, note: note.value, tz: myTz(), ...(mineOrNew ? { scope: scope.value } : {}) };
+      const body = { name: name.value, amount: amount.value, due: due.value, repeat: repeat.value, autopay: autopay.checked, note: note.value, category: cat.value, tz: myTz(), ...(mineOrNew ? { scope: scope.value } : {}) };
       const x = b ? await api('PATCH', '/bills/' + b.id, body) : await api('POST', '/bills', body);
       S.bills = [...S.bills.filter((y) => y.id !== x.id), x];
       renderDay();
       renderTool();
     }, b ? 'Save' : 'Add bill');
+  }
+
+  // ----- finance: money in and out, budgets, bills -----
+  // One tool with three views. Overview is the month at a glance and its budgets; In & out is every entry,
+  // typed in or imported from a bank statement; Bills is what's owed. Personal or business, as with bills.
+  const IN_CATS = ['Client payment', 'Sales', 'Paycheck', 'Refund', 'Transfer in', 'Other income'];
+  const OUT_CATS = ['Bills', 'Rent', 'Utilities', 'Groceries', 'Dining', 'Gas', 'Ads & marketing', 'Supplies', 'Software', 'Payroll', 'Insurance', 'Travel', 'Kids', 'Shopping', 'Health', 'Fees', 'Savings', 'Transfer', 'Other'];
+  // Not counted when suggesting budgets: moving money around isn't spending it.
+  const NOT_SPENDING = ['Transfer', 'Savings'];
+  const FIN = { tab: store.get('finTab', 'overview'), month: todayKey().slice(0, 7), campaign: null };
+  const monthKey = (ym, d) => { const [y, m] = ym.split('-').map(Number); const t = new Date(Date.UTC(y, m - 1 + d, 1)); return t.toISOString().slice(0, 7); };
+  const monthName = (ym) => new Date(ym + '-15T12:00:00').toLocaleDateString(undefined, { month: 'long', year: ym.slice(0, 4) === todayKey().slice(0, 4) ? undefined : 'numeric' });
+  const inScope = (x) => billScope === 'all' || x.scope === billScope;
+  const moneyIn = (ym) => (S.money || []).filter((x) => x.day?.startsWith(ym) && inScope(x));
+  const sum = (xs, kind) => xs.reduce((n, x) => n + (x.kind === kind ? x.amount : 0), 0);
+  const spentOn = (xs, cat) => xs.reduce((n, x) => n + (x.kind === 'out' && sameText(x.category, cat) ? x.amount : 0), 0);
+  const sameText = (a, b) => String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
+  function catInput(kind, value) {
+    const id = 'cats-' + kind;
+    if (!document.getElementById(id)) document.body.append(h('datalist', { id }, (kind === 'in' ? IN_CATS : OUT_CATS).map((c) => h('option', { value: c }))));
+    return h('input', { value: value || '', list: id, placeholder: kind === 'in' ? 'Client payment, Sales…' : 'Groceries, Ads…' });
+  }
+  // Budgets on this month with most of their limit used.
+  function budgetAlerts() {
+    const xs = (S.money || []).filter((x) => x.day?.startsWith(todayKey().slice(0, 7)));
+    return (S.budgets || []).map((b) => ({ b, spent: spentOn(xs.filter((x) => x.scope === b.scope), b.category) })).filter(({ b, spent }) => spent >= b.limit * 0.9);
+  }
+  function budgetDayRow({ b, spent }) {
+    const over = spent > b.limit;
+    return h('div', { class: 'any-row bill-day' + (over ? ' late' : ''), onclick: () => { FIN.tab = 'overview'; FIN.month = todayKey().slice(0, 7); openTool('bills'); } },
+      h('span', { class: 'p-text' }, `${b.category} budget`, h('small', { class: 'bill-amt' }, ` · ${money(spent)} of ${money(b.limit)}`),
+        h('small', { class: 'bill-tag' + (over ? ' late' : '') }, over ? 'over' : `${Math.round((spent / b.limit) * 100)}% used`)));
+  }
+  function financeTool() {
+    const hasBiz = [...(S.bills || []), ...(S.money || []), ...(S.budgets || [])].some((x) => x.scope === 'business') || amOwner();
+    const tab = (k) => { FIN.tab = k; store.set('finTab', k); renderTool(); };
+    const scope = (v) => { billScope = v; store.set('billScope', v); renderTool(); };
+    return [
+      h('div', { class: 'seg' }, [['overview', 'Overview'], ['flow', 'In & out'], ['bills', 'Bills']].map(([k, t]) => h('button', { class: FIN.tab === k ? 'on' : null, onclick: () => tab(k) }, t))),
+      hasBiz ? h('div', { class: 'seg seg-sm' }, [['all', 'All'], ['personal', 'Personal'], ['business', 'Business']].map(([v, t]) => h('button', { class: billScope === v ? 'on' : null, onclick: () => scope(v) }, t))) : null,
+      ...(FIN.tab === 'bills' ? billsTab() : FIN.tab === 'flow' ? flowTab() : overviewTab()),
+    ];
+  }
+  function monthNav() {
+    const go = (d) => { FIN.month = monthKey(FIN.month, d); renderTool(); };
+    const now = todayKey().slice(0, 7);
+    return h('div', { class: 'fin-month' },
+      h('button', { class: 'icon-btn', 'aria-label': 'Month before', onclick: () => go(-1) }, '‹'),
+      h('b', {}, monthName(FIN.month)),
+      h('button', { class: 'icon-btn', 'aria-label': 'Month after', disabled: FIN.month >= now, onclick: () => go(1) }, '›'));
+  }
+  function overviewTab() {
+    const ym = FIN.month;
+    const xs = moneyIn(ym);
+    const got = sum(xs, 'in'), spent = sum(xs, 'out');
+    const today = todayKey();
+    // Bills still to pay this month, late ones included.
+    const owed = ym === today.slice(0, 7) ? billsLive().filter((b) => inScope(b) && b.due.slice(0, 7) <= ym).reduce((n, b) => n + b.amount, 0) : 0;
+    const left = got - spent;
+    const budgets = (S.budgets || []).filter(inScope).sort((a, b) => a.category.localeCompare(b.category));
+    const cats = new Map();
+    for (const x of xs) if (x.kind === 'out') cats.set(x.category || 'Other', (cats.get(x.category || 'Other') || 0) + x.amount);
+    const loose = [...cats].filter(([c]) => !budgets.some((b) => sameText(b.category, c))).sort((a, b) => b[1] - a[1]);
+    const budgetRow = (b) => {
+      const n = spentOn(xs.filter((x) => x.scope === b.scope), b.category);
+      const frac = n / b.limit;
+      return h('div', { class: 'budget', onclick: () => budgetSheet(b) },
+        h('div', { class: 'budget-top' }, h('span', {}, b.category, billScope === 'all' && b.scope === 'business' ? h('small', {}, ' · business') : null),
+          h('span', { class: frac > 1 ? 'late' : null }, `${money(n)} of ${money(b.limit)}`)),
+        h('div', { class: 'pbar ' + (frac > 1 ? 'c-rose' : frac >= 0.9 ? 'c-amber' : 'c-green') }, h('i', { style: `width:${Math.min(100, Math.round(frac * 100))}%` })),
+        h('small', { class: frac > 1 ? 'late' : null }, frac > 1 ? `${money(n - b.limit)} over` : `${money(b.limit - n)} left`));
+    };
+    return [
+      monthNav(),
+      h('div', { class: 'bill-sum fin-sum' },
+        h('div', {}, h('small', {}, 'Money in'), h('b', { class: 'up' }, money(got))),
+        h('div', {}, h('small', {}, 'Money out'), h('b', {}, money(spent))),
+        h('div', {}, h('small', {}, 'Left'), h('b', { class: left < 0 ? 'down' : null }, (left < 0 ? '−' : '') + money(Math.abs(left)))),
+        owed ? h('div', {}, h('small', {}, 'Safe to spend', h('span', { title: 'What’s left after the bills still due this month' }, ' ⓘ')), h('b', { class: left - owed < 0 ? 'down' : null }, (left - owed < 0 ? '−' : '') + money(Math.abs(left - owed))), h('small', {}, `after ${money(owed)} in bills`)) : null),
+      h('section', {}, h('h3', {}, 'Budgets'),
+        budgets.length ? budgets.map(budgetRow) : h('p', { class: 'day-hint' }, 'Set a monthly limit for what you spend on, like groceries or ads, and Column shows how much is left. It warns you on your Day when one is nearly used.'),
+        h('div', { class: 'btns' },
+          h('button', { class: 'add-goal', onclick: () => budgetSheet() }, '+ Set a budget'),
+          h('button', { class: 'add-goal', onclick: suggestBudgets }, '✦ Suggest budgets'))),
+      loose.length ? h('section', {}, h('h3', {}, 'Other spending'),
+        loose.map(([c, n]) => h('div', { class: 'bill-hist', onclick: () => budgetSheet(null, c) }, h('span', {}, c), h('span', {}, money(n))))) : null,
+      xs.length ? null : h('p', { class: 'day-hint' }, 'Nothing for this month yet. Add money in and out under In & out, or import a bank statement.'),
+    ];
+  }
+  function flowTab() {
+    const xs = moneyIn(FIN.month).filter((x) => !FIN.campaign || x.campaignId === FIN.campaign).sort((a, b) => (a.day < b.day ? 1 : a.day > b.day ? -1 : b.createdAt - a.createdAt));
+    const days = [...new Set(xs.map((x) => x.day))];
+    const camp = FIN.campaign && campById(FIN.campaign);
+    const row = (x) => {
+      const g = x.goalId && goalById(x.goalId), c = x.campaignId && campById(x.campaignId);
+      return h('div', { class: 'bill', onclick: () => moneySheet(x) },
+        h('span', { class: 'bill-name' }, x.note || x.category || (x.kind === 'in' ? 'Money in' : 'Money out'),
+          h('small', {}, [x.category && x.note ? x.category : null, x.billId ? 'bill' : null, billScope === 'all' && x.scope === 'business' ? 'Business' : null, g ? '→ ' + g.title : c ? '→ ' + c.name : null].filter(Boolean).join(' · '))),
+        h('span', { class: 'bill-right' }, h('b', { class: x.kind === 'in' ? 'up' : null }, (x.kind === 'in' ? '+' : '−') + money(x.amount))));
+    };
+    return [
+      monthNav(),
+      camp ? h('div', { class: 'fin-filter' }, `Only ${camp.name}`, h('button', { class: 'icon-btn', 'aria-label': 'Show all', html: I.close, onclick: () => { FIN.campaign = null; renderTool(); } })) : null,
+      h('div', { class: 'btns fin-add' },
+        h('button', { class: 'btn small', onclick: () => moneySheet(null, 'in') }, '+ Money in'),
+        h('button', { class: 'btn small', onclick: () => moneySheet(null, 'out') }, '+ Money out'),
+        h('button', { class: 'btn small', onclick: pickStatement }, 'Import bank statement…')),
+      ...days.map((d) => h('section', {}, h('h3', {}, dueLabel(d)), xs.filter((x) => x.day === d).map(row))),
+      xs.length ? null : h('p', { class: 'day-hint' }, 'Type in what comes in and goes out, or import the CSV file your bank lets you download. Tag money to a campaign to see what it cost and brought in, or to a money goal to fill it.'),
+    ];
+  }
+  // Where a bit of money goes: nowhere, a campaign, or one of its money goals.
+  function tagSelect(x) {
+    const camps = S.campaigns.filter((c) => c.status !== 'done' || c.id === x?.campaignId);
+    const sel = h('select', {}, h('option', { value: '' }, 'Not tagged'),
+      camps.map((c) => [h('option', { value: 'c:' + c.id }, c.name), ...goalsOf(c.id).filter((g) => g.kind === 'money').map((g) => h('option', { value: 'g:' + g.id }, `${c.name} → ${g.title}`))]).flat());
+    sel.value = x?.goalId ? 'g:' + x.goalId : x?.campaignId ? 'c:' + x.campaignId : '';
+    return sel;
+  }
+  function moneySheet(x, kind) {
+    kind = x?.kind || kind || 'out';
+    const amount = h('input', { value: x ? (x.amount / 100).toFixed(2) : '', placeholder: '0.00', inputmode: 'decimal' });
+    const day = h('input', { type: 'date', value: x?.day || todayKey() });
+    const cat = catInput(kind, x?.category);
+    const note = h('input', { value: x?.note || '', placeholder: kind === 'in' ? 'Who paid, what for' : 'Where, what for' });
+    const mine = !x || x.memberId === S.me?.memberId;
+    const scope = h('select', { disabled: !mine || !amOwner() }, h('option', { value: 'personal' }, 'Personal · only you'), h('option', { value: 'business', selected: (x?.scope || (billScope === 'business' ? 'business' : 'personal')) === 'business' }, 'Business · shared with owners'));
+    const tag = tagSelect(x);
+    const del = x ? h('button', { class: 'btn small danger', 'data-label': '1' }, 'Delete') : null;
+    del?.addEventListener('click', () => confirmClick(del, async () => {
+      await api('DELETE', '/money/' + x.id).catch((e) => toast(e.message));
+      S.money = S.money.filter((y) => y.id !== x.id);
+      closeSheet();
+      renderTool();
+    }));
+    sheet(x ? (kind === 'in' ? 'Money in' : 'Money out') : kind === 'in' ? 'Add money in' : 'Add money out', [
+      h('div', { class: 'row2' }, h('label', {}, 'Amount ($)', amount), h('label', {}, 'Date', day)),
+      h('div', { class: 'row2' }, h('label', {}, 'Category', cat), h('label', {}, 'Kind', scope)),
+      h('label', {}, 'Note', note),
+      h('label', {}, 'Campaign or goal', tag, h('small', { class: 'hint' }, kind === 'in' ? 'Counts toward what that campaign brought in, or fills that money goal.' : 'Counts as that campaign’s cost.')),
+      x?.billId ? h('p', { class: 'day-hint' }, 'Recorded when the bill was marked paid.') : null,
+      del,
+    ], async () => {
+      const t = tag.value;
+      const body = { kind, amount: amount.value, day: day.value, category: cat.value, note: note.value, goalId: t.startsWith('g:') ? t.slice(2) : null, campaignId: t.startsWith('c:') ? t.slice(2) : null, ...(mine ? { scope: scope.value } : {}) };
+      const y = x ? await api('PATCH', '/money/' + x.id, body) : await api('POST', '/money', body);
+      S.money = [...(S.money || []).filter((z) => z.id !== y.id), y];
+      if (!x && y.day.slice(0, 7) !== FIN.month) FIN.month = y.day.slice(0, 7);
+      renderTool();
+    }, x ? 'Save' : 'Add');
+  }
+  function budgetSheet(b, category) {
+    const cat = catInput('out', b?.category || category || '');
+    const limit = h('input', { value: b ? (b.limit / 100).toFixed(0) : '', placeholder: '400', inputmode: 'decimal' });
+    const scope = h('select', { disabled: !!b || !amOwner() }, h('option', { value: 'personal' }, 'Personal'), h('option', { value: 'business', selected: (b?.scope || (billScope === 'business' ? 'business' : 'personal')) === 'business' }, 'Business'));
+    const del = b ? h('button', { class: 'btn small danger', 'data-label': '1' }, 'Remove budget') : null;
+    del?.addEventListener('click', () => confirmClick(del, async () => {
+      await api('PUT', '/budgets', { scope: b.scope, category: b.category, limit: 0 }).catch((e) => toast(e.message));
+      S.budgets = S.budgets.filter((y) => y.id !== b.id);
+      closeSheet();
+      renderTool();
+    }));
+    sheet(b ? `${b.category} budget` : 'Set a budget', [
+      h('div', { class: 'row2' }, h('label', {}, 'Category', cat), h('label', {}, 'Each month ($)', limit)),
+      h('label', {}, 'Kind', scope),
+      del,
+    ], async () => {
+      const y = await api('PUT', '/budgets', { scope: b?.scope || scope.value, category: cat.value, limit: limit.value });
+      S.budgets = [...(S.budgets || []).filter((z) => z.id !== y.id), y];
+      renderTool();
+    }, 'Save');
+  }
+  // Suggested limits: what each category averaged over the last three full months, or its bills a month if
+  // that's more, rounded up to the next $10. You change any of them, or untick it, before saving.
+  function suggestBudgets() {
+    const sc = billScope === 'all' ? 'personal' : billScope;
+    const months = [1, 2, 3].map((d) => monthKey(todayKey().slice(0, 7), -d));
+    const xs = (S.money || []).filter((x) => x.scope === sc && x.kind === 'out' && months.some((m) => x.day?.startsWith(m)));
+    const per = new Map();
+    for (const x of xs) if (!NOT_SPENDING.includes(x.category)) per.set(x.category || 'Other', (per.get(x.category || 'Other') || 0) + x.amount / 3);
+    for (const b of billsLive().filter((b) => b.scope === sc)) {
+      const c = b.category || 'Bills';
+      per.set(c, Math.max(per.get(c) || 0, b.amount * PER_MONTH[b.repeat]));
+    }
+    const rows = [...per].filter(([, n]) => n >= 100).sort((a, b) => b[1] - a[1]).map(([c, n]) => {
+      const have = (S.budgets || []).find((y) => y.scope === sc && sameText(y.category, c));
+      const on = h('input', { type: 'checkbox', checked: !have });
+      const val = h('input', { value: have ? (have.limit / 100).toFixed(0) : String(Math.ceil(n / 1000) * 10), inputmode: 'decimal' });
+      return { c, on, val, el: h('div', { class: 'suggest-row' }, h('label', { class: 'pick' }, on, c, have ? h('small', {}, ` · now ${money(have.limit)}`) : null), h('span', {}, '$', val)) };
+    });
+    if (!rows.length) return toast('Add a few weeks of spending or some bills first, so there’s something to go on.');
+    sheet(`Suggested ${sc} budgets`, [
+      h('p', { class: 'day-hint' }, `From what you spent in ${months.slice().reverse().map(monthName).join(', ')}, and your bills. Change any amount, or untick the ones you don’t want.`),
+      ...rows.map((r) => r.el),
+    ], async () => {
+      for (const r of rows.filter((r) => r.on.checked)) {
+        const y = await api('PUT', '/budgets', { scope: sc, category: r.c, limit: r.val.value });
+        S.budgets = [...(S.budgets || []).filter((z) => z.id !== y.id), y];
+      }
+      renderTool();
+    }, 'Save budgets');
+  }
+
+  // ----- bank statements: a CSV file from the bank, sorted into categories -----
+  const CAT_RULES = [
+    ['Groceries', /trader joe|whole foods|safeway|kroger|aldi|sprouts|smith'?s food|albertsons|vons|grocery|market/i],
+    ['Dining', /restaurant|cafe|coffee|starbucks|dutch bros|mcdonald|chipotle|doordash|uber eats|grubhub|pizza|taco|burger|chick-fil-a|in-n-out/i],
+    ['Gas', /shell|chevron|exxon|arco|circle k|maverik|fuel|gas station|76 /i],
+    ['Ads & marketing', /facebk|facebook|meta ads|google ads|adwords|instagram|tiktok|yelp|nextdoor/i],
+    ['Software', /adobe|google \*|gsuite|workspace|microsoft|apple\.com|openai|anthropic|canva|dropbox|zoom|slack|notion|github|vercel|railway|squarespace|godaddy/i],
+    ['Utilities', /electric|energy|power|water|sewer|internet|comcast|xfinity|cox comm|at&t|verizon|t-mobile|spectrum/i],
+    ['Insurance', /insurance|geico|progressive|state farm|allstate/i],
+    ['Rent', /\brent\b|lease|property mgmt/i],
+    ['Travel', /airline|delta|united|southwest|american air|hotel|airbnb|marriott|hilton|uber|lyft/i],
+    ['Health', /pharmacy|cvs|walgreens|dental|doctor|clinic|medical/i],
+    ['Shopping', /amazon|amzn|target|etsy|ebay|walmart|costco|home depot|lowe'?s/i],
+    ['Fees', /\bfee\b|interest charge|overdraft|service charge/i],
+    ['Payroll', /gusto|adp|paychex/i],
+    ['Transfer', /transfer|zelle|venmo|cash app|paypal|xfer/i],
+  ];
+  const IN_RULES = [['Paycheck', /payroll|direct dep|salary/i], ['Client payment', /stripe|square|deposit|invoice/i], ['Refund', /refund|return/i], ['Transfer in', /transfer|zelle|venmo|cash app|paypal|xfer/i]];
+  const descKey = (t) => String(t || '').toLowerCase().replace(/[#*]?\d[\d\s/:-]*/g, ' ').replace(/\s+/g, ' ').trim();
+  // A row's category: what you called the same place before, else a guess from its name.
+  function guessCategory(note, kind) {
+    const k = descKey(note);
+    const before = k && [...(S.money || [])].sort((a, b) => b.createdAt - a.createdAt).find((x) => x.kind === kind && x.category && descKey(x.note) === k);
+    if (before) return before.category;
+    return ((kind === 'in' ? IN_RULES : CAT_RULES).find(([, re]) => re.test(note)) || [kind === 'in' ? 'Other income' : 'Other'])[0];
+  }
+  // Dates as banks write them: 2026-10-05, 10/05/2026, 10/5/26, Oct 5, 2026.
+  function statementDay(v) {
+    const t = String(v || '').trim();
+    let m = t.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+    if (m) return `${m[1]}-${m[2].padStart(2, '0')}-${m[3].padStart(2, '0')}`;
+    m = t.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})/);
+    if (m) return `${m[3].length === 2 ? '20' + m[3] : m[3]}-${m[1].padStart(2, '0')}-${m[2].padStart(2, '0')}`;
+    const d = Date.parse(t);
+    return Number.isNaN(d) ? null : new Date(d).toISOString().slice(0, 10);
+  }
+  const statementNum = (v) => {
+    const t = String(v || '').trim();
+    if (!t) return 0;
+    const neg = /^\(.*\)$/.test(t) || /^-/.test(t) || /-$/.test(t);
+    const n = Number(t.replace(/[^\d.]/g, ''));
+    return Number.isFinite(n) ? (neg ? -n : n) : 0;
+  };
+  function pickStatement() {
+    // On the page while it's open, as some browsers won't open a file picker for one that isn't.
+    $('#stmtFile')?.remove();
+    const input = h('input', { type: 'file', id: 'stmtFile', class: 'hidden', accept: '.csv,.tsv,.txt,text/csv' });
+    document.body.append(input);
+    input.addEventListener('change', async () => {
+      const f = input.files[0];
+      input.remove();
+      if (!f) return;
+      if (f.size > 5_000_000) return toast('That file is too big for a statement.');
+      statementSheet(parseDelimited(await f.text()).filter((r) => r.some((c) => c.trim())), f.name);
+    });
+    input.click();
+  }
+  function statementSheet(raw, name) {
+    // The header is the first row with a date-like or description-like heading.
+    const at = Math.max(0, raw.findIndex((r) => r.some((c) => /date|description|amount|debit|credit|memo|payee/i.test(c))));
+    const head = raw[at] || [];
+    const body = raw.slice(at + 1).filter((r) => r.length >= 2);
+    if (!body.length) return toast('Couldn’t find any transactions in that file.');
+    const find = (re) => head.findIndex((c) => re.test(c));
+    const cols = head.map((c, i) => h('option', { value: i }, c || `Column ${i + 1}`));
+    const pick = (i) => { const sel = h('select', {}, h('option', { value: -1 }, '—'), cols.map((o) => o.cloneNode(true))); sel.value = i; return sel; };
+    const cDate = pick(Math.max(0, find(/date|posted/i)));
+    const cDesc = pick(find(/desc|memo|payee|merchant|name|details|transaction/i));
+    const cAmt = pick(find(/^amount|amount$/i));
+    const cOut = pick(find(/debit|withdraw|charge|money out/i));
+    const cIn = pick(find(/credit|deposit|money in/i));
+    const flip = h('input', { type: 'checkbox' });
+    const scope = h('select', { disabled: !amOwner() }, h('option', { value: 'personal' }, 'Personal · only you'), h('option', { value: 'business', selected: billScope === 'business' }, 'Business · shared with owners'));
+    const preview = h('div', { class: 'stmt-rows' });
+    const totals = h('p', { class: 'day-hint' });
+    let rows = [];
+    const read = () => {
+      const v = (r, sel) => (Number(sel.value) >= 0 ? r[Number(sel.value)] : '');
+      rows = body.map((r) => {
+        let n = Number(cAmt.value) >= 0 ? statementNum(v(r, cAmt)) * (flip.checked ? -1 : 1) : statementNum(v(r, cIn)) - Math.abs(statementNum(v(r, cOut)));
+        const note = String(v(r, cDesc) || '').trim().slice(0, 200);
+        const kind = n > 0 ? 'in' : 'out';
+        return { day: statementDay(v(r, cDate)), amount: n, note, kind };
+      }).filter((r) => r.day && r.amount);
+      for (const r of rows) r.category = guessCategory(r.note, r.kind);
+      const got = rows.filter((r) => r.amount > 0).reduce((n, r) => n + r.amount, 0), out = rows.filter((r) => r.amount < 0).reduce((n, r) => n - r.amount, 0);
+      totals.textContent = rows.length ? `${rows.length} transactions · ${money(Math.round(got * 100))} in · ${money(Math.round(out * 100))} out. Check the categories, then import. Ones already in Column are skipped.` : 'No transactions found with these columns. Pick the right ones above.';
+      preview.replaceChildren(...rows.slice(0, 300).map((r) => {
+        const cat = catInput(r.kind, r.category);
+        cat.addEventListener('change', () => (r.category = cat.value));
+        return h('div', { class: 'stmt-row' }, h('span', { class: 'stmt-d' }, dueLabel(r.day)), h('span', { class: 'stmt-n' }, r.note || '—'), cat,
+          h('b', { class: r.amount > 0 ? 'up' : null }, (r.amount > 0 ? '+' : '−') + money(Math.round(Math.abs(r.amount) * 100))));
+      }), rows.length > 300 ? h('p', { class: 'day-hint' }, `…and ${rows.length - 300} more, sorted the same way.`) : '');
+    };
+    for (const sel of [cDate, cDesc, cAmt, cOut, cIn, flip]) sel.addEventListener('change', read);
+    read();
+    sheet('Import ' + name, [
+      h('div', { class: 'row2' }, h('label', {}, 'Date', cDate), h('label', {}, 'Description', cDesc)),
+      h('div', { class: 'row3' }, h('label', {}, 'Amount', cAmt), h('label', {}, 'or Money out', cOut), h('label', {}, 'and Money in', cIn)),
+      h('label', { class: 'pick' }, flip, 'Spending shows as positive numbers (common on credit card statements)'),
+      h('label', {}, 'Kind', scope),
+      totals,
+      preview,
+    ], async () => {
+      if (!rows.length) throw new Error('Pick the columns with the date and amount first.');
+      const r = await api('POST', '/money/import', { scope: scope.value, rows: rows.map(({ day, amount, note, category }) => ({ day, amount, note, category })) });
+      S.money = [...(S.money || []).filter((x) => !r.entries.some((y) => y.id === x.id)), ...r.entries];
+      FIN.tab = 'flow';
+      renderTool();
+      toast(`Imported ${r.added}` + (r.skipped ? ` · ${r.skipped} already in or unreadable` : ''));
+    }, 'Import');
   }
 
   // ----- meeting notes: record a call, then review notes drafted from it -----
@@ -5703,7 +6049,7 @@
   function emailTool() {
     const m = S.mail;
     if (!amOwner() && m && !m.pss) return [h('p', { class: 'day-hint' }, 'Email needs PSS admin connected, for the unsubscribe links. Ask a team owner to connect it in Settings.')];
-    if (amOwner() && !S.pss?.connected) return [h('p', { class: 'day-hint' }, 'Connect PSS admin in Settings first. Every email carries an unsubscribe link, and those come from your website.'), h('button', { class: 'btn small', onclick: () => { closeTool(); openSettings(); } }, 'Open Settings')];
+    if (amOwner() && !S.pss?.connected) return [h('p', { class: 'day-hint' }, 'Connect PSS admin in Settings first. Every email carries an unsubscribe link, and those come from your website.'), h('button', { class: 'btn small', onclick: () => { closeTool(); openSettings('connections', '.pss-sec'); } }, 'Open Settings')];
     if (!m) return [h('p', { class: 'day-hint' }, 'Loading…')];
     if (!m.from) {
       const go = h('button', { class: 'btn primary-btn' }, 'Connect Outlook');
@@ -6013,165 +6359,177 @@
     return sec;
   }
 
+  const SET_TABS = [['general', 'General'], ['team', 'Team'], ['connections', 'Connections'], ['account', 'Account']];
   function renderSettings() {
     const s = $('#settings');
     const ws = S.workspace;
     s.innerHTML = '';
     s.append(h('h2', {}, 'Settings', h('button', { class: 'icon-btn', html: I.close, 'aria-label': 'Close', onclick: () => s.classList.add('hidden') })));
-
-    // Layout
-    const seg = h('div', { class: 'seg' },
-      h('button', { class: S.panes.length === 1 ? 'on' : null, onclick: () => { setPanes([S.panes[0] === 'files' ? 'all' : S.panes[0]]); renderSettings(); } }, 'One column'),
-      h('button', { class: S.panes.length === 2 ? 'on' : null, onclick: () => { setPanes(['all', 'files']); renderSettings(); } }, 'Split into two')
-    );
-    s.append(h('section', {}, h('h3', {}, 'Layout'), seg,
-      h('p', { style: 'margin-top:8px;font-size:11.5px' }, 'Use the tabs at the top of each column to switch what it shows: everything, files, or a stack.')));
-
-    s.append(brandSection());
-
-    // Stacks
-    const stackSec = h('section', {}, h('h3', {}, 'Stacks (folders)'));
-    for (const st of ws.stacks) {
-      const inp = h('input', { value: st.name });
-      inp.addEventListener('change', () => api('PATCH', '/stacks/' + st.id, { name: inp.value }).catch((e) => toast(e.message)));
-      const del = h('button', { class: 'btn danger', title: 'Delete stack (items stay, just unsorted)' }, 'Delete');
-      del.addEventListener('click', () => confirmClick(del, () => api('DELETE', '/stacks/' + st.id).catch((e) => toast(e.message))));
-      stackSec.append(h('div', { class: 'stack-row' }, inp, del));
-    }
-    const newInp = h('input', { placeholder: 'New stack, e.g. Design, Receipts…' });
-    const addStack = () => {
-      if (!newInp.value.trim()) return;
-      api('POST', '/stacks', { name: newInp.value }).catch((e) => toast(e.message));
-      newInp.value = '';
-    };
-    newInp.addEventListener('keydown', (e) => e.key === 'Enter' && addStack());
-    stackSec.append(h('div', { class: 'stack-row' }, newInp, h('button', { class: 'btn', onclick: addStack }, 'Add')));
-    s.append(stackSec);
-
-    // Auto-clear
-    const sel = h('select', {},
-      [[0, 'Never'], [1, 'After 1 hour'], [24, 'After 24 hours'], [168, 'After 7 days'], [720, 'After 30 days']].map(([v, l]) =>
-        h('option', { value: v, selected: ws.settings.expireHours === v }, l)
-      )
-    );
-    sel.addEventListener('change', () => api('PATCH', '/workspace', { expireHours: Number(sel.value) }).catch((e) => toast(e.message)));
-    s.append(h('section', {}, h('h3', {}, 'Auto-clear'),
-      h('div', { class: 'srow' }, h('span', {}, 'Remove items', h('small', {}, 'Pinned items are always kept')), sel)));
-
-    if (isOwner()) {
-      s.append(h('section', {}, h('h3', {}, 'Team'),
-        toggleRow('Members can send campaign email', 'From their own Outlook, to people on lists in their own campaigns. Owners can always send.', !!ws.settings.memberEmail,
-          (on) => api('PATCH', '/workspace', { memberEmail: on }).catch((e) => toast(e.message)))));
-    }
-    s.append(calendarSection());
-    loadCalendars();
-    s.append(aiSection());
-    loadAi();
-    if (isOwner()) s.append(pssSection());
-
-    // This device
-    const dev = h('section', {}, h('h3', {}, 'This device'));
-    if ('Notification' in window) {
-      dev.append(toggleRow('Notifications', 'When something arrives from another device, or a task or campaign is assigned to you', S.notify && Notification.permission === 'granted', async (on, input) => {
-        if (on && Notification.permission !== 'granted') {
-          const p = await Notification.requestPermission();
-          if (p !== 'granted') { input.checked = false; toast('Notifications blocked by the system'); return; }
-        }
-        S.notify = on;
-        store.set('notify', on);
-      }));
-    }
-    if ('Notification' in window) {
-      dev.append(toggleRow('Reminders', 'Notify me when a note or block on my day starts', S.remind && Notification.permission === 'granted', async (on, input) => {
-        if (on && !(await askNotify())) { input.checked = false; return; }
-        S.remind = on;
-        store.set('remind', on);
-      }));
-    }
-    if (desktop) {
-      dev.append(
-        toggleRow('Always on top', 'Keep the column above other windows', S.desktopCfg.alwaysOnTop, (on) => { S.desktopCfg.alwaysOnTop = on; desktop.setConfig({ alwaysOnTop: on }); }),
-        toggleRow('Auto-save incoming files', 'Copy everything that arrives into Downloads/Column', S.desktopCfg.autoSave, (on) => { S.desktopCfg.autoSave = on; desktop.setConfig({ autoSave: on }); }),
-        toggleRow('Open at login', null, S.desktopCfg.openAtLogin, (on) => { S.desktopCfg.openAtLogin = on; desktop.setConfig({ openAtLogin: on }); }),
-        desktop.setNext && desktop.platform === 'darwin' ? toggleRow('Next event in menu bar', 'Show what’s on now or next beside the menu-bar icon', S.desktopCfg.trayNext !== false, (on) => { S.desktopCfg.trayNext = on; desktop.setConfig({ trayNext: on }); }) : null,
-        h('div', { class: 'srow' }, h('span', {}, 'Show / hide', h('small', {}, desktop.platform === 'darwin' ? '⌘ ⇧ Space, or the menu bar icon' : 'Ctrl + Shift + Space, or the tray icon'))),
-        h('div', { class: 'btns', style: 'margin-top:8px' },
-          h('button', { class: 'btn', onclick: () => desktop.openFolder() }, 'Open Downloads/Column'),
-          h('button', { class: 'btn', onclick: () => desktop.changeServer() }, 'Change server')
-        )
-      );
-    }
-    s.append(dev);
-
-    // People
+    // Grouped under tabs, so each one stays short.
+    const tab = SET_TABS.some(([k]) => k === S.setTab) ? S.setTab : 'general';
+    s.append(h('div', { class: 'seg set-tabs', role: 'tablist' }, SET_TABS.map(([k, label]) =>
+      h('button', { class: tab === k ? 'on' : null, role: 'tab', 'aria-selected': String(tab === k), onclick: () => { S.setTab = k; store.set('setTab', k); renderSettings(); s.scrollTop = 0; } }, label))));
     const me = ws.members.find((x) => x.id === S.me.memberId);
     const owner = me?.role === 'owner';
-    const onlineIds = new Set(S.online.map((d) => d.memberId));
-    const peopleCall = (method, path, body) => api(method, path, body).then((w) => { S.workspace = w; renderSettings(); }).catch((e) => toast(e.message));
-    const people = h('section', {}, h('h3', {}, `People · ${ws.members.length}`));
-    const sorted = [...ws.members].sort((a, b) => (b.id === me?.id) - (a.id === me?.id) || a.name.localeCompare(b.name));
-    for (const mb of sorted) {
-      const you = mb.id === me?.id;
-      const notes = [mb.role === 'owner' ? 'Owner' : 'Member', mb.hasPassword ? null : 'no password yet', onlineIds.has(mb.id) ? 'online' : null].filter(Boolean).join(' · ');
-      const row = h('div', { class: 'srow person' },
-        h('span', {}, h('span', { class: 'live' + (onlineIds.has(mb.id) ? ' on' : '') }), mb.name, you ? ' (you)' : '', h('small', {}, notes)));
-      if (owner && !you) {
-        row.append(h('button', { class: 'icon-btn', 'aria-label': 'Options for ' + mb.name, html: I.more, onclick: (e) => openMenu(e.currentTarget, [
-          mb.role === 'owner'
-            ? { label: 'Make member', run: () => peopleCall('PATCH', '/members/' + mb.id, { role: 'member' }) }
-            : { label: 'Make owner', run: () => peopleCall('PATCH', '/members/' + mb.id, { role: 'owner' }) },
-          { label: 'Reset password', danger: true, run: () => peopleCall('POST', `/members/${mb.id}/reset`).then(() => toast(`${mb.name} is signed out. They can set a new password with Join team.`)) },
-          { label: 'Remove from team', danger: true, run: () => peopleCall('DELETE', '/members/' + mb.id) },
-        ]) }));
+
+    if (tab === 'general') {
+      // Layout
+      const seg = h('div', { class: 'seg' },
+        h('button', { class: S.panes.length === 1 ? 'on' : null, onclick: () => { setPanes([S.panes[0] === 'files' ? 'all' : S.panes[0]]); renderSettings(); } }, 'One column'),
+        h('button', { class: S.panes.length === 2 ? 'on' : null, onclick: () => { setPanes(['all', 'files']); renderSettings(); } }, 'Split into two')
+      );
+      s.append(h('section', {}, h('h3', {}, 'Layout'), seg,
+        h('p', { style: 'margin-top:8px;font-size:11.5px' }, 'Use the tabs at the top of each column to switch what it shows: everything, files, or a stack.')));
+
+      // Stacks
+      const stackSec = h('section', {}, h('h3', {}, 'Stacks (folders)'));
+      for (const st of ws.stacks) {
+        const inp = h('input', { value: st.name });
+        inp.addEventListener('change', () => api('PATCH', '/stacks/' + st.id, { name: inp.value }).catch((e) => toast(e.message)));
+        const del = h('button', { class: 'btn danger', title: 'Delete stack (items stay, just unsorted)' }, 'Delete');
+        del.addEventListener('click', () => confirmClick(del, () => api('DELETE', '/stacks/' + st.id).catch((e) => toast(e.message))));
+        stackSec.append(h('div', { class: 'stack-row' }, inp, del));
       }
-      people.append(row);
+      const newInp = h('input', { placeholder: 'New stack, e.g. Design, Receipts…' });
+      const addStack = () => {
+        if (!newInp.value.trim()) return;
+        api('POST', '/stacks', { name: newInp.value }).catch((e) => toast(e.message));
+        newInp.value = '';
+      };
+      newInp.addEventListener('keydown', (e) => e.key === 'Enter' && addStack());
+      stackSec.append(h('div', { class: 'stack-row' }, newInp, h('button', { class: 'btn', onclick: addStack }, 'Add')));
+      s.append(stackSec);
+
+      // Auto-clear
+      const sel = h('select', {},
+        [[0, 'Never'], [1, 'After 1 hour'], [24, 'After 24 hours'], [168, 'After 7 days'], [720, 'After 30 days']].map(([v, l]) =>
+          h('option', { value: v, selected: ws.settings.expireHours === v }, l)
+        )
+      );
+      sel.addEventListener('change', () => api('PATCH', '/workspace', { expireHours: Number(sel.value) }).catch((e) => toast(e.message)));
+      s.append(h('section', {}, h('h3', {}, 'Auto-clear'),
+        h('div', { class: 'srow' }, h('span', {}, 'Remove items', h('small', {}, 'Pinned items are always kept')), sel)));
+
+      // This device
+      const dev = h('section', {}, h('h3', {}, 'This device'));
+      if ('Notification' in window) {
+        dev.append(toggleRow('Notifications', 'When something arrives from another device, or a task or campaign is assigned to you', S.notify && Notification.permission === 'granted', async (on, input) => {
+          if (on && Notification.permission !== 'granted') {
+            const p = await Notification.requestPermission();
+            if (p !== 'granted') { input.checked = false; toast('Notifications blocked by the system'); return; }
+          }
+          S.notify = on;
+          store.set('notify', on);
+        }));
+      }
+      if ('Notification' in window) {
+        dev.append(toggleRow('Reminders', 'Notify me when a note or block on my day starts', S.remind && Notification.permission === 'granted', async (on, input) => {
+          if (on && !(await askNotify())) { input.checked = false; return; }
+          S.remind = on;
+          store.set('remind', on);
+        }));
+      }
+      if (desktop) {
+        dev.append(
+          toggleRow('Always on top', 'Keep the column above other windows', S.desktopCfg.alwaysOnTop, (on) => { S.desktopCfg.alwaysOnTop = on; desktop.setConfig({ alwaysOnTop: on }); }),
+          toggleRow('Auto-save incoming files', 'Copy everything that arrives into Downloads/Column', S.desktopCfg.autoSave, (on) => { S.desktopCfg.autoSave = on; desktop.setConfig({ autoSave: on }); }),
+          toggleRow('Open at login', null, S.desktopCfg.openAtLogin, (on) => { S.desktopCfg.openAtLogin = on; desktop.setConfig({ openAtLogin: on }); }),
+          desktop.setNext && desktop.platform === 'darwin' ? toggleRow('Next event in menu bar', 'Show what’s on now or next beside the menu-bar icon', S.desktopCfg.trayNext !== false, (on) => { S.desktopCfg.trayNext = on; desktop.setConfig({ trayNext: on }); }) : null,
+          h('div', { class: 'srow' }, h('span', {}, 'Show / hide', h('small', {}, desktop.platform === 'darwin' ? '⌘ ⇧ Space, or the menu bar icon' : 'Ctrl + Shift + Space, or the tray icon'))),
+          h('div', { class: 'btns', style: 'margin-top:8px' },
+            h('button', { class: 'btn', onclick: () => desktop.openFolder() }, 'Open Downloads/Column'),
+            h('button', { class: 'btn', onclick: () => desktop.changeServer() }, 'Change server')
+          )
+        );
+      }
+      s.append(dev);
     }
-    const inviteText = () => `Join “${ws.name}” on Column\n${location.origin}\nChoose Join team · Team: ${ws.name} · Invite code: ${ws.inviteCode}`;
-    const newCode = h('button', { class: 'btn', 'data-label': '1', title: 'The old code stops working' }, ws.inviteCode ? 'New code' : 'Make an invite code');
-    newCode.addEventListener('click', () => (ws.inviteCode ? confirmClick(newCode, () => peopleCall('POST', '/invite')) : peopleCall('POST', '/invite')));
-    people.append(
-      ws.inviteCode
-        ? h('p', { style: 'margin-top:10px' }, 'Invite code: ', h('code', {}, ws.inviteCode))
-        : h('p', { style: 'margin-top:10px' }, 'The old team passphrase works as the invite code.' + (owner ? ' Make a code to replace it.' : '')),
-      h('p', {}, 'New people open ', h('code', {}, location.origin), ', choose ', h('b', {}, 'Join team'), ', and enter the team name and code. Removing someone signs them out; make a new code too if they still know it.'),
-      h('div', { class: 'btns' },
-        ws.inviteCode ? h('button', { class: 'btn', onclick: () => copyText(inviteText()) }, 'Copy invite') : null,
-        owner ? newCode : null)
-    );
-    s.append(people);
 
-    // Your password
-    const cur = h('input', { type: 'password', placeholder: 'Current password', autocomplete: 'current-password' });
-    const next = h('input', { type: 'password', placeholder: me?.hasPassword ? 'New password' : 'Choose a password', autocomplete: 'new-password' });
-    const savePw = async () => {
-      try {
-        S.workspace = await api('POST', '/members/me/password', { current: cur.value, next: next.value });
-        toast('Password saved');
-        renderSettings();
-      } catch (e) {
-        toast(e.message);
+    if (tab === 'connections') {
+      s.append(calendarSection());
+      loadCalendars();
+      s.append(aiSection());
+      loadAi();
+      if (isOwner()) s.append(pssSection());
+    }
+
+    if (tab === 'team') {
+      // People
+      const onlineIds = new Set(S.online.map((d) => d.memberId));
+      const peopleCall = (method, path, body) => api(method, path, body).then((w) => { S.workspace = w; renderSettings(); }).catch((e) => toast(e.message));
+      const people = h('section', {}, h('h3', {}, `People · ${ws.members.length}`));
+      const sorted = [...ws.members].sort((a, b) => (b.id === me?.id) - (a.id === me?.id) || a.name.localeCompare(b.name));
+      for (const mb of sorted) {
+        const you = mb.id === me?.id;
+        const notes = [mb.role === 'owner' ? 'Owner' : 'Member', mb.hasPassword ? null : 'no password yet', onlineIds.has(mb.id) ? 'online' : null].filter(Boolean).join(' · ');
+        const row = h('div', { class: 'srow person' },
+          h('span', {}, h('span', { class: 'live' + (onlineIds.has(mb.id) ? ' on' : '') }), mb.name, you ? ' (you)' : '', h('small', {}, notes)));
+        if (owner && !you) {
+          row.append(h('button', { class: 'icon-btn', 'aria-label': 'Options for ' + mb.name, html: I.more, onclick: (e) => openMenu(e.currentTarget, [
+            mb.role === 'owner'
+              ? { label: 'Make member', run: () => peopleCall('PATCH', '/members/' + mb.id, { role: 'member' }) }
+              : { label: 'Make owner', run: () => peopleCall('PATCH', '/members/' + mb.id, { role: 'owner' }) },
+            { label: 'Reset password', danger: true, run: () => peopleCall('POST', `/members/${mb.id}/reset`).then(() => toast(`${mb.name} is signed out. They can set a new password with Join team.`)) },
+            { label: 'Remove from team', danger: true, run: () => peopleCall('DELETE', '/members/' + mb.id) },
+          ]) }));
+        }
+        people.append(row);
       }
-    };
-    next.addEventListener('keydown', (e) => e.key === 'Enter' && savePw());
-    s.append(h('section', {}, h('h3', {}, 'Your password'),
-      me?.hasPassword ? null : h('p', { class: 'warn' }, 'You don’t have a password yet. Set one so you can sign in on new devices.'),
-      me?.hasPassword ? h('div', { class: 'stack-row' }, cur) : null,
-      h('div', { class: 'stack-row' }, next, h('button', { class: 'btn', onclick: savePw }, 'Save'))));
+      const inviteText = () => `Join “${ws.name}” on Column\n${location.origin}\nChoose Join team · Team: ${ws.name} · Invite code: ${ws.inviteCode}`;
+      const newCode = h('button', { class: 'btn', 'data-label': '1', title: 'The old code stops working' }, ws.inviteCode ? 'New code' : 'Make an invite code');
+      newCode.addEventListener('click', () => (ws.inviteCode ? confirmClick(newCode, () => peopleCall('POST', '/invite')) : peopleCall('POST', '/invite')));
+      people.append(
+        ws.inviteCode
+          ? h('p', { style: 'margin-top:10px' }, 'Invite code: ', h('code', {}, ws.inviteCode))
+          : h('p', { style: 'margin-top:10px' }, 'The old team passphrase works as the invite code.' + (owner ? ' Make a code to replace it.' : '')),
+        h('p', {}, 'New people open ', h('code', {}, location.origin), ', choose ', h('b', {}, 'Join team'), ', and enter the team name and code. Removing someone signs them out; make a new code too if they still know it.'),
+        h('div', { class: 'btns' },
+          ws.inviteCode ? h('button', { class: 'btn', onclick: () => copyText(inviteText()) }, 'Copy invite') : null,
+          owner ? newCode : null)
+      );
+      s.append(people);
+      if (isOwner()) {
+        s.append(h('section', {}, h('h3', {}, 'Campaign email'),
+          toggleRow('Members can send campaign email', 'From their own Outlook, to people on lists in their own campaigns. Owners can always send.', !!ws.settings.memberEmail,
+            (on) => api('PATCH', '/workspace', { memberEmail: on }).catch((e) => toast(e.message)))));
+      }
+      s.append(brandSection());
+    }
 
-    // Account
-    const devices = S.online.filter((d) => d.memberId === S.me.memberId).map((d) => `${d.device}${d.deviceId === S.deviceId ? ' (this)' : ''}`).join(', ');
-    const clearBtn = h('button', { class: 'btn danger', 'data-label': '1' }, 'Clear unpinned items');
-    clearBtn.addEventListener('click', () => confirmClick(clearBtn, () => api('POST', '/clear').then(() => toast('Cleared')).catch((e) => toast(e.message))));
-    s.append(h('section', {}, h('h3', {}, 'Account'),
-      h('p', {}, 'Signed in to ', h('b', {}, ws.name), ` as ${S.me.member} on ${S.me.device}.`),
-      h('p', {}, 'Your devices online: ', devices || '—'),
-      h('p', {}, 'To add another computer or phone, open ', h('code', {}, location.origin), ' and sign in with your name and password. On a phone, use “Add to Home Screen” to keep it as an app.'),
-      h('div', { class: 'btns' },
-        h('button', { class: 'btn', onclick: () => copyText(location.origin) }, 'Copy link'),
-        clearBtn,
-        h('button', { class: 'btn', onclick: () => { api('POST', '/logout').catch(() => {}).finally(signOutLocal); } }, 'Sign out')
-      )
-    ));
+    if (tab === 'account') {
+      // Your password
+      const cur = h('input', { type: 'password', placeholder: 'Current password', autocomplete: 'current-password' });
+      const next = h('input', { type: 'password', placeholder: me?.hasPassword ? 'New password' : 'Choose a password', autocomplete: 'new-password' });
+      const savePw = async () => {
+        try {
+          S.workspace = await api('POST', '/members/me/password', { current: cur.value, next: next.value });
+          toast('Password saved');
+          renderSettings();
+        } catch (e) {
+          toast(e.message);
+        }
+      };
+      next.addEventListener('keydown', (e) => e.key === 'Enter' && savePw());
+      s.append(h('section', {}, h('h3', {}, 'Your password'),
+        me?.hasPassword ? null : h('p', { class: 'warn' }, 'You don’t have a password yet. Set one so you can sign in on new devices.'),
+        me?.hasPassword ? h('div', { class: 'stack-row' }, cur) : null,
+        h('div', { class: 'stack-row' }, next, h('button', { class: 'btn', onclick: savePw }, 'Save'))));
+
+      // Account
+      const devices = S.online.filter((d) => d.memberId === S.me.memberId).map((d) => `${d.device}${d.deviceId === S.deviceId ? ' (this)' : ''}`).join(', ');
+      const clearBtn = h('button', { class: 'btn danger', 'data-label': '1' }, 'Clear unpinned items');
+      clearBtn.addEventListener('click', () => confirmClick(clearBtn, () => api('POST', '/clear').then(() => toast('Cleared')).catch((e) => toast(e.message))));
+      s.append(h('section', {}, h('h3', {}, 'Account'),
+        h('p', {}, 'Signed in to ', h('b', {}, ws.name), ` as ${S.me.member} on ${S.me.device}.`),
+        h('p', {}, 'Your devices online: ', devices || '—'),
+        h('p', {}, 'To add another computer or phone, open ', h('code', {}, location.origin), ' and sign in with your name and password. On a phone, use “Add to Home Screen” to keep it as an app.'),
+        h('div', { class: 'btns' },
+          h('button', { class: 'btn', onclick: () => copyText(location.origin) }, 'Copy link'),
+          clearBtn,
+          h('button', { class: 'btn', onclick: () => { api('POST', '/logout').catch(() => {}).finally(signOutLocal); } }, 'Sign out')
+        )
+      ));
+    }
   }
 
   // ---------- boot ----------
