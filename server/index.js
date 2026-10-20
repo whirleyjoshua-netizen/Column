@@ -26,7 +26,7 @@ const PUBLIC_URL = (process.env.PUBLIC_URL || `http://localhost:${PORT}`).replac
 fs.mkdirSync(FILES_DIR, { recursive: true });
 
 // ---------- persistence (a JSON file is plenty for personal/small-team use) ----------
-let db = { workspaces: {}, tokens: {}, items: {}, entries: {}, tasks: {}, uploads: {}, campaigns: {}, goals: {}, attempts: {}, lists: {}, templates: {}, calendars: {}, ai: {}, pss: {}, sends: {}, bills: {}, meetings: {}, plans: {} };
+let db = { workspaces: {}, tokens: {}, items: {}, entries: {}, tasks: {}, uploads: {}, campaigns: {}, goals: {}, attempts: {}, lists: {}, templates: {}, calendars: {}, ai: {}, pss: {}, sends: {}, bills: {}, meetings: {}, money: {}, budgets: {}, plans: {} };
 try {
   db = { ...db, ...JSON.parse(fs.readFileSync(DB_PATH, 'utf8')) };
 } catch {}
@@ -372,6 +372,8 @@ function applyTask(t, body) {
   }
   if (body.assigneeId !== undefined) t.assigneeId = body.assigneeId && db.workspaces[t.wsId]?.members.some((m) => m.id === body.assigneeId) ? body.assigneeId : null;
   if (body.report !== undefined) t.report = !!body.report;
+  // Where it sits when dragged: order within its goal, dayOrder on the Tasks list. null = not placed by hand.
+  for (const k of ['order', 'dayOrder']) if (body[k] !== undefined) t[k] = body[k] === null || !Number.isFinite(Number(body[k])) ? null : Number(body[k]);
   if (body.priority !== undefined) t.priority = Math.max(0, Math.min(3, Math.round(Number(body.priority)) || 0));
   if (body.done !== undefined) {
     t.done = !!body.done;
@@ -660,8 +662,17 @@ function seesTemplate(t, memberId) {
   return !c || !c.private || t.ownerId === memberId || t.assigneeId === memberId || c.memberIds.includes(memberId);
 }
 
-const publicCampaign = ({ wsId, ...c }) => c;
-const publicGoal = ({ wsId, ...g }) => g;
+// What's been logged in Finance against a campaign: spent (its cost) and brought in. Totals only, so a
+// personal entry tagged to a team campaign shows in the sum but not on its own.
+function campMoney(id) {
+  let spent = 0, earned = 0;
+  for (const x of Object.values(db.money)) if (x.campaignId === id) x.kind === 'in' ? (earned += x.amount) : (spent += x.amount);
+  return spent || earned ? { spent, earned } : null;
+}
+const publicCampaign = ({ wsId, ...c }) => ({ ...c, money: campMoney(c.id) });
+// A money goal fills from Finance: money in tagged to it, less money out.
+const goalSaved = (id) => Object.values(db.money).reduce((n, x) => (x.goalId === id ? n + (x.kind === 'in' ? x.amount : -x.amount) : n), 0);
+const publicGoal = ({ wsId, ...g }) => (g.kind === 'money' ? { ...g, saved: goalSaved(g.id) } : g);
 const publicAttempt = ({ wsId, ...x }) => x;
 const publicList = ({ wsId, ...l }) => l;
 const isDate = (v) => v === null || /^\d{4}-\d{2}-\d{2}$/.test(String(v));
@@ -687,6 +698,11 @@ function applyCampaign(c, body, ws, auth) {
   // Only the person who made it decides who can see it.
   if ((body.private !== undefined || body.memberIds !== undefined) && c.ownerId && c.ownerId !== auth.memberId) throw Object.assign(new Error('Only the campaign owner can change who sees it.'), { status: 403 });
   if (body.private !== undefined) c.private = !!body.private;
+  // "In order": goals and tasks are worked one at a time, top to bottom. Owners set it, and can skip or unlock steps.
+  if (body.inOrder !== undefined && !!body.inOrder !== !!c.inOrder) {
+    if (!passesSteps(c, auth)) throw Object.assign(new Error('Only an owner can change whether this campaign is worked in order.'), { status: 403 });
+    c.inOrder = !!body.inOrder;
+  }
   if (body.memberIds !== undefined) c.memberIds = (Array.isArray(body.memberIds) ? body.memberIds : []).filter((id) => ws.members.some((m) => m.id === id) && id !== c.ownerId);
   if (c.end && c.start && c.end < c.start) throw badRequest('The end date is before the start.');
   if (!c.name) throw badRequest('Give it a name.');
@@ -699,14 +715,55 @@ function applyGoal(g, body, c) {
     if (!isDate(body.due || null)) throw badRequest('Bad date');
     g.due = body.due || null;
   }
-  if (body.kind !== undefined) g.kind = body.kind === 'count' ? 'count' : 'tasks';
-  if (body.target !== undefined) g.target = Math.max(1, Math.min(1_000_000, Math.round(Number(body.target)) || 1));
+  if (body.kind !== undefined) g.kind = ['count', 'money'].includes(body.kind) ? body.kind : 'tasks';
+  // A money goal's target is in whole dollars.
+  if (body.target !== undefined) g.target = Math.max(1, Math.min(g.kind === 'money' ? 100_000_000 : 1_000_000, Math.round(Number(String(body.target).replace(/[$,\s]/g, ''))) || 1));
   // A count goal counts the campaign's logged attempts, optionally only these outcomes and methods (empty = all).
   if (body.counts !== undefined) g.counts = Array.isArray(body.counts) ? body.counts.filter((o) => c.outcomes.includes(o)) : null;
   if (body.methods !== undefined) g.methods = Array.isArray(body.methods) ? body.methods.filter((o) => (c.methods || []).includes(o)) : null;
   if (body.order !== undefined) g.order = Number(body.order) || 0;
   if (!g.title) throw badRequest('Give the goal a name.');
   return g;
+}
+
+// ----- campaigns worked in order -----
+// Goals open one at a time, top to bottom: the next waits until the one above is met. Inside a goal each task
+// waits for the one above it. An owner can skip a step (it stops holding up the rest) or unlock one early.
+// The client works this out the same way to grey out what's waiting.
+const passesSteps = (c, auth) => !c.ownerId || c.ownerId === auth.memberId || auth.role === 'owner';
+const goalsInOrder = (c) => Object.values(db.goals).filter((g) => g.campaignId === c.id).sort((a, b) => (a.order || 0) - (b.order || 0) || a.createdAt - b.createdAt);
+const placed = (base) => (a, b) => (a.order != null) !== (b.order != null) ? (a.order != null ? -1 : 1) : a.order != null && a.order !== b.order ? a.order - b.order : base(a, b);
+const tasksInOrder = (g) => Object.values(db.tasks).filter((t) => t.goalId === g.id)
+  .sort(placed((a, b) => ((a.due || '9') < (b.due || '9') ? -1 : (a.due || '9') > (b.due || '9') ? 1 : a.createdAt - b.createdAt)));
+function goalMet(g) {
+  if (g.skipped) return true;
+  if (g.kind === 'count') {
+    const n = Object.values(db.attempts).filter((x) => x.campaignId === g.campaignId && (!g.counts?.length || g.counts.includes(x.outcome)) && (!g.methods?.length || g.methods.includes(x.method))).length;
+    return n >= g.target;
+  }
+  return tasksInOrder(g).every((t) => t.done || t.skipped);
+}
+// The goal it's waiting on, or null when it's open.
+function goalWaitsOn(g) {
+  const c = db.campaigns[g.campaignId];
+  if (!c?.inOrder || g.unlocked) return null;
+  for (const x of goalsInOrder(c)) {
+    if (x.id === g.id) return null;
+    if (!goalMet(x)) return x;
+  }
+  return null;
+}
+// What a task is waiting on (a goal or a task), or null when it can be done.
+function taskWaitsOn(t) {
+  const g = db.goals[t.goalId];
+  if (!g || !db.campaigns[g.campaignId]?.inOrder || t.done || t.unlocked) return null;
+  const wg = goalWaitsOn(g);
+  if (wg) return wg;
+  for (const x of tasksInOrder(g)) {
+    if (x.id === t.id) return null;
+    if (!x.done && !x.skipped) return x;
+  }
+  return null;
 }
 
 // A call list: a spreadsheet of prospects dropped on a campaign. Each logged call can name the row it was for,
@@ -830,10 +887,10 @@ const publicTemplate = ({ wsId, ran, ...t }) => t;
 function snapshotCampaign(c) {
   const rel = (key) => (key && c.start ? daysBetween(c.start, key) : null);
   return {
-    campaign: { brief: c.brief, color: c.color, outcomes: c.outcomes, methods: c.methods, private: c.private, memberIds: c.memberIds, days: c.start && c.end ? daysBetween(c.start, c.end) : null },
+    campaign: { brief: c.brief, color: c.color, outcomes: c.outcomes, methods: c.methods, private: c.private, memberIds: c.memberIds, inOrder: !!c.inOrder, days: c.start && c.end ? daysBetween(c.start, c.end) : null },
     goals: Object.values(db.goals).filter((g) => g.campaignId === c.id).sort((a, b) => (a.order || 0) - (b.order || 0)).map((g) => ({
       title: g.title, kind: g.kind, target: g.target, counts: g.counts, methods: g.methods || null, order: g.order, dueIn: rel(g.due),
-      tasks: Object.values(db.tasks).filter((t) => t.goalId === g.id).sort((a, b) => a.createdAt - b.createdAt).map((t) => ({ text: t.text, priority: t.priority, dueIn: rel(t.due), assigneeId: t.assigneeId || null, report: !!t.report })),
+      tasks: Object.values(db.tasks).filter((t) => t.goalId === g.id).sort((a, b) => a.createdAt - b.createdAt).map((t) => ({ text: t.text, order: t.order ?? null, priority: t.priority, dueIn: rel(t.due), assigneeId: t.assigneeId || null, report: !!t.report })),
     })),
   };
 }
@@ -880,7 +937,7 @@ function runTemplate(tpl, { date, time, by }) {
   const k = tpl.campaign;
   const c = createCampaign(ws, owner, {
     name: `${tpl.name} · ${label}${time ? ' ' + time : ''}`.slice(0, 80), brief: k.brief, color: k.color, outcomes: k.outcomes, methods: k.methods,
-    private: k.private, memberIds: k.memberIds, start: date, end: k.days != null ? addDays(date, k.days) : null, assigneeId: tpl.assigneeId,
+    private: k.private, memberIds: k.memberIds, inOrder: !!k.inOrder, start: date, end: k.days != null ? addDays(date, k.days) : null, assigneeId: tpl.assigneeId,
   }, { templateId: tpl.id, assignedBy: by || null }); // who handed it out: whoever started it, or nobody for a scheduled run
   const due = (n) => (n == null ? null : addDays(date, n));
   for (const sg of tpl.goals) {
@@ -890,7 +947,7 @@ function runTemplate(tpl, { date, time, by }) {
     broadcast(ws.id, { type: 'goal', goal: publicGoal(g) });
     for (const st of sg.tasks) {
       const t = applyTask({ id: rid(), wsId: ws.id, by: owner.member, createdAt: Date.now(), text: '', done: false, doneAt: null, due: null, priority: 0, goalId: g.id, assigneeId: null },
-        { text: st.text, priority: st.priority, due: due(st.dueIn), assigneeId: st.assigneeId, report: st.report });
+        { text: st.text, order: st.order ?? null, priority: st.priority, due: due(st.dueIn), assigneeId: st.assigneeId, report: st.report });
       if (t.assigneeId) t.assignedBy = by || null;
       db.tasks[t.id] = t;
       broadcast(ws.id, { type: 'task', task: publicTask(t) });
@@ -1386,12 +1443,17 @@ function applyBill(b, body) {
   if (body.scope !== undefined) b.scope = body.scope === 'business' ? 'business' : 'personal';
   if (body.autopay !== undefined) b.autopay = !!body.autopay;
   if (body.note !== undefined) b.note = cleanText(body.note, 1000);
+  if (body.category !== undefined) b.category = cleanText(body.category, 40) || 'Bills';
   if (body.tz !== undefined) b.tz = validTz(body.tz);
   return b;
 }
 // Pays the bill due now: it goes into the history and the next due date comes up.
 function payBill(b, by, auto) {
-  b.paid = [{ due: b.due, at: Date.now(), amount: b.amount, by, auto: !!auto }, ...(b.paid || [])].slice(0, BILL_HISTORY);
+  // Paid shows in Finance as money out, on the day it was paid (autopay pays on the due date).
+  const x = { id: rid(), wsId: b.wsId, memberId: b.memberId, by, createdAt: Date.now(), kind: 'out', amount: b.amount, day: auto ? b.due : localNow(b.tz || validTz(), Date.now()).date, category: b.category || 'Bills', note: b.name, scope: b.scope, campaignId: null, goalId: null, billId: b.id };
+  db.money[x.id] = x;
+  moneyNews(x);
+  b.paid = [{ due: b.due, at: Date.now(), amount: b.amount, by, auto: !!auto, moneyId: x.id }, ...(b.paid || [])].slice(0, BILL_HISTORY);
   const next = nextDue(b, b.due);
   if (next) b.due = next;
   else b.done = true;
@@ -1412,6 +1474,58 @@ function runAutopay() {
   }
 }
 
+// ---------- finance: money in and out, budgets, and money goals on campaigns ----------
+// Entries are seen like bills: personal ones by their owner only, business ones by the team's owners too.
+// Tagging one to a campaign counts it as that campaign's cost (out) or earnings (in); tagging it to a money
+// goal fills that goal. Budgets are a monthly limit per spending category, personal or business.
+const MONEY_IMPORT = 2000;
+const publicMoney = ({ wsId, key, ...x }) => x;
+const publicBudget = ({ wsId, ...x }) => x;
+const cents = (v, what = 'the amount') => {
+  const n = Math.round(Number(String(v ?? '').replace(/[$,\s]/g, '')) * 100);
+  if (!Number.isFinite(n) || n <= 0 || n > 1e11) throw badRequest(`Enter ${what}, like 142.50`);
+  return n;
+};
+// What changing an entry touches: its goal's progress and its campaign's totals.
+function moneyTouches(x, ws) {
+  const g = x.goalId && db.goals[x.goalId];
+  if (g) broadcast(x.wsId, { type: 'goal', goal: publicGoal(g) });
+  const c = x.campaignId && db.campaigns[x.campaignId];
+  if (c) broadcast(x.wsId, { type: 'campaign', campaign: publicCampaign(c) });
+}
+function moneyNews(x) {
+  broadcast(x.wsId, { type: 'money', money: publicMoney(x), bill: x });
+  moneyTouches(x);
+}
+function dropMoney(x) {
+  delete db.money[x.id];
+  broadcast(x.wsId, { type: 'money:remove', id: x.id, bill: x });
+  moneyTouches(x);
+}
+function applyMoney(x, body, auth) {
+  if (body.kind !== undefined) x.kind = body.kind === 'in' ? 'in' : 'out';
+  if (body.amount !== undefined) x.amount = cents(body.amount);
+  if (body.day !== undefined) {
+    x.day = validDay(body.day);
+    if (!x.day) throw badRequest('Pick the date.');
+  }
+  if (body.category !== undefined) x.category = cleanText(body.category, 40);
+  if (body.note !== undefined) x.note = cleanText(body.note, 200);
+  if (body.scope !== undefined) x.scope = body.scope === 'business' && auth.role === 'owner' ? 'business' : 'personal';
+  // A money goal brings its campaign with it. Either has to be one you can see.
+  if (body.goalId !== undefined || body.campaignId !== undefined) {
+    const g = body.goalId && db.goals[body.goalId];
+    const c = db.campaigns[g ? g.campaignId : body.campaignId];
+    const ok = c && c.wsId === auth.ws.id && canSee(auth, 'campaign', c);
+    x.goalId = ok && g?.kind === 'money' ? g.id : null;
+    x.campaignId = ok ? c.id : null;
+  }
+  return x;
+}
+const newMoney = (auth) => ({ id: rid(), wsId: auth.ws.id, memberId: auth.memberId, by: auth.member, createdAt: Date.now(), kind: 'out', amount: 0, day: null, category: '', note: '', scope: 'personal', campaignId: null, goalId: null, billId: null });
+// Rows from a bank statement come in once: the same day, amount and description from the same person is skipped.
+const moneyKey = (x) => crypto.createHash('sha256').update([x.memberId, x.scope, x.day, x.kind, x.amount, x.note.toLowerCase()].join('|')).digest('base64url').slice(0, 22);
+const sameBudget = (a, b) => a.wsId === b.wsId && a.scope === b.scope && sameText(a.category, b.category) && (a.scope === 'business' || a.memberId === b.memberId);
 // ---------- planner: work out the goal and what it needs before it becomes a campaign ----------
 // A plan is its maker's own: the end goal, the steps to it (each with its tasks), and what's needed
 // to start: a thing in Column, PSS leads, a pasted list, or just a note to tick off. Making it a
@@ -1516,7 +1630,14 @@ function publicSend(x) {
     problems: x.to.filter((r) => r.status === 'failed' || r.status === 'skipped').slice(0, 50).map((r) => ({ email: r.email, name: r.name, why: r.error })),
   };
 }
-const sendNews = (x) => broadcast(x.wsId, { type: 'send', send: publicSend(x), forOwners: true });
+// Owners see every send; a member who sent one sees their own.
+function sendNews(x) {
+  broadcast(x.wsId, { type: 'send', send: publicSend(x), forOwners: true });
+  if (!isOwnerId(x.wsId, x.memberId)) broadcast(x.wsId, { type: 'send', send: publicSend(x), forMember: x.memberId });
+}
+// A member's own campaigns: ones they made, run, are invited to, or have a task in.
+const onCampaign = (c, memberId) => c.ownerId === memberId || c.assigneeId === memberId || (c.memberIds || []).includes(memberId)
+  || Object.values(db.tasks).some((t) => t.assigneeId === memberId && campaignOf('task', t) === c.id);
 function sendFinish(x) {
   x.status = 'done';
   x.doneAt = Date.now();
@@ -1919,6 +2040,8 @@ async function api(req, res, url) {
       lists: Object.values(db.lists).filter((l) => l.wsId === ws.id && canSee(auth, 'list', l)).map(publicList),
       templates: Object.values(db.templates).filter((t) => t.wsId === ws.id && seesTemplate(t, auth.memberId)).map(publicTemplate),
       bills: Object.values(db.bills).filter((x) => x.wsId === ws.id && seesBill(ws.id, x, auth.memberId)).map(publicBill),
+      money: Object.values(db.money).filter((x) => x.wsId === ws.id && seesBill(ws.id, x, auth.memberId)).map(publicMoney),
+      budgets: Object.values(db.budgets).filter((x) => x.wsId === ws.id && seesBill(ws.id, x, auth.memberId)).map(publicBudget),
       version: clientVersion(),
     });
   }
@@ -1966,7 +2089,14 @@ async function api(req, res, url) {
     const t = b && db.tasks[b];
     if (!t || t.wsId !== ws.id || !canSee(auth, 'task', t)) return send(res, 404, { error: 'Not found' });
     if (m === 'PATCH') {
-      const next = applyTask({ ...t }, await readJson(req, 50_000));
+      const body = await readJson(req, 50_000);
+      const camp = db.campaigns[db.goals[t.goalId]?.campaignId];
+      if ((body.skipped !== undefined || body.unlocked !== undefined) && !(camp && passesSteps(camp, auth))) return send(res, 403, { error: 'Only an owner can skip or unlock a step.' });
+      const waits = body.done && !t.done && camp && !passesSteps(camp, auth) && taskWaitsOn(t);
+      if (waits) return send(res, 409, { error: `This campaign is worked in order. Finish “${waits.title || waits.text}” first.` });
+      const next = applyTask({ ...t }, body);
+      if (body.skipped !== undefined) next.skipped = !!body.skipped;
+      if (body.unlocked !== undefined) next.unlocked = !!body.unlocked;
       if (!canSee(auth, 'task', next)) return send(res, 404, { error: 'Goal not found' });
       // Who handed it over, so the new assignee can be told.
       if (next.assigneeId !== t.assigneeId) next.assignedBy = next.assigneeId ? auth.memberId : null;
@@ -2161,6 +2291,7 @@ async function api(req, res, url) {
         const last = x.paid?.[0];
         if (!last) return send(res, 400, { error: 'Nothing to undo.' });
         x.paid.shift();
+        if (db.money[last.moneyId]) dropMoney(db.money[last.moneyId]);
         x.due = last.due;
         x.done = false;
       } else if (x.done) return send(res, 400, { error: 'That bill is already paid.' });
@@ -2174,6 +2305,84 @@ async function api(req, res, url) {
     save();
     billNews(x);
     return send(res, 200, publicBill(x));
+  }
+
+  // Finance: money in and out, yours and (for owners) the business's.
+  if (a === 'money') {
+    if (m === 'POST' && b === 'import') {
+      const body = await readJson(req, 2_000_000);
+      const rows = Array.isArray(body.rows) ? body.rows.slice(0, MONEY_IMPORT) : [];
+      if (!rows.length) return send(res, 400, { error: 'There’s nothing to import.' });
+      const scope = body.scope === 'business' && auth.role === 'owner' ? 'business' : 'personal';
+      const have = new Set(Object.values(db.money).filter((x) => x.wsId === ws.id && x.key).map((x) => x.key));
+      const added = [];
+      let skipped = 0;
+      for (const r of rows) {
+        const n = Number(String(r?.amount ?? '').replace(/[$,\s]/g, ''));
+        const day = validDay(r?.day);
+        if (!day || !Number.isFinite(n) || !n) { skipped++; continue; }
+        const x = { ...newMoney(auth), kind: n > 0 ? 'in' : 'out', day, scope, note: cleanText(r.note, 200), category: cleanText(r.category, 40) };
+        x.amount = Math.min(1e11, Math.round(Math.abs(n) * 100));
+        x.key = moneyKey(x);
+        if (have.has(x.key)) { skipped++; continue; }
+        have.add(x.key);
+        db.money[x.id] = x;
+        added.push(x);
+      }
+      save();
+      for (const x of added) broadcast(ws.id, { type: 'money', money: publicMoney(x), bill: x });
+      return send(res, 200, { added: added.length, skipped, entries: added.map(publicMoney) });
+    }
+    if (m === 'POST' && !b) {
+      const x = applyMoney(newMoney(auth), { kind: 'out', ...(await readJson(req, 20_000)) }, auth);
+      if (!x.amount) return send(res, 400, { error: 'Enter the amount, like 142.50' });
+      if (!x.day) return send(res, 400, { error: 'Pick the date.' });
+      db.money[x.id] = x;
+      save();
+      moneyNews(x);
+      return send(res, 200, publicMoney(x));
+    }
+    const x = b && db.money[b];
+    if (!x || x.wsId !== ws.id || !seesBill(ws.id, x, auth.memberId)) return send(res, 404, { error: 'Not found' });
+    if (m === 'PATCH') {
+      const body = await readJson(req, 20_000);
+      if (body.scope !== undefined && x.memberId !== auth.memberId) delete body.scope;
+      const was = { ...x };
+      applyMoney(x, body, auth);
+      save();
+      if (was.goalId !== x.goalId || was.campaignId !== x.campaignId) moneyTouches(was);
+      moneyNews(x);
+      return send(res, 200, publicMoney(x));
+    }
+    if (m === 'DELETE') {
+      dropMoney(x);
+      save();
+      return send(res, 200, { ok: true });
+    }
+    return send(res, 405, { error: 'Method not allowed' });
+  }
+
+  // A monthly budget for one spending category. A limit of 0 removes it.
+  if (a === 'budgets' && m === 'PUT') {
+    const body = await readJson(req, 20_000);
+    const want = { wsId: ws.id, memberId: auth.memberId, scope: body.scope === 'business' && auth.role === 'owner' ? 'business' : 'personal', category: cleanText(body.category, 40) };
+    if (!want.category) return send(res, 400, { error: 'Pick a category.' });
+    const old = Object.values(db.budgets).find((x) => sameBudget(x, want));
+    const limit = Math.round(Number(String(body.limit ?? '').replace(/[$,\s]/g, '')) * 100) || 0;
+    if (limit <= 0) {
+      if (old) {
+        delete db.budgets[old.id];
+        broadcast(ws.id, { type: 'budget:remove', id: old.id, bill: old });
+      }
+      save();
+      return send(res, 200, { ok: true });
+    }
+    const x = old || { id: rid(), ...want, by: auth.member };
+    x.limit = Math.min(1e11, limit);
+    db.budgets[x.id] = x;
+    save();
+    broadcast(ws.id, { type: 'budget', budget: publicBudget(x), bill: x });
+    return send(res, 200, publicBudget(x));
   }
 
   // Plans: only yours.
@@ -2207,14 +2416,18 @@ async function api(req, res, url) {
 
   // Campaign email from your own Outlook. Owners only, since it reaches the PSS contacts.
   if (a === 'mail') {
-    if (auth.role !== 'owner') return send(res, 403, { error: 'Only team owners can send campaign email.' });
+    // Owners, and members when an owner allows it in Settings. Members email only rows of lists in their own
+    // campaigns, with the team's footer, and see only their own sends.
+    const owner = auth.role === 'owner';
+    if (!owner && !ws.settings.memberEmail) return send(res, 403, { error: 'Only team owners can send campaign email. An owner can let members send it in Settings.' });
     const conn = mailConn(ws.id, auth.memberId);
     const body = m === 'GET' ? {} : await readJson(req, 2_000_000);
     if (m === 'GET' && !b) {
-      const sends = Object.values(db.sends).filter((x) => x.wsId === ws.id).sort((p, q) => q.createdAt - p.createdAt).slice(0, MAIL_KEEP).map(publicSend);
+      const sends = Object.values(db.sends).filter((x) => x.wsId === ws.id && (owner || x.memberId === auth.memberId)).sort((p, q) => q.createdAt - p.createdAt).slice(0, MAIL_KEEP).map(publicSend);
       return send(res, 200, { from: conn?.account || null, canConnect: calProviders.microsoft.configured(), footer: ws.mailFooter || '', pss: !!db.pss[ws.id], sends });
     }
     if (m === 'PUT' && b === 'footer') {
+      if (!owner) return send(res, 403, { error: 'Only team owners can change the footer.' });
       ws.mailFooter = mailFooter(body.footer);
       save();
       return send(res, 200, { footer: ws.mailFooter });
@@ -2225,7 +2438,8 @@ async function api(req, res, url) {
       if (!conn) return send(res, 400, { error: 'Connect Outlook to send from it first.' });
       if (!subject) return send(res, 400, { error: 'Add a subject.' });
       if (!text.trim()) return send(res, 400, { error: 'Write the message.' });
-      const footer = mailFooter(body.footer ?? ws.mailFooter);
+      const footer = owner ? mailFooter(body.footer ?? ws.mailFooter) : ws.mailFooter || '';
+      if (!owner && !footer.trim()) return send(res, 400, { error: 'An owner needs to add the team’s footer (business and mailing address) first.' });
       if (footer !== ws.mailFooter) ws.mailFooter = footer;
       // A test comes to you, merged with the first person's name, with a placeholder unsubscribe link.
       if (b === 'test') {
@@ -2255,6 +2469,7 @@ async function api(req, res, url) {
         const l = r?.listId && db.lists[r.listId];
         const row = l && l.wsId === ws.id && canSee(auth, 'list', l) ? l.rows.find((y) => y.id === r.rowId && y.cells.some((v) => v.trim().toLowerCase() === email)) : null;
         const lead = leads.get(r?.leadId);
+        if (!owner && !(row && onCampaign(db.campaigns[l.campaignId] || {}, auth.memberId))) continue;
         seen.add(email);
         if (no.has(email) || row?.dne || lead?.dne) continue;
         to.push({
@@ -2262,7 +2477,7 @@ async function api(req, res, url) {
           listId: row ? l.id : null, rowId: row ? row.id : null, leadId: lead && lead.email.toLowerCase() === email ? lead.id : row?.leadId || null, status: 'queued',
         });
       }
-      if (!to.length) return send(res, 400, { error: 'Nobody here can be emailed.' });
+      if (!to.length) return send(res, 400, { error: owner ? 'Nobody here can be emailed.' : 'Nobody here can be emailed. Members can email people on lists in their own campaigns.' });
       if (to.length > MAIL_MAX) return send(res, 400, { error: `Send to up to ${MAIL_MAX} people at a time.` });
       const links = await unsubLinks(ws.id, to.map((r) => r.email));
       for (const r of to) r.unsub = links[r.email] || null;
@@ -2277,7 +2492,7 @@ async function api(req, res, url) {
       return send(res, 200, publicSend(x));
     }
     const x = b === 'sends' && c && db.sends[c];
-    if (!x || x.wsId !== ws.id) return send(res, 404, { error: 'Not found' });
+    if (!x || x.wsId !== ws.id || (!owner && x.memberId !== auth.memberId)) return send(res, 404, { error: 'Not found' });
     if (m === 'POST' && d === 'stop' && (x.status === 'sending' || x.status === 'paused')) {
       for (const r of x.to) if (r.status === 'queued') r.status = 'stopped';
       x.status = 'stopped';
@@ -2294,6 +2509,7 @@ async function api(req, res, url) {
       delete db.sends[x.id];
       save();
       broadcast(ws.id, { type: 'send:remove', id: x.id, forOwners: true });
+      if (!isOwnerId(ws.id, x.memberId)) broadcast(ws.id, { type: 'send:remove', id: x.id, forMember: x.memberId });
       return send(res, 200, { ok: true });
     } else return send(res, 400, { error: 'That can’t be done now.' });
     save();
@@ -2428,7 +2644,12 @@ async function api(req, res, url) {
     const g = b && db.goals[b];
     if (!g || g.wsId !== ws.id || !canSee(auth, 'goal', g)) return send(res, 404, { error: 'Not found' });
     if (m === 'PATCH') {
-      const next = applyGoal({ ...g }, await readJson(req, 50_000), db.campaigns[g.campaignId]);
+      const body = await readJson(req, 50_000);
+      const camp = db.campaigns[g.campaignId];
+      if ((body.skipped !== undefined || body.unlocked !== undefined) && !passesSteps(camp, auth)) return send(res, 403, { error: 'Only an owner can skip or unlock a step.' });
+      const next = applyGoal({ ...g }, body, camp);
+      if (body.skipped !== undefined) next.skipped = !!body.skipped;
+      if (body.unlocked !== undefined) next.unlocked = !!body.unlocked;
       db.goals[g.id] = next;
       save();
       broadcast(ws.id, { type: 'goal', goal: publicGoal(next) });
@@ -2659,6 +2880,10 @@ async function api(req, res, url) {
   if (a === 'workspace' && m === 'PATCH') {
     const body = await readJson(req);
     if (body.expireHours !== undefined) ws.settings.expireHours = Math.max(0, Number(body.expireHours) || 0);
+    if (body.memberEmail !== undefined) {
+      if (auth.role !== 'owner') return send(res, 403, { error: 'Only team owners can change who sends campaign email.' });
+      ws.settings.memberEmail = !!body.memberEmail;
+    }
     save();
     broadcast(ws.id, { type: 'workspace' });
     return send(res, 200, publicWorkspace(ws, auth.memberId));
