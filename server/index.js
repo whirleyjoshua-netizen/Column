@@ -26,7 +26,7 @@ const PUBLIC_URL = (process.env.PUBLIC_URL || `http://localhost:${PORT}`).replac
 fs.mkdirSync(FILES_DIR, { recursive: true });
 
 // ---------- persistence (a JSON file is plenty for personal/small-team use) ----------
-let db = { workspaces: {}, tokens: {}, items: {}, entries: {}, tasks: {}, uploads: {}, campaigns: {}, goals: {}, attempts: {}, lists: {}, templates: {}, calendars: {}, ai: {}, pss: {}, sends: {}, bills: {}, meetings: {}, money: {}, budgets: {}, plans: {} };
+let db = { workspaces: {}, tokens: {}, items: {}, entries: {}, tasks: {}, uploads: {}, campaigns: {}, goals: {}, attempts: {}, lists: {}, templates: {}, calendars: {}, ai: {}, pss: {}, sends: {}, bills: {}, meetings: {}, money: {}, budgets: {}, plans: {}, vaults: {}, vaultItems: {} };
 try {
   db = { ...db, ...JSON.parse(fs.readFileSync(DB_PATH, 'utf8')) };
 } catch {}
@@ -1526,6 +1526,28 @@ const newMoney = (auth) => ({ id: rid(), wsId: auth.ws.id, memberId: auth.member
 // Rows from a bank statement come in once: the same day, amount and description from the same person is skipped.
 const moneyKey = (x) => crypto.createHash('sha256').update([x.memberId, x.scope, x.day, x.kind, x.amount, x.note.toLowerCase()].join('|')).digest('base64url').slice(0, 22);
 const sameBudget = (a, b) => a.wsId === b.wsId && a.scope === b.scope && sameText(a.category, b.category) && (a.scope === 'business' || a.memberId === b.memberId);
+// ---------- vault: each person's safe box, locked in their own browser ----------
+// Everything is encrypted and decrypted on the person's device with a key made from their vault passphrase,
+// which never reaches the server. The server keeps the salt, a check value (a known text encrypted with
+// that key, so a wrong passphrase can be told apart), and each item's encrypted blob. Links to a campaign
+// or contact are kept readable so the campaign can show a lock; what's in the item isn't.
+// Lose the passphrase and the contents are gone: starting over deletes them.
+const VAULT_ITEMS = 1000;
+const B64 = /^[\w-]+$/;
+const vaultKey = (wsId, memberId) => `${wsId}:${memberId}`;
+const publicVaultItem = ({ wsId, memberId, ...x }) => x;
+function vaultBlob(v, max) {
+  const t = String(v || '');
+  if (!t || t.length > max || !B64.test(t)) throw badRequest('That doesn’t look encrypted.');
+  return t;
+}
+function vaultLink(v, ws) {
+  if (!v || typeof v !== 'object') return null;
+  if (v.type === 'campaign' && db.campaigns[v.id]?.wsId === ws.id) return { type: 'campaign', id: v.id };
+  if (v.type === 'contact' && typeof v.id === 'string' && v.id.length <= 60) return { type: 'contact', id: v.id };
+  return null;
+}
+
 // ---------- planner: work out the goal and what it needs before it becomes a campaign ----------
 // A plan is its maker's own: the end goal, the steps to it (each with its tasks), and what's needed
 // to start: a thing in Column, PSS leads, a pasted list, or just a note to tick off. Making it a
@@ -2383,6 +2405,52 @@ async function api(req, res, url) {
     save();
     broadcast(ws.id, { type: 'budget', budget: publicBudget(x), bill: x });
     return send(res, 200, publicBudget(x));
+  }
+
+  // Your vault: only ever encrypted blobs. Nobody else, owners included, can reach it.
+  if (a === 'vault') {
+    const key = vaultKey(ws.id, auth.memberId);
+    const mine = () => Object.values(db.vaultItems).filter((x) => x.wsId === ws.id && x.memberId === auth.memberId);
+    const v = db.vaults[key];
+    if (m === 'GET' && !b) return send(res, 200, v ? { salt: v.salt, iters: v.iters, check: v.check, items: mine().map(publicVaultItem) } : { salt: null });
+    // Set up, or start over with a new passphrase (which deletes everything in it).
+    if (m === 'POST' && b === 'setup') {
+      const body = await readJson(req, 10_000);
+      if (v && !body.reset) return send(res, 409, { error: 'Your vault is already set up.' });
+      const iters = Math.round(Number(body.iters));
+      if (!(iters >= 100_000 && iters <= 10_000_000)) return send(res, 400, { error: 'Bad key settings.' });
+      const next = { wsId: ws.id, memberId: auth.memberId, salt: vaultBlob(body.salt, 64), iters, check: vaultBlob(body.check, 200), createdAt: Date.now() };
+      for (const x of mine()) delete db.vaultItems[x.id];
+      db.vaults[key] = next;
+      save();
+      broadcast(ws.id, { type: 'vault', forMember: auth.memberId });
+      return send(res, 200, { salt: next.salt, iters, check: next.check, items: [] });
+    }
+    if (!v) return send(res, 400, { error: 'Set up your vault first.' });
+    if (b === 'items') {
+      if (m === 'POST' && !c) {
+        if (mine().length >= VAULT_ITEMS) return send(res, 400, { error: `A vault holds up to ${VAULT_ITEMS} items.` });
+        const body = await readJson(req, 200_000);
+        const x = { id: rid(), wsId: ws.id, memberId: auth.memberId, blob: vaultBlob(body.blob, 150_000), link: vaultLink(body.link, ws), createdAt: Date.now(), updatedAt: Date.now() };
+        db.vaultItems[x.id] = x;
+        save();
+        broadcast(ws.id, { type: 'vault', forMember: auth.memberId });
+        return send(res, 200, publicVaultItem(x));
+      }
+      const x = c && db.vaultItems[c];
+      if (!x || x.wsId !== ws.id || x.memberId !== auth.memberId) return send(res, 404, { error: 'Not found' });
+      if (m === 'PATCH') {
+        const body = await readJson(req, 200_000);
+        if (body.blob !== undefined) x.blob = vaultBlob(body.blob, 150_000);
+        if (body.link !== undefined) x.link = vaultLink(body.link, ws);
+        x.updatedAt = Date.now();
+      } else if (m === 'DELETE') delete db.vaultItems[x.id];
+      else return send(res, 405, { error: 'Method not allowed' });
+      save();
+      broadcast(ws.id, { type: 'vault', forMember: auth.memberId });
+      return send(res, 200, m === 'DELETE' ? { ok: true } : publicVaultItem(x));
+    }
+    return send(res, 405, { error: 'Method not allowed' });
   }
 
   // Plans: only yours.
@@ -3252,9 +3320,11 @@ function serveStatic(req, res, url) {
   if (rel === '/' || !path.extname(rel)) rel = '/index.html';
   const file = path.join(CLIENT_DIR, rel);
   if (!file.startsWith(CLIENT_DIR + path.sep)) return send(res, 403, 'Forbidden');
+  // Only Column's own script runs on its pages: markup that slips in from a file or message can't run code.
+  const csp = path.extname(file) === '.html' ? { 'Content-Security-Policy': "script-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'" } : {};
   fs.readFile(file, (err, data) => {
     if (err) return send(res, 404, 'Not found');
-    send(res, 200, data, { 'Content-Type': MIME[path.extname(file)] || 'application/octet-stream', 'Cache-Control': 'no-cache' });
+    send(res, 200, data, { 'Content-Type': MIME[path.extname(file)] || 'application/octet-stream', 'Cache-Control': 'no-cache', ...csp });
   });
 }
 

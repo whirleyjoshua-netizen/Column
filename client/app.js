@@ -271,6 +271,9 @@
   });
 
   function signOutLocal() {
+    vaultLock();
+    VK.meta = undefined;
+    VK.raw = [];
     S.token = null;
     store.del('token');
     try {
@@ -400,6 +403,8 @@
       if (msg.meeting?.status === 'ready' && was?.status !== 'ready') toast('Meeting notes are ready', { label: 'Review', run: () => meetingSheet(msg.meeting) });
       renderRec();
       renderTool();
+    } else if (msg.type === 'vault') {
+      loadVault();
     } else if (msg.type === 'plan' || msg.type === 'plan:remove') {
       if (msg.plan && msg.plan.id === PL.dirty) return;
       S.plans = (S.plans || []).filter((x) => x.id !== (msg.plan?.id || msg.id));
@@ -513,6 +518,7 @@
     S.budgets = st.budgets || [];
     api('GET', '/meetings').then((x) => { S.meetings = x; renderRec(); }).catch(() => {});
     api('GET', '/plans').then((x) => { S.plans = x; renderTool(); }).catch(() => {});
+    loadVault();
     loadPss();
     S.panes = S.panes.map((v) => (v.startsWith('stack:') && !stackById(v.slice(6)) ? 'files' : v));
     $('#wsName').textContent = S.workspace.name;
@@ -3043,7 +3049,8 @@
         st ? h('button', { class: 'btn small', title: 'Open a file, add one, or go to the stack', onclick: (e) => filesMenu(e.currentTarget, c) }, `Files · ${files} ▾`) : null,
         st ? h('button', { class: 'btn small', title: 'Jot a quick note, or open one', onclick: (e) => notesMenu(e.currentTarget, c) }, `Notes · ${notes} ▾`) : null,
         h('button', { class: 'btn small' + (K.logOpen === c.id ? ' on' : ''), onclick: () => openLog(c) }, 'Log'),
-        h('button', { class: 'btn small', onclick: () => openReport(c) }, 'Write a report')),
+        h('button', { class: 'btn small', onclick: () => openReport(c) }, 'Write a report'),
+        vaultLinked('campaign', c.id) ? h('button', { class: 'btn small', title: 'In your vault', onclick: () => openVaultFor('campaign', c.id) }, h('span', { class: 'vault-ic', html: I.lock }), `Vault · ${vaultLinked('campaign', c.id)}`) : null),
       sendBars(c),
       h('div', { class: 'any-h camp-goals-h' }, 'Log'),
       logBox(c),
@@ -5242,7 +5249,8 @@
         cb.addEventListener('change', () => { if (cb.checked) CT.picked.add(x.id); else CT.picked.delete(x.id); act(); });
         return h('div', { class: 'contact contact-row' }, cb,
           h('div', { class: 'contact-main' },
-            h('div', { class: 'contact-top' }, h('b', {}, x.name || '—'), h('span', { class: 'lead-stage' }, stageLabel(x.stage))),
+            h('div', { class: 'contact-top' }, h('b', {}, x.name || '—'), h('span', { class: 'lead-stage' }, stageLabel(x.stage)),
+              vaultLinked('contact', x.id) ? h('button', { class: 'link vault-tag', title: 'In your vault', onclick: () => openVaultFor('contact', x.id) }, h('span', { class: 'vault-ic', html: I.lock }), vaultLinked('contact', x.id)) : null),
             h('small', {}, [x.address, x.city, x.source, x.assignedTo ? '→ ' + x.assignedTo : ''].filter(Boolean).join(' · ')),
             h('small', { class: 'contact-reach' },
               x.phone ? h('a', { href: 'tel:' + x.phone.replace(/[^\d+]/g, '') }, x.phone) : null,
@@ -5303,7 +5311,7 @@
   }
 
   // ---------- tools: small apps that open in a drawer, so the tabs stay as they are ----------
-  const TOOLS = { bills: { name: 'Finance', render: financeTool }, contacts: { name: 'Contacts', render: contactsTool }, email: { name: 'Email', render: emailTool }, meetings: { name: 'Meeting notes', render: meetingsTool }, planner: { name: 'Planner', render: plannerTool } };
+  const TOOLS = { bills: { name: 'Finance', render: financeTool }, contacts: { name: 'Contacts', render: contactsTool }, email: { name: 'Email', render: emailTool }, meetings: { name: 'Meeting notes', render: meetingsTool }, planner: { name: 'Planner', render: plannerTool }, vault: { name: 'Vault', render: vaultTool } };
   let toolOpen = null;
   $('#toolsBtn').addEventListener('click', (e) => {
     const soon = billsSoon().length;
@@ -5315,6 +5323,7 @@
       mayEmail() ? { label: h('span', { class: 'tool-item' }, 'Email', (S.mail?.sends || []).some((x) => x.status === 'sending') ? h('small', {}, 'sending…') : null), on: toolOpen === 'email', run: () => openTool('email') } : null,
       { label: 'Meeting notes', on: toolOpen === 'meetings', run: () => openTool('meetings') },
       { label: 'Planner', on: toolOpen === 'planner', run: () => openTool('planner') },
+      { label: h('span', { class: 'tool-item' }, 'Vault', VK.key ? h('small', {}, 'unlocked') : null), on: toolOpen === 'vault', run: () => { VK.filter = null; openTool('vault'); } },
     ].filter(Boolean));
   });
   function openTool(name) {
@@ -5334,6 +5343,285 @@
     const keep = el.scrollTop;
     el.replaceChildren(h('h2', {}, TOOLS[toolOpen].name, h('button', { class: 'icon-btn', html: I.close, 'aria-label': 'Close', onclick: closeTool })), ...TOOLS[toolOpen].render().filter(Boolean));
     el.scrollTop = keep;
+  }
+
+  // ----- vault: a safe box locked with your own passphrase -----
+  // Items are encrypted here, in the browser (AES-GCM, with a key made from the passphrase by PBKDF2), and
+  // only the encrypted blobs go to the server. The key lives in memory while it's unlocked: locking, five
+  // idle minutes, a minute in the background or signing out forgets it, and everything decrypted with it.
+  const VAULT_ITERS = 600_000;
+  const VAULT_IDLE = 5 * 60_000;
+  const VAULT_CHECK = 'column-vault';
+  const VK = { meta: undefined, raw: [], key: null, items: null, at: 0, hid: null, q: '', filter: null };
+  const VAULT_KINDS = {
+    login: ['Login', [['site', 'Website'], ['user', 'Username'], ['secret', 'Password', true]]],
+    code: ['Code', [['code', 'Code', true], ['where', 'What it opens, or where']]],
+    number: ['Account number', [['number', 'Number', true], ['extra', 'Routing or other number', true]]],
+    key: ['Secret key', [['secret', 'Key', true]]],
+    note: ['Private note', []],
+  };
+  const b64u = (u8) => btoa(String.fromCharCode(...u8)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  const unb64u = (s) => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/')), (ch) => ch.charCodeAt(0));
+  async function vaultDerive(pass, salt, iters) {
+    const base = await crypto.subtle.importKey('raw', new TextEncoder().encode(pass), 'PBKDF2', false, ['deriveKey']);
+    return crypto.subtle.deriveKey({ name: 'PBKDF2', salt: unb64u(salt), iterations: iters, hash: 'SHA-256' }, base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+  }
+  async function vaultSeal(key, value) {
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, new TextEncoder().encode(JSON.stringify(value))));
+    const out = new Uint8Array(12 + ct.length);
+    out.set(iv);
+    out.set(ct, 12);
+    // Chunks keep String.fromCharCode under the argument limit for big notes.
+    let s = '';
+    for (let i = 0; i < out.length; i += 0x8000) s += String.fromCharCode(...out.subarray(i, i + 0x8000));
+    return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  }
+  async function vaultOpen(key, blob) {
+    const b = unb64u(blob);
+    const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: b.subarray(0, 12) }, key, b.subarray(12));
+    return JSON.parse(new TextDecoder().decode(pt));
+  }
+  async function loadVault() {
+    try {
+      const v = await api('GET', '/vault');
+      VK.meta = v.salt ? { salt: v.salt, iters: v.iters, check: v.check } : null;
+      VK.raw = v.items || [];
+      if (VK.key) await vaultDecryptAll();
+    } catch {}
+    renderCamps();
+    renderTool();
+  }
+  async function vaultDecryptAll() {
+    const out = [];
+    for (const x of VK.raw) {
+      try {
+        out.push({ id: x.id, link: x.link, updatedAt: x.updatedAt, ...(await vaultOpen(VK.key, x.blob)) });
+      } catch {
+        out.push({ id: x.id, link: x.link, updatedAt: x.updatedAt, kind: 'note', title: 'Can’t be opened', broken: true });
+      }
+    }
+    VK.items = out;
+  }
+  async function vaultUnlock(pass) {
+    const key = await vaultDerive(pass, VK.meta.salt, VK.meta.iters);
+    try {
+      if ((await vaultOpen(key, VK.meta.check)) !== VAULT_CHECK) throw new Error();
+    } catch {
+      throw new Error('That’s not the passphrase.');
+    }
+    VK.key = key;
+    vaultTouch();
+    await vaultDecryptAll();
+  }
+  function vaultLock() {
+    if (!VK.key && !VK.items) return;
+    VK.key = null;
+    VK.items = null;
+    if ($('#sheet .vault-item')) closeSheet();
+    // The drawer won't redraw under someone typing, so take the focus out first: locked has to hide it.
+    if ($('#tool').contains(document.activeElement)) document.activeElement.blur();
+    renderTool();
+  }
+  function vaultTouch() {
+    VK.at = Date.now();
+  }
+  setInterval(() => VK.key && Date.now() - VK.at > VAULT_IDLE && vaultLock(), 15_000);
+  for (const ev of ['pointerdown', 'keydown']) document.addEventListener(ev, () => VK.key && vaultTouch(), true);
+  document.addEventListener('visibilitychange', () => {
+    clearTimeout(VK.hid);
+    if (document.hidden && VK.key) VK.hid = setTimeout(vaultLock, 60_000);
+  });
+  const vaultLinked = (type, id) => VK.raw.filter((x) => x.link?.type === type && x.link.id === id).length;
+  function openVaultFor(type, id) {
+    VK.filter = { type, id };
+    openTool('vault');
+  }
+  const vaultLinkName = (l) => (!l ? '' : l.type === 'campaign' ? campById(l.id)?.name || 'Campaign' : (S.contacts || []).find((x) => x.id === l.id)?.name || 'Contact');
+
+  function vaultTool() {
+    if (VK.meta === undefined) {
+      loadVault();
+      return [h('p', { class: 'day-hint' }, 'Opening…')];
+    }
+    if (!VK.meta) return vaultSetup(false);
+    if (!VK.key) return vaultLocked();
+    const q = h('input', { type: 'search', value: VK.q, placeholder: 'Search the vault', 'aria-label': 'Search the vault' });
+    const box = h('div', { class: 'vault-list' });
+    const show = () => {
+      VK.q = q.value;
+      const n = q.value.trim().toLowerCase();
+      const f = VK.filter;
+      const hits = VK.items
+        .filter((x) => !f || (x.link?.type === f.type && x.link.id === f.id))
+        .filter((x) => !n || [x.title, x.site, x.user, x.where, vaultLinkName(x.link)].some((v) => (v || '').toLowerCase().includes(n)))
+        .sort((a, b) => (a.title || '').localeCompare(b.title || ''));
+      box.replaceChildren(...(hits.length ? hits.map(vaultRow) : [h('p', { class: 'day-hint' }, VK.items.length ? 'Nothing matches.' : 'Nothing in here yet. Add a gate code, an account number, a key…')]));
+    };
+    q.addEventListener('input', show);
+    show();
+    return [
+      h('div', { class: 'vault-bar' }, q,
+        h('button', { class: 'btn small', onclick: () => vaultSheet(null) }, '+ Add'),
+        h('button', { class: 'btn small', title: 'Lock the vault', onclick: vaultLock }, h('span', { class: 'vault-ic', html: I.lock }), 'Lock')),
+      VK.filter ? h('p', { class: 'day-hint vault-filter' }, `Linked to ${vaultLinkName(VK.filter)} · `, h('button', { class: 'link', onclick: () => { VK.filter = null; renderTool(); } }, 'Show everything')) : null,
+      box,
+      h('p', { class: 'day-hint vault-foot' }, 'Locked with your passphrase on this device. Column’s server only keeps it scrambled; nobody else, team owners included, can open it. It locks by itself after 5 idle minutes.'),
+    ];
+  }
+  function vaultRow(x) {
+    const sub = [VAULT_KINDS[x.kind]?.[0], x.user || x.where || x.site, x.link ? '→ ' + vaultLinkName(x.link) : ''].filter(Boolean).join(' · ');
+    return h('div', { class: 'bill vault-row', onclick: () => vaultSheet(x) },
+      h('span', { class: 'vault-ic', html: I.lock }),
+      h('span', { class: 'bill-name' }, x.title || 'Untitled', h('small', {}, sub)));
+  }
+  function vaultLocked() {
+    const pass = h('input', { type: 'password', autocomplete: 'off', placeholder: 'Vault passphrase', 'aria-label': 'Vault passphrase' });
+    const err = h('p', { class: 'err' });
+    const go = h('button', { class: 'btn primary-btn' }, 'Unlock');
+    const unlock = async () => {
+      if (!pass.value) return pass.focus();
+      go.disabled = true;
+      go.textContent = 'Unlocking…';
+      err.textContent = '';
+      try {
+        await vaultUnlock(pass.value);
+        pass.value = '';
+        pass.blur();
+        renderTool();
+      } catch (e) {
+        err.textContent = e.message;
+        go.disabled = false;
+        go.textContent = 'Unlock';
+        pass.select();
+      }
+    };
+    go.addEventListener('click', unlock);
+    pass.addEventListener('keydown', (e) => e.key === 'Enter' && unlock());
+    const reset = h('button', { class: 'link', 'data-label': '1' }, 'Forgot it? Start over');
+    reset.addEventListener('click', () => confirmClick(reset, () => { VK.resetting = true; renderTool(); }));
+    if (VK.resetting) return vaultSetup(true);
+    setTimeout(() => pass.focus());
+    return [
+      h('div', { class: 'vault-lock' }, h('span', { class: 'vault-big', html: I.lock }), h('b', {}, 'Your vault is locked'),
+        h('div', { class: 'vault-unlock' }, pass, go), err, reset),
+    ];
+  }
+  function vaultSetup(reset) {
+    const pass = h('input', { type: 'password', autocomplete: 'new-password', placeholder: 'At least 10 characters' });
+    const again = h('input', { type: 'password', autocomplete: 'new-password', placeholder: 'Type it again' });
+    const ok = h('input', { type: 'checkbox' });
+    const err = h('p', { class: 'err' });
+    const go = h('button', { class: 'btn primary-btn' }, reset ? 'Erase and start over' : 'Set up my vault');
+    go.addEventListener('click', async () => {
+      err.textContent = '';
+      if (pass.value.length < 10) return (err.textContent = 'Use at least 10 characters. A few words together works well.');
+      if (pass.value !== again.value) return (err.textContent = 'The two don’t match.');
+      if (!ok.checked) return (err.textContent = 'Tick the box to show you’ve read it.');
+      go.disabled = true;
+      try {
+        const salt = b64u(crypto.getRandomValues(new Uint8Array(16)));
+        const key = await vaultDerive(pass.value, salt, VAULT_ITERS);
+        const v = await api('POST', '/vault/setup', { salt, iters: VAULT_ITERS, check: await vaultSeal(key, VAULT_CHECK), reset });
+        VK.meta = { salt: v.salt, iters: v.iters, check: v.check };
+        VK.raw = [];
+        VK.items = [];
+        VK.key = key;
+        VK.resetting = false;
+        vaultTouch();
+        renderTool();
+        renderCamps();
+      } catch (e) {
+        err.textContent = e.message;
+        go.disabled = false;
+      }
+    });
+    return [
+      h('p', { class: 'day-hint' }, reset
+        ? 'This erases everything in your vault, for good, and locks the new one with a new passphrase.'
+        : 'A safe place for gate and alarm codes, account numbers, logins and keys. It’s locked with a passphrase that only you know: Column’s server only ever keeps it scrambled, and nobody else on the team can open it.'),
+      h('div', { class: 'vault-setup' },
+        h('label', {}, 'Passphrase', pass),
+        h('label', {}, 'Again', again),
+        h('label', { class: 'pick' }, ok, 'If I forget this passphrase, what’s in the vault is gone. Nobody can get it back.')),
+      err,
+      h('div', { class: 'btns' }, reset ? h('button', { class: 'btn', onclick: () => { VK.resetting = false; renderTool(); } }, 'Cancel') : null, h('span', { style: 'flex:1' }), go),
+    ];
+  }
+  async function vaultCopy(v) {
+    try {
+      await navigator.clipboard.writeText(v);
+      toast('Copied. It’s cleared from the clipboard in 30 seconds.');
+      setTimeout(() => navigator.clipboard.writeText('').catch(() => {}), 30_000);
+    } catch {
+      toast('Couldn’t copy it.');
+    }
+  }
+  function vaultSheet(x) {
+    if (!VK.key) return;
+    const kind = h('select', { 'aria-label': 'Kind' }, Object.entries(VAULT_KINDS).map(([k, [t]]) => h('option', { value: k, selected: (x?.kind || 'code') === k }, t)));
+    const title = h('input', { value: x?.title || '', placeholder: 'Smith job gate, Supplier account…' });
+    const note = h('textarea', { rows: 3, placeholder: 'Anything else (optional)' });
+    note.value = x?.note || '';
+    const vals = { ...(x || {}) };
+    const fieldsBox = h('div', { class: 'vault-fields' });
+    const drawFields = () => {
+      fieldsBox.replaceChildren(...VAULT_KINDS[kind.value][1].map(([k, label, secret]) => {
+        const inp = h('input', { value: vals[k] || '', type: secret ? 'password' : 'text', autocomplete: 'off', spellcheck: 'false' });
+        inp.addEventListener('input', () => (vals[k] = inp.value));
+        const tools = secret ? [
+          h('button', { class: 'btn small', type: 'button', onclick: (e) => { const on = inp.type === 'password'; inp.type = on ? 'text' : 'password'; e.currentTarget.textContent = on ? 'Hide' : 'Show'; } }, 'Show'),
+          h('button', { class: 'btn small', type: 'button', onclick: () => inp.value && vaultCopy(inp.value) }, 'Copy'),
+          kind.value === 'login' ? h('button', { class: 'btn small', type: 'button', title: 'Make a strong password', onclick: () => { inp.value = vals[k] = vaultPassword(); inp.type = 'text'; } }, 'New') : null,
+        ] : [];
+        return h('label', {}, label, h('div', { class: 'vault-field' }, inp, ...tools));
+      }));
+    };
+    kind.addEventListener('change', drawFields);
+    drawFields();
+    const camp = h('select', {}, h('option', { value: '' }, 'No campaign'), (S.campaigns || []).map((c) => h('option', { value: 'campaign:' + c.id, selected: x?.link?.type === 'campaign' && x.link.id === c.id }, c.name)));
+    // Contacts are owners-only, like the Contacts tool.
+    const contacts = amOwner() ? S.contacts || [] : [];
+    const dl = h('datalist', { id: 'vaultContacts' }, contacts.slice(0, 2000).map((p) => h('option', { value: [p.name, p.address || p.city].filter(Boolean).join(' · ') })));
+    const contactLabel = (p) => [p.name, p.address || p.city].filter(Boolean).join(' · ');
+    const was = x?.link?.type === 'contact' ? contacts.find((p) => p.id === x.link.id) : null;
+    const contact = h('input', { list: 'vaultContacts', value: was ? contactLabel(was) : '', placeholder: 'Type a name' });
+    const del = x ? h('button', { class: 'btn small danger', 'data-label': '1' }, 'Delete') : null;
+    del?.addEventListener('click', () => confirmClick(del, async () => {
+      await api('DELETE', '/vault/items/' + x.id).catch((e) => toast(e.message));
+      VK.raw = VK.raw.filter((y) => y.id !== x.id);
+      VK.items = VK.items?.filter((y) => y.id !== x.id) || null;
+      closeSheet();
+      renderTool();
+      renderCamps();
+    }));
+    sheet(x ? x.title || 'Vault item' : 'Add to the vault', [
+      h('div', { class: 'vault-item' }),
+      h('div', { class: 'row2' }, h('label', {}, 'Kind', kind), h('label', {}, 'Name', title)),
+      fieldsBox,
+      h('label', {}, 'Note', note),
+      h('div', { class: 'row2' }, h('label', {}, 'Campaign', camp), contacts.length ? h('label', {}, 'Contact', contact, dl) : null),
+      del,
+    ], async () => {
+      if (!VK.key) throw new Error('The vault locked. Unlock it and try again.');
+      if (!title.value.trim()) throw new Error('Give it a name.');
+      const k = kind.value;
+      const data = { kind: k, title: title.value.trim(), note: note.value };
+      for (const [f] of VAULT_KINDS[k][1]) data[f] = vals[f] || '';
+      const p = contact.value.trim() && contacts.find((y) => contactLabel(y) === contact.value.trim());
+      const link = p ? { type: 'contact', id: p.id } : camp.value ? { type: 'campaign', id: camp.value.slice(9) } : null;
+      const blob = await vaultSeal(VK.key, data);
+      const saved = x ? await api('PATCH', '/vault/items/' + x.id, { blob, link }) : await api('POST', '/vault/items', { blob, link });
+      VK.raw = [...VK.raw.filter((y) => y.id !== saved.id), saved];
+      VK.items = [...(VK.items || []).filter((y) => y.id !== saved.id), { id: saved.id, link: saved.link, updatedAt: saved.updatedAt, ...data }];
+      renderTool();
+      renderCamps();
+    }, x ? 'Save' : 'Add');
+  }
+  function vaultPassword() {
+    const abc = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%*-_';
+    const r = crypto.getRandomValues(new Uint32Array(20));
+    return [...r].map((n) => abc[n % abc.length]).join('');
   }
 
   // ----- planner: the end goal, the steps to it, and what's needed before it can start -----
