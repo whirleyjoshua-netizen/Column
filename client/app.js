@@ -2310,7 +2310,7 @@
     inlineEdit(span, { value: t.text, placeholder: 'Task', onDone: (text) => text && text !== t.text && patchTask(t, { text }) });
   }
 
-  function taskRow(t, { inCampaign } = {}) {
+  function taskRow(t, { inCampaign, sort } = {}) {
     const text = h('span', { class: 'p-text', title: 'Click to edit' }, t.report ? h('span', { class: 'is-task', title: 'Report: ticking it asks for your findings', html: I.copy }) : null, t.text);
     text.addEventListener('click', () => editTaskText(text, t));
     const slot = taskSlot(t);
@@ -2320,7 +2320,10 @@
     const pr = t.priority || 0;
     const list = listOfTask(t);
     const lp = list && listProgress(list, t.runId);
+    const waits = taskWaitsOn(t);
+    const waitMsg = waits && `Waiting on “${waits.title || waits.text}” · this campaign is worked in order`;
     const openList = () => {
+      if (waits) return toast(waitMsg);
       const key = 'task:' + t.id;
       if (inCampaign) {
         K.listOpen = K.listOpen === key ? null : key;
@@ -2329,16 +2332,19 @@
       K.listOpen = key;
       openCampaign(camp.id);
     };
-    return h('div', { class: 'any-row task-row' + (t.done ? ' done' : ''),
-      onpointerdown: (ev) => !t.done && dragToTimeline(ev, t.text, (k, m) => scheduleTask(t, k, m)) },
+    return h('div', { class: 'any-row task-row' + (t.done ? ' done' : '') + (waits ? ' waiting' : ''), 'data-id': t.id, title: waitMsg || null,
+      onpointerdown: (ev) => !t.done && !waits && dragToTimeline(ev, t.text, (k, m) => scheduleTask(t, k, m)) },
+      sort ? grip((ev) => sortDrag(ev, ev.currentTarget.parentNode, '.task-row', sort)) : null,
       h('button', {
         class: 'check' + (t.done ? ' on' : '') + (pr ? ' pr-' + pr : ''),
         html: I.check,
-        'aria-label': t.done ? 'Mark not done' : 'Mark done',
+        disabled: !!waits,
+        'aria-label': waits ? waitMsg : t.done ? 'Mark not done' : 'Mark done',
         onclick: () => patchTask(t, { done: !t.done }),
       }),
       pr && !t.done ? h('button', { class: 'prio pr-' + pr, title: PRIO[pr] + ' priority', onclick: (ev) => prioMenu(ev.currentTarget, t) }, '!'.repeat(pr)) : null,
       text,
+      stepTag(t),
       t.due && !t.done ? h('button', { class: 'due' + (isOverdue(t) ? ' late' : t.due === todayKey() ? ' today' : ''), title: 'Due ' + dayName(t.due) + (t.repeat ? ' · ' + repeatLabel(t.repeat, t.due) : ''), onclick: (ev) => dueMenu(ev.currentTarget, t) },
         t.repeat ? h('span', { class: 'rep', html: I.repeat }) : null, dueLabel(t.due)) : null,
       slot ? h('button', { class: 'slot', title: 'Show on schedule', onclick: () => { D.sub = 'schedule'; store.set('daySub', 'schedule'); setTab('day'); goDay(slot.e.date); } },
@@ -2347,7 +2353,7 @@
         h('span', { html: KIND_ICON[list.kind || 'calls'] }), lp.of ? `${lp.n}/${lp.of}` : '') : null,
       camp && !inCampaign ? h('button', { class: 'camp-chip c-' + camp.color, title: `${camp.name} · ${g.title}`, onclick: () => openCampaign(camp.id) }, camp.name) : null,
       t.assigneeId ? avatar(t.assigneeId) : null,
-      t.done ? null : btn(I.clock, 'Put on schedule', () => openSheet({ text: t.text, taskId: t.id, date: t.due && D.sub === 'tasks' ? t.due : D.date })),
+      t.done || waits ? null : btn(I.clock, 'Put on schedule', () => openSheet({ text: t.text, taskId: t.id, date: t.due && D.sub === 'tasks' ? t.due : D.date })),
       btn(I.more, 'More', (b) => taskMenu(b, t))
     );
   }
@@ -2360,6 +2366,7 @@
       { label: t.assigneeId ? `Assigned to ${memberName(t.assigneeId)}…` : 'Assign to…', run: () => assignMenu(anchor, t) },
       { label: g ? `Goal: ${g.title}…` : 'Add to a goal…', run: () => goalMenu(anchor, t) },
       ...(g ? [{ label: t.report ? 'Stop asking for a report' : 'Ask for a report when done', run: () => patchTask(t, { report: !t.report }) }] : []),
+      ...stepRows(g && campById(g.campaignId), t, !!taskWaitsOn(t), (ch) => patchTask(t, ch)),
       { label: 'Share to chat…', run: () => shareMenu(anchor, linkToken('task', t.id)) },
       { label: 'Delete task', danger: true, run: async () => {
         try {
@@ -2419,14 +2426,17 @@
         h('button', { class: mineOnly ? '' : 'on', onclick: () => { D.mine = false; store.set('tasksMine', false); renderDay(); } }, 'All tasks'),
         h('button', { class: mineOnly ? 'on' : '', onclick: () => { D.mine = true; store.set('tasksMine', true); renderDay(); } }, 'Assigned to me')));
     }
-    const group = (title, list, extra) => list.length && parts.push(h('div', { class: 'anytime tasks' }, h('div', { class: 'any-h' }, title, extra || null), list.map(taskRow)));
+    // Overdue, Today and undated tasks can be dragged into your own order; Upcoming stays by date.
+    const sortBy = (ids) => saveOrder(S.tasks, 'dayOrder', ids, '/tasks/');
+    const group = (title, list, extra, sort) => list.length && parts.push(h('div', { class: 'anytime tasks' }, h('div', { class: 'any-h' }, title, extra || null),
+      (sort ? list.sort(placed('dayOrder', byPrio)) : list).map((t) => taskRow(t, { sort: sort && sortBy }))));
     const late = open.filter(isOverdue);
-    group(`Overdue · ${late.length}`, late, late.length ? moveToToday(late) : null);
+    group(`Overdue · ${late.length}`, late, late.length ? moveToToday(late) : null, true);
     if (open.some((t) => t.due)) {
-      group('Today', open.filter((t) => t.due === today));
+      group('Today', open.filter((t) => t.due === today), null, true);
       group('Upcoming', open.filter((t) => t.due > today).sort((a, b) => (a.due < b.due ? -1 : a.due > b.due ? 1 : byPrio(a, b))));
-      group('No date', open.filter((t) => !t.due));
-    } else group('To do', open);
+      group('No date', open.filter((t) => !t.due), null, true);
+    } else group('To do', open, null, true);
     if (!open.length) {
       parts.push(h('div', { class: 'anytime tasks' }, h('div', { class: 'any-h' }, 'To do'),
         h('p', { class: 'day-hint' }, mineOnly ? 'Nothing assigned to you.' : done.length ? 'All done.' : 'No tasks yet. Type below, like “Pay rent friday !!” (! low, !! medium, !!! high), then tap the clock to put it on your schedule.')));
@@ -2436,7 +2446,7 @@
       clear.addEventListener('click', () => confirmClick(clear, async () => {
         for (const t of done) await api('DELETE', '/tasks/' + t.id).catch((e) => toast(e.message));
       }));
-      parts.push(h('div', { class: 'anytime tasks' }, h('div', { class: 'any-h' }, `Done · ${done.length}`, clear), done.map(taskRow)));
+      parts.push(h('div', { class: 'anytime tasks' }, h('div', { class: 'any-h' }, `Done · ${done.length}`, clear), done.map((t) => taskRow(t))));
     }
     D.scroll.replaceChildren(...parts);
     D.scroll.scrollTop = keep;
@@ -2726,6 +2736,84 @@
     const gs = goalsOf(c.id);
     return gs.length ? gs.reduce((s, g) => s + goalProgress(g).frac, 0) / gs.length : 0;
   }
+
+  // ----- campaigns worked in order (same rules as the server) -----
+  // Goals open one at a time, top to bottom; inside a goal each task waits for the one above it.
+  // What's waiting is greyed out but still readable. Owners can skip a step or unlock one early.
+  const canPass = (c) => !!c && (!c.ownerId || c.ownerId === S.me?.memberId || amOwner());
+  // Hand-placed rows (key set) come first in that order; the rest follow in their usual order.
+  const placed = (key, base) => (a, b) => (a[key] != null) !== (b[key] != null) ? (a[key] != null ? -1 : 1) : a[key] != null && a[key] !== b[key] ? a[key] - b[key] : base(a, b);
+  const byDueMade = (a, b) => ((a.due || '9') < (b.due || '9') ? -1 : (a.due || '9') > (b.due || '9') ? 1 : a.createdAt - b.createdAt);
+  const tasksInOrder = (gid) => tasksOf(gid).sort(placed('order', byDueMade));
+  const goalMet = (g) => !!g.skipped || (g.kind === 'count' ? goalProgress(g).n >= g.target : tasksOf(g.id).every((t) => t.done || t.skipped));
+  function goalWaitsOn(g) {
+    if (!campById(g.campaignId)?.inOrder || g.unlocked) return null;
+    for (const x of goalsOf(g.campaignId)) {
+      if (x.id === g.id) return null;
+      if (!goalMet(x)) return x;
+    }
+    return null;
+  }
+  function taskWaitsOn(t) {
+    const g = goalById(t.goalId);
+    if (!g || !campById(g.campaignId)?.inOrder || t.done || t.unlocked) return null;
+    const wg = goalWaitsOn(g);
+    if (wg) return wg;
+    for (const x of tasksInOrder(g.id)) {
+      if (x.id === t.id) return null;
+      if (!x.done && !x.skipped) return x;
+    }
+    return null;
+  }
+  // Owner-only menu rows for a goal or task in an in-order campaign.
+  function stepRows(c, x, waiting, patch) {
+    if (!c?.inOrder || !canPass(c) || x.done) return [];
+    return [
+      waiting || x.unlocked ? { label: x.unlocked ? 'Lock again (back in order)' : 'Unlock now', run: () => patch({ unlocked: !x.unlocked }) } : null,
+      { label: x.skipped ? 'Stop skipping' : 'Skip for now', run: () => patch({ skipped: !x.skipped }) },
+    ].filter(Boolean);
+  }
+  const stepTag = (x) => (x.skipped ? h('span', { class: 'step-tag' }, 'Skipped') : x.unlocked ? h('span', { class: 'step-tag' }, 'Unlocked') : null);
+
+  // Drag a row by its grip to move it among its siblings (matching sel). Rows move as you go;
+  // done(ids) gets the new order. Mouse and pen only, like the other drags.
+  function sortDrag(ev, row, sel, done) {
+    ev.stopPropagation();
+    const box = row.parentNode;
+    const sibs = () => [...box.children].filter((x) => x !== row && x.matches(sel));
+    pointerDrag(ev, {
+      onStart: () => { D.dragging = K.sorting = true; row.classList.add('sorting'); },
+      onMove: (e) => {
+        const list = sibs();
+        const before = list.find((x) => { const r = x.getBoundingClientRect(); return e.clientY < r.top + r.height / 2; });
+        if (before) { if (row.nextElementSibling !== before) before.before(row); }
+        else if (list.length) list[list.length - 1].after(row);
+      },
+      onEnd: (up) => {
+        D.dragging = K.sorting = false;
+        row.classList.remove('sorting');
+        if (up) done([...box.children].filter((x) => x.matches(sel)).map((x) => x.dataset.id));
+        renderDay();
+        renderCamps();
+      },
+    });
+  }
+  const grip = (onDown) => h('span', { class: 'grip', title: 'Drag to reorder', 'aria-hidden': 'true', onpointerdown: onDown }, '⋮⋮');
+  // Number the rows 1, 2, 3… in their new order, saving only the ones that moved.
+  async function saveOrder(rows, key, ids, path) {
+    const moved = [];
+    ids.forEach((id, i) => {
+      const x = rows.find((r) => r.id === id);
+      if (x && x[key] !== i + 1) { x[key] = i + 1; moved.push(x); }
+    });
+    renderDay();
+    renderCamps();
+    try {
+      await Promise.all(moved.map((x) => api('PATCH', path + x.id, { [key]: x[key] })));
+    } catch (er) {
+      toast(er.message);
+    }
+  }
   const bar = (frac, color) => h('div', { class: 'pbar c-' + (color || 'violet') }, h('i', { style: `width:${Math.round(frac * 100)}%` }));
   function campDates(c) {
     const f = (k) => keyDate(k).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
@@ -2746,7 +2834,7 @@
   // Re-render, unless someone is typing in here; then wait until they're done.
   function renderCamps() {
     const root = $('#camps');
-    if (!S.workspace || S.tab !== 'camps') return;
+    if (!S.workspace || S.tab !== 'camps' || K.sorting) return;
     if (root.contains(document.activeElement) && document.activeElement.matches('input, textarea, select')) {
       K.stale = true;
       return;
@@ -2916,6 +3004,7 @@
         campDates(c) ? h('span', {}, campDates(c)) : null,
         h('button', { class: 'pill pill-btn', title: 'Who’s responsible', onclick: (e) => assignCampaignMenu(e.currentTarget, c) }, c.assigneeId ? avatar(c.assigneeId) : null, c.assigneeId ? memberName(c.assigneeId) : 'Assign to…'),
         c.status !== 'active' ? h('span', { class: 'pill' }, c.status === 'done' ? 'Finished' : 'Paused') : null,
+        c.inOrder ? h('span', { class: 'pill', title: 'Goals and tasks open one at a time, top to bottom' }, 'In order') : null,
         who ? h('span', { class: 'pill', title: who.map(memberName).join(', ') }, h('span', { class: 'is-task', html: I.lock }), `Private · ${who.length}`) : null),
       h('div', { class: 'camp-total' }, bar(p, c.color), h('span', {}, Math.round(p * 100) + '%')),
       brief,
@@ -2939,7 +3028,8 @@
 
   function goalCard(c, g) {
     const pg = goalProgress(g);
-    const tasks = tasksOf(g.id).sort((a, b) => a.done - b.done || ((a.due || '9') < (b.due || '9') ? -1 : (a.due || '9') > (b.due || '9') ? 1 : a.createdAt - b.createdAt));
+    const tasks = tasksInOrder(g.id).sort((a, b) => a.done - b.done);
+    const waits = goalWaitsOn(g);
     const add = h('input', { class: 'goal-add', placeholder: 'Add a task… “Call Old Town monday @Sam”', 'aria-label': 'Add a task to this goal' });
     add.addEventListener('keydown', async (e) => {
       if (e.key !== 'Enter' || !add.value.trim()) return;
@@ -2954,17 +3044,19 @@
         toast(er.message);
       }
     });
-    const el = h('div', { class: 'goal' },
+    const el = h('div', { class: 'goal' + (waits ? ' waiting' : ''), 'data-id': g.id, title: waits ? `Opens when “${waits.title}” is met · this campaign is worked in order` : null },
       h('div', { class: 'goal-top' },
+        grip((ev) => sortDrag(ev, el, '.goal', (ids) => saveOrder(S.goals, 'order', ids, '/goals/'))),
         h('span', { class: 'goal-ic', html: g.kind === 'count' ? I.target : I.task }),
         h('b', { class: 'goal-title' }, g.title),
+        stepTag(g),
         g.due ? h('span', { class: 'due' + (g.due < todayKey() && pg.frac < 1 ? ' late' : '') }, dueLabel(g.due)) : null,
         h('button', { class: 't-btn', 'aria-label': 'Goal options', html: I.more, onclick: (e) => goalOptions(e.currentTarget, c, g) })),
       h('div', { class: 'goal-prog' }, bar(pg.frac, c.color), h('span', {}, pg.label)));
     if (tasks.length) el.append(h('div', { class: 'goal-tasks' }, tasks.flatMap((t) => {
       const l = listOfTask(t);
       const close = () => { K.listOpen = null; renderCamps(); };
-      return [taskRow(t, { inCampaign: true }), l && K.listOpen === 'task:' + t.id ? h('div', { class: 'task-list' }, taskListBody(c, l, t, close)) : null];
+      return [taskRow(t, { inCampaign: true, sort: (ids) => saveOrder(S.tasks, 'order', ids, '/tasks/') }), l && K.listOpen === 'task:' + t.id ? h('div', { class: 'task-list' }, taskListBody(c, l, t, close)) : null];
     }).filter(Boolean)));
     el.append(add);
     el.addEventListener('dragover', (e) => {
@@ -4305,6 +4397,7 @@
       { label: c.assigneeId ? `Responsible: ${memberName(c.assigneeId)}…` : 'Assign to…', run: () => assignCampaignMenu(anchor, c) },
       { label: 'Save to run again…', run: () => saveTemplate(c) },
       { label: 'What to log…', run: () => outcomesSheet(c) },
+      ...(canPass(c) ? [{ label: c.inOrder ? 'Stop working in order' : 'Work in order (one step at a time)', on: !!c.inOrder, run: () => api('PATCH', '/campaigns/' + c.id, { inOrder: !c.inOrder }).catch((e) => toast(e.message)) }] : []),
       { label: 'Write a report', run: () => openReport(c) },
       { label: 'Share to chat…', run: () => shareMenu(anchor, linkToken('campaign', c.id)) },
       c.status === 'active' ? { label: 'Pause', run: () => api('PATCH', '/campaigns/' + c.id, { status: 'paused' }).catch((e) => toast(e.message)) } : { label: 'Make active', run: () => api('PATCH', '/campaigns/' + c.id, { status: 'active' }).catch((e) => toast(e.message)) },
@@ -4316,6 +4409,7 @@
     openMenu(anchor, [
       { label: 'Plan it out…', run: () => planSheet(c, g) },
       { label: 'Edit goal…', run: () => goalSheet(c, g) },
+      ...stepRows(c, g, !!goalWaitsOn(g), (ch) => api('PATCH', '/goals/' + g.id, ch).catch((e) => toast(e.message))),
       { label: 'Delete goal and its tasks', danger: true, run: () => api('DELETE', '/goals/' + g.id).catch((e) => toast(e.message)) },
     ]);
   }

@@ -372,6 +372,8 @@ function applyTask(t, body) {
   }
   if (body.assigneeId !== undefined) t.assigneeId = body.assigneeId && db.workspaces[t.wsId]?.members.some((m) => m.id === body.assigneeId) ? body.assigneeId : null;
   if (body.report !== undefined) t.report = !!body.report;
+  // Where it sits when dragged: order within its goal, dayOrder on the Tasks list. null = not placed by hand.
+  for (const k of ['order', 'dayOrder']) if (body[k] !== undefined) t[k] = body[k] === null || !Number.isFinite(Number(body[k])) ? null : Number(body[k]);
   if (body.priority !== undefined) t.priority = Math.max(0, Math.min(3, Math.round(Number(body.priority)) || 0));
   if (body.done !== undefined) {
     t.done = !!body.done;
@@ -687,6 +689,11 @@ function applyCampaign(c, body, ws, auth) {
   // Only the person who made it decides who can see it.
   if ((body.private !== undefined || body.memberIds !== undefined) && c.ownerId && c.ownerId !== auth.memberId) throw Object.assign(new Error('Only the campaign owner can change who sees it.'), { status: 403 });
   if (body.private !== undefined) c.private = !!body.private;
+  // "In order": goals and tasks are worked one at a time, top to bottom. Owners set it, and can skip or unlock steps.
+  if (body.inOrder !== undefined && !!body.inOrder !== !!c.inOrder) {
+    if (!passesSteps(c, auth)) throw Object.assign(new Error('Only an owner can change whether this campaign is worked in order.'), { status: 403 });
+    c.inOrder = !!body.inOrder;
+  }
   if (body.memberIds !== undefined) c.memberIds = (Array.isArray(body.memberIds) ? body.memberIds : []).filter((id) => ws.members.some((m) => m.id === id) && id !== c.ownerId);
   if (c.end && c.start && c.end < c.start) throw badRequest('The end date is before the start.');
   if (!c.name) throw badRequest('Give it a name.');
@@ -707,6 +714,46 @@ function applyGoal(g, body, c) {
   if (body.order !== undefined) g.order = Number(body.order) || 0;
   if (!g.title) throw badRequest('Give the goal a name.');
   return g;
+}
+
+// ----- campaigns worked in order -----
+// Goals open one at a time, top to bottom: the next waits until the one above is met. Inside a goal each task
+// waits for the one above it. An owner can skip a step (it stops holding up the rest) or unlock one early.
+// The client works this out the same way to grey out what's waiting.
+const passesSteps = (c, auth) => !c.ownerId || c.ownerId === auth.memberId || auth.role === 'owner';
+const goalsInOrder = (c) => Object.values(db.goals).filter((g) => g.campaignId === c.id).sort((a, b) => (a.order || 0) - (b.order || 0) || a.createdAt - b.createdAt);
+const placed = (base) => (a, b) => (a.order != null) !== (b.order != null) ? (a.order != null ? -1 : 1) : a.order != null && a.order !== b.order ? a.order - b.order : base(a, b);
+const tasksInOrder = (g) => Object.values(db.tasks).filter((t) => t.goalId === g.id)
+  .sort(placed((a, b) => ((a.due || '9') < (b.due || '9') ? -1 : (a.due || '9') > (b.due || '9') ? 1 : a.createdAt - b.createdAt)));
+function goalMet(g) {
+  if (g.skipped) return true;
+  if (g.kind === 'count') {
+    const n = Object.values(db.attempts).filter((x) => x.campaignId === g.campaignId && (!g.counts?.length || g.counts.includes(x.outcome)) && (!g.methods?.length || g.methods.includes(x.method))).length;
+    return n >= g.target;
+  }
+  return tasksInOrder(g).every((t) => t.done || t.skipped);
+}
+// The goal it's waiting on, or null when it's open.
+function goalWaitsOn(g) {
+  const c = db.campaigns[g.campaignId];
+  if (!c?.inOrder || g.unlocked) return null;
+  for (const x of goalsInOrder(c)) {
+    if (x.id === g.id) return null;
+    if (!goalMet(x)) return x;
+  }
+  return null;
+}
+// What a task is waiting on (a goal or a task), or null when it can be done.
+function taskWaitsOn(t) {
+  const g = db.goals[t.goalId];
+  if (!g || !db.campaigns[g.campaignId]?.inOrder || t.done || t.unlocked) return null;
+  const wg = goalWaitsOn(g);
+  if (wg) return wg;
+  for (const x of tasksInOrder(g)) {
+    if (x.id === t.id) return null;
+    if (!x.done && !x.skipped) return x;
+  }
+  return null;
 }
 
 // A call list: a spreadsheet of prospects dropped on a campaign. Each logged call can name the row it was for,
@@ -830,10 +877,10 @@ const publicTemplate = ({ wsId, ran, ...t }) => t;
 function snapshotCampaign(c) {
   const rel = (key) => (key && c.start ? daysBetween(c.start, key) : null);
   return {
-    campaign: { brief: c.brief, color: c.color, outcomes: c.outcomes, methods: c.methods, private: c.private, memberIds: c.memberIds, days: c.start && c.end ? daysBetween(c.start, c.end) : null },
+    campaign: { brief: c.brief, color: c.color, outcomes: c.outcomes, methods: c.methods, private: c.private, memberIds: c.memberIds, inOrder: !!c.inOrder, days: c.start && c.end ? daysBetween(c.start, c.end) : null },
     goals: Object.values(db.goals).filter((g) => g.campaignId === c.id).sort((a, b) => (a.order || 0) - (b.order || 0)).map((g) => ({
       title: g.title, kind: g.kind, target: g.target, counts: g.counts, methods: g.methods || null, order: g.order, dueIn: rel(g.due),
-      tasks: Object.values(db.tasks).filter((t) => t.goalId === g.id).sort((a, b) => a.createdAt - b.createdAt).map((t) => ({ text: t.text, priority: t.priority, dueIn: rel(t.due), assigneeId: t.assigneeId || null, report: !!t.report })),
+      tasks: Object.values(db.tasks).filter((t) => t.goalId === g.id).sort((a, b) => a.createdAt - b.createdAt).map((t) => ({ text: t.text, order: t.order ?? null, priority: t.priority, dueIn: rel(t.due), assigneeId: t.assigneeId || null, report: !!t.report })),
     })),
   };
 }
@@ -880,7 +927,7 @@ function runTemplate(tpl, { date, time, by }) {
   const k = tpl.campaign;
   const c = createCampaign(ws, owner, {
     name: `${tpl.name} · ${label}${time ? ' ' + time : ''}`.slice(0, 80), brief: k.brief, color: k.color, outcomes: k.outcomes, methods: k.methods,
-    private: k.private, memberIds: k.memberIds, start: date, end: k.days != null ? addDays(date, k.days) : null, assigneeId: tpl.assigneeId,
+    private: k.private, memberIds: k.memberIds, inOrder: !!k.inOrder, start: date, end: k.days != null ? addDays(date, k.days) : null, assigneeId: tpl.assigneeId,
   }, { templateId: tpl.id, assignedBy: by || null }); // who handed it out: whoever started it, or nobody for a scheduled run
   const due = (n) => (n == null ? null : addDays(date, n));
   for (const sg of tpl.goals) {
@@ -890,7 +937,7 @@ function runTemplate(tpl, { date, time, by }) {
     broadcast(ws.id, { type: 'goal', goal: publicGoal(g) });
     for (const st of sg.tasks) {
       const t = applyTask({ id: rid(), wsId: ws.id, by: owner.member, createdAt: Date.now(), text: '', done: false, doneAt: null, due: null, priority: 0, goalId: g.id, assigneeId: null },
-        { text: st.text, priority: st.priority, due: due(st.dueIn), assigneeId: st.assigneeId, report: st.report });
+        { text: st.text, order: st.order ?? null, priority: st.priority, due: due(st.dueIn), assigneeId: st.assigneeId, report: st.report });
       if (t.assigneeId) t.assignedBy = by || null;
       db.tasks[t.id] = t;
       broadcast(ws.id, { type: 'task', task: publicTask(t) });
@@ -1925,7 +1972,14 @@ async function api(req, res, url) {
     const t = b && db.tasks[b];
     if (!t || t.wsId !== ws.id || !canSee(auth, 'task', t)) return send(res, 404, { error: 'Not found' });
     if (m === 'PATCH') {
-      const next = applyTask({ ...t }, await readJson(req, 50_000));
+      const body = await readJson(req, 50_000);
+      const camp = db.campaigns[db.goals[t.goalId]?.campaignId];
+      if ((body.skipped !== undefined || body.unlocked !== undefined) && !(camp && passesSteps(camp, auth))) return send(res, 403, { error: 'Only an owner can skip or unlock a step.' });
+      const waits = body.done && !t.done && camp && !passesSteps(camp, auth) && taskWaitsOn(t);
+      if (waits) return send(res, 409, { error: `This campaign is worked in order. Finish “${waits.title || waits.text}” first.` });
+      const next = applyTask({ ...t }, body);
+      if (body.skipped !== undefined) next.skipped = !!body.skipped;
+      if (body.unlocked !== undefined) next.unlocked = !!body.unlocked;
       if (!canSee(auth, 'task', next)) return send(res, 404, { error: 'Goal not found' });
       // Who handed it over, so the new assignee can be told.
       if (next.assigneeId !== t.assigneeId) next.assignedBy = next.assigneeId ? auth.memberId : null;
@@ -2358,7 +2412,12 @@ async function api(req, res, url) {
     const g = b && db.goals[b];
     if (!g || g.wsId !== ws.id || !canSee(auth, 'goal', g)) return send(res, 404, { error: 'Not found' });
     if (m === 'PATCH') {
-      const next = applyGoal({ ...g }, await readJson(req, 50_000), db.campaigns[g.campaignId]);
+      const body = await readJson(req, 50_000);
+      const camp = db.campaigns[g.campaignId];
+      if ((body.skipped !== undefined || body.unlocked !== undefined) && !passesSteps(camp, auth)) return send(res, 403, { error: 'Only an owner can skip or unlock a step.' });
+      const next = applyGoal({ ...g }, body, camp);
+      if (body.skipped !== undefined) next.skipped = !!body.skipped;
+      if (body.unlocked !== undefined) next.unlocked = !!body.unlocked;
       db.goals[g.id] = next;
       save();
       broadcast(ws.id, { type: 'goal', goal: publicGoal(next) });

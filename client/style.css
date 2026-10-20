@@ -962,3 +962,15 @@ body.viewer .preview pre, body.viewer .preview .pv-edit, body.viewer .preview .d
 .mail-warn { flex: 1; }
 .tool .sends { margin: 0 0 14px; }
 .mail-to .link { align-self: flex-start; font-size: 12px; }
+
+/* Drag to reorder goals and tasks; campaigns worked in order grey out what's waiting. */
+.grip { flex: none; align-self: center; width: 12px; margin-left: -4px; color: var(--muted); font-size: 11px; letter-spacing: -3px; line-height: 1; cursor: grab; opacity: 0; user-select: none; touch-action: none; }
+.any-row:hover > .grip, .goal-top:hover > .grip { opacity: 0.7; }
+.grip:hover { opacity: 1 !important; }
+.is-dragging, .is-dragging * { cursor: grabbing !important; }
+.sorting { background: var(--card-hover); box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18); position: relative; z-index: 2; }
+.any-row.waiting, .goal.waiting { opacity: 0.45; }
+.goal.waiting .any-row.waiting { opacity: 1; }
+.check:disabled { cursor: not-allowed; border-style: dashed; }
+.check:disabled:hover { border-color: var(--line); color: inherit; }
+.step-tag { flex: none; font-size: 10px; color: var(--muted); border: 1px solid var(--line); border-radius: 5px; padding: 0 5px; align-self: center; }
