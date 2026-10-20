@@ -5311,11 +5311,10 @@
     openMenu(e.currentTarget, [
       { head: 'Tools' },
       { label: h('span', { class: 'tool-item' }, 'Finance', soon || tight ? h('small', {}, [soon ? `${soon} due soon` : '', tight ? `${tight} budget${tight === 1 ? '' : 's'} nearly used` : ''].filter(Boolean).join(' · ')) : null), on: toolOpen === 'bills', run: () => openTool('bills') },
-      amOwner() ? { label: h('span', { class: 'tool-item' }, 'Contacts', S.contacts?.length ? h('small', {}, S.contacts.length.toLocaleString()) : null), on: toolOpen === 'contacts', run: () => openTool('contacts') } : null,
+      amOwner() ? { label: 'Contacts', on: toolOpen === 'contacts', run: () => openTool('contacts') } : null,
       mayEmail() ? { label: h('span', { class: 'tool-item' }, 'Email', (S.mail?.sends || []).some((x) => x.status === 'sending') ? h('small', {}, 'sending…') : null), on: toolOpen === 'email', run: () => openTool('email') } : null,
       { label: 'Meeting notes', on: toolOpen === 'meetings', run: () => openTool('meetings') },
       { label: 'Planner', on: toolOpen === 'planner', run: () => openTool('planner') },
-      R.on ? null : { label: '● Record a meeting', run: () => askRecord('') },
     ].filter(Boolean));
   });
   function openTool(name) {
