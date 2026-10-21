@@ -1953,7 +1953,7 @@
   ];
 
   // ----- view state -----
-  const D = { date: todayKey(), scrolledFor: null, sub: store.get('daySub', 'schedule'), mine: store.get('tasksMine', false) };
+  const D = { date: todayKey(), scrolledFor: null, sub: store.get('daySub', 'schedule'), mine: store.get('tasksMine', false), taskView: store.get('taskView', 'mine'), campsOpen: new Set(store.get('stepsOpen', [])) };
 
   function setSub(sub) {
     D.sub = sub;
@@ -2385,7 +2385,7 @@
     inlineEdit(span, { value: t.text, placeholder: 'Task', onDone: (text) => text && text !== t.text && patchTask(t, { text }) });
   }
 
-  function taskRow(t, { inCampaign, sort } = {}) {
+  function taskRow(t, { inCampaign, sort, noCamp } = {}) {
     const text = h('span', { class: 'p-text', title: 'Click to edit' }, t.report ? h('span', { class: 'is-task', title: 'Report: ticking it asks for your findings', html: I.copy }) : null, t.text);
     text.addEventListener('click', () => editTaskText(text, t));
     const slot = taskSlot(t);
@@ -2428,7 +2428,7 @@
         h('span', { html: KIND_ICON[list.kind || 'calls'] }), lp.of ? `${lp.n}/${lp.of}` : '') : null,
       taskFiles(t).length ? h('button', { class: 'list-chip file-chip', title: taskFiles(t).map((it) => it.name || 'Note').join(', '), onclick: (ev) => { ev.stopPropagation(); taskFiles(t).length === 1 ? openPreview(taskFiles(t)[0]) : taskFilesMenu(ev.currentTarget, t); } },
         h('span', { html: I.clip }), taskFiles(t).length === 1 ? shortText(taskFiles(t)[0].name || 'Note', 18) : String(taskFiles(t).length)) : null,
-      camp && !inCampaign ? h('button', { class: 'camp-chip c-' + camp.color, title: `${camp.name} · ${g.title}`, onclick: () => openCampaign(camp.id) }, camp.name) : null,
+      camp && !inCampaign && !noCamp ? h('button', { class: 'camp-chip c-' + camp.color, title: `${camp.name} · ${g.title}`, onclick: () => openCampaign(camp.id) }, camp.name) : null,
       t.assigneeId ? avatar(t.assigneeId) : null,
       t.done || waits ? null : btn(I.clock, 'Put on schedule', () => openSheet({ text: t.text, taskId: t.id, date: t.due && D.sub === 'tasks' ? t.due : D.date })),
       btn(I.more, 'More', (b) => taskMenu(b, t))
@@ -2530,19 +2530,34 @@
     return b;
   }
 
+  // Two views: your own to-dos, and campaign steps grouped by campaign, so a busy campaign can't bury them.
+  const stepOf = (t) => !!(t.goalId && goalById(t.goalId));
   function renderTasks() {
     const keep = D.scroll.scrollTop;
     const mineOnly = D.mine;
-    const shown = S.tasks.filter((t) => !mineOnly || t.assigneeId === S.me?.memberId);
+    const steps = D.taskView === 'camps';
+    const shown = S.tasks.filter((t) => (!mineOnly || t.assigneeId === S.me?.memberId) && stepOf(t) === steps);
     const open = shown.filter((t) => !t.done).sort(byPrio);
     const done = shown.filter((t) => t.done).sort((a, b) => (b.doneAt || 0) - (a.doneAt || 0));
     const today = todayKey();
     const parts = [];
+    const view = (v) => { D.taskView = v; store.set('taskView', v); renderDay(); };
+    const stepsDue = S.tasks.filter((t) => stepOf(t) && !t.done && t.due && t.due <= today && (!mineOnly || t.assigneeId === S.me?.memberId));
+    parts.push(h('div', { class: 'seg mine-seg' },
+      h('button', { class: steps ? '' : 'on', onclick: () => view('mine') }, 'My tasks'),
+      h('button', { class: steps ? 'on' : '', onclick: () => view('camps') }, 'Campaign steps', stepsDue.length ? h('span', { class: 'seg-n' }, stepsDue.length) : null)));
     if (S.tasks.some((t) => t.assigneeId)) {
       parts.push(h('div', { class: 'seg mine-seg' },
         h('button', { class: mineOnly ? '' : 'on', onclick: () => { D.mine = false; store.set('tasksMine', false); renderDay(); } }, 'All tasks'),
         h('button', { class: mineOnly ? 'on' : '', onclick: () => { D.mine = true; store.set('tasksMine', true); renderDay(); } }, 'Assigned to me')));
     }
+    if (steps) {
+      renderSteps(parts, open, done);
+      D.scroll.replaceChildren(...parts);
+      D.scroll.scrollTop = keep;
+      return;
+    }
+    if (stepsDue.length) parts.push(h('button', { class: 'steps-due', onclick: () => view('camps') }, `${stepsDue.length} campaign step${stepsDue.length === 1 ? '' : 's'} due today or late →`));
     // Overdue, Today and undated tasks can be dragged into your own order; Upcoming stays by date.
     const sortBy = (ids) => saveOrder(S.tasks, 'dayOrder', ids, '/tasks/');
     const group = (title, list, extra, sort) => list.length && parts.push(h('div', { class: 'anytime tasks' }, h('div', { class: 'any-h' }, title, extra || null),
@@ -2567,6 +2582,39 @@
     }
     D.scroll.replaceChildren(...parts);
     D.scroll.scrollTop = keep;
+  }
+
+  // Campaign steps, a group per campaign: late and due-today ones first, each group folded to a line if you like.
+  function renderSteps(parts, open, done) {
+    const today = todayKey();
+    const byCamp = new Map();
+    for (const t of open) {
+      const c = campById(goalById(t.goalId).campaignId);
+      if (!c) continue;
+      if (!byCamp.has(c.id)) byCamp.set(c.id, { c, ts: [] });
+      byCamp.get(c.id).ts.push(t);
+    }
+    const urgent = (x) => x.ts.filter((t) => t.due && t.due <= today).length;
+    const groups = [...byCamp.values()].sort((a, b) => urgent(b) - urgent(a) || a.c.name.localeCompare(b.c.name));
+    const order = (a, b) => (a.due || '9') < (b.due || '9') ? -1 : (a.due || '9') > (b.due || '9') ? 1 : byPrio(a, b);
+    for (const { c, ts } of groups) {
+      const shut = !D.campsOpen.has(c.id);
+      const n = urgent({ ts });
+      const fold = () => {
+        if (shut) D.campsOpen.add(c.id);
+        else D.campsOpen.delete(c.id);
+        store.set('stepsOpen', [...D.campsOpen]);
+        renderDay();
+      };
+      parts.push(h('div', { class: 'anytime tasks steps-group' + (shut ? ' closed' : '') },
+        h('div', { class: 'any-h steps-h', onclick: fold },
+          h('span', { class: 'goal-fold', html: I.down }), h('span', { class: 'camp-dot c-' + c.color }), c.name,
+          h('small', {}, `${ts.length} open${n ? ` · ${n} due` : ''}`),
+          h('button', { class: 'link', onclick: (ev) => { ev.stopPropagation(); setTab('camps'); openCampaign(c.id); } }, 'Open')),
+        shut ? null : ts.sort(order).map((t) => taskRow(t, { noCamp: true }))));
+    }
+    if (!groups.length) parts.push(h('div', { class: 'anytime tasks' }, h('p', { class: 'day-hint' }, D.mine ? 'No campaign steps assigned to you.' : 'No open campaign steps.')));
+    if (done.length) parts.push(h('details', { class: 'anytime tasks' }, h('summary', { class: 'any-h' }, `Done · ${done.length}`), done.slice(0, 50).map((t) => taskRow(t))));
   }
 
   function dayComposer() {

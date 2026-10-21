@@ -639,6 +639,14 @@ button.oc:hover { background: color-mix(in srgb, var(--oc) 30%, transparent); }
 .av { flex: none; width: 18px; height: 18px; border-radius: 50%; display: inline-grid; place-items: center; font-size: 10px; font-weight: 700; color: #fff; background: hsl(var(--h) 55% 50%); }
 .mine-seg { margin: 2px 8px 8px; }
 .mine-seg button { padding: 4px; font-size: 12px; }
+.seg-n { margin-left: 5px; padding: 0 5px; border-radius: 99px; background: var(--danger, #e5484d); color: #fff; font-size: 10px; font-weight: 700; }
+.steps-due { display: block; width: calc(100% - 16px); margin: 0 8px 8px; padding: 7px 10px; border: 1px dashed var(--line); border-radius: 9px; background: none; color: var(--muted); font-size: 12.5px; text-align: left; cursor: pointer; }
+.steps-due:hover { color: var(--text); background: var(--card-hover); }
+.steps-h { display: flex; align-items: center; gap: 7px; cursor: pointer; user-select: none; }
+.steps-h small { color: var(--muted); font-weight: 400; text-transform: none; letter-spacing: 0; flex: 1; }
+.steps-h .goal-fold { display: inline-grid; } .steps-h .goal-fold svg { width: 12px; height: 12px; transition: transform 0.15s; }
+.steps-group.closed .steps-h .goal-fold svg { transform: rotate(-90deg); }
+.camp-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--c); flex: none; }
 .pick { flex-direction: row !important; align-items: center; gap: 7px !important; color: var(--text) !important; font-size: 13px !important; }
 .picks { display: flex; flex-wrap: wrap; gap: 6px 14px; }
 .picks-h { font-size: 12px; color: var(--muted); margin: 8px 0 5px; }
