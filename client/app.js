@@ -332,7 +332,7 @@
       if (isNew && msg.item.deviceId !== S.deviceId) incoming(msg.item);
     } else if (msg.type === 'item:update') {
       upsert(msg.item);
-      if (msg.item.id === VIEW_ID && !$('#preview .pv-edit')) openPreview(msg.item, { standalone: true });
+      if (msg.item.id === VIEW_ID && !$('#preview .pv-edit, #preview .wd.editing')) openPreview(msg.item, { standalone: true });
       render();
       renderCamps();
       refreshLinks();
@@ -691,7 +691,10 @@
         openPicker(wrap, addLink);
       }
     });
-    const add = h('button', { class: 'add', title: 'Add files', onclick: () => pickFiles(destOf(view)) }, '+');
+    const add = h('button', { class: 'add', title: 'Add files or a new document', onclick: (e) => openMenu(e.currentTarget, [
+      { label: 'Upload files…', run: () => pickFiles(destOf(view)) },
+      { label: 'New document', run: () => newDocSheet(destOf(view)) },
+    ]) }, '+');
     if (!chat) return h('div', { class: 'composer' }, add, ta);
     const linkBtn = h('button', { class: 'add link-btn', title: 'Link a stack, file or task  ([[)', 'aria-label': 'Link a stack, file or task', html: I.link, onclick: () => openPicker(wrap, addLink) });
     const wrap = h('div', { class: 'composer-wrap' }, tray, h('div', { class: 'composer' }, viewThread(view) ? null : add, linkBtn, ta));
@@ -1326,11 +1329,15 @@
 
   // ---------- preview ----------
   // standalone: the whole page is this file (a window of its own), so there's nothing to close back to.
-  function openPreview(it, { standalone = false } = {}) {
+  function openPreview(it, { standalone = false, edit = false } = {}) {
     const pv = $('#preview');
     pv.innerHTML = '';
     const k = kind(it);
-    const close = () => { pv.classList.add('hidden'); pv.innerHTML = ''; };
+    const close = (force) => {
+      if (force !== true && wordGuard()) return;
+      pv.classList.add('hidden');
+      pv.innerHTML = '';
+    };
     pv.onclick = (e) => { if (e.target === pv && !standalone) close(); };
     if (!standalone) pv.append(h('button', { class: 'icon-btn close', html: I.close, onclick: close, 'aria-label': 'Close' }));
     if (k === 'image') pv.append(h('img', { src: fileUrl(it), alt: it.name }));
@@ -1338,12 +1345,7 @@
     else if (k === 'audio') pv.append(h('div', { style: 'color:#fff;font-size:15px' }, it.name), h('audio', { src: fileUrl(it), controls: true, autoplay: true }));
     else if (k === 'pdf') pv.append(pdfView(it));
     else if (k === 'text') pv.append(h('pre', { html: linkify(it.text) }));
-    else if (k === 'docx') {
-      const box = h('div', { class: 'docx' }, 'Loading…');
-      pv.append(box);
-      fetch(fileUrl(it)).then((r) => r.arrayBuffer()).then(renderDocx).then((doc) => box.replaceChildren(...doc.childNodes))
-        .catch(() => box.replaceChildren('Couldn’t read this document. Download it to open it in Word.'));
-    }
+    else if (k === 'docx') pv.append(wordView(it, { edit, close: () => (standalone ? null : close(true)) }));
     else if (k === 'textfile') {
       const pre = h('pre', {}, 'Loading…');
       pv.append(pre);
@@ -1386,87 +1388,9 @@
       pv.classList.remove('hidden');
     }
   }
-  // A Word document as readable HTML: paragraphs, headings, bold/italic/underline, lists, tables and links.
-  // Read only. It's built from elements, never from the file's own markup, so a document can't run anything.
+  // A Word document as HTML: paragraphs, headings, bold/italic/underline, lists, tables, links and pictures (wordkit.js).
   async function renderDocx(buf) {
-    const z = unzip(buf);
-    const read = async (name) => (z[name] ? new DOMParser().parseFromString(await z[name](), 'application/xml') : null);
-    const [doc, rels, numbering] = await Promise.all([read('word/document.xml'), read('word/_rels/document.xml.rels'), read('word/numbering.xml')]);
-    const body = doc?.getElementsByTagNameNS('*', 'body')[0];
-    if (!body) throw new Error('Not a Word document');
-    const kids = (el, tag) => (el ? [...el.children].filter((c) => c.localName === tag) : []);
-    const val = (el) => el?.getAttribute('w:val') ?? null;
-    const all = (doc, tag) => (doc ? [...doc.getElementsByTagNameNS('*', tag)] : []);
-    const links = new Map(all(rels, 'Relationship').map((r) => [r.getAttribute('Id'), r.getAttribute('Target')]));
-    // Bullet or numbered: numId → its abstract numbering → that level's format.
-    const listFmt = (numId, lvl) => {
-      const abs = val(kids(all(numbering, 'num').find((n) => n.getAttribute('w:numId') === numId), 'abstractNumId')[0]);
-      const def = all(numbering, 'abstractNum').find((a) => a.getAttribute('w:abstractNumId') === abs);
-      return val(kids(kids(def, 'lvl').find((l) => l.getAttribute('w:ilvl') === String(lvl)), 'numFmt')[0]);
-    };
-    const on = (rPr, tag) => {
-      const e = kids(rPr, tag)[0];
-      return !!e && !/^(0|false|none)$/.test(val(e) || '');
-    };
-    const runs = (el, out) => {
-      for (const c of el.children) {
-        if (c.localName === 'r') {
-          let node = document.createDocumentFragment();
-          for (const x of c.children) {
-            if (x.localName === 't') node.append(x.textContent);
-            else if (x.localName === 'tab') node.append('\t');
-            else if (x.localName === 'br' || x.localName === 'cr') node.append(h('br'));
-          }
-          const rPr = kids(c, 'rPr')[0];
-          for (const [tag, wrap] of [['b', 'b'], ['i', 'i'], ['u', 'u'], ['strike', 's']]) if (on(rPr, tag)) node = h(wrap, {}, node);
-          out.append(node);
-        } else if (c.localName === 'hyperlink') {
-          const href = links.get(c.getAttribute('r:id')) || '';
-          const a = /^(https?:|mailto:|tel:)/i.test(href) ? h('a', { href, target: '_blank', rel: 'noopener' }) : h('span');
-          runs(c, a);
-          out.append(a);
-        } else if (['ins', 'smartTag', 'fldSimple', 'sdt', 'sdtContent'].includes(c.localName)) runs(c, out);
-      }
-    };
-    const blocks = (parent, into) => {
-      let list = null;
-      for (const c of parent.children) {
-        if (c.localName === 'p') {
-          const pPr = kids(c, 'pPr')[0];
-          const head = /^(Title|Heading([1-6]))$/i.exec(val(kids(pPr, 'pStyle')[0]) || '');
-          const el = h(head ? (head[2] ? 'h' + Math.min(6, +head[2] + 1) : 'h1') : 'p');
-          const align = val(kids(pPr, 'jc')[0]);
-          if (align === 'center' || align === 'right') el.style.textAlign = align;
-          runs(c, el);
-          const num = kids(pPr, 'numPr')[0];
-          if (num) {
-            const lvl = Number(val(kids(num, 'ilvl')[0])) || 0;
-            const ordered = listFmt(val(kids(num, 'numId')[0]), lvl) !== 'bullet';
-            if (!list || list.ordered !== ordered) into.append((list = { ordered, el: h(ordered ? 'ol' : 'ul') }).el);
-            const li = h('li', {}, ...el.childNodes);
-            if (lvl) li.style.marginLeft = lvl * 1.5 + 'em';
-            list.el.append(li);
-            continue;
-          }
-          list = null;
-          // An empty paragraph is a blank line.
-          into.append(el.childNodes.length ? el : h('p', {}, h('br')));
-        } else if (c.localName === 'tbl') {
-          list = null;
-          into.append(h('table', {}, kids(c, 'tr').map((tr) => h('tr', {}, kids(tr, 'tc').map((tc) => {
-            const td = h('td');
-            blocks(tc, td);
-            return td;
-          })))));
-        } else if (c.localName === 'sdt') {
-          list = null;
-          blocks(kids(c, 'sdtContent')[0] || c, into);
-        }
-      }
-    };
-    const out = h('div');
-    blocks(body, out);
-    return out;
+    return (await ColumnWord.read(buf)).el;
   }
 
   // Edit a text file in place. If it's a campaign's call list, the list follows the edit.
@@ -1501,7 +1425,7 @@
     if (e.key === 'Escape') {
       if (!$('#sheet').classList.contains('hidden')) closeSheet();
       else if (pdfStop()) return;
-      else if (!$('#preview').classList.contains('hidden') && !VIEW_ID) { $('#preview').classList.add('hidden'); $('#preview').innerHTML = ''; }
+      else if (!$('#preview').classList.contains('hidden') && !VIEW_ID) { if (!wordGuard()) { $('#preview').classList.add('hidden'); $('#preview').innerHTML = ''; } }
       else if (!$('#settings').classList.contains('hidden')) $('#settings').classList.add('hidden');
       hideMenu();
     }
@@ -4353,6 +4277,7 @@
     const notes = notesOf(c);
     openMenu(anchor, [
       { label: '+ New note', run: () => noteWin(c) },
+      { label: '+ New document', run: () => newDocSheet({ stackId: c.stackId }) },
       ...(notes.length ? [{ head: 'Recent notes' }] : []),
       ...notes.slice(0, 8).map((it) => ({ label: h('span', { class: 'mfile' }, h('span', { class: 'mfile-name' }, noteTitle(it)), h('small', { class: 'mfile-when' }, ago(it.editedAt || it.createdAt))), run: () => noteWin(c, it) })),
       { label: notes.length > 8 ? `Go to the stack · all ${notes.length} notes` : 'Go to the stack', run: () => showStack(c.stackId) },
@@ -5496,6 +5421,341 @@
     const keep = el.scrollTop;
     el.replaceChildren(h('h2', {}, TOOLS[toolOpen].name, h('button', { class: 'icon-btn', html: I.close, 'aria-label': 'Close', onclick: closeTool })), ...TOOLS[toolOpen].render().filter(Boolean));
     el.scrollTop = keep;
+  }
+
+  // ----- Word documents: read, edit and save as .docx, or make a PDF to sign or send -----
+  // You edit the page Column shows. Saving writes a .docx from it that keeps the document's styles, headers and
+  // footers, pictures and page setup; pieces Column can't edit (text boxes, footnotes) ride along as they were.
+  const WD_STYLES = [['P', 'Normal text'], ['H1', 'Title'], ['H2', 'Heading 1'], ['H3', 'Heading 2'], ['H4', 'Heading 3']];
+  const WD_WARN = { tracked: 'tracked changes are accepted', fields: 'fields like page numbers or a table of contents become plain text', textbox: 'text boxes stay as they are but can’t be edited here' };
+  const isWord = (it) => kind(it) === 'docx';
+  let wordGuard = () => false; // true when closing would lose changes (it says so, and offers to close anyway)
+
+  function wordView(it, { edit: startEditing = false, close } = {}) {
+    const page = h('div', { class: 'docx wd-page' }, 'Loading…');
+    const bar = h('div', { class: 'wd-bar' });
+    const note = h('p', { class: 'wd-note hidden' });
+    const wrap = h('div', { class: 'wd' }, bar, note, page);
+    const status = h('small', { class: 'wd-status' });
+    let doc = null, editing = false, dirty = false, busy = false, range = null;
+    const current = () => S.items.find((x) => x.id === it.id) || it;
+    const setDirty = (on) => {
+      dirty = on;
+      status.textContent = on ? 'Not saved' : status.textContent === 'Not saved' ? '' : status.textContent;
+    };
+    wordGuard = () => {
+      if (!dirty || !wrap.isConnected) return false;
+      toast('You have changes you haven’t saved', { label: 'Close anyway', run: () => { dirty = false; close?.(); } });
+      return true;
+    };
+    const leaving = (e) => {
+      if (dirty && wrap.isConnected) e.preventDefault();
+    };
+    addEventListener('beforeunload', leaving);
+
+    async function load() {
+      try {
+        doc = await ColumnWord.read(await fileBuf(current()));
+        page.replaceChildren(...doc.el.childNodes);
+      } catch (e) {
+        doc = null;
+        page.replaceChildren(h('p', {}, 'Couldn’t read this document. Download it to open it in Word.'));
+      }
+      setDirty(false);
+      draw();
+    }
+
+    // The toolbar keeps the place you were typing, so choosing from it acts on that.
+    document.addEventListener('selectionchange', function track() {
+      if (!wrap.isConnected) return document.removeEventListener('selectionchange', track);
+      const sel = getSelection();
+      if (editing && sel.rangeCount && page.contains(sel.anchorNode)) {
+        range = sel.getRangeAt(0).cloneRange();
+        sync();
+      }
+    });
+    const restore = () => {
+      page.focus({ preventScroll: true });
+      if (range) {
+        const sel = getSelection();
+        sel.removeAllRanges();
+        sel.addRange(range);
+      }
+    };
+    const exec = (cmd, value = null) => {
+      restore();
+      document.execCommand(cmd, false, value);
+      setDirty(true);
+      sync();
+    };
+    const tool = (label, title, run, cls = '') => {
+      const b = h('button', { class: 'btn small ' + cls, title, 'aria-label': title, type: 'button' }, label);
+      b.addEventListener('mousedown', (e) => e.preventDefault());
+      b.addEventListener('click', run);
+      return b;
+    };
+    const STATES = [['bold', 'B'], ['italic', 'I'], ['underline', 'U'], ['strikeThrough', 'S'], ['insertUnorderedList', '•'], ['insertOrderedList', '1.'], ['justifyLeft', 'L'], ['justifyCenter', 'C'], ['justifyRight', 'R']];
+    const btns = {};
+    const styleSel = h('select', { class: 'wd-style', 'aria-label': 'Paragraph style' }, WD_STYLES.map(([v, l]) => h('option', { value: v }, l)));
+    styleSel.addEventListener('change', () => {
+      exec('formatBlock', `<${styleSel.value.toLowerCase()}>`);
+    });
+    const block = () => {
+      let n = range?.startContainer;
+      if (n?.nodeType === 3) n = n.parentNode;
+      return n && page.contains(n) ? n.closest('h1,h2,h3,h4,h5,h6,p,li,td') : null;
+    };
+    function sync() {
+      if (!editing) return;
+      for (const [cmd] of STATES) btns[cmd]?.classList.toggle('on', document.queryCommandState(cmd));
+      const b = block();
+      const tag = b?.tagName;
+      styleSel.value = WD_STYLES.some(([v]) => v === tag) ? tag : 'P';
+      btns.table?.classList.toggle('on', !!b?.closest('td'));
+    }
+
+    function linkSheet() {
+      const a = (() => {
+        let n = range?.startContainer;
+        if (n?.nodeType === 3) n = n.parentNode;
+        return n && page.contains(n) ? n.closest('a') : null;
+      })();
+      const url = h('input', { type: 'url', placeholder: 'https://… or someone@example.com', value: a?.getAttribute('href')?.replace(/^mailto:/, '') || '' });
+      sheet(a ? 'Edit link' : 'Add a link', [h('label', {}, 'Link to', url), h('p', { class: 'day-hint' }, 'Leave it empty to take the link off.')], async () => {
+        let v = url.value.trim();
+        if (v && !/^(https?:|mailto:|tel:)/i.test(v)) v = EMAIL_RE.test(v) ? 'mailto:' + v : 'https://' + v;
+        if (v && !/^(https?:\/\/[^\s]+|mailto:[^\s]+|tel:[+\d][\d\s().-]*)$/i.test(v)) throw new Error('That doesn’t look like a web address or an email.');
+        if (a && range?.collapsed) {
+          const r = document.createRange();
+          r.selectNodeContents(a);
+          range = r;
+        }
+        if (!v) return exec('unlink');
+        if (range && !range.collapsed) exec('createLink', v);
+        else exec('insertHTML', `<a href="${esc(v)}">${esc(v.replace(/^mailto:/, ''))}</a>&nbsp;`);
+      }, 'Save');
+    }
+    function tableMenu(anchor) {
+      const td = block()?.closest('td');
+      const tr = td?.parentElement;
+      const table = td?.closest('table');
+      const fresh = (cell) => {
+        const c = cell.cloneNode(false);
+        c.removeAttribute('colspan');
+        c.append(h('p', {}, h('br')));
+        return c;
+      };
+      const changed = () => {
+        setDirty(true);
+        sync();
+      };
+      openMenu(anchor, [
+        { label: 'Insert a table (3 × 3)', run: () => exec('insertHTML', `<table><tbody>${'<tr>' + '<td><p><br></p></td>'.repeat(3) + '</tr>'}${'<tr>' + '<td><p><br></p></td>'.repeat(3) + '</tr>'}${'<tr>' + '<td><p><br></p></td>'.repeat(3) + '</tr>'}</tbody></table><p><br></p>`) },
+        ...(td ? [
+          { head: 'This table' },
+          { label: 'Add a row below', run: () => { const r = tr.cloneNode(false); [...tr.cells].forEach((c) => r.append(fresh(c))); tr.after(r); changed(); } },
+          { label: 'Add a column to the right', run: () => { const i = td.cellIndex; for (const r of table.rows) { const c = r.cells[Math.min(i, r.cells.length - 1)]; c && c.after(fresh(c)); } changed(); } },
+          { label: 'Delete this row', run: () => { tr.parentElement.children.length > 1 ? tr.remove() : table.remove(); changed(); } },
+          { label: 'Delete this column', run: () => { const i = td.cellIndex; for (const r of [...table.rows]) r.cells[Math.min(i, r.cells.length - 1)]?.remove(); if (![...table.rows].some((r) => r.cells.length)) table.remove(); changed(); } },
+          { label: 'Delete the table', run: () => { table.remove(); changed(); } },
+        ] : []),
+      ]);
+    }
+
+    async function save(copy, btn) {
+      if (busy || !doc) return;
+      busy = true;
+      btn.disabled = true;
+      status.textContent = 'Saving…';
+      try {
+        const blob = await doc.save(page);
+        const it2 = current();
+        if (copy) {
+          const name = it2.name.replace(/\.docx$/i, '').replace(/ \(copy\)$/, '') + ' (copy).docx';
+          const item = await uploadFile(new File([blob], name, { type: ColumnWord.DOCX }), { stackId: it2.stackId, channelId: it2.channelId });
+          dirty = false;
+          toast(`Saved as ${name}. The original hasn’t changed.`);
+          if (item) openPreview(item, { edit: true, standalone: !!VIEW_ID });
+          return;
+        }
+        upsert(await put('/api/files/' + it2.id, blob, () => {}));
+        setDirty(false);
+        status.textContent = 'Saved';
+      } catch (e) {
+        status.textContent = dirty ? 'Not saved' : '';
+        toast(e.message);
+      } finally {
+        busy = false;
+        btn.disabled = false;
+      }
+    }
+    async function makePdf(btn) {
+      if (!doc) return;
+      btn.disabled = true;
+      const was = btn.textContent;
+      btn.textContent = 'Making the PDF…';
+      try {
+        const blocks = await ColumnWord.outline(page, doc);
+        const item = await api('POST', '/docs/pdf', { itemId: it.id, name: current().name, blocks });
+        upsert(item);
+        toast(`Made ${item.name}`, { label: 'Open', run: () => openPreview(item, { standalone: !!VIEW_ID }) });
+      } catch (e) {
+        toast(e.message);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = was;
+      }
+    }
+
+    function draw() {
+      wrap.classList.toggle('editing', editing);
+      page.contentEditable = editing ? 'true' : 'false';
+      page.spellcheck = editing;
+      const warn = doc?.warn.map((k) => WD_WARN[k]).filter(Boolean) || [];
+      note.classList.toggle('hidden', !editing || !warn.length);
+      note.textContent = warn.length ? `When you save here, ${warn.join(', ')}. Save a copy to keep the original as it is.` : '';
+      if (!editing) {
+        const pdfBtn = h('button', { class: 'btn small', title: 'Make a PDF of this document, to sign or send for signature', onclick: (e) => makePdf(e.currentTarget) }, 'Make a PDF');
+        bar.replaceChildren(
+          doc ? h('button', { class: 'btn small primary-btn', onclick: () => edit() }, 'Edit') : null,
+          doc ? pdfBtn : null,
+          h('span', { class: 'pdf-gap' }), status);
+        return;
+      }
+      for (const [cmd, label] of STATES) {
+        const titles = { bold: 'Bold (Ctrl+B)', italic: 'Italic (Ctrl+I)', underline: 'Underline (Ctrl+U)', strikeThrough: 'Strikethrough', insertUnorderedList: 'Bulleted list', insertOrderedList: 'Numbered list', justifyLeft: 'Align left', justifyCenter: 'Center', justifyRight: 'Align right' };
+        btns[cmd] = tool(label, titles[cmd], () => exec(cmd), 'wd-' + cmd);
+      }
+      btns.table = tool('Table', 'Insert or change a table', (e) => tableMenu(e.currentTarget));
+      const saveBtn = h('button', { class: 'btn small primary-btn', title: 'Save (Ctrl+S)' }, 'Save');
+      saveBtn.onclick = () => save(false, saveBtn);
+      const copyBtn = h('button', { class: 'btn small', title: 'Save as a new document and leave this one as it is' }, 'Save a copy');
+      copyBtn.onclick = () => save(true, copyBtn);
+      const done = h('button', { class: 'btn small', 'data-label': '1' }, 'Done');
+      done.onclick = () => {
+        if (!dirty) return stopEditing();
+        confirmClick(done, () => load().then(stopEditing));
+      };
+      const sep = () => h('span', { class: 'pdf-sep' });
+      bar.replaceChildren(
+        styleSel, sep(),
+        btns.bold, btns.italic, btns.underline, btns.strikeThrough, sep(),
+        btns.insertUnorderedList, btns.insertOrderedList, sep(),
+        btns.justifyLeft, btns.justifyCenter, btns.justifyRight, sep(),
+        tool('Link', 'Add a link (Ctrl+K)', linkSheet), btns.table,
+        tool('↶', 'Undo (Ctrl+Z)', () => exec('undo')), tool('↷', 'Redo', () => exec('redo')),
+        h('span', { class: 'pdf-gap' }), status, copyBtn, saveBtn, done);
+      sync();
+    }
+    function edit() {
+      editing = true;
+      document.execCommand('defaultParagraphSeparator', false, 'p');
+      draw();
+      page.focus();
+    }
+    function stopEditing() {
+      editing = false;
+      status.textContent = '';
+      draw();
+    }
+
+    page.addEventListener('input', () => editing && setDirty(true));
+    page.addEventListener('keydown', (e) => {
+      if (!editing) return;
+      const mod = e.metaKey || e.ctrlKey;
+      if (mod && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        $('.wd-bar .primary-btn', wrap)?.click();
+      } else if (mod && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        linkSheet();
+      } else if (e.key === 'Tab') {
+        e.preventDefault();
+        if (block()?.closest('li')) exec(e.shiftKey ? 'outdent' : 'indent');
+        else if (!e.shiftKey) exec('insertText', '\t');
+      }
+    });
+    // What comes in from outside is cleaned down to what a document can hold.
+    const insertFrom = (dt) => {
+      const html = dt.getData('text/html');
+      if (html) exec('insertHTML', cleanPaste(html));
+      else exec('insertText', dt.getData('text/plain'));
+    };
+    page.addEventListener('paste', (e) => {
+      if (!editing) return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.clipboardData.files?.length && !e.clipboardData.getData('text/plain')) return toast('Pictures can’t be pasted into a document here yet.');
+      insertFrom(e.clipboardData);
+    });
+    page.addEventListener('drop', (e) => {
+      if (!editing || hasFiles(e.dataTransfer)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const at = document.caretRangeFromPoint?.(e.clientX, e.clientY);
+      if (at) range = at;
+      insertFrom(e.dataTransfer);
+    });
+    // While editing, a click on a link puts the cursor there; Ctrl- or Cmd-click opens it.
+    page.addEventListener('click', (e) => {
+      const a = editing && (e.metaKey || e.ctrlKey) && e.target.closest('a[href]');
+      if (a) window.open(a.href, '_blank', 'noopener');
+    });
+
+    load().then(() => startEditing && doc && edit());
+    return wrap;
+  }
+
+  // Pasted HTML (from Word, Google Docs, a web page) cut down to paragraphs, headings, lists, tables, links,
+  // bold, italic, underline and strikethrough. Built fresh from elements, so nothing pasted can run.
+  function cleanPaste(html) {
+    const src = new DOMParser().parseFromString(html, 'text/html').body;
+    const TAGS = { P: 'p', DIV: 'div', H1: 'h1', H2: 'h2', H3: 'h3', H4: 'h4', H5: 'h5', H6: 'h6', LI: 'li', UL: 'ul', OL: 'ol', TABLE: 'table', TBODY: 'tbody', THEAD: 'tbody', TFOOT: 'tbody', TR: 'tr', TD: 'td', TH: 'td', BR: 'br', B: 'b', STRONG: 'b', I: 'i', EM: 'i', U: 'u', S: 's', STRIKE: 's', DEL: 's', A: 'a' };
+    const SKIP = /^(SCRIPT|STYLE|META|LINK|TITLE|HEAD|TEMPLATE|IFRAME|OBJECT|EMBED|SVG|IMG|PICTURE|VIDEO|AUDIO|CANVAS|INPUT|BUTTON|SELECT|TEXTAREA|NOSCRIPT|FORM)$/;
+    const out = h('div');
+    const walk = (from, to) => {
+      for (const n of from.childNodes) {
+        if (n.nodeType === 3) {
+          to.append(n.data.replace(/\s+/g, ' '));
+          continue;
+        }
+        if (n.nodeType !== 1 || SKIP.test(n.tagName)) continue;
+        let into = to;
+        let tag = TAGS[n.tagName];
+        // Google Docs wraps a whole paste in <b style="font-weight:normal">.
+        if (tag === 'b' && /font-weight:\s*(normal|[1-5]00)/.test(n.getAttribute('style') || '')) tag = null;
+        if (tag === 'a') {
+          const href = n.getAttribute('href') || '';
+          tag = /^(https?:|mailto:|tel:)/i.test(href) ? 'a' : null;
+          if (tag) to.append((into = h('a', { href })));
+        } else if (tag) to.append((into = h(tag)));
+        else {
+          const st = n.style;
+          for (const [want, t] of [[/^(bold|bolder|[6-9]00)$/.test(st?.fontWeight || ''), 'b'], [st?.fontStyle === 'italic', 'i'], [/underline/.test(st?.textDecoration || ''), 'u'], [/line-through/.test(st?.textDecoration || ''), 's']]) {
+            if (!want) continue;
+            const x = h(t);
+            into.append(x);
+            into = x;
+          }
+        }
+        if (tag === 'br') continue;
+        const align = n.style?.textAlign;
+        if (tag && /^(p|div|h\d|li)$/.test(tag) && ['center', 'right', 'justify'].includes(align)) into.style.textAlign = align;
+        walk(n, into);
+      }
+    };
+    walk(src, out);
+    return out.innerHTML;
+  }
+
+  function newDocSheet(dest) {
+    const name = h('input', { value: 'Untitled document', maxlength: 120 });
+    sheet('New document', [h('label', {}, 'Name', name), h('p', { class: 'day-hint' }, 'A Word document (.docx). Anyone can download it and open it in Word.')], async () => {
+      const n = name.value.trim().replace(/[\\/]/g, '-').replace(/\.docx$/i, '') || 'Untitled document';
+      const item = await uploadFile(new File([await ColumnWord.blank()], n + '.docx', { type: ColumnWord.DOCX }), dest);
+      if (item) openPreview(item, { edit: true });
+    }, 'Create');
+    setTimeout(() => name.select());
   }
 
   // ----- PDFs: read, fill in, sign, and send for signature -----

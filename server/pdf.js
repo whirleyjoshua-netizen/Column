@@ -180,3 +180,173 @@ export async function addCertificate(doc, c) {
 }
 
 export const pageCount = async (bytes) => (await loadPdf(bytes)).getPageCount();
+
+// A document typed in Column (or a Word file) as a PDF, so it can be signed or sent.
+// blocks: [{ t: p|h1…h6|li|table|img|break, align, runs: [{ text, b, i, u, s, link }], ordered, n, lvl, rows, img }]
+// images: PNG or JPEG bytes for img blocks, by index.
+export async function writeDoc(blocks, { title = '' } = {}) {
+  const doc = await PDFDocument.create();
+  if (title) doc.setTitle(title);
+  const fonts = {
+    r: await doc.embedFont(StandardFonts.Helvetica),
+    b: await doc.embedFont(StandardFonts.HelveticaBold),
+    i: await doc.embedFont(StandardFonts.HelveticaOblique),
+    bi: await doc.embedFont(StandardFonts.HelveticaBoldOblique),
+  };
+  const LINK = rgb(0.02, 0.39, 0.76);
+  const [W, H, M] = [612, 792, 72];
+  const SIZE = { p: 11, li: 11, h1: 24, h2: 17, h3: 14, h4: 12, h5: 11, h6: 11 };
+  let page, y;
+  const newPage = () => {
+    page = doc.addPage([W, H]);
+    y = H - M;
+  };
+  newPage();
+  const fontOf = (r) => fonts[(r.b ? 'b' : '') + (r.i ? 'i' : '') || 'r'];
+
+  // Runs → wrapped lines of pieces, each piece one style.
+  function lines(runs, size, width) {
+    const out = [];
+    let line = { parts: [], w: 0 };
+    const push = () => {
+      while (line.parts.length && !line.parts.at(-1).text.trim()) line.w -= line.parts.pop().w;
+      out.push(line);
+      line = { parts: [], w: 0 };
+    };
+    const add = (r, text) => {
+      const f = fontOf(r);
+      const w = f.widthOfTextAtSize(text, size);
+      const last = line.parts.at(-1);
+      if (last && last.f === f && !!last.u === !!r.u && !!last.s === !!r.s && !!last.link === !!r.link) {
+        last.text += text;
+        last.w += w;
+      } else line.parts.push({ text, w, f, u: r.u, s: r.s, link: r.link });
+      line.w += w;
+    };
+    for (const r of runs) {
+      const f = fontOf(r);
+      for (const tok of safeText(f, r.text.replace(/\t/g, '    ').replace(/\r/g, '')).split(/(\n|\s+)/)) {
+        if (!tok) continue;
+        if (tok === '\n') {
+          push();
+          continue;
+        }
+        const w = f.widthOfTextAtSize(tok, size);
+        if (!tok.trim()) {
+          if (line.parts.length) add(r, tok);
+          continue;
+        }
+        if (line.w + w > width && line.parts.length) push();
+        if (w <= width) {
+          add(r, tok);
+          continue;
+        }
+        // A word wider than the line breaks wherever it has to.
+        let rest = tok;
+        while (rest) {
+          let i = rest.length;
+          while (i > 1 && f.widthOfTextAtSize(rest.slice(0, i), size) > width - line.w) i--;
+          add(r, rest.slice(0, i));
+          rest = rest.slice(i);
+          if (rest) push();
+        }
+      }
+    }
+    push();
+    return out;
+  }
+  function drawLine(l, x, top, width, size, align) {
+    const base = top - size;
+    let at = x + (align === 'center' ? (width - l.w) / 2 : align === 'right' ? width - l.w : 0);
+    for (const p of l.parts) {
+      const color = p.link ? LINK : INK;
+      page.drawText(p.text, { x: at, y: base, size, font: p.f, color });
+      if (p.u || p.link) page.drawLine({ start: { x: at, y: base - size * 0.12 }, end: { x: at + p.w, y: base - size * 0.12 }, thickness: size / 16, color });
+      if (p.s) page.drawLine({ start: { x: at, y: base + size * 0.3 }, end: { x: at + p.w, y: base + size * 0.3 }, thickness: size / 16, color });
+      at += p.w;
+    }
+  }
+  const styleRuns = (b) => {
+    const runs = (b.runs || []).filter((r) => r.text);
+    return /^h[2-6]$/.test(b.t) ? runs.map((r) => ({ ...r, b: true })) : runs;
+  };
+  const bullet = (b) => (b.ordered ? `${b.n}.` : ['•', '–', '·'][Math.min(2, b.lvl || 0) % 3]);
+  // How tall a text block is at a width, and how to draw it at a given top.
+  function text(b, width) {
+    const size = SIZE[b.t] || 11;
+    const lh = size * 1.32;
+    const indent = b.t === 'li' ? 18 * (1 + Math.min(6, b.lvl || 0)) : 0;
+    const ls = lines(styleRuns(b), size, width - indent);
+    const before = /^h/.test(b.t) ? size * 0.5 : 0;
+    const after = b.t === 'li' ? 3 : size * 0.55;
+    return {
+      ls, lh, size, before, after, indent,
+      height: before + ls.length * lh + after,
+      draw(x, top, n = ls.length, from = 0) {
+        if (b.t === 'li' && from === 0) page.drawText(safeText(fonts.r, bullet(b)), { x: x + indent - 14, y: top - size, size, font: fonts.r, color: INK });
+        for (let i = from; i < from + n; i++) drawLine(ls[i], x + indent, top - (i - from) * lh, width - indent, size, b.align);
+      },
+    };
+  }
+
+  const width = W - 2 * M;
+  for (const b of blocks) {
+    if (b.t === 'break') {
+      newPage();
+      continue;
+    }
+    if (b.t === 'img') {
+      if (!b.img) continue;
+      const img = b.img.type === 'png' ? await doc.embedPng(b.img.bytes) : await doc.embedJpg(b.img.bytes);
+      const wantW = b.w > 0 ? b.w * 0.75 : img.width * 0.75;
+      const k = Math.min(1, width / wantW, (H - 2 * M) / ((wantW / img.width) * img.height));
+      const w = wantW * k;
+      const h = (w / img.width) * img.height;
+      if (y - h < M) newPage();
+      page.drawImage(img, { x: M, y: y - h, width: w, height: h });
+      y -= h + 8;
+      continue;
+    }
+    if (b.t === 'table') {
+      const cols = Math.max(1, ...b.rows.map((r) => r.length));
+      const cw = width / cols;
+      const pad = 5;
+      for (const row of b.rows) {
+        const cells = row.map((blocks) => blocks.map((x) => text(x, cw - 2 * pad)));
+        const rh = Math.max(16, ...cells.map((c) => c.reduce((n, t) => n + t.height, 0) - (c.at(-1)?.after || 0) + 2 * pad));
+        if (y - rh < M && y < H - M) newPage();
+        cells.forEach((c, i) => {
+          const x = M + i * cw;
+          page.drawRectangle({ x, y: y - rh, width: cw, height: rh, borderColor: GREY, borderWidth: 0.6 });
+          let top = y - pad;
+          for (const t of c) {
+            top -= t.before;
+            t.draw(x + pad, top);
+            top -= t.ls.length * t.lh + t.after;
+          }
+        });
+        y -= rh;
+      }
+      y -= 10;
+      continue;
+    }
+    const t = text(b, width);
+    if (!(b.runs || []).some((r) => r.text.trim())) {
+      if (y - t.lh < M) newPage();
+      y -= t.lh * 0.8;
+      continue;
+    }
+    y -= t.before;
+    // A heading moves to the next page rather than sit alone at the bottom.
+    if (/^h/.test(b.t) && y - t.lh * 3 < M) newPage();
+    for (let i = 0; i < t.ls.length; ) {
+      if (y - t.lh < M) newPage();
+      const fit = Math.max(1, Math.min(t.ls.length - i, Math.floor((y - M) / t.lh)));
+      t.draw(M, y, fit, i);
+      y -= fit * t.lh;
+      i += fit;
+    }
+    y -= t.after;
+  }
+  return doc.save();
+}

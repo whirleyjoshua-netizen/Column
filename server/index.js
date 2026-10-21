@@ -13,7 +13,7 @@ import { streamZip, zipSize } from './zip.js';
 import { iconPng } from './png.js';
 import { providers as calProviders } from './calendar.js';
 import { llms, llmError, complete } from './llm.js';
-import { PdfError, stampPdf, addCertificate, pageCount } from './pdf.js';
+import { PdfError, stampPdf, addCertificate, pageCount, writeDoc } from './pdf.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 4747);
@@ -441,6 +441,7 @@ async function receiveUpload(req, dest) {
 // Folder-relative path with no way to climb out of the folder.
 const cleanRel = (p) => String(p || 'file').replace(/\\/g, '/').split('/').filter((x) => x && x !== '.' && x !== '..').join('/') || 'file';
 const isTextFile = (it) => (it.mime || '').startsWith('text/') || /\.(json|js|ts|css|html|md|csv|tsv|txt|log|py|sh|ya?ml|xml)$/i.test(it.name);
+const isWordFile = (it) => /\.docx$/i.test(it.name) || it.mime === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 const cleanName = (n) => String(n || 'file').replace(/[\/\\]/g, '_').slice(0, 255);
 
 // Resumable uploads: a session holds the bytes received so far in FILES_DIR/.part-<id>.
@@ -1578,6 +1579,35 @@ async function pdfWork(fn) {
 }
 // "Lease.pdf" → "Lease (signed).pdf"
 const copyName = (name, what) => `${name.replace(/\.pdf$/i, '').replace(/ \((signed|filled)\)$/, '')} (${what}).pdf`;
+// A document from the editor, checked over before it becomes a PDF: text blocks, lists, tables (text only),
+// PNG or JPEG pictures and page breaks. Anything else is dropped.
+const DOC_TYPES = ['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'li'];
+function cleanBlocks(list, budget = { blocks: 20000, pics: 30 }, inCell = false) {
+  const out = [];
+  if (!Array.isArray(list)) return out;
+  const runs = (rs) => (Array.isArray(rs) ? rs.slice(0, 2000) : []).map((r) => ({
+    text: typeof r?.text === 'string' ? r.text.slice(0, 20000) : '',
+    ...Object.fromEntries(['b', 'i', 'u', 's', 'link'].filter((k) => r?.[k] === true).map((k) => [k, true])),
+  })).filter((r) => r.text);
+  for (const b of list) {
+    if (--budget.blocks < 0) break;
+    if (!b || typeof b !== 'object') continue;
+    const align = ['center', 'right', 'justify'].includes(b.align) ? b.align : '';
+    if (DOC_TYPES.includes(b.t)) {
+      out.push({ t: b.t, align, runs: runs(b.runs), ...(b.t === 'li' ? { ordered: !!b.ordered, n: Math.max(1, Math.min(9999, b.n | 0)), lvl: Math.max(0, Math.min(8, b.lvl | 0)) } : {}) });
+    } else if (inCell) continue;
+    else if (b.t === 'break') out.push({ t: 'break' });
+    else if (b.t === 'table' && Array.isArray(b.rows)) {
+      const rows = b.rows.slice(0, 500).map((r) => (Array.isArray(r) ? r.slice(0, 30) : []).map((cell) => cleanBlocks(cell, budget, true)));
+      if (rows.length) out.push({ t: 'table', rows });
+    } else if (b.t === 'img' && typeof b.src === 'string' && budget.pics-- > 0) {
+      const m = /^data:image\/(png|jpeg);base64,([A-Za-z0-9+/=]+)$/.exec(b.src);
+      if (!m || m[2].length > 11_000_000) continue;
+      out.push({ t: 'img', w: Math.max(0, Math.min(5000, +b.w || 0)), img: { type: m[1] === 'png' ? 'png' : 'jpg', bytes: Buffer.from(m[2], 'base64') } });
+    }
+  }
+  return out;
+}
 async function addPdf(who, bytes, name, src) {
   const ws = db.workspaces[who.wsId];
   const id = rid();
@@ -2757,6 +2787,19 @@ async function api(req, res, url) {
     return send(res, 200, publicItem(item));
   }
 
+  // A document from the editor (a Word file, or one started in Column) as a PDF in the same stack.
+  if (a === 'docs' && b === 'pdf' && m === 'POST') {
+    const body = await readJson(req, 40_000_000);
+    const src = body.itemId ? db.items[body.itemId] : null;
+    if (body.itemId && (!src || src.wsId !== ws.id || !canSee(auth, 'item', src))) return send(res, 404, { error: 'Not found' });
+    const blocks = cleanBlocks(body.blocks);
+    if (!blocks.some((x) => x.t === 'img' || x.t === 'table' || x.runs?.some((r) => r.text.trim()))) return send(res, 400, { error: 'There’s nothing in this document yet.' });
+    const name = (cleanText(body.name, 200) || 'Document').replace(/\.(docx?|pdf)$/i, '');
+    const bytes = Buffer.from(await pdfWork(() => writeDoc(blocks, { title: name })));
+    const item = await addPdf(auth, bytes, name + '.pdf', src || { stackId: body.stackId, channelId: body.channelId });
+    return send(res, 200, publicItem(item));
+  }
+
   if (a === 'signs') {
     const mine = (x) => x.wsId === ws.id && x.memberId === auth.memberId;
     if (m === 'GET' && !b) return send(res, 200, Object.values(db.signs).filter(mine).sort((p, q) => q.createdAt - p.createdAt).slice(0, SIGN_KEEP).map(publicSign));
@@ -3767,12 +3810,24 @@ async function api(req, res, url) {
   if (a === 'files' && b && m === 'PUT') {
     const it = db.items[b];
     if (!it || it.wsId !== ws.id || it.type !== 'file' || !canSee(auth, 'item', it)) return send(res, 404, { error: 'Not found' });
-    if (!isTextFile(it)) return send(res, 400, { error: 'Only text files can be edited here.' });
+    const word = isWordFile(it);
+    if (!isTextFile(it) && !word) return send(res, 400, { error: 'Only text files and Word documents can be edited here.' });
     const tmp = path.join(FILES_DIR, '.edit-' + rid());
     const { size } = await receiveUpload(req, tmp);
-    if (size > 5_000_000) {
+    if (size > (word ? 100_000_000 : 5_000_000)) {
       await fsp.rm(tmp, { force: true });
       return send(res, 413, { error: 'Too big to edit here' });
+    }
+    // A Word document is a zip; anything else would leave a file Word can't open.
+    if (word) {
+      const fh = await fsp.open(tmp);
+      const head = Buffer.alloc(4);
+      await fh.read(head, 0, 4, 0);
+      await fh.close();
+      if (head.readUInt32LE(0) !== 0x04034b50) {
+        await fsp.rm(tmp, { force: true });
+        return send(res, 400, { error: 'That isn’t a Word document.' });
+      }
     }
     await fsp.rename(tmp, path.join(FILES_DIR, it.id));
     Object.assign(it, { size, editedAt: Date.now(), editedBy: auth.member });
@@ -3794,7 +3849,7 @@ async function api(req, res, url) {
 // so devices that stay open (like the desktop app in the tray) pick up updates.
 let clientVer = { key: '', hash: '' };
 function clientVersion() {
-  const files = ['index.html', 'app.js', 'style.css', 'pdfkit.js'].map((f) => path.join(CLIENT_DIR, f));
+  const files = ['index.html', 'app.js', 'style.css', 'pdfkit.js', 'wordkit.js'].map((f) => path.join(CLIENT_DIR, f));
   const key = files.map((f) => fs.statSync(f, { throwIfNoEntry: false })?.mtimeMs || 0).join(':');
   if (key !== clientVer.key) {
     const h = crypto.createHash('sha256');
