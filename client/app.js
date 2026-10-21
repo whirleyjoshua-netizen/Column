@@ -420,6 +420,11 @@
       if (x && was && x.status !== was.status && (x.status === 'signed' || x.status === 'declined')) {
         toast(`${x.signer.name} ${x.status === 'signed' ? 'signed' : 'declined to sign'} “${x.name}”`, { label: 'Details', run: () => signSheet(x) });
       }
+    } else if (msg.type === 'sidekick' || msg.type === 'sidekick:remove') {
+      S.sidekick = (S.sidekick || []).filter((x) => x.id !== (msg.sidekick?.id || msg.id));
+      if (msg.sidekick) S.sidekick.unshift(msg.sidekick);
+      renderTool();
+      renderCamps();
     } else if (msg.type === 'plan' || msg.type === 'plan:remove') {
       if (msg.plan && msg.plan.id === PL.dirty) return;
       S.plans = (S.plans || []).filter((x) => x.id !== (msg.plan?.id || msg.id));
@@ -533,6 +538,7 @@
     S.budgets = st.budgets || [];
     api('GET', '/meetings').then((x) => { S.meetings = x; renderRec(); }).catch(() => {});
     api('GET', '/plans').then((x) => { S.plans = x; renderTool(); }).catch(() => {});
+    api('GET', '/sidekick').then((x) => { S.sidekick = x; renderTool(); renderCamps(); }).catch(() => {});
     loadVault();
     loadSignature();
     loadSigns();
@@ -3068,6 +3074,7 @@
         st ? h('button', { class: 'btn small', title: 'Jot a quick note, or open one', onclick: (e) => notesMenu(e.currentTarget, c) }, `Notes · ${notes} ▾`) : null,
         h('button', { class: 'btn small' + (K.logOpen === c.id ? ' on' : ''), onclick: () => openLog(c) }, 'Log'),
         h('button', { class: 'btn small', onclick: () => openReport(c) }, 'Write a report'),
+        h('button', { class: 'btn small' + (skFor(c.id)?.nudge ? ' sk-nudge' : ''), title: skFor(c.id)?.nudge?.text || 'Talk this campaign through with Sidekick', onclick: () => sidekickFor(c) }, '✦ Sidekick'),
         signsFor(c) ? h('button', { class: 'btn small', title: 'Sent for signature', onclick: () => { SG.filter = c.id; openTool('signs'); } }, `Signatures · ${signsFor(c)}`) : null,
         vaultLinked('campaign', c.id) ? h('button', { class: 'btn small', title: 'In your vault', onclick: () => openVaultFor('campaign', c.id) }, h('span', { class: 'vault-ic', html: I.lock }), `Vault · ${vaultLinked('campaign', c.id)}`) : null),
       sendBars(c),
@@ -5330,18 +5337,18 @@
   }
 
   // ---------- tools: small apps that open in a drawer, so the tabs stay as they are ----------
-  const TOOLS = { bills: { name: 'Finance', render: financeTool }, contacts: { name: 'Contacts', render: contactsTool }, email: { name: 'Email', render: emailTool }, meetings: { name: 'Meeting notes', render: meetingsTool }, planner: { name: 'Planner', render: plannerTool }, signs: { name: 'Signatures', render: signsTool }, vault: { name: 'Vault', render: vaultTool } };
+  const TOOLS = { sidekick: { name: 'Sidekick', render: sidekickTool }, bills: { name: 'Finance', render: financeTool }, contacts: { name: 'Contacts', render: contactsTool }, email: { name: 'Email', render: emailTool }, meetings: { name: 'Meeting notes', render: meetingsTool }, planner: { name: 'Planner', render: plannerTool }, signs: { name: 'Signatures', render: signsTool }, vault: { name: 'Vault', render: vaultTool } };
   let toolOpen = null;
   $('#toolsBtn').addEventListener('click', (e) => {
     const soon = billsSoon().length;
     const tight = budgetAlerts().length;
     openMenu(e.currentTarget, [
       { head: 'Tools' },
+      { label: h('span', { class: 'tool-item' }, '✦ Sidekick', skNudges().length ? h('small', {}, `${skNudges().length} need${skNudges().length === 1 ? 's' : ''} a look`) : null), on: toolOpen === 'sidekick', run: () => { SK.open = null; openTool('sidekick'); } },
       { label: h('span', { class: 'tool-item' }, 'Finance', soon || tight ? h('small', {}, [soon ? `${soon} due soon` : '', tight ? `${tight} budget${tight === 1 ? '' : 's'} nearly used` : ''].filter(Boolean).join(' · ')) : null), on: toolOpen === 'bills', run: () => openTool('bills') },
       amOwner() ? { label: 'Contacts', on: toolOpen === 'contacts', run: () => openTool('contacts') } : null,
       mayEmail() ? { label: h('span', { class: 'tool-item' }, 'Email', (S.mail?.sends || []).some((x) => x.status === 'sending') ? h('small', {}, 'sending…') : null), on: toolOpen === 'email', run: () => openTool('email') } : null,
       { label: 'Meeting notes', on: toolOpen === 'meetings', run: () => openTool('meetings') },
-      { label: 'Planner', on: toolOpen === 'planner', run: () => openTool('planner') },
       { label: h('span', { class: 'tool-item' }, 'Signatures', SG.list.some((x) => x.status === 'sent' || x.status === 'viewed') ? h('small', {}, `${SG.list.filter((x) => x.status === 'sent' || x.status === 'viewed').length} waiting`) : null), on: toolOpen === 'signs', run: () => { SG.filter = null; openTool('signs'); } },
       { label: h('span', { class: 'tool-item' }, 'Vault', VK.key ? h('small', {}, 'unlocked') : null), on: toolOpen === 'vault', run: () => { VK.filter = null; openTool('vault'); } },
     ].filter(Boolean));
@@ -5356,10 +5363,11 @@
     toolOpen = null;
     $('#tool').classList.add('hidden');
   }
-  function renderTool() {
+  // Holds off while you're typing in it, so a redraw can't eat what you wrote. Sidekick keeps its own draft.
+  function renderTool(force) {
     const el = $('#tool');
     if (!toolOpen || el.classList.contains('hidden')) return;
-    if (el.contains(document.activeElement) && document.activeElement.matches('input, textarea, select')) return;
+    if (!force && el.contains(document.activeElement) && document.activeElement.matches('input, textarea, select')) return;
     const keep = el.scrollTop;
     el.replaceChildren(h('h2', {}, TOOLS[toolOpen].name, h('button', { class: 'icon-btn', html: I.close, 'aria-label': 'Close', onclick: closeTool })), ...TOOLS[toolOpen].render().filter(Boolean));
     el.scrollTop = keep;
@@ -6054,6 +6062,254 @@
     const abc = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%*-_';
     const r = crypto.getRandomValues(new Uint32Array(20));
     return [...r].map((n) => abc[n % abc.length]).join('');
+  }
+
+  // ----- Sidekick: plan a campaign or a schedule by talking it through -----
+  // You talk it through; it proposes cards (goals, a prospect list, a script, a budget, time on your Day).
+  // You accept, skip or edit each, ask it to check what you kept, then build: the cards become the campaign,
+  // its goals and tasks, notes and lists, or blocks on your Day. Afterwards it keeps an eye on the pace,
+  // and you can open it again to talk about how it's going.
+  const SK = { open: null, busy: false, draft: '' };
+  const skById = (id) => (S.sidekick || []).find((x) => x.id === id);
+  const skFor = (campaignId) => (S.sidekick || []).find((x) => x.campaignId === campaignId);
+  const skNudges = () => (S.sidekick || []).filter((x) => x.nudge && x.status !== 'done' && campById(x.campaignId)?.status === 'active');
+  const skCards = (x) => x.messages.flatMap((m) => m.cards || []);
+  const SK_LABEL = { campaign: 'Campaign', goal: 'Goal', list: 'Prospect list', note: 'Note', budget: 'Budget', block: 'On your Day', task: 'Task', change: 'Change' };
+  async function skCall(method, path, body) {
+    SK.busy = true;
+    renderTool(true);
+    try {
+      const x = await api(method, path, { ...body, today: todayKey() });
+      S.sidekick = [x, ...(S.sidekick || []).filter((y) => y.id !== x.id)];
+      return x;
+    } catch (e) {
+      if (/Settings → AI/.test(e.message)) toast(e.message, { label: 'Open Settings', run: () => { closeTool(); openSettings(); } });
+      else toast(e.message);
+      return null;
+    } finally {
+      SK.busy = false;
+      renderTool(true);
+      if (path.endsWith('/say') || path === '/sidekick') {
+        $('#tool .sk-end')?.scrollIntoView({ block: 'end' });
+        $('#tool .sk-say')?.focus();
+      }
+    }
+  }
+  async function skStart(kind) {
+    const x = await skCall('POST', '/sidekick', { kind });
+    if (x) { SK.open = x.id; renderTool(); }
+  }
+  // From a campaign: its conversation if Sidekick made it or talked about it, else a new one about it.
+  async function sidekickFor(c) {
+    const had = skFor(c.id);
+    if (had) { SK.open = had.id; openTool('sidekick'); return; }
+    SK.open = null;
+    openTool('sidekick');
+    const x = await skCall('POST', '/sidekick', { campaignId: c.id });
+    if (x) { SK.open = x.id; renderTool(); }
+  }
+  function skStatus(x) {
+    const c = campById(x.campaignId);
+    if (x.status === 'done') return 'Done';
+    if (c) return `${Math.round(campProgress(c) * 100)}% · ${x.nudge ? 'behind pace' : c.status === 'done' ? 'finished' : 'on track'}`;
+    if (x.status === 'built') return 'On your Day';
+    const n = skCards(x).filter((y) => y.state === 'accepted').length;
+    return n ? `Planning · ${n} accepted` : 'Planning';
+  }
+  function sidekickTool() {
+    const x = SK.open && skById(SK.open);
+    if (x) return skView(x);
+    SK.open = null;
+    const rank = (y) => (y.status === 'done' ? 3 : y.nudge ? 0 : y.status === 'built' ? 1 : 2);
+    const all = [...(S.sidekick || [])].sort((a, b) => rank(a) - rank(b) || b.updatedAt - a.updatedAt);
+    const row = (y) => h('div', { class: 'bill sk-row' + (y.status === 'done' ? ' done' : ''), onclick: () => { SK.open = y.id; renderTool(); } },
+      y.nudge && y.status !== 'done' ? h('span', { class: 'sk-dot', title: y.nudge.text }) : null,
+      h('span', { class: 'bill-name' }, y.title, h('small', {}, `${y.kind === 'schedule' ? 'Schedule' : 'Campaign'} · ${skStatus(y)}`)),
+      h('span', { class: 'bill-right' }, h('small', {}, ago(y.updatedAt))));
+    return [
+      h('p', { class: 'day-hint' }, 'Talk it through and Sidekick lays out a plan: what to do, what you need, and when. You pick what to keep, it checks it adds up, then builds it.'),
+      h('div', { class: 'sk-start' },
+        h('button', { class: 'btn', disabled: SK.busy, onclick: () => skStart('campaign') }, h('b', {}, 'Plan a campaign'), h('small', {}, 'Goals, prospects, scripts, budget')),
+        h('button', { class: 'btn', disabled: SK.busy, onclick: () => skStart('schedule') }, h('b', {}, 'Plan my schedule'), h('small', {}, 'Time blocks around your Day'))),
+      SK.busy ? h('p', { class: 'day-hint' }, 'Thinking…') : null,
+      all.length ? h('section', {}, h('h3', {}, 'Your plans'), all.map(row)) : null,
+      (S.plans || []).length ? h('details', { class: 'bill-paid' }, h('summary', {}, `Older plans · ${S.plans.length}`),
+        S.plans.map((p) => h('div', { class: 'bill-hist', onclick: () => { PL.open = p.id; openTool('planner'); } }, h('span', {}, p.name), h('small', {}, p.goal || '')))) : null,
+    ];
+  }
+  function skCardBody(c) {
+    const fmtT = (m) => (m == null ? '' : fmtTime(m));
+    if (c.type === 'campaign') return [h('b', {}, c.name), c.start || c.end ? h('small', {}, [c.start && dueLabel(c.start), c.end && dueLabel(c.end)].filter(Boolean).join(' → ')) : null, c.brief ? h('p', {}, c.brief) : null];
+    if (c.type === 'goal') return [h('b', {}, c.title), h('small', {}, [c.kind === 'count' ? `${c.target} logged` : c.kind === 'money' ? money(c.target * 100) : `${c.tasks.length} task${c.tasks.length === 1 ? '' : 's'}`, c.due && 'by ' + dueLabel(c.due)].filter(Boolean).join(' · ')),
+      c.tasks.length ? h('ul', {}, c.tasks.map((t) => h('li', {}, t.text, t.due ? h('small', {}, ' · ' + dueLabel(t.due)) : null))) : null];
+    if (c.type === 'list') {
+      const n = S.contacts ? S.contacts.filter((x) => liveMatch(c.live, x, Date.now())).length : null;
+      const f = c.live;
+      return [h('b', {}, c.name), h('small', {}, [f.stages.length ? f.stages.map(stageLabel).join(', ') : 'Any stage', f.cities.join(', '), f.sources.join(', '), f.days ? `last ${f.days} days` : '', f.need ? `has ${f.need}` : '', n != null ? `${n} from PSS now` : ''].filter(Boolean).join(' · '))];
+    }
+    if (c.type === 'note') return [h('b', {}, c.title || 'Note'), h('p', { class: 'sk-note' }, c.text)];
+    if (c.type === 'budget') return [h('b', {}, `${c.category} · ${money(c.limit * 100)} a month`)];
+    if (c.type === 'block') return [h('b', {}, c.text), h('small', {}, `${dueLabel(c.date)} · ${fmtT(c.start)}–${fmtT(c.end)}${c.repeat ? ' · repeats ' + c.repeat : ''}`)];
+    if (c.type === 'task') return [h('b', {}, c.text), h('small', {}, [c.goal && 'under ' + c.goal, c.due && dueLabel(c.due)].filter(Boolean).join(' · '))];
+    return [h('b', {}, c.text), h('small', {}, [c.due && 'due ' + dueLabel(c.due), c.target && 'target ' + c.target, c.end && 'ends ' + dueLabel(c.end)].filter(Boolean).join(' · '))];
+  }
+  function skCardEl(x, c) {
+    const set = (state) => skCall('PATCH', `/sidekick/${x.id}/cards/${c.id}`, { state });
+    const can = c.type !== 'list' || amOwner();
+    return h('div', { class: `sk-card ${c.state}` },
+      h('div', { class: 'sk-card-h' }, SK_LABEL[c.type]),
+      ...skCardBody(c),
+      c.why ? h('p', { class: 'sk-why' }, c.why) : null,
+      h('div', { class: 'sk-card-btns' },
+        c.state === 'built' ? h('small', { class: 'plan-ok' }, '✓ Added')
+          : c.state === 'accepted' ? [h('small', { class: 'plan-ok' }, '✓ Accepted'), h('button', { class: 'linkish', onclick: () => set('new') }, 'Undo')]
+          : c.state === 'skipped' ? [h('small', {}, 'Skipped'), h('button', { class: 'linkish', onclick: () => set('new') }, 'Undo')]
+          : [can ? h('button', { class: 'btn small primary-btn', onclick: () => set('accepted') }, 'Accept') : h('small', {}, 'Only owners can pull PSS leads'),
+            h('button', { class: 'btn small', onclick: () => skEdit(x, c) }, 'Edit'),
+            h('button', { class: 'btn small', onclick: () => set('skipped') }, 'Skip')]));
+  }
+  // Edit a card's main fields, then it's accepted.
+  function skEdit(x, c) {
+    const f = {};
+    const field = (k, label, el) => { f[k] = el; return h('label', {}, label, el); };
+    const inp = (v, extra) => h('input', { value: v ?? '', ...extra });
+    const area = (v, rows) => { const t = h('textarea', { rows }); t.value = v || ''; return t; };
+    const time = (m) => h('input', { type: 'time', value: m == null ? '' : `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}` });
+    const body = {
+      campaign: () => [field('name', 'Name', inp(c.name)), h('div', { class: 'row2' }, field('start', 'Starts', inp(c.start, { type: 'date' })), field('end', 'Ends', inp(c.end, { type: 'date' }))), field('brief', 'Brief', area(c.brief, 4))],
+      goal: () => [field('title', 'Goal', inp(c.title)), h('div', { class: 'row2' }, c.kind === 'tasks' ? null : field('target', c.kind === 'money' ? 'Amount ($)' : 'How many', inp(c.target, { inputmode: 'decimal' })), field('due', 'By', inp(c.due, { type: 'date' }))), field('tasks', 'Tasks · one per line', area(c.tasks.map((t) => t.text).join('\n'), 5))],
+      list: () => [field('name', 'Name', inp(c.name))],
+      note: () => [field('title', 'Title', inp(c.title)), field('text', 'Text', area(c.text, 10))],
+      budget: () => [h('div', { class: 'row2' }, field('category', 'Category', inp(c.category)), field('limit', 'Each month ($)', inp(c.limit, { inputmode: 'decimal' })))],
+      block: () => [field('text', 'What', inp(c.text)), h('div', { class: 'row3' }, field('date', 'Day', inp(c.date, { type: 'date' })), field('start', 'From', time(c.start)), field('end', 'To', time(c.end)))],
+      task: () => [field('text', 'Task', inp(c.text)), field('due', 'Due', inp(c.due, { type: 'date' }))],
+      change: () => [field('text', 'Change', inp(c.text)), field('due', 'New date', inp(c.due || c.end, { type: 'date' }))],
+    }[c.type]();
+    sheet('Edit ' + SK_LABEL[c.type].toLowerCase(), body, async () => {
+      const card = {};
+      for (const [k, el] of Object.entries(f)) {
+        if (k === 'tasks') card.tasks = el.value.split('\n').map((t) => t.trim()).filter(Boolean).map((text) => ({ text, due: c.tasks.find((t) => t.text === text)?.due || null }));
+        else if (el.type === 'time') { const [hh, mm] = el.value.split(':').map(Number); card[k] = Number.isFinite(hh) ? hh * 60 + (mm || 0) : null; }
+        else card[k] = el.value;
+      }
+      if (c.type === 'change' && c.end && !c.due) { card.end = card.due; delete card.due; }
+      const y = await api('PATCH', `/sidekick/${x.id}/cards/${c.id}`, { state: 'accepted', card });
+      S.sidekick = [y, ...S.sidekick.filter((z) => z.id !== y.id)];
+      renderTool(true);
+    }, 'Save and accept');
+  }
+  function skView(x) {
+    const c = campById(x.campaignId);
+    const cards = skCards(x);
+    const ready = cards.filter((y) => y.state === 'accepted');
+    const say = h('textarea', { class: 'sk-say', rows: 2, placeholder: SK.busy ? 'Thinking…' : x.status === 'talking' ? 'Answer, or ask for changes…' : 'How’s it going? What should change?', disabled: SK.busy });
+    say.value = SK.draft;
+    say.addEventListener('input', () => (SK.draft = say.value));
+    const send = () => {
+      const text = say.value.trim();
+      if (!text || SK.busy) return;
+      SK.draft = '';
+      skCall('POST', `/sidekick/${x.id}/say`, { text }).then((y) => { if (!y) SK.draft = text; });
+    };
+    say.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } });
+    const menu = (e) => openMenu(e.currentTarget, [
+      { label: 'Rename', run: () => { const t = h('input', { value: x.title }); sheet('Rename', [h('label', {}, 'Name', t)], async () => { await skCall('PATCH', '/sidekick/' + x.id, { title: t.value }); }); } },
+      x.status !== 'done' ? { label: 'Mark done', run: () => skCall('PATCH', '/sidekick/' + x.id, { status: 'done' }) } : { label: 'Reopen', run: () => skCall('PATCH', '/sidekick/' + x.id, { status: x.campaignId || x.entryIds.length ? 'built' : 'talking' }) },
+      { label: 'Delete conversation', danger: true, run: async () => { await api('DELETE', '/sidekick/' + x.id).catch((er) => toast(er.message)); S.sidekick = S.sidekick.filter((y) => y.id !== x.id); SK.open = null; renderTool(); } },
+    ]);
+    return [
+      h('div', { class: 'sk-top' },
+        h('button', { class: 'icon-btn', 'aria-label': 'All plans', html: I.back, onclick: () => { SK.open = null; renderTool(); } }),
+        h('b', {}, x.title),
+        c ? h('button', { class: 'btn small', onclick: () => { closeTool(); setTab('camps'); openCampaign(c.id); } }, 'Open campaign') : x.entryIds.length ? h('button', { class: 'btn small', onclick: () => { closeTool(); setTab('day'); } }, 'Open Day') : null,
+        h('button', { class: 'icon-btn', 'aria-label': 'Options', html: I.more, onclick: menu })),
+      x.nudge && x.status !== 'done' ? h('div', { class: 'sk-nudge-bar' }, h('span', {}, 'Behind pace: ' + x.nudge.text), h('button', { class: 'btn small', disabled: SK.busy, onclick: () => skCall('POST', `/sidekick/${x.id}/say`, { text: 'We’re behind. What should change?' }) }, 'Talk it through')) : null,
+      h('div', { class: 'sk-chat' },
+        x.messages.filter((m) => !(m.role === 'user' && x.messages.indexOf(m) === 0)).map((m) => m.role === 'user'
+          ? h('div', { class: 'sk-msg me' }, m.check ? '✓ Check my plan' : m.text)
+          : h('div', { class: 'sk-msg' }, h('div', { class: 'sk-text' }, m.text), (m.cards || []).length ? h('div', { class: 'sk-cards' }, m.cards.map((cd) => skCardEl(x, cd))) : null)),
+        SK.busy ? h('div', { class: 'sk-msg sk-thinking' }, 'Thinking…') : null,
+        h('span', { class: 'sk-end' })),
+      ready.length ? h('div', { class: 'sk-ready' },
+        h('span', {}, `${ready.length} accepted`),
+        h('button', { class: 'btn small', disabled: SK.busy, onclick: () => skCall('POST', `/sidekick/${x.id}/check`, {}) }, 'Check my plan'),
+        h('button', { class: 'btn small primary-btn', disabled: SK.busy, onclick: () => skBuild(x) }, c || x.status === 'built' ? `Apply ${ready.length}` : x.kind === 'schedule' ? 'Put it on my Day' : 'Build campaign')) : null,
+      h('div', { class: 'sk-compose' }, say, h('button', { class: 'btn primary-btn', disabled: SK.busy, onclick: send }, 'Send')),
+    ];
+  }
+  // Builds the accepted cards: the campaign first (or the one this is about), then everything that goes in it.
+  async function skBuild(x) {
+    const cards = skCards(x).filter((y) => y.state === 'accepted');
+    SK.busy = true;
+    renderTool(true);
+    const made = [];
+    const entryIds = [];
+    try {
+      let c = campById(x.campaignId);
+      if (!c && x.kind === 'campaign') {
+        const cc = cards.find((y) => y.type === 'campaign') || { name: x.title };
+        c = await api('POST', '/campaigns', { name: cc.name, brief: cc.brief || '', start: cc.start || todayKey(), end: cc.end || null });
+        if (!S.campaigns.some((y) => y.id === c.id)) S.campaigns.push(c);
+        made.push(cc);
+      }
+      const goalByTitle = (t) => c && goalsOf(c.id).find((g) => g.title.trim().toLowerCase() === String(t || '').trim().toLowerCase());
+      for (const y of cards) {
+        if (y.type === 'campaign') {
+          // On a campaign that's already there, it updates the brief and dates.
+          if (!made.includes(y) && c) {
+            const z = await api('PATCH', '/campaigns/' + c.id, { brief: y.brief || c.brief, ...(y.start ? { start: y.start } : {}), ...(y.end ? { end: y.end } : {}) });
+            S.campaigns = S.campaigns.map((w) => (w.id === z.id ? z : w));
+          }
+          if (!made.includes(y)) made.push(y);
+        } else if (y.type === 'goal' && c) {
+          const g = await api('POST', '/goals', { campaignId: c.id, title: y.title, kind: y.kind, target: y.target, due: y.due });
+          if (!S.goals.some((z) => z.id === g.id)) S.goals.push(g);
+          for (const t of y.tasks) upsertTask(await api('POST', '/tasks', { text: t.text, due: t.due, goalId: g.id }));
+          made.push(y);
+        } else if (y.type === 'list' && c && amOwner()) {
+          upsertList(await api('POST', '/lists', { campaignId: c.id, name: y.name, live: y.live }));
+          made.push(y);
+        } else if (y.type === 'note') {
+          const it = await api('POST', '/items', { type: 'text', text: [y.title, y.text].filter(Boolean).join('\n\n'), stackId: c?.stackId || null });
+          await api('PATCH', '/items/' + it.id, { pinned: true }).catch(() => {});
+          made.push(y);
+        } else if (y.type === 'budget') {
+          const b = await api('PUT', '/budgets', { scope: amOwner() && c ? 'business' : 'personal', category: y.category, limit: y.limit });
+          S.budgets = [...(S.budgets || []).filter((z) => z.id !== b.id), b];
+          made.push(y);
+        } else if (y.type === 'block') {
+          const e = await api('POST', '/entries', { text: y.text, date: y.date, start: y.start, end: y.end, repeat: y.repeat });
+          upsertEntry(e);
+          entryIds.push(e.id);
+          made.push(y);
+        } else if (y.type === 'task') {
+          upsertTask(await api('POST', '/tasks', { text: y.text, due: y.due, goalId: goalByTitle(y.goal)?.id || null }));
+          made.push(y);
+        } else if (y.type === 'change' && c) {
+          if (y.goalId && goalById(y.goalId)) {
+            const g = await api('PATCH', '/goals/' + y.goalId, { ...(y.due ? { due: y.due } : {}), ...(y.target ? { target: y.target } : {}) });
+            S.goals = S.goals.map((z) => (z.id === g.id ? g : z));
+          }
+          if (y.end) {
+            const z = await api('PATCH', '/campaigns/' + c.id, { end: y.end });
+            S.campaigns = S.campaigns.map((w) => (w.id === z.id ? z : w));
+          }
+          made.push(y);
+        }
+      }
+      for (const y of made) await api('PATCH', `/sidekick/${x.id}/cards/${y.id}`, { state: 'built' }).catch(() => {});
+      const z = await api('PATCH', '/sidekick/' + x.id, { built: true, campaignId: c?.id, entryIds, today: todayKey() });
+      S.sidekick = [z, ...S.sidekick.filter((w) => w.id !== z.id)];
+      const left = cards.length - made.length;
+      toast(`${c ? c.name : 'Your Day'}: ${plural(made.length, 'thing')} added${left ? ` · ${left} couldn’t be` : ''}`, c ? { label: 'Open', run: () => { closeTool(); setTab('camps'); openCampaign(c.id); } } : { label: 'Open Day', run: () => { closeTool(); setTab('day'); } });
+      renderCamps();
+      renderDay();
+    } catch (e) {
+      toast(e.message);
+    } finally {
+      SK.busy = false;
+      renderTool(true);
+    }
   }
 
   // ----- planner: the end goal, the steps to it, and what's needed before it can start -----

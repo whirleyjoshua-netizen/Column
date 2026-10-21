@@ -27,7 +27,7 @@ const PUBLIC_URL = (process.env.PUBLIC_URL || `http://localhost:${PORT}`).replac
 fs.mkdirSync(FILES_DIR, { recursive: true });
 
 // ---------- persistence (a JSON file is plenty for personal/small-team use) ----------
-let db = { workspaces: {}, tokens: {}, items: {}, entries: {}, tasks: {}, uploads: {}, campaigns: {}, goals: {}, attempts: {}, lists: {}, templates: {}, calendars: {}, ai: {}, pss: {}, sends: {}, bills: {}, meetings: {}, money: {}, budgets: {}, plans: {}, vaults: {}, vaultItems: {}, signs: {}, signatures: {} };
+let db = { workspaces: {}, tokens: {}, items: {}, entries: {}, tasks: {}, uploads: {}, campaigns: {}, goals: {}, attempts: {}, lists: {}, templates: {}, calendars: {}, ai: {}, pss: {}, sends: {}, bills: {}, meetings: {}, money: {}, budgets: {}, plans: {}, sidekick: {}, vaults: {}, vaultItems: {}, signs: {}, signatures: {} };
 try {
   db = { ...db, ...JSON.parse(fs.readFileSync(DB_PATH, 'utf8')) };
 } catch {}
@@ -2121,6 +2121,149 @@ async function aiPlan(ws, auth, c, body) {
   return { goals: out };
 }
 
+// ---------- Sidekick: plan a campaign or a schedule by talking it through ----------
+// A conversation with the person's own AI. It asks what the goal is, proposes a path as cards (goals and
+// tasks, a prospect list, a script, a budget, time on the Day), checks the accepted ones still add up, and
+// the app builds them through the usual routes. After that it keeps an eye on the campaign's pace and
+// says so when it's behind, and the person can pick the conversation back up. Each one is its maker's own.
+const SK_CARDS = ['campaign', 'goal', 'list', 'note', 'budget', 'block', 'task', 'change'];
+const SK_KEEP = 60;
+const publicSidekick = ({ wsId, ...x }) => x;
+const skNews = (x) => broadcast(x.wsId, { type: 'sidekick', sidekick: publicSidekick(x), forMember: x.memberId });
+const skDay = (v) => (isDay(v) ? v : null);
+const skMin = (v, max) => (Number.isFinite(Number(v)) && v !== null && v !== '' ? Math.max(0, Math.min(max, Math.round(Number(v)))) : null);
+// One card from the AI, cleaned up: only what Column can build, with sane values.
+function skCard(v, ws) {
+  const type = SK_CARDS.includes(v?.type) ? v.type : null;
+  if (!type) return null;
+  const t = (x, n) => clipText(String(x ?? '').trim(), n);
+  const c = { id: rid(6), type, state: 'new', why: t(v.why, 300) };
+  if (type === 'campaign') Object.assign(c, { name: t(v.name, 80), brief: t(v.brief, 4000), start: skDay(v.start), end: skDay(v.end) });
+  if (type === 'goal') Object.assign(c, {
+    title: t(v.title, 200), kind: ['count', 'money'].includes(v.kind) ? v.kind : 'tasks',
+    target: v.kind === 'count' || v.kind === 'money' ? Math.max(1, Math.min(10_000_000, Math.round(Number(String(v.target).replace(/[$,]/g, ''))) || 10)) : null,
+    due: skDay(v.due), tasks: (Array.isArray(v.tasks) ? v.tasks : []).slice(0, 12).map((x) => ({ text: t(x?.text, 300), due: skDay(x?.due) })).filter((x) => x.text),
+  });
+  if (type === 'list') {
+    if (!db.pss[ws.id]) return null;
+    Object.assign(c, { name: t(v.name, 80) || 'PSS leads', live: applyLive(v.live || {}) });
+  }
+  if (type === 'note') Object.assign(c, { title: t(v.title, 120), text: t(v.text, 8000) });
+  if (type === 'budget') Object.assign(c, { category: t(v.category, 40), limit: Math.max(1, Math.min(1e9, Math.round(Number(String(v.limit).replace(/[$,]/g, ''))) || 0)) });
+  if (type === 'block') Object.assign(c, { text: t(v.text, 200), date: skDay(v.date), start: skMin(v.start, 1439), end: skMin(v.end, 1440), repeat: REPEATS.includes(v.repeat) ? v.repeat : null });
+  if (type === 'task') Object.assign(c, { text: t(v.text, 300), due: skDay(v.due), goal: t(v.goal, 200) });
+  if (type === 'change') Object.assign(c, { text: t(v.text, 300), goalId: db.goals[v.goalId]?.wsId === ws.id ? v.goalId : null, due: skDay(v.due), target: Number(v.target) > 0 ? Math.round(Number(v.target)) : null, end: skDay(v.end) });
+  const empty = { campaign: !c.name, goal: !c.title, note: !c.text, budget: !c.category || !c.limit, block: !c.text || !c.date || c.start == null || c.end == null || c.end <= c.start, task: !c.text, change: !c.text || (!c.goalId && !c.end) }[type];
+  return empty ? null : c;
+}
+// How far along a campaign is, 0 to 1: its goals' progress on average, as the app shows it.
+function campFrac(c) {
+  const gs = Object.values(db.goals).filter((g) => g.campaignId === c.id);
+  if (!gs.length) return null;
+  const one = (g) => {
+    if (g.kind === 'money') return Math.min(1, Math.max(0, goalSaved(g.id)) / (g.target * 100));
+    if (g.kind === 'count') {
+      const n = Object.values(db.attempts).filter((x) => x.campaignId === c.id && (!g.counts?.length || g.counts.includes(x.outcome)) && (!g.methods?.length || g.methods.includes(x.method))).length;
+      return Math.min(1, n / g.target);
+    }
+    const ts = Object.values(db.tasks).filter((t) => t.goalId === g.id);
+    return ts.length ? ts.filter((t) => t.done).length / ts.length : 0;
+  };
+  return gs.reduce((n, g) => n + one(g), 0) / gs.length;
+}
+// Where the campaign is against its calendar: a note when it's well behind, or nothing.
+function skPace(c, today) {
+  if (!c || c.status !== 'active' || !c.start || !c.end || c.end <= c.start || today < c.start) return null;
+  const span = (Date.parse(c.end) - Date.parse(c.start)) / 864e5;
+  const gone = Math.min(1, (Date.parse(today) - Date.parse(c.start)) / 864e5 / span);
+  const done = campFrac(c);
+  if (done == null || gone < 0.15 || done >= gone - 0.2) return null;
+  return `${Math.round(gone * 100)}% of the way through the dates, ${Math.round(done * 100)}% done.`;
+}
+function runSidekickPace() {
+  for (const x of Object.values(db.sidekick)) {
+    if (!x.campaignId) continue;
+    const c = db.campaigns[x.campaignId];
+    const note = skPace(c, fmtDay(Date.now()));
+    if ((note || null) === (x.nudge?.text || null)) continue;
+    x.nudge = note ? { text: note, at: Date.now() } : null;
+    save();
+    skNews(x);
+  }
+}
+// What Sidekick knows before it asks anything: the date, what's in Column, and the campaign it's for.
+function skContext(ws, auth, x, today) {
+  const camps = Object.values(db.campaigns).filter((c) => c.wsId === ws.id && canSee(auth, 'campaign', c));
+  const p = db.pss[ws.id];
+  const count = (k) => Object.entries((p?.leads || []).reduce((m, l) => ((m[l[k] || '—'] = (m[l[k] || '—'] || 0) + 1), m), {})).sort((a, b) => b[1] - a[1]).slice(0, 12).map(([v, n]) => `${v} ${n}`).join(', ');
+  const mine = Object.values(db.entries).filter((e) => e.wsId === ws.id && e.memberId === auth.memberId && e.start != null && (e.repeat || (e.date >= today && e.date <= addDays(today, 14))));
+  const fmt = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+  const c = x.campaignId && db.campaigns[x.campaignId];
+  const lines = [
+    `Today is ${today} (${new Date(today + 'T12:00:00Z').toLocaleDateString('en-US', { weekday: 'long', timeZone: 'UTC' })}). The person is ${auth.member}${auth.role === 'owner' ? ', a team owner' : ''}.`,
+    camps.length ? `Campaigns already in Column: ${camps.slice(0, 30).map((c) => `${c.name} (${c.status})`).join('; ')}.` : 'No campaigns yet.',
+    p ? `PSS (their website's leads) is connected: ${p.leads?.length || 0} leads. By stage: ${count('stage')}. By city: ${count('city')}. By source: ${count('source')}.` : 'PSS isn’t connected, so there are no leads to pull in: prospects would have to be found or imported.',
+    mine.length ? `Their Day for the next two weeks (busy times):\n${mine.slice(0, 80).map((e) => `- ${e.repeat ? 'repeats ' + e.repeat + ' from ' + e.date : e.date} ${fmt(e.start)}${e.end != null ? '–' + fmt(e.end) : ''} ${clipText(e.text, 60)}`).join('\n')}` : 'Nothing on their Day in the next two weeks.',
+  ];
+  if (c) {
+    const gs = Object.values(db.goals).filter((g) => g.campaignId === c.id).sort((a, b) => (a.order || 0) - (b.order || 0));
+    const ts = Object.values(db.tasks).filter((t) => campaignOf('task', t) === c.id);
+    const log = Object.values(db.attempts).filter((a) => a.campaignId === c.id);
+    const recent = log.filter((a) => a.at > Date.now() - 14 * 864e5);
+    const by = (xs) => Object.entries(xs.reduce((m, a) => ((m[a.outcome] = (m[a.outcome] || 0) + 1), m), {})).map(([k, n]) => `${k} ${n}`).join(', ') || 'none';
+    const money = campMoney(c.id);
+    lines.push([
+      `This conversation is about the campaign “${c.name}” (${c.status}), running ${c.start || '?'} to ${c.end || 'no end'}. It's ${Math.round((campFrac(c) || 0) * 100)}% done.${x.nudge ? ' ' + x.nudge.text : ''}`,
+      c.brief ? `Brief: ${clipText(c.brief, 2000)}` : '',
+      gs.length ? `Goals (use these ids for changes):\n${gs.map((g) => `- [${g.id}] ${g.title} · ${g.kind}${g.target ? ' target ' + g.target : ''}${g.due ? ' due ' + g.due : ''} · ${g.kind === 'money' ? '$' + Math.round(goalSaved(g.id) / 100) + ' so far' : g.kind === 'count' ? '' : `${ts.filter((t) => t.goalId === g.id && t.done).length}/${ts.filter((t) => t.goalId === g.id).length} tasks done`}`).join('\n')}` : 'No goals yet.',
+      `Tasks: ${ts.filter((t) => t.done).length} done, ${ts.filter((t) => !t.done).length} open, ${ts.filter((t) => !t.done && t.due && t.due < today).length} overdue.`,
+      `Logged calls and emails: ${log.length} in all (${by(log)}); last 14 days ${recent.length} (${by(recent)}).`,
+      money ? `Money: spent $${Math.round(money.spent / 100)}, brought in $${Math.round(money.earned / 100)}.` : '',
+    ].filter(Boolean).join('\n'));
+  }
+  return lines.join('\n\n');
+}
+const SK_SYSTEM = (kind, built) => [
+  'You are Sidekick, the planning partner inside Column, a work app for a small business: it has campaigns (each with goals, and tasks under the goals, call lists, a log of calls and emails, and notes), a Day schedule, and Finance (money in and out, budgets).',
+  kind === 'schedule'
+    ? 'Here you help plan the person’s schedule: what they want to get done, when they work best, what’s fixed. Then propose time blocks on their Day around what’s already there.'
+    : 'Here you help plan a campaign: what success looks like (a number to reach, by when), who it’s aimed at, what they already have (leads, lists, scripts), how much time and money they can put in. Then propose the campaign, its goals with tasks, and what it needs to succeed.',
+  built ? 'The plan is already built and running. Help them see how it’s going from the numbers given, say plainly what’s working and what isn’t and why, what could happen next, and propose changes. Keep it short.' : '',
+  'Work like a sharp colleague brainstorming: ask one or two questions at a time, the ones that matter most, and don’t ask what the context already tells you. When you know enough, propose a path as cards. Explain briefly why each card helps. When asked to check the accepted cards, say honestly whether they add up to the goal (do the numbers work, is anything missing, is the time realistic) and propose what would fix it.',
+  'Never invent leads, names, numbers or results. Use dates from today on, as YYYY-MM-DD. Times are minutes after midnight (9:00 = 540).',
+  'Reply with JSON only: {"reply":"what you say, plain text, short paragraphs, no markdown","title":"a short name for this plan, once you know it, else null","cards":[...]}. cards is often empty while you’re still asking. Card shapes:',
+  '{"type":"campaign","name":"","brief":"the goal, audience and approach in a few lines","start":"YYYY-MM-DD","end":"YYYY-MM-DD","why":""}',
+  '{"type":"goal","title":"","kind":"tasks"|"count"|"money","target":number|null (count: logged calls or emails to reach; money: whole dollars),"due":"YYYY-MM-DD"|null,"tasks":[{"text":"an action for one sitting","due":"YYYY-MM-DD"|null}],"why":""}',
+  '{"type":"list","name":"","live":{"stages":[],"cities":[],"sources":[],"days":0|30|90|180|365,"need":"phone"|"email"|null},"why":""} — a prospect list pulled from PSS by filter, only if PSS is connected. Use stage, city and source values exactly as given.',
+  '{"type":"note","title":"","text":"","why":""} — a call script, an email draft, a checklist, talking points.',
+  '{"type":"budget","category":"","limit":whole dollars a month,"why":""}',
+  '{"type":"block","text":"","date":"YYYY-MM-DD","start":540,"end":600,"repeat":null|"daily"|"weekdays"|"weekly"|"monthly","why":""} — time on their Day. Don’t overlap what’s already there.',
+  built ? '{"type":"task","text":"","due":"YYYY-MM-DD"|null,"goal":"the goal’s title it goes under","why":""} and {"type":"change","text":"what changes, in words","goalId":"id"|null,"due":"YYYY-MM-DD"|null,"target":number|null,"end":"YYYY-MM-DD"|null (the campaign’s new end),"why":""}' : '',
+].filter(Boolean).join('\n');
+async function skTurn(ws, auth, x, today, say) {
+  const ai = aiOf(ws.id, auth.memberId);
+  const use = aiUse(ai);
+  if (!use) throw Object.assign(new Error('Add your AI key in Settings → AI to use Sidekick.'), { status: 400 });
+  const cardLine = (c) => `[${c.state}] ${c.type}: ${c.name || c.title || c.text || c.category || ''}${c.type === 'goal' && c.target ? ' · target ' + c.target : ''}${c.type === 'block' ? ` · ${c.date} ${c.start}-${c.end}${c.repeat ? ' ' + c.repeat : ''}` : ''}`;
+  const history = x.messages.slice(-30).map((m) => ({ role: m.role, text: m.role === 'assistant' ? JSON.stringify({ reply: m.text, cards: (m.cards || []).map(cardLine) }) : m.text }));
+  history.push({ role: 'user', text: `${say}\n\n(Context, not from the person)\n${skContext(ws, auth, x, today)}` });
+  let out;
+  try {
+    out = await llms[use.provider].run({ key: unseal(ai.keys[use.provider].sealed).key, model: use.model, system: SK_SYSTEM(x.kind, !!x.campaignId || x.status === 'built') + brandPrompt(ws), history, tools: [], web: false, exec: () => Promise.reject(new Error('No tools')) });
+  } catch (e) {
+    console.error('Sidekick request failed:', e.message);
+    throw Object.assign(new Error(llmError(e)), { status: 502 });
+  }
+  if (out.refused) throw Object.assign(new Error(out.text), { status: 502 });
+  const j = replyJson(out.text);
+  const msg = { role: 'assistant', text: clipText(String(j.reply || '').trim(), 6000) || '…', cards: (Array.isArray(j.cards) ? j.cards : []).slice(0, 16).map((v) => skCard(v, ws)).filter(Boolean), at: Date.now() };
+  if (j.title && (!x.title || x.title === 'New campaign plan' || x.title === 'New schedule')) x.title = clipText(String(j.title).trim(), 80);
+  x.messages.push(msg);
+  x.messages = x.messages.slice(-SK_KEEP);
+  x.updatedAt = Date.now();
+  return msg;
+}
+
 // ---------- icons ----------
 const iconCache = {};
 function icon(size) {
@@ -2728,6 +2871,81 @@ async function api(req, res, url) {
   }
 
   // Plans: only yours.
+  // Sidekick conversations: yours only.
+  if (a === 'sidekick') {
+    const mine = () => Object.values(db.sidekick).filter((x) => x.wsId === ws.id && x.memberId === auth.memberId);
+    if (m === 'GET' && !b) return send(res, 200, mine().sort((p, q) => q.updatedAt - p.updatedAt).map(publicSidekick));
+    const body = m === 'GET' || m === 'DELETE' ? {} : await readJson(req, 200_000);
+    const today = isDay(body.today) ? body.today : fmtDay(Date.now());
+    if (m === 'POST' && !b) {
+      if (mine().length >= 200) return send(res, 400, { error: 'You can keep up to 200 Sidekick plans. Delete some old ones first.' });
+      const camp = body.campaignId && db.campaigns[body.campaignId];
+      const ok = camp && camp.wsId === ws.id && canSee(auth, 'campaign', camp);
+      const kind = ok || body.kind !== 'schedule' ? 'campaign' : 'schedule';
+      const x = { id: rid(), wsId: ws.id, memberId: auth.memberId, createdAt: Date.now(), updatedAt: Date.now(), kind, title: ok ? camp.name : kind === 'schedule' ? 'New schedule' : 'New campaign plan', status: ok ? 'built' : 'talking', campaignId: ok ? camp.id : null, entryIds: [], messages: [], nudge: null };
+      await skTurn(ws, auth, x, today, ok ? `I want to talk about how “${camp.name}” is going.` : kind === 'schedule' ? 'I want to plan my schedule.' : 'I want to plan a campaign.');
+      x.messages[0].opener = true;
+      db.sidekick[x.id] = x;
+      save();
+      skNews(x);
+      return send(res, 200, publicSidekick(x));
+    }
+    const x = b && db.sidekick[b];
+    if (!x || x.wsId !== ws.id || x.memberId !== auth.memberId) return send(res, 404, { error: 'Not found' });
+    if (m === 'POST' && (c === 'say' || c === 'check')) {
+      const text = cleanText(body.text, 4000);
+      if (c === 'say' && !text) return send(res, 400, { error: 'Write something first.' });
+      const said = c === 'check' ? 'Check the cards I accepted: do they add up to the goal? What’s missing or unrealistic?' : text;
+      x.messages.push({ role: 'user', text: said, at: Date.now(), check: c === 'check' || undefined });
+      try {
+        await skTurn(ws, auth, x, today, said);
+      } catch (e) {
+        x.messages.pop();
+        throw e;
+      }
+      save();
+      skNews(x);
+      return send(res, 200, publicSidekick(x));
+    }
+    // A card accepted, skipped, edited, or built.
+    if (m === 'PATCH' && c === 'cards' && d) {
+      const card = x.messages.flatMap((y) => y.cards || []).find((y) => y.id === d);
+      if (!card) return send(res, 404, { error: 'Not found' });
+      if (['new', 'accepted', 'skipped', 'built'].includes(body.state)) card.state = body.state;
+      if (body.card && typeof body.card === 'object') {
+        const fresh = skCard({ ...card, ...body.card, type: card.type }, ws);
+        if (!fresh) return send(res, 400, { error: 'That card is missing something it needs.' });
+        Object.assign(card, fresh, { id: card.id, state: card.state });
+      }
+      x.updatedAt = Date.now();
+      save();
+      skNews(x);
+      return send(res, 200, publicSidekick(x));
+    }
+    if (m === 'PATCH' && !c) {
+      if (body.title !== undefined) x.title = cleanText(body.title, 80) || x.title;
+      if (body.campaignId !== undefined) {
+        const camp = db.campaigns[body.campaignId];
+        x.campaignId = camp?.wsId === ws.id && canSee(auth, 'campaign', camp) ? camp.id : x.campaignId;
+      }
+      if (Array.isArray(body.entryIds)) x.entryIds = [...new Set([...x.entryIds, ...body.entryIds.filter((id) => db.entries[id]?.wsId === ws.id)])].slice(-200);
+      if (body.built) x.status = 'built';
+      if (body.status === 'done' || body.status === 'built') x.status = body.status;
+      x.nudge = x.campaignId ? (skPace(db.campaigns[x.campaignId], today) ? { text: skPace(db.campaigns[x.campaignId], today), at: Date.now() } : null) : null;
+      x.updatedAt = Date.now();
+      save();
+      skNews(x);
+      return send(res, 200, publicSidekick(x));
+    }
+    if (m === 'DELETE' && !c) {
+      delete db.sidekick[x.id];
+      save();
+      broadcast(ws.id, { type: 'sidekick:remove', id: x.id, forMember: x.memberId });
+      return send(res, 200, { ok: true });
+    }
+    return send(res, 405, { error: 'Method not allowed' });
+  }
+
   if (a === 'plans') {
     const mine = () => Object.values(db.plans).filter((x) => x.wsId === ws.id && x.memberId === auth.memberId).sort((p, q) => q.updatedAt - p.updatedAt);
     if (m === 'GET' && !b) return send(res, 200, mine().map(publicPlan));
@@ -3728,6 +3946,7 @@ setInterval(syncAllCalendars, 30_000);
 setInterval(syncAllPss, 60_000);
 setInterval(mailTick, MAIL_GAP);
 setInterval(runAutopay, 10 * 60_000);
+setInterval(runSidekickPace, 30 * 60_000);
 
 // ---------- backups: a copy of the data file each day, the last 14 kept next to it ----------
 // They guard against a bad write or a mistake; the host's volume backups guard against losing the disk.
