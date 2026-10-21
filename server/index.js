@@ -27,7 +27,7 @@ const PUBLIC_URL = (process.env.PUBLIC_URL || `http://localhost:${PORT}`).replac
 fs.mkdirSync(FILES_DIR, { recursive: true });
 
 // ---------- persistence (a JSON file is plenty for personal/small-team use) ----------
-let db = { workspaces: {}, tokens: {}, items: {}, entries: {}, tasks: {}, uploads: {}, campaigns: {}, goals: {}, attempts: {}, lists: {}, templates: {}, calendars: {}, ai: {}, pss: {}, sends: {}, bills: {}, meetings: {}, money: {}, budgets: {}, plans: {}, sidekick: {}, vaults: {}, vaultItems: {}, signs: {}, signatures: {}, trips: {}, pins: {} };
+let db = { workspaces: {}, tokens: {}, items: {}, entries: {}, tasks: {}, uploads: {}, campaigns: {}, goals: {}, attempts: {}, lists: {}, templates: {}, calendars: {}, ai: {}, pss: {}, sends: {}, bills: {}, meetings: {}, money: {}, budgets: {}, plans: {}, sidekick: {}, vaults: {}, vaultItems: {}, signs: {}, signatures: {}, trips: {}, pins: {}, zones: {} };
 try {
   db = { ...db, ...JSON.parse(fs.readFileSync(DB_PATH, 'utf8')) };
 } catch {}
@@ -1760,6 +1760,23 @@ function meters(a, b) {
 }
 const mapCampaign = (ws, auth, id) => (id && db.campaigns[id]?.wsId === ws.id && canSee(auth, 'campaign', db.campaigns[id]) ? id : null);
 const publicTrip = ({ wsId, ...t }) => t;
+const publicZone = ({ wsId, ...z }) => z;
+const zoneNews = (z) => broadcast(z.wsId, { type: 'map', zone: publicZone(z), forMember: z.memberId });
+// A street (a line you tap along) or a block (an area you tap the corners of) you've covered.
+function applyZone(z, body, ws, auth) {
+  if (body.kind !== undefined) {
+    if (!['line', 'area'].includes(body.kind)) throw badRequest('Bad kind.');
+    z.kind = body.kind;
+  }
+  if (body.points !== undefined) {
+    const pts = (Array.isArray(body.points) ? body.points : []).slice(0, 2000).map((x) => [Number(x?.[0]), Number(x?.[1])]).filter(([la, ln]) => okLat(la) && okLng(ln)).map(([la, ln]) => [Math.round(la * 1e6) / 1e6, Math.round(ln * 1e6) / 1e6]);
+    if (pts.length < (z.kind === 'area' ? 3 : 2)) throw badRequest(z.kind === 'area' ? 'An area needs at least 3 corners.' : 'A street needs at least 2 points.');
+    z.points = pts;
+  }
+  if (body.note !== undefined) z.note = cleanText(body.note, 1000);
+  if (body.campaignId !== undefined) z.campaignId = mapCampaign(ws, auth, body.campaignId);
+  return z;
+}
 const publicPin = ({ wsId, ...p }) => p;
 const tripNews = (t) => broadcast(t.wsId, { type: 'map', trip: publicTrip(t), forMember: t.memberId });
 const pinNews = (p) => broadcast(p.wsId, { type: 'map', pin: publicPin(p), forMember: p.memberId });
@@ -3116,6 +3133,7 @@ async function api(req, res, url) {
     return send(res, 200, {
       trips: Object.values(db.trips).filter(mine).sort((p, q) => q.startedAt - p.startedAt).slice(0, 300).map(publicTrip),
       pins: Object.values(db.pins).filter(mine).sort((p, q) => q.createdAt - p.createdAt).slice(0, 5000).map(publicPin),
+      zones: Object.values(db.zones).filter(mine).sort((p, q) => q.createdAt - p.createdAt).slice(0, 5000).map(publicZone),
     });
   }
   if (a === 'geo' && m === 'GET') {
@@ -3123,11 +3141,11 @@ async function api(req, res, url) {
     if (!okLat(lat) || !okLng(lng)) return send(res, 400, { error: 'Bad location.' });
     return send(res, 200, { address: await streetAt(lat, lng) });
   }
-  if (a === 'trips' || a === 'pins') {
-    const store = a === 'trips' ? db.trips : db.pins;
-    const news = a === 'trips' ? tripNews : pinNews;
-    const pub = a === 'trips' ? publicTrip : publicPin;
-    const apply = (x, body) => (a === 'trips' ? applyTrip(x, body, ws, auth) : applyPin(x, body, ws, auth));
+  if (a === 'trips' || a === 'pins' || a === 'zones') {
+    const store = db[a];
+    const news = { trips: tripNews, pins: pinNews, zones: zoneNews }[a];
+    const pub = { trips: publicTrip, pins: publicPin, zones: publicZone }[a];
+    const apply = (x, body) => ({ trips: applyTrip, pins: applyPin, zones: applyZone }[a](x, body, ws, auth));
     if (m === 'POST' && !b) {
       const body = await readJson(req, 1_000_000);
       const id = MAP_ID.test(body.id || '') ? body.id : rid();
@@ -3135,10 +3153,13 @@ async function api(req, res, url) {
       // Sent twice (no answer the first time, so the phone tried again): the first one stands.
       if (had) return had.wsId === ws.id && had.memberId === auth.memberId ? send(res, 200, pub(had)) : send(res, 409, { error: 'Try again.' });
       const count = Object.values(store).filter((x) => x.wsId === ws.id && x.memberId === auth.memberId).length;
-      if (count >= (a === 'trips' ? 2000 : 20000)) return send(res, 400, { error: a === 'trips' ? 'You have too many runs saved. Delete some old ones first.' : 'You have too many pins. Delete some old ones first.' });
+      if (count >= (a === 'trips' ? 2000 : 20000)) return send(res, 400, { error: `You have too many ${{ trips: 'runs', pins: 'pins', zones: 'done streets' }[a]} saved. Delete some old ones first.` });
       const base = { id, wsId: ws.id, memberId: auth.memberId, by: auth.member, createdAt: Date.now(), campaignId: null };
       let x;
-      if (a === 'trips') {
+      if (a === 'zones') {
+        x = applyZone({ ...base, kind: 'line', points: [], note: '' }, { kind: body.kind || 'line', ...body }, ws, auth);
+        if (!x.points.length) return send(res, 400, { error: 'Draw it on the map first.' });
+      } else if (a === 'trips') {
         const startedAt = Number.isFinite(body.startedAt) ? Math.min(Date.now() + 60_000, body.startedAt) : Date.now();
         x = applyTrip({ ...base, name: '', startedAt, endedAt: null, path: [], dist: 0 }, body, ws, auth);
       } else {
@@ -3166,7 +3187,7 @@ async function api(req, res, url) {
       if (a === 'trips') for (const p of Object.values(db.pins)) if (p.tripId === x.id) p.tripId = null;
       delete store[x.id];
       save();
-      broadcast(ws.id, { type: 'map:remove', [a === 'trips' ? 'tripId' : 'pinId']: x.id, forMember: x.memberId });
+      broadcast(ws.id, { type: 'map:remove', [{ trips: 'tripId', pins: 'pinId', zones: 'zoneId' }[a]]: x.id, forMember: x.memberId });
       return send(res, 200, { ok: true });
     }
     return send(res, 405, { error: 'Method not allowed' });

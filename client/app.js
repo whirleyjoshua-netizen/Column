@@ -5770,7 +5770,7 @@
   // A run is your path while you walk or drive, recorded while Column is open. Pins are dropped where you are,
   // or anywhere you tap: a flyer left, a spot to come back to (a date makes it a task), or a lead.
   // Everything is saved on the phone first and sent when there's signal, so a dead zone loses nothing.
-  const MP = { trips: [], pins: [], loaded: false, map: null, box: null, group: null, live: null, meDot: null, meRing: null, me: null, watch: null, run: null, wake: null, camp: '', show: 'all', focus: null, centered: false, stats: null };
+  const MP = { trips: [], pins: [], zones: [], draw: null, drawLayer: null, loaded: false, map: null, box: null, group: null, live: null, meDot: null, meRing: null, me: null, watch: null, run: null, wake: null, camp: '', show: 'all', focus: null, centered: false, stats: null };
   const MAP_KIND = { flyer: 'Flyer left', back: 'Come back', lead: 'Lead' };
   const MAP_COLOR = { flyer: '#1f9d55', back: '#e8930c', lead: '#2f7bf5', done: '#9a9aa5' };
   const mapNewId = () => (Date.now().toString(36) + Math.random().toString(36).slice(2, 12)).slice(0, 20);
@@ -5789,7 +5789,7 @@
   const tripById = (id) => MP.trips.find((t) => t.id === id);
   const pinTitle = (p) => p.address || p.name || 'Dropped pin';
   const inCamp = (x) => !MP.camp || x.campaignId === MP.camp;
-  const mapFor = (c) => MP.pins.filter((p) => p.campaignId === c.id).length + MP.trips.filter((t) => t.campaignId === c.id).length;
+  const mapFor = (c) => [MP.pins, MP.trips, MP.zones].reduce((n, list) => n + list.filter((x) => x.campaignId === c.id).length, 0);
   const directions = (p) => /iPhone|iPad|Macintosh/.test(navigator.userAgent) ? `https://maps.apple.com/?daddr=${p.lat},${p.lng}` : `https://www.google.com/maps/dir/?api=1&destination=${p.lat},${p.lng}`;
 
   // Sent in order, one at a time. With no signal they wait here (kept across reloads) and go when it's back.
@@ -5835,6 +5835,7 @@
       const keep = (list, fresh) => [...list.filter((y) => mapPending(y.id) && !fresh.some((f) => f.id === y.id)), ...fresh.map((f) => (mapPending(f.id) ? list.find((y) => y.id === f.id) || f : f))];
       MP.trips = keep(MP.trips, x.trips);
       MP.pins = keep(MP.pins, x.pins);
+      MP.zones = keep(MP.zones, x.zones || []);
       MP.loaded = true;
     } catch {}
     const runId = store.get('mapRun', null);
@@ -5847,7 +5848,7 @@
     if (MP.run) clearInterval(MP.run.timer);
     MP.run = null;
     mapUnwatch();
-    Object.assign(MP, { trips: [], pins: [], loaded: false, camp: '', focus: null });
+    Object.assign(MP, { trips: [], pins: [], zones: [], draw: null, loaded: false, camp: '', focus: null });
     mapQ = [];
     store.set('mapQueue', []);
     store.set('mapRun', null);
@@ -5856,6 +5857,9 @@
     if (msg.type === 'map:remove') {
       MP.trips = MP.trips.filter((t) => t.id !== msg.tripId);
       MP.pins = MP.pins.filter((p) => p.id !== msg.pinId);
+      MP.zones = MP.zones.filter((z) => z.id !== msg.zoneId);
+    } else if (msg.zone && !mapPending(msg.zone.id)) {
+      MP.zones = [msg.zone, ...MP.zones.filter((z) => z.id !== msg.zone.id)];
     } else if (msg.trip && msg.trip.id !== MP.run?.id && !mapPending(msg.trip.id)) {
       MP.trips = [msg.trip, ...MP.trips.filter((t) => t.id !== msg.trip.id)].sort((a, b) => b.startedAt - a.startedAt);
     } else if (msg.pin && !mapPending(msg.pin.id)) {
@@ -6090,7 +6094,7 @@
       MP.map = L.map(MP.box, { zoomControl: true, attributionControl: true }).setView([39.5, -98.35], 4);
       L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>' }).addTo(MP.map);
       MP.group = L.layerGroup().addTo(MP.map);
-      MP.map.on('click', (e) => tapMenu(e.latlng));
+      MP.map.on('click', (e) => (MP.draw ? drawPoint(e.latlng) : tapMenu(e.latlng)));
       MP.map.on('dragstart', () => (MP.follow = false));
       new ResizeObserver(() => MP.map.invalidateSize()).observe(MP.box);
       mapDraw(true);
@@ -6098,6 +6102,75 @@
     }).catch((e) => MP.box.replaceChildren(h('p', { class: 'day-hint map-loading' }, e.message)));
     return MP.box;
   }
+  // ---- done streets and blocks ----
+  // Tap along a street to mark it covered, or tap the corners of a block to shade it in.
+  function startDraw(kind = 'line') {
+    MP.draw = { kind, pts: [] };
+    MP.map?.closePopup();
+    mapDraw();
+    drawPreview();
+    renderTool(true);
+  }
+  function drawPoint(ll) {
+    MP.draw.pts.push([Math.round(ll.lat * 1e6) / 1e6, Math.round(ll.lng * 1e6) / 1e6]);
+    drawPreview();
+    renderTool(true);
+  }
+  function drawPreview() {
+    MP.drawLayer?.remove();
+    MP.drawLayer = null;
+    if (!MP.draw || !MP.map) return;
+    const g = L.layerGroup();
+    const pts = MP.draw.pts;
+    if (pts.length > 1) (MP.draw.kind === 'area' ? L.polygon(pts, { color: '#1f9d55', weight: 2, dashArray: '6 6', fillOpacity: 0.15 }) : L.polyline(pts, { color: '#1f9d55', weight: 10, opacity: 0.5, lineCap: 'round' })).addTo(g);
+    pts.forEach((p, i) => L.circleMarker(p, { radius: i === pts.length - 1 ? 6 : 4, color: '#fff', weight: 2, fillColor: '#1f9d55', fillOpacity: 1, interactive: false }).addTo(g));
+    MP.drawLayer = g.addTo(MP.map);
+  }
+  function endDraw() {
+    MP.draw = null;
+    mapDraw();
+    drawPreview();
+    renderTool(true);
+  }
+  function saveZone(kind, points, note = '') {
+    const z = { id: mapNewId(), memberId: S.me?.memberId, by: S.me?.member, kind, points, note, campaignId: MP.camp || null, createdAt: Date.now() };
+    MP.zones.unshift(z);
+    const { memberId, by, ...body } = z;
+    mapSend('POST', '/zones', body);
+    mapDraw();
+    renderTool(true);
+    renderCamps();
+    toast(kind === 'area' ? 'Block marked done' : 'Street marked done', { label: 'Undo', run: () => deleteZone(z) });
+  }
+  function deleteZone(z) {
+    MP.zones = MP.zones.filter((x) => x.id !== z.id);
+    mapSend('DELETE', '/zones/' + z.id);
+    MP.map?.closePopup();
+    mapDraw();
+    renderTool();
+    renderCamps();
+  }
+  // A run's path as a done street, thinned to at most 2000 points.
+  function runDone(t) {
+    const step = Math.ceil(t.path.length / 2000);
+    const pts = t.path.filter((_, i) => i % step === 0 || i === t.path.length - 1).map((x) => [x[0], x[1]]);
+    if (pts.length < 2) return toast('This run is too short to mark.');
+    saveZone('line', pts, t.name || '');
+  }
+  function zonePop(z) {
+    const del = h('button', { class: 'btn small danger', 'data-label': '1' }, 'Not done');
+    del.addEventListener('click', () => confirmClick(del, () => deleteZone(z)));
+    const camp = campById(z.campaignId);
+    return h('div', { class: 'map-pop' },
+      h('small', { class: 'map-kind', style: `color:${MAP_COLOR.flyer}` }, z.kind === 'area' ? 'Block done' : 'Street done'),
+      h('b', {}, `Done ${dayName(dayKey(new Date(z.createdAt)))}`),
+      z.note ? h('p', { class: 'map-note' }, z.note) : null,
+      camp ? h('small', { class: 'map-when' }, camp.name) : null,
+      h('div', { class: 'map-pop-btns' },
+        h('button', { class: 'btn small', onclick: () => { MP.map.closePopup(); const note = h('textarea', { rows: 3, placeholder: 'Anything about it: gated, no soliciting, half the houses empty…' }); note.value = z.note || ''; sheet('Note', [note], () => { z.note = note.value.trim(); mapSend('PATCH', '/zones/' + z.id, { note: z.note }); }); } }, z.note ? 'Edit note' : 'Add a note'),
+        del));
+  }
+
   function tapMenu(ll) {
     const at = { lat: ll.lat, lng: ll.lng };
     const pop = L.popup({ closeButton: false });
@@ -6133,6 +6206,16 @@
     if (!MP.group) return;
     MP.group.clearLayers();
     MP.live = null;
+    if (MP.show === 'all' || MP.show === 'done') {
+      for (const z of MP.zones) {
+        if (!inCamp(z)) continue;
+        const shape = z.kind === 'area'
+          ? L.polygon(z.points, { color: '#1f9d55', weight: 2, fillColor: '#1f9d55', fillOpacity: 0.22, interactive: !MP.draw, bubblingMouseEvents: false })
+          : L.polyline(z.points, { color: '#1f9d55', weight: 12, opacity: 0.45, lineCap: 'round', lineJoin: 'round', interactive: !MP.draw, bubblingMouseEvents: false });
+        shape.bindPopup(() => zonePop(z), { maxWidth: 260 });
+        shape.addTo(MP.group);
+      }
+    }
     for (const t of MP.trips) {
       if (!inCamp(t) || (t.path.length < 2 && t.id !== MP.run?.id)) continue;
       const line = L.polyline(t.path.map((x) => [x[0], x[1]]), t.id === MP.run?.id ? { color: '#6b5cf0', weight: 6, opacity: 0.9 } : { color: '#6b5cf0', weight: 4, opacity: 0.35 });
@@ -6142,7 +6225,7 @@
     const markers = {};
     for (const p of MP.pins) {
       if (!inCamp(p) || (MP.show !== 'all' && MP.show !== p.kind)) continue;
-      const m = L.circleMarker([p.lat, p.lng], { radius: p.kind === 'flyer' ? 6 : 9, color: '#fff', weight: 2, fillColor: MAP_COLOR[p.done ? 'done' : p.kind], fillOpacity: 1 });
+      const m = L.circleMarker([p.lat, p.lng], { radius: p.kind === 'flyer' ? 6 : 9, color: '#fff', weight: 2, fillColor: MAP_COLOR[p.done ? 'done' : p.kind], fillOpacity: 1, interactive: !MP.draw, bubblingMouseEvents: false });
       m.bindPopup(() => pinPop(p), { maxWidth: 260 });
       m.addTo(MP.group);
       markers[p.id] = m;
@@ -6184,6 +6267,21 @@
     MP.box?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 
+  function drawBar() {
+    const d = MP.draw;
+    const need = d.kind === 'area' ? 3 : 2;
+    const tab = (k, l) => h('button', { class: d.kind === k ? 'on' : '', onclick: () => { d.kind = k; drawPreview(); renderTool(true); } }, l);
+    return h('div', { class: 'map-draw' },
+      h('div', { class: 'seg map-draw-kind' }, tab('line', 'Street'), tab('area', 'Block or area')),
+      h('p', { class: 'map-draw-hint' }, d.kind === 'area'
+        ? (d.pts.length ? `${plural(d.pts.length, 'corner')}. Keep tapping corners, then Save.` : 'Tap the corners of the block on the map, all the way round.')
+        : (d.pts.length ? `${plural(d.pts.length, 'point')}. Keep tapping along the street, then Save.` : 'Tap along the street on the map: where you started, each corner, and where you stopped.')),
+      h('div', { class: 'btns' },
+        h('button', { class: 'btn small', disabled: !d.pts.length, onclick: () => { d.pts.pop(); drawPreview(); renderTool(true); } }, 'Undo point'),
+        h('button', { class: 'btn small', onclick: endDraw }, 'Cancel'),
+        h('span', { style: 'flex:1' }),
+        h('button', { class: 'btn small primary-btn', disabled: d.pts.length < need, onclick: () => { const { kind, pts } = d; MP.draw = null; drawPreview(); saveZone(kind, pts); } }, 'Save as done')));
+  }
   function mapTool() {
     mapWatch();
     const box = mapBox();
@@ -6199,6 +6297,7 @@
     const big = (label, cls, fn) => h('button', { class: 'map-act ' + cls, onclick: fn }, label);
     const tripMenu = (anchor, t) => openMenu(anchor, [
       { label: 'Show on the map', run: () => showTrip(t) },
+      { label: 'Mark its streets done', run: () => runDone(t) },
       { label: 'Rename…', run: () => { const name = h('input', { value: t.name || '', placeholder: 'Maple Ave and around' }); sheet('Name this run', [h('label', {}, 'Name', name)], () => { t.name = name.value.trim(); mapSend('PATCH', '/trips/' + t.id, { name: t.name }); renderTool(); }); } },
       { label: 'Delete run', danger: true, run: () => { MP.trips = MP.trips.filter((x) => x.id !== t.id); mapSend('DELETE', '/trips/' + t.id); mapDraw(); renderTool(); } },
     ]);
@@ -6207,13 +6306,14 @@
         run ? h('span', { class: 'map-rec' }) : null,
         run ? MP.stats : h('span', { class: 'map-stats' }, MP.geoErr || (hereNow() ? 'Ready when you are' : 'Finding your location…')),
         run ? h('button', { class: 'btn small primary-btn', onclick: stopRun }, 'Stop run') : h('button', { class: 'btn small primary-btn', onclick: startRun }, 'Start a run')),
-      h('div', { class: 'map-acts' },
+      MP.draw ? drawBar() : h('div', { class: 'map-acts' },
         big('Flyer left', 'flyer', () => placeFor(dropFlyer)),
         big('Come back…', 'back', () => placeFor((at) => pinSheet(newPin('back', at), true))),
-        big('Lead…', 'lead', () => placeFor((at) => pinSheet(newPin('lead', at), true)))),
+        big('Lead…', 'lead', () => placeFor((at) => pinSheet(newPin('lead', at), true))),
+        h('button', { class: 'map-act done', onclick: () => startDraw('line') }, 'Mark a street or block done')),
       box,
       h('div', { class: 'map-filters' },
-        h('div', { class: 'set-tabs map-show' }, [['all', 'All'], ['flyer', `Flyers ${flyers}`], ['back', `Come back ${backs.length}`], ['lead', `Leads ${leads.length}`]].map(([k, l]) =>
+        h('div', { class: 'seg map-show' }, [['all', 'All'], ['done', `Done ${MP.zones.filter(inCamp).length}`], ['flyer', `Flyers ${flyers}`], ['back', `Come back ${backs.length}`], ['lead', `Leads ${leads.length}`]].map(([k, l]) =>
           h('button', { class: MP.show === k ? 'on' : '', onclick: () => { MP.show = k; mapDraw(); renderTool(true); } }, l))),
         camps.length ? h('select', { class: 'map-camp', 'aria-label': 'Campaign', onchange: (e) => { MP.camp = e.target.value; mapDraw(true); renderTool(true); } },
           h('option', { value: '' }, 'All campaigns'), camps.map((c) => h('option', { value: c.id, selected: c.id === MP.camp }, c.name))) : null),
