@@ -64,6 +64,7 @@
   // ---------- icons ----------
   const svg = (d) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
   const I = {
+    clip: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.4 11.1-9.2 9.2a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5"/></svg>',
     download: svg('<path d="M12 4v11M7 10l5 5 5-5M5 20h14"/>'),
     doc: svg('<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h6"/>'),
     grid: svg('<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18M3 15h18M10 4v16"/>'),
@@ -1513,6 +1514,7 @@
     }
     el.addEventListener('dragstart', (e) => {
       S.internalDrag = true;
+      S.dragItem = { it, at: Date.now() };
       if (it.type === 'text') {
         e.dataTransfer.setData('text/plain', it.text);
         return;
@@ -1550,7 +1552,16 @@
     dragDepth++;
     e.preventDefault();
   });
+  // A task row takes a file dropped on it as an attachment, from the computer or from Column.
+  const taskAt = (target) => { const tr = target?.closest?.('.task-row[data-id]'); return tr && taskById(tr.dataset.id) ? tr : null; };
   window.addEventListener('dragover', (e) => {
+    const tr = S.token && taskAt(e.target);
+    document.querySelectorAll('.task-row.file-over').forEach((x) => x !== tr && x.classList.remove('file-over'));
+    if (tr && (hasFiles(e.dataTransfer) || (S.internalDrag && S.dragItem?.it.type !== 'text'))) {
+      e.preventDefault();
+      tr.classList.add('file-over');
+      return;
+    }
     if (S.internalDrag || !S.token) return;
     e.preventDefault();
     if (dropCampaign()) return $('#camps').classList.add('dropping');
@@ -1571,6 +1582,18 @@
     e.preventDefault();
     dragDepth = 0;
     clearDropping();
+    document.querySelectorAll('.task-row.file-over').forEach((x) => x.classList.remove('file-over'));
+    const tr = S.token && taskAt(e.target);
+    if (tr) {
+      const t = taskById(tr.dataset.id);
+      // Something dragged out of Column is attached as it is, not uploaded again (the desktop app drags a copy).
+      const fromColumn = S.dragItem && Date.now() - S.dragItem.at < 60_000 && (S.internalDrag || [...(e.dataTransfer.files || [])].some((f) => f.name === S.dragItem.it.name)) ? S.dragItem.it : null;
+      S.internalDrag = false;
+      S.dragItem = null;
+      if (fromColumn) return attachToTask(t, [], [fromColumn]);
+      if (hasFiles(e.dataTransfer)) return attachToTask(t, [...e.dataTransfer.files]);
+      return;
+    }
     if (S.internalDrag || !S.token) return;
     const dt = e.dataTransfer;
     const camp = dropCampaign();
@@ -2403,6 +2426,8 @@
         slot.label + (slot.more ? ` +${slot.more}` : '')) : null,
       lp ? h('button', { class: 'list-chip' + (lp.of && lp.n === lp.of ? ' full' : ''), title: `${list.name}: ${lp.label} · click to open`, onclick: (ev) => { ev.stopPropagation(); openList(); } },
         h('span', { html: KIND_ICON[list.kind || 'calls'] }), lp.of ? `${lp.n}/${lp.of}` : '') : null,
+      taskFiles(t).length ? h('button', { class: 'list-chip file-chip', title: taskFiles(t).map((it) => it.name || 'Note').join(', '), onclick: (ev) => { ev.stopPropagation(); taskFiles(t).length === 1 ? openPreview(taskFiles(t)[0]) : taskFilesMenu(ev.currentTarget, t); } },
+        h('span', { html: I.clip }), taskFiles(t).length === 1 ? shortText(taskFiles(t)[0].name || 'Note', 18) : String(taskFiles(t).length)) : null,
       camp && !inCampaign ? h('button', { class: 'camp-chip c-' + camp.color, title: `${camp.name} · ${g.title}`, onclick: () => openCampaign(camp.id) }, camp.name) : null,
       t.assigneeId ? avatar(t.assigneeId) : null,
       t.done || waits ? null : btn(I.clock, 'Put on schedule', () => openSheet({ text: t.text, taskId: t.id, date: t.due && D.sub === 'tasks' ? t.due : D.date })),
@@ -2410,11 +2435,51 @@
     );
   }
 
+  // ----- files on tasks: the finished thing a task asked for, dropped on it or picked -----
+  // A file from the computer goes into the campaign's stack (or the main column), then on the task.
+  const taskFiles = (t) => (t.files || []).map((id) => S.items.find((it) => it.id === id)).filter(Boolean);
+  const shortText = (v, n) => (String(v || '').length > n ? String(v).slice(0, n - 1) + '…' : String(v || ''));
+  async function attachToTask(t, files, items = []) {
+    const camp = campById(goalById(t.goalId)?.campaignId);
+    const add = [...items];
+    try {
+      for (const f of files) {
+        if (!f.size && !f.type) { toast(`${f.name}: folders can’t be attached to a task`); continue; }
+        add.push(await uploadFile(f, { stackId: camp?.stackId || null }));
+      }
+    } catch (er) {
+      toast(er.message);
+    }
+    if (!add.length) return;
+    const now = taskById(t.id) || t;
+    await patchTask(now, { files: [...new Set([...(now.files || []), ...add.map((it) => it.id)])] });
+    renderCamps();
+    const what = add.length === 1 ? add[0].name || 'Note' : `${add.length} files`;
+    toast(`Attached ${what} to “${shortText(now.text, 40)}”`, now.done ? null : { label: 'Mark done', run: () => patchTask(taskById(t.id), { done: true }).then(renderCamps) });
+  }
+  function pickForTask(t) {
+    $('#taskFile')?.remove();
+    const input = h('input', { type: 'file', id: 'taskFile', class: 'hidden', multiple: true });
+    document.body.append(input);
+    input.addEventListener('change', () => { const fs = [...input.files]; input.remove(); if (fs.length) attachToTask(t, fs); });
+    input.click();
+  }
+  function taskFilesMenu(anchor, t) {
+    const fs = taskFiles(t);
+    openMenu(anchor, [
+      { head: 'Attached' },
+      ...fs.map((it) => ({ label: it.name || shortText(it.text || 'Note', 40), run: () => openPreview(it) })),
+      { label: '+ Attach a file…', run: () => pickForTask(t) },
+      ...(fs.length ? [{ head: 'Remove' }, ...fs.map((it) => ({ label: '× ' + (it.name || 'Note'), run: () => patchTask(t, { files: (t.files || []).filter((id) => id !== it.id) }).then(renderCamps) }))] : []),
+    ]);
+  }
+
   function taskMenu(anchor, t) {
     const g = goalById(t.goalId);
     openMenu(anchor, [
       { label: t.due ? `Due ${dueLabel(t.due)}…` : 'Due date…', run: () => dueMenu(anchor, t) },
       { label: t.priority ? `${PRIO[t.priority]} priority…` : 'Priority…', run: () => prioMenu(anchor, t) },
+      { label: taskFiles(t).length ? `Attached · ${taskFiles(t).length}…` : 'Attach a file…', run: () => (taskFiles(t).length ? taskFilesMenu(anchor, t) : pickForTask(t)) },
       { label: t.assigneeId ? `Assigned to ${memberName(t.assigneeId)}…` : 'Assign to…', run: () => assignMenu(anchor, t) },
       { label: g ? `Goal: ${g.title}…` : 'Add to a goal…', run: () => goalMenu(anchor, t) },
       ...(g ? [{ label: t.report ? 'Stop asking for a report' : 'Ask for a report when done', run: () => patchTask(t, { report: !t.report }) }] : []),

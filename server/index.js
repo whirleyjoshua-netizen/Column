@@ -374,6 +374,8 @@ function applyTask(t, body) {
   }
   if (body.assigneeId !== undefined) t.assigneeId = body.assigneeId && db.workspaces[t.wsId]?.members.some((m) => m.id === body.assigneeId) ? body.assigneeId : null;
   if (body.report !== undefined) t.report = !!body.report;
+  // Files attached to it, like the finished list a "Provide a list of…" task asked for. Items in the same team.
+  if (body.files !== undefined) t.files = [...new Set((Array.isArray(body.files) ? body.files : []).filter((id) => typeof id === 'string' && db.items[id]?.wsId === t.wsId))].slice(0, 20);
   // Where it sits when dragged: order within its goal, dayOrder on the Tasks list. null = not placed by hand.
   for (const k of ['order', 'dayOrder']) if (body[k] !== undefined) t[k] = body[k] === null || !Number.isFinite(Number(body[k])) ? null : Number(body[k]);
   if (body.priority !== undefined) t.priority = Math.max(0, Math.min(3, Math.round(Number(body.priority)) || 0));
