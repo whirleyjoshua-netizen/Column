@@ -273,6 +273,7 @@
 
   function signOutLocal() {
     vaultLock();
+    mapResetLocal();
     VK.meta = undefined;
     VK.raw = [];
     SG.mine = {};
@@ -426,6 +427,8 @@
       if (msg.sidekick) S.sidekick.unshift(msg.sidekick);
       renderTool();
       renderCamps();
+    } else if (msg.type === 'map' || msg.type === 'map:remove') {
+      mapNews(msg);
     } else if (msg.type === 'plan' || msg.type === 'plan:remove') {
       if (msg.plan && msg.plan.id === PL.dirty) return;
       S.plans = (S.plans || []).filter((x) => x.id !== (msg.plan?.id || msg.id));
@@ -539,6 +542,7 @@
     S.budgets = st.budgets || [];
     api('GET', '/meetings').then((x) => { S.meetings = x; renderRec(); }).catch(() => {});
     api('GET', '/plans').then((x) => { S.plans = x; renderTool(); }).catch(() => {});
+    loadMap();
     api('GET', '/sidekick').then((x) => { S.sidekick = x; renderTool(); renderCamps(); }).catch(() => {});
     loadVault();
     loadSignature();
@@ -2352,6 +2356,7 @@
         h('span', { html: KIND_ICON[list.kind || 'calls'] }), lp.of ? `${lp.n}/${lp.of}` : '') : null,
       taskFiles(t).length ? h('button', { class: 'list-chip file-chip', title: taskFiles(t).map((it) => it.name || 'Note').join(', '), onclick: (ev) => { ev.stopPropagation(); taskFiles(t).length === 1 ? openPreview(taskFiles(t)[0]) : taskFilesMenu(ev.currentTarget, t); } },
         h('span', { html: I.clip }), taskFiles(t).length === 1 ? shortText(taskFiles(t)[0].name || 'Note', 18) : String(taskFiles(t).length)) : null,
+      t.pinId && pinById(t.pinId) ? h('button', { class: 'list-chip', title: 'Show it on the map', onclick: (ev) => { ev.stopPropagation(); openMap({ pinId: t.pinId }); } }, 'Map') : null,
       camp && !inCampaign && !noCamp ? h('button', { class: 'camp-chip c-' + camp.color, title: `${camp.name} · ${g.title}`, onclick: () => openCampaign(camp.id) }, camp.name) : null,
       t.assigneeId ? avatar(t.assigneeId) : null,
       t.done || waits ? null : btn(I.clock, 'Put on schedule', () => openSheet({ text: t.text, taskId: t.id, date: t.due && D.sub === 'tasks' ? t.due : D.date })),
@@ -3112,6 +3117,7 @@
         h('button', { class: 'btn small' + (K.logOpen === c.id ? ' on' : ''), onclick: () => openLog(c) }, 'Log'),
         h('button', { class: 'btn small', onclick: () => openReport(c) }, 'Write a report'),
         h('button', { class: 'btn small' + (skFor(c.id)?.nudge ? ' sk-nudge' : ''), title: skFor(c.id)?.nudge?.text || 'Talk this campaign through with Sidekick', onclick: () => sidekickFor(c) }, '✦ Sidekick'),
+        mapFor(c) ? h('button', { class: 'btn small', title: 'Runs and pins on the map', onclick: () => openMap({ campaignId: c.id }) }, `Map · ${mapFor(c)}`) : null,
         signsFor(c) ? h('button', { class: 'btn small', title: 'Sent for signature', onclick: () => { SG.filter = c.id; openTool('signs'); } }, `Signatures · ${signsFor(c)}`) : null,
         vaultLinked('campaign', c.id) ? h('button', { class: 'btn small', title: 'In your vault', onclick: () => openVaultFor('campaign', c.id) }, h('span', { class: 'vault-ic', html: I.lock }), `Vault · ${vaultLinked('campaign', c.id)}`) : null),
       sendBars(c),
@@ -5387,7 +5393,7 @@
   }
 
   // ---------- tools: small apps that open in a drawer, so the tabs stay as they are ----------
-  const TOOLS = { sidekick: { name: 'Sidekick', render: sidekickTool }, bills: { name: 'Finance', render: financeTool }, contacts: { name: 'Contacts', render: contactsTool }, email: { name: 'Email', render: emailTool }, meetings: { name: 'Meeting notes', render: meetingsTool }, planner: { name: 'Planner', render: plannerTool }, signs: { name: 'Signatures', render: signsTool }, vault: { name: 'Vault', render: vaultTool } };
+  const TOOLS = { sidekick: { name: 'Sidekick', render: sidekickTool }, bills: { name: 'Finance', render: financeTool }, contacts: { name: 'Contacts', render: contactsTool }, email: { name: 'Email', render: emailTool }, meetings: { name: 'Meeting notes', render: meetingsTool }, planner: { name: 'Planner', render: plannerTool }, map: { name: 'Map', render: mapTool }, signs: { name: 'Signatures', render: signsTool }, vault: { name: 'Vault', render: vaultTool } };
   let toolOpen = null;
   $('#toolsBtn').addEventListener('click', (e) => {
     const soon = billsSoon().length;
@@ -5399,6 +5405,7 @@
       amOwner() ? { label: 'Contacts', on: toolOpen === 'contacts', run: () => openTool('contacts') } : null,
       mayEmail() ? { label: h('span', { class: 'tool-item' }, 'Email', (S.mail?.sends || []).some((x) => x.status === 'sending') ? h('small', {}, 'sending…') : null), on: toolOpen === 'email', run: () => openTool('email') } : null,
       { label: 'Meeting notes', on: toolOpen === 'meetings', run: () => openTool('meetings') },
+      { label: h('span', { class: 'tool-item' }, 'Map', MP.run ? h('small', {}, 'recording a run') : null), on: toolOpen === 'map', run: () => openMap() },
       { label: h('span', { class: 'tool-item' }, 'Signatures', SG.list.some((x) => x.status === 'sent' || x.status === 'viewed') ? h('small', {}, `${SG.list.filter((x) => x.status === 'sent' || x.status === 'viewed').length} waiting`) : null), on: toolOpen === 'signs', run: () => { SG.filter = null; openTool('signs'); } },
       { label: h('span', { class: 'tool-item' }, 'Vault', VK.key ? h('small', {}, 'unlocked') : null), on: toolOpen === 'vault', run: () => { VK.filter = null; openTool('vault'); } },
     ].filter(Boolean));
@@ -5411,6 +5418,7 @@
   }
   function closeTool() {
     toolOpen = null;
+    if (!MP.run) mapUnwatch();
     $('#tool').classList.add('hidden');
   }
   // Holds off while you're typing in it, so a redraw can't eat what you wrote. Sidekick keeps its own draft.
@@ -5756,6 +5764,479 @@
       if (item) openPreview(item, { edit: true });
     }, 'Create');
     setTimeout(() => name.select());
+  }
+
+  // ----- Map: where you've been with flyers, and the spots to come back to -----
+  // A run is your path while you walk or drive, recorded while Column is open. Pins are dropped where you are,
+  // or anywhere you tap: a flyer left, a spot to come back to (a date makes it a task), or a lead.
+  // Everything is saved on the phone first and sent when there's signal, so a dead zone loses nothing.
+  const MP = { trips: [], pins: [], loaded: false, map: null, box: null, group: null, live: null, meDot: null, meRing: null, me: null, watch: null, run: null, wake: null, camp: '', show: 'all', focus: null, centered: false, stats: null };
+  const MAP_KIND = { flyer: 'Flyer left', back: 'Come back', lead: 'Lead' };
+  const MAP_COLOR = { flyer: '#1f9d55', back: '#e8930c', lead: '#2f7bf5', done: '#9a9aa5' };
+  const mapNewId = () => (Date.now().toString(36) + Math.random().toString(36).slice(2, 12)).slice(0, 20);
+  const miles = /^en-(US|GB|LR|MM)$/i.test(navigator.language || '');
+  const fmtDist = (m) => (miles ? `${(m / 1609.34).toFixed(m < 16093 ? 1 : 0)} mi` : m < 1000 ? `${Math.round(m)} m` : `${(m / 1000).toFixed(1)} km`);
+  const fmtLength = (ms) => {
+    const min = Math.round(ms / 60000);
+    return min < 60 ? `${min} min` : `${Math.floor(min / 60)} h ${min % 60} min`;
+  };
+  const metersBetween = (a, b) => {
+    const r = Math.PI / 180;
+    const x = Math.sin(((b[0] - a[0]) * r) / 2) ** 2 + Math.cos(a[0] * r) * Math.cos(b[0] * r) * Math.sin(((b[1] - a[1]) * r) / 2) ** 2;
+    return 12742000 * Math.asin(Math.sqrt(x));
+  };
+  const pinById = (id) => MP.pins.find((p) => p.id === id);
+  const tripById = (id) => MP.trips.find((t) => t.id === id);
+  const pinTitle = (p) => p.address || p.name || 'Dropped pin';
+  const inCamp = (x) => !MP.camp || x.campaignId === MP.camp;
+  const mapFor = (c) => MP.pins.filter((p) => p.campaignId === c.id).length + MP.trips.filter((t) => t.campaignId === c.id).length;
+  const directions = (p) => /iPhone|iPad|Macintosh/.test(navigator.userAgent) ? `https://maps.apple.com/?daddr=${p.lat},${p.lng}` : `https://www.google.com/maps/dir/?api=1&destination=${p.lat},${p.lng}`;
+
+  // Sent in order, one at a time. With no signal they wait here (kept across reloads) and go when it's back.
+  let mapQ = store.get('mapQueue', []);
+  let mapFlushing = false;
+  function mapSend(method, path, body) {
+    mapQ.push({ method, path, body });
+    store.set('mapQueue', mapQ);
+    flushMap();
+  }
+  async function flushMap() {
+    if (mapFlushing || !S.token) return;
+    mapFlushing = true;
+    try {
+      while (mapQ.length) {
+        const job = mapQ[0];
+        let res;
+        try {
+          res = await fetch('/api' + job.path, { method: job.method, headers: { Authorization: 'Bearer ' + S.token, 'Content-Type': 'application/json' }, body: JSON.stringify(job.body || {}) });
+        } catch {
+          break; // no signal: try again later
+        }
+        if (res.status >= 500 || res.status === 401) break;
+        if (!res.ok) {
+          const out = await res.json().catch(() => ({}));
+          if (res.status !== 404) toast(out.error || 'The map couldn’t save a change.');
+        }
+        mapQ.shift();
+        store.set('mapQueue', mapQ);
+      }
+    } finally {
+      mapFlushing = false;
+    }
+    if (mapQ.length) setTimeout(flushMap, 15000);
+  }
+  addEventListener('online', flushMap);
+  const mapPending = (id) => mapQ.some((j) => j.path.endsWith('/' + id) || j.body?.id === id);
+
+  async function loadMap() {
+    try {
+      const x = await api('GET', '/map');
+      // Anything made here and not sent yet stays, on top of what the server has.
+      const keep = (list, fresh) => [...list.filter((y) => mapPending(y.id) && !fresh.some((f) => f.id === y.id)), ...fresh.map((f) => (mapPending(f.id) ? list.find((y) => y.id === f.id) || f : f))];
+      MP.trips = keep(MP.trips, x.trips);
+      MP.pins = keep(MP.pins, x.pins);
+      MP.loaded = true;
+    } catch {}
+    const runId = store.get('mapRun', null);
+    if (runId && !MP.run && tripById(runId) && !tripById(runId).endedAt) beginRun(tripById(runId));
+    flushMap();
+    mapDraw();
+    renderTool();
+  }
+  function mapResetLocal() {
+    if (MP.run) clearInterval(MP.run.timer);
+    MP.run = null;
+    mapUnwatch();
+    Object.assign(MP, { trips: [], pins: [], loaded: false, camp: '', focus: null });
+    mapQ = [];
+    store.set('mapQueue', []);
+    store.set('mapRun', null);
+  }
+  function mapNews(msg) {
+    if (msg.type === 'map:remove') {
+      MP.trips = MP.trips.filter((t) => t.id !== msg.tripId);
+      MP.pins = MP.pins.filter((p) => p.id !== msg.pinId);
+    } else if (msg.trip && msg.trip.id !== MP.run?.id && !mapPending(msg.trip.id)) {
+      MP.trips = [msg.trip, ...MP.trips.filter((t) => t.id !== msg.trip.id)].sort((a, b) => b.startedAt - a.startedAt);
+    } else if (msg.pin && !mapPending(msg.pin.id)) {
+      MP.pins = [msg.pin, ...MP.pins.filter((p) => p.id !== msg.pin.id)];
+    } else return;
+    mapDraw();
+    renderTool();
+    renderCamps();
+  }
+
+  // ---- where you are ----
+  function mapWatch() {
+    if (MP.watch != null || !navigator.geolocation) return;
+    MP.watch = navigator.geolocation.watchPosition((pos) => {
+      const c = pos.coords;
+      const first = !MP.me;
+      MP.me = { lat: c.latitude, lng: c.longitude, acc: c.accuracy, at: pos.timestamp || Date.now() };
+      MP.geoErr = null;
+      if (MP.run) runPoint(MP.me);
+      drawMe();
+      if (first) renderTool();
+    }, (e) => {
+      MP.geoErr = e.code === 1 ? 'Column can’t see your location. Allow location for this site in your browser settings, or tap the map to drop pins.' : 'Looking for your location…';
+      renderTool();
+    }, { enableHighAccuracy: true, maximumAge: 5000, timeout: 30000 });
+  }
+  function mapUnwatch() {
+    if (MP.watch != null) navigator.geolocation.clearWatch(MP.watch);
+    MP.watch = null;
+  }
+  const hereNow = () => (MP.me && Date.now() - MP.me.at < 120_000 ? MP.me : null);
+  function drawMe() {
+    if (!MP.map || !MP.me) return;
+    const ll = [MP.me.lat, MP.me.lng];
+    if (!MP.meDot) {
+      // You stay on top of the pins, in a layer of your own.
+      MP.map.createPane('me').style.zIndex = 650;
+      MP.meRing = L.circle(ll, { pane: 'me', radius: MP.me.acc, color: '#2f7bf5', weight: 1, fillOpacity: 0.08, interactive: false }).addTo(MP.map);
+      MP.meDot = L.circleMarker(ll, { pane: 'me', radius: 7, color: '#fff', weight: 3, fillColor: '#2f7bf5', fillOpacity: 1, interactive: false }).addTo(MP.map);
+    } else {
+      MP.meDot.setLatLng(ll);
+      MP.meRing.setLatLng(ll).setRadius(MP.me.acc);
+    }
+    if (!MP.centered && !MP.focus) {
+      MP.centered = true;
+      MP.map.setView(ll, 17);
+    } else if (MP.run && MP.follow) MP.map.panTo(ll, { animate: true });
+  }
+
+  // ---- runs ----
+  async function keepAwake() {
+    try {
+      MP.wake = MP.run ? await navigator.wakeLock?.request('screen') : null;
+    } catch {}
+  }
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && MP.run) keepAwake();
+  });
+  function beginRun(t) {
+    MP.run = { id: t.id, buf: [], timer: setInterval(() => { flushRun(); runStats(); }, 15000) };
+    MP.follow = true;
+    store.set('mapRun', t.id);
+    keepAwake();
+    mapWatch();
+  }
+  function startRun() {
+    const t = { id: mapNewId(), memberId: S.me?.memberId, by: S.me?.member, name: '', startedAt: Date.now(), endedAt: null, path: [], dist: 0, campaignId: MP.camp || null, createdAt: Date.now() };
+    MP.trips.unshift(t);
+    mapSend('POST', '/trips', { id: t.id, startedAt: t.startedAt, campaignId: t.campaignId });
+    beginRun(t);
+    if (MP.me) runPoint(MP.me);
+    mapDraw();
+    renderTool(true);
+    toast(hereNow() ? 'Run started. Keep Column open while you go.' : 'Run started. Waiting for your location…');
+  }
+  // A point every 8 m or so, once the phone knows where it is to within 35 m.
+  function runPoint(me) {
+    const t = tripById(MP.run.id);
+    if (!t || me.acc > 35) return;
+    const pt = [Math.round(me.lat * 1e6) / 1e6, Math.round(me.lng * 1e6) / 1e6, Math.round(me.at)];
+    const last = t.path.at(-1);
+    if (last) {
+      const d = metersBetween(last, pt);
+      if (d < 8 || pt[2] <= last[2] || d / Math.max(1, (pt[2] - last[2]) / 1000) > 45) return;
+      t.dist = Math.round((t.dist || 0) + d);
+    }
+    t.path.push(pt);
+    MP.run.buf.push(pt);
+    MP.live?.addLatLng([pt[0], pt[1]]);
+    if (MP.run.buf.length >= 40) flushRun();
+    runStats();
+  }
+  function flushRun() {
+    if (!MP.run?.buf.length) return;
+    mapSend('PATCH', '/trips/' + MP.run.id, { add: MP.run.buf });
+    MP.run.buf = [];
+  }
+  function stopRun() {
+    const t = tripById(MP.run.id);
+    flushRun();
+    clearInterval(MP.run.timer);
+    if (t) {
+      t.endedAt = Date.now();
+      mapSend('PATCH', '/trips/' + t.id, { endedAt: t.endedAt });
+    }
+    MP.run = null;
+    store.set('mapRun', null);
+    MP.wake?.release?.().catch(() => {});
+    MP.wake = null;
+    if (toolOpen !== 'map') mapUnwatch();
+    mapDraw();
+    renderTool(true);
+    if (t) toast(`Run saved: ${fmtDist(t.dist || 0)} in ${fmtLength(t.endedAt - t.startedAt)}, ${plural(MP.pins.filter((p) => p.tripId === t.id && p.kind === 'flyer').length, 'flyer')}.`);
+  }
+  const runFlyers = (t) => MP.pins.filter((p) => p.tripId === t.id && p.kind === 'flyer').length;
+  function runStats() {
+    const t = MP.run && tripById(MP.run.id);
+    if (!t || !MP.stats?.isConnected) return;
+    MP.stats.textContent = `${fmtDist(t.dist || 0)} · ${fmtLength(Date.now() - t.startedAt)} · ${plural(runFlyers(t), 'flyer')}`;
+  }
+
+  // ---- pins ----
+  function newPin(kind, at, extra = {}) {
+    const p = { id: mapNewId(), memberId: S.me?.memberId, by: S.me?.member, kind, lat: Math.round(at.lat * 1e6) / 1e6, lng: Math.round(at.lng * 1e6) / 1e6, note: '', address: '', name: '', phone: '', email: '', due: null, done: false, tripId: MP.run?.id || null, campaignId: MP.camp || null, photoId: null, taskId: null, createdAt: Date.now(), ...extra };
+    return p;
+  }
+  function savePin(p, fresh, changes) {
+    if (fresh) {
+      MP.pins.unshift(p);
+      const { memberId, by, taskId, ...body } = p;
+      mapSend('POST', '/pins', body);
+      // Its street address, when the lookup can find one.
+      if (!p.address) {
+        api('GET', `/geo?lat=${p.lat}&lng=${p.lng}`).then(({ address }) => {
+          const now = pinById(p.id);
+          if (!address || !now || now.address) return;
+          now.address = address;
+          mapSend('PATCH', '/pins/' + p.id, { address });
+          mapDraw();
+          renderTool();
+        }).catch(() => {});
+      }
+    } else {
+      Object.assign(p, changes);
+      mapSend('PATCH', '/pins/' + p.id, changes);
+    }
+    mapDraw();
+    renderTool();
+    renderCamps();
+  }
+  function placeFor(fn) {
+    const at = hereNow();
+    if (at) return fn(at);
+    toast(MP.geoErr && /can’t/.test(MP.geoErr) ? 'No location yet. Tap the map where you are to drop it there.' : 'Still finding your location. Try again in a moment, or tap the map to drop it there.');
+  }
+  function dropFlyer(at) {
+    const p = newPin('flyer', at);
+    savePin(p, true);
+    toast('Flyer left', { label: 'Undo', run: () => deletePin(p) });
+  }
+  function deletePin(p) {
+    MP.pins = MP.pins.filter((x) => x.id !== p.id);
+    mapSend('DELETE', '/pins/' + p.id);
+    MP.map?.closePopup();
+    mapDraw();
+    renderTool();
+    renderCamps();
+  }
+  const inDays = (n) => addDays(todayKey(), n);
+  function pinSheet(p, fresh) {
+    const kind = h('select', {}, Object.entries(MAP_KIND).map(([k, l]) => h('option', { value: k, selected: k === p.kind }, l)));
+    const address = h('input', { value: p.address || '', placeholder: 'Street address (found for you when there’s signal)' });
+    const note = h('textarea', { rows: 3, placeholder: p.kind === 'back' ? 'New build, framing up. Check back when the windows are in.' : 'Anything worth remembering' });
+    note.value = p.note || '';
+    const due = h('input', { type: 'date', value: p.due || '' });
+    const quick = h('div', { class: 'btns' }, [['2 weeks', 14], ['1 month', 30], ['3 months', 91]].map(([l, n]) => h('button', { type: 'button', class: 'btn small', onclick: () => { due.value = inDays(n); } }, l)));
+    const name = h('input', { value: p.name || '', placeholder: 'Their name', autocomplete: 'off' });
+    const phone = h('input', { type: 'tel', value: p.phone || '', placeholder: 'Phone', autocomplete: 'off' });
+    const email = h('input', { type: 'email', value: p.email || '', placeholder: 'Email', autocomplete: 'off' });
+    const photo = h('input', { type: 'file', accept: 'image/*', capture: 'environment' });
+    const camp = h('select', {}, h('option', { value: '' }, 'No campaign'), S.campaigns.filter((c) => c.status !== 'done' || c.id === p.campaignId).map((c) => h('option', { value: c.id, selected: c.id === p.campaignId }, c.name)));
+    const backBox = h('div', {}, h('label', {}, 'Come back on', due), quick, h('p', { class: 'day-hint' }, 'With a date, it’s a task on your Day for that day.'));
+    const leadBox = h('div', { class: 'row2' }, h('label', {}, 'Name', name), h('label', {}, 'Phone', phone), h('label', {}, 'Email', email));
+    const show = () => {
+      backBox.classList.toggle('hidden', kind.value !== 'back');
+      leadBox.classList.toggle('hidden', kind.value !== 'lead');
+    };
+    kind.addEventListener('change', show);
+    show();
+    const had = p.photoId && S.items.find((it) => it.id === p.photoId);
+    sheet(fresh ? MAP_KIND[p.kind] : 'Edit pin', [
+      h('label', {}, 'What', kind),
+      h('label', {}, 'Where', address),
+      backBox, leadBox,
+      h('label', {}, 'Note', note),
+      h('label', {}, had ? 'Replace the photo' : 'Photo (optional)', photo),
+      S.campaigns.length ? h('label', {}, 'Campaign', camp) : null,
+    ], async () => {
+      const changes = { kind: kind.value, address: address.value.trim(), note: note.value.trim(), campaignId: camp.value || null };
+      if (changes.kind === 'back') changes.due = due.value || null;
+      else if (p.due) changes.due = null;
+      if (changes.kind === 'lead') Object.assign(changes, { name: name.value.trim(), phone: phone.value.trim(), email: email.value.trim() });
+      if (changes.kind === 'lead' && !changes.name && !changes.phone && !changes.note) throw new Error('Add their name, phone, or a note.');
+      if (photo.files[0]) {
+        const item = await uploadFile(photo.files[0], { stackId: campById(changes.campaignId)?.stackId || null });
+        if (item) changes.photoId = item.id;
+      }
+      if (fresh) savePin(Object.assign(p, changes), true);
+      else savePin(p, false, changes);
+      if (changes.kind === 'back' && changes.due) toast(`Come back ${dueLabel(changes.due)}: it’s on your tasks`);
+    }, fresh ? 'Drop pin' : 'Save');
+  }
+
+  // ---- drawing ----
+  let leafletLoad = null;
+  const loadLeaflet = () => (leafletLoad ||= new Promise((ok, bad) => {
+    document.head.append(h('link', { rel: 'stylesheet', href: '/vendor/leaflet-1.9.4/leaflet.css' }));
+    const s = document.createElement('script');
+    s.src = '/vendor/leaflet-1.9.4/leaflet.js';
+    s.onload = () => ok(window.L);
+    s.onerror = () => {
+      leafletLoad = null;
+      bad(new Error('Couldn’t load the map.'));
+    };
+    document.head.append(s);
+  }));
+  function mapBox() {
+    if (MP.box) return MP.box;
+    MP.box = h('div', { class: 'map-box' }, h('p', { class: 'day-hint map-loading' }, 'Loading the map…'));
+    loadLeaflet().then(() => {
+      MP.box.replaceChildren();
+      MP.map = L.map(MP.box, { zoomControl: true, attributionControl: true }).setView([39.5, -98.35], 4);
+      L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>' }).addTo(MP.map);
+      MP.group = L.layerGroup().addTo(MP.map);
+      MP.map.on('click', (e) => tapMenu(e.latlng));
+      MP.map.on('dragstart', () => (MP.follow = false));
+      new ResizeObserver(() => MP.map.invalidateSize()).observe(MP.box);
+      mapDraw(true);
+      drawMe();
+    }).catch((e) => MP.box.replaceChildren(h('p', { class: 'day-hint map-loading' }, e.message)));
+    return MP.box;
+  }
+  function tapMenu(ll) {
+    const at = { lat: ll.lat, lng: ll.lng };
+    const pop = L.popup({ closeButton: false });
+    const go = (fn) => () => { MP.map.closePopup(pop); fn(); };
+    pop.setLatLng(ll).setContent(h('div', { class: 'map-pop' },
+      h('b', {}, 'Drop a pin here'),
+      h('div', { class: 'map-pop-btns' },
+        h('button', { class: 'btn small', onclick: go(() => dropFlyer(at)) }, 'Flyer left'),
+        h('button', { class: 'btn small', onclick: go(() => pinSheet(newPin('back', at), true)) }, 'Come back…'),
+        h('button', { class: 'btn small', onclick: go(() => pinSheet(newPin('lead', at), true)) }, 'Lead…')))).openOn(MP.map);
+  }
+  function pinPop(p) {
+    const photo = p.photoId && S.items.find((it) => it.id === p.photoId);
+    const del = h('button', { class: 'btn small danger', 'data-label': '1' }, 'Delete');
+    del.addEventListener('click', () => confirmClick(del, () => deletePin(p)));
+    return h('div', { class: 'map-pop' },
+      h('small', { class: 'map-kind', style: `color:${MAP_COLOR[p.done ? 'done' : p.kind]}` }, MAP_KIND[p.kind] + (p.done ? ' · done' : '')),
+      h('b', {}, pinTitle(p)),
+      p.kind === 'lead' && p.name ? h('div', {}, p.name) : null,
+      p.phone ? h('div', {}, h('a', { href: 'tel:' + p.phone.replace(/[^\d+]/g, '') }, p.phone)) : null,
+      p.email ? h('div', {}, h('a', { href: 'mailto:' + p.email }, p.email)) : null,
+      p.due ? h('div', { class: isOverdue({ due: p.due, done: p.done }) ? 'map-late' : null }, 'Come back ' + dueLabel(p.due)) : null,
+      p.note ? h('p', { class: 'map-note' }, p.note) : null,
+      photo ? h('img', { class: 'map-photo', src: fileUrl(photo), alt: 'Photo', onclick: () => openPreview(photo) }) : null,
+      h('small', { class: 'map-when' }, `${dayName(dayKey(new Date(p.createdAt)))} · ${new Date(p.createdAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`),
+      h('div', { class: 'map-pop-btns' },
+        h('a', { class: 'btn small', href: directions(p), target: '_blank', rel: 'noopener' }, 'Directions'),
+        h('button', { class: 'btn small', onclick: () => { MP.map.closePopup(); pinSheet(p, false); } }, 'Edit'),
+        p.kind === 'back' ? h('button', { class: 'btn small', onclick: () => { MP.map.closePopup(); savePin(p, false, { done: !p.done }); } }, p.done ? 'Not done' : 'Done') : null,
+        del));
+  }
+  function mapDraw(fit) {
+    if (!MP.group) return;
+    MP.group.clearLayers();
+    MP.live = null;
+    for (const t of MP.trips) {
+      if (!inCamp(t) || (t.path.length < 2 && t.id !== MP.run?.id)) continue;
+      const line = L.polyline(t.path.map((x) => [x[0], x[1]]), t.id === MP.run?.id ? { color: '#6b5cf0', weight: 6, opacity: 0.9 } : { color: '#6b5cf0', weight: 4, opacity: 0.35 });
+      line.addTo(MP.group);
+      if (t.id === MP.run?.id) MP.live = line;
+    }
+    const markers = {};
+    for (const p of MP.pins) {
+      if (!inCamp(p) || (MP.show !== 'all' && MP.show !== p.kind)) continue;
+      const m = L.circleMarker([p.lat, p.lng], { radius: p.kind === 'flyer' ? 6 : 9, color: '#fff', weight: 2, fillColor: MAP_COLOR[p.done ? 'done' : p.kind], fillOpacity: 1 });
+      m.bindPopup(() => pinPop(p), { maxWidth: 260 });
+      m.addTo(MP.group);
+      markers[p.id] = m;
+    }
+    if (MP.focus) {
+      const p = pinById(MP.focus);
+      MP.focus = null;
+      if (p) {
+        MP.centered = true;
+        MP.map.setView([p.lat, p.lng], 18);
+        markers[p.id]?.openPopup();
+        return;
+      }
+    }
+    if (fit && !MP.me) {
+      const pts = [...MP.pins.filter(inCamp).map((p) => [p.lat, p.lng]), ...MP.trips.filter(inCamp).flatMap((t) => t.path.slice(-1).map((x) => [x[0], x[1]]))];
+      if (pts.length) MP.map.fitBounds(pts, { maxZoom: 17, padding: [30, 30] });
+    }
+  }
+  function openMap({ pinId = null, campaignId } = {}) {
+    if (campaignId !== undefined) MP.camp = campaignId || '';
+    MP.focus = pinId;
+    openTool('map');
+    if (MP.map) {
+      mapDraw();
+      setTimeout(() => MP.map.invalidateSize(), 50);
+    }
+  }
+  function showOnMap(p) {
+    MP.focus = p.id;
+    if (MP.show !== 'all' && MP.show !== p.kind) MP.show = 'all';
+    mapDraw();
+    MP.box?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+  function showTrip(t) {
+    if (!MP.map || t.path.length < 1) return;
+    MP.follow = false;
+    MP.map.fitBounds(t.path.map((x) => [x[0], x[1]]), { maxZoom: 18, padding: [30, 30] });
+    MP.box?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  function mapTool() {
+    mapWatch();
+    const box = mapBox();
+    if (MP.map) setTimeout(() => MP.map.invalidateSize(), 0);
+    const run = MP.run && tripById(MP.run.id);
+    MP.stats = h('span', { class: 'map-stats' });
+    const camps = S.campaigns.filter((c) => c.status !== 'done' || c.id === MP.camp);
+    const backs = MP.pins.filter((p) => p.kind === 'back' && !p.done && inCamp(p)).sort((a, b) => (a.due || '9999').localeCompare(b.due || '9999') || b.createdAt - a.createdAt);
+    const doneBacks = MP.pins.filter((p) => p.kind === 'back' && p.done && inCamp(p)).length;
+    const leads = MP.pins.filter((p) => p.kind === 'lead' && inCamp(p));
+    const trips = MP.trips.filter((t) => inCamp(t) && t.id !== MP.run?.id).slice(0, 30);
+    const flyers = MP.pins.filter((p) => p.kind === 'flyer' && inCamp(p)).length;
+    const big = (label, cls, fn) => h('button', { class: 'map-act ' + cls, onclick: fn }, label);
+    const tripMenu = (anchor, t) => openMenu(anchor, [
+      { label: 'Show on the map', run: () => showTrip(t) },
+      { label: 'Rename…', run: () => { const name = h('input', { value: t.name || '', placeholder: 'Maple Ave and around' }); sheet('Name this run', [h('label', {}, 'Name', name)], () => { t.name = name.value.trim(); mapSend('PATCH', '/trips/' + t.id, { name: t.name }); renderTool(); }); } },
+      { label: 'Delete run', danger: true, run: () => { MP.trips = MP.trips.filter((x) => x.id !== t.id); mapSend('DELETE', '/trips/' + t.id); mapDraw(); renderTool(); } },
+    ]);
+    const out = [
+      h('div', { class: 'map-run' + (run ? ' on' : '') },
+        run ? h('span', { class: 'map-rec' }) : null,
+        run ? MP.stats : h('span', { class: 'map-stats' }, MP.geoErr || (hereNow() ? 'Ready when you are' : 'Finding your location…')),
+        run ? h('button', { class: 'btn small primary-btn', onclick: stopRun }, 'Stop run') : h('button', { class: 'btn small primary-btn', onclick: startRun }, 'Start a run')),
+      h('div', { class: 'map-acts' },
+        big('Flyer left', 'flyer', () => placeFor(dropFlyer)),
+        big('Come back…', 'back', () => placeFor((at) => pinSheet(newPin('back', at), true))),
+        big('Lead…', 'lead', () => placeFor((at) => pinSheet(newPin('lead', at), true)))),
+      box,
+      h('div', { class: 'map-filters' },
+        h('div', { class: 'set-tabs map-show' }, [['all', 'All'], ['flyer', `Flyers ${flyers}`], ['back', `Come back ${backs.length}`], ['lead', `Leads ${leads.length}`]].map(([k, l]) =>
+          h('button', { class: MP.show === k ? 'on' : '', onclick: () => { MP.show = k; mapDraw(); renderTool(true); } }, l))),
+        camps.length ? h('select', { class: 'map-camp', 'aria-label': 'Campaign', onchange: (e) => { MP.camp = e.target.value; mapDraw(true); renderTool(true); } },
+          h('option', { value: '' }, 'All campaigns'), camps.map((c) => h('option', { value: c.id, selected: c.id === MP.camp }, c.name))) : null),
+      MP.camp ? h('p', { class: 'day-hint' }, `New runs and pins go on ${campById(MP.camp)?.name || 'this campaign'}.`) : null,
+      h('section', {}, h('h3', {}, 'Come back to'),
+        backs.length ? backs.map((p) => h('div', { class: 'bill map-row', onclick: () => showOnMap(p) },
+          h('span', { class: 'bill-name' }, pinTitle(p), h('small', {}, p.note || 'No note')),
+          h('span', { class: 'bill-right' }, p.due ? h('small', { class: isOverdue({ due: p.due, done: false }) ? 'map-late' : null }, dueLabel(p.due)) : h('small', {}, 'No date'),
+            h('a', { class: 'btn small', href: directions(p), target: '_blank', rel: 'noopener', onclick: (e) => e.stopPropagation() }, 'Go')))) :
+          h('p', { class: 'day-hint' }, 'Spots to double back to show here, soonest first. Drop one with Come back, or tap the map.'),
+        doneBacks ? h('p', { class: 'day-hint' }, `${plural(doneBacks, 'spot')} done.`) : null),
+      leads.length ? h('section', {}, h('h3', {}, 'Leads'), leads.slice(0, 50).map((p) => h('div', { class: 'bill map-row', onclick: () => showOnMap(p) },
+        h('span', { class: 'bill-name' }, p.name || pinTitle(p), h('small', {}, [p.phone, p.address].filter(Boolean).join(' · ') || p.note || '')),
+        p.phone ? h('a', { class: 'btn small', href: 'tel:' + p.phone.replace(/[^\d+]/g, ''), onclick: (e) => e.stopPropagation() }, 'Call') : null))) : null,
+      h('section', {}, h('h3', {}, 'Runs'),
+        trips.length ? trips.map((t) => h('div', { class: 'bill map-row', onclick: () => showTrip(t) },
+          h('span', { class: 'bill-name' }, t.name || `${dayName(dayKey(new Date(t.startedAt)))} · ${new Date(t.startedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`,
+            h('small', {}, [fmtDist(t.dist || 0), t.endedAt ? fmtLength(t.endedAt - t.startedAt) : 'not finished', plural(runFlyers(t), 'flyer'), campById(t.campaignId)?.name].filter(Boolean).join(' · '))),
+          h('button', { class: 't-btn', html: I.more, 'aria-label': 'More', onclick: (e) => { e.stopPropagation(); tripMenu(e.currentTarget, t); } }))) :
+          h('p', { class: 'day-hint' }, 'Press Start a run when you head out. Column draws your path while it’s open, so you can see which streets you’ve covered. Keep the screen on: a phone stops sharing its location with a web page when the screen locks.')),
+    ];
+    setTimeout(runStats);
+    return out;
   }
 
   // ----- PDFs: read, fill in, sign, and send for signature -----

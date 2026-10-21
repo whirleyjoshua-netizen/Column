@@ -27,7 +27,7 @@ const PUBLIC_URL = (process.env.PUBLIC_URL || `http://localhost:${PORT}`).replac
 fs.mkdirSync(FILES_DIR, { recursive: true });
 
 // ---------- persistence (a JSON file is plenty for personal/small-team use) ----------
-let db = { workspaces: {}, tokens: {}, items: {}, entries: {}, tasks: {}, uploads: {}, campaigns: {}, goals: {}, attempts: {}, lists: {}, templates: {}, calendars: {}, ai: {}, pss: {}, sends: {}, bills: {}, meetings: {}, money: {}, budgets: {}, plans: {}, sidekick: {}, vaults: {}, vaultItems: {}, signs: {}, signatures: {} };
+let db = { workspaces: {}, tokens: {}, items: {}, entries: {}, tasks: {}, uploads: {}, campaigns: {}, goals: {}, attempts: {}, lists: {}, templates: {}, calendars: {}, ai: {}, pss: {}, sends: {}, bills: {}, meetings: {}, money: {}, budgets: {}, plans: {}, sidekick: {}, vaults: {}, vaultItems: {}, signs: {}, signatures: {}, trips: {}, pins: {} };
 try {
   db = { ...db, ...JSON.parse(fs.readFileSync(DB_PATH, 'utf8')) };
 } catch {}
@@ -1745,6 +1745,120 @@ function vaultLink(v, ws) {
 // to start: a thing in Column, PSS leads, a pasted list, or just a note to tick off. Making it a
 // campaign happens in the browser, through the usual campaign, goal, task and list routes.
 const PLAN_LINKS = ['file', 'stack', 'campaign', 'task'];
+// ----- Map: runs you walk or drive (a GPS path), and pins you drop on the way -----
+// A pin is a flyer left, a spot to come back to (with a date, which becomes a task), or a lead you talked to.
+// Ids come from the phone, so a run or pin made with no signal keeps its id when it's sent later.
+const MAP_ID = /^[\w-]{8,32}$/;
+const PIN_KINDS = ['flyer', 'back', 'lead'];
+const TRIP_POINTS = 20000;
+const okLat = (v) => Number.isFinite(v) && v >= -90 && v <= 90;
+const okLng = (v) => Number.isFinite(v) && v >= -180 && v <= 180;
+function meters(a, b) {
+  const r = Math.PI / 180;
+  const x = Math.sin(((b[0] - a[0]) * r) / 2) ** 2 + Math.cos(a[0] * r) * Math.cos(b[0] * r) * Math.sin(((b[1] - a[1]) * r) / 2) ** 2;
+  return 12742000 * Math.asin(Math.sqrt(x));
+}
+const mapCampaign = (ws, auth, id) => (id && db.campaigns[id]?.wsId === ws.id && canSee(auth, 'campaign', db.campaigns[id]) ? id : null);
+const publicTrip = ({ wsId, ...t }) => t;
+const publicPin = ({ wsId, ...p }) => p;
+const tripNews = (t) => broadcast(t.wsId, { type: 'map', trip: publicTrip(t), forMember: t.memberId });
+const pinNews = (p) => broadcast(p.wsId, { type: 'map', pin: publicPin(p), forMember: p.memberId });
+function applyTrip(t, body, ws, auth) {
+  if (body.name !== undefined) t.name = cleanText(body.name, 120);
+  if (body.campaignId !== undefined) t.campaignId = mapCampaign(ws, auth, body.campaignId);
+  if (body.endedAt !== undefined) t.endedAt = Number.isFinite(body.endedAt) ? Math.min(Date.now() + 60_000, Math.max(t.startedAt, body.endedAt)) : null;
+  // New points along the way: [lat, lng, time]. Jumps faster than a car on a highway are GPS noise.
+  if (Array.isArray(body.add)) {
+    for (const raw of body.add.slice(0, 2000)) {
+      if (!Array.isArray(raw) || t.path.length >= TRIP_POINTS) break;
+      const pt = [Number(raw[0]), Number(raw[1]), Math.round(Number(raw[2]) || Date.now())];
+      if (!okLat(pt[0]) || !okLng(pt[1])) continue;
+      pt[0] = Math.round(pt[0] * 1e6) / 1e6;
+      pt[1] = Math.round(pt[1] * 1e6) / 1e6;
+      const last = t.path.at(-1);
+      if (last) {
+        if (pt[2] <= last[2]) continue;
+        const d = meters(last, pt);
+        if (d / Math.max(1, (pt[2] - last[2]) / 1000) > 45) continue;
+        t.dist = Math.round((t.dist || 0) + d);
+      }
+      t.path.push(pt);
+    }
+  }
+  return t;
+}
+function applyPin(x, body, ws, auth) {
+  if (body.kind !== undefined) {
+    if (!PIN_KINDS.includes(body.kind)) throw badRequest('Bad pin kind.');
+    x.kind = body.kind;
+  }
+  if (body.lat !== undefined || body.lng !== undefined) {
+    const lat = Number(body.lat ?? x.lat), lng = Number(body.lng ?? x.lng);
+    if (!okLat(lat) || !okLng(lng)) throw badRequest('Bad location.');
+    x.lat = Math.round(lat * 1e6) / 1e6;
+    x.lng = Math.round(lng * 1e6) / 1e6;
+  }
+  for (const [k, n] of [['note', 2000], ['address', 200], ['name', 120], ['phone', 40], ['email', 200]]) if (body[k] !== undefined) x[k] = cleanText(body[k], n);
+  if (body.due !== undefined) {
+    if (body.due !== null && body.due !== '' && !/^\d{4}-\d{2}-\d{2}$/.test(body.due)) throw badRequest('Bad date.');
+    x.due = body.due || null;
+  }
+  if (body.done !== undefined) x.done = !!body.done;
+  if (body.campaignId !== undefined) x.campaignId = mapCampaign(ws, auth, body.campaignId);
+  if (body.tripId !== undefined) x.tripId = body.tripId && db.trips[body.tripId]?.memberId === auth.memberId ? body.tripId : null;
+  if (body.photoId !== undefined) x.photoId = body.photoId && db.items[body.photoId]?.wsId === ws.id ? body.photoId : null;
+  return x;
+}
+const pinLabel = (x) => x.address || x.name || `${x.lat.toFixed(4)}, ${x.lng.toFixed(4)}`;
+// A spot to come back to, with a date, is a task on that day for whoever dropped it.
+function syncPinTask(x) {
+  const t = x.taskId && db.tasks[x.taskId];
+  const want = x.kind === 'back' && x.due;
+  if (!want) {
+    if (t) {
+      deleteTask(t);
+      x.taskId = null;
+    }
+    return;
+  }
+  const text = `Come back: ${pinLabel(x)}${x.note ? ' · ' + x.note.split('\n')[0].slice(0, 200) : ''}`;
+  if (t) {
+    if (t.text === text && t.due === x.due && t.done === x.done) return;
+    Object.assign(t, { text, due: x.due });
+    if (t.done !== x.done) Object.assign(t, { done: x.done, doneAt: x.done ? Date.now() : null });
+    broadcast(x.wsId, { type: 'task', task: publicTask(t) });
+    return;
+  }
+  const nt = { id: rid(), wsId: x.wsId, by: x.by, createdAt: Date.now(), text, done: x.done, doneAt: x.done ? Date.now() : null, due: x.due, priority: 0, goalId: null, assigneeId: x.memberId, pinId: x.id };
+  db.tasks[nt.id] = nt;
+  x.taskId = nt.id;
+  broadcast(x.wsId, { type: 'task', task: publicTask(nt) });
+}
+// The street address at a spot, from OpenStreetMap's Nominatim: one lookup a second, as its rules ask, and remembered.
+const geoCache = new Map();
+let geoNext = 0;
+async function streetAt(lat, lng) {
+  const key = `${lat.toFixed(4)},${lng.toFixed(4)}`;
+  if (geoCache.has(key)) return geoCache.get(key);
+  const wait = geoNext - Date.now();
+  geoNext = Math.max(Date.now(), geoNext) + 1100;
+  if (wait > 5000) return null;
+  if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+  let out = null;
+  try {
+    const r = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=18&addressdetails=1&lat=${lat}&lon=${lng}`, {
+      headers: { 'User-Agent': `Column (${PUBLIC_URL})`, 'Accept-Language': 'en' }, signal: AbortSignal.timeout(6000),
+    });
+    const j = r.ok ? await r.json() : null;
+    const a = j?.address || {};
+    const street = [a.house_number, a.road || a.pedestrian || a.footway || a.neighbourhood].filter(Boolean).join(' ');
+    out = [street, a.city || a.town || a.village || a.hamlet || a.suburb].filter(Boolean).join(', ').slice(0, 200) || null;
+  } catch {}
+  if (geoCache.size > 5000) geoCache.clear();
+  geoCache.set(key, out);
+  return out;
+}
+
 const publicPlan = ({ wsId, ...p }) => p;
 const planId = (v) => (typeof v === 'string' && /^[\w-]{4,20}$/.test(v) ? v : rid(6));
 function planLink(v) {
@@ -2461,6 +2575,12 @@ async function api(req, res, url) {
       // Who handed it over, so the new assignee can be told.
       if (next.assigneeId !== t.assigneeId) next.assignedBy = next.assigneeId ? auth.memberId : null;
       db.tasks[t.id] = next;
+      // Ticking off a come-back task ticks off its spot on the map.
+      const pin = next.pinId && db.pins[next.pinId];
+      if (pin && pin.done !== next.done) {
+        pin.done = next.done;
+        pinNews(pin);
+      }
       // Keep linked entries' own copy current so they still read right if the task is deleted later.
       for (const e of Object.values(db.entries)) {
         if (e.taskId === t.id && (e.text !== next.text || e.done !== next.done)) {
@@ -2986,6 +3106,67 @@ async function api(req, res, url) {
       delete db.sidekick[x.id];
       save();
       broadcast(ws.id, { type: 'sidekick:remove', id: x.id, forMember: x.memberId });
+      return send(res, 200, { ok: true });
+    }
+    return send(res, 405, { error: 'Method not allowed' });
+  }
+
+  if (a === 'map' && m === 'GET' && !b) {
+    const mine = (x) => x.wsId === ws.id && x.memberId === auth.memberId;
+    return send(res, 200, {
+      trips: Object.values(db.trips).filter(mine).sort((p, q) => q.startedAt - p.startedAt).slice(0, 300).map(publicTrip),
+      pins: Object.values(db.pins).filter(mine).sort((p, q) => q.createdAt - p.createdAt).slice(0, 5000).map(publicPin),
+    });
+  }
+  if (a === 'geo' && m === 'GET') {
+    const lat = Number(url.searchParams.get('lat')), lng = Number(url.searchParams.get('lng'));
+    if (!okLat(lat) || !okLng(lng)) return send(res, 400, { error: 'Bad location.' });
+    return send(res, 200, { address: await streetAt(lat, lng) });
+  }
+  if (a === 'trips' || a === 'pins') {
+    const store = a === 'trips' ? db.trips : db.pins;
+    const news = a === 'trips' ? tripNews : pinNews;
+    const pub = a === 'trips' ? publicTrip : publicPin;
+    const apply = (x, body) => (a === 'trips' ? applyTrip(x, body, ws, auth) : applyPin(x, body, ws, auth));
+    if (m === 'POST' && !b) {
+      const body = await readJson(req, 1_000_000);
+      const id = MAP_ID.test(body.id || '') ? body.id : rid();
+      const had = store[id];
+      // Sent twice (no answer the first time, so the phone tried again): the first one stands.
+      if (had) return had.wsId === ws.id && had.memberId === auth.memberId ? send(res, 200, pub(had)) : send(res, 409, { error: 'Try again.' });
+      const count = Object.values(store).filter((x) => x.wsId === ws.id && x.memberId === auth.memberId).length;
+      if (count >= (a === 'trips' ? 2000 : 20000)) return send(res, 400, { error: a === 'trips' ? 'You have too many runs saved. Delete some old ones first.' : 'You have too many pins. Delete some old ones first.' });
+      const base = { id, wsId: ws.id, memberId: auth.memberId, by: auth.member, createdAt: Date.now(), campaignId: null };
+      let x;
+      if (a === 'trips') {
+        const startedAt = Number.isFinite(body.startedAt) ? Math.min(Date.now() + 60_000, body.startedAt) : Date.now();
+        x = applyTrip({ ...base, name: '', startedAt, endedAt: null, path: [], dist: 0 }, body, ws, auth);
+      } else {
+        if (body.lat === undefined || body.lng === undefined) return send(res, 400, { error: 'Bad location.' });
+        x = applyPin({ ...base, kind: 'flyer', note: '', address: '', name: '', phone: '', email: '', due: null, done: false, tripId: null, photoId: null, taskId: null }, { kind: 'flyer', ...body }, ws, auth);
+        if (Number.isFinite(body.createdAt)) x.createdAt = Math.min(Date.now(), body.createdAt);
+        syncPinTask(x);
+      }
+      store[x.id] = x;
+      save();
+      news(x);
+      return send(res, 200, pub(x));
+    }
+    const x = b && store[b];
+    if (!x || x.wsId !== ws.id || x.memberId !== auth.memberId) return send(res, 404, { error: 'Not found' });
+    if (m === 'PATCH') {
+      apply(x, await readJson(req, 1_000_000));
+      if (a === 'pins') syncPinTask(x);
+      save();
+      news(x);
+      return send(res, 200, pub(x));
+    }
+    if (m === 'DELETE') {
+      if (a === 'pins' && x.taskId && db.tasks[x.taskId]) deleteTask(db.tasks[x.taskId]);
+      if (a === 'trips') for (const p of Object.values(db.pins)) if (p.tripId === x.id) p.tripId = null;
+      delete store[x.id];
+      save();
+      broadcast(ws.id, { type: 'map:remove', [a === 'trips' ? 'tripId' : 'pinId']: x.id, forMember: x.memberId });
       return send(res, 200, { ok: true });
     }
     return send(res, 405, { error: 'Method not allowed' });
