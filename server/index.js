@@ -13,6 +13,7 @@ import { streamZip, zipSize } from './zip.js';
 import { iconPng } from './png.js';
 import { providers as calProviders } from './calendar.js';
 import { llms, llmError, complete } from './llm.js';
+import { PdfError, stampPdf, addCertificate, pageCount } from './pdf.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 4747);
@@ -26,7 +27,7 @@ const PUBLIC_URL = (process.env.PUBLIC_URL || `http://localhost:${PORT}`).replac
 fs.mkdirSync(FILES_DIR, { recursive: true });
 
 // ---------- persistence (a JSON file is plenty for personal/small-team use) ----------
-let db = { workspaces: {}, tokens: {}, items: {}, entries: {}, tasks: {}, uploads: {}, campaigns: {}, goals: {}, attempts: {}, lists: {}, templates: {}, calendars: {}, ai: {}, pss: {}, sends: {}, bills: {}, meetings: {}, money: {}, budgets: {}, plans: {}, vaults: {}, vaultItems: {} };
+let db = { workspaces: {}, tokens: {}, items: {}, entries: {}, tasks: {}, uploads: {}, campaigns: {}, goals: {}, attempts: {}, lists: {}, templates: {}, calendars: {}, ai: {}, pss: {}, sends: {}, bills: {}, meetings: {}, money: {}, budgets: {}, plans: {}, vaults: {}, vaultItems: {}, signs: {}, signatures: {} };
 try {
   db = { ...db, ...JSON.parse(fs.readFileSync(DB_PATH, 'utf8')) };
 } catch {}
@@ -119,6 +120,7 @@ const MIME = {
   '.heic': 'image/heic', '.mp4': 'video/mp4', '.mov': 'video/quicktime', '.webm': 'video/webm', '.mkv': 'video/x-matroska',
   '.mp3': 'audio/mpeg', '.m4a': 'audio/mp4', '.wav': 'audio/wav', '.flac': 'audio/flac', '.ogg': 'audio/ogg',
   '.pdf': 'application/pdf', '.txt': 'text/plain; charset=utf-8', '.md': 'text/markdown; charset=utf-8', '.zip': 'application/zip',
+  '.mjs': 'text/javascript; charset=utf-8', '.wasm': 'application/wasm',
 };
 const mimeFor = (name, given) => (given && given !== 'application/octet-stream' ? given : MIME[path.extname(name).toLowerCase()] || 'application/octet-stream');
 
@@ -1526,6 +1528,164 @@ const newMoney = (auth) => ({ id: rid(), wsId: auth.ws.id, memberId: auth.member
 // Rows from a bank statement come in once: the same day, amount and description from the same person is skipped.
 const moneyKey = (x) => crypto.createHash('sha256').update([x.memberId, x.scope, x.day, x.kind, x.amount, x.note.toLowerCase()].join('|')).digest('base64url').slice(0, 22);
 const sameBudget = (a, b) => a.wsId === b.wsId && a.scope === b.scope && sameText(a.category, b.category) && (a.scope === 'business' || a.memberId === b.memberId);
+// ---------- PDFs: filling in, signing, and sending for signature ----------
+// Your own signature and initials are PNGs kept per person. A signature request keeps a copy of the PDF as it
+// was sent (and its fingerprint), so what the signer sees is exactly what they sign, even if the file changes.
+const SIGN_DAYS = 30;
+const SIGN_KEEP = 500;
+const SIGN_FIELDS = ['sig', 'ini', 'date', 'name', 'text'];
+const sigKey = (wsId, memberId) => wsId + ':' + memberId;
+const sha256 = (buf) => crypto.createHash('sha256').update(buf).digest('hex');
+const isPdf = (it) => it?.type === 'file' && (it.mime === 'application/pdf' || /\.pdf$/i.test(it.name));
+const PNG_HEAD = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+function pngData(v) {
+  const m = /^data:image\/png;base64,([A-Za-z0-9+/=]{20,400000})$/.exec(String(v || ''));
+  const buf = m && Buffer.from(m[1], 'base64');
+  return buf && buf.subarray(0, 8).equals(PNG_HEAD) ? buf : null;
+}
+// Where each mark goes, in PDF points (see pdf.js).
+function cleanMarks(list, kinds) {
+  if (!Array.isArray(list)) return [];
+  if (list.length > 500) throw badRequest('Too many marks.');
+  const num = (v, lo, hi) => {
+    const x = Number(v);
+    if (!Number.isFinite(x) || x < lo || x > hi) throw badRequest('A mark is off the page.');
+    return x;
+  };
+  return list.map((m) => {
+    if (!kinds.includes(m?.type)) throw badRequest('Unknown kind of mark.');
+    const x = { id: cleanText(m.id, 20) || rid(6), type: m.type, page: Math.round(num(m.page, 0, 9999)), x: num(m.x, -20000, 20000), y: num(m.y, -20000, 20000), w: num(m.w, 2, 3000), h: num(m.h, 2, 3000) };
+    if (m.type === 'text') Object.assign(x, { text: cleanText(m.text, 500), size: num(m.size ?? 11, 4, 72) });
+    if (m.label) x.label = cleanText(m.label, 60);
+    return x;
+  });
+}
+function cleanForm(v) {
+  const out = {};
+  if (!v || typeof v !== 'object') return out;
+  for (const [k, x] of Object.entries(v).slice(0, 2000)) out[String(k).slice(0, 300)] = typeof x === 'boolean' ? x : cleanText(x, 5000);
+  return out;
+}
+async function pdfWork(fn) {
+  try {
+    return await fn();
+  } catch (e) {
+    if (e instanceof PdfError) throw badRequest(e.message);
+    throw e;
+  }
+}
+// "Lease.pdf" → "Lease (signed).pdf"
+const copyName = (name, what) => `${name.replace(/\.pdf$/i, '').replace(/ \((signed|filled)\)$/, '')} (${what}).pdf`;
+async function addPdf(who, bytes, name, src) {
+  const ws = db.workspaces[who.wsId];
+  const id = rid();
+  await fsp.writeFile(path.join(FILES_DIR, id), bytes);
+  return addItem({
+    ...baseItem(who, { type: 'file', name, size: bytes.length, mime: 'application/pdf' }),
+    id,
+    stackId: validStack(ws, src.stackId, who.memberId),
+    channelId: validChannel(ws, src.channelId, who.memberId),
+  });
+}
+const signPath = (x, signed) => path.join(FILES_DIR, `sign-${x.id}${signed ? '-signed' : ''}.pdf`);
+const signLink = (x) => `${PUBLIC_URL}/sign/${x.token}`;
+const signStatus = (x) => (['sent', 'viewed'].includes(x.status) && x.expiresAt < Date.now() ? 'expired' : x.status);
+function publicSign(x) {
+  const { wsId, token, ...rest } = x;
+  return { ...rest, status: signStatus(x), link: signLink(x) };
+}
+const signNews = (x) => broadcast(x.wsId, { type: 'sign', sign: publicSign(x), forMember: x.memberId });
+function signEvent(x, what, req) {
+  x.events.push({ at: Date.now(), what, ...(req ? { ip: clientIp(req), ua: String(req.headers['user-agent'] || '').slice(0, 200) } : {}) });
+  x.events = x.events.slice(-200);
+}
+const utc = (t) => new Date(t).toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
+const CONSENT = 'I agree to use electronic records and signatures for this document. I can ask the sender for a paper copy instead, and I can download a copy of the signed document.';
+
+async function signApi(req, res, token, part) {
+  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('X-Robots-Tag', 'noindex');
+  const x = token && Object.values(db.signs).find((s) => s.token === token);
+  if (!x || x.status === 'void') return send(res, 404, { error: 'This signing link isn’t available any more. Ask the sender for a new one.' });
+  const ws = db.workspaces[x.wsId];
+  const st = signStatus(x);
+  const open = st === 'sent' || st === 'viewed';
+  const m = req.method;
+  if (!part && m === 'GET') {
+    if (open && x.events.filter((e) => e.what === 'Opened').length < 50) {
+      x.status = 'viewed';
+      signEvent(x, 'Opened', req);
+      save();
+      signNews(x);
+    }
+    const brand = ws ? brandOf(ws) : {};
+    return send(res, 200, {
+      name: x.name, from: x.by, team: ws?.name || '', logo: logoUrl(brand.logo) || null, accent: brand.accent || null, message: x.message,
+      signer: x.signer, fields: x.fields, status: st, expiresAt: x.expiresAt, signedAt: x.signedAt || null, consent: CONSENT,
+    });
+  }
+  if (part === 'file' && (m === 'GET' || m === 'HEAD')) return serveFile(req, res, signPath(x), { name: x.name, mime: 'application/pdf' });
+  if (part === 'signed' && (m === 'GET' || m === 'HEAD')) {
+    if (st !== 'signed') return send(res, 404, { error: 'Not signed yet.' });
+    return serveFile(req, res, signPath(x, true), { name: copyName(x.name, 'signed'), mime: 'application/pdf', download: true });
+  }
+  if (m !== 'POST' || (part && part !== 'decline')) return send(res, 404, { error: 'Not found' });
+  if (!open) return send(res, 409, { error: st === 'signed' ? 'This document is already signed.' : st === 'declined' ? 'You declined this document.' : 'This link has expired. Ask the sender for a new one.' });
+  if (x.busy) return send(res, 409, { error: 'Already signing. Wait a moment.' });
+  const body = await readJson(req, 2_000_000);
+  if (part === 'decline') {
+    x.status = 'declined';
+    x.declineReason = cleanText(body.reason, 500);
+    signEvent(x, 'Declined to sign' + (x.declineReason ? `: “${x.declineReason}”` : ''), req);
+    save();
+    signNews(x);
+    return send(res, 200, { status: 'declined' });
+  }
+  if (body.consent !== true) return send(res, 400, { error: 'Tick the box to agree to sign electronically.' });
+  const typed = cleanText(body.name, 120);
+  if (!typed) return send(res, 400, { error: 'Type your full name.' });
+  const images = { sig: pngData(body.sig), ini: pngData(body.ini) };
+  if (!images.sig) return send(res, 400, { error: 'Add your signature.' });
+  if (x.fields.some((f) => f.type === 'ini') && !images.ini) return send(res, 400, { error: 'Add your initials.' });
+  const date = cleanText(body.date, 40) || new Date().toISOString().slice(0, 10);
+  const values = body.values && typeof body.values === 'object' ? body.values : {};
+  const marks = x.fields.map((f) =>
+    f.type === 'sig' || f.type === 'ini' ? { ...f, type: 'image', image: f.type }
+      : { ...f, type: 'text', size: 0, text: f.type === 'date' ? date : f.type === 'name' ? typed : cleanText(values[f.id], 300) });
+  x.busy = true;
+  try {
+    signEvent(x, `Agreed to sign electronically: “${CONSENT}”`, req);
+    signEvent(x, `Signed as “${typed}”`, req);
+    const signedAt = Date.now();
+    const doc = await pdfWork(() => stampPdf(fs.readFileSync(signPath(x)), { marks, images, flatten: true }));
+    const at = (e) => [utc(e.at), e.what + (e.ip ? ` · from ${e.ip}` : '') + (e.ua ? ` · ${e.ua}` : '')];
+    await addCertificate(doc, {
+      title: 'Signing certificate',
+      rows: [
+        ['Document', x.name], ['Pages', `${x.pages} (this certificate is added after them)`], ['Request', x.id],
+        ['Fingerprint of the document as sent (SHA-256)', x.hash],
+        ['Sent by', `${x.by}, ${ws?.name || ''}`], ['Signer', `${x.signer.name} <${x.signer.email}>`], ['Signed as', typed], ['Signed', utc(signedAt)],
+      ],
+      images: [['Signature', images.sig], ...(images.ini ? [['Initials', images.ini]] : [])],
+      events: x.events.map(at),
+      note: 'Made with Column. The signer reached this document through a private link sent to the email address above. Each line of the history shows when it happened, the network address it came from, and the browser used.',
+    });
+    const bytes = await doc.save();
+    await fsp.writeFile(signPath(x, true), bytes);
+    const sender = ws?.members.find((p) => p.id === x.memberId);
+    const item = await addPdf({ wsId: x.wsId, member: x.by, memberId: sender ? x.memberId : null, device: 'Signature', deviceId: null }, bytes, copyName(x.name, 'signed'), x);
+    Object.assign(x, { status: 'signed', signedAt, signedName: typed, signedHash: sha256(bytes), signedItemId: item.id });
+  } catch (e) {
+    x.events = x.events.filter((e2) => !/^(Agreed to sign|Signed as)/.test(e2.what));
+    throw e;
+  } finally {
+    delete x.busy;
+  }
+  save();
+  signNews(x);
+  return send(res, 200, { status: 'signed' });
+}
+
 // ---------- vault: each person's safe box, locked in their own browser ----------
 // Everything is encrypted and decrypted on the person's device with a key made from their vault passphrase,
 // which never reaches the server. The server keeps the salt, a check value (a known text encrypted with
@@ -2035,6 +2195,9 @@ async function api(req, res, url) {
     return send(res, 200, { token, workspace: publicWorkspace(ws, member.id) });
   }
 
+  // Someone signing a document they were sent: the link is their way in, no account.
+  if (a === 'public' && b === 'sign') return signApi(req, res, c, d);
+
   const auth = authFrom(req, url);
   if (!auth) return send(res, 401, { error: 'Not signed in' });
   const { ws } = auth;
@@ -2408,6 +2571,117 @@ async function api(req, res, url) {
   }
 
   // Your vault: only ever encrypted blobs. Nobody else, owners included, can reach it.
+  if (a === 'signature') {
+    const k = sigKey(ws.id, auth.memberId);
+    if (m === 'GET') return send(res, 200, db.signatures[k] || {});
+    if (m === 'PUT') {
+      const body = await readJson(req, 1_200_000);
+      const cur = { ...db.signatures[k] };
+      for (const f of ['sig', 'ini']) {
+        if (!(f in body)) continue;
+        if (body[f] === null) delete cur[f];
+        else if (!pngData(body[f])) return send(res, 400, { error: 'That signature didn’t come through. Draw it again.' });
+        else cur[f] = body[f];
+      }
+      db.signatures[k] = cur;
+      save();
+      broadcast(ws.id, { type: 'signature', forMember: auth.memberId });
+      return send(res, 200, cur);
+    }
+  }
+
+  // Saves a filled-in or signed copy of a PDF next to it. The original stays as it was.
+  if (a === 'pdf' && b && c === 'save' && m === 'POST') {
+    const it = db.items[b];
+    if (!it || it.wsId !== ws.id || it.status !== 'ready' || !canSee(auth, 'item', it)) return send(res, 404, { error: 'Not found' });
+    if (!isPdf(it)) return send(res, 400, { error: 'Only PDFs can be filled in and signed here.' });
+    const body = await readJson(req, 2_000_000);
+    const marks = cleanMarks(body.marks, ['text', 'check', 'sig', 'ini']);
+    const form = cleanForm(body.form);
+    if (!marks.length && !Object.keys(form).length) return send(res, 400, { error: 'Nothing to save yet.' });
+    const mine = db.signatures[sigKey(ws.id, auth.memberId)] || {};
+    const images = { sig: pngData(mine.sig), ini: pngData(mine.ini) };
+    for (const x of marks) {
+      if (x.type !== 'sig' && x.type !== 'ini') continue;
+      if (!images[x.type]) return send(res, 400, { error: x.type === 'sig' ? 'Add your signature first.' : 'Add your initials first.' });
+      Object.assign(x, { image: x.type, type: 'image' });
+    }
+    const signed = marks.some((x) => x.type === 'image');
+    const bytes = await pdfWork(async () => (await stampPdf(await fsp.readFile(path.join(FILES_DIR, it.id)), { marks, form, images, flatten: signed })).save());
+    const item = await addPdf(auth, bytes, copyName(it.name, signed ? 'signed' : 'filled'), it);
+    return send(res, 200, publicItem(item));
+  }
+
+  if (a === 'signs') {
+    const mine = (x) => x.wsId === ws.id && x.memberId === auth.memberId;
+    if (m === 'GET' && !b) return send(res, 200, Object.values(db.signs).filter(mine).sort((p, q) => q.createdAt - p.createdAt).slice(0, SIGN_KEEP).map(publicSign));
+    if (m === 'POST' && !b) {
+      const body = await readJson(req, 1_000_000);
+      const it = db.items[body.itemId];
+      if (!it || it.wsId !== ws.id || it.status !== 'ready' || !canSee(auth, 'item', it)) return send(res, 404, { error: 'Not found' });
+      if (!isPdf(it)) return send(res, 400, { error: 'Only PDFs can be sent for signature.' });
+      const name = cleanText(body.signer?.name, 120);
+      const email = cleanText(body.signer?.email, 200).toLowerCase();
+      if (!name) return send(res, 400, { error: 'Add the name of the person signing.' });
+      if (!EMAIL_RE.test(email)) return send(res, 400, { error: 'Add their email address.' });
+      const fields = cleanMarks(body.fields, SIGN_FIELDS);
+      if (fields.length > 100) return send(res, 400, { error: 'That’s too many boxes. 100 at most.' });
+      if (!fields.some((f) => f.type === 'sig')) return send(res, 400, { error: 'Add at least one signature box for them.' });
+      const bytes = await fsp.readFile(path.join(FILES_DIR, it.id));
+      const pages = await pdfWork(() => pageCount(bytes));
+      if (fields.some((f) => f.page >= pages)) return send(res, 400, { error: 'A box is off the end of the document.' });
+      const camp = body.campaignId && db.campaigns[body.campaignId];
+      const x = {
+        id: rid(), wsId: ws.id, memberId: auth.memberId, by: auth.member, itemId: it.id, name: it.name, stackId: it.stackId, channelId: it.channelId,
+        campaignId: camp && camp.wsId === ws.id && seesCampaign(camp.id, auth.memberId) ? camp.id : null,
+        signer: { name, email }, message: String(body.message ?? '').replace(/\r\n?/g, '\n').trim().slice(0, 2000), fields, pages,
+        token: rid(24), hash: sha256(bytes), status: 'sent', events: [], createdAt: Date.now(), expiresAt: Date.now() + SIGN_DAYS * 86_400_000,
+      };
+      await fsp.writeFile(signPath(x), bytes);
+      signEvent(x, `Sent by ${auth.member} (${ws.name})`, req);
+      db.signs[x.id] = x;
+      save();
+      signNews(x);
+      return send(res, 200, publicSign(x));
+    }
+    const x = b && db.signs[b];
+    if (!x || !mine(x)) return send(res, 404, { error: 'Not found' });
+    const open = ['sent', 'viewed'].includes(signStatus(x));
+    if (c === 'email' && m === 'POST') {
+      const conn = mailConn(ws.id, auth.memberId);
+      if (!conn) return send(res, 400, { error: 'Connect Outlook in Settings to email it from Column, or copy the link and send it yourself.' });
+      if (!open) return send(res, 400, { error: 'This request is closed.' });
+      const first = x.signer.name.split(/\s+/)[0];
+      const until = new Date(x.expiresAt).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
+      const text = `Hi ${first},\n\n${x.by} at ${ws.name} sent you “${x.name}” to sign.\n\n${x.message ? x.message + '\n\n' : ''}Read it and sign here:\n${signLink(x)}\n\nThe link works until ${until}.\n`;
+      try {
+        await calProviders.microsoft.sendMail(await calToken(conn), mailMime(conn.account, x.signer, `Please sign: ${x.name}`, text, ''));
+      } catch (e) {
+        return send(res, 502, { error: e.auth ? 'Outlook’s sign-in expired. Connect it again.' : 'Outlook didn’t send it: ' + String(e.message).slice(0, 200) });
+      }
+      signEvent(x, `Emailed to ${x.signer.email} from ${conn.account}`);
+      save();
+      signNews(x);
+      return send(res, 200, publicSign(x));
+    }
+    if (c === 'void' && m === 'POST') {
+      if (!open) return send(res, 400, { error: 'This request is already closed.' });
+      x.status = 'void';
+      signEvent(x, `Cancelled by ${auth.member}`);
+      save();
+      signNews(x);
+      return send(res, 200, publicSign(x));
+    }
+    if (m === 'DELETE' && !c) {
+      if (x.status === 'signed') return send(res, 400, { error: 'A signed request stays on record.' });
+      delete db.signs[x.id];
+      fsp.rm(signPath(x), { force: true }).catch(() => {});
+      save();
+      broadcast(ws.id, { type: 'sign:remove', id: x.id, forMember: x.memberId });
+      return send(res, 200, { ok: true });
+    }
+  }
+
   if (a === 'vault') {
     const key = vaultKey(ws.id, auth.memberId);
     const mine = () => Object.values(db.vaultItems).filter((x) => x.wsId === ws.id && x.memberId === auth.memberId);
@@ -3300,7 +3574,7 @@ async function api(req, res, url) {
 // so devices that stay open (like the desktop app in the tray) pick up updates.
 let clientVer = { key: '', hash: '' };
 function clientVersion() {
-  const files = ['index.html', 'app.js', 'style.css'].map((f) => path.join(CLIENT_DIR, f));
+  const files = ['index.html', 'app.js', 'style.css', 'pdfkit.js'].map((f) => path.join(CLIENT_DIR, f));
   const key = files.map((f) => fs.statSync(f, { throwIfNoEntry: false })?.mtimeMs || 0).join(':');
   if (key !== clientVer.key) {
     const h = crypto.createHash('sha256');
@@ -3322,9 +3596,11 @@ function serveStatic(req, res, url) {
   if (!file.startsWith(CLIENT_DIR + path.sep)) return send(res, 403, 'Forbidden');
   // Only Column's own script runs on its pages: markup that slips in from a file or message can't run code.
   const csp = path.extname(file) === '.html' ? { 'Content-Security-Policy': "script-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'" } : {};
+  // Libraries in /vendor/ have their version in the folder name, so they never change.
+  const cache = rel.startsWith('/vendor/') ? 'public, max-age=31536000, immutable' : 'no-cache';
   fs.readFile(file, (err, data) => {
     if (err) return send(res, 404, 'Not found');
-    send(res, 200, data, { 'Content-Type': MIME[path.extname(file)] || 'application/octet-stream', 'Cache-Control': 'no-cache', ...csp });
+    send(res, 200, data, { 'Content-Type': MIME[path.extname(file)] || 'application/octet-stream', 'Cache-Control': cache, ...csp });
   });
 }
 
@@ -3375,6 +3651,12 @@ const server = http.createServer(async (req, res) => {
   }
   if (url.pathname === '/import' && req.method === 'POST') return importData(req, res);
   if (url.pathname.startsWith('/s/') && (req.method === 'GET' || req.method === 'HEAD')) return serveShare(req, res, url);
+  if (url.pathname.startsWith('/sign/') && req.method === 'GET') {
+    // The signing page; the token in the address stays out of other sites' logs and search results.
+    res.setHeader('Referrer-Policy', 'no-referrer');
+    res.setHeader('X-Robots-Tag', 'noindex');
+    return serveStatic(req, res, new URL('/sign.html', 'http://x'));
+  }
   if (url.pathname.startsWith('/brand/') && (req.method === 'GET' || req.method === 'HEAD')) return serveLogo(req, res, url);
   if (url.pathname.startsWith('/oauth/')) return oauthCallback(req, res, url).catch((e) => {
     console.error(e);

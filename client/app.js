@@ -274,6 +274,8 @@
     vaultLock();
     VK.meta = undefined;
     VK.raw = [];
+    SG.mine = {};
+    SG.list = [];
     S.token = null;
     store.del('token');
     try {
@@ -405,6 +407,19 @@
       renderTool();
     } else if (msg.type === 'vault') {
       loadVault();
+    } else if (msg.type === 'signature') {
+      loadSignature();
+    } else if (msg.type === 'sign' || msg.type === 'sign:remove') {
+      const was = SG.list.find((x) => x.id === (msg.sign?.id || msg.id));
+      if (!msg.sign) {
+        SG.list = SG.list.filter((x) => x.id !== msg.id);
+        renderCamps();
+        renderTool();
+      } else upsertSign(msg.sign);
+      const x = msg.sign;
+      if (x && was && x.status !== was.status && (x.status === 'signed' || x.status === 'declined')) {
+        toast(`${x.signer.name} ${x.status === 'signed' ? 'signed' : 'declined to sign'} “${x.name}”`, { label: 'Details', run: () => signSheet(x) });
+      }
     } else if (msg.type === 'plan' || msg.type === 'plan:remove') {
       if (msg.plan && msg.plan.id === PL.dirty) return;
       S.plans = (S.plans || []).filter((x) => x.id !== (msg.plan?.id || msg.id));
@@ -519,6 +534,8 @@
     api('GET', '/meetings').then((x) => { S.meetings = x; renderRec(); }).catch(() => {});
     api('GET', '/plans').then((x) => { S.plans = x; renderTool(); }).catch(() => {});
     loadVault();
+    loadSignature();
+    loadSigns();
     loadPss();
     S.panes = S.panes.map((v) => (v.startsWith('stack:') && !stackById(v.slice(6)) ? 'files' : v));
     $('#wsName').textContent = S.workspace.name;
@@ -1312,7 +1329,7 @@
     if (k === 'image') pv.append(h('img', { src: fileUrl(it), alt: it.name }));
     else if (k === 'video') pv.append(h('video', { src: fileUrl(it), controls: true, autoplay: true, playsinline: true }));
     else if (k === 'audio') pv.append(h('div', { style: 'color:#fff;font-size:15px' }, it.name), h('audio', { src: fileUrl(it), controls: true, autoplay: true }));
-    else if (k === 'pdf') pv.append(h('iframe', { src: fileUrl(it) }));
+    else if (k === 'pdf') pv.append(pdfView(it));
     else if (k === 'text') pv.append(h('pre', { html: linkify(it.text) }));
     else if (k === 'docx') {
       const box = h('div', { class: 'docx' }, 'Loading…');
@@ -1476,6 +1493,7 @@
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
       if (!$('#sheet').classList.contains('hidden')) closeSheet();
+      else if (pdfStop()) return;
       else if (!$('#preview').classList.contains('hidden') && !VIEW_ID) { $('#preview').classList.add('hidden'); $('#preview').innerHTML = ''; }
       else if (!$('#settings').classList.contains('hidden')) $('#settings').classList.add('hidden');
       hideMenu();
@@ -3050,6 +3068,7 @@
         st ? h('button', { class: 'btn small', title: 'Jot a quick note, or open one', onclick: (e) => notesMenu(e.currentTarget, c) }, `Notes · ${notes} ▾`) : null,
         h('button', { class: 'btn small' + (K.logOpen === c.id ? ' on' : ''), onclick: () => openLog(c) }, 'Log'),
         h('button', { class: 'btn small', onclick: () => openReport(c) }, 'Write a report'),
+        signsFor(c) ? h('button', { class: 'btn small', title: 'Sent for signature', onclick: () => { SG.filter = c.id; openTool('signs'); } }, `Signatures · ${signsFor(c)}`) : null,
         vaultLinked('campaign', c.id) ? h('button', { class: 'btn small', title: 'In your vault', onclick: () => openVaultFor('campaign', c.id) }, h('span', { class: 'vault-ic', html: I.lock }), `Vault · ${vaultLinked('campaign', c.id)}`) : null),
       sendBars(c),
       h('div', { class: 'any-h camp-goals-h' }, 'Log'),
@@ -4168,7 +4187,7 @@
       return;
     }
     const k = kind(it);
-    if (k === 'pdf') return body.append(h('iframe', { src: fileUrl(it), title: it.name }));
+    if (k === 'pdf') return body.append(pdfView(it, { docked: true }));
     if (k === 'image') return body.append(h('img', { src: fileUrl(it), alt: it.name }));
     if (!docKind(it) && k !== 'textfile') return body.append(h('p', { class: 'day-hint' }, 'This file can’t be shown here.'), h('button', { class: 'btn small', onclick: () => download(it) }, 'Download'));
     body.append(h('p', { class: 'day-hint' }, 'Loading…'));
@@ -5311,7 +5330,7 @@
   }
 
   // ---------- tools: small apps that open in a drawer, so the tabs stay as they are ----------
-  const TOOLS = { bills: { name: 'Finance', render: financeTool }, contacts: { name: 'Contacts', render: contactsTool }, email: { name: 'Email', render: emailTool }, meetings: { name: 'Meeting notes', render: meetingsTool }, planner: { name: 'Planner', render: plannerTool }, vault: { name: 'Vault', render: vaultTool } };
+  const TOOLS = { bills: { name: 'Finance', render: financeTool }, contacts: { name: 'Contacts', render: contactsTool }, email: { name: 'Email', render: emailTool }, meetings: { name: 'Meeting notes', render: meetingsTool }, planner: { name: 'Planner', render: plannerTool }, signs: { name: 'Signatures', render: signsTool }, vault: { name: 'Vault', render: vaultTool } };
   let toolOpen = null;
   $('#toolsBtn').addEventListener('click', (e) => {
     const soon = billsSoon().length;
@@ -5323,6 +5342,7 @@
       mayEmail() ? { label: h('span', { class: 'tool-item' }, 'Email', (S.mail?.sends || []).some((x) => x.status === 'sending') ? h('small', {}, 'sending…') : null), on: toolOpen === 'email', run: () => openTool('email') } : null,
       { label: 'Meeting notes', on: toolOpen === 'meetings', run: () => openTool('meetings') },
       { label: 'Planner', on: toolOpen === 'planner', run: () => openTool('planner') },
+      { label: h('span', { class: 'tool-item' }, 'Signatures', SG.list.some((x) => x.status === 'sent' || x.status === 'viewed') ? h('small', {}, `${SG.list.filter((x) => x.status === 'sent' || x.status === 'viewed').length} waiting`) : null), on: toolOpen === 'signs', run: () => { SG.filter = null; openTool('signs'); } },
       { label: h('span', { class: 'tool-item' }, 'Vault', VK.key ? h('small', {}, 'unlocked') : null), on: toolOpen === 'vault', run: () => { VK.filter = null; openTool('vault'); } },
     ].filter(Boolean));
   });
@@ -5344,6 +5364,418 @@
     el.replaceChildren(h('h2', {}, TOOLS[toolOpen].name, h('button', { class: 'icon-btn', html: I.close, 'aria-label': 'Close', onclick: closeTool })), ...TOOLS[toolOpen].render().filter(Boolean));
     el.scrollTop = keep;
   }
+
+  // ----- PDFs: read, fill in, sign, and send for signature -----
+  // What you add (text, dates, checks, your signature, form answers) stays in the viewer until you save a copy;
+  // the original file never changes. Sending for signature places boxes for the other person to fill instead.
+  const SG = { mine: {}, dims: {}, list: [], filter: null };
+  const PDF_SIZE = { text: [20, 14], date: [72, 14], check: [12, 12], sig: [150, 45], ini: [48, 30], name: [150, 18] }; // points
+  const SEND_TOOLS = [['sig', 'Signature'], ['ini', 'Initials'], ['date', 'Date signed'], ['name', 'Name'], ['text', 'Text box']];
+  const FIELD_NAME = Object.fromEntries(SEND_TOOLS);
+  const SIGN_STATUS = { sent: 'Sent', viewed: 'Opened', signed: 'Signed', declined: 'Declined', void: 'Cancelled', expired: 'Expired' };
+  const pdfViews = new Map(); // item → its open viewer, so redrawing what's around it keeps your marks
+  let pdfStop = () => false; // Esc puts down the tool in hand before it closes anything
+  const measure = document.createElement('canvas').getContext('2d');
+  const textWidth = (t, size) => {
+    measure.font = `${size}px Helvetica, Arial, sans-serif`;
+    return measure.measureText(t).width;
+  };
+  const markId = () => Math.random().toString(36).slice(2, 10);
+
+  async function loadSignature() {
+    try {
+      SG.mine = await api('GET', '/signature');
+    } catch {}
+    await Promise.all(['sig', 'ini'].map((k) => new Promise((done) => {
+      if (!SG.mine[k]) return done();
+      const img = new Image();
+      img.onload = img.onerror = () => done((SG.dims[k] = img.naturalWidth / img.naturalHeight || 3));
+      img.src = SG.mine[k];
+    })));
+    renderTool();
+  }
+  async function loadSigns() {
+    try {
+      SG.list = await api('GET', '/signs');
+    } catch {}
+    renderCamps();
+    renderTool();
+  }
+  function upsertSign(x) {
+    SG.list = [x, ...SG.list.filter((y) => y.id !== x.id)].sort((p, q) => q.createdAt - p.createdAt);
+    renderCamps();
+    renderTool();
+  }
+
+  function signatureSheet(kind, then) {
+    const name = S.me?.member || '';
+    const typed = kind === 'ini' ? name.split(/\s+/).map((w) => w[0] || '').join('').toUpperCase() : name;
+    const pad = ColumnPdf.pad({ typed, label: kind === 'ini' ? 'Your initials' : 'Your signature' });
+    sheet(kind === 'ini' ? 'Your initials' : 'Your signature', [
+      pad.el,
+      h('p', { class: 'day-hint' }, 'Kept with your account so you can sign anything in Column with one click. Only you can use it.'),
+    ], async () => {
+      const png = pad.png();
+      if (!png) throw new Error(kind === 'ini' ? 'Draw or type your initials first.' : 'Draw or type your signature first.');
+      await api('PUT', '/signature', { [kind]: png });
+      await loadSignature();
+      then?.();
+    });
+  }
+
+  function pdfView(it, { docked = false } = {}) {
+    const key = `${it.id}:${it.editedAt || it.createdAt}:${docked ? 'dock' : 'full'}`;
+    if (pdfViews.has(key)) return pdfViews.get(key);
+    const P = { marks: [], form: {}, fields: [], tool: null, sending: false, zoom: 1, doc: null, view: null, width: 0, run: 0 };
+    const bar = h('div', { class: 'pdf-bar' });
+    const hint = h('div', { class: 'pdf-hint hidden' });
+    const host = h('div', { class: 'pdf-pages' }, h('p', { class: 'day-hint' }, 'Opening…'));
+    const scroll = h('div', { class: 'pdf-scroll' }, host);
+    const el = h('div', { class: 'pdf' + (docked ? ' docked' : '') }, bar, h('div', { class: 'pdf-body' }, hint, scroll));
+    pdfViews.set(key, el);
+    if (pdfViews.size > 6) pdfViews.delete(pdfViews.keys().next().value);
+    const marks = () => (P.sending ? P.fields : P.marks);
+    const dirty = () => P.marks.length > 0 || Object.keys(P.form).length > 0;
+
+    async function layout() {
+      if (!P.doc || !el.isConnected) return;
+      const width = Math.round(Math.max(200, scroll.clientWidth - 16) * P.zoom);
+      if (P.view && Math.abs(width - P.width) < 4) return;
+      const at = scroll.scrollTop / (scroll.scrollHeight || 1);
+      P.width = width;
+      P.view?.stop();
+      const pages = h('div', {});
+      host.replaceChildren(pages);
+      const run = ++P.run;
+      P.view = await ColumnPdf.pages(P.doc, pages, { width, onPage: (p) => fillPage(p) });
+      if (run === P.run) scroll.scrollTop = at * scroll.scrollHeight;
+    }
+    let resizing;
+    new ResizeObserver(() => {
+      clearTimeout(resizing);
+      resizing = setTimeout(layout, 150);
+    }).observe(scroll);
+    ColumnPdf.open(fileUrl(it)).then((doc) => {
+      P.doc = doc;
+      layout();
+    }).catch(() => host.replaceChildren(h('p', { class: 'day-hint' }, 'Couldn’t open this PDF. '), h('button', { class: 'btn small', onclick: () => download(it) }, 'Download it')));
+
+    async function fillPage(p) {
+      p.layer.replaceChildren();
+      p.layer.onpointerdown = (e) => {
+        if (!P.tool || e.target !== p.layer) return;
+        e.preventDefault();
+        const r = p.layer.getBoundingClientRect();
+        place(p, e.clientX - r.left, e.clientY - r.top);
+      };
+      if (!P.sending) for (const f of await ColumnPdf.fields(p)) p.layer.append(formInput(p, f));
+      for (const m of marks()) if (m.page === p.n) p.layer.append(markEl(p, m));
+    }
+    const refill = () => P.view?.pages.forEach(fillPage);
+
+    function place(p, x, y) {
+      const t = P.tool;
+      const s = p.vp.scale;
+      let [w, ht] = PDF_SIZE[t];
+      if (!P.sending && (t === 'sig' || t === 'ini')) ht = clamp(w / (SG.dims[t] || 3), 14, 80);
+      const m = { id: markId(), type: t, ...ColumnPdf.toPdf(p, x, y - (ht * s) / 2, w * s, ht * s) };
+      if (!P.sending && (t === 'text' || t === 'date')) Object.assign(m, { type: 'text', text: t === 'date' ? new Date().toLocaleDateString() : '', size: 11 });
+      marks().push(m);
+      const node = markEl(p, m);
+      p.layer.append(node);
+      node.querySelector('input')?.focus();
+      setTool(null);
+      changed();
+    }
+
+    function markEl(p, m) {
+      const s = p.vp.scale;
+      const node = h('div', { class: `pdf-mark pm-${m.type}${P.sending ? ' pm-field' : ''}` });
+      const put = () => {
+        const b = ColumnPdf.fromPdf(p, m);
+        Object.assign(node.style, { left: b.left + 'px', top: b.top + 'px', width: b.w + 'px', height: b.h + 'px' });
+      };
+      const drop = () => {
+        const list = marks();
+        if (list.includes(m)) list.splice(list.indexOf(m), 1);
+        node.remove();
+        changed();
+      };
+      const drag = (e, how) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const [x0, y0] = [e.clientX, e.clientY];
+        const b = ColumnPdf.fromPdf(p, m);
+        const [W, H] = [p.el.clientWidth, p.el.clientHeight];
+        const ratio = !P.sending && ['sig', 'ini', 'check'].includes(m.type) ? b.w / b.h : 0;
+        const move = (ev) => {
+          let { left, top, w, h: ht } = b;
+          if (how === 'move') {
+            left = clamp(left + ev.clientX - x0, -w / 2, W - w / 2);
+            top = clamp(top + ev.clientY - y0, -ht / 2, H - ht / 2);
+          } else {
+            w = Math.max(10, w + ev.clientX - x0);
+            ht = ratio ? w / ratio : Math.max(10, ht + ev.clientY - y0);
+          }
+          Object.assign(m, ColumnPdf.toPdf(p, left, top, w, ht));
+          put();
+        };
+        const up = () => {
+          window.removeEventListener('pointermove', move);
+          window.removeEventListener('pointerup', up);
+          changed();
+        };
+        window.addEventListener('pointermove', move);
+        window.addEventListener('pointerup', up);
+      };
+      const grip = h('span', { class: 'pm-grip', title: 'Drag to move', onpointerdown: (e) => drag(e, 'move') }, '⠿');
+      const x = h('button', { class: 'pm-x', title: 'Remove', 'aria-label': 'Remove', onclick: drop }, '×');
+      if (m.type === 'text') {
+        const input = h('input', { value: m.text, 'aria-label': 'Text on the page', spellcheck: 'false' });
+        const fit = () => {
+          m.h = m.size * 1.25;
+          m.w = Math.max(PDF_SIZE.text[0], textWidth(input.value || ' ', m.size) + 3);
+          input.style.fontSize = m.size * s + 'px';
+          put();
+        };
+        const size = (d) => {
+          m.size = clamp(m.size + d, 6, 36);
+          fit();
+          changed();
+        };
+        input.addEventListener('input', () => {
+          m.text = input.value;
+          fit();
+          changed();
+        });
+        input.addEventListener('blur', () => setTimeout(() => !m.text.trim() && !node.contains(document.activeElement) && drop(), 150));
+        node.append(input, h('span', { class: 'pm-tools' }, grip,
+          h('button', { title: 'Smaller', onclick: () => size(-1) }, 'A−'), h('button', { title: 'Bigger', onclick: () => size(1) }, 'A+'), x));
+        fit();
+        return node;
+      }
+      if (P.sending) node.append(h('span', { class: 'pm-label' }, FIELD_NAME[m.type]));
+      else if (m.type === 'check') node.append(h('span', { class: 'pm-check' }, '✓'));
+      else node.append(h('img', { src: SG.mine[m.type], alt: m.type === 'sig' ? 'Your signature' : 'Your initials', draggable: 'false' }));
+      node.addEventListener('pointerdown', (e) => !e.target.closest('button, .pm-size') && drag(e, 'move'));
+      node.append(h('span', { class: 'pm-tools' }, x), h('span', { class: 'pm-size', title: 'Drag to resize', onpointerdown: (e) => drag(e, 'size') }));
+      put();
+      if (m.type === 'check') node.querySelector('.pm-check').style.fontSize = m.h * s + 'px';
+      return node;
+    }
+
+    // A fillable field in the PDF itself. Fields that share a name (one on each page, say) stay the same.
+    function formInput(p, { a, left, top, w, h: ht }) {
+      const name = a.fieldName;
+      const val = Object.hasOwn(P.form, name) ? P.form[name] : a.fieldValue;
+      const set = (v, from) => {
+        P.form[name] = v;
+        for (const o of host.querySelectorAll('[data-field]')) {
+          if (o === from || o.dataset.field !== name || o.type === 'radio') continue;
+          if (o.type === 'checkbox') o.checked = !!v;
+          else o.value = v;
+        }
+        changed();
+      };
+      let input;
+      if (a.fieldType === 'Btn' && a.radioButton) {
+        input = h('input', { type: 'radio', name: key + name });
+        input.checked = val === a.buttonValue;
+        input.onchange = () => input.checked && set(a.buttonValue, input);
+      } else if (a.fieldType === 'Btn') {
+        input = h('input', { type: 'checkbox' });
+        input.checked = val === true || (typeof val === 'string' && val !== 'Off' && val !== '');
+        input.onchange = () => set(input.checked, input);
+      } else if (a.fieldType === 'Ch') {
+        input = h('select', {}, h('option', { value: '' }, ''), (a.options || []).map((o) => h('option', { value: o.exportValue ?? o.displayValue }, o.displayValue ?? o.exportValue)));
+        input.value = (Array.isArray(val) ? val[0] : val) ?? '';
+        input.onchange = () => set(input.value, input);
+      } else {
+        input = a.multiLine ? h('textarea') : h('input');
+        input.value = val ?? '';
+        if (a.maxLen) input.maxLength = a.maxLen;
+        input.style.fontSize = Math.min(ht * 0.7, (a.textSize || 11) * p.vp.scale) + 'px';
+        input.oninput = () => set(input.value, input);
+      }
+      input.dataset.field = name;
+      input.disabled = !!a.readOnly;
+      return h('div', { class: 'pdf-field', style: `left:${left}px;top:${top}px;width:${w}px;height:${ht}px` }, input);
+    }
+
+    function setTool(t) {
+      P.tool = t;
+      el.classList.toggle('placing', !!t);
+      pdfStop = () => (P.tool && el.isConnected ? (setTool(null), true) : false);
+      drawBar();
+    }
+    function pick(t) {
+      if (!P.sending && (t === 'sig' || t === 'ini') && !SG.mine[t]) return signatureSheet(t, () => pick(t));
+      setTool(P.tool === t ? null : t);
+    }
+    let was = null;
+    function changed() {
+      if (dirty() !== was || P.sending) drawBar();
+    }
+    function zoomBy(d) {
+      P.zoom = clamp(P.zoom + d, 0.5, 3);
+      layout();
+    }
+    function sendMode(on) {
+      P.sending = on;
+      P.tool = null;
+      refill();
+      setTool(null);
+    }
+    function drawBar() {
+      was = dirty();
+      const tool = (t, label, title) => h('button', { class: 'btn small' + (P.tool === t ? ' on' : ''), title, onclick: () => pick(t) }, label);
+      if (P.sending) {
+        const n = P.fields.length;
+        bar.replaceChildren(h('b', { class: 'pdf-what' }, 'Their boxes:'), ...SEND_TOOLS.map(([t, l]) => tool(t, l)), h('span', { class: 'pdf-gap' }),
+          h('button', { class: 'btn small', onclick: () => sendMode(false) }, 'Cancel'),
+          h('button', { class: 'btn small primary-btn', disabled: !P.fields.some((f) => f.type === 'sig'), onclick: () => sendSheet(it, P, () => sendMode(false)) }, n ? `Next (${n})` : 'Next'));
+      } else {
+        bar.replaceChildren(...[
+          h('button', { class: 'btn small', title: 'Smaller', 'aria-label': 'Smaller', onclick: () => zoomBy(-0.25) }, '−'),
+          h('button', { class: 'btn small', title: 'Bigger', 'aria-label': 'Bigger', onclick: () => zoomBy(0.25) }, '+'),
+          h('span', { class: 'pdf-sep' }),
+          tool('text', 'Text', 'Type anywhere on the page'), tool('date', 'Date', 'Today’s date'), tool('check', '✓', 'A checkmark'),
+          tool('sig', 'Sign', 'Your signature'), tool('ini', 'Initials', 'Your initials'),
+          h('span', { class: 'pdf-gap' }),
+          dirty() ? h('button', { class: 'btn small primary-btn', title: 'Saves a new PDF next to this one. This one stays as it is.', onclick: saveCopy }, 'Save a copy') : null,
+          h('button', { class: 'btn small', title: 'Get someone else’s signature', onclick: () => sendMode(true) }, 'Send for signature'),
+        ].filter(Boolean));
+      }
+      const tip = P.tool ? 'Click on the page where it goes. Esc to stop.'
+        : P.sending ? `Put a box wherever they sign or fill something in. At least one Signature box.${dirty() ? ' Your own changes aren’t sent: save a copy first and send that one.' : ''}` : '';
+      hint.textContent = tip;
+      hint.classList.toggle('hidden', !tip);
+    }
+    async function saveCopy(e) {
+      const btn = e.currentTarget;
+      btn.disabled = true;
+      btn.textContent = 'Saving…';
+      try {
+        const list = P.marks.filter((m) => m.type !== 'text' || m.text.trim()).map(({ id, type, page, x, y, w, h: ht, text, size }) => ({ id, type, page, x, y, w, h: ht, text, size }));
+        const item = await api('POST', `/pdf/${it.id}/save`, { marks: list, form: P.form });
+        P.marks = [];
+        P.form = {};
+        refill();
+        drawBar();
+        toast(`Saved “${item.name}”`, { label: 'Open', run: () => openPreview(S.items.find((x) => x.id === item.id) || item) });
+      } catch (err) {
+        toast(err.message);
+        btn.disabled = false;
+        btn.textContent = 'Save a copy';
+      }
+    }
+    drawBar();
+    return el;
+  }
+
+  function sendSheet(it, P, done) {
+    const name = h('input', { placeholder: 'Pat Smith', autocomplete: 'off' });
+    const email = h('input', { type: 'email', placeholder: 'pat@example.com', list: 'signPeople', autocomplete: 'off' });
+    const people = amOwner() ? (S.contacts || []).filter((x) => x.email) : [];
+    const dl = h('datalist', { id: 'signPeople' }, people.slice(0, 2000).map((p) => h('option', { value: p.email }, p.name)));
+    email.addEventListener('change', () => {
+      const p = people.find((x) => x.email.toLowerCase() === email.value.trim().toLowerCase());
+      if (p && !name.value.trim()) name.value = p.name;
+    });
+    const msg = h('textarea', { rows: 3, placeholder: 'A note for them (optional)' });
+    const camp = h('select', {}, h('option', { value: '' }, 'None'), (S.campaigns || []).map((c) => h('option', { value: c.id }, c.name)));
+    camp.value = campOfItem(it)?.id || '';
+    const n = P.fields.length;
+    sheet('Send for signature', [
+      h('p', { class: 'day-hint' }, `“${it.name}” · ${n} box${n === 1 ? '' : 'es'} for them to fill`),
+      h('label', {}, 'Their name', name), h('label', {}, 'Their email', email), dl,
+      h('label', {}, 'Message', msg), h('label', {}, 'Campaign', camp),
+      h('p', { class: 'day-hint' }, 'They get a private link and don’t need an account. When they sign, the signed copy lands next to this file, with a last page showing who signed, when and from where.'),
+    ], async () => {
+      const fields = P.fields.map(({ id, type, page, x, y, w, h: ht }) => ({ id, type, page, x, y, w, h: ht }));
+      const x = await api('POST', '/signs', { itemId: it.id, signer: { name: name.value, email: email.value }, message: msg.value, campaignId: camp.value || null, fields });
+      upsertSign(x);
+      P.fields = [];
+      done();
+      setTimeout(() => signSheet(x, true));
+    }, 'Make the signing link');
+  }
+
+  function signSheet(x, fresh) {
+    x = SG.list.find((y) => y.id === x.id) || x;
+    const open = x.status === 'sent' || x.status === 'viewed';
+    const copy = h('button', { class: 'btn small', onclick: () => navigator.clipboard.writeText(x.link).then(() => toast('Link copied'), () => toast('Couldn’t copy. Select the link and copy it.')) }, 'Copy link');
+    const mail = h('button', { class: 'btn small' }, 'Email it from Outlook');
+    mail.addEventListener('click', async () => {
+      mail.disabled = true;
+      try {
+        upsertSign(await api('POST', `/signs/${x.id}/email`));
+        toast(`Emailed to ${x.signer.email}`);
+      } catch (err) {
+        toast(err.message);
+      }
+      mail.disabled = false;
+    });
+    const cancel = h('button', { class: 'btn small', 'data-label': '1' }, 'Cancel request');
+    cancel.addEventListener('click', () => confirmClick(cancel, async () => {
+      try {
+        upsertSign(await api('POST', `/signs/${x.id}/void`));
+        closeSheet();
+      } catch (err) {
+        toast(err.message);
+      }
+    }));
+    const del = h('button', { class: 'btn small', 'data-label': '1' }, 'Delete');
+    del.addEventListener('click', () => confirmClick(del, async () => {
+      try {
+        await api('DELETE', `/signs/${x.id}`);
+        SG.list = SG.list.filter((y) => y.id !== x.id);
+        renderCamps();
+        renderTool();
+        closeSheet();
+      } catch (err) {
+        toast(err.message);
+      }
+    }));
+    const signed = x.signedItemId && S.items.find((y) => y.id === x.signedItemId);
+    const fmt = (t) => new Date(t).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+    sheet(x.name, [
+      h('p', { class: 'sign-who' }, h('span', { class: `sign-st st-${x.status}` }, SIGN_STATUS[x.status]), ` ${x.signer.name} · ${x.signer.email}`),
+      fresh ? h('p', { class: 'day-hint' }, 'Here’s their link. Email it from Outlook, or copy it into your own email or text.') : null,
+      open ? h('div', { class: 'sign-link' }, h('input', { value: x.link, readonly: true, 'aria-label': 'Signing link', onfocus: (e) => e.target.select() }), copy) : null,
+      open ? h('div', { class: 'btns' }, mail, cancel) : null,
+      x.status === 'signed' ? h('div', { class: 'btns' }, signed ? h('button', { class: 'btn small primary-btn', onclick: () => { closeSheet(); openPreview(signed); } }, 'Open the signed copy') : h('span', { class: 'day-hint' }, 'The signed copy was removed from Column.')) : null,
+      x.declineReason ? h('p', {}, `Their reason: “${x.declineReason}”`) : null,
+      h('div', { class: 'any-h' }, 'History'),
+      h('ul', { class: 'sign-log' }, x.events.slice().reverse().map((e) => h('li', {}, h('small', {}, fmt(e.at)), ` ${e.what.replace(/: “I agree.*$/, '')}`, e.ip ? h('small', {}, ` · ${e.ip}`) : null))),
+      x.status === 'signed' ? h('p', { class: 'day-hint sign-hash' }, `Fingerprint of the signed copy (SHA-256): ${x.signedHash}`) : null,
+      x.status !== 'signed' ? h('div', { class: 'btns' }, del) : null,
+    ].filter(Boolean), async () => {}, 'Done');
+  }
+
+  function signsTool() {
+    const mine = (k, label) => h('div', { class: 'sig-mine' },
+      h('small', {}, label),
+      SG.mine[k] ? h('img', { src: SG.mine[k], alt: label }) : h('span', { class: 'day-hint' }, 'Not added yet'),
+      h('button', { class: 'btn small', onclick: () => signatureSheet(k) }, SG.mine[k] ? 'Change' : 'Add'));
+    const f = SG.filter;
+    const list = SG.list.filter((x) => !f || x.campaignId === f);
+    return [
+      h('div', { class: 'any-h' }, 'Yours'),
+      h('div', { class: 'sig-mines' }, mine('sig', 'Signature'), mine('ini', 'Initials')),
+      h('div', { class: 'any-h' }, 'Sent for signature'),
+      f ? h('p', { class: 'day-hint' }, `For ${campById(f)?.name || 'one campaign'} · `, h('button', { class: 'link', onclick: () => { SG.filter = null; renderTool(); } }, 'Show all')) : null,
+      list.length ? h('div', { class: 'sign-list' }, list.map(signRow))
+        : h('p', { class: 'day-hint' }, 'Open a PDF and choose Send for signature. Who it went to, and whether they’ve opened or signed it, shows up here.'),
+    ];
+  }
+  function signRow(x) {
+    const when = new Date(x.signedAt || x.createdAt).toLocaleDateString([], { month: 'short', day: 'numeric' });
+    return h('div', { class: 'bill sign-row', onclick: () => signSheet(x) },
+      h('span', { class: 'bill-name' }, x.name, h('small', {}, `${x.signer.name} · ${when}`)),
+      h('span', { class: `sign-st st-${x.status}` }, SIGN_STATUS[x.status]));
+  }
+  const signsFor = (c) => SG.list.filter((x) => x.campaignId === c.id).length;
 
   // ----- vault: a safe box locked with your own passphrase -----
   // Items are encrypted here, in the browser (AES-GCM, with a key made from the passphrase by PBKDF2), and

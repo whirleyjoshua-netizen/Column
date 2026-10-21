@@ -1052,3 +1052,59 @@ body.viewer .preview pre, body.viewer .preview .pv-edit, body.viewer .preview .d
 .vault-field { display: flex; gap: 6px; align-items: center; }
 .vault-field input { flex: 1; min-width: 0; font-family: ui-monospace, Menlo, monospace; }
 .vault-tag { display: inline-flex; align-items: center; gap: 3px; margin-left: 6px; color: var(--muted); }
+
+/* PDFs: the viewer, marks you place, fillable fields, and signatures */
+.pdf { display: flex; flex-direction: column; min-height: 0; width: 100%; height: 100%; background: var(--panel); border-radius: 10px; overflow: hidden; }
+.preview .pdf { max-width: 1000px; flex: 1; }
+.dock-body:has(> .pdf) { padding: 0; overflow: hidden; }
+.pdf-bar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 8px; border-bottom: 1px solid var(--line); }
+.pdf-bar .btn.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.pdf-sep { width: 1px; height: 20px; background: var(--line); margin: 0 2px; }
+.pdf-gap { flex: 1; }
+.pdf-what { font-size: 12px; color: var(--muted); font-weight: 600; }
+.pdf-body { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.pdf-hint { position: absolute; z-index: 3; top: 8px; left: 50%; transform: translateX(-50%); width: max-content; max-width: calc(100% - 24px); font-size: 12px; color: #fff; background: color-mix(in srgb, var(--accent) 92%, #000); padding: 5px 12px; border-radius: 12px; box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3); pointer-events: none; text-align: center; }
+.pdf-scroll { flex: 1; min-height: 0; overflow: auto; padding: 8px; background: color-mix(in srgb, var(--panel) 85%, #000); }
+.pdf-page { position: relative; margin: 0 auto 10px; background: #fff; color-scheme: light; box-shadow: 0 1px 6px rgba(0, 0, 0, 0.25); }
+.pdf-page canvas { width: 100%; height: 100%; display: block; }
+.pdf-layer { position: absolute; inset: 0; }
+.pdf.placing .pdf-layer { cursor: crosshair; }
+.pdf-field { position: absolute; }
+.pdf-field input, .pdf-field textarea, .pdf-field select { width: 100%; height: 100%; margin: 0; border: 0; padding: 0 2px; background: rgba(80, 120, 255, 0.12); color: #111; font-family: Helvetica, Arial, sans-serif; resize: none; }
+.pdf-field input[type=checkbox], .pdf-field input[type=radio] { accent-color: #111; background: none; }
+.pdf-field :focus { outline: 2px solid var(--accent); }
+.pdf-mark { position: absolute; color: #111; touch-action: none; }
+.pdf-mark:not(.pm-text) { cursor: move; outline: 1px dashed transparent; }
+.pdf-mark:hover, .pdf-mark:focus-within { outline: 1px dashed var(--accent); }
+.pdf-mark img { width: 100%; height: 100%; object-fit: contain; display: block; pointer-events: none; }
+.pm-text input { width: 100%; height: 100%; border: 0; padding: 0; margin: 0; background: transparent; color: #111; font-family: Helvetica, Arial, sans-serif; line-height: 1.25; outline: none; }
+.pm-check { display: block; line-height: 1; text-align: center; font-family: Helvetica, Arial, sans-serif; }
+.pm-tools { position: absolute; bottom: 100%; right: 0; display: none; gap: 2px; padding-bottom: 3px; white-space: nowrap; }
+.pdf-mark:hover .pm-tools, .pdf-mark:focus-within .pm-tools { display: flex; }
+.pm-tools button, .pm-grip { border: 0; background: var(--accent); color: #fff; border-radius: 4px; font-size: 11px; line-height: 1; padding: 3px 5px; cursor: pointer; }
+.pm-grip { cursor: move; touch-action: none; }
+.pm-size { position: absolute; right: -5px; bottom: -5px; width: 10px; height: 10px; border-radius: 2px; background: var(--accent); cursor: nwse-resize; display: none; touch-action: none; }
+.pdf-mark:hover .pm-size { display: block; }
+.pm-field { background: rgba(255, 200, 0, 0.22); outline: 1.5px dashed #c99a00 !important; border-radius: 3px; display: flex; align-items: center; justify-content: center; }
+.pm-label { font-size: 11px; font-weight: 600; color: #6a5200; white-space: nowrap; overflow: hidden; pointer-events: none; }
+.sig-pad { display: flex; flex-direction: column; gap: 8px; }
+.sig-tabs { display: flex; gap: 6px; }
+.sig-tabs button { border: 1px solid var(--line); background: none; color: var(--muted); border-radius: 999px; padding: 3px 12px; font: inherit; font-size: 12px; cursor: pointer; }
+.sig-tabs button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.sig-canvas { width: 100%; aspect-ratio: 520 / 170; background: #fff; border: 1px solid var(--line); border-radius: 8px; touch-action: none; cursor: crosshair; }
+.sig-foot { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); }
+.sig-mines { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 14px; }
+.sig-mine { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding: 10px; border: 1px solid var(--line); border-radius: 8px; min-width: 0; }
+.sig-mine small { color: var(--muted); }
+.sig-mine img { max-width: 100%; height: 40px; object-fit: contain; background: #fff; border-radius: 4px; padding: 2px 6px; }
+.sign-row { cursor: pointer; }
+.sign-st { font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px; background: var(--line); color: var(--muted); white-space: nowrap; }
+.sign-st.st-viewed { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); }
+.sign-st.st-signed { background: rgba(31, 157, 85, 0.16); color: #1f9d55; }
+.sign-st.st-declined { background: rgba(212, 60, 60, 0.14); color: #d43c3c; }
+.sign-link { display: flex; gap: 6px; }
+.sign-link input { flex: 1; min-width: 0; }
+.sign-log { list-style: none; margin: 0; padding: 0; font-size: 12.5px; display: flex; flex-direction: column; gap: 4px; max-height: 220px; overflow: auto; }
+.sign-log small { color: var(--muted); }
+.sign-who { margin: 0; }
+.sign-hash { overflow-wrap: anywhere; }
