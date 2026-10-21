@@ -2828,7 +2828,7 @@
   }, 30_000);
 
   // ---------- campaigns: campaign → goals → tasks, with logged attempts ----------
-  const K = { open: store.get('campOpen', null), mine: store.get('campsMine', false), logOpen: null, showAll: {}, stale: false, pick: null, listOpen: null, listShow: {}, listN: {}, dragList: null, logFrom: {}, book: null, dock: store.get('dock', null), dockSize: store.get('dockSize', 0.45), dockMin: false, refQ: {}, noteDraft: {}, runOpen: null, noteRow: null, answers: {}, askOpen: false, ansOpen: {}, lead: null, mailDraft: {}, sendHide: new Set(store.get('sendHide', [])) };
+  const K = { open: store.get('campOpen', null), mine: store.get('campsMine', false), logOpen: null, showAll: {}, stale: false, pick: null, listOpen: null, listShow: {}, listN: {}, dragList: null, logFrom: {}, book: null, dock: store.get('dock', null), dockSize: store.get('dockSize', 0.45), dockMin: false, refQ: {}, noteDraft: {}, runOpen: null, noteRow: null, answers: {}, askOpen: false, ansOpen: {}, lead: null, mailDraft: {}, sendHide: new Set(store.get('sendHide', [])), closed: new Set(store.get('goalsClosed', [])) };
   const campById = (id) => id && S.campaigns?.find((c) => c.id === id);
   const goalById = (id) => id && S.goals?.find((g) => g.id === id);
   const goalsOf = (cid) => S.goals.filter((g) => g.campaignId === cid).sort((a, b) => (a.order || 0) - (b.order || 0) || a.createdAt - b.createdAt);
@@ -3172,21 +3172,33 @@
         toast(er.message);
       }
     });
-    const el = h('div', { class: 'goal' + (waits ? ' waiting' : ''), 'data-id': g.id, title: waits ? `Opens when “${waits.title}” is met · this campaign is worked in order` : null },
+    // Collapsed to its title row (remembered on this device), or open with its progress and tasks.
+    const closed = K.closed.has(g.id);
+    const fold = () => {
+      if (K.closed.has(g.id)) K.closed.delete(g.id);
+      else K.closed.add(g.id);
+      store.set('goalsClosed', [...K.closed].filter((id) => goalById(id)));
+      renderCamps();
+    };
+    const el = h('div', { class: 'goal' + (waits ? ' waiting' : '') + (closed ? ' closed' : ''), 'data-id': g.id, title: waits ? `Opens when “${waits.title}” is met · this campaign is worked in order` : null },
       h('div', { class: 'goal-top' },
         grip((ev) => sortDrag(ev, el, '.goal', (ids) => saveOrder(S.goals, 'order', ids, '/goals/'))),
+        h('button', { class: 't-btn goal-fold', 'aria-label': closed ? 'Show tasks' : 'Hide tasks', 'aria-expanded': String(!closed), html: I.down, onclick: fold }),
         h('span', { class: 'goal-ic', html: g.kind === 'task' || g.kind === 'tasks' || !g.kind ? I.task : I.target }),
-        h('b', { class: 'goal-title' }, g.title),
+        h('b', { class: 'goal-title', onclick: fold }, g.title),
+        closed ? h('small', { class: 'goal-mini' }, pg.label) : null,
         stepTag(g),
         g.due ? h('span', { class: 'due' + (g.due < todayKey() && pg.frac < 1 ? ' late' : '') }, dueLabel(g.due)) : null,
         h('button', { class: 't-btn', 'aria-label': 'Goal options', html: I.more, onclick: (e) => goalOptions(e.currentTarget, c, g) })),
-      h('div', { class: 'goal-prog' }, bar(pg.frac, c.color), h('span', {}, pg.label)));
-    if (tasks.length) el.append(h('div', { class: 'goal-tasks' }, tasks.flatMap((t) => {
-      const l = listOfTask(t);
-      const close = () => { K.listOpen = null; renderCamps(); };
-      return [taskRow(t, { inCampaign: true, sort: (ids) => saveOrder(S.tasks, 'order', ids, '/tasks/') }), l && K.listOpen === 'task:' + t.id ? h('div', { class: 'task-list' }, taskListBody(c, l, t, close)) : null];
-    }).filter(Boolean)));
-    el.append(add);
+      closed ? null : h('div', { class: 'goal-prog' }, bar(pg.frac, c.color), h('span', {}, pg.label)));
+    if (!closed) {
+      if (tasks.length) el.append(h('div', { class: 'goal-tasks' }, tasks.flatMap((t) => {
+        const l = listOfTask(t);
+        const close = () => { K.listOpen = null; renderCamps(); };
+        return [taskRow(t, { inCampaign: true, sort: (ids) => saveOrder(S.tasks, 'order', ids, '/tasks/') }), l && K.listOpen === 'task:' + t.id ? h('div', { class: 'task-list' }, taskListBody(c, l, t, close)) : null];
+      }).filter(Boolean)));
+      el.append(add);
+    }
     el.addEventListener('dragover', (e) => {
       if (!K.dragList || K.dragList.campaignId !== c.id) return;
       e.preventDefault();
