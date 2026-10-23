@@ -357,6 +357,7 @@
       if (S.tab === 'chat') openChannel(C.view);
       else renderChatSide();
       if (!$('#settings').classList.contains('hidden')) renderSettings();
+      if (toolOpen === 'folders') renderTool();
     } else if (msg.type === 'entry') {
       upsertEntry(msg.entry);
       renderDay();
@@ -594,7 +595,7 @@
     const th = viewThread(view);
     if (th) return S.items.filter((x) => x.id === th || x.parentId === th).sort((a, b) => a.createdAt - b.createdAt);
     const ch = viewChannel(view);
-    let list = S.items.filter((x) => (x.channelId || null) === ch && !x.parentId);
+    let list = S.items.filter((x) => (x.channelId || null) === ch && !x.parentId && !x.dirId);
     if (view === 'files') list = list.filter((x) => x.type !== 'message');
     else if (view === 'chat') list = list.filter((x) => x.type === 'message');
     else if (view.startsWith('stack:')) list = list.filter((x) => x.stackId === viewStack(view));
@@ -709,13 +710,14 @@
   // ---------- rendering ----------
   function render(force = false) {
     for (const pane of document.querySelectorAll('.pane')) renderPane(pane, force);
+    if (toolOpen === 'folders') renderTool();
   }
 
   function renderPane(pane, force) {
     const view = pane._view;
     const list = pane._list;
     const items = itemsFor(view);
-    const uploads = view === 'chat' || viewThread(view) ? [] : [...S.uploads.values()].filter((u) => (u.channelId || null) === viewChannel(view) && (!viewStack(view) || u.stackId === viewStack(view)));
+    const uploads = view === 'chat' || viewThread(view) ? [] : [...S.uploads.values()].filter((u) => !u.dirId && (u.channelId || null) === viewChannel(view) && (!viewStack(view) || u.stackId === viewStack(view)));
     const atBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 60;
 
     const want = [];
@@ -759,7 +761,7 @@
 
   function subline(it) {
     const bits = [];
-    if (it.type === 'folder') bits.push(`${it.files.length} file${it.files.length === 1 ? '' : 's'}`);
+    if (it.type === 'folder') bits.push(`Uploaded folder · ${it.files.length} file${it.files.length === 1 ? '' : 's'}`);
     if (it.size != null && it.type !== 'text') bits.push(fmtSize(it.size));
     bits.push(it.deviceId === S.deviceId ? 'this device' : it.device);
     bits.push(h('span', { 'data-ago': it.createdAt }, ago(it.createdAt)));
@@ -785,7 +787,8 @@
     if (it.type === 'file' || it.type === 'folder') a.append(btn(I.edit, 'Rename', (b) => startRename(b.closest('.card'), it)));
     if (it.type !== 'message') {
       a.append(btn(I.pin, it.pinned ? 'Unpin' : 'Pin (never auto-clear)', () => api('PATCH', '/items/' + it.id, { pinned: !it.pinned }).catch((e) => toast(e.message)), it.pinned ? 'on' : null));
-      if (!it.channelId) a.append(btn(I.stack, 'Move to stack', (b) => stackMenu(it, b)));
+      if (!it.channelId) a.append(btn(I.folder, it.dirId ? `In ${dirById(it.dirId)?.name || 'a folder'} · move it` : 'Save to folder', (b) => folderMenu(it, b), it.dirId ? 'on' : null));
+      if (!it.channelId) a.append(btn(I.stack, it.dirId ? 'Move to a stack (out of the folder)' : 'Move to stack', (b) => stackMenu(it, b)));
     }
     if (it.type === 'message' && isMine(it)) a.append(btn(I.edit, 'Edit', (b) => editMessage(b.closest('.msg'), it)));
     if (it.type !== 'message' || isMine(it) || amOwner()) {
@@ -1323,7 +1326,7 @@
     const move = (id) => api('PATCH', '/items/' + it.id, { stackId: id }).catch((e) => toast(e.message));
     openMenu(anchor, [
       { head: 'Move to stack' },
-      { label: 'No stack', on: !it.stackId, run: () => move(null) },
+      { label: 'No stack', on: !it.stackId && !it.dirId, run: () => move(null) },
       ...S.workspace.stacks.map((s) => ({ label: s.name, on: it.stackId === s.id, run: () => move(s.id) })),
       ...(S.workspace.stacks.length ? [] : [{ note: 'Create stacks in ⚙ Settings' }]),
     ]);
@@ -1483,6 +1486,14 @@
   // A task row takes a file dropped on it as an attachment, from the computer or from Column.
   const taskAt = (target) => { const tr = target?.closest?.('.task-row[data-id]'); return tr && taskById(tr.dataset.id) ? tr : null; };
   window.addEventListener('dragover', (e) => {
+    const fr = S.token && dirAt(e.target);
+    document.querySelectorAll('#tool .dir-over').forEach((x) => x !== fr && x.classList.remove('dir-over'));
+    if (fr && (hasFiles(e.dataTransfer) || (S.internalDrag && S.dragItem && !S.dragItem.it.channelId))) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = S.internalDrag ? (e.dataTransfer.effectAllowed === 'copy' ? 'copy' : 'move') : 'copy';
+      fr.classList.add('dir-over');
+      return;
+    }
     const tr = S.token && taskAt(e.target);
     document.querySelectorAll('.task-row.file-over').forEach((x) => x !== tr && x.classList.remove('file-over'));
     if (tr && (hasFiles(e.dataTransfer) || (S.internalDrag && S.dragItem?.it.type !== 'text'))) {
@@ -1511,6 +1522,20 @@
     dragDepth = 0;
     clearDropping();
     document.querySelectorAll('.task-row.file-over').forEach((x) => x.classList.remove('file-over'));
+    document.querySelectorAll('#tool .dir-over').forEach((x) => x.classList.remove('dir-over'));
+    const fr = S.token && dirAt(e.target);
+    if (fr) {
+      const it = S.internalDrag && S.dragItem?.it;
+      S.internalDrag = false;
+      S.dragItem = null;
+      if (it) return it.dirId !== fr.dataset.dir && saveToDir(it, fr.dataset.dir);
+      if (hasFiles(e.dataTransfer)) {
+        FD.open = fr.dataset.dir;
+        renderTool(true);
+        return dirUploads([...e.dataTransfer.files]);
+      }
+      return;
+    }
     const tr = S.token && taskAt(e.target);
     if (tr) {
       const t = taskById(tr.dataset.id);
@@ -1682,9 +1707,9 @@
     let item;
     try {
       const progress = (n) => { u.loaded = n; updateUpload(u); };
-      const qs = new URLSearchParams({ name: file.name, type: file.type || '', ...(dest.stackId ? { stackId: dest.stackId } : {}), ...(dest.channelId ? { channelId: dest.channelId } : {}) });
+      const qs = new URLSearchParams({ name: file.name, type: file.type || '', ...(dest.stackId ? { stackId: dest.stackId } : {}), ...(dest.channelId ? { channelId: dest.channelId } : {}), ...(dest.dirId ? { dirId: dest.dirId } : {}) });
       item = file.size > CHUNK
-        ? await putResumable(file, { name: file.name, type: file.type || '', stackId: dest.stackId || null, channelId: dest.channelId || null }, progress, u)
+        ? await putResumable(file, { name: file.name, type: file.type || '', stackId: dest.stackId || null, channelId: dest.channelId || null, dirId: dest.dirId || null }, progress, u)
         : await put('/api/upload?' + qs, file, progress);
       upsert(item);
     } finally {
@@ -5393,7 +5418,7 @@
   }
 
   // ---------- tools: small apps that open in a drawer, so the tabs stay as they are ----------
-  const TOOLS = { sidekick: { name: 'Sidekick', render: sidekickTool }, bills: { name: 'Finance', render: financeTool }, contacts: { name: 'Contacts', render: contactsTool }, email: { name: 'Email', render: emailTool }, meetings: { name: 'Meeting notes', render: meetingsTool }, planner: { name: 'Planner', render: plannerTool }, map: { name: 'Map', render: mapTool }, signs: { name: 'Signatures', render: signsTool }, vault: { name: 'Vault', render: vaultTool } };
+  const TOOLS = { sidekick: { name: 'Sidekick', render: sidekickTool }, bills: { name: 'Finance', render: financeTool }, contacts: { name: 'Contacts', render: contactsTool }, email: { name: 'Email', render: emailTool }, meetings: { name: 'Meeting notes', render: meetingsTool }, planner: { name: 'Planner', render: plannerTool }, folders: { name: 'Folders', render: foldersTool }, map: { name: 'Map', render: mapTool }, signs: { name: 'Signatures', render: signsTool }, vault: { name: 'Vault', render: vaultTool } };
   let toolOpen = null;
   $('#toolsBtn').addEventListener('click', (e) => {
     const soon = billsSoon().length;
@@ -5404,6 +5429,7 @@
       { label: h('span', { class: 'tool-item' }, 'Finance', soon || tight ? h('small', {}, [soon ? `${soon} due soon` : '', tight ? `${tight} budget${tight === 1 ? '' : 's'} nearly used` : ''].filter(Boolean).join(' · ')) : null), on: toolOpen === 'bills', run: () => openTool('bills') },
       amOwner() ? { label: 'Contacts', on: toolOpen === 'contacts', run: () => openTool('contacts') } : null,
       mayEmail() ? { label: h('span', { class: 'tool-item' }, 'Email', (S.mail?.sends || []).some((x) => x.status === 'sending') ? h('small', {}, 'sending…') : null), on: toolOpen === 'email', run: () => openTool('email') } : null,
+      { label: 'Folders', on: toolOpen === 'folders', run: () => openTool('folders') },
       { label: 'Meeting notes', on: toolOpen === 'meetings', run: () => openTool('meetings') },
       { label: h('span', { class: 'tool-item' }, 'Map', MP.run ? h('small', {}, 'recording a run') : null), on: toolOpen === 'map', run: () => openMap() },
       { label: h('span', { class: 'tool-item' }, 'Signatures', SG.list.some((x) => x.status === 'sent' || x.status === 'viewed') ? h('small', {}, `${SG.list.filter((x) => x.status === 'sent' || x.status === 'viewed').length} waiting`) : null), on: toolOpen === 'signs', run: () => { SG.filter = null; openTool('signs'); } },
@@ -5414,6 +5440,7 @@
     toolOpen = name;
     $('#settings').classList.add('hidden');
     $('#tool').classList.remove('hidden');
+    $('#tool').classList.toggle('side', name === 'folders'); // beside the stacks, so cards can be dragged in
     renderTool();
   }
   function closeTool() {
@@ -5430,6 +5457,169 @@
     el.replaceChildren(h('h2', {}, TOOLS[toolOpen].name, h('button', { class: 'icon-btn', html: I.close, 'aria-label': 'Close', onclick: closeTool })), ...TOOLS[toolOpen].render().filter(Boolean));
     el.scrollTop = keep;
   }
+
+  // ----- Folders: somewhere to keep things out of the stacks. What's in a folder never auto-clears. -----
+  // A top folder is the team's or just yours (Only me); folders inside it follow it.
+  const FD = { open: null, q: '', sort: 'new' };
+  const dirs = () => S.workspace?.dirs || [];
+  const dirById = (id) => dirs().find((d) => d.id === id);
+  const dirKids = (id) => dirs().filter((d) => (d.parentId || null) === (id || null)).sort((a, b) => a.name.localeCompare(b.name));
+  const dirPath = (id) => {
+    const out = [];
+    for (let d = dirById(id); d && out.length < 10; d = dirById(d.parentId)) out.unshift(d);
+    return out;
+  };
+  const dirTop = (id) => dirPath(id)[0];
+  const dirTreeIds = (id) => {
+    const out = [id];
+    for (let i = 0; i < out.length; i++) for (const d of dirs()) if (d.parentId === out[i]) out.push(d.id);
+    return out;
+  };
+  const dirItems = (id) => S.items.filter((x) => x.dirId === id && !x.parentId);
+  const dirCount = (id) => { const t = new Set(dirTreeIds(id)); return S.items.filter((x) => t.has(x.dirId)).length; };
+  // Every folder, parents first, for the pickers. skip: a folder (and what's in it) to leave out.
+  const dirFlat = (skip) => {
+    const out = [];
+    const walk = (pid, depth) => { for (const d of dirKids(pid)) if (d.id !== skip) { out.push({ d, depth }); walk(d.id, depth + 1); } };
+    walk(null, 0);
+    return out;
+  };
+  const dirLabel = (d, depth) => h('span', { class: 'dir-pick', style: `padding-left:${depth * 14}px` }, h('span', { class: 'dir-ic', html: I.folder }), d.name, dirTop(d.id)?.private ? h('small', {}, ' · only me') : null);
+
+  async function saveToDir(it, dirId) {
+    try {
+      upsert(await api('PATCH', '/items/' + it.id, { dirId }));
+      render();
+      const d = dirById(dirId);
+      toast(d ? `Saved to ${d.name}` : 'Back in the stack', d ? { label: 'Open', run: () => openFolder(dirId) } : undefined);
+    } catch (e) {
+      toast(e.message);
+    }
+  }
+  function folderMenu(it, anchor) {
+    openMenu(anchor, [
+      { head: 'Save to folder' },
+      ...dirFlat().map(({ d, depth }) => ({ label: dirLabel(d, depth), on: it.dirId === d.id, run: () => saveToDir(it, d.id) })),
+      { label: '+ New folder…', run: () => newFolder(null, (d) => saveToDir(it, d.id)) },
+      it.dirId ? { label: 'Take it out (back to the stack)', run: () => saveToDir(it, null) } : null,
+    ].filter(Boolean));
+  }
+  function newFolder(parentId, then) {
+    const name = h('input', { placeholder: parentId ? 'Contracts' : 'Clients' });
+    const priv = h('input', { type: 'checkbox' });
+    sheet(parentId ? `New folder in ${dirById(parentId)?.name || 'folder'}` : 'New folder', [
+      h('label', {}, 'Name', name),
+      parentId ? null : h('label', { class: 'pick' }, priv, 'Only me: nobody else on the team sees it or what’s in it'),
+    ], async () => {
+      if (!name.value.trim()) throw new Error('Give it a name.');
+      const d = await api('POST', '/dirs', { name: name.value, parentId, private: priv.checked });
+      if (!dirById(d.id)) S.workspace.dirs = [...dirs(), d];
+      then ? then(d) : openFolder(d.id);
+    }, 'Create');
+    setTimeout(() => name.focus(), 50);
+  }
+  function openFolder(id) {
+    FD.open = id;
+    FD.q = '';
+    openTool('folders');
+  }
+  function dirMenu(d, anchor, row) {
+    const top = !d.parentId;
+    const mayShare = top && (d.ownerId === S.me?.memberId || amOwner());
+    const n = dirCount(d.id);
+    const move = (pid) => api('PATCH', '/dirs/' + d.id, { parentId: pid }).catch((e) => toast(e.message));
+    openMenu(anchor, [
+      { label: 'Rename', run: () => {
+        const el = row?.querySelector('.dir-name');
+        if (!el) return;
+        inlineEdit(el, { value: d.name, select: [0, d.name.length], onDone: (name) => name && name !== d.name && api('PATCH', '/dirs/' + d.id, { name }).catch((e) => toast(e.message)) });
+      } },
+      { label: 'Move to…', run: () => openMenu(anchor, [
+        { head: `Move ${d.name} to` },
+        { label: 'Top level', on: top, run: () => move(null) },
+        ...dirFlat(d.id).map(({ d: x, depth }) => ({ label: dirLabel(x, depth), on: d.parentId === x.id, run: () => move(x.id) })),
+      ]) },
+      mayShare ? { label: d.private ? 'Share with the team' : 'Make it only me', run: () => api('PATCH', '/dirs/' + d.id, { private: !d.private }).catch((e) => toast(e.message)) } : null,
+      { label: n ? `Delete folder (its ${n} thing${n === 1 ? '' : 's'} go back to the stack)` : 'Delete folder', danger: true, run: async () => {
+        await api('DELETE', '/dirs/' + d.id).catch((e) => toast(e.message));
+        if (dirTreeIds(d.id).includes(FD.open)) FD.open = d.parentId || null;
+        renderTool();
+      } },
+    ].filter(Boolean));
+  }
+  function dirRow(d) {
+    const n = dirCount(d.id);
+    const kids = dirKids(d.id).length;
+    const row = h('div', { class: 'bill dir-row', 'data-dir': d.id, tabindex: '0', role: 'button', onclick: (e) => !e.target.closest('input') && openFolder(d.id), onkeydown: (e) => e.key === 'Enter' && e.target === row && openFolder(d.id) },
+      h('span', { class: 'dir-ic', html: I.folder }),
+      h('span', { class: 'bill-name' }, h('span', { class: 'dir-name' }, d.name), h('small', {}, [n ? `${n} thing${n === 1 ? '' : 's'}` : kids ? null : 'Empty', kids ? `${kids} folder${kids === 1 ? '' : 's'}` : null, !d.parentId && d.private ? 'only me' : null].filter(Boolean).join(' · '))),
+      h('button', { class: 'icon-btn', html: I.more, title: 'Folder options', 'aria-label': 'Folder options', onclick: (e) => { e.stopPropagation(); dirMenu(d, e.currentTarget, row); } }));
+    return row;
+  }
+  function dirUploads(files) {
+    const id = FD.open;
+    if (!id || !files.length) return;
+    toast(`Uploading ${files.length} file${files.length === 1 ? '' : 's'} to ${dirById(id)?.name}…`);
+    for (const f of files) uploadFile(f, { dirId: id }).catch((e) => toast(e.message));
+  }
+  function foldersTool() {
+    if (FD.open && !dirById(FD.open)) FD.open = null;
+    const id = FD.open;
+    const path = dirPath(id);
+    const crumbs = h('div', { class: 'dir-crumbs' },
+      h('button', { class: 'link', onclick: () => { FD.open = null; renderTool(); } }, 'Folders'),
+      ...path.flatMap((d, i) => [h('span', {}, '›'), i === path.length - 1 ? h('b', {}, d.name) : h('button', { class: 'link', onclick: () => { FD.open = d.id; renderTool(); } }, d.name)]));
+    const body = h('div', { class: 'dir-body' });
+    const draw = () => {
+      const q = FD.q.trim().toLowerCase();
+      const scope = id ? new Set(dirTreeIds(id)) : null;
+      const hits = (it) => [it.name, it.text].some((t) => t && t.toLowerCase().includes(q));
+      const items = q ? S.items.filter((x) => x.dirId && (!scope || scope.has(x.dirId)) && hits(x)) : id ? dirItems(id) : [];
+      const by = { new: (a, b) => (b.editedAt || b.createdAt) - (a.editedAt || a.createdAt), name: (a, b) => (a.name || a.text || '').localeCompare(b.name || b.text || ''), type: (a, b) => kind(a).localeCompare(kind(b)) || (a.name || '').localeCompare(b.name || '') }[FD.sort];
+      const sub = q ? dirFlat().filter(({ d }) => d.name.toLowerCase().includes(q) && (!scope || scope.has(d.id))).map(({ d }) => d) : dirKids(id);
+      const ups = id ? [...S.uploads.values()].filter((u) => u.dirId === id) : [];
+      body.replaceChildren(...[
+        ...sub.map(dirRow),
+        ...ups.map((u) => h('p', { class: 'day-hint' }, `Uploading ${u.name}…`)),
+        items.length ? h('div', { class: 'list dir-list' }, [...items].sort(by).map((it) => {
+          const el = cardEl(it);
+          if (q && it.dirId !== id) el.querySelector('.sub')?.append(' · in ', dirById(it.dirId)?.name || '');
+          return el;
+        })) : null,
+        !sub.length && !items.length && !ups.length ? h('p', { class: 'day-hint' }, q ? 'Nothing matches.'
+          : id ? 'Empty. Drag cards here from a stack, drop files from your computer, or use “Save to folder” on any card.'
+          : 'Keep things out of the stacks: files, notes, documents, links. Make a folder, then drag cards onto it or use the folder button on any card. Nothing in a folder auto-clears.') : null].filter(Boolean));
+    };
+    const search = h('input', { type: 'search', class: 'dir-search', value: FD.q, placeholder: id ? `Search ${dirById(id).name}` : 'Search all folders', 'aria-label': 'Search folders', oninput: (e) => { FD.q = e.target.value; draw(); } });
+    const sorts = h('div', { class: 'seg dir-sort' }, [['new', 'Newest'], ['name', 'Name'], ['type', 'Type']].map(([k, label]) =>
+      h('button', { class: FD.sort === k ? 'on' : null, onclick: () => { FD.sort = k; renderTool(true); } }, label)));
+    const pick = h('input', { type: 'file', multiple: true, class: 'hidden', onchange: (e) => { dirUploads([...e.target.files]); e.target.value = ''; } });
+    draw();
+    return [
+      crumbs,
+      h('div', { class: 'dir-tools' }, search, sorts),
+      h('div', { class: 'dir-view', 'data-dir': id || null }, body),
+      h('div', { class: 'btns dir-foot' },
+        h('button', { class: 'add-goal', onclick: () => newFolder(id) }, id ? '+ Folder inside' : '+ New folder'),
+        id ? h('button', { class: 'add-goal', onclick: () => pick.click() }, '+ Upload files') : null,
+        id ? h('button', { class: 'add-goal', onclick: () => newNoteIn(id) }, '+ Note') : null,
+        pick),
+    ];
+  }
+  function newNoteIn(dirId) {
+    const ta = h('textarea', { rows: 8, placeholder: 'Write anything' });
+    sheet(`New note in ${dirById(dirId)?.name}`, [ta], async () => {
+      if (!ta.value.trim()) throw new Error('Write something first.');
+      upsert(await api('POST', '/items', { type: 'text', text: ta.value, dirId }));
+      render();
+    });
+    setTimeout(() => ta.focus(), 50);
+  }
+  // Drag a card (or files from your computer) onto a folder row, or into an open folder.
+  const dirAt = (target) => {
+    const el = target?.closest?.('#tool [data-dir]');
+    return el && dirById(el.dataset.dir) ? el : null;
+  };
 
   // ----- Word documents: read, edit and save as .docx, or make a PDF to sign or send -----
   // You edit the page Column shows. Saving writes a .docx from it that keeps the document's styles, headers and

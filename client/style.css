@@ -1215,3 +1215,28 @@ body.viewer .preview .wd { max-width: 900px; }
 .map-draw { border: 2px solid #1f9d55; border-radius: 10px; padding: 10px; margin-bottom: 8px; }
 .map-draw-kind { margin: 0 0 8px; max-width: 320px; }
 .map-draw-hint { margin: 0 0 8px !important; color: var(--text) !important; font-size: 13px; }
+
+/* Folders tool */
+.dir-crumbs { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 13px; margin-bottom: 8px; color: var(--muted); }
+.dir-crumbs .link { padding: 0; }
+.dir-crumbs b { color: var(--text); font-weight: 600; overflow-wrap: anywhere; }
+.dir-tools { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; flex-wrap: wrap; }
+.dir-search { flex: 1 1 160px; min-width: 0; }
+.dir-sort { flex: none; }
+.dir-sort button { padding: 5px 9px; font-size: 12px; }
+.dir-view { min-height: 90px; border-radius: var(--radius); outline: 2px dashed transparent; outline-offset: 2px; transition: outline-color 0.12s; }
+.dir-view.dir-over, .dir-row.dir-over { outline-color: var(--accent); background: var(--accent-soft); }
+.dir-row { border-radius: 8px; outline: 2px dashed transparent; outline-offset: -2px; }
+.dir-row:hover { background: var(--card-hover); }
+.dir-row .dir-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dir-ic { flex: none; display: inline-flex; color: var(--accent); }
+.dir-ic svg { width: 18px; height: 18px; }
+.dir-pick { display: inline-flex; align-items: center; gap: 6px; }
+.dir-pick .dir-ic svg { width: 14px; height: 14px; }
+.dir-pick small { color: var(--muted); }
+.dir-list { padding: 8px 0 0; overflow: visible; }
+.dir-foot { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; margin-top: 12px; }
+.tool .dir-sort { margin: 0; }
+@media (min-width: 900px) {
+  .settings.tool.side { left: auto; width: 420px; border-left: 1px solid var(--line); box-shadow: -8px 0 24px rgba(0, 0, 0, 0.08); }
+}

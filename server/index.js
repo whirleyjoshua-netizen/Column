@@ -38,6 +38,7 @@ for (const [k, keys] of Object.entries(db.agentKeys || {})) db.ai[k] ||= { keys,
 for (const ws of Object.values(db.workspaces)) {
   ws.channels ||= [];
   ws.chatFolders ||= [];
+  ws.dirs ||= [];
   // Feeds became invite-only: everyone already on the team keeps the feeds they had.
   const owner = ws.members?.find((m) => m.role === 'owner');
   for (const ch of ws.channels) {
@@ -227,6 +228,7 @@ const publicWorkspace = (ws, memberId) => ({
   stacks: ws.stacks.filter((x) => seesCampaign(x.campaignId, memberId)),
   channels: ws.channels.filter((x) => seesFeed(x, memberId)),
   chatFolders: ws.chatFolders,
+  dirs: ws.dirs.filter((d) => seesDir(ws, d.id, memberId)),
   members: ws.members.map(publicMember),
   inviteCode: ws.inviteCode,
   brand: publicBrand(ws),
@@ -491,6 +493,12 @@ function baseItem(auth, fields) {
   };
 }
 
+// Where an upload lands: a folder from the Folders tool, or else a stack or feed.
+function uploadPlace(ws, auth, x) {
+  const dirId = validDir(ws, x.dirId, auth.memberId);
+  return dirId ? { dirId, stackId: null, channelId: null } : { stackId: validStack(ws, x.stackId, auth.memberId), channelId: validChannel(ws, x.channelId, auth.memberId) };
+}
+
 function sendZip(req, res, folder) {
   const entries = folder.files.map((f) => ({
     name: `${folder.name}/${f.relPath}`,
@@ -580,6 +588,32 @@ function validStack(ws, stackId, memberId) {
   return st && seesCampaign(st.campaignId, memberId) ? stackId : null;
 }
 
+// Folders (the Folders tool; "dirs" here, since an uploaded folder is already an item called a folder).
+// Things saved in one leave the stacks and never auto-clear. A top folder is the team's or one person's,
+// and the folders inside it follow it.
+const DIR_DEPTH = 8;
+function dirRoot(ws, dirId) {
+  let d = ws?.dirs.find((x) => x.id === dirId);
+  for (let i = 0; d?.parentId && i < DIR_DEPTH + 2; i++) d = ws.dirs.find((x) => x.id === d.parentId) || d;
+  return d || null;
+}
+function seesDir(ws, dirId, memberId) {
+  const r = dirRoot(ws, dirId);
+  return !!r && (!r.private || r.ownerId === memberId);
+}
+const validDir = (ws, dirId, memberId) => (dirId && seesDir(ws, dirId, memberId) ? dirId : null);
+const dirDepth = (ws, dirId) => {
+  let n = 0;
+  for (let d = ws.dirs.find((x) => x.id === dirId); d && n <= DIR_DEPTH; d = ws.dirs.find((x) => x.id === d.parentId)) n++;
+  return n;
+};
+const dirTree = (ws, dirId) => {
+  const out = [dirId];
+  for (let i = 0; i < out.length; i++) for (const d of ws.dirs) if (d.parentId === out[i]) out.push(d.id);
+  return out;
+};
+const seesItemDir = (it, memberId) => !it?.dirId || seesDir(db.workspaces[it.wsId], it.dirId, memberId);
+
 // Chat feeds (#channels), optionally grouped into folders. Items with a channelId live only in that feed.
 // A feed is invite-only: its creator and the people they add. A campaign's feed follows the campaign instead.
 // #general (no channelId) is the whole team's.
@@ -621,9 +655,13 @@ function broadcast(wsId, msg) {
     return;
   }
   const campaignId = campaignOfMsg(msg);
+  // An item that just went into someone's private folder disappears for everyone else.
+  const hide = (msg.type === 'item:add' || msg.type === 'item:update') && JSON.stringify({ type: 'item:remove', id: msg.item.id });
   const feed = msg.item && db.items[msg.item.id] ? feedOfItem(db.items[msg.item.id]) : null;
+  const inDir = msg.item && db.items[msg.item.id];
   const data = JSON.stringify(msg);
-  for (const s of set) if (s.readyState === 1 && seesCampaign(campaignId, s.meta.memberId) && seesFeed(feed, s.meta.memberId) && seesTemplate(msg.template, s.meta.memberId) && seesEntry(msg.entry, s.meta.memberId) && (!msg.forMember || msg.forMember === s.meta.memberId) && (!msg.forOwners || isOwnerId(wsId, s.meta.memberId)) && (!msg.bill || seesBill(wsId, msg.bill, s.meta.memberId))) s.send(data);
+  for (const s of set) if (hide && s.readyState === 1 && !seesItemDir(inDir, s.meta.memberId)) s.send(hide);
+  for (const s of set) if (s.readyState === 1 && seesCampaign(campaignId, s.meta.memberId) && seesFeed(feed, s.meta.memberId) && seesItemDir(inDir, s.meta.memberId) && seesTemplate(msg.template, s.meta.memberId) && seesEntry(msg.entry, s.meta.memberId) && (!msg.forMember || msg.forMember === s.meta.memberId) && (!msg.forOwners || isOwnerId(wsId, s.meta.memberId)) && (!msg.bill || seesBill(wsId, msg.bill, s.meta.memberId))) s.send(data);
 }
 
 // ---------- campaigns: campaign → goals → tasks, plus logged attempts (each call or email and its outcome) ----------
@@ -650,7 +688,7 @@ function campaignOf(kind, x) {
 }
 // Each person's Day is their own: entries, and the calendar events pulled into them, are seen only by them.
 const seesEntry = (e, memberId) => !e || e.memberId === memberId;
-const canSee = (auth, kind, x) => seesCampaign(campaignOf(kind, x), auth.memberId) && (kind !== 'item' || seesFeed(feedOfItem(x), auth.memberId)) && (kind !== 'entry' || seesEntry(x, auth.memberId));
+const canSee = (auth, kind, x) => seesCampaign(campaignOf(kind, x), auth.memberId) && (kind !== 'item' || (seesFeed(feedOfItem(x), auth.memberId) && seesItemDir(x, auth.memberId))) && (kind !== 'entry' || seesEntry(x, auth.memberId));
 function campaignOfMsg(msg) {
   if (msg.item) return campaignOf('item', db.items[msg.item.id]);
   if (msg.task) return campaignOf('task', msg.task);
@@ -2467,6 +2505,7 @@ async function api(req, res, url) {
         stacks: [],
         channels: [],
         chatFolders: [],
+        dirs: [],
         members: [],
         inviteCode: newInviteCode(),
       };
@@ -3696,6 +3735,64 @@ async function api(req, res, url) {
     return send(res, 200, publicWorkspace(ws, auth.memberId));
   }
 
+  if (a === 'dirs') {
+    const body = m === 'POST' || m === 'PATCH' ? await readJson(req) : {};
+    const name = body.name !== undefined ? cleanText(body.name, 60) : undefined;
+    const parentOk = (pid) => !pid || validDir(ws, pid, auth.memberId);
+    if (m === 'POST' && !b) {
+      if (!name) return send(res, 400, { error: 'Name required' });
+      const parentId = body.parentId || null;
+      if (!parentOk(parentId)) return send(res, 404, { error: 'That folder is gone' });
+      if (parentId && dirDepth(ws, parentId) >= DIR_DEPTH) return send(res, 400, { error: `Folders go ${DIR_DEPTH} deep at most.` });
+      if (ws.dirs.length >= 2000) return send(res, 400, { error: 'That’s a lot of folders. Delete some first.' });
+      const d = { id: rid(8), name, parentId, private: !parentId && !!body.private, ownerId: auth.memberId, createdAt: Date.now() };
+      ws.dirs.push(d);
+      save();
+      broadcast(ws.id, { type: 'workspace' });
+      return send(res, 200, d);
+    }
+    const d = b && ws.dirs.find((x) => x.id === b);
+    if (!d || !seesDir(ws, d.id, auth.memberId)) return send(res, 404, { error: 'Not found' });
+    if (m === 'PATCH') {
+      if (body.name !== undefined) {
+        if (!name) return send(res, 400, { error: 'Name required' });
+        d.name = name;
+      }
+      if (body.parentId !== undefined) {
+        const pid = body.parentId || null;
+        if (pid && dirTree(ws, d.id).includes(pid)) return send(res, 400, { error: 'A folder can’t go inside itself.' });
+        if (!parentOk(pid)) return send(res, 404, { error: 'That folder is gone' });
+        const deepest = Math.max(...dirTree(ws, d.id).map((id) => dirDepth(ws, id))) - dirDepth(ws, d.id) + 1;
+        if ((pid ? dirDepth(ws, pid) : 0) + deepest > DIR_DEPTH) return send(res, 400, { error: `Folders go ${DIR_DEPTH} deep at most.` });
+        d.parentId = pid;
+      }
+      // Only whoever made it, or a team owner, decides who sees a top folder.
+      if (body.private !== undefined && !d.parentId) {
+        if (d.ownerId !== auth.memberId && auth.role !== 'owner') return send(res, 403, { error: 'Only whoever made this folder can change who sees it.' });
+        d.private = !!body.private;
+        if (d.private) d.ownerId = auth.memberId;
+      }
+      if (d.parentId) d.private = false;
+      // Who sees it may have changed: tell everyone about what's inside (or that it's gone, for those who lost it).
+      const tree = new Set(dirTree(ws, d.id));
+      for (const it of Object.values(db.items)) if (it.wsId === ws.id && tree.has(it.dirId)) broadcast(ws.id, { type: 'item:update', item: publicItem(it) });
+    } else if (m === 'DELETE') {
+      // The folder goes; what was in it goes back to the main stack.
+      const gone = new Set(dirTree(ws, d.id));
+      ws.dirs = ws.dirs.filter((x) => !gone.has(x.id));
+      for (const it of Object.values(db.items)) {
+        if (it.wsId !== ws.id || !gone.has(it.dirId)) continue;
+        it.dirId = null;
+        it.stackId = null;
+        it.pinned = true; // it was kept safe in a folder; don't let auto-clear take it the moment it's out
+        broadcast(ws.id, { type: 'item:update', item: publicItem(it) });
+      }
+    } else return send(res, 405, { error: 'Method not allowed' });
+    save();
+    broadcast(ws.id, { type: 'workspace' });
+    return send(res, 200, { ok: true });
+  }
+
   if (a === 'stacks') {
     if (m === 'POST' && !b) {
       const { name } = await readJson(req);
@@ -3780,7 +3877,7 @@ async function api(req, res, url) {
 
   if (a === 'items') {
     if (m === 'POST' && !b) {
-      const { type, text, stackId, channelId, parentId } = await readJson(req, 300_000);
+      const { type, text, stackId, channelId, parentId, dirId } = await readJson(req, 300_000);
       if (!['text', 'message'].includes(type)) return send(res, 400, { error: 'Bad type' });
       const t = String(text || '').slice(0, 200_000);
       if (!t.trim()) return send(res, 400, { error: 'Empty' });
@@ -3789,7 +3886,8 @@ async function api(req, res, url) {
       if (parentId && (type !== 'message' || !parent || parent.wsId !== ws.id || parent.type !== 'message' || parent.parentId || !canSee(auth, 'item', parent))) {
         return send(res, 400, { error: 'That thread is gone' });
       }
-      const where = parent ? { parentId: parent.id, channelId: parent.channelId || null } : { stackId: validStack(ws, stackId, auth.memberId), channelId: validChannel(ws, channelId, auth.memberId) };
+      const dir = type === 'text' && !parent ? validDir(ws, dirId, auth.memberId) : null;
+      const where = parent ? { parentId: parent.id, channelId: parent.channelId || null } : dir ? { dirId: dir } : { stackId: validStack(ws, stackId, auth.memberId), channelId: validChannel(ws, channelId, auth.memberId) };
       if (!parent && channelId && !where.channelId) return send(res, 404, { error: 'Feed not found' });
       const item = addItem(baseItem(auth, { type, text: t, ...where }));
       if (type === 'message') pinLinked(ws, t);
@@ -3838,7 +3936,17 @@ async function api(req, res, url) {
         }
       }
       if (body.pinned !== undefined) it.pinned = !!body.pinned;
-      if (body.stackId !== undefined) it.stackId = validStack(ws, body.stackId, auth.memberId);
+      // Saving to a folder takes it out of its stack; moving it to a stack takes it out of its folder.
+      if (body.dirId !== undefined && it.type !== 'message' && !it.channelId) {
+        if (body.dirId && !validDir(ws, body.dirId, auth.memberId)) return send(res, 404, { error: 'That folder is gone' });
+        if (it.dirId && !body.dirId) it.pinned = true;
+        it.dirId = body.dirId || null;
+        if (it.dirId) it.stackId = null;
+      } else if (body.stackId !== undefined) {
+        it.stackId = validStack(ws, body.stackId, auth.memberId);
+        if (it.dirId) it.pinned = true; // fresh out of a folder: don't let auto-clear take it straight away
+        it.dirId = null;
+      }
       if (body.name !== undefined && (it.type === 'file' || it.type === 'folder')) {
         const name = String(body.name).trim().replace(/[\/\\]/g, '_').slice(0, 255);
         if (!name) return send(res, 400, { error: 'Name required' });
@@ -3856,7 +3964,7 @@ async function api(req, res, url) {
   }
 
   if (a === 'clear' && m === 'POST') {
-    for (const it of Object.values(db.items)) if (it.wsId === ws.id && !it.pinned && canSee(auth, 'item', it)) deleteItem(it.id);
+    for (const it of Object.values(db.items)) if (it.wsId === ws.id && !it.pinned && !it.dirId && canSee(auth, 'item', it)) deleteItem(it.id);
     return send(res, 200, { ok: true });
   }
 
@@ -3872,7 +3980,7 @@ async function api(req, res, url) {
         if (!folder || folder.wsId !== ws.id || folder.type !== 'folder' || folder.status !== 'uploading') return send(res, 404, { error: 'Folder not found' });
         target = { folder: folder.id, relPath: cleanRel(body.relPath), mtime: Number(body.mtime) || Date.now() };
       } else {
-        target = { name: cleanName(body.name), type: String(body.type || '').slice(0, 200), stackId: validStack(ws, body.stackId, auth.memberId), channelId: validChannel(ws, body.channelId, auth.memberId) };
+        target = { name: cleanName(body.name), type: String(body.type || '').slice(0, 200), stackId: validStack(ws, body.stackId, auth.memberId), channelId: validChannel(ws, body.channelId, auth.memberId), dirId: validDir(ws, body.dirId, auth.memberId) };
       }
       const up = { id: rid(), wsId: ws.id, size, received: 0, crc: 0, touched: Date.now(), ...target };
       await fsp.writeFile(partPath(up), '');
@@ -3935,8 +4043,7 @@ async function api(req, res, url) {
       const item = addItem({
         ...baseItem(auth, { type: 'file', name: up.name, size: up.size, mime: mimeFor(up.name, up.type) }),
         id,
-        stackId: validStack(ws, up.stackId, auth.memberId),
-        channelId: validChannel(ws, up.channelId, auth.memberId),
+        ...uploadPlace(ws, auth, up),
       });
       return send(res, 200, publicItem(item));
     }
@@ -3968,8 +4075,7 @@ async function api(req, res, url) {
     const item = addItem({
       ...baseItem(auth, { type: 'file', name, size, mime: mimeFor(name, url.searchParams.get('type')) }),
       id,
-      stackId: validStack(ws, url.searchParams.get('stackId'), auth.memberId),
-      channelId: validChannel(ws, url.searchParams.get('channelId'), auth.memberId),
+      ...uploadPlace(ws, auth, Object.fromEntries(url.searchParams)),
     });
     return send(res, 200, publicItem(item));
   }
@@ -4188,7 +4294,7 @@ setInterval(() => {
     }
     if (it.status === 'uploading' && now - it.createdAt > 24 * 3600_000) deleteItem(it.id);
     const h = ws.settings.expireHours;
-    if (h > 0 && !it.pinned && it.status === 'ready' && now - it.createdAt > h * 3600_000) deleteItem(it.id);
+    if (h > 0 && !it.pinned && !it.dirId && it.status === 'ready' && now - it.createdAt > h * 3600_000) deleteItem(it.id);
   }
   for (const it of Object.values(db.items)) {
     if (it.share && !liveShare(it)) {
