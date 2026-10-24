@@ -992,6 +992,11 @@ body.viewer .preview pre, body.viewer .preview .pv-edit, body.viewer .preview .d
 .sub-card { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border: 1px solid var(--line); border-left: 3px solid var(--c); border-radius: var(--radius); background: var(--panel); color: var(--text); font: inherit; text-align: left; cursor: pointer; }
 .sub-card .pbar { flex: none; } .sub-card .cc-top { margin-bottom: 0; }
 .sub-card:hover { background: var(--card-hover); } .sub-card.done { opacity: 0.6; }
+.tool-table { max-height: 300px; overflow: auto; border: 1px solid var(--line); border-radius: 10px; }
+.tool-table table { border-collapse: collapse; font-size: 12px; width: max-content; min-width: 100%; }
+.tool-table th, .tool-table td { padding: 5px 8px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+.tool-table th { position: sticky; top: 0; background: var(--panel); color: var(--muted); font-weight: 600; }
+.tool-table a { color: var(--accent); }
 .role-chip { flex: none; font-size: 10.5px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }
 .role-chip.mine { border-color: color-mix(in srgb, var(--accent) 60%, var(--line)); color: var(--text); }
 .sk-files { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0 0 12px; }

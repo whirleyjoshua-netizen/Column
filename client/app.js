@@ -64,6 +64,7 @@
   // ---------- icons ----------
   const svg = (d) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
   const I = {
+    spark: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 5.6L19.5 10l-5.6 1.9L12 17.5l-1.9-5.6L4.5 10l5.6-1.4z"/><path d="M19 15v4M17 17h4"/></svg>',
     clip: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.4 11.1-9.2 9.2a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5"/></svg>',
     download: svg('<path d="M12 4v11M7 10l5 5 5-5M5 20h14"/>'),
     doc: svg('<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h6"/>'),
@@ -2403,6 +2404,7 @@
       t.pinId && pinById(t.pinId) ? h('button', { class: 'list-chip', title: 'Show it on the map', onclick: (ev) => { ev.stopPropagation(); openMap({ pinId: t.pinId }); } }, 'Map') : null,
       camp && !inCampaign && !noCamp ? h('button', { class: 'camp-chip c-' + camp.color, title: `${camp.name} · ${g.title}`, onclick: () => openCampaign(camp.id) }, camp.name) : null,
       t.assigneeId ? avatar(t.assigneeId) : t.roleId ? roleChip(t.roleId) : null,
+      t.done || waits || !g ? null : btn(I.spark, 'Tools for this task', (b) => toolsMenu(b, t)),
       t.done || waits ? null : btn(I.clock, 'Put on schedule', () => openSheet({ text: t.text, taskId: t.id, date: t.due && D.sub === 'tasks' ? t.due : D.date })),
       btn(I.more, 'More', (b) => taskMenu(b, t))
     );
@@ -2457,6 +2459,7 @@
       { label: g ? `Goal: ${g.title}…` : 'Add to a goal…', run: () => goalMenu(anchor, t) },
       ...(g ? [{ label: t.report ? 'Stop asking for a report' : 'Ask for a report when done', run: () => patchTask(t, { report: !t.report }) }] : []),
       ...stepRows(g && campById(g.campaignId), t, !!taskWaitsOn(t), (ch) => patchTask(t, ch)),
+      ...(t.done ? [] : [{ label: '✦ Get help with it…', run: () => toolsMenu(anchor, t) }]),
       { label: 'Share to chat…', run: () => shareMenu(anchor, linkToken('task', t.id)) },
       { label: 'Delete task', danger: true, run: async () => {
         try {
@@ -2471,6 +2474,145 @@
     ]);
   }
   const people = (n) => (n === 0 ? 'nobody yet' : n === 1 ? '1 person' : `${n} people`);
+  // ----- task tools: help with one task right where it is -----
+  // Research it, find people to reach, draft the email, a call script or a document. Each comes back as a draft
+  // to look over; nothing is kept until you save it to the task, make it a call list, or open it in Email.
+  const TOOLS_T = {
+    contacts: { label: 'Find contacts', sub: 'Phones, emails and websites from the web', ask: 'Who exactly? e.g. car dealerships in Henderson with a fleet manager' },
+    email: { label: 'Draft the email', sub: 'Ready to send from Email', ask: 'Anything it should say or offer?' },
+    script: { label: 'Write a call script', sub: 'Opener, questions, objections, close', ask: 'Anything to cover?' },
+    doc: { label: 'Make a document', sub: 'A Word doc saved on the task', ask: 'What should it be? e.g. a one-page offer for fleet managers' },
+    research: { label: 'Research it', sub: 'Facts, options and prices from the web', ask: 'What do you want to know?' },
+    ask: { label: 'Ask about it…', sub: 'Anything about this task', ask: 'Your question', need: true },
+  };
+  // Which tools fit, from what the task says. The rest stay one tap further down.
+  function toolsFor(t) {
+    const x = t.text.toLowerCase();
+    const out = [];
+    if (/\b(call|phone|dial|ring|reach|outreach|contact|prospect|leads?|follow[- ]?up|cold|canvass|book|meetings?|appointments?)\b/.test(x)) out.push('contacts', 'script', 'email');
+    if (/\b(e-?mails?|newsletter|mailer|send|message|write to|dm)\b/.test(x)) out.push('email', 'contacts');
+    if (/\b(lists?|find|source|gather|collect|compile|names|numbers|directory)\b/.test(x)) out.push('contacts', 'research');
+    if (/\b(write|draft|docs?|document|proposal|flyers?|brochure|one[- ]pager|report|plan|policy|guide|checklist|quote|letter|post|copy|script|template|sop)\b/.test(x)) out.push(/\bscript\b/.test(x) ? 'script' : 'doc');
+    if (/\b(research|look (up|into)|compare|prices?|costs?|find out|learn|analy[sz]e|competitors?|options|vendors?|suppliers?)\b/.test(x)) out.push('research');
+    return [...new Set(out)];
+  }
+  function toolsMenu(anchor, t) {
+    const fit = toolsFor(t);
+    const camp = campById(goalById(t.goalId)?.campaignId);
+    const list = listOfTask(t);
+    const row = (k) => ({ label: h('span', { class: 'tool-item' }, TOOLS_T[k].label, h('small', {}, TOOLS_T[k].sub)), run: () => runTaskTool(t, k) });
+    const rest = Object.keys(TOOLS_T).filter((k) => !fit.includes(k));
+    openMenu(anchor, [
+      ...(fit.length ? [{ head: 'For this task' }, ...fit.map(row), { head: 'More' }] : [{ head: 'Help with this task' }]),
+      ...rest.map(row),
+      ...(camp || list ? [{ head: 'Resources' }] : []),
+      ...(list ? [{ label: `Open ${list.name}`, run: () => { K.listOpen = 'task:' + t.id; openCampaign(camp.id); } }] : []),
+      ...(camp ? [{ label: 'Log a call or email', run: () => { openCampaign(camp.id); openLog(camp); } }] : []),
+      ...(camp && amOwner() && S.pss?.connected ? [{ label: 'Pull leads from PSS into a list…', run: () => { openCampaign(camp.id); sidekickFor(camp); } }] : []),
+    ]);
+  }
+  function runTaskTool(t, tool) {
+    const T = TOOLS_T[tool];
+    const ask = h('textarea', { rows: 3, placeholder: T.ask });
+    let result = null;
+    sheet(T.label, [
+      h('p', { class: 'day-hint' }, `For “${shortText(t.text, 90)}”. It uses the task, its campaign and brief${tool === 'contacts' || tool === 'research' || tool === 'ask' ? ', and searches the web' : ''}. Nothing is saved until you choose to.`),
+      h('label', {}, T.need ? 'Question' : 'Anything specific? (optional)', ask),
+    ], async () => {
+      if (T.need && !ask.value.trim()) throw new Error('Write your question first.');
+      const go = $('#sheet .btns .primary-btn');
+      go.disabled = true;
+      go.textContent = tool === 'contacts' || tool === 'research' || tool === 'ask' ? 'Searching… this can take a minute' : 'Writing…';
+      try {
+        result = await api('POST', '/ai/task', { taskId: t.id, tool, ask: ask.value, today: todayKey() });
+      } catch (e) {
+        if (/Settings → AI/.test(e.message)) toast(e.message, { label: 'Open Settings', run: () => { closeSheet(); openSettings(); } });
+        throw e;
+      } finally {
+        go.disabled = false;
+        go.textContent = 'Go';
+      }
+      setTimeout(() => toolResult(t, tool, result));
+    }, 'Go');
+  }
+  // Saved on the task as a note in its campaign's stack, so it's one tap away when the task is worked.
+  async function noteOnTask(t, title, text) {
+    const camp = campById(goalById(t.goalId)?.campaignId);
+    const it = await api('POST', '/items', { type: 'text', text: [title, text].filter(Boolean).join('\n\n'), stackId: camp?.stackId || null });
+    const now = taskById(t.id) || t;
+    await patchTask(now, { files: [...new Set([...(now.files || []), it.id])] });
+    renderCamps();
+    toast(`Saved on “${shortText(now.text, 40)}”`);
+  }
+  // Plain text with # headings, ## subheadings and - bullets, as a Word document.
+  function textToHtml(text) {
+    const out = [];
+    let ul = null;
+    for (const line of text.split('\n')) {
+      const l = line.trim();
+      if (/^- /.test(l)) { (ul ||= (out.push('<ul>'), [])).push(1); out.push(`<li>${esc(l.slice(2))}</li>`); continue; }
+      if (ul) { out.push('</ul>'); ul = null; }
+      if (!l) continue;
+      out.push(/^## /.test(l) ? `<h2>${esc(l.slice(3))}</h2>` : /^# /.test(l) ? `<h1>${esc(l.slice(2))}</h1>` : `<p>${esc(l)}</p>`);
+    }
+    if (ul) out.push('</ul>');
+    return out.join('');
+  }
+  async function docOnTask(t, title, text) {
+    const camp = campById(goalById(t.goalId)?.campaignId);
+    const doc = await ColumnWord.read(await (await ColumnWord.blank()).arrayBuffer());
+    const page = h('div', { html: textToHtml(text) });
+    const name = (title.trim() || 'Document').replace(/[\\/]/g, '-').slice(0, 100) + '.docx';
+    const it = await uploadFile(new File([await doc.save(page)], name, { type: ColumnWord.DOCX }), { stackId: camp?.stackId || null });
+    if (!it) return;
+    const now = taskById(t.id) || t;
+    await patchTask(now, { files: [...new Set([...(now.files || []), it.id])] });
+    renderCamps();
+    toast(`${name} is on the task`, { label: 'Open', run: () => openPreview(it) });
+  }
+  function toolResult(t, tool, r) {
+    const camp = campById(goalById(t.goalId)?.campaignId);
+    const area = (v, rows) => { const x = h('textarea', { rows }); x.value = v || ''; return x; };
+    const copy = (get) => h('button', { type: 'button', class: 'btn small', onclick: () => copyText(get()) }, 'Copy');
+    if (r.kind === 'email') {
+      const subject = h('input', { value: r.subject });
+      const body = area(r.body, 12);
+      return sheet('Email draft', [h('label', {}, 'Subject', subject), h('label', {}, 'Message', body),
+        h('div', { class: 'btns' }, copy(() => `${subject.value}\n\n${body.value}`), h('button', { type: 'button', class: 'btn small', onclick: () => noteOnTask(t, 'Email: ' + subject.value, body.value).then(closeSheet, (e) => toast(e.message)) }, 'Save on the task'))],
+      async () => { M.subject = subject.value; M.body = body.value; M.campaignId = camp?.id || ''; openTool('email'); }, 'Open in Email');
+    }
+    if (r.kind === 'list') {
+      const name = h('input', { value: r.name });
+      const picks = r.rows.map((row) => ({ row, cb: h('input', { type: 'checkbox', checked: true }) }));
+      const cell = (v, i) => (i === 4 || i === 6) && /^https?:/.test(v) ? h('a', { href: v, target: '_blank', rel: 'noopener' }, i === 6 ? 'source' : v.replace(/^https?:\/\/(www\.)?/, '').slice(0, 28)) : v;
+      const table = picks.length ? h('div', { class: 'tool-table' }, h('table', {},
+        h('tr', {}, h('th', {}), r.columns.map((c) => h('th', {}, c))),
+        picks.map(({ row, cb }) => h('tr', {}, h('td', {}, cb), row.cells.map((v, i) => h('td', {}, cell(v, i))))))) : h('p', { class: 'day-hint' }, 'Nothing it could stand behind turned up. Try being more specific about who and where.');
+      const chosen = () => picks.filter((p) => p.cb.checked).map((p) => p.row);
+      return sheet(`Found ${plural(r.rows.length, 'contact')}`, [
+        r.note ? h('p', { class: 'day-hint' }, r.note) : null,
+        h('p', { class: 'day-hint' }, 'Each one comes from the page in its Source column. Check before you call: listings go out of date.'),
+        table,
+        h('label', {}, 'List name', name),
+        picks.length ? h('div', { class: 'btns' }, copy(() => [r.columns, ...chosen().map((x) => x.cells)].map((x) => x.join('\t')).join('\n'))) : null,
+      ], async () => {
+        if (!chosen().length) throw new Error('Tick at least one.');
+        if (!camp) return noteOnTask(t, name.value, [r.columns, ...chosen().map((x) => x.cells)].map((x) => x.join(' · ')).join('\n'));
+        const l = await api('POST', '/lists', { campaignId: camp.id, name: name.value, kind: 'calls', columns: r.columns, rows: chosen() });
+        upsertList(l);
+        await patchTask(taskById(t.id) || t, { listId: l.id });
+        renderCamps();
+        toast(`${l.name}: ${plural(l.rows.length, 'contact')} to work`, { label: 'Open', run: () => { K.listOpen = 'task:' + t.id; openCampaign(camp.id); } });
+      }, camp ? 'Make it the task’s call list' : 'Save on the task');
+    }
+    const title = h('input', { value: r.title });
+    const text = area(r.text, 16);
+    if (r.kind === 'doc') return sheet('Document draft', [h('label', {}, 'Title', title), h('label', {}, 'Text · # heading, - bullet', text), h('div', { class: 'btns' }, copy(() => text.value))],
+      () => docOnTask(t, title.value, text.value), 'Save as a Word doc on the task');
+    return sheet(tool === 'script' ? 'Call script' : r.title, [h('label', {}, 'Title', title), text, h('div', { class: 'btns' }, copy(() => text.value))],
+      () => noteOnTask(t, title.value, text.value), 'Save on the task');
+  }
+
   function assignMenu(anchor, t) {
     const roles = S.workspace.roles || [];
     const who = (m) => [m.id === S.me?.memberId ? `${m.name} (you)` : m.name, rolesOf(m.id).map((r) => r.name).join(', ')].filter(Boolean).join(' · ');

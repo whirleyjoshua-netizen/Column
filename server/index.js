@@ -2308,6 +2308,72 @@ async function processMeeting(x) {
 }
 
 // Goals and tasks drafted from the brief, for the person to tick and add.
+// ---------- task tools: help with one task, right where it is ----------
+// Research it, find people to reach, draft the email, a call script or a document. Each comes back as a draft
+// the person looks over; nothing is saved until they choose to. Research and finding contacts search the web.
+const TASK_TOOLS = {
+  research: { web: true, ask: 'Research what this person needs to know to do this task well: the facts, options, prices, rules or examples that matter. Give the answer, not a plan to research.',
+    shape: '{"title":"short title","text":"plain text: short paragraphs and lines starting with - for lists","sources":["page title: https://…"]}' },
+  ask: { web: true, ask: 'Answer their question about this task, practically.',
+    shape: '{"title":"short title","text":"plain text: short paragraphs and lines starting with - for lists","sources":["page title: https://…"]}' },
+  contacts: { web: true, ask: 'Find real people or businesses this task should reach, with their public phone numbers, emails and websites. Search the web. Include only what you actually found on a page, with that page as the source: never guess or make up a name, number or email. Leave a field empty when you didn’t find it. Up to 40.',
+    shape: '{"name":"a short name for the list","note":"one or two lines: what you searched and anything to know","rows":[{"name":"contact person or empty","business":"","phone":"","email":"","website":"","city":"","source":"https://…"}]}' },
+  email: { web: false, ask: 'Draft the email this task calls for, ready to send. Use {first name} where the recipient’s first name goes. Keep it short and specific, in the team’s voice.',
+    shape: '{"subject":"","body":"plain text"}' },
+  script: { web: false, ask: 'Write a call script for this task: an opener, two or three questions, answers to the likely objections, and how to close or book the next step. Short lines someone can glance at mid-call.',
+    shape: '{"title":"","text":"plain text: lines starting with # for section headings and - for points"}' },
+  doc: { web: false, ask: 'Write the document this task calls for (a proposal, flyer copy, one-pager, checklist, report…), complete and ready to use.',
+    shape: '{"title":"","text":"plain text: lines starting with # for headings, ## for subheadings, - for bullet points; blank lines between paragraphs"}' },
+};
+const CONTACT_COLS = ['Name', 'Business', 'Phone', 'Email', 'Website', 'City', 'Source'];
+function taskBrief(ws, auth, t) {
+  const g = db.goals[t.goalId];
+  const c = g && db.campaigns[g.campaignId];
+  const p = c?.parentId && db.campaigns[c.parentId];
+  const l = t.listId && db.lists[t.listId];
+  const files = (t.files || []).map((id) => db.items[id]).filter(Boolean);
+  const role = t.roleId && (ws.roles || []).find((r) => r.id === t.roleId);
+  return [
+    `The task: ${t.text}${t.due ? ` (due ${t.due})` : ''}${role ? `. It's for the ${role.name} role${role.about ? ` (${role.about})` : ''}` : ''}.`,
+    c ? `It's in the campaign “${c.name}”${c.start || c.end ? `, running ${c.start || '?'} to ${c.end || 'no end'}` : ''}, under the goal “${g.title}”.` : '',
+    c?.brief ? `Campaign brief: ${clipText(c.brief, 3000)}` : '',
+    p ? `That campaign is part of “${p.name}”${p.brief ? `: ${clipText(p.brief, 1000)}` : ''}.` : '',
+    l ? `The task works the list “${l.name}” (${l.rows.length} rows).` : '',
+    files.length ? `Attached to it: ${files.map((it) => it.name || clipText(it.text, 60)).join('; ')}.` : '',
+    auth.role === 'owner' && db.pss[ws.id] ? `Their website (PSS) already has ${db.pss[ws.id].leads?.length || 0} leads they can pull into a list.` : '',
+  ].filter(Boolean).join('\n');
+}
+async function aiTask(ws, auth, t, body) {
+  const tool = TASK_TOOLS[body.tool];
+  if (!tool) throw badRequest('Unknown tool');
+  const ai = aiOf(ws.id, auth.memberId);
+  const use = aiUse(ai);
+  if (!use) throw Object.assign(new Error('Add your AI key in Settings → AI to use this.'), { status: 400 });
+  const today = isDay(body.today) ? body.today : fmtDay(Date.now());
+  const extra = cleanText(body.ask, 2000);
+  const prompt = [`Today is ${today}.`, taskBrief(ws, auth, t), extra ? `What they asked for: ${extra}` : ''].filter(Boolean).join('\n\n');
+  const system = `You help someone on a small business team get one task done. ${tool.ask} Reply with JSON only, in this shape: ${tool.shape}` + brandPrompt(ws);
+  let out;
+  try {
+    out = await llms[use.provider].run({ key: unseal(ai.keys[use.provider].sealed).key, model: use.model, system, history: [{ role: 'user', text: prompt }], tools: [], web: tool.web, exec: () => Promise.reject(new Error('No tools')) });
+  } catch (e) {
+    console.error('Task tool failed:', e.message);
+    throw Object.assign(new Error(llmError(e)), { status: 502 });
+  }
+  if (out.refused) throw Object.assign(new Error(out.text), { status: 502 });
+  const j = replyJson(out.text);
+  const str = (v, n) => clipText(String(v ?? '').trim(), n);
+  if (body.tool === 'contacts') {
+    const rows = (Array.isArray(j.rows) ? j.rows : []).slice(0, 60)
+      .map((r) => ({ cells: [str(r?.name, 120), str(r?.business, 160), str(r?.phone, 40), str(r?.email, 160), str(r?.website, 300), str(r?.city, 80), str(r?.source, 300)] }))
+      .filter((r) => (r.cells[0] || r.cells[1]) && (r.cells[2] || r.cells[3] || r.cells[4]));
+    return { kind: 'list', name: str(j.name, 80) || 'Contacts', note: str(j.note, 600), columns: CONTACT_COLS, rows };
+  }
+  if (body.tool === 'email') return { kind: 'email', subject: str(j.subject, 200), body: str(j.body, 8000) };
+  const sources = Array.isArray(j.sources) ? j.sources.map((x) => str(x, 400)).filter(Boolean).slice(0, 12) : [];
+  return { kind: body.tool === 'doc' ? 'doc' : 'text', title: str(j.title, 120) || 'Notes', text: str(j.text, 20000) + (sources.length ? `\n\nSources:\n${sources.map((x) => '- ' + x).join('\n')}` : '') };
+}
+
 // The team as the AI sees it: who's on it and what each role handles, so it can say who should do a task.
 function teamLine(ws, memberId) {
   const roles = ws.roles || [];
@@ -3593,6 +3659,11 @@ async function api(req, res, url) {
       if (body.model !== undefined && ai.keys[ai.provider]?.models.some((x) => x.id === body.model)) ai.model = body.model;
       save();
       return send(res, 200, aiState(ws, auth.memberId));
+    }
+    if (m === 'POST' && b === 'task') {
+      const t = db.tasks[body.taskId];
+      if (!t || t.wsId !== ws.id || !canSee(auth, 'task', t)) return send(res, 404, { error: 'That task is gone.' });
+      return send(res, 200, await aiTask(ws, auth, t, body));
     }
     if (m === 'POST' && (b === 'report' || b === 'plan')) {
       const camp = db.campaigns[body.campaignId];
