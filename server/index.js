@@ -727,6 +727,7 @@ const publicAttempt = ({ wsId, ...x }) => x;
 const publicList = ({ wsId, ...l }) => l;
 const isDate = (v) => v === null || /^\d{4}-\d{2}-\d{2}$/.test(String(v));
 
+const subsOf = (c) => Object.values(db.campaigns).filter((x) => x.parentId === c.id);
 function applyCampaign(c, body, ws, auth) {
   if (body.name !== undefined) c.name = String(body.name || '').trim().slice(0, 80);
   if (body.brief !== undefined) c.brief = String(body.brief || '').slice(0, 20_000);
@@ -754,6 +755,15 @@ function applyCampaign(c, body, ws, auth) {
     c.inOrder = !!body.inOrder;
   }
   if (body.memberIds !== undefined) c.memberIds = (Array.isArray(body.memberIds) ? body.memberIds : []).filter((id) => ws.members.some((m) => m.id === id) && id !== c.ownerId);
+  // Part of a bigger campaign: its progress counts toward the main one's. One level: a sub has no subs of its own.
+  if (body.parentId !== undefined) {
+    const p = body.parentId && db.campaigns[body.parentId];
+    if (body.parentId && (!p || p.wsId !== ws.id)) throw badRequest('That campaign is gone.');
+    if (p?.id === c.id) throw badRequest('A campaign can’t be part of itself.');
+    if (p?.parentId) throw badRequest(`“${p.name}” is itself part of another campaign. Pick the main one.`);
+    if (p && subsOf(c).length) throw badRequest('This campaign has sub-campaigns of its own, so it can’t go under another one.');
+    c.parentId = p ? p.id : null;
+  }
   if (c.end && c.start && c.end < c.start) throw badRequest('The end date is before the start.');
   if (!c.name) throw badRequest('Give it a name.');
   return c;
@@ -885,6 +895,11 @@ function deleteTask(t) {
   broadcast(t.wsId, { type: 'task:remove', id: t.id });
 }
 function deleteCampaign(ws, c) {
+  // Its sub-campaigns carry on by themselves.
+  for (const x of subsOf(c)) {
+    x.parentId = null;
+    broadcast(ws.id, { type: 'campaign', campaign: publicCampaign(x) });
+  }
   for (const g of Object.values(db.goals)) if (g.campaignId === c.id) deleteGoal(g);
   for (const x of Object.values(db.attempts)) if (x.campaignId === c.id) delete db.attempts[x.id];
   for (const l of Object.values(db.lists)) if (l.campaignId === c.id) delete db.lists[l.id];
@@ -2359,7 +2374,7 @@ async function aiPlan(ws, auth, c, body) {
 // tasks, a prospect list, a script, a budget, time on the Day), checks the accepted ones still add up, and
 // the app builds them through the usual routes. After that it keeps an eye on the campaign's pace and
 // says so when it's behind, and the person can pick the conversation back up. Each one is its maker's own.
-const SK_CARDS = ['campaign', 'goal', 'list', 'note', 'budget', 'block', 'task', 'change'];
+const SK_CARDS = ['campaign', 'sub', 'goal', 'list', 'note', 'budget', 'block', 'task', 'change'];
 const SK_KEEP = 60;
 const publicSidekick = ({ wsId, ...x }) => x;
 const skNews = (x) => broadcast(x.wsId, { type: 'sidekick', sidekick: publicSidekick(x), forMember: x.memberId });
@@ -2371,7 +2386,7 @@ function skCard(v, ws) {
   if (!type) return null;
   const t = (x, n) => clipText(String(x ?? '').trim(), n);
   const c = { id: rid(6), type, state: 'new', why: t(v.why, 300) };
-  if (type === 'campaign') Object.assign(c, { name: t(v.name, 80), brief: t(v.brief, 4000), start: skDay(v.start), end: skDay(v.end) });
+  if (type === 'campaign' || type === 'sub') Object.assign(c, { name: t(v.name, 80), brief: t(v.brief, 4000), start: skDay(v.start), end: skDay(v.end) });
   if (type === 'goal') Object.assign(c, {
     title: t(v.title, 200), kind: ['count', 'money'].includes(v.kind) ? v.kind : 'tasks',
     target: v.kind === 'count' || v.kind === 'money' ? Math.max(1, Math.min(10_000_000, Math.round(Number(String(v.target).replace(/[$,]/g, ''))) || 10)) : null,
@@ -2386,13 +2401,15 @@ function skCard(v, ws) {
   if (type === 'block') Object.assign(c, { text: t(v.text, 200), date: skDay(v.date), start: skMin(v.start, 1439), end: skMin(v.end, 1440), repeat: REPEATS.includes(v.repeat) ? v.repeat : null });
   if (type === 'task') Object.assign(c, { text: t(v.text, 300), due: skDay(v.due), goal: t(v.goal, 200), ...whoOfCard(ws, v) });
   if (type === 'change') Object.assign(c, { text: t(v.text, 300), goalId: db.goals[v.goalId]?.wsId === ws.id ? v.goalId : null, due: skDay(v.due), target: Number(v.target) > 0 ? Math.round(Number(v.target)) : null, end: skDay(v.end) });
-  const empty = { campaign: !c.name, goal: !c.title, note: !c.text, budget: !c.category || !c.limit, block: !c.text || !c.date || c.start == null || c.end == null || c.end <= c.start, task: !c.text, change: !c.text || (!c.goalId && !c.end) }[type];
+  const empty = { campaign: !c.name, sub: !c.name, goal: !c.title, note: !c.text, budget: !c.category || !c.limit, block: !c.text || !c.date || c.start == null || c.end == null || c.end <= c.start, task: !c.text, change: !c.text || (!c.goalId && !c.end) }[type];
   return empty ? null : c;
 }
 // How far along a campaign is, 0 to 1: its goals' progress on average, as the app shows it.
+// A main campaign's sub-campaigns each count like one of its goals.
 function campFrac(c) {
   const gs = Object.values(db.goals).filter((g) => g.campaignId === c.id);
-  if (!gs.length) return null;
+  const subs = c.parentId ? [] : subsOf(c).map(campFrac).filter((f) => f != null);
+  if (!gs.length && !subs.length) return null;
   const one = (g) => {
     if (g.kind === 'money') return Math.min(1, Math.max(0, goalSaved(g.id)) / (g.target * 100));
     if (g.kind === 'count') {
@@ -2402,7 +2419,7 @@ function campFrac(c) {
     const ts = Object.values(db.tasks).filter((t) => t.goalId === g.id);
     return ts.length ? ts.filter((t) => t.done).length / ts.length : 0;
   };
-  return gs.reduce((n, g) => n + one(g), 0) / gs.length;
+  return (gs.reduce((n, g) => n + one(g), 0) + subs.reduce((n, f) => n + f, 0)) / (gs.length + subs.length);
 }
 // Where the campaign is against its calendar: a note when it's well behind, or nothing.
 function skPace(c, today) {
@@ -2436,7 +2453,7 @@ function skContext(ws, auth, x, today) {
   const lines = [
     `Today is ${today} (${new Date(today + 'T12:00:00Z').toLocaleDateString('en-US', { weekday: 'long', timeZone: 'UTC' })}). The person is ${auth.member}${auth.role === 'owner' ? ', a team owner' : ''}.`,
     teamLine(ws, auth.memberId),
-    camps.length ? `Campaigns already in Column: ${camps.slice(0, 30).map((c) => `${c.name} (${c.status})`).join('; ')}.` : 'No campaigns yet.',
+    camps.length ? `Campaigns already in Column: ${camps.slice(0, 30).map((c) => `${c.name} (${c.status}${c.parentId && db.campaigns[c.parentId] ? ', part of ' + db.campaigns[c.parentId].name : ''})`).join('; ')}.` : 'No campaigns yet.',
     p ? `PSS (their website's leads) is connected: ${p.leads?.length || 0} leads. By stage: ${count('stage')}. By city: ${count('city')}. By source: ${count('source')}.` : 'PSS isn’t connected, so there are no leads to pull in: prospects would have to be found or imported.',
     files.length ? `They attached files for this plan: ${files.map((f) => f.name).join('; ')}. They're at the start of the conversation. Plan from what they say (prices, offers, audience, past numbers, scripts) instead of asking for it again, and say which file a fact came from.` : '',
     mine.length ? `Their Day for the next two weeks (busy times):\n${mine.slice(0, 80).map((e) => `- ${e.repeat ? 'repeats ' + e.repeat + ' from ' + e.date : e.date} ${fmt(e.start)}${e.end != null ? '–' + fmt(e.end) : ''} ${clipText(e.text, 60)}`).join('\n')}` : 'Nothing on their Day in the next two weeks.',
@@ -2448,9 +2465,13 @@ function skContext(ws, auth, x, today) {
     const recent = log.filter((a) => a.at > Date.now() - 14 * 864e5);
     const by = (xs) => Object.entries(xs.reduce((m, a) => ((m[a.outcome] = (m[a.outcome] || 0) + 1), m), {})).map(([k, n]) => `${k} ${n}`).join(', ') || 'none';
     const money = campMoney(c.id);
+    const parent = c.parentId && db.campaigns[c.parentId];
+    const subs = subsOf(c).filter((y) => canSee(auth, 'campaign', y));
     lines.push([
       `This conversation is about the campaign “${c.name}” (${c.status}), running ${c.start || '?'} to ${c.end || 'no end'}. It's ${Math.round((campFrac(c) || 0) * 100)}% done.${x.nudge ? ' ' + x.nudge.text : ''}`,
       c.brief ? `Brief: ${clipText(c.brief, 2000)}` : '',
+      parent ? `It's a sub-campaign of “${parent.name}”${parent.brief ? `, whose brief is: ${clipText(parent.brief, 800)}` : ''}. Keep it pointed at what the main campaign needs.` : '',
+      subs.length ? `Its sub-campaigns, each counting toward it:\n${subs.map((y) => `- ${y.name} (${y.status}, ${Math.round((campFrac(y) || 0) * 100)}% done${y.end ? ', ends ' + y.end : ''})`).join('\n')}` : '',
       gs.length ? `Goals (use these ids for changes):\n${gs.map((g) => `- [${g.id}] ${g.title} · ${g.kind}${g.target ? ' target ' + g.target : ''}${g.due ? ' due ' + g.due : ''} · ${g.kind === 'money' ? '$' + Math.round(goalSaved(g.id) / 100) + ' so far' : g.kind === 'count' ? '' : `${ts.filter((t) => t.goalId === g.id && t.done).length}/${ts.filter((t) => t.goalId === g.id).length} tasks done`}`).join('\n')}` : 'No goals yet.',
       `Tasks: ${ts.filter((t) => t.done).length} done, ${ts.filter((t) => !t.done).length} open, ${ts.filter((t) => !t.done && t.due && t.due < today).length} overdue.`,
       `Logged calls and emails: ${log.length} in all (${by(log)}); last 14 days ${recent.length} (${by(recent)}).`,
@@ -2521,13 +2542,14 @@ const SK_SYSTEM = (kind, built) => [
   'You are Sidekick, the planning partner inside Column, a work app for a small business: it has campaigns (each with goals, and tasks under the goals, call lists, a log of calls and emails, and notes), a Day schedule, and Finance (money in and out, budgets).',
   kind === 'schedule'
     ? 'Here you help plan the person’s schedule: what they want to get done, when they work best, what’s fixed. Then propose time blocks on their Day around what’s already there.'
-    : 'Here you help plan a campaign: what success looks like (a number to reach, by when), who it’s aimed at, what they already have (leads, lists, scripts), how much time and money they can put in. Then propose the campaign, its goals with tasks, and what it needs to succeed.',
+    : 'Here you help plan a campaign: what success looks like (a number to reach, by when), who it’s aimed at, what they already have (leads, lists, scripts), how much time and money they can put in. Then propose the campaign, its goals with tasks, and what it needs to succeed. When the goal is big enough that it splits into separate pushes (by channel, region, audience or phase), propose it as a main campaign with sub-campaigns that each serve it; each sub-campaign is planned in detail on its own afterwards.',
   built ? 'The plan is already built and running. Help them see how it’s going from the numbers given, say plainly what’s working and what isn’t and why, what could happen next, and propose changes. Keep it short.' : '',
   'Work like a sharp colleague brainstorming: ask one or two questions at a time, the ones that matter most, and don’t ask what the context already tells you. When you know enough, propose a path as cards. Explain briefly why each card helps. When asked to check the accepted cards, say honestly whether they add up to the goal (do the numbers work, is anything missing, is the time realistic) and propose what would fix it.',
   'Never invent leads, names, numbers or results. Use dates from today on, as YYYY-MM-DD. Times are minutes after midnight (9:00 = 540).',
   WHO_RULE,
   'Reply with JSON only: {"reply":"what you say, plain text, short paragraphs, no markdown","title":"a short name for this plan, once you know it, else null","cards":[...]}. cards is often empty while you’re still asking. Card shapes:',
   '{"type":"campaign","name":"","brief":"the goal, audience and approach in a few lines","start":"YYYY-MM-DD","end":"YYYY-MM-DD","why":""}',
+  kind === 'schedule' ? '' : '{"type":"sub","name":"","brief":"what this part does for the main campaign","start":"YYYY-MM-DD","end":"YYYY-MM-DD","why":""} — a sub-campaign under the one being planned. Not for a campaign that is itself a sub-campaign.',
   '{"type":"goal","title":"","kind":"tasks"|"count"|"money","target":number|null (count: logged calls or emails to reach; money: whole dollars),"due":"YYYY-MM-DD"|null,"tasks":[{"text":"an action for one sitting","due":"YYYY-MM-DD"|null,"who":null|"role or person"}],"why":""}',
   '{"type":"list","name":"","live":{"stages":[],"cities":[],"sources":[],"days":0|30|90|180|365,"need":"phone"|"email"|null},"why":""} — a prospect list pulled from PSS by filter, only if PSS is connected. Use stage, city and source values exactly as given.',
   '{"type":"note","title":"","text":"","why":""} — a call script, an email draft, a checklist, talking points.',

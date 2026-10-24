@@ -2923,9 +2923,12 @@
     const n = ts.filter((t) => t.done).length;
     return { n, of: ts.length, frac: ts.length ? n / ts.length : 0, label: ts.length ? `${n} / ${ts.length} tasks` : 'No tasks yet' };
   }
+  // A main campaign's sub-campaigns each count like one of its goals (same as the server).
+  const subsOf = (c) => (c.parentId ? [] : S.campaigns.filter((x) => x.parentId === c.id));
+  const parentOf = (c) => c.parentId && campById(c.parentId);
   function campProgress(c) {
-    const gs = goalsOf(c.id);
-    return gs.length ? gs.reduce((s, g) => s + goalProgress(g).frac, 0) / gs.length : 0;
+    const fracs = [...goalsOf(c.id).map((g) => goalProgress(g).frac), ...subsOf(c).filter((x) => goalsOf(x.id).length || subsOf(x).length).map(campProgress)];
+    return fracs.length ? fracs.reduce((s, f) => s + f, 0) / fracs.length : 0;
   }
 
   // ----- campaigns worked in order (same rules as the server) -----
@@ -3040,17 +3043,26 @@
   $('#camps').addEventListener('focusout', () => setTimeout(() => K.stale && renderCamps(), 0));
 
   function campaignList() {
-    const all = [...S.campaigns].filter((c) => !K.mine || c.assigneeId === S.me?.memberId).sort((a, b) => (a.end || '9999') < (b.end || '9999') ? -1 : 1);
+    // Sub-campaigns sit under their main campaign's card; on their own when the main one isn't shown.
+    const shownAll = [...S.campaigns].filter((c) => !K.mine || c.assigneeId === S.me?.memberId).sort((a, b) => (a.end || '9999') < (b.end || '9999') ? -1 : 1);
+    const all = shownAll.filter((c) => !parentOf(c) || !shownAll.includes(parentOf(c)));
+    const subRows = (c) => {
+      const subs = shownAll.filter((x) => x.parentId === c.id);
+      return subs.length ? h('div', { class: 'cc-subs' }, subs.map((x) => h('button', { class: 'cc-sub-row c-' + x.color + (x.status === 'done' ? ' done' : ''), onclick: () => openCampaign(x.id) },
+        h('span', {}, x.name), bar(campProgress(x), x.color), h('small', {}, Math.round(campProgress(x) * 100) + '%')))) : null;
+    };
     const live = all.filter((c) => c.status !== 'done');
     const done = all.filter((c) => c.status === 'done');
     const card = (c) => {
       const p = campProgress(c);
       const gs = goalsOf(c.id);
       const mine = gs.flatMap((g) => tasksOf(g.id)).filter((t) => !t.done && taskMine(t)).length;
-      return h('button', { class: 'camp-card c-' + c.color + (c.status === 'paused' ? ' paused' : ''), onclick: () => openCampaign(c.id) },
+      const subs = subsOf(c).length;
+      return h('div', { class: 'camp-card-wrap c-' + c.color }, h('button', { class: 'camp-card c-' + c.color + (c.status === 'paused' ? ' paused' : ''), onclick: () => openCampaign(c.id) },
         h('div', { class: 'cc-top' }, h('b', {}, c.name), c.private ? h('span', { class: 'cc-lock', html: I.lock, title: 'Private' }) : null, h('span', { class: 'cc-pct' }, Math.round(p * 100) + '%')),
         bar(p, c.color),
-        h('div', { class: 'cc-sub' }, [c.assigneeId ? '→ ' + memberName(c.assigneeId) : '', campDates(c), `${gs.length} goal${gs.length === 1 ? '' : 's'}`, mine ? `${mine} for you` : '', c.status === 'paused' ? 'paused' : ''].filter(Boolean).join(' · ')));
+        h('div', { class: 'cc-sub' }, [parentOf(c) ? 'Part of ' + parentOf(c).name : '', c.assigneeId ? '→ ' + memberName(c.assigneeId) : '', campDates(c), `${gs.length} goal${gs.length === 1 ? '' : 's'}`, subs ? plural(subs, 'sub-campaign') : '', mine ? `${mine} for you` : '', c.status === 'paused' ? 'paused' : ''].filter(Boolean).join(' · '))),
+        subRows(c));
     };
     const setMine = (on) => { K.mine = on; store.set('campsMine', on); renderCamps(); };
     const tpls = [...S.templates].sort((a, b) => a.name.localeCompare(b.name));
@@ -3170,6 +3182,7 @@
     const notes = notesOf(c).length;
     const lists = listsOf(c.id).filter((l) => !onGoal(l));
     const who = c.private ? [...new Set([c.ownerId, ...c.memberIds, c.assigneeId].filter(Boolean))] : null;
+    const subLine = (x) => [x.assigneeId ? '→ ' + memberName(x.assigneeId) : '', campDates(x), x.status !== 'active' ? (x.status === 'done' ? 'finished' : 'paused') : ''].filter(Boolean).join(' · ');
     const brief = h('div', { class: 'camp-brief' + (c.brief ? '' : ' empty'), title: 'Click to edit', html: c.brief ? linkify(c.brief) : 'Add a brief: the goal, who it’s for, how you’ll know it worked…' });
     brief.addEventListener('click', (e) => {
       if (e.target.closest('a')) return;
@@ -3192,6 +3205,7 @@
         h('b', { class: 'camp-name' }, c.name),
         h('button', { class: 'icon-btn', 'aria-label': 'Campaign options', html: I.more, onclick: (e) => campaignMenu(e.currentTarget, c) })),
       h('div', { class: 'camp-meta' },
+        parentOf(c) ? h('button', { class: 'pill pill-btn', title: 'The main campaign this one serves', onclick: () => openCampaign(c.parentId) }, '↑ Part of ' + parentOf(c).name) : null,
         campDates(c) ? h('span', {}, campDates(c)) : null,
         h('button', { class: 'pill pill-btn', title: 'Who’s responsible', onclick: (e) => assignCampaignMenu(e.currentTarget, c) }, c.assigneeId ? avatar(c.assigneeId) : null, c.assigneeId ? memberName(c.assigneeId) : 'Assign to…'),
         c.status !== 'active' ? h('span', { class: 'pill' }, c.status === 'done' ? 'Finished' : 'Paused') : null,
@@ -3216,6 +3230,12 @@
       sendBars(c),
       h('div', { class: 'any-h camp-goals-h' }, 'Log'),
       logBox(c),
+      subsOf(c).length ? h('div', { class: 'any-h camp-goals-h' }, 'Sub-campaigns') : null,
+      subsOf(c).length ? h('div', { class: 'camp-subs' }, subsOf(c).map((x) => h('button', { class: 'sub-card c-' + x.color + (x.status === 'done' ? ' done' : ''), onclick: () => openCampaign(x.id) },
+        h('div', { class: 'cc-top' }, h('b', {}, x.name), h('span', { class: 'cc-pct' }, Math.round(campProgress(x) * 100) + '%')),
+        bar(campProgress(x), x.color),
+        subLine(x) ? h('div', { class: 'cc-sub' }, subLine(x)) : null)),
+        h('button', { class: 'add-goal', onclick: () => campaignSheet(null, c) }, '+ Add a sub-campaign')) : null,
       lists.length ? h('div', { class: 'any-h camp-goals-h' }, 'Lists & docs') : null,
       lists.map((l) => listCard(c, l)),
       h('div', { class: 'any-h camp-goals-h' }, 'Goals'),
@@ -4606,6 +4626,7 @@
     const owner = c.ownerId === S.me?.memberId;
     openMenu(anchor, [
       { label: 'Edit details…', run: () => campaignSheet(c) },
+      ...(c.parentId ? [] : [{ label: 'Add a sub-campaign…', run: () => campaignSheet(null, c) }]),
       { label: c.assigneeId ? `Responsible: ${memberName(c.assigneeId)}…` : 'Assign to…', run: () => assignCampaignMenu(anchor, c) },
       { label: 'Save to run again…', run: () => saveTemplate(c) },
       { label: 'What to log…', run: () => outcomesSheet(c) },
@@ -4649,8 +4670,13 @@
     wrap.querySelector('input, textarea')?.focus();
   }
 
-  function campaignSheet(c) {
-    const name = h('input', { value: c?.name || '', placeholder: 'Q4 outreach' });
+  // main: a new campaign's main campaign, when it's made as a sub-campaign.
+  function campaignSheet(c, main) {
+    const name = h('input', { value: c?.name || '', placeholder: main ? 'Dealerships' : 'Q4 outreach' });
+    // Part of a bigger campaign. Only main campaigns can be picked, and one with subs of its own can't go under another.
+    const mains = S.campaigns.filter((x) => !x.parentId && x.id !== c?.id && x.status !== 'done');
+    const partOf = h('select', {}, h('option', { value: '' }, 'Nothing: it’s a main campaign'), mains.map((x) => h('option', { value: x.id }, x.name)));
+    partOf.value = main?.id || c?.parentId || '';
     const brief = h('textarea', { rows: 4, placeholder: 'What’s the goal? Who’s it for? How will you know it worked?' });
     brief.value = c?.brief || '';
     const start = h('input', { type: 'date', value: c?.start || todayKey() });
@@ -4670,16 +4696,17 @@
     const people = h('div', { class: 'picks' + (priv.checked ? '' : ' hidden') }, picks.length ? picks : h('small', {}, 'Nobody else on the team yet.'));
     priv.addEventListener('change', () => people.classList.toggle('hidden', !priv.checked));
     const who = assigneeSelect(c?.assigneeId);
-    sheet(c ? 'Campaign details' : 'New campaign', [
+    sheet(c ? 'Campaign details' : main ? `New sub-campaign of ${main.name}` : 'New campaign', [
       h('label', {}, 'Name', name),
       h('label', {}, 'Brief', brief),
+      c && subsOf(c).length ? null : h('label', {}, 'Part of', partOf),
       h('div', { class: 'row2' }, h('label', {}, 'Starts', start), h('label', {}, 'Ends (optional)', end)),
       h('label', {}, 'Color', sw),
       h('label', {}, 'Responsible', who),
       owner ? h('label', { class: 'pick' }, priv, 'Private: only people I choose can see it') : (c?.private ? h('small', { class: 'day-hint' }, 'Private. The campaign owner chooses who sees it.') : null),
       owner ? people : null,
     ], async () => {
-      const body = { name: name.value, brief: brief.value, start: start.value || null, end: end.value || null, color, assigneeId: who.value || null };
+      const body = { name: name.value, brief: brief.value, start: start.value || null, end: end.value || null, color, assigneeId: who.value || null, ...(c && subsOf(c).length ? {} : { parentId: partOf.value || null }) };
       if (owner) Object.assign(body, { private: priv.checked, memberIds: picks.map((l) => l.firstChild).filter((cb) => cb.checked).map((cb) => cb.value) });
       const saved = c ? await api('PATCH', '/campaigns/' + c.id, body) : await api('POST', '/campaigns', body);
       const i = S.campaigns.findIndex((x) => x.id === saved.id);
@@ -7298,7 +7325,7 @@
   const skFor = (campaignId) => (S.sidekick || []).find((x) => x.campaignId === campaignId);
   const skNudges = () => (S.sidekick || []).filter((x) => x.nudge && x.status !== 'done' && campById(x.campaignId)?.status === 'active');
   const skCards = (x) => x.messages.flatMap((m) => m.cards || []);
-  const SK_LABEL = { campaign: 'Campaign', goal: 'Goal', list: 'Prospect list', note: 'Note', budget: 'Budget', block: 'On your Day', task: 'Task', change: 'Change' };
+  const SK_LABEL = { campaign: 'Campaign', sub: 'Sub-campaign', goal: 'Goal', list: 'Prospect list', note: 'Note', budget: 'Budget', block: 'On your Day', task: 'Task', change: 'Change' };
   async function skCall(method, path, body) {
     SK.busy = true;
     renderTool(true);
@@ -7363,7 +7390,7 @@
   }
   function skCardBody(c) {
     const fmtT = (m) => (m == null ? '' : fmtTime(m));
-    if (c.type === 'campaign') return [h('b', {}, c.name), c.start || c.end ? h('small', {}, [c.start && dueLabel(c.start), c.end && dueLabel(c.end)].filter(Boolean).join(' → ')) : null, c.brief ? h('p', {}, c.brief) : null];
+    if (c.type === 'campaign' || c.type === 'sub') return [h('b', {}, c.name), c.start || c.end ? h('small', {}, [c.start && dueLabel(c.start), c.end && dueLabel(c.end)].filter(Boolean).join(' → ')) : null, c.brief ? h('p', {}, c.brief) : null];
     if (c.type === 'goal') return [h('b', {}, c.title), h('small', {}, [c.kind === 'count' ? `${c.target} logged` : c.kind === 'money' ? money(c.target * 100) : `${c.tasks.length} task${c.tasks.length === 1 ? '' : 's'}`, c.due && 'by ' + dueLabel(c.due)].filter(Boolean).join(' · ')),
       c.tasks.length ? h('ul', {}, c.tasks.map((t) => h('li', {}, t.text, t.due || whoName(t) ? h('small', {}, [t.due && dueLabel(t.due), whoName(t) && '→ ' + whoName(t)].filter(Boolean).map((x) => ' · ' + x).join('')) : null))) : null];
     if (c.type === 'list') {
@@ -7401,6 +7428,7 @@
     const time = (m) => h('input', { type: 'time', value: m == null ? '' : `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}` });
     const body = {
       campaign: () => [field('name', 'Name', inp(c.name)), h('div', { class: 'row2' }, field('start', 'Starts', inp(c.start, { type: 'date' })), field('end', 'Ends', inp(c.end, { type: 'date' }))), field('brief', 'Brief', area(c.brief, 4))],
+      sub: () => [field('name', 'Name', inp(c.name)), h('div', { class: 'row2' }, field('start', 'Starts', inp(c.start, { type: 'date' })), field('end', 'Ends', inp(c.end, { type: 'date' }))), field('brief', 'What it does for the main campaign', area(c.brief, 4))],
       goal: () => [field('title', 'Goal', inp(c.title)), h('div', { class: 'row2' }, c.kind === 'tasks' ? null : field('target', c.kind === 'money' ? 'Amount ($)' : 'How many', inp(c.target, { inputmode: 'decimal' })), field('due', 'By', inp(c.due, { type: 'date' }))), field('tasks', 'Tasks · one per line', area(c.tasks.map((t) => t.text).join('\n'), 5))],
       list: () => [field('name', 'Name', inp(c.name))],
       note: () => [field('title', 'Title', inp(c.title)), field('text', 'Text', area(c.text, 10))],
@@ -7560,6 +7588,10 @@
             S.campaigns = S.campaigns.map((w) => (w.id === z.id ? z : w));
           }
           if (!made.includes(y)) made.push(y);
+        } else if (y.type === 'sub' && c && !c.parentId) {
+          const sub = await api('POST', '/campaigns', { name: y.name, brief: y.brief || '', start: y.start || c.start || todayKey(), end: y.end || c.end || null, parentId: c.id, color: c.color });
+          if (!S.campaigns.some((z) => z.id === sub.id)) S.campaigns.push(sub);
+          made.push(y);
         } else if (y.type === 'goal' && c) {
           const g = await api('POST', '/goals', { campaignId: c.id, title: y.title, kind: y.kind, target: y.target, due: y.due });
           if (!S.goals.some((z) => z.id === g.id)) S.goals.push(g);
