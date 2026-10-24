@@ -978,6 +978,10 @@ body.viewer .preview pre, body.viewer .preview .pv-edit, body.viewer .preview .d
 .sk-row { position: relative; } .sk-row.done { opacity: 0.6; }
 .sk-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--warn, #ffb547); flex: none; }
 .sk-top { display: flex; align-items: center; gap: 8px; margin: -4px 0 10px; } .sk-top b { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#tool.sk-over { outline: 2px dashed var(--accent); outline-offset: -6px; }
+#tool.sk-over::before { content: 'Drop for Sidekick to read'; position: sticky; top: 0; z-index: 5; display: block; margin: 0 0 8px; padding: 8px; border-radius: 10px; text-align: center; font-size: 12.5px; font-weight: 600; color: #fff; background: var(--accent); }
+.sk-msg.me:has(.sk-sent-file) { display: flex; flex-wrap: wrap; gap: 6px; }
+.sk-sent-file { display: inline-flex; align-items: center; gap: 5px; font-size: 12.5px; }
 .sk-files { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0 0 12px; }
 .sk-file { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; padding: 3px 4px 3px 10px; border: 1px solid var(--line); border-radius: 999px; font-size: 12px; background: var(--panel); }
 .sk-file-n { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 180px; }

@@ -3202,7 +3202,8 @@ async function api(req, res, url) {
       const text = cleanText(body.text, 4000);
       if (c === 'say' && !text) return send(res, 400, { error: 'Write something first.' });
       const said = c === 'check' ? 'Check the cards I accepted: do they add up to the goal? What’s missing or unrealistic?' : text;
-      x.messages.push({ role: 'user', text: said, at: Date.now(), check: c === 'check' || undefined });
+      const attached = c === 'say' && Array.isArray(body.attached) ? body.attached.slice(0, SK_FILES).map((n) => cleanText(n, 200)).filter(Boolean) : [];
+      x.messages.push({ role: 'user', text: said, at: Date.now(), check: c === 'check' || undefined, attached: attached.length ? attached : undefined });
       try {
         await skTurn(ws, auth, x, today, said);
       } catch (e) {

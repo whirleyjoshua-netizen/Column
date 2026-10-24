@@ -1474,18 +1474,30 @@
   }
   function clearDropping() {
     document.querySelectorAll('.dropping').forEach((p) => p.classList.remove('dropping'));
+    $('#tool')?.classList.remove('sk-over');
   }
+  // Something dragged out of Column, to be used as it is rather than uploaded again (the desktop app drags a copy).
+  const columnDragged = (e) => (S.dragItem && Date.now() - S.dragItem.at < 60_000 && (S.internalDrag || [...(e.dataTransfer.files || [])].some((f) => f.name === S.dragItem.it.name)) ? S.dragItem.it : null);
+  // An open Sidekick takes files dropped on it to read.
+  const skDropAt = (target) => S.token && toolOpen === 'sidekick' && target?.closest?.('#tool');
   // An open campaign takes the drop itself: files go to its stack, and lists become call lists.
   const dropCampaign = () => S.tab === 'camps' && campById(K.open);
   window.addEventListener('dragenter', (e) => {
     if (S.internalDrag || !S.token) return;
-    if (S.tab === 'day' && hasFiles(e.dataTransfer)) setTab('column');
+    if (S.tab === 'day' && hasFiles(e.dataTransfer) && !skDropAt(e.target)) setTab('column');
     dragDepth++;
     e.preventDefault();
   });
   // A task row takes a file dropped on it as an attachment, from the computer or from Column.
   const taskAt = (target) => { const tr = target?.closest?.('.task-row[data-id]'); return tr && taskById(tr.dataset.id) ? tr : null; };
   window.addEventListener('dragover', (e) => {
+    const sk = skDropAt(e.target) && (hasFiles(e.dataTransfer) || (S.internalDrag && ['file', 'text'].includes(S.dragItem?.it.type)));
+    $('#tool')?.classList.toggle('sk-over', !!sk);
+    if (sk) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'copy';
+      return;
+    }
     const fr = S.token && dirAt(e.target);
     document.querySelectorAll('#tool .dir-over').forEach((x) => x !== fr && x.classList.remove('dir-over'));
     if (fr && (hasFiles(e.dataTransfer) || (S.internalDrag && S.dragItem && !S.dragItem.it.channelId))) {
@@ -1523,6 +1535,13 @@
     clearDropping();
     document.querySelectorAll('.task-row.file-over').forEach((x) => x.classList.remove('file-over'));
     document.querySelectorAll('#tool .dir-over').forEach((x) => x.classList.remove('dir-over'));
+    if (skDropAt(e.target)) {
+      const it = columnDragged(e);
+      S.internalDrag = false;
+      S.dragItem = null;
+      if (it || hasFiles(e.dataTransfer)) skDrop(it ? [] : [...e.dataTransfer.files], it ? [it] : []);
+      return;
+    }
     const fr = S.token && dirAt(e.target);
     if (fr) {
       const it = S.internalDrag && S.dragItem?.it;
@@ -1539,8 +1558,7 @@
     const tr = S.token && taskAt(e.target);
     if (tr) {
       const t = taskById(tr.dataset.id);
-      // Something dragged out of Column is attached as it is, not uploaded again (the desktop app drags a copy).
-      const fromColumn = S.dragItem && Date.now() - S.dragItem.at < 60_000 && (S.internalDrag || [...(e.dataTransfer.files || [])].some((f) => f.name === S.dragItem.it.name)) ? S.dragItem.it : null;
+      const fromColumn = columnDragged(e);
       S.internalDrag = false;
       S.dragItem = null;
       if (fromColumn) return attachToTask(t, [], [fromColumn]);
@@ -7356,20 +7374,35 @@
   }
   // Files for Sidekick to read while planning: from this device or from Column. The plan keeps its own copies.
   const SK_READS = /\.(pdf|png|jpe?g|gif|webp|docx|xlsx|pptx|txt|md|csv|tsv|json|html?|xml|ya?ml|log)$/i;
-  async function skUpload(x, files) {
+  // Adds files from this device and things from Column; returns the names that made it.
+  async function skUpload(x, files, items = []) {
     SK.busy = true;
     renderTool(true);
+    const added = [];
+    const took = (y) => { S.sidekick = [y, ...S.sidekick.filter((z) => z.id !== y.id)]; added.push(y.files.at(-1).name); };
     try {
       for (const f of files) {
         const res = await fetch(`/api/sidekick/${x.id}/files?name=${encodeURIComponent(f.name)}&type=${encodeURIComponent(f.type)}`, { method: 'PUT', headers: { Authorization: 'Bearer ' + S.token }, body: f });
         const y = await res.json().catch(() => ({}));
         if (!res.ok) { toast(y.error || `Couldn’t add ${f.name}`); continue; }
-        S.sidekick = [y, ...S.sidekick.filter((z) => z.id !== y.id)];
+        took(y);
       }
+      for (const it of items) await api('POST', `/sidekick/${x.id}/files`, { itemId: it.id }).then(took, (e) => toast(e.message));
     } finally {
       SK.busy = false;
       renderTool(true);
     }
+    return added;
+  }
+  // Dropped on the chat: added to the plan, and Sidekick reads them and says what it makes of them.
+  async function skDrop(files, items) {
+    const x = SK.open && skById(SK.open);
+    if (!x) return toast('Open a plan or start one, then drop files on it.');
+    if (SK.busy) return toast('Sidekick is still thinking. Drop it again in a moment.');
+    const added = await skUpload(x, files, items);
+    if (!added.length) return;
+    const text = `I added ${added.join(', ')}. Read ${added.length === 1 ? 'it' : 'them'} and tell me what matters for this plan.`;
+    skCall('POST', `/sidekick/${x.id}/say`, { text, attached: added });
   }
   function skPickFromColumn(x) {
     const q = h('input', { placeholder: 'Search files and notes', spellcheck: 'false' });
@@ -7411,7 +7444,7 @@
         h('span', { class: 'sk-file-n' }, f.name),
         h('button', { class: 'sk-file-x', 'aria-label': 'Remove ' + f.name, disabled: SK.busy, onclick: () => remove(f) }, '×'))),
       h('button', { class: 'btn small sk-attach', disabled: SK.busy || files.length >= 12, onclick: add, title: 'PDFs, images, Word, Excel, PowerPoint or text files for Sidekick to plan from' },
-        h('span', { class: 'sk-clip', html: I.clip }), files.length ? 'Add' : 'Add files for Sidekick to read'));
+        h('span', { class: 'sk-clip', html: I.clip }), files.length ? 'Add' : 'Add or drop files for Sidekick to read'));
   }
   function skView(x) {
     const c = campById(x.campaignId);
@@ -7442,7 +7475,7 @@
       x.nudge && x.status !== 'done' ? h('div', { class: 'sk-nudge-bar' }, h('span', {}, 'Behind pace: ' + x.nudge.text), h('button', { class: 'btn small', disabled: SK.busy, onclick: () => skCall('POST', `/sidekick/${x.id}/say`, { text: 'We’re behind. What should change?' }) }, 'Talk it through')) : null,
       h('div', { class: 'sk-chat' },
         x.messages.filter((m) => !(m.role === 'user' && x.messages.indexOf(m) === 0)).map((m) => m.role === 'user'
-          ? h('div', { class: 'sk-msg me' }, m.check ? '✓ Check my plan' : m.text)
+          ? h('div', { class: 'sk-msg me' }, m.check ? '✓ Check my plan' : m.attached ? m.attached.map((n) => h('span', { class: 'sk-sent-file' }, h('span', { class: 'sk-clip', html: I.clip }), n)) : m.text)
           : h('div', { class: 'sk-msg' }, h('div', { class: 'sk-text' }, m.text), (m.cards || []).length ? h('div', { class: 'sk-cards' }, m.cards.map((cd) => skCardEl(x, cd))) : null)),
         SK.busy ? h('div', { class: 'sk-msg sk-thinking' }, 'Thinking…') : null,
         h('span', { class: 'sk-end' })),
