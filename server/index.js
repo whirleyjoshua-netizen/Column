@@ -13,6 +13,7 @@ import { streamZip, zipSize } from './zip.js';
 import { iconPng } from './png.js';
 import { providers as calProviders } from './calendar.js';
 import { llms, llmError, complete } from './llm.js';
+import { fileText, officeKind } from './extract.js';
 import { PdfError, stampPdf, addCertificate, pageCount, writeDoc } from './pdf.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -2400,10 +2401,12 @@ function skContext(ws, auth, x, today) {
   const mine = Object.values(db.entries).filter((e) => e.wsId === ws.id && e.memberId === auth.memberId && e.start != null && (e.repeat || (e.date >= today && e.date <= addDays(today, 14))));
   const fmt = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
   const c = x.campaignId && db.campaigns[x.campaignId];
+  const files = x.files || [];
   const lines = [
     `Today is ${today} (${new Date(today + 'T12:00:00Z').toLocaleDateString('en-US', { weekday: 'long', timeZone: 'UTC' })}). The person is ${auth.member}${auth.role === 'owner' ? ', a team owner' : ''}.`,
     camps.length ? `Campaigns already in Column: ${camps.slice(0, 30).map((c) => `${c.name} (${c.status})`).join('; ')}.` : 'No campaigns yet.',
     p ? `PSS (their website's leads) is connected: ${p.leads?.length || 0} leads. By stage: ${count('stage')}. By city: ${count('city')}. By source: ${count('source')}.` : 'PSS isn’t connected, so there are no leads to pull in: prospects would have to be found or imported.',
+    files.length ? `They attached files for this plan: ${files.map((f) => f.name).join('; ')}. They're at the start of the conversation. Plan from what they say (prices, offers, audience, past numbers, scripts) instead of asking for it again, and say which file a fact came from.` : '',
     mine.length ? `Their Day for the next two weeks (busy times):\n${mine.slice(0, 80).map((e) => `- ${e.repeat ? 'repeats ' + e.repeat + ' from ' + e.date : e.date} ${fmt(e.start)}${e.end != null ? '–' + fmt(e.end) : ''} ${clipText(e.text, 60)}`).join('\n')}` : 'Nothing on their Day in the next two weeks.',
   ];
   if (c) {
@@ -2422,7 +2425,65 @@ function skContext(ws, auth, x, today) {
       money ? `Money: spent $${Math.round(money.spent / 100)}, brought in $${Math.round(money.earned / 100)}.` : '',
     ].filter(Boolean).join('\n'));
   }
-  return lines.join('\n\n');
+  return lines.filter(Boolean).join('\n\n');
+}
+// Files a plan reads from. Each plan keeps its own copy, so auto-clear or a delete in the column can't take
+// them away. Word, Excel, PowerPoint and text files are kept as their words; PDFs and images go to the AI whole.
+// The total stays under what every provider takes in one request.
+const SK_FILES = 12;
+const SK_FILE_MAX = 10 * 1024 * 1024;
+const SK_TOTAL_MAX = 14 * 1024 * 1024;
+const SK_TEXT_MAX = 80_000; // characters of one file the AI reads
+const SK_TEXT_ALL = 200_000; // and of all of them together
+const skPath = (f) => path.join(FILES_DIR, 'sk-' + f.id);
+const skBad = (msg) => Object.assign(new Error(msg), { status: 400 });
+function skFileKind(name, mime) {
+  if (/^image\/(png|jpeg|gif|webp)$/.test(mime)) return 'image';
+  if (mime === 'application/pdf') return 'pdf';
+  if (officeKind(name) || isTextFile({ name, mime })) return 'text';
+  return null;
+}
+async function skAddFile(x, name, mime, buf) {
+  const kind = skFileKind(name, mime);
+  if (!kind) throw skBad('Sidekick reads PDFs, images, and Word, Excel, PowerPoint and text files.');
+  if ((x.files || []).length >= SK_FILES) throw skBad(`A plan can have ${SK_FILES} files. Remove one first.`);
+  if (buf.length > SK_FILE_MAX) throw skBad('Keep each file under 10 MB.');
+  let data = buf;
+  let chars = null;
+  if (kind === 'text') {
+    let text;
+    try {
+      text = fileText(buf, name);
+    } catch {
+      throw skBad(`Column couldn’t read ${name}.`);
+    }
+    if (!text.trim()) throw skBad(`${name} has no text Sidekick can read.`);
+    data = Buffer.from(text, 'utf8');
+    chars = text.length;
+  }
+  if ((x.files || []).reduce((n, f) => n + f.size, 0) + data.length > SK_TOTAL_MAX) throw skBad('A plan’s files can add up to 14 MB. Remove one first.');
+  const f = { id: rid(), name: cleanName(name).slice(0, 200), mime: kind === 'text' ? 'text/plain' : mime, kind, size: data.length, chars, addedAt: Date.now() };
+  await fsp.writeFile(skPath(f), data);
+  x.files = [...(x.files || []), f];
+  return f;
+}
+// The plan's files, ready for the AI.
+async function skFiles(x) {
+  let room = SK_TEXT_ALL;
+  const out = [];
+  for (const f of x.files || []) {
+    const buf = await fsp.readFile(skPath(f)).catch(() => null);
+    if (!buf) continue;
+    if (f.kind !== 'text') {
+      out.push({ name: f.name, mime: f.mime, data: buf.toString('base64') });
+      continue;
+    }
+    const all = buf.toString('utf8');
+    const text = all.slice(0, Math.min(SK_TEXT_MAX, room));
+    room -= text.length;
+    if (text) out.push({ name: f.name, text: text.length < all.length ? text + '\n\n[The rest of this file was too long to include.]' : text });
+  }
+  return out;
 }
 const SK_SYSTEM = (kind, built) => [
   'You are Sidekick, the planning partner inside Column, a work app for a small business: it has campaigns (each with goals, and tasks under the goals, call lists, a log of calls and emails, and notes), a Day schedule, and Finance (money in and out, budgets).',
@@ -2448,6 +2509,9 @@ async function skTurn(ws, auth, x, today, say) {
   const cardLine = (c) => `[${c.state}] ${c.type}: ${c.name || c.title || c.text || c.category || ''}${c.type === 'goal' && c.target ? ' · target ' + c.target : ''}${c.type === 'block' ? ` · ${c.date} ${c.start}-${c.end}${c.repeat ? ' ' + c.repeat : ''}` : ''}`;
   const history = x.messages.slice(-30).map((m) => ({ role: m.role, text: m.role === 'assistant' ? JSON.stringify({ reply: m.text, cards: (m.cards || []).map(cardLine) }) : m.text }));
   history.push({ role: 'user', text: `${say}\n\n(Context, not from the person)\n${skContext(ws, auth, x, today)}` });
+  // The files ride on the first message, so they come before the conversation about them.
+  const files = await skFiles(x);
+  if (files.length) history.find((m) => m.role === 'user').files = files;
   let out;
   try {
     out = await llms[use.provider].run({ key: unseal(ai.keys[use.provider].sealed).key, model: use.model, system: SK_SYSTEM(x.kind, !!x.campaignId || x.status === 'built') + brandPrompt(ws), history, tools: [], web: false, exec: () => Promise.reject(new Error('No tools')) });
@@ -3096,6 +3160,27 @@ async function api(req, res, url) {
   if (a === 'sidekick') {
     const mine = () => Object.values(db.sidekick).filter((x) => x.wsId === ws.id && x.memberId === auth.memberId);
     if (m === 'GET' && !b) return send(res, 200, mine().sort((p, q) => q.updatedAt - p.updatedAt).map(publicSidekick));
+    // A file from this device, sent as it is.
+    if (m === 'PUT' && c === 'files') {
+      const x = db.sidekick[b];
+      if (!x || x.wsId !== ws.id || x.memberId !== auth.memberId || Number(req.headers['content-length']) > SK_FILE_MAX) {
+        req.resume();
+        return x ? send(res, 400, { error: 'Keep each file under 10 MB.' }) : send(res, 404, { error: 'Not found' });
+      }
+      const chunks = [];
+      let size = 0;
+      for await (const chunk of req) {
+        size += chunk.length;
+        if (size > SK_FILE_MAX) throw skBad('Keep each file under 10 MB.');
+        chunks.push(chunk);
+      }
+      const name = cleanName(url.searchParams.get('name'));
+      await skAddFile(x, name, mimeFor(name, url.searchParams.get('type')), Buffer.concat(chunks));
+      x.updatedAt = Date.now();
+      save();
+      skNews(x);
+      return send(res, 200, publicSidekick(x));
+    }
     const body = m === 'GET' || m === 'DELETE' ? {} : await readJson(req, 200_000);
     const today = isDay(body.today) ? body.today : fmtDay(Date.now());
     if (m === 'POST' && !b) {
@@ -3103,7 +3188,7 @@ async function api(req, res, url) {
       const camp = body.campaignId && db.campaigns[body.campaignId];
       const ok = camp && camp.wsId === ws.id && canSee(auth, 'campaign', camp);
       const kind = ok || body.kind !== 'schedule' ? 'campaign' : 'schedule';
-      const x = { id: rid(), wsId: ws.id, memberId: auth.memberId, createdAt: Date.now(), updatedAt: Date.now(), kind, title: ok ? camp.name : kind === 'schedule' ? 'New schedule' : 'New campaign plan', status: ok ? 'built' : 'talking', campaignId: ok ? camp.id : null, entryIds: [], messages: [], nudge: null };
+      const x = { id: rid(), wsId: ws.id, memberId: auth.memberId, createdAt: Date.now(), updatedAt: Date.now(), kind, title: ok ? camp.name : kind === 'schedule' ? 'New schedule' : 'New campaign plan', status: ok ? 'built' : 'talking', campaignId: ok ? camp.id : null, entryIds: [], messages: [], files: [], nudge: null };
       await skTurn(ws, auth, x, today, ok ? `I want to talk about how “${camp.name}” is going.` : kind === 'schedule' ? 'I want to plan my schedule.' : 'I want to plan a campaign.');
       x.messages[0].opener = true;
       db.sidekick[x.id] = x;
@@ -3124,6 +3209,27 @@ async function api(req, res, url) {
         x.messages.pop();
         throw e;
       }
+      save();
+      skNews(x);
+      return send(res, 200, publicSidekick(x));
+    }
+    // Something already in Column: a file, or a note's text.
+    if (m === 'POST' && c === 'files' && !d) {
+      const it = db.items[body.itemId];
+      if (!it || it.wsId !== ws.id || !['file', 'text'].includes(it.type) || !canSee(auth, 'item', it)) return send(res, 404, { error: 'That file is gone.' });
+      if (it.type === 'text') await skAddFile(x, (it.text.trim().split('\n')[0].slice(0, 60).trim() || 'Note') + '.txt', 'text/plain', Buffer.from(it.text, 'utf8'));
+      else await skAddFile(x, it.name, it.mime, await fsp.readFile(path.join(FILES_DIR, it.id)));
+      x.updatedAt = Date.now();
+      save();
+      skNews(x);
+      return send(res, 200, publicSidekick(x));
+    }
+    if (m === 'DELETE' && c === 'files' && d) {
+      const f = (x.files || []).find((y) => y.id === d);
+      if (!f) return send(res, 404, { error: 'Not found' });
+      x.files = x.files.filter((y) => y !== f);
+      fsp.rm(skPath(f), { force: true }).catch(() => {});
+      x.updatedAt = Date.now();
       save();
       skNews(x);
       return send(res, 200, publicSidekick(x));
@@ -3159,6 +3265,7 @@ async function api(req, res, url) {
       return send(res, 200, publicSidekick(x));
     }
     if (m === 'DELETE' && !c) {
+      for (const f of x.files || []) fsp.rm(skPath(f), { force: true }).catch(() => {});
       delete db.sidekick[x.id];
       save();
       broadcast(ws.id, { type: 'sidekick:remove', id: x.id, forMember: x.memberId });

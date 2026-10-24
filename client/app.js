@@ -7354,6 +7354,65 @@
       renderTool(true);
     }, 'Save and accept');
   }
+  // Files for Sidekick to read while planning: from this device or from Column. The plan keeps its own copies.
+  const SK_READS = /\.(pdf|png|jpe?g|gif|webp|docx|xlsx|pptx|txt|md|csv|tsv|json|html?|xml|ya?ml|log)$/i;
+  async function skUpload(x, files) {
+    SK.busy = true;
+    renderTool(true);
+    try {
+      for (const f of files) {
+        const res = await fetch(`/api/sidekick/${x.id}/files?name=${encodeURIComponent(f.name)}&type=${encodeURIComponent(f.type)}`, { method: 'PUT', headers: { Authorization: 'Bearer ' + S.token }, body: f });
+        const y = await res.json().catch(() => ({}));
+        if (!res.ok) { toast(y.error || `Couldn’t add ${f.name}`); continue; }
+        S.sidekick = [y, ...S.sidekick.filter((z) => z.id !== y.id)];
+      }
+    } finally {
+      SK.busy = false;
+      renderTool(true);
+    }
+  }
+  function skPickFromColumn(x) {
+    const q = h('input', { placeholder: 'Search files and notes', spellcheck: 'false' });
+    const list = h('div', { class: 'sk-pick' });
+    const chosen = new Set();
+    const all = S.items.filter((it) => (it.type === 'file' && SK_READS.test(it.name)) || (it.type === 'text' && it.text?.trim())).sort((a, b) => b.createdAt - a.createdAt);
+    const label = (it) => (it.type === 'text' ? it.text.trim().split('\n')[0].slice(0, 80) : it.name);
+    const draw = () => {
+      const s = q.value.trim().toLowerCase();
+      const hits = all.filter((it) => !s || label(it).toLowerCase().includes(s)).slice(0, 60);
+      list.replaceChildren(...(hits.length ? hits.map((it) => {
+        const box = h('input', { type: 'checkbox', checked: chosen.has(it.id), onchange: () => (box.checked ? chosen.add(it.id) : chosen.delete(it.id)) });
+        return h('label', { class: 'sk-pick-row' }, box, h('span', {}, label(it)), h('small', {}, it.type === 'text' ? 'Note' : fmtSize(it.size)));
+      }) : [h('p', { class: 'day-hint' }, s ? 'Nothing matches.' : 'No files or notes in Column yet.')]));
+    };
+    q.addEventListener('input', draw);
+    draw();
+    sheet('Add from Column', [q, list], async () => {
+      for (const id of chosen) {
+        const y = await api('POST', `/sidekick/${x.id}/files`, { itemId: id });
+        S.sidekick = [y, ...S.sidekick.filter((z) => z.id !== y.id)];
+      }
+      renderTool(true);
+    }, 'Add');
+  }
+  function skFilesBar(x) {
+    const files = x.files || [];
+    const input = h('input', { type: 'file', multiple: true, class: 'hidden', accept: '.pdf,.png,.jpg,.jpeg,.gif,.webp,.docx,.xlsx,.pptx,.txt,.md,.csv,.tsv,.json,.html', onchange: (e) => { const f = [...e.target.files]; e.target.value = ''; if (f.length) skUpload(x, f); } });
+    const add = (e) => openMenu(e.currentTarget, [
+      { label: 'From this device…', run: () => input.click() },
+      { label: 'From Column…', run: () => skPickFromColumn(x) },
+    ]);
+    const remove = async (f) => {
+      const y = await api('DELETE', `/sidekick/${x.id}/files/${f.id}`).catch((er) => toast(er.message));
+      if (y) { S.sidekick = [y, ...S.sidekick.filter((z) => z.id !== y.id)]; renderTool(true); }
+    };
+    return h('div', { class: 'sk-files' }, input,
+      files.map((f) => h('span', { class: 'sk-file', title: f.chars > 80_000 ? 'Long file: Sidekick reads the first part' : f.name },
+        h('span', { class: 'sk-file-n' }, f.name),
+        h('button', { class: 'sk-file-x', 'aria-label': 'Remove ' + f.name, disabled: SK.busy, onclick: () => remove(f) }, '×'))),
+      h('button', { class: 'btn small sk-attach', disabled: SK.busy || files.length >= 12, onclick: add, title: 'PDFs, images, Word, Excel, PowerPoint or text files for Sidekick to plan from' },
+        h('span', { class: 'sk-clip', html: I.clip }), files.length ? 'Add' : 'Add files for Sidekick to read'));
+  }
   function skView(x) {
     const c = campById(x.campaignId);
     const cards = skCards(x);
@@ -7379,6 +7438,7 @@
         h('b', {}, x.title),
         c ? h('button', { class: 'btn small', onclick: () => { closeTool(); setTab('camps'); openCampaign(c.id); } }, 'Open campaign') : x.entryIds.length ? h('button', { class: 'btn small', onclick: () => { closeTool(); setTab('day'); } }, 'Open Day') : null,
         h('button', { class: 'icon-btn', 'aria-label': 'Options', html: I.more, onclick: menu })),
+      skFilesBar(x),
       x.nudge && x.status !== 'done' ? h('div', { class: 'sk-nudge-bar' }, h('span', {}, 'Behind pace: ' + x.nudge.text), h('button', { class: 'btn small', disabled: SK.busy, onclick: () => skCall('POST', `/sidekick/${x.id}/say`, { text: 'We’re behind. What should change?' }) }, 'Talk it through')) : null,
       h('div', { class: 'sk-chat' },
         x.messages.filter((m) => !(m.role === 'user' && x.messages.indexOf(m) === 0)).map((m) => m.role === 'user'

@@ -3,13 +3,16 @@
 // plain case: one prompt in, text out, no tools.
 //
 // run({ key, model, system, history, tools, web, exec, onStep }) -> { text, refused? }
-//   history: [{ role: 'user' | 'assistant', text }], ending with the new user message
+//   history: [{ role: 'user' | 'assistant', text, files? }], ending with the new user message
+//   files:   [{ name, text }] read as text, or [{ name, mime, data }] (base64 PDF or image) read whole
 //   tools:   [{ name, description, parameters }] (JSON Schema), run with exec(name, args) -> result
 //   web:     let the agent search the web
 import Anthropic from '@anthropic-ai/sdk';
 
 const MAX_STEPS = 16;
 const clip = (s, n) => (s.length > n ? s.slice(0, n) + '…' : s);
+const isPdf = (f) => f.mime === 'application/pdf';
+const fileHeading = (f) => `File: ${f.name}\n\n${f.text}`;
 const toolResult = async (exec, name, args, onStep) => {
   onStep?.(name);
   try {
@@ -39,7 +42,16 @@ const claude = {
     const client = new Anthropic({ apiKey: key, maxRetries: 2 });
     const defs = tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.parameters }));
     if (web) defs.push({ type: WEB_SEARCH_NEW.test(model) ? 'web_search_20260209' : 'web_search_20250305', name: 'web_search', max_uses: 5 });
-    const messages = history.map((m) => ({ role: m.role, content: m.text }));
+    // Files are cached with the system prompt, so a long conversation about them doesn't pay for them each turn.
+    const messages = history.map((m) => {
+      if (!m.files?.length) return { role: m.role, content: m.text };
+      const blocks = m.files.map((f) => (f.text != null
+        ? { type: 'document', source: { type: 'text', media_type: 'text/plain', data: f.text }, title: f.name }
+        : isPdf(f) ? { type: 'document', source: { type: 'base64', media_type: f.mime, data: f.data }, title: f.name }
+        : { type: 'image', source: { type: 'base64', media_type: f.mime, data: f.data } }));
+      blocks.at(-1).cache_control = { type: 'ephemeral' };
+      return { role: m.role, content: [...blocks, { type: 'text', text: m.text }] };
+    });
     let text = '';
     for (let step = 0; step < MAX_STEPS; step++) {
       const params = { model, max_tokens: 16000, system, ...(defs.length ? { tools: defs } : {}), messages, ...(HAS_EFFORT.test(model) ? { output_config: { effort: 'medium' } } : {}) };
@@ -86,7 +98,12 @@ const openai = {
   async run({ key, model, system, history, tools, web, exec, onStep }) {
     const defs = tools.map((t) => ({ type: 'function', name: t.name, description: t.description, parameters: t.parameters }));
     if (web) defs.push({ type: 'web_search' });
-    let input = history.map((m) => ({ role: m.role, content: m.text }));
+    let input = history.map((m) => (m.files?.length ? {
+      role: m.role,
+      content: [...m.files.flatMap((f) => (f.text != null ? [{ type: 'input_text', text: fileHeading(f) }]
+        : isPdf(f) ? [{ type: 'input_file', filename: f.name, file_data: `data:${f.mime};base64,${f.data}` }]
+        : [{ type: 'input_text', text: `File: ${f.name}` }, { type: 'input_image', image_url: `data:${f.mime};base64,${f.data}` }])), { type: 'input_text', text: m.text }],
+    } : { role: m.role, content: m.text }));
     let prev = null;
     let text = '';
     for (let step = 0; step < MAX_STEPS; step++) {
@@ -140,7 +157,10 @@ const gemini = {
   async run({ key, model, system, history, tools, web, exec, onStep }) {
     const all = web ? [...tools, WEB_TOOL] : tools;
     const run = (name, args) => (name === 'web_search' ? gemini.search(key, model, args.query) : exec(name, args));
-    const contents = history.map((m) => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.text }] }));
+    const contents = history.map((m) => ({
+      role: m.role === 'assistant' ? 'model' : 'user',
+      parts: [...(m.files || []).flatMap((f) => (f.text != null ? [{ text: fileHeading(f) }] : [{ text: `File: ${f.name}` }, { inlineData: { mimeType: f.mime, data: f.data } }])), { text: m.text }],
+    }));
     let text = '';
     for (let step = 0; step < MAX_STEPS; step++) {
       const d = await geminiCall(key, `/models/${model}:generateContent`, {
