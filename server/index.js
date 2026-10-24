@@ -40,6 +40,7 @@ for (const ws of Object.values(db.workspaces)) {
   ws.channels ||= [];
   ws.chatFolders ||= [];
   ws.dirs ||= [];
+  ws.roles ||= [];
   // Feeds became invite-only: everyone already on the team keeps the feeds they had.
   const owner = ws.members?.find((m) => m.role === 'owner');
   for (const ch of ws.channels) {
@@ -219,7 +220,7 @@ function signOutMember(ws, memberId) {
   for (const [tok, sess] of Object.entries(db.tokens)) if (sess.memberId === memberId) delete db.tokens[tok];
   for (const s of sockets.get(ws.id) || []) if (s.meta.memberId === memberId) s.close(4001, 'Signed out');
 }
-const publicMember = (m) => ({ id: m.id, name: m.name, role: m.role, hasPassword: !!m.hash });
+const publicMember = (m) => ({ id: m.id, name: m.name, role: m.role, roleIds: m.roleIds || [], hasPassword: !!m.hash });
 
 // A private campaign's feed and stack are hidden from people outside it, and so is a feed you weren't invited to.
 const publicWorkspace = (ws, memberId) => ({
@@ -231,6 +232,7 @@ const publicWorkspace = (ws, memberId) => ({
   chatFolders: ws.chatFolders,
   dirs: ws.dirs.filter((d) => seesDir(ws, d.id, memberId)),
   members: ws.members.map(publicMember),
+  roles: ws.roles || [],
   inviteCode: ws.inviteCode,
   brand: publicBrand(ws),
 });
@@ -376,6 +378,10 @@ function applyTask(t, body) {
     t.runId = id && db.lists[t.listId]?.runs?.some((r) => r.id === id) ? id : null;
   }
   if (body.assigneeId !== undefined) t.assigneeId = body.assigneeId && db.workspaces[t.wsId]?.members.some((m) => m.id === body.assigneeId) ? body.assigneeId : null;
+  // Or a role: whoever on the team does that kind of work. A task goes to a person or a role, not both.
+  if (body.roleId !== undefined) t.roleId = body.roleId && db.workspaces[t.wsId]?.roles?.some((r) => r.id === body.roleId) ? body.roleId : null;
+  if (body.assigneeId && t.assigneeId) t.roleId = null;
+  else if (body.roleId && t.roleId) t.assigneeId = null;
   if (body.report !== undefined) t.report = !!body.report;
   // Files attached to it, like the finished list a "Provide a list of…" task asked for. Items in the same team.
   if (body.files !== undefined) t.files = [...new Set((Array.isArray(body.files) ? body.files : []).filter((id) => typeof id === 'string' && db.items[id]?.wsId === t.wsId))].slice(0, 20);
@@ -2287,6 +2293,30 @@ async function processMeeting(x) {
 }
 
 // Goals and tasks drafted from the brief, for the person to tick and add.
+// The team as the AI sees it: who's on it and what each role handles, so it can say who should do a task.
+function teamLine(ws, memberId) {
+  const roles = ws.roles || [];
+  if (ws.members.length < 2 && !roles.length) return '';
+  const who = ws.members.map((mb) => {
+    const rs = (mb.roleIds || []).map((id) => roles.find((r) => r.id === id)?.name).filter(Boolean);
+    return `${mb.name}${mb.id === memberId ? ' (the person you’re helping)' : ''}${rs.length ? ': ' + rs.join(', ') : ''}`;
+  });
+  return `The team: ${who.join('; ')}.` + (roles.length ? ` Roles: ${roles.map((r) => r.name + (r.about ? ` (${r.about})` : '')).join('; ')}.` : '');
+}
+// And back: the name the AI gave for who does a task, as a role (preferred) or a person.
+function whoOf(ws, name) {
+  const n = String(name || '').trim().toLowerCase();
+  if (!n) return {};
+  const r = (ws.roles || []).find((x) => x.name.toLowerCase() === n);
+  if (r) return { roleId: r.id };
+  const mb = ws.members.find((x) => x.name.toLowerCase() === n);
+  return mb ? { assigneeId: mb.id } : {};
+}
+// On a card being edited, who it's for is already an id; keep it if it's still on the team.
+const whoOfCard = (ws, x) => (x?.roleId && (ws.roles || []).some((r) => r.id === x.roleId) ? { roleId: x.roleId }
+  : x?.assigneeId && ws.members.some((mb) => mb.id === x.assigneeId) ? { assigneeId: x.assigneeId } : whoOf(ws, x?.who));
+const WHO_RULE = 'When a team is given, say who should do each task in "who": a role name exactly as given (preferred, so anyone in it can pick it up) or a person’s name exactly as given, matched to what they handle; otherwise null.';
+
 async function aiPlan(ws, auth, c, body) {
   if (!c.brief.trim()) throw badRequest('Write a brief first: the plan is made from it.');
   const today = isDay(body.today) ? body.today : fmtDay(Date.now());
@@ -2301,13 +2331,14 @@ async function aiPlan(ws, auth, c, body) {
     lists.length ? `Call lists: ${lists.map((l) => `${l.name} (${l.rows.length} prospects)`).join(', ')}.` : '',
     goals.length ? `Goals it already has (don't repeat them):\n${goals.map((g) => `- ${g.title}`).join('\n')}` : '',
     tasks.length ? `Tasks it already has (don't repeat them):\n${tasks.slice(0, 80).map((t) => `- ${clipText(t.text, 150)}`).join('\n')}` : '',
+    teamLine(ws, auth.memberId),
   ].filter(Boolean).join('\n\n');
   const text = await aiAsk(ws, auth.memberId,
     'You turn a campaign brief into a practical plan of goals and tasks. A goal is either "tasks" (done when its tasks are) or "count" ' +
     '(a number of logged calls or emails to reach, with a target, optionally only some outcomes or methods). Suggest 2 to 5 goals, ' +
     'each with 1 to 6 concrete tasks a person can do in one sitting, phrased as actions. Give due dates (YYYY-MM-DD) within the campaign’s ' +
-    'dates, from today on, when timing matters; otherwise null. Stick to what the brief supports: never invent leads, contacts or facts. ' +
-    'Reply with JSON only, in this shape: {"goals":[{"title":"","kind":"tasks"|"count","target":null|number,"outcomes":[],"methods":[],"due":null|"YYYY-MM-DD","tasks":[{"text":"","due":null|"YYYY-MM-DD"}]}]}',
+    'dates, from today on, when timing matters; otherwise null. Stick to what the brief supports: never invent leads, contacts or facts. ' + WHO_RULE + ' ' +
+    'Reply with JSON only, in this shape: {"goals":[{"title":"","kind":"tasks"|"count","target":null|number,"outcomes":[],"methods":[],"due":null|"YYYY-MM-DD","tasks":[{"text":"","due":null|"YYYY-MM-DD","who":null|""}]}]}',
     prompt);
   const day = (v) => (isDay(v) && v >= today && (!c.end || v <= c.end) ? v : null);
   const out = (Array.isArray(replyJson(text).goals) ? replyJson(text).goals : []).slice(0, 6).map((g) => ({
@@ -2317,7 +2348,7 @@ async function aiPlan(ws, auth, c, body) {
     counts: Array.isArray(g?.outcomes) ? g.outcomes.filter((o) => c.outcomes.includes(o)) : [],
     methods: Array.isArray(g?.methods) ? g.methods.filter((o) => (c.methods || []).includes(o)) : [],
     due: day(g?.due),
-    tasks: (Array.isArray(g?.tasks) ? g.tasks : []).slice(0, 8).map((t) => ({ text: clipText(String(t?.text || '').trim(), 300), due: day(t?.due) })).filter((t) => t.text),
+    tasks: (Array.isArray(g?.tasks) ? g.tasks : []).slice(0, 8).map((t) => ({ text: clipText(String(t?.text || '').trim(), 300), due: day(t?.due), ...whoOf(ws, t?.who) })).filter((t) => t.text),
   })).filter((g) => g.title);
   if (!out.length) throw Object.assign(new Error('The AI didn’t suggest anything. Add more to the brief and try again.'), { status: 502 });
   return { goals: out };
@@ -2344,7 +2375,7 @@ function skCard(v, ws) {
   if (type === 'goal') Object.assign(c, {
     title: t(v.title, 200), kind: ['count', 'money'].includes(v.kind) ? v.kind : 'tasks',
     target: v.kind === 'count' || v.kind === 'money' ? Math.max(1, Math.min(10_000_000, Math.round(Number(String(v.target).replace(/[$,]/g, ''))) || 10)) : null,
-    due: skDay(v.due), tasks: (Array.isArray(v.tasks) ? v.tasks : []).slice(0, 12).map((x) => ({ text: t(x?.text, 300), due: skDay(x?.due) })).filter((x) => x.text),
+    due: skDay(v.due), tasks: (Array.isArray(v.tasks) ? v.tasks : []).slice(0, 12).map((x) => ({ text: t(x?.text, 300), due: skDay(x?.due), ...whoOfCard(ws, x) })).filter((x) => x.text),
   });
   if (type === 'list') {
     if (!db.pss[ws.id]) return null;
@@ -2353,7 +2384,7 @@ function skCard(v, ws) {
   if (type === 'note') Object.assign(c, { title: t(v.title, 120), text: t(v.text, 8000) });
   if (type === 'budget') Object.assign(c, { category: t(v.category, 40), limit: Math.max(1, Math.min(1e9, Math.round(Number(String(v.limit).replace(/[$,]/g, ''))) || 0)) });
   if (type === 'block') Object.assign(c, { text: t(v.text, 200), date: skDay(v.date), start: skMin(v.start, 1439), end: skMin(v.end, 1440), repeat: REPEATS.includes(v.repeat) ? v.repeat : null });
-  if (type === 'task') Object.assign(c, { text: t(v.text, 300), due: skDay(v.due), goal: t(v.goal, 200) });
+  if (type === 'task') Object.assign(c, { text: t(v.text, 300), due: skDay(v.due), goal: t(v.goal, 200), ...whoOfCard(ws, v) });
   if (type === 'change') Object.assign(c, { text: t(v.text, 300), goalId: db.goals[v.goalId]?.wsId === ws.id ? v.goalId : null, due: skDay(v.due), target: Number(v.target) > 0 ? Math.round(Number(v.target)) : null, end: skDay(v.end) });
   const empty = { campaign: !c.name, goal: !c.title, note: !c.text, budget: !c.category || !c.limit, block: !c.text || !c.date || c.start == null || c.end == null || c.end <= c.start, task: !c.text, change: !c.text || (!c.goalId && !c.end) }[type];
   return empty ? null : c;
@@ -2404,6 +2435,7 @@ function skContext(ws, auth, x, today) {
   const files = x.files || [];
   const lines = [
     `Today is ${today} (${new Date(today + 'T12:00:00Z').toLocaleDateString('en-US', { weekday: 'long', timeZone: 'UTC' })}). The person is ${auth.member}${auth.role === 'owner' ? ', a team owner' : ''}.`,
+    teamLine(ws, auth.memberId),
     camps.length ? `Campaigns already in Column: ${camps.slice(0, 30).map((c) => `${c.name} (${c.status})`).join('; ')}.` : 'No campaigns yet.',
     p ? `PSS (their website's leads) is connected: ${p.leads?.length || 0} leads. By stage: ${count('stage')}. By city: ${count('city')}. By source: ${count('source')}.` : 'PSS isn’t connected, so there are no leads to pull in: prospects would have to be found or imported.',
     files.length ? `They attached files for this plan: ${files.map((f) => f.name).join('; ')}. They're at the start of the conversation. Plan from what they say (prices, offers, audience, past numbers, scripts) instead of asking for it again, and say which file a fact came from.` : '',
@@ -2493,14 +2525,15 @@ const SK_SYSTEM = (kind, built) => [
   built ? 'The plan is already built and running. Help them see how it’s going from the numbers given, say plainly what’s working and what isn’t and why, what could happen next, and propose changes. Keep it short.' : '',
   'Work like a sharp colleague brainstorming: ask one or two questions at a time, the ones that matter most, and don’t ask what the context already tells you. When you know enough, propose a path as cards. Explain briefly why each card helps. When asked to check the accepted cards, say honestly whether they add up to the goal (do the numbers work, is anything missing, is the time realistic) and propose what would fix it.',
   'Never invent leads, names, numbers or results. Use dates from today on, as YYYY-MM-DD. Times are minutes after midnight (9:00 = 540).',
+  WHO_RULE,
   'Reply with JSON only: {"reply":"what you say, plain text, short paragraphs, no markdown","title":"a short name for this plan, once you know it, else null","cards":[...]}. cards is often empty while you’re still asking. Card shapes:',
   '{"type":"campaign","name":"","brief":"the goal, audience and approach in a few lines","start":"YYYY-MM-DD","end":"YYYY-MM-DD","why":""}',
-  '{"type":"goal","title":"","kind":"tasks"|"count"|"money","target":number|null (count: logged calls or emails to reach; money: whole dollars),"due":"YYYY-MM-DD"|null,"tasks":[{"text":"an action for one sitting","due":"YYYY-MM-DD"|null}],"why":""}',
+  '{"type":"goal","title":"","kind":"tasks"|"count"|"money","target":number|null (count: logged calls or emails to reach; money: whole dollars),"due":"YYYY-MM-DD"|null,"tasks":[{"text":"an action for one sitting","due":"YYYY-MM-DD"|null,"who":null|"role or person"}],"why":""}',
   '{"type":"list","name":"","live":{"stages":[],"cities":[],"sources":[],"days":0|30|90|180|365,"need":"phone"|"email"|null},"why":""} — a prospect list pulled from PSS by filter, only if PSS is connected. Use stage, city and source values exactly as given.',
   '{"type":"note","title":"","text":"","why":""} — a call script, an email draft, a checklist, talking points.',
   '{"type":"budget","category":"","limit":whole dollars a month,"why":""}',
   '{"type":"block","text":"","date":"YYYY-MM-DD","start":540,"end":600,"repeat":null|"daily"|"weekdays"|"weekly"|"monthly","why":""} — time on their Day. Don’t overlap what’s already there.',
-  built ? '{"type":"task","text":"","due":"YYYY-MM-DD"|null,"goal":"the goal’s title it goes under","why":""} and {"type":"change","text":"what changes, in words","goalId":"id"|null,"due":"YYYY-MM-DD"|null,"target":number|null,"end":"YYYY-MM-DD"|null (the campaign’s new end),"why":""}' : '',
+  built ? '{"type":"task","text":"","due":"YYYY-MM-DD"|null,"goal":"the goal’s title it goes under","who":null|"role or person","why":""} and {"type":"change","text":"what changes, in words","goalId":"id"|null,"due":"YYYY-MM-DD"|null,"target":number|null,"end":"YYYY-MM-DD"|null (the campaign’s new end),"why":""}' : '',
 ].filter(Boolean).join('\n');
 async function skTurn(ws, auth, x, today, say) {
   const ai = aiOf(ws.id, auth.memberId);
@@ -2570,6 +2603,7 @@ async function api(req, res, url) {
         channels: [],
         chatFolders: [],
         dirs: [],
+        roles: [],
         members: [],
         inviteCode: newInviteCode(),
       };
@@ -2674,7 +2708,7 @@ async function api(req, res, url) {
     if (m === 'POST' && !b) {
       const t = applyTask({ id: rid(), wsId: ws.id, by: auth.member, createdAt: Date.now(), text: '', done: false, doneAt: null, due: null, priority: 0, goalId: null, assigneeId: null }, await readJson(req, 50_000));
       if (!canSee(auth, 'task', t)) return send(res, 404, { error: 'Goal not found' });
-      if (t.assigneeId) t.assignedBy = auth.memberId;
+      if (t.assigneeId || t.roleId) t.assignedBy = auth.memberId;
       db.tasks[t.id] = t;
       save();
       broadcast(ws.id, { type: 'task', task: publicTask(t) });
@@ -2693,7 +2727,7 @@ async function api(req, res, url) {
       if (body.unlocked !== undefined) next.unlocked = !!body.unlocked;
       if (!canSee(auth, 'task', next)) return send(res, 404, { error: 'Goal not found' });
       // Who handed it over, so the new assignee can be told.
-      if (next.assigneeId !== t.assigneeId) next.assignedBy = next.assigneeId ? auth.memberId : null;
+      if (next.assigneeId !== t.assigneeId || next.roleId !== t.roleId) next.assignedBy = next.assigneeId || next.roleId ? auth.memberId : null;
       db.tasks[t.id] = next;
       // Ticking off a come-back task ticks off its spot on the map.
       const pin = next.pinId && db.pins[next.pinId];
@@ -3765,6 +3799,44 @@ async function api(req, res, url) {
       return send(res, 200, { ok: true });
     }
     return send(res, 405, { error: 'Method not allowed' });
+  }
+
+  // Roles: the kinds of work people on the team do (Sales, Installs…), so work can be handed to a role.
+  // Separate from owner/member, which is about what someone may change. Owners set them up.
+  if (a === 'roles') {
+    if (auth.role !== 'owner') return send(res, 403, { error: 'Only team owners can change roles.' });
+    ws.roles ||= [];
+    const body = m === 'DELETE' ? {} : await readJson(req, 20_000);
+    const fill = (r) => {
+      if (body.name !== undefined) r.name = cleanText(body.name, 40);
+      if (body.about !== undefined) r.about = cleanText(body.about, 300);
+      if (!r.name) throw badRequest('Give the role a name.');
+      if (ws.roles.some((x) => x !== r && x.name.toLowerCase() === r.name.toLowerCase())) throw badRequest('There’s already a role with that name.');
+      return r;
+    };
+    if (m === 'POST' && !b) {
+      if (ws.roles.length >= 30) return send(res, 400, { error: 'A team can have up to 30 roles.' });
+      const r = fill({ id: rid(8), name: '', about: '' });
+      ws.roles.push(r);
+      if (Array.isArray(body.memberIds)) for (const mb of ws.members) if (body.memberIds.includes(mb.id)) mb.roleIds = [...(mb.roleIds || []), r.id];
+    } else {
+      const r = b && ws.roles.find((x) => x.id === b);
+      if (!r) return send(res, 404, { error: 'Not found' });
+      if (m === 'PATCH') {
+        fill(r);
+        if (Array.isArray(body.memberIds)) for (const mb of ws.members) mb.roleIds = [...(mb.roleIds || []).filter((id) => id !== r.id), ...(body.memberIds.includes(mb.id) ? [r.id] : [])];
+      } else if (m === 'DELETE') {
+        ws.roles = ws.roles.filter((x) => x !== r);
+        for (const mb of ws.members) mb.roleIds = (mb.roleIds || []).filter((id) => id !== r.id);
+        for (const t of Object.values(db.tasks)) if (t.wsId === ws.id && t.roleId === r.id) {
+          t.roleId = null;
+          broadcast(ws.id, { type: 'task', task: publicTask(t) });
+        }
+      } else return send(res, 405, { error: 'Method not allowed' });
+    }
+    save();
+    broadcast(ws.id, { type: 'workspace' });
+    return send(res, 200, publicWorkspace(ws, auth.memberId));
   }
 
   if (a === 'members') {

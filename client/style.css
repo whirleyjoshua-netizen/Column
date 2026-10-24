@@ -982,6 +982,8 @@ body.viewer .preview pre, body.viewer .preview .pv-edit, body.viewer .preview .d
 #tool.sk-over::before { content: 'Drop for Sidekick to read'; position: sticky; top: 0; z-index: 5; display: block; margin: 0 0 8px; padding: 8px; border-radius: 10px; text-align: center; font-size: 12.5px; font-weight: 600; color: #fff; background: var(--accent); }
 .sk-msg.me:has(.sk-sent-file) { display: flex; flex-wrap: wrap; gap: 6px; }
 .sk-sent-file { display: inline-flex; align-items: center; gap: 5px; font-size: 12.5px; }
+.role-chip { flex: none; font-size: 10.5px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }
+.role-chip.mine { border-color: color-mix(in srgb, var(--accent) 60%, var(--line)); color: var(--text); }
 .sk-files { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0 0 12px; }
 .sk-file { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; padding: 3px 4px 3px 10px; border: 1px solid var(--line); border-radius: 999px; font-size: 12px; background: var(--panel); }
 .sk-file-n { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 180px; }

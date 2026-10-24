@@ -367,7 +367,8 @@
     } else if (msg.type === 'task') {
       const was = taskById(msg.task.id);
       upsertTask(msg.task);
-      if (msg.task.assigneeId === S.me?.memberId && was?.assigneeId !== msg.task.assigneeId && msg.task.assignedBy !== S.me?.memberId) assignedToMe(msg.task);
+      const newly = msg.task.assigneeId === S.me?.memberId ? was?.assigneeId !== msg.task.assigneeId : myRole(msg.task.roleId) && was?.roleId !== msg.task.roleId;
+      if (newly && msg.task.assignedBy !== S.me?.memberId) assignedToMe(msg.task);
       renderDay();
       refreshLinks();
     } else if (msg.type === 'task:remove') {
@@ -2401,7 +2402,7 @@
         h('span', { html: I.clip }), taskFiles(t).length === 1 ? shortText(taskFiles(t)[0].name || 'Note', 18) : String(taskFiles(t).length)) : null,
       t.pinId && pinById(t.pinId) ? h('button', { class: 'list-chip', title: 'Show it on the map', onclick: (ev) => { ev.stopPropagation(); openMap({ pinId: t.pinId }); } }, 'Map') : null,
       camp && !inCampaign && !noCamp ? h('button', { class: 'camp-chip c-' + camp.color, title: `${camp.name} · ${g.title}`, onclick: () => openCampaign(camp.id) }, camp.name) : null,
-      t.assigneeId ? avatar(t.assigneeId) : null,
+      t.assigneeId ? avatar(t.assigneeId) : t.roleId ? roleChip(t.roleId) : null,
       t.done || waits ? null : btn(I.clock, 'Put on schedule', () => openSheet({ text: t.text, taskId: t.id, date: t.due && D.sub === 'tasks' ? t.due : D.date })),
       btn(I.more, 'More', (b) => taskMenu(b, t))
     );
@@ -2452,7 +2453,7 @@
       { label: t.due ? `Due ${dueLabel(t.due)}…` : 'Due date…', run: () => dueMenu(anchor, t) },
       { label: t.priority ? `${PRIO[t.priority]} priority…` : 'Priority…', run: () => prioMenu(anchor, t) },
       { label: taskFiles(t).length ? `Attached · ${taskFiles(t).length}…` : 'Attach a file…', run: () => (taskFiles(t).length ? taskFilesMenu(anchor, t) : pickForTask(t)) },
-      { label: t.assigneeId ? `Assigned to ${memberName(t.assigneeId)}…` : 'Assign to…', run: () => assignMenu(anchor, t) },
+      { label: t.assigneeId ? `Assigned to ${memberName(t.assigneeId)}…` : t.roleId && roleById(t.roleId) ? `For ${roleById(t.roleId).name}…` : 'Assign to…', run: () => assignMenu(anchor, t) },
       { label: g ? `Goal: ${g.title}…` : 'Add to a goal…', run: () => goalMenu(anchor, t) },
       ...(g ? [{ label: t.report ? 'Stop asking for a report' : 'Ask for a report when done', run: () => patchTask(t, { report: !t.report }) }] : []),
       ...stepRows(g && campById(g.campaignId), t, !!taskWaitsOn(t), (ch) => patchTask(t, ch)),
@@ -2469,11 +2470,15 @@
       } },
     ]);
   }
+  const people = (n) => (n === 0 ? 'nobody yet' : n === 1 ? '1 person' : `${n} people`);
   function assignMenu(anchor, t) {
+    const roles = S.workspace.roles || [];
+    const who = (m) => [m.id === S.me?.memberId ? `${m.name} (you)` : m.name, rolesOf(m.id).map((r) => r.name).join(', ')].filter(Boolean).join(' · ');
     openMenu(anchor, [
       { head: 'Assign to' },
-      { label: 'Nobody', on: !t.assigneeId, run: () => patchTask(t, { assigneeId: null }) },
-      ...S.workspace.members.map((m) => ({ label: m.id === S.me?.memberId ? `${m.name} (you)` : m.name, on: t.assigneeId === m.id, run: () => patchTask(t, { assigneeId: m.id }) })),
+      { label: 'Nobody', on: !t.assigneeId && !t.roleId, run: () => patchTask(t, { assigneeId: null, roleId: null }) },
+      ...S.workspace.members.map((m) => ({ label: who(m), on: t.assigneeId === m.id, run: () => patchTask(t, { assigneeId: m.id, roleId: null }) })),
+      ...(roles.length ? [{ head: 'Or a role' }, ...roles.map((r) => ({ label: `${r.name} · ${people(S.workspace.members.filter((m) => m.roleIds?.includes(r.id)).length)}`, on: t.roleId === r.id, run: () => patchTask(t, { roleId: r.id, assigneeId: null }) }))] : []),
     ]);
   }
   function goalMenu(anchor, t) {
@@ -2487,6 +2492,51 @@
     openMenu(anchor, rows);
   }
 
+  // Roles: the kinds of work people do (Sales, Installs…). A task can go to a role instead of a person.
+  const roleById = (id) => (S.workspace?.roles || []).find((r) => r.id === id);
+  const myRole = (id) => !!id && !!S.workspace?.members.find((m) => m.id === S.me?.memberId)?.roleIds?.includes(id);
+  const taskMine = (t) => t.assigneeId === S.me?.memberId || myRole(t.roleId);
+  const rolesOf = (memberId) => (S.workspace?.members.find((m) => m.id === memberId)?.roleIds || []).map(roleById).filter(Boolean);
+  const whoName = (x) => (x.roleId && roleById(x.roleId) ? roleById(x.roleId).name : x.assigneeId ? memberName(x.assigneeId) : '');
+  const roleChip = (id) => roleById(id) && h('span', { class: 'role-chip' + (myRole(id) ? ' mine' : ''), title: `For ${roleById(id).name}${roleById(id).about ? ': ' + roleById(id).about : ''}` }, roleById(id).name);
+
+  // Settings → Team → Roles. Everyone sees them; owners make and change them and say who has each.
+  function rolesSection(call) {
+    const roles = S.workspace.roles || [];
+    const owner = amOwner();
+    const edit = (r) => {
+      const name = h('input', { value: r?.name || '', placeholder: 'Sales', maxlength: 40 });
+      const about = h('input', { value: r?.about || '', placeholder: 'Calls, follow-ups and quotes', maxlength: 300 });
+      const picks = S.workspace.members.map((m) => {
+        const cb = h('input', { type: 'checkbox', value: m.id, checked: !!r && !!m.roleIds?.includes(r.id) });
+        return h('label', { class: 'pick' }, cb, m.id === S.me?.memberId ? `${m.name} (you)` : m.name);
+      });
+      sheet(r ? 'Edit role' : 'New role', [
+        h('label', {}, 'Role', name),
+        h('label', {}, 'What they handle', about),
+        h('div', { class: 'picks-h' }, 'Who has it'),
+        h('div', { class: 'picks' }, picks),
+        h('p', { class: 'day-hint' }, 'Tasks can go to a role instead of one person. Everyone with the role sees them as theirs, and Sidekick suggests who does what from these.'),
+      ], async () => {
+        const body = { name: name.value, about: about.value, memberIds: picks.map((l) => l.firstChild).filter((cb) => cb.checked).map((cb) => cb.value) };
+        S.workspace = await api(r ? 'PATCH' : 'POST', '/roles' + (r ? '/' + r.id : ''), body);
+        renderSettings();
+      }, r ? 'Save' : 'Add role');
+    };
+    const row = (r) => {
+      const who = S.workspace.members.filter((m) => m.roleIds?.includes(r.id)).map((m) => m.name);
+      return h('div', { class: 'srow' },
+        h('span', {}, r.name, h('small', {}, [r.about, who.length ? who.join(', ') : 'Nobody yet'].filter(Boolean).join(' · '))),
+        owner ? h('button', { class: 'icon-btn', 'aria-label': 'Options for ' + r.name, html: I.more, onclick: (e) => openMenu(e.currentTarget, [
+          { label: 'Edit…', run: () => edit(r) },
+          { label: 'Delete role', danger: true, run: () => call('DELETE', '/roles/' + r.id) },
+        ]) }) : null);
+    };
+    return h('section', {}, h('h3', {}, `Roles · ${roles.length}`),
+      roles.length ? roles.map(row) : h('p', { class: 'day-hint' }, owner ? 'Name the kinds of work people do, like Sales, Installs or Marketing, and who does them. Then hand tasks to a role, and Sidekick can suggest who does what.' : 'No roles yet. Team owners can add them.'),
+      owner ? h('div', { class: 'btns' }, h('button', { class: 'btn', onclick: () => edit(null) }, '+ Add a role')) : null);
+  }
+
   // Small round initial for a teammate.
   function avatar(memberId, size) {
     const name = memberName(memberId);
@@ -2494,7 +2544,7 @@
     return h('span', { class: 'av' + (size ? ' ' + size : ''), title: name, style: `--h:${hue}` }, name === 'You' ? (S.workspace?.members.find((m) => m.id === memberId)?.name || 'Y')[0].toUpperCase() : name[0].toUpperCase());
   }
   // Tasks on my day: mine, or nobody's.
-  const forMe = (t) => !t.assigneeId || t.assigneeId === S.me?.memberId;
+  const forMe = (t) => (!t.assigneeId && !t.roleId) || taskMine(t);
 
   function moveToToday(list) {
     const b = h('button', { class: 'link' }, 'Move to today');
@@ -2508,13 +2558,13 @@
     const keep = D.scroll.scrollTop;
     const mineOnly = D.mine;
     const steps = D.taskView === 'camps';
-    const shown = S.tasks.filter((t) => (!mineOnly || t.assigneeId === S.me?.memberId) && stepOf(t) === steps);
+    const shown = S.tasks.filter((t) => (!mineOnly || taskMine(t)) && stepOf(t) === steps);
     const open = shown.filter((t) => !t.done).sort(byPrio);
     const done = shown.filter((t) => t.done).sort((a, b) => (b.doneAt || 0) - (a.doneAt || 0));
     const today = todayKey();
     const parts = [];
     const view = (v) => { D.taskView = v; store.set('taskView', v); renderDay(); };
-    const stepsDue = S.tasks.filter((t) => stepOf(t) && !t.done && t.due && t.due <= today && (!mineOnly || t.assigneeId === S.me?.memberId));
+    const stepsDue = S.tasks.filter((t) => stepOf(t) && !t.done && t.due && t.due <= today && (!mineOnly || taskMine(t)));
     parts.push(h('div', { class: 'seg mine-seg' },
       h('button', { class: steps ? '' : 'on', onclick: () => view('mine') }, 'My tasks'),
       h('button', { class: steps ? 'on' : '', onclick: () => view('camps') }, 'Campaign steps', stepsDue.length ? h('span', { class: 'seg-n' }, stepsDue.length) : null)));
@@ -2996,7 +3046,7 @@
     const card = (c) => {
       const p = campProgress(c);
       const gs = goalsOf(c.id);
-      const mine = gs.flatMap((g) => tasksOf(g.id)).filter((t) => !t.done && t.assigneeId === S.me?.memberId).length;
+      const mine = gs.flatMap((g) => tasksOf(g.id)).filter((t) => !t.done && taskMine(t)).length;
       return h('button', { class: 'camp-card c-' + c.color + (c.status === 'paused' ? ' paused' : ''), onclick: () => openCampaign(c.id) },
         h('div', { class: 'cc-top' }, h('b', {}, c.name), c.private ? h('span', { class: 'cc-lock', html: I.lock, title: 'Private' }) : null, h('span', { class: 'cc-pct' }, Math.round(p * 100) + '%')),
         bar(p, c.color),
@@ -5237,7 +5287,7 @@
       const el = h('div', { class: 'plan-goal' },
         h('label', { class: 'pick' }, gb, h('b', {}, g.title)),
         h('small', { class: 'day-hint' }, what + (g.due ? ` · by ${dueLabel(g.due)}` : '')),
-        tbs.map(({ t, cb }) => h('label', { class: 'pick plan-task' }, cb, t.text, t.due ? h('small', {}, ' · ' + dueLabel(t.due)) : null)));
+        tbs.map(({ t, cb }) => h('label', { class: 'pick plan-task' }, cb, t.text, t.due || whoName(t) ? h('small', {}, [t.due && dueLabel(t.due), whoName(t) && '→ ' + whoName(t)].filter(Boolean).map((x) => ' · ' + x).join('')) : null)));
       return { g, gb, tbs, el };
     });
     sheet('Suggested plan', [
@@ -5249,7 +5299,7 @@
         if (!gb.checked) continue;
         const goal = await api('POST', '/goals', { campaignId: c.id, title: g.title, kind: g.kind, due: g.due, ...(g.kind === 'count' ? { target: g.target, counts: g.counts, methods: g.methods } : {}) });
         if (!S.goals.some((x) => x.id === goal.id)) S.goals.push(goal);
-        for (const { t, cb } of tbs) if (cb.checked) upsertTask(await api('POST', '/tasks', { text: t.text, due: t.due, goalId: goal.id }));
+        for (const { t, cb } of tbs) if (cb.checked) upsertTask(await api('POST', '/tasks', { text: t.text, due: t.due, goalId: goal.id, assigneeId: t.assigneeId || null, roleId: t.roleId || null }));
         n++;
       }
       renderCamps();
@@ -7315,7 +7365,7 @@
     const fmtT = (m) => (m == null ? '' : fmtTime(m));
     if (c.type === 'campaign') return [h('b', {}, c.name), c.start || c.end ? h('small', {}, [c.start && dueLabel(c.start), c.end && dueLabel(c.end)].filter(Boolean).join(' → ')) : null, c.brief ? h('p', {}, c.brief) : null];
     if (c.type === 'goal') return [h('b', {}, c.title), h('small', {}, [c.kind === 'count' ? `${c.target} logged` : c.kind === 'money' ? money(c.target * 100) : `${c.tasks.length} task${c.tasks.length === 1 ? '' : 's'}`, c.due && 'by ' + dueLabel(c.due)].filter(Boolean).join(' · ')),
-      c.tasks.length ? h('ul', {}, c.tasks.map((t) => h('li', {}, t.text, t.due ? h('small', {}, ' · ' + dueLabel(t.due)) : null))) : null];
+      c.tasks.length ? h('ul', {}, c.tasks.map((t) => h('li', {}, t.text, t.due || whoName(t) ? h('small', {}, [t.due && dueLabel(t.due), whoName(t) && '→ ' + whoName(t)].filter(Boolean).map((x) => ' · ' + x).join('')) : null))) : null];
     if (c.type === 'list') {
       const n = S.contacts ? S.contacts.filter((x) => liveMatch(c.live, x, Date.now())).length : null;
       const f = c.live;
@@ -7324,7 +7374,7 @@
     if (c.type === 'note') return [h('b', {}, c.title || 'Note'), h('p', { class: 'sk-note' }, c.text)];
     if (c.type === 'budget') return [h('b', {}, `${c.category} · ${money(c.limit * 100)} a month`)];
     if (c.type === 'block') return [h('b', {}, c.text), h('small', {}, `${dueLabel(c.date)} · ${fmtT(c.start)}–${fmtT(c.end)}${c.repeat ? ' · repeats ' + c.repeat : ''}`)];
-    if (c.type === 'task') return [h('b', {}, c.text), h('small', {}, [c.goal && 'under ' + c.goal, c.due && dueLabel(c.due)].filter(Boolean).join(' · '))];
+    if (c.type === 'task') return [h('b', {}, c.text), h('small', {}, [c.goal && 'under ' + c.goal, c.due && dueLabel(c.due), whoName(c) && '→ ' + whoName(c)].filter(Boolean).join(' · '))];
     return [h('b', {}, c.text), h('small', {}, [c.due && 'due ' + dueLabel(c.due), c.target && 'target ' + c.target, c.end && 'ends ' + dueLabel(c.end)].filter(Boolean).join(' · '))];
   }
   function skCardEl(x, c) {
@@ -7362,7 +7412,7 @@
     sheet('Edit ' + SK_LABEL[c.type].toLowerCase(), body, async () => {
       const card = {};
       for (const [k, el] of Object.entries(f)) {
-        if (k === 'tasks') card.tasks = el.value.split('\n').map((t) => t.trim()).filter(Boolean).map((text) => ({ text, due: c.tasks.find((t) => t.text === text)?.due || null }));
+        if (k === 'tasks') card.tasks = el.value.split('\n').map((t) => t.trim()).filter(Boolean).map((text) => { const was = c.tasks.find((t) => t.text === text); return { text, due: was?.due || null, assigneeId: was?.assigneeId || null, roleId: was?.roleId || null }; });
         else if (el.type === 'time') { const [hh, mm] = el.value.split(':').map(Number); card[k] = Number.isFinite(hh) ? hh * 60 + (mm || 0) : null; }
         else card[k] = el.value;
       }
@@ -7513,7 +7563,7 @@
         } else if (y.type === 'goal' && c) {
           const g = await api('POST', '/goals', { campaignId: c.id, title: y.title, kind: y.kind, target: y.target, due: y.due });
           if (!S.goals.some((z) => z.id === g.id)) S.goals.push(g);
-          for (const t of y.tasks) upsertTask(await api('POST', '/tasks', { text: t.text, due: t.due, goalId: g.id }));
+          for (const t of y.tasks) upsertTask(await api('POST', '/tasks', { text: t.text, due: t.due, goalId: g.id, assigneeId: t.assigneeId || null, roleId: t.roleId || null }));
           made.push(y);
         } else if (y.type === 'list' && c && amOwner()) {
           upsertList(await api('POST', '/lists', { campaignId: c.id, name: y.name, live: y.live }));
@@ -7532,7 +7582,7 @@
           entryIds.push(e.id);
           made.push(y);
         } else if (y.type === 'task') {
-          upsertTask(await api('POST', '/tasks', { text: y.text, due: y.due, goalId: goalByTitle(y.goal)?.id || null }));
+          upsertTask(await api('POST', '/tasks', { text: y.text, due: y.due, goalId: goalByTitle(y.goal)?.id || null, assigneeId: y.assigneeId || null, roleId: y.roleId || null }));
           made.push(y);
         } else if (y.type === 'change' && c) {
           if (y.goalId && goalById(y.goalId)) {
@@ -8394,7 +8444,7 @@
   // (ones they made, run, are invited to, or have a task in). The server checks the same.
   const mayEmail = () => amOwner() || !!S.workspace?.settings?.memberEmail;
   const myCampaign = (c) => !!c && (c.ownerId === S.me?.memberId || c.assigneeId === S.me?.memberId || (c.memberIds || []).includes(S.me?.memberId)
-    || S.tasks.some((t) => t.assigneeId === S.me?.memberId && goalById(t.goalId)?.campaignId === c.id));
+    || S.tasks.some((t) => taskMine(t) && goalById(t.goalId)?.campaignId === c.id));
   const noEmail = () => new Set((S.contacts || []).filter((x) => x.dne).map((x) => x.email.toLowerCase()));
   // Adds people, each address once. Returns how many were new.
   function mailAdd(people) {
@@ -8915,7 +8965,7 @@
       const sorted = [...ws.members].sort((a, b) => (b.id === me?.id) - (a.id === me?.id) || a.name.localeCompare(b.name));
       for (const mb of sorted) {
         const you = mb.id === me?.id;
-        const notes = [mb.role === 'owner' ? 'Owner' : 'Member', mb.hasPassword ? null : 'no password yet', onlineIds.has(mb.id) ? 'online' : null].filter(Boolean).join(' · ');
+        const notes = [mb.role === 'owner' ? 'Owner' : 'Member', ...rolesOf(mb.id).map((r) => r.name), mb.hasPassword ? null : 'no password yet', onlineIds.has(mb.id) ? 'online' : null].filter(Boolean).join(' · ');
         const row = h('div', { class: 'srow person' },
           h('span', {}, h('span', { class: 'live' + (onlineIds.has(mb.id) ? ' on' : '') }), mb.name, you ? ' (you)' : '', h('small', {}, notes)));
         if (owner && !you) {
@@ -8942,6 +8992,7 @@
           owner ? newCode : null)
       );
       s.append(people);
+      s.append(rolesSection(peopleCall));
       if (isOwner()) {
         s.append(h('section', {}, h('h3', {}, 'Campaign email'),
           toggleRow('Members can send campaign email', 'From their own Outlook, to people on lists in their own campaigns. Owners can always send.', !!ws.settings.memberEmail,
