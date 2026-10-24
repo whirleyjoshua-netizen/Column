@@ -38,14 +38,17 @@
       "extendInfo": {
         "NSMicrophoneUsageDescription": "Column records your microphone when you record a meeting.",
         "NSAudioCaptureUsageDescription": "Column records your computer's sound when you record a meeting, so both sides of a call are heard."
-      }
+      },
+      "artifactName": "Column-mac-${arch}.${ext}"
     },
     "win": {
-      "target": "nsis"
+      "target": "nsis",
+      "artifactName": "Column-windows-setup.${ext}"
     },
     "linux": {
       "target": "AppImage",
-      "category": "Utility"
+      "category": "Utility",
+      "artifactName": "Column-linux.${ext}"
     },
     "publish": {
       "provider": "github",

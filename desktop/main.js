@@ -13,6 +13,8 @@ const isMac = process.platform === 'darwin';
 const COL_WIDTH = 340;
 const HOTKEY = 'CommandOrControl+Shift+Space';
 const PREFETCH_LIMIT = 500 * 1024 * 1024;
+// Where a fresh install connects, so downloading the app is all it takes. "Change server" still picks another.
+const DEFAULT_SERVER = 'https://column.premiershadesolutions.com';
 
 if (!app.requestSingleInstanceLock()) app.quit();
 // Meeting recording hears the computer's own sound (the other side of a call). On macOS that's
@@ -21,7 +23,7 @@ if (isMac) app.commandLine.appendSwitch('enable-features', 'MacLoopbackAudioForS
 
 // ---------- config ----------
 const CFG_PATH = path.join(app.getPath('userData'), 'config.json');
-let cfg = { serverUrl: null, alwaysOnTop: false, autoSave: false, openAtLogin: false, panes: 1, trayNext: true };
+let cfg = { serverUrl: DEFAULT_SERVER, alwaysOnTop: false, autoSave: false, openAtLogin: false, panes: 1, trayNext: true };
 try {
   cfg = { ...cfg, ...JSON.parse(fs.readFileSync(CFG_PATH, 'utf8')) };
 } catch {}

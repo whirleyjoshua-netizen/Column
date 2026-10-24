@@ -4240,6 +4240,7 @@ const server = http.createServer(async (req, res) => {
     res.setHeader('X-Robots-Tag', 'noindex');
     return serveStatic(req, res, new URL('/sign.html', 'http://x'));
   }
+  if (url.pathname === '/download' || url.pathname === '/get') return serveStatic(req, res, new URL('/download.html', 'http://x'));
   if (url.pathname.startsWith('/brand/') && (req.method === 'GET' || req.method === 'HEAD')) return serveLogo(req, res, url);
   if (url.pathname.startsWith('/oauth/')) return oauthCallback(req, res, url).catch((e) => {
     console.error(e);

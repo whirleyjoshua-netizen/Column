@@ -25,15 +25,15 @@
   <form id="f">
     <h1>Connect Column</h1>
     <p>Where is your Column server?</p>
-    <input id="url" placeholder="http://localhost:4747" autofocus>
+    <input id="url" placeholder="https://column.premiershadesolutions.com" autofocus>
     <button id="go">Connect</button>
     <div class="err" id="err"></div>
-    <small>Running the server on this computer? Use http://localhost:4747.<br>On another machine, use the "Other devices" address it prints.</small>
+    <small>Most people use https://column.premiershadesolutions.com.<br>Running your own server? Use its address, e.g. http://localhost:4747.</small>
   </form>
   <script>
     const q = new URLSearchParams(location.search);
     const url = document.getElementById('url');
-    url.value = q.get('server') || 'http://localhost:4747';
+    url.value = q.get('server') || 'https://column.premiershadesolutions.com';
     document.getElementById('err').textContent = q.get('error') || '';
     document.getElementById('f').addEventListener('submit', async (e) => {
       e.preventDefault();
