@@ -660,6 +660,18 @@ button.oc:hover { background: color-mix(in srgb, var(--oc) 30%, transparent); }
 .log-from { flex-wrap: wrap; }
 .log-from button { flex: 1 1 auto; padding: 3px 8px; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
 .log-book-btn { align-self: flex-start; font-size: 12px; }
+.log-extras { display: flex; flex-wrap: wrap; gap: 4px 14px; }
+.log-x { color: var(--muted); font-size: 12px; flex: none; min-width: 64px; }
+.att-amt { font-size: 12px; font-weight: 600; flex: none; }
+.task-log { flex: none; padding: 2px 9px; font-size: 12px; }
+.follow-h { font-weight: 600; font-size: 13px; margin-top: 4px; }
+.follow-days { display: flex; flex-direction: column; gap: 4px; }
+.sheet .follow-day { flex-direction: row; align-items: center; gap: 8px; font-size: 13px; color: var(--text); }
+.follow-day span { flex: 1; min-width: 0; }
+.follow-day input { width: 64px; flex: none; padding: 4px 6px; }
+.follow-day small { color: var(--muted); width: 30px; }
+.mail-line { display: block; text-align: left; background: none; border: 0; padding: 2px 0 0; color: var(--muted); font: inherit; font-size: 12px; font-style: italic; cursor: pointer; white-space: normal; }
+.mail-line:hover { color: var(--text); }
 .log-book { display: flex; flex-direction: column; gap: 4px; }
 .log-book-row { display: flex; align-items: center; gap: 6px; }
 .log-book-row input, .log-book-row select { min-width: 0; flex: 1; font-size: 12.5px; padding: 5px 7px; }

@@ -719,7 +719,7 @@ function campMoney(id) {
   for (const x of Object.values(db.money)) if (x.campaignId === id) x.kind === 'in' ? (earned += x.amount) : (spent += x.amount);
   return spent || earned ? { spent, earned } : null;
 }
-const publicCampaign = ({ wsId, ...c }) => ({ ...c, money: campMoney(c.id) });
+const publicCampaign = ({ wsId, ...c }) => ({ ...c, followUps: followUpsOf(c), money: campMoney(c.id) });
 // A money goal fills from Finance: money in tagged to it, less money out.
 const goalSaved = (id) => Object.values(db.money).reduce((n, x) => (x.goalId === id ? n + (x.kind === 'in' ? x.amount : -x.amount) : n), 0);
 const publicGoal = ({ wsId, ...g }) => (g.kind === 'money' ? { ...g, saved: goalSaved(g.id) } : g);
@@ -744,6 +744,11 @@ function applyCampaign(c, body, ws, auth) {
     if (list.length) c.outcomes = list;
   }
   if (body.methods !== undefined) c.methods = labelList(body.methods, 8);
+  // Which outcomes come back as a follow-up task, and after how many days. "Sent" is an email sent from Column.
+  if (body.followUps !== undefined) {
+    const v = body.followUps && typeof body.followUps === 'object' ? body.followUps : {};
+    c.followUps = Object.fromEntries(Object.entries(v).filter(([o, n]) => (c.outcomes.includes(o) || o === 'Sent') && Number(n) >= 1).map(([o, n]) => [o, Math.min(90, Math.round(Number(n)))]));
+  }
   // The one person responsible for it, like a work order.
   if (body.assigneeId !== undefined) c.assigneeId = body.assigneeId && ws.members.some((m) => m.id === body.assigneeId) ? body.assigneeId : null;
   // Only the person who made it decides who can see it.
@@ -816,7 +821,7 @@ function goalWaitsOn(g) {
 // What a task is waiting on (a goal or a task), or null when it can be done.
 function taskWaitsOn(t) {
   const g = db.goals[t.goalId];
-  if (!g || !db.campaigns[g.campaignId]?.inOrder || t.done || t.unlocked) return null;
+  if (!g || !db.campaigns[g.campaignId]?.inOrder || t.done || t.unlocked || t.followUp) return null;
   const wg = goalWaitsOn(g);
   if (wg) return wg;
   for (const x of tasksInOrder(g)) {
@@ -824,6 +829,46 @@ function taskWaitsOn(t) {
     if (!x.done && !x.skipped) return x;
   }
   return null;
+}
+
+// ----- follow-ups: a logged call or email that comes back as a task a few days later -----
+// Unless a campaign says otherwise, no answer comes back in 2 days and interest in 3.
+const FOLLOW_UPS = { 'No answer': 2, Interested: 3 };
+const followUpsOf = (c) => Object.fromEntries(Object.entries(c.followUps || FOLLOW_UPS).filter(([o]) => (c.outcomes || []).includes(o) || o === 'Sent'));
+// An open follow-up for the person this attempt reached: the same list row, or the same name when there's no row.
+const followsUp = (t, x) => t.followUp && !t.done && (x.rowId ? t.followUp.rowId === x.rowId : !!x.contact && !t.followUp.rowId && sameText(t.followUp.contact, x.contact));
+// Reaching someone again closes their open follow-up.
+function closeFollowUps(c, x) {
+  for (const t of Object.values(db.tasks)) {
+    if (!followsUp(t, x) || campaignOf('task', t) !== c.id) continue;
+    t.done = true;
+    t.doneAt = Date.now();
+    broadcast(t.wsId, { type: 'task', task: publicTask(t) });
+  }
+}
+// The follow-up goes under the task the call was logged from, else the goal that works its list, else the
+// campaign's first goal (a "Follow-ups" goal when it has none). It's for whoever logged the call.
+// day: the day it was logged, in the logger's own time zone.
+function addFollowUp(c, x, due, day) {
+  const from = x.taskId && db.tasks[x.taskId];
+  const onList = x.listId && Object.values(db.tasks).find((t) => t.listId === x.listId && db.goals[t.goalId]?.campaignId === c.id);
+  let g = db.goals[from?.goalId] || db.goals[onList?.goalId] || goalsInOrder(c)[0];
+  if (!g) {
+    g = applyGoal({ id: rid(), wsId: c.wsId, campaignId: c.id, by: x.by, createdAt: Date.now(), title: '', due: null, kind: 'tasks', target: 10, counts: null, order: 1 }, { title: 'Follow-ups' }, c);
+    db.goals[g.id] = g;
+    broadcast(c.wsId, { type: 'goal', goal: publicGoal(g) });
+  }
+  const what = x.outcome === 'Sent' ? 'emailed' : x.outcome.toLowerCase();
+  const t = applyTask({ id: rid(), wsId: c.wsId, by: x.by, createdAt: Date.now(), text: '', done: false, doneAt: null, due: null, priority: 0, goalId: null, assigneeId: null }, {
+    text: `Follow up with ${x.contact || 'them'} (${what} ${new Date(day + 'T12:00:00Z').toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' })}${x.note && x.outcome !== 'Sent' ? ': ' + clipText(x.note, 120) : ''})`,
+    due, goalId: g.id, assigneeId: x.memberId,
+  });
+  // It doesn't wait its turn in a campaign worked in order (taskWaitsOn).
+  t.followUp = { attemptId: x.id, listId: x.listId, rowId: x.rowId, contact: x.contact };
+  t.assignedBy = x.memberId; // their own, so no "assigned you" notice
+  db.tasks[t.id] = t;
+  broadcast(c.wsId, { type: 'task', task: publicTask(t) });
+  return t;
 }
 
 // A call list: a spreadsheet of prospects dropped on a campaign. Each logged call can name the row it was for,
@@ -949,14 +994,27 @@ const addDays = (key, n) => dayKey(new Date(Date.parse(key + 'T00:00:00Z') + n *
 const daysBetween = (a, b) => Math.round((Date.parse(b + 'T00:00:00Z') - Date.parse(a + 'T00:00:00Z')) / 864e5);
 const publicTemplate = ({ wsId, ran, ...t }) => t;
 
-function snapshotCampaign(c) {
+// It keeps the lists that are part of how the work is done (question forms, checklists, reference sheets),
+// not the ones that hold its prospects, and a main campaign keeps its sub-campaigns, started as many days in.
+const KEPT_LISTS = ['form', 'checklist', 'reference'];
+function snapshotCampaign(c, main = c) {
   const rel = (key) => (key && c.start ? daysBetween(c.start, key) : null);
+  const lists = Object.values(db.lists).filter((l) => l.campaignId === c.id && !l.live && KEPT_LISTS.includes(l.kind)).sort((a, b) => a.createdAt - b.createdAt);
   return {
-    campaign: { brief: c.brief, color: c.color, outcomes: c.outcomes, methods: c.methods, private: c.private, memberIds: c.memberIds, inOrder: !!c.inOrder, days: c.start && c.end ? daysBetween(c.start, c.end) : null },
+    campaign: {
+      brief: c.brief, color: c.color, outcomes: c.outcomes, methods: c.methods, followUps: c.followUps, private: c.private, memberIds: c.memberIds, inOrder: !!c.inOrder,
+      days: c.start && c.end ? daysBetween(c.start, c.end) : null, ...(c === main ? {} : { name: c.name, assigneeId: c.assigneeId || null, startIn: c.start && main.start ? daysBetween(main.start, c.start) : null }),
+    },
+    lists: lists.map((l) => ({ ref: l.id, name: l.name, kind: l.kind, agenda: !!l.agenda, columns: l.columns, rows: l.rows.map((r) => ({ cells: r.cells, section: r.section, mins: r.mins })) })),
     goals: Object.values(db.goals).filter((g) => g.campaignId === c.id).sort((a, b) => (a.order || 0) - (b.order || 0)).map((g) => ({
       title: g.title, kind: g.kind, target: g.target, counts: g.counts, methods: g.methods || null, order: g.order, dueIn: rel(g.due),
-      tasks: Object.values(db.tasks).filter((t) => t.goalId === g.id).sort((a, b) => a.createdAt - b.createdAt).map((t) => ({ text: t.text, order: t.order ?? null, priority: t.priority, dueIn: rel(t.due), assigneeId: t.assigneeId || null, report: !!t.report })),
+      // Follow-ups were for that run's people, so they stay behind.
+      tasks: Object.values(db.tasks).filter((t) => t.goalId === g.id && !t.followUp).sort((a, b) => a.createdAt - b.createdAt).map((t) => ({
+        text: t.text, order: t.order ?? null, priority: t.priority, dueIn: rel(t.due), assigneeId: t.assigneeId || null, roleId: t.roleId || null, report: !!t.report,
+        listRef: lists.some((l) => l.id === t.listId) ? t.listId : null,
+      })),
     })),
+    ...(c === main && !c.parentId ? { subs: subsOf(c).sort((a, b) => a.createdAt - b.createdAt).map((x) => snapshotCampaign(x, c)) } : {}),
   };
 }
 
@@ -999,29 +1057,54 @@ function runTemplate(tpl, { date, time, by }) {
   const ownerM = ws.members.find((m) => m.id === tpl.ownerId) || ws.members.find((m) => m.role === 'owner');
   const owner = { memberId: ownerM.id, member: ownerM.name };
   const label = new Date(date + 'T12:00:00Z').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' });
-  const k = tpl.campaign;
-  const c = createCampaign(ws, owner, {
-    name: `${tpl.name} · ${label}${time ? ' ' + time : ''}`.slice(0, 80), brief: k.brief, color: k.color, outcomes: k.outcomes, methods: k.methods,
-    private: k.private, memberIds: k.memberIds, inOrder: !!k.inOrder, start: date, end: k.days != null ? addDays(date, k.days) : null, assigneeId: tpl.assigneeId,
-  }, { templateId: tpl.id, assignedBy: by || null }); // who handed it out: whoever started it, or nobody for a scheduled run
+  // who handed it out: whoever started it, or nobody for a scheduled run
+  const make = (snap, name, start, extra) => {
+    const k = snap.campaign;
+    const c = createCampaign(ws, owner, {
+      name, brief: k.brief, color: k.color, outcomes: k.outcomes, methods: k.methods, private: k.private, memberIds: k.memberIds, inOrder: !!k.inOrder,
+      start, end: k.days != null ? addDays(start, k.days) : null, ...extra,
+      ...(k.followUps ? { followUps: k.followUps } : {}),
+    }, { templateId: tpl.id, assignedBy: by || null });
+    fillCampaign(ws, owner, c, snap, start, by);
+    return c;
+  };
+  const c = make(tpl, `${tpl.name} · ${label}${time ? ' ' + time : ''}`.slice(0, 80), date, { assigneeId: tpl.assigneeId });
+  for (const sub of tpl.subs || []) {
+    make(sub, sub.campaign.name, sub.campaign.startIn != null ? addDays(date, sub.campaign.startIn) : date, { assigneeId: sub.campaign.assigneeId, parentId: c.id });
+  }
+  tpl.lastRunAt = Date.now();
+  save();
+  broadcast(ws.id, { type: 'template', template: publicTemplate(tpl) });
+  return c;
+}
+// A saved campaign's lists, goals and tasks, put into a new run of it.
+function fillCampaign(ws, owner, c, snap, date, by) {
   const due = (n) => (n == null ? null : addDays(date, n));
-  for (const sg of tpl.goals) {
+  const lists = new Map();
+  for (const sl of snap.lists || []) {
+    try {
+      const l = applyList({ id: rid(), wsId: ws.id, campaignId: c.id, itemId: null, by: owner.member, createdAt: Date.now(), name: '', columns: [], rows: [] },
+        { name: sl.name, kind: sl.kind, agenda: sl.agenda, columns: sl.columns, rows: sl.rows });
+      db.lists[l.id] = l;
+      lists.set(sl.ref, l.id);
+      broadcast(ws.id, { type: 'list', list: publicList(l) });
+    } catch (e) {
+      console.error('A saved list didn’t copy:', e.message);
+    }
+  }
+  for (const sg of snap.goals) {
     const g = applyGoal({ id: rid(), wsId: ws.id, campaignId: c.id, by: owner.member, createdAt: Date.now(), title: '', due: null, kind: 'tasks', target: 10, counts: null, order: 0 },
       { title: sg.title, kind: sg.kind, target: sg.target, counts: sg.counts, methods: sg.methods, order: sg.order, due: due(sg.dueIn) }, c);
     db.goals[g.id] = g;
     broadcast(ws.id, { type: 'goal', goal: publicGoal(g) });
     for (const st of sg.tasks) {
       const t = applyTask({ id: rid(), wsId: ws.id, by: owner.member, createdAt: Date.now(), text: '', done: false, doneAt: null, due: null, priority: 0, goalId: g.id, assigneeId: null },
-        { text: st.text, order: st.order ?? null, priority: st.priority, due: due(st.dueIn), assigneeId: st.assigneeId, report: st.report });
-      if (t.assigneeId) t.assignedBy = by || null;
+        { text: st.text, order: st.order ?? null, priority: st.priority, due: due(st.dueIn), assigneeId: st.assigneeId, roleId: st.assigneeId ? undefined : st.roleId || undefined, report: st.report, listId: lists.get(st.listRef) || null });
+      if (t.assigneeId || t.roleId) t.assignedBy = by || null;
       db.tasks[t.id] = t;
       broadcast(ws.id, { type: 'task', task: publicTask(t) });
     }
   }
-  tpl.lastRunAt = Date.now();
-  save();
-  broadcast(ws.id, { type: 'template', template: publicTemplate(tpl) });
-  return c;
 }
 
 // Fires each slot once, when its time comes in the schedule's time zone. A slot missed by more than 6 hours (server was off) is skipped.
@@ -1993,12 +2076,21 @@ function mailFooter(v) {
   if (!/\d/.test(f)) throw badRequest('The footer needs your mailing address (street or PO box).');
   return f;
 }
-// "Hi {first name}" → "Hi Pat", or "Hi there" when there's no first name.
-const merge = (text, r) => text.replace(/\{\s*first\s*name\s*\}/gi, r.first || 'there').replace(/\{\s*name\s*\}/gi, r.name || 'there');
+// "Hi {first name}" → "Hi Pat", or "Hi there" when there's no first name. {opener} is the line written for
+// that person, and any other {Column} is that column of their list row (left out when they don't have it).
+const mergeKey = (s) => String(s || '').trim().toLowerCase().replace(/\s+/g, ' ');
+const merge = (text, r) => text.replace(/\{([^{}\n]{1,40})\}/g, (_, raw) => {
+  const k = mergeKey(raw);
+  if (k === 'first name') return r.first || 'there';
+  if (k === 'name') return r.name || 'there';
+  if (k === 'opener') return r.opener || '';
+  return r.fields?.[k] || '';
+});
+const rowFields = (l, row) => Object.fromEntries(l.columns.map((col, i) => [mergeKey(col), row.cells[i] || '']).filter(([k]) => k && k !== 'name' && k !== 'opener' && k !== 'first name'));
 const mimeWord = (t) => (/^[\x20-\x7e]*$/.test(t) ? t : `=?UTF-8?B?${Buffer.from(t).toString('base64')}?=`);
 const mimeAddr = (name, email) => (name ? `"${mimeWord(name.replace(/["\\\r\n]/g, ''))}" <${email}>` : `<${email}>`);
 function mailBody(sendRec, r, unsub) {
-  return `${merge(sendRec.body, r).trim()}\n\n--\n${sendRec.footer}\nDon’t want these emails? Unsubscribe: ${unsub}\n`;
+  return `${merge(sendRec.body, r).replace(/\n{3,}/g, '\n\n').trim()}\n\n--\n${sendRec.footer}\nDon’t want these emails? Unsubscribe: ${unsub}\n`;
 }
 function mailMime(from, r, subject, text, unsub) {
   const b64 = Buffer.from(text.replace(/\n/g, '\r\n')).toString('base64').replace(/.{76}/g, '$&\r\n');
@@ -2091,6 +2183,10 @@ async function mailOne(x) {
           memberId: x.memberId, by: x.by, at: r.at, outcome: 'Sent', contact: (r.name || r.email).slice(0, 200), note: merge(x.subject, r).slice(0, 2000), answers: [], sendId: x.id,
         };
         db.attempts[a.id] = a;
+        if (followUpsOf(c).Sent) {
+          closeFollowUps(c, a);
+          a.followTaskId = addFollowUp(c, a, addDays(dayKey(new Date(a.at)), followUpsOf(c).Sent), dayKey(new Date(a.at))).id;
+        }
         broadcast(x.wsId, { type: 'attempt', attempt: publicAttempt(a) });
         if (a.leadId) pushPssSoon(x.wsId);
       }
@@ -2164,26 +2260,68 @@ function replyJson(text) {
 const fmtDay = (ms) => new Date(ms).toISOString().slice(0, 10);
 
 // The report's "Findings": what the log says since the last report, in the team's voice.
+// A main campaign's report takes in its sub-campaigns too: their log, their tasks and how far along each is.
 async function aiReport(ws, auth, c, body) {
   const since = Number(body.since) || 0;
-  const log = Object.values(db.attempts).filter((x) => x.campaignId === c.id && x.at > since).sort((a, b) => a.at - b.at);
-  const done = Object.values(db.tasks).filter((t) => campaignOf('task', t) === c.id && t.done && (t.doneAt || 0) > since);
-  const open = Object.values(db.tasks).filter((t) => campaignOf('task', t) === c.id && !t.done);
+  const today = isDay(body.today) ? body.today : dayKey(new Date());
+  const subs = c.parentId ? [] : subsOf(c).filter((x) => canSee(auth, 'campaign', x));
+  const ids = new Set([c.id, ...subs.map((x) => x.id)]);
+  const tag = (id) => (id !== c.id ? ` [${db.campaigns[id].name}]` : '');
+  const log = Object.values(db.attempts).filter((x) => ids.has(x.campaignId) && x.at > since).sort((a, b) => a.at - b.at);
+  const tasks = Object.values(db.tasks).filter((t) => ids.has(campaignOf('task', t)));
+  const done = tasks.filter((t) => t.done && (t.doneAt || 0) > since);
+  const open = tasks.filter((t) => !t.done);
+  const whoIs = (t) => (t.assigneeId ? ws.members.find((x) => x.id === t.assigneeId)?.name : t.roleId ? (ws.roles || []).find((r) => r.id === t.roleId)?.name : null) || 'nobody';
+  const load = Object.entries(open.reduce((n, t) => ((n[whoIs(t)] = (n[whoIs(t)] || 0) + 1), n), {})).sort((a, b) => b[1] - a[1]);
+  const late = open.filter((t) => t.due && t.due < today);
+  const sold = log.filter((x) => x.amount).reduce((n, x) => n + x.amount, 0);
   const prompt = [
+    `Today is ${today}.`,
+    subs.length ? `This is the main campaign. Its sub-campaigns:\n${subs.map((x) => `- ${x.name} (${x.status}, ${Math.round((campFrac(x) || 0) * 100)}% done${x.end ? ', ends ' + x.end : ''}): ${log.filter((y) => y.campaignId === x.id).length} logged since the last report, ${open.filter((t) => campaignOf('task', t) === x.id && t.due && t.due < today).length} tasks overdue`).join('\n')}` : '',
+    late.length ? `Overdue tasks:\n${late.slice(0, 40).map((t) => `- ${clipText(t.text, 160)} (due ${t.due}, ${whoIs(t)})${tag(campaignOf('task', t))}`).join('\n')}` : 'Nothing is overdue.',
+    load.length ? `Open tasks by who they're for: ${load.map(([w, n]) => `${w} ${n}`).join(', ')}` : '',
+    sold ? `Sales logged since the last report: $${Math.round(sold / 100)}` : '',
     `Campaign: ${c.name}`,
     c.brief ? `Brief:\n${clipText(c.brief, 4000)}` : 'No brief.',
     `Numbers (already shown above the findings, don't repeat them as a list):\n${(Array.isArray(body.stats) ? body.stats : []).map((x) => '- ' + clipText(x, 300)).join('\n')}`,
-    log.length ? `Calls and emails logged since the last report (oldest first):\n${log.slice(-300).map((x) => `- ${fmtDay(x.at)} ${x.method || ''} ${x.contact || '(no name)'}: ${x.outcome}${x.note ? ` · ${clipText(x.note, 300)}` : ''}${(x.answers || []).map((y) => ` · ${clipText(y.q, 80)} ${clipText(y.a, 200)}`).join('')} (${x.by})`).join('\n')}` : 'Nothing logged since the last report.',
-    done.length ? `Tasks finished:\n${done.slice(-50).map((t) => '- ' + clipText(t.text, 200)).join('\n')}` : '',
-    open.length ? `Tasks still open:\n${open.slice(0, 50).map((t) => `- ${clipText(t.text, 200)}${t.due ? ` (due ${t.due})` : ''}`).join('\n')}` : '',
+    log.length ? `Calls and emails logged since the last report (oldest first):\n${log.slice(-300).map((x) => `- ${fmtDay(x.at)} ${x.method || ''} ${x.contact || '(no name)'}: ${x.outcome}${x.amount ? ` ($${Math.round(x.amount / 100)} sale)` : ''}${x.note ? ` · ${clipText(x.note, 300)}` : ''}${(x.answers || []).map((y) => ` · ${clipText(y.q, 80)} ${clipText(y.a, 200)}`).join('')} (${x.by})${tag(x.campaignId)}`).join('\n')}` : 'Nothing logged since the last report.',
+    done.length ? `Tasks finished:\n${done.slice(-50).map((t) => `- ${clipText(t.text, 200)}${tag(campaignOf('task', t))}`).join('\n')}` : '',
+    open.length ? `Tasks still open:\n${open.slice(0, 50).map((t) => `- ${clipText(t.text, 200)}${t.due ? ` (due ${t.due})` : ''} · ${whoIs(t)}${tag(campaignOf('task', t))}`).join('\n')}` : '',
   ].filter(Boolean).join('\n\n');
   const text = await aiAsk(ws, auth.memberId,
-    'You write the findings section of a short progress report for a sales or outreach campaign, posted to the team’s chat. ' +
-    'From the log, say what’s working, what isn’t, notable conversations or patterns in the notes, and the next steps. ' +
+    'You write the findings section of a short progress check-in for a sales or outreach campaign, posted to the team’s chat. ' +
+    'From the log and the tasks, say what’s working, what isn’t, notable conversations or patterns in the notes, what’s stuck or overdue, ' +
+    'whether one person or role has much more open work than the rest, and the next steps. For a main campaign, say which sub-campaigns are moving and which are behind. ' +
     'Use only what the data shows: never invent names, numbers or results. If little was logged, say so plainly and keep it short. ' +
-    'Write 3 to 6 short lines of plain text, no headings and no markdown, at most a few dashes for a list. Reply with the findings only.',
+    'Write 4 to 8 short lines of plain text, no headings and no markdown, at most a few dashes for a list. Reply with the findings only.',
     prompt);
   return { text: text.trim() };
+}
+
+// A personal opening line for each person getting a campaign email, from what their list row says about them.
+// The person sending reads every one before anything goes out.
+async function aiOpeners(ws, auth, body) {
+  const camp = body.campaignId && db.campaigns[body.campaignId];
+  const c = camp && camp.wsId === ws.id && canSee(auth, 'campaign', camp) ? camp : null;
+  const people = (Array.isArray(body.people) ? body.people : []).slice(0, 40).map((x, i) => ({
+    i, name: cleanText(x?.name, 120),
+    about: Object.entries(x?.fields && typeof x.fields === 'object' ? x.fields : {}).slice(0, 12).map(([k, v]) => [cleanText(k, 40), cleanText(v, 200)]).filter(([k, v]) => k && v).map(([k, v]) => `${k}: ${v}`).join('; '),
+  }));
+  if (!people.length) throw badRequest('Add who it’s going to first.');
+  const prompt = [
+    c ? `Campaign: ${c.name}${c.brief ? `\nBrief:\n${clipText(c.brief, 3000)}` : ''}` : '',
+    `Subject: ${clipText(body.subject, 200) || '(none yet)'}`,
+    `The email (the line you write replaces {opener}):\n${clipText(body.body, 6000) || '(not written yet)'}`,
+    `People:\n${people.map((x) => `${x.i}. ${x.name || '(no name)'}${x.about ? ' · ' + x.about : ''}`).join('\n')}`,
+  ].filter(Boolean).join('\n\n');
+  const text = await aiAsk(ws, auth.memberId,
+    'You write the one personal opening line of a business email, for each person it goes to, so each email reads as written for them. ' +
+    'Use what their details say (their business, city, line of work); never invent facts about them, and when there is little to go on keep it simple and true. ' +
+    'One sentence each, under 30 words, plain and friendly, no greeting (the email already has one), no flattery, no exclamation marks, and it must lead into the rest of the email. ' +
+    'Reply with JSON only: {"lines":[{"i":0,"text":"…"}]} with one line for every person, by their number.',
+    prompt);
+  const lines = Array.isArray(replyJson(text).lines) ? replyJson(text).lines : [];
+  return { lines: lines.filter((x) => people.some((y) => y.i === Number(x?.i))).map((x) => ({ i: Number(x.i), text: cleanText(x.text, 600) })).filter((x) => x.text) };
 }
 
 // ---------- meeting notes: record a call, transcribe it, draft notes that tie into campaigns ----------
@@ -3519,7 +3657,8 @@ async function api(req, res, url) {
       if (footer !== ws.mailFooter) ws.mailFooter = footer;
       // A test comes to you, merged with the first person's name, with a placeholder unsubscribe link.
       if (b === 'test') {
-        const r = { email: conn.account, name: cleanText(body.sample?.name, 200), first: cleanText(body.sample?.first, 80) };
+        const fields = Object.fromEntries(Object.entries(body.sample?.fields || {}).slice(0, 30).map(([k, v]) => [mergeKey(k), cleanText(v, 300)]));
+        const r = { email: conn.account, name: cleanText(body.sample?.name, 200), first: cleanText(body.sample?.first, 80), opener: cleanText(body.sample?.opener, 600), fields };
         const unsub = '(each person gets their own unsubscribe link here)';
         try {
           await calProviders.microsoft.sendMail(await calToken(conn), mailMime(conn.account, r, '[Test] ' + merge(subject, r), mailBody({ body: text, footer }, r, unsub), unsub));
@@ -3549,7 +3688,8 @@ async function api(req, res, url) {
         seen.add(email);
         if (no.has(email) || row?.dne || lead?.dne) continue;
         to.push({
-          email, name: cleanText(r.name, 200), first: cleanText(r.first, 80),
+          email, name: cleanText(r.name, 200), first: cleanText(r.first, 80), opener: cleanText(r.opener, 600),
+          fields: row ? rowFields(l, row) : lead ? { city: lead.city, phone: lead.phone } : {},
           listId: row ? l.id : null, rowId: row ? row.id : null, leadId: lead && lead.email.toLowerCase() === email ? lead.id : row?.leadId || null, status: 'queued',
         });
       }
@@ -3660,6 +3800,7 @@ async function api(req, res, url) {
       save();
       return send(res, 200, aiState(ws, auth.memberId));
     }
+    if (m === 'POST' && b === 'openers') return send(res, 200, await aiOpeners(ws, auth, body));
     if (m === 'POST' && b === 'task') {
       const t = db.tasks[body.taskId];
       if (!t || t.wsId !== ws.id || !canSee(auth, 'task', t)) return send(res, 404, { error: 'That task is gone.' });
@@ -3753,6 +3894,9 @@ async function api(req, res, url) {
       const outcome = String(body.outcome || '');
       if (!c.outcomes.includes(outcome)) return send(res, 400, { error: 'Pick an outcome' });
       const method = (c.methods || []).includes(body.method) ? body.method : null;
+      // A sale made on the call goes into Finance as money in for the campaign.
+      const amount = body.amount ? cents(body.amount, 'what the sale was worth') : null;
+      const today = isDay(body.today) ? body.today : dayKey(new Date());
       const t = body.taskId && db.tasks[body.taskId];
       const l = body.listId && db.lists[body.listId];
       const row = l && l.campaignId === c.id && l.rows.find((r) => r.id === body.rowId);
@@ -3767,6 +3911,17 @@ async function api(req, res, url) {
         answers: (Array.isArray(body.answers) ? body.answers : []).slice(0, 40).map((x) => ({ q: cleanText(x?.q, 300), a: cleanText(x?.a, 2000) })).filter((x) => x.q && x.a),
       };
       db.attempts[x.id] = x;
+      closeFollowUps(c, x);
+      const days = followUpsOf(c)[outcome];
+      const due = body.followUp === false ? null : isDay(body.followUp) ? body.followUp : days ? addDays(today, days) : null;
+      if (due) x.followTaskId = addFollowUp(c, x, due, today).id;
+      if (amount) {
+        const money = goalsInOrder(c).filter((g) => g.kind === 'money');
+        const y = applyMoney(newMoney(auth), { kind: 'in', amount: amount / 100, day: today, category: 'Sales', note: x.contact || c.name, scope: auth.role === 'owner' ? 'business' : 'personal', campaignId: c.id, goalId: money.length === 1 ? money[0].id : null }, auth);
+        db.money[y.id] = y;
+        moneyNews(y);
+        Object.assign(x, { amount, moneyId: y.id });
+      }
       save();
       broadcast(ws.id, { type: 'attempt', attempt: publicAttempt(x) });
       if (x.leadId) pushPssSoon(ws.id);
@@ -3777,6 +3932,10 @@ async function api(req, res, url) {
     if (m === 'DELETE') {
       if (x.memberId !== auth.memberId && db.campaigns[x.campaignId]?.ownerId !== auth.memberId) return send(res, 403, { error: 'You can only remove your own entries.' });
       delete db.attempts[x.id];
+      // Its follow-up, if nobody's done it yet, and the sale it put in Finance go with it.
+      const ft = db.tasks[x.followTaskId];
+      if (ft && !ft.done) deleteTask(ft);
+      if (db.money[x.moneyId]) dropMoney(db.money[x.moneyId]);
       save();
       broadcast(ws.id, { type: 'attempt:remove', id: x.id });
       return send(res, 200, { ok: true });

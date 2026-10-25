@@ -2404,6 +2404,7 @@
       t.pinId && pinById(t.pinId) ? h('button', { class: 'list-chip', title: 'Show it on the map', onclick: (ev) => { ev.stopPropagation(); openMap({ pinId: t.pinId }); } }, 'Map') : null,
       camp && !inCampaign && !noCamp ? h('button', { class: 'camp-chip c-' + camp.color, title: `${camp.name} · ${g.title}`, onclick: () => openCampaign(camp.id) }, camp.name) : null,
       t.assigneeId ? avatar(t.assigneeId) : t.roleId ? roleChip(t.roleId) : null,
+      t.followUp && camp && !t.done ? h('button', { class: 'btn small task-log', title: 'Log how the follow-up went', onclick: (ev) => { ev.stopPropagation(); logFollowUp(t, camp); } }, 'Log') : null,
       t.done || waits || !g ? null : btn(I.spark, 'Tools for this task', (b) => toolsMenu(b, t)),
       t.done || waits ? null : btn(I.clock, 'Put on schedule', () => openSheet({ text: t.text, taskId: t.id, date: t.due && D.sub === 'tasks' ? t.due : D.date })),
       btn(I.more, 'More', (b) => taskMenu(b, t))
@@ -3092,7 +3093,7 @@
   }
   function taskWaitsOn(t) {
     const g = goalById(t.goalId);
-    if (!g || !campById(g.campaignId)?.inOrder || t.done || t.unlocked) return null;
+    if (!g || !campById(g.campaignId)?.inOrder || t.done || t.unlocked || t.followUp) return null;
     const wg = goalWaitsOn(g);
     if (wg) return wg;
     for (const x of tasksInOrder(g.id)) {
@@ -3245,7 +3246,7 @@
   function templateRow(t) {
     return h('div', { class: 'tpl-row' },
       h('div', { class: 'tpl-main' }, h('b', {}, t.name),
-        h('small', {}, [scheduleText(t), t.assigneeId ? '→ ' + memberName(t.assigneeId) : '', `${t.goals.length} goal${t.goals.length === 1 ? '' : 's'}`].filter(Boolean).join(' · '))),
+        h('small', {}, [scheduleText(t), t.assigneeId ? '→ ' + memberName(t.assigneeId) : '', `${t.goals.length} goal${t.goals.length === 1 ? '' : 's'}`, t.subs?.length ? plural(t.subs.length, 'sub-campaign') : ''].filter(Boolean).join(' · '))),
       h('button', { class: 'btn small', onclick: () => runTemplate(t) }, 'Start now'),
       canEditTemplate(t) ? h('button', { class: 'icon-btn', 'aria-label': 'Saved campaign options', html: I.more, onclick: (e) => openMenu(e.currentTarget, [
         { label: 'Schedule and details…', run: () => templateSheet(t) },
@@ -3274,7 +3275,7 @@
     sheet(fresh ? 'Saved. Run it again when?' : 'Saved campaign', [
       h('label', {}, 'Name', name),
       h('label', {}, 'Responsible', who),
-      h('small', { class: 'day-hint' }, `Keeps its ${plural(t.goals.length, 'goal')} and ${plural(t.goals.reduce((n, g) => n + g.tasks.length, 0), 'task')}, with due dates counted from each run’s start. Start it by hand any time from Campaigns.`),
+      h('small', { class: 'day-hint' }, `Keeps its ${plural(t.goals.length, 'goal')} and ${plural(t.goals.reduce((n, g) => n + g.tasks.length, 0), 'task')}${t.lists?.length ? `, ${t.lists.map((l) => `“${l.name}”`).join(', ')}` : ''}${t.subs?.length ? ` and ${plural(t.subs.length, 'sub-campaign')}` : ''}, with due dates counted from each run’s start. Call lists stay behind, so each run starts with new people. Start it by hand any time from Campaigns.`),
       h('label', { class: 'pick' }, sched.auto, 'Also start it automatically'),
       sched.box,
     ], async () => {
@@ -3364,7 +3365,7 @@
         st ? h('button', { class: 'btn small', title: 'Open a file, add one, or go to the stack', onclick: (e) => filesMenu(e.currentTarget, c) }, `Files · ${files} ▾`) : null,
         st ? h('button', { class: 'btn small', title: 'Jot a quick note, or open one', onclick: (e) => notesMenu(e.currentTarget, c) }, `Notes · ${notes} ▾`) : null,
         h('button', { class: 'btn small' + (K.logOpen === c.id ? ' on' : ''), onclick: () => openLog(c) }, 'Log'),
-        h('button', { class: 'btn small', onclick: () => openReport(c) }, 'Write a report'),
+        h('button', { class: 'btn small' + (reportDue(c) ? ' sk-nudge' : ''), title: reportDue(c) ? 'It’s been over a week since the last report' : 'Numbers from the log, and what you found, posted to the feed', onclick: () => openReport(c) }, reportDue(c) ? 'Weekly check-in' : 'Write a report'),
         h('button', { class: 'btn small' + (skFor(c.id)?.nudge ? ' sk-nudge' : ''), title: skFor(c.id)?.nudge?.text || 'Talk this campaign through with Sidekick', onclick: () => sidekickFor(c) }, '✦ Sidekick'),
         mapFor(c) ? h('button', { class: 'btn small', title: 'Runs and pins on the map', onclick: () => openMap({ campaignId: c.id }) }, `Map · ${mapFor(c)}`) : null,
         signsFor(c) ? h('button', { class: 'btn small', title: 'Sent for signature', onclick: () => { SG.filter = c.id; openTool('signs'); } }, `Signatures · ${signsFor(c)}`) : null,
@@ -4027,16 +4028,26 @@
     : kindOf(l) === 'tracker' ? trackerBody(c, l, close) : listBody(c, l, close));
 
   // The prospects themselves, with To contact / Contacted tabs and a Log button on each.
+  // Open follow-up tasks on a list, by row.
+  function rowFollowUps(l) {
+    const m = new Map();
+    for (const t of S.tasks) if (t.followUp?.listId === l.id && !t.done && !(m.get(t.followUp.rowId)?.due < t.due)) m.set(t.followUp.rowId, t);
+    return m;
+  }
   function listBody(c, l, close) {
     const f = listFields(l);
     const st = rowStatus(l);
+    const fus = rowFollowUps(l);
     const reached = l.rows.filter((r) => st.has(r.id)).length;
-    const show = K.listShow[l.id] || 'todo';
+    const dueNow = l.rows.filter((r) => fus.get(r.id)?.due && fus.get(r.id).due <= todayKey()).length;
+    let show = K.listShow[l.id] || 'todo';
+    if (show === 'follow' && !fus.size) show = 'todo';
     const q = h('input', { class: 'goal-add clist-q', placeholder: 'Search this list', 'aria-label': 'Search this list' });
     const box = h('div', { class: 'clist-rows' });
     const draw = () => {
       const needle = q.value.trim().toLowerCase();
-      const rows = l.rows.filter((r) => (show === 'all' || (show === 'todo') === !st.has(r.id)) && (!needle || r.cells.some((x) => x.toLowerCase().includes(needle))));
+      const rows = l.rows.filter((r) => (show === 'all' || (show === 'follow' ? fus.has(r.id) : (show === 'todo') === !st.has(r.id))) && (!needle || r.cells.some((x) => x.toLowerCase().includes(needle))));
+      if (show === 'follow') rows.sort((a, b) => (fus.get(a.id).due || '9') < (fus.get(b.id).due || '9') ? -1 : 1);
       const n = K.listN[l.id] || 50;
       box.replaceChildren(...[
         ...rows.slice(0, n).map((r) => {
@@ -4044,17 +4055,18 @@
           return h('div', { class: 'crow' },
             h('div', { class: 'crow-who' }, h('b', {}, f.who(r)), h('small', {}, reachLinks(f, r))),
             x ? h('span', { class: 'oc oc-' + c.outcomes.indexOf(x.outcome), title: `${x.method ? x.method + ' · ' : ''}${x.by} · ${ago(x.at)}` }, x.outcome) : null,
+            fus.get(r.id)?.due ? h('span', { class: 'due' + (fus.get(r.id).due < todayKey() ? ' late' : fus.get(r.id).due === todayKey() ? ' today' : ''), title: `Follow up · ${memberName(fus.get(r.id).assigneeId) || 'nobody'}` }, '↻ ' + dueLabel(fus.get(r.id).due)) : null,
             h('button', { class: 'btn small', onclick: () => logRow(c, l, r) }, 'Log'));
         }),
         rows.length > n ? h('button', { class: 'link', onclick: () => { K.listN[l.id] = n + 100; draw(); } }, `Show more (${rows.length - n} left)`) : null,
-        rows.length ? null : h('p', { class: 'day-hint' }, needle ? 'No matches' : show === 'todo' ? 'Everyone on this list has been contacted.' : 'Nobody contacted yet.'),
+        rows.length ? null : h('p', { class: 'day-hint' }, needle ? 'No matches' : show === 'todo' ? 'Everyone on this list has been contacted.' : show === 'follow' ? 'No follow-ups waiting.' : 'Nobody contacted yet.'),
       ].filter(Boolean));
     };
     q.addEventListener('input', draw);
     const tab = (k, label) => h('button', { class: show === k ? 'on' : '', onclick: () => { K.listShow[l.id] = k; renderCamps(); } }, label);
     draw();
     return [
-      h('div', { class: 'seg clist-seg' }, tab('todo', `To contact · ${l.rows.length - reached}`), tab('done', `Contacted · ${reached}`), tab('all', 'All')),
+      h('div', { class: 'seg clist-seg' }, tab('todo', `To contact · ${l.rows.length - reached}`), fus.size ? tab('follow', `Follow up · ${dueNow || fus.size}`) : null, tab('done', `Contacted · ${reached}`), tab('all', 'All')),
       l.rows.length > 8 ? q : null,
       box,
       h('button', { class: 'link', onclick: close }, 'Hide'),
@@ -4617,6 +4629,7 @@
     const list = recent.length ? h('div', { class: 'attempts' },
       recent.slice(0, showN).flatMap((x) => [h('div', { class: 'attempt' },
         h('span', { class: 'oc oc-' + c.outcomes.indexOf(x.outcome) }, x.outcome),
+        x.amount ? h('b', { class: 'att-amt', title: 'In Finance as money in' }, money(x.amount)) : null,
         h('span', { class: 'att-who' }, x.method ? h('small', {}, x.method + ' · ') : null, x.contact || '—', x.note ? h('small', {}, ' · ' + x.note) : null,
           x.answers?.length ? h('button', { class: 'link att-ans-btn', onclick: () => { K.ansOpen[x.id] = !K.ansOpen[x.id]; renderCamps(); } }, ` · ${plural(x.answers.length, 'answer')}`) : null),
         h('span', { class: 'att-by' }, `${x.memberId === S.me?.memberId ? 'You' : x.by} · `, h('span', { 'data-ago': x.at }, ago(x.at))),
@@ -4693,8 +4706,13 @@
       const name = picked ? f.who(picked) : contact.value.trim();
       const leadId = !picked && K.lead && S.contacts?.find((x) => x.id === K.lead)?.name === name ? K.lead : undefined;
       if (bk && (!bk.date || !bk.time)) return toast('Pick a day and time for the meeting');
+      if (K.sale && K.sale.amount.trim() && !(Number(K.sale.amount.replace(/[$,\s]/g, '')) > 0)) return toast('Enter what the sale was worth, like 1200');
+      const followUp = followPicked();
       try {
-        const x = await api('POST', '/attempts', { campaignId: c.id, method: K.method, outcome, contact: name, note: note.value, answers: qs.filter((x) => ans[x.id]?.trim()).map((x) => ({ q: x.q, a: ans[x.id] })), leadId, ...(picked ? K.pick : {}) });
+        const x = await api('POST', '/attempts', {
+          campaignId: c.id, method: K.method, outcome, contact: name, note: note.value, answers: qs.filter((x) => ans[x.id]?.trim()).map((x) => ({ q: x.q, a: ans[x.id] })), leadId, ...(picked ? K.pick : {}),
+          today: todayKey(), followUp, amount: K.sale?.amount.trim() || undefined,
+        });
         if (!S.attempts.some((y) => y.id === x.id)) S.attempts.push(x);
         let booked = '';
         if (bk) {
@@ -4705,6 +4723,10 @@
           booked = ` · on your schedule ${fmtDay(bk.date).rel || fmtDay(bk.date).long} ${fmtTime(start)}`;
           K.book = null;
         }
+        const fd = followUp ?? (followUp !== false && c.followUps?.[outcome] ? addDays(todayKey(), c.followUps[outcome]) : null);
+        if (fd) booked += ` · follow-up ${dueLabel(fd)}`;
+        if (x.amount) booked += ` · ${money(x.amount)} in Finance`;
+        K.follow = K.sale = null;
         contact.value = note.value = '';
         K.noteDraft[c.id] = '';
         K.answers[c.id] = {};
@@ -4732,7 +4754,35 @@
             field(h('select', { 'aria-label': 'How long' }, [15, 30, 45, 60, 90].map((n) => h('option', { value: n }, n < 60 ? `${n} min` : `${n / 60} hr`.replace('1.5 hr', '1½ hr')))), 'mins'),
             h('button', { class: 't-btn', 'aria-label': 'Don’t book', html: I.close, onclick: () => { K.book = null; document.activeElement?.blur(); renderCamps(); } })),
           h('small', { class: 'day-hint' }, `Goes on your schedule${cal ? ` and ${CAL_NAMES[cal.provider]}` : ''} when you tap how it went.`))
-      : h('button', { class: 'link log-book-btn', onclick: () => { K.book = { date: todayKey(), time: '', mins: 30 }; document.activeElement?.blur(); renderCamps(); } }, '+ Book a meeting');
+      : null;
+    // When they come up again as a follow-up task: the campaign's usual for the outcome tapped, or picked here.
+    const fu = K.follow;
+    const usual = Object.entries(c.followUps || {}).filter(([o]) => o !== 'Sent').map(([o, n]) => `${o.toLowerCase()} in ${plural(n, 'day')}`).join(', ');
+    let follow = null;
+    if (fu) {
+      const pick = h('select', { 'aria-label': 'Follow up' },
+        [['auto', usual ? `The usual (${usual})` : 'The usual (none set)'], ['1', 'Tomorrow'], ['3', 'In 3 days'], ['7', 'In a week'], ['14', 'In 2 weeks'], ['day', 'On a day…'], ['none', 'No follow-up']]
+          .map(([v, t]) => h('option', { value: v, selected: fu.pick === v }, t)));
+      pick.addEventListener('change', () => { fu.pick = pick.value; if (fu.pick === 'day') renderCamps(); });
+      const day = fu.pick === 'day' ? h('input', { type: 'date', value: fu.date || '', 'aria-label': 'Follow up on' }) : null;
+      day?.addEventListener('change', () => (fu.date = day.value));
+      follow = h('div', { class: 'log-book' }, h('div', { class: 'log-book-row' }, h('small', { class: 'log-x' }, 'Follow up'), pick, day,
+        h('button', { class: 't-btn', 'aria-label': 'Use the usual', html: I.close, onclick: () => { K.follow = null; document.activeElement?.blur(); renderCamps(); } })));
+    }
+    // A sale made on the call: it goes into Finance as money in for this campaign.
+    let sale = null;
+    if (K.sale) {
+      const amt = h('input', { inputmode: 'decimal', placeholder: '$ what it was worth', 'aria-label': 'Sale amount', value: K.sale.amount });
+      amt.addEventListener('input', () => (K.sale.amount = amt.value));
+      sale = h('div', { class: 'log-book' }, h('div', { class: 'log-book-row' }, h('small', { class: 'log-x' }, 'Sale'), amt,
+        h('button', { class: 't-btn', 'aria-label': 'No sale', html: I.close, onclick: () => { K.sale = null; document.activeElement?.blur(); renderCamps(); } })),
+        h('small', { class: 'day-hint' }, 'Goes into Finance as money in for this campaign when you tap how it went.'));
+    }
+    const extra = (label, title, run) => h('button', { class: 'link log-book-btn', title, onclick: () => { run(); document.activeElement?.blur(); renderCamps(); } }, label);
+    const extras = bk && fu && K.sale ? null : h('div', { class: 'log-extras' },
+      bk ? null : extra('+ Book a meeting', 'Put a meeting on your schedule', () => (K.book = { date: todayKey(), time: '', mins: 30 })),
+      fu ? null : extra('+ Follow up', usual ? `Usually: ${usual}. Pick another day, or none.` : 'Come back to them on a day you pick', () => (K.follow = { pick: 'auto', date: '' })),
+      K.sale ? null : extra('+ Sale', 'Log what the sale was worth; it goes into Finance', () => (K.sale = { amount: '' })));
     const sources = all.length
       ? h('div', { class: 'seg log-from' }, [...all.map((l) => [l.id, l.name]), ['blank', 'Blank']].map(([id, label]) =>
           h('button', { class: id === from ? 'on' : '', title: id === 'blank' ? 'Log someone who isn’t on a list' : 'Log from ' + label, onclick: () => { K.logFrom[c.id] = id; K.pick = null; document.activeElement?.blur(); renderCamps(); $('#camps .log-contact')?.focus(); } }, label)))
@@ -4744,8 +4794,37 @@
       note,
       ask,
       booking,
+      follow,
+      sale,
+      extras,
       h('div', { class: 'log-outcomes' }, c.outcomes.map((o, i) => h('button', { class: 'oc oc-' + i, onclick: () => log(o) }, o))),
       list);
+  }
+
+  // A follow-up task opens the log on the person it's for. Logging them ticks the task off.
+  function logFollowUp(t, c) {
+    const f = t.followUp;
+    const l = f.listId && S.lists.find((x) => x.id === f.listId);
+    const r = l?.rows.find((x) => x.id === f.rowId);
+    if (K.open !== c.id || S.tab !== 'camps') openCampaign(c.id);
+    if (r) return logRow(c, l, r);
+    K.logOpen = c.id;
+    K.logFrom[c.id] = 'blank';
+    K.pick = null;
+    renderCamps();
+    const box = $('#camps .log-contact');
+    if (box) box.value = f.contact || '';
+    $('#camps .logbox')?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    $('#camps .log-note')?.focus();
+  }
+
+  // The follow-up day picked in the log box: undefined for the campaign's usual, false for none.
+  function followPicked() {
+    const fu = K.follow;
+    if (!fu || fu.pick === 'auto') return undefined;
+    if (fu.pick === 'none') return false;
+    if (fu.pick === 'day') return fu.date || undefined;
+    return addDays(todayKey(), Number(fu.pick));
   }
 
   function openLog(c, { ask = false } = {}) {
@@ -4771,7 +4850,7 @@
       ...(c.parentId ? [] : [{ label: 'Add a sub-campaign…', run: () => campaignSheet(null, c) }]),
       { label: c.assigneeId ? `Responsible: ${memberName(c.assigneeId)}…` : 'Assign to…', run: () => assignCampaignMenu(anchor, c) },
       { label: 'Save to run again…', run: () => saveTemplate(c) },
-      { label: 'What to log…', run: () => outcomesSheet(c) },
+      { label: 'What to log & follow-ups…', run: () => outcomesSheet(c) },
       ...(canPass(c) ? [{ label: c.inOrder ? 'Stop working in order' : 'Work in order (one step at a time)', on: !!c.inOrder, run: () => api('PATCH', '/campaigns/' + c.id, { inOrder: !c.inOrder }).catch((e) => toast(e.message)) }] : []),
       { label: 'Write a report', run: () => openReport(c) },
       { label: 'Share to chat…', run: () => shareMenu(anchor, linkToken('campaign', c.id)) },
@@ -4973,21 +5052,46 @@
     ta.value = c.outcomes.join('\n');
     const ms = h('textarea', { rows: 3 });
     ms.value = (c.methods || []).join('\n');
+    // Days until each outcome comes back as a follow-up task. Blank: no follow-up.
+    const days = { ...(c.followUps || {}) };
+    const fbox = h('div', { class: 'follow-days' });
+    const drawDays = () => {
+      const outs = [...new Set(ta.value.split('\n').map((x) => x.trim()).filter(Boolean)), 'Sent'];
+      fbox.replaceChildren(...outs.map((o) => {
+        const n = h('input', { type: 'number', min: 1, max: 90, value: days[o] || '', placeholder: '–', 'aria-label': `Days until a follow-up after ${o}` });
+        n.addEventListener('input', () => { if (Number(n.value) >= 1) days[o] = Number(n.value); else delete days[o]; });
+        return h('label', { class: 'follow-day' }, h('span', {}, o === 'Sent' ? 'Email sent from Column' : o), n, h('small', {}, 'days'));
+      }));
+    };
+    ta.addEventListener('change', drawDays);
+    drawDays();
     sheet('What to log', [
       h('label', {}, 'Ways you reach people (one per line)', ms),
       h('label', {}, 'Outcomes (one per line; these are the buttons you tap)', ta),
+      h('div', { class: 'follow-h' }, 'Follow up after'),
+      h('small', { class: 'day-hint' }, 'Logging one of these adds a task to call or email them again, for whoever logged it. Reaching them again ticks it off.'),
+      fbox,
     ], async () => {
-      const saved = await api('PATCH', '/campaigns/' + c.id, { outcomes: ta.value.split('\n'), methods: ms.value.split('\n') });
+      const saved = await api('PATCH', '/campaigns/' + c.id, { outcomes: ta.value.split('\n'), methods: ms.value.split('\n'), followUps: days });
       Object.assign(c, saved);
       renderCamps();
     });
   }
 
   // A report: numbers since the last one are filled in from the log, you add what you found. Posts to the campaign feed.
+  // A campaign still running that's had work on it and no report for a week.
+  const reportDue = (c) => c.status === 'active' && Date.now() - (c.lastReportAt || c.createdAt) > 7 * 864e5
+    && S.attempts.some((x) => x.campaignId === c.id && x.at > (c.lastReportAt || 0));
   function openReport(c, task) {
     if (!c) return;
     const since = c.lastReportAt || (c.start ? keyDate(c.start).getTime() : 0);
-    const xs = S.attempts.filter((x) => x.campaignId === c.id && x.at > since);
+    // A main campaign's check-in takes in its sub-campaigns.
+    const subs = c.parentId ? [] : subsOf(c);
+    const ids = new Set([c.id, ...subs.map((x) => x.id)]);
+    const xs = S.attempts.filter((x) => ids.has(x.campaignId) && x.at > since);
+    const open = S.tasks.filter((t) => !t.done && ids.has(goalById(t.goalId)?.campaignId));
+    const late = open.filter((t) => t.due && t.due < todayKey()).length;
+    const sold = xs.reduce((n, x) => n + (x.amount || 0), 0);
     const by = (key) => Object.entries(xs.reduce((m, x) => ((m[x[key]] = (m[x[key]] || 0) + 1), m), {})).sort((a, b) => b[1] - a[1]);
     const outcomes = by('outcome').map(([o, n]) => `${o} ${n}`).join(' · ');
     const methods = xs.some((x) => x.method) ? by('method').filter(([m]) => m !== 'null').map(([m, n]) => `${m} ${n}`).join(' · ') : '';
@@ -4998,12 +5102,15 @@
       xs.length ? `${xs.length} attempt${xs.length === 1 ? '' : 's'} since ${sinceTxt}: ${outcomes}` : `No attempts logged since ${sinceTxt}`,
       methods ? `How: ${methods}` : '',
       xs.length && people ? `By: ${people}` : '',
+      sold ? `Sales: ${money(sold)}` : '',
       ...goals,
+      ...subs.map((x) => `${x.name}: ${Math.round(campProgress(x) * 100)}%${x.status !== 'active' ? (x.status === 'done' ? ' · finished' : ' · paused') : ''}`),
+      late ? `${plural(late, 'task')} overdue` : '',
     ].filter(Boolean);
     const notes = h('textarea', { rows: 6, placeholder: 'What did you find? What’s working, what isn’t, what’s next?' });
     const draft = h('button', { type: 'button', class: 'btn small ai-btn' }, '✨ Draft from the log');
     draft.addEventListener('click', async () => {
-      const r = await aiRun(draft, 'report', { campaignId: c.id, since, stats });
+      const r = await aiRun(draft, 'report', { campaignId: c.id, since, stats, today: todayKey() });
       if (r) notes.value = notes.value.trim() ? `${notes.value.trim()}\n\n${r.text}` : r.text;
     });
     sheet(`Report · ${c.name}`, [
@@ -8609,7 +8716,13 @@
   // campaign. Each person gets their own email, addressed only to them.
   const MAIL_RE = /^[^\s@<>",;]+@[^\s@<>",;]+\.[a-z]{2,}$/i;
   const M = { to: [], subject: '', body: '', campaignId: '', showAll: false, armed: false, preview: false };
-  const mergeText = (t, r) => t.replace(/\{\s*first\s*name\s*\}/gi, r?.first || 'there').replace(/\{\s*name\s*\}/gi, r?.name || 'there');
+  // The same as the server: {first name}, {name}, {opener} (the line written for them), or any column of their list row.
+  const mergeKey = (v) => String(v || '').trim().toLowerCase().replace(/\s+/g, ' ');
+  const mergeText = (t, r) => t.replace(/\{([^{}\n]{1,40})\}/g, (_, raw) => {
+    const k = mergeKey(raw);
+    return k === 'first name' ? r?.first || 'there' : k === 'name' ? r?.name || 'there' : k === 'opener' ? r?.opener || '' : r?.fields?.[k] || '';
+  }).replace(/\n{3,}/g, '\n\n');
+  const rowFields = (l, r) => Object.fromEntries(l.columns.map((col, i) => [mergeKey(col), r.cells[i] || '']).filter(([k]) => k && !['name', 'first name', 'opener'].includes(k)));
   const firstOf = (name) => {
     const w = String(name || '').trim().split(/\s+/)[0];
     return /^\p{L}[\p{L}'’-]*$/u.test(w) ? w : '';
@@ -8683,7 +8796,7 @@
       box,
       h('p', { class: 'day-hint' }, 'Only contacts with an email address who haven’t unsubscribed are here.'),
     ], () => {
-      mailAdd(all.filter((x) => picked.has(x.id)).map((x) => ({ email: x.email, name: x.name, leadId: x.id })));
+      mailAdd(all.filter((x) => picked.has(x.id)).map((x) => ({ email: x.email, name: x.name, leadId: x.id, fields: { city: x.city || '', phone: x.phone || '' } })));
       renderTool();
     }, 'Add');
   }
@@ -8695,7 +8808,7 @@
     const info = h('p', { class: 'day-hint' });
     const people = () => {
       const l = lists.find((x) => x.id === pick.value), f = listFields(l), st = rowStatus(l);
-      return l.rows.filter((r) => !(fresh.checked && st.has(r.id))).map((r) => ({ email: r.cells[f.email], name: f.who(r) === '—' ? '' : f.who(r), first: f.first(r), listId: l.id, rowId: r.id, dne: r.dne }))
+      return l.rows.filter((r) => !(fresh.checked && st.has(r.id))).map((r) => ({ email: r.cells[f.email], name: f.who(r) === '—' ? '' : f.who(r), first: f.first(r), listId: l.id, rowId: r.id, dne: r.dne, fields: rowFields(l, r) }))
         .filter((p) => MAIL_RE.test(String(p.email || '').trim()) && !p.dne);
     };
     const update = () => (info.textContent = `${people().length} with an email address`);
@@ -8770,6 +8883,37 @@
     for (const el of [subject, body, footer]) el.addEventListener('input', () => { M.armed = false; update(); });
     camp.addEventListener('change', update);
     const payload = () => ({ subject: subject.value, body: body.value, footer: footer.value });
+    // A line written for each person, from what their list row says. It goes where {opener} is.
+    const lined = to.filter((r) => r.opener).length;
+    const openers = h('button', { class: 'btn small ai-btn', title: 'Your AI writes one opening line for each person, from their details. Read them before you send.' }, lined ? '✨ Write their lines again' : '✨ Write a line for each person');
+    openers.addEventListener('click', async () => {
+      if (!to.length) return toast('Add who it’s going to first');
+      Object.assign(M, { subject: subject.value, body: body.value });
+      for (let i = 0; i < to.length; i += 40) {
+        const part = to.slice(i, i + 40);
+        const r = await aiRun(openers, 'openers', { campaignId: camp.value || null, subject: subject.value, body: body.value, people: part.map((p) => ({ name: p.name, fields: p.fields })) });
+        if (!r) break;
+        for (const x of r.lines) if (part[x.i]) part[x.i].opener = x.text;
+      }
+      if (to.some((r) => r.opener) && !/\{\s*opener\s*\}/i.test(M.body)) {
+        // After the greeting, or at the top when there isn't one.
+        const lines = M.body.split('\n');
+        const greet = /^(hi|hey|hello|dear|good (morning|afternoon))\b/i.test(lines[0]?.trim() || '');
+        M.body = greet ? [lines[0], '', '{opener}', ...lines.slice(1)].join('\n').replace(/\{opener\}\n(?!\n)/, '{opener}\n\n') : `{opener}\n\n${M.body}`;
+      }
+      M.armed = false;
+      M.preview = true;
+      rerender();
+    });
+    const editLine = (r) => {
+      const ta = h('textarea', { rows: 3 });
+      ta.value = r.opener || '';
+      sheet(`Line for ${r.name || r.email}`, [ta, h('small', { class: 'day-hint' }, 'Goes where {opener} is in the message. Leave it empty for none.')], () => {
+        r.opener = ta.value.trim();
+        M.armed = false;
+        renderTool();
+      });
+    };
     const test = h('button', { class: 'btn small' }, 'Send me a test');
     test.addEventListener('click', async () => {
       test.disabled = true;
@@ -8810,14 +8954,19 @@
           amOwner() ? h('button', { class: 'btn small', onclick: pickTyped }, '+ Type or paste') : null),
         out.length ? h('small', { class: 'day-hint' }, `${out.length} unsubscribed, so they’re left out.`) : null,
         shown.map((r) => h('div', { class: 'mail-person' + (no.has(r.email) ? ' out' : '') },
-          h('span', {}, r.name ? h('b', {}, r.name) : null, h('small', {}, (r.name ? ' · ' : '') + r.email)),
+          h('span', {}, r.name ? h('b', {}, r.name) : null, h('small', {}, (r.name ? ' · ' : '') + r.email),
+            r.opener ? h('button', { class: 'mail-line', title: 'Their own line · tap to change it', onclick: () => editLine(r) }, r.opener) : null),
           h('button', { class: 't-btn', 'aria-label': 'Remove', html: I.close, onclick: () => { M.to = M.to.filter((y) => y !== r); M.armed = false; rerender(); } }))),
         M.to.length > 6 ? h('button', { class: 'link', onclick: () => { M.showAll = !M.showAll; rerender(); } }, M.showAll ? 'Show fewer' : `Show all ${M.to.length}`) : null,
         M.to.length ? h('button', { class: 'link mail-clear', onclick: () => { M.to = []; rerender(); } }, 'Clear') : null),
       h('section', { class: 'mail-form' },
         h('label', {}, 'Subject', subject),
         h('label', {}, 'Message', body),
-        h('small', { class: 'day-hint' }, '{first name} becomes each person’s first name, or “there” when there isn’t one.'),
+        h('small', { class: 'day-hint' }, '{first name} becomes each person’s first name, or “there” when there isn’t one.' + (() => {
+          const keys = [...new Set(to.flatMap((r) => Object.keys(r.fields || {}).filter((k) => r.fields[k])))].slice(0, 6);
+          return keys.length ? ` From their list: ${keys.map((k) => `{${k}}`).join(' ')}.` : '';
+        })() + (lined ? ` {opener} is each person’s own line (${lined} of ${to.length}).` : '')),
+        h('div', { class: 'mail-tools' }, openers),
         h('label', {}, 'Footer: your business and mailing address', footer),
         h('small', { class: 'day-hint' }, amOwner() ? 'Every email ends with this and the person’s own unsubscribe link.' : 'Every email ends with this and the person’s own unsubscribe link. Team owners set the footer.'),
         h('label', {}, 'Log each email in a campaign', camp),
