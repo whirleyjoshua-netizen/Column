@@ -27,11 +27,21 @@ let cfg = { serverUrl: DEFAULT_SERVER, alwaysOnTop: false, autoSave: false, open
 try {
   cfg = { ...cfg, ...JSON.parse(fs.readFileSync(CFG_PATH, 'utf8')) };
 } catch {}
+// Older versions saved the hosted server as http://, which it moves to https:// anyway.
+if (DEFAULT_SERVER && cfg.serverUrl && cfg.serverUrl !== DEFAULT_SERVER && new URL(DEFAULT_SERVER).host === (URL.canParse(cfg.serverUrl) ? new URL(cfg.serverUrl).host : '')) cfg.serverUrl = DEFAULT_SERVER;
 // The microphone only works on secure pages; a Column server on the local network is plain http.
 try {
   const u = cfg.serverUrl && new URL(cfg.serverUrl);
   if (u && u.protocol === 'http:' && u.hostname !== 'localhost' && u.hostname !== '127.0.0.1') app.commandLine.appendSwitch('unsafely-treat-insecure-origin-as-secure', u.origin);
 } catch {}
+// The Column server, whether the address was typed as http:// and the server moved us to https:// or not.
+function onServer(url) {
+  try {
+    return !!cfg.serverUrl && new URL(url).host === new URL(cfg.serverUrl).host;
+  } catch {
+    return false;
+  }
+}
 function saveCfg() {
   fs.mkdirSync(path.dirname(CFG_PATH), { recursive: true });
   fs.writeFileSync(CFG_PATH, JSON.stringify(cfg, null, 2));
@@ -102,7 +112,7 @@ function createWindow() {
   // Links open in the real browser, never inside the column. A file popped out of Column (/?view=<id>)
   // gets a window of its own instead, next to the column.
   win.webContents.setWindowOpenHandler(({ url }) => {
-    if (cfg.serverUrl && url.startsWith(cfg.serverUrl) && new URL(url).searchParams.has('view')) {
+    if (onServer(url) && new URL(url).searchParams.has('view')) {
       const { workArea } = screen.getPrimaryDisplay();
       const width = Math.min(760, workArea.width - win.getBounds().width);
       return {
@@ -129,13 +139,13 @@ function createWindow() {
     });
   });
   win.webContents.on('will-navigate', (e, url) => {
-    if (cfg.serverUrl && !url.startsWith(cfg.serverUrl) && !url.startsWith('file:')) {
+    if (cfg.serverUrl && !onServer(url) && !url.startsWith('file:')) {
       e.preventDefault();
       shell.openExternal(url);
     }
   });
   win.webContents.on('did-fail-load', (_e, code, desc, url, isMain) => {
-    if (isMain && cfg.serverUrl && url.startsWith(cfg.serverUrl)) loadSetup(`Couldn't reach ${cfg.serverUrl} (${desc}). Is the server running?`);
+    if (isMain && onServer(url)) loadSetup(`Couldn't reach ${cfg.serverUrl} (${desc}). Is the server running?`);
   });
   loadApp();
 }
@@ -303,10 +313,16 @@ ipcMain.on('set-next', (_e, info) => {
 });
 ipcMain.handle('connect', async (_e, raw) => {
   let url = String(raw || '').trim().replace(/\/+$/, '');
-  if (!/^https?:\/\//.test(url)) url = 'http://' + url;
-  const res = await fetch(url + '/api/health', { signal: AbortSignal.timeout(5000) }).catch(() => null);
-  const ok = res && res.ok && (await res.json().catch(() => ({}))).app === 'column';
-  if (!ok) throw new Error(`No Column server found at ${url}`);
+  // No http:// or https:// typed: try the secure address first, then plain (a server on the local network).
+  const tries = /^https?:\/\//.test(url) ? [url] : ['https://' + url, 'http://' + url];
+  let found = null;
+  for (const u of tries) {
+    const res = await fetch(u + '/api/health', { signal: AbortSignal.timeout(5000) }).catch(() => null);
+    // Keep the address the server ended up at, so http:// that moves to https:// is saved as https://.
+    if (res && res.ok && (await res.json().catch(() => ({}))).app === 'column') { found = new URL(res.url).origin; break; }
+  }
+  if (!found) throw new Error(`No Column server found at ${tries[tries.length - 1]}`);
+  url = found;
   cfg.serverUrl = url;
   saveCfg();
   win.loadURL(url);
