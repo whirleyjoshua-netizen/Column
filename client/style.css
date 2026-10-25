@@ -91,7 +91,7 @@ input:focus, textarea:focus, select:focus { border-color: var(--accent); }
 }
 .ws { display: flex; align-items: center; gap: 8px; font-weight: 650; font-size: 13.5px; min-width: 0; flex: 1; }
 #wsName { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.ws { cursor: pointer; }
+.ws { cursor: pointer; flex: 0 1 auto; margin-right: auto; }
 .ws-more { color: var(--muted); flex: none; margin-left: -4px; }
 .ws:hover .ws-more { color: var(--text); }
 .live { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); flex: none; transition: background 0.3s; }
@@ -109,7 +109,7 @@ input:focus, textarea:focus, select:focus { border-color: var(--accent); }
 
 /* desktop window chrome */
 body.desktop .bar { -webkit-app-region: drag; }
-body.desktop .bar button, body.desktop .bar .devices { -webkit-app-region: no-drag; }
+body.desktop .bar button, body.desktop .bar .devices, body.desktop .bar .ws { -webkit-app-region: no-drag; }
 body.platform-darwin .bar { padding-left: 76px; }
 
 .panes { flex: 1; display: flex; min-height: 0; }
