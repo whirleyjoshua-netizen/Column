@@ -52,6 +52,7 @@ a { color: var(--accent); }
 .login form { width: 100%; max-width: 320px; display: flex; flex-direction: column; gap: 12px; }
 .login .logo { width: 56px; height: 56px; margin: 0 auto 4px; }
 .login h1 { margin: 0; text-align: center; font-size: 20px; font-weight: 650; }
+.login .backteam { text-align: center; font-size: 13px; }
 .login .getapp { text-align: center; font-size: 12px; color: var(--muted); }
 .desktop .login .getapp { display: none; }
 @media (display-mode: standalone) { .login .getapp { display: none; } }
@@ -90,6 +91,9 @@ input:focus, textarea:focus, select:focus { border-color: var(--accent); }
 }
 .ws { display: flex; align-items: center; gap: 8px; font-weight: 650; font-size: 13.5px; min-width: 0; flex: 1; }
 #wsName { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ws { cursor: pointer; }
+.ws-more { color: var(--muted); flex: none; margin-left: -4px; }
+.ws:hover .ws-more { color: var(--text); }
 .live { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); flex: none; transition: background 0.3s; }
 .live.on { background: var(--ok); }
 .devices { display: flex; gap: 3px; }

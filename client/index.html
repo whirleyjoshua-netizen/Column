@@ -32,16 +32,18 @@
       <label>This device<input name="device" placeholder="MacBook"></label>
       <button class="primary" type="submit" id="loginBtn">Sign in</button>
       <p class="err" id="loginErr"></p>
+      <a class="backteam hidden" id="loginBack" href="#"></a>
       <a class="getapp" href="/download">Get the Column app for this device</a>
     </form>
   </div>
 
   <div id="app" class="app hidden">
     <header class="bar">
-      <div class="ws" title="Account / team">
+      <div class="ws" title="Switch team" role="button">
         <span class="live" id="liveDot"></span>
         <img id="wsLogo" class="ws-logo hidden" alt="">
         <span id="wsName"></span>
+        <svg class="ws-more" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
       </div>
       <div class="devices" id="devices"></div>
       <button class="icon-btn" id="toolsBtn" title="Tools" aria-label="Tools">

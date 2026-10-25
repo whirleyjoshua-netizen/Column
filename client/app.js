@@ -15,10 +15,15 @@
     for (const kid of kids.flat()) if (kid != null && kid !== false) el.append(kid);
     return el;
   };
+  // What this device remembers that belongs to one team (open feed, read marks, panes…). A second team
+  // signed in here keeps its own copy under its id; the first team keeps the plain keys it always had.
+  const TEAM_KEYS = new Set(['campOpen', 'chatView', 'lastRead', 'chatSince', 'dock', 'fired', 'mapQueue', 'mapRun', 'panes', 'goalsClosed', 'sendHide', 'stepsOpen', 'chatCollapsed']);
+  let teamNs = '';
+  const keyOf = (k) => 'column.' + (teamNs && TEAM_KEYS.has(k) ? teamNs + '.' : '') + k;
   const store = {
     get(k, d) {
       try {
-        const v = localStorage.getItem('column.' + k);
+        const v = localStorage.getItem(keyOf(k));
         return v == null ? d : JSON.parse(v);
       } catch {
         return d;
@@ -26,15 +31,16 @@
     },
     set(k, v) {
       try {
-        localStorage.setItem('column.' + k, JSON.stringify(v));
+        localStorage.setItem(keyOf(k), JSON.stringify(v));
       } catch {}
     },
     del(k) {
       try {
-        localStorage.removeItem('column.' + k);
+        localStorage.removeItem(keyOf(k));
       } catch {}
     },
   };
+  teamNs = store.get('accounts', []).find((a) => a.token === store.get('token'))?.ns || '';
   const newId = () => Math.random().toString(36).slice(2) + Date.now().toString(36);
 
   const desktop = window.columnDesktop || null;
@@ -204,6 +210,47 @@
     return data;
   }
 
+  // ---------- teams on this device ----------
+  // Each team signed in here keeps its token, so switching is a tap. Switching reloads the page,
+  // so nothing from one team is left showing in the other.
+  const accounts = () => store.get('accounts', []);
+  function nsFor(wsId) {
+    let first = store.get('firstTeam', null);
+    if (!first) store.set('firstTeam', (first = wsId));
+    return wsId === first ? '' : wsId;
+  }
+  function keepAccount(token, ws, member) {
+    const list = accounts();
+    const a = { token, wsId: ws.id, ws: ws.name, member, ns: nsFor(ws.id) };
+    const i = list.findIndex((x) => x.wsId === ws.id);
+    if (i >= 0) list[i] = a;
+    else list.push(a);
+    store.set('accounts', list);
+  }
+  function switchTeam(token) {
+    store.set('token', token);
+    location.reload();
+  }
+  function teamMenu(anchor) {
+    openMenu(anchor, [
+      { head: 'Teams' },
+      ...accounts().map((a) => (a.token === S.token ? { label: '✓ ' + S.workspace.name, on: true, run: () => {} } : { label: a.ws, run: () => switchTeam(a.token) })),
+      { label: '+ Add a team', run: addTeam },
+    ]);
+  }
+  function addTeam() {
+    S.adding = true;
+    S.loginMode = 'signin';
+    showLogin();
+  }
+  $('.ws').addEventListener('click', (e) => teamMenu(e.currentTarget));
+  $('#loginBack').addEventListener('click', (e) => {
+    e.preventDefault();
+    S.adding = false;
+    $('#login').classList.add('hidden');
+    $('#app').classList.remove('hidden');
+  });
+
   // ---------- auth ----------
   function showLogin() {
     $('#app').classList.add('hidden');
@@ -211,7 +258,9 @@
     const f = $('#loginForm');
     f.name.value = store.get('name', '');
     f.device.value = store.get('device', guessDevice());
-    f.workspace.value = store.get('lastWorkspace', '');
+    f.workspace.value = S.adding ? '' : store.get('lastWorkspace', '');
+    $('#loginBack').classList.toggle('hidden', !S.adding);
+    if (S.adding) $('#loginBack').textContent = 'Back to ' + S.workspace.name;
     setLoginMode(S.loginMode);
     (!f.workspace.value ? f.workspace : !f.name.value ? f.name : f.password).focus();
   }
@@ -257,13 +306,17 @@
         deviceId: S.deviceId,
       };
       const r = await api('POST', '/auth', body);
+      if (S.adding && r.workspace.id === S.workspace.id) throw new Error('You’re already signed in to ' + r.workspace.name + '.');
       S.token = r.token;
       store.set('token', r.token);
       store.set('name', body.name);
       store.set('device', body.device);
       store.set('lastWorkspace', body.workspace);
+      keepAccount(r.token, r.workspace, body.name);
       f.password.value = '';
       f.code.value = '';
+      // Another team's settings live under its own keys, which this page didn't load with.
+      if (S.adding || nsFor(r.workspace.id) !== teamNs) return location.reload();
       await start();
     } catch (err) {
       $('#loginErr').textContent = err.message;
@@ -273,6 +326,10 @@
   });
 
   function signOutLocal() {
+    // Signed in to another team here too: go there rather than to the sign-in screen.
+    store.set('accounts', accounts().filter((a) => a.token !== S.token));
+    const next = accounts()[0];
+    if (next) return switchTeam(next.token);
     vaultLock();
     mapResetLocal();
     VK.meta = undefined;
@@ -532,6 +589,7 @@
     S.version ||= st.version;
     S.workspace = st.workspace;
     S.me = st.me;
+    keepAccount(S.token, S.workspace, S.me.member);
     S.items = st.items;
     S.entries = st.entries || [];
     S.tasks = st.tasks || [];
