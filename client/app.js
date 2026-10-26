@@ -2757,7 +2757,9 @@
   const stepOf = (t) => !!(t.goalId && goalById(t.goalId));
   function renderTasks() {
     const keep = D.scroll.scrollTop;
-    const mineOnly = D.mine;
+    // "Assigned to me" only applies while its switch is showing, so a task is never hidden with no way to see why.
+    const canFilter = S.tasks.some((t) => t.assigneeId || t.roleId);
+    const mineOnly = D.mine && canFilter;
     const steps = D.taskView === 'camps';
     const shown = S.tasks.filter((t) => (!mineOnly || taskMine(t)) && stepOf(t) === steps);
     const open = shown.filter((t) => !t.done).sort(byPrio);
@@ -2769,7 +2771,7 @@
     parts.push(h('div', { class: 'seg mine-seg' },
       h('button', { class: steps ? '' : 'on', onclick: () => view('mine') }, 'My tasks'),
       h('button', { class: steps ? 'on' : '', onclick: () => view('camps') }, 'Campaign steps', stepsDue.length ? h('span', { class: 'seg-n' }, stepsDue.length) : null)));
-    if (S.tasks.some((t) => t.assigneeId)) {
+    if (canFilter) {
       parts.push(h('div', { class: 'seg mine-seg' },
         h('button', { class: mineOnly ? '' : 'on', onclick: () => { D.mine = false; store.set('tasksMine', false); renderDay(); } }, 'All tasks'),
         h('button', { class: mineOnly ? 'on' : '', onclick: () => { D.mine = true; store.set('tasksMine', true); renderDay(); } }, 'Assigned to me')));
@@ -2865,7 +2867,18 @@
         ta.value = '';
         update();
         try {
-          upsertTask(await api('POST', '/tasks', parseTask(raw)));
+          const t = await api('POST', '/tasks', parseTask(raw));
+          upsertTask(t);
+          // Typed while the list shows something this task isn't part of: switch to where it is.
+          if (D.taskView === 'camps' && !stepOf(t)) {
+            D.taskView = 'mine';
+            store.set('taskView', 'mine');
+          }
+          if (D.mine && !taskMine(t)) {
+            D.mine = false;
+            store.set('tasksMine', false);
+            toast('Added. Showing all tasks, since this one isn’t assigned to anyone. Add @name to assign it.');
+          }
           renderDay();
         } catch (e) {
           ta.value = raw;
