@@ -387,9 +387,10 @@ body.platform-darwin .bar { padding-left: 76px; }
 .day-sub button { padding: 4px; font-size: 12.5px; }
 .tasks .any-h { display: flex; justify-content: space-between; align-items: center; }
 .tasks .any-h .link { font-size: 10.5px; text-transform: none; letter-spacing: 0; }
-.task-row { align-items: center; cursor: default; }
-.task-row .p-text { cursor: text; padding-top: 0; }
-.task-row .rename { flex: 1; margin: 0; }
+.task-row { align-items: center; cursor: default; flex-wrap: wrap; justify-content: flex-end; row-gap: 4px; }
+/* The text keeps a readable width; in a narrow panel the chips and buttons drop to a line under it. */
+.task-row .p-text { cursor: text; padding-top: 0; flex: 1 1 200px; }
+.task-row .rename { flex: 1 1 200px; margin: 0; }
 .t-btn { flex: none; background: none; border: 0; padding: 4px; border-radius: 6px; color: var(--muted); display: grid; place-items: center; opacity: 0; }
 .t-btn svg { width: 14px; height: 14px; }
 .t-btn:hover { color: var(--text); background: var(--card); }
