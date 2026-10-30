@@ -321,7 +321,11 @@ function publicItem(it) {
 // The blocks go out only when the doc is opened. Notes from before docs have only text: they read as blocks
 // the first time they're opened, and become blocks for good the first time they're edited.
 // Blocks are flat; nesting is an indent. Text is runs of plain text with marks, never markup.
-const DOC_TYPES = ['p', 'h1', 'h2', 'h3', 'ul', 'ol', 'todo', 'quote', 'callout', 'code', 'toggle', 'divider', 'table', 'file'];
+const DOC_TYPES = ['p', 'h1', 'h2', 'h3', 'ul', 'ol', 'todo', 'quote', 'callout', 'code', 'toggle', 'divider', 'table', 'file', 'live'];
+// A mention points at something else in Column. A live block shows numbers from it, or a snapshot of them.
+const DOC_REFS = ['member', 'campaign', 'goal', 'task', 'doc'];
+const DOC_LIVE = ['campaign', 'goal', 'tasks', 'calls', 'budgets', 'list'];
+const DOC_SNAP_MAX = 60_000;
 const DOC_TEXT_TYPES = new Set(['p', 'h1', 'h2', 'h3', 'ul', 'ol', 'todo', 'quote', 'callout', 'code', 'toggle']);
 const DOC_BLOCKS = 5000;
 const DOC_BLOCK_CHARS = 20_000;
@@ -343,9 +347,11 @@ function cleanRuns(v, plain) {
       for (const k of ['b', 'i', 'u', 's', 'code']) if (r[k]) run[k] = true;
       const link = docLink(r.link);
       if (link) run.link = link;
+      if (DOC_REFS.includes(r.ref?.k) && docId(r.ref.id)) run.ref = { k: r.ref.k, id: r.ref.id };
     }
     const last = out.at(-1);
-    if (last && ['b', 'i', 'u', 's', 'code', 'link'].every((k) => last[k] === run[k])) last.text += run.text;
+    const refKey = (x) => (x.ref ? x.ref.k + ':' + x.ref.id : '');
+    if (last && ['b', 'i', 'u', 's', 'code', 'link'].every((k) => last[k] === run[k]) && refKey(last) === refKey(run)) last.text += run.text;
     else out.push(run);
     if (!room) break;
   }
@@ -360,6 +366,18 @@ function cleanDocBlock(v) {
   if (indent > 0) x.indent = Math.min(8, indent);
   if (DOC_TEXT_TYPES.has(type)) x.runs = cleanRuns(v.runs, type === 'code');
   if (type === 'todo' && v.checked) x.checked = true;
+  if (type === 'todo' && docId(v.taskId)) x.taskId = v.taskId;
+  if (type === 'live') {
+    if (!DOC_LIVE.includes(v.source)) return null;
+    x.source = v.source;
+    if (docId(v.ref)) x.ref = v.ref;
+    if ([7, 30, 90].includes(Number(v.days))) x.days = Number(v.days);
+    // A snapshot: numbers as they were, shown as text only.
+    if (v.snap && typeof v.snap === 'object' && Number.isFinite(Number(v.snap.at))) {
+      const data = JSON.stringify(v.snap.data ?? null);
+      if (data.length <= DOC_SNAP_MAX) x.snap = { at: Number(v.snap.at), data: JSON.parse(data) };
+    }
+  }
   if (type === 'toggle' && v.closed) x.closed = true;
   if (type === 'callout') x.emoji = String(v.emoji || '💡').slice(0, 8);
   if (type === 'code' && v.lang) x.lang = cleanText(v.lang, 20);
@@ -396,6 +414,7 @@ function docText(title, blocks) {
     if (b.type === 'divider') return '---';
     if (b.type === 'table') return b.rows.map((r) => '| ' + r.map(runsText).join(' | ') + ' |').join('\n');
     if (b.type === 'file') return `[${b.name || 'File'}]`;
+    if (b.type === 'live') return `[${{ campaign: 'Campaign summary', goal: 'Goal progress', tasks: 'Task list', calls: 'Call stats', budgets: 'Budgets', list: 'Call list' }[b.source]}${b.snap ? ' as of ' + fmtDay(b.snap.at) : ''}]`;
     return pad + t;
   });
   // The title is always the first line, even when it's empty.
@@ -473,6 +492,26 @@ function cleanDocOps(v) {
     const set = cleanDocBlock(op?.set);
     return set ? { set, after: docId(op.after) } : null;
   }).filter(Boolean);
+}
+// What a doc points at, as "kind:id": its mentions, its tasks, and what its live blocks show. Each card
+// carries this, so anything can list the docs that mention it.
+function docRefs(blocks) {
+  const out = new Set();
+  for (const b of blocks) {
+    for (const r of [...(b.runs || []), ...(b.rows || []).flat(2)]) if (r.ref) out.add(r.ref.k + ':' + r.ref.id);
+    if (b.taskId) out.add('task:' + b.taskId);
+    if (b.type === 'live' && b.ref) out.add((['tasks', 'calls'].includes(b.source) ? 'campaign' : b.source) + ':' + b.ref);
+  }
+  return [...out].slice(0, 300);
+}
+// People newly mentioned in a doc hear about it, if they can see the doc.
+function docMentions(ws, it, before, auth) {
+  const had = new Set(before || []);
+  for (const key of it.refs || []) {
+    const [k, id] = key.split(':');
+    if (k !== 'member' || had.has(key) || id === auth.memberId || !ws.members.some((m) => m.id === id)) continue;
+    broadcast(ws.id, { type: 'doc:mention', forMember: id, docId: it.id, title: it.title || 'a doc', by: auth.member, item: { id: it.id } });
+  }
 }
 // Files shown in a doc stay as long as the doc does.
 function pinDocFiles(ws, blocks) {
@@ -552,6 +591,8 @@ function applyTask(t, body) {
   if (body.assigneeId && t.assigneeId) t.roleId = null;
   else if (body.roleId && t.roleId) t.assigneeId = null;
   if (body.report !== undefined) t.report = !!body.report;
+  // The doc it was made in, when it's a to-do there.
+  if (body.docId !== undefined) t.docId = body.docId && db.items[body.docId]?.wsId === t.wsId && db.items[body.docId].type === 'text' ? body.docId : null;
   // Files attached to it, like the finished list a "Provide a list of…" task asked for. Items in the same team.
   if (body.files !== undefined) t.files = [...new Set((Array.isArray(body.files) ? body.files : []).filter((id) => typeof id === 'string' && db.items[id]?.wsId === t.wsId))].slice(0, 20);
   // Where it sits when dragged: order within its goal, dayOrder on the Tasks list. null = not placed by hand.
@@ -4581,9 +4622,12 @@ async function api(req, res, url) {
       const dir = type === 'text' && !parent ? validDir(ws, dirId, auth.memberId) : null;
       const where = parent ? { parentId: parent.id, channelId: parent.channelId || null } : dir ? { dirId: dir } : { stackId: validStack(ws, stackId, auth.memberId), channelId: validChannel(ws, channelId, auth.memberId) };
       if (!parent && channelId && !where.channelId) return send(res, 404, { error: 'Feed not found' });
-      const item = addItem(baseItem(auth, { type, text: t, ...where, ...(made ? { title: made.title, blocks: made.blocks, v: 0, pinned: true, editedAt: Date.now() } : {}) }));
+      const item = addItem(baseItem(auth, { type, text: t, ...where, ...(made ? { title: made.title, blocks: made.blocks, refs: docRefs(made.blocks), v: 0, pinned: true, editedAt: Date.now() } : {}) }));
       if (type === 'message') pinLinked(ws, t);
-      if (made) pinDocFiles(ws, made.blocks);
+      if (made) {
+        pinDocFiles(ws, made.blocks);
+        docMentions(ws, item, [], auth);
+      }
       return send(res, 200, publicItem(item));
     }
     const it = b && db.items[b];
@@ -4604,11 +4648,14 @@ async function api(req, res, url) {
       it.blocks = blocks;
       it.title = title ?? now.title;
       it.text = docText(it.title, it.blocks);
+      const before = it.refs;
+      it.refs = docRefs(it.blocks);
       it.v = (it.v || 0) + 1;
       it.editedAt = Date.now();
       it.pinned = true;
       pinLinked(ws, it.text);
       pinDocFiles(ws, ops.filter((o) => o.set).map((o) => o.set));
+      docMentions(ws, it, before, auth);
       save();
       // The editors with it open apply the same changes; the cards just show the new text.
       broadcast(ws.id, { type: 'doc', id: it.id, item: { id: it.id }, v: it.v, ops, order, title, sid: cleanText(body.sid, 40) });
@@ -4655,6 +4702,7 @@ async function api(req, res, url) {
           if (it.blocks) {
             delete it.blocks;
             delete it.title;
+            delete it.refs;
             it.v = (it.v || 0) + 1;
             broadcast(ws.id, { type: 'doc', id: it.id, item: { id: it.id }, v: it.v, reload: true });
           }

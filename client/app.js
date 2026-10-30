@@ -382,6 +382,8 @@
   }
 
   function handle(msg) {
+    // An open doc's live blocks, tasks and links follow the numbers.
+    if (DV.doc && /^(task|goal|campaign|attempt|list|money|budget|item)/.test(msg.type)) setTimeout(docLiveSoon);
     if (msg.type === 'item:add') {
       const isNew = !S.items.some((x) => x.id === msg.item.id);
       upsert(msg.item);
@@ -397,6 +399,16 @@
       refreshLinks();
     } else if (msg.type === 'doc') {
       docNews(msg);
+    } else if (msg.type === 'doc:mention') {
+      const it = S.items.find((y) => y.id === msg.docId);
+      const open = () => it && openDoc(it);
+      toast(`${msg.by} mentioned you in “${msg.title}”`, it ? { label: 'Open', run: open } : undefined);
+      if (S.notify && document.hidden && 'Notification' in window && Notification.permission === 'granted') {
+        try {
+          const n = new Notification(`${msg.by} mentioned you`, { body: msg.title, icon: '/icon-128.png' });
+          n.onclick = () => { window.focus(); open(); };
+        } catch {}
+      }
     } else if (msg.type === 'item:remove') {
       S.items = S.items.filter((x) => x.id !== msg.id);
       if (DV.doc?.id === msg.id) { closeDoc(true); toast('That doc was deleted.'); }
@@ -2464,6 +2476,7 @@
         h('span', { html: KIND_ICON[list.kind || 'calls'] }), lp.of ? `${lp.n}/${lp.of}` : '') : null,
       taskFiles(t).length ? h('button', { class: 'list-chip file-chip', title: taskFiles(t).map((it) => it.name || 'Note').join(', '), onclick: (ev) => { ev.stopPropagation(); taskFiles(t).length === 1 ? openPreview(taskFiles(t)[0]) : taskFilesMenu(ev.currentTarget, t); } },
         h('span', { html: I.clip }), taskFiles(t).length === 1 ? shortText(taskFiles(t)[0].name || 'Note', 18) : String(taskFiles(t).length)) : null,
+      t.docId && S.items.some((x) => x.id === t.docId) ? h('button', { class: 'list-chip', title: `From the doc “${docTitle(S.items.find((x) => x.id === t.docId))}”`, onclick: (ev) => { ev.stopPropagation(); openDoc(S.items.find((x) => x.id === t.docId)); } }, '📄 Doc') : null,
       t.pinId && pinById(t.pinId) ? h('button', { class: 'list-chip', title: 'Show it on the map', onclick: (ev) => { ev.stopPropagation(); openMap({ pinId: t.pinId }); } }, 'Map') : null,
       camp && !inCampaign && !noCamp ? h('button', { class: 'camp-chip c-' + camp.color, title: `${camp.name} · ${g.title}`, onclick: () => openCampaign(camp.id) }, camp.name) : null,
       t.assigneeId ? avatar(t.assigneeId) : t.roleId ? roleChip(t.roleId) : null,
@@ -4628,6 +4641,9 @@
       { label: '+ New Word document', run: () => newDocSheet({ stackId: c.stackId }) },
       ...(notes.length ? [{ head: 'Recent docs' }] : []),
       ...notes.slice(0, 8).map((it) => ({ label: h('span', { class: 'mfile' }, h('span', { class: 'mfile-name' }, docTitle(it)), h('small', { class: 'mfile-when' }, ago(it.editedAt || it.createdAt))), run: () => openDoc(it) })),
+      // Docs elsewhere that mention this campaign or its goals, or show its numbers.
+      ...((m) => (m.length ? [{ head: 'Mentioned in' }, ...m.slice(0, 6).map((it) => ({ label: h('span', { class: 'mfile' }, h('span', { class: 'mfile-name' }, docTitle(it)), h('small', { class: 'mfile-when' }, docWhere(it))), run: () => openDoc(it) }))] : []))(
+        docsMentioning(['campaign:' + c.id, ...goalsOf(c.id).map((g) => 'goal:' + g.id)]).filter((it) => it.stackId !== c.stackId)),
       { label: notes.length > 8 ? `Go to the stack · all ${notes.length} docs` : 'Go to the stack', run: () => showStack(c.stackId) },
     ]);
   }
@@ -6038,6 +6054,17 @@
       openFile: (id) => { const f = S.items.find((y) => y.id === id); if (f) openPreview(f); },
       menu: openMenu,
       toast,
+      refInfo: docRefInfo,
+      mentions: docMentionList,
+      openRef: docOpenRef,
+      live: docLiveShow,
+      liveData: docLiveData,
+      pickLive: docPickLive,
+      task: taskById,
+      taskChips: docTaskChips,
+      toggleTask: (id, on) => { const t = taskById(id); if (t) patchTask(t, { done: on }); },
+      makeTask: docMakeTask,
+      openTask: docOpenTask,
     });
     DV.doc = x;
     const more = (e) => openMenu(e.currentTarget, [
@@ -6055,7 +6082,9 @@
         h('span', { class: 'dv-where' }, docWhere(item())),
         status,
         h('button', { class: 'icon-btn', 'aria-label': 'Doc options', html: I.more, onclick: more })),
-      h('div', { class: 'dv-scroll' }, h('div', { class: 'dv-page' }, x.ed.el)));
+      h('div', { class: 'dv-scroll' }, h('div', { class: 'dv-page' }, x.ed.el, h('div', { class: 'dv-links' }))));
+    docLinksDraw(x);
+    docTasksSync(x);
     if (fresh) x.ed.el.querySelector('.dk-title').focus();
   }
   function closeDoc(gone) {
@@ -6084,11 +6113,14 @@
     }
     x.busy = true;
     x.status.textContent = 'Saving…';
+    docTasksPush(x, ops);
     try {
       const r = await api('PATCH', `/items/${x.id}/doc`, { ops, order, title, sid: x.sid });
       x.pending.set(r.v, { ops, order, title, mine: true });
       docDrain(x);
       x.status.textContent = 'Saved';
+      // Task changes that came in while this was unsaved.
+      if (DV.doc === x) docTasksSync(x);
     } catch (e) {
       x.status.textContent = 'Not saved · trying again';
       if (!closing) x.timer = setTimeout(() => docSave(x), 4000);
@@ -6150,7 +6182,7 @@
       let out;
       if (as === 'docx') {
         toast('Making the Word file…');
-        const page = ColumnDocs.toHtml(x.ed.blocks, { shift: 1, files });
+        const page = ColumnDocs.toHtml(x.ed.blocks, { shift: 1, files, live: docLiveLines });
         if (x.ed.title.trim()) page.prepend(h('h1', {}, x.ed.title.trim()));
         const doc = await ColumnWord.read(await (await ColumnWord.blank()).arrayBuffer());
         out = await uploadFile(new File([await doc.save(page)], name + '.docx', { type: ColumnWord.DOCX }), { stackId: it?.stackId || null, dirId: it?.dirId || null });
@@ -6164,7 +6196,7 @@
           const img = await new Promise((done) => { const i = new Image(); i.onload = () => done(i); i.onerror = () => done(null); i.src = src; });
           return img && { src, w: img.naturalWidth, h: img.naturalHeight };
         };
-        out = await api('POST', '/docs/pdf', { itemId: x.id, name, blocks: await ColumnDocs.toPdf(x.ed.title.trim(), x.ed.blocks, pics) });
+        out = await api('POST', '/docs/pdf', { itemId: x.id, name, blocks: await ColumnDocs.toPdf(x.ed.title.trim(), x.ed.blocks, pics, docLiveLines) });
         if (it?.dirId) out = await api('PATCH', '/items/' + out.id, { dirId: it.dirId }).catch(() => out);
         upsert(out);
       }
@@ -6192,6 +6224,240 @@
         h('button', { class: 'btn primary-btn', onclick: () => { closeTool(); newDoc(); } }, '+ New doc')),
       list,
     ];
+  }
+
+  // ----- connections: mentions, live blocks, to-dos that are tasks, and what links to what -----
+  // Each doc card carries refs ("campaign:id", "task:id"…) from the server, so the docs that mention
+  // something are found from the cards, with no extra request.
+  const docsMentioning = (keys, exceptId) => S.items.filter((x) => x.type === 'text' && x.id !== exceptId && x.refs?.some((k) => keys.includes(k)))
+    .sort((a, b) => (b.editedAt || b.createdAt) - (a.editedAt || a.createdAt));
+  const docCampaign = (it) => campById(stackById(it?.stackId)?.campaignId);
+  const member = (id) => S.workspace?.members?.find((m) => m.id === id);
+  // What a mention shows: the thing's name now, or that it's gone.
+  function docRefInfo(ref) {
+    if (ref.k === 'member') { const m = member(ref.id); return m ? { label: '@' + m.name, hint: 'Someone on the team' } : { gone: true }; }
+    if (ref.k === 'campaign') { const c = campById(ref.id); return c ? { label: c.name, hint: 'Campaign · click to open' } : { gone: true }; }
+    if (ref.k === 'goal') { const g = goalById(ref.id); return g ? { label: g.title, hint: `Goal in ${campById(g.campaignId)?.name || 'a campaign'} · ${goalProgress(g).label}` } : { gone: true }; }
+    if (ref.k === 'task') { const t = taskById(ref.id); return t ? { label: (t.done ? '✓ ' : '') + shortText(t.text, 60), hint: 'Task · click to open' } : { gone: true }; }
+    if (ref.k === 'doc') { const d = S.items.find((x) => x.id === ref.id && x.type === 'text'); return d ? { label: docTitle(d), hint: 'Doc · click to open' } : { gone: true }; }
+    return { gone: true };
+  }
+  // The "@" list: people, docs, campaigns, goals and open tasks whose name has the words typed.
+  function docMentionList(q) {
+    const s = q.toLowerCase();
+    const has = (t) => !s || String(t || '').toLowerCase().includes(s);
+    const self = DV.doc?.id;
+    const people = (S.workspace?.members || []).filter((m) => has(m.name)).slice(0, 5).map((m) => ({ k: 'member', id: m.id, label: '@' + m.name, sub: m.id === S.me?.memberId ? 'You' : 'Person', icon: m.name[0].toUpperCase() }));
+    const docs = S.items.filter((x) => x.type === 'text' && x.id !== self && has(docTitle(x))).sort((a, b) => (b.editedAt || b.createdAt) - (a.editedAt || a.createdAt)).slice(0, 4).map((x) => ({ k: 'doc', id: x.id, label: docTitle(x), sub: 'Doc · ' + docWhere(x), icon: '📄' }));
+    const camps = S.campaigns.filter((c) => has(c.name)).sort((a, b) => (a.status === 'done') - (b.status === 'done')).slice(0, 4).map((c) => ({ k: 'campaign', id: c.id, label: c.name, sub: `Campaign · ${Math.round(campProgress(c) * 100)}%`, icon: '◎' }));
+    const goals = S.goals.filter((g) => has(g.title) && campById(g.campaignId)).slice(0, 3).map((g) => ({ k: 'goal', id: g.id, label: g.title, sub: 'Goal · ' + campById(g.campaignId).name, icon: '▰' }));
+    const tasks = s ? S.tasks.filter((t) => !t.done && has(t.text)).slice(0, 4).map((t) => ({ k: 'task', id: t.id, label: shortText(t.text, 60), sub: 'Task' + (goalById(t.goalId) ? ' · ' + goalById(t.goalId).title : ''), icon: '✓' })) : [];
+    return [...people, ...docs, ...camps, ...goals, ...tasks].slice(0, 14);
+  }
+  function docOpenRef(ref) {
+    const go = (fn) => { closeDoc(); fn(); };
+    if (ref.k === 'campaign' && campById(ref.id)) return go(() => { setTab('camps'); openCampaign(ref.id); });
+    if (ref.k === 'goal' && goalById(ref.id)) return go(() => { setTab('camps'); openCampaign(goalById(ref.id).campaignId); });
+    if (ref.k === 'task' && taskById(ref.id)) return docOpenTask(ref.id);
+    if (ref.k === 'doc') { const d = S.items.find((x) => x.id === ref.id); if (d) return openDoc(d); }
+    if (ref.k === 'member' && member(ref.id)) return toast(`${member(ref.id).name} is on the team`);
+    toast('That isn’t in Column any more.');
+  }
+  function docOpenTask(id) {
+    const t = taskById(id);
+    if (!t) return toast('That task was deleted.');
+    const g = goalById(t.goalId);
+    closeDoc();
+    if (g) { setTab('camps'); openCampaign(g.campaignId); } else showTasks();
+  }
+
+  // Live blocks: the numbers now, or the snapshot's. Each kind gives plain data, so a snapshot can keep it.
+  function docLiveData(b) {
+    const today = todayKey();
+    if (b.source === 'campaign') {
+      const c = campById(b.ref);
+      if (!c) return null;
+      const m = (S.money || []).filter((x) => x.campaignId === c.id);
+      return { name: c.name, status: c.status, start: c.start, end: c.end, pct: Math.round(campProgress(c) * 100),
+        goals: goalsOf(c.id).map((g) => ({ title: g.title, label: goalProgress(g).label, pct: Math.round(goalProgress(g).frac * 100) })),
+        subs: subsOf(c).map((x) => ({ name: x.name, pct: Math.round(campProgress(x) * 100) })),
+        late: S.tasks.filter((t) => !t.done && t.due && t.due < today && goalById(t.goalId)?.campaignId === c.id).length,
+        spent: m.reduce((n, x) => n + (x.kind === 'out' ? x.amount : 0), 0), earned: m.reduce((n, x) => n + (x.kind === 'in' ? x.amount : 0), 0) };
+    }
+    if (b.source === 'goal') {
+      const g = goalById(b.ref);
+      if (!g) return null;
+      const p = goalProgress(g);
+      return { title: g.title, campaign: campById(g.campaignId)?.name, label: p.label, pct: Math.round(p.frac * 100), due: g.due || null };
+    }
+    if (b.source === 'tasks') {
+      const c = campById(b.ref);
+      if (b.ref && !c) return null;
+      const all = S.tasks.filter((t) => (c ? goalById(t.goalId)?.campaignId === c.id : !t.done && (t.assigneeId === S.me?.memberId || (!t.assigneeId && !t.roleId && !t.goalId))));
+      const open = all.filter((t) => !t.done).sort((a, b) => (a.due || '9') < (b.due || '9') ? -1 : 1);
+      return { name: c ? c.name : 'My open tasks', done: all.filter((t) => t.done).length, open: open.length, late: open.filter((t) => t.due && t.due < today).length,
+        items: open.slice(0, 25).map((t) => ({ id: t.id, text: t.text, due: t.due || null, who: whoName(t) || null })) };
+    }
+    if (b.source === 'calls') {
+      const c = campById(b.ref);
+      if (!c) return null;
+      const since = b.days ? Date.now() - b.days * 864e5 : 0;
+      const xs = S.attempts.filter((x) => (x.campaignId === c.id || subsOf(c).some((y) => y.id === x.campaignId)) && x.at >= since);
+      const by = (k) => Object.entries(xs.reduce((m, x) => ((m[x[k] || '—'] = (m[x[k] || '—'] || 0) + 1), m), {})).sort((p, q) => q[1] - p[1]);
+      return { name: c.name, days: b.days || 0, total: xs.length, outcomes: by('outcome'), methods: xs.some((x) => x.method) ? by('method') : [], people: by('by').slice(0, 8), sold: xs.reduce((n, x) => n + (x.amount || 0), 0) };
+    }
+    if (b.source === 'budgets') {
+      const ym = today.slice(0, 7);
+      const xs = (S.money || []).filter((x) => x.day?.startsWith(ym));
+      return { month: ym, rows: (S.budgets || []).slice().sort((p, q) => p.category.localeCompare(q.category)).map((x) => ({ category: x.category, scope: x.scope, spent: spentOn(xs.filter((y) => y.scope === x.scope), x.category), limit: x.limit })) };
+    }
+    if (b.source === 'list') {
+      const l = S.lists.find((x) => x.id === b.ref);
+      if (!l) return null;
+      const p = listProgress(l);
+      return { name: l.name, campaign: campById(l.campaignId)?.name, label: p.label, pct: p.of ? Math.round((p.n / p.of) * 100) : null };
+    }
+    return null;
+  }
+  const lvBar = (pct) => h('div', { class: 'pbar ' + (pct >= 100 ? 'c-green' : 'c-violet') }, h('i', { style: `width:${Math.max(0, Math.min(100, pct || 0))}%` }));
+  // What a live block shows. A snapshot is drawn from its saved numbers and can't be ticked.
+  function docLiveShow(b) {
+    const d = b.snap ? b.snap.data : docLiveData(b);
+    const live = !b.snap;
+    const gone = (what) => ({ title: LIVE_TITLE[b.source], body: h('p', { class: 'dk-live-none' }, `That ${what} isn’t in Column any more.`) });
+    if (!d) return gone({ campaign: 'campaign', goal: 'goal', tasks: 'campaign', calls: 'campaign', list: 'list' }[b.source] || 'thing');
+    const row = (label, value, pct) => h('div', { class: 'lv-row' }, h('div', { class: 'lv-top' }, h('span', {}, label), h('small', {}, value)), pct != null ? lvBar(pct) : null);
+    if (b.source === 'campaign') return { title: d.name, body: h('div', {},
+      h('div', { class: 'lv-big' }, h('b', {}, d.pct + '%'), h('small', {}, [d.status, d.start && d.end ? `${dueLabel(d.start)} → ${dueLabel(d.end)}` : '', d.late ? `${d.late} overdue` : ''].filter(Boolean).join(' · '))),
+      lvBar(d.pct),
+      ...(d.goals || []).map((g) => row(g.title, g.label, g.pct)),
+      ...(d.subs || []).map((x) => row(x.name + ' (sub-campaign)', x.pct + '%', x.pct)),
+      d.spent || d.earned ? h('small', { class: 'lv-note' }, `Spent ${money(d.spent)} · brought in ${money(d.earned)}`) : null) };
+    if (b.source === 'goal') return { title: d.title, body: h('div', {}, row(d.campaign || '', d.label + (d.due ? ' · by ' + dueLabel(d.due) : ''), d.pct)) };
+    if (b.source === 'tasks') return { title: d.name, body: h('div', {},
+      h('small', { class: 'lv-note' }, `${d.open} open · ${d.done} done${d.late ? ` · ${d.late} overdue` : ''}`),
+      ...(d.items || []).map((t) => h('div', { class: 'lv-task' + (t.due && t.due < todayKey() ? ' late' : '') },
+        live ? h('button', { class: 'dk-check', type: 'button', title: 'Mark done', onclick: () => { const x = taskById(t.id); if (x) patchTask(x, { done: true }); } }) : h('span', { class: 'lv-dot' }, '○'),
+        h('span', { class: 'lv-task-t' }, t.text), t.due ? h('small', {}, dueLabel(t.due)) : null, t.who ? h('small', {}, t.who) : null)),
+      d.open > (d.items || []).length ? h('small', { class: 'lv-note' }, `and ${d.open - d.items.length} more`) : null,
+      !d.open ? h('p', { class: 'dk-live-none' }, 'Nothing open. 🎉') : null) };
+    if (b.source === 'calls') return { title: `${d.name} · ${d.days ? 'last ' + d.days + ' days' : 'all time'}`, body: h('div', {},
+      h('div', { class: 'lv-big' }, h('b', {}, String(d.total)), h('small', {}, `logged${d.sold ? ' · ' + money(d.sold) + ' sold' : ''}`)),
+      ...(d.outcomes || []).map(([o, n]) => row(o, String(n), d.total ? Math.round((n / d.total) * 100) : 0)),
+      d.methods?.length ? h('small', { class: 'lv-note' }, d.methods.map(([m, n]) => `${m} ${n}`).join(' · ')) : null,
+      d.people?.length ? h('small', { class: 'lv-note' }, 'By ' + d.people.map(([p, n]) => `${p} ${n}`).join(' · ')) : null) };
+    if (b.source === 'budgets') return { title: `Budgets · ${monthName(d.month)}`, body: h('div', {},
+      ...(d.rows || []).map((r) => row(r.category + (r.scope === 'business' ? ' · business' : ''), `${money(r.spent)} of ${money(r.limit)}`, r.limit ? Math.round((r.spent / r.limit) * 100) : 0)),
+      !d.rows?.length ? h('p', { class: 'dk-live-none' }, 'No budgets yet. Set them in Finance.') : null) };
+    if (b.source === 'list') return { title: d.name, body: h('div', {}, row(d.campaign || '', d.label, d.pct)) };
+    return null;
+  }
+  const LIVE_TITLE = { campaign: 'Campaign summary', goal: 'Goal progress', tasks: 'Task list', calls: 'Call stats', budgets: 'Budgets', list: 'Call list' };
+  // A live block as lines of text, for Word and PDF.
+  function docLiveLines(b) {
+    const d = b.snap ? b.snap.data : docLiveData(b);
+    const when = b.snap ? ` (as of ${new Date(b.snap.at).toLocaleDateString()})` : '';
+    if (!d) return [LIVE_TITLE[b.source] + when];
+    if (b.source === 'campaign') return [`${d.name}: ${d.pct}% done${when}`, ...d.goals.map((g) => `${g.title}: ${g.label}`), ...d.subs.map((x) => `${x.name}: ${x.pct}%`)];
+    if (b.source === 'goal') return [`${d.title}: ${d.label}${when}`];
+    if (b.source === 'tasks') return [`${d.name}: ${d.open} open, ${d.done} done${when}`, ...d.items.map((t) => t.text + (t.due ? ` (due ${t.due})` : ''))];
+    if (b.source === 'calls') return [`${d.name}: ${d.total} logged${d.days ? ` in the last ${d.days} days` : ''}${when}`, ...d.outcomes.map(([o, n]) => `${o}: ${n}`)];
+    if (b.source === 'budgets') return [`Budgets, ${monthName(d.month)}${when}`, ...d.rows.map((r) => `${r.category}: ${money(r.spent)} of ${money(r.limit)}`)];
+    if (b.source === 'list') return [`${d.name}: ${d.label}${when}`];
+    return [LIVE_TITLE[b.source]];
+  }
+  // Which campaign, goal or list a new live block shows. The doc's own campaign comes first.
+  function docPickLive(kind, anchor) {
+    if (kind === 'budgets') return {};
+    const it = S.items.find((x) => x.id === DV.doc?.id);
+    const home = docCampaign(it);
+    const camps = [...(home ? [home] : []), ...S.campaigns.filter((c) => c !== home && c.status !== 'done')].slice(0, 15);
+    return new Promise((done) => {
+      const rows = [];
+      if (kind === 'tasks') rows.push({ label: 'My open tasks', run: () => done({}) });
+      if (kind === 'campaign' || kind === 'calls' || kind === 'tasks') {
+        rows.push({ head: 'Campaign' }, ...camps.map((c) => ({ label: c.name + (c === home ? ' · this doc’s campaign' : ''), run: () => done({ ref: c.id, ...(kind === 'calls' ? { days: 30 } : {}) }) })));
+      }
+      if (kind === 'goal') for (const c of camps) { const gs = goalsOf(c.id); if (gs.length) rows.push({ head: c.name }, ...gs.map((g) => ({ label: g.title, run: () => done({ ref: g.id }) }))); }
+      if (kind === 'list') for (const c of camps) { const ls = listsOf(c.id); if (ls.length) rows.push({ head: c.name }, ...ls.map((l) => ({ label: l.name, run: () => done({ ref: l.id }) }))); }
+      if (rows.filter((r) => !r.head).length === 0) { toast(kind === 'goal' ? 'No goals yet. Add them to a campaign first.' : kind === 'list' ? 'No call lists yet.' : 'No campaigns yet.'); return done(null); }
+      openMenu(anchor, rows);
+    });
+  }
+  // To-dos that are tasks: ticking either ticks both, and the words follow whichever changed last.
+  function docTaskChips(b) {
+    const t = taskById(b.taskId);
+    if (!t) return null;
+    return h('span', { class: 'dk-task-chips' },
+      t.due ? h('button', { class: 'due' + (isOverdue(t) ? ' late' : t.due === todayKey() ? ' today' : ''), type: 'button', onclick: (e) => dueMenu(e.currentTarget, t) }, dueLabel(t.due)) : null,
+      t.assigneeId ? avatar(t.assigneeId) : t.roleId ? roleChip(t.roleId) : null,
+      h('button', { class: 't-btn dk-task-more', type: 'button', title: 'Task: due date, who it’s for, goal…', 'aria-label': 'Task options', html: I.more, onclick: (e) => taskMenu(e.currentTarget, t) }));
+  }
+  async function docMakeTask(b) {
+    const it = S.items.find((x) => x.id === DV.doc?.id);
+    const c = docCampaign(it);
+    const make = async (goalId) => {
+      try {
+        const t = await api('POST', '/tasks', { text: ColumnDocs.runsText(b.runs).trim(), goalId: goalId || null, assigneeId: goalId ? null : S.me?.memberId, docId: DV.doc?.id || null });
+        upsertTask(t);
+        renderCamps();
+        renderDay();
+        return t.id;
+      } catch (e) {
+        toast(e.message);
+        return null;
+      }
+    };
+    const gs = c ? goalsOf(c.id) : [];
+    if (!gs.length) return make(null);
+    // In a campaign's doc, it can go under one of its goals.
+    const anchor = document.querySelector(`#docview .dk-row[data-id="${CSS.escape(b.id)}"] .dk-line`) || document.body;
+    return new Promise((done) => openMenu(anchor, [{ head: 'Make it a task in…' }, { label: 'My tasks (no goal)', run: () => done(make(null)) }, ...gs.map((g) => ({ label: g.title, run: () => done(make(g.id)) }))]));
+  }
+  // A task changed elsewhere: its to-do in the open doc follows.
+  function docTasksSync(x) {
+    const local = new Set(docLocal(x).ops.map((o) => o.set?.id));
+    for (const b of x.ed.blocks) {
+      if (b.type !== 'todo' || !b.taskId || local.has(b.id)) continue;
+      const t = taskById(b.taskId);
+      if (!t) continue;
+      const words = ColumnDocs.runsText(b.runs);
+      if (words !== t.text || !!b.checked !== !!t.done) x.ed.update(b.id, (y) => { if (words !== t.text) y.runs = [{ text: t.text }]; if (t.done) y.checked = true; else delete y.checked; });
+    }
+  }
+  // …and words typed into a to-do go to its task when the doc saves. Only words changed here: a tick or a
+  // rename that came from the task mustn't send the old words back.
+  function docTasksPush(x, ops) {
+    for (const op of ops) {
+      const b = op.set;
+      const t = b?.type === 'todo' && b.taskId && taskById(b.taskId);
+      if (!t) continue;
+      const words = ColumnDocs.runsText(b.runs).trim();
+      const was = x.saved.find((y) => y.id === b.id);
+      if (words && words !== t.text && (!was || ColumnDocs.runsText(was.runs).trim() !== words)) patchTask(t, { text: words });
+    }
+  }
+  let docLiveTimer = null;
+  function docLiveSoon() {
+    clearTimeout(docLiveTimer);
+    docLiveTimer = setTimeout(() => {
+      const x = DV.doc;
+      if (!x) return;
+      x.ed.refresh();
+      docTasksSync(x);
+      docLinksDraw(x);
+    }, 150);
+  }
+  // At the foot of a doc: the docs that link to it.
+  function docLinksDraw(x) {
+    const box = $('#docview .dv-links');
+    if (!box) return;
+    const from = docsMentioning(['doc:' + x.id], x.id);
+    const it = S.items.find((y) => y.id === x.id);
+    const tasks = S.tasks.filter((t) => t.docId === x.id);
+    box.replaceChildren(...(from.length ? [h('h4', {}, `Linked from ${from.length === 1 ? '1 doc' : from.length + ' docs'}`), ...from.map((d) => h('button', { class: 'dv-link', onclick: () => openDoc(d) }, '📄 ', docTitle(d), h('small', {}, ' · ' + docWhere(d))))] : []),
+      ...(tasks.length ? [h('small', { class: 'dv-tasks-note' }, `${plural(tasks.length, 'task')} made here · ${tasks.filter((t) => t.done).length} done`)] : []),
+      it?.editedAt ? h('small', { class: 'dv-edited' }, `Edited ${ago(it.editedAt)}`) : null);
   }
 
   // ----- Word documents: read, edit and save as .docx, or make a PDF to sign or send -----

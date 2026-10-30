@@ -2,11 +2,13 @@
 // callouts, code, tables, dividers, pictures and files. "/" picks a block, markdown shortcuts work as you type
 // (# , - , 1. , [] , > , ``` , ---), blocks drag to reorder, and pasting from Word, Google Docs or a web page
 // keeps the shape. The app saves it and keeps it in step with other people (app.js); this file is the page.
-// A block is { id, type, indent, runs, … } and runs are [{ text, b, i, u, s, code, link }]. The page is built
-// from elements, never from markup, so nothing pasted or saved can run.
+// "@" mentions a person, campaign, goal, task or doc; live blocks show a campaign's numbers as they are now (or
+// frozen as of a day); a to-do can be a real task.
+// A block is { id, type, indent, runs, … } and runs are [{ text, b, i, u, s, code, link, ref }], ref being a
+// mention { k, id }. The page is built from elements, never from markup, so nothing pasted or saved can run.
 window.ColumnDocs = (() => {
   const TEXT = new Set(['p', 'h1', 'h2', 'h3', 'ul', 'ol', 'todo', 'quote', 'callout', 'code', 'toggle']);
-  const MARKS = ['b', 'i', 'u', 's', 'code', 'link'];
+  const MARKS = ['b', 'i', 'u', 's', 'code', 'link', 'ref'];
   const EMOJIS = ['💡', '📌', '⚠️', '✅', '❗', '🔥', 'ℹ️', '📞', '💰', '🎯'];
   const COMMANDS = [
     { type: 'p', label: 'Text', hint: 'Plain writing', keys: 'text paragraph plain' },
@@ -24,7 +26,16 @@ window.ColumnDocs = (() => {
     { type: 'table', label: 'Table', hint: 'Rows and columns', keys: 'table grid rows columns' },
     { type: 'image', label: 'Image', hint: 'Upload a picture', keys: 'image picture photo img' },
     { type: 'file', label: 'File', hint: 'Attach a file', keys: 'file attachment upload pdf' },
+    { type: 'task', label: 'Task', hint: 'A to-do that’s a real task', keys: 'task assign todo due' },
+    { type: 'mention', label: 'Mention', hint: 'A person, campaign, task or doc', keys: 'mention link person page @' },
+    { type: 'live:campaign', live: 'campaign', label: 'Campaign summary', hint: 'Progress and goals, kept up to date', keys: 'campaign summary progress live status' },
+    { type: 'live:goal', live: 'goal', label: 'Goal progress', hint: 'One goal’s progress bar', keys: 'goal progress live target' },
+    { type: 'live:tasks', live: 'tasks', label: 'Task list', hint: 'Open tasks, ticked off as they’re done', keys: 'tasks list live open todo' },
+    { type: 'live:calls', live: 'calls', label: 'Call stats', hint: 'Calls and emails logged, by outcome', keys: 'calls stats log attempts outcomes live report' },
+    { type: 'live:budgets', live: 'budgets', label: 'Budgets', hint: 'This month against each budget', keys: 'budget money finance spending live' },
+    { type: 'live:list', live: 'list', label: 'Call list', hint: 'How far through a list you are', keys: 'call list prospects contacted live' },
   ];
+  const LIVE_NAME = { campaign: 'Campaign summary', goal: 'Goal progress', tasks: 'Task list', calls: 'Call stats', budgets: 'Budgets', list: 'Call list' };
   const LABEL = Object.fromEntries(COMMANDS.map((c) => [c.type, c.label]));
   const PH = { p: 'Type “/” for blocks', h1: 'Heading 1', h2: 'Heading 2', h3: 'Heading 3', ul: 'List', ol: 'List', todo: 'To-do', toggle: 'Toggle', quote: 'Quote', callout: 'Write something', code: 'Code' };
 
@@ -46,7 +57,8 @@ window.ColumnDocs = (() => {
   const isMac = /Mac|iPhone|iPad/.test(navigator.platform);
 
   // ---------- runs ----------
-  const sameMarks = (a, b) => MARKS.every((k) => (a[k] || undefined) === (b[k] || undefined));
+  const refKey = (r) => (r ? r.k + ':' + r.id : '');
+  const sameMarks = (a, b) => MARKS.every((k) => (k === 'ref' ? refKey(a.ref) === refKey(b.ref) : (a[k] || undefined) === (b[k] || undefined)));
   function norm(runs) {
     const out = [];
     for (const r of runs) {
@@ -87,9 +99,15 @@ window.ColumnDocs = (() => {
 
   // Runs onto the page: each run is its text wrapped in its marks. A line break is a <br>; a break at the very
   // end needs a second one for the empty line to show.
-  function drawRuns(runs, into) {
+  function drawRuns(runs, into, refInfo) {
     into.replaceChildren();
     for (const r of runs || []) {
+      // A mention is one chip, named as the thing is named now.
+      if (r.ref) {
+        const info = refInfo?.(r.ref);
+        into.append(el('span', { class: `dk-ref dk-ref-${r.ref.k}${info?.gone ? ' gone' : ''}`, contenteditable: 'false', 'data-k': r.ref.k, 'data-id': r.ref.id, title: info?.gone ? 'This isn’t in Column any more' : info?.hint || null }, info?.label || r.text));
+        continue;
+      }
       r.text.split('\n').forEach((part, i) => {
         if (i) into.append(el('br'));
         if (!part) return;
@@ -117,6 +135,11 @@ window.ColumnDocs = (() => {
         }
         if (n.nodeType !== 1) continue;
         const t = n.tagName;
+        if (n.classList.contains('dk-ref') && n.dataset.k) {
+          out.push({ text: n.textContent, ...m, ref: { k: n.dataset.k, id: n.dataset.id } });
+          lastBr = false;
+          continue;
+        }
         if (t === 'BR') { out.push({ text: '\n', ...m }); lastBr = true; continue; }
         if ((t === 'DIV' || t === 'P') && out.length && !runsText(out).endsWith('\n')) out.push({ text: '\n' });
         const x = { ...m };
@@ -265,6 +288,7 @@ window.ColumnDocs = (() => {
       for (const n of node.childNodes) {
         if (n.nodeType === 3) { out.push({ text: n.data, ...m }); continue; }
         if (n.nodeType !== 1 || SKIP.test(n.tagName)) continue;
+        if (n.classList.contains('dk-ref') && n.dataset.k && n.dataset.id) { out.push({ text: n.textContent, ...m, ref: { k: n.dataset.k, id: n.dataset.id } }); continue; }
         if (n.tagName === 'BR') { out.push({ text: ' ' }); continue; }
         if (n.tagName === 'UL' || n.tagName === 'OL') continue;
         const x = { ...m };
@@ -358,12 +382,13 @@ window.ColumnDocs = (() => {
       if (b.type === 'divider') return '---';
       if (b.type === 'table') return b.rows.map((r) => '| ' + r.map(runsText).join(' | ') + ' |').join('\n');
       if (b.type === 'file') return `[${b.name || 'File'}]`;
+      if (b.type === 'live') return `[${LIVE_NAME[b.source]}]`;
       return pad + t;
     }).join('\n');
   }
   // As HTML elements (for the clipboard, and for Word). shift moves headings down a level, for a page whose
-  // title is the top heading.
-  function toHtml(blocks, { shift = 0, files } = {}) {
+  // title is the top heading. live(b) gives a live block's numbers as lines of text.
+  function toHtml(blocks, { shift = 0, files, live } = {}) {
     const root = el('div');
     const stack = [{ indent: -1, into: root }];
     const runsEl = (runs, into) => { drawRuns(runs, into); into.querySelectorAll('a').forEach((a) => { a.removeAttribute('title'); a.removeAttribute('target'); a.removeAttribute('rel'); }); return into; };
@@ -397,12 +422,15 @@ window.ColumnDocs = (() => {
       } else if (b.type === 'file') {
         const f = files?.(b.itemId);
         into.append(el('p', {}, f?.url ? el('a', { href: f.url }, b.name || f.name || 'File') : `[${b.name || 'File'}]`));
+      } else if (b.type === 'live') {
+        const lines = live?.(b) || [LIVE_NAME[b.source]];
+        into.append(el('p', {}, el('b', {}, lines[0])), ...lines.slice(1).map((l) => el('p', {}, l)));
       } else into.append(runsEl(b.runs, el('p')));
     }
     return root;
   }
   // As the blocks Column's PDF writer takes. Pictures come in as PNG or JPEG data URLs from pics(itemId).
-  async function toPdf(title, blocks, pics) {
+  async function toPdf(title, blocks, pics, live) {
     const out = [];
     const runs = (rs) => (rs || []).map((r) => ({ text: r.text, ...(r.b ? { b: true } : {}), ...(r.i ? { i: true } : {}), ...(r.u ? { u: true } : {}), ...(r.s ? { s: true } : {}), ...(r.link ? { link: true } : {}) }));
     if (title) out.push({ t: 'h1', runs: [{ text: title, b: true }] });
@@ -416,6 +444,10 @@ window.ColumnDocs = (() => {
       else if (b.type === 'todo') out.push({ t: 'li', ordered: false, n: 1, lvl, runs: [{ text: b.checked ? '[x] ' : '[ ] ' }, ...runs(b.runs)] });
       else if (b.type === 'quote') out.push({ t: 'p', runs: runs(b.runs).map((r) => ({ ...r, i: true })) });
       else if (b.type === 'divider') out.push({ t: 'p', runs: [{ text: ' ' }] });
+      else if (b.type === 'live') {
+        const lines = live?.(b) || [LIVE_NAME[b.source]];
+        out.push({ t: 'p', runs: [{ text: lines[0], b: true }] }, ...lines.slice(1).map((l) => ({ t: 'li', ordered: false, n: 1, lvl: 0, runs: [{ text: l }] })));
+      }
       else if (b.type === 'table') out.push({ t: 'table', rows: b.rows.map((r, i) => r.map((c) => [{ t: 'p', runs: runs(c).map((x) => (i === 0 && b.header ? { ...x, b: true } : x)) }])) });
       else if (b.type === 'file') {
         const pic = await pics?.(b.itemId);
@@ -472,7 +504,8 @@ window.ColumnDocs = (() => {
   // opts: { title, blocks, onChange(), upload(files) → [{ itemId, name }], fileInfo(itemId) → { name, url, image,
   // size } | null, openFile(itemId), menu(anchor, rows), toast(text) }
   function editor(opts) {
-    const S = { blocks: clone(opts.blocks || []), title: opts.title || '', sel: [], anchor: null, undo: [], redo: [], typing: null, slash: null, composing: false, uploads: 0, focus: null };
+    const S = { blocks: clone(opts.blocks || []), title: opts.title || '', sel: [], anchor: null, undo: [], redo: [], typing: null, slash: null, composing: false, uploads: 0, focus: null, autoTask: new Set() };
+    const draw = (runs, into) => drawRuns(runs, into, opts.refInfo);
     const titleEl = el('div', { class: 'dk-title', contenteditable: 'true', 'data-ph': 'Untitled', spellcheck: 'true', role: 'textbox', 'aria-label': 'Title' });
     titleEl.textContent = S.title;
     const body = el('div', { class: 'dk-body' });
@@ -565,27 +598,50 @@ window.ColumnDocs = (() => {
           e.contentEditable = 'true';
         }
       }
-      drawRuns(b.runs, e);
+      draw(b.runs, e);
       return e;
     }
+    // A to-do that's a task is ticked when the task is done.
+    const isDone = (b) => (b.taskId && opts.task?.(b.taskId) ? !!opts.task(b.taskId).done : !!b.checked);
     function row(b, num) {
-      const r = el('div', { class: `dk-row dk-${b.type}${b.checked ? ' dk-done' : ''}`, 'data-id': b.id, style: `--in:${b.indent || 0}` });
+      const r = el('div', { class: `dk-row dk-${b.type}${b.type === 'todo' && isDone(b) ? ' dk-done' : ''}${b.taskId ? ' dk-tasked' : ''}`, 'data-id': b.id, style: `--in:${b.indent || 0}` });
       r.append(el('div', { class: 'dk-handle', contenteditable: 'false' },
         el('button', { class: 'dk-add', type: 'button', title: 'Add a block below', 'aria-label': 'Add a block below', tabindex: '-1' }, '+'),
         el('button', { class: 'dk-grip', type: 'button', title: 'Drag to move · click for options', 'aria-label': 'Block options', tabindex: '-1' }, '⋮⋮')));
       if (b.type === 'divider') r.append(el('div', { class: 'dk-hr' }, el('hr')));
+      else if (b.type === 'live') r.append(liveEl(b));
       else if (b.type === 'file') r.append(fileEl(b));
       else if (b.type === 'table') r.append(tableEl(b));
       else {
         const lead = b.type === 'ul' ? el('span', { class: 'dk-lead dk-bullet', contenteditable: 'false' }, ['•', '◦', '▪'][(b.indent || 0) % 3])
           : b.type === 'ol' ? el('span', { class: 'dk-lead dk-num', contenteditable: 'false' }, num + '.')
-          : b.type === 'todo' ? el('span', { class: 'dk-lead', contenteditable: 'false' }, el('button', { class: 'dk-check' + (b.checked ? ' on' : ''), type: 'button', role: 'checkbox', 'aria-checked': String(!!b.checked), 'aria-label': 'Done', tabindex: '-1' }))
+          : b.type === 'todo' ? el('span', { class: 'dk-lead', contenteditable: 'false' }, el('button', { class: 'dk-check' + (isDone(b) ? ' on' : ''), type: 'button', role: 'checkbox', 'aria-checked': String(isDone(b)), 'aria-label': 'Done', tabindex: '-1' }))
           : b.type === 'toggle' ? el('span', { class: 'dk-lead', contenteditable: 'false' }, el('button', { class: 'dk-arrow' + (b.closed ? '' : ' open'), type: 'button', 'aria-label': b.closed ? 'Open' : 'Close', 'aria-expanded': String(!b.closed), tabindex: '-1' }, '▸'))
           : b.type === 'callout' ? el('span', { class: 'dk-lead', contenteditable: 'false' }, el('button', { class: 'dk-emoji', type: 'button', title: 'Change the icon', tabindex: '-1' }, b.emoji || '💡'))
           : null;
-        r.append(el('div', { class: 'dk-line' }, lead, editable(b, 'dk-' + b.type + '-t', b.type === 'code')));
+        r.append(el('div', { class: 'dk-line' }, lead, editable(b, 'dk-' + b.type + '-t', b.type === 'code'), taskBits(b)));
       }
       return r;
+    }
+    // A task's due date and who it's for, beside its to-do.
+    function taskBits(b) {
+      if (b.type !== 'todo' || !b.taskId) return null;
+      const bits = opts.taskChips?.(b);
+      return el('span', { class: 'dk-task-bits', contenteditable: 'false' }, bits || el('small', { class: 'dk-task-gone' }, 'task deleted'));
+    }
+    function liveEl(b) {
+      let shown;
+      try {
+        shown = opts.live?.(b);
+      } catch {
+        shown = null;
+      }
+      const when = b.snap ? new Date(b.snap.at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: new Date(b.snap.at).getFullYear() === new Date().getFullYear() ? undefined : 'numeric' }) : null;
+      return el('div', { class: 'dk-lv' + (b.snap ? ' snap' : ''), contenteditable: 'false' },
+        el('div', { class: 'dk-live-h' },
+          el('span', { class: 'dk-live-tag', title: b.snap ? 'Numbers as they were that day. The block menu updates them.' : 'Always shows the numbers as they are now' }, b.snap ? 'As of ' + when : '● Live'),
+          el('b', {}, shown?.title || LIVE_NAME[b.source])),
+        el('div', { class: 'dk-live-body' }, shown?.body || el('p', { class: 'dk-live-none' }, 'Nothing to show.')));
     }
     function fileEl(b) {
       const f = opts.fileInfo?.(b.itemId);
@@ -597,7 +653,7 @@ window.ColumnDocs = (() => {
       const t = el('table', { class: 'dk-table' + (b.header ? ' head' : '') });
       b.rows.forEach((rw, r) => t.append(el('tr', {}, rw.map((c, i) => {
         const cell = el('div', { class: 'dk-text dk-cell', contenteditable: 'true', 'data-r': r, 'data-c': i, spellcheck: 'true' });
-        drawRuns(c, cell);
+        draw(c, cell);
         return el(r === 0 && b.header ? 'th' : 'td', {}, cell);
       }))));
       return el('div', { class: 'dk-table-wrap' }, t,
@@ -668,7 +724,7 @@ window.ColumnDocs = (() => {
     function setType(b, type) {
       if (!TEXT.has(b.type) || !TEXT.has(type)) return;
       b.type = type;
-      if (type !== 'todo') delete b.checked;
+      if (type !== 'todo') { delete b.checked; delete b.taskId; S.autoTask.delete(b.id); }
       if (type !== 'toggle') delete b.closed;
       if (type === 'callout') b.emoji ||= '💡';
       else delete b.emoji;
@@ -736,10 +792,10 @@ window.ColumnDocs = (() => {
         b.runs = readRuns(ed, b.type === 'code');
         if (!runsLen(b.runs) && ed.childNodes.length) ed.replaceChildren();
         if (S.slash?.id === id) updateSlash(ed, b);
-        else if (e.inputType === 'insertText' && e.data === '/' && b.type !== 'code') {
+        else if (e.inputType === 'insertText' && (e.data === '/' || (e.data === '@' && opts.mentions)) && b.type !== 'code') {
           const c = caretOf(ed);
           const before = runsText(b.runs).slice(0, c ? c.start - 1 : 0);
-          if (c && (!before || /\s$/.test(before))) openSlash(id, c.start - 1);
+          if (c && (!before || /\s$/.test(before))) openSlash(id, c.start - 1, e.data === '@' ? 'at' : 'slash');
         }
       }
       changed();
@@ -816,8 +872,25 @@ window.ColumnDocs = (() => {
       }
       const next = newBlock(type, { runs: after, ...(lvl ? { indent: lvl } : {}) });
       insertAfter(at, [next]);
+      if (S.autoTask.has(b.id) && type === 'todo') S.autoTask.add(next.id);
       render();
+      makeTaskSoon(b.id);
       focus(next.id, 0);
+      changed();
+    }
+    // A to-do started as a task becomes one when it has words and you move on from it.
+    function makeTaskSoon(id) {
+      const b = byId(id);
+      if (!b || !S.autoTask.has(id) || b.type !== 'todo' || b.taskId || !runsText(b.runs).trim() || !opts.makeTask) return;
+      S.autoTask.delete(id);
+      linkTask(b);
+    }
+    async function linkTask(b) {
+      const taskId = await opts.makeTask(b);
+      const now = byId(b.id);
+      if (!taskId || !now) return;
+      now.taskId = taskId;
+      refresh();
       changed();
     }
     // Backspace at the very start of a block.
@@ -926,7 +999,7 @@ window.ColumnDocs = (() => {
       if (mod && k === 'd') { e.preventDefault(); snap(); const [first] = duplicate([id]); render(); focus(first.id, 'end'); return changed(); }
       if (mod && k === 'Enter') {
         e.preventDefault();
-        if (b.type === 'todo') { snap(); b.checked = !b.checked; if (!b.checked) delete b.checked; const c = caretOf(ed); render(); focus(id, c?.start || 0); return changed(); }
+        if (b.type === 'todo') { snap(); const on = !isDone(b); if (on) b.checked = true; else delete b.checked; if (b.taskId && opts.task?.(b.taskId)) opts.toggleTask?.(b.taskId, on); const c = caretOf(ed); render(); focus(id, c?.start || 0); return changed(); }
         if (b.type === 'toggle') { snap(); b.closed = !b.closed; if (!b.closed) delete b.closed; render(); focus(id, 'end'); return changed(); }
         if (b.type === 'code') { const next = byId(visibleIds()[visibleIds().indexOf(id) + 1]); if (next && TEXT.has(next.type)) return focus(next.id, 0); snap(); const n = newBlock(); insertAfter(id, [n]); render(); focus(n.id); return changed(); }
       }
@@ -1068,7 +1141,7 @@ window.ColumnDocs = (() => {
       snap();
       const all = markAll(a.get(), a.c.start, a.c.end, key);
       a.put(setMark(a.get(), a.c.start, a.c.end, key, all && key !== 'link' ? null : val));
-      drawRuns(a.get(), a.ed);
+      draw(a.get(), a.ed);
       setCaret(a.ed, a.c.start, a.c.end);
       changed();
       showBar();
@@ -1092,7 +1165,7 @@ window.ColumnDocs = (() => {
         if (ok) {
           snap();
           a.put(setMark(a.get(), a.c.start, a.c.end, 'link', url || null));
-          drawRuns(a.get(), a.ed);
+          draw(a.get(), a.ed);
           setCaret(a.ed, a.c.end);
           changed();
         }
@@ -1130,15 +1203,22 @@ window.ColumnDocs = (() => {
     }
 
     // ----- the "/" menu -----
-    function openSlash(id, start) {
-      S.slash = { id, start, q: '', i: 0, list: COMMANDS };
+    function openSlash(id, start, mode = 'slash') {
+      S.slash = { id, start, q: '', i: 0, mode, list: mode === 'at' ? opts.mentions('') : COMMANDS };
       drawSlash();
     }
     function updateSlash(ed, b) {
       const c = caretOf(ed);
       const text = runsText(b.runs);
-      if (!c || c.start <= S.slash.start || text[S.slash.start] !== '/') return closeSlash();
+      if (!c || c.start <= S.slash.start || text[S.slash.start] !== (S.slash.mode === 'at' ? '@' : '/')) return closeSlash();
       const q = text.slice(S.slash.start + 1, c.start);
+      if (S.slash.mode === 'at') {
+        if (/\s{2}|\n/.test(q) || q.length > 40) return closeSlash();
+        const list = opts.mentions(q.trim());
+        if (!list.length && q.length > 4) return closeSlash();
+        Object.assign(S.slash, { q, list, i: Math.min(S.slash.i, Math.max(0, list.length - 1)) });
+        return drawSlash();
+      }
       if (/\s{2}|\n/.test(q) || q.length > 24) return closeSlash();
       // Matches the start of a word, best first: the label's start, a word in the label, then other names for it.
       const words = q.toLowerCase().trim();
@@ -1157,7 +1237,7 @@ window.ColumnDocs = (() => {
     function drawSlash() {
       const s = S.slash;
       slashEl.replaceChildren(...(s.list.length ? s.list.map((x, i) => el('button', { type: 'button', class: i === s.i ? 'on' : null, role: 'option', 'aria-selected': String(i === s.i), onpointerdown: (e) => { e.preventDefault(); pickSlash(x); }, onmousemove: () => { if (s.i !== i) { s.i = i; drawSlash(); } } },
-        el('span', { class: 'dk-slash-ic' }, ICON[x.type] || '¶'), el('span', {}, el('b', {}, x.label), el('small', {}, x.hint)))) : [el('p', { class: 'dk-slash-none' }, 'No block like that')]));
+        el('span', { class: 'dk-slash-ic' }, s.mode === 'at' ? x.icon || '@' : ICON[x.type] || '¶'), el('span', {}, el('b', {}, x.label), el('small', {}, s.mode === 'at' ? x.sub : x.hint)))) : [el('p', { class: 'dk-slash-none' }, s.mode === 'at' ? 'Nothing by that name' : 'No block like that')]));
       slashEl.classList.remove('hidden');
       place(slashEl, caretRect(), false);
       slashEl.querySelector('.on')?.scrollIntoView({ block: 'nearest' });
@@ -1194,13 +1274,56 @@ window.ColumnDocs = (() => {
       snap();
       const ed = textOf(b.id);
       const c = (ed && caretOf(ed)) || { start: s.start + 1 + s.q.length };
+      // A mention goes where the "@" was, as one chip, and the caret after it.
+      if (s.mode === 'at') {
+        const add = [{ text: cmd.label, ref: { k: cmd.k, id: cmd.id } }, { text: ' ' }];
+        b.runs = joinRuns(sliceRuns(b.runs, 0, s.start), add, sliceRuns(b.runs, c.start));
+        draw(b.runs, ed);
+        setCaret(ed, s.start + runsLen(add));
+        return changed();
+      }
       b.runs = joinRuns(sliceRuns(b.runs, 0, s.start), sliceRuns(b.runs, c.start));
-      turnInto(b, cmd.type, true);
+      if (cmd.type === 'mention') {
+        b.runs = joinRuns(sliceRuns(b.runs, 0, s.start), [{ text: '@' }], sliceRuns(b.runs, s.start));
+        draw(b.runs, ed);
+        setCaret(ed, s.start + 1);
+        openSlash(b.id, s.start, 'at');
+        return changed();
+      }
+      turnInto(b, cmd.type, true, cmd.live);
     }
     // A block becomes another kind: this one if it's empty, else a new one below.
-    function turnInto(b, type, fromSlash) {
+    function turnInto(b, type, fromSlash, live) {
       const empty = !runsLen(b.runs);
       const lvl = b.indent ? { indent: b.indent } : {};
+      // A live block: what it shows is picked first.
+      if (live) {
+        render();
+        const anchor = rowOf(b.id);
+        Promise.resolve(opts.pickLive?.(live, anchor)).then((pick) => {
+          if (!pick || !byId(b.id)) return;
+          snap();
+          const n = newBlock('live', { source: live, ...pick });
+          const after = newBlock('p', lvl);
+          if (!runsLen(b.runs) && b.type === 'p') S.blocks.splice(idx(b.id), 1, n, after);
+          else insertAfter(b.id, [n, after]);
+          render();
+          focus(after.id);
+          changed();
+        });
+        return;
+      }
+      if (type === 'task') {
+        if (!empty) {
+          const n = newBlock('todo', lvl);
+          insertAfter(b.id, [n]);
+          b = n;
+        } else setType(b, 'todo');
+        S.autoTask.add(b.id);
+        render();
+        focus(b.id, 'end');
+        return changed();
+      }
       if (type === 'image' || type === 'file') {
         render();
         if (empty && fromSlash) focus(b.id);
@@ -1305,7 +1428,7 @@ window.ColumnDocs = (() => {
       if (c.start !== c.end && /^(https?:\/\/|mailto:)\S+$/i.test(text.trim())) {
         snap();
         b.runs = setMark(b.runs, c.start, c.end, 'link', text.trim());
-        drawRuns(b.runs, ed);
+        draw(b.runs, ed);
         setCaret(ed, c.end);
         return changed();
       }
@@ -1316,7 +1439,7 @@ window.ColumnDocs = (() => {
       if (blocks.length === 1 && blocks[0].type === 'p') {
         const add = blocks[0].runs;
         b.runs = joinRuns(sliceRuns(b.runs, 0, c.start), add, sliceRuns(b.runs, c.end));
-        drawRuns(b.runs, ed);
+        draw(b.runs, ed);
         setCaret(ed, c.start + runsLen(add));
         return changed();
       }
@@ -1384,6 +1507,17 @@ window.ColumnDocs = (() => {
           { label: b.header ? 'First row as plain cells' : 'First row as headings', run: () => { snap(); b.header = !b.header; if (!b.header) delete b.header; render(); changed(); } });
       }
       if (b.type === 'file') rows.push({ label: 'Open', run: () => opts.openFile?.(b.itemId) });
+      if (b.type === 'todo' && opts.makeTask) {
+        rows.push({ head: 'Task' });
+        if (!b.taskId) rows.push({ label: 'Make it a task', run: () => { if (!runsText(b.runs).trim()) return opts.toast?.('Write the to-do first.'); linkTask(b); } });
+        else rows.push({ label: 'Open the task', run: () => opts.openTask?.(b.taskId) }, { label: 'Unlink from the task', run: () => { snap(); delete b.taskId; render(); changed(); } });
+      }
+      if (b.type === 'live') {
+        rows.push({ head: b.snap ? 'Snapshot' : 'Live' });
+        if (!b.snap) rows.push({ label: 'Freeze the numbers as of today', run: () => { snap(); b.snap = { at: Date.now(), data: opts.liveData?.(b) ?? null }; render(); changed(); } });
+        else rows.push({ label: 'Update the numbers to today', run: () => { snap(); b.snap = { at: Date.now(), data: opts.liveData?.(b) ?? null }; render(); changed(); } }, { label: 'Make it live again', run: () => { snap(); delete b.snap; render(); changed(); } });
+        if (b.source === 'calls') for (const [d, label] of [[7, 'Last 7 days'], [30, 'Last 30 days'], [90, 'Last 90 days'], [0, 'All time']]) rows.push({ label, on: (b.days || 0) === d, run: () => { snap(); if (d) b.days = d; else delete b.days; if (b.snap) b.snap = { at: Date.now(), data: opts.liveData?.(b) ?? null }; render(); changed(); } });
+      }
       rows.push({ head: 'Block' },
         { label: 'Duplicate', run: () => { snap(); duplicate([b.id]); render(); changed(); } },
         { label: 'Move up', run: () => { snap(); move([b.id], -1); render(); select([b.id]); changed(); } },
@@ -1494,8 +1628,10 @@ window.ColumnDocs = (() => {
       if (e.target.closest('.dk-check')) {
         e.preventDefault();
         snap();
-        b.checked = !b.checked;
-        if (!b.checked) delete b.checked;
+        const on = !isDone(b);
+        if (on) b.checked = true;
+        else delete b.checked;
+        if (b.taskId && opts.task?.(b.taskId)) opts.toggleTask?.(b.taskId, on);
         render();
         return changed();
       }
@@ -1520,7 +1656,14 @@ window.ColumnDocs = (() => {
         focus(id, 0, 0, e.target.closest('.dk-tbl-row') ? [b.rows.length - 1, 0] : [0, b.rows[0].length - 1]);
         return changed();
       }
-      if (e.target.closest('.dk-figure, .dk-file, .dk-hr')) {
+      const ref = e.target.closest('.dk-ref');
+      if (ref) {
+        e.preventDefault();
+        return opts.openRef?.({ k: ref.dataset.k, id: ref.dataset.id });
+      }
+      if (e.target.closest('.dk-task-bits')) return;
+      if (e.target.closest('.dk-live-body button, .dk-live-body a, .dk-live-body input')) return;
+      if (e.target.closest('.dk-figure, .dk-file, .dk-hr, .dk-lv')) {
         e.preventDefault();
         if (b.type === 'file' && (e.detail > 1 || S.sel.includes(id))) return opts.openFile?.(b.itemId);
         return e.shiftKey && S.anchor ? select(range(S.anchor, id), S.anchor) : select([id]);
@@ -1559,6 +1702,10 @@ window.ColumnDocs = (() => {
     root.addEventListener('paste', onPaste);
     root.addEventListener('copy', (e) => onCopy(e, false));
     root.addEventListener('cut', (e) => onCopy(e, true));
+    body.addEventListener('focusout', (e) => {
+      const id = e.target.closest?.('.dk-row')?.dataset.id;
+      if (id && S.autoTask.has(id)) setTimeout(() => !rowOf(id)?.contains(document.activeElement) && makeTaskSoon(id), 0);
+    });
     root.addEventListener('focusout', () => setTimeout(() => { if (!root.contains(document.activeElement) && !slashEl.contains(document.activeElement)) closeSlash(); }, 150));
     // Pictures and files dropped on the page go where they're dropped.
     root.addEventListener('dragover', (e) => {
@@ -1585,7 +1732,12 @@ window.ColumnDocs = (() => {
       else hideBar();
     };
     document.addEventListener('selectionchange', onSel);
-    const onScroll = () => { hideBar(); if (S.slash) closeSlash(); };
+    // Only scrolling the page the doc is on moves it away from its menus; the app redrawing behind it doesn't.
+    const onScroll = (e) => {
+      if (e.target !== document && !e.target.contains?.(root)) return;
+      hideBar();
+      if (S.slash) closeSlash();
+    };
     addEventListener('scroll', onScroll, true);
 
     // ----- the title -----
@@ -1615,7 +1767,32 @@ window.ColumnDocs = (() => {
       }
     });
 
-    const ICON = { p: 'Aa', h1: 'H1', h2: 'H2', h3: 'H3', ul: '•', ol: '1.', todo: '☑', toggle: '▸', quote: '❝', callout: '💡', code: '</>', divider: '—', table: '▦', image: '🖼', file: '📎' };
+    const ICON = { p: 'Aa', h1: 'H1', h2: 'H2', h3: 'H3', ul: '•', ol: '1.', todo: '☑', toggle: '▸', quote: '❝', callout: '💡', code: '</>', divider: '—', table: '▦', image: '🖼', file: '📎', task: '✓', mention: '@', 'live:campaign': '◎', 'live:goal': '▰', 'live:tasks': '☰', 'live:calls': '☏', 'live:budgets': '$', 'live:list': '≡' };
+    // Live blocks, task chips and mention names drawn again from the app's data, leaving the caret alone.
+    function refresh() {
+      const at = document.activeElement;
+      for (const b of S.blocks) {
+        const r = rowOf(b.id);
+        if (!r) continue;
+        if (b.type === 'live') r.querySelector('.dk-lv')?.replaceWith(liveEl(b));
+        if (b.type === 'todo') {
+          const done = isDone(b);
+          r.classList.toggle('dk-done', done);
+          r.classList.toggle('dk-tasked', !!b.taskId);
+          r.querySelector('.dk-check')?.classList.toggle('on', done);
+          const bits = r.querySelector('.dk-task-bits');
+          const fresh = taskBits(b);
+          if (bits && fresh) bits.replaceWith(fresh);
+          else if (bits) bits.remove();
+          else if (fresh) r.querySelector('.dk-line').append(fresh);
+        }
+        for (const chip of r.querySelectorAll('.dk-ref')) {
+          const info = opts.refInfo?.({ k: chip.dataset.k, id: chip.dataset.id });
+          chip.classList.toggle('gone', !!info?.gone);
+          if (info?.label && chip.textContent !== info.label && !r.contains(at)) chip.textContent = info.label;
+        }
+      }
+    }
     if (!S.blocks.length) S.blocks.push(newBlock());
     render();
     if (touch) root.classList.add('dk-touch');
@@ -1647,6 +1824,19 @@ window.ColumnDocs = (() => {
         TEXT.has(last.type) ? focus(last.id, 'end') : select([last.id]);
       },
       redraw() { render(); },
+      refresh,
+      // A change to one block from outside (a task renamed elsewhere): applied, and saved like any edit.
+      update(id, fn) {
+        const b = byId(id);
+        if (!b) return;
+        const r = rowOf(id);
+        const typing = r?.contains(document.activeElement);
+        fn(b);
+        if (r && !typing) r.replaceWith(row(b, 0));
+        else refresh();
+        if (b.type === 'ol') render();
+        changed();
+      },
       destroy() {
         document.removeEventListener('selectionchange', onSel);
         removeEventListener('scroll', onScroll, true);
