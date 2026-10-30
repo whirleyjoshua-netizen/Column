@@ -1502,8 +1502,11 @@ button.dv-hist-row:hover { background: var(--card-hover); }
 .dk-kb button:last-child { margin-left: auto; color: var(--muted); }
 
 /* ---------- projects: records as a table or a board ---------- */
-.projects { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; user-select: text; }
-.pj-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px 6px; }
+.projects { position: fixed; inset: 0; z-index: 44; background: var(--bg); display: flex; flex-direction: column; overflow: hidden; user-select: text; padding-top: env(safe-area-inset-top); }
+.pj-head { display: flex; align-items: center; gap: 8px; padding: 12px 16px 6px; }
+body.desktop .pj-head, body.desktop .pj-top { -webkit-app-region: drag; }
+body.desktop .pj-head > *, body.desktop .pj-top > * { -webkit-app-region: no-drag; }
+body.platform-darwin .pj-head, body.platform-darwin .pj-top { padding-left: 80px; min-height: 44px; }
 .pj-head h2 { margin: 0; font-size: 20px; }
 .pj-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; padding: 8px 16px 24px; overflow-y: auto; }
 .pj-card { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; text-align: left; padding: 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); }

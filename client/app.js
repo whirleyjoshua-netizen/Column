@@ -1538,6 +1538,14 @@
       else if (pdfStop()) return;
       else if (!$('#preview').classList.contains('hidden') && !VIEW_ID) { if (!wordGuard()) { $('#preview').classList.add('hidden'); $('#preview').innerHTML = ''; } }
       else if (DV.doc) { if (!e.defaultPrevented && $('#menu').classList.contains('hidden')) closeDoc(); }
+      else if (!$('#projects').classList.contains('hidden')) {
+        if (!e.target.matches?.('input, textarea, select') && $('#menu').classList.contains('hidden')) {
+          if (PR.panel) PR.panel = null;
+          else if (PR.open) PR.open = null;
+          else closeProjects();
+          renderProjects();
+        }
+      }
       else if (!$('#settings').classList.contains('hidden')) $('#settings').classList.add('hidden');
       hideMenu();
     }
@@ -2045,9 +2053,7 @@
     $('#panes').classList.toggle('hidden', tab !== 'column');
     $('#chat').classList.toggle('hidden', tab !== 'chat');
     $('#campsWrap').classList.toggle('hidden', tab !== 'camps');
-    $('#projects').classList.toggle('hidden', tab !== 'projects');
     if (tab === 'camps') renderCamps();
-    if (tab === 'projects') renderProjects();
     if (tab === 'day') renderDay();
     if (tab === 'chat') openChannel(C.view);
   }
@@ -5908,6 +5914,7 @@
       { head: 'Tools' },
       { label: h('span', { class: 'tool-item' }, '✦ Sidekick', skNudges().length ? h('small', {}, `${skNudges().length} need${skNudges().length === 1 ? 's' : ''} a look`) : null), on: toolOpen === 'sidekick', run: () => { SK.open = null; openTool('sidekick'); } },
       { label: 'Docs', on: toolOpen === 'docs', run: () => openTool('docs') },
+      { label: 'Projects', run: showProjects },
       { label: h('span', { class: 'tool-item' }, 'Finance', soon || tight ? h('small', {}, [soon ? `${soon} due soon` : '', tight ? `${tight} budget${tight === 1 ? '' : 's'} nearly used` : ''].filter(Boolean).join(' · ')) : null), on: toolOpen === 'bills', run: () => openTool('bills') },
       amOwner() ? { label: 'Contacts', on: toolOpen === 'contacts', run: () => openTool('contacts') } : null,
       mayEmail() ? { label: h('span', { class: 'tool-item' }, 'Email', (S.mail?.sends || []).some((x) => x.status === 'sending') ? h('small', {}, 'sending…') : null), on: toolOpen === 'email', run: () => openTool('email') } : null,
@@ -6129,7 +6136,7 @@
   function prSoon() {
     clearTimeout(prTimer);
     prTimer = setTimeout(() => {
-      if (S.tab !== 'projects') return;
+      if ($('#projects').classList.contains('hidden')) return;
       if ($('#projects')?.contains(document.activeElement) && document.activeElement.matches('input, textarea')) return prSoon();
       if (document.body.classList.contains('is-dragging')) return prSoon(); // not under a card being dragged
       renderProjects();
@@ -6142,7 +6149,7 @@
     PR.view = prType(p, PR.type)?.views[0]?.id;
     PR.q = '';
     PR.panel = null;
-    if (S.tab !== 'projects') setTab('projects');
+    showProjects();
     renderProjects();
     if (!PR.records.has(id)) {
       PR.loading = id;
@@ -6151,6 +6158,15 @@
       if (list) PR.records.set(id, list);
       renderProjects();
     }
+  }
+  // Projects open from Tools, over the app; closing goes back to where you were.
+  function showProjects() {
+    closeTool();
+    $('#projects').classList.remove('hidden');
+    renderProjects();
+  }
+  function closeProjects() {
+    $('#projects').classList.add('hidden');
   }
   function renderProjects() {
     const root = $('#projects');
@@ -6166,12 +6182,12 @@
   function projectsHome() {
     const list = [...(S.projects || [])].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
     return [
-      h('div', { class: 'pj-head' }, h('h2', {}, 'Projects'), h('button', { class: 'btn primary-btn', onclick: newProjectSheet }, '+ New project')),
+      h('div', { class: 'pj-head' }, h('button', { class: 'icon-btn', 'aria-label': 'Close Projects', html: I.close, onclick: closeProjects }), h('h2', {}, 'Projects'), h('span', { style: 'flex:1' }), h('button', { class: 'btn primary-btn', onclick: newProjectSheet }, '+ New project')),
       list.length ? h('div', { class: 'pj-grid' }, list.map((p) => h('button', { class: 'pj-card', onclick: () => openProject(p.id) },
         h('span', { class: 'pj-ic' }, p.icon || '📁'),
         h('b', {}, p.name, p.private ? h('small', { title: 'Private' }, ' 🔒') : null),
         h('small', {}, p.types.map((t) => (PR.records.has(p.id) ? `${prRecs(p.id).filter((r) => r.typeId === t.id).length} ${t.name.toLowerCase()}` : t.name)).join(' · ')))))
-        : h('div', { class: 'pj-empty' }, h('p', {}, 'Keep track of customers, deals, jobs, vendors: anything with a list of records and stages.'), h('button', { class: 'btn primary-btn', onclick: newProjectSheet }, 'Start with the CRM template')),
+        : h('div', { class: 'pj-empty' }, h('p', {}, 'Keep track of customers and deals, bids and quotes, jobs, vendors: anything with a list of records and stages.'), h('button', { class: 'btn primary-btn', onclick: newProjectSheet }, 'Start a project')),
     ];
   }
   function newProjectSheet() {
@@ -6204,7 +6220,7 @@
       { label: 'Add a list…', run: () => prAddType(p) },
       { head: '' },
       { label: p.private ? 'Who can see it…' : 'Make it private…', run: () => prAccess(p) },
-      amOwner() ? { label: 'Connect other apps (API, webhooks)…', run: () => openSettings('connections', '.int-sec') } : null,
+      amOwner() ? { label: 'Connect other apps (API, webhooks)…', run: () => { closeProjects(); openSettings('connections', '.int-sec'); } } : null,
       p.types.length > 1 ? { label: `Delete the ${t.name} list`, danger: true, run: async () => { const y = await prCall('POST', `/projects/${p.id}/schema`, { op: 'removeType', typeId: t.id }); if (y) { prUpsertProject(y.project); PR.records.set(p.id, prRecs(p.id).filter((r) => r.typeId !== t.id)); PR.type = null; renderProjects(); } } } : null,
       { label: 'Delete project', danger: true, run: async () => { if (await prCall('DELETE', '/projects/' + p.id)) { S.projects = S.projects.filter((x) => x.id !== p.id); PR.open = null; renderProjects(); } } },
     ].filter(Boolean));
