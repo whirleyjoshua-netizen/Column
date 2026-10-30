@@ -2573,12 +2573,15 @@ async function aiPlan(ws, auth, c, body) {
   return { goals: out };
 }
 
-// ---------- Sidekick: plan a campaign or a schedule by talking it through ----------
+// ---------- Sidekick: plan a campaign, a schedule or a budget by talking it through ----------
 // A conversation with the person's own AI. It asks what the goal is, proposes a path as cards (goals and
-// tasks, a prospect list, a script, a budget, time on the Day), checks the accepted ones still add up, and
-// the app builds them through the usual routes. After that it keeps an eye on the campaign's pace and
-// says so when it's behind, and the person can pick the conversation back up. Each one is its maker's own.
-const SK_CARDS = ['campaign', 'sub', 'goal', 'list', 'note', 'budget', 'block', 'task', 'change'];
+// tasks, a prospect list, a script, a budget, a bill, time on the Day), checks the accepted ones still add up,
+// and the app builds them through the usual routes. After that it keeps an eye on the campaign's pace, or on
+// the budgets, and says so when they slip, and the person can pick the conversation back up. Each one is its
+// maker's own.
+const SK_CARDS = ['campaign', 'sub', 'goal', 'list', 'note', 'budget', 'bill', 'block', 'task', 'change'];
+const SK_KINDS = ['campaign', 'schedule', 'money'];
+const SK_TITLES = { campaign: 'New campaign plan', schedule: 'New schedule', money: 'New budget plan' };
 const SK_KEEP = 60;
 const publicSidekick = ({ wsId, ...x }) => x;
 const skNews = (x) => broadcast(x.wsId, { type: 'sidekick', sidekick: publicSidekick(x), forMember: x.memberId });
@@ -2601,11 +2604,19 @@ function skCard(v, ws) {
     Object.assign(c, { name: t(v.name, 80) || 'PSS leads', live: applyLive(v.live || {}) });
   }
   if (type === 'note') Object.assign(c, { title: t(v.title, 120), text: t(v.text, 8000) });
-  if (type === 'budget') Object.assign(c, { category: t(v.category, 40), limit: Math.max(1, Math.min(1e9, Math.round(Number(String(v.limit).replace(/[$,]/g, ''))) || 0)) });
+  // A limit of 0 takes the budget away, as it does in Finance.
+  if (type === 'budget') {
+    const limit = Math.round(Number(String(v.limit ?? '').replace(/[$,\s]/g, '')));
+    Object.assign(c, { category: t(v.category, 40), limit: Number.isFinite(limit) ? Math.max(0, Math.min(1e9, limit)) : null, scope: v.scope === 'business' ? 'business' : 'personal' });
+  }
+  if (type === 'bill') {
+    const amount = Math.round(Number(String(v.amount ?? '').replace(/[$,\s]/g, '')) * 100) / 100;
+    Object.assign(c, { name: t(v.name, 80), amount: Number.isFinite(amount) && amount > 0 ? Math.min(1e9, amount) : null, repeat: BILL_REPEATS.includes(v.repeat) ? v.repeat : 'monthly', due: skDay(v.due), category: t(v.category, 40) || 'Bills', scope: v.scope === 'business' ? 'business' : 'personal', autopay: !!v.autopay });
+  }
   if (type === 'block') Object.assign(c, { text: t(v.text, 200), date: skDay(v.date), start: skMin(v.start, 1439), end: skMin(v.end, 1440), repeat: REPEATS.includes(v.repeat) ? v.repeat : null });
   if (type === 'task') Object.assign(c, { text: t(v.text, 300), due: skDay(v.due), goal: t(v.goal, 200), ...whoOfCard(ws, v) });
   if (type === 'change') Object.assign(c, { text: t(v.text, 300), goalId: db.goals[v.goalId]?.wsId === ws.id ? v.goalId : null, due: skDay(v.due), target: Number(v.target) > 0 ? Math.round(Number(v.target)) : null, end: skDay(v.end) });
-  const empty = { campaign: !c.name, sub: !c.name, goal: !c.title, note: !c.text, budget: !c.category || !c.limit, block: !c.text || !c.date || c.start == null || c.end == null || c.end <= c.start, task: !c.text, change: !c.text || (!c.goalId && !c.end) }[type];
+  const empty = { campaign: !c.name, sub: !c.name, goal: !c.title, note: !c.text, budget: !c.category || c.limit == null, bill: !c.name || !c.amount || !c.due, block: !c.text || !c.date || c.start == null || c.end == null || c.end <= c.start, task: !c.text, change: !c.text || (!c.goalId && !c.end) }[type];
   return empty ? null : c;
 }
 // How far along a campaign is, 0 to 1: its goals' progress on average, as the app shows it.
@@ -2634,16 +2645,87 @@ function skPace(c, today) {
   if (done == null || gone < 0.15 || done >= gone - 0.2) return null;
   return `${Math.round(gone * 100)}% of the way through the dates, ${Math.round(done * 100)}% done.`;
 }
+// The person's money as Finance shows it to them: their own, and the business's if they're an owner.
+const skSees = (x, wsId, memberId) => x.wsId === wsId && seesBill(wsId, x, memberId);
+const skSpent = (xs, b) => xs.reduce((n, x) => n + (x.kind === 'out' && x.scope === b.scope && sameText(x.category, b.category) ? x.amount : 0), 0);
+// Budgets this month that are over, or on pace to be by the end of it. Nothing early in the month, when a
+// single bill can look like a trend.
+function skBudgetWatch(wsId, memberId, today) {
+  const ym = today.slice(0, 7);
+  const day = Number(today.slice(8));
+  const days = new Date(Date.UTC(Number(ym.slice(0, 4)), Number(ym.slice(5)), 0)).getUTCDate();
+  const xs = Object.values(db.money).filter((x) => skSees(x, wsId, memberId) && x.day?.startsWith(ym));
+  const over = [];
+  const pace = [];
+  for (const b of Object.values(db.budgets).filter((y) => skSees(y, wsId, memberId))) {
+    const n = skSpent(xs, b);
+    if (n > b.limit) over.push(`${b.category} is $${Math.round((n - b.limit) / 100)} over`);
+    else if (day >= 8 && n / day * days > b.limit * 1.15) pace.push(`${b.category} is on pace to go over`);
+  }
+  const all = [...over, ...pace];
+  return all.length ? all.slice(0, 4).join(', ') + '.' : null;
+}
+// Whether a plan needs a look: a campaign behind pace, or budgets slipping on a budget plan that's been applied.
+function skNudgeOf(x, today) {
+  if (x.campaignId) return skPace(db.campaigns[x.campaignId], today);
+  if (x.kind === 'money' && x.status === 'built') return skBudgetWatch(x.wsId, x.memberId, today);
+  return null;
+}
 function runSidekickPace() {
   for (const x of Object.values(db.sidekick)) {
-    if (!x.campaignId) continue;
-    const c = db.campaigns[x.campaignId];
-    const note = skPace(c, fmtDay(Date.now()));
+    if (!x.campaignId && x.kind !== 'money') continue;
+    const note = skNudgeOf(x, fmtDay(Date.now()));
     if ((note || null) === (x.nudge?.text || null)) continue;
     x.nudge = note ? { text: note, at: Date.now() } : null;
     save();
     skNews(x);
   }
+}
+// What a budget plan knows: the last few months in and out by category, the budgets against this month,
+// and the bills, all as Finance shows them to this person. Dollars, rounded.
+function skMoney(ws, auth, today) {
+  const usd = (n) => '$' + Math.round(n / 100).toLocaleString('en-US');
+  const owner = isOwnerId(ws.id, auth.memberId);
+  const xs = Object.values(db.money).filter((x) => skSees(x, ws.id, auth.memberId) && x.day);
+  const ym = today.slice(0, 7);
+  const month = (d) => { const [y, m] = ym.split('-').map(Number); return new Date(Date.UTC(y, m - 1 + d, 1)).toISOString().slice(0, 7); };
+  const months = [-3, -2, -1, 0].map(month);
+  const scopes = owner && xs.some((x) => x.scope === 'business') ? ['personal', 'business'] : ['personal'];
+  const lines = [owner ? 'Finance keeps personal and business money apart. They’re a team owner, so they see both; say which a budget or bill is for.' : 'They see their personal money only, so every budget and bill is personal.'];
+  if (!xs.length) lines.push('Nothing has been entered or imported in Finance yet. They can add money in and out by hand or import a bank statement (CSV) under In & out.');
+  for (const sc of scopes) {
+    const mine = xs.filter((x) => x.scope === sc);
+    if (!mine.length) continue;
+    const rows = months.map((m) => {
+      const ys = mine.filter((x) => x.day.startsWith(m));
+      const tot = (k) => ys.reduce((n, x) => n + (x.kind === k ? x.amount : 0), 0);
+      return `- ${m}${m === ym ? ` (so far, day ${Number(today.slice(8))})` : ''}: in ${usd(tot('in'))}, out ${usd(tot('out'))}`;
+    });
+    // Spending by category over the three full months, as a monthly average, and this month so far.
+    const cats = {};
+    for (const x of mine) {
+      if (x.kind !== 'out') continue;
+      const k = x.category || 'Other';
+      cats[k] ||= { avg: 0, now: 0 };
+      if (months.slice(0, 3).some((m) => x.day.startsWith(m))) cats[k].avg += x.amount / 3;
+      if (x.day.startsWith(ym)) cats[k].now += x.amount;
+    }
+    const top = Object.entries(cats).sort((a, b) => b[1].avg - a[1].avg).slice(0, 25);
+    lines.push(`${sc === 'business' ? 'Business' : 'Personal'} money, month by month:\n${rows.join('\n')}`);
+    if (top.length) lines.push(`${sc === 'business' ? 'Business' : 'Personal'} spending by category (average a month over the last three full months; this month so far):\n${top.map(([k, v]) => `- ${k}: ${usd(v.avg)}; ${usd(v.now)}`).join('\n')}`);
+  }
+  const xsNow = xs.filter((x) => x.day.startsWith(ym));
+  const budgets = Object.values(db.budgets).filter((b) => skSees(b, ws.id, auth.memberId));
+  lines.push(budgets.length ? `Their monthly budgets, with this month's spending so far:\n${budgets.map((b) => `- ${b.category} (${b.scope}): ${usd(b.limit)} a month, ${usd(skSpent(xsNow, b))} spent`).join('\n')}` : 'No budgets set yet.');
+  const per = { weekly: 52 / 12, monthly: 1, quarterly: 1 / 3, yearly: 1 / 12, once: 0 };
+  const bills = Object.values(db.bills).filter((b) => skSees(b, ws.id, auth.memberId) && !b.done);
+  if (bills.length) {
+    const monthly = bills.reduce((n, b) => n + b.amount * per[b.repeat], 0);
+    lines.push(`Their bills (about ${usd(monthly)} a month all together):\n${bills.slice(0, 60).map((b) => `- ${b.name} (${b.scope}): ${usd(b.amount)} ${b.repeat}, next due ${b.due}${b.autopay ? ', autopay' : ''}, counted as ${b.category || 'Bills'}`).join('\n')}`);
+  } else lines.push('No bills in Finance yet.');
+  const watch = skBudgetWatch(ws.id, auth.memberId, today);
+  if (watch) lines.push(`This month: ${watch}`);
+  return lines.join('\n\n');
 }
 // What Sidekick knows before it asks anything: the date, what's in Column, and the campaign it's for.
 function skContext(ws, auth, x, today) {
@@ -2662,6 +2744,7 @@ function skContext(ws, auth, x, today) {
     files.length ? `They attached files for this plan: ${files.map((f) => f.name).join('; ')}. They're at the start of the conversation. Plan from what they say (prices, offers, audience, past numbers, scripts) instead of asking for it again, and say which file a fact came from.` : '',
     mine.length ? `Their Day for the next two weeks (busy times):\n${mine.slice(0, 80).map((e) => `- ${e.repeat ? 'repeats ' + e.repeat + ' from ' + e.date : e.date} ${fmt(e.start)}${e.end != null ? '–' + fmt(e.end) : ''} ${clipText(e.text, 60)}`).join('\n')}` : 'Nothing on their Day in the next two weeks.',
   ];
+  if (x.kind === 'money') lines.push(skMoney(ws, auth, today));
   if (c) {
     const gs = Object.values(db.goals).filter((g) => g.campaignId === c.id).sort((a, b) => (a.order || 0) - (b.order || 0));
     const ts = Object.values(db.tasks).filter((t) => campaignOf('task', t) === c.id);
@@ -2744,12 +2827,16 @@ async function skFiles(x) {
 }
 const SK_SYSTEM = (kind, built) => [
   'You are Sidekick, the planning partner inside Column, a work app for a small business: it has campaigns (each with goals, and tasks under the goals, call lists, a log of calls and emails, and notes), a Day schedule, and Finance (money in and out, budgets).',
-  kind === 'schedule'
+  kind === 'money'
+    ? 'Here you help the person set, keep and improve their budget, from the money in Finance. Start from the numbers you’re given: where the money goes, what comes in, which budgets fit and which keep running over, what the bills add up to. Ask what they’re aiming for (spend less somewhere, save for something by a date, pay something off, steady cash for the business) and anything the numbers can’t tell you. Then propose budgets per category with limits they can actually keep, bills that are missing, and a regular money check-in on their Day. Point out what looks off: categories with no budget, budgets far from what’s really spent, money in that doesn’t cover money out.'
+    : kind === 'schedule'
     ? 'Here you help plan the person’s schedule: what they want to get done, when they work best, what’s fixed. Then propose time blocks on their Day around what’s already there.'
     : 'Here you help plan a campaign: what success looks like (a number to reach, by when), who it’s aimed at, what they already have (leads, lists, scripts), how much time and money they can put in. Then propose the campaign, its goals with tasks, and what it needs to succeed. When the goal is big enough that it splits into separate pushes (by channel, region, audience or phase), propose it as a main campaign with sub-campaigns that each serve it; each sub-campaign is planned in detail on its own afterwards.',
-  built ? 'The plan is already built and running. Help them see how it’s going from the numbers given, say plainly what’s working and what isn’t and why, what could happen next, and propose changes. Keep it short.' : '',
+  built ? (kind === 'money'
+    ? 'Their budget is already set up. Help them keep it: how this month is going against each budget, what’s running over and why, whether a limit should change or the spending should, and what to watch next. Propose changes as cards. Keep it short.'
+    : 'The plan is already built and running. Help them see how it’s going from the numbers given, say plainly what’s working and what isn’t and why, what could happen next, and propose changes. Keep it short.') : '',
   'Work like a sharp colleague brainstorming: ask one or two questions at a time, the ones that matter most, and don’t ask what the context already tells you. When you know enough, propose a path as cards. Explain briefly why each card helps. When asked to check the accepted cards, say honestly whether they add up to the goal (do the numbers work, is anything missing, is the time realistic) and propose what would fix it.',
-  'Never invent leads, names, numbers or results. Use dates from today on, as YYYY-MM-DD. Times are minutes after midnight (9:00 = 540).',
+  'Never invent leads, names, numbers, amounts or results. Use dates from today on, as YYYY-MM-DD. Times are minutes after midnight (9:00 = 540).',
   WHO_RULE,
   'Reply with JSON only: {"reply":"what you say, plain text, short paragraphs, no markdown","title":"a short name for this plan, once you know it, else null","cards":[...]}. cards is often empty while you’re still asking. Card shapes:',
   '{"type":"campaign","name":"","brief":"the goal, audience and approach in a few lines","start":"YYYY-MM-DD","end":"YYYY-MM-DD","why":""}',
@@ -2757,7 +2844,8 @@ const SK_SYSTEM = (kind, built) => [
   '{"type":"goal","title":"","kind":"tasks"|"count"|"money","target":number|null (count: logged calls or emails to reach; money: whole dollars),"due":"YYYY-MM-DD"|null,"tasks":[{"text":"an action for one sitting","due":"YYYY-MM-DD"|null,"who":null|"role or person"}],"why":""}',
   '{"type":"list","name":"","live":{"stages":[],"cities":[],"sources":[],"days":0|30|90|180|365,"need":"phone"|"email"|null},"why":""} — a prospect list pulled from PSS by filter, only if PSS is connected. Use stage, city and source values exactly as given.',
   '{"type":"note","title":"","text":"","why":""} — a call script, an email draft, a checklist, talking points.',
-  '{"type":"budget","category":"","limit":whole dollars a month,"why":""}',
+  `{"type":"budget","category":"","limit":whole dollars a month,"scope":"personal"|"business","why":""} — a monthly limit for one spending category.${kind === 'money' ? ' For a budget they already have, use its category exactly, and the card changes its limit; a limit of 0 removes it.' : ''}`,
+  kind === 'money' ? '{"type":"bill","name":"","amount":dollars,"repeat":"once"|"weekly"|"monthly"|"quarterly"|"yearly","due":"YYYY-MM-DD","category":"","scope":"personal"|"business","autopay":false,"why":""} — a bill they pay that isn’t in Finance yet. Only ones they’ve told you about or that clearly repeat in their spending.' : '',
   '{"type":"block","text":"","date":"YYYY-MM-DD","start":540,"end":600,"repeat":null|"daily"|"weekdays"|"weekly"|"monthly","why":""} — time on their Day. Don’t overlap what’s already there.',
   built ? '{"type":"task","text":"","due":"YYYY-MM-DD"|null,"goal":"the goal’s title it goes under","who":null|"role or person","why":""} and {"type":"change","text":"what changes, in words","goalId":"id"|null,"due":"YYYY-MM-DD"|null,"target":number|null,"end":"YYYY-MM-DD"|null (the campaign’s new end),"why":""}' : '',
 ].filter(Boolean).join('\n');
@@ -2765,7 +2853,7 @@ async function skTurn(ws, auth, x, today, say) {
   const ai = aiOf(ws.id, auth.memberId);
   const use = aiUse(ai);
   if (!use) throw Object.assign(new Error('Add your AI key in Settings → AI to use Sidekick.'), { status: 400 });
-  const cardLine = (c) => `[${c.state}] ${c.type}: ${c.name || c.title || c.text || c.category || ''}${c.type === 'goal' && c.target ? ' · target ' + c.target : ''}${c.type === 'block' ? ` · ${c.date} ${c.start}-${c.end}${c.repeat ? ' ' + c.repeat : ''}` : ''}`;
+  const cardLine = (c) => `[${c.state}] ${c.type}: ${c.name || c.title || c.text || c.category || ''}${c.type === 'goal' && c.target ? ' · target ' + c.target : ''}${c.type === 'block' ? ` · ${c.date} ${c.start}-${c.end}${c.repeat ? ' ' + c.repeat : ''}` : ''}${c.type === 'budget' ? ` · $${c.limit} a month, ${c.scope}` : ''}${c.type === 'bill' ? ` · $${c.amount} ${c.repeat} from ${c.due}, ${c.scope}` : ''}`;
   const history = x.messages.slice(-30).map((m) => ({ role: m.role, text: m.role === 'assistant' ? JSON.stringify({ reply: m.text, cards: (m.cards || []).map(cardLine) }) : m.text }));
   history.push({ role: 'user', text: `${say}\n\n(Context, not from the person)\n${skContext(ws, auth, x, today)}` });
   // The files ride on the first message, so they come before the conversation about them.
@@ -2781,7 +2869,7 @@ async function skTurn(ws, auth, x, today, say) {
   if (out.refused) throw Object.assign(new Error(out.text), { status: 502 });
   const j = replyJson(out.text);
   const msg = { role: 'assistant', text: clipText(String(j.reply || '').trim(), 6000) || '…', cards: (Array.isArray(j.cards) ? j.cards : []).slice(0, 16).map((v) => skCard(v, ws)).filter(Boolean), at: Date.now() };
-  if (j.title && (!x.title || x.title === 'New campaign plan' || x.title === 'New schedule')) x.title = clipText(String(j.title).trim(), 80);
+  if (j.title && (!x.title || Object.values(SK_TITLES).includes(x.title))) x.title = clipText(String(j.title).trim(), 80);
   x.messages.push(msg);
   x.messages = x.messages.slice(-SK_KEEP);
   x.updatedAt = Date.now();
@@ -3447,9 +3535,9 @@ async function api(req, res, url) {
       if (mine().length >= 200) return send(res, 400, { error: 'You can keep up to 200 Sidekick plans. Delete some old ones first.' });
       const camp = body.campaignId && db.campaigns[body.campaignId];
       const ok = camp && camp.wsId === ws.id && canSee(auth, 'campaign', camp);
-      const kind = ok || body.kind !== 'schedule' ? 'campaign' : 'schedule';
-      const x = { id: rid(), wsId: ws.id, memberId: auth.memberId, createdAt: Date.now(), updatedAt: Date.now(), kind, title: ok ? camp.name : kind === 'schedule' ? 'New schedule' : 'New campaign plan', status: ok ? 'built' : 'talking', campaignId: ok ? camp.id : null, entryIds: [], messages: [], files: [], nudge: null };
-      await skTurn(ws, auth, x, today, ok ? `I want to talk about how “${camp.name}” is going.` : kind === 'schedule' ? 'I want to plan my schedule.' : 'I want to plan a campaign.');
+      const kind = !ok && SK_KINDS.includes(body.kind) ? body.kind : 'campaign';
+      const x = { id: rid(), wsId: ws.id, memberId: auth.memberId, createdAt: Date.now(), updatedAt: Date.now(), kind, title: ok ? camp.name : SK_TITLES[kind], status: ok ? 'built' : 'talking', campaignId: ok ? camp.id : null, entryIds: [], messages: [], files: [], nudge: null };
+      await skTurn(ws, auth, x, today, ok ? `I want to talk about how “${camp.name}” is going.` : { campaign: 'I want to plan a campaign.', schedule: 'I want to plan my schedule.', money: 'I want to set up my budget, or make it better.' }[kind]);
       x.messages[0].opener = true;
       db.sidekick[x.id] = x;
       save();
@@ -3519,7 +3607,8 @@ async function api(req, res, url) {
       if (Array.isArray(body.entryIds)) x.entryIds = [...new Set([...x.entryIds, ...body.entryIds.filter((id) => db.entries[id]?.wsId === ws.id)])].slice(-200);
       if (body.built) x.status = 'built';
       if (body.status === 'done' || body.status === 'built') x.status = body.status;
-      x.nudge = x.campaignId ? (skPace(db.campaigns[x.campaignId], today) ? { text: skPace(db.campaigns[x.campaignId], today), at: Date.now() } : null) : null;
+      const note = skNudgeOf(x, today);
+      x.nudge = note ? { text: note, at: Date.now() } : null;
       x.updatedAt = Date.now();
       save();
       skNews(x);

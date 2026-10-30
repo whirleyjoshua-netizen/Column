@@ -7635,17 +7635,17 @@
     return [...r].map((n) => abc[n % abc.length]).join('');
   }
 
-  // ----- Sidekick: plan a campaign or a schedule by talking it through -----
-  // You talk it through; it proposes cards (goals, a prospect list, a script, a budget, time on your Day).
+  // ----- Sidekick: plan a campaign, a schedule or a budget by talking it through -----
+  // You talk it through; it proposes cards (goals, a prospect list, a script, a budget, a bill, time on your Day).
   // You accept, skip or edit each, ask it to check what you kept, then build: the cards become the campaign,
-  // its goals and tasks, notes and lists, or blocks on your Day. Afterwards it keeps an eye on the pace,
-  // and you can open it again to talk about how it's going.
+  // its goals and tasks, notes and lists, budgets and bills in Finance, or blocks on your Day. Afterwards it
+  // keeps an eye on the pace or the budgets, and you can open it again to talk about how it's going.
   const SK = { open: null, busy: false, draft: '' };
   const skById = (id) => (S.sidekick || []).find((x) => x.id === id);
   const skFor = (campaignId) => (S.sidekick || []).find((x) => x.campaignId === campaignId);
-  const skNudges = () => (S.sidekick || []).filter((x) => x.nudge && x.status !== 'done' && campById(x.campaignId)?.status === 'active');
+  const skNudges = () => (S.sidekick || []).filter((x) => x.nudge && x.status !== 'done' && (x.kind === 'money' || campById(x.campaignId)?.status === 'active'));
   const skCards = (x) => x.messages.flatMap((m) => m.cards || []);
-  const SK_LABEL = { campaign: 'Campaign', sub: 'Sub-campaign', goal: 'Goal', list: 'Prospect list', note: 'Note', budget: 'Budget', block: 'On your Day', task: 'Task', change: 'Change' };
+  const SK_LABEL = { campaign: 'Campaign', sub: 'Sub-campaign', goal: 'Goal', list: 'Prospect list', note: 'Note', budget: 'Budget', bill: 'Bill', block: 'On your Day', task: 'Task', change: 'Change' };
   async function skCall(method, path, body) {
     SK.busy = true;
     renderTool(true);
@@ -7679,9 +7679,17 @@
     const x = await skCall('POST', '/sidekick', { campaignId: c.id });
     if (x) { SK.open = x.id; renderTool(); }
   }
+  // Your budget conversation: the one you have, else a new one. From Finance.
+  async function sidekickForMoney() {
+    const had = (S.sidekick || []).find((x) => x.kind === 'money' && x.status !== 'done');
+    SK.open = had?.id || null;
+    openTool('sidekick');
+    if (!had) skStart('money');
+  }
   function skStatus(x) {
     const c = campById(x.campaignId);
     if (x.status === 'done') return 'Done';
+    if (x.kind === 'money' && x.status === 'built') return x.nudge ? 'Budgets slipping' : 'Watching your budgets';
     if (c) return `${Math.round(campProgress(c) * 100)}% · ${x.nudge ? 'behind pace' : c.status === 'done' ? 'finished' : 'on track'}`;
     if (x.status === 'built') return 'On your Day';
     const n = skCards(x).filter((y) => y.state === 'accepted').length;
@@ -7695,13 +7703,14 @@
     const all = [...(S.sidekick || [])].sort((a, b) => rank(a) - rank(b) || b.updatedAt - a.updatedAt);
     const row = (y) => h('div', { class: 'bill sk-row' + (y.status === 'done' ? ' done' : ''), onclick: () => { SK.open = y.id; renderTool(); } },
       y.nudge && y.status !== 'done' ? h('span', { class: 'sk-dot', title: y.nudge.text }) : null,
-      h('span', { class: 'bill-name' }, y.title, h('small', {}, `${y.kind === 'schedule' ? 'Schedule' : 'Campaign'} · ${skStatus(y)}`)),
+      h('span', { class: 'bill-name' }, y.title, h('small', {}, `${{ schedule: 'Schedule', money: 'Budget' }[y.kind] || 'Campaign'} · ${skStatus(y)}`)),
       h('span', { class: 'bill-right' }, h('small', {}, ago(y.updatedAt))));
     return [
       h('p', { class: 'day-hint' }, 'Talk it through and Sidekick lays out a plan: what to do, what you need, and when. You pick what to keep, it checks it adds up, then builds it.'),
       h('div', { class: 'sk-start' },
         h('button', { class: 'btn', disabled: SK.busy, onclick: () => skStart('campaign') }, h('b', {}, 'Plan a campaign'), h('small', {}, 'Goals, prospects, scripts, budget')),
-        h('button', { class: 'btn', disabled: SK.busy, onclick: () => skStart('schedule') }, h('b', {}, 'Plan my schedule'), h('small', {}, 'Time blocks around your Day'))),
+        h('button', { class: 'btn', disabled: SK.busy, onclick: () => skStart('schedule') }, h('b', {}, 'Plan my schedule'), h('small', {}, 'Time blocks around your Day')),
+        h('button', { class: 'btn', disabled: SK.busy, onclick: () => skStart('money') }, h('b', {}, 'Plan my budget'), h('small', {}, 'Budgets and bills from your Finance'))),
       SK.busy ? h('p', { class: 'day-hint' }, 'Thinking…') : null,
       all.length ? h('section', {}, h('h3', {}, 'Your plans'), all.map(row)) : null,
       (S.plans || []).length ? h('details', { class: 'bill-paid' }, h('summary', {}, `Older plans · ${S.plans.length}`),
@@ -7719,7 +7728,13 @@
       return [h('b', {}, c.name), h('small', {}, [f.stages.length ? f.stages.map(stageLabel).join(', ') : 'Any stage', f.cities.join(', '), f.sources.join(', '), f.days ? `last ${f.days} days` : '', f.need ? `has ${f.need}` : '', n != null ? `${n} from PSS now` : ''].filter(Boolean).join(' · '))];
     }
     if (c.type === 'note') return [h('b', {}, c.title || 'Note'), h('p', { class: 'sk-note' }, c.text)];
-    if (c.type === 'budget') return [h('b', {}, `${c.category} · ${money(c.limit * 100)} a month`)];
+    if (c.type === 'budget') {
+      const had = (S.budgets || []).find((b) => b.scope === c.scope && sameText(b.category, c.category));
+      const biz = c.scope === 'business' ? ' · business' : '';
+      if (!c.limit) return [h('b', {}, `Remove the ${c.category} budget`), had ? h('small', {}, `Now ${money(had.limit)} a month${biz}`) : null];
+      return [h('b', {}, `${c.category} · ${money(c.limit * 100)} a month`), had || biz ? h('small', {}, [had && `now ${money(had.limit)}`, biz.slice(3)].filter(Boolean).join(' · ')) : null];
+    }
+    if (c.type === 'bill') return [h('b', {}, `${c.name} · ${money(Math.round(c.amount * 100))}`), h('small', {}, [c.repeat === 'once' ? 'once' : c.repeat, 'due ' + dueLabel(c.due), c.category, c.autopay && 'autopay', c.scope === 'business' && 'business'].filter(Boolean).join(' · '))];
     if (c.type === 'block') return [h('b', {}, c.text), h('small', {}, `${dueLabel(c.date)} · ${fmtT(c.start)}–${fmtT(c.end)}${c.repeat ? ' · repeats ' + c.repeat : ''}`)];
     if (c.type === 'task') return [h('b', {}, c.text), h('small', {}, [c.goal && 'under ' + c.goal, c.due && dueLabel(c.due), whoName(c) && '→ ' + whoName(c)].filter(Boolean).join(' · '))];
     return [h('b', {}, c.text), h('small', {}, [c.due && 'due ' + dueLabel(c.due), c.target && 'target ' + c.target, c.end && 'ends ' + dueLabel(c.end)].filter(Boolean).join(' · '))];
@@ -7753,6 +7768,7 @@
       list: () => [field('name', 'Name', inp(c.name))],
       note: () => [field('title', 'Title', inp(c.title)), field('text', 'Text', area(c.text, 10))],
       budget: () => [h('div', { class: 'row2' }, field('category', 'Category', inp(c.category)), field('limit', 'Each month ($)', inp(c.limit, { inputmode: 'decimal' })))],
+      bill: () => [field('name', 'Bill', inp(c.name)), h('div', { class: 'row2' }, field('amount', 'Amount ($)', inp(c.amount, { inputmode: 'decimal' })), field('due', 'Due', inp(c.due, { type: 'date' })))],
       block: () => [field('text', 'What', inp(c.text)), h('div', { class: 'row3' }, field('date', 'Day', inp(c.date, { type: 'date' })), field('start', 'From', time(c.start)), field('end', 'To', time(c.end)))],
       task: () => [field('text', 'Task', inp(c.text)), field('due', 'Due', inp(c.due, { type: 'date' }))],
       change: () => [field('text', 'Change', inp(c.text)), field('due', 'New date', inp(c.due || c.end, { type: 'date' }))],
@@ -7867,10 +7883,10 @@
       h('div', { class: 'sk-top' },
         h('button', { class: 'icon-btn', 'aria-label': 'All plans', html: I.back, onclick: () => { SK.open = null; renderTool(); } }),
         h('b', {}, x.title),
-        c ? h('button', { class: 'btn small', onclick: () => { closeTool(); setTab('camps'); openCampaign(c.id); } }, 'Open campaign') : x.entryIds.length ? h('button', { class: 'btn small', onclick: () => { closeTool(); setTab('day'); } }, 'Open Day') : null,
+        c ? h('button', { class: 'btn small', onclick: () => { closeTool(); setTab('camps'); openCampaign(c.id); } }, 'Open campaign') : x.kind === 'money' ? h('button', { class: 'btn small', onclick: () => { FIN.tab = 'overview'; FIN.month = todayKey().slice(0, 7); openTool('bills'); } }, 'Open Finance') : x.entryIds.length ? h('button', { class: 'btn small', onclick: () => { closeTool(); setTab('day'); } }, 'Open Day') : null,
         h('button', { class: 'icon-btn', 'aria-label': 'Options', html: I.more, onclick: menu })),
       skFilesBar(x),
-      x.nudge && x.status !== 'done' ? h('div', { class: 'sk-nudge-bar' }, h('span', {}, 'Behind pace: ' + x.nudge.text), h('button', { class: 'btn small', disabled: SK.busy, onclick: () => skCall('POST', `/sidekick/${x.id}/say`, { text: 'We’re behind. What should change?' }) }, 'Talk it through')) : null,
+      x.nudge && x.status !== 'done' ? h('div', { class: 'sk-nudge-bar' }, h('span', {}, (x.kind === 'money' ? 'This month: ' : 'Behind pace: ') + x.nudge.text), h('button', { class: 'btn small', disabled: SK.busy, onclick: () => skCall('POST', `/sidekick/${x.id}/say`, { text: x.kind === 'money' ? 'My budgets are slipping this month. What should change?' : 'We’re behind. What should change?' }) }, 'Talk it through')) : null,
       h('div', { class: 'sk-chat' },
         x.messages.filter((m) => !(m.role === 'user' && x.messages.indexOf(m) === 0)).map((m) => m.role === 'user'
           ? h('div', { class: 'sk-msg me' }, m.check ? '✓ Check my plan' : m.attached ? m.attached.map((n) => h('span', { class: 'sk-sent-file' }, h('span', { class: 'sk-clip', html: I.clip }), n)) : m.text)
@@ -7880,7 +7896,7 @@
       ready.length ? h('div', { class: 'sk-ready' },
         h('span', {}, `${ready.length} accepted`),
         h('button', { class: 'btn small', disabled: SK.busy, onclick: () => skCall('POST', `/sidekick/${x.id}/check`, {}) }, 'Check my plan'),
-        h('button', { class: 'btn small primary-btn', disabled: SK.busy, onclick: () => skBuild(x) }, c || x.status === 'built' ? `Apply ${ready.length}` : x.kind === 'schedule' ? 'Put it on my Day' : 'Build campaign')) : null,
+        h('button', { class: 'btn small primary-btn', disabled: SK.busy, onclick: () => skBuild(x) }, c || x.status === 'built' ? `Apply ${ready.length}` : { schedule: 'Put it on my Day', money: 'Apply to Finance' }[x.kind] || 'Build campaign')) : null,
       h('div', { class: 'sk-compose' }, say, h('button', { class: 'btn primary-btn', disabled: SK.busy, onclick: send }, 'Send')),
     ];
   }
@@ -7925,8 +7941,15 @@
           await api('PATCH', '/items/' + it.id, { pinned: true }).catch(() => {});
           made.push(y);
         } else if (y.type === 'budget') {
-          const b = await api('PUT', '/budgets', { scope: amOwner() && c ? 'business' : 'personal', category: y.category, limit: y.limit });
-          S.budgets = [...(S.budgets || []).filter((z) => z.id !== b.id), b];
+          // In a campaign plan it's the business's; in a budget plan, whichever the card says.
+          const scope = x.kind === 'money' ? (y.scope === 'business' && amOwner() ? 'business' : 'personal') : amOwner() && c ? 'business' : 'personal';
+          const b = await api('PUT', '/budgets', { scope, category: y.category, limit: y.limit });
+          S.budgets = (S.budgets || []).filter((z) => !(z.scope === scope && sameText(z.category, y.category)));
+          if (b.id) S.budgets.push(b);
+          made.push(y);
+        } else if (y.type === 'bill') {
+          const b = await api('POST', '/bills', { name: y.name, amount: y.amount, due: y.due, repeat: y.repeat, autopay: y.autopay, category: y.category, scope: y.scope === 'business' && amOwner() ? 'business' : 'personal', tz: myTz() });
+          S.bills = [...(S.bills || []).filter((z) => z.id !== b.id), b];
           made.push(y);
         } else if (y.type === 'block') {
           const e = await api('POST', '/entries', { text: y.text, date: y.date, start: y.start, end: y.end, repeat: y.repeat });
@@ -7952,7 +7975,11 @@
       const z = await api('PATCH', '/sidekick/' + x.id, { built: true, campaignId: c?.id, entryIds, today: todayKey() });
       S.sidekick = [z, ...S.sidekick.filter((w) => w.id !== z.id)];
       const left = cards.length - made.length;
-      toast(`${c ? c.name : 'Your Day'}: ${plural(made.length, 'thing')} added${left ? ` · ${left} couldn’t be` : ''}`, c ? { label: 'Open', run: () => { closeTool(); setTab('camps'); openCampaign(c.id); } } : { label: 'Open Day', run: () => { closeTool(); setTab('day'); } });
+      const where = c ? c.name : x.kind === 'money' ? 'Finance' : 'Your Day';
+      const open = c ? { label: 'Open', run: () => { closeTool(); setTab('camps'); openCampaign(c.id); } }
+        : x.kind === 'money' ? { label: 'Open Finance', run: () => { FIN.tab = 'overview'; FIN.month = todayKey().slice(0, 7); openTool('bills'); } }
+        : { label: 'Open Day', run: () => { closeTool(); setTab('day'); } };
+      toast(`${where}: ${plural(made.length, 'thing')} ${x.kind === 'money' ? 'updated' : 'added'}${left ? ` · ${left} couldn’t be` : ''}`, open);
       renderCamps();
       renderDay();
     } catch (e) {
@@ -8361,7 +8388,8 @@
         budgets.length ? budgets.map(budgetRow) : h('p', { class: 'day-hint' }, 'Set a monthly limit for what you spend on, like groceries or ads, and Column shows how much is left. It warns you on your Day when one is nearly used.'),
         h('div', { class: 'btns' },
           h('button', { class: 'add-goal', onclick: () => budgetSheet() }, '+ Set a budget'),
-          h('button', { class: 'add-goal', onclick: suggestBudgets }, '✦ Suggest budgets'))),
+          h('button', { class: 'add-goal', onclick: suggestBudgets }, '✦ Suggest budgets'),
+          h('button', { class: 'add-goal', title: 'Talk your budget through: Sidekick reads your Finance, suggests budgets and bills, and keeps an eye on them', onclick: sidekickForMoney }, '✦ Plan with Sidekick'))),
       loose.length ? h('section', {}, h('h3', {}, 'Other spending'),
         loose.map(([c, n]) => h('div', { class: 'bill-hist', onclick: () => budgetSheet(null, c) }, h('span', {}, c), h('span', {}, money(n))))) : null,
       xs.length ? null : h('p', { class: 'day-hint' }, 'Nothing for this month yet. Add money in and out under In & out, or import a bank statement.'),
