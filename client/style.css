@@ -1294,6 +1294,7 @@ body.viewer .preview .wd { max-width: 900px; }
 body.desktop .dv-bar { -webkit-app-region: drag; min-height: 44px; }
 body.desktop .dv-bar > * { -webkit-app-region: no-drag; }
 body.platform-darwin .dv-bar { padding-left: 80px; }
+.dv-lib { flex: none; }
 .dv-where { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dv-status { color: var(--faint); font-size: 11.5px; margin-left: auto; white-space: nowrap; }
 .dv-scroll { flex: 1; overflow-y: auto; }

@@ -393,6 +393,7 @@
       if (isNew && msg.item.deviceId !== S.deviceId) incoming(msg.item);
     } else if (msg.type === 'item:update') {
       upsert(msg.item);
+      if (toolOpen === 'docs' && msg.item.type === 'text') renderTool();
       if (msg.item.id === VIEW_ID && !$('#preview .pv-edit, #preview .wd.editing')) openPreview(msg.item, { standalone: true });
       render();
       renderCamps();
@@ -6099,7 +6100,8 @@
     ]);
     view.replaceChildren(
       h('div', { class: 'dv-bar' },
-        h('button', { class: 'icon-btn', 'aria-label': 'Close doc', html: I.back, onclick: () => closeDoc() }),
+        h('button', { class: 'icon-btn', 'aria-label': 'Close doc', title: toolOpen === 'docs' ? 'Back to all docs' : 'Close', html: I.back, onclick: () => closeDoc() }),
+        h('button', { class: 'btn small dv-lib', title: 'Every doc you can see, with search', onclick: docsLibrary }, 'All docs'),
         h('span', { class: 'dv-where' }, docWhere(item())),
         status,
         h('button', { class: 'icon-btn', 'aria-label': 'Doc options', html: I.more, onclick: more })),
@@ -6117,6 +6119,14 @@
     DV.doc = null;
     $('#docview')?.classList.add('hidden');
     $('#docview')?.replaceChildren();
+    // Opened from the library: it's still open underneath, with this doc's new title.
+    if (toolOpen === 'docs') renderTool();
+  }
+  // From any doc to the library of all of them.
+  function docsLibrary() {
+    closeDoc();
+    DK.q = '';
+    openTool('docs');
   }
   function docSoon(x) {
     x.status.textContent = 'Editing…';
@@ -6235,7 +6245,7 @@
     const draw = () => {
       const s = DK.q.trim().toLowerCase();
       const hits = all.filter((x) => !s || x.text.toLowerCase().includes(s)).slice(0, 200);
-      list.replaceChildren(...(hits.length ? hits.map((x) => h('div', { class: 'bill doc-row', onclick: () => { closeTool(); openDoc(x); } },
+      list.replaceChildren(...(hits.length ? hits.map((x) => h('div', { class: 'bill doc-row', onclick: () => openDoc(x) },
         h('span', { class: 'bill-name' }, docTitle(x), h('small', {}, [docWhere(x), docSnippet(x)].filter(Boolean).join(' · '))),
         h('span', { class: 'bill-right' }, h('small', {}, ago(x.editedAt || x.createdAt))))) : [h('p', { class: 'day-hint' }, s ? 'No doc has that in it.' : 'No docs yet. Start one: a plan, a script, meeting notes, a process to follow.')]));
     };
@@ -6243,7 +6253,7 @@
     return [
       h('div', { class: 'dir-tools' },
         h('input', { type: 'search', class: 'dir-search', value: DK.q, placeholder: 'Search docs', 'aria-label': 'Search docs', oninput: (e) => { DK.q = e.target.value; draw(); } }),
-        h('button', { class: 'btn primary-btn', onclick: () => { closeTool(); newDoc(); } }, '+ New doc')),
+        h('button', { class: 'btn primary-btn', onclick: () => newDoc() }, '+ New doc')),
       list,
     ];
   }
