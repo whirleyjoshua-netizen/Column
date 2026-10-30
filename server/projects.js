@@ -1,5 +1,6 @@
-// Projects: the long-lived things a business keeps track of (customers, deals, jobs, vendors), as records with
-// fields the team chooses, seen as a table or a board. A project has record types ("Contacts", "Deals"), each
+// Projects: the long-lived things a business keeps track of (customers, deals, jobs, bids, quotes), as records
+// with fields the team chooses, seen as a table or a board. A record with line items can go to a customer as a
+// quote: a page of its own they open from a link, and accept or decline. A project has record types ("Contacts", "Deals"), each
 // with fields and views; a record is one row of a type. Templates set a project up in one go; CRM is the first.
 //
 // Built to be integrated with from day one:
@@ -13,7 +14,7 @@ import crypto from 'node:crypto';
 import dns from 'node:dns/promises';
 import net from 'node:net';
 
-export const FIELD_TYPES = ['text', 'number', 'money', 'date', 'select', 'multi', 'person', 'email', 'phone', 'url', 'checkbox', 'link'];
+export const FIELD_TYPES = ['text', 'number', 'money', 'date', 'select', 'multi', 'person', 'email', 'phone', 'url', 'checkbox', 'link', 'items', 'autonumber', 'files'];
 const COLORS = ['gray', 'blue', 'green', 'amber', 'rose', 'violet', 'teal'];
 const MAX_RECORDS = 50_000; // per team
 const MAX_TYPES = 20;
@@ -68,13 +69,63 @@ export const TEMPLATES = {
       ], views: [{ name: 'All companies', kind: 'table' }] },
     ],
   },
+  bids: {
+    name: 'Bids & Quotes', icon: '📐', about: 'Jobs you bid on, quotes you send, clients and a price list',
+    types: [
+      { key: 'quotes', name: 'Quotes', singular: 'Quote', icon: '🧾', primary: 'title', fields: [
+        { key: 'title', name: 'Quote', type: 'text' },
+        { key: 'number', name: 'Number', type: 'autonumber', prefix: 'Q-', start: 1001 },
+        { key: 'client', name: 'Client', type: 'link', target: 'clients' },
+        { key: 'status', name: 'Status', type: 'select', choices: [choice('Draft', 'gray'), choice('Sent', 'blue'), choice('Viewed', 'violet'), choice('Accepted', 'green'), choice('Declined', 'rose'), choice('Expired', 'amber')] },
+        { key: 'items', name: 'Line items', type: 'items' },
+        { key: 'issued', name: 'Issued', type: 'date' },
+        { key: 'valid_until', name: 'Valid until', type: 'date' },
+        { key: 'bid', name: 'Bid', type: 'link', target: 'bids' },
+        { key: 'terms', name: 'Terms', type: 'text' },
+        { key: 'owner', name: 'Owner', type: 'person' },
+        { key: 'accepted_by', name: 'Accepted by', type: 'text' },
+        { key: 'accepted_on', name: 'Accepted on', type: 'date' },
+      ], views: [{ name: 'By status', kind: 'board', groupBy: 'status' }, { name: 'All quotes', kind: 'table' }] },
+      { key: 'bids', name: 'Bids', singular: 'Bid', icon: '📐', primary: 'job', fields: [
+        { key: 'job', name: 'Job', type: 'text' },
+        { key: 'client', name: 'Client', type: 'link', target: 'clients' },
+        { key: 'status', name: 'Status', type: 'select', choices: [choice('Researching', 'gray'), choice('Estimating', 'blue'), choice('Submitted', 'violet'), choice('Won', 'green'), choice('Lost', 'rose'), choice('No bid', 'amber')] },
+        { key: 'bid_due', name: 'Bid due', type: 'date' },
+        { key: 'site_visit', name: 'Site visit', type: 'date' },
+        { key: 'location', name: 'Location', type: 'text' },
+        { key: 'estimate', name: 'Estimate', type: 'items' },
+        { key: 'scope', name: 'Scope', type: 'text' },
+        { key: 'plans', name: 'Plans & specs', type: 'files' },
+        { key: 'chance', name: 'Win chance', type: 'select', choices: [choice('Low', 'rose'), choice('Medium', 'amber'), choice('High', 'green')] },
+        { key: 'competitors', name: 'Competing', type: 'text' },
+        { key: 'result', name: 'Why we won or lost', type: 'text' },
+        { key: 'owner', name: 'Estimator', type: 'person' },
+      ], views: [{ name: 'Pipeline', kind: 'board', groupBy: 'status' }, { name: 'All bids', kind: 'table', sortBy: 'bid_due' }] },
+      { key: 'clients', name: 'Clients', singular: 'Client', icon: '🏢', primary: 'name', fields: [
+        { key: 'name', name: 'Name', type: 'text' },
+        { key: 'kind', name: 'Kind', type: 'select', choices: [choice('Homeowner', 'blue'), choice('Business', 'violet'), choice('General contractor', 'amber'), choice('Property manager', 'teal')] },
+        { key: 'contact', name: 'Contact person', type: 'text' },
+        { key: 'email', name: 'Email', type: 'email' },
+        { key: 'phone', name: 'Phone', type: 'phone' },
+        { key: 'address', name: 'Address', type: 'text' },
+      ], views: [{ name: 'All clients', kind: 'table' }] },
+      { key: 'price_list', name: 'Price list', singular: 'Item', icon: '🏷️', primary: 'item', fields: [
+        { key: 'item', name: 'Item', type: 'text' },
+        { key: 'description', name: 'Description', type: 'text' },
+        { key: 'unit', name: 'Unit', type: 'select', choices: [choice('each', 'gray'), choice('sq ft', 'blue'), choice('window', 'violet'), choice('hour', 'amber'), choice('job', 'green')] },
+        { key: 'price', name: 'Price', type: 'money' },
+        { key: 'cost', name: 'Our cost', type: 'money' },
+        { key: 'category', name: 'Category', type: 'select', choices: [] },
+      ], views: [{ name: 'All items', kind: 'table' }] },
+    ],
+  },
   blank: {
     name: 'Blank', icon: '📁', about: 'One list to shape as you like',
     types: [{ key: 'items', name: 'Items', singular: 'Item', icon: '📄', primary: 'name', fields: [{ key: 'name', name: 'Name', type: 'text' }, { key: 'status', name: 'Status', type: 'select', choices: [choice('To do', 'gray'), choice('Doing', 'blue'), choice('Done', 'green')] }], views: [{ name: 'All', kind: 'table' }, { name: 'Board', kind: 'board', groupBy: 'status' }] }],
   },
 };
 
-export function projectsModule({ db, save, broadcast, rid, cleanText, isDay, readJson, send, badRequest, isOwnerId, allowLocalHooks = false }) {
+export function projectsModule({ db, save, broadcast, rid, cleanText, isDay, readJson, send, badRequest, isOwnerId, escHtml, brandOf, logoUrl, allowLocalHooks = false }) {
   const bad = (msg) => badRequest(msg);
   db.projects ||= {};
   db.records ||= {};
@@ -103,15 +154,32 @@ export function projectsModule({ db, save, broadcast, rid, cleanText, isDay, rea
     const typeIdOf = (k) => types.find((x) => x.key === k)?.id;
     for (const t of types) {
       const src = t.src;
-      t.fields = src.fields.map((f) => ({ id: rid(8), key: f.key, name: f.name, type: f.type, ...(f.choices ? { choices: f.choices.map((c) => ({ id: rid(6), label: c.label, color: c.color })) } : {}), ...(f.type === 'link' ? { target: typeIdOf(f.target), many: false } : {}) }));
+      t.fields = src.fields.map((f) => ({ id: rid(8), key: f.key, name: f.name, type: f.type, ...(f.choices ? { choices: f.choices.map((c) => ({ id: rid(6), label: c.label, color: c.color })) } : {}), ...(f.type === 'link' ? { target: typeIdOf(f.target), many: false } : {}), ...(f.type === 'autonumber' ? { prefix: f.prefix || '', next: f.start || 1 } : {}) }));
       t.primary = t.fields.find((f) => f.key === src.primary)?.id || t.fields[0].id;
-      t.views = src.views.map((v) => ({ id: rid(8), name: v.name, kind: v.kind, ...(v.groupBy ? { groupBy: t.fields.find((f) => f.key === v.groupBy)?.id } : {}), sort: null }));
+      // A new record starts at the first stage, so it never sits in "No status".
+      for (const f of t.fields) if ((f.key === 'stage' || f.key === 'status') && f.choices?.length) f.default = f.choices[0].id;
+      t.views = src.views.map((v) => ({ id: rid(8), name: v.name, kind: v.kind, ...(v.groupBy ? { groupBy: t.fields.find((f) => f.key === v.groupBy)?.id } : {}), sort: v.sortBy ? { field: t.fields.find((f) => f.key === v.sortBy)?.id, dir: 'asc' } : null }));
       delete t.src;
     }
     return { types, template: tpl === TEMPLATES[key] ? key : 'blank' };
   }
 
   // ---------- values ----------
+  // What line items add up to, in cents: subtotal, discount, tax (on taxable lines, after the discount), total,
+  // and when costs are given, our cost and the margin.
+  function itemsTotals(v) {
+    const rows = v?.rows || [];
+    const line = (r) => Math.round((r.qty || 0) * (r.price || 0));
+    const subtotal = rows.reduce((n, r) => n + line(r), 0);
+    const discount = !v?.discount ? 0 : v.discount.type === 'percent' ? Math.round((subtotal * v.discount.value) / 100) : Math.min(subtotal, v.discount.value);
+    const taxable = rows.filter((r) => r.taxable !== false).reduce((n, r) => n + line(r), 0);
+    const share = subtotal ? (subtotal - discount) / subtotal : 0;
+    const tax = Math.round(taxable * share * ((v?.taxRate || 0) / 100));
+    const total = subtotal - discount + tax;
+    const costed = rows.some((r) => r.cost != null);
+    const cost = rows.reduce((n, r) => n + Math.round((r.qty || 0) * (r.cost || 0)), 0);
+    return { subtotal, discount, tax, total, ...(costed ? { cost, margin: subtotal - discount - cost, marginPct: subtotal - discount ? Math.round(((subtotal - discount - cost) / (subtotal - discount)) * 1000) / 10 : 0 } : {}) };
+  }
   // A value made to fit its field, or undefined to clear it. Unknown choices are added when allowed (imports
   // and the API), so a sync never fails on a new stage name.
   function cleanValue(ws, p, t, f, v, { addChoices = false } = {}) {
@@ -165,6 +233,41 @@ export function projectsModule({ db, save, broadcast, rid, cleanText, isDay, rea
         const ids = [...new Set(list.slice(0, 50).map((x) => choiceFor(f, x, addChoices)).filter(Boolean))];
         return ids.length ? ids : undefined;
       }
+      // Line items: what's being quoted, with quantity, unit and price (and what it costs us, for margin).
+      // Prices come in as dollars and are kept in cents. Tax is a percent; a discount is an amount or a percent.
+      case 'items': {
+        if (typeof v !== 'object') throw bad(`${f.name}: send line items as { rows: [...] }.`);
+        const cents = (x) => (x === '' || x == null ? null : Math.round(Number(String(x).replace(/[$,\s]/g, '')) * 100));
+        const rows = (Array.isArray(v.rows) ? v.rows : Array.isArray(v) ? v : []).slice(0, 200).map((r) => {
+          const qty = Number(String(r?.qty ?? 1).replace(/[,\s]/g, ''));
+          const price = cents(r?.price_cents != null ? r.price_cents / 100 : r?.price);
+          const cost = cents(r?.cost_cents != null ? r.cost_cents / 100 : r?.cost);
+          return {
+            id: typeof r?.id === 'string' && /^[\w-]{1,24}$/.test(r.id) ? r.id : rid(6),
+            desc: cleanText(r?.desc ?? r?.description, 500),
+            qty: Number.isFinite(qty) ? Math.max(-1e6, Math.min(1e6, qty)) : 1,
+            unit: cleanText(r?.unit, 20),
+            price: Number.isFinite(price) ? Math.max(-1e10, Math.min(1e10, price)) : 0,
+            ...(Number.isFinite(cost) ? { cost: Math.max(0, Math.min(1e10, cost)) } : {}),
+            ...(r?.taxable === false ? { taxable: false } : {}),
+            ...(typeof r?.from === 'string' && db.records[r.from]?.projectId === p.id ? { from: r.from } : {}),
+          };
+        }).filter((r) => r.desc || r.price);
+        const tax = Number(v.taxRate ?? v.tax_rate ?? 0);
+        const disc = v.discount && typeof v.discount === 'object' ? v.discount : null;
+        const dv = Number(String(disc?.value ?? 0).replace(/[$,%\s]/g, ''));
+        const out = { rows, taxRate: Number.isFinite(tax) ? Math.max(0, Math.min(100, tax)) : 0 };
+        if (disc && Number.isFinite(dv) && dv > 0) out.discount = disc.type === 'percent' ? { type: 'percent', value: Math.min(100, dv) } : { type: 'amount', value: Math.round(dv * (disc.cents ? 1 : 100)) };
+        return rows.length || out.discount || out.taxRate ? out : undefined;
+      }
+      // A file in Column: plans, specs, photos.
+      case 'files': {
+        const ids = [...new Set((Array.isArray(v) ? v : [v]).map(String))].filter((id) => db.items[id]?.wsId === ws.id && db.items[id].type === 'file');
+        for (const id of ids) db.items[id].pinned = true;
+        return ids.length ? ids.slice(0, 50) : undefined;
+      }
+      // Numbered by Column; what's sent in is ignored.
+      case 'autonumber': return undefined;
       case 'link': {
         const ids = [...new Set((Array.isArray(v) ? v : [v]).map(String))].filter((id) => {
           const r = db.records[id];
@@ -193,7 +296,7 @@ export function projectsModule({ db, save, broadcast, rid, cleanText, isDay, rea
     const before = JSON.stringify(t.fields.map((f) => f.choices?.length || 0));
     for (const [k, v] of Object.entries(values)) {
       const f = fieldOf(t, k);
-      if (!f) continue;
+      if (!f || f.type === 'autonumber') continue;
       const val = cleanValue(ws, p, t, f, v, opts);
       if (val === undefined) delete rec.values[f.id];
       else rec.values[f.id] = val;
@@ -241,6 +344,9 @@ export function projectsModule({ db, save, broadcast, rid, cleanText, isDay, rea
   function newRecord(ws, p, t, auth, values, extId, opts) {
     if (teamRecords(ws.id) >= MAX_RECORDS) throw bad(`A team can keep ${MAX_RECORDS.toLocaleString()} records. Delete some first.`);
     const rec = { id: rid(), wsId: ws.id, projectId: p.id, typeId: t.id, values: {}, extId: extId ? cleanText(extId, 200) : null, by: auth.member, memberId: auth.memberId, createdAt: Date.now(), updatedAt: Date.now() };
+    for (const f of t.fields) if (f.type === 'autonumber') rec.values[f.id] = `${f.prefix || ''}${(f.next = (f.next || 1) + 1) - 1}`;
+    for (const f of t.fields) if (f.default && f.choices?.some((c) => c.id === f.default)) rec.values[f.id] = f.default;
+    if (t.fields.some((f) => f.type === 'autonumber')) projectNews(p);
     applyValues(ws, p, t, rec, values, opts);
     db.records[rec.id] = rec;
     return rec;
@@ -284,6 +390,12 @@ export function projectsModule({ db, save, broadcast, rid, cleanText, isDay, rea
         const nm = name(60) || 'Field';
         const f = { id: rid(8), key: freeKey(nm, new Set(t.fields.map((x) => x.key))), name: nm, type };
         if (type === 'select' || type === 'multi') f.choices = (Array.isArray(body.choices) ? body.choices : []).slice(0, 100).map((c, i) => ({ id: rid(6), label: cleanText(c?.label ?? c, 60), color: COLORS.includes(c?.color) ? c.color : COLORS[i % COLORS.length] })).filter((c) => c.label);
+        if (type === 'autonumber') {
+          f.prefix = cleanText(body.prefix, 10);
+          f.next = Math.max(1, Math.round(Number(body.start) || 1));
+          // Records already here get numbers, oldest first.
+          for (const r of Object.values(db.records).filter((x) => x.projectId === p.id && x.typeId === t.id).sort((a, b) => a.createdAt - b.createdAt)) r.values[f.id] = `${f.prefix}${f.next++}`;
+        }
         if (type === 'link') {
           const to = typeOf(p, body.target);
           if (!to) throw bad('Pick which list it links to.');
@@ -466,7 +578,7 @@ export function projectsModule({ db, save, broadcast, rid, cleanText, isDay, rea
       const p = rec && db.projects[rec.projectId];
       if (!rec || rec.wsId !== ws.id || !sees(p, auth.memberId)) return send(res, 404, { error: 'That record is gone.' });
       const t = typeOf(p, rec.typeId);
-      if (m === 'PATCH') {
+      if (m === 'PATCH' && !c) {
         const body = await readJson(req, 200_000);
         applyValues(ws, p, t, rec, body.values, { addChoices: false });
         if (body.docId !== undefined) rec.docId = db.items[body.docId]?.wsId === ws.id && db.items[body.docId].type === 'text' ? body.docId : null;
@@ -474,9 +586,25 @@ export function projectsModule({ db, save, broadcast, rid, cleanText, isDay, rea
         recordNews(rec, 'record.updated', auth.member);
         return send(res, 200, publicRecord(rec));
       }
-      if (m === 'DELETE') {
+      if (m === 'DELETE' && !c) {
         recordGone(rec, auth.member);
         return send(res, 200, { ok: true });
+      }
+      // Sending a quote: a link of its own for the customer. Making it marks a draft as sent.
+      if (c === 'share' && t.fields.some((f) => f.type === 'items')) {
+        if (m === 'POST') {
+          const body = await readJson(req, 10_000);
+          const hours = Number(body.hours) > 0 ? Math.min(Number(body.hours), 24 * 365) : null;
+          rec.share = { token: rec.share?.token || crypto.randomBytes(18).toString('base64url'), createdAt: Date.now(), expiresAt: hours ? Date.now() + hours * 3600_000 : null, by: auth.member };
+          const st = quoteStatus(t, rec);
+          if (!st || st === 'draft') setStatus(p, t, rec, 'Sent');
+          const issued = fieldOf(t, 'issued');
+          if (issued?.type === 'date' && !rec.values[issued.id]) rec.values[issued.id] = today();
+        } else if (m === 'DELETE') rec.share = null;
+        else return send(res, 405, { error: 'Method not allowed' });
+        rec.updatedAt = Date.now();
+        recordNews(rec, 'record.updated', auth.member);
+        return send(res, 200, publicRecord(rec));
       }
       return send(res, 405, { error: 'Method not allowed' });
     }
@@ -542,6 +670,140 @@ export function projectsModule({ db, save, broadcast, rid, cleanText, isDay, rea
     return null;
   }
 
+  // ---------- quotes: the page a customer opens from the link, to accept or decline ----------
+  // It works on any list with line items; it finds its other parts by key: status, issued, valid_until, terms,
+  // client, accepted_by, accepted_on (the Bids & Quotes template has them all).
+  const today = () => new Date().toISOString().slice(0, 10);
+  const statusField = (t) => { const f = fieldOf(t, 'status'); return f?.type === 'select' ? f : null; };
+  const quoteStatus = (t, rec) => { const f = statusField(t); return f ? (f.choices.find((c) => c.id === rec.values[f.id])?.label || '').toLowerCase() : ''; };
+  function setStatus(p, t, rec, label) {
+    const f = statusField(t);
+    if (!f) return;
+    rec.values[f.id] = choiceFor(f, label, true);
+  }
+  const quoteFor = (token) => {
+    const rec = token && Object.values(db.records).find((r) => r.share?.token === token);
+    if (!rec || (rec.share.expiresAt && rec.share.expiresAt < Date.now())) return null;
+    const p = db.projects[rec.projectId];
+    const t = p && typeOf(p, rec.typeId);
+    return p && t && db.workspaces[rec.wsId] ? { rec, p, t, ws: db.workspaces[rec.wsId] } : null;
+  };
+  const money = (c) => (c / 100).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
+  const day = (d) => (d ? new Date(d + 'T12:00:00Z').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' }) : '');
+  async function readForm(req) {
+    let body = '';
+    for await (const chunk of req) {
+      body += chunk;
+      if (body.length > 20_000) break;
+    }
+    return Object.fromEntries(new URLSearchParams(body));
+  }
+  async function quotePage(req, res, url) {
+    const [, token, act] = url.pathname.split('/').filter(Boolean);
+    const q = quoteFor(token);
+    const head = { 'X-Robots-Tag': 'noindex', 'Referrer-Policy': 'no-referrer', 'Cache-Control': 'no-store' };
+    for (const [k, v] of Object.entries(head)) res.setHeader(k, v);
+    if (!q) return quoteHtml(res, 404, null, '<h1>Quote not available</h1><p class="muted">This link has expired or was turned off. Contact whoever sent it.</p>');
+    const { rec, p, t, ws } = q;
+    const status = quoteStatus(t, rec);
+    const valid = fieldOf(t, 'valid_until');
+    const expired = valid && rec.values[valid.id] && rec.values[valid.id] < today() && !['accepted', 'declined'].includes(status);
+    // An answer, once: accepted (with the name they typed) or declined (with why, if they say).
+    if (req.method === 'POST' && (act === 'accept' || act === 'decline')) {
+      const form = await readForm(req);
+      const name = cleanText(form.name, 120);
+      if (!['accepted', 'declined'].includes(status) && !expired && (act === 'decline' || name)) {
+        setStatus(p, t, rec, act === 'accept' ? 'Accepted' : 'Declined');
+        const by = fieldOf(t, 'accepted_by');
+        const on = fieldOf(t, 'accepted_on');
+        if (by?.type === 'text') rec.values[by.id] = act === 'accept' ? name : `Declined${name ? ' by ' + name : ''}${form.reason ? ': ' + cleanText(form.reason, 500) : ''}`;
+        if (on?.type === 'date') rec.values[on.id] = today();
+        rec.answer = { act, name, reason: cleanText(form.reason, 500), at: Date.now() };
+        rec.updatedAt = Date.now();
+        const items = t.fields.find((f) => f.type === 'items');
+        broadcast(rec.wsId, { type: 'quote:answer', projectId: p.id, recordId: rec.id, act, name: name || 'The customer', title: quoteTitle(t, rec), total: items ? itemsTotals(rec.values[items.id]).total : 0 });
+        recordNews(rec, 'record.updated', name ? `${name} (customer)` : 'Customer');
+      }
+      res.writeHead(303, { Location: `/q/${token}` });
+      return res.end();
+    }
+    if (act) return quoteHtml(res, 404, null, '<h1>Not found</h1>');
+    // Opening it marks a sent quote viewed.
+    if (status === 'sent') {
+      setStatus(p, t, rec, 'Viewed');
+      rec.updatedAt = Date.now();
+      recordNews(rec, 'record.updated', 'Customer');
+    }
+    return quoteHtml(res, 200, ws, quoteBody(q, token, expired));
+  }
+  const quoteTitle = (t, rec) => {
+    const num = t.fields.find((f) => f.type === 'autonumber');
+    return [num && rec.values[num.id], rec.values[t.primary]].filter(Boolean).join(' · ') || t.singular || 'Quote';
+  };
+  function quoteBody({ rec, p, t, ws }, token, expired) {
+    const v = (key) => { const f = fieldOf(t, key); return f ? rec.values[f.id] : undefined; };
+    const items = t.fields.find((f) => f.type === 'items');
+    const data = items ? rec.values[items.id] || { rows: [] } : { rows: [] };
+    const tot = itemsTotals(data);
+    // The client, from the linked record.
+    const cf = fieldOf(t, 'client');
+    const client = cf?.type === 'link' && rec.values[cf.id]?.[0] && db.records[rec.values[cf.id][0]];
+    const ct = client && typeOf(p, client.typeId);
+    const cv = (key) => { const f = ct && fieldOf(ct, key); return f && client.values[f.id] != null ? String(client.values[f.id]) : ''; };
+    const status = quoteStatus(t, rec);
+    const brand = brandOf(ws);
+    const lines = data.rows.map((r) => `<tr><td>${escHtml(r.desc)}</td><td class="n">${escHtml(String(r.qty))}${r.unit ? ' ' + escHtml(r.unit) : ''}</td><td class="n">${money(r.price)}</td><td class="n">${money(Math.round(r.qty * r.price))}</td></tr>`).join('');
+    const answer = status === 'accepted' ? `<div class="done ok">✓ Accepted${v('accepted_by') ? ' by ' + escHtml(v('accepted_by')) : ''}${v('accepted_on') ? ' on ' + day(v('accepted_on')) : ''}. Thank you!</div>`
+      : status === 'declined' ? '<div class="done">This quote was declined. Thanks for letting us know.</div>'
+      : expired ? `<div class="done">This quote expired on ${day(v('valid_until'))}. Contact us for an updated one.</div>`
+      : `<form class="accept" method="post" action="/q/${token}/accept"><label>Type your full name to accept this quote<input name="name" required maxlength="120" autocomplete="name"></label><button>Accept quote · ${money(tot.total)}</button></form>
+         <details class="decline"><summary>Decline</summary><form method="post" action="/q/${token}/decline"><label>Your name<input name="name" maxlength="120" autocomplete="name"></label><label>Anything we should know? (optional)<textarea name="reason" rows="3" maxlength="500"></textarea></label><button class="ghost">Decline quote</button></form></details>`;
+    return `<header>${brand.logo ? `<img class="brand" src="${logoUrl(brand.logo)}" alt="">` : ''}<div><b>${escHtml(ws.name)}</b></div></header>
+      <h1>${escHtml(quoteTitle(t, rec))}</h1>
+      <div class="meta">${v('issued') ? `<span>Issued ${day(v('issued'))}</span>` : ''}${v('valid_until') ? `<span>Valid until ${day(v('valid_until'))}</span>` : ''}</div>
+      ${client ? `<div class="to"><small>Prepared for</small><b>${escHtml(cv('name') || cv(ct.fields.find((f) => f.id === ct.primary)?.key))}</b>${[cv('contact'), cv('address'), cv('email'), cv('phone')].filter(Boolean).map((x) => `<div>${escHtml(x)}</div>`).join('')}</div>` : ''}
+      <table><thead><tr><th>Description</th><th class="n">Qty</th><th class="n">Price</th><th class="n">Amount</th></tr></thead><tbody>${lines || '<tr><td colspan="4" class="muted">No items yet.</td></tr>'}</tbody></table>
+      <div class="sums"><div><span>Subtotal</span><span>${money(tot.subtotal)}</span></div>${tot.discount ? `<div><span>Discount${data.discount?.type === 'percent' ? ` (${data.discount.value}%)` : ''}</span><span>−${money(tot.discount)}</span></div>` : ''}${data.taxRate ? `<div><span>Tax (${data.taxRate}%)</span><span>${money(tot.tax)}</span></div>` : ''}<div class="total"><span>Total</span><span>${money(tot.total)}</span></div></div>
+      ${v('terms') ? `<div class="terms"><small>Terms</small><p>${escHtml(v('terms')).replace(/\n/g, '<br>')}</p></div>` : ''}
+      ${answer}`;
+  }
+  function quoteHtml(res, code, ws, body) {
+    const accent = ws ? brandOf(ws).accent : null;
+    res.writeHead(code, { 'Content-Type': 'text/html; charset=utf-8', 'Content-Security-Policy': "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; form-action 'self'" });
+    res.end(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Quote</title><style>
+:root{color-scheme:light;--text:#16161a;--muted:#6b6b76;--line:#e4e4ea;--accent:${accent || '#5b4ee0'};--soft:#f6f6f8}
+*{box-sizing:border-box}body{margin:0;background:var(--soft);color:var(--text);font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;padding:24px 14px}
+main{background:#fff;max-width:760px;margin:0 auto;border-radius:14px;padding:36px 40px;box-shadow:0 10px 40px rgba(0,0,0,.08)}@media(max-width:600px){main{padding:22px 16px}}
+header{display:flex;align-items:center;gap:12px;margin-bottom:22px}.brand{max-height:46px;max-width:160px;border-radius:6px}
+h1{font-size:26px;margin:0 0 6px}.meta{display:flex;gap:16px;color:var(--muted);font-size:13.5px;margin-bottom:20px;flex-wrap:wrap}
+.to{background:var(--soft);border-radius:10px;padding:12px 14px;margin-bottom:20px;font-size:14px}.to small,.terms small{display:block;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;font-size:11px;margin-bottom:2px}
+table{width:100%;border-collapse:collapse;font-size:14px}th{text-align:left;color:var(--muted);font-weight:600;font-size:12px;border-bottom:2px solid var(--line);padding:8px 6px}td{border-bottom:1px solid var(--line);padding:10px 6px;vertical-align:top}.n{text-align:right;white-space:nowrap}
+.sums{margin:14px 0 0 auto;max-width:300px;font-size:14px}.sums div{display:flex;justify-content:space-between;padding:4px 6px}.sums .total{border-top:2px solid var(--text);margin-top:6px;padding-top:8px;font-size:18px;font-weight:700}
+.terms{margin-top:26px;font-size:13.5px;color:#333}.terms p{margin:0}
+.accept{margin-top:30px;padding:18px;border:2px solid var(--accent);border-radius:12px;display:flex;flex-direction:column;gap:10px}
+label{display:flex;flex-direction:column;gap:6px;font-size:13.5px;color:var(--muted)}input,textarea{font:inherit;padding:10px 12px;border:1px solid var(--line);border-radius:8px;color:var(--text)}
+button{font:inherit;font-weight:700;background:var(--accent);color:#fff;border:0;border-radius:10px;padding:12px 18px;cursor:pointer}button.ghost{background:none;color:var(--text);border:1px solid var(--line);font-weight:500}
+.decline{margin-top:12px;color:var(--muted);font-size:13.5px}.decline form{display:flex;flex-direction:column;gap:10px;margin-top:10px}.decline summary{cursor:pointer}
+.done{margin-top:28px;padding:16px;border-radius:12px;background:var(--soft);font-weight:600}.done.ok{background:#e7f8ef;color:#126b3d}.muted{color:var(--muted)}
+footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
+</style></head><body><main>${body}</main><footer>Sent with Column</footer></body></html>`);
+  }
+  // Quotes still waiting past their valid-until day become Expired.
+  function expireQuotes() {
+    const now = today();
+    for (const rec of Object.values(db.records)) {
+      const p = db.projects[rec.projectId];
+      const t = p && typeOf(p, rec.typeId);
+      const valid = t && fieldOf(t, 'valid_until');
+      if (!valid || !rec.values[valid.id] || rec.values[valid.id] >= now || !['sent', 'viewed'].includes(quoteStatus(t, rec))) continue;
+      setStatus(p, t, rec, 'Expired');
+      rec.updatedAt = Date.now();
+      recordNews(rec, 'record.updated', 'Column');
+    }
+  }
+  setInterval(expireQuotes, 3600_000).unref?.();
+  setTimeout(expireQuotes, 5_000).unref?.();
+
   // ---------- the public API: /api/v1 ----------
   // Records in and out by type and field keys, values as an outside system would write them: options by their
   // label, people by name or id, money in dollars, links as record ids.
@@ -575,6 +837,13 @@ export function projectsModule({ db, save, broadcast, rid, cleanText, isDay, rea
     if (f.type === 'multi') return v.map((id) => f.choices.find((c) => c.id === id)?.label).filter(Boolean);
     if (f.type === 'person') { const m = ws.members.find((x) => x.id === v); return m ? { id: m.id, name: m.name } : null; }
     if (f.type === 'link') return f.many ? v : v[0] ?? null;
+    if (f.type === 'items') {
+      const t2 = itemsTotals(v);
+      const d = (c) => c / 100;
+      return { rows: v.rows.map((r) => ({ id: r.id, description: r.desc, qty: r.qty, unit: r.unit, price: d(r.price), ...(r.cost != null ? { cost: d(r.cost) } : {}), total: d(Math.round(r.qty * r.price)), ...(r.taxable === false ? { taxable: false } : {}) })),
+        tax_rate: v.taxRate, ...(v.discount ? { discount: v.discount.type === 'percent' ? { percent: v.discount.value } : { amount: d(v.discount.value) } } : {}),
+        subtotal: d(t2.subtotal), discount_total: d(t2.discount), tax: d(t2.tax), total: d(t2.total), ...(t2.cost != null ? { cost: d(t2.cost), margin: d(t2.margin), margin_percent: t2.marginPct } : {}) };
+    }
     return v;
   }
   function outRecord(ws, p, t, r) {
@@ -582,7 +851,7 @@ export function projectsModule({ db, save, broadcast, rid, cleanText, isDay, rea
       fields: Object.fromEntries(t.fields.map((f) => [f.key, outValue(ws, f, r.values[f.id])])) };
   }
   const outSchema = (p) => ({ id: p.id, name: p.name, template: p.template, types: p.types.map((t) => ({ key: t.key, name: t.name, singular: t.singular,
-    fields: t.fields.map((f) => ({ key: f.key, name: f.name, type: f.type, ...(f.choices ? { options: f.choices.map((c) => c.label) } : {}), ...(f.type === 'link' ? { links_to: p.types.find((x) => x.id === f.target)?.key, many: !!f.many } : {}), ...(f.id === t.primary ? { primary: true } : {}) })) })) });
+    fields: t.fields.map((f) => ({ key: f.key, name: f.name, type: f.type, ...(f.type === 'autonumber' ? { read_only: true } : {}), ...(f.choices ? { options: f.choices.map((c) => c.label) } : {}), ...(f.type === 'link' ? { links_to: p.types.find((x) => x.id === f.target)?.key, many: !!f.many } : {}), ...(f.id === t.primary ? { primary: true } : {}) })) })) });
   // Fields from outside, by key.
   const inFields = (t, fields) => {
     if (!fields || typeof fields !== 'object' || Array.isArray(fields)) throw bad('Send fields as an object of field keys and values.');
@@ -739,5 +1008,5 @@ export function projectsModule({ db, save, broadcast, rid, cleanText, isDay, rea
   // What the app needs at sign-in: the projects this person sees (records load when a project opens).
   const stateFor = (ws, auth) => Object.values(db.projects).filter((p) => p.wsId === ws.id && sees(p, auth.memberId)).map(publicProject);
 
-  return { route, v1, seesMsg, stateFor, sees, TEMPLATES: Object.fromEntries(Object.entries(TEMPLATES).map(([k, t]) => [k, { name: t.name, icon: t.icon, about: t.about }])) };
+  return { route, v1, quotePage, seesMsg, stateFor, sees, TEMPLATES: Object.fromEntries(Object.entries(TEMPLATES).map(([k, t]) => [k, { name: t.name, icon: t.icon, about: t.about }])) };
 }

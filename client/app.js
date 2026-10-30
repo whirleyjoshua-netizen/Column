@@ -402,6 +402,8 @@
       refreshLinks();
     } else if (msg.type === 'doc') {
       docNews(msg);
+    } else if (msg.type === 'quote:answer') {
+      quoteAnswerNews(msg);
     } else if (/^(project|record)/.test(msg.type)) {
       prNews(msg);
     } else if (msg.type === 'doc:here') {
@@ -6105,8 +6107,8 @@
   const recById = (pid, id) => prRecs(pid).find((r) => r.id === id);
   const recName = (t, r) => String(r?.values[t.primary] ?? '').trim() || 'Untitled';
   const PF_COLOR = { gray: '#8b8b98', blue: '#4ea1ff', green: '#3ddc97', amber: '#ffb547', rose: '#ff6b8b', violet: '#8b7cff', teal: '#2dd4bf' };
-  const PF_IC = { text: 'Aa', number: '#', money: '$', date: '📅', select: '◉', multi: '☰', person: '👤', email: '@', phone: '☏', url: '🔗', checkbox: '☑', link: '↗' };
-  const PF_NAME = { text: 'Text', number: 'Number', money: 'Money', date: 'Date', select: 'Options (one)', multi: 'Options (many)', person: 'Person', email: 'Email', phone: 'Phone', url: 'Web link', checkbox: 'Checkbox', link: 'Link to another list' };
+  const PF_IC = { text: 'Aa', number: '#', money: '$', date: '📅', select: '◉', multi: '☰', person: '👤', email: '@', phone: '☏', url: '🔗', checkbox: '☑', link: '↗', items: '🧾', autonumber: '№', files: '📎' };
+  const PF_NAME = { text: 'Text', number: 'Number', money: 'Money', date: 'Date', select: 'Options (one)', multi: 'Options (many)', person: 'Person', email: 'Email', phone: 'Phone', url: 'Web link', checkbox: 'Checkbox', link: 'Link to another list', items: 'Line items (quote, estimate)', autonumber: 'Auto number', files: 'Files' };
   const prCall = async (method, path, body) => {
     try {
       return await api(method, path, body);
@@ -6175,7 +6177,7 @@
   function newProjectSheet() {
     let tpl = 'crm';
     const name = h('input', { placeholder: 'Sales', maxlength: 80 });
-    const TPL = { crm: ['🤝', 'CRM', 'Contacts, companies and deals, with a pipeline board'], blank: ['📁', 'Blank', 'One list to shape as you like'] };
+    const TPL = { crm: ['🤝', 'CRM', 'Contacts, companies and deals, with a pipeline board'], bids: ['📐', 'Bids & Quotes', 'Jobs you bid on, quotes customers accept online, clients, a price list'], blank: ['📁', 'Blank', 'One list to shape as you like'] };
     const pick = h('div', { class: 'pj-tpls' });
     const draw = () => pick.replaceChildren(...Object.entries(TPL).map(([k, [ic, nm, about]]) => h('button', { type: 'button', class: 'pj-tpl' + (tpl === k ? ' on' : ''), onclick: () => { tpl = k; draw(); } }, h('span', { class: 'pj-ic' }, ic), h('b', {}, nm), h('small', {}, about))));
     draw();
@@ -6259,6 +6261,8 @@
     if (f.type === 'checkbox') return v ? 'Yes' : '';
     if (f.type === 'date') return v;
     if (f.type === 'link') { const to = prType(p, f.target); return v.map((id) => recName(to, recById(p.id, id))).join(', '); }
+    if (f.type === 'items') return money(itemsTotals(v).total);
+    if (f.type === 'files') return v.map((id) => S.items.find((x) => x.id === id)?.name).filter(Boolean).join(', ');
     return String(v);
   }
   const pjChip = (c) => h('span', { class: 'pj-chip', style: `--c:${PF_COLOR[c.color] || PF_COLOR.gray}` }, c.label);
@@ -6276,6 +6280,9 @@
     if (f.type === 'phone') return h('a', { href: 'tel:' + String(v).replace(/[^\d+]/g, ''), onclick: (e) => e.stopPropagation() }, v);
     if (f.type === 'url') return h('a', { href: v, target: '_blank', rel: 'noopener', onclick: (e) => e.stopPropagation() }, v.replace(/^https?:\/\/(www\.)?/, '').replace(/\/$/, ''));
     if (f.type === 'link') { const to = prType(p, f.target); return v.map((id) => recById(p.id, id)).filter(Boolean).map((r) => h('button', { class: 'pj-link', onclick: (e) => { e.stopPropagation(); PR.type = r.typeId; PR.view = null; PR.panel = r.id; renderProjects(); } }, recName(to, r))); }
+    if (f.type === 'items') { const tt = itemsTotals(v); return h('span', { class: 'pj-num', title: `${v.rows.length} line${v.rows.length === 1 ? '' : 's'}${tt.cost != null ? ` · margin ${tt.marginPct}%` : ''}` }, money(tt.total)); }
+    if (f.type === 'autonumber') return h('span', { class: 'pj-num pj-auto' }, v);
+    if (f.type === 'files') return v.map((id) => S.items.find((x) => x.id === id)).filter(Boolean).map((it) => h('button', { class: 'pj-link', onclick: (e) => { e.stopPropagation(); openPreview(it); } }, '📎 ' + shortText(it.name, 28)));
     return String(v);
   }
   async function prSet(p, r, f, value) {
@@ -6288,6 +6295,22 @@
     const v = r.values[f.id];
     const set = (val) => prSet(p, r, f, val);
     if (f.type === 'checkbox') return set(!v);
+    if (f.type === 'autonumber') return toast('Column numbers these itself.');
+    if (f.type === 'items') { PR.panel = r.id; return renderProjects(); }
+    if (f.type === 'files') {
+      const pick = h('input', { type: 'file', multiple: true, class: 'hidden' });
+      pick.addEventListener('change', async () => {
+        const ups = [];
+        for (const file of pick.files) { const it = await uploadFile(file, {}).catch((e) => toast(e.message)); if (it) ups.push(it.id); }
+        pick.remove();
+        if (ups.length) set([...(v || []), ...ups]);
+      });
+      return openMenu(anchor, [
+        ...(v || []).map((id) => S.items.find((x) => x.id === id)).filter(Boolean).map((it) => ({ label: '📎 ' + it.name, run: () => openPreview(it) })),
+        { label: '+ Add files…', run: () => { document.body.append(pick); pick.click(); } },
+        ...(v?.length ? [{ head: 'Remove' }, ...v.map((id) => S.items.find((x) => x.id === id)).filter(Boolean).map((it) => ({ label: '× ' + it.name, run: () => set(v.filter((x) => x !== it.id)) }))] : []),
+      ]);
+    }
     if (f.type === 'select' || f.type === 'multi') {
       const many = f.type === 'multi';
       const on = (id) => (many ? (v || []).includes(id) : v === id);
@@ -6358,14 +6381,17 @@
     const target = h('select', {}, p.types.map((x) => h('option', { value: x.id }, x.name)));
     const many = h('input', { type: 'checkbox' });
     const optWrap = h('label', { class: 'hidden' }, 'Options', opts);
+    const prefix = h('input', { placeholder: 'Q-', maxlength: 10 });
+    const start = h('input', { value: '1001', inputmode: 'numeric' });
+    const numWrap = h('div', { class: 'row2 hidden' }, h('label', {}, 'Starts with', prefix), h('label', {}, 'First number', start));
     const linkWrap = h('div', { class: 'hidden' }, h('label', {}, 'Links to', target), h('label', { class: 'pick' }, many, 'More than one'));
-    type.addEventListener('change', () => { optWrap.classList.toggle('hidden', !['select', 'multi'].includes(type.value)); linkWrap.classList.toggle('hidden', type.value !== 'link'); });
-    sheet(`Add a field to ${t.name}`, [h('label', {}, 'Name', name), h('label', {}, 'Kind', type), optWrap, linkWrap], async () => {
+    type.addEventListener('change', () => { optWrap.classList.toggle('hidden', !['select', 'multi'].includes(type.value)); linkWrap.classList.toggle('hidden', type.value !== 'link'); numWrap.classList.toggle('hidden', type.value !== 'autonumber'); });
+    sheet(`Add a field to ${t.name}`, [h('label', {}, 'Name', name), h('label', {}, 'Kind', type), optWrap, linkWrap, numWrap], async () => {
       if (!name.value.trim()) throw new Error('Name the field.');
-      await prSchema(p, { op: 'addField', typeId: t.id, name: name.value, type: type.value, choices: opts.value.split('\n').map((x) => x.trim()).filter(Boolean), target: target.value, many: many.checked });
+      await prSchema(p, { op: 'addField', typeId: t.id, name: name.value, type: type.value, choices: opts.value.split('\n').map((x) => x.trim()).filter(Boolean), target: target.value, many: many.checked, prefix: prefix.value, start: start.value });
     }, 'Add field');
   }
-  const PF_TYPES = ['text', 'select', 'multi', 'number', 'money', 'date', 'person', 'email', 'phone', 'url', 'checkbox', 'link'];
+  const PF_TYPES = ['text', 'select', 'multi', 'number', 'money', 'date', 'person', 'email', 'phone', 'url', 'checkbox', 'link', 'items', 'autonumber', 'files'];
   function prAddType(p) {
     const name = h('input', { placeholder: 'Jobs' });
     sheet('Add a list', [h('label', {}, 'Name', name), h('p', { class: 'day-hint' }, 'A new kind of record in this project, like Jobs or Vendors. It starts with a Name field; add more after.')], async () => {
@@ -6400,7 +6426,7 @@
     const cols = [prField(t, t.primary), ...t.fields.filter((f) => f.id !== t.primary && !f.hidden)];
     const recs = prShown(p, t, v);
     const shown = recs.slice(0, 500);
-    const sum = (f) => recs.reduce((n, r) => n + (Number(r.values[f.id]) || 0), 0);
+    const sum = (f) => recs.reduce((n, r) => n + (f.type === 'items' ? (r.values[f.id] ? itemsTotals(r.values[f.id]).total : 0) : Number(r.values[f.id]) || 0), 0);
     return [h('div', { class: 'pj-table-wrap' }, h('table', { class: 'pj-table' },
       h('thead', {}, h('tr', {}, cols.map((f) => h('th', { class: f.id === t.primary ? 'pj-first' : null }, h('button', { class: 'pj-th', onclick: (e) => prFieldMenu(e, p, t, v, f) }, h('span', { class: 'pj-fic' }, PF_IC[f.type]), f.name, v.sort?.field === f.id ? (v.sort.dir === 'asc' ? ' ↑' : ' ↓') : ''))),
         h('th', { class: 'pj-addcol' }, h('button', { class: 'pj-th', title: 'Add a field', onclick: () => prAddField(p, t) }, '+')))),
@@ -6411,7 +6437,7 @@
           cell.addEventListener('click', (e) => { if (e.target.closest('a, .pj-link')) return; prEdit(cell, p, t, r, f); });
           return h('td', {}, cell);
         }), h('td', {})))),
-      h('tfoot', {}, h('tr', {}, cols.map((f, i) => h('td', {}, i === 0 ? h('button', { class: 'pj-newrow', onclick: () => prNew(p, t) }, `+ New`) : f.type === 'money' || f.type === 'number' ? h('small', { class: 'pj-num' }, f.type === 'money' ? money(sum(f)) : sum(f).toLocaleString()) : '')), h('td', {}))))),
+      h('tfoot', {}, h('tr', {}, cols.map((f, i) => h('td', {}, i === 0 ? h('button', { class: 'pj-newrow', onclick: () => prNew(p, t) }, `+ New`) : f.type === 'money' || f.type === 'number' || f.type === 'items' ? h('small', { class: 'pj-num' }, f.type === 'number' ? sum(f).toLocaleString() : money(sum(f))) : '')), h('td', {}))))),
       h('p', { class: 'day-hint pj-count' }, `${recs.length.toLocaleString()} ${recs.length === 1 ? (t.singular || 'record').toLowerCase() : t.name.toLowerCase()}${shown.length < recs.length ? ` · showing the first ${shown.length}, search to narrow it down` : ''}`)];
   }
   // ----- board -----
@@ -6419,7 +6445,8 @@
     const g = prField(t, v.groupBy) || t.fields.find((f) => f.type === 'select');
     if (!g) return [h('p', { class: 'day-hint' }, 'A board needs a field with options, like Stage.')];
     const recs = prShown(p, t, v);
-    const sumF = t.fields.find((f) => f.type === 'money');
+    const sumF = t.fields.find((f) => f.type === 'money') || t.fields.find((f) => f.type === 'items');
+    const val = (r) => (!sumF ? 0 : sumF.type === 'items' ? (r.values[sumF.id] ? itemsTotals(r.values[sumF.id]).total : 0) : r.values[sumF.id] || 0);
     const cardFields = t.fields.filter((f) => f.id !== t.primary && f.id !== g.id && !f.hidden).slice(0, 4);
     const cols = [...(recs.some((r) => !r.values[g.id]) ? [{ id: '', label: `No ${g.name.toLowerCase()}`, color: 'gray' }] : []), ...g.choices];
     const board = h('div', { class: 'pj-board' });
@@ -6472,7 +6499,7 @@
     };
     for (const c of cols) {
       const inCol = recs.filter((r) => (r.values[g.id] || '') === c.id);
-      const total = sumF ? inCol.reduce((n, r) => n + (r.values[sumF.id] || 0), 0) : 0;
+      const total = inCol.reduce((n, r) => n + val(r), 0);
       board.append(h('div', { class: 'pj-col', 'data-choice': c.id, style: `--c:${PF_COLOR[c.color] || PF_COLOR.gray}` },
         h('div', { class: 'pj-col-h' }, h('span', { class: 'pj-dot' }), h('b', {}, c.label), h('small', {}, String(inCol.length)), sumF && total ? h('small', { class: 'pj-num pj-col-sum' }, money(total)) : null),
         h('div', { class: 'pj-col-cards' }, inCol.slice(0, 300).map(card)),
@@ -6503,17 +6530,24 @@
       await prCall('PATCH', '/records/' + r.id, { docId: it.id }).then((y) => y && prUpsertRecord(y));
       openDoc(it, { fresh: false });
     };
-    const fields = t.fields.filter((f) => f.id !== t.primary);
-    return h('aside', { class: 'pj-panel' },
+    const fields = t.fields.filter((f) => f.id !== t.primary && f.type !== 'items');
+    const itemFields = t.fields.filter((f) => f.type === 'items');
+    const fieldRow = (f) => {
+      const val = h('div', { class: 'pj-cell' }, prShow(p, f, r.values[f.id]) ?? (f.type === 'checkbox' ? h('span', { class: 'pj-check' }) : h('span', { class: 'pj-empty-v' }, 'Empty')));
+      val.addEventListener('click', (e) => { if (e.target.closest('a, .pj-link')) return; prEdit(val, p, t, r, f); });
+      return h('div', { class: 'pj-frow' + (f.hidden ? ' hid' : '') }, h('span', { class: 'pj-flabel' }, h('span', { class: 'pj-fic' }, PF_IC[f.type]), f.name), val);
+    };
+    // On a quote or estimate the lines come first, under who it's for and where it stands.
+    const top = itemFields.length ? fields.filter((f) => ['client', 'status', 'number'].includes(f.key)) : [];
+    return h('aside', { class: 'pj-panel' + (itemFields.length ? ' wide' : '') },
       h('div', { class: 'pj-panel-h' }, h('small', {}, `${t.icon || ''} ${t.singular || t.name}`), h('span', { style: 'flex:1' }),
         h('button', { class: 'icon-btn', 'aria-label': 'Record options', html: I.more, onclick: (e) => openMenu(e.currentTarget, [{ label: `Delete this ${(t.singular || 'record').toLowerCase()}`, danger: true, run: async () => { if (await prCall('DELETE', '/records/' + r.id)) { PR.records.set(p.id, prRecs(p.id).filter((x) => x.id !== r.id)); PR.panel = null; renderProjects(); } } }]) }),
         h('button', { class: 'icon-btn', 'aria-label': 'Close', html: I.close, onclick: () => { PR.panel = null; renderProjects(); } })),
       title,
-      h('div', { class: 'pj-fields' }, fields.map((f) => {
-        const val = h('div', { class: 'pj-cell' }, prShow(p, f, r.values[f.id]) ?? (f.type === 'checkbox' ? h('span', { class: 'pj-check' }) : h('span', { class: 'pj-empty-v' }, 'Empty')));
-        val.addEventListener('click', (e) => { if (e.target.closest('a, .pj-link')) return; prEdit(val, p, t, r, f); });
-        return h('div', { class: 'pj-frow' + (f.hidden ? ' hid' : '') }, h('span', { class: 'pj-flabel' }, h('span', { class: 'pj-fic' }, PF_IC[f.type]), f.name), val);
-      })),
+      itemFields.length ? quoteActions(p, t, r) : null,
+      top.length ? h('div', { class: 'pj-fields' }, top.map(fieldRow)) : null,
+      ...itemFields.map((f) => prItems(p, t, r, f)),
+      h('div', { class: 'pj-fields' }, fields.filter((f) => !top.includes(f)).map(fieldRow)),
       ...back.map(({ o, f, from }) => h('div', { class: 'pj-back' }, h('h4', {}, `${o.name} · ${f.name}`), from.map((x) => h('button', { class: 'pj-link', onclick: () => { PR.type = o.id; PR.view = null; PR.panel = x.id; renderProjects(); } }, recName(o, x), o.fields.find((y) => y.type === 'money') && x.values[o.fields.find((y) => y.type === 'money').id] ? h('small', {}, ' · ' + money(x.values[o.fields.find((y) => y.type === 'money').id])) : null)))),
       h('button', { class: 'btn pj-notes', onclick: notes }, doc ? `📄 Notes · ${docSnippet(doc) ? shortText(docSnippet(doc), 50) : 'open'}` : '📄 Add notes (a doc)'),
       h('small', { class: 'pj-meta' }, `Added by ${r.by} · ${ago(r.createdAt)}${r.updatedAt > r.createdAt + 1000 ? ` · changed ${ago(r.updatedAt)}` : ''}${r.extId ? ` · from another app (${r.extId})` : ''}`));
@@ -6559,7 +6593,7 @@
   function prExport(p, t) {
     const recs = prRecs(p.id).filter((r) => r.typeId === t.id);
     const cell = (s) => (/[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s);
-    const csv = [t.fields.map((f) => cell(f.name)).join(','), ...recs.map((r) => t.fields.map((f) => cell(f.type === 'money' && r.values[f.id] != null ? (r.values[f.id] / 100).toFixed(2) : prText(p, f, r.values[f.id]))).join(','))].join('\n');
+    const csv = [t.fields.map((f) => cell(f.name)).join(','), ...recs.map((r) => t.fields.map((f) => cell(f.type === 'money' && r.values[f.id] != null ? (r.values[f.id] / 100).toFixed(2) : f.type === 'items' && r.values[f.id] ? (itemsTotals(r.values[f.id]).total / 100).toFixed(2) : prText(p, f, r.values[f.id]))).join(','))].join('\n');
     const a = h('a', { href: URL.createObjectURL(new Blob(['﻿' + csv], { type: 'text/csv' })), download: `${p.name} - ${t.name}.csv` });
     document.body.append(a);
     a.click();
@@ -6573,6 +6607,191 @@
     else if (msg.type === 'record') prUpsertRecord(msg.record);
     else if (msg.type === 'record:remove' && PR.records.has(msg.projectId)) PR.records.set(msg.projectId, prRecs(msg.projectId).filter((x) => x.id !== msg.id));
     prSoon();
+  }
+
+  // ----- line items, and quotes sent to customers -----
+  // The same sums as the server (projects.js itemsTotals), in cents.
+  function itemsTotals(v) {
+    const rows = v?.rows || [];
+    const line = (r) => Math.round((r.qty || 0) * (r.price || 0));
+    const subtotal = rows.reduce((n, r) => n + line(r), 0);
+    const discount = !v?.discount ? 0 : v.discount.type === 'percent' ? Math.round((subtotal * v.discount.value) / 100) : Math.min(subtotal, v.discount.value);
+    const taxable = rows.filter((r) => r.taxable !== false).reduce((n, r) => n + line(r), 0);
+    const share = subtotal ? (subtotal - discount) / subtotal : 0;
+    const tax = Math.round(taxable * share * ((v?.taxRate || 0) / 100));
+    const costed = rows.some((r) => r.cost != null);
+    const cost = rows.reduce((n, r) => n + Math.round((r.qty || 0) * (r.cost || 0)), 0);
+    return { subtotal, discount, tax, total: subtotal - discount + tax, ...(costed ? { cost, margin: subtotal - discount - cost, marginPct: subtotal - discount ? Math.round(((subtotal - discount - cost) / (subtotal - discount)) * 1000) / 10 : 0 } : {}) };
+  }
+  // Line items always show cents, like an invoice.
+  const money2 = (c) => (c / 100).toLocaleString(undefined, { style: 'currency', currency: 'USD', minimumFractionDigits: 2 });
+  const dollars = (c) => (c == null ? '' : (c / 100).toFixed(c % 100 ? 2 : 0));
+  const toCents = (s) => { const n = Number(String(s).replace(/[$,\s]/g, '')); return s === '' || !Number.isFinite(n) ? null : Math.round(n * 100); };
+  // Line items in a record's panel: lines to type in or pick from the price list, a discount, tax, the total,
+  // and (for estimates) what it costs us and the margin. It saves a moment after each change.
+  function prItems(p, t, r, f) {
+    const v = JSON.parse(JSON.stringify(r.values[f.id] || { rows: [], taxRate: 0 }));
+    v.rows ||= [];
+    const box = h('div', { class: 'pj-items' });
+    let showCost = v.rows.some((x) => x.cost != null) || t.key === 'bids';
+    let timer = null;
+    const save = () => {
+      clearTimeout(timer);
+      timer = setTimeout(async () => {
+        const body = { rows: v.rows.map((x) => ({ id: x.id, desc: x.desc, qty: x.qty, unit: x.unit, price_cents: x.price || 0, ...(x.cost != null ? { cost_cents: x.cost } : {}), ...(x.taxable === false ? { taxable: false } : {}), ...(x.from ? { from: x.from } : {}) })),
+          taxRate: v.taxRate || 0, discount: v.discount ? { type: v.discount.type, value: v.discount.value, cents: v.discount.type === 'amount' } : null };
+        // Saved without redrawing, so typing isn't interrupted.
+        const y = await prCall('PATCH', '/records/' + r.id, { values: { [f.id]: body } });
+        if (y) { prUpsertRecord(y); r.values = y.values; }
+      }, 600);
+    };
+    const priceList = p.types.find((x) => x.key === 'price_list');
+    const fromList = (e) => {
+      const pf = (k) => priceList.fields.find((x) => x.key === k);
+      const items = prRecs(p.id).filter((x) => x.typeId === priceList.id).sort((a, b) => recName(priceList, a).localeCompare(recName(priceList, b)));
+      if (!items.length) return toast('The price list is empty. Add items to it first.');
+      openMenu(e.currentTarget, [{ head: 'From the price list' }, ...items.slice(0, 60).map((x) => ({
+        label: h('span', { class: 'mfile' }, h('span', { class: 'mfile-name' }, recName(priceList, x)), h('small', { class: 'mfile-when' }, pf('price') && x.values[pf('price').id] != null ? money2(x.values[pf('price').id]) : '')),
+        run: () => {
+          const unit = pf('unit') && prText(p, pf('unit'), x.values[pf('unit').id]);
+          v.rows.push({ id: Math.random().toString(36).slice(2, 8), desc: [recName(priceList, x), pf('description') && x.values[pf('description').id]].filter(Boolean).join(' — '), qty: 1, unit: unit || '', price: pf('price') ? x.values[pf('price').id] || 0 : 0, ...(pf('cost') && x.values[pf('cost').id] != null ? { cost: x.values[pf('cost').id] } : {}), from: x.id });
+          if (v.rows.at(-1).cost != null) showCost = true;
+          draw(true);
+          save();
+        },
+      }))]);
+    };
+    const draw = (focusLast) => {
+      const tot = itemsTotals(v);
+      const inp = (val, cls, on, ph = '') => {
+        const i = h('input', { class: 'pj-it-in ' + cls, value: val ?? '', placeholder: ph, inputmode: cls === 'desc' || cls === 'unit' ? null : 'decimal' });
+        i.addEventListener('input', () => { on(i.value); foot(); save(); });
+        // A number is replaced by typing, not added to.
+        if (cls !== 'desc' && cls !== 'unit') i.addEventListener('focus', () => i.select());
+        i.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); i.blur(); } });
+        return i;
+      };
+      const amount = (x) => h('td', { class: 'pj-num pj-it-amt' }, money2(Math.round((x.qty || 0) * (x.price || 0))));
+      const rows = v.rows.map((x, i) => h('tr', {},
+        h('td', {}, inp(x.desc, 'desc', (s) => (x.desc = s), 'What it is')),
+        h('td', {}, inp(x.qty, 'qty', (s) => { const n = Number(s); x.qty = Number.isFinite(n) ? n : 0; amtCell(i); })),
+        h('td', {}, inp(x.unit, 'unit', (s) => (x.unit = s), 'unit')),
+        h('td', {}, inp(x.price ? dollars(x.price) : '', 'price', (s) => { x.price = toCents(s) || 0; amtCell(i); }, '0.00')),
+        showCost ? h('td', {}, inp(dollars(x.cost), 'cost', (s) => { const c = toCents(s); if (c == null) delete x.cost; else x.cost = c; }, '—')) : null,
+        amount(x),
+        h('td', {}, h('button', { class: 'pj-it-x', title: x.taxable === false ? 'Not taxed · click to tax it' : 'Taxed · click to not tax it', onclick: () => { if (x.taxable === false) delete x.taxable; else x.taxable = false; draw(); save(); } }, x.taxable === false ? 'no tax' : ''),
+          h('button', { class: 'pj-it-x', 'aria-label': 'Remove line', onclick: () => { v.rows.splice(i, 1); draw(); save(); } }, '×'))));
+      const tbody = h('tbody', {}, rows);
+      const amtCell = (i) => { const tr = tbody.children[i]; tr?.querySelector('.pj-it-amt')?.replaceWith(amount(v.rows[i])); };
+      const sums = h('div', { class: 'pj-it-sums' });
+      const disc = h('input', { class: 'pj-it-in small', value: v.discount ? (v.discount.type === 'percent' ? v.discount.value : dollars(v.discount.value)) : '', placeholder: '0' });
+      const discType = h('select', { class: 'pj-it-sel' }, h('option', { value: 'amount' }, '$'), h('option', { value: 'percent' }, '%'));
+      discType.value = v.discount?.type || 'amount';
+      const setDisc = () => {
+        const n = Number(String(disc.value).replace(/[$,%\s]/g, ''));
+        v.discount = disc.value === '' || !Number.isFinite(n) || n <= 0 ? null : discType.value === 'percent' ? { type: 'percent', value: Math.min(100, n) } : { type: 'amount', value: Math.round(n * 100) };
+        foot();
+        save();
+      };
+      disc.addEventListener('input', setDisc);
+      discType.addEventListener('change', setDisc);
+      const tax = h('input', { class: 'pj-it-in small', value: v.taxRate || '', placeholder: '0' });
+      tax.addEventListener('input', () => { const n = Number(tax.value); v.taxRate = Number.isFinite(n) ? Math.max(0, Math.min(100, n)) : 0; foot(); save(); });
+      const foot = () => {
+        const s2 = itemsTotals(v);
+        sums.replaceChildren(
+          h('div', {}, h('span', {}, 'Subtotal'), h('b', { class: 'pj-num' }, money2(s2.subtotal))),
+          h('div', {}, h('span', {}, 'Discount ', discType, disc), h('span', { class: 'pj-num' }, s2.discount ? '−' + money2(s2.discount) : '')),
+          h('div', {}, h('span', {}, 'Tax % ', tax), h('span', { class: 'pj-num' }, s2.tax ? money2(s2.tax) : '')),
+          h('div', { class: 'pj-it-total' }, h('span', {}, 'Total'), h('b', { class: 'pj-num' }, money2(s2.total))),
+          s2.cost != null ? h('div', { class: 'pj-it-margin' + (s2.margin < 0 ? ' neg' : '') }, h('span', {}, `Our cost ${money2(s2.cost)}`), h('b', { class: 'pj-num' }, `Margin ${money2(s2.margin)} · ${s2.marginPct}%`)) : null);
+      };
+      // The inputs in the footer are made once; foot() only redraws numbers around them.
+      foot();
+      const keep = [disc, discType, tax];
+      box.replaceChildren(
+        h('div', { class: 'pj-it-h' }, h('b', {}, f.name), h('span', { style: 'flex:1' }),
+          h('label', { class: 'pick small' }, h('input', { type: 'checkbox', checked: showCost, onchange: (e) => { showCost = e.target.checked; draw(); } }), 'Our cost')),
+        h('div', { class: 'pj-it-wrap' }, h('table', { class: 'pj-it' },
+          h('thead', {}, h('tr', {}, h('th', {}, 'Description'), h('th', {}, 'Qty'), h('th', {}, 'Unit'), h('th', {}, 'Price'), showCost ? h('th', {}, 'Cost') : null, h('th', { class: 'pj-num' }, 'Amount'), h('th', {}))),
+          tbody)),
+        h('div', { class: 'pj-it-add' },
+          h('button', { class: 'pj-newrow', onclick: () => { v.rows.push({ id: Math.random().toString(36).slice(2, 8), desc: '', qty: 1, unit: '', price: 0 }); draw(true); } }, '+ Add a line'),
+          priceList && priceList.id !== t.id ? h('button', { class: 'pj-newrow', onclick: fromList }, '+ From the price list') : null),
+        sums);
+      void keep;
+      if (focusLast) setTimeout(() => box.querySelector('tbody tr:last-child .desc')?.focus());
+    };
+    draw();
+    return box;
+  }
+  // What a quote is called: its number and title.
+  const quoteName = (t, r) => [t.fields.find((f) => f.type === 'autonumber') && r.values[t.fields.find((f) => f.type === 'autonumber').id], recName(t, r)].filter(Boolean).join(' · ');
+  const quoteUrl = (r) => `${location.origin}/q/${r.share.token}`;
+  function quoteActions(p, t, r) {
+    const st = prField(t, t.fields.find((f) => f.key === 'status')?.id);
+    const status = st && prText(p, st, r.values[st.id]);
+    const send = async () => {
+      const y = await prCall('POST', `/records/${r.id}/share`, {});
+      if (!y) return;
+      prUpsertRecord(y);
+      copyText(quoteUrl(y));
+      toast('Link copied. Send it to your customer: they can accept or decline it there.');
+      renderProjects();
+    };
+    const pdf = async () => {
+      const f = t.fields.find((x) => x.type === 'items');
+      const v = r.values[f.id] || { rows: [] };
+      const tot = itemsTotals(v);
+      const val = (k) => { const x = t.fields.find((y) => y.key === k); return x ? prText(p, x, r.values[x.id]) : ''; };
+      const txt = (text, b) => ({ text, ...(b ? { b: true } : {}) });
+      const cell = (text, b) => [{ t: 'p', runs: [txt(text, b)] }];
+      const blocks = [
+        { t: 'h1', runs: [txt(quoteName(t, r), true)] },
+        { t: 'p', runs: [txt(S.workspace?.name || '')] },
+        ...[['Prepared for', val('client')], ['Issued', val('issued')], ['Valid until', val('valid_until')]].filter(([, x]) => x).map(([k, x]) => ({ t: 'p', runs: [txt(k + ': ', true), txt(x)] })),
+        { t: 'table', rows: [[cell('Description', true), cell('Qty', true), cell('Price', true), cell('Amount', true)], ...v.rows.map((x) => [cell(x.desc), cell(`${x.qty}${x.unit ? ' ' + x.unit : ''}`), cell(money(x.price)), cell(money(Math.round(x.qty * x.price)))])] },
+        { t: 'p', runs: [txt('Subtotal: '), txt(money(tot.subtotal))] },
+        ...(tot.discount ? [{ t: 'p', runs: [txt('Discount: '), txt('−' + money(tot.discount))] }] : []),
+        ...(v.taxRate ? [{ t: 'p', runs: [txt(`Tax (${v.taxRate}%): `), txt(money(tot.tax))] }] : []),
+        { t: 'h3', runs: [txt('Total: ' + money(tot.total), true)] },
+        ...(val('terms') ? [{ t: 'h4', runs: [txt('Terms', true)] }, { t: 'p', runs: [txt(val('terms'))] }] : []),
+      ];
+      const it = await prCall('POST', '/docs/pdf', { name: quoteName(t, r), blocks });
+      if (it) { upsert(it); download(it); }
+    };
+    const fromBid = async () => {
+      const qt = p.types.find((x) => x.key === 'quotes');
+      const qf = (k) => qt.fields.find((x) => x.key === k);
+      const est = t.fields.find((x) => x.type === 'items');
+      const client = t.fields.find((x) => x.key === 'client');
+      const values = { [qt.primary]: recName(t, r), ...(qf('bid') ? { [qf('bid').id]: [r.id] } : {}), ...(client && qf('client') && r.values[client.id] ? { [qf('client').id]: r.values[client.id] } : {}),
+        ...(qf('status') ? { [qf('status').id]: qf('status').choices.find((c) => c.label === 'Draft')?.id } : {}) };
+      if (est && qf('items') && r.values[est.id]) { const v = r.values[est.id]; values[qf('items').id] = { rows: v.rows.map((x) => ({ ...x, price_cents: x.price, ...(x.cost != null ? { cost_cents: x.cost } : {}) })), taxRate: v.taxRate || 0, discount: v.discount ? { ...v.discount, cents: v.discount.type === 'amount' } : null }; }
+      const q = await prNewQuick(p, qt, values);
+      if (q) { PR.type = qt.id; PR.view = null; PR.panel = q.id; renderProjects(); toast('Quote made from the bid. Check it, then send it.'); }
+    };
+    const isQuote = t.key === 'quotes' || t.fields.some((f) => f.key === 'valid_until');
+    return h('div', { class: 'pj-qbar' },
+      isQuote ? (r.share
+        ? [h('button', { class: 'btn small primary-btn', onclick: () => { copyText(quoteUrl(r)); toast('Link copied'); } }, '🔗 Copy customer link'),
+          h('button', { class: 'btn small', onclick: () => open(quoteUrl(r), '_blank', 'noopener') }, 'Open as the customer sees it'),
+          h('button', { class: 'btn small', onclick: async () => { const y = await prCall('DELETE', `/records/${r.id}/share`); if (y) { prUpsertRecord(y); renderProjects(); toast('Link turned off'); } } }, 'Turn off link')]
+        : h('button', { class: 'btn small primary-btn', onclick: send }, '📨 Send to customer')) : null,
+      h('button', { class: 'btn small', onclick: pdf }, 'Download PDF'),
+      t.key === 'bids' && p.types.some((x) => x.key === 'quotes') ? h('button', { class: 'btn small', onclick: fromBid }, 'Make a quote from this bid') : null,
+      status && r.answer ? h('small', { class: 'pj-qnote' }, r.answer.act === 'accept' ? `✓ ${r.answer.name} accepted ${ago(r.answer.at)}` : `${r.answer.name || 'The customer'} declined ${ago(r.answer.at)}${r.answer.reason ? ': “' + r.answer.reason + '”' : ''}`) : null);
+  }
+  function quoteAnswerNews(msg) {
+    const go = () => openProject(msg.projectId).then(() => { PR.panel = msg.recordId; renderProjects(); });
+    const said = `${msg.name} ${msg.act === 'accept' ? 'accepted' : 'declined'} ${msg.title}${msg.total ? ' (' + money(msg.total) + ')' : ''}`;
+    toast(msg.act === 'accept' ? '🎉 ' + said : said, { label: 'Open', run: go });
+    if (S.notify && document.hidden && 'Notification' in window && Notification.permission === 'granted') {
+      try {
+        const n = new Notification(msg.act === 'accept' ? 'Quote accepted' : 'Quote declined', { body: said, icon: '/icon-128.png' });
+        n.onclick = () => { window.focus(); go(); };
+      } catch {}
+    }
   }
 
   // ----- Docs: notes written as pages of blocks (dockit.js) -----

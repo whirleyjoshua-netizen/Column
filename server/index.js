@@ -5298,7 +5298,7 @@ async function importData(req, res) {
 }
 
 // Projects and the public API (projects.js).
-const PJ = projectsModule({ db, save, broadcast, rid, cleanText, isDay, readJson, send, badRequest, isOwnerId, allowLocalHooks: process.env.ALLOW_LOCAL_WEBHOOKS === '1' });
+const PJ = projectsModule({ db, save, broadcast, rid, cleanText, isDay, readJson, send, badRequest, isOwnerId, escHtml, brandOf, logoUrl, allowLocalHooks: process.env.ALLOW_LOCAL_WEBHOOKS === '1' });
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://x');
@@ -5318,6 +5318,8 @@ const server = http.createServer(async (req, res) => {
   }
   if (url.pathname === '/import' && req.method === 'POST') return importData(req, res);
   if (url.pathname.startsWith('/s/') && (req.method === 'GET' || req.method === 'HEAD')) return serveShare(req, res, url);
+  // A quote sent to a customer: they read it and accept or decline.
+  if (url.pathname.startsWith('/q/') && (req.method === 'GET' || req.method === 'POST')) return PJ.quotePage(req, res, url);
   if (url.pathname.startsWith('/sign/') && req.method === 'GET') {
     // The signing page; the token in the address stays out of other sites' logs and search results.
     res.setHeader('Referrer-Policy', 'no-referrer');
