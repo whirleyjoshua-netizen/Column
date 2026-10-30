@@ -6196,9 +6196,14 @@
   function newProjectSheet() {
     let tpl = 'crm';
     const name = h('input', { placeholder: 'Sales', maxlength: 80 });
-    const TPL = { crm: ['🤝', 'CRM', 'Contacts, companies and deals, with a pipeline board'], bids: ['📐', 'Bids & Quotes', 'Jobs you bid on, quotes customers accept online, clients, a price list'], blank: ['📁', 'Blank', 'One list to shape as you like'] };
+    const TPL = { crm: ['🤝', 'CRM', 'Contacts, companies and deals, with a pipeline board'], bids: ['📐', 'Bids & Quotes', 'Jobs you bid on, quotes customers accept online, jobs, clients, a price list'], jobs: ['🛠️', 'Jobs & Installs', 'Jobs from scheduled to paid, with crews, dates and photos'], blank: ['📁', 'Blank', 'One list to shape as you like'] };
+    api('GET', '/project-templates').then((list) => {
+      for (const x of list) TPL['custom:' + x.id] = ['⭐', x.name, x.about || x.lists.join(', '), x];
+      if (list.length) draw();
+    }).catch(() => {});
     const pick = h('div', { class: 'pj-tpls' });
-    const draw = () => pick.replaceChildren(...Object.entries(TPL).map(([k, [ic, nm, about]]) => h('button', { type: 'button', class: 'pj-tpl' + (tpl === k ? ' on' : ''), onclick: () => { tpl = k; draw(); } }, h('span', { class: 'pj-ic' }, ic), h('b', {}, nm), h('small', {}, about))));
+    const draw = () => pick.replaceChildren(...Object.entries(TPL).map(([k, [ic, nm, about, own]]) => h('button', { type: 'button', class: 'pj-tpl' + (tpl === k ? ' on' : ''), onclick: () => { tpl = k; draw(); } }, h('span', { class: 'pj-ic' }, ic), h('b', {}, nm), h('small', {}, own ? `Your template · ${about}` : about),
+      own && (own.memberId === S.me?.memberId || amOwner()) ? h('span', { class: 'pj-tpl-del', role: 'button', title: 'Delete this template', onclick: async (e) => { e.stopPropagation(); await api('DELETE', '/project-templates/' + own.id).catch((er) => toast(er.message)); delete TPL[k]; if (tpl === k) tpl = 'crm'; draw(); } }, '×') : null)));
     draw();
     const priv = h('input', { type: 'checkbox' });
     sheet('New project', [h('label', {}, 'Name', name), h('div', {}, h('small', { class: 'hint' }, 'Start from'), pick), h('label', { class: 'pick' }, priv, 'Private: only me and people I add')], async () => {
@@ -6220,7 +6225,8 @@
       { label: 'Rename project', run: () => { const i = h('input', { value: p.name }); sheet('Rename project', [h('label', {}, 'Name', i)], async () => { const y = await api('PATCH', '/projects/' + p.id, { name: i.value }); prUpsertProject(y); renderProjects(); }); } },
       { label: `Import ${t.name.toLowerCase()} from a spreadsheet…`, run: () => prImport(p, t) },
       { label: `Export ${t.name.toLowerCase()} as CSV`, run: () => prExport(p, t) },
-      { label: 'Add a list…', run: () => prAddType(p) },
+      { label: 'Add a list…', run: () => prReadyMenu(e.target, p) },
+      { label: 'Save as a template…', run: () => prSaveTemplate(p) },
       { head: '' },
       { label: p.private ? 'Who can see it…' : 'Make it private…', run: () => prAccess(p) },
       amOwner() ? { label: 'Connect other apps (API, webhooks)…', run: () => { closeProjects(); openSettings('connections', '.int-sec'); } } : null,
@@ -6665,7 +6671,9 @@
     return h('div', { class: 'pj-act' },
       h('div', { class: 'pj-act-btns' },
         [['call', '☏ Log a call'], ['email', '✉ Email'], ['meeting', '👥 Meeting'], ['note', '📝 Note']].map(([k, label]) => h('button', { class: 'btn small', onclick: () => prLogSheet(p, t, r, k) }, label)),
-        h('button', { class: 'btn small', onclick: () => prTaskSheet(p, t, r) }, '+ Task')),
+        h('button', { class: 'btn small', onclick: () => prTaskSheet(p, t, r) }, '+ Task'),
+        h('button', { class: 'btn small pj-ai-btn', title: 'Sidekick reads the record and its history, and suggests what to do next', onclick: () => prNextStep(r) }, '✦ Next step')),
+      prAiCard(p, t, r),
       tasks.length ? h('div', { class: 'pj-tasks' }, h('h4', {}, 'Tasks'), tasks.map((x) => h('div', { class: 'pj-task' + (x.done ? ' done' : '') },
         h('button', { class: 'check' + (x.done ? ' on' : ''), html: I.check, 'aria-label': x.done ? 'Not done' : 'Done', onclick: () => patchTask(x, { done: !x.done }).then(renderProjects) }),
         h('span', {}, x.text), x.due ? h('small', { class: isOverdue(x) ? 'late' : null }, dueLabel(x.due)) : null, x.assigneeId ? avatar(x.assigneeId) : null))) : null,
@@ -6777,6 +6785,98 @@
     return { g, mf, amt, recs, stages };
   }
 
+  // ----- AI on a record: where it stands and what to do next, accepted one step at a time -----
+  PR.ai = new Map();
+  async function prNextStep(r) {
+    PR.ai.set(r.id, { loading: true });
+    renderProjects();
+    try {
+      const y = await api('POST', '/ai/record', { recordId: r.id, today: todayKey() });
+      PR.ai.set(r.id, { ...y, done: {} });
+    } catch (e) {
+      PR.ai.set(r.id, { error: e.message, settings: /Settings → AI/.test(e.message) });
+    }
+    renderProjects();
+  }
+  function prAiCard(p, t, r) {
+    const x = PR.ai.get(r.id);
+    if (!x) return null;
+    const close = h('button', { class: 'icon-btn', 'aria-label': 'Dismiss', html: I.close, onclick: () => { PR.ai.delete(r.id); renderProjects(); } });
+    if (x.loading) return h('div', { class: 'pj-ai' }, h('div', { class: 'pj-ai-h' }, h('b', {}, '✦ Sidekick'), h('small', {}, 'Reading the record…')));
+    if (x.error) return h('div', { class: 'pj-ai' }, h('div', { class: 'pj-ai-h' }, h('b', {}, '✦ Sidekick'), h('span', { style: 'flex:1' }), close), h('p', { class: 'err' }, x.error), x.settings ? h('button', { class: 'btn small', onclick: () => { closeProjects(); openSettings(); } }, 'Open Settings') : null);
+    const did = (i, what) => { x.done[i] = what; renderProjects(); };
+    const step = (s, i) => {
+      const done = x.done[i];
+      const act = done ? h('small', { class: 'plan-ok' }, '✓ ' + done)
+        : s.kind === 'task' ? h('button', { class: 'btn small primary-btn', onclick: async () => { const y = await prCall('POST', '/tasks', { text: s.text, due: s.due, assigneeId: S.me?.memberId, recordId: r.id }); if (y) { upsertTask(y); PR.logs.delete(r.id); did(i, 'Task added'); } } }, 'Add task')
+        : s.kind === 'stage' ? h('button', { class: 'btn small primary-btn', onclick: async () => { if (await prSet(p, r, prField(t, s.fieldId), s.choiceId)) did(i, `${s.field} set`); } }, `Set ${s.field} to ${s.to}`)
+        : s.kind === 'message' ? [h('button', { class: 'btn small primary-btn', onclick: () => { copyText([s.subject, s.text].filter(Boolean).join('\n\n')); toast('Copied'); } }, 'Copy'),
+          h('button', { class: 'btn small', onclick: async () => { const y = await prCall('POST', `/records/${r.id}/log`, { kind: s.channel === 'text' ? 'note' : 'email', note: (s.channel === 'text' ? 'Texted: ' : '') + (s.subject ? s.subject + ' — ' : '') + s.text.slice(0, 600) }); if (y) { PR.logs.set(r.id, y); did(i, 'Logged as sent'); } } }, 'Log as sent')]
+        : h('button', { class: 'btn small primary-btn', onclick: () => prLogSheet(p, t, r, 'call') }, 'Log the call');
+      return h('div', { class: 'pj-ai-step' },
+        h('div', {}, h('b', {}, { task: '✓ ', stage: '↻ ', message: s.channel === 'text' ? '💬 ' : '✉ ', call: '☏ ' }[s.kind], s.kind === 'task' ? s.text : s.kind === 'stage' ? `Move to ${s.to}` : s.kind === 'message' ? (s.subject || (s.channel === 'text' ? 'A text' : 'An email')) : 'Call them'), s.kind === 'task' && s.due ? h('small', {}, ' · ' + dueLabel(s.due)) : null),
+        s.kind === 'message' || s.kind === 'call' ? h('div', { class: 'pj-ai-draft' }, s.text) : null,
+        s.why ? h('small', { class: 'pj-ai-why' }, s.why) : null,
+        h('div', { class: 'btns' }, act));
+    };
+    return h('div', { class: 'pj-ai' },
+      h('div', { class: 'pj-ai-h' }, h('b', {}, '✦ Sidekick'), h('span', { style: 'flex:1' }), h('button', { class: 'linkish', onclick: () => prNextStep(r) }, 'Ask again'), close),
+      h('p', { class: 'pj-ai-read' }, x.read),
+      ...(x.steps || []).map(step),
+      !(x.steps || []).length ? h('small', { class: 'day-hint' }, 'No next step to suggest right now.') : null);
+  }
+  // An estimate drafted from the plans and price list, shown in the line items until it's added or dropped.
+  async function prEstimate(p, t, r, f, onDone) {
+    const ask = h('textarea', { rows: 3, placeholder: 'Anything to know? e.g. ceramic film on all south-facing windows, remove old film first' });
+    const files = t.fields.filter((x) => x.type === 'files').flatMap((x) => r.values[x.id] || []).map((id) => S.items.find((y) => y.id === id)?.name).filter(Boolean);
+    sheet('✦ Draft an estimate', [h('p', { class: 'day-hint' }, `It reads ${files.length ? files.join(', ') + ', ' : ''}the scope and notes, and uses your price list where an item fits (at your prices). You see the lines first and choose to add them.`), ask], async () => {
+      const go = $('#sheet .btns .primary-btn');
+      go.disabled = true;
+      go.textContent = 'Estimating… this can take a minute';
+      try {
+        const y = await api('POST', '/ai/estimate', { recordId: r.id, ask: ask.value, today: todayKey() });
+        onDone(y);
+      } catch (e) {
+        if (/Settings → AI/.test(e.message)) toast(e.message, { label: 'Open Settings', run: () => { closeSheet(); closeProjects(); openSettings(); } });
+        throw e;
+      } finally {
+        go.disabled = false;
+        go.textContent = 'Draft it';
+      }
+    }, 'Draft it');
+  }
+  // A won quote becomes a job: same client, its value, the address, and a link back.
+  async function prJobFromQuote(p, t, r) {
+    r = await prFresh(p, r); // as saved now, not as the panel last drew it
+    const jt = p.types.find((x) => x.key === 'jobs');
+    const jf = (k) => jt.fields.find((x) => x.key === k);
+    const qf = (k) => t.fields.find((x) => x.key === k);
+    const items = t.fields.find((x) => x.type === 'items');
+    const client = qf('client') && r.values[qf('client').id];
+    const cr = client && recById(p.id, client[0]);
+    const ct = cr && prType(p, cr.typeId);
+    const addr = ct && ct.fields.find((x) => x.key === 'address');
+    const values = { [jt.primary]: recName(t, r), ...(jf('client') && client ? { [jf('client').id]: client } : {}), ...(jf('quote') ? { [jf('quote').id]: [r.id] } : {}),
+      ...(jf('value') && items && r.values[items.id] ? { [jf('value').id]: itemsTotals(r.values[items.id]).total / 100 } : {}),
+      ...(jf('address') && addr && cr.values[addr.id] ? { [jf('address').id]: cr.values[addr.id] } : {}) };
+    const j = await prNewQuick(p, jt, values);
+    if (j) { PR.type = jt.id; PR.view = null; PR.panel = j.id; renderProjects(); toast('Job made from the quote. Set the install date and crew.'); }
+  }
+  // Ready-made lists a project can add, and saving a project's shape as a template.
+  const READY = [['jobs', '🛠️ Jobs', 'Scheduled to paid, with crews and dates'], ['clients', '🏢 Clients', 'Who you work for'], ['contacts', '👤 Contacts', 'People, with stage and source'], ['deals', '💰 Deals', 'A pipeline with values'], ['companies', '🏢 Companies', 'Businesses'], ['quotes', '🧾 Quotes', 'Numbered quotes customers accept online'], ['bids', '📐 Bids', 'Jobs you bid on'], ['price_list', '🏷️ Price list', 'Your items and prices']];
+  function prReadyMenu(anchor, p) {
+    const left = READY.filter(([k]) => !p.types.some((t) => t.key === k));
+    openMenu(anchor, [{ head: 'Add a ready-made list' }, ...left.map(([k, label, sub]) => ({ label: h('span', { class: 'tool-item' }, label, h('small', {}, sub)), run: async () => { const made = await prSchema(p, { op: 'addTypeFrom', key: k }); if (made) { PR.type = made.id; PR.view = null; renderProjects(); } } })), { label: 'A blank list…', run: () => prAddType(p) }]);
+  }
+  function prSaveTemplate(p) {
+    const name = h('input', { value: p.name });
+    const about = h('input', { placeholder: 'What it’s for' });
+    sheet('Save as a template', [h('p', { class: 'day-hint' }, 'Its lists, fields, options and views, ready to start new projects from. Its records stay here.'), h('label', {}, 'Name', name), h('label', {}, 'About', about)], async () => {
+      await api('POST', `/projects/${p.id}/template`, { name: name.value, about: about.value });
+      toast(`Saved. It’s under “Your templates” when you start a project.`);
+    }, 'Save template');
+  }
+
   // ----- line items, and quotes sent to customers -----
   // The same sums as the server (projects.js itemsTotals), in cents.
   function itemsTotals(v) {
@@ -6801,17 +6901,22 @@
     const v = JSON.parse(JSON.stringify(r.values[f.id] || { rows: [], taxRate: 0 }));
     v.rows ||= [];
     const box = h('div', { class: 'pj-items' });
-    let showCost = v.rows.some((x) => x.cost != null) || t.key === 'bids';
+    let est = PR.est?.get(r.id) || null;
+    let showCost = v.rows.some((x) => x.cost != null) || t.key === 'bids' || !!est?.rows.some((x) => x.cost != null);
     let timer = null;
+    let saving = null;
     const save = () => {
       clearTimeout(timer);
-      timer = setTimeout(async () => {
+      timer = setTimeout(() => { timer = null; saving = write(); }, 600);
+    };
+    // Anything about to read the lines (a quote from a bid, a job, sending, a PDF) saves them first.
+    (PR.flush ||= new Map()).set(r.id, async () => { if (timer) { clearTimeout(timer); timer = null; saving = write(); } await saving; });
+    const write = async () => {
         const body = { rows: v.rows.map((x) => ({ id: x.id, desc: x.desc, qty: x.qty, unit: x.unit, price_cents: x.price || 0, ...(x.cost != null ? { cost_cents: x.cost } : {}), ...(x.taxable === false ? { taxable: false } : {}), ...(x.from ? { from: x.from } : {}) })),
           taxRate: v.taxRate || 0, discount: v.discount ? { type: v.discount.type, value: v.discount.value, cents: v.discount.type === 'amount' } : null };
         // Saved without redrawing, so typing isn't interrupted.
         const y = await prCall('PATCH', '/records/' + r.id, { values: { [f.id]: body } });
         if (y) { prUpsertRecord(y); r.values = y.values; }
-      }, 600);
     };
     const priceList = p.types.find((x) => x.key === 'price_list');
     const fromList = (e) => {
@@ -6828,6 +6933,23 @@
           save();
         },
       }))]);
+    };
+    // The drafted lines, with what the AI assumed and wants to know, until they're added or dropped.
+    const estBox = () => {
+      const drop = () => { est = null; PR.est?.delete(r.id); draw(); };
+      const take = (replace) => {
+        const rows = est.rows.map((x) => ({ id: Math.random().toString(36).slice(2, 8), desc: x.desc, qty: x.qty, unit: x.unit, price: x.price, ...(x.cost != null ? { cost: x.cost } : {}), ...(x.from ? { from: x.from } : {}) }));
+        v.rows = replace ? rows : [...v.rows, ...rows];
+        drop();
+        save();
+      };
+      const tt = itemsTotals({ rows: est.rows });
+      return h('div', { class: 'pj-est' },
+        h('div', { class: 'pj-ai-h' }, h('b', {}, `✦ Draft estimate · ${money2(tt.subtotal)}`), est.read?.length ? h('small', {}, ' from ' + est.read.join(', ')) : null),
+        h('table', { class: 'pj-it' }, h('tbody', {}, est.rows.map((x) => h('tr', {}, h('td', {}, x.desc, x.from ? h('small', { class: 'pj-from' }, ' · price list') : null), h('td', { class: 'pj-num' }, `${x.qty} ${x.unit || ''}`), h('td', { class: 'pj-num' }, money2(x.price)), h('td', { class: 'pj-num' }, money2(Math.round(x.qty * x.price))))))),
+        est.assumptions?.length ? h('div', { class: 'pj-est-notes' }, h('small', {}, 'Assumed'), h('ul', {}, est.assumptions.map((x) => h('li', {}, x)))) : null,
+        est.questions?.length ? h('div', { class: 'pj-est-notes q' }, h('small', {}, 'To check'), h('ul', {}, est.questions.map((x) => h('li', {}, x)))) : null,
+        h('div', { class: 'btns' }, h('button', { class: 'btn small primary-btn', onclick: () => take(false) }, v.rows.length ? 'Add these lines' : 'Use these lines'), v.rows.length ? h('button', { class: 'btn small', onclick: () => take(true) }, 'Replace all lines') : null, h('button', { class: 'btn small', onclick: drop }, 'Discard')));
     };
     const draw = (focusLast) => {
       const tot = itemsTotals(v);
@@ -6885,7 +7007,10 @@
           tbody)),
         h('div', { class: 'pj-it-add' },
           h('button', { class: 'pj-newrow', onclick: () => { v.rows.push({ id: Math.random().toString(36).slice(2, 8), desc: '', qty: 1, unit: '', price: 0 }); draw(true); } }, '+ Add a line'),
-          priceList && priceList.id !== t.id ? h('button', { class: 'pj-newrow', onclick: fromList }, '+ From the price list') : null),
+          priceList && priceList.id !== t.id ? h('button', { class: 'pj-newrow', onclick: fromList }, '+ From the price list') : null,
+          // The panel may have been redrawn while it worked, so the draft is kept with the record and drawn fresh.
+          h('button', { class: 'pj-newrow pj-ai-btn', onclick: () => prEstimate(p, t, r, f, (y) => { (PR.est ||= new Map()).set(r.id, y); renderProjects(); }) }, '✦ Draft estimate')),
+        est ? estBox() : null,
         sums);
       void keep;
       if (focusLast) setTimeout(() => box.querySelector('tbody tr:last-child .desc')?.focus());
@@ -6896,10 +7021,13 @@
   // What a quote is called: its number and title.
   const quoteName = (t, r) => [t.fields.find((f) => f.type === 'autonumber') && r.values[t.fields.find((f) => f.type === 'autonumber').id], recName(t, r)].filter(Boolean).join(' · ');
   const quoteUrl = (r) => `${location.origin}/q/${r.share.token}`;
+  // The record as saved, after any lines still being typed are saved.
+  const prFresh = async (p, r) => { await PR.flush?.get(r.id)?.(); return recById(p.id, r.id) || r; };
   function quoteActions(p, t, r) {
     const st = prField(t, t.fields.find((f) => f.key === 'status')?.id);
     const status = st && prText(p, st, r.values[st.id]);
     const send = async () => {
+      await prFresh(p, r);
       const y = await prCall('POST', `/records/${r.id}/share`, {});
       if (!y) return;
       prUpsertRecord(y);
@@ -6908,6 +7036,7 @@
       renderProjects();
     };
     const pdf = async () => {
+      r = await prFresh(p, r);
       const f = t.fields.find((x) => x.type === 'items');
       const v = r.values[f.id] || { rows: [] };
       const tot = itemsTotals(v);
@@ -6929,6 +7058,7 @@
       if (it) { upsert(it); download(it); }
     };
     const fromBid = async () => {
+      r = await prFresh(p, r);
       const qt = p.types.find((x) => x.key === 'quotes');
       const qf = (k) => qt.fields.find((x) => x.key === k);
       const est = t.fields.find((x) => x.type === 'items');
@@ -6948,6 +7078,7 @@
         : h('button', { class: 'btn small primary-btn', onclick: send }, '📨 Send to customer')) : null,
       h('button', { class: 'btn small', onclick: pdf }, 'Download PDF'),
       t.key === 'bids' && p.types.some((x) => x.key === 'quotes') ? h('button', { class: 'btn small', onclick: fromBid }, 'Make a quote from this bid') : null,
+      t.key === 'quotes' && p.types.some((x) => x.key === 'jobs') ? h('button', { class: 'btn small' + (/accepted/i.test(status || '') ? ' primary-btn' : ''), onclick: () => prJobFromQuote(p, t, r) }, '🛠️ Make a job from this quote') : null,
       status && r.answer ? h('small', { class: 'pj-qnote' }, r.answer.act === 'accept' ? `✓ ${r.answer.name} accepted ${ago(r.answer.at)}` : `${r.answer.name || 'The customer'} declined ${ago(r.answer.at)}${r.answer.reason ? ': “' + r.answer.reason + '”' : ''}`) : null);
   }
   function quoteAnswerNews(msg) {

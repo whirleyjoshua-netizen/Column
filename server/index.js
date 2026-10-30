@@ -2938,6 +2938,107 @@ async function aiDoc(ws, auth, body) {
   return { text: clipText(String(j.text || '').trim(), 40_000), title: j.title ? clipText(String(j.title).trim(), 140) : null };
 }
 
+// ---------- AI on a Projects record: the next step, and an estimate drafted from the plans ----------
+// Both come back as suggestions the person accepts one by one; nothing changes here.
+async function aiRecord(ws, auth, body) {
+  const at = PJ.recordAt(body.recordId, ws.id, auth.memberId);
+  if (!at) throw Object.assign(new Error('That record is gone.'), { status: 404 });
+  const { rec, t } = at;
+  const today = isDay(body.today) ? body.today : fmtDay(Date.now());
+  const selects = t.fields.filter((f) => f.type === 'select');
+  const doc = rec.docId && db.items[rec.docId];
+  const prompt = [
+    `Today is ${today} (${new Date(today + 'T12:00:00Z').toLocaleDateString('en-US', { weekday: 'long', timeZone: 'UTC' })}). The person asking is ${auth.member}.`,
+    teamLine(ws, auth.memberId),
+    PJ.recordStory(rec, ws),
+    doc ? `Their notes on it:\n${clipText(doc.text, 3000)}` : '',
+    selects.length ? `Fields with options (for a stage change): ${selects.map((f) => `${f.name}: ${f.choices.map((c) => c.label).join(', ')}`).join('; ')}` : '',
+    body.ask ? `They ask: ${cleanText(body.ask, 1000)}` : '',
+  ].filter(Boolean).join('\n\n');
+  const system = [
+    'You are Sidekick inside Column, helping a small business team move one customer, deal, quote, bid or job forward.',
+    'Read where it stands from the fields and timeline and say it plainly in two or three sentences: what has happened, what is waiting on whom, and what risks a stall. Then suggest the next one to three steps, the most useful first. Be specific to this record and its history; use real names, dates and amounts from it. Never invent facts.',
+    'Kinds of step: a task with a date; a change to one of the option fields (only to an option that exists); a message to send (email or text), written out ready to send, short and in the team’s voice; or a call with what to say and ask.',
+    'Reply with JSON only: {"read":"…","steps":[{"kind":"task","text":"","due":"YYYY-MM-DD"|null,"why":""} | {"kind":"stage","field":"field name","to":"option","why":""} | {"kind":"message","channel":"email"|"text","subject":"","text":"","why":""} | {"kind":"call","text":"what to say and ask","why":""}]}',
+  ].join('\n');
+  const j = replyJson(await aiAsk(ws, auth.memberId, system, prompt));
+  const str = (v, n) => clipText(String(v ?? '').trim(), n);
+  const steps = (Array.isArray(j.steps) ? j.steps : []).slice(0, 4).map((x) => {
+    if (x?.kind === 'task' && x.text) return { kind: 'task', text: str(x.text, 300), due: isDay(x.due) ? x.due : null, why: str(x.why, 300) };
+    if (x?.kind === 'stage') {
+      const f = selects.find((y) => y.name.toLowerCase() === String(x.field || '').toLowerCase()) || selects.find((y) => y.choices.some((c) => c.label.toLowerCase() === String(x.to || '').toLowerCase()));
+      const c = f?.choices.find((y) => y.label.toLowerCase() === String(x.to || '').toLowerCase());
+      return c && rec.values[f.id] !== c.id ? { kind: 'stage', fieldId: f.id, field: f.name, choiceId: c.id, to: c.label, why: str(x.why, 300) } : null;
+    }
+    if (x?.kind === 'message' && x.text) return { kind: 'message', channel: x.channel === 'text' ? 'text' : 'email', subject: str(x.subject, 200), text: str(x.text, 4000), why: str(x.why, 300) };
+    if (x?.kind === 'call' && x.text) return { kind: 'call', text: str(x.text, 2000), why: str(x.why, 300) };
+    return null;
+  }).filter(Boolean);
+  return { read: str(j.read, 1200), steps };
+}
+// An estimate from the job's scope, its plans and photos (PDFs and pictures go to the AI whole), and the price
+// list. Lines matched to the price list take its price and cost, never the AI's.
+async function aiEstimate(ws, auth, body) {
+  const at = PJ.recordAt(body.recordId, ws.id, auth.memberId);
+  if (!at) throw Object.assign(new Error('That record is gone.'), { status: 404 });
+  const { rec, p, t } = at;
+  const ai = aiOf(ws.id, auth.memberId);
+  const use = aiUse(ai);
+  if (!use) throw Object.assign(new Error('Add your AI key in Settings → AI to use this.'), { status: 400 });
+  const list = PJ.priceList(p);
+  const files = [];
+  let room = 14 * 1024 * 1024;
+  for (const f of t.fields.filter((x) => x.type === 'files')) {
+    for (const id of rec.values[f.id] || []) {
+      const it = db.items[id];
+      const kind = it && skFileKind(it.name, it.mime || '');
+      if (!kind || it.size > 10 * 1024 * 1024 || it.size > room) continue;
+      const buf = await fsp.readFile(path.join(FILES_DIR, it.id)).catch(() => null);
+      if (!buf) continue;
+      if (kind === 'text') {
+        try {
+          files.push({ name: it.name, text: clipText(fileText(buf, it.name), 60_000) });
+        } catch {}
+      } else files.push({ name: it.name, mime: it.mime, data: buf.toString('base64') });
+      room -= it.size;
+    }
+  }
+  const prompt = [
+    PJ.recordStory(rec, ws),
+    files.length ? `Attached: ${files.map((f) => f.name).join('; ')}. Read them for sizes, counts and conditions.` : 'Nothing is attached; work from the scope and notes.',
+    list.length ? `The price list (use these items, by id, wherever one fits):\n${list.map((x) => `- [${x.id}] ${x.item}${x.description ? ' — ' + x.description : ''} · per ${x.unit || 'each'} · $${((x.price || 0) / 100).toFixed(2)}`).join('\n')}` : 'There is no price list; price lines at typical rates and say so in the assumptions.',
+    body.ask ? `They ask: ${cleanText(body.ask, 1000)}` : '',
+  ].filter(Boolean).join('\n\n');
+  const system = [
+    'You are an estimator inside Column, drafting line items for a contractor’s quote or bid. Work out quantities from the plans, photos and scope: count windows or doors, measure areas, and show the working in the line descriptions when it helps (e.g. “Ceramic film, 12 windows at ~24 sq ft”).',
+    'Prefer items from the price list, by its id. Only add other lines for work the list doesn’t cover, priced at typical rates. Never guess what you can’t see: list it as a question. Put every assumption you made in assumptions.',
+    'Reply with JSON only: {"rows":[{"desc":"","qty":number,"unit":"","from":"price list id"|null,"price":dollars (only when from is null),"cost":dollars|null}],"assumptions":["…"],"questions":["…"]}',
+  ].join('\n');
+  let out;
+  try {
+    out = await llms[use.provider].run({ key: unseal(ai.keys[use.provider].sealed).key, model: use.model, system: system + brandPrompt(ws), history: [{ role: 'user', text: prompt, files }], tools: [], web: false, exec: () => Promise.reject(new Error('No tools')) });
+  } catch (e) {
+    console.error('Estimate failed:', e.message);
+    throw Object.assign(new Error(llmError(e)), { status: 502 });
+  }
+  if (out.refused) throw Object.assign(new Error(out.text), { status: 502 });
+  const j = replyJson(out.text);
+  const byId = new Map(list.map((x) => [x.id, x]));
+  const cents = (v) => (v == null || v === '' || !Number.isFinite(Number(v)) ? null : Math.round(Number(v) * 100));
+  const rows = (Array.isArray(j.rows) ? j.rows : []).slice(0, 60).map((r) => {
+    const qty = Number(r?.qty);
+    const item = byId.get(r?.from);
+    return {
+      desc: clipText(String(r?.desc || item?.item || '').trim(), 500), qty: Number.isFinite(qty) && qty > 0 ? Math.round(qty * 100) / 100 : 1,
+      unit: clipText(String(r?.unit || item?.unit || '').trim(), 20),
+      price: item ? item.price || 0 : cents(r?.price) || 0, ...(item ? (item.cost != null ? { cost: item.cost } : {}) : cents(r?.cost) != null ? { cost: cents(r.cost) } : {}),
+      ...(item ? { from: item.id } : {}),
+    };
+  }).filter((r) => r.desc);
+  const list2 = (v) => (Array.isArray(v) ? v.map((x) => clipText(String(x).trim(), 300)).filter(Boolean).slice(0, 12) : []);
+  return { rows, assumptions: list2(j.assumptions), questions: list2(j.questions), read: files.map((f) => f.name) };
+}
+
 // The team as the AI sees it: who's on it and what each role handles, so it can say who should do a task.
 function teamLine(ws, memberId) {
   const roles = ws.roles || [];
@@ -3393,7 +3494,7 @@ async function api(req, res, url) {
     return send(res, 200, { ok: true });
   }
 
-  if (a === 'projects' || a === 'records' || a === 'integrations') {
+  if (a === 'projects' || a === 'records' || a === 'integrations' || a === 'project-templates') {
     const out = await PJ.route(req, res, parts, auth, ws);
     if (out !== null) return;
   }
@@ -4377,6 +4478,8 @@ async function api(req, res, url) {
     }
     if (m === 'POST' && b === 'openers') return send(res, 200, await aiOpeners(ws, auth, body));
     if (m === 'POST' && b === 'doc') return send(res, 200, await aiDoc(ws, auth, body));
+    if (m === 'POST' && b === 'record') return send(res, 200, await aiRecord(ws, auth, body));
+    if (m === 'POST' && b === 'estimate') return send(res, 200, await aiEstimate(ws, auth, body));
     if (m === 'POST' && b === 'task') {
       const t = db.tasks[body.taskId];
       if (!t || t.wsId !== ws.id || !canSee(auth, 'task', t)) return send(res, 404, { error: 'That task is gone.' });

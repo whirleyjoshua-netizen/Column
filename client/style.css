@@ -1657,3 +1657,20 @@ body.platform-darwin .pj-head, body.platform-darwin .pj-top { padding-left: 80px
 .pj-fc { cursor: pointer; }
 .pj-outs .btn.sel { background: var(--accent); border-color: var(--accent); color: #fff; }
 .pj-tl-main .linkish { background: none; border: 0; color: var(--faint); padding: 0; } .pj-tl-main .linkish:hover { color: var(--danger); }
+/* projects: AI on a record, drafted estimates, templates */
+.pj-ai-btn { color: var(--accent) !important; }
+.pj-ai { border: 1px solid var(--accent); border-radius: 10px; padding: 10px 12px; background: color-mix(in srgb, var(--accent) 6%, var(--panel)); display: flex; flex-direction: column; gap: 8px; }
+.pj-ai-h { display: flex; align-items: center; gap: 8px; }
+.pj-ai-h small { color: var(--muted); }
+.pj-ai-read { margin: 0; font-size: 13.5px; line-height: 1.5; }
+.pj-ai-step { border-top: 1px solid var(--line); padding-top: 8px; display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+.pj-ai-draft { white-space: pre-wrap; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font-size: 13px; }
+.pj-ai-why { color: var(--muted); }
+.pj-est { border: 1px dashed var(--accent); border-radius: 8px; padding: 8px 10px; margin: 6px 0; display: flex; flex-direction: column; gap: 6px; background: color-mix(in srgb, var(--accent) 5%, transparent); }
+.pj-est-notes small { color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; font-size: 10.5px; }
+.pj-est-notes ul { margin: 2px 0 0; padding-left: 18px; font-size: 12.5px; }
+.pj-est-notes.q li { color: var(--accent); }
+.pj-from { color: var(--ok); }
+.pj-tpl { position: relative; }
+.pj-tpl-del { position: absolute; top: 6px; right: 8px; color: var(--faint); font-size: 14px; }
+.pj-tpl-del:hover { color: var(--danger); }

@@ -31,6 +31,27 @@ const freeKey = (want, used) => {
 };
 
 // ---------- templates ----------
+// A job to do once a quote is won: when, who, where, and how far along.
+const JOBS_TYPE = { key: 'jobs', name: 'Jobs', singular: 'Job', icon: '🛠️', primary: 'job', fields: [
+  { key: 'job', name: 'Job', type: 'text' },
+  { key: 'client', name: 'Client', type: 'link', target: 'clients' },
+  { key: 'status', name: 'Status', type: 'select', choices: [{ label: 'Scheduled', color: 'gray' }, { label: 'Measured', color: 'blue' }, { label: 'Ordered', color: 'violet' }, { label: 'Installing', color: 'amber' }, { label: 'Installed', color: 'teal' }, { label: 'Invoiced', color: 'rose' }, { label: 'Paid', color: 'green' }] },
+  { key: 'install_date', name: 'Install date', type: 'date' },
+  { key: 'crew', name: 'Crew lead', type: 'person' },
+  { key: 'address', name: 'Address', type: 'text' },
+  { key: 'value', name: 'Value', type: 'money' },
+  { key: 'quote', name: 'Quote', type: 'link', target: 'quotes' },
+  { key: 'materials', name: 'Materials', type: 'text' },
+  { key: 'photos', name: 'Photos', type: 'files' },
+], views: [{ name: 'Board', kind: 'board', groupBy: 'status' }, { name: 'Schedule', kind: 'table', sortBy: 'install_date' }] };
+const CLIENTS_TYPE = { key: 'clients', name: 'Clients', singular: 'Client', icon: '🏢', primary: 'name', fields: [
+  { key: 'name', name: 'Name', type: 'text' },
+  { key: 'kind', name: 'Kind', type: 'select', choices: [{ label: 'Homeowner', color: 'blue' }, { label: 'Business', color: 'violet' }, { label: 'General contractor', color: 'amber' }, { label: 'Property manager', color: 'teal' }] },
+  { key: 'contact', name: 'Contact person', type: 'text' },
+  { key: 'email', name: 'Email', type: 'email' },
+  { key: 'phone', name: 'Phone', type: 'phone' },
+  { key: 'address', name: 'Address', type: 'text' },
+], views: [{ name: 'All clients', kind: 'table' }] };
 // A template is types with fields and views; ids are made fresh each time it's used. Fields refer to each
 // other (links, the primary field, a board's column) by key here, and by id once made.
 const choice = (label, color) => ({ label, color });
@@ -101,14 +122,8 @@ export const TEMPLATES = {
         { key: 'result', name: 'Why we won or lost', type: 'text' },
         { key: 'owner', name: 'Estimator', type: 'person' },
       ], views: [{ name: 'Pipeline', kind: 'board', groupBy: 'status' }, { name: 'All bids', kind: 'table', sortBy: 'bid_due' }] },
-      { key: 'clients', name: 'Clients', singular: 'Client', icon: '🏢', primary: 'name', fields: [
-        { key: 'name', name: 'Name', type: 'text' },
-        { key: 'kind', name: 'Kind', type: 'select', choices: [choice('Homeowner', 'blue'), choice('Business', 'violet'), choice('General contractor', 'amber'), choice('Property manager', 'teal')] },
-        { key: 'contact', name: 'Contact person', type: 'text' },
-        { key: 'email', name: 'Email', type: 'email' },
-        { key: 'phone', name: 'Phone', type: 'phone' },
-        { key: 'address', name: 'Address', type: 'text' },
-      ], views: [{ name: 'All clients', kind: 'table' }] },
+      JOBS_TYPE,
+      CLIENTS_TYPE,
       { key: 'price_list', name: 'Price list', singular: 'Item', icon: '🏷️', primary: 'item', fields: [
         { key: 'item', name: 'Item', type: 'text' },
         { key: 'description', name: 'Description', type: 'text' },
@@ -118,6 +133,10 @@ export const TEMPLATES = {
         { key: 'category', name: 'Category', type: 'select', choices: [] },
       ], views: [{ name: 'All items', kind: 'table' }] },
     ],
+  },
+  jobs: {
+    name: 'Jobs & Installs', icon: '🛠️', about: 'Jobs from scheduled to paid, with crews, dates and photos',
+    types: [JOBS_TYPE, CLIENTS_TYPE],
   },
   blank: {
     name: 'Blank', icon: '📁', about: 'One list to shape as you like',
@@ -131,6 +150,7 @@ export function projectsModule({ db, save, broadcast, rid, cleanText, isDay, rea
   db.records ||= {};
   db.apiKeys ||= {};
   db.webhooks ||= {};
+  db.projectTemplates ||= {};
 
   // ---------- seeing a project ----------
   // A private project is seen by whoever made it and its members; the rest by the whole team.
@@ -242,20 +262,59 @@ export function projectsModule({ db, save, broadcast, rid, cleanText, isDay, rea
   }
 
   // ---------- making projects from templates ----------
-  function fromTemplate(key) {
-    const tpl = TEMPLATES[key] || TEMPLATES.blank;
-    const types = tpl.types.map((t) => ({ id: rid(8), key: t.key, name: t.name, singular: t.singular, icon: t.icon, src: t }));
-    const typeIdOf = (k) => types.find((x) => x.key === k)?.id;
-    for (const t of types) {
-      const src = t.src;
-      t.fields = src.fields.map((f) => ({ id: rid(8), key: f.key, name: f.name, type: f.type, ...(f.choices ? { choices: f.choices.map((c) => ({ id: rid(6), label: c.label, color: c.color })) } : {}), ...(f.type === 'link' ? { target: typeIdOf(f.target), many: false } : {}), ...(f.type === 'autonumber' ? { prefix: f.prefix || '', next: f.start || 1 } : {}) }));
-      t.primary = t.fields.find((f) => f.key === src.primary)?.id || t.fields[0].id;
-      // A new record starts at the first stage, so it never sits in "No status".
-      for (const f of t.fields) if ((f.key === 'stage' || f.key === 'status') && f.choices?.length) f.default = f.choices[0].id;
-      t.views = src.views.map((v) => ({ id: rid(8), name: v.name, kind: v.kind, ...(v.groupBy ? { groupBy: t.fields.find((f) => f.key === v.groupBy)?.id } : {}), sort: v.sortBy ? { field: t.fields.find((f) => f.key === v.sortBy)?.id, dir: 'asc' } : null }));
-      delete t.src;
+  // A list from its definition. Links find their list by key among `others`; one with nowhere to point is left out.
+  function typeFrom(src, typeIdOf) {
+    const t = { id: rid(8), key: src.key, name: src.name, singular: src.singular, icon: src.icon };
+    t.fields = src.fields.filter((f) => f.type !== 'link' || typeIdOf(f.target)).map((f) => ({ id: rid(8), key: f.key, name: f.name, type: f.type, ...(f.choices ? { choices: f.choices.map((c) => ({ id: rid(6), label: c.label, color: c.color })) } : {}), ...(f.type === 'link' ? { target: typeIdOf(f.target), many: false } : {}), ...(f.type === 'autonumber' ? { prefix: f.prefix || '', next: f.start || 1, start: f.start || 1 } : {}) }));
+    t.primary = t.fields.find((f) => f.key === src.primary)?.id || t.fields[0].id;
+    // A new record starts at the first stage, so it never sits in "No status".
+    for (const f of t.fields) if ((f.key === 'stage' || f.key === 'status') && f.choices?.length) f.default = f.choices[0].id;
+    t.views = src.views.map((v) => ({ id: rid(8), name: v.name, kind: v.kind, ...(v.groupBy ? { groupBy: t.fields.find((f) => f.key === v.groupBy)?.id } : {}), sort: v.sortBy ? { field: t.fields.find((f) => f.key === v.sortBy)?.id, dir: 'asc' } : null }));
+    return t;
+  }
+  function fromTemplate(key, wsId) {
+    // A team's own template: its lists, fields and views, with new ids throughout.
+    if (String(key).startsWith('custom:')) {
+      const own = db.projectTemplates[String(key).slice(7)];
+      if (own && own.wsId === wsId) return { types: cloneTypes(own.types), template: 'custom', icon: own.icon };
     }
+    const tpl = TEMPLATES[key] || TEMPLATES.blank;
+    const ids = Object.fromEntries(tpl.types.map((t) => [t.key, rid(8)]));
+    const types = tpl.types.map((src) => {
+      const t = typeFrom(src, (k) => ids[k]);
+      t.id = ids[src.key];
+      return t;
+    });
     return { types, template: tpl === TEMPLATES[key] ? key : 'blank' };
+  }
+  // Lists copied with every id made new, and everything that points at an id following it.
+  function cloneTypes(types) {
+    const map = new Map();
+    const fresh = (old, n = 8) => { if (!map.has(old)) map.set(old, rid(n)); return map.get(old); };
+    const out = JSON.parse(JSON.stringify(types));
+    for (const t of out) {
+      t.id = fresh(t.id);
+      for (const f of t.fields) {
+        f.id = fresh(f.id);
+        if (f.choices) for (const c of f.choices) c.id = fresh(c.id, 6);
+        if (f.type === 'autonumber') f.next = f.start || 1;
+      }
+    }
+    for (const t of out) {
+      t.primary = map.get(t.primary) || t.fields[0].id;
+      for (const f of t.fields) {
+        if (f.target) f.target = map.get(f.target);
+        if (f.default) f.default = map.get(f.default);
+      }
+      t.fields = t.fields.filter((f) => f.type !== 'link' || f.target);
+      for (const v of t.views) {
+        v.id = fresh(v.id);
+        if (v.groupBy) v.groupBy = map.get(v.groupBy);
+        if (v.sort?.field) v.sort.field = map.get(v.sort.field);
+        if (v.filter?.field) v.filter = { field: map.get(v.filter.field), is: (v.filter.is || []).map((x) => map.get(x) || x) };
+      }
+    }
+    return out;
   }
 
   // ---------- values ----------
@@ -463,6 +522,16 @@ export function projectsModule({ db, save, broadcast, rid, cleanText, isDay, rea
         p.types.push(nt);
         return nt;
       }
+      // A ready-made list (Jobs, Contacts, Price list…), its links pointing at this project's lists by key.
+      case 'addTypeFrom': {
+        if (p.types.length >= MAX_TYPES) throw bad(`A project can have ${MAX_TYPES} kinds of records.`);
+        const src = Object.values(TEMPLATES).flatMap((x) => x.types).find((x) => x.key === body.key);
+        if (!src) throw bad('That list isn’t one of the ready-made ones.');
+        if (p.types.some((x) => x.key === src.key)) throw bad(`This project already has ${src.name}.`);
+        const nt = typeFrom(src, (k) => p.types.find((x) => x.key === k)?.id);
+        p.types.push(nt);
+        return nt;
+      }
       case 'updateType': {
         if (!t) throw bad('That list is gone.');
         if (body.name !== undefined) t.name = name(60) || t.name;
@@ -584,8 +653,9 @@ export function projectsModule({ db, save, broadcast, rid, cleanText, isDay, rea
       if (m === 'GET' && !b) return send(res, 200, Object.values(db.projects).filter((p) => p.wsId === ws.id && sees(p, auth.memberId)).map(publicProject));
       if (m === 'POST' && !b) {
         const body = await readJson(req, 50_000);
-        const { types, template } = fromTemplate(body.template);
-        const p = { id: rid(), wsId: ws.id, name: cleanText(body.name, 80) || TEMPLATES[template].name, icon: cleanText(body.icon, 8) || TEMPLATES[template].icon, template, types, private: !!body.private, memberIds: [], memberId: auth.memberId, by: auth.member, createdAt: Date.now(), updatedAt: Date.now() };
+        const { types, template, icon } = fromTemplate(body.template, ws.id);
+        const own = template === 'custom' && db.projectTemplates[String(body.template).slice(7)];
+        const p = { id: rid(), wsId: ws.id, name: cleanText(body.name, 80) || own?.name || TEMPLATES[template].name, icon: cleanText(body.icon, 8) || icon || TEMPLATES[template].icon, template, types, private: !!body.private, memberIds: [], memberId: auth.memberId, by: auth.member, createdAt: Date.now(), updatedAt: Date.now() };
         db.projects[p.id] = p;
         projectNews(p);
         return send(res, 200, publicProject(p));
@@ -593,6 +663,14 @@ export function projectsModule({ db, save, broadcast, rid, cleanText, isDay, rea
       const p = b && db.projects[b];
       if (!p || p.wsId !== ws.id || !sees(p, auth.memberId)) return send(res, 404, { error: 'That project is gone.' });
       if (m === 'GET' && c === 'records') return send(res, 200, Object.values(db.records).filter((r) => r.projectId === p.id).map(publicRecord));
+      if (m === 'POST' && c === 'template') {
+        const body = await readJson(req, 10_000);
+        if (Object.values(db.projectTemplates).filter((x) => x.wsId === ws.id).length >= 50) return send(res, 400, { error: 'A team can keep 50 templates. Delete one first.' });
+        const x = { id: rid(), wsId: ws.id, name: cleanText(body.name, 80) || p.name, about: cleanText(body.about, 200) || p.types.map((t) => t.name).join(', '), icon: p.icon, types: JSON.parse(JSON.stringify(p.types)), memberId: auth.memberId, by: auth.member, createdAt: Date.now() };
+        db.projectTemplates[x.id] = x;
+        save();
+        return send(res, 200, { id: x.id, name: x.name });
+      }
       if (m === 'POST' && c === 'schema') {
         const body = await readJson(req, 200_000);
         const out = schemaOp(p, body);
@@ -668,6 +746,19 @@ export function projectsModule({ db, save, broadcast, rid, cleanText, isDay, rea
         for (const h of Object.values(db.webhooks)) if (h.projectId === p.id) delete db.webhooks[h.id];
         save();
         broadcast(ws.id, { type: 'project:remove', id: p.id });
+        return send(res, 200, { ok: true });
+      }
+      return send(res, 405, { error: 'Method not allowed' });
+    }
+    // A team's own templates: a project's lists, fields and views, without its records.
+    if (a === 'project-templates') {
+      if (m === 'GET' && !b) return send(res, 200, Object.values(db.projectTemplates).filter((x) => x.wsId === ws.id).map(({ wsId, types, ...x }) => ({ ...x, lists: types.map((t) => t.name) })));
+      const x = b && db.projectTemplates[b];
+      if (!x || x.wsId !== ws.id) return send(res, 404, { error: 'That template is gone.' });
+      if (m === 'DELETE') {
+        if (x.memberId !== auth.memberId && auth.role !== 'owner') return send(res, 403, { error: 'Only whoever saved it and team owners can delete it.' });
+        delete db.projectTemplates[x.id];
+        save();
         return send(res, 200, { ok: true });
       }
       return send(res, 405, { error: 'Method not allowed' });
@@ -1155,5 +1246,42 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
   // What the app needs at sign-in: the projects this person sees (records load when a project opens).
   const stateFor = (ws, auth) => Object.values(db.projects).filter((p) => p.wsId === ws.id && sees(p, auth.memberId)).map(publicProject);
 
-  return { route, v1, quotePage, seesMsg, stateFor, sees, recordActivity, fillFromProject, fromProjectOk, TEMPLATES: Object.fromEntries(Object.entries(TEMPLATES).map(([k, t]) => [k, { name: t.name, icon: t.icon, about: t.about }])) };
+  // A record told in words, for the AI: its fields, what links to it, its timeline and open tasks.
+  function recordStory(rec, ws) {
+    const p = db.projects[rec.projectId];
+    const t = p && typeOf(p, rec.typeId);
+    if (!t) return '';
+    const lines = [`A ${t.singular || t.name} in the project “${p.name}”: ${recName(p, rec)}.`];
+    for (const f of t.fields) {
+      if (f.id === t.primary || rec.values[f.id] == null) continue;
+      if (f.type === 'items') {
+        const v = rec.values[f.id];
+        const tt = itemsTotals(v);
+        lines.push(`${f.name}: ${v.rows.map((r) => `${r.qty} ${r.unit || ''} ${r.desc} at $${(r.price / 100).toFixed(2)}`).join('; ')}. Total $${(tt.total / 100).toFixed(2)}${tt.cost != null ? `, margin ${tt.marginPct}%` : ''}.`);
+      } else lines.push(`${f.name}: ${words(ws, p, f, rec.values[f.id])}`);
+    }
+    for (const o of p.types) for (const f of o.fields) if (f.type === 'link' && f.target === t.id) {
+      const from = Object.values(db.records).filter((x) => x.typeId === o.id && (x.values[f.id] || []).includes(rec.id));
+      if (from.length) lines.push(`${o.name} linked to it: ${from.slice(0, 10).map((x) => `${recName(p, x)} (${o.fields.filter((y) => ['select', 'money', 'date', 'items'].includes(y.type) && x.values[y.id] != null).map((y) => `${y.name.toLowerCase()} ${words(ws, p, y, x.values[y.id])}`).join(', ')})`).join('; ')}`);
+    }
+    const log = (rec.log || []).slice(0, 30).map((e) => `- ${new Date(e.at).toISOString().slice(0, 10)} ${e.by || ''}: ${e.kind}${e.outcome ? ' (' + e.outcome + ')' : ''}${e.what ? ' ' + e.what : ''}${e.field ? ` ${e.field} ${e.from || 'empty'} → ${e.to || 'empty'}` : ''}${e.note ? ': ' + e.note.slice(0, 300) : ''}${e.campaign ? ` [campaign ${e.campaign}]` : ''}`);
+    if (log.length) lines.push(`Timeline, newest first:\n${log.join('\n')}`);
+    const tasks = Object.values(db.tasks).filter((x) => x.recordId === rec.id && !x.done);
+    if (tasks.length) lines.push(`Open tasks: ${tasks.map((x) => x.text + (x.due ? ` (due ${x.due})` : '')).join('; ')}`);
+    return lines.join('\n');
+  }
+  // The price list a quote or bid can draw from: a list keyed price_list in the same project.
+  function priceList(p) {
+    const t = p.types.find((x) => x.key === 'price_list');
+    if (!t) return [];
+    const f = (k) => fieldOf(t, k);
+    return Object.values(db.records).filter((r) => r.projectId === p.id && r.typeId === t.id).slice(0, 300).map((r) => ({ id: r.id, item: String(r.values[t.primary] ?? ''), description: f('description') ? String(r.values[f('description').id] ?? '') : '', unit: f('unit') ? words(db.workspaces[r.wsId], p, f('unit'), r.values[f('unit').id]) : '', price: f('price') ? r.values[f('price').id] ?? null : null, cost: f('cost') ? r.values[f('cost').id] ?? null : null }));
+  }
+  const recordAt = (id, wsId, memberId) => {
+    const rec = db.records[id];
+    const p = rec && db.projects[rec.projectId];
+    return rec && rec.wsId === wsId && sees(p, memberId) ? { rec, p, t: typeOf(p, rec.typeId) } : null;
+  };
+
+  return { route, v1, quotePage, seesMsg, stateFor, sees, recordActivity, fillFromProject, fromProjectOk, recordStory, priceList, recordAt, itemsTotals, TEMPLATES: Object.fromEntries(Object.entries(TEMPLATES).map(([k, t]) => [k, { name: t.name, icon: t.icon, about: t.about }])) };
 }
