@@ -2512,6 +2512,7 @@
         h('span', { html: KIND_ICON[list.kind || 'calls'] }), lp.of ? `${lp.n}/${lp.of}` : '') : null,
       taskFiles(t).length ? h('button', { class: 'list-chip file-chip', title: taskFiles(t).map((it) => it.name || 'Note').join(', '), onclick: (ev) => { ev.stopPropagation(); taskFiles(t).length === 1 ? openPreview(taskFiles(t)[0]) : taskFilesMenu(ev.currentTarget, t); } },
         h('span', { html: I.clip }), taskFiles(t).length === 1 ? shortText(taskFiles(t)[0].name || 'Note', 18) : String(taskFiles(t).length)) : null,
+      t.recordId ? h('button', { class: 'list-chip', title: 'Open the record this task is about', onclick: (ev) => { ev.stopPropagation(); prLoadAll().then(() => openRecord(t.recordId)); } }, '↗ ' + (recEverywhere(t.recordId) ? shortText(recName(prType(recEverywhere(t.recordId).p, recEverywhere(t.recordId).r.typeId), recEverywhere(t.recordId).r), 24) : 'Record')) : null,
       t.docId && S.items.some((x) => x.id === t.docId) ? h('button', { class: 'list-chip', title: `From the doc “${docTitle(S.items.find((x) => x.id === t.docId))}”`, onclick: (ev) => { ev.stopPropagation(); openDoc(S.items.find((x) => x.id === t.docId)); } }, '📄 Doc') : null,
       t.pinId && pinById(t.pinId) ? h('button', { class: 'list-chip', title: 'Show it on the map', onclick: (ev) => { ev.stopPropagation(); openMap({ pinId: t.pinId }); } }, 'Map') : null,
       camp && !inCampaign && !noCamp ? h('button', { class: 'camp-chip c-' + camp.color, title: `${camp.name} · ${g.title}`, onclick: () => openCampaign(camp.id) }, camp.name) : null,
@@ -3713,6 +3714,7 @@
     return m;
   }
   const reachLinks = (f, r) => [
+    r.recordId ? h('button', { class: 'linkish', title: 'Open the record', onclick: (e) => { e.stopPropagation(); prLoadAll().then(() => openRecord(r.recordId)); } }, '↗ record') : null,
     f.phone >= 0 && r.cells[f.phone] ? h('a', { href: 'tel:' + r.cells[f.phone].replace(/[^\d+]/g, ''), onclick: (e) => e.stopPropagation() }, r.cells[f.phone]) : null,
     f.email >= 0 && r.cells[f.email] ? h('a', { href: 'mailto:' + r.cells[f.email], onclick: (e) => e.stopPropagation() }, r.cells[f.email]) : null,
   ].filter(Boolean);
@@ -4695,6 +4697,7 @@
         run: () => (it.type === 'folder' ? showStack(c.stackId) : docKind(it) || kind(it) === 'pdf' ? dockOpen(c, { type: 'file', id: it.id }) : openPreview(it)),
       })),
       { label: '+ Add a call list or file…', run: () => pickCampaignFiles(c) },
+      (S.projects || []).length ? { label: '+ Call list from a project…', run: () => prListSheet(c) } : null,
       { label: files.length > 8 ? `Go to the stack · all ${files.length} files` : 'Go to the stack', run: () => showStack(c.stackId) },
     ].filter(Boolean));
   }
@@ -6237,7 +6240,8 @@
         h('button', { class: 'icon-btn', 'aria-label': 'All projects', html: I.back, onclick: () => { PR.open = null; renderProjects(); } }),
         h('span', { class: 'pj-ic' }, p.icon), h('b', { class: 'pj-name' }, p.name), p.private ? h('small', { title: 'Private' }, '🔒') : null,
         h('div', { class: 'pj-types' }, p.types.map((x) => h('button', { class: x.id === t.id ? 'on' : null, onclick: () => { PR.type = x.id; PR.view = null; PR.panel = null; renderProjects(); } }, `${x.icon || ''} ${x.name}`, h('small', {}, String(prRecs(p.id).filter((r) => r.typeId === x.id).length))))),
-        h('button', { class: 'icon-btn', 'aria-label': 'Project options', html: I.more, onclick: more })),
+        h('button', { class: 'icon-btn', 'aria-label': 'Project options', html: I.more, onclick: more }),
+        h('button', { class: 'icon-btn', 'aria-label': 'Close Projects', html: I.close, onclick: closeProjects })),
       h('div', { class: 'pj-bar' },
         h('div', { class: 'pj-views' }, t.views.map((x) => h('button', { class: x.id === v.id ? 'on' : null, onclick: () => { PR.view = x.id; renderProjects(); }, oncontextmenu: (e) => { e.preventDefault(); viewMenu(e, x); } }, x.kind === 'board' ? '▥ ' : '☰ ', x.name)),
           h('button', { class: 'pj-view-more', title: 'This view', 'aria-label': 'View options', onclick: (e) => viewMenu(e, v) }, '⌄'),
@@ -6564,6 +6568,7 @@
       top.length ? h('div', { class: 'pj-fields' }, top.map(fieldRow)) : null,
       ...itemFields.map((f) => prItems(p, t, r, f)),
       h('div', { class: 'pj-fields' }, fields.filter((f) => !top.includes(f)).map(fieldRow)),
+      prActivity(p, t, r),
       ...back.map(({ o, f, from }) => h('div', { class: 'pj-back' }, h('h4', {}, `${o.name} · ${f.name}`), from.map((x) => h('button', { class: 'pj-link', onclick: () => { PR.type = o.id; PR.view = null; PR.panel = x.id; renderProjects(); } }, recName(o, x), o.fields.find((y) => y.type === 'money') && x.values[o.fields.find((y) => y.type === 'money').id] ? h('small', {}, ' · ' + money(x.values[o.fields.find((y) => y.type === 'money').id])) : null)))),
       h('button', { class: 'btn pj-notes', onclick: notes }, doc ? `📄 Notes · ${docSnippet(doc) ? shortText(docSnippet(doc), 50) : 'open'}` : '📄 Add notes (a doc)'),
       h('small', { class: 'pj-meta' }, `Added by ${r.by} · ${ago(r.createdAt)}${r.updatedAt > r.createdAt + 1000 ? ` · changed ${ago(r.updatedAt)}` : ''}${r.extId ? ` · from another app (${r.extId})` : ''}`));
@@ -6621,8 +6626,155 @@
     else if (msg.type === 'project:remove') { S.projects = (S.projects || []).filter((x) => x.id !== msg.id); PR.records.delete(msg.id); if (PR.open === msg.id) PR.open = null; }
     else if (msg.type === 'project:access') api('GET', '/projects').then((list) => { S.projects = list; for (const id of [...PR.records.keys()]) if (!list.some((x) => x.id === id)) PR.records.delete(id); renderProjects(); }).catch(() => {});
     else if (msg.type === 'record') prUpsertRecord(msg.record);
+    else if (msg.type === 'record:log') { if (PR.logs.has(msg.recordId)) PR.logs.set(msg.recordId, msg.log); }
     else if (msg.type === 'record:remove' && PR.records.has(msg.projectId)) PR.records.set(msg.projectId, prRecs(msg.projectId).filter((x) => x.id !== msg.id));
     prSoon();
+  }
+
+  // ----- a record's activity: log a call or note, its tasks, the docs that mention it, its timeline -----
+  PR.logs = new Map();
+  function prLog(r) {
+    if (!PR.logs.has(r.id)) {
+      PR.logs.set(r.id, null);
+      api('GET', `/records/${r.id}/log`).then((log) => { PR.logs.set(r.id, log); prSoon(); }).catch(() => PR.logs.delete(r.id));
+    }
+    return PR.logs.get(r.id);
+  }
+  const ACT_IC = { created: '✦', change: '↻', call: '☏', email: '✉', meeting: '👥', note: '📝', task: '✓', quote: '🧾' };
+  function prLogLine(e) {
+    const who = h('b', {}, e.by || 'Someone');
+    const said = {
+      created: [who, ' added this'],
+      change: [who, ` changed ${e.field}: `, h('s', {}, e.from || 'empty'), ' → ', h('b', {}, e.to || 'empty')],
+      call: [who, ' called', e.outcome ? [' · ', h('span', { class: 'pj-out' }, e.outcome)] : null, e.campaign ? h('small', {}, ` · ${e.campaign}`) : null],
+      email: [who, ' emailed', e.campaign ? h('small', {}, ` · ${e.campaign}`) : null],
+      meeting: [who, ' met with them'],
+      note: [who, ' noted'],
+      task: [who, e.what === 'done' ? ' finished a task' : ' added a task'],
+      quote: [who, { sent: ' sent the quote', viewed: ' opened the quote', accepted: ' accepted the quote', declined: ' declined the quote' }[e.what] || ' updated the quote'],
+    }[e.kind] || [who];
+    const body = e.kind === 'task' || e.note ? e.note : '';
+    return [said.flat(), body];
+  }
+  function prActivity(p, t, r) {
+    const log = prLog(r);
+    const tasks = S.tasks.filter((x) => x.recordId === r.id).sort((a, b) => (a.done - b.done) || (a.due || '9').localeCompare(b.due || '9'));
+    const docs = docsMentioning(['record:' + r.id]);
+    const del = async (e) => { const y = await prCall('DELETE', `/records/${r.id}/log/${e.id}`); if (y) { PR.logs.set(r.id, y); renderProjects(); } };
+    const mine = (e) => ['call', 'email', 'meeting', 'note'].includes(e.kind) && (e.memberId === S.me?.memberId || amOwner());
+    return h('div', { class: 'pj-act' },
+      h('div', { class: 'pj-act-btns' },
+        [['call', '☏ Log a call'], ['email', '✉ Email'], ['meeting', '👥 Meeting'], ['note', '📝 Note']].map(([k, label]) => h('button', { class: 'btn small', onclick: () => prLogSheet(p, t, r, k) }, label)),
+        h('button', { class: 'btn small', onclick: () => prTaskSheet(p, t, r) }, '+ Task')),
+      tasks.length ? h('div', { class: 'pj-tasks' }, h('h4', {}, 'Tasks'), tasks.map((x) => h('div', { class: 'pj-task' + (x.done ? ' done' : '') },
+        h('button', { class: 'check' + (x.done ? ' on' : ''), html: I.check, 'aria-label': x.done ? 'Not done' : 'Done', onclick: () => patchTask(x, { done: !x.done }).then(renderProjects) }),
+        h('span', {}, x.text), x.due ? h('small', { class: isOverdue(x) ? 'late' : null }, dueLabel(x.due)) : null, x.assigneeId ? avatar(x.assigneeId) : null))) : null,
+      docs.length ? h('div', { class: 'pj-tasks' }, h('h4', {}, 'Mentioned in'), docs.slice(0, 8).map((d) => h('button', { class: 'pj-link', onclick: () => openDoc(d) }, '📄 ' + docTitle(d)))) : null,
+      h('div', { class: 'pj-timeline' }, h('h4', {}, 'Timeline'),
+        log == null ? h('small', { class: 'day-hint' }, 'Loading…')
+          : log.map((e) => { const [said, body] = prLogLine(e); return h('div', { class: 'pj-tl pj-tl-' + e.kind },
+            h('span', { class: 'pj-tl-ic' }, ACT_IC[e.kind] || '•'),
+            h('div', { class: 'pj-tl-main' }, h('div', {}, said, h('small', { class: 'pj-tl-at', title: new Date(e.at).toLocaleString() }, ' · ' + ago(e.at)), mine(e) ? h('button', { class: 'linkish', onclick: () => del(e) }, 'Remove') : null), body ? h('div', { class: 'pj-tl-body' }, body) : null)); })));
+  }
+  function prLogSheet(p, t, r, kind) {
+    let k = kind, outcome = null;
+    const seg = h('div', { class: 'seg' });
+    const outs = h('div', { class: 'pj-outs' });
+    const note = h('textarea', { rows: 3, placeholder: 'What happened? What’s next?' });
+    const follow = h('input', { type: 'date' });
+    const quick = h('div', { class: 'btns' }, [['', 'No follow-up'], [2, 'In 2 days'], [7, 'In a week'], [14, 'In 2 weeks']].map(([d, label]) => h('button', { type: 'button', class: 'btn small', onclick: () => { follow.value = d ? addDaysKey(todayKey(), d) : ''; } }, label)));
+    const draw = () => {
+      seg.replaceChildren(...[['call', 'Call'], ['email', 'Email'], ['meeting', 'Meeting'], ['note', 'Note']].map(([v, label]) => h('button', { type: 'button', class: k === v ? 'on' : null, onclick: () => { k = v; draw(); } }, label)));
+      outs.replaceChildren(...(k === 'call' ? ['No answer', 'Not interested', 'Interested', 'Booked'].map((o) => h('button', { type: 'button', class: 'btn small' + (outcome === o ? ' sel' : ''), onclick: () => { outcome = o; if (!follow.value && (o === 'No answer' || o === 'Interested')) follow.value = addDaysKey(todayKey(), o === 'No answer' ? 2 : 3); draw(); } }, o)) : []));
+    };
+    draw();
+    sheet(`Log on ${recName(t, r)}`, [seg, outs, note, h('label', {}, 'Follow up on', follow), quick], async () => {
+      if (!note.value.trim() && !(k === 'call' && outcome)) throw new Error(k === 'call' ? 'Pick how the call went, or write a note.' : 'Write what happened.');
+      const y = await api('POST', `/records/${r.id}/log`, { kind: k, outcome: k === 'call' ? outcome : null, note: note.value, followUp: follow.value || null });
+      PR.logs.set(r.id, y);
+      renderProjects();
+      if (follow.value) toast(`Follow-up on your tasks for ${dueLabel(follow.value)}`);
+    }, 'Log it');
+    setTimeout(() => note.focus());
+  }
+  const addDaysKey = (k, n) => { const d = new Date(k + 'T12:00:00'); d.setDate(d.getDate() + n); return dayKey(d); };
+  function prTaskSheet(p, t, r) {
+    const text = h('input', { placeholder: 'Send the warranty info' });
+    const due = h('input', { type: 'date' });
+    const who = h('select', {}, (S.workspace?.members || []).map((m) => h('option', { value: m.id, selected: m.id === S.me?.memberId }, m.name)));
+    sheet(`Task for ${recName(t, r)}`, [h('label', {}, 'Task', text), h('div', { class: 'row2' }, h('label', {}, 'Due', due), h('label', {}, 'For', who))], async () => {
+      if (!text.value.trim()) throw new Error('Write the task.');
+      upsertTask(await api('POST', '/tasks', { text: text.value, due: due.value || null, assigneeId: who.value, recordId: r.id }));
+      PR.logs.delete(r.id);
+      renderProjects();
+      renderDay();
+    }, 'Add task');
+    setTimeout(() => text.focus());
+  }
+  // Every visible project's records, for mentions in docs and the Finance forecast. Loaded once, then live.
+  let prAllLoading = null;
+  function prLoadAll() {
+    const need = (S.projects || []).filter((p) => !PR.records.has(p.id));
+    if (!need.length || prAllLoading) return prAllLoading || Promise.resolve();
+    prAllLoading = Promise.all(need.map((p) => api('GET', `/projects/${p.id}/records`).then((list) => PR.records.set(p.id, list)).catch(() => {}))).finally(() => { prAllLoading = null; });
+    return prAllLoading;
+  }
+  const recEverywhere = (id) => { for (const [pid, list] of PR.records) { const r = list.find((x) => x.id === id); if (r) return { p: projById(pid), r }; } return null; };
+  function openRecord(id) {
+    const at = recEverywhere(id);
+    if (!at?.p) return toast('That record isn’t here any more.');
+    openProject(at.p.id, at.r.typeId).then(() => { PR.type = at.r.typeId; PR.view = null; PR.panel = id; renderProjects(); });
+  }
+  // A campaign call list made from a project's records, kept current as they change.
+  function prListSheet(c) {
+    const projects = (S.projects || []);
+    if (!projects.length) return toast('Make a project first (Tools → Projects).');
+    const proj = h('select', {}, projects.map((p) => h('option', { value: p.id }, p.name)));
+    const list = h('select');
+    const field = h('select');
+    const boxes = h('div', { class: 'pj-outs' });
+    const name = h('input', { placeholder: 'Qualified contacts' });
+    const drawFilter = () => {
+      const t = prType(projById(proj.value), list.value);
+      const sel = (t?.fields || []).filter((f) => f.type === 'select');
+      field.replaceChildren(h('option', { value: '' }, 'Everyone in the list'), ...sel.map((f) => h('option', { value: f.id }, `Only some ${f.name.toLowerCase()}s`)));
+      drawBoxes();
+    };
+    const drawBoxes = () => {
+      const f = prField(prType(projById(proj.value), list.value), field.value);
+      boxes.replaceChildren(...(f ? f.choices.map((ch) => h('label', { class: 'pick' }, h('input', { type: 'checkbox', value: ch.id }), ch.label)) : []));
+    };
+    const drawLists = () => {
+      const p = projById(proj.value);
+      list.replaceChildren(...p.types.map((t) => h('option', { value: t.id }, t.name)));
+      const people = p.types.find((t) => t.key === 'contacts');
+      if (people) list.value = people.id;
+      drawFilter();
+    };
+    proj.addEventListener('change', drawLists);
+    list.addEventListener('change', drawFilter);
+    field.addEventListener('change', drawBoxes);
+    drawLists();
+    sheet('Call list from a project', [h('p', { class: 'day-hint' }, 'A row for each record. It stays current as records change, and every call you log lands on the record’s timeline.'),
+      h('div', { class: 'row2' }, h('label', {}, 'Project', proj), h('label', {}, 'List', list)), h('label', {}, 'Who', field), boxes, h('label', {}, 'Name', name)], async () => {
+      const is = [...boxes.querySelectorAll('input:checked')].map((x) => x.value);
+      const t = prType(projById(proj.value), list.value);
+      const l = await api('POST', '/lists', { campaignId: c.id, name: name.value.trim() || `${t.name}${is.length ? ' · ' + is.map((id) => prField(t, field.value).choices.find((x) => x.id === id)?.label).join(', ') : ''}`, fromProject: { projectId: proj.value, typeId: list.value, ...(field.value && is.length ? { filter: { field: field.value, is } } : {}) } });
+      upsertList(l);
+      renderCamps();
+      toast(`${l.name}: ${plural(l.rows.length, (t.singular || 'record').toLowerCase())} to call`);
+    }, 'Make the list');
+  }
+  // The pipeline of a project's list, by stage: for live doc blocks and the Finance forecast.
+  const WON = /^(won|accepted|customer)$/i;
+  const LOST = /^(lost|declined|expired|no bid)$/i;
+  function pipelineOf(p, t) {
+    const g = t.fields.find((f) => f.id === t.views.find((v) => v.kind === 'board')?.groupBy) || t.fields.find((f) => f.type === 'select' && /^(stage|status)$/.test(f.key)) || t.fields.find((f) => f.type === 'select');
+    const mf = t.fields.find((f) => f.type === 'money') || t.fields.find((f) => f.type === 'items');
+    const amt = (r) => (!mf || r.values[mf.id] == null ? 0 : mf.type === 'items' ? itemsTotals(r.values[mf.id]).total : r.values[mf.id]);
+    const recs = prRecs(p.id).filter((r) => r.typeId === t.id);
+    const stages = g ? g.choices.map((c) => { const xs = recs.filter((r) => r.values[g.id] === c.id); return { label: c.label, color: c.color, count: xs.length, total: xs.reduce((n, r) => n + amt(r), 0) }; }) : [];
+    return { g, mf, amt, recs, stages };
   }
 
   // ----- line items, and quotes sent to customers -----
@@ -6895,6 +7047,7 @@
     docStarter(x);
     docTasksSync(x);
     docTell(x);
+    prLoadAll().then(() => DV.doc === x && x.ed.refresh());
     api('GET', `/items/${x.id}/comments`).then((list) => { if (DV.doc !== x) return; x.comments = list; x.ed.refresh(); docBar(x); docSide(x); }).catch(() => {});
     if (fresh) x.ed.el.querySelector('.dk-title').focus();
   }
@@ -7258,6 +7411,13 @@
     if (ref.k === 'goal') { const g = goalById(ref.id); return g ? { label: g.title, hint: `Goal in ${campById(g.campaignId)?.name || 'a campaign'} · ${goalProgress(g).label}` } : { gone: true }; }
     if (ref.k === 'task') { const t = taskById(ref.id); return t ? { label: (t.done ? '✓ ' : '') + shortText(t.text, 60), hint: 'Task · click to open' } : { gone: true }; }
     if (ref.k === 'doc') { const d = S.items.find((x) => x.id === ref.id && x.type === 'text'); return d ? { label: docTitle(d), hint: 'Doc · click to open' } : { gone: true }; }
+    if (ref.k === 'record') {
+      const at = recEverywhere(ref.id);
+      // Not loaded yet: the name it was saved with shows until it is.
+      if (!at) return PR.records.size >= (S.projects || []).length ? { gone: true } : null;
+      const t = prType(at.p, at.r.typeId);
+      return { label: recName(t, at.r), hint: `${t.singular || t.name} in ${at.p.name} · click to open` };
+    }
     return { gone: true };
   }
   // The "@" list: people, docs, campaigns, goals and open tasks whose name has the words typed.
@@ -7270,7 +7430,14 @@
     const camps = S.campaigns.filter((c) => has(c.name)).sort((a, b) => (a.status === 'done') - (b.status === 'done')).slice(0, 4).map((c) => ({ k: 'campaign', id: c.id, label: c.name, sub: `Campaign · ${Math.round(campProgress(c) * 100)}%`, icon: '◎' }));
     const goals = S.goals.filter((g) => has(g.title) && campById(g.campaignId)).slice(0, 3).map((g) => ({ k: 'goal', id: g.id, label: g.title, sub: 'Goal · ' + campById(g.campaignId).name, icon: '▰' }));
     const tasks = s ? S.tasks.filter((t) => !t.done && has(t.text)).slice(0, 4).map((t) => ({ k: 'task', id: t.id, label: shortText(t.text, 60), sub: 'Task' + (goalById(t.goalId) ? ' · ' + goalById(t.goalId).title : ''), icon: '✓' })) : [];
-    return [...people, ...docs, ...camps, ...goals, ...tasks].slice(0, 14);
+    // Records in Projects: customers, deals, quotes, bids.
+    const recs = [];
+    if (s) for (const [pid, list] of PR.records) {
+      const p = projById(pid);
+      if (!p) continue;
+      for (const r of list) { const t = prType(p, r.typeId); if (t && has(recName(t, r))) recs.push({ k: 'record', id: r.id, label: recName(t, r), sub: `${t.singular || t.name} · ${p.name}`, icon: t.icon || '▤' }); }
+    }
+    return [...people, ...recs.slice(0, 5), ...docs, ...camps, ...goals, ...tasks].slice(0, 14);
   }
   function docOpenRef(ref) {
     const go = (fn) => { closeDoc(); fn(); };
@@ -7279,6 +7446,7 @@
     if (ref.k === 'task' && taskById(ref.id)) return docOpenTask(ref.id);
     if (ref.k === 'doc') { const d = S.items.find((x) => x.id === ref.id); if (d) return openDoc(d); }
     if (ref.k === 'member' && member(ref.id)) return toast(`${member(ref.id).name} is on the team`);
+    if (ref.k === 'record') { closeDoc(); return prLoadAll().then(() => openRecord(ref.id)); }
     toast('That isn’t in Column any more.');
   }
   function docOpenTask(id) {
@@ -7329,6 +7497,14 @@
       const xs = (S.money || []).filter((x) => x.day?.startsWith(ym));
       return { month: ym, rows: (S.budgets || []).slice().sort((p, q) => p.category.localeCompare(q.category)).map((x) => ({ category: x.category, scope: x.scope, spent: spentOn(xs.filter((y) => y.scope === x.scope), x.category), limit: x.limit })) };
     }
+    if (b.source === 'pipeline') {
+      const p = projById(b.ref);
+      const t = p && prType(p, b.sub);
+      if (!t) return null;
+      if (!PR.records.has(p.id)) { prLoadAll().then(docLiveSoon); return { name: `${p.name} · ${t.name}`, loading: true, stages: [] }; }
+      const pl = pipelineOf(p, t);
+      return { name: `${p.name} · ${t.name}`, money: !!pl.mf, stages: pl.stages, count: pl.recs.length };
+    }
     if (b.source === 'list') {
       const l = S.lists.find((x) => x.id === b.ref);
       if (!l) return null;
@@ -7368,9 +7544,15 @@
       ...(d.rows || []).map((r) => row(r.category + (r.scope === 'business' ? ' · business' : ''), `${money(r.spent)} of ${money(r.limit)}`, r.limit ? Math.round((r.spent / r.limit) * 100) : 0)),
       !d.rows?.length ? h('p', { class: 'dk-live-none' }, 'No budgets yet. Set them in Finance.') : null) };
     if (b.source === 'list') return { title: d.name, body: h('div', {}, row(d.campaign || '', d.label, d.pct)) };
+    if (b.source === 'pipeline') {
+      const top = Math.max(1, ...d.stages.map((x) => (d.money ? x.total : x.count)));
+      return { title: d.name, body: d.loading ? h('p', { class: 'dk-live-none' }, 'Loading…') : h('div', {},
+        ...d.stages.map((x) => h('div', { class: 'lv-row' }, h('div', { class: 'lv-top' }, h('span', {}, x.label), h('small', {}, `${x.count}${d.money ? ' · ' + money(x.total) : ''}`)), h('div', { class: 'pbar', style: `--c:${PF_COLOR[x.color] || PF_COLOR.gray}` }, h('i', { style: `width:${Math.round(((d.money ? x.total : x.count) / top) * 100)}%` })))),
+        !d.stages.length ? h('p', { class: 'dk-live-none' }, 'This list has no stages.') : null) };
+    }
     return null;
   }
-  const LIVE_TITLE = { campaign: 'Campaign summary', goal: 'Goal progress', tasks: 'Task list', calls: 'Call stats', budgets: 'Budgets', list: 'Call list' };
+  const LIVE_TITLE = { campaign: 'Campaign summary', goal: 'Goal progress', tasks: 'Task list', calls: 'Call stats', budgets: 'Budgets', list: 'Call list', pipeline: 'Pipeline' };
   // A live block as lines of text, for Word and PDF.
   function docLiveLines(b) {
     const d = b.snap ? b.snap.data : docLiveData(b);
@@ -7382,11 +7564,21 @@
     if (b.source === 'calls') return [`${d.name}: ${d.total} logged${d.days ? ` in the last ${d.days} days` : ''}${when}`, ...d.outcomes.map(([o, n]) => `${o}: ${n}`)];
     if (b.source === 'budgets') return [`Budgets, ${monthName(d.month)}${when}`, ...d.rows.map((r) => `${r.category}: ${money(r.spent)} of ${money(r.limit)}`)];
     if (b.source === 'list') return [`${d.name}: ${d.label}${when}`];
+    if (b.source === 'pipeline') return [`${d.name}${when}`, ...d.stages.map((x) => `${x.label}: ${x.count}${d.money ? ', ' + money(x.total) : ''}`)];
     return [LIVE_TITLE[b.source]];
   }
   // Which campaign, goal or list a new live block shows. The doc's own campaign comes first.
   function docPickLive(kind, anchor) {
     if (kind === 'budgets') return {};
+    if (kind === 'pipeline') {
+      const rows = [];
+      for (const p of S.projects || []) {
+        const ts = p.types.filter((t) => t.fields.some((f) => f.type === 'select'));
+        if (ts.length) rows.push({ head: p.name }, ...ts.map((t) => ({ label: `${t.icon || ''} ${t.name}`, run: null, t, p })));
+      }
+      if (!rows.length) { toast('Make a project first (Tools → Projects).'); return null; }
+      return new Promise((done) => openMenu(anchor, rows.map((r) => (r.head ? r : { label: r.label, run: () => done({ ref: r.p.id, sub: r.t.id }) }))));
+    }
     const it = S.items.find((x) => x.id === DV.doc?.id);
     const home = docCampaign(it);
     const camps = [...(home ? [home] : []), ...S.campaigns.filter((c) => c !== home && c.status !== 'done')].slice(0, 15);
@@ -9902,10 +10094,33 @@
           h('button', { class: 'add-goal', onclick: () => budgetSheet() }, '+ Set a budget'),
           h('button', { class: 'add-goal', onclick: suggestBudgets }, '✦ Suggest budgets'),
           h('button', { class: 'add-goal', title: 'Talk your budget through: Sidekick reads your Finance, suggests budgets and bills, and keeps an eye on them', onclick: sidekickForMoney }, '✦ Plan with Sidekick'))),
+      finForecast(ym),
       loose.length ? h('section', {}, h('h3', {}, 'Other spending'),
         loose.map(([c, n]) => h('div', { class: 'bill-hist', onclick: () => budgetSheet(null, c) }, h('span', {}, c), h('span', {}, money(n))))) : null,
       xs.length ? null : h('p', { class: 'day-hint' }, 'Nothing for this month yet. Add money in and out under In & out, or import a bank statement.'),
     ];
+  }
+  // From Projects: open deals and quotes, what's due to close this month, and what was won in it.
+  function finForecast(ym) {
+    if (!(S.projects || []).length) return null;
+    if ((S.projects || []).some((p) => !PR.records.has(p.id))) { prLoadAll().then(() => toolOpen === 'bills' && renderTool()); return null; }
+    const rows = [];
+    for (const p of S.projects) for (const t of p.types) {
+      const pl = pipelineOf(p, t);
+      const when = t.fields.find((f) => f.type === 'date' && /^(close_date|valid_until|expected|close)$/.test(f.key));
+      if (!pl.mf || !pl.g || !when) continue;
+      const label = (r) => pl.g.choices.find((c) => c.id === r.values[pl.g.id])?.label || '';
+      const done = t.fields.find((f) => f.key === 'accepted_on');
+      const open = pl.recs.filter((r) => !WON.test(label(r)) && !LOST.test(label(r)));
+      const soon = open.filter((r) => String(r.values[when.id] || '').startsWith(ym));
+      const won = pl.recs.filter((r) => WON.test(label(r)) && String((done && r.values[done.id]) || r.values[when.id] || new Date(r.updatedAt).toISOString()).startsWith(ym));
+      const sum = (xs) => xs.reduce((n, r) => n + pl.amt(r), 0);
+      if (open.length || won.length) rows.push({ p, t, open: sum(open), openN: open.length, soon: sum(soon), soonN: soon.length, won: sum(won), wonN: won.length });
+    }
+    if (!rows.length) return null;
+    return h('section', {}, h('h3', {}, 'Pipeline'), rows.map((x) => h('div', { class: 'budget pj-fc', onclick: () => { closeTool(); openProject(x.p.id, x.t.id); } },
+      h('div', { class: 'budget-top' }, h('span', {}, `${x.p.name} · ${x.t.name}`), h('span', { class: 'up' }, `${money(x.won)} won`)),
+      h('small', {}, `${plural(x.openN, (x.t.singular || 'record').toLowerCase())} open, ${money(x.open)} · closing in ${monthName(ym)}: ${money(x.soon)}${x.soonN ? ` (${x.soonN})` : ''} · won: ${x.wonN}`))));
   }
   function flowTab() {
     const xs = moneyIn(FIN.month).filter((x) => !FIN.campaign || x.campaignId === FIN.campaign).sort((a, b) => (a.day < b.day ? 1 : a.day > b.day ? -1 : b.createdAt - a.createdAt));

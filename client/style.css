@@ -1631,3 +1631,29 @@ body.platform-darwin .pj-head, body.platform-darwin .pj-top { padding-left: 80px
 .pj-it-margin { color: var(--ok); font-size: 12.5px; }
 .pj-it-margin.neg { color: var(--danger); }
 .pj-tpls { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); }
+/* projects: a record's activity */
+.pj-act { display: flex; flex-direction: column; gap: 10px; border-top: 1px solid var(--line); padding-top: 10px; }
+.pj-act-btns { display: flex; flex-wrap: wrap; gap: 6px; }
+.pj-act h4, .pj-timeline h4 { margin: 4px 0 4px; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+.pj-tasks { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+.pj-task { display: flex; align-items: center; gap: 8px; font-size: 13px; width: 100%; }
+.pj-task > span:not(.av) { flex: 1; min-width: 0; }
+.pj-task.done span { text-decoration: line-through; color: var(--muted); }
+.pj-task small { color: var(--muted); }
+.pj-task small.late { color: var(--danger); }
+.pj-timeline { display: flex; flex-direction: column; gap: 2px; }
+.pj-tl { display: flex; gap: 10px; padding: 6px 0; font-size: 13px; border-bottom: 1px solid var(--line); }
+.pj-tl:last-child { border-bottom: 0; }
+.pj-tl-ic { flex: none; width: 24px; height: 24px; border-radius: 50%; background: var(--card-hover); display: grid; place-items: center; font-size: 12px; }
+.pj-tl-call .pj-tl-ic, .pj-tl-email .pj-tl-ic, .pj-tl-meeting .pj-tl-ic { background: var(--accent-soft); color: var(--accent); }
+.pj-tl-quote .pj-tl-ic { background: color-mix(in srgb, var(--ok) 18%, transparent); }
+.pj-tl-main { flex: 1; min-width: 0; }
+.pj-tl-main s { color: var(--muted); }
+.pj-tl-main .linkish { margin-left: 6px; font-size: 11.5px; }
+.pj-tl-at { color: var(--faint); }
+.pj-tl-body { color: var(--text); background: var(--card); border-radius: 8px; padding: 6px 9px; margin-top: 4px; white-space: pre-wrap; }
+.pj-out { font-weight: 600; color: var(--accent); }
+.pj-outs { display: flex; flex-wrap: wrap; gap: 6px; }
+.pj-fc { cursor: pointer; }
+.pj-outs .btn.sel { background: var(--accent); border-color: var(--accent); color: #fff; }
+.pj-tl-main .linkish { background: none; border: 0; color: var(--faint); padding: 0; } .pj-tl-main .linkish:hover { color: var(--danger); }

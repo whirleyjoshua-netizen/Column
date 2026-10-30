@@ -324,8 +324,8 @@ function publicItem(it) {
 // Blocks are flat; nesting is an indent. Text is runs of plain text with marks, never markup.
 const DOC_TYPES = ['p', 'h1', 'h2', 'h3', 'ul', 'ol', 'todo', 'quote', 'callout', 'code', 'toggle', 'divider', 'table', 'file', 'live'];
 // A mention points at something else in Column. A live block shows numbers from it, or a snapshot of them.
-const DOC_REFS = ['member', 'campaign', 'goal', 'task', 'doc'];
-const DOC_LIVE = ['campaign', 'goal', 'tasks', 'calls', 'budgets', 'list'];
+const DOC_REFS = ['member', 'campaign', 'goal', 'task', 'doc', 'record'];
+const DOC_LIVE = ['campaign', 'goal', 'tasks', 'calls', 'budgets', 'list', 'pipeline'];
 const DOC_SNAP_MAX = 60_000;
 const DOC_TEXT_TYPES = new Set(['p', 'h1', 'h2', 'h3', 'ul', 'ol', 'todo', 'quote', 'callout', 'code', 'toggle']);
 const DOC_BLOCKS = 5000;
@@ -372,6 +372,7 @@ function cleanDocBlock(v) {
     if (!DOC_LIVE.includes(v.source)) return null;
     x.source = v.source;
     if (docId(v.ref)) x.ref = v.ref;
+    if (docId(v.sub)) x.sub = v.sub; // a pipeline's list in its project
     if ([7, 30, 90].includes(Number(v.days))) x.days = Number(v.days);
     // A snapshot: numbers as they were, shown as text only.
     if (v.snap && typeof v.snap === 'object' && Number.isFinite(Number(v.snap.at))) {
@@ -415,7 +416,7 @@ function docText(title, blocks) {
     if (b.type === 'divider') return '---';
     if (b.type === 'table') return b.rows.map((r) => '| ' + r.map(runsText).join(' | ') + ' |').join('\n');
     if (b.type === 'file') return `[${b.name || 'File'}]`;
-    if (b.type === 'live') return `[${{ campaign: 'Campaign summary', goal: 'Goal progress', tasks: 'Task list', calls: 'Call stats', budgets: 'Budgets', list: 'Call list' }[b.source]}${b.snap ? ' as of ' + fmtDay(b.snap.at) : ''}]`;
+    if (b.type === 'live') return `[${{ campaign: 'Campaign summary', goal: 'Goal progress', tasks: 'Task list', calls: 'Call stats', budgets: 'Budgets', list: 'Call list', pipeline: 'Pipeline' }[b.source]}${b.snap ? ' as of ' + fmtDay(b.snap.at) : ''}]`;
     return pad + t;
   });
   // The title is always the first line, even when it's empty.
@@ -501,7 +502,7 @@ function docRefs(blocks) {
   for (const b of blocks) {
     for (const r of [...(b.runs || []), ...(b.rows || []).flat(2)]) if (r.ref) out.add(r.ref.k + ':' + r.ref.id);
     if (b.taskId) out.add('task:' + b.taskId);
-    if (b.type === 'live' && b.ref) out.add((['tasks', 'calls'].includes(b.source) ? 'campaign' : b.source) + ':' + b.ref);
+    if (b.type === 'live' && b.ref) out.add((['tasks', 'calls'].includes(b.source) ? 'campaign' : b.source === 'pipeline' ? 'project' : b.source) + ':' + b.ref);
   }
   return [...out].slice(0, 300);
 }
@@ -733,6 +734,8 @@ function applyTask(t, body) {
   if (body.assigneeId && t.assigneeId) t.roleId = null;
   else if (body.roleId && t.roleId) t.assigneeId = null;
   if (body.report !== undefined) t.report = !!body.report;
+  // The project record it's about (a follow-up with a contact, a step on a deal).
+  if (body.recordId !== undefined) t.recordId = body.recordId && db.records?.[body.recordId]?.wsId === t.wsId ? body.recordId : null;
   // The doc it was made in, when it's a to-do there.
   if (body.docId !== undefined) t.docId = body.docId && db.items[body.docId]?.wsId === t.wsId && db.items[body.docId].type === 'text' ? body.docId : null;
   // Files attached to it, like the finished list a "Provide a list of…" task asked for. Items in the same team.
@@ -1228,6 +1231,7 @@ function addFollowUp(c, x, due, day) {
   });
   // It doesn't wait its turn in a campaign worked in order (taskWaitsOn).
   t.followUp = { attemptId: x.id, listId: x.listId, rowId: x.rowId, contact: x.contact };
+  if (x.recordId) t.recordId = x.recordId;
   t.assignedBy = x.memberId; // their own, so no "assigned you" notice
   db.tasks[t.id] = t;
   broadcast(c.wsId, { type: 'task', task: publicTask(t) });
@@ -1276,7 +1280,7 @@ function applyList(l, body) {
       return row;
     }).filter((r) => r.cells.some(Boolean));
   }
-  if (!l.rows.length && !l.live) throw badRequest('That list has no rows.');
+  if (!l.rows.length && !l.live && !l.fromProject) throw badRequest('That list has no rows.');
   return l;
 }
 
@@ -3454,6 +3458,7 @@ async function api(req, res, url) {
       if (!canSee(auth, 'task', t)) return send(res, 404, { error: 'Goal not found' });
       if (t.assigneeId || t.roleId) t.assignedBy = auth.memberId;
       db.tasks[t.id] = t;
+      if (t.recordId) PJ.recordActivity(t.recordId, { kind: 'task', what: 'added', note: t.text, taskId: t.id, by: auth.member });
       save();
       broadcast(ws.id, { type: 'task', task: publicTask(t) });
       return send(res, 200, publicTask(t));
@@ -3473,6 +3478,7 @@ async function api(req, res, url) {
       // Who handed it over, so the new assignee can be told.
       if (next.assigneeId !== t.assigneeId || next.roleId !== t.roleId) next.assignedBy = next.assigneeId || next.roleId ? auth.memberId : null;
       db.tasks[t.id] = next;
+      if (next.recordId && next.done && !t.done) PJ.recordActivity(next.recordId, { kind: 'task', what: 'done', note: next.text, taskId: next.id, by: auth.member });
       // Ticking off a come-back task ticks off its spot on the map.
       const pin = next.pinId && db.pins[next.pinId];
       if (pin && pin.done !== next.done) {
@@ -4472,7 +4478,7 @@ async function api(req, res, url) {
       const row = l && l.campaignId === c.id && l.rows.find((r) => r.id === body.rowId);
       const x = {
         id: rid(), wsId: ws.id, campaignId: c.id, method, taskId: t && campaignOf('task', t) === c.id ? t.id : null,
-        listId: row ? l.id : null, rowId: row ? row.id : null,
+        listId: row ? l.id : null, rowId: row ? row.id : null, recordId: row?.recordId || null,
         // The PSS lead it was, from a live list's row, or picked by an owner from the contacts.
         leadId: row?.leadId || (auth.role === 'owner' && db.pss[ws.id]?.leads?.some((y) => y.id === body.leadId) ? body.leadId : null),
         memberId: auth.memberId, by: auth.member, at: Date.now(), outcome,
@@ -4481,6 +4487,7 @@ async function api(req, res, url) {
         answers: (Array.isArray(body.answers) ? body.answers : []).slice(0, 40).map((x) => ({ q: cleanText(x?.q, 300), a: cleanText(x?.a, 2000) })).filter((x) => x.q && x.a),
       };
       db.attempts[x.id] = x;
+      if (x.recordId) PJ.recordActivity(x.recordId, { kind: method === 'Email' ? 'email' : 'call', outcome, note: x.note, campaign: c.name, attemptId: x.id, by: auth.member, memberId: auth.memberId });
       closeFollowUps(c, x);
       const days = followUpsOf(c)[outcome];
       const due = body.followUp === false ? null : isDay(body.followUp) ? body.followUp : days ? addDays(today, days) : null;
@@ -4520,7 +4527,11 @@ async function api(req, res, url) {
       if (!c || c.wsId !== ws.id || !canSee(auth, 'campaign', c)) return send(res, 404, { error: 'Campaign not found' });
       const file = body.itemId && db.items[body.itemId];
       let l;
-      if (body.live) {
+      if (body.fromProject) {
+        const src = PJ.fromProjectOk(ws, auth, body.fromProject);
+        if (!src) return send(res, 404, { error: 'That project or list is gone.' });
+        l = PJ.fillFromProject(applyList({ id: rid(), wsId: ws.id, campaignId: c.id, itemId: null, by: auth.member, createdAt: Date.now(), kind: 'calls', fromProject: src, columns: [], rows: [] }, { name: body.name || 'From a project' }));
+      } else if (body.live) {
         if (auth.role !== 'owner') return send(res, 403, { error: 'Only team owners can make lists from PSS.' });
         if (!db.pss[ws.id]) return send(res, 400, { error: 'Connect PSS in Settings first.' });
         l = fillLive(applyList({ id: rid(), wsId: ws.id, campaignId: c.id, itemId: null, by: auth.member, createdAt: Date.now(), kind: 'calls', live: applyLive(body.live), columns: [], rows: [] }, { name: body.name || 'PSS leads' }));
@@ -5298,7 +5309,26 @@ async function importData(req, res) {
 }
 
 // Projects and the public API (projects.js).
-const PJ = projectsModule({ db, save, broadcast, rid, cleanText, isDay, readJson, send, badRequest, isOwnerId, escHtml, brandOf, logoUrl, allowLocalHooks: process.env.ALLOW_LOCAL_WEBHOOKS === '1' });
+const PJ = projectsModule({ db, save, broadcast, rid, cleanText, isDay, readJson, send, badRequest, isOwnerId, escHtml, brandOf, logoUrl, allowLocalHooks: process.env.ALLOW_LOCAL_WEBHOOKS === '1',
+  // A follow-up from a record's timeline: a task for whoever logged it, about the record.
+  makeTask: (ws, auth, { text, due, recordId }) => {
+    const t = applyTask({ id: rid(), wsId: ws.id, by: auth.member, createdAt: Date.now(), text: '', done: false, doneAt: null, due: null, priority: 0, goalId: null, assigneeId: null }, { text, due, assigneeId: auth.memberId, recordId });
+    t.assignedBy = auth.memberId;
+    db.tasks[t.id] = t;
+    save();
+    broadcast(ws.id, { type: 'task', task: publicTask(t) });
+    return t;
+  },
+  // Campaign lists made from a project follow its records.
+  onRecords: (projectId) => {
+    for (const l of Object.values(db.lists)) {
+      if (l.fromProject?.projectId !== projectId) continue;
+      PJ.fillFromProject(l);
+      broadcast(l.wsId, { type: 'list', list: publicList(l) });
+    }
+    save();
+  },
+});
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://x');

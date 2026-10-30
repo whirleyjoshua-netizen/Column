@@ -125,7 +125,7 @@ export const TEMPLATES = {
   },
 };
 
-export function projectsModule({ db, save, broadcast, rid, cleanText, isDay, readJson, send, badRequest, isOwnerId, escHtml, brandOf, logoUrl, allowLocalHooks = false }) {
+export function projectsModule({ db, save, broadcast, rid, cleanText, isDay, readJson, send, badRequest, isOwnerId, escHtml, brandOf, logoUrl, makeTask, onRecords, allowLocalHooks = false }) {
   const bad = (msg) => badRequest(msg);
   db.projects ||= {};
   db.records ||= {};
@@ -143,9 +143,103 @@ export function projectsModule({ db, save, broadcast, rid, cleanText, isDay, rea
   };
 
   const publicProject = ({ wsId, ...p }) => p;
-  const publicRecord = ({ wsId, ...r }) => r;
+  const publicRecord = ({ wsId, log, ...r }) => r;
   const typeOf = (p, typeId) => p.types.find((t) => t.id === typeId || t.key === typeId);
   const fieldOf = (t, id) => t.fields.find((f) => f.id === id || f.key === id);
+
+  // ---------- a record's timeline ----------
+  // What happened to a record, newest first: made, fields changed, quotes sent and answered, calls and emails
+  // (logged here or from a campaign's list), tasks, notes. Kept on the record, the newest 300.
+  const ACTS = ['call', 'email', 'meeting', 'note'];
+  const OUTCOMES = ['No answer', 'Not interested', 'Interested', 'Booked'];
+  function logTo(rec, entry) {
+    const e = { id: rid(6), at: Date.now(), ...entry };
+    // Quick edits to the same field by the same person are one change.
+    const last = rec.log?.[0];
+    if (e.kind === 'change' && last?.kind === 'change' && last.field === e.field && last.by === e.by && e.at - last.at < 120_000) {
+      last.to = e.to;
+      last.at = e.at;
+      if (last.from === last.to) rec.log.shift();
+    } else rec.log = [e, ...(rec.log || [])].slice(0, 300);
+    broadcast(rec.wsId, { type: 'record:log', recordId: rec.id, projectId: rec.projectId, log: (rec.log || []).slice(0, 50) });
+    return e;
+  }
+  // A value as words, for the timeline.
+  function words(ws, p, f, v) {
+    if (v == null || v === '') return '';
+    if (f.type === 'money') return '$' + (v / 100).toLocaleString('en-US', { minimumFractionDigits: v % 100 ? 2 : 0 });
+    if (f.type === 'select') return f.choices.find((c) => c.id === v)?.label || '';
+    if (f.type === 'multi') return v.map((id) => f.choices.find((c) => c.id === id)?.label).filter(Boolean).join(', ');
+    if (f.type === 'person') return ws.members.find((m) => m.id === v)?.name || '';
+    if (f.type === 'checkbox') return v ? 'yes' : '';
+    if (f.type === 'link') { const to = p.types.find((t) => t.id === f.target); return v.map((id) => db.records[id] && to ? String(db.records[id].values[to.primary] ?? '') : '').filter(Boolean).join(', '); }
+    if (f.type === 'items') return '$' + (itemsTotals(v).total / 100).toLocaleString('en-US', { minimumFractionDigits: 2 });
+    if (f.type === 'files') return `${v.length} file${v.length === 1 ? '' : 's'}`;
+    return String(v).slice(0, 120);
+  }
+  // Fields that changed between two sets of values, each logged.
+  function logChanges(ws, p, t, rec, before, by) {
+    for (const f of t.fields) {
+      if (f.type === 'autonumber') continue;
+      const a = JSON.stringify(before[f.id] ?? null), b = JSON.stringify(rec.values[f.id] ?? null);
+      if (a === b) continue;
+      const from = words(ws, p, f, before[f.id]), to = words(ws, p, f, rec.values[f.id]);
+      if (from !== to) logTo(rec, { kind: 'change', field: f.name, from, to, by });
+    }
+  }
+  // Activity from elsewhere: a call logged from a campaign's list, a task made or done.
+  function recordActivity(recordId, entry) {
+    const rec = db.records[recordId];
+    if (!rec) return null;
+    const e = logTo(rec, entry);
+    // A call, email or meeting is contact: the record's "Last contacted" day moves up.
+    if (['call', 'email', 'meeting'].includes(entry.kind)) {
+      const p = db.projects[rec.projectId];
+      const t = p && typeOf(p, rec.typeId);
+      const lc = t && fieldOf(t, 'last_contacted');
+      if (lc?.type === 'date') {
+        rec.values[lc.id] = new Date().toISOString().slice(0, 10);
+        rec.updatedAt = Date.now();
+        broadcast(rec.wsId, { type: 'record', record: publicRecord(rec), projectId: rec.projectId });
+      }
+    }
+    save();
+    return e;
+  }
+  const recName = (p, rec) => { const t = typeOf(p, rec.typeId); return String(rec.values[t?.primary] ?? '').trim() || t?.singular || 'Record'; };
+  // A campaign's call list made from a project's records: a row each, kept current as records change.
+  function fillFromProject(l) {
+    const src = l.fromProject;
+    const p = db.projects[src?.projectId];
+    const t = p && typeOf(p, src.typeId);
+    if (!t) return l;
+    const shown = [fieldOf(t, t.primary), ...t.fields.filter((f) => f.id !== t.primary && ['phone', 'email', 'text', 'select', 'link'].includes(f.type) && !f.hidden)].slice(0, 7);
+    const ws = db.workspaces[l.wsId];
+    const was = new Map((l.rows || []).map((r) => [r.id, r]));
+    l.columns = shown.map((f) => f.name);
+    l.rows = Object.values(db.records).filter((r) => r.projectId === p.id && r.typeId === t.id && (!src.filter?.field || !src.filter.is?.length || src.filter.is.includes(String(r.values[src.filter.field] ?? ''))))
+      .sort((a, b) => a.createdAt - b.createdAt).slice(0, 5000).map((r) => {
+        const row = { id: r.id, recordId: r.id, cells: shown.map((f) => words(ws, p, f, r.values[f.id])) };
+        const old = was.get(row.id);
+        for (const k of ['stage', 'note', 'by', 'at']) if (old?.[k] !== undefined) row[k] = old[k];
+        return row;
+      });
+    l.syncedAt = Date.now();
+    return l;
+  }
+  const fromProjectOk = (ws, auth, v) => {
+    const p = db.projects[v?.projectId];
+    const t = p && p.wsId === ws.id && sees(p, auth.memberId) && typeOf(p, v.typeId);
+    if (!t) return null;
+    const f = v.filter?.field && fieldOf(t, v.filter.field);
+    return { projectId: p.id, typeId: t.id, ...(f ? { filter: { field: f.id, is: (Array.isArray(v.filter.is) ? v.filter.is : []).slice(0, 50).map(String) } } : {}) };
+  };
+  // Lists made from a project refill a moment after its records change.
+  const refill = new Map();
+  function recordsChanged(projectId) {
+    clearTimeout(refill.get(projectId));
+    refill.set(projectId, setTimeout(() => { refill.delete(projectId); onRecords?.(projectId); }, 400));
+  }
 
   // ---------- making projects from templates ----------
   function fromTemplate(key) {
@@ -313,6 +407,7 @@ export function projectsModule({ db, save, broadcast, rid, cleanText, isDay, rea
     broadcast(p.wsId, { type: 'project', project: publicProject(p), projectId: p.id });
   }
   function recordNews(rec, event, by) {
+    recordsChanged(rec.projectId);
     save();
     broadcast(rec.wsId, { type: 'record', record: publicRecord(rec), projectId: rec.projectId });
     hooksFire(rec, event, by);
@@ -336,6 +431,7 @@ export function projectsModule({ db, save, broadcast, rid, cleanText, isDay, rea
         broadcast(r.wsId, { type: 'record', record: publicRecord(r), projectId: r.projectId });
       }
     }
+    recordsChanged(rec.projectId);
     save();
     broadcast(rec.wsId, { type: 'record:remove', id: rec.id, projectId: rec.projectId });
     hooksFire(rec, 'record.deleted', by);
@@ -349,6 +445,7 @@ export function projectsModule({ db, save, broadcast, rid, cleanText, isDay, rea
     if (t.fields.some((f) => f.type === 'autonumber')) projectNews(p);
     applyValues(ws, p, t, rec, values, opts);
     db.records[rec.id] = rec;
+    rec.log = [{ id: rid(6), at: rec.createdAt, kind: 'created', by: auth.member }];
     return rec;
   }
 
@@ -529,7 +626,9 @@ export function projectsModule({ db, save, broadcast, rid, cleanText, isDay, rea
               rec = key != null ? index.get(String(key).toLowerCase()) : null;
             }
             if (rec) {
+              const before = { ...rec.values };
               applyValues(ws, p, t, rec, row, { addChoices: true });
+              logChanges(ws, p, t, rec, before, auth.member);
               rec.updatedAt = Date.now();
               broadcast(rec.wsId, { type: 'record', record: publicRecord(rec), projectId: p.id });
               hooksFire(rec, 'record.updated', auth.member);
@@ -580,7 +679,9 @@ export function projectsModule({ db, save, broadcast, rid, cleanText, isDay, rea
       const t = typeOf(p, rec.typeId);
       if (m === 'PATCH' && !c) {
         const body = await readJson(req, 200_000);
+        const before = { ...rec.values };
         applyValues(ws, p, t, rec, body.values, { addChoices: false });
+        logChanges(ws, p, t, rec, before, auth.member);
         if (body.docId !== undefined) rec.docId = db.items[body.docId]?.wsId === ws.id && db.items[body.docId].type === 'text' ? body.docId : null;
         rec.updatedAt = Date.now();
         recordNews(rec, 'record.updated', auth.member);
@@ -590,6 +691,30 @@ export function projectsModule({ db, save, broadcast, rid, cleanText, isDay, rea
         recordGone(rec, auth.member);
         return send(res, 200, { ok: true });
       }
+      if (c === 'log' && m === 'GET') return send(res, 200, rec.log || []);
+      // Logging a call, email, meeting or note on the record; a follow-up date makes a task.
+      if (c === 'log' && m === 'POST') {
+        const body = await readJson(req, 20_000);
+        const kind = ACTS.includes(body.kind) ? body.kind : 'note';
+        const note = cleanText(body.note, 4000);
+        const outcome = kind === 'call' && OUTCOMES.includes(body.outcome) ? body.outcome : null;
+        if (!note && !outcome) return send(res, 400, { error: 'Write what happened.' });
+        const e = recordActivity(rec.id, { kind, outcome, note, by: auth.member, memberId: auth.memberId });
+        if (isDay(body.followUp) && makeTask) {
+          const task = makeTask(ws, auth, { text: `Follow up with ${recName(p, rec)}${outcome ? ` (${outcome.toLowerCase()})` : ''}`, due: body.followUp, recordId: rec.id });
+          if (task) e.taskId = task.id;
+        }
+        save();
+        return send(res, 200, rec.log);
+      }
+      if (c === 'log' && m === 'DELETE' && d) {
+        const e = (rec.log || []).find((x) => x.id === d);
+        if (!e || !ACTS.includes(e.kind) || (e.memberId !== auth.memberId && auth.role !== 'owner')) return send(res, 403, { error: 'You can only remove calls and notes you logged.' });
+        rec.log = rec.log.filter((x) => x !== e);
+        save();
+        broadcast(rec.wsId, { type: 'record:log', recordId: rec.id, projectId: rec.projectId, log: rec.log.slice(0, 50) });
+        return send(res, 200, rec.log);
+      }
       // Sending a quote: a link of its own for the customer. Making it marks a draft as sent.
       if (c === 'share' && t.fields.some((f) => f.type === 'items')) {
         if (m === 'POST') {
@@ -598,6 +723,7 @@ export function projectsModule({ db, save, broadcast, rid, cleanText, isDay, rea
           rec.share = { token: rec.share?.token || crypto.randomBytes(18).toString('base64url'), createdAt: Date.now(), expiresAt: hours ? Date.now() + hours * 3600_000 : null, by: auth.member };
           const st = quoteStatus(t, rec);
           if (!st || st === 'draft') setStatus(p, t, rec, 'Sent');
+          logTo(rec, { kind: 'quote', what: 'sent', by: auth.member });
           const issued = fieldOf(t, 'issued');
           if (issued?.type === 'date' && !rec.values[issued.id]) rec.values[issued.id] = today();
         } else if (m === 'DELETE') rec.share = null;
@@ -719,6 +845,7 @@ export function projectsModule({ db, save, broadcast, rid, cleanText, isDay, rea
         if (by?.type === 'text') rec.values[by.id] = act === 'accept' ? name : `Declined${name ? ' by ' + name : ''}${form.reason ? ': ' + cleanText(form.reason, 500) : ''}`;
         if (on?.type === 'date') rec.values[on.id] = today();
         rec.answer = { act, name, reason: cleanText(form.reason, 500), at: Date.now() };
+        logTo(rec, { kind: 'quote', what: act === 'accept' ? 'accepted' : 'declined', by: name || 'The customer', note: rec.answer.reason || '' });
         rec.updatedAt = Date.now();
         const items = t.fields.find((f) => f.type === 'items');
         broadcast(rec.wsId, { type: 'quote:answer', projectId: p.id, recordId: rec.id, act, name: name || 'The customer', title: quoteTitle(t, rec), total: items ? itemsTotals(rec.values[items.id]).total : 0 });
@@ -731,6 +858,7 @@ export function projectsModule({ db, save, broadcast, rid, cleanText, isDay, rea
     // Opening it marks a sent quote viewed.
     if (status === 'sent') {
       setStatus(p, t, rec, 'Viewed');
+      logTo(rec, { kind: 'quote', what: 'viewed', by: 'The customer' });
       rec.updatedAt = Date.now();
       recordNews(rec, 'record.updated', 'Customer');
     }
@@ -870,6 +998,7 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
       return send(res, 404, { error: 'Not found. Start at GET /api/v1/projects.' });
     }
     const [, p_, t_, sub_, rid_, extra_] = parts;
+    const sub2 = rid_ && rid_ !== 'external' ? extra_ : null;
     // A key is the team's, so it reaches the team's projects, never anyone's private ones.
     if (m === 'GET' && !p_) return send(res, 200, { projects: Object.values(db.projects).filter((p) => p.wsId === ws.id && !p.private).map(outSchema) });
     const p = db.projects[p_];
@@ -911,7 +1040,9 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
         const body = await readJson(req, 200_000);
         const fields = inFields(t, body.fields);
         if (rec) {
+          const before = { ...rec.values };
           applyValues(ws, p, t, rec, fields, { addChoices: true });
+          logChanges(ws, p, t, rec, before, auth.member);
           rec.updatedAt = Date.now();
           recordNews(rec, 'record.updated', auth.member);
           return send(res, 200, outRecord(ws, p, t, rec));
@@ -924,11 +1055,27 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
     }
     const rec = rid_ && db.records[rid_];
     if (!rec || rec.projectId !== p.id || rec.typeId !== t.id) return send(res, 404, { error: 'No record with that id in this list.' });
+    if (sub2 === 'timeline') {
+      if (m === 'GET') return send(res, 200, { timeline: (rec.log || []).map(({ memberId, ...e }) => ({ ...e, at: new Date(e.at).toISOString() })) });
+      if (m === 'POST') {
+        write();
+        const body = await readJson(req, 20_000);
+        const kind = ACTS.includes(body.kind) ? body.kind : 'note';
+        const note = cleanText(body.note, 4000);
+        const outcome = kind === 'call' && OUTCOMES.includes(body.outcome) ? body.outcome : null;
+        if (!note && !outcome) return send(res, 400, { error: 'Send a note, or an outcome for a call.' });
+        const e = recordActivity(rec.id, { kind, outcome, note, by: auth.member });
+        return send(res, 201, { ...e, at: new Date(e.at).toISOString() });
+      }
+      return send(res, 405, { error: 'Use GET or POST.' });
+    }
     if (m === 'GET') return send(res, 200, outRecord(ws, p, t, rec));
     if (m === 'PATCH') {
       write();
       const body = await readJson(req, 200_000);
+      const before = { ...rec.values };
       applyValues(ws, p, t, rec, inFields(t, body.fields), { addChoices: true });
+      logChanges(ws, p, t, rec, before, auth.member);
       if (body.external_id !== undefined) rec.extId = body.external_id ? cleanText(body.external_id, 200) : null;
       rec.updatedAt = Date.now();
       recordNews(rec, 'record.updated', auth.member);
@@ -1008,5 +1155,5 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
   // What the app needs at sign-in: the projects this person sees (records load when a project opens).
   const stateFor = (ws, auth) => Object.values(db.projects).filter((p) => p.wsId === ws.id && sees(p, auth.memberId)).map(publicProject);
 
-  return { route, v1, quotePage, seesMsg, stateFor, sees, TEMPLATES: Object.fromEntries(Object.entries(TEMPLATES).map(([k, t]) => [k, { name: t.name, icon: t.icon, about: t.about }])) };
+  return { route, v1, quotePage, seesMsg, stateFor, sees, recordActivity, fillFromProject, fromProjectOk, TEMPLATES: Object.fromEntries(Object.entries(TEMPLATES).map(([k, t]) => [k, { name: t.name, icon: t.icon, about: t.about }])) };
 }

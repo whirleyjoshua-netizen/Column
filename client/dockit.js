@@ -35,8 +35,9 @@ window.ColumnDocs = (() => {
     { type: 'live:calls', live: 'calls', label: 'Call stats', hint: 'Calls and emails logged, by outcome', keys: 'calls stats log attempts outcomes live report' },
     { type: 'live:budgets', live: 'budgets', label: 'Budgets', hint: 'This month against each budget', keys: 'budget money finance spending live' },
     { type: 'live:list', live: 'list', label: 'Call list', hint: 'How far through a list you are', keys: 'call list prospects contacted live' },
+    { type: 'live:pipeline', live: 'pipeline', label: 'Pipeline', hint: 'A project’s deals or quotes by stage, with totals', keys: 'pipeline deals quotes bids stages project crm forecast live' },
   ];
-  const LIVE_NAME = { campaign: 'Campaign summary', goal: 'Goal progress', tasks: 'Task list', calls: 'Call stats', budgets: 'Budgets', list: 'Call list' };
+  const LIVE_NAME = { campaign: 'Campaign summary', goal: 'Goal progress', tasks: 'Task list', calls: 'Call stats', budgets: 'Budgets', list: 'Call list', pipeline: 'Pipeline' };
   const LABEL = Object.fromEntries(COMMANDS.map((c) => [c.type, c.label]));
   const PH = { p: 'Type “/” for blocks', h1: 'Heading 1', h2: 'Heading 2', h3: 'Heading 3', ul: 'List', ol: 'List', todo: 'To-do', toggle: 'Toggle', quote: 'Quote', callout: 'Write something', code: 'Code' };
 
@@ -1973,7 +1974,7 @@ window.ColumnDocs = (() => {
       }
     });
 
-    const ICON = { p: 'Aa', h1: 'H1', h2: 'H2', h3: 'H3', ul: '•', ol: '1.', todo: '☑', toggle: '▸', quote: '❝', callout: '💡', code: '</>', divider: '—', table: '▦', image: '🖼', file: '📎', task: '✓', mention: '@', ai: '✦', 'live:campaign': '◎', 'live:goal': '▰', 'live:tasks': '☰', 'live:calls': '☏', 'live:budgets': '$', 'live:list': '≡' };
+    const ICON = { p: 'Aa', h1: 'H1', h2: 'H2', h3: 'H3', ul: '•', ol: '1.', todo: '☑', toggle: '▸', quote: '❝', callout: '💡', code: '</>', divider: '—', table: '▦', image: '🖼', file: '📎', task: '✓', mention: '@', ai: '✦', 'live:campaign': '◎', 'live:goal': '▰', 'live:tasks': '☰', 'live:calls': '☏', 'live:budgets': '$', 'live:list': '≡', 'live:pipeline': '▥' };
     // Live blocks, task chips and mention names drawn again from the app's data, leaving the caret alone.
     function refresh() {
       const at = document.activeElement;
