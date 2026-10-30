@@ -310,9 +310,178 @@ function migrateDay() {
 }
 
 function publicItem(it) {
-  const { wsId, files, ...rest } = it;
+  const { wsId, files, blocks, ...rest } = it;
   if (files) rest.files = files.map((f, i) => ({ i, relPath: f.relPath, size: f.size }));
   return rest;
+}
+
+// ---------- docs: notes written as blocks, like a Notion page ----------
+// A doc is a note (an item of type "text") with a title and a list of blocks. Its text is kept as a plain
+// copy of the whole thing (# headings, - bullets), so search, copy, Sidekick and the cards read it as before.
+// The blocks go out only when the doc is opened. Notes from before docs have only text: they read as blocks
+// the first time they're opened, and become blocks for good the first time they're edited.
+// Blocks are flat; nesting is an indent. Text is runs of plain text with marks, never markup.
+const DOC_TYPES = ['p', 'h1', 'h2', 'h3', 'ul', 'ol', 'todo', 'quote', 'callout', 'code', 'toggle', 'divider', 'table', 'file'];
+const DOC_TEXT_TYPES = new Set(['p', 'h1', 'h2', 'h3', 'ul', 'ol', 'todo', 'quote', 'callout', 'code', 'toggle']);
+const DOC_BLOCKS = 5000;
+const DOC_BLOCK_CHARS = 20_000;
+const docId = (v) => (typeof v === 'string' && /^[\w-]{1,24}$/.test(v) ? v : null);
+const docLink = (v) => {
+  const u = String(v ?? '').trim().slice(0, 2000);
+  return /^(https?:\/\/|mailto:|tel:)/i.test(u) ? u : null;
+};
+// Runs: [{ text, b, i, u, s, code, link }]. Neighbours with the same marks are joined.
+function cleanRuns(v, plain) {
+  const out = [];
+  let room = DOC_BLOCK_CHARS;
+  for (const r of Array.isArray(v) ? v.slice(0, 2000) : []) {
+    const text = String(r?.text ?? '').replace(/\r\n?/g, '\n').slice(0, room);
+    if (!text) continue;
+    room -= text.length;
+    const run = { text };
+    if (!plain) {
+      for (const k of ['b', 'i', 'u', 's', 'code']) if (r[k]) run[k] = true;
+      const link = docLink(r.link);
+      if (link) run.link = link;
+    }
+    const last = out.at(-1);
+    if (last && ['b', 'i', 'u', 's', 'code', 'link'].every((k) => last[k] === run[k])) last.text += run.text;
+    else out.push(run);
+    if (!room) break;
+  }
+  return out;
+}
+function cleanDocBlock(v) {
+  const id = docId(v?.id);
+  const type = DOC_TYPES.includes(v?.type) ? v.type : null;
+  if (!id || !type) return null;
+  const x = { id, type };
+  const indent = Math.round(Number(v.indent) || 0);
+  if (indent > 0) x.indent = Math.min(8, indent);
+  if (DOC_TEXT_TYPES.has(type)) x.runs = cleanRuns(v.runs, type === 'code');
+  if (type === 'todo' && v.checked) x.checked = true;
+  if (type === 'toggle' && v.closed) x.closed = true;
+  if (type === 'callout') x.emoji = String(v.emoji || '💡').slice(0, 8);
+  if (type === 'code' && v.lang) x.lang = cleanText(v.lang, 20);
+  if (type === 'table') {
+    const rows = (Array.isArray(v.rows) ? v.rows : []).slice(0, 100).map((r) => (Array.isArray(r) ? r : []).slice(0, 20).map((c) => cleanRuns(c)));
+    const cols = Math.max(1, ...rows.map((r) => r.length));
+    x.rows = (rows.length ? rows : [[[]]]).map((r) => [...r, ...Array(cols - r.length).fill([])]);
+    if (v.header) x.header = true;
+  }
+  if (type === 'file') {
+    x.itemId = docId(v.itemId);
+    if (!x.itemId) return null;
+    x.name = cleanText(v.name, 255);
+  }
+  return x;
+}
+const runsText = (runs) => (runs || []).map((r) => r.text).join('');
+// The doc as plain text: # headings, - bullets, [ ] to-dos, > quotes.
+function docText(title, blocks) {
+  const n = {};
+  const lines = (blocks || []).map((b) => {
+    const pad = '  '.repeat(b.indent || 0);
+    const t = runsText(b.runs);
+    n[b.indent || 0] = b.type === 'ol' ? (n[b.indent || 0] || 0) + 1 : 0;
+    if (b.type === 'h1') return '# ' + t;
+    if (b.type === 'h2') return '## ' + t;
+    if (b.type === 'h3') return '### ' + t;
+    if (b.type === 'ul' || b.type === 'toggle') return pad + '- ' + t;
+    if (b.type === 'ol') return `${pad}${n[b.indent || 0]}. ${t}`;
+    if (b.type === 'todo') return `${pad}[${b.checked ? 'x' : ' '}] ${t}`;
+    if (b.type === 'quote') return pad + '> ' + t;
+    if (b.type === 'callout') return `${pad}${b.emoji || ''} ${t}`;
+    if (b.type === 'code') return '```\n' + t + '\n```';
+    if (b.type === 'divider') return '---';
+    if (b.type === 'table') return b.rows.map((r) => '| ' + r.map(runsText).join(' | ') + ' |').join('\n');
+    if (b.type === 'file') return `[${b.name || 'File'}]`;
+    return pad + t;
+  });
+  // The title is always the first line, even when it's empty.
+  return [title || '', ...lines].join('\n').replace(/\n{3,}/g, '\n\n').replace(/\s+$/, '').slice(0, 200_000);
+}
+// A plain note as a doc: its first line is the title, and the rest is read as # headings, - bullets and so on.
+// Ids come from the line's place, so reading the same note twice gives the same blocks.
+function textToDoc(text) {
+  const lines = String(text || '').replace(/\r\n?/g, '\n').split('\n');
+  while (lines.length && !lines[0].trim()) lines.shift();
+  const first = (lines[0] || '').trim();
+  const title = first.length <= 140 ? first.replace(/^#{1,3}\s+/, '') : '';
+  const blocks = [];
+  let code = null;
+  const plainRuns = (t) => (t ? [{ text: t }] : []);
+  lines.slice(title || !first ? 1 : 0).forEach((line, i) => {
+    const id = 'n' + i;
+    if (code) {
+      if (/^```/.test(line.trim())) { code = null; return; }
+      code.runs = plainRuns((runsText(code.runs) ? runsText(code.runs) + '\n' : '') + line);
+      return;
+    }
+    if (!line.trim()) return;
+    const indent = Math.min(8, Math.floor(line.match(/^ */)[0].length / 2));
+    const l = line.trim();
+    let m;
+    const add = (type, t, more) => blocks.push({ id, type, ...(indent && type !== 'h1' && type !== 'h2' && type !== 'h3' ? { indent } : {}), runs: plainRuns(t), ...more });
+    if (/^```/.test(l)) blocks.push((code = { id, type: 'code', runs: [] }));
+    else if (/^(-{3,}|\*{3,})$/.test(l)) blocks.push({ id, type: 'divider' });
+    else if ((m = l.match(/^(#{1,3})\s+(.*)$/))) add('h' + m[1].length, m[2]);
+    else if ((m = l.match(/^[-*+]\s+\[([ xX])\]\s*(.*)$/)) || (m = l.match(/^\[([ xX])\]\s*(.*)$/))) add('todo', m[2], m[1].trim() ? { checked: true } : {});
+    else if ((m = l.match(/^[-*+•]\s+(.*)$/))) add('ul', m[1]);
+    else if ((m = l.match(/^\d+[.)]\s+(.*)$/))) add('ol', m[1]);
+    else if ((m = l.match(/^>\s?(.*)$/))) add('quote', m[1]);
+    else add('p', l);
+  });
+  return { title, blocks: blocks.map(cleanDocBlock).filter(Boolean) };
+}
+// The doc as it is now: its blocks, or its text read as blocks.
+const docOf = (it) => (it.blocks ? { title: it.title || '', blocks: it.blocks } : textToDoc(it.text));
+// Puts blocks in the order given. Blocks the order doesn't mention (added by someone else meanwhile) stay
+// after the block they followed.
+function docOrder(blocks, order) {
+  const byId = new Map(blocks.map((b) => [b.id, b]));
+  const out = [...new Set(order)].filter((id) => byId.has(id)).map((id) => byId.get(id));
+  const placed = new Set(out.map((b) => b.id));
+  blocks.forEach((b, i) => {
+    if (placed.has(b.id)) return;
+    const before = blocks.slice(0, i).reverse().find((y) => placed.has(y.id));
+    out.splice(before ? out.indexOf(before) + 1 : 0, 0, b);
+    placed.add(b.id);
+  });
+  return out;
+}
+// Changes from one editor: blocks set (added or replaced) or deleted, and maybe a new order. The last
+// change to a block wins; two people rarely type in the same one.
+function applyDocOps(blocks, ops, order) {
+  let out = blocks.slice();
+  for (const op of ops) {
+    if (op.del) out = out.filter((b) => b.id !== op.del);
+    else if (op.set) {
+      const i = out.findIndex((b) => b.id === op.set.id);
+      if (i >= 0) out[i] = op.set;
+      else {
+        const after = op.after ? out.findIndex((b) => b.id === op.after) : -1;
+        out.splice(after + 1, 0, op.set);
+      }
+    }
+  }
+  return order ? docOrder(out, order) : out;
+}
+function cleanDocOps(v) {
+  return (Array.isArray(v) ? v.slice(0, DOC_BLOCKS * 2) : []).map((op) => {
+    if (op?.del) return docId(op.del) ? { del: op.del } : null;
+    const set = cleanDocBlock(op?.set);
+    return set ? { set, after: docId(op.after) } : null;
+  }).filter(Boolean);
+}
+// Files shown in a doc stay as long as the doc does.
+function pinDocFiles(ws, blocks) {
+  for (const b of blocks) {
+    const it = b.type === 'file' && db.items[b.itemId];
+    if (!it || it.wsId !== ws.id || it.pinned) continue;
+    it.pinned = true;
+    broadcast(ws.id, { type: 'item:update', item: publicItem(it) });
+  }
 }
 
 // Day planner entries: a note (start only, or no time = "anytime") or a block (start + end).
@@ -1724,7 +1893,7 @@ async function pdfWork(fn) {
 const copyName = (name, what) => `${name.replace(/\.pdf$/i, '').replace(/ \((signed|filled)\)$/, '')} (${what}).pdf`;
 // A document from the editor, checked over before it becomes a PDF: text blocks, lists, tables (text only),
 // PNG or JPEG pictures and page breaks. Anything else is dropped.
-const DOC_TYPES = ['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'li'];
+const PDF_TYPES = ['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'li'];
 function cleanBlocks(list, budget = { blocks: 20000, pics: 30 }, inCell = false) {
   const out = [];
   if (!Array.isArray(list)) return out;
@@ -1736,7 +1905,7 @@ function cleanBlocks(list, budget = { blocks: 20000, pics: 30 }, inCell = false)
     if (--budget.blocks < 0) break;
     if (!b || typeof b !== 'object') continue;
     const align = ['center', 'right', 'justify'].includes(b.align) ? b.align : '';
-    if (DOC_TYPES.includes(b.t)) {
+    if (PDF_TYPES.includes(b.t)) {
       out.push({ t: b.t, align, runs: runs(b.runs), ...(b.t === 'li' ? { ordered: !!b.ordered, n: Math.max(1, Math.min(9999, b.n | 0)), lvl: Math.max(0, Math.min(8, b.lvl | 0)) } : {}) });
     } else if (inCell) continue;
     else if (b.t === 'break') out.push({ t: 'break' });
@@ -4398,10 +4567,12 @@ async function api(req, res, url) {
 
   if (a === 'items') {
     if (m === 'POST' && !b) {
-      const { type, text, stackId, channelId, parentId, dirId } = await readJson(req, 300_000);
+      const { type, text, stackId, channelId, parentId, dirId, doc } = await readJson(req, 4_000_000);
       if (!['text', 'message'].includes(type)) return send(res, 400, { error: 'Bad type' });
-      const t = String(text || '').slice(0, 200_000);
-      if (!t.trim()) return send(res, 400, { error: 'Empty' });
+      // A doc made as one: a title and blocks, and it can start empty. It never auto-clears.
+      const made = type === 'text' && doc && typeof doc === 'object' ? { title: cleanText(doc.title, 300), blocks: (Array.isArray(doc.blocks) ? doc.blocks.slice(0, DOC_BLOCKS) : []).map(cleanDocBlock).filter(Boolean) } : null;
+      const t = made ? docText(made.title, made.blocks) : String(text || '').slice(0, 200_000);
+      if (!made && !t.trim()) return send(res, 400, { error: 'Empty' });
       // A reply lives in its parent's thread and feed. Threads are one level deep.
       const parent = parentId ? db.items[parentId] : null;
       if (parentId && (type !== 'message' || !parent || parent.wsId !== ws.id || parent.type !== 'message' || parent.parentId || !canSee(auth, 'item', parent))) {
@@ -4410,14 +4581,40 @@ async function api(req, res, url) {
       const dir = type === 'text' && !parent ? validDir(ws, dirId, auth.memberId) : null;
       const where = parent ? { parentId: parent.id, channelId: parent.channelId || null } : dir ? { dirId: dir } : { stackId: validStack(ws, stackId, auth.memberId), channelId: validChannel(ws, channelId, auth.memberId) };
       if (!parent && channelId && !where.channelId) return send(res, 404, { error: 'Feed not found' });
-      const item = addItem(baseItem(auth, { type, text: t, ...where }));
+      const item = addItem(baseItem(auth, { type, text: t, ...where, ...(made ? { title: made.title, blocks: made.blocks, v: 0, pinned: true, editedAt: Date.now() } : {}) }));
       if (type === 'message') pinLinked(ws, t);
+      if (made) pinDocFiles(ws, made.blocks);
       return send(res, 200, publicItem(item));
     }
     const it = b && db.items[b];
     if (!it || it.wsId !== ws.id || !canSee(auth, 'item', it)) return send(res, 404, { error: 'Not found' });
     // Messages: only the author edits; the author or an owner deletes.
     const own = it.memberId ? it.memberId === auth.memberId : it.deviceId === auth.deviceId;
+    // A doc's blocks, to open it; and changes to it from an editor. Anyone who can see a note can edit it.
+    if (c === 'doc' && it.type === 'text') {
+      if (m === 'GET') return send(res, 200, { id: it.id, v: it.v || 0, ...docOf(it) });
+      if (m !== 'PATCH') return send(res, 405, { error: 'Method not allowed' });
+      const body = await readJson(req, 4_000_000);
+      const ops = cleanDocOps(body.ops);
+      const order = Array.isArray(body.order) ? body.order.slice(0, DOC_BLOCKS * 2).filter(docId) : null;
+      const title = body.title !== undefined ? cleanText(body.title, 300) : undefined;
+      const now = docOf(it);
+      const blocks = applyDocOps(now.blocks, ops, order);
+      if (blocks.length > DOC_BLOCKS) return send(res, 400, { error: `A doc can have ${DOC_BLOCKS} blocks. Split it into two.` });
+      it.blocks = blocks;
+      it.title = title ?? now.title;
+      it.text = docText(it.title, it.blocks);
+      it.v = (it.v || 0) + 1;
+      it.editedAt = Date.now();
+      it.pinned = true;
+      pinLinked(ws, it.text);
+      pinDocFiles(ws, ops.filter((o) => o.set).map((o) => o.set));
+      save();
+      // The editors with it open apply the same changes; the cards just show the new text.
+      broadcast(ws.id, { type: 'doc', id: it.id, item: { id: it.id }, v: it.v, ops, order, title, sid: cleanText(body.sid, 40) });
+      broadcast(ws.id, { type: 'item:update', item: publicItem(it) });
+      return send(res, 200, { v: it.v, editedAt: it.editedAt });
+    }
     if (c === 'react' && m === 'POST' && it.type === 'message') {
       const emoji = String((await readJson(req)).emoji || '').trim();
       if (!emoji || emoji.length > 16) return send(res, 400, { error: 'Bad emoji' });
@@ -4454,6 +4651,13 @@ async function api(req, res, url) {
           it.text = t;
           it.editedAt = Date.now();
           pinLinked(ws, t);
+          // A doc changed as plain text is read as blocks again, and editors with it open load it fresh.
+          if (it.blocks) {
+            delete it.blocks;
+            delete it.title;
+            it.v = (it.v || 0) + 1;
+            broadcast(ws.id, { type: 'doc', id: it.id, item: { id: it.id }, v: it.v, reload: true });
+          }
         }
       }
       if (body.pinned !== undefined) it.pinned = !!body.pinned;

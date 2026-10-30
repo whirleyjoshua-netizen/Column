@@ -395,8 +395,11 @@
       render();
       renderCamps();
       refreshLinks();
+    } else if (msg.type === 'doc') {
+      docNews(msg);
     } else if (msg.type === 'item:remove') {
       S.items = S.items.filter((x) => x.id !== msg.id);
+      if (DV.doc?.id === msg.id) { closeDoc(true); toast('That doc was deleted.'); }
       if (msg.id === VIEW_ID) openViewer();
       checkThread();
       render();
@@ -756,9 +759,10 @@
         openPicker(wrap, addLink);
       }
     });
-    const add = h('button', { class: 'add', title: 'Add files or a new document', onclick: (e) => openMenu(e.currentTarget, [
+    const add = h('button', { class: 'add', title: 'Add a doc or files', onclick: (e) => openMenu(e.currentTarget, [
+      { label: 'New doc', run: () => newDoc(destOf(view)) },
       { label: 'Upload files…', run: () => pickFiles(destOf(view)) },
-      { label: 'New document', run: () => newDocSheet(destOf(view)) },
+      { label: 'New Word document', run: () => newDocSheet(destOf(view)) },
     ]) }, '+');
     if (!chat) return h('div', { class: 'composer' }, add, ta);
     const linkBtn = h('button', { class: 'add link-btn', title: 'Link a stack, file or task  ([[)', 'aria-label': 'Link a stack, file or task', html: I.link, onclick: () => openPicker(wrap, addLink) });
@@ -912,11 +916,10 @@
   function cardEl(it) {
     const k = kind(it);
     if (it.type === 'text') {
-      const el = h('article', { class: 'card text' + (it.pinned ? ' pinned' : ''), draggable: 'true' },
-        h('div', { class: 'meta' }, h('div', { class: 'snippet', html: linkify(it.text) }), subline(it)),
+      const el = h('article', { class: 'card text doc-card' + (it.pinned ? ' pinned' : ''), draggable: 'true', title: 'Open the doc' },
+        h('div', { class: 'meta', onclick: () => openDoc(it) }, h('div', { class: 'doc-card-t' }, docTitle(it)), docSnippet(it) ? h('div', { class: 'snippet' }, docSnippet(it)) : null, subline(it)),
         actionsEl(it)
       );
-      el.addEventListener('dblclick', () => openPreview(it));
       wireDrag(el, it);
       return el;
     }
@@ -1397,6 +1400,7 @@
   // ---------- preview ----------
   // standalone: the whole page is this file (a window of its own), so there's nothing to close back to.
   function openPreview(it, { standalone = false, edit = false } = {}) {
+    if (it.type === 'text' && !standalone) return openDoc(it);
     const pv = $('#preview');
     pv.innerHTML = '';
     const k = kind(it);
@@ -1493,6 +1497,7 @@
       if (!$('#sheet').classList.contains('hidden')) closeSheet();
       else if (pdfStop()) return;
       else if (!$('#preview').classList.contains('hidden') && !VIEW_ID) { if (!wordGuard()) { $('#preview').classList.add('hidden'); $('#preview').innerHTML = ''; } }
+      else if (DV.doc) { if (!e.defaultPrevented && $('#menu').classList.contains('hidden')) closeDoc(); }
       else if (!$('#settings').classList.contains('hidden')) $('#settings').classList.add('hidden');
       hideMenu();
     }
@@ -2597,7 +2602,7 @@
   // Saved on the task as a note in its campaign's stack, so it's one tap away when the task is worked.
   async function noteOnTask(t, title, text) {
     const camp = campById(goalById(t.goalId)?.campaignId);
-    const it = await api('POST', '/items', { type: 'text', text: [title, text].filter(Boolean).join('\n\n'), stackId: camp?.stackId || null });
+    const it = await api('POST', '/items', { type: 'text', doc: { title: title || '', blocks: ColumnDocs.fromText(text) }, stackId: camp?.stackId || null });
     const now = taskById(t.id) || t;
     await patchTask(now, { files: [...new Set([...(now.files || []), it.id])] });
     renderCamps();
@@ -4616,65 +4621,16 @@
 
   // Notes are text cards in the campaign's stack, so they sit in the stack next to its files.
   const notesOf = (c) => S.items.filter((it) => it.stackId === c.stackId && it.type === 'text').sort((a, b) => (b.editedAt || b.createdAt) - (a.editedAt || a.createdAt));
-  const noteTitle = (it) => it.text.trim().split('\n')[0].slice(0, 60) || 'Empty note';
   function notesMenu(anchor, c) {
     const notes = notesOf(c);
     openMenu(anchor, [
-      { label: '+ New note', run: () => noteWin(c) },
-      { label: '+ New document', run: () => newDocSheet({ stackId: c.stackId }) },
-      ...(notes.length ? [{ head: 'Recent notes' }] : []),
-      ...notes.slice(0, 8).map((it) => ({ label: h('span', { class: 'mfile' }, h('span', { class: 'mfile-name' }, noteTitle(it)), h('small', { class: 'mfile-when' }, ago(it.editedAt || it.createdAt))), run: () => noteWin(c, it) })),
-      { label: notes.length > 8 ? `Go to the stack · all ${notes.length} notes` : 'Go to the stack', run: () => showStack(c.stackId) },
+      { label: '+ New doc', run: () => newDoc({ stackId: c.stackId }) },
+      { label: '+ New Word document', run: () => newDocSheet({ stackId: c.stackId }) },
+      ...(notes.length ? [{ head: 'Recent docs' }] : []),
+      ...notes.slice(0, 8).map((it) => ({ label: h('span', { class: 'mfile' }, h('span', { class: 'mfile-name' }, docTitle(it)), h('small', { class: 'mfile-when' }, ago(it.editedAt || it.createdAt))), run: () => openDoc(it) })),
+      { label: notes.length > 8 ? `Go to the stack · all ${notes.length} docs` : 'Go to the stack', run: () => showStack(c.stackId) },
     ]);
   }
-  // A small window that floats over Column, so you can jot while the list stays in view. It saves as you type.
-  function noteWin(c, it = null) {
-    $('.note-win')?._close();
-    const ta = h('textarea', { class: 'note-ta', placeholder: 'Jot something…', 'aria-label': 'Note' });
-    ta.value = it?.text || '';
-    const status = h('small', { class: 'note-status' }, it ? 'Saved' : '');
-    let saved = ta.value, timer = null, saving = Promise.resolve();
-    const flush = () => {
-      clearTimeout(timer);
-      const text = ta.value;
-      if (text === saved || !text.trim()) return saving;
-      saved = text;
-      status.textContent = 'Saving…';
-      saving = saving.then(async () => {
-        try {
-          it = it ? await api('PATCH', '/items/' + it.id, { text }) : await api('POST', '/items', { type: 'text', text, stackId: c.stackId });
-          if (it?.id) upsert(it);
-          status.textContent = 'Saved';
-        } catch (e) {
-          saved = null;
-          status.textContent = 'Not saved';
-          toast(e.message);
-        }
-      });
-      return saving;
-    };
-    ta.addEventListener('input', () => {
-      status.textContent = '';
-      clearTimeout(timer);
-      timer = setTimeout(flush, 600);
-    });
-    const close = async () => {
-      await flush();
-      win.remove();
-      renderCamps();
-    };
-    ta.addEventListener('keydown', (e) => e.key === 'Escape' && close());
-    const win = h('div', { class: 'note-win', role: 'dialog', 'aria-label': 'Quick note' },
-      h('div', { class: 'note-top' },
-        h('b', {}, 'Note'), h('span', { class: 'note-camp' }, c.name), status,
-        h('button', { class: 'icon-btn', 'aria-label': 'Close note', html: I.close, onclick: close })),
-      ta);
-    win._close = close;
-    document.body.append(win);
-    ta.focus();
-    ta.setSelectionRange(ta.value.length, ta.value.length);
-  }
-
   // The Files button: the campaign's newest files to open, a way to add one, and the whole stack.
   function filesMenu(anchor, c) {
     const files = S.items.filter((it) => it.stackId === c.stackId && (it.type === 'file' || it.type === 'folder')).sort((a, b) => (b.editedAt || b.createdAt) - (a.editedAt || a.createdAt));
@@ -5352,8 +5308,8 @@
             html: mark(plainText(x.text), s), sub: `${isMine(x) ? 'You' : x.by} · ${feedOf(x)}${x.parentId ? ' thread' : ''} · ${ago(x.createdAt)}`, two: true, run: () => jumpTo(x) }))],
           ['Files', S.items.filter((x) => (x.type === 'file' || x.type === 'folder') && hit(x.name)).sort((a, b) => b.createdAt - a.createdAt).slice(0, 10)
             .map((x) => ({ icon: h('span', { class: 'pk-ic', html: x.type === 'folder' ? I.folder : I.link }), label: x.name, sub: fmtSize(x.size), run: () => openPreview(x) }))],
-          ['Notes', S.items.filter((x) => x.type === 'text' && hit(x.text)).sort((a, b) => b.createdAt - a.createdAt).slice(0, 10)
-            .map((x) => ({ icon: h('span', { class: 'pk-ic', html: I.copy }), html: mark(x.text, s), sub: ago(x.createdAt), two: true, run: () => openPreview(x) }))],
+          ['Docs', S.items.filter((x) => x.type === 'text' && hit(x.text)).sort((a, b) => (b.editedAt || b.createdAt) - (a.editedAt || a.createdAt)).slice(0, 10)
+            .map((x) => ({ icon: h('span', { class: 'pk-ic', html: I.copy }), label: docTitle(x), sub: `${docWhere(x)} · ${ago(x.editedAt || x.createdAt)}`, two: true, run: () => openDoc(x) }))],
           ['Campaigns', [...S.campaigns.filter((c) => hit(c.name) || hit(c.brief)).map((c) => ({ icon: h('span', { class: 'pk-ic', html: I.target }), label: c.name, sub: Math.round(campProgress(c) * 100) + '%', run: () => openCampaign(c.id) })),
             ...S.goals.filter((g) => hit(g.title)).slice(0, 10).map((g) => ({ icon: h('span', { class: 'pk-ic', html: I.target }), label: g.title, sub: `${campById(g.campaignId)?.name} · ${goalProgress(g).label}`, run: () => openCampaign(g.campaignId) }))]],
           ['Tasks', S.tasks.filter((t) => hit(t.text)).slice(0, 10)
@@ -5833,7 +5789,7 @@
   }
 
   // ---------- tools: small apps that open in a drawer, so the tabs stay as they are ----------
-  const TOOLS = { sidekick: { name: 'Sidekick', render: sidekickTool }, bills: { name: 'Finance', render: financeTool }, contacts: { name: 'Contacts', render: contactsTool }, email: { name: 'Email', render: emailTool }, meetings: { name: 'Meeting notes', render: meetingsTool }, planner: { name: 'Planner', render: plannerTool }, folders: { name: 'Folders', render: foldersTool }, map: { name: 'Map', render: mapTool }, signs: { name: 'Signatures', render: signsTool }, vault: { name: 'Vault', render: vaultTool } };
+  const TOOLS = { sidekick: { name: 'Sidekick', render: sidekickTool }, docs: { name: 'Docs', render: docsTool }, bills: { name: 'Finance', render: financeTool }, contacts: { name: 'Contacts', render: contactsTool }, email: { name: 'Email', render: emailTool }, meetings: { name: 'Meeting notes', render: meetingsTool }, planner: { name: 'Planner', render: plannerTool }, folders: { name: 'Folders', render: foldersTool }, map: { name: 'Map', render: mapTool }, signs: { name: 'Signatures', render: signsTool }, vault: { name: 'Vault', render: vaultTool } };
   let toolOpen = null;
   $('#toolsBtn').addEventListener('click', (e) => {
     const soon = billsSoon().length;
@@ -5841,6 +5797,7 @@
     openMenu(e.currentTarget, [
       { head: 'Tools' },
       { label: h('span', { class: 'tool-item' }, '✦ Sidekick', skNudges().length ? h('small', {}, `${skNudges().length} need${skNudges().length === 1 ? 's' : ''} a look`) : null), on: toolOpen === 'sidekick', run: () => { SK.open = null; openTool('sidekick'); } },
+      { label: 'Docs', on: toolOpen === 'docs', run: () => openTool('docs') },
       { label: h('span', { class: 'tool-item' }, 'Finance', soon || tight ? h('small', {}, [soon ? `${soon} due soon` : '', tight ? `${tight} budget${tight === 1 ? '' : 's'} nearly used` : ''].filter(Boolean).join(' · ')) : null), on: toolOpen === 'bills', run: () => openTool('bills') },
       amOwner() ? { label: 'Contacts', on: toolOpen === 'contacts', run: () => openTool('contacts') } : null,
       mayEmail() ? { label: h('span', { class: 'tool-item' }, 'Email', (S.mail?.sends || []).some((x) => x.status === 'sending') ? h('small', {}, 'sending…') : null), on: toolOpen === 'email', run: () => openTool('email') } : null,
@@ -6017,24 +5974,225 @@
       h('div', { class: 'btns dir-foot' },
         h('button', { class: 'add-goal', onclick: () => newFolder(id) }, id ? '+ Folder inside' : '+ New folder'),
         id ? h('button', { class: 'add-goal', onclick: () => pick.click() }, '+ Upload files') : null,
-        id ? h('button', { class: 'add-goal', onclick: () => newNoteIn(id) }, '+ Note') : null,
+        id ? h('button', { class: 'add-goal', onclick: () => { closeTool(); newDoc({ dirId: id }); } }, '+ Doc') : null,
         pick),
     ];
   }
-  function newNoteIn(dirId) {
-    const ta = h('textarea', { rows: 8, placeholder: 'Write anything' });
-    sheet(`New note in ${dirById(dirId)?.name}`, [ta], async () => {
-      if (!ta.value.trim()) throw new Error('Write something first.');
-      upsert(await api('POST', '/items', { type: 'text', text: ta.value, dirId }));
-      render();
-    });
-    setTimeout(() => ta.focus(), 50);
-  }
+
   // Drag a card (or files from your computer) onto a folder row, or into an open folder.
   const dirAt = (target) => {
     const el = target?.closest?.('#tool [data-dir]');
     return el && dirById(el.dataset.dir) ? el : null;
   };
+
+  // ----- Docs: notes written as pages of blocks (dockit.js) -----
+  // Every note is a doc. It opens over the app, saves as you type, and stays in step with anyone else who has
+  // it open: each save sends only the blocks that changed, and their changes land under yours. When two people
+  // change the same block, the later one wins and the other is told. Export makes a Word file or a PDF next to it.
+  const DV = { doc: null };
+  // A doc's text starts with its title line; a note from before docs uses its first line as the title.
+  const docTitle = (it) => (it.title != null ? it.title : it.text.trim().split('\n')[0].replace(/^#{1,3}\s+/, '').slice(0, 140)) || 'Untitled';
+  const docSnippet = (it) => (it.title != null ? it.text : it.text.trim()).split('\n').slice(1)
+    .map((l) => l.trim().replace(/^(#{1,3}|[-*+•]|\d+[.)]|>|\[[ xX]\]|```|---|\|)\s*/, '').replace(/\s*\|\s*/g, ' · ')).filter(Boolean).join(' · ').slice(0, 160);
+  const docWhere = (it) => (it.dirId ? dirById(it.dirId)?.name || 'A folder' : stackById(it.stackId)?.name || 'Stacks');
+  async function newDoc(dest = {}, start = {}) {
+    try {
+      const it = await api('POST', '/items', { type: 'text', doc: { title: start.title || '', blocks: start.blocks || [] }, ...dest });
+      upsert(it);
+      openDoc(it, { fresh: !start.title });
+      return it;
+    } catch (e) {
+      toast(e.message);
+    }
+  }
+  async function openDoc(it, { fresh = false } = {}) {
+    closeDoc();
+    const view = $('#docview') || document.body.appendChild(h('div', { id: 'docview', class: 'docview' }));
+    view.classList.remove('hidden');
+    view.replaceChildren(h('p', { class: 'day-hint dv-loading' }, 'Opening…'));
+    let d;
+    try {
+      d = await api('GET', `/items/${it.id}/doc`);
+    } catch (e) {
+      view.classList.add('hidden');
+      return toast(e.message);
+    }
+    const status = h('small', { class: 'dv-status' }, 'Saved');
+    const x = { id: it.id, v: d.v, saved: d.blocks, savedTitle: d.title, sid: newId(), pending: new Map(), timer: null, busy: false, gap: null, warned: false, status };
+    const item = () => S.items.find((y) => y.id === x.id) || it;
+    x.ed = ColumnDocs.editor({
+      title: d.title, blocks: d.blocks,
+      onChange: () => docSoon(x),
+      upload: async (files) => {
+        const out = [];
+        for (const f of files) {
+          const up = await uploadFile(f, { stackId: item().stackId || null, dirId: item().dirId || null }).catch((e) => toast(e.message));
+          if (up) out.push({ itemId: up.id, name: up.name });
+        }
+        return out;
+      },
+      fileInfo: (id) => {
+        const f = S.items.find((y) => y.id === id);
+        return f && f.type === 'file' ? { name: f.name, url: fileUrl(f), image: kind(f) === 'image', size: fmtSize(f.size) } : null;
+      },
+      openFile: (id) => { const f = S.items.find((y) => y.id === id); if (f) openPreview(f); },
+      menu: openMenu,
+      toast,
+    });
+    DV.doc = x;
+    const more = (e) => openMenu(e.currentTarget, [
+      { label: 'Export as Word (.docx)', run: () => docExport(x, 'docx') },
+      { label: 'Export as PDF', run: () => docExport(x, 'pdf') },
+      { label: 'Copy as text', run: () => copyText([x.ed.title, ColumnDocs.toText(x.ed.blocks)].filter(Boolean).join('\n\n')) },
+      { head: '' },
+      { label: item().dirId ? `In ${docWhere(item())} · move it` : 'Save to folder', run: () => folderMenu(item(), e.target) },
+      { label: 'Move to stack', run: () => stackMenu(item(), e.target) },
+      { label: 'Delete doc', danger: true, run: async () => { await api('DELETE', '/items/' + x.id).catch((er) => toast(er.message)); closeDoc(true); } },
+    ]);
+    view.replaceChildren(
+      h('div', { class: 'dv-bar' },
+        h('button', { class: 'icon-btn', 'aria-label': 'Close doc', html: I.back, onclick: () => closeDoc() }),
+        h('span', { class: 'dv-where' }, docWhere(item())),
+        status,
+        h('button', { class: 'icon-btn', 'aria-label': 'Doc options', html: I.more, onclick: more })),
+      h('div', { class: 'dv-scroll' }, h('div', { class: 'dv-page' }, x.ed.el)));
+    if (fresh) x.ed.el.querySelector('.dk-title').focus();
+  }
+  function closeDoc(gone) {
+    const x = DV.doc;
+    if (!x) return;
+    if (!gone) docSave(x, true);
+    x.ed.destroy();
+    DV.doc = null;
+    $('#docview')?.classList.add('hidden');
+    $('#docview')?.replaceChildren();
+  }
+  function docSoon(x) {
+    x.status.textContent = 'Editing…';
+    clearTimeout(x.timer);
+    x.timer = setTimeout(() => docSave(x), 700);
+  }
+  // What this editor has that the server doesn't yet: blocks changed and the title.
+  const docLocal = (x) => ({ ...ColumnDocs.diff(x.saved, x.ed.blocks), title: x.ed.title !== x.savedTitle ? x.ed.title : undefined });
+  async function docSave(x, closing) {
+    clearTimeout(x.timer);
+    if (x.busy) { x.again = true; return; }
+    const { ops, order, title } = docLocal(x);
+    if (!ops.length && !order && title === undefined) {
+      if (DV.doc === x) x.status.textContent = 'Saved';
+      return;
+    }
+    x.busy = true;
+    x.status.textContent = 'Saving…';
+    try {
+      const r = await api('PATCH', `/items/${x.id}/doc`, { ops, order, title, sid: x.sid });
+      x.pending.set(r.v, { ops, order, title, mine: true });
+      docDrain(x);
+      x.status.textContent = 'Saved';
+    } catch (e) {
+      x.status.textContent = 'Not saved · trying again';
+      if (!closing) x.timer = setTimeout(() => docSave(x), 4000);
+      else toast('Your last changes to the doc weren’t saved: ' + e.message);
+    } finally {
+      x.busy = false;
+      if (x.again) { x.again = false; docSoon(x); }
+    }
+  }
+  // Applies saves in the order the server made them: ours to what's saved, theirs to the page as well.
+  function docDrain(x) {
+    while (x.pending.has(x.v + 1)) {
+      const ev = x.pending.get(x.v + 1);
+      x.pending.delete(x.v + 1);
+      if (!ev.mine) {
+        const mine = docLocal(x);
+        const keep = [...mine.ops.map((o) => o.set?.id || o.del), ...(mine.title !== undefined ? ['title'] : [])];
+        if (x.ed.merge(ev.ops, ev.order, ev.title, keep) && !x.warned) {
+          x.warned = true;
+          toast('Someone else changed a block you’re editing. Your version is kept.');
+        }
+      }
+      x.saved = ColumnDocs.apply(x.saved, ev.ops, ev.order);
+      if (ev.title != null) x.savedTitle = ev.title;
+      x.v++;
+    }
+    clearTimeout(x.gap);
+    // A save we never heard about: load the doc fresh, keeping what's typed here.
+    if (x.pending.size) x.gap = setTimeout(() => docReload(x), 2500);
+  }
+  async function docReload(x) {
+    try {
+      const d = await api('GET', `/items/${x.id}/doc`);
+      if (DV.doc !== x) return;
+      const mine = docLocal(x);
+      const want = ColumnDocs.apply(d.blocks, mine.ops, mine.order);
+      const to = ColumnDocs.diff(x.ed.blocks, want);
+      x.ed.merge(to.ops, want.map((b) => b.id), mine.title !== undefined ? null : d.title, []);
+      x.saved = d.blocks;
+      x.savedTitle = d.title;
+      x.v = d.v;
+      for (const v of [...x.pending.keys()]) if (v <= d.v) x.pending.delete(v);
+      if (mine.ops.length || mine.title !== undefined) docSoon(x);
+    } catch {}
+  }
+  function docNews(msg) {
+    const x = DV.doc;
+    if (!x || x.id !== msg.id || msg.sid === x.sid) return;
+    if (msg.reload) return docReload(x);
+    x.pending.set(msg.v, { ops: msg.ops || [], order: msg.order, title: msg.title });
+    docDrain(x);
+  }
+  async function docExport(x, as) {
+    await docSave(x);
+    const it = S.items.find((y) => y.id === x.id);
+    const name = (x.ed.title.trim() || 'Untitled').replace(/[\\/:*?"<>|]/g, '-').slice(0, 100);
+    const files = (id) => { const f = S.items.find((y) => y.id === id); return f && { name: f.name, url: abs(fileUrl(f)) }; };
+    try {
+      let out;
+      if (as === 'docx') {
+        toast('Making the Word file…');
+        const page = ColumnDocs.toHtml(x.ed.blocks, { shift: 1, files });
+        if (x.ed.title.trim()) page.prepend(h('h1', {}, x.ed.title.trim()));
+        const doc = await ColumnWord.read(await (await ColumnWord.blank()).arrayBuffer());
+        out = await uploadFile(new File([await doc.save(page)], name + '.docx', { type: ColumnWord.DOCX }), { stackId: it?.stackId || null, dirId: it?.dirId || null });
+      } else {
+        toast('Making the PDF…');
+        const pics = async (id) => {
+          const f = S.items.find((y) => y.id === id);
+          if (!f || !/^image\/(png|jpeg)$/.test(f.mime || '')) return null;
+          const blob = await (await fetch(fileUrl(f))).blob();
+          const src = await new Promise((done) => { const fr = new FileReader(); fr.onload = () => done(fr.result); fr.readAsDataURL(blob); });
+          const img = await new Promise((done) => { const i = new Image(); i.onload = () => done(i); i.onerror = () => done(null); i.src = src; });
+          return img && { src, w: img.naturalWidth, h: img.naturalHeight };
+        };
+        out = await api('POST', '/docs/pdf', { itemId: x.id, name, blocks: await ColumnDocs.toPdf(x.ed.title.trim(), x.ed.blocks, pics) });
+        if (it?.dirId) out = await api('PATCH', '/items/' + out.id, { dirId: it.dirId }).catch(() => out);
+        upsert(out);
+      }
+      if (out) toast(`${out.name} is next to the doc`, { label: 'Download', run: () => download(out) });
+    } catch (e) {
+      toast(e.message);
+    }
+  }
+  // The Docs tool: every doc you can see, newest first.
+  const DK = { q: '' };
+  function docsTool() {
+    const all = S.items.filter((x) => x.type === 'text').sort((a, b) => (b.editedAt || b.createdAt) - (a.editedAt || a.createdAt));
+    const list = h('div', { class: 'docs-list' });
+    const draw = () => {
+      const s = DK.q.trim().toLowerCase();
+      const hits = all.filter((x) => !s || x.text.toLowerCase().includes(s)).slice(0, 200);
+      list.replaceChildren(...(hits.length ? hits.map((x) => h('div', { class: 'bill doc-row', onclick: () => { closeTool(); openDoc(x); } },
+        h('span', { class: 'bill-name' }, docTitle(x), h('small', {}, [docWhere(x), docSnippet(x)].filter(Boolean).join(' · '))),
+        h('span', { class: 'bill-right' }, h('small', {}, ago(x.editedAt || x.createdAt))))) : [h('p', { class: 'day-hint' }, s ? 'No doc has that in it.' : 'No docs yet. Start one: a plan, a script, meeting notes, a process to follow.')]));
+    };
+    draw();
+    return [
+      h('div', { class: 'dir-tools' },
+        h('input', { type: 'search', class: 'dir-search', value: DK.q, placeholder: 'Search docs', 'aria-label': 'Search docs', oninput: (e) => { DK.q = e.target.value; draw(); } }),
+        h('button', { class: 'btn primary-btn', onclick: () => { closeTool(); newDoc(); } }, '+ New doc')),
+      list,
+    ];
+  }
 
   // ----- Word documents: read, edit and save as .docx, or make a PDF to sign or send -----
   // You edit the page Column shows. Saving writes a .docx from it that keeps the document's styles, headers and
@@ -7937,8 +8095,7 @@
           upsertList(await api('POST', '/lists', { campaignId: c.id, name: y.name, live: y.live }));
           made.push(y);
         } else if (y.type === 'note') {
-          const it = await api('POST', '/items', { type: 'text', text: [y.title, y.text].filter(Boolean).join('\n\n'), stackId: c?.stackId || null });
-          await api('PATCH', '/items/' + it.id, { pinned: true }).catch(() => {});
+          await api('POST', '/items', { type: 'text', doc: { title: y.title || '', blocks: ColumnDocs.fromText(y.text) }, stackId: c?.stackId || null });
           made.push(y);
         } else if (y.type === 'budget') {
           // In a campaign plan it's the business's; in a budget plan, whichever the card says.
