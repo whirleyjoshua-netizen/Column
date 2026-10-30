@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Column API</title>
+  <link rel="icon" href="/favicon.png">
+  <style>
+    :root { color-scheme: light dark; --bg: #f6f6f8; --card: #fff; --text: #16161a; --muted: #6b6b76; --line: #e4e4ea; --code: #f1f1f5; --accent: #6b5cf0; }
+    @media (prefers-color-scheme: dark) { :root { --bg: #111115; --card: #1a1a20; --text: #ececf1; --muted: #8d8d99; --line: #2a2a32; --code: #22222a; --accent: #8b7cff; } }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    main { max-width: 860px; margin: 0 auto; padding: 32px 20px 80px; }
+    h1 { font-size: 30px; margin: 0 0 4px; } h2 { font-size: 21px; margin: 40px 0 8px; padding-top: 12px; border-top: 1px solid var(--line); } h3 { font-size: 16px; margin: 22px 0 6px; }
+    p, li { color: var(--text); } .lead { color: var(--muted); font-size: 16px; margin: 0 0 20px; }
+    code { background: var(--code); border-radius: 5px; padding: 1px 5px; font: 13px ui-monospace, SFMono-Regular, Menlo, monospace; }
+    pre { background: var(--code); border-radius: 10px; padding: 14px 16px; overflow-x: auto; font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+    pre code { background: none; padding: 0; }
+    table { border-collapse: collapse; width: 100%; font-size: 14px; margin: 8px 0; } td, th { border: 1px solid var(--line); padding: 6px 10px; text-align: left; vertical-align: top; } th { background: var(--code); }
+    .m { display: inline-block; min-width: 54px; font: 600 12px ui-monospace, Menlo, monospace; color: #fff; background: var(--accent); border-radius: 5px; padding: 1px 6px; text-align: center; }
+    .m.get { background: #2f7bf5; } .m.post { background: #1f9d55; } .m.put, .m.patch { background: #e8930c; } .m.del { background: #d64545; }
+    nav { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 14px; margin: 10px 0 0; } a { color: var(--accent); }
+    .note { border-left: 3px solid var(--accent); padding: 4px 12px; color: var(--muted); }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Column API</h1>
+  <p class="lead">Read and write the records in your Projects (contacts, companies, deals, anything you track) from other apps, and hear the moment they change.</p>
+  <nav><a href="#auth">Keys</a><a href="#schema">Projects &amp; fields</a><a href="#records">Records</a><a href="#values">Field values</a><a href="#sync">Syncing</a><a href="#errors">Errors &amp; limits</a><a href="#webhooks">Webhooks</a></nav>
+
+  <h2 id="auth">Keys</h2>
+  <p>A team owner makes an API key in <b>Settings → Connections → Connect other apps</b>. It's shown once. Send it with every request:</p>
+  <pre><code>Authorization: Bearer col_…</code></pre>
+  <p>The base address is your Column server followed by <code>/api/v1</code>, for example <code>https://column.example.com/api/v1</code>. A key reaches every project that isn't private. A key can be <b>read and write</b> or <b>read only</b>. Deleting it in Settings stops it at once.</p>
+  <pre><code>curl https://column.example.com/api/v1/me -H "Authorization: Bearer $COLUMN_KEY"
+{"team":"Premier","key":"Zapier","write":true}</code></pre>
+
+  <h2 id="schema">Projects &amp; fields</h2>
+  <p>A project has <b>lists</b> (Contacts, Companies, Deals…), and each list has <b>fields</b>. Every list and field has a <b>key</b>, like <code>contacts</code> or <code>close_date</code>, that never changes when someone renames it in Column. Use keys in your code.</p>
+  <table>
+    <tr><td><span class="m get">GET</span></td><td><code>/projects</code></td><td>Every project the key reaches, with its lists and fields.</td></tr>
+    <tr><td><span class="m get">GET</span></td><td><code>/projects/{project_id}</code></td><td>One project's lists and fields.</td></tr>
+  </table>
+  <pre><code>{
+  "id": "Hk2…", "name": "Sales", "template": "crm",
+  "types": [{
+    "key": "deals", "name": "Deals", "singular": "Deal",
+    "fields": [
+      { "key": "name", "name": "Deal", "type": "text", "primary": true },
+      { "key": "value", "name": "Value", "type": "money" },
+      { "key": "stage", "name": "Stage", "type": "select", "options": ["New", "Qualified", "Proposal", "Negotiation", "Won", "Lost"] },
+      { "key": "contact", "name": "Contact", "type": "link", "links_to": "contacts", "many": false }
+    ]
+  }]
+}</code></pre>
+
+  <h2 id="records">Records</h2>
+  <table>
+    <tr><td><span class="m get">GET</span></td><td><code>/projects/{project_id}/{list}/records</code></td><td>Records, oldest change first. <code>?limit=</code> (up to 500), <code>?cursor=</code>, <code>?updated_since=</code></td></tr>
+    <tr><td><span class="m post">POST</span></td><td><code>/projects/{project_id}/{list}/records</code></td><td>Add one. Body: <code>{"fields": {…}, "external_id": "optional"}</code></td></tr>
+    <tr><td><span class="m get">GET</span></td><td><code>/projects/{project_id}/{list}/records/{id}</code></td><td>One record.</td></tr>
+    <tr><td><span class="m patch">PATCH</span></td><td><code>/projects/{project_id}/{list}/records/{id}</code></td><td>Change some fields. Fields you leave out stay as they are; <code>null</code> clears one.</td></tr>
+    <tr><td><span class="m del">DELETE</span></td><td><code>/projects/{project_id}/{list}/records/{id}</code></td><td>Delete it (and links to it).</td></tr>
+    <tr><td><span class="m get">GET</span></td><td><code>/projects/{project_id}/{list}/records/external/{external_id}</code></td><td>Find a record by your system's id.</td></tr>
+    <tr><td><span class="m put">PUT</span></td><td><code>/projects/{project_id}/{list}/records/external/{external_id}</code></td><td><b>Upsert</b>: update the record with that id, or add it. The safest way to sync.</td></tr>
+  </table>
+  <pre><code>curl -X PUT https://column.example.com/api/v1/projects/$PROJECT/contacts/records/external/hubspot-4411 \
+  -H "Authorization: Bearer $COLUMN_KEY" -H "Content-Type: application/json" \
+  -d '{"fields": {"name": "Maria Lopez", "email": "maria@desertauto.com", "stage": "Qualified", "owner": "Sam"}}'</code></pre>
+  <p>A record comes back as:</p>
+  <pre><code>{
+  "id": "q8Lx…", "external_id": "hubspot-4411", "type": "contacts",
+  "created_at": "2026-11-02T17:04:11.000Z", "updated_at": "2026-11-02T17:04:11.000Z",
+  "fields": { "name": "Maria Lopez", "email": "maria@desertauto.com", "stage": "Qualified",
+              "owner": { "id": "m1…", "name": "Sam" }, "company": "c7…", "city": null }
+}</code></pre>
+
+  <h2 id="values">Field values</h2>
+  <table>
+    <tr><th>Type</th><th>Send</th><th>Comes back as</th></tr>
+    <tr><td>text, phone</td><td>a string</td><td>the string</td></tr>
+    <tr><td>email</td><td>an email address (made lowercase)</td><td>the address</td></tr>
+    <tr><td>url</td><td>a web address (<code>https://</code> is added if missing)</td><td>the address</td></tr>
+    <tr><td>number</td><td>a number, or a string like <code>"1,250"</code></td><td>a number</td></tr>
+    <tr><td>money</td><td>dollars: <code>1250.5</code> or <code>"$1,250.50"</code></td><td>dollars, as a number</td></tr>
+    <tr><td>date</td><td><code>"2026-11-30"</code>, or a date and time (the day is kept)</td><td><code>"2026-11-30"</code></td></tr>
+    <tr><td>select</td><td>the option's label. A new label becomes a new option.</td><td>the label</td></tr>
+    <tr><td>multi</td><td>a list of labels, or one string with commas</td><td>a list of labels</td></tr>
+    <tr><td>person</td><td>a team member's name or id</td><td><code>{"id", "name"}</code></td></tr>
+    <tr><td>checkbox</td><td><code>true</code> / <code>false</code></td><td><code>true</code> or <code>null</code></td></tr>
+    <tr><td>link</td><td>a record id in the list it links to (a list of ids when <code>many</code>)</td><td>the id (or ids)</td></tr>
+  </table>
+  <p class="note">An unknown field key is an error that lists the keys the list has, so typos don't vanish silently.</p>
+
+  <h2 id="sync">Syncing</h2>
+  <p>To keep another system in step, remember the time of your last sync and ask only for what changed since, page by page:</p>
+  <pre><code>GET /projects/$PROJECT/deals/records?updated_since=2026-11-02T00:00:00Z&amp;limit=500
+→ { "records": [ … ], "next_cursor": "1793400000000.q8Lx…" }
+GET /projects/$PROJECT/deals/records?updated_since=2026-11-02T00:00:00Z&amp;limit=500&amp;cursor=1793400000000.q8Lx…
+→ { "records": [ … ], "next_cursor": null }</code></pre>
+  <p>Going the other way, write with <b>PUT …/external/{your id}</b>: running it twice can't make a duplicate. Deletions arrive as webhooks (below).</p>
+
+  <h2 id="errors">Errors &amp; limits</h2>
+  <p>Errors are JSON, <code>{"error": "What went wrong, in words"}</code>, with the usual status: <code>400</code> bad value, <code>401</code> missing or wrong key, <code>403</code> read-only key, <code>404</code> not found, <code>409</code> that external_id is already used, <code>429</code> too many requests.</p>
+  <p>Each key can make <b>300 requests a minute</b>. A team can keep 50,000 records.</p>
+
+  <h2 id="webhooks">Webhooks</h2>
+  <p>A team owner adds a webhook in Settings with an <code>https://</code> address, for every project or one. Column sends a <code>POST</code> when a record is added, changed or deleted:</p>
+  <pre><code>{
+  "id": "evt_9fQ…",
+  "type": "record.updated",            // record.created, record.updated, record.deleted (or "ping" from Send a test)
+  "created_at": "2026-11-02T17:05:00.000Z",
+  "by": "Sam",                         // who made the change; an API key shows as "Zapier (API)"
+  "project": { "id": "Hk2…", "name": "Sales" },
+  "list": "deals",
+  "data": { …the record, as above… }
+}</code></pre>
+  <p>Headers: <code>X-Column-Event</code>, <code>X-Column-Delivery</code> (the event id, for ignoring repeats) and <code>X-Column-Signature: t=&lt;seconds&gt;,v1=&lt;signature&gt;</code>.</p>
+  <h3>Checking the signature</h3>
+  <p>The signature is an HMAC-SHA256 of <code>t + "." + the raw body</code>, made with the webhook's secret (shown once when it's made). Check it, and reject old timestamps:</p>
+  <pre><code>// Node
+import crypto from 'node:crypto';
+function fromColumn(rawBody, header, secret) {
+  const { t, v1 } = Object.fromEntries(header.split(',').map((p) => p.split('=')));
+  if (Math.abs(Date.now() / 1000 - Number(t)) > 300) return false; // older than 5 minutes
+  const want = crypto.createHmac('sha256', secret).update(`${t}.${rawBody}`).digest('hex');
+  return crypto.timingSafeEqual(Buffer.from(want), Buffer.from(v1));
+}</code></pre>
+  <pre><code># Python
+import hmac, hashlib, time
+def from_column(raw_body: bytes, header: str, secret: str) -> bool:
+    parts = dict(p.split("=", 1) for p in header.split(","))
+    if abs(time.time() - int(parts["t"])) > 300:
+        return False
+    want = hmac.new(secret.encode(), f'{parts["t"]}.'.encode() + raw_body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(want, parts["v1"])</code></pre>
+  <p>Answer with any <code>2xx</code> within 10 seconds. Anything else is tried again after 30 seconds, 2 minutes and 8 minutes. After 20 failures in a row the webhook pauses; turn it back on in Settings. The last 20 deliveries show there too. Webhook addresses must be public: private network addresses are refused. Records in private projects are never sent.</p>
+
+  <h2>Using it with Zapier or Make</h2>
+  <p>Use their webhook trigger with the address they give you as a Column webhook, and their HTTP action with your API key in the <code>Authorization</code> header to add or update records (PUT by <code>external_id</code> keeps runs from making duplicates).</p>
+</main>
+</body>
+</html>

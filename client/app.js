@@ -402,6 +402,8 @@
       refreshLinks();
     } else if (msg.type === 'doc') {
       docNews(msg);
+    } else if (/^(project|record)/.test(msg.type)) {
+      prNews(msg);
     } else if (msg.type === 'doc:here') {
       docHereNews(msg);
     } else if (msg.type === 'comment' || msg.type === 'comment:remove') {
@@ -633,6 +635,7 @@
     S.bills = st.bills || [];
     S.money = st.money || [];
     S.budgets = st.budgets || [];
+    S.projects = st.projects || [];
     api('GET', '/meetings').then((x) => { S.meetings = x; renderRec(); }).catch(() => {});
     api('GET', '/plans').then((x) => { S.plans = x; renderTool(); }).catch(() => {});
     loadMap();
@@ -2040,7 +2043,9 @@
     $('#panes').classList.toggle('hidden', tab !== 'column');
     $('#chat').classList.toggle('hidden', tab !== 'chat');
     $('#campsWrap').classList.toggle('hidden', tab !== 'camps');
+    $('#projects').classList.toggle('hidden', tab !== 'projects');
     if (tab === 'camps') renderCamps();
+    if (tab === 'projects') renderProjects();
     if (tab === 'day') renderDay();
     if (tab === 'chat') openChannel(C.view);
   }
@@ -5689,6 +5694,57 @@
     const sec = $('#settings .pss-sec');
     if (sec && !sec.contains(document.activeElement)) sec.replaceWith(pssSection());
   }
+  // Connecting other apps to Projects: API keys (each shown once) and webhooks (with their deliveries).
+  const INT = { keys: null, hooks: null };
+  function intSection() {
+    const sec = h('section', { class: 'int-sec' }, h('h3', {}, 'Connect other apps'));
+    const redraw = () => sec.replaceWith(intSection());
+    if (!INT.keys || !INT.hooks) {
+      sec.append(h('p', { class: 'day-hint' }, 'Loading…'));
+      Promise.all([api('GET', '/integrations/keys'), api('GET', '/integrations/webhooks')]).then(([k, w]) => { INT.keys = k; INT.hooks = w; redraw(); }).catch((e) => sec.replaceChildren(h('h3', {}, 'Connect other apps'), h('p', { class: 'err' }, e.message)));
+      return sec;
+    }
+    const secretSheet = (title, what, value, note) => sheet(title, [h('p', { class: 'day-hint' }, note), h('div', { class: 'int-secret' }, h('code', {}, value), h('button', { class: 'btn small', onclick: () => { copyText(value); toast('Copied'); } }, 'Copy')), h('p', { class: 'day-hint' }, `This is the only time the ${what} is shown. Keep it somewhere safe.`)], async () => {}, 'Done');
+    const newKey = () => {
+      const name = h('input', { placeholder: 'Zapier' });
+      const write = h('select', {}, h('option', { value: '1' }, 'Read and write records'), h('option', { value: '0' }, 'Read only'));
+      sheet('New API key', [h('label', {}, 'What it’s for', name), h('label', {}, 'Can', write), h('p', { class: 'day-hint' }, 'The key reaches every project that isn’t private. Anyone with it can do what you pick here.')], async () => {
+        const k = await api('POST', '/integrations/keys', { name: name.value || 'API key', write: write.value === '1' });
+        INT.keys = [...INT.keys, k];
+        redraw();
+        setTimeout(() => secretSheet('Your API key', 'key', k.token, `Use it as: Authorization: Bearer ${k.token.slice(0, 10)}…`));
+      }, 'Make key');
+    };
+    const newHook = () => {
+      const url = h('input', { type: 'url', placeholder: 'https://hooks.zapier.com/…' });
+      const proj = h('select', {}, h('option', { value: '' }, 'Every project'), (S.projects || []).filter((p) => !p.private).map((p) => h('option', { value: p.id }, p.name)));
+      const evs = [['record.created', 'A record is added'], ['record.updated', 'A record changes'], ['record.deleted', 'A record is deleted']].map(([k, label]) => ({ k, cb: h('input', { type: 'checkbox', checked: true }), label }));
+      sheet('New webhook', [h('label', {}, 'Send to', url), h('label', {}, 'For', proj), ...evs.map((x) => h('label', { class: 'pick' }, x.cb, x.label)), h('p', { class: 'day-hint' }, 'Column sends a signed POST with the record each time. Failed sends are tried again over ten minutes.')], async () => {
+        const w = await api('POST', '/integrations/webhooks', { url: url.value, projectId: proj.value || null, events: evs.filter((x) => x.cb.checked).map((x) => x.k) });
+        INT.hooks = [...INT.hooks, w];
+        redraw();
+        setTimeout(() => secretSheet('Webhook signing secret', 'secret', w.secret, 'Check each delivery’s X-Column-Signature with this secret (how: see the developer docs).'));
+      }, 'Add webhook');
+    };
+    const hookMenu = (e, w) => openMenu(e.currentTarget, [
+      { label: 'Send a test', run: async () => { await api('POST', `/integrations/webhooks/${w.id}/test`).catch((er) => toast(er.message)); toast('Test sent'); setTimeout(() => { INT.hooks = null; redraw(); }, 1500); } },
+      { label: 'Recent deliveries', run: () => sheet('Recent deliveries', [w.log?.length ? h('div', { class: 'int-log' }, w.log.map((l) => h('div', { class: l.ok ? 'ok' : 'bad' }, h('b', {}, l.ok ? '✓' : '✕'), ` ${l.event} · ${l.status || l.error || 'no answer'} · ${l.ms}ms · ${ago(l.at)}${l.attempt > 1 ? ` · try ${l.attempt}` : ''}`))) : h('p', { class: 'day-hint' }, 'Nothing sent yet.')], async () => {}, 'Close') },
+      { label: w.active ? 'Pause' : 'Turn back on', run: async () => { const y = await api('PATCH', '/integrations/webhooks/' + w.id, { active: !w.active }).catch((er) => toast(er.message)); if (y) { INT.hooks = INT.hooks.map((x) => (x.id === y.id ? y : x)); redraw(); } } },
+      { label: 'Delete', danger: true, run: async () => { await api('DELETE', '/integrations/webhooks/' + w.id).catch((er) => toast(er.message)); INT.hooks = INT.hooks.filter((x) => x.id !== w.id); redraw(); } },
+    ]);
+    sec.append(
+      h('p', { class: 'day-hint' }, 'Let other tools (Zapier, Make, your website, your own code) read and write Projects records, and hear when they change. ', h('a', { href: '/developers', target: '_blank', rel: 'noopener' }, 'Developer docs')),
+      h('h4', {}, 'API keys'),
+      ...INT.keys.map((k) => h('div', { class: 'srow' }, h('span', {}, k.name, h('small', {}, `${k.prefix}… · ${k.write ? 'read & write' : 'read only'} · ${k.lastUsedAt ? 'used ' + ago(k.lastUsedAt) : 'never used'} · by ${k.by}`)),
+        h('button', { class: 'btn small danger', 'data-label': '1', onclick: (e) => confirmClick(e.currentTarget, async () => { await api('DELETE', '/integrations/keys/' + k.id).catch((er) => toast(er.message)); INT.keys = INT.keys.filter((x) => x.id !== k.id); redraw(); }) }, 'Delete'))),
+      h('button', { class: 'btn small', onclick: newKey }, '+ New API key'),
+      h('h4', {}, 'Webhooks'),
+      ...INT.hooks.map((w) => h('div', { class: 'srow' }, h('span', {}, h('span', { class: 'live' + (w.active ? ' on' : '') }), shortText(w.url.replace(/^https?:\/\//, ''), 46),
+        h('small', {}, `${w.projectId ? (S.projects || []).find((p) => p.id === w.projectId)?.name || 'a project' : 'every project'} · ${w.events.map((x) => x.split('.')[1]).join(', ')}${!w.active ? ' · paused' + (w.failures >= 20 ? ' after 20 failures' : '') : w.log?.[0] ? ` · last ${w.log[0].ok ? 'sent' : 'failed'} ${ago(w.log[0].at)}` : ''}`)),
+        h('button', { class: 'icon-btn', 'aria-label': 'Webhook options', html: I.more, onclick: (e) => hookMenu(e, w) }))),
+      h('button', { class: 'btn small', onclick: newHook }, '+ New webhook'));
+    return sec;
+  }
   function pssSection() {
     const sec = h('section', { class: 'pss-sec' }, h('h3', {}, 'PSS admin'));
     const p = S.pss;
@@ -6036,6 +6092,488 @@
     const el = target?.closest?.('#tool [data-dir]');
     return el && dirById(el.dataset.dir) ? el : null;
   };
+
+  // ----- Projects: records with fields, as a table or a board (server: projects.js) -----
+  // A project holds lists ("types") of records; each list has fields and views. The CRM template makes
+  // Contacts, Companies and Deals with a pipeline board. Records load when a project opens and stay in step
+  // with everyone through the socket.
+  const PR = { open: null, type: null, view: null, q: '', records: new Map(), panel: null, loading: null };
+  const projById = (id) => (S.projects || []).find((p) => p.id === id);
+  const prType = (p, id) => p?.types.find((t) => t.id === id);
+  const prField = (t, id) => t?.fields.find((f) => f.id === id);
+  const prRecs = (pid) => PR.records.get(pid) || [];
+  const recById = (pid, id) => prRecs(pid).find((r) => r.id === id);
+  const recName = (t, r) => String(r?.values[t.primary] ?? '').trim() || 'Untitled';
+  const PF_COLOR = { gray: '#8b8b98', blue: '#4ea1ff', green: '#3ddc97', amber: '#ffb547', rose: '#ff6b8b', violet: '#8b7cff', teal: '#2dd4bf' };
+  const PF_IC = { text: 'Aa', number: '#', money: '$', date: '📅', select: '◉', multi: '☰', person: '👤', email: '@', phone: '☏', url: '🔗', checkbox: '☑', link: '↗' };
+  const PF_NAME = { text: 'Text', number: 'Number', money: 'Money', date: 'Date', select: 'Options (one)', multi: 'Options (many)', person: 'Person', email: 'Email', phone: 'Phone', url: 'Web link', checkbox: 'Checkbox', link: 'Link to another list' };
+  const prCall = async (method, path, body) => {
+    try {
+      return await api(method, path, body);
+    } catch (e) {
+      toast(e.message);
+      return null;
+    }
+  };
+  function prUpsertProject(p) {
+    S.projects = [...(S.projects || []).filter((x) => x.id !== p.id), p];
+  }
+  function prUpsertRecord(r) {
+    if (!PR.records.has(r.projectId)) return;
+    PR.records.set(r.projectId, [...prRecs(r.projectId).filter((x) => x.id !== r.id), r]);
+  }
+  // Live changes from others, redrawn unless someone's typing in the project.
+  let prTimer = null;
+  function prSoon() {
+    clearTimeout(prTimer);
+    prTimer = setTimeout(() => {
+      if (S.tab !== 'projects') return;
+      if ($('#projects')?.contains(document.activeElement) && document.activeElement.matches('input, textarea')) return prSoon();
+      if (document.body.classList.contains('is-dragging')) return prSoon(); // not under a card being dragged
+      renderProjects();
+    }, 120);
+  }
+  async function openProject(id, typeId) {
+    PR.open = id;
+    const p = projById(id);
+    PR.type = typeId || (PR.type && prType(p, PR.type) ? PR.type : p?.types[0]?.id);
+    PR.view = prType(p, PR.type)?.views[0]?.id;
+    PR.q = '';
+    PR.panel = null;
+    if (S.tab !== 'projects') setTab('projects');
+    renderProjects();
+    if (!PR.records.has(id)) {
+      PR.loading = id;
+      const list = await prCall('GET', `/projects/${id}/records`);
+      PR.loading = null;
+      if (list) PR.records.set(id, list);
+      renderProjects();
+    }
+  }
+  function renderProjects() {
+    const root = $('#projects');
+    if (!root) return;
+    const p = projById(PR.open);
+    if (!p) PR.open = null;
+    const keep = $('#projects .pj-body');
+    const at = keep ? [keep.scrollLeft, keep.scrollTop] : null;
+    root.replaceChildren(...(p ? projectView(p) : projectsHome()).filter(Boolean));
+    const now = $('#projects .pj-body');
+    if (now && at) [now.scrollLeft, now.scrollTop] = at;
+  }
+  function projectsHome() {
+    const list = [...(S.projects || [])].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+    return [
+      h('div', { class: 'pj-head' }, h('h2', {}, 'Projects'), h('button', { class: 'btn primary-btn', onclick: newProjectSheet }, '+ New project')),
+      list.length ? h('div', { class: 'pj-grid' }, list.map((p) => h('button', { class: 'pj-card', onclick: () => openProject(p.id) },
+        h('span', { class: 'pj-ic' }, p.icon || '📁'),
+        h('b', {}, p.name, p.private ? h('small', { title: 'Private' }, ' 🔒') : null),
+        h('small', {}, p.types.map((t) => (PR.records.has(p.id) ? `${prRecs(p.id).filter((r) => r.typeId === t.id).length} ${t.name.toLowerCase()}` : t.name)).join(' · ')))))
+        : h('div', { class: 'pj-empty' }, h('p', {}, 'Keep track of customers, deals, jobs, vendors: anything with a list of records and stages.'), h('button', { class: 'btn primary-btn', onclick: newProjectSheet }, 'Start with the CRM template')),
+    ];
+  }
+  function newProjectSheet() {
+    let tpl = 'crm';
+    const name = h('input', { placeholder: 'Sales', maxlength: 80 });
+    const TPL = { crm: ['🤝', 'CRM', 'Contacts, companies and deals, with a pipeline board'], blank: ['📁', 'Blank', 'One list to shape as you like'] };
+    const pick = h('div', { class: 'pj-tpls' });
+    const draw = () => pick.replaceChildren(...Object.entries(TPL).map(([k, [ic, nm, about]]) => h('button', { type: 'button', class: 'pj-tpl' + (tpl === k ? ' on' : ''), onclick: () => { tpl = k; draw(); } }, h('span', { class: 'pj-ic' }, ic), h('b', {}, nm), h('small', {}, about))));
+    draw();
+    const priv = h('input', { type: 'checkbox' });
+    sheet('New project', [h('label', {}, 'Name', name), h('div', {}, h('small', { class: 'hint' }, 'Start from'), pick), h('label', { class: 'pick' }, priv, 'Private: only me and people I add')], async () => {
+      const p = await api('POST', '/projects', { template: tpl, name: name.value.trim() || TPL[tpl][1], private: priv.checked });
+      prUpsertProject(p);
+      PR.records.set(p.id, []);
+      openProject(p.id);
+    }, 'Create');
+  }
+
+  // ----- one project -----
+  function projectView(p) {
+    const t = prType(p, PR.type) || p.types[0];
+    PR.type = t.id;
+    const v = t.views.find((x) => x.id === PR.view) || t.views[0];
+    PR.view = v.id;
+    const recs = prRecs(p.id).filter((r) => r.typeId === t.id);
+    const more = (e) => openMenu(e.currentTarget, [
+      { label: 'Rename project', run: () => { const i = h('input', { value: p.name }); sheet('Rename project', [h('label', {}, 'Name', i)], async () => { const y = await api('PATCH', '/projects/' + p.id, { name: i.value }); prUpsertProject(y); renderProjects(); }); } },
+      { label: `Import ${t.name.toLowerCase()} from a spreadsheet…`, run: () => prImport(p, t) },
+      { label: `Export ${t.name.toLowerCase()} as CSV`, run: () => prExport(p, t) },
+      { label: 'Add a list…', run: () => prAddType(p) },
+      { head: '' },
+      { label: p.private ? 'Who can see it…' : 'Make it private…', run: () => prAccess(p) },
+      amOwner() ? { label: 'Connect other apps (API, webhooks)…', run: () => openSettings('connections', '.int-sec') } : null,
+      p.types.length > 1 ? { label: `Delete the ${t.name} list`, danger: true, run: async () => { const y = await prCall('POST', `/projects/${p.id}/schema`, { op: 'removeType', typeId: t.id }); if (y) { prUpsertProject(y.project); PR.records.set(p.id, prRecs(p.id).filter((r) => r.typeId !== t.id)); PR.type = null; renderProjects(); } } } : null,
+      { label: 'Delete project', danger: true, run: async () => { if (await prCall('DELETE', '/projects/' + p.id)) { S.projects = S.projects.filter((x) => x.id !== p.id); PR.open = null; renderProjects(); } } },
+    ].filter(Boolean));
+    const search = h('input', { type: 'search', class: 'pj-search', value: PR.q, placeholder: `Search ${t.name.toLowerCase()}`, 'aria-label': 'Search' });
+    search.addEventListener('input', () => { PR.q = search.value; const b = $('#projects .pj-body'); if (b) b.replaceChildren(...(v.kind === 'board' ? prBoard(p, t, v) : prTable(p, t, v)).filter(Boolean)); });
+    const viewMenu = (e, x) => openMenu(e.currentTarget, [
+      { label: 'Rename view', run: () => { const i = h('input', { value: x.name }); sheet('Rename view', [h('label', {}, 'Name', i)], () => prSchema(p, { op: 'updateView', typeId: t.id, viewId: x.id, name: i.value })); } },
+      { label: x.kind === 'board' ? 'Show as a table' : 'Show as a board', run: () => prSchema(p, { op: 'updateView', typeId: t.id, viewId: x.id, kind: x.kind === 'board' ? 'table' : 'board' }) },
+      ...(x.kind === 'board' ? t.fields.filter((f) => f.type === 'select').map((f) => ({ label: `Columns by ${f.name}`, on: x.groupBy === f.id, run: () => prSchema(p, { op: 'updateView', typeId: t.id, viewId: x.id, groupBy: f.id }) })) : []),
+      t.views.length > 1 ? { label: 'Delete view', danger: true, run: () => { PR.view = null; prSchema(p, { op: 'removeView', typeId: t.id, viewId: x.id }); } } : null,
+    ].filter(Boolean));
+    return [
+      h('div', { class: 'pj-top' },
+        h('button', { class: 'icon-btn', 'aria-label': 'All projects', html: I.back, onclick: () => { PR.open = null; renderProjects(); } }),
+        h('span', { class: 'pj-ic' }, p.icon), h('b', { class: 'pj-name' }, p.name), p.private ? h('small', { title: 'Private' }, '🔒') : null,
+        h('div', { class: 'pj-types' }, p.types.map((x) => h('button', { class: x.id === t.id ? 'on' : null, onclick: () => { PR.type = x.id; PR.view = null; PR.panel = null; renderProjects(); } }, `${x.icon || ''} ${x.name}`, h('small', {}, String(prRecs(p.id).filter((r) => r.typeId === x.id).length))))),
+        h('button', { class: 'icon-btn', 'aria-label': 'Project options', html: I.more, onclick: more })),
+      h('div', { class: 'pj-bar' },
+        h('div', { class: 'pj-views' }, t.views.map((x) => h('button', { class: x.id === v.id ? 'on' : null, onclick: () => { PR.view = x.id; renderProjects(); }, oncontextmenu: (e) => { e.preventDefault(); viewMenu(e, x); } }, x.kind === 'board' ? '▥ ' : '☰ ', x.name)),
+          h('button', { class: 'pj-view-more', title: 'This view', 'aria-label': 'View options', onclick: (e) => viewMenu(e, v) }, '⌄'),
+          h('button', { class: 'pj-view-add', title: 'Add a view', onclick: (e) => openMenu(e.currentTarget, [{ label: '☰ Table', run: () => prSchema(p, { op: 'addView', typeId: t.id, name: 'Table', kind: 'table' }, true) }, { label: '▥ Board', run: () => prSchema(p, { op: 'addView', typeId: t.id, name: 'Board', kind: 'board' }, true) }]) }, '+')),
+        search,
+        h('button', { class: 'btn primary-btn', onclick: () => prNew(p, t) }, `+ New ${(t.singular || 'record').toLowerCase()}`)),
+      h('div', { class: 'pj-main' },
+        h('div', { class: 'pj-body' + (v.kind === 'board' ? ' board' : '') }, ...(PR.loading === p.id ? [h('p', { class: 'day-hint' }, 'Loading…')] : v.kind === 'board' ? prBoard(p, t, v) : prTable(p, t, v)).filter(Boolean)),
+        PR.panel ? prPanel(p, PR.panel) : null),
+    ];
+  }
+  async function prSchema(p, body, pickNew) {
+    const y = await prCall('POST', `/projects/${p.id}/schema`, body);
+    if (!y) return null;
+    prUpsertProject(y.project);
+    if (pickNew && y.made?.id) PR.view = y.made.id;
+    renderProjects();
+    return y.made;
+  }
+  // The records a view shows: searched, filtered and sorted.
+  function prShown(p, t, v) {
+    const q = PR.q.trim().toLowerCase();
+    let recs = prRecs(p.id).filter((r) => r.typeId === t.id);
+    if (q) recs = recs.filter((r) => t.fields.some((f) => prText(p, f, r.values[f.id]).toLowerCase().includes(q)));
+    if (v.filter?.field && v.filter.is?.length) recs = recs.filter((r) => v.filter.is.includes(String(r.values[v.filter.field] ?? '')));
+    const sf = v.sort && prField(t, v.sort.field);
+    const key = (r) => (sf ? (sf.type === 'select' ? sf.choices.findIndex((c) => c.id === r.values[sf.id]) : sf.type === 'number' || sf.type === 'money' ? r.values[sf.id] ?? -Infinity : prText(p, sf, r.values[sf.id]).toLowerCase()) : -r.createdAt);
+    return recs.sort((a, b) => { const x = key(a), y = key(b); const d = x < y ? -1 : x > y ? 1 : 0; return v.sort?.dir === 'desc' ? -d : d; });
+  }
+  // A value as text: for search, export, and showing.
+  function prText(p, f, v) {
+    if (v == null || v === '') return '';
+    if (f.type === 'money') return money(v);
+    if (f.type === 'select') return f.choices.find((c) => c.id === v)?.label || '';
+    if (f.type === 'multi') return v.map((id) => f.choices.find((c) => c.id === id)?.label).filter(Boolean).join(', ');
+    if (f.type === 'person') return S.workspace?.members.find((m) => m.id === v)?.name || '';
+    if (f.type === 'checkbox') return v ? 'Yes' : '';
+    if (f.type === 'date') return v;
+    if (f.type === 'link') { const to = prType(p, f.target); return v.map((id) => recName(to, recById(p.id, id))).join(', '); }
+    return String(v);
+  }
+  const pjChip = (c) => h('span', { class: 'pj-chip', style: `--c:${PF_COLOR[c.color] || PF_COLOR.gray}` }, c.label);
+  // A value as it shows in a cell or card.
+  function prShow(p, f, v) {
+    if (v == null || v === '' || (Array.isArray(v) && !v.length)) return null;
+    if (f.type === 'select') { const c = f.choices.find((x) => x.id === v); return c ? pjChip(c) : null; }
+    if (f.type === 'multi') return v.map((id) => f.choices.find((x) => x.id === id)).filter(Boolean).map(pjChip);
+    if (f.type === 'person') return [avatar(v), ' ', memberName(v)];
+    if (f.type === 'checkbox') return h('span', { class: 'pj-check on' }, '✓');
+    if (f.type === 'money') return h('span', { class: 'pj-num' }, money(v));
+    if (f.type === 'number') return h('span', { class: 'pj-num' }, Number(v).toLocaleString());
+    if (f.type === 'date') return dueLabel(v);
+    if (f.type === 'email') return h('a', { href: 'mailto:' + v, onclick: (e) => e.stopPropagation() }, v);
+    if (f.type === 'phone') return h('a', { href: 'tel:' + String(v).replace(/[^\d+]/g, ''), onclick: (e) => e.stopPropagation() }, v);
+    if (f.type === 'url') return h('a', { href: v, target: '_blank', rel: 'noopener', onclick: (e) => e.stopPropagation() }, v.replace(/^https?:\/\/(www\.)?/, '').replace(/\/$/, ''));
+    if (f.type === 'link') { const to = prType(p, f.target); return v.map((id) => recById(p.id, id)).filter(Boolean).map((r) => h('button', { class: 'pj-link', onclick: (e) => { e.stopPropagation(); PR.type = r.typeId; PR.view = null; PR.panel = r.id; renderProjects(); } }, recName(to, r))); }
+    return String(v);
+  }
+  async function prSet(p, r, f, value) {
+    const y = await prCall('PATCH', '/records/' + r.id, { values: { [f.id]: value } });
+    if (y) { prUpsertRecord(y); renderProjects(); }
+    return y;
+  }
+  // Editing one value, in place: a box for words and numbers, a menu for options, people and links.
+  function prEdit(anchor, p, t, r, f) {
+    const v = r.values[f.id];
+    const set = (val) => prSet(p, r, f, val);
+    if (f.type === 'checkbox') return set(!v);
+    if (f.type === 'select' || f.type === 'multi') {
+      const many = f.type === 'multi';
+      const on = (id) => (many ? (v || []).includes(id) : v === id);
+      return openMenu(anchor, [
+        ...f.choices.map((c) => ({ label: h('span', {}, pjChip(c)), on: on(c.id), run: () => set(many ? (on(c.id) ? (v || []).filter((x) => x !== c.id) : [...(v || []), c.id]) : c.id) })),
+        { label: '+ New option…', run: () => prEditChoices(p, t, f, true) },
+        v != null ? { label: 'Clear', run: () => set(null) } : null,
+      ].filter(Boolean));
+    }
+    if (f.type === 'person') return openMenu(anchor, [...(S.workspace?.members || []).map((m) => ({ label: h('span', {}, avatar(m.id), ' ', m.name), on: v === m.id, run: () => set(m.id) })), v ? { label: 'Clear', run: () => set(null) } : null].filter(Boolean));
+    if (f.type === 'link') {
+      const to = prType(p, f.target);
+      const cur = v || [];
+      const opts = prRecs(p.id).filter((x) => x.typeId === f.target).sort((a, b) => recName(to, a).localeCompare(recName(to, b)));
+      return openMenu(anchor, [
+        { head: `Link to ${f.many ? '' : 'a '}${(to?.singular || 'record').toLowerCase()}` },
+        ...opts.slice(0, 40).map((x) => ({ label: recName(to, x), on: cur.includes(x.id), run: () => set(f.many ? (cur.includes(x.id) ? cur.filter((y) => y !== x.id) : [...cur, x.id]) : [x.id]) })),
+        opts.length > 40 ? { note: `Showing 40 of ${opts.length}. Search in the record’s panel.` } : null,
+        { label: `+ New ${(to?.singular || 'record').toLowerCase()}…`, run: async () => { const n = await prNewQuick(p, to); if (n) set(f.many ? [...cur, n.id] : [n.id]); } },
+        cur.length ? { label: 'Clear', run: () => set(null) } : null,
+      ].filter(Boolean));
+    }
+    // Words, numbers, money, dates: a box in place of the value.
+    const inp = h('input', { class: 'pj-input', type: f.type === 'date' ? 'date' : f.type === 'number' || f.type === 'money' ? 'text' : f.type === 'email' ? 'email' : 'text', inputmode: f.type === 'number' || f.type === 'money' ? 'decimal' : null, value: v == null ? '' : f.type === 'money' ? (v / 100).toFixed(v % 100 ? 2 : 0) : v });
+    let done = false;
+    const finish = (save) => {
+      if (done) return;
+      done = true;
+      const val = inp.value.trim();
+      inp.replaceWith(anchor);
+      const was = v == null ? '' : f.type === 'money' ? (v / 100).toFixed(v % 100 ? 2 : 0) : String(v);
+      if (save && val !== was) set(val === '' ? null : val);
+    };
+    inp.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') finish(true); if (e.key === 'Escape') finish(false); });
+    inp.addEventListener('blur', () => finish(true));
+    anchor.replaceWith(inp);
+    inp.focus();
+    inp.select?.();
+  }
+  function prEditChoices(p, t, f, adding) {
+    const ta = h('textarea', { rows: Math.max(4, f.choices.length + 2) });
+    ta.value = f.choices.map((c) => c.label).join('\n') + (adding ? '\n' : '');
+    sheet(`${f.name}: options`, [h('p', { class: 'day-hint' }, 'One per line, in order. Renaming one keeps it on every record that has it.'), ta], async () => {
+      const labels = ta.value.split('\n').map((x) => x.trim()).filter(Boolean);
+      // Lines that match an old label (or sit where it was) keep its id and color.
+      const choices = labels.map((label, i) => { const old = f.choices.find((c) => c.label === label) || (labels.length === f.choices.length ? f.choices[i] : null); return { id: old?.id, label, color: old?.color }; });
+      await prSchema(p, { op: 'updateField', typeId: t.id, fieldId: f.id, choices });
+    });
+    setTimeout(() => { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); });
+  }
+  function prFieldMenu(e, p, t, v, f) {
+    openMenu(e.currentTarget, [
+      { head: `${f.name} · ${PF_NAME[f.type]}` },
+      { label: 'Sort A → Z', on: v.sort?.field === f.id && v.sort.dir === 'asc', run: () => prSchema(p, { op: 'updateView', typeId: t.id, viewId: v.id, sort: { field: f.id, dir: 'asc' } }) },
+      { label: 'Sort Z → A', on: v.sort?.field === f.id && v.sort.dir === 'desc', run: () => prSchema(p, { op: 'updateView', typeId: t.id, viewId: v.id, sort: { field: f.id, dir: 'desc' } }) },
+      v.sort ? { label: 'Newest first (no sort)', run: () => prSchema(p, { op: 'updateView', typeId: t.id, viewId: v.id, sort: null }) } : null,
+      { label: 'Rename', run: () => { const i = h('input', { value: f.name }); sheet('Rename field', [h('label', {}, 'Name', i), h('p', { class: 'day-hint' }, `Apps connected to Column still find it as “${f.key}”.`)], () => prSchema(p, { op: 'updateField', typeId: t.id, fieldId: f.id, name: i.value })); } },
+      f.choices ? { label: 'Edit options…', run: () => prEditChoices(p, t, f) } : null,
+      f.id !== t.primary ? { label: 'Hide', run: () => prSchema(p, { op: 'updateField', typeId: t.id, fieldId: f.id, hidden: true }) } : null,
+      t.fields.some((x) => x.hidden) ? { label: 'Show hidden fields', run: async () => { for (const x of t.fields.filter((y) => y.hidden)) await prCall('POST', `/projects/${p.id}/schema`, { op: 'updateField', typeId: t.id, fieldId: x.id, hidden: false }).then((y) => y && prUpsertProject(y.project)); renderProjects(); } } : null,
+      f.id !== t.primary ? { label: 'Delete field', danger: true, run: () => prSchema(p, { op: 'removeField', typeId: t.id, fieldId: f.id }) } : null,
+    ].filter(Boolean));
+  }
+  function prAddField(p, t) {
+    const name = h('input', { placeholder: 'Close date' });
+    const type = h('select', {}, PF_TYPES.map((k) => h('option', { value: k }, `${PF_IC[k]}  ${PF_NAME[k]}`)));
+    const opts = h('textarea', { rows: 4, placeholder: 'One option per line' });
+    const target = h('select', {}, p.types.map((x) => h('option', { value: x.id }, x.name)));
+    const many = h('input', { type: 'checkbox' });
+    const optWrap = h('label', { class: 'hidden' }, 'Options', opts);
+    const linkWrap = h('div', { class: 'hidden' }, h('label', {}, 'Links to', target), h('label', { class: 'pick' }, many, 'More than one'));
+    type.addEventListener('change', () => { optWrap.classList.toggle('hidden', !['select', 'multi'].includes(type.value)); linkWrap.classList.toggle('hidden', type.value !== 'link'); });
+    sheet(`Add a field to ${t.name}`, [h('label', {}, 'Name', name), h('label', {}, 'Kind', type), optWrap, linkWrap], async () => {
+      if (!name.value.trim()) throw new Error('Name the field.');
+      await prSchema(p, { op: 'addField', typeId: t.id, name: name.value, type: type.value, choices: opts.value.split('\n').map((x) => x.trim()).filter(Boolean), target: target.value, many: many.checked });
+    }, 'Add field');
+  }
+  const PF_TYPES = ['text', 'select', 'multi', 'number', 'money', 'date', 'person', 'email', 'phone', 'url', 'checkbox', 'link'];
+  function prAddType(p) {
+    const name = h('input', { placeholder: 'Jobs' });
+    sheet('Add a list', [h('label', {}, 'Name', name), h('p', { class: 'day-hint' }, 'A new kind of record in this project, like Jobs or Vendors. It starts with a Name field; add more after.')], async () => {
+      const made = await prSchema(p, { op: 'addType', name: name.value || 'New list' });
+      if (made) { PR.type = made.id; PR.view = null; renderProjects(); }
+    }, 'Add');
+  }
+  function prAccess(p) {
+    if (p.memberId !== S.me?.memberId && !amOwner()) return toast('Only whoever made the project and team owners can change who sees it.');
+    const priv = h('input', { type: 'checkbox', checked: !!p.private });
+    const boxes = (S.workspace?.members || []).filter((m) => m.id !== p.memberId).map((m) => ({ m, cb: h('input', { type: 'checkbox', checked: (p.memberIds || []).includes(m.id) }) }));
+    sheet('Who can see it', [h('label', { class: 'pick' }, priv, 'Private: only the people below'), ...boxes.map(({ m, cb }) => h('label', { class: 'pick' }, cb, m.name)), h('p', { class: 'day-hint' }, 'Private projects stay out of connected apps and webhooks.')], async () => {
+      const y = await api('PATCH', '/projects/' + p.id, { private: priv.checked, memberIds: boxes.filter((x) => x.cb.checked).map((x) => x.m.id) });
+      prUpsertProject(y);
+      renderProjects();
+    });
+  }
+  async function prNewQuick(p, t, values = {}) {
+    const r = await prCall('POST', `/projects/${p.id}/records`, { typeId: t.id, values });
+    if (r) prUpsertRecord(r);
+    return r;
+  }
+  async function prNew(p, t, values) {
+    const r = await prNewQuick(p, t, values);
+    if (!r) return;
+    PR.panel = r.id;
+    renderProjects();
+    setTimeout(() => $('#projects .pj-panel .pj-title')?.focus());
+  }
+  // ----- table -----
+  function prTable(p, t, v) {
+    const cols = [prField(t, t.primary), ...t.fields.filter((f) => f.id !== t.primary && !f.hidden)];
+    const recs = prShown(p, t, v);
+    const shown = recs.slice(0, 500);
+    const sum = (f) => recs.reduce((n, r) => n + (Number(r.values[f.id]) || 0), 0);
+    return [h('div', { class: 'pj-table-wrap' }, h('table', { class: 'pj-table' },
+      h('thead', {}, h('tr', {}, cols.map((f) => h('th', { class: f.id === t.primary ? 'pj-first' : null }, h('button', { class: 'pj-th', onclick: (e) => prFieldMenu(e, p, t, v, f) }, h('span', { class: 'pj-fic' }, PF_IC[f.type]), f.name, v.sort?.field === f.id ? (v.sort.dir === 'asc' ? ' ↑' : ' ↓') : ''))),
+        h('th', { class: 'pj-addcol' }, h('button', { class: 'pj-th', title: 'Add a field', onclick: () => prAddField(p, t) }, '+')))),
+      h('tbody', {}, shown.map((r) => h('tr', { class: PR.panel === r.id ? 'on' : null, 'data-id': r.id },
+        cols.map((f) => {
+          if (f.id === t.primary) return h('td', { class: 'pj-first' }, h('button', { class: 'pj-open', onclick: () => { PR.panel = r.id; renderProjects(); } }, recName(t, r)));
+          const cell = h('div', { class: 'pj-cell' + (f.type === 'checkbox' ? ' center' : '') }, prShow(p, f, r.values[f.id]) ?? (f.type === 'checkbox' ? h('span', { class: 'pj-check' }) : ''));
+          cell.addEventListener('click', (e) => { if (e.target.closest('a, .pj-link')) return; prEdit(cell, p, t, r, f); });
+          return h('td', {}, cell);
+        }), h('td', {})))),
+      h('tfoot', {}, h('tr', {}, cols.map((f, i) => h('td', {}, i === 0 ? h('button', { class: 'pj-newrow', onclick: () => prNew(p, t) }, `+ New`) : f.type === 'money' || f.type === 'number' ? h('small', { class: 'pj-num' }, f.type === 'money' ? money(sum(f)) : sum(f).toLocaleString()) : '')), h('td', {}))))),
+      h('p', { class: 'day-hint pj-count' }, `${recs.length.toLocaleString()} ${recs.length === 1 ? (t.singular || 'record').toLowerCase() : t.name.toLowerCase()}${shown.length < recs.length ? ` · showing the first ${shown.length}, search to narrow it down` : ''}`)];
+  }
+  // ----- board -----
+  function prBoard(p, t, v) {
+    const g = prField(t, v.groupBy) || t.fields.find((f) => f.type === 'select');
+    if (!g) return [h('p', { class: 'day-hint' }, 'A board needs a field with options, like Stage.')];
+    const recs = prShown(p, t, v);
+    const sumF = t.fields.find((f) => f.type === 'money');
+    const cardFields = t.fields.filter((f) => f.id !== t.primary && f.id !== g.id && !f.hidden).slice(0, 4);
+    const cols = [...(recs.some((r) => !r.values[g.id]) ? [{ id: '', label: `No ${g.name.toLowerCase()}`, color: 'gray' }] : []), ...g.choices];
+    const board = h('div', { class: 'pj-board' });
+    const card = (r) => {
+      const el = h('div', { class: 'pj-card-r' + (PR.panel === r.id ? ' on' : ''), 'data-id': r.id, onclick: () => { PR.panel = r.id; renderProjects(); } },
+        h('b', {}, recName(t, r)),
+        ...cardFields.map((f) => { const s2 = prShow(p, f, r.values[f.id]); return s2 == null ? null : h('div', { class: 'pj-card-f' }, s2); }));
+      // Drag a card to another column to change its stage.
+      el.addEventListener('pointerdown', (ev) => {
+        let ghost = null, over = null, at = null, roll = null;
+        const pane = () => $('#projects .pj-body'); // the board on screen now, even if it was redrawn
+        const find = () => {
+          const col = document.elementFromPoint(at.x, at.y)?.closest('.pj-col');
+          if (over !== col) { over?.classList.remove('over'); over = col; over?.classList.add('over'); }
+        };
+        pointerDrag(ev, {
+          onStart: () => {
+            el.classList.add('dragging'); ghost = el.cloneNode(true); ghost.classList.add('pj-ghost'); ghost.style.width = el.offsetWidth + 'px'; document.body.append(ghost);
+            // Held near the board's edge, it scrolls toward the columns out of sight.
+            roll = setInterval(() => {
+              const box = pane();
+              if (!at || !box) return;
+              const b = box.getBoundingClientRect();
+              const d = at.x > b.right - 60 ? 18 : at.x < b.left + 60 ? -18 : 0;
+              if (d) { box.scrollLeft += d; find(); }
+            }, 16);
+          },
+          onMove: (e) => {
+            at = { x: e.clientX, y: e.clientY };
+            ghost.style.transform = `translate(${e.clientX - 20}px, ${e.clientY - 16}px)`;
+            find();
+          },
+          onEnd: () => {
+            clearInterval(roll);
+            ghost?.remove();
+            el.classList.remove('dragging');
+            over?.classList.remove('over');
+            const to = over?.dataset.choice;
+            if (over && to !== (r.values[g.id] || '')) {
+              // Moved at once on screen; the server confirms.
+              r.values = { ...r.values, [g.id]: to || undefined };
+              if (!to) delete r.values[g.id];
+              renderProjects();
+              prSet(p, r, g, to || null);
+            }
+          },
+        });
+      });
+      return el;
+    };
+    for (const c of cols) {
+      const inCol = recs.filter((r) => (r.values[g.id] || '') === c.id);
+      const total = sumF ? inCol.reduce((n, r) => n + (r.values[sumF.id] || 0), 0) : 0;
+      board.append(h('div', { class: 'pj-col', 'data-choice': c.id, style: `--c:${PF_COLOR[c.color] || PF_COLOR.gray}` },
+        h('div', { class: 'pj-col-h' }, h('span', { class: 'pj-dot' }), h('b', {}, c.label), h('small', {}, String(inCol.length)), sumF && total ? h('small', { class: 'pj-num pj-col-sum' }, money(total)) : null),
+        h('div', { class: 'pj-col-cards' }, inCol.slice(0, 300).map(card)),
+        h('button', { class: 'pj-newrow', onclick: () => prNew(p, t, c.id ? { [g.id]: c.id } : {}) }, '+ New')));
+    }
+    return [board];
+  }
+  // ----- one record: its fields, what links to it, its notes doc -----
+  function prPanel(p, id) {
+    const r = recById(p.id, id);
+    if (!r) { PR.panel = null; return null; }
+    const t = prType(p, r.typeId);
+    const title = h('input', { class: 'pj-title', value: String(r.values[t.primary] ?? ''), placeholder: `${t.singular || 'Record'} name` });
+    title.addEventListener('change', () => prSet(p, r, prField(t, t.primary), title.value.trim() || null));
+    title.addEventListener('keydown', (e) => { if (e.key === 'Enter') title.blur(); });
+    // Records elsewhere that link to this one, by list and field.
+    const back = [];
+    for (const o of p.types) for (const f of o.fields) if (f.type === 'link' && f.target === t.id) {
+      const from = prRecs(p.id).filter((x) => x.typeId === o.id && (x.values[f.id] || []).includes(r.id));
+      if (from.length) back.push({ o, f, from });
+    }
+    const doc = r.docId && S.items.find((x) => x.id === r.docId);
+    const notes = async () => {
+      if (doc) return openDoc(doc);
+      const it = await prCall('POST', '/items', { type: 'text', doc: { title: recName(t, r), blocks: [] } });
+      if (!it) return;
+      upsert(it);
+      await prCall('PATCH', '/records/' + r.id, { docId: it.id }).then((y) => y && prUpsertRecord(y));
+      openDoc(it, { fresh: false });
+    };
+    const fields = t.fields.filter((f) => f.id !== t.primary);
+    return h('aside', { class: 'pj-panel' },
+      h('div', { class: 'pj-panel-h' }, h('small', {}, `${t.icon || ''} ${t.singular || t.name}`), h('span', { style: 'flex:1' }),
+        h('button', { class: 'icon-btn', 'aria-label': 'Record options', html: I.more, onclick: (e) => openMenu(e.currentTarget, [{ label: `Delete this ${(t.singular || 'record').toLowerCase()}`, danger: true, run: async () => { if (await prCall('DELETE', '/records/' + r.id)) { PR.records.set(p.id, prRecs(p.id).filter((x) => x.id !== r.id)); PR.panel = null; renderProjects(); } } }]) }),
+        h('button', { class: 'icon-btn', 'aria-label': 'Close', html: I.close, onclick: () => { PR.panel = null; renderProjects(); } })),
+      title,
+      h('div', { class: 'pj-fields' }, fields.map((f) => {
+        const val = h('div', { class: 'pj-cell' }, prShow(p, f, r.values[f.id]) ?? (f.type === 'checkbox' ? h('span', { class: 'pj-check' }) : h('span', { class: 'pj-empty-v' }, 'Empty')));
+        val.addEventListener('click', (e) => { if (e.target.closest('a, .pj-link')) return; prEdit(val, p, t, r, f); });
+        return h('div', { class: 'pj-frow' + (f.hidden ? ' hid' : '') }, h('span', { class: 'pj-flabel' }, h('span', { class: 'pj-fic' }, PF_IC[f.type]), f.name), val);
+      })),
+      ...back.map(({ o, f, from }) => h('div', { class: 'pj-back' }, h('h4', {}, `${o.name} · ${f.name}`), from.map((x) => h('button', { class: 'pj-link', onclick: () => { PR.type = o.id; PR.view = null; PR.panel = x.id; renderProjects(); } }, recName(o, x), o.fields.find((y) => y.type === 'money') && x.values[o.fields.find((y) => y.type === 'money').id] ? h('small', {}, ' · ' + money(x.values[o.fields.find((y) => y.type === 'money').id])) : null)))),
+      h('button', { class: 'btn pj-notes', onclick: notes }, doc ? `📄 Notes · ${docSnippet(doc) ? shortText(docSnippet(doc), 50) : 'open'}` : '📄 Add notes (a doc)'),
+      h('small', { class: 'pj-meta' }, `Added by ${r.by} · ${ago(r.createdAt)}${r.updatedAt > r.createdAt + 1000 ? ` · changed ${ago(r.updatedAt)}` : ''}${r.extId ? ` · from another app (${r.extId})` : ''}`));
+  }
+  // ----- spreadsheets in and out -----
+  function prImport(p, t) {
+    const input = h('input', { type: 'file', accept: '.csv,.tsv,.txt', class: 'hidden' });
+    input.addEventListener('change', async () => {
+      const file = input.files[0];
+      if (!file) return;
+      const rows = parseDelimited(await file.text()).filter((r) => r.some((c) => String(c).trim()));
+      if (rows.length < 2) return toast('That file has no rows under its headings.');
+      const [heads, ...body] = rows;
+      const norm = (s) => String(s).toLowerCase().replace(/[^a-z0-9]/g, '');
+      const guess = (hd) => t.fields.find((f) => norm(f.name) === norm(hd) || norm(f.key) === norm(hd))?.id || '';
+      const maps = heads.map((hd) => {
+        const sel = h('select', {}, h('option', { value: '' }, '— skip —'), t.fields.map((f) => h('option', { value: f.id }, f.name)));
+        sel.value = guess(hd);
+        return { hd, sel };
+      });
+      const matchSel = h('select', {}, h('option', { value: '' }, 'Always add new ones'), t.fields.filter((f) => ['text', 'email', 'phone', 'url'].includes(f.type)).map((f) => h('option', { value: f.id }, `Update the one with the same ${f.name.toLowerCase()}`)));
+      const em = t.fields.find((f) => f.type === 'email');
+      if (em) matchSel.value = em.id;
+      sheet(`Import ${body.length.toLocaleString()} rows into ${t.name}`, [
+        h('p', { class: 'day-hint' }, `From ${file.name}. Pick which field each column fills. New options (like a stage you haven’t used) are added.`),
+        h('div', { class: 'pj-map' }, maps.map(({ hd, sel }) => h('label', {}, h('span', {}, hd, h('small', {}, ' e.g. ' + shortText(body[0][heads.indexOf(hd)] || '', 24))), sel))),
+        h('label', {}, 'When a row is already here', matchSel),
+      ], async () => {
+        const used = maps.filter((x) => x.sel.value);
+        if (!used.length) throw new Error('Pick a field for at least one column.');
+        const out = body.map((row) => Object.fromEntries(used.map((x) => [x.sel.value, row[heads.indexOf(x.hd)]]).filter(([, val]) => val != null && String(val).trim() !== '')));
+        const r = await api('POST', `/projects/${p.id}/import`, { typeId: t.id, rows: out, match: matchSel.value || null });
+        const list = await api('GET', `/projects/${p.id}/records`);
+        PR.records.set(p.id, list);
+        renderProjects();
+        toast(`${r.added} added, ${r.updated} updated${r.skipped.length ? ` · ${r.skipped.length} skipped (row ${r.skipped[0].row}: ${r.skipped[0].error})` : ''}`);
+      }, 'Import');
+    });
+    document.body.append(input);
+    input.click();
+    setTimeout(() => input.remove(), 60_000);
+  }
+  function prExport(p, t) {
+    const recs = prRecs(p.id).filter((r) => r.typeId === t.id);
+    const cell = (s) => (/[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s);
+    const csv = [t.fields.map((f) => cell(f.name)).join(','), ...recs.map((r) => t.fields.map((f) => cell(f.type === 'money' && r.values[f.id] != null ? (r.values[f.id] / 100).toFixed(2) : prText(p, f, r.values[f.id]))).join(','))].join('\n');
+    const a = h('a', { href: URL.createObjectURL(new Blob(['﻿' + csv], { type: 'text/csv' })), download: `${p.name} - ${t.name}.csv` });
+    document.body.append(a);
+    a.click();
+    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+    toast(`${recs.length} ${t.name.toLowerCase()} exported`);
+  }
+  function prNews(msg) {
+    if (msg.type === 'project') prUpsertProject(msg.project);
+    else if (msg.type === 'project:remove') { S.projects = (S.projects || []).filter((x) => x.id !== msg.id); PR.records.delete(msg.id); if (PR.open === msg.id) PR.open = null; }
+    else if (msg.type === 'project:access') api('GET', '/projects').then((list) => { S.projects = list; for (const id of [...PR.records.keys()]) if (!list.some((x) => x.id === id)) PR.records.delete(id); renderProjects(); }).catch(() => {});
+    else if (msg.type === 'record') prUpsertRecord(msg.record);
+    else if (msg.type === 'record:remove' && PR.records.has(msg.projectId)) PR.records.set(msg.projectId, prRecs(msg.projectId).filter((x) => x.id !== msg.id));
+    prSoon();
+  }
 
   // ----- Docs: notes written as pages of blocks (dockit.js) -----
   // Every note is a doc. It opens over the app, saves as you type, and stays in step with anyone else who has
@@ -10116,6 +10654,7 @@
       s.append(aiSection());
       loadAi();
       if (isOwner()) s.append(pssSection());
+      if (isOwner()) s.append(intSection());
     }
 
     if (tab === 'team') {

@@ -15,6 +15,7 @@ import { providers as calProviders } from './calendar.js';
 import { llms, llmError, complete } from './llm.js';
 import { fileText, officeKind } from './extract.js';
 import { PdfError, stampPdf, addCertificate, pageCount, writeDoc } from './pdf.js';
+import { projectsModule } from './projects.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 4747);
@@ -1030,7 +1031,7 @@ function broadcast(wsId, msg) {
   const inDir = msg.item && db.items[msg.item.id];
   const data = JSON.stringify(msg);
   for (const s of set) if (hide && s.readyState === 1 && !seesItemDir(inDir, s.meta.memberId)) s.send(hide);
-  for (const s of set) if (s.readyState === 1 && seesCampaign(campaignId, s.meta.memberId) && seesFeed(feed, s.meta.memberId) && seesItemDir(inDir, s.meta.memberId) && seesTemplate(msg.template, s.meta.memberId) && seesEntry(msg.entry, s.meta.memberId) && (!msg.forMember || msg.forMember === s.meta.memberId) && (!msg.forOwners || isOwnerId(wsId, s.meta.memberId)) && (!msg.bill || seesBill(wsId, msg.bill, s.meta.memberId))) s.send(data);
+  for (const s of set) if (s.readyState === 1 && seesCampaign(campaignId, s.meta.memberId) && seesFeed(feed, s.meta.memberId) && seesItemDir(inDir, s.meta.memberId) && seesTemplate(msg.template, s.meta.memberId) && seesEntry(msg.entry, s.meta.memberId) && (!msg.forMember || msg.forMember === s.meta.memberId) && (!msg.forOwners || isOwnerId(wsId, s.meta.memberId)) && (!msg.bill || seesBill(wsId, msg.bill, s.meta.memberId)) && PJ.seesMsg(msg, s.meta.memberId)) s.send(data);
 }
 
 // ---------- campaigns: campaign → goals → tasks, plus logged attempts (each call or email and its outcome) ----------
@@ -3310,6 +3311,8 @@ async function api(req, res, url) {
   const m = req.method;
 
   if (a === 'health') return send(res, 200, { ok: true, app: 'column' });
+  // The public API, for other apps: its own keys, not a person's sign-in.
+  if (a === 'v1') return PJ.v1(req, res, parts.slice(1));
 
   if (a === 'auth' && m === 'POST') {
     const { workspace, password, code, name, device, deviceId, mode } = await readJson(req);
@@ -3386,6 +3389,11 @@ async function api(req, res, url) {
     return send(res, 200, { ok: true });
   }
 
+  if (a === 'projects' || a === 'records' || a === 'integrations') {
+    const out = await PJ.route(req, res, parts, auth, ws);
+    if (out !== null) return;
+  }
+
   if (a === 'state' && m === 'GET') {
     const items = Object.values(db.items)
       .filter((it) => it.wsId === ws.id && it.status === 'ready' && canSee(auth, 'item', it))
@@ -3405,6 +3413,7 @@ async function api(req, res, url) {
       bills: Object.values(db.bills).filter((x) => x.wsId === ws.id && seesBill(ws.id, x, auth.memberId)).map(publicBill),
       money: Object.values(db.money).filter((x) => x.wsId === ws.id && seesBill(ws.id, x, auth.memberId)).map(publicMoney),
       budgets: Object.values(db.budgets).filter((x) => x.wsId === ws.id && seesBill(ws.id, x, auth.memberId)).map(publicBudget),
+      projects: PJ.stateFor(ws, auth),
       version: clientVersion(),
     });
   }
@@ -5288,6 +5297,9 @@ async function importData(req, res) {
   });
 }
 
+// Projects and the public API (projects.js).
+const PJ = projectsModule({ db, save, broadcast, rid, cleanText, isDay, readJson, send, badRequest, isOwnerId, allowLocalHooks: process.env.ALLOW_LOCAL_WEBHOOKS === '1' });
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://x');
   if (url.pathname.startsWith('/api/')) {
@@ -5313,6 +5325,7 @@ const server = http.createServer(async (req, res) => {
     return serveStatic(req, res, new URL('/sign.html', 'http://x'));
   }
   if (url.pathname === '/download' || url.pathname === '/get') return serveStatic(req, res, new URL('/download.html', 'http://x'));
+  if (url.pathname === '/developers') return serveStatic(req, res, new URL('/developers.html', 'http://x'));
   if (url.pathname.startsWith('/brand/') && (req.method === 'GET' || req.method === 'HEAD')) return serveLogo(req, res, url);
   if (url.pathname.startsWith('/oauth/')) return oauthCallback(req, res, url).catch((e) => {
     console.error(e);
