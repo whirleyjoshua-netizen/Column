@@ -404,8 +404,9 @@ window.ColumnDocs = (() => {
     }).join('\n');
   }
   // As HTML elements (for the clipboard, and for Word). shift moves headings down a level, for a page whose
-  // title is the top heading. live(b) gives a live block's numbers as lines of text.
-  function toHtml(blocks, { shift = 0, files, live } = {}) {
+  // title is the top heading. live(b) gives a live block's numbers as lines of text; pics maps a file's id to
+  // { src, w, h } for pictures to put in (Word).
+  function toHtml(blocks, { shift = 0, files, live, pics } = {}) {
     const root = el('div');
     const stack = [{ indent: -1, into: root }];
     const runsEl = (runs, into) => { drawRuns(runs, into); into.querySelectorAll('a').forEach((a) => { a.removeAttribute('title'); a.removeAttribute('target'); a.removeAttribute('rel'); }); return into; };
@@ -438,7 +439,9 @@ window.ColumnDocs = (() => {
         into.append(el('table', {}, el('tbody', {}, b.rows.map((r, i) => el('tr', {}, r.map((c) => runsEl(c, el(i === 0 && b.header ? 'th' : 'td'))))))));
       } else if (b.type === 'file') {
         const f = files?.(b.itemId);
-        into.append(el('p', {}, f?.url ? el('a', { href: f.url }, b.name || f.name || 'File') : `[${b.name || 'File'}]`));
+        const pic = pics?.get(b.itemId);
+        into.append(pic ? el('p', {}, el('img', { src: pic.src, 'data-w': pic.w, 'data-h': pic.h, alt: b.name || '' }))
+          : el('p', {}, f?.url ? el('a', { href: f.url }, b.name || f.name || 'File') : `[${b.name || 'File'}]`));
       } else if (b.type === 'live') {
         const lines = live?.(b) || [LIVE_NAME[b.source]];
         into.append(el('p', {}, el('b', {}, lines[0])), ...lines.slice(1).map((l) => el('p', {}, l)));
@@ -521,7 +524,7 @@ window.ColumnDocs = (() => {
   // opts: { title, blocks, onChange(), upload(files) → [{ itemId, name }], fileInfo(itemId) → { name, url, image,
   // size } | null, openFile(itemId), menu(anchor, rows), toast(text) }
   function editor(opts) {
-    const S = { blocks: clone(opts.blocks || []), title: opts.title || '', sel: [], anchor: null, undo: [], redo: [], typing: null, slash: null, composing: false, uploads: 0, focus: null, autoTask: new Set() };
+    const S = { blocks: clone(opts.blocks || []), title: opts.title || '', sel: [], anchor: null, undo: [], redo: [], typing: null, slash: null, composing: false, uploads: 0, focus: null, autoTask: new Set(), ro: !!opts.readOnly };
     const draw = (runs, into) => drawRuns(runs, into, opts.refInfo);
     const titleEl = el('div', { class: 'dk-title', contenteditable: 'true', 'data-ph': 'Untitled', spellcheck: 'true', role: 'textbox', 'aria-label': 'Title' });
     titleEl.textContent = S.title;
@@ -608,9 +611,9 @@ window.ColumnDocs = (() => {
       drawDraft();
     }
     function editable(b, cls, plain) {
-      const e = el(plain ? 'pre' : 'div', { class: 'dk-text ' + cls, contenteditable: 'true', 'data-ph': PH[b.type] || '', spellcheck: plain ? 'false' : 'true' });
+      const e = el(plain ? 'pre' : 'div', { class: 'dk-text ' + cls, contenteditable: S.ro ? 'false' : 'true', 'data-ph': S.ro ? '' : PH[b.type] || '', spellcheck: plain ? 'false' : 'true' });
       // Code takes plain text only, where the browser can do that.
-      if (plain) {
+      if (plain && !S.ro) {
         try {
           e.contentEditable = 'plaintext-only';
         } catch {
@@ -627,6 +630,7 @@ window.ColumnDocs = (() => {
       r.append(el('div', { class: 'dk-handle', contenteditable: 'false' },
         el('button', { class: 'dk-add', type: 'button', title: 'Add a block below', 'aria-label': 'Add a block below', tabindex: '-1' }, '+'),
         el('button', { class: 'dk-grip', type: 'button', title: 'Drag to move · click for options', 'aria-label': 'Block options', tabindex: '-1' }, '⋮⋮')));
+      r.append(...rowMarks(b));
       if (b.type === 'divider') r.append(el('div', { class: 'dk-hr' }, el('hr')));
       else if (b.type === 'live') r.append(liveEl(b));
       else if (b.type === 'file') r.append(fileEl(b));
@@ -641,6 +645,15 @@ window.ColumnDocs = (() => {
         r.append(el('div', { class: 'dk-line' }, lead, editable(b, 'dk-' + b.type + '-t', b.type === 'code'), taskBits(b)));
       }
       return r;
+    }
+    // Beside a block: its comments, and who else is in it.
+    function rowMarks(b) {
+      const out = [];
+      const n = opts.commentCount?.(b.id) || 0;
+      if (n) out.push(el('button', { class: 'dk-cmt', type: 'button', contenteditable: 'false', tabindex: '-1', title: `${n} comment${n === 1 ? '' : 's'}`, 'data-cmt': b.id }, '💬 ' + n));
+      const here = (opts.here?.() || []).filter((p) => p.block === b.id);
+      if (here.length) out.push(el('span', { class: 'dk-here', contenteditable: 'false', title: here.map((p) => p.name).join(', ') + ' here' }, here.map((p) => el('i', { style: `--h:${p.hue}` }, p.name[0].toUpperCase()))));
+      return out;
     }
     // A task's due date and who it's for, beside its to-do.
     function taskBits(b) {
@@ -671,7 +684,7 @@ window.ColumnDocs = (() => {
     function tableEl(b) {
       const t = el('table', { class: 'dk-table' + (b.header ? ' head' : '') });
       b.rows.forEach((rw, r) => t.append(el('tr', {}, rw.map((c, i) => {
-        const cell = el('div', { class: 'dk-text dk-cell', contenteditable: 'true', 'data-r': r, 'data-c': i, spellcheck: 'true' });
+        const cell = el('div', { class: 'dk-text dk-cell', contenteditable: S.ro ? 'false' : 'true', 'data-r': r, 'data-c': i, spellcheck: 'true' });
         draw(c, cell);
         return el(r === 0 && b.header ? 'th' : 'td', {}, cell);
       }))));
@@ -820,6 +833,7 @@ window.ColumnDocs = (() => {
       changed();
     }
     function onBeforeInput(e) {
+      if (S.ro) return e.preventDefault();
       if (e.inputType === 'historyUndo') { e.preventDefault(); return undo(); }
       if (e.inputType === 'historyRedo') { e.preventDefault(); return redo(); }
       const ed = e.target.closest?.('.dk-text');
@@ -895,6 +909,18 @@ window.ColumnDocs = (() => {
       render();
       makeTaskSoon(b.id);
       focus(next.id, 0);
+      changed();
+    }
+    // A new block under this one (and anything inside it), with the "/" menu open in it.
+    function addBelow(id) {
+      const b = byId(id);
+      if (!b) return;
+      snap();
+      const n = newBlock('p', { runs: [{ text: '/' }], ...(b.indent ? { indent: b.indent } : {}) });
+      S.blocks.splice(childrenEnd(idx(id)), 0, n);
+      render();
+      focus(n.id, 1);
+      openSlash(n.id, 0);
       changed();
     }
     // A to-do started as a task becomes one when it has words and you move on from it.
@@ -991,6 +1017,7 @@ window.ColumnDocs = (() => {
       if (S.draft && e.key === 'Escape' && !e.target.closest?.('.dk-ai-ask')) { e.preventDefault(); return discardDraft(); }
       const mod = isMac ? e.metaKey : e.ctrlKey;
       const k = e.key;
+      if (S.ro) { if (k === 'Escape') clearSel(); return; }
       if (mod && !e.altKey && (k === 'z' || k === 'Z')) { e.preventDefault(); return e.shiftKey ? redo() : undo(); }
       if (mod && k === 'y') { e.preventDefault(); return redo(); }
       // Block selection.
@@ -1146,7 +1173,7 @@ window.ColumnDocs = (() => {
       const sel = getSelection();
       if (!sel.rangeCount) return null;
       const ed = (sel.anchorNode?.nodeType === 1 ? sel.anchorNode : sel.anchorNode?.parentElement)?.closest?.('.dk-text');
-      if (!ed || !root.contains(ed) || ed.tagName === 'PRE') return null;
+      if (!ed || !root.contains(ed) || (ed.tagName === 'PRE' && !S.ro)) return null;
       const c = caretOf(ed);
       if (!c) return null;
       const b = byId(ed.closest('.dk-row').dataset.id);
@@ -1213,7 +1240,9 @@ window.ColumnDocs = (() => {
       const btn = (key, label, title) => el('button', { type: 'button', class: markAll(runs, a.c.start, a.c.end, key) ? 'on' : null, title, onpointerdown: (e) => { e.preventDefault(); key === 'link' ? linkAsk() : format(key); } }, label);
       const k = isMac ? '⌘' : 'Ctrl+';
       const aiBtn = opts.ai && !a.ed.classList.contains('dk-cell') ? el('button', { type: 'button', class: 'dk-ai-btn', title: 'Rework this with AI', onpointerdown: (e) => { e.preventDefault(); aiSelMenu(e.currentTarget, a); } }, '✦ AI') : null;
-      barEl.replaceChildren(aiBtn, btn('b', el('b', {}, 'B'), `Bold (${k}B)`), btn('i', el('i', {}, 'I'), `Italic (${k}I)`), btn('u', el('u', {}, 'U'), `Underline (${k}U)`), btn('s', el('s', {}, 'S'), `Strikethrough (${k}Shift+S)`), btn('code', '</>', `Code (${k}E)`), btn('link', '🔗', `Link (${k}K)`));
+      const cmtBtn = opts.comment ? el('button', { type: 'button', title: 'Comment on this', onpointerdown: (e) => { e.preventDefault(); hideBar(); opts.comment({ blockId: a.b.id, quote: runsText(sliceRuns(a.get(), a.c.start, a.c.end)) }); } }, '💬') : null;
+      if (S.ro) return cmtBtn ? (barEl.replaceChildren(cmtBtn), barEl.classList.remove('hidden'), place(barEl, getSelection().getRangeAt(0).getBoundingClientRect(), true)) : hideBar();
+      barEl.replaceChildren(...[aiBtn, cmtBtn, btn('b', el('b', {}, 'B'), `Bold (${k}B)`), btn('i', el('i', {}, 'I'), `Italic (${k}I)`), btn('u', el('u', {}, 'U'), `Underline (${k}U)`), btn('s', el('s', {}, 'S'), `Strikethrough (${k}Shift+S)`), btn('code', '</>', `Code (${k}E)`), btn('link', '🔗', `Link (${k}K)`)].filter(Boolean));
       barEl.classList.remove('hidden');
       const sel = getSelection();
       place(barEl, sel.rangeCount ? sel.getRangeAt(0).getBoundingClientRect() : null, true);
@@ -1550,6 +1579,7 @@ window.ColumnDocs = (() => {
 
     // ----- paste and copy -----
     function onPaste(e) {
+      if (S.ro) return e.preventDefault();
       const ed = e.target.closest?.('.dk-text');
       const cd = e.clipboardData;
       if (!cd) return;
@@ -1651,6 +1681,8 @@ window.ColumnDocs = (() => {
     // ----- pointer: handles, checkboxes, toggles, dragging -----
     function blockMenu(anchor, b) {
       const rows = [];
+      if (opts.comment) rows.push({ label: '💬 Comment', run: () => opts.comment({ blockId: b.id, quote: '' }) });
+      if (S.ro) return opts.menu?.(anchor, rows);
       if (TEXT.has(b.type)) {
         rows.push({ head: 'Turn into' });
         for (const c of COMMANDS.filter((x) => TEXT.has(x.type) && x.type !== b.type)) rows.push({ label: c.label, run: () => { snap(); turnInto(b, c.type, false); } });
@@ -1771,17 +1803,25 @@ window.ColumnDocs = (() => {
       if (!r) return;
       const id = r.dataset.id;
       const b = byId(id);
+      const cm = e.target.closest('.dk-cmt');
+      if (cm) {
+        e.preventDefault();
+        return opts.openComments?.(cm.dataset.cmt);
+      }
+      // Read-only: links, mentions, files and live blocks work; nothing changes the doc.
+      if (S.ro) {
+        const ref = e.target.closest('.dk-ref');
+        if (ref) { e.preventDefault(); return opts.openRef?.({ k: ref.dataset.k, id: ref.dataset.id }); }
+        if (e.target.closest('.dk-figure, .dk-file') && b?.type === 'file') return opts.openFile?.(b.itemId);
+        if (e.target.closest('.dk-grip')) { e.preventDefault(); return blockMenu(e.target, b); }
+        if (e.target.closest('a') && (isMac ? e.metaKey : e.ctrlKey)) { e.preventDefault(); return open(e.target.closest('a').href, '_blank', 'noopener'); }
+        if (e.target.closest('.dk-check, .dk-arrow, .dk-emoji, .dk-add, .dk-tbl-add')) e.preventDefault();
+        return;
+      }
       if (e.target.closest('.dk-grip')) return gripDrag(e, id);
       if (e.target.closest('.dk-add')) {
         e.preventDefault();
-        snap();
-        const n = newBlock('p', { runs: [{ text: '/' }], ...(b.indent ? { indent: b.indent } : {}) });
-        const i = childrenEnd(idx(id));
-        S.blocks.splice(i, 0, n);
-        render();
-        focus(n.id, 1);
-        openSlash(n.id, 0);
-        return changed();
+        return addBelow(id);
       }
       if (e.target.closest('.dk-check')) {
         e.preventDefault();
@@ -1843,6 +1883,7 @@ window.ColumnDocs = (() => {
     });
     tail.addEventListener('pointerdown', (e) => {
       e.preventDefault();
+      if (S.ro) return;
       const last = S.blocks.at(-1);
       if (last && last.type === 'p' && !runsLen(last.runs)) return focus(last.id);
       snap();
@@ -1874,7 +1915,7 @@ window.ColumnDocs = (() => {
     });
     root.addEventListener('drop', (e) => {
       const files = [...(e.dataTransfer?.files || [])];
-      if (!files.length) return;
+      if (!files.length || S.ro) return;
       e.preventDefault();
       e.stopPropagation();
       const r = document.elementFromPoint(e.clientX, e.clientY)?.closest?.('.dk-row');
@@ -1882,8 +1923,14 @@ window.ColumnDocs = (() => {
       if (r && e.clientY < r.getBoundingClientRect().top + r.getBoundingClientRect().height / 2) after = S.blocks[idx(r.dataset.id) - 1]?.id || null;
       addFiles(files, after);
     });
+    let lastBlock;
+    let kbShow = null;
     const onSel = () => {
       if (!root.isConnected) return;
+      kbShow?.();
+      const at = getSelection().anchorNode;
+      const id = at && root.contains(at) ? (at.nodeType === 1 ? at : at.parentElement)?.closest('.dk-row')?.dataset.id || null : lastBlock;
+      if (id !== lastBlock) { lastBlock = id; opts.onBlock?.(id); }
       if (barEl.querySelector('.dk-link-in')) return;
       const sel = getSelection();
       if (sel.rangeCount && !sel.isCollapsed && root.contains(sel.anchorNode)) showBar();
@@ -1899,6 +1946,7 @@ window.ColumnDocs = (() => {
     addEventListener('scroll', onScroll, true);
 
     // ----- the title -----
+    titleEl.addEventListener('beforeinput', (e) => S.ro && e.preventDefault());
     titleEl.addEventListener('input', () => {
       const t = titleEl.textContent.replace(/\s*\n\s*/g, ' ');
       if (titleEl.querySelector('*')) { titleEl.textContent = t; setCaret(titleEl, t.length); }
@@ -1944,6 +1992,8 @@ window.ColumnDocs = (() => {
           else if (bits) bits.remove();
           else if (fresh) r.querySelector('.dk-line').append(fresh);
         }
+        r.querySelectorAll(':scope > .dk-cmt, :scope > .dk-here').forEach((m) => m.remove());
+        r.prepend(...rowMarks(b));
         for (const chip of r.querySelectorAll('.dk-ref')) {
           const info = opts.refInfo?.({ k: chip.dataset.k, id: chip.dataset.id });
           chip.classList.toggle('gone', !!info?.gone);
@@ -1954,6 +2004,48 @@ window.ColumnDocs = (() => {
     if (!S.blocks.length) S.blocks.push(newBlock());
     render();
     if (touch) root.classList.add('dk-touch');
+    // On a phone: a bar over the keyboard for what a keyboard shortcut would do.
+    const kb = touch ? el('div', { class: 'dk-kb hidden', contenteditable: 'false' }) : null;
+    if (kb) {
+      document.body.append(kb);
+      const current = () => {
+        const ed = document.activeElement?.closest?.('.dk-text');
+        return ed && root.contains(ed) ? { ed, b: byId(ed.closest('.dk-row').dataset.id) } : null;
+      };
+      const act = (label, title, fn) => el('button', { type: 'button', title, 'aria-label': title, onpointerdown: (e) => { e.preventDefault(); const c = current(); if (c) fn(c); } }, label);
+      const turn = (type) => ({ b, ed }) => { const at = caretOf(ed)?.start || 0; snap(); setType(b, b.type === type ? 'p' : type); render(); focus(b.id, at); changed(); };
+      kb.append(...[
+        act('+', 'Add a block', ({ b }) => addBelow(b.id)),
+        act(el('b', {}, 'B'), 'Bold', () => format('b')),
+        act(el('i', {}, 'I'), 'Italic', () => format('i')),
+        act('☐', 'To-do', turn('todo')),
+        act('•', 'Bulleted list', turn('ul')),
+        act('⇥', 'Indent', ({ b, ed }) => { const at = caretOf(ed)?.start || 0; snap(); indent([b.id], 1); render(); focus(b.id, at); changed(); }),
+        act('⇤', 'Outdent', ({ b, ed }) => { const at = caretOf(ed)?.start || 0; snap(); indent([b.id], -1); render(); focus(b.id, at); changed(); }),
+        opts.mentions ? act('@', 'Mention', () => document.execCommand('insertText', false, '@')) : null,
+        opts.ai ? act('✦', 'Write with AI', ({ b }) => aiAsk({ mode: 'write', at: b.id, replaceEmpty: !runsLen(b.runs) })) : null,
+        act('⌄', 'Done', ({ ed }) => ed.blur())].filter(Boolean));
+      // Sits on top of the keyboard, which shrinks the visual viewport.
+      const place = () => {
+        const vv = window.visualViewport;
+        kb.style.bottom = vv ? Math.max(0, innerHeight - vv.height - vv.offsetTop) + 'px' : '0px';
+      };
+      const show = () => { kb.classList.toggle('hidden', S.ro || !current()); place(); };
+      kbShow = show;
+      root.addEventListener('focusin', show);
+      root.addEventListener('focusout', () => setTimeout(show, 50));
+      window.visualViewport?.addEventListener('resize', place);
+      window.visualViewport?.addEventListener('scroll', place);
+    }
+    // Locked: shown, not edited.
+    function setReadOnly(on) {
+      S.ro = !!on;
+      root.classList.toggle('dk-ro', S.ro);
+      titleEl.contentEditable = S.ro ? 'false' : 'true';
+      closeSlash();
+      render();
+    }
+    if (S.ro) setReadOnly(true);
 
     return {
       el: root,
@@ -1983,6 +2075,18 @@ window.ColumnDocs = (() => {
       },
       redraw() { render(); },
       refresh,
+      setReadOnly,
+      get readOnly() { return S.ro; },
+      // Scrolls to a block and flashes it (from a comment).
+      show(id) {
+        const r = rowOf(id);
+        if (!r) return false;
+        r.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        r.classList.remove('dk-flash');
+        void r.offsetWidth;
+        r.classList.add('dk-flash');
+        return true;
+      },
       // Starts the doc over from a template, as one step that undo takes back.
       replace(blocks, title) {
         snap();
@@ -2011,6 +2115,7 @@ window.ColumnDocs = (() => {
         removeEventListener('scroll', onScroll, true);
         slashEl.remove();
         barEl.remove();
+        kb?.remove();
       },
     };
   }

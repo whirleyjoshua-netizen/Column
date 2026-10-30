@@ -389,6 +389,31 @@ window.ColumnWord = (() => {
       rels.documentElement.append(r);
       return id;
     }
+    // New pictures from the page (PNG or JPEG data URLs, from a Column doc): each becomes a media part.
+    let picN = 0;
+    function picture(img, into) {
+      const m = /^data:image\/(png|jpeg);base64,(.+)$/.exec(img.getAttribute('src') || '');
+      if (!m) return;
+      const ext = m[1] === 'png' ? 'png' : 'jpeg';
+      const bin = atob(m[2]);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      const name = `media/column-${Date.now().toString(36)}-${++picN}.${ext}`;
+      added.set(dirOf(pkg.main) + name, bytes);
+      const rid = addRel(REL('image'), name);
+      if (!all(ct, 'Default').some((d) => d.getAttribute('Extension') === ext)) {
+        const dft = ct.createElementNS(CT, 'Default');
+        dft.setAttribute('Extension', ext);
+        dft.setAttribute('ContentType', 'image/' + ext);
+        ct.documentElement.prepend(dft);
+      }
+      // Sized as it was, no wider than the page (6.5 inches); 9525 EMU to a pixel.
+      const pw = +img.dataset.w || 600, ph = +img.dataset.h || 400;
+      const cx = Math.round(Math.min(pw * 9525, 6.5 * 914400));
+      const cy = Math.round((cx * ph) / pw);
+      const id = 4000 + picN;
+      into.append(frag(xml, `<w:r xmlns:w="${W}" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="${A}" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture" xmlns:r="${R}"><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="${cx}" cy="${cy}"/><wp:docPr id="${id}" name="Picture ${picN}"/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:nvPicPr><pic:cNvPr id="${id}" name="Picture ${picN}"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="${rid}"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>`));
+    }
     const linkRel = (href) => all(rels, 'Relationship').find((r) => r.getAttribute('Type') === REL('hyperlink') && r.getAttribute('Target') === href)?.getAttribute('Id') || addRel(REL('hyperlink'), href, true);
     function addPart(name, type, relType) {
       addRel(REL(relType), name.slice(dirOf(pkg.main).length));
@@ -511,6 +536,10 @@ window.ColumnWord = (() => {
           const r = w('r');
           r.append(w('br'));
           into.append(r);
+          continue;
+        }
+        if (t === 'IMG') {
+          picture(c, into);
           continue;
         }
         const s = styleOf(c, st);

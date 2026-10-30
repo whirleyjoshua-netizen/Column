@@ -361,6 +361,7 @@
       $('#liveDot').title = 'Live';
       if (hadConnection) loadState().catch(() => {}); // catch up on anything missed
       hadConnection = true;
+      if (DV.doc) docTell(DV.doc);
     };
     s.onmessage = (e) => handle(JSON.parse(e.data));
     s.onclose = (e) => {
@@ -394,12 +395,27 @@
     } else if (msg.type === 'item:update') {
       upsert(msg.item);
       if (toolOpen === 'docs' && msg.item.type === 'text') renderTool();
+      if (DV.doc?.id === msg.item.id) docLockChanged(DV.doc);
       if (msg.item.id === VIEW_ID && !$('#preview .pv-edit, #preview .wd.editing')) openPreview(msg.item, { standalone: true });
       render();
       renderCamps();
       refreshLinks();
     } else if (msg.type === 'doc') {
       docNews(msg);
+    } else if (msg.type === 'doc:here') {
+      docHereNews(msg);
+    } else if (msg.type === 'comment' || msg.type === 'comment:remove') {
+      docCommentNews(msg);
+    } else if (msg.type === 'comment:mention') {
+      const it = S.items.find((y) => y.id === msg.docId);
+      const open = () => { if (!it) return; openDoc(it).then(() => { if (DV.doc) { DV.doc.side = 'comments'; docSide(DV.doc); } }); };
+      toast(`${msg.by} mentioned you in a comment on “${msg.title}”: ${msg.text}`, it ? { label: 'Open', run: open } : undefined);
+      if (S.notify && document.hidden && 'Notification' in window && Notification.permission === 'granted') {
+        try {
+          const n = new Notification(`${msg.by} mentioned you in a comment`, { body: msg.text, icon: '/icon-128.png' });
+          n.onclick = () => { window.focus(); open(); };
+        } catch {}
+      }
     } else if (msg.type === 'doc:mention') {
       const it = S.items.find((y) => y.id === msg.docId);
       const open = () => it && openDoc(it);
@@ -930,7 +946,7 @@
     const k = kind(it);
     if (it.type === 'text') {
       const el = h('article', { class: 'card text doc-card' + (it.pinned ? ' pinned' : ''), draggable: 'true', title: 'Open the doc' },
-        h('div', { class: 'meta', onclick: () => openDoc(it) }, h('div', { class: 'doc-card-t' }, docTitle(it)), docSnippet(it) ? h('div', { class: 'snippet' }, docSnippet(it)) : null, subline(it)),
+        h('div', { class: 'meta', onclick: () => openDoc(it) }, h('div', { class: 'doc-card-t' }, docTitle(it), it.openComments ? h('small', { class: 'doc-card-c', title: 'Open comments' }, ' 💬 ' + it.openComments) : null, it.locked ? h('small', { title: 'Locked' }, ' 🔒') : null), docSnippet(it) ? h('div', { class: 'snippet' }, docSnippet(it)) : null, subline(it)),
         actionsEl(it)
       );
       wireDrag(el, it);
@@ -6054,8 +6070,10 @@
       return toast(e.message);
     }
     const status = h('small', { class: 'dv-status' }, 'Saved');
-    const x = { id: it.id, v: d.v, saved: d.blocks, savedTitle: d.title, sid: newId(), pending: new Map(), timer: null, busy: false, gap: null, warned: false, status, taskId: S.tasks.find((t) => t.files?.includes(it.id))?.id || null };
+    const x = { id: it.id, v: d.v, saved: d.blocks, savedTitle: d.title, sid: newId(), pending: new Map(), timer: null, busy: false, gap: null, warned: false, status, taskId: S.tasks.find((t) => t.files?.includes(it.id))?.id || null,
+      here: [], block: null, comments: [], side: null, draftComment: null, showResolved: false };
     const item = () => S.items.find((y) => y.id === x.id) || it;
+    x.item = item;
     x.ed = ColumnDocs.editor({
       title: d.title, blocks: d.blocks,
       onChange: () => { docSoon(x); docStarter(x); },
@@ -6086,37 +6104,226 @@
       toggleTask: (id, on) => { const t = taskById(id); if (t) patchTask(t, { done: on }); },
       makeTask: docMakeTask,
       openTask: docOpenTask,
+      readOnly: !docCanEdit(it),
+      commentCount: (blockId) => x.comments.filter((c) => c.blockId === blockId && !c.resolved).length,
+      openComments: (blockId) => { x.side = 'comments'; x.focusBlock = blockId; docSide(x); },
+      comment: (at) => { x.draftComment = at; x.side = 'comments'; docSide(x); },
+      here: () => x.here,
+      onBlock: (id) => { x.block = id; docTellSoon(x); },
     });
     DV.doc = x;
+    view.replaceChildren(
+      h('div', { class: 'dv-bar' }),
+      h('div', { class: 'dv-body' },
+        h('div', { class: 'dv-scroll' }, h('div', { class: 'dv-page' }, x.ed.el, h('div', { class: 'dv-start' }), h('div', { class: 'dv-links' }))),
+        h('aside', { class: 'dv-side hidden' })));
+    docBar(x);
+    docLinksDraw(x);
+    docStarter(x);
+    docTasksSync(x);
+    docTell(x);
+    api('GET', `/items/${x.id}/comments`).then((list) => { if (DV.doc !== x) return; x.comments = list; x.ed.refresh(); docBar(x); docSide(x); }).catch(() => {});
+    if (fresh) x.ed.el.querySelector('.dk-title').focus();
+  }
+  // ----- working on a doc together: who's here, comments, history, public link, lock -----
+  const docCanLock = (it) => it.memberId === S.me?.memberId || amOwner();
+  const docCanEdit = (it) => !it.locked || docCanLock(it);
+  const hueOf = (id) => [...String(id)].reduce((n, ch) => n + ch.charCodeAt(0), 0) % 360;
+  // The top of the doc: back, library, where it lives, who else is here, comments, link, lock, options.
+  function docBar(x) {
+    const bar = $('#docview .dv-bar');
+    if (!bar || DV.doc !== x) return;
+    const it = x.item();
+    const open = x.comments.filter((c) => !c.resolved).length;
     const more = (e) => openMenu(e.currentTarget, [
       { label: 'Export as Word (.docx)', run: () => docExport(x, 'docx') },
       { label: 'Export as PDF', run: () => docExport(x, 'pdf') },
       { label: 'Copy as text', run: () => copyText([x.ed.title, ColumnDocs.toText(x.ed.blocks)].filter(Boolean).join('\n\n')) },
-      { label: '✦ Draft the whole doc with AI…', run: () => docAskDraft(x) },
+      x.ed.readOnly ? null : { label: '✦ Draft the whole doc with AI…', run: () => docAskDraft(x) },
       { head: '' },
-      { label: item().dirId ? `In ${docWhere(item())} · move it` : 'Save to folder', run: () => folderMenu(item(), e.target) },
-      { label: 'Move to stack', run: () => stackMenu(item(), e.target) },
-      { label: 'Delete doc', danger: true, run: async () => { await api('DELETE', '/items/' + x.id).catch((er) => toast(er.message)); closeDoc(true); } },
-    ]);
-    view.replaceChildren(
-      h('div', { class: 'dv-bar' },
-        h('button', { class: 'icon-btn', 'aria-label': 'Close doc', title: toolOpen === 'docs' ? 'Back to all docs' : 'Close', html: I.back, onclick: () => closeDoc() }),
-        h('button', { class: 'btn small dv-lib', title: 'Every doc you can see, with search', onclick: docsLibrary }, 'All docs'),
-        h('span', { class: 'dv-where' }, docWhere(item())),
-        status,
-        h('button', { class: 'icon-btn', 'aria-label': 'Doc options', html: I.more, onclick: more })),
-      h('div', { class: 'dv-scroll' }, h('div', { class: 'dv-page' }, x.ed.el, h('div', { class: 'dv-start' }), h('div', { class: 'dv-links' }))));
-    docLinksDraw(x);
-    docStarter(x);
-    docTasksSync(x);
-    if (fresh) x.ed.el.querySelector('.dk-title').focus();
+      { label: it.share ? 'Public link…' : 'Share a public link…', run: () => docShareMenu(e.target, x) },
+      { label: 'Version history', run: () => { x.side = 'history'; docSide(x); } },
+      docCanLock(it) ? { label: it.locked ? 'Unlock: let everyone edit' : 'Lock: only you and owners can edit', run: () => api('PATCH', '/items/' + x.id, { locked: !it.locked }).then(upsert).then(() => docLockChanged(x), (er) => toast(er.message)) } : null,
+      { head: '' },
+      { label: it.dirId ? `In ${docWhere(it)} · move it` : 'Save to folder', run: () => folderMenu(it, e.target) },
+      { label: 'Move to stack', run: () => stackMenu(it, e.target) },
+      docCanEdit(it) ? { label: 'Delete doc', danger: true, run: async () => { await api('DELETE', '/items/' + x.id).catch((er) => toast(er.message)); closeDoc(true); } } : null,
+    ].filter(Boolean));
+    bar.replaceChildren(...[
+      h('button', { class: 'icon-btn', 'aria-label': 'Close doc', title: toolOpen === 'docs' ? 'Back to all docs' : 'Close', html: I.back, onclick: () => closeDoc() }),
+      h('button', { class: 'btn small dv-lib', title: 'Every doc you can see, with search', onclick: docsLibrary }, 'All docs'),
+      h('span', { class: 'dv-where' }, docWhere(it)),
+      it.locked ? h('span', { class: 'dv-badge', title: `Locked by ${it.lockedBy || 'its maker'}: only they and team owners can edit` }, x.ed.readOnly ? '🔒 Read only' : '🔒 Locked') : null,
+      x.status,
+      x.here.length ? h('span', { class: 'dv-here', title: x.here.map((p) => p.name).join(', ') + ' also here' }, x.here.slice(0, 5).map((p) => h('i', { style: `--h:${p.hue}` }, p.name[0].toUpperCase()))) : null,
+      it.share ? h('button', { class: 'btn small dv-pub', title: 'Anyone with the link can read this doc', onclick: (e) => docShareMenu(e.currentTarget, x) }, '🌐 Public') : null,
+      h('button', { class: 'btn small' + (x.side === 'comments' ? ' on' : ''), title: 'Comments', onclick: () => { x.side = x.side === 'comments' ? null : 'comments'; docSide(x); } }, '💬' + (open ? ' ' + open : '')),
+      h('button', { class: 'icon-btn', 'aria-label': 'Doc options', html: I.more, onclick: more })].filter(Boolean));
   }
+  function docLockChanged(x) {
+    const ro = !docCanEdit(x.item());
+    if (ro !== x.ed.readOnly) {
+      x.ed.setReadOnly(ro);
+      if (ro) toast(`${x.item().lockedBy || 'Someone'} locked this doc. You can read and comment.`);
+    }
+    docBar(x);
+    docStarter(x);
+  }
+  // Who's here: this window says which doc and block it's on; the server tells everyone with the doc open.
+  function docTell(x) {
+    if (sock?.readyState === 1) sock.send(JSON.stringify({ type: 'doc:here', id: x ? x.id : null, block: x?.block || null }));
+  }
+  let docTellTimer = null;
+  function docTellSoon(x) {
+    clearTimeout(docTellTimer);
+    docTellTimer = setTimeout(() => DV.doc === x && docTell(x), 400);
+  }
+  function docHereNews(msg) {
+    const x = DV.doc;
+    if (!x || x.id !== msg.id) return;
+    x.here = (msg.people || []).filter((p) => p.memberId !== S.me?.memberId).map((p) => ({ ...p, hue: hueOf(p.memberId) }));
+    x.ed.refresh();
+    docBar(x);
+  }
+  // The side of the doc: its comments, or its history.
+  function docSide(x) {
+    const side = $('#docview .dv-side');
+    if (!side || DV.doc !== x) return;
+    side.classList.toggle('hidden', !x.side);
+    docBar(x);
+    if (x.side === 'comments') return docCommentsDraw(x, side);
+    if (x.side === 'history') return docHistoryDraw(x, side);
+    side.replaceChildren();
+  }
+  const sideHead = (x, title, extra) => h('div', { class: 'dv-side-h' }, h('b', {}, title), extra, h('button', { class: 'icon-btn', 'aria-label': 'Close', html: I.close, onclick: () => { x.side = null; x.draftComment = null; x.preview = null; docSide(x); } }));
+  function docCommentsDraw(x, side) {
+    const order = new Map(x.ed.blocks.map((b, i) => [b.id, i]));
+    const list = x.comments.filter((c) => !!c.resolved === x.showResolved).sort((a, b) => (order.get(a.blockId) ?? 1e9) - (order.get(b.blockId) ?? 1e9) || a.at - b.at);
+    const blockText = (id) => { const b = x.ed.blocks.find((y) => y.id === id); return b ? ColumnDocs.runsText(b.runs) || ColumnDocs.toText([b]) : ''; };
+    const box = (placeholder, send) => {
+      const ta = h('textarea', { rows: 2, placeholder });
+      const wrap = h('div', { class: 'dv-cbox' }, ta);
+      const mk = mentionAuto(wrap, ta);
+      const go = async () => {
+        const text = ta.value.trim();
+        if (!text) return;
+        ta.disabled = true;
+        try { await send(text); ta.value = ''; } catch (e) { toast(e.message); } finally { ta.disabled = false; }
+      };
+      ta.addEventListener('keydown', (e) => {
+        if (mk(e)) return;
+        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); go(); }
+      });
+      wrap.append(h('button', { class: 'btn small primary-btn', onclick: go }, 'Send'));
+      return { wrap, ta };
+    };
+    const msg = (m, del) => h('div', { class: 'dv-cmsg' },
+      h('div', { class: 'dv-cwho' }, avatar(m.memberId, 'sm'), h('b', {}, m.by), h('small', {}, ago(m.at)), del ? h('button', { class: 'linkish', onclick: del }, 'Delete') : null),
+      h('div', { class: 'dv-ctext', html: mentionify(esc(m.text)).replace(/\n/g, '<br>') }));
+    const mine = (m) => m.memberId === S.me?.memberId || amOwner();
+    const draft = x.draftComment ? (() => {
+      const b = box('Comment… @ to mention someone', async (text) => {
+        const c = await api('POST', `/items/${x.id}/comments`, { blockId: x.draftComment.blockId, quote: x.draftComment.quote, text });
+        x.comments = [...x.comments.filter((y) => y.id !== c.id), c];
+        x.draftComment = null;
+        x.ed.refresh();
+        docSide(x);
+      });
+      setTimeout(() => b.ta.focus());
+      return h('div', { class: 'dv-thread new' }, h('div', { class: 'dv-quote' }, x.draftComment.quote || shortText(blockText(x.draftComment.blockId), 120) || 'This block'), b.wrap,
+        h('button', { class: 'linkish', onclick: () => { x.draftComment = null; docSide(x); } }, 'Cancel'));
+    })() : null;
+    side.replaceChildren(...[
+      sideHead(x, 'Comments', h('div', { class: 'seg seg-sm' }, [[false, 'Open'], [true, 'Resolved']].map(([v, t]) => h('button', { class: x.showResolved === v ? 'on' : null, onclick: () => { x.showResolved = v; docSide(x); } }, t)))),
+      draft,
+      ...list.map((c) => {
+        const b = box('Reply…', async (text) => { const y = await api('POST', `/comments/${c.id}/replies`, { text }); x.comments = x.comments.map((z) => (z.id === y.id ? y : z)); docSide(x); });
+        const el = h('div', { class: 'dv-thread' + (x.focusBlock === c.blockId ? ' focus' : '') },
+          h('button', { class: 'dv-quote', title: 'Show it in the doc', onclick: () => x.ed.show(c.blockId) || toast('That part of the doc was removed.') }, c.quote || shortText(blockText(c.blockId), 120) || 'Removed from the doc'),
+          msg(c, mine(c) ? async () => { await api('DELETE', '/comments/' + c.id).catch((e) => toast(e.message)); x.comments = x.comments.filter((y) => y.id !== c.id); x.ed.refresh(); docSide(x); } : null),
+          ...c.replies.map((r) => msg(r, mine(r) ? async () => { const y = await api('DELETE', `/comments/${c.id}/replies/${r.id}`).catch((e) => toast(e.message)); if (y) { x.comments = x.comments.map((z) => (z.id === y.id ? y : z)); docSide(x); } } : null)),
+          c.resolved ? h('small', { class: 'dv-resolved' }, `Resolved by ${c.resolvedBy || 'someone'}`) : b.wrap,
+          h('button', { class: 'btn small', onclick: async () => { const y = await api('PATCH', '/comments/' + c.id, { resolved: !c.resolved }).catch((e) => toast(e.message)); if (y) { x.comments = x.comments.map((z) => (z.id === y.id ? y : z)); x.ed.refresh(); docSide(x); } } }, c.resolved ? 'Reopen' : '✓ Resolve'));
+        return el;
+      }),
+      !list.length && !draft ? h('p', { class: 'day-hint' }, x.showResolved ? 'No resolved comments.' : 'No comments yet. Select some text and press 💬, or use a block’s ⋮⋮ menu.') : null].filter(Boolean));
+    if (x.focusBlock) {
+      side.querySelector('.dv-thread.focus')?.scrollIntoView({ block: 'nearest' });
+      x.focusBlock = null;
+    }
+  }
+  function docCommentNews(msg) {
+    const x = DV.doc;
+    if (!x || (msg.comment?.itemId || msg.itemId) !== x.id) return;
+    x.comments = msg.type === 'comment:remove' ? x.comments.filter((c) => c.id !== msg.id) : [...x.comments.filter((c) => c.id !== msg.comment.id), msg.comment];
+    x.ed.refresh();
+    if (x.side === 'comments' && !$('#docview .dv-side textarea:focus')) docSide(x);
+    else docBar(x);
+  }
+  // History: earlier versions, newest first. Opening one shows it; restoring it is one more change, undoable.
+  async function docHistoryDraw(x, side) {
+    if (x.preview) {
+      const v = x.preview;
+      const page = ColumnDocs.toHtml(v.blocks, { live: docLiveLines });
+      page.className = 'dv-hist-page';
+      return side.replaceChildren(...[
+        sideHead(x, 'Version history'),
+        h('button', { class: 'linkish', onclick: () => { x.preview = null; docSide(x); } }, '‹ All versions'),
+        h('div', { class: 'dv-hist-when' }, h('b', {}, new Date(v.at).toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })), h('small', {}, ' · ' + v.by)),
+        x.ed.readOnly ? null : h('button', { class: 'btn primary-btn', onclick: () => docRestore(x, v) }, 'Restore this version'),
+        h('div', { class: 'dv-hist-doc' }, h('h2', {}, v.title || 'Untitled'), page)].filter(Boolean));
+    }
+    side.replaceChildren(...[sideHead(x, 'Version history'), h('p', { class: 'day-hint' }, 'Loading…')].filter(Boolean));
+    const list = await api('GET', `/items/${x.id}/history`).catch((e) => (toast(e.message), []));
+    if (DV.doc !== x || x.side !== 'history' || x.preview) return;
+    const it = x.item();
+    side.replaceChildren(...[
+      sideHead(x, 'Version history'),
+      h('div', { class: 'dv-hist-row now' }, h('b', {}, 'Now'), h('small', {}, `${it.lastBy || it.by} · ${ago(it.editedAt || it.createdAt)}`)),
+      ...list.map((v) => h('button', { class: 'dv-hist-row', onclick: async () => { x.preview = await api('GET', `/items/${x.id}/history/${v.id}`).catch((e) => (toast(e.message), null)); docSide(x); } },
+        h('b', {}, new Date(v.at).toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })), h('small', {}, `${v.by}${v.title ? ' · ' + shortText(v.title, 40) : ''}`))),
+      !list.length ? h('p', { class: 'day-hint' }, 'No earlier versions yet. One is kept each time someone new starts editing, or after a break of ten minutes.') : null].filter(Boolean));
+  }
+  function docRestore(x, v) {
+    x.restoreFrom = v.id;
+    x.ed.replace(v.blocks, v.title);
+    x.preview = null;
+    x.side = null;
+    docSide(x);
+    docSave(x);
+    toast('Restored that version. ⌘Z undoes it.');
+  }
+  // A public link: anyone with it can read the doc. Live numbers show as they were when shared.
+  function docShareMenu(anchor, x) {
+    const it = x.item();
+    const lives = () => Object.fromEntries(x.ed.blocks.filter((b) => b.type === 'live').map((b) => [b.id, docLiveLines(b)]));
+    const share = async (hours, said = 'Public link copied. Anyone with it can read this doc.') => {
+      await docSave(x);
+      const y = await api('POST', `/items/${x.id}/share`, { hours, live: lives() }).catch((e) => toast(e.message));
+      if (!y) return;
+      upsert(y);
+      copyText(shareUrl(y));
+      toast(said);
+      docBar(x);
+    };
+    if (it.share) return openMenu(anchor, [
+      { head: it.share.expiresAt ? `Public until ${new Date(it.share.expiresAt).toLocaleDateString()}` : 'Public link' },
+      { label: 'Copy the link', run: () => { copyText(shareUrl(it)); toast('Link copied'); } },
+      { label: 'Open the public page', run: () => open(shareUrl(it), '_blank', 'noopener') },
+      x.ed.blocks.some((b) => b.type === 'live') ? { label: 'Update the numbers on it', run: () => share(it.share.expiresAt ? Math.max(1, (it.share.expiresAt - Date.now()) / 3600_000) : 0, 'Numbers updated on the public page, link copied') } : null,
+      { label: 'Turn off the public link', danger: true, run: async () => { const y = await api('DELETE', `/items/${x.id}/share`).catch((e) => toast(e.message)); if (y) { upsert(y); docBar(x); toast('Public link turned off'); } } },
+    ].filter(Boolean));
+    openMenu(anchor, [{ head: 'Make a public link' }, { note: 'Anyone with the link can read it, not edit it.' },
+      { label: 'No expiry', run: () => share(0) }, { label: 'For 24 hours', run: () => share(24) }, { label: 'For 7 days', run: () => share(168) }, { label: 'For 30 days', run: () => share(720) }]);
+  }
+
   function closeDoc(gone) {
     const x = DV.doc;
     if (!x) return;
     if (!gone) docSave(x, true);
     x.ed.destroy();
     DV.doc = null;
+    docTell(null);
     $('#docview')?.classList.add('hidden');
     $('#docview')?.replaceChildren();
     // Opened from the library: it's still open underneath, with this doc's new title.
@@ -6137,6 +6344,7 @@
   const docLocal = (x) => ({ ...ColumnDocs.diff(x.saved, x.ed.blocks), title: x.ed.title !== x.savedTitle ? x.ed.title : undefined });
   async function docSave(x, closing) {
     clearTimeout(x.timer);
+    if (x.ed.readOnly) return;
     if (x.busy) { x.again = true; return; }
     const { ops, order, title } = docLocal(x);
     if (!ops.length && !order && title === undefined) {
@@ -6147,7 +6355,9 @@
     x.status.textContent = 'Saving…';
     docTasksPush(x, ops);
     try {
-      const r = await api('PATCH', `/items/${x.id}/doc`, { ops, order, title, sid: x.sid });
+      const restore = x.restoreFrom;
+      x.restoreFrom = null;
+      const r = await api('PATCH', `/items/${x.id}/doc`, { ops, order, title, sid: x.sid, ...(restore ? { restore } : {}) });
       x.pending.set(r.v, { ops, order, title, mine: true });
       docDrain(x);
       x.status.textContent = 'Saved';
@@ -6212,22 +6422,25 @@
     const files = (id) => { const f = S.items.find((y) => y.id === id); return f && { name: f.name, url: abs(fileUrl(f)) }; };
     try {
       let out;
+      // Pictures in the doc, as PNG or JPEG data, for the Word file and the PDF.
+      const pics = async (id) => {
+        const f = S.items.find((y) => y.id === id);
+        if (!f || !/^image\/(png|jpeg)$/.test(f.mime || '')) return null;
+        const blob = await (await fetch(fileUrl(f))).blob();
+        const src = await new Promise((done) => { const fr = new FileReader(); fr.onload = () => done(fr.result); fr.readAsDataURL(blob); });
+        const img = await new Promise((done) => { const i = new Image(); i.onload = () => done(i); i.onerror = () => done(null); i.src = src; });
+        return img && { src, w: img.naturalWidth, h: img.naturalHeight };
+      };
       if (as === 'docx') {
         toast('Making the Word file…');
-        const page = ColumnDocs.toHtml(x.ed.blocks, { shift: 1, files, live: docLiveLines });
+        const found = new Map();
+        for (const b of x.ed.blocks) if (b.type === 'file' && !found.has(b.itemId)) { const p = await pics(b.itemId).catch(() => null); if (p) found.set(b.itemId, p); }
+        const page = ColumnDocs.toHtml(x.ed.blocks, { shift: 1, files, live: docLiveLines, pics: found });
         if (x.ed.title.trim()) page.prepend(h('h1', {}, x.ed.title.trim()));
         const doc = await ColumnWord.read(await (await ColumnWord.blank()).arrayBuffer());
         out = await uploadFile(new File([await doc.save(page)], name + '.docx', { type: ColumnWord.DOCX }), { stackId: it?.stackId || null, dirId: it?.dirId || null });
       } else {
         toast('Making the PDF…');
-        const pics = async (id) => {
-          const f = S.items.find((y) => y.id === id);
-          if (!f || !/^image\/(png|jpeg)$/.test(f.mime || '')) return null;
-          const blob = await (await fetch(fileUrl(f))).blob();
-          const src = await new Promise((done) => { const fr = new FileReader(); fr.onload = () => done(fr.result); fr.readAsDataURL(blob); });
-          const img = await new Promise((done) => { const i = new Image(); i.onload = () => done(i); i.onerror = () => done(null); i.src = src; });
-          return img && { src, w: img.naturalWidth, h: img.naturalHeight };
-        };
         out = await api('POST', '/docs/pdf', { itemId: x.id, name, blocks: await ColumnDocs.toPdf(x.ed.title.trim(), x.ed.blocks, pics, docLiveLines) });
         if (it?.dirId) out = await api('PATCH', '/items/' + out.id, { dirId: it.dirId }).catch(() => out);
         upsert(out);
@@ -6448,6 +6661,7 @@
   }
   // A task changed elsewhere: its to-do in the open doc follows.
   function docTasksSync(x) {
+    if (x.ed.readOnly) return;
     const local = new Set(docLocal(x).ops.map((o) => o.set?.id));
     for (const b of x.ed.blocks) {
       if (b.type !== 'todo' || !b.taskId || local.has(b.id)) continue;
@@ -6487,9 +6701,9 @@
     const from = docsMentioning(['doc:' + x.id], x.id);
     const it = S.items.find((y) => y.id === x.id);
     const tasks = S.tasks.filter((t) => t.docId === x.id);
-    box.replaceChildren(...(from.length ? [h('h4', {}, `Linked from ${from.length === 1 ? '1 doc' : from.length + ' docs'}`), ...from.map((d) => h('button', { class: 'dv-link', onclick: () => openDoc(d) }, '📄 ', docTitle(d), h('small', {}, ' · ' + docWhere(d))))] : []),
+    box.replaceChildren(...[...(from.length ? [h('h4', {}, `Linked from ${from.length === 1 ? '1 doc' : from.length + ' docs'}`), ...from.map((d) => h('button', { class: 'dv-link', onclick: () => openDoc(d) }, '📄 ', docTitle(d), h('small', {}, ' · ' + docWhere(d))))] : []),
       ...(tasks.length ? [h('small', { class: 'dv-tasks-note' }, `${plural(tasks.length, 'task')} made here · ${tasks.filter((t) => t.done).length} done`)] : []),
-      it?.editedAt ? h('small', { class: 'dv-edited' }, `Edited ${ago(it.editedAt)}`) : null);
+      it?.editedAt ? h('small', { class: 'dv-edited' }, `Edited ${ago(it.editedAt)}`) : null].filter(Boolean));
   }
 
   // ----- templates and AI: a doc can start from a shape, and AI can write it, as a draft you accept -----
@@ -6524,11 +6738,11 @@
     const it = S.items.find((y) => y.id === x.id);
     const c = docCampaign(it) || campById(goalById(taskById(x.taskId)?.goalId)?.campaignId);
     const use = (k) => { const t = DOC_TEMPLATES[k].make(c); x.ed.replace(t.blocks, x.ed.title.trim() || t.title); x.templated = k; docStarter(x); };
-    box.replaceChildren(
+    box.replaceChildren(...[
       h('small', {}, 'Start from'),
       h('div', { class: 'dv-start-row' },
         h('button', { class: 'dv-start-ai', onclick: () => docAskDraft(x) }, '✦ Draft it with AI'),
-        Object.entries(DOC_TEMPLATES).map(([k, t]) => h('button', { title: t.sub, onclick: () => use(k) }, t.name))));
+        Object.entries(DOC_TEMPLATES).map(([k, t]) => h('button', { title: t.sub, onclick: () => use(k) }, t.name)))].filter(Boolean));
   }
   function docAskDraft(x) {
     const ask = h('textarea', { rows: 3, placeholder: 'What’s this doc for? e.g. a one-page offer for fleet managers, or a recap of this week’s calls' });

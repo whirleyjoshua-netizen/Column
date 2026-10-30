@@ -28,7 +28,7 @@ const PUBLIC_URL = (process.env.PUBLIC_URL || `http://localhost:${PORT}`).replac
 fs.mkdirSync(FILES_DIR, { recursive: true });
 
 // ---------- persistence (a JSON file is plenty for personal/small-team use) ----------
-let db = { workspaces: {}, tokens: {}, items: {}, entries: {}, tasks: {}, uploads: {}, campaigns: {}, goals: {}, attempts: {}, lists: {}, templates: {}, calendars: {}, ai: {}, pss: {}, sends: {}, bills: {}, meetings: {}, money: {}, budgets: {}, plans: {}, sidekick: {}, vaults: {}, vaultItems: {}, signs: {}, signatures: {}, trips: {}, pins: {}, zones: {} };
+let db = { workspaces: {}, tokens: {}, items: {}, entries: {}, tasks: {}, uploads: {}, campaigns: {}, goals: {}, attempts: {}, lists: {}, templates: {}, calendars: {}, ai: {}, pss: {}, sends: {}, bills: {}, meetings: {}, money: {}, budgets: {}, plans: {}, sidekick: {}, vaults: {}, vaultItems: {}, signs: {}, signatures: {}, trips: {}, pins: {}, zones: {}, comments: {} };
 try {
   db = { ...db, ...JSON.parse(fs.readFileSync(DB_PATH, 'utf8')) };
 } catch {}
@@ -513,6 +513,147 @@ function docMentions(ws, it, before, auth) {
     broadcast(ws.id, { type: 'doc:mention', forMember: id, docId: it.id, title: it.title || 'a doc', by: auth.member, item: { id: it.id } });
   }
 }
+// ---------- doc history: earlier versions, kept in a file per doc ----------
+// A version is kept of the doc as it was before someone else starts editing, or before the same person
+// carries on after ten quiet minutes, and before a restore. The newest 100 are kept.
+const HIST_KEEP = 100;
+const HIST_GAP = 10 * 60_000;
+const histPath = (id) => path.join(FILES_DIR, `dochist-${id}.json`);
+const histQueue = {};
+const histRead = (id) => fsp.readFile(histPath(id), 'utf8').then(JSON.parse).catch(() => []);
+function histPush(it, before, by, force) {
+  if (!before.title && !before.blocks.some((b) => b.type !== 'p' || b.runs?.length)) return;
+  histQueue[it.id] = (histQueue[it.id] || Promise.resolve()).then(async () => {
+    const list = await histRead(it.id);
+    const last = list[0];
+    if (!force && last && Date.now() - last.savedAt < HIST_GAP && last.nextBy === by) return;
+    list.unshift({ id: rid(6), at: before.at, savedAt: Date.now(), by: before.by, nextBy: by, title: before.title, blocks: before.blocks });
+    let size = 0;
+    const kept = list.slice(0, HIST_KEEP).filter((v) => (size += JSON.stringify(v.blocks).length) < 8_000_000);
+    await fsp.writeFile(histPath(it.id), JSON.stringify(kept));
+  }).catch((e) => console.error('Doc history:', e.message));
+}
+
+// ---------- doc comments: threads on a block, seen by whoever can see the doc ----------
+const publicComment = ({ wsId, ...x }) => x;
+const openComments = (itemId) => Object.values(db.comments).filter((x) => x.itemId === itemId && !x.resolved).length;
+function commentNews(x, removed) {
+  const it = db.items[x.itemId];
+  broadcast(x.wsId, removed ? { type: 'comment:remove', id: x.id, itemId: x.itemId, item: { id: x.itemId } } : { type: 'comment', comment: publicComment(x), item: { id: x.itemId } });
+  if (it) {
+    it.openComments = openComments(it.id);
+    broadcast(x.wsId, { type: 'item:update', item: publicItem(it) });
+  }
+}
+// "@Sam" in a comment tells Sam, if Sam can see the doc.
+function commentMentions(ws, x, text, auth) {
+  const it = db.items[x.itemId];
+  for (const mb of ws.members) {
+    if (mb.id === auth.memberId || !new RegExp(`(^|[\\s(])@${mb.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w])`, 'i').test(text)) continue;
+    broadcast(ws.id, { type: 'comment:mention', forMember: mb.id, docId: x.itemId, title: it?.title || 'a doc', by: auth.member, text: clipText(text, 140), item: { id: x.itemId } });
+  }
+}
+// Who has a doc open, and on which block: each window says so over its socket.
+function docHere(wsId, docId) {
+  if (!docId) return;
+  const people = new Map();
+  for (const s of sockets.get(wsId) || []) {
+    const d = s.meta.doc;
+    if (d?.id !== docId || s.readyState !== 1) continue;
+    const had = people.get(s.meta.memberId);
+    if (!had || d.at > had.at) people.set(s.meta.memberId, { memberId: s.meta.memberId, name: s.meta.member, block: d.block, at: d.at });
+  }
+  broadcast(wsId, { type: 'doc:here', id: docId, people: [...people.values()], item: { id: docId } });
+}
+// A locked doc is edited only by whoever made it and the team's owners.
+const canEditDoc = (it, auth) => !it.locked || it.memberId === auth.memberId || auth.role === 'owner';
+
+// ---------- a shared doc, as a page anyone with the link can read ----------
+function docShareHtml(it, token) {
+  const live = it.share?.live || {};
+  const runsHtml = (runs) => (runs || []).map((r) => {
+    if (r.ref) return `<span class="ref">${escHtml(r.text)}</span>`;
+    let h = escHtml(r.text).replace(/\n/g, '<br>');
+    if (r.code) h = `<code>${h}</code>`;
+    if (r.s) h = `<s>${h}</s>`;
+    if (r.u) h = `<u>${h}</u>`;
+    if (r.i) h = `<i>${h}</i>`;
+    if (r.b) h = `<b>${h}</b>`;
+    if (r.link) h = `<a href="${escHtml(r.link)}" rel="noopener noreferrer nofollow" target="_blank">${h}</a>`;
+    return h;
+  }).join('');
+  const blocks = docOf(it).blocks;
+  // Nesting comes from indents: a block's children are the more-indented blocks right after it.
+  const tree = (from, lvl) => {
+    const out = [];
+    let i = from;
+    while (i < blocks.length && (blocks[i].indent || 0) >= lvl) {
+      const b = blocks[i];
+      let j = i + 1;
+      while (j < blocks.length && (blocks[j].indent || 0) > (b.indent || 0)) j++;
+      out.push({ b, kids: tree(i + 1, (b.indent || 0) + 1).filter((k) => blocks.indexOf(k.b) < j) });
+      i = j;
+    }
+    return out;
+  };
+  const draw = (nodes) => {
+    let n = 0;
+    return nodes.map(({ b, kids }) => {
+      n = b.type === 'ol' ? n + 1 : 0;
+      const inner = kids.length ? `<div class="kids">${draw(kids)}</div>` : '';
+      const t = runsHtml(b.runs);
+      if (b.type === 'toggle') return `<details open><summary>${t}</summary>${inner}</details>`;
+      const one = {
+        h1: () => `<h2>${t}</h2>`, h2: () => `<h3>${t}</h3>`, h3: () => `<h4>${t}</h4>`,
+        ul: () => `<div class="li"><span class="mk">•</span><div>${t}</div></div>`,
+        ol: () => `<div class="li"><span class="mk">${n}.</span><div>${t}</div></div>`,
+        todo: () => `<div class="li${b.checked ? ' done' : ''}"><span class="mk">${b.checked ? '☑' : '☐'}</span><div>${t}</div></div>`,
+        quote: () => `<blockquote>${t}</blockquote>`,
+        callout: () => `<div class="callout"><span>${escHtml(b.emoji || '💡')}</span><div>${t}</div></div>`,
+        code: () => `<pre>${escHtml(runsText(b.runs))}</pre>`,
+        divider: () => '<hr>',
+        table: () => `<div class="tw"><table>${b.rows.map((r, ri) => `<tr>${r.map((c) => (ri === 0 && b.header ? `<th>${runsHtml(c)}</th>` : `<td>${runsHtml(c)}</td>`)).join('')}</tr>`).join('')}</table></div>`,
+        file: () => {
+          const f = db.items[b.itemId];
+          return f?.type === 'file' && /^image\/(png|jpe?g|gif|webp)$/.test(f.mime || '') ? `<img src="/s/${token}/img/${f.id}" alt="${escHtml(f.name)}">` : `<p class="muted">📎 ${escHtml(b.name || f?.name || 'A file')}</p>`;
+        },
+        live: () => {
+          const lines = live[b.id] || [];
+          return `<div class="live"><b>${escHtml(lines[0] || 'Numbers')}</b>${lines.slice(1).map((l) => `<div>${escHtml(l)}</div>`).join('')}</div>`;
+        },
+      }[b.type];
+      return (one ? one() : `<p>${t || '<br>'}</p>`) + inner;
+    }).join('');
+  };
+  return draw(tree(0, 0));
+}
+function docSharePage(res, it, token, brand) {
+  const top = brand?.logo ? `<img class="brand" src="${logoUrl(brand.logo)}" alt="${escHtml(brand.team)}">` : '';
+  const when = new Date(it.editedAt || it.createdAt).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+  res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Content-Security-Policy': "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'" });
+  res.end(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${escHtml(it.title || 'Doc')}</title><style>
+:root{color-scheme:light dark;--bg:#f6f6f8;--card:#fff;--text:#16161a;--muted:#6b6b76;--line:#e4e4ea;--soft:#f1f1f5;--accent:#6b5cf0}
+@media (prefers-color-scheme:dark){:root{--bg:#111115;--card:#1a1a20;--text:#ececf1;--muted:#8d8d99;--line:#2a2a32;--soft:#22222a;--accent:#8b7cff}}
+${brand?.accent ? `:root{--accent:${brand.accent}}` : ''}
+body{margin:0;background:var(--bg);color:var(--text);font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;padding:24px 16px}
+article{background:var(--card);border-radius:14px;max-width:760px;margin:0 auto;padding:36px 44px;box-shadow:0 10px 40px rgba(0,0,0,.08);word-break:break-word}
+@media (max-width:600px){article{padding:22px 18px}}
+.brand{max-height:44px;max-width:180px;border-radius:6px;display:block;margin-bottom:18px}
+h1{font-size:30px;line-height:1.2;margin:0 0 4px}.meta{color:var(--muted);font-size:13px;margin:0 0 24px}
+h2{font-size:23px;margin:1.2em 0 .3em}h3{font-size:19px;margin:1em 0 .3em}h4{font-size:16px;margin:.9em 0 .2em}
+p{margin:.25em 0}.kids{margin-left:26px}.li{display:flex;gap:8px;margin:.15em 0}.mk{flex:none;min-width:16px;color:var(--muted);text-align:center}
+.li.done div{text-decoration:line-through;color:var(--muted)}
+blockquote{border-left:3px solid var(--text);margin:.5em 0;padding-left:14px}
+.callout{display:flex;gap:10px;background:var(--soft);border-radius:8px;padding:10px 14px;margin:.5em 0}
+pre{background:var(--soft);border-radius:8px;padding:12px 14px;overflow-x:auto;font-size:13px}code{background:var(--soft);border-radius:4px;padding:1px 4px;font-size:.88em}
+hr{border:0;border-top:1px solid var(--line);margin:1em 0}.tw{overflow-x:auto;margin:.6em 0}table{border-collapse:collapse}td,th{border:1px solid var(--line);padding:5px 10px;text-align:left;vertical-align:top}th{background:var(--soft)}
+img{max-width:100%;border-radius:8px;margin:.5em 0}a{color:var(--accent)}.ref{color:var(--accent);font-weight:600}.muted{color:var(--muted)}
+.live{border:1px solid var(--line);border-radius:10px;padding:10px 14px;margin:.6em 0;font-size:14px}.live b{display:block;margin-bottom:4px}.live div{color:var(--muted)}
+details summary{cursor:pointer;font-weight:500}footer{max-width:760px;margin:16px auto 0;text-align:center;font-size:12px;color:var(--muted)}
+</style></head><body><article>${top}<h1>${escHtml(it.title || 'Untitled')}</h1><p class="meta">Updated ${escHtml(when)}${it.share?.liveAt ? ' · numbers as of ' + escHtml(new Date(it.share.liveAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })) : ''}</p>
+${docShareHtml(it, token)}</article><footer>${brand ? `Shared by ${escHtml(brand.team)} with Column` : 'Shared with Column'}</footer></body></html>`);
+}
 // Files shown in a doc stay as long as the doc does.
 function pinDocFiles(ws, blocks) {
   for (const b of blocks) {
@@ -673,6 +814,10 @@ function dropUpload(up) {
 
 function removeItemFiles(it) {
   if (it.type === 'file') fsp.rm(path.join(FILES_DIR, it.id), { force: true }).catch(() => {});
+  if (it.type === 'text') {
+    fsp.rm(histPath(it.id), { force: true }).catch(() => {});
+    for (const x of Object.values(db.comments)) if (x.itemId === it.id) delete db.comments[x.id];
+  }
   if (it.type === 'folder') for (const f of it.files || []) fsp.rm(path.join(FILES_DIR, f.fid), { force: true }).catch(() => {});
 }
 
@@ -751,6 +896,13 @@ function serveShare(req, res, url) {
   const headers = { 'X-Robots-Tag': 'noindex', 'Referrer-Policy': 'no-referrer', 'Cache-Control': 'no-store' };
   for (const [k, v] of Object.entries(headers)) res.setHeader(k, v);
   if (!it) return sharePage(res, 404, '<h1>Link not available</h1><p>This link has expired or was turned off.</p>');
+  if (it.type === 'text') {
+    // Only pictures the doc shows, through its link.
+    const pic = part === 'img' && db.items[url.pathname.split('/')[4]];
+    if (part === 'img') return pic && pic.wsId === it.wsId && docOf(it).blocks.some((b) => b.type === 'file' && b.itemId === pic.id) && /^image\//.test(pic.mime || '') ? serveFile(req, res, path.join(FILES_DIR, pic.id), { name: pic.name, mime: pic.mime }) : sharePage(res, 404, '<h1>Not found</h1>');
+    if (part) return sharePage(res, 404, '<h1>Not found</h1>');
+    return docSharePage(res, it, token, brand);
+  }
   if (part === 'file' && it.type === 'file') return serveFile(req, res, path.join(FILES_DIR, it.id), { name: it.name, mime: it.mime, download: url.searchParams.has('dl') });
   if (part === 'zip' && it.type === 'folder') return sendZip(req, res, it);
   if (part) return sharePage(res, 404, '<h1>Not found</h1>');
@@ -3773,6 +3925,56 @@ async function api(req, res, url) {
   }
 
   // Plans: only yours.
+  // A comment thread on a doc: replies, resolving, editing your own, deleting (yours, or any if you're an owner).
+  if (a === 'comments' && b) {
+    const x = db.comments[b];
+    const it = x && db.items[x.itemId];
+    if (!x || x.wsId !== ws.id || !it || !canSee(auth, 'item', it)) return send(res, 404, { error: 'That comment is gone.' });
+    const mine = (y) => y.memberId === auth.memberId || auth.role === 'owner';
+    if (m === 'POST' && c === 'replies') {
+      const text = cleanText((await readJson(req, 50_000)).text, 5000);
+      if (!text) return send(res, 400, { error: 'Write a reply first.' });
+      x.replies.push({ id: rid(6), text, by: auth.member, memberId: auth.memberId, at: Date.now() });
+      x.replies = x.replies.slice(-200);
+      x.resolved = false;
+      save();
+      commentNews(x);
+      commentMentions(ws, x, text, auth);
+      return send(res, 200, publicComment(x));
+    }
+    if (m === 'PATCH' && !c) {
+      const body = await readJson(req, 50_000);
+      if (body.resolved !== undefined) {
+        x.resolved = !!body.resolved;
+        x.resolvedBy = x.resolved ? auth.member : null;
+      }
+      if (body.text !== undefined) {
+        if (x.memberId !== auth.memberId) return send(res, 403, { error: 'Only whoever wrote it can change it.' });
+        x.text = cleanText(body.text, 5000) || x.text;
+        x.editedAt = Date.now();
+      }
+      save();
+      commentNews(x);
+      return send(res, 200, publicComment(x));
+    }
+    if (m === 'DELETE' && c === 'replies' && d) {
+      const r = x.replies.find((y) => y.id === d);
+      if (!r || !mine(r)) return send(res, 403, { error: 'You can only delete your own replies.' });
+      x.replies = x.replies.filter((y) => y !== r);
+      save();
+      commentNews(x);
+      return send(res, 200, publicComment(x));
+    }
+    if (m === 'DELETE' && !c) {
+      if (!mine(x)) return send(res, 403, { error: 'You can only delete your own comments.' });
+      delete db.comments[x.id];
+      save();
+      commentNews(x, true);
+      return send(res, 200, { ok: true });
+    }
+    return send(res, 405, { error: 'Method not allowed' });
+  }
+
   // Sidekick conversations: yours only.
   if (a === 'sidekick') {
     const mine = () => Object.values(db.sidekick).filter((x) => x.wsId === ws.id && x.memberId === auth.memberId);
@@ -4695,14 +4897,38 @@ async function api(req, res, url) {
     // Messages: only the author edits; the author or an owner deletes.
     const own = it.memberId ? it.memberId === auth.memberId : it.deviceId === auth.deviceId;
     // A doc's blocks, to open it; and changes to it from an editor. Anyone who can see a note can edit it.
+    if (c === 'history' && it.type === 'text' && m === 'GET') {
+      const list = await histRead(it.id);
+      if (d) {
+        const v = list.find((x) => x.id === d);
+        return v ? send(res, 200, { id: v.id, at: v.at, by: v.by, title: v.title, blocks: v.blocks }) : send(res, 404, { error: 'That version is gone.' });
+      }
+      return send(res, 200, list.map(({ blocks, nextBy, ...v }) => ({ ...v, size: blocks.length })));
+    }
+    if (c === 'comments' && it.type === 'text') {
+      if (m === 'GET') return send(res, 200, Object.values(db.comments).filter((x) => x.itemId === it.id).sort((a, b) => a.at - b.at).map(publicComment));
+      if (m !== 'POST') return send(res, 405, { error: 'Method not allowed' });
+      const body = await readJson(req, 50_000);
+      const text = cleanText(body.text, 5000);
+      if (!text) return send(res, 400, { error: 'Write a comment first.' });
+      const x = { id: rid(), wsId: ws.id, itemId: it.id, blockId: docId(body.blockId), quote: cleanText(body.quote, 500), text, by: auth.member, memberId: auth.memberId, at: Date.now(), replies: [], resolved: false };
+      db.comments[x.id] = x;
+      save();
+      commentNews(x);
+      commentMentions(ws, x, text, auth);
+      return send(res, 200, publicComment(x));
+    }
     if (c === 'doc' && it.type === 'text') {
       if (m === 'GET') return send(res, 200, { id: it.id, v: it.v || 0, ...docOf(it) });
       if (m !== 'PATCH') return send(res, 405, { error: 'Method not allowed' });
+      if (!canEditDoc(it, auth)) return send(res, 403, { error: 'This doc is locked. Only whoever made it and team owners can edit it.' });
       const body = await readJson(req, 4_000_000);
       const ops = cleanDocOps(body.ops);
       const order = Array.isArray(body.order) ? body.order.slice(0, DOC_BLOCKS * 2).filter(docId) : null;
       const title = body.title !== undefined ? cleanText(body.title, 300) : undefined;
       const now = docOf(it);
+      // The doc as it was goes into its history when a new stretch of editing starts.
+      histPush(it, { title: now.title, blocks: now.blocks, at: it.editedAt || it.createdAt, by: it.lastBy || it.by }, auth.member, !!body.restore);
       const blocks = applyDocOps(now.blocks, ops, order);
       if (blocks.length > DOC_BLOCKS) return send(res, 400, { error: `A doc can have ${DOC_BLOCKS} blocks. Split it into two.` });
       it.blocks = blocks;
@@ -4712,6 +4938,7 @@ async function api(req, res, url) {
       it.refs = docRefs(it.blocks);
       it.v = (it.v || 0) + 1;
       it.editedAt = Date.now();
+      it.lastBy = auth.member;
       it.pinned = true;
       pinLinked(ws, it.text);
       pinDocFiles(ws, ops.filter((o) => o.set).map((o) => o.set));
@@ -4734,11 +4961,17 @@ async function api(req, res, url) {
       broadcast(ws.id, { type: 'item:update', item: publicItem(it) });
       return send(res, 200, publicItem(it));
     }
-    if (c === 'share' && (it.type === 'file' || it.type === 'folder')) {
+    if (c === 'share' && (it.type === 'file' || it.type === 'folder' || it.type === 'text')) {
       if (m === 'POST') {
-        const { hours } = await readJson(req);
+        const { hours, live } = await readJson(req, 500_000);
         const h = Number(hours) > 0 ? Math.min(Number(hours), 24 * 365) : null;
-        it.share = { token: crypto.randomBytes(18).toString('base64url'), createdAt: Date.now(), expiresAt: h ? Date.now() + h * 3600_000 : null, by: auth.member };
+        // A doc keeps its link when the numbers or expiry change; its live blocks show as they were when shared.
+        const keep = it.type === 'text' && it.share?.token;
+        it.share = { token: keep || crypto.randomBytes(18).toString('base64url'), createdAt: Date.now(), expiresAt: h ? Date.now() + h * 3600_000 : null, by: auth.member };
+        if (it.type === 'text' && live && typeof live === 'object') {
+          it.share.live = Object.fromEntries(Object.entries(live).slice(0, 60).filter(([k, v]) => docId(k) && Array.isArray(v)).map(([k, v]) => [k, v.slice(0, 40).map((l) => cleanText(l, 300))]));
+          it.share.liveAt = Date.now();
+        }
         it.pinned = true; // auto-clear must not break the link
       } else if (m === 'DELETE') it.share = null;
       else return send(res, 405, { error: 'Method not allowed' });
@@ -4752,6 +4985,7 @@ async function api(req, res, url) {
       if (body.text !== undefined) {
         // Notes (text cards) are shared, like text files. Messages belong to whoever sent them.
         if (it.type !== 'text' && (it.type !== 'message' || !own)) return send(res, 403, { error: 'You can only edit your own messages.' });
+        if (it.type === 'text' && !canEditDoc(it, auth)) return send(res, 403, { error: 'This doc is locked.' });
         const t = String(body.text).slice(0, 200_000);
         if (!t.trim()) return send(res, 400, { error: 'Empty' });
         if (t !== it.text) {
@@ -4769,6 +5003,11 @@ async function api(req, res, url) {
         }
       }
       if (body.pinned !== undefined) it.pinned = !!body.pinned;
+      if (body.locked !== undefined && it.type === 'text') {
+        if (it.memberId !== auth.memberId && auth.role !== 'owner') return send(res, 403, { error: 'Only whoever made the doc and team owners can lock it.' });
+        it.locked = !!body.locked;
+        it.lockedBy = it.locked ? auth.member : null;
+      }
       // Saving to a folder takes it out of its stack; moving it to a stack takes it out of its folder.
       if (body.dirId !== undefined && it.type !== 'message' && !it.channelId) {
         if (body.dirId && !validDir(ws, body.dirId, auth.memberId)) return send(res, 404, { error: 'That folder is gone' });
@@ -5097,9 +5336,26 @@ server.on('upgrade', (req, socket, head) => {
     if (!sockets.has(auth.wsId)) sockets.set(auth.wsId, new Set());
     sockets.get(auth.wsId).add(s);
     presence(auth.wsId);
+    // The one thing a window tells the server: which doc it has open, and which block it's in.
+    s.on('message', (raw) => {
+      if (raw.length > 2000) return;
+      let msg;
+      try {
+        msg = JSON.parse(raw);
+      } catch {
+        return;
+      }
+      if (msg?.type !== 'doc:here') return;
+      const was = s.meta.doc?.id;
+      const id = typeof msg.id === 'string' && db.items[msg.id]?.wsId === auth.wsId && db.items[msg.id].type === 'text' ? msg.id : null;
+      s.meta.doc = id ? { id, block: docId(msg.block), at: Date.now() } : null;
+      if (was && was !== id) docHere(auth.wsId, was);
+      docHere(auth.wsId, id);
+    });
     s.on('close', () => {
       sockets.get(auth.wsId)?.delete(s);
       presence(auth.wsId);
+      if (s.meta.doc) docHere(auth.wsId, s.meta.doc.id);
     });
   });
 });
