@@ -1110,7 +1110,7 @@
 
   // ---------- links in chat: [[file:<id>]], [[stack:<id>]], [[task:<id>]] ----------
   // They point at the live thing, so renames, ticks and deletes show up in old messages too.
-  const LINK_RE = /\[\[(file|stack|task|campaign):([\w-]+)\]\]/g;
+  const LINK_RE = /\[\[(file|stack|task|campaign|doc):([\w-]+)\]\]/g;
   const linkToken = (type, id) => `[[${type}:${id}]]`;
   const linksIn = (text) => [...text.matchAll(LINK_RE)].map(([, type, id]) => ({ type, id }));
   const stripLinks = (text) => text.replace(LINK_RE, '').trim();
@@ -1121,6 +1121,7 @@
     if (type === 'file') return linkedFile(id)?.name || 'Removed file';
     if (type === 'stack') return stackById(id)?.name || 'Removed stack';
     if (type === 'campaign') return campById(id)?.name || 'Campaign';
+    if (type === 'doc') { const d = S.items.find((x) => x.id === id && x.type === 'text'); return d ? docTitle(d) : 'Removed doc'; }
     return taskById(id)?.text || 'Deleted task';
   }
   // Message text with links spelled out, for notifications and copying.
@@ -1139,6 +1140,11 @@
 
   function linkEl({ type, id }) {
     const gone = (msg) => h('div', { class: 'ln ln-gone' }, msg);
+    if (type === 'doc') {
+      const d = S.items.find((x) => x.id === id && x.type === 'text');
+      if (!d) return gone('Doc no longer available');
+      return h('button', { class: 'ln ln-chip', title: 'Open the doc', onclick: () => openDoc(d) }, h('span', { class: 'ln-ic' }, '📄'), h('span', { class: 'ln-text' }, docTitle(d)), h('span', { class: 'ln-sub' }, docWhere(d)));
+    }
     if (type === 'file') {
       const it = linkedFile(id);
       if (!it) return gone('File no longer available');
@@ -2537,6 +2543,7 @@
       ...(g ? [{ label: t.report ? 'Stop asking for a report' : 'Ask for a report when done', run: () => patchTask(t, { report: !t.report }) }] : []),
       ...stepRows(g && campById(g.campaignId), t, !!taskWaitsOn(t), (ch) => patchTask(t, ch)),
       ...(t.done ? [] : [{ label: '✦ Get help with it…', run: () => toolsMenu(anchor, t) }]),
+      { label: 'Write a doc for it…', run: () => docForTask(anchor, t) },
       { label: 'Share to chat…', run: () => shareMenu(anchor, linkToken('task', t.id)) },
       { label: 'Delete task', danger: true, run: async () => {
         try {
@@ -2619,7 +2626,8 @@
     const now = taskById(t.id) || t;
     await patchTask(now, { files: [...new Set([...(now.files || []), it.id])] });
     renderCamps();
-    toast(`Saved on “${shortText(now.text, 40)}”`);
+    toast(`Saved on “${shortText(now.text, 40)}”`, { label: 'Open', run: () => openDoc(it) });
+    return it;
   }
   // Plain text with # headings, ## subheadings and - bullets, as a Word document.
   function textToHtml(text) {
@@ -2685,7 +2693,7 @@
     const title = h('input', { value: r.title });
     const text = area(r.text, 16);
     if (r.kind === 'doc') return sheet('Document draft', [h('label', {}, 'Title', title), h('label', {}, 'Text · # heading, - bullet', text), h('div', { class: 'btns' }, copy(() => text.value))],
-      () => docOnTask(t, title.value, text.value), 'Save as a Word doc on the task');
+      async () => { const it = await noteOnTask(t, title.value, text.value); if (it) openDoc(it); }, 'Save as a doc on the task');
     return sheet(tool === 'script' ? 'Call script' : r.title, [h('label', {}, 'Title', title), text, h('div', { class: 'btns' }, copy(() => text.value))],
       () => noteOnTask(t, title.value, text.value), 'Save on the task');
   }
@@ -5151,6 +5159,7 @@
       late ? `${plural(late, 'task')} overdue` : '',
     ].filter(Boolean);
     const notes = h('textarea', { rows: 6, placeholder: 'What did you find? What’s working, what isn’t, what’s next?' });
+    const asDoc = h('input', { type: 'checkbox', checked: true });
     const draft = h('button', { type: 'button', class: 'btn small ai-btn' }, '✨ Draft from the log');
     draft.addEventListener('click', async () => {
       const r = await aiRun(draft, 'report', { campaignId: c.id, since, stats, today: todayKey() });
@@ -5161,8 +5170,18 @@
       h('div', { class: 'report-stats' }, stats.map((l) => h('div', {}, l))),
       h('div', { class: 'report-findings-h' }, h('span', {}, 'Findings'), draft),
       notes,
+      h('label', { class: 'pick' }, asDoc, 'Also save it as a doc, with the numbers frozen as of today'),
     ].filter(Boolean), async () => {
-      const text = [`📋 Report · ${c.name}`, ...stats, notes.value.trim() ? '\n' + notes.value.trim() : '', linkToken('campaign', c.id)].filter(Boolean).join('\n');
+      // The doc keeps the numbers as they are today, so it still reads right next month.
+      let doc = null;
+      if (asDoc.checked) {
+        const days = Math.max(1, Math.min(90, Math.round((Date.now() - (since || Date.now() - 7 * 864e5)) / 864e5)));
+        const blocks = [frozen(liveBlock('campaign', c.id)), frozen(liveBlock('calls', c.id, { days: [7, 30, 90].find((n) => n >= days) || 90 })),
+          ...(notes.value.trim() ? [...ColumnDocs.fromText('# Findings'), ...ColumnDocs.fromText(notes.value.trim())] : ColumnDocs.fromText('# Findings\n- '))];
+        doc = await api('POST', '/items', { type: 'text', doc: { title: `${c.name} · report ${new Date().toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`, blocks }, stackId: c.stackId }).catch(() => null);
+        if (doc) upsert(doc);
+      }
+      const text = [`📋 Report · ${c.name}`, ...stats, notes.value.trim() ? '\n' + notes.value.trim() : '', linkToken('campaign', c.id), doc ? linkToken('doc', doc.id) : ''].filter(Boolean).join('\n');
       await api('POST', '/items', { type: 'message', text, channelId: c.channelId });
       await api('PATCH', '/campaigns/' + c.id, { lastReportAt: Date.now() });
       if (task) await patchTask(task, { done: true }, { reported: true });
@@ -6034,11 +6053,12 @@
       return toast(e.message);
     }
     const status = h('small', { class: 'dv-status' }, 'Saved');
-    const x = { id: it.id, v: d.v, saved: d.blocks, savedTitle: d.title, sid: newId(), pending: new Map(), timer: null, busy: false, gap: null, warned: false, status };
+    const x = { id: it.id, v: d.v, saved: d.blocks, savedTitle: d.title, sid: newId(), pending: new Map(), timer: null, busy: false, gap: null, warned: false, status, taskId: S.tasks.find((t) => t.files?.includes(it.id))?.id || null };
     const item = () => S.items.find((y) => y.id === x.id) || it;
     x.ed = ColumnDocs.editor({
       title: d.title, blocks: d.blocks,
-      onChange: () => docSoon(x),
+      onChange: () => { docSoon(x); docStarter(x); },
+      ai: (req) => docAi(x, req),
       upload: async (files) => {
         const out = [];
         for (const f of files) {
@@ -6071,6 +6091,7 @@
       { label: 'Export as Word (.docx)', run: () => docExport(x, 'docx') },
       { label: 'Export as PDF', run: () => docExport(x, 'pdf') },
       { label: 'Copy as text', run: () => copyText([x.ed.title, ColumnDocs.toText(x.ed.blocks)].filter(Boolean).join('\n\n')) },
+      { label: '✦ Draft the whole doc with AI…', run: () => docAskDraft(x) },
       { head: '' },
       { label: item().dirId ? `In ${docWhere(item())} · move it` : 'Save to folder', run: () => folderMenu(item(), e.target) },
       { label: 'Move to stack', run: () => stackMenu(item(), e.target) },
@@ -6082,8 +6103,9 @@
         h('span', { class: 'dv-where' }, docWhere(item())),
         status,
         h('button', { class: 'icon-btn', 'aria-label': 'Doc options', html: I.more, onclick: more })),
-      h('div', { class: 'dv-scroll' }, h('div', { class: 'dv-page' }, x.ed.el, h('div', { class: 'dv-links' }))));
+      h('div', { class: 'dv-scroll' }, h('div', { class: 'dv-page' }, x.ed.el, h('div', { class: 'dv-start' }), h('div', { class: 'dv-links' }))));
     docLinksDraw(x);
+    docStarter(x);
     docTasksSync(x);
     if (fresh) x.ed.el.querySelector('.dk-title').focus();
   }
@@ -6458,6 +6480,74 @@
     box.replaceChildren(...(from.length ? [h('h4', {}, `Linked from ${from.length === 1 ? '1 doc' : from.length + ' docs'}`), ...from.map((d) => h('button', { class: 'dv-link', onclick: () => openDoc(d) }, '📄 ', docTitle(d), h('small', {}, ' · ' + docWhere(d))))] : []),
       ...(tasks.length ? [h('small', { class: 'dv-tasks-note' }, `${plural(tasks.length, 'task')} made here · ${tasks.filter((t) => t.done).length} done`)] : []),
       it?.editedAt ? h('small', { class: 'dv-edited' }, `Edited ${ago(it.editedAt)}`) : null);
+  }
+
+  // ----- templates and AI: a doc can start from a shape, and AI can write it, as a draft you accept -----
+  // A template is headings and prompts, plus live or frozen numbers from its campaign where they help.
+  const liveBlock = (source, ref, more = {}) => ({ id: ColumnDocs.uid(), type: 'live', source, ...(ref ? { ref } : {}), ...more });
+  const frozen = (b) => ({ ...b, snap: { at: Date.now(), data: docLiveData(b) } });
+  const DOC_TEMPLATES = {
+    brief: { name: 'Campaign brief', sub: 'Goal, audience, offer, plan', make: (c) => ({ title: c ? `${c.name} · brief` : 'Campaign brief', blocks: [
+      ...ColumnDocs.fromText('# The goal\nWhat we want to happen, by when, and the number that says it worked.\n# Who it’s for\n- \n# The offer\nWhat they get, and why now.\n# How we’ll reach them\n- \n# What we need\n- [ ] '),
+      ...(c ? [liveBlock('campaign', c.id)] : [])] }) },
+    report: { name: 'Weekly report', sub: 'Numbers as of today, wins, next steps', make: (c) => ({ title: `${c ? c.name + ' · ' : ''}Week of ${new Date().toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`, blocks: [
+      ...(c ? [frozen(liveBlock('campaign', c.id)), frozen(liveBlock('calls', c.id, { days: 7 }))] : []),
+      ...ColumnDocs.fromText('# What worked\n- \n# What didn’t\n- \n# Next week\n- [ ] ')] }) },
+    proposal: { name: 'Proposal', sub: 'Problem, plan, price, next step', make: () => ({ title: 'Proposal', blocks: [
+      ...ColumnDocs.fromText('# The problem\nWhat they’re dealing with now.\n# What we’ll do\n- \n# Price'),
+      { id: ColumnDocs.uid(), type: 'table', header: true, rows: [[[{ text: 'Item' }], [{ text: 'Price' }]], [[], []], [[{ text: 'Total', b: true }], []]] },
+      ...ColumnDocs.fromText('# Timeline\n- \n# Next step\nOne clear thing to say yes to.')] }) },
+    onepager: { name: 'One-pager', sub: 'Headline, benefits, proof, call to action', make: () => ({ title: 'One-pager', blocks: ColumnDocs.fromText('# Headline that says the benefit\nOne line on who it’s for.\n## Why it matters\n## What you get\n- \n- \n- \n## Proof\n> A real customer quote\n## Get started\nPhone, link, or the one next step.') }) },
+    script: { name: 'Call script', sub: 'Opener, questions, objections, close', make: () => ({ title: 'Call script', blocks: [
+      ...ColumnDocs.fromText('# Opener\nHi, this is [name] with [company]…\n# Questions\n1. \n2. \n3. \n# If they say…'),
+      { id: ColumnDocs.uid(), type: 'toggle', runs: [{ text: '“We already have someone”' }] }, { id: ColumnDocs.uid(), type: 'p', indent: 1, runs: [] },
+      { id: ColumnDocs.uid(), type: 'toggle', runs: [{ text: '“It costs too much”' }] }, { id: ColumnDocs.uid(), type: 'p', indent: 1, runs: [] },
+      ...ColumnDocs.fromText('# Close\nBook the next step: …')] }) },
+    sop: { name: 'Process guide', sub: 'Steps anyone can follow', make: () => ({ title: 'How we…', blocks: ColumnDocs.fromText('# When to use this\n# Steps\n1. \n2. \n3. \n# Checklist\n- [ ] \n# Who to ask\n') }) },
+    meeting: { name: 'Meeting notes', sub: 'Who, notes, decisions, action items', make: () => ({ title: `Meeting · ${new Date().toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`, blocks: ColumnDocs.fromText('# Who was there\n- \n# Notes\n- \n# Decisions\n- \n# Action items\n- [ ] ') }) },
+  };
+  // Under the title of an empty doc: start from a template, or have AI draft it.
+  function docStarter(x) {
+    const box = $('#docview .dv-start');
+    if (!box) return;
+    if (!x.ed.empty) return box.replaceChildren();
+    const it = S.items.find((y) => y.id === x.id);
+    const c = docCampaign(it) || campById(goalById(taskById(x.taskId)?.goalId)?.campaignId);
+    const use = (k) => { const t = DOC_TEMPLATES[k].make(c); x.ed.replace(t.blocks, x.ed.title.trim() || t.title); x.templated = k; docStarter(x); };
+    box.replaceChildren(
+      h('small', {}, 'Start from'),
+      h('div', { class: 'dv-start-row' },
+        h('button', { class: 'dv-start-ai', onclick: () => docAskDraft(x) }, '✦ Draft it with AI'),
+        Object.entries(DOC_TEMPLATES).map(([k, t]) => h('button', { title: t.sub, onclick: () => use(k) }, t.name))));
+  }
+  function docAskDraft(x) {
+    const ask = h('textarea', { rows: 3, placeholder: 'What’s this doc for? e.g. a one-page offer for fleet managers, or a recap of this week’s calls' });
+    sheet('Draft it with AI', [h('p', { class: 'day-hint' }, 'It writes from the doc so far, its campaign and how that’s going. You see the draft first and choose whether to use it.'), ask], async () => {
+      if (!ask.value.trim() && x.ed.empty) throw new Error('Say what the doc is for.');
+      x.ed.draft(ask.value.trim());
+    }, 'Draft');
+  }
+  async function docAi(x, req) {
+    try {
+      return await api('POST', '/ai/doc', { ...req, itemId: x.id, taskId: x.taskId || null, today: todayKey() });
+    } catch (e) {
+      if (/Settings → AI/.test(e.message)) toast(e.message, { label: 'Open Settings', run: () => { closeDoc(); openSettings(); } });
+      throw e;
+    }
+  }
+  // A doc for a task: from a template, in its campaign's stack, attached to it, and the AI knows what it's for.
+  function docForTask(anchor, t) {
+    const camp = campById(goalById(t.goalId)?.campaignId);
+    const make = async (k) => {
+      const tpl = k ? DOC_TEMPLATES[k].make(camp) : { title: '', blocks: [] };
+      const it = await api('POST', '/items', { type: 'text', doc: { title: t.text.slice(0, 140), blocks: tpl.blocks }, stackId: camp?.stackId || null }).catch((e) => toast(e.message));
+      if (!it) return;
+      upsert(it);
+      const now = taskById(t.id) || t;
+      await patchTask(now, { files: [...new Set([...(now.files || []), it.id])] });
+      openDoc(it);
+    };
+    openMenu(anchor, [{ head: 'Write a doc for this task' }, { label: 'Blank doc', run: () => make(null) }, ...Object.entries(DOC_TEMPLATES).map(([k, x]) => ({ label: h('span', { class: 'tool-item' }, x.name, h('small', {}, x.sub)), run: () => make(k) }))]);
   }
 
   // ----- Word documents: read, edit and save as .docx, or make a PDF to sign or send -----
@@ -8069,7 +8159,7 @@
   const skFor = (campaignId) => (S.sidekick || []).find((x) => x.campaignId === campaignId);
   const skNudges = () => (S.sidekick || []).filter((x) => x.nudge && x.status !== 'done' && (x.kind === 'money' || campById(x.campaignId)?.status === 'active'));
   const skCards = (x) => x.messages.flatMap((m) => m.cards || []);
-  const SK_LABEL = { campaign: 'Campaign', sub: 'Sub-campaign', goal: 'Goal', list: 'Prospect list', note: 'Note', budget: 'Budget', bill: 'Bill', block: 'On your Day', task: 'Task', change: 'Change' };
+  const SK_LABEL = { campaign: 'Campaign', sub: 'Sub-campaign', goal: 'Goal', list: 'Prospect list', note: 'Doc', budget: 'Budget', bill: 'Bill', block: 'On your Day', task: 'Task', change: 'Change' };
   async function skCall(method, path, body) {
     SK.busy = true;
     renderTool(true);
@@ -8151,7 +8241,7 @@
       const f = c.live;
       return [h('b', {}, c.name), h('small', {}, [f.stages.length ? f.stages.map(stageLabel).join(', ') : 'Any stage', f.cities.join(', '), f.sources.join(', '), f.days ? `last ${f.days} days` : '', f.need ? `has ${f.need}` : '', n != null ? `${n} from PSS now` : ''].filter(Boolean).join(' · '))];
     }
-    if (c.type === 'note') return [h('b', {}, c.title || 'Note'), h('p', { class: 'sk-note' }, c.text)];
+    if (c.type === 'note') return [h('b', {}, c.title || 'Doc'), c.template && DOC_TEMPLATES[c.template] ? h('small', {}, DOC_TEMPLATES[c.template].name) : null, h('p', { class: 'sk-note' }, c.text)];
     if (c.type === 'budget') {
       const had = (S.budgets || []).find((b) => b.scope === c.scope && sameText(b.category, c.category));
       const biz = c.scope === 'business' ? ' · business' : '';
@@ -8361,7 +8451,9 @@
           upsertList(await api('POST', '/lists', { campaignId: c.id, name: y.name, live: y.live }));
           made.push(y);
         } else if (y.type === 'note') {
-          await api('POST', '/items', { type: 'text', doc: { title: y.title || '', blocks: ColumnDocs.fromText(y.text) }, stackId: c?.stackId || null });
+          // A report from Sidekick keeps the campaign's numbers frozen at the top; a brief shows them live.
+          const top = c && y.template === 'report' ? [frozen(liveBlock('campaign', c.id)), frozen(liveBlock('calls', c.id, { days: 7 }))] : c && y.template === 'brief' ? [liveBlock('campaign', c.id)] : [];
+          await api('POST', '/items', { type: 'text', doc: { title: y.title || '', blocks: [...top, ...ColumnDocs.fromText(y.text)] }, stackId: c?.stackId || null });
           made.push(y);
         } else if (y.type === 'budget') {
           // In a campaign plan it's the business's; in a budget plan, whichever the card says.

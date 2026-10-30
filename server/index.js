@@ -789,7 +789,7 @@ footer{margin-top:18px;font-size:11.5px;color:var(--muted)}
 }
 
 // Messages link to things as [[file:<id>]], [[stack:<id>]], [[task:<id>]]. A linked file is pinned so auto-clear never breaks the link.
-const LINK_RE = /\[\[(file|stack|task|campaign):([\w-]+)\]\]/g;
+const LINK_RE = /\[\[(file|stack|task|campaign|doc):([\w-]+)\]\]/g;
 function pinLinked(ws, text) {
   for (const [, kind, id] of text.matchAll(LINK_RE)) {
     const it = kind === 'file' && db.items[id];
@@ -2722,6 +2722,65 @@ async function aiTask(ws, auth, t, body) {
   return { kind: body.tool === 'doc' ? 'doc' : 'text', title: str(j.title, 120) || 'Notes', text: str(j.text, 20000) + (sources.length ? `\n\nSources:\n${sources.map((x) => '- ' + x).join('\n')}` : '') };
 }
 
+// ---------- AI in docs: write, rework and fill in, always as a draft the person accepts ----------
+// The doc, the campaign it belongs to (from its stack, or the task it's for) and how that campaign is going.
+function docBrief(ws, auth, it, task, today) {
+  const c = (task && db.campaigns[db.goals[task.goalId]?.campaignId]) || db.campaigns[ws.stacks.find((st) => st.id === it?.stackId)?.campaignId];
+  const lines = [`Today is ${today}. The person writing is ${auth.member}.`, teamLine(ws, auth.memberId)];
+  if (task) lines.push(taskBrief(ws, auth, task));
+  if (c && canSee(auth, 'campaign', c)) {
+    const gs = Object.values(db.goals).filter((g) => g.campaignId === c.id);
+    const ts = Object.values(db.tasks).filter((t) => campaignOf('task', t) === c.id);
+    const recent = Object.values(db.attempts).filter((x) => x.campaignId === c.id && x.at > Date.now() - 14 * 864e5);
+    const by = Object.entries(recent.reduce((m, x) => ((m[x.outcome] = (m[x.outcome] || 0) + 1), m), {})).map(([k, n]) => `${k} ${n}`).join(', ');
+    const money = campMoney(c.id);
+    if (!task) lines.push(`This doc belongs to the campaign “${c.name}” (${c.status}), running ${c.start || '?'} to ${c.end || 'no end'}.${c.brief ? ' Brief: ' + clipText(c.brief, 2500) : ''}`);
+    lines.push([
+      `How it's going: ${Math.round((campFrac(c) || 0) * 100)}% done.`,
+      gs.length ? `Goals: ${gs.map((g) => `${g.title} (${g.kind}${g.target ? ', target ' + g.target : ''})`).join('; ')}.` : '',
+      `Tasks: ${ts.filter((t) => t.done).length} done, ${ts.filter((t) => !t.done).length} open (${ts.filter((t) => !t.done && t.due && t.due < today).length} overdue). Open: ${ts.filter((t) => !t.done).slice(0, 15).map((t) => t.text).join('; ') || 'none'}.`,
+      `Calls and emails logged in the last 14 days: ${recent.length}${by ? ' (' + by + ')' : ''}.`,
+      money ? `Money: spent $${Math.round(money.spent / 100)}, brought in $${Math.round(money.earned / 100)}.` : '',
+    ].filter(Boolean).join(' '));
+  }
+  return lines.filter(Boolean).join('\n\n');
+}
+const DOC_AI = {
+  draft: 'Write the whole doc. If it already has an outline (headings, prompts, empty sections), keep that shape and fill every part in. Lines like [[live:1]] stand for live numbers already in the doc: keep each one on its own line where it makes sense, and don’t repeat its numbers in words.',
+  write: 'Write what they ask for, to go into the doc where their cursor is. Fit what’s around it; don’t repeat what the doc already says.',
+  continue: 'Continue the doc from where it ends, in the same voice and shape. Add only the next part.',
+  improve: 'Rewrite the selected text so it reads better: clearer, tighter, more specific. Keep its meaning and roughly its length.',
+  shorten: 'Make the selected text shorter, keeping what matters.',
+  expand: 'Expand the selected text with useful detail and specifics.',
+  fix: 'Fix spelling, grammar and punctuation in the selected text. Change nothing else.',
+  ask: 'Do what they ask with the selected text.',
+};
+async function aiDoc(ws, auth, body) {
+  const mode = DOC_AI[body.mode] ? body.mode : 'write';
+  const it = body.itemId ? db.items[body.itemId] : null;
+  if (body.itemId && (!it || it.wsId !== ws.id || it.type !== 'text' || !canSee(auth, 'item', it))) throw Object.assign(new Error('That doc is gone.'), { status: 404 });
+  const task = body.taskId && db.tasks[body.taskId]?.wsId === ws.id && canSee(auth, 'task', db.tasks[body.taskId]) ? db.tasks[body.taskId] : null;
+  const today = isDay(body.today) ? body.today : fmtDay(Date.now());
+  const docNow = cleanText(body.doc, 30_000);
+  const selection = cleanText(body.selection, 12_000);
+  const ask = cleanText(body.ask, 2000);
+  const prompt = [
+    docBrief(ws, auth, it, task, today),
+    `The doc${body.title ? ` (“${cleanText(body.title, 200)}”)` : ''} so far:\n${docNow || '(empty)'}`,
+    body.near ? `The cursor is in or after this part: ${cleanText(body.near, 2000)}` : '',
+    selection ? `The selected text:\n${selection}` : '',
+    ask ? `What they asked for: ${ask}` : '',
+  ].filter(Boolean).join('\n\n');
+  const system = [
+    'You write inside Column, a work app for a small business team, in their doc. ' + DOC_AI[mode],
+    'Use the real numbers, names and dates you’re given; never invent results, quotes, prices or people. Where something is unknown, leave a short [bracketed] placeholder for them to fill.',
+    'Write plain markdown: # heading, ## subheading, ### small heading, - bullet, 1. numbered, - [ ] to-do, > quote, **bold**, *italic*, [text](https://link). Short paragraphs. No title line at the top unless they asked for one.',
+    'Reply with JSON only: {"text":"the markdown","title":"a short title for the doc, only when drafting the whole doc and it has none, else null"}',
+  ].join('\n');
+  const j = replyJson(await aiAsk(ws, auth.memberId, system, prompt));
+  return { text: clipText(String(j.text || '').trim(), 40_000), title: j.title ? clipText(String(j.title).trim(), 140) : null };
+}
+
 // The team as the AI sees it: who's on it and what each role handles, so it can say who should do a task.
 function teamLine(ws, memberId) {
   const roles = ws.roles || [];
@@ -2813,7 +2872,7 @@ function skCard(v, ws) {
     if (!db.pss[ws.id]) return null;
     Object.assign(c, { name: t(v.name, 80) || 'PSS leads', live: applyLive(v.live || {}) });
   }
-  if (type === 'note') Object.assign(c, { title: t(v.title, 120), text: t(v.text, 8000) });
+  if (type === 'note') Object.assign(c, { title: t(v.title, 120), text: t(v.text, 8000), template: ['brief', 'report', 'proposal', 'onepager', 'script', 'sop', 'meeting'].includes(v.template) ? v.template : null });
   // A limit of 0 takes the budget away, as it does in Finance.
   if (type === 'budget') {
     const limit = Math.round(Number(String(v.limit ?? '').replace(/[$,\s]/g, '')));
@@ -3053,7 +3112,7 @@ const SK_SYSTEM = (kind, built) => [
   kind === 'schedule' ? '' : '{"type":"sub","name":"","brief":"what this part does for the main campaign","start":"YYYY-MM-DD","end":"YYYY-MM-DD","why":""} — a sub-campaign under the one being planned. Not for a campaign that is itself a sub-campaign.',
   '{"type":"goal","title":"","kind":"tasks"|"count"|"money","target":number|null (count: logged calls or emails to reach; money: whole dollars),"due":"YYYY-MM-DD"|null,"tasks":[{"text":"an action for one sitting","due":"YYYY-MM-DD"|null,"who":null|"role or person"}],"why":""}',
   '{"type":"list","name":"","live":{"stages":[],"cities":[],"sources":[],"days":0|30|90|180|365,"need":"phone"|"email"|null},"why":""} — a prospect list pulled from PSS by filter, only if PSS is connected. Use stage, city and source values exactly as given.',
-  '{"type":"note","title":"","text":"","why":""} — a call script, an email draft, a checklist, talking points.',
+  '{"type":"note","title":"","text":"markdown: # headings, - bullets, 1. steps, - [ ] to-dos, **bold**","template":null|"brief"|"report"|"proposal"|"onepager"|"script"|"sop"|"meeting","why":""} — a doc for the campaign, written out in full: a brief, a call script, an email draft, a one-pager, a proposal, a process guide, a weekly report, talking points. Propose one when the plan needs it (a script before calling starts, a brief for a new campaign, a report when they ask how it went). A report or brief gets the campaign’s numbers added on its own, so don’t repeat them.',
   `{"type":"budget","category":"","limit":whole dollars a month,"scope":"personal"|"business","why":""} — a monthly limit for one spending category.${kind === 'money' ? ' For a budget they already have, use its category exactly, and the card changes its limit; a limit of 0 removes it.' : ''}`,
   kind === 'money' ? '{"type":"bill","name":"","amount":dollars,"repeat":"once"|"weekly"|"monthly"|"quarterly"|"yearly","due":"YYYY-MM-DD","category":"","scope":"personal"|"business","autopay":false,"why":""} — a bill they pay that isn’t in Finance yet. Only ones they’ve told you about or that clearly repeat in their spending.' : '',
   '{"type":"block","text":"","date":"YYYY-MM-DD","start":540,"end":600,"repeat":null|"daily"|"weekdays"|"weekly"|"monthly","why":""} — time on their Day. Don’t overlap what’s already there.',
@@ -4100,6 +4159,7 @@ async function api(req, res, url) {
       return send(res, 200, aiState(ws, auth.memberId));
     }
     if (m === 'POST' && b === 'openers') return send(res, 200, await aiOpeners(ws, auth, body));
+    if (m === 'POST' && b === 'doc') return send(res, 200, await aiDoc(ws, auth, body));
     if (m === 'POST' && b === 'task') {
       const t = db.tasks[body.taskId];
       if (!t || t.wsId !== ws.id || !canSee(auth, 'task', t)) return send(res, 404, { error: 'That task is gone.' });

@@ -26,6 +26,7 @@ window.ColumnDocs = (() => {
     { type: 'table', label: 'Table', hint: 'Rows and columns', keys: 'table grid rows columns' },
     { type: 'image', label: 'Image', hint: 'Upload a picture', keys: 'image picture photo img' },
     { type: 'file', label: 'File', hint: 'Attach a file', keys: 'file attachment upload pdf' },
+    { type: 'ai', label: 'Write with AI', hint: 'Ask for a section, a list, a summary…', keys: 'ai write draft generate assistant sidekick ✦' },
     { type: 'task', label: 'Task', hint: 'A to-do that’s a real task', keys: 'task assign todo due' },
     { type: 'mention', label: 'Mention', hint: 'A person, campaign, task or doc', keys: 'mention link person page @' },
     { type: 'live:campaign', live: 'campaign', label: 'Campaign summary', hint: 'Progress and goals, kept up to date', keys: 'campaign summary progress live status' },
@@ -245,6 +246,22 @@ window.ColumnDocs = (() => {
   }
 
   // ---------- reading other formats into blocks ----------
+  // **bold**, *italic* or _italic_, `code` and [text](link) inside a line, as runs.
+  function inlineMd(text) {
+    const out = [];
+    const re = /\*\*([^*]+)\*\*|`([^`]+)`|\[([^\]]+)\]\(((?:https?:|mailto:|tel:)[^\s)]+)\)|(?:^|(?<=[\s(]))[*_]([^*_\s][^*_]*?)[*_](?=[\s.,;:!?)]|$)/g;
+    let at = 0;
+    for (const m of text.matchAll(re)) {
+      if (m.index > at) out.push({ text: text.slice(at, m.index) });
+      if (m[1]) out.push({ text: m[1], b: true });
+      else if (m[2]) out.push({ text: m[2], code: true });
+      else if (m[3]) out.push({ text: m[3], link: m[4] });
+      else out.push({ text: m[5], i: true });
+      at = m.index + m[0].length;
+    }
+    if (at < text.length) out.push({ text: text.slice(at) });
+    return norm(out);
+  }
   // Plain text, read the way people type it: # headings, - bullets, 1. numbers, [ ] to-dos, > quotes, ``` code.
   function fromText(text) {
     const blocks = [];
@@ -258,7 +275,7 @@ window.ColumnDocs = (() => {
       if (!line.trim()) continue;
       const indent = Math.min(8, Math.floor(line.match(/^ */)[0].length / 2));
       const l = line.trim();
-      const add = (type, t, more) => blocks.push({ id: uid(), type, ...(indent && !/^h/.test(type) ? { indent } : {}), runs: t ? [{ text: t }] : [], ...more });
+      const add = (type, t, more) => blocks.push({ id: uid(), type, ...(indent && !/^h/.test(type) ? { indent } : {}), runs: t ? inlineMd(t) : [], ...more });
       let m;
       if (/^```/.test(l)) blocks.push((code = { id: uid(), type: 'code', runs: [] }));
       else if (/^(-{3,}|\*{3,})$/.test(l)) blocks.push({ id: uid(), type: 'divider' });
@@ -562,7 +579,8 @@ window.ColumnDocs = (() => {
       S.typing = null;
       render();
       if (s.at?.sel) select(s.at.sel);
-      else if (s.at) focus(s.at.id, s.at.start, s.at.end, s.at.cell);
+      else if (s.at && byId(s.at.id)) focus(s.at.id, s.at.start, s.at.end, s.at.cell);
+      else root.focus({ preventScroll: true }); // so the next ⌘Z still reaches the doc
       changed();
     }
     const undo = () => restore(S.undo, S.redo);
@@ -587,6 +605,7 @@ window.ColumnDocs = (() => {
       }
       body.replaceChildren(...S.blocks.map((b, i) => (hide[i] ? null : row(b, nums[i]))).filter(Boolean));
       for (const id of S.sel) rowOf(id)?.classList.add('dk-selected');
+      drawDraft();
     }
     function editable(b, cls, plain) {
       const e = el(plain ? 'pre' : 'div', { class: 'dk-text ' + cls, contenteditable: 'true', 'data-ph': PH[b.type] || '', spellcheck: plain ? 'false' : 'true' });
@@ -969,6 +988,7 @@ window.ColumnDocs = (() => {
     }
     function onKey(e) {
       if (S.slash && slashKey(e)) return;
+      if (S.draft && e.key === 'Escape' && !e.target.closest?.('.dk-ai-ask')) { e.preventDefault(); return discardDraft(); }
       const mod = isMac ? e.metaKey : e.ctrlKey;
       const k = e.key;
       if (mod && !e.altKey && (k === 'z' || k === 'Z')) { e.preventDefault(); return e.shiftKey ? redo() : undo(); }
@@ -1192,7 +1212,8 @@ window.ColumnDocs = (() => {
       const runs = a.get();
       const btn = (key, label, title) => el('button', { type: 'button', class: markAll(runs, a.c.start, a.c.end, key) ? 'on' : null, title, onpointerdown: (e) => { e.preventDefault(); key === 'link' ? linkAsk() : format(key); } }, label);
       const k = isMac ? '⌘' : 'Ctrl+';
-      barEl.replaceChildren(btn('b', el('b', {}, 'B'), `Bold (${k}B)`), btn('i', el('i', {}, 'I'), `Italic (${k}I)`), btn('u', el('u', {}, 'U'), `Underline (${k}U)`), btn('s', el('s', {}, 'S'), `Strikethrough (${k}Shift+S)`), btn('code', '</>', `Code (${k}E)`), btn('link', '🔗', `Link (${k}K)`));
+      const aiBtn = opts.ai && !a.ed.classList.contains('dk-cell') ? el('button', { type: 'button', class: 'dk-ai-btn', title: 'Rework this with AI', onpointerdown: (e) => { e.preventDefault(); aiSelMenu(e.currentTarget, a); } }, '✦ AI') : null;
+      barEl.replaceChildren(aiBtn, btn('b', el('b', {}, 'B'), `Bold (${k}B)`), btn('i', el('i', {}, 'I'), `Italic (${k}I)`), btn('u', el('u', {}, 'U'), `Underline (${k}U)`), btn('s', el('s', {}, 'S'), `Strikethrough (${k}Shift+S)`), btn('code', '</>', `Code (${k}E)`), btn('link', '🔗', `Link (${k}K)`));
       barEl.classList.remove('hidden');
       const sel = getSelection();
       place(barEl, sel.rangeCount ? sel.getRangeAt(0).getBoundingClientRect() : null, true);
@@ -1200,6 +1221,138 @@ window.ColumnDocs = (() => {
     function hideBar() {
       barEl.classList.add('hidden');
       barEl.replaceChildren();
+    }
+
+    // ----- AI: what it writes shows as a draft under the block; nothing changes until it's accepted -----
+    // The doc as text for the AI, with live blocks as [[live:N]] so a full draft can keep them where they go.
+    function docForAi() {
+      let n = 0;
+      return S.blocks.map((b) => (b.type === 'live' ? `[[live:${++n}]] (${LIVE_NAME[b.source]})` : toText([b]))).join('\n');
+    }
+    function aiSelMenu(anchor, a) {
+      const sel = runsText(sliceRuns(a.get(), a.c.start, a.c.end));
+      const go = (mode, ask) => { hideBar(); aiRun({ mode, ask, selection: sel, at: a.b.id, range: { id: a.b.id, start: a.c.start, end: a.c.end } }); };
+      opts.menu?.(anchor, [
+        { head: 'AI' },
+        { label: 'Improve the writing', run: () => go('improve') },
+        { label: 'Make it shorter', run: () => go('shorten') },
+        { label: 'Make it longer', run: () => go('expand') },
+        { label: 'Fix spelling and grammar', run: () => go('fix') },
+        { label: 'Ask for something else…', run: () => { hideBar(); aiAsk({ mode: 'ask', selection: sel, at: a.b.id, range: { id: a.b.id, start: a.c.start, end: a.c.end } }); } },
+      ]);
+    }
+    // A box to say what to write, with a few ready asks.
+    function aiAsk(req) {
+      const anchor = rowOf(req.at);
+      const inp = el('input', { class: 'dk-ai-in', placeholder: req.mode === 'ask' ? 'What should it do with the selected text?' : 'What should it write? e.g. three follow-up email ideas', spellcheck: 'true' });
+      const quick = req.mode === 'ask' ? [] : [['Continue writing', 'continue', ''], ['Next steps for this campaign', 'write', 'A short list of next steps for this campaign, from how it’s going'], ['Summary of how it’s going', 'write', 'A short summary of how the campaign is going, with the numbers'], ['Talking points', 'write', 'Talking points for calls about this']];
+      const send = (mode, ask) => { close(); aiRun({ ...req, mode, ask }); };
+      const close = () => { box.remove(); removeEventListener('pointerdown', away, true); };
+      const away = (e) => { if (!box.contains(e.target)) close(); };
+      const box = el('div', { class: 'dk-ai-ask', contenteditable: 'false' },
+        el('div', { class: 'dk-ai-row' }, el('span', { class: 'dk-ai-spark' }, '✦'), inp, el('button', { type: 'button', class: 'dk-ai-go', onclick: () => inp.value.trim() && send(req.mode, inp.value.trim()) }, 'Write')),
+        quick.length ? el('div', { class: 'dk-ai-quick' }, quick.map(([label, mode, ask]) => el('button', { type: 'button', onclick: () => send(mode, ask) }, label))) : null);
+      inp.addEventListener('keydown', (e) => {
+        e.stopPropagation();
+        if (e.key === 'Enter' && inp.value.trim()) { e.preventDefault(); send(req.mode, inp.value.trim()); }
+        if (e.key === 'Escape') { e.preventDefault(); close(); focus(req.at, 'end'); }
+      });
+      (anchor || body).after(box);
+      setTimeout(() => addEventListener('pointerdown', away, true));
+      inp.focus();
+    }
+    // Asks the app's AI, shows a draft, and puts it in on Accept.
+    async function aiRun(req) {
+      if (!opts.ai) return;
+      const near = req.at && byId(req.at) ? runsText(byId(req.at).runs) || toText([byId(req.at)]) : '';
+      S.draft = { req, blocks: null, error: null };
+      drawDraft();
+      try {
+        const r = await opts.ai({ mode: req.mode, ask: req.ask || '', selection: req.selection || '', near, doc: docForAi(), title: S.title });
+        if (S.draft?.req !== req) return;
+        const blocks = fromText(r.text || '');
+        if (!blocks.length) throw new Error('The AI didn’t write anything. Try asking another way.');
+        S.draft = { req, blocks, title: r.title };
+      } catch (e) {
+        if (S.draft?.req !== req) return;
+        S.draft = { req, blocks: null, error: e.message };
+      }
+      drawDraft();
+    }
+    function drawDraft() {
+      body.parentNode.querySelector('.dk-draft')?.remove();
+      const d = S.draft;
+      if (!d) return;
+      const card = el('div', { class: 'dk-draft', contenteditable: 'false' },
+        el('div', { class: 'dk-draft-h' }, el('span', { class: 'dk-ai-spark' }, '✦'), d.error ? 'Couldn’t write that' : d.blocks ? 'Draft from AI' : 'Writing…'),
+        d.error ? el('p', { class: 'dk-draft-err' }, d.error) : d.blocks ? draftPreview(d.blocks) : el('div', { class: 'dk-draft-wait' }, el('i'), el('i'), el('i')),
+        el('div', { class: 'dk-draft-btns' },
+          d.blocks ? el('button', { type: 'button', class: 'dk-draft-ok', onclick: acceptDraft }, d.req.range ? 'Replace selection' : d.req.mode === 'draft' ? 'Use this draft' : 'Insert') : null,
+          d.blocks || d.error ? el('button', { type: 'button', onclick: () => aiRun(d.req) }, 'Try again') : null,
+          el('button', { type: 'button', onclick: discardDraft }, d.blocks || d.error ? 'Discard' : 'Stop')));
+      const anchor = d.req.mode === 'draft' ? null : rowOf(d.req.at);
+      if (anchor) anchor.after(card);
+      else body.before(card);
+      card.scrollIntoView({ block: 'nearest' });
+      card.querySelector('.dk-draft-ok')?.focus();
+    }
+    function draftPreview(blocks) {
+      const page = toHtml(blocks.map((b) => (/^\[\[live:\d+\]\]/.test(runsText(b.runs)) ? { ...b, runs: [{ text: '▦ live numbers stay here' }] } : b)));
+      page.className = 'dk-draft-page';
+      return page;
+    }
+    function discardDraft() {
+      const at = S.draft?.req.at;
+      S.draft = null;
+      drawDraft();
+      if (at && byId(at)) focus(at, 'end');
+    }
+    function acceptDraft() {
+      const d = S.draft;
+      if (!d?.blocks) return;
+      snap();
+      const blocks = d.blocks.map((b) => ({ ...b, id: uid() }));
+      const lvl = byId(d.req.at)?.indent;
+      if (lvl) for (const b of blocks) if (!/^h/.test(b.type)) b.indent = Math.min(8, (b.indent || 0) + lvl);
+      let last = blocks.at(-1);
+      if (d.req.mode === 'draft') {
+        // The whole doc: live blocks go where the AI kept their markers; any it left out stay at the top.
+        const lives = S.blocks.filter((b) => b.type === 'live');
+        const used = new Set();
+        const out = blocks.map((b) => {
+          const m = runsText(b.runs).match(/^\[\[live:(\d+)\]\]/);
+          const live = m && lives[Number(m[1]) - 1];
+          if (live && !used.has(live)) { used.add(live); return live; }
+          return m ? null : b;
+        }).filter(Boolean);
+        S.blocks = [...lives.filter((b) => !used.has(b)), ...out];
+        if (!S.title.trim() && d.title) { S.title = d.title; titleEl.textContent = d.title; }
+        last = S.blocks.at(-1);
+      } else if (d.req.range && byId(d.req.range.id)) {
+        // The selected words: one paragraph replaces them in the line; more splits the line around them.
+        const b = byId(d.req.range.id);
+        const { start, end } = d.req.range;
+        if (blocks.length === 1 && blocks[0].type === 'p') {
+          b.runs = joinRuns(sliceRuns(b.runs, 0, start), blocks[0].runs, sliceRuns(b.runs, end));
+          S.draft = null;
+          render();
+          focus(b.id, start + runsLen(blocks[0].runs));
+          return changed();
+        }
+        const after = sliceRuns(b.runs, end);
+        b.runs = sliceRuns(b.runs, 0, start);
+        const tailB = runsLen(after) ? newBlock(b.type === 'code' ? 'p' : b.type, { runs: after, ...(b.indent ? { indent: b.indent } : {}) }) : null;
+        insertAfter(b.id, [...blocks, ...(tailB ? [tailB] : [])]);
+        if (!runsLen(b.runs) && b.type === 'p') S.blocks.splice(idx(b.id), 1);
+      } else {
+        const at = byId(d.req.at);
+        if (at && at.type === 'p' && !runsLen(at.runs)) S.blocks.splice(idx(at.id), 1, ...blocks);
+        else insertAfter(at ? S.blocks[childrenEnd(idx(at.id)) - 1].id : S.blocks.at(-1)?.id, blocks);
+      }
+      S.draft = null;
+      render();
+      if (last && byId(last.id)) TEXT.has(last.type) ? focus(last.id, 'end') : select([last.id]);
+      changed();
     }
 
     // ----- the "/" menu -----
@@ -1312,6 +1465,11 @@ window.ColumnDocs = (() => {
           changed();
         });
         return;
+      }
+      if (type === 'ai') {
+        render();
+        focus(b.id, 'end');
+        return aiAsk({ mode: empty ? 'write' : 'write', at: b.id, replaceEmpty: empty });
       }
       if (type === 'task') {
         if (!empty) {
@@ -1767,7 +1925,7 @@ window.ColumnDocs = (() => {
       }
     });
 
-    const ICON = { p: 'Aa', h1: 'H1', h2: 'H2', h3: 'H3', ul: '•', ol: '1.', todo: '☑', toggle: '▸', quote: '❝', callout: '💡', code: '</>', divider: '—', table: '▦', image: '🖼', file: '📎', task: '✓', mention: '@', 'live:campaign': '◎', 'live:goal': '▰', 'live:tasks': '☰', 'live:calls': '☏', 'live:budgets': '$', 'live:list': '≡' };
+    const ICON = { p: 'Aa', h1: 'H1', h2: 'H2', h3: 'H3', ul: '•', ol: '1.', todo: '☑', toggle: '▸', quote: '❝', callout: '💡', code: '</>', divider: '—', table: '▦', image: '🖼', file: '📎', task: '✓', mention: '@', ai: '✦', 'live:campaign': '◎', 'live:goal': '▰', 'live:tasks': '☰', 'live:calls': '☏', 'live:budgets': '$', 'live:list': '≡' };
     // Live blocks, task chips and mention names drawn again from the app's data, leaving the caret alone.
     function refresh() {
       const at = document.activeElement;
@@ -1825,6 +1983,17 @@ window.ColumnDocs = (() => {
       },
       redraw() { render(); },
       refresh,
+      // Starts the doc over from a template, as one step that undo takes back.
+      replace(blocks, title) {
+        snap();
+        S.blocks = clone(blocks).map((b) => ({ ...b, id: b.id || uid() }));
+        if (!S.blocks.length) S.blocks.push(newBlock());
+        if (title != null) { S.title = title; titleEl.textContent = title; }
+        render();
+        changed();
+      },
+      draft(ask) { aiRun({ mode: 'draft', ask: ask || '', at: null }); },
+      get empty() { return S.blocks.every((b) => TEXT.has(b.type) && !runsLen(b.runs)) && !S.draft; },
       // A change to one block from outside (a task renamed elsewhere): applied, and saved like any edit.
       update(id, fn) {
         const b = byId(id);
@@ -1846,5 +2015,5 @@ window.ColumnDocs = (() => {
     };
   }
 
-  return { editor, diff, apply, toText, toHtml, toPdf, fromText, fromHtml, runsText, LABEL };
+  return { editor, diff, apply, toText, toHtml, toPdf, fromText, fromHtml, runsText, uid, LABEL };
 })();
