@@ -2825,14 +2825,17 @@
     const parts = [];
     const view = (v) => { D.taskView = v; store.set('taskView', v); renderDay(); };
     const stepsDue = S.tasks.filter((t) => stepOf(t) && !t.done && t.due && t.due <= today && (!mineOnly || taskMine(t)));
-    parts.push(h('div', { class: 'seg mine-seg' },
-      h('button', { class: steps ? '' : 'on', onclick: () => view('mine') }, 'My tasks'),
-      h('button', { class: steps ? 'on' : '', onclick: () => view('camps') }, 'Campaign steps', stepsDue.length ? h('span', { class: 'seg-n' }, stepsDue.length) : null)));
-    if (canFilter) {
-      parts.push(h('div', { class: 'seg mine-seg' },
-        h('button', { class: mineOnly ? '' : 'on', onclick: () => { D.mine = false; store.set('tasksMine', false); renderDay(); } }, 'All tasks'),
-        h('button', { class: mineOnly ? 'on' : '', onclick: () => { D.mine = true; store.set('tasksMine', true); renderDay(); } }, 'Assigned to me')));
-    }
+    // One slim bar of two small pickers, instead of more rows of tabs: which tasks on the left, whose on the right.
+    const setMine = (on) => { D.mine = on; store.set('tasksMine', on); renderDay(); };
+    parts.push(h('div', { class: 'task-bar' },
+      h('button', { class: 'tb-pick', 'aria-haspopup': 'menu', onclick: (e) => openMenu(e.currentTarget, [
+        { label: 'My tasks', on: !steps, run: () => view('mine') },
+        { label: h('span', {}, 'Campaign steps', stepsDue.length ? h('span', { class: 'seg-n' }, stepsDue.length) : null), on: steps, run: () => view('camps') },
+      ]) }, steps ? 'Campaign steps' : 'My tasks', !steps && stepsDue.length ? h('span', { class: 'seg-n', title: `${stepsDue.length} campaign step${stepsDue.length === 1 ? '' : 's'} due` }, stepsDue.length) : null, h('span', { class: 'tb-caret' }, '▾')),
+      canFilter ? h('button', { class: 'tb-pick' + (mineOnly ? ' on' : ''), 'aria-haspopup': 'menu', onclick: (e) => openMenu(e.currentTarget, [
+        { label: 'All tasks', on: !mineOnly, run: () => setMine(false) },
+        { label: 'Assigned to me', on: mineOnly, run: () => setMine(true) },
+      ]) }, mineOnly ? 'Assigned to me' : 'All tasks', h('span', { class: 'tb-caret' }, '▾')) : null));
     if (steps) {
       renderSteps(parts, open, done);
       D.scroll.replaceChildren(...parts);

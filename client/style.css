@@ -1674,3 +1674,10 @@ body.platform-darwin .pj-head, body.platform-darwin .pj-top { padding-left: 80px
 .pj-tpl { position: relative; }
 .pj-tpl-del { position: absolute; top: 6px; right: 8px; color: var(--faint); font-size: 14px; }
 .pj-tpl-del:hover { color: var(--danger); }
+/* the Tasks view's two small pickers */
+.task-bar { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 2px 6px 4px; }
+.tb-pick { display: inline-flex; align-items: center; gap: 5px; border: 0; background: none; color: var(--text); font-weight: 600; font-size: 13px; padding: 5px 8px; border-radius: 7px; }
+.tb-pick:hover { background: var(--card-hover); }
+.tb-pick + .tb-pick, .task-bar > .tb-pick:last-child:not(:first-child) { color: var(--muted); font-weight: 500; }
+.tb-pick.on { color: var(--accent) !important; }
+.tb-caret { font-size: 10px; color: var(--muted); }
