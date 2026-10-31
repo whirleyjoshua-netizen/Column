@@ -566,7 +566,7 @@
 
   function incoming(it) {
     if (S.notify && document.hidden && 'Notification' in window && Notification.permission === 'granted') {
-      const body = it.type === 'message' ? plainText(it.text).slice(0, 140) : it.type === 'text' ? it.text.slice(0, 140) : `${it.name}${it.size ? ' · ' + fmtSize(it.size) : ''}`;
+      const body = it.type === 'message' ? plainText(it.text).slice(0, 140) : it.type === 'text' ? it.text.slice(0, 140) : it.type === 'sealed' ? `🔒 Sealed: ${it.label || 'a secret'}` : `${it.name}${it.size ? ' · ' + fmtSize(it.size) : ''}`;
       try {
         const ch = channelById(it.channelId);
         new Notification(`${it.by}${mentionsMe(it) ? ' mentioned you' : ''}${ch ? ' in #' + ch.name : ''} · ${it.device}`, { body, icon: '/icon-128.png', silent: false });
@@ -795,6 +795,7 @@
     });
     const add = h('button', { class: 'add', title: 'Add a doc or files', onclick: (e) => openMenu(e.currentTarget, [
       { label: 'New doc', run: () => newDoc(destOf(view)) },
+      { label: '🔒 Sealed note…', run: () => sealNote(destOf(view)) },
       { label: 'Upload files…', run: () => pickFiles(destOf(view)) },
       { label: 'New Word document', run: () => newDocSheet(destOf(view)) },
     ]) }, '+');
@@ -949,6 +950,15 @@
 
   function cardEl(it) {
     const k = kind(it);
+    if (it.type === 'sealed') {
+      const left = it.expiresAt ? Math.max(0, it.expiresAt - Date.now()) : null;
+      const el = h('article', { class: 'card sealed-card' + (it.pinned ? ' pinned' : ''), title: 'Open it with the code its sender gave you' },
+        h('div', { class: 'thumb seal-thumb', html: I.lock, onclick: () => sealOpen(it) }),
+        h('div', { class: 'meta', onclick: () => sealOpen(it) }, h('div', { class: 'name' }, it.label || 'Sealed card'),
+          h('div', { class: 'sub' }, [`Sealed by ${isMine(it) ? 'you' : it.by}`, it.burn ? 'burns after reading' : '', left != null ? (left < 3600_000 ? 'expires within the hour' : left < 86400_000 ? `expires in ${Math.round(left / 3600_000)}h` : `expires in ${Math.round(left / 86400_000)} days`) : '', it.opened?.length ? `opened ${it.opened.length}×` : ''].filter(Boolean).join(' · '))),
+        actionsEl(it));
+      return el;
+    }
     if (it.type === 'text') {
       const el = h('article', { class: 'card text doc-card' + (it.pinned ? ' pinned' : ''), draggable: 'true', title: 'Open the doc' },
         h('div', { class: 'meta', onclick: () => openDoc(it) }, h('div', { class: 'doc-card-t' }, docTitle(it), it.openComments ? h('small', { class: 'doc-card-c', title: 'Open comments' }, ' 💬 ' + it.openComments) : null, it.locked ? h('small', { title: 'Locked' }, ' 🔒') : null), docSnippet(it) ? h('div', { class: 'snippet' }, docSnippet(it)) : null, subline(it)),
@@ -1441,6 +1451,7 @@
   // standalone: the whole page is this file (a window of its own), so there's nothing to close back to.
   function openPreview(it, { standalone = false, edit = false } = {}) {
     if (it.type === 'text' && !standalone) return openDoc(it);
+    if (it.type === 'sealed') return sealOpen(it);
     const pv = $('#preview');
     pv.innerHTML = '';
     const k = kind(it);
@@ -9449,7 +9460,7 @@
       fieldsBox,
       h('label', {}, 'Note', note),
       h('div', { class: 'row2' }, h('label', {}, 'Campaign', camp), contacts.length ? h('label', {}, 'Contact', contact, dl) : null),
-      del,
+      x ? h('div', { class: 'btns' }, h('button', { type: 'button', class: 'btn small', title: 'Send it into a stack, encrypted, opened with a one-time code', onclick: () => { closeSheet(); sealFromVault(x); } }, '🔒 Send sealed…'), del) : null,
     ], async () => {
       if (!VK.key) throw new Error('The vault locked. Unlock it and try again.');
       if (!title.value.trim()) throw new Error('Give it a name.');
@@ -9466,6 +9477,112 @@
       renderCamps();
     }, x ? 'Save' : 'Add');
   }
+  // ----- sealed cards: a secret sent through a stack, opened only with a one-time code -----
+  // It's encrypted here (the vault's AES-GCM, with a key made from the code), and the code goes to the other
+  // person another way: said on a call, or texted. Column keeps only the scrambled card. 12 characters from a
+  // 32-letter alphabet is 60 bits, slowed down further by 300,000 rounds of key stretching.
+  const SEAL_ABC = '0123456789ABCDEFGHJKMNPQRSTVWXYZ'; // no I, L, O, U, so it reads aloud cleanly
+  const SEAL_ITERS = 300_000;
+  const sealCode = () => { const r = crypto.getRandomValues(new Uint8Array(12)); const s = [...r].map((x) => SEAL_ABC[x % 32]).join(''); return `${s.slice(0, 4)}-${s.slice(4, 8)}-${s.slice(8)}`; };
+  // Typed back in any case, with or without dashes; O read as 0 and I or L as 1.
+  const sealClean = (s) => String(s).toUpperCase().replace(/O/g, '0').replace(/[IL]/g, '1').replace(/[^0-9A-Z]/g, '');
+  async function sealSend(value, { label, burn, hours, dest }) {
+    const code = sealCode();
+    const salt = b64u(crypto.getRandomValues(new Uint8Array(16)));
+    const key = await vaultDerive(sealClean(code), salt, SEAL_ITERS);
+    const blob = await vaultSeal(key, value);
+    const it = await api('POST', '/items', { type: 'sealed', sealed: { blob, salt, iters: SEAL_ITERS, label, burn, hours }, ...dest });
+    upsert(it);
+    render();
+    sheet('Sealed · here’s the code', [
+      h('p', { class: 'day-hint' }, 'Give this code to whoever should open it: say it on a call or text it. Don’t send it in the same place as the card. Without it, nobody can open the card, not even Column.'),
+      h('div', { class: 'seal-code' }, code),
+      h('div', { class: 'btns' }, h('button', { type: 'button', class: 'btn small', onclick: () => vaultCopy(code) }, 'Copy code')),
+      h('p', { class: 'day-hint' }, [burn ? 'It deletes itself once someone opens it.' : '', hours ? `It expires in ${hours < 48 ? hours + ' hours' : Math.round(hours / 24) + ' days'}.` : ''].filter(Boolean).join(' ') || 'It stays until someone deletes it.'),
+    ], async () => {}, 'Done');
+    return it;
+  }
+  // Where it goes, how long it lives, and a label everyone can see.
+  function sealOptions(defaultLabel, extra, onSend, dest) {
+    const stacks = (S.workspace?.stacks || []);
+    // The stack on screen comes first.
+    const here = (S.panes || []).map((v) => viewStack(v)).find(Boolean);
+    const where = dest ? null : h('select', {}, stacks.map((st) => h('option', { value: st.id, selected: st.id === here }, st.name)));
+    const label = h('input', { value: defaultLabel || '', placeholder: 'Wi-Fi, gate code, supplier login…', maxlength: 80 });
+    const burn = h('input', { type: 'checkbox', checked: true });
+    const life = h('select', {}, h('option', { value: '24' }, '24 hours'), h('option', { value: '168' }, '7 days'), h('option', { value: '0' }, 'No expiry'));
+    sheet('Send sealed', [
+      ...extra,
+      h('label', {}, 'Label (everyone can see it)', label),
+      where ? h('label', {}, 'Into the stack', where) : null,
+      h('div', { class: 'row2' }, h('label', { class: 'pick' }, burn, 'Burn after reading'), h('label', {}, 'Expires', life)),
+    ].filter(Boolean), async () => {
+      const opts = { label: label.value.trim(), burn: burn.checked, hours: Number(life.value), dest: dest || { stackId: where.value } };
+      // After this sheet closes, so the one with the code isn't closed with it.
+      setTimeout(() => onSend(opts));
+    }, 'Seal and send');
+  }
+  function sealFromVault(x) {
+    const { id, link, updatedAt, broken, ...value } = x;
+    sealOptions(x.title, [h('p', { class: 'day-hint' }, `“${x.title}” goes in a sealed card: everything in it, encrypted on this device.`)], (o) => sealSend(value, o).catch((e) => toast(e.message)));
+  }
+  function sealNote(dest) {
+    const title = h('input', { placeholder: 'What it is' });
+    const secret = h('textarea', { rows: 4, placeholder: 'The secret: a password, a code, account details…' });
+    sealOptions('', [h('label', {}, 'Name', title), h('label', {}, 'Secret', secret)], async (o) => {
+      if (!secret.value.trim()) return toast('Nothing to seal.');
+      await sealSend({ kind: 'note', title: title.value.trim() || o.label || 'Sealed note', note: secret.value }, o).catch((e) => toast(e.message));
+    }, dest);
+  }
+  // Opening one: the code turns it back into what was sent, on this device only.
+  function sealOpen(it) {
+    if (it.expiresAt && it.expiresAt < Date.now()) return toast('That sealed card has expired.');
+    const code = h('input', { class: 'seal-in', placeholder: 'XXXX-XXXX-XXXX', autocomplete: 'off', spellcheck: 'false', autocapitalize: 'characters' });
+    let opened = false;
+    sheet(it.label ? `🔒 ${it.label}` : '🔒 Sealed card', [
+      h('p', { class: 'day-hint' }, `From ${it.by}${it.burn ? ' · it deletes itself once you open it, so copy what you need' : ''}.`),
+      h('label', {}, 'Code', code),
+    ], async () => {
+      if (opened) return;
+      let v;
+      try {
+        v = await vaultOpen(await vaultDerive(sealClean(code.value), it.salt, it.iters), it.blob);
+      } catch {
+        throw new Error('That code doesn’t open it. Check it with whoever sent it.');
+      }
+      opened = true;
+      const r = await api('POST', `/items/${it.id}/opened`).catch(() => ({}));
+      setTimeout(() => sealShow(it, v, r.burned)); // once this sheet has closed
+    }, 'Open');
+    setTimeout(() => code.focus());
+  }
+  function sealShow(it, v, burned) {
+    const fields = (VAULT_KINDS[v.kind]?.[1] || []).filter(([k]) => v[k]);
+    const row = (label, val, secret) => {
+      const shown = h('span', { class: 'seal-val' }, secret ? '••••••••' : val);
+      return h('div', { class: 'seal-row' }, h('small', {}, label), shown,
+        secret ? h('button', { type: 'button', class: 'btn small', onclick: (e) => { const on = shown.textContent.startsWith('•'); shown.textContent = on ? val : '••••••••'; e.currentTarget.textContent = on ? 'Hide' : 'Show'; } }, 'Show') : null,
+        h('button', { type: 'button', class: 'btn small', onclick: () => vaultCopy(val) }, 'Copy'));
+    };
+    const save = h('button', { type: 'button', class: 'btn small', onclick: async () => {
+      if (!VK.meta) return toast('Set up your vault first (Tools → Vault).');
+      if (!VK.key) return toast('Unlock your vault first (Tools → Vault), then open this again.');
+      const data = { kind: VAULT_KINDS[v.kind] ? v.kind : 'note', title: v.title || it.label || 'From a sealed card', note: v.note || '' };
+      for (const [f] of VAULT_KINDS[data.kind][1]) data[f] = v[f] || '';
+      const saved = await api('POST', '/vault/items', { blob: await vaultSeal(VK.key, data), link: null }).catch((e) => toast(e.message));
+      if (!saved) return;
+      VK.raw = [...VK.raw, saved];
+      VK.items = [...(VK.items || []), { id: saved.id, link: null, updatedAt: saved.updatedAt, ...data }];
+      toast('Saved to your vault');
+    } }, 'Save to my vault');
+    sheet(v.title || it.label || 'Opened', [
+      burned ? h('p', { class: 'seal-burn' }, '🔥 This card has been deleted. What’s here is only on your screen now.') : null,
+      ...fields.map(([k, label, secret]) => row(label, v[k], secret)),
+      v.note ? h('div', { class: 'seal-note' }, v.note) : null,
+      h('div', { class: 'btns' }, v.note ? h('button', { type: 'button', class: 'btn small', onclick: () => vaultCopy(v.note) }, 'Copy note') : null, save),
+    ].filter(Boolean), async () => {}, 'Done');
+  }
+
   function vaultPassword() {
     const abc = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%*-_';
     const r = crypto.getRandomValues(new Uint32Array(20));

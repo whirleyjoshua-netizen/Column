@@ -4993,7 +4993,20 @@ async function api(req, res, url) {
 
   if (a === 'items') {
     if (m === 'POST' && !b) {
-      const { type, text, stackId, channelId, parentId, dirId, doc } = await readJson(req, 4_000_000);
+      const { type, text, stackId, channelId, parentId, dirId, doc, sealed } = await readJson(req, 4_000_000);
+      // A sealed card: something secret, encrypted in the sender's browser with a one-time code they pass on
+      // themselves. Column only keeps the scrambled blob; it can burn after reading and expire.
+      if (type === 'sealed') {
+        const blob = typeof sealed?.blob === 'string' && /^[\w-]{20,200000}$/.test(sealed.blob) ? sealed.blob : null;
+        const salt = typeof sealed?.salt === 'string' && /^[\w-]{16,64}$/.test(sealed.salt) ? sealed.salt : null;
+        const iters = Math.round(Number(sealed?.iters));
+        if (!blob || !salt || !(iters >= 100_000 && iters <= 2_000_000)) return send(res, 400, { error: 'That sealed card isn’t complete.' });
+        const hours = Number(sealed.hours) > 0 ? Math.min(Number(sealed.hours), 24 * 30) : 0;
+        const dir = validDir(ws, dirId, auth.memberId);
+        const where = dir ? { dirId: dir } : { stackId: validStack(ws, stackId, auth.memberId), channelId: validChannel(ws, channelId, auth.memberId) };
+        const item = addItem(baseItem(auth, { type: 'sealed', text: '', label: cleanText(sealed.label, 80), blob, salt, iters, burn: !!sealed.burn, expiresAt: hours ? Date.now() + hours * 3600_000 : null, opened: [], ...where }));
+        return send(res, 200, publicItem(item));
+      }
       if (!['text', 'message'].includes(type)) return send(res, 400, { error: 'Bad type' });
       // A doc made as one: a title and blocks, and it can start empty. It never auto-clears.
       const made = type === 'text' && doc && typeof doc === 'object' ? { title: cleanText(doc.title, 300), blocks: (Array.isArray(doc.blocks) ? doc.blocks.slice(0, DOC_BLOCKS) : []).map(cleanDocBlock).filter(Boolean) } : null;
@@ -5019,6 +5032,18 @@ async function api(req, res, url) {
     if (!it || it.wsId !== ws.id || !canSee(auth, 'item', it)) return send(res, 404, { error: 'Not found' });
     // Messages: only the author edits; the author or an owner deletes.
     const own = it.memberId ? it.memberId === auth.memberId : it.deviceId === auth.deviceId;
+    // Opened (the code worked on their device): it's noted, and a burn-after-reading card is gone, unless the
+    // sender opened their own.
+    if (c === 'opened' && it.type === 'sealed' && m === 'POST') {
+      it.opened = [...(it.opened || []), { by: auth.member, memberId: auth.memberId, at: Date.now() }].slice(-20);
+      if (it.burn && !own) {
+        deleteItem(it.id);
+        return send(res, 200, { burned: true });
+      }
+      save();
+      broadcast(ws.id, { type: 'item:update', item: publicItem(it) });
+      return send(res, 200, { burned: false });
+    }
     // A doc's blocks, to open it; and changes to it from an editor. Anyone who can see a note can edit it.
     if (c === 'history' && it.type === 'text' && m === 'GET') {
       const list = await histRead(it.id);
@@ -5531,6 +5556,7 @@ setInterval(() => {
       continue;
     }
     if (it.status === 'uploading' && now - it.createdAt > 24 * 3600_000) deleteItem(it.id);
+    if (it.type === 'sealed' && it.expiresAt && it.expiresAt < now) { deleteItem(it.id); continue; }
     const h = ws.settings.expireHours;
     if (h > 0 && !it.pinned && !it.dirId && it.status === 'ready' && now - it.createdAt > h * 3600_000) deleteItem(it.id);
   }
