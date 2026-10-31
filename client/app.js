@@ -439,6 +439,9 @@
       renderCamps();
       refreshLinks();
       chatChanged();
+    } else if (msg.type === 'stack:request') {
+      const st = stackById(msg.stackId);
+      if (st?.request) Object.assign(st.request, { count: msg.count, lastAt: msg.lastAt });
     } else if (msg.type === 'workspace') {
       const mailWas = !!S.workspace?.settings?.memberEmail;
       S.workspace = msg.workspace;
@@ -565,6 +568,7 @@
   }
 
   function incoming(it) {
+    if (it.viaLink) linkArrived(it);
     if (S.notify && document.hidden && 'Notification' in window && Notification.permission === 'granted') {
       const body = it.type === 'message' ? plainText(it.text).slice(0, 140) : it.type === 'text' ? it.text.slice(0, 140) : it.type === 'sealed' ? `🔒 Sealed: ${it.label || 'a secret'}` : `${it.name}${it.size ? ' · ' + fmtSize(it.size) : ''}`;
       try {
@@ -575,6 +579,51 @@
     if (desktop && S.desktopCfg.autoSave && (it.type === 'file' || it.type === 'folder')) {
       desktop.save(desktopInfo(it)).catch(() => {});
     }
+  }
+
+  // ---------- file requests: a link customers use to send files into a stack ----------
+  const reqLive = (st) => st?.request && (!st.request.expiresAt || st.request.expiresAt > Date.now());
+  const reqUrl = (st) => abs('/r/' + st.request.token);
+  function requestSheet(stackId, justMade) {
+    const st = stackById(stackId);
+    if (!st) return;
+    const live = reqLive(st);
+    const r = st.request;
+    const note = h('textarea', { rows: 3, maxlength: 500, placeholder: 'What to send, e.g. a photo of each window, inside and out' });
+    note.value = live ? r.note || '' : '';
+    const life = h('select', {}, [[1, '1 day'], [7, '7 days'], [30, '30 days'], [90, '90 days'], [0, 'No expiry']].map(([v, l]) => h('option', { value: v }, l)));
+    life.value = live && !r.expiresAt ? '0' : '7';
+    const off = h('button', { type: 'button', class: 'btn danger small' }, 'Turn off link');
+    off.addEventListener('click', () => confirmClick(off, () => api('DELETE', `/stacks/${st.id}/request`).then(() => { closeSheet(); toast('Link turned off. It won’t take files any more.'); }, (e) => toast(e.message))));
+    sheet(`Request files · ${st.name}`, [
+      live ? h('div', { class: 'req-link' }, h('code', {}, reqUrl(st)), h('button', { type: 'button', class: 'btn small', onclick: () => copyText(reqUrl(st)) }, 'Copy')) : null,
+      live ? h('p', { class: 'day-hint' }, justMade ? 'Link copied. Send it by text or email.' : `${r.count ? `${r.count} file${r.count === 1 ? '' : 's'} received` : 'Nothing received yet'} · ${r.expiresAt ? 'works until ' + new Date(r.expiresAt).toLocaleDateString() : 'no expiry'}`)
+        : h('p', { class: 'day-hint' }, `Anyone with the link can send photos and files into “${st.name}”, no account needed. You’ll be told when they arrive, and what they send is kept (pinned).`),
+      h('label', {}, 'Note on their page (optional)', note),
+      h('label', {}, live ? 'From now, works for' : 'Link works for', life),
+      live ? h('div', { class: 'req-off' }, off) : null,
+    ].filter(Boolean), async () => {
+      const ws = await api('POST', `/stacks/${st.id}/request`, { days: Number(life.value), note: note.value });
+      S.workspace = ws;
+      if (live) return toast('Saved');
+      copyText(reqUrl(stackById(st.id)));
+      // After this sheet closes, so the one with the link isn't closed with it.
+      setTimeout(() => requestSheet(st.id, true));
+    }, live ? 'Save' : 'Make link');
+  }
+  // Files from a request link arrive one at a time: one notice per sender and stack.
+  let linkBatch = [];
+  function linkArrived(it) {
+    linkBatch.push(it);
+    if (linkBatch.length === 1) setTimeout(() => {
+      const got = linkBatch.splice(0);
+      const groups = new Map();
+      for (const x of got) groups.set(x.viaLink + '|' + x.stackId, [...(groups.get(x.viaLink + '|' + x.stackId) || []), x]);
+      for (const xs of groups.values()) {
+        const st = stackById(xs[0].stackId);
+        toast(`${xs[0].viaLink} sent ${xs.length === 1 ? '“' + xs[0].name + '”' : xs.length + ' files'}${st ? ' to ' + st.name : ''}`, st ? { label: 'Open', run: () => { setTab('column'); setPanes([`stack:${st.id}`, ...S.panes.slice(1)]); } } : undefined);
+      }
+    }, 1500);
   }
 
   // Someone else gave me a task: a toast here, and a system notification if the app is in the background.
@@ -726,11 +775,48 @@
           ))
         );
       }
+      if (viewStack(view) || view === 'files') pane.append(filterBar(pane));
       pane._list = h('div', { class: 'list' + (newestAtBottom(view) ? ' bottom' : '') });
       pane.append(pane._list, composer(pane));
       root.append(pane);
     });
     render(true);
+  }
+
+  // A busy stack: narrow it to one kind of thing, or search it. Kept per view, so a redraw doesn't reset it.
+  const PF = {};
+  const FILTERS = [['all', 'All'], ['photos', 'Photos'], ['docs', 'Docs'], ['files', 'Files'], ['sealed', 'Sealed']];
+  function filterOf(it) {
+    const k = kind(it);
+    if (k === 'image' || k === 'video') return 'photos';
+    if (k === 'text' || k === 'pdf' || k === 'docx' || k === 'textfile') return 'docs';
+    if (k === 'sealed') return 'sealed';
+    return it.type === 'file' || it.type === 'folder' ? 'files' : null;
+  }
+  function paneFiltered(view, items) {
+    const f = PF[view];
+    if (!f) return items;
+    const q = f.q.trim().toLowerCase();
+    return items.filter((it) => (f.kind === 'all' || filterOf(it) === f.kind)
+      && (!q || [it.name, it.label, it.text, it.by].some((x) => x && String(x).toLowerCase().includes(q))));
+  }
+  function filterBar(pane) {
+    const view = pane._view;
+    const f = (PF[view] ||= { kind: 'all', q: '' });
+    const chips = h('div', { class: 'pf-chips' });
+    const q = h('input', { type: 'search', class: 'pf-q', placeholder: 'Search', value: f.q, 'aria-label': 'Search this stack' });
+    q.addEventListener('input', () => { f.q = q.value; renderPane(pane); });
+    // Only the kinds this stack has, with how many.
+    pane._drawFilters = () => {
+      const all = itemsFor(view);
+      const n = (k) => all.filter((it) => filterOf(it) === k).length;
+      if (f.kind !== 'all' && !n(f.kind)) f.kind = 'all';
+      chips.replaceChildren(...FILTERS.filter(([k]) => k === 'all' || n(k)).map(([k, label]) =>
+        h('button', { class: 'pf-chip' + (f.kind === k ? ' on' : ''), onclick: () => { f.kind = k; renderPane(pane); } }, label, k === 'all' ? null : h('small', {}, String(n(k))))));
+      bar.classList.toggle('hidden', all.length < 2 && !f.q);
+    };
+    const bar = h('div', { class: 'pf' }, chips, q);
+    return bar;
   }
 
   function composer(pane) {
@@ -798,7 +884,8 @@
       { label: '🔒 Sealed note…', run: () => sealNote(destOf(view)) },
       { label: 'Upload files…', run: () => pickFiles(destOf(view)) },
       { label: 'New Word document', run: () => newDocSheet(destOf(view)) },
-    ]) }, '+');
+      viewStack(view) ? { label: '📥 Request files from someone…', run: () => requestSheet(viewStack(view)) } : null,
+    ].filter(Boolean)) }, '+');
     if (!chat) return h('div', { class: 'composer' }, add, ta);
     const linkBtn = h('button', { class: 'add link-btn', title: 'Link a stack, file or task  ([[)', 'aria-label': 'Link a stack, file or task', html: I.link, onclick: () => openPicker(wrap, addLink) });
     const wrap = h('div', { class: 'composer-wrap' }, tray, h('div', { class: 'composer' }, viewThread(view) ? null : add, linkBtn, ta));
@@ -815,7 +902,8 @@
   function renderPane(pane, force) {
     const view = pane._view;
     const list = pane._list;
-    const items = itemsFor(view);
+    pane._drawFilters?.();
+    const items = paneFiltered(view, itemsFor(view));
     const uploads = view === 'chat' || viewThread(view) ? [] : [...S.uploads.values()].filter((u) => !u.dirId && (u.channelId || null) === viewChannel(view) && (!viewStack(view) || u.stackId === viewStack(view)));
     const atBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 60;
 
@@ -850,8 +938,9 @@
     if (!ordered.length) {
       list.append(
         h('div', { class: 'empty' },
-          h('b', {}, isChatView(view) ? 'No messages yet' : 'Drop anything'),
-          h('small', {}, isChatView(view) ? 'Say something to your other devices' : 'files · folders · photos · music · video · text')
+          ...(PF[view] && (PF[view].kind !== 'all' || PF[view].q.trim()) ? [h('b', {}, 'Nothing matches'), h('small', {}, 'Try another word, or All')] : [
+            h('b', {}, isChatView(view) ? 'No messages yet' : 'Drop anything'),
+            h('small', {}, isChatView(view) ? 'Say something to your other devices' : 'files · folders · photos · music · video · text')])
         )
       );
     }
@@ -862,7 +951,7 @@
     const bits = [];
     if (it.type === 'folder') bits.push(`Uploaded folder · ${it.files.length} file${it.files.length === 1 ? '' : 's'}`);
     if (it.size != null && it.type !== 'text') bits.push(fmtSize(it.size));
-    bits.push(it.deviceId === S.deviceId ? 'this device' : it.device);
+    bits.push(it.viaLink ? `from ${it.viaLink} by link` : it.deviceId === S.deviceId ? 'this device' : it.device);
     bits.push(h('span', { 'data-ago': it.createdAt }, ago(it.createdAt)));
     const el = h('div', { class: 'sub' });
     bits.forEach((b, i) => { if (i) el.append(' · '); el.append(b); });
@@ -11292,7 +11381,8 @@
         inp.addEventListener('change', () => api('PATCH', '/stacks/' + st.id, { name: inp.value }).catch((e) => toast(e.message)));
         const del = h('button', { class: 'btn danger', title: 'Delete stack (items stay, just unsorted)' }, 'Delete');
         del.addEventListener('click', () => confirmClick(del, () => api('DELETE', '/stacks/' + st.id).catch((e) => toast(e.message))));
-        stackSec.append(h('div', { class: 'stack-row' }, inp, del));
+        const ask = h('button', { class: 'btn' + (reqLive(st) ? ' on' : ''), title: 'A link anyone can use to send files into this stack', onclick: () => requestSheet(st.id) }, reqLive(st) ? '📥 Link on' : '📥 Request');
+        stackSec.append(h('div', { class: 'stack-row' }, inp, ask, del));
       }
       const newInp = h('input', { placeholder: 'New stack, e.g. Design, Receipts…' });
       const addStack = () => {

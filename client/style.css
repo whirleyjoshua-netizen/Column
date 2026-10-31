@@ -1692,3 +1692,19 @@ body.platform-darwin .pj-head, body.platform-darwin .pj-top { padding-left: 80px
 .seal-val { flex: 1; min-width: 0; font-family: var(--mono); word-break: break-all; user-select: text; }
 .seal-note { white-space: pre-wrap; background: var(--card); border-radius: 8px; padding: 10px 12px; user-select: text; }
 .seal-burn { color: var(--danger); font-weight: 600; margin: 0; }
+
+/* Stack filters and search */
+.pf { display: flex; gap: 6px; align-items: center; padding: 5px 8px; border-bottom: 1px solid var(--line); flex: none; }
+.pf-chips { display: flex; gap: 3px; overflow-x: auto; scrollbar-width: none; flex: 1; min-width: 0; }
+.pf-chips::-webkit-scrollbar { display: none; }
+.pf-chip { border: 0; background: none; color: var(--muted); border-radius: 6px; padding: 2px 8px; font-size: 11.5px; white-space: nowrap; display: inline-flex; gap: 4px; align-items: center; }
+.pf-chip small { font-size: 10px; opacity: .7; }
+.pf-chip:hover { background: var(--card-hover); }
+.pf-chip.on { background: var(--panel); color: var(--text); box-shadow: inset 0 0 0 1px var(--line); }
+.pf-q { width: 110px; flex: none; padding: 3px 8px; font-size: 12px; border-radius: 6px; }
+.pf-q:focus { width: 150px; }
+/* File request link */
+.req-link { display: flex; gap: 6px; align-items: center; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 6px 6px 6px 10px; }
+.req-link code { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; user-select: all; }
+.req-off { display: flex; justify-content: flex-start; }
+.stack-row .btn.on { color: var(--accent); }

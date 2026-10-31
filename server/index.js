@@ -2144,6 +2144,55 @@ function signEvent(x, what, req) {
 const utc = (t) => new Date(t).toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
 const CONSENT = 'I agree to use electronic records and signatures for this document. I can ask the sender for a paper copy instead, and I can download a copy of the signed document.';
 
+// ---------- file requests: /r/<token> lets a customer send files into a stack, no sign-in ----------
+const REQ_MAX = 500 * 1024 * 1024;
+const liveRequest = (st) => st.request && (!st.request.expiresAt || st.request.expiresAt > Date.now());
+function requestByToken(token) {
+  for (const ws of Object.values(db.workspaces)) {
+    const st = token && ws.stacks.find((x) => x.request?.token === token);
+    if (st) return liveRequest(st) ? { ws, st } : null;
+  }
+  return null;
+}
+const reqHits = new Map(); // ip -> [times], so one visitor can't flood a stack
+async function requestApi(req, res, url, token, part) {
+  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('X-Robots-Tag', 'noindex');
+  const found = requestByToken(token);
+  if (!found) return send(res, 404, { error: 'This link isn’t taking files any more. Ask whoever sent it for a new one.' });
+  const { ws, st } = found;
+  const r = st.request;
+  if (!part && req.method === 'GET') {
+    const brand = brandOf(ws);
+    return send(res, 200, { team: ws.name, by: r.by, note: r.note, expiresAt: r.expiresAt, logo: logoUrl(brand.logo) || null, accent: brand.accent || null, maxBytes: REQ_MAX });
+  }
+  if (part !== 'file' || (req.method !== 'PUT' && req.method !== 'POST')) return send(res, 404, { error: 'Not found' });
+  const ip = clientIp(req);
+  const now = Date.now();
+  const hits = (reqHits.get(ip) || []).filter((t) => now - t < 3600000);
+  if (hits.length >= 200) return send(res, 429, { error: 'That’s a lot of files. Please wait a bit and try again.' });
+  hits.push(now);
+  reqHits.set(ip, hits);
+  const len = Number(req.headers['content-length']);
+  if (!Number.isFinite(len)) return send(res, 411, { error: 'Missing file size' });
+  if (len > REQ_MAX) return send(res, 413, { error: 'That file is too big. The limit is 500 MB.' });
+  const name = cleanName(url.searchParams.get('name'));
+  const from = String(url.searchParams.get('from') || '').replace(/\s+/g, ' ').trim().slice(0, 60) || 'Someone';
+  const id = rid();
+  const { size } = await receiveUpload(req, path.join(FILES_DIR, id));
+  // Kept (pinned) so auto-clear never throws away what a customer sent.
+  const item = addItem({
+    id, wsId: ws.id, by: from + ' (link)', memberId: r.memberId, device: 'Upload link', deviceId: null, createdAt: Date.now(),
+    pinned: true, stackId: st.id, channelId: null, status: 'ready', type: 'file', name, size, mime: mimeFor(name, url.searchParams.get('type')), viaLink: from,
+  });
+  r.count = (r.count || 0) + 1;
+  r.lastAt = Date.now();
+  save();
+  // Just the count: a full workspace update would rebuild everyone's columns mid-typing.
+  broadcast(ws.id, { type: 'stack:request', stackId: st.id, count: r.count, lastAt: r.lastAt });
+  return send(res, 200, { ok: true, name: item.name, size });
+}
+
 async function signApi(req, res, token, part) {
   res.setHeader('Cache-Control', 'no-store');
   res.setHeader('X-Robots-Tag', 'noindex');
@@ -3483,6 +3532,7 @@ async function api(req, res, url) {
 
   // Someone signing a document they were sent: the link is their way in, no account.
   if (a === 'public' && b === 'sign') return signApi(req, res, c, d);
+  if (a === 'public' && b === 'request') return requestApi(req, res, url, c, d);
 
   const auth = authFrom(req, url);
   if (!auth) return send(res, 401, { error: 'Not signed in' });
@@ -4910,7 +4960,21 @@ async function api(req, res, url) {
   }
 
   if (a === 'stacks') {
-    if (m === 'POST' && !b) {
+    const rq = b && c === 'request' && ws.stacks.find((x) => x.id === b && seesCampaign(x.campaignId, auth.memberId));
+    if (c === 'request' && !rq) return send(res, 404, { error: 'Not found' });
+    if (rq && m === 'POST') {
+      // A link anyone can use to drop files into this stack, no account needed.
+      const { days, note } = await readJson(req);
+      const d = [0, 1, 7, 30, 90].includes(Number(days)) ? Number(days) : 7;
+      rq.request = {
+        token: rq.request?.token || crypto.randomBytes(18).toString('base64url'),
+        memberId: auth.memberId, by: auth.member, createdAt: rq.request?.createdAt || Date.now(),
+        expiresAt: d ? Date.now() + d * 86400000 : null, note: String(note || '').trim().slice(0, 500), count: rq.request?.count || 0, lastAt: rq.request?.lastAt || null,
+      };
+    } else if (rq && m === 'DELETE') {
+      delete rq.request;
+    } else if (rq) return send(res, 405, { error: 'Method not allowed' });
+    else if (m === 'POST' && !b) {
       const { name } = await readJson(req);
       const n = String(name || '').trim().slice(0, 40);
       if (!n) return send(res, 400, { error: 'Name required' });
@@ -5483,6 +5547,11 @@ const server = http.createServer(async (req, res) => {
     res.setHeader('Referrer-Policy', 'no-referrer');
     res.setHeader('X-Robots-Tag', 'noindex');
     return serveStatic(req, res, new URL('/sign.html', 'http://x'));
+  }
+  if (url.pathname.startsWith('/r/') && req.method === 'GET') {
+    res.setHeader('Referrer-Policy', 'no-referrer');
+    res.setHeader('X-Robots-Tag', 'noindex');
+    return serveStatic(req, res, new URL('/request.html', 'http://x'));
   }
   if (url.pathname === '/download' || url.pathname === '/get') return serveStatic(req, res, new URL('/download.html', 'http://x'));
   if (url.pathname === '/developers') return serveStatic(req, res, new URL('/developers.html', 'http://x'));
