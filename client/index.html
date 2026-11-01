@@ -25,13 +25,15 @@
         <button type="button" data-mode="create">Create team</button>
       </div>
       <p class="hint" id="modeHint"></p>
-      <label>Team name<input name="workspace" required autocomplete="organization" placeholder="e.g. premier-studio"></label>
-      <label>Your name<input name="name" required autocomplete="username" placeholder="Josh"></label>
-      <label>Password<input name="password" type="password" required minlength="6" autocomplete="current-password"></label>
+      <label id="teamField">Team name<input name="workspace" autocomplete="organization" placeholder="e.g. premier-studio"></label>
       <label id="codeField" class="hidden">Invite code<input name="code" autocomplete="off" placeholder="From someone on the team"></label>
-      <label>This device<input name="device" placeholder="MacBook"></label>
+      <label id="nameField">Your name<input name="name" autocomplete="name" placeholder="Josh"></label>
+      <label id="emailField">Email<input name="email" type="email" autocomplete="email" placeholder="you@company.com"></label>
+      <label id="passField">Password<input name="password" type="password" autocomplete="current-password"></label>
+      <label id="deviceField">This device<input name="device" placeholder="MacBook"></label>
       <button class="primary" type="submit" id="loginBtn">Sign in</button>
       <p class="err" id="loginErr"></p>
+      <p class="login-links" id="loginLinks"></p>
       <a class="backteam hidden" id="loginBack" href="#"></a>
       <a class="getapp" href="/download">Get the Column app for this device</a>
     </form>

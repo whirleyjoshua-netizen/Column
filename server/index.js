@@ -17,6 +17,7 @@ import { fileText, officeKind } from './extract.js';
 import { PdfError, stampPdf, addCertificate, pageCount, writeDoc } from './pdf.js';
 import { projectsModule } from './projects.js';
 import { openStore, Fenced } from './store.js';
+import { createMailer } from './mail.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 4747);
@@ -33,7 +34,7 @@ fs.mkdirSync(FILES_DIR, { recursive: true });
 // Everything lives in memory; save() hands the whole thing to the store a moment later.
 const IMPORT_PATH = path.join(DATA_DIR, 'import-pending.json');
 const store = await openStore({ url: process.env.DATABASE_URL, file: DB_PATH, importFile: IMPORT_PATH });
-let db = { workspaces: {}, tokens: {}, items: {}, entries: {}, tasks: {}, uploads: {}, campaigns: {}, goals: {}, attempts: {}, lists: {}, templates: {}, calendars: {}, ai: {}, pss: {}, sends: {}, bills: {}, meetings: {}, money: {}, budgets: {}, plans: {}, sidekick: {}, vaults: {}, vaultItems: {}, signs: {}, signatures: {}, trips: {}, pins: {}, zones: {}, comments: {} };
+let db = { workspaces: {}, tokens: {}, items: {}, entries: {}, tasks: {}, uploads: {}, campaigns: {}, goals: {}, attempts: {}, lists: {}, templates: {}, calendars: {}, ai: {}, pss: {}, sends: {}, bills: {}, meetings: {}, money: {}, budgets: {}, plans: {}, sidekick: {}, vaults: {}, vaultItems: {}, signs: {}, signatures: {}, trips: {}, pins: {}, zones: {}, comments: {}, users: {}, resets: {} };
 const loaded = await store.load();
 if (loaded.db) db = { ...db, ...loaded.db };
 if (loaded.fromFile) console.log(`Moving ${path.basename(loaded.fromFile)} into Postgres.`);
@@ -247,7 +248,77 @@ function signOutMember(ws, memberId) {
   for (const [tok, sess] of Object.entries(db.tokens)) if (sess.memberId === memberId) delete db.tokens[tok];
   for (const s of sockets.get(ws.id) || []) if (s.meta.memberId === memberId) s.close(4001, 'Signed out');
 }
-const publicMember = (m) => ({ id: m.id, name: m.name, role: m.role, roleIds: m.roleIds || [], hasPassword: !!m.hash });
+const publicMember = (m) => ({ id: m.id, name: m.name, role: m.role, roleIds: m.roleIds || [], hasPassword: hasPass(m) });
+
+// ---------- accounts: one email and password for every team you're in ----------
+// A person in a team is a member; a member can belong to an account (users), which holds the email
+// and the password. Members from before accounts have their own password until they add an email.
+const mailer = createMailer({
+  token: process.env.POSTMARK_TOKEN, from: process.env.MAIL_FROM, appName: process.env.APP_NAME || 'Column',
+  outbox: process.env.MAIL_OUTBOX === '1' ? path.join(DATA_DIR, 'outbox') : null,
+});
+const CODE_MINUTES = 30;
+const RESET_MINUTES = 30;
+const cleanEmail = (e) => String(e || '').trim().toLowerCase();
+const okEmail = (e) => e.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e);
+const userByEmail = (e) => Object.values(db.users).find((u) => u.email === e) || null;
+const userOf = (m) => (m?.userId && db.users[m.userId]) || null;
+const credOf = (m) => userOf(m) || m; // whichever holds this member's password
+const hasPass = (m) => !!credOf(m).hash;
+const passOk = (cred, pass) => !!cred?.hash && checkHash(String(pass || ''), cred.salt, cred.hash);
+const membersOf = (u) => Object.values(db.workspaces).flatMap((ws) => ws.members.filter((m) => m.userId === u.id).map((m) => ({ ws, m })));
+const sha = (t) => crypto.createHash('sha256').update(String(t)).digest('hex');
+function newUser(email, pass) {
+  const u = { id: rid(), email, emailVerified: false, salt: null, hash: null, createdAt: Date.now() };
+  setPassword(u, pass);
+  db.users[u.id] = u;
+  return u;
+}
+// The account takes over the member's password; the member keeps none of its own.
+function linkMember(m, u) {
+  m.userId = u.id;
+  m.salt = m.hash = null;
+}
+function signOutUser(u, keepToken) {
+  for (const { ws, m } of membersOf(u)) {
+    for (const [tok, sess] of Object.entries(db.tokens)) if (sess.memberId === m.id && sess.wsId === ws.id && tok !== keepToken) delete db.tokens[tok];
+    for (const sock of sockets.get(ws.id) || []) if (sock.meta.memberId === m.id && sock.meta.token !== keepToken) sock.close(4001, 'Signed out');
+  }
+}
+// A 6-digit code, five guesses, then a new one has to be sent. At most one a minute and ten a day.
+async function sendCode(u) {
+  if (mailer.mode === 'off' || u.emailVerified) return false;
+  const now = Date.now();
+  const v = u.verify || {};
+  if (v.sentAt && now - v.sentAt < 60_000) throw badRequest('A code was just sent. Wait a minute before asking for another.');
+  const day = (v.day === dayKey(new Date()) ? v.dayCount : 0) || 0;
+  if (day >= 10) throw badRequest('That’s a lot of codes for one day. Try again tomorrow.');
+  const code = String(crypto.randomInt(0, 1_000_000)).padStart(6, '0');
+  u.verify = { hash: sha(u.id + ':' + code), expiresAt: now + CODE_MINUTES * 60_000, tries: 0, sentAt: now, day: dayKey(new Date()), dayCount: day + 1 };
+  save();
+  await mailer.codeEmail(u.email, code);
+  return true;
+}
+function checkCode(u, code) {
+  const v = u.verify;
+  if (!v || v.expiresAt < Date.now()) throw badRequest('That code has expired. Send a new one.');
+  if (v.tries >= 5) throw badRequest('Too many wrong codes. Send a new one.');
+  const given = String(code || '').replace(/\D/g, '');
+  if (!crypto.timingSafeEqual(Buffer.from(sha(u.id + ':' + given)), Buffer.from(v.hash))) {
+    v.tries++;
+    save();
+    throw badRequest(v.tries >= 5 ? 'Too many wrong codes. Send a new one.' : 'That code isn’t right. Check the email and try again.');
+  }
+  u.emailVerified = true;
+  delete u.verify;
+  save();
+}
+// Things that count (campaign email, later billing) wait for a confirmed email, once email works here.
+const needsConfirm = (auth) => mailer.mode !== 'off' && !userOf(auth.ws.members.find((x) => x.id === auth.memberId))?.emailVerified;
+const meAccount = (ws, memberId) => {
+  const u = userOf(ws.members.find((x) => x.id === memberId));
+  return { email: u?.email || null, emailVerified: !!u?.emailVerified, mail: mailer.mode !== 'off' };
+};
 
 // A private campaign's feed and stack are hidden from people outside it, and so is a feed you weren't invited to.
 const publicWorkspace = (ws, memberId) => ({
@@ -3490,23 +3561,83 @@ async function api(req, res, url) {
   const [a, b, c, d] = parts;
   const m = req.method;
 
-  if (a === 'health') return send(res, 200, { ok: true, app: 'column', data: store.mode, saving: saveFails ? 'retrying' : 'ok' });
+  if (a === 'health') return send(res, 200, { ok: true, app: 'column', data: store.mode, saving: saveFails ? 'retrying' : 'ok', mail: mailer.mode !== 'off' });
   // The public API, for other apps: its own keys, not a person's sign-in.
   if (a === 'v1') return PJ.v1(req, res, parts.slice(1));
 
-  if (a === 'auth' && m === 'POST') {
-    const { workspace, password, code, name, device, deviceId, mode } = await readJson(req);
+  // Forgot password: the same answer whether or not there's an account, so nobody can use it to check.
+  if (a === 'auth' && b === 'forgot' && m === 'POST') {
+    const email = cleanEmail((await readJson(req)).email);
+    const keys = ['forgot-ip:' + clientIp(req), 'forgot:' + email];
+    if (mailer.mode === 'off') return send(res, 400, { error: 'Email isn’t set up here yet. Ask a team owner to reset your password.' });
+    if (!okEmail(email)) return send(res, 400, { error: 'Enter your email address.' });
+    if (loginBlocked(keys)) return send(res, 429, { error: 'Too many tries. Wait 15 minutes, then try again.' });
+    loginFailed(keys); // counts every request, so the limit is a few an hour
+    const u = userByEmail(email);
+    if (u) {
+      const token = crypto.randomBytes(32).toString('base64url');
+      for (const r of Object.values(db.resets)) if (r.userId === u.id) delete db.resets[r.id];
+      const r = { id: rid(), userId: u.id, hash: sha(token), expiresAt: Date.now() + RESET_MINUTES * 60_000 };
+      db.resets[r.id] = r;
+      save();
+      mailer.resetEmail(u.email, `${PUBLIC_URL}/reset/${token}`).catch((e) => console.error('Reset email failed:', e.message));
+    }
+    return send(res, 200, { ok: true });
+  }
+
+  if (a === 'auth' && m === 'POST' && !b) {
+    const body = await readJson(req);
+    const { workspace, password, code, name, device, deviceId, mode } = body;
+    const email = cleanEmail(body.email);
+    const session = (ws, member) => {
+      const token = rid(24);
+      db.tokens[token] = {
+        wsId: ws.id,
+        memberId: member.id,
+        device: String(device || 'Device').trim().slice(0, 40) || 'Device',
+        deviceId: String(deviceId || rid()).slice(0, 64),
+        createdAt: Date.now(),
+      };
+      return token;
+    };
+
+    // Email and password: signed in to every team on the account at once.
+    if (mode === 'email') {
+      const keys = ['ip:' + clientIp(req), 'email:' + email];
+      if (loginBlocked(keys)) return send(res, 429, { error: 'Too many wrong tries. Wait 15 minutes, then try again.' });
+      const u = okEmail(email) && userByEmail(email);
+      if (!u || !passOk(u, password)) {
+        loginFailed(keys);
+        return send(res, 401, { error: 'That email and password don’t match. Check them, or use Forgot password.' });
+      }
+      const teams = membersOf(u);
+      if (!teams.length) return send(res, 404, { error: 'This account isn’t in a team yet. Use Join team with an invite code, or Create team.' });
+      const all = teams.map(({ ws, m }) => ({ token: session(ws, m), workspace: publicWorkspace(ws, m.id), member: m.name }));
+      save();
+      const first = all.find((x) => x.workspace.id === workspace) || all[0];
+      return send(res, 200, { ...first, accounts: all });
+    }
+
     const slug = slugify(workspace);
     if (!slug || slug.length > 60) return send(res, 400, { error: 'Enter a team name.' });
     const who = String(name || '').trim().slice(0, 40);
     if (!who) return send(res, 400, { error: 'Enter your name.' });
-    const tries = ['ip:' + clientIp(req), `name:${slug}:${nameKey(who)}`];
+    const tries = ['ip:' + clientIp(req), `name:${slug}:${nameKey(who)}`, ...(email ? ['email:' + email] : [])];
     if (loginBlocked(tries)) return send(res, 429, { error: 'Too many wrong tries. Wait 15 minutes, then try again.' });
     const refuse = (msg) => {
       loginFailed(tries);
       return send(res, 401, { error: msg });
     };
     if (!password || String(password).length < 6) return send(res, 400, { error: 'Password must be at least 6 characters.' });
+    if (email && !okEmail(email)) return send(res, 400, { error: 'That email address doesn’t look right.' });
+    // Creating or joining with an email: an existing account has to give its own password.
+    let user = null;
+    let fresh = false;
+    if (email && mode !== 'signin') {
+      user = userByEmail(email);
+      if (user && !passOk(user, password)) return refuse('That email already has an account. Use its password, or sign in with it instead.');
+      if (!user && String(password).length < 8) return send(res, 400, { error: 'Choose a password of at least 8 characters.' });
+    }
     let ws = Object.values(db.workspaces).find((w) => w.slug === slug);
     let member;
     if (mode === 'create') {
@@ -3527,33 +3658,55 @@ async function api(req, res, url) {
       };
       db.workspaces[ws.id] = ws;
       member = newMember(ws, who, 'owner');
-      setPassword(member, password);
+      if (email) {
+        if (!user) (user = newUser(email, password)), (fresh = true);
+        linkMember(member, user);
+      } else setPassword(member, password);
     } else {
       if (!ws) return send(res, 404, { error: 'No team with that name. Create it instead?' });
       member = ws.members.find((x) => x.nameKey === nameKey(who));
       if (mode === 'join') {
         if (!checkInvite(ws, code)) return refuse('Wrong invite code.');
-        if (member?.hash) return send(res, 409, { error: 'Someone here already uses that name. Sign in instead, or pick another name.' });
-        member ||= newMember(ws, who, 'member');
-        setPassword(member, password);
-        ensureOwner(ws, member);
+        const mine = user && ws.members.find((x) => x.userId === user.id);
+        if (mine) member = mine; // already on this team with this account
+        else {
+          if (member && hasPass(member)) return send(res, 409, { error: 'Someone here already uses that name. Sign in instead, or pick another name.' });
+          member ||= newMember(ws, who, 'member');
+          if (email) {
+            if (!user) (user = newUser(email, password)), (fresh = true);
+            linkMember(member, user);
+          } else setPassword(member, password);
+          ensureOwner(ws, member);
+        }
       } else {
         if (!member) return send(res, 404, { error: `No one called “${who}” in ${ws.name}. New here? Use Join team with the invite code.` });
-        if (!member.hash) return send(res, 401, { error: 'No password set for this name yet. Use Join team with the invite code to set one.' });
-        if (!checkHash(password, member.salt, member.hash)) return refuse('Wrong password.');
+        if (!hasPass(member)) return send(res, 401, { error: 'No password set for this name yet. Use Join team with the invite code to set one.' });
+        if (!passOk(credOf(member), password)) return refuse('Wrong password.');
       }
     }
-    const token = rid(24);
-    db.tokens[token] = {
-      wsId: ws.id,
-      memberId: member.id,
-      device: String(device || 'Device').trim().slice(0, 40) || 'Device',
-      deviceId: String(deviceId || rid()).slice(0, 64),
-      createdAt: Date.now(),
-    };
+    const token = session(ws, member);
     save();
+    if (fresh) sendCode(user).catch((e) => console.error('Code email failed:', e.message));
     if (mode !== 'signin') broadcast(ws.id, { type: 'workspace' });
     return send(res, 200, { token, workspace: publicWorkspace(ws, member.id) });
+  }
+
+  // Choosing a new password from the link in a reset email.
+  if (a === 'public' && b === 'reset') {
+    res.setHeader('Cache-Control', 'no-store');
+    const r = c && Object.values(db.resets).find((x) => x.hash === sha(c));
+    const u = r && r.expiresAt > Date.now() && db.users[r.userId];
+    if (!u) return send(res, 404, { error: 'This link has expired or was already used. Ask for a new one from the sign-in screen.' });
+    if (m === 'GET') return send(res, 200, { email: u.email.replace(/^(.).*(@.*)$/, (x, f, d) => f + '•••' + d) });
+    if (m !== 'POST') return send(res, 405, { error: 'Method not allowed' });
+    const { password } = await readJson(req);
+    if (String(password || '').length < 8) return send(res, 400, { error: 'Choose a password of at least 8 characters.' });
+    setPassword(u, String(password));
+    u.emailVerified = true; // they opened the email, so it's theirs
+    delete db.resets[r.id];
+    signOutUser(u);
+    save();
+    return send(res, 200, { ok: true });
   }
 
   // Someone signing a document they were sent: the link is their way in, no account.
@@ -3582,7 +3735,7 @@ async function api(req, res, url) {
       .map(publicItem);
     return send(res, 200, {
       workspace: publicWorkspace(ws, auth.memberId),
-      me: { memberId: auth.memberId, member: auth.member, device: auth.device, deviceId: auth.deviceId },
+      me: { memberId: auth.memberId, member: auth.member, device: auth.device, deviceId: auth.deviceId, ...meAccount(ws, auth.memberId) },
       items,
       entries: Object.values(db.entries).filter((e) => e.wsId === ws.id && canSee(auth, 'entry', e)).map(publicEntry),
       tasks: Object.values(db.tasks).filter((t) => t.wsId === ws.id && canSee(auth, 'task', t)).map(publicTask),
@@ -4386,6 +4539,7 @@ async function api(req, res, url) {
     // campaigns, with the team's footer, and see only their own sends.
     const owner = auth.role === 'owner';
     if (!owner && !ws.settings.memberEmail) return send(res, 403, { error: 'Only team owners can send campaign email. An owner can let members send it in Settings.' });
+    if (m !== 'GET' && needsConfirm(auth)) return send(res, 403, { error: 'Confirm your email first (Settings → Account), then send campaign email.' });
     const conn = mailConn(ws.id, auth.memberId);
     const body = m === 'GET' ? {} : await readJson(req, 2_000_000);
     if (m === 'GET' && !b) {
@@ -4851,13 +5005,66 @@ async function api(req, res, url) {
     return send(res, 200, publicWorkspace(ws, auth.memberId));
   }
 
+  // Your account: adding an email to a login from before accounts, and confirming it.
+  if (a === 'account') {
+    const me = ws.members.find((x) => x.id === auth.memberId);
+    if (b === 'email' && m === 'POST') {
+      const { email: raw, password } = await readJson(req);
+      const email = cleanEmail(raw);
+      if (userOf(me)) return send(res, 400, { error: 'Your login already has an email.' });
+      if (!okEmail(email)) return send(res, 400, { error: 'That email address doesn’t look right.' });
+      const keys = ['ip:' + clientIp(req), 'email:' + email];
+      if (loginBlocked(keys)) return send(res, 429, { error: 'Too many wrong tries. Wait 15 minutes, then try again.' });
+      let u = userByEmail(email);
+      if (u) {
+        // The same person's login in another team: prove it with that account's password, and they become one.
+        if (!passOk(u, password)) {
+          loginFailed(keys);
+          return send(res, 401, { error: 'That email already has an account. Enter its password to join them up.' });
+        }
+        if (ws.members.some((x) => x.userId === u.id)) return send(res, 409, { error: 'That account is already someone else on this team.' });
+        linkMember(me, u);
+      } else {
+        if (me.hash && !passOk(me, password)) {
+          loginFailed(keys);
+          return send(res, 401, { error: 'Your password isn’t right.' });
+        }
+        if (!me.hash && String(password || '').length < 8) return send(res, 400, { error: 'Choose a password of at least 8 characters.' });
+        u = { id: rid(), email, emailVerified: false, salt: me.salt, hash: me.hash, createdAt: Date.now() };
+        if (!u.hash) setPassword(u, String(password));
+        db.users[u.id] = u;
+        linkMember(me, u);
+      }
+      save();
+      await sendCode(u).catch((e) => console.error('Code email failed:', e.message));
+      broadcast(ws.id, { type: 'workspace' });
+      return send(res, 200, meAccount(ws, me.id));
+    }
+    const u = userOf(me);
+    if (b === 'verify' && !c && m === 'POST') {
+      if (!u) return send(res, 400, { error: 'Add your email first.' });
+      if (!u.emailVerified) checkCode(u, (await readJson(req)).code);
+      return send(res, 200, meAccount(ws, me.id));
+    }
+    if (b === 'verify' && c === 'send' && m === 'POST') {
+      if (!u) return send(res, 400, { error: 'Add your email first.' });
+      if (mailer.mode === 'off') return send(res, 400, { error: 'Email isn’t set up here yet.' });
+      await sendCode(u);
+      return send(res, 200, meAccount(ws, me.id));
+    }
+    return send(res, 404, { error: 'Not found' });
+  }
+
   if (a === 'members') {
     if (b === 'me' && c === 'password' && m === 'POST') {
       const { current, next } = await readJson(req);
       const me = ws.members.find((x) => x.id === auth.memberId);
-      if (me.hash && !checkHash(String(current || ''), me.salt, me.hash)) return send(res, 401, { error: 'Current password is wrong.' });
-      if (String(next || '').length < 6) return send(res, 400, { error: 'Password must be at least 6 characters.' });
-      setPassword(me, String(next));
+      const cred = credOf(me);
+      if (cred.hash && !passOk(cred, current)) return send(res, 401, { error: 'Current password is wrong.' });
+      const min = userOf(me) ? 8 : 6;
+      if (String(next || '').length < min) return send(res, 400, { error: `Password must be at least ${min} characters.` });
+      setPassword(cred, String(next));
+      if (userOf(me)) signOutUser(userOf(me), auth.token); // everywhere else, in every team
       ensureOwner(ws, me);
     } else {
       if (auth.role !== 'owner') return send(res, 403, { error: 'Only team owners can do that.' });
@@ -4868,6 +5075,10 @@ async function api(req, res, url) {
         ws.members = ws.members.filter((x) => x !== target);
         signOutMember(ws, target.id);
       } else if (c === 'reset' && m === 'POST') {
+        // Someone with an account resets it from their email; without email working, they're unlinked
+        // here and choose a new password with the invite code, like before accounts.
+        if (userOf(target) && mailer.mode !== 'off') return send(res, 400, { error: `${target.name} has an email on their account, so they can use Forgot password on the sign-in screen.` });
+        target.userId = null;
         target.salt = target.hash = null;
         signOutMember(ws, target.id);
       } else if (m === 'PATCH') {
@@ -5576,6 +5787,11 @@ const server = http.createServer(async (req, res) => {
     res.setHeader('X-Robots-Tag', 'noindex');
     return serveStatic(req, res, new URL('/sign.html', 'http://x'));
   }
+  if (url.pathname.startsWith('/reset/') && req.method === 'GET') {
+    res.setHeader('Referrer-Policy', 'no-referrer');
+    res.setHeader('X-Robots-Tag', 'noindex');
+    return serveStatic(req, res, new URL('/reset.html', 'http://x'));
+  }
   if (url.pathname.startsWith('/r/') && req.method === 'GET') {
     res.setHeader('Referrer-Policy', 'no-referrer');
     res.setHeader('X-Robots-Tag', 'noindex');
@@ -5600,7 +5816,7 @@ server.on('upgrade', (req, socket, head) => {
     return socket.destroy();
   }
   wss.handleUpgrade(req, socket, head, (s) => {
-    s.meta = { wsId: auth.wsId, memberId: auth.memberId, member: auth.member, device: auth.device, deviceId: auth.deviceId };
+    s.meta = { wsId: auth.wsId, memberId: auth.memberId, member: auth.member, device: auth.device, deviceId: auth.deviceId, token: auth.token };
     s.alive = true;
     s.on('pong', () => (s.alive = true));
     if (!sockets.has(auth.wsId)) sockets.set(auth.wsId, new Set());

@@ -257,28 +257,45 @@
     $('#login').classList.remove('hidden');
     const f = $('#loginForm');
     f.name.value = store.get('name', '');
+    f.email.value = store.get('email', '');
     f.device.value = store.get('device', guessDevice());
     f.workspace.value = S.adding ? '' : store.get('lastWorkspace', '');
     $('#loginBack').classList.toggle('hidden', !S.adding);
     if (S.adding) $('#loginBack').textContent = 'Back to ' + S.workspace.name;
-    setLoginMode(S.loginMode);
-    (!f.workspace.value ? f.workspace : !f.name.value ? f.name : f.password).focus();
+    setLoginMode('signin');
+    // Forgot password only shows when this server can send email.
+    fetch('/api/health').then((r) => r.json()).then((x) => { S.mailOn = !!x.mail; setLoginMode(S.loginMode); }).catch(() => {});
+    $('#loginForm').querySelector('label:not(.hidden) input')?.focus();
   }
 
+  // Sign in is by email; logins from before accounts sign in with the team and their name ("teamname").
+  // Forgot asks only for the email.
   const LOGIN_MODES = {
-    signin: { btn: 'Sign in', hint: '' },
-    join: { btn: 'Join team', hint: 'New to a team? Ask someone on it for the invite code, then choose your own password.' },
-    create: { btn: 'Create team', hint: 'Start a new team. You’ll get an invite code to share in Settings.' },
+    signin: { btn: 'Sign in', hint: '', fields: ['email', 'pass', 'device'] },
+    teamname: { btn: 'Sign in', hint: 'For logins that don’t have an email yet.', fields: ['team', 'name', 'pass', 'device'] },
+    join: { btn: 'Join team', hint: 'New to a team? Ask someone on it for the invite code. Already have an account? Use its email and password.', fields: ['team', 'code', 'name', 'email', 'pass', 'device'] },
+    create: { btn: 'Create team', hint: 'Start a new team. You’ll get an invite code to share in Settings.', fields: ['team', 'name', 'email', 'pass', 'device'] },
+    forgot: { btn: 'Send reset link', hint: 'We’ll email you a link to choose a new password.', fields: ['email'] },
   };
   function setLoginMode(mode) {
     S.loginMode = mode;
-    for (const x of $('#modeSeg').children) x.classList.toggle('on', x.dataset.mode === mode);
-    $('#loginBtn').textContent = LOGIN_MODES[mode].btn;
-    $('#modeHint').textContent = LOGIN_MODES[mode].hint;
-    $('#modeHint').classList.toggle('hidden', !LOGIN_MODES[mode].hint);
-    $('#codeField').classList.toggle('hidden', mode !== 'join');
-    $('#loginForm').password.autocomplete = mode === 'signin' ? 'current-password' : 'new-password';
+    const tab = mode === 'teamname' || mode === 'forgot' ? 'signin' : mode;
+    for (const x of $('#modeSeg').children) x.classList.toggle('on', x.dataset.mode === tab);
+    const M = LOGIN_MODES[mode];
+    $('#loginBtn').textContent = M.btn;
+    $('#modeHint').textContent = M.hint;
+    $('#modeHint').classList.toggle('hidden', !M.hint);
+    for (const k of ['team', 'code', 'name', 'email', 'pass', 'device']) $(`#${k}Field`).classList.toggle('hidden', !M.fields.includes(k));
+    const pw = $('#loginForm').password;
+    pw.autocomplete = mode === 'signin' || mode === 'teamname' ? 'current-password' : 'new-password';
+    pw.placeholder = mode === 'join' || mode === 'create' ? 'At least 8 characters' : '';
     $('#loginErr').textContent = '';
+    const link = (label, to) => h('a', { href: '#', onclick: (e) => { e.preventDefault(); setLoginMode(to); } }, label);
+    $('#loginLinks').replaceChildren(...[
+      mode === 'signin' && S.mailOn ? link('Forgot password?', 'forgot') : null,
+      mode === 'signin' ? link('Sign in with team name instead', 'teamname') : null,
+      mode === 'teamname' || mode === 'forgot' ? link('Back to sign in with email', 'signin') : null,
+    ].filter(Boolean).flatMap((x, i) => (i ? [' · ', x] : [x])));
   }
   $('#modeSeg').addEventListener('click', (e) => {
     const b = e.target.closest('button');
@@ -290,29 +307,45 @@
     const f = e.target;
     $('#loginErr').textContent = '';
     const err = (msg) => void ($('#loginErr').textContent = msg);
-    if (!f.workspace.value.trim()) return err('Enter a team name.');
-    if (!f.name.value.trim()) return err('Enter your name.');
-    if (f.password.value.length < 6) return err('Password must be at least 6 characters.');
-    if (S.loginMode === 'join' && !f.code.value.trim()) return err('Enter the invite code.');
+    const mode = S.loginMode;
+    const email = f.email.value.trim();
+    const needs = LOGIN_MODES[mode].fields;
+    if (needs.includes('email') && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return err('Enter your email address.');
+    if (needs.includes('team') && !f.workspace.value.trim()) return err('Enter a team name.');
+    if (needs.includes('name') && !f.name.value.trim()) return err('Enter your name.');
+    if (mode === 'join' && !f.code.value.trim()) return err('Enter the invite code.');
+    if (needs.includes('pass') && f.password.value.length < 6) return err('Password must be at least 6 characters.');
     $('#loginBtn').disabled = true;
     try {
+      if (mode === 'forgot') {
+        await api('POST', '/auth/forgot', { email });
+        store.set('email', email);
+        setLoginMode('signin');
+        return void ($('#modeHint').textContent = 'If there’s an account for that email, we’ve sent a link to choose a new password. It works for 30 minutes.', $('#modeHint').classList.remove('hidden'));
+      }
       const body = {
-        mode: S.loginMode,
-        workspace: f.workspace.value,
+        mode: mode === 'signin' ? 'email' : mode === 'teamname' ? 'signin' : mode,
+        workspace: mode === 'signin' ? S.workspace?.id : f.workspace.value,
+        email: needs.includes('email') ? email : undefined,
         password: f.password.value,
         code: f.code.value,
         name: f.name.value.trim(),
         device: f.device.value || guessDevice(),
         deviceId: S.deviceId,
       };
-      const r = await api('POST', '/auth', body);
-      if (S.adding && r.workspace.id === S.workspace.id) throw new Error('You’re already signed in to ' + r.workspace.name + '.');
+      const r = await api('POST', '/auth', body).catch((e) => {
+        throw mode === 'signin' && /don’t match/.test(e.message) ? new Error(e.message + ' Signed in before with your team name? Use “Sign in with team name instead”.') : e;
+      });
+      if (S.adding && r.workspace.id === S.workspace.id && !r.accounts) throw new Error('You’re already signed in to ' + r.workspace.name + '.');
       S.token = r.token;
       store.set('token', r.token);
-      store.set('name', body.name);
+      if (body.name) store.set('name', body.name);
+      if (email) store.set('email', email);
       store.set('device', body.device);
-      store.set('lastWorkspace', body.workspace);
-      keepAccount(r.token, r.workspace, body.name);
+      if (mode !== 'signin') store.set('lastWorkspace', body.workspace);
+      // Email sign-in: every team on the account, ready to switch between.
+      for (const x of r.accounts || []) keepAccount(x.token, x.workspace, x.member);
+      keepAccount(r.token, r.workspace, r.member || body.name);
       f.password.value = '';
       f.code.value = '';
       // Another team's settings live under its own keys, which this page didn't load with.
@@ -724,6 +757,62 @@
     $('#app').classList.remove('hidden');
     setTab('day');
     connect();
+    accountNudge();
+  }
+
+  // ---------- your account: an email for every login, and confirming it ----------
+  // A login from before accounts is asked once a day to add an email. An email that isn't confirmed yet
+  // gets a bar at the top with a box for the code, when this server can send email.
+  function accountNudge() {
+    drawConfirmBar();
+    if (S.me.email || VIEW_ID) return;
+    const today = new Date().toDateString();
+    if (store.get('emailAsked', '') === today) return;
+    store.set('emailAsked', today);
+    setTimeout(() => addEmailSheet(true), 1200);
+  }
+  function addEmailSheet(nudge) {
+    const me = S.workspace.members.find((m) => m.id === S.me.memberId);
+    const email = h('input', { type: 'email', autocomplete: 'email', placeholder: 'you@company.com', value: store.get('email', '') });
+    const pw = h('input', { type: 'password', autocomplete: me?.hasPassword ? 'current-password' : 'new-password' });
+    sheet('Add your email', [
+      h('p', { class: 'day-hint' }, nudge
+        ? 'Column now signs in with your email. Add yours so you can sign in to all your teams at once and reset your password if you forget it.'
+        : 'Sign in with your email from now on, on any device, and reset your password if you forget it.'),
+      h('label', {}, 'Email', email),
+      h('label', {}, me?.hasPassword ? 'Your password (to confirm it’s you)' : 'Choose a password (at least 8 characters)', pw),
+      h('p', { class: 'day-hint' }, 'Already added this email in another team? Use that account’s password and the two logins become one.'),
+    ], async () => {
+      const r = await api('POST', '/account/email', { email: email.value.trim(), password: pw.value });
+      Object.assign(S.me, r);
+      store.set('email', r.email);
+      drawConfirmBar();
+      if (!$('#settings').classList.contains('hidden')) renderSettings();
+      toast(r.mail && !r.emailVerified ? `Email added. We sent a code to ${r.email}.` : 'Email added. Sign in with it from now on.');
+    }, 'Add email');
+  }
+  function drawConfirmBar() {
+    $('#confirmBar')?.remove();
+    if (!S.me.email || S.me.emailVerified || !S.me.mail || S.confirmHidden) return;
+    const code = h('input', { class: 'cb-code', inputmode: 'numeric', autocomplete: 'one-time-code', maxlength: 7, placeholder: '6-digit code', 'aria-label': 'Code from the email' });
+    const confirm = async () => {
+      try {
+        Object.assign(S.me, await api('POST', '/account/verify', { code: code.value }));
+        drawConfirmBar();
+        toast('Email confirmed');
+        if (!$('#settings').classList.contains('hidden')) renderSettings();
+      } catch (e) {
+        toast(e.message);
+      }
+    };
+    code.addEventListener('keydown', (e) => e.key === 'Enter' && confirm());
+    const bar = h('div', { id: 'confirmBar', class: 'confirm-bar' },
+      h('span', {}, 'Confirm your email: enter the code we sent to ', h('b', {}, S.me.email)),
+      code,
+      h('button', { class: 'btn small', onclick: confirm }, 'Confirm'),
+      h('button', { class: 'btn small', onclick: () => api('POST', '/account/verify/send').then(() => toast('New code sent'), (e) => toast(e.message)) }, 'Send a new code'),
+      h('button', { class: 'icon-btn', 'aria-label': 'Hide for now', html: I.close, onclick: () => { S.confirmHidden = true; drawConfirmBar(); } }));
+    $('#tabs').before(bar);
   }
 
   // ---------- views ----------
@@ -11493,6 +11582,20 @@
     }
 
     if (tab === 'account') {
+      // Your email
+      const em = h('section', {}, h('h3', {}, 'Your email'));
+      if (!S.me.email) em.append(h('p', { class: 'warn' }, 'Your login doesn’t have an email yet. Add one to sign in with it and reset your password if you forget it.'), h('div', { class: 'btns' }, h('button', { class: 'btn', onclick: () => addEmailSheet(false) }, 'Add email')));
+      else {
+        em.append(h('p', {}, h('b', {}, S.me.email), S.me.emailVerified ? ' · ✓ confirmed' : S.me.mail ? ' · not confirmed yet' : ''));
+        if (!S.me.emailVerified && S.me.mail) {
+          const code = h('input', { inputmode: 'numeric', autocomplete: 'one-time-code', maxlength: 7, placeholder: '6-digit code' });
+          const go = () => api('POST', '/account/verify', { code: code.value }).then((r) => { Object.assign(S.me, r); drawConfirmBar(); toast('Email confirmed'); renderSettings(); }, (e) => toast(e.message));
+          em.append(h('div', { class: 'stack-row' }, code, h('button', { class: 'btn', onclick: go }, 'Confirm'), h('button', { class: 'btn', onclick: () => api('POST', '/account/verify/send').then(() => toast('New code sent'), (e) => toast(e.message)) }, 'Send a new code')));
+        }
+        em.append(h('p', { style: 'font-size:11.5px' }, 'Sign in with this email on any device to reach all your teams.'));
+      }
+      s.append(em);
+
       // Your password
       const cur = h('input', { type: 'password', placeholder: 'Current password', autocomplete: 'current-password' });
       const next = h('input', { type: 'password', placeholder: me?.hasPassword ? 'New password' : 'Choose a password', autocomplete: 'new-password' });
@@ -11518,7 +11621,7 @@
       s.append(h('section', {}, h('h3', {}, 'Account'),
         h('p', {}, 'Signed in to ', h('b', {}, ws.name), ` as ${S.me.member} on ${S.me.device}.`),
         h('p', {}, 'Your devices online: ', devices || '—'),
-        h('p', {}, 'To add another computer or phone, open ', h('code', {}, location.origin), ' and sign in with your name and password. On a phone, use “Add to Home Screen” to keep it as an app.'),
+        h('p', {}, 'To add another computer or phone, open ', h('code', {}, location.origin), S.me.email ? ' and sign in with your email and password.' : ' and sign in with your team, name and password.', ' On a phone, use “Add to Home Screen” to keep it as an app.'),
         h('div', { class: 'btns' },
           h('button', { class: 'btn', onclick: () => copyText(location.origin) }, 'Copy link'),
           clearBtn,

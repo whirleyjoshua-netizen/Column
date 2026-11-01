@@ -44,7 +44,10 @@ server, e.g. `https://column.example.com`; default `http://localhost:4747`), `CO
 rest; if unset, a random key is created at `DATA_DIR/secret.key`. Back it up with the data, or everyone reconnects),
 `COLUMN_SECRET_KEY` (that file's 64 hex characters, to move the key off the disk unchanged), `DATABASE_URL` (Postgres, e.g.
 Neon, with `sslmode=verify-full`; when set, data is kept there instead of `db.json`. The first start moves `db.json` in
-once. Uploaded files still live in `DATA_DIR/files`).
+once. Uploaded files still live in `DATA_DIR/files`), `POSTMARK_TOKEN` and `MAIL_FROM` (Column's own email: sign-up codes and
+password resets, sent through Postmark from an address on a domain verified there; without them, Forgot password stays
+hidden), `APP_NAME` (the name in those emails; default `Column`), `MAIL_OUTBOX=1` (for local testing: emails are written to
+`DATA_DIR/outbox` instead of sent).
 
 ## Calendars (Google / Outlook)
 
