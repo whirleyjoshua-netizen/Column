@@ -41,7 +41,10 @@ To reach it from anywhere, either:
 
 Env vars: `PORT` (default 4747), `DATA_DIR` (default `server/data`), `PUBLIC_URL` (the address browsers use to reach the
 server, e.g. `https://column.example.com`; default `http://localhost:4747`), `COLUMN_SECRET` (encrypts calendar sign-ins at
-rest; if unset, a random key is created at `DATA_DIR/secret.key`. Back it up with the data, or everyone reconnects).
+rest; if unset, a random key is created at `DATA_DIR/secret.key`. Back it up with the data, or everyone reconnects),
+`COLUMN_SECRET_KEY` (that file's 64 hex characters, to move the key off the disk unchanged), `DATABASE_URL` (Postgres, e.g.
+Neon, with `sslmode=verify-full`; when set, data is kept there instead of `db.json`. The first start moves `db.json` in
+once. Uploaded files still live in `DATA_DIR/files`).
 
 ## Calendars (Google / Outlook)
 

@@ -16,6 +16,7 @@ import { llms, llmError, complete } from './llm.js';
 import { fileText, officeKind } from './extract.js';
 import { PdfError, stampPdf, addCertificate, pageCount, writeDoc } from './pdf.js';
 import { projectsModule } from './projects.js';
+import { openStore, Fenced } from './store.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 4747);
@@ -28,11 +29,15 @@ const PUBLIC_URL = (process.env.PUBLIC_URL || `http://localhost:${PORT}`).replac
 
 fs.mkdirSync(FILES_DIR, { recursive: true });
 
-// ---------- persistence (a JSON file is plenty for personal/small-team use) ----------
+// ---------- persistence: Postgres when DATABASE_URL is set, else the db.json file (store.js) ----------
+// Everything lives in memory; save() hands the whole thing to the store a moment later.
+const IMPORT_PATH = path.join(DATA_DIR, 'import-pending.json');
+const store = await openStore({ url: process.env.DATABASE_URL, file: DB_PATH, importFile: IMPORT_PATH });
 let db = { workspaces: {}, tokens: {}, items: {}, entries: {}, tasks: {}, uploads: {}, campaigns: {}, goals: {}, attempts: {}, lists: {}, templates: {}, calendars: {}, ai: {}, pss: {}, sends: {}, bills: {}, meetings: {}, money: {}, budgets: {}, plans: {}, sidekick: {}, vaults: {}, vaultItems: {}, signs: {}, signatures: {}, trips: {}, pins: {}, zones: {}, comments: {} };
-try {
-  db = { ...db, ...JSON.parse(fs.readFileSync(DB_PATH, 'utf8')) };
-} catch {}
+const loaded = await store.load();
+if (loaded.db) db = { ...db, ...loaded.db };
+if (loaded.fromFile) console.log(`Moving ${path.basename(loaded.fromFile)} into Postgres.`);
+console.log(`Data: ${store.mode === 'postgres' ? 'Postgres' : DB_PATH}`);
 // Agents became smart buttons: the keys people saved for them are their AI keys now; agents' sign-ins go.
 // (Old agents and their keys stay in the data file, unused, so going back to them loses nothing.)
 for (const [tok, sess] of Object.entries(db.tokens)) if (sess.agentId) delete db.tokens[tok];
@@ -53,33 +58,51 @@ for (const ws of Object.values(db.workspaces)) {
 
 // Writes wait for a 200 ms lull so bursts become one write, but never longer than 2 s behind,
 // so steady activity can't hold changes in memory indefinitely.
+// A write that fails (the database is unreachable) keeps everything in memory and tries again, waiting
+// longer each time, up to 30 s. A server that's been replaced by a newer one stops.
 let saveTimer = null;
 let importing = false; // while another Column's data is being unpacked over this one, nothing is written
-let dirtySince = 0;
+let dirtySince = loaded.fromFile ? Date.now() : 0;
+let writing = null;
+let saveFails = 0;
 function writeNow() {
   clearTimeout(saveTimer);
-  if (importing) return;
   saveTimer = null;
-  if (!dirtySince) return;
+  if (importing) return Promise.resolve();
+  if (writing) return writing.then(writeNow); // the next write starts once the one in flight lands
+  if (!dirtySince) return Promise.resolve();
   dirtySince = 0;
-  const tmp = DB_PATH + '.tmp';
-  fs.writeFileSync(tmp, JSON.stringify(db));
-  fs.renameSync(tmp, DB_PATH);
+  writing = store.write(db).then(() => {
+    if (saveFails) console.log('Saving works again.');
+    saveFails = 0;
+    if (loaded.fromFile === IMPORT_PATH) fs.renameSync(IMPORT_PATH, IMPORT_PATH + '.done');
+    loaded.fromFile = null;
+  }, (e) => {
+    if (e instanceof Fenced) {
+      console.error(e.message, 'This server is stopping so it doesn’t write over newer data.');
+      process.exit(1);
+    }
+    saveFails++;
+    console.error(`Saving failed (${saveFails}), trying again:`, e.message);
+    dirtySince ||= Date.now();
+    saveTimer = setTimeout(writeNow, Math.min(30_000, 500 * 2 ** saveFails));
+  }).finally(() => { writing = null; });
+  return writing;
 }
 function save() {
   if (importing) return;
   dirtySince ||= Date.now();
+  if (saveFails && saveTimer) return; // a retry is already waiting
   clearTimeout(saveTimer);
   saveTimer = setTimeout(writeNow, Math.max(0, Math.min(200, dirtySince + 2000 - Date.now())));
 }
-// On shutdown, write anything still waiting.
+if (dirtySince) save();
+// On shutdown, write anything still waiting (giving up after 10 s).
 for (const sig of ['SIGINT', 'SIGTERM']) {
   process.on(sig, () => {
-    try {
-      writeNow();
-    } finally {
-      process.exit(0);
-    }
+    Promise.race([writeNow(), new Promise((r) => setTimeout(r, 10_000))])
+      .catch(() => {})
+      .finally(() => store.close().catch(() => {}).finally(() => process.exit(0)));
   });
 }
 
@@ -87,8 +110,11 @@ const rid = (n = 12) => crypto.randomBytes(n).toString('base64url');
 
 // Secrets at rest (calendar tokens, API keys) are sealed with AES-256-GCM. The key is COLUMN_SECRET,
 // or a random key kept next to the data on first run. Lose the key and connections need redoing.
+// COLUMN_SECRET_KEY is that file's key itself (64 hex characters), to move it off the disk unchanged.
 const SECRET = (() => {
+  if (/^[0-9a-f]{64}$/i.test(process.env.COLUMN_SECRET_KEY || '')) return Buffer.from(process.env.COLUMN_SECRET_KEY, 'hex');
   if (process.env.COLUMN_SECRET) return crypto.createHash('sha256').update(process.env.COLUMN_SECRET).digest();
+  if (store.mode === 'postgres') console.warn('The key for saved connections is still a file on this server’s disk. Copy it into COLUMN_SECRET_KEY before moving off the disk.');
   const file = path.join(DATA_DIR, 'secret.key');
   try {
     return Buffer.from(fs.readFileSync(file, 'utf8').trim(), 'hex');
@@ -3464,7 +3490,7 @@ async function api(req, res, url) {
   const [a, b, c, d] = parts;
   const m = req.method;
 
-  if (a === 'health') return send(res, 200, { ok: true, app: 'column' });
+  if (a === 'health') return send(res, 200, { ok: true, app: 'column', data: store.mode, saving: saveFails ? 'retrying' : 'ok' });
   // The public API, for other apps: its own keys, not a person's sign-in.
   if (a === 'v1') return PJ.v1(req, res, parts.slice(1));
 
@@ -5494,6 +5520,8 @@ async function importData(req, res) {
       importing = false;
       return send(res, 500, { error: 'Unpacking failed: ' + err.slice(0, 300) });
     }
+    // On Postgres the unpacked db.json is loaded into the database on the next start.
+    if (store.mode === 'postgres' && fs.existsSync(DB_PATH)) fs.renameSync(DB_PATH, IMPORT_PATH);
     send(res, 200, { ok: true, restarting: true });
     console.log('Imported data. Restarting to load it.');
     setTimeout(() => process.exit(1), 500);
@@ -5649,13 +5677,18 @@ setInterval(runSidekickPace, 30 * 60_000);
 // ---------- backups: a copy of the data file each day, the last 14 kept next to it ----------
 // They guard against a bad write or a mistake; the host's volume backups guard against losing the disk.
 const BACKUP_DIR = path.join(DATA_DIR, 'backups');
-function backupDb() {
+// On Postgres, Neon keeps its own history too; this copy is a second, independent one.
+async function backupDb() {
   try {
     fs.mkdirSync(BACKUP_DIR, { recursive: true });
     const file = path.join(BACKUP_DIR, `db-${dayKey(new Date())}.json`);
-    if (fs.existsSync(file) || !fs.existsSync(DB_PATH)) return;
-    writeNow();
-    fs.copyFileSync(DB_PATH, file);
+    if (fs.existsSync(file)) return;
+    if (store.mode === 'postgres') fs.writeFileSync(file, JSON.stringify(db));
+    else {
+      if (!fs.existsSync(DB_PATH)) return;
+      await writeNow();
+      fs.copyFileSync(DB_PATH, file);
+    }
     for (const old of fs.readdirSync(BACKUP_DIR).filter((f) => /^db-\d{4}-\d{2}-\d{2}\.json$/.test(f)).sort().slice(0, -14)) fs.rmSync(path.join(BACKUP_DIR, old));
   } catch (e) {
     console.error('Backup failed:', e.message);
