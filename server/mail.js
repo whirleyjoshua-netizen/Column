@@ -69,5 +69,25 @@ ${button ? `<p style="margin:18px 0"><a href="${esc(button.url)}" style="display
     }),
   });
 
-  return { mode, send, codeEmail, resetEmail };
+  const inviteEmail = (to, { team, by, url }) => send({
+    to, tag: 'invite',
+    subject: `${by} invited you to ${team} on ${appName}`,
+    ...layout({
+      heading: `Join ${team}`,
+      lines: [`${by} invited you to work with the ${team} team in ${appName}.`, 'Open the link to choose your name and password. It works once, for 14 days.'],
+      button: { label: `Join ${team}`, url },
+      foot: 'If you weren’t expecting this, you can ignore it.',
+    }),
+  });
+  const emailChanged = (to, { newEmail }) => send({
+    to, tag: 'email-changed',
+    subject: `Your ${appName} email was changed`,
+    ...layout({
+      heading: 'Your email was changed',
+      lines: [`Your ${appName} account now uses ${newEmail}. If you didn’t do this, reset your password straight away and tell your team owner.`],
+      foot: 'You’re getting this at your old address so you know.',
+    }),
+  });
+
+  return { mode, send, codeEmail, resetEmail, inviteEmail, emailChanged };
 }

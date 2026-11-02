@@ -247,6 +247,11 @@
   $('#loginBack').addEventListener('click', (e) => {
     e.preventDefault();
     S.adding = false;
+    if (S.invite) {
+      S.invite = null;
+      history.replaceState(null, '', '/');
+    }
+    if (!S.workspace) return void start();
     $('#login').classList.add('hidden');
     $('#app').classList.remove('hidden');
   });
@@ -261,8 +266,9 @@
     f.device.value = store.get('device', guessDevice());
     f.workspace.value = S.adding ? '' : store.get('lastWorkspace', '');
     $('#loginBack').classList.toggle('hidden', !S.adding);
-    if (S.adding) $('#loginBack').textContent = 'Back to ' + S.workspace.name;
-    setLoginMode('signin');
+    if (S.adding) $('#loginBack').textContent = 'Back to ' + (S.workspace?.name || 'your team');
+    setLoginMode(S.invite ? 'invite' : 'signin');
+    if (S.invite) f.email.value = S.invite.email;
     // Forgot password only shows when this server can send email.
     fetch('/api/health').then((r) => r.json()).then((x) => { S.mailOn = !!x.mail; setLoginMode(S.loginMode); }).catch(() => {});
     $('#loginForm').querySelector('label:not(.hidden) input')?.focus();
@@ -276,15 +282,18 @@
     join: { btn: 'Join team', hint: 'New to a team? Ask someone on it for the invite code. Already have an account? Use its email and password.', fields: ['team', 'code', 'name', 'email', 'pass', 'device'] },
     create: { btn: 'Create team', hint: 'Start a new team. You’ll get an invite code to share in Settings.', fields: ['team', 'name', 'email', 'pass', 'device'] },
     forgot: { btn: 'Send reset link', hint: 'We’ll email you a link to choose a new password.', fields: ['email'] },
+    invite: { btn: 'Join team', hint: '', fields: ['name', 'email', 'pass', 'device'] },
   };
   function setLoginMode(mode) {
     S.loginMode = mode;
     const tab = mode === 'teamname' || mode === 'forgot' ? 'signin' : mode;
     for (const x of $('#modeSeg').children) x.classList.toggle('on', x.dataset.mode === tab);
     const M = LOGIN_MODES[mode];
-    $('#loginBtn').textContent = M.btn;
-    $('#modeHint').textContent = M.hint;
-    $('#modeHint').classList.toggle('hidden', !M.hint);
+    $('#loginBtn').textContent = mode === 'invite' && S.invite ? `Join ${S.invite.team}` : M.btn;
+    const hint = mode === 'invite' && S.invite ? `${S.invite.by} invited you to join ${S.invite.team}. Choose your name and a password. Already have an account? Use its email and password.` : M.hint;
+    $('#modeHint').textContent = hint;
+    $('#modeHint').classList.toggle('hidden', !hint);
+    $('#modeSeg').classList.toggle('hidden', mode === 'invite');
     for (const k of ['team', 'code', 'name', 'email', 'pass', 'device']) $(`#${k}Field`).classList.toggle('hidden', !M.fields.includes(k));
     const pw = $('#loginForm').password;
     pw.autocomplete = mode === 'signin' || mode === 'teamname' ? 'current-password' : 'new-password';
@@ -324,6 +333,7 @@
         return void ($('#modeHint').textContent = 'If there’s an account for that email, we’ve sent a link to choose a new password. It works for 30 minutes.', $('#modeHint').classList.remove('hidden'));
       }
       const body = {
+        invite: mode === 'invite' ? S.invite?.token : undefined,
         mode: mode === 'signin' ? 'email' : mode === 'teamname' ? 'signin' : mode,
         workspace: mode === 'signin' ? S.workspace?.id : f.workspace.value,
         email: needs.includes('email') ? email : undefined,
@@ -336,13 +346,17 @@
       const r = await api('POST', '/auth', body).catch((e) => {
         throw mode === 'signin' && /don’t match/.test(e.message) ? new Error(e.message + ' Signed in before with your team name? Use “Sign in with team name instead”.') : e;
       });
-      if (S.adding && r.workspace.id === S.workspace.id && !r.accounts) throw new Error('You’re already signed in to ' + r.workspace.name + '.');
+      if (S.adding && r.workspace.id === S.workspace?.id && !r.accounts) throw new Error('You’re already signed in to ' + r.workspace.name + '.');
       S.token = r.token;
       store.set('token', r.token);
       if (body.name) store.set('name', body.name);
       if (email) store.set('email', email);
       store.set('device', body.device);
-      if (mode !== 'signin') store.set('lastWorkspace', body.workspace);
+      if (mode !== 'signin' && mode !== 'invite') store.set('lastWorkspace', body.workspace);
+      if (mode === 'invite') {
+        S.invite = null;
+        history.replaceState(null, '', '/');
+      }
       // Email sign-in: every team on the account, ready to switch between.
       for (const x of r.accounts || []) keepAccount(x.token, x.workspace, x.member);
       keepAccount(r.token, r.workspace, r.member || body.name);
@@ -760,6 +774,42 @@
     accountNudge();
   }
 
+  // ---------- inviting people by email (owners) ----------
+  // Each invite is a link that joins one person, once, within 14 days. It's emailed when this server can
+  // send email, and shown here to copy either way (only right after it's made: Column keeps no copy).
+  function inviteSection() {
+    const sec = h('section', {}, h('h3', {}, 'Invite by email'));
+    const box = h('input', { type: 'text', placeholder: 'sam@company.com, lee@company.com', 'aria-label': 'Email addresses to invite' });
+    const made = h('div', { class: 'inv-made' });
+    const pending = h('div', {});
+    const drawPending = (list) => pending.replaceChildren(...(list.length ? [h('p', { class: 'day-hint', style: 'margin:10px 0 4px' }, 'Waiting to join'),
+      ...list.map((x) => h('div', { class: 'srow' },
+        h('span', {}, x.email, h('small', {}, `invited by ${x.by} · ${ago(x.createdAt)} · works until ${new Date(x.expiresAt).toLocaleDateString()}`)),
+        h('span', { class: 'btns' },
+          h('button', { class: 'btn small', onclick: () => api('POST', `/invites/${x.id}/resend`).then((r) => { showMade([r.invite]); drawPending(r.pending); }, (e) => toast(e.message)) }, S.me.mail ? 'Send again' : 'New link'),
+          h('button', { class: 'btn small danger', onclick: () => api('DELETE', '/invites/' + x.id).then((r) => drawPending(r.pending), (e) => toast(e.message)) }, 'Cancel'))))] : []));
+    const showMade = (list) => made.replaceChildren(...list.map((x) => x.already
+      ? h('p', { class: 'day-hint' }, `${x.email} is already on the team.`)
+      : h('div', { class: 'req-link' }, h('code', {}, x.link), h('button', { type: 'button', class: 'btn small', onclick: () => copyText(x.link) }, 'Copy'), h('small', {}, x.sent ? `emailed to ${x.email}` : `for ${x.email}`))));
+    const go = async () => {
+      try {
+        const r = await api('POST', '/invites', { emails: box.value });
+        box.value = '';
+        showMade(r.invites);
+        drawPending(r.pending);
+        const sent = r.invites.filter((x) => x.sent).length;
+        toast(sent ? `Invite${sent === 1 ? '' : 's'} emailed` : 'Invite link made. Copy it and send it to them.');
+      } catch (e) {
+        toast(e.message);
+      }
+    };
+    box.addEventListener('keydown', (e) => e.key === 'Enter' && go());
+    sec.append(h('p', { class: 'day-hint' }, S.me.mail ? 'Each person gets an email with a link that joins them to the team.' : 'Each person gets their own link to join. Copy it and send it to them.'),
+      h('div', { class: 'stack-row' }, box, h('button', { class: 'btn', onclick: go }, 'Invite')), made, pending);
+    api('GET', '/invites').then(drawPending, () => {});
+    return sec;
+  }
+
   // ---------- your account: an email for every login, and confirming it ----------
   // A login from before accounts is asked once a day to add an email. An email that isn't confirmed yet
   // gets a bar at the top with a box for the code, when this server can send email.
@@ -791,9 +841,26 @@
       toast(r.mail && !r.emailVerified ? `Email added. We sent a code to ${r.email}.` : 'Email added. Sign in with it from now on.');
     }, 'Add email');
   }
+  function changeEmailSheet() {
+    const email = h('input', { type: 'email', autocomplete: 'email', placeholder: 'new@company.com' });
+    const pw = h('input', { type: 'password', autocomplete: 'current-password' });
+    sheet('Change your email', [
+      h('p', { class: 'day-hint' }, S.me.mail ? 'We’ll send a code to the new address. Your email changes once you enter it, and your old address gets a note saying so.' : 'You’ll sign in with the new email from now on.'),
+      h('label', {}, 'New email', email),
+      h('label', {}, 'Your password', pw),
+    ], async () => {
+      const r = await api('POST', '/account/email/change', { email: email.value.trim(), password: pw.value });
+      Object.assign(S.me, r);
+      S.confirmHidden = false;
+      drawConfirmBar();
+      renderSettings();
+      toast(r.pendingEmail ? `Code sent to ${r.pendingEmail}` : 'Email changed');
+    }, 'Change email');
+  }
   function drawConfirmBar() {
     $('#confirmBar')?.remove();
-    if (!S.me.email || S.me.emailVerified || !S.me.mail || S.confirmHidden) return;
+    const to = S.me.pendingEmail || (!S.me.emailVerified && S.me.email);
+    if (!to || !S.me.mail || S.confirmHidden) return;
     const code = h('input', { class: 'cb-code', inputmode: 'numeric', autocomplete: 'one-time-code', maxlength: 7, placeholder: '6-digit code', 'aria-label': 'Code from the email' });
     const confirm = async () => {
       try {
@@ -807,7 +874,7 @@
     };
     code.addEventListener('keydown', (e) => e.key === 'Enter' && confirm());
     const bar = h('div', { id: 'confirmBar', class: 'confirm-bar' },
-      h('span', {}, 'Confirm your email: enter the code we sent to ', h('b', {}, S.me.email)),
+      h('span', {}, S.me.pendingEmail ? 'Confirm your new email: enter the code we sent to ' : 'Confirm your email: enter the code we sent to ', h('b', {}, to)),
       code,
       h('button', { class: 'btn small', onclick: confirm }, 'Confirm'),
       h('button', { class: 'btn small', onclick: () => api('POST', '/account/verify/send').then(() => toast('New code sent'), (e) => toast(e.message)) }, 'Send a new code'),
@@ -11572,6 +11639,7 @@
           owner ? newCode : null)
       );
       s.append(people);
+      if (owner) s.append(inviteSection());
       s.append(rolesSection(peopleCall));
       if (isOwner()) {
         s.append(h('section', {}, h('h3', {}, 'Campaign email'),
@@ -11587,14 +11655,35 @@
       if (!S.me.email) em.append(h('p', { class: 'warn' }, 'Your login doesn’t have an email yet. Add one to sign in with it and reset your password if you forget it.'), h('div', { class: 'btns' }, h('button', { class: 'btn', onclick: () => addEmailSheet(false) }, 'Add email')));
       else {
         em.append(h('p', {}, h('b', {}, S.me.email), S.me.emailVerified ? ' · ✓ confirmed' : S.me.mail ? ' · not confirmed yet' : ''));
-        if (!S.me.emailVerified && S.me.mail) {
-          const code = h('input', { inputmode: 'numeric', autocomplete: 'one-time-code', maxlength: 7, placeholder: '6-digit code' });
+        if ((!S.me.emailVerified || S.me.pendingEmail) && S.me.mail) {
+          const code = h('input', { class: 'set-code', inputmode: 'numeric', autocomplete: 'one-time-code', maxlength: 7, placeholder: '6-digit code' });
           const go = () => api('POST', '/account/verify', { code: code.value }).then((r) => { Object.assign(S.me, r); drawConfirmBar(); toast('Email confirmed'); renderSettings(); }, (e) => toast(e.message));
           em.append(h('div', { class: 'stack-row' }, code, h('button', { class: 'btn', onclick: go }, 'Confirm'), h('button', { class: 'btn', onclick: () => api('POST', '/account/verify/send').then(() => toast('New code sent'), (e) => toast(e.message)) }, 'Send a new code')));
         }
-        em.append(h('p', { style: 'font-size:11.5px' }, 'Sign in with this email on any device to reach all your teams.'));
+        if (S.me.pendingEmail) em.append(h('p', { class: 'warn' }, `Changing to ${S.me.pendingEmail}: enter the code we sent there. Until then you sign in with ${S.me.email}. `,
+          h('a', { href: '#', onclick: (e) => { e.preventDefault(); api('DELETE', '/account/email/change').then((r) => { Object.assign(S.me, r); drawConfirmBar(); renderSettings(); }, (er) => toast(er.message)); } }, 'Cancel the change')));
+        em.append(h('p', { style: 'font-size:11.5px' }, 'Sign in with this email on any device to reach all your teams.'),
+          h('div', { class: 'btns' }, h('button', { class: 'btn', onclick: changeEmailSheet }, 'Change email')));
       }
       s.append(em);
+
+      // Where you're signed in
+      const where = h('section', {}, h('h3', {}, 'Where you’re signed in'), h('p', { class: 'day-hint' }, 'Loading…'));
+      const drawWhere = async () => {
+        let list;
+        try { list = await api('GET', '/account/sessions'); } catch (e) { return where.replaceChildren(h('h3', {}, 'Where you’re signed in'), h('p', { class: 'warn' }, e.message)); }
+        const others = list.filter((x) => !x.here);
+        const outAll = h('button', { class: 'btn danger', 'data-label': '1' }, 'Sign out of all other devices');
+        outAll.addEventListener('click', () => confirmClick(outAll, () => api('POST', '/account/signout-others').then(() => { toast('Signed out everywhere else'); drawWhere(); }, (e) => toast(e.message))));
+        where.replaceChildren(...[h('h3', {}, 'Where you’re signed in'),
+          ...list.map((x) => h('div', { class: 'srow sess-row' },
+            h('span', {}, x.device, x.here ? ' (this device)' : '', h('small', {}, `${x.team} · ${x.here ? 'now' : 'last used ' + ago(x.lastSeen)}`)),
+            x.here ? null : h('button', { class: 'btn small', onclick: () => api('DELETE', '/account/sessions/' + x.id).then(drawWhere, (e) => toast(e.message)) }, 'Sign out'))),
+          h('p', { style: 'font-size:11.5px' }, 'A device that isn’t used for 30 days is signed out by itself.'),
+          others.length ? h('div', { class: 'btns' }, outAll) : null].filter(Boolean));
+      };
+      drawWhere();
+      s.append(where);
 
       // Your password
       const cur = h('input', { type: 'password', placeholder: 'Current password', autocomplete: 'current-password' });
@@ -11633,7 +11722,19 @@
 
   // ---------- boot ----------
   if (desktop) desktop.onConfig?.((cfg) => (S.desktopCfg = cfg));
-  if (S.token) start();
+  // An invite link (/join/<token>): the sign-in screen, set up for joining that team.
+  const inviteToken = location.pathname.startsWith('/join/') ? location.pathname.split('/')[2] : null;
+  if (inviteToken) {
+    fetch('/api/public/invite/' + encodeURIComponent(inviteToken)).then(async (r) => {
+      const x = await r.json().catch(() => ({}));
+      history.replaceState(null, '', r.ok ? location.pathname : '/');
+      if (r.ok) S.invite = { ...x, token: inviteToken };
+      S.adding = !!(r.ok && S.token);
+      if (S.token && !r.ok) return start().then(() => toast(x.error || 'That invite isn’t available.'));
+      showLogin();
+      if (!r.ok) $('#loginErr').textContent = x.error || 'That invite isn’t available.';
+    }, () => (S.token ? start() : showLogin()));
+  } else if (S.token) start();
   else showLogin();
   if (desktop) desktop.setLayout(S.panes.length);
 })();

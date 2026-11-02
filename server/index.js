@@ -34,7 +34,7 @@ fs.mkdirSync(FILES_DIR, { recursive: true });
 // Everything lives in memory; save() hands the whole thing to the store a moment later.
 const IMPORT_PATH = path.join(DATA_DIR, 'import-pending.json');
 const store = await openStore({ url: process.env.DATABASE_URL, file: DB_PATH, importFile: IMPORT_PATH });
-let db = { workspaces: {}, tokens: {}, items: {}, entries: {}, tasks: {}, uploads: {}, campaigns: {}, goals: {}, attempts: {}, lists: {}, templates: {}, calendars: {}, ai: {}, pss: {}, sends: {}, bills: {}, meetings: {}, money: {}, budgets: {}, plans: {}, sidekick: {}, vaults: {}, vaultItems: {}, signs: {}, signatures: {}, trips: {}, pins: {}, zones: {}, comments: {}, users: {}, resets: {} };
+let db = { workspaces: {}, tokens: {}, items: {}, entries: {}, tasks: {}, uploads: {}, campaigns: {}, goals: {}, attempts: {}, lists: {}, templates: {}, calendars: {}, ai: {}, pss: {}, sends: {}, bills: {}, meetings: {}, money: {}, budgets: {}, plans: {}, sidekick: {}, vaults: {}, vaultItems: {}, signs: {}, signatures: {}, trips: {}, pins: {}, zones: {}, comments: {}, users: {}, resets: {}, invites: {} };
 const loaded = await store.load();
 if (loaded.db) db = { ...db, ...loaded.db };
 if (loaded.fromFile) console.log(`Moving ${path.basename(loaded.fromFile)} into Postgres.`);
@@ -201,10 +201,28 @@ async function readJson(req, limit = 1_000_000) {
   }
 }
 
+// A sign-in ends after 30 days without being used. When it was last used is noted at most once an hour.
+const SESSION_DAYS = 30;
+function liveSession(token) {
+  const session = token ? db.tokens[token] : null;
+  if (!session) return null;
+  const now = Date.now();
+  if (!session.lastSeen) session.lastSeen = now; // sign-ins from before this count from now
+  if (now - session.lastSeen > SESSION_DAYS * 86_400_000) {
+    delete db.tokens[token];
+    save();
+    return null;
+  }
+  if (now - session.lastSeen > 3_600_000) {
+    session.lastSeen = now;
+    save();
+  }
+  return session;
+}
 function authFrom(req, url) {
   const h = req.headers.authorization || '';
   const token = h.startsWith('Bearer ') ? h.slice(7) : url.searchParams.get('t');
-  const session = token ? db.tokens[token] : null;
+  const session = liveSession(token);
   const ws = session ? db.workspaces[session.wsId] : null;
   const member = ws?.members.find((x) => x.id === session.memberId);
   if (!member) return null;
@@ -279,15 +297,28 @@ function linkMember(m, u) {
   m.userId = u.id;
   m.salt = m.hash = null;
 }
-function signOutUser(u, keepToken) {
-  for (const { ws, m } of membersOf(u)) {
-    for (const [tok, sess] of Object.entries(db.tokens)) if (sess.memberId === m.id && sess.wsId === ws.id && tok !== keepToken) delete db.tokens[tok];
-    for (const sock of sockets.get(ws.id) || []) if (sock.meta.memberId === m.id && sock.meta.token !== keepToken) sock.close(4001, 'Signed out');
+// Signs the account out everywhere, or everywhere but one device (its sign-ins to every team stay).
+function signOutUser(u, keepDevice) {
+  for (const { ws, m } of membersOf(u)) signOutWhere(ws, m.id, keepDevice);
+}
+function signOutWhere(ws, memberId, keepDevice, onlyToken) {
+  for (const [tok, sess] of Object.entries(db.tokens)) {
+    if (sess.memberId !== memberId || sess.wsId !== ws.id) continue;
+    if (onlyToken ? tok !== onlyToken : keepDevice && sess.deviceId === keepDevice) continue;
+    delete db.tokens[tok];
+    for (const sock of sockets.get(ws.id) || []) if (sock.meta.token === tok) sock.close(4001, 'Signed out');
   }
 }
+// The places an account (or an old login) is signed in, for Settings.
+const sessionId = (tok) => sha('session:' + tok).slice(0, 16);
+function sessionsOf(ws, me) {
+  const u = userOf(me);
+  const mine = u ? membersOf(u) : [{ ws, m: me }];
+  return mine.flatMap(({ ws: w, m }) => Object.entries(db.tokens).filter(([, s]) => s.wsId === w.id && s.memberId === m.id).map(([tok, s]) => ({ tok, s, w })));
+}
 // A 6-digit code, five guesses, then a new one has to be sent. At most one a minute and ten a day.
-async function sendCode(u) {
-  if (mailer.mode === 'off' || u.emailVerified) return false;
+async function sendCode(u, toPending) {
+  if (mailer.mode === 'off' || (u.emailVerified && !toPending)) return false;
   const now = Date.now();
   const v = u.verify || {};
   if (v.sentAt && now - v.sentAt < 60_000) throw badRequest('A code was just sent. Wait a minute before asking for another.');
@@ -296,7 +327,7 @@ async function sendCode(u) {
   const code = String(crypto.randomInt(0, 1_000_000)).padStart(6, '0');
   u.verify = { hash: sha(u.id + ':' + code), expiresAt: now + CODE_MINUTES * 60_000, tries: 0, sentAt: now, day: dayKey(new Date()), dayCount: day + 1 };
   save();
-  await mailer.codeEmail(u.email, code);
+  await mailer.codeEmail(u.pendingEmail || u.email, code);
   return true;
 }
 function checkCode(u, code) {
@@ -309,15 +340,36 @@ function checkCode(u, code) {
     save();
     throw badRequest(v.tries >= 5 ? 'Too many wrong codes. Send a new one.' : 'That code isn’t right. Check the email and try again.');
   }
+  if (u.pendingEmail) {
+    const old = u.email;
+    u.email = u.pendingEmail;
+    delete u.pendingEmail;
+    mailer.emailChanged(old, { newEmail: u.email }).catch((e) => console.error('Email-changed notice failed:', e.message));
+  }
   u.emailVerified = true;
   delete u.verify;
   save();
 }
+// Invites by email: a link that joins one person to a team, once, within 14 days. Only its hash is kept.
+const INVITE_DAYS = 14;
+const inviteByToken = (t) => {
+  const inv = t && Object.values(db.invites).find((x) => x.hash === sha('invite:' + t));
+  return inv && inv.expiresAt > Date.now() && db.workspaces[inv.wsId] ? inv : null;
+};
+const publicInvite = (x) => ({ id: x.id, email: x.email, by: x.by, createdAt: x.createdAt, expiresAt: x.expiresAt });
+function makeInvite(ws, auth, email) {
+  for (const x of Object.values(db.invites)) if (x.wsId === ws.id && x.email === email) delete db.invites[x.id];
+  const token = crypto.randomBytes(24).toString('base64url');
+  const x = { id: rid(), wsId: ws.id, email, hash: sha('invite:' + token), by: auth.member, byId: auth.memberId, createdAt: Date.now(), expiresAt: Date.now() + INVITE_DAYS * 86_400_000 };
+  db.invites[x.id] = x;
+  return { x, link: `${PUBLIC_URL}/join/${token}` };
+}
+
 // Things that count (campaign email, later billing) wait for a confirmed email, once email works here.
 const needsConfirm = (auth) => mailer.mode !== 'off' && !userOf(auth.ws.members.find((x) => x.id === auth.memberId))?.emailVerified;
 const meAccount = (ws, memberId) => {
   const u = userOf(ws.members.find((x) => x.id === memberId));
-  return { email: u?.email || null, emailVerified: !!u?.emailVerified, mail: mailer.mode !== 'off' };
+  return { email: u?.email || null, emailVerified: !!u?.emailVerified, pendingEmail: u?.pendingEmail || null, mail: mailer.mode !== 'off' };
 };
 
 // A private campaign's feed and stack are hidden from people outside it, and so is a feed you weren't invited to.
@@ -3618,7 +3670,11 @@ async function api(req, res, url) {
       return send(res, 200, { ...first, accounts: all });
     }
 
-    const slug = slugify(workspace);
+    // An invite link stands in for the team name and invite code.
+    const inv = mode === 'invite' ? inviteByToken(body.invite) : null;
+    if (mode === 'invite' && !inv) return send(res, 404, { error: 'This invite has expired or was already used. Ask the team for a new one.' });
+    if (mode === 'invite' && !email) return send(res, 400, { error: 'Enter your email address.' });
+    const slug = inv ? db.workspaces[inv.wsId].slug : slugify(workspace);
     if (!slug || slug.length > 60) return send(res, 400, { error: 'Enter a team name.' });
     const who = String(name || '').trim().slice(0, 40);
     if (!who) return send(res, 400, { error: 'Enter your name.' });
@@ -3665,8 +3721,8 @@ async function api(req, res, url) {
     } else {
       if (!ws) return send(res, 404, { error: 'No team with that name. Create it instead?' });
       member = ws.members.find((x) => x.nameKey === nameKey(who));
-      if (mode === 'join') {
-        if (!checkInvite(ws, code)) return refuse('Wrong invite code.');
+      if (mode === 'join' || mode === 'invite') {
+        if (mode === 'join' && !checkInvite(ws, code)) return refuse('Wrong invite code.');
         const mine = user && ws.members.find((x) => x.userId === user.id);
         if (mine) member = mine; // already on this team with this account
         else {
@@ -3685,10 +3741,25 @@ async function api(req, res, url) {
       }
     }
     const token = session(ws, member);
+    if (inv) {
+      delete db.invites[inv.id];
+      // Opening the invite proves the address it was sent to.
+      if (user && user.email === inv.email) user.emailVerified = true;
+    }
     save();
-    if (fresh) sendCode(user).catch((e) => console.error('Code email failed:', e.message));
+    if (fresh && !user.emailVerified) sendCode(user).catch((e) => console.error('Code email failed:', e.message));
     if (mode !== 'signin') broadcast(ws.id, { type: 'workspace' });
     return send(res, 200, { token, workspace: publicWorkspace(ws, member.id) });
+  }
+
+  // The page an invite link opens: which team, who asked, and the email it was sent to.
+  if (a === 'public' && b === 'invite' && m === 'GET') {
+    res.setHeader('Cache-Control', 'no-store');
+    const inv = inviteByToken(c);
+    if (!inv) return send(res, 404, { error: 'This invite has expired or was already used. Ask the team for a new one.' });
+    const w = db.workspaces[inv.wsId];
+    const brand = brandOf(w);
+    return send(res, 200, { team: w.name, by: inv.by, email: inv.email, logo: logoUrl(brand.logo) || null, accent: brand.accent || null });
   }
 
   // Choosing a new password from the link in a reset email.
@@ -5005,10 +5076,57 @@ async function api(req, res, url) {
     return send(res, 200, publicWorkspace(ws, auth.memberId));
   }
 
+  // Inviting people by email. Owners only. The link is shown once, to copy, and emailed when email works.
+  if (a === 'invites') {
+    if (auth.role !== 'owner') return send(res, 403, { error: 'Only team owners can invite people.' });
+    const mine = () => Object.values(db.invites).filter((x) => x.wsId === ws.id && x.expiresAt > Date.now()).sort((x, y) => y.createdAt - x.createdAt).map(publicInvite);
+    if (m === 'GET' && !b) return send(res, 200, mine());
+    if (m === 'POST' && !b) {
+      const { emails } = await readJson(req);
+      const list = [...new Set((Array.isArray(emails) ? emails : String(emails || '').split(/[\s,;]+/)).map(cleanEmail).filter(Boolean))];
+      if (!list.length) return send(res, 400, { error: 'Enter at least one email address.' });
+      if (list.length > 20) return send(res, 400, { error: 'Up to 20 at a time.' });
+      const badOne = list.find((e) => !okEmail(e));
+      if (badOne) return send(res, 400, { error: `“${badOne}” doesn’t look like an email address.` });
+      const today = Object.values(db.invites).filter((x) => x.wsId === ws.id && Date.now() - x.createdAt < 86_400_000).length;
+      if (today + list.length > 100) return send(res, 429, { error: 'That’s a lot of invites for one day. Try again tomorrow.' });
+      const out = [];
+      for (const email of list) {
+        const already = ws.members.some((mb) => userOf(mb)?.email === email);
+        if (already) {
+          out.push({ email, already: true });
+          continue;
+        }
+        const { x, link } = makeInvite(ws, auth, email);
+        let sent = false;
+        if (mailer.mode !== 'off') {
+          sent = await mailer.inviteEmail(email, { team: ws.name, by: auth.member, url: link }).then(() => true, (e) => (console.error('Invite email failed:', e.message), false));
+        }
+        out.push({ ...publicInvite(x), link, sent });
+      }
+      save();
+      return send(res, 200, { invites: out, pending: mine() });
+    }
+    const x = b && db.invites[b];
+    if (!x || x.wsId !== ws.id) return send(res, 404, { error: 'Not found' });
+    if (m === 'DELETE') {
+      delete db.invites[x.id];
+      save();
+      return send(res, 200, { pending: mine() });
+    }
+    if (m === 'POST' && c === 'resend') {
+      const { x: y, link } = makeInvite(ws, auth, x.email);
+      const sent = mailer.mode !== 'off' && (await mailer.inviteEmail(y.email, { team: ws.name, by: auth.member, url: link }).then(() => true, () => false));
+      save();
+      return send(res, 200, { invite: { ...publicInvite(y), link, sent }, pending: mine() });
+    }
+    return send(res, 405, { error: 'Method not allowed' });
+  }
+
   // Your account: adding an email to a login from before accounts, and confirming it.
   if (a === 'account') {
     const me = ws.members.find((x) => x.id === auth.memberId);
-    if (b === 'email' && m === 'POST') {
+    if (b === 'email' && !c && m === 'POST') {
       const { email: raw, password } = await readJson(req);
       const email = cleanEmail(raw);
       if (userOf(me)) return send(res, 400, { error: 'Your login already has an email.' });
@@ -5043,8 +5161,48 @@ async function api(req, res, url) {
     const u = userOf(me);
     if (b === 'verify' && !c && m === 'POST') {
       if (!u) return send(res, 400, { error: 'Add your email first.' });
-      if (!u.emailVerified) checkCode(u, (await readJson(req)).code);
+      if (!u.emailVerified || u.pendingEmail) checkCode(u, (await readJson(req)).code);
       return send(res, 200, meAccount(ws, me.id));
+    }
+    // A new email: with email working, it's used once its code is entered; until then the old one stays.
+    if (b === 'email' && c === 'change' && m === 'POST') {
+      if (!u) return send(res, 400, { error: 'Add your email first.' });
+      const { email: raw, password } = await readJson(req);
+      const email = cleanEmail(raw);
+      if (!okEmail(email)) return send(res, 400, { error: 'That email address doesn’t look right.' });
+      if (!passOk(u, password)) return send(res, 401, { error: 'Your password isn’t right.' });
+      if (email === u.email) return send(res, 400, { error: 'That’s already your email.' });
+      if (userByEmail(email) || Object.values(db.users).some((x) => x.pendingEmail === email && x !== u)) return send(res, 409, { error: 'That email belongs to another account.' });
+      if (mailer.mode === 'off') {
+        u.email = email;
+        u.emailVerified = false;
+      } else {
+        u.pendingEmail = email;
+        delete u.verify;
+        await sendCode(u, true);
+      }
+      save();
+      return send(res, 200, meAccount(ws, me.id));
+    }
+    if (b === 'email' && c === 'change' && m === 'DELETE') {
+      if (u?.pendingEmail) delete u.pendingEmail, delete u.verify, save();
+      return send(res, 200, meAccount(ws, me.id));
+    }
+    if (b === 'sessions' && m === 'GET') {
+      return send(res, 200, sessionsOf(ws, me).map(({ tok, s, w }) => ({ id: sessionId(tok), device: s.device, team: w.name, lastSeen: s.lastSeen || s.createdAt, createdAt: s.createdAt, here: s.deviceId === auth.deviceId })).sort((x, y) => y.lastSeen - x.lastSeen));
+    }
+    if (b === 'sessions' && c && m === 'DELETE') {
+      const hit = sessionsOf(ws, me).find(({ tok }) => sessionId(tok) === c);
+      if (!hit) return send(res, 404, { error: 'Not found' });
+      signOutWhere(hit.w, hit.s.memberId, null, hit.tok);
+      save();
+      return send(res, 200, { ok: true });
+    }
+    if (b === 'signout-others' && m === 'POST') {
+      if (u) signOutUser(u, auth.deviceId);
+      else signOutWhere(ws, me.id, auth.deviceId);
+      save();
+      return send(res, 200, { ok: true });
     }
     if (b === 'verify' && c === 'send' && m === 'POST') {
       if (!u) return send(res, 400, { error: 'Add your email first.' });
@@ -5061,10 +5219,10 @@ async function api(req, res, url) {
       const me = ws.members.find((x) => x.id === auth.memberId);
       const cred = credOf(me);
       if (cred.hash && !passOk(cred, current)) return send(res, 401, { error: 'Current password is wrong.' });
-      const min = userOf(me) ? 8 : 6;
-      if (String(next || '').length < min) return send(res, 400, { error: `Password must be at least ${min} characters.` });
+      if (String(next || '').length < 8) return send(res, 400, { error: 'Password must be at least 8 characters.' });
       setPassword(cred, String(next));
-      if (userOf(me)) signOutUser(userOf(me), auth.token); // everywhere else, in every team
+      if (userOf(me)) signOutUser(userOf(me), auth.deviceId); // other devices, in every team
+      else signOutWhere(ws, me.id, auth.deviceId);
       ensureOwner(ws, me);
     } else {
       if (auth.role !== 'owner') return send(res, 403, { error: 'Only team owners can do that.' });
@@ -5787,6 +5945,12 @@ const server = http.createServer(async (req, res) => {
     res.setHeader('X-Robots-Tag', 'noindex');
     return serveStatic(req, res, new URL('/sign.html', 'http://x'));
   }
+  if (url.pathname.startsWith('/join/') && req.method === 'GET') {
+    // An invite link opens the app, which reads the invite from the address.
+    res.setHeader('Referrer-Policy', 'no-referrer');
+    res.setHeader('X-Robots-Tag', 'noindex');
+    return serveStatic(req, res, new URL('/index.html', 'http://x'));
+  }
   if (url.pathname.startsWith('/reset/') && req.method === 'GET') {
     res.setHeader('Referrer-Policy', 'no-referrer');
     res.setHeader('X-Robots-Tag', 'noindex');
@@ -5911,6 +6075,16 @@ async function backupDb() {
   }
 }
 setInterval(backupDb, 60 * 60_000);
+// Expired sign-ins, reset links and invites are cleared away each hour.
+function sweepAccounts() {
+  const now = Date.now();
+  let n = 0;
+  for (const [tok, s] of Object.entries(db.tokens)) if (s.lastSeen && now - s.lastSeen > SESSION_DAYS * 86_400_000) delete db.tokens[tok], n++;
+  for (const r of Object.values(db.resets)) if (r.expiresAt < now) delete db.resets[r.id], n++;
+  for (const x of Object.values(db.invites)) if (x.expiresAt < now) delete db.invites[x.id], n++;
+  if (n) save();
+}
+setInterval(sweepAccounts, 60 * 60_000);
 backupDb();
 // A recording whose page went away (closed, crashed) is wrapped up with what arrived.
 setInterval(() => {

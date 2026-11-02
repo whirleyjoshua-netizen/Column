@@ -1715,3 +1715,6 @@ body.platform-darwin .pj-head, body.platform-darwin .pj-top { padding-left: 80px
 .confirm-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 12px; margin: 0 8px 6px; border-radius: 10px; background: var(--panel); border: 1px solid var(--accent); font-size: 13px; }
 .confirm-bar > span { flex: 1 1 220px; min-width: 0; }
 .confirm-bar .cb-code { width: 128px; padding: 5px 8px; letter-spacing: 2px; }
+.inv-made { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.inv-made .req-link small { color: var(--muted); font-size: 11px; white-space: nowrap; }
+.sess-row small { display: block; }
