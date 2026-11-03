@@ -109,5 +109,15 @@ ${button ? `<p style="margin:18px 0"><a href="${esc(button.url)}" style="display
     }),
   });
 
-  return { mode, send, codeEmail, resetEmail, inviteEmail, emailChanged, teamDeleting, teamKept };
+  const accountDeleted = (to, { teams }) => send({
+    to, tag: 'account-deleted',
+    subject: `Your ${appName} account was deleted`,
+    ...layout({
+      heading: 'Your account was deleted',
+      lines: [`Your ${appName} account for this email is gone, and you’ve left ${teams.join(', ')}. Your private things were deleted; what you shared stays with each team.`, 'If you didn’t do this, tell your team owner straight away.'],
+      foot: 'This is the last email you’ll get from us at this address.',
+    }),
+  });
+
+  return { mode, send, codeEmail, resetEmail, inviteEmail, emailChanged, teamDeleting, teamKept, accountDeleted };
 }

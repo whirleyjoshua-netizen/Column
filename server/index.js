@@ -3821,7 +3821,7 @@ async function api(req, res, url) {
       if (loginBlocked(keys)) return send(res, 429, { error: 'Too many wrong tries. Wait 15 minutes, then try again.' });
       if (!passOk(credOf(me), body.password)) {
         loginFailed(keys);
-        return send(res, 401, { error: 'That password isn’t right.' });
+        return send(res, 403, { error: 'That password isn’t right.' });
       }
       ws.deleteAt = Date.now() + DELETE_DAYS * 86_400_000;
       ws.deleteBy = auth.member;
@@ -5185,6 +5185,37 @@ async function api(req, res, url) {
   // Your account: adding an email to a login from before accounts, and confirming it.
   if (a === 'account') {
     const me = ws.members.find((x) => x.id === auth.memberId);
+    // Leaving this team, or deleting the whole account (every team it's in). Both need the password.
+    if ((b === 'leave' || b === 'delete') && m === 'POST') {
+      const { password } = await readJson(req);
+      const keys = ['ip:' + clientIp(req), 'leave:' + me.id];
+      if (loginBlocked(keys)) return send(res, 429, { error: 'Too many wrong tries. Wait 15 minutes, then try again.' });
+      if (!passOk(credOf(me), password)) {
+        loginFailed(keys);
+        return send(res, 403, { error: 'That password isn’t right.' });
+      }
+      if (b === 'leave') {
+        const why = cantLeave(ws, me);
+        if (why) return send(res, 409, { error: why });
+        await removeMember(ws, me);
+        return send(res, 200, { ok: true });
+      }
+      const u = userOf(me);
+      const teams = u ? membersOf(u) : [{ ws, m: me }];
+      const stuck = teams.filter(({ ws: w, m: x }) => w.members.length > 1 && cantLeave(w, x));
+      if (stuck.length) return send(res, 409, { error: `You’re the only owner of ${stuck.map(({ ws: w }) => w.name).join(' and ')}. Make someone else an owner there first, or delete the team.` });
+      for (const { ws: w, m: x } of teams) {
+        if (w.members.length === 1) await eraseTeam(w); // a team of one goes with its only person
+        else await removeMember(w, x);
+      }
+      if (u) {
+        for (const x of Object.values(db.resets)) if (x.userId === u.id) delete db.resets[x.id];
+        delete db.users[u.id];
+        if (mailer.mode !== 'off') mailer.accountDeleted(u.email, { teams: teams.map(({ ws: w }) => w.name) }).catch((e) => console.error('Account-deleted email failed:', e.message));
+      }
+      save();
+      return send(res, 200, { ok: true });
+    }
     if (b === 'email' && !c && m === 'POST') {
       const { email: raw, password } = await readJson(req);
       const email = cleanEmail(raw);
@@ -5197,14 +5228,14 @@ async function api(req, res, url) {
         // The same person's login in another team: prove it with that account's password, and they become one.
         if (!passOk(u, password)) {
           loginFailed(keys);
-          return send(res, 401, { error: 'That email already has an account. Enter its password to join them up.' });
+          return send(res, 403, { error: 'That email already has an account. Enter its password to join them up.' });
         }
         if (ws.members.some((x) => x.userId === u.id)) return send(res, 409, { error: 'That account is already someone else on this team.' });
         linkMember(me, u);
       } else {
         if (me.hash && !passOk(me, password)) {
           loginFailed(keys);
-          return send(res, 401, { error: 'Your password isn’t right.' });
+          return send(res, 403, { error: 'Your password isn’t right.' });
         }
         if (!me.hash && String(password || '').length < 8) return send(res, 400, { error: 'Choose a password of at least 8 characters.' });
         u = { id: rid(), email, emailVerified: false, salt: me.salt, hash: me.hash, createdAt: Date.now() };
@@ -5229,7 +5260,7 @@ async function api(req, res, url) {
       const { email: raw, password } = await readJson(req);
       const email = cleanEmail(raw);
       if (!okEmail(email)) return send(res, 400, { error: 'That email address doesn’t look right.' });
-      if (!passOk(u, password)) return send(res, 401, { error: 'Your password isn’t right.' });
+      if (!passOk(u, password)) return send(res, 403, { error: 'Your password isn’t right.' });
       if (email === u.email) return send(res, 400, { error: 'That’s already your email.' });
       if (userByEmail(email) || Object.values(db.users).some((x) => x.pendingEmail === email && x !== u)) return send(res, 409, { error: 'That email belongs to another account.' });
       if (mailer.mode === 'off') {
@@ -5277,7 +5308,7 @@ async function api(req, res, url) {
       const { current, next } = await readJson(req);
       const me = ws.members.find((x) => x.id === auth.memberId);
       const cred = credOf(me);
-      if (cred.hash && !passOk(cred, current)) return send(res, 401, { error: 'Current password is wrong.' });
+      if (cred.hash && !passOk(cred, current)) return send(res, 403, { error: 'Current password is wrong.' });
       if (String(next || '').length < 8) return send(res, 400, { error: 'Password must be at least 8 characters.' });
       setPassword(cred, String(next));
       if (userOf(me)) signOutUser(userOf(me), auth.deviceId); // other devices, in every team
@@ -5289,8 +5320,8 @@ async function api(req, res, url) {
       if (!target) return send(res, 404, { error: 'Not found' });
       if (target.id === auth.memberId) return send(res, 400, { error: 'You can’t do that to yourself.' });
       if (m === 'DELETE') {
-        ws.members = ws.members.filter((x) => x !== target);
-        signOutMember(ws, target.id);
+        await removeMember(ws, target);
+        return send(res, 200, publicWorkspace(ws, auth.memberId));
       } else if (c === 'reset' && m === 'POST') {
         // Someone with an account resets it from their email; without email working, they're unlinked
         // here and choose a new password with the invite code, like before accounts.
@@ -6193,6 +6224,82 @@ async function eraseTeam(ws) {
   for (const f of files) await fsp.rm(f, { force: true }).catch(() => {});
   console.log(`Erased team ${wsId}: ${n} records, ${files.length} files.`);
 }
+// ---------- someone leaves a team: they leave, an owner removes them, or they delete their account ----------
+// Their private things go. What they shared stays with the team, under their name. What only they could
+// see but the business needs (signing requests, meeting notes, map pins, campaigns they ran) passes to an owner.
+async function removeMember(ws, m) {
+  const id = m.id;
+  const wsId = ws.id;
+  const heir = ws.members.find((x) => x.role === 'owner' && x.id !== id);
+  const theirs = (x) => x?.wsId === wsId && x.memberId === id;
+  const hand = (x, k = 'memberId') => { if (x[k] === id) x[k] = heir ? heir.id : null; };
+  signOutWhere(ws, id);
+  await Promise.all(Object.values(db.calendars).filter(theirs).map(async (conn) => { await revokeCalendar(conn); disconnectCalendar(conn); }));
+  for (const c of Object.values(db.campaigns)) {
+    if (c.wsId !== wsId) continue;
+    if (c.private && [c.ownerId, c.assigneeId, ...c.memberIds].filter(Boolean).every((x) => x === id)) { deleteCampaign(ws, c); continue; }
+    hand(c, 'ownerId');
+    if (c.assigneeId === id) c.assigneeId = null;
+    c.memberIds = c.memberIds.filter((x) => x !== id);
+  }
+  for (const t of Object.values(db.templates)) {
+    if (t.wsId !== wsId) continue;
+    hand(t, 'ownerId');
+    if (t.assigneeId === id) t.assigneeId = null;
+  }
+  // Private folders and invite-only feeds that were only theirs, with what's in them.
+  const gone = new Set();
+  for (const d of ws.dirs) if (!d.parentId && d.private && d.ownerId === id) for (const x of dirTree(ws, d.id)) gone.add(x);
+  for (const it of Object.values(db.items)) if (it.wsId === wsId && it.dirId && gone.has(it.dirId)) deleteItem(it.id);
+  ws.dirs = ws.dirs.filter((d) => !gone.has(d.id));
+  for (const d of ws.dirs) hand(d, 'ownerId');
+  const lone = new Set(ws.channels.filter((ch) => !ch.campaignId && ch.memberIds && ch.ownerId === id && !ch.memberIds.some((x) => x !== id)).map((ch) => ch.id));
+  for (const it of Object.values(db.items)) if (it.wsId === wsId && lone.has(it.channelId)) deleteItem(it.id);
+  ws.channels = ws.channels.filter((ch) => !lone.has(ch.id));
+  for (const ch of ws.channels) {
+    hand(ch, 'ownerId');
+    if (ch.memberIds) ch.memberIds = ch.memberIds.filter((x) => x !== id);
+  }
+  // Only ever theirs: their Day, personal money, vault, signature, AI keys, Sidekick, plans.
+  for (const e of Object.values(db.entries)) if (theirs(e)) delete db.entries[e.id];
+  for (const x of Object.values(db.money)) if (theirs(x) && x.scope !== 'business') dropMoney(x);
+  for (const x of Object.values(db.bills)) if (theirs(x) && x.scope !== 'business') delete db.bills[x.id];
+  for (const x of Object.values(db.budgets)) if (theirs(x) && x.scope !== 'business') delete db.budgets[x.id];
+  for (const x of Object.values(db.vaultItems)) if (theirs(x)) delete db.vaultItems[x.id];
+  delete db.vaults[vaultKey(wsId, id)];
+  delete db.signatures[sigKey(wsId, id)];
+  delete db.ai[`${wsId}:${id}`];
+  for (const x of Object.values(db.sidekick)) if (theirs(x)) {
+    for (const f of x.files || []) fsp.rm(skPath(f), { force: true }).catch(() => {});
+    delete db.sidekick[x.id];
+  }
+  for (const x of Object.values(db.plans)) if (theirs(x)) delete db.plans[x.id];
+  // Passed on: the business keeps these.
+  for (const coll of ['signs', 'meetings', 'pins', 'trips', 'zones', 'money', 'bills', 'budgets']) for (const x of Object.values(db[coll])) if (theirs(x)) hand(x);
+  for (const x of Object.values(db.sends)) if (theirs(x) && x.status === 'sending') Object.assign(x, { status: 'paused', error: `${m.name} left the team, so their Outlook can’t send the rest.` });
+  for (const t of Object.values(db.tasks)) if (t.wsId === wsId && t.assigneeId === id) t.assigneeId = null;
+  for (const p of Object.values(db.projects)) {
+    if (p.wsId !== wsId) continue;
+    if (p.private && p.memberId === id && !(p.memberIds || []).some((x) => x !== id)) {
+      for (const x of Object.values(db.records)) if (x.projectId === p.id) delete db.records[x.id];
+      for (const h of Object.values(db.webhooks)) if (h.projectId === p.id) delete db.webhooks[h.id];
+      delete db.projects[p.id];
+      continue;
+    }
+    hand(p);
+    if (p.memberIds) p.memberIds = p.memberIds.filter((x) => x !== id);
+  }
+  ws.members = ws.members.filter((x) => x.id !== id);
+  save();
+  broadcast(wsId, { type: 'workspace' });
+}
+// Why someone can't leave yet: a team needs an owner, and a team of one is deleted instead.
+function cantLeave(ws, m) {
+  if (ws.members.length === 1) return `You’re the only person in ${ws.name}. Delete the team instead.`;
+  if (m.role === 'owner' && !ws.members.some((x) => x.role === 'owner' && x.id !== m.id)) return `You’re the only owner of ${ws.name}. Make someone else an owner first.`;
+  return null;
+}
+
 async function eraseDueTeams() {
   for (const ws of Object.values(db.workspaces)) if (ws.deleteAt && ws.deleteAt <= Date.now()) await eraseTeam(ws).catch((e) => console.error('Erasing a team failed:', e.message));
 }

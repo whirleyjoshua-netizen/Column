@@ -11761,7 +11761,35 @@
           h('button', { class: 'btn', onclick: () => { api('POST', '/logout').catch(() => {}).finally(signOutLocal); } }, 'Sign out')
         )
       ));
+
+      // Leaving, and deleting the account
+      const alone = ws.members.length === 1;
+      s.append(h('section', {}, h('h3', {}, 'Leave or delete'),
+        h('p', {}, alone ? `You’re the only person in ${ws.name}. To close it, delete the team from the Team tab.` : `Leaving ${ws.name} deletes your private things here: your Day, personal money, vault and private folders. What you shared stays with the team.`),
+        h('div', { class: 'btns' },
+          alone ? null : h('button', { class: 'btn danger', onclick: () => goodbyeSheet('leave') }, `Leave ${ws.name}…`),
+          h('button', { class: 'btn danger', onclick: () => goodbyeSheet('delete') }, 'Delete my account…'))));
     }
+  }
+
+  // Leave this team, or delete the account and leave every team on it.
+  function goodbyeSheet(kind) {
+    const pw = h('input', { type: 'password', autocomplete: 'current-password' });
+    const leave = kind === 'leave';
+    sheet(leave ? `Leave ${S.workspace.name}?` : 'Delete your account?', [
+      h('p', {}, leave
+        ? 'You’ll be signed out of this team. Your private things here are deleted; what you shared stays, under your name. Tasks given to you become unassigned.'
+        : S.me.email
+          ? `This deletes the account for ${S.me.email} and takes you out of every team on it. Your private things are deleted; what you shared stays with each team. A team where you’re the only person is deleted with it.`
+          : `Your login isn’t joined to an email, so this takes you out of ${S.workspace.name} only. Your private things are deleted; what you shared stays.`),
+      h('p', { class: 'day-hint' }, 'This can’t be undone. If you’re a team’s only owner, make someone else an owner first.'),
+      h('label', {}, 'Your password', pw),
+    ], async () => {
+      await api('POST', leave ? '/account/leave' : '/account/delete', { password: pw.value });
+      toast(leave ? `You left ${S.workspace.name}` : 'Your account was deleted');
+      signOutLocal();
+    }, leave ? 'Leave the team' : 'Delete my account');
+    $('#sheet .primary-btn').classList.add('danger-fill');
   }
 
   // ---------- boot ----------
