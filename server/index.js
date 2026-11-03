@@ -272,7 +272,7 @@ const publicMember = (m) => ({ id: m.id, name: m.name, role: m.role, roleIds: m.
 // A person in a team is a member; a member can belong to an account (users), which holds the email
 // and the password. Members from before accounts have their own password until they add an email.
 const mailer = createMailer({
-  token: process.env.POSTMARK_TOKEN, from: process.env.MAIL_FROM, appName: process.env.APP_NAME || 'Column',
+  token: process.env.RESEND_API_KEY, from: process.env.MAIL_FROM, appName: process.env.APP_NAME || 'Column',
   outbox: process.env.MAIL_OUTBOX === '1' ? path.join(DATA_DIR, 'outbox') : null,
 });
 const CODE_MINUTES = 30;

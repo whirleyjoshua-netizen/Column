@@ -1,5 +1,5 @@
-// Email Column sends itself: sign-up codes and password resets, through Postmark.
-// Postmark when POSTMARK_TOKEN and MAIL_FROM are set. MAIL_OUTBOX=1 writes each email as a file in
+// Email Column sends itself: sign-up codes and password resets, through Resend.
+// Resend when RESEND_API_KEY and MAIL_FROM are set. MAIL_OUTBOX=1 writes each email as a file in
 // DATA_DIR/outbox instead, for local testing, so nobody real is ever emailed. Otherwise email is off,
 // and the parts of Column that need it (codes, Forgot password) stay hidden.
 import fs from 'node:fs';
@@ -9,7 +9,7 @@ import crypto from 'node:crypto';
 const esc = (t) => String(t).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 
 export function createMailer({ token, from, outbox, appName }) {
-  const mode = token && from ? 'postmark' : outbox ? 'outbox' : 'off';
+  const mode = token && from ? 'resend' : outbox ? 'outbox' : 'off';
   async function send({ to, subject, text, html, tag }) {
     if (mode === 'off') throw new Error('Email isn’t set up on this server.');
     if (mode === 'outbox') {
@@ -18,15 +18,15 @@ export function createMailer({ token, from, outbox, appName }) {
       fs.writeFileSync(file, JSON.stringify({ to, subject, text, html, tag, at: Date.now() }));
       return { ok: true };
     }
-    const r = await fetch('https://api.postmarkapp.com/email', {
+    const r = await fetch('https://api.resend.com/emails', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'X-Postmark-Server-Token': token },
-      body: JSON.stringify({ From: from, To: to, Subject: subject, TextBody: text, HtmlBody: html, Tag: tag, MessageStream: 'outbound' }),
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ from, to: [to], subject, text, html, tags: tag ? [{ name: 'kind', value: tag }] : undefined }),
       signal: AbortSignal.timeout(15_000),
     });
     if (!r.ok) {
       const j = await r.json().catch(() => ({}));
-      throw new Error(`Postmark: ${j.Message || r.status}`);
+      throw new Error(`Resend: ${j.message || r.status}`);
     }
     return { ok: true };
   }
