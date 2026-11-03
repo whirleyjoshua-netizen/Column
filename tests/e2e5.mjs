@@ -1,0 +1,181 @@
+import * as FS from 'node:fs';
+import http from 'node:http';
+import crypto from 'node:crypto';
+import WebSocket from '../server/node_modules/ws/index.js';
+import { spawn } from 'node:child_process';
+const S = process.argv[2];
+const APP = 'http://127.0.0.1:4797/';
+const chrome = spawn('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', ['--headless=new', '--remote-debugging-port=9334', `--user-data-dir=${S}/dk/chrome2`, '--no-first-run', '--window-size=1200,900', 'about:blank'], { stdio: 'ignore' });
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+let fails = 0;
+const ok = (c, msg) => { console.log((c ? 'PASS ' : 'FAIL ') + msg); if (!c) fails++; };
+async function tab(url) {
+  let t;
+  for (let i = 0; i < 50 && !t; i++) { await sleep(200); try { t = await (await fetch('http://127.0.0.1:9334/json/new?' + url, { method: 'PUT' })).json(); } catch {} }
+  const ws = new WebSocket(t.webSocketDebuggerUrl);
+  await new Promise((r) => ws.on('open', r));
+  let n = 0; const wait = new Map();
+  const errors = [];
+  const chooser = [];
+  ws.on('message', (d) => { const m = JSON.parse(d); if (m.method === 'Page.fileChooserOpened') chooser.push(m.params); if (m.id && wait.has(m.id)) { wait.get(m.id)(m); wait.delete(m.id); } if (m.method === 'Runtime.exceptionThrown') errors.push(m.params.exceptionDetails.exception?.description || m.params.exceptionDetails.text); });
+  const cmd = (method, params = {}) => new Promise((r) => { const id = ++n; wait.set(id, r); ws.send(JSON.stringify({ id, method, params })); });
+  await cmd('Runtime.enable');
+  const ev = async (expr) => { const r = await cmd('Runtime.evaluate', { expression: expr, awaitPromise: true, returnByValue: true, userGesture: true }); if (r.result?.exceptionDetails) throw new Error(expr.slice(0, 60) + ': ' + r.result.exceptionDetails.exception?.description); return r.result?.result?.value; };
+  const KEYS = { Enter: [13, '\r'], Escape: [27], Tab: [9] };
+  const key = async (k) => { const [code, text] = KEYS[k]; await cmd('Input.dispatchKeyEvent', { type: text ? 'keyDown' : 'rawKeyDown', key: k, code: k, windowsVirtualKeyCode: code, ...(text ? { text } : {}) }); await cmd('Input.dispatchKeyEvent', { type: 'keyUp', key: k, code: k, windowsVirtualKeyCode: code }); await sleep(40); };
+  const type = async (t) => { await cmd('Input.insertText', { text: t }); await sleep(40); };
+  const until = async (expr, ms = 5000) => { const end = Date.now() + ms; while (Date.now() < end) { if (await ev(expr).catch(() => false)) return true; await sleep(100); } return false; };
+  const tap = async (expr) => {
+    const [x, y] = await ev(`(() => { const e = ${expr}; e.scrollIntoView({ block: 'center' }); const r = e.getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; })()`);
+    for (const type of ['mouseMoved', 'mousePressed', 'mouseReleased']) await cmd('Input.dispatchMouseEvent', { type, x, y, button: 'left', buttons: type === 'mousePressed' ? 1 : 0, clickCount: 1 });
+    await sleep(80);
+  };
+  const click = (sel) => ev(`(() => { const e = typeof ${JSON.stringify(sel)} === 'string' ? document.querySelector(${JSON.stringify(sel)}) : null; e.click(); return true; })()`);
+  return { ev, key, type, until, click, tap, cmd, errors, chooser, close: () => ws.close() };
+}
+
+const A = await tab(APP);
+await A.until(`!!document.querySelector('#loginLinks a')`);
+await A.ev(`(() => { document.querySelector('[data-mode=create]').click(); const f = document.querySelector('#loginForm'); f.workspace.value = 'pjui${Date.now()}'; f.name.value = 'Jo'; f.password.value = 'secret1'; f.device.value = 'A'; if (f.email && f.code !== undefined) { f.email.value = f.name.value.toLowerCase().replace(/[^a-z]/g, '') + f.workspace.value.replace(/[^a-z0-9]/gi, '') + '@t.test'; if (f.password.value.length < 8) f.password.value += 'pad1'; } f.requestSubmit(); })()`);
+ok(await A.until(`!document.querySelector('#app').classList.contains('hidden')`), 'signed in');
+await sleep(1200);
+const token = await A.ev(`JSON.parse(localStorage.getItem('column.token'))`);
+const api = async (m, p, body) => (await fetch(APP + 'api' + p, { method: m, headers: { 'content-type': 'application/json', authorization: 'Bearer ' + token }, body: body ? JSON.stringify(body) : undefined })).json();
+await A.tap(`document.querySelector('#toolsBtn')`); await A.tap(`[...document.querySelectorAll('#menu button')].find((b) => b.textContent === 'Projects')`);
+ok(await A.until(`!!document.querySelector('#projects .pj-empty')`), 'Projects tab, empty to start');
+await A.tap(`document.querySelector('#projects .pj-empty .btn')`);
+await A.ev(`document.querySelector('#sheet input').value = 'Sales'`);
+await A.tap(`document.querySelector('#sheet .primary-btn')`);
+ok(await A.until(`document.querySelector('#projects .pj-name')?.textContent === 'Sales'`), 'CRM project made and opened');
+ok(await A.ev(`[...document.querySelectorAll('#projects .pj-types button')].map((b) => b.textContent.replace(/\\d+$/, '').trim()).join('|')`) === '👤 Contacts|💰 Deals|🏢 Companies', 'it opens on Contacts, with Deals and Companies');
+// a contact, through its panel
+await A.tap(`[...document.querySelectorAll('#projects .pj-bar .btn')].find((b) => b.textContent.startsWith('+ New contact'))`);
+ok(await A.until(`document.activeElement === document.querySelector('#projects .pj-panel .pj-title')`), 'New contact opens its panel, ready to name');
+await A.type('Maria Lopez');
+await A.key('Enter');
+const field = (name) => `[...document.querySelectorAll('#projects .pj-panel .pj-frow')].find((r) => r.querySelector('.pj-flabel').textContent.endsWith(${JSON.stringify(name)})).querySelector('.pj-cell')`;
+await A.tap(field('Email'));
+await A.until(`document.activeElement?.classList.contains('pj-input')`);
+await A.type('Maria@DesertAuto.com'); await A.key('Enter');
+await A.tap(field('Stage'));
+await A.tap(`[...document.querySelectorAll('#menu button')].find((b) => b.textContent === 'Qualified')`);
+ok(await A.until(`document.querySelector('#projects .pj-table')?.textContent.includes('maria@desertauto.com') && document.querySelector('#projects .pj-table').textContent.includes('Qualified') && document.querySelector('#projects .pj-table').textContent.includes('Maria Lopez')`), 'the table shows the new contact, email cleaned, stage set');
+// deals board
+await A.tap(`[...document.querySelectorAll('#projects .pj-types button')].find((b) => b.textContent.includes('Deals'))`);
+ok(await A.until(`document.querySelectorAll('#projects .pj-col').length === 6`), 'Deals open as a pipeline board with 6 stages');
+await A.tap(`[...document.querySelectorAll('#projects .pj-col')].find((c) => c.querySelector('.pj-col-h b').textContent === 'Proposal').querySelector('.pj-newrow')`);
+await A.until(`document.activeElement === document.querySelector('#projects .pj-panel .pj-title')`);
+await A.type('Fleet tint'); await A.key('Enter');
+await A.tap(field('Value'));
+await A.until(`document.activeElement?.classList.contains('pj-input')`);
+await A.type('12,500'); await A.key('Enter');
+ok(await A.until(`[...document.querySelectorAll('#projects .pj-col')].find((c) => c.querySelector('.pj-col-h b').textContent === 'Proposal')?.querySelector('.pj-col-sum')?.textContent === '$12,500'`), 'the card lands in Proposal and the column totals $12,500');
+// link the deal to the contact
+await A.tap(field('Contact'));
+await A.tap(`[...document.querySelectorAll('#menu button')].find((b) => b.textContent === 'Maria Lopez')`);
+ok(await A.until(`[...document.querySelectorAll('#projects .pj-panel .pj-link')].some((b) => b.textContent === 'Maria Lopez')`), 'deal linked to Maria');
+// drag the card to Won
+await A.ev(`document.querySelector('#projects .pj-panel [aria-label="Close"]').click()`);
+await A.until(`!document.querySelector('#projects .pj-panel')`);
+const pos = async (expr) => A.ev(`(() => { const r = (${expr}).getBoundingClientRect(); return [r.left + r.width / 2, r.top + Math.min(r.height / 2, 20)]; })()`);
+const from = await pos(`document.querySelector('#projects .pj-card-r')`);
+const to = await pos(`[...document.querySelectorAll('#projects .pj-col')].find((c) => c.querySelector('.pj-col-h b').textContent === 'Won')`);
+const mouse = (type, [x, y], buttons = 1) => A.cmd('Input.dispatchMouseEvent', { type, x, y, button: 'left', buttons, clickCount: 1 });
+// Won is off to the right: hold the card at the edge until the board scrolls to it, then let go over it.
+const edge = [1170, to[1]];
+await mouse('mouseMoved', from, 0); await mouse('mousePressed', from); await mouse('mouseMoved', [from[0] + 20, from[1] + 5]); await mouse('mouseMoved', edge);
+await A.until(`(() => { const c = [...document.querySelectorAll('#projects .pj-col')].find((x) => x.querySelector('.pj-col-h b').textContent === 'Won'); const r = c.getBoundingClientRect(); return r.right < 1100; })()`, 4000);
+const won = await pos(`[...document.querySelectorAll('#projects .pj-col')].find((c) => c.querySelector('.pj-col-h b').textContent === 'Won')`);
+await mouse('mouseMoved', won); await mouse('mouseReleased', won, 0);
+ok(await A.until(`[...document.querySelectorAll('#projects .pj-col')].find((c) => c.querySelector('.pj-col-h b').textContent === 'Won')?.textContent.includes('Fleet tint')`), 'dragging the card to Won moves it');
+await sleep(500);
+const st = await api('GET', '/state');
+const proj = st.projects.find((p) => p.name === 'Sales');
+const T = Object.fromEntries(proj.types.map((t) => [t.key, t]));
+const recs = await api('GET', `/projects/${proj.id}/records`);
+const deal = recs.find((r) => r.typeId === T.deals.id);
+ok(T.deals.fields.find((f) => f.key === 'stage').choices.find((c) => c.id === deal.values[T.deals.fields.find((f) => f.key === 'stage').id])?.label === 'Won' && deal.values[T.deals.fields.find((f) => f.key === 'value').id] === 1250000, 'the server has the deal as Won, $12,500');
+// back on the contact: the deal links back
+await A.tap(`[...document.querySelectorAll('#projects .pj-types button')].find((b) => b.textContent.includes('Contacts'))`);
+await A.tap(`[...document.querySelectorAll('#projects .pj-open')].find((b) => b.textContent === 'Maria Lopez')`);
+ok(await A.until(`[...document.querySelectorAll('#projects .pj-back h4')].some((h) => h.textContent === 'Deals · Contact') && document.querySelector('#projects .pj-back').textContent.includes('$12,500')`), 'the contact shows the deal linked to her, with its value');
+await A.ev(`document.querySelector('#projects .pj-panel [aria-label="Close"]').click()`);
+// add a field from the table
+await A.tap(`document.querySelector('#projects .pj-addcol .pj-th')`);
+await A.ev(`(() => { const s = document.querySelector('#sheet'); s.querySelector('input').value = 'Priority'; const sel = s.querySelector('select'); sel.value = 'select'; sel.dispatchEvent(new Event('change')); s.querySelector('textarea').value = 'High\\nLow'; })()`);
+await A.tap(`document.querySelector('#sheet .primary-btn')`);
+ok(await A.until(`[...document.querySelectorAll('#projects .pj-th')].some((b) => b.textContent.includes('Priority'))`), 'a new Priority column');
+// import a spreadsheet: one new, one matching Maria by email
+await A.cmd('Page.enable');
+await A.cmd('Page.setInterceptFileChooserDialog', { enabled: true });
+await A.tap(`document.querySelector('#projects [aria-label="Project options"]')`);
+await A.ev(`[...document.querySelectorAll('#menu button')].find((b) => b.textContent.startsWith('Import contacts')).click()`);
+await A.until(`false`, 800);
+const fc = A.chooser.at(-1);
+ok(!!fc, 'the import asks for a file');
+await A.cmd('DOM.setFileInputFiles', { files: [new URL('fixtures/contacts.csv', import.meta.url).pathname], backendNodeId: fc.backendNodeId });
+ok(await A.until(`document.querySelector('#sheet h2')?.textContent.startsWith('Import 2 rows into Contacts')`), 'it reads the file');
+ok(await A.ev(`[...document.querySelectorAll('#sheet .pj-map select')].map((s) => s.selectedOptions[0].textContent).join('|')`) === 'Name|Email|Stage|City', 'columns matched to fields by name');
+await A.tap(`document.querySelector('#sheet .primary-btn')`);
+ok(await A.until(`[...document.querySelectorAll('#toasts *')].some((t) => t.textContent.includes('1 added, 1 updated'))`), 'import: 1 added, 1 updated (Maria by email)');
+ok(await A.until(`document.querySelector('#projects .pj-table')?.textContent.includes('Luis Vega') && document.querySelector('#projects .pj-table').textContent.includes('Customer')`), 'the table shows Luis, and Maria now a Customer');
+// export
+await A.cmd('Browser.setDownloadBehavior', { behavior: 'allow', downloadPath: process.argv[2] + '/dk/dl' }).catch(() => {});
+await A.cmd('Page.setDownloadBehavior', { behavior: 'allow', downloadPath: process.argv[2] + '/dk/dl' }).catch(() => {});
+await A.tap(`document.querySelector('#projects [aria-label="Project options"]')`);
+await A.ev(`[...document.querySelectorAll('#menu button')].find((b) => b.textContent.startsWith('Export contacts')).click()`);
+await A.until(`false`, 1500);
+const csv = FS.readdirSync(process.argv[2] + '/dk/dl').find((f) => f.endsWith('.csv'));
+const csvText = csv ? FS.readFileSync(process.argv[2] + '/dk/dl/' + csv, 'utf8') : '';
+ok(csv === 'Sales - Contacts.csv' && csvText.includes('Luis Vega') && csvText.includes('maria@desertauto.com'), 'export downloads a CSV of the contacts');
+// a second tab sees changes live
+const B = await tab(APP);
+await B.until(`!document.querySelector('#app').classList.contains('hidden')`);
+await sleep(800);
+await B.tap(`document.querySelector('#toolsBtn')`); await B.tap(`[...document.querySelectorAll('#menu button')].find((b) => b.textContent === 'Projects')`);
+await B.tap(`[...document.querySelectorAll('#projects .pj-card')].find((c) => c.textContent.includes('Sales'))`);
+await B.until(`document.querySelector('#projects .pj-table')?.textContent.includes('Luis Vega')`);
+await A.tap(`[...document.querySelectorAll('#projects .pj-bar .btn')].find((b) => b.textContent.startsWith('+ New contact'))`);
+await A.until(`document.activeElement === document.querySelector('#projects .pj-panel .pj-title')`);
+await A.type('Ben Ortiz'); await A.key('Enter');
+ok(await B.until(`document.querySelector('#projects .pj-table')?.textContent.includes('Ben Ortiz')`, 4000), 'the other tab shows the new contact live');
+B.close();
+// Settings: make an API key, use it
+await A.ev(`document.querySelector('#projects .pj-panel [aria-label="Close"]')?.click()`);
+await A.tap(`document.querySelector('#projects [aria-label="Project options"]')`);
+await A.ev(`[...document.querySelectorAll('#menu button')].find((b) => b.textContent.startsWith('Connect other apps')).click()`);
+ok(await A.until(`!!document.querySelector('.int-sec h4')`), 'Settings opens at Connect other apps');
+await A.tap(`[...document.querySelectorAll('.int-sec .btn')].find((b) => b.textContent === '+ New API key')`);
+await A.ev(`document.querySelector('#sheet input').value = 'Zapier'`);
+await A.tap(`document.querySelector('#sheet .primary-btn')`);
+ok(await A.until(`document.querySelector('#sheet .int-secret code')?.textContent.startsWith('col_')`), 'the new key is shown once');
+const key = await A.ev(`document.querySelector('#sheet .int-secret code').textContent`);
+await A.ev(`document.querySelector('#sheet .primary-btn').click()`);
+ok(await A.until(`[...document.querySelectorAll('.int-sec .srow')].some((r) => r.textContent.includes('Zapier') && r.textContent.includes('never used'))`), 'and listed without the key');
+// a webhook to a local server
+const got = [];
+const hookSrv = http.createServer((q, s2) => { let b2 = ''; q.on('data', (c) => (b2 += c)); q.on('end', () => { got.push({ h: q.headers, b: b2 }); s2.end('ok'); }); }).listen(4789);
+await A.tap(`[...document.querySelectorAll('.int-sec .btn')].find((b) => b.textContent === '+ New webhook')`);
+await A.ev(`document.querySelector('#sheet input[type=url]').value = 'http://127.0.0.1:4789/hook'`);
+await A.tap(`document.querySelector('#sheet .primary-btn')`);
+ok(await A.until(`document.querySelector('#sheet .int-secret code')?.textContent.startsWith('whsec_')`), 'the webhook secret is shown once');
+const secret = await A.ev(`document.querySelector('#sheet .int-secret code').textContent`);
+await A.ev(`document.querySelector('#sheet .primary-btn').click()`);
+await A.ev(`document.querySelector('#settings')?.classList.add('hidden')`);
+const V = async (m, p, body) => { const r = await fetch(APP + 'api/v1' + p, { method: m, headers: { 'content-type': 'application/json', authorization: 'Bearer ' + key }, body: body ? JSON.stringify(body) : undefined }); return { status: r.status, body: await r.json() }; };
+const made = await V('PUT', `/projects/${proj.id}/contacts/records/external/crm-42`, { fields: { name: 'Ana Ruiz', email: 'ana@ruiz.com', stage: 'Lead', owner: 'Jo' } });
+ok(made.status === 201, 'the key adds a contact through the API');
+await A.ev(`document.querySelector('#settings').classList.add('hidden')`);
+await A.tap(`document.querySelector('#toolsBtn')`); await A.tap(`[...document.querySelectorAll('#menu button')].find((b) => b.textContent === 'Projects')`);
+ok(await A.until(`document.querySelector('#projects .pj-table')?.textContent.includes('Ana Ruiz')`, 4000), 'reopening Projects, the contact the API added is there');
+await sleep(500);
+const ev = got.find((g) => JSON.parse(g.b).data?.fields?.name === 'Ana Ruiz');
+const [tP, vP] = (ev?.h['x-column-signature'] || ',').split(',');
+ok(ev && JSON.parse(ev.b).type === 'record.created' && vP.slice(3) === crypto.createHmac('sha256', secret).update(`${tP.slice(2)}.${ev.b}`).digest('hex'), 'the webhook got a signed record.created');
+hookSrv.close();
+const docs = await (await fetch(APP + 'developers')).text();
+ok(docs.includes('<h1>Column API</h1>') && docs.includes('X-Column-Signature'), 'the developer docs page is served');
+ok(!A.errors.length, 'no page errors' + (A.errors.length ? ': ' + A.errors.join(' / ') : ''));
+A.close(); chrome.kill();
+console.log(fails ? fails + ' failed' : 'all passed');
+process.exit(fails ? 1 : 0);

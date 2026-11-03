@@ -1,0 +1,110 @@
+// Invites by email, and sign-ins: expiry, the list, signing out others, changing email.
+import fs from 'node:fs';
+const S = process.argv[2];
+const B = 'http://127.0.0.1:4797/api', OFF = 'http://127.0.0.1:4795/api';
+const OUTBOX = S + '/dk/data/outbox';
+let fails = 0;
+const ok = (c, msg) => { console.log((c ? 'PASS ' : 'FAIL ') + msg); if (!c) fails++; };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const call = (base = B) => (tok) => async (m, p, body) => { const r = await fetch(base + p, { method: m, headers: { 'content-type': 'application/json', ...(tok ? { authorization: 'Bearer ' + tok } : {}) }, body: body ? JSON.stringify(body) : undefined }); return { status: r.status, body: await r.json().catch(() => null) }; };
+const api = call();
+const mails = () => fs.readdirSync(OUTBOX).sort().map((f) => JSON.parse(fs.readFileSync(OUTBOX + '/' + f, 'utf8')));
+const lastTo = (to) => mails().filter((x) => x.to === to).at(-1);
+const t = Date.now();
+const own = `own${t}@shop.test`, pat = `pat${t}@shop.test`, quinn = `quinn${t}@shop.test`;
+
+let r = await api()('POST', '/auth', { mode: 'create', workspace: 'inv ' + t, name: 'Olive', email: own, password: 'olivepass1', device: 'Mac', deviceId: 'o1' });
+const oTok = r.body.token;
+await sleep(200);
+const oCode = lastTo(own).text.match(/\b(\d{6})\b/)[1];
+await api(oTok)('POST', '/account/verify', { code: oCode });
+
+// 1. Invites
+r = await api(oTok)('POST', '/invites', { emails: `${pat}, not-an-email` });
+ok(r.status === 400 && /doesn’t look like/.test(r.body.error), 'a bad address is caught before anything is sent');
+r = await api(oTok)('POST', '/invites', { emails: `${pat}  ${quinn}; ${own}` });
+ok(r.status === 200 && r.body.invites.length === 3, 'an owner invites several people at once');
+const pInv = r.body.invites.find((x) => x.email === pat);
+ok(pInv.sent && /\/join\/[\w-]+$/.test(pInv.link), 'each gets a join link, emailed');
+ok(r.body.invites.find((x) => x.email === own)?.already, 'someone already on the team is skipped');
+await sleep(300);
+const pm = lastTo(pat);
+ok(pm && /invited you to inv/.test(pm.subject) && pm.text.includes(pInv.link), 'the invite email has the link');
+ok(r.body.pending.length === 2, 'two invites are waiting');
+ok(!JSON.stringify(fs.readFileSync(S + '/dk/data/db.json', 'utf8')).includes(pInv.link.split('/join/')[1]), 'Column keeps no copy of the link itself');
+const pTok = pInv.link.split('/join/')[1];
+r = await api()('GET', '/public/invite/' + pTok);
+ok(r.status === 200 && r.body.team === 'inv ' + t && r.body.by === 'Olive' && r.body.email === pat, 'the link shows the team, who asked and the email');
+const html = await (await fetch('http://127.0.0.1:4797/join/' + pTok)).text();
+ok(html.includes('id="loginForm"'), 'opening the link opens Column');
+r = await api()('POST', '/auth', { mode: 'invite', invite: pTok, name: 'Pat', email: pat, password: 'patpassword', device: 'Phone', deviceId: 'p1' });
+ok(r.status === 200 && r.body.workspace.id, 'Pat joins with the link: no team name, no code');
+const patTok = r.body.token;
+let st = (await api(patTok)('GET', '/state')).body;
+ok(st.me.email === pat && st.me.emailVerified, 'joining from the emailed link confirms Pat’s email');
+r = await api()('POST', '/auth', { mode: 'invite', invite: pTok, name: 'Pat Two', email: 'x' + pat, password: 'patpassword', device: 'Phone', deviceId: 'p2' });
+ok(r.status === 404, 'the link works only once');
+r = await api(patTok)('POST', '/invites', { emails: 'z@shop.test' });
+ok(r.status === 403, 'members can’t invite');
+const qId = (await api(oTok)('GET', '/invites')).body.find((x) => x.email === quinn).id;
+r = await api(oTok)('POST', `/invites/${qId}/resend`);
+const qLink2 = r.body.invite.link;
+ok(r.status === 200 && r.body.pending.length === 1, 'sending again makes a new link…');
+r = await api(oTok)('DELETE', '/invites/' + r.body.invite.id);
+ok(r.body.pending.length === 0, 'an invite can be cancelled');
+r = await api()('GET', '/public/invite/' + qLink2.split('/join/')[1]);
+ok(r.status === 404, '…and a cancelled link stops working');
+// Joining by invite with an existing account
+r = await api()('POST', '/auth', { mode: 'create', workspace: 'inv2 ' + t, name: 'Olive', email: `o2${t}@shop.test`, password: 'olive2pass', device: 'Mac', deviceId: 'o2' });
+const o2 = r.body.token;
+const inv2 = (await api(o2)('POST', '/invites', { emails: pat })).body.invites[0];
+r = await api()('POST', '/auth', { mode: 'invite', invite: inv2.link.split('/join/')[1], name: 'Pat', email: pat, password: 'wrongwrong', device: 'Phone', deviceId: 'p1' });
+ok(r.status === 401, 'joining with an existing account’s email needs its password');
+r = await api()('POST', '/auth', { mode: 'invite', invite: inv2.link.split('/join/')[1], name: 'Pat', email: pat, password: 'patpassword', device: 'Phone', deviceId: 'p1' });
+ok(r.status === 200, 'with it, Pat’s account joins the second team');
+r = await api()('POST', '/auth', { mode: 'email', email: pat, password: 'patpassword', device: 'Laptop', deviceId: 'p3' });
+ok(r.body.accounts.length === 2, 'and her email signs her in to both');
+const patLaptop = r.body.accounts.map((x) => x.token);
+
+// 2. Sign-ins
+r = await api(patTok)('GET', '/account/sessions');
+ok(r.status === 200 && r.body.length >= 4 && r.body.some((x) => x.here) && r.body.every((x) => x.device && x.team && !x.token), 'Settings lists where she’s signed in, for every team, without the sign-in keys');
+const laptop = r.body.find((x) => x.device === 'Laptop');
+r = await api(patTok)('DELETE', '/account/sessions/' + laptop.id);
+ok(r.status === 200, 'she signs one device out');
+ok((await api(patLaptop.find(Boolean))('GET', '/state')).status === 401 || (await api(patLaptop[1])('GET', '/state')).status === 401, 'that device is signed out');
+r = await api()('POST', '/auth', { mode: 'email', email: pat, password: 'patpassword', device: 'Laptop', deviceId: 'p3' });
+const lap2 = r.body.accounts.map((x) => x.token);
+r = await api(patTok)('POST', '/account/signout-others');
+ok(r.status === 200, 'Sign out of all other devices');
+ok((await api(lap2[0])('GET', '/state')).status === 401 && (await api(lap2[1])('GET', '/state')).status === 401, 'the laptop is signed out of both teams');
+const phoneTokens = [patTok];
+ok((await api(patTok)('GET', '/state')).status === 200, 'this device stays signed in');
+r = await api(o2)('GET', '/account/sessions');
+ok(r.body.every((x) => x.team === 'inv2 ' + t || x.team), 'someone else only sees their own');
+// Password change keeps this device
+r = await api(patTok)('POST', '/members/me/password', { current: 'patpassword', next: 'short' });
+ok(r.status === 400, 'a new password needs 8 characters');
+r = await api(patTok)('POST', '/members/me/password', { current: 'patpassword', next: 'patnewpass1' });
+ok(r.status === 200 && (await api(patTok)('GET', '/state')).status === 200, 'changing the password keeps this device signed in');
+
+// 3. Changing email
+r = await api(patTok)('POST', '/account/email/change', { email: quinn, password: 'nope' });
+ok(r.status === 403, 'changing email needs the password');
+r = await api(patTok)('POST', '/account/email/change', { email: own, password: 'patnewpass1' });
+ok(r.status === 409, 'it can’t take someone else’s email');
+r = await api(patTok)('POST', '/account/email/change', { email: `pat.new${t}@shop.test`, password: 'patnewpass1' });
+ok(r.status === 200 && r.body.pendingEmail === `pat.new${t}@shop.test` && r.body.email === pat, 'a new email waits for its code; the old one stays until then');
+await sleep(300);
+const nc = lastTo(`pat.new${t}@shop.test`).text.match(/\b(\d{6})\b/)[1];
+r = await api(patTok)('POST', '/account/verify', { code: nc });
+ok(r.status === 200 && r.body.email === `pat.new${t}@shop.test` && !r.body.pendingEmail && r.body.emailVerified, 'the code switches it over');
+await sleep(300);
+ok(/was changed/.test(lastTo(pat)?.subject || ''), 'the old address is told');
+r = await api()('POST', '/auth', { mode: 'email', email: `pat.new${t}@shop.test`, password: 'patnewpass1', device: 'Mac', deviceId: 'p9' });
+ok(r.status === 200, 'she signs in with the new email');
+r = await call(OFF)()('POST', '/auth', { mode: 'create', workspace: 'chg off ' + t, name: 'Ro', email: `ro${t}@shop.test`, password: 'ropassword', device: 'Mac', deviceId: 'r1' });
+r = await call(OFF)(r.body.token)('POST', '/account/email/change', { email: `ro2${t}@shop.test`, password: 'ropassword' });
+ok(r.status === 200 && r.body.email === `ro2${t}@shop.test`, 'without email set up, the change is straight away');
+console.log(fails ? fails + ' failed' : 'all passed');
+process.exit(fails ? 1 : 0);

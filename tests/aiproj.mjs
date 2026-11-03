@@ -1,0 +1,54 @@
+import fs from 'node:fs';
+const B = 'http://127.0.0.1:4797';
+const ok = (c, msg) => { console.log((c ? 'PASS ' : 'FAIL ') + msg); if (!c) process.exitCode = 1; };
+const req = (tok) => async (m, p, body, raw) => { const r = await fetch(B + p, { method: m, headers: { 'content-type': 'application/json', ...(tok ? { authorization: 'Bearer ' + tok } : {}) }, body: body ? JSON.stringify(body) : undefined }); const j = await r.json().catch(() => null); if (raw) return { status: r.status, body: j }; if (!r.ok) throw new Error(p + ' ' + r.status + ' ' + JSON.stringify(j)); return j; };
+const a = await (await fetch(B + '/api/auth', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ workspace: 'ai' + Date.now(), password: 'secret1', name: 'Jo', mode: 'create', device: 'x', deviceId: 'd1' }) })).json();
+const A = req(a.token);
+await A('PUT', '/api/ai/keys/anthropic', { key: 'sk-test-1234567890' });
+// templates
+const bq = await A('POST', '/api/projects', { template: 'bids', name: 'Estimating' });
+ok(bq.types.map((t) => t.key).join() === 'quotes,bids,jobs,clients,price_list', 'Bids & Quotes now includes Jobs');
+const J = bq.types.find((t) => t.key === 'jobs');
+ok(J.fields.find((f) => f.key === 'client').target === bq.types.find((t) => t.key === 'clients').id && J.fields.find((f) => f.key === 'quote').target === bq.types[0].id && J.views[0].kind === 'board', 'jobs link to clients and quotes, on a board by status');
+const jp = await A('POST', '/api/projects', { template: 'jobs', name: 'Installs' });
+ok(jp.types.map((t) => t.key).join() === 'jobs,clients' && !jp.types[0].fields.some((f) => f.key === 'quote'), 'Jobs & Installs: jobs and clients (no quotes list, so no quote link)');
+const crm = await A('POST', '/api/projects', { template: 'crm', name: 'Sales' });
+let s1 = await A('POST', `/api/projects/${crm.id}/schema`, { op: 'addTypeFrom', key: 'price_list' });
+ok(s1.made.key === 'price_list' && s1.made.fields.some((f) => f.key === 'price'), 'a ready-made Price list can be added to a CRM');
+const dup = await A('POST', `/api/projects/${crm.id}/schema`, { op: 'addTypeFrom', key: 'price_list' }, true);
+ok(dup.status === 400, 'but not twice');
+// save as a template and start from it
+const T = Object.fromEntries(bq.types.map((t) => [t.key, t]));
+const F = (t, k) => T[t].fields.find((f) => f.key === k);
+await A('POST', `/api/projects/${bq.id}/records`, { typeId: T.quotes.id, values: { title: 'One' } });
+const saved = await A('POST', `/api/projects/${bq.id}/template`, { name: 'Our shop setup' });
+const list = await A('GET', '/api/project-templates');
+ok(list.length === 1 && list[0].name === 'Our shop setup' && list[0].lists.includes('Jobs') && !list[0].types, 'saved as a template (its lists, not its records)');
+const fromOwn = await A('POST', '/api/projects', { template: 'custom:' + saved.id, name: 'Branch 2' });
+const T2 = Object.fromEntries(fromOwn.types.map((t) => [t.key, t]));
+ok(fromOwn.types.length === 5 && fromOwn.types.every((t) => !bq.types.some((o) => o.id === t.id)) && T2.jobs.fields.find((f) => f.key === 'quote').target === T2.quotes.id, 'a project from it has the same lists, new ids, links pointing within it');
+const q2 = await A('POST', `/api/projects/${fromOwn.id}/records`, { typeId: T2.quotes.id, values: { title: 'First here' } });
+ok(q2.values[T2.quotes.fields.find((f) => f.key === 'number').id] === 'Q-1001' && (await A('GET', `/api/projects/${fromOwn.id}/records`)).length === 1, 'numbers start over and no records came along');
+ok(T2.quotes.views[0].groupBy === T2.quotes.fields.find((f) => f.key === 'status').id, 'its board still groups by status');
+await A('DELETE', `/api/project-templates/${saved.id}`);
+ok((await A('GET', '/api/project-templates')).length === 0, 'a template can be deleted');
+// next step
+const C = Object.fromEntries(crm.types.map((t) => [t.key, t]));
+const cf = (t, k) => C[t].fields.find((f) => f.key === k);
+const ben = await A('POST', `/api/projects/${crm.id}/records`, { typeId: C.contacts.id, values: { name: 'Ben Ortiz', stage: cf('contacts', 'stage').choices.find((c) => c.label === 'Qualified').id } });
+await A('POST', `/api/records/${ben.id}/log`, { kind: 'call', outcome: 'Interested', note: 'Wants pricing for 14 vans' });
+await A('POST', `/api/projects/${crm.id}/records`, { typeId: C.deals.id, values: { name: 'Fleet tint', value: 18400, contact: ben.id } });
+const ns = await A('POST', '/api/ai/record', { recordId: ben.id, today: '2026-10-30' });
+const sent = JSON.parse(fs.readFileSync(process.argv[2] + '/dk/ai.log', 'utf8').trim().split('\n').at(-1)).user;
+ok(sent.includes('Ben Ortiz') && sent.includes('Wants pricing for 14 vans') && sent.includes('Fleet tint') && sent.includes('Stage: Lead, Contacted'), 'the AI gets the record, its timeline, linked deals and the stage options');
+ok(ns.read.includes('14 vans') && ns.steps.length === 3, 'a read and three steps (an unknown stage dropped)');
+ok(ns.steps[1].kind === 'stage' && ns.steps[1].to === 'Customer' && ns.steps[1].choiceId, 'a stage step points at the real option');
+// estimate from plans
+const P = Object.fromEntries(bq.types.map((t) => [t.key, t]));
+const film = await A('POST', `/api/projects/${bq.id}/records`, { typeId: P.price_list.id, values: { item: 'Ceramic film install', unit: 'window', price: 185, cost: 70 } });
+const pdf = await (await fetch(B + '/api/upload?name=plans.pdf&type=application/pdf', { method: 'PUT', headers: { authorization: 'Bearer ' + a.token }, body: Buffer.from('%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF') })).json();
+const bid = await A('POST', `/api/projects/${bq.id}/records`, { typeId: P.bids.id, values: { job: 'Library glazing', scope: 'Tint all office windows', plans: [pdf.id] } });
+const est = await A('POST', '/api/ai/estimate', { recordId: bid.id, ask: 'south side only' });
+ok(est.rows[0].from === film.id && est.rows[0].price === 18500 && est.rows[0].cost === 7000, 'a price-list line takes the list’s $185 price and cost, not the AI’s $999');
+ok(est.rows[1].price === 8500 && est.rows[1].cost === 6000 && !est.rows[1].from, 'a line not on the list keeps the AI’s price');
+ok(est.assumptions.includes('pdf seen: true') && est.questions[0].includes('skylights') && est.read[0] === 'plans.pdf', 'the plans PDF went to the AI; assumptions and questions come back');
