@@ -546,6 +546,8 @@
     } else if (msg.type === 'resync') {
       // Who can see a private campaign or feed changed.
       loadState().catch(() => {});
+    } else if (msg.type === 'export') {
+      document.dispatchEvent(new CustomEvent('column:export'));
     } else if (msg.type === 'calendars') {
       if (!$('#settings').classList.contains('hidden')) loadCalendars();
     } else if (msg.type === 'meeting' || msg.type === 'meeting:remove') {
@@ -889,6 +891,29 @@
     $('#tabs').before(bar);
   }
 
+  // ---------- exports: the team (owners) or your own things, as a .zip made in the background ----------
+  function exportSection(kind) {
+    const team = kind === 'team';
+    const sec = h('section', { class: 'export-sec' }, h('h3', {}, team ? 'Export the team' : 'Export your things'));
+    const list = h('div', {});
+    const draw = (xs) => list.replaceChildren(...xs.filter((x) => x.kind === kind).slice(0, 3).map((x) => h('div', { class: 'srow' },
+      h('span', {}, x.status === 'ready' ? `Ready · ${fmtSize(x.size)}` : x.status === 'building' ? 'Being made…' : 'Didn’t work',
+        h('small', {}, x.status === 'ready' ? `made ${ago(x.readyAt)} · kept until ${new Date(x.expiresAt).toLocaleDateString()}` : x.error || `started ${ago(x.createdAt)}`)),
+      h('span', { class: 'btns' },
+        x.status === 'ready' ? h('a', { class: 'btn small', href: `/api/exports/${x.id}/file?t=${encodeURIComponent(S.token)}`, download: '' }, 'Download') : null,
+        h('button', { class: 'btn small danger', onclick: () => api('DELETE', '/exports/' + x.id).then((r) => draw(r.exports), (e) => toast(e.message)) }, x.status === 'building' ? 'Cancel' : 'Delete')))));
+    const load = () => (sec.isConnected || !sec.parentNode ? api('GET', '/exports').then((r) => draw(r.exports), () => {}) : null);
+    const go = h('button', { class: 'btn', onclick: () => api('POST', '/exports', { kind }).then((r) => { draw(r.exports); toast(S.me.email ? 'Making your export. We’ll email you when it’s ready.' : 'Making your export. It shows here when it’s ready.'); }, (e) => toast(e.message)) }, team ? 'Export team' : 'Export my things');
+    sec.append(h('p', {}, team
+      ? 'Everything in the team as a .zip: docs as Markdown, tasks, campaigns, calls and money as spreadsheets, every uploaded file, and the full data. Other people’s private things aren’t included.'
+      : 'Your own things in this team as a .zip: your docs and files, your Day, your personal money, and the full data.'),
+    h('div', { class: 'btns' }, go), list);
+    const onMsg = () => (sec.isConnected ? load() : document.removeEventListener('column:export', onMsg));
+    document.addEventListener('column:export', onMsg);
+    load();
+    return sec;
+  }
+
   // ---------- deleting the team ----------
   // While a team waits to be erased, its owners see only this: when, who asked, and a way to cancel.
   function drawDeleteLock() {
@@ -901,6 +926,7 @@
       h('h2', {}, `${S.workspace.name} is being deleted`),
       h('p', {}, `${S.workspace.deleteBy || 'An owner'} asked to delete this team. It’s locked: only owners can sign in, and links, syncing and sending have stopped.`),
       h('p', {}, h('b', {}, `Everything in it will be erased for good on ${day}.`)),
+      exportSection('team'),
       h('div', { class: 'btns' }, h('button', { class: 'btn', onclick: () => { api('POST', '/logout').catch(() => {}).finally(signOutLocal); } }, 'Sign out'), h('span', { style: 'flex:1' }), keep))));
   }
   function deleteTeamSheet() {
@@ -909,6 +935,7 @@
     sheet(`Delete ${S.workspace.name}?`, [
       h('p', {}, 'This deletes the whole team: every doc, task, campaign, list, file and setting, for everyone on it.'),
       h('p', { class: 'day-hint' }, 'The team locks straight away and everyone but owners is signed out. It’s erased for good after 7 days; until then any owner can cancel. Everyone with an email on the team is told.'),
+      h('p', { class: 'day-hint' }, 'Want a copy first? Close this and use Export team, just above, before you delete.'),
       h('label', {}, `Type the team’s name, ${S.workspace.name}, to confirm`, name),
       h('label', {}, 'Your password', pw),
     ], async () => {
@@ -11688,6 +11715,7 @@
         s.append(h('section', {}, h('h3', {}, 'Time zone'), h('p', {}, 'Where your team works. Column uses it for “today” when it dates things by itself, like follow-ups and quotes.'), tz));
       }
       s.append(brandSection());
+      if (isOwner()) s.append(exportSection('team'));
       if (isOwner()) s.append(h('section', {}, h('h3', {}, 'Delete team'),
         h('p', {}, 'Erase this team and everything in it, for everyone. You get 7 days to change your mind.'),
         h('div', { class: 'btns' }, h('button', { class: 'btn danger', onclick: deleteTeamSheet }, 'Delete team…'))));
@@ -11761,6 +11789,8 @@
           h('button', { class: 'btn', onclick: () => { api('POST', '/logout').catch(() => {}).finally(signOutLocal); } }, 'Sign out')
         )
       ));
+
+      s.append(exportSection('mine'));
 
       // Leaving, and deleting the account
       const alone = ws.members.length === 1;

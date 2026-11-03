@@ -9,7 +9,7 @@ import zlib from 'node:zlib';
 import { pipeline } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
-import { streamZip, zipSize } from './zip.js';
+import { createZip, streamZip, zipSize } from './zip.js';
 import { iconPng } from './png.js';
 import { providers as calProviders } from './calendar.js';
 import { llms, llmError, complete } from './llm.js';
@@ -34,7 +34,7 @@ fs.mkdirSync(FILES_DIR, { recursive: true });
 // Everything lives in memory; save() hands the whole thing to the store a moment later.
 const IMPORT_PATH = path.join(DATA_DIR, 'import-pending.json');
 const store = await openStore({ url: process.env.DATABASE_URL, file: DB_PATH, importFile: IMPORT_PATH });
-let db = { workspaces: {}, tokens: {}, items: {}, entries: {}, tasks: {}, uploads: {}, campaigns: {}, goals: {}, attempts: {}, lists: {}, templates: {}, calendars: {}, ai: {}, pss: {}, sends: {}, bills: {}, meetings: {}, money: {}, budgets: {}, plans: {}, sidekick: {}, vaults: {}, vaultItems: {}, signs: {}, signatures: {}, trips: {}, pins: {}, zones: {}, comments: {}, users: {}, resets: {}, invites: {} };
+let db = { workspaces: {}, tokens: {}, items: {}, entries: {}, tasks: {}, uploads: {}, campaigns: {}, goals: {}, attempts: {}, lists: {}, templates: {}, calendars: {}, ai: {}, pss: {}, sends: {}, bills: {}, meetings: {}, money: {}, budgets: {}, plans: {}, sidekick: {}, vaults: {}, vaultItems: {}, signs: {}, signatures: {}, trips: {}, pins: {}, zones: {}, comments: {}, users: {}, resets: {}, invites: {}, exports: {} };
 const loaded = await store.load();
 if (loaded.db) db = { ...db, ...loaded.db };
 if (loaded.fromFile) console.log(`Moving ${path.basename(loaded.fromFile)} into Postgres.`);
@@ -275,8 +275,9 @@ const publicMember = (m) => ({ id: m.id, name: m.name, role: m.role, roleIds: m.
 // ---------- accounts: one email and password for every team you're in ----------
 // A person in a team is a member; a member can belong to an account (users), which holds the email
 // and the password. Members from before accounts have their own password until they add an email.
+const APP_NAME = process.env.APP_NAME || 'Column';
 const mailer = createMailer({
-  token: process.env.RESEND_API_KEY, from: process.env.MAIL_FROM, appName: process.env.APP_NAME || 'Column',
+  token: process.env.RESEND_API_KEY, from: process.env.MAIL_FROM, appName: APP_NAME,
   outbox: process.env.MAIL_OUTBOX === '1' ? path.join(DATA_DIR, 'outbox') : null,
 });
 const CODE_MINUTES = 30;
@@ -3843,7 +3844,7 @@ async function api(req, res, url) {
     }
     return send(res, 405, { error: 'Method not allowed' });
   }
-  if (ws.deleteAt && !(a === 'state' && m === 'GET') && a !== 'logout' && a !== 'account') {
+  if (ws.deleteAt && !(a === 'state' && m === 'GET') && a !== 'logout' && a !== 'account' && a !== 'exports') {
     return send(res, 423, { error: 'This team is being deleted. Cancel the deletion in Settings to use it again.' });
   }
 
@@ -5183,6 +5184,37 @@ async function api(req, res, url) {
   }
 
   // Your account: adding an email to a login from before accounts, and confirming it.
+  if (a === 'exports') {
+    const mine = () => Object.values(db.exports).filter((x) => x.wsId === ws.id && x.memberId === auth.memberId).sort((p, q) => q.createdAt - p.createdAt).map(publicExport);
+    if (!b && m === 'GET') return send(res, 200, { exports: mine() });
+    if (!b && m === 'POST') {
+      const { kind } = await readJson(req);
+      const k = kind === 'team' ? 'team' : 'mine';
+      if (k === 'team' && auth.role !== 'owner') return send(res, 403, { error: 'Only team owners can export the whole team. You can export your own things.' });
+      const recent = Object.values(db.exports).filter((x) => x.memberId === auth.memberId && x.wsId === ws.id);
+      if (recent.some((x) => x.status === 'building')) return send(res, 409, { error: 'An export is already being made. It’ll be ready soon.' });
+      if (recent.filter((x) => Date.now() - x.createdAt < 86_400_000).length >= 5) return send(res, 429, { error: 'That’s 5 exports today. Try again tomorrow.' });
+      const x = { id: rid(), wsId: ws.id, memberId: auth.memberId, by: auth.member, kind: k, status: 'building', createdAt: Date.now() };
+      db.exports[x.id] = x;
+      save();
+      setImmediate(() => buildExport(x).catch((e) => console.error('Export failed:', e)));
+      return send(res, 200, { exports: mine() });
+    }
+    const x = b && db.exports[b];
+    if (!x || x.wsId !== ws.id || x.memberId !== auth.memberId) return send(res, 404, { error: 'That export is gone. Make a new one.' });
+    if (c === 'file' && m === 'GET') {
+      if (x.status !== 'ready') return send(res, 409, { error: 'That export isn’t ready yet.' });
+      const name = `${APP_NAME} export - ${fileName(ws.name, 'Team')}${x.kind === 'mine' ? ' - ' + fileName(auth.member, 'me') : ''} - ${dayIn(tzOf(ws), x.readyAt)}.zip`;
+      return serveFile(req, res, exportPath(x), { name, mime: 'application/zip', download: true });
+    }
+    if (!c && m === 'DELETE') {
+      dropExport(x);
+      save();
+      return send(res, 200, { exports: mine() });
+    }
+    return send(res, 405, { error: 'Method not allowed' });
+  }
+
   if (a === 'account') {
     const me = ws.members.find((x) => x.id === auth.memberId);
     // Leaving this team, or deleting the whole account (every team it's in). Both need the password.
@@ -6195,6 +6227,7 @@ function teamFiles(wsId) {
   for (const x of Object.values(db.meetings)) if (mine(x)) files.push(meetPath(x));
   for (const x of Object.values(db.sidekick)) if (mine(x)) for (const f of x.files || []) files.push(skPath(f));
   for (const x of Object.values(db.uploads)) if (mine(x)) files.push(partPath(x));
+  for (const x of Object.values(db.exports)) if (mine(x)) files.push(exportPath(x), exportPath(x) + '.part');
   const logo = db.workspaces[wsId]?.brand?.logo;
   if (logo) files.push(logoPath(logo));
   return files;
@@ -6274,6 +6307,7 @@ async function removeMember(ws, m) {
     delete db.sidekick[x.id];
   }
   for (const x of Object.values(db.plans)) if (theirs(x)) delete db.plans[x.id];
+  for (const x of Object.values(db.exports)) if (theirs(x)) dropExport(x);
   // Passed on: the business keeps these.
   for (const coll of ['signs', 'meetings', 'pins', 'trips', 'zones', 'money', 'bills', 'budgets']) for (const x of Object.values(db[coll])) if (theirs(x)) hand(x);
   for (const x of Object.values(db.sends)) if (theirs(x) && x.status === 'sending') Object.assign(x, { status: 'paused', error: `${m.name} left the team, so their Outlook can’t send the rest.` });
@@ -6293,6 +6327,171 @@ async function removeMember(ws, m) {
   save();
   broadcast(wsId, { type: 'workspace' });
 }
+// ---------- exporting: a team's data (owners), or your own things (anyone), as a .zip ----------
+// Built in the background into FILES_DIR, downloaded from Settings for 7 days. It holds what the person can
+// see in Column (an owner's team export: everything shared plus their own private things), never
+// passwords, sign-in or connection keys, AI keys, PSS logins or vault contents.
+const EXPORT_DAYS = 7;
+const exportPath = (x) => path.join(FILES_DIR, `export-${x.id}.zip`);
+const publicExport = (x) => ({ id: x.id, kind: x.kind, status: x.status, createdAt: x.createdAt, readyAt: x.readyAt || null, size: x.size || 0, expiresAt: x.expiresAt || null, error: x.error || null });
+const SECRET_KEYS = new Set(['salt', 'hash', 'token', 'tokens', 'secret', 'sealed', 'inviteCode', 'keys', 'userId', 'verify', 'blob', 'transcript_raw']);
+function scrub(v) {
+  if (Array.isArray(v)) return v.map(scrub);
+  if (!v || typeof v !== 'object') return v;
+  return Object.fromEntries(Object.entries(v).filter(([k]) => !SECRET_KEYS.has(k)).map(([k, x]) => [k, scrub(x)]));
+}
+// Spreadsheet text: people's names for ids, dollars for cents, dates for timestamps. A cell that starts
+// like a formula is quoted so a spreadsheet won't run it.
+function toCsv(rows, ws) {
+  const who = (id) => ws.members.find((m) => m.id === id)?.name || id || '';
+  const ID_NAMES = { memberId: 'person', ownerId: 'owner', assigneeId: 'assigned to', campaignId: 'campaign', goalId: 'goal' };
+  const nameOf = (k, v) => (k === 'campaignId' ? db.campaigns[v]?.name : k === 'goalId' ? db.goals[v]?.title : who(v)) || v || '';
+  const cols = [];
+  for (const r of rows) for (const [k, v] of Object.entries(r)) if (!cols.includes(k) && !SECRET_KEYS.has(k) && k !== 'wsId' && (v == null || typeof v !== 'object' || (Array.isArray(v) && v.every((x) => x == null || typeof x !== 'object')))) cols.push(k);
+  const cell = (k, v) => {
+    if (v == null) return '';
+    if (ID_NAMES[k]) return nameOf(k, v);
+    if (Array.isArray(v)) return v.join('; ');
+    if ((k === 'amount' || k === 'limit') && typeof v === 'number') return (v / 100).toFixed(2);
+    if (/At$/.test(k) && typeof v === 'number' && v > 1e11) return new Date(v).toISOString();
+    return String(v);
+  };
+  const head = cols.map((k) => ID_NAMES[k] || ((k === 'amount' || k === 'limit') ? k + ' ($)' : k));
+  const esc = (t) => {
+    t = String(t);
+    if (/^[=+\-@\t\r]/.test(t)) t = "'" + t;
+    return /[",\n\r]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t;
+  };
+  return [head, ...rows.map((r) => cols.map((k) => cell(k, r[k])))].map((line) => line.map(esc).join(',')).join('\r\n') + '\r\n';
+}
+const fileName = (t, fallback) => String(t || '').replace(/[\/\\:*?"<>|\x00-\x1f]/g, '-').replace(/\s+/g, ' ').trim().slice(0, 100) || fallback;
+async function buildExport(x) {
+  const ws = db.workspaces[x.wsId];
+  const me = ws?.members.find((m) => m.id === x.memberId);
+  if (!me) return;
+  const auth = { ws, memberId: me.id, member: me.name, role: me.role };
+  const mineOnly = x.kind === 'mine';
+  const made = (y) => !mineOnly || y.memberId === me.id || y.ownerId === me.id || y.assigneeId === me.id;
+  const inWs = (y) => y?.wsId === ws.id;
+  const sees = {
+    items: (y) => y.status === 'ready' && canSee(auth, 'item', y),
+    tasks: (y) => canSee(auth, 'task', y),
+    campaigns: (y) => canSee(auth, 'campaign', y),
+    goals: (y) => canSee(auth, 'goal', y),
+    attempts: (y) => canSee(auth, 'attempt', y),
+    lists: (y) => canSee(auth, 'list', y),
+    entries: (y) => y.memberId === me.id,
+    templates: (y) => seesTemplate(y, me.id),
+    money: (y) => seesBill(ws.id, y, me.id),
+    bills: (y) => seesBill(ws.id, y, me.id),
+    budgets: (y) => seesBill(ws.id, y, me.id),
+    sends: (y) => seesCampaign(y.campaignId, me.id) && (me.role === 'owner' || y.memberId === me.id),
+    comments: (y) => db.items[y.itemId] && canSee(auth, 'item', db.items[y.itemId]),
+    meetings: (y) => y.memberId === me.id,
+    signs: (y) => y.memberId === me.id,
+    pins: (y) => y.memberId === me.id,
+    trips: (y) => y.memberId === me.id,
+    zones: (y) => y.memberId === me.id,
+    plans: (y) => y.memberId === me.id,
+    sidekick: (y) => y.memberId === me.id,
+    projects: (y) => PJ.sees(y, me.id),
+    records: (y) => PJ.sees(db.projects[y.projectId], me.id),
+    projectTemplates: () => !mineOnly,
+    webhooks: () => !mineOnly && me.role === 'owner',
+  };
+  const data = {};
+  for (const [coll, ok] of Object.entries(sees)) data[coll] = Object.values(db[coll] || {}).filter((y) => inWs(y) && ok(y) && made(y));
+  const sig = db.signatures[sigKey(ws.id, me.id)];
+  if (sig) data.signatures = [sig];
+  if (!mineOnly && me.role === 'owner' && db.pss[ws.id]) data.pss = { leads: db.pss[ws.id].leads || [], dne: db.pss[ws.id].dne || [] };
+  const team = mineOnly
+    ? { name: ws.name, you: { id: me.id, name: me.name, role: me.role } }
+    : {
+        name: ws.name, createdAt: ws.createdAt, tz: tzOf(ws), settings: ws.settings, brand: ws.brand, roles: ws.roles,
+        members: ws.members.map((m) => ({ id: m.id, name: m.name, role: m.role, roleIds: m.roleIds || [], createdAt: m.createdAt })),
+        stacks: ws.stacks.filter((st) => seesCampaign(st.campaignId, me.id)), channels: ws.channels.filter((ch) => seesFeed(ch, me.id)),
+        chatFolders: ws.chatFolders, dirs: ws.dirs.filter((d) => seesDir(ws, d.id, me.id)),
+      };
+
+  const part = exportPath(x) + '.part';
+  const z = createZip(part);
+  try {
+    const day = dayIn(tzOf(ws));
+    z.add('README.txt', [
+      `${APP_NAME} export: ${mineOnly ? `${me.name}’s things in ${ws.name}` : ws.name}, made ${day} by ${me.name}.`,
+      '',
+      'docs/        Each doc as a Markdown file (.md), readable in any text editor.',
+      'files/       Every uploaded file, in its stack or folder.',
+      'sheets/      Tasks, campaigns, calls and emails, money, bills, calendar and call lists as CSV files for Excel, Numbers or Google Sheets.',
+      'data.json    Everything above and more, in full, for moving to another tool.',
+      '',
+      'Not included: passwords, sign-in keys, Outlook and Google connections, AI keys, PSS logins, and vault contents.',
+      mineOnly ? '' : 'Other people’s private things (their Day, personal money, private folders) aren’t included; they can export their own.',
+    ].join('\r\n'));
+    z.add('data.json', JSON.stringify(scrub({ exportedAt: new Date().toISOString(), kind: x.kind, team, ...data }), null, 1));
+    // Where an item lives, as a folder path.
+    const place = (it) => {
+      if (it.dirId) {
+        const parts = [];
+        for (let d = ws.dirs.find((y) => y.id === it.dirId); d && parts.length < 10; d = ws.dirs.find((y) => y.id === d.parentId)) parts.unshift(fileName(d.name, 'Folder'));
+        return parts.join('/');
+      }
+      const st = ws.stacks.find((y) => y.id === it.stackId);
+      return st ? fileName(st.name, 'Stack') : 'Everything';
+    };
+    for (const it of data.items) {
+      const when = new Date(it.createdAt || Date.now());
+      if (it.type === 'text') {
+        const d = docOf(it);
+        z.add(`docs/${place(it)}/${fileName(d.title || it.title, 'Untitled')}.md`, docText(d.title || it.title, d.blocks), when);
+      } else if (it.type === 'file') {
+        await z.addFile(`files/${place(it)}/${fileName(it.name, it.id)}`, path.join(FILES_DIR, it.id), when);
+      } else if (it.type === 'folder') {
+        for (const f of it.files || []) await z.addFile(`files/${place(it)}/${fileName(it.name, 'Folder')}/${String(f.relPath || f.fid).split('/').map((p) => fileName(p, '_')).join('/')}`, path.join(FILES_DIR, f.fid), new Date(f.mtime || Date.now()));
+      }
+    }
+    for (const y of data.signs) {
+      const signed = fs.existsSync(signPath(y, true));
+      await z.addFile(`files/Signatures/${fileName(y.title || y.name, y.id)}${signed ? ' (signed)' : ''}.pdf`, signPath(y, signed));
+    }
+    const sheet = (name, rows) => rows.length && z.add(`sheets/${name}.csv`, toCsv(rows, ws));
+    sheet('Tasks', data.tasks);
+    sheet('Campaigns', data.campaigns);
+    sheet('Goals', data.goals);
+    sheet('Calls and emails', data.attempts);
+    sheet('Money', data.money);
+    sheet('Bills', data.bills);
+    sheet('Budgets', data.budgets);
+    sheet('Calendar', data.entries);
+    for (const l of data.lists) {
+      const rows = (l.rows || []).map((row) => Object.fromEntries([...l.columns.map((c, i) => [c || `Column ${i + 1}`, row.cells?.[i] ?? '']), ['stage', row.stage ?? ''], ['note', row.note ?? '']]));
+      sheet(`Lists/${fileName(l.name, 'List')}`, rows);
+    }
+    if (data.pss) sheet('PSS leads', data.pss.leads);
+    for (const p of data.projects) for (const t of p.types || []) {
+      const rows = data.records.filter((y) => y.projectId === p.id && y.typeId === t.id).map((y) => Object.fromEntries([['created', new Date(y.createdAt).toISOString()], ...t.fields.map((f) => [f.name, typeof y.values?.[f.id] === 'object' && y.values?.[f.id] !== null ? JSON.stringify(y.values[f.id]) : y.values?.[f.id] ?? ''])]));
+      sheet(`Projects/${fileName(p.name, 'Project')}/${fileName(t.name, 'List')}`, rows);
+    }
+    x.size = z.finish();
+    if (!db.exports[x.id]) return void fsp.rm(part, { force: true }).catch(() => {}); // cancelled while it was being made
+    await fsp.rename(part, exportPath(x));
+    Object.assign(x, { status: 'ready', readyAt: Date.now(), expiresAt: Date.now() + EXPORT_DAYS * 86_400_000 });
+    const u = userOf(me);
+    if (u?.email && mailer.mode !== 'off') mailer.exportReady(u.email, { team: ws.name, mine: mineOnly, url: PUBLIC_URL }).catch((e) => console.error('Export email failed:', e.message));
+  } catch (e) {
+    z.abort();
+    Object.assign(x, { status: 'failed', error: e.status ? e.message : 'Something went wrong making the export. Try again.' });
+    if (!e.status) console.error('Export failed:', e);
+  }
+  save();
+  broadcast(ws.id, { type: 'export', forMember: me.id, export: publicExport(x) });
+}
+function dropExport(x) {
+  delete db.exports[x.id];
+  fsp.rm(exportPath(x), { force: true }).catch(() => {});
+  fsp.rm(exportPath(x) + '.part', { force: true }).catch(() => {});
+}
+
 // Why someone can't leave yet: a team needs an owner, and a team of one is deleted instead.
 function cantLeave(ws, m) {
   if (ws.members.length === 1) return `You’re the only person in ${ws.name}. Delete the team instead.`;
@@ -6311,6 +6510,7 @@ function sweepAccounts() {
   for (const [tok, s] of Object.entries(db.tokens)) if (s.lastSeen && now - s.lastSeen > SESSION_DAYS * 86_400_000) delete db.tokens[tok], n++;
   for (const r of Object.values(db.resets)) if (r.expiresAt < now) delete db.resets[r.id], n++;
   for (const x of Object.values(db.invites)) if (x.expiresAt < now) delete db.invites[x.id], n++;
+  for (const x of Object.values(db.exports)) if ((x.expiresAt && x.expiresAt < now) || (x.status === 'building' && now - x.createdAt > 6 * 3600_000)) dropExport(x), n++;
   if (n) save();
 }
 setInterval(sweepAccounts, 60 * 60_000);

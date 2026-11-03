@@ -119,5 +119,16 @@ ${button ? `<p style="margin:18px 0"><a href="${esc(button.url)}" style="display
     }),
   });
 
-  return { mode, send, codeEmail, resetEmail, inviteEmail, emailChanged, teamDeleting, teamKept, accountDeleted };
+  const exportReady = (to, { team, mine, url }) => send({
+    to, tag: 'export-ready',
+    subject: `Your ${appName} export of ${team} is ready`,
+    ...layout({
+      heading: 'Your export is ready',
+      lines: [`The export of ${mine ? 'your things in ' : ''}${team} is ready to download. Sign in to ${appName} and open Settings to get it. It’s kept for 7 days.`],
+      button: { label: `Open ${appName}`, url },
+      foot: 'You’re getting this because you asked for an export.',
+    }),
+  });
+
+  return { mode, send, codeEmail, resetEmail, inviteEmail, emailChanged, teamDeleting, teamKept, accountDeleted, exportReady };
 }

@@ -1723,3 +1723,5 @@ body.platform-darwin .pj-head, body.platform-darwin .pj-top { padding-left: 80px
 .delete-lock { position: fixed; inset: 0; z-index: 200; background: var(--bg); display: flex; align-items: center; justify-content: center; padding: 16px; }
 .delete-lock .sheet { max-width: 460px; border-bottom: 1px solid var(--line); border-radius: 16px; }
 .btn.primary-btn.danger-fill { background: var(--danger); border-color: var(--danger); color: #fff; }
+.delete-lock .export-sec { border-top: 1px solid var(--line); padding-top: 10px; }
+.delete-lock .export-sec h3 { margin: 0 0 4px; font-size: 13px; }
