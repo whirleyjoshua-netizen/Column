@@ -6090,6 +6090,7 @@ const server = http.createServer(async (req, res) => {
   }
   if (url.pathname === '/download' || url.pathname === '/get') return serveStatic(req, res, new URL('/download.html', 'http://x'));
   if (url.pathname === '/developers') return serveStatic(req, res, new URL('/developers.html', 'http://x'));
+  if (url.pathname === '/terms' || url.pathname === '/privacy') return serveStatic(req, res, new URL(url.pathname + '.html', 'http://x'));
   if (url.pathname.startsWith('/brand/') && (req.method === 'GET' || req.method === 'HEAD')) return serveLogo(req, res, url);
   if (url.pathname.startsWith('/oauth/')) return oauthCallback(req, res, url).catch((e) => {
     console.error(e);
