@@ -226,7 +226,10 @@ function authFrom(req, url) {
   const ws = session ? db.workspaces[session.wsId] : null;
   const member = ws?.members.find((x) => x.id === session.memberId);
   if (!member) return null;
-  return { token, ...session, ws, memberId: member.id, member: member.name, role: member.role };
+  // The person's own time zone, from their browser; the team takes the first one it hears.
+  const own = okTz(req.headers['x-time-zone']);
+  if (own && !ws.tz) { ws.tz = own; save(); }
+  return { token, ...session, ws, memberId: member.id, member: member.name, role: member.role, tz: own || tzOf(ws) };
 }
 
 // ---------- people ----------
@@ -377,6 +380,7 @@ const publicWorkspace = (ws, memberId) => ({
   id: ws.id,
   name: ws.name,
   settings: ws.settings,
+  tz: tzOf(ws),
   stacks: ws.stacks.filter((x) => seesCampaign(x.campaignId, memberId)),
   channels: ws.channels.filter((x) => seesFeed(x, memberId)),
   chatFolders: ws.chatFolders,
@@ -1548,6 +1552,14 @@ function validTz(tz) {
     return Intl.DateTimeFormat().resolvedOptions().timeZone;
   }
 }
+const okTz = (tz) => {
+  if (!tz || typeof tz !== 'string' || tz.length > 64) return null;
+  try { return new Intl.DateTimeFormat('en-US', { timeZone: tz }).resolvedOptions().timeZone; } catch { return null; }
+};
+// "Today", and the day something happened, on the team's clock, not the server's (UTC on Railway).
+const tzOf = (ws) => ws?.tz || validTz();
+const dayIn = (tz, ms = Date.now()) => localNow(tz, ms).date;
+const teamDay = (wsId, ms) => dayIn(tzOf(db.workspaces[wsId]), ms);
 // The wall clock in the schedule's time zone: date, weekday and minutes since midnight.
 function localNow(tz, now) {
   const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit', weekday: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(now).map((x) => [x.type, x.value]));
@@ -2387,7 +2399,7 @@ async function signApi(req, res, token, part) {
   const images = { sig: pngData(body.sig), ini: pngData(body.ini) };
   if (!images.sig) return send(res, 400, { error: 'Add your signature.' });
   if (x.fields.some((f) => f.type === 'ini') && !images.ini) return send(res, 400, { error: 'Add your initials.' });
-  const date = cleanText(body.date, 40) || new Date().toISOString().slice(0, 10);
+  const date = cleanText(body.date, 40) || dayIn(okTz(req.headers['x-time-zone']) || tzOf(ws));
   const values = body.values && typeof body.values === 'object' ? body.values : {};
   const marks = x.fields.map((f) =>
     f.type === 'sig' || f.type === 'ini' ? { ...f, type: 'image', image: f.type }
@@ -2750,7 +2762,7 @@ async function mailOne(x) {
         db.attempts[a.id] = a;
         if (followUpsOf(c).Sent) {
           closeFollowUps(c, a);
-          a.followTaskId = addFollowUp(c, a, addDays(dayKey(new Date(a.at)), followUpsOf(c).Sent), dayKey(new Date(a.at))).id;
+          a.followTaskId = addFollowUp(c, a, addDays(teamDay(x.wsId, a.at), followUpsOf(c).Sent), teamDay(x.wsId, a.at)).id;
         }
         broadcast(x.wsId, { type: 'attempt', attempt: publicAttempt(a) });
         if (a.leadId) pushPssSoon(x.wsId);
@@ -2822,13 +2834,13 @@ function replyJson(text) {
     throw Object.assign(new Error('The AI’s answer didn’t come back in a usable shape. Try again.'), { status: 502 });
   }
 }
-const fmtDay = (ms) => new Date(ms).toISOString().slice(0, 10);
+const fmtDay = (ms, tz) => dayIn(tz || validTz(), ms);
 
 // The report's "Findings": what the log says since the last report, in the team's voice.
 // A main campaign's report takes in its sub-campaigns too: their log, their tasks and how far along each is.
 async function aiReport(ws, auth, c, body) {
   const since = Number(body.since) || 0;
-  const today = isDay(body.today) ? body.today : dayKey(new Date());
+  const today = isDay(body.today) ? body.today : dayIn(auth.tz);
   const subs = c.parentId ? [] : subsOf(c).filter((x) => canSee(auth, 'campaign', x));
   const ids = new Set([c.id, ...subs.map((x) => x.id)]);
   const tag = (id) => (id !== c.id ? ` [${db.campaigns[id].name}]` : '');
@@ -2849,7 +2861,7 @@ async function aiReport(ws, auth, c, body) {
     `Campaign: ${c.name}`,
     c.brief ? `Brief:\n${clipText(c.brief, 4000)}` : 'No brief.',
     `Numbers (already shown above the findings, don't repeat them as a list):\n${(Array.isArray(body.stats) ? body.stats : []).map((x) => '- ' + clipText(x, 300)).join('\n')}`,
-    log.length ? `Calls and emails logged since the last report (oldest first):\n${log.slice(-300).map((x) => `- ${fmtDay(x.at)} ${x.method || ''} ${x.contact || '(no name)'}: ${x.outcome}${x.amount ? ` ($${Math.round(x.amount / 100)} sale)` : ''}${x.note ? ` · ${clipText(x.note, 300)}` : ''}${(x.answers || []).map((y) => ` · ${clipText(y.q, 80)} ${clipText(y.a, 200)}`).join('')} (${x.by})${tag(x.campaignId)}`).join('\n')}` : 'Nothing logged since the last report.',
+    log.length ? `Calls and emails logged since the last report (oldest first):\n${log.slice(-300).map((x) => `- ${fmtDay(x.at, auth.tz)} ${x.method || ''} ${x.contact || '(no name)'}: ${x.outcome}${x.amount ? ` ($${Math.round(x.amount / 100)} sale)` : ''}${x.note ? ` · ${clipText(x.note, 300)}` : ''}${(x.answers || []).map((y) => ` · ${clipText(y.q, 80)} ${clipText(y.a, 200)}`).join('')} (${x.by})${tag(x.campaignId)}`).join('\n')}` : 'Nothing logged since the last report.',
     done.length ? `Tasks finished:\n${done.slice(-50).map((t) => `- ${clipText(t.text, 200)}${tag(campaignOf('task', t))}`).join('\n')}` : '',
     open.length ? `Tasks still open:\n${open.slice(0, 50).map((t) => `- ${clipText(t.text, 200)}${t.due ? ` (due ${t.due})` : ''} · ${whoIs(t)}${tag(campaignOf('task', t))}`).join('\n')}` : '',
   ].filter(Boolean).join('\n\n');
@@ -2954,7 +2966,7 @@ async function draftMeeting(ws, x) {
   // Only leads named in the call go to the AI, and only for owners (who can see them).
   const leads = auth.role === 'owner' ? (db.pss[ws.id]?.leads || []).filter((l) => l.name.length > 3 && said.includes(l.name.toLowerCase())).slice(0, 10) : [];
   const prompt = [
-    `Meeting: ${x.title || 'Untitled'} on ${fmtDay(x.startedAt)}, ${Math.round(((x.endedAt || x.startedAt) - x.startedAt) / 60000)} minutes. Recorded by ${x.by}.`,
+    `Meeting: ${x.title || 'Untitled'} on ${fmtDay(x.startedAt, tzOf(ws))}, ${Math.round(((x.endedAt || x.startedAt) - x.startedAt) / 60000)} minutes. Recorded by ${x.by}.`,
     camps.length ? `Campaigns it might belong to:
 ${camps.slice(0, 30).map((c) => `- id ${c.id}: ${c.name}${c.brief ? ` · ${clipText(c.brief, 200)}` : ''}
   outcomes: ${c.outcomes.join(', ')}
@@ -3052,7 +3064,7 @@ async function aiTask(ws, auth, t, body) {
   const ai = aiOf(ws.id, auth.memberId);
   const use = aiUse(ai);
   if (!use) throw Object.assign(new Error('Add your AI key in Settings → AI to use this.'), { status: 400 });
-  const today = isDay(body.today) ? body.today : fmtDay(Date.now());
+  const today = isDay(body.today) ? body.today : dayIn(auth.tz);
   const extra = cleanText(body.ask, 2000);
   const prompt = [`Today is ${today}.`, taskBrief(ws, auth, t), extra ? `What they asked for: ${extra}` : ''].filter(Boolean).join('\n\n');
   const system = `You help someone on a small business team get one task done. ${tool.ask} Reply with JSON only, in this shape: ${tool.shape}` + brandPrompt(ws);
@@ -3115,7 +3127,7 @@ async function aiDoc(ws, auth, body) {
   const it = body.itemId ? db.items[body.itemId] : null;
   if (body.itemId && (!it || it.wsId !== ws.id || it.type !== 'text' || !canSee(auth, 'item', it))) throw Object.assign(new Error('That doc is gone.'), { status: 404 });
   const task = body.taskId && db.tasks[body.taskId]?.wsId === ws.id && canSee(auth, 'task', db.tasks[body.taskId]) ? db.tasks[body.taskId] : null;
-  const today = isDay(body.today) ? body.today : fmtDay(Date.now());
+  const today = isDay(body.today) ? body.today : dayIn(auth.tz);
   const docNow = cleanText(body.doc, 30_000);
   const selection = cleanText(body.selection, 12_000);
   const ask = cleanText(body.ask, 2000);
@@ -3142,7 +3154,7 @@ async function aiRecord(ws, auth, body) {
   const at = PJ.recordAt(body.recordId, ws.id, auth.memberId);
   if (!at) throw Object.assign(new Error('That record is gone.'), { status: 404 });
   const { rec, t } = at;
-  const today = isDay(body.today) ? body.today : fmtDay(Date.now());
+  const today = isDay(body.today) ? body.today : dayIn(auth.tz);
   const selects = t.fields.filter((f) => f.type === 'select');
   const doc = rec.docId && db.items[rec.docId];
   const prompt = [
@@ -3263,7 +3275,7 @@ const WHO_RULE = 'When a team is given, say who should do each task in "who": a 
 
 async function aiPlan(ws, auth, c, body) {
   if (!c.brief.trim()) throw badRequest('Write a brief first: the plan is made from it.');
-  const today = isDay(body.today) ? body.today : fmtDay(Date.now());
+  const today = isDay(body.today) ? body.today : dayIn(auth.tz);
   const goals = Object.values(db.goals).filter((g) => g.campaignId === c.id);
   const tasks = Object.values(db.tasks).filter((t) => campaignOf('task', t) === c.id);
   const lists = Object.values(db.lists).filter((l) => l.campaignId === c.id);
@@ -3399,7 +3411,7 @@ function skNudgeOf(x, today) {
 function runSidekickPace() {
   for (const x of Object.values(db.sidekick)) {
     if (!x.campaignId && x.kind !== 'money') continue;
-    const note = skNudgeOf(x, fmtDay(Date.now()));
+    const note = skNudgeOf(x, teamDay(x.wsId));
     if ((note || null) === (x.nudge?.text || null)) continue;
     x.nudge = note ? { text: note, at: Date.now() } : null;
     save();
@@ -4417,7 +4429,7 @@ async function api(req, res, url) {
       return send(res, 200, publicSidekick(x));
     }
     const body = m === 'GET' || m === 'DELETE' ? {} : await readJson(req, 200_000);
-    const today = isDay(body.today) ? body.today : fmtDay(Date.now());
+    const today = isDay(body.today) ? body.today : dayIn(auth.tz);
     if (m === 'POST' && !b) {
       if (mine().length >= 200) return send(res, 400, { error: 'You can keep up to 200 Sidekick plans. Delete some old ones first.' });
       const camp = body.campaignId && db.campaigns[body.campaignId];
@@ -4876,7 +4888,7 @@ async function api(req, res, url) {
       const method = (c.methods || []).includes(body.method) ? body.method : null;
       // A sale made on the call goes into Finance as money in for the campaign.
       const amount = body.amount ? cents(body.amount, 'what the sale was worth') : null;
-      const today = isDay(body.today) ? body.today : dayKey(new Date());
+      const today = isDay(body.today) ? body.today : dayIn(auth.tz);
       const t = body.taskId && db.tasks[body.taskId];
       const l = body.listId && db.lists[body.listId];
       const row = l && l.campaignId === c.id && l.rows.find((r) => r.id === body.rowId);
@@ -5290,6 +5302,11 @@ async function api(req, res, url) {
     if (body.memberEmail !== undefined) {
       if (auth.role !== 'owner') return send(res, 403, { error: 'Only team owners can change who sends campaign email.' });
       ws.settings.memberEmail = !!body.memberEmail;
+    }
+    if (body.tz !== undefined) {
+      if (auth.role !== 'owner') return send(res, 403, { error: 'Only team owners can change the team’s time zone.' });
+      if (!okTz(body.tz)) return send(res, 400, { error: 'Pick a time zone from the list.' });
+      ws.tz = okTz(body.tz);
     }
     save();
     broadcast(ws.id, { type: 'workspace' });
@@ -5898,7 +5915,7 @@ async function importData(req, res) {
 }
 
 // Projects and the public API (projects.js).
-const PJ = projectsModule({ db, save, broadcast, rid, cleanText, isDay, readJson, send, badRequest, isOwnerId, escHtml, brandOf, logoUrl, allowLocalHooks: process.env.ALLOW_LOCAL_WEBHOOKS === '1',
+const PJ = projectsModule({ db, save, broadcast, rid, cleanText, isDay, readJson, send, badRequest, isOwnerId, escHtml, brandOf, logoUrl, teamDay, allowLocalHooks: process.env.ALLOW_LOCAL_WEBHOOKS === '1',
   // A follow-up from a record's timeline: a task for whoever logged it, about the record.
   makeTask: (ws, auth, { text, due, recordId }) => {
     const t = applyTask({ id: rid(), wsId: ws.id, by: auth.member, createdAt: Date.now(), text: '', done: false, doneAt: null, due: null, priority: 0, goalId: null, assigneeId: null }, { text, due, assigneeId: auth.memberId, recordId });

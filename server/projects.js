@@ -144,7 +144,7 @@ export const TEMPLATES = {
   },
 };
 
-export function projectsModule({ db, save, broadcast, rid, cleanText, isDay, readJson, send, badRequest, isOwnerId, escHtml, brandOf, logoUrl, makeTask, onRecords, allowLocalHooks = false }) {
+export function projectsModule({ db, save, broadcast, rid, cleanText, isDay, readJson, send, badRequest, isOwnerId, escHtml, brandOf, logoUrl, teamDay, makeTask, onRecords, allowLocalHooks = false }) {
   const bad = (msg) => badRequest(msg);
   db.projects ||= {};
   db.records ||= {};
@@ -218,7 +218,7 @@ export function projectsModule({ db, save, broadcast, rid, cleanText, isDay, rea
       const t = p && typeOf(p, rec.typeId);
       const lc = t && fieldOf(t, 'last_contacted');
       if (lc?.type === 'date') {
-        rec.values[lc.id] = new Date().toISOString().slice(0, 10);
+        rec.values[lc.id] = teamDay(rec.wsId);
         rec.updatedAt = Date.now();
         broadcast(rec.wsId, { type: 'record', record: publicRecord(rec), projectId: rec.projectId });
       }
@@ -816,7 +816,7 @@ export function projectsModule({ db, save, broadcast, rid, cleanText, isDay, rea
           if (!st || st === 'draft') setStatus(p, t, rec, 'Sent');
           logTo(rec, { kind: 'quote', what: 'sent', by: auth.member });
           const issued = fieldOf(t, 'issued');
-          if (issued?.type === 'date' && !rec.values[issued.id]) rec.values[issued.id] = today();
+          if (issued?.type === 'date' && !rec.values[issued.id]) rec.values[issued.id] = today(rec.wsId);
         } else if (m === 'DELETE') rec.share = null;
         else return send(res, 405, { error: 'Method not allowed' });
         rec.updatedAt = Date.now();
@@ -890,7 +890,7 @@ export function projectsModule({ db, save, broadcast, rid, cleanText, isDay, rea
   // ---------- quotes: the page a customer opens from the link, to accept or decline ----------
   // It works on any list with line items; it finds its other parts by key: status, issued, valid_until, terms,
   // client, accepted_by, accepted_on (the Bids & Quotes template has them all).
-  const today = () => new Date().toISOString().slice(0, 10);
+  const today = (wsId) => teamDay(wsId);
   const statusField = (t) => { const f = fieldOf(t, 'status'); return f?.type === 'select' ? f : null; };
   const quoteStatus = (t, rec) => { const f = statusField(t); return f ? (f.choices.find((c) => c.id === rec.values[f.id])?.label || '').toLowerCase() : ''; };
   function setStatus(p, t, rec, label) {
@@ -924,7 +924,7 @@ export function projectsModule({ db, save, broadcast, rid, cleanText, isDay, rea
     const { rec, p, t, ws } = q;
     const status = quoteStatus(t, rec);
     const valid = fieldOf(t, 'valid_until');
-    const expired = valid && rec.values[valid.id] && rec.values[valid.id] < today() && !['accepted', 'declined'].includes(status);
+    const expired = valid && rec.values[valid.id] && rec.values[valid.id] < today(rec.wsId) && !['accepted', 'declined'].includes(status);
     // An answer, once: accepted (with the name they typed) or declined (with why, if they say).
     if (req.method === 'POST' && (act === 'accept' || act === 'decline')) {
       const form = await readForm(req);
@@ -934,7 +934,7 @@ export function projectsModule({ db, save, broadcast, rid, cleanText, isDay, rea
         const by = fieldOf(t, 'accepted_by');
         const on = fieldOf(t, 'accepted_on');
         if (by?.type === 'text') rec.values[by.id] = act === 'accept' ? name : `Declined${name ? ' by ' + name : ''}${form.reason ? ': ' + cleanText(form.reason, 500) : ''}`;
-        if (on?.type === 'date') rec.values[on.id] = today();
+        if (on?.type === 'date') rec.values[on.id] = today(rec.wsId);
         rec.answer = { act, name, reason: cleanText(form.reason, 500), at: Date.now() };
         logTo(rec, { kind: 'quote', what: act === 'accept' ? 'accepted' : 'declined', by: name || 'The customer', note: rec.answer.reason || '' });
         rec.updatedAt = Date.now();
@@ -1009,12 +1009,11 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
   }
   // Quotes still waiting past their valid-until day become Expired.
   function expireQuotes() {
-    const now = today();
     for (const rec of Object.values(db.records)) {
       const p = db.projects[rec.projectId];
       const t = p && typeOf(p, rec.typeId);
       const valid = t && fieldOf(t, 'valid_until');
-      if (!valid || !rec.values[valid.id] || rec.values[valid.id] >= now || !['sent', 'viewed'].includes(quoteStatus(t, rec))) continue;
+      if (!valid || !rec.values[valid.id] || rec.values[valid.id] >= today(rec.wsId) || !['sent', 'viewed'].includes(quoteStatus(t, rec))) continue;
       setStatus(p, t, rec, 'Expired');
       rec.updatedAt = Date.now();
       recordNews(rec, 'record.updated', 'Column');
@@ -1264,7 +1263,7 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
       const from = Object.values(db.records).filter((x) => x.typeId === o.id && (x.values[f.id] || []).includes(rec.id));
       if (from.length) lines.push(`${o.name} linked to it: ${from.slice(0, 10).map((x) => `${recName(p, x)} (${o.fields.filter((y) => ['select', 'money', 'date', 'items'].includes(y.type) && x.values[y.id] != null).map((y) => `${y.name.toLowerCase()} ${words(ws, p, y, x.values[y.id])}`).join(', ')})`).join('; ')}`);
     }
-    const log = (rec.log || []).slice(0, 30).map((e) => `- ${new Date(e.at).toISOString().slice(0, 10)} ${e.by || ''}: ${e.kind}${e.outcome ? ' (' + e.outcome + ')' : ''}${e.what ? ' ' + e.what : ''}${e.field ? ` ${e.field} ${e.from || 'empty'} → ${e.to || 'empty'}` : ''}${e.note ? ': ' + e.note.slice(0, 300) : ''}${e.campaign ? ` [campaign ${e.campaign}]` : ''}`);
+    const log = (rec.log || []).slice(0, 30).map((e) => `- ${teamDay(rec.wsId, e.at)} ${e.by || ''}: ${e.kind}${e.outcome ? ' (' + e.outcome + ')' : ''}${e.what ? ' ' + e.what : ''}${e.field ? ` ${e.field} ${e.from || 'empty'} → ${e.to || 'empty'}` : ''}${e.note ? ': ' + e.note.slice(0, 300) : ''}${e.campaign ? ` [campaign ${e.campaign}]` : ''}`);
     if (log.length) lines.push(`Timeline, newest first:\n${log.join('\n')}`);
     const tasks = Object.values(db.tasks).filter((x) => x.recordId === rec.id && !x.done);
     if (tasks.length) lines.push(`Open tasks: ${tasks.map((x) => x.text + (x.due ? ` (due ${x.due})` : '')).join('; ')}`);

@@ -198,7 +198,7 @@
   async function api(method, path, body) {
     const res = await fetch('/api' + path, {
       method,
-      headers: { ...(S.token ? { Authorization: 'Bearer ' + S.token } : {}), ...(body ? { 'Content-Type': 'application/json' } : {}) },
+      headers: { ...(S.token ? { Authorization: 'Bearer ' + S.token } : {}), ...(body ? { 'Content-Type': 'application/json' } : {}), 'X-Time-Zone': Intl.DateTimeFormat().resolvedOptions().timeZone },
       body: body ? JSON.stringify(body) : undefined,
     });
     const data = await res.json().catch(() => ({}));
@@ -8506,7 +8506,7 @@
         const job = mapQ[0];
         let res;
         try {
-          res = await fetch('/api' + job.path, { method: job.method, headers: { Authorization: 'Bearer ' + S.token, 'Content-Type': 'application/json' }, body: JSON.stringify(job.body || {}) });
+          res = await fetch('/api' + job.path, { method: job.method, headers: { Authorization: 'Bearer ' + S.token, 'Content-Type': 'application/json', 'X-Time-Zone': Intl.DateTimeFormat().resolvedOptions().timeZone }, body: JSON.stringify(job.body || {}) });
         } catch {
           break; // no signal: try again later
         }
@@ -11645,6 +11645,11 @@
         s.append(h('section', {}, h('h3', {}, 'Campaign email'),
           toggleRow('Members can send campaign email', 'From their own Outlook, to people on lists in their own campaigns. Owners can always send.', !!ws.settings.memberEmail,
             (on) => api('PATCH', '/workspace', { memberEmail: on }).catch((e) => toast(e.message)))));
+        // The team's clock: what "today" is for follow-ups, quotes and anything Column dates on its own.
+        const zones = Intl.supportedValuesOf?.('timeZone') || [ws.tz];
+        const tz = h('select', { onchange: () => api('PATCH', '/workspace', { tz: tz.value }).then(() => toast('Time zone saved'), (e) => toast(e.message)) },
+          [...new Set([ws.tz, ...zones])].filter(Boolean).map((z) => h('option', { value: z, selected: z === ws.tz }, z.replace(/_/g, ' '))));
+        s.append(h('section', {}, h('h3', {}, 'Time zone'), h('p', {}, 'Where your team works. Column uses it for “today” when it dates things by itself, like follow-ups and quotes.'), tz));
       }
       s.append(brandSection());
     }
