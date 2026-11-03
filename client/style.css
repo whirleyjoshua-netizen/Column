@@ -1718,3 +1718,8 @@ body.platform-darwin .pj-head, body.platform-darwin .pj-top { padding-left: 80px
 .inv-made { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
 .inv-made .req-link small { color: var(--muted); font-size: 11px; white-space: nowrap; }
 .sess-row small { display: block; }
+
+/* A team waiting to be erased: owners see only this */
+.delete-lock { position: fixed; inset: 0; z-index: 200; background: var(--bg); display: flex; align-items: center; justify-content: center; padding: 16px; }
+.delete-lock .sheet { max-width: 460px; border-bottom: 1px solid var(--line); border-radius: 16px; }
+.btn.primary-btn.danger-fill { background: var(--danger); border-color: var(--danger); color: #fff; }

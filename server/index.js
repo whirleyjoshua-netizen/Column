@@ -226,6 +226,7 @@ function authFrom(req, url) {
   const ws = session ? db.workspaces[session.wsId] : null;
   const member = ws?.members.find((x) => x.id === session.memberId);
   if (!member) return null;
+  if (ws.deleteAt && member.role !== 'owner') return null; // a team being deleted is closed to all but its owners
   // The person's own time zone, from their browser; the team takes the first one it hears.
   const own = okTz(req.headers['x-time-zone']);
   if (own && !ws.tz) { ws.tz = own; save(); }
@@ -381,6 +382,8 @@ const publicWorkspace = (ws, memberId) => ({
   name: ws.name,
   settings: ws.settings,
   tz: tzOf(ws),
+  deleteAt: ws.deleteAt || null,
+  deleteBy: ws.deleteAt ? ws.deleteBy : null,
   stacks: ws.stacks.filter((x) => seesCampaign(x.campaignId, memberId)),
   channels: ws.channels.filter((x) => seesFeed(x, memberId)),
   chatFolders: ws.chatFolders,
@@ -1037,7 +1040,7 @@ function sendZip(req, res, folder) {
 
 // ---------- public share links: /s/<token> is a download page for one file or folder, no sign-in ----------
 const liveShare = (it) => it?.share && (!it.share.expiresAt || it.share.expiresAt > Date.now());
-const sharedItem = (token) => Object.values(db.items).find((it) => it.share?.token === token && liveShare(it) && it.status === 'ready');
+const sharedItem = (token) => Object.values(db.items).find((it) => it.share?.token === token && liveShare(it) && it.status === 'ready' && !offline(it.wsId));
 const escHtml = (t) => String(t).replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch]);
 function fmtBytes(n) {
   const u = ['B', 'KB', 'MB', 'GB', 'TB'];
@@ -1170,6 +1173,9 @@ function channelName(ws, raw, selfId) {
 
 // ---------- realtime ----------
 const sockets = new Map(); // wsId -> Set<socket>
+const DELETE_DAYS = 7;
+// A team being deleted (or gone) does nothing on its own: no links, no syncing, no sending.
+const offline = (wsId) => { const w = db.workspaces[wsId]; return !w || !!w.deleteAt; };
 
 const isOwnerId = (wsId, memberId) => db.workspaces[wsId]?.members.some((m) => m.id === memberId && m.role === 'owner');
 function broadcast(wsId, msg) {
@@ -1656,6 +1662,7 @@ function runSchedules() {
   const now = Date.now();
   let ran = false;
   for (const tpl of Object.values(db.templates)) {
+    if (offline(tpl.wsId)) continue;
     for (const slot of dueSlots(tpl, now)) {
       ran = true;
       try {
@@ -1837,7 +1844,7 @@ async function syncCalendar(conn) {
 }
 function syncAllCalendars() {
   for (const conn of Object.values(db.calendars)) {
-    if (conn.error?.startsWith('Sign-in') || Date.now() - (conn.lastSync || 0) < SYNC_EVERY) continue;
+    if (offline(conn.wsId) || conn.error?.startsWith('Sign-in') || Date.now() - (conn.lastSync || 0) < SYNC_EVERY) continue;
     syncCalendar(conn).catch(() => {});
   }
 }
@@ -2032,7 +2039,7 @@ function syncAllPss() {
   for (const [wsId, p] of Object.entries(db.pss)) {
     const ws = db.workspaces[wsId];
     if (!ws) delete db.pss[wsId];
-    else if (Date.now() - (p.tried || 0) >= PSS_EVERY) syncPss(ws);
+    else if (!ws.deleteAt && Date.now() - (p.tried || 0) >= PSS_EVERY) syncPss(ws);
   }
 }
 
@@ -2139,7 +2146,7 @@ function billNews(b) {
 }
 function runAutopay() {
   for (const b of Object.values(db.bills)) {
-    if (!b.autopay || b.done) continue;
+    if (!b.autopay || b.done || offline(b.wsId)) continue;
     const today = localNow(b.tz || validTz(), Date.now()).date;
     let n = 0;
     while (!b.done && b.due < today && n++ < 60) payBill(b, 'Autopay', true);
@@ -2311,7 +2318,7 @@ const liveRequest = (st) => st.request && (!st.request.expiresAt || st.request.e
 function requestByToken(token) {
   for (const ws of Object.values(db.workspaces)) {
     const st = token && ws.stacks.find((x) => x.request?.token === token);
-    if (st) return liveRequest(st) ? { ws, st } : null;
+    if (st) return liveRequest(st) && !ws.deleteAt ? { ws, st } : null;
   }
   return null;
 }
@@ -2358,7 +2365,7 @@ async function signApi(req, res, token, part) {
   res.setHeader('Cache-Control', 'no-store');
   res.setHeader('X-Robots-Tag', 'noindex');
   const x = token && Object.values(db.signs).find((s) => s.token === token);
-  if (!x || x.status === 'void') return send(res, 404, { error: 'This signing link isn’t available any more. Ask the sender for a new one.' });
+  if (!x || x.status === 'void' || offline(x.wsId)) return send(res, 404, { error: 'This signing link isn’t available any more. Ask the sender for a new one.' });
   const ws = db.workspaces[x.wsId];
   const st = signStatus(x);
   const open = st === 'sent' || st === 'viewed';
@@ -2722,7 +2729,7 @@ const mailBusy = new Set();
 async function mailTick() {
   const now = Date.now();
   for (const x of Object.values(db.sends)) {
-    if (x.status !== 'sending' || mailBusy.has(x.connId) || (x.waitUntil || 0) > now) continue;
+    if (x.status !== 'sending' || offline(x.wsId) || mailBusy.has(x.connId) || (x.waitUntil || 0) > now) continue;
     mailBusy.add(x.connId);
     mailOne(x).catch((e) => console.error('Email send failed:', e.message)).finally(() => mailBusy.delete(x.connId));
   }
@@ -3410,7 +3417,7 @@ function skNudgeOf(x, today) {
 }
 function runSidekickPace() {
   for (const x of Object.values(db.sidekick)) {
-    if (!x.campaignId && x.kind !== 'money') continue;
+    if ((!x.campaignId && x.kind !== 'money') || offline(x.wsId)) continue;
     const note = skNudgeOf(x, teamDay(x.wsId));
     if ((note || null) === (x.nudge?.text || null)) continue;
     x.nudge = note ? { text: note, at: Date.now() } : null;
@@ -3674,7 +3681,7 @@ async function api(req, res, url) {
         loginFailed(keys);
         return send(res, 401, { error: 'That email and password don’t match. Check them, or use Forgot password.' });
       }
-      const teams = membersOf(u);
+      const teams = membersOf(u).filter(({ ws, m }) => !ws.deleteAt || m.role === 'owner');
       if (!teams.length) return send(res, 404, { error: 'This account isn’t in a team yet. Use Join team with an invite code, or Create team.' });
       const all = teams.map(({ ws, m }) => ({ token: session(ws, m), workspace: publicWorkspace(ws, m.id), member: m.name }));
       save();
@@ -3684,7 +3691,7 @@ async function api(req, res, url) {
 
     // An invite link stands in for the team name and invite code.
     const inv = mode === 'invite' ? inviteByToken(body.invite) : null;
-    if (mode === 'invite' && !inv) return send(res, 404, { error: 'This invite has expired or was already used. Ask the team for a new one.' });
+    if (mode === 'invite' && (!inv || offline(inv.wsId))) return send(res, 404, { error: 'This invite has expired or was already used. Ask the team for a new one.' });
     if (mode === 'invite' && !email) return send(res, 400, { error: 'Enter your email address.' });
     const slug = inv ? db.workspaces[inv.wsId].slug : slugify(workspace);
     if (!slug || slug.length > 60) return send(res, 400, { error: 'Enter a team name.' });
@@ -3733,6 +3740,7 @@ async function api(req, res, url) {
     } else {
       if (!ws) return send(res, 404, { error: 'No team with that name. Create it instead?' });
       member = ws.members.find((x) => x.nameKey === nameKey(who));
+      if (ws.deleteAt && (mode !== 'signin' || member?.role !== 'owner')) return send(res, 403, { error: 'This team is being deleted, so nobody can sign in or join. Ask an owner if that’s a mistake.' });
       if (mode === 'join' || mode === 'invite') {
         if (mode === 'join' && !checkInvite(ws, code)) return refuse('Wrong invite code.');
         const mine = user && ws.members.find((x) => x.userId === user.id);
@@ -3768,7 +3776,7 @@ async function api(req, res, url) {
   if (a === 'public' && b === 'invite' && m === 'GET') {
     res.setHeader('Cache-Control', 'no-store');
     const inv = inviteByToken(c);
-    if (!inv) return send(res, 404, { error: 'This invite has expired or was already used. Ask the team for a new one.' });
+    if (!inv || offline(inv.wsId)) return send(res, 404, { error: 'This invite has expired or was already used. Ask the team for a new one.' });
     const w = db.workspaces[inv.wsId];
     const brand = brandOf(w);
     return send(res, 200, { team: w.name, by: inv.by, email: inv.email, logo: logoUrl(brand.logo) || null, accent: brand.accent || null });
@@ -3799,6 +3807,45 @@ async function api(req, res, url) {
   const auth = authFrom(req, url);
   if (!auth) return send(res, 401, { error: 'Not signed in' });
   const { ws } = auth;
+
+  // Deleting the team: owners only, with the team's name and their password. It locks now and is erased
+  // after DELETE_DAYS; until then any owner can cancel.
+  if (a === 'workspace' && b === 'delete') {
+    if (auth.role !== 'owner') return send(res, 403, { error: 'Only team owners can delete the team.' });
+    if (m === 'POST') {
+      if (ws.deleteAt) return send(res, 200, publicWorkspace(ws, auth.memberId));
+      const body = await readJson(req);
+      const me = ws.members.find((x) => x.id === auth.memberId);
+      if (String(body.name || '').trim().toLowerCase() !== ws.name.trim().toLowerCase()) return send(res, 400, { error: `Type the team’s name, ${ws.name}, to confirm.` });
+      const keys = ['ip:' + clientIp(req), 'delete:' + ws.id];
+      if (loginBlocked(keys)) return send(res, 429, { error: 'Too many wrong tries. Wait 15 minutes, then try again.' });
+      if (!passOk(credOf(me), body.password)) {
+        loginFailed(keys);
+        return send(res, 401, { error: 'That password isn’t right.' });
+      }
+      ws.deleteAt = Date.now() + DELETE_DAYS * 86_400_000;
+      ws.deleteBy = auth.member;
+      // Everyone but the owners is signed out now.
+      for (const x of ws.members) if (x.role !== 'owner') signOutWhere(ws, x.id);
+      save();
+      broadcast(ws.id, { type: 'workspace' });
+      tellTeam(ws, (to) => mailer.teamDeleting(to, { team: ws.name, by: auth.member, when: ws.deleteAt, tz: tzOf(ws) }));
+      return send(res, 200, publicWorkspace(ws, auth.memberId));
+    }
+    if (m === 'DELETE') {
+      if (!ws.deleteAt) return send(res, 200, publicWorkspace(ws, auth.memberId));
+      delete ws.deleteAt;
+      delete ws.deleteBy;
+      save();
+      broadcast(ws.id, { type: 'workspace' });
+      tellTeam(ws, (to) => mailer.teamKept(to, { team: ws.name, by: auth.member }));
+      return send(res, 200, publicWorkspace(ws, auth.memberId));
+    }
+    return send(res, 405, { error: 'Method not allowed' });
+  }
+  if (ws.deleteAt && !(a === 'state' && m === 'GET') && a !== 'logout' && a !== 'account') {
+    return send(res, 423, { error: 'This team is being deleted. Cancel the deletion in Settings to use it again.' });
+  }
 
   if (a === 'logout' && m === 'POST') {
     delete db.tokens[auth.token];
@@ -5915,7 +5962,7 @@ async function importData(req, res) {
 }
 
 // Projects and the public API (projects.js).
-const PJ = projectsModule({ db, save, broadcast, rid, cleanText, isDay, readJson, send, badRequest, isOwnerId, escHtml, brandOf, logoUrl, teamDay, allowLocalHooks: process.env.ALLOW_LOCAL_WEBHOOKS === '1',
+const PJ = projectsModule({ db, save, broadcast, rid, cleanText, isDay, readJson, send, badRequest, isOwnerId, escHtml, brandOf, logoUrl, teamDay, offline, allowLocalHooks: process.env.ALLOW_LOCAL_WEBHOOKS === '1',
   // A follow-up from a record's timeline: a task for whoever logged it, about the record.
   makeTask: (ws, auth, { text, due, recordId }) => {
     const t = applyTask({ id: rid(), wsId: ws.id, by: auth.member, createdAt: Date.now(), text: '', done: false, doneAt: null, due: null, priority: 0, goalId: null, assigneeId: null }, { text, due, assigneeId: auth.memberId, recordId });
@@ -6093,7 +6140,65 @@ async function backupDb() {
 }
 setInterval(backupDb, 60 * 60_000);
 // Expired sign-ins, reset links and invites are cleared away each hour.
+// ---------- deleting a team: locked at once, erased after a week unless an owner cancels ----------
+// Erasing takes every record that belongs to the team (by wsId, or a key starting with its id), the files
+// those records point to, its sign-ins and its calendar connections. Accounts stay: people may be in
+// other teams. The daily backups still hold it for up to 14 days.
+function tellTeam(ws, mail) {
+  if (mailer.mode === 'off') return;
+  for (const x of ws.members) {
+    const u = userOf(x);
+    if (u?.email) mail(u.email).catch((e) => console.error('Team email failed:', e.message));
+  }
+}
+function teamFiles(wsId) {
+  const files = [];
+  const mine = (x) => x?.wsId === wsId;
+  for (const it of Object.values(db.items)) {
+    if (!mine(it)) continue;
+    if (it.type === 'file') files.push(path.join(FILES_DIR, it.id));
+    if (it.type === 'text') files.push(histPath(it.id));
+    if (it.type === 'folder') for (const f of it.files || []) files.push(path.join(FILES_DIR, f.fid));
+  }
+  for (const x of Object.values(db.signs)) if (mine(x)) files.push(signPath(x, false), signPath(x, true));
+  for (const x of Object.values(db.meetings)) if (mine(x)) files.push(meetPath(x));
+  for (const x of Object.values(db.sidekick)) if (mine(x)) for (const f of x.files || []) files.push(skPath(f));
+  for (const x of Object.values(db.uploads)) if (mine(x)) files.push(partPath(x));
+  const logo = db.workspaces[wsId]?.brand?.logo;
+  if (logo) files.push(logoPath(logo));
+  return files;
+}
+async function revokeCalendar(conn) {
+  // Google can be told to forget the connection; Microsoft has no such call, so its keys are just dropped.
+  if (conn.provider !== 'google') return;
+  try {
+    const tok = unseal(conn.tokens);
+    await fetch('https://oauth2.googleapis.com/revoke', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ token: tok.refresh || tok.access }), signal: AbortSignal.timeout(10_000) });
+  } catch {}
+}
+async function eraseTeam(ws) {
+  const wsId = ws.id;
+  const files = teamFiles(wsId);
+  await Promise.all(Object.values(db.calendars).filter((x) => x.wsId === wsId).map(revokeCalendar));
+  for (const sock of sockets.get(wsId) || []) sock.close(4001, 'Team deleted');
+  sockets.delete(wsId);
+  let n = 0;
+  for (const [coll, recs] of Object.entries(db)) {
+    if (coll === 'users' || coll === 'resets' || !recs || typeof recs !== 'object') continue;
+    for (const [k, x] of Object.entries(recs)) {
+      if (k === wsId || k.startsWith(wsId + ':') || x?.wsId === wsId) delete recs[k], n++;
+    }
+  }
+  save();
+  for (const f of files) await fsp.rm(f, { force: true }).catch(() => {});
+  console.log(`Erased team ${wsId}: ${n} records, ${files.length} files.`);
+}
+async function eraseDueTeams() {
+  for (const ws of Object.values(db.workspaces)) if (ws.deleteAt && ws.deleteAt <= Date.now()) await eraseTeam(ws).catch((e) => console.error('Erasing a team failed:', e.message));
+}
+
 function sweepAccounts() {
+  eraseDueTeams();
   const now = Date.now();
   let n = 0;
   for (const [tok, s] of Object.entries(db.tokens)) if (s.lastSeen && now - s.lastSeen > SESSION_DAYS * 86_400_000) delete db.tokens[tok], n++;
@@ -6102,6 +6207,7 @@ function sweepAccounts() {
   if (n) save();
 }
 setInterval(sweepAccounts, 60 * 60_000);
+setTimeout(eraseDueTeams, 15_000);
 backupDb();
 // A recording whose page went away (closed, crashed) is wrapped up with what arrived.
 setInterval(() => {

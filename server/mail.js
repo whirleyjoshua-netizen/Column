@@ -89,5 +89,25 @@ ${button ? `<p style="margin:18px 0"><a href="${esc(button.url)}" style="display
     }),
   });
 
-  return { mode, send, codeEmail, resetEmail, inviteEmail, emailChanged };
+  const longDay = (ms, tz) => new Date(ms).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', timeZone: tz || 'UTC' });
+  const teamDeleting = (to, { team, by, when, tz }) => send({
+    to, tag: 'team-deleting',
+    subject: `${team} is being deleted from ${appName}`,
+    ...layout({
+      heading: `${team} is being deleted`,
+      lines: [`${by} asked to delete the ${team} team. It’s locked now, and everything in it will be erased for good on ${longDay(when, tz)}.`, 'Until then, any team owner can sign in and cancel it from Settings.'],
+      foot: 'You’re getting this because you’re on the team.',
+    }),
+  });
+  const teamKept = (to, { team, by }) => send({
+    to, tag: 'team-kept',
+    subject: `${team} won’t be deleted`,
+    ...layout({
+      heading: `${team} won’t be deleted`,
+      lines: [`${by} cancelled deleting the ${team} team. Everything is as it was, and you can sign in again.`],
+      foot: 'You’re getting this because you’re on the team.',
+    }),
+  });
+
+  return { mode, send, codeEmail, resetEmail, inviteEmail, emailChanged, teamDeleting, teamKept };
 }

@@ -491,6 +491,8 @@
       if (st?.request) Object.assign(st.request, { count: msg.count, lastAt: msg.lastAt });
     } else if (msg.type === 'workspace') {
       const mailWas = !!S.workspace?.settings?.memberEmail;
+      // Locked or unlocked by another owner: start over, so the app shows the right thing.
+      if (!!S.workspace?.deleteAt !== !!msg.workspace.deleteAt) return location.reload();
       S.workspace = msg.workspace;
       if (mailWas !== !!S.workspace.settings?.memberEmail) loadPss();
       applyBrand();
@@ -768,6 +770,11 @@
       return connect();
     }
     $('#login').classList.add('hidden');
+    if (S.workspace.deleteAt) {
+      // Locked while it waits to be erased: only the lock screen, listening in case another owner cancels.
+      drawDeleteLock();
+      return connect();
+    }
     $('#app').classList.remove('hidden');
     setTab('day');
     connect();
@@ -880,6 +887,35 @@
       h('button', { class: 'btn small', onclick: () => api('POST', '/account/verify/send').then(() => toast('New code sent'), (e) => toast(e.message)) }, 'Send a new code'),
       h('button', { class: 'icon-btn', 'aria-label': 'Hide for now', html: I.close, onclick: () => { S.confirmHidden = true; drawConfirmBar(); } }));
     $('#tabs').before(bar);
+  }
+
+  // ---------- deleting the team ----------
+  // While a team waits to be erased, its owners see only this: when, who asked, and a way to cancel.
+  function drawDeleteLock() {
+    $('#deleteLock')?.remove();
+    const at = S.workspace?.deleteAt;
+    if (!at) return;
+    const day = new Date(at).toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
+    const keep = h('button', { class: 'btn primary-btn', onclick: () => api('DELETE', '/workspace/delete').then(() => location.reload(), (e) => toast(e.message)) }, 'Cancel deletion and keep the team');
+    document.body.append(h('div', { id: 'deleteLock', class: 'delete-lock' }, h('div', { class: 'sheet' },
+      h('h2', {}, `${S.workspace.name} is being deleted`),
+      h('p', {}, `${S.workspace.deleteBy || 'An owner'} asked to delete this team. It’s locked: only owners can sign in, and links, syncing and sending have stopped.`),
+      h('p', {}, h('b', {}, `Everything in it will be erased for good on ${day}.`)),
+      h('div', { class: 'btns' }, h('button', { class: 'btn', onclick: () => { api('POST', '/logout').catch(() => {}).finally(signOutLocal); } }, 'Sign out'), h('span', { style: 'flex:1' }), keep))));
+  }
+  function deleteTeamSheet() {
+    const name = h('input', { autocomplete: 'off', placeholder: S.workspace.name });
+    const pw = h('input', { type: 'password', autocomplete: 'current-password' });
+    sheet(`Delete ${S.workspace.name}?`, [
+      h('p', {}, 'This deletes the whole team: every doc, task, campaign, list, file and setting, for everyone on it.'),
+      h('p', { class: 'day-hint' }, 'The team locks straight away and everyone but owners is signed out. It’s erased for good after 7 days; until then any owner can cancel. Everyone with an email on the team is told.'),
+      h('label', {}, `Type the team’s name, ${S.workspace.name}, to confirm`, name),
+      h('label', {}, 'Your password', pw),
+    ], async () => {
+      await api('POST', '/workspace/delete', { name: name.value, password: pw.value });
+      location.reload();
+    }, 'Delete the team');
+    $('#sheet .primary-btn').classList.add('danger-fill');
   }
 
   // ---------- views ----------
@@ -11652,6 +11688,9 @@
         s.append(h('section', {}, h('h3', {}, 'Time zone'), h('p', {}, 'Where your team works. Column uses it for “today” when it dates things by itself, like follow-ups and quotes.'), tz));
       }
       s.append(brandSection());
+      if (isOwner()) s.append(h('section', {}, h('h3', {}, 'Delete team'),
+        h('p', {}, 'Erase this team and everything in it, for everyone. You get 7 days to change your mind.'),
+        h('div', { class: 'btns' }, h('button', { class: 'btn danger', onclick: deleteTeamSheet }, 'Delete team…'))));
     }
 
     if (tab === 'account') {

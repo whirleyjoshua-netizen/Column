@@ -144,7 +144,7 @@ export const TEMPLATES = {
   },
 };
 
-export function projectsModule({ db, save, broadcast, rid, cleanText, isDay, readJson, send, badRequest, isOwnerId, escHtml, brandOf, logoUrl, teamDay, makeTask, onRecords, allowLocalHooks = false }) {
+export function projectsModule({ db, save, broadcast, rid, cleanText, isDay, readJson, send, badRequest, isOwnerId, escHtml, brandOf, logoUrl, teamDay, offline, makeTask, onRecords, allowLocalHooks = false }) {
   const bad = (msg) => badRequest(msg);
   db.projects ||= {};
   db.records ||= {};
@@ -900,7 +900,7 @@ export function projectsModule({ db, save, broadcast, rid, cleanText, isDay, rea
   }
   const quoteFor = (token) => {
     const rec = token && Object.values(db.records).find((r) => r.share?.token === token);
-    if (!rec || (rec.share.expiresAt && rec.share.expiresAt < Date.now())) return null;
+    if (!rec || (rec.share.expiresAt && rec.share.expiresAt < Date.now()) || offline(rec.wsId)) return null;
     const p = db.projects[rec.projectId];
     const t = p && typeOf(p, rec.typeId);
     return p && t && db.workspaces[rec.wsId] ? { rec, p, t, ws: db.workspaces[rec.wsId] } : null;
@@ -1013,7 +1013,7 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
       const p = db.projects[rec.projectId];
       const t = p && typeOf(p, rec.typeId);
       const valid = t && fieldOf(t, 'valid_until');
-      if (!valid || !rec.values[valid.id] || rec.values[valid.id] >= today(rec.wsId) || !['sent', 'viewed'].includes(quoteStatus(t, rec))) continue;
+      if (!valid || offline(rec.wsId) || !rec.values[valid.id] || rec.values[valid.id] >= today(rec.wsId) || !['sent', 'viewed'].includes(quoteStatus(t, rec))) continue;
       setStatus(p, t, rec, 'Expired');
       rec.updatedAt = Date.now();
       recordNews(rec, 'record.updated', 'Column');
@@ -1036,7 +1036,7 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
     const k = Object.values(db.apiKeys).find((x) => x.hash === sha(token));
     if (!k) return null;
     const ws = db.workspaces[k.wsId];
-    if (!ws) return null;
+    if (!ws || offline(ws.id)) return null;
     // 300 requests a minute per key.
     const now = Date.now();
     const r = rate.get(k.id) || { at: now, n: 0 };
@@ -1218,6 +1218,7 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
   // Signed like Stripe: X-Column-Signature: t=<seconds>,v1=<hmac of "t.body">. Tried 4 times over ~10 minutes.
   const DELAYS = [0, 30_000, 120_000, 480_000];
   async function deliver(h, event, attempt = 0) {
+    if (offline(h.wsId)) return;
     const body = JSON.stringify(event);
     const ts = Math.floor(Date.now() / 1000);
     const sig = crypto.createHmac('sha256', h.secret).update(`${ts}.${body}`).digest('hex');
