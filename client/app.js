@@ -305,6 +305,9 @@
       mode === 'signin' ? link('Sign in with team name instead', 'teamname') : null,
       mode === 'teamname' || mode === 'forgot' ? link('Back to sign in with email', 'signin') : null,
     ].filter(Boolean).flatMap((x, i) => (i ? [' · ', x] : [x])));
+    const terms = h('a', { href: '/terms', target: '_blank' }, 'Terms of service');
+    const privacy = h('a', { href: '/privacy', target: '_blank' }, 'Privacy policy');
+    $('#loginLegal').replaceChildren(...(['join', 'create', 'invite'].includes(mode) ? ['By continuing you agree to the ', terms, ' and ', privacy, '.'] : [terms, ' · ', privacy]));
   }
   $('#modeSeg').addEventListener('click', (e) => {
     const b = e.target.closest('button');
@@ -11799,6 +11802,7 @@
         h('div', { class: 'btns' },
           alone ? null : h('button', { class: 'btn danger', onclick: () => goodbyeSheet('leave') }, `Leave ${ws.name}…`),
           h('button', { class: 'btn danger', onclick: () => goodbyeSheet('delete') }, 'Delete my account…'))));
+      s.append(h('p', { class: 'legal-links' }, h('a', { href: '/terms', target: '_blank' }, 'Terms of service'), ' · ', h('a', { href: '/privacy', target: '_blank' }, 'Privacy policy')));
     }
   }
 
