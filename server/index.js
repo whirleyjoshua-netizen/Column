@@ -74,7 +74,8 @@ function writeNow() {
   if (!dirtySince) return Promise.resolve();
   dirtySince = 0;
   writing = store.write(db).then(() => {
-    if (saveFails) console.log('Saving works again.');
+    if (saveFails >= 3) alarm('Saving works again', `after ${saveFails} failed tries`);
+    else if (saveFails) console.log('Saving works again.');
     saveFails = 0;
     if (loaded.fromFile === IMPORT_PATH) fs.renameSync(IMPORT_PATH, IMPORT_PATH + '.done');
     loaded.fromFile = null;
@@ -84,7 +85,8 @@ function writeNow() {
       process.exit(1);
     }
     saveFails++;
-    console.error(`Saving failed (${saveFails}), trying again:`, e.message);
+    if (saveFails === 3) alarm('Saving data is failing (changes are kept in memory and retried)', e);
+    else console.error(`Saving failed (${saveFails}), trying again:`, e.message);
     dirtySince ||= Date.now();
     saveTimer = setTimeout(writeNow, Math.min(30_000, 500 * 2 ** saveFails));
   }).finally(() => { writing = null; });
@@ -280,6 +282,39 @@ const mailer = createMailer({
   token: process.env.RESEND_API_KEY, from: process.env.MAIL_FROM, appName: APP_NAME,
   outbox: process.env.MAIL_OUTBOX === '1' ? path.join(DATA_DIR, 'outbox') : null,
 });
+// ---------- alerts: serious errors are emailed to ALERT_EMAIL ----------
+// Grouped, at most one email every 15 minutes, so a loop of failures doesn't flood the inbox.
+// Problems with someone's own connections (their calendar, their AI key) are theirs, not alerts.
+const ALERT_EMAIL = process.env.ALERT_EMAIL || '';
+const ALERT_GAP = 15 * 60_000;
+const alerts = { queue: new Map(), last: 0, timer: null };
+function alarm(what, e) {
+  console.error(what + ':', e);
+  if (!ALERT_EMAIL || mailer.mode === 'off') return;
+  const msg = String(e?.stack || e?.message || e).split('\n').slice(0, 6).join('\n');
+  const k = what + '\n' + msg.split('\n')[0];
+  const x = alerts.queue.get(k);
+  if (x) x.count++;
+  else if (alerts.queue.size < 20) alerts.queue.set(k, { what, msg, count: 1, at: Date.now() });
+  if (!alerts.timer) alerts.timer = setTimeout(sendAlerts, Math.max(0, alerts.last + ALERT_GAP - Date.now()));
+}
+async function sendAlerts() {
+  alerts.timer = null;
+  if (!alerts.queue.size) return;
+  const list = [...alerts.queue.values()];
+  alerts.queue.clear();
+  alerts.last = Date.now();
+  await mailer.alertEmail(ALERT_EMAIL, { url: PUBLIC_URL, list }).catch((e) => console.error('Alert email failed:', e.message));
+}
+// A crash is reported before the server stops (Railway starts it again).
+for (const ev of ['uncaughtException', 'unhandledRejection']) {
+  process.on(ev, (e) => {
+    alarm('The server crashed', e);
+    clearTimeout(alerts.timer);
+    Promise.race([sendAlerts(), new Promise((r) => setTimeout(r, 5000))]).finally(() => process.exit(1));
+  });
+}
+
 const CODE_MINUTES = 30;
 const RESET_MINUTES = 30;
 const cleanEmail = (e) => String(e || '').trim().toLowerCase();
@@ -1669,7 +1704,7 @@ function runSchedules() {
       try {
         runTemplate(tpl, { date: slot.date, time: slot.several ? slot.time : null });
       } catch (e) {
-        console.error('Scheduled campaign failed:', e);
+        alarm('Scheduled campaign failed', e);
       }
     }
   }
@@ -3633,6 +3668,8 @@ async function api(req, res, url) {
   const [a, b, c, d] = parts;
   const m = req.method;
 
+  // For an uptime checker: 503 while saving is failing, so "it's up" means changes are being kept.
+  if (a === 'up') return send(res, saveFails >= 3 ? 503 : 200, { ok: saveFails < 3 });
   if (a === 'health') return send(res, 200, { ok: true, app: 'column', data: store.mode, saving: saveFails ? 'retrying' : 'ok', mail: mailer.mode !== 'off' });
   // The public API, for other apps: its own keys, not a person's sign-in.
   if (a === 'v1') return PJ.v1(req, res, parts.slice(1));
@@ -3652,7 +3689,7 @@ async function api(req, res, url) {
       const r = { id: rid(), userId: u.id, hash: sha(token), expiresAt: Date.now() + RESET_MINUTES * 60_000 };
       db.resets[r.id] = r;
       save();
-      mailer.resetEmail(u.email, `${PUBLIC_URL}/reset/${token}`).catch((e) => console.error('Reset email failed:', e.message));
+      mailer.resetEmail(u.email, `${PUBLIC_URL}/reset/${token}`).catch((e) => alarm('Password reset email failed', e));
     }
     return send(res, 200, { ok: true });
   }
@@ -3768,7 +3805,7 @@ async function api(req, res, url) {
       if (user && user.email === inv.email) user.emailVerified = true;
     }
     save();
-    if (fresh && !user.emailVerified) sendCode(user).catch((e) => console.error('Code email failed:', e.message));
+    if (fresh && !user.emailVerified) sendCode(user).catch((e) => alarm('Code email failed', e));
     if (mode !== 'signin') broadcast(ws.id, { type: 'workspace' });
     return send(res, 200, { token, workspace: publicWorkspace(ws, member.id) });
   }
@@ -5160,7 +5197,7 @@ async function api(req, res, url) {
         const { x, link } = makeInvite(ws, auth, email);
         let sent = false;
         if (mailer.mode !== 'off') {
-          sent = await mailer.inviteEmail(email, { team: ws.name, by: auth.member, url: link }).then(() => true, (e) => (console.error('Invite email failed:', e.message), false));
+          sent = await mailer.inviteEmail(email, { team: ws.name, by: auth.member, url: link }).then(() => true, (e) => (alarm('Invite email failed', e), false));
         }
         out.push({ ...publicInvite(x), link, sent });
       }
@@ -5276,7 +5313,7 @@ async function api(req, res, url) {
         linkMember(me, u);
       }
       save();
-      await sendCode(u).catch((e) => console.error('Code email failed:', e.message));
+      await sendCode(u).catch((e) => alarm('Code email failed', e));
       broadcast(ws.id, { type: 'workspace' });
       return send(res, 200, meAccount(ws, me.id));
     }
@@ -6058,7 +6095,7 @@ const server = http.createServer(async (req, res) => {
       await api(req, res, url);
     } catch (e) {
       if (!res.headersSent) send(res, e.status || 500, { error: e.status ? e.message : 'Server error' });
-      if (!e.status) console.error(e);
+      if (!e.status) alarm(`Server error on ${req.method} ${url.pathname.replace(/\/[A-Za-z0-9_-]{12,}/g, '/…')}`, e);
     }
     return;
   }
@@ -6093,7 +6130,7 @@ const server = http.createServer(async (req, res) => {
   if (url.pathname === '/terms' || url.pathname === '/privacy') return serveStatic(req, res, new URL(url.pathname + '.html', 'http://x'));
   if (url.pathname.startsWith('/brand/') && (req.method === 'GET' || req.method === 'HEAD')) return serveLogo(req, res, url);
   if (url.pathname.startsWith('/oauth/')) return oauthCallback(req, res, url).catch((e) => {
-    console.error(e);
+    alarm('Connecting a calendar failed', e);
     if (!res.headersSent) send(res, 500, 'Something went wrong connecting your calendar.');
   });
   serveStatic(req, res, url);
@@ -6199,7 +6236,7 @@ async function backupDb() {
     }
     for (const old of fs.readdirSync(BACKUP_DIR).filter((f) => /^db-\d{4}-\d{2}-\d{2}\.json$/.test(f)).sort().slice(0, -14)) fs.rmSync(path.join(BACKUP_DIR, old));
   } catch (e) {
-    console.error('Backup failed:', e.message);
+    alarm('Backup failed', e);
   }
 }
 setInterval(backupDb, 60 * 60_000);
@@ -6482,7 +6519,7 @@ async function buildExport(x) {
   } catch (e) {
     z.abort();
     Object.assign(x, { status: 'failed', error: e.status ? e.message : 'Something went wrong making the export. Try again.' });
-    if (!e.status) console.error('Export failed:', e);
+    if (!e.status) alarm('Export failed', e);
   }
   save();
   broadcast(ws.id, { type: 'export', forMember: me.id, export: publicExport(x) });
@@ -6501,7 +6538,7 @@ function cantLeave(ws, m) {
 }
 
 async function eraseDueTeams() {
-  for (const ws of Object.values(db.workspaces)) if (ws.deleteAt && ws.deleteAt <= Date.now()) await eraseTeam(ws).catch((e) => console.error('Erasing a team failed:', e.message));
+  for (const ws of Object.values(db.workspaces)) if (ws.deleteAt && ws.deleteAt <= Date.now()) await eraseTeam(ws).catch((e) => alarm('Erasing a deleted team failed', e));
 }
 
 function sweepAccounts() {

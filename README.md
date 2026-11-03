@@ -47,7 +47,14 @@ Neon, with `sslmode=verify-full`; when set, data is kept there instead of `db.js
 once. Uploaded files still live in `DATA_DIR/files`), `RESEND_API_KEY` and `MAIL_FROM` (Column's own email: sign-up codes and
 password resets, sent through Resend from an address on a domain verified there, e.g. `Kloomie <hello@kloomie.com>`; without them, Forgot password stays
 hidden), `APP_NAME` (the name in those emails; default `Column`), `MAIL_OUTBOX=1` (for local testing: emails are written to
-`DATA_DIR/outbox` instead of sent).
+`DATA_DIR/outbox` instead of sent), `ALERT_EMAIL` (where serious errors are emailed: crashes, server errors, saving or
+backups failing. Grouped, at most one email every 15 minutes; needs email sending set up).
+
+Uptime: point a checker such as UptimeRobot at `PUBLIC_URL/api/up`. It answers 200 when the server is up and saving, and
+503 while saving is failing. `/api/health` always answers 200 while the server runs (the desktop app uses it to find servers).
+
+Tests: `tests/run.sh [suite ...]` runs every end-to-end suite against throwaway local servers (browser suites need Google
+Chrome). `pgtest` also needs `TEST_DATABASE_URL`, a Neon test branch, never the live one. No real email is sent.
 
 ## Calendars (Google / Outlook)
 

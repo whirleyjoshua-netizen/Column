@@ -130,5 +130,16 @@ ${button ? `<p style="margin:18px 0"><a href="${esc(button.url)}" style="display
     }),
   });
 
-  return { mode, send, codeEmail, resetEmail, inviteEmail, emailChanged, teamDeleting, teamKept, accountDeleted, exportReady };
+  // To whoever runs this server (ALERT_EMAIL), not to customers.
+  const alertEmail = (to, { url, list }) => send({
+    to, tag: 'alert',
+    subject: `${appName} alert: ${list[0].what}${list.length > 1 ? ` (+${list.length - 1} more)` : ''}`,
+    ...layout({
+      heading: list.length > 1 ? `${list.length} problems on ${url}` : `A problem on ${url}`,
+      lines: list.flatMap((x) => [`${x.what}${x.count > 1 ? ` (${x.count} times)` : ''}, first at ${new Date(x.at).toISOString().replace('T', ' ').slice(0, 19)} UTC`, x.msg]),
+      foot: 'Alerts are grouped and sent at most every 15 minutes. The server log on Railway has the full details.',
+    }),
+  });
+
+  return { mode, send, codeEmail, alertEmail, resetEmail, inviteEmail, emailChanged, teamDeleting, teamKept, accountDeleted, exportReady };
 }
