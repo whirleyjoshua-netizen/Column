@@ -14,7 +14,7 @@ const COL_WIDTH = 340;
 const HOTKEY = 'CommandOrControl+Shift+Space';
 const PREFETCH_LIMIT = 500 * 1024 * 1024;
 // Where a fresh install connects, so downloading the app is all it takes. "Change server" still picks another.
-const DEFAULT_SERVER = 'https://column.premiershadesolutions.com';
+const DEFAULT_SERVER = 'https://app.kloomie.com';
 
 if (!app.requestSingleInstanceLock()) app.quit();
 // Meeting recording hears the computer's own sound (the other side of a call). On macOS that's

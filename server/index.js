@@ -6083,8 +6083,25 @@ const PJ = projectsModule({ db, save, broadcast, rid, cleanText, isDay, readJson
   },
 });
 
+// Addresses the app used to live at (OLD_HOSTS, comma-separated) send people on to PUBLIC_URL, so links
+// in old emails, signing requests and quotes keep working. Only pages move: /api/ answers on every address,
+// because apps calling it with a key would lose their Authorization header on a redirect.
+const OLD_HOSTS = new Set((process.env.OLD_HOSTS ?? 'column.premiershadesolutions.com').split(',').map((x) => x.trim().toLowerCase()).filter(Boolean));
+const HOME_HOST = new URL(PUBLIC_URL).host.toLowerCase();
+function movedTo(req, url) {
+  const host = String(req.headers.host || '').toLowerCase();
+  if (host === HOME_HOST || !OLD_HOSTS.has(host) || url.pathname.startsWith('/api/')) return null;
+  return PUBLIC_URL + url.pathname + url.search;
+}
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://x');
+  const moved = movedTo(req, url);
+  if (moved) {
+    // Temporary (302/307, not remembered by browsers), so the move can be undone; 307 keeps a form's POST a POST.
+    res.writeHead(req.method === 'GET' || req.method === 'HEAD' ? 302 : 307, { Location: moved, 'Cache-Control': 'no-store' });
+    return res.end();
+  }
   if (url.pathname.startsWith('/api/')) {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, Range');
