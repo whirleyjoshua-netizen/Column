@@ -8,7 +8,7 @@ export default defineRailway(() => {
     start: "node server/index.js",
     healthcheck: "/api/health",
     replicas: { "us-west2": 1 },
-    domains: ["app.kloomie.com", "column.premiershadesolutions.com"],
+    domains: ["app.kloomie.com"],
     networking: { privateNetworkEndpoint: "column" },
     volumeMounts: { "/data": columnVolume },
   });
