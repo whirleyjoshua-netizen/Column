@@ -19,10 +19,11 @@ failed=0
 for t in $all; do
   if [[ $t == pgtest && -z $TEST_DATABASE_URL ]]; then printf '%-8s %s\n' $t 'skipped (no TEST_DATABASE_URL)'; continue; fi
   start; pkill -f "remote-debugging-port=93"
-  out=$(node $T/$t.mjs $W 2>&1)
+  out=$(node $T/$t.mjs $W 2>&1); rc=$?
   printf '%-8s %s\n' $t "$(echo $out | tail -1)"
   echo $out | grep FAIL | sed 's/^/         /'
   echo $out | grep -q FAIL && failed=1
+  (( rc )) && { echo $out | grep -m3 'Error' | sed 's/^/         /'; failed=1 }
 done
 lsof -ti:4797,4795,4799 | xargs kill 2>/dev/null
 exit $failed

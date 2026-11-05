@@ -1,4 +1,4 @@
-// Column client: one UI for desktop (Electron), browsers and phones.
+// Kloomie client: one UI for desktop (Electron), browsers and phones.
 (() => {
   'use strict';
 
@@ -710,14 +710,14 @@
     }
   }
 
-  // Column was updated on the server: reload into the new version, now if nothing's being typed, else when asked.
+  // Kloomie was updated on the server: reload into the new version, now if nothing's being typed, else when asked.
   let updateOffered = false;
   function newVersion() {
     const typing = document.activeElement?.matches?.('input, textarea, [contenteditable]') && document.activeElement.value !== '';
     if (document.hidden || !typing) return location.reload();
     if (updateOffered) return;
     updateOffered = true;
-    toast('Column was updated', { label: 'Reload', run: () => location.reload() });
+    toast('Kloomie was updated', { label: 'Reload', run: () => location.reload() });
     // Otherwise it reloads the next time the window is hidden.
     document.addEventListener('visibilitychange', () => document.hidden && location.reload());
   }
@@ -751,7 +751,7 @@
     loadPss();
     S.panes = S.panes.map((v) => (v.startsWith('stack:') && !stackById(v.slice(6)) ? 'files' : v));
     $('#wsName').textContent = S.workspace.name;
-    document.title = `${S.workspace.name} · Column`;
+    document.title = `${S.workspace.name} · Kloomie`;
     applyBrand();
     buildPanes();
     renderDay();
@@ -788,7 +788,7 @@
 
   // ---------- inviting people by email (owners) ----------
   // Each invite is a link that joins one person, once, within 14 days. It's emailed when this server can
-  // send email, and shown here to copy either way (only right after it's made: Column keeps no copy).
+  // send email, and shown here to copy either way (only right after it's made: Kloomie keeps no copy).
   function inviteSection() {
     const sec = h('section', {}, h('h3', {}, 'Invite by email'));
     const box = h('input', { type: 'text', placeholder: 'sam@company.com, lee@company.com', 'aria-label': 'Email addresses to invite' });
@@ -839,7 +839,7 @@
     const pw = h('input', { type: 'password', autocomplete: me?.hasPassword ? 'current-password' : 'new-password' });
     sheet('Add your email', [
       h('p', { class: 'day-hint' }, nudge
-        ? 'Column now signs in with your email. Add yours so you can sign in to all your teams at once and reset your password if you forget it.'
+        ? 'Kloomie now signs in with your email. Add yours so you can sign in to all your teams at once and reset your password if you forget it.'
         : 'Sign in with your email from now on, on any device, and reset your password if you forget it.'),
       h('label', {}, 'Email', email),
       h('label', {}, me?.hasPassword ? 'Your password (to confirm it’s you)' : 'Choose a password (at least 8 characters)', pw),
@@ -1680,7 +1680,7 @@
       toast('Saving…');
       try {
         const p = await desktop.save(desktopInfo(it));
-        toast('Saved to Downloads/Column', { label: 'Show', run: () => desktop.reveal(p) });
+        toast('Saved to Downloads/Kloomie', { label: 'Show', run: () => desktop.reveal(p) });
       } catch (e) {
         toast('Save failed: ' + e.message);
       }
@@ -1797,7 +1797,7 @@
       it.type !== 'text' ? h('span', {}, it.name) : null,
       standalone ? null : campOfItem(it) && it.type === 'file'
         ? h('button', { class: 'btn', title: 'Keep it open beside the campaign', onclick: () => { close(); dockOpen(campOfItem(it), { type: 'file', id: it.id }); } }, 'Keep beside')
-        : h('button', { class: 'btn', title: 'Keep it open next to Column', onclick: () => { close(); popOut(it); } }, 'Open in new window'),
+        : h('button', { class: 'btn', title: 'Keep it open next to Kloomie', onclick: () => { close(); popOut(it); } }, 'Open in new window'),
       !standalone && campOfItem(it) && it.type === 'file' ? h('button', { class: 'btn', onclick: () => { close(); useSheet(campOfItem(it), it); } }, 'Use as…') : null,
       it.type !== 'text' ? h('button', { class: 'btn', onclick: () => download(it) }, it.type === 'folder' ? 'Download all (.zip)' : 'Download') : null));
     pv.classList.remove('hidden');
@@ -1805,7 +1805,7 @@
   // A file in a window of its own, e.g. your call script beside the call list. Each file gets one window.
   function popOut(it) {
     const w = window.open('/?view=' + encodeURIComponent(it.id), 'column-view-' + it.id, 'popup,width=760,height=900');
-    if (!w) toast('Your browser blocked the window. Allow pop-ups for Column and try again.');
+    if (!w) toast('Your browser blocked the window. Allow pop-ups for Kloomie and try again.');
   }
   // This page is a popped-out file (/?view=<id>): show just that file, kept up to date.
   const VIEW_ID = new URLSearchParams(location.search).get('view');
@@ -1813,7 +1813,7 @@
     document.body.classList.add('viewer');
     $('#login').classList.add('hidden');
     const it = S.items.find((x) => x.id === VIEW_ID);
-    document.title = it ? `${it.name || 'Note'} · Column` : 'Column';
+    document.title = it ? `${it.name || 'Note'} · Kloomie` : 'Kloomie';
     if (it) openPreview(it, { standalone: true });
     else {
       const pv = $('#preview');
@@ -1911,7 +1911,7 @@
     document.querySelectorAll('.dropping').forEach((p) => p.classList.remove('dropping'));
     $('#tool')?.classList.remove('sk-over');
   }
-  // Something dragged out of Column, to be used as it is rather than uploaded again (the desktop app drags a copy).
+  // Something dragged out of Kloomie, to be used as it is rather than uploaded again (the desktop app drags a copy).
   const columnDragged = (e) => (S.dragItem && Date.now() - S.dragItem.at < 60_000 && (S.internalDrag || [...(e.dataTransfer.files || [])].some((f) => f.name === S.dragItem.it.name)) ? S.dragItem.it : null);
   // An open Sidekick takes files dropped on it to read.
   const skDropAt = (target) => S.token && toolOpen === 'sidekick' && target?.closest?.('#tool');
@@ -1923,7 +1923,7 @@
     dragDepth++;
     e.preventDefault();
   });
-  // A task row takes a file dropped on it as an attachment, from the computer or from Column.
+  // A task row takes a file dropped on it as an attachment, from the computer or from Kloomie.
   const taskAt = (target) => { const tr = target?.closest?.('.task-row[data-id]'); return tr && taskById(tr.dataset.id) ? tr : null; };
   window.addEventListener('dragover', (e) => {
     const sk = skDropAt(e.target) && (hasFiles(e.dataTransfer) || (S.internalDrag && ['file', 'text'].includes(S.dragItem?.it.type)));
@@ -1993,10 +1993,10 @@
     const tr = S.token && taskAt(e.target);
     if (tr) {
       const t = taskById(tr.dataset.id);
-      const fromColumn = columnDragged(e);
+      const fromKloomie = columnDragged(e);
       S.internalDrag = false;
       S.dragItem = null;
-      if (fromColumn) return attachToTask(t, [], [fromColumn]);
+      if (fromKloomie) return attachToTask(t, [], [fromColumn]);
       if (hasFiles(e.dataTransfer)) return attachToTask(t, [...e.dataTransfer.files]);
       return;
     }
@@ -5469,7 +5469,7 @@
       fbox.replaceChildren(...outs.map((o) => {
         const n = h('input', { type: 'number', min: 1, max: 90, value: days[o] || '', placeholder: '–', 'aria-label': `Days until a follow-up after ${o}` });
         n.addEventListener('input', () => { if (Number(n.value) >= 1) days[o] = Number(n.value); else delete days[o]; });
-        return h('label', { class: 'follow-day' }, h('span', {}, o === 'Sent' ? 'Email sent from Column' : o), n, h('small', {}, 'days'));
+        return h('label', { class: 'follow-day' }, h('span', {}, o === 'Sent' ? 'Email sent from Kloomie' : o), n, h('small', {}, 'days'));
       }));
     };
     ta.addEventListener('change', drawDays);
@@ -6004,7 +6004,7 @@
   }
 
   // ---------- PSS admin: the business site's leads (owners only) ----------
-  // Column reads them every 15 minutes. Owners can browse them, make live call lists from them, and pick
+  // Kloomie reads them every 15 minutes. Owners can browse them, make live call lists from them, and pick
   // them in the Log. Nothing here changes PSS.
   const PSS_STAGES = ['new', 'contacted', 'visit_booked', 'quoted', 'approved', 'signed', 'sold', 'measure', 'ordered', 'installed', 'completed', 'lost'];
   const stagesIn = (all) => [...new Set(all.map((x) => x.stage))].sort((a, b) => (PSS_STAGES.indexOf(a) + 1 || 99) - (PSS_STAGES.indexOf(b) + 1 || 99));
@@ -6055,11 +6055,11 @@
       const url = h('input', { type: 'url', placeholder: 'https://hooks.zapier.com/…' });
       const proj = h('select', {}, h('option', { value: '' }, 'Every project'), (S.projects || []).filter((p) => !p.private).map((p) => h('option', { value: p.id }, p.name)));
       const evs = [['record.created', 'A record is added'], ['record.updated', 'A record changes'], ['record.deleted', 'A record is deleted']].map(([k, label]) => ({ k, cb: h('input', { type: 'checkbox', checked: true }), label }));
-      sheet('New webhook', [h('label', {}, 'Send to', url), h('label', {}, 'For', proj), ...evs.map((x) => h('label', { class: 'pick' }, x.cb, x.label)), h('p', { class: 'day-hint' }, 'Column sends a signed POST with the record each time. Failed sends are tried again over ten minutes.')], async () => {
+      sheet('New webhook', [h('label', {}, 'Send to', url), h('label', {}, 'For', proj), ...evs.map((x) => h('label', { class: 'pick' }, x.cb, x.label)), h('p', { class: 'day-hint' }, 'Kloomie sends a signed POST with the record each time. Failed sends are tried again over ten minutes.')], async () => {
         const w = await api('POST', '/integrations/webhooks', { url: url.value, projectId: proj.value || null, events: evs.filter((x) => x.cb.checked).map((x) => x.k) });
         INT.hooks = [...INT.hooks, w];
         redraw();
-        setTimeout(() => secretSheet('Webhook signing secret', 'secret', w.secret, 'Check each delivery’s X-Column-Signature with this secret (how: see the developer docs).'));
+        setTimeout(() => secretSheet('Webhook signing secret', 'secret', w.secret, 'Check each delivery’s X-Kloomie-Signature with this secret (how: see the developer docs).'));
       }, 'Add webhook');
     };
     const hookMenu = (e, w) => openMenu(e.currentTarget, [
@@ -6646,7 +6646,7 @@
     const v = r.values[f.id];
     const set = (val) => prSet(p, r, f, val);
     if (f.type === 'checkbox') return set(!v);
-    if (f.type === 'autonumber') return toast('Column numbers these itself.');
+    if (f.type === 'autonumber') return toast('Kloomie numbers these itself.');
     if (f.type === 'items') { PR.panel = r.id; return renderProjects(); }
     if (f.type === 'files') {
       const pick = h('input', { type: 'file', multiple: true, class: 'hidden' });
@@ -6718,7 +6718,7 @@
       { label: 'Sort A → Z', on: v.sort?.field === f.id && v.sort.dir === 'asc', run: () => prSchema(p, { op: 'updateView', typeId: t.id, viewId: v.id, sort: { field: f.id, dir: 'asc' } }) },
       { label: 'Sort Z → A', on: v.sort?.field === f.id && v.sort.dir === 'desc', run: () => prSchema(p, { op: 'updateView', typeId: t.id, viewId: v.id, sort: { field: f.id, dir: 'desc' } }) },
       v.sort ? { label: 'Newest first (no sort)', run: () => prSchema(p, { op: 'updateView', typeId: t.id, viewId: v.id, sort: null }) } : null,
-      { label: 'Rename', run: () => { const i = h('input', { value: f.name }); sheet('Rename field', [h('label', {}, 'Name', i), h('p', { class: 'day-hint' }, `Apps connected to Column still find it as “${f.key}”.`)], () => prSchema(p, { op: 'updateField', typeId: t.id, fieldId: f.id, name: i.value })); } },
+      { label: 'Rename', run: () => { const i = h('input', { value: f.name }); sheet('Rename field', [h('label', {}, 'Name', i), h('p', { class: 'day-hint' }, `Apps connected to Kloomie still find it as “${f.key}”.`)], () => prSchema(p, { op: 'updateField', typeId: t.id, fieldId: f.id, name: i.value })); } },
       f.choices ? { label: 'Edit options…', run: () => prEditChoices(p, t, f) } : null,
       f.id !== t.primary ? { label: 'Hide', run: () => prSchema(p, { op: 'updateField', typeId: t.id, fieldId: f.id, hidden: true }) } : null,
       t.fields.some((x) => x.hidden) ? { label: 'Show hidden fields', run: async () => { for (const x of t.fields.filter((y) => y.hidden)) await prCall('POST', `/projects/${p.id}/schema`, { op: 'updateField', typeId: t.id, fieldId: x.id, hidden: false }).then((y) => y && prUpsertProject(y.project)); renderProjects(); } } : null,
@@ -7903,7 +7903,7 @@
     if (ref.k === 'doc') { const d = S.items.find((x) => x.id === ref.id); if (d) return openDoc(d); }
     if (ref.k === 'member' && member(ref.id)) return toast(`${member(ref.id).name} is on the team`);
     if (ref.k === 'record') { closeDoc(); return prLoadAll().then(() => openRecord(ref.id)); }
-    toast('That isn’t in Column any more.');
+    toast('That isn’t in Kloomie any more.');
   }
   function docOpenTask(id) {
     const t = taskById(id);
@@ -7974,7 +7974,7 @@
   function docLiveShow(b) {
     const d = b.snap ? b.snap.data : docLiveData(b);
     const live = !b.snap;
-    const gone = (what) => ({ title: LIVE_TITLE[b.source], body: h('p', { class: 'dk-live-none' }, `That ${what} isn’t in Column any more.`) });
+    const gone = (what) => ({ title: LIVE_TITLE[b.source], body: h('p', { class: 'dk-live-none' }, `That ${what} isn’t in Kloomie any more.`) });
     if (!d) return gone({ campaign: 'campaign', goal: 'goal', tasks: 'campaign', calls: 'campaign', list: 'list' }[b.source] || 'thing');
     const row = (label, value, pct) => h('div', { class: 'lv-row' }, h('div', { class: 'lv-top' }, h('span', {}, label), h('small', {}, value)), pct != null ? lvBar(pct) : null);
     if (b.source === 'campaign') return { title: d.name, body: h('div', {},
@@ -8196,8 +8196,8 @@
   }
 
   // ----- Word documents: read, edit and save as .docx, or make a PDF to sign or send -----
-  // You edit the page Column shows. Saving writes a .docx from it that keeps the document's styles, headers and
-  // footers, pictures and page setup; pieces Column can't edit (text boxes, footnotes) ride along as they were.
+  // You edit the page Kloomie shows. Saving writes a .docx from it that keeps the document's styles, headers and
+  // footers, pictures and page setup; pieces Kloomie can't edit (text boxes, footnotes) ride along as they were.
   const WD_STYLES = [['P', 'Normal text'], ['H1', 'Title'], ['H2', 'Heading 1'], ['H3', 'Heading 2'], ['H4', 'Heading 3']];
   const WD_WARN = { tracked: 'tracked changes are accepted', fields: 'fields like page numbers or a table of contents become plain text', textbox: 'text boxes stay as they are but can’t be edited here' };
   const isWord = (it) => kind(it) === 'docx';
@@ -8531,7 +8531,7 @@
   }
 
   // ----- Map: where you've been with flyers, and the spots to come back to -----
-  // A run is your path while you walk or drive, recorded while Column is open. Pins are dropped where you are,
+  // A run is your path while you walk or drive, recorded while Kloomie is open. Pins are dropped where you are,
   // or anywhere you tap: a flyer left, a spot to come back to (a date makes it a task), or a lead.
   // Everything is saved on the phone first and sent when there's signal, so a dead zone loses nothing.
   const MP = { trips: [], pins: [], zones: [], draw: null, drawLayer: null, loaded: false, map: null, box: null, group: null, live: null, meDot: null, meRing: null, me: null, watch: null, run: null, wake: null, camp: '', show: 'all', focus: null, centered: false, stats: null };
@@ -8646,7 +8646,7 @@
       drawMe();
       if (first) renderTool();
     }, (e) => {
-      MP.geoErr = e.code === 1 ? 'Column can’t see your location. Allow location for this site in your browser settings, or tap the map to drop pins.' : 'Looking for your location…';
+      MP.geoErr = e.code === 1 ? 'Kloomie can’t see your location. Allow location for this site in your browser settings, or tap the map to drop pins.' : 'Looking for your location…';
       renderTool();
     }, { enableHighAccuracy: true, maximumAge: 5000, timeout: 30000 });
   }
@@ -8697,7 +8697,7 @@
     if (MP.me) runPoint(MP.me);
     mapDraw();
     renderTool(true);
-    toast(hereNow() ? 'Run started. Keep Column open while you go.' : 'Run started. Waiting for your location…');
+    toast(hereNow() ? 'Run started. Keep Kloomie open while you go.' : 'Run started. Waiting for your location…');
   }
   // A point every 8 m or so, once the phone knows where it is to within 35 m.
   function runPoint(me) {
@@ -9097,7 +9097,7 @@
           h('span', { class: 'bill-name' }, t.name || `${dayName(dayKey(new Date(t.startedAt)))} · ${new Date(t.startedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`,
             h('small', {}, [fmtDist(t.dist || 0), t.endedAt ? fmtLength(t.endedAt - t.startedAt) : 'not finished', plural(runFlyers(t), 'flyer'), campById(t.campaignId)?.name].filter(Boolean).join(' · '))),
           h('button', { class: 't-btn', html: I.more, 'aria-label': 'More', onclick: (e) => { e.stopPropagation(); tripMenu(e.currentTarget, t); } }))) :
-          h('p', { class: 'day-hint' }, 'Press Start a run when you head out. Column draws your path while it’s open, so you can see which streets you’ve covered. Keep the screen on: a phone stops sharing its location with a web page when the screen locks.')),
+          h('p', { class: 'day-hint' }, 'Press Start a run when you head out. Kloomie draws your path while it’s open, so you can see which streets you’ve covered. Keep the screen on: a phone stops sharing its location with a web page when the screen locks.')),
     ];
     setTimeout(runStats);
     return out;
@@ -9151,7 +9151,7 @@
     const pad = ColumnPdf.pad({ typed, label: kind === 'ini' ? 'Your initials' : 'Your signature' });
     sheet(kind === 'ini' ? 'Your initials' : 'Your signature', [
       pad.el,
-      h('p', { class: 'day-hint' }, 'Kept with your account so you can sign anything in Column with one click. Only you can use it.'),
+      h('p', { class: 'day-hint' }, 'Kept with your account so you can sign anything in Kloomie with one click. Only you can use it.'),
     ], async () => {
       const png = pad.png();
       if (!png) throw new Error(kind === 'ini' ? 'Draw or type your initials first.' : 'Draw or type your signature first.');
@@ -9482,7 +9482,7 @@
       fresh ? h('p', { class: 'day-hint' }, 'Here’s their link. Email it from Outlook, or copy it into your own email or text.') : null,
       open ? h('div', { class: 'sign-link' }, h('input', { value: x.link, readonly: true, 'aria-label': 'Signing link', onfocus: (e) => e.target.select() }), copy) : null,
       open ? h('div', { class: 'btns' }, mail, cancel) : null,
-      x.status === 'signed' ? h('div', { class: 'btns' }, signed ? h('button', { class: 'btn small primary-btn', onclick: () => { closeSheet(); openPreview(signed); } }, 'Open the signed copy') : h('span', { class: 'day-hint' }, 'The signed copy was removed from Column.')) : null,
+      x.status === 'signed' ? h('div', { class: 'btns' }, signed ? h('button', { class: 'btn small primary-btn', onclick: () => { closeSheet(); openPreview(signed); } }, 'Open the signed copy') : h('span', { class: 'day-hint' }, 'The signed copy was removed from Kloomie.')) : null,
       x.declineReason ? h('p', {}, `Their reason: “${x.declineReason}”`) : null,
       h('div', { class: 'any-h' }, 'History'),
       h('ul', { class: 'sign-log' }, x.events.slice().reverse().map((e) => h('li', {}, h('small', {}, fmt(e.at)), ` ${e.what.replace(/: “I agree.*$/, '')}`, e.ip ? h('small', {}, ` · ${e.ip}`) : null))),
@@ -9636,7 +9636,7 @@
         h('button', { class: 'btn small', title: 'Lock the vault', onclick: vaultLock }, h('span', { class: 'vault-ic', html: I.lock }), 'Lock')),
       VK.filter ? h('p', { class: 'day-hint vault-filter' }, `Linked to ${vaultLinkName(VK.filter)} · `, h('button', { class: 'link', onclick: () => { VK.filter = null; renderTool(); } }, 'Show everything')) : null,
       box,
-      h('p', { class: 'day-hint vault-foot' }, 'Locked with your passphrase on this device. Column’s server only keeps it scrambled; nobody else, team owners included, can open it. It locks by itself after 5 idle minutes.'),
+      h('p', { class: 'day-hint vault-foot' }, 'Locked with your passphrase on this device. Kloomie’s server only keeps it scrambled; nobody else, team owners included, can open it. It locks by itself after 5 idle minutes.'),
     ];
   }
   function vaultRow(x) {
@@ -9709,7 +9709,7 @@
     return [
       h('p', { class: 'day-hint' }, reset
         ? 'This erases everything in your vault, for good, and locks the new one with a new passphrase.'
-        : 'A safe place for gate and alarm codes, account numbers, logins and keys. It’s locked with a passphrase that only you know: Column’s server only ever keeps it scrambled, and nobody else on the team can open it.'),
+        : 'A safe place for gate and alarm codes, account numbers, logins and keys. It’s locked with a passphrase that only you know: Kloomie’s server only ever keeps it scrambled, and nobody else on the team can open it.'),
       h('div', { class: 'vault-setup' },
         h('label', {}, 'Passphrase', pass),
         h('label', {}, 'Again', again),
@@ -9790,7 +9790,7 @@
   }
   // ----- sealed cards: a secret sent through a stack, opened only with a one-time code -----
   // It's encrypted here (the vault's AES-GCM, with a key made from the code), and the code goes to the other
-  // person another way: said on a call, or texted. Column keeps only the scrambled card. 12 characters from a
+  // person another way: said on a call, or texted. Kloomie keeps only the scrambled card. 12 characters from a
   // 32-letter alphabet is 60 bits, slowed down further by 300,000 rounds of key stretching.
   const SEAL_ABC = '0123456789ABCDEFGHJKMNPQRSTVWXYZ'; // no I, L, O, U, so it reads aloud cleanly
   const SEAL_ITERS = 300_000;
@@ -9806,7 +9806,7 @@
     upsert(it);
     render();
     sheet('Sealed · here’s the code', [
-      h('p', { class: 'day-hint' }, 'Give this code to whoever should open it: say it on a call or text it. Don’t send it in the same place as the card. Without it, nobody can open the card, not even Column.'),
+      h('p', { class: 'day-hint' }, 'Give this code to whoever should open it: say it on a call or text it. Don’t send it in the same place as the card. Without it, nobody can open the card, not even Kloomie.'),
       h('div', { class: 'seal-code' }, code),
       h('div', { class: 'btns' }, h('button', { type: 'button', class: 'btn small', onclick: () => vaultCopy(code) }, 'Copy code')),
       h('p', { class: 'day-hint' }, [burn ? 'It deletes itself once someone opens it.' : '', hours ? `It expires in ${hours < 48 ? hours + ' hours' : Math.round(hours / 24) + ' days'}.` : ''].filter(Boolean).join(' ') || 'It stays until someone deletes it.'),
@@ -10051,9 +10051,9 @@
       renderTool(true);
     }, 'Save and accept');
   }
-  // Files for Sidekick to read while planning: from this device or from Column. The plan keeps its own copies.
+  // Files for Sidekick to read while planning: from this device or from Kloomie. The plan keeps its own copies.
   const SK_READS = /\.(pdf|png|jpe?g|gif|webp|docx|xlsx|pptx|txt|md|csv|tsv|json|html?|xml|ya?ml|log)$/i;
-  // Adds files from this device and things from Column; returns the names that made it.
+  // Adds files from this device and things from Kloomie; returns the names that made it.
   async function skUpload(x, files, items = []) {
     SK.busy = true;
     renderTool(true);
@@ -10095,11 +10095,11 @@
       list.replaceChildren(...(hits.length ? hits.map((it) => {
         const box = h('input', { type: 'checkbox', checked: chosen.has(it.id), onchange: () => (box.checked ? chosen.add(it.id) : chosen.delete(it.id)) });
         return h('label', { class: 'sk-pick-row' }, box, h('span', {}, label(it)), h('small', {}, it.type === 'text' ? 'Note' : fmtSize(it.size)));
-      }) : [h('p', { class: 'day-hint' }, s ? 'Nothing matches.' : 'No files or notes in Column yet.')]));
+      }) : [h('p', { class: 'day-hint' }, s ? 'Nothing matches.' : 'No files or notes in Kloomie yet.')]));
     };
     q.addEventListener('input', draw);
     draw();
-    sheet('Add from Column', [q, list], async () => {
+    sheet('Add from Kloomie', [q, list], async () => {
       for (const id of chosen) {
         const y = await api('POST', `/sidekick/${x.id}/files`, { itemId: id });
         S.sidekick = [y, ...S.sidekick.filter((z) => z.id !== y.id)];
@@ -10112,7 +10112,7 @@
     const input = h('input', { type: 'file', multiple: true, class: 'hidden', accept: '.pdf,.png,.jpg,.jpeg,.gif,.webp,.docx,.xlsx,.pptx,.txt,.md,.csv,.tsv,.json,.html', onchange: (e) => { const f = [...e.target.files]; e.target.value = ''; if (f.length) skUpload(x, f); } });
     const add = (e) => openMenu(e.currentTarget, [
       { label: 'From this device…', run: () => input.click() },
-      { label: 'From Column…', run: () => skPickFromColumn(x) },
+      { label: 'From Kloomie…', run: () => skPickFromColumn(x) },
     ]);
     const remove = async (f) => {
       const y = await api('DELETE', `/sidekick/${x.id}/files/${f.id}`).catch((er) => toast(er.message));
@@ -10312,7 +10312,7 @@
           h('span', { class: 'bill-right' }, c ? h('small', {}, '→ ' + c.name) : n ? h('small', { class: r === n ? 'plan-ok' : null }, `${r} of ${n} ready`) : null, x.due ? h('small', {}, 'by ' + dueLabel(x.due)) : null));
       }),
       h('button', { class: 'add-goal', onclick: newPlan }, '+ New plan'),
-      all.length ? null : h('p', { class: 'day-hint' }, 'Start from where you want to end up. Write the goal, the steps to it, and what you need before you can start, like a list of prospects or a script. Link what’s already in Column. When it’s ready, make it a campaign: the steps become its goals and tasks, and the lists become its call lists.'),
+      all.length ? null : h('p', { class: 'day-hint' }, 'Start from where you want to end up. Write the goal, the steps to it, and what you need before you can start, like a list of prospects or a script. Link what’s already in Kloomie. When it’s ready, make it a campaign: the steps become its goals and tasks, and the lists become its call lists.'),
     ];
   }
   function planView(p) {
@@ -10380,7 +10380,7 @@
       : linkEl(l);
     const menu = (e) => openMenu(e.currentTarget, [
       { head: 'Get it from' },
-      { label: 'Something in Column…', run: () => openPicker(pick, (r) => setLink({ type: r.type, id: r.id }, r.label)) },
+      { label: 'Something in Kloomie…', run: () => openPicker(pick, (r) => setLink({ type: r.type, id: r.id }, r.label)) },
       amOwner() && S.pss?.connected ? { label: 'Leads from PSS…', run: () => liveSheet(null, l?.type === 'live' ? { name: x.text, live: l.live } : null, (b) => setLink({ type: 'live', live: b.live }, b.name)) } : null,
       { label: l?.type === 'rows' ? 'Edit the list…' : 'Type or paste a list…', run: () => pasteSheet(x, (link) => setLink(link)) },
       l ? { label: 'Unlink', run: () => setLink(null) } : null,
@@ -10651,7 +10651,7 @@
         h('div', {}, h('small', {}, 'Left'), h('b', { class: left < 0 ? 'down' : null }, (left < 0 ? '−' : '') + money(Math.abs(left)))),
         owed ? h('div', {}, h('small', {}, 'Safe to spend', h('span', { title: 'What’s left after the bills still due this month' }, ' ⓘ')), h('b', { class: left - owed < 0 ? 'down' : null }, (left - owed < 0 ? '−' : '') + money(Math.abs(left - owed))), h('small', {}, `after ${money(owed)} in bills`)) : null),
       h('section', {}, h('h3', {}, 'Budgets'),
-        budgets.length ? budgets.map(budgetRow) : h('p', { class: 'day-hint' }, 'Set a monthly limit for what you spend on, like groceries or ads, and Column shows how much is left. It warns you on your Day when one is nearly used.'),
+        budgets.length ? budgets.map(budgetRow) : h('p', { class: 'day-hint' }, 'Set a monthly limit for what you spend on, like groceries or ads, and Kloomie shows how much is left. It warns you on your Day when one is nearly used.'),
         h('div', { class: 'btns' },
           h('button', { class: 'add-goal', onclick: () => budgetSheet() }, '+ Set a budget'),
           h('button', { class: 'add-goal', onclick: suggestBudgets }, '✦ Suggest budgets'),
@@ -10884,7 +10884,7 @@
       }).filter((r) => r.day && r.amount);
       for (const r of rows) r.category = guessCategory(r.note, r.kind);
       const got = rows.filter((r) => r.amount > 0).reduce((n, r) => n + r.amount, 0), out = rows.filter((r) => r.amount < 0).reduce((n, r) => n - r.amount, 0);
-      totals.textContent = rows.length ? `${rows.length} transactions · ${money(Math.round(got * 100))} in · ${money(Math.round(out * 100))} out. Check the categories, then import. Ones already in Column are skipped.` : 'No transactions found with these columns. Pick the right ones above.';
+      totals.textContent = rows.length ? `${rows.length} transactions · ${money(Math.round(got * 100))} in · ${money(Math.round(out * 100))} out. Check the categories, then import. Ones already in Kloomie are skipped.` : 'No transactions found with these columns. Pick the right ones above.';
       preview.replaceChildren(...rows.slice(0, 300).map((r) => {
         const cat = catInput(r.kind, r.category);
         cat.addEventListener('change', () => (r.category = cat.value));
@@ -10919,11 +10919,11 @@
   const MEET_STATE = { recording: 'Recording', transcribing: 'Transcribing…', drafting: 'Writing notes…', ready: 'Ready to review', failed: 'Didn’t work', saved: 'Saved' };
   function askRecord(title, entryId) {
     if (R.on) return toast('Already recording');
-    if (!navigator.mediaDevices?.getUserMedia) return toast('Recording works in the Column desktop app, or in a browser on this computer.');
+    if (!navigator.mediaDevices?.getUserMedia) return toast('Recording works in the Kloomie desktop app, or in a browser on this computer.');
     const name = h('input', { value: title || '', placeholder: 'Meeting with…' });
     sheet('Record a meeting', [
       h('label', {}, 'What is it', name),
-      h('p', { class: 'day-hint' }, desktop ? 'Column records your microphone and the sound from your computer, so both sides of the call are heard.' : 'Column records your microphone. Next, pick the window or tab with the call and turn on “Share audio” so the other side is heard too.'),
+      h('p', { class: 'day-hint' }, desktop ? 'Kloomie records your microphone and the sound from your computer, so both sides of the call are heard.' : 'Kloomie records your microphone. Next, pick the window or tab with the call and turn on “Share audio” so the other side is heard too.'),
       h('p', { class: 'day-hint' }, 'Let everyone on the call know you’re recording. When you stop, you’ll get a summary and next steps to check before anything is saved.'),
     ], () => startRecording(name.value.trim() || 'Meeting', entryId), 'Start recording');
   }
@@ -10932,7 +10932,7 @@
     try {
       mic = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
     } catch {
-      throw new Error('Column can’t use the microphone. Allow it in your browser or system settings, then try again.');
+      throw new Error('Kloomie can’t use the microphone. Allow it in your browser or system settings, then try again.');
     }
     try {
       const d = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true, systemAudio: 'include', selfBrowserSurface: 'exclude' });
@@ -11024,7 +11024,7 @@
     const xs = S.meetings || [];
     return [
       R.on ? null : h('button', { class: 'add-goal', onclick: () => askRecord('') }, '● Record a meeting'),
-      xs.length ? null : h('p', { class: 'day-hint' }, 'Record a call and Column writes the notes: a summary, decisions and next steps, tied to the right campaign. Meetings happening now also get a Record button on your Day.'),
+      xs.length ? null : h('p', { class: 'day-hint' }, 'Record a call and Kloomie writes the notes: a summary, decisions and next steps, tied to the right campaign. Meetings happening now also get a Record button on your Day.'),
       ...xs.map((x) => h('div', { class: 'bill', onclick: () => meetingSheet(x) },
         h('span', { class: 'bill-name' }, x.draft?.title || x.title, h('small', {}, `${new Date(x.startedAt).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })} · ${Math.max(1, Math.round(((x.endedAt || Date.now()) - x.startedAt) / 60000))} min`)),
         h('span', { class: 'bill-right' }, h('small', { class: x.status === 'failed' ? 'late' : null }, MEET_STATE[x.status])))),
@@ -11241,7 +11241,7 @@
           toast(e.message);
         }
       });
-      return [h('p', { class: 'day-hint' }, 'Emails go out from your own Outlook, so replies land in your inbox and they show in your Sent folder. Connect it once and allow Column to send email for you.'),
+      return [h('p', { class: 'day-hint' }, 'Emails go out from your own Outlook, so replies land in your inbox and they show in your Sent folder. Connect it once and allow Kloomie to send email for you.'),
         m.canConnect ? go : h('p', { class: 'day-hint' }, 'Outlook sign-in isn’t set up on this server yet. See “Calendars” in the README.'), sendBars(null)];
     }
     const no = noEmail();
@@ -11430,7 +11430,7 @@
           b.colors.length ? h('div', { class: 'brand-sw' }, b.colors.map((x) => h('span', { class: 'brand-dot' + (x.hex === b.accent ? ' on' : ''), style: `background:${x.hex}`, title: (x.name ? x.name + ' ' : '') + x.hex + (x.hex === b.accent ? ' · app colour' : '') }))) : null)));
     } else {
       sec.append(h('p', {}, owner
-        ? 'Set your mission, values, tone of voice, logo and colours. AI drafts follow them, and your logo and colour brand Column for everyone.'
+        ? 'Set your mission, values, tone of voice, logo and colours. AI drafts follow them, and your logo and colour brand Kloomie for everyone.'
         : 'Your team owner hasn’t set the brand up yet.'));
     }
     if (owner || set) sec.append(h('button', { class: 'btn', onclick: brandSheet }, owner ? (set ? 'Edit brand & culture' : 'Set up brand & culture') : 'View all'));
@@ -11500,7 +11500,7 @@
       drawAccent();
     };
     const drawAccent = () => {
-      accentSel.replaceChildren(h('option', { value: '' }, 'Column’s default'), ...colors.map((x) => h('option', { value: x.hex }, (x.name || 'Colour') + ' ' + x.hex)));
+      accentSel.replaceChildren(h('option', { value: '' }, 'Kloomie’s default'), ...colors.map((x) => h('option', { value: x.hex }, (x.name || 'Colour') + ' ' + x.hex)));
       accentSel.value = colors.some((x) => x.hex === accent) ? accent : '';
       accentSel.disabled = !owner;
     };
@@ -11517,7 +11517,7 @@
       h('label', {}, 'Tone of voice', tone),
       h('label', {}, 'About the business', about),
       h('label', {}, 'Brand colours', list),
-      h('label', {}, 'App colour', accentSel, h('small', {}, 'Buttons, links and highlights in Column, for everyone on the team.')),
+      h('label', {}, 'App colour', accentSel, h('small', {}, 'Buttons, links and highlights in Kloomie, for everyone on the team.')),
     ], async () => {
       if (!owner) return;
       S.workspace = await api('PATCH', '/brand', { mission: mission.value, values: values.value, tone: tone.value, about: about.value, colors, accent });
@@ -11556,7 +11556,7 @@
         h('div', { class: 'srow' }, h('span', {}, `${CAL_NAMES[conn.provider]} · ${conn.account}`, synced), h('span', { class: 'cal-btns' }, sync, del)),
         h('div', { class: 'picks-h' }, 'Show in my Day'),
         h('div', { class: 'picks' }, shows),
-        h('div', { class: 'srow' }, h('span', {}, 'Add blocks I make in Column to', h('small', {}, 'Blocks with a start and end time. Edits and deletes follow both ways.')), write)));
+        h('div', { class: 'srow' }, h('span', {}, 'Add blocks I make in Kloomie to', h('small', {}, 'Blocks with a start and end time. Edits and deletes follow both ways.')), write)));
     }
     const ready = Object.entries(c.providers).filter(([, on]) => on);
     if (ready.length) {
@@ -11570,7 +11570,7 @@
         }
       } }, (c.connections.some((x) => x.provider === k) ? '+ Another ' : 'Connect ') + CAL_NAMES[k]))));
     } else sec.append(h('p', { class: 'day-hint' }, 'Calendar sign-in isn’t set up on this server yet. See “Calendars” in the README.'));
-    sec.append(h('p', { style: 'margin-top:8px;font-size:11.5px' }, 'Only you see events from your calendars. Your team sees what you add in Column as usual.'));
+    sec.append(h('p', { style: 'margin-top:8px;font-size:11.5px' }, 'Only you see events from your calendars. Your team sees what you add in Kloomie as usual.'));
     return sec;
   }
 
@@ -11648,12 +11648,12 @@
       if (desktop) {
         dev.append(
           toggleRow('Always on top', 'Keep the column above other windows', S.desktopCfg.alwaysOnTop, (on) => { S.desktopCfg.alwaysOnTop = on; desktop.setConfig({ alwaysOnTop: on }); }),
-          toggleRow('Auto-save incoming files', 'Copy everything that arrives into Downloads/Column', S.desktopCfg.autoSave, (on) => { S.desktopCfg.autoSave = on; desktop.setConfig({ autoSave: on }); }),
+          toggleRow('Auto-save incoming files', 'Copy everything that arrives into Downloads/Kloomie', S.desktopCfg.autoSave, (on) => { S.desktopCfg.autoSave = on; desktop.setConfig({ autoSave: on }); }),
           toggleRow('Open at login', null, S.desktopCfg.openAtLogin, (on) => { S.desktopCfg.openAtLogin = on; desktop.setConfig({ openAtLogin: on }); }),
           desktop.setNext && desktop.platform === 'darwin' ? toggleRow('Next event in menu bar', 'Show what’s on now or next beside the menu-bar icon', S.desktopCfg.trayNext !== false, (on) => { S.desktopCfg.trayNext = on; desktop.setConfig({ trayNext: on }); }) : null,
           h('div', { class: 'srow' }, h('span', {}, 'Show / hide', h('small', {}, desktop.platform === 'darwin' ? '⌘ ⇧ Space, or the menu bar icon' : 'Ctrl + Shift + Space, or the tray icon'))),
           h('div', { class: 'btns', style: 'margin-top:8px' },
-            h('button', { class: 'btn', onclick: () => desktop.openFolder() }, 'Open Downloads/Column'),
+            h('button', { class: 'btn', onclick: () => desktop.openFolder() }, 'Open Downloads/Kloomie'),
             h('button', { class: 'btn', onclick: () => desktop.changeServer() }, 'Change server')
           )
         );
@@ -11692,7 +11692,7 @@
         }
         people.append(row);
       }
-      const inviteText = () => `Join “${ws.name}” on Column\n${location.origin}\nChoose Join team · Team: ${ws.name} · Invite code: ${ws.inviteCode}`;
+      const inviteText = () => `Join “${ws.name}” on Kloomie\n${location.origin}\nChoose Join team · Team: ${ws.name} · Invite code: ${ws.inviteCode}`;
       const newCode = h('button', { class: 'btn', 'data-label': '1', title: 'The old code stops working' }, ws.inviteCode ? 'New code' : 'Make an invite code');
       newCode.addEventListener('click', () => (ws.inviteCode ? confirmClick(newCode, () => peopleCall('POST', '/invite')) : peopleCall('POST', '/invite')));
       people.append(
@@ -11711,11 +11711,11 @@
         s.append(h('section', {}, h('h3', {}, 'Campaign email'),
           toggleRow('Members can send campaign email', 'From their own Outlook, to people on lists in their own campaigns. Owners can always send.', !!ws.settings.memberEmail,
             (on) => api('PATCH', '/workspace', { memberEmail: on }).catch((e) => toast(e.message)))));
-        // The team's clock: what "today" is for follow-ups, quotes and anything Column dates on its own.
+        // The team's clock: what "today" is for follow-ups, quotes and anything Kloomie dates on its own.
         const zones = Intl.supportedValuesOf?.('timeZone') || [ws.tz];
         const tz = h('select', { onchange: () => api('PATCH', '/workspace', { tz: tz.value }).then(() => toast('Time zone saved'), (e) => toast(e.message)) },
           [...new Set([ws.tz, ...zones])].filter(Boolean).map((z) => h('option', { value: z, selected: z === ws.tz }, z.replace(/_/g, ' '))));
-        s.append(h('section', {}, h('h3', {}, 'Time zone'), h('p', {}, 'Where your team works. Column uses it for “today” when it dates things by itself, like follow-ups and quotes.'), tz));
+        s.append(h('section', {}, h('h3', {}, 'Time zone'), h('p', {}, 'Where your team works. Kloomie uses it for “today” when it dates things by itself, like follow-ups and quotes.'), tz));
       }
       s.append(brandSection());
       if (isOwner()) s.append(exportSection('team'));

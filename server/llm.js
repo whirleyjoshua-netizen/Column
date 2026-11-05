@@ -1,4 +1,4 @@
-// The AI providers Column's smart buttons run on, with each person's own API key: Claude, OpenAI, Gemini.
+// The AI providers Kloomie's smart buttons run on, with each person's own API key: Claude, OpenAI, Gemini.
 // Each provider runs one turn as its own tool-use loop and returns the final reply. complete() is the
 // plain case: one prompt in, text out, no tools.
 //

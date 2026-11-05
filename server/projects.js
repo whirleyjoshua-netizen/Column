@@ -9,7 +9,7 @@
 // - The public API (/api/v1) takes an API key made in Settings, reads and writes records by those keys, and
 //   matches records by an outside system's id (external_id) so a sync updates instead of duplicating.
 // - Webhooks tell other systems when a record is created, changed or deleted, signed so they can check it
-//   came from Column, retried when the other end is down.
+//   came from Kloomie, retried when the other end is down.
 import crypto from 'node:crypto';
 import dns from 'node:dns/promises';
 import net from 'node:net';
@@ -413,13 +413,13 @@ export function projectsModule({ db, save, broadcast, rid, cleanText, isDay, rea
         if (disc && Number.isFinite(dv) && dv > 0) out.discount = disc.type === 'percent' ? { type: 'percent', value: Math.min(100, dv) } : { type: 'amount', value: Math.round(dv * (disc.cents ? 1 : 100)) };
         return rows.length || out.discount || out.taxRate ? out : undefined;
       }
-      // A file in Column: plans, specs, photos.
+      // A file in Kloomie: plans, specs, photos.
       case 'files': {
         const ids = [...new Set((Array.isArray(v) ? v : [v]).map(String))].filter((id) => db.items[id]?.wsId === ws.id && db.items[id].type === 'file');
         for (const id of ids) db.items[id].pinned = true;
         return ids.length ? ids.slice(0, 50) : undefined;
       }
-      // Numbered by Column; what's sent in is ignored.
+      // Numbered by Kloomie; what's sent in is ignored.
       case 'autonumber': return undefined;
       case 'link': {
         const ids = [...new Set((Array.isArray(v) ? v : [v]).map(String))].filter((id) => {
@@ -865,7 +865,7 @@ export function projectsModule({ db, save, broadcast, rid, cleanText, isDay, rea
         const h = c && db.webhooks[c];
         if (!h || h.wsId !== ws.id) return send(res, 404, { error: 'That webhook is gone.' });
         if (m === 'POST' && d === 'test') {
-          deliver(h, { id: 'evt_' + rid(), type: 'ping', created_at: new Date().toISOString(), data: { message: 'Hello from Column' } });
+          deliver(h, { id: 'evt_' + rid(), type: 'ping', created_at: new Date().toISOString(), data: { message: 'Hello from Kloomie' } });
           return send(res, 200, { ok: true });
         }
         if (m === 'PATCH' && !d) {
@@ -1005,7 +1005,7 @@ button{font:inherit;font-weight:700;background:var(--accent);color:#fff;border:0
 .decline{margin-top:12px;color:var(--muted);font-size:13.5px}.decline form{display:flex;flex-direction:column;gap:10px;margin-top:10px}.decline summary{cursor:pointer}
 .done{margin-top:28px;padding:16px;border-radius:12px;background:var(--soft);font-weight:600}.done.ok{background:#e7f8ef;color:#126b3d}.muted{color:var(--muted)}
 footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
-</style></head><body><main>${body}</main><footer>Sent with Column</footer></body></html>`);
+</style></head><body><main>${body}</main><footer>Sent with Kloomie</footer></body></html>`);
   }
   // Quotes still waiting past their valid-until day become Expired.
   function expireQuotes() {
@@ -1016,7 +1016,7 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
       if (!valid || offline(rec.wsId) || !rec.values[valid.id] || rec.values[valid.id] >= today(rec.wsId) || !['sent', 'viewed'].includes(quoteStatus(t, rec))) continue;
       setStatus(p, t, rec, 'Expired');
       rec.updatedAt = Date.now();
-      recordNews(rec, 'record.updated', 'Column');
+      recordNews(rec, 'record.updated', 'Kloomie');
     }
   }
   setInterval(expireQuotes, 3600_000).unref?.();
@@ -1211,11 +1211,11 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
     const p = db.projects[rec.projectId];
     const ws = db.workspaces[rec.wsId];
     const t = p && typeOf(p, rec.typeId);
-    if (!p || !t || !ws || p.private) return; // private projects stay in Column
+    if (!p || !t || !ws || p.private) return; // private projects stay in Kloomie
     const event = { id: 'evt_' + rid(), type, created_at: new Date().toISOString(), by, project: { id: p.id, name: p.name }, list: t.key, data: outRecord(ws, p, t, rec) };
     for (const h of hooks) deliver(h, event);
   }
-  // Signed like Stripe: X-Column-Signature: t=<seconds>,v1=<hmac of "t.body">. Tried 4 times over ~10 minutes.
+  // Signed like Stripe: X-Kloomie-Signature: t=<seconds>,v1=<hmac of "t.body">. The X-Column-* copies are for receivers set up before the rename. Tried 4 times over ~10 minutes.
   const DELAYS = [0, 30_000, 120_000, 480_000];
   async function deliver(h, event, attempt = 0) {
     if (offline(h.wsId)) return;
@@ -1226,7 +1226,7 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
     let status = 0, error = null;
     try {
       if (!allowLocalHooks) await hookUrl(h.url); // the address could point somewhere private by now
-      const r = await fetch(h.url, { method: 'POST', redirect: 'manual', headers: { 'Content-Type': 'application/json', 'User-Agent': 'Column-Webhooks/1', 'X-Column-Event': event.type, 'X-Column-Delivery': event.id, 'X-Column-Signature': `t=${ts},v1=${sig}` }, body, signal: AbortSignal.timeout(10_000) });
+      const r = await fetch(h.url, { method: 'POST', redirect: 'manual', headers: { 'Content-Type': 'application/json', 'User-Agent': 'Kloomie-Webhooks/1', 'X-Kloomie-Event': event.type, 'X-Kloomie-Delivery': event.id, 'X-Kloomie-Signature': `t=${ts},v1=${sig}`, 'X-Column-Event': event.type, 'X-Column-Delivery': event.id, 'X-Column-Signature': `t=${ts},v1=${sig}` }, body, signal: AbortSignal.timeout(10_000) });
       status = r.status;
     } catch (e) {
       error = e.message;

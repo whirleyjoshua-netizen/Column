@@ -1,5 +1,5 @@
-// Word documents (.docx) in Column: read one into something you can edit, and write the edit back.
-// What Column can't edit (pictures, footnotes, equations, text boxes) rides along untouched, and the parts it
+// Word documents (.docx) in Kloomie: read one into something you can edit, and write the edit back.
+// What Kloomie can't edit (pictures, footnotes, equations, text boxes) rides along untouched, and the parts it
 // never shows (styles, headers and footers, page setup) are copied over as they were.
 // The page is built from elements, never from the file's own markup, so a document can't run anything.
 window.ColumnWord = (() => {
@@ -18,7 +18,7 @@ window.ColumnWord = (() => {
     const dv = new DataView(buf);
     let end = buf.byteLength - 22;
     while (end >= 0 && dv.getUint32(end, true) !== 0x06054b50) end--;
-    if (end < 0) throw new Error('This isn’t a Word document Column can read.');
+    if (end < 0) throw new Error('This isn’t a Word document Kloomie can read.');
     const out = new Map();
     let p = dv.getUint32(end + 16, true);
     for (let n = dv.getUint16(end + 10, true); n > 0; n--) {
@@ -145,7 +145,7 @@ window.ColumnWord = (() => {
     const relsName = `${dirOf(main)}_rels/${main.slice(dirOf(main).length)}.rels`;
     const [xml, rels] = await Promise.all([get(main), get(relsName)]);
     const body = xml && all(xml, 'body').find((b) => b.namespaceURI === W);
-    if (!ct || !body) throw new Error('This isn’t a Word document Column can read.');
+    if (!ct || !body) throw new Error('This isn’t a Word document Kloomie can read.');
     const relList = all(rels, 'Relationship');
     const partFor = (type) => {
       const r = relList.find((x) => x.getAttribute('Type') === REL(type));
@@ -199,7 +199,7 @@ window.ColumnWord = (() => {
       else if (all(node, 'br').some((b) => b.getAttributeNS(W, 'type') === 'page')) label = 'Page break';
       else if (all(node, 'br').some((b) => b.getAttributeNS(W, 'type') === 'column')) label = 'Column break';
       if (label === 'Page break') return el(inline ? 'span' : 'div', { class: 'wd-atom wd-break', 'data-x': i, contenteditable: 'false' }, label);
-      return el(inline ? 'span' : 'div', { class: 'wd-atom', 'data-x': i, contenteditable: 'false', title: 'Column keeps this as it is' }, label);
+      return el(inline ? 'span' : 'div', { class: 'wd-atom', 'data-x': i, contenteditable: 'false', title: 'Kloomie keeps this as it is' }, label);
     }
 
     function run(r, into) {
@@ -389,7 +389,7 @@ window.ColumnWord = (() => {
       rels.documentElement.append(r);
       return id;
     }
-    // New pictures from the page (PNG or JPEG data URLs, from a Column doc): each becomes a media part.
+    // New pictures from the page (PNG or JPEG data URLs, from a Kloomie doc): each becomes a media part.
     let picN = 0;
     function picture(img, into) {
       const m = /^data:image\/(png|jpeg);base64,(.+)$/.exec(img.getAttribute('src') || '');
@@ -423,7 +423,7 @@ window.ColumnWord = (() => {
       ct.documentElement.append(o);
     }
 
-    // Lists Column starts: bullets share one list; each numbered list counts from 1.
+    // Lists Kloomie starts: bullets share one list; each numbered list counts from 1.
     let bulletNum = null, numberAbs = null;
     const maxOf = (tag, attr) => Math.max(0, ...all(numbering, tag).map((x) => +x.getAttributeNS(W, attr) || 0));
     function numPart() {

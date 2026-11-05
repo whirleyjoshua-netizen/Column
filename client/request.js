@@ -87,7 +87,7 @@
       info.note ? h('div', { class: 'msg' }, info.note) : null,
       h('label', { class: 'name' }, 'Your name', name),
       drop, pick, list,
-      h('p', { class: 'small' }, info.expiresAt ? `This link works until ${new Date(info.expiresAt).toLocaleDateString()}.` : 'Sent with Column'),
+      h('p', { class: 'small' }, info.expiresAt ? `This link works until ${new Date(info.expiresAt).toLocaleDateString()}.` : 'Sent with Kloomie'),
     ].filter(Boolean));
   }
 

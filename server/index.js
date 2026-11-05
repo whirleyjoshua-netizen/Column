@@ -1,4 +1,4 @@
-// Column sync server: accounts/teams, file storage, and live updates over WebSocket.
+// Kloomie sync server: accounts/teams, file storage, and live updates over WebSocket.
 import http from 'node:http';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
@@ -10,7 +10,6 @@ import { pipeline } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 import { createZip, streamZip, zipSize } from './zip.js';
-import { iconPng } from './png.js';
 import { providers as calProviders } from './calendar.js';
 import { llms, llmError, complete } from './llm.js';
 import { fileText, officeKind } from './extract.js';
@@ -62,7 +61,7 @@ for (const ws of Object.values(db.workspaces)) {
 // A write that fails (the database is unreachable) keeps everything in memory and tries again, waiting
 // longer each time, up to 30 s. A server that's been replaced by a newer one stops.
 let saveTimer = null;
-let importing = false; // while another Column's data is being unpacked over this one, nothing is written
+let importing = false; // while another Kloomie's data is being unpacked over this one, nothing is written
 let dirtySince = loaded.fromFile ? Date.now() : 0;
 let writing = null;
 let saveFails = 0;
@@ -277,7 +276,7 @@ const publicMember = (m) => ({ id: m.id, name: m.name, role: m.role, roleIds: m.
 // ---------- accounts: one email and password for every team you're in ----------
 // A person in a team is a member; a member can belong to an account (users), which holds the email
 // and the password. Members from before accounts have their own password until they add an email.
-const APP_NAME = process.env.APP_NAME || 'Column';
+const APP_NAME = process.env.APP_NAME || 'Kloomie';
 const mailer = createMailer({
   token: process.env.RESEND_API_KEY, from: process.env.MAIL_FROM, appName: APP_NAME,
   outbox: process.env.MAIL_OUTBOX === '1' ? path.join(DATA_DIR, 'outbox') : null,
@@ -515,7 +514,7 @@ function publicItem(it) {
 // the first time they're opened, and become blocks for good the first time they're edited.
 // Blocks are flat; nesting is an indent. Text is runs of plain text with marks, never markup.
 const DOC_TYPES = ['p', 'h1', 'h2', 'h3', 'ul', 'ol', 'todo', 'quote', 'callout', 'code', 'toggle', 'divider', 'table', 'file', 'live'];
-// A mention points at something else in Column. A live block shows numbers from it, or a snapshot of them.
+// A mention points at something else in Kloomie. A live block shows numbers from it, or a snapshot of them.
 const DOC_REFS = ['member', 'campaign', 'goal', 'task', 'doc', 'record'];
 const DOC_LIVE = ['campaign', 'goal', 'tasks', 'calls', 'budgets', 'list', 'pipeline'];
 const DOC_SNAP_MAX = 60_000;
@@ -846,7 +845,7 @@ img{max-width:100%;border-radius:8px;margin:.5em 0}a{color:var(--accent)}.ref{co
 .live{border:1px solid var(--line);border-radius:10px;padding:10px 14px;margin:.6em 0;font-size:14px}.live b{display:block;margin-bottom:4px}.live div{color:var(--muted)}
 details summary{cursor:pointer;font-weight:500}footer{max-width:760px;margin:16px auto 0;text-align:center;font-size:12px;color:var(--muted)}
 </style></head><body><article>${top}<h1>${escHtml(it.title || 'Untitled')}</h1><p class="meta">Updated ${escHtml(when)}${it.share?.liveAt ? ' · numbers as of ' + escHtml(new Date(it.share.liveAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })) : ''}</p>
-${docShareHtml(it, token)}</article><footer>${brand ? `Shared by ${escHtml(brand.team)} with Column` : 'Shared with Column'}</footer></body></html>`);
+${docShareHtml(it, token)}</article><footer>${brand ? `Shared by ${escHtml(brand.team)} with Kloomie` : 'Shared with Kloomie'}</footer></body></html>`);
 }
 // Files shown in a doc stay as long as the doc does.
 function pinDocFiles(ws, blocks) {
@@ -1115,9 +1114,9 @@ function serveShare(req, res, url) {
     <a class="dl" href="${it.type === 'folder' ? base + '/zip' : src + '?dl=1'}">Download${it.type === 'folder' ? ' (.zip)' : ''}</a>`, it.name, brand);
 }
 
-function sharePage(res, code, body, title = 'Column', brand = null) {
+function sharePage(res, code, body, title = 'Kloomie', brand = null) {
   const top = brand?.logo ? `<img class="brand" src="${logoUrl(brand.logo)}" alt="${escHtml(brand.team)}">` : '';
-  const from = brand ? `Shared by ${escHtml(brand.team)} with Column` : 'Shared with Column';
+  const from = brand ? `Shared by ${escHtml(brand.team)} with Kloomie` : 'Shared with Kloomie';
   res.writeHead(code, {
     'Content-Type': 'text/html; charset=utf-8',
     'Content-Security-Policy': "default-src 'none'; img-src 'self'; media-src 'self'; style-src 'unsafe-inline'",
@@ -1305,7 +1304,7 @@ function applyCampaign(c, body, ws, auth) {
     if (list.length) c.outcomes = list;
   }
   if (body.methods !== undefined) c.methods = labelList(body.methods, 8);
-  // Which outcomes come back as a follow-up task, and after how many days. "Sent" is an email sent from Column.
+  // Which outcomes come back as a follow-up task, and after how many days. "Sent" is an email sent from Kloomie.
   if (body.followUps !== undefined) {
     const v = body.followUps && typeof body.followUps === 'object' ? body.followUps : {};
     c.followUps = Object.fromEntries(Object.entries(v).filter(([o, n]) => (c.outcomes.includes(o) || o === 'Sent') && Number(n) >= 1).map(([o, n]) => [o, Math.min(90, Math.round(Number(n)))]));
@@ -1719,7 +1718,7 @@ function presence(wsId) {
 
 // ---------- calendars: Google / Outlook, both ways ----------
 // Events from the calendars you switch on become entries in your Day that only you see (cal.imported).
-// Blocks you add in Column go to the calendar you pick (writeCalId) and stay linked (cal, not imported),
+// Blocks you add in Kloomie go to the calendar you pick (writeCalId) and stay linked (cal, not imported),
 // so an edit or delete on either side follows to the other. Repeating entries and events spanning
 // several days stay one-way for now.
 const oauthPending = new Map(); // state -> who is connecting
@@ -1733,7 +1732,7 @@ async function oauthCallback(req, res, url) {
   const p = calProviders[provider];
   const pend = oauthPending.get(url.searchParams.get('state') || '');
   const page = (title, msg) => send(res, 200, `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${title}</title><body style="font:15px system-ui;background:#111;color:#eee;display:grid;place-items:center;height:90vh;text-align:center"><div><h2>${title}</h2><p>${msg}</p></div></body>`, { 'Content-Type': 'text/html; charset=utf-8' });
-  if (!p || !pend || pend.provider !== provider || pend.exp < Date.now()) return page('Link expired', 'Start again from Column → Settings → Calendars.');
+  if (!p || !pend || pend.provider !== provider || pend.exp < Date.now()) return page('Link expired', 'Start again from Kloomie → Settings → Calendars.');
   oauthPending.delete(url.searchParams.get('state'));
   if (url.searchParams.get('error')) return page('Not connected', 'Calendar access wasn’t granted. You can close this window.');
   const ws = db.workspaces[pend.wsId];
@@ -1760,7 +1759,7 @@ async function oauthCallback(req, res, url) {
   broadcast(ws.id, { type: 'mail', forMember: pend.memberId });
   syncCalendar(conn).catch(() => {});
   if (pend.mail && !conn.mail) return page(`${p.name} connected`, `${account} is linked, but sending email wasn’t allowed. Your Microsoft admin may need to approve it.`);
-  return page(`${p.name} connected`, `${account} is linked to Column${pend.mail ? ' and can send campaign emails' : ''}. You can close this window.`);
+  return page(`${p.name} connected`, `${account} is linked to Kloomie${pend.mail ? ' and can send campaign emails' : ''}. You can close this window.`);
 }
 
 async function calToken(conn) {
@@ -1797,7 +1796,7 @@ function eventPieces(ev, tz) {
   }
   return out.map((x) => ({ ...x, text: ev.title.slice(0, 5000) }));
 }
-// A Column entry as an event, in wall-clock time.
+// A Kloomie entry as an event, in wall-clock time.
 function entryEvent(e, tz) {
   const t = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}:00`;
   if (e.start == null) return { title: e.text, allDay: true, start: e.date, end: addDays(e.date, 1), tz };
@@ -1836,7 +1835,7 @@ async function syncCalendar(conn) {
       if (!cal.on && cal.id !== conn.writeCalId && !linked.some((e) => !e.cal.imported)) continue;
       const events = await p.events(token, cal.id, from, to);
       const byId = new Map(events.map((ev) => [ev.id, ev]));
-      // Blocks made in Column: follow edits and deletes made in the calendar.
+      // Blocks made in Kloomie: follow edits and deletes made in the calendar.
       const ours = new Set();
       for (const e of linked.filter((x) => !x.cal.imported)) {
         ours.add(e.cal.eventId);
@@ -1885,7 +1884,7 @@ function syncAllCalendars() {
   }
 }
 
-// After an entry is saved or deleted in Column, send it to the calendar it's linked to (or, for a new
+// After an entry is saved or deleted in Kloomie, send it to the calendar it's linked to (or, for a new
 // block, to its maker's chosen calendar). Runs after the response; failures show on the connection.
 async function pushEntry(ref, action) {
   const e = action === 'delete' ? ref : db.entries[ref];
@@ -1919,7 +1918,7 @@ async function pushEntry(ref, action) {
   }
 }
 
-// Your private copies go; blocks made in Column stay, just no longer linked.
+// Your private copies go; blocks made in Kloomie stay, just no longer linked.
 function disconnectCalendar(conn) {
   for (const e of Object.values(db.entries)) {
     if (e.cal?.connId !== conn.id) continue;
@@ -2036,7 +2035,7 @@ async function syncPss(ws) {
       const leads = [];
       let after = null;
       for (let i = 0; ; i++) {
-        if (i >= PSS_PAGES) throw new Error('PSS has more leads than Column can hold.');
+        if (i >= PSS_PAGES) throw new Error('PSS has more leads than Kloomie can hold.');
         const page = await pssGet(p.url, key, '/api/column/leads' + (after ? '?after=' + encodeURIComponent(after) : ''));
         leads.push(...(Array.isArray(page.leads) ? page.leads : []).map(pssLead).filter((x) => x.id));
         if (!page.next) break;
@@ -2096,7 +2095,7 @@ async function pushPss(ws) {
       const r = await pssGet(p.url, key, '/api/column/events', {
         events: batch.map((x) => ({
           id: x.id, lead_id: x.leadId, method: x.method === 'Email' ? 'email' : 'call', outcome: x.outcome, note: x.note || '',
-          campaign: (db.campaigns[x.campaignId]?.name || '').slice(0, 120), by: x.by || 'Column', at: new Date(x.at).toISOString(),
+          campaign: (db.campaigns[x.campaignId]?.name || '').slice(0, 120), by: x.by || 'Kloomie', at: new Date(x.at).toISOString(),
         })),
       });
       const done = new Map([...(r.saved || []).map((id) => [id, 'sent']), ...(r.missing || []).map((id) => [id, 'gone'])]);
@@ -2463,7 +2462,7 @@ async function signApi(req, res, token, part) {
       ],
       images: [['Signature', images.sig], ...(images.ini ? [['Initials', images.ini]] : [])],
       events: x.events.map(at),
-      note: 'Made with Column. The signer reached this document through a private link sent to the email address above. Each line of the history shows when it happened, the network address it came from, and the browser used.',
+      note: 'Made with Kloomie. The signer reached this document through a private link sent to the email address above. Each line of the history shows when it happened, the network address it came from, and the browser used.',
     });
     const bytes = await doc.save();
     await fsp.writeFile(signPath(x, true), bytes);
@@ -2505,7 +2504,7 @@ function vaultLink(v, ws) {
 
 // ---------- planner: work out the goal and what it needs before it becomes a campaign ----------
 // A plan is its maker's own: the end goal, the steps to it (each with its tasks), and what's needed
-// to start: a thing in Column, PSS leads, a pasted list, or just a note to tick off. Making it a
+// to start: a thing in Kloomie, PSS leads, a pasted list, or just a note to tick off. Making it a
 // campaign happens in the browser, through the usual campaign, goal, task and list routes.
 const PLAN_LINKS = ['file', 'stack', 'campaign', 'task'];
 // ----- Map: runs you walk or drive (a GPS path), and pins you drop on the way -----
@@ -2627,7 +2626,7 @@ async function streetAt(lat, lng) {
   let out = null;
   try {
     const r = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=18&addressdetails=1&lat=${lat}&lon=${lng}`, {
-      headers: { 'User-Agent': `Column (${PUBLIC_URL})`, 'Accept-Language': 'en' }, signal: AbortSignal.timeout(6000),
+      headers: { 'User-Agent': `Kloomie (${PUBLIC_URL})`, 'Accept-Language': 'en' }, signal: AbortSignal.timeout(6000),
     });
     const j = r.ok ? await r.json() : null;
     const a = j?.address || {};
@@ -2697,7 +2696,7 @@ function mailFooter(v) {
   return f;
 }
 // "Hi {first name}" → "Hi Pat", or "Hi there" when there's no first name. {opener} is the line written for
-// that person, and any other {Column} is that column of their list row (left out when they don't have it).
+// that person, and any other {Kloomie} is that column of their list row (left out when they don't have it).
 const mergeKey = (s) => String(s || '').trim().toLowerCase().replace(/\s+/g, ' ');
 const merge = (text, r) => text.replace(/\{([^{}\n]{1,40})\}/g, (_, raw) => {
   const k = mergeKey(raw);
@@ -3182,7 +3181,7 @@ async function aiDoc(ws, auth, body) {
     ask ? `What they asked for: ${ask}` : '',
   ].filter(Boolean).join('\n\n');
   const system = [
-    'You write inside Column, a work app for a small business team, in their doc. ' + DOC_AI[mode],
+    'You write inside Kloomie, a work app for a small business team, in their doc. ' + DOC_AI[mode],
     'Use the real numbers, names and dates you’re given; never invent results, quotes, prices or people. Where something is unknown, leave a short [bracketed] placeholder for them to fill.',
     'Write plain markdown: # heading, ## subheading, ### small heading, - bullet, 1. numbered, - [ ] to-do, > quote, **bold**, *italic*, [text](https://link). Short paragraphs. No title line at the top unless they asked for one.',
     'Reply with JSON only: {"text":"the markdown","title":"a short title for the doc, only when drafting the whole doc and it has none, else null"}',
@@ -3209,7 +3208,7 @@ async function aiRecord(ws, auth, body) {
     body.ask ? `They ask: ${cleanText(body.ask, 1000)}` : '',
   ].filter(Boolean).join('\n\n');
   const system = [
-    'You are Sidekick inside Column, helping a small business team move one customer, deal, quote, bid or job forward.',
+    'You are Sidekick inside Kloomie, helping a small business team move one customer, deal, quote, bid or job forward.',
     'Read where it stands from the fields and timeline and say it plainly in two or three sentences: what has happened, what is waiting on whom, and what risks a stall. Then suggest the next one to three steps, the most useful first. Be specific to this record and its history; use real names, dates and amounts from it. Never invent facts.',
     'Kinds of step: a task with a date; a change to one of the option fields (only to an option that exists); a message to send (email or text), written out ready to send, short and in the team’s voice; or a call with what to say and ask.',
     'Reply with JSON only: {"read":"…","steps":[{"kind":"task","text":"","due":"YYYY-MM-DD"|null,"why":""} | {"kind":"stage","field":"field name","to":"option","why":""} | {"kind":"message","channel":"email"|"text","subject":"","text":"","why":""} | {"kind":"call","text":"what to say and ask","why":""}]}',
@@ -3263,7 +3262,7 @@ async function aiEstimate(ws, auth, body) {
     body.ask ? `They ask: ${cleanText(body.ask, 1000)}` : '',
   ].filter(Boolean).join('\n\n');
   const system = [
-    'You are an estimator inside Column, drafting line items for a contractor’s quote or bid. Work out quantities from the plans, photos and scope: count windows or doors, measure areas, and show the working in the line descriptions when it helps (e.g. “Ceramic film, 12 windows at ~24 sq ft”).',
+    'You are an estimator inside Kloomie, drafting line items for a contractor’s quote or bid. Work out quantities from the plans, photos and scope: count windows or doors, measure areas, and show the working in the line descriptions when it helps (e.g. “Ceramic film, 12 windows at ~24 sq ft”).',
     'Prefer items from the price list, by its id. Only add other lines for work the list doesn’t cover, priced at typical rates. Never guess what you can’t see: list it as a question. Put every assumption you made in assumptions.',
     'Reply with JSON only: {"rows":[{"desc":"","qty":number,"unit":"","from":"price list id"|null,"price":dollars (only when from is null),"cost":dollars|null}],"assumptions":["…"],"questions":["…"]}',
   ].join('\n');
@@ -3367,7 +3366,7 @@ const publicSidekick = ({ wsId, ...x }) => x;
 const skNews = (x) => broadcast(x.wsId, { type: 'sidekick', sidekick: publicSidekick(x), forMember: x.memberId });
 const skDay = (v) => (isDay(v) ? v : null);
 const skMin = (v, max) => (Number.isFinite(Number(v)) && v !== null && v !== '' ? Math.max(0, Math.min(max, Math.round(Number(v)))) : null);
-// One card from the AI, cleaned up: only what Column can build, with sane values.
+// One card from the AI, cleaned up: only what Kloomie can build, with sane values.
 function skCard(v, ws) {
   const type = SK_CARDS.includes(v?.type) ? v.type : null;
   if (!type) return null;
@@ -3507,7 +3506,7 @@ function skMoney(ws, auth, today) {
   if (watch) lines.push(`This month: ${watch}`);
   return lines.join('\n\n');
 }
-// What Sidekick knows before it asks anything: the date, what's in Column, and the campaign it's for.
+// What Sidekick knows before it asks anything: the date, what's in Kloomie, and the campaign it's for.
 function skContext(ws, auth, x, today) {
   const camps = Object.values(db.campaigns).filter((c) => c.wsId === ws.id && canSee(auth, 'campaign', c));
   const p = db.pss[ws.id];
@@ -3519,7 +3518,7 @@ function skContext(ws, auth, x, today) {
   const lines = [
     `Today is ${today} (${new Date(today + 'T12:00:00Z').toLocaleDateString('en-US', { weekday: 'long', timeZone: 'UTC' })}). The person is ${auth.member}${auth.role === 'owner' ? ', a team owner' : ''}.`,
     teamLine(ws, auth.memberId),
-    camps.length ? `Campaigns already in Column: ${camps.slice(0, 30).map((c) => `${c.name} (${c.status}${c.parentId && db.campaigns[c.parentId] ? ', part of ' + db.campaigns[c.parentId].name : ''})`).join('; ')}.` : 'No campaigns yet.',
+    camps.length ? `Campaigns already in Kloomie: ${camps.slice(0, 30).map((c) => `${c.name} (${c.status}${c.parentId && db.campaigns[c.parentId] ? ', part of ' + db.campaigns[c.parentId].name : ''})`).join('; ')}.` : 'No campaigns yet.',
     p ? `PSS (their website's leads) is connected: ${p.leads?.length || 0} leads. By stage: ${count('stage')}. By city: ${count('city')}. By source: ${count('source')}.` : 'PSS isn’t connected, so there are no leads to pull in: prospects would have to be found or imported.',
     files.length ? `They attached files for this plan: ${files.map((f) => f.name).join('; ')}. They're at the start of the conversation. Plan from what they say (prices, offers, audience, past numbers, scripts) instead of asking for it again, and say which file a fact came from.` : '',
     mine.length ? `Their Day for the next two weeks (busy times):\n${mine.slice(0, 80).map((e) => `- ${e.repeat ? 'repeats ' + e.repeat + ' from ' + e.date : e.date} ${fmt(e.start)}${e.end != null ? '–' + fmt(e.end) : ''} ${clipText(e.text, 60)}`).join('\n')}` : 'Nothing on their Day in the next two weeks.',
@@ -3575,7 +3574,7 @@ async function skAddFile(x, name, mime, buf) {
     try {
       text = fileText(buf, name);
     } catch {
-      throw skBad(`Column couldn’t read ${name}.`);
+      throw skBad(`Kloomie couldn’t read ${name}.`);
     }
     if (!text.trim()) throw skBad(`${name} has no text Sidekick can read.`);
     data = Buffer.from(text, 'utf8');
@@ -3606,7 +3605,7 @@ async function skFiles(x) {
   return out;
 }
 const SK_SYSTEM = (kind, built) => [
-  'You are Sidekick, the planning partner inside Column, a work app for a small business: it has campaigns (each with goals, and tasks under the goals, call lists, a log of calls and emails, and notes), a Day schedule, and Finance (money in and out, budgets).',
+  'You are Sidekick, the planning partner inside Kloomie, a work app for a small business: it has campaigns (each with goals, and tasks under the goals, call lists, a log of calls and emails, and notes), a Day schedule, and Finance (money in and out, budgets).',
   kind === 'money'
     ? 'Here you help the person set, keep and improve their budget, from the money in Finance. Start from the numbers you’re given: where the money goes, what comes in, which budgets fit and which keep running over, what the bills add up to. Ask what they’re aiming for (spend less somewhere, save for something by a date, pay something off, steady cash for the business) and anything the numbers can’t tell you. Then propose budgets per category with limits they can actually keep, bills that are missing, and a regular money check-in on their Day. Point out what looks off: categories with no budget, budgets far from what’s really spent, money in that doesn’t cover money out.'
     : kind === 'schedule'
@@ -3654,12 +3653,6 @@ async function skTurn(ws, auth, x, today, say) {
   x.messages = x.messages.slice(-SK_KEEP);
   x.updatedAt = Date.now();
   return msg;
-}
-
-// ---------- icons ----------
-const iconCache = {};
-function icon(size) {
-  return (iconCache[size] ||= iconPng(size));
 }
 
 // ---------- routes ----------
@@ -4309,7 +4302,7 @@ async function api(req, res, url) {
     return send(res, 200, publicItem(item));
   }
 
-  // A document from the editor (a Word file, or one started in Column) as a PDF in the same stack.
+  // A document from the editor (a Word file, or one started in Kloomie) as a PDF in the same stack.
   if (a === 'docs' && b === 'pdf' && m === 'POST') {
     const body = await readJson(req, 40_000_000);
     const src = body.itemId ? db.items[body.itemId] : null;
@@ -4359,7 +4352,7 @@ async function api(req, res, url) {
     const open = ['sent', 'viewed'].includes(signStatus(x));
     if (c === 'email' && m === 'POST') {
       const conn = mailConn(ws.id, auth.memberId);
-      if (!conn) return send(res, 400, { error: 'Connect Outlook in Settings to email it from Column, or copy the link and send it yourself.' });
+      if (!conn) return send(res, 400, { error: 'Connect Outlook in Settings to email it from Kloomie, or copy the link and send it yourself.' });
       if (!open) return send(res, 400, { error: 'This request is closed.' });
       const first = x.signer.name.split(/\s+/)[0];
       const until = new Date(x.expiresAt).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
@@ -4546,7 +4539,7 @@ async function api(req, res, url) {
       skNews(x);
       return send(res, 200, publicSidekick(x));
     }
-    // Something already in Column: a file, or a note's text.
+    // Something already in Kloomie: a file, or a note's text.
     if (m === 'POST' && c === 'files' && !d) {
       const it = db.items[body.itemId];
       if (!it || it.wsId !== ws.id || !['file', 'text'].includes(it.type) || !canSee(auth, 'item', it)) return send(res, 404, { error: 'That file is gone.' });
@@ -5618,7 +5611,7 @@ async function api(req, res, url) {
     if (m === 'POST' && !b) {
       const { type, text, stackId, channelId, parentId, dirId, doc, sealed } = await readJson(req, 4_000_000);
       // A sealed card: something secret, encrypted in the sender's browser with a one-time code they pass on
-      // themselves. Column only keeps the scrambled blob; it can burn after reading and expire.
+      // themselves. Kloomie only keeps the scrambled blob; it can burn after reading and expire.
       if (type === 'sealed') {
         const blob = typeof sealed?.blob === 'string' && /^[\w-]{20,200000}$/.test(sealed.blob) ? sealed.blob : null;
         const salt = typeof sealed?.salt === 'string' && /^[\w-]{16,64}$/.test(sealed.salt) ? sealed.salt : null;
@@ -6011,16 +6004,11 @@ function clientVersion() {
 }
 
 function serveStatic(req, res, url) {
-  const iconMatch = /^\/(?:icon-(\d+)|apple-touch-icon|favicon)\.png$/.exec(url.pathname);
-  if (iconMatch) {
-    const size = Math.min(1024, Number(iconMatch[1]) || (url.pathname.includes('apple') ? 180 : 64));
-    return send(res, 200, icon(size), { 'Content-Type': 'image/png', 'Cache-Control': 'public, max-age=86400' });
-  }
   let rel = decodeURIComponent(url.pathname);
   if (rel === '/' || !path.extname(rel)) rel = '/index.html';
   const file = path.join(CLIENT_DIR, rel);
   if (!file.startsWith(CLIENT_DIR + path.sep)) return send(res, 403, 'Forbidden');
-  // Only Column's own script runs on its pages: markup that slips in from a file or message can't run code.
+  // Only Kloomie's own script runs on its pages: markup that slips in from a file or message can't run code.
   const csp = path.extname(file) === '.html' ? { 'Content-Security-Policy': "script-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'" } : {};
   // Libraries in /vendor/ have their version in the folder name, so they never change.
   const cache = rel.startsWith('/vendor/') ? 'public, max-age=31536000, immutable' : 'no-cache';
@@ -6030,8 +6018,8 @@ function serveStatic(req, res, url) {
   });
 }
 
-// ---------- moving in: a one-time upload of another Column's data folder ----------
-// Only when IMPORT_TOKEN is set (24+ characters) and this Column has no teams yet. The body is a .tar.gz
+// ---------- moving in: a one-time upload of another Kloomie's data folder ----------
+// Only when IMPORT_TOKEN is set (24+ characters) and this Kloomie has no teams yet. The body is a .tar.gz
 // of the data folder (db.json, secret.key, files/). Afterwards the server exits so the host restarts it
 // on the new data; then remove IMPORT_TOKEN.
 async function importData(req, res) {
@@ -6039,7 +6027,7 @@ async function importData(req, res) {
   const given = String(req.headers.authorization || '').replace(/^Bearer /, '');
   const same = token.length >= 24 && given.length === token.length && crypto.timingSafeEqual(Buffer.from(given), Buffer.from(token));
   if (!same) return send(res, 404, 'Not found');
-  if (importing || Object.keys(db.workspaces).length) return send(res, 409, { error: 'This Column already has data.' });
+  if (importing || Object.keys(db.workspaces).length) return send(res, 409, { error: 'This Kloomie already has data.' });
   importing = true;
   clearTimeout(saveTimer);
   dirtySince = 0;
@@ -6384,7 +6372,7 @@ async function removeMember(ws, m) {
 }
 // ---------- exporting: a team's data (owners), or your own things (anyone), as a .zip ----------
 // Built in the background into FILES_DIR, downloaded from Settings for 7 days. It holds what the person can
-// see in Column (an owner's team export: everything shared plus their own private things), never
+// see in Kloomie (an owner's team export: everything shared plus their own private things), never
 // passwords, sign-in or connection keys, AI keys, PSS logins or vault contents.
 const EXPORT_DAYS = 7;
 const exportPath = (x) => path.join(FILES_DIR, `export-${x.id}.zip`);
@@ -6591,7 +6579,7 @@ runAutopay();
 migratePeople();
 migrateDay();
 server.listen(PORT, '0.0.0.0', () => {
-  console.log(`\n  Column server running\n`);
+  console.log(`\n  Kloomie server running\n`);
   console.log(`  This machine:   http://localhost:${PORT}`);
   for (const nets of Object.values(os.networkInterfaces())) {
     for (const n of nets || []) if (n.family === 'IPv4' && !n.internal) console.log(`  Other devices:  http://${n.address}:${PORT}`);

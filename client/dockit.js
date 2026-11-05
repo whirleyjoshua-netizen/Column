@@ -1,4 +1,4 @@
-// Docs in Column: a page of blocks you write in, like Notion. Headings, lists, to-dos, toggles, quotes,
+// Docs in Kloomie: a page of blocks you write in, like Notion. Headings, lists, to-dos, toggles, quotes,
 // callouts, code, tables, dividers, pictures and files. "/" picks a block, markdown shortcuts work as you type
 // (# , - , 1. , [] , > , ``` , ---), blocks drag to reorder, and pasting from Word, Google Docs or a web page
 // keeps the shape. The app saves it and keeps it in step with other people (app.js); this file is the page.
@@ -107,7 +107,7 @@ window.ColumnDocs = (() => {
       // A mention is one chip, named as the thing is named now.
       if (r.ref) {
         const info = refInfo?.(r.ref);
-        into.append(el('span', { class: `dk-ref dk-ref-${r.ref.k}${info?.gone ? ' gone' : ''}`, contenteditable: 'false', 'data-k': r.ref.k, 'data-id': r.ref.id, title: info?.gone ? 'This isn’t in Column any more' : info?.hint || null }, info?.label || r.text));
+        into.append(el('span', { class: `dk-ref dk-ref-${r.ref.k}${info?.gone ? ' gone' : ''}`, contenteditable: 'false', 'data-k': r.ref.k, 'data-id': r.ref.id, title: info?.gone ? 'This isn’t in Kloomie any more' : info?.hint || null }, info?.label || r.text));
         continue;
       }
       r.text.split('\n').forEach((part, i) => {
@@ -450,7 +450,7 @@ window.ColumnDocs = (() => {
     }
     return root;
   }
-  // As the blocks Column's PDF writer takes. Pictures come in as PNG or JPEG data URLs from pics(itemId).
+  // As the blocks Kloomie's PDF writer takes. Pictures come in as PNG or JPEG data URLs from pics(itemId).
   async function toPdf(title, blocks, pics, live) {
     const out = [];
     const runs = (rs) => (rs || []).map((r) => ({ text: r.text, ...(r.b ? { b: true } : {}), ...(r.i ? { i: true } : {}), ...(r.u ? { u: true } : {}), ...(r.s ? { s: true } : {}), ...(r.link ? { link: true } : {}) }));

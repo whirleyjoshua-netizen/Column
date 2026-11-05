@@ -1,4 +1,4 @@
-// Exposes a small, safe desktop API to the Column page as window.columnDesktop.
+// Exposes a small, safe desktop API to the Kloomie page as window.columnDesktop.
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('columnDesktop', {

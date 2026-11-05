@@ -1,4 +1,4 @@
-# Column
+# Kloomie
 
 Drop anything into a column. It shows up on every device signed in to the same account or team.
 
@@ -7,6 +7,7 @@ column/
   server/   Node sync server: accounts, file storage, live updates (WebSocket)
   client/   The column UI. Served by the server, used by desktop, browsers and phones
   desktop/  Electron app: docked column, tray/menu-bar icon, hotkey, drag-out to desktop
+  brand/    The logo (kloomie-check.png); `node brand/make-icons.mjs` remakes every icon from it
 ```
 
 ## Run it
@@ -44,9 +45,9 @@ server, e.g. `https://column.example.com`; default `http://localhost:4747`), `CO
 rest; if unset, a random key is created at `DATA_DIR/secret.key`. Back it up with the data, or everyone reconnects),
 `COLUMN_SECRET_KEY` (that file's 64 hex characters, to move the key off the disk unchanged), `DATABASE_URL` (Postgres, e.g.
 Neon, with `sslmode=verify-full`; when set, data is kept there instead of `db.json`. The first start moves `db.json` in
-once. Uploaded files still live in `DATA_DIR/files`), `RESEND_API_KEY` and `MAIL_FROM` (Column's own email: sign-up codes and
+once. Uploaded files still live in `DATA_DIR/files`), `RESEND_API_KEY` and `MAIL_FROM` (Kloomie's own email: sign-up codes and
 password resets, sent through Resend from an address on a domain verified there, e.g. `Kloomie <hello@kloomie.com>`; without them, Forgot password stays
-hidden), `APP_NAME` (the name in those emails; default `Column`), `MAIL_OUTBOX=1` (for local testing: emails are written to
+hidden), `APP_NAME` (the name in those emails; default `Kloomie`), `MAIL_OUTBOX=1` (for local testing: emails are written to
 `DATA_DIR/outbox` instead of sent), `ALERT_EMAIL` (where serious errors are emailed: crashes, server errors, saving or
 backups failing. Grouped, at most one email every 15 minutes; needs email sending set up).
 
@@ -59,7 +60,7 @@ Chrome). `pgtest` also needs `TEST_DATABASE_URL`, a Neon test branch, never the 
 ## Calendars (Google / Outlook)
 
 Everyone connects their own calendars in ⚙ Settings → Calendars. Events show in their Day (only they see them), and blocks
-they make in Column go to the calendar they pick. Edits and deletes follow both ways. The server needs an app registration
+they make in Kloomie go to the calendar they pick. Edits and deletes follow both ways. The server needs an app registration
 with each provider. The sign-in comes back to `PUBLIC_URL/oauth/<provider>/callback`, so register exactly that address.
 Until the server is hosted, use `http://localhost:4747` and connect from the machine running the server. Google and Microsoft
 only allow `localhost` or `https://` addresses, not Wi-Fi IPs.
@@ -82,7 +83,7 @@ Google's verification for the calendar scopes.
 3. *API permissions → Microsoft Graph → Delegated*: `Calendars.ReadWrite`, `User.Read`, `offline_access`, and `Mail.Send` for campaign email (only asked for when an owner connects Outlook to send email).
 4. Start the server with `MS_CLIENT_ID=… MS_CLIENT_SECRET=…` (optionally `MS_TENANT` to allow only one organization).
 
-Sync pulls 7 days back to 60 days ahead, every 3 minutes (or *Sync now*). Repeating Column entries and multi-day events
+Sync pulls 7 days back to 60 days ahead, every 3 minutes (or *Sync now*). Repeating Kloomie entries and multi-day events
 stay one-way for now.
 
 ## Build installers

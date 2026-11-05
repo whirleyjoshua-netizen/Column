@@ -1,6 +1,6 @@
 {
-  "name": "Column",
-  "short_name": "Column",
+  "name": "Kloomie",
+  "short_name": "Kloomie",
   "description": "Drop anything. It shows up on every device.",
   "start_url": "/",
   "display": "standalone",

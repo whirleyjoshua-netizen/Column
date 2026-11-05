@@ -1,6 +1,6 @@
 // The download page: points each visitor at the build for their device.
 (() => {
-  const RELEASES = 'https://github.com/whirleyjoshua-netizen/Column/releases/latest/download/';
+  const RELEASES = 'https://github.com/whirleyjoshua-netizen/Kloomie/releases/latest/download/';
   const $ = (s) => document.querySelector(s);
   for (const a of document.querySelectorAll('[data-file]')) a.href = RELEASES + a.dataset.file;
 
@@ -20,14 +20,14 @@
   } else if (os === 'mac') {
     show('mac');
     cta.textContent = 'Download for Mac';
-    cta.href = RELEASES + 'Column-mac-arm64.dmg';
-    alt.innerHTML = 'For Apple Silicon. <a href="' + RELEASES + 'Column-mac-x64.dmg">Intel Mac?</a>';
+    cta.href = RELEASES + 'Kloomie-mac-arm64.dmg';
+    alt.innerHTML = 'For Apple Silicon. <a href="' + RELEASES + 'Kloomie-mac-x64.dmg">Intel Mac?</a>';
   } else if (os === 'windows') {
     show('windows');
     cta.textContent = 'Download for Windows';
-    cta.href = RELEASES + 'Column-windows-setup.exe';
+    cta.href = RELEASES + 'Kloomie-windows-setup.exe';
   } else if (os === 'linux') {
     cta.textContent = 'Download for Linux';
-    cta.href = RELEASES + 'Column-linux.AppImage';
+    cta.href = RELEASES + 'Kloomie-linux.AppImage';
   }
 })();

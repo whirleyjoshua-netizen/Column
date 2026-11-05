@@ -1,4 +1,4 @@
-// Column desktop shell: a slim window docked to the screen edge, tray/menu-bar icon,
+// Kloomie desktop shell: a slim window docked to the screen edge, tray/menu-bar icon,
 // global hotkey, and native drag-out of files to Finder/Explorer/desktop.
 const { app, BrowserWindow, Tray, Menu, globalShortcut, ipcMain, nativeImage, screen, shell, clipboard, session, desktopCapturer } = require('electron');
 const path = require('node:path');
@@ -7,7 +7,6 @@ const fsp = require('node:fs/promises');
 const os = require('node:os');
 const { Readable } = require('node:stream');
 const { pipeline } = require('node:stream/promises');
-const { iconPng } = require('./icon');
 
 const isMac = process.platform === 'darwin';
 const COL_WIDTH = 340;
@@ -29,12 +28,12 @@ try {
 } catch {}
 // Older versions saved the hosted server as http://, which it moves to https:// anyway.
 if (DEFAULT_SERVER && cfg.serverUrl && cfg.serverUrl !== DEFAULT_SERVER && new URL(DEFAULT_SERVER).host === (URL.canParse(cfg.serverUrl) ? new URL(cfg.serverUrl).host : '')) cfg.serverUrl = DEFAULT_SERVER;
-// The microphone only works on secure pages; a Column server on the local network is plain http.
+// The microphone only works on secure pages; a Kloomie server on the local network is plain http.
 try {
   const u = cfg.serverUrl && new URL(cfg.serverUrl);
   if (u && u.protocol === 'http:' && u.hostname !== 'localhost' && u.hostname !== '127.0.0.1') app.commandLine.appendSwitch('unsafely-treat-insecure-origin-as-secure', u.origin);
 } catch {}
-// The Column server, whether the address was typed as http:// and the server moved us to https:// or not.
+// The Kloomie server, whether the address was typed as http:// and the server moved us to https:// or not.
 function onServer(url) {
   try {
     return !!cfg.serverUrl && new URL(url).host === new URL(cfg.serverUrl).host;
@@ -57,18 +56,19 @@ function log(...args) {
 process.on('uncaughtException', (e) => log('crash', e.stack || e));
 
 const CACHE_DIR = path.join(os.tmpdir(), 'column-cache');
-const SAVE_DIR = () => path.join(app.getPath('downloads'), 'Column');
+const SAVE_DIR = () => path.join(app.getPath('downloads'), 'Kloomie');
 
 // ---------- icons ----------
-const appIcon = nativeImage.createFromBuffer(iconPng(512));
-const dragIcon = nativeImage.createFromBuffer(iconPng(64), { scaleFactor: 2 });
+const asset = (f) => path.join(__dirname, f); // made by brand/make-icons.mjs
+const appIcon = nativeImage.createFromPath(asset('icon.png'));
+const dragIcon = nativeImage.createFromBuffer(fs.readFileSync(asset('drag.png')), { scaleFactor: 2 });
 function trayIcon() {
   if (isMac) {
-    const img = nativeImage.createFromBuffer(iconPng(36, { template: true }), { scaleFactor: 2 });
+    const img = nativeImage.createFromBuffer(fs.readFileSync(asset('trayTemplate@2x.png')), { scaleFactor: 2 });
     img.setTemplateImage(true);
     return img;
   }
-  return nativeImage.createFromBuffer(iconPng(32), { scaleFactor: 2 });
+  return nativeImage.createFromBuffer(fs.readFileSync(asset('tray.png')), { scaleFactor: 2 });
 }
 
 // ---------- window ----------
@@ -86,7 +86,7 @@ function createWindow() {
     y: workArea.y,
     minWidth: 260,
     minHeight: 320,
-    title: 'Column',
+    title: 'Kloomie',
     icon: appIcon,
     backgroundColor: '#111115',
     alwaysOnTop: cfg.alwaysOnTop,
@@ -109,7 +109,7 @@ function createWindow() {
       win.hide();
     }
   });
-  // Links open in the real browser, never inside the column. A file popped out of Column (/?view=<id>)
+  // Links open in the real browser, never inside the column. A file popped out of Kloomie (/?view=<id>)
   // gets a window of its own instead, next to the column.
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (onServer(url) && new URL(url).searchParams.has('view')) {
@@ -119,7 +119,7 @@ function createWindow() {
         action: 'allow',
         overrideBrowserWindowOptions: {
           width: Math.max(420, width), height: Math.min(900, workArea.height), x: workArea.x + Math.max(0, win.getBounds().x - workArea.x - Math.max(420, width)), y: workArea.y,
-          title: 'Column', icon: appIcon, backgroundColor: '#111115', autoHideMenuBar: true,
+          title: 'Kloomie', icon: appIcon, backgroundColor: '#111115', autoHideMenuBar: true,
           webPreferences: { contextIsolation: true, nodeIntegration: false },
         },
       };
@@ -189,7 +189,7 @@ function updateTray() {
   if (!tray) return;
   const title = cfg.trayNext && next?.title ? next.title : '';
   if (isMac) tray.setTitle(title ? ' ' + title : '', { fontType: 'monospacedDigit' });
-  tray.setToolTip(title ? `Column · ${title}` : 'Column');
+  tray.setToolTip(title ? `Kloomie · ${title}` : 'Kloomie');
   if (!isMac) tray.setContextMenu(trayMenu());
 }
 
@@ -199,18 +199,18 @@ function trayMenu() {
     : [];
   return Menu.buildFromTemplate([
     ...today,
-    { label: win?.isVisible() ? 'Hide Column' : 'Show Column', click: toggle },
+    { label: win?.isVisible() ? 'Hide Kloomie' : 'Show Kloomie', click: toggle },
     { label: 'Always on top', type: 'checkbox', checked: cfg.alwaysOnTop, click: (i) => applyCfg({ alwaysOnTop: i.checked }) },
-    { label: 'Open Downloads/Column', click: openSaveDir },
+    { label: 'Open Downloads/Kloomie', click: openSaveDir },
     { label: 'Change server…', click: () => { win.show(); loadSetup(); } },
     { type: 'separator' },
-    { label: 'Quit Column', click: () => { quitting = true; app.quit(); } },
+    { label: 'Quit Kloomie', click: () => { quitting = true; app.quit(); } },
   ]);
 }
 
 function buildTray() {
   tray = new Tray(trayIcon());
-  tray.setToolTip('Column');
+  tray.setToolTip('Kloomie');
   tray.on('click', toggle);
   tray.on('right-click', () => tray.popUpContextMenu(trayMenu()));
   updateTray(); // Windows/Linux: sets the right-click menu
@@ -321,7 +321,7 @@ ipcMain.handle('connect', async (_e, raw) => {
     // Keep the address the server ended up at, so http:// that moves to https:// is saved as https://.
     if (res && res.ok && (await res.json().catch(() => ({}))).app === 'column') { found = new URL(res.url).origin; break; }
   }
-  if (!found) throw new Error(`No Column server found at ${tries[tries.length - 1]}`);
+  if (!found) throw new Error(`No Kloomie server found at ${tries[tries.length - 1]}`);
   url = found;
   cfg.serverUrl = url;
   saveCfg();
@@ -335,7 +335,7 @@ app.on('second-instance', () => {
 });
 app.whenReady().then(() => {
   if (isMac) app.dock.setIcon(appIcon);
-  // A Column page asking for the screen gets the computer's sound with no picker: it only ever asks
+  // A Kloomie page asking for the screen gets the computer's sound with no picker: it only ever asks
   // to record a meeting, and throws the picture away.
   session.defaultSession.setDisplayMediaRequestHandler((_req, cb) => {
     desktopCapturer.getSources({ types: ['screen'] }).then((s) => cb(s[0] ? { video: s[0], audio: 'loopback' } : {})).catch(() => cb({}));

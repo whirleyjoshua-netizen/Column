@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Column API</title>
+  <title>Kloomie API</title>
   <link rel="icon" href="/favicon.png">
   <style>
     :root { color-scheme: light dark; --bg: #f6f6f8; --card: #fff; --text: #16161a; --muted: #6b6b76; --line: #e4e4ea; --code: #f1f1f5; --accent: #6b5cf0; }
@@ -25,19 +25,19 @@
 </head>
 <body>
 <main>
-  <h1>Column API</h1>
+  <h1>Kloomie API</h1>
   <p class="lead">Read and write the records in your Projects (contacts, companies, deals, anything you track) from other apps, and hear the moment they change.</p>
   <nav><a href="#auth">Keys</a><a href="#schema">Projects &amp; fields</a><a href="#records">Records</a><a href="#values">Field values</a><a href="#sync">Syncing</a><a href="#errors">Errors &amp; limits</a><a href="#webhooks">Webhooks</a></nav>
 
   <h2 id="auth">Keys</h2>
   <p>A team owner makes an API key in <b>Settings → Connections → Connect other apps</b>. It's shown once. Send it with every request:</p>
   <pre><code>Authorization: Bearer col_…</code></pre>
-  <p>The base address is your Column server followed by <code>/api/v1</code>, for example <code>https://column.example.com/api/v1</code>. A key reaches every project that isn't private. A key can be <b>read and write</b> or <b>read only</b>. Deleting it in Settings stops it at once.</p>
-  <pre><code>curl https://column.example.com/api/v1/me -H "Authorization: Bearer $COLUMN_KEY"
+  <p>The base address is your Kloomie server followed by <code>/api/v1</code>, for example <code>https://app.kloomie.com/api/v1</code>. A key reaches every project that isn't private. A key can be <b>read and write</b> or <b>read only</b>. Deleting it in Settings stops it at once.</p>
+  <pre><code>curl https://app.kloomie.com/api/v1/me -H "Authorization: Bearer $COLUMN_KEY"
 {"team":"Premier","key":"Zapier","write":true}</code></pre>
 
   <h2 id="schema">Projects &amp; fields</h2>
-  <p>A project has <b>lists</b> (Contacts, Companies, Deals…), and each list has <b>fields</b>. Every list and field has a <b>key</b>, like <code>contacts</code> or <code>close_date</code>, that never changes when someone renames it in Column. Use keys in your code.</p>
+  <p>A project has <b>lists</b> (Contacts, Companies, Deals…), and each list has <b>fields</b>. Every list and field has a <b>key</b>, like <code>contacts</code> or <code>close_date</code>, that never changes when someone renames it in Kloomie. Use keys in your code.</p>
   <table>
     <tr><td><span class="m get">GET</span></td><td><code>/projects</code></td><td>Every project the key reaches, with its lists and fields.</td></tr>
     <tr><td><span class="m get">GET</span></td><td><code>/projects/{project_id}</code></td><td>One project's lists and fields.</td></tr>
@@ -65,7 +65,7 @@
     <tr><td><span class="m get">GET</span></td><td><code>/projects/{project_id}/{list}/records/external/{external_id}</code></td><td>Find a record by your system's id.</td></tr>
     <tr><td><span class="m put">PUT</span></td><td><code>/projects/{project_id}/{list}/records/external/{external_id}</code></td><td><b>Upsert</b>: update the record with that id, or add it. The safest way to sync.</td></tr>
   </table>
-  <pre><code>curl -X PUT https://column.example.com/api/v1/projects/$PROJECT/contacts/records/external/hubspot-4411 \
+  <pre><code>curl -X PUT https://app.kloomie.com/api/v1/projects/$PROJECT/contacts/records/external/hubspot-4411 \
   -H "Authorization: Bearer $COLUMN_KEY" -H "Content-Type: application/json" \
   -d '{"fields": {"name": "Maria Lopez", "email": "maria@desertauto.com", "stage": "Qualified", "owner": "Sam"}}'</code></pre>
   <p>A record comes back as:</p>
@@ -106,7 +106,7 @@ GET /projects/$PROJECT/deals/records?updated_since=2026-11-02T00:00:00Z&amp;limi
   <p>Each key can make <b>300 requests a minute</b>. A team can keep 50,000 records.</p>
 
   <h2 id="webhooks">Webhooks</h2>
-  <p>A team owner adds a webhook in Settings with an <code>https://</code> address, for every project or one. Column sends a <code>POST</code> when a record is added, changed or deleted:</p>
+  <p>A team owner adds a webhook in Settings with an <code>https://</code> address, for every project or one. Kloomie sends a <code>POST</code> when a record is added, changed or deleted:</p>
   <pre><code>{
   "id": "evt_9fQ…",
   "type": "record.updated",            // record.created, record.updated, record.deleted (or "ping" from Send a test)
@@ -116,12 +116,12 @@ GET /projects/$PROJECT/deals/records?updated_since=2026-11-02T00:00:00Z&amp;limi
   "list": "deals",
   "data": { …the record, as above… }
 }</code></pre>
-  <p>Headers: <code>X-Column-Event</code>, <code>X-Column-Delivery</code> (the event id, for ignoring repeats) and <code>X-Column-Signature: t=&lt;seconds&gt;,v1=&lt;signature&gt;</code>.</p>
+  <p>Headers: <code>X-Kloomie-Event</code>, <code>X-Kloomie-Delivery</code> (the event id, for ignoring repeats) and <code>X-Kloomie-Signature: t=&lt;seconds&gt;,v1=&lt;signature&gt;</code>.</p>
   <h3>Checking the signature</h3>
   <p>The signature is an HMAC-SHA256 of <code>t + "." + the raw body</code>, made with the webhook's secret (shown once when it's made). Check it, and reject old timestamps:</p>
   <pre><code>// Node
 import crypto from 'node:crypto';
-function fromColumn(rawBody, header, secret) {
+function fromKloomie(rawBody, header, secret) {
   const { t, v1 } = Object.fromEntries(header.split(',').map((p) => p.split('=')));
   if (Math.abs(Date.now() / 1000 - Number(t)) > 300) return false; // older than 5 minutes
   const want = crypto.createHmac('sha256', secret).update(`${t}.${rawBody}`).digest('hex');
@@ -129,7 +129,7 @@ function fromColumn(rawBody, header, secret) {
 }</code></pre>
   <pre><code># Python
 import hmac, hashlib, time
-def from_column(raw_body: bytes, header: str, secret: str) -> bool:
+def from_kloomie(raw_body: bytes, header: str, secret: str) -> bool:
     parts = dict(p.split("=", 1) for p in header.split(","))
     if abs(time.time() - int(parts["t"])) > 300:
         return False
@@ -138,7 +138,7 @@ def from_column(raw_body: bytes, header: str, secret: str) -> bool:
   <p>Answer with any <code>2xx</code> within 10 seconds. Anything else is tried again after 30 seconds, 2 minutes and 8 minutes. After 20 failures in a row the webhook pauses; turn it back on in Settings. The last 20 deliveries show there too. Webhook addresses must be public: private network addresses are refused. Records in private projects are never sent.</p>
 
   <h2>Using it with Zapier or Make</h2>
-  <p>Use their webhook trigger with the address they give you as a Column webhook, and their HTTP action with your API key in the <code>Authorization</code> header to add or update records (PUT by <code>external_id</code> keeps runs from making duplicates).</p>
+  <p>Use their webhook trigger with the address they give you as a Kloomie webhook, and their HTTP action with your API key in the <code>Authorization</code> header to add or update records (PUT by <code>external_id</code> keeps runs from making duplicates).</p>
 </main>
 </body>
 </html>

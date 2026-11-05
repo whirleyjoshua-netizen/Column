@@ -1,7 +1,7 @@
 // Google Calendar and Outlook (Microsoft Graph): sign-in, calendars, and events.
 // Each provider speaks one shape: events are { id, title, allDay, start, end }, where start/end are
 // Date instants for timed events and YYYY-MM-DD strings for all-day ones (end exclusive).
-// Writes take Column times as wall-clock strings plus an IANA time zone, so no offset math happens here.
+// Writes take Kloomie times as wall-clock strings plus an IANA time zone, so no offset math happens here.
 
 const env = (k) => process.env[k] || '';
 
@@ -85,7 +85,7 @@ const google = {
   },
 };
 
-// MS_GRAPH points Column at a stand-in for Microsoft Graph when testing.
+// MS_GRAPH points Kloomie at a stand-in for Microsoft Graph when testing.
 const GRAPH = env('MS_GRAPH') || 'https://graph.microsoft.com/v1.0';
 const MS_SCOPE = 'offline_access openid email User.Read Calendars.ReadWrite';
 // Sending email is asked for only when someone connects Outlook to send campaign emails.

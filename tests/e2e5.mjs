@@ -170,11 +170,11 @@ await A.tap(`document.querySelector('#toolsBtn')`); await A.tap(`[...document.qu
 ok(await A.until(`document.querySelector('#projects .pj-table')?.textContent.includes('Ana Ruiz')`, 4000), 'reopening Projects, the contact the API added is there');
 await sleep(500);
 const ev = got.find((g) => JSON.parse(g.b).data?.fields?.name === 'Ana Ruiz');
-const [tP, vP] = (ev?.h['x-column-signature'] || ',').split(',');
+const [tP, vP] = (ev?.h['x-kloomie-signature'] || ',').split(',');
 ok(ev && JSON.parse(ev.b).type === 'record.created' && vP.slice(3) === crypto.createHmac('sha256', secret).update(`${tP.slice(2)}.${ev.b}`).digest('hex'), 'the webhook got a signed record.created');
 hookSrv.close();
 const docs = await (await fetch(APP + 'developers')).text();
-ok(docs.includes('<h1>Column API</h1>') && docs.includes('X-Column-Signature'), 'the developer docs page is served');
+ok(docs.includes('<h1>Kloomie API</h1>') && docs.includes('X-Kloomie-Signature'), 'the developer docs page is served');
 ok(!A.errors.length, 'no page errors' + (A.errors.length ? ': ' + A.errors.join(' / ') : ''));
 A.close(); chrome.kill();
 console.log(fails ? fails + ' failed' : 'all passed');

@@ -11,7 +11,7 @@ export async function loadPdf(bytes) {
   try {
     return await PDFDocument.load(bytes, { updateMetadata: false });
   } catch (e) {
-    throw new PdfError(/encrypt/i.test(e.message) ? 'This PDF is password-protected, so Column can’t change it.' : 'Column couldn’t read this PDF.');
+    throw new PdfError(/encrypt/i.test(e.message) ? 'This PDF is password-protected, so Kloomie can’t change it.' : 'Kloomie couldn’t read this PDF.');
   }
 }
 
@@ -181,7 +181,7 @@ export async function addCertificate(doc, c) {
 
 export const pageCount = async (bytes) => (await loadPdf(bytes)).getPageCount();
 
-// A document typed in Column (or a Word file) as a PDF, so it can be signed or sent.
+// A document typed in Kloomie (or a Word file) as a PDF, so it can be signed or sent.
 // blocks: [{ t: p|h1…h6|li|table|img|break, align, runs: [{ text, b, i, u, s, link }], ordered, n, lvl, rows, img }]
 // images: PNG or JPEG bytes for img blocks, by index.
 export async function writeDoc(blocks, { title = '' } = {}) {

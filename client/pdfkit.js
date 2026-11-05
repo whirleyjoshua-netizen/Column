@@ -1,4 +1,4 @@
-// PDFs in Column: pages drawn with pdf.js (hosted with Column, loaded the first time a PDF opens), and a pad
+// PDFs in Kloomie: pages drawn with pdf.js (hosted with Kloomie, loaded the first time a PDF opens), and a pad
 // for drawing or typing a signature. Shared by the app and the signing page (sign.html).
 window.ColumnPdf = (() => {
   const BASE = '/vendor/pdfjs-5.7.284/';

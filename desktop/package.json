@@ -1,6 +1,6 @@
 {
-  "name": "column-desktop",
-  "productName": "Column",
+  "name": "kloomie-desktop",
+  "productName": "Kloomie",
   "version": "0.1.0",
   "description": "Drop anything. It shows up on every device.",
   "main": "main.js",
@@ -17,12 +17,15 @@
     "electron-builder": "^26.15.3"
   },
   "build": {
-    "appId": "app.column.desktop",
+    "appId": "com.kloomie.desktop",
     "files": [
       "main.js",
       "preload.js",
-      "icon.js",
-      "setup.html"
+      "setup.html",
+      "icon.png",
+      "tray.png",
+      "trayTemplate@2x.png",
+      "drag.png"
     ],
     "mac": {
       "target": [
@@ -36,19 +39,22 @@
       ],
       "category": "public.app-category.productivity",
       "extendInfo": {
-        "NSMicrophoneUsageDescription": "Column records your microphone when you record a meeting.",
-        "NSAudioCaptureUsageDescription": "Column records your computer's sound when you record a meeting, so both sides of a call are heard."
+        "NSMicrophoneUsageDescription": "Kloomie records your microphone when you record a meeting.",
+        "NSAudioCaptureUsageDescription": "Kloomie records your computer's sound when you record a meeting, so both sides of a call are heard."
       },
-      "artifactName": "Column-mac-${arch}.${ext}"
+      "icon": "icon.png",
+      "artifactName": "Kloomie-mac-${arch}.${ext}"
     },
     "win": {
       "target": "nsis",
-      "artifactName": "Column-windows-setup.${ext}"
+      "icon": "icon.png",
+      "artifactName": "Kloomie-windows-setup.${ext}"
     },
     "linux": {
       "target": "AppImage",
       "category": "Utility",
-      "artifactName": "Column-linux.${ext}"
+      "icon": "icon.png",
+      "artifactName": "Kloomie-linux.${ext}"
     },
     "publish": {
       "provider": "github",

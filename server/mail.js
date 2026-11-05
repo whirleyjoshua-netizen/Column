@@ -1,7 +1,7 @@
-// Email Column sends itself: sign-up codes and password resets, through Resend.
+// Email Kloomie sends itself: sign-up codes and password resets, through Resend.
 // Resend when RESEND_API_KEY and MAIL_FROM are set. MAIL_OUTBOX=1 writes each email as a file in
 // DATA_DIR/outbox instead, for local testing, so nobody real is ever emailed. Otherwise email is off,
-// and the parts of Column that need it (codes, Forgot password) stay hidden.
+// and the parts of Kloomie that need it (codes, Forgot password) stay hidden.
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';

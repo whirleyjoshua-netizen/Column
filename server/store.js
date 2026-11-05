@@ -1,11 +1,11 @@
-// Where Column's data is kept: the db.json file next to the server, or Postgres when DATABASE_URL is set.
+// Where Kloomie's data is kept: the db.json file next to the server, or Postgres when DATABASE_URL is set.
 // Either way the server keeps everything in memory and hands the whole object to write(). In Postgres
 // each record (a task, an item, a team…) is one row, and a write sends only the records that changed
 // since the last one, in one transaction.
 //
 // Only one server may write. Starting up claims the database (column_meta 'owner'); every write checks
 // the claim in the same transaction, so a server that has been replaced stops instead of writing over
-// the new one's data. Nothing holds a connection open, so Neon can sleep when nobody's using Column.
+// the new one's data. Nothing holds a connection open, so Neon can sleep when nobody's using Kloomie.
 import fs from 'node:fs';
 import crypto from 'node:crypto';
 import pg from 'pg';

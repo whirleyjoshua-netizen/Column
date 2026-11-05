@@ -100,7 +100,7 @@ await V('PATCH', `/api/v1/projects/${p.id}/contacts/records/${made.id}`, { field
 await new Promise((r) => setTimeout(r, 400));
 const ev = got.at(-1);
 const payload = JSON.parse(ev.body);
-const [tPart, vPart] = ev.headers['x-column-signature'].split(',');
+const [tPart, vPart] = ev.headers['x-kloomie-signature'].split(',');
 const expect = crypto.createHmac('sha256', hk.secret).update(`${tPart.slice(2)}.${ev.body}`).digest('hex');
 ok(payload.type === 'record.updated' && payload.list === 'contacts' && payload.data.fields.stage === 'Customer' && payload.by === 'Zapier (API)', 'webhook says what changed, by whom, with the record');
 ok(vPart.slice(3) === expect, 'the signature checks out with the secret');
