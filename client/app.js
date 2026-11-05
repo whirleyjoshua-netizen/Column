@@ -506,7 +506,7 @@
       if (S.tab === 'chat') openChannel(C.view);
       else renderChatSide();
       if (!$('#settings').classList.contains('hidden')) renderSettings();
-      if (toolOpen === 'folders') renderTool();
+      if (toolOpen === 'folders' || (toolOpen && !toolOn(toolOpen))) renderTool();
     } else if (msg.type === 'entry') {
       upsertEntry(msg.entry);
       renderDay();
@@ -1299,6 +1299,8 @@
 
   const amOwner = () => S.workspace?.members?.find((m) => m.id === S.me?.memberId)?.role === 'owner';
   // Owners and admins run the team; only owners delete it, make owners, export all of it and keep the business's money.
+  // Tools the team's owners and admins have switched on (Settings → Team).
+  const toolOn = (k) => S.workspace?.tools?.[k] !== false;
   const amAdmin = () => ['owner', 'admin'].includes(S.workspace?.members?.find((m) => m.id === S.me?.memberId)?.role);
   const memberName = (id) => (id === S.me?.memberId ? 'You' : S.workspace?.members?.find((m) => m.id === id)?.name || 'Someone');
 
@@ -6385,17 +6387,17 @@
     const tight = budgetAlerts().length;
     openMenu(e.currentTarget, [
       { head: 'Tools' },
-      { label: h('span', { class: 'tool-item' }, '✦ Sidekick', skNudges().length ? h('small', {}, `${skNudges().length} need${skNudges().length === 1 ? 's' : ''} a look`) : null), on: toolOpen === 'sidekick', run: () => { SK.open = null; openTool('sidekick'); } },
-      { label: 'Docs', on: toolOpen === 'docs', run: () => openTool('docs') },
-      { label: 'Projects', run: showProjects },
-      { label: h('span', { class: 'tool-item' }, 'Finance', soon || tight ? h('small', {}, [soon ? `${soon} due soon` : '', tight ? `${tight} budget${tight === 1 ? '' : 's'} nearly used` : ''].filter(Boolean).join(' · ')) : null), on: toolOpen === 'bills', run: () => openTool('bills') },
-      amAdmin() ? { label: 'Contacts', on: toolOpen === 'contacts', run: () => openTool('contacts') } : null,
-      mayEmail() ? { label: h('span', { class: 'tool-item' }, 'Email', (S.mail?.sends || []).some((x) => x.status === 'sending') ? h('small', {}, 'sending…') : null), on: toolOpen === 'email', run: () => openTool('email') } : null,
-      { label: 'Folders', on: toolOpen === 'folders', run: () => openTool('folders') },
-      { label: 'Meeting notes', on: toolOpen === 'meetings', run: () => openTool('meetings') },
-      { label: h('span', { class: 'tool-item' }, 'Map', MP.run ? h('small', {}, 'recording a run') : null), on: toolOpen === 'map', run: () => openMap() },
-      { label: h('span', { class: 'tool-item' }, 'Signatures', SG.list.some((x) => x.status === 'sent' || x.status === 'viewed') ? h('small', {}, `${SG.list.filter((x) => x.status === 'sent' || x.status === 'viewed').length} waiting`) : null), on: toolOpen === 'signs', run: () => { SG.filter = null; openTool('signs'); } },
-      { label: h('span', { class: 'tool-item' }, 'Vault', VK.key ? h('small', {}, 'unlocked') : null), on: toolOpen === 'vault', run: () => { VK.filter = null; openTool('vault'); } },
+      toolOn('sidekick') ? { label: h('span', { class: 'tool-item' }, '✦ Sidekick', skNudges().length ? h('small', {}, `${skNudges().length} need${skNudges().length === 1 ? 's' : ''} a look`) : null), on: toolOpen === 'sidekick', run: () => { SK.open = null; openTool('sidekick'); } } : null,
+      toolOn('docs') ? { label: 'Docs', on: toolOpen === 'docs', run: () => openTool('docs') } : null,
+      toolOn('projects') ? { label: 'Projects', run: showProjects } : null,
+      toolOn('bills') ? { label: h('span', { class: 'tool-item' }, 'Finance', soon || tight ? h('small', {}, [soon ? `${soon} due soon` : '', tight ? `${tight} budget${tight === 1 ? '' : 's'} nearly used` : ''].filter(Boolean).join(' · ')) : null), on: toolOpen === 'bills', run: () => openTool('bills') } : null,
+      toolOn('contacts') && amAdmin() ? { label: 'Contacts', on: toolOpen === 'contacts', run: () => openTool('contacts') } : null,
+      toolOn('email') && mayEmail() ? { label: h('span', { class: 'tool-item' }, 'Email', (S.mail?.sends || []).some((x) => x.status === 'sending') ? h('small', {}, 'sending…') : null), on: toolOpen === 'email', run: () => openTool('email') } : null,
+      toolOn('folders') ? { label: 'Folders', on: toolOpen === 'folders', run: () => openTool('folders') } : null,
+      toolOn('meetings') ? { label: 'Meeting notes', on: toolOpen === 'meetings', run: () => openTool('meetings') } : null,
+      toolOn('map') ? { label: h('span', { class: 'tool-item' }, 'Map', MP.run ? h('small', {}, 'recording a run') : null), on: toolOpen === 'map', run: () => openMap() } : null,
+      toolOn('signs') ? { label: h('span', { class: 'tool-item' }, 'Signatures', SG.list.some((x) => x.status === 'sent' || x.status === 'viewed') ? h('small', {}, `${SG.list.filter((x) => x.status === 'sent' || x.status === 'viewed').length} waiting`) : null), on: toolOpen === 'signs', run: () => { SG.filter = null; openTool('signs'); } } : null,
+      toolOn('vault') ? { label: h('span', { class: 'tool-item' }, 'Vault', VK.key ? h('small', {}, 'unlocked') : null), on: toolOpen === 'vault', run: () => { VK.filter = null; openTool('vault'); } } : null,
     ].filter(Boolean));
   });
   function openTool(name) {
@@ -6414,6 +6416,7 @@
   function renderTool(force) {
     const el = $('#tool');
     if (!toolOpen || el.classList.contains('hidden')) return;
+    if (!toolOn(toolOpen)) return closeTool(); // switched off for the team
     if (!force && el.contains(document.activeElement) && document.activeElement.matches('input, textarea, select')) return;
     const keep = el.scrollTop;
     el.replaceChildren(h('h2', {}, TOOLS[toolOpen].name, h('button', { class: 'icon-btn', html: I.close, 'aria-label': 'Close', onclick: closeTool })), ...TOOLS[toolOpen].render().filter(Boolean));
@@ -11859,6 +11862,17 @@
           h('p', { class: 'day-hint', style: 'margin-top:8px' }, vis === 'own'
             ? 'Members see the campaigns they run, belong to or have a task in, the tasks and files that are theirs, and the team’s chat. Nothing else reaches their devices. Owners and admins see everything.'
             : 'Members see the whole team’s campaigns, tasks and files, except private campaigns and folders they’re not in. Owners and admins see everything.')));
+      }
+      if (admin) {
+        // The tools the team uses. Switched off, a tool leaves everyone's Tools menu; nothing in it is deleted.
+        const TOOL_ROWS = [['sidekick', 'Sidekick', 'Plans campaigns with you'], ['docs', 'Docs', 'Write and share pages'], ['contacts', 'Contacts', 'Your customers and leads (owners and admins)'],
+          ['email', 'Email', 'Campaign email from Outlook'], ['folders', 'Folders', 'Files in folders'], ['signs', 'Signatures', 'Send PDFs to be signed'], ['bills', 'Finance', 'Bills, money in and out, budgets'],
+          ['meetings', 'Meeting notes', 'Record a call, get the notes'], ['map', 'Map', 'Pins, routes and canvassing runs'], ['vault', 'Vault', 'Codes and logins, locked on your device'], ['projects', 'Projects', 'CRM pipelines, bids and quotes']];
+        const tools = ws.tools || {};
+        s.append(h('section', { class: 'tools-sec' }, h('h3', {}, 'Tools'),
+          h('p', { class: 'day-hint' }, 'Turn on what your team uses. A tool you turn off leaves everyone’s Tools menu; nothing in it is deleted.'),
+          ...TOOL_ROWS.map(([k, name, sub]) => toggleRow(name, sub, tools[k] !== false, (on, input) =>
+            api('PATCH', '/workspace', { tools: { [k]: on } }).then((w) => { S.workspace = w; }, (e) => { input.checked = !on; toast(e.message); })))));
       }
       if (admin) s.append(inviteSection());
       s.append(rolesSection(peopleCall));

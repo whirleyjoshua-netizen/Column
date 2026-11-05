@@ -123,6 +123,14 @@ await A.ev(`[...document.querySelectorAll('#settings .set-tabs button')].find((b
 ok(await A.until(`[...document.querySelectorAll('#settings h3')].some((x) => x.textContent === 'What members see')`), 'Settings → Team has What members see');
 await A.tap(`[...document.querySelectorAll('#settings .vis-sec button')].find((b) => b.textContent === 'Only what’s theirs')`);
 ok(await A.until(`document.querySelector('#settings .vis-sec .on')?.textContent === 'Only what’s theirs' && document.querySelector('#settings .vis-sec .day-hint').textContent.includes('Nothing else reaches their devices')`), 'choosing Only what’s theirs saves and explains it');
+// Tools: a new team starts simple; switching one on puts it in the Tools menu
+ok(await A.ev(`[...document.querySelectorAll('#settings .tools-sec .srow')].find((r) => r.textContent.startsWith('Map'))?.querySelector('input').checked === false`), 'Map starts off for a new team');
+await A.ev(`[...document.querySelectorAll('#settings .tools-sec .srow')].find((r) => r.textContent.startsWith('Map')).querySelector('input').click()`);
+await sleep(600);
+await A.tap(`document.querySelector('#toolsBtn')`);
+ok(await A.until(`[...document.querySelectorAll('#menu button')].some((b) => b.textContent.startsWith('Map'))`), 'switched on, Map is in the Tools menu');
+ok(!(await A.ev(`[...document.querySelectorAll('#menu button')].some((b) => b.textContent.startsWith('Vault') || b.textContent.startsWith('Finance'))`)), 'tools left off aren’t');
+await A.key('Escape');
 await A.cmd('Page.captureScreenshot', {}).then((r) => FS.writeFileSync(S + '/dk/contacts.png', Buffer.from(r.result.data, 'base64')));
 ok(!A.errors.length, 'no errors on the page: ' + A.errors.join(' | '));
 A.close();

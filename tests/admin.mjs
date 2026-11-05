@@ -37,6 +37,13 @@ try {
   const idOf = async (name) => (await members()).find((m) => m.name === name).id;
   const [ken, lee, mo, jo] = [await idOf('Ken'), await idOf('Lee'), await idOf('Mo'), await idOf('Jo')];
 
+  // tools: a new team starts simple
+  let tools = (await J('GET', '/api/state')).body.workspace.tools;
+  ok(tools.docs && tools.contacts && tools.email && tools.signs && tools.folders && tools.sidekick && !tools.bills && !tools.map && !tools.vault && !tools.meetings && !tools.projects, 'a new team starts with a simple set of tools: ' + Object.keys(tools).filter((k) => tools[k]).join(', '));
+  ok((await K('PATCH', '/api/workspace', { tools: { map: true } })).status === 403, 'a member can’t switch tools');
+  r = await J('PATCH', '/api/workspace', { tools: { map: true, docs: false, nonsense: true } });
+  ok(r.body.tools.map === true && r.body.tools.docs === false && r.body.tools.contacts === true && !('nonsense' in r.body.tools), 'an owner switches tools on and off; the rest stay as they were');
+  await J('PATCH', '/api/workspace', { tools: { docs: true } });
   ok((await K('GET', '/api/contacts')).status === 403, 'a member can’t see Contacts');
   r = await J('PATCH', '/api/members/' + ken, { role: 'admin' });
   ok(r.status === 200 && r.body.members.find((m) => m.id === ken).role === 'admin', 'an owner makes someone an admin');
@@ -53,6 +60,8 @@ try {
   r = await K('PATCH', '/api/members/' + lee, { role: 'admin' });
   ok(r.status === 200, 'makes a member an admin');
   ok((await K('PATCH', '/api/members/' + mo, { role: 'member' })).status === 200, 'looks after members');
+
+  ok((await K('PATCH', '/api/workspace', { tools: { vault: true } })).body?.tools?.vault === true, 'switches tools on and off');
 
   // what an admin can't do
   ok((await K('PATCH', '/api/members/' + mo, { role: 'owner' })).status === 403, 'an admin can’t make an owner');

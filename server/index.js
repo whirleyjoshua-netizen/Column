@@ -413,7 +413,13 @@ const meAccount = (ws, memberId) => {
 };
 
 // A private campaign's feed and stack are hidden from people outside it, and so is a feed you weren't invited to.
+// The tools a team uses, which owners and admins switch on and off (Settings → Team). A new team starts with
+// a simple set; a team from before switches keeps everything but Projects, which is parked.
+const TOOL_KEYS = ['sidekick', 'docs', 'contacts', 'email', 'folders', 'signs', 'bills', 'meetings', 'map', 'vault', 'projects'];
+const NEW_TEAM_TOOLS = ['sidekick', 'docs', 'contacts', 'email', 'folders', 'signs'];
+const toolsOf = (ws) => Object.fromEntries(TOOL_KEYS.map((k) => [k, ws.settings?.tools ? ws.settings.tools[k] === true : k !== 'projects']));
 const publicWorkspace = (ws, memberId) => ({
+  tools: toolsOf(ws),
   id: ws.id,
   name: ws.name,
   settings: ws.settings,
@@ -3961,7 +3967,7 @@ async function api(req, res, url) {
         name: String(workspace).trim(),
         slug,
         createdAt: Date.now(),
-        settings: { expireHours: 0 },
+        settings: { expireHours: 0, tools: Object.fromEntries(TOOL_KEYS.map((k) => [k, NEW_TEAM_TOOLS.includes(k)])) },
         stacks: [],
         channels: [],
         chatFolders: [],
@@ -5738,7 +5744,12 @@ async function api(req, res, url) {
   if (a === 'workspace' && m === 'PATCH') {
     const body = await readJson(req);
     const was = ws.settings.visibility || 'all';
-    if ((body.expireHours !== undefined || body.visibility !== undefined) && !isAdmin(auth)) return send(res, 403, { error: 'Only team owners and admins can change that.' });
+    if ((body.expireHours !== undefined || body.visibility !== undefined || body.tools !== undefined) && !isAdmin(auth)) return send(res, 403, { error: 'Only team owners and admins can change that.' });
+    if (body.tools && typeof body.tools === 'object') {
+      const next = toolsOf(ws);
+      for (const k of TOOL_KEYS) if (body.tools[k] !== undefined) next[k] = !!body.tools[k];
+      ws.settings.tools = next;
+    }
     if (body.expireHours !== undefined) ws.settings.expireHours = Math.max(0, Number(body.expireHours) || 0);
     if (body.visibility !== undefined) ws.settings.visibility = body.visibility === 'own' ? 'own' : 'all';
     if (body.memberEmail !== undefined) {
