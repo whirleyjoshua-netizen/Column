@@ -759,7 +759,7 @@ function docHere(wsId, docId) {
   broadcast(wsId, { type: 'doc:here', id: docId, people: [...people.values()], item: { id: docId } });
 }
 // A locked doc is edited only by whoever made it and the team's owners.
-const canEditDoc = (it, auth) => !it.locked || it.memberId === auth.memberId || auth.role === 'owner';
+const canEditDoc = (it, auth) => !it.locked || it.memberId === auth.memberId || isAdmin(auth);
 
 // ---------- a shared doc, as a page anyone with the link can read ----------
 function docShareHtml(it, token) {
@@ -1190,7 +1190,7 @@ function feedOfItem(it) {
   const top = it.parentId ? db.items[it.parentId] || it : it;
   return top.channelId ? db.workspaces[it.wsId]?.channels.find((c) => c.id === top.channelId) : null;
 }
-const managesFeed = (ch, auth) => ch.ownerId === auth.memberId || auth.role === 'owner';
+const managesFeed = (ch, auth) => ch.ownerId === auth.memberId || isAdmin(auth);
 const feedMembers = (ws, ch, ids) => [...new Set(Array.isArray(ids) ? ids : [])].filter((id) => id !== ch.ownerId && ws.members.some((m) => m.id === id));
 function validChannel(ws, channelId, memberId) {
   const ch = channelId && ws.channels.find((c) => c.id === channelId);
@@ -1213,6 +1213,11 @@ const DELETE_DAYS = 7;
 const offline = (wsId) => { const w = db.workspaces[wsId]; return !w || !!w.deleteAt; };
 
 const isOwnerId = (wsId, memberId) => db.workspaces[wsId]?.members.some((m) => m.id === memberId && m.role === 'owner');
+// Admins run the team day to day with the owners: people, Contacts, email, settings. Owners alone delete the
+// team, make owners, export the whole team and keep the business's money.
+const ADMIN_ROLES = ['owner', 'admin'];
+const isAdmin = (auth) => ADMIN_ROLES.includes(auth?.role);
+const isAdminId = (wsId, memberId) => db.workspaces[wsId]?.members.some((m) => m.id === memberId && ADMIN_ROLES.includes(m.role));
 function broadcast(wsId, msg) {
   const set = sockets.get(wsId);
   if (!set) return;
@@ -1228,7 +1233,7 @@ function broadcast(wsId, msg) {
   const inDir = msg.item && db.items[msg.item.id];
   const data = JSON.stringify(msg);
   for (const s of set) if (hide && s.readyState === 1 && !seesItemDir(inDir, s.meta.memberId)) s.send(hide);
-  for (const s of set) if (s.readyState === 1 && seesCampaign(campaignId, s.meta.memberId) && seesFeed(feed, s.meta.memberId) && seesItemDir(inDir, s.meta.memberId) && seesTemplate(msg.template, s.meta.memberId) && seesEntry(msg.entry, s.meta.memberId) && (!msg.forMember || msg.forMember === s.meta.memberId) && (!msg.forOwners || isOwnerId(wsId, s.meta.memberId)) && (!msg.bill || seesBill(wsId, msg.bill, s.meta.memberId)) && PJ.seesMsg(msg, s.meta.memberId)) s.send(data);
+  for (const s of set) if (s.readyState === 1 && seesCampaign(campaignId, s.meta.memberId) && seesFeed(feed, s.meta.memberId) && seesItemDir(inDir, s.meta.memberId) && seesTemplate(msg.template, s.meta.memberId) && seesEntry(msg.entry, s.meta.memberId) && (!msg.forMember || msg.forMember === s.meta.memberId) && (!msg.forAdmins || isAdminId(wsId, s.meta.memberId)) && (!msg.bill || seesBill(wsId, msg.bill, s.meta.memberId)) && PJ.seesMsg(msg, s.meta.memberId)) s.send(data);
 }
 
 // ---------- campaigns: campaign → goals → tasks, plus logged attempts (each call or email and its outcome) ----------
@@ -1355,7 +1360,7 @@ function applyGoal(g, body, c) {
 // Goals open one at a time, top to bottom: the next waits until the one above is met. Inside a goal each task
 // waits for the one above it. An owner can skip a step (it stops holding up the rest) or unlock one early.
 // The client works this out the same way to grey out what's waiting.
-const passesSteps = (c, auth) => !c.ownerId || c.ownerId === auth.memberId || auth.role === 'owner';
+const passesSteps = (c, auth) => !c.ownerId || c.ownerId === auth.memberId || isAdmin(auth);
 const goalsInOrder = (c) => Object.values(db.goals).filter((g) => g.campaignId === c.id).sort((a, b) => (a.order || 0) - (b.order || 0) || a.createdAt - b.createdAt);
 const placed = (base) => (a, b) => (a.order != null) !== (b.order != null) ? (a.order != null ? -1 : 1) : a.order != null && a.order !== b.order ? a.order - b.order : base(a, b);
 const tasksInOrder = (g) => Object.values(db.tasks).filter((t) => t.goalId === g.id)
@@ -1966,9 +1971,9 @@ const publicContact = (x) => ({
   note: x.note, tags: x.tags, dne: noContact(x), ownDne: !!x.dne, extDne: !!x.extDne, ext: x.ext, via: x.via, pss: x.ext?.pss || null,
   assignedTo: x.assignedTo || '', lostReason: x.lostReason || '', unsub: x.unsub || null, by: x.by, createdAt: x.createdAt, updatedAt: x.updatedAt,
 });
-const contactNews = (wsId, x) => broadcast(wsId, { type: 'contact', contact: publicContact(x), forOwners: true });
+const contactNews = (wsId, x) => broadcast(wsId, { type: 'contact', contact: publicContact(x), forAdmins: true });
 // Many changed at once (an import, a merge, a sync): owners load them again.
-const contactsNews = (wsId) => broadcast(wsId, { type: 'contacts', forOwners: true });
+const contactsNews = (wsId) => broadcast(wsId, { type: 'contacts', forAdmins: true });
 // Live call lists follow the contacts, a moment after they change.
 const liveSoon = new Map();
 function refreshLiveSoon(wsId) {
@@ -2222,11 +2227,11 @@ async function syncPss(ws) {
       p.tried = Date.now();
       pssBusy.delete(ws.id);
       save();
-      broadcast(ws.id, { type: 'pss', forOwners: true });
+      broadcast(ws.id, { type: 'pss', forAdmins: true });
     }
   })();
   pssBusy.set(ws.id, run);
-  broadcast(ws.id, { type: 'pss', forOwners: true });
+  broadcast(ws.id, { type: 'pss', forAdmins: true });
   return run;
 }
 function syncAllPss() {
@@ -2271,7 +2276,7 @@ async function pushPss(ws) {
     save();
   } finally {
     pssPushing.delete(ws.id);
-    broadcast(ws.id, { type: 'pss', forOwners: true });
+    broadcast(ws.id, { type: 'pss', forAdmins: true });
   }
 }
 // Soon after a call is logged, in case a few come in together.
@@ -2908,8 +2913,8 @@ function publicSend(x) {
 }
 // Owners see every send; a member who sent one sees their own.
 function sendNews(x) {
-  broadcast(x.wsId, { type: 'send', send: publicSend(x), forOwners: true });
-  if (!isOwnerId(x.wsId, x.memberId)) broadcast(x.wsId, { type: 'send', send: publicSend(x), forMember: x.memberId });
+  broadcast(x.wsId, { type: 'send', send: publicSend(x), forAdmins: true });
+  if (!isAdminId(x.wsId, x.memberId)) broadcast(x.wsId, { type: 'send', send: publicSend(x), forMember: x.memberId });
 }
 // A member's own campaigns: ones they made, run, are invited to, or have a task in.
 const onCampaign = (c, memberId) => c.ownerId === memberId || c.assigneeId === memberId || (c.memberIds || []).includes(memberId)
@@ -3166,7 +3171,7 @@ async function draftMeeting(ws, x) {
   const camps = Object.values(db.campaigns).filter((c) => c.wsId === ws.id && c.status !== 'done' && canSee(auth, 'campaign', c));
   const said = x.transcript.toLowerCase();
   // Only contacts named in the call go to the AI, and only for owners (who can see them).
-  const leads = auth.role === 'owner' ? contactsOf(ws.id).filter((l) => l.name.length > 3 && said.includes(l.name.toLowerCase())).slice(0, 10) : [];
+  const leads = isAdmin(auth) ? contactsOf(ws.id).filter((l) => l.name.length > 3 && said.includes(l.name.toLowerCase())).slice(0, 10) : [];
   const prompt = [
     `Meeting: ${x.title || 'Untitled'} on ${fmtDay(x.startedAt, tzOf(ws))}, ${Math.round(((x.endedAt || x.startedAt) - x.startedAt) / 60000)} minutes. Recorded by ${x.by}.`,
     camps.length ? `Campaigns it might belong to:
@@ -3257,7 +3262,7 @@ function taskBrief(ws, auth, t) {
     p ? `That campaign is part of “${p.name}”${p.brief ? `: ${clipText(p.brief, 1000)}` : ''}.` : '',
     l ? `The task works the list “${l.name}” (${l.rows.length} rows).` : '',
     files.length ? `Attached to it: ${files.map((it) => it.name || clipText(it.text, 60)).join('; ')}.` : '',
-    auth.role === 'owner' && contactsOf(ws.id).length ? `Their Contacts already have ${contactsOf(ws.id).length} people they can pull into a list.` : '',
+    isAdmin(auth) && contactsOf(ws.id).length ? `Their Contacts already have ${contactsOf(ws.id).length} people they can pull into a list.` : '',
   ].filter(Boolean).join('\n');
 }
 async function aiTask(ws, auth, t, body) {
@@ -3669,14 +3674,14 @@ function skMoney(ws, auth, today) {
 // What Sidekick knows before it asks anything: the date, what's in Kloomie, and the campaign it's for.
 function skContext(ws, auth, x, today) {
   const camps = Object.values(db.campaigns).filter((c) => c.wsId === ws.id && canSee(auth, 'campaign', c));
-  const people = auth.role === 'owner' ? contactsOf(ws.id) : [];
+  const people = isAdmin(auth) ? contactsOf(ws.id) : [];
   const count = (k) => Object.entries(people.reduce((m, l) => ((m[l[k] || '—'] = (m[l[k] || '—'] || 0) + 1), m), {})).sort((a, b) => b[1] - a[1]).slice(0, 12).map(([v, n]) => `${v} ${n}`).join(', ');
   const mine = Object.values(db.entries).filter((e) => e.wsId === ws.id && e.memberId === auth.memberId && e.start != null && (e.repeat || (e.date >= today && e.date <= addDays(today, 14))));
   const fmt = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
   const c = x.campaignId && db.campaigns[x.campaignId];
   const files = x.files || [];
   const lines = [
-    `Today is ${today} (${new Date(today + 'T12:00:00Z').toLocaleDateString('en-US', { weekday: 'long', timeZone: 'UTC' })}). The person is ${auth.member}${auth.role === 'owner' ? ', a team owner' : ''}.`,
+    `Today is ${today} (${new Date(today + 'T12:00:00Z').toLocaleDateString('en-US', { weekday: 'long', timeZone: 'UTC' })}). The person is ${auth.member}${auth.role === 'owner' ? ', a team owner' : auth.role === 'admin' ? ', a team admin' : ''}.`,
     teamLine(ws, auth.memberId),
     camps.length ? `Campaigns already in Kloomie: ${camps.slice(0, 30).map((c) => `${c.name} (${c.status}${c.parentId && db.campaigns[c.parentId] ? ', part of ' + db.campaigns[c.parentId].name : ''})`).join('; ')}.` : 'No campaigns yet.',
     people.length ? `Their Contacts: ${people.length} people${db.pss[ws.id] ? ', kept in step with PSS (their website’s leads)' : ''}. By stage: ${count('stage')}. By city: ${count('city')}. By source: ${count('source')}.` : 'Their Contacts are empty, so there’s nobody to pull in: prospects would have to be found or imported.',
@@ -4186,7 +4191,7 @@ async function api(req, res, url) {
       return send(res, 200, publicCampaign(next));
     }
     if (m === 'DELETE') {
-      if (c.ownerId !== auth.memberId && auth.role !== 'owner') return send(res, 403, { error: 'Only the campaign owner can delete it.' });
+      if (c.ownerId !== auth.memberId && !isAdmin(auth)) return send(res, 403, { error: 'Only the campaign owner can delete it.' });
       deleteCampaign(ws, c);
       save();
       return send(res, 200, { ok: true });
@@ -4596,7 +4601,7 @@ async function api(req, res, url) {
     const x = db.comments[b];
     const it = x && db.items[x.itemId];
     if (!x || x.wsId !== ws.id || !it || !canSee(auth, 'item', it)) return send(res, 404, { error: 'That comment is gone.' });
-    const mine = (y) => y.memberId === auth.memberId || auth.role === 'owner';
+    const mine = (y) => y.memberId === auth.memberId || isAdmin(auth);
     if (m === 'POST' && c === 'replies') {
       const text = cleanText((await readJson(req, 50_000)).text, 5000);
       if (!text) return send(res, 400, { error: 'Write a reply first.' });
@@ -4858,8 +4863,8 @@ async function api(req, res, url) {
   if (a === 'mail') {
     // Owners, and members when an owner allows it in Settings. Members email only rows of lists in their own
     // campaigns, with the team's footer, and see only their own sends.
-    const owner = auth.role === 'owner';
-    if (!owner && !ws.settings.memberEmail) return send(res, 403, { error: 'Only team owners can send campaign email. An owner can let members send it in Settings.' });
+    const owner = isAdmin(auth);
+    if (!owner && !ws.settings.memberEmail) return send(res, 403, { error: 'Only team owners and admins can send campaign email. They can let members send it in Settings.' });
     if (m !== 'GET' && needsConfirm(auth)) return send(res, 403, { error: 'Confirm your email first (Settings → Account), then send campaign email.' });
     const conn = mailConn(ws.id, auth.memberId);
     const body = m === 'GET' ? {} : await readJson(req, 2_000_000);
@@ -4868,7 +4873,7 @@ async function api(req, res, url) {
       return send(res, 200, { from: conn?.account || null, canConnect: calProviders.microsoft.configured(), footer: ws.mailFooter || '', pss: !!db.pss[ws.id], sends });
     }
     if (m === 'PUT' && b === 'footer') {
-      if (!owner) return send(res, 403, { error: 'Only team owners can change the footer.' });
+      if (!owner) return send(res, 403, { error: 'Only team owners and admins can change the footer.' });
       ws.mailFooter = mailFooter(body.footer);
       save();
       return send(res, 200, { footer: ws.mailFooter });
@@ -4951,8 +4956,8 @@ async function api(req, res, url) {
     } else if (m === 'DELETE' && x.status !== 'sending') {
       delete db.sends[x.id];
       save();
-      broadcast(ws.id, { type: 'send:remove', id: x.id, forOwners: true });
-      if (!isOwnerId(ws.id, x.memberId)) broadcast(ws.id, { type: 'send:remove', id: x.id, forMember: x.memberId });
+      broadcast(ws.id, { type: 'send:remove', id: x.id, forAdmins: true });
+      if (!isAdminId(ws.id, x.memberId)) broadcast(ws.id, { type: 'send:remove', id: x.id, forMember: x.memberId });
       return send(res, 200, { ok: true });
     } else return send(res, 400, { error: 'That can’t be done now.' });
     save();
@@ -4962,7 +4967,7 @@ async function api(req, res, url) {
 
   // Contacts. Owners only.
   if (a === 'contacts') {
-    if (auth.role !== 'owner') return send(res, 403, { error: 'Only team owners can see Contacts.' });
+    if (!isAdmin(auth)) return send(res, 403, { error: 'Only team owners and admins can see Contacts.' });
     if (m === 'GET' && !b) return send(res, 200, { contacts: contactsOf(ws.id).map(publicContact) });
     if (m === 'GET' && b === 'duplicates') return send(res, 200, { groups: duplicateGroups(ws.id).map((g) => g.sort((p, q) => p.createdAt - q.createdAt).map((x) => x.id)) });
     const body = m === 'DELETE' ? {} : await readJson(req, 20_000_000);
@@ -5034,7 +5039,7 @@ async function api(req, res, url) {
       if (x.via) return send(res, 400, { error: 'This contact comes from PSS, so it would come back. Remove it in PSS, or mark it do not contact.' });
       delete db.contacts[x.id];
       save();
-      broadcast(ws.id, { type: 'contact:remove', id: x.id, forOwners: true });
+      broadcast(ws.id, { type: 'contact:remove', id: x.id, forAdmins: true });
       refreshLiveSoon(ws.id);
       return send(res, 200, { ok: true });
     }
@@ -5043,7 +5048,7 @@ async function api(req, res, url) {
 
   // The PSS admin connection, which fills Contacts. Owners only.
   if (a === 'pss') {
-    if (auth.role !== 'owner') return send(res, 403, { error: 'Only team owners can do that.' });
+    if (!isAdmin(auth)) return send(res, 403, { error: 'Only team owners and admins can do that.' });
     if (m === 'GET' && !b) return send(res, 200, pssState(ws));
     if (m === 'PUT' && !b) {
       const body = await readJson(req);
@@ -5066,7 +5071,7 @@ async function api(req, res, url) {
       delete db.pss[ws.id];
       releaseContacts(ws.id, 'pss');
       save();
-      broadcast(ws.id, { type: 'pss', forOwners: true });
+      broadcast(ws.id, { type: 'pss', forAdmins: true });
       contactsNews(ws.id);
       return send(res, 200, pssState(ws));
     }
@@ -5142,7 +5147,7 @@ async function api(req, res, url) {
       return send(res, 200, publicCampaign(camp));
     }
     if (c) return send(res, 404, { error: 'Not found' });
-    if (t.ownerId !== auth.memberId && auth.role !== 'owner') return send(res, 403, { error: 'Only the person who saved it can change it.' });
+    if (t.ownerId !== auth.memberId && !isAdmin(auth)) return send(res, 403, { error: 'Only the person who saved it can change it.' });
     if (m === 'PATCH') {
       const was = t.assigneeId;
       applyTemplate(t, await readJson(req, 50_000), ws);
@@ -5214,7 +5219,7 @@ async function api(req, res, url) {
         listId: row ? l.id : null, rowId: row ? row.id : null, recordId: row?.recordId || null,
         // Who it was: a live list's row, or a contact an owner picked. Its PSS lead, if any, gets the call too.
         ...(() => {
-          const ct = row?.contactId ? db.contacts[row.contactId] : auth.role === 'owner' ? (db.contacts[body.contactId]?.wsId === ws.id ? db.contacts[body.contactId] : contactByLead(ws.id, body.leadId)) : null;
+          const ct = row?.contactId ? db.contacts[row.contactId] : isAdmin(auth) ? (db.contacts[body.contactId]?.wsId === ws.id ? db.contacts[body.contactId] : contactByLead(ws.id, body.leadId)) : null;
           return { contactId: ct?.wsId === ws.id ? ct.id : null, leadId: row?.leadId || (ct?.wsId === ws.id ? ct.ext?.pss : null) || null };
         })(),
         memberId: auth.memberId, by: auth.member, at: Date.now(), outcome,
@@ -5268,7 +5273,7 @@ async function api(req, res, url) {
         if (!src) return send(res, 404, { error: 'That project or list is gone.' });
         l = PJ.fillFromProject(applyList({ id: rid(), wsId: ws.id, campaignId: c.id, itemId: null, by: auth.member, createdAt: Date.now(), kind: 'calls', fromProject: src, columns: [], rows: [] }, { name: body.name || 'From a project' }));
       } else if (body.live) {
-        if (auth.role !== 'owner') return send(res, 403, { error: 'Only team owners can make lists from Contacts.' });
+        if (!isAdmin(auth)) return send(res, 403, { error: 'Only team owners and admins can make lists from Contacts.' });
         l = fillLive(applyList({ id: rid(), wsId: ws.id, campaignId: c.id, itemId: null, by: auth.member, createdAt: Date.now(), kind: 'calls', live: applyLive(body.live), columns: [], rows: [] }, { name: body.name || 'Contacts' }));
       } else l = applyList({ id: rid(), wsId: ws.id, campaignId: c.id, itemId: file && file.wsId === ws.id ? file.id : null, by: auth.member, createdAt: Date.now(), name: '', columns: [], rows: [] }, { name: 'List', ...body });
       db.lists[l.id] = l;
@@ -5346,7 +5351,7 @@ async function api(req, res, url) {
       const body = await readJson(req, 8_000_000);
       // A live list's rows come from Contacts: only its name and (by an owner) its filter change.
       if (l.live) {
-        if (body.live !== undefined && auth.role !== 'owner') return send(res, 403, { error: 'Only team owners can change who’s on a live list.' });
+        if (body.live !== undefined && !isAdmin(auth)) return send(res, 403, { error: 'Only team owners and admins can change who’s on a live list.' });
         const next = fillLive(applyList({ ...l, live: body.live !== undefined ? applyLive(body.live) : l.live }, { name: body.name }));
         db.lists[l.id] = next;
         save();
@@ -5370,9 +5375,9 @@ async function api(req, res, url) {
   }
 
   // Roles: the kinds of work people on the team do (Sales, Installs…), so work can be handed to a role.
-  // Separate from owner/member, which is about what someone may change. Owners set them up.
+  // Separate from owner/admin/member, which is about what someone may change. Owners and admins set them up.
   if (a === 'roles') {
-    if (auth.role !== 'owner') return send(res, 403, { error: 'Only team owners can change roles.' });
+    if (!isAdmin(auth)) return send(res, 403, { error: 'Only team owners and admins can change roles.' });
     ws.roles ||= [];
     const body = m === 'DELETE' ? {} : await readJson(req, 20_000);
     const fill = (r) => {
@@ -5409,7 +5414,7 @@ async function api(req, res, url) {
 
   // Inviting people by email. Owners only. The link is shown once, to copy, and emailed when email works.
   if (a === 'invites') {
-    if (auth.role !== 'owner') return send(res, 403, { error: 'Only team owners can invite people.' });
+    if (!isAdmin(auth)) return send(res, 403, { error: 'Only team owners and admins can invite people.' });
     const mine = () => Object.values(db.invites).filter((x) => x.wsId === ws.id && x.expiresAt > Date.now()).sort((x, y) => y.createdAt - x.createdAt).map(publicInvite);
     if (m === 'GET' && !b) return send(res, 200, mine());
     if (m === 'POST' && !b) {
@@ -5618,10 +5623,12 @@ async function api(req, res, url) {
       else signOutWhere(ws, me.id, auth.deviceId);
       ensureOwner(ws, me);
     } else {
-      if (auth.role !== 'owner') return send(res, 403, { error: 'Only team owners can do that.' });
+      if (!isAdmin(auth)) return send(res, 403, { error: 'Only team owners and admins can do that.' });
       const target = b && ws.members.find((x) => x.id === b);
       if (!target) return send(res, 404, { error: 'Not found' });
       if (target.id === auth.memberId) return send(res, 400, { error: 'You can’t do that to yourself.' });
+      // An admin looks after members: not other admins or owners, and can't make anyone an owner.
+      if (auth.role !== 'owner' && target.role !== 'member') return send(res, 403, { error: 'Only team owners can change other admins and owners.' });
       if (m === 'DELETE') {
         await removeMember(ws, target);
         return send(res, 200, publicWorkspace(ws, auth.memberId));
@@ -5634,7 +5641,10 @@ async function api(req, res, url) {
         signOutMember(ws, target.id);
       } else if (m === 'PATCH') {
         const { role } = await readJson(req);
-        if (role === 'owner' || role === 'member') target.role = role;
+        if (role === 'owner' && auth.role !== 'owner') return send(res, 403, { error: 'Only team owners can make someone an owner.' });
+        if (!['owner', 'admin', 'member'].includes(role)) return send(res, 400, { error: 'Pick owner, admin or member.' });
+        if (target.role === 'owner' && role !== 'owner' && !ws.members.some((x) => x.role === 'owner' && x.id !== target.id)) return send(res, 400, { error: 'A team needs an owner.' });
+        target.role = role;
       } else return send(res, 405, { error: 'Method not allowed' });
     }
     save();
@@ -5643,7 +5653,7 @@ async function api(req, res, url) {
   }
 
   if (a === 'invite' && m === 'POST') {
-    if (auth.role !== 'owner') return send(res, 403, { error: 'Only team owners can do that.' });
+    if (!isAdmin(auth)) return send(res, 403, { error: 'Only team owners and admins can do that.' });
     ws.inviteCode = newInviteCode();
     save();
     broadcast(ws.id, { type: 'workspace' });
@@ -5651,7 +5661,7 @@ async function api(req, res, url) {
   }
 
   if (a === 'brand') {
-    if (auth.role !== 'owner') return send(res, 403, { error: 'Only team owners can change the brand.' });
+    if (!isAdmin(auth)) return send(res, 403, { error: 'Only team owners and admins can change the brand.' });
     const old = ws.brand?.logo;
     if (m === 'PATCH' && !b) {
       applyBrand(ws, await readJson(req, 100_000));
@@ -5681,11 +5691,11 @@ async function api(req, res, url) {
     const body = await readJson(req);
     if (body.expireHours !== undefined) ws.settings.expireHours = Math.max(0, Number(body.expireHours) || 0);
     if (body.memberEmail !== undefined) {
-      if (auth.role !== 'owner') return send(res, 403, { error: 'Only team owners can change who sends campaign email.' });
+      if (!isAdmin(auth)) return send(res, 403, { error: 'Only team owners and admins can change who sends campaign email.' });
       ws.settings.memberEmail = !!body.memberEmail;
     }
     if (body.tz !== undefined) {
-      if (auth.role !== 'owner') return send(res, 403, { error: 'Only team owners can change the team’s time zone.' });
+      if (!isAdmin(auth)) return send(res, 403, { error: 'Only team owners and admins can change the team’s time zone.' });
       if (!okTz(body.tz)) return send(res, 400, { error: 'Pick a time zone from the list.' });
       ws.tz = okTz(body.tz);
     }
@@ -5727,7 +5737,7 @@ async function api(req, res, url) {
       }
       // Only whoever made it, or a team owner, decides who sees a top folder.
       if (body.private !== undefined && !d.parentId) {
-        if (d.ownerId !== auth.memberId && auth.role !== 'owner') return send(res, 403, { error: 'Only whoever made this folder can change who sees it.' });
+        if (d.ownerId !== auth.memberId && !isAdmin(auth)) return send(res, 403, { error: 'Only whoever made this folder can change who sees it.' });
         d.private = !!body.private;
         if (d.private) d.ownerId = auth.memberId;
       }
@@ -5926,7 +5936,7 @@ async function api(req, res, url) {
     if (c === 'doc' && it.type === 'text') {
       if (m === 'GET') return send(res, 200, { id: it.id, v: it.v || 0, ...docOf(it) });
       if (m !== 'PATCH') return send(res, 405, { error: 'Method not allowed' });
-      if (!canEditDoc(it, auth)) return send(res, 403, { error: 'This doc is locked. Only whoever made it and team owners can edit it.' });
+      if (!canEditDoc(it, auth)) return send(res, 403, { error: 'This doc is locked. Only whoever made it and team admins can edit it.' });
       const body = await readJson(req, 4_000_000);
       const ops = cleanDocOps(body.ops);
       const order = Array.isArray(body.order) ? body.order.slice(0, DOC_BLOCKS * 2).filter(docId) : null;
@@ -6009,7 +6019,7 @@ async function api(req, res, url) {
       }
       if (body.pinned !== undefined) it.pinned = !!body.pinned;
       if (body.locked !== undefined && it.type === 'text') {
-        if (it.memberId !== auth.memberId && auth.role !== 'owner') return send(res, 403, { error: 'Only whoever made the doc and team owners can lock it.' });
+        if (it.memberId !== auth.memberId && !isAdmin(auth)) return send(res, 403, { error: 'Only whoever made the doc and team admins can lock it.' });
         it.locked = !!body.locked;
         it.lockedBy = it.locked ? auth.member : null;
       }
@@ -6034,7 +6044,7 @@ async function api(req, res, url) {
       return send(res, 200, publicItem(it));
     }
     if (m === 'DELETE') {
-      if (it.type === 'message' && !own && auth.role !== 'owner') return send(res, 403, { error: 'You can only delete your own messages.' });
+      if (it.type === 'message' && !own && !isAdmin(auth)) return send(res, 403, { error: 'You can only delete your own messages.' });
       deleteItem(it.id);
       return send(res, 200, { ok: true });
     }

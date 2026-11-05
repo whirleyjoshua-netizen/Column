@@ -1206,7 +1206,7 @@
       if (!it.channelId) a.append(btn(I.stack, it.dirId ? 'Move to a stack (out of the folder)' : 'Move to stack', (b) => stackMenu(it, b)));
     }
     if (it.type === 'message' && isMine(it)) a.append(btn(I.edit, 'Edit', (b) => editMessage(b.closest('.msg'), it)));
-    if (it.type !== 'message' || isMine(it) || amOwner()) {
+    if (it.type !== 'message' || isMine(it) || amAdmin()) {
       a.append(btn(I.trash, it.type === 'message' ? 'Delete message' : 'Delete everywhere', (b) => confirmClick(b, () => api('DELETE', '/items/' + it.id).catch((e) => toast(e.message)))));
     }
     return a;
@@ -1298,6 +1298,8 @@
   const isMine = (it) => (it.memberId ? it.memberId === S.me?.memberId : it.deviceId === S.deviceId);
 
   const amOwner = () => S.workspace?.members?.find((m) => m.id === S.me?.memberId)?.role === 'owner';
+  // Owners and admins run the team; only owners delete it, make owners, export all of it and keep the business's money.
+  const amAdmin = () => ['owner', 'admin'].includes(S.workspace?.members?.find((m) => m.id === S.me?.memberId)?.role);
   const memberName = (id) => (id === S.me?.memberId ? 'You' : S.workspace?.members?.find((m) => m.id === id)?.name || 'Someone');
 
   // ---------- @mentions: plain "@Name" in the text, so edits and copies just work. @here is everyone. ----------
@@ -2950,7 +2952,7 @@
       ...(camp || list ? [{ head: 'Resources' }] : []),
       ...(list ? [{ label: `Open ${list.name}`, run: () => { K.listOpen = 'task:' + t.id; openCampaign(camp.id); } }] : []),
       ...(camp ? [{ label: 'Log a call or email', run: () => { openCampaign(camp.id); openLog(camp); } }] : []),
-      ...(camp && amOwner() && S.contacts?.length ? [{ label: 'Pull people from Contacts into a list…', run: () => { openCampaign(camp.id); sidekickFor(camp); } }] : []),
+      ...(camp && amAdmin() && S.contacts?.length ? [{ label: 'Pull people from Contacts into a list…', run: () => { openCampaign(camp.id); sidekickFor(camp); } }] : []),
     ]);
   }
   function runTaskTool(t, tool) {
@@ -3088,7 +3090,7 @@
   // Settings → Team → Roles. Everyone sees them; owners make and change them and say who has each.
   function rolesSection(call) {
     const roles = S.workspace.roles || [];
-    const owner = amOwner();
+    const owner = amAdmin();
     const edit = (r) => {
       const name = h('input', { value: r?.name || '', placeholder: 'Sales', maxlength: 40 });
       const about = h('input', { value: r?.about || '', placeholder: 'Calls, follow-ups and quotes', maxlength: 300 });
@@ -3535,7 +3537,7 @@
   // ----- campaigns worked in order (same rules as the server) -----
   // Goals open one at a time, top to bottom; inside a goal each task waits for the one above it.
   // What's waiting is greyed out but still readable. Owners can skip a step or unlock one early.
-  const canPass = (c) => !!c && (!c.ownerId || c.ownerId === S.me?.memberId || amOwner());
+  const canPass = (c) => !!c && (!c.ownerId || c.ownerId === S.me?.memberId || amAdmin());
   // Hand-placed rows (key set) come first in that order; the rest follow in their usual order.
   const placed = (key, base) => (a, b) => (a[key] != null) !== (b[key] != null) ? (a[key] != null ? -1 : 1) : a[key] != null && a[key] !== b[key] ? a[key] - b[key] : base(a, b);
   const byDueMade = (a, b) => ((a.due || '9') < (b.due || '9') ? -1 : (a.due || '9') > (b.due || '9') ? 1 : a.createdAt - b.createdAt);
@@ -3691,7 +3693,7 @@
     const days = (d) => (d.length === 7 ? 'Every day' : d.join() === '1,2,3,4,5' ? 'Weekdays' : d.map((x) => DOW[x]).join('/'));
     return t.slots.map((x) => `${days(x.days)} ${hhmm(x.time)}`).join(', ');
   }
-  const canEditTemplate = (t) => t.ownerId === S.me?.memberId || amOwner();
+  const canEditTemplate = (t) => t.ownerId === S.me?.memberId || amAdmin();
   async function runTemplate(t) {
     try {
       const c = await api('POST', `/templates/${t.id}/run`, { date: todayKey() });
@@ -4802,8 +4804,8 @@
       file ? { label: kind(file) === 'textfile' ? 'Open or edit the file' : 'Open the file', run: () => openPreview(file) } : null,
       file ? { label: 'Use as…', run: () => useSheet(c, file) } : null,
       k === 'tracker' ? { label: 'Edit stages…', run: () => stagesSheet(l) } : null,
-      l.live && amOwner() ? { label: 'Change who’s on it…', run: () => liveSheet(c, l) } : null,
-      S.mail && k === 'calls' && listFields(l).email >= 0 && (amOwner() || myCampaign(c)) ? { label: 'Email this list…', run: () => { const f = listFields(l); emailTo(l.rows.filter((r) => !r.dne).map((r) => ({ email: r.cells[f.email], name: f.who(r) === '—' ? '' : f.who(r), first: f.first(r), listId: l.id, rowId: r.id }))); } } : null,
+      l.live && amAdmin() ? { label: 'Change who’s on it…', run: () => liveSheet(c, l) } : null,
+      S.mail && k === 'calls' && listFields(l).email >= 0 && (amAdmin() || myCampaign(c)) ? { label: 'Email this list…', run: () => { const f = listFields(l); emailTo(l.rows.filter((r) => !r.dne).map((r) => ({ email: r.cells[f.email], name: f.who(r) === '—' ? '' : f.who(r), first: f.first(r), listId: l.id, rowId: r.id }))); } } : null,
       ...(draggableKind(l) && goalsOf(c.id).length ? [{ head: k === 'checklist' ? 'Run it as a task on' : 'Add as a task to' }, ...goalsOf(c.id).map((g) => ({ label: g.title, run: () => listToGoal(l, g) }))] : []),
       { label: file ? 'Remove (the file stays)' : 'Remove', danger: true, run: () => api('DELETE', '/lists/' + l.id).catch((e) => toast(e.message)) },
     ].filter(Boolean));
@@ -5027,7 +5029,7 @@
         run: () => (it.type === 'folder' ? showStack(c.stackId) : docKind(it) || kind(it) === 'pdf' ? dockOpen(c, { type: 'file', id: it.id }) : openPreview(it)),
       })),
       { label: '+ Add a call list or file…', run: () => pickCampaignFiles(c) },
-      amOwner() && S.contacts?.length ? { label: '+ Call list from Contacts…', run: () => liveSheet(c) } : null,
+      amAdmin() && S.contacts?.length ? { label: '+ Call list from Contacts…', run: () => liveSheet(c) } : null,
       (S.projects || []).length ? { label: '+ Call list from a project…', run: () => prListSheet(c) } : null,
       { label: files.length > 8 ? `Go to the stack · all ${files.length} files` : 'Go to the stack', run: () => showStack(c.stackId) },
     ].filter(Boolean));
@@ -5271,7 +5273,7 @@
       { label: 'Share to chat…', run: () => shareMenu(anchor, linkToken('campaign', c.id)) },
       c.status === 'active' ? { label: 'Pause', run: () => api('PATCH', '/campaigns/' + c.id, { status: 'paused' }).catch((e) => toast(e.message)) } : { label: 'Make active', run: () => api('PATCH', '/campaigns/' + c.id, { status: 'active' }).catch((e) => toast(e.message)) },
       c.status !== 'done' ? { label: 'Mark finished', run: () => api('PATCH', '/campaigns/' + c.id, { status: 'done' }).catch((e) => toast(e.message)) } : { note: 'Finished' },
-      ...(owner || amOwner() ? [{ label: 'Delete campaign and everything in it', danger: true, run: () => api('DELETE', '/campaigns/' + c.id).then(() => openCampaign(null)).catch((e) => toast(e.message)) }] : []),
+      ...(owner || amAdmin() ? [{ label: 'Delete campaign and everything in it', danger: true, run: () => api('DELETE', '/campaigns/' + c.id).then(() => openCampaign(null)).catch((e) => toast(e.message)) }] : []),
     ]);
   }
   function goalOptions(anchor, c, g) {
@@ -5810,7 +5812,7 @@
   }
 
   function channelMenu(ch, anchor, row) {
-    const manages = ch.ownerId === S.me?.memberId || S.workspace.members.find((m) => m.id === S.me?.memberId)?.role === 'owner';
+    const manages = ch.ownerId === S.me?.memberId || amAdmin();
     const people = !ch.memberIds ? []
       : manages ? [{ label: 'People…', run: () => feedPeopleSheet(ch) }]
       : [{ note: 'In this feed: ' + [ch.ownerId, ...ch.memberIds].map(memberName).join(', ') },
@@ -6015,7 +6017,7 @@
   const stagesIn = (all) => [...new Set(all.map((x) => x.stage).filter(Boolean))].sort((a, b) => (PSS_STAGES.indexOf(a) + 1 || 99) - (PSS_STAGES.indexOf(b) + 1 || 99));
   const stageLabel = (s) => { const t = String(s || '').replace(/_/g, ' '); return t.charAt(0).toUpperCase() + t.slice(1); };
   async function loadPss() {
-    if (!S.workspace || !amOwner()) {
+    if (!S.workspace || !amAdmin()) {
       S.pss = S.contacts = S.mail = null;
       // Members get Email when an owner allows it.
       if (S.workspace && mayEmail()) S.mail = await api('GET', '/mail').catch(() => null);
@@ -6108,7 +6110,7 @@
           go.textContent = 'Connect';
         }
       });
-      sec.append(h('p', { class: 'day-hint' }, 'Brings every lead’s name, phone, email, address, stage and source into Contacts, and keeps them current. Only team owners see them. In PSS admin, open Settings → Marketing → Column → Connect Column, and paste the key here.'),
+      sec.append(h('p', { class: 'day-hint' }, 'Brings every lead’s name, phone, email, address, stage and source into Contacts, and keeps them current. Only team owners and admins see them. In PSS admin, open Settings → Marketing → Column → Connect Column, and paste the key here.'),
         h('div', { class: 'pss-form' }, url, h('span', { class: 'ai-key' }, key, go)));
       return sec;
     }
@@ -6387,7 +6389,7 @@
       { label: 'Docs', on: toolOpen === 'docs', run: () => openTool('docs') },
       { label: 'Projects', run: showProjects },
       { label: h('span', { class: 'tool-item' }, 'Finance', soon || tight ? h('small', {}, [soon ? `${soon} due soon` : '', tight ? `${tight} budget${tight === 1 ? '' : 's'} nearly used` : ''].filter(Boolean).join(' · ')) : null), on: toolOpen === 'bills', run: () => openTool('bills') },
-      amOwner() ? { label: 'Contacts', on: toolOpen === 'contacts', run: () => openTool('contacts') } : null,
+      amAdmin() ? { label: 'Contacts', on: toolOpen === 'contacts', run: () => openTool('contacts') } : null,
       mayEmail() ? { label: h('span', { class: 'tool-item' }, 'Email', (S.mail?.sends || []).some((x) => x.status === 'sending') ? h('small', {}, 'sending…') : null), on: toolOpen === 'email', run: () => openTool('email') } : null,
       { label: 'Folders', on: toolOpen === 'folders', run: () => openTool('folders') },
       { label: 'Meeting notes', on: toolOpen === 'meetings', run: () => openTool('meetings') },
@@ -6485,7 +6487,7 @@
   }
   function dirMenu(d, anchor, row) {
     const top = !d.parentId;
-    const mayShare = top && (d.ownerId === S.me?.memberId || amOwner());
+    const mayShare = top && (d.ownerId === S.me?.memberId || amAdmin());
     const n = dirCount(d.id);
     const move = (pid) => api('PATCH', '/dirs/' + d.id, { parentId: pid }).catch((e) => toast(e.message));
     openMenu(anchor, [
@@ -6671,7 +6673,7 @@
     }).catch(() => {});
     const pick = h('div', { class: 'pj-tpls' });
     const draw = () => pick.replaceChildren(...Object.entries(TPL).map(([k, [ic, nm, about, own]]) => h('button', { type: 'button', class: 'pj-tpl' + (tpl === k ? ' on' : ''), onclick: () => { tpl = k; draw(); } }, h('span', { class: 'pj-ic' }, ic), h('b', {}, nm), h('small', {}, own ? `Your template · ${about}` : about),
-      own && (own.memberId === S.me?.memberId || amOwner()) ? h('span', { class: 'pj-tpl-del', role: 'button', title: 'Delete this template', onclick: async (e) => { e.stopPropagation(); await api('DELETE', '/project-templates/' + own.id).catch((er) => toast(er.message)); delete TPL[k]; if (tpl === k) tpl = 'crm'; draw(); } }, '×') : null)));
+      own && (own.memberId === S.me?.memberId || amAdmin()) ? h('span', { class: 'pj-tpl-del', role: 'button', title: 'Delete this template', onclick: async (e) => { e.stopPropagation(); await api('DELETE', '/project-templates/' + own.id).catch((er) => toast(er.message)); delete TPL[k]; if (tpl === k) tpl = 'crm'; draw(); } }, '×') : null)));
     draw();
     const priv = h('input', { type: 'checkbox' });
     sheet('New project', [h('label', {}, 'Name', name), h('div', {}, h('small', { class: 'hint' }, 'Start from'), pick), h('label', { class: 'pick' }, priv, 'Private: only me and people I add')], async () => {
@@ -6697,7 +6699,7 @@
       { label: 'Save as a template…', run: () => prSaveTemplate(p) },
       { head: '' },
       { label: p.private ? 'Who can see it…' : 'Make it private…', run: () => prAccess(p) },
-      amOwner() ? { label: 'Connect other apps (API, webhooks)…', run: () => { closeProjects(); openSettings('connections', '.int-sec'); } } : null,
+      amAdmin() ? { label: 'Connect other apps (API, webhooks)…', run: () => { closeProjects(); openSettings('connections', '.int-sec'); } } : null,
       p.types.length > 1 ? { label: `Delete the ${t.name} list`, danger: true, run: async () => { const y = await prCall('POST', `/projects/${p.id}/schema`, { op: 'removeType', typeId: t.id }); if (y) { prUpsertProject(y.project); PR.records.set(p.id, prRecs(p.id).filter((r) => r.typeId !== t.id)); PR.type = null; renderProjects(); } } } : null,
       { label: 'Delete project', danger: true, run: async () => { if (await prCall('DELETE', '/projects/' + p.id)) { S.projects = S.projects.filter((x) => x.id !== p.id); PR.open = null; renderProjects(); } } },
     ].filter(Boolean));
@@ -6894,7 +6896,7 @@
     }, 'Add');
   }
   function prAccess(p) {
-    if (p.memberId !== S.me?.memberId && !amOwner()) return toast('Only whoever made the project and team owners can change who sees it.');
+    if (p.memberId !== S.me?.memberId && !amAdmin()) return toast('Only whoever made the project and team admins can change who sees it.');
     const priv = h('input', { type: 'checkbox', checked: !!p.private });
     const boxes = (S.workspace?.members || []).filter((m) => m.id !== p.memberId).map((m) => ({ m, cb: h('input', { type: 'checkbox', checked: (p.memberIds || []).includes(m.id) }) }));
     sheet('Who can see it', [h('label', { class: 'pick' }, priv, 'Private: only the people below'), ...boxes.map(({ m, cb }) => h('label', { class: 'pick' }, cb, m.name)), h('p', { class: 'day-hint' }, 'Private projects stay out of connected apps and webhooks.')], async () => {
@@ -7135,7 +7137,7 @@
     const tasks = S.tasks.filter((x) => x.recordId === r.id).sort((a, b) => (a.done - b.done) || (a.due || '9').localeCompare(b.due || '9'));
     const docs = docsMentioning(['record:' + r.id]);
     const del = async (e) => { const y = await prCall('DELETE', `/records/${r.id}/log/${e.id}`); if (y) { PR.logs.set(r.id, y); renderProjects(); } };
-    const mine = (e) => ['call', 'email', 'meeting', 'note'].includes(e.kind) && (e.memberId === S.me?.memberId || amOwner());
+    const mine = (e) => ['call', 'email', 'meeting', 'note'].includes(e.kind) && (e.memberId === S.me?.memberId || amAdmin());
     return h('div', { class: 'pj-act' },
       h('div', { class: 'pj-act-btns' },
         [['call', '☏ Log a call'], ['email', '✉ Email'], ['meeting', '👥 Meeting'], ['note', '📝 Note']].map(([k, label]) => h('button', { class: 'btn small', onclick: () => prLogSheet(p, t, r, k) }, label)),
@@ -7651,7 +7653,7 @@
     if (fresh) x.ed.el.querySelector('.dk-title').focus();
   }
   // ----- working on a doc together: who's here, comments, history, public link, lock -----
-  const docCanLock = (it) => it.memberId === S.me?.memberId || amOwner();
+  const docCanLock = (it) => it.memberId === S.me?.memberId || amAdmin();
   const docCanEdit = (it) => !it.locked || docCanLock(it);
   const hueOf = (id) => [...String(id)].reduce((n, ch) => n + ch.charCodeAt(0), 0) % 360;
   // The top of the doc: back, library, where it lives, who else is here, comments, link, lock, options.
@@ -7678,7 +7680,7 @@
       h('button', { class: 'icon-btn', 'aria-label': 'Close doc', title: toolOpen === 'docs' ? 'Back to all docs' : 'Close', html: I.back, onclick: () => closeDoc() }),
       h('button', { class: 'btn small dv-lib', title: 'Every doc you can see, with search', onclick: docsLibrary }, 'All docs'),
       h('span', { class: 'dv-where' }, docWhere(it)),
-      it.locked ? h('span', { class: 'dv-badge', title: `Locked by ${it.lockedBy || 'its maker'}: only they and team owners can edit` }, x.ed.readOnly ? '🔒 Read only' : '🔒 Locked') : null,
+      it.locked ? h('span', { class: 'dv-badge', title: `Locked by ${it.lockedBy || 'its maker'}: only they and team admins can edit` }, x.ed.readOnly ? '🔒 Read only' : '🔒 Locked') : null,
       x.status,
       x.here.length ? h('span', { class: 'dv-here', title: x.here.map((p) => p.name).join(', ') + ' also here' }, x.here.slice(0, 5).map((p) => h('i', { style: `--h:${p.hue}` }, p.name[0].toUpperCase()))) : null,
       it.share ? h('button', { class: 'btn small dv-pub', title: 'Anyone with the link can read this doc', onclick: (e) => docShareMenu(e.currentTarget, x) }, '🌐 Public') : null,
@@ -7745,7 +7747,7 @@
     const msg = (m, del) => h('div', { class: 'dv-cmsg' },
       h('div', { class: 'dv-cwho' }, avatar(m.memberId, 'sm'), h('b', {}, m.by), h('small', {}, ago(m.at)), del ? h('button', { class: 'linkish', onclick: del }, 'Delete') : null),
       h('div', { class: 'dv-ctext', html: mentionify(esc(m.text)).replace(/\n/g, '<br>') }));
-    const mine = (m) => m.memberId === S.me?.memberId || amOwner();
+    const mine = (m) => m.memberId === S.me?.memberId || amAdmin();
     const draft = x.draftComment ? (() => {
       const b = box('Comment… @ to mention someone', async (text) => {
         const c = await api('POST', `/items/${x.id}/comments`, { blockId: x.draftComment.blockId, quote: x.draftComment.quote, text });
@@ -9557,7 +9559,7 @@
   function sendSheet(it, P, done) {
     const name = h('input', { placeholder: 'Pat Smith', autocomplete: 'off' });
     const email = h('input', { type: 'email', placeholder: 'pat@example.com', list: 'signPeople', autocomplete: 'off' });
-    const people = amOwner() ? (S.contacts || []).filter((x) => x.email) : [];
+    const people = amAdmin() ? (S.contacts || []).filter((x) => x.email) : [];
     const dl = h('datalist', { id: 'signPeople' }, people.slice(0, 2000).map((p) => h('option', { value: p.email }, p.name)));
     email.addEventListener('change', () => {
       const p = people.find((x) => x.email.toLowerCase() === email.value.trim().toLowerCase());
@@ -9779,7 +9781,7 @@
         h('button', { class: 'btn small', title: 'Lock the vault', onclick: vaultLock }, h('span', { class: 'vault-ic', html: I.lock }), 'Lock')),
       VK.filter ? h('p', { class: 'day-hint vault-filter' }, `Linked to ${vaultLinkName(VK.filter)} · `, h('button', { class: 'link', onclick: () => { VK.filter = null; renderTool(); } }, 'Show everything')) : null,
       box,
-      h('p', { class: 'day-hint vault-foot' }, 'Locked with your passphrase on this device. Kloomie’s server only keeps it scrambled; nobody else, team owners included, can open it. It locks by itself after 5 idle minutes.'),
+      h('p', { class: 'day-hint vault-foot' }, 'Locked with your passphrase on this device. Kloomie’s server only keeps it scrambled; nobody else, team owners and admins included, can open it. It locks by itself after 5 idle minutes.'),
     ];
   }
   function vaultRow(x) {
@@ -9894,7 +9896,7 @@
     drawFields();
     const camp = h('select', {}, h('option', { value: '' }, 'No campaign'), (S.campaigns || []).map((c) => h('option', { value: 'campaign:' + c.id, selected: x?.link?.type === 'campaign' && x.link.id === c.id }, c.name)));
     // Contacts are owners-only, like the Contacts tool.
-    const contacts = amOwner() ? S.contacts || [] : [];
+    const contacts = amAdmin() ? S.contacts || [] : [];
     const dl = h('datalist', { id: 'vaultContacts' }, contacts.slice(0, 2000).map((p) => h('option', { value: [contactName(p), p.address || p.city].filter(Boolean).join(' · ') })));
     const contactLabel = (p) => [contactName(p), p.address || p.city].filter(Boolean).join(' · ');
     const was = x?.link?.type === 'contact' ? contacts.find((p) => p.id === x.link.id || p.pss === x.link.id) : null;
@@ -10149,7 +10151,7 @@
   }
   function skCardEl(x, c) {
     const set = (state) => skCall('PATCH', `/sidekick/${x.id}/cards/${c.id}`, { state });
-    const can = c.type !== 'list' || amOwner();
+    const can = c.type !== 'list' || amAdmin();
     return h('div', { class: `sk-card ${c.state}` },
       h('div', { class: 'sk-card-h' }, SK_LABEL[c.type]),
       ...skCardBody(c),
@@ -10341,7 +10343,7 @@
           if (!S.goals.some((z) => z.id === g.id)) S.goals.push(g);
           for (const t of y.tasks) upsertTask(await api('POST', '/tasks', { text: t.text, due: t.due, goalId: g.id, assigneeId: t.assigneeId || null, roleId: t.roleId || null }));
           made.push(y);
-        } else if (y.type === 'list' && c && amOwner()) {
+        } else if (y.type === 'list' && c && amAdmin()) {
           upsertList(await api('POST', '/lists', { campaignId: c.id, name: y.name, live: y.live }));
           made.push(y);
         } else if (y.type === 'note') {
@@ -10518,13 +10520,13 @@
     const pick = h('div', { class: 'plan-pick' });
     const l = x.link;
     const shown = !l ? null
-      : l.type === 'live' ? h('button', { class: 'ln ln-chip', title: 'Change who’s on it', onclick: () => amOwner() && liveSheet(null, { name: x.text, live: l.live }, (b) => setLink({ type: 'live', live: b.live }, b.name)) }, h('span', { class: 'ln-ic', html: I.target }), h('span', { class: 'ln-text' }, 'PSS leads'), h('span', { class: 'ln-sub' }, s.sub))
+      : l.type === 'live' ? h('button', { class: 'ln ln-chip', title: 'Change who’s on it', onclick: () => amAdmin() && liveSheet(null, { name: x.text, live: l.live }, (b) => setLink({ type: 'live', live: b.live }, b.name)) }, h('span', { class: 'ln-ic', html: I.target }), h('span', { class: 'ln-text' }, 'PSS leads'), h('span', { class: 'ln-sub' }, s.sub))
       : l.type === 'rows' ? h('button', { class: 'ln ln-chip', title: 'Edit the list', onclick: () => pasteSheet(x, (link) => setLink(link)) }, h('span', { class: 'ln-ic', html: I.task }), h('span', { class: 'ln-text' }, l.columns.join(' · ')), h('span', { class: 'ln-sub' }, s.sub))
       : linkEl(l);
     const menu = (e) => openMenu(e.currentTarget, [
       { head: 'Get it from' },
       { label: 'Something in Kloomie…', run: () => openPicker(pick, (r) => setLink({ type: r.type, id: r.id }, r.label)) },
-      amOwner() && S.contacts?.length ? { label: 'People from Contacts…', run: () => liveSheet(null, l?.type === 'live' ? { name: x.text, live: l.live } : null, (b) => setLink({ type: 'live', live: b.live }, b.name)) } : null,
+      amAdmin() && S.contacts?.length ? { label: 'People from Contacts…', run: () => liveSheet(null, l?.type === 'live' ? { name: x.text, live: l.live } : null, (b) => setLink({ type: 'live', live: b.live }, b.name)) } : null,
       { label: l?.type === 'rows' ? 'Edit the list…' : 'Type or paste a list…', run: () => pasteSheet(x, (link) => setLink(link)) },
       l ? { label: 'Unlink', run: () => setLink(null) } : null,
       { label: 'Remove', run: () => { p.needs.splice(i, 1); savePlan(p); redrawPlan(); } },
@@ -10570,7 +10572,7 @@
   function planToCampaign(p) {
     const steps = p.steps.filter((st) => st.title.trim() || st.tasks.some((t) => t.text.trim()));
     const missing = p.needs.filter((x) => x.text.trim() && !needState(x).ready);
-    const lists = p.needs.filter((x) => x.link?.type === 'rows' || (x.link?.type === 'live' && amOwner()));
+    const lists = p.needs.filter((x) => x.link?.type === 'rows' || (x.link?.type === 'live' && amAdmin()));
     const files = p.needs.filter((x) => x.link?.type === 'file' && linkedFile(x.link.id)?.type === 'file');
     const tasks = steps.reduce((k, st) => k + st.tasks.filter((t) => t.text.trim()).length, 0);
     const lines = [
@@ -11260,7 +11262,7 @@
   };
   // Owners always; members when an owner turns it on in Settings, and then only for lists in their own campaigns
   // (ones they made, run, are invited to, or have a task in). The server checks the same.
-  const mayEmail = () => amOwner() || !!S.workspace?.settings?.memberEmail;
+  const mayEmail = () => amAdmin() || !!S.workspace?.settings?.memberEmail;
   const myCampaign = (c) => !!c && (c.ownerId === S.me?.memberId || c.assigneeId === S.me?.memberId || (c.memberIds || []).includes(S.me?.memberId)
     || S.tasks.some((t) => taskMine(t) && goalById(t.goalId)?.campaignId === c.id));
   const noEmail = () => new Set((S.contacts || []).filter((x) => x.dne).map((x) => x.email.toLowerCase()));
@@ -11332,7 +11334,7 @@
     }, 'Add');
   }
   function pickList() {
-    const lists = S.lists.filter((l) => kindOf(l) === 'calls' && listFields(l).email >= 0 && campById(l.campaignId) && (amOwner() || myCampaign(campById(l.campaignId))));
+    const lists = S.lists.filter((l) => kindOf(l) === 'calls' && listFields(l).email >= 0 && campById(l.campaignId) && (amAdmin() || myCampaign(campById(l.campaignId))));
     if (!lists.length) return toast('None of your campaigns has a list with email addresses yet.');
     const pick = h('select', {}, lists.map((l) => h('option', { value: l.id }, `${l.name} · ${campById(l.campaignId).name}`)));
     const fresh = h('input', { type: 'checkbox' });
@@ -11395,8 +11397,8 @@
     body.value = M.body;
     const footer = h('textarea', { rows: 2, placeholder: 'Premier Shade Solutions\n123 Main St, Henderson, NV 89002', 'aria-label': 'Footer' });
     footer.value = m.footer || '';
-    if (!amOwner()) footer.readOnly = true;
-    const camp = h('select', { 'aria-label': 'Log it in' }, h('option', { value: '' }, 'Don’t log it'), S.campaigns.filter((c) => c.status !== 'done' && (amOwner() || myCampaign(c))).map((c) => h('option', { value: c.id, selected: c.id === M.campaignId }, c.name)));
+    if (!amAdmin()) footer.readOnly = true;
+    const camp = h('select', { 'aria-label': 'Log it in' }, h('option', { value: '' }, 'Don’t log it'), S.campaigns.filter((c) => c.status !== 'done' && (amAdmin() || myCampaign(c))).map((c) => h('option', { value: c.id, selected: c.id === M.campaignId }, c.name)));
     const preview = h('pre', { class: 'mail-preview' + (M.preview ? '' : ' hidden') });
     const sendBtn = h('button', { class: 'btn primary-btn' });
     const warn = h('small', { class: 'day-hint mail-warn' });
@@ -11480,7 +11482,7 @@
         h('div', { class: 'mail-add' },
           S.contacts?.length ? h('button', { class: 'btn small', onclick: pickContacts }, '+ Contacts') : null,
           h('button', { class: 'btn small', onclick: pickList }, '+ From a list'),
-          amOwner() ? h('button', { class: 'btn small', onclick: pickTyped }, '+ Type or paste') : null),
+          amAdmin() ? h('button', { class: 'btn small', onclick: pickTyped }, '+ Type or paste') : null),
         out.length ? h('small', { class: 'day-hint' }, `${out.length} unsubscribed, so they’re left out.`) : null,
         shown.map((r) => h('div', { class: 'mail-person' + (no.has(r.email) ? ' out' : '') },
           h('span', {}, r.name ? h('b', {}, r.name) : null, h('small', {}, (r.name ? ' · ' : '') + r.email),
@@ -11497,7 +11499,7 @@
         })() + (lined ? ` {opener} is each person’s own line (${lined} of ${to.length}).` : '')),
         h('div', { class: 'mail-tools' }, openers),
         h('label', {}, 'Footer: your business and mailing address', footer),
-        h('small', { class: 'day-hint' }, amOwner() ? 'Every email ends with this and the person’s own unsubscribe link.' : 'Every email ends with this and the person’s own unsubscribe link. Team owners set the footer.'),
+        h('small', { class: 'day-hint' }, amAdmin() ? 'Every email ends with this and the person’s own unsubscribe link.' : 'Every email ends with this and the person’s own unsubscribe link. Team owners set the footer.'),
         h('label', {}, 'Log each email in a campaign', camp),
         h('div', { class: 'mail-tools' }, h('button', { class: 'link', onclick: () => { M.preview = !M.preview; preview.classList.toggle('hidden', !M.preview); } }, 'Preview'), test),
         preview,
@@ -11538,8 +11540,7 @@
     const box = $('#settings .cal-sec');
     if (box) box.replaceWith(calendarSection());
   }
-  // ---------- brand & culture: set by team owners; brands the app and guides AI drafts ----------
-  const isOwner = () => S.workspace.members.find((x) => x.id === S.me?.memberId)?.role === 'owner';
+  // ---------- brand & culture: set by team owners and admins; brands the app and guides AI drafts ----------
   function applyBrand() {
     const b = S.workspace?.brand;
     const root = document.documentElement.style;
@@ -11560,7 +11561,7 @@
 
   function brandSection() {
     const b = S.workspace.brand;
-    const owner = isOwner();
+    const owner = amAdmin();
     const set = b.mission || b.values || b.tone || b.about || b.colors.length || b.logo;
     const sec = h('section', {}, h('h3', {}, 'Brand & culture'));
     if (set) {
@@ -11580,7 +11581,7 @@
 
   function brandSheet() {
     const b = S.workspace.brand;
-    const owner = isOwner();
+    const owner = amAdmin();
     const area = (v, rows, placeholder) => {
       const t = h('textarea', { rows, placeholder, ...(owner ? {} : { readonly: '' }) });
       t.value = v || '';
@@ -11727,6 +11728,7 @@
       h('button', { class: tab === k ? 'on' : null, role: 'tab', 'aria-selected': String(tab === k), onclick: () => { S.setTab = k; store.set('setTab', k); renderSettings(); s.scrollTop = 0; } }, label))));
     const me = ws.members.find((x) => x.id === S.me.memberId);
     const owner = me?.role === 'owner';
+    const admin = owner || me?.role === 'admin';
 
     if (tab === 'general') {
       // Layout
@@ -11807,8 +11809,8 @@
       loadCalendars();
       s.append(aiSection());
       loadAi();
-      if (isOwner()) s.append(pssSection());
-      if (isOwner()) s.append(intSection());
+      if (amAdmin()) s.append(pssSection());
+      if (amAdmin()) s.append(intSection());
     }
 
     if (tab === 'team') {
@@ -11819,17 +11821,17 @@
       const sorted = [...ws.members].sort((a, b) => (b.id === me?.id) - (a.id === me?.id) || a.name.localeCompare(b.name));
       for (const mb of sorted) {
         const you = mb.id === me?.id;
-        const notes = [mb.role === 'owner' ? 'Owner' : 'Member', ...rolesOf(mb.id).map((r) => r.name), mb.hasPassword ? null : 'no password yet', onlineIds.has(mb.id) ? 'online' : null].filter(Boolean).join(' · ');
+        const notes = [{ owner: 'Owner', admin: 'Admin' }[mb.role] || 'Member', ...rolesOf(mb.id).map((r) => r.name), mb.hasPassword ? null : 'no password yet', onlineIds.has(mb.id) ? 'online' : null].filter(Boolean).join(' · ');
         const row = h('div', { class: 'srow person' },
           h('span', {}, h('span', { class: 'live' + (onlineIds.has(mb.id) ? ' on' : '') }), mb.name, you ? ' (you)' : '', h('small', {}, notes)));
-        if (owner && !you) {
+        // Owners change anyone; admins look after members.
+        if (!you && (owner || (admin && mb.role === 'member'))) {
+          const make = (role, label) => (mb.role !== role && (owner || role !== 'owner') ? { label, run: () => peopleCall('PATCH', '/members/' + mb.id, { role }) } : null);
           row.append(h('button', { class: 'icon-btn', 'aria-label': 'Options for ' + mb.name, html: I.more, onclick: (e) => openMenu(e.currentTarget, [
-            mb.role === 'owner'
-              ? { label: 'Make member', run: () => peopleCall('PATCH', '/members/' + mb.id, { role: 'member' }) }
-              : { label: 'Make owner', run: () => peopleCall('PATCH', '/members/' + mb.id, { role: 'owner' }) },
+            make('owner', 'Make owner'), make('admin', 'Make admin'), make('member', 'Make member'),
             { label: 'Reset password', danger: true, run: () => peopleCall('POST', `/members/${mb.id}/reset`).then(() => toast(`${mb.name} is signed out. They can set a new password with Join team.`)) },
             { label: 'Remove from team', danger: true, run: () => peopleCall('DELETE', '/members/' + mb.id) },
-          ]) }));
+          ].filter(Boolean)) }));
         }
         people.append(row);
       }
@@ -11839,18 +11841,18 @@
       people.append(
         ws.inviteCode
           ? h('p', { style: 'margin-top:10px' }, 'Invite code: ', h('code', {}, ws.inviteCode))
-          : h('p', { style: 'margin-top:10px' }, 'The old team passphrase works as the invite code.' + (owner ? ' Make a code to replace it.' : '')),
+          : h('p', { style: 'margin-top:10px' }, 'The old team passphrase works as the invite code.' + (admin ? ' Make a code to replace it.' : '')),
         h('p', {}, 'New people open ', h('code', {}, location.origin), ', choose ', h('b', {}, 'Join team'), ', and enter the team name and code. Removing someone signs them out; make a new code too if they still know it.'),
         h('div', { class: 'btns' },
           ws.inviteCode ? h('button', { class: 'btn', onclick: () => copyText(inviteText()) }, 'Copy invite') : null,
-          owner ? newCode : null)
+          admin ? newCode : null)
       );
       s.append(people);
-      if (owner) s.append(inviteSection());
+      if (admin) s.append(inviteSection());
       s.append(rolesSection(peopleCall));
-      if (isOwner()) {
+      if (amAdmin()) {
         s.append(h('section', {}, h('h3', {}, 'Campaign email'),
-          toggleRow('Members can send campaign email', 'From their own Outlook, to people on lists in their own campaigns. Owners can always send.', !!ws.settings.memberEmail,
+          toggleRow('Members can send campaign email', 'From their own Outlook, to people on lists in their own campaigns. Owners and admins can always send.', !!ws.settings.memberEmail,
             (on) => api('PATCH', '/workspace', { memberEmail: on }).catch((e) => toast(e.message)))));
         // The team's clock: what "today" is for follow-ups, quotes and anything Kloomie dates on its own.
         const zones = Intl.supportedValuesOf?.('timeZone') || [ws.tz];
@@ -11859,8 +11861,8 @@
         s.append(h('section', {}, h('h3', {}, 'Time zone'), h('p', {}, 'Where your team works. Kloomie uses it for “today” when it dates things by itself, like follow-ups and quotes.'), tz));
       }
       s.append(brandSection());
-      if (isOwner()) s.append(exportSection('team'));
-      if (isOwner()) s.append(h('section', {}, h('h3', {}, 'Delete team'),
+      if (amOwner()) s.append(exportSection('team'));
+      if (amOwner()) s.append(h('section', {}, h('h3', {}, 'Delete team'),
         h('p', {}, 'Erase this team and everything in it, for everyone. You get 7 days to change your mind.'),
         h('div', { class: 'btns' }, h('button', { class: 'btn danger', onclick: deleteTeamSheet }, 'Delete team…'))));
     }

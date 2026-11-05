@@ -155,7 +155,7 @@ export function projectsModule({ db, save, broadcast, rid, cleanText, isDay, rea
   // ---------- seeing a project ----------
   // A private project is seen by whoever made it and its members; the rest by the whole team.
   const sees = (p, memberId) => !!p && (!p.private || p.memberId === memberId || (p.memberIds || []).includes(memberId));
-  const canManage = (p, auth) => p.memberId === auth.memberId || auth.role === 'owner';
+  const canManage = (p, auth) => p.memberId === auth.memberId || ['owner', 'admin'].includes(auth.role);
   // For broadcast: a message about a project or its records reaches only those who see the project.
   const seesMsg = (msg, memberId) => {
     const id = msg.projectId || msg.project?.id || msg.record?.projectId;
@@ -740,7 +740,7 @@ export function projectsModule({ db, save, broadcast, rid, cleanText, isDay, rea
         return send(res, 200, publicProject(p));
       }
       if (m === 'DELETE' && !c) {
-        if (!canManage(p, auth)) return send(res, 403, { error: 'Only whoever made the project and team owners can delete it.' });
+        if (!canManage(p, auth)) return send(res, 403, { error: 'Only whoever made the project and team admins can delete it.' });
         for (const r of Object.values(db.records)) if (r.projectId === p.id) delete db.records[r.id];
         delete db.projects[p.id];
         for (const h of Object.values(db.webhooks)) if (h.projectId === p.id) delete db.webhooks[h.id];
@@ -756,7 +756,7 @@ export function projectsModule({ db, save, broadcast, rid, cleanText, isDay, rea
       const x = b && db.projectTemplates[b];
       if (!x || x.wsId !== ws.id) return send(res, 404, { error: 'That template is gone.' });
       if (m === 'DELETE') {
-        if (x.memberId !== auth.memberId && auth.role !== 'owner') return send(res, 403, { error: 'Only whoever saved it and team owners can delete it.' });
+        if (x.memberId !== auth.memberId && !['owner', 'admin'].includes(auth.role)) return send(res, 403, { error: 'Only whoever saved it and team admins can delete it.' });
         delete db.projectTemplates[x.id];
         save();
         return send(res, 200, { ok: true });
@@ -800,7 +800,7 @@ export function projectsModule({ db, save, broadcast, rid, cleanText, isDay, rea
       }
       if (c === 'log' && m === 'DELETE' && d) {
         const e = (rec.log || []).find((x) => x.id === d);
-        if (!e || !ACTS.includes(e.kind) || (e.memberId !== auth.memberId && auth.role !== 'owner')) return send(res, 403, { error: 'You can only remove calls and notes you logged.' });
+        if (!e || !ACTS.includes(e.kind) || (e.memberId !== auth.memberId && !['owner', 'admin'].includes(auth.role))) return send(res, 403, { error: 'You can only remove calls and notes you logged.' });
         rec.log = rec.log.filter((x) => x !== e);
         save();
         broadcast(rec.wsId, { type: 'record:log', recordId: rec.id, projectId: rec.projectId, log: rec.log.slice(0, 50) });
@@ -827,7 +827,7 @@ export function projectsModule({ db, save, broadcast, rid, cleanText, isDay, rea
     }
     // API keys and webhooks: team owners only.
     if (a === 'integrations') {
-      if (auth.role !== 'owner') return send(res, 403, { error: 'Only team owners manage integrations.' });
+      if (!['owner', 'admin'].includes(auth.role)) return send(res, 403, { error: 'Only team owners and admins manage integrations.' });
       if (b === 'keys') {
         if (m === 'GET' && !c) return send(res, 200, Object.values(db.apiKeys).filter((k) => k.wsId === ws.id).map(publicKey));
         if (m === 'POST' && !c) {
