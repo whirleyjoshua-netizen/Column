@@ -602,8 +602,13 @@
       if (msg.budget) S.budgets.push(msg.budget);
       renderDay();
       renderTool();
-    } else if (msg.type === 'pss') {
+    } else if (msg.type === 'pss' || msg.type === 'contacts') {
       loadPss();
+    } else if ((msg.type === 'contact' || msg.type === 'contact:remove') && S.contacts) {
+      S.contacts = S.contacts.filter((x) => x.id !== (msg.contact?.id || msg.id));
+      if (msg.contact) S.contacts.push(msg.contact);
+      renderCamps();
+      renderTool();
     } else if (msg.type === 'mail') {
       loadPss();
     } else if (msg.type === 'send' && S.mail) {
@@ -2945,7 +2950,7 @@
       ...(camp || list ? [{ head: 'Resources' }] : []),
       ...(list ? [{ label: `Open ${list.name}`, run: () => { K.listOpen = 'task:' + t.id; openCampaign(camp.id); } }] : []),
       ...(camp ? [{ label: 'Log a call or email', run: () => { openCampaign(camp.id); openLog(camp); } }] : []),
-      ...(camp && amOwner() && S.pss?.connected ? [{ label: 'Pull leads from PSS into a list…', run: () => { openCampaign(camp.id); sidekickFor(camp); } }] : []),
+      ...(camp && amOwner() && S.contacts?.length ? [{ label: 'Pull people from Contacts into a list…', run: () => { openCampaign(camp.id); sidekickFor(camp); } }] : []),
     ]);
   }
   function runTaskTool(t, tool) {
@@ -4452,7 +4457,7 @@
       h('div', { class: 'goal-top', draggable: drag ? 'true' : null, title: drag ? 'Drag onto a goal to make it a task' : null },
         h('span', { class: 'goal-ic', html: KIND_ICON[k] }),
         h('button', { class: 'goal-title clist-name', onclick: click }, l.name),
-        l.live ? h('small', { class: 'clist-live', title: 'Kept in step with PSS' + (l.syncedAt ? ` · updated ${ago(l.syncedAt)}` : '') }, 'Live') : null,
+        l.live ? h('small', { class: 'clist-live', title: 'Kept in step with Contacts' + (l.syncedAt ? ` · updated ${ago(l.syncedAt)}` : '') }, 'Live') : null,
         h('small', { class: 'clist-meta' + (p.late ? ' late' : '') }, p.label),
         h('button', { class: 't-btn', 'aria-label': 'Options', html: I.more, onclick: (e) => listMenu(e.currentTarget, c, l) })),
       p.of ? bar(p.n / p.of, c.color) : null);
@@ -4797,7 +4802,7 @@
       file ? { label: kind(file) === 'textfile' ? 'Open or edit the file' : 'Open the file', run: () => openPreview(file) } : null,
       file ? { label: 'Use as…', run: () => useSheet(c, file) } : null,
       k === 'tracker' ? { label: 'Edit stages…', run: () => stagesSheet(l) } : null,
-      l.live && S.pss?.connected ? { label: 'Change who’s on it…', run: () => liveSheet(c, l) } : null,
+      l.live && amOwner() ? { label: 'Change who’s on it…', run: () => liveSheet(c, l) } : null,
       S.mail && k === 'calls' && listFields(l).email >= 0 && (amOwner() || myCampaign(c)) ? { label: 'Email this list…', run: () => { const f = listFields(l); emailTo(l.rows.filter((r) => !r.dne).map((r) => ({ email: r.cells[f.email], name: f.who(r) === '—' ? '' : f.who(r), first: f.first(r), listId: l.id, rowId: r.id }))); } } : null,
       ...(draggableKind(l) && goalsOf(c.id).length ? [{ head: k === 'checklist' ? 'Run it as a task on' : 'Add as a task to' }, ...goalsOf(c.id).map((g) => ({ label: g.title, run: () => listToGoal(l, g) }))] : []),
       { label: file ? 'Remove (the file stays)' : 'Remove', danger: true, run: () => api('DELETE', '/lists/' + l.id).catch((e) => toast(e.message)) },
@@ -5022,6 +5027,7 @@
         run: () => (it.type === 'folder' ? showStack(c.stackId) : docKind(it) || kind(it) === 'pdf' ? dockOpen(c, { type: 'file', id: it.id }) : openPreview(it)),
       })),
       { label: '+ Add a call list or file…', run: () => pickCampaignFiles(c) },
+      amOwner() && S.contacts?.length ? { label: '+ Call list from Contacts…', run: () => liveSheet(c) } : null,
       (S.projects || []).length ? { label: '+ Call list from a project…', run: () => prListSheet(c) } : null,
       { label: files.length > 8 ? `Go to the stack · all ${files.length} files` : 'Go to the stack', run: () => showStack(c.stackId) },
     ].filter(Boolean));
@@ -5055,7 +5061,7 @@
     const picked = pl && pl.rows.find((r) => r.id === K.pick.rowId);
     if (!picked) K.pick = null;
     const leads = !lists.length && S.contacts?.length ? S.contacts : null;
-    const contact = h('input', { class: 'log-contact', placeholder: lists.length ? `Who? Search ${lists[0].name}, or type a name` : leads ? 'Who? Search PSS contacts, or type a name' : 'Who? (business, person, area)', 'aria-label': 'Who you reached' });
+    const contact = h('input', { class: 'log-contact', placeholder: lists.length ? `Who? Search ${lists[0].name}, or type a name` : leads ? 'Who? Search Contacts, or type a name' : 'Who? (business, person, area)', 'aria-label': 'Who you reached' });
     const note = h('input', { class: 'log-note', placeholder: 'Note (optional)', 'aria-label': 'Note' });
     note.value = K.noteDraft[c.id] || '';
     note.addEventListener('input', () => (K.noteDraft[c.id] = note.value));
@@ -5075,12 +5081,12 @@
     const sugg = h('div', { class: 'log-sugg hidden' });
     const suggest = () => {
       const needle = contact.value.trim().toLowerCase();
-      // Logging blank, an owner can pick from PSS's leads.
+      // Logging blank, an owner can pick from Contacts.
       if (leads) {
-        const found = needle.length < 2 ? [] : leads.filter((x) => [x.name, x.phone, x.email, x.city].some((v) => v.toLowerCase().includes(needle))).slice(0, 6);
-        sugg.replaceChildren(h('small', { class: 'log-sugg-h' }, 'From PSS'), ...found.map((x) => h('button', {
-          onpointerdown: (e) => { e.preventDefault(); contact.value = x.name; K.lead = x.id; sugg.classList.add('hidden'); note.focus(); },
-        }, h('b', {}, x.name), h('small', {}, [x.phone, x.email, x.city].filter(Boolean).join(' · ')), h('span', { class: 'lead-stage' }, stageLabel(x.stage)))));
+        const found = needle.length < 2 ? [] : leads.filter((x) => [x.name, x.company, x.phone, x.email, x.city].some((v) => (v || '').toLowerCase().includes(needle))).slice(0, 6);
+        sugg.replaceChildren(h('small', { class: 'log-sugg-h' }, 'From Contacts'), ...found.map((x) => h('button', {
+          onpointerdown: (e) => { e.preventDefault(); contact.value = contactName(x); K.lead = x.id; sugg.classList.add('hidden'); note.focus(); },
+        }, h('b', {}, contactName(x)), h('small', {}, [x.phone, x.email, x.city].filter(Boolean).join(' · ')), x.stage ? h('span', { class: 'lead-stage' }, stageLabel(x.stage)) : null)));
         sugg.classList.toggle('hidden', !found.length);
         return;
       }
@@ -5113,13 +5119,13 @@
     const bk = K.book;
     const log = async (outcome) => {
       const name = picked ? f.who(picked) : contact.value.trim();
-      const leadId = !picked && K.lead && S.contacts?.find((x) => x.id === K.lead)?.name === name ? K.lead : undefined;
+      const contactId = !picked && K.lead && contactName(S.contacts?.find((x) => x.id === K.lead) || {}) === name ? K.lead : undefined;
       if (bk && (!bk.date || !bk.time)) return toast('Pick a day and time for the meeting');
       if (K.sale && K.sale.amount.trim() && !(Number(K.sale.amount.replace(/[$,\s]/g, '')) > 0)) return toast('Enter what the sale was worth, like 1200');
       const followUp = followPicked();
       try {
         const x = await api('POST', '/attempts', {
-          campaignId: c.id, method: K.method, outcome, contact: name, note: note.value, answers: qs.filter((x) => ans[x.id]?.trim()).map((x) => ({ q: x.q, a: ans[x.id] })), leadId, ...(picked ? K.pick : {}),
+          campaignId: c.id, method: K.method, outcome, contact: name, note: note.value, answers: qs.filter((x) => ans[x.id]?.trim()).map((x) => ({ q: x.q, a: ans[x.id] })), contactId, ...(picked ? K.pick : {}),
           today: todayKey(), followUp, amount: K.sale?.amount.trim() || undefined,
         });
         if (!S.attempts.some((y) => y.id === x.id)) S.attempts.push(x);
@@ -6003,11 +6009,10 @@
     }, 'Add to campaign');
   }
 
-  // ---------- PSS admin: the business site's leads (owners only) ----------
-  // Kloomie reads them every 15 minutes. Owners can browse them, make live call lists from them, and pick
-  // them in the Log. Nothing here changes PSS.
+  // ---------- PSS admin: the business site's leads, which fill Contacts (owners only) ----------
+  // Kloomie reads them every 15 minutes. Calls and emails logged against them go back onto PSS's timeline.
   const PSS_STAGES = ['new', 'contacted', 'visit_booked', 'quoted', 'approved', 'signed', 'sold', 'measure', 'ordered', 'installed', 'completed', 'lost'];
-  const stagesIn = (all) => [...new Set(all.map((x) => x.stage))].sort((a, b) => (PSS_STAGES.indexOf(a) + 1 || 99) - (PSS_STAGES.indexOf(b) + 1 || 99));
+  const stagesIn = (all) => [...new Set(all.map((x) => x.stage).filter(Boolean))].sort((a, b) => (PSS_STAGES.indexOf(a) + 1 || 99) - (PSS_STAGES.indexOf(b) + 1 || 99));
   const stageLabel = (s) => { const t = String(s || '').replace(/_/g, ' '); return t.charAt(0).toUpperCase() + t.slice(1); };
   async function loadPss() {
     if (!S.workspace || !amOwner()) {
@@ -6019,9 +6024,7 @@
       return;
     }
     try {
-      S.pss = await api('GET', '/pss');
-      S.contacts = S.pss.connected ? (await api('GET', '/pss/contacts')).leads : null;
-      S.mail = S.pss.connected ? await api('GET', '/mail') : null;
+      [S.pss, S.contacts, S.mail] = await Promise.all([api('GET', '/pss'), api('GET', '/contacts').then((r) => r.contacts), api('GET', '/mail')]);
       renderCamps();
       renderTool();
     } catch {
@@ -6105,7 +6108,7 @@
           go.textContent = 'Connect';
         }
       });
-      sec.append(h('p', { class: 'day-hint' }, 'Brings every lead’s name, phone, email, address, stage and source over from PSS, and keeps them current. Only team owners see them. In PSS admin, open Settings → Marketing → Column → Connect Column, and paste the key here.'),
+      sec.append(h('p', { class: 'day-hint' }, 'Brings every lead’s name, phone, email, address, stage and source into Contacts, and keeps them current. Only team owners see them. In PSS admin, open Settings → Marketing → Column → Connect Column, and paste the key here.'),
         h('div', { class: 'pss-form' }, url, h('span', { class: 'ai-key' }, key, go)));
       return sec;
     }
@@ -6124,8 +6127,7 @@
     const off = h('button', { class: 'btn small danger' }, 'Disconnect');
     off.addEventListener('click', () => confirmClick(off, async () => {
       redo(await api('DELETE', '/pss').catch((e) => (toast(e.message), S.pss)));
-      S.contacts = null;
-      renderCamps();
+      loadPss();
     }));
     sec.append(
       h('div', { class: 'srow' }, h('span', {}, new URL(p.url).host, h('small', {}, `Key ····${p.last4} · connected by ${p.by}`)), off),
@@ -6142,13 +6144,37 @@
             : 'Logged against a contact, they show up on that lead in PSS'))));
     return sec;
   }
-  // Everyone in PSS, kept current. Tick people to email them.
+  // ---------- Contacts: the team's people (owners only) ----------
+  // Typed in, imported from a spreadsheet, or filled by PSS. Tick people to email them; tap one to change it.
   const CT = { q: '', stage: '', picked: new Set() };
+  const contactName = (x) => x.name || x.company || x.email || x.phone || 'No name';
+  const ctPhone = (v) => { const d = String(v || '').replace(/\D/g, '').slice(-10); return d.length >= 7 ? d : ''; };
+  // The same person twice: the same email or phone. PSS's people are never put together with each other.
+  function contactDupes(all) {
+    const by = new Map();
+    const groups = [];
+    const seen = new Map();
+    for (const x of all) {
+      const keys = [x.email && 'e' + x.email.toLowerCase(), ctPhone(x.phone) && 'p' + ctPhone(x.phone)].filter(Boolean);
+      const g = keys.map((k) => by.get(k)).find(Boolean) || (groups.push(new Set()), groups.at(-1));
+      g.add(x.id);
+      for (const k of keys) by.set(k, g);
+      seen.set(x.id, x);
+    }
+    return groups.map((g) => [...g].map((id) => seen.get(id)).sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0))).filter((g) => g.length > 1 && new Set(g.filter((x) => x.pss).map((x) => x.pss)).size <= 1);
+  }
   function contactsTool() {
-    if (!S.pss?.connected) return [h('p', { class: 'day-hint' }, 'Connect PSS admin in Settings to bring your leads and customers here. They stay current with your website.'), h('button', { class: 'btn small', onclick: () => { closeTool(); openSettings('connections', '.pss-sec'); } }, 'Open Settings')];
     const all = [...(S.contacts || [])].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
-    const q = h('input', { type: 'search', value: CT.q, placeholder: 'Search name, phone, email, city', 'aria-label': 'Search contacts' });
-    const stage = h('select', { 'aria-label': 'Stage' }, h('option', { value: '' }, 'All stages'), stagesIn(all).map((v) => h('option', { value: v, selected: CT.stage === v }, `${stageLabel(v)} · ${all.filter((x) => x.stage === v).length}`)));
+    const add = h('button', { class: 'btn small', onclick: () => contactSheet() }, '+ Add');
+    const imp = h('button', { class: 'btn small', onclick: pickContactsFile }, 'Import');
+    const dupes = contactDupes(all);
+    const tools = h('div', { class: 'contacts-tools' }, add, imp,
+      dupes.length ? h('button', { class: 'btn small', onclick: () => dupesSheet(dupes) }, `Duplicates · ${dupes.length}`) : null,
+      S.pss?.connected ? h('small', { class: 'day-hint' }, 'PSS keeps its leads current here.') : null);
+    if (!all.length) return [tools, h('p', { class: 'day-hint' }, 'Nobody here yet. Add people one at a time, import a spreadsheet (CSV), or connect PSS admin in Settings to bring in your website’s leads.')];
+    const q = h('input', { type: 'search', value: CT.q, placeholder: 'Search name, company, phone, email, city', 'aria-label': 'Search contacts' });
+    const stages = stagesIn(all.filter((x) => x.stage));
+    const stage = stages.length ? h('select', { 'aria-label': 'Stage' }, h('option', { value: '' }, 'All stages'), stages.map((v) => h('option', { value: v, selected: CT.stage === v }, `${stageLabel(v)} · ${all.filter((x) => x.stage === v).length}`))) : null;
     const count = h('p', { class: 'day-hint' });
     const box = h('div', { class: 'contacts contacts-tool' });
     const bar = h('div', { class: 'contacts-act hidden' });
@@ -6157,35 +6183,152 @@
       const n = CT.picked.size;
       bar.classList.toggle('hidden', !n);
       bar.replaceChildren(h('span', {}, `${n} selected`), h('button', { class: 'link', onclick: () => { CT.picked.clear(); show(); } }, 'Clear'),
-        h('button', { class: 'btn small primary-btn', onclick: () => { const ps = all.filter((x) => CT.picked.has(x.id)); CT.picked.clear(); emailTo(ps.map((x) => ({ email: x.email, name: x.name, leadId: x.id }))); } }, `Email ${n}`));
+        h('button', { class: 'btn small primary-btn', onclick: () => { const ps = all.filter((x) => CT.picked.has(x.id)); CT.picked.clear(); emailTo(ps.map((x) => ({ email: x.email, name: x.name, contactId: x.id }))); } }, `Email ${n}`));
     };
     const show = () => {
       CT.q = q.value;
-      CT.stage = stage.value;
+      CT.stage = stage?.value || '';
       const n = q.value.trim().toLowerCase();
-      const hits = all.filter((x) => (!stage.value || x.stage === stage.value) && (!n || [x.name, x.phone, x.email, x.city, x.address].some((v) => v.toLowerCase().includes(n))));
-      count.textContent = hits.length === all.length ? `${all.length.toLocaleString()} contacts` : `${hits.length.toLocaleString()} of ${all.length.toLocaleString()}`;
+      const hits = all.filter((x) => (!CT.stage || x.stage === CT.stage) && (!n || [x.name, x.company, x.phone, x.email, x.city, x.address, ...(x.tags || [])].some((v) => (v || '').toLowerCase().includes(n))));
+      count.textContent = hits.length === all.length ? plural(all.length, 'contact') : `${hits.length.toLocaleString()} of ${all.length.toLocaleString()}`;
       box.replaceChildren(...hits.slice(0, 150).map((x) => {
-        const can = MAIL_RE.test(x.email.trim()) && !no.has(x.email.toLowerCase());
-        const cb = h('input', { type: 'checkbox', checked: CT.picked.has(x.id), disabled: !can, title: can ? 'Select to email' : x.email ? 'Unsubscribed' : 'No email address', 'aria-label': 'Select ' + x.name });
+        const can = MAIL_RE.test(x.email.trim()) && !x.dne && !no.has(x.email.toLowerCase());
+        const cb = h('input', { type: 'checkbox', checked: CT.picked.has(x.id), disabled: !can, title: can ? 'Select to email' : x.email ? 'Do not contact' : 'No email address', 'aria-label': 'Select ' + contactName(x) });
         cb.addEventListener('change', () => { if (cb.checked) CT.picked.add(x.id); else CT.picked.delete(x.id); act(); });
         return h('div', { class: 'contact contact-row' }, cb,
           h('div', { class: 'contact-main' },
-            h('div', { class: 'contact-top' }, h('b', {}, x.name || '—'), h('span', { class: 'lead-stage' }, stageLabel(x.stage)),
-              vaultLinked('contact', x.id) ? h('button', { class: 'link vault-tag', title: 'In your vault', onclick: () => openVaultFor('contact', x.id) }, h('span', { class: 'vault-ic', html: I.lock }), vaultLinked('contact', x.id)) : null),
-            h('small', {}, [x.address, x.city, x.source, x.assignedTo ? '→ ' + x.assignedTo : ''].filter(Boolean).join(' · ')),
+            h('div', { class: 'contact-top' }, h('button', { class: 'link contact-name', title: 'Open', onclick: () => contactSheet(x) }, h('b', {}, contactName(x))),
+              x.stage ? h('span', { class: 'lead-stage' }, stageLabel(x.stage)) : null,
+              x.dne ? h('span', { class: 'lead-stage dne', title: x.extDne ? 'Unsubscribed in PSS' : 'Marked do not contact' }, 'Do not contact') : null,
+              vaultLinked('contact', x.id) || vaultLinked('contact', x.pss) ? h('button', { class: 'link vault-tag', title: 'In your vault', onclick: () => openVaultFor('contact', vaultLinked('contact', x.id) ? x.id : x.pss) }, h('span', { class: 'vault-ic', html: I.lock }), vaultLinked('contact', x.id) || vaultLinked('contact', x.pss)) : null),
+            h('small', {}, [x.name && x.company, x.address, x.city, x.source, x.assignedTo ? '→ ' + x.assignedTo : '', ...(x.tags || []).map((t) => '#' + t)].filter(Boolean).join(' · ')),
             h('small', { class: 'contact-reach' },
               x.phone ? h('a', { href: 'tel:' + x.phone.replace(/[^\d+]/g, '') }, x.phone) : null,
-              x.email ? (x.dne ? h('span', { title: 'On the do-not-contact list' }, h('s', {}, x.email), ' · unsubscribed') : h('a', { href: 'mailto:' + x.email }, x.email)) : null)));
-      }), hits.length > 150 ? h('p', { class: 'day-hint' }, 'Showing the newest 150. Search to narrow it down.') : null);
+              x.email ? (x.dne ? h('s', {}, x.email) : h('a', { href: 'mailto:' + x.email }, x.email)) : null)));
+      }), ...(hits.length > 150 ? [h('p', { class: 'day-hint' }, 'Showing the newest 150. Search to narrow it down.')] : []));
       act();
     };
     q.addEventListener('input', show);
-    stage.addEventListener('change', show);
+    stage?.addEventListener('change', show);
     show();
-    return [h('div', { class: 'contacts-bar' }, q, stage), count, box, bar];
+    return [tools, h('div', { class: 'contacts-bar' }, q, stage), count, box, bar];
   }
-  // A call list of the leads that match, kept in step with PSS.
+  // One contact, new or to change. PSS's own details are changed in PSS.
+  function contactSheet(x) {
+    const from = x?.via === 'pss';
+    const f = {};
+    const field = (k, label, attrs = {}) => {
+      f[k] = h(k === 'note' ? 'textarea' : 'input', { value: x?.[k] || '', disabled: from && ['name', 'email', 'phone', 'address', 'city', 'source'].includes(k), ...attrs });
+      if (k === 'note') f[k].value = x?.note || '';
+      return h('label', {}, label, f[k]);
+    };
+    const tags = h('input', { value: (x?.tags || []).join(', '), placeholder: 'customer, referral' });
+    const dne = h('input', { type: 'checkbox', checked: !!x?.ownDne });
+    const del = x && !from ? h('button', { class: 'btn small danger', 'data-label': '1' }, 'Delete') : null;
+    del?.addEventListener('click', () => confirmClick(del, async () => {
+      try {
+        await api('DELETE', '/contacts/' + x.id);
+        S.contacts = S.contacts.filter((y) => y.id !== x.id);
+        closeSheet();
+        renderTool();
+      } catch (e) {
+        toast(e.message);
+      }
+    }));
+    sheet(x ? contactName(x) : 'New contact', [
+      from ? h('p', { class: 'day-hint' }, 'From PSS: its name, phone, email and address stay in step with your website, so change them there. Company, tags and notes are Kloomie’s own.') : null,
+      field('name', 'Name', { placeholder: 'Pat Lee' }),
+      field('company', 'Company'),
+      h('div', { class: 'row2' }, field('phone', 'Phone', { type: 'tel' }), field('email', 'Email', { type: 'email' })),
+      h('div', { class: 'row2' }, field('address', 'Address'), field('city', 'City')),
+      h('div', { class: 'row2' }, field('source', 'Source', { placeholder: 'Referral' }), h('label', {}, 'Tags', tags)),
+      field('note', 'Note', { rows: 3 }),
+      h('label', { class: 'pick' }, dne, 'Do not contact', h('small', {}, ' Never emailed, and left off call lists’ email.')),
+      x?.extDne ? h('p', { class: 'day-hint' }, 'Unsubscribed in PSS too.') : null,
+      del ? h('div', { class: 'btns' }, del) : null,
+    ].filter(Boolean), async () => {
+      const body = Object.fromEntries(Object.entries(f).filter(([, el]) => !el.disabled).map(([k, el]) => [k, el.value]));
+      Object.assign(body, { tags: tags.value, dne: dne.checked });
+      const y = x ? await api('PATCH', '/contacts/' + x.id, body) : await api('POST', '/contacts', body);
+      S.contacts = [...(S.contacts || []).filter((z) => z.id !== y.id), y];
+      renderTool();
+      if (!x) toast(`Added ${contactName(y)}`);
+    }, x ? 'Save' : 'Add');
+  }
+  function dupesSheet(groups) {
+    const rows = groups.map((g) => {
+      const cb = h('input', { type: 'checkbox', checked: true, 'aria-label': 'Merge ' + contactName(g[0]) });
+      return { g, cb, el: h('label', { class: 'pick dupe' }, cb, h('span', {}, h('b', {}, g.map(contactName).filter((v, i, a) => a.indexOf(v) === i).join(' / ')),
+        h('small', {}, [...new Set(g.flatMap((x) => [x.email, x.phone]).filter(Boolean))].join(' · ') + ` · ${g.length} entries`))) };
+    });
+    sheet(`Duplicates · ${groups.length}`, [h('p', { class: 'day-hint' }, 'The same email or phone number more than once. Merging keeps the oldest, fills in what it’s missing from the others, and keeps every note, tag and logged call.'), h('div', { class: 'dupes' }, rows.map((r) => r.el))], async () => {
+      let n = 0;
+      for (const r of rows) if (r.cb.checked) { await api('POST', '/contacts/merge', { ids: r.g.map((x) => x.id) }); n++; }
+      S.contacts = (await api('GET', '/contacts')).contacts;
+      renderTool();
+      toast(n ? `Merged ${plural(n, 'duplicate')}` : 'Nothing merged');
+    }, 'Merge');
+  }
+  // A spreadsheet saved as CSV: pick which column is which, then everyone comes in. People already here
+  // (same email or phone) get what they were missing filled in.
+  function pickContactsFile() {
+    $('#contactsFile')?.remove();
+    const input = h('input', { type: 'file', id: 'contactsFile', class: 'hidden', accept: '.csv,.tsv,.txt,text/csv' });
+    document.body.append(input);
+    input.addEventListener('change', async () => {
+      const file = input.files[0];
+      input.remove();
+      if (!file) return;
+      if (/\.xlsx?$/i.test(file.name)) return toast('Save the spreadsheet as CSV first (File → Save As or Download → CSV), then import that.');
+      if (file.size > 20_000_000) return toast('That file is too big. Split it into smaller ones.');
+      const raw = parseDelimited(await file.text()).filter((r) => r.some((c) => c.trim()));
+      if (raw.length < 2) return toast('Couldn’t find anyone in that file.');
+      importSheet(raw, file.name);
+    });
+    input.click();
+  }
+  const IMPORT_FIELDS = [
+    ['name', 'Name', /^(full )?name$|^contact( name)?$|^customer( name)?$/i], ['first', 'First name', /first|given/i], ['last', 'Last name', /last|surname|family/i],
+    ['company', 'Company', /company|business|organi[sz]ation|account/i], ['email', 'Email', /e-?mail/i], ['phone', 'Phone', /phone|mobile|cell|tel/i],
+    ['address', 'Address', /address|street/i], ['city', 'City', /city|town/i], ['tags', 'Tags', /tags?|labels?|groups?/i], ['note', 'Note', /notes?|comments?|description/i], ['source', 'Source', /source|lead source|origin/i],
+  ];
+  function importSheet(raw, name) {
+    const head = raw[0], body = raw.slice(1);
+    const cols = head.map((c, i) => h('option', { value: i }, c || `Column ${i + 1}`));
+    const used = new Set();
+    const sel = Object.fromEntries(IMPORT_FIELDS.map(([k, , re]) => {
+      const i = head.findIndex((c, j) => !used.has(j) && re.test(c.trim()));
+      if (i >= 0) used.add(i);
+      const el = h('select', {}, h('option', { value: -1 }, '—'), cols.map((o) => o.cloneNode(true)));
+      el.value = i;
+      return [k, el];
+    }));
+    const tag = h('input', { placeholder: 'e.g. trade show 2026' });
+    const sum = h('p', { class: 'day-hint' });
+    const read = () => body.map((r) => {
+      const v = (k) => (Number(sel[k].value) >= 0 ? String(r[Number(sel[k].value)] || '').trim() : '');
+      return { name: v('name') || [v('first'), v('last')].filter(Boolean).join(' '), company: v('company'), email: v('email'), phone: v('phone'), address: v('address'), city: v('city'), tags: v('tags'), note: v('note'), source: v('source') };
+    }).filter((x) => x.name || x.company || x.email || x.phone);
+    const update = () => {
+      const rows = read();
+      sum.textContent = `${rows.length.toLocaleString()} ${rows.length === 1 ? 'person' : 'people'} to bring in from ${name}${rows[0] ? `, starting with ${rows[0].name || rows[0].company || rows[0].email}` : ''}. Anyone already here is matched by email or phone.`;
+    };
+    for (const el of Object.values(sel)) el.addEventListener('change', update);
+    update();
+    sheet('Import contacts', [
+      h('div', { class: 'import-map' }, IMPORT_FIELDS.map(([k, label]) => h('label', {}, label, sel[k]))),
+      h('label', {}, 'Tag everyone (optional)', tag),
+      sum,
+    ], async () => {
+      const rows = read();
+      if (!rows.length) throw new Error('Pick the columns with names, emails or phone numbers.');
+      const r = await api('POST', '/contacts/import', { rows, tags: tag.value.split(',').map((t) => t.trim()).filter(Boolean), source: 'Import' });
+      S.contacts = (await api('GET', '/contacts')).contacts;
+      renderTool();
+      toast([r.added && `${r.added.toLocaleString()} added`, r.updated && `${r.updated.toLocaleString()} filled in`, r.skipped && `${r.skipped.toLocaleString()} already here`].filter(Boolean).join(' · ') || 'Nothing new');
+    }, 'Import');
+  }
+  // A call list of the contacts that match, kept in step with Contacts.
   const LIVE_DAYS = [[0, 'Any time'], [30, 'Last 30 days'], [90, 'Last 90 days'], [180, 'Last 6 months'], [365, 'Last year']];
   function liveMatch(f, x, now) {
     const same = (a, b) => a.trim().toLowerCase() === b.trim().toLowerCase();
@@ -6208,19 +6351,19 @@
     const read = () => ({ stages: stages.filter((x) => x.cb.checked).map((x) => x.v), cities: city.value ? [city.value] : [], sources: source.value ? [source.value] : [], days: Number(days.value), need: need.value || null });
     const update = () => {
       const n = all.filter((x) => liveMatch(read(), x, Date.now())).length;
-      count.textContent = `${n.toLocaleString()} lead${n === 1 ? '' : 's'} right now. New matches join by themselves; anyone who stops matching leaves.`;
+      count.textContent = `${n.toLocaleString()} contact${n === 1 ? '' : 's'} right now. New matches join by themselves; anyone who stops matching leaves.`;
     };
     for (const el of [city, source, days, need, ...stages.map((x) => x.cb)]) el.addEventListener('change', update);
     update();
-    sheet(l ? 'Who’s on this list' : 'Live list from PSS', [
+    sheet(l ? 'Who’s on this list' : 'Call list from Contacts', [
       h('label', {}, 'Name', name),
-      h('div', { class: 'live-field' }, 'Stage', h('div', { class: 'live-stages' }, stages.map((x) => h('label', { class: 'pick' }, x.cb, stageLabel(x.v))))),
+      stages.length ? h('div', { class: 'live-field' }, 'Stage', h('div', { class: 'live-stages' }, stages.map((x) => h('label', { class: 'pick' }, x.cb, stageLabel(x.v))))) : null,
       h('div', { class: 'row2' }, h('label', {}, 'City', city), h('label', {}, 'Source', source)),
       h('div', { class: 'row2' }, h('label', {}, 'Added', days), h('label', {}, 'Who', need)),
       count,
       l || onPick ? null : h('p', { class: 'day-hint' }, 'Everyone in this campaign will see these contacts.'),
     ], async () => {
-      const body = { name: name.value.trim() || 'PSS leads', live: read() };
+      const body = { name: name.value.trim() || 'Contacts', live: read() };
       if (onPick) return onPick(body);
       const x = l ? await api('PATCH', '/lists/' + l.id, body) : await api('POST', '/lists', { campaignId: c.id, ...body });
       const i = S.lists.findIndex((y) => y.id === x.id);
@@ -6228,7 +6371,7 @@
       else S.lists.push(x);
       K.listOpen = x.id;
       renderCamps();
-      if (!l) toast(`Added ${x.name} · ${x.rows.length} lead${x.rows.length === 1 ? '' : 's'}`);
+      if (!l) toast(`Added ${x.name} · ${x.rows.length} contact${x.rows.length === 1 ? '' : 's'}`);
     }, l ? 'Save' : 'Add to campaign');
   }
 
@@ -9607,7 +9750,7 @@
     VK.filter = { type, id };
     openTool('vault');
   }
-  const vaultLinkName = (l) => (!l ? '' : l.type === 'campaign' ? campById(l.id)?.name || 'Campaign' : (S.contacts || []).find((x) => x.id === l.id)?.name || 'Contact');
+  const vaultLinkName = (l) => (!l ? '' : l.type === 'campaign' ? campById(l.id)?.name || 'Campaign' : contactName((S.contacts || []).find((x) => x.id === l.id || x.pss === l.id) || { name: 'Contact' }));
 
   function vaultTool() {
     if (VK.meta === undefined) {
@@ -9752,9 +9895,9 @@
     const camp = h('select', {}, h('option', { value: '' }, 'No campaign'), (S.campaigns || []).map((c) => h('option', { value: 'campaign:' + c.id, selected: x?.link?.type === 'campaign' && x.link.id === c.id }, c.name)));
     // Contacts are owners-only, like the Contacts tool.
     const contacts = amOwner() ? S.contacts || [] : [];
-    const dl = h('datalist', { id: 'vaultContacts' }, contacts.slice(0, 2000).map((p) => h('option', { value: [p.name, p.address || p.city].filter(Boolean).join(' · ') })));
-    const contactLabel = (p) => [p.name, p.address || p.city].filter(Boolean).join(' · ');
-    const was = x?.link?.type === 'contact' ? contacts.find((p) => p.id === x.link.id) : null;
+    const dl = h('datalist', { id: 'vaultContacts' }, contacts.slice(0, 2000).map((p) => h('option', { value: [contactName(p), p.address || p.city].filter(Boolean).join(' · ') })));
+    const contactLabel = (p) => [contactName(p), p.address || p.city].filter(Boolean).join(' · ');
+    const was = x?.link?.type === 'contact' ? contacts.find((p) => p.id === x.link.id || p.pss === x.link.id) : null;
     const contact = h('input', { list: 'vaultContacts', value: was ? contactLabel(was) : '', placeholder: 'Type a name' });
     const del = x ? h('button', { class: 'btn small danger', 'data-label': '1' }, 'Delete') : null;
     del?.addEventListener('click', () => confirmClick(del, async () => {
@@ -9990,7 +10133,7 @@
     if (c.type === 'list') {
       const n = S.contacts ? S.contacts.filter((x) => liveMatch(c.live, x, Date.now())).length : null;
       const f = c.live;
-      return [h('b', {}, c.name), h('small', {}, [f.stages.length ? f.stages.map(stageLabel).join(', ') : 'Any stage', f.cities.join(', '), f.sources.join(', '), f.days ? `last ${f.days} days` : '', f.need ? `has ${f.need}` : '', n != null ? `${n} from PSS now` : ''].filter(Boolean).join(' · '))];
+      return [h('b', {}, c.name), h('small', {}, [f.stages.length ? f.stages.map(stageLabel).join(', ') : 'Any stage', f.cities.join(', '), f.sources.join(', '), f.days ? `last ${f.days} days` : '', f.need ? `has ${f.need}` : '', n != null ? `${n} in Contacts now` : ''].filter(Boolean).join(' · '))];
     }
     if (c.type === 'note') return [h('b', {}, c.title || 'Doc'), c.template && DOC_TEMPLATES[c.template] ? h('small', {}, DOC_TEMPLATES[c.template].name) : null, h('p', { class: 'sk-note' }, c.text)];
     if (c.type === 'budget') {
@@ -10015,7 +10158,7 @@
         c.state === 'built' ? h('small', { class: 'plan-ok' }, '✓ Added')
           : c.state === 'accepted' ? [h('small', { class: 'plan-ok' }, '✓ Accepted'), h('button', { class: 'linkish', onclick: () => set('new') }, 'Undo')]
           : c.state === 'skipped' ? [h('small', {}, 'Skipped'), h('button', { class: 'linkish', onclick: () => set('new') }, 'Undo')]
-          : [can ? h('button', { class: 'btn small primary-btn', onclick: () => set('accepted') }, 'Accept') : h('small', {}, 'Only owners can pull PSS leads'),
+          : [can ? h('button', { class: 'btn small primary-btn', onclick: () => set('accepted') }, 'Accept') : h('small', {}, 'Only owners can use Contacts'),
             h('button', { class: 'btn small', onclick: () => skEdit(x, c) }, 'Edit'),
             h('button', { class: 'btn small', onclick: () => set('skipped') }, 'Skip')]));
   }
@@ -10267,9 +10410,9 @@
     const l = n.link;
     if (!l) return { ready: n.done };
     if (l.type === 'live') {
-      if (!S.contacts) return { ready: true, sub: 'Leads from PSS' };
+      if (!S.contacts) return { ready: true, sub: 'From Contacts' };
       const k = S.contacts.filter((x) => liveMatch(l.live, x, Date.now())).length;
-      return { ready: k > 0, sub: `${plural(k, 'lead')} from PSS right now` };
+      return { ready: k > 0, sub: `${plural(k, 'contact')} right now` };
     }
     if (l.type === 'rows') return { ready: true, sub: plural(l.rows.length, 'row') };
     const there = l.type === 'file' ? linkedFile(l.id) : l.type === 'stack' ? stackById(l.id) : l.type === 'campaign' ? campById(l.id) : taskById(l.id);
@@ -10381,7 +10524,7 @@
     const menu = (e) => openMenu(e.currentTarget, [
       { head: 'Get it from' },
       { label: 'Something in Kloomie…', run: () => openPicker(pick, (r) => setLink({ type: r.type, id: r.id }, r.label)) },
-      amOwner() && S.pss?.connected ? { label: 'Leads from PSS…', run: () => liveSheet(null, l?.type === 'live' ? { name: x.text, live: l.live } : null, (b) => setLink({ type: 'live', live: b.live }, b.name)) } : null,
+      amOwner() && S.contacts?.length ? { label: 'People from Contacts…', run: () => liveSheet(null, l?.type === 'live' ? { name: x.text, live: l.live } : null, (b) => setLink({ type: 'live', live: b.live }, b.name)) } : null,
       { label: l?.type === 'rows' ? 'Edit the list…' : 'Type or paste a list…', run: () => pasteSheet(x, (link) => setLink(link)) },
       l ? { label: 'Unlink', run: () => setLink(null) } : null,
       { label: 'Remove', run: () => { p.needs.splice(i, 1); savePlan(p); redrawPlan(); } },
@@ -10423,7 +10566,7 @@
     });
   }
   // Makes the campaign: the brief from the goal and notes, a goal per step, call lists from the lists and
-  // PSS leads, files put to use, and whatever's still missing as tasks to do first.
+  // People from Contacts, files put to use, and whatever's still missing as tasks to do first.
   function planToCampaign(p) {
     const steps = p.steps.filter((st) => st.title.trim() || st.tasks.some((t) => t.text.trim()));
     const missing = p.needs.filter((x) => x.text.trim() && !needState(x).ready);
@@ -10434,7 +10577,7 @@
       `A campaign called “${p.name}”${p.due ? `, ending ${dueLabel(p.due)}` : ''}, with the end goal${p.notes.trim() ? ' and notes' : ''} as its brief`,
       steps.length ? `${plural(steps.length, 'goal')}, one per step${tasks ? `, with ${plural(tasks, 'task')}` : ''}` : null,
       missing.length ? `A “Before you start” goal with ${plural(missing.length, 'task')}, for what you don’t have yet` : null,
-      ...lists.map((x) => `Call list: ${x.text || (x.link.type === 'live' ? 'PSS leads' : 'List')}`),
+      ...lists.map((x) => `Call list: ${x.text || (x.link.type === 'live' ? 'Contacts' : 'List')}`),
       ...files.map((x) => `${linkedFile(x.link.id).name}, put to use in the campaign`),
     ].filter(Boolean);
     sheet('Make it a campaign', [
@@ -10457,7 +10600,7 @@
       for (const st of steps) await goal(st.title.trim() || 'Step', st.due, st.tasks.map((t) => t.text.trim()).filter(Boolean));
       for (const x of lists) {
         const l = x.link.type === 'live'
-          ? await api('POST', '/lists', { campaignId: c.id, name: x.text || 'PSS leads', live: x.link.live })
+          ? await api('POST', '/lists', { campaignId: c.id, name: x.text || 'Contacts', live: x.link.live })
           : await api('POST', '/lists', { campaignId: c.id, name: x.text || 'Call list', kind: 'calls', columns: x.link.columns, rows: x.link.rows });
         upsertList(l);
       }
@@ -11090,7 +11233,7 @@
       await api('PATCH', '/items/' + note.id, { pinned: true }).catch(() => {});
       for (const { a, goal } of keep) upsertTask(await api('POST', '/tasks', { text: a.text, due: a.due, goalId: c && goal.value ? goal.value : null, assigneeId: a.who ? memberByName(a.who) : null }));
       if (c && logOn.checked && outcome.value) {
-        const at = await api('POST', '/attempts', { campaignId: c.id, method: c.methods?.includes('Meeting') ? 'Meeting' : null, outcome: outcome.value, contact: contact.value.trim(), note: title.value.trim(), leadId: d.leadId || undefined });
+        const at = await api('POST', '/attempts', { campaignId: c.id, method: c.methods?.includes('Meeting') ? 'Meeting' : null, outcome: outcome.value, contact: contact.value.trim(), note: title.value.trim(), contactId: d.contactId || undefined, leadId: d.leadId || undefined });
         if (!S.attempts.some((y) => y.id === at.id)) S.attempts.push(at);
       }
       upsertMeeting(await api('POST', `/meetings/${x.id}/saved`, { noteId: note.id, campaignId: c?.id || null }));
@@ -11184,7 +11327,7 @@
       box,
       h('p', { class: 'day-hint' }, 'Only contacts with an email address who haven’t unsubscribed are here.'),
     ], () => {
-      mailAdd(all.filter((x) => picked.has(x.id)).map((x) => ({ email: x.email, name: x.name, leadId: x.id, fields: { city: x.city || '', phone: x.phone || '' } })));
+      mailAdd(all.filter((x) => picked.has(x.id)).map((x) => ({ email: x.email, name: x.name, contactId: x.id, fields: { city: x.city || '', phone: x.phone || '', company: x.company || '' } })));
       renderTool();
     }, 'Add');
   }
@@ -11227,8 +11370,6 @@
   }
   function emailTool() {
     const m = S.mail;
-    if (!amOwner() && m && !m.pss) return [h('p', { class: 'day-hint' }, 'Email needs PSS admin connected, for the unsubscribe links. Ask a team owner to connect it in Settings.')];
-    if (amOwner() && !S.pss?.connected) return [h('p', { class: 'day-hint' }, 'Connect PSS admin in Settings first. Every email carries an unsubscribe link, and those come from your website.'), h('button', { class: 'btn small', onclick: () => { closeTool(); openSettings('connections', '.pss-sec'); } }, 'Open Settings')];
     if (!m) return [h('p', { class: 'day-hint' }, 'Loading…')];
     if (!m.from) {
       const go = h('button', { class: 'btn primary-btn' }, 'Connect Outlook');

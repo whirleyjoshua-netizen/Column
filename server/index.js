@@ -33,7 +33,7 @@ fs.mkdirSync(FILES_DIR, { recursive: true });
 // Everything lives in memory; save() hands the whole thing to the store a moment later.
 const IMPORT_PATH = path.join(DATA_DIR, 'import-pending.json');
 const store = await openStore({ url: process.env.DATABASE_URL, file: DB_PATH, importFile: IMPORT_PATH });
-let db = { workspaces: {}, tokens: {}, items: {}, entries: {}, tasks: {}, uploads: {}, campaigns: {}, goals: {}, attempts: {}, lists: {}, templates: {}, calendars: {}, ai: {}, pss: {}, sends: {}, bills: {}, meetings: {}, money: {}, budgets: {}, plans: {}, sidekick: {}, vaults: {}, vaultItems: {}, signs: {}, signatures: {}, trips: {}, pins: {}, zones: {}, comments: {}, users: {}, resets: {}, invites: {}, exports: {} };
+let db = { workspaces: {}, tokens: {}, items: {}, entries: {}, tasks: {}, uploads: {}, campaigns: {}, goals: {}, attempts: {}, lists: {}, templates: {}, calendars: {}, ai: {}, pss: {}, sends: {}, bills: {}, meetings: {}, money: {}, budgets: {}, plans: {}, sidekick: {}, vaults: {}, vaultItems: {}, signs: {}, signatures: {}, trips: {}, pins: {}, zones: {}, comments: {}, users: {}, resets: {}, invites: {}, exports: {}, contacts: {}, optouts: {}, unsubs: {} };
 const loaded = await store.load();
 if (loaded.db) db = { ...db, ...loaded.db };
 if (loaded.fromFile) console.log(`Moving ${path.basename(loaded.fromFile)} into Postgres.`);
@@ -1933,6 +1933,170 @@ function disconnectCalendar(conn) {
   broadcast(conn.wsId, { type: 'calendars', forMember: conn.memberId });
 }
 
+// ---------- Contacts: the team's people ----------
+// Typed in, imported from a spreadsheet, or filled by a connector (PSS for now). Owners see and change them;
+// members reach them through the call lists on their campaigns. A connector's people keep its id in ext
+// ({ pss: leadId }) and, when the connector made them (via), it owns their details: each sync refreshes them.
+// Do not contact is two flags: dne, set here (or by an unsubscribe link), and a connector's own (extDne).
+const CONTACT_LEN = { name: 200, company: 200, email: 200, phone: 60, address: 300, city: 80, source: 80, stage: 40, note: 2000 };
+const CONTACT_MAX = 50_000;
+const CONNECTOR_OWNS = ['name', 'email', 'phone', 'address', 'city', 'source', 'stage'];
+const contactsOf = (wsId) => Object.values(db.contacts).filter((x) => x.wsId === wsId);
+const emailKey = (v) => String(v || '').trim().toLowerCase();
+const phoneKey = (v) => { const d = String(v || '').replace(/\D/g, '').slice(-10); return d.length >= 7 ? d : ''; };
+const noContact = (x) => !!(x.dne || x.extDne);
+const contactByLead = (wsId, leadId) => leadId && contactsOf(wsId).find((x) => x.ext?.pss === leadId);
+function newContact(wsId, by) {
+  return { id: rid(), wsId, name: '', company: '', email: '', phone: '', address: '', city: '', source: '', stage: '', note: '', tags: [], dne: false, ext: {}, via: null, by, createdAt: Date.now(), updatedAt: Date.now() };
+}
+// What a person typed or imported. A connector's contact keeps its details; the rest can change.
+function applyContact(x, v) {
+  for (const k of Object.keys(CONTACT_LEN)) {
+    if (v[k] === undefined || (x.via && CONNECTOR_OWNS.includes(k))) continue;
+    x[k] = k === 'note' ? String(v[k] ?? '').replace(/\r\n?/g, '\n').trim().slice(0, CONTACT_LEN[k]) : cleanText(v[k], CONTACT_LEN[k]).replace(/\s+/g, ' ');
+  }
+  if (v.email !== undefined && !x.via) x.email = emailKey(x.email) && EMAIL_RE.test(x.email) ? x.email : '';
+  if (v.tags !== undefined) x.tags = [...new Set((Array.isArray(v.tags) ? v.tags : String(v.tags || '').split(/[;,]/)).map((t) => cleanText(t, 40)).filter(Boolean))].slice(0, 20);
+  if (v.dne !== undefined) x.dne = !!v.dne;
+  x.updatedAt = Date.now();
+  return x;
+}
+const publicContact = (x) => ({
+  id: x.id, name: x.name, company: x.company, email: x.email, phone: x.phone, address: x.address, city: x.city, source: x.source, stage: x.stage,
+  note: x.note, tags: x.tags, dne: noContact(x), ownDne: !!x.dne, extDne: !!x.extDne, ext: x.ext, via: x.via, pss: x.ext?.pss || null,
+  assignedTo: x.assignedTo || '', lostReason: x.lostReason || '', unsub: x.unsub || null, by: x.by, createdAt: x.createdAt, updatedAt: x.updatedAt,
+});
+const contactNews = (wsId, x) => broadcast(wsId, { type: 'contact', contact: publicContact(x), forOwners: true });
+// Many changed at once (an import, a merge, a sync): owners load them again.
+const contactsNews = (wsId) => broadcast(wsId, { type: 'contacts', forOwners: true });
+// Live call lists follow the contacts, a moment after they change.
+const liveSoon = new Map();
+function refreshLiveSoon(wsId) {
+  if (liveSoon.has(wsId)) return;
+  liveSoon.set(wsId, setTimeout(() => {
+    liveSoon.delete(wsId);
+    let n = 0;
+    for (const l of Object.values(db.lists)) {
+      if (l.wsId !== wsId || !l.live) continue;
+      fillLive(l);
+      broadcast(wsId, { type: 'list', list: publicList(l) });
+      n++;
+    }
+    if (n) save();
+  }, 2_000));
+}
+
+// The same person twice: the same email, or the same phone number.
+function duplicateGroups(wsId) {
+  const all = contactsOf(wsId);
+  const parent = new Map(all.map((x) => [x.id, x.id]));
+  const find = (id) => (parent.get(id) === id ? id : (parent.set(id, find(parent.get(id))), parent.get(id)));
+  const seen = new Map();
+  for (const x of all) for (const k of [emailKey(x.email) && 'e' + emailKey(x.email), phoneKey(x.phone) && 'p' + phoneKey(x.phone)]) {
+    if (!k) continue;
+    if (seen.has(k)) parent.set(find(x.id), find(seen.get(k)));
+    else seen.set(k, x.id);
+  }
+  const groups = new Map();
+  for (const x of all) { const r = find(x.id); groups.set(r, [...(groups.get(r) || []), x]); }
+  // Two people from the same connector are two people there; they're left apart.
+  return [...groups.values()].filter((g) => g.length > 1 && new Set(g.filter((x) => x.ext?.pss).map((x) => x.ext.pss)).size <= 1);
+}
+// Folds the others into the first (the oldest): its empty fields filled, tags and notes added, any
+// connector link kept, and calls logged against them pointed at it.
+function mergeContacts(keep, others) {
+  for (const y of others) {
+    if (y.via && !keep.via) { for (const k of CONNECTOR_OWNS) keep[k] = y[k]; keep.via = y.via; }
+    for (const k of Object.keys(CONTACT_LEN)) if (k !== 'note' && !keep[k] && y[k]) keep[k] = y[k];
+    if (y.note && !keep.note.includes(y.note)) keep.note = [keep.note, y.note].filter(Boolean).join('\n\n').slice(0, CONTACT_LEN.note);
+    keep.tags = [...new Set([...keep.tags, ...(y.tags || [])])].slice(0, 20);
+    keep.ext = { ...y.ext, ...keep.ext };
+    for (const k of ['dne', 'extDne', 'assignedTo', 'lostReason', 'unsub']) if (y[k] && !keep[k]) keep[k] = y[k];
+    keep.createdAt = Math.min(keep.createdAt, y.createdAt);
+    for (const a of Object.values(db.attempts)) if (a.contactId === y.id) a.contactId = keep.id;
+    delete db.contacts[y.id];
+  }
+  keep.updatedAt = Date.now();
+  return keep;
+}
+
+// A connector hands over everyone it has, shaped like this: { id, name, email, phone, address, city, source,
+// stage, createdAt, dne, unsub, ... }. Each is matched by the connector's id, then by email or phone to a
+// contact that isn't linked yet. Someone the connector no longer has loses the link, and goes if the
+// connector made them and nobody added a note or tags.
+function fillContacts(ws, src, people) {
+  const all = contactsOf(ws.id);
+  const byExt = new Map(all.filter((x) => x.ext?.[src]).map((x) => [x.ext[src], x]));
+  const byEmail = new Map(), byPhone = new Map();
+  for (const x of all) if (!x.ext?.[src]) {
+    if (emailKey(x.email) && !byEmail.has(emailKey(x.email))) byEmail.set(emailKey(x.email), x);
+    if (phoneKey(x.phone) && !byPhone.has(phoneKey(x.phone))) byPhone.set(phoneKey(x.phone), x);
+  }
+  let count = all.length;
+  const kept = new Set();
+  for (const p of people) {
+    let x = byExt.get(p.id);
+    if (!x) {
+      x = (emailKey(p.email) && byEmail.get(emailKey(p.email))) || (phoneKey(p.phone) && byPhone.get(phoneKey(p.phone)));
+      if (x && x.ext?.[src]) x = null; // already matched to someone else from there
+    }
+    if (!x) {
+      if (count >= CONTACT_MAX) continue;
+      x = newContact(ws.id, src.toUpperCase());
+      x.via = src;
+      db.contacts[x.id] = x;
+      count++;
+    }
+    x.ext = { ...x.ext, [src]: p.id };
+    // A contact typed in first keeps its own details, filled where empty.
+    for (const k of CONNECTOR_OWNS) if (x.via === src ? true : !x[k]) x[k] = String(p[k] ?? '').slice(0, CONTACT_LEN[k]);
+    if (x.via === src) x.createdAt = p.createdAt || x.createdAt;
+    Object.assign(x, { extDne: !!p.dne, unsub: p.unsub || null, assignedTo: p.assignedTo || '', lostReason: p.lostReason || '', stageChangedAt: p.stageChangedAt || null });
+    kept.add(x.id);
+  }
+  for (const x of contactsOf(ws.id)) {
+    if (!x.ext?.[src] || kept.has(x.id)) continue;
+    if (x.via === src && !x.note && !x.tags.length && !x.dne) { delete db.contacts[x.id]; continue; }
+    const { [src]: _, ...rest } = x.ext;
+    Object.assign(x, { ext: rest, via: x.via === src ? null : x.via, extDne: false, unsub: null });
+  }
+  refreshLiveSoon(ws.id);
+}
+// A disconnected connector's people stay as the team's own contacts, editable, still linked so connecting
+// again finds them.
+function releaseContacts(wsId, src) {
+  for (const x of contactsOf(wsId)) if (x.via === src) x.via = null;
+}
+
+// Unsubscribe links for email sent without PSS: one per address, the same each time.
+function ownUnsubLink(wsId, email) {
+  const token = crypto.createHmac('sha256', SECRET).update(`unsub\n${wsId}\n${email}`).digest('base64url').slice(0, 24);
+  if (!db.unsubs[token]) db.unsubs[token] = { id: token, wsId, email, createdAt: Date.now() };
+  return `${PUBLIC_URL}/unsubscribe/${token}`;
+}
+const optKey = (wsId, email) => wsId + ':' + crypto.createHash('sha256').update(email).digest('base64url').slice(0, 16);
+// The page the link opens, and the one-click unsubscribe mail apps send (List-Unsubscribe-Post).
+async function unsubscribePage(req, res, url) {
+  const u = db.unsubs[url.pathname.slice('/unsubscribe/'.length)];
+  const ws = u && db.workspaces[u.wsId];
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  res.setHeader('X-Robots-Tag', 'noindex');
+  if (!ws) return sharePage(res, 404, '<h1>This link doesn’t work any more</h1><p>You won’t get more email from this sender through Kloomie.</p>', 'Unsubscribe');
+  const brand = ws.brand?.logo || ws.brand?.accent ? { team: ws.name, logo: ws.brand.logo, accent: ws.brand.accent } : null;
+  if (req.method === 'POST') {
+    req.resume();
+    db.optouts[optKey(ws.id, u.email)] = { id: optKey(ws.id, u.email), wsId: ws.id, email: u.email, at: Date.now() };
+    for (const x of contactsOf(ws.id)) if (emailKey(x.email) === u.email && !x.dne) { x.dne = true; x.updatedAt = Date.now(); contactNews(ws.id, x); }
+    save();
+    refreshLiveSoon(ws.id);
+    return sharePage(res, 200, `<h1>You’re unsubscribed</h1><p>${escHtml(ws.name)} won’t email ${escHtml(u.email)} again.</p>`, 'Unsubscribed', brand);
+  }
+  const done = !!db.optouts[optKey(ws.id, u.email)];
+  return sharePage(res, 200, done
+    ? `<h1>You’re unsubscribed</h1><p>${escHtml(ws.name)} won’t email ${escHtml(u.email)} again.</p>`
+    : `<h1>Unsubscribe from ${escHtml(ws.name)}?</h1><p>No more email to ${escHtml(u.email)}.</p><form method="post"><button class="dl" type="submit" style="border:0;font:inherit;cursor:pointer">Unsubscribe</button></form>`, 'Unsubscribe', brand);
+}
+
 // ---------- PSS admin: the business site's leads and do-not-contact list ----------
 // With a key an owner makes in PSS (Settings → Marketing → Column), stored sealed. Only owners
 // see the contacts. A live list puts the leads that match a filter on a campaign as a call list, kept in
@@ -1983,7 +2147,7 @@ function pssState(ws) {
   const p = db.pss[ws.id];
   if (!p) return { connected: false };
   return {
-    connected: true, url: p.url, last4: p.last4, by: p.by, at: p.at, syncedAt: p.syncedAt || null, error: p.error || null, count: p.leads?.length || 0, dne: (p.leads || []).filter((x) => x.dne).length, syncing: pssBusy.has(ws.id),
+    connected: true, url: p.url, last4: p.last4, by: p.by, at: p.at, syncedAt: p.syncedAt || null, error: p.error || null, count: contactsOf(ws.id).filter((x) => x.ext?.pss).length, dne: contactsOf(ws.id).filter((x) => x.ext?.pss && x.extDne).length, syncing: pssBusy.has(ws.id),
     pushedAt: p.pushedAt || null, pushError: p.pushError || null, waiting: toPush(ws.id).length,
   };
 }
@@ -2009,19 +2173,18 @@ function liveMatch(f, x, now) {
 // Rows are keyed by the lead, so calls logged against one, and its tracker stage, stay with it across syncs.
 const leadRowId = (id) => 'L' + crypto.createHash('sha256').update(id).digest('base64url').slice(0, 11);
 function fillLive(l) {
-  const p = db.pss[l.wsId];
-  if (!p) return l;
   const now = Date.now();
   const was = new Map((l.rows || []).map((r) => [r.id, r]));
   l.columns = LIVE_COLS;
-  l.rows = (p.leads || []).filter((x) => liveMatch(l.live, x, now)).slice(0, LIST_ROWS).map((x) => {
-    const row = { id: leadRowId(x.id), leadId: x.id, cells: [x.name, x.phone, x.email, x.address, x.city, stageLabel(x.stage), x.source] };
+  l.rows = contactsOf(l.wsId).map(publicContact).filter((x) => liveMatch(l.live, x, now)).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)).slice(0, LIST_ROWS).map((x) => {
+    // Keyed by the PSS lead when there is one, so rows made before Contacts keep their calls.
+    const row = { id: leadRowId(x.pss || x.id), contactId: x.id, leadId: x.pss, cells: [x.name, x.phone, x.email, x.address, x.city, stageLabel(x.stage), x.source] };
     if (x.dne) row.dne = true;
     const old = was.get(row.id);
     for (const k of ['stage', 'note', 'by', 'at']) if (old?.[k] !== undefined) row[k] = old[k];
     return row;
   });
-  l.syncedAt = p.syncedAt || null;
+  l.syncedAt = Date.now();
   return l;
 }
 // Reads every lead, a page at a time, then the do-not-contact list, and refreshes the live lists.
@@ -2043,19 +2206,15 @@ async function syncPss(ws) {
       }
       const mail = await pssGet(p.url, key, '/api/column/email');
       if (db.pss[ws.id] !== p) return;
-      p.leads = leads;
       p.dne = (Array.isArray(mail.do_not_email) ? mail.do_not_email : []).map((x) => cleanText(x, 200).toLowerCase()).filter(Boolean);
       // Someone who unsubscribed by address but whose lead says otherwise is still not emailed.
       const no = new Set(p.dne);
       for (const x of leads) if (no.has(x.email.toLowerCase())) x.dne = true;
+      fillContacts(ws, 'pss', leads);
       p.syncedAt = Date.now();
       p.error = null;
       pushPss(ws);
-      for (const l of Object.values(db.lists)) {
-        if (l.wsId !== ws.id || !l.live) continue;
-        fillLive(l);
-        broadcast(ws.id, { type: 'list', list: publicList(l) });
-      }
+      contactsNews(ws.id);
     } catch (e) {
       if (db.pss[ws.id] === p) p.error = e.message;
       console.error('PSS sync failed:', e.message);
@@ -2684,10 +2843,11 @@ const MAIL_MAX = 2000;
 const MAIL_KEEP = 30;
 const EMAIL_RE = /^[^\s@<>",;]+@[^\s@<>",;]+\.[a-z]{2,}$/i;
 const mailConn = (wsId, memberId) => Object.values(db.calendars).find((x) => x.wsId === wsId && x.memberId === memberId && x.provider === 'microsoft' && x.mail);
-const doNotEmail = (wsId) => {
-  const p = db.pss[wsId];
-  return new Set([...(p?.dne || []), ...(p?.leads || []).filter((x) => x.dne).map((x) => x.email.toLowerCase())]);
-};
+const doNotEmail = (wsId) => new Set([
+  ...(db.pss[wsId]?.dne || []),
+  ...contactsOf(wsId).filter(noContact).map((x) => emailKey(x.email)).filter(Boolean),
+  ...Object.values(db.optouts).filter((x) => x.wsId === wsId).map((x) => x.email),
+]);
 const mailText = (v, n) => String(v ?? '').replace(/\r\n?/g, '\n').slice(0, n);
 function mailFooter(v) {
   const f = mailText(v, 500).trim();
@@ -2720,10 +2880,10 @@ function mailMime(from, r, subject, text, unsub) {
     '', b64,
   ].join('\r\n');
 }
-// One unsubscribe link per address, from PSS, a thousand at a time.
+// One unsubscribe link per address: from PSS, a thousand at a time, when it's connected; Kloomie's own otherwise.
 async function unsubLinks(wsId, emails) {
   const p = db.pss[wsId];
-  if (!p) throw badRequest('Connect PSS in Settings first. Unsubscribe links come from the PSS website.');
+  if (!p) return Object.fromEntries(emails.map((e) => [e, ownUnsubLink(wsId, e)]));
   const key = unseal(p.sealed).key;
   const out = {};
   for (let i = 0; i < emails.length; i += 1000) {
@@ -2798,7 +2958,7 @@ async function mailOne(x) {
         const onList = listId && db.lists[listId]?.campaignId === c.id && db.lists[listId].rows.some((y) => y.id === r.rowId);
         const a = {
           id: rid(), wsId: x.wsId, campaignId: c.id, method: (c.methods || []).includes('Email') ? 'Email' : null, taskId: null,
-          listId: onList ? listId : null, rowId: onList ? r.rowId : null, leadId: r.leadId || null,
+          listId: onList ? listId : null, rowId: onList ? r.rowId : null, contactId: r.contactId || null, leadId: r.leadId || null,
           memberId: x.memberId, by: x.by, at: r.at, outcome: 'Sent', contact: (r.name || r.email).slice(0, 200), note: merge(x.subject, r).slice(0, 2000), answers: [], sendId: x.id,
         };
         db.attempts[a.id] = a;
@@ -3000,21 +3160,21 @@ async function transcribe(ai, file) {
   }
   throw badRequest('Transcribing needs an OpenAI or Gemini key. Add one in Settings → AI.');
 }
-// Notes, decisions and next steps from the transcript, tied to the campaigns, goals and PSS leads it mentions.
+// Notes, decisions and next steps from the transcript, tied to the campaigns, goals and contacts it mentions.
 async function draftMeeting(ws, x) {
   const auth = { memberId: x.memberId, role: ws.members.find((m) => m.id === x.memberId)?.role };
   const camps = Object.values(db.campaigns).filter((c) => c.wsId === ws.id && c.status !== 'done' && canSee(auth, 'campaign', c));
   const said = x.transcript.toLowerCase();
-  // Only leads named in the call go to the AI, and only for owners (who can see them).
-  const leads = auth.role === 'owner' ? (db.pss[ws.id]?.leads || []).filter((l) => l.name.length > 3 && said.includes(l.name.toLowerCase())).slice(0, 10) : [];
+  // Only contacts named in the call go to the AI, and only for owners (who can see them).
+  const leads = auth.role === 'owner' ? contactsOf(ws.id).filter((l) => l.name.length > 3 && said.includes(l.name.toLowerCase())).slice(0, 10) : [];
   const prompt = [
     `Meeting: ${x.title || 'Untitled'} on ${fmtDay(x.startedAt, tzOf(ws))}, ${Math.round(((x.endedAt || x.startedAt) - x.startedAt) / 60000)} minutes. Recorded by ${x.by}.`,
     camps.length ? `Campaigns it might belong to:
 ${camps.slice(0, 30).map((c) => `- id ${c.id}: ${c.name}${c.brief ? ` · ${clipText(c.brief, 200)}` : ''}
   outcomes: ${c.outcomes.join(', ')}
   goals: ${Object.values(db.goals).filter((g) => g.campaignId === c.id).map((g) => `${g.id} "${clipText(g.title, 80)}"`).join(', ') || 'none'}`).join('\n')}` : 'No campaigns.',
-    leads.length ? `Leads from the CRM named in the call:
-${leads.map((l) => `- id ${l.id}: ${l.name}, stage ${l.stage}${l.city ? ', ' + l.city : ''}`).join('\n')}` : '',
+    leads.length ? `Contacts named in the call:
+${leads.map((l) => `- id ${l.id}: ${l.name}${l.stage ? ', stage ' + l.stage : ''}${l.company ? ', ' + l.company : ''}${l.city ? ', ' + l.city : ''}`).join('\n')}` : '',
     `Transcript:
 ${clipText(x.transcript, 120_000)}`,
   ].filter(Boolean).join('\n\n');
@@ -3024,7 +3184,7 @@ ${clipText(x.transcript, 120_000)}`,
     'If the meeting clearly belongs to one of the campaigns listed, give its id, the goal id each action fits (or null), the outcome from that ' +
     'campaign’s outcomes that fits best, and who was met. Use only what was said: never invent names, numbers, dates or commitments. ' +
     'If nothing fits a campaign, use null. Reply with JSON only: {"title":"","summary":[""],"decisions":[""],"actions":[{"text":"","due":null,"who":null,"goalId":null}],' +
-    '"campaignId":null,"outcome":null,"contact":null,"leadId":null}',
+    '"campaignId":null,"outcome":null,"contact":null,"contactId":null}',
     prompt);
   const j = replyJson(text);
   const camp = camps.find((c) => c.id === j.campaignId) || null;
@@ -3040,7 +3200,7 @@ ${clipText(x.transcript, 120_000)}`,
     campaignId: camp?.id || null,
     outcome: camp && camp.outcomes.includes(j.outcome) ? j.outcome : null,
     contact: cleanText(j.contact, 120) || null,
-    leadId: leads.some((l) => l.id === j.leadId) ? j.leadId : null,
+    contactId: leads.some((l) => l.id === j.contactId) ? j.contactId : null,
   };
 }
 async function processMeeting(x) {
@@ -3097,7 +3257,7 @@ function taskBrief(ws, auth, t) {
     p ? `That campaign is part of “${p.name}”${p.brief ? `: ${clipText(p.brief, 1000)}` : ''}.` : '',
     l ? `The task works the list “${l.name}” (${l.rows.length} rows).` : '',
     files.length ? `Attached to it: ${files.map((it) => it.name || clipText(it.text, 60)).join('; ')}.` : '',
-    auth.role === 'owner' && db.pss[ws.id] ? `Their website (PSS) already has ${db.pss[ws.id].leads?.length || 0} leads they can pull into a list.` : '',
+    auth.role === 'owner' && contactsOf(ws.id).length ? `Their Contacts already have ${contactsOf(ws.id).length} people they can pull into a list.` : '',
   ].filter(Boolean).join('\n');
 }
 async function aiTask(ws, auth, t, body) {
@@ -3379,8 +3539,8 @@ function skCard(v, ws) {
     due: skDay(v.due), tasks: (Array.isArray(v.tasks) ? v.tasks : []).slice(0, 12).map((x) => ({ text: t(x?.text, 300), due: skDay(x?.due), ...whoOfCard(ws, x) })).filter((x) => x.text),
   });
   if (type === 'list') {
-    if (!db.pss[ws.id]) return null;
-    Object.assign(c, { name: t(v.name, 80) || 'PSS leads', live: applyLive(v.live || {}) });
+    if (!contactsOf(ws.id).length) return null;
+    Object.assign(c, { name: t(v.name, 80) || 'Contacts', live: applyLive(v.live || {}) });
   }
   if (type === 'note') Object.assign(c, { title: t(v.title, 120), text: t(v.text, 8000), template: ['brief', 'report', 'proposal', 'onepager', 'script', 'sop', 'meeting'].includes(v.template) ? v.template : null });
   // A limit of 0 takes the budget away, as it does in Finance.
@@ -3509,8 +3669,8 @@ function skMoney(ws, auth, today) {
 // What Sidekick knows before it asks anything: the date, what's in Kloomie, and the campaign it's for.
 function skContext(ws, auth, x, today) {
   const camps = Object.values(db.campaigns).filter((c) => c.wsId === ws.id && canSee(auth, 'campaign', c));
-  const p = db.pss[ws.id];
-  const count = (k) => Object.entries((p?.leads || []).reduce((m, l) => ((m[l[k] || '—'] = (m[l[k] || '—'] || 0) + 1), m), {})).sort((a, b) => b[1] - a[1]).slice(0, 12).map(([v, n]) => `${v} ${n}`).join(', ');
+  const people = auth.role === 'owner' ? contactsOf(ws.id) : [];
+  const count = (k) => Object.entries(people.reduce((m, l) => ((m[l[k] || '—'] = (m[l[k] || '—'] || 0) + 1), m), {})).sort((a, b) => b[1] - a[1]).slice(0, 12).map(([v, n]) => `${v} ${n}`).join(', ');
   const mine = Object.values(db.entries).filter((e) => e.wsId === ws.id && e.memberId === auth.memberId && e.start != null && (e.repeat || (e.date >= today && e.date <= addDays(today, 14))));
   const fmt = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
   const c = x.campaignId && db.campaigns[x.campaignId];
@@ -3519,7 +3679,7 @@ function skContext(ws, auth, x, today) {
     `Today is ${today} (${new Date(today + 'T12:00:00Z').toLocaleDateString('en-US', { weekday: 'long', timeZone: 'UTC' })}). The person is ${auth.member}${auth.role === 'owner' ? ', a team owner' : ''}.`,
     teamLine(ws, auth.memberId),
     camps.length ? `Campaigns already in Kloomie: ${camps.slice(0, 30).map((c) => `${c.name} (${c.status}${c.parentId && db.campaigns[c.parentId] ? ', part of ' + db.campaigns[c.parentId].name : ''})`).join('; ')}.` : 'No campaigns yet.',
-    p ? `PSS (their website's leads) is connected: ${p.leads?.length || 0} leads. By stage: ${count('stage')}. By city: ${count('city')}. By source: ${count('source')}.` : 'PSS isn’t connected, so there are no leads to pull in: prospects would have to be found or imported.',
+    people.length ? `Their Contacts: ${people.length} people${db.pss[ws.id] ? ', kept in step with PSS (their website’s leads)' : ''}. By stage: ${count('stage')}. By city: ${count('city')}. By source: ${count('source')}.` : 'Their Contacts are empty, so there’s nobody to pull in: prospects would have to be found or imported.',
     files.length ? `They attached files for this plan: ${files.map((f) => f.name).join('; ')}. They're at the start of the conversation. Plan from what they say (prices, offers, audience, past numbers, scripts) instead of asking for it again, and say which file a fact came from.` : '',
     mine.length ? `Their Day for the next two weeks (busy times):\n${mine.slice(0, 80).map((e) => `- ${e.repeat ? 'repeats ' + e.repeat + ' from ' + e.date : e.date} ${fmt(e.start)}${e.end != null ? '–' + fmt(e.end) : ''} ${clipText(e.text, 60)}`).join('\n')}` : 'Nothing on their Day in the next two weeks.',
   ];
@@ -3621,7 +3781,7 @@ const SK_SYSTEM = (kind, built) => [
   '{"type":"campaign","name":"","brief":"the goal, audience and approach in a few lines","start":"YYYY-MM-DD","end":"YYYY-MM-DD","why":""}',
   kind === 'schedule' ? '' : '{"type":"sub","name":"","brief":"what this part does for the main campaign","start":"YYYY-MM-DD","end":"YYYY-MM-DD","why":""} — a sub-campaign under the one being planned. Not for a campaign that is itself a sub-campaign.',
   '{"type":"goal","title":"","kind":"tasks"|"count"|"money","target":number|null (count: logged calls or emails to reach; money: whole dollars),"due":"YYYY-MM-DD"|null,"tasks":[{"text":"an action for one sitting","due":"YYYY-MM-DD"|null,"who":null|"role or person"}],"why":""}',
-  '{"type":"list","name":"","live":{"stages":[],"cities":[],"sources":[],"days":0|30|90|180|365,"need":"phone"|"email"|null},"why":""} — a prospect list pulled from PSS by filter, only if PSS is connected. Use stage, city and source values exactly as given.',
+  '{"type":"list","name":"","live":{"stages":[],"cities":[],"sources":[],"days":0|30|90|180|365,"need":"phone"|"email"|null},"why":""} — a prospect list pulled from their Contacts by filter, only if they have contacts. Use stage, city and source values exactly as given.',
   '{"type":"note","title":"","text":"markdown: # headings, - bullets, 1. steps, - [ ] to-dos, **bold**","template":null|"brief"|"report"|"proposal"|"onepager"|"script"|"sop"|"meeting","why":""} — a doc for the campaign, written out in full: a brief, a call script, an email draft, a one-pager, a proposal, a process guide, a weekly report, talking points. Propose one when the plan needs it (a script before calling starts, a brief for a new campaign, a report when they ask how it went). A report or brief gets the campaign’s numbers added on its own, so don’t repeat them.',
   `{"type":"budget","category":"","limit":whole dollars a month,"scope":"personal"|"business","why":""} — a monthly limit for one spending category.${kind === 'money' ? ' For a budget they already have, use its category exactly, and the card changes its limit; a limit of 0 removes it.' : ''}`,
   kind === 'money' ? '{"type":"bill","name":"","amount":dollars,"repeat":"once"|"weekly"|"monthly"|"quarterly"|"yearly","due":"YYYY-MM-DD","category":"","scope":"personal"|"business","autopay":false,"why":""} — a bill they pay that isn’t in Finance yet. Only ones they’ve told you about or that clearly repeat in their spending.' : '',
@@ -4694,7 +4854,7 @@ async function api(req, res, url) {
     return send(res, 405, { error: 'Method not allowed' });
   }
 
-  // Campaign email from your own Outlook. Owners only, since it reaches the PSS contacts.
+  // Campaign email from your own Outlook. Owners send to anyone in Contacts; members, when allowed, to their campaigns' lists.
   if (a === 'mail') {
     // Owners, and members when an owner allows it in Settings. Members email only rows of lists in their own
     // campaigns, with the team's footer, and see only their own sends.
@@ -4739,10 +4899,9 @@ async function api(req, res, url) {
       const camp = body.campaignId ? db.campaigns[body.campaignId] : null;
       if (body.campaignId && (!camp || camp.wsId !== ws.id || !canSee(auth, 'campaign', camp))) return send(res, 404, { error: 'Campaign not found' });
       if (Object.values(db.sends).some((x) => x.connId === conn.id && x.status === 'sending')) return send(res, 409, { error: 'An email is still going out from your Outlook. Wait for it, or stop it, first.' });
-      // Each person once, and nobody who unsubscribed. People can come from PSS contacts (by lead), a list's
-      // row (which must hold that address), or be typed in.
+      // Each person once, and nobody who unsubscribed. People can come from Contacts, a list's row (which must
+      // hold that address), or be typed in.
       const no = doNotEmail(ws.id);
-      const leads = new Map((db.pss[ws.id]?.leads || []).map((y) => [y.id, y]));
       const seen = new Set();
       const to = [];
       for (const r of (Array.isArray(body.to) ? body.to : []).slice(0, MAIL_MAX * 2)) {
@@ -4750,14 +4909,15 @@ async function api(req, res, url) {
         if (!EMAIL_RE.test(email) || seen.has(email)) continue;
         const l = r?.listId && db.lists[r.listId];
         const row = l && l.wsId === ws.id && canSee(auth, 'list', l) ? l.rows.find((y) => y.id === r.rowId && y.cells.some((v) => v.trim().toLowerCase() === email)) : null;
-        const lead = leads.get(r?.leadId);
+        const ct = owner ? (db.contacts[r?.contactId]?.wsId === ws.id ? db.contacts[r.contactId] : contactByLead(ws.id, r?.leadId)) : null;
+        const who = ct && emailKey(ct.email) === email ? ct : null;
         if (!owner && !(row && onCampaign(db.campaigns[l.campaignId] || {}, auth.memberId))) continue;
         seen.add(email);
-        if (no.has(email) || row?.dne || lead?.dne) continue;
+        if (no.has(email) || row?.dne || (who && noContact(who))) continue;
         to.push({
           email, name: cleanText(r.name, 200), first: cleanText(r.first, 80), opener: cleanText(r.opener, 600),
-          fields: row ? rowFields(l, row) : lead ? { city: lead.city, phone: lead.phone } : {},
-          listId: row ? l.id : null, rowId: row ? row.id : null, leadId: lead && lead.email.toLowerCase() === email ? lead.id : row?.leadId || null, status: 'queued',
+          fields: row ? rowFields(l, row) : who ? { city: who.city, phone: who.phone, company: who.company } : {},
+          listId: row ? l.id : null, rowId: row ? row.id : null, contactId: who?.id || row?.contactId || null, leadId: who?.ext?.pss || row?.leadId || null, status: 'queued',
         });
       }
       if (!to.length) return send(res, 400, { error: owner ? 'Nobody here can be emailed.' : 'Nobody here can be emailed. Members can email people on lists in their own campaigns.' });
@@ -4800,7 +4960,88 @@ async function api(req, res, url) {
     return send(res, 200, publicSend(x));
   }
 
-  // The PSS admin connection and its contacts. Owners only.
+  // Contacts. Owners only.
+  if (a === 'contacts') {
+    if (auth.role !== 'owner') return send(res, 403, { error: 'Only team owners can see Contacts.' });
+    if (m === 'GET' && !b) return send(res, 200, { contacts: contactsOf(ws.id).map(publicContact) });
+    if (m === 'GET' && b === 'duplicates') return send(res, 200, { groups: duplicateGroups(ws.id).map((g) => g.sort((p, q) => p.createdAt - q.createdAt).map((x) => x.id)) });
+    const body = m === 'DELETE' ? {} : await readJson(req, 20_000_000);
+    if (m === 'POST' && !b) {
+      if (contactsOf(ws.id).length >= CONTACT_MAX) return send(res, 400, { error: `A team can keep up to ${CONTACT_MAX.toLocaleString()} contacts.` });
+      const x = applyContact(newContact(ws.id, auth.member), body);
+      if (!x.name && !x.email && !x.phone && !x.company) return send(res, 400, { error: 'Add a name, company, email or phone number.' });
+      db.contacts[x.id] = x;
+      save();
+      contactNews(ws.id, x);
+      refreshLiveSoon(ws.id);
+      return send(res, 200, publicContact(x));
+    }
+    // A spreadsheet's rows. Someone already here (same email or phone) gets the empty fields filled and the
+    // tags added; everyone else is new. Rows with no name, company, email or phone are skipped.
+    if (m === 'POST' && b === 'import') {
+      const rows = Array.isArray(body.rows) ? body.rows.slice(0, CONTACT_MAX) : [];
+      const all = contactsOf(ws.id);
+      const byEmail = new Map(), byPhone = new Map();
+      const index = (x) => {
+        if (emailKey(x.email) && !byEmail.has(emailKey(x.email))) byEmail.set(emailKey(x.email), x);
+        if (phoneKey(x.phone) && !byPhone.has(phoneKey(x.phone))) byPhone.set(phoneKey(x.phone), x);
+      };
+      all.forEach(index);
+      let added = 0, updated = 0, skipped = 0, count = all.length;
+      for (const r of rows) {
+        const y = applyContact(newContact(ws.id, auth.member), { ...(r && typeof r === 'object' ? r : {}), source: r?.source || body.source || 'Import', tags: [...(Array.isArray(r?.tags) ? r.tags : String(r?.tags || '').split(/[;,]/)), ...(body.tags || [])] });
+        if (!y.name && !y.email && !y.phone && !y.company) { skipped++; continue; }
+        const x = (emailKey(y.email) && byEmail.get(emailKey(y.email))) || (phoneKey(y.phone) && byPhone.get(phoneKey(y.phone)));
+        if (x) {
+          const fill = Object.fromEntries(Object.keys(CONTACT_LEN).filter((k) => k !== 'source' && !x[k] && y[k]).map((k) => [k, y[k]]));
+          const tags = [...new Set([...x.tags, ...y.tags])];
+          if (Object.keys(fill).length || tags.length !== x.tags.length) { applyContact(x, { ...fill, tags }); updated++; } else skipped++;
+          continue;
+        }
+        if (count >= CONTACT_MAX) { skipped++; continue; }
+        db.contacts[y.id] = y;
+        index(y);
+        count++;
+        added++;
+      }
+      save();
+      contactsNews(ws.id);
+      refreshLiveSoon(ws.id);
+      return send(res, 200, { added, updated, skipped });
+    }
+    // Folds the given contacts into the oldest of them.
+    if (m === 'POST' && b === 'merge') {
+      const xs = [...new Set(Array.isArray(body.ids) ? body.ids : [])].map((id) => db.contacts[id]).filter((x) => x?.wsId === ws.id).sort((p, q) => p.createdAt - q.createdAt);
+      if (xs.length < 2) return send(res, 400, { error: 'Pick two or more to merge.' });
+      if (new Set(xs.filter((x) => x.ext?.pss).map((x) => x.ext.pss)).size > 1) return send(res, 400, { error: 'These are separate leads in PSS. Merge them there first.' });
+      const x = mergeContacts(xs[0], xs.slice(1));
+      save();
+      contactsNews(ws.id);
+      refreshLiveSoon(ws.id);
+      return send(res, 200, publicContact(x));
+    }
+    const x = b && db.contacts[b];
+    if (!x || x.wsId !== ws.id || c) return send(res, 404, { error: 'Not found' });
+    if (m === 'PATCH') {
+      applyContact(x, body);
+      if (!x.name && !x.email && !x.phone && !x.company) return send(res, 400, { error: 'Keep a name, company, email or phone number.' });
+      save();
+      contactNews(ws.id, x);
+      refreshLiveSoon(ws.id);
+      return send(res, 200, publicContact(x));
+    }
+    if (m === 'DELETE') {
+      if (x.via) return send(res, 400, { error: 'This contact comes from PSS, so it would come back. Remove it in PSS, or mark it do not contact.' });
+      delete db.contacts[x.id];
+      save();
+      broadcast(ws.id, { type: 'contact:remove', id: x.id, forOwners: true });
+      refreshLiveSoon(ws.id);
+      return send(res, 200, { ok: true });
+    }
+    return send(res, 405, { error: 'Method not allowed' });
+  }
+
+  // The PSS admin connection, which fills Contacts. Owners only.
   if (a === 'pss') {
     if (auth.role !== 'owner') return send(res, 403, { error: 'Only team owners can do that.' });
     if (m === 'GET' && !b) return send(res, 200, pssState(ws));
@@ -4811,7 +5052,7 @@ async function api(req, res, url) {
       if (!url) return send(res, 400, { error: 'Use the site’s https address, like https://premiershadesolutions.com' });
       if (!/^[\w-]{20,200}$/.test(key)) return send(res, 400, { error: 'That doesn’t look like a PSS key.' });
       await pssGet(url, key, '/api/column/leads?limit=1');
-      db.pss[ws.id] = { url, sealed: seal({ key }), last4: key.slice(-4), by: auth.member, at: Date.now(), leads: [], dne: [] };
+      db.pss[ws.id] = { url, sealed: seal({ key }), last4: key.slice(-4), by: auth.member, at: Date.now(), dne: [] };
       await syncPss(ws);
       return send(res, 200, pssState(ws));
     }
@@ -4820,15 +5061,13 @@ async function api(req, res, url) {
       await syncPss(ws);
       return send(res, 200, pssState(ws));
     }
-    if (m === 'GET' && b === 'contacts') {
-      const p = db.pss[ws.id];
-      return send(res, 200, { syncedAt: p.syncedAt || null, stages: PSS_STAGES, leads: p.leads || [] });
-    }
-    // Live lists stop updating and keep the rows they had.
+    // Its people stay in Contacts, as the team's own.
     if (m === 'DELETE' && !b) {
       delete db.pss[ws.id];
+      releaseContacts(ws.id, 'pss');
       save();
       broadcast(ws.id, { type: 'pss', forOwners: true });
+      contactsNews(ws.id);
       return send(res, 200, pssState(ws));
     }
     return send(res, 405, { error: 'Method not allowed' });
@@ -4973,8 +5212,11 @@ async function api(req, res, url) {
       const x = {
         id: rid(), wsId: ws.id, campaignId: c.id, method, taskId: t && campaignOf('task', t) === c.id ? t.id : null,
         listId: row ? l.id : null, rowId: row ? row.id : null, recordId: row?.recordId || null,
-        // The PSS lead it was, from a live list's row, or picked by an owner from the contacts.
-        leadId: row?.leadId || (auth.role === 'owner' && db.pss[ws.id]?.leads?.some((y) => y.id === body.leadId) ? body.leadId : null),
+        // Who it was: a live list's row, or a contact an owner picked. Its PSS lead, if any, gets the call too.
+        ...(() => {
+          const ct = row?.contactId ? db.contacts[row.contactId] : auth.role === 'owner' ? (db.contacts[body.contactId]?.wsId === ws.id ? db.contacts[body.contactId] : contactByLead(ws.id, body.leadId)) : null;
+          return { contactId: ct?.wsId === ws.id ? ct.id : null, leadId: row?.leadId || (ct?.wsId === ws.id ? ct.ext?.pss : null) || null };
+        })(),
         memberId: auth.memberId, by: auth.member, at: Date.now(), outcome,
         contact: String(body.contact || '').trim().slice(0, 200), note: String(body.note || '').trim().slice(0, 2000),
         // Answers to the campaign's question form, asked on this call.
@@ -5026,9 +5268,8 @@ async function api(req, res, url) {
         if (!src) return send(res, 404, { error: 'That project or list is gone.' });
         l = PJ.fillFromProject(applyList({ id: rid(), wsId: ws.id, campaignId: c.id, itemId: null, by: auth.member, createdAt: Date.now(), kind: 'calls', fromProject: src, columns: [], rows: [] }, { name: body.name || 'From a project' }));
       } else if (body.live) {
-        if (auth.role !== 'owner') return send(res, 403, { error: 'Only team owners can make lists from PSS.' });
-        if (!db.pss[ws.id]) return send(res, 400, { error: 'Connect PSS in Settings first.' });
-        l = fillLive(applyList({ id: rid(), wsId: ws.id, campaignId: c.id, itemId: null, by: auth.member, createdAt: Date.now(), kind: 'calls', live: applyLive(body.live), columns: [], rows: [] }, { name: body.name || 'PSS leads' }));
+        if (auth.role !== 'owner') return send(res, 403, { error: 'Only team owners can make lists from Contacts.' });
+        l = fillLive(applyList({ id: rid(), wsId: ws.id, campaignId: c.id, itemId: null, by: auth.member, createdAt: Date.now(), kind: 'calls', live: applyLive(body.live), columns: [], rows: [] }, { name: body.name || 'Contacts' }));
       } else l = applyList({ id: rid(), wsId: ws.id, campaignId: c.id, itemId: file && file.wsId === ws.id ? file.id : null, by: auth.member, createdAt: Date.now(), name: '', columns: [], rows: [] }, { name: 'List', ...body });
       db.lists[l.id] = l;
       save();
@@ -5103,9 +5344,9 @@ async function api(req, res, url) {
     if (c) return send(res, 404, { error: 'Not found' });
     if (m === 'PATCH') {
       const body = await readJson(req, 8_000_000);
-      // A live list's rows come from PSS: only its name and (by an owner) its filter change.
+      // A live list's rows come from Contacts: only its name and (by an owner) its filter change.
       if (l.live) {
-        if (body.live !== undefined && auth.role !== 'owner') return send(res, 403, { error: 'Only team owners can change what a PSS list shows.' });
+        if (body.live !== undefined && auth.role !== 'owner') return send(res, 403, { error: 'Only team owners can change who’s on a live list.' });
         const next = fillLive(applyList({ ...l, live: body.live !== undefined ? applyLive(body.live) : l.live }, { name: body.name }));
         db.lists[l.id] = next;
         save();
@@ -6125,6 +6366,7 @@ const server = http.createServer(async (req, res) => {
     res.setHeader('X-Robots-Tag', 'noindex');
     return serveStatic(req, res, new URL('/reset.html', 'http://x'));
   }
+  if (url.pathname.startsWith('/unsubscribe/') && (req.method === 'GET' || req.method === 'POST')) return unsubscribePage(req, res, url);
   if (url.pathname.startsWith('/r/') && req.method === 'GET') {
     res.setHeader('Referrer-Policy', 'no-referrer');
     res.setHeader('X-Robots-Tag', 'noindex');
@@ -6219,6 +6461,13 @@ setInterval(() => {
 
 setInterval(runSchedules, 30_000);
 setInterval(syncAllCalendars, 30_000);
+// Before Contacts, PSS's leads were kept on the connection. They become contacts, once.
+for (const [wsId, p] of Object.entries(db.pss)) {
+  if (!Array.isArray(p.leads)) continue;
+  if (db.workspaces[wsId]) fillContacts(db.workspaces[wsId], 'pss', p.leads);
+  delete p.leads;
+  save();
+}
 setInterval(syncAllPss, 60_000);
 setInterval(mailTick, MAIL_GAP);
 setInterval(runAutopay, 10 * 60_000);
@@ -6441,12 +6690,13 @@ async function buildExport(x) {
     records: (y) => PJ.sees(db.projects[y.projectId], me.id),
     projectTemplates: () => !mineOnly,
     webhooks: () => !mineOnly && me.role === 'owner',
+    contacts: () => !mineOnly && me.role === 'owner',
   };
   const data = {};
   for (const [coll, ok] of Object.entries(sees)) data[coll] = Object.values(db[coll] || {}).filter((y) => inWs(y) && ok(y) && made(y));
   const sig = db.signatures[sigKey(ws.id, me.id)];
   if (sig) data.signatures = [sig];
-  if (!mineOnly && me.role === 'owner' && db.pss[ws.id]) data.pss = { leads: db.pss[ws.id].leads || [], dne: db.pss[ws.id].dne || [] };
+  if (!mineOnly && me.role === 'owner' && db.pss[ws.id]) data.pss = { dne: db.pss[ws.id].dne || [] };
   const team = mineOnly
     ? { name: ws.name, you: { id: me.id, name: me.name, role: me.role } }
     : {
@@ -6465,7 +6715,7 @@ async function buildExport(x) {
       '',
       'docs/        Each doc as a Markdown file (.md), readable in any text editor.',
       'files/       Every uploaded file, in its stack or folder.',
-      'sheets/      Tasks, campaigns, calls and emails, money, bills, calendar and call lists as CSV files for Excel, Numbers or Google Sheets.',
+      'sheets/      Tasks, campaigns, calls and emails, contacts, money, bills, calendar and call lists as CSV files for Excel, Numbers or Google Sheets.',
       'data.json    Everything above and more, in full, for moving to another tool.',
       '',
       'Not included: passwords, sign-in keys, Outlook and Google connections, AI keys, PSS logins, and vault contents.',
@@ -6510,7 +6760,7 @@ async function buildExport(x) {
       const rows = (l.rows || []).map((row) => Object.fromEntries([...l.columns.map((c, i) => [c || `Column ${i + 1}`, row.cells?.[i] ?? '']), ['stage', row.stage ?? ''], ['note', row.note ?? '']]));
       sheet(`Lists/${fileName(l.name, 'List')}`, rows);
     }
-    if (data.pss) sheet('PSS leads', data.pss.leads);
+    sheet('Contacts', data.contacts.map((y) => ({ name: y.name, company: y.company, email: y.email, phone: y.phone, address: y.address, city: y.city, source: y.source, stage: y.stage, tags: y.tags, note: y.note, doNotContact: noContact(y) ? 'yes' : '', createdAt: y.createdAt })));
     for (const p of data.projects) for (const t of p.types || []) {
       const rows = data.records.filter((y) => y.projectId === p.id && y.typeId === t.id).map((y) => Object.fromEntries([['created', new Date(y.createdAt).toISOString()], ...t.fields.map((f) => [f.name, typeof y.values?.[f.id] === 'object' && y.values?.[f.id] !== null ? JSON.stringify(y.values[f.id]) : y.values?.[f.id] ?? ''])]));
       sheet(`Projects/${fileName(p.name, 'Project')}/${fileName(t.name, 'List')}`, rows);

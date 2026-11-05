@@ -1728,3 +1728,13 @@ body.platform-darwin .pj-head, body.platform-darwin .pj-top { padding-left: 80px
 .btn.primary-btn.danger-fill { background: var(--danger); border-color: var(--danger); color: #fff; }
 .delete-lock .export-sec { border-top: 1px solid var(--line); padding-top: 10px; }
 .delete-lock .export-sec h3 { margin: 0 0 4px; font-size: 13px; }
+
+/* Contacts */
+.contacts-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 10px; }
+.contacts-tools small { flex-basis: 100%; }
+.contact-name { padding: 0; color: inherit; text-align: left; }
+.lead-stage.dne { color: var(--danger, #d64545); }
+.import-map { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+.dupes { display: flex; flex-direction: column; gap: 8px; max-height: 50vh; overflow: auto; }
+.dupe { align-items: flex-start; }
+.dupe span { display: flex; flex-direction: column; }
