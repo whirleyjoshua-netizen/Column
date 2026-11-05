@@ -92,6 +92,7 @@ function writeNow() {
   return writing;
 }
 function save() {
+  visRev++;
   if (importing) return;
   dirtySince ||= Date.now();
   if (saveFails && saveTimer) return; // a retry is already waiting
@@ -1219,6 +1220,7 @@ const ADMIN_ROLES = ['owner', 'admin'];
 const isAdmin = (auth) => ADMIN_ROLES.includes(auth?.role);
 const isAdminId = (wsId, memberId) => db.workspaces[wsId]?.members.some((m) => m.id === memberId && ADMIN_ROLES.includes(m.role));
 function broadcast(wsId, msg) {
+  visRev++;
   const set = sockets.get(wsId);
   if (!set) return;
   if (msg.type === 'workspace') {
@@ -1232,8 +1234,9 @@ function broadcast(wsId, msg) {
   const feed = msg.item && db.items[msg.item.id] ? feedOfItem(db.items[msg.item.id]) : null;
   const inDir = msg.item && db.items[msg.item.id];
   const data = JSON.stringify(msg);
-  for (const s of set) if (hide && s.readyState === 1 && !seesItemDir(inDir, s.meta.memberId)) s.send(hide);
-  for (const s of set) if (s.readyState === 1 && seesCampaign(campaignId, s.meta.memberId) && seesFeed(feed, s.meta.memberId) && seesItemDir(inDir, s.meta.memberId) && seesTemplate(msg.template, s.meta.memberId) && seesEntry(msg.entry, s.meta.memberId) && (!msg.forMember || msg.forMember === s.meta.memberId) && (!msg.forAdmins || isAdminId(wsId, s.meta.memberId)) && (!msg.bill || seesBill(wsId, msg.bill, s.meta.memberId)) && PJ.seesMsg(msg, s.meta.memberId)) s.send(data);
+  for (const s of set) if (hide && s.readyState === 1 && (!seesItemDir(inDir, s.meta.memberId) || (msg.type === 'item:update' && !seesOwn('item', inDir, s.meta.memberId)))) s.send(hide);
+  const task = msg.type === 'task' && msg.task && db.tasks[msg.task.id];
+  for (const s of set) if (s.readyState === 1 && seesCampaign(campaignId, s.meta.memberId) && seesFeed(feed, s.meta.memberId) && seesItemDir(inDir, s.meta.memberId) && seesTemplate(msg.template, s.meta.memberId) && seesEntry(msg.entry, s.meta.memberId) && (!msg.forMember || msg.forMember === s.meta.memberId) && (!msg.forAdmins || isAdminId(wsId, s.meta.memberId)) && (!msg.bill || seesBill(wsId, msg.bill, s.meta.memberId)) && (!inDir || seesOwn('item', inDir, s.meta.memberId)) && (!task || seesOwn('task', task, s.meta.memberId)) && PJ.seesMsg(msg, s.meta.memberId)) s.send(data);
 }
 
 // ---------- campaigns: campaign → goals → tasks, plus logged attempts (each call or email and its outcome) ----------
@@ -1243,7 +1246,46 @@ const METHODS = ['Call', 'Email'];
 const labelList = (v, max) => [...new Set((Array.isArray(v) ? v : []).map((o) => String(o).trim().slice(0, 40)).filter(Boolean))].slice(0, max);
 function seesCampaign(campaignId, memberId) {
   const c = campaignId && db.campaigns[campaignId];
+  if (c && ownOnly(c.wsId, memberId)) return c.ownerId === memberId || c.assigneeId === memberId || c.memberIds.includes(memberId) || taskCamps(c.wsId, memberId).has(c.id);
   return !c || !c.private || c.ownerId === memberId || c.assigneeId === memberId || c.memberIds.includes(memberId);
+}
+// The team's choice (settings.visibility): members see everything, the default, or only what's theirs.
+// Then a member sees the campaigns they run, belong to or have a task in, with everything in them; tasks
+// outside campaigns that are theirs (made by, given to, or for a role of theirs); files and docs outside
+// campaigns that they added; and the team's chat. Owners and admins always see everything.
+const ownOnly = (wsId, memberId) => db.workspaces[wsId]?.settings?.visibility === 'own' && !isAdminId(wsId, memberId);
+const memberIn = (wsId, memberId) => db.workspaces[wsId]?.members.find((m) => m.id === memberId);
+function myTask(t, memberId) {
+  const me = memberIn(t.wsId, memberId);
+  return !!me && (t.assigneeId === memberId || t.memberId === memberId || t.assignedBy === memberId || (!!t.roleId && (me.roleIds || []).includes(t.roleId))
+    || (!t.memberId && !!t.by && nameKey(t.by) === me.nameKey));
+}
+// Which campaigns a member has a task in, worked out once per change (visRev moves on every save and broadcast).
+let visRev = 0;
+const taskCampsMemo = new Map();
+function taskCamps(wsId, memberId) {
+  const hit = taskCampsMemo.get(memberId);
+  if (hit?.rev === visRev) return hit.ids;
+  const ids = new Set();
+  for (const t of Object.values(db.tasks)) if (t.wsId === wsId && t.goalId && myTask(t, memberId)) { const c = db.goals[t.goalId]?.campaignId; if (c) ids.add(c); }
+  taskCampsMemo.set(memberId, { rev: visRev, ids });
+  return ids;
+}
+function seesOwn(kind, x, memberId) {
+  if (!x || !ownOnly(x.wsId, memberId)) return true;
+  if (kind === 'task') return !!campaignOf('task', x) || myTask(x, memberId);
+  if (kind === 'item') {
+    const top = x.parentId ? db.items[x.parentId] || x : x;
+    return !!campaignOf('item', x) || !!top.channelId || top.type === 'message' || top.memberId === memberId;
+  }
+  if (kind === 'template') return x.ownerId === memberId;
+  return true;
+}
+// When what a member may see changes (the setting, or a task or campaign that's theirs), their app loads again.
+function resyncVisibility(wsId, memberIds) {
+  const ws = db.workspaces[wsId];
+  if (ws?.settings?.visibility !== 'own') return;
+  for (const id of new Set(memberIds)) if (id && !isAdminId(wsId, id)) broadcast(wsId, { type: 'resync', forMember: id });
 }
 function campaignOf(kind, x) {
   if (!x) return null;
@@ -1260,7 +1302,7 @@ function campaignOf(kind, x) {
 }
 // Each person's Day is their own: entries, and the calendar events pulled into them, are seen only by them.
 const seesEntry = (e, memberId) => !e || e.memberId === memberId;
-const canSee = (auth, kind, x) => seesCampaign(campaignOf(kind, x), auth.memberId) && (kind !== 'item' || (seesFeed(feedOfItem(x), auth.memberId) && seesItemDir(x, auth.memberId))) && (kind !== 'entry' || seesEntry(x, auth.memberId));
+const canSee = (auth, kind, x) => seesCampaign(campaignOf(kind, x), auth.memberId) && (kind !== 'item' || (seesFeed(feedOfItem(x), auth.memberId) && seesItemDir(x, auth.memberId))) && (kind !== 'entry' || seesEntry(x, auth.memberId)) && seesOwn(kind, x, auth.memberId);
 function campaignOfMsg(msg) {
   if (msg.item) return campaignOf('item', db.items[msg.item.id]);
   if (msg.task) return campaignOf('task', msg.task);
@@ -1273,6 +1315,7 @@ function campaignOfMsg(msg) {
 }
 // A saved campaign is private when the campaign it came from was.
 function seesTemplate(t, memberId) {
+  if (t && !seesOwn('template', t, memberId)) return false;
   const c = t?.campaign;
   return !c || !c.private || t.ownerId === memberId || t.assigneeId === memberId || c.memberIds.includes(memberId);
 }
@@ -4110,13 +4153,14 @@ async function api(req, res, url) {
 
   if (a === 'tasks') {
     if (m === 'POST' && !b) {
-      const t = applyTask({ id: rid(), wsId: ws.id, by: auth.member, createdAt: Date.now(), text: '', done: false, doneAt: null, due: null, priority: 0, goalId: null, assigneeId: null }, await readJson(req, 50_000));
+      const t = applyTask({ id: rid(), wsId: ws.id, by: auth.member, memberId: auth.memberId, createdAt: Date.now(), text: '', done: false, doneAt: null, due: null, priority: 0, goalId: null, assigneeId: null }, await readJson(req, 50_000));
       if (!canSee(auth, 'task', t)) return send(res, 404, { error: 'Goal not found' });
       if (t.assigneeId || t.roleId) t.assignedBy = auth.memberId;
       db.tasks[t.id] = t;
       if (t.recordId) PJ.recordActivity(t.recordId, { kind: 'task', what: 'added', note: t.text, taskId: t.id, by: auth.member });
       save();
       broadcast(ws.id, { type: 'task', task: publicTask(t) });
+      if (t.goalId && t.assigneeId) resyncVisibility(ws.id, [t.assigneeId]);
       return send(res, 200, publicTask(t));
     }
     const t = b && db.tasks[b];
@@ -4150,7 +4194,11 @@ async function api(req, res, url) {
         }
       }
       save();
+      // Someone who could see it and now can't (it was handed away) has it taken off their app.
+      for (const mb of ws.members) if (seesOwn('task', t, mb.id) && !seesOwn('task', next, mb.id)) broadcast(ws.id, { type: 'task:remove', id: t.id, forMember: mb.id });
       broadcast(ws.id, { type: 'task', task: publicTask(next) });
+      // A campaign task handed to someone new opens (or closes) that campaign for them.
+      if (next.goalId && (next.assigneeId !== t.assigneeId || next.goalId !== t.goalId)) resyncVisibility(ws.id, [t.assigneeId, next.assigneeId]);
       return send(res, 200, publicTask(next));
     }
     if (m === 'DELETE') {
@@ -4183,7 +4231,7 @@ async function api(req, res, url) {
       // The campaign itself goes first so a new assignee is told it's theirs.
       if (was !== JSON.stringify([next.private, next.memberIds, next.assigneeId])) {
         broadcast(ws.id, { type: 'campaign', campaign: publicCampaign(next) });
-        if (next.private) broadcast(ws.id, { type: 'resync' });
+        if (next.private || ws.settings.visibility === 'own') broadcast(ws.id, { type: 'resync' });
       } else {
         broadcast(ws.id, { type: 'campaign', campaign: publicCampaign(next) });
         if (body.name !== undefined) broadcast(ws.id, { type: 'workspace' });
@@ -5689,7 +5737,10 @@ async function api(req, res, url) {
 
   if (a === 'workspace' && m === 'PATCH') {
     const body = await readJson(req);
+    const was = ws.settings.visibility || 'all';
+    if ((body.expireHours !== undefined || body.visibility !== undefined) && !isAdmin(auth)) return send(res, 403, { error: 'Only team owners and admins can change that.' });
     if (body.expireHours !== undefined) ws.settings.expireHours = Math.max(0, Number(body.expireHours) || 0);
+    if (body.visibility !== undefined) ws.settings.visibility = body.visibility === 'own' ? 'own' : 'all';
     if (body.memberEmail !== undefined) {
       if (!isAdmin(auth)) return send(res, 403, { error: 'Only team owners and admins can change who sends campaign email.' });
       ws.settings.memberEmail = !!body.memberEmail;
@@ -5701,6 +5752,7 @@ async function api(req, res, url) {
     }
     save();
     broadcast(ws.id, { type: 'workspace' });
+    if ((ws.settings.visibility || 'all') !== was) for (const m2 of ws.members) if (!isAdminId(ws.id, m2.id)) broadcast(ws.id, { type: 'resync', forMember: m2.id });
     return send(res, 200, publicWorkspace(ws, auth.memberId));
   }
 

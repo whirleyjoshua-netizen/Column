@@ -116,6 +116,13 @@ await A.ev(`(() => { const s = [...document.querySelectorAll('#sheet select')].a
 ok(await A.until(`/^3 contacts right now/.test(document.querySelector('#sheet .live-count')?.textContent)`), 'it counts who matches (has a phone)');
 await A.tap(`document.querySelector('#sheet .primary-btn')`);
 ok(await A.until(`[...document.querySelectorAll('#toasts *')].some((t) => t.textContent.includes('· 3 contacts'))`), 'the list is made with them');
+// Settings → Team: what members see
+await A.ev(`document.querySelector('#settingsBtn').click()`);
+await sleep(400);
+await A.ev(`[...document.querySelectorAll('#settings .set-tabs button')].find((b) => b.textContent.trim() === 'Team').click()`);
+ok(await A.until(`[...document.querySelectorAll('#settings h3')].some((x) => x.textContent === 'What members see')`), 'Settings → Team has What members see');
+await A.tap(`[...document.querySelectorAll('#settings .vis-sec button')].find((b) => b.textContent === 'Only what’s theirs')`);
+ok(await A.until(`document.querySelector('#settings .vis-sec .on')?.textContent === 'Only what’s theirs' && document.querySelector('#settings .vis-sec .day-hint').textContent.includes('Nothing else reaches their devices')`), 'choosing Only what’s theirs saves and explains it');
 await A.cmd('Page.captureScreenshot', {}).then((r) => FS.writeFileSync(S + '/dk/contacts.png', Buffer.from(r.result.data, 'base64')));
 ok(!A.errors.length, 'no errors on the page: ' + A.errors.join(' | '));
 A.close();

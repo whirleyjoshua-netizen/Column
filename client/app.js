@@ -11766,8 +11766,8 @@
         )
       );
       sel.addEventListener('change', () => api('PATCH', '/workspace', { expireHours: Number(sel.value) }).catch((e) => toast(e.message)));
-      s.append(h('section', {}, h('h3', {}, 'Auto-clear'),
-        h('div', { class: 'srow' }, h('span', {}, 'Remove items', h('small', {}, 'Pinned items are always kept')), sel)));
+      if (amAdmin()) s.append(h('section', {}, h('h3', {}, 'Auto-clear'),
+        h('div', { class: 'srow' }, h('span', {}, 'Remove items', h('small', {}, 'For the whole team. Pinned items are always kept')), sel)));
 
       // This device
       const dev = h('section', {}, h('h3', {}, 'This device'));
@@ -11848,6 +11848,18 @@
           admin ? newCode : null)
       );
       s.append(people);
+      if (admin) {
+        // What members see: everything, or only what's theirs. Owners and admins always see everything.
+        const vis = ws.settings.visibility || 'all';
+        const pick = (v) => api('PATCH', '/workspace', { visibility: v }).then((w) => { S.workspace = w; renderSettings(); toast(v === 'own' ? 'Members now see only what’s theirs' : 'Members now see everything'); }, (e) => toast(e.message));
+        s.append(h('section', { class: 'vis-sec' }, h('h3', {}, 'What members see'),
+          h('div', { class: 'seg' },
+            h('button', { class: vis === 'all' ? 'on' : null, onclick: () => vis !== 'all' && pick('all') }, 'Everything'),
+            h('button', { class: vis === 'own' ? 'on' : null, onclick: () => vis !== 'own' && pick('own') }, 'Only what’s theirs')),
+          h('p', { class: 'day-hint', style: 'margin-top:8px' }, vis === 'own'
+            ? 'Members see the campaigns they run, belong to or have a task in, the tasks and files that are theirs, and the team’s chat. Nothing else reaches their devices. Owners and admins see everything.'
+            : 'Members see the whole team’s campaigns, tasks and files, except private campaigns and folders they’re not in. Owners and admins see everything.')));
+      }
       if (admin) s.append(inviteSection());
       s.append(rolesSection(peopleCall));
       if (amAdmin()) {
