@@ -1387,7 +1387,7 @@ window.ColumnDocs = (() => {
 
     // ----- the "/" menu -----
     function openSlash(id, start, mode = 'slash') {
-      S.slash = { id, start, q: '', i: 0, mode, list: mode === 'at' ? opts.mentions('') : COMMANDS };
+      S.slash = { id, start, q: '', i: 0, mode, list: mode === 'at' ? opts.mentions('') : commands() };
       drawSlash();
     }
     function updateSlash(ed, b) {
@@ -1412,7 +1412,7 @@ window.ColumnDocs = (() => {
         if (x.keys.split(' ').some((w) => w.startsWith(words))) return 2;
         return 9;
       };
-      const list = words ? COMMANDS.map((x) => [x, score(x)]).filter(([, n]) => n < 9).sort((a, b) => a[1] - b[1]).map(([x]) => x) : COMMANDS;
+      const list = words ? commands().map((x) => [x, score(x)]).filter(([, n]) => n < 9).sort((a, b) => a[1] - b[1]).map(([x]) => x) : commands();
       if (!list.length && q.length > 3) return closeSlash();
       Object.assign(S.slash, { q, list, i: Math.min(S.slash.i, Math.max(0, list.length - 1)) });
       drawSlash();
@@ -1449,6 +1449,9 @@ window.ColumnDocs = (() => {
       }
       return false;
     }
+    // Your signature, when the app knows how to find it.
+    const SIG_CMD = { type: 'signature', label: 'My signature', hint: 'Your name and details, from Settings', keys: 'signature sign-off sig name contact details' };
+    const commands = () => (opts.signature ? [...COMMANDS, SIG_CMD] : COMMANDS);
     function pickSlash(cmd) {
       const s = S.slash;
       closeSlash();
@@ -1466,6 +1469,15 @@ window.ColumnDocs = (() => {
         return changed();
       }
       b.runs = joinRuns(sliceRuns(b.runs, 0, s.start), sliceRuns(b.runs, c.start));
+      if (cmd.type === 'signature') {
+        const text = opts.signature();
+        if (!text) { draw(b.runs, ed); opts.toast?.('Add your signature first: Settings → Account → Signature.'); return changed(); }
+        const blocks = fromText(text).map((x) => (x.type === 'p' ? x : { ...x, type: 'p' }));
+        if (!runsLen(b.runs) && TEXT.has(b.type)) { b.runs = blocks[0].runs; b.type = 'p'; insertAfter(b.id, blocks.slice(1)); } else insertAfter(b.id, blocks);
+        render();
+        focus(blocks.at(-1).id === blocks[0].id ? b.id : blocks.at(-1).id);
+        return changed();
+      }
       if (cmd.type === 'mention') {
         b.runs = joinRuns(sliceRuns(b.runs, 0, s.start), [{ text: '@' }], sliceRuns(b.runs, s.start));
         draw(b.runs, ed);
@@ -1974,7 +1986,7 @@ window.ColumnDocs = (() => {
       }
     });
 
-    const ICON = { p: 'Aa', h1: 'H1', h2: 'H2', h3: 'H3', ul: '•', ol: '1.', todo: '☑', toggle: '▸', quote: '❝', callout: '💡', code: '</>', divider: '—', table: '▦', image: '🖼', file: '📎', task: '✓', mention: '@', ai: '✦', 'live:campaign': '◎', 'live:goal': '▰', 'live:tasks': '☰', 'live:calls': '☏', 'live:budgets': '$', 'live:list': '≡', 'live:pipeline': '▥' };
+    const ICON = { p: 'Aa', h1: 'H1', h2: 'H2', h3: 'H3', ul: '•', ol: '1.', todo: '☑', toggle: '▸', quote: '❝', callout: '💡', code: '</>', divider: '—', table: '▦', image: '🖼', file: '📎', task: '✓', mention: '@', ai: '✦', 'live:campaign': '◎', 'live:goal': '▰', 'live:tasks': '☰', 'live:calls': '☏', 'live:budgets': '$', 'live:list': '≡', 'live:pipeline': '▥', signature: '✍' };
     // Live blocks, task chips and mention names drawn again from the app's data, leaving the caret alone.
     function refresh() {
       const at = document.activeElement;

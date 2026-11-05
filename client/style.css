@@ -1738,3 +1738,11 @@ body.platform-darwin .pj-head, body.platform-darwin .pj-top { padding-left: 80px
 .dupes { display: flex; flex-direction: column; gap: 8px; max-height: 50vh; overflow: auto; }
 .dupe { align-items: flex-start; }
 .dupe span { display: flex; flex-direction: column; }
+
+/* A doc out for signature, in the Docs library */
+.doc-sign { border: 0; border-radius: 999px; padding: 2px 8px; font: inherit; font-size: 11px; cursor: pointer; background: rgba(139, 124, 255, 0.15); color: var(--accent); margin-right: 6px; white-space: nowrap; }
+.doc-sign.s-signed { background: rgba(60, 179, 113, 0.16); color: #3cb371; }
+.doc-sign.s-expired { background: rgba(255, 107, 107, 0.12); color: var(--danger); }
+.sig-sec textarea { width: 100%; }
+.sig-thumb { display: flex; align-items: center; gap: 8px; }
+.sig-thumb img { height: 28px; max-width: 120px; object-fit: contain; background: #fff; border-radius: 4px; padding: 2px 4px; }

@@ -2543,6 +2543,9 @@ async function addPdf(who, bytes, name, src) {
     id,
     stackId: validStack(ws, src.stackId, who.memberId),
     channelId: validChannel(ws, src.channelId, who.memberId),
+    dirId: validDir(ws, src.dirId, who.memberId),
+    // A PDF of a doc remembers it, so the doc can show when it's out for signature or signed.
+    ...(src.type === 'text' && db.items[src.id] ? { fromDoc: src.id } : {}),
   });
 }
 const signPath = (x, signed) => path.join(FILES_DIR, `sign-${x.id}${signed ? '-signed' : ''}.pdf`);
@@ -2923,7 +2926,8 @@ const rowFields = (l, row) => Object.fromEntries(l.columns.map((col, i) => [merg
 const mimeWord = (t) => (/^[\x20-\x7e]*$/.test(t) ? t : `=?UTF-8?B?${Buffer.from(t).toString('base64')}?=`);
 const mimeAddr = (name, email) => (name ? `"${mimeWord(name.replace(/["\\\r\n]/g, ''))}" <${email}>` : `<${email}>`);
 function mailBody(sendRec, r, unsub) {
-  return `${merge(sendRec.body, r).replace(/\n{3,}/g, '\n\n').trim()}\n\n--\n${sendRec.footer}\nDon’t want these emails? Unsubscribe: ${unsub}\n`;
+  const sig = sendRec.signature ? `\n\n${sendRec.signature}` : '';
+  return `${merge(sendRec.body, r).replace(/\n{3,}/g, '\n\n').trim()}${sig}\n\n--\n${sendRec.footer}\nDon’t want these emails? Unsubscribe: ${unsub}\n`;
 }
 function mailMime(from, r, subject, text, unsub) {
   const b64 = Buffer.from(text.replace(/\n/g, '\r\n')).toString('base64').replace(/.{76}/g, '$&\r\n');
@@ -4492,6 +4496,13 @@ async function api(req, res, url) {
         else if (!pngData(body[f])) return send(res, 400, { error: 'That signature didn’t come through. Draw it again.' });
         else cur[f] = body[f];
       }
+      // Your email signature: a few lines at the end of the email you send from Kloomie (and in docs).
+      if ('email' in body) {
+        const t = String(body.email ?? '').replace(/\r\n?/g, '\n').split('\n').map((l) => l.trimEnd().slice(0, 120)).join('\n').trim();
+        if (t.split('\n').length > 8) return send(res, 400, { error: 'Keep your signature to 8 lines or fewer.' });
+        if (t) cur.email = t;
+        else delete cur.email;
+      }
       db.signatures[k] = cur;
       save();
       broadcast(ws.id, { type: 'signature', forMember: auth.memberId });
@@ -4554,7 +4565,7 @@ async function api(req, res, url) {
       if (fields.some((f) => f.page >= pages)) return send(res, 400, { error: 'A box is off the end of the document.' });
       const camp = body.campaignId && db.campaigns[body.campaignId];
       const x = {
-        id: rid(), wsId: ws.id, memberId: auth.memberId, by: auth.member, itemId: it.id, name: it.name, stackId: it.stackId, channelId: it.channelId,
+        id: rid(), wsId: ws.id, memberId: auth.memberId, by: auth.member, itemId: it.id, name: it.name, stackId: it.stackId, channelId: it.channelId, dirId: it.dirId || null, docId: it.fromDoc || null,
         campaignId: camp && camp.wsId === ws.id && seesCampaign(camp.id, auth.memberId) ? camp.id : null,
         signer: { name, email }, message: String(body.message ?? '').replace(/\r\n?/g, '\n').trim().slice(0, 2000), fields, pages,
         token: rid(24), hash: sha256(bytes), status: 'sent', events: [], createdAt: Date.now(), expiresAt: Date.now() + SIGN_DAYS * 86_400_000,
@@ -4947,7 +4958,7 @@ async function api(req, res, url) {
         const r = { email: conn.account, name: cleanText(body.sample?.name, 200), first: cleanText(body.sample?.first, 80), opener: cleanText(body.sample?.opener, 600), fields };
         const unsub = '(each person gets their own unsubscribe link here)';
         try {
-          await calProviders.microsoft.sendMail(await calToken(conn), mailMime(conn.account, r, '[Test] ' + merge(subject, r), mailBody({ body: text, footer }, r, unsub), unsub));
+          await calProviders.microsoft.sendMail(await calToken(conn), mailMime(conn.account, r, '[Test] ' + merge(subject, r), mailBody({ body: text, footer, signature: body.signature === false ? '' : db.signatures[sigKey(ws.id, auth.memberId)]?.email || '' }, r, unsub), unsub));
         } catch (e) {
           return send(res, 502, { error: e.auth ? 'Outlook’s sign-in expired. Connect it again.' : 'Outlook didn’t send it: ' + String(e.message).slice(0, 200) });
         }
@@ -4984,7 +4995,7 @@ async function api(req, res, url) {
       const links = await unsubLinks(ws.id, to.map((r) => r.email));
       for (const r of to) r.unsub = links[r.email] || null;
       if (to.some((r) => !r.unsub)) return send(res, 502, { error: 'PSS didn’t give an unsubscribe link for everyone. Nothing was sent.' });
-      const x = { id: rid(), wsId: ws.id, campaignId: camp?.id || null, listId: null, memberId: auth.memberId, by: auth.member, connId: conn.id, from: conn.account, subject, body: text, footer, createdAt: Date.now(), status: 'sending', to };
+      const x = { id: rid(), wsId: ws.id, campaignId: camp?.id || null, listId: null, memberId: auth.memberId, by: auth.member, connId: conn.id, from: conn.account, subject, body: text, footer, signature: body.signature === false ? '' : db.signatures[sigKey(ws.id, auth.memberId)]?.email || '', createdAt: Date.now(), status: 'sending', to };
       db.sends[x.id] = x;
       // Old batches go, oldest first; the emails they logged stay in the campaign.
       const mine = Object.values(db.sends).filter((y) => y.wsId === ws.id && y.status !== 'sending').sort((p, q) => q.createdAt - p.createdAt);

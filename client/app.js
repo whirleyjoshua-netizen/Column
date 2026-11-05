@@ -1769,7 +1769,7 @@
 
   // ---------- preview ----------
   // standalone: the whole page is this file (a window of its own), so there's nothing to close back to.
-  function openPreview(it, { standalone = false, edit = false } = {}) {
+  function openPreview(it, { standalone = false, edit = false, sign = false } = {}) {
     if (it.type === 'text' && !standalone) return openDoc(it);
     if (it.type === 'sealed') return sealOpen(it);
     const pv = $('#preview');
@@ -1785,7 +1785,7 @@
     if (k === 'image') pv.append(h('img', { src: fileUrl(it), alt: it.name }));
     else if (k === 'video') pv.append(h('video', { src: fileUrl(it), controls: true, autoplay: true, playsinline: true }));
     else if (k === 'audio') pv.append(h('div', { style: 'color:#fff;font-size:15px' }, it.name), h('audio', { src: fileUrl(it), controls: true, autoplay: true }));
-    else if (k === 'pdf') pv.append(pdfView(it));
+    else if (k === 'pdf') pv.append(pdfView(it, { sign }));
     else if (k === 'text') pv.append(h('pre', { html: linkify(it.text) }));
     else if (k === 'docx') pv.append(wordView(it, { edit, close: () => (standalone ? null : close(true)) }));
     else if (k === 'textfile') {
@@ -7629,6 +7629,7 @@
       liveData: docLiveData,
       pickLive: docPickLive,
       task: taskById,
+      signature: () => SG.mine.email || '',
       taskChips: docTaskChips,
       toggleTask: (id, on) => { const t = taskById(id); if (t) patchTask(t, { done: on }); },
       makeTask: docMakeTask,
@@ -7668,12 +7669,13 @@
     const more = (e) => openMenu(e.currentTarget, [
       { label: 'Export as Word (.docx)', run: () => docExport(x, 'docx') },
       { label: 'Export as PDF', run: () => docExport(x, 'pdf') },
+      { label: 'Send for signature…', run: () => docExport(x, 'sign') },
       { label: 'Copy as text', run: () => copyText([x.ed.title, ColumnDocs.toText(x.ed.blocks)].filter(Boolean).join('\n\n')) },
       x.ed.readOnly ? null : { label: '✦ Draft the whole doc with AI…', run: () => docAskDraft(x) },
       { head: '' },
       { label: it.share ? 'Public link…' : 'Share a public link…', run: () => docShareMenu(e.target, x) },
       { label: 'Version history', run: () => { x.side = 'history'; docSide(x); } },
-      docCanLock(it) ? { label: it.locked ? 'Unlock: let everyone edit' : 'Lock: only you and owners can edit', run: () => api('PATCH', '/items/' + x.id, { locked: !it.locked }).then(upsert).then(() => docLockChanged(x), (er) => toast(er.message)) } : null,
+      docCanLock(it) ? { label: it.locked ? 'Unlock: let everyone edit' : 'Lock: only you, owners and admins can edit', run: () => api('PATCH', '/items/' + x.id, { locked: !it.locked }).then(upsert).then(() => docLockChanged(x), (er) => toast(er.message)) } : null,
       { head: '' },
       { label: it.dirId ? `In ${docWhere(it)} · move it` : 'Save to folder', run: () => folderMenu(it, e.target) },
       { label: 'Move to stack', run: () => stackMenu(it, e.target) },
@@ -7945,6 +7947,7 @@
     x.pending.set(msg.v, { ops: msg.ops || [], order: msg.order, title: msg.title });
     docDrain(x);
   }
+  // as: 'docx', 'pdf', or 'sign': a PDF of the doc as it is now, opened to place the signer's boxes.
   async function docExport(x, as) {
     await docSave(x);
     const it = S.items.find((y) => y.id === x.id);
@@ -7972,14 +7975,17 @@
       } else {
         toast('Making the PDF…');
         out = await api('POST', '/docs/pdf', { itemId: x.id, name, blocks: await ColumnDocs.toPdf(x.ed.title.trim(), x.ed.blocks, pics, docLiveLines) });
-        if (it?.dirId) out = await api('PATCH', '/items/' + out.id, { dirId: it.dirId }).catch(() => out);
         upsert(out);
       }
+      if (out && as === 'sign') return openPreview(out, { sign: true });
       if (out) toast(`${out.name} is next to the doc`, { label: 'Download', run: () => download(out) });
     } catch (e) {
       toast(e.message);
     }
   }
+  // A doc's latest send for signature (yours), when it's out or signed.
+  const SIGN_BADGE = { sent: 'Waiting for signature', viewed: 'Opened by signer', signed: 'Signed', expired: 'Signing link expired', declined: 'Signer declined' };
+  const docSign = (x) => SG.list.find((y) => y.docId === x.id && SIGN_BADGE[y.status]);
   // The Docs tool: every doc you can see, newest first.
   const DK = { q: '' };
   function docsTool() {
@@ -7988,9 +7994,13 @@
     const draw = () => {
       const s = DK.q.trim().toLowerCase();
       const hits = all.filter((x) => !s || x.text.toLowerCase().includes(s)).slice(0, 200);
-      list.replaceChildren(...(hits.length ? hits.map((x) => h('div', { class: 'bill doc-row', onclick: () => openDoc(x) },
-        h('span', { class: 'bill-name' }, docTitle(x), h('small', {}, [docWhere(x), docSnippet(x)].filter(Boolean).join(' · '))),
-        h('span', { class: 'bill-right' }, h('small', {}, ago(x.editedAt || x.createdAt))))) : [h('p', { class: 'day-hint' }, s ? 'No doc has that in it.' : 'No docs yet. Start one: a plan, a script, meeting notes, a process to follow.')]));
+      list.replaceChildren(...(hits.length ? hits.map((x) => {
+        const sg = docSign(x);
+        return h('div', { class: 'bill doc-row', onclick: () => openDoc(x) },
+          h('span', { class: 'bill-name' }, docTitle(x), h('small', {}, [docWhere(x), docSnippet(x)].filter(Boolean).join(' · '))),
+          h('span', { class: 'bill-right' }, sg ? h('button', { class: `doc-sign s-${sg.status}`, title: `Sent to ${sg.signer.name}`, onclick: (e) => { e.stopPropagation(); openTool('signs'); } }, SIGN_BADGE[sg.status]) : null,
+            h('small', {}, ago(x.editedAt || x.createdAt))));
+      }) : [h('p', { class: 'day-hint' }, s ? 'No doc has that in it.' : 'No docs yet. Start one: a plan, a script, meeting notes, a process to follow.')]));
     };
     draw();
     return [
@@ -9309,10 +9319,11 @@
     });
   }
 
-  function pdfView(it, { docked = false } = {}) {
-    const key = `${it.id}:${it.editedAt || it.createdAt}:${docked ? 'dock' : 'full'}`;
+  // sign: open straight into placing someone else's signature boxes.
+  function pdfView(it, { docked = false, sign = false } = {}) {
+    const key = `${it.id}:${it.editedAt || it.createdAt}:${docked ? 'dock' : 'full'}${sign ? ':sign' : ''}`;
     if (pdfViews.has(key)) return pdfViews.get(key);
-    const P = { marks: [], form: {}, fields: [], tool: null, sending: false, zoom: 1, doc: null, view: null, width: 0, run: 0 };
+    const P = { marks: [], form: {}, fields: [], tool: null, sending: sign, zoom: 1, doc: null, view: null, width: 0, run: 0 };
     const bar = h('div', { class: 'pdf-bar' });
     const hint = h('div', { class: 'pdf-hint hidden' });
     const host = h('div', { class: 'pdf-pages' }, h('p', { class: 'day-hint' }, 'Opening…'));
@@ -11403,20 +11414,22 @@
     if (!amAdmin()) footer.readOnly = true;
     const camp = h('select', { 'aria-label': 'Log it in' }, h('option', { value: '' }, 'Don’t log it'), S.campaigns.filter((c) => c.status !== 'done' && (amAdmin() || myCampaign(c))).map((c) => h('option', { value: c.id, selected: c.id === M.campaignId }, c.name)));
     const preview = h('pre', { class: 'mail-preview' + (M.preview ? '' : ' hidden') });
+    // Your signature goes above the footer, unless you leave it off this time.
+    const useSig = h('input', { type: 'checkbox', checked: M.noSig !== true, onchange: () => { M.noSig = !useSig.checked; update(); } });
     const sendBtn = h('button', { class: 'btn primary-btn' });
     const warn = h('small', { class: 'day-hint mail-warn' });
     const update = () => {
       Object.assign(M, { subject: subject.value, body: body.value, campaignId: camp.value });
       m.footer = footer.value;
       const r = to[0];
-      preview.textContent = `To: ${r ? (r.name ? `${r.name} <${r.email}>` : r.email) : '—'}\nSubject: ${mergeText(subject.value, r)}\n\n${mergeText(body.value, r).trim()}\n\n--\n${footer.value.trim() || '(your business and mailing address)'}\nDon’t want these emails? Unsubscribe: (their own link)`;
+      preview.textContent = `To: ${r ? (r.name ? `${r.name} <${r.email}>` : r.email) : '—'}\nSubject: ${mergeText(subject.value, r)}\n\n${mergeText(body.value, r).trim()}${useSig.checked && SG.mine.email ? '\n\n' + SG.mine.email : ''}\n\n--\n${footer.value.trim() || '(your business and mailing address)'}\nDon’t want these emails? Unsubscribe: (their own link)`;
       sendBtn.textContent = M.armed ? `Yes, send ${to.length} now` : `Send to ${to.length}`;
       sendBtn.disabled = !to.length;
       warn.textContent = M.armed ? `${to.length} emails go out from ${m.from}, one every few seconds. You can stop it.` : '';
     };
     for (const el of [subject, body, footer]) el.addEventListener('input', () => { M.armed = false; update(); });
     camp.addEventListener('change', update);
-    const payload = () => ({ subject: subject.value, body: body.value, footer: footer.value });
+    const payload = () => ({ subject: subject.value, body: body.value, footer: footer.value, signature: useSig.checked });
     // A line written for each person, from what their list row says. It goes where {opener} is.
     const lined = to.filter((r) => r.opener).length;
     const openers = h('button', { class: 'btn small ai-btn', title: 'Your AI writes one opening line for each person, from their details. Read them before you send.' }, lined ? '✨ Write their lines again' : '✨ Write a line for each person');
@@ -11501,6 +11514,7 @@
           return keys.length ? ` From their list: ${keys.map((k) => `{${k}}`).join(' ')}.` : '';
         })() + (lined ? ` {opener} is each person’s own line (${lined} of ${to.length}).` : '')),
         h('div', { class: 'mail-tools' }, openers),
+        SG.mine.email ? h('label', { class: 'pick' }, useSig, 'End with my signature') : h('small', { class: 'day-hint' }, 'Add your signature in Settings → Account to end every email with it.'),
         h('label', {}, 'Footer: your business and mailing address', footer),
         h('small', { class: 'day-hint' }, amAdmin() ? 'Every email ends with this and the person’s own unsubscribe link.' : 'Every email ends with this and the person’s own unsubscribe link. Team owners set the footer.'),
         h('label', {}, 'Log each email in a campaign', camp),
@@ -11910,6 +11924,18 @@
           h('div', { class: 'btns' }, h('button', { class: 'btn', onclick: changeEmailSheet }, 'Change email')));
       }
       s.append(em);
+
+      // Your signature: the lines at the end of email you send from Kloomie, and in docs (/ → My signature);
+      // your drawn signature and initials for signing PDFs.
+      const sigText = h('textarea', { rows: 4, placeholder: `${S.me.member}\nOwner, ${S.workspace.name}\n(555) 123-4567`, 'aria-label': 'Email signature' });
+      sigText.value = SG.mine.email || '';
+      const saveSig = h('button', { class: 'btn', onclick: () => api('PUT', '/signature', { email: sigText.value }).then((r) => { SG.mine = { ...SG.mine, ...r, email: r.email }; toast('Signature saved'); }, (e) => toast(e.message)) }, 'Save');
+      const drawn = (k, label) => h('div', { class: 'srow' }, h('span', {}, label, h('small', {}, SG.mine[k] ? 'Saved' : 'Not drawn yet')),
+        h('span', { class: 'sig-thumb' }, SG.mine[k] ? h('img', { src: SG.mine[k], alt: label }) : null, h('button', { class: 'btn small', onclick: () => signatureSheet(k, renderSettings) }, SG.mine[k] ? 'Redraw' : 'Draw')));
+      s.append(h('section', { class: 'sig-sec' }, h('h3', {}, 'Signature'),
+        h('p', { class: 'day-hint' }, 'Added to the end of email you send from Kloomie, and to docs with / → My signature. Outlook doesn’t let apps read your Outlook signature, so paste it here once.'),
+        sigText, h('div', { class: 'btns' }, saveSig),
+        drawn('sig', 'Drawn signature'), drawn('ini', 'Initials')));
 
       // Where you're signed in
       const where = h('section', {}, h('h3', {}, 'Where you’re signed in'), h('p', { class: 'day-hint' }, 'Loading…'));
