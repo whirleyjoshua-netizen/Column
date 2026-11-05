@@ -1,7 +1,7 @@
 {
   "name": "kloomie-desktop",
   "productName": "Kloomie",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Drop anything. It shows up on every device.",
   "main": "main.js",
   "private": true,
