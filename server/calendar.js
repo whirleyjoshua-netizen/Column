@@ -32,34 +32,43 @@ async function call(url, { method = 'GET', token, body, form, raw, headers = {} 
   return data;
 }
 
+// Sending email is asked for only when someone connects Gmail to send campaign emails. GOOGLE_API points
+// every Google call (sign-in tokens, calendars, Gmail) at one stand-in when testing.
+const GOOGLE_SCOPE = 'openid email https://www.googleapis.com/auth/calendar.calendarlist.readonly https://www.googleapis.com/auth/calendar.events';
+const GMAIL_SEND = 'https://www.googleapis.com/auth/gmail.send';
+const G = (url) => (env('GOOGLE_API') ? url.replace(/^https:\/\/[^/]+/, env('GOOGLE_API')) : url);
 const google = {
   name: 'Google',
   configured: () => !!(env('GOOGLE_CLIENT_ID') && env('GOOGLE_CLIENT_SECRET')),
-  authUrl: (redirect, state) => 'https://accounts.google.com/o/oauth2/v2/auth?' + new URLSearchParams({
+  authUrl: (redirect, state, mail) => 'https://accounts.google.com/o/oauth2/v2/auth?' + new URLSearchParams({
     client_id: env('GOOGLE_CLIENT_ID'), redirect_uri: redirect, response_type: 'code', state,
-    scope: 'openid email https://www.googleapis.com/auth/calendar.calendarlist.readonly https://www.googleapis.com/auth/calendar.events',
+    scope: mail ? GOOGLE_SCOPE + ' ' + GMAIL_SEND : GOOGLE_SCOPE,
     access_type: 'offline', prompt: 'consent', include_granted_scopes: 'true',
   }),
+  // Someone can untick sending on Google's screen; then the connection is for the calendar only.
   async exchange(code, redirect) {
-    const t = await call('https://oauth2.googleapis.com/token', { method: 'POST', form: { code, redirect_uri: redirect, grant_type: 'authorization_code', client_id: env('GOOGLE_CLIENT_ID'), client_secret: env('GOOGLE_CLIENT_SECRET') } });
-    return { access: t.access_token, refresh: t.refresh_token, expires: Date.now() + (t.expires_in - 60) * 1000 };
+    const t = await call(G('https://oauth2.googleapis.com/token'), { method: 'POST', form: { code, redirect_uri: redirect, grant_type: 'authorization_code', client_id: env('GOOGLE_CLIENT_ID'), client_secret: env('GOOGLE_CLIENT_SECRET') } });
+    return { access: t.access_token, refresh: t.refresh_token, expires: Date.now() + (t.expires_in - 60) * 1000, mail: String(t.scope || '').split(' ').includes(GMAIL_SEND) };
+  },
+  async sendMail(token, mime) {
+    await call(G('https://gmail.googleapis.com/gmail/v1/users/me/messages/send'), { method: 'POST', token, body: { raw: Buffer.from(mime).toString('base64url') } });
   },
   async refresh(tok) {
-    const t = await call('https://oauth2.googleapis.com/token', { method: 'POST', form: { refresh_token: tok.refresh, grant_type: 'refresh_token', client_id: env('GOOGLE_CLIENT_ID'), client_secret: env('GOOGLE_CLIENT_SECRET') } });
+    const t = await call(G('https://oauth2.googleapis.com/token'), { method: 'POST', form: { refresh_token: tok.refresh, grant_type: 'refresh_token', client_id: env('GOOGLE_CLIENT_ID'), client_secret: env('GOOGLE_CLIENT_SECRET') } });
     return { access: t.access_token, refresh: t.refresh_token || tok.refresh, expires: Date.now() + (t.expires_in - 60) * 1000 };
   },
   async account(token) {
-    return (await call('https://openidconnect.googleapis.com/v1/userinfo', { token })).email;
+    return (await call(G('https://openidconnect.googleapis.com/v1/userinfo'), { token })).email;
   },
   async calendars(token) {
-    const d = await call('https://www.googleapis.com/calendar/v3/users/me/calendarList?maxResults=250', { token });
+    const d = await call(G('https://www.googleapis.com/calendar/v3/users/me/calendarList?maxResults=250'), { token });
     return d.items.map((c) => ({ id: c.id, name: c.summaryOverride || c.summary, primary: !!c.primary, canWrite: ['owner', 'writer'].includes(c.accessRole), color: c.backgroundColor || null }));
   },
   async events(token, calId, from, to) {
     const out = [];
     let page = '';
     do {
-      const d = await call(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calId)}/events?` + new URLSearchParams({ singleEvents: 'true', timeMin: from.toISOString(), timeMax: to.toISOString(), maxResults: '2500', ...(page ? { pageToken: page } : {}) }), { token });
+      const d = await call(G(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calId)}/events?`) + new URLSearchParams({ singleEvents: 'true', timeMin: from.toISOString(), timeMax: to.toISOString(), maxResults: '2500', ...(page ? { pageToken: page } : {}) }), { token });
       for (const e of d.items || []) {
         if (e.status === 'cancelled') continue;
         const allDay = !!e.start.date;
@@ -75,13 +84,13 @@ const google = {
     end: ev.allDay ? { date: ev.end } : { dateTime: ev.end, timeZone: ev.tz },
   }),
   async create(token, calId, ev) {
-    return (await call(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calId)}/events`, { method: 'POST', token, body: google.body(ev) })).id;
+    return (await call(G(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calId)}/events`), { method: 'POST', token, body: google.body(ev) })).id;
   },
   async update(token, calId, id, ev) {
-    await call(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calId)}/events/${encodeURIComponent(id)}`, { method: 'PATCH', token, body: google.body(ev) });
+    await call(G(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calId)}/events/${encodeURIComponent(id)}`), { method: 'PATCH', token, body: google.body(ev) });
   },
   async remove(token, calId, id) {
-    await call(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calId)}/events/${encodeURIComponent(id)}`, { method: 'DELETE', token });
+    await call(G(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calId)}/events/${encodeURIComponent(id)}`), { method: 'DELETE', token });
   },
 };
 

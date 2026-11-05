@@ -13,7 +13,7 @@ start() {
   PORT=4795 DATA_DIR=$D/data2 DATABASE_URL= node index.js > $D/s2.log 2>&1 &
   sleep 3
 }
-all=(proj api3 quote conn aiproj contacts contactsui admin visibility docsign acct acct3 req seal tasksui tz e2e e2e2 e2e3 e2e4 e2e5 e2e6 e2e7 e2e8 acctui acctui2 tzui delteam delui leave leaveui export expui alerts pgtest)
+all=(proj api3 quote conn aiproj contacts contactsui admin visibility docsign gmail acct acct3 req seal tasksui tz e2e e2e2 e2e3 e2e4 e2e5 e2e6 e2e7 e2e8 acctui acctui2 tzui delteam delui leave leaveui export expui alerts pgtest)
 (( $# )) && all=("$@")
 failed=0
 for t in $all; do

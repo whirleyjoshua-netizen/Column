@@ -1805,6 +1805,7 @@ async function oauthCallback(req, res, url) {
   const was = new Map(conn.calendars.map((x) => [x.id, x.on]));
   conn.calendars = cals.map((x) => ({ ...x, on: was.has(x.id) ? was.get(x.id) : x.primary }));
   conn.tokens = seal(tok);
+  if (tok.mail && !conn.mail) conn.mailAt = Date.now();
   conn.mail = !!tok.mail;
   conn.error = null;
   conn.lastSync = 0;
@@ -1812,7 +1813,7 @@ async function oauthCallback(req, res, url) {
   broadcast(ws.id, { type: 'calendars', forMember: pend.memberId });
   broadcast(ws.id, { type: 'mail', forMember: pend.memberId });
   syncCalendar(conn).catch(() => {});
-  if (pend.mail && !conn.mail) return page(`${p.name} connected`, `${account} is linked, but sending email wasn’t allowed. Your Microsoft admin may need to approve it.`);
+  if (pend.mail && !conn.mail) return page(`${p.name} connected`, provider === 'google' ? `${account} is linked, but sending email wasn’t allowed. Connect again and leave “Send email on your behalf” ticked.` : `${account} is linked, but sending email wasn’t allowed. Your Microsoft admin may need to approve it.`);
   return page(`${p.name} connected`, `${account} is linked to Kloomie${pend.mail ? ' and can send campaign emails' : ''}. You can close this window.`);
 }
 
@@ -2890,16 +2891,18 @@ function planNews(p) {
   broadcast(p.wsId, { type: 'plan', plan: publicPlan(p), forMember: p.memberId });
 }
 
-// ---------- campaign email: one email to each person, from an owner's own Outlook ----------
+// ---------- campaign email: one email to each person, from someone's own Outlook or Gmail ----------
 // Never BCC: each person gets their own message, addressed only to them. Every email carries the team's
 // mailing address and that person's unsubscribe link from PSS (and List-Unsubscribe headers), and anyone
 // on PSS's do-not-contact list is skipped, checked again just before each send. Sends go out one every
-// few seconds in the background, within Outlook's limits, and each one is logged in the campaign.
+// few seconds in the background, within the mailbox's limits, and each one is logged in the campaign.
 const MAIL_GAP = 3000;
 const MAIL_MAX = 2000;
 const MAIL_KEEP = 30;
 const EMAIL_RE = /^[^\s@<>",;]+@[^\s@<>",;]+\.[a-z]{2,}$/i;
-const mailConn = (wsId, memberId) => Object.values(db.calendars).find((x) => x.wsId === wsId && x.memberId === memberId && x.provider === 'microsoft' && x.mail);
+const mailboxName = (conn) => (conn?.provider === 'google' ? 'Gmail' : 'Outlook');
+// The mailbox someone sends from: Outlook or Gmail, the one connected for sending most recently.
+const mailConn = (wsId, memberId) => Object.values(db.calendars).filter((x) => x.wsId === wsId && x.memberId === memberId && x.mail && calProviders[x.provider]?.sendMail).sort((a, b) => (b.mailAt || b.createdAt) - (a.mailAt || a.createdAt))[0];
 const doNotEmail = (wsId) => new Set([
   ...(db.pss[wsId]?.dne || []),
   ...contactsOf(wsId).filter(noContact).map((x) => emailKey(x.email)).filter(Boolean),
@@ -2998,7 +3001,7 @@ async function mailOne(x) {
   const conn = db.calendars[x.connId];
   if (!conn?.mail) {
     x.status = 'paused';
-    x.error = 'Outlook was disconnected. Connect it again to finish sending.';
+    x.error = `${mailboxName(conn || { provider: x.provider })} was disconnected. Connect it again to finish sending.`;
     save();
     return sendNews(x);
   }
@@ -3007,7 +3010,7 @@ async function mailOne(x) {
     r.error = 'Unsubscribed';
   } else {
     try {
-      await calProviders.microsoft.sendMail(await calToken(conn), mailMime(conn.account, r, merge(x.subject, r), mailBody(x, r, r.unsub), r.unsub));
+      await calProviders[conn.provider].sendMail(await calToken(conn), mailMime(conn.account, r, merge(x.subject, r), mailBody(x, r, r.unsub), r.unsub));
       r.status = 'sent';
       r.at = Date.now();
       // Logged in the campaign it was sent for; against the list row too when that list is the campaign's.
@@ -3031,18 +3034,18 @@ async function mailOne(x) {
     } catch (e) {
       if (e.auth) {
         x.status = 'paused';
-        x.error = 'Outlook’s sign-in expired. Connect it again to finish sending.';
+        x.error = `${mailboxName(conn)}’s sign-in expired. Connect it again to finish sending.`;
       } else if (e.status === 429 || e.status >= 500 || !e.status) {
         // Busy or unreachable: wait and try the same person again, a few times.
         r.tries = (r.tries || 0) + 1;
         x.waitUntil = Date.now() + Math.min(5 * 60_000, 30_000 * r.tries);
         if (r.tries >= 4) {
           r.status = 'failed';
-          r.error = String(e.message || 'Outlook didn’t send it').slice(0, 200);
+          r.error = String(e.message || `${mailboxName(conn)} didn’t send it`).slice(0, 200);
         }
       } else {
         r.status = 'failed';
-        r.error = String(e.message || 'Outlook didn’t send it').slice(0, 200);
+        r.error = String(e.message || `${mailboxName(conn)} didn’t send it`).slice(0, 200);
       }
     }
   }
@@ -4267,7 +4270,7 @@ async function api(req, res, url) {
       if (!p) return send(res, 400, { error: 'Unknown calendar' });
       if (!p.configured()) return send(res, 400, { error: `${p.name} isn’t set up on this server yet.` });
       const state = rid(18);
-      const wantMail = !!mail && provider === 'microsoft';
+      const wantMail = !!mail && !!p.sendMail;
       oauthPending.set(state, { wsId: ws.id, memberId: auth.memberId, provider, tz: validTz(tz), mail: wantMail, exp: Date.now() + 15 * 60_000 });
       return send(res, 200, { url: p.authUrl(`${PUBLIC_URL}/oauth/${provider}/callback`, state, wantMail) });
     }
@@ -4582,15 +4585,15 @@ async function api(req, res, url) {
     const open = ['sent', 'viewed'].includes(signStatus(x));
     if (c === 'email' && m === 'POST') {
       const conn = mailConn(ws.id, auth.memberId);
-      if (!conn) return send(res, 400, { error: 'Connect Outlook in Settings to email it from Kloomie, or copy the link and send it yourself.' });
+      if (!conn) return send(res, 400, { error: 'Connect Outlook or Gmail in Settings to email it from Kloomie, or copy the link and send it yourself.' });
       if (!open) return send(res, 400, { error: 'This request is closed.' });
       const first = x.signer.name.split(/\s+/)[0];
       const until = new Date(x.expiresAt).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
       const text = `Hi ${first},\n\n${x.by} at ${ws.name} sent you “${x.name}” to sign.\n\n${x.message ? x.message + '\n\n' : ''}Read it and sign here:\n${signLink(x)}\n\nThe link works until ${until}.\n`;
       try {
-        await calProviders.microsoft.sendMail(await calToken(conn), mailMime(conn.account, x.signer, `Please sign: ${x.name}`, text, ''));
+        await calProviders[conn.provider].sendMail(await calToken(conn), mailMime(conn.account, x.signer, `Please sign: ${x.name}`, text, ''));
       } catch (e) {
-        return send(res, 502, { error: e.auth ? 'Outlook’s sign-in expired. Connect it again.' : 'Outlook didn’t send it: ' + String(e.message).slice(0, 200) });
+        return send(res, 502, { error: e.auth ? `${mailboxName(conn)}’s sign-in expired. Connect it again.` : `${mailboxName(conn)} didn’t send it: ` + String(e.message).slice(0, 200) });
       }
       signEvent(x, `Emailed to ${x.signer.email} from ${conn.account}`);
       save();
@@ -4924,7 +4927,7 @@ async function api(req, res, url) {
     return send(res, 405, { error: 'Method not allowed' });
   }
 
-  // Campaign email from your own Outlook. Owners send to anyone in Contacts; members, when allowed, to their campaigns' lists.
+  // Campaign email from your own Outlook or Gmail. Owners send to anyone in Contacts; members, when allowed, to their campaigns' lists.
   if (a === 'mail') {
     // Owners, and members when an owner allows it in Settings. Members email only rows of lists in their own
     // campaigns, with the team's footer, and see only their own sends.
@@ -4935,7 +4938,7 @@ async function api(req, res, url) {
     const body = m === 'GET' ? {} : await readJson(req, 2_000_000);
     if (m === 'GET' && !b) {
       const sends = Object.values(db.sends).filter((x) => x.wsId === ws.id && (owner || x.memberId === auth.memberId)).sort((p, q) => q.createdAt - p.createdAt).slice(0, MAIL_KEEP).map(publicSend);
-      return send(res, 200, { from: conn?.account || null, canConnect: calProviders.microsoft.configured(), footer: ws.mailFooter || '', pss: !!db.pss[ws.id], sends });
+      return send(res, 200, { from: conn?.account || null, via: conn ? mailboxName(conn) : null, canConnect: calProviders.microsoft.configured(), canGmail: calProviders.google.configured(), footer: ws.mailFooter || '', pss: !!db.pss[ws.id], sends });
     }
     if (m === 'PUT' && b === 'footer') {
       if (!owner) return send(res, 403, { error: 'Only team owners and admins can change the footer.' });
@@ -4946,7 +4949,7 @@ async function api(req, res, url) {
     const subject = mailText(body.subject, 200).trim();
     const text = mailText(body.body, 20_000);
     if ((b === 'test' || (b === 'sends' && !c)) && m === 'POST') {
-      if (!conn) return send(res, 400, { error: 'Connect Outlook to send from it first.' });
+      if (!conn) return send(res, 400, { error: 'Connect Outlook or Gmail to send from it first.' });
       if (!subject) return send(res, 400, { error: 'Add a subject.' });
       if (!text.trim()) return send(res, 400, { error: 'Write the message.' });
       const footer = owner ? mailFooter(body.footer ?? ws.mailFooter) : ws.mailFooter || '';
@@ -4958,9 +4961,9 @@ async function api(req, res, url) {
         const r = { email: conn.account, name: cleanText(body.sample?.name, 200), first: cleanText(body.sample?.first, 80), opener: cleanText(body.sample?.opener, 600), fields };
         const unsub = '(each person gets their own unsubscribe link here)';
         try {
-          await calProviders.microsoft.sendMail(await calToken(conn), mailMime(conn.account, r, '[Test] ' + merge(subject, r), mailBody({ body: text, footer, signature: body.signature === false ? '' : db.signatures[sigKey(ws.id, auth.memberId)]?.email || '' }, r, unsub), unsub));
+          await calProviders[conn.provider].sendMail(await calToken(conn), mailMime(conn.account, r, '[Test] ' + merge(subject, r), mailBody({ body: text, footer, signature: body.signature === false ? '' : db.signatures[sigKey(ws.id, auth.memberId)]?.email || '' }, r, unsub), unsub));
         } catch (e) {
-          return send(res, 502, { error: e.auth ? 'Outlook’s sign-in expired. Connect it again.' : 'Outlook didn’t send it: ' + String(e.message).slice(0, 200) });
+          return send(res, 502, { error: e.auth ? `${mailboxName(conn)}’s sign-in expired. Connect it again.` : `${mailboxName(conn)} didn’t send it: ` + String(e.message).slice(0, 200) });
         }
         save();
         return send(res, 200, { to: conn.account });
@@ -4968,7 +4971,7 @@ async function api(req, res, url) {
       // A campaign is optional: with one, each email is logged there.
       const camp = body.campaignId ? db.campaigns[body.campaignId] : null;
       if (body.campaignId && (!camp || camp.wsId !== ws.id || !canSee(auth, 'campaign', camp))) return send(res, 404, { error: 'Campaign not found' });
-      if (Object.values(db.sends).some((x) => x.connId === conn.id && x.status === 'sending')) return send(res, 409, { error: 'An email is still going out from your Outlook. Wait for it, or stop it, first.' });
+      if (Object.values(db.sends).some((x) => x.connId === conn.id && x.status === 'sending')) return send(res, 409, { error: `An email is still going out from your ${mailboxName(conn)}. Wait for it, or stop it, first.` });
       // Each person once, and nobody who unsubscribed. People can come from Contacts, a list's row (which must
       // hold that address), or be typed in.
       const no = doNotEmail(ws.id);
@@ -4995,7 +4998,7 @@ async function api(req, res, url) {
       const links = await unsubLinks(ws.id, to.map((r) => r.email));
       for (const r of to) r.unsub = links[r.email] || null;
       if (to.some((r) => !r.unsub)) return send(res, 502, { error: 'PSS didn’t give an unsubscribe link for everyone. Nothing was sent.' });
-      const x = { id: rid(), wsId: ws.id, campaignId: camp?.id || null, listId: null, memberId: auth.memberId, by: auth.member, connId: conn.id, from: conn.account, subject, body: text, footer, signature: body.signature === false ? '' : db.signatures[sigKey(ws.id, auth.memberId)]?.email || '', createdAt: Date.now(), status: 'sending', to };
+      const x = { id: rid(), wsId: ws.id, campaignId: camp?.id || null, listId: null, memberId: auth.memberId, by: auth.member, connId: conn.id, provider: conn.provider, from: conn.account, subject, body: text, footer, signature: body.signature === false ? '' : db.signatures[sigKey(ws.id, auth.memberId)]?.email || '', createdAt: Date.now(), status: 'sending', to };
       db.sends[x.id] = x;
       // Old batches go, oldest first; the emails they logged stay in the campaign.
       const mine = Object.values(db.sends).filter((y) => y.wsId === ws.id && y.status !== 'sending').sort((p, q) => q.createdAt - p.createdAt);
@@ -5013,7 +5016,7 @@ async function api(req, res, url) {
     } else if (m === 'POST' && d === 'resume' && x.status === 'paused') {
       if (!db.calendars[x.connId]?.mail) {
         const now = mailConn(ws.id, x.memberId);
-        if (!now) return send(res, 400, { error: 'Connect Outlook again first.' });
+        if (!now) return send(res, 400, { error: 'Connect Outlook or Gmail again first.' });
         x.connId = now.id;
       }
       x.status = 'sending';
@@ -6686,7 +6689,7 @@ async function removeMember(ws, m) {
   for (const x of Object.values(db.exports)) if (theirs(x)) dropExport(x);
   // Passed on: the business keeps these.
   for (const coll of ['signs', 'meetings', 'pins', 'trips', 'zones', 'money', 'bills', 'budgets']) for (const x of Object.values(db[coll])) if (theirs(x)) hand(x);
-  for (const x of Object.values(db.sends)) if (theirs(x) && x.status === 'sending') Object.assign(x, { status: 'paused', error: `${m.name} left the team, so their Outlook can’t send the rest.` });
+  for (const x of Object.values(db.sends)) if (theirs(x) && x.status === 'sending') Object.assign(x, { status: 'paused', error: `${m.name} left the team, so their email can’t send the rest.` });
   for (const t of Object.values(db.tasks)) if (t.wsId === wsId && t.assigneeId === id) t.assigneeId = null;
   for (const p of Object.values(db.projects)) {
     if (p.wsId !== wsId) continue;

@@ -66,15 +66,18 @@ Until the server is hosted, use `http://localhost:4747` and connect from the mac
 only allow `localhost` or `https://` addresses, not Wi-Fi IPs.
 
 **Google Calendar:** in [Google Cloud Console](https://console.cloud.google.com/):
-1. Create a project, then *APIs & Services → Library → Google Calendar API → Enable*.
+1. Create a project, then *APIs & Services → Library*: enable the *Google Calendar API* and the *Gmail API*.
 2. *OAuth consent screen*: External, add your email as a test user, and add the scopes
-   `.../auth/calendar.events` and `.../auth/calendar.calendarlist.readonly`.
+   `.../auth/calendar.events`, `.../auth/calendar.calendarlist.readonly` and `.../auth/gmail.send` (campaign email from
+   Gmail; only asked for when someone connects Gmail to send email).
 3. *Credentials → Create credentials → OAuth client ID → Web application*. Add the redirect URI
    `http://localhost:4747/oauth/google/callback` (and your hosted `https://…/oauth/google/callback` later).
 4. Start the server with `GOOGLE_CLIENT_ID=… GOOGLE_CLIENT_SECRET=… npm run server`.
 
 While the app is in *Testing*, only the test users you list (up to 100) can connect, which is fine for a beta. Public launch needs
-Google's verification for the calendar scopes.
+Google's verification for the calendar and `gmail.send` scopes (sensitive, not restricted, so no security audit). Reading
+someone's Gmail signature would need a restricted scope and a paid audit, so people paste their signature in Settings instead.
+`GOOGLE_API` points every Google call at a stand-in, for tests.
 
 **Outlook / Microsoft 365:** in [Azure portal → App registrations](https://portal.azure.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade):
 1. *New registration*: "Accounts in any organizational directory and personal Microsoft accounts", redirect URI (Web)

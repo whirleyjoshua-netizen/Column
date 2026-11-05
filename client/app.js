@@ -9602,7 +9602,7 @@
     x = SG.list.find((y) => y.id === x.id) || x;
     const open = x.status === 'sent' || x.status === 'viewed';
     const copy = h('button', { class: 'btn small', onclick: () => navigator.clipboard.writeText(x.link).then(() => toast('Link copied'), () => toast('Couldn’t copy. Select the link and copy it.')) }, 'Copy link');
-    const mail = h('button', { class: 'btn small' }, 'Email it from Outlook');
+    const mail = h('button', { class: 'btn small' }, S.mail?.via ? `Email it from ${S.mail.via}` : 'Email it to them');
     mail.addEventListener('click', async () => {
       mail.disabled = true;
       try {
@@ -9638,7 +9638,7 @@
     const fmt = (t) => new Date(t).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
     sheet(x.name, [
       h('p', { class: 'sign-who' }, h('span', { class: `sign-st st-${x.status}` }, SIGN_STATUS[x.status]), ` ${x.signer.name} · ${x.signer.email}`),
-      fresh ? h('p', { class: 'day-hint' }, 'Here’s their link. Email it from Outlook, or copy it into your own email or text.') : null,
+      fresh ? h('p', { class: 'day-hint' }, 'Here’s their link. Email it from Kloomie, or copy it into your own email or text.') : null,
       open ? h('div', { class: 'sign-link' }, h('input', { value: x.link, readonly: true, 'aria-label': 'Signing link', onfocus: (e) => e.target.select() }), copy) : null,
       open ? h('div', { class: 'btns' }, mail, cancel) : null,
       x.status === 'signed' ? h('div', { class: 'btns' }, signed ? h('button', { class: 'btn small primary-btn', onclick: () => { closeSheet(); openPreview(signed); } }, 'Open the signed copy') : h('span', { class: 'day-hint' }, 'The signed copy was removed from Kloomie.')) : null,
@@ -11258,7 +11258,7 @@
     }, 'Save notes');
   }
 
-  // ----- Email: one email to each person, from your Outlook -----
+  // ----- Email: one email to each person, from your own Outlook or Gmail -----
   // Who gets it is built up from Contacts, a list, or addresses typed or pasted in, and can be logged in a
   // campaign. Each person gets their own email, addressed only to them.
   const MAIL_RE = /^[^\s@<>",;]+@[^\s@<>",;]+\.[a-z]{2,}$/i;
@@ -11388,18 +11388,22 @@
     const m = S.mail;
     if (!m) return [h('p', { class: 'day-hint' }, 'Loading…')];
     if (!m.from) {
-      const go = h('button', { class: 'btn primary-btn' }, 'Connect Outlook');
-      go.addEventListener('click', async () => {
-        try {
-          const { url } = await api('POST', '/calendars/connect', { provider: 'microsoft', tz: myTz(), mail: true });
-          window.open(url, '_blank');
-          toast('Finish signing in in your browser. This updates when it’s done.');
-        } catch (e) {
-          toast(e.message);
-        }
-      });
-      return [h('p', { class: 'day-hint' }, 'Emails go out from your own Outlook, so replies land in your inbox and they show in your Sent folder. Connect it once and allow Kloomie to send email for you.'),
-        m.canConnect ? go : h('p', { class: 'day-hint' }, 'Outlook sign-in isn’t set up on this server yet. See “Calendars” in the README.'), sendBars(null)];
+      const connect = (provider, label) => {
+        const go = h('button', { class: 'btn primary-btn' }, label);
+        go.addEventListener('click', async () => {
+          try {
+            const { url } = await api('POST', '/calendars/connect', { provider, tz: myTz(), mail: true });
+            window.open(url, '_blank');
+            toast('Finish signing in in your browser. This updates when it’s done.');
+          } catch (e) {
+            toast(e.message);
+          }
+        });
+        return go;
+      };
+      const ways = [m.canConnect && connect('microsoft', 'Connect Outlook'), m.canGmail && connect('google', 'Connect Gmail')].filter(Boolean);
+      return [h('p', { class: 'day-hint' }, 'Emails go out from your own Outlook or Gmail, so replies land in your inbox and they show in your Sent folder. Connect it once and allow Kloomie to send email for you.'),
+        ways.length ? h('div', { class: 'btns' }, ...ways) : h('p', { class: 'day-hint' }, 'Email sign-in isn’t set up on this server yet. See “Calendars” in the README.'), sendBars(null)];
     }
     const no = noEmail();
     const out = M.to.filter((r) => no.has(r.email));
@@ -11880,7 +11884,7 @@
       if (admin) {
         // The tools the team uses. Switched off, a tool leaves everyone's Tools menu; nothing in it is deleted.
         const TOOL_ROWS = [['sidekick', 'Sidekick', 'Plans campaigns with you'], ['docs', 'Docs', 'Write and share pages'], ['contacts', 'Contacts', 'Your customers and leads (owners and admins)'],
-          ['email', 'Email', 'Campaign email from Outlook'], ['folders', 'Folders', 'Files in folders'], ['signs', 'Signatures', 'Send PDFs to be signed'], ['bills', 'Finance', 'Bills, money in and out, budgets'],
+          ['email', 'Email', 'Campaign email from Outlook or Gmail'], ['folders', 'Folders', 'Files in folders'], ['signs', 'Signatures', 'Send PDFs to be signed'], ['bills', 'Finance', 'Bills, money in and out, budgets'],
           ['meetings', 'Meeting notes', 'Record a call, get the notes'], ['map', 'Map', 'Pins, routes and canvassing runs'], ['vault', 'Vault', 'Codes and logins, locked on your device'], ['projects', 'Projects', 'CRM pipelines, bids and quotes']];
         const tools = ws.tools || {};
         s.append(h('section', { class: 'tools-sec' }, h('h3', {}, 'Tools'),
@@ -11892,7 +11896,7 @@
       s.append(rolesSection(peopleCall));
       if (amAdmin()) {
         s.append(h('section', {}, h('h3', {}, 'Campaign email'),
-          toggleRow('Members can send campaign email', 'From their own Outlook, to people on lists in their own campaigns. Owners and admins can always send.', !!ws.settings.memberEmail,
+          toggleRow('Members can send campaign email', 'From their own Outlook or Gmail, to people on lists in their own campaigns. Owners and admins can always send.', !!ws.settings.memberEmail,
             (on) => api('PATCH', '/workspace', { memberEmail: on }).catch((e) => toast(e.message)))));
         // The team's clock: what "today" is for follow-ups, quotes and anything Kloomie dates on its own.
         const zones = Intl.supportedValuesOf?.('timeZone') || [ws.tz];
@@ -11933,7 +11937,7 @@
       const drawn = (k, label) => h('div', { class: 'srow' }, h('span', {}, label, h('small', {}, SG.mine[k] ? 'Saved' : 'Not drawn yet')),
         h('span', { class: 'sig-thumb' }, SG.mine[k] ? h('img', { src: SG.mine[k], alt: label }) : null, h('button', { class: 'btn small', onclick: () => signatureSheet(k, renderSettings) }, SG.mine[k] ? 'Redraw' : 'Draw')));
       s.append(h('section', { class: 'sig-sec' }, h('h3', {}, 'Signature'),
-        h('p', { class: 'day-hint' }, 'Added to the end of email you send from Kloomie, and to docs with / → My signature. Outlook doesn’t let apps read your Outlook signature, so paste it here once.'),
+        h('p', { class: 'day-hint' }, 'Added to the end of email you send from Kloomie, and to docs with / → My signature. Outlook and Gmail don’t let apps read your email signature, so paste it here once.'),
         sigText, h('div', { class: 'btns' }, saveSig),
         drawn('sig', 'Drawn signature'), drawn('ini', 'Initials')));
 
