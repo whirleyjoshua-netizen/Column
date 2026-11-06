@@ -1100,11 +1100,22 @@ body.viewer .preview pre, body.viewer .preview .pv-edit, body.viewer .preview .d
 .grip:hover { opacity: 1 !important; }
 .is-dragging, .is-dragging * { cursor: grabbing !important; }
 .sorting { background: var(--card-hover); box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18); position: relative; z-index: 2; }
-.any-row.waiting, .goal.waiting { opacity: 0.45; }
-.goal.waiting .any-row.waiting { opacity: 1; }
+/* Waiting: the step itself fades, but what it waits on stays readable. */
+.any-row.waiting > .p-text, .any-row.waiting > .check, .any-row.waiting > .due, .any-row.waiting > .avatar, .any-row.waiting > .role-chip,
+.goal.waiting > .goal-top > .goal-title, .goal.waiting > .goal-top > .goal-ic, .goal.waiting > .goal-prog, .goal.waiting > .goal-add { opacity: 0.45; }
 .check:disabled { cursor: not-allowed; border-style: dashed; }
 .check:disabled:hover { border-color: var(--line); color: inherit; }
 .step-tag { flex: none; font-size: 10px; color: var(--muted); border: 1px solid var(--line); border-radius: 5px; padding: 0 5px; align-self: center; }
+.step-tag.up { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 50%, var(--line)); font-weight: 600; }
+.wait-chip { max-width: 170px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; background: color-mix(in srgb, #f5a524 16%, transparent); color: #b7791f; }
+.unlock-chip { max-width: 170px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.goal-top .wait-chip { align-self: center; }
+.wait-picks { max-height: 46vh; overflow: auto; flex-direction: column; flex-wrap: nowrap; }
+.wait-pick { display: flex; align-items: baseline; gap: 8px; }
+.wait-pick small { color: var(--muted); margin-left: auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 45%; }
+.wait-picks details summary { cursor: pointer; color: var(--muted); font-size: 12px; margin: 8px 0 4px; }
+.flash { animation: flash 1.6s ease; }
+@keyframes flash { 0%, 40% { background: var(--accent-soft); } 100% { background: transparent; } }
 
 /* planner */
 .plan-row .bill-name small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

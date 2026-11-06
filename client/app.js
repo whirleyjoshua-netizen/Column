@@ -522,6 +522,11 @@
       if (newly && msg.task.assignedBy !== S.me?.memberId) assignedToMe(msg.task);
       renderDay();
       refreshLinks();
+    } else if (msg.type === 'handoff') {
+      upsertTask(msg.task);
+      renderDay();
+      refreshLinks();
+      if (taskMine(msg.task)) youreUp(msg.task, msg.byId === S.me?.memberId ? null : msg.by);
     } else if (msg.type === 'task:remove') {
       S.tasks = S.tasks.filter((x) => x.id !== msg.id);
       renderDay();
@@ -691,6 +696,19 @@
   // Same for a campaign I'm made responsible for. Things that arrive together (Plan it out, or a campaign
   // with its tasks) become one notice. Nobody assigned it = a saved campaign started on its schedule.
   let assignedBatch = [];
+  // Something you were waiting on is done, so your task is open.
+  function youreUp(t, by) {
+    const title = 'You’re up';
+    const body = `“${t.text.slice(0, 120)}”` + (by ? ` · ${by} finished what it was waiting on` : '') + (t.due ? ` · due ${dueLabel(t.due)}` : '');
+    const show = () => (goalById(t.goalId) ? showStep(t) : showTasks());
+    toast(`${title}: ${body}`, { label: 'Show', run: show });
+    if (by && S.notify && document.hidden && 'Notification' in window && Notification.permission === 'granted') {
+      try {
+        const n = new Notification(title, { body, icon: '/icon-128.png', silent: false });
+        n.onclick = () => { window.focus(); show(); };
+      } catch {}
+    }
+  }
   function assignedToMe(x, kind = 'task') {
     assignedBatch.push({ kind, x });
     if (assignedBatch.length === 1) setTimeout(flushAssigned, 800);
@@ -2822,6 +2840,9 @@
         try { inp.showPicker(); } catch { inp.focus(); }
       } },
       ...(t.due ? [{ label: 'No due date', run: () => patchTask(t, { due: null, repeat: null }) }] : []),
+      ...(t.blockedBy?.length || taskWaitsOn(t) ? [{ head: 'Once it opens' },
+        ...[0, 1, 2, 3, 7].map((n) => ({ label: n ? `${plural(n, 'day')} after` : 'The day it opens', on: t.dueAfter === n, run: () => patchTask(t, { dueAfter: n }) })),
+        ...(t.dueAfter != null ? [{ label: 'No set time', run: () => patchTask(t, { dueAfter: null }) }] : [])] : []),
       { head: 'Repeat' },
       ...REPEATS.map((r) => ({ label: repeatLabel(r, t.due || today), on: (t.repeat || null) === r, run: () => patchTask(t, r && !t.due ? { repeat: r, due: today } : { repeat: r }) })),
     ]);
@@ -2860,8 +2881,11 @@
     const pr = t.priority || 0;
     const list = listOfTask(t);
     const lp = list && listProgress(list, t.runId);
-    const waits = taskWaitsOn(t);
-    const waitMsg = waits && `Waiting on “${waits.title || waits.text}” · this campaign is worked in order`;
+    const blockers = taskBlockers(t);
+    const waits = blockers[0] || null;
+    const waitMsg = waits && waitText(blockers);
+    const unlocks = t.done ? [] : unlocksOf(t);
+    const upNow = !t.done && !waits && t.openedAt > Date.now() - 864e5 && taskMine(t);
     const openList = () => {
       if (waits) return toast(waitMsg);
       const key = 'task:' + t.id;
@@ -2885,6 +2909,12 @@
       pr && !t.done ? h('button', { class: 'prio pr-' + pr, title: PRIO[pr] + ' priority', onclick: (ev) => prioMenu(ev.currentTarget, t) }, '!'.repeat(pr)) : null,
       text,
       stepTag(t),
+      upNow ? h('span', { class: 'step-tag up', title: 'What it was waiting on is done' }, 'You’re up') : null,
+      waits ? h('button', { class: 'list-chip wait-chip', title: blockers.map((x) => '⏳ ' + stepName(x) + (stepWho(x) ? ' · ' + stepWho(x) : '')).join('\n') + (waits.hidden ? '' : '\nClick to see it'), onclick: (ev) => { ev.stopPropagation(); waits.hidden ? toast(waitMsg) : showStep(waits); } },
+        '⏳ ' + shortText(stepName(waits), 26) + (blockers.length > 1 ? ` +${blockers.length - 1}` : '')) : null,
+      unlocks.length ? h('button', { class: 'list-chip unlock-chip', title: 'Finishing this opens:\n' + unlocks.map((x) => '→ ' + x.text + (stepWho(x) ? ' · ' + stepWho(x) : '')).join('\n'), onclick: (ev) => { ev.stopPropagation(); showStep(unlocks[0]); } },
+        '→ ' + (unlocks.length === 1 ? shortText(unlocks[0].text, 22) : `unlocks ${unlocks.length}`)) : null,
+      !t.due && !t.done && waits && t.dueAfter != null ? h('span', { class: 'due', title: 'Its due date is set when it opens' }, t.dueAfter ? `due ${t.dueAfter}d after` : 'due when it opens') : null,
       t.due && !t.done ? h('button', { class: 'due' + (isOverdue(t) ? ' late' : t.due === todayKey() ? ' today' : ''), title: 'Due ' + dayName(t.due) + (t.repeat ? ' · ' + repeatLabel(t.repeat, t.due) : ''), onclick: (ev) => dueMenu(ev.currentTarget, t) },
         t.repeat ? h('span', { class: 'rep', html: I.repeat }) : null, dueLabel(t.due)) : null,
       slot ? h('button', { class: 'slot', title: 'Show on schedule', onclick: () => { D.sub = 'schedule'; store.set('daySub', 'schedule'); setTab('day'); goDay(slot.e.date); } },
@@ -2952,6 +2982,7 @@
       { label: taskFiles(t).length ? `Attached · ${taskFiles(t).length}…` : 'Attach a file…', run: () => (taskFiles(t).length ? taskFilesMenu(anchor, t) : pickForTask(t)) },
       { label: t.assigneeId ? `Assigned to ${memberName(t.assigneeId)}…` : t.roleId && roleById(t.roleId) ? `For ${roleById(t.roleId).name}…` : 'Assign to…', run: () => assignMenu(anchor, t) },
       { label: g ? `Goal: ${g.title}…` : 'Add to a goal…', run: () => goalMenu(anchor, t) },
+      { label: t.blockedBy?.length ? `Waits for ${plural(t.blockedBy.length, 'task')}…` : 'Waits for…', run: () => waitsSheet(t) },
       ...(g ? [{ label: t.report ? 'Stop asking for a report' : 'Ask for a report when done', run: () => patchTask(t, { report: !t.report }) }] : []),
       ...stepRows(g && campById(g.campaignId), t, !!taskWaitsOn(t), (ch) => patchTask(t, ch)),
       ...(t.done ? [] : [{ label: '✦ Get help with it…', run: () => toolsMenu(anchor, t) }]),
@@ -3586,33 +3617,95 @@
     return fracs.length ? fracs.reduce((s, f) => s + f, 0) / fracs.length : 0;
   }
 
-  // ----- campaigns worked in order (same rules as the server) -----
-  // Goals open one at a time, top to bottom; inside a goal each task waits for the one above it.
+  // ----- what waits on what (same rules as the server) -----
+  // A task can wait for other tasks, a goal for other goals. A campaign worked "in order" adds a chain on top:
+  // goals open one at a time, top to bottom, and inside a goal each task waits for the one above it.
   // What's waiting is greyed out but still readable. Owners can skip a step or unlock one early.
-  const canPass = (c) => !!c && (!c.ownerId || c.ownerId === S.me?.memberId || amAdmin());
+  const canPass = (c) => amAdmin() || (!!c && (!c.ownerId || c.ownerId === S.me?.memberId));
   // Hand-placed rows (key set) come first in that order; the rest follow in their usual order.
   const placed = (key, base) => (a, b) => (a[key] != null) !== (b[key] != null) ? (a[key] != null ? -1 : 1) : a[key] != null && a[key] !== b[key] ? a[key] - b[key] : base(a, b);
   const byDueMade = (a, b) => ((a.due || '9') < (b.due || '9') ? -1 : (a.due || '9') > (b.due || '9') ? 1 : a.createdAt - b.createdAt);
   const tasksInOrder = (gid) => tasksOf(gid).sort(placed('order', byDueMade));
   const goalMet = (g) => !!g.skipped || (g.kind === 'count' ? goalProgress(g).n >= g.target : tasksOf(g.id).every((t) => t.done || t.skipped));
-  function goalWaitsOn(g) {
-    if (!campById(g.campaignId)?.inOrder || g.unlocked) return null;
-    for (const x of goalsOf(g.campaignId)) {
-      if (x.id === g.id) return null;
-      if (!goalMet(x)) return x;
+  const stepDone = (t) => t.done || t.skipped;
+  function goalBlockers(g) {
+    if (g.unlocked) return [];
+    const out = [];
+    if (campById(g.campaignId)?.inOrder) for (const x of goalsOf(g.campaignId)) {
+      if (x.id === g.id) break;
+      if (!goalMet(x)) { out.push(x); break; }
     }
-    return null;
+    for (const x of (g.blockedBy || []).map(goalById)) if (x && !goalMet(x) && !out.includes(x)) out.push(x);
+    return out;
   }
-  function taskWaitsOn(t) {
+  const goalWaitsOn = (g) => goalBlockers(g)[0] || null;
+  function taskBlockers(t) {
+    if (!t || t.done || t.unlocked || t.followUp) return [];
     const g = goalById(t.goalId);
-    if (!g || !campById(g.campaignId)?.inOrder || t.done || t.unlocked || t.followUp) return null;
-    const wg = goalWaitsOn(g);
-    if (wg) return wg;
-    for (const x of tasksInOrder(g.id)) {
-      if (x.id === t.id) return null;
-      if (!x.done && !x.skipped) return x;
+    const out = g ? goalBlockers(g) : [];
+    if (g && campById(g.campaignId)?.inOrder) for (const x of tasksInOrder(g.id)) {
+      if (x.id === t.id) break;
+      if (!stepDone(x)) { out.push(x); break; }
     }
-    return null;
+    for (const x of (t.blockedBy || []).map(taskById)) if (x && !stepDone(x) && !out.includes(x)) out.push(x);
+    // Waiting on a step in a campaign you can't see: the server says so.
+    if (!out.length && t.waiting && [...(t.blockedBy || []).filter((id) => !taskById(id)), ...(g?.blockedBy || []).filter((id) => !goalById(id))].length) out.push({ text: 'a step you can’t see', hidden: true });
+    return out;
+  }
+  const taskWaitsOn = (t) => taskBlockers(t)[0] || null;
+  const stepName = (x) => x.title || x.text || '';
+  const stepWho = (x) => (x.assigneeId ? memberName(x.assigneeId) : x.roleId ? roleById(x.roleId)?.name : null);
+  const waitText = (list) => `Waiting on “${shortText(stepName(list[0]), 60)}”${stepWho(list[0]) ? ' · ' + stepWho(list[0]) : ''}${list.length > 1 ? ` and ${list.length - 1} more` : ''}`;
+  // The open tasks waiting for this one: finishing it moves them along.
+  const unlocksOf = (t) => S.tasks.filter((x) => !x.done && x.blockedBy?.includes(t.id));
+  // Does "from", through what it waits for, reach "to"? Then making "to" wait for "from" would be a loop.
+  function reaches(byId, from, to, seen = new Set()) {
+    if (from === to) return true;
+    if (seen.has(from)) return false;
+    seen.add(from);
+    return (byId(from)?.blockedBy || []).some((x) => reaches(byId, x, to, seen));
+  }
+  // Open the campaign a step is in and point at it.
+  function showStep(x) {
+    const cid = x.campaignId || goalById(x.goalId)?.campaignId;
+    if (!cid) return showTasks();
+    K.closed.delete(x.goalId);
+    openCampaign(cid);
+    setTimeout(() => {
+      const el = $('#camps').querySelector(`[data-id="${x.id}"]`);
+      if (!el) return;
+      el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      el.classList.add('flash');
+      setTimeout(() => el.classList.remove('flash'), 1600);
+    }, 60);
+  }
+  // Pick what a task (or goal) waits for: steps in its own campaign first, then other running campaigns.
+  function waitsSheet(x, isGoal) {
+    const cid = isGoal ? x.campaignId : goalById(x.goalId)?.campaignId;
+    const byId = isGoal ? goalById : taskById;
+    const pool = isGoal ? S.goals : S.tasks.filter((t) => !t.followUp && (!t.done || x.blockedBy?.includes(t.id)));
+    const picks = pool.filter((y) => y.id !== x.id && !reaches(byId, y.id, x.id)).map((y) => {
+      const g = isGoal ? y : goalById(y.goalId);
+      const camp = g && campById(g.campaignId);
+      const cb = h('input', { type: 'checkbox', value: y.id });
+      cb.checked = !!x.blockedBy?.includes(y.id);
+      const where = isGoal ? camp?.name : [g?.title, camp && camp.id !== cid ? camp.name : ''].filter(Boolean).join(' · ');
+      const row = h('label', { class: 'pick wait-pick' }, cb, h('span', {}, stepName(y)), h('small', {}, [where, stepWho(y), y.done ? 'done' : ''].filter(Boolean).join(' · ')));
+      return { y, cb, row, home: (camp?.id || null) === (cid || null), text: (stepName(y) + ' ' + where).toLowerCase() };
+    }).filter((p) => p.home || campById(isGoal ? p.y.campaignId : goalById(p.y.goalId)?.campaignId)?.status !== 'done');
+    picks.sort((a, b) => b.home - a.home);
+    const find = h('input', { type: 'search', placeholder: isGoal ? 'Find a goal' : 'Find a task' });
+    find.addEventListener('input', () => { const q = find.value.trim().toLowerCase(); for (const p of picks) p.row.classList.toggle('hidden', !!q && !p.text.includes(q)); });
+    const home = picks.filter((p) => p.home), away = picks.filter((p) => !p.home);
+    sheet(`What does “${shortText(stepName(x), 40)}” wait for?`, [
+      h('p', { class: 'day-hint' }, isGoal ? 'None of this goal’s tasks can be ticked off until the goals you pick are met. Whoever its tasks are for hears when they open.' : 'It can’t be ticked off until the tasks you pick are done. Whoever it’s for hears the moment it opens.'),
+      picks.length > 8 ? find : null,
+      h('div', { class: 'picks wait-picks' }, home.length ? home.map((p) => p.row) : h('small', {}, isGoal ? 'No other goals in this campaign yet.' : 'No other open tasks in this campaign yet.'),
+        away.length ? h('details', {}, h('summary', {}, `In other campaigns · ${away.length}`), away.map((p) => p.row)) : null),
+    ], () => {
+      const ids = picks.filter((p) => p.cb.checked).map((p) => p.y.id);
+      return isGoal ? api('PATCH', '/goals/' + x.id, { blockedBy: ids }) : patchTask(x, { blockedBy: ids });
+    });
   }
   // Owner-only menu rows for a goal or task in an in-order campaign.
   function stepRows(c, x, waiting, patch) {
@@ -3922,7 +4015,8 @@
   function goalCard(c, g) {
     const pg = goalProgress(g);
     const tasks = tasksInOrder(g.id).sort((a, b) => a.done - b.done);
-    const waits = goalWaitsOn(g);
+    const gBlockers = goalBlockers(g);
+    const waits = gBlockers[0] || null;
     const add = h('input', { class: 'goal-add', placeholder: 'Add a task… “Call Old Town monday @Sam”', 'aria-label': 'Add a task to this goal' });
     add.addEventListener('keydown', async (e) => {
       if (e.key !== 'Enter' || !add.value.trim()) return;
@@ -3945,7 +4039,7 @@
       store.set('goalsClosed', [...K.closed].filter((id) => goalById(id)));
       renderCamps();
     };
-    const el = h('div', { class: 'goal' + (waits ? ' waiting' : '') + (closed ? ' closed' : ''), 'data-id': g.id, title: waits ? `Opens when “${waits.title}” is met · this campaign is worked in order` : null },
+    const el = h('div', { class: 'goal' + (waits ? ' waiting' : '') + (closed ? ' closed' : ''), 'data-id': g.id, title: waits ? `Opens when ${gBlockers.map((x) => `“${x.title}”`).join(' and ')} ${gBlockers.length > 1 ? 'are' : 'is'} met` : null },
       h('div', { class: 'goal-top' },
         grip((ev) => sortDrag(ev, el, '.goal', (ids) => saveOrder(S.goals, 'order', ids, '/goals/'))),
         h('button', { class: 't-btn goal-fold', 'aria-label': closed ? 'Show tasks' : 'Hide tasks', 'aria-expanded': String(!closed), html: I.down, onclick: fold }),
@@ -3953,6 +4047,7 @@
         h('b', { class: 'goal-title', onclick: fold }, g.title),
         closed ? h('small', { class: 'goal-mini' }, pg.label) : null,
         stepTag(g),
+        waits ? h('button', { class: 'list-chip wait-chip', title: 'Opens when ' + gBlockers.map((x) => `“${x.title}”`).join(' and ') + ' is met', onclick: () => showStep(waits) }, '⏳ ' + shortText(waits.title, 22) + (gBlockers.length > 1 ? ` +${gBlockers.length - 1}` : '')) : null,
         g.due ? h('span', { class: 'due' + (g.due < todayKey() && pg.frac < 1 ? ' late' : '') }, dueLabel(g.due)) : null,
         h('button', { class: 't-btn', 'aria-label': 'Goal options', html: I.more, onclick: (e) => goalOptions(e.currentTarget, c, g) })),
       closed ? null : h('div', { class: 'goal-prog' }, bar(pg.frac, c.color), h('span', {}, pg.label)));
@@ -5352,6 +5447,7 @@
     openMenu(anchor, [
       { label: 'Plan it out…', run: () => planSheet(c, g) },
       { label: 'Edit goal…', run: () => goalSheet(c, g) },
+      { label: g.blockedBy?.length ? `Waits for ${plural(g.blockedBy.length, 'goal')}…` : 'Waits for…', run: () => waitsSheet(g, true) },
       ...stepRows(c, g, !!goalWaitsOn(g), (ch) => api('PATCH', '/goals/' + g.id, ch).catch((e) => toast(e.message))),
       { label: 'Delete goal and its tasks', danger: true, run: () => api('DELETE', '/goals/' + g.id).catch((e) => toast(e.message)) },
     ]);

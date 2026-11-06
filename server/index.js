@@ -909,7 +909,7 @@ function applyEntry(e, body) {
 }
 
 // Tasks: an undated to-do list. Schedule entries can link to one (entry.taskId) and then share its text and done state.
-const publicTask = publicEntry;
+const publicTask = (t) => ({ ...publicEntry(t), waiting: isWaiting(t) });
 
 function applyTask(t, body) {
   if (body.text !== undefined) t.text = String(body.text || '').trim().slice(0, 5000);
@@ -935,6 +935,9 @@ function applyTask(t, body) {
   if (body.assigneeId && t.assigneeId) t.roleId = null;
   else if (body.roleId && t.roleId) t.assigneeId = null;
   if (body.report !== undefined) t.report = !!body.report;
+  // The tasks it waits for (any in the team), and how many days after they're done it's due.
+  if (body.blockedBy !== undefined) t.blockedBy = blockerList(db.tasks, t, body.blockedBy, 'task');
+  if (body.dueAfter !== undefined) t.dueAfter = body.dueAfter === null || body.dueAfter === '' ? null : Math.max(0, Math.min(365, Math.round(Number(body.dueAfter)) || 0));
   // The project record it's about (a follow-up with a contact, a step on a deal).
   if (body.recordId !== undefined) t.recordId = body.recordId && db.records?.[body.recordId]?.wsId === t.wsId ? body.recordId : null;
   // The doc it was made in, when it's a to-do there.
@@ -1489,15 +1492,19 @@ function applyGoal(g, body, c) {
   if (body.counts !== undefined) g.counts = Array.isArray(body.counts) ? body.counts.filter((o) => c.outcomes.includes(o)) : null;
   if (body.methods !== undefined) g.methods = Array.isArray(body.methods) ? body.methods.filter((o) => (c.methods || []).includes(o)) : null;
   if (body.order !== undefined) g.order = Number(body.order) || 0;
+  // The goals it waits for: none of its tasks can be ticked off until those are met.
+  if (body.blockedBy !== undefined) g.blockedBy = blockerList(db.goals, g, body.blockedBy, 'goal');
   if (!g.title) throw badRequest('Give the goal a name.');
   return g;
 }
 
-// ----- campaigns worked in order -----
-// Goals open one at a time, top to bottom: the next waits until the one above is met. Inside a goal each task
-// waits for the one above it. An owner can skip a step (it stops holding up the rest) or unlock one early.
-// The client works this out the same way to grey out what's waiting.
-const passesSteps = (c, auth) => !c.ownerId || c.ownerId === auth.memberId || isAdmin(auth);
+// ----- what waits on what -----
+// A task can wait for other tasks (blockedBy), and a goal for other goals: the waiting one can't be ticked off
+// until those are done (or skipped). A campaign worked "in order" adds a chain on top: goals open one at a time,
+// top to bottom, and inside a goal each task waits for the one above it. An owner can skip a step (it stops
+// holding up the rest) or unlock one early. The client works this out the same way to grey out what's waiting.
+// Who can pass a step that's waiting: the campaign's owner and team admins (only admins for tasks outside a campaign).
+const passesSteps = (c, auth) => isAdmin(auth) || (!!c && (!c.ownerId || c.ownerId === auth.memberId));
 const goalsInOrder = (c) => Object.values(db.goals).filter((g) => g.campaignId === c.id).sort((a, b) => (a.order || 0) - (b.order || 0) || a.createdAt - b.createdAt);
 const placed = (base) => (a, b) => (a.order != null) !== (b.order != null) ? (a.order != null ? -1 : 1) : a.order != null && a.order !== b.order ? a.order - b.order : base(a, b);
 const tasksInOrder = (g) => Object.values(db.tasks).filter((t) => t.goalId === g.id)
@@ -1510,28 +1517,71 @@ function goalMet(g) {
   }
   return tasksInOrder(g).every((t) => t.done || t.skipped);
 }
-// The goal it's waiting on, or null when it's open.
-function goalWaitsOn(g) {
+const stepDone = (t) => t.done || t.skipped;
+// Everything a goal is waiting on: the unmet goal above it (in order), then the goals it was set to wait for.
+function goalBlockers(g) {
   const c = db.campaigns[g.campaignId];
-  if (!c?.inOrder || g.unlocked) return null;
-  for (const x of goalsInOrder(c)) {
-    if (x.id === g.id) return null;
-    if (!goalMet(x)) return x;
+  if (g.unlocked) return [];
+  const out = [];
+  if (c?.inOrder) for (const x of goalsInOrder(c)) {
+    if (x.id === g.id) break;
+    if (!goalMet(x)) { out.push(x); break; }
   }
-  return null;
+  for (const id of g.blockedBy || []) if (db.goals[id] && !goalMet(db.goals[id]) && !out.includes(db.goals[id])) out.push(db.goals[id]);
+  return out;
 }
-// What a task is waiting on (a goal or a task), or null when it can be done.
-function taskWaitsOn(t) {
+const goalWaitsOn = (g) => goalBlockers(g)[0] || null;
+// Everything a task is waiting on (goals and tasks), or [] when it can be done. Follow-ups never wait.
+function taskBlockers(t) {
+  if (!t || t.done || t.unlocked || t.followUp) return [];
   const g = db.goals[t.goalId];
-  if (!g || !db.campaigns[g.campaignId]?.inOrder || t.done || t.unlocked || t.followUp) return null;
-  const wg = goalWaitsOn(g);
-  if (wg) return wg;
-  for (const x of tasksInOrder(g)) {
-    if (x.id === t.id) return null;
-    if (!x.done && !x.skipped) return x;
+  const out = g ? goalBlockers(g) : [];
+  if (g && db.campaigns[g.campaignId]?.inOrder) for (const x of tasksInOrder(g)) {
+    if (x.id === t.id) break;
+    if (!stepDone(x)) { out.push(x); break; }
   }
-  return null;
+  for (const id of t.blockedBy || []) if (db.tasks[id] && !stepDone(db.tasks[id]) && !out.includes(db.tasks[id])) out.push(db.tasks[id]);
+  return out;
 }
+const taskWaitsOn = (t) => taskBlockers(t)[0] || null;
+// Could it wait at all? Skips the work for the plain to-dos that make up most tasks.
+const mayWait = (t) => !t.done && !t.followUp && (t.blockedBy?.length || (db.goals[t.goalId] && (db.goals[t.goalId].blockedBy?.length || db.campaigns[db.goals[t.goalId].campaignId]?.inOrder)));
+const isWaiting = (t) => !!(mayWait(t) && taskWaitsOn(t));
+// Waiting on each other would mean neither could ever start: does "from" (through what it waits for) reach "to"?
+function reaches(store, from, to, seen = new Set()) {
+  if (from === to) return true;
+  if (seen.has(from)) return false;
+  seen.add(from);
+  return (store[from]?.blockedBy || []).some((x) => reaches(store, x, to, seen));
+}
+function blockerList(store, x, ids, what) {
+  const list = [...new Set((Array.isArray(ids) ? ids : []).filter((id) => typeof id === 'string' && store[id]?.wsId === x.wsId && id !== x.id))].slice(0, 30);
+  const loop = list.find((id) => reaches(store, id, x.id));
+  if (loop) throw badRequest(`“${clipText(store[loop].title || store[loop].text, 60)}” already waits for this ${what}, so they’d wait on each other forever.`);
+  return list;
+}
+// Work that opened up because of a change: whoever it's for is told they're up ("handoff"). A task set to be
+// due some days after it opens gets that due date now. Call before a change; the returned function, after it.
+function openings(ws, tz) {
+  const before = new Set(Object.values(db.tasks).filter((t) => t.wsId === ws.id && isWaiting(t)).map((t) => t.id));
+  return (by, byId) => {
+    const after = new Set(Object.values(db.tasks).filter((t) => t.wsId === ws.id && isWaiting(t)).map((t) => t.id));
+    let changed = false;
+    for (const id of new Set([...before, ...after])) {
+      const t = db.tasks[id];
+      if (!t || before.has(id) === after.has(id)) continue;
+      if (before.has(id) && !t.done) {
+        t.openedAt = Date.now();
+        if (t.dueAfter != null) t.due = addDays(dayIn(ws.tz ? tzOf(ws) : validTz(tz)), t.dueAfter);
+        changed = true;
+        broadcast(ws.id, { type: 'task', task: publicTask(t) });
+        broadcast(ws.id, { type: 'handoff', task: publicTask(t), by, byId });
+      } else broadcast(ws.id, { type: 'task', task: publicTask(t) });
+    }
+    if (changed) save();
+  };
+}
+const HANDOFF_ROUTES = new Set(['tasks', 'goals', 'attempts', 'campaigns', 'templates', 'sidekick']);
 
 // ----- follow-ups: a logged call or email that comes back as a task a few days later -----
 // Unless a campaign says otherwise, no answer comes back in 2 days and interest in 3.
@@ -1623,6 +1673,10 @@ function applyList(l, body) {
 // Everything that belongs to a campaign goes with it.
 function deleteGoal(g) {
   for (const t of Object.values(db.tasks)) if (t.goalId === g.id) deleteTask(t);
+  for (const x of Object.values(db.goals)) if (x.blockedBy?.includes(g.id)) {
+    x.blockedBy = x.blockedBy.filter((id) => id !== g.id);
+    broadcast(x.wsId, { type: 'goal', goal: publicGoal(x) });
+  }
   delete db.goals[g.id];
   broadcast(g.wsId, { type: 'goal:remove', id: g.id });
 }
@@ -1642,6 +1696,10 @@ function deleteTask(t) {
   }
   delete db.tasks[t.id];
   broadcast(t.wsId, { type: 'task:remove', id: t.id });
+  for (const x of Object.values(db.tasks)) if (x.blockedBy?.includes(t.id)) {
+    x.blockedBy = x.blockedBy.filter((id) => id !== t.id);
+    broadcast(x.wsId, { type: 'task', task: publicTask(x) });
+  }
 }
 function deleteCampaign(ws, c) {
   // Its sub-campaigns carry on by themselves.
@@ -1711,9 +1769,10 @@ function snapshotCampaign(c, main = c) {
     },
     lists: lists.map((l) => ({ ref: l.id, name: l.name, kind: l.kind, agenda: !!l.agenda, columns: l.columns, rows: l.rows.map((r) => ({ cells: r.cells, section: r.section, mins: r.mins })) })),
     goals: Object.values(db.goals).filter((g) => g.campaignId === c.id).sort((a, b) => (a.order || 0) - (b.order || 0)).map((g) => ({
-      title: g.title, kind: g.kind, target: g.target, counts: g.counts, methods: g.methods || null, order: g.order, dueIn: rel(g.due),
+      ref: g.id, blockedBy: g.blockedBy || [], title: g.title, kind: g.kind, target: g.target, counts: g.counts, methods: g.methods || null, order: g.order, dueIn: rel(g.due),
       // Follow-ups were for that run's people, so they stay behind.
       tasks: Object.values(db.tasks).filter((t) => t.goalId === g.id && !t.followUp).sort((a, b) => a.createdAt - b.createdAt).map((t) => ({
+        ref: t.id, blockedBy: t.blockedBy || [], dueAfter: t.dueAfter ?? null,
         text: t.text, order: t.order ?? null, priority: t.priority, dueIn: rel(t.due), assigneeId: t.assigneeId || null, roleId: t.roleId || null, report: !!t.report,
         listRef: lists.some((l) => l.id === t.listId) ? t.listId : null,
       })),
@@ -1793,6 +1852,7 @@ function runTemplate(tpl, { date, time, by }) {
 function fillCampaign(ws, owner, c, snap, date, by) {
   const due = (n) => (n == null ? null : addDays(date, n));
   const lists = new Map();
+  const made = new Map(); // a saved goal or task's ref → the new one
   for (const sl of snap.lists || []) {
     try {
       const l = applyList({ id: rid(), wsId: ws.id, campaignId: c.id, itemId: null, by: owner.member, createdAt: Date.now(), name: '', columns: [], rows: [] },
@@ -1808,15 +1868,28 @@ function fillCampaign(ws, owner, c, snap, date, by) {
     const g = applyGoal({ id: rid(), wsId: ws.id, campaignId: c.id, by: owner.member, createdAt: Date.now(), title: '', due: null, kind: 'tasks', target: 10, counts: null, order: 0 },
       { title: sg.title, kind: sg.kind, target: sg.target, counts: sg.counts, methods: sg.methods, order: sg.order, due: due(sg.dueIn) }, c);
     db.goals[g.id] = g;
+    made.set(sg.ref, g);
     broadcast(ws.id, { type: 'goal', goal: publicGoal(g) });
     for (const st of sg.tasks) {
       const t = applyTask({ id: rid(), wsId: ws.id, by: owner.member, createdAt: Date.now(), text: '', done: false, doneAt: null, due: null, priority: 0, goalId: g.id, assigneeId: null },
         { text: st.text, order: st.order ?? null, priority: st.priority, due: due(st.dueIn), assigneeId: st.assigneeId, roleId: st.assigneeId ? undefined : st.roleId || undefined, report: st.report, listId: lists.get(st.listRef) || null });
       if (t.assigneeId || t.roleId) t.assignedBy = by || null;
+      if (st.dueAfter != null) t.dueAfter = st.dueAfter;
       db.tasks[t.id] = t;
-      broadcast(ws.id, { type: 'task', task: publicTask(t) });
+      made.set(st.ref, t);
     }
   }
+  // What waits for what, between the new goals and tasks (links to steps outside this campaign stay behind).
+  for (const sg of snap.goals) {
+    const g = made.get(sg.ref);
+    if (g && sg.blockedBy?.length) g.blockedBy = sg.blockedBy.map((r) => made.get(r)?.id).filter((id) => db.goals[id]);
+    for (const st of sg.tasks) {
+      const t = made.get(st.ref);
+      if (t && st.blockedBy?.length) t.blockedBy = st.blockedBy.map((r) => made.get(r)?.id).filter((id) => db.tasks[id]);
+    }
+    if (g?.blockedBy?.length) broadcast(ws.id, { type: 'goal', goal: publicGoal(g) });
+  }
+  for (const x of made.values()) if (db.tasks[x.id]) broadcast(ws.id, { type: 'task', task: publicTask(x) });
 }
 
 // Fires each slot once, when its time comes in the schedule's time zone. A slot missed by more than 6 hours (server was off) is skipped.
@@ -4152,6 +4225,8 @@ async function api(req, res, url) {
   const auth = authFrom(req, url);
   if (!auth) return send(res, 401, { error: 'Not signed in' });
   const { ws } = auth;
+  // Work this change opens up: whoever it's for hears they're up, once the change is made.
+  if (m !== 'GET' && HANDOFF_ROUTES.has(a)) { const opened = openings(ws, auth.tz); res.once('finish', () => opened(auth.member, auth.memberId)); }
   const locked = readOnlyBlock(ws, a, m);
   if (locked) return send(res, 402, { error: locked, billing: true });
 
@@ -4305,9 +4380,9 @@ async function api(req, res, url) {
     if (m === 'PATCH') {
       const body = await readJson(req, 50_000);
       const camp = db.campaigns[db.goals[t.goalId]?.campaignId];
-      if ((body.skipped !== undefined || body.unlocked !== undefined) && !(camp && passesSteps(camp, auth))) return send(res, 403, { error: 'Only an owner can skip or unlock a step.' });
-      const waits = body.done && !t.done && camp && !passesSteps(camp, auth) && taskWaitsOn(t);
-      if (waits) return send(res, 409, { error: `This campaign is worked in order. Finish “${waits.title || waits.text}” first.` });
+      if ((body.skipped !== undefined || body.unlocked !== undefined) && !passesSteps(camp, auth)) return send(res, 403, { error: 'Only an owner can skip or unlock a step.' });
+      const waits = body.done && !t.done && !passesSteps(camp, auth) && taskWaitsOn(t);
+      if (waits) return send(res, 409, { error: `This is waiting on “${clipText(waits.title || waits.text, 80)}”. That has to be done first.` });
       const next = applyTask({ ...t }, body);
       if (body.skipped !== undefined) next.skipped = !!body.skipped;
       if (body.unlocked !== undefined) next.unlocked = !!body.unlocked;
