@@ -57,6 +57,19 @@ Uptime: point a checker such as UptimeRobot at `PUBLIC_URL/api/up`. It answers 2
 Tests: `tests/run.sh [suite ...]` runs every end-to-end suite against throwaway local servers (browser suites need Google
 Chrome). `pgtest` also needs `TEST_DATABASE_URL`, a Neon test branch, never the live one. No real email is sent.
 
+## Billing (Stripe)
+
+A new team gets a 14-day free trial, then pays per person a month on Stripe's own checkout page. When the trial ends
+without a subscription, or a subscription stops, the team is read-only: everyone can sign in, look, export and leave, and
+owners can subscribe (Settings → Team → Billing). Teams from before billing are free. Seats follow the team, prorated.
+With no Stripe keys set, billing is off and every team is free.
+
+In Stripe: a product with a recurring per-unit monthly price, the customer portal turned on (Settings → Billing →
+Customer portal), and a webhook to `PUBLIC_URL/stripe/webhook` for `checkout.session.completed` and
+`customer.subscription.created`, `.updated` and `.deleted`. Then set `STRIPE_SECRET_KEY`, `STRIPE_PRICE` (the price id),
+`STRIPE_WEBHOOK_SECRET` (the webhook's signing secret) and, if the price isn't $15, `SEAT_PRICE_CENTS` (what the app
+shows). `STRIPE_API` points it at a stand-in, for tests.
+
 ## Calendars (Google / Outlook)
 
 Everyone connects their own calendars in ⚙ Settings → Calendars. Events show in their Day (only they see them), and blocks

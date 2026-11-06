@@ -497,6 +497,7 @@
       // Locked or unlocked by another owner: start over, so the app shows the right thing.
       if (!!S.workspace?.deleteAt !== !!msg.workspace.deleteAt) return location.reload();
       S.workspace = msg.workspace;
+      drawBillingBar();
       if (mailWas !== !!S.workspace.settings?.memberEmail) loadPss();
       applyBrand();
       refreshLinks();
@@ -832,6 +833,13 @@
   // gets a bar at the top with a box for the code, when this server can send email.
   function accountNudge() {
     drawConfirmBar();
+    drawBillingBar();
+    // Back from Stripe's checkout: the subscription arrives a moment later, by webhook.
+    const back = new URLSearchParams(location.search).get('billing');
+    if (back) {
+      history.replaceState(null, '', location.pathname);
+      toast(back === 'done' ? 'Thanks! Your subscription is starting.' : 'No changes made to billing.');
+    }
     if (S.me.email || VIEW_ID) return;
     const today = new Date().toDateString();
     if (store.get('emailAsked', '') === today) return;
@@ -897,6 +905,47 @@
       h('button', { class: 'btn small', onclick: () => api('POST', '/account/verify/send').then(() => toast('New code sent'), (e) => toast(e.message)) }, 'Send a new code'),
       h('button', { class: 'icon-btn', 'aria-label': 'Hide for now', html: I.close, onclick: () => { S.confirmHidden = true; drawConfirmBar(); } }));
     $('#tabs').before(bar);
+  }
+
+  // ---------- billing: a free trial, then a subscription on Stripe's own pages (owners) ----------
+  const money0 = (cents) => '$' + (cents / 100).toFixed(cents % 100 ? 2 : 0);
+  async function billingGo(what) {
+    try {
+      location.href = (await api('POST', '/billing/' + what)).url;
+    } catch (e) {
+      toast(e.message);
+    }
+  }
+  // A bar at the top when the team is read-only, its trial is nearly over, or a payment failed.
+  function drawBillingBar() {
+    $('#billingBar')?.remove();
+    const b = S.workspace?.billing;
+    if (!b || S.billingHidden) return;
+    const owner = amOwner();
+    const msg = b.readOnly ? (b.state === 'ended' ? 'This team’s subscription has ended. Kloomie is read-only: you can look and export, but not add or change anything.' : 'This team’s free trial has ended. Kloomie is read-only: you can look and export, but not add or change anything.')
+      : b.state === 'trial' && b.daysLeft <= 3 && owner ? `Your free trial ends in ${b.daysLeft} day${b.daysLeft === 1 ? '' : 's'}.`
+      : b.state === 'past_due' && owner ? 'Your last payment didn’t go through. Update your card to keep using Kloomie.' : null;
+    if (!msg) return;
+    const bar = h('div', { id: 'billingBar', class: 'confirm-bar billing-bar' + (b.readOnly ? ' ended' : '') }, h('span', {}, msg, owner ? '' : ' Ask a team owner to subscribe.'),
+      owner ? h('button', { class: 'btn small primary-btn', onclick: () => billingGo(b.state === 'past_due' ? 'portal' : 'checkout') }, b.state === 'past_due' ? 'Update card' : 'Subscribe') : null,
+      b.readOnly ? null : h('button', { class: 'icon-btn', 'aria-label': 'Hide for now', html: I.close, onclick: () => { S.billingHidden = true; drawBillingBar(); } }));
+    $('#tabs').before(bar);
+  }
+  function billingSection() {
+    const b = S.workspace.billing || {};
+    const sec = h('section', { class: 'billing-sec' }, h('h3', {}, 'Billing'));
+    if (b.state === 'free') return null;
+    const n = S.workspace.members.length;
+    const each = money0(b.price);
+    const line = { trial: `Free trial · ${b.daysLeft} day${b.daysLeft === 1 ? '' : 's'} left`, trial_over: 'The free trial has ended', ended: 'The subscription has ended', active: `Subscribed · ${b.seats} ${b.seats === 1 ? 'person' : 'people'}`, past_due: 'Subscribed · the last payment didn’t go through' }[b.state] || '';
+    const when = b.cancelAt ? `Ends ${new Date(b.cancelAt).toLocaleDateString()}` : b.periodEnd ? `Renews ${new Date(b.periodEnd).toLocaleDateString()}` : '';
+    sec.append(h('div', { class: 'srow' }, h('span', {}, line, h('small', {}, [`${each} per person a month · ${n} on the team now`, when].filter(Boolean).join(' · ')))));
+    if (!amOwner()) sec.append(h('p', { class: 'day-hint' }, 'Team owners manage billing.'));
+    else if (b.state === 'active' || b.state === 'past_due') sec.append(h('div', { class: 'btns' }, h('button', { class: 'btn', onclick: () => billingGo('portal') }, 'Manage billing')),
+      h('p', { class: 'day-hint' }, 'Change the card, see invoices, or cancel, on Stripe. People who join or leave change the seats; you’re charged or credited for the difference.'));
+    else sec.append(h('div', { class: 'btns' }, h('button', { class: 'btn primary-btn', onclick: () => billingGo('checkout') }, `Subscribe · ${money0(b.price * Math.max(1, n))} a month`)),
+      h('p', { class: 'day-hint' }, 'You pay on Stripe’s secure page; Kloomie never sees your card. Cancel any time.'));
+    return sec;
   }
 
   // ---------- exports: the team (owners) or your own things, as a .zip made in the background ----------
@@ -11905,6 +11954,8 @@
         s.append(h('section', {}, h('h3', {}, 'Time zone'), h('p', {}, 'Where your team works. Kloomie uses it for “today” when it dates things by itself, like follow-ups and quotes.'), tz));
       }
       s.append(brandSection());
+      const bill = billingSection();
+      if (bill) s.append(bill);
       if (amOwner()) s.append(exportSection('team'));
       if (amOwner()) s.append(h('section', {}, h('h3', {}, 'Delete team'),
         h('p', {}, 'Erase this team and everything in it, for everyone. You get 7 days to change your mind.'),

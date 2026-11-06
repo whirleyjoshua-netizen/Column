@@ -17,6 +17,7 @@ import { PdfError, stampPdf, addCertificate, pageCount, writeDoc } from './pdf.j
 import { projectsModule } from './projects.js';
 import { openStore, Fenced } from './store.js';
 import { createMailer } from './mail.js';
+import * as stripe from './stripe.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 4747);
@@ -247,6 +248,7 @@ function newInviteCode() {
 function newMember(ws, name, role) {
   const m = { id: rid(8), name, nameKey: nameKey(name), role, salt: null, hash: null, createdAt: Date.now() };
   ws.members.push(m);
+  seatsSoon(ws);
   return m;
 }
 function setPassword(m, pass) {
@@ -420,6 +422,7 @@ const NEW_TEAM_TOOLS = ['sidekick', 'docs', 'contacts', 'email', 'folders', 'sig
 const toolsOf = (ws) => Object.fromEntries(TOOL_KEYS.map((k) => [k, ws.settings?.tools ? ws.settings.tools[k] === true : k !== 'projects']));
 const publicWorkspace = (ws, memberId) => ({
   tools: toolsOf(ws),
+  billing: publicBilling(ws),
   id: ws.id,
   name: ws.name,
   settings: ws.settings,
@@ -1211,6 +1214,84 @@ function channelName(ws, raw, selfId) {
   if (!n) throw badRequest('Name required');
   if (n === 'general' || ws.channels.some((c) => c.name === n && c.id !== selfId)) throw Object.assign(new Error(`#${n} already exists.`), { status: 409 });
   return n;
+}
+
+// ---------- billing: a free trial, then $15 per person a month through Stripe ----------
+// ws.billing: { trialEnds, comp, customer, sub, item, status, seats, periodEnd, cancelAt }. Teams from before
+// billing are free (comp). A team whose trial has ended without a subscription, or whose subscription has
+// stopped, is read-only: everyone can still sign in, look, export, and leave, and owners can subscribe.
+// With no Stripe keys on the server, billing is off and every team is free.
+const TRIAL_DAYS = 14;
+const SEAT_PRICE = Number(process.env.SEAT_PRICE_CENTS) || 1500;
+const LIVE_SUB = ['active', 'trialing', 'past_due'];
+function billingOf(ws) {
+  const b = ws.billing || { comp: true };
+  if (!stripe.configured() || b.comp) return { state: 'free', readOnly: false };
+  if (b.sub && LIVE_SUB.includes(b.status)) return { state: b.status === 'past_due' ? 'past_due' : 'active', readOnly: false, seats: b.seats || ws.members.length, periodEnd: b.periodEnd || null, cancelAt: b.cancelAt || null };
+  if ((b.trialEnds || 0) > Date.now()) return { state: 'trial', readOnly: false, trialEnds: b.trialEnds, daysLeft: Math.ceil((b.trialEnds - Date.now()) / 86_400_000) };
+  return { state: b.sub ? 'ended' : 'trial_over', readOnly: true, trialEnds: b.trialEnds || null };
+}
+const publicBilling = (ws) => ({ ...billingOf(ws), price: SEAT_PRICE, members: ws.members.length, hasCustomer: !!ws.billing?.customer });
+// What a read-only team may still do: sign in and out, its own account, export, leave or delete, and pay.
+const READ_ONLY_OK = new Set(['billing', 'exports', 'account', 'auth', 'logout', 'workspace', 'members', 'signature', 'ai']);
+function readOnlyBlock(ws, a, m) {
+  if (m === 'GET' || m === 'HEAD' || READ_ONLY_OK.has(a) || !billingOf(ws).readOnly) return null;
+  return billingOf(ws).state === 'ended' ? 'This team’s subscription has ended, so Kloomie is read-only. An owner can subscribe again in Settings → Team → Billing.' : 'This team’s free trial has ended, so Kloomie is read-only. An owner can subscribe in Settings → Team → Billing.';
+}
+// The subscription's seats follow the team, a moment after someone joins or leaves.
+const seatTimers = new Map();
+function seatsSoon(ws) {
+  if (!ws?.billing?.sub || !ws.billing.item || !stripe.configured() || seatTimers.has(ws.id)) return;
+  seatTimers.set(ws.id, setTimeout(async () => {
+    seatTimers.delete(ws.id);
+    const n = Math.max(1, ws.members.length);
+    if (!db.workspaces[ws.id] || ws.billing.seats === n || !LIVE_SUB.includes(ws.billing.status)) return;
+    try {
+      await stripe.call('POST', `/subscription_items/${ws.billing.item}`, { quantity: n, proration_behavior: 'create_prorations' });
+      ws.billing.seats = n;
+      save();
+      broadcast(ws.id, { type: 'workspace' });
+    } catch (e) {
+      alarm('Updating a team’s seats in Stripe failed', e);
+    }
+  }, 3_000));
+}
+// What Stripe says about a subscription, onto the team it's for.
+function applySub(ws, sub) {
+  const b = (ws.billing ||= {});
+  const item = sub.items?.data?.[0];
+  Object.assign(b, {
+    customer: typeof sub.customer === 'string' ? sub.customer : sub.customer?.id || b.customer, sub: sub.id, item: item?.id || b.item, status: sub.status,
+    seats: item?.quantity || b.seats, periodEnd: (item?.current_period_end || sub.current_period_end || 0) * 1000 || null, cancelAt: sub.cancel_at ? sub.cancel_at * 1000 : null,
+  });
+  if (sub.status === 'canceled' || sub.status === 'incomplete_expired') b.status = sub.status;
+  save();
+  broadcast(ws.id, { type: 'workspace' });
+  seatsSoon(ws);
+}
+const wsForStripe = (meta, customer) => db.workspaces[meta?.wsId] || Object.values(db.workspaces).find((w) => customer && w.billing?.customer === customer);
+async function stripeWebhook(req, res) {
+  const chunks = [];
+  let size = 0;
+  for await (const c of req) { size += c.length; if (size > 1_000_000) return send(res, 413, 'Too large'); chunks.push(c); }
+  const raw = Buffer.concat(chunks).toString('utf8');
+  if (!stripe.verify(raw, req.headers['stripe-signature'])) return send(res, 400, { error: 'Bad signature' });
+  const ev = JSON.parse(raw);
+  const o = ev.data?.object || {};
+  try {
+    if (ev.type === 'checkout.session.completed' && o.mode === 'subscription') {
+      const ws = db.workspaces[o.client_reference_id] || wsForStripe(o.metadata, o.customer);
+      if (ws && o.subscription) applySub(ws, await stripe.call('GET', `/subscriptions/${o.subscription}`));
+    } else if (/^customer\.subscription\.(created|updated|deleted)$/.test(ev.type)) {
+      const ws = wsForStripe(o.metadata, o.customer);
+      // Only the team's current subscription counts; an old one ending doesn't end a new one.
+      if (ws && (!ws.billing?.sub || ws.billing.sub === o.id || ev.type !== 'customer.subscription.deleted')) applySub(ws, o);
+    }
+  } catch (e) {
+    alarm('A Stripe webhook failed', e);
+    return send(res, 500, { error: 'Try again' });
+  }
+  return send(res, 200, { received: true });
 }
 
 // ---------- realtime ----------
@@ -3982,6 +4063,7 @@ async function api(req, res, url) {
         roles: [],
         members: [],
         inviteCode: newInviteCode(),
+        billing: { trialEnds: Date.now() + TRIAL_DAYS * 86_400_000 },
       };
       db.workspaces[ws.id] = ws;
       member = newMember(ws, who, 'owner');
@@ -4059,6 +4141,37 @@ async function api(req, res, url) {
   const auth = authFrom(req, url);
   if (!auth) return send(res, 401, { error: 'Not signed in' });
   const { ws } = auth;
+  const locked = readOnlyBlock(ws, a, m);
+  if (locked) return send(res, 402, { error: locked, billing: true });
+
+  // Billing: everyone sees where the team stands; owners subscribe and manage it, on Stripe's own pages.
+  if (a === 'billing') {
+    if (m === 'GET' && !b) return send(res, 200, publicBilling(ws));
+    if (auth.role !== 'owner') return send(res, 403, { error: 'Only team owners can manage billing.' });
+    if (!stripe.configured()) return send(res, 400, { error: 'Billing isn’t set up on this server.' });
+    if (m === 'POST' && b === 'checkout') {
+      if (ws.billing?.sub && LIVE_SUB.includes(ws.billing.status)) return send(res, 409, { error: 'This team is already subscribed. Use Manage billing.' });
+      const me = ws.members.find((x) => x.id === auth.memberId);
+      if (!ws.billing?.customer) {
+        const c = await stripe.call('POST', '/customers', { name: ws.name, email: userOf(me)?.email || undefined, metadata: { wsId: ws.id } });
+        (ws.billing ||= {}).customer = c.id;
+        save();
+      }
+      const session = await stripe.call('POST', '/checkout/sessions', {
+        mode: 'subscription', customer: ws.billing.customer, client_reference_id: ws.id,
+        line_items: [{ price: process.env.STRIPE_PRICE, quantity: Math.max(1, ws.members.length) }],
+        subscription_data: { metadata: { wsId: ws.id } }, allow_promotion_codes: 'true',
+        success_url: `${PUBLIC_URL}/?billing=done`, cancel_url: `${PUBLIC_URL}/?billing=cancel`,
+      });
+      return send(res, 200, { url: session.url });
+    }
+    if (m === 'POST' && b === 'portal') {
+      if (!ws.billing?.customer) return send(res, 400, { error: 'Subscribe first.' });
+      const session = await stripe.call('POST', '/billing_portal/sessions', { customer: ws.billing.customer, return_url: `${PUBLIC_URL}/` });
+      return send(res, 200, { url: session.url });
+    }
+    return send(res, 405, { error: 'Method not allowed' });
+  }
 
   // Deleting the team: owners only, with the team's name and their password. It locks now and is erased
   // after DELETE_DAYS; until then any owner can cancel.
@@ -6433,6 +6546,7 @@ const server = http.createServer(async (req, res) => {
     return;
   }
   if (url.pathname === '/import' && req.method === 'POST') return importData(req, res);
+  if (url.pathname === '/stripe/webhook' && req.method === 'POST') return stripeWebhook(req, res).catch((e) => { alarm('A Stripe webhook failed', e); if (!res.headersSent) send(res, 500, 'Error'); });
   if (url.pathname.startsWith('/s/') && (req.method === 'GET' || req.method === 'HEAD')) return serveShare(req, res, url);
   // A quote sent to a customer: they read it and accept or decline.
   if (url.pathname.startsWith('/q/') && (req.method === 'GET' || req.method === 'POST')) return PJ.quotePage(req, res, url);
@@ -6621,6 +6735,8 @@ async function revokeCalendar(conn) {
 }
 async function eraseTeam(ws) {
   const wsId = ws.id;
+  // A team that's gone stops paying.
+  if (ws.billing?.sub && LIVE_SUB.includes(ws.billing.status) && stripe.configured()) await stripe.call('DELETE', `/subscriptions/${ws.billing.sub}`).catch((e) => alarm('Cancelling a deleted team’s subscription failed', e));
   const files = teamFiles(wsId);
   await Promise.all(Object.values(db.calendars).filter((x) => x.wsId === wsId).map(revokeCalendar));
   for (const sock of sockets.get(wsId) || []) sock.close(4001, 'Team deleted');
@@ -6703,6 +6819,7 @@ async function removeMember(ws, m) {
     if (p.memberIds) p.memberIds = p.memberIds.filter((x) => x !== id);
   }
   ws.members = ws.members.filter((x) => x.id !== id);
+  seatsSoon(ws);
   save();
   broadcast(wsId, { type: 'workspace' });
 }

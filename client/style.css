@@ -1746,3 +1746,4 @@ body.platform-darwin .pj-head, body.platform-darwin .pj-top { padding-left: 80px
 .sig-sec textarea { width: 100%; }
 .sig-thumb { display: flex; align-items: center; gap: 8px; }
 .sig-thumb img { height: 28px; max-width: 120px; object-fit: contain; background: #fff; border-radius: 4px; padding: 2px 4px; }
+.billing-bar.ended { border-color: var(--danger); }
