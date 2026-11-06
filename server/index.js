@@ -946,6 +946,8 @@ function applyTask(t, body) {
   }
   if (t.signoff?.castId && !castRole(taskCamp(t), t.signoff.castId)) { t.signoff = null; t.submitted = null; }
   if (body.report !== undefined) t.report = !!body.report;
+  // The tool that does it, so the step ticks itself off when that tool's work is done.
+  if (body.action !== undefined) t.action = STEP_KINDS.includes(body.action?.kind) ? { kind: body.action.kind } : null;
   // The tasks it waits for (any in the team), and how many days after they're done it's due.
   if (body.blockedBy !== undefined) t.blockedBy = blockerList(db.tasks, t, body.blockedBy, 'task');
   if (body.dueAfter !== undefined) t.dueAfter = body.dueAfter === null || body.dueAfter === '' ? null : Math.max(0, Math.min(365, Math.round(Number(body.dueAfter)) || 0));
@@ -1620,6 +1622,49 @@ function openings(ws, tz) {
     if (changed) save();
   };
 }
+// ----- steps done with a tool -----
+// A task can name the tool that does it (action.kind). Started from the step, the tool's record carries the task's
+// id, and the step ticks itself off when the tool says the work is done: the email went out, it's signed, the payment
+// is logged, files came in on the link, everyone on the call list was reached, the meeting notes are ready.
+// A step that needs sign-off goes to its approver instead. Whatever the tool made (the signed copy, the files) lands
+// on the step, where the steps waiting for it can pick it up.
+const STEP_KINDS = ['email', 'sign', 'pay', 'files', 'calls', 'meeting'];
+const TOOL_STARTED = { email: 'Email going out', sign: 'Sent to sign', files: 'File link sent', meeting: 'Meeting being recorded' };
+// The task a tool was started from, if this person can see it.
+const stepOf = (ws, auth, id) => (typeof id === 'string' && db.tasks[id]?.wsId === ws.id && canSee(auth, 'task', db.tasks[id]) ? id : null);
+function toolStarted(taskId, kind, ref, label) {
+  const t = db.tasks[taskId];
+  if (!t) return;
+  t.toolRef = { kind, id: ref, label: label || TOOL_STARTED[kind] || 'Started', at: Date.now() };
+  broadcast(t.wsId, { type: 'task', task: publicTask(t) });
+}
+function syncEntries(t) {
+  for (const e of Object.values(db.entries)) {
+    if (e.taskId !== t.id || (e.text === t.text && e.done === t.done)) continue;
+    e.text = t.text;
+    e.done = t.done;
+    broadcast(t.wsId, { type: 'entry', entry: publicEntry(e) });
+  }
+}
+function toolDone(taskId, { by, byId, note, file } = {}) {
+  const t = db.tasks[taskId];
+  if (!t) return;
+  if (file && db.items[file]?.wsId === t.wsId) t.files = [...new Set([...(t.files || []), file])].slice(0, 20);
+  if (!t.done && !t.submitted) {
+    const opened = openings(db.workspaces[t.wsId]);
+    t.doneNote = note ? cleanText(note, 200) : null;
+    if (t.signoff) Object.assign(t, { submitted: { by: by || 'Kloomie', byId: byId || null, at: Date.now() }, returned: null });
+    else Object.assign(t, { done: true, doneAt: Date.now(), submitted: null, returned: null });
+    syncEntries(t);
+    broadcast(t.wsId, { type: 'task', task: publicTask(t) });
+    if (t.submitted) broadcast(t.wsId, { type: 'signoff', task: publicTask(t), by: by || 'Kloomie' });
+    opened(by || 'Kloomie', byId || null);
+  } else broadcast(t.wsId, { type: 'task', task: publicTask(t) });
+  save();
+}
+// Every row on a call list reached (logged at least once).
+const listWorked = (l) => l.rows.length > 0 && l.rows.every((r) => Object.values(db.attempts).some((x) => x.listId === l.id && x.rowId === r.id));
+
 const HANDOFF_ROUTES = new Set(['tasks', 'goals', 'attempts', 'campaigns', 'templates', 'sidekick']);
 
 // ----- follow-ups: a logged call or email that comes back as a task a few days later -----
@@ -1811,7 +1856,7 @@ function snapshotCampaign(c, main = c) {
       ref: g.id, blockedBy: g.blockedBy || [], title: g.title, kind: g.kind, target: g.target, counts: g.counts, methods: g.methods || null, order: g.order, dueIn: rel(g.due),
       // Follow-ups were for that run's people, so they stay behind.
       tasks: Object.values(db.tasks).filter((t) => t.goalId === g.id && !t.followUp).sort((a, b) => a.createdAt - b.createdAt).map((t) => ({
-        ref: t.id, blockedBy: t.blockedBy || [], dueAfter: t.dueAfter ?? null, castId: t.castId || null, signoff: t.signoff || null,
+        ref: t.id, blockedBy: t.blockedBy || [], dueAfter: t.dueAfter ?? null, castId: t.castId || null, signoff: t.signoff || null, action: t.action || null,
         text: t.text, order: t.order ?? null, priority: t.priority, dueIn: rel(t.due), assigneeId: t.assigneeId || null, roleId: t.roleId || null, report: !!t.report,
         listRef: lists.some((l) => l.id === t.listId) ? t.listId : null,
       })),
@@ -1916,6 +1961,7 @@ function fillCampaign(ws, owner, c, snap, date, by) {
         { text: st.text, order: st.order ?? null, priority: st.priority, due: due(st.dueIn), assigneeId: st.assigneeId, roleId: st.assigneeId ? undefined : st.roleId || undefined, report: st.report, listId: lists.get(st.listRef) || null });
       if (t.assigneeId || t.roleId) t.assignedBy = by || null;
       if (st.dueAfter != null) t.dueAfter = st.dueAfter;
+      if (STEP_KINDS.includes(st.action?.kind)) t.action = { kind: st.action.kind };
       if (st.castId && castRole(c, st.castId)) { Object.assign(t, { castId: st.castId, assigneeId: null, roleId: null }); t.assignedBy = by || null; }
       if (st.signoff?.memberId || castRole(c, st.signoff?.castId)) t.signoff = st.signoff;
       db.tasks[t.id] = t;
@@ -2815,6 +2861,7 @@ async function requestApi(req, res, url, token, part) {
   });
   r.count = (r.count || 0) + 1;
   r.lastAt = Date.now();
+  if (r.taskId) toolDone(r.taskId, { by: r.by, byId: r.memberId, note: `Files from ${from}`, file: item.id });
   save();
   // Just the count: a full workspace update would rebuild everyone's columns mid-typing.
   broadcast(ws.id, { type: 'stack:request', stackId: st.id, count: r.count, lastAt: r.lastAt });
@@ -2894,6 +2941,7 @@ async function signApi(req, res, token, part) {
     const sender = ws?.members.find((p) => p.id === x.memberId);
     const item = await addPdf({ wsId: x.wsId, member: x.by, memberId: sender ? x.memberId : null, device: 'Signature', deviceId: null }, bytes, copyName(x.name, 'signed'), x);
     Object.assign(x, { status: 'signed', signedAt, signedName: typed, signedHash: sha256(bytes), signedItemId: item.id });
+    if (x.taskId) toolDone(x.taskId, { by: x.by, byId: x.memberId, note: `Signed by ${x.signer.name}`, file: item.id });
   } catch (e) {
     x.events = x.events.filter((e2) => !/^(Agreed to sign|Signed as)/.test(e2.what));
     throw e;
@@ -3181,12 +3229,14 @@ function sendNews(x) {
   if (!isAdminId(x.wsId, x.memberId)) broadcast(x.wsId, { type: 'send', send: publicSend(x), forMember: x.memberId });
 }
 // A member's own campaigns: ones they made, run, are invited to, or have a task in.
-const onCampaign = (c, memberId) => c.ownerId === memberId || c.assigneeId === memberId || (c.memberIds || []).includes(memberId)
+const onCampaign = (c, memberId) => c.ownerId === memberId || c.assigneeId === memberId || (c.memberIds || []).includes(memberId) || castOf(c).some((r) => r.memberIds.includes(memberId))
   || Object.values(db.tasks).some((t) => t.assigneeId === memberId && campaignOf('task', t) === c.id);
 function sendFinish(x) {
   x.status = 'done';
   x.doneAt = Date.now();
   x.waitUntil = 0;
+  const sent = x.to.filter((r) => r.status === 'sent').length;
+  if (x.taskId && sent) toolDone(x.taskId, { by: x.by, byId: x.memberId, note: `Emailed ${sent} ${sent === 1 ? 'person' : 'people'}` });
 }
 // Sends the next email of each sending batch, at most one per mailbox per tick.
 const mailBusy = new Set();
@@ -3484,6 +3534,7 @@ async function processMeeting(x) {
     x.draft = await draftMeeting(ws, x);
     x.status = 'ready';
     x.error = null;
+    if (x.taskId) toolDone(x.taskId, { by: x.by, byId: x.memberId, note: 'Meeting notes are ready' });
   } catch (e) {
     console.error('Meeting notes failed:', e.message);
     x.status = 'failed';
@@ -4456,13 +4507,7 @@ async function api(req, res, url) {
         pinNews(pin);
       }
       // Keep linked entries' own copy current so they still read right if the task is deleted later.
-      for (const e of Object.values(db.entries)) {
-        if (e.taskId === t.id && (e.text !== next.text || e.done !== next.done)) {
-          e.text = next.text;
-          e.done = next.done;
-          broadcast(ws.id, { type: 'entry', entry: publicEntry(e) });
-        }
-      }
+      syncEntries(next);
       save();
       // Someone who could see it and now can't (it was handed away) has it taken off their app.
       for (const mb of ws.members) if (seesOwn('task', t, mb.id) && !seesOwn('task', next, mb.id)) broadcast(ws.id, { type: 'task:remove', id: t.id, forMember: mb.id });
@@ -4570,8 +4615,9 @@ async function api(req, res, url) {
       const body = await readJson(req);
       if (mine().some((x) => x.status === 'recording' && Date.now() - x.touched < 60_000)) return send(res, 409, { error: 'You’re already recording a meeting.' });
       const e = body.entryId && db.entries[body.entryId];
-      const x = { id: rid(), wsId: ws.id, memberId: auth.memberId, by: auth.member, title: cleanText(body.title, 120) || 'Meeting', entryId: e && e.wsId === ws.id ? e.id : null, startedAt: Date.now(), touched: Date.now(), endedAt: null, bytes: 0, seq: 0, mic: !!body.mic, call: !!body.call, status: 'recording', transcript: '', draft: null, error: null };
+      const x = { id: rid(), wsId: ws.id, memberId: auth.memberId, by: auth.member, title: cleanText(body.title, 120) || 'Meeting', entryId: e && e.wsId === ws.id ? e.id : null, taskId: stepOf(ws, auth, body.taskId), startedAt: Date.now(), touched: Date.now(), endedAt: null, bytes: 0, seq: 0, mic: !!body.mic, call: !!body.call, status: 'recording', transcript: '', draft: null, error: null };
       db.meetings[x.id] = x;
+      if (x.taskId) toolStarted(x.taskId, 'meeting', x.id);
       await fs.promises.writeFile(meetPath(x), '');
       save();
       meetNews(x);
@@ -4700,12 +4746,18 @@ async function api(req, res, url) {
       return send(res, 200, { added: added.length, skipped, entries: added.map(publicMoney) });
     }
     if (m === 'POST' && !b) {
-      const x = applyMoney(newMoney(auth), { kind: 'out', ...(await readJson(req, 20_000)) }, auth);
+      const body = await readJson(req, 20_000);
+      const step = stepOf(ws, auth, body.taskId);
+      // Logged from a step: it counts toward that step's campaign unless tagged otherwise.
+      if (step && body.goalId == null && body.campaignId == null) body.campaignId = taskCamp(db.tasks[step])?.id || null;
+      const x = applyMoney(newMoney(auth), { kind: 'out', ...body }, auth);
       if (!x.amount) return send(res, 400, { error: 'Enter the amount, like 142.50' });
       if (!x.day) return send(res, 400, { error: 'Pick the date.' });
+      x.taskId = step;
       db.money[x.id] = x;
       save();
       moneyNews(x);
+      if (step) toolDone(step, { by: auth.member, byId: auth.memberId, note: `${x.kind === 'in' ? 'Got' : 'Paid'} $${(x.amount / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}${x.note ? ' · ' + x.note : ''}` });
       return send(res, 200, publicMoney(x));
     }
     const x = b && db.money[b];
@@ -4834,13 +4886,14 @@ async function api(req, res, url) {
       const camp = body.campaignId && db.campaigns[body.campaignId];
       const x = {
         id: rid(), wsId: ws.id, memberId: auth.memberId, by: auth.member, itemId: it.id, name: it.name, stackId: it.stackId, channelId: it.channelId, dirId: it.dirId || null, docId: it.fromDoc || null,
-        campaignId: camp && camp.wsId === ws.id && seesCampaign(camp.id, auth.memberId) ? camp.id : null,
+        campaignId: camp && camp.wsId === ws.id && seesCampaign(camp.id, auth.memberId) ? camp.id : null, taskId: stepOf(ws, auth, body.taskId),
         signer: { name, email }, message: String(body.message ?? '').replace(/\r\n?/g, '\n').trim().slice(0, 2000), fields, pages,
         token: rid(24), hash: sha256(bytes), status: 'sent', events: [], createdAt: Date.now(), expiresAt: Date.now() + SIGN_DAYS * 86_400_000,
       };
       await fsp.writeFile(signPath(x), bytes);
       signEvent(x, `Sent by ${auth.member} (${ws.name})`, req);
       db.signs[x.id] = x;
+      if (x.taskId) toolStarted(x.taskId, 'sign', x.id, `With ${name} to sign`);
       save();
       signNews(x);
       return send(res, 200, publicSign(x));
@@ -5263,8 +5316,9 @@ async function api(req, res, url) {
       const links = await unsubLinks(ws.id, to.map((r) => r.email));
       for (const r of to) r.unsub = links[r.email] || null;
       if (to.some((r) => !r.unsub)) return send(res, 502, { error: 'PSS didn’t give an unsubscribe link for everyone. Nothing was sent.' });
-      const x = { id: rid(), wsId: ws.id, campaignId: camp?.id || null, listId: null, memberId: auth.memberId, by: auth.member, connId: conn.id, provider: conn.provider, from: conn.account, subject, body: text, footer, signature: body.signature === false ? '' : db.signatures[sigKey(ws.id, auth.memberId)]?.email || '', createdAt: Date.now(), status: 'sending', to };
+      const x = { id: rid(), wsId: ws.id, campaignId: camp?.id || null, listId: null, taskId: stepOf(ws, auth, body.taskId), memberId: auth.memberId, by: auth.member, connId: conn.id, provider: conn.provider, from: conn.account, subject, body: text, footer, signature: body.signature === false ? '' : db.signatures[sigKey(ws.id, auth.memberId)]?.email || '', createdAt: Date.now(), status: 'sending', to };
       db.sends[x.id] = x;
+      if (x.taskId) toolStarted(x.taskId, 'email', x.id, `Email going out to ${x.to.length}`);
       // Old batches go, oldest first; the emails they logged stay in the campaign.
       const mine = Object.values(db.sends).filter((y) => y.wsId === ws.id && y.status !== 'sending').sort((p, q) => q.createdAt - p.createdAt);
       for (const y of mine.slice(MAIL_KEEP)) delete db.sends[y.id];
@@ -5576,6 +5630,10 @@ async function api(req, res, url) {
       save();
       broadcast(ws.id, { type: 'attempt', attempt: publicAttempt(x) });
       if (x.leadId) pushPssSoon(ws.id);
+      // The last one on a list reached: a "work the list" step that works it is done.
+      if (x.listId && listWorked(db.lists[x.listId])) for (const t of Object.values(db.tasks)) {
+        if (t.listId === x.listId && t.action?.kind === 'calls' && !t.done) toolDone(t.id, { by: auth.member, byId: auth.memberId, note: `Everyone on “${clipText(db.lists[x.listId].name, 40)}” reached` });
+      }
       return send(res, 200, publicAttempt(x));
     }
     const x = b && db.attempts[b];
@@ -6109,13 +6167,16 @@ async function api(req, res, url) {
     if (c === 'request' && !rq) return send(res, 404, { error: 'Not found' });
     if (rq && m === 'POST') {
       // A link anyone can use to drop files into this stack, no account needed.
-      const { days, note } = await readJson(req);
+      const { days, note, taskId } = await readJson(req);
       const d = [0, 1, 7, 30, 90].includes(Number(days)) ? Number(days) : 7;
+      const step = stepOf(ws, auth, taskId) || (taskId === undefined ? rq.request?.taskId || null : null);
       rq.request = {
         token: rq.request?.token || crypto.randomBytes(18).toString('base64url'),
         memberId: auth.memberId, by: auth.member, createdAt: rq.request?.createdAt || Date.now(),
         expiresAt: d ? Date.now() + d * 86400000 : null, note: String(note || '').trim().slice(0, 500), count: rq.request?.count || 0, lastAt: rq.request?.lastAt || null,
+        taskId: step,
       };
+      if (step && db.tasks[step].toolRef?.kind !== 'files') toolStarted(step, 'files', rq.id, 'File link sent');
     } else if (rq && m === 'DELETE') {
       delete rq.request;
     } else if (rq) return send(res, 405, { error: 'Method not allowed' });

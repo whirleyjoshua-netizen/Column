@@ -682,7 +682,8 @@
       h('label', {}, live ? 'From now, works for' : 'Link works for', life),
       live ? h('div', { class: 'req-off' }, off) : null,
     ].filter(Boolean), async () => {
-      const ws = await api('POST', `/stacks/${st.id}/request`, { days: Number(life.value), note: note.value });
+      const ws = await api('POST', `/stacks/${st.id}/request`, { days: Number(life.value), note: note.value, ...stepRef('files') });
+      stepUsed('files');
       S.workspace = ws;
       if (live) return toast('Saved');
       copyText(reqUrl(stackById(st.id)));
@@ -2951,6 +2952,11 @@
       t.pinId && pinById(t.pinId) ? h('button', { class: 'list-chip', title: 'Show it on the map', onclick: (ev) => { ev.stopPropagation(); openMap({ pinId: t.pinId }); } }, 'Map') : null,
       camp && !inCampaign && !noCamp ? h('button', { class: 'camp-chip c-' + camp.color, title: `${camp.name} · ${g.title}`, onclick: () => openCampaign(camp.id) }, camp.name) : null,
       ...signoffBits(t),
+      t.action && !t.done && t.toolRef ? h('span', { class: 'step-tag tool', title: `Started ${dayName(new Date(t.toolRef.at).toLocaleDateString('en-CA'))}` }, t.toolRef.label) : null,
+      t.done && t.doneNote ? h('span', { class: 'step-tag', title: 'Done with its tool' }, t.doneNote) : null,
+      !t.done && handedFiles(t).length ? h('button', { class: 'list-chip', title: 'Handed over by the steps it waited for:\n' + handedFiles(t).map((it) => it.name || 'Note').join('\n'), onclick: (ev) => { ev.stopPropagation(); const fs = handedFiles(t); fs.length === 1 ? openPreview(fs[0]) : openMenu(ev.currentTarget, [{ head: 'Handed over' }, ...fs.map((it) => ({ label: it.name || 'Note', run: () => openPreview(it) }))]); } },
+        h('span', { html: I.clip }), handedFiles(t).length === 1 ? shortText(handedFiles(t)[0].name || 'Note', 18) : `${handedFiles(t).length} handed over`) : null,
+      t.action && !t.done && !waits && !t.submitted ? h('button', { class: 'btn small step-go', title: STEP_KINDS[t.action.kind]?.hint, onclick: (ev) => { ev.stopPropagation(); runStep(t); } }, STEP_KINDS[t.action.kind]?.btn || 'Start') : null,
       t.assigneeId ? avatar(t.assigneeId) : t.roleId ? roleChip(t.roleId) : t.castId ? castChip(t) : null,
       t.followUp && camp && !t.done ? h('button', { class: 'btn small task-log', title: 'Log how the follow-up went', onclick: (ev) => { ev.stopPropagation(); logFollowUp(t, camp); } }, 'Log') : null,
       t.done || waits || !g ? null : btn(I.spark, 'Tools for this task', (b) => toolsMenu(b, t)),
@@ -3020,6 +3026,7 @@
       { label: g ? `Goal: ${g.title}…` : 'Add to a goal…', run: () => goalMenu(anchor, t) },
       { label: t.blockedBy?.length ? `Waits for ${plural(t.blockedBy.length, 'task')}…` : 'Waits for…', run: () => waitsSheet(t) },
       { label: t.signoff ? `Signed off by ${signerName(t)}…` : 'Needs sign-off…', run: () => signoffMenu(anchor, t) },
+      { label: t.action ? `Done with: ${STEP_KINDS[t.action.kind]?.label || 'a tool'}…` : 'Done with a tool…', run: () => toolKindMenu(anchor, t) },
       ...(g ? [{ label: t.report ? 'Stop asking for a report' : 'Ask for a report when done', run: () => patchTask(t, { report: !t.report }) }] : []),
       ...stepRows(g && campById(g.campaignId), t, !!taskWaitsOn(t), (ch) => patchTask(t, ch)),
       ...(t.done ? [] : [{ label: '✦ Get help with it…', run: () => toolsMenu(anchor, t) }]),
@@ -3222,6 +3229,51 @@
   const openLoad = (memberId) => S.tasks.filter((t) => !t.done && taskFor(t, memberId)).length;
   const loadText = (memberId) => { const n = openLoad(memberId); return n ? `${n} open task${n === 1 ? '' : 's'}` : 'free'; };
   const castChip = (t) => { const r = castRoleOf(t); return r && h('span', { class: 'role-chip cast-chip' + (r.memberIds.includes(S.me?.memberId) ? ' mine' : '') + (r.memberIds.length ? '' : ' empty'), title: `For the ${r.name} in this campaign: ${r.memberIds.length ? r.memberIds.map(memberName).join(', ') : 'nobody plays it yet'}` }, r.name); };
+  // ----- steps done with a tool: email, sign, pay, files, calls, meeting -----
+  // The step's button opens the tool already pointed at it (STEP). What the tool makes carries the task's id, and the
+  // server ticks the step off when that work is done.
+  const STEP_KINDS = {
+    email: { label: 'Send an email', btn: 'Send email', hint: 'Done when the email has gone out' },
+    sign: { label: 'Get something signed', btn: 'Get it signed', hint: 'Done when it’s signed. The signed copy lands on the step' },
+    pay: { label: 'Pay for something', btn: 'Log payment', hint: 'Done when the payment is logged in Finance' },
+    files: { label: 'Collect files from someone', btn: 'Request files', hint: 'Done when files come in on the link. They land on the step' },
+    calls: { label: 'Work a call list', btn: 'Open the list', hint: 'Done when everyone on its list has been reached' },
+    meeting: { label: 'Hold a meeting', btn: 'Record meeting', hint: 'Done when the meeting notes are ready' },
+  };
+  let STEP = null;
+  const stepRef = (kind) => (STEP && STEP.kind === kind && Date.now() - STEP.at < 3_600_000 ? { taskId: STEP.taskId } : {});
+  const stepUsed = (kind) => { if (STEP?.kind === kind) STEP = null; };
+  // Files the steps it waited for left behind (a signed copy, photos that came in): handed over to this one.
+  const handedFiles = (t) => (t.blockedBy || []).map(taskById).filter((x) => x?.done).flatMap(taskFiles);
+  function runStep(t) {
+    const kind = t.action?.kind;
+    const camp = campById(goalById(t.goalId)?.campaignId);
+    STEP = { kind, taskId: t.id, at: Date.now() };
+    if (kind === 'email') {
+      M.campaignId = camp?.id || '';
+      if (!M.subject) M.subject = t.text;
+      openTool('email');
+    } else if (kind === 'sign') {
+      const pdf = [...taskFiles(t), ...handedFiles(t)].find((it) => it.type === 'file' && it.mime === 'application/pdf');
+      if (!pdf) return toast('Put the PDF to sign on this step first, or have an earlier step hand one over', { label: 'Attach it', run: () => pickForTask(t) });
+      openPreview(pdf);
+      toast('Choose “Send for signature”, place the boxes, and send it. This step ticks itself off when it’s signed.');
+    } else if (kind === 'pay') moneySheet(null, 'out', { campaignId: camp?.id || null, note: t.text });
+    else if (kind === 'files') camp?.stackId ? requestSheet(camp.stackId) : toast('This step needs to be in a campaign to collect files.');
+    else if (kind === 'meeting') startRecording(t.text, null).catch((e) => toast(e.message));
+    else if (kind === 'calls') {
+      if (!t.listId) return toast('Put a call list on this step first: drag one onto it, or use ✦ Tools → Find people to reach.');
+      K.listOpen = 'task:' + t.id;
+      openCampaign(camp.id);
+    }
+  }
+  function toolKindMenu(anchor, t) {
+    openMenu(anchor, [
+      { head: 'Done with a tool' },
+      { label: 'No tool: tick it by hand', on: !t.action, run: () => patchTask(t, { action: null }) },
+      ...Object.entries(STEP_KINDS).map(([k, v]) => ({ label: h('span', { class: 'tool-item' }, v.label, h('small', {}, v.hint)), on: t.action?.kind === k, run: () => patchTask(t, { action: { kind: k } }) })),
+    ]);
+  }
   // Sign-off: who has to approve a step before it counts as done. The campaign's owner and admins can too.
   function signersOf(t) {
     if (t.signoff?.memberId) return [t.signoff.memberId];
@@ -9908,7 +9960,8 @@
       h('p', { class: 'day-hint' }, 'They get a private link and don’t need an account. When they sign, the signed copy lands next to this file, with a last page showing who signed, when and from where.'),
     ], async () => {
       const fields = P.fields.map(({ id, type, page, x, y, w, h: ht }) => ({ id, type, page, x, y, w, h: ht }));
-      const x = await api('POST', '/signs', { itemId: it.id, signer: { name: name.value, email: email.value }, message: msg.value, campaignId: camp.value || null, fields });
+      const x = await api('POST', '/signs', { itemId: it.id, signer: { name: name.value, email: email.value }, message: msg.value, campaignId: camp.value || null, fields, ...stepRef('sign') });
+      stepUsed('sign');
       upsertSign(x);
       P.fields = [];
       done();
@@ -11191,15 +11244,16 @@
     sel.value = x?.goalId ? 'g:' + x.goalId : x?.campaignId ? 'c:' + x.campaignId : '';
     return sel;
   }
-  function moneySheet(x, kind) {
+  // preset: a new entry's campaign and note, when it's logged from a step.
+  function moneySheet(x, kind, preset) {
     kind = x?.kind || kind || 'out';
     const amount = h('input', { value: x ? (x.amount / 100).toFixed(2) : '', placeholder: '0.00', inputmode: 'decimal' });
     const day = h('input', { type: 'date', value: x?.day || todayKey() });
     const cat = catInput(kind, x?.category);
-    const note = h('input', { value: x?.note || '', placeholder: kind === 'in' ? 'Who paid, what for' : 'Where, what for' });
+    const note = h('input', { value: x?.note || preset?.note || '', placeholder: kind === 'in' ? 'Who paid, what for' : 'Where, what for' });
     const mine = !x || x.memberId === S.me?.memberId;
     const scope = h('select', { disabled: !mine || !amOwner() }, h('option', { value: 'personal' }, 'Personal · only you'), h('option', { value: 'business', selected: (x?.scope || (billScope === 'business' ? 'business' : 'personal')) === 'business' }, 'Business · shared with owners'));
-    const tag = tagSelect(x);
+    const tag = tagSelect(x || preset);
     const del = x ? h('button', { class: 'btn small danger', 'data-label': '1' }, 'Delete') : null;
     del?.addEventListener('click', () => confirmClick(del, async () => {
       await api('DELETE', '/money/' + x.id).catch((e) => toast(e.message));
@@ -11217,7 +11271,8 @@
     ], async () => {
       const t = tag.value;
       const body = { kind, amount: amount.value, day: day.value, category: cat.value, note: note.value, goalId: t.startsWith('g:') ? t.slice(2) : null, campaignId: t.startsWith('c:') ? t.slice(2) : null, ...(mine ? { scope: scope.value } : {}) };
-      const y = x ? await api('PATCH', '/money/' + x.id, body) : await api('POST', '/money', body);
+      const y = x ? await api('PATCH', '/money/' + x.id, body) : await api('POST', '/money', { ...body, ...stepRef('pay') });
+      if (!x) stepUsed('pay');
       S.money = [...(S.money || []).filter((z) => z.id !== y.id), y];
       if (!x && y.day.slice(0, 7) !== FIN.month) FIN.month = y.day.slice(0, 7);
       renderTool();
@@ -11422,7 +11477,8 @@
     await ctx.resume().catch(() => {});
     let meeting;
     try {
-      meeting = await api('POST', '/meetings', { title, entryId, mic: true, call: !!call });
+      meeting = await api('POST', '/meetings', { title, entryId, mic: true, call: !!call, ...stepRef('meeting') });
+      stepUsed('meeting');
     } catch (e) {
       for (const st of [mic, call].filter(Boolean)) st.getTracks().forEach((t) => t.stop());
       ctx.close();
@@ -11801,7 +11857,8 @@
       }
       sendBtn.disabled = true;
       try {
-        const x = await api('POST', '/mail/sends', { ...payload(), campaignId: camp.value || null, to });
+        const x = await api('POST', '/mail/sends', { ...payload(), campaignId: camp.value || null, to, ...stepRef('email') });
+      stepUsed('email');
         S.mail.sends = [x, ...S.mail.sends.filter((y) => y.id !== x.id)];
         Object.assign(M, { to: [], subject: '', body: '', armed: false, preview: false });
         toast(`Sending ${x.total} emails`);
