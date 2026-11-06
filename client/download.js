@@ -1,6 +1,6 @@
 // The download page: points each visitor at the build for their device.
 (() => {
-  const RELEASES = 'https://github.com/whirleyjoshua-netizen/Kloomie/releases/latest/download/';
+  const RELEASES = 'https://github.com/whirleyjoshua-netizen/Column/releases/latest/download/';
   const $ = (s) => document.querySelector(s);
   for (const a of document.querySelectorAll('[data-file]')) a.href = RELEASES + a.dataset.file;
 
