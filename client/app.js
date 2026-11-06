@@ -267,7 +267,8 @@
     f.workspace.value = S.adding ? '' : store.get('lastWorkspace', '');
     $('#loginBack').classList.toggle('hidden', !S.adding);
     if (S.adding) $('#loginBack').textContent = 'Back to ' + (S.workspace?.name || 'your team');
-    setLoginMode(S.invite ? 'invite' : 'signin');
+    // The website's "Start free trial" opens here with ?start=1.
+    setLoginMode(S.invite ? 'invite' : !S.adding && new URLSearchParams(location.search).has('start') ? 'create' : 'signin');
     if (S.invite) f.email.value = S.invite.email;
     // Forgot password only shows when this server can send email.
     fetch('/api/health').then((r) => r.json()).then((x) => { S.mailOn = !!x.mail; setLoginMode(S.loginMode); }).catch(() => {});

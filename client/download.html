@@ -69,8 +69,9 @@
       <h2>Opening it the first time on a Mac</h2>
       <ol>
         <li>Open the downloaded file and drag <b>Kloomie</b> into <b>Applications</b>.</li>
-        <li>Open Kloomie. If macOS says it can't check it, go to <b>System Settings → Privacy &amp; Security</b>, scroll down and click <b>Open Anyway</b>.</li>
+        <li>Open Kloomie. If macOS says it “is damaged” or can’t be checked, open <b>Terminal</b>, paste the line below, press Return, and open Kloomie again.</li>
       </ol>
+      <p><code>xattr -cr /Applications/Kloomie.app</code></p>
       <p class="muted">You only do this once. Kloomie lives in your menu bar; ⌘⇧Space shows or hides it.</p>
     </section>
 

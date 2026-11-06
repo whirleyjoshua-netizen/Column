@@ -6523,14 +6523,35 @@ function movedTo(req, url) {
   return PUBLIC_URL + url.pathname + url.search;
 }
 
+// The website lives on the bare domain (kloomie.com when the app is app.kloomie.com; SITE_HOST to change it):
+// its home page, the legal pages, downloads and images. www goes to the bare domain, and any other page there
+// opens in the app. /welcome shows the home page on any address, for a look before the domain points here.
+const SITE_HOST = (process.env.SITE_HOST ?? (HOME_HOST.startsWith('app.') ? HOME_HOST.slice(4) : '')).toLowerCase();
+const SITE_PAGES = new Set(['/', '/welcome', '/terms', '/privacy', '/download', '/get']);
+function siteMove(req, url) {
+  const host = String(req.headers.host || '').toLowerCase();
+  if (!SITE_HOST || url.pathname.startsWith('/api/')) return null;
+  if (host === 'www.' + SITE_HOST) return `https://${SITE_HOST}${url.pathname}${url.search}`;
+  if (host !== SITE_HOST || SITE_PAGES.has(url.pathname) || path.extname(url.pathname)) return null;
+  return PUBLIC_URL + url.pathname + url.search;
+}
+const onSite = (req) => !!SITE_HOST && String(req.headers.host || '').toLowerCase() === SITE_HOST;
+function serveSite(req, res) {
+  fs.readFile(path.join(CLIENT_DIR, 'site.html'), 'utf8', (err, html) => {
+    if (err) return send(res, 404, 'Not found');
+    send(res, 200, html.replaceAll('{{APP}}', PUBLIC_URL), { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache', 'Content-Security-Policy': "script-src 'none'; object-src 'none'; base-uri 'none'" });
+  });
+}
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://x');
-  const moved = movedTo(req, url);
+  const moved = movedTo(req, url) || siteMove(req, url);
   if (moved) {
     // Temporary (302/307, not remembered by browsers), so the move can be undone; 307 keeps a form's POST a POST.
     res.writeHead(req.method === 'GET' || req.method === 'HEAD' ? 302 : 307, { Location: moved, 'Cache-Control': 'no-store' });
     return res.end();
   }
+  if (url.pathname === '/welcome' || (url.pathname === '/' && onSite(req))) return serveSite(req, res);
   if (url.pathname.startsWith('/api/')) {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, Range');
