@@ -1630,10 +1630,11 @@ function deleteTask(t) {
   const priv = campaignOf('task', t) && db.campaigns[campaignOf('task', t)]?.private;
   for (const e of Object.values(db.entries)) {
     if (e.taskId !== t.id) continue;
-    if (priv) {
-      // Its slot on the schedule was private too, so it goes rather than turning visible.
+    if (priv || !e.done) {
+      // Time set aside for it goes with it (a private one would turn visible otherwise). A done block stays as a record.
       delete db.entries[e.id];
       broadcast(t.wsId, { type: 'entry:remove', id: e.id, forMember: e.memberId });
+      pushEntry(e, 'delete');
     } else {
       e.taskId = null;
       broadcast(t.wsId, { type: 'entry', entry: publicEntry(e) });

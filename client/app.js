@@ -3715,7 +3715,9 @@
 
   function campaignList() {
     // Sub-campaigns sit under their main campaign's card; on their own when the main one isn't shown.
-    const shownAll = [...S.campaigns].filter((c) => !K.mine || c.assigneeId === S.me?.memberId).sort((a, b) => (a.end || '9999') < (b.end || '9999') ? -1 : 1);
+    // "Assigned to me" only applies while its switch shows, so a remembered choice can't hide every campaign.
+    const mineOn = K.mine && S.campaigns.some((c) => c.assigneeId);
+    const shownAll = [...S.campaigns].filter((c) => !mineOn || c.assigneeId === S.me?.memberId).sort((a, b) => (a.end || '9999') < (b.end || '9999') ? -1 : 1);
     const all = shownAll.filter((c) => !parentOf(c) || !shownAll.includes(parentOf(c)));
     const subRows = (c) => {
       const subs = shownAll.filter((x) => x.parentId === c.id);
@@ -3740,9 +3742,9 @@
     return h('div', { class: 'camp-list' },
       h('div', { class: 'camp-h' }, h('b', {}, 'Campaigns'), h('button', { class: 'btn small primary-btn', onclick: () => campaignSheet() }, '+ New')),
       S.campaigns.some((c) => c.assigneeId) ? h('div', { class: 'seg mine-seg' },
-        h('button', { class: K.mine ? '' : 'on', onclick: () => setMine(false) }, 'All campaigns'),
-        h('button', { class: K.mine ? 'on' : '', onclick: () => setMine(true) }, 'Assigned to me')) : null,
-      live.length ? live.map(card) : h('p', { class: 'day-hint camp-empty' }, K.mine ? 'Nothing assigned to you right now.' : done.length ? 'Nothing running right now.' : 'A campaign is a project with goals, and goals are made of tasks. Make one for an outreach push, a launch, anything with a finish line.'),
+        h('button', { class: mineOn ? '' : 'on', onclick: () => setMine(false) }, 'All campaigns'),
+        h('button', { class: mineOn ? 'on' : '', onclick: () => setMine(true) }, 'Assigned to me')) : null,
+      live.length ? live.map(card) : h('p', { class: 'day-hint camp-empty' }, mineOn ? 'Nothing assigned to you right now.' : done.length ? 'Nothing running right now.' : 'A campaign is a project with goals, and goals are made of tasks. Make one for an outreach push, a launch, anything with a finish line.'),
       done.length ? h('details', { class: 'camp-done' }, h('summary', {}, `Finished · ${done.length}`), done.map(card)) : null,
       tpls.length ? h('div', { class: 'any-h camp-goals-h' }, 'Saved campaigns') : null,
       tpls.map(templateRow));

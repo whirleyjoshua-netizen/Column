@@ -42,5 +42,20 @@ ok(r.body.budget === null && !('budgetSpent' in r.body), 'clearing it takes the 
 r = await jo('PATCH', '/campaigns/' + c.id, { budget: '0' });
 ok(r.body.budget === null, 'a budget of 0 takes it away too');
 
+// Deleting a campaign takes its tasks off the schedule too: blocks set aside for them go, done ones stay as a record.
+r = await jo('POST', '/campaigns', { name: 'Gone soon', start: today });
+const gone = r.body;
+const goal = (await jo('POST', '/goals', { campaignId: gone.id, title: 'Calls', kind: 'tasks' })).body;
+const t1 = (await jo('POST', '/tasks', { goalId: goal.id, text: 'Call Sam', due: today })).body;
+const t2 = (await jo('POST', '/tasks', { goalId: goal.id, text: 'Call Ana', due: today })).body;
+const open = (await jo('POST', '/entries', { text: 'Call Sam', date: today, start: 600, end: 630, taskId: t1.id })).body;
+const did = (await jo('POST', '/entries', { text: 'Call Ana', date: today, start: 540, end: 570, taskId: t2.id, done: true })).body;
+ok(open.taskId === t1.id && did.taskId === t2.id, 'blocks on the day are linked to campaign tasks');
+r = await jo('DELETE', '/campaigns/' + gone.id);
+st = (await jo('GET', '/state')).body;
+ok(r.status === 200 && !st.tasks.some((x) => x.id === t1.id || x.id === t2.id), 'deleting the campaign deletes its tasks');
+ok(!st.entries.some((x) => x.id === open.id), 'a block set aside for one of its tasks leaves the day');
+ok(st.entries.some((x) => x.id === did.id && !x.taskId), 'a done block stays, unlinked');
+
 console.log(fails ? fails + ' failed' : 'all passed');
 process.exit(fails ? 1 : 0);
