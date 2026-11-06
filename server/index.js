@@ -6523,15 +6523,15 @@ function movedTo(req, url) {
   return PUBLIC_URL + url.pathname + url.search;
 }
 
-// The website lives on the bare domain (kloomie.com when the app is app.kloomie.com; SITE_HOST to change it):
-// its home page, the legal pages, downloads and images. www goes to the bare domain, and any other page there
-// opens in the app. /welcome shows the home page on any address, for a look before the domain points here.
-const SITE_HOST = (process.env.SITE_HOST ?? (HOME_HOST.startsWith('app.') ? HOME_HOST.slice(4) : '')).toLowerCase();
+// The website lives on www of the app's domain (www.kloomie.com when the app is app.kloomie.com; SITE_HOST to
+// change it): its home page, the legal pages, downloads and images. The bare domain goes to it, and any other page
+// there opens in the app. /welcome shows the home page on any address, for a look before the domain points here.
+const SITE_HOST = (process.env.SITE_HOST ?? (HOME_HOST.startsWith('app.') ? 'www.' + HOME_HOST.slice(4) : '')).toLowerCase();
 const SITE_PAGES = new Set(['/', '/welcome', '/terms', '/privacy', '/download', '/get']);
 function siteMove(req, url) {
   const host = String(req.headers.host || '').toLowerCase();
   if (!SITE_HOST || url.pathname.startsWith('/api/')) return null;
-  if (host === 'www.' + SITE_HOST) return `https://${SITE_HOST}${url.pathname}${url.search}`;
+  if (host === SITE_HOST.replace(/^www\./, '') && host !== SITE_HOST) return `https://${SITE_HOST}${url.pathname}${url.search}`;
   if (host !== SITE_HOST || SITE_PAGES.has(url.pathname) || path.extname(url.pathname)) return null;
   return PUBLIC_URL + url.pathname + url.search;
 }
