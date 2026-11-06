@@ -967,6 +967,14 @@ body.viewer .preview pre, body.viewer .preview .pv-edit, body.viewer .preview .d
 .fin-filter { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 0 0 10px; padding: 4px 4px 4px 10px; border-radius: 8px; background: var(--accent-soft); font-size: 12.5px; }
 .camp-money { display: flex; flex-wrap: wrap; gap: 14px; margin: 6px 0 2px; font-size: 12.5px; color: var(--muted); cursor: pointer; font-variant-numeric: tabular-nums; }
 .camp-money b { color: var(--text); }
+.camp-budget { margin: 8px 0 2px; font-size: 12.5px; color: var(--muted); cursor: pointer; font-variant-numeric: tabular-nums; }
+.camp-budget .cb-top { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 4px 12px; margin-bottom: 5px; }
+.camp-budget b { color: var(--text); }
+.cb-bar { position: relative; height: 6px; border-radius: 99px; background: var(--line); }
+.cb-bar i { display: block; height: 100%; border-radius: 99px; background: var(--ok, #3ddc97); }
+.cb-bar u { position: absolute; top: -3px; width: 2px; height: 12px; margin-left: -1px; border-radius: 1px; background: var(--text); opacity: .45; }
+.camp-budget.fast .cb-bar i { background: #f5a524; } .camp-budget.fast small { color: #d38b10; }
+.camp-budget.over .cb-bar i { background: var(--danger, #e5484d); } .camp-budget.over small { color: var(--danger, #e5484d); }
 .row3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
 .sheet .hint { font-size: 11px; color: var(--muted); }
 .stmt-rows { max-height: 42vh; overflow-y: auto; border: 1px solid var(--line); border-radius: 10px; }

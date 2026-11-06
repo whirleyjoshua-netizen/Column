@@ -3664,6 +3664,22 @@
     }
   }
   const bar = (frac, color) => h('div', { class: 'pbar c-' + (color || 'violet') }, h('i', { style: `width:${Math.round(frac * 100)}%` }));
+  // A campaign's budget: what's been spent on it (and its sub-campaigns) against the budget, and whether
+  // spending is running ahead of the calendar. The tick on the bar is where spending would be at an even pace.
+  function campBudget(c) {
+    const spent = c.budgetSpent || 0;
+    const used = spent / c.budget;
+    const days = c.start && c.end ? (Date.parse(c.end) - Date.parse(c.start)) / 864e5 + 1 : 0;
+    const gone = days ? Math.min(1, Math.max(0, ((Date.parse(todayKey()) - Date.parse(c.start)) / 864e5 + 1) / days)) : null;
+    const state = used > 1 ? 'over' : gone != null && used > 0.25 && used > gone + 0.1 ? 'fast' : 'ok';
+    const pct = (n) => Math.round(n * 100) + '%';
+    const note = state === 'over' ? `${money(spent - c.budget)} over budget`
+      : state === 'fast' ? `Spending is ahead: ${pct(used)} spent, ${pct(gone)} of the time gone`
+      : [`${money(c.budget - spent)} left`, gone != null ? `${pct(gone)} of the time gone` : ''].filter(Boolean).join(' · ');
+    return h('div', { class: 'camp-budget ' + state, title: 'Money out tagged to this campaign in Finance', onclick: () => { FIN.tab = 'flow'; FIN.campaign = c.id; openTool('bills'); } },
+      h('div', { class: 'cb-top' }, h('span', {}, 'Budget ', h('b', {}, `${money(spent)} of ${money(c.budget)}`)), h('small', {}, note)),
+      h('div', { class: 'cb-bar' }, h('i', { style: `width:${Math.min(100, used * 100)}%` }), gone != null && state !== 'over' ? h('u', { style: `left:${gone * 100}%` }) : null));
+  }
   function campDates(c) {
     const f = (k) => keyDate(k).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
     const range = c.start && c.end ? `${f(c.start)} – ${f(c.end)}` : c.start ? `From ${f(c.start)}` : c.end ? `Until ${f(c.end)}` : '';
@@ -3716,7 +3732,7 @@
       return h('div', { class: 'camp-card-wrap c-' + c.color }, h('button', { class: 'camp-card c-' + c.color + (c.status === 'paused' ? ' paused' : ''), onclick: () => openCampaign(c.id) },
         h('div', { class: 'cc-top' }, h('b', {}, c.name), c.private ? h('span', { class: 'cc-lock', html: I.lock, title: 'Private' }) : null, h('span', { class: 'cc-pct' }, Math.round(p * 100) + '%')),
         bar(p, c.color),
-        h('div', { class: 'cc-sub' }, [parentOf(c) ? 'Part of ' + parentOf(c).name : '', c.assigneeId ? '→ ' + memberName(c.assigneeId) : '', campDates(c), `${gs.length} goal${gs.length === 1 ? '' : 's'}`, subs ? plural(subs, 'sub-campaign') : '', mine ? `${mine} for you` : '', c.status === 'paused' ? 'paused' : ''].filter(Boolean).join(' · '))),
+        h('div', { class: 'cc-sub' }, [parentOf(c) ? 'Part of ' + parentOf(c).name : '', c.assigneeId ? '→ ' + memberName(c.assigneeId) : '', campDates(c), `${gs.length} goal${gs.length === 1 ? '' : 's'}`, subs ? plural(subs, 'sub-campaign') : '', mine ? `${mine} for you` : '', c.budget && c.budgetSpent > c.budget ? 'over budget' : '', c.status === 'paused' ? 'paused' : ''].filter(Boolean).join(' · '))),
         subRows(c));
     };
     const setMine = (on) => { K.mine = on; store.set('campsMine', on); renderCamps(); };
@@ -3867,8 +3883,9 @@
         c.inOrder ? h('span', { class: 'pill', title: 'Goals and tasks open one at a time, top to bottom' }, 'In order') : null,
         who ? h('span', { class: 'pill', title: who.map(memberName).join(', ') }, h('span', { class: 'is-task', html: I.lock }), `Private · ${who.length}`) : null),
       h('div', { class: 'camp-total' }, bar(p, c.color), h('span', {}, Math.round(p * 100) + '%')),
+      c.budget ? campBudget(c) : null,
       c.money ? h('div', { class: 'camp-money', onclick: () => { FIN.tab = 'flow'; FIN.campaign = c.id; openTool('bills'); } },
-        c.money.spent ? h('span', {}, 'Spent ', h('b', {}, money(c.money.spent))) : null,
+        c.money.spent && !c.budget ? h('span', {}, 'Spent ', h('b', {}, money(c.money.spent))) : null,
         c.money.earned ? h('span', {}, 'Brought in ', h('b', {}, money(c.money.earned))) : null,
         c.money.spent && c.money.earned ? h('span', { class: c.money.earned >= c.money.spent ? 'up' : 'down' }, c.money.earned >= c.money.spent ? `+${money(c.money.earned - c.money.spent)}` : `−${money(c.money.spent - c.money.earned)}`) : null) : null,
       brief,
@@ -5318,6 +5335,7 @@
       { label: 'Edit details…', run: () => campaignSheet(c) },
       ...(c.parentId ? [] : [{ label: 'Add a sub-campaign…', run: () => campaignSheet(null, c) }]),
       { label: c.assigneeId ? `Responsible: ${memberName(c.assigneeId)}…` : 'Assign to…', run: () => assignCampaignMenu(anchor, c) },
+      { label: c.budget ? `Budget: ${money(c.budget)}…` : 'Set a budget…', run: () => campaignSheet(c, null, 'budget') },
       { label: 'Save to run again…', run: () => saveTemplate(c) },
       { label: 'What to log & follow-ups…', run: () => outcomesSheet(c) },
       ...(canPass(c) ? [{ label: c.inOrder ? 'Stop working in order' : 'Work in order (one step at a time)', on: !!c.inOrder, run: () => api('PATCH', '/campaigns/' + c.id, { inOrder: !c.inOrder }).catch((e) => toast(e.message)) }] : []),
@@ -5361,7 +5379,7 @@
   }
 
   // main: a new campaign's main campaign, when it's made as a sub-campaign.
-  function campaignSheet(c, main) {
+  function campaignSheet(c, main, focus) {
     const name = h('input', { value: c?.name || '', placeholder: main ? 'Dealerships' : 'Q4 outreach' });
     // Part of a bigger campaign. Only main campaigns can be picked, and one with subs of its own can't go under another.
     const mains = S.campaigns.filter((x) => !x.parentId && x.id !== c?.id && x.status !== 'done');
@@ -5386,17 +5404,19 @@
     const people = h('div', { class: 'picks' + (priv.checked ? '' : ' hidden') }, picks.length ? picks : h('small', {}, 'Nobody else on the team yet.'));
     priv.addEventListener('change', () => people.classList.toggle('hidden', !priv.checked));
     const who = assigneeSelect(c?.assigneeId);
+    const budget = h('input', { inputmode: 'decimal', placeholder: 'e.g. 2,000', value: c?.budget ? String(c.budget / 100) : '' });
     sheet(c ? 'Campaign details' : main ? `New sub-campaign of ${main.name}` : 'New campaign', [
       h('label', {}, 'Name', name),
       h('label', {}, 'Brief', brief),
       c && subsOf(c).length ? null : h('label', {}, 'Part of', partOf),
       h('div', { class: 'row2' }, h('label', {}, 'Starts', start), h('label', {}, 'Ends (optional)', end)),
+      h('label', {}, 'Budget (optional)', budget, h('small', { class: 'day-hint' }, 'Money out tagged to this campaign in Finance counts against it, sub-campaigns included.')),
       h('label', {}, 'Color', sw),
       h('label', {}, 'Responsible', who),
       owner ? h('label', { class: 'pick' }, priv, 'Private: only people I choose can see it') : (c?.private ? h('small', { class: 'day-hint' }, 'Private. The campaign owner chooses who sees it.') : null),
       owner ? people : null,
     ], async () => {
-      const body = { name: name.value, brief: brief.value, start: start.value || null, end: end.value || null, color, assigneeId: who.value || null, ...(c && subsOf(c).length ? {} : { parentId: partOf.value || null }) };
+      const body = { name: name.value, brief: brief.value, start: start.value || null, end: end.value || null, budget: budget.value.trim() || null, color, assigneeId: who.value || null, ...(c && subsOf(c).length ? {} : { parentId: partOf.value || null }) };
       if (owner) Object.assign(body, { private: priv.checked, memberIds: picks.map((l) => l.firstChild).filter((cb) => cb.checked).map((cb) => cb.value) });
       const saved = c ? await api('PATCH', '/campaigns/' + c.id, body) : await api('POST', '/campaigns', body);
       const i = S.campaigns.findIndex((x) => x.id === saved.id);
@@ -5404,6 +5424,7 @@
       else S.campaigns.push(saved);
       openCampaign(saved.id);
     }, c ? 'Save' : 'Create');
+    if (focus === 'budget') budget.focus();
   }
 
   function goalSheet(c, g) {

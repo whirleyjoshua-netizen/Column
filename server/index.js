@@ -1414,7 +1414,9 @@ function campMoney(id) {
   for (const x of Object.values(db.money)) if (x.campaignId === id) x.kind === 'in' ? (earned += x.amount) : (spent += x.amount);
   return spent || earned ? { spent, earned } : null;
 }
-const publicCampaign = ({ wsId, ...c }) => ({ ...c, followUps: followUpsOf(c), money: campMoney(c.id) });
+// A campaign's budget (cents) is measured against what's been spent on it and on its sub-campaigns.
+const budgetSpent = (c) => [c, ...subsOf(c)].reduce((n, x) => n + (campMoney(x.id)?.spent || 0), 0);
+const publicCampaign = ({ wsId, ...c }) => ({ ...c, followUps: followUpsOf(c), money: campMoney(c.id), ...(c.budget ? { budgetSpent: budgetSpent(c) } : {}) });
 // A money goal fills from Finance: money in tagged to it, less money out.
 const goalSaved = (id) => Object.values(db.money).reduce((n, x) => (x.goalId === id ? n + (x.kind === 'in' ? x.amount : -x.amount) : n), 0);
 const publicGoal = ({ wsId, ...g }) => (g.kind === 'money' ? { ...g, saved: goalSaved(g.id) } : g);
@@ -1432,6 +1434,11 @@ function applyCampaign(c, body, ws, auth) {
     c[k] = body[k] || null;
   }
   if (body.color !== undefined) c.color = COLORS.includes(body.color) ? body.color : 'violet';
+  // What it may spend, from Finance entries tagged to it. Blank or 0 takes the budget away.
+  if (body.budget !== undefined) {
+    const v = String(body.budget ?? '').replace(/[$,\s]/g, '');
+    c.budget = v === '' || Number(v) === 0 ? null : cents(v, 'the budget, like 2,000');
+  }
   if (body.status !== undefined && ['active', 'paused', 'done'].includes(body.status)) c.status = body.status;
   if (body.lastReportAt !== undefined) c.lastReportAt = Number(body.lastReportAt) || null;
   if (body.outcomes !== undefined) {
@@ -2505,6 +2512,9 @@ function moneyTouches(x, ws) {
   if (g) broadcast(x.wsId, { type: 'goal', goal: publicGoal(g) });
   const c = x.campaignId && db.campaigns[x.campaignId];
   if (c) broadcast(x.wsId, { type: 'campaign', campaign: publicCampaign(c) });
+  // A sub-campaign's spending counts against the main campaign's budget.
+  const main = c?.parentId && db.campaigns[c.parentId];
+  if (main?.budget) broadcast(x.wsId, { type: 'campaign', campaign: publicCampaign(main) });
 }
 function moneyNews(x) {
   broadcast(x.wsId, { type: 'money', money: publicMoney(x), bill: x });
