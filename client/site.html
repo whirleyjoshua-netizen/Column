@@ -3,147 +3,203 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>Kloomie: files, tasks, calls and email for small teams</title>
-  <meta name="description" content="Kloomie keeps a small team's files, day, calls, email, contacts, docs and signatures in one place, live on every computer and phone. 14 days free, then $15 per person a month.">
-  <meta property="og:title" content="Kloomie">
-  <meta property="og:description" content="Your team's work in one column, live on every device. 14 days free, no card.">
-  <meta property="og:image" content="{{APP}}/mascot.png">
+  <title>Kloomie: the all-in-one team app for small businesses</title>
+  <meta name="description" content="Share files, plan the day, run call lists, email customers from Gmail or Outlook, and get documents signed. One app for small business teams, on every device. 14 days free.">
+  <link rel="canonical" href="{{SITE}}/">
+  <meta name="robots" content="index, follow, max-image-preview:large">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="Kloomie">
+  <meta property="og:url" content="{{SITE}}/">
+  <meta property="og:title" content="Kloomie: the all-in-one team app for small businesses">
+  <meta property="og:description" content="Files, calls, email, contacts, docs and signatures for small business teams, live on every device. 14 days free, no card.">
+  <meta property="og:image" content="{{SITE}}/og.jpg">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="Kloomie: your team’s work, in one column">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Kloomie: the all-in-one team app for small businesses">
+  <meta name="twitter:description" content="Files, calls, email, contacts, docs and signatures for small business teams. 14 days free.">
+  <meta name="twitter:image" content="{{SITE}}/og.jpg">
   <link rel="icon" href="/favicon.png">
   <link rel="apple-touch-icon" href="/apple-touch-icon.png">
-  <meta name="theme-color" content="#0b0a12">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&display=swap" rel="stylesheet">
+  <meta name="theme-color" content="#ffffff">
+  <link rel="preload" as="image" href="/mascot.webp" type="image/webp" fetchpriority="high">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@graph": [
+      {
+        "@type": "Organization",
+        "@id": "{{SITE}}/#org",
+        "name": "Kloomie",
+        "legalName": "Cultural Architects Collective LLC",
+        "url": "{{SITE}}/",
+        "logo": "{{SITE}}/icon-512.png",
+        "email": "hello@kloomie.com",
+        "contactPoint": { "@type": "ContactPoint", "contactType": "customer support", "email": "hello@kloomie.com" }
+      },
+      {
+        "@type": "WebSite",
+        "@id": "{{SITE}}/#site",
+        "url": "{{SITE}}/",
+        "name": "Kloomie",
+        "publisher": { "@id": "{{SITE}}/#org" }
+      },
+      {
+        "@type": "SoftwareApplication",
+        "name": "Kloomie",
+        "url": "{{SITE}}/",
+        "image": "{{SITE}}/og.jpg",
+        "applicationCategory": "BusinessApplication",
+        "operatingSystem": "Web, macOS, Windows, iOS, Android",
+        "description": "An all-in-one team app for small businesses: file sharing across devices, a daily planner with Google and Outlook calendar sync, call lists, email campaigns from Gmail or Outlook, contacts, documents and e-signatures, and bills and budgets.",
+        "publisher": { "@id": "{{SITE}}/#org" },
+        "offers": {
+          "@type": "Offer",
+          "price": "15.00",
+          "priceCurrency": "USD",
+          "url": "{{SITE}}/#pricing",
+          "priceSpecification": { "@type": "UnitPriceSpecification", "price": "15.00", "priceCurrency": "USD", "unitText": "per user per month", "billingDuration": "P1M" }
+        }
+      },
+      {
+        "@type": "FAQPage",
+        "mainEntity": [
+          { "@type": "Question", "name": "Do I need a card to try Kloomie?", "acceptedAnswer": { "@type": "Answer", "text": "No. Create a team and use everything for 14 days. When you’re ready, the owner subscribes in Settings, Team, Billing." } },
+          { "@type": "Question", "name": "What happens when the free trial ends?", "acceptedAnswer": { "@type": "Answer", "text": "If nobody subscribes, the team becomes read-only. Everyone can still sign in, look at everything and export it, and nothing is deleted." } },
+          { "@type": "Question", "name": "Who pays, the company or each person?", "acceptedAnswer": { "@type": "Answer", "text": "The company. One subscription covers the whole team at $15 per person a month, paid by the owner." } },
+          { "@type": "Question", "name": "Does Kloomie work on phones?", "acceptedAnswer": { "@type": "Answer", "text": "Yes. Open Kloomie in Safari or Chrome and add it to your home screen. There are desktop apps for Mac and Windows too." } },
+          { "@type": "Question", "name": "Can I send email from my own address?", "acceptedAnswer": { "@type": "Answer", "text": "Yes. Connect Outlook or Gmail and campaign email goes out from your own mailbox. Kloomie only asks for permission to send, not to read your inbox." } },
+          { "@type": "Question", "name": "Does Kloomie use AI?", "acceptedAnswer": { "@type": "Answer", "text": "Where it helps, such as drafting a campaign from a brief or writing up meeting notes. It always shows a draft and changes nothing until you accept it." } }
+        ]
+      }
+    ]
+  }
+  </script>
   <style>
-    /* The site is dark on purpose: the brand is a glowing purple check, and the mascot's glow needs a dark sky. */
     :root {
-      --bg: #0b0a12; --bg2: #110f1c; --panel: #161423; --panel2: #1d1a2e; --line: #2a2640; --line2: #3a3456;
-      --text: #f1effa; --muted: #a29fb8; --dim: #77738f;
-      --accent: #8b6cff; --accent2: #b49bff; --glow: rgba(139, 108, 255, .45); --ok: #5ad19a;
-      --display: "Bricolage Grotesque", system-ui, -apple-system, "Segoe UI", sans-serif;
-      color-scheme: dark;
+      --bg: #ffffff; --soft: #f7f6fb; --soft2: #f1eefb; --line: #eae7f2; --line2: #dcd7ea;
+      --text: #14121f; --muted: #5d5a70; --dim: #8a879c;
+      --accent: #6b4cf0; --accent-ink: #5537d6; --tint: rgba(107, 76, 240, .08); --ok: #12945a;
+      color-scheme: light;
     }
     * { box-sizing: border-box; }
     html { scroll-behavior: smooth; }
-    body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif; overflow-x: hidden; }
-    a { color: var(--accent2); }
+    body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; -webkit-font-smoothing: antialiased; overflow-x: hidden; }
+    a { color: var(--accent-ink); }
     img { max-width: 100%; height: auto; display: block; }
     .wrap { max-width: 1120px; margin: 0 auto; padding: 0 16px; }
     .ico { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 
     /* ---------- nav ---------- */
-    header { position: sticky; top: 0; z-index: 10; background: rgba(11, 10, 18, .72); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); border-bottom: 1px solid rgba(255,255,255,.05); }
+    header { position: sticky; top: 0; z-index: 10; background: rgba(255, 255, 255, .85); backdrop-filter: saturate(1.4) blur(12px); -webkit-backdrop-filter: saturate(1.4) blur(12px); border-bottom: 1px solid var(--line); }
     nav { display: flex; align-items: center; gap: 24px; height: 64px; }
-    .brand { display: flex; align-items: center; gap: 9px; color: var(--text); text-decoration: none; font: 800 21px/1 var(--display); letter-spacing: -.02em; }
-    .brand img { width: 30px; height: 30px; }
+    .brand { display: flex; align-items: center; gap: 9px; color: var(--text); text-decoration: none; font-weight: 750; font-size: 20px; letter-spacing: -.02em; }
+    .brand img { width: 28px; height: 28px; }
     nav .links { display: flex; gap: 22px; margin-left: auto; align-items: center; font-size: 15px; }
-    nav .links a:not(.btn) { color: var(--muted); text-decoration: none; transition: color .15s; }
+    nav .links a:not(.btn) { color: var(--muted); text-decoration: none; }
     nav .links a:not(.btn):hover { color: var(--text); }
     @media (max-width: 760px) { nav .links .hide-s { display: none; } nav .links { gap: 14px; } }
 
-    .btn { display: inline-flex; align-items: center; gap: 8px; justify-content: center; background: linear-gradient(180deg, #9a7fff, #7a58f5); color: #fff; text-decoration: none; font-weight: 650; border-radius: 12px; padding: 13px 22px; box-shadow: 0 0 0 1px rgba(255,255,255,.12) inset, 0 10px 30px -10px var(--glow); transition: transform .15s, box-shadow .15s; }
-    .btn:hover { transform: translateY(-1px); box-shadow: 0 0 0 1px rgba(255,255,255,.18) inset, 0 14px 36px -10px var(--glow); }
-    .btn.small { padding: 8px 14px; font-size: 14px; border-radius: 10px; }
-    .btn.ghost { background: rgba(255,255,255,.04); box-shadow: 0 0 0 1px var(--line2) inset; color: var(--text); }
-    .btn.ghost:hover { background: rgba(255,255,255,.07); }
+    .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; background: var(--accent); color: #fff; text-decoration: none; font-weight: 600; border-radius: 10px; padding: 13px 22px; box-shadow: 0 1px 2px rgba(20,18,31,.12), 0 8px 20px -10px rgba(107,76,240,.6); transition: background .15s, transform .15s; }
+    .btn:hover { background: var(--accent-ink); transform: translateY(-1px); }
+    .btn.small { padding: 8px 14px; font-size: 14px; border-radius: 9px; }
+    .btn.ghost { background: #fff; color: var(--text); box-shadow: 0 0 0 1px var(--line2) inset, 0 1px 2px rgba(20,18,31,.05); }
+    .btn.ghost:hover { background: var(--soft); }
 
     /* ---------- hero ---------- */
-    .hero { position: relative; isolation: isolate; }
-    .hero::before { content: ""; position: absolute; z-index: -1; inset: -120px -20% auto; height: 760px; background: radial-gradient(50% 55% at 72% 45%, rgba(124, 84, 255, .32), transparent 70%), radial-gradient(35% 40% at 15% 20%, rgba(90, 60, 200, .16), transparent 70%); pointer-events: none; }
-    .hero .wrap { display: grid; grid-template-columns: 1.05fr .95fr; gap: 24px; align-items: center; padding-top: 56px; padding-bottom: 40px; }
-    @media (max-width: 880px) { .hero .wrap { grid-template-columns: 1fr; padding-top: 32px; text-align: center; } .hero .ctas, .hero .trust { justify-content: center; } .hero .lead { margin-left: auto; margin-right: auto; } }
-    .eyebrow { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; color: var(--accent2); background: rgba(139,108,255,.1); border: 1px solid rgba(139,108,255,.25); border-radius: 99px; padding: 5px 12px 5px 8px; margin-bottom: 22px; }
-    .eyebrow i { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 10px var(--ok); }
-    h1 { font: 800 clamp(40px, 6.6vw, 76px)/.98 var(--display); letter-spacing: -.035em; margin: 0 0 22px; }
-    h1 .grad { background: linear-gradient(100deg, #c7b6ff, #8b6cff 55%, #6d4cf0); -webkit-background-clip: text; background-clip: text; color: transparent; }
+    .hero { position: relative; isolation: isolate; border-bottom: 1px solid var(--line); }
+    .hero::before { content: ""; position: absolute; z-index: -1; inset: 0; background: radial-gradient(45% 60% at 75% 45%, #efe9ff, transparent 70%); pointer-events: none; }
+    .hero .wrap { display: grid; grid-template-columns: 1.05fr .95fr; gap: 24px; align-items: center; padding-top: 64px; padding-bottom: 56px; }
+    @media (max-width: 880px) { .hero .wrap { grid-template-columns: 1fr; padding-top: 36px; text-align: center; } .hero .ctas, .hero .trust { justify-content: center; } .hero .lead { margin-left: auto; margin-right: auto; } }
+    .eyebrow { display: inline-block; font-size: 14px; font-weight: 600; color: var(--accent-ink); background: var(--tint); border-radius: 99px; padding: 5px 12px; margin: 0 0 20px; }
+    h1 { font-size: clamp(38px, 6vw, 66px); line-height: 1.03; font-weight: 800; letter-spacing: -.035em; margin: 0 0 22px; }
+    h1 span { color: var(--accent); }
     .lead { font-size: 19px; color: var(--muted); margin: 0 0 30px; max-width: 31em; }
     .ctas { display: flex; gap: 10px; flex-wrap: wrap; }
-    .trust { display: flex; gap: 8px 20px; flex-wrap: wrap; margin-top: 22px; font-size: 14px; color: var(--dim); }
-    .trust span { display: inline-flex; align-items: center; gap: 6px; }
+    .trust { display: flex; gap: 8px 20px; flex-wrap: wrap; margin-top: 22px; font-size: 14px; color: var(--muted); list-style: none; padding: 0; }
+    .trust li { display: inline-flex; align-items: center; gap: 6px; }
     .trust .ico { width: 16px; height: 16px; color: var(--ok); stroke-width: 2.4; }
 
-    .mascot { position: relative; justify-self: center; width: min(640px, 112%); }
-    .mascot::before { content: ""; position: absolute; inset: 8% 14%; border-radius: 50%; background: radial-gradient(closest-side, rgba(139,108,255,.55), rgba(139,108,255,.12) 60%, transparent); filter: blur(30px); z-index: -1; }
-    .mascot img { width: 100%; filter: drop-shadow(0 0 28px rgba(139,108,255,.55)); animation: bob 5s ease-in-out infinite; }
-    .bubble { position: absolute; background: var(--panel); border: 1px solid var(--line2); border-radius: 14px; padding: 9px 13px; font-size: 13px; box-shadow: 0 18px 40px -18px rgba(0,0,0,.8); display: flex; gap: 9px; align-items: center; white-space: nowrap; animation: bob 6s ease-in-out infinite; }
+    .mascot { position: relative; justify-self: center; width: min(600px, 108%); }
+    .mascot img { width: 100%; animation: bob 5s ease-in-out infinite; }
+    .bubble { position: absolute; background: #fff; border: 1px solid var(--line); border-radius: 14px; padding: 9px 13px; font-size: 13px; box-shadow: 0 16px 36px -16px rgba(40,30,90,.28); display: flex; gap: 9px; align-items: center; white-space: nowrap; text-align: left; animation: bob 6s ease-in-out infinite; }
     .bubble b { display: block; font-weight: 600; font-size: 13px; }
     .bubble small { color: var(--muted); font-size: 12px; }
-    .bubble .dot { width: 28px; height: 28px; border-radius: 8px; display: grid; place-items: center; background: rgba(139,108,255,.16); color: var(--accent2); flex: none; }
+    .bubble .dot { width: 28px; height: 28px; border-radius: 8px; display: grid; place-items: center; background: var(--tint); color: var(--accent); flex: none; }
     .bubble .dot .ico { width: 16px; height: 16px; }
     .bubble.a { left: -4%; top: 8%; animation-delay: -2s; }
-    .bubble.b { right: -2%; bottom: 2%; animation-delay: -4s; }
-    .bubble.b .dot { background: rgba(90,209,154,.14); color: var(--ok); }
+    .bubble.b { right: -2%; bottom: 4%; animation-delay: -4s; }
+    .bubble.b .dot { background: rgba(18,148,90,.1); color: var(--ok); }
     @media (max-width: 520px) { .bubble { display: none; } }
-    @keyframes bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-10px); } }
+    @keyframes bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-8px); } }
     @media (prefers-reduced-motion: reduce) { .mascot img, .bubble { animation: none; } .btn { transition: none; } html { scroll-behavior: auto; } }
 
     /* ---------- sections ---------- */
-    section.block { padding: 96px 0; position: relative; scroll-margin-top: 40px; }
-    .kicker { font-size: 13px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; color: var(--accent2); margin: 0 0 12px; }
-    h2 { font: 800 clamp(30px, 4.2vw, 48px)/1.05 var(--display); letter-spacing: -.03em; margin: 0 0 16px; }
+    section.block { padding: 96px 0; scroll-margin-top: 40px; }
+    section.alt { background: var(--soft); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+    .kicker { font-size: 13px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--accent-ink); margin: 0 0 12px; }
+    h2 { font-size: clamp(30px, 4vw, 44px); line-height: 1.1; font-weight: 800; letter-spacing: -.03em; margin: 0 0 16px; }
     .intro { color: var(--muted); font-size: 18px; margin: 0 0 44px; max-width: 36em; }
     .center { text-align: center; }
     .center .intro { margin-left: auto; margin-right: auto; }
 
-    /* features: a bento grid, with the column itself as the big tile */
     .bento { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
-    .tile { background: linear-gradient(180deg, var(--panel), var(--bg2)); border: 1px solid var(--line); border-radius: 20px; padding: 24px; position: relative; overflow: hidden; transition: border-color .2s; }
-    .tile:hover { border-color: var(--line2); }
-    .tile h3 { font: 600 19px/1.2 var(--display); letter-spacing: -.01em; margin: 14px 0 8px; }
+    .tile { background: #fff; border: 1px solid var(--line); border-radius: 18px; padding: 24px; position: relative; overflow: hidden; box-shadow: 0 1px 2px rgba(20,18,31,.04); transition: box-shadow .2s, border-color .2s; }
+    .tile:hover { border-color: var(--line2); box-shadow: 0 14px 34px -20px rgba(40,30,90,.3); }
+    .tile h3 { font-size: 18px; line-height: 1.25; font-weight: 700; letter-spacing: -.01em; margin: 14px 0 8px; }
     .tile p { margin: 0; color: var(--muted); font-size: 15px; }
-    .tile .badge { width: 42px; height: 42px; border-radius: 12px; display: grid; place-items: center; color: var(--accent2); background: rgba(139,108,255,.12); border: 1px solid rgba(139,108,255,.22); }
-    .tile.big { grid-column: span 2; grid-row: span 2; display: flex; flex-direction: column; }
-    .tile.big::after { content: ""; position: absolute; inset: auto -30% -40% -30%; height: 70%; background: radial-gradient(closest-side, rgba(124,84,255,.22), transparent); pointer-events: none; }
+    .badge { width: 42px; height: 42px; border-radius: 12px; display: grid; place-items: center; color: var(--accent); background: var(--tint); flex: none; }
+    .tile.big { grid-column: span 2; grid-row: span 2; display: flex; flex-direction: column; background: linear-gradient(180deg, #fff, var(--soft2)); }
     .tile.wide { grid-column: span 2; }
     @media (max-width: 920px) { .bento { grid-template-columns: repeat(2, 1fr); } .tile.big { grid-row: auto; } }
     @media (max-width: 560px) { .bento { grid-template-columns: 1fr; } .tile.big, .tile.wide { grid-column: auto; } }
 
-    .column { margin-top: 22px; display: grid; gap: 8px; position: relative; z-index: 1; }
-    .card { display: flex; gap: 11px; align-items: center; background: rgba(255,255,255,.03); border: 1px solid var(--line); border-radius: 13px; padding: 10px 12px; font-size: 14px; }
-    .card .ci { width: 34px; height: 34px; border-radius: 9px; display: grid; place-items: center; background: rgba(139,108,255,.14); color: var(--accent2); flex: none; }
+    .column { margin-top: 22px; display: grid; gap: 8px; }
+    .card { display: flex; gap: 11px; align-items: center; background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; font-size: 14px; box-shadow: 0 1px 2px rgba(20,18,31,.04); }
+    .card .ci { width: 34px; height: 34px; border-radius: 9px; display: grid; place-items: center; background: var(--tint); color: var(--accent); flex: none; }
     .card .ci .ico { width: 17px; height: 17px; }
     .card b { display: block; font-weight: 600; }
     .card small { color: var(--muted); font-size: 12px; }
-    .card .tag { margin-left: auto; font-size: 11px; font-weight: 700; color: var(--ok); background: rgba(90,209,154,.1); border-radius: 99px; padding: 2px 9px; white-space: nowrap; }
-    .card.new { border-color: rgba(139,108,255,.5); box-shadow: 0 0 0 4px rgba(139,108,255,.08); }
+    .card .tag { margin-left: auto; font-size: 11px; font-weight: 700; color: var(--ok); background: rgba(18,148,90,.1); border-radius: 99px; padding: 2px 9px; white-space: nowrap; }
+    .card.new { border-color: rgba(107,76,240,.45); box-shadow: 0 0 0 4px rgba(107,76,240,.08); }
 
-    /* owner section */
+    .who { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; list-style: none; padding: 0; margin: 0; }
+    .who li { background: #fff; border: 1px solid var(--line); border-radius: 99px; padding: 9px 16px; font-size: 15px; font-weight: 500; }
+
     .split { display: grid; grid-template-columns: .9fr 1.1fr; gap: 56px; align-items: center; }
     @media (max-width: 860px) { .split { grid-template-columns: 1fr; gap: 28px; } }
-    .rows { display: grid; gap: 12px; }
-    .row { display: flex; gap: 16px; background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 18px 20px; }
-    .row .badge { width: 38px; height: 38px; border-radius: 11px; display: grid; place-items: center; color: var(--accent2); background: rgba(139,108,255,.12); flex: none; }
+    .rows { display: grid; gap: 12px; list-style: none; padding: 0; margin: 0; }
+    .row { display: flex; gap: 16px; background: #fff; border: 1px solid var(--line); border-radius: 16px; padding: 18px 20px; }
+    .row .badge { width: 38px; height: 38px; border-radius: 11px; }
     .row b { display: block; font-weight: 650; margin-bottom: 2px; }
     .row span { color: var(--muted); font-size: 15px; }
 
-    /* pricing */
     .price-wrap { display: grid; justify-items: center; }
-    .price { position: relative; width: min(480px, 100%); background: linear-gradient(180deg, #1c1830, var(--panel)); border-radius: 24px; padding: 34px; border: 1px solid rgba(139,108,255,.45); box-shadow: 0 0 0 6px rgba(139,108,255,.06), 0 40px 100px -40px var(--glow); text-align: left; }
-    .price .name { font: 600 15px var(--display); color: var(--accent2); letter-spacing: .02em; }
-    .price .amt { font: 800 64px/1 var(--display); letter-spacing: -.04em; margin: 10px 0 6px; }
-    .price .amt small { font: 500 17px system-ui, sans-serif; color: var(--muted); letter-spacing: 0; }
+    .price { width: min(480px, 100%); background: #fff; border-radius: 22px; padding: 34px; border: 1px solid rgba(107,76,240,.35); box-shadow: 0 0 0 6px rgba(107,76,240,.05), 0 30px 70px -36px rgba(60,40,140,.45); text-align: left; }
+    .price .name { font-size: 15px; font-weight: 650; color: var(--accent-ink); }
+    .price .amt { font-size: 60px; line-height: 1; font-weight: 800; letter-spacing: -.04em; margin: 10px 0 6px; }
+    .price .amt small { font-size: 17px; font-weight: 500; color: var(--muted); letter-spacing: 0; }
     .price ul { list-style: none; padding: 0; margin: 22px 0 26px; display: grid; gap: 12px; }
     .price li { display: flex; gap: 10px; align-items: flex-start; }
     .price li .ico { width: 18px; height: 18px; color: var(--ok); stroke-width: 2.4; flex: none; margin-top: 3px; }
     .price .btn { width: 100%; }
     .fine { font-size: 13px; color: var(--dim); margin: 14px 0 0; text-align: center; }
 
-    /* questions */
     .faq { max-width: 760px; margin: 0 auto; }
     details { border-bottom: 1px solid var(--line); padding: 20px 0; }
-    summary { cursor: pointer; font: 600 18px/1.35 var(--display); list-style: none; display: flex; justify-content: space-between; gap: 16px; }
+    summary { cursor: pointer; font-size: 18px; font-weight: 650; line-height: 1.35; list-style: none; display: flex; justify-content: space-between; gap: 16px; }
     summary::-webkit-details-marker { display: none; }
-    summary::after { content: "+"; color: var(--accent2); font-weight: 400; font-size: 24px; line-height: 1; transition: transform .2s; }
+    summary::after { content: "+"; color: var(--accent); font-weight: 400; font-size: 24px; line-height: 1; transition: transform .2s; }
     details[open] summary::after { transform: rotate(45deg); }
     details p { color: var(--muted); margin: 10px 0 0; }
 
-    /* closing call */
-    .end { padding: 40px 0 110px; }
-    .end-card { position: relative; overflow: hidden; border-radius: 28px; border: 1px solid var(--line2); background: radial-gradient(70% 120% at 85% 50%, rgba(124,84,255,.35), transparent 60%), linear-gradient(180deg, var(--panel), var(--bg2)); display: grid; grid-template-columns: 1.3fr .7fr; align-items: center; padding: 48px; gap: 24px; }
+    .end { padding: 24px 0 100px; }
+    .end-card { border-radius: 26px; border: 1px solid var(--line); background: radial-gradient(60% 120% at 85% 50%, #ece5ff, transparent 65%), var(--soft); display: grid; grid-template-columns: 1.3fr .7fr; align-items: center; padding: 48px; gap: 24px; }
     .end-card h2 { margin-bottom: 12px; }
     .end-card p { color: var(--muted); font-size: 18px; margin: 0 0 26px; }
-    .end-card img { width: 100%; max-width: 320px; justify-self: center; filter: drop-shadow(0 0 24px rgba(139,108,255,.5)); }
-    @media (max-width: 760px) { .end-card { grid-template-columns: 1fr; padding: 32px 24px; text-align: center; } .end-card .ctas { justify-content: center; } .end-card img { max-width: 220px; grid-row: 1; } }
+    .end-card img { width: 100%; max-width: 300px; justify-self: center; }
+    @media (max-width: 760px) { .end-card { grid-template-columns: 1fr; padding: 32px 24px; text-align: center; } .end-card .ctas { justify-content: center; } .end-card picture { grid-row: 1; justify-self: center; } .end-card img { max-width: 220px; } }
 
     footer { border-top: 1px solid var(--line); padding: 30px 0 44px; font-size: 14px; color: var(--dim); }
     footer .wrap { display: flex; flex-wrap: wrap; gap: 10px 24px; align-items: center; }
@@ -171,8 +227,8 @@
   </svg>
 
   <header>
-    <nav class="wrap">
-      <a class="brand" href="/"><img src="/icon-128.png" alt="">Kloomie</a>
+    <nav class="wrap" aria-label="Main">
+      <a class="brand" href="/"><img src="/icon-128.png" width="28" height="28" alt="">Kloomie</a>
       <div class="links">
         <a class="hide-s" href="#features">Features</a>
         <a class="hide-s" href="#pricing">Pricing</a>
@@ -187,85 +243,105 @@
     <div class="hero">
       <div class="wrap">
         <div>
-          <span class="eyebrow"><i></i>Live on every device</span>
-          <h1>Your team’s work, <span class="grad">in one column.</span></h1>
-          <p class="lead">Files, the day’s plan, calls, email, contacts, docs and signatures for small teams. Drop something in on your laptop and it’s on everyone’s phone a second later.</p>
+          <p class="eyebrow">The all-in-one team app for small businesses</p>
+          <h1>Your team’s work, <span>in one column.</span></h1>
+          <p class="lead">File sharing, a daily planner, call lists, email campaigns, contacts, documents and e-signatures for small business teams. Drop something in on your laptop and it’s on everyone’s phone a second later.</p>
           <div class="ctas">
             <a class="btn" href="{{APP}}/?start=1">Start your free trial</a>
             <a class="btn ghost" href="/download">Get the app</a>
           </div>
-          <div class="trust">
-            <span><svg class="ico"><use href="#i-check"/></svg>14 days free</span>
-            <span><svg class="ico"><use href="#i-check"/></svg>No card needed</span>
-            <span><svg class="ico"><use href="#i-check"/></svg>$15 per person after</span>
-          </div>
+          <ul class="trust">
+            <li><svg class="ico" aria-hidden="true"><use href="#i-check"/></svg>14 days free</li>
+            <li><svg class="ico" aria-hidden="true"><use href="#i-check"/></svg>No card needed</li>
+            <li><svg class="ico" aria-hidden="true"><use href="#i-check"/></svg>$15 per person after</li>
+          </ul>
         </div>
         <div class="mascot">
-          <img src="/mascot.png" width="1000" height="667" alt="Kloomie’s mascot, a purple check mark giving a thumbs up">
+          <picture>
+            <source srcset="/mascot.webp" type="image/webp">
+            <img src="/mascot.png" width="1000" height="667" fetchpriority="high" alt="Kloomie’s mascot, a purple check mark giving a thumbs up">
+          </picture>
           <div class="bubble a" aria-hidden="true"><span class="dot"><svg class="ico"><use href="#i-photo"/></svg></span><div><b>Site photos, Elm St</b><small>from Dana’s phone</small></div></div>
           <div class="bubble b" aria-hidden="true"><span class="dot"><svg class="ico"><use href="#i-check"/></svg></span><div><b>Quote signed</b><small>Rivera install · just now</small></div></div>
         </div>
       </div>
     </div>
 
-    <section class="block" id="features">
+    <section class="block" id="features" aria-labelledby="features-h">
       <div class="wrap">
-        <p class="kicker">What’s inside</p>
-        <h2>Everything a small team<br>passes around, in one place</h2>
-        <p class="intro">Turn on the tools your team uses and leave the rest off. It all works in the browser, on Mac and Windows, and on phones.</p>
+        <p class="kicker">Features</p>
+        <h2 id="features-h">Everything a small business team needs, in one app</h2>
+        <p class="intro">Turn on the tools your team uses and leave the rest off. Kloomie works in the browser, on Mac and Windows, and on iPhone and Android.</p>
         <div class="bento">
-          <div class="tile big">
-            <span class="badge"><svg class="ico"><use href="#i-drop"/></svg></span>
-            <h3>The column</h3>
-            <p>Drop in files, folders, photos and links. They’re on every device the moment you let go, and drag back out to your desktop.</p>
+          <article class="tile big">
+            <span class="badge"><svg class="ico" aria-hidden="true"><use href="#i-drop"/></svg></span>
+            <h3>File sharing across every device</h3>
+            <p>Drop in files, folders, photos and links. They’re on every computer and phone on the team the moment you let go, and drag back out to your desktop.</p>
             <div class="column" aria-hidden="true">
               <div class="card new"><div class="ci"><svg class="ico"><use href="#i-photo"/></svg></div><div><b>Site photos, Elm St</b><small>12 photos · from Dana’s phone</small></div><span class="tag">New</span></div>
               <div class="card"><div class="ci"><svg class="ico"><use href="#i-pen"/></svg></div><div><b>Quote, Rivera install.pdf</b><small>sent for signature</small></div><span class="tag">Signed</span></div>
               <div class="card"><div class="ci"><svg class="ico"><use href="#i-phone"/></svg></div><div><b>Spring follow-ups</b><small>call list · 18 of 42 done</small></div></div>
               <div class="card"><div class="ci"><svg class="ico"><use href="#i-mail"/></svg></div><div><b>March newsletter</b><small>from your Gmail · 214 sent</small></div></div>
             </div>
-          </div>
-          <div class="tile"><span class="badge"><svg class="ico"><use href="#i-cal"/></svg></span><h3>Your day</h3><p>Tasks and time blocks beside your Google or Outlook calendar. Changes go both ways.</p></div>
-          <div class="tile"><span class="badge"><svg class="ico"><use href="#i-phone"/></svg></span><h3>Call lists</h3><p>Turn a spreadsheet into a call list, log every call, and see who’s next.</p></div>
-          <div class="tile"><span class="badge"><svg class="ico"><use href="#i-mail"/></svg></span><h3>Email from your address</h3><p>Campaign email through your Outlook or Gmail, with an unsubscribe link on every message.</p></div>
-          <div class="tile"><span class="badge"><svg class="ico"><use href="#i-people"/></svg></span><h3>Contacts</h3><p>Customers and leads in one list, with duplicates merged and do-not-contact honored everywhere.</p></div>
-          <div class="tile wide"><span class="badge"><svg class="ico"><use href="#i-pen"/></svg></span><h3>Docs and signatures</h3><p>Write quotes and pages, fill in PDFs, and send them for signature. Signed copies come back with a signing record, right next to the original.</p></div>
-          <div class="tile"><span class="badge"><svg class="ico"><use href="#i-money"/></svg></span><h3>Finance</h3><p>Bills, money in and out, and budgets.</p></div>
-          <div class="tile"><span class="badge"><svg class="ico"><use href="#i-lock"/></svg></span><h3>And more</h3><p>Meeting notes, routes and canvassing, and a vault for gate codes.</p></div>
+          </article>
+          <article class="tile"><span class="badge"><svg class="ico" aria-hidden="true"><use href="#i-cal"/></svg></span><h3>Daily planner with calendar sync</h3><p>Tasks and time blocks beside your Google or Outlook calendar. Changes go both ways.</p></article>
+          <article class="tile"><span class="badge"><svg class="ico" aria-hidden="true"><use href="#i-phone"/></svg></span><h3>Call lists and follow-ups</h3><p>Turn a spreadsheet into a call list, log every call, and see who’s next.</p></article>
+          <article class="tile"><span class="badge"><svg class="ico" aria-hidden="true"><use href="#i-mail"/></svg></span><h3>Email campaigns from Gmail or Outlook</h3><p>Send from your own address, with an unsubscribe link on every message.</p></article>
+          <article class="tile"><span class="badge"><svg class="ico" aria-hidden="true"><use href="#i-people"/></svg></span><h3>Contact management</h3><p>Customers and leads in one list, with duplicates merged and do-not-contact honored everywhere.</p></article>
+          <article class="tile wide"><span class="badge"><svg class="ico" aria-hidden="true"><use href="#i-pen"/></svg></span><h3>Documents and e-signatures</h3><p>Write quotes and pages, fill in PDFs, and send them for electronic signature. Signed copies come back with a signing record, right next to the original.</p></article>
+          <article class="tile"><span class="badge"><svg class="ico" aria-hidden="true"><use href="#i-money"/></svg></span><h3>Bills and budgets</h3><p>Money in and out, bills due, and budgets for the owner.</p></article>
+          <article class="tile"><span class="badge"><svg class="ico" aria-hidden="true"><use href="#i-lock"/></svg></span><h3>And more</h3><p>Meeting notes, route planning for canvassing, and a vault for gate codes.</p></article>
         </div>
       </div>
     </section>
 
-    <section class="block">
+    <section class="block alt center" aria-labelledby="who-h">
+      <div class="wrap">
+        <p class="kicker">Who it’s for</p>
+        <h2 id="who-h">Built for small teams that work on the move</h2>
+        <p class="intro">From two people to a few dozen, in the office and out on jobs.</p>
+        <ul class="who">
+          <li>Contractors and home services</li>
+          <li>Field sales teams</li>
+          <li>Installers and trades</li>
+          <li>Real estate teams</li>
+          <li>Agencies and studios</li>
+          <li>Cleaning and maintenance</li>
+          <li>Nonprofits and community groups</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="block" aria-labelledby="owner-h">
       <div class="wrap split">
         <div>
           <p class="kicker">For the owner</p>
-          <h2>You stay in charge</h2>
+          <h2 id="owner-h">You stay in charge</h2>
           <p class="intro" style="margin-bottom:0">Kloomie is built for a business with a few people on the road and one person keeping it all together.</p>
         </div>
-        <div class="rows">
-          <div class="row"><span class="badge"><svg class="ico"><use href="#i-people"/></svg></span><div><b>Owners, admins and members</b><span>Admins look after people and settings. Owners also handle billing and the team’s data.</span></div></div>
-          <div class="row"><span class="badge"><svg class="ico"><use href="#i-shield"/></svg></span><div><b>Members see only their own work, if you want</b><span>One switch, and the server enforces it, not just the screen.</span></div></div>
-          <div class="row"><span class="badge"><svg class="ico"><use href="#i-key"/></svg></span><div><b>Invite by email or with a code</b><span>New people pick a password and they’re in. Removing someone signs them out everywhere.</span></div></div>
-          <div class="row"><span class="badge"><svg class="ico"><use href="#i-box"/></svg></span><div><b>Your data is yours</b><span>Export the whole team as a .zip any time. If you leave, delete it.</span></div></div>
-        </div>
+        <ul class="rows">
+          <li class="row"><span class="badge"><svg class="ico" aria-hidden="true"><use href="#i-people"/></svg></span><div><b>Owners, admins and members</b><span>Admins look after people and settings. Owners also handle billing and the team’s data.</span></div></li>
+          <li class="row"><span class="badge"><svg class="ico" aria-hidden="true"><use href="#i-shield"/></svg></span><div><b>Members see only their own work, if you want</b><span>One switch, and the server enforces it, not just the screen.</span></div></li>
+          <li class="row"><span class="badge"><svg class="ico" aria-hidden="true"><use href="#i-key"/></svg></span><div><b>Invite by email or with a code</b><span>New people pick a password and they’re in. Removing someone signs them out everywhere.</span></div></li>
+          <li class="row"><span class="badge"><svg class="ico" aria-hidden="true"><use href="#i-box"/></svg></span><div><b>Your data is yours</b><span>Export the whole team as a .zip any time. If you leave, delete it.</span></div></li>
+        </ul>
       </div>
     </section>
 
-    <section class="block center" id="pricing">
+    <section class="block alt center" id="pricing" aria-labelledby="pricing-h">
       <div class="wrap">
         <p class="kicker">Pricing</p>
-        <h2>One simple price</h2>
+        <h2 id="pricing-h">One simple price</h2>
         <p class="intro">Every tool is included. You pay for the people on your team, and the bill follows when people join or leave.</p>
         <div class="price-wrap">
           <div class="price">
             <div class="name">Kloomie for teams</div>
             <div class="amt">$15 <small>per person a month</small></div>
             <ul>
-              <li><svg class="ico"><use href="#i-check"/></svg>14 days free, no card needed</li>
-              <li><svg class="ico"><use href="#i-check"/></svg>Every tool, on every device</li>
-              <li><svg class="ico"><use href="#i-check"/></svg>Add or remove people any time, charged only for the days they’re on the team</li>
-              <li><svg class="ico"><use href="#i-check"/></svg>Cancel any time, and keep your export</li>
+              <li><svg class="ico" aria-hidden="true"><use href="#i-check"/></svg>14 days free, no card needed</li>
+              <li><svg class="ico" aria-hidden="true"><use href="#i-check"/></svg>Every tool, on every device</li>
+              <li><svg class="ico" aria-hidden="true"><use href="#i-check"/></svg>Add or remove people any time, charged only for the days they’re on the team</li>
+              <li><svg class="ico" aria-hidden="true"><use href="#i-check"/></svg>Cancel any time, and keep your export</li>
             </ul>
             <a class="btn" href="{{APP}}/?start=1">Start your free trial</a>
             <p class="fine">Payments go through Stripe. Kloomie never sees your card.</p>
@@ -274,16 +350,16 @@
       </div>
     </section>
 
-    <section class="block" id="faq">
+    <section class="block" id="faq" aria-labelledby="faq-h">
       <div class="wrap">
-        <div class="center"><p class="kicker">Questions</p><h2>Good to know</h2></div>
+        <div class="center"><p class="kicker">Questions</p><h2 id="faq-h">Frequently asked questions</h2></div>
         <div class="faq">
-          <details><summary>Do I need a card to try it?</summary><p>No. Create a team and use everything for 14 days. When you’re ready, the owner subscribes in Settings → Team → Billing.</p></details>
-          <details><summary>What happens when the trial ends?</summary><p>If nobody subscribes, the team becomes read-only. Everyone can still sign in, look at everything and export it, and nothing is deleted. Subscribe and it’s all back to normal.</p></details>
+          <details><summary>Do I need a card to try Kloomie?</summary><p>No. Create a team and use everything for 14 days. When you’re ready, the owner subscribes in Settings → Team → Billing.</p></details>
+          <details><summary>What happens when the free trial ends?</summary><p>If nobody subscribes, the team becomes read-only. Everyone can still sign in, look at everything and export it, and nothing is deleted. Subscribe and it’s all back to normal.</p></details>
           <details><summary>Who pays, the company or each person?</summary><p>The company. One subscription covers the whole team, paid by the owner. Members never see a payment screen.</p></details>
-          <details><summary>Does it work on phones?</summary><p>Yes. Open Kloomie in Safari or Chrome and add it to your home screen, and it opens full screen like any other app. There are desktop apps for Mac and Windows too.</p></details>
+          <details><summary>Does Kloomie work on phones?</summary><p>Yes. Open Kloomie in Safari or Chrome and add it to your home screen, and it opens full screen like any other app. There are desktop apps for Mac and Windows too.</p></details>
           <details><summary>Can I send email from my own address?</summary><p>Yes. Connect your Outlook or Gmail and campaign email goes out from your own mailbox, so replies come straight to you. Kloomie only asks for permission to send, not to read your inbox.</p></details>
-          <details><summary>Does it use AI?</summary><p>Where it helps: drafting a campaign from a brief, summing up a call log, writing up meeting notes. It always shows a draft and changes nothing until you accept it.</p></details>
+          <details><summary>Does Kloomie use AI?</summary><p>Where it helps: drafting a campaign from a brief, summing up a call log, writing up meeting notes. It always shows a draft and changes nothing until you accept it.</p></details>
           <details><summary>How do I get help?</summary><p>Email <a href="mailto:hello@kloomie.com">hello@kloomie.com</a> and a person will answer.</p></details>
         </div>
       </div>
@@ -297,7 +373,10 @@
             <p>Setup takes a couple of minutes. Invite your people and drop in the first file.</p>
             <div class="ctas"><a class="btn" href="{{APP}}/?start=1">Start your free trial</a><a class="btn ghost" href="/download">Get the app</a></div>
           </div>
-          <img src="/mascot.png" width="1000" height="667" alt="" loading="lazy">
+          <picture>
+            <source srcset="/mascot.webp" type="image/webp">
+            <img src="/mascot.png" width="1000" height="667" alt="" loading="lazy" decoding="async">
+          </picture>
         </div>
       </div>
     </div>
@@ -305,7 +384,7 @@
 
   <footer>
     <div class="wrap">
-      <span class="co"><img src="/icon-128.png" alt="">© 2026 Cultural Architects Collective LLC</span>
+      <span class="co"><img src="/icon-128.png" width="22" height="22" alt="">© 2026 Cultural Architects Collective LLC</span>
       <a href="/download">Download</a>
       <a href="/terms">Terms</a>
       <a href="/privacy">Privacy</a>

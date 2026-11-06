@@ -6527,7 +6527,7 @@ function movedTo(req, url) {
 // change it): its home page, the legal pages, downloads and images. The bare domain goes to it, and any other page
 // there opens in the app. /welcome shows the home page on any address, for a look before the domain points here.
 const SITE_HOST = (process.env.SITE_HOST ?? (HOME_HOST.startsWith('app.') ? 'www.' + HOME_HOST.slice(4) : '')).toLowerCase();
-const SITE_PAGES = new Set(['/', '/welcome', '/terms', '/privacy', '/download', '/get']);
+const SITE_PAGES = new Set(['/', '/welcome', '/terms', '/privacy', '/download', '/get', '/robots.txt', '/sitemap.xml']);
 function siteMove(req, url) {
   const host = String(req.headers.host || '').toLowerCase();
   if (!SITE_HOST || url.pathname.startsWith('/api/')) return null;
@@ -6536,11 +6536,22 @@ function siteMove(req, url) {
   return PUBLIC_URL + url.pathname + url.search;
 }
 const onSite = (req) => !!SITE_HOST && String(req.headers.host || '').toLowerCase() === SITE_HOST;
+const SITE_URL = SITE_HOST ? 'https://' + SITE_HOST : PUBLIC_URL;
 function serveSite(req, res) {
   fs.readFile(path.join(CLIENT_DIR, 'site.html'), 'utf8', (err, html) => {
     if (err) return send(res, 404, 'Not found');
-    send(res, 200, html.replaceAll('{{APP}}', PUBLIC_URL), { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache', 'Content-Security-Policy': "script-src 'none'; object-src 'none'; base-uri 'none'" });
+    send(res, 200, html.replaceAll('{{APP}}', PUBLIC_URL).replaceAll('{{SITE}}', SITE_URL), { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache', 'Content-Security-Policy': "script-src 'none'; object-src 'none'; base-uri 'none'" });
   });
+}
+// Search engines: the website is indexed; the app's address is not (its pages are sign-in screens and private links).
+const SITE_MAP = ['/', '/download', '/terms', '/privacy'];
+function serveRobots(req, res) {
+  const body = onSite(req) || !SITE_HOST ? `User-agent: *\nAllow: /\n\nSitemap: ${SITE_URL}/sitemap.xml\n` : 'User-agent: *\nAllow: /terms\nAllow: /privacy\nAllow: /download\nDisallow: /\n';
+  send(res, 200, body, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'public, max-age=3600' });
+}
+function serveSitemap(req, res) {
+  const urls = SITE_MAP.map((p) => `  <url><loc>${SITE_URL}${p}</loc><changefreq>${p === '/' ? 'weekly' : 'monthly'}</changefreq><priority>${p === '/' ? '1.0' : '0.5'}</priority></url>`).join('\n');
+  send(res, 200, `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls}\n</urlset>\n`, { 'Content-Type': 'application/xml; charset=utf-8', 'Cache-Control': 'public, max-age=3600' });
 }
 
 const server = http.createServer(async (req, res) => {
@@ -6551,7 +6562,15 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(req.method === 'GET' || req.method === 'HEAD' ? 302 : 307, { Location: moved, 'Cache-Control': 'no-store' });
     return res.end();
   }
-  if (url.pathname === '/welcome' || (url.pathname === '/' && onSite(req))) return serveSite(req, res);
+  if (url.pathname === '/welcome' || (url.pathname === '/' && onSite(req))) {
+    if (url.pathname === '/welcome') res.setHeader('Link', `<${SITE_URL}/>; rel="canonical"`);
+    return serveSite(req, res);
+  }
+  if (url.pathname === '/robots.txt') return serveRobots(req, res);
+  if (url.pathname === '/sitemap.xml') return serveSitemap(req, res);
+  // Pages served on both addresses name the website's copy as the one to index; the app itself stays out of search.
+  if (SITE_HOST && ['/terms', '/privacy', '/download', '/get'].includes(url.pathname)) res.setHeader('Link', `<${SITE_URL}${url.pathname === '/get' ? '/download' : url.pathname}>; rel="canonical"`);
+  else if (SITE_HOST && !onSite(req) && req.method === 'GET' && !path.extname(url.pathname)) res.setHeader('X-Robots-Tag', 'noindex');
   if (url.pathname.startsWith('/api/')) {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, Range');
