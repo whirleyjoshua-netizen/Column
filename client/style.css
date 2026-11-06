@@ -1115,6 +1115,21 @@ body.viewer .preview pre, body.viewer .preview .pv-edit, body.viewer .preview .d
 .wait-pick small { color: var(--muted); margin-left: auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 45%; }
 .wait-picks details summary { cursor: pointer; color: var(--muted); font-size: 12px; margin: 8px 0 4px; }
 .flash { animation: flash 1.6s ease; }
+.cast-strip { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 2px 0 10px; }
+.cast-h { font-size: 11px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); margin-right: 2px; }
+.cast-pill { display: inline-flex; gap: 6px; align-items: center; border: 1px solid var(--line); background: var(--card); color: var(--muted); border-radius: 99px; padding: 3px 10px; font-size: 12px; cursor: pointer; }
+.cast-pill b { color: var(--text); font-weight: 600; }
+.cast-pill.mine { border-color: color-mix(in srgb, var(--accent) 60%, var(--line)); }
+.cast-pill.empty { border-style: dashed; border-color: #f5a524; color: #b7791f; }
+.cast-pill.add { border-style: dashed; }
+.cast-pill:hover { background: var(--card-hover); }
+.cast-chip.empty { border-style: dashed; border-color: #f5a524; }
+.wait-pick small.heavy { color: var(--danger); }
+.crew-role { margin-bottom: 8px; }
+.step-tag.sign { color: #b7791f; border-color: #f5a524; }
+.step-tag.back { color: var(--danger); border-color: var(--danger); }
+.sign-btn { flex: none; padding: 2px 9px; font-size: 11.5px; }
+.check.pending { border-style: dotted; border-color: #f5a524; }
 @keyframes flash { 0%, 40% { background: var(--accent-soft); } 100% { background: transparent; } }
 
 /* planner */

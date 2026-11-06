@@ -932,8 +932,19 @@ function applyTask(t, body) {
   if (body.assigneeId !== undefined) t.assigneeId = body.assigneeId && db.workspaces[t.wsId]?.members.some((m) => m.id === body.assigneeId) ? body.assigneeId : null;
   // Or a role: whoever on the team does that kind of work. A task goes to a person or a role, not both.
   if (body.roleId !== undefined) t.roleId = body.roleId && db.workspaces[t.wsId]?.roles?.some((r) => r.id === body.roleId) ? body.roleId : null;
-  if (body.assigneeId && t.assigneeId) t.roleId = null;
-  else if (body.roleId && t.roleId) t.assigneeId = null;
+  // Or a role in its campaign. A task goes to one of: a person, a team role, a campaign role.
+  if (body.castId !== undefined) t.castId = castRole(taskCamp(t), body.castId) ? body.castId : null;
+  if (body.assigneeId && t.assigneeId) { t.roleId = null; t.castId = null; }
+  else if (body.roleId && t.roleId) { t.assigneeId = null; t.castId = null; }
+  else if (body.castId && t.castId) { t.assigneeId = null; t.roleId = null; }
+  if (t.castId && !castRole(taskCamp(t), t.castId)) t.castId = null;
+  // Who has to sign it off before it counts as done.
+  if (body.signoff !== undefined) {
+    const v = body.signoff;
+    t.signoff = v?.memberId && db.workspaces[t.wsId]?.members.some((m) => m.id === v.memberId) ? { memberId: v.memberId } : v?.castId && castRole(taskCamp(t), v.castId) ? { castId: v.castId } : null;
+    if (!t.signoff) t.submitted = null;
+  }
+  if (t.signoff?.castId && !castRole(taskCamp(t), t.signoff.castId)) { t.signoff = null; t.submitted = null; }
   if (body.report !== undefined) t.report = !!body.report;
   // The tasks it waits for (any in the team), and how many days after they're done it's due.
   if (body.blockedBy !== undefined) t.blockedBy = blockerList(db.tasks, t, body.blockedBy, 'task');
@@ -1336,8 +1347,9 @@ const METHODS = ['Call', 'Email'];
 const labelList = (v, max) => [...new Set((Array.isArray(v) ? v : []).map((o) => String(o).trim().slice(0, 40)).filter(Boolean))].slice(0, max);
 function seesCampaign(campaignId, memberId) {
   const c = campaignId && db.campaigns[campaignId];
-  if (c && ownOnly(c.wsId, memberId)) return c.ownerId === memberId || c.assigneeId === memberId || c.memberIds.includes(memberId) || taskCamps(c.wsId, memberId).has(c.id);
-  return !c || !c.private || c.ownerId === memberId || c.assigneeId === memberId || c.memberIds.includes(memberId);
+  const cast = !!c && castOf(c).some((r) => r.memberIds.includes(memberId));
+  if (c && ownOnly(c.wsId, memberId)) return c.ownerId === memberId || c.assigneeId === memberId || c.memberIds.includes(memberId) || cast || taskCamps(c.wsId, memberId).has(c.id);
+  return !c || !c.private || c.ownerId === memberId || c.assigneeId === memberId || c.memberIds.includes(memberId) || cast;
 }
 // The team's choice (settings.visibility): members see everything, the default, or only what's theirs.
 // Then a member sees the campaigns they run, belong to or have a task in, with everything in them; tasks
@@ -1348,6 +1360,7 @@ const memberIn = (wsId, memberId) => db.workspaces[wsId]?.members.find((m) => m.
 function myTask(t, memberId) {
   const me = memberIn(t.wsId, memberId);
   return !!me && (t.assigneeId === memberId || t.memberId === memberId || t.assignedBy === memberId || (!!t.roleId && (me.roleIds || []).includes(t.roleId))
+    || (!!t.castId && inCast(taskCamp(t), t.castId, memberId)) || (!t.done && signers(t).includes(memberId))
     || (!t.memberId && !!t.by && nameKey(t.by) === me.nameKey));
 }
 // Which campaigns a member has a task in, worked out once per change (visRev moves on every save and broadcast).
@@ -1428,6 +1441,31 @@ const publicList = ({ wsId, ...l }) => l;
 const isDate = (v) => v === null || /^\d{4}-\d{2}-\d{2}$/.test(String(v));
 
 const subsOf = (c) => Object.values(db.campaigns).filter((x) => x.parentId === c.id);
+// ----- a campaign's roles (its cast) -----
+// The parts of this campaign's work, like Designer or Approver, each played by one or more people. A task can go to
+// a role ("whoever's the Designer here"), and a step can need a role's sign-off. Saved campaigns keep their roles,
+// so the same playbook runs with a different crew.
+const castOf = (c) => c?.cast || [];
+const castRole = (c, id) => (id ? castOf(c).find((r) => r.id === id) : null);
+const taskCamp = (t) => db.campaigns[db.goals[t?.goalId]?.campaignId] || null;
+const inCast = (c, castId, memberId) => !!castRole(c, castId)?.memberIds.includes(memberId);
+function castList(v, ws) {
+  const out = [];
+  for (const r of (Array.isArray(v) ? v : []).slice(0, 20)) {
+    const name = cleanText(r?.name, 40);
+    if (!name || out.some((x) => x.name.toLowerCase() === name.toLowerCase())) continue;
+    out.push({
+      id: typeof r?.id === 'string' && /^[A-Za-z0-9_-]{1,16}$/.test(r.id) ? r.id : rid(6),
+      name, about: cleanText(r?.about, 200),
+      memberIds: [...new Set((Array.isArray(r?.memberIds) ? r.memberIds : []).filter((id) => ws.members.some((m) => m.id === id)))],
+    });
+  }
+  return out;
+}
+// Who signs a step off: a person, or whoever plays a role in its campaign. The campaign's owner and admins can too.
+const signers = (t) => (t.signoff?.memberId ? [t.signoff.memberId] : t.signoff?.castId ? castRole(taskCamp(t), t.signoff.castId)?.memberIds || [] : []);
+const maySignOff = (t, auth) => isAdmin(auth) || taskCamp(t)?.ownerId === auth.memberId || signers(t).includes(auth.memberId);
+
 function applyCampaign(c, body, ws, auth) {
   if (body.name !== undefined) c.name = String(body.name || '').trim().slice(0, 80);
   if (body.brief !== undefined) c.brief = String(body.brief || '').slice(0, 20_000);
@@ -1464,6 +1502,7 @@ function applyCampaign(c, body, ws, auth) {
     if (!passesSteps(c, auth)) throw Object.assign(new Error('Only an owner can change whether this campaign is worked in order.'), { status: 403 });
     c.inOrder = !!body.inOrder;
   }
+  if (body.cast !== undefined) c.cast = castList(body.cast, ws);
   if (body.memberIds !== undefined) c.memberIds = (Array.isArray(body.memberIds) ? body.memberIds : []).filter((id) => ws.members.some((m) => m.id === id) && id !== c.ownerId);
   // Part of a bigger campaign: its progress counts toward the main one's. One level: a sub has no subs of its own.
   if (body.parentId !== undefined) {
@@ -1764,7 +1803,7 @@ function snapshotCampaign(c, main = c) {
   const lists = Object.values(db.lists).filter((l) => l.campaignId === c.id && !l.live && KEPT_LISTS.includes(l.kind)).sort((a, b) => a.createdAt - b.createdAt);
   return {
     campaign: {
-      brief: c.brief, color: c.color, outcomes: c.outcomes, methods: c.methods, followUps: c.followUps, private: c.private, memberIds: c.memberIds, inOrder: !!c.inOrder,
+      brief: c.brief, color: c.color, outcomes: c.outcomes, methods: c.methods, followUps: c.followUps, private: c.private, memberIds: c.memberIds, inOrder: !!c.inOrder, cast: castOf(c),
       days: c.start && c.end ? daysBetween(c.start, c.end) : null, ...(c === main ? {} : { name: c.name, assigneeId: c.assigneeId || null, startIn: c.start && main.start ? daysBetween(main.start, c.start) : null }),
     },
     lists: lists.map((l) => ({ ref: l.id, name: l.name, kind: l.kind, agenda: !!l.agenda, columns: l.columns, rows: l.rows.map((r) => ({ cells: r.cells, section: r.section, mins: r.mins })) })),
@@ -1772,7 +1811,7 @@ function snapshotCampaign(c, main = c) {
       ref: g.id, blockedBy: g.blockedBy || [], title: g.title, kind: g.kind, target: g.target, counts: g.counts, methods: g.methods || null, order: g.order, dueIn: rel(g.due),
       // Follow-ups were for that run's people, so they stay behind.
       tasks: Object.values(db.tasks).filter((t) => t.goalId === g.id && !t.followUp).sort((a, b) => a.createdAt - b.createdAt).map((t) => ({
-        ref: t.id, blockedBy: t.blockedBy || [], dueAfter: t.dueAfter ?? null,
+        ref: t.id, blockedBy: t.blockedBy || [], dueAfter: t.dueAfter ?? null, castId: t.castId || null, signoff: t.signoff || null,
         text: t.text, order: t.order ?? null, priority: t.priority, dueIn: rel(t.due), assigneeId: t.assigneeId || null, roleId: t.roleId || null, report: !!t.report,
         listRef: lists.some((l) => l.id === t.listId) ? t.listId : null,
       })),
@@ -1823,7 +1862,8 @@ function applyTemplate(t, body, ws) {
 }
 
 // Makes a new campaign from a saved one. date: its start day; time: set for scheduled runs.
-function runTemplate(tpl, { date, time, by }) {
+// cast: who plays each of the main campaign's roles this time ({ roleId: [memberIds] }); otherwise the saved crew.
+function runTemplate(tpl, { date, time, by, cast }) {
   const ws = db.workspaces[tpl.wsId];
   const ownerM = ws.members.find((m) => m.id === tpl.ownerId) || ws.members.find((m) => m.role === 'owner');
   const owner = { memberId: ownerM.id, member: ownerM.name };
@@ -1833,6 +1873,7 @@ function runTemplate(tpl, { date, time, by }) {
     const k = snap.campaign;
     const c = createCampaign(ws, owner, {
       name, brief: k.brief, color: k.color, outcomes: k.outcomes, methods: k.methods, private: k.private, memberIds: k.memberIds, inOrder: !!k.inOrder,
+      cast: (k.cast || []).map((r) => (snap === tpl && cast && Array.isArray(cast[r.id]) ? { ...r, memberIds: cast[r.id] } : r)),
       start, end: k.days != null ? addDays(start, k.days) : null, ...extra,
       ...(k.followUps ? { followUps: k.followUps } : {}),
     }, { templateId: tpl.id, assignedBy: by || null });
@@ -1875,6 +1916,8 @@ function fillCampaign(ws, owner, c, snap, date, by) {
         { text: st.text, order: st.order ?? null, priority: st.priority, due: due(st.dueIn), assigneeId: st.assigneeId, roleId: st.assigneeId ? undefined : st.roleId || undefined, report: st.report, listId: lists.get(st.listRef) || null });
       if (t.assigneeId || t.roleId) t.assignedBy = by || null;
       if (st.dueAfter != null) t.dueAfter = st.dueAfter;
+      if (st.castId && castRole(c, st.castId)) { Object.assign(t, { castId: st.castId, assigneeId: null, roleId: null }); t.assignedBy = by || null; }
+      if (st.signoff?.memberId || castRole(c, st.signoff?.castId)) t.signoff = st.signoff;
       db.tasks[t.id] = t;
       made.set(st.ref, t);
     }
@@ -3276,7 +3319,7 @@ async function aiReport(ws, auth, c, body) {
   const tasks = Object.values(db.tasks).filter((t) => ids.has(campaignOf('task', t)));
   const done = tasks.filter((t) => t.done && (t.doneAt || 0) > since);
   const open = tasks.filter((t) => !t.done);
-  const whoIs = (t) => (t.assigneeId ? ws.members.find((x) => x.id === t.assigneeId)?.name : t.roleId ? (ws.roles || []).find((r) => r.id === t.roleId)?.name : null) || 'nobody';
+  const whoIs = (t) => (t.assigneeId ? ws.members.find((x) => x.id === t.assigneeId)?.name : t.roleId ? (ws.roles || []).find((r) => r.id === t.roleId)?.name : t.castId ? castRole(taskCamp(t), t.castId)?.name : null) || 'nobody';
   const load = Object.entries(open.reduce((n, t) => ((n[whoIs(t)] = (n[whoIs(t)] || 0) + 1), n), {})).sort((a, b) => b[1] - a[1]);
   const late = open.filter((t) => t.due && t.due < today);
   const sold = log.filter((x) => x.amount).reduce((n, x) => n + x.amount, 0);
@@ -4367,7 +4410,7 @@ async function api(req, res, url) {
     if (m === 'POST' && !b) {
       const t = applyTask({ id: rid(), wsId: ws.id, by: auth.member, memberId: auth.memberId, createdAt: Date.now(), text: '', done: false, doneAt: null, due: null, priority: 0, goalId: null, assigneeId: null }, await readJson(req, 50_000));
       if (!canSee(auth, 'task', t)) return send(res, 404, { error: 'Goal not found' });
-      if (t.assigneeId || t.roleId) t.assignedBy = auth.memberId;
+      if (t.assigneeId || t.roleId || t.castId) t.assignedBy = auth.memberId;
       db.tasks[t.id] = t;
       if (t.recordId) PJ.recordActivity(t.recordId, { kind: 'task', what: 'added', note: t.text, taskId: t.id, by: auth.member });
       save();
@@ -4383,12 +4426,27 @@ async function api(req, res, url) {
       if ((body.skipped !== undefined || body.unlocked !== undefined) && !passesSteps(camp, auth)) return send(res, 403, { error: 'Only an owner can skip or unlock a step.' });
       const waits = body.done && !t.done && !passesSteps(camp, auth) && taskWaitsOn(t);
       if (waits) return send(res, 409, { error: `This is waiting on “${clipText(waits.title || waits.text, 80)}”. That has to be done first.` });
+      if (body.sendBack !== undefined && !(t.submitted && maySignOff(t, auth))) return send(res, 403, { error: 'Only whoever signs it off can send it back.' });
       const next = applyTask({ ...t }, body);
       if (body.skipped !== undefined) next.skipped = !!body.skipped;
       if (body.unlocked !== undefined) next.unlocked = !!body.unlocked;
       if (!canSee(auth, 'task', next)) return send(res, 404, { error: 'Goal not found' });
+      // A step that needs sign-off: ticking it sends it to whoever signs off. Their tick (or the owner's) finishes it.
+      let signNews = null;
+      if (body.done && !t.done && next.signoff && !maySignOff(next, auth)) {
+        Object.assign(next, { done: false, doneAt: null, submitted: { by: auth.member, byId: auth.memberId, at: Date.now() }, returned: null });
+        signNews = { type: 'signoff', task: null, by: auth.member };
+      } else if (body.done && !t.done) {
+        if (next.signoff) next.approved = { by: auth.member, at: Date.now() };
+        next.submitted = null;
+        next.returned = null;
+      } else if (body.sendBack !== undefined) {
+        next.returned = { note: cleanText(body.sendBack, 500), by: auth.member, at: Date.now() };
+        next.submitted = null;
+        signNews = { type: 'returned', task: null, by: auth.member, note: next.returned.note };
+      } else if (body.done === false && t.done) next.approved = null;
       // Who handed it over, so the new assignee can be told.
-      if (next.assigneeId !== t.assigneeId || next.roleId !== t.roleId) next.assignedBy = next.assigneeId || next.roleId ? auth.memberId : null;
+      if (next.assigneeId !== t.assigneeId || next.roleId !== t.roleId || next.castId !== t.castId) next.assignedBy = next.assigneeId || next.roleId || next.castId ? auth.memberId : null;
       db.tasks[t.id] = next;
       if (next.recordId && next.done && !t.done) PJ.recordActivity(next.recordId, { kind: 'task', what: 'done', note: next.text, taskId: next.id, by: auth.member });
       // Ticking off a come-back task ticks off its spot on the map.
@@ -4409,6 +4467,7 @@ async function api(req, res, url) {
       // Someone who could see it and now can't (it was handed away) has it taken off their app.
       for (const mb of ws.members) if (seesOwn('task', t, mb.id) && !seesOwn('task', next, mb.id)) broadcast(ws.id, { type: 'task:remove', id: t.id, forMember: mb.id });
       broadcast(ws.id, { type: 'task', task: publicTask(next) });
+      if (signNews) broadcast(ws.id, { ...signNews, task: publicTask(next) });
       // A campaign task handed to someone new opens (or closes) that campaign for them.
       if (next.goalId && (next.assigneeId !== t.assigneeId || next.goalId !== t.goalId)) resyncVisibility(ws.id, [t.assigneeId, next.assigneeId]);
       return send(res, 200, publicTask(next));
@@ -4430,7 +4489,7 @@ async function api(req, res, url) {
     if (!c || c.wsId !== ws.id || !canSee(auth, 'campaign', c)) return send(res, 404, { error: 'Not found' });
     if (m === 'PATCH') {
       const body = await readJson(req, 100_000);
-      const was = JSON.stringify([c.private, c.memberIds, c.assigneeId]);
+      const was = JSON.stringify([c.private, c.memberIds, c.assigneeId, castOf(c).map((r) => r.memberIds)]);
       const next = applyCampaign({ ...c, memberIds: [...c.memberIds] }, body, ws, auth);
       if (next.assigneeId !== c.assigneeId) next.assignedBy = next.assigneeId ? auth.memberId : null;
       db.campaigns[c.id] = next;
@@ -4441,7 +4500,14 @@ async function api(req, res, url) {
       save();
       // Who can see it changed: everyone reloads so it appears or disappears cleanly.
       // The campaign itself goes first so a new assignee is told it's theirs.
-      if (was !== JSON.stringify([next.private, next.memberIds, next.assigneeId])) {
+      // A role taken away: its tasks go back to nobody, and steps it signed off no longer wait for it.
+      if (body.cast !== undefined) for (const t of Object.values(db.tasks)) {
+        if (taskCamp(t)?.id !== c.id || !((t.castId && !castRole(next, t.castId)) || (t.signoff?.castId && !castRole(next, t.signoff.castId)))) continue;
+        if (t.castId && !castRole(next, t.castId)) t.castId = null;
+        if (t.signoff?.castId && !castRole(next, t.signoff.castId)) Object.assign(t, { signoff: null, submitted: null });
+        broadcast(ws.id, { type: 'task', task: publicTask(t) });
+      }
+      if (was !== JSON.stringify([next.private, next.memberIds, next.assigneeId, castOf(next).map((r) => r.memberIds)])) {
         broadcast(ws.id, { type: 'campaign', campaign: publicCampaign(next) });
         if (next.private || ws.settings.visibility === 'own') broadcast(ws.id, { type: 'resync' });
       } else {
@@ -5409,8 +5475,8 @@ async function api(req, res, url) {
     const t = b && db.templates[b];
     if (!t || t.wsId !== ws.id || !seesTemplate(t, auth.memberId)) return send(res, 404, { error: 'Not found' });
     if (c === 'run' && m === 'POST') {
-      const { date, tz } = await readJson(req);
-      const camp = runTemplate(t, { date: isDay(date) ? date : localNow(validTz(tz || t.tz), Date.now()).date, by: auth.memberId });
+      const { date, tz, cast } = await readJson(req);
+      const camp = runTemplate(t, { date: isDay(date) ? date : localNow(validTz(tz || t.tz), Date.now()).date, by: auth.memberId, cast: cast && typeof cast === 'object' ? cast : null });
       return send(res, 200, publicCampaign(camp));
     }
     if (c) return send(res, 404, { error: 'Not found' });
@@ -6895,6 +6961,7 @@ async function removeMember(ws, m) {
     hand(c, 'ownerId');
     if (c.assigneeId === id) c.assigneeId = null;
     c.memberIds = c.memberIds.filter((x) => x !== id);
+    for (const r of castOf(c)) r.memberIds = r.memberIds.filter((x) => x !== id);
   }
   for (const t of Object.values(db.templates)) {
     if (t.wsId !== wsId) continue;

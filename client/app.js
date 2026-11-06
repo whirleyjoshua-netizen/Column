@@ -522,6 +522,14 @@
       if (newly && msg.task.assignedBy !== S.me?.memberId) assignedToMe(msg.task);
       renderDay();
       refreshLinks();
+    } else if (msg.type === 'signoff' || msg.type === 'returned') {
+      upsertTask(msg.task);
+      renderDay();
+      renderCamps();
+      const t = msg.task;
+      const show = () => showStep(t);
+      if (msg.type === 'signoff' && maySign(t) && t.submitted?.byId !== S.me?.memberId) notice(`${msg.by} sent “${shortText(t.text, 60)}” for your sign-off`, 'Approve it or send it back', show);
+      if (msg.type === 'returned' && taskMine(t)) notice(`${msg.by} sent “${shortText(t.text, 60)}” back`, msg.note, show);
     } else if (msg.type === 'handoff') {
       upsertTask(msg.task);
       renderDay();
@@ -535,6 +543,11 @@
       const list = { campaign: S.campaigns, goal: S.goals, attempt: S.attempts, list: S.lists }[msg.type];
       const x = msg[msg.type];
       const i = list.findIndex((y) => y.id === x.id);
+      // Given a role in a campaign by someone else: say so.
+      if (msg.type === 'campaign' && i >= 0 && Date.now() - (K.castSaved || 0) > 5000) {
+        const got = castOf(x).filter((r) => r.memberIds.includes(S.me?.memberId) && !castOf(list[i]).find((y) => y.id === r.id)?.memberIds.includes(S.me?.memberId));
+        if (got.length) notice(`You’re the ${got.map((r) => r.name).join(' and ')} on ${x.name}`, got[0].about || 'Its tasks for that role are yours now', () => openCampaign(x.id));
+      }
       if (msg.type === 'campaign' && x.assigneeId === S.me?.memberId && list[i]?.assigneeId !== x.assigneeId && x.assignedBy !== S.me?.memberId) assignedToMe(x, 'campaign');
       if (i >= 0) list[i] = x;
       else list.push(x);
@@ -696,6 +709,16 @@
   // Same for a campaign I'm made responsible for. Things that arrive together (Plan it out, or a campaign
   // with its tasks) become one notice. Nobody assigned it = a saved campaign started on its schedule.
   let assignedBatch = [];
+  // A toast, and a desktop notification when the app is in the background.
+  function notice(title, body, show) {
+    toast(body ? `${title}: ${body}` : title, { label: 'Show', run: show });
+    if (S.notify && document.hidden && 'Notification' in window && Notification.permission === 'granted') {
+      try {
+        const n = new Notification(title, { body: body || '', icon: '/icon-128.png', silent: false });
+        n.onclick = () => { window.focus(); show(); };
+      } catch {}
+    }
+  }
   // Something you were waiting on is done, so your task is open.
   function youreUp(t, by) {
     const title = 'You’re up';
@@ -2900,11 +2923,11 @@
       onpointerdown: (ev) => !t.done && !waits && dragToTimeline(ev, t.text, (k, m) => scheduleTask(t, k, m)) },
       sort ? grip((ev) => sortDrag(ev, ev.currentTarget.parentNode, '.task-row', sort)) : null,
       h('button', {
-        class: 'check' + (t.done ? ' on' : '') + (pr ? ' pr-' + pr : ''),
+        class: 'check' + (t.done ? ' on' : '') + (pr ? ' pr-' + pr : '') + (t.submitted && !t.done ? ' pending' : ''),
         html: I.check,
         disabled: !!waits,
         'aria-label': waits ? waitMsg : t.done ? 'Mark not done' : 'Mark done',
-        onclick: () => patchTask(t, { done: !t.done }),
+        onclick: () => (!t.done && t.signoff && !maySign(t) ? (t.submitted ? toast(`Waiting for ${signerName(t)} to sign it off`) : sendForSignoff(t)) : patchTask(t, { done: !t.done })),
       }),
       pr && !t.done ? h('button', { class: 'prio pr-' + pr, title: PRIO[pr] + ' priority', onclick: (ev) => prioMenu(ev.currentTarget, t) }, '!'.repeat(pr)) : null,
       text,
@@ -2927,12 +2950,25 @@
       t.docId && S.items.some((x) => x.id === t.docId) ? h('button', { class: 'list-chip', title: `From the doc “${docTitle(S.items.find((x) => x.id === t.docId))}”`, onclick: (ev) => { ev.stopPropagation(); openDoc(S.items.find((x) => x.id === t.docId)); } }, '📄 Doc') : null,
       t.pinId && pinById(t.pinId) ? h('button', { class: 'list-chip', title: 'Show it on the map', onclick: (ev) => { ev.stopPropagation(); openMap({ pinId: t.pinId }); } }, 'Map') : null,
       camp && !inCampaign && !noCamp ? h('button', { class: 'camp-chip c-' + camp.color, title: `${camp.name} · ${g.title}`, onclick: () => openCampaign(camp.id) }, camp.name) : null,
-      t.assigneeId ? avatar(t.assigneeId) : t.roleId ? roleChip(t.roleId) : null,
+      ...signoffBits(t),
+      t.assigneeId ? avatar(t.assigneeId) : t.roleId ? roleChip(t.roleId) : t.castId ? castChip(t) : null,
       t.followUp && camp && !t.done ? h('button', { class: 'btn small task-log', title: 'Log how the follow-up went', onclick: (ev) => { ev.stopPropagation(); logFollowUp(t, camp); } }, 'Log') : null,
       t.done || waits || !g ? null : btn(I.spark, 'Tools for this task', (b) => toolsMenu(b, t)),
       t.done || waits ? null : btn(I.clock, 'Put on schedule', () => openSheet({ text: t.text, taskId: t.id, date: t.due && D.sub === 'tasks' ? t.due : D.date })),
       btn(I.more, 'More', (b) => taskMenu(b, t))
     );
+  }
+
+  // A step that needs sign-off: who signs it, and while it's waiting on them, Approve / Send back for them.
+  function signoffBits(t) {
+    if (t.done) return [];
+    const back = t.returned && !t.submitted ? h('span', { class: 'step-tag back', title: `${t.returned.by}: ${t.returned.note}` }, 'Sent back') : null;
+    if (!t.signoff) return [back];
+    if (t.submitted && maySign(t)) return [back,
+      h('button', { class: 'btn small primary-btn sign-btn', title: `${t.submitted.by} finished it. Approving marks it done.`, onclick: (ev) => { ev.stopPropagation(); patchTask(t, { done: true }); } }, 'Approve'),
+      h('button', { class: 'btn small sign-btn', onclick: (ev) => { ev.stopPropagation(); sendBack(t); } }, 'Send back')];
+    if (t.submitted) return [h('span', { class: 'step-tag sign', title: `Sent by ${t.submitted.by}` }, `With ${signerName(t)} for sign-off`)];
+    return [back, h('span', { class: 'step-tag', title: `${signerName(t)} signs it off before it counts as done` }, '✓ ' + signerName(t))];
   }
 
   // ----- files on tasks: the finished thing a task asked for, dropped on it or picked -----
@@ -2980,9 +3016,10 @@
       { label: t.due ? `Due ${dueLabel(t.due)}…` : 'Due date…', run: () => dueMenu(anchor, t) },
       { label: t.priority ? `${PRIO[t.priority]} priority…` : 'Priority…', run: () => prioMenu(anchor, t) },
       { label: taskFiles(t).length ? `Attached · ${taskFiles(t).length}…` : 'Attach a file…', run: () => (taskFiles(t).length ? taskFilesMenu(anchor, t) : pickForTask(t)) },
-      { label: t.assigneeId ? `Assigned to ${memberName(t.assigneeId)}…` : t.roleId && roleById(t.roleId) ? `For ${roleById(t.roleId).name}…` : 'Assign to…', run: () => assignMenu(anchor, t) },
+      { label: t.assigneeId ? `Assigned to ${memberName(t.assigneeId)}…` : t.roleId && roleById(t.roleId) ? `For ${roleById(t.roleId).name}…` : castRoleOf(t) ? `For the ${castRoleOf(t).name}…` : 'Assign to…', run: () => assignMenu(anchor, t) },
       { label: g ? `Goal: ${g.title}…` : 'Add to a goal…', run: () => goalMenu(anchor, t) },
       { label: t.blockedBy?.length ? `Waits for ${plural(t.blockedBy.length, 'task')}…` : 'Waits for…', run: () => waitsSheet(t) },
+      { label: t.signoff ? `Signed off by ${signerName(t)}…` : 'Needs sign-off…', run: () => signoffMenu(anchor, t) },
       ...(g ? [{ label: t.report ? 'Stop asking for a report' : 'Ask for a report when done', run: () => patchTask(t, { report: !t.report }) }] : []),
       ...stepRows(g && campById(g.campaignId), t, !!taskWaitsOn(t), (ch) => patchTask(t, ch)),
       ...(t.done ? [] : [{ label: '✦ Get help with it…', run: () => toolsMenu(anchor, t) }]),
@@ -3143,12 +3180,17 @@
 
   function assignMenu(anchor, t) {
     const roles = S.workspace.roles || [];
+    const camp = campById(goalById(t.goalId)?.campaignId);
     const who = (m) => [m.id === S.me?.memberId ? `${m.name} (you)` : m.name, rolesOf(m.id).map((r) => r.name).join(', ')].filter(Boolean).join(' · ');
     openMenu(anchor, [
       { head: 'Assign to' },
-      { label: 'Nobody', on: !t.assigneeId && !t.roleId, run: () => patchTask(t, { assigneeId: null, roleId: null }) },
-      ...S.workspace.members.map((m) => ({ label: who(m), on: t.assigneeId === m.id, run: () => patchTask(t, { assigneeId: m.id, roleId: null }) })),
-      ...(roles.length ? [{ head: 'Or a role' }, ...roles.map((r) => ({ label: `${r.name} · ${people(S.workspace.members.filter((m) => m.roleIds?.includes(r.id)).length)}`, on: t.roleId === r.id, run: () => patchTask(t, { roleId: r.id, assigneeId: null }) }))] : []),
+      { label: 'Nobody', on: !t.assigneeId && !t.roleId && !t.castId, run: () => patchTask(t, { assigneeId: null, roleId: null, castId: null }) },
+      ...(camp ? [{ head: 'A role in this campaign' },
+        ...castOf(camp).map((r) => ({ label: `${r.name} · ${r.memberIds.length ? r.memberIds.map(memberName).join(', ') : 'nobody yet'}`, on: t.castId === r.id, run: () => patchTask(t, { castId: r.id, assigneeId: null, roleId: null }) })),
+        { label: '+ New role in this campaign…', run: () => roleSheet(camp, null, (r) => r && patchTask(taskById(t.id) || t, { castId: r.id, assigneeId: null, roleId: null })) },
+        { head: 'A person' }] : []),
+      ...S.workspace.members.map((m) => ({ label: who(m) + ` · ${loadText(m.id)}`, on: t.assigneeId === m.id, run: () => patchTask(t, { assigneeId: m.id, roleId: null, castId: null }) })),
+      ...(roles.length ? [{ head: 'Or a role' }, ...roles.map((r) => ({ label: `${r.name} · ${people(S.workspace.members.filter((m) => m.roleIds?.includes(r.id)).length)}`, on: t.roleId === r.id, run: () => patchTask(t, { roleId: r.id, assigneeId: null, castId: null }) }))] : []),
     ]);
   }
   function goalMenu(anchor, t) {
@@ -3165,7 +3207,111 @@
   // Roles: the kinds of work people do (Sales, Installs…). A task can go to a role instead of a person.
   const roleById = (id) => (S.workspace?.roles || []).find((r) => r.id === id);
   const myRole = (id) => !!id && !!S.workspace?.members.find((m) => m.id === S.me?.memberId)?.roleIds?.includes(id);
-  const taskMine = (t) => t.assigneeId === S.me?.memberId || myRole(t.roleId);
+  const taskMine = (t) => t.assigneeId === S.me?.memberId || myRole(t.roleId) || taskFor(t, S.me?.memberId, true);
+  // ----- a campaign's roles (its cast): Designer, Caller, Approver… each played by one or more people -----
+  function castOf(c) { return c?.cast || []; }
+  function castRoleOf(t) { return t?.castId ? castOf(campById(goalById(t.goalId)?.campaignId)).find((r) => r.id === t.castId) : null; }
+  // Is this task for that person: given to them, for a team role of theirs, or for a role they play in its campaign.
+  function taskFor(t, memberId, castOnly) {
+    if (!memberId) return false;
+    if (castRoleOf(t)?.memberIds.includes(memberId)) return true;
+    if (castOnly) return false;
+    return t.assigneeId === memberId || (!!t.roleId && !!S.workspace.members.find((m) => m.id === memberId)?.roleIds?.includes(t.roleId));
+  }
+  // How much someone has on: their open tasks, so a role goes to whoever has room.
+  const openLoad = (memberId) => S.tasks.filter((t) => !t.done && taskFor(t, memberId)).length;
+  const loadText = (memberId) => { const n = openLoad(memberId); return n ? `${n} open task${n === 1 ? '' : 's'}` : 'free'; };
+  const castChip = (t) => { const r = castRoleOf(t); return r && h('span', { class: 'role-chip cast-chip' + (r.memberIds.includes(S.me?.memberId) ? ' mine' : '') + (r.memberIds.length ? '' : ' empty'), title: `For the ${r.name} in this campaign: ${r.memberIds.length ? r.memberIds.map(memberName).join(', ') : 'nobody plays it yet'}` }, r.name); };
+  // Sign-off: who has to approve a step before it counts as done. The campaign's owner and admins can too.
+  function signersOf(t) {
+    if (t.signoff?.memberId) return [t.signoff.memberId];
+    return castOf(campById(goalById(t.goalId)?.campaignId)).find((r) => r.id === t.signoff?.castId)?.memberIds || [];
+  }
+  const signerName = (t) => (t.signoff?.memberId ? memberName(t.signoff.memberId) : castOf(campById(goalById(t.goalId)?.campaignId)).find((r) => r.id === t.signoff?.castId)?.name || 'someone');
+  const maySign = (t) => amAdmin() || campById(goalById(t.goalId)?.campaignId)?.ownerId === S.me?.memberId || signersOf(t).includes(S.me?.memberId);
+  async function sendForSignoff(t) {
+    try {
+      upsertTask(await api('PATCH', '/tasks/' + t.id, { done: true }));
+      renderDay();
+      toast(`Sent to ${signerName(t)} for sign-off`);
+    } catch (er) {
+      toast(er.message);
+    }
+  }
+  function sendBack(t) {
+    const note = h('textarea', { rows: 3, placeholder: 'What needs to change?' });
+    sheet(`Send back “${shortText(t.text, 40)}”`, [h('label', {}, 'Note for whoever did it', note)], async () => {
+      if (!note.value.trim()) throw new Error('Say what needs to change.');
+      upsertTask(await api('PATCH', '/tasks/' + t.id, { sendBack: note.value.trim() }));
+      renderDay();
+    }, 'Send back');
+  }
+  function signoffMenu(anchor, t) {
+    const c = campById(goalById(t.goalId)?.campaignId);
+    openMenu(anchor, [
+      { head: 'Who signs it off' },
+      { label: 'Nobody: done means done', on: !t.signoff, run: () => patchTask(t, { signoff: null }) },
+      ...(castOf(c).length ? [{ head: 'A role in this campaign' }, ...castOf(c).map((r) => ({ label: `${r.name} · ${r.memberIds.length ? r.memberIds.map(memberName).join(', ') : 'nobody yet'}`, on: t.signoff?.castId === r.id, run: () => patchTask(t, { signoff: { castId: r.id } }) }))] : []),
+      { head: 'A person' },
+      ...S.workspace.members.map((m) => ({ label: m.id === S.me?.memberId ? `${m.name} (you)` : m.name, on: t.signoff?.memberId === m.id, run: () => patchTask(t, { signoff: { memberId: m.id } }) })),
+    ]);
+  }
+  // Add or change one of a campaign's roles, and who plays it.
+  function roleSheet(c, r, after) {
+    const name = h('input', { value: r?.name || '', placeholder: 'Designer, Caller, Approver…' });
+    const about = h('input', { value: r?.about || '', placeholder: 'What they do here (optional)' });
+    const picks = S.workspace.members.map((m) => {
+      const cb = h('input', { type: 'checkbox', value: m.id });
+      cb.checked = !!r?.memberIds.includes(m.id);
+      return { m, cb, row: h('label', { class: 'pick wait-pick' }, cb, h('span', {}, m.id === S.me?.memberId ? `${m.name} (you)` : m.name), h('small', { class: openLoad(m.id) >= 10 ? 'heavy' : '' }, loadText(m.id))) };
+    });
+    const n = r ? S.tasks.filter((t) => !t.done && t.castId === r.id && goalById(t.goalId)?.campaignId === c.id).length : 0;
+    const save = async (list) => {
+      K.castSaved = Date.now();
+      const saved = await api('PATCH', '/campaigns/' + c.id, { cast: list });
+      const i = S.campaigns.findIndex((x) => x.id === c.id);
+      if (i >= 0) S.campaigns[i] = saved;
+      renderCamps();
+      return saved;
+    };
+    sheet(r ? `Role: ${r.name}` : `New role in ${c.name}`, [
+      h('label', {}, 'Name', name),
+      h('label', {}, 'What they do', about),
+      h('div', { class: 'picks-h' }, 'Who plays it'),
+      h('div', { class: 'picks wait-picks' }, picks.map((p) => p.row)),
+      h('p', { class: 'day-hint' }, 'Tasks for this role go to everyone who plays it. Beside each name: how many open tasks they have right now.'),
+      r ? h('button', { class: 'btn small danger', onclick: () => save(castOf(c).filter((x) => x.id !== r.id)).then(closeSheet).catch((e) => toast(e.message)) },
+        n ? `Remove this role (its ${plural(n, 'open task')} go back to nobody)` : 'Remove this role') : null,
+    ], async () => {
+      const v = { ...(r || {}), name: name.value.trim(), about: about.value.trim(), memberIds: picks.filter((p) => p.cb.checked).map((p) => p.m.id) };
+      if (!v.name) throw new Error('Give the role a name.');
+      if (castOf(c).some((x) => x.id !== r?.id && x.name.toLowerCase() === v.name.toLowerCase())) throw new Error(`There’s already a ${v.name} in this campaign.`);
+      const saved = await save(r ? castOf(c).map((x) => (x.id === r.id ? v : x)) : [...castOf(c), v]);
+      if (after) after(saved.cast.find((x) => x.name.toLowerCase() === v.name.toLowerCase()));
+    });
+  }
+  // The campaign's roles, under its title: who's playing what, and which roles nobody has yet.
+  function castStrip(c) {
+    const roles = castOf(c);
+    return h('div', { class: 'cast-strip' },
+      h('span', { class: 'cast-h', title: 'The parts of this campaign’s work. Give tasks to a role and everyone playing it gets them.' }, 'Roles'),
+      roles.map((r) => h('button', { class: 'cast-pill' + (r.memberIds.length ? '' : ' empty') + (r.memberIds.includes(S.me?.memberId) ? ' mine' : ''), title: (r.about ? r.about + '\n' : '') + 'Click to change who plays it', onclick: () => roleSheet(c, r) },
+        h('b', {}, r.name), r.memberIds.length ? r.memberIds.map(memberName).join(', ') : 'nobody yet')),
+      h('button', { class: 'cast-pill add', onclick: () => roleSheet(c) }, roles.length ? '+ Role' : '+ Add roles, like Designer, Caller or Approver'));
+  }
+  // Starting a saved campaign that has roles: who plays each one this time. Ticked: the crew it was saved with.
+  function crewSheet(t, go) {
+    const roles = t.campaign?.cast || [];
+    const sets = roles.map((r) => ({ r, picks: S.workspace.members.map((m) => {
+      const cb = h('input', { type: 'checkbox', value: m.id });
+      cb.checked = r.memberIds.includes(m.id);
+      return { m, cb, row: h('label', { class: 'pick wait-pick' }, cb, h('span', {}, m.id === S.me?.memberId ? `${m.name} (you)` : m.name), h('small', { class: openLoad(m.id) >= 10 ? 'heavy' : '' }, loadText(m.id))) };
+    }) }));
+    sheet(`Who’s playing each role?`, [
+      h('p', { class: 'day-hint' }, `“${t.name}” has ${plural(roles.length, 'role')}. Each person’s open tasks are beside their name, so the work goes to whoever has room.`),
+      ...sets.map(({ r, picks }) => h('div', { class: 'crew-role' }, h('div', { class: 'picks-h' }, h('b', {}, r.name), r.about ? ' · ' + r.about : ''), h('div', { class: 'picks wait-picks' }, picks.map((p) => p.row)))),
+    ], () => go(Object.fromEntries(sets.map(({ r, picks }) => [r.id, picks.filter((p) => p.cb.checked).map((p) => p.m.id)]))), 'Start it');
+  }
   const rolesOf = (memberId) => (S.workspace?.members.find((m) => m.id === memberId)?.roleIds || []).map(roleById).filter(Boolean);
   const whoName = (x) => (x.roleId && roleById(x.roleId) ? roleById(x.roleId).name : x.assigneeId ? memberName(x.assigneeId) : '');
   const roleChip = (id) => roleById(id) && h('span', { class: 'role-chip' + (myRole(id) ? ' mine' : ''), title: `For ${roleById(id).name}${roleById(id).about ? ': ' + roleById(id).about : ''}` }, roleById(id).name);
@@ -3857,9 +4003,10 @@
     return t.slots.map((x) => `${days(x.days)} ${hhmm(x.time)}`).join(', ');
   }
   const canEditTemplate = (t) => t.ownerId === S.me?.memberId || amAdmin();
-  async function runTemplate(t) {
+  async function runTemplate(t, cast) {
+    if (!cast && t.campaign?.cast?.length) return crewSheet(t, (picked) => runTemplate(t, picked));
     try {
-      const c = await api('POST', `/templates/${t.id}/run`, { date: todayKey() });
+      const c = await api('POST', `/templates/${t.id}/run`, { date: todayKey(), ...(cast ? { cast } : {}) });
       if (!campById(c.id)) S.campaigns.push(c);
       openCampaign(c.id);
     } catch (e) {
@@ -3977,6 +4124,7 @@
         c.status !== 'active' ? h('span', { class: 'pill' }, c.status === 'done' ? 'Finished' : 'Paused') : null,
         c.inOrder ? h('span', { class: 'pill', title: 'Goals and tasks open one at a time, top to bottom' }, 'In order') : null,
         who ? h('span', { class: 'pill', title: who.map(memberName).join(', ') }, h('span', { class: 'is-task', html: I.lock }), `Private · ${who.length}`) : null),
+      castStrip(c),
       h('div', { class: 'camp-total' }, bar(p, c.color), h('span', {}, Math.round(p * 100) + '%')),
       c.budget ? campBudget(c) : null,
       c.money ? h('div', { class: 'camp-money', onclick: () => { FIN.tab = 'flow'; FIN.campaign = c.id; openTool('bills'); } },
@@ -5433,6 +5581,7 @@
       ...(c.parentId ? [] : [{ label: 'Add a sub-campaign…', run: () => campaignSheet(null, c) }]),
       { label: c.assigneeId ? `Responsible: ${memberName(c.assigneeId)}…` : 'Assign to…', run: () => assignCampaignMenu(anchor, c) },
       { label: c.budget ? `Budget: ${money(c.budget)}…` : 'Set a budget…', run: () => campaignSheet(c, null, 'budget') },
+      { label: castOf(c).length ? 'Add a role…' : 'Add roles (Designer, Caller…)…', run: () => roleSheet(c) },
       { label: 'Save to run again…', run: () => saveTemplate(c) },
       { label: 'What to log & follow-ups…', run: () => outcomesSheet(c) },
       ...(canPass(c) ? [{ label: c.inOrder ? 'Stop working in order' : 'Work in order (one step at a time)', on: !!c.inOrder, run: () => api('PATCH', '/campaigns/' + c.id, { inOrder: !c.inOrder }).catch((e) => toast(e.message)) }] : []),
