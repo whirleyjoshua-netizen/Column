@@ -1505,6 +1505,13 @@ function applyCampaign(c, body, ws, auth) {
     c.inOrder = !!body.inOrder;
   }
   if (body.cast !== undefined) c.cast = castList(body.cast, ws);
+  // In a series: the campaign this one comes after. Finishing that one tells whoever runs this one it's up.
+  if (body.follows !== undefined) {
+    let p = body.follows && db.campaigns[body.follows];
+    if (body.follows && (!p || p.wsId !== ws.id || p.id === c.id)) throw badRequest('That campaign is gone.');
+    for (let q = p, n = 0; q && n < 50; q = db.campaigns[q.follows], n++) if (q.id === c.id) throw badRequest('They’d each come after the other.');
+    c.follows = p ? p.id : null;
+  }
   if (body.memberIds !== undefined) c.memberIds = (Array.isArray(body.memberIds) ? body.memberIds : []).filter((id) => ws.members.some((m) => m.id === id) && id !== c.ownerId);
   // Part of a bigger campaign: its progress counts toward the main one's. One level: a sub has no subs of its own.
   if (body.parentId !== undefined) {
@@ -1787,6 +1794,11 @@ function deleteTask(t) {
   }
 }
 function deleteCampaign(ws, c) {
+  // What came after it now stands on its own.
+  for (const x of Object.values(db.campaigns)) if (x.follows === c.id) {
+    x.follows = null;
+    broadcast(ws.id, { type: 'campaign', campaign: publicCampaign(x) });
+  }
   // Its sub-campaigns carry on by themselves.
   for (const x of subsOf(c)) {
     x.parentId = null;
@@ -3839,7 +3851,7 @@ async function aiPlan(ws, auth, c, body) {
 // and the app builds them through the usual routes. After that it keeps an eye on the campaign's pace, or on
 // the budgets, and says so when they slip, and the person can pick the conversation back up. Each one is its
 // maker's own.
-const SK_CARDS = ['campaign', 'sub', 'goal', 'list', 'note', 'budget', 'bill', 'block', 'task', 'change'];
+const SK_CARDS = ['campaign', 'sub', 'goal', 'list', 'note', 'budget', 'bill', 'block', 'task', 'change', 'roles', 'next'];
 const SK_KINDS = ['campaign', 'schedule', 'money'];
 const SK_TITLES = { campaign: 'New campaign plan', schedule: 'New schedule', money: 'New budget plan' };
 const SK_KEEP = 60;
@@ -3848,6 +3860,20 @@ const skNews = (x) => broadcast(x.wsId, { type: 'sidekick', sidekick: publicSide
 const skDay = (v) => (isDay(v) ? v : null);
 const skMin = (v, max) => (Number.isFinite(Number(v)) && v !== null && v !== '' ? Math.max(0, Math.min(max, Math.round(Number(v)))) : null);
 // One card from the AI, cleaned up: only what Kloomie can build, with sane values.
+const skNames = (v, n, len) => (Array.isArray(v) ? v : []).slice(0, n).map((x) => clipText(String(x ?? '').trim(), len)).filter(Boolean);
+// A planned task's place in the work: its key (so others can wait for it), what it waits for, its campaign role,
+// the tool that does it, who signs it off, and how many days after it opens it's due.
+function skStep(x) {
+  const n = Math.round(Number(x?.dueAfter));
+  return {
+    key: clipText(String(x?.key ?? '').trim(), 20) || null,
+    after: skNames(x?.after, 8, 20),
+    role: clipText(String(x?.role ?? '').trim(), 40) || null,
+    tool: STEP_KINDS.includes(x?.tool) ? x.tool : null,
+    signoff: clipText(String(x?.signoff ?? '').trim(), 80) || null,
+    dueAfter: x?.dueAfter != null && x?.dueAfter !== '' && Number.isFinite(n) ? Math.max(0, Math.min(365, n)) : null,
+  };
+}
 function skCard(v, ws) {
   const type = SK_CARDS.includes(v?.type) ? v.type : null;
   if (!type) return null;
@@ -3857,8 +3883,16 @@ function skCard(v, ws) {
   if (type === 'goal') Object.assign(c, {
     title: t(v.title, 200), kind: ['count', 'money'].includes(v.kind) ? v.kind : 'tasks',
     target: v.kind === 'count' || v.kind === 'money' ? Math.max(1, Math.min(10_000_000, Math.round(Number(String(v.target).replace(/[$,]/g, ''))) || 10)) : null,
-    due: skDay(v.due), tasks: (Array.isArray(v.tasks) ? v.tasks : []).slice(0, 12).map((x) => ({ text: t(x?.text, 300), due: skDay(x?.due), ...whoOfCard(ws, x) })).filter((x) => x.text),
+    due: skDay(v.due), after: skNames(v.after, 6, 200),
+    tasks: (Array.isArray(v.tasks) ? v.tasks : []).slice(0, 16).map((x) => ({ text: t(x?.text, 300), due: skDay(x?.due), ...whoOfCard(ws, x), ...skStep(x) })).filter((x) => x.text),
   });
+  // The campaign's roles, and who on the team plays each (by name, matched to the team; ids once matched).
+  if (type === 'roles') Object.assign(c, { roles: (Array.isArray(v.roles) ? v.roles : []).slice(0, 12).map((r) => ({
+    name: t(r?.name, 40), about: t(r?.about, 200),
+    memberIds: [...new Set([...(Array.isArray(r?.memberIds) ? r.memberIds : []), ...(Array.isArray(r?.who) ? r.who : []).map((n) => ws.members.find((m) => sameText(m.name, n))?.id)].filter((id) => ws.members.some((m) => m.id === id)))],
+  })).filter((r) => r.name) });
+  // The campaign that comes after this one, in a series. Planned in detail on its own later.
+  if (type === 'next') Object.assign(c, { name: t(v.name, 80), brief: t(v.brief, 4000), start: skDay(v.start), end: skDay(v.end) });
   if (type === 'list') {
     if (!contactsOf(ws.id).length) return null;
     Object.assign(c, { name: t(v.name, 80) || 'Contacts', live: applyLive(v.live || {}) });
@@ -3876,7 +3910,7 @@ function skCard(v, ws) {
   if (type === 'block') Object.assign(c, { text: t(v.text, 200), date: skDay(v.date), start: skMin(v.start, 1439), end: skMin(v.end, 1440), repeat: REPEATS.includes(v.repeat) ? v.repeat : null });
   if (type === 'task') Object.assign(c, { text: t(v.text, 300), due: skDay(v.due), goal: t(v.goal, 200), ...whoOfCard(ws, v) });
   if (type === 'change') Object.assign(c, { text: t(v.text, 300), goalId: db.goals[v.goalId]?.wsId === ws.id ? v.goalId : null, due: skDay(v.due), target: Number(v.target) > 0 ? Math.round(Number(v.target)) : null, end: skDay(v.end) });
-  const empty = { campaign: !c.name, sub: !c.name, goal: !c.title, note: !c.text, budget: !c.category || c.limit == null, bill: !c.name || !c.amount || !c.due, block: !c.text || !c.date || c.start == null || c.end == null || c.end <= c.start, task: !c.text, change: !c.text || (!c.goalId && !c.end) }[type];
+  const empty = { campaign: !c.name, sub: !c.name, next: !c.name, roles: !c.roles?.length, goal: !c.title, note: !c.text, budget: !c.category || c.limit == null, bill: !c.name || !c.amount || !c.due, block: !c.text || !c.date || c.start == null || c.end == null || c.end <= c.start, task: !c.text, change: !c.text || (!c.goalId && !c.end) }[type];
   return empty ? null : c;
 }
 // How far along a campaign is, 0 to 1: its goals' progress on average, as the app shows it.
@@ -4101,7 +4135,13 @@ const SK_SYSTEM = (kind, built) => [
   'Reply with JSON only: {"reply":"what you say, plain text, short paragraphs, no markdown","title":"a short name for this plan, once you know it, else null","cards":[...]}. cards is often empty while you’re still asking. Card shapes:',
   '{"type":"campaign","name":"","brief":"the goal, audience and approach in a few lines","start":"YYYY-MM-DD","end":"YYYY-MM-DD","why":""}',
   kind === 'schedule' ? '' : '{"type":"sub","name":"","brief":"what this part does for the main campaign","start":"YYYY-MM-DD","end":"YYYY-MM-DD","why":""} — a sub-campaign under the one being planned. Not for a campaign that is itself a sub-campaign.',
-  '{"type":"goal","title":"","kind":"tasks"|"count"|"money","target":number|null (count: logged calls or emails to reach; money: whole dollars),"due":"YYYY-MM-DD"|null,"tasks":[{"text":"an action for one sitting","due":"YYYY-MM-DD"|null,"who":null|"role or person"}],"why":""}',
+  kind === 'campaign' ? [
+    'Plan it so the team can run it without you: who does what, what has to happen before what, which tool each step uses, who approves what customers will see, and when. Give the campaign its own roles (a roles card, like Designer, Caller, Approver) and put the team’s people in them by what they handle. Give each task a short key (t1, t2…) and list in "after" the keys of the tasks it can’t start before; leave "after" empty for work that can start right away, so things run side by side where they can. Use "dueAfter" (days after the tasks it waits for are done) instead of a fixed date for anything that waits. Say which tool does a step when one does: email (an email or mail-merge goes out), sign (someone signs a PDF), pay (a payment is logged), files (files collected from someone through a link), calls (a call list is worked), meeting (a meeting is held and noted). Put a sign-off on steps whose result goes in front of customers or costs real money.',
+    'Before proposing, look for gaps and say them plainly in your reply: steps nobody does, roles nobody plays, a step that needs something no earlier step produces, a budget that doesn’t cover the spending, dates that don’t fit. When the goal is long, propose what comes after this campaign as a next card.',
+  ].join(' ') : '',
+  '{"type":"goal","title":"","kind":"tasks"|"count"|"money","target":number|null (count: logged calls or emails to reach; money: whole dollars),"due":"YYYY-MM-DD"|null,"after":["titles of goals that must be met before this one starts"],"tasks":[{"key":"t1","text":"an action for one sitting","due":"YYYY-MM-DD"|null,"dueAfter":days|null,"after":["t2"],"role":null|"campaign role name from the roles card","who":null|"team role or person, when it has no campaign role","tool":null|"email"|"sign"|"pay"|"files"|"calls"|"meeting","signoff":null|"campaign role or person who approves it"}],"why":""}',
+  kind === 'campaign' ? '{"type":"roles","roles":[{"name":"Designer","about":"what they do here","who":["team member names exactly as given"]}],"why":""} — the campaign’s roles. One card for all of them.' : '',
+  kind === 'campaign' ? '{"type":"next","name":"","brief":"what it does and why it comes next","start":"YYYY-MM-DD","end":"YYYY-MM-DD","why":""} — a campaign that follows this one in a series.' : '',
   '{"type":"list","name":"","live":{"stages":[],"cities":[],"sources":[],"days":0|30|90|180|365,"need":"phone"|"email"|null},"why":""} — a prospect list pulled from their Contacts by filter, only if they have contacts. Use stage, city and source values exactly as given.',
   '{"type":"note","title":"","text":"markdown: # headings, - bullets, 1. steps, - [ ] to-dos, **bold**","template":null|"brief"|"report"|"proposal"|"onepager"|"script"|"sop"|"meeting","why":""} — a doc for the campaign, written out in full: a brief, a call script, an email draft, a one-pager, a proposal, a process guide, a weekly report, talking points. Propose one when the plan needs it (a script before calling starts, a brief for a new campaign, a report when they ask how it went). A report or brief gets the campaign’s numbers added on its own, so don’t repeat them.',
   `{"type":"budget","category":"","limit":whole dollars a month,"scope":"personal"|"business","why":""} — a monthly limit for one spending category.${kind === 'money' ? ' For a budget they already have, use its category exactly, and the card changes its limit; a limit of 0 removes it.' : ''}`,
@@ -4566,6 +4606,8 @@ async function api(req, res, url) {
       save();
       // Who can see it changed: everyone reloads so it appears or disappears cleanly.
       // The campaign itself goes first so a new assignee is told it's theirs.
+      // Finished: the campaigns that come after it are up.
+      if (next.status === 'done' && c.status !== 'done') for (const n of Object.values(db.campaigns)) if (n.follows === c.id && n.status !== 'done') broadcast(ws.id, { type: 'nextup', campaign: publicCampaign(n), after: c.name, by: auth.member });
       // A role taken away: its tasks go back to nobody, and steps it signed off no longer wait for it.
       if (body.cast !== undefined) for (const t of Object.values(db.tasks)) {
         if (taskCamp(t)?.id !== c.id || !((t.castId && !castRole(next, t.castId)) || (t.signoff?.castId && !castRole(next, t.signoff.castId)))) continue;

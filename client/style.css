@@ -1168,6 +1168,10 @@ body.viewer .preview pre, body.viewer .preview .pv-edit, body.viewer .preview .d
 .ci-row small { color: var(--muted); white-space: nowrap; }
 @media (max-width: 640px) { .lead-row { grid-template-columns: 1fr auto; } .lead-prog, .lead-facts { grid-column: 1 / -1; } }
 .camp-h-btns { display: flex; gap: 6px; }
+.sk-gaps { border: 1px solid #f5a524; background: color-mix(in srgb, #f5a524 10%, transparent); border-radius: 10px; padding: 8px 12px; margin: 8px 0; font-size: 12.5px; }
+.sk-gaps b { color: #b7791f; }
+.sk-gaps ul { margin: 4px 0 0; padding-left: 18px; }
+.sk-gap { color: #b7791f; }
 .check.pending { border-style: dotted; border-color: #f5a524; }
 @keyframes flash { 0%, 40% { background: var(--accent-soft); } 100% { background: transparent; } }
 

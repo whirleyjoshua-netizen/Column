@@ -20,7 +20,16 @@ http.createServer((req, res) => {
       const id = (user.match(/\[([\w-]{8,24})\] Ceramic/) || [])[1];
       const hasPdf = /"type":"document"|application\/pdf|"mime":"application\/pdf"/.test(user);
       out = { rows: [{ desc: 'Ceramic film, 12 windows', qty: 12, unit: 'window', from: id || null, price: 999 }, { desc: 'Ladder rental', qty: 1, unit: 'day', price: 85, cost: 60 }], assumptions: ['12 windows from plan sheet A2', 'pdf seen: ' + hasPdf], questions: ['Are the skylights included?'] };
-    } else if (sys.includes('You are Sidekick')) out = { reply: 'Here is a report doc.', title: 'Fleet check-in', cards: [{ type: 'note', title: 'Fleet push · weekly report', template: 'report', text: '# What worked\n- Two **booked** demos\n# Next week\n- [ ] Call the rest', why: 'You asked how it went' }] };
+    } else if (sys.includes('You are Sidekick') && user.includes('deep plan please')) out = { reply: 'Gap: nobody approves the flyer yet, so I made Approver a role.', title: 'Gym launch', cards: [
+      { type: 'campaign', name: 'Gym launch', brief: 'Flyers to 20 gyms, then calls', start: '2026-11-10', end: '2026-12-10', why: 'x' },
+      { type: 'roles', roles: [{ name: 'Designer', about: 'Makes the flyer', who: ['Sam'] }, { name: 'Approver', who: ['Nobody Real'] }], why: 'x' },
+      { type: 'goal', title: 'Flyer', kind: 'tasks', tasks: [
+        { key: 't1', text: 'Design the flyer', role: 'Designer', signoff: 'Approver' },
+        { key: 't2', text: 'Pay the printer', after: ['t1'], dueAfter: 2, tool: 'pay', who: 'Jo' },
+        { key: 't3', text: 'Teleport it', tool: 'teleport' }], why: 'x' },
+      { type: 'goal', title: 'Mail', kind: 'tasks', after: ['Flyer'], tasks: [{ key: 't4', text: 'Email the gyms', after: ['t2'], tool: 'email', role: 'Caller' }], why: 'x' },
+      { type: 'next', name: 'Gym follow-up', brief: 'Call everyone who got a flyer', start: '2026-12-11', end: '2027-01-15', why: 'x' }] };
+    else if (sys.includes('You are Sidekick')) out = { reply: 'Here is a report doc.', title: 'Fleet check-in', cards: [{ type: 'note', title: 'Fleet push · weekly report', template: 'report', text: '# What worked\n- Two **booked** demos\n# Next week\n- [ ] Call the rest', why: 'You asked how it went' }] };
     else if (sys.includes('Write the whole doc')) out = { text: '[[live:2]]\n# What worked\n- Calls to **Desert Auto** landed\n# What didn’t\n- [few callbacks]\n# Next week\n- [ ] Book 3 demos', title: 'AI title' };
     else if (sys.includes('Rewrite the selected text so it reads better')) out = { text: 'Much **better** words' };
     else if (sys.includes('Write what they ask for')) out = { text: '- First point\n- Second point' };

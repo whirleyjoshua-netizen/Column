@@ -532,6 +532,11 @@
       const show = () => showStep(t);
       if (msg.type === 'signoff' && maySign(t) && t.submitted?.byId !== S.me?.memberId) notice(`${msg.by} sent “${shortText(t.text, 60)}” for your sign-off`, 'Approve it or send it back', show);
       if (msg.type === 'returned' && taskMine(t)) notice(`${msg.by} sent “${shortText(t.text, 60)}” back`, msg.note, show);
+    } else if (msg.type === 'nextup') {
+      const i = S.campaigns.findIndex((y) => y.id === msg.campaign.id);
+      if (i >= 0) S.campaigns[i] = msg.campaign;
+      if (runsIt(msg.campaign) && msg.campaign.ownerId !== S.me?.memberId || msg.campaign.assigneeId === S.me?.memberId || (msg.campaign.ownerId === S.me?.memberId && msg.by !== S.me?.member))
+        notice(`${msg.after} is finished, so ${msg.campaign.name} is up`, msg.campaign.start ? 'Planned to start ' + dueLabel(msg.campaign.start) : '', () => openCampaign(msg.campaign.id));
     } else if (msg.type === 'handoff') {
       upsertTask(msg.task);
       renderDay();
@@ -4070,7 +4075,7 @@
       const ci = lastCheckin(c);
       const waitingN = hl.open.filter((t) => taskWaitsOn(t)).length;
       return h('div', { class: 'lead-row c-' + c.color + (sub ? ' sub' : ''), onclick: () => openCampaign(c.id) },
-        h('div', { class: 'lead-name' }, h('b', {}, c.name), h('small', {}, [c.assigneeId ? '→ ' + memberName(c.assigneeId) : '', campDates(c)].filter(Boolean).join(' · '))),
+        h('div', { class: 'lead-name' }, h('b', {}, c.name), h('small', {}, [c.assigneeId ? '→ ' + memberName(c.assigneeId) : '', campDates(c), campById(c.follows) ? 'after ' + campById(c.follows).name : ''].filter(Boolean).join(' · '))),
         healthPill(c, hl, runsIt(c) ? (e) => { e.stopPropagation(); checkinSheet(c); } : null),
         h('div', { class: 'lead-prog', title: gone != null ? `${pctOf(p)} done · ${pctOf(gone)} of the time gone` : `${pctOf(p)} done` },
           h('div', { class: 'lead-bar' }, h('i', { style: `width:${pctOf(p)}` }), gone != null ? h('u', { style: `left:${pctOf(gone)}` }) : null), h('small', {}, pctOf(p))),
@@ -4163,7 +4168,7 @@
       return h('div', { class: 'camp-card-wrap c-' + c.color }, h('button', { class: 'camp-card c-' + c.color + (c.status === 'paused' ? ' paused' : ''), onclick: () => openCampaign(c.id) },
         h('div', { class: 'cc-top' }, h('b', {}, c.name), c.private ? h('span', { class: 'cc-lock', html: I.lock, title: 'Private' }) : null, h('span', { class: 'cc-pct' }, Math.round(p * 100) + '%')),
         bar(p, c.color),
-        h('div', { class: 'cc-sub' }, [parentOf(c) ? 'Part of ' + parentOf(c).name : '', c.assigneeId ? '→ ' + memberName(c.assigneeId) : '', campDates(c), `${gs.length} goal${gs.length === 1 ? '' : 's'}`, subs ? plural(subs, 'sub-campaign') : '', mine ? `${mine} for you` : '', c.budget && c.budgetSpent > c.budget ? 'over budget' : '', c.status === 'paused' ? 'paused' : ''].filter(Boolean).join(' · '))),
+        h('div', { class: 'cc-sub' }, [parentOf(c) ? 'Part of ' + parentOf(c).name : '', campById(c.follows) ? 'after ' + campById(c.follows).name : '', c.assigneeId ? '→ ' + memberName(c.assigneeId) : '', campDates(c), `${gs.length} goal${gs.length === 1 ? '' : 's'}`, subs ? plural(subs, 'sub-campaign') : '', mine ? `${mine} for you` : '', c.budget && c.budgetSpent > c.budget ? 'over budget' : '', c.status === 'paused' ? 'paused' : ''].filter(Boolean).join(' · '))),
         subRows(c));
     };
     const setMine = (on) => { K.mine = on; store.set('campsMine', on); renderCamps(); };
@@ -4311,6 +4316,8 @@
         h('button', { class: 'icon-btn', 'aria-label': 'Campaign options', html: I.more, onclick: (e) => campaignMenu(e.currentTarget, c) })),
       h('div', { class: 'camp-meta' },
         parentOf(c) ? h('button', { class: 'pill pill-btn', title: 'The main campaign this one serves', onclick: () => openCampaign(c.parentId) }, '↑ Part of ' + parentOf(c).name) : null,
+        campById(c.follows) ? h('button', { class: 'pill pill-btn', title: 'In a series: this one comes after it', onclick: () => openCampaign(c.follows) }, '← After ' + campById(c.follows).name) : null,
+        S.campaigns.filter((x) => x.follows === c.id).map((x) => h('button', { class: 'pill pill-btn', title: 'In a series: this comes next', onclick: () => openCampaign(x.id) }, 'Next: ' + x.name + ' →')),
         campDates(c) ? h('span', {}, campDates(c)) : null,
         h('button', { class: 'pill pill-btn', title: 'Who’s responsible', onclick: (e) => assignCampaignMenu(e.currentTarget, c) }, c.assigneeId ? avatar(c.assigneeId) : null, c.assigneeId ? memberName(c.assigneeId) : 'Assign to…'),
         c.status !== 'active' ? h('span', { class: 'pill' }, c.status === 'done' ? 'Finished' : 'Paused') : null,
@@ -5827,6 +5834,8 @@
     const mains = S.campaigns.filter((x) => !x.parentId && x.id !== c?.id && x.status !== 'done');
     const partOf = h('select', {}, h('option', { value: '' }, 'Nothing: it’s a main campaign'), mains.map((x) => h('option', { value: x.id }, x.name)));
     partOf.value = main?.id || c?.parentId || '';
+    const after = h('select', {}, h('option', { value: '' }, 'Nothing: it stands on its own'), S.campaigns.filter((x) => x.id !== c?.id && (x.status !== 'done' || x.id === c?.follows)).map((x) => h('option', { value: x.id }, x.name)));
+    after.value = c?.follows || '';
     const brief = h('textarea', { rows: 4, placeholder: 'What’s the goal? Who’s it for? How will you know it worked?' });
     brief.value = c?.brief || '';
     const start = h('input', { type: 'date', value: c?.start || todayKey() });
@@ -5851,6 +5860,7 @@
       h('label', {}, 'Name', name),
       h('label', {}, 'Brief', brief),
       c && subsOf(c).length ? null : h('label', {}, 'Part of', partOf),
+      h('label', {}, 'Comes after (in a series)', after, h('small', { class: 'hint' }, 'When that one is marked finished, whoever runs this one hears it’s up.')),
       h('div', { class: 'row2' }, h('label', {}, 'Starts', start), h('label', {}, 'Ends (optional)', end)),
       h('label', {}, 'Budget (optional)', budget, h('small', { class: 'day-hint' }, 'Money out tagged to this campaign in Finance counts against it, sub-campaigns included.')),
       h('label', {}, 'Color', sw),
@@ -5858,7 +5868,7 @@
       owner ? h('label', { class: 'pick' }, priv, 'Private: only people I choose can see it') : (c?.private ? h('small', { class: 'day-hint' }, 'Private. The campaign owner chooses who sees it.') : null),
       owner ? people : null,
     ], async () => {
-      const body = { name: name.value, brief: brief.value, start: start.value || null, end: end.value || null, budget: budget.value.trim() || null, color, assigneeId: who.value || null, ...(c && subsOf(c).length ? {} : { parentId: partOf.value || null }) };
+      const body = { name: name.value, brief: brief.value, start: start.value || null, end: end.value || null, budget: budget.value.trim() || null, follows: after.value || null, color, assigneeId: who.value || null, ...(c && subsOf(c).length ? {} : { parentId: partOf.value || null }) };
       if (owner) Object.assign(body, { private: priv.checked, memberIds: picks.map((l) => l.firstChild).filter((cb) => cb.checked).map((cb) => cb.value) });
       const saved = c ? await api('PATCH', '/campaigns/' + c.id, body) : await api('POST', '/campaigns', body);
       const i = S.campaigns.findIndex((x) => x.id === saved.id);
@@ -10583,7 +10593,41 @@
   const skFor = (campaignId) => (S.sidekick || []).find((x) => x.campaignId === campaignId);
   const skNudges = () => (S.sidekick || []).filter((x) => x.nudge && x.status !== 'done' && (x.kind === 'money' || campById(x.campaignId)?.status === 'active'));
   const skCards = (x) => x.messages.flatMap((m) => m.cards || []);
-  const SK_LABEL = { campaign: 'Campaign', sub: 'Sub-campaign', goal: 'Goal', list: 'Prospect list', note: 'Doc', budget: 'Budget', bill: 'Bill', block: 'On your Day', task: 'Task', change: 'Change' };
+  const SK_LABEL = { campaign: 'Campaign', sub: 'Sub-campaign', goal: 'Goal', list: 'Prospect list', note: 'Doc', budget: 'Budget', bill: 'Bill', block: 'On your Day', task: 'Task', change: 'Change', roles: 'Roles', next: 'Next campaign' };
+  // A planned task's place in the work, in words: who, what it waits for, its tool, its sign-off.
+  function skTaskBits(t, plan) {
+    const byKey = (k) => plan.flatMap((c) => (c.type === 'goal' ? c.tasks : [])).find((y) => y.key === k);
+    return [t.role ? 'the ' + t.role : whoName(t), t.due && dueLabel(t.due),
+      t.after?.length ? 'after ' + t.after.map((k) => `“${shortText(byKey(k)?.text || k, 24)}”`).join(', ') : '',
+      t.dueAfter != null && t.after?.length ? (t.dueAfter ? `due ${t.dueAfter}d after` : 'due when it opens') : '',
+      t.tool && STEP_KINDS[t.tool] ? STEP_KINDS[t.tool].label.toLowerCase() : '', t.signoff ? `${t.signoff} signs off` : ''].filter(Boolean);
+  }
+  // What to look at before building: steps nobody does, roles nobody plays, links to steps that aren't in the
+  // plan or that loop, dates past the campaign's end.
+  function planGaps(cards) {
+    const gaps = [];
+    const goals = cards.filter((c) => c.type === 'goal');
+    const tasks = goals.flatMap((g) => g.tasks);
+    const roleCard = cards.find((c) => c.type === 'roles');
+    const roles = new Map((roleCard?.roles || []).map((r) => [r.name.toLowerCase(), r]));
+    const people = new Set(S.workspace.members.map((m) => m.name.toLowerCase()));
+    const nobody = tasks.filter((t) => !t.role && !t.assigneeId && !t.roleId);
+    if (nobody.length) gaps.push(`${plural(nobody.length, 'step')} with nobody on ${nobody.length === 1 ? 'it' : 'them'}: ${nobody.slice(0, 3).map((t) => `“${shortText(t.text, 30)}”`).join(', ')}`);
+    const used = [...new Set([...tasks.map((t) => t.role), ...tasks.map((t) => t.signoff).filter((n) => n && !people.has(n.toLowerCase()))].filter(Boolean))];
+    const empty = used.filter((n) => !roles.get(n.toLowerCase())?.memberIds.length);
+    if (empty.length) gaps.push(`Nobody plays ${empty.join(', ')} yet. Fill ${empty.length === 1 ? 'it' : 'them'} after building, from the campaign’s Roles`);
+    const keys = new Set(tasks.map((t) => t.key).filter(Boolean));
+    const lost = tasks.filter((t) => (t.after || []).some((k) => !keys.has(k)));
+    if (lost.length) gaps.push(`${plural(lost.length, 'step')} wait${lost.length === 1 ? 's' : ''} for a step that isn’t in what you accepted, so ${lost.length === 1 ? 'it' : 'they'} won’t wait`);
+    const titles = new Set(goals.map((g) => g.title.toLowerCase()));
+    if (goals.some((g) => (g.after || []).some((n) => !titles.has(n.toLowerCase())))) gaps.push('A goal waits for a goal that isn’t in what you accepted');
+    const byKey = new Map(tasks.filter((t) => t.key).map((t) => [t.key, t]));
+    const loops = (k, seen = new Set()) => { if (seen.has(k)) return true; seen.add(k); return (byKey.get(k)?.after || []).some((x) => loops(x, new Set(seen))); };
+    if ([...byKey.keys()].some((k) => loops(k))) gaps.push('Some steps wait on each other in a loop. Building drops the link that closes the loop');
+    const camp = cards.find((c) => c.type === 'campaign');
+    if (camp?.end && tasks.some((t) => t.due && t.due > camp.end)) gaps.push(`Some steps are due after the campaign ends (${dueLabel(camp.end)})`);
+    return gaps;
+  }
   async function skCall(method, path, body) {
     SK.busy = true;
     renderTool(true);
@@ -10655,11 +10699,16 @@
         S.plans.map((p) => h('div', { class: 'bill-hist', onclick: () => { PL.open = p.id; openTool('planner'); } }, h('span', {}, p.name), h('small', {}, p.goal || '')))) : null,
     ];
   }
-  function skCardBody(c) {
+  function skCardBody(c, x) {
     const fmtT = (m) => (m == null ? '' : fmtTime(m));
     if (c.type === 'campaign' || c.type === 'sub') return [h('b', {}, c.name), c.start || c.end ? h('small', {}, [c.start && dueLabel(c.start), c.end && dueLabel(c.end)].filter(Boolean).join(' → ')) : null, c.brief ? h('p', {}, c.brief) : null];
-    if (c.type === 'goal') return [h('b', {}, c.title), h('small', {}, [c.kind === 'count' ? `${c.target} logged` : c.kind === 'money' ? money(c.target * 100) : `${c.tasks.length} task${c.tasks.length === 1 ? '' : 's'}`, c.due && 'by ' + dueLabel(c.due)].filter(Boolean).join(' · ')),
-      c.tasks.length ? h('ul', {}, c.tasks.map((t) => h('li', {}, t.text, t.due || whoName(t) ? h('small', {}, [t.due && dueLabel(t.due), whoName(t) && '→ ' + whoName(t)].filter(Boolean).map((x) => ' · ' + x).join('')) : null))) : null];
+    if (c.type === 'goal') {
+      const plan = x ? skCards(x) : [c];
+      return [h('b', {}, c.title), h('small', {}, [c.kind === 'count' ? `${c.target} logged` : c.kind === 'money' ? money(c.target * 100) : `${c.tasks.length} task${c.tasks.length === 1 ? '' : 's'}`, c.due && 'by ' + dueLabel(c.due), c.after?.length ? 'after ' + c.after.join(', ') : ''].filter(Boolean).join(' · ')),
+        c.tasks.length ? h('ul', {}, c.tasks.map((t) => { const bits = skTaskBits(t, plan); return h('li', {}, t.text, bits.length ? h('small', {}, bits.map((x) => ' · ' + x).join('')) : null); })) : null];
+    }
+    if (c.type === 'roles') return [h('b', {}, plural(c.roles.length, 'role')), h('ul', {}, c.roles.map((r) => h('li', {}, h('b', {}, r.name), ' · ', r.memberIds.length ? r.memberIds.map(memberName).join(', ') : h('span', { class: 'sk-gap' }, 'nobody yet'), r.about ? h('small', {}, ' · ' + r.about) : null)))];
+    if (c.type === 'next') return [h('b', {}, c.name), c.start || c.end ? h('small', {}, [c.start && dueLabel(c.start), c.end && dueLabel(c.end)].filter(Boolean).join(' → ')) : null, c.brief ? h('p', {}, c.brief) : null];
     if (c.type === 'list') {
       const n = S.contacts ? S.contacts.filter((x) => liveMatch(c.live, x, Date.now())).length : null;
       const f = c.live;
@@ -10682,7 +10731,7 @@
     const can = c.type !== 'list' || amAdmin();
     return h('div', { class: `sk-card ${c.state}` },
       h('div', { class: 'sk-card-h' }, SK_LABEL[c.type]),
-      ...skCardBody(c),
+      ...skCardBody(c, x),
       c.why ? h('p', { class: 'sk-why' }, c.why) : null,
       h('div', { class: 'sk-card-btns' },
         c.state === 'built' ? h('small', { class: 'plan-ok' }, '✓ Added')
@@ -10710,11 +10759,14 @@
       block: () => [field('text', 'What', inp(c.text)), h('div', { class: 'row3' }, field('date', 'Day', inp(c.date, { type: 'date' })), field('start', 'From', time(c.start)), field('end', 'To', time(c.end)))],
       task: () => [field('text', 'Task', inp(c.text)), field('due', 'Due', inp(c.due, { type: 'date' }))],
       change: () => [field('text', 'Change', inp(c.text)), field('due', 'New date', inp(c.due || c.end, { type: 'date' }))],
+      roles: () => [field('roles', 'One role per line, then who plays it: “Designer: Ana, Sam”', area(c.roles.map((r) => `${r.name}: ${r.memberIds.map(memberName).filter((n) => n !== 'You').concat(r.memberIds.includes(S.me?.memberId) ? [S.workspace.members.find((m) => m.id === S.me?.memberId)?.name] : []).join(', ')}`).join('\n'), 5))],
+      next: () => [field('name', 'Name', inp(c.name)), h('div', { class: 'row2' }, field('start', 'Starts', inp(c.start, { type: 'date' })), field('end', 'Ends', inp(c.end, { type: 'date' }))), field('brief', 'What it does', area(c.brief, 4))],
     }[c.type]();
     sheet('Edit ' + SK_LABEL[c.type].toLowerCase(), body, async () => {
       const card = {};
       for (const [k, el] of Object.entries(f)) {
-        if (k === 'tasks') card.tasks = el.value.split('\n').map((t) => t.trim()).filter(Boolean).map((text) => { const was = c.tasks.find((t) => t.text === text); return { text, due: was?.due || null, assigneeId: was?.assigneeId || null, roleId: was?.roleId || null }; });
+        if (k === 'tasks') card.tasks = el.value.split('\n').map((t) => t.trim()).filter(Boolean).map((text) => { const was = c.tasks.find((t) => t.text === text); return was ? { ...was, text } : { text, due: null }; });
+        else if (k === 'roles') card.roles = el.value.split('\n').map((l) => l.trim()).filter(Boolean).map((l) => { const [name, who = ''] = l.split(':'); return { name: name.trim(), about: c.roles.find((r) => r.name.toLowerCase() === name.trim().toLowerCase())?.about || '', who: who.split(',').map((x) => x.trim()).filter(Boolean) }; });
         else if (el.type === 'time') { const [hh, mm] = el.value.split(':').map(Number); card[k] = Number.isFinite(hh) ? hh * 60 + (mm || 0) : null; }
         else card[k] = el.value;
       }
@@ -10831,6 +10883,7 @@
           : h('div', { class: 'sk-msg' }, h('div', { class: 'sk-text' }, m.text), (m.cards || []).length ? h('div', { class: 'sk-cards' }, m.cards.map((cd) => skCardEl(x, cd))) : null)),
         SK.busy ? h('div', { class: 'sk-msg sk-thinking' }, 'Thinking…') : null,
         h('span', { class: 'sk-end' })),
+      ready.length && x.kind === 'campaign' && planGaps(ready).length ? h('div', { class: 'sk-gaps' }, h('b', {}, 'Before you build'), h('ul', {}, planGaps(ready).map((g) => h('li', {}, g)))) : null,
       ready.length ? h('div', { class: 'sk-ready' },
         h('span', {}, `${ready.length} accepted`),
         h('button', { class: 'btn small', disabled: SK.busy, onclick: () => skCall('POST', `/sidekick/${x.id}/check`, {}) }, 'Check my plan'),
@@ -10854,6 +10907,29 @@
         made.push(cc);
       }
       const goalByTitle = (t) => c && goalsOf(c.id).find((g) => g.title.trim().toLowerCase() === String(t || '').trim().toLowerCase());
+      // Roles before the goals, so tasks can go to them. Any role a task or sign-off names but the roles card
+      // doesn't is added with nobody in it yet.
+      const plannedTasks = cards.filter((y) => y.type === 'goal').flatMap((y) => y.tasks);
+      const named = (n) => S.workspace.members.find((m) => sameText(m.name, n));
+      if (c) {
+        const roleCard = cards.find((y) => y.type === 'roles');
+        const want = [...(roleCard?.roles || []), ...[...plannedTasks.map((t) => t.role), ...plannedTasks.map((t) => t.signoff).filter((n) => n && !named(n))].filter(Boolean).map((name) => ({ name, about: '', memberIds: [] }))];
+        const cast = [...castOf(c)];
+        for (const r of want) {
+          const had = cast.find((z) => sameText(z.name, r.name));
+          if (had) had.memberIds = [...new Set([...had.memberIds, ...r.memberIds])];
+          else cast.push({ name: r.name, about: r.about, memberIds: r.memberIds });
+        }
+        if (cast.length !== castOf(c).length || roleCard) {
+          K.castSaved = Date.now();
+          c = await api('PATCH', '/campaigns/' + c.id, { cast });
+          S.campaigns = S.campaigns.map((w) => (w.id === c.id ? c : w));
+        }
+        if (roleCard) made.push(roleCard);
+      }
+      const castId = (n) => castOf(c).find((r) => sameText(r.name, n))?.id || null;
+      const keyed = new Map(); // a planned task's key → the task made from it
+      const links = []; // [task, its "after" keys] and [goal, its "after" titles], linked once everything exists
       for (const y of cards) {
         if (y.type === 'campaign') {
           // On a campaign that's already there, it updates the brief and dates.
@@ -10869,7 +10945,16 @@
         } else if (y.type === 'goal' && c) {
           const g = await api('POST', '/goals', { campaignId: c.id, title: y.title, kind: y.kind, target: y.target, due: y.due });
           if (!S.goals.some((z) => z.id === g.id)) S.goals.push(g);
-          for (const t of y.tasks) upsertTask(await api('POST', '/tasks', { text: t.text, due: t.due, goalId: g.id, assigneeId: t.assigneeId || null, roleId: t.roleId || null }));
+          if (y.after?.length) links.push(['goal', g, y.after]);
+          for (const t of y.tasks) {
+            const cid = t.role ? castId(t.role) : null;
+            const so = t.signoff ? (castId(t.signoff) ? { castId: castId(t.signoff) } : named(t.signoff) ? { memberId: named(t.signoff).id } : null) : null;
+            const made1 = await api('POST', '/tasks', { text: t.text, due: t.after?.length ? null : t.due, goalId: g.id, ...(cid ? { castId: cid } : { assigneeId: t.assigneeId || null, roleId: t.roleId || null }),
+              ...(t.tool ? { action: { kind: t.tool } } : {}), ...(so ? { signoff: so } : {}), ...(t.dueAfter != null ? { dueAfter: t.dueAfter } : {}) });
+            upsertTask(made1);
+            if (t.key) keyed.set(t.key, made1);
+            if (t.after?.length) links.push(['task', made1, t.after]);
+          }
           made.push(y);
         } else if (y.type === 'list' && c && amAdmin()) {
           upsertList(await api('POST', '/lists', { campaignId: c.id, name: y.name, live: y.live }));
@@ -10909,6 +10994,22 @@
           }
           made.push(y);
         }
+      }
+      // What waits for what, now that every step exists. A link that would loop is refused and left out.
+      for (const [kind, thing, after] of links) {
+        if (kind === 'task') {
+          const ids = after.map((k) => keyed.get(k)?.id).filter(Boolean);
+          if (ids.length) await api('PATCH', '/tasks/' + thing.id, { blockedBy: ids }).then(upsertTask).catch(() => {});
+        } else {
+          const ids = after.map((n) => goalByTitle(n)?.id).filter((id) => id && id !== thing.id);
+          if (ids.length) await api('PATCH', '/goals/' + thing.id, { blockedBy: ids }).then((g) => { S.goals = S.goals.map((w) => (w.id === g.id ? g : w)); }).catch(() => {});
+        }
+      }
+      // What comes after this campaign, in a series.
+      for (const y of cards.filter((y) => y.type === 'next' && c)) {
+        const n = await api('POST', '/campaigns', { name: y.name, brief: y.brief || '', start: y.start || c.end || todayKey(), end: y.end || null, follows: c.id, color: c.color });
+        if (!S.campaigns.some((z) => z.id === n.id)) S.campaigns.push(n);
+        made.push(y);
       }
       for (const y of made) await api('PATCH', `/sidekick/${x.id}/cards/${y.id}`, { state: 'built' }).catch(() => {});
       const z = await api('PATCH', '/sidekick/' + x.id, { built: true, campaignId: c?.id, entryIds, today: todayKey() });
