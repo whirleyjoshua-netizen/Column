@@ -63,6 +63,16 @@
         }
       },
       {
+        "@type": "VideoObject",
+        "name": "How campaigns work in Kloomie",
+        "description": "A 2-minute walkthrough: plan a campaign with Sidekick, give the work to roles, hand off steps with sign-offs, let tool steps tick themselves off, and check how every campaign is going.",
+        "thumbnailUrl": "{{SITE}}/walkthrough-poster.jpg",
+        "contentUrl": "{{SITE}}/walkthrough.mp4",
+        "uploadDate": "2026-11-07",
+        "duration": "PT2M19S",
+        "publisher": { "@id": "{{SITE}}/#org" }
+      },
+      {
         "@type": "FAQPage",
         "mainEntity": [
           { "@type": "Question", "name": "Do I need a card to try Kloomie?", "acceptedAnswer": { "@type": "Answer", "text": "No. Create a team and use everything for 14 days. When you’re ready, the owner subscribes in Settings, Team, Billing." } },
@@ -137,6 +147,8 @@
 
     /* ---------- sections ---------- */
     section.block { padding: 104px 0; scroll-margin-top: 52px; }
+    section.demo { padding-top: 40px; }
+    .demo video { display: block; width: 100%; max-width: 1100px; height: auto; margin: 0 auto; border-radius: 16px; border: 1px solid var(--line); box-shadow: 0 30px 70px -30px rgba(40, 20, 120, .45); background: #0d0c14; }
     section.alt { background: var(--soft); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
     .kicker { font-size: 13px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--accent-ink); margin: 0 0 12px; }
     h2 { font-size: clamp(30px, 4vw, 44px); line-height: 1.1; font-weight: 800; letter-spacing: -.03em; margin: 0 0 16px; }
@@ -230,6 +242,7 @@
     <nav class="wrap" aria-label="Main">
       <a class="brand" href="/"><img src="/icon-128.png" width="42" height="42" alt="">Kloomie</a>
       <div class="links">
+        <a class="hide-s" href="#demo">See it</a>
         <a class="hide-s" href="#features">Features</a>
         <a class="hide-s" href="#pricing">Pricing</a>
         <a class="hide-s" href="#faq">Questions</a>
@@ -266,6 +279,18 @@
         </div>
       </div>
     </div>
+
+    <section class="block demo center" id="demo" aria-labelledby="demo-h">
+      <div class="wrap">
+        <p class="kicker">See it in action</p>
+        <h2 id="demo-h">Plan a campaign, hand off the work, see how it’s going</h2>
+        <p class="intro">Two minutes on campaigns: Sidekick drafts the plan, roles share out the work, steps hand off to whoever’s next, and you see what needs you.</p>
+        <video controls preload="none" playsinline width="1280" height="800" poster="/walkthrough-poster.jpg">
+          <source src="/walkthrough.mp4" type="video/mp4">
+          <a href="/walkthrough.mp4">Watch the walkthrough (MP4, 2 minutes)</a>
+        </video>
+      </div>
+    </section>
 
     <section class="block" id="features" aria-labelledby="features-h">
       <div class="wrap">

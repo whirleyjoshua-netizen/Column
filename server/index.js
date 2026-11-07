@@ -974,7 +974,7 @@ function contentDisposition(kind, name) {
 }
 
 // Serves a file with Range support so videos/music stream and scrub.
-function serveFile(req, res, filePath, { name, mime, download }) {
+function serveFile(req, res, filePath, { name, mime, download, cache }) {
   let stat;
   try {
     stat = fs.statSync(filePath);
@@ -985,7 +985,7 @@ function serveFile(req, res, filePath, { name, mime, download }) {
     'Content-Type': mime,
     'Accept-Ranges': 'bytes',
     'Content-Disposition': contentDisposition(download ? 'attachment' : 'inline', name),
-    'Cache-Control': 'private, max-age=31536000, immutable',
+    'Cache-Control': cache || 'private, max-age=31536000, immutable',
   };
   const range = req.headers.range && /^bytes=(\d*)-(\d*)$/.exec(req.headers.range);
   if (range && stat.size > 0) {
@@ -6727,6 +6727,8 @@ function serveStatic(req, res, url) {
   if (!file.startsWith(CLIENT_DIR + path.sep)) return send(res, 403, 'Forbidden');
   // Only Kloomie's own script runs on its pages: markup that slips in from a file or message can't run code.
   const csp = path.extname(file) === '.html' ? { 'Content-Security-Policy': "script-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'" } : {};
+  // Video, like the website's walkthrough, streams in pieces so it plays and scrubs on phones and Safari.
+  if (/^\.(mp4|webm)$/.test(path.extname(file))) return serveFile(req, res, file, { name: path.basename(file), mime: MIME[path.extname(file)], cache: 'public, max-age=86400' });
   // Libraries in /vendor/ have their version in the folder name, so they never change.
   const cache = rel.startsWith('/vendor/') ? 'public, max-age=31536000, immutable' : 'no-cache';
   fs.readFile(file, (err, data) => {
