@@ -518,6 +518,8 @@
     } else if (msg.type === 'task') {
       const was = taskById(msg.task.id);
       upsertTask(msg.task);
+      const wc = campById(goalById(msg.task.goalId)?.campaignId);
+      if (was && !was.done && msg.task.done && watching(wc) && msg.task.doneBy && msg.task.doneBy !== S.me?.member) notice(`${msg.task.doneBy} finished “${shortText(msg.task.text, 60)}”`, wc.name + (msg.task.doneNote ? ' · ' + msg.task.doneNote : ''), () => showStep(msg.task));
       const newly = msg.task.assigneeId === S.me?.memberId ? was?.assigneeId !== msg.task.assigneeId : myRole(msg.task.roleId) && was?.roleId !== msg.task.roleId;
       if (newly && msg.task.assignedBy !== S.me?.memberId) assignedToMe(msg.task);
       renderDay();
@@ -543,6 +545,8 @@
       const list = { campaign: S.campaigns, goal: S.goals, attempt: S.attempts, list: S.lists }[msg.type];
       const x = msg[msg.type];
       const i = list.findIndex((y) => y.id === x.id);
+      const newCi = msg.type === 'campaign' && i >= 0 && (x.checkins || []).length > (list[i].checkins || []).length ? x.checkins.at(-1) : null;
+      if (newCi && newCi.byId !== S.me?.memberId && (watching(x) || x.ownerId === S.me?.memberId)) notice(`${newCi.by} checked in on ${x.name}: ${HEALTH_L[newCi.status]}`, newCi.note, () => openCampaign(x.id));
       // Given a role in a campaign by someone else: say so.
       if (msg.type === 'campaign' && i >= 0 && Date.now() - (K.castSaved || 0) > 5000) {
         const got = castOf(x).filter((r) => r.memberIds.includes(S.me?.memberId) && !castOf(list[i]).find((y) => y.id === r.id)?.memberIds.includes(S.me?.memberId));
@@ -3228,7 +3232,7 @@
   // How much someone has on: their open tasks, so a role goes to whoever has room.
   const openLoad = (memberId) => S.tasks.filter((t) => !t.done && taskFor(t, memberId)).length;
   const loadText = (memberId) => { const n = openLoad(memberId); return n ? `${n} open task${n === 1 ? '' : 's'}` : 'free'; };
-  const castChip = (t) => { const r = castRoleOf(t); return r && h('span', { class: 'role-chip cast-chip' + (r.memberIds.includes(S.me?.memberId) ? ' mine' : '') + (r.memberIds.length ? '' : ' empty'), title: `For the ${r.name} in this campaign: ${r.memberIds.length ? r.memberIds.map(memberName).join(', ') : 'nobody plays it yet'}` }, r.name); };
+  const castChip = (t) => { const r = castRoleOf(t); return r && h('span', { class: 'role-chip cast-chip' + (r.memberIds.includes(S.me?.memberId) ? ' mine' : '') + (r.memberIds.length ? '' : ' unfilled'), title: `For the ${r.name} in this campaign: ${r.memberIds.length ? r.memberIds.map(memberName).join(', ') : 'nobody plays it yet'}` }, r.name); };
   // ----- steps done with a tool: email, sign, pay, files, calls, meeting -----
   // The step's button opens the tool already pointed at it (STEP). What the tool makes carries the task's id, and the
   // server ticks the step off when that work is done.
@@ -3347,7 +3351,7 @@
     const roles = castOf(c);
     return h('div', { class: 'cast-strip' },
       h('span', { class: 'cast-h', title: 'The parts of this campaign’s work. Give tasks to a role and everyone playing it gets them.' }, 'Roles'),
-      roles.map((r) => h('button', { class: 'cast-pill' + (r.memberIds.length ? '' : ' empty') + (r.memberIds.includes(S.me?.memberId) ? ' mine' : ''), title: (r.about ? r.about + '\n' : '') + 'Click to change who plays it', onclick: () => roleSheet(c, r) },
+      roles.map((r) => h('button', { class: 'cast-pill' + (r.memberIds.length ? '' : ' unfilled') + (r.memberIds.includes(S.me?.memberId) ? ' mine' : ''), title: (r.about ? r.about + '\n' : '') + 'Click to change who plays it', onclick: () => roleSheet(c, r) },
         h('b', {}, r.name), r.memberIds.length ? r.memberIds.map(memberName).join(', ') : 'nobody yet')),
       h('button', { class: 'cast-pill add', onclick: () => roleSheet(c) }, roles.length ? '+ Role' : '+ Add roles, like Designer, Caller or Approver'));
   }
@@ -3957,6 +3961,139 @@
   const bar = (frac, color) => h('div', { class: 'pbar c-' + (color || 'violet') }, h('i', { style: `width:${Math.round(frac * 100)}%` }));
   // A campaign's budget: what's been spent on it (and its sub-campaigns) against the budget, and whether
   // spending is running ahead of the calendar. The tick on the bar is where spending would be at an even pace.
+  // ----- the leader's view: how every campaign is going, and what needs you -----
+  const HEALTH_L = { onTrack: 'On track', atRisk: 'At risk', offTrack: 'Off track' };
+  const pctOf = (n) => Math.round(n * 100) + '%';
+  const dayGap = (a, b) => Math.round((Date.parse(b) - Date.parse(a)) / 864e5);
+  const campTasks = (c) => goalsOf(c.id).flatMap((g) => tasksOf(g.id));
+  // Steps that are stuck: waiting on something that's late, or on a sign-off or tool that's sat for days.
+  function stuckSteps(c) {
+    const today = todayKey();
+    const old = (at, days) => at && Date.now() - at > days * 864e5;
+    return campTasks(c).filter((t) => !t.done).map((t) => {
+      const b = taskBlockers(t).find((x) => !x.hidden && x.text && ((x.due && x.due < today) || old(x.submitted?.at, 2) || (!x.done && old(x.toolRef?.at, 3))));
+      return b ? { t, b } : null;
+    }).filter(Boolean);
+  }
+  const lastCheckin = (c) => (c.checkins || []).at(-1) || null;
+  // Worked out from the work: progress against the calendar, overdue and stuck steps, sign-offs sitting,
+  // spending, and roles nobody plays. A check-in from the last two weeks stands in for it.
+  function campHealth(c) {
+    const today = todayKey();
+    const why = [];
+    let level = 0;
+    const bump = (n, text) => { level = Math.max(level, n); why.push(text); };
+    const p = campProgress(c);
+    const open = campTasks(c).filter((t) => !t.done);
+    if (c.start && c.end && c.end >= c.start) {
+      const gone = Math.min(1, Math.max(0, dayGap(c.start, today) / Math.max(1, dayGap(c.start, c.end))));
+      if (today > c.end && p < 1) bump(2, `Ended ${dayName(c.end)} at ${pctOf(p)} done`);
+      else if (gone - p > 0.25) bump(2, `${pctOf(p)} done with ${pctOf(gone)} of the time gone`);
+      else if (gone - p > 0.1) bump(1, `${pctOf(p)} done with ${pctOf(gone)} of the time gone`);
+    }
+    const late = open.filter((t) => t.due && t.due < today);
+    if (late.length >= 5) bump(2, plural(late.length, 'step') + ' overdue');
+    else if (late.length >= 2) bump(1, plural(late.length, 'step') + ' overdue');
+    const stuck = stuckSteps(c);
+    if (stuck.length) bump(1, plural(stuck.length, 'step') + ' stuck');
+    const signing = open.filter((t) => t.submitted && Date.now() - t.submitted.at > 2 * 864e5);
+    if (signing.length) bump(1, plural(signing.length, 'sign-off') + ' waiting over 2 days');
+    if (c.budget && (c.budgetSpent || 0) > c.budget) bump(1, 'Over budget');
+    const empty = castOf(c).filter((r) => !r.memberIds.length && open.some((t) => t.castId === r.id));
+    if (empty.length) bump(1, `Nobody plays ${empty.map((r) => r.name).join(', ')}`);
+    const worked = ['onTrack', 'atRisk', 'offTrack'][level];
+    const ci = lastCheckin(c);
+    const said = ci && Date.now() - ci.at < 14 * 864e5 ? ci : null;
+    return { status: said ? said.status : worked, worked, why, said, late, stuck, open };
+  }
+  const healthPill = (c, hl = campHealth(c), onclick) => h(onclick ? 'button' : 'span', {
+    class: 'pill health ' + hl.status + (onclick ? ' pill-btn' : ''),
+    title: [hl.said ? `${hl.said.by} checked in ${ago(hl.said.at)}: ${HEALTH_L[hl.said.status]}${hl.said.note ? ' · ' + hl.said.note : ''}` : '', hl.why.length ? 'From the work: ' + hl.why.join(' · ') : 'From the work: nothing late or stuck'].filter(Boolean).join('\n'),
+    onclick,
+  }, HEALTH_L[hl.status], hl.said && hl.said.status !== hl.worked ? h('small', {}, ' · said') : null);
+  const runsIt = (c) => c.ownerId === S.me?.memberId || c.assigneeId === S.me?.memberId || amAdmin();
+  const watching = (c) => !!c?.watch?.includes(S.me?.memberId);
+  function checkinSheet(c) {
+    const hl = campHealth(c);
+    let pick = hl.worked;
+    const opts = h('div', { class: 'health-seg' }, Object.entries(HEALTH_L).map(([k, v]) => h('button', { type: 'button', class: 'health ' + k + (k === pick ? ' on' : ''),
+      onclick: (e) => { pick = k; for (const b of opts.children) b.classList.toggle('on', b === e.currentTarget); } }, v)));
+    const note = h('textarea', { rows: 3, placeholder: 'One line: what moved, what’s in the way' });
+    const post = h('input', { type: 'checkbox', checked: true });
+    sheet(`Check in · ${c.name}`, [
+      h('p', { class: 'day-hint' }, hl.why.length ? 'From the work: ' + hl.why.join(' · ') + '.' : 'From the work: nothing late or stuck.'),
+      opts,
+      h('label', {}, 'How it’s going', note),
+      c.channelId ? h('label', { class: 'pick' }, post, 'Also post it to the campaign’s feed') : null,
+    ], async () => {
+      const saved = await api('POST', `/campaigns/${c.id}/checkin`, { status: pick, note: note.value.trim() });
+      const i = S.campaigns.findIndex((x) => x.id === c.id);
+      if (i >= 0) S.campaigns[i] = saved;
+      if (post.checked && c.channelId) await api('POST', '/items', { type: 'message', text: `Check-in · ${c.name}: ${HEALTH_L[pick]}${note.value.trim() ? '\n' + note.value.trim() : ''}\n${linkToken('campaign', c.id)}`, channelId: c.channelId }).catch(() => {});
+      renderCamps();
+    }, 'Check in');
+  }
+  // What's waiting on you: sign-offs, then, for campaigns you run (all of them for admins), stuck steps, roles
+  // nobody plays, overdue work, steps due soon with nobody on them, and check-ins that are due.
+  function needsYou() {
+    const me = S.me?.memberId;
+    const today = todayKey();
+    const out = [];
+    for (const t of S.tasks) if (t.submitted && !t.done && t.submitted.byId !== me && maySign(t)) out.push({ kind: 'sign', text: `Sign off “${shortText(t.text, 60)}”`, sub: `${t.submitted.by} sent it ${ago(t.submitted.at)}`, run: () => showStep(t) });
+    for (const c of S.campaigns.filter((x) => x.status === 'active' && runsIt(x))) {
+      for (const { t, b } of stuckSteps(c)) out.push({ kind: 'stuck', text: `Stuck: “${shortText(t.text, 50)}”`, sub: `${c.name} · waiting on “${shortText(stepName(b), 40)}”${stepWho(b) ? ' · ' + stepWho(b) : ''}${b.due && b.due < today ? `, due ${dueLabel(b.due)}` : b.submitted ? ', waiting for sign-off' : ''}`, run: () => showStep(b) });
+      const open = campTasks(c).filter((t) => !t.done);
+      for (const r of castOf(c).filter((r) => !r.memberIds.length)) {
+        const n = open.filter((t) => t.castId === r.id).length;
+        if (n) out.push({ kind: 'role', text: `Nobody plays ${r.name}`, sub: `${c.name} · ${plural(n, 'open task')} for that role`, run: () => roleSheet(c, r) });
+      }
+      const late = open.filter((t) => t.due && t.due < today && !t.submitted);
+      if (late.length) out.push({ kind: 'late', text: `${plural(late.length, 'step')} overdue in ${c.name}`, sub: late.slice(0, 3).map((t) => shortText(t.text, 30)).join(' · '), run: () => (late.length === 1 ? showStep(late[0]) : openCampaign(c.id)) });
+      for (const t of open.filter((t) => t.due && t.due <= addDays(today, 3) && t.due >= today && !t.assigneeId && !t.roleId && !t.castId && !taskWaitsOn(t)))
+        out.push({ kind: 'nobody', text: `Nobody’s on “${shortText(t.text, 50)}”`, sub: `${c.name} · due ${dueLabel(t.due)}`, run: () => showStep(t) });
+      const ci = lastCheckin(c);
+      if ((c.ownerId === me || c.assigneeId === me) && Date.now() - (ci?.at || c.createdAt) > 7 * 864e5) out.push({ kind: 'checkin', text: `Check in on ${c.name}`, sub: ci ? `Last one ${ago(ci.at)}` : 'No check-in yet', run: () => checkinSheet(c) });
+    }
+    return out;
+  }
+  function overviewView() {
+    const needs = needsYou();
+    const ICON = { sign: '✓', stuck: '⏳', role: '👤', late: '!', nobody: '?', checkin: '🩺' };
+    const live = S.campaigns.filter((c) => c.status === 'active').sort((a, b) => (a.end || '9999') < (b.end || '9999') ? -1 : 1);
+    const mains = live.filter((c) => !c.parentId || !live.some((x) => x.id === c.parentId));
+    const row = (c, sub) => {
+      const hl = campHealth(c);
+      const p = campProgress(c);
+      const today = todayKey();
+      const gone = c.start && c.end ? Math.min(1, Math.max(0, dayGap(c.start, today) / Math.max(1, dayGap(c.start, c.end)))) : null;
+      const next = hl.open.filter((t) => t.due && !taskWaitsOn(t)).sort((a, b) => (a.due < b.due ? -1 : 1))[0];
+      const ci = lastCheckin(c);
+      const waitingN = hl.open.filter((t) => taskWaitsOn(t)).length;
+      return h('div', { class: 'lead-row c-' + c.color + (sub ? ' sub' : ''), onclick: () => openCampaign(c.id) },
+        h('div', { class: 'lead-name' }, h('b', {}, c.name), h('small', {}, [c.assigneeId ? '→ ' + memberName(c.assigneeId) : '', campDates(c)].filter(Boolean).join(' · '))),
+        healthPill(c, hl, runsIt(c) ? (e) => { e.stopPropagation(); checkinSheet(c); } : null),
+        h('div', { class: 'lead-prog', title: gone != null ? `${pctOf(p)} done · ${pctOf(gone)} of the time gone` : `${pctOf(p)} done` },
+          h('div', { class: 'lead-bar' }, h('i', { style: `width:${pctOf(p)}` }), gone != null ? h('u', { style: `left:${pctOf(gone)}` }) : null), h('small', {}, pctOf(p))),
+        h('div', { class: 'lead-facts' },
+          next ? h('span', { title: 'Next step due' }, `Next: ${shortText(next.text, 28)} · ${dueLabel(next.due)}`) : null,
+          hl.late.length ? h('span', { class: 'bad' }, `${hl.late.length} overdue`) : null,
+          hl.stuck.length ? h('span', { class: 'warn' }, `${hl.stuck.length} stuck`) : null,
+          waitingN ? h('span', {}, `${waitingN} waiting`) : null,
+          c.budget ? h('span', { class: (c.budgetSpent || 0) > c.budget ? 'bad' : '' }, `${money(c.budgetSpent || 0)} of ${money(c.budget)}`) : null,
+          h('span', { class: 'muted' }, ci ? `Checked in ${ago(ci.at)}` : 'No check-in yet')));
+    };
+    const feed = S.campaigns.flatMap((c) => (c.checkins || []).map((x) => ({ c, x }))).sort((a, b) => b.x.at - a.x.at).slice(0, 8);
+    return h('div', { class: 'camp-list lead' },
+      h('div', { class: 'camp-h' }, h('b', {}, 'Overview'), h('button', { class: 'btn small', onclick: () => { K.overview = false; store.set('campsOverview', false); renderCamps(); } }, 'All campaigns')),
+      h('section', { class: 'lead-needs' }, h('div', { class: 'any-h' }, needs.length ? `Needs you · ${needs.length}` : 'Needs you'),
+        needs.length ? needs.slice(0, 30).map((n) => h('button', { class: 'need-row ' + n.kind, onclick: n.run }, h('span', { class: 'need-ic' }, ICON[n.kind]), h('span', { class: 'need-text' }, h('b', {}, n.text), h('small', {}, n.sub))))
+          : h('p', { class: 'day-hint' }, 'Nothing needs you right now. Nothing stuck, overdue or waiting on your sign-off.')),
+      h('div', { class: 'any-h camp-goals-h' }, live.length ? `Running · ${live.length}` : 'Running'),
+      live.length ? mains.flatMap((c) => [row(c), ...live.filter((x) => x.parentId === c.id).map((x) => row(x, true))]) : h('p', { class: 'day-hint' }, 'No campaigns running.'),
+      feed.length ? h('div', { class: 'any-h camp-goals-h' }, 'Latest check-ins') : null,
+      feed.map(({ c, x }) => h('button', { class: 'ci-row', onclick: () => openCampaign(c.id) }, h('span', { class: 'pill health ' + x.status }, HEALTH_L[x.status]), h('span', { class: 'ci-text' }, h('b', {}, c.name), x.note ? ' · ' + x.note : ''), h('small', {}, `${x.by} · ${ago(x.at)}`))));
+  }
+
   function campBudget(c) {
     const spent = c.budgetSpent || 0;
     const used = spent / c.budget;
@@ -3988,6 +4125,7 @@
   }
 
   // Re-render, unless someone is typing in here; then wait until they're done.
+  K.overview ??= store.get('campsOverview', false);
   function renderCamps() {
     const root = $('#camps');
     if (!S.workspace || S.tab !== 'camps' || K.sorting) return;
@@ -3998,7 +4136,7 @@
     K.stale = false;
     const keep = root.scrollTop;
     const c = campById(K.open);
-    root.replaceChildren(c ? campaignView(c) : campaignList());
+    root.replaceChildren(c ? campaignView(c) : K.overview ? overviewView() : campaignList());
     renderDock();
     root.scrollTop = keep;
   }
@@ -4031,7 +4169,9 @@
     const setMine = (on) => { K.mine = on; store.set('campsMine', on); renderCamps(); };
     const tpls = [...S.templates].sort((a, b) => a.name.localeCompare(b.name));
     return h('div', { class: 'camp-list' },
-      h('div', { class: 'camp-h' }, h('b', {}, 'Campaigns'), h('button', { class: 'btn small primary-btn', onclick: () => campaignSheet() }, '+ New')),
+      h('div', { class: 'camp-h' }, h('b', {}, 'Campaigns'), h('span', { class: 'camp-h-btns' },
+        S.campaigns.some((c) => c.status === 'active') ? h('button', { class: 'btn small' + (needsYou().length ? ' sk-nudge' : ''), title: 'How every campaign is going, and what needs you', onclick: () => { K.overview = true; store.set('campsOverview', true); renderCamps(); } }, needsYou().length ? `Overview · ${needsYou().length} need you` : 'Overview') : null,
+        h('button', { class: 'btn small primary-btn', onclick: () => campaignSheet() }, '+ New'))),
       S.campaigns.some((c) => c.assigneeId) ? h('div', { class: 'seg mine-seg' },
         h('button', { class: mineOn ? '' : 'on', onclick: () => setMine(false) }, 'All campaigns'),
         h('button', { class: mineOn ? 'on' : '', onclick: () => setMine(true) }, 'Assigned to me')) : null,
@@ -4174,6 +4314,7 @@
         campDates(c) ? h('span', {}, campDates(c)) : null,
         h('button', { class: 'pill pill-btn', title: 'Who’s responsible', onclick: (e) => assignCampaignMenu(e.currentTarget, c) }, c.assigneeId ? avatar(c.assigneeId) : null, c.assigneeId ? memberName(c.assigneeId) : 'Assign to…'),
         c.status !== 'active' ? h('span', { class: 'pill' }, c.status === 'done' ? 'Finished' : 'Paused') : null,
+        c.status === 'active' ? healthPill(c, campHealth(c), runsIt(c) ? () => checkinSheet(c) : null) : null,
         c.inOrder ? h('span', { class: 'pill', title: 'Goals and tasks open one at a time, top to bottom' }, 'In order') : null,
         who ? h('span', { class: 'pill', title: who.map(memberName).join(', ') }, h('span', { class: 'is-task', html: I.lock }), `Private · ${who.length}`) : null),
       castStrip(c),
@@ -5637,6 +5778,8 @@
       { label: 'Save to run again…', run: () => saveTemplate(c) },
       { label: 'What to log & follow-ups…', run: () => outcomesSheet(c) },
       ...(canPass(c) ? [{ label: c.inOrder ? 'Stop working in order' : 'Work in order (one step at a time)', on: !!c.inOrder, run: () => api('PATCH', '/campaigns/' + c.id, { inOrder: !c.inOrder }).catch((e) => toast(e.message)) }] : []),
+      ...(runsIt(c) ? [{ label: 'Check in (how it’s going)…', run: () => checkinSheet(c) }] : []),
+      { label: watching(c) ? 'Stop keeping me posted' : 'Keep me posted', on: watching(c), run: () => api('POST', `/campaigns/${c.id}/watch`, { on: !watching(c) }).then((x) => { const i = S.campaigns.findIndex((y) => y.id === c.id); if (i >= 0) S.campaigns[i] = x; renderCamps(); toast(watching(x) ? 'You’ll hear when its steps get done and when someone checks in' : 'Stopped'); }).catch((e) => toast(e.message)) },
       { label: 'Write a report', run: () => openReport(c) },
       { label: 'Share to chat…', run: () => shareMenu(anchor, linkToken('campaign', c.id)) },
       c.status === 'active' ? { label: 'Pause', run: () => api('PATCH', '/campaigns/' + c.id, { status: 'paused' }).catch((e) => toast(e.message)) } : { label: 'Make active', run: () => api('PATCH', '/campaigns/' + c.id, { status: 'active' }).catch((e) => toast(e.message)) },

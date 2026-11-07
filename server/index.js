@@ -1654,7 +1654,7 @@ function toolDone(taskId, { by, byId, note, file } = {}) {
     const opened = openings(db.workspaces[t.wsId]);
     t.doneNote = note ? cleanText(note, 200) : null;
     if (t.signoff) Object.assign(t, { submitted: { by: by || 'Kloomie', byId: byId || null, at: Date.now() }, returned: null });
-    else Object.assign(t, { done: true, doneAt: Date.now(), submitted: null, returned: null });
+    else Object.assign(t, { done: true, doneAt: Date.now(), doneBy: by || 'Kloomie', submitted: null, returned: null });
     syncEntries(t);
     broadcast(t.wsId, { type: 'task', task: publicTask(t) });
     if (t.submitted) broadcast(t.wsId, { type: 'signoff', task: publicTask(t), by: by || 'Kloomie' });
@@ -1665,6 +1665,7 @@ function toolDone(taskId, { by, byId, note, file } = {}) {
 // Every row on a call list reached (logged at least once).
 const listWorked = (l) => l.rows.length > 0 && l.rows.every((r) => Object.values(db.attempts).some((x) => x.listId === l.id && x.rowId === r.id));
 
+const HEALTH = ['onTrack', 'atRisk', 'offTrack'];
 const HANDOFF_ROUTES = new Set(['tasks', 'goals', 'attempts', 'campaigns', 'templates', 'sidekick']);
 
 // ----- follow-ups: a logged call or email that comes back as a task a few days later -----
@@ -4488,6 +4489,7 @@ async function api(req, res, url) {
         Object.assign(next, { done: false, doneAt: null, submitted: { by: auth.member, byId: auth.memberId, at: Date.now() }, returned: null });
         signNews = { type: 'signoff', task: null, by: auth.member };
       } else if (body.done && !t.done) {
+        next.doneBy = auth.member;
         if (next.signoff) next.approved = { by: auth.member, at: Date.now() };
         next.submitted = null;
         next.returned = null;
@@ -4532,6 +4534,25 @@ async function api(req, res, url) {
     }
     const c = b && db.campaigns[b];
     if (!c || c.wsId !== ws.id || !canSee(auth, 'campaign', c)) return send(res, 404, { error: 'Not found' });
+    // A check-in: how it's going (on track, at risk, off track) and a line about it, from whoever runs it.
+    // The latest stands in for the worked-out health until the next one.
+    if (parts[2] === 'checkin' && m === 'POST') {
+      if (c.ownerId !== auth.memberId && c.assigneeId !== auth.memberId && !isAdmin(auth)) return send(res, 403, { error: 'Only whoever runs this campaign can check in on it.' });
+      const body = await readJson(req, 10_000);
+      if (!HEALTH.includes(body.status)) return send(res, 400, { error: 'Pick how it’s going.' });
+      c.checkins = [...(c.checkins || []).slice(-25), { id: rid(6), status: body.status, note: cleanText(body.note, 500), by: auth.member, byId: auth.memberId, at: Date.now() }];
+      save();
+      broadcast(ws.id, { type: 'campaign', campaign: publicCampaign(c) });
+      return send(res, 200, publicCampaign(c));
+    }
+    // Keep me posted: hear when its steps get done and when someone checks in, without being on it.
+    if (parts[2] === 'watch' && m === 'POST') {
+      const { on } = await readJson(req, 1_000);
+      c.watch = on ? [...new Set([...(c.watch || []), auth.memberId])] : (c.watch || []).filter((x) => x !== auth.memberId);
+      save();
+      broadcast(ws.id, { type: 'campaign', campaign: publicCampaign(c) });
+      return send(res, 200, publicCampaign(c));
+    }
     if (m === 'PATCH') {
       const body = await readJson(req, 100_000);
       const was = JSON.stringify([c.private, c.memberIds, c.assigneeId, castOf(c).map((r) => r.memberIds)]);
@@ -7023,6 +7044,7 @@ async function removeMember(ws, m) {
     if (c.assigneeId === id) c.assigneeId = null;
     c.memberIds = c.memberIds.filter((x) => x !== id);
     for (const r of castOf(c)) r.memberIds = r.memberIds.filter((x) => x !== id);
+    if (c.watch) c.watch = c.watch.filter((x) => x !== id);
   }
   for (const t of Object.values(db.templates)) {
     if (t.wsId !== wsId) continue;
