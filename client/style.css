@@ -1226,6 +1226,7 @@ body.viewer .preview pre, body.viewer .preview .pv-edit, body.viewer .preview .d
 .note-row { display: flex; align-items: center; gap: 4px; }
 .note-row .need-row { flex: 1; }
 .need-row.auto .need-ic { background: var(--accent-soft); color: var(--accent); }
+.tab-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--danger); margin-left: 6px; vertical-align: 1px; }
 .check.pending { border-style: dotted; border-color: #f5a524; }
 @keyframes flash { 0%, 40% { background: var(--accent-soft); } 100% { background: transparent; } }
 

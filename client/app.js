@@ -531,7 +531,7 @@
       S.notices = msg.id ? (S.notices || []).filter((n) => n.id !== msg.id) : [];
     } else if (msg.type === 'automation' || msg.type === 'automation:remove') {
       if (S.automations) S.automations = msg.automation ? [...S.automations.filter((x) => x.id !== msg.automation.id), msg.automation] : S.automations.filter((x) => x.id !== msg.id);
-      if (toolOpen === 'automations') renderTool();
+      renderAutos();
     } else if (msg.type === 'signoff' || msg.type === 'returned') {
       upsertTask(msg.task);
       renderDay();
@@ -4055,7 +4055,7 @@
     const me = S.me?.memberId;
     const today = todayKey();
     const out = [];
-    if (amAdmin()) for (const x of (S.automations || []).filter(autoFailing)) out.push({ kind: 'auto', text: `Automation “${x.name}” didn’t run`, sub: x.runs[0].note, run: () => { openTool('automations'); setTimeout(() => autoSheet(x), 50); } });
+    if (amAdmin()) for (const x of (S.automations || []).filter(autoFailing)) out.push({ kind: 'auto', text: `Automation “${x.name}” didn’t run`, sub: x.runs[0].note, run: () => { openSettings('automations', '.auto-list'); setTimeout(() => autoSheet(x), 50); } });
     for (const t of S.tasks) if (t.submitted && !t.done && t.submitted.byId !== me && maySign(t)) out.push({ kind: 'sign', text: `Sign off “${shortText(t.text, 60)}”`, sub: `${t.submitted.by} sent it ${ago(t.submitted.at)}`, run: () => showStep(t) });
     for (const c of S.campaigns.filter((x) => x.status === 'active' && runsIt(x))) {
       for (const { t, b } of stuckSteps(c)) out.push({ kind: 'stuck', text: `Stuck: “${shortText(t.text, 50)}”`, sub: `${c.name} · waiting on “${shortText(stepName(b), 40)}”${stepWho(b) ? ' · ' + stepWho(b) : ''}${b.due && b.due < today ? `, due ${dueLabel(b.due)}` : b.submitted ? ', waiting for sign-off' : ''}`, run: () => showStep(b) });
@@ -4123,6 +4123,14 @@
     'contact.added': ['contact', 'stage', 'who'], 'contact.stage': ['contact', 'stage', 'who'], 'attempt.logged': ['contact', 'outcome', 'note', 'campaign', 'who'],
     'campaign.done': ['campaign', 'who'], 'campaign.checkin': ['campaign', 'note', 'who'], schedule: ['date'],
   };
+  // Automations live in Settings → Automations; redraw it there when they change.
+  const renderAutos = () => {
+    const st = $('#settings');
+    if (st.classList.contains('hidden') || S.setTab !== 'automations' || st.contains(document.activeElement) && document.activeElement.matches('input, textarea, select')) return;
+    const keep = st.scrollTop;
+    renderSettings();
+    st.scrollTop = keep;
+  };
   const autoFailing = (x) => x.on && x.runs?.[0] && !x.runs[0].ok && Date.now() - x.runs[0].at < 3 * 864e5;
   const DOWS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
   function autoSummary(x) {
@@ -4141,7 +4149,7 @@
   ];
   function automationsTool() {
     if (!S.automations) {
-      api('GET', '/automations').then((x) => { S.automations = x; renderTool(); }).catch((e) => toast(e.message));
+      api('GET', '/automations').then((x) => { S.automations = x; renderAutos(); }).catch((e) => toast(e.message));
       return [h('p', { class: 'day-hint' }, 'Loading…')];
     }
     const all = [...S.automations].sort((a, b) => a.createdAt - b.createdAt);
@@ -4263,7 +4271,7 @@
       const body = { name: dr.name || recipe?.name || 'Automation', trigger: { ...dr.trigger, tz: myTz() }, actions: dr.actions };
       const y = x ? await api('PATCH', '/automations/' + x.id, body) : await api('POST', '/automations', body);
       S.automations = [...(S.automations || []).filter((z) => z.id !== y.id), y];
-      renderTool();
+      renderAutos();
       if (!x) toast(`“${y.name}” is on`);
     }, x ? 'Save' : 'Turn it on');
   }
@@ -7234,14 +7242,13 @@
   }
 
   // ---------- tools: small apps that open in a drawer, so the tabs stay as they are ----------
-  const TOOLS = { automations: { name: 'Automations', render: automationsTool }, sidekick: { name: 'Sidekick', render: sidekickTool }, docs: { name: 'Docs', render: docsTool }, bills: { name: 'Finance', render: financeTool }, contacts: { name: 'Contacts', render: contactsTool }, email: { name: 'Email', render: emailTool }, meetings: { name: 'Meeting notes', render: meetingsTool }, planner: { name: 'Planner', render: plannerTool }, folders: { name: 'Folders', render: foldersTool }, map: { name: 'Map', render: mapTool }, signs: { name: 'Signatures', render: signsTool }, vault: { name: 'Vault', render: vaultTool } };
+  const TOOLS = { sidekick: { name: 'Sidekick', render: sidekickTool }, docs: { name: 'Docs', render: docsTool }, bills: { name: 'Finance', render: financeTool }, contacts: { name: 'Contacts', render: contactsTool }, email: { name: 'Email', render: emailTool }, meetings: { name: 'Meeting notes', render: meetingsTool }, planner: { name: 'Planner', render: plannerTool }, folders: { name: 'Folders', render: foldersTool }, map: { name: 'Map', render: mapTool }, signs: { name: 'Signatures', render: signsTool }, vault: { name: 'Vault', render: vaultTool } };
   let toolOpen = null;
   $('#toolsBtn').addEventListener('click', (e) => {
     const soon = billsSoon().length;
     const tight = budgetAlerts().length;
     openMenu(e.currentTarget, [
       { head: 'Tools' },
-      amAdmin() ? { label: h('span', { class: 'tool-item' }, 'Automations', (S.automations || []).some(autoFailing) ? h('small', {}, 'one didn’t run') : null), on: toolOpen === 'automations', run: () => openTool('automations') } : null,
       toolOn('sidekick') ? { label: h('span', { class: 'tool-item' }, '✦ Sidekick', skNudges().length ? h('small', {}, `${skNudges().length} need${skNudges().length === 1 ? 's' : ''} a look`) : null), on: toolOpen === 'sidekick', run: () => { SK.open = null; openTool('sidekick'); } } : null,
       toolOn('docs') ? { label: 'Docs', on: toolOpen === 'docs', run: () => openTool('docs') } : null,
       toolOn('projects') ? { label: 'Projects', run: showProjects } : null,
@@ -12688,16 +12695,17 @@
     return sec;
   }
 
-  const SET_TABS = [['general', 'General'], ['team', 'Team'], ['connections', 'Connections'], ['account', 'Account']];
+  const SET_TABS = [['general', 'General'], ['team', 'Team'], ['connections', 'Connections'], ['automations', 'Automations'], ['account', 'Account']];
   function renderSettings() {
     const s = $('#settings');
     const ws = S.workspace;
     s.innerHTML = '';
     s.append(h('h2', {}, 'Settings', h('button', { class: 'icon-btn', html: I.close, 'aria-label': 'Close', onclick: () => s.classList.add('hidden') })));
     // Grouped under tabs, so each one stays short.
-    const tab = SET_TABS.some(([k]) => k === S.setTab) ? S.setTab : 'general';
-    s.append(h('div', { class: 'seg set-tabs', role: 'tablist' }, SET_TABS.map(([k, label]) =>
-      h('button', { class: tab === k ? 'on' : null, role: 'tab', 'aria-selected': String(tab === k), onclick: () => { S.setTab = k; store.set('setTab', k); renderSettings(); s.scrollTop = 0; } }, label))));
+    const tabs = SET_TABS.filter(([k]) => k !== 'automations' || amAdmin());
+    const tab = tabs.some(([k]) => k === S.setTab) ? S.setTab : 'general';
+    s.append(h('div', { class: 'seg set-tabs', role: 'tablist' }, tabs.map(([k, label]) =>
+      h('button', { class: tab === k ? 'on' : null, role: 'tab', 'aria-selected': String(tab === k), onclick: () => { S.setTab = k; store.set('setTab', k); renderSettings(); s.scrollTop = 0; } }, label, k === 'automations' && (S.automations || []).some(autoFailing) ? h('span', { class: 'tab-dot', title: 'One didn’t run' }) : null))));
     const me = ws.members.find((x) => x.id === S.me.memberId);
     const owner = me?.role === 'owner';
     const admin = owner || me?.role === 'admin';
@@ -12864,6 +12872,8 @@
         h('p', {}, 'Erase this team and everything in it, for everyone. You get 7 days to change your mind.'),
         h('div', { class: 'btns' }, h('button', { class: 'btn danger', onclick: deleteTeamSheet }, 'Delete team…'))));
     }
+
+    if (tab === 'automations') s.append(h('section', { class: 'auto-sec' }, h('h3', {}, 'Automations'), ...automationsTool()));
 
     if (tab === 'account') {
       // Your email
