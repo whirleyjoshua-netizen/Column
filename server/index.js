@@ -34,7 +34,7 @@ fs.mkdirSync(FILES_DIR, { recursive: true });
 // Everything lives in memory; save() hands the whole thing to the store a moment later.
 const IMPORT_PATH = path.join(DATA_DIR, 'import-pending.json');
 const store = await openStore({ url: process.env.DATABASE_URL, file: DB_PATH, importFile: IMPORT_PATH });
-let db = { workspaces: {}, tokens: {}, items: {}, entries: {}, tasks: {}, uploads: {}, campaigns: {}, goals: {}, attempts: {}, lists: {}, templates: {}, calendars: {}, ai: {}, pss: {}, sends: {}, bills: {}, meetings: {}, money: {}, budgets: {}, plans: {}, sidekick: {}, vaults: {}, vaultItems: {}, signs: {}, signatures: {}, trips: {}, pins: {}, zones: {}, comments: {}, users: {}, resets: {}, invites: {}, exports: {}, contacts: {}, optouts: {}, unsubs: {}, gcontacts: {} };
+let db = { workspaces: {}, tokens: {}, items: {}, entries: {}, tasks: {}, uploads: {}, campaigns: {}, goals: {}, attempts: {}, lists: {}, templates: {}, calendars: {}, ai: {}, pss: {}, sends: {}, bills: {}, meetings: {}, money: {}, budgets: {}, plans: {}, sidekick: {}, vaults: {}, vaultItems: {}, signs: {}, signatures: {}, trips: {}, pins: {}, zones: {}, comments: {}, users: {}, resets: {}, invites: {}, exports: {}, contacts: {}, optouts: {}, unsubs: {}, gcontacts: {}, automations: {}, notices: {} };
 const loaded = await store.load();
 if (loaded.db) db = { ...db, ...loaded.db };
 if (loaded.fromFile) console.log(`Moving ${path.basename(loaded.fromFile)} into Postgres.`);
@@ -1661,7 +1661,10 @@ function toolDone(taskId, { by, byId, note, file } = {}) {
     const opened = openings(db.workspaces[t.wsId]);
     t.doneNote = note ? cleanText(note, 200) : null;
     if (t.signoff) Object.assign(t, { submitted: { by: by || 'Kloomie', byId: byId || null, at: Date.now() }, returned: null });
-    else Object.assign(t, { done: true, doneAt: Date.now(), doneBy: by || 'Kloomie', submitted: null, returned: null });
+    else {
+      Object.assign(t, { done: true, doneAt: Date.now(), doneBy: by || 'Kloomie', submitted: null, returned: null });
+      setImmediate(() => automate(t.wsId, 'task.done', { task: t, campaign: taskCamp(t), who: by, whoId: byId }));
+    }
     syncEntries(t);
     broadcast(t.wsId, { type: 'task', task: publicTask(t) });
     if (t.submitted) broadcast(t.wsId, { type: 'signoff', task: publicTask(t), by: by || 'Kloomie' });
@@ -2011,9 +2014,168 @@ function dueSlots(x, now) {
   }
   return due;
 }
+// ---------- automations: "when this happens, do that" ----------
+// An owner or admin picks a trigger and up to five actions. Triggers fire from what already happens in Kloomie;
+// actions make a task, post to a feed, start a saved campaign, notify people (it lands on their Home), or change a
+// contact. What an automation does never sets off another one (no loops), each runs at most 30 times an hour, and
+// every run is logged. No AI here: the same thing happens every time.
+const AUTO_TRIGGERS = ['task.done', 'file.arrived', 'sign.signed', 'contact.added', 'contact.stage', 'attempt.logged', 'campaign.done', 'campaign.checkin', 'schedule'];
+const AUTO_ACTIONS = ['task', 'post', 'campaign', 'notify', 'contact'];
+const AUTO_RUNS = 30;
+const AUTO_MAX = 50;
+let automating = 0;
+const publicAutomation = ({ wsId, recent, ran, ...x }) => x;
+function applyAutomation(x, body, ws) {
+  if (body.name !== undefined) x.name = cleanText(body.name, 80) || 'Automation';
+  if (body.on !== undefined) x.on = !!body.on;
+  if (body.trigger !== undefined) {
+    const t = body.trigger || {};
+    if (!AUTO_TRIGGERS.includes(t.kind)) throw badRequest('Pick what sets it off.');
+    const camp = t.campaignId && db.campaigns[t.campaignId]?.wsId === ws.id ? t.campaignId : null;
+    x.trigger = {
+      kind: t.kind, campaignId: camp,
+      stackId: t.stackId && ws.stacks.some((st) => st.id === t.stackId) ? t.stackId : null,
+      stage: cleanText(t.stage, 40) || null, outcome: cleanText(t.outcome, 40) || null,
+      statuses: (Array.isArray(t.statuses) ? t.statuses : []).filter((v) => HEALTH.includes(v)),
+    };
+    // On a schedule: weekdays and times, in the team's time zone (the same slots saved campaigns use).
+    if (t.kind === 'schedule') {
+      const slots = slotList(t.slots);
+      if (!slots.length) throw badRequest('Pick the days and time it runs.');
+      Object.assign(x, { auto: true, slots, tz: validTz(t.tz || ws.tz), since: x.since || Date.now(), ran: x.ran || [] });
+    } else Object.assign(x, { auto: false, slots: [], ran: [] });
+  }
+  if (body.actions !== undefined) {
+    const list = (Array.isArray(body.actions) ? body.actions : []).slice(0, 5).map((a) => {
+      const kind = AUTO_ACTIONS.includes(a?.kind) ? a.kind : null;
+      if (!kind) return null;
+      const text = cleanText(a.text, 1000);
+      if (kind === 'task') return { kind, text, assignee: /^(who|role:[\w-]+|[\w-]{6,})$/.test(a.assignee || '') ? a.assignee : '', dueIn: a.dueIn === '' || a.dueIn == null ? null : Math.max(0, Math.min(90, Math.round(Number(a.dueIn)) || 0)), campaign: a.campaign === 'same' || (a.campaign && db.campaigns[a.campaign]?.wsId === ws.id) ? a.campaign : '' };
+      if (kind === 'post') return { kind, text, channelId: a.channelId === 'same' || a.channelId === 'general' || ws.channels.some((c) => c.id === a.channelId) ? a.channelId : 'general' };
+      if (kind === 'campaign') return db.templates[a.templateId]?.wsId === ws.id ? { kind, templateId: a.templateId } : null;
+      if (kind === 'notify') return { kind, text, to: (Array.isArray(a.to) ? a.to : []).filter((v) => ['owners', 'admins', 'who'].includes(v) || ws.members.some((m) => m.id === v)).slice(0, 20) };
+      if (kind === 'contact') return { kind, stage: cleanText(a.stage, 40), tag: cleanText(a.tag, 40) };
+      return null;
+    }).filter(Boolean);
+    if (!list.length) throw badRequest('Add at least one thing for it to do.');
+    for (const a of list) {
+      if ((a.kind === 'task' || a.kind === 'post' || a.kind === 'notify') && !a.text) throw badRequest('Write what it should say.');
+      if (a.kind === 'notify' && !a.to.length) throw badRequest('Pick who to notify.');
+      if (a.kind === 'contact' && !a.stage && !a.tag) throw badRequest('Pick a stage or a tag for the contact.');
+    }
+    x.actions = list;
+  }
+  if (!x.trigger) throw badRequest('Pick what sets it off.');
+  if (!x.actions?.length) throw badRequest('Add at least one thing for it to do.');
+  return x;
+}
+// {task}, {campaign}, {contact}, {file}, {from}, {who}, {stage}, {outcome}, {document}, {note}, {date} in what it writes.
+function autoFill(text, ctx, wsId) {
+  const v = { task: ctx.task?.text, campaign: ctx.campaign?.name, contact: ctx.contact ? ctx.contact.name || ctx.contact.company || ctx.contact.email || ctx.contact.phone : '', file: ctx.file?.name,
+    from: ctx.from, who: ctx.who, stage: ctx.stage ? stageLabel(ctx.stage) : '', outcome: ctx.outcome, document: ctx.document, note: ctx.note, date: teamDay(wsId) };
+  return String(text || '').replace(/\{(\w+)\}/g, (m, k) => (k in v ? String(v[k] ?? '') : m)).trim();
+}
+function autoMatches(t, ctx) {
+  if (t.campaignId && ctx.campaign?.id !== t.campaignId && ctx.campaign?.parentId !== t.campaignId) return false;
+  if (t.stackId && ctx.file?.stackId !== t.stackId) return false;
+  if (t.stage && !sameText(ctx.stage, t.stage)) return false;
+  if (t.outcome && ctx.outcome !== t.outcome) return false;
+  if (t.statuses?.length && !t.statuses.includes(ctx.status)) return false;
+  return true;
+}
+function automate(wsId, kind, ctx = {}) {
+  if (automating || offline(wsId)) return;
+  for (const x of Object.values(db.automations)) if (x.wsId === wsId && x.on && x.trigger.kind === kind && autoMatches(x.trigger, ctx)) runAutomation(x, ctx);
+}
+function autoLog(x, ok, note) {
+  x.runs = [{ at: Date.now(), ok, note: clipText(note || '', 240) }, ...(x.runs || [])].slice(0, 20);
+  if (ok) x.count = (x.count || 0) + 1;
+  broadcast(x.wsId, { type: 'automation', automation: publicAutomation(x), forAdmins: true });
+}
+function runAutomation(x, ctx) {
+  x.recent = (x.recent || []).filter((at) => at > Date.now() - 3600_000);
+  if (x.recent.length >= AUTO_RUNS) return autoLog(x, false, `Skipped: it already ran ${AUTO_RUNS} times this hour`);
+  x.recent.push(Date.now());
+  const did = [];
+  automating++;
+  try {
+    for (const a of x.actions) did.push(autoAction(x, a, ctx));
+    autoLog(x, true, did.filter(Boolean).join(' · '));
+  } catch (e) {
+    autoLog(x, false, (did.length ? did.join(' · ') + ' · then ' : '') + e.message);
+  } finally {
+    automating--;
+    save();
+  }
+}
+function autoAction(x, a, ctx) {
+  const ws = db.workspaces[x.wsId];
+  const say = autoFill(a.text, ctx, ws.id);
+  if (a.kind === 'task') {
+    const camp = a.campaign === 'same' ? ctx.campaign : db.campaigns[a.campaign];
+    const g = camp && goalsInOrder(camp)[0];
+    const who = a.assignee === 'who' ? (ws.members.some((m) => m.id === ctx.whoId) ? { assigneeId: ctx.whoId } : {})
+      : a.assignee.startsWith('role:') ? { roleId: a.assignee.slice(5) } : a.assignee ? { assigneeId: a.assignee } : {};
+    const t = applyTask({ id: rid(), wsId: ws.id, by: x.name, memberId: x.memberId, createdAt: Date.now(), text: '', done: false, doneAt: null, due: null, priority: 0, goalId: null, assigneeId: null },
+      { text: say, due: a.dueIn != null ? addDays(teamDay(ws.id), a.dueIn) : null, goalId: g?.id || null, ...who });
+    if (t.assigneeId || t.roleId) t.assignedBy = x.memberId;
+    db.tasks[t.id] = t;
+    broadcast(ws.id, { type: 'task', task: publicTask(t) });
+    return `Made the task “${clipText(t.text, 60)}”`;
+  }
+  if (a.kind === 'post') {
+    const channelId = a.channelId === 'same' ? ctx.campaign?.channelId || null : a.channelId === 'general' ? null : a.channelId;
+    if (channelId && !ws.channels.some((c) => c.id === channelId)) throw new Error('its feed is gone');
+    addItem({ id: rid(), wsId: ws.id, by: x.name, memberId: null, device: 'Automation', deviceId: null, createdAt: Date.now(), pinned: false, stackId: null, channelId, status: 'ready', type: 'message', text: say });
+    return `Posted to #${channelId ? ws.channels.find((c) => c.id === channelId).name : 'general'}`;
+  }
+  if (a.kind === 'campaign') {
+    const tpl = db.templates[a.templateId];
+    if (!tpl) throw new Error('its saved campaign is gone');
+    const c = runTemplate(tpl, { date: teamDay(ws.id), by: x.memberId });
+    return `Started “${c.name}”`;
+  }
+  if (a.kind === 'notify') {
+    const ids = new Set();
+    for (const v of a.to) {
+      if (v === 'owners') ws.members.filter((m) => m.role === 'owner').forEach((m) => ids.add(m.id));
+      else if (v === 'admins') ws.members.filter((m) => ['owner', 'admin'].includes(m.role)).forEach((m) => ids.add(m.id));
+      else if (v === 'who') { if (ctx.whoId && ws.members.some((m) => m.id === ctx.whoId)) ids.add(ctx.whoId); }
+      else if (ws.members.some((m) => m.id === v)) ids.add(v);
+    }
+    for (const id of ids) notify(ws.id, id, { title: x.name, text: say, campaignId: ctx.campaign?.id || null, taskId: ctx.task?.id || null });
+    return `Notified ${ids.size} ${ids.size === 1 ? 'person' : 'people'}`;
+  }
+  if (a.kind === 'contact') {
+    const c = ctx.contact?.id && db.contacts[ctx.contact.id];
+    if (!c) return 'No contact to change';
+    if (a.stage && !ownsOf(c.via).includes('stage')) c.stage = a.stage.toLowerCase().replace(/\s+/g, '_');
+    if (a.tag) c.tags = [...new Set([...(c.tags || []), a.tag])].slice(0, 20);
+    c.updatedAt = Date.now();
+    contactNews(ws.id, c);
+    return `Updated ${clipText(c.name || c.email || 'the contact', 40)}`;
+  }
+}
+// A note for one person, on their Home until they clear it (and a pop-up if they're on).
+const publicNotice = ({ wsId, ...n }) => n;
+function notify(wsId, memberId, { title, text, campaignId = null, taskId = null }) {
+  const n = { id: rid(), wsId, memberId, title: clipText(title, 80), text: clipText(text, 600), campaignId, taskId, at: Date.now() };
+  db.notices[n.id] = n;
+  const mine = Object.values(db.notices).filter((y) => y.wsId === wsId && y.memberId === memberId).sort((p, q) => q.at - p.at);
+  for (const old of mine.slice(50)) delete db.notices[old.id];
+  broadcast(wsId, { type: 'notice', notice: publicNotice(n), forMember: memberId });
+}
+function runAutomationSchedules(now) {
+  for (const x of Object.values(db.automations)) {
+    if (!x.on || x.trigger.kind !== 'schedule' || offline(x.wsId)) continue;
+    for (const slot of dueSlots(x, now)) runAutomation(x, { date: slot.date });
+  }
+}
+
 function runSchedules() {
   const now = Date.now();
   let ran = false;
+  runAutomationSchedules(now);
   for (const tpl of Object.values(db.templates)) {
     if (offline(tpl.wsId)) continue;
     for (const slot of dueSlots(tpl, now)) {
@@ -2349,7 +2511,8 @@ function mergeContacts(keep, others) {
 // stage, createdAt, dne, unsub, ... }. Each is matched by the connector's id, then by email or phone to a
 // contact that isn't linked yet. Someone the connector no longer has loses the link, and goes if the
 // connector made them and nobody added a note or tags.
-function fillContacts(ws, src, people) {
+function fillContacts(ws, src, people, { announce = false } = {}) {
+  const news = [];
   const all = contactsOf(ws.id);
   const byExt = new Map(all.filter((x) => x.ext?.[src]).map((x) => [x.ext[src], x]));
   const byEmail = new Map(), byPhone = new Map();
@@ -2370,14 +2533,17 @@ function fillContacts(ws, src, people) {
       x = newContact(ws.id, src.toUpperCase());
       x.via = src;
       x.source = CONNECTOR_SOURCE[src] || '';
+      news.push(['contact.added', x]);
       db.contacts[x.id] = x;
       count++;
     }
     x.ext = { ...x.ext, [src]: p.id };
+    const wasStage = x.stage;
     // A contact typed in first keeps its own details, filled where empty.
     for (const k of ownsOf(src)) if (x.via === src ? true : !x[k]) x[k] = String(p[k] ?? '').slice(0, CONTACT_LEN[k]);
     if (x.via === src) x.createdAt = p.createdAt || x.createdAt;
     Object.assign(x, { extDne: !!p.dne, unsub: p.unsub || null, assignedTo: p.assignedTo || '', lostReason: p.lostReason || '', stageChangedAt: p.stageChangedAt || null });
+    if (x.stage && wasStage && x.stage !== wasStage) news.push(['contact.stage', x]);
     kept.add(x.id);
   }
   for (const x of contactsOf(ws.id)) {
@@ -2388,6 +2554,7 @@ function fillContacts(ws, src, people) {
     Object.assign(x, { ext: rest, via: x.via === src ? null : x.via, extDne: false, unsub: null });
   }
   refreshLiveSoon(ws.id);
+  if (announce) for (const [kind, x] of news) if (db.contacts[x.id]) automate(ws.id, kind, { contact: x, stage: x.stage, who: src === 'pss' ? 'PSS' : 'Google Contacts' });
 }
 // A disconnected connector's people stay as the team's own contacts, editable, still linked so connecting
 // again finds them.
@@ -2537,7 +2704,7 @@ async function syncPss(ws) {
       // Someone who unsubscribed by address but whose lead says otherwise is still not emailed.
       const no = new Set(p.dne);
       for (const x of leads) if (no.has(x.email.toLowerCase())) x.dne = true;
-      fillContacts(ws, 'pss', leads);
+      fillContacts(ws, 'pss', leads, { announce: !!p.syncedAt });
       p.syncedAt = Date.now();
       p.error = null;
       pushPss(ws);
@@ -2602,7 +2769,7 @@ async function syncGc(ws) {
     try {
       const people = (await calProviders.google.people(await gcToken(g))).map(gcPerson).filter((x) => x.id && (x.name || x.company || x.email || x.phone));
       if (db.gcontacts[ws.id] !== g) return;
-      fillContacts(ws, 'google', people);
+      fillContacts(ws, 'google', people, { announce: !!g.syncedAt });
       g.syncedAt = Date.now();
       g.error = null;
       contactsNews(ws.id);
@@ -2973,6 +3140,7 @@ async function requestApi(req, res, url, token, part) {
   r.count = (r.count || 0) + 1;
   r.lastAt = Date.now();
   if (r.taskId) toolDone(r.taskId, { by: r.by, byId: r.memberId, note: `Files from ${from}`, file: item.id });
+  automate(ws.id, 'file.arrived', { file: item, from, campaign: db.campaigns[st.campaignId] || null, who: r.by, whoId: r.memberId });
   save();
   // Just the count: a full workspace update would rebuild everyone's columns mid-typing.
   broadcast(ws.id, { type: 'stack:request', stackId: st.id, count: r.count, lastAt: r.lastAt });
@@ -3053,6 +3221,7 @@ async function signApi(req, res, token, part) {
     const item = await addPdf({ wsId: x.wsId, member: x.by, memberId: sender ? x.memberId : null, device: 'Signature', deviceId: null }, bytes, copyName(x.name, 'signed'), x);
     Object.assign(x, { status: 'signed', signedAt, signedName: typed, signedHash: sha256(bytes), signedItemId: item.id });
     if (x.taskId) toolDone(x.taskId, { by: x.by, byId: x.memberId, note: `Signed by ${x.signer.name}`, file: item.id });
+    automate(x.wsId, 'sign.signed', { document: x.name, from: x.signer.name, file: item, campaign: db.campaigns[x.campaignId] || null, who: x.by, whoId: x.memberId });
   } catch (e) {
     x.events = x.events.filter((e2) => !/^(Agreed to sign|Signed as)/.test(e2.what));
     throw e;
@@ -4570,6 +4739,7 @@ async function api(req, res, url) {
     return send(res, 200, {
       workspace: publicWorkspace(ws, auth.memberId),
       me: { memberId: auth.memberId, member: auth.member, device: auth.device, deviceId: auth.deviceId, ...meAccount(ws, auth.memberId) },
+      notices: Object.values(db.notices).filter((n) => n.wsId === ws.id && n.memberId === auth.memberId).sort((p, q) => q.at - p.at).map(publicNotice),
       items,
       entries: Object.values(db.entries).filter((e) => e.wsId === ws.id && canSee(auth, 'entry', e)).map(publicEntry),
       tasks: Object.values(db.tasks).filter((t) => t.wsId === ws.id && canSee(auth, 'task', t)).map(publicTask),
@@ -4648,6 +4818,7 @@ async function api(req, res, url) {
         signNews = { type: 'signoff', task: null, by: auth.member };
       } else if (body.done && !t.done) {
         next.doneBy = auth.member;
+        setImmediate(() => db.tasks[next.id]?.done && automate(ws.id, 'task.done', { task: next, campaign: taskCamp(next), who: auth.member, whoId: auth.memberId }));
         if (next.signoff) next.approved = { by: auth.member, at: Date.now() };
         next.submitted = null;
         next.returned = null;
@@ -4699,6 +4870,7 @@ async function api(req, res, url) {
       const body = await readJson(req, 10_000);
       if (!HEALTH.includes(body.status)) return send(res, 400, { error: 'Pick how it’s going.' });
       c.checkins = [...(c.checkins || []).slice(-25), { id: rid(6), status: body.status, note: cleanText(body.note, 500), by: auth.member, byId: auth.memberId, at: Date.now() }];
+      automate(ws.id, 'campaign.checkin', { campaign: c, status: body.status, note: c.checkins.at(-1).note, who: auth.member, whoId: auth.memberId });
       save();
       broadcast(ws.id, { type: 'campaign', campaign: publicCampaign(c) });
       return send(res, 200, publicCampaign(c));
@@ -4725,6 +4897,7 @@ async function api(req, res, url) {
       // Who can see it changed: everyone reloads so it appears or disappears cleanly.
       // The campaign itself goes first so a new assignee is told it's theirs.
       // Finished: the campaigns that come after it are up.
+      if (next.status === 'done' && c.status !== 'done') automate(ws.id, 'campaign.done', { campaign: next, who: auth.member, whoId: auth.memberId });
       if (next.status === 'done' && c.status !== 'done') for (const n of Object.values(db.campaigns)) if (n.follows === c.id && n.status !== 'done') broadcast(ws.id, { type: 'nextup', campaign: publicCampaign(n), after: c.name, by: auth.member });
       // A role taken away: its tasks go back to nobody, and steps it signed off no longer wait for it.
       if (body.cast !== undefined) for (const t of Object.values(db.tasks)) {
@@ -5547,6 +5720,7 @@ async function api(req, res, url) {
       save();
       contactNews(ws.id, x);
       refreshLiveSoon(ws.id);
+      automate(ws.id, 'contact.added', { contact: x, stage: x.stage, who: auth.member, whoId: auth.memberId });
       return send(res, 200, publicContact(x));
     }
     // A spreadsheet's rows. Someone already here (same email or phone) gets the empty fields filled and the
@@ -5596,10 +5770,12 @@ async function api(req, res, url) {
     const x = b && db.contacts[b];
     if (!x || x.wsId !== ws.id || c) return send(res, 404, { error: 'Not found' });
     if (m === 'PATCH') {
+      const wasStage = x.stage;
       applyContact(x, body);
       if (!x.name && !x.email && !x.phone && !x.company) return send(res, 400, { error: 'Keep a name, company, email or phone number.' });
       save();
       contactNews(ws.id, x);
+      if (x.stage !== wasStage && x.stage) automate(ws.id, 'contact.stage', { contact: x, stage: x.stage, who: auth.member, whoId: auth.memberId });
       refreshLiveSoon(ws.id);
       return send(res, 200, publicContact(x));
     }
@@ -5615,6 +5791,53 @@ async function api(req, res, url) {
   }
 
   // The PSS admin connection, which fills Contacts. Owners only.
+  if (a === 'automations') {
+    if (!isAdmin(auth)) return send(res, 403, { error: 'Only team owners and admins can set up automations.' });
+    const mine = () => Object.values(db.automations).filter((x) => x.wsId === ws.id).sort((p, q) => p.createdAt - q.createdAt);
+    if (m === 'GET' && !b) return send(res, 200, mine().map(publicAutomation));
+    if (m === 'POST' && !b) {
+      if (mine().length >= AUTO_MAX) return send(res, 400, { error: `A team can have up to ${AUTO_MAX} automations.` });
+      const x = applyAutomation({ id: rid(), wsId: ws.id, memberId: auth.memberId, by: auth.member, createdAt: Date.now(), on: true, runs: [], count: 0 }, await readJson(req, 50_000), ws);
+      db.automations[x.id] = x;
+      save();
+      broadcast(ws.id, { type: 'automation', automation: publicAutomation(x), forAdmins: true });
+      return send(res, 200, publicAutomation(x));
+    }
+    const x = b && db.automations[b];
+    if (!x || x.wsId !== ws.id) return send(res, 404, { error: 'Not found' });
+    // A scheduled one can be run now, to try it.
+    if (m === 'POST' && c === 'run') {
+      if (x.trigger.kind !== 'schedule') return send(res, 400, { error: 'Only scheduled automations can be run by hand.' });
+      runAutomation(x, { date: teamDay(ws.id), who: auth.member, whoId: auth.memberId });
+      return send(res, 200, publicAutomation(x));
+    }
+    if (m === 'PATCH' && !c) {
+      applyAutomation(x, await readJson(req, 50_000), ws);
+      save();
+      broadcast(ws.id, { type: 'automation', automation: publicAutomation(x), forAdmins: true });
+      return send(res, 200, publicAutomation(x));
+    }
+    if (m === 'DELETE' && !c) {
+      delete db.automations[x.id];
+      save();
+      broadcast(ws.id, { type: 'automation:remove', id: x.id, forAdmins: true });
+      return send(res, 200, { ok: true });
+    }
+    return send(res, 405, { error: 'Method not allowed' });
+  }
+  // Notes for you from automations: on your Home until you clear them.
+  if (a === 'notices') {
+    const mine = () => Object.values(db.notices).filter((n) => n.wsId === ws.id && n.memberId === auth.memberId).sort((p, q) => q.at - p.at);
+    if (m === 'GET' && !b) return send(res, 200, mine().map(publicNotice));
+    if (m === 'DELETE') {
+      for (const n of mine()) if (!b || n.id === b) delete db.notices[n.id];
+      save();
+      broadcast(ws.id, { type: 'notice:remove', id: b || null, forMember: auth.memberId });
+      return send(res, 200, { ok: true });
+    }
+    return send(res, 405, { error: 'Method not allowed' });
+  }
+
   if (a === 'home' && b === 'brief' && m === 'POST') return send(res, 200, await homeBrief(ws, auth, await readJson(req, 40_000)));
 
   if (a === 'gcontacts') {
@@ -5834,6 +6057,7 @@ async function api(req, res, url) {
       save();
       broadcast(ws.id, { type: 'attempt', attempt: publicAttempt(x) });
       if (x.leadId) pushPssSoon(ws.id);
+      automate(ws.id, 'attempt.logged', { campaign: c, outcome: x.outcome, contact: db.contacts[x.contactId] || { name: x.contact }, note: x.note, who: auth.member, whoId: auth.memberId });
       // The last one on a list reached: a "work the list" step that works it is done.
       if (x.listId && listWorked(db.lists[x.listId])) for (const t of Object.values(db.tasks)) {
         if (t.listId === x.listId && t.action?.kind === 'calls' && !t.done) toolDone(t.id, { by: auth.member, byId: auth.memberId, note: `Everyone on “${clipText(db.lists[x.listId].name, 40)}” reached` });
@@ -7224,6 +7448,7 @@ async function removeMember(ws, m) {
   const hand = (x, k = 'memberId') => { if (x[k] === id) x[k] = heir ? heir.id : null; };
   signOutWhere(ws, id);
   await Promise.all(Object.values(db.calendars).filter(theirs).map(async (conn) => { await revokeCalendar(conn); disconnectCalendar(conn); }));
+  for (const n of Object.values(db.notices)) if (theirs(n)) delete db.notices[n.id];
   // Google Contacts reads their Google account, so it goes with them; its people stay.
   if (db.gcontacts[wsId]?.memberId === id) await gcDisconnect(wsId);
   for (const c of Object.values(db.campaigns)) {

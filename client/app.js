@@ -524,6 +524,14 @@
       if (newly && msg.task.assignedBy !== S.me?.memberId) assignedToMe(msg.task);
       renderDay();
       refreshLinks();
+    } else if (msg.type === 'notice') {
+      S.notices = [msg.notice, ...(S.notices || []).filter((n) => n.id !== msg.notice.id)];
+      notice(msg.notice.title, msg.notice.text, () => setTab('home'));
+    } else if (msg.type === 'notice:remove') {
+      S.notices = msg.id ? (S.notices || []).filter((n) => n.id !== msg.id) : [];
+    } else if (msg.type === 'automation' || msg.type === 'automation:remove') {
+      if (S.automations) S.automations = msg.automation ? [...S.automations.filter((x) => x.id !== msg.automation.id), msg.automation] : S.automations.filter((x) => x.id !== msg.id);
+      if (toolOpen === 'automations') renderTool();
     } else if (msg.type === 'signoff' || msg.type === 'returned') {
       upsertTask(msg.task);
       renderDay();
@@ -796,6 +804,7 @@
     S.lists = st.lists || [];
     S.templates = st.templates || [];
     S.bills = st.bills || [];
+    S.notices = st.notices || [];
     S.money = st.money || [];
     S.budgets = st.budgets || [];
     S.projects = st.projects || [];
@@ -4046,6 +4055,7 @@
     const me = S.me?.memberId;
     const today = todayKey();
     const out = [];
+    if (amAdmin()) for (const x of (S.automations || []).filter(autoFailing)) out.push({ kind: 'auto', text: `Automation “${x.name}” didn’t run`, sub: x.runs[0].note, run: () => { openTool('automations'); setTimeout(() => autoSheet(x), 50); } });
     for (const t of S.tasks) if (t.submitted && !t.done && t.submitted.byId !== me && maySign(t)) out.push({ kind: 'sign', text: `Sign off “${shortText(t.text, 60)}”`, sub: `${t.submitted.by} sent it ${ago(t.submitted.at)}`, run: () => showStep(t) });
     for (const c of S.campaigns.filter((x) => x.status === 'active' && runsIt(x))) {
       for (const { t, b } of stuckSteps(c)) out.push({ kind: 'stuck', text: `Stuck: “${shortText(t.text, 50)}”`, sub: `${c.name} · waiting on “${shortText(stepName(b), 40)}”${stepWho(b) ? ' · ' + stepWho(b) : ''}${b.due && b.due < today ? `, due ${dueLabel(b.due)}` : b.submitted ? ', waiting for sign-off' : ''}`, run: () => showStep(b) });
@@ -4099,6 +4109,163 @@
       live.length ? mains.flatMap((c) => [row(c), ...live.filter((x) => x.parentId === c.id).map((x) => row(x, true))]) : h('p', { class: 'day-hint' }, 'No campaigns running.'),
       feed.length ? h('div', { class: 'any-h camp-goals-h' }, 'Latest check-ins') : null,
       feed.map(({ c, x }) => h('button', { class: 'ci-row', onclick: () => openCampaign(c.id) }, h('span', { class: 'pill health ' + x.status }, HEALTH_L[x.status]), h('span', { class: 'ci-text' }, h('b', {}, c.name), x.note ? ' · ' + x.note : ''), h('small', {}, `${x.by} · ${ago(x.at)}`))));
+  }
+
+  // ---------- Automations: "when this happens, do that" (owners and admins) ----------
+  const AUTO_WHEN = {
+    'task.done': 'A task or step is done', 'file.arrived': 'Files come in on a request link', 'sign.signed': 'A document is signed',
+    'contact.added': 'A contact is added', 'contact.stage': 'A contact’s stage changes', 'attempt.logged': 'A call or email is logged',
+    'campaign.done': 'A campaign is marked finished', 'campaign.checkin': 'Someone checks in on a campaign', schedule: 'On a schedule',
+  };
+  const AUTO_DO = { task: 'Make a task', post: 'Post in a feed', campaign: 'Start a saved campaign', notify: 'Notify people', contact: 'Change the contact' };
+  const AUTO_WORDS = {
+    'task.done': ['task', 'campaign', 'who'], 'file.arrived': ['file', 'from', 'campaign'], 'sign.signed': ['document', 'from', 'campaign', 'who'],
+    'contact.added': ['contact', 'stage', 'who'], 'contact.stage': ['contact', 'stage', 'who'], 'attempt.logged': ['contact', 'outcome', 'note', 'campaign', 'who'],
+    'campaign.done': ['campaign', 'who'], 'campaign.checkin': ['campaign', 'note', 'who'], schedule: ['date'],
+  };
+  const autoFailing = (x) => x.on && x.runs?.[0] && !x.runs[0].ok && Date.now() - x.runs[0].at < 3 * 864e5;
+  const DOWS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  function autoSummary(x) {
+    const t = x.trigger;
+    const when = t.kind === 'schedule' ? `Every ${t.slots?.[0] ? t.slots[0].days.map((d) => DOWS[d]).join(', ') + ' at ' + hhmm(t.slots[0].time) : '…'}`
+      : AUTO_WHEN[t.kind] + [t.campaignId && campById(t.campaignId) ? ` in ${campById(t.campaignId).name}` : '', t.stage ? ` to ${stageLabel(t.stage)}` : '', t.outcome ? ` as ${t.outcome}` : '', t.statuses?.length ? ` (${t.statuses.map((v) => HEALTH_L[v]).join(' or ')})` : ''].join('');
+    return `${when} → ${x.actions.map((a) => AUTO_DO[a.kind].toLowerCase()).join(', ')}`;
+  }
+  const AUTO_RECIPES = [
+    { name: 'Signed? Schedule the work', why: 'When a document is signed, make a task to schedule the work', trigger: { kind: 'sign.signed' }, actions: [{ kind: 'task', text: 'Schedule the work for {document}', assignee: '', dueIn: 1, campaign: 'same' }] },
+    { name: 'Files in? Tell the campaign', why: 'When files come in on a link, post it in the campaign’s feed', trigger: { kind: 'file.arrived' }, actions: [{ kind: 'post', text: '{from} sent {file}', channelId: 'same' }] },
+    { name: 'Good call? Follow up', why: 'When a call is logged as Interested, make a follow-up task for whoever made it', trigger: { kind: 'attempt.logged', outcome: 'Interested' }, actions: [{ kind: 'task', text: 'Send {contact} a quote', assignee: 'who', dueIn: 1, campaign: 'same' }] },
+    { name: 'New customer? Onboard them', why: 'When a contact becomes a Customer, the owners hear it’s time to onboard them', trigger: { kind: 'contact.stage', stage: 'customer' }, actions: [{ kind: 'notify', text: '{contact} is a new customer. Time to onboard them.', to: ['owners'] }] },
+    { name: 'Off track? Tell the owners', why: 'When a campaign is checked in at risk or off track, the owners hear why', trigger: { kind: 'campaign.checkin', statuses: ['atRisk', 'offTrack'] }, actions: [{ kind: 'notify', text: '{who} checked in on {campaign}: {note}', to: ['owners'] }] },
+    { name: 'Monday goals', why: 'Every Monday at 9, ask the team for the week’s goals', trigger: { kind: 'schedule', slots: [{ days: [1], time: '09:00' }] }, actions: [{ kind: 'post', text: 'Good morning! What are your goals for this week?', channelId: 'general' }] },
+  ];
+  function automationsTool() {
+    if (!S.automations) {
+      api('GET', '/automations').then((x) => { S.automations = x; renderTool(); }).catch((e) => toast(e.message));
+      return [h('p', { class: 'day-hint' }, 'Loading…')];
+    }
+    const all = [...S.automations].sort((a, b) => a.createdAt - b.createdAt);
+    const row = (x) => {
+      const last = x.runs?.[0];
+      const sw = h('input', { type: 'checkbox', checked: x.on, 'aria-label': x.on ? 'On' : 'Off' });
+      sw.addEventListener('change', () => api('PATCH', '/automations/' + x.id, { on: sw.checked }).catch((e) => toast(e.message)));
+      return h('div', { class: 'auto-row' + (x.on ? '' : ' off') + (autoFailing(x) ? ' failing' : '') },
+        h('button', { class: 'auto-main', onclick: () => autoSheet(x) }, h('b', {}, x.name), h('small', {}, autoSummary(x)),
+          h('small', { class: last && !last.ok ? 'err' : 'muted' }, last ? `${last.ok ? 'Ran' : 'Didn’t run'} ${ago(last.at)} · ${last.note}` : 'Hasn’t run yet', x.count ? ` · ${plural(x.count, 'run')} in all` : '')),
+        h('label', { class: 'toggle', title: x.on ? 'On' : 'Off' }, sw, h('i')),
+        h('button', { class: 'icon-btn', 'aria-label': 'Options', html: I.more, onclick: (e) => openMenu(e.currentTarget, [
+          { label: 'Edit…', run: () => autoSheet(x) },
+          ...(x.trigger.kind === 'schedule' ? [{ label: 'Run it now', run: () => api('POST', `/automations/${x.id}/run`).then(() => toast('Ran it')).catch((er) => toast(er.message)) }] : []),
+          { label: 'Recent runs…', run: () => sheet(`Runs · ${x.name}`, [x.runs?.length ? h('div', { class: 'int-log' }, x.runs.map((r) => h('div', { class: r.ok ? 'ok' : 'bad' }, h('b', {}, r.ok ? '✓' : '✕'), ` ${ago(r.at)} · ${r.note}`))) : h('p', { class: 'day-hint' }, 'It hasn’t run yet.')], async () => {}, 'Close') },
+          { label: 'Delete', danger: true, run: () => api('DELETE', '/automations/' + x.id).catch((er) => toast(er.message)) },
+        ]) }));
+    };
+    return [
+      h('p', { class: 'day-hint' }, 'When something happens in Kloomie, do something about it, every time. Automations never set each other off, and each runs at most 30 times an hour.'),
+      h('div', { class: 'contacts-tools' }, h('button', { class: 'btn small primary-btn', onclick: () => autoSheet() }, '+ New automation')),
+      all.length ? h('div', { class: 'auto-list' }, all.map(row)) : null,
+      h('div', { class: 'any-h camp-goals-h' }, all.length ? 'More ideas' : 'Start from one of these'),
+      h('div', { class: 'auto-recipes' }, AUTO_RECIPES.map((r) => h('button', { class: 'auto-recipe', onclick: () => autoSheet(null, r) }, h('b', {}, r.name), h('small', {}, r.why)))),
+    ];
+  }
+  // Make or change one: what sets it off (and only when…), then up to five things it does.
+  function autoSheet(x, recipe) {
+    const src = x || recipe || {};
+    const dr = { name: src.name || '', trigger: JSON.parse(JSON.stringify(src.trigger || { kind: 'task.done' })), actions: JSON.parse(JSON.stringify(src.actions || [{ kind: 'task', text: '', assignee: '', dueIn: null, campaign: '' }])) };
+    const box = h('div', { class: 'auto-edit' });
+    const opt = (v, label, sel) => h('option', { value: v, selected: v === sel }, label);
+    const camps = S.campaigns.filter((c) => c.status !== 'done' || c.id === dr.trigger.campaignId);
+    const stages = [...new Set((S.contacts || []).map((c) => c.stage).filter(Boolean))];
+    const outcomes = [...new Set(S.campaigns.flatMap((c) => c.outcomes || []))];
+    const people = S.workspace.members;
+    const draw = () => {
+      const t = dr.trigger;
+      const name = h('input', { value: dr.name, placeholder: 'e.g. Signed? Schedule the work' });
+      name.addEventListener('input', () => (dr.name = name.value));
+      const kind = h('select', {}, Object.entries(AUTO_WHEN).map(([k, v]) => opt(k, v, t.kind)));
+      kind.addEventListener('change', () => { dr.trigger = { kind: kind.value, ...(kind.value === 'schedule' ? { slots: [{ days: [1], time: '09:00' }] } : {}) }; draw(); });
+      const only = [];
+      if (['task.done', 'sign.signed', 'attempt.logged', 'campaign.done', 'campaign.checkin', 'file.arrived'].includes(t.kind)) {
+        const sel = h('select', {}, opt('', 'Any campaign', t.campaignId || ''), camps.map((c) => opt(c.id, c.name, t.campaignId || '')));
+        sel.addEventListener('change', () => (t.campaignId = sel.value || null));
+        only.push(h('label', {}, 'In', sel));
+      }
+      if (t.kind === 'contact.stage' || t.kind === 'contact.added') {
+        const st = h('input', { value: t.stage ? stageLabel(t.stage) : '', placeholder: t.kind === 'contact.stage' ? 'Customer' : 'Any stage', list: 'autoStages' });
+        st.addEventListener('input', () => (t.stage = st.value.trim().toLowerCase().replace(/\s+/g, '_') || null));
+        only.push(h('label', {}, t.kind === 'contact.stage' ? 'Changes to' : 'With the stage', st), h('datalist', { id: 'autoStages' }, stages.map((v) => h('option', { value: stageLabel(v) }))));
+      }
+      if (t.kind === 'attempt.logged') {
+        const oc = h('select', {}, opt('', 'Any outcome', t.outcome || ''), outcomes.map((v) => opt(v, v, t.outcome || '')));
+        oc.addEventListener('change', () => (t.outcome = oc.value || null));
+        only.push(h('label', {}, 'Logged as', oc));
+      }
+      if (t.kind === 'campaign.checkin') {
+        t.statuses ||= [];
+        only.push(h('div', { class: 'picks' }, Object.entries(HEALTH_L).map(([k, v]) => { const cb = h('input', { type: 'checkbox', checked: t.statuses.includes(k) }); cb.addEventListener('change', () => (t.statuses = cb.checked ? [...t.statuses, k] : t.statuses.filter((y) => y !== k))); return h('label', { class: 'pick' }, cb, v); })), h('small', { class: 'hint' }, 'Tick none for every check-in.'));
+      }
+      if (t.kind === 'schedule') {
+        const slot = (t.slots ||= [{ days: [1], time: '09:00' }])[0];
+        const time = h('input', { type: 'time', value: slot.time });
+        time.addEventListener('change', () => (slot.time = time.value || '09:00'));
+        only.push(h('div', { class: 'picks' }, DOWS.map((d, i) => { const cb = h('input', { type: 'checkbox', checked: slot.days.includes(i) }); cb.addEventListener('change', () => (slot.days = cb.checked ? [...slot.days, i].sort() : slot.days.filter((y) => y !== i))); return h('label', { class: 'pick' }, cb, d); })), h('label', {}, 'At', time));
+      }
+      const words = (AUTO_WORDS[t.kind] || []).map((w) => `{${w}}`).join(' ');
+      const action = (a, i) => {
+        const k = h('select', {}, Object.entries(AUTO_DO).map(([v, l]) => opt(v, l, a.kind)));
+        k.addEventListener('change', () => { dr.actions[i] = { kind: k.value, text: a.text || '', to: [], channelId: 'same' }; draw(); });
+        const text = (ph) => { const el = h('input', { value: a.text || '', placeholder: ph }); el.addEventListener('input', () => (a.text = el.value)); return el; };
+        const f = [];
+        if (a.kind === 'task') {
+          const who = h('select', {}, opt('', 'Nobody', a.assignee || ''), opt('who', 'Whoever set it off', a.assignee || ''), people.map((m) => opt(m.id, m.name, a.assignee || '')), (S.workspace.roles || []).map((r) => opt('role:' + r.id, 'Role: ' + r.name, a.assignee || '')));
+          who.addEventListener('change', () => (a.assignee = who.value));
+          const due = h('input', { type: 'number', min: 0, max: 90, value: a.dueIn ?? '', placeholder: 'No due date' });
+          due.addEventListener('input', () => (a.dueIn = due.value === '' ? null : Number(due.value)));
+          const camp = h('select', {}, opt('', 'No campaign', a.campaign || ''), opt('same', 'The same campaign', a.campaign || ''), camps.map((c) => opt(c.id, c.name, a.campaign || '')));
+          camp.addEventListener('change', () => (a.campaign = camp.value));
+          f.push(h('label', {}, 'Task', text('Schedule the work for {document}')), h('div', { class: 'row2' }, h('label', {}, 'For', who), h('label', {}, 'Due in (days)', due)), h('label', {}, 'Under', camp));
+        }
+        if (a.kind === 'post') {
+          const ch = h('select', {}, opt('same', 'The campaign’s own feed', a.channelId || 'same'), opt('general', '#general', a.channelId || 'same'), S.workspace.channels.map((c) => opt(c.id, '#' + c.name, a.channelId || 'same')));
+          ch.addEventListener('change', () => (a.channelId = ch.value));
+          f.push(h('label', {}, 'Message', text('{from} sent {file}')), h('label', {}, 'In', ch));
+        }
+        if (a.kind === 'campaign') {
+          const tpls = S.templates || [];
+          if (!a.templateId && tpls[0]) a.templateId = tpls[0].id;
+          const sel = h('select', {}, tpls.length ? tpls.map((x) => opt(x.id, x.name, a.templateId)) : opt('', 'No saved campaigns yet', ''));
+          sel.addEventListener('change', () => (a.templateId = sel.value));
+          f.push(h('label', {}, 'Saved campaign', sel), tpls.length ? null : h('small', { class: 'hint' }, 'Save a campaign to run again first (its ⋯ menu).'));
+        }
+        if (a.kind === 'notify') {
+          a.to ||= [];
+          const pick = (v, label) => { const cb = h('input', { type: 'checkbox', checked: a.to.includes(v) }); cb.addEventListener('change', () => (a.to = cb.checked ? [...a.to, v] : a.to.filter((y) => y !== v))); return h('label', { class: 'pick' }, cb, label); };
+          f.push(h('label', {}, 'Note', text('{contact} is a new customer')), h('div', { class: 'picks' }, pick('owners', 'Owners'), pick('admins', 'Owners and admins'), pick('who', 'Whoever set it off'), people.map((m) => pick(m.id, m.name))), h('small', { class: 'hint' }, 'It lands on their Home, with a pop-up if they’re on.'));
+        }
+        if (a.kind === 'contact') {
+          const st = h('input', { value: a.stage ? stageLabel(a.stage) : '', placeholder: 'Customer', list: 'autoStages' });
+          st.addEventListener('input', () => (a.stage = st.value.trim()));
+          const tag = h('input', { value: a.tag || '', placeholder: 'onboarded' });
+          tag.addEventListener('input', () => (a.tag = tag.value.trim()));
+          f.push(h('div', { class: 'row2' }, h('label', {}, 'Set stage to', st), h('label', {}, 'Add tag', tag)));
+        }
+        return h('div', { class: 'auto-act' }, h('div', { class: 'auto-act-h' }, h('b', {}, `${i + 1}.`), k, dr.actions.length > 1 ? h('button', { class: 'icon-btn', 'aria-label': 'Remove', html: I.close, onclick: () => { dr.actions.splice(i, 1); draw(); } }) : null), ...f);
+      };
+      box.replaceChildren(
+        h('label', {}, 'Name', name),
+        h('div', { class: 'auto-step' }, h('div', { class: 'auto-step-h' }, 'When'), h('label', {}, '', kind), ...only),
+        h('div', { class: 'auto-step' }, h('div', { class: 'auto-step-h' }, 'Then'), ...dr.actions.map(action),
+          dr.actions.length < 5 ? h('button', { class: 'btn small', onclick: () => { dr.actions.push({ kind: 'notify', text: '', to: [] }); draw(); } }, '+ Another action') : null),
+        words ? h('p', { class: 'day-hint' }, `Words that fill themselves in: ${words}`) : null);
+    };
+    draw();
+    sheet(x ? `Automation · ${x.name}` : recipe ? recipe.name : 'New automation', [box], async () => {
+      const body = { name: dr.name || recipe?.name || 'Automation', trigger: { ...dr.trigger, tz: myTz() }, actions: dr.actions };
+      const y = x ? await api('PATCH', '/automations/' + x.id, body) : await api('POST', '/automations', body);
+      S.automations = [...(S.automations || []).filter((z) => z.id !== y.id), y];
+      renderTool();
+      if (!x) toast(`“${y.name}” is on`);
+    }, x ? 'Save' : 'Turn it on');
   }
 
   // ---------- Home: what needs you, what's on today, how the work is going, and what came in ----------
@@ -4175,8 +4342,10 @@
     const card = (cls, title, n, action, ...body) => h('section', { class: 'home-card ' + cls },
       h('div', { class: 'hc-h' }, h('b', {}, title), n ? h('span', { class: 'hc-n' }, String(n)) : null, action ? h('button', { class: 'linkish hc-go', onclick: action[1] }, action[0]) : null), ...body);
     const row = (ic, cls, title, sub, run) => h('button', { class: 'need-row ' + cls, onclick: run }, h('span', { class: 'need-ic' }, ic), h('span', { class: 'need-text' }, h('b', {}, title), sub ? h('small', {}, sub) : null));
-    const ICON = { sign: '✓', stuck: '⏳', role: '👤', late: '!', nobody: '?', checkin: '🩺' };
+    const ICON = { sign: '✓', stuck: '⏳', role: '👤', late: '!', nobody: '?', checkin: '🩺', auto: '⚙' };
     const steps = [...d.up, ...d.late, ...d.dueToday].slice(0, 8);
+    const notes = S.notices || [];
+    const clearNote = (n) => { S.notices = notes.filter((y) => !n || y.id !== n.id); renderHome(); api('DELETE', '/notices' + (n ? '/' + n.id : '')).catch(() => {}); };
     const needsN = d.needs.length + (d.late.length ? 1 : 0);
     const summary = [needsN ? `${plural(needsN, 'thing')} need${needsN === 1 ? 's' : ''} you` : 'nothing needs you', d.next.length ? `${d.next.length} still on today` : 'your day is clear', d.feeds.reduce((n, f) => n + f.n, 0) ? `${d.feeds.reduce((n, f) => n + f.n, 0)} new in chat` : ''].filter(Boolean).join(' · ');
     const activity = [
@@ -4192,6 +4361,11 @@
         toolOn('sidekick') ? h('button', { class: 'btn small home-brief-btn', disabled: HM.busy, onclick: () => homeBrief(d) }, HM.busy ? 'Thinking…' : HM.brief ? '✦ Brief me again' : '✦ Brief me') : null),
       HM.brief ? h('div', { class: 'home-brief' }, h('p', {}, HM.brief.text), h('small', {}, `Sidekick · ${ago(HM.brief.at)}`)) : null,
       h('div', { class: 'home-grid' },
+        notes.length ? card('notes wide', 'For you', notes.length, ['Clear all', () => clearNote(null)],
+          h('div', {}, notes.slice(0, 8).map((n) => h('div', { class: 'note-row' },
+            h('button', { class: 'need-row auto', onclick: () => (n.taskId && taskById(n.taskId) ? showStep(taskById(n.taskId)) : n.campaignId && campById(n.campaignId) ? openCampaign(n.campaignId) : null) },
+              h('span', { class: 'need-ic' }, '⚙'), h('span', { class: 'need-text' }, h('b', {}, n.text), h('small', {}, `${n.title} · ${ago(n.at)}`))),
+            h('button', { class: 'icon-btn', 'aria-label': 'Clear', html: I.close, onclick: () => clearNote(n) }))))) : null,
         card('needs' + (needsN ? ' wide' : ''), 'Needs you', needsN, d.needs.length ? ['Overview', () => { K.overview = true; store.set('campsOverview', true); setTab('camps'); openCampaign(null); }] : null,
           needsN ? h('div', {}, d.late.length ? row('!', 'late', `${plural(d.late.length, 'of your tasks')} overdue`, d.late.slice(0, 3).map((t) => shortText(t.text, 30)).join(' · '), () => (d.late.length === 1 && d.late[0].goalId ? showStep(d.late[0]) : showTasks())) : null,
             d.needs.slice(0, 12).map((n) => row(ICON[n.kind], n.kind, n.text, n.sub, n.run)))
@@ -6663,7 +6837,7 @@
       return;
     }
     try {
-      [S.pss, S.contacts, S.mail, S.gc] = await Promise.all([api('GET', '/pss'), api('GET', '/contacts').then((r) => r.contacts), api('GET', '/mail'), api('GET', '/gcontacts').catch(() => null)]);
+      [S.pss, S.contacts, S.mail, S.gc, S.automations] = await Promise.all([api('GET', '/pss'), api('GET', '/contacts').then((r) => r.contacts), api('GET', '/mail'), api('GET', '/gcontacts').catch(() => null), api('GET', '/automations').catch(() => [])]);
       renderCamps();
       renderTool();
     } catch {
@@ -7060,13 +7234,14 @@
   }
 
   // ---------- tools: small apps that open in a drawer, so the tabs stay as they are ----------
-  const TOOLS = { sidekick: { name: 'Sidekick', render: sidekickTool }, docs: { name: 'Docs', render: docsTool }, bills: { name: 'Finance', render: financeTool }, contacts: { name: 'Contacts', render: contactsTool }, email: { name: 'Email', render: emailTool }, meetings: { name: 'Meeting notes', render: meetingsTool }, planner: { name: 'Planner', render: plannerTool }, folders: { name: 'Folders', render: foldersTool }, map: { name: 'Map', render: mapTool }, signs: { name: 'Signatures', render: signsTool }, vault: { name: 'Vault', render: vaultTool } };
+  const TOOLS = { automations: { name: 'Automations', render: automationsTool }, sidekick: { name: 'Sidekick', render: sidekickTool }, docs: { name: 'Docs', render: docsTool }, bills: { name: 'Finance', render: financeTool }, contacts: { name: 'Contacts', render: contactsTool }, email: { name: 'Email', render: emailTool }, meetings: { name: 'Meeting notes', render: meetingsTool }, planner: { name: 'Planner', render: plannerTool }, folders: { name: 'Folders', render: foldersTool }, map: { name: 'Map', render: mapTool }, signs: { name: 'Signatures', render: signsTool }, vault: { name: 'Vault', render: vaultTool } };
   let toolOpen = null;
   $('#toolsBtn').addEventListener('click', (e) => {
     const soon = billsSoon().length;
     const tight = budgetAlerts().length;
     openMenu(e.currentTarget, [
       { head: 'Tools' },
+      amAdmin() ? { label: h('span', { class: 'tool-item' }, 'Automations', (S.automations || []).some(autoFailing) ? h('small', {}, 'one didn’t run') : null), on: toolOpen === 'automations', run: () => openTool('automations') } : null,
       toolOn('sidekick') ? { label: h('span', { class: 'tool-item' }, '✦ Sidekick', skNudges().length ? h('small', {}, `${skNudges().length} need${skNudges().length === 1 ? 's' : ''} a look`) : null), on: toolOpen === 'sidekick', run: () => { SK.open = null; openTool('sidekick'); } } : null,
       toolOn('docs') ? { label: 'Docs', on: toolOpen === 'docs', run: () => openTool('docs') } : null,
       toolOn('projects') ? { label: 'Projects', run: showProjects } : null,
