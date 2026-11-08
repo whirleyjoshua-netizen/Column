@@ -79,10 +79,12 @@ Until the server is hosted, use `http://localhost:4747` and connect from the mac
 only allow `localhost` or `https://` addresses, not Wi-Fi IPs.
 
 **Google Calendar:** in [Google Cloud Console](https://console.cloud.google.com/):
-1. Create a project, then *APIs & Services → Library*: enable the *Google Calendar API* and the *Gmail API*.
+1. Create a project, then *APIs & Services → Library*: enable the *Google Calendar API*, the *Gmail API* and the
+   *People API* (Google Contacts).
 2. *OAuth consent screen*: External, add your email as a test user, and add the scopes
    `.../auth/calendar.events`, `.../auth/calendar.calendarlist.readonly` and `.../auth/gmail.send` (campaign email from
-   Gmail; only asked for when someone connects Gmail to send email).
+   Gmail; only asked for when someone connects Gmail to send email), and `.../auth/contacts.readonly` (Google Contacts;
+   asked for only when an owner or admin connects it in Settings → Connections).
 3. *Credentials → Create credentials → OAuth client ID → Web application*. Add the redirect URI
    `http://localhost:4747/oauth/google/callback` (and your hosted `https://…/oauth/google/callback` later).
 4. Start the server with `GOOGLE_CLIENT_ID=… GOOGLE_CLIENT_SECRET=… npm run server`.

@@ -36,6 +36,8 @@ async function call(url, { method = 'GET', token, body, form, raw, headers = {} 
 // every Google call (sign-in tokens, calendars, Gmail) at one stand-in when testing.
 const GOOGLE_SCOPE = 'openid email https://www.googleapis.com/auth/calendar.calendarlist.readonly https://www.googleapis.com/auth/calendar.events';
 const GMAIL_SEND = 'https://www.googleapis.com/auth/gmail.send';
+// Google Contacts, for a team's Contacts: read-only, asked for on its own connection.
+const CONTACTS_READ = 'https://www.googleapis.com/auth/contacts.readonly';
 const G = (url) => (env('GOOGLE_API') ? url.replace(/^https:\/\/[^/]+/, env('GOOGLE_API')) : url);
 const google = {
   name: 'Google',
@@ -48,7 +50,24 @@ const google = {
   // Someone can untick sending on Google's screen; then the connection is for the calendar only.
   async exchange(code, redirect) {
     const t = await call(G('https://oauth2.googleapis.com/token'), { method: 'POST', form: { code, redirect_uri: redirect, grant_type: 'authorization_code', client_id: env('GOOGLE_CLIENT_ID'), client_secret: env('GOOGLE_CLIENT_SECRET') } });
-    return { access: t.access_token, refresh: t.refresh_token, expires: Date.now() + (t.expires_in - 60) * 1000, mail: String(t.scope || '').split(' ').includes(GMAIL_SEND) };
+    const granted = String(t.scope || '').split(' ');
+    return { access: t.access_token, refresh: t.refresh_token, expires: Date.now() + (t.expires_in - 60) * 1000, mail: granted.includes(GMAIL_SEND), contacts: granted.includes(CONTACTS_READ) };
+  },
+  contactsUrl: (redirect, state) => 'https://accounts.google.com/o/oauth2/v2/auth?' + new URLSearchParams({
+    client_id: env('GOOGLE_CLIENT_ID'), redirect_uri: redirect, response_type: 'code', state,
+    scope: 'openid email ' + CONTACTS_READ, access_type: 'offline', prompt: 'consent',
+  }),
+  // Everyone in the account's Google Contacts ("My contacts"), a page at a time.
+  async people(token) {
+    const out = [];
+    let page = '';
+    for (let i = 0; i < 30; i++) {
+      const d = await call(G('https://people.googleapis.com/v1/people/me/connections?') + new URLSearchParams({ personFields: 'names,emailAddresses,phoneNumbers,addresses,organizations,metadata', pageSize: '1000', ...(page ? { pageToken: page } : {}) }), { token });
+      out.push(...(d?.connections || []));
+      page = d?.nextPageToken;
+      if (!page) return out;
+    }
+    throw new Error('Google Contacts has more people than Kloomie can hold.');
   },
   async sendMail(token, mime) {
     await call(G('https://gmail.googleapis.com/gmail/v1/users/me/messages/send'), { method: 'POST', token, body: { raw: Buffer.from(mime).toString('base64url') } });

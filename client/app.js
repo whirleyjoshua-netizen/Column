@@ -631,7 +631,7 @@
       if (msg.budget) S.budgets.push(msg.budget);
       renderDay();
       renderTool();
-    } else if (msg.type === 'pss' || msg.type === 'contacts') {
+    } else if (msg.type === 'pss' || msg.type === 'contacts' || msg.type === 'gcontacts') {
       loadPss();
     } else if ((msg.type === 'contact' || msg.type === 'contact:remove') && S.contacts) {
       S.contacts = S.contacts.filter((x) => x.id !== (msg.contact?.id || msg.id));
@@ -6551,7 +6551,7 @@
       return;
     }
     try {
-      [S.pss, S.contacts, S.mail] = await Promise.all([api('GET', '/pss'), api('GET', '/contacts').then((r) => r.contacts), api('GET', '/mail')]);
+      [S.pss, S.contacts, S.mail, S.gc] = await Promise.all([api('GET', '/pss'), api('GET', '/contacts').then((r) => r.contacts), api('GET', '/mail'), api('GET', '/gcontacts').catch(() => null)]);
       renderCamps();
       renderTool();
     } catch {
@@ -6559,6 +6559,7 @@
     }
     const sec = $('#settings .pss-sec');
     if (sec && !sec.contains(document.activeElement)) sec.replaceWith(pssSection());
+    $('#settings .gc-sec')?.replaceWith(gcSection());
   }
   // Connecting other apps to Projects: API keys (each shown once) and webhooks (with their deliveries).
   const INT = { keys: null, hooks: null };
@@ -6609,6 +6610,47 @@
         h('small', {}, `${w.projectId ? (S.projects || []).find((p) => p.id === w.projectId)?.name || 'a project' : 'every project'} · ${w.events.map((x) => x.split('.')[1]).join(', ')}${!w.active ? ' · paused' + (w.failures >= 20 ? ' after 20 failures' : '') : w.log?.[0] ? ` · last ${w.log[0].ok ? 'sent' : 'failed'} ${ago(w.log[0].at)}` : ''}`)),
         h('button', { class: 'icon-btn', 'aria-label': 'Webhook options', html: I.more, onclick: (e) => hookMenu(e, w) }))),
       h('button', { class: 'btn small', onclick: newHook }, '+ New webhook'));
+    return sec;
+  }
+  // Google Contacts fills the team's Contacts from one Google account and keeps them current.
+  async function connectGc() {
+    try {
+      const { url } = await api('POST', '/gcontacts/connect');
+      window.open(url, '_blank');
+      toast('Finish signing in in your browser. Your contacts show up here when it’s done.');
+    } catch (e) {
+      toast(e.message);
+    }
+  }
+  function gcSection() {
+    const sec = h('section', { class: 'gc-sec' }, h('h3', {}, 'Google Contacts'));
+    const g = S.gc;
+    if (!g) {
+      sec.append(h('p', { class: 'day-hint' }, 'Loading…'));
+      return sec;
+    }
+    if (!g.configured) return sec.append(h('p', { class: 'day-hint' }, 'Google sign-in isn’t set up on this server yet.')), sec;
+    const redo = (x) => { S.gc = x; sec.replaceWith(gcSection()); };
+    if (!g.connected) {
+      sec.append(h('p', { class: 'day-hint' }, 'Brings everyone in a Google account’s contacts into Contacts, and keeps them current. Kloomie only reads them; it never changes your Google contacts. Only team owners and admins see Contacts.'),
+        h('button', { class: 'btn small primary-btn', onclick: connectGc }, 'Connect Google Contacts'));
+      return sec;
+    }
+    const sync = h('button', { class: 'btn small', disabled: !!g.syncing }, g.syncing ? 'Syncing…' : 'Sync now');
+    sync.addEventListener('click', async () => {
+      sync.disabled = true;
+      sync.textContent = 'Syncing…';
+      try { redo(await api('POST', '/gcontacts/sync')); loadPss(); } catch (e) { toast(e.message); }
+    });
+    const off = h('button', { class: 'btn small danger', 'data-label': '1' }, 'Disconnect');
+    off.addEventListener('click', () => confirmClick(off, async () => { redo(await api('DELETE', '/gcontacts').catch((e) => (toast(e.message), S.gc))); loadPss(); }));
+    sec.append(
+      h('div', { class: 'srow' }, h('span', {}, g.account, h('small', {}, `Connected by ${g.by} · read only`)), off),
+      h('div', { class: 'srow' },
+        h('span', {}, `${g.count.toLocaleString()} contact${g.count === 1 ? '' : 's'}`,
+          h('small', { class: g.error ? 'err' : null }, g.error ? g.error : g.syncedAt ? ['Updated ', h('span', { 'data-ago': g.syncedAt }, ago(g.syncedAt)), ' · every 30 minutes'] : 'Not synced yet')),
+        h('span', { class: 'ai-key' }, g.count ? h('button', { class: 'btn small', onclick: () => openTool('contacts') }, 'Contacts') : null, g.error && /expired/.test(g.error) ? h('button', { class: 'btn small primary-btn', onclick: connectGc }, 'Connect again') : sync)),
+      h('p', { class: 'day-hint' }, 'Names, companies, emails, phones and addresses are changed in Google. Stage, tags, notes and do-not-contact are yours. Disconnecting keeps everyone here.'));
     return sec;
   }
   function pssSection() {
@@ -6688,7 +6730,8 @@
       for (const k of keys) by.set(k, g);
       seen.set(x.id, x);
     }
-    return groups.map((g) => [...g].map((id) => seen.get(id)).sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0))).filter((g) => g.length > 1 && new Set(g.filter((x) => x.pss).map((x) => x.pss)).size <= 1);
+    const twoFromOne = (g) => ['pss', 'google'].some((src) => new Set(g.filter((x) => x.ext?.[src]).map((x) => x.ext[src])).size > 1);
+    return groups.map((g) => [...g].map((id) => seen.get(id)).sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0))).filter((g) => g.length > 1 && !twoFromOne(g));
   }
   function contactsTool() {
     const all = [...(S.contacts || [])].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
@@ -6697,8 +6740,9 @@
     const dupes = contactDupes(all);
     const tools = h('div', { class: 'contacts-tools' }, add, imp,
       dupes.length ? h('button', { class: 'btn small', onclick: () => dupesSheet(dupes) }, `Duplicates · ${dupes.length}`) : null,
-      S.pss?.connected ? h('small', { class: 'day-hint' }, 'PSS keeps its leads current here.') : null);
-    if (!all.length) return [tools, h('p', { class: 'day-hint' }, 'Nobody here yet. Add people one at a time, import a spreadsheet (CSV), or connect PSS admin in Settings to bring in your website’s leads.')];
+      S.pss?.connected ? h('small', { class: 'day-hint' }, 'PSS keeps its leads current here.') : null,
+      S.gc?.connected ? h('small', { class: 'day-hint' }, `Google Contacts (${S.gc.account}) keeps its people current here.`) : S.gc?.configured ? h('button', { class: 'btn small', onclick: connectGc }, 'Connect Google Contacts') : null);
+    if (!all.length) return [tools, h('p', { class: 'day-hint' }, 'Nobody here yet. Add people one at a time, import a spreadsheet (CSV), connect Google Contacts, or connect PSS admin in Settings to bring in your website’s leads.')];
     const q = h('input', { type: 'search', value: CT.q, placeholder: 'Search name, company, phone, email, city', 'aria-label': 'Search contacts' });
     const stages = stagesIn(all.filter((x) => x.stage));
     const stage = stages.length ? h('select', { 'aria-label': 'Stage' }, h('option', { value: '' }, 'All stages'), stages.map((v) => h('option', { value: v, selected: CT.stage === v }, `${stageLabel(v)} · ${all.filter((x) => x.stage === v).length}`))) : null;
@@ -6740,12 +6784,13 @@
     show();
     return [tools, h('div', { class: 'contacts-bar' }, q, stage), count, box, bar];
   }
-  // One contact, new or to change. PSS's own details are changed in PSS.
+  // One contact, new or to change. A connector's own details are changed there (PSS, Google).
   function contactSheet(x) {
-    const from = x?.via === 'pss';
+    const from = !!x?.via;
+    const owned = x?.owns || [];
     const f = {};
     const field = (k, label, attrs = {}) => {
-      f[k] = h(k === 'note' ? 'textarea' : 'input', { value: x?.[k] || '', disabled: from && ['name', 'email', 'phone', 'address', 'city', 'source'].includes(k), ...attrs });
+      f[k] = h(k === 'note' ? 'textarea' : 'input', { value: x?.[k] || '', disabled: from && owned.includes(k), ...attrs });
       if (k === 'note') f[k].value = x?.note || '';
       return h('label', {}, label, f[k]);
     };
@@ -6763,7 +6808,7 @@
       }
     }));
     sheet(x ? contactName(x) : 'New contact', [
-      from ? h('p', { class: 'day-hint' }, 'From PSS: its name, phone, email and address stay in step with your website, so change them there. Company, tags and notes are Kloomie’s own.') : null,
+      from ? h('p', { class: 'day-hint' }, x.via === 'google' ? 'From Google Contacts: its name, company, email, phone and address stay in step with Google, so change them there. Stage, tags and notes are Kloomie’s own.' : 'From PSS: its name, phone, email and address stay in step with your website, so change them there. Company, tags and notes are Kloomie’s own.') : null,
       field('name', 'Name', { placeholder: 'Pat Lee' }),
       field('company', 'Company'),
       h('div', { class: 'row2' }, field('phone', 'Phone', { type: 'tel' }), field('email', 'Email', { type: 'email' })),
@@ -12449,6 +12494,7 @@
       loadCalendars();
       s.append(aiSection());
       loadAi();
+      if (amAdmin()) s.append(gcSection());
       if (amAdmin()) s.append(pssSection());
       if (amAdmin()) s.append(intSection());
     }

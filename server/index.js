@@ -34,7 +34,7 @@ fs.mkdirSync(FILES_DIR, { recursive: true });
 // Everything lives in memory; save() hands the whole thing to the store a moment later.
 const IMPORT_PATH = path.join(DATA_DIR, 'import-pending.json');
 const store = await openStore({ url: process.env.DATABASE_URL, file: DB_PATH, importFile: IMPORT_PATH });
-let db = { workspaces: {}, tokens: {}, items: {}, entries: {}, tasks: {}, uploads: {}, campaigns: {}, goals: {}, attempts: {}, lists: {}, templates: {}, calendars: {}, ai: {}, pss: {}, sends: {}, bills: {}, meetings: {}, money: {}, budgets: {}, plans: {}, sidekick: {}, vaults: {}, vaultItems: {}, signs: {}, signatures: {}, trips: {}, pins: {}, zones: {}, comments: {}, users: {}, resets: {}, invites: {}, exports: {}, contacts: {}, optouts: {}, unsubs: {} };
+let db = { workspaces: {}, tokens: {}, items: {}, entries: {}, tasks: {}, uploads: {}, campaigns: {}, goals: {}, attempts: {}, lists: {}, templates: {}, calendars: {}, ai: {}, pss: {}, sends: {}, bills: {}, meetings: {}, money: {}, budgets: {}, plans: {}, sidekick: {}, vaults: {}, vaultItems: {}, signs: {}, signatures: {}, trips: {}, pins: {}, zones: {}, comments: {}, users: {}, resets: {}, invites: {}, exports: {}, contacts: {}, optouts: {}, unsubs: {}, gcontacts: {} };
 const loaded = await store.load();
 if (loaded.db) db = { ...db, ...loaded.db };
 if (loaded.fromFile) console.log(`Moving ${path.basename(loaded.fromFile)} into Postgres.`);
@@ -2052,6 +2052,7 @@ async function oauthCallback(req, res, url) {
   const page = (title, msg) => send(res, 200, `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${title}</title><body style="font:15px system-ui;background:#111;color:#eee;display:grid;place-items:center;height:90vh;text-align:center"><div><h2>${title}</h2><p>${msg}</p></div></body>`, { 'Content-Type': 'text/html; charset=utf-8' });
   if (!p || !pend || pend.provider !== provider || pend.exp < Date.now()) return page('Link expired', 'Start again from Kloomie → Settings → Calendars.');
   oauthPending.delete(url.searchParams.get('state'));
+  if (pend.kind === 'contacts') return url.searchParams.get('error') ? page('Not connected', 'Contacts access wasn’t granted. You can close this window.') : gcCallback(res, url, pend, page);
   if (url.searchParams.get('error')) return page('Not connected', 'Calendar access wasn’t granted. You can close this window.');
   const ws = db.workspaces[pend.wsId];
   if (!ws?.members.some((m) => m.id === pend.memberId)) return page('Not connected', 'You’re no longer on that team.');
@@ -2259,7 +2260,11 @@ function disconnectCalendar(conn) {
 // Do not contact is two flags: dne, set here (or by an unsubscribe link), and a connector's own (extDne).
 const CONTACT_LEN = { name: 200, company: 200, email: 200, phone: 60, address: 300, city: 80, source: 80, stage: 40, note: 2000 };
 const CONTACT_MAX = 50_000;
-const CONNECTOR_OWNS = ['name', 'email', 'phone', 'address', 'city', 'source', 'stage'];
+// The details each connector keeps current; the team changes them there, not in Kloomie. The rest is the team's.
+const CONNECTOR_OWNS = { pss: ['name', 'email', 'phone', 'address', 'city', 'source', 'stage'], google: ['name', 'company', 'email', 'phone', 'address', 'city'] };
+const ownsOf = (src) => CONNECTOR_OWNS[src] || [];
+// Where a connector's new people say they came from, when it doesn't say itself.
+const CONNECTOR_SOURCE = { google: 'Google Contacts' };
 const contactsOf = (wsId) => Object.values(db.contacts).filter((x) => x.wsId === wsId);
 const emailKey = (v) => String(v || '').trim().toLowerCase();
 const phoneKey = (v) => { const d = String(v || '').replace(/\D/g, '').slice(-10); return d.length >= 7 ? d : ''; };
@@ -2271,7 +2276,7 @@ function newContact(wsId, by) {
 // What a person typed or imported. A connector's contact keeps its details; the rest can change.
 function applyContact(x, v) {
   for (const k of Object.keys(CONTACT_LEN)) {
-    if (v[k] === undefined || (x.via && CONNECTOR_OWNS.includes(k))) continue;
+    if (v[k] === undefined || ownsOf(x.via).includes(k)) continue;
     x[k] = k === 'note' ? String(v[k] ?? '').replace(/\r\n?/g, '\n').trim().slice(0, CONTACT_LEN[k]) : cleanText(v[k], CONTACT_LEN[k]).replace(/\s+/g, ' ');
   }
   if (v.email !== undefined && !x.via) x.email = emailKey(x.email) && EMAIL_RE.test(x.email) ? x.email : '';
@@ -2282,7 +2287,7 @@ function applyContact(x, v) {
 }
 const publicContact = (x) => ({
   id: x.id, name: x.name, company: x.company, email: x.email, phone: x.phone, address: x.address, city: x.city, source: x.source, stage: x.stage,
-  note: x.note, tags: x.tags, dne: noContact(x), ownDne: !!x.dne, extDne: !!x.extDne, ext: x.ext, via: x.via, pss: x.ext?.pss || null,
+  note: x.note, tags: x.tags, dne: noContact(x), ownDne: !!x.dne, extDne: !!x.extDne, ext: x.ext, via: x.via, owns: ownsOf(x.via), pss: x.ext?.pss || null,
   assignedTo: x.assignedTo || '', lostReason: x.lostReason || '', unsub: x.unsub || null, by: x.by, createdAt: x.createdAt, updatedAt: x.updatedAt,
 });
 const contactNews = (wsId, x) => broadcast(wsId, { type: 'contact', contact: publicContact(x), forAdmins: true });
@@ -2319,13 +2324,14 @@ function duplicateGroups(wsId) {
   const groups = new Map();
   for (const x of all) { const r = find(x.id); groups.set(r, [...(groups.get(r) || []), x]); }
   // Two people from the same connector are two people there; they're left apart.
-  return [...groups.values()].filter((g) => g.length > 1 && new Set(g.filter((x) => x.ext?.pss).map((x) => x.ext.pss)).size <= 1);
+  const twoFromOne = (g) => Object.keys(CONNECTOR_OWNS).some((src) => new Set(g.filter((x) => x.ext?.[src]).map((x) => x.ext[src])).size > 1);
+  return [...groups.values()].filter((g) => g.length > 1 && !twoFromOne(g));
 }
 // Folds the others into the first (the oldest): its empty fields filled, tags and notes added, any
 // connector link kept, and calls logged against them pointed at it.
 function mergeContacts(keep, others) {
   for (const y of others) {
-    if (y.via && !keep.via) { for (const k of CONNECTOR_OWNS) keep[k] = y[k]; keep.via = y.via; }
+    if (y.via && !keep.via) { for (const k of ownsOf(y.via)) keep[k] = y[k]; keep.via = y.via; }
     for (const k of Object.keys(CONTACT_LEN)) if (k !== 'note' && !keep[k] && y[k]) keep[k] = y[k];
     if (y.note && !keep.note.includes(y.note)) keep.note = [keep.note, y.note].filter(Boolean).join('\n\n').slice(0, CONTACT_LEN.note);
     keep.tags = [...new Set([...keep.tags, ...(y.tags || [])])].slice(0, 20);
@@ -2363,19 +2369,21 @@ function fillContacts(ws, src, people) {
       if (count >= CONTACT_MAX) continue;
       x = newContact(ws.id, src.toUpperCase());
       x.via = src;
+      x.source = CONNECTOR_SOURCE[src] || '';
       db.contacts[x.id] = x;
       count++;
     }
     x.ext = { ...x.ext, [src]: p.id };
     // A contact typed in first keeps its own details, filled where empty.
-    for (const k of CONNECTOR_OWNS) if (x.via === src ? true : !x[k]) x[k] = String(p[k] ?? '').slice(0, CONTACT_LEN[k]);
+    for (const k of ownsOf(src)) if (x.via === src ? true : !x[k]) x[k] = String(p[k] ?? '').slice(0, CONTACT_LEN[k]);
     if (x.via === src) x.createdAt = p.createdAt || x.createdAt;
     Object.assign(x, { extDne: !!p.dne, unsub: p.unsub || null, assignedTo: p.assignedTo || '', lostReason: p.lostReason || '', stageChangedAt: p.stageChangedAt || null });
     kept.add(x.id);
   }
   for (const x of contactsOf(ws.id)) {
     if (!x.ext?.[src] || kept.has(x.id)) continue;
-    if (x.via === src && !x.note && !x.tags.length && !x.dne) { delete db.contacts[x.id]; continue; }
+    // Gone from there: it goes too, unless the team made it theirs (a note, tags, do-not-contact, or a stage the connector doesn't set).
+    if (x.via === src && !x.note && !x.tags.length && !x.dne && !(x.stage && !ownsOf(src).includes('stage'))) { delete db.contacts[x.id]; continue; }
     const { [src]: _, ...rest } = x.ext;
     Object.assign(x, { ext: rest, via: x.via === src ? null : x.via, extDne: false, unsub: null });
   }
@@ -2554,6 +2562,96 @@ function syncAllPss() {
     if (!ws) delete db.pss[wsId];
     else if (!ws.deleteAt && Date.now() - (p.tried || 0) >= PSS_EVERY) syncPss(ws);
   }
+}
+
+// ---------- Google Contacts: a team's Contacts filled from one Google account ----------
+// An owner or admin connects it, read only. Everyone in that account's "My contacts" comes into Contacts and stays
+// current: what Google holds (name, company, email, phone, address) is changed in Google; stage, tags, notes and
+// do-not-contact are the team's. Disconnecting keeps the people as the team's own. GOOGLE_API stands in when testing.
+const GC_EVERY = 30 * 60_000;
+const gcBusy = new Map();
+function gcPerson(p) {
+  const pick = (a) => (a || []).find((x) => x.metadata?.primary) || (a || [])[0];
+  const n = pick(p.names), e = pick(p.emailAddresses), ph = pick(p.phoneNumbers), ad = pick(p.addresses), org = pick(p.organizations);
+  return {
+    id: cleanText(p.resourceName, 100),
+    name: cleanText(n?.displayName || [n?.givenName, n?.familyName].filter(Boolean).join(' '), 200),
+    company: cleanText(org?.name, 200), email: cleanText(e?.value, 200).toLowerCase(), phone: cleanText(ph?.value, 60),
+    address: cleanText([ad?.streetAddress, ad?.extendedAddress].filter(Boolean).join(', ') || String(ad?.formattedValue || '').split('\n')[0], 300),
+    city: cleanText(ad?.city, 100),
+  };
+}
+const gcState = (ws) => {
+  const g = db.gcontacts[ws.id];
+  return { configured: calProviders.google.configured(), connected: !!g, account: g?.account || null, by: g?.by || null, at: g?.at || null, syncedAt: g?.syncedAt || null, error: g?.error || null, syncing: gcBusy.has(ws.id), count: contactsOf(ws.id).filter((x) => x.ext?.google).length };
+};
+async function gcToken(g) {
+  let tok = unseal(g.tokens);
+  if (Date.now() > tok.expires) {
+    tok = await calProviders.google.refresh(tok);
+    g.tokens = seal(tok);
+    save();
+  }
+  return tok.access;
+}
+async function syncGc(ws) {
+  const g = db.gcontacts[ws.id];
+  if (!g) return;
+  if (gcBusy.has(ws.id)) return gcBusy.get(ws.id);
+  const run = (async () => {
+    try {
+      const people = (await calProviders.google.people(await gcToken(g))).map(gcPerson).filter((x) => x.id && (x.name || x.company || x.email || x.phone));
+      if (db.gcontacts[ws.id] !== g) return;
+      fillContacts(ws, 'google', people);
+      g.syncedAt = Date.now();
+      g.error = null;
+      contactsNews(ws.id);
+    } catch (e) {
+      if (db.gcontacts[ws.id] === g) g.error = e.auth ? 'Google’s sign-in expired. Connect it again.' : 'Couldn’t reach Google Contacts: ' + clipText(e.message, 200);
+      console.error('Google Contacts sync failed:', e.message);
+    } finally {
+      g.tried = Date.now();
+      gcBusy.delete(ws.id);
+      save();
+      broadcast(ws.id, { type: 'gcontacts', forAdmins: true });
+    }
+  })();
+  gcBusy.set(ws.id, run);
+  broadcast(ws.id, { type: 'gcontacts', forAdmins: true });
+  return run;
+}
+function syncAllGc() {
+  for (const [wsId, g] of Object.entries(db.gcontacts)) {
+    const ws = db.workspaces[wsId];
+    if (!ws) delete db.gcontacts[wsId];
+    else if (!ws.deleteAt && Date.now() - (g.tried || 0) >= GC_EVERY) syncGc(ws);
+  }
+}
+// Google is told to forget Kloomie's access, and its people stay as the team's own.
+async function gcDisconnect(wsId) {
+  const g = db.gcontacts[wsId];
+  if (!g) return;
+  await revokeCalendar({ provider: 'google', tokens: g.tokens });
+  delete db.gcontacts[wsId];
+  releaseContacts(wsId, 'google');
+  save();
+  broadcast(wsId, { type: 'gcontacts', forAdmins: true });
+  contactsNews(wsId);
+}
+async function gcCallback(res, url, pend, page) {
+  const ws = db.workspaces[pend.wsId];
+  const who = ws?.members.find((m) => m.id === pend.memberId);
+  if (!who || !['owner', 'admin'].includes(who.role)) return page('Not connected', 'Only team owners and admins can connect Google Contacts.');
+  const tok = await calProviders.google.exchange(url.searchParams.get('code'), `${PUBLIC_URL}/oauth/google/callback`);
+  if (!tok.contacts) return page('Not connected', 'Reading your contacts wasn’t allowed. Try again and leave “See your contacts” ticked.');
+  if (!tok.refresh) return page('Not connected', 'Google didn’t allow offline access. Try connecting again.');
+  const account = await calProviders.google.account(tok.access);
+  if (db.gcontacts[ws.id] && db.gcontacts[ws.id].account !== account) await revokeCalendar({ provider: 'google', tokens: db.gcontacts[ws.id].tokens });
+  db.gcontacts[ws.id] = { id: ws.id, wsId: ws.id, memberId: who.id, by: who.name, account, tokens: seal(tok), at: Date.now(), syncedAt: null, error: null };
+  save();
+  await syncGc(ws);
+  const n = gcState(ws).count;
+  return page('Google Contacts connected', `${account} is linked. ${n.toLocaleString()} ${n === 1 ? 'person is' : 'people are'} in Kloomie’s Contacts now, and they stay current. You can close this window.`);
 }
 
 // Calls and emails logged against a PSS lead that PSS doesn't have yet, oldest first. Each is marked once
@@ -5497,6 +5595,27 @@ async function api(req, res, url) {
   }
 
   // The PSS admin connection, which fills Contacts. Owners only.
+  if (a === 'gcontacts') {
+    if (!isAdmin(auth)) return send(res, 403, { error: 'Only team owners and admins can do that.' });
+    if (m === 'GET' && !b) return send(res, 200, gcState(ws));
+    if (m === 'POST' && b === 'connect') {
+      if (!calProviders.google.configured()) return send(res, 400, { error: 'Google isn’t set up on this server yet.' });
+      const state = rid(18);
+      oauthPending.set(state, { wsId: ws.id, memberId: auth.memberId, provider: 'google', kind: 'contacts', exp: Date.now() + 15 * 60_000 });
+      return send(res, 200, { url: calProviders.google.contactsUrl(`${PUBLIC_URL}/oauth/google/callback`, state) });
+    }
+    if (!db.gcontacts[ws.id]) return send(res, 404, { error: 'Google Contacts isn’t connected.' });
+    if (m === 'POST' && b === 'sync') {
+      await syncGc(ws);
+      return send(res, 200, gcState(ws));
+    }
+    if (m === 'DELETE' && !b) {
+      await gcDisconnect(ws.id);
+      return send(res, 200, gcState(ws));
+    }
+    return send(res, 405, { error: 'Method not allowed' });
+  }
+
   if (a === 'pss') {
     if (!isAdmin(auth)) return send(res, 403, { error: 'Only team owners and admins can do that.' });
     if (m === 'GET' && !b) return send(res, 200, pssState(ws));
@@ -6988,6 +7107,7 @@ for (const [wsId, p] of Object.entries(db.pss)) {
   save();
 }
 setInterval(syncAllPss, 60_000);
+setInterval(syncAllGc, 60_000);
 setInterval(mailTick, MAIL_GAP);
 setInterval(runAutopay, 10 * 60_000);
 setInterval(runSidekickPace, 30 * 60_000);
@@ -7048,7 +7168,7 @@ async function revokeCalendar(conn) {
   if (conn.provider !== 'google') return;
   try {
     const tok = unseal(conn.tokens);
-    await fetch('https://oauth2.googleapis.com/revoke', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ token: tok.refresh || tok.access }), signal: AbortSignal.timeout(10_000) });
+    await fetch((process.env.GOOGLE_API || 'https://oauth2.googleapis.com') + '/revoke', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ token: tok.refresh || tok.access }), signal: AbortSignal.timeout(10_000) });
   } catch {}
 }
 async function eraseTeam(ws) {
@@ -7057,6 +7177,7 @@ async function eraseTeam(ws) {
   if (ws.billing?.sub && LIVE_SUB.includes(ws.billing.status) && stripe.configured()) await stripe.call('DELETE', `/subscriptions/${ws.billing.sub}`).catch((e) => alarm('Cancelling a deleted team’s subscription failed', e));
   const files = teamFiles(wsId);
   await Promise.all(Object.values(db.calendars).filter((x) => x.wsId === wsId).map(revokeCalendar));
+  if (db.gcontacts[wsId]) await revokeCalendar({ provider: 'google', tokens: db.gcontacts[wsId].tokens });
   for (const sock of sockets.get(wsId) || []) sock.close(4001, 'Team deleted');
   sockets.delete(wsId);
   let n = 0;
@@ -7081,6 +7202,8 @@ async function removeMember(ws, m) {
   const hand = (x, k = 'memberId') => { if (x[k] === id) x[k] = heir ? heir.id : null; };
   signOutWhere(ws, id);
   await Promise.all(Object.values(db.calendars).filter(theirs).map(async (conn) => { await revokeCalendar(conn); disconnectCalendar(conn); }));
+  // Google Contacts reads their Google account, so it goes with them; its people stay.
+  if (db.gcontacts[wsId]?.memberId === id) await gcDisconnect(wsId);
   for (const c of Object.values(db.campaigns)) {
     if (c.wsId !== wsId) continue;
     if (c.private && [c.ownerId, c.assigneeId, ...c.memberIds].filter(Boolean).every((x) => x === id)) { deleteCampaign(ws, c); continue; }
