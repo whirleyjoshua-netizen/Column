@@ -141,5 +141,40 @@ ${button ? `<p style="margin:18px 0"><a href="${esc(button.url)}" style="display
     }),
   });
 
-  return { mode, send, codeEmail, alertEmail, resetEmail, inviteEmail, emailChanged, teamDeleting, teamKept, accountDeleted, exportReady };
+  // Getting started: one welcome, then reminders as the free trial runs out (days 3, 1, and 0 = it ended).
+  const welcomeEmail = (to, { team, url, trialDays }) => send({
+    to, tag: 'welcome',
+    subject: `Welcome to ${appName}`,
+    ...layout({
+      heading: `${team} is ready`,
+      lines: [
+        `Thanks for starting ${team} on ${appName}.${trialDays ? ` Your free trial runs for ${trialDays} days, with no card needed.` : ''} Three things make the biggest difference in the first week:`,
+        '1. Invite your team, in Settings → Team, so work lands with the right people.',
+        '2. Connect your calendar and email, in Settings → Connections, so your day and your sends live in one place.',
+        '3. Start your first campaign, from Campaigns → New, or ask Sidekick to plan one for you.',
+        `Home has a Get started list that ticks these off as you go. Questions? Just reply to this email.`,
+      ],
+      button: { label: `Open ${appName}`, url },
+      foot: 'You’re getting this because you created a team.',
+    }),
+  });
+  const trialEmail = (to, { team, url, days, seats, price, ends, tz }) => {
+    const per = `$${(price / 100).toFixed(price % 100 ? 2 : 0)}`;
+    const total = `$${((price * seats) / 100).toFixed((price * seats) % 100 ? 2 : 0)}`;
+    const cost = `It’s ${per} a person a month: ${total} a month for ${seats === 1 ? 'one person' : `the ${seats} people`} on ${team} now.`;
+    return send({
+      to, tag: 'trial-' + days,
+      subject: days ? `Your ${appName} trial ends ${days === 1 ? 'tomorrow' : `in ${days} days`}` : `Your ${appName} trial has ended`,
+      ...layout({
+        heading: days ? `${days === 1 ? 'One day' : `${days} days`} left in your trial` : `${team}’s free trial has ended`,
+        lines: days
+          ? [`The free trial for ${team} ends on ${longDay(ends, tz)}. To keep working without a break, subscribe before then.`, cost, 'If you don’t, nothing is deleted: the team turns read-only, so everyone can still look and export, until an owner subscribes.']
+          : [`${team} is read-only now. Everyone can still sign in, look around and export, and nothing has been deleted.`, `Subscribe to pick up right where you left off. ${cost}`],
+        button: { label: 'Subscribe', url },
+        foot: 'You’re getting this because you own the team. Questions? Just reply.',
+      }),
+    });
+  };
+
+  return { mode, send, codeEmail, alertEmail, resetEmail, inviteEmail, emailChanged, teamDeleting, teamKept, accountDeleted, exportReady, welcomeEmail, trialEmail };
 }

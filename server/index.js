@@ -1285,6 +1285,60 @@ function applySub(ws, sub) {
   broadcast(ws.id, { type: 'workspace' });
   seatsSoon(ws);
 }
+// ---------- getting started: a short list for a new team's owners and admins, and the emails around the trial ----------
+// Each item is ticked by what the team has actually done, not by hand. It shows for the team's first
+// START_DAYS, until everything's done or the person hides it. Items for tools that are off, or that need
+// something this server doesn't have, are left out.
+const START_DAYS = 30;
+function startList(ws, auth) {
+  const me = ws.members.find((x) => x.id === auth.memberId);
+  if (!isAdmin(auth) || !me || me.startHidden || Date.now() - (ws.createdAt || 0) > START_DAYS * 86_400_000) return null;
+  const tools = toolsOf(ws);
+  const calOn = Object.values(calProviders).some((p) => p.configured());
+  const items = [
+    ['invite', ws.members.length > 1 || Object.values(db.invites).some((x) => x.wsId === ws.id)],
+    calOn && ['calendar', Object.values(db.calendars).some((x) => x.wsId === ws.id && x.memberId === auth.memberId)],
+    calOn && tools.email && ['email', !!mailConn(ws.id, auth.memberId)],
+    tools.contacts && ['contacts', contactsOf(ws.id).length > 0],
+    ['campaign', Object.values(db.campaigns).some((c) => c.wsId === ws.id)],
+    tools.sidekick && ['ai', !!aiUse(aiOf(ws.id, auth.memberId))],
+  ].filter(Boolean);
+  return items.map(([key, done]) => ({ key, done }));
+}
+
+// Emails a new team gets: a welcome once the owner's email is confirmed, and trial reminders 3 days and
+// 1 day before it ends, and when it has ended. ws.onboard remembers what went, so each goes once; each
+// only goes inside its own window, so a team that was already past it (or a restart) sends nothing late.
+const ownerEmails = (ws) => ws.members.filter((x) => x.role === 'owner').map(userOf).filter((u) => u?.email && u.emailVerified).map((u) => u.email);
+async function onboardTick() {
+  if (mailer.mode === 'off') return;
+  const now = Date.now();
+  for (const ws of Object.values(db.workspaces)) {
+    if (ws.deleteAt || !ws.createdAt || now - ws.createdAt > START_DAYS * 86_400_000) continue;
+    const sent = (ws.onboard ||= {});
+    const go = async (key, fn) => {
+      const to = ownerEmails(ws);
+      if (!to.length) return;
+      sent[key] = now;
+      save();
+      for (const addr of to) await fn(addr).catch((e) => alarm(`Onboarding email (${key}) failed`, e));
+    };
+    if (!sent.welcome && now - ws.createdAt < 3 * 86_400_000) {
+      await go('welcome', (to) => mailer.welcomeEmail(to, { team: ws.name, url: PUBLIC_URL, trialDays: billingOf(ws).state === 'trial' ? TRIAL_DAYS : 0 }));
+    }
+    const b = billingOf(ws);
+    const end = ws.billing?.trialEnds;
+    if (!end || !stripe.configured() || ws.billing.comp || ws.billing.sub) continue;
+    const left = end - now;
+    const info = { team: ws.name, url: PUBLIC_URL + '/?billing=open', seats: Math.max(1, ws.members.length), price: SEAT_PRICE, ends: end, tz: tzOf(ws) };
+    if (b.state === 'trial' && left <= 86_400_000 && !sent.t1) await go('t1', (to) => mailer.trialEmail(to, { ...info, days: 1 }));
+    else if (b.state === 'trial' && left <= 3 * 86_400_000 && left > 86_400_000 && !sent.t3) await go('t3', (to) => mailer.trialEmail(to, { ...info, days: 3 }));
+    else if (b.state === 'trial_over' && -left < 3 * 86_400_000 && !sent.t0) await go('t0', (to) => mailer.trialEmail(to, { ...info, days: 0 }));
+  }
+}
+let onboardBusy = false;
+setInterval(() => { if (!onboardBusy) (onboardBusy = true), onboardTick().catch((e) => alarm('Onboarding emails failed', e)).finally(() => (onboardBusy = false)); }, Number(process.env.ONBOARD_TICK_MS) || 10 * 60_000);
+
 const wsForStripe = (meta, customer) => db.workspaces[meta?.wsId] || Object.values(db.workspaces).find((w) => customer && w.billing?.customer === customer);
 async function stripeWebhook(req, res) {
   const chunks = [];
@@ -4740,6 +4794,7 @@ async function api(req, res, url) {
       workspace: publicWorkspace(ws, auth.memberId),
       me: { memberId: auth.memberId, member: auth.member, device: auth.device, deviceId: auth.deviceId, ...meAccount(ws, auth.memberId) },
       notices: Object.values(db.notices).filter((n) => n.wsId === ws.id && n.memberId === auth.memberId).sort((p, q) => q.at - p.at).map(publicNotice),
+      start: startList(ws, auth),
       items,
       entries: Object.values(db.entries).filter((e) => e.wsId === ws.id && canSee(auth, 'entry', e)).map(publicEntry),
       tasks: Object.values(db.tasks).filter((t) => t.wsId === ws.id && canSee(auth, 'task', t)).map(publicTask),
@@ -5839,6 +5894,15 @@ async function api(req, res, url) {
   }
 
   if (a === 'home' && b === 'brief' && m === 'POST') return send(res, 200, await homeBrief(ws, auth, await readJson(req, 40_000)));
+  // Home's Get started list: where it stands, and hiding it for good (for this person).
+  if (a === 'home' && b === 'start') {
+    if (m === 'GET') return send(res, 200, { start: startList(ws, auth) });
+    if (m === 'DELETE') {
+      const me = ws.members.find((x) => x.id === auth.memberId);
+      if (me) (me.startHidden = true), save();
+      return send(res, 200, { start: null });
+    }
+  }
 
   if (a === 'gcontacts') {
     if (!isAdmin(auth)) return send(res, 403, { error: 'Only team owners and admins can do that.' });
@@ -7170,7 +7234,7 @@ function movedTo(req, url) {
 // change it): its home page, the legal pages, downloads and images. The bare domain goes to it, and any other page
 // there opens in the app. /welcome shows the home page on any address, for a look before the domain points here.
 const SITE_HOST = (process.env.SITE_HOST ?? (HOME_HOST.startsWith('app.') ? 'www.' + HOME_HOST.slice(4) : '')).toLowerCase();
-const SITE_PAGES = new Set(['/', '/welcome', '/terms', '/privacy', '/download', '/get', '/robots.txt', '/sitemap.xml']);
+const SITE_PAGES = new Set(['/', '/welcome', '/terms', '/privacy', '/help', '/download', '/get', '/robots.txt', '/sitemap.xml']);
 function siteMove(req, url) {
   const host = String(req.headers.host || '').toLowerCase();
   if (!SITE_HOST || url.pathname.startsWith('/api/')) return null;
@@ -7187,9 +7251,9 @@ function serveSite(req, res) {
   });
 }
 // Search engines: the website is indexed; the app's address is not (its pages are sign-in screens and private links).
-const SITE_MAP = ['/', '/download', '/terms', '/privacy'];
+const SITE_MAP = ['/', '/help', '/download', '/terms', '/privacy'];
 function serveRobots(req, res) {
-  const body = onSite(req) || !SITE_HOST ? `User-agent: *\nAllow: /\n\nSitemap: ${SITE_URL}/sitemap.xml\n` : 'User-agent: *\nAllow: /terms\nAllow: /privacy\nAllow: /download\nDisallow: /\n';
+  const body = onSite(req) || !SITE_HOST ? `User-agent: *\nAllow: /\n\nSitemap: ${SITE_URL}/sitemap.xml\n` : 'User-agent: *\nAllow: /terms\nAllow: /privacy\nAllow: /help\nAllow: /download\nDisallow: /\n';
   send(res, 200, body, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'public, max-age=3600' });
 }
 function serveSitemap(req, res) {
@@ -7212,7 +7276,7 @@ const server = http.createServer(async (req, res) => {
   if (url.pathname === '/robots.txt') return serveRobots(req, res);
   if (url.pathname === '/sitemap.xml') return serveSitemap(req, res);
   // Pages served on both addresses name the website's copy as the one to index; the app itself stays out of search.
-  if (SITE_HOST && ['/terms', '/privacy', '/download', '/get'].includes(url.pathname)) res.setHeader('Link', `<${SITE_URL}${url.pathname === '/get' ? '/download' : url.pathname}>; rel="canonical"`);
+  if (SITE_HOST && ['/terms', '/privacy', '/help', '/download', '/get'].includes(url.pathname)) res.setHeader('Link', `<${SITE_URL}${url.pathname === '/get' ? '/download' : url.pathname}>; rel="canonical"`);
   else if (SITE_HOST && !onSite(req) && req.method === 'GET' && !path.extname(url.pathname)) res.setHeader('X-Robots-Tag', 'noindex');
   if (url.pathname.startsWith('/api/')) {
     res.setHeader('Access-Control-Allow-Origin', '*');
@@ -7258,7 +7322,7 @@ const server = http.createServer(async (req, res) => {
   }
   if (url.pathname === '/download' || url.pathname === '/get') return serveStatic(req, res, new URL('/download.html', 'http://x'));
   if (url.pathname === '/developers') return serveStatic(req, res, new URL('/developers.html', 'http://x'));
-  if (url.pathname === '/terms' || url.pathname === '/privacy') return serveStatic(req, res, new URL(url.pathname + '.html', 'http://x'));
+  if (url.pathname === '/terms' || url.pathname === '/privacy' || url.pathname === '/help') return serveStatic(req, res, new URL(url.pathname + '.html', 'http://x'));
   if (url.pathname.startsWith('/brand/') && (req.method === 'GET' || req.method === 'HEAD')) return serveLogo(req, res, url);
   if (url.pathname.startsWith('/oauth/')) return oauthCallback(req, res, url).catch((e) => {
     alarm('Connecting a calendar failed', e);

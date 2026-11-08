@@ -1879,3 +1879,14 @@ body.platform-darwin .pj-head, body.platform-darwin .pj-top { padding-left: 80px
 .sig-thumb { display: flex; align-items: center; gap: 8px; }
 .sig-thumb img { height: 28px; max-width: 120px; object-fit: contain; background: #fff; border-radius: 4px; padding: 2px 4px; }
 .billing-bar.ended { border-color: var(--danger); }
+/* Home: Get started */
+.home-card.start { border-color: color-mix(in srgb, var(--accent) 35%, var(--line)); }
+.start-bar { height: 4px; border-radius: 99px; background: var(--line); overflow: hidden; margin: 2px 0 6px; }
+.start-bar i { display: block; height: 100%; background: var(--accent); border-radius: inherit; transition: width 0.3s; }
+.start-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 16px; }
+.start-row.done { opacity: 0.55; }
+.start-row.done .need-ic { background: color-mix(in srgb, #22a06b 16%, transparent); color: #22a06b; font-weight: 700; }
+.start-row.done b { text-decoration: line-through; }
+.start-list .need-row:nth-of-type(2) { border-top: 0; }
+.start-help { display: inline-block; margin-top: 6px; font-size: 12px; color: var(--accent); }
+@media (max-width: 860px) { .start-list { grid-template-columns: 1fr; } .start-list .need-row:nth-of-type(2) { border-top: 1px solid var(--line); } }

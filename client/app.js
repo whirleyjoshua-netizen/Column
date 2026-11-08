@@ -805,6 +805,8 @@
     S.templates = st.templates || [];
     S.bills = st.bills || [];
     S.notices = st.notices || [];
+    S.start = st.start || null;
+    HM.startAt = Date.now();
     S.money = st.money || [];
     S.budgets = st.budgets || [];
     S.projects = st.projects || [];
@@ -857,7 +859,7 @@
   // Each invite is a link that joins one person, once, within 14 days. It's emailed when this server can
   // send email, and shown here to copy either way (only right after it's made: Kloomie keeps no copy).
   function inviteSection() {
-    const sec = h('section', {}, h('h3', {}, 'Invite by email'));
+    const sec = h('section', { class: 'inv-sec' }, h('h3', {}, 'Invite by email'));
     const box = h('input', { type: 'text', placeholder: 'sam@company.com, lee@company.com', 'aria-label': 'Email addresses to invite' });
     const made = h('div', { class: 'inv-made' });
     const pending = h('div', {});
@@ -899,7 +901,9 @@
     const back = new URLSearchParams(location.search).get('billing');
     if (back) {
       history.replaceState(null, '', location.pathname);
-      toast(back === 'done' ? 'Thanks! Your subscription is starting.' : 'No changes made to billing.');
+      // "open" is the link in the trial emails: straight to Billing.
+      if (back === 'open') openSettings('team', '.billing-sec');
+      else toast(back === 'done' ? 'Thanks! Your subscription is starting.' : 'No changes made to billing.');
     }
     if (S.me.email || VIEW_ID) return;
     const today = new Date().toDateString();
@@ -4283,9 +4287,48 @@
   let homeTimer = 0;
   const homeSoon = () => { if (S.tab !== 'home' || homeTimer) return; homeTimer = setTimeout(() => { homeTimer = 0; renderHome(); }, 250); };
   setInterval(homeSoon, 60_000);
+  // Get started: a new team's first steps, ticked by the server from what's been done. Most of them get done
+  // elsewhere (Settings, Google's sign-in tab), so while Home is open the list is checked again now and then.
+  const START = {
+    invite: ['Invite your team', 'Send invites by email, so work lands with the right people.', () => openSettings('team', '.inv-sec')],
+    calendar: ['Connect your calendar', 'Google Calendar or Outlook, so your meetings show up in your Day.', () => openSettings('connections', '.cal-sec')],
+    email: ['Connect your email', 'Send from your own Gmail or Outlook, so replies come back to you.', () => openTool('email')],
+    contacts: ['Add your contacts', 'Import a spreadsheet, add people by hand, or connect Google Contacts.', () => openTool('contacts')],
+    campaign: ['Start your first campaign', 'A launch, an outreach push, anything with a finish line. Sidekick can plan it with you.', () => { setTab('camps'); openCampaign(null); campaignSheet(); }],
+    ai: ['Add your AI key', 'Sidekick plans and drafts for you, on your own Claude, OpenAI or Gemini key.', () => openSettings('connections', '.ai-sec')],
+  };
+  function startSoon() {
+    if (!S.start || Date.now() - (HM.startAt || 0) < 5_000) return;
+    HM.startAt = Date.now();
+    api('GET', '/home/start').then((r) => {
+      if (JSON.stringify(r.start) === JSON.stringify(S.start)) return;
+      S.start = r.start;
+      renderHome();
+    }).catch(() => {});
+  }
+  function hideStart() {
+    S.start = null;
+    renderHome();
+    api('DELETE', '/home/start').catch(() => {});
+    toast('Hidden. Help is always at kloomie.com/help.');
+  }
+  function startCard(card) {
+    const st = S.start;
+    if (!st?.some((x) => !x.done)) return null;
+    const done = st.filter((x) => x.done).length;
+    return card('start wide', 'Get started', `${done} of ${st.length}`, ['Hide', hideStart],
+      h('div', { class: 'start-bar' }, h('i', { style: `width:${Math.round((done / st.length) * 100)}%` })),
+      h('div', { class: 'start-list' }, st.filter((x) => START[x.key]).map((x, i) => {
+        const [title, sub, run] = START[x.key];
+        return h('button', { class: 'need-row start-row' + (x.done ? ' done' : ''), onclick: run },
+          h('span', { class: 'need-ic' }, x.done ? '✓' : String(i + 1)), h('span', { class: 'need-text' }, h('b', {}, title), x.done ? null : h('small', {}, sub)));
+      })),
+      h('a', { class: 'start-help', href: '/help', target: '_blank', rel: 'noopener' }, 'Help & guides'));
+  }
   function renderHome() {
     const root = $('#home');
     if (!root || S.tab !== 'home' || !S.workspace) return;
+    startSoon();
     if (root.contains(document.activeElement) && document.activeElement.matches('input, textarea')) return;
     const keep = root.scrollTop;
     root.replaceChildren(homeView());
@@ -4369,6 +4412,7 @@
         toolOn('sidekick') ? h('button', { class: 'btn small home-brief-btn', disabled: HM.busy, onclick: () => homeBrief(d) }, HM.busy ? 'Thinking…' : HM.brief ? '✦ Brief me again' : '✦ Brief me') : null),
       HM.brief ? h('div', { class: 'home-brief' }, h('p', {}, HM.brief.text), h('small', {}, `Sidekick · ${ago(HM.brief.at)}`)) : null,
       h('div', { class: 'home-grid' },
+        startCard(card),
         notes.length ? card('notes wide', 'For you', notes.length, ['Clear all', () => clearNote(null)],
           h('div', {}, notes.slice(0, 8).map((n) => h('div', { class: 'note-row' },
             h('button', { class: 'need-row auto', onclick: () => (n.taskId && taskById(n.taskId) ? showStep(taskById(n.taskId)) : n.campaignId && campById(n.campaignId) ? openCampaign(n.campaignId) : null) },
@@ -12965,7 +13009,7 @@
         h('div', { class: 'btns' },
           alone ? null : h('button', { class: 'btn danger', onclick: () => goodbyeSheet('leave') }, `Leave ${ws.name}…`),
           h('button', { class: 'btn danger', onclick: () => goodbyeSheet('delete') }, 'Delete my account…'))));
-      s.append(h('p', { class: 'legal-links' }, h('a', { href: '/terms', target: '_blank' }, 'Terms of service'), ' · ', h('a', { href: '/privacy', target: '_blank' }, 'Privacy policy')));
+      s.append(h('p', { class: 'legal-links' }, h('a', { href: '/help', target: '_blank' }, 'Help'), ' · ', h('a', { href: '/terms', target: '_blank' }, 'Terms of service'), ' · ', h('a', { href: '/privacy', target: '_blank' }, 'Privacy policy')));
     }
   }
 
