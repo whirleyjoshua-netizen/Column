@@ -3691,6 +3691,26 @@ function taskBrief(ws, auth, t) {
     isAdmin(auth) && contactsOf(ws.id).length ? `Their Contacts already have ${contactsOf(ws.id).length} people they can pull into a list.` : '',
   ].filter(Boolean).join('\n');
 }
+// Home's brief: a few sentences on someone's day, from the facts their own app gathered (only what they can see).
+async function homeBrief(ws, auth, body) {
+  const ai = aiOf(ws.id, auth.memberId);
+  const use = aiUse(ai);
+  if (!use) throw Object.assign(new Error('Add your AI key in Settings → AI to get a brief.'), { status: 400 });
+  const facts = cleanText(body.facts, 12_000);
+  if (!facts) throw badRequest('Nothing to brief on yet.');
+  const system = 'You write a short brief for one person on a small business team, from facts about their day in Kloomie, their work app. Three to five short sentences of plain text: no list, no greeting, no sign-off. Lead with what most needs them, then what is on today, then anything else worth knowing. Name people, campaigns and tasks as given. Never add anything that is not in the facts, and do not repeat numbers that do not matter.';
+  let out;
+  try {
+    out = await llms[use.provider].run({ key: unseal(ai.keys[use.provider].sealed).key, model: use.model, system, history: [{ role: 'user', text: facts }], tools: [], web: false, exec: () => Promise.reject(new Error('No tools')) });
+  } catch (e) {
+    console.error('Home brief failed:', e.message);
+    throw Object.assign(new Error(llmError(e)), { status: 502 });
+  }
+  if (out.refused) throw Object.assign(new Error(out.text), { status: 502 });
+  let text = String(out.text || '').trim();
+  try { const j = JSON.parse(text); if (typeof j?.text === 'string') text = j.text; } catch {}
+  return { text: clipText(text, 1500) };
+}
 async function aiTask(ws, auth, t, body) {
   const tool = TASK_TOOLS[body.tool];
   if (!tool) throw badRequest('Unknown tool');
@@ -5595,6 +5615,8 @@ async function api(req, res, url) {
   }
 
   // The PSS admin connection, which fills Contacts. Owners only.
+  if (a === 'home' && b === 'brief' && m === 'POST') return send(res, 200, await homeBrief(ws, auth, await readJson(req, 40_000)));
+
   if (a === 'gcontacts') {
     if (!isAdmin(auth)) return send(res, 403, { error: 'Only team owners and admins can do that.' });
     if (m === 'GET' && !b) return send(res, 200, gcState(ws));

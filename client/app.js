@@ -414,7 +414,7 @@
       hadConnection = true;
       if (DV.doc) docTell(DV.doc);
     };
-    s.onmessage = (e) => handle(JSON.parse(e.data));
+    s.onmessage = (e) => { handle(JSON.parse(e.data)); homeSoon(); };
     s.onclose = (e) => {
       if (sock !== s) return;
       if (e.code === 4001) {
@@ -839,7 +839,7 @@
       return connect();
     }
     $('#app').classList.remove('hidden');
-    setTab('day');
+    setTab('home');
     connect();
     accountNudge();
   }
@@ -2481,6 +2481,8 @@
   function setTab(tab) {
     S.tab = tab;
     for (const b of $('#tabs').children) b.classList.toggle('on', b.dataset.tab === tab);
+    $('#home').classList.toggle('hidden', tab !== 'home');
+    if (tab === 'home') renderHome();
     $('#day').classList.toggle('hidden', tab !== 'day');
     $('#panes').classList.toggle('hidden', tab !== 'column');
     $('#chat').classList.toggle('hidden', tab !== 'chat');
@@ -4097,6 +4099,116 @@
       live.length ? mains.flatMap((c) => [row(c), ...live.filter((x) => x.parentId === c.id).map((x) => row(x, true))]) : h('p', { class: 'day-hint' }, 'No campaigns running.'),
       feed.length ? h('div', { class: 'any-h camp-goals-h' }, 'Latest check-ins') : null,
       feed.map(({ c, x }) => h('button', { class: 'ci-row', onclick: () => openCampaign(c.id) }, h('span', { class: 'pill health ' + x.status }, HEALTH_L[x.status]), h('span', { class: 'ci-text' }, h('b', {}, c.name), x.note ? ' · ' + x.note : ''), h('small', {}, `${x.by} · ${ago(x.at)}`))));
+  }
+
+  // ---------- Home: what needs you, what's on today, how the work is going, and what came in ----------
+  // Everything here is already in the app; Home gathers it in one place, and stays live. "Brief me" asks Sidekick
+  // for a few sentences on it, from what this person can see.
+  const HM = { brief: null, busy: false };
+  let homeTimer = 0;
+  const homeSoon = () => { if (S.tab !== 'home' || homeTimer) return; homeTimer = setTimeout(() => { homeTimer = 0; renderHome(); }, 250); };
+  setInterval(homeSoon, 60_000);
+  function renderHome() {
+    const root = $('#home');
+    if (!root || S.tab !== 'home' || !S.workspace) return;
+    if (root.contains(document.activeElement) && document.activeElement.matches('input, textarea')) return;
+    const keep = root.scrollTop;
+    root.replaceChildren(homeView());
+    root.scrollTop = keep;
+  }
+  function homeData() {
+    const me = S.me?.memberId;
+    const today = todayKey();
+    const now = new Date();
+    const mins = now.getHours() * 60 + now.getMinutes();
+    const sched = entriesOn(today).sort((a, b) => (a.start ?? -1) - (b.start ?? -1));
+    const next = sched.filter((e) => !e.done && (e.start == null || (e.end ?? e.start + 30) > mins));
+    // Your own to-dos and your campaign steps that can be done now.
+    const mine = S.tasks.filter((t) => !t.done && (t.goalId ? taskMine(t) : forMe(t) && (t.memberId === me || taskMine(t))) && !taskWaitsOn(t));
+    const up = mine.filter((t) => t.openedAt > Date.now() - 864e5);
+    const late = mine.filter((t) => t.due && t.due < today && !up.includes(t));
+    const dueToday = mine.filter((t) => t.due === today && !up.includes(t));
+    const camps = S.campaigns.filter((c) => c.status === 'active' && (runsIt(c) || castOf(c).some((r) => r.memberIds.includes(me)) || campTasks(c).some((t) => !t.done && taskMine(t))))
+      .map((c) => ({ c, hl: campHealth(c), forMe: campTasks(c).filter((t) => !t.done && taskMine(t)).length }))
+      .sort((a, b) => ['offTrack', 'atRisk', 'onTrack'].indexOf(a.hl.status) - ['offTrack', 'atRisk', 'onTrack'].indexOf(b.hl.status));
+    const feeds = [['chat', 'general'], ...S.workspace.channels.map((c) => ['ch:' + c.id, c.name])].map(([v, name]) => ({ v, name, n: unread(v), at: unreadAt(v) })).filter((x) => x.n);
+    const since = Date.now() - 3 * 864e5;
+    const came = S.items.filter((it) => it.viaLink && it.createdAt > since);
+    const signed = S.items.filter((it) => it.device === 'Signature' && it.createdAt > since);
+    const sends = (S.mail?.sends || []).filter((x) => x.status === 'sending' || (x.doneAt && x.doneAt > Date.now() - 2 * 864e5));
+    const bills = toolOn('bills') ? billsSoon() : [];
+    return { today, sched, next, up, late, dueToday, needs: needsYou(), camps, feeds, came, signed, sends, bills };
+  }
+  // The same facts in plain words, for Sidekick's brief.
+  function homeFacts(d) {
+    const name = (t) => `“${shortText(t.text, 80)}”${campById(goalById(t.goalId)?.campaignId) ? ` (${campById(goalById(t.goalId)?.campaignId).name})` : ''}`;
+    return [
+      `Today is ${new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })}, ${fmtTime(new Date().getHours() * 60 + new Date().getMinutes())}. This is for ${S.me?.member} on the team ${S.workspace.name}.`,
+      d.needs.length ? 'Needs them: ' + d.needs.map((n) => `${n.text} (${n.sub})`).join('; ') : 'Nothing is waiting on them.',
+      d.up.length ? 'Just opened up for them: ' + d.up.map(name).join('; ') : '',
+      d.late.length ? 'Overdue: ' + d.late.map((t) => `${name(t)} due ${t.due}`).join('; ') : '',
+      d.dueToday.length ? 'Due today: ' + d.dueToday.map(name).join('; ') : '',
+      d.next.length ? 'Still on their schedule today: ' + d.next.map((e) => `${e.start != null ? fmtTime(e.start) + ' ' : ''}${e.text}`).join('; ') : 'Nothing left on their schedule today.',
+      d.camps.length ? 'Their campaigns: ' + d.camps.map(({ c, hl, forMe }) => `${c.name}: ${HEALTH_L[hl.status]}${hl.why.length ? ' (' + hl.why.join(', ') + ')' : ''}, ${Math.round(campProgress(c) * 100)}% done${forMe ? `, ${forMe} steps for them` : ''}`).join('; ') : '',
+      d.feeds.length ? 'Unread in chat: ' + d.feeds.map((f) => `#${f.name} ${f.n}${f.at ? ' (mentions them)' : ''}`).join(', ') : '',
+      d.came.length ? `Files that came in on request links: ${d.came.length}` : '',
+      d.signed.length ? 'Signed documents: ' + d.signed.map((it) => it.name).join(', ') : '',
+      d.sends.length ? 'Email: ' + d.sends.map((x) => `“${x.subject}” ${x.status === 'sending' ? `going out, ${x.sent} of ${x.total} sent` : `sent to ${x.sent}`}`).join('; ') : '',
+      d.bills.length ? 'Bills due this week: ' + d.bills.map((b) => `${b.name} ${money(b.amount)} on ${b.due}`).join('; ') : '',
+    ].filter(Boolean).join('\n');
+  }
+  async function homeBrief(d) {
+    HM.busy = true;
+    renderHome();
+    try {
+      HM.brief = { ...(await api('POST', '/home/brief', { facts: homeFacts(d) })), at: Date.now() };
+    } catch (e) {
+      toast(e.message);
+    }
+    HM.busy = false;
+    renderHome();
+  }
+  function homeView() {
+    const d = homeData();
+    const hr = new Date().getHours();
+    const first = String(S.me?.member || '').split(/\s+/)[0];
+    const card = (cls, title, n, action, ...body) => h('section', { class: 'home-card ' + cls },
+      h('div', { class: 'hc-h' }, h('b', {}, title), n ? h('span', { class: 'hc-n' }, String(n)) : null, action ? h('button', { class: 'linkish hc-go', onclick: action[1] }, action[0]) : null), ...body);
+    const row = (ic, cls, title, sub, run) => h('button', { class: 'need-row ' + cls, onclick: run }, h('span', { class: 'need-ic' }, ic), h('span', { class: 'need-text' }, h('b', {}, title), sub ? h('small', {}, sub) : null));
+    const ICON = { sign: '✓', stuck: '⏳', role: '👤', late: '!', nobody: '?', checkin: '🩺' };
+    const steps = [...d.up, ...d.late, ...d.dueToday].slice(0, 8);
+    const needsN = d.needs.length + (d.late.length ? 1 : 0);
+    const summary = [needsN ? `${plural(needsN, 'thing')} need${needsN === 1 ? 's' : ''} you` : 'nothing needs you', d.next.length ? `${d.next.length} still on today` : 'your day is clear', d.feeds.reduce((n, f) => n + f.n, 0) ? `${d.feeds.reduce((n, f) => n + f.n, 0)} new in chat` : ''].filter(Boolean).join(' · ');
+    const activity = [
+      ...d.feeds.map((f) => row(f.at ? '@' : '#', f.at ? 'late' : 'chat', `#${f.name}`, `${f.n} new${f.at ? ' · mentions you' : ''}`, () => { setTab('chat'); openChannel(f.v); })),
+      d.came.length ? row('📥', 'files', `${plural(d.came.length, 'file')} came in`, [...new Set(d.came.map((it) => it.viaLink))].slice(0, 3).join(', '), () => { const st = stackById(d.came[0].stackId); setTab('column'); if (st) setPanes([`stack:${st.id}`, ...S.panes.slice(1)]); }) : null,
+      ...d.signed.slice(0, 3).map((it) => row('✍', 'files', `Signed: ${shortText(it.name, 50)}`, ago(it.createdAt), () => openPreview(it))),
+      ...d.sends.slice(0, 3).map((x) => row('✉', 'chat', `“${shortText(x.subject, 50)}”`, x.status === 'sending' ? `going out · ${x.sent} of ${x.total} sent` : `sent to ${x.sent} · ${ago(x.doneAt)}`, () => openTool('email'))),
+    ].filter(Boolean);
+    return h('div', { class: 'home' },
+      h('div', { class: 'home-top' },
+        h('div', {}, h('h1', {}, `${hr < 12 ? 'Good morning' : hr < 18 ? 'Good afternoon' : 'Good evening'}, ${first}`),
+          h('p', { class: 'home-sub' }, new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' }) + ' · ' + summary)),
+        toolOn('sidekick') ? h('button', { class: 'btn small home-brief-btn', disabled: HM.busy, onclick: () => homeBrief(d) }, HM.busy ? 'Thinking…' : HM.brief ? '✦ Brief me again' : '✦ Brief me') : null),
+      HM.brief ? h('div', { class: 'home-brief' }, h('p', {}, HM.brief.text), h('small', {}, `Sidekick · ${ago(HM.brief.at)}`)) : null,
+      h('div', { class: 'home-grid' },
+        card('needs' + (needsN ? ' wide' : ''), 'Needs you', needsN, d.needs.length ? ['Overview', () => { K.overview = true; store.set('campsOverview', true); setTab('camps'); openCampaign(null); }] : null,
+          needsN ? h('div', {}, d.late.length ? row('!', 'late', `${plural(d.late.length, 'of your tasks')} overdue`, d.late.slice(0, 3).map((t) => shortText(t.text, 30)).join(' · '), () => (d.late.length === 1 && d.late[0].goalId ? showStep(d.late[0]) : showTasks())) : null,
+            d.needs.slice(0, 12).map((n) => row(ICON[n.kind], n.kind, n.text, n.sub, n.run)))
+            : h('p', { class: 'day-hint' }, 'Nothing needs you right now: no sign-offs waiting, nothing stuck or overdue.')),
+        card('today', 'Today', d.next.length, ['Open Day', () => { D.sub = 'schedule'; store.set('daySub', 'schedule'); setTab('day'); goDay(d.today); }],
+          d.sched.length ? h('div', { class: 'home-sched' }, d.sched.slice(0, 8).map((e) => h('button', { class: 'hs-row' + (e.done ? ' done' : '') + (d.next.includes(e) ? '' : ' past'), onclick: () => { D.sub = 'schedule'; setTab('day'); goDay(d.today); } },
+            h('span', { class: 'hs-t' }, e.start != null ? fmtTime(e.start) : 'Anytime'), h('span', {}, e.text))))
+            : h('p', { class: 'day-hint' }, 'Nothing on your schedule today.')),
+        card('steps', 'Your steps', steps.length, ['All tasks', showTasks],
+          steps.length ? h('div', { class: 'home-steps' }, steps.map((t) => taskRow(t, {}))) : h('p', { class: 'day-hint' }, 'No steps due or waiting on you.')),
+        d.camps.length ? card('camps', 'Your campaigns', d.camps.length, ['Overview', () => { K.overview = true; store.set('campsOverview', true); setTab('camps'); openCampaign(null); }],
+          h('div', {}, d.camps.slice(0, 6).map(({ c, hl, forMe }) => h('button', { class: 'home-camp c-' + c.color, onclick: () => openCampaign(c.id) },
+            h('span', { class: 'hcm-name' }, h('b', {}, c.name), h('small', {}, [campDates(c), forMe ? `${forMe} for you` : ''].filter(Boolean).join(' · '))),
+            healthPill(c, hl), h('span', { class: 'hcm-bar' }, h('i', { style: `width:${pctOf(campProgress(c))}` })), h('small', { class: 'hcm-pct' }, pctOf(campProgress(c))))))) : null,
+        card('came', 'What came in', activity.length, null, activity.length ? h('div', {}, activity) : h('p', { class: 'day-hint' }, 'You’re all caught up.')),
+        d.bills.length ? card('bills', 'Bills this week', d.bills.length, ['Finance', () => openTool('bills')],
+          h('div', {}, d.bills.slice(0, 5).map((b) => row('$', b.due < d.today ? 'late' : 'nobody', `${b.name} · ${money(b.amount)}`, b.due < d.today ? `was due ${dueLabel(b.due)}` : `due ${dueLabel(b.due)}`, () => openTool('bills'))))) : null));
   }
 
   function campBudget(c) {

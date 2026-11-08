@@ -36,5 +36,14 @@ const t = (await jo('POST', '/tasks', { goalId: g.id, text: 'Order signs' })).bo
 r = await sam('PATCH', '/tasks/' + t.id, { done: true });
 ok(r.body.doneBy === 'Sam', 'a finished step says who finished it');
 
+// Home's brief: needs an AI key; then Sidekick sums up the facts the app sends.
+r = await jo('POST', '/home/brief', { facts: 'Needs them: Sign off “Approve the coupon”.' });
+ok(r.status === 400 && /AI key/.test(r.body.error), 'no AI key yet: the brief says to add one');
+await jo('PUT', '/ai/keys/anthropic', { key: 'test-key-for-the-fake-ai' });
+r = await jo('POST', '/home/brief', { facts: '' });
+ok(r.status === 400, 'nothing to brief on is refused');
+r = await jo('POST', '/home/brief', { facts: 'Needs them: Sign off “Approve the coupon”.' });
+ok(r.status === 200 && typeof r.body.text === 'string' && r.body.text.length > 0, 'with a key, the brief comes back as text: ' + r.body?.text);
+
 console.log(fails ? fails + ' failed' : 'all passed');
 process.exit(fails ? 1 : 0);
