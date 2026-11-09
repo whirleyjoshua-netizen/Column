@@ -517,6 +517,16 @@
       S.entries = S.entries.filter((x) => x.id !== msg.id);
       teamSoon();
       renderDay();
+    } else if (msg.type === 'invoice') {
+      invoiceNews(msg.invoice);
+    } else if (msg.type === 'invoice:remove') {
+      PR.invoices.set(msg.recordId, (PR.invoices.get(msg.recordId) || []).filter((x) => x.id !== msg.id));
+      if (PR.panel === msg.recordId) renderProjects();
+    } else if (msg.type === 'invoice:paid') {
+      toast(`💵 ${msg.name || 'A customer'} paid ${msg.number} · ${money(msg.amount)}`, { label: 'Open', run: () => openJob(msg.projectId, msg.recordId) });
+    } else if (msg.type === 'payments') {
+      S.payments = msg.payments;
+      $('#settings .pay-sec')?.replaceWith(paySection());
     } else if (msg.type === 'visits') {
       PR.visits.set(msg.recordId, msg.visits);
       teamSoon();
@@ -7984,7 +7994,9 @@
       return h('div', { class: 'pj-frow' + (f.hidden ? ' hid' : '') }, h('span', { class: 'pj-flabel' }, h('span', { class: 'pj-fic' }, PF_IC[f.type]), f.name), val);
     };
     // On a quote or estimate the lines come first, under who it's for and where it stands.
-    const top = itemFields.length ? fields.filter((f) => ['client', 'status', 'number'].includes(f.key)) : [];
+    // A trade job keeps its details first; its price lines, invoices and costing come after them.
+    const job = !!t.trade;
+    const top = itemFields.length && !job ? fields.filter((f) => ['client', 'status', 'number'].includes(f.key)) : [];
     return h('aside', { class: 'pj-panel' + (itemFields.length || richFields.length ? ' wide' : ''), 'data-id': r.id },
       h('div', { class: 'pj-panel-h' }, h('small', {}, `${t.icon || ''} ${t.singular || t.name}`), h('span', { style: 'flex:1' }),
         h('button', { class: 'icon-btn', 'aria-label': 'Record options', html: I.more, onclick: (e) => openMenu(e.currentTarget, [{ label: `Delete this ${(t.singular || 'record').toLowerCase()}`, danger: true, run: async () => { if (await prCall('DELETE', '/records/' + r.id)) { PR.records.set(p.id, prRecs(p.id).filter((x) => x.id !== r.id)); PR.panel = null; renderProjects(); } } }]) }),
@@ -7993,10 +8005,12 @@
       custFields.length ? prVisitBar(p, t, r) : null,
       ...custFields.map((f) => prCustomer(p, t, r, f)),
       custFields.length ? prVisits(p, t, r) : null,
-      itemFields.length ? quoteActions(p, t, r) : null,
+      itemFields.length && !job ? quoteActions(p, t, r) : null,
       top.length ? h('div', { class: 'pj-fields' }, top.map(fieldRow)) : null,
-      ...itemFields.map((f) => prItems(p, t, r, f)),
+      ...(job ? [] : itemFields.map((f) => prItems(p, t, r, f))),
       h('div', { class: 'pj-fields' }, fields.filter((f) => !top.includes(f)).map(fieldRow)),
+      ...(job ? itemFields.map((f) => prItems(p, t, r, f)) : []),
+      job ? prJobMoney(p, t, r) : null,
       ...richFields.map((f) => prRichBlock(p, t, r, f)),
       prActivity(p, t, r),
       ...back.map(({ o, f, from }) => h('div', { class: 'pj-back' }, h('h4', {}, `${o.name} · ${f.name}`), from.map((x) => h('button', { class: 'pj-link', onclick: () => { PR.type = o.id; PR.view = null; PR.panel = x.id; renderProjects(); } }, recName(o, x), o.fields.find((y) => y.type === 'money') && x.values[o.fields.find((y) => y.type === 'money').id] ? h('small', {}, ' · ' + money(x.values[o.fields.find((y) => y.type === 'money').id])) : null)))),
@@ -8435,7 +8449,7 @@
           priceList && priceList.id !== t.id ? h('button', { class: 'pj-newrow', onclick: fromList }, '+ From the price list') : null,
           // The panel may have been redrawn while it worked, so the draft is kept with the record and drawn fresh.
           h('button', { class: 'pj-newrow pj-ai-btn', onclick: () => prEstimate(p, t, r, f, (y) => { (PR.est ||= new Map()).set(r.id, y); renderProjects(); }) }, '✦ Draft estimate')),
-        est ? estBox() : null,
+        ...(est ? [estBox()] : []),
         sums);
       void keep;
       if (focusLast) setTimeout(() => box.querySelector('tbody tr:last-child .desc')?.focus());
@@ -8856,6 +8870,155 @@
       h('div', { class: 'btns' },
         h('button', { class: 'btn small' + (v.done ? '' : ' primary-btn'), onclick: async () => { await api('PATCH', '/visits/' + v.id, { done: !v.done }).catch((e) => toast(e.message)); } }, v.done ? 'Not done' : '✓ Visit done'),
         h('button', { class: 'btn small', onclick: () => visitSheet(p, t, r, v) }, 'Change')));
+  }
+
+  // ----- invoices: billing the customer for a job, getting paid, and what the job cost (owners and admins) -----
+  // An invoice starts from the job's price lines. Sending it gives the customer a link to read and pay it (by card
+  // when the team's Stripe is connected in Settings → Connections); cash and checks are recorded here.
+  PR.invoices = new Map();
+  PR.costing = new Map();
+  const INV_LABEL = { draft: 'Draft', sent: 'Sent', viewed: 'Viewed', partial: 'Part paid', paid: 'Paid', void: 'Void' };
+  const PAY_METHODS = [['cash', 'Cash'], ['check', 'Check'], ['card', 'Card (in person)'], ['bank', 'Bank transfer'], ['other', 'Other']];
+  async function loadInvoices(r, force) {
+    if (PR.invoices.has(r.id) && !force) return;
+    const [list, cost] = await Promise.all([api('GET', `/records/${r.id}/invoices`).catch(() => null), api('GET', `/records/${r.id}/costing`).catch(() => null)]);
+    if (list) PR.invoices.set(r.id, list);
+    if (cost) PR.costing.set(r.id, cost);
+  }
+  function invoiceNews(inv) {
+    const list = (PR.invoices.get(inv.recordId) || []).filter((x) => x.id !== inv.id);
+    PR.invoices.set(inv.recordId, [...list, inv].sort((a, b) => a.createdAt - b.createdAt));
+    PR.costing.delete(inv.recordId);
+    if (PR.panel === inv.recordId) loadInvoices({ id: inv.recordId }, true).then(() => PR.panel === inv.recordId && renderProjects());
+    if (INV.open?.id === inv.id) INV.open = inv;
+  }
+  const INV = { open: null };
+  function prJobMoney(p, t, r) {
+    if (!amAdmin()) return null;
+    const list = PR.invoices.get(r.id);
+    const cost = PR.costing.get(r.id);
+    if (!list) loadInvoices(r).then(() => PR.panel === r.id && renderProjects());
+    const make = async () => {
+      await PR.flush?.get(r.id)?.();
+      const inv = await api('POST', `/records/${r.id}/invoices`).catch((e) => toast(e.message));
+      if (inv) { invoiceNews(inv); invoiceSheet(inv); }
+    };
+    const rows = (list || []).map((x) => h('button', { type: 'button', class: 'pj-inv' + (x.status === 'void' ? ' void' : ''), onclick: () => invoiceSheet(x) },
+      h('b', {}, x.number), h('span', { class: 'pj-inv-st s-' + x.status + (x.overdue ? ' late' : '') }, x.overdue ? 'Overdue' : INV_LABEL[x.status]),
+      h('span', { class: 'pj-num' }, money2(x.total)), x.paid && x.balance ? h('small', {}, `${money2(x.balance)} left`) : x.due && x.balance && x.status !== 'void' && x.status !== 'draft' ? h('small', {}, 'due ' + dueLabel(x.due).toLowerCase()) : null));
+    const line = (label, val, cls) => h('div', { class: 'pj-cost-row' + (cls ? ' ' + cls : '') }, h('span', {}, label), h('b', { class: 'pj-num' }, val));
+    const costBox = cost ? h('div', { class: 'pj-cost' },
+      line(cost.billed ? 'Billed' : cost.quoted ? 'Price' : 'Value', money2(cost.price)),
+      line('Materials', money2(cost.materials)),
+      line(cost.laborRate ? `Labor · ${cost.hours} h × ${money2(cost.laborRate)}` : `Labor · ${cost.hours} h`, cost.laborRate ? money2(cost.labor) : '—'),
+      line('Margin', cost.price ? `${money2(cost.margin)} · ${cost.marginPct}%` : '—', 'pj-cost-m' + (cost.margin < 0 ? ' neg' : '')),
+      h('button', { class: 'pj-newrow', onclick: () => laborRateSheet(r) }, cost.laborRate ? 'Change the labor rate' : 'Set a labor rate, to count labor'),
+      h('small', { class: 'day-hint' }, 'Labor is the hours on visits marked done, times the people on them. Materials are from the materials list, or the price lines’ costs.')) : null;
+    return h('div', { class: 'pj-items pj-job-blk' },
+      h('div', { class: 'pj-it-h' }, h('b', {}, '💵 Invoices'), h('span', { style: 'flex:1' }), h('button', { class: 'btn small primary-btn', onclick: make }, '+ Make an invoice')),
+      list ? (rows.length ? h('div', { class: 'pj-invs' }, rows) : h('p', { class: 'day-hint' }, 'None yet. An invoice starts from the job’s price lines; send it and the customer can pay by card.')) : h('p', { class: 'day-hint' }, 'Loading…'),
+      costBox ? h('div', { class: 'pj-it-h' }, h('b', {}, '📊 What this job cost')) : null, costBox);
+  }
+  function laborRateSheet(r) {
+    const rate = h('input', { inputmode: 'decimal', value: dollars(PR.costing.get(r.id)?.laborRate || 0) || '', placeholder: '45.00' });
+    sheet('Labor rate', [h('p', { class: 'day-hint' }, 'What an hour of someone’s work costs the business, with wages, taxes and insurance. Only owners and admins see it.'), h('label', {}, 'Per hour, per person ($)', rate)], async () => {
+      await api('PATCH', '/workspace', { laborRate: rate.value });
+      PR.costing.clear();
+      if (PR.panel) loadInvoices({ id: PR.panel }, true).then(renderProjects);
+    });
+  }
+  const invUrl = (inv) => inv.url || `${location.origin}/i/${inv.token}`;
+  function invoiceSheet(inv) {
+    INV.open = inv;
+    const locked = inv.payments.length > 0 || inv.status === 'void';
+    const v = JSON.parse(JSON.stringify(inv.lines));
+    const total = h('b', { class: 'pj-num' });
+    const sum = () => { total.textContent = money2(itemsTotals(v).total); };
+    const tbody = h('tbody');
+    const draw = () => {
+      tbody.replaceChildren(...v.rows.map((x, i) => h('tr', {},
+        h('td', {}, locked ? x.desc : h('input', { class: 'pj-it-in desc', value: x.desc, placeholder: 'What it is', oninput: (e) => { x.desc = e.target.value; } })),
+        h('td', {}, locked ? String(x.qty) : h('input', { class: 'pj-it-in qty', value: x.qty, inputmode: 'decimal', oninput: (e) => { x.qty = Number(e.target.value) || 0; sum(); } })),
+        h('td', {}, locked ? money2(x.price) : h('input', { class: 'pj-it-in price', value: dollars(x.price), inputmode: 'decimal', placeholder: '0.00', oninput: (e) => { x.price = toCents(e.target.value) || 0; sum(); } })),
+        h('td', {}, locked ? null : h('button', { class: 'pj-it-x', 'aria-label': 'Remove line', onclick: () => { v.rows.splice(i, 1); draw(); } }, '×')))));
+      sum();
+    };
+    draw();
+    const tax = h('input', { class: 'pj-it-in small', value: v.taxRate || '', placeholder: '0', inputmode: 'decimal', disabled: locked, oninput: (e) => { v.taxRate = Math.max(0, Math.min(100, Number(e.target.value) || 0)); sum(); } });
+    const due = h('input', { type: 'date', value: inv.due || '' });
+    const name = h('input', { value: inv.to.name, placeholder: 'Customer' });
+    const email = h('input', { type: 'email', value: inv.to.email, placeholder: 'name@example.com' });
+    const note = h('textarea', { rows: 2, placeholder: 'Thank you for your business! Checks payable to…' });
+    note.value = inv.note || '';
+    const body = () => ({ ...(locked ? {} : { lines: { rows: v.rows.map((x) => ({ id: x.id, desc: x.desc, qty: x.qty, unit: x.unit, price_cents: x.price, ...(x.taxable === false ? { taxable: false } : {}) })), taxRate: v.taxRate || 0, discount: v.discount ? { ...v.discount, cents: v.discount.type === 'amount' } : null } }),
+      due: due.value || null, note: note.value, to: { name: name.value, email: email.value } });
+    const saveIt = async () => { if (inv.status === 'void') return inv; const y = await api('PATCH', '/invoices/' + inv.id, body()); invoiceNews(y); return y; };
+    const sendIt = async () => {
+      try {
+        await saveIt();
+        const y = await api('POST', `/invoices/${inv.id}/send`);
+        invoiceNews(y);
+        copyText(invUrl(y));
+        closeSheet();
+        toast(S.payments?.connected ? 'Link copied. Send it to your customer: they can pay by card there.' : 'Link copied. Send it to your customer. Connect Stripe in Settings → Connections so they can pay by card.');
+      } catch (e) { toast(e.message); }
+    };
+    const pays = inv.payments.map((x) => h('div', { class: 'pj-inv-pay' }, h('span', {}, `${dueLabel(x.day)} · ${PAY_METHODS.find(([k]) => k === x.method)?.[1] || x.method}${x.note ? ' · ' + x.note : ''}`), h('b', { class: 'pj-num' }, money2(x.amount)),
+      x.session ? h('small', {}, 'online') : h('button', { class: 'pj-it-x', 'aria-label': 'Remove payment', onclick: async () => { const y = await api('DELETE', `/invoices/${inv.id}/payments/${x.id}`).catch((e) => toast(e.message)); if (y) { invoiceNews(y); invoiceSheet(y); } } }, '×')));
+    const act = (label, run, cls = '') => h('button', { type: 'button', class: 'btn small ' + cls, onclick: run }, label);
+    const del = inv.status === 'draft' ? h('button', { type: 'button', class: 'btn small danger', 'data-label': '1' }, 'Delete draft') : !inv.payments.length && inv.status !== 'void' ? h('button', { type: 'button', class: 'btn small danger', 'data-label': '1' }, 'Void') : null;
+    del?.addEventListener('click', () => confirmClick(del, async () => {
+      if (inv.status === 'draft') { await api('DELETE', '/invoices/' + inv.id).catch((e) => toast(e.message)); PR.invoices.set(inv.recordId, (PR.invoices.get(inv.recordId) || []).filter((x) => x.id !== inv.id)); renderProjects(); }
+      else { const y = await api('POST', `/invoices/${inv.id}/void`).catch((e) => toast(e.message)); if (y) invoiceNews(y); }
+      closeSheet();
+    }));
+    sheet(`${inv.number} · ${INV_LABEL[inv.status]}${inv.overdue ? ' · overdue' : ''}`, [
+      h('div', { class: 'pj-it-wrap' }, h('table', { class: 'pj-it' }, h('thead', {}, h('tr', {}, h('th', {}, 'Description'), h('th', {}, 'Qty'), h('th', {}, 'Price'), h('th', {}))), tbody)),
+      locked ? (inv.payments.length ? h('small', { class: 'day-hint' }, 'It has payments on it, so the lines stay as they are.') : null) : h('button', { type: 'button', class: 'pj-newrow', onclick: () => { v.rows.push({ id: Math.random().toString(36).slice(2, 8), desc: '', qty: 1, unit: '', price: 0 }); draw(); tbody.querySelector('tr:last-child .desc')?.focus(); } }, '+ Add a line'),
+      h('div', { class: 'pj-it-sums' }, h('div', {}, h('span', {}, 'Tax % ', tax), h('span', {})), h('div', { class: 'pj-it-total' }, h('span', {}, 'Total'), total),
+        inv.paid ? h('div', {}, h('span', {}, 'Paid'), h('b', { class: 'pj-num' }, money2(inv.paid))) : null, inv.paid ? h('div', { class: 'pj-it-total' }, h('span', {}, 'Balance'), h('b', { class: 'pj-num' }, money2(inv.balance))) : null),
+      h('div', { class: 'row2' }, h('label', {}, 'Bill to', name), h('label', {}, 'Their email', email)),
+      h('div', { class: 'row2' }, h('label', {}, 'Due', due), h('span')),
+      h('label', {}, 'Note on the invoice', note),
+      pays.length ? h('div', { class: 'pj-inv-pays' }, h('small', { class: 'hint' }, 'Payments'), pays) : null,
+      h('div', { class: 'btns' },
+        inv.status === 'void' ? null : inv.token ? [act('🔗 Copy customer link', () => { copyText(invUrl(inv)); toast('Link copied'); }, 'primary-btn'), act('Open as the customer sees it', () => open(invUrl(inv), '_blank', 'noopener'))] : act('📨 Send to customer', sendIt, 'primary-btn'),
+        inv.status !== 'void' && inv.balance > 0 ? act('Record a payment', async () => { try { await saveIt(); paymentSheet(inv); } catch (e) { toast(e.message); } }) : null,
+        del),
+      inv.status !== 'void' && !S.payments?.connected ? h('small', { class: 'day-hint' }, 'To take cards on the customer’s page, connect your Stripe account in Settings → Connections.') : null,
+    ].filter(Boolean), inv.status === 'void' ? null : async () => { await saveIt(); toast('Invoice saved'); });
+  }
+  function paymentSheet(inv) {
+    const amount = h('input', { inputmode: 'decimal', value: dollars(inv.balance) });
+    const method = h('select', {}, PAY_METHODS.map(([k, l]) => h('option', { value: k }, l)));
+    const day = h('input', { type: 'date', value: todayKey() });
+    const note = h('input', { placeholder: 'Check #1042' });
+    sheet(`Payment on ${inv.number}`, [h('div', { class: 'row2' }, h('label', {}, 'Amount ($)', amount), h('label', {}, 'How', method)), h('div', { class: 'row2' }, h('label', {}, 'Day', day), h('label', {}, 'Note', note)),
+      h('small', { class: 'day-hint' }, 'It goes into Finance as money in for the business.')], async () => {
+      const y = await api('POST', `/invoices/${inv.id}/payments`, { amount: amount.value, method: method.value, day: day.value, note: note.value });
+      invoiceNews(y);
+      toast(y.status === 'paid' ? `${inv.number} is paid in full` : `${money2(y.balance)} left on ${inv.number}`);
+    }, 'Record payment');
+  }
+  // Settings → Connections: the team's own Stripe account, so customers can pay invoices by card.
+  function paySection() {
+    const sec = h('section', { class: 'pay-sec' }, h('h3', {}, 'Card payments (Stripe)'));
+    const x = S.payments;
+    if (!x) {
+      api('GET', '/payments/stripe').then((y) => { S.payments = y; $('#settings .pay-sec')?.replaceWith(paySection()); }).catch(() => {});
+      return sec.append(h('p', { class: 'day-hint' }, 'Loading…')), sec;
+    }
+    const redo = (y) => { S.payments = y; sec.replaceWith(paySection()); };
+    if (x.connected) {
+      const off = h('button', { class: 'btn small danger', 'data-label': '1' }, 'Disconnect');
+      off.addEventListener('click', () => confirmClick(off, () => api('DELETE', '/payments/stripe').then(redo).catch((e) => toast(e.message))));
+      sec.append(h('p', {}, `✓ Connected to ${x.account}${x.live ? '' : ' (test mode: no real money)'}. Customers can pay your invoices by card; the money goes straight to your Stripe account.`), h('div', { class: 'btns' }, off));
+      return sec;
+    }
+    const key = h('input', { type: 'password', autocomplete: 'off', placeholder: 'sk_live_… or rk_live_…' });
+    sec.append(h('p', { class: 'day-hint' }, 'Let customers pay invoices by card, into your own Stripe account. In Stripe, open Developers → API keys and copy the secret key (or make a restricted key that can write Checkout Sessions and read your account). It’s kept encrypted and only used to make payment pages.'),
+      h('div', { class: 'row-in' }, key, h('button', { class: 'btn primary-btn', onclick: () => api('PUT', '/payments/stripe', { key: key.value }).then((y) => { redo(y); toast('Stripe connected'); }).catch((e) => toast(e.message)) }, 'Connect')));
+    return sec;
   }
 
   // The team's schedule (owners and admins): a row for each person, their job visits across the day, and the
@@ -13409,6 +13572,7 @@
       loadCalendars();
       s.append(aiSection());
       loadAi();
+      if (amAdmin()) s.append(paySection());
       if (amAdmin()) s.append(gcSection());
       if (amAdmin()) s.append(pssSection());
       if (amAdmin()) s.append(intSection());

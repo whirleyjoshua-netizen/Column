@@ -16,6 +16,7 @@ import { fileText, officeKind } from './extract.js';
 import { PdfError, stampPdf, addCertificate, pageCount, writeDoc } from './pdf.js';
 import { routesOn, dayRoute } from './routes.js';
 import { projectsModule } from './projects.js';
+import { invoicesModule } from './invoices.js';
 import { openStore, Fenced } from './store.js';
 import { createMailer } from './mail.js';
 import * as stripe from './stripe.js';
@@ -952,12 +953,15 @@ function syncJob(rec) {
 // A visit booked or done moves the job's stage along, never back: a measure booked → Measure booked; an install or
 // service booked → Scheduled; a measure done → Measured; an install done → Installed; a service done → Done.
 function advanceJob(rec, kind, done) {
+  moveJob(rec, done
+    ? { Measure: 'Measured', Install: 'Installed', Service: 'Done', Repair: 'Done', Maintenance: 'Done', Cleaning: 'Done', Inspection: 'Done', Delivery: 'Done' }[kind]
+    : kind === 'Measure' ? 'Measure booked' : kind === 'Estimate' ? null : 'Scheduled');
+}
+// The job's stage moved forward to the one called `want`, if it has one and isn't past it already.
+function moveJob(rec, want) {
   const j = jobOfRecord(rec);
   const st = j?.t.fields.find((f) => f.key === 'status' && f.type === 'select');
   if (!st) return;
-  const want = done
-    ? { Measure: 'Measured', Install: 'Installed', Service: 'Done', Repair: 'Done', Maintenance: 'Done', Cleaning: 'Done', Inspection: 'Done', Delivery: 'Done' }[kind]
-    : kind === 'Measure' ? 'Measure booked' : kind === 'Estimate' ? null : 'Scheduled';
   const to = want && st.choices.findIndex((c) => c.label.toLowerCase() === want.toLowerCase());
   const at = st.choices.findIndex((c) => c.id === rec.values[st.id]);
   if (to == null || to < 0 || to <= at) return;
@@ -4916,6 +4920,10 @@ async function api(req, res, url) {
       return send(res, 200, { ok: true });
     }
   }
+  {
+    const out = await INV.route(req, res, parts, auth, ws);
+    if (out !== null) return;
+  }
   if (a === 'projects' || a === 'records' || a === 'integrations' || a === 'project-templates') {
     const out = await PJ.route(req, res, parts, auth, ws);
     if (out !== null) return;
@@ -6793,6 +6801,12 @@ async function api(req, res, url) {
       if (!isAdmin(auth)) return send(res, 403, { error: 'Only team owners and admins can change where routes start.' });
       ws.settings.base = cleanText(body.base, 200);
     }
+    // What an hour of work costs the business, for what jobs cost. Kept off the settings everyone sees.
+    if (body.laborRate !== undefined) {
+      if (!isAdmin(auth)) return send(res, 403, { error: 'Only team owners and admins can set the labor rate.' });
+      const n = Math.round(Number(String(body.laborRate ?? '').replace(/[$,\s]/g, '')) * 100);
+      ws.laborRate = Number.isFinite(n) && n > 0 ? Math.min(n, 1e6) : 0;
+    }
     if (body.tz !== undefined) {
       if (!isAdmin(auth)) return send(res, 403, { error: 'Only team owners and admins can change the team’s time zone.' });
       if (!okTz(body.tz)) return send(res, 400, { error: 'Pick a time zone from the list.' });
@@ -7407,7 +7421,7 @@ async function importData(req, res) {
 
 // Projects and the public API (projects.js).
 const PJ = projectsModule({ db, save, broadcast, rid, cleanText, isDay, readJson, send, badRequest, isOwnerId, escHtml, brandOf, logoUrl, teamDay, offline, allowLocalHooks: process.env.ALLOW_LOCAL_WEBHOOKS === '1',
-  onRecordGone: (rec) => dropVisits(rec),
+  onRecordGone: (rec) => { dropVisits(rec); INV.dropFor(rec); },
   // A follow-up from a record's timeline: a task for whoever logged it, about the record.
   makeTask: (ws, auth, { text, due, recordId }) => {
     const t = applyTask({ id: rid(), wsId: ws.id, by: auth.member, createdAt: Date.now(), text: '', done: false, doneAt: null, due: null, priority: 0, goalId: null, assigneeId: null }, { text, due, assigneeId: auth.memberId, recordId });
@@ -7426,6 +7440,18 @@ const PJ = projectsModule({ db, save, broadcast, rid, cleanText, isDay, readJson
     }
     save();
   },
+});
+// Invoices for jobs, and the team's own Stripe account for card payments (invoices.js).
+const INV = invoicesModule({ db, save, broadcast, rid, cleanText, readJson, send, badRequest, escHtml, brandOf, logoUrl, teamDay, offline, seal, unseal, stripeCall: stripe.callWith, PJ, isAdmin, jobOfRecord, jobLabel, moveJob, publicUrl: PUBLIC_URL,
+  // A payment is money in on the business's Finance, under the team's owner.
+  addMoney: (ws, { amount, day, note }) => {
+    const owner = ws.members.find((m) => m.role === 'owner') || ws.members[0];
+    const x = { id: rid(), wsId: ws.id, memberId: owner.id, by: 'Kloomie', createdAt: Date.now(), kind: 'in', amount, day, category: 'Client payment', note: cleanText(note, 200), scope: 'business', campaignId: null, goalId: null, billId: null };
+    db.money[x.id] = x;
+    moneyNews(x);
+    return x.id;
+  },
+  dropMoneyId: (id) => { if (db.money[id]) dropMoney(db.money[id]); },
 });
 
 // Addresses the app used to live at (OLD_HOSTS, comma-separated) send people on to PUBLIC_URL, so links
@@ -7506,6 +7532,8 @@ const server = http.createServer(async (req, res) => {
   if (url.pathname.startsWith('/s/') && (req.method === 'GET' || req.method === 'HEAD')) return serveShare(req, res, url);
   // A quote sent to a customer: they read it and accept or decline.
   if (url.pathname.startsWith('/q/') && (req.method === 'GET' || req.method === 'POST')) return PJ.quotePage(req, res, url);
+  // An invoice sent to a customer: they read it and pay it by card.
+  if (url.pathname.startsWith('/i/') && (req.method === 'GET' || req.method === 'POST')) return INV.page(req, res, url);
   if (url.pathname.startsWith('/sign/') && req.method === 'GET') {
     // The signing page; the token in the address stays out of other sites' logs and search results.
     res.setHeader('Referrer-Policy', 'no-referrer');

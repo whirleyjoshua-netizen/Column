@@ -204,6 +204,7 @@ export function tradeType(key) {
       { key: 'crew', name: 'Assigned to', type: 'person' },
       { key: 'value', name: 'Value', type: 'money' },
       { key: 'access', name: 'Access notes', type: 'text', hint: 'Gate code, lockbox, pets, parking' },
+      { key: 'price', name: 'Price', type: 'items' },
       ...tr.fields.map(spec),
       { key: 'checklist', name: 'Checklist', type: 'checklist', list: tr.checklist },
       { key: 'before', name: 'Before photos', type: 'files' },

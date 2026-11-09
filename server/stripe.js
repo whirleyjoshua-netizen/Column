@@ -16,10 +16,12 @@ function form(obj, prefix = '', out = new URLSearchParams()) {
   return out;
 }
 
-export async function call(method, path, body) {
+export const call = (method, path, body) => callWith(env('STRIPE_SECRET_KEY'), method, path, body);
+// The same call with another key: a team's own Stripe account, for the invoices it sends its customers.
+export async function callWith(key, method, path, body) {
   const res = await fetch((env('STRIPE_API') || 'https://api.stripe.com') + '/v1' + path, {
     method,
-    headers: { Authorization: 'Bearer ' + env('STRIPE_SECRET_KEY'), ...(body ? { 'Content-Type': 'application/x-www-form-urlencoded' } : {}), 'Stripe-Version': '2024-06-20' },
+    headers: { Authorization: 'Bearer ' + key, ...(body ? { 'Content-Type': 'application/x-www-form-urlencoded' } : {}), 'Stripe-Version': '2024-06-20' },
     body: body ? form(body) : undefined,
     signal: AbortSignal.timeout(20_000),
   });
