@@ -156,6 +156,8 @@ body.platform-darwin .bar { padding-left: 76px; }
 .thumb .play { position: absolute; inset: 0; display: grid; place-items: center; color: #fff; text-shadow: 0 1px 4px #000; font-size: 14px; }
 .card.big { flex-direction: column; align-items: stretch; padding: 6px; gap: 6px; }
 .card.big .thumb { width: 100%; height: auto; aspect-ratio: 16 / 10; max-height: 220px; }
+/* The whole picture, not a thin strip of it, however wide the column is. */
+.card.big .thumb img, .card.big .thumb video { position: absolute; inset: 0; object-fit: contain; }
 .card.big .meta { padding: 0 4px 2px; }
 .meta { flex: 1; min-width: 0; }
 .name { font-weight: 550; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

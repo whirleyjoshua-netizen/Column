@@ -7247,7 +7247,7 @@ const SITE_URL = SITE_HOST ? 'https://' + SITE_HOST : PUBLIC_URL;
 function serveSite(req, res) {
   fs.readFile(path.join(CLIENT_DIR, 'site.html'), 'utf8', (err, html) => {
     if (err) return send(res, 404, 'Not found');
-    send(res, 200, html.replaceAll('{{APP}}', PUBLIC_URL).replaceAll('{{SITE}}', SITE_URL), { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache', 'Content-Security-Policy': "script-src 'none'; object-src 'none'; base-uri 'none'" });
+    send(res, 200, html.replaceAll('{{APP}}', PUBLIC_URL).replaceAll('{{SITE}}', SITE_URL), { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache', 'Content-Security-Policy': "script-src 'self'; object-src 'none'; base-uri 'none'" });
   });
 }
 // Search engines: the website is indexed; the app's address is not (its pages are sign-in screens and private links).

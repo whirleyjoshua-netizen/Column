@@ -148,6 +148,11 @@
     /* ---------- sections ---------- */
     section.block { padding: 104px 0; scroll-margin-top: 52px; }
     section.demo { padding-top: 40px; }
+    .vid-tabs { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin: 0 auto 18px; max-width: 900px; }
+    .vid-tabs button { font: inherit; font-size: 14px; font-weight: 600; color: var(--muted); background: var(--soft); border: 1px solid var(--line); border-radius: 999px; padding: 8px 15px; cursor: pointer; transition: color .15s, background .15s, border-color .15s; }
+    .vid-tabs button:hover { color: var(--text); border-color: var(--line2); }
+    .vid-tabs button[aria-selected="true"] { color: #fff; background: var(--accent); border-color: var(--accent); }
+    .vid-note { color: var(--muted); margin: 14px auto 0; max-width: 640px; }
     .demo video { display: block; width: 100%; max-width: 1100px; height: auto; margin: 0 auto; border-radius: 16px; border: 1px solid var(--line); box-shadow: 0 30px 70px -30px rgba(40, 20, 120, .45); background: #0d0c14; }
     section.alt { background: var(--soft); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
     .kicker { font-size: 13px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--accent-ink); margin: 0 0 12px; }
@@ -283,12 +288,23 @@
     <section class="block demo center" id="demo" aria-labelledby="demo-h">
       <div class="wrap">
         <p class="kicker">See it in action</p>
-        <h2 id="demo-h">Plan a campaign, hand off the work, see how it’s going</h2>
-        <p class="intro">Two minutes on campaigns: Sidekick drafts the plan, roles share out the work, steps hand off to whoever’s next, and you see what needs you.</p>
-        <video controls preload="none" playsinline width="1280" height="800" poster="/walkthrough-poster.jpg">
+        <h2 id="demo-h">See how Kloomie works</h2>
+        <p class="intro">A minute or two on each part of the app, from planning your day to getting a contract signed.</p>
+        <div class="vid-tabs" role="tablist" aria-label="Videos">
+          <button type="button" role="tab" aria-selected="true" data-v="campaigns" data-src="/walkthrough.mp4" data-poster="/walkthrough-poster.jpg" data-note="Plan a campaign with Sidekick, share out the work by role, and see how it’s going.">Campaigns</button>
+          <button type="button" role="tab" aria-selected="false" data-v="day" data-src="/videos/day.mp4" data-poster="/videos/day.jpg" data-note="Your schedule and to-do list, typed the way you’d say it.">Day & tasks</button>
+          <button type="button" role="tab" aria-selected="false" data-v="stacks" data-src="/videos/stacks.mp4" data-poster="/videos/stacks.jpg" data-note="Drop in files, notes and links, and find them on every device.">Stacks</button>
+          <button type="button" role="tab" aria-selected="false" data-v="chat" data-src="/videos/chat.mp4" data-poster="/videos/chat.jpg" data-note="Feeds, threads and mentions, right next to the work.">Chat</button>
+          <button type="button" role="tab" aria-selected="false" data-v="contacts" data-src="/videos/contacts.mp4" data-poster="/videos/contacts.jpg" data-note="One shared list of everyone you work with.">Contacts</button>
+          <button type="button" role="tab" aria-selected="false" data-v="docs" data-src="/videos/docs.mp4" data-poster="/videos/docs.jpg" data-note="Write together, let AI draft, and keep live numbers in the page.">Docs</button>
+          <button type="button" role="tab" aria-selected="false" data-v="finance" data-src="/videos/finance.mp4" data-poster="/videos/finance.jpg" data-note="Money in and out, bank statements, budgets and bills.">Finance</button>
+          <button type="button" role="tab" aria-selected="false" data-v="automations" data-src="/videos/automations.mp4" data-poster="/videos/automations.jpg" data-note="When this happens, do that, every time.">Automations</button>
+        </div>
+        <video id="demoVideo" controls preload="none" playsinline width="1280" height="800" poster="/walkthrough-poster.jpg">
           <source src="/walkthrough.mp4" type="video/mp4">
-          <a href="/walkthrough.mp4">Watch the walkthrough (MP4, 2 minutes)</a>
+          <a href="/walkthrough.mp4">Watch the walkthrough (MP4)</a>
         </video>
+        <p class="vid-note" id="demoNote">Plan a campaign with Sidekick, share out the work by role, and see how it’s going.</p>
       </div>
     </section>
 
@@ -417,5 +433,6 @@
       <a href="mailto:hello@kloomie.com">hello@kloomie.com</a>
     </div>
   </footer>
+  <script src="/videos.js" defer></script>
 </body>
 </html>
