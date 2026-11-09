@@ -6160,7 +6160,8 @@
     wrap.append(h('div', { class: 'sheet' },
       h('h2', {}, title, h('button', { class: 'icon-btn', html: I.close, 'aria-label': 'Close', onclick: closeSheet })),
       ...body, err,
-      h('div', { class: 'btns' }, h('span', { style: 'flex:1' }), h('button', { class: 'btn primary-btn', onclick: save }, saveLabel))));
+      // A sheet that only shows something (or has its own buttons) has no Save.
+      onSave ? h('div', { class: 'btns' }, h('span', { style: 'flex:1' }), h('button', { class: 'btn primary-btn', onclick: save }, saveLabel)) : null));
     wrap.classList.remove('hidden');
     wrap.querySelector('input, textarea')?.focus();
   }
@@ -7155,6 +7156,7 @@
       field('note', 'Note', { rows: 3 }),
       h('label', { class: 'pick' }, dne, 'Do not contact', h('small', {}, ' Never emailed, and left off call lists’ email.')),
       x?.extDne ? h('p', { class: 'day-hint' }, 'Unsubscribed in PSS too.') : null,
+      x && toolOn('projects') ? contactJobs(x) : null,
       del ? h('div', { class: 'btns' }, del) : null,
     ].filter(Boolean), async () => {
       const body = Object.fromEntries(Object.entries(f).filter(([, el]) => !el.disabled).map(([k, el]) => [k, el.value]));
@@ -7295,7 +7297,7 @@
       { head: 'Tools' },
       toolOn('sidekick') ? { label: h('span', { class: 'tool-item' }, '✦ Sidekick', skNudges().length ? h('small', {}, `${skNudges().length} need${skNudges().length === 1 ? 's' : ''} a look`) : null), on: toolOpen === 'sidekick', run: () => { SK.open = null; openTool('sidekick'); } } : null,
       toolOn('docs') ? { label: 'Docs', on: toolOpen === 'docs', run: () => openTool('docs') } : null,
-      toolOn('projects') ? { label: 'Projects', run: showProjects } : null,
+      toolOn('projects') ? { label: 'Jobs & projects', run: showProjects } : null,
       toolOn('bills') ? { label: h('span', { class: 'tool-item' }, 'Finance', soon || tight ? h('small', {}, [soon ? `${soon} due soon` : '', tight ? `${tight} budget${tight === 1 ? '' : 's'} nearly used` : ''].filter(Boolean).join(' · ')) : null), on: toolOpen === 'bills', run: () => openTool('bills') } : null,
       toolOn('contacts') && amAdmin() ? { label: 'Contacts', on: toolOpen === 'contacts', run: () => openTool('contacts') } : null,
       toolOn('email') && mayEmail() ? { label: h('span', { class: 'tool-item' }, 'Email', (S.mail?.sends || []).some((x) => x.status === 'sending') ? h('small', {}, 'sending…') : null), on: toolOpen === 'email', run: () => openTool('email') } : null,
@@ -7496,8 +7498,8 @@
   const recById = (pid, id) => prRecs(pid).find((r) => r.id === id);
   const recName = (t, r) => String(r?.values[t.primary] ?? '').trim() || 'Untitled';
   const PF_COLOR = { gray: '#8b8b98', blue: '#4ea1ff', green: '#3ddc97', amber: '#ffb547', rose: '#ff6b8b', violet: '#8b7cff', teal: '#2dd4bf' };
-  const PF_IC = { text: 'Aa', number: '#', money: '$', date: '📅', select: '◉', multi: '☰', person: '👤', email: '@', phone: '☏', url: '🔗', checkbox: '☑', link: '↗', items: '🧾', autonumber: '№', files: '📎' };
-  const PF_NAME = { text: 'Text', number: 'Number', money: 'Money', date: 'Date', select: 'Options (one)', multi: 'Options (many)', person: 'Person', email: 'Email', phone: 'Phone', url: 'Web link', checkbox: 'Checkbox', link: 'Link to another list', items: 'Line items (quote, estimate)', autonumber: 'Auto number', files: 'Files' };
+  const PF_IC = { text: 'Aa', number: '#', money: '$', date: '📅', select: '◉', multi: '☰', person: '👤', email: '@', phone: '☏', url: '🔗', checkbox: '☑', link: '↗', items: '🧾', autonumber: '№', files: '📎', contact: '👤', checklist: '☑', measure: '📏', equipment: '⚙', materials: '🧱', readings: '📈', signature: '✍', permit: '📋' };
+  const PF_NAME = { text: 'Text', number: 'Number', money: 'Money', date: 'Date', select: 'Options (one)', multi: 'Options (many)', person: 'Person', email: 'Email', phone: 'Phone', url: 'Web link', checkbox: 'Checkbox', link: 'Link to another list', items: 'Line items (quote, estimate)', autonumber: 'Auto number', files: 'Files', contact: 'Customer (from Contacts)', checklist: 'Checklist', measure: 'Measurements', equipment: 'Equipment', materials: 'Materials and parts', readings: 'Readings', signature: 'Sign-off (signature)', permit: 'Permit' };
   const prCall = async (method, path, body) => {
     try {
       return await api(method, path, body);
@@ -7557,25 +7559,31 @@
     if (!p) PR.open = null;
     const keep = $('#projects .pj-body');
     const at = keep ? [keep.scrollLeft, keep.scrollTop] : null;
+    // The open record keeps its place too, so ticking a step or saving a field doesn't jump back to the top.
+    const panel = $('#projects .pj-panel');
+    const panelAt = panel ? [panel.dataset.id, panel.scrollTop] : null;
     root.replaceChildren(...(p ? projectView(p) : projectsHome()).filter(Boolean));
     const now = $('#projects .pj-body');
     if (now && at) [now.scrollLeft, now.scrollTop] = at;
+    const pNow = $('#projects .pj-panel');
+    if (pNow && panelAt && pNow.dataset.id === panelAt[0]) pNow.scrollTop = panelAt[1];
   }
   function projectsHome() {
     const list = [...(S.projects || [])].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
     return [
-      h('div', { class: 'pj-head' }, h('button', { class: 'icon-btn', 'aria-label': 'Close Projects', html: I.close, onclick: closeProjects }), h('h2', {}, 'Projects'), h('span', { style: 'flex:1' }), h('button', { class: 'btn primary-btn', onclick: newProjectSheet }, '+ New project')),
+      h('div', { class: 'pj-head' }, h('button', { class: 'icon-btn', 'aria-label': 'Close Projects', html: I.close, onclick: closeProjects }), h('h2', {}, 'Jobs & projects'), h('span', { style: 'flex:1' }), h('button', { class: 'btn primary-btn', onclick: newProjectSheet }, '+ New project')),
       list.length ? h('div', { class: 'pj-grid' }, list.map((p) => h('button', { class: 'pj-card', onclick: () => openProject(p.id) },
         h('span', { class: 'pj-ic' }, p.icon || '📁'),
         h('b', {}, p.name, p.private ? h('small', { title: 'Private' }, ' 🔒') : null),
         h('small', {}, p.types.map((t) => (PR.records.has(p.id) ? `${prRecs(p.id).filter((r) => r.typeId === t.id).length} ${t.name.toLowerCase()}` : t.name)).join(' · ')))))
-        : h('div', { class: 'pj-empty' }, h('p', {}, 'Keep track of customers and deals, bids and quotes, jobs, vendors: anything with a list of records and stages.'), h('button', { class: 'btn primary-btn', onclick: newProjectSheet }, 'Start a project')),
+        : h('div', { class: 'pj-empty' }, h('p', {}, 'Jobs for every kind of work you do, with the details, checklist and stages that trade needs. Or keep track of deals, bids and quotes, vendors: anything with a list of records and stages.'),
+          h('div', { class: 'btns' }, h('button', { class: 'btn primary-btn', onclick: () => tradePicker('What kind of work do you do?', async (keys) => { const p = await newJobsProject(keys); if (p) openProject(p.id); }) }, 'Set up Jobs'), h('button', { class: 'btn', onclick: newProjectSheet }, 'Another kind of project'))),
     ];
   }
   function newProjectSheet() {
     let tpl = 'crm';
     const name = h('input', { placeholder: 'Sales', maxlength: 80 });
-    const TPL = { crm: ['🤝', 'CRM', 'Contacts, companies and deals, with a pipeline board'], bids: ['📐', 'Bids & Quotes', 'Jobs you bid on, quotes customers accept online, jobs, clients, a price list'], jobs: ['🛠️', 'Jobs & Installs', 'Jobs from scheduled to paid, with crews, dates and photos'], blank: ['📁', 'Blank', 'One list to shape as you like'] };
+    const TPL = { crm: ['🤝', 'CRM', 'Contacts, companies and deals, with a pipeline board'], bids: ['📐', 'Bids & Quotes', 'Jobs you bid on, quotes customers accept online, jobs, clients, a price list'], trades: ['🛠️', 'Jobs (by trade)', 'Pick the kinds of work you do: each gets its own job details, checklist and stages'], blank: ['📁', 'Blank', 'One list to shape as you like'] };
     api('GET', '/project-templates').then((list) => {
       for (const x of list) TPL['custom:' + x.id] = ['⭐', x.name, x.about || x.lists.join(', '), x];
       if (list.length) draw();
@@ -7586,6 +7594,8 @@
     draw();
     const priv = h('input', { type: 'checkbox' });
     sheet('New project', [h('label', {}, 'Name', name), h('div', {}, h('small', { class: 'hint' }, 'Start from'), pick), h('label', { class: 'pick' }, priv, 'Private: only me and people I add')], async () => {
+      // Jobs ask what kind of work, then set up a list for each.
+      if (tpl === 'trades') return setTimeout(() => tradePicker('What kind of work do you do?', async (keys) => { const p = await newJobsProject(keys); if (p) openProject(p.id); }), 0);
       const p = await api('POST', '/projects', { template: tpl, name: name.value.trim() || TPL[tpl][1], private: priv.checked });
       prUpsertProject(p);
       PR.records.set(p.id, []);
@@ -7668,6 +7678,14 @@
     if (f.type === 'link') { const to = prType(p, f.target); return v.map((id) => recName(to, recById(p.id, id))).join(', '); }
     if (f.type === 'items') return money(itemsTotals(v).total);
     if (f.type === 'files') return v.map((id) => S.items.find((x) => x.id === id)?.name).filter(Boolean).join(', ');
+    if (f.type === 'contact') { const c = custOf(v); return c ? c.name || c.company || '' : ''; }
+    if (f.type === 'checklist') return `${v.items.filter((x) => x.done).length}/${v.items.length}`;
+    if (f.type === 'measure') return measureText(f, v);
+    if (f.type === 'equipment') return v.rows.map((x) => [x.brand, x.model, x.serial].filter(Boolean).join(' ')).join(', ');
+    if (f.type === 'materials') return v.rows.map((x) => x.item).join(', ');
+    if (f.type === 'readings') return v.rows.filter((x) => x.value !== '').map((x) => `${x.label} ${x.value}${x.unit ? ' ' + x.unit : ''}`).join(', ');
+    if (f.type === 'signature') return 'Signed by ' + v.name;
+    if (f.type === 'permit') return [v.status, v.number].filter(Boolean).join(' · ');
     return String(v);
   }
   const pjChip = (c) => h('span', { class: 'pj-chip', style: `--c:${PF_COLOR[c.color] || PF_COLOR.gray}` }, c.label);
@@ -7688,6 +7706,11 @@
     if (f.type === 'items') { const tt = itemsTotals(v); return h('span', { class: 'pj-num', title: `${v.rows.length} line${v.rows.length === 1 ? '' : 's'}${tt.cost != null ? ` · margin ${tt.marginPct}%` : ''}` }, money(tt.total)); }
     if (f.type === 'autonumber') return h('span', { class: 'pj-num pj-auto' }, v);
     if (f.type === 'files') return v.map((id) => S.items.find((x) => x.id === id)).filter(Boolean).map((it) => h('button', { class: 'pj-link', onclick: (e) => { e.stopPropagation(); openPreview(it); } }, '📎 ' + shortText(it.name, 28)));
+    if (f.type === 'checklist') { const done = v.items.filter((x) => x.done).length; return h('span', { class: 'pj-clmini', title: `${done} of ${v.items.length} done` }, h('span', { class: 'pj-cl-bar' }, h('i', { style: `width:${v.items.length ? Math.round((done / v.items.length) * 100) : 0}%` })), h('small', {}, `${done}/${v.items.length}`)); }
+    if (f.type === 'materials') { const c = materialsCost(v); return h('span', { class: 'pj-num' }, `${v.rows.length} item${v.rows.length === 1 ? '' : 's'}${c ? ' · ' + money(c) : ''}`); }
+    if (f.type === 'signature') return h('span', { class: 'pj-chip', style: `--c:${PF_COLOR.green}` }, '✓ Signed');
+    if (f.type === 'permit') { const tone = { Approved: 'blue', 'Inspection booked': 'violet', Passed: 'green', Failed: 'rose', Applied: 'amber' }[v.status] || 'gray'; return pjChip({ label: v.status + (v.number ? ' · #' + v.number : ''), color: tone }); }
+    if (f.type === 'contact' || f.type === 'measure' || f.type === 'equipment' || f.type === 'readings') return prText(p, f, v) || null;
     return String(v);
   }
   async function prSet(p, r, f, value) {
@@ -7702,6 +7725,9 @@
     if (f.type === 'checkbox') return set(!v);
     if (f.type === 'autonumber') return toast('Kloomie numbers these itself.');
     if (f.type === 'items') { PR.panel = r.id; return renderProjects(); }
+    if (f.type === 'contact') return pickContact((x) => set(x.id));
+    // Job fields with more to them open in the job's panel, at that block.
+    if (PR_RICH.includes(f.type)) { PR.panel = r.id; renderProjects(); return setTimeout(() => $(`#projects .pj-panel [data-field="${f.id}"]`)?.scrollIntoView({ block: 'start', behavior: 'smooth' }), 50); }
     if (f.type === 'files') {
       const pick = h('input', { type: 'file', multiple: true, class: 'hidden' });
       pick.addEventListener('change', async () => {
@@ -7796,7 +7822,7 @@
       await prSchema(p, { op: 'addField', typeId: t.id, name: name.value, type: type.value, choices: opts.value.split('\n').map((x) => x.trim()).filter(Boolean), target: target.value, many: many.checked, prefix: prefix.value, start: start.value });
     }, 'Add field');
   }
-  const PF_TYPES = ['text', 'select', 'multi', 'number', 'money', 'date', 'person', 'email', 'phone', 'url', 'checkbox', 'link', 'items', 'autonumber', 'files'];
+  const PF_TYPES = ['text', 'select', 'multi', 'number', 'money', 'date', 'person', 'email', 'phone', 'url', 'checkbox', 'link', 'items', 'autonumber', 'files', 'contact', 'checklist', 'measure', 'equipment', 'materials', 'readings', 'signature', 'permit'];
   function prAddType(p) {
     const name = h('input', { placeholder: 'Jobs' });
     sheet('Add a list', [h('label', {}, 'Name', name), h('p', { class: 'day-hint' }, 'A new kind of record in this project, like Jobs or Vendors. It starts with a Name field; add more after.')], async () => {
@@ -7935,8 +7961,10 @@
       await prCall('PATCH', '/records/' + r.id, { docId: it.id }).then((y) => y && prUpsertRecord(y));
       openDoc(it, { fresh: false });
     };
-    const fields = t.fields.filter((f) => f.id !== t.primary && f.type !== 'items');
+    const fields = t.fields.filter((f) => f.id !== t.primary && f.type !== 'items' && f.type !== 'contact' && !PR_RICH.includes(f.type));
     const itemFields = t.fields.filter((f) => f.type === 'items');
+    const custFields = t.fields.filter((f) => f.type === 'contact');
+    const richFields = t.fields.filter((f) => PR_RICH.includes(f.type) && !f.hidden);
     const fieldRow = (f) => {
       const val = h('div', { class: 'pj-cell' }, prShow(p, f, r.values[f.id]) ?? (f.type === 'checkbox' ? h('span', { class: 'pj-check' }) : h('span', { class: 'pj-empty-v' }, 'Empty')));
       val.addEventListener('click', (e) => { if (e.target.closest('a, .pj-link')) return; prEdit(val, p, t, r, f); });
@@ -7944,15 +7972,17 @@
     };
     // On a quote or estimate the lines come first, under who it's for and where it stands.
     const top = itemFields.length ? fields.filter((f) => ['client', 'status', 'number'].includes(f.key)) : [];
-    return h('aside', { class: 'pj-panel' + (itemFields.length ? ' wide' : '') },
+    return h('aside', { class: 'pj-panel' + (itemFields.length || richFields.length ? ' wide' : ''), 'data-id': r.id },
       h('div', { class: 'pj-panel-h' }, h('small', {}, `${t.icon || ''} ${t.singular || t.name}`), h('span', { style: 'flex:1' }),
         h('button', { class: 'icon-btn', 'aria-label': 'Record options', html: I.more, onclick: (e) => openMenu(e.currentTarget, [{ label: `Delete this ${(t.singular || 'record').toLowerCase()}`, danger: true, run: async () => { if (await prCall('DELETE', '/records/' + r.id)) { PR.records.set(p.id, prRecs(p.id).filter((x) => x.id !== r.id)); PR.panel = null; renderProjects(); } } }]) }),
         h('button', { class: 'icon-btn', 'aria-label': 'Close', html: I.close, onclick: () => { PR.panel = null; renderProjects(); } })),
       title,
+      ...custFields.map((f) => prCustomer(p, t, r, f)),
       itemFields.length ? quoteActions(p, t, r) : null,
       top.length ? h('div', { class: 'pj-fields' }, top.map(fieldRow)) : null,
       ...itemFields.map((f) => prItems(p, t, r, f)),
       h('div', { class: 'pj-fields' }, fields.filter((f) => !top.includes(f)).map(fieldRow)),
+      ...richFields.map((f) => prRichBlock(p, t, r, f)),
       prActivity(p, t, r),
       ...back.map(({ o, f, from }) => h('div', { class: 'pj-back' }, h('h4', {}, `${o.name} · ${f.name}`), from.map((x) => h('button', { class: 'pj-link', onclick: () => { PR.type = o.id; PR.view = null; PR.panel = x.id; renderProjects(); } }, recName(o, x), o.fields.find((y) => y.type === 'money') && x.values[o.fields.find((y) => y.type === 'money').id] ? h('small', {}, ' · ' + money(x.values[o.fields.find((y) => y.type === 'money').id])) : null)))),
       h('button', { class: 'btn pj-notes', onclick: notes }, doc ? `📄 Notes · ${docSnippet(doc) ? shortText(docSnippet(doc), 50) : 'open'}` : '📄 Add notes (a doc)'),
@@ -8245,7 +8275,8 @@
   const READY = [['jobs', '🛠️ Jobs', 'Scheduled to paid, with crews and dates'], ['clients', '🏢 Clients', 'Who you work for'], ['contacts', '👤 Contacts', 'People, with stage and source'], ['deals', '💰 Deals', 'A pipeline with values'], ['companies', '🏢 Companies', 'Businesses'], ['quotes', '🧾 Quotes', 'Numbered quotes customers accept online'], ['bids', '📐 Bids', 'Jobs you bid on'], ['price_list', '🏷️ Price list', 'Your items and prices']];
   function prReadyMenu(anchor, p) {
     const left = READY.filter(([k]) => !p.types.some((t) => t.key === k));
-    openMenu(anchor, [{ head: 'Add a ready-made list' }, ...left.map(([k, label, sub]) => ({ label: h('span', { class: 'tool-item' }, label, h('small', {}, sub)), run: async () => { const made = await prSchema(p, { op: 'addTypeFrom', key: k }); if (made) { PR.type = made.id; PR.view = null; renderProjects(); } } })), { label: 'A blank list…', run: () => prAddType(p) }]);
+    const trades = p.types.filter((t) => t.trade).map((t) => t.trade);
+    openMenu(anchor, [{ label: h('span', { class: 'tool-item' }, '🛠️ Another kind of job', h('small', {}, 'A trade, with its own details, checklist and stages')), run: () => tradePicker('Add kinds of work', async (keys) => { let made = null; for (const k of keys) made = (await prSchema(p, { op: 'addTypeFrom', key: 'trade_' + k })) || made; if (made) { PR.type = made.id; PR.view = null; renderProjects(); } }, { except: trades, button: 'Add' }) }, { head: 'Add a ready-made list' }, ...left.map(([k, label, sub]) => ({ label: h('span', { class: 'tool-item' }, label, h('small', {}, sub)), run: async () => { const made = await prSchema(p, { op: 'addTypeFrom', key: k }); if (made) { PR.type = made.id; PR.view = null; renderProjects(); } } })), { label: 'A blank list…', run: () => prAddType(p) }]);
   }
   function prSaveTemplate(p) {
     const name = h('input', { value: p.name });
@@ -8476,6 +8507,258 @@
   // Every note is a doc. It opens over the app, saves as you type, and stays in step with anyone else who has
   // it open: each save sends only the blocks that changed, and their changes land under yours. When two people
   // change the same block, the later one wins and the other is told. Export makes a Word file or a PDF next to it.
+  // ----- jobs: trades, the customer, and the work on site -----
+  // A Jobs project has a list for each kind of work the team does (server: trades.js). A job points at a customer
+  // in Contacts, and carries what gets done and found on site: a checklist, measurements, equipment, materials,
+  // readings, a permit and the customer's sign-off. These show as blocks in the job's panel.
+  // A customer's name and how to reach them: from Contacts when this person can open it, else from the jobs that carry it.
+  function custOf(id) {
+    const c = (S.contacts || []).find((x) => x.id === id);
+    if (c) return c;
+    for (const list of PR.records.values()) for (const r of list) if (r.people?.[id]) return r.people[id];
+    return null;
+  }
+  const PR_RICH = ['checklist', 'measure', 'equipment', 'materials', 'readings', 'signature', 'permit'];
+  const PERMIT_STATUS = ['Not needed', 'To apply', 'Applied', 'Approved', 'Inspection booked', 'Passed', 'Failed'];
+  const sqFeet = (f, rows) => {
+    const area = rows.reduce((n, r) => n + (r.w || 0) * (r.h || 0) * (r.qty || 1), 0);
+    return f.unit === 'in' ? area / 144 : f.unit === 'cm' ? area / 10000 : area;
+  };
+  const sqUnit = (f) => (f.unit === 'in' || f.unit === 'ft' ? 'sq ft' : 'sq m');
+  function measureText(f, v) {
+    const rows = v?.rows || [];
+    if (f.mode === 'length') return `${rows.length} run${rows.length === 1 ? '' : 's'} · ${Math.round(rows.reduce((n, r) => n + (r.w || 0) * (r.qty || 1), 0) * 10) / 10} ${f.unit}`;
+    if (f.mode === 'area') return `${rows.length} area${rows.length === 1 ? '' : 's'} · ${Math.round(sqFeet(f, rows)).toLocaleString()} ${sqUnit(f)}`;
+    const n = rows.reduce((a, r) => a + (r.qty || 1), 0);
+    return `${n} opening${n === 1 ? '' : 's'}`;
+  }
+  const materialsCost = (v) => (v?.rows || []).reduce((n, r) => n + Math.round((r.qty || 0) * (r.cost || 0)), 0);
+  // Saves a job field a moment after the last change, without redrawing, so typing isn't interrupted.
+  function prSaver(r, f) {
+    let timer = null;
+    let saving = null;
+    const write = async (val) => {
+      const y = await prCall('PATCH', '/records/' + r.id, { values: { [f.id]: val } });
+      if (y) { prUpsertRecord(y); r.values = y.values; }
+    };
+    const soon = (get) => { clearTimeout(timer); timer = setTimeout(() => { timer = null; saving = write(get()); }, 600); };
+    (PR.flush ||= new Map()).set(r.id + f.id, async () => { await saving; });
+    return { soon, now: (val) => { clearTimeout(timer); return (saving = write(val)); } };
+  }
+  const prBlock = (f, right, ...body) => h('div', { class: 'pj-items pj-job-blk', 'data-field': f.id }, h('div', { class: 'pj-it-h' }, h('b', {}, PF_IC[f.type], ' ', f.name), h('span', { style: 'flex:1' }), right || null), ...body);
+
+  // The customer: who they are and how to reach them, with directions to the job's address.
+  function prCustomer(p, t, r, f) {
+    const id = r.values[f.id];
+    const c = id && (r.people?.[id] || (S.contacts || []).find((x) => x.id === id));
+    const af = t.fields.find((x) => x.key === 'address');
+    const where = (af && r.values[af.id]) || (c ? [c.address, c.city].filter(Boolean).join(', ') : '');
+    const change = h('button', { class: 'linkish', onclick: () => pickContact((x) => prSet(p, r, f, x.id)) }, c ? 'Change' : 'Pick a customer');
+    if (!c) return h('div', { class: 'pj-cust empty' }, h('span', { class: 'pj-fic' }, '👤'), h('span', {}, f.name), change);
+    return h('div', { class: 'pj-cust' },
+      h('div', { class: 'pj-cust-h' }, h('b', {}, c.name || c.company || 'Customer'), c.company && c.name ? h('small', {}, c.company) : null, h('span', { style: 'flex:1' }), change),
+      h('div', { class: 'pj-cust-ways' },
+        c.phone ? h('a', { class: 'btn small', href: 'tel:' + String(c.phone).replace(/[^\d+]/g, '') }, '☏ ' + c.phone) : null,
+        c.phone ? h('a', { class: 'btn small', href: 'sms:' + String(c.phone).replace(/[^\d+]/g, '') }, 'Text') : null,
+        c.email ? h('a', { class: 'btn small', href: 'mailto:' + c.email }, '✉ Email') : null,
+        where ? h('a', { class: 'btn small', target: '_blank', rel: 'noopener', href: /iPhone|iPad|Macintosh/.test(navigator.userAgent) ? `https://maps.apple.com/?daddr=${encodeURIComponent(where)}` : `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(where)}` }, '➤ Directions') : null),
+      where ? h('small', { class: 'pj-cust-at' }, where) : null);
+  }
+  // Pick someone from Contacts, or add them there.
+  async function pickContact(done) {
+    if (!S.contacts) S.contacts = (await api('GET', '/contacts').catch(() => null))?.contacts || null;
+    if (!S.contacts) return toast('Only owners and admins can pick from Contacts. Ask one to set the customer.');
+    const q = h('input', { type: 'search', placeholder: 'Search name, company, phone, address', 'aria-label': 'Search contacts' });
+    const list = h('div', { class: 'pj-pick' });
+    const draw = () => {
+      const n = q.value.trim().toLowerCase();
+      const hits = S.contacts.filter((x) => !n || [x.name, x.company, x.phone, x.email, x.address, x.city].some((v) => (v || '').toLowerCase().includes(n))).slice(0, 40);
+      list.replaceChildren(...hits.map((x) => h('button', { type: 'button', class: 'pj-pick-row', onclick: () => { closeSheet(); done(x); } }, h('b', {}, contactName(x)), h('small', {}, [x.company !== contactName(x) ? x.company : '', x.phone, [x.address, x.city].filter(Boolean).join(', ')].filter(Boolean).join(' · ')))),
+        h('button', { type: 'button', class: 'pj-pick-row new', onclick: () => newContactFor(q.value, done) }, `+ New contact${q.value.trim() ? ` “${q.value.trim()}”` : ''}`));
+    };
+    q.addEventListener('input', draw);
+    draw();
+    sheet('Customer', [q, list]);
+    setTimeout(() => q.focus(), 50);
+  }
+  function newContactFor(name, done) {
+    const f = { name: h('input', { value: name.trim(), placeholder: 'Pat Lee' }), phone: h('input', { type: 'tel' }), email: h('input', { type: 'email' }), address: h('input'), city: h('input') };
+    sheet('New contact', [h('label', {}, 'Name', f.name), h('div', { class: 'row2' }, h('label', {}, 'Phone', f.phone), h('label', {}, 'Email', f.email)), h('div', { class: 'row2' }, h('label', {}, 'Address', f.address), h('label', {}, 'City', f.city))], async () => {
+      const y = await api('POST', '/contacts', Object.fromEntries(Object.entries(f).map(([k, el]) => [k, el.value])));
+      S.contacts = [...(S.contacts || []).filter((z) => z.id !== y.id), y];
+      done(y);
+    }, 'Add');
+  }
+
+  // What gets done on site, ticked off as it happens.
+  function prChecklist(p, t, r, f) {
+    const v = JSON.parse(JSON.stringify(r.values[f.id] || { items: [] }));
+    const sv = prSaver(r, f);
+    const box = h('div', { class: 'pj-cl' });
+    const bar = h('i');
+    const count = h('small', { class: 'pj-cl-n' });
+    const draw = () => {
+      const done = v.items.filter((x) => x.done).length;
+      bar.style.width = v.items.length ? `${Math.round((done / v.items.length) * 100)}%` : '0';
+      count.textContent = v.items.length ? `${done} of ${v.items.length}` : '';
+      box.replaceChildren(...v.items.map((x) => {
+        const cb = h('input', { type: 'checkbox', checked: x.done, 'aria-label': x.text });
+        cb.addEventListener('change', () => { x.done = cb.checked; if (x.done) { x.by = S.me?.member; x.at = Date.now(); } else { delete x.by; delete x.at; } draw(); sv.now(v); });
+        return h('div', { class: 'pj-cl-row' + (x.done ? ' done' : '') }, h('label', { class: 'pick' }, cb, h('span', {}, x.text)), x.done && x.by ? h('small', {}, `${x.by} · ${ago(x.at)}`) : null,
+          h('button', { class: 'pj-it-x', 'aria-label': 'Remove', onclick: () => { v.items = v.items.filter((y) => y !== x); draw(); sv.now(v); } }, '×'));
+      }));
+    };
+    const add = h('input', { class: 'pj-it-in', placeholder: '+ Add a step' });
+    add.addEventListener('keydown', (e) => { if (e.key !== 'Enter' || !add.value.trim()) return; v.items.push({ id: Math.random().toString(36).slice(2, 8), text: add.value.trim(), done: false }); add.value = ''; draw(); sv.now(v); });
+    draw();
+    return prBlock(f, count, h('div', { class: 'pj-cl-bar' }, bar), box, add);
+  }
+
+  // Rows of things found or used on site: measurements, equipment, materials, readings.
+  const ROW_COLS = {
+    measure: (f) => [['label', f.mode === 'area' ? 'Room / area' : f.mode === 'length' ? 'Run' : 'Location', 'desc'], ['w', f.mode === 'wh' ? `W (${f.unit})` : `Length (${f.unit})`, 'qty', 'num'], ...(f.mode === 'length' ? [] : [['h', f.mode === 'wh' ? `H (${f.unit})` : `Width (${f.unit})`, 'qty', 'num']]), ['qty', 'Qty', 'qty', 'num']],
+    equipment: () => [['kind', 'What', 'unit'], ['brand', 'Make', 'unit'], ['model', 'Model', 'unit'], ['serial', 'Serial', 'unit'], ['installed', 'Installed', 'unit', 'date'], ['warranty', 'Warranty to', 'unit', 'date']],
+    materials: () => [['item', 'Item', 'desc'], ['qty', 'Qty', 'qty', 'num'], ['unit', 'Unit', 'unit'], ['cost', 'Cost each', 'price', 'money']],
+    readings: () => [['label', 'Reading', 'desc'], ['value', 'Value', 'qty'], ['unit', 'Unit', 'unit']],
+  };
+  function prRows(p, t, r, f) {
+    const v = JSON.parse(JSON.stringify(r.values[f.id] || { rows: [] }));
+    v.rows ||= [];
+    const cols = ROW_COLS[f.type](f);
+    const sv = prSaver(r, f);
+    const out = () => ({ rows: v.rows.map((x) => (f.type === 'materials' ? { ...x, cost_cents: x.cost ?? null, cost: undefined } : x)) });
+    const sums = h('div', { class: 'pj-it-sums' });
+    const drawSums = () => {
+      const lines = f.type === 'measure' ? [measureText(f, v)] : f.type === 'materials' && materialsCost(v) ? [`Materials cost ${money(materialsCost(v))}`] : [];
+      sums.replaceChildren(...lines.map((x) => h('div', {}, h('b', {}, x))));
+    };
+    const tbody = h('tbody');
+    const draw = () => {
+      tbody.replaceChildren(...v.rows.map((x) => h('tr', {}, ...cols.map(([k, , cls, kind]) => {
+        const val = kind === 'money' ? (x[k] == null ? '' : (x[k] / 100).toFixed(x[k] % 100 ? 2 : 0)) : x[k] ?? '';
+        const inp = h('input', { class: 'pj-it-in ' + cls, type: kind === 'date' ? 'date' : 'text', inputmode: kind === 'num' || kind === 'money' ? 'decimal' : null, value: val });
+        inp.addEventListener('input', () => {
+          const s = inp.value.trim();
+          x[k] = kind === 'num' ? (s === '' ? 0 : Number(s.replace(/[^\d.\-]/g, '')) || 0) : kind === 'money' ? (s === '' ? null : Math.round(Number(s.replace(/[$,\s]/g, '')) * 100) || 0) : s;
+          drawSums();
+          sv.soon(out);
+        });
+        return h('td', {}, inp);
+      }), h('td', {}, h('button', { class: 'pj-it-x', 'aria-label': 'Remove row', onclick: () => { v.rows = v.rows.filter((y) => y !== x); draw(); drawSums(); sv.now(out()); } }, '×')))));
+    };
+    const addRow = () => {
+      v.rows.push({ id: Math.random().toString(36).slice(2, 8), ...(f.type === 'measure' ? { qty: 1 } : f.type === 'materials' ? { qty: 1 } : {}) });
+      draw();
+      tbody.lastChild?.querySelector('input')?.focus();
+    };
+    draw();
+    drawSums();
+    return prBlock(f, null, h('div', { class: 'pj-it-wrap' }, h('table', { class: 'pj-it' }, h('thead', {}, h('tr', {}, ...cols.map(([, label]) => h('th', {}, label)), h('th'))), tbody)),
+      h('div', { class: 'pj-it-add' }, h('button', { class: 'pj-newrow', onclick: addRow }, f.type === 'measure' ? '+ Add a measurement' : f.type === 'equipment' ? '+ Add equipment' : f.type === 'materials' ? '+ Add a material' : '+ Add a reading')), sums);
+  }
+
+  // The customer's sign-off: their name and a signature drawn with a finger or a mouse.
+  function prSignature(p, t, r, f) {
+    const v = r.values[f.id];
+    if (v) return prBlock(f, h('button', { class: 'pj-it-x', onclick: () => prSet(p, r, f, null) }, 'Clear'),
+      h('div', { class: 'pj-sig-done' }, v.image ? h('img', { src: v.image, alt: 'Signature' }) : null, h('small', {}, `Signed by ${v.name} · ${new Date(v.at).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}`)));
+    const cust = t.fields.find((x) => x.type === 'contact' && r.values[x.id]);
+    const name = h('input', { class: 'pj-it-in', placeholder: 'Their name', value: cust ? r.people?.[r.values[cust.id]]?.name || '' : '' });
+    const pad = h('canvas', { class: 'pj-sig', width: 600, height: 180 });
+    const g = pad.getContext('2d');
+    g.lineWidth = 3;
+    g.lineCap = 'round';
+    g.strokeStyle = '#16161a';
+    let drawing = false;
+    let inked = false;
+    const at = (e) => { const b = pad.getBoundingClientRect(); return [((e.clientX - b.left) / b.width) * pad.width, ((e.clientY - b.top) / b.height) * pad.height]; };
+    pad.addEventListener('pointerdown', (e) => { drawing = true; inked = true; pad.setPointerCapture(e.pointerId); g.beginPath(); g.moveTo(...at(e)); });
+    pad.addEventListener('pointermove', (e) => { if (!drawing) return; g.lineTo(...at(e)); g.stroke(); });
+    pad.addEventListener('pointerup', () => { drawing = false; });
+    const clear = h('button', { class: 'pj-it-x', onclick: () => { g.clearRect(0, 0, pad.width, pad.height); inked = false; } }, 'Clear');
+    const saveIt = h('button', { class: 'btn small primary-btn', onclick: () => {
+      if (!name.value.trim()) return toast('Who’s signing?');
+      if (!inked) return toast('Have them sign in the box.');
+      prSet(p, r, f, { name: name.value.trim(), image: pad.toDataURL('image/png') });
+    } }, 'Save sign-off');
+    return prBlock(f, clear, h('p', { class: 'day-hint' }, 'Hand the phone over: they sign below to say the work is done.'), name, pad, h('div', { class: 'btns' }, saveIt));
+  }
+
+  function prPermit(p, t, r, f) {
+    const v = { ...(r.values[f.id] || { status: 'To apply' }) };
+    const sv = prSaver(r, f);
+    const status = h('select', { class: 'pj-it-sel' }, PERMIT_STATUS.map((s) => h('option', { value: s, selected: v.status === s }, s)));
+    const number = h('input', { class: 'pj-it-in', placeholder: 'Permit #', value: v.number || '' });
+    const insp = h('input', { class: 'pj-it-in', type: 'date', value: v.inspection || '' });
+    const write = () => sv.now({ status: status.value, number: number.value.trim(), inspection: insp.value });
+    status.addEventListener('change', write);
+    number.addEventListener('change', write);
+    insp.addEventListener('change', write);
+    return prBlock(f, null, h('div', { class: 'pj-permit' }, h('label', {}, 'Status', status), h('label', {}, 'Number', number), h('label', {}, 'Inspection', insp)));
+  }
+  const prRichBlock = (p, t, r, f) => (f.type === 'checklist' ? prChecklist(p, t, r, f) : f.type === 'signature' ? prSignature(p, t, r, f) : f.type === 'permit' ? prPermit(p, t, r, f) : prRows(p, t, r, f));
+
+  // "What kind of work do you do?": the trades, by family, to pick one or several.
+  async function tradePicker(title, done, { except = [], button = 'Set it up' } = {}) {
+    const fams = await api('GET', '/project-templates/trades').catch((e) => (toast(e.message), null));
+    if (!fams) return;
+    const picked = new Set();
+    const go = h('button', { type: 'button', class: 'btn primary-btn', disabled: true }, button);
+    const grid = h('div', { class: 'pj-trades' }, fams.map((fm) => h('section', {}, h('h4', {}, fm.name, h('small', {}, fm.about)),
+      h('div', { class: 'pj-trade-row' }, fm.trades.filter((x) => !except.includes(x.key)).map((x) => {
+        const b = h('button', { type: 'button', class: 'pj-trade', 'aria-pressed': 'false' }, h('span', {}, x.icon), x.name);
+        b.addEventListener('click', () => { picked.has(x.key) ? picked.delete(x.key) : picked.add(x.key); b.setAttribute('aria-pressed', String(picked.has(x.key))); go.disabled = !picked.size; go.textContent = picked.size > 1 ? `${button} · ${picked.size} kinds of work` : button; });
+        return b;
+      })))));
+    go.addEventListener('click', () => { closeSheet(); done([...picked]); });
+    sheet(title, [h('p', { class: 'day-hint' }, 'Pick everything you do. Each gets its own job details, checklist and stages, and you can change any of it later.'), grid, h('div', { class: 'btns' }, go)]);
+  }
+  async function newJobsProject(trades) {
+    const p = await api('POST', '/projects', { template: 'trades', trades, name: 'Jobs' }).catch((e) => (toast(e.message), null));
+    if (!p) return null;
+    prUpsertProject(p);
+    PR.records.set(p.id, []);
+    return p;
+  }
+  // Lists a job for a customer can go in: any with a customer (contact) field, in projects this person sees.
+  const jobLists = () => (S.projects || []).flatMap((p) => p.types.filter((t) => t.fields.some((f) => f.type === 'contact')).map((t) => ({ p, t })));
+  // A new job for this contact: in the one jobs list, or the one they pick; a Jobs project is set up first if there's none.
+  async function makeJobFor(c, anchor) {
+    const start = async ({ p, t }) => {
+      const cf = t.fields.find((f) => f.type === 'contact');
+      const r = await prCall('POST', `/projects/${p.id}/records`, { typeId: t.id, values: { [cf.id]: c.id } });
+      if (!r) return;
+      closeSheet();
+      closeTool();
+      await openProject(p.id, t.id);
+      prUpsertRecord(r);
+      PR.panel = r.id;
+      renderProjects();
+      setTimeout(() => $('#projects .pj-panel .pj-title')?.focus(), 50);
+    };
+    const lists = jobLists();
+    if (!lists.length) return tradePicker('What kind of work do you do?', async (keys) => { const p = await newJobsProject(keys); if (p) start(jobLists().find((x) => x.p.id === p.id)); });
+    if (lists.length === 1) return start(lists[0]);
+    openMenu(anchor, [{ head: 'What kind of job?' }, ...lists.map((x) => ({ label: `${x.t.icon || ''} ${x.t.singular || x.t.name}`, run: () => start(x) }))]);
+  }
+  // A contact's jobs, in their sheet.
+  function contactJobs(c) {
+    const box = h('div', { class: 'ct-jobs' }, h('p', { class: 'day-hint' }, 'Loading jobs…'));
+    const btn = h('button', { type: 'button', class: 'btn small primary-btn', onclick: (e) => makeJobFor(c, e.currentTarget) }, '+ Make a job');
+    api('GET', '/records/for-contact/' + c.id).then((list) => {
+      box.replaceChildren(...(list.length ? list.map((r) => {
+        const p = projById(r.projectId);
+        const t = p && prType(p, r.typeId);
+        const st = t?.fields.find((f) => f.key === 'status');
+        const chip = st && st.choices.find((x) => x.id === r.values[st.id]);
+        const when = t?.fields.find((f) => f.key === 'scheduled');
+        return h('button', { type: 'button', class: 'ct-job', onclick: async () => { closeSheet(); closeTool(); await openProject(r.projectId, r.typeId); PR.panel = r.id; renderProjects(); } },
+          h('span', {}, r.icon), h('b', {}, (t && String(r.values[t.primary] || '')) || r.list), chip ? pjChip(chip) : null, when && r.values[when.id] ? h('small', {}, dueLabel(r.values[when.id])) : null);
+      }) : [h('p', { class: 'day-hint' }, 'No jobs yet.')]));
+    }).catch(() => box.replaceChildren(h('p', { class: 'day-hint' }, 'Couldn’t load jobs.')));
+    return h('div', { class: 'ct-jobs-sec' }, h('div', { class: 'ct-jobs-h' }, h('b', {}, 'Jobs'), btn), box);
+  }
+
   const DV = { doc: null };
   // A doc's text starts with its title line; a note from before docs uses its first line as the title.
   const docTitle = (it) => (it.title != null ? it.title : it.text.trim().split('\n')[0].replace(/^#{1,3}\s+/, '').slice(0, 140)) || 'Untitled';
@@ -12889,7 +13172,7 @@
         // The tools the team uses. Switched off, a tool leaves everyone's Tools menu; nothing in it is deleted.
         const TOOL_ROWS = [['sidekick', 'Sidekick', 'Plans campaigns with you'], ['docs', 'Docs', 'Write and share pages'], ['contacts', 'Contacts', 'Your customers and leads (owners and admins)'],
           ['email', 'Email', 'Campaign email from Outlook or Gmail'], ['folders', 'Folders', 'Files in folders'], ['signs', 'Signatures', 'Send PDFs to be signed'], ['bills', 'Finance', 'Bills, money in and out, budgets'],
-          ['meetings', 'Meeting notes', 'Record a call, get the notes'], ['map', 'Map', 'Pins, routes and canvassing runs'], ['vault', 'Vault', 'Codes and logins, locked on your device'], ['projects', 'Projects', 'CRM pipelines, bids and quotes']];
+          ['meetings', 'Meeting notes', 'Record a call, get the notes'], ['map', 'Map', 'Pins, routes and canvassing runs'], ['vault', 'Vault', 'Codes and logins, locked on your device'], ['projects', 'Jobs & projects', 'Jobs by trade, quotes and CRM pipelines']];
         const tools = ws.tools || {};
         s.append(h('section', { class: 'tools-sec' }, h('h3', {}, 'Tools'),
           h('p', { class: 'day-hint' }, 'Turn on what your team uses. A tool you turn off leaves everyone’s Tools menu; nothing in it is deleted.'),

@@ -1892,3 +1892,49 @@ body.platform-darwin .pj-head, body.platform-darwin .pj-top { padding-left: 80px
 .start-list .need-row:nth-of-type(2) { border-top: 0; }
 .start-help { display: inline-block; margin-top: 6px; font-size: 12px; color: var(--accent); }
 @media (max-width: 860px) { .start-list { grid-template-columns: 1fr; } .start-list .need-row:nth-of-type(2) { border-top: 1px solid var(--line); } }
+/* jobs: the customer, checklists, rows found on site, sign-off, permits, the trade picker */
+.pj-cust { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: var(--bg); display: flex; flex-direction: column; gap: 8px; }
+.pj-cust.empty { flex-direction: row; align-items: center; gap: 8px; color: var(--muted); }
+.pj-cust.empty .linkish { margin-left: auto; }
+.pj-cust-h { display: flex; align-items: baseline; gap: 8px; }
+.pj-cust-h small { color: var(--muted); }
+.pj-cust-ways { display: flex; flex-wrap: wrap; gap: 6px; }
+.pj-cust-ways a { text-decoration: none; }
+.pj-cust-at { color: var(--muted); }
+.pj-job-blk { margin-top: 2px; }
+.pj-cl-bar { height: 5px; border-radius: 99px; background: var(--line); overflow: hidden; margin: 2px 0 6px; }
+.pj-cl-bar i { display: block; height: 100%; background: #22a06b; border-radius: inherit; transition: width .25s; }
+.pj-cl-n { color: var(--muted); }
+.pj-cl-row { display: flex; align-items: center; gap: 8px; padding: 3px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
+.pj-cl-row .pick { flex: 1; min-width: 0; display: flex; gap: 8px; align-items: center; }
+.pj-cl-row.done .pick span { text-decoration: line-through; color: var(--muted); }
+.pj-cl-row small { color: var(--muted); white-space: nowrap; font-size: 11px; }
+.pj-clmini { display: inline-flex; align-items: center; gap: 6px; min-width: 90px; }
+.pj-clmini .pj-cl-bar { flex: 1; margin: 0; min-width: 40px; }
+.pj-clmini small { color: var(--muted); }
+.pj-sig { width: 100%; height: auto; aspect-ratio: 10 / 3; background: #fff; border: 1px dashed var(--line2, var(--line)); border-radius: 8px; touch-action: none; margin: 6px 0; cursor: crosshair; }
+.pj-sig-done { display: flex; flex-direction: column; gap: 4px; }
+.pj-sig-done img { max-width: 320px; background: #fff; border-radius: 6px; border: 1px solid var(--line); }
+.pj-sig-done small { color: var(--muted); }
+.pj-permit { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.pj-permit label { display: flex; flex-direction: column; gap: 3px; font-size: 11.5px; color: var(--muted); }
+.pj-permit .pj-it-sel { margin: 0; padding: 5px; }
+@media (max-width: 560px) { .pj-permit { grid-template-columns: 1fr; } }
+.pj-pick { display: flex; flex-direction: column; max-height: 50vh; overflow: auto; margin-top: 8px; }
+.pj-pick-row { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; text-align: left; background: none; border: 0; border-bottom: 1px solid var(--line); padding: 8px 4px; color: var(--text); cursor: pointer; }
+.pj-pick-row:hover { background: var(--card-hover); }
+.pj-pick-row small { color: var(--muted); }
+.pj-pick-row.new { color: var(--accent); font-weight: 600; }
+.pj-trades { display: flex; flex-direction: column; gap: 14px; max-height: 60vh; overflow: auto; }
+.pj-trades h4 { margin: 0 0 6px; font-size: 13px; display: flex; flex-direction: column; }
+.pj-trades h4 small { color: var(--muted); font-weight: 400; font-size: 11.5px; }
+.pj-trade-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.pj-trade { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); background: var(--panel); color: var(--text); border-radius: 99px; padding: 6px 12px; font-size: 13px; cursor: pointer; }
+.pj-trade[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.ct-jobs-sec { border-top: 1px solid var(--line); padding-top: 10px; display: flex; flex-direction: column; gap: 6px; }
+.ct-jobs-h { display: flex; align-items: center; justify-content: space-between; }
+.ct-jobs { display: flex; flex-direction: column; }
+.ct-job { display: flex; align-items: center; gap: 8px; text-align: left; background: none; border: 0; border-bottom: 1px solid var(--line); padding: 7px 2px; color: var(--text); cursor: pointer; font-size: 13px; }
+.ct-job b { flex: 1; min-width: 0; font-weight: 600; }
+.ct-job small { color: var(--muted); }
+.ct-job:hover { background: var(--card-hover); }

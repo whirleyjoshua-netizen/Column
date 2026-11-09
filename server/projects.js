@@ -13,8 +13,14 @@
 import crypto from 'node:crypto';
 import dns from 'node:dns/promises';
 import net from 'node:net';
+import { TRADES, tradeType, tradeMenu } from './trades.js';
 
-export const FIELD_TYPES = ['text', 'number', 'money', 'date', 'select', 'multi', 'person', 'email', 'phone', 'url', 'checkbox', 'link', 'items', 'autonumber', 'files'];
+export const FIELD_TYPES = ['text', 'number', 'money', 'date', 'select', 'multi', 'person', 'email', 'phone', 'url', 'checkbox', 'link', 'items', 'autonumber', 'files',
+  // For jobs at a customer's place: who it's for (a contact), what gets done on site, what was measured, the
+  // equipment there, materials used, readings taken, the permit, and the customer's sign-off.
+  'contact', 'checklist', 'measure', 'equipment', 'materials', 'readings', 'signature', 'permit'];
+export const PERMIT_STATUS = ['Not needed', 'To apply', 'Applied', 'Approved', 'Inspection booked', 'Passed', 'Failed'];
+const MEASURE_MODES = ['wh', 'area', 'length'];
 const COLORS = ['gray', 'blue', 'green', 'amber', 'rose', 'violet', 'teal'];
 const MAX_RECORDS = 50_000; // per team
 const MAX_TYPES = 20;
@@ -163,7 +169,17 @@ export function projectsModule({ db, save, broadcast, rid, cleanText, isDay, rea
   };
 
   const publicProject = ({ wsId, ...p }) => p;
-  const publicRecord = ({ wsId, log, ...r }) => r;
+  // A record goes out with the contacts it points at (name and how to reach them), so whoever does the job can
+  // call the customer and find the place, even if they can't open Contacts.
+  const publicRecord = ({ wsId, log, ...r }) => {
+    const p = db.projects[r.projectId];
+    const t = p?.types.find((x) => x.id === r.typeId);
+    const ids = (t?.fields || []).filter((f) => f.type === 'contact' && r.values[f.id]).map((f) => r.values[f.id]);
+    if (!ids.length) return r;
+    const people = {};
+    for (const id of ids) { const c = db.contacts[id]; if (c) people[id] = { name: c.name || '', company: c.company || '', phone: c.phone || '', email: c.email || '', address: c.address || '', city: c.city || '' }; }
+    return { ...r, people };
+  };
   const typeOf = (p, typeId) => p.types.find((t) => t.id === typeId || t.key === typeId);
   const fieldOf = (t, id) => t.fields.find((f) => f.id === id || f.key === id);
 
@@ -195,7 +211,25 @@ export function projectsModule({ db, save, broadcast, rid, cleanText, isDay, rea
     if (f.type === 'link') { const to = p.types.find((t) => t.id === f.target); return v.map((id) => db.records[id] && to ? String(db.records[id].values[to.primary] ?? '') : '').filter(Boolean).join(', '); }
     if (f.type === 'items') return '$' + (itemsTotals(v).total / 100).toLocaleString('en-US', { minimumFractionDigits: 2 });
     if (f.type === 'files') return `${v.length} file${v.length === 1 ? '' : 's'}`;
+    if (f.type === 'contact') return db.contacts[v]?.name || db.contacts[v]?.company || '';
+    if (f.type === 'checklist') return `${v.items.filter((x) => x.done).length} of ${v.items.length} done`;
+    if (f.type === 'measure') return measureWords(f, v);
+    if (f.type === 'equipment') return v.rows.map((r) => [r.kind, r.brand, r.model].filter(Boolean).join(' ') + (r.serial ? ` (serial ${r.serial})` : '')).join('; ');
+    if (f.type === 'materials') { const c = v.rows.reduce((n2, r) => n2 + Math.round((r.qty || 0) * (r.cost || 0)), 0); return v.rows.map((r) => `${r.qty} ${r.unit || ''} ${r.item}`.replace(/\s+/g, ' ').trim()).join(', ') + (c ? ` ($${(c / 100).toFixed(2)})` : ''); }
+    if (f.type === 'readings') return v.rows.filter((r) => r.value !== '').map((r) => `${r.label} ${r.value}${r.unit ? ' ' + r.unit : ''}`).join(', ');
+    if (f.type === 'signature') return `signed by ${v.name}`;
+    if (f.type === 'permit') return [v.status, v.number ? '#' + v.number : '', v.inspection ? 'inspection ' + v.inspection : ''].filter(Boolean).join(' · ');
     return String(v).slice(0, 120);
+  }
+  // Measurements in words: how many and the total area or length.
+  function measureWords(f, v) {
+    const rows = v.rows || [];
+    const count = rows.reduce((n2, r) => n2 + (r.qty || 1), 0);
+    if (f.mode === 'length') return `${rows.length} run${rows.length === 1 ? '' : 's'}, ${Math.round(rows.reduce((n2, r) => n2 + (r.w || 0) * (r.qty || 1), 0) * 10) / 10} ${f.unit}`;
+    const area = rows.reduce((n2, r) => n2 + (r.w || 0) * (r.h || 0) * (r.qty || 1), 0);
+    const sq = f.unit === 'in' ? area / 144 : f.unit === 'cm' ? area / 10000 : area;
+    const sqUnit = f.unit === 'in' || f.unit === 'ft' ? 'sq ft' : 'sq m';
+    return f.mode === 'area' ? `${rows.length} area${rows.length === 1 ? '' : 's'}, ${Math.round(sq)} ${sqUnit}` : `${count} opening${count === 1 ? '' : 's'}`;
   }
   // Fields that changed between two sets of values, each logged.
   function logChanges(ws, p, t, rec, before, by) {
@@ -264,13 +298,31 @@ export function projectsModule({ db, save, broadcast, rid, cleanText, isDay, rea
   // ---------- making projects from templates ----------
   // A list from its definition. Links find their list by key among `others`; one with nowhere to point is left out.
   function typeFrom(src, typeIdOf) {
-    const t = { id: rid(8), key: src.key, name: src.name, singular: src.singular, icon: src.icon };
-    t.fields = src.fields.filter((f) => f.type !== 'link' || typeIdOf(f.target)).map((f) => ({ id: rid(8), key: f.key, name: f.name, type: f.type, ...(f.choices ? { choices: f.choices.map((c) => ({ id: rid(6), label: c.label, color: c.color })) } : {}), ...(f.type === 'link' ? { target: typeIdOf(f.target), many: false } : {}), ...(f.type === 'autonumber' ? { prefix: f.prefix || '', next: f.start || 1, start: f.start || 1 } : {}) }));
+    const t = { id: rid(8), key: src.key, name: src.name, singular: src.singular, icon: src.icon, ...(src.trade ? { trade: src.trade } : {}) };
+    t.fields = src.fields.filter((f) => f.type !== 'link' || typeIdOf(f.target)).map((f) => ({ id: rid(8), key: f.key, name: f.name, type: f.type, ...(f.choices ? { choices: f.choices.map((c) => ({ id: rid(6), label: c.label, color: c.color })) } : {}), ...(f.type === 'link' ? { target: typeIdOf(f.target), many: false } : {}), ...(f.type === 'autonumber' ? { prefix: f.prefix || '', next: f.start || 1, start: f.start || 1 } : {}), ...fieldExtras(f) }));
     t.primary = t.fields.find((f) => f.key === src.primary)?.id || t.fields[0].id;
     // A new record starts at the first stage, so it never sits in "No status".
     for (const f of t.fields) if ((f.key === 'stage' || f.key === 'status') && f.choices?.length) f.default = f.choices[0].id;
     t.views = src.views.map((v) => ({ id: rid(8), name: v.name, kind: v.kind, ...(v.groupBy ? { groupBy: t.fields.find((f) => f.key === v.groupBy)?.id } : {}), sort: v.sortBy ? { field: t.fields.find((f) => f.key === v.sortBy)?.id, dir: 'asc' } : null }));
     return t;
+  }
+  // What a job field carries besides its type: a checklist's or readings' starting lines, how a measurement is
+  // taken (width × height, length × width, or length) and in what unit, a hint under the name.
+  function fieldExtras(f) {
+    const out = {};
+    if ((f.type === 'checklist' || f.type === 'readings') && Array.isArray(f.list)) out.list = f.list.map((x) => cleanText(x, 120)).filter(Boolean).slice(0, 60);
+    if (f.type === 'measure') {
+      out.mode = MEASURE_MODES.includes(f.mode) ? f.mode : 'wh';
+      out.unit = ['in', 'ft', 'cm', 'm'].includes(f.unit) ? f.unit : out.mode === 'wh' ? 'in' : 'ft';
+    }
+    if (f.hint) out.hint = cleanText(f.hint, 120);
+    return out;
+  }
+  // A Jobs project from the trades a team does: a list for each.
+  function fromTrades(keys) {
+    const picked = [...new Set((Array.isArray(keys) ? keys : []).map(String))].filter((k) => TRADES[k]).slice(0, MAX_TYPES);
+    if (!picked.length) throw bad('Pick at least one kind of work.');
+    return picked.map((k) => typeFrom(tradeType(k), () => null));
   }
   function fromTemplate(key, wsId) {
     // A team's own template: its lists, fields and views, with new ids throughout.
@@ -421,6 +473,62 @@ export function projectsModule({ db, save, broadcast, rid, cleanText, isDay, rea
       }
       // Numbered by Kloomie; what's sent in is ignored.
       case 'autonumber': return undefined;
+      // A person or company in the team's Contacts.
+      case 'contact': {
+        const c = db.contacts[String(v)];
+        if (!c || c.wsId !== ws.id) throw bad(`${f.name}: that contact isn’t in your Contacts.`);
+        return c.id;
+      }
+      // What gets done on site, ticked off as it happens (who and when, for each).
+      case 'checklist': {
+        const list = Array.isArray(v) ? v : Array.isArray(v?.items) ? v.items : null;
+        if (!list) throw bad(`${f.name}: send a checklist as { items: [...] }.`);
+        const items = list.slice(0, 100).map((x) => (typeof x === 'string' ? { text: x } : x || {})).map((x) => ({
+          id: rowId(x.id), text: cleanText(x.text, 200), done: !!x.done,
+          ...(x.done && x.by ? { by: cleanText(x.by, 60) } : {}), ...(x.done && Number.isFinite(x.at) ? { at: x.at } : {}),
+        })).filter((x) => x.text);
+        return items.length ? { items } : undefined;
+      }
+      // Openings (width × height), areas (length × width) or runs (length), each with a label and how many.
+      case 'measure': {
+        const rows = rowsOf(v, f).map((r) => ({ id: rowId(r.id), label: cleanText(r.label, 80), w: num(r.w), ...(f.mode === 'length' ? {} : { h: num(r.h) }), qty: Math.max(1, Math.min(999, Math.round(num(r.qty) || 1))), ...(r.note ? { note: cleanText(r.note, 200) } : {}) }))
+          .filter((r) => r.label || r.w || r.h);
+        return rows.length ? { rows } : undefined;
+      }
+      // Equipment at the customer's place: what it is, make, model, serial, when it went in, the warranty.
+      case 'equipment': {
+        const rows = rowsOf(v, f).map((r) => ({ id: rowId(r.id), kind: cleanText(r.kind, 60), brand: cleanText(r.brand, 60), model: cleanText(r.model, 60), serial: cleanText(r.serial, 60),
+          ...(isDay(String(r.installed || '')) ? { installed: r.installed } : {}), ...(isDay(String(r.warranty || '')) ? { warranty: r.warranty } : {}), ...(r.note ? { note: cleanText(r.note, 200) } : {}) }))
+          .filter((r) => r.kind || r.brand || r.model || r.serial);
+        return rows.length ? { rows } : undefined;
+      }
+      // Materials and parts used: what, how many, and what each cost us (in dollars in, kept in cents).
+      case 'materials': {
+        const rows = rowsOf(v, f).map((r) => {
+          const cost = r.cost_cents != null ? Number(r.cost_cents) : r.cost === '' || r.cost == null ? null : Math.round(num(r.cost) * 100);
+          return { id: rowId(r.id), item: cleanText(r.item, 120), qty: num(r.qty ?? 1), unit: cleanText(r.unit, 20), ...(Number.isFinite(cost) && cost !== null ? { cost: Math.max(0, Math.min(1e10, cost)) } : {}) };
+        }).filter((r) => r.item);
+        return rows.length ? { rows } : undefined;
+      }
+      // Readings taken on site: a label, a value as written, and a unit.
+      case 'readings': {
+        const rows = rowsOf(v, f).map((r) => ({ id: rowId(r.id), label: cleanText(r.label, 80), value: cleanText(r.value, 40), unit: cleanText(r.unit, 20) })).filter((r) => r.label || r.value);
+        return rows.length ? { rows } : undefined;
+      }
+      // The customer's sign-off: their name, a drawn signature (a small picture), and when.
+      case 'signature': {
+        if (typeof v !== 'object') throw bad(`${f.name}: send { name, image }.`);
+        const nm = cleanText(v.name, 80);
+        if (!nm) throw bad(`${f.name}: who’s signing?`);
+        const img = typeof v.image === 'string' && /^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(v.image) && v.image.length < 120_000 ? v.image : null;
+        return { name: nm, ...(img ? { image: img } : {}), at: Number.isFinite(v.at) ? v.at : Date.now() };
+      }
+      // A permit: its number, where it stands, and the inspection day.
+      case 'permit': {
+        if (typeof v !== 'object') throw bad(`${f.name}: send { number, status, inspection }.`);
+        const status = PERMIT_STATUS.find((x) => x.toLowerCase() === String(v.status || '').toLowerCase()) || (v.number ? 'Applied' : 'To apply');
+        return { status, ...(v.number ? { number: cleanText(v.number, 40) } : {}), ...(isDay(String(v.inspection || '')) ? { inspection: v.inspection } : {}) };
+      }
       case 'link': {
         const ids = [...new Set((Array.isArray(v) ? v : [v]).map(String))].filter((id) => {
           const r = db.records[id];
@@ -431,6 +539,14 @@ export function projectsModule({ db, save, broadcast, rid, cleanText, isDay, rea
     }
     return undefined;
   }
+  // Rows of a job field, from { rows: [...] } or a plain list.
+  const rowsOf = (v, f) => {
+    const rows = Array.isArray(v) ? v : Array.isArray(v?.rows) ? v.rows : null;
+    if (!rows) throw bad(`${f.name}: send rows as { rows: [...] }.`);
+    return rows.slice(0, 200).map((r) => r || {});
+  };
+  const rowId = (id) => (typeof id === 'string' && /^[\w-]{1,24}$/.test(id) ? id : rid(6));
+  const num = (x) => { const n2 = Number(String(x ?? '').replace(/[,\s]/g, '')); return Number.isFinite(n2) ? Math.max(-1e9, Math.min(1e9, n2)) : 0; };
   // A choice by id or label (any case); a new label becomes a new choice when allowed.
   function choiceFor(f, v, add) {
     const s = String(v).trim();
@@ -456,6 +572,11 @@ export function projectsModule({ db, save, broadcast, rid, cleanText, isDay, rea
     }
     // New choices change the project too.
     if (JSON.stringify(t.fields.map((f) => f.choices?.length || 0)) !== before) projectNews(p);
+    // A job for a customer starts at the customer's address, unless it's somewhere else already.
+    const cf = t.fields.find((f) => f.type === 'contact' && rec.values[f.id]);
+    const af = t.fields.find((f) => f.key === 'address' && f.type === 'text');
+    const c = cf && db.contacts[rec.values[cf.id]];
+    if (c && af && !rec.values[af.id] && (c.address || c.city)) rec.values[af.id] = [c.address, c.city].filter(Boolean).join(', ');
     return rec;
   }
 
@@ -501,6 +622,9 @@ export function projectsModule({ db, save, broadcast, rid, cleanText, isDay, rea
     const rec = { id: rid(), wsId: ws.id, projectId: p.id, typeId: t.id, values: {}, extId: extId ? cleanText(extId, 200) : null, by: auth.member, memberId: auth.memberId, createdAt: Date.now(), updatedAt: Date.now() };
     for (const f of t.fields) if (f.type === 'autonumber') rec.values[f.id] = `${f.prefix || ''}${(f.next = (f.next || 1) + 1) - 1}`;
     for (const f of t.fields) if (f.default && f.choices?.some((c) => c.id === f.default)) rec.values[f.id] = f.default;
+    // A new job starts with its trade's checklist to tick, and the readings it takes, ready to fill in.
+    for (const f of t.fields) if (f.type === 'checklist' && f.list?.length) rec.values[f.id] = { items: f.list.map((text) => ({ id: rid(6), text, done: false })) };
+    for (const f of t.fields) if (f.type === 'readings' && f.list?.length) rec.values[f.id] = { rows: f.list.map((x) => { const m = /^(.*?)\s+([^\s]*[%°]\w*|psi|ppm|gpm|gpg|A|V|Hz|CFM50|pCi\/L)$/.exec(x); return { id: rid(6), label: m ? m[1] : x, value: '', unit: m ? m[2] : '' }; }) };
     if (t.fields.some((f) => f.type === 'autonumber')) projectNews(p);
     applyValues(ws, p, t, rec, values, opts);
     db.records[rec.id] = rec;
@@ -525,7 +649,7 @@ export function projectsModule({ db, save, broadcast, rid, cleanText, isDay, rea
       // A ready-made list (Jobs, Contacts, Price list…), its links pointing at this project's lists by key.
       case 'addTypeFrom': {
         if (p.types.length >= MAX_TYPES) throw bad(`A project can have ${MAX_TYPES} kinds of records.`);
-        const src = Object.values(TEMPLATES).flatMap((x) => x.types).find((x) => x.key === body.key);
+        const src = String(body.key).startsWith('trade_') ? tradeType(String(body.key).slice(6)) : Object.values(TEMPLATES).flatMap((x) => x.types).find((x) => x.key === body.key);
         if (!src) throw bad('That list isn’t one of the ready-made ones.');
         if (p.types.some((x) => x.key === src.key)) throw bad(`This project already has ${src.name}.`);
         const nt = typeFrom(src, (k) => p.types.find((x) => x.key === k)?.id);
@@ -554,7 +678,7 @@ export function projectsModule({ db, save, broadcast, rid, cleanText, isDay, rea
         if (t.fields.length >= MAX_FIELDS) throw bad(`A list can have ${MAX_FIELDS} fields.`);
         const type = FIELD_TYPES.includes(body.type) ? body.type : 'text';
         const nm = name(60) || 'Field';
-        const f = { id: rid(8), key: freeKey(nm, new Set(t.fields.map((x) => x.key))), name: nm, type };
+        const f = { id: rid(8), key: freeKey(nm, new Set(t.fields.map((x) => x.key))), name: nm, type, ...fieldExtras({ type, list: body.list, mode: body.mode, unit: body.unit }) };
         if (type === 'select' || type === 'multi') f.choices = (Array.isArray(body.choices) ? body.choices : []).slice(0, 100).map((c, i) => ({ id: rid(6), label: cleanText(c?.label ?? c, 60), color: COLORS.includes(c?.color) ? c.color : COLORS[i % COLORS.length] })).filter((c) => c.label);
         if (type === 'autonumber') {
           f.prefix = cleanText(body.prefix, 10);
@@ -587,6 +711,8 @@ export function projectsModule({ db, save, broadcast, rid, cleanText, isDay, rea
           }
         }
         if (body.many !== undefined && f.type === 'link') f.many = !!body.many;
+        if (Array.isArray(body.list) && (f.type === 'checklist' || f.type === 'readings')) f.list = fieldExtras({ type: f.type, list: body.list }).list;
+        if (body.unit !== undefined && f.type === 'measure') f.unit = fieldExtras({ type: 'measure', mode: f.mode, unit: body.unit }).unit;
         return f;
       }
       case 'moveField': {
@@ -649,13 +775,28 @@ export function projectsModule({ db, save, broadcast, rid, cleanText, isDay, rea
   async function route(req, res, parts, auth, ws) {
     const [a, b, c, d] = parts;
     const m = req.method;
+    // The kinds of work a Jobs project can be set up for, by family.
+    if (a === 'project-templates' && b === 'trades' && m === 'GET') return send(res, 200, tradeMenu());
+    // A contact's jobs: records anywhere that point at them, in projects this person sees, newest first.
+    if (a === 'records' && b === 'for-contact' && c && m === 'GET') {
+      const out = [];
+      for (const r of Object.values(db.records)) {
+        if (r.wsId !== ws.id) continue;
+        const p = db.projects[r.projectId];
+        if (!p || !sees(p, auth.memberId)) continue;
+        const t = typeOf(p, r.typeId);
+        if (t?.fields.some((f) => f.type === 'contact' && r.values[f.id] === c)) out.push({ ...publicRecord(r), project: p.name, list: t.singular || t.name, icon: t.icon || '' });
+      }
+      return send(res, 200, out.sort((x, y) => y.createdAt - x.createdAt).slice(0, 100));
+    }
     if (a === 'projects') {
       if (m === 'GET' && !b) return send(res, 200, Object.values(db.projects).filter((p) => p.wsId === ws.id && sees(p, auth.memberId)).map(publicProject));
       if (m === 'POST' && !b) {
         const body = await readJson(req, 50_000);
-        const { types, template, icon } = fromTemplate(body.template, ws.id);
+        const trades = body.template === 'trades';
+        const { types, template, icon } = trades ? { types: fromTrades(body.trades), template: 'trades', icon: '🛠️' } : fromTemplate(body.template, ws.id);
         const own = template === 'custom' && db.projectTemplates[String(body.template).slice(7)];
-        const p = { id: rid(), wsId: ws.id, name: cleanText(body.name, 80) || own?.name || TEMPLATES[template].name, icon: cleanText(body.icon, 8) || icon || TEMPLATES[template].icon, template, types, private: !!body.private, memberIds: [], memberId: auth.memberId, by: auth.member, createdAt: Date.now(), updatedAt: Date.now() };
+        const p = { id: rid(), wsId: ws.id, name: cleanText(body.name, 80) || own?.name || (trades ? 'Jobs' : TEMPLATES[template].name), icon: cleanText(body.icon, 8) || icon || TEMPLATES[template].icon, template, types, private: !!body.private, memberIds: [], memberId: auth.memberId, by: auth.member, createdAt: Date.now(), updatedAt: Date.now() };
         db.projects[p.id] = p;
         projectNews(p);
         return send(res, 200, publicProject(p));
