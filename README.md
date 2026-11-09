@@ -49,7 +49,9 @@ once. Uploaded files still live in `DATA_DIR/files`), `RESEND_API_KEY` and `MAIL
 password resets, sent through Resend from an address on a domain verified there, e.g. `Kloomie <hello@kloomie.com>`; without them, Forgot password stays
 hidden), `APP_NAME` (the name in those emails; default `Kloomie`), `MAIL_OUTBOX=1` (for local testing: emails are written to
 `DATA_DIR/outbox` instead of sent), `ALERT_EMAIL` (where serious errors are emailed: crashes, server errors, saving or
-backups failing. Grouped, at most one email every 15 minutes; needs email sending set up).
+backups failing. Grouped, at most one email every 15 minutes; needs email sending set up), `MAPBOX_TOKEN` (job routes: a Mapbox access token, used to find job addresses, get drive times
+and draw the road route; addresses are looked up when a route is asked for and never stored, which keeps within Mapbox's free
+geocoding; without it, Job routes says it isn't set up).
 
 Uptime: point a checker such as UptimeRobot at `PUBLIC_URL/api/up`. It answers 200 when the server is up and saving, and
 503 while saving is failing. `/api/health` always answers 200 while the server runs (the desktop app uses it to find servers).

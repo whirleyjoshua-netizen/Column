@@ -14,6 +14,7 @@ import { providers as calProviders } from './calendar.js';
 import { llms, llmError, complete } from './llm.js';
 import { fileText, officeKind } from './extract.js';
 import { PdfError, stampPdf, addCertificate, pageCount, writeDoc } from './pdf.js';
+import { routesOn, dayRoute } from './routes.js';
 import { projectsModule } from './projects.js';
 import { openStore, Fenced } from './store.js';
 import { createMailer } from './mail.js';
@@ -927,7 +928,7 @@ function jobLabel(rec) {
 }
 function publicVisit(list) {
   const e = list[0];
-  return { id: e.visitId, recordId: e.recordId, kind: e.visit || 'Visit', date: e.date, start: e.start, end: e.end, note: e.note || '', done: list.every((x) => x.done), memberIds: list.map((x) => x.memberId), by: e.by, text: e.text };
+  return { id: e.visitId, recordId: e.recordId, kind: e.visit || 'Visit', date: e.date, start: e.start, end: e.end, note: e.note || '', flex: !!e.flex, done: list.every((x) => x.done), memberIds: list.map((x) => x.memberId), by: e.by, text: e.text };
 }
 function visitsOf(recordId) {
   const groups = new Map();
@@ -984,8 +985,8 @@ function setVisit(ws, auth, rec, visitId, body, old = []) {
   const out = [];
   for (const memberId of memberIds) {
     const had = old.find((e) => e.memberId === memberId);
-    const e = applyEntry(had ? { ...had } : { id: rid(), wsId: ws.id, memberId, by: auth.member, deviceId: auth.deviceId, createdAt: Date.now(), text: '', date: null, start: null, end: null, done: base.done || false, color: 'teal', taskId: null }, fields);
-    Object.assign(e, { recordId: rec.id, projectId: rec.projectId, visitId, visit: kind, note });
+    const e = applyEntry(had ? { ...had } : { id: rid(), wsId: ws.id, memberId, by: auth.member, deviceId: auth.deviceId, createdAt: Date.now(), text: '', date: null, start: null, end: null, done: base.done || false, color: 'green', taskId: null }, fields);
+    Object.assign(e, { recordId: rec.id, projectId: rec.projectId, visitId, visit: kind, note, flex: body.flex !== undefined ? !!body.flex : !!base.flex });
     db.entries[e.id] = e;
     out.push(e);
     broadcast(ws.id, { type: 'entry', entry: publicEntry(e) });
@@ -4946,6 +4947,35 @@ async function api(req, res, url) {
     });
   }
 
+  // A person's route for a day: their job visits in order on real roads, the driving, what's too tight, and a better
+  // order. Owners and admins can see anyone's; everyone else, their own.
+  if (a === 'route' && m === 'GET') {
+    const q = new URL(req.url, 'http://x').searchParams;
+    const day = q.get('date');
+    const who = q.get('member') || auth.memberId;
+    if (!isDay(day || '')) return send(res, 400, { error: 'Pick a day.' });
+    if (who !== auth.memberId && !isAdmin(auth)) return send(res, 403, { error: 'You can see your own route.' });
+    if (!ws.members.some((x) => x.id === who)) return send(res, 404, { error: 'Nobody on the team by that id.' });
+    const out = { configured: routesOn(), date: day, member: who, baseAddress: ws.settings.base || '' };
+    if (!out.configured) return send(res, 200, out);
+    const visits = [];
+    for (const e of Object.values(db.entries)) {
+      if (e.wsId !== ws.id || !e.visitId || e.memberId !== who || e.date !== day) continue;
+      const rec = db.records[e.recordId];
+      const j = rec && jobOfRecord(rec);
+      if (!j || !PJ.recordAt(rec.id, ws.id, auth.memberId)) continue;
+      const af = j.t.fields.find((f) => f.key === 'address');
+      visits.push({ id: e.visitId, recordId: rec.id, projectId: rec.projectId, label: `${e.visit || 'Visit'}: ${jobLabel(rec)}`, address: (af && rec.values[af.id]) || '', start: e.start, end: e.end, flex: !!e.flex, done: !!e.done });
+    }
+    try {
+      const r = await dayRoute(`${ws.id}:${who}:${day}`, visits, ws.settings.base || '');
+      const ref = Object.fromEntries(visits.map((v) => [v.id, v]));
+      for (const s2 of r.stops) Object.assign(s2, { recordId: ref[s2.id]?.recordId, projectId: ref[s2.id]?.projectId });
+      return send(res, 200, { ...out, ...r });
+    } catch (e) {
+      return send(res, 502, { error: e.message });
+    }
+  }
   // The team's schedule: every job visit on a day, by person (owners and admins see everyone; others, themselves),
   // and jobs still waiting for a visit. Personal entries stay private: only job visits show.
   if (a === 'schedule' && m === 'GET') {
@@ -6757,6 +6787,11 @@ async function api(req, res, url) {
     if (body.memberEmail !== undefined) {
       if (!isAdmin(auth)) return send(res, 403, { error: 'Only team owners and admins can change who sends campaign email.' });
       ws.settings.memberEmail = !!body.memberEmail;
+    }
+    // Where the day's routes start and end: the shop, the yard, the office.
+    if (body.base !== undefined) {
+      if (!isAdmin(auth)) return send(res, 403, { error: 'Only team owners and admins can change where routes start.' });
+      ws.settings.base = cleanText(body.base, 200);
     }
     if (body.tz !== undefined) {
       if (!isAdmin(auth)) return send(res, 403, { error: 'Only team owners and admins can change the team’s time zone.' });

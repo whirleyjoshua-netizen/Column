@@ -2680,6 +2680,8 @@
       parts.push(sec);
     }
 
+    const rl = dayRouteLine(k);
+    if (rl) parts.unshift(rl);
     const tl = h('div', { class: 'timeline', style: `height:${(24 - h0) * HOUR}px` });
     for (let hr = h0; hr < 24; hr++) {
       tl.append(h('div', { class: 'hour', style: `top:${y(hr * 60)}px` }, h('span', {}, fmtTime(hr * 60))));
@@ -8809,6 +8811,7 @@
     }));
     const note = h('textarea', { rows: 2, placeholder: 'For whoever’s going: bring the sample book, park on the street…' });
     note.value = v?.note || '';
+    const flex = h('input', { type: 'checkbox', checked: !!(v?.flex ?? pre.flex) });
     const del = v ? h('button', { type: 'button', class: 'btn small danger', 'data-label': '1' }, 'Cancel visit') : null;
     del?.addEventListener('click', () => confirmClick(del, async () => { await api('DELETE', '/visits/' + v.id).catch((e) => toast(e.message)); closeSheet(); }));
     const done = v ? h('button', { type: 'button', class: 'btn small' }, v.done ? 'Not done' : '✓ Mark done') : null;
@@ -8818,12 +8821,13 @@
     sheet(v ? `${v.kind} · ${recName(t, r)}` : `Schedule a visit · ${recName(t, r)}`, [
       h('div', { class: 'row2' }, h('label', {}, 'What for', kind), h('label', {}, 'Day', date)),
       h('div', { class: 'row2' }, h('label', {}, 'From', start), h('label', {}, 'Until', end)),
+      h('label', { class: 'pick' }, flex, 'Any time that day', h('small', {}, ' The time is a guess: the route can move it to save driving.')),
       h('div', {}, h('small', { class: 'hint' }, 'Who’s going'), crew),
       h('label', {}, 'Note', note),
       v ? h('div', { class: 'btns' }, done, del) : null,
     ].filter(Boolean), async () => {
       if (!going.size) throw new Error('Pick who’s going.');
-      const body = { kind: kind.value, date: date.value, start: fromHm(start.value), end: fromHm(end.value), memberIds: [...going], note: note.value };
+      const body = { kind: kind.value, date: date.value, start: fromHm(start.value), end: fromHm(end.value), memberIds: [...going], note: note.value, flex: flex.checked };
       if (v) await api('PATCH', '/visits/' + v.id, body);
       else await api('POST', `/records/${r.id}/visits`, body);
       toast(v ? 'Visit changed' : `Booked: ${kind.value} ${dueLabel(date.value).toLowerCase()}`);
@@ -8898,7 +8902,7 @@
         if (TS.drag) book(m.id, Math.max(H0 * 60, Math.min(H1 * 60 - 60, minute)), TS.drag);
         TS.drag = null;
       });
-      return h('div', { class: 'ts-row' }, h('div', { class: 'ts-name' }, avatar(m.id), h('span', {}, m.name), h('small', {}, mine.length ? plural(mine.length, 'visit') : 'free')), lane);
+      return h('div', { class: 'ts-row' }, h('div', { class: 'ts-name' }, avatar(m.id), h('span', {}, m.name), mine.length ? h('button', { class: 'ts-route', title: `${m.name}’s route`, onclick: () => openRoute(m.id, k) }, '🗺') : h('small', {}, 'free')), lane);
     });
     const wait = waiting.map((w) => {
       const chip = h('div', { class: 'ts-wait', draggable: 'true', title: 'Drag onto someone’s row to book it' }, h('span', {}, w.icon), h('b', {}, w.label), w.stage ? h('small', {}, w.stage) : null);
@@ -8912,6 +8916,131 @@
       h('div', { class: 'anytime tasks ts-waiting' }, h('div', { class: 'any-h' }, `Jobs to schedule · ${waiting.length}`),
         wait.length ? h('div', { class: 'ts-waits' }, wait) : h('p', { class: 'day-hint' }, 'Every open job has a visit booked.'),
         wait.length ? h('p', { class: 'day-hint' }, 'Drag a job onto someone’s row at the time they’ll go, or tap it to open it.') : null)].filter(Boolean));
+  }
+
+  // ----- job routes on the map: a person's visits for a day, on the road, in a better order -----
+  // The server finds the addresses and the roads (server/routes.js); here the stops are drawn numbered, with the
+  // drive before each, what's too tight to make, and a better order to use with one tap. Start route hands the
+  // stops to Google Maps for turn-by-turn.
+  const RT = { member: null, date: null, data: null, loading: null };
+  const fmtMins = (m) => (m < 60 ? `${m} min` : `${Math.floor(m / 60)} h${m % 60 ? ' ' + (m % 60) + ' min' : ''}`);
+  async function loadRoute(force) {
+    RT.member ||= S.me.memberId;
+    RT.date ||= todayKey();
+    const key = RT.member + RT.date;
+    if (!force && RT.data && RT.data.key === key) return RT.data;
+    if (RT.loading?.key === key) return RT.loading.p;
+    const p = api('GET', `/route?date=${RT.date}&member=${RT.member}`).then((x) => { RT.data = { ...x, key }; return RT.data; }).catch((e) => { RT.data = { error: e.message, key }; return RT.data; }).finally(() => { RT.loading = null; });
+    RT.loading = { key, p };
+    return p;
+  }
+  function openRoute(memberId, date) {
+    RT.member = memberId || S.me.memberId;
+    RT.date = date || todayKey();
+    RT.data = null;
+    MP.mode = 'routes';
+    closeProjects();
+    openTool('map');
+    loadRoute(true).then(() => { renderTool(true); mapDraw(true); });
+  }
+  const mapsLink = (r) => {
+    const pts = r.stops.filter((x) => !x.done).map((x) => `${x.lat},${x.lng}`);
+    if (!pts.length) return null;
+    const origin = r.base ? `${r.base.lat},${r.base.lng}` : pts.shift();
+    const destination = r.base ? origin : pts.pop() || origin;
+    return `https://www.google.com/maps/dir/?api=1&travelmode=driving&origin=${origin}&destination=${destination}${pts.length ? '&waypoints=' + pts.slice(0, 9).join('|') : ''}`;
+  };
+  async function useOrder(r, plan) {
+    for (const x of plan.times) {
+      const s = r.stops.find((y) => y.id === x.id);
+      if (s && (s.start !== x.start || s.end !== x.end)) await api('PATCH', '/visits/' + x.id, { start: x.start, end: x.end }).catch((e) => toast(e.message));
+    }
+    toast(`New order saved: ${fmtMins(plan.saves)} less driving`);
+    await loadRoute(true);
+    renderTool(true);
+    mapDraw(true);
+  }
+  function drawRoute(fit) {
+    const r = RT.data;
+    if (!r?.stops) return;
+    if (r.line.length > 1) L.polyline(r.line, { color: '#6b5cf0', weight: 5, opacity: 0.85 }).addTo(MP.group);
+    const pin = (lat, lng, label, cls, pop) => {
+      const m = L.marker([lat, lng], { icon: L.divIcon({ className: 'rt-pin ' + cls, html: `<span>${label}</span>`, iconSize: [26, 26], iconAnchor: [13, 13] }) });
+      if (pop) m.bindPopup(pop, { maxWidth: 260 });
+      m.addTo(MP.group);
+    };
+    if (r.base) pin(r.base.lat, r.base.lng, '⌂', 'base', `Start: ${r.base.address}`);
+    for (const s of r.stops) pin(s.lat, s.lng, String(s.n), s.done ? 'done' : s.flex ? 'flex' : '', () => h('div', { class: 'rt-pop' }, h('b', {}, s.label), h('small', {}, [s.start != null ? fmtTime(s.start) : 'Any time', s.address].join(' · ')), h('button', { class: 'btn small', onclick: () => openJob(s.projectId, s.recordId, s.id) }, 'Open job')));
+    if (fit) {
+      const pts = [...r.stops.map((s) => [s.lat, s.lng]), ...(r.base ? [[r.base.lat, r.base.lng]] : [])];
+      if (pts.length) MP.map.fitBounds(pts, { maxZoom: 15, padding: [30, 30] });
+    }
+  }
+  function routePanel() {
+    const r = RT.data && RT.data.key === (RT.member || S.me.memberId) + (RT.date || todayKey()) ? RT.data : null;
+    if (!r) loadRoute().then(() => { renderTool(true); mapDraw(true); });
+    const who = amAdmin() ? h('select', { 'aria-label': 'Whose route', onchange: (e) => { RT.member = e.target.value; RT.data = null; renderTool(true); mapDraw(); } }, (S.workspace?.members || []).map((m) => h('option', { value: m.id, selected: m.id === (RT.member || S.me.memberId) }, m.id === S.me.memberId ? `${m.name} (you)` : m.name))) : null;
+    const date = h('input', { type: 'date', value: RT.date || todayKey(), 'aria-label': 'Day' });
+    date.addEventListener('change', () => { RT.date = date.value; RT.data = null; renderTool(true); mapDraw(); });
+    const step = (n) => { RT.date = addDays(RT.date || todayKey(), n); RT.data = null; renderTool(true); mapDraw(); };
+    const head = h('div', { class: 'rt-head' }, who, h('button', { class: 'icon-btn', 'aria-label': 'Previous day', html: I.left, onclick: () => step(-1) }), date, h('button', { class: 'icon-btn', 'aria-label': 'Next day', html: I.right, onclick: () => step(1) }));
+    if (!r) return [head, h('p', { class: 'day-hint' }, 'Working out the route…')];
+    if (r.error) return [head, h('p', { class: 'day-hint' }, r.error)];
+    if (!r.configured) return [head, h('p', { class: 'day-hint' }, 'Route planning isn’t turned on for this team’s server yet. Once it is, each person’s job visits show here in order, with the driving between them and a better order to save time.')];
+    const base = () => {
+      const inp = h('input', { value: r.baseAddress || '', placeholder: 'The shop, yard or office address' });
+      sheet('Where routes start', [h('p', { class: 'day-hint' }, 'Each day’s route starts and ends here, so the driving to the first job and home from the last one counts.'), h('label', {}, 'Address', inp)], async () => {
+        const w = await api('PATCH', '/workspace', { base: inp.value });
+        S.workspace = w;
+        RT.data = null;
+        await loadRoute(true);
+        renderTool(true);
+        mapDraw(true);
+      });
+    };
+    const link = r.stops.length ? mapsLink(r) : null;
+    const legBefore = (i) => (r.base ? r.legs[i] : i > 0 ? r.legs[i - 1] : null);
+    const name = (id) => r.stops.find((s) => s.id === id)?.label.replace(/^[^:]+:\s*/, '') || '';
+    const plan = (title, x, warn) => h('div', { class: 'rt-better' + (warn ? ' warn' : '') }, h('b', {}, `${title}: ${fmtMins(x.saves)} less driving`),
+      h('ol', {}, x.order.map((id) => { const tm = x.times.find((y) => y.id === id); return h('li', {}, `${tm ? fmtTime(tm.start) : ''} ${name(id)}`); })),
+      warn ? h('small', {}, 'This changes times you may have given customers. Let them know.') : null,
+      h('button', { class: 'btn small' + (warn ? '' : ' primary-btn'), onclick: () => useOrder(r, x) }, 'Use this order'));
+    return [
+      head,
+      h('div', { class: 'rt-sum' },
+        h('b', {}, r.stops.length ? `${plural(r.stops.length, 'stop')} · ${fmtMins(r.drive)} driving · ${fmtDist(r.meters)}` : 'No job visits on this day'),
+        h('small', {}, r.base ? `From ${r.base.address}` : 'Starts at the first visit', amAdmin() ? h('button', { class: 'link rt-base', onclick: base }, r.base ? 'Change' : 'Set where routes start') : null)),
+      link ? h('a', { class: 'btn primary-btn rt-go', href: link, target: '_blank', rel: 'noopener' }, '➤ Start route in Google Maps') : null,
+      ...r.tight.map((x) => h('p', { class: 'rt-tight' }, `⚠ ${name(x.from)} → ${name(x.to)}: the drive is ${fmtMins(x.drive)} but there’s ${x.gap > 0 ? 'only ' + fmtMins(x.gap) : 'no time'} between them.`)),
+      h('div', { class: 'rt-stops' }, r.stops.map((s, i) => [
+        // The drive before each stop: from the base to the first, then from each stop to the next.
+        legBefore(i) ? h('div', { class: 'rt-leg' }, `🚗 ${fmtMins(Math.round(legBefore(i).secs / 60))} · ${fmtDist(legBefore(i).meters)}`) : null,
+        h('button', { class: 'rt-stop' + (s.done ? ' done' : ''), onclick: () => openJob(s.projectId, s.recordId, s.id) },
+          h('span', { class: 'rt-n' + (s.flex ? ' flex' : '') }, String(s.n)),
+          h('span', { class: 'rt-what' }, h('b', {}, s.label), h('small', {}, [s.start != null ? (s.flex ? 'Any time · ' : '') + fmtTime(s.start) + (s.end != null ? '–' + fmtTime(s.end) : '') : 'Any time', s.address].join(' · '))),
+          s.done ? h('small', { class: 'rt-done' }, '✓') : null),
+      ]).flat().filter(Boolean)),
+      r.base && r.stops.length && r.legs.length > r.stops.length ? h('div', { class: 'rt-leg' }, `🚗 ${fmtMins(Math.round(r.legs.at(-1).secs / 60))} back`) : null,
+      ...r.missing.map((x) => h('p', { class: 'day-hint' }, `Not on the map: ${x.label} (${x.why}).`)),
+      r.better ? plan('A better order that keeps promised times', r.better) : null,
+      r.reorder ? plan('Reorder everything', r.reorder, true) : null,
+      !r.better && !r.reorder && r.stops.length > 2 ? h('p', { class: 'day-hint' }, 'This is already the best order Kloomie can find. Visits booked “any time that day” can be moved around to save driving.') : null,
+    ];
+  }
+  // The Day's line about its route: how much driving, and anything too tight.
+  const DR = { key: null, data: null };
+  function dayRouteLine(k) {
+    if (!toolOn('projects') || !S.entries.some((e) => e.visitId && e.date === k && e.memberId === S.me.memberId)) return null;
+    const key = k + S.entries.filter((e) => e.visitId && e.date === k).map((e) => e.id + e.start + e.end).join();
+    if (DR.key !== key) {
+      DR.key = key;
+      DR.data = null;
+      api('GET', `/route?date=${k}`).then((x) => { if (DR.key === key) { DR.data = x; renderDay(); } }).catch(() => {});
+    }
+    const r = DR.data;
+    if (!r?.configured || !r.stops?.length) return null;
+    return h('button', { class: 'day-route' + (r.tight.length ? ' warn' : ''), onclick: () => openRoute(S.me.memberId, k) },
+      `🚗 ${plural(r.stops.length, 'stop')} · ${fmtMins(r.drive)} driving`, r.tight.length ? ` · ⚠ ${plural(r.tight.length, 'visit')} too tight` : '', r.better ? ` · could save ${fmtMins(r.better.saves)}` : '', h('span', {}, ' See route →'));
   }
 
   const DV = { doc: null };
@@ -10472,6 +10601,7 @@
     if (!MP.group) return;
     MP.group.clearLayers();
     MP.live = null;
+    if (MP.mode === 'routes') return drawRoute(fit);
     if (MP.show === 'all' || MP.show === 'done') {
       for (const z of MP.zones) {
         if (!inCamp(z)) continue;
@@ -10549,6 +10679,13 @@
         h('button', { class: 'btn small primary-btn', disabled: d.pts.length < need, onclick: () => { const { kind, pts } = d; MP.draw = null; drawPreview(); saveZone(kind, pts); } }, 'Save as done')));
   }
   function mapTool() {
+    const modes = toolOn('projects') ? h('div', { class: 'seg map-mode' }, [['canvass', 'Canvassing'], ['routes', 'Job routes']].map(([k, l]) => h('button', { class: (MP.mode || 'canvass') === k ? 'on' : '', onclick: () => { MP.mode = k; renderTool(true); mapDraw(true); } }, l))) : null;
+    if (MP.mode === 'routes' && toolOn('projects')) {
+      const box = mapBox();
+      if (MP.map) setTimeout(() => MP.map.invalidateSize(), 0);
+      const rp = routePanel();
+      return [modes, rp[0], box, ...rp.slice(1)];
+    }
     mapWatch();
     const box = mapBox();
     if (MP.map) setTimeout(() => MP.map.invalidateSize(), 0);
@@ -10568,6 +10705,7 @@
       { label: 'Delete run', danger: true, run: () => { MP.trips = MP.trips.filter((x) => x.id !== t.id); mapSend('DELETE', '/trips/' + t.id); mapDraw(); renderTool(); } },
     ]);
     const out = [
+      modes,
       h('div', { class: 'map-run' + (run ? ' on' : '') },
         run ? h('span', { class: 'map-rec' }) : null,
         run ? MP.stats : h('span', { class: 'map-stats' }, MP.geoErr || (hereNow() ? 'Ready when you are' : 'Finding your location…')),
