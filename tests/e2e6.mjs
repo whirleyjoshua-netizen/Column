@@ -45,7 +45,7 @@ await A.until(`document.querySelector('#toolsBtn') && true`, 500);
 await sleep(1200);
 const token = await A.ev(`JSON.parse(localStorage.getItem('column.token'))`);
 const api = async (m, p, body) => (await fetch(APP + 'api' + p, { method: m, headers: { 'content-type': 'application/json', authorization: 'Bearer ' + token }, body: body ? JSON.stringify(body) : undefined })).json();
-await A.tap(`document.querySelector('#toolsBtn')`); await A.tap(`[...document.querySelectorAll('#menu button')].find((b) => b.textContent === 'Projects')`);
+await A.tap(`document.querySelector('#toolsBtn')`); await A.tap(`[...document.querySelectorAll('#menu button')].find((b) => b.textContent === 'Jobs & projects')`);
 await A.tap(`[...document.querySelectorAll('#projects .btn')].find((b) => b.textContent === '+ New project' || b.textContent.startsWith('Start with'))`);
 await A.tap(`[...document.querySelectorAll('#sheet .pj-tpl')].find((b) => b.textContent.includes('Bids & Quotes'))`);
 await A.ev(`document.querySelector('#sheet input').value = 'Estimating'`);

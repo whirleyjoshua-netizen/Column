@@ -49,7 +49,7 @@ const st0 = await (await fetch(APP + 'api/state', { headers: { authorization: 'B
 const name = st0.workspace.name;
 await A.ev(`document.querySelector('[data-open=settings], #settingsBtn, [title=Settings]')?.click()`);
 await sleep(500);
-await A.ev(`[...document.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Team')?.click()`);
+await A.ev(`[...document.querySelectorAll('#settings [role=tab]')].find((b) => b.textContent.trim() === 'Team')?.click()`);
 await sleep(400);
 ok(await A.ev(`[...document.querySelectorAll('h3')].some((x) => x.textContent === 'Delete team')`), 'Settings → Team has Delete team for the owner');
 await A.ev(`[...document.querySelectorAll('button')].find((b) => b.textContent === 'Delete team…').click()`);

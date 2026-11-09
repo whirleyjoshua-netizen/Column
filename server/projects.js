@@ -150,7 +150,7 @@ export const TEMPLATES = {
   },
 };
 
-export function projectsModule({ db, save, broadcast, rid, cleanText, isDay, readJson, send, badRequest, isOwnerId, escHtml, brandOf, logoUrl, teamDay, offline, makeTask, onRecords, allowLocalHooks = false }) {
+export function projectsModule({ db, save, broadcast, rid, cleanText, isDay, readJson, send, badRequest, isOwnerId, escHtml, brandOf, logoUrl, teamDay, offline, makeTask, onRecords, onRecordGone, allowLocalHooks = false }) {
   const bad = (msg) => badRequest(msg);
   db.projects ||= {};
   db.records ||= {};
@@ -615,6 +615,7 @@ export function projectsModule({ db, save, broadcast, rid, cleanText, isDay, rea
     save();
     broadcast(rec.wsId, { type: 'record:remove', id: rec.id, projectId: rec.projectId });
     hooksFire(rec, 'record.deleted', by);
+    onRecordGone?.(rec);
   }
   const teamRecords = (wsId) => Object.values(db.records).filter((r) => r.wsId === wsId).length;
   function newRecord(ws, p, t, auth, values, extId, opts) {
@@ -1424,5 +1425,5 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
     return rec && rec.wsId === wsId && sees(p, memberId) ? { rec, p, t: typeOf(p, rec.typeId) } : null;
   };
 
-  return { route, v1, quotePage, seesMsg, stateFor, sees, recordActivity, fillFromProject, fromProjectOk, recordStory, priceList, recordAt, itemsTotals, TEMPLATES: Object.fromEntries(Object.entries(TEMPLATES).map(([k, t]) => [k, { name: t.name, icon: t.icon, about: t.about }])) };
+  return { route, v1, quotePage, seesMsg, stateFor, sees, recordActivity, recordNews, words, fillFromProject, fromProjectOk, recordStory, priceList, recordAt, itemsTotals, TEMPLATES: Object.fromEntries(Object.entries(TEMPLATES).map(([k, t]) => [k, { name: t.name, icon: t.icon, about: t.about }])) };
 }

@@ -46,7 +46,7 @@ await sleep(1000);
 const token = await A.ev(`JSON.parse(localStorage.getItem('column.token'))`);
 await A.ev(`document.querySelector('[data-open=settings], #settingsBtn, [title=Settings]')?.click()`);
 await sleep(500);
-await A.ev(`[...document.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Team')?.click()`);
+await A.ev(`[...document.querySelectorAll('#settings [role=tab]')].find((b) => b.textContent.trim() === 'Team')?.click()`);
 await sleep(400);
 ok(await A.ev(`[...document.querySelectorAll('h3')].some((x) => x.textContent === 'Export the team')`), 'Settings → Team has Export the team');
 await A.ev(`[...document.querySelectorAll('#settings button')].find((b) => b.textContent === 'Export team').click()`);

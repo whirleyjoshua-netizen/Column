@@ -511,10 +511,16 @@
       if (toolOpen === 'folders' || (toolOpen && !toolOn(toolOpen))) renderTool();
     } else if (msg.type === 'entry') {
       upsertEntry(msg.entry);
+      if (msg.entry.visitId) teamSoon();
       renderDay();
     } else if (msg.type === 'entry:remove') {
       S.entries = S.entries.filter((x) => x.id !== msg.id);
+      teamSoon();
       renderDay();
+    } else if (msg.type === 'visits') {
+      PR.visits.set(msg.recordId, msg.visits);
+      teamSoon();
+      if (PR.panel === msg.recordId) renderProjects();
     } else if (msg.type === 'task') {
       const was = taskById(msg.task.id);
       upsertTask(msg.task);
@@ -2527,7 +2533,8 @@
     D.scroll = h('div', { class: 'day-scroll' });
     D.seg = h('div', { class: 'seg day-sub' },
       h('button', { 'data-sub': 'schedule', onclick: () => setSub('schedule') }, 'Schedule'),
-      h('button', { 'data-sub': 'tasks', onclick: () => setSub('tasks') }, 'Tasks')
+      h('button', { 'data-sub': 'tasks', onclick: () => setSub('tasks') }, 'Tasks'),
+      h('button', { 'data-sub': 'team', onclick: () => setSub('team') }, 'Team')
     );
     root.append(
       D.seg,
@@ -2628,8 +2635,9 @@
     sendNext();
     if (S.tab === 'camps') renderCamps();
     if (!D.scroll) buildDay();
-    for (const b of D.seg.children) b.classList.toggle('on', b.dataset.sub === D.sub);
-    D.head.classList.toggle('hidden', D.sub !== 'schedule');
+    if (D.sub === 'team' && !canTeam()) D.sub = 'schedule';
+    for (const b of D.seg.children) { b.classList.toggle('on', b.dataset.sub === D.sub); if (b.dataset.sub === 'team') b.classList.toggle('hidden', !canTeam()); }
+    D.head.classList.toggle('hidden', D.sub === 'tasks');
     D.input.placeholder = D.sub === 'tasks' ? 'Add a task…' : 'Add to your day… “Call Sam at 3pm”';
     if (D.sub === 'tasks') return renderTasks();
     const k = D.date;
@@ -2638,6 +2646,7 @@
     D.title.replaceChildren(...(rel ? [h('b', {}, rel), ' '] : []), h('span', {}, rel ? long.replace(/^\w+,?\s*/, '') : long));
     D.pick.value = k;
     D.todayBtn.classList.toggle('hidden', isToday);
+    if (D.sub === 'team') return renderTeam(k);
 
     const entries = entriesOn(k);
     const anytime = entries.filter((e) => e.start == null).sort((a, b) => a.done - b.done || a.createdAt - b.createdAt);
@@ -3627,6 +3636,8 @@
   }
 
   function openSheet(entry) {
+    // A job visit opens the job, on that visit.
+    if (entry.visitId && entry.recordId && entry.projectId) return openJob(entry.projectId, entry.recordId, entry.visitId);
     const isNew = !entry.id;
     const wrap = $('#sheet');
     const toHM = (m) => (m == null ? '' : `${pad2(Math.floor(Math.min(m, 1439) / 60))}:${pad2(Math.min(m, 1439) % 60)}`);
@@ -7583,7 +7594,7 @@
   function newProjectSheet() {
     let tpl = 'crm';
     const name = h('input', { placeholder: 'Sales', maxlength: 80 });
-    const TPL = { crm: ['🤝', 'CRM', 'Contacts, companies and deals, with a pipeline board'], bids: ['📐', 'Bids & Quotes', 'Jobs you bid on, quotes customers accept online, jobs, clients, a price list'], trades: ['🛠️', 'Jobs (by trade)', 'Pick the kinds of work you do: each gets its own job details, checklist and stages'], blank: ['📁', 'Blank', 'One list to shape as you like'] };
+    const TPL = { crm: ['🤝', 'CRM', 'Contacts, companies and deals, with a pipeline board'], bids: ['📐', 'Bids & Quotes', 'Jobs you bid on, quotes customers accept online, jobs, clients, a price list'], trades: ['🛠️', 'Jobs (by trade)', 'Pick the kinds of work you do: each gets its own job details, checklist and stages'], jobs: ['🚚', 'Jobs & Installs', 'Jobs from scheduled to paid, with crews, dates and photos'], blank: ['📁', 'Blank', 'One list to shape as you like'] };
     api('GET', '/project-templates').then((list) => {
       for (const x of list) TPL['custom:' + x.id] = ['⭐', x.name, x.about || x.lists.join(', '), x];
       if (list.length) draw();
@@ -7975,9 +7986,11 @@
     return h('aside', { class: 'pj-panel' + (itemFields.length || richFields.length ? ' wide' : ''), 'data-id': r.id },
       h('div', { class: 'pj-panel-h' }, h('small', {}, `${t.icon || ''} ${t.singular || t.name}`), h('span', { style: 'flex:1' }),
         h('button', { class: 'icon-btn', 'aria-label': 'Record options', html: I.more, onclick: (e) => openMenu(e.currentTarget, [{ label: `Delete this ${(t.singular || 'record').toLowerCase()}`, danger: true, run: async () => { if (await prCall('DELETE', '/records/' + r.id)) { PR.records.set(p.id, prRecs(p.id).filter((x) => x.id !== r.id)); PR.panel = null; renderProjects(); } } }]) }),
-        h('button', { class: 'icon-btn', 'aria-label': 'Close', html: I.close, onclick: () => { PR.panel = null; renderProjects(); } })),
+        h('button', { class: 'icon-btn', 'aria-label': 'Close', html: I.close, onclick: () => { PR.panel = null; PR.visit = null; renderProjects(); } })),
       title,
+      custFields.length ? prVisitBar(p, t, r) : null,
       ...custFields.map((f) => prCustomer(p, t, r, f)),
+      custFields.length ? prVisits(p, t, r) : null,
       itemFields.length ? quoteActions(p, t, r) : null,
       top.length ? h('div', { class: 'pj-fields' }, top.map(fieldRow)) : null,
       ...itemFields.map((f) => prItems(p, t, r, f)),
@@ -8757,6 +8770,148 @@
       }) : [h('p', { class: 'day-hint' }, 'No jobs yet.')]));
     }).catch(() => box.replaceChildren(h('p', { class: 'day-hint' }, 'Couldn’t load jobs.')));
     return h('div', { class: 'ct-jobs-sec' }, h('div', { class: 'ct-jobs-h' }, h('b', {}, 'Jobs'), btn), box);
+  }
+
+  // ----- visits: going to a job, on each person's Day, and the team's schedule -----
+  // A visit is booked from the job (or the team schedule). Each person going gets it on their Day; tapping it there
+  // opens the job, with that visit's time, who's going and Mark done at the top.
+  const VISIT_KINDS = ['Estimate', 'Measure', 'Install', 'Service', 'Repair', 'Maintenance', 'Inspection', 'Follow-up', 'Delivery', 'Cleaning', 'Visit'];
+  PR.visits = new Map();
+  const hm = (m) => (m == null ? '' : `${pad2(Math.floor(Math.min(m, 1439) / 60))}:${pad2(Math.min(m, 1439) % 60)}`);
+  const fromHm = (v) => { if (!v) return null; const [a, b] = v.split(':').map(Number); return a * 60 + b; };
+  const visitWhen = (v) => `${dueLabel(v.date)}${v.start != null ? ' · ' + fmtTime(v.start) + (v.end != null ? '–' + fmtTime(v.end) : '') : ''}`;
+  async function loadVisits(r, force) {
+    if (PR.visits.has(r.id) && !force) return PR.visits.get(r.id);
+    const list = await api('GET', `/records/${r.id}/visits`).catch(() => null);
+    if (list) PR.visits.set(r.id, list);
+    return list || [];
+  }
+  // The job's visits, and booking another.
+  function prVisits(p, t, r) {
+    const list = PR.visits.get(r.id);
+    if (!list) loadVisits(r).then(() => renderProjects());
+    const rows = (list || []).map((v) => h('button', { type: 'button', class: 'pj-visit' + (v.done ? ' done' : '') + (v.id === PR.visit ? ' on' : ''), onclick: () => visitSheet(p, t, r, v) },
+      h('b', {}, v.kind), h('span', {}, visitWhen(v)), h('span', { class: 'pj-visit-who' }, v.memberIds.map((id) => avatar(id))), v.done ? h('small', {}, '✓ done') : null));
+    return h('div', { class: 'pj-items pj-job-blk' }, h('div', { class: 'pj-it-h' }, h('b', {}, '🗓 Visits'), h('span', { style: 'flex:1' }), h('button', { class: 'btn small primary-btn', onclick: () => visitSheet(p, t, r) }, '+ Schedule a visit')),
+      list ? (rows.length ? h('div', { class: 'pj-visits' }, rows) : h('p', { class: 'day-hint' }, 'Nothing booked yet. A visit goes on the Day of everyone going, and on their calendar.')) : h('p', { class: 'day-hint' }, 'Loading…'));
+  }
+  // Book or change a visit: what kind, when, who's going, a note for them.
+  function visitSheet(p, t, r, v, pre = {}) {
+    const kind = h('select', {}, VISIT_KINDS.map((k) => h('option', { value: k, selected: (v?.kind || pre.kind || 'Visit') === k }, k)));
+    const date = h('input', { type: 'date', value: v?.date || pre.date || todayKey() });
+    const start = h('input', { type: 'time', step: 900, value: hm(v?.start ?? pre.start ?? 540) });
+    const end = h('input', { type: 'time', step: 900, value: hm(v?.end ?? pre.end ?? ((v?.start ?? pre.start ?? 540) + 60)) });
+    const going = new Set(v?.memberIds || pre.memberIds || [S.me.memberId]);
+    const crew = h('div', { class: 'pj-crew' }, (S.workspace?.members || []).map((m) => {
+      const cb = h('input', { type: 'checkbox', checked: going.has(m.id) });
+      cb.addEventListener('change', () => (cb.checked ? going.add(m.id) : going.delete(m.id)));
+      return h('label', { class: 'pick' }, cb, avatar(m.id), m.name);
+    }));
+    const note = h('textarea', { rows: 2, placeholder: 'For whoever’s going: bring the sample book, park on the street…' });
+    note.value = v?.note || '';
+    const del = v ? h('button', { type: 'button', class: 'btn small danger', 'data-label': '1' }, 'Cancel visit') : null;
+    del?.addEventListener('click', () => confirmClick(del, async () => { await api('DELETE', '/visits/' + v.id).catch((e) => toast(e.message)); closeSheet(); }));
+    const done = v ? h('button', { type: 'button', class: 'btn small' }, v.done ? 'Not done' : '✓ Mark done') : null;
+    done?.addEventListener('click', async () => { await api('PATCH', '/visits/' + v.id, { done: !v.done }).catch((e) => toast(e.message)); closeSheet(); });
+    // A new visit starts as what that kind of work usually books first: installers measure, remodels estimate, the rest service.
+    if (!v && !pre.kind && t.trade) kind.value = ['blinds', 'flooring', 'cabinets', 'windows', 'fencing', 'closets'].includes(t.trade) ? 'Measure' : ['painting', 'drywall', 'concrete', 'remodel', 'insulation', 'roofing', 'solar'].includes(t.trade) ? 'Estimate' : t.trade === 'cleaning' ? 'Cleaning' : 'Service';
+    sheet(v ? `${v.kind} · ${recName(t, r)}` : `Schedule a visit · ${recName(t, r)}`, [
+      h('div', { class: 'row2' }, h('label', {}, 'What for', kind), h('label', {}, 'Day', date)),
+      h('div', { class: 'row2' }, h('label', {}, 'From', start), h('label', {}, 'Until', end)),
+      h('div', {}, h('small', { class: 'hint' }, 'Who’s going'), crew),
+      h('label', {}, 'Note', note),
+      v ? h('div', { class: 'btns' }, done, del) : null,
+    ].filter(Boolean), async () => {
+      if (!going.size) throw new Error('Pick who’s going.');
+      const body = { kind: kind.value, date: date.value, start: fromHm(start.value), end: fromHm(end.value), memberIds: [...going], note: note.value };
+      if (v) await api('PATCH', '/visits/' + v.id, body);
+      else await api('POST', `/records/${r.id}/visits`, body);
+      toast(v ? 'Visit changed' : `Booked: ${kind.value} ${dueLabel(date.value).toLowerCase()}`);
+    }, v ? 'Save' : 'Book it');
+  }
+  // From someone's Day: the job, open on that visit.
+  async function openJob(projectId, recordId, visitId) {
+    if (!projById(projectId)) return toast('That job is in a project you can’t open.');
+    await openProject(projectId);
+    const r = recById(projectId, recordId);
+    if (!r) return toast('That job is gone.');
+    PR.type = r.typeId;
+    PR.view = null;
+    PR.panel = r.id;
+    PR.visit = visitId || null;
+    await loadVisits(r, true);
+    renderProjects();
+  }
+  // The visit you came from, at the top of the job: when, who, directions, done.
+  function prVisitBar(p, t, r) {
+    const v = PR.visit && (PR.visits.get(r.id) || []).find((x) => x.id === PR.visit);
+    if (!v) return null;
+    return h('div', { class: 'pj-visit-bar' + (v.done ? ' done' : '') },
+      h('div', {}, h('b', {}, v.kind), h('span', {}, visitWhen(v)), h('span', { class: 'pj-visit-who' }, v.memberIds.map((id) => avatar(id)))),
+      v.note ? h('p', {}, v.note) : null,
+      h('div', { class: 'btns' },
+        h('button', { class: 'btn small' + (v.done ? '' : ' primary-btn'), onclick: async () => { await api('PATCH', '/visits/' + v.id, { done: !v.done }).catch((e) => toast(e.message)); } }, v.done ? 'Not done' : '✓ Visit done'),
+        h('button', { class: 'btn small', onclick: () => visitSheet(p, t, r, v) }, 'Change')));
+  }
+
+  // The team's schedule (owners and admins): a row for each person, their job visits across the day, and the
+  // jobs still waiting for one. Drag a waiting job onto someone's row to book it then; tap a visit to open the job.
+  const TS = { data: null, date: null, timer: 0 };
+  const canTeam = () => amAdmin() && toolOn('projects');
+  const teamSoon = () => { if (D.sub !== 'team' || TS.timer) return; TS.timer = setTimeout(() => { TS.timer = 0; TS.data = null; renderDay(); }, 300); };
+  function renderTeam(k) {
+    if (!TS.data || TS.date !== k) {
+      TS.date = k;
+      if (!TS.loading) {
+        TS.loading = api('GET', '/schedule?date=' + k).then((x) => { TS.data = x; }).catch((e) => toast(e.message)).finally(() => { TS.loading = null; if (D.sub === 'team') renderDay(); });
+      }
+      if (!TS.data || TS.data.date !== k) return D.scroll.replaceChildren(h('p', { class: 'day-hint' }, 'Loading the team’s day…'));
+    }
+    const { visits, waiting, members } = TS.data;
+    const H0 = 6, H1 = 20, span = (H1 - H0) * 60;
+    const x = (m) => `${(Math.max(0, Math.min(span, m - H0 * 60)) / span) * 100}%`;
+    const hours = h('div', { class: 'ts-hours' }, Array.from({ length: H1 - H0 + 1 }, (_, i) => h('span', { style: `left:${(i / (H1 - H0)) * 100}%` }, i % 2 ? '' : fmtTime((H0 + i) * 60))));
+    const book = (memberId, minute, item) => {
+      const p = projById(item.projectId);
+      const go = async () => {
+        if (!PR.records.has(p.id)) PR.records.set(p.id, (await prCall('GET', `/projects/${p.id}/records`)) || []);
+        const r = recById(p.id, item.recordId);
+        if (r) visitSheet(p, prType(p, r.typeId), r, null, { date: k, start: minute, end: minute + 60, memberIds: [memberId] });
+      };
+      if (p) go();
+    };
+    const rows = members.map((m) => {
+      const mine = visits.filter((v) => v.memberIds.includes(m.id));
+      const lane = h('div', { class: 'ts-lane' }, mine.map((v) => h('button', {
+        class: 'ts-visit' + (v.done ? ' done' : ''),
+        style: v.start != null ? `left:${x(v.start)};width:calc(${x(v.end ?? v.start + 60)} - ${x(v.start)})` : 'left:0;width:12%',
+        title: `${v.kind}: ${v.label}\n${visitWhen(v)}`,
+        onclick: () => openJob(v.projectId, v.recordId, v.id),
+      }, h('b', {}, v.kind), h('span', {}, v.label))));
+      lane.addEventListener('dragover', (e) => { if (TS.drag) { e.preventDefault(); lane.classList.add('over'); } });
+      lane.addEventListener('dragleave', () => lane.classList.remove('over'));
+      lane.addEventListener('drop', (e) => {
+        e.preventDefault();
+        lane.classList.remove('over');
+        const b = lane.getBoundingClientRect();
+        const minute = Math.round(((e.clientX - b.left) / b.width) * span / 15) * 15 + H0 * 60;
+        if (TS.drag) book(m.id, Math.max(H0 * 60, Math.min(H1 * 60 - 60, minute)), TS.drag);
+        TS.drag = null;
+      });
+      return h('div', { class: 'ts-row' }, h('div', { class: 'ts-name' }, avatar(m.id), h('span', {}, m.name), h('small', {}, mine.length ? plural(mine.length, 'visit') : 'free')), lane);
+    });
+    const wait = waiting.map((w) => {
+      const chip = h('div', { class: 'ts-wait', draggable: 'true', title: 'Drag onto someone’s row to book it' }, h('span', {}, w.icon), h('b', {}, w.label), w.stage ? h('small', {}, w.stage) : null);
+      chip.addEventListener('dragstart', (e) => { TS.drag = w; e.dataTransfer.setData('text/plain', w.label); e.dataTransfer.effectAllowed = 'copy'; });
+      chip.addEventListener('click', () => openJob(w.projectId, w.recordId));
+      return chip;
+    });
+    D.scroll.replaceChildren(...[
+      h('div', { class: 'ts' }, h('div', { class: 'ts-row ts-head' }, h('div', { class: 'ts-name' }), hours), ...rows),
+      visits.length ? null : h('p', { class: 'day-hint' }, 'No job visits on this day yet.'),
+      h('div', { class: 'anytime tasks ts-waiting' }, h('div', { class: 'any-h' }, `Jobs to schedule · ${waiting.length}`),
+        wait.length ? h('div', { class: 'ts-waits' }, wait) : h('p', { class: 'day-hint' }, 'Every open job has a visit booked.'),
+        wait.length ? h('p', { class: 'day-hint' }, 'Drag a job onto someone’s row at the time they’ll go, or tap it to open it.') : null)].filter(Boolean));
   }
 
   const DV = { doc: null };

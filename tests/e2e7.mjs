@@ -58,7 +58,7 @@ await add('deals', { name: 'Fleet tint', value: 12500, stage: ch('deals', 'stage
 await add('deals', { name: 'Showroom', value: 6200, stage: ch('deals', 'stage', 'Won'), close_date: month + '-03' });
 await sleep(400);
 const openTools = async (label) => { await A.tap(`document.querySelector('#toolsBtn')`); await A.tap(`[...document.querySelectorAll('#menu button')].find((b) => b.textContent.startsWith(${JSON.stringify(label)}))`); };
-await openTools('Projects');
+await openTools('Jobs & projects');
 await A.tap(`[...document.querySelectorAll('#projects .pj-card')].find((x) => x.textContent.includes('Sales'))`);
 await A.tap(`[...document.querySelectorAll('#projects .pj-open')].find((b) => b.textContent === 'Ben Ortiz')`);
 ok(await A.until(`[...document.querySelectorAll('#projects .pj-tl')].some((x) => x.textContent.includes('Jo added this'))`), 'Ben’s panel has a timeline starting with who added him');

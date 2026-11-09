@@ -908,6 +908,111 @@ function applyEntry(e, body) {
   return e;
 }
 
+// ---------- visits: someone going to a job ----------
+// A visit is a Day entry for each person going, sharing a visitId and pointing at the job (entry.recordId), so it's
+// on each person's own Day and calendar, and the job lists its visits. Moving one person's copy moves them all.
+// The job's Scheduled day and Assigned to follow its next visit.
+const fmtMinutes = (m) => { const h = Math.floor(m / 60), mm = m % 60; return `${h % 12 || 12}${mm ? ':' + String(mm).padStart(2, '0') : ''}${h < 12 ? 'am' : 'pm'}`; };
+const memberById = (ws, id) => ws.members.find((x) => x.id === id);
+const VISIT_KINDS = ['Estimate', 'Measure', 'Install', 'Service', 'Repair', 'Maintenance', 'Inspection', 'Follow-up', 'Delivery', 'Cleaning', 'Visit'];
+const visitEntries = (visitId) => Object.values(db.entries).filter((e) => e.visitId === visitId);
+const jobOfRecord = (rec) => { const p = rec && db.projects[rec.projectId]; const t = p?.types.find((x) => x.id === rec.typeId); return t ? { p, t } : null; };
+function jobLabel(rec) {
+  const j = jobOfRecord(rec);
+  if (!j) return 'Job';
+  const name = String(rec.values[j.t.primary] ?? '').trim();
+  const cf = j.t.fields.find((f) => f.type === 'contact' && rec.values[f.id]);
+  const who = cf && (db.contacts[rec.values[cf.id]]?.name || db.contacts[rec.values[cf.id]]?.company);
+  return [name, who].filter(Boolean).join(' · ') || j.t.singular || 'Job';
+}
+function publicVisit(list) {
+  const e = list[0];
+  return { id: e.visitId, recordId: e.recordId, kind: e.visit || 'Visit', date: e.date, start: e.start, end: e.end, note: e.note || '', done: list.every((x) => x.done), memberIds: list.map((x) => x.memberId), by: e.by, text: e.text };
+}
+function visitsOf(recordId) {
+  const groups = new Map();
+  for (const e of Object.values(db.entries)) if (e.recordId === recordId && e.visitId) (groups.get(e.visitId) || groups.set(e.visitId, []).get(e.visitId)).push(e);
+  return [...groups.values()].map(publicVisit).sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : (a.start ?? -1) - (b.start ?? -1)));
+}
+// The job's Scheduled day is its next visit's, and Assigned to its lead, so the board and lists stay true.
+function syncJob(rec) {
+  const j = jobOfRecord(rec);
+  if (!j) return;
+  const vs = visitsOf(rec.id).filter((v) => !v.done);
+  const today = teamDay(rec.wsId);
+  const next = vs.find((v) => v.date >= today) || vs.at(-1);
+  const sf = j.t.fields.find((f) => f.key === 'scheduled' && f.type === 'date');
+  const cf = j.t.fields.find((f) => f.key === 'crew' && f.type === 'person');
+  let changed = false;
+  if (sf && next && rec.values[sf.id] !== next.date) { rec.values[sf.id] = next.date; changed = true; }
+  if (cf && next && !next.memberIds.includes(rec.values[cf.id])) { rec.values[cf.id] = next.memberIds[0]; changed = true; }
+  if (changed) { rec.updatedAt = Date.now(); PJ.recordNews(rec, 'record.updated', 'Kloomie'); }
+}
+// A visit booked or done moves the job's stage along, never back: a measure booked → Measure booked; an install or
+// service booked → Scheduled; a measure done → Measured; an install done → Installed; a service done → Done.
+function advanceJob(rec, kind, done) {
+  const j = jobOfRecord(rec);
+  const st = j?.t.fields.find((f) => f.key === 'status' && f.type === 'select');
+  if (!st) return;
+  const want = done
+    ? { Measure: 'Measured', Install: 'Installed', Service: 'Done', Repair: 'Done', Maintenance: 'Done', Cleaning: 'Done', Inspection: 'Done', Delivery: 'Done' }[kind]
+    : kind === 'Measure' ? 'Measure booked' : kind === 'Estimate' ? null : 'Scheduled';
+  const to = want && st.choices.findIndex((c) => c.label.toLowerCase() === want.toLowerCase());
+  const at = st.choices.findIndex((c) => c.id === rec.values[st.id]);
+  if (to == null || to < 0 || to <= at) return;
+  rec.values[st.id] = st.choices[to].id;
+  rec.updatedAt = Date.now();
+  PJ.recordNews(rec, 'record.updated', 'Kloomie');
+}
+function visitNews(rec) {
+  broadcast(rec.wsId, { type: 'visits', recordId: rec.id, projectId: rec.projectId, visits: visitsOf(rec.id) });
+}
+// One visit's entries made to match: date, times, what kind, a note, who's going (copies made or removed), done.
+function setVisit(ws, auth, rec, visitId, body, old = []) {
+  const kind = VISIT_KINDS.includes(body.kind) ? body.kind : old[0]?.visit || 'Visit';
+  const memberIds = Array.isArray(body.memberIds) ? [...new Set(body.memberIds.map(String))].filter((id) => ws.members.some((m) => m.id === id)).slice(0, 20) : old.map((e) => e.memberId);
+  if (!memberIds.length) throw badRequest('Pick who’s going.');
+  const base = old[0] || {};
+  const fields = {
+    text: `${kind}: ${jobLabel(rec)}`,
+    date: body.date !== undefined ? body.date : base.date,
+    start: body.start !== undefined ? body.start : base.start ?? null,
+    end: body.end !== undefined ? body.end : base.end ?? null,
+    ...(body.done !== undefined ? { done: !!body.done } : {}),
+  };
+  const note = body.note !== undefined ? cleanText(body.note, 1000) : base.note || '';
+  const out = [];
+  for (const memberId of memberIds) {
+    const had = old.find((e) => e.memberId === memberId);
+    const e = applyEntry(had ? { ...had } : { id: rid(), wsId: ws.id, memberId, by: auth.member, deviceId: auth.deviceId, createdAt: Date.now(), text: '', date: null, start: null, end: null, done: base.done || false, color: 'teal', taskId: null }, fields);
+    Object.assign(e, { recordId: rec.id, projectId: rec.projectId, visitId, visit: kind, note });
+    db.entries[e.id] = e;
+    out.push(e);
+    broadcast(ws.id, { type: 'entry', entry: publicEntry(e) });
+    pushEntry(e.id, 'save');
+  }
+  for (const e of old) if (!memberIds.includes(e.memberId)) {
+    delete db.entries[e.id];
+    broadcast(ws.id, { type: 'entry:remove', id: e.id, forMember: e.memberId });
+    pushEntry(e, 'delete');
+  }
+  save();
+  syncJob(rec);
+  if (!old.length) advanceJob(rec, kind, false);
+  if (body.done === true) advanceJob(rec, kind, true);
+  visitNews(rec);
+  return publicVisit(out);
+}
+// A job deleted takes its visits with it.
+function dropVisits(rec) {
+  for (const e of Object.values(db.entries)) if (e.recordId === rec.id) {
+    delete db.entries[e.id];
+    broadcast(rec.wsId, { type: 'entry:remove', id: e.id, forMember: e.memberId });
+    pushEntry(e, 'delete');
+  }
+  save();
+}
+
 // Tasks: an undated to-do list. Schedule entries can link to one (entry.taskId) and then share its text and done state.
 const publicTask = (t) => ({ ...publicEntry(t), waiting: isWaiting(t) });
 
@@ -4780,6 +4885,36 @@ async function api(req, res, url) {
     return send(res, 200, { ok: true });
   }
 
+  // A job's visits: list, schedule, change, cancel.
+  if (a === 'records' && c === 'visits') {
+    const at = PJ.recordAt(b, ws.id, auth.memberId);
+    if (!at) return send(res, 404, { error: 'That job is gone.' });
+    if (m === 'GET') return send(res, 200, visitsOf(at.rec.id));
+    if (m === 'POST') {
+      const body = await readJson(req, 20_000);
+      const v = setVisit(ws, auth, at.rec, rid(), { memberIds: [auth.memberId], ...body });
+      PJ.recordActivity(at.rec.id, { kind: 'meeting', what: 'visit booked', note: `${v.kind} on ${v.date}${v.start != null ? ' at ' + fmtMinutes(v.start) : ''} · ${v.memberIds.map((id) => memberById(ws, id)?.name).filter(Boolean).join(', ')}`, by: auth.member });
+      return send(res, 200, v);
+    }
+  }
+  if (a === 'visits' && b) {
+    const list = visitEntries(b);
+    const rec = list[0] && db.records[list[0].recordId];
+    const at = rec && PJ.recordAt(rec.id, ws.id, auth.memberId);
+    if (!at || !list.length) return send(res, 404, { error: 'That visit is gone.' });
+    if (m === 'PATCH') return send(res, 200, setVisit(ws, auth, rec, b, await readJson(req, 20_000), list));
+    if (m === 'DELETE') {
+      for (const e of list) {
+        delete db.entries[e.id];
+        broadcast(ws.id, { type: 'entry:remove', id: e.id, forMember: e.memberId });
+        pushEntry(e, 'delete');
+      }
+      save();
+      syncJob(rec);
+      visitNews(rec);
+      return send(res, 200, { ok: true });
+    }
+  }
   if (a === 'projects' || a === 'records' || a === 'integrations' || a === 'project-templates') {
     const out = await PJ.route(req, res, parts, auth, ws);
     if (out !== null) return;
@@ -4811,6 +4946,36 @@ async function api(req, res, url) {
     });
   }
 
+  // The team's schedule: every job visit on a day, by person (owners and admins see everyone; others, themselves),
+  // and jobs still waiting for a visit. Personal entries stay private: only job visits show.
+  if (a === 'schedule' && m === 'GET') {
+    const day = new URL(req.url, 'http://x').searchParams.get('date');
+    if (!isDay(day || '')) return send(res, 400, { error: 'Pick a day.' });
+    const everyone = isAdmin(auth);
+    const groups = new Map();
+    for (const e of Object.values(db.entries)) {
+      if (e.wsId !== ws.id || !e.visitId || e.date !== day || (!everyone && e.memberId !== auth.memberId)) continue;
+      const rec = db.records[e.recordId];
+      if (!rec || !PJ.recordAt(rec.id, ws.id, auth.memberId)) continue;
+      (groups.get(e.visitId) || groups.set(e.visitId, []).get(e.visitId)).push(e);
+    }
+    const visits = [...groups.values()].map((list) => ({ ...publicVisit(visitEntries(list[0].visitId)), label: jobLabel(db.records[list[0].recordId]), projectId: db.records[list[0].recordId].projectId }));
+    // Jobs with a customer, not finished, and no visit coming up.
+    const today = teamDay(ws.id);
+    const waiting = [];
+    for (const rec of Object.values(db.records)) {
+      if (rec.wsId !== ws.id || waiting.length >= 60) continue;
+      const j = jobOfRecord(rec);
+      if (!j || !j.t.fields.some((f) => f.type === 'contact') || !PJ.recordAt(rec.id, ws.id, auth.memberId)) continue;
+      const st = j.t.fields.find((f) => f.key === 'status');
+      const stage = st?.choices.find((x) => x.id === rec.values[st.id])?.label || '';
+      if (/^(done|installed|complete|paid|invoiced|skipped|claim paid)$/i.test(stage)) continue;
+      if (visitsOf(rec.id).some((v) => !v.done && v.date >= today)) continue;
+      waiting.push({ recordId: rec.id, projectId: rec.projectId, label: jobLabel(rec), stage, list: j.t.singular || j.t.name, icon: j.t.icon || '' });
+    }
+    return send(res, 200, { date: day, visits, waiting, members: everyone ? ws.members.map((x) => ({ id: x.id, name: x.name })) : ws.members.filter((x) => x.id === auth.memberId).map((x) => ({ id: x.id, name: x.name })), kinds: VISIT_KINDS });
+  }
+
   if (a === 'entries') {
     if (m === 'POST' && !b) {
       const body = await readJson(req, 50_000);
@@ -4824,7 +4989,15 @@ async function api(req, res, url) {
     const e = b && db.entries[b];
     if (!e || e.wsId !== ws.id || !canSee(auth, 'entry', e)) return send(res, 404, { error: 'Not found' });
     if (m === 'PATCH') {
-      const next = applyEntry({ ...e }, await readJson(req, 50_000));
+      const body = await readJson(req, 50_000);
+      // Part of a visit: everyone's copy moves (and is done) together, and the job follows.
+      const rec = e.visitId && db.records[e.recordId];
+      if (rec) {
+        const keep = Object.fromEntries(['date', 'start', 'end', 'done'].filter((k) => body[k] !== undefined).map((k) => [k, body[k]]));
+        setVisit(ws, auth, rec, e.visitId, keep, visitEntries(e.visitId));
+        return send(res, 200, publicEntry(db.entries[e.id]));
+      }
+      const next = applyEntry({ ...e }, body);
       db.entries[e.id] = next;
       save();
       broadcast(ws.id, { type: 'entry', entry: publicEntry(next) });
@@ -7199,6 +7372,7 @@ async function importData(req, res) {
 
 // Projects and the public API (projects.js).
 const PJ = projectsModule({ db, save, broadcast, rid, cleanText, isDay, readJson, send, badRequest, isOwnerId, escHtml, brandOf, logoUrl, teamDay, offline, allowLocalHooks: process.env.ALLOW_LOCAL_WEBHOOKS === '1',
+  onRecordGone: (rec) => dropVisits(rec),
   // A follow-up from a record's timeline: a task for whoever logged it, about the record.
   makeTask: (ws, auth, { text, due, recordId }) => {
     const t = applyTask({ id: rid(), wsId: ws.id, by: auth.member, createdAt: Date.now(), text: '', done: false, doneAt: null, due: null, priority: 0, goalId: null, assigneeId: null }, { text, due, assigneeId: auth.memberId, recordId });
