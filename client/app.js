@@ -1195,9 +1195,15 @@
       drawTray();
       ta.focus();
     };
+    const clearBox = () => { ta.value = ''; ta.style.height = ''; };
     const sendIt = async () => {
       const text = ta.value;
       if (!text.trim() && !links.length) return;
+      // "/vault …" goes into the vault, never into the stack or chat.
+      if (/^\/vault(\s|$)/i.test(text.trim())) {
+        if (!toolOn('vault')) return toast('The vault is switched off for this team.');
+        return vaultQuick({ text: text.trim(), onSaved: clearBox });
+      }
       const sent = links.splice(0);
       const body = [text.trim(), sent.map((l) => linkToken(l.type, l.id)).join(' ')].filter(Boolean).join('\n');
       ta.value = '';
@@ -1239,6 +1245,7 @@
     const add = h('button', { class: 'add', title: 'Add a doc or files', onclick: (e) => openMenu(e.currentTarget, [
       { label: 'New doc', run: () => newDoc(destOf(view)) },
       { label: '🔒 Sealed note…', run: () => sealNote(destOf(view)) },
+      toolOn('vault') ? { label: '🔐 Save to my vault…', run: () => vaultQuick({ text: ta.value, onSaved: clearBox }) } : null,
       { label: 'Upload files…', run: () => pickFiles(destOf(view)) },
       { label: 'New Word document', run: () => newDocSheet(destOf(view)) },
       viewStack(view) ? { label: '📥 Request files from someone…', run: () => requestSheet(viewStack(view)) } : null,
@@ -1326,6 +1333,7 @@
     if (it.type === 'text' || it.type === 'message') {
       a.append(btn(I.copy, 'Copy', () => copyText(it.type === 'message' ? plainText(it.text) : it.text)));
       a.append(btn(I.clock, 'Add to my day', () => openSheet({ text: it.text.slice(0, 5000), date: todayKey() })));
+      if (toolOn('vault')) a.append(btn(I.lock, 'Save to my vault', () => vaultQuick({ text: it.type === 'message' ? plainText(it.text) : [it.title, it.text].filter(Boolean).join('\n'), from: it })));
     }
     if (it.type === 'file' || it.type === 'folder') a.append(btn(I.share, 'Share to chat', (b) => shareMenu(b, linkToken('file', it.id))));
     if (it.type === 'file' || it.type === 'folder') a.append(btn(I.link, it.share ? 'Public link' : 'Make a public link', (b) => publicLinkMenu(b, it), it.share ? 'on' : null));
@@ -11388,12 +11396,16 @@
     VK.key = key;
     vaultTouch();
     await vaultDecryptAll();
+    renderTool();
+    renderCamps();
   }
   function vaultLock() {
     if (!VK.key && !VK.items) return;
     VK.key = null;
     VK.items = null;
     if ($('#sheet .vault-item')) closeSheet();
+    // A new item being typed is the person's own words, not the vault's: keep the form, ask for the passphrase again.
+    $('#sheet .vault-new')?._locked?.();
     // The drawer won't redraw under someone typing, so take the focus out first: locked has to hide it.
     if ($('#tool').contains(document.activeElement)) document.activeElement.blur();
     renderTool();
@@ -11413,6 +11425,35 @@
     openTool('vault');
   }
   const vaultLinkName = (l) => (!l ? '' : l.type === 'campaign' ? campById(l.id)?.name || 'Campaign' : contactName((S.contacts || []).find((x) => x.id === l.id || x.pss === l.id) || { name: 'Contact' }));
+
+  // ----- straight into the vault from a stack or chat -----
+  // What was typed goes into a vault form instead of being posted. When the vault is locked, its passphrase
+  // box is right in that form: the key is made here, as always, and the passphrase never leaves the device.
+  const capFirst = (t) => t.charAt(0).toUpperCase() + t.slice(1);
+  function vaultGuess(text) {
+    const t = String(text || '').replace(/^\/vault\b[ \t]*/i, '').trim();
+    if (!t) return {};
+    const words = t.split(/\s+/);
+    // One short line with a number in it is a code (or an account number, when it's long).
+    const i = t.includes('\n') || t.length > 120 ? -1 : words.findIndex((w) => /^[#*]?\d[\d*#-]*[.,;:]?$/.test(w) && w.replace(/\D/g, '').length >= 3);
+    if (i < 0) return { kind: 'note', title: capFirst(t.split('\n')[0].slice(0, 60)), note: t };
+    const val = words[i].replace(/[.,;:]$/, '');
+    const kind = val.replace(/\D/g, '').length >= 8 ? 'number' : 'code';
+    const rest = words.filter((_, j) => j !== i).join(' ').replace(/^[\s:=-]+|[\s:=-]+$/g, '').replace(/\s+(is|was|=)$/i, '');
+    return { kind, title: capFirst(rest) || VAULT_KINDS[kind][0], [kind]: val };
+  }
+  // o: { text, from (the card or message it came from), onSaved }
+  async function vaultQuick(o = {}) {
+    if (VK.meta === undefined) await loadVault();
+    if (VK.meta === undefined) return toast('Couldn’t reach your vault. Try again.');
+    if (!VK.meta) {
+      // Set it up first; what was typed opens in the form once it's ready.
+      VK.draft = o;
+      toast('Set up your vault first. What you typed opens right after.');
+      return openTool('vault');
+    }
+    vaultSheet(null, { ...o, prefill: vaultGuess(o.text) });
+  }
 
   function vaultTool() {
     if (VK.meta === undefined) {
@@ -11506,6 +11547,7 @@
         vaultTouch();
         renderTool();
         renderCamps();
+        if (VK.draft) { const d = VK.draft; VK.draft = null; vaultQuick(d); }
       } catch (e) {
         err.textContent = e.message;
         go.disabled = false;
@@ -11532,13 +11574,24 @@
       toast('Couldn’t copy it.');
     }
   }
-  function vaultSheet(x) {
-    if (!VK.key) return;
-    const kind = h('select', { 'aria-label': 'Kind' }, Object.entries(VAULT_KINDS).map(([k, [t]]) => h('option', { value: k, selected: (x?.kind || 'code') === k }, t)));
-    const title = h('input', { value: x?.title || '', placeholder: 'Smith job gate, Supplier account…' });
+  // o (new items only): prefill, from (a card or message to offer deleting), onSaved.
+  function vaultSheet(x, o = {}) {
+    if (!VK.key && x) return;
+    const p = x || o.prefill || {};
+    const kind = h('select', { 'aria-label': 'Kind' }, Object.entries(VAULT_KINDS).map(([k, [t]]) => h('option', { value: k, selected: (p.kind || 'code') === k }, t)));
+    const title = h('input', { value: p.title || '', placeholder: 'Smith job gate, Supplier account…' });
     const note = h('textarea', { rows: 3, placeholder: 'Anything else (optional)' });
-    note.value = x?.note || '';
-    const vals = { ...(x || {}) };
+    note.value = p.note || '';
+    const vals = { ...p };
+    // Locked: the passphrase goes here, in Kloomie's own box, never in the message box.
+    const pass = h('input', { type: 'password', autocomplete: 'off', placeholder: 'Vault passphrase', 'aria-label': 'Vault passphrase' });
+    const lockRow = h('div', { class: 'vault-quick-lock' + (VK.key ? ' hidden' : '') }, h('span', { class: 'vault-ic', html: I.lock }),
+      h('label', {}, 'Your vault is locked. Type its passphrase to save this.', pass));
+    pass.addEventListener('keydown', (e) => e.key === 'Enter' && $('#sheet .primary-btn')?.click());
+    // Already posted: it's sitting in the stack or chat as plain text, so offer to take it down.
+    const from = o.from;
+    const canDrop = from && (from.type !== 'message' || isMine(from) || amAdmin());
+    const drop = canDrop ? h('input', { type: 'checkbox', checked: isMine(from) }) : null;
     const fieldsBox = h('div', { class: 'vault-fields' });
     const drawFields = () => {
       fieldsBox.replaceChildren(...VAULT_KINDS[kind.value][1].map(([k, label, secret]) => {
@@ -11570,16 +11623,27 @@
       renderTool();
       renderCamps();
     }));
-    sheet(x ? x.title || 'Vault item' : 'Add to the vault', [
-      h('div', { class: 'vault-item' }),
+    const marker = h('div', { class: x ? 'vault-item' : 'vault-new' });
+    marker._locked = () => lockRow.classList.remove('hidden');
+    sheet(x ? x.title || 'Vault item' : o.prefill ? 'Save to my vault' : 'Add to the vault', [
+      marker,
       h('div', { class: 'row2' }, h('label', {}, 'Kind', kind), h('label', {}, 'Name', title)),
       fieldsBox,
       h('label', {}, 'Note', note),
       h('div', { class: 'row2' }, h('label', {}, 'Campaign', camp), contacts.length ? h('label', {}, 'Contact', contact, dl) : null),
       x ? h('div', { class: 'btns' }, h('button', { type: 'button', class: 'btn small', title: 'Send it into a stack, encrypted, opened with a one-time code', onclick: () => { closeSheet(); sealFromVault(x); } }, '🔒 Send sealed…'), del) : null,
-    ], async () => {
-      if (!VK.key) throw new Error('The vault locked. Unlock it and try again.');
+      x ? null : lockRow,
+      drop ? h('label', { class: 'pick' }, drop, from.type === 'message' ? 'Delete the message afterwards (it’s in the chat as plain text)' : 'Delete the original afterwards (it’s in the stack as plain text)') : null,
+    ].filter(Boolean), async () => {
       if (!title.value.trim()) throw new Error('Give it a name.');
+      if (!VK.key) {
+        if (x) throw new Error('The vault locked. Unlock it and try again.');
+        lockRow.classList.remove('hidden');
+        if (!pass.value) { pass.focus(); throw new Error('Type your vault passphrase to save it.'); }
+        await vaultUnlock(pass.value);
+        pass.value = '';
+        lockRow.classList.add('hidden');
+      }
       const k = kind.value;
       const data = { kind: k, title: title.value.trim(), note: note.value };
       for (const [f] of VAULT_KINDS[k][1]) data[f] = vals[f] || '';
@@ -11591,7 +11655,11 @@
       VK.items = [...(VK.items || []).filter((y) => y.id !== saved.id), { id: saved.id, link: saved.link, updatedAt: saved.updatedAt, ...data }];
       renderTool();
       renderCamps();
-    }, x ? 'Save' : 'Add');
+      if (drop?.checked) await api('DELETE', '/items/' + from.id).catch((e) => toast(e.message));
+      o.onSaved?.();
+      if (o.prefill) toast('Saved to your vault 🔐', { label: 'Show', run: () => { VK.filter = null; openTool('vault'); } });
+    }, x ? 'Save' : VK.key ? 'Add' : 'Unlock and save');
+    setTimeout(() => (VK.key || x ? title : pass).focus());
   }
   // ----- sealed cards: a secret sent through a stack, opened only with a one-time code -----
   // It's encrypted here (the vault's AES-GCM, with a key made from the code), and the code goes to the other
@@ -11680,9 +11748,19 @@
         secret ? h('button', { type: 'button', class: 'btn small', onclick: (e) => { const on = shown.textContent.startsWith('•'); shown.textContent = on ? val : '••••••••'; e.currentTarget.textContent = on ? 'Hide' : 'Show'; } }, 'Show') : null,
         h('button', { type: 'button', class: 'btn small', onclick: () => vaultCopy(val) }, 'Copy'));
     };
+    // Locked: unlock right here, so a card that burned isn't lost on the way to the vault.
+    const pass = h('input', { type: 'password', autocomplete: 'off', placeholder: 'Vault passphrase', 'aria-label': 'Vault passphrase' });
+    const lockRow = h('div', { class: 'vault-quick-lock hidden' }, h('span', { class: 'vault-ic', html: I.lock }), h('label', {}, 'Your vault is locked. Its passphrase:', pass));
+    pass.addEventListener('keydown', (e) => e.key === 'Enter' && save.click());
     const save = h('button', { type: 'button', class: 'btn small', onclick: async () => {
+      if (!VK.meta) await loadVault();
       if (!VK.meta) return toast('Set up your vault first (Tools → Vault).');
-      if (!VK.key) return toast('Unlock your vault first (Tools → Vault), then open this again.');
+      if (!VK.key) {
+        if (lockRow.classList.contains('hidden') || !pass.value) { lockRow.classList.remove('hidden'); return pass.focus(); }
+        try { await vaultUnlock(pass.value); } catch (e) { pass.select(); return toast(e.message); }
+        pass.value = '';
+        lockRow.classList.add('hidden');
+      }
       const data = { kind: VAULT_KINDS[v.kind] ? v.kind : 'note', title: v.title || it.label || 'From a sealed card', note: v.note || '' };
       for (const [f] of VAULT_KINDS[data.kind][1]) data[f] = v[f] || '';
       const saved = await api('POST', '/vault/items', { blob: await vaultSeal(VK.key, data), link: null }).catch((e) => toast(e.message));
@@ -11695,6 +11773,7 @@
       burned ? h('p', { class: 'seal-burn' }, '🔥 This card has been deleted. What’s here is only on your screen now.') : null,
       ...fields.map(([k, label, secret]) => row(label, v[k], secret)),
       v.note ? h('div', { class: 'seal-note' }, v.note) : null,
+      lockRow,
       h('div', { class: 'btns' }, v.note ? h('button', { type: 'button', class: 'btn small', onclick: () => vaultCopy(v.note) }, 'Copy note') : null, save),
     ].filter(Boolean), async () => {}, 'Done');
   }

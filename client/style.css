@@ -1275,6 +1275,10 @@ body.viewer .preview pre, body.viewer .preview .pv-edit, body.viewer .preview .d
 .vault-big svg { width: 100%; height: 100%; }
 .vault-unlock { display: flex; gap: 6px; width: min(340px, 100%); }
 .vault-unlock input { flex: 1; min-width: 0; }
+.vault-quick-lock { display: flex; gap: 8px; align-items: flex-start; padding: 10px 12px; margin-bottom: 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--soft, transparent); }
+.vault-quick-lock .vault-ic { margin-top: 3px; }
+.vault-quick-lock label { flex: 1; min-width: 0; }
+.vault-quick-lock.hidden { display: none; }
 .vault-setup { display: flex; flex-direction: column; gap: 10px; margin: 12px 0; }
 .vault-setup label:not(.pick) { display: flex; flex-direction: column; gap: 5px; color: var(--muted); font-size: 12px; }
 .vault-fields { display: flex; flex-direction: column; gap: 10px; }
