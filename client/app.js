@@ -707,8 +707,6 @@
     }
   }
 
-  // ---------- file requests: a link customers use to send files into a stack ----------
-  const reqLive = (st) => st?.request && (!st.request.expiresAt || st.request.expiresAt > Date.now());
   // ---------- notifications: the bell up top, and pushes to this device while Kloomie is closed ----------
   // A pop-up from the open app itself, when it's in the background. A device that gets pushes leaves it to them.
   const localNote = () => S.notify && !S.pushHere && document.hidden && 'Notification' in window && Notification.permission === 'granted';
@@ -844,6 +842,8 @@
   }
   for (const ev of ['visibilitychange', 'focus', 'blur', 'pagehide', 'pageshow']) (ev === 'visibilitychange' ? document : window).addEventListener(ev, () => tellVis());
 
+  // ---------- file requests: a link customers use to send files into a stack ----------
+  const reqLive = (st) => st?.request && (!st.request.expiresAt || st.request.expiresAt > Date.now());
   const reqUrl = (st) => abs('/r/' + st.request.token);
   function requestSheet(stackId, justMade) {
     const st = stackById(stackId);
@@ -970,10 +970,10 @@
     S.templates = st.templates || [];
     S.bills = st.bills || [];
     S.notices = st.notices || [];
-    S.start = st.start || null;
-    HM.startAt = Date.now();
     drawBell();
     api('GET', '/push').then((x) => { S.pushAll = x.all; }).catch(() => {});
+    S.start = st.start || null;
+    HM.startAt = Date.now();
     S.money = st.money || [];
     S.budgets = st.budgets || [];
     S.projects = st.projects || [];
@@ -1021,8 +1021,6 @@
     setTab('home');
     connect();
     accountNudge();
-  }
-
     pushSetup();
     // Opened from a notification: go where it points.
     const go = new URLSearchParams(location.search).get('go');
@@ -1030,6 +1028,8 @@
       history.replaceState(null, '', location.pathname);
       setTimeout(() => goTo(go), 300);
     }
+  }
+
   // ---------- inviting people by email (owners) ----------
   // Each invite is a link that joins one person, once, within 14 days. It's emailed when this server can
   // send email, and shown here to copy either way (only right after it's made: Kloomie keeps no copy).
@@ -14422,6 +14422,12 @@
           store.set('notify', on);
         }));
       }
+      if (S.pushHere || S.notify) {
+        dev.append(toggleRow('New messages and files too', 'Not just what’s for you: everything new in the chats and stacks you’re in (for all your devices)', S.pushAll !== false, async (on, input) => {
+          try { S.pushAll = (await api('PUT', '/push/prefs', { all: on })).all; } catch (e) { input.checked = !on; toast(e.message); }
+        }));
+      }
+      if (S.pushHere) dev.append(h('div', { class: 'srow' }, h('span', {}, 'Check it works', h('small', {}, 'Sends a notification to your devices that have them on')), h('button', { class: 'btn', onclick: () => api('POST', '/push/test').then(() => toast('Sent. Check your notifications.'), (e) => toast(e.message)) }, 'Send a test')));
       if ('Notification' in window) {
         dev.append(toggleRow('Reminders', 'Notify me when a note or block on my day starts', S.remind && Notification.permission === 'granted', async (on, input) => {
           if (on && !(await askNotify())) { input.checked = false; return; }
@@ -14464,12 +14470,6 @@
       const people = h('section', {}, h('h3', {}, `People · ${ws.members.length}`));
       const sorted = [...ws.members].sort((a, b) => (b.id === me?.id) - (a.id === me?.id) || a.name.localeCompare(b.name));
       for (const mb of sorted) {
-      if (S.pushHere || S.notify) {
-        dev.append(toggleRow('New messages and files too', 'Not just what’s for you: everything new in the chats and stacks you’re in (for all your devices)', S.pushAll !== false, async (on, input) => {
-          try { S.pushAll = (await api('PUT', '/push/prefs', { all: on })).all; } catch (e) { input.checked = !on; toast(e.message); }
-        }));
-      }
-      if (S.pushHere) dev.append(h('div', { class: 'srow' }, h('span', {}, 'Check it works', h('small', {}, 'Sends a notification to your devices that have them on')), h('button', { class: 'btn', onclick: () => api('POST', '/push/test').then(() => toast('Sent. Check your notifications.'), (e) => toast(e.message)) }, 'Send a test')));
         const you = mb.id === me?.id;
         const notes = [{ owner: 'Owner', admin: 'Admin' }[mb.role] || 'Member', ...rolesOf(mb.id).map((r) => r.name), mb.hasPassword ? null : 'no password yet', onlineIds.has(mb.id) ? 'online' : null].filter(Boolean).join(' · ');
         const row = h('div', { class: 'srow person' },
