@@ -51,7 +51,7 @@ export const AGENTS = {
       'Books customer meetings and prepares a brief beforehand',
       'Finds deals that have gone quiet and plans the next step',
     ],
-    tools: ['find_records', 'read_record', 'list_projects', 'find_contacts', 'look_at_day', 'list_tasks', 'list_campaigns', 'team_schedule', 'find_docs', 'read_doc', 'create_task', 'update_task', 'save_contact', 'create_record', 'update_record', 'log_note', 'book_visit', 'schedule_time', 'write_doc', 'draft_email', 'notify_me'],
+    tools: ['find_records', 'read_record', 'list_projects', 'find_contacts', 'look_at_day', 'list_tasks', 'list_campaigns', 'team_schedule', 'find_docs', 'read_doc', 'create_task', 'update_task', 'save_contact', 'create_record', 'update_record', 'log_note', 'book_visit', 'schedule_time', 'move_time', 'write_doc', 'draft_email', 'notify_me'],
     workflows: [
       { key: 'lead', name: 'Handle a new lead', ask: 'A new lead came in. Record them (contact and lead or deal), draft my reply, suggest times to meet, and set the follow-up:\n\n', paste: true },
       { key: 'radar', name: 'Follow-up radar', ask: 'Run the follow-up radar: find leads, deals and quotes with no reply or no contact in a while, and set up the next step for each (a task, and a drafted follow-up email where there’s an address).', sched: { days: [1, 3, 5], at: 8 * 60 } },
@@ -73,7 +73,7 @@ export const AGENTS = {
       'Checks project health and says what’s slipping',
       'Closes jobs out with a completion report',
     ],
-    tools: ['list_projects', 'find_records', 'read_record', 'list_tasks', 'look_at_day', 'team_schedule', 'plan_route', 'find_docs', 'read_doc', 'create_project', 'create_record', 'update_record', 'log_note', 'book_visit', 'create_task', 'update_task', 'schedule_time', 'write_doc', 'draft_email', 'notify_me'],
+    tools: ['list_projects', 'find_records', 'read_record', 'list_tasks', 'look_at_day', 'team_schedule', 'plan_route', 'find_docs', 'read_doc', 'create_project', 'create_record', 'update_record', 'log_note', 'book_visit', 'create_task', 'update_task', 'schedule_time', 'move_time', 'write_doc', 'draft_email', 'notify_me'],
     workflows: [
       { key: 'kickoff', name: 'Project kickoff', ask: 'We just won this work. Organize it: the job (or project), the tasks in order with who and when, a materials list, visits, and a completion checklist:\n\n', paste: true },
       { key: 'prep', name: 'Job preparation', ask: 'Prepare for the jobs coming up in the next few days: a checklist for each, what to bring or order, and anything missing before we can start.' },
@@ -672,6 +672,7 @@ export function agentsModule({ db, save, broadcast, rid, cleanText, readJson, se
         x.status = 'planning';
         news(x);
         const plan = await coordinate(ws, x);
+        if (x.status === 'cancelled') return finish(x); // stopped while the team was deciding
         if (plan.question) {
           x.question = plan.question;
           x.status = 'blocked';
