@@ -10,7 +10,7 @@ import { pipeline } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 import { createZip, streamZip, zipSize } from './zip.js';
-import { providers as calProviders } from './calendar.js';
+import { providers as calProviders, ics as ICS } from './calendar.js';
 import { llms, llmError, complete } from './llm.js';
 import { fileText, officeKind } from './extract.js';
 import { PdfError, stampPdf, addCertificate, pageCount, writeDoc } from './pdf.js';
@@ -36,7 +36,7 @@ fs.mkdirSync(FILES_DIR, { recursive: true });
 // Everything lives in memory; save() hands the whole thing to the store a moment later.
 const IMPORT_PATH = path.join(DATA_DIR, 'import-pending.json');
 const store = await openStore({ url: process.env.DATABASE_URL, file: DB_PATH, importFile: IMPORT_PATH });
-let db = { workspaces: {}, tokens: {}, items: {}, entries: {}, tasks: {}, uploads: {}, campaigns: {}, goals: {}, attempts: {}, lists: {}, templates: {}, calendars: {}, ai: {}, pss: {}, sends: {}, bills: {}, meetings: {}, money: {}, budgets: {}, plans: {}, sidekick: {}, vaults: {}, vaultItems: {}, signs: {}, signatures: {}, trips: {}, pins: {}, zones: {}, comments: {}, users: {}, resets: {}, invites: {}, exports: {}, contacts: {}, optouts: {}, unsubs: {}, gcontacts: {}, automations: {}, notices: {} };
+let db = { workspaces: {}, tokens: {}, items: {}, entries: {}, tasks: {}, uploads: {}, campaigns: {}, goals: {}, attempts: {}, lists: {}, templates: {}, calendars: {}, ai: {}, pss: {}, sends: {}, bills: {}, meetings: {}, money: {}, budgets: {}, plans: {}, sidekick: {}, vaults: {}, vaultItems: {}, signs: {}, signatures: {}, trips: {}, pins: {}, zones: {}, comments: {}, users: {}, resets: {}, invites: {}, exports: {}, contacts: {}, optouts: {}, unsubs: {}, gcontacts: {}, automations: {}, notices: {}, calfeeds: {} };
 const loaded = await store.load();
 if (loaded.db) db = { ...db, ...loaded.db };
 if (loaded.fromFile) console.log(`Moving ${path.basename(loaded.fromFile)} into Postgres.`);
@@ -1407,11 +1407,12 @@ function startList(ws, auth) {
   const me = ws.members.find((x) => x.id === auth.memberId);
   if (!isAdmin(auth) || !me || me.startHidden || Date.now() - (ws.createdAt || 0) > START_DAYS * 86_400_000) return null;
   const tools = toolsOf(ws);
-  const calOn = Object.values(calProviders).some((p) => p.configured());
+  // A calendar can always be linked (Apple Calendar, or the subscribe link); email needs Google or Outlook set up.
+  const mailOn = Object.values(calProviders).some((p) => p.sendMail && p.configured());
   const items = [
     ['invite', ws.members.length > 1 || Object.values(db.invites).some((x) => x.wsId === ws.id)],
-    calOn && ['calendar', Object.values(db.calendars).some((x) => x.wsId === ws.id && x.memberId === auth.memberId)],
-    calOn && tools.email && ['email', !!mailConn(ws.id, auth.memberId)],
+    ['calendar', Object.values(db.calendars).some((x) => x.wsId === ws.id && x.memberId === auth.memberId) || Object.values(db.calfeeds).some((x) => x.wsId === ws.id && x.memberId === auth.memberId)],
+    mailOn && tools.email && ['email', !!mailConn(ws.id, auth.memberId)],
     tools.contacts && ['contacts', contactsOf(ws.id).length > 0],
     ['campaign', Object.values(db.campaigns).some((c) => c.wsId === ws.id)],
     tools.sidekick && ['ai', !!aiUse(aiOf(ws.id, auth.memberId))],
@@ -2389,11 +2390,17 @@ async function oauthCallback(req, res, url) {
   if (!tok.refresh) return page('Not connected', `${p.name} didn’t allow offline access. Try connecting again.`);
   const account = await p.account(tok.access);
   const cals = await p.calendars(tok.access);
-  // Reconnecting the same account keeps its settings and links.
-  let conn = Object.values(db.calendars).find((x) => x.wsId === ws.id && x.memberId === pend.memberId && x.provider === provider && x.account === account);
+  const conn = linkCalendar(ws, pend.memberId, provider, account, pend.tz, cals, tok);
+  if (pend.mail && !conn.mail) return page(`${p.name} connected`, provider === 'google' ? `${account} is linked, but sending email wasn’t allowed. Connect again and leave “Send email on your behalf” ticked.` : `${account} is linked, but sending email wasn’t allowed. Your Microsoft admin may need to approve it.`);
+  return page(`${p.name} connected`, `${account} is linked to Kloomie${pend.mail ? ' and can send campaign emails' : ''}. You can close this window.`);
+}
+
+// Reconnecting the same account keeps its settings and links.
+function linkCalendar(ws, memberId, provider, account, tz, cals, tok) {
+  let conn = Object.values(db.calendars).find((x) => x.wsId === ws.id && x.memberId === memberId && x.provider === provider && x.account === account);
   if (!conn) {
     const primary = cals.find((x) => x.primary) || cals[0];
-    conn = { id: rid(), wsId: ws.id, memberId: pend.memberId, provider, account, tz: pend.tz, calendars: [], writeCalId: primary?.canWrite ? primary.id : null, createdAt: Date.now(), lastSync: 0, error: null };
+    conn = { id: rid(), wsId: ws.id, memberId, provider, account, tz, calendars: [], writeCalId: primary?.canWrite ? primary.id : null, createdAt: Date.now(), lastSync: 0, error: null };
     db.calendars[conn.id] = conn;
   }
   const was = new Map(conn.calendars.map((x) => [x.id, x.on]));
@@ -2404,11 +2411,10 @@ async function oauthCallback(req, res, url) {
   conn.error = null;
   conn.lastSync = 0;
   save();
-  broadcast(ws.id, { type: 'calendars', forMember: pend.memberId });
-  broadcast(ws.id, { type: 'mail', forMember: pend.memberId });
+  broadcast(ws.id, { type: 'calendars', forMember: memberId });
+  broadcast(ws.id, { type: 'mail', forMember: memberId });
   syncCalendar(conn).catch(() => {});
-  if (pend.mail && !conn.mail) return page(`${p.name} connected`, provider === 'google' ? `${account} is linked, but sending email wasn’t allowed. Connect again and leave “Send email on your behalf” ticked.` : `${account} is linked, but sending email wasn’t allowed. Your Microsoft admin may need to approve it.`);
-  return page(`${p.name} connected`, `${account} is linked to Kloomie${pend.mail ? ' and can send campaign emails' : ''}. You can close this window.`);
+  return conn;
 }
 
 async function calToken(conn) {
@@ -2421,7 +2427,7 @@ async function calToken(conn) {
   return tok.access;
 }
 function calFailed(conn, e) {
-  conn.error = e.auth ? 'Sign-in expired. Reconnect this calendar.' : 'Couldn’t reach the calendar: ' + String(e.message || e).slice(0, 200);
+  conn.error = e.auth ? (calProviders[conn.provider]?.password ? 'Apple stopped accepting the app-specific password. Disconnect, then connect again with a new one.' : 'Sign-in expired. Reconnect this calendar.') : 'Couldn’t reach the calendar: ' + String(e.message || e).slice(0, 200);
   if (!e.auth) console.error(`Calendar ${conn.provider} ${conn.id}:`, e.message);
   save();
   broadcast(conn.wsId, { type: 'calendars', forMember: conn.memberId });
@@ -2482,7 +2488,7 @@ async function syncCalendar(conn) {
       const linked = Object.values(db.entries).filter((e) => e.cal?.connId === conn.id && e.cal.calId === cal.id);
       if (!cal.on) for (const e of linked) if (e.cal.imported) dropEntry(e);
       if (!cal.on && cal.id !== conn.writeCalId && !linked.some((e) => !e.cal.imported)) continue;
-      const events = await p.events(token, cal.id, from, to);
+      const events = await p.events(token, cal.id, from, to, conn.tz);
       const byId = new Map(events.map((ev) => [ev.id, ev]));
       // Blocks made in Kloomie: follow edits and deletes made in the calendar.
       const ours = new Set();
@@ -2565,6 +2571,52 @@ async function pushEntry(ref, action) {
   } finally {
     pushing.set(conn.id, pushing.get(conn.id) - 1);
   }
+}
+
+// ---------- subscribe link: someone's Day as an .ics feed ----------
+// A private link (whoever has it can read that person's Day) that Apple Calendar, Google Calendar, Outlook
+// and the rest subscribe to and refresh on their own. Read-only: changes are made in Kloomie. Events that
+// came in from a connected calendar are left out, since that calendar already has them.
+const feedUrl = (x) => `${PUBLIC_URL}/cal/${x.id}.ics`;
+const FEED_RULES = { daily: 'FREQ=DAILY', weekdays: 'FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR', weekly: 'FREQ=WEEKLY', monthly: 'FREQ=MONTHLY' };
+function feedIcs(x) {
+  const ws = db.workspaces[x.wsId];
+  const who = ws?.members.find((m) => m.id === x.memberId);
+  if (!who) return null;
+  const tz = tzOf(ws);
+  const today = dayIn(tz);
+  const from = addDays(today, -60), to = addDays(today, 400);
+  const hm = (min) => `${String(Math.floor(min / 60)).padStart(2, '0')}${String(min % 60).padStart(2, '0')}00`;
+  const local = (date, min) => `${ICS.icsDate(min >= 1440 ? addDays(date, 1) : date)}T${hm(min % 1440)}`;
+  const L = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Kloomie//Day feed//EN', 'CALSCALE:GREGORIAN', 'METHOD:PUBLISH',
+    ICS.fold('X-WR-CALNAME:' + ICS.escapeText(`Kloomie · ${ws.name}`)), `X-WR-TIMEZONE:${tz}`, 'REFRESH-INTERVAL;VALUE=DURATION:PT15M', 'X-PUBLISHED-TTL:PT15M'];
+  const stamp = ICS.icsStamp(Date.now());
+  for (const e of Object.values(db.entries)) {
+    if (e.wsId !== x.wsId || e.memberId !== x.memberId || e.cal?.imported || !e.date || !e.text) continue;
+    if (e.repeat ? e.date > to : e.date < from || e.date > to) continue;
+    const [first, ...more] = e.text.split('\n');
+    const desc = [e.visitId ? `Job ${String(e.visit || 'visit').toLowerCase()}` : '', more.join('\n').trim(), e.note || '', 'Open Kloomie to change it.'].filter(Boolean).join('\n\n');
+    L.push('BEGIN:VEVENT', `UID:${e.id}@kloomie`, `DTSTAMP:${stamp}`, ICS.fold('SUMMARY:' + ICS.escapeText((!e.repeat && e.done ? '✓ ' : '') + first.slice(0, 300))), ICS.fold('DESCRIPTION:' + ICS.escapeText(desc.slice(0, 4000))));
+    if (e.start == null) L.push(`DTSTART;VALUE=DATE:${ICS.icsDate(e.date)}`, `DTEND;VALUE=DATE:${ICS.icsDate(addDays(e.date, 1))}`);
+    else {
+      const end = e.end != null && e.end > e.start ? e.end : Math.min(1440, e.start + 30);
+      L.push(`DTSTART;TZID=${tz}:${local(e.date, e.start)}`, `DTEND;TZID=${tz}:${local(e.date, end)}`);
+    }
+    if (e.repeat && FEED_RULES[e.repeat]) {
+      L.push('RRULE:' + FEED_RULES[e.repeat]);
+      for (const d of e.skip || []) L.push(e.start == null ? `EXDATE;VALUE=DATE:${ICS.icsDate(d)}` : `EXDATE;TZID=${tz}:${local(d, e.start)}`);
+    }
+    L.push('END:VEVENT');
+  }
+  L.push('END:VCALENDAR', '');
+  return L.join('\r\n');
+}
+function feedPage(req, res, url) {
+  const x = db.calfeeds[(url.pathname.split('/')[2] || '').replace(/\.ics$/i, '')];
+  const body = x && feedIcs(x);
+  if (!body) return send(res, 404, 'This calendar link was turned off or replaced. Make a new one in Kloomie → Settings → Connections → Calendars.');
+  res.writeHead(200, { 'Content-Type': 'text/calendar; charset=utf-8', 'Cache-Control': 'private, max-age=300', 'X-Robots-Tag': 'noindex', 'Referrer-Policy': 'no-referrer' });
+  res.end(req.method === 'HEAD' ? undefined : body);
 }
 
 // Your private copies go; blocks made in Kloomie stay, just no longer linked.
@@ -5317,15 +5369,53 @@ async function api(req, res, url) {
     return send(res, 405, { error: 'Method not allowed' });
   }
 
+  // Your subscribe link: your Day as a calendar feed any calendar app can follow.
+  if (a === 'calfeed') {
+    const mine = () => Object.values(db.calfeeds).find((x) => x.wsId === ws.id && x.memberId === auth.memberId);
+    if (m === 'GET') return send(res, 200, { url: mine() ? feedUrl(mine()) : null });
+    if (m === 'POST') {
+      // Making one again replaces the old link, which stops working.
+      const old = mine();
+      if (old) delete db.calfeeds[old.id];
+      const x = { id: rid(24), wsId: ws.id, memberId: auth.memberId, createdAt: Date.now() };
+      db.calfeeds[x.id] = x;
+      save();
+      return send(res, 200, { url: feedUrl(x) });
+    }
+    if (m === 'DELETE') {
+      const old = mine();
+      if (old) { delete db.calfeeds[old.id]; save(); }
+      return send(res, 200, { url: null });
+    }
+    return send(res, 405, { error: 'Method not allowed' });
+  }
+
   // Your own connected calendars. Nobody else on the team sees them or their events.
   if (a === 'calendars') {
     const mine = () => Object.values(db.calendars).filter((x) => x.wsId === ws.id && x.memberId === auth.memberId).map(publicCalendarConn);
     if (m === 'GET' && !b) return send(res, 200, { providers: Object.fromEntries(Object.entries(calProviders).map(([k, p]) => [k, p.configured()])), connections: mine(), redirect: PUBLIC_URL + '/oauth/<provider>/callback' });
     if (m === 'POST' && b === 'connect') {
-      const { provider, tz, mail } = await readJson(req);
+      const apple = await readJson(req);
+      const { provider, tz, mail } = apple;
       const p = calProviders[provider];
       if (!p) return send(res, 400, { error: 'Unknown calendar' });
       if (!p.configured()) return send(res, 400, { error: `${p.name} isn’t set up on this server yet.` });
+      // Apple: an Apple ID and an app-specific password, checked by listing the calendars.
+      if (p.password) {
+        const user = String(apple.user || '').trim().slice(0, 200);
+        const pass = String(apple.pass || '').trim().slice(0, 100);
+        if (!user || !pass) return send(res, 400, { error: 'Type your Apple ID and the app-specific password.' });
+        const tok = p.login(user, pass);
+        let cals;
+        try {
+          cals = await p.calendars(tok.access);
+        } catch (e) {
+          return send(res, 400, { error: e.auth ? 'Apple didn’t accept that. Check the Apple ID, and use an app-specific password (not your Apple ID password).' : 'Couldn’t reach iCloud: ' + String(e.message || e).slice(0, 200) });
+        }
+        if (!cals.length) return send(res, 400, { error: 'That iCloud account has no calendars.' });
+        const conn = linkCalendar(ws, auth.memberId, provider, user.toLowerCase(), validTz(tz), cals, tok);
+        return send(res, 200, publicCalendarConn(conn));
+      }
       const state = rid(18);
       const wantMail = !!mail && !!p.sendMail;
       oauthPending.set(state, { wsId: ws.id, memberId: auth.memberId, provider, tz: validTz(tz), mail: wantMail, exp: Date.now() + 15 * 60_000 });
@@ -7694,6 +7784,7 @@ const server = http.createServer(async (req, res) => {
     return serveStatic(req, res, new URL('/reset.html', 'http://x'));
   }
   if (url.pathname.startsWith('/unsubscribe/') && (req.method === 'GET' || req.method === 'POST')) return unsubscribePage(req, res, url);
+  if (url.pathname.startsWith('/cal/') && (req.method === 'GET' || req.method === 'HEAD')) return feedPage(req, res, url);
   if (url.pathname.startsWith('/r/') && req.method === 'GET') {
     res.setHeader('Referrer-Policy', 'no-referrer');
     res.setHeader('X-Robots-Tag', 'noindex');
@@ -7928,6 +8019,7 @@ async function removeMember(ws, m) {
   for (const x of Object.values(db.budgets)) if (theirs(x) && x.scope !== 'business') delete db.budgets[x.id];
   for (const x of Object.values(db.vaultItems)) if (theirs(x)) delete db.vaultItems[x.id];
   delete db.vaults[vaultKey(wsId, id)];
+  for (const x of Object.values(db.calfeeds)) if (theirs(x)) delete db.calfeeds[x.id];
   delete db.signatures[sigKey(wsId, id)];
   delete db.ai[`${wsId}:${id}`];
   for (const x of Object.values(db.sidekick)) if (theirs(x)) {

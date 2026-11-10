@@ -2047,3 +2047,11 @@ body.platform-darwin .pj-head, body.platform-darwin .pj-top { padding-left: 80px
   .pj-inv-st.s-paid { background: #e3f6ec; color: #126b3d; }
   .pj-inv-st.late { background: #fde8e7; color: #b42318; }
 }
+
+/* Calendars: Apple steps and the subscribe link */
+.apple-steps { margin: 0 0 12px; padding-left: 20px; font-size: 13px; line-height: 1.6; color: var(--muted); }
+.apple-steps b { color: var(--text, inherit); font-weight: 600; }
+.cal-feed { margin-top: 12px; }
+.cal-feed .cal-btns { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.cal-feed a.btn { text-decoration: none; }
+.cal-feed-url { width: 100%; margin-top: 8px; font-size: 12px; color: var(--muted); }

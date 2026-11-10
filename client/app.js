@@ -4417,7 +4417,7 @@
   // elsewhere (Settings, Google's sign-in tab), so while Home is open the list is checked again now and then.
   const START = {
     invite: ['Invite your team', 'Send invites by email, so work lands with the right people.', () => openSettings('team', '.inv-sec')],
-    calendar: ['Connect your calendar', 'Google Calendar or Outlook, so your meetings show up in your Day.', () => openSettings('connections', '.cal-sec')],
+    calendar: ['Connect your calendar', 'Google, Outlook or Apple Calendar, so your meetings show up in your Day (or put your Day in your phone’s calendar).', () => openSettings('connections', '.cal-sec')],
     email: ['Connect your email', 'Send from your own Gmail or Outlook, so replies come back to you.', () => openTool('email')],
     contacts: ['Add your contacts', 'Import a spreadsheet, add people by hand, or connect Google Contacts.', () => openTool('contacts')],
     campaign: ['Start your first campaign', 'A launch, an outreach push, anything with a finish line. Sidekick can plan it with you.', () => { setTab('camps'); openCampaign(null); campaignSheet(); }],
@@ -13540,11 +13540,11 @@
   }
 
   // ----- connected calendars (each person's own) -----
-  const CAL_NAMES = { google: 'Google Calendar', microsoft: 'Outlook' };
+  const CAL_NAMES = { google: 'Google Calendar', microsoft: 'Outlook', apple: 'Apple Calendar' };
   const myTz = () => Intl.DateTimeFormat().resolvedOptions().timeZone;
   async function loadCalendars() {
     try {
-      S.cals = await api('GET', '/calendars');
+      [S.cals, S.calfeed] = await Promise.all([api('GET', '/calendars'), api('GET', '/calfeed').catch(() => ({ url: null }))]);
     } catch {
       return;
     }
@@ -13714,6 +13714,7 @@
     const ready = Object.entries(c.providers).filter(([, on]) => on);
     if (ready.length) {
       sec.append(h('div', { class: 'cal-add' }, ready.map(([k]) => h('button', { class: 'btn', onclick: async () => {
+        if (k === 'apple') return appleCalSheet();
         try {
           const { url } = await api('POST', '/calendars/connect', { provider: k, tz: myTz() });
           window.open(url, '_blank');
@@ -13724,7 +13725,59 @@
       } }, (c.connections.some((x) => x.provider === k) ? '+ Another ' : 'Connect ') + CAL_NAMES[k]))));
     } else sec.append(h('p', { class: 'day-hint' }, 'Calendar sign-in isn’t set up on this server yet. See “Calendars” in the README.'));
     sec.append(h('p', { style: 'margin-top:8px;font-size:11.5px' }, 'Only you see events from your calendars. Your team sees what you add in Kloomie as usual.'));
+    sec.append(calFeedBox());
     return sec;
+  }
+  // Apple has no sign-in page for other apps: an Apple ID plus an app-specific password made for Kloomie.
+  function appleCalSheet() {
+    const user = h('input', { type: 'email', autocomplete: 'username', placeholder: 'you@icloud.com', value: S.me?.email || '' });
+    const pass = h('input', { type: 'password', autocomplete: 'off', spellcheck: 'false', placeholder: 'xxxx-xxxx-xxxx-xxxx' });
+    sheet('Connect Apple Calendar', [
+      h('p', { class: 'day-hint' }, 'Apple doesn’t let apps sign in to iCloud directly, so you make a password just for Kloomie. It only works for calendars and the like, can’t change your Apple ID, and you can cancel it at Apple any time.'),
+      h('ol', { class: 'apple-steps' },
+        h('li', {}, 'Go to ', h('a', { href: 'https://account.apple.com/account/manage', target: '_blank', rel: 'noopener' }, 'account.apple.com'), ' and sign in.'),
+        h('li', {}, 'Open ', h('b', {}, 'Sign-In and Security → App-Specific Passwords'), ', click ', h('b', {}, '+'), ', and name it “Kloomie”.'),
+        h('li', {}, 'Copy the password it shows and paste it below.')),
+      h('label', {}, 'Apple ID (the email you sign in to iCloud with)', user),
+      h('label', {}, 'App-specific password', pass),
+      h('p', { class: 'day-hint' }, 'Kloomie keeps it encrypted and uses it only to read and add events in your iCloud calendars.'),
+    ], async () => {
+      if (!user.value.trim() || !pass.value.trim()) throw new Error('Type your Apple ID and the app-specific password.');
+      await api('POST', '/calendars/connect', { provider: 'apple', tz: myTz(), user: user.value.trim(), pass: pass.value.trim() });
+      toast('Apple Calendar connected');
+      loadCalendars();
+    }, 'Connect');
+  }
+  // A private link to your Day that any calendar app can subscribe to.
+  function calFeedBox() {
+    const url = S.calfeed?.url;
+    const box = h('div', { class: 'cal-conn cal-feed' }, h('div', { class: 'srow' }, h('span', {}, 'Your Day in any calendar app', h('small', {}, 'A private link Apple Calendar, Google Calendar or Outlook can subscribe to. Your blocks, tasks with times and job visits show up there and update by themselves (calendar apps check every 15 minutes to an hour). It’s read-only there: make changes in Kloomie.'))));
+    const make = async () => {
+      try {
+        S.calfeed = await api('POST', '/calfeed');
+        loadCalendars();
+      } catch (e) {
+        toast(e.message);
+      }
+    };
+    if (!url) {
+      box.append(h('div', { class: 'cal-btns' }, h('button', { class: 'btn small primary-btn', onclick: make }, 'Make my calendar link')));
+      return box;
+    }
+    const webcal = url.replace(/^https?:/, 'webcal:');
+    const again = h('button', { class: 'btn small', 'data-label': '1' }, 'New link');
+    again.addEventListener('click', () => confirmClick(again, make));
+    const off = h('button', { class: 'btn small danger', 'data-label': '1' }, 'Turn off');
+    off.addEventListener('click', () => confirmClick(off, async () => { S.calfeed = await api('DELETE', '/calfeed').catch((e) => (toast(e.message), S.calfeed)); loadCalendars(); }));
+    box.append(
+      h('div', { class: 'cal-btns cal-feed-add' },
+        h('a', { class: 'btn small primary-btn', href: webcal }, 'Add to Apple Calendar'),
+        h('a', { class: 'btn small', href: 'https://calendar.google.com/calendar/r?cid=' + encodeURIComponent(webcal), target: '_blank', rel: 'noopener' }, 'Add to Google Calendar'),
+        h('button', { class: 'btn small', onclick: () => copyText(url) }, 'Copy link')),
+      h('input', { class: 'cal-feed-url', readonly: true, value: url, onclick: (e) => e.currentTarget.select(), 'aria-label': 'Your calendar link' }),
+      h('p', { class: 'day-hint' }, 'Anyone with this link can see your Day, so keep it to yourself. New link makes the old one stop working.'),
+      h('div', { class: 'cal-btns' }, again, off));
+    return box;
   }
 
   const SET_TABS = [['general', 'General'], ['team', 'Team'], ['connections', 'Connections'], ['automations', 'Automations'], ['account', 'Account']];

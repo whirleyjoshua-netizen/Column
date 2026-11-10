@@ -34,7 +34,7 @@ try {
   const J = call(r.body.token), wsId = r.body.workspace.id;
   let st = (await J('GET', '/state')).body;
   const keys = (st.start || []).map((x) => x.key);
-  ok(keys.join() === 'invite,contacts,campaign,ai', 'an owner of a new team gets the list (no calendar or email steps when this server can’t connect them): ' + keys.join());
+  ok(keys.join() === 'invite,calendar,contacts,campaign,ai', 'an owner of a new team gets the list (a calendar step, since Apple Calendar or the subscribe link always works; no email step when this server can’t send): ' + keys.join());
   ok(st.start.every((x) => !x.done), 'nothing is ticked yet');
 
   await sleep(1200);
