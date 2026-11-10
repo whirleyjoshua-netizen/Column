@@ -213,7 +213,8 @@ try {
   await ada('DELETE', '/ai/keys/gemini');
   r = await ada('POST', '/agents/runs', { agent: 'marketing', ask: 'claude only picture' });
   x = await wait(ada, r.body.id);
-  ok(steps(x)[0].status === 'failed' && /OpenAI or Google Gemini key/.test(steps(x)[0].error), 'with only a Claude key: told it needs an OpenAI or Gemini key');
+  const lastAsk = seen.asked.filter((q) => q.sys.includes('You are the Marketing Manager')).at(-1);
+  ok(!lastAsk.tools.includes('make_image') && lastAsk.sys.includes('no OpenAI or Gemini key on this account'), 'with only a Claude key: no picture tool, and it’s told why (so it doesn’t try)');
 
   // ----- Members, schedules, disconnect -----
   await ben('PUT', '/ai/keys/anthropic', { key: 'sk-ant-test-key-0987654321' });

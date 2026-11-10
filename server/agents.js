@@ -120,7 +120,7 @@ const KEEP_RUNS = 80;
 const MAX_PARTS = 4;
 const MAX_TURN_CHARS = 30_000;
 
-export function agentsModule({ db, save, broadcast, rid, cleanText, readJson, send, notify, replay, run: llmRun, sendEmail, textToDoc, PJ, isAdminId, localNow, tzOf, fmtMinutes, hasAi = () => true, POSTIZ = null, makeImageItem, itemFile, noContact = (c) => !!c.dne }) {
+export function agentsModule({ db, save, broadcast, rid, cleanText, readJson, send, notify, replay, run: llmRun, sendEmail, textToDoc, PJ, isAdminId, localNow, tzOf, fmtMinutes, hasAi = () => true, POSTIZ = null, makeImageItem, itemFile, noContact = (c) => !!c.dne, canPicture = () => true }) {
   db.agentRuns ||= {};
   db.agentPrefs ||= {};
   // Anything still running when the server stopped (a deploy, a restart) can't pick up where it was: say so.
@@ -863,7 +863,9 @@ export function agentsModule({ db, save, broadcast, rid, cleanText, readJson, se
     part.status = 'running';
     part.startedAt = Date.now();
     news(x);
-    const tools = a.tools.map((k) => ({ name: k, description: TOOLS[k].description, parameters: TOOLS[k].parameters }));
+    // No picture key: no picture tool, so it doesn't try (and it's told why, below).
+    const pics = canPicture(ws.id, x.memberId);
+    const tools = a.tools.filter((k) => k !== 'make_image' || pics).map((k) => ({ name: k, description: TOOLS[k].description, parameters: TOOLS[k].parameters }));
     if (x.parts.length < MAX_PARTS) tools.push({ name: 'hand_off', ...HANDOFF });
     const exec = async (name, args) => {
       if (x.status === 'cancelled') throw new Error('The person stopped this assignment. Stop now.');
@@ -918,7 +920,7 @@ export function agentsModule({ db, save, broadcast, rid, cleanText, readJson, se
     };
     const history = [...(part.history || []), { role: 'user', text: !part.reply && (x.parts.length > 1 || part.from) ? handoffContext(x, part) : part.ask }];
     try {
-      const out = await llmRun(ws, x.memberId, { system: systemFor(ws, x.memberId, part.agent, level, prefs, x.agent === 'team'), history, tools, exec, task: part.agent === 'sales' ? 'customer' : part.agent === 'ops' ? 'jobs' : 'plan' });
+      const out = await llmRun(ws, x.memberId, { system: systemFor(ws, x.memberId, part.agent, level, prefs, x.agent === 'team') + (a.tools.includes('make_image') && !pics ? '\n\nPictures: there is no OpenAI or Gemini key on this account, so you can’t make pictures. Don’t try; suggest real job photos, and mention once that adding an OpenAI or Gemini key in Settings → AI lets you make them.' : ''), history, tools, exec, task: part.agent === 'sales' ? 'customer' : part.agent === 'ops' ? 'jobs' : 'plan' });
       part.report = cleanText(out, 6000);
       part.history = [...history, { role: 'assistant', text: part.report }].slice(-12);
       part.status = x.status === 'cancelled' ? 'cancelled' : part.steps.some((s) => ['proposed', 'held'].includes(s.status)) ? 'awaiting' : 'completed';

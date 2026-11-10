@@ -8636,7 +8636,8 @@
   }
   function agRunView(x) {
     const d = AG.data;
-    const proposed = agSteps(x).filter((s) => s.status === 'proposed' && s.tool !== 'draft_email');
+    // Approve all covers routine changes; posts and emails are read and sent one at a time.
+    const proposed = agSteps(x).filter((s) => s.status === 'proposed' && !['draft_email', 'draft_social_post', 'draft_email_campaign'].includes(s.tool));
     const reply = h('textarea', { class: 'ag-ask', rows: 2, placeholder: x.status === 'blocked' ? 'Your answer' : 'Ask a follow-up, or tell it what to change' });
     const send = h('button', { class: 'btn small primary-btn' }, x.status === 'blocked' ? 'Answer' : 'Send');
     send.addEventListener('click', async () => {
