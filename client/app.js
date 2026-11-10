@@ -1118,13 +1118,13 @@
   function buildPanes() {
     const root = $('#panes');
     root.innerHTML = '';
-    const showChips = S.panes.length > 1 || (S.workspace?.stacks.length || 0) > 0;
     S.panes.forEach((view, i) => {
       const pane = h('section', { class: 'pane', 'data-i': i });
       pane._view = view;
       pane._cards = new Map();
-      if (showChips) {
-        const views = ['all', 'files', ...S.workspace.stacks.map((s) => 'stack:' + s.id)];
+      // Everything and Files are always there; each stack adds a chip after them.
+      {
+        const views = ['all', 'files', ...(S.workspace?.stacks || []).map((s) => 'stack:' + s.id)];
         pane.append(
           h('div', { class: 'chips' }, views.map((v) =>
             h('button', {

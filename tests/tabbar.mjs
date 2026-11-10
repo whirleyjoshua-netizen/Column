@@ -51,6 +51,13 @@ const names = async () => (await tabs()).map((t) => t.replace('*', '')).join(','
 ok(await names() === 'Home,Day,Stacks,Chat,Campaigns', 'starts with the usual tabs: ' + await names());
 ok(await A.ev(`!!document.querySelector('#tabs .tabs-edit')`), 'a pencil to change them');
 ok((await api('GET', '/state')).me.bar === null, 'nothing saved yet');
+ok((await api('GET', '/state')).workspace.stacks.length === 0, 'a new team has no stacks yet');
+await A.click('#tabs [data-tab=column]');
+ok(await A.until(`[...document.querySelectorAll('#panes .chip')].map((c) => c.textContent).join('|') === 'Everything|Files'`), 'Stacks shows Everything and Files before any stack is made');
+await A.ev(`[...document.querySelectorAll('#panes .chip')].find((c) => c.textContent === 'Files').click()`);
+ok(await A.until(`document.querySelector('#panes .chip.on')?.textContent === 'Files'`), 'and Files can be picked');
+await A.ev(`[...document.querySelectorAll('#panes .chip')].find((c) => c.textContent === 'Everything').click()`);
+await A.click('#tabs [data-tab=home]');
 
 // Change: drop Chat and Campaigns, add Finance and Jobs, move Jobs before Finance
 await A.click('#tabs .tabs-edit');
