@@ -215,14 +215,14 @@ body.platform-darwin .bar { padding-left: 76px; }
 
 /* settings */
 .settings {
-  position: absolute; inset: 44px 0 0 0; background: var(--bg); overflow-y: auto; z-index: 10;
+  position: absolute; inset: 44px 0 0 0; background: var(--bg); overflow-y: auto; overflow-x: hidden; z-index: 10;
   padding: 14px 14px 30px; animation: slide 0.18s ease-out;
 }
 @keyframes slide { from { transform: translateY(-6px); opacity: 0; } }
 .settings h2 { font-size: 15px; margin: 0 0 14px; display: flex; align-items: center; justify-content: space-between; }
 .settings section { margin-bottom: 20px; }
-.settings .set-tabs { margin-bottom: 18px; }
-.settings .set-tabs button { font-size: 12px; white-space: nowrap; }
+.settings .set-tabs { margin-bottom: 18px; grid-auto-flow: row; grid-template-columns: repeat(auto-fit, minmax(76px, 1fr)); } /* a narrow column wraps them, evenly, inside the box */
+.settings .set-tabs button { font-size: 12px; white-space: nowrap; padding: 6px 4px; overflow: hidden; text-overflow: ellipsis; }
 .settings h3 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin: 0 0 8px; font-weight: 600; }
 .settings p { margin: 0 0 8px; color: var(--muted); line-height: 1.5; }
 .settings code { font-family: var(--mono); font-size: 11.5px; color: var(--text); background: var(--panel); padding: 1px 5px; border-radius: 4px; user-select: all; -webkit-user-select: all; word-break: break-all; }
