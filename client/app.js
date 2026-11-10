@@ -9863,7 +9863,7 @@
           toast('Finish signing in to QuickBooks in your browser.');
         } catch (e) { toast(e.message); }
       };
-      sec.append(h('p', { class: 'day-hint' }, 'Keep your books up to date without typing anything twice. Each invoice you send from Kloomie goes into QuickBooks Online under the same number, billed to the same customer, and every payment goes with it. Payments you record in QuickBooks come back here, so the job shows as paid.'),
+      sec.append(h('p', { class: 'day-hint' }, 'Keep your books up to date without typing anything twice. Each quote you send from a job goes into QuickBooks Online as an estimate, marked accepted or declined when your customer answers. Each invoice goes in under the same number, linked to its estimate, billed to the same customer, and every payment goes with it. Payments you record in QuickBooks come back here, so the job shows as paid.'),
         h('div', { class: 'btns' }, h('button', { class: 'btn primary-btn', onclick: go }, 'Connect QuickBooks')));
       return sec;
     }
@@ -9871,10 +9871,10 @@
     off.addEventListener('click', () => confirmClick(off, () => api('DELETE', '/quickbooks').then(redo).catch((e) => toast(e.message))));
     const now = h('button', { class: 'btn small' }, x.busy ? 'Syncing…' : 'Sync now');
     now.onclick = async () => { now.textContent = 'Syncing…'; now.disabled = true; const y = await api('POST', '/quickbooks/sync').catch((e) => toast(e.message)); if (y) redo(y); };
-    const earlier = x.from ? h('button', { class: 'btn small', onclick: async () => { const y = await api('POST', '/quickbooks/earlier').catch((e) => toast(e.message)); if (y) { redo(y); toast('Copying your earlier invoices too'); } } }, 'Copy earlier invoices too') : null;
+    const earlier = x.from ? h('button', { class: 'btn small', onclick: async () => { const y = await api('POST', '/quickbooks/earlier').catch((e) => toast(e.message)); if (y) { redo(y); toast('Copying your earlier quotes and invoices too'); } } }, 'Copy earlier ones too') : null;
     sec.append(...[
-      h('p', {}, `✓ Connected to ${x.company}${x.sandbox ? ' (sandbox)' : ''} by ${x.by}. Invoices you send${x.from ? ` from ${new Date(x.from).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} on` : ''} go into QuickBooks with their payments, and payments recorded there come back.`),
-      h('p', { class: 'day-hint' }, `${x.copied} invoice${x.copied === 1 ? '' : 's'} in QuickBooks${x.waiting ? ` · ${x.waiting} waiting` : ''}${x.syncedAt ? ' · checked ' + ago(x.syncedAt) : ''}`),
+      h('p', {}, `✓ Connected to ${x.company}${x.sandbox ? ' (sandbox)' : ''} by ${x.by}. Quotes and invoices you send${x.from ? ` from ${new Date(x.from).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} on` : ''} go into QuickBooks (quotes as estimates) with their payments, and payments recorded there come back.`),
+      h('p', { class: 'day-hint' }, `${x.quotes ? `${x.quotes} quote${x.quotes === 1 ? '' : 's'} and ` : ''}${x.copied} invoice${x.copied === 1 ? '' : 's'} in QuickBooks${x.waiting ? ` · ${x.waiting} waiting` : ''}${x.syncedAt ? ' · checked ' + ago(x.syncedAt) : ''}`),
       x.error ? h('p', { class: 'err' }, x.error) : null,
       ...(x.failed || []).map((f) => h('small', { class: 'err' }, `${f.number}: ${f.error}`)),
       h('div', { class: 'btns' }, now, earlier, off),

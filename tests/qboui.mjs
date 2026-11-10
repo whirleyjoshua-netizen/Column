@@ -62,7 +62,7 @@ try {
   const st = new URL(url).searchParams.get('state');
   await fetch(`${APP}oauth/quickbooks/callback?code=x&state=${st}&realmId=R1`);
   ok(await A.until(`/Connected to Blinds & Co/.test(document.querySelector('#settings .qbo-sec')?.textContent || '')`), 'the section shows it’s connected to Blinds & Co, without reloading');
-  ok(await A.ev(`[...document.querySelectorAll('#settings .qbo-sec button')].map((b) => b.textContent).join('|')`) === 'Sync now|Copy earlier invoices too|Disconnect', 'with Sync now, Copy earlier invoices too and Disconnect');
+  ok(await A.ev(`[...document.querySelectorAll('#settings .qbo-sec button')].map((b) => b.textContent).join('|')`) === 'Sync now|Copy earlier ones too|Disconnect', 'with Sync now, Copy earlier ones too and Disconnect');
   ok(!(await A.ev(`document.querySelector('#settings .qbo-sec').textContent.includes('null')`)), 'still no stray “null”');
 
   // The new-webhook sheet.

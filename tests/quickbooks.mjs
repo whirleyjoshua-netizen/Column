@@ -16,9 +16,10 @@ const ok = (c, msg) => { console.log((c ? 'PASS ' : 'FAIL ') + msg); if (!c) fai
 const until = async (f, ms = 8000) => { const end = Date.now() + ms; while (Date.now() < end) { if (await f()) return true; await sleep(120); } return false; };
 
 // ---------- a stand-in for Intuit and one QuickBooks company ----------
-const Q = { access: null, refresh: null, refreshes: 0, revoked: [], seq: 100, Account: [{ Id: '1', Name: 'Services', AccountType: 'Income' }, { Id: '2', Name: 'Board of Equalization Payable', AccountType: 'Other Current Liability' }], Item: [], Customer: [{ Id: '9', DisplayName: 'Dana Ruiz (vendor)' }], Invoice: [], Payment: [], posts: [] };
+const Q = { access: null, refresh: null, refreshes: 0, revoked: [], seq: 100, Account: [{ Id: '1', Name: 'Services', AccountType: 'Income' }, { Id: '2', Name: 'Board of Equalization Payable', AccountType: 'Other Current Liability' }], Item: [], Customer: [{ Id: '9', DisplayName: 'Dana Ruiz (vendor)' }], Invoice: [], Estimate: [], Payment: [], posts: [] };
 const issue = (short) => { Q.access = 'at_' + ++Q.seq; Q.refresh = 'rt_' + ++Q.seq; return { access_token: Q.access, refresh_token: Q.refresh, expires_in: short ? 1 : 3600, x_refresh_token_expires_in: 8640000 }; };
 let shortTokens = false;
+const PJtotal = (v) => { const sub = v.rows.reduce((n, r) => n + Math.round(r.qty * r.price), 0); return sub + Math.round(sub * (v.taxRate || 0) / 100); };
 const total = (inv) => Math.round(inv.Line.reduce((n, l) => n + (l.DetailType === 'DiscountLineDetail' ? -l.Amount : l.Amount), 0) * 100) / 100;
 const fake = http.createServer(async (req, res) => {
   let raw = '';
@@ -51,6 +52,8 @@ const fake = http.createServer(async (req, res) => {
   }
   const g = path.match(/^invoice\/(\w+)$/);
   if (g && req.method === 'GET') { const inv = Q.Invoice.find((x) => x.Id === g[1]); return inv ? out(200, { Invoice: inv }) : out(404, {}); }
+  const ge = path.match(/^estimate\/(\w+)$/);
+  if (ge && req.method === 'GET') { const e = Q.Estimate.find((x) => x.Id === ge[1]); return e ? out(200, { Estimate: e }) : out(404, {}); }
   if (req.method === 'POST') {
     const body = JSON.parse(raw);
     Q.posts.push([path, body]);
@@ -64,7 +67,19 @@ const fake = http.createServer(async (req, res) => {
     if (path === 'invoice') {
       if (!body.Line.every((l) => l.DetailType !== 'SalesItemLineDetail' || Math.abs(l.Amount - l.SalesItemLineDetail.Qty * l.SalesItemLineDetail.UnitPrice) < 0.01)) return out(400, { Fault: { Error: [{ Message: 'Amount is not equal to UnitPrice * Qty', code: '6070' }] } });
       if (body.Id) { const inv = Q.Invoice.find((x) => x.Id === body.Id); if (inv.SyncToken !== body.SyncToken) return out(400, { Fault: { Error: [{ Message: 'Stale Object Error', code: '5010' }] } }); Object.assign(inv, body, { SyncToken: String(Number(inv.SyncToken) + 1) }); inv.TotalAmt = total(inv); return out(200, { Invoice: inv }); }
-      const inv = { Id: String(++Q.seq), SyncToken: '0', ...body }; inv.TotalAmt = total(inv); Q.Invoice.push(inv); return out(200, { Invoice: inv });
+      const inv = { Id: String(++Q.seq), SyncToken: '0', ...body }; inv.TotalAmt = total(inv); Q.Invoice.push(inv);
+      for (const lt of body.LinkedTxn || []) { const e = lt.TxnType === 'Estimate' && Q.Estimate.find((x) => x.Id === lt.TxnId); if (e) { e.TxnStatus = 'Closed'; e.SyncToken = String(Number(e.SyncToken) + 1); } }
+      return out(200, { Invoice: inv });
+    }
+    if (path === 'estimate') {
+      if (body.Id) {
+        const e = Q.Estimate.find((x) => x.Id === body.Id);
+        if (e.SyncToken !== body.SyncToken) return out(400, { Fault: { Error: [{ Message: 'Stale Object Error', code: '5010' }] } });
+        const { sparse, ...rest } = body;
+        Object.assign(e, rest);
+        e.SyncToken = String(Number(e.SyncToken) + 1); e.TotalAmt = total(e); return out(200, { Estimate: e });
+      }
+      const e = { Id: String(++Q.seq), SyncToken: '0', TxnStatus: 'Pending', ...body }; e.TotalAmt = total(e); Q.Estimate.push(e); return out(200, { Estimate: e });
     }
     if (path === 'payment') { const p = { Id: String(++Q.seq), ...body, at: Date.now() }; Q.Payment.push(p); return out(200, { Payment: p }); }
   }
@@ -172,6 +187,53 @@ try {
   await jo('POST', `/invoices/${inv3.id}/send`);
   ok(await until(async () => (await jo('GET', '/invoices/' + inv3.id)).body.qbo?.id === 'HAND1'), 'it links to the one already there');
   ok(Q.Invoice.filter((x) => x.DocNumber === n3).length === 1, 'without making a second');
+
+  // Quotes become estimates.
+  const fid = (k) => tp.fields.find((f) => f.key === k)?.id;
+  const lee = (await jo('POST', '/contacts', { name: 'Lee Park', email: 'lee@x.test', address: '22 B St' })).body;
+  const qjob = (await jo('POST', `/projects/${p.id}/records`, { typeId: tp.id, values: { job: 'Heat pump install', customer: lee.id, address: '22 B St', price: { rows: [{ desc: 'Heat pump', qty: 1, price: '4200' }, { desc: 'Labor', qty: 6, price: '95' }], taxRate: 8.25 } } })).body;
+  const sh = (await jo('POST', `/records/${qjob.id}/share`, { hours: 0 })).body;
+  const token = sh.share.token;
+  ok(await until(() => Q.Estimate.some((x) => Q.Customer.find((c) => c.Id === x.CustomerRef?.value)?.DisplayName === 'Lee Park')), 'a quote sent from a job goes in as an estimate, for Lee');
+  let est = Q.Estimate.at(-1);
+  ok(est.TxnStatus === 'Pending' && est.Line.length === 3 && est.Line[0].SalesItemLineDetail.UnitPrice === 4200 && est.Line[2].Description.startsWith('Sales tax'), 'pending, with both lines and the tax line');
+  const kq = PJtotal({ rows: [{ qty: 1, price: 420000 }, { qty: 6, price: 9500 }], taxRate: 8.25 });
+  ok(Math.round(est.TotalAmt * 100) === kq, `its total matches the quote: $${est.TotalAmt}`);
+  ok(est.DocNumber === 'KQ-1001', 'under the team’s first quote number: ' + est.DocNumber);
+  // Changing the price before they answer updates it.
+  await jo('PATCH', `/records/${qjob.id}`, { values: { [fid('price')]: { rows: [{ desc: 'Heat pump', qty: 1, price: '3900' }, { desc: 'Labor', qty: 6, price: '95' }], taxRate: 8.25 } } });
+  ok(await until(() => Q.Estimate.find((x) => x.Id === est.Id)?.Line[0].SalesItemLineDetail.UnitPrice === 3900), 'a new price before they answer updates the estimate');
+  // Accepted on the customer's page.
+  await fetch(`${B}/q/${token}/accept`, { method: 'POST', body: new URLSearchParams({ name: 'Lee Park' }), redirect: 'manual' });
+  ok(await until(() => Q.Estimate.find((x) => x.Id === est.Id)?.TxnStatus === 'Accepted'), 'accepted by the customer: Accepted there');
+  est = Q.Estimate.find((x) => x.Id === est.Id);
+  ok(est.AcceptedBy === 'Lee Park' && /^\d{4}-\d{2}-\d{2}$/.test(est.AcceptedDate), 'with who accepted it and when');
+  // Invoiced: linked to the estimate, which closes.
+  const qinv = (await jo('POST', `/records/${qjob.id}/invoices`)).body;
+  await jo('POST', `/invoices/${qinv.id}/send`);
+  ok(await until(() => Q.Invoice.some((x) => x.DocNumber === qinv.number)), `the job’s invoice ${qinv.number} goes in`);
+  const qi2 = Q.Invoice.find((x) => x.DocNumber === qinv.number);
+  ok(qi2.LinkedTxn?.[0]?.TxnId === est.Id && qi2.LinkedTxn[0].TxnType === 'Estimate', 'linked to its estimate');
+  ok(Q.Estimate.find((x) => x.Id === est.Id).TxnStatus === 'Closed', 'and the estimate shows as closed (invoiced)');
+  await sleep(1200);
+  ok(Q.Estimate.find((x) => x.Id === est.Id).TxnStatus === 'Closed', 'Kloomie leaves it closed');
+  // Declined, and withdrawn.
+  const dj = (await jo('POST', `/projects/${p.id}/records`, { typeId: tp.id, values: { job: 'Duct cleaning', customer: lee.id, price: { rows: [{ desc: 'Ducts', qty: 1, price: '350' }], taxRate: 0 } } })).body;
+  const dsh = (await jo('POST', `/records/${dj.id}/share`, {})).body;
+  ok(await until(() => Q.Estimate.length === 2), 'a second quote, a second estimate');
+  const dEst = Q.Estimate.at(-1);
+  await fetch(`${B}/q/${dsh.share.token}/decline`, { method: 'POST', body: new URLSearchParams({ name: 'Lee', reason: 'Too much' }), redirect: 'manual' });
+  ok(await until(() => Q.Estimate.find((x) => x.Id === dEst.Id)?.TxnStatus === 'Rejected'), 'declined: Rejected there');
+  const wj = (await jo('POST', `/projects/${p.id}/records`, { typeId: tp.id, values: { job: 'Thermostat', customer: lee.id, price: { rows: [{ desc: 'Thermostat', qty: 1, price: '180' }], taxRate: 0 } } })).body;
+  await jo('POST', `/records/${wj.id}/share`, {});
+  ok(await until(() => Q.Estimate.length === 3), 'a third quote');
+  const wEst = Q.Estimate.at(-1);
+  await jo('DELETE', `/records/${wj.id}/share`);
+  ok(await until(() => Q.Estimate.find((x) => x.Id === wEst.Id)?.TxnStatus === 'Closed'), 'its link turned off: closed there');
+  ok((await jo('GET', '/quickbooks')).body.quotes === 3, 'Settings counts 3 quotes in QuickBooks');
+  const noQuote = (await jo('POST', `/projects/${p.id}/records`, { typeId: tp.id, values: { job: 'Not quoted', customer: lee.id, price: { rows: [{ desc: 'X', qty: 1, price: '10' }] } } })).body;
+  await sleep(900);
+  ok(Q.Estimate.length === 3 && noQuote.id, 'a job whose quote was never sent isn’t copied');
 
   // Earlier invoices, when asked.
   r = await jo('POST', '/quickbooks/earlier');

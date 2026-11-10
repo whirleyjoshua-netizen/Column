@@ -1167,6 +1167,36 @@ button{font:inherit;font-weight:700;background:var(--accent);color:#fff;border:0
 footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
 </style></head><body><main>${body}</main><footer>Sent with Kloomie</footer></body></html>`);
   }
+  // A record's quote as other systems need it (QuickBooks estimates): its number, lines, customer and where it stands.
+  // null when the record has no price lines. status: pending, accepted, declined, expired, or withdrawn (link turned off).
+  function quoteOf(rec) {
+    const p = db.projects[rec?.projectId];
+    const t = p && typeOf(p, rec.typeId);
+    const items = t?.fields.find((f) => f.type === 'items' && rec.values[f.id]?.rows?.length);
+    if (!items) return null;
+    const v = (key) => { const f = fieldOf(t, key); return f ? rec.values[f.id] : undefined; };
+    const num = t.fields.find((f) => f.type === 'autonumber');
+    const label = quoteStatus(t, rec);
+    const status = rec.answer?.act === 'accept' || label === 'accepted' ? 'accepted' : rec.answer?.act === 'decline' || label === 'declined' ? 'declined'
+      : label === 'expired' ? 'expired' : !rec.share ? 'withdrawn' : 'pending';
+    // Who it's for: a Contacts customer (jobs), or a linked client record (Bids & Quotes).
+    let customer = null;
+    const cf = t.fields.find((f) => f.type === 'contact' && rec.values[f.id]);
+    const c = cf && db.contacts?.[rec.values[cf.id]];
+    if (c) customer = { contactId: c.id, name: c.name || c.company || '', email: c.email || '', phone: c.phone || '', address: [c.address, c.city].filter(Boolean).join(', ') };
+    else {
+      const lf = fieldOf(t, 'client');
+      const client = lf?.type === 'link' && rec.values[lf.id]?.[0] && db.records[rec.values[lf.id][0]];
+      const ct = client && typeOf(p, client.typeId);
+      const cv = (key) => { const f = ct && fieldOf(ct, key); return f && client.values[f.id] != null ? String(client.values[f.id]) : ''; };
+      if (client) customer = { contactId: 'rec:' + client.id, name: String(client.values[ct.primary] ?? '') || cv('name'), email: cv('email'), phone: cv('phone'), address: [cv('address'), cv('city')].filter(Boolean).join(', ') };
+    }
+    const addr = v('address');
+    if (customer && addr && typeof addr === 'string') customer.address = addr;
+    return { number: (num && rec.values[num.id]) || null, title: String(rec.values[t.primary] ?? '') || t.singular || 'Quote', lines: rec.values[items.id],
+      issued: v('issued') || (rec.share ? teamDay(rec.wsId, rec.share.createdAt) : null), validUntil: v('valid_until') || null, terms: typeof v('terms') === 'string' ? v('terms') : '',
+      status, acceptedBy: rec.answer?.act === 'accept' ? rec.answer.name : null, answeredOn: rec.answer ? teamDay(rec.wsId, rec.answer.at) : null, sentAt: rec.share?.createdAt || null, customer };
+  }
   // Quotes still waiting past their valid-until day become Expired.
   function expireQuotes() {
     for (const rec of Object.values(db.records)) {
@@ -1468,5 +1498,5 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
     return rec && rec.wsId === wsId && sees(p, memberId) ? { rec, p, t: typeOf(p, rec.typeId) } : null;
   };
 
-  return { route, v1, keyAuth, makeHook, publicHook, deliver, emit, quotePage, seesMsg, stateFor, sees, recordActivity, recordNews, words, fillFromProject, fromProjectOk, recordStory, priceList, recordAt, itemsTotals, TEMPLATES: Object.fromEntries(Object.entries(TEMPLATES).map(([k, t]) => [k, { name: t.name, icon: t.icon, about: t.about }])) };
+  return { route, v1, keyAuth, makeHook, publicHook, deliver, emit, quoteOf, quotePage, seesMsg, stateFor, sees, recordActivity, recordNews, words, fillFromProject, fromProjectOk, recordStory, priceList, recordAt, itemsTotals, TEMPLATES: Object.fromEntries(Object.entries(TEMPLATES).map(([k, t]) => [k, { name: t.name, icon: t.icon, about: t.about }])) };
 }

@@ -7889,7 +7889,7 @@ async function replayAs(ws, memberId, approvalId, { method, path: p, body }) {
 const hold = (...a) => RULES.hold(...a);
 const PJ = projectsModule({ db, save, broadcast, rid, hold, cleanText, isDay, readJson, send, badRequest, isOwnerId, escHtml, brandOf, logoUrl, teamDay, offline, allowLocalHooks: process.env.ALLOW_LOCAL_WEBHOOKS === '1',
   onRecordGone: (rec) => { dropVisits(rec); INV.dropFor(rec); },
-  onRecordNews: (rec) => jobChanged(rec),
+  onRecordNews: (rec) => { jobChanged(rec); if (rec.share || rec.qbo?.estId) QB.soon(rec.wsId); },
   // A follow-up from a record's timeline: a task for whoever logged it, about the record.
   makeTask: (ws, auth, { text, due, recordId }) => {
     const t = applyTask({ id: rid(), wsId: ws.id, by: auth.member, createdAt: Date.now(), text: '', done: false, doneAt: null, due: null, priority: 0, goalId: null, assigneeId: null }, { text, due, assigneeId: auth.memberId, recordId });
@@ -7996,7 +7996,7 @@ const INV = invoicesModule({ db, save, broadcast, rid, hold, cleanText, readJson
   dropMoneyId: (id) => { if (db.money[id]) dropMoney(db.money[id]); },
 });
 // QuickBooks Online: invoices and payments into the team's books, payments recorded there back (quickbooks.js).
-const QB = quickbooksModule({ db, save, broadcast, cleanText, readJson, send, seal, unseal, isAdmin, INV, publicUrl: PUBLIC_URL, alarm, offline, teamDay });
+const QB = quickbooksModule({ db, save, broadcast, cleanText, readJson, send, seal, unseal, isAdmin, INV, PJ, publicUrl: PUBLIC_URL, alarm, offline, teamDay });
 // The public API for Contacts, Tasks, Visits and Invoices, and webhooks apps subscribe to (publicapi.js).
 const API = publicApiModule({ db, save, broadcast, rid, cleanText, readJson, send, badRequest, PJ, INV, isAdmin, teamDay, EVENTS: HOOK_EVENTS, EMAIL_RE,
   publicContact, contactsOf, newContact, applyContact, contactNews, refreshLiveSoon, automate, CONTACT_MAX, emailKey, phoneKey,

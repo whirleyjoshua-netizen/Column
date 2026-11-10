@@ -9,6 +9,9 @@
 // - Each payment taken in Kloomie (card, cash, check…) is recorded against it in QuickBooks.
 // - A payment recorded in QuickBooks against one of those invoices comes back into Kloomie, so the job moves to
 //   Paid and the money shows in Finance.
+// - A quote sent from a job (or a Bids & Quotes quote) goes in as an Estimate under its number, the same way. When
+//   the customer accepts or declines it, the Estimate is marked Accepted or Rejected; an expired or withdrawn quote
+//   is closed. The job's invoice is linked to its Estimate, as QuickBooks does when an estimate becomes an invoice.
 // Only invoices made after connecting are copied, unless the team asks for earlier ones too.
 //
 // It works by looking, not by reacting: every few minutes (and right after an invoice changes) it compares what
@@ -23,7 +26,7 @@ const TICK = Number(env('QBO_TICK_MS')) || 3 * 60_000;
 const ITEM = 'Kloomie services';
 const TAX_ITEM = 'Sales tax (from Kloomie)';
 
-export function quickbooksModule({ db, save, broadcast, cleanText, readJson, send, seal, unseal, isAdmin, INV, publicUrl, alarm, offline, teamDay }) {
+export function quickbooksModule({ db, save, broadcast, cleanText, readJson, send, seal, unseal, isAdmin, INV, PJ, publicUrl, alarm, offline, teamDay }) {
   db.qbo ||= {};
   const configured = () => !!(env('QBO_CLIENT_ID') && env('QBO_CLIENT_SECRET'));
   const sandbox = () => env('QBO_ENV') !== 'production';
@@ -38,7 +41,7 @@ export function quickbooksModule({ db, save, broadcast, cleanText, readJson, sen
   const soonTimers = new Map();
   const cents = (d) => Math.round(Number(d || 0) * 100);
   const dollars = (c) => Math.round(c) / 100;
-  const q = (s) => String(s).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+  const esc = (s) => String(s).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 
   // ---------- Intuit sign-in ----------
   async function tokenCall(form) {
@@ -80,7 +83,7 @@ export function quickbooksModule({ db, save, broadcast, cleanText, readJson, sen
     const key = tax ? 'taxItemId' : 'itemId';
     if (c[key]) return c[key];
     const name = tax ? TAX_ITEM : ITEM;
-    let item = (await query(c, `select * from Item where Name = '${q(name)}'`)).Item?.[0];
+    let item = (await query(c, `select * from Item where Name = '${esc(name)}'`)).Item?.[0];
     if (!item) {
       let acct;
       if (tax) {
@@ -100,13 +103,13 @@ export function quickbooksModule({ db, save, broadcast, cleanText, readJson, sen
     return item.Id;
   }
   // The customer an invoice is billed to: the one already used for that contact, one with the same name, or a new one.
-  async function customerFor(c, inv) {
-    const to = inv.to || {};
+  async function customerFor(c, to = {}) {
     const name = cleanText(to.name, 100) || 'Customer';
     const key = to.contactId || 'name:' + name.toLowerCase();
     c.customers ||= {};
     if (c.customers[key]) return c.customers[key];
-    let cust = (await query(c, `select * from Customer where DisplayName = '${q(name)}'`)).Customer?.[0];
+    if (!to.name && !to.email) throw new Error('It has no customer. Pick who it’s for in Kloomie.');
+    let cust = (await query(c, `select * from Customer where DisplayName = '${esc(name)}'`)).Customer?.[0];
     if (!cust) {
       const body = { DisplayName: name, ...(to.email ? { PrimaryEmailAddr: { Address: to.email } } : {}), ...(to.phone ? { PrimaryPhone: { FreeFormNumber: to.phone } } : {}), ...(to.address ? { BillAddr: { Line1: to.address.slice(0, 500) } } : {}) };
       try {
@@ -121,15 +124,19 @@ export function quickbooksModule({ db, save, broadcast, cleanText, readJson, sen
     save();
     return cust.Id;
   }
-  // Kloomie's invoice as QuickBooks lines: each line, the discount, and the tax as a line of its own.
-  async function invoiceBody(c, inv) {
-    const t = INV.totals(inv);
+  // Kloomie's price lines as QuickBooks lines: each line, the discount, and the tax as a line of its own.
+  async function linesFor(c, lines) {
+    const t = PJ.itemsTotals(lines);
     const item = await itemFor(c, false);
-    const Line = inv.lines.rows.map((r) => ({ DetailType: 'SalesItemLineDetail', Amount: dollars(Math.round(r.qty * r.price)), Description: [r.desc, r.unit && `(${r.unit})`].filter(Boolean).join(' ').slice(0, 4000) || 'Work',
+    const Line = lines.rows.map((r) => ({ DetailType: 'SalesItemLineDetail', Amount: dollars(Math.round(r.qty * r.price)), Description: [r.desc, r.unit && `(${r.unit})`].filter(Boolean).join(' ').slice(0, 4000) || 'Work',
       SalesItemLineDetail: { ItemRef: { value: item }, Qty: r.qty, UnitPrice: dollars(r.price) } }));
     if (t.discount > 0) Line.push({ DetailType: 'DiscountLineDetail', Amount: dollars(t.discount), DiscountLineDetail: { PercentBased: false } });
-    if (t.tax > 0) Line.push({ DetailType: 'SalesItemLineDetail', Amount: dollars(t.tax), Description: `Sales tax (${inv.lines.taxRate}%)`, SalesItemLineDetail: { ItemRef: { value: await itemFor(c, true) }, Qty: 1, UnitPrice: dollars(t.tax) } });
-    return { CustomerRef: { value: await customerFor(c, inv) }, DocNumber: inv.number.slice(0, 21), TxnDate: inv.issued || undefined, DueDate: inv.due || undefined, Line,
+    if (t.tax > 0) Line.push({ DetailType: 'SalesItemLineDetail', Amount: dollars(t.tax), Description: `Sales tax (${lines.taxRate}%)`, SalesItemLineDetail: { ItemRef: { value: await itemFor(c, true) }, Qty: 1, UnitPrice: dollars(t.tax) } });
+    return Line;
+  }
+  async function invoiceBody(c, inv) {
+    const Line = await linesFor(c, inv.lines);
+    return { CustomerRef: { value: await customerFor(c, inv.to) }, DocNumber: inv.number.slice(0, 21), TxnDate: inv.issued || undefined, DueDate: inv.due || undefined, Line,
       ...(inv.to?.email ? { BillEmail: { Address: inv.to.email } } : {}), ...(inv.note ? { CustomerMemo: { value: inv.note.slice(0, 1000) } } : {}), PrivateNote: `From Kloomie${inv.title ? ': ' + inv.title.slice(0, 200) : ''}` };
   }
   const linesHash = (inv) => crypto.createHash('sha256').update(JSON.stringify([inv.lines, inv.due, inv.note, inv.to?.name])).digest('base64url').slice(0, 16);
@@ -141,6 +148,15 @@ export function quickbooksModule({ db, save, broadcast, cleanText, readJson, sen
     if (!c || offline(ws.id)) return;
     let did = 0;
     const fails = [];
+    for (const rec of quotesOf(c)) {
+      try {
+        did += await copyQuote(c, rec);
+      } catch (e) {
+        if (e.auth) throw e;
+        rec.qbo = { ...rec.qbo, error: String(e.message).slice(0, 300), tried: Date.now() };
+        fails.push(`Quote ${PJ.quoteOf(rec)?.number || PJ.quoteOf(rec)?.title || ''}: ${e.message}`);
+      }
+    }
     const invs = Object.values(db.invoices).filter((x) => toCopy(c, x)).sort((a, b) => a.createdAt - b.createdAt);
     for (const inv of invs) {
       try {
@@ -153,7 +169,7 @@ export function quickbooksModule({ db, save, broadcast, cleanText, readJson, sen
     }
     did += await pullPayments(c, ws);
     c.syncedAt = Date.now();
-    c.error = fails.length ? `${fails.length} invoice${fails.length > 1 ? 's' : ''} didn’t copy. ${fails[0].slice(0, 300)}` : null;
+    c.error = fails.length ? `${fails.length} thing${fails.length > 1 ? 's' : ''} didn’t copy. ${fails[0].slice(0, 300)}` : null;
     return did;
   }
   async function copyInvoice(c, inv) {
@@ -171,11 +187,15 @@ export function quickbooksModule({ db, save, broadcast, cleanText, readJson, sen
     }
     if (!x.id) {
       // Already there under this number (an earlier run that didn't finish, or typed in by hand): link to it.
-      const found = (await query(c, `select * from Invoice where DocNumber = '${q(inv.number)}'`)).Invoice?.[0];
+      const found = (await query(c, `select * from Invoice where DocNumber = '${esc(inv.number)}'`)).Invoice?.[0];
       if (found) Object.assign(x, { id: found.Id, linked: true, hash: linesHash(inv) });
       else {
-        const made = (await qb(c, 'POST', '/invoice', await invoiceBody(c, inv))).Invoice;
-        Object.assign(x, { id: made.Id, hash: linesHash(inv), total: cents(made.TotalAmt) });
+        const body = await invoiceBody(c, inv);
+        // Made from a job whose quote is an Estimate there: linked to it, so QuickBooks shows it was invoiced.
+        const est = db.records[inv.recordId]?.qbo?.estId;
+        if (est) body.LinkedTxn = [{ TxnId: est, TxnType: 'Estimate' }];
+        const made = (await qb(c, 'POST', '/invoice', body)).Invoice;
+        Object.assign(x, { id: made.Id, hash: linesHash(inv), total: cents(made.TotalAmt), ...(est ? { estimate: est } : {}) });
         did++;
       }
       x.at = Date.now();
@@ -190,7 +210,7 @@ export function quickbooksModule({ db, save, broadcast, cleanText, readJson, sen
     // Payments taken in Kloomie, recorded against it there (not the ones that came from QuickBooks).
     for (const p of inv.payments) {
       if (p.qbo || p.ref?.startsWith('qbo:')) continue;
-      const made = (await qb(c, 'POST', '/payment', { CustomerRef: { value: await customerFor(c, inv) }, TotalAmt: dollars(p.amount), TxnDate: p.day, PaymentRefNum: p.id.slice(0, 21),
+      const made = (await qb(c, 'POST', '/payment', { CustomerRef: { value: await customerFor(c, inv.to) }, TotalAmt: dollars(p.amount), TxnDate: p.day, PaymentRefNum: p.id.slice(0, 21),
         PrivateNote: `From Kloomie: ${p.method}${p.note ? ' · ' + p.note.slice(0, 200) : ''}`, Line: [{ Amount: dollars(p.amount), LinkedTxn: [{ TxnId: x.id, TxnType: 'Invoice' }] }] })).Payment;
       p.qbo = made.Id;
       save();
@@ -198,6 +218,66 @@ export function quickbooksModule({ db, save, broadcast, cleanText, readJson, sen
     }
     return did;
   }
+  // ---------- quotes, as estimates ----------
+  // Quotes sent since connecting (or earlier, when asked), and any already copied.
+  const quotesOf = (c) => Object.values(db.records).filter((r) => r.wsId === c.wsId && (r.qbo?.estId || (r.share && (r.share.createdAt || 0) >= (c.from || 0)))).sort((a, b) => (a.share?.createdAt || 0) - (b.share?.createdAt || 0));
+  const EST_STATUS = { pending: 'Pending', accepted: 'Accepted', declined: 'Rejected', expired: 'Closed', withdrawn: 'Closed' };
+  const quoteHash = (q) => crypto.createHash('sha256').update(JSON.stringify([q.lines, q.validUntil, q.terms, q.customer?.name])).digest('base64url').slice(0, 16);
+  // The quote's own number (Bids & Quotes has one); a job's quote gets the next KQ-1001, KQ-1002… for the team, kept.
+  const quoteNumber = (q, rec) => {
+    if (q.number) return String(q.number).slice(0, 21);
+    if (!rec.qbo?.num) {
+      const c = db.qbo[rec.wsId];
+      c.quoteNext = (c.quoteNext || 1000) + 1;
+      rec.qbo = { ...rec.qbo, num: 'KQ-' + c.quoteNext };
+      save();
+    }
+    return rec.qbo.num;
+  };
+  async function estimateBody(c, q, rec) {
+    return { CustomerRef: { value: await customerFor(c, q.customer || {}) }, DocNumber: quoteNumber(q, rec), TxnDate: q.issued || undefined, ExpirationDate: q.validUntil || undefined, Line: await linesFor(c, q.lines),
+      ...(q.customer?.email ? { BillEmail: { Address: q.customer.email } } : {}), ...(q.terms ? { CustomerMemo: { value: q.terms.slice(0, 1000) } } : {}), PrivateNote: `From Kloomie: ${q.title.slice(0, 200)}`,
+      TxnStatus: EST_STATUS[q.status], ...(q.status === 'accepted' ? { AcceptedBy: (q.acceptedBy || 'Customer').slice(0, 100), AcceptedDate: q.answeredOn || undefined } : {}) };
+  }
+  async function copyQuote(c, rec) {
+    const q = PJ.quoteOf(rec);
+    if (!q) return 0;
+    if (!rec.qbo?.estId && (q.status === 'withdrawn' || q.status === 'expired')) return 0; // never copied, nothing to close
+    const num = quoteNumber(q, rec);
+    const x = (rec.qbo ||= {});
+    const want = EST_STATUS[q.status];
+    let did = 0;
+    if (!x.estId) {
+      const found = (await query(c, `select * from Estimate where DocNumber = '${esc(num)}'`)).Estimate?.[0];
+      if (found) Object.assign(x, { estId: found.Id, linked: true, hash: quoteHash(q), status: found.TxnStatus });
+      else {
+        const made = (await qb(c, 'POST', '/estimate', await estimateBody(c, q, rec))).Estimate;
+        Object.assign(x, { estId: made.Id, hash: quoteHash(q), status: made.TxnStatus || want, total: cents(made.TotalAmt) });
+        did++;
+      }
+    }
+    if (x.hash !== quoteHash(q) && q.status === 'pending') {
+      const cur = (await qb(c, 'GET', `/estimate/${x.estId}`)).Estimate;
+      if (cur.TxnStatus !== 'Closed') {
+        const made = (await qb(c, 'POST', '/estimate', { ...(await estimateBody(c, q, rec)), Id: x.estId, SyncToken: cur.SyncToken })).Estimate;
+        Object.assign(x, { hash: quoteHash(q), status: made.TxnStatus, total: cents(made.TotalAmt) });
+        did++;
+      } else x.hash = quoteHash(q);
+    }
+    if (x.status !== want) {
+      const cur = (await qb(c, 'GET', `/estimate/${x.estId}`)).Estimate;
+      // Closed there already (it became an invoice): leave it closed.
+      if (cur.TxnStatus !== 'Closed' && cur.TxnStatus !== want) {
+        await qb(c, 'POST', '/estimate', { Id: x.estId, SyncToken: cur.SyncToken, sparse: true, TxnStatus: want, ...(q.status === 'accepted' ? { AcceptedBy: (q.acceptedBy || 'Customer').slice(0, 100), AcceptedDate: q.answeredOn || undefined } : {}) });
+        did++;
+      }
+      x.status = want;
+    }
+    x.error = null;
+    save();
+    return did;
+  }
+
   // Payments recorded in QuickBooks since last time, against invoices that came from Kloomie.
   async function pullPayments(c, ws) {
     const byQbo = new Map(Object.values(db.invoices).filter((x) => x.wsId === ws.id && x.qbo?.id && x.status !== 'void').map((x) => [x.qbo.id, x]));
@@ -273,7 +353,7 @@ export function quickbooksModule({ db, save, broadcast, cleanText, readJson, sen
     if (!c) return { configured: configured(), connected: false };
     const invs = Object.values(db.invoices).filter((x) => toCopy(c, x));
     return { configured: configured(), connected: true, company: c.company, sandbox: c.sandbox, by: c.by, at: c.at, from: c.from || 0, syncedAt: c.syncedAt || null, error: c.error || null, busy: busy.has(ws.id),
-      copied: invs.filter((x) => x.qbo?.id).length, waiting: invs.filter((x) => !x.qbo?.id && x.status !== 'void').length, failed: invs.filter((x) => x.qbo?.error).map((x) => ({ id: x.id, number: x.number, error: x.qbo.error })).slice(0, 10) };
+      copied: invs.filter((x) => x.qbo?.id).length, quotes: quotesOf(c).filter((r) => r.qbo?.estId).length, waiting: invs.filter((x) => !x.qbo?.id && x.status !== 'void').length, failed: [...quotesOf(c).filter((r) => r.qbo?.error).map((r) => ({ id: r.id, number: PJ.quoteOf(r)?.number || 'A quote', error: r.qbo.error })), ...invs.filter((x) => x.qbo?.error).map((x) => ({ id: x.id, number: x.number, error: x.qbo.error }))].slice(0, 10) };
   };
   async function revoke(c) {
     try {
@@ -338,10 +418,11 @@ export function quickbooksModule({ db, save, broadcast, cleanText, readJson, sen
       const old = db.qbo[ws.id];
       const c = { wsId: ws.id, realmId, company: '', sandbox: sandbox(), memberId: who.id, by: who.name, tokens: seal(tok), at: Date.now(), from: Date.now(), syncedAt: null, pulledAt: null, error: null, customers: {} };
       // The same company again keeps what it already copied; a different one starts over.
-      if (old?.realmId === realmId) Object.assign(c, { from: old.from, customers: old.customers || {}, itemId: old.itemId, taxItemId: old.taxItemId, pulledAt: old.pulledAt });
+      if (old?.realmId === realmId) Object.assign(c, { from: old.from, customers: old.customers || {}, itemId: old.itemId, taxItemId: old.taxItemId, pulledAt: old.pulledAt, quoteNext: old.quoteNext });
       else if (old) {
         await revoke(old);
         for (const inv of Object.values(db.invoices)) if (inv.wsId === ws.id) delete inv.qbo;
+        for (const r of Object.values(db.records)) if (r.wsId === ws.id) delete r.qbo;
       }
       const info = await qb(c, 'GET', `/companyinfo/${encodeURIComponent(realmId)}`);
       c.company = info.CompanyInfo?.CompanyName || 'your company';
@@ -349,7 +430,7 @@ export function quickbooksModule({ db, save, broadcast, cleanText, readJson, sen
       save();
       broadcast(ws.id, { type: 'quickbooks', forAdmins: true });
       sync(ws);
-      return page(res, 'QuickBooks connected', `${escapeHtml(c.company)} is linked. Invoices you send from Kloomie now go into QuickBooks, with their payments. You can close this window.`);
+      return page(res, 'QuickBooks connected', `${escapeHtml(c.company)} is linked. Quotes and invoices you send from Kloomie now go into QuickBooks, with their payments. You can close this window.`);
     } catch (e) {
       alarm('Connecting QuickBooks failed', e);
       return page(res, 'Not connected', 'Something went wrong talking to QuickBooks. Try again in a minute.');
