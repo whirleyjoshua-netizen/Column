@@ -1670,5 +1670,12 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
     recordNews(rec, 'record.updated', by);
   }
 
-  return { updateRecord, route, v1, keyAuth, makeHook, publicHook, deliver, emit, quoteOf, quotePage, seesMsg, stateFor, sees, recordActivity, recordNews, words, fillFromProject, fromProjectOk, recordStory, priceList, recordAt, itemsTotals, TEMPLATES: Object.fromEntries(Object.entries(TEMPLATES).map(([k, t]) => [k, { name: t.name, icon: t.icon, about: t.about }])) };
+  // A record made by Kloomie for someone (an AI plan they accepted): made, announced.
+  function createRecord(ws, p, t, auth, values) {
+    const rec = newRecord(ws, p, t, auth, values, null, { addChoices: false });
+    recordNews(rec, 'record.created', auth.member);
+    return rec;
+  }
+
+  return { createRecord, publicRecord, updateRecord, route, v1, keyAuth, makeHook, publicHook, deliver, emit, quoteOf, quotePage, seesMsg, stateFor, sees, recordActivity, recordNews, words, fillFromProject, fromProjectOk, recordStory, priceList, recordAt, itemsTotals, TEMPLATES: Object.fromEntries(Object.entries(TEMPLATES).map(([k, t]) => [k, { name: t.name, icon: t.icon, about: t.about }])) };
 }

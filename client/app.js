@@ -8433,7 +8433,7 @@
         h('button', { class: 'icon-btn', 'aria-label': 'All projects', html: I.back, onclick: () => { PR.open = null; renderProjects(); } }),
         h('span', { class: 'pj-ic' }, p.icon), h('b', { class: 'pj-name' }, p.name), p.private ? h('small', { title: 'Private' }, '🔒') : null,
         h('div', { class: 'pj-types' }, p.types.map((x) => h('button', { class: x.id === t.id ? 'on' : null, onclick: () => { PR.type = x.id; PR.view = null; PR.panel = null; renderProjects(); } }, `${x.icon || ''} ${x.name}`, h('small', {}, String(prRecs(p.id).filter((r) => r.typeId === x.id).length))))),
-        isTech(p) ? h('div', { class: 'pj-tools' }, h('button', { class: 'btn small', onclick: () => standupSheet(p) }, '☀️ Standup'), h('button', { class: 'btn small', onclick: () => techDocsSheet(p) }, '📚 Docs'), h('button', { class: 'btn small', onclick: () => githubSheet(p) }, '🐙 GitHub'),
+        isTech(p) ? h('div', { class: 'pj-tools' }, h('button', { class: 'btn small', onclick: () => planFeatureSheet(p) }, '✦ Plan a feature'), h('button', { class: 'btn small', onclick: () => standupSheet(p) }, '☀️ Standup'), h('button', { class: 'btn small', onclick: () => techDocsSheet(p) }, '📚 Docs'), h('button', { class: 'btn small', onclick: () => githubSheet(p) }, '🐙 GitHub'),
           t.key === 'tests' ? h('button', { class: 'btn small', onclick: async () => { try { const o = await api('POST', `/projects/${p.id}/test-run`, {}); PR.records.set(p.id, await api('GET', `/projects/${p.id}/records`)); renderProjects(); toast(`New test run: ${plural(o.reset, 'test')} to run`); } catch (e) { toast(e.message); } } }, '🧪 New test run') : null) : null,
         h('button', { class: 'icon-btn', 'aria-label': 'Project options', html: I.more, onclick: more }),
         h('button', { class: 'icon-btn', 'aria-label': 'Close Projects', html: I.close, onclick: closeProjects })),
@@ -8877,6 +8877,90 @@
       ...[...bugs, ...open.filter((x) => !bugs.includes(x))].slice(0, 6).map((x) => h('button', { class: 'pj-link rl-item', onclick: () => go(x) }, `${k(work, 'number') && x.values[k(work, 'number').id] ? x.values[k(work, 'number').id] + ' ' : ''}${recName(work, x)}`, h('small', {}, ' · ' + [lab(k(work, 'status'), x), bugs.includes(x) ? lab(k(work, 'severity'), x) : ''].filter(Boolean).join(' · ')))));
   }
 
+  // ----- AI helpers for software projects: always a draft to look over first -----
+  function planFeatureSheet(p) {
+    const idea = h('textarea', { rows: 6, placeholder: 'e.g. Recurring tasks: people want a task to come back every week or month, like “pay rent” or “team standup notes”.' });
+    sheet('✦ Plan a feature', [h('p', { class: 'day-hint' }, 'Describe the idea in your own words. Kloomie drafts the feature and the work to build it: stories and tasks with points and acceptance criteria, plus the questions and risks. You check it over before anything is made.'), idea], async () => {
+      if (!idea.value.trim()) throw new Error('Describe the idea first.');
+      toast('Planning it…');
+      const out = await api('POST', `/projects/${p.id}/ai-feature`, { idea: idea.value });
+      setTimeout(() => reviewPlanSheet(p, out.plan), 0);
+    }, 'Draft the plan');
+    setTimeout(() => idea.focus(), 50);
+  }
+  function reviewPlanSheet(p, plan) {
+    const feats = p.types.find((t) => t.key === 'features'), work = p.types.find((t) => t.key === 'work');
+    const opts = (t, key, cur) => [h('option', { value: '' }, '—'), ...(fkey(t, key)?.choices || []).map((c) => h('option', { value: c.label, selected: c.label === cur }, c.label))];
+    const title = h('input', { value: plan.feature.title });
+    const phase = h('select', {}, opts(feats, 'phase', plan.feature.phase));
+    const prio = h('select', {}, opts(feats, 'priority', plan.feature.priority));
+    const why = h('textarea', { rows: 3 });
+    why.value = plan.feature.why;
+    const rows = plan.items.map((x) => {
+      const on = h('input', { type: 'checkbox', checked: x.on });
+      const t = h('input', { value: x.title });
+      const ty = h('select', {}, (fkey(work, 'type')?.choices || []).map((c) => h('option', { value: c.label, selected: c.label === x.type }, c.label)));
+      const pts = h('input', { class: 'ai-pts', inputmode: 'numeric', value: x.estimate ?? '' });
+      const acc = h('textarea', { rows: Math.max(2, x.acceptance.length), class: 'ai-acc' });
+      acc.value = x.acceptance.join('\n');
+      return { x, on, t, ty, pts, acc, el: h('div', { class: 'ai-item' }, h('div', { class: 'ai-item-top' }, on, t, ty, pts, h('small', {}, 'pts')), x.description ? h('small', { class: 'day-hint' }, x.description) : null, h('label', { class: 'ai-acc-l' }, 'Acceptance criteria, one per line', acc)) };
+    });
+    const total = plan.items.reduce((n, x) => n + (x.estimate || 0), 0);
+    sheet('✦ The plan', [
+      h('div', { class: 'row2' }, h('label', {}, 'Feature', title), h('label', {}, 'Phase', phase)),
+      h('div', { class: 'row2' }, h('label', {}, 'Priority', prio), h('span')),
+      h('label', {}, 'What and why', why),
+      h('small', { class: 'hq-kind' }, `${plural(rows.length, 'work item')} · ${total} points`),
+      ...rows.map((r) => r.el),
+      plan.questions.length ? h('div', { class: 'ai-notes' }, h('b', {}, 'Questions to answer first'), h('ul', {}, plan.questions.map((q) => h('li', {}, q)))) : null,
+      plan.risks.length ? h('div', { class: 'ai-notes' }, h('b', {}, 'Risks'), h('ul', {}, plan.risks.map((q) => h('li', {}, q)))) : null,
+    ].filter(Boolean), async () => {
+      const draft = { feature: { title: title.value, why: why.value, phase: phase.value || null, priority: prio.value || null }, items: rows.map((r) => ({ ...r.x, on: r.on.checked, title: r.t.value, type: r.ty.value, estimate: Number(r.pts.value) || null, acceptance: r.acc.value.split('\n').map((s) => s.trim()).filter(Boolean) })), questions: [], risks: [] };
+      const out = await api('POST', `/projects/${p.id}/ai-feature/create`, { plan: draft });
+      PR.records.set(p.id, await api('GET', `/projects/${p.id}/records`));
+      PR.type = feats.id;
+      PR.view = null;
+      PR.panel = out.feature.id;
+      renderProjects();
+      toast(`Made ${out.feature.values[feats.primary]} and ${plural(out.items.length, 'work item')} in the backlog`);
+    }, 'Make them');
+  }
+  // On a feature: its test cases, and drafting more.
+  function prFeatureTests(p, t, r) {
+    const tests = p.types.find((x) => x.key === 'tests');
+    if (!tests) return null;
+    const ff = fkey(tests, 'feature'), rf = fkey(tests, 'result');
+    const mine = prRecs(p.id).filter((x) => x.typeId === tests.id && (x.values[ff?.id] || []).includes(r.id));
+    const pass = mine.filter((x) => rf?.choices.find((c) => c.id === x.values[rf.id])?.label === 'Pass').length;
+    const draft = async (btn) => {
+      btn.disabled = true;
+      btn.textContent = 'Writing…';
+      try {
+        const out = await api('POST', `/records/${r.id}/ai-tests`);
+        const rows = out.tests.map((x) => ({ x, on: h('input', { type: 'checkbox', checked: true }) }));
+        sheet(`✦ Test cases · ${recName(t, r)}`, [h('p', { class: 'day-hint' }, 'Untick any you don’t want. They’re added as Not run, linked to this feature (and its release).'),
+          ...rows.map(({ x, on }) => h('label', { class: 'ai-test' }, on, h('span', {}, h('b', {}, x.title), h('small', {}, x.expected ? 'Expect: ' + x.expected : ''), x.platforms.length ? h('small', {}, x.platforms.join(' · ')) : null)))],
+          async () => {
+            const made = await api('POST', `/records/${r.id}/ai-tests/create`, { tests: rows.map(({ x, on }) => ({ ...x, on: on.checked })) });
+            PR.records.set(p.id, await api('GET', `/projects/${p.id}/records`));
+            renderProjects();
+            toast(`Added ${plural(made.tests.length, 'test case')}`);
+          }, 'Add them');
+      } catch (e) {
+        toast(e.message);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = '✦ Write test cases';
+      }
+    };
+    const b = h('button', { class: 'btn small' }, '✦ Write test cases');
+    b.addEventListener('click', () => draft(b));
+    return h('div', { class: 'pj-items pj-job-blk' },
+      h('div', { class: 'pj-it-h' }, h('b', {}, '🧪 Tests'), h('span', { style: 'flex:1' }), b),
+      mine.length ? h('p', { class: 'day-hint' }, `${pass} of ${plural(mine.length, 'test')} passed`) : h('p', { class: 'day-hint' }, 'No test cases yet. Kloomie can write them from this feature’s work and acceptance criteria.'),
+      ...mine.slice(0, 8).map((x) => h('button', { class: 'pj-link rl-item', onclick: () => { PR.type = tests.id; PR.view = null; PR.panel = x.id; renderProjects(); } }, recName(tests, x), h('small', {}, ' · ' + (rf?.choices.find((c) => c.id === x.values[rf.id])?.label || 'Not run')))));
+  }
+
   // ----- the roadmap timeline: records as bars from start to end, grouped (by phase), with progress and warnings -----
   const shortDay = (k) => keyDate(k).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
   // How much of a record's work is done: the records that link to it whose status is at the last stage.
@@ -9152,6 +9236,7 @@
       h('div', { class: 'pj-fields' }, fields.filter((f) => !top.includes(f)).map(fieldRow)),
       isTech(p) && t.key === 'work' ? prGithub(p, t, r) : null,
       isTech(p) && t.key === 'releases' ? prReadiness(p, t, r) : null,
+      isTech(p) && t.key === 'features' ? prFeatureTests(p, t, r) : null,
       ...(job ? itemFields.map((f) => prItems(p, t, r, f)) : []),
       job ? prJobMoney(p, t, r) : null,
       ...richFields.map((f) => prRichBlock(p, t, r, f)),
