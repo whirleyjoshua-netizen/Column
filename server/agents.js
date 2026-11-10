@@ -105,7 +105,8 @@ export function agentsModule({ db, save, broadcast, rid, cleanText, readJson, se
   }
   const memberOf = (ws, id) => ws.members.find((m) => m.id === id);
   // v counts changes, so the app never swaps a newer copy for an older one that arrives late.
-  const news = (x) => { x.v = (x.v || 0) + 1; broadcast(x.wsId, { type: 'agent', run: publicRun(x), forMember: x.memberId }); };
+  // A deleted assignment stays deleted, even if its last model call comes back afterwards.
+  const news = (x) => { if (db.agentRuns[x.id] !== x) return; x.v = (x.v || 0) + 1; broadcast(x.wsId, { type: 'agent', run: publicRun(x), forMember: x.memberId }); };
   const publicRun = ({ wsId, history, ...x }) => x;
   const runsOf = (wsId, memberId) => Object.values(db.agentRuns).filter((x) => x.wsId === wsId && x.memberId === memberId).sort((a, b) => b.createdAt - a.createdAt);
 
@@ -685,6 +686,7 @@ export function agentsModule({ db, save, broadcast, rid, cleanText, readJson, se
     finish(x);
   }
   function finish(x) {
+    if (db.agentRuns[x.id] !== x) return;
     const parts = x.parts;
     if (x.status === 'cancelled' || x.status === 'blocked') {
       // stays as it is

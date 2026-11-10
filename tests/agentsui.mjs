@@ -60,6 +60,15 @@ const SCRIPTS = {
     'Maria is in Contacts, a reply is drafted for you, and the follow-up is set.',
   ][n],
   'prepare test': (n) => [[['create_task', { text: 'A proposed task' }]], 'One task proposed.'][n],
+  'two proposals': (n) => [[['create_task', { text: 'Proposal one' }], ['create_task', { text: 'Proposal two' }]], 'Two proposed.'][n],
+  'skip these': (n) => [[['create_task', { text: 'Skip me A' }], ['create_task', { text: 'Skip me B' }], ['create_task', { text: 'Skip me C' }]], 'Three proposed.'][n],
+  'observe test': (n) => [[['create_task', { text: 'Only a suggestion' }]], 'I would add a task.'][n],
+  'install checklist': (n) => [[['write_doc', { title: 'Garcia install checklist', text: '# Before\n- [ ] Confirm measurements' }]], 'Checklist written.'][n],
+  'handoff test': (n) => [[['hand_off', { agent: 'ops', ask: 'Write the install checklist for Garcia' }]], 'Handed the checklist to Operations.'][n],
+  'fail test': (n) => [[['create_record', { project: 'Nope', list: 'Jobs', values: { Name: 'x' } }]], 'That project does not exist.'][n],
+  'slow test': (n) => [[['look_at_day', {}]], 'Slow done.'][n],
+  'more please': (n) => [[['create_task', { text: 'Reply task from the follow-up' }]], 'Added the follow-up task.'][n],
+  'answered': (n) => [[['create_task', { text: 'Task after the answer' }]], 'Done after your answer.'][n],
 };
 const ai = http.createServer((req, res) => {
   let b = ''; req.on('data', (c) => (b += c)); req.on('end', () => {
@@ -71,6 +80,9 @@ const ai = http.createServer((req, res) => {
     const lastUser = [...msgs].reverse().find((m) => m.role === 'user' && typeof m.content === 'string');
     asked.push({ sys, msgs: JSON.stringify(msgs), tools: (j.tools || []).map((t) => t.name) });
     const reply = (content, stop = 'end_turn') => res.end(JSON.stringify({ id: 'm', type: 'message', role: 'assistant', model: 'claude-test', content, stop_reason: stop, stop_sequence: null, usage: { input_tokens: 1, output_tokens: 1 } }));
+    if (sys.includes('You coordinate three specialists') && text(msgs[0].content).includes('something vague') && !text(msgs[0].content).includes('They answered')) return reply([{ type: 'text', text: JSON.stringify({ question: 'Which customer do you mean?', parts: [] }) }]);
+    if (sys.includes('You coordinate three specialists') && text(msgs[0].content).includes('They answered')) return reply([{ type: 'text', text: JSON.stringify({ summary: 'Chief handles it', parts: [{ agent: 'chief', ask: 'answered: the Garcia one' }], question: null }) }]);
+    if (text(lastUser?.content).toLowerCase().includes('slow test') && msgs.length === 1) return setTimeout(() => reply([{ type: 'text', text: 'Slow done.' }]), 5000);
     if (sys.includes('You coordinate three specialists')) return reply([{ type: 'text', text: JSON.stringify({ summary: 'The Chief of Staff plans your day', parts: [{ agent: 'chief', ask: 'Plan my day today' }], question: null }) }]);
     const key = Object.keys(SCRIPTS).find((k) => text(lastUser?.content).toLowerCase().includes(k));
     // Turns since the last plain user message.
@@ -176,11 +188,154 @@ try {
   ok(await A.until(`document.querySelector('#tool .ag-run-h .ag-chip')?.textContent === 'Done'`), 'approved: done');
   ok((await api('GET', '/state')).tasks.some((x) => x.text === 'A proposed task'), 'and the task is made');
 
+  // ----- More of the screen: Approve all, Skip all, Skip, Observe, hand-off, failures, Stop, reply, question, delete -----
+  const openRun = async (id, title) => {
+    if (!(await A.ev(`!document.querySelector('#tool').classList.contains('hidden') && document.querySelector('#tool h2')?.textContent.includes('Your team')`))) await A.click('#tabs [data-tab=agents]');
+    await sleep(200);
+    for (let i = 0; i < 3 && await A.ev(`!!document.querySelector('#tool .ag-back')`); i++) { await A.ev(`document.querySelector('#tool .ag-back').click()`); await sleep(150); }
+    await A.until(`[...document.querySelectorAll('#tool .ag-run-row')].some((r) => r.textContent.includes(${JSON.stringify(title)}))`);
+    await A.ev(`[...document.querySelectorAll('#tool .ag-run-row')].find((r) => r.textContent.includes(${JSON.stringify(title)})).click()`);
+    return A.until(`document.querySelector('#tool .ag-run-h b')?.textContent === ${JSON.stringify(title)}`);
+  };
+  const startRun = async (agent, ask) => { const x = await api('POST', '/agents/runs', { agent, ask }); for (let i = 0; i < 80; i++) { const y = await api('GET', '/agents/runs/' + x.id); if (!['requested', 'planning', 'running'].includes(y.status)) break; await sleep(100); } return x.id; };
+  await api('PATCH', '/agents/chief', { level: 'prepare' });
+  await startRun('chief', 'two proposals');
+  ok(await openRun(null, 'two proposals'), 'an assignment opens from recent activity');
+  ok(await A.ev(`document.querySelector('#tool .ag-note')?.textContent.includes('2 changes waiting')`), 'two changes waiting, with Approve all');
+  await A.ev(`[...document.querySelectorAll('#tool .ag-note button')].find((b) => b.textContent === 'Approve all').click()`);
+  ok(await A.until(`document.querySelector('#tool .ag-run-h .ag-chip')?.textContent === 'Done'`), 'Approve all: done');
+  let st = (await api('GET', '/state')).tasks;
+  ok(st.some((x) => x.text === 'Proposal one') && st.some((x) => x.text === 'Proposal two'), 'and both tasks are made');
+  await startRun('chief', 'skip these');
+  await openRun(null, 'skip these');
+  await A.ev(`[...document.querySelectorAll('#tool .ag-step.act')][0].querySelector('button:nth-of-type(2)').click()`);
+  ok(await A.until(`document.querySelectorAll('#tool .ag-step.act.s-skipped').length === 1`), 'Skip one: crossed out');
+  await A.ev(`[...document.querySelectorAll('#tool .ag-note button')].find((b) => b.textContent === 'Skip all').click()`);
+  ok(await A.until(`document.querySelectorAll('#tool .ag-step.act.s-skipped').length === 3 && document.querySelector('#tool .ag-run-h .ag-chip')?.textContent === 'Done'`), 'Skip all skips the rest');
+  ok(!(await api('GET', '/state')).tasks.some((x) => x.text.startsWith('Skip me')), 'and nothing is made');
+  await api('PATCH', '/agents/chief', { level: 'observe' });
+  await startRun('chief', 'observe test');
+  await openRun(null, 'observe test');
+  ok(await A.ev(`document.querySelector('#tool .ag-step.act.s-suggested')?.textContent.includes('Suggestion only (Observe)')`), 'at Observe a change shows as a suggestion');
+  await api('PATCH', '/agents/chief', { level: 'execute' });
+  await startRun('chief', 'handoff test');
+  await sleep(500);
+  await openRun(null, 'handoff test');
+  ok(await A.until(`document.querySelector('#tool .ag-step.handoff')?.textContent.includes('Handed to the Operations Manager') && [...document.querySelectorAll('#tool .ag-part-h')].some((p) => p.textContent.includes('from the Chief of Staff'))`), 'a hand-off shows, with the Operations part “from the Chief of Staff”');
+  await A.ev(`[...document.querySelectorAll('#tool .ag-step.act')].find((s) => s.textContent.includes('Garcia install checklist')).querySelector('button.linkish').click()`);
+  ok(await A.until(`!document.querySelector('#docview')?.classList.contains('hidden') && document.querySelector('#docview')?.textContent.includes('Garcia install checklist')`), 'Open on the doc opens the doc');
+  await A.ev(`(() => { const b = document.querySelector('#docview .dv-bar button'); b && b.click(); return true; })()`);
+  await sleep(300);
+  await startRun('sales', 'fail test');
+  await openRun(null, 'fail test');
+  ok(await A.ev(`!!document.querySelector('#tool .ag-step.act.s-failed .ag-err')?.textContent.includes('No project called Nope')`), 'a failed step shows why');
+  // Open on a task and on a contact
+  await openRun(null, 'Handle a new lead');
+  await A.ev(`[...document.querySelectorAll('#tool .ag-step.act')].find((s) => s.textContent.includes('Follow up with Maria')).querySelector('button.linkish').click()`);
+  ok(await A.until(`!document.querySelector('#day').classList.contains('hidden') && document.querySelector('#day').textContent.includes('Follow up with Maria Lopez')`), 'Open on a task goes to it in the Day');
+  await openRun(null, 'Handle a new lead');
+  await A.ev(`[...document.querySelectorAll('#tool .ag-step.act')].find((s) => s.textContent.includes('Contact: Maria')).querySelector('button.linkish').click()`);
+  ok(await A.until(`document.querySelector('#tool h2')?.textContent.includes('Contacts') && document.querySelector('#tool').textContent.includes('Maria Lopez')`), 'Open on a contact opens Contacts');
+  // Reply
+  await openRun(null, 'Plan my day please');
+  await A.ev(`(() => { const t = [...document.querySelectorAll('#tool .ag-box textarea')].pop(); t.value = 'more please'; return true; })()`);
+  await A.ev(`[...document.querySelectorAll('#tool .ag-box button')].pop().click()`);
+  ok(await A.until(`[...document.querySelectorAll('#tool .ag-part-h')].some((p) => p.textContent.includes('You asked: more please')) && document.querySelector('#tool .ag-run-h .ag-chip')?.textContent === 'Done'`, 8000), 'a reply carries the assignment on, shown as “You asked”');
+  ok(await A.ev(`document.querySelector('#tool').textContent.includes('Reply task from the follow-up')`), 'with what it did next');
+  // The coordinator's question, and answering it
+  await A.ev(`document.querySelector('#tool .ag-back').click()`);
+  await A.until(`!!document.querySelector('#tool .ag-ask')`);
+  await A.ev(`(() => { const t = document.querySelector('#tool .ag-ask'); t.value = 'something vague'; t.dispatchEvent(new Event('input')); return true; })()`);
+  await A.ev(`[...document.querySelectorAll('#tool .ag-box button')].find((b) => b.textContent === 'Ask your team').click()`);
+  ok(await A.until(`document.querySelector('#tool .ag-q')?.textContent.includes('Which customer do you mean?') && document.querySelector('#tool .ag-run-h .ag-chip')?.textContent === 'Has a question'`, 8000), 'the coordinator’s question shows');
+  await A.ev(`(() => { const t = [...document.querySelectorAll('#tool .ag-box textarea')].pop(); t.value = 'the Garcia one'; return true; })()`);
+  ok(await A.ev(`[...document.querySelectorAll('#tool .ag-box button')].pop().textContent === 'Answer'`), 'with an Answer box');
+  await A.ev(`[...document.querySelectorAll('#tool .ag-box button')].pop().click()`);
+  ok(await A.until(`document.querySelector('#tool .ag-run-h .ag-chip')?.textContent === 'Done' && document.querySelector('#tool').textContent.includes('Task after the answer')`, 8000), 'answering it runs the request');
+  // Stop
+  await A.ev(`document.querySelector('#tool .ag-back').click()`);
+  await A.until(`!!document.querySelector('#tool .ag-ask')`);
+  await A.ev(`(() => { const t = document.querySelector('#tool .ag-ask'); t.value = 'slow test'; t.dispatchEvent(new Event('input')); return true; })()`);
+  await api('PATCH', '/agents/chief', { level: 'execute' });
+  const slow = await api('POST', '/agents/runs', { agent: 'chief', ask: 'slow test' });
+  await openRun(null, 'slow test');
+  ok(await A.until(`!!document.querySelector('#tool .ag-working')`), 'while working: a spinner and Stop');
+  await A.ev(`[...document.querySelectorAll('#tool .ag-working button')].find((b) => b.textContent === 'Stop').click()`);
+  ok(await A.until(`document.querySelector('#tool .ag-run-h .ag-chip')?.textContent === 'Stopped'`, 8000), 'Stop stops it');
+  // Delete from the ⋯ menu, before its last model call has come back
+  await A.ev(`document.querySelector('#tool [aria-label="Assignment options"]').click()`);
+  await A.ev(`[...document.querySelectorAll('#menu button')].find((b) => b.textContent === 'Delete this assignment').click()`);
+  ok(await A.ev(`!!document.querySelector('#menu:not(.hidden)')`), 'Delete asks for a second tap first');
+  await A.ev(`[...document.querySelectorAll('#menu button')].find((b) => /Delete this assignment|Sure|Tap again|Confirm/i.test(b.textContent)).click()`);
+  ok(await A.until(`!!document.querySelector('#tool .ag-cards') && ![...document.querySelectorAll('#tool .ag-run-row')].some((r) => r.textContent.includes('slow test'))`), 'Delete from the ⋯ menu removes it');
+  await sleep(1500);
+  ok(await A.ev(`!!document.querySelector('#tool .ag-cards') && ![...document.querySelectorAll('#tool .ag-run-row')].some((r) => r.textContent.includes('slow test'))`) && (await api('GET', '/agents/runs/' + slow.id)).error, 'and it stays gone');
+  // Instructions, pause, days and time
+  await A.ev(`[...document.querySelectorAll('#tool .ag-card')][2].click()`);
+  await A.until(`document.querySelector('#tool .ag-prof-h b')?.textContent === 'Operations Manager'`);
+  await A.ev(`[...document.querySelectorAll('#tool .ag-tabs button')].find((b) => b.textContent === 'Settings').click()`);
+  await A.ev(`(() => { const t = document.querySelector('#tool .ag-tab-body textarea'); t.value = 'Order fabric 10 days ahead.'; return true; })()`);
+  await A.ev(`[...document.querySelectorAll('#tool .ag-tab-body button')].find((b) => b.textContent === 'Save instructions').click()`);
+  await sleep(400);
+  ok((await api('GET', '/agents')).agents.ops.instructions === 'Order fabric 10 days ahead.', 'standing instructions save');
+  await A.ev(`[...document.querySelectorAll('#tool .ag-tabs button')].find((b) => b.textContent === 'Schedules').click()`);
+  await A.until(`!!document.querySelector('#tool .ag-sched')`);
+  await A.ev(`[...document.querySelectorAll('#tool .ag-sched')].find((s) => s.textContent.includes('Project health check')).querySelector('input[type=checkbox]').click()`);
+  await A.until(`[...document.querySelectorAll('#tool .ag-sched.on')].some((s) => s.textContent.includes('Project health check'))`);
+  await A.ev(`[...document.querySelectorAll('#tool .ag-sched.on')][0].querySelectorAll('.ag-day')[3].click()`);
+  await sleep(400);
+  await A.ev(`(() => { const t = document.querySelector('#tool .ag-sched.on input[type=time]'); t.value = '06:45'; t.dispatchEvent(new Event('change')); return true; })()`);
+  await sleep(400);
+  await A.ev(`document.querySelector('#tool .ag-pause input').click()`);
+  await sleep(400);
+  const ops = (await api('GET', '/agents')).agents.ops;
+  ok(ops.schedules[0]?.workflow === 'health' && ops.schedules[0].days.join() === '1,3' && ops.schedules[0].at === 405, 'schedule days and time change: ' + JSON.stringify(ops.schedules));
+  ok(ops.paused === true, 'and Pause pauses its schedules');
+  // A notification opens the assignment
+  await api('PATCH', '/agents/chief', { level: 'prepare' });
+  await startRun('chief', 'two proposals');
+  await sleep(500);
+  await A.ev(`document.querySelector('#tool [aria-label=Close]').click()`);
+  await A.click('#bellBtn');
+  await A.until(`[...document.querySelectorAll('#bellPop .bell-row')].some((r) => r.textContent.includes('to approve'))`);
+  await A.ev(`[...document.querySelectorAll('#bellPop .bell-row')].find((r) => r.textContent.includes('to approve')).click()`);
+  ok(await A.until(`document.querySelector('#tool .ag-run-h b')?.textContent === 'two proposals'`), 'the notification opens the assignment');
+  await A.ev(`document.querySelector('#tool [aria-label=Close]').click()`);
+  // Off the bar: in Tools. Switched off: gone.
+  await api('PUT', '/account/bar', { bar: ['column', 'chat'] });
+  await A.ev(`location.reload()`).catch(() => {});
+  await sleep(1500);
+  await A.until(`!document.querySelector('#app').classList.contains('hidden')`);
+  await sleep(500);
+  await A.click('#toolsBtn');
+  await sleep(200);
+  ok(await A.ev(`[...document.querySelectorAll('#menu button')].some((b) => b.textContent.includes('Your team') && b.textContent.includes('waiting for your yes'))`), 'off the bar, Your team is in Tools, saying what’s waiting');
+  await A.ev(`[...document.querySelectorAll('#menu button')].find((b) => b.textContent.includes('Your team')).click()`);
+  ok(await A.until(`document.querySelectorAll('#tool .ag-card').length === 3`), 'and opens from there');
+  await A.ev(`document.querySelector('#tool [aria-label=Close]').click()`);
+  // No AI key
+  await api('DELETE', '/ai/keys/anthropic');
+  await api('PUT', '/account/bar', { bar: null });
+  await A.ev(`location.reload()`).catch(() => {});
+  await sleep(1500);
+  await A.until(`!document.querySelector('#app').classList.contains('hidden')`);
+  await sleep(500);
+  await A.click('#tabs [data-tab=agents]');
+  ok(await A.until(`!!document.querySelector('#tool .ag-nokey') && [...document.querySelectorAll('#tool .ag-box button')].find((b) => b.textContent === 'Ask your team').disabled`), 'without an AI key: a banner to add one, and asking is off');
+  await A.ev(`document.querySelector('#tool .ag-nokey button').click()`);
+  ok(await A.until(`!document.querySelector('#settings').classList.contains('hidden')`), 'the banner opens Settings');
+  await A.ev(`document.querySelector('#settings').classList.add('hidden')`);
+  await api('PUT', '/ai/keys/anthropic', { key: 'sk-ant-test-key-1234567890' });
+  // Switched off for the team
+  await api('PATCH', '/workspace', { tools: { agents: false } });
+  ok(await A.until(`!document.querySelector('#tabs [data-tab=agents]') && document.querySelector('#tool').classList.contains('hidden')`), 'switched off for the team: the tab goes and the drawer closes');
+  await api('PATCH', '/workspace', { tools: { agents: true } });
+  ok(await A.until(`!!document.querySelector('#tabs [data-tab=agents]')`), 'and comes back when switched on');
+
   // Phone
   await A.cmd('Emulation.setDeviceMetricsOverride', { width: 375, height: 800, deviceScaleFactor: 2, mobile: true });
-  await A.ev(`document.querySelector('#tool .ag-back').click()`);
-  await sleep(300);
-  if (await A.ev(`!!document.querySelector('#tool .ag-prof-h')`)) await A.ev(`document.querySelector('#tool .ag-back').click()`);
+  await A.click('#tabs [data-tab=agents]');
+  await A.until(`document.querySelectorAll('#tool .ag-card').length === 3`);
   await sleep(300);
   ok(await A.ev(`document.documentElement.scrollWidth <= innerWidth && document.querySelector('#tool').scrollWidth <= document.querySelector('#tool').clientWidth + 1`), 'nothing runs off the side on a phone');
   await shot(A, 'ag-phone');
