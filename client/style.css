@@ -2157,3 +2157,17 @@ button.hq-entry:hover { background: var(--card-hover); }
 .ru-ctl { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .ru-unit { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); }
 .ru-over { width: 80px; }
+
+/* mileage (Map → Mileage) */
+.ml-btns { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.ml-sum { margin: 10px 0 4px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); }
+.ml-top { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.ml-top select { flex: 1; min-width: 0; }
+.ml-big { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
+.ml-big b { font-size: 26px; font-weight: 750; letter-spacing: -0.02em; }
+.ml-big span { color: var(--muted); font-size: 13px; }
+.ml-people { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.ml-calc { display: flex; gap: 8px; flex-wrap: wrap; margin: 4px 0; }
+.ml-note:empty { display: none; }
+.rt-miles { margin-top: 6px; }
+.map-box.ml-map { height: min(32vh, 300px); min-height: 180px; }

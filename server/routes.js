@@ -151,3 +151,18 @@ export async function dayRoute(key, visits, base) {
   cache.set(sig, { at: Date.now(), route });
   return route;
 }
+
+// Mileage: the road distance through addresses in order (From, any stops, To; back to the start for a round trip).
+// Each one comes back as found, or why it wasn't, so the person can fix the one that's wrong.
+export async function driveDistance(addresses, { near = null, roundTrip = false } = {}) {
+  const homeAt = near ? await geocode(near).catch(() => null) : null;
+  const points = [];
+  for (const a of addresses) {
+    const at = await geocode(a, homeAt).catch(() => null);
+    if (!at) return { error: `Couldn’t find “${a}” on the map. Add the town or a ZIP code.` };
+    points.push(at);
+  }
+  if (roundTrip) points.push(points[0]);
+  const dir = await directions(points);
+  return { meters: dir.legs.reduce((n, l) => n + l.meters, 0), mins: Math.round(dir.legs.reduce((n, l) => n + l.secs, 0) / 60), line: dir.line };
+}

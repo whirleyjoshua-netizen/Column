@@ -1719,6 +1719,7 @@
       { cmd: 'sidekick', also: ['ask'], hint: 'Plan it with Sidekick', on: toolOn('sidekick'), off: off('Sidekick'), run: () => { SK.open = null; openTool('sidekick'); } },
       { cmd: 'plan', hint: 'Open the Planner', run: () => openTool('planner') },
       { cmd: 'map', hint: 'Open the Map', on: toolOn('map'), off: off('Map'), run: () => openMap() },
+      { cmd: 'miles', also: ['mileage', 'drove'], hint: 'Log a drive for mileage', arg: '23 supplies run', on: toolOn('map'), off: off('Map'), run: async (t) => { const a = moneyArgs(t); if (!ML.list) await loadMiles(); mileSheet(null, { purpose: a.rest, meters: a.amount ? Math.round(Number(a.amount) * mlPer()) : 0 }); } },
       { cmd: 'sign', also: ['signature'], hint: 'Open Signatures', on: toolOn('signs'), off: off('Signatures'), run: () => openTool('signs') },
       { cmd: 'email', hint: 'Open Email', on: toolOn('email') && mayEmail(), off: toolOn('email') ? 'Your team’s owners haven’t turned on email for members.' : off('Email'), run: () => openTool('email') },
       { cmd: 'folders', hint: 'Open Folders', on: toolOn('folders'), off: off('Folders'), run: () => openTool('folders') },
@@ -10054,6 +10055,7 @@
         h('b', {}, r.stops.length ? `${plural(r.stops.length, 'stop')} · ${fmtMins(r.drive)} driving · ${fmtDist(r.meters)}` : 'No job visits on this day'),
         h('small', {}, r.base ? `From ${r.base.address}` : 'Starts at the first visit', amAdmin() ? h('button', { class: 'link rt-base', onclick: base }, r.base ? 'Change' : 'Set where routes start') : null)),
       link ? h('a', { class: 'btn primary-btn rt-go', href: link, target: '_blank', rel: 'noopener' }, '➤ Start route in Google Maps') : null,
+      r.meters && ((RT.member || S.me.memberId) === S.me.memberId || amAdmin()) ? h('button', { class: 'btn small rt-miles', onclick: () => routeMiles(r) }, `🚗 Log these ${fmtMiles(r.meters)} as mileage`) : null,
       ...r.tight.map((x) => h('p', { class: 'rt-tight' }, `⚠ ${name(x.from)} → ${name(x.to)}: the drive is ${fmtMins(x.drive)} but there’s ${x.gap > 0 ? 'only ' + fmtMins(x.gap) : 'no time'} between them.`)),
       h('div', { class: 'rt-stops' }, r.stops.map((s, i) => [
         // The drive before each stop: from the base to the first, then from each stop to the next.
@@ -11363,15 +11365,21 @@
     keepAwake();
     mapWatch();
   }
-  function startRun() {
-    const t = { id: mapNewId(), memberId: S.me?.memberId, by: S.me?.member, name: '', startedAt: Date.now(), endedAt: null, path: [], dist: 0, campaignId: MP.camp || null, createdAt: Date.now() };
+  function startRun(kind = null) {
+    const drive = kind === 'drive';
+    if (drive) {
+      ML.line = null;
+      ML.showTrip = null;
+      if (MP.map && MP.me) MP.map.setView([MP.me.lat, MP.me.lng], 16); // street level, to see the line grow
+    }
+    const t = { id: mapNewId(), memberId: S.me?.memberId, by: S.me?.member, name: '', kind: drive ? 'drive' : null, startedAt: Date.now(), endedAt: null, path: [], dist: 0, campaignId: drive ? null : MP.camp || null, createdAt: Date.now() };
     MP.trips.unshift(t);
-    mapSend('POST', '/trips', { id: t.id, startedAt: t.startedAt, campaignId: t.campaignId });
+    mapSend('POST', '/trips', { id: t.id, startedAt: t.startedAt, campaignId: t.campaignId, kind: t.kind });
     beginRun(t);
     if (MP.me) runPoint(MP.me);
     mapDraw();
     renderTool(true);
-    toast(hereNow() ? 'Run started. Keep Kloomie open while you go.' : 'Run started. Waiting for your location…');
+    toast(drive ? 'Tracking your mileage. Keep Kloomie open with the screen on while you drive.' : hereNow() ? 'Run started. Keep Kloomie open while you go.' : 'Run started. Waiting for your location…');
   }
   // A point every 8 m or so, once the phone knows where it is to within 35 m.
   function runPoint(me) {
@@ -11381,7 +11389,7 @@
     const last = t.path.at(-1);
     if (last) {
       const d = metersBetween(last, pt);
-      if (d < 8 || pt[2] <= last[2] || d / Math.max(1, (pt[2] - last[2]) / 1000) > 45) return;
+      if (d < (t.kind === 'drive' ? 20 : 8) || pt[2] <= last[2] || d / Math.max(1, (pt[2] - last[2]) / 1000) > 45) return;
       t.dist = Math.round((t.dist || 0) + d);
     }
     t.path.push(pt);
@@ -11410,13 +11418,14 @@
     if (toolOpen !== 'map') mapUnwatch();
     mapDraw();
     renderTool(true);
-    if (t) toast(`Run saved: ${fmtDist(t.dist || 0)} in ${fmtLength(t.endedAt - t.startedAt)}, ${plural(MP.pins.filter((p) => p.tripId === t.id && p.kind === 'flyer').length, 'flyer')}.`);
+    if (t?.kind === 'drive') driveDone(t);
+    else if (t) toast(`Run saved: ${fmtDist(t.dist || 0)} in ${fmtLength(t.endedAt - t.startedAt)}, ${plural(MP.pins.filter((p) => p.tripId === t.id && p.kind === 'flyer').length, 'flyer')}.`);
   }
   const runFlyers = (t) => MP.pins.filter((p) => p.tripId === t.id && p.kind === 'flyer').length;
   function runStats() {
     const t = MP.run && tripById(MP.run.id);
     if (!t || !MP.stats?.isConnected) return;
-    MP.stats.textContent = `${fmtDist(t.dist || 0)} · ${fmtLength(Date.now() - t.startedAt)} · ${plural(runFlyers(t), 'flyer')}`;
+    MP.stats.textContent = t.kind === 'drive' ? `${fmtMiles(t.dist || 0)} · ${fmtLength(Date.now() - t.startedAt)}` : `${fmtDist(t.dist || 0)} · ${fmtLength(Date.now() - t.startedAt)} · ${plural(runFlyers(t), 'flyer')}`;
   }
 
   // ---- pins ----
@@ -11645,6 +11654,7 @@
     MP.group.clearLayers();
     MP.live = null;
     if (MP.mode === 'routes') return drawRoute(fit);
+    if (MP.mode === 'miles') return drawDrives(fit);
     if (MP.show === 'all' || MP.show === 'done') {
       for (const z of MP.zones) {
         if (!inCamp(z)) continue;
@@ -11656,7 +11666,7 @@
       }
     }
     for (const t of MP.trips) {
-      if (!inCamp(t) || (t.path.length < 2 && t.id !== MP.run?.id)) continue;
+      if (t.kind === 'drive' || !inCamp(t) || (t.path.length < 2 && t.id !== MP.run?.id)) continue;
       const line = L.polyline(t.path.map((x) => [x[0], x[1]]), t.id === MP.run?.id ? { color: '#6b5cf0', weight: 6, opacity: 0.9 } : { color: '#6b5cf0', weight: 4, opacity: 0.35 });
       line.addTo(MP.group);
       if (t.id === MP.run?.id) MP.live = line;
@@ -11721,16 +11731,185 @@
         h('span', { style: 'flex:1' }),
         h('button', { class: 'btn small primary-btn', disabled: d.pts.length < need, onclick: () => { const { kind, pts } = d; MP.draw = null; drawPreview(); saveZone(kind, pts); } }, 'Save as done')));
   }
+  // ----- Mileage: business driving, for reimbursing people or claiming it at tax time -----
+  // Four ways in: track a drive live (GPS), log a day's job route (its road miles), work it out from addresses
+  // (road distance), or type it. People see their own; owners and admins see everyone's.
+  const ML = { list: null, rate: 70, unit: 'mi', maps: false, period: 'month', member: '', loading: null, show: null };
+  const mlPer = () => (ML.unit === 'km' ? 1000 : 1609.344);
+  const fmtMiles = (m) => `${(m / mlPer()).toFixed(1)} ${ML.unit}`;
+  const fmtMoney2 = (cents) => '$' + (cents / 100).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  function mlRange() {
+    const t = todayKey(), y = t.slice(0, 4), mo = t.slice(0, 7);
+    if (ML.period === 'month') return [mo + '-01', t];
+    if (ML.period === 'last') { const d = new Date(Number(y), Number(t.slice(5, 7)) - 2, 1); const k = dayKey(d).slice(0, 7); return [k + '-01', k + '-31']; }
+    if (ML.period === 'year') return [y + '-01-01', t];
+    return ['0000-01-01', '9999-12-31'];
+  }
+  function loadMiles() {
+    const [from, to] = mlRange();
+    const q = `/mileage?from=${from}&to=${to}${ML.member ? '&member=' + ML.member : ''}`;
+    ML.loading = api('GET', q).then((x) => { Object.assign(ML, { list: x.list, rate: x.rate, unit: x.unit, maps: x.maps }); }).catch((e) => { ML.list = []; toast(e.message); }).finally(() => { ML.loading = null; if (MP.mode === 'miles') renderTool(true); });
+    return ML.loading;
+  }
+  const HOW = { gps: '📍 Tracked', route: '🛣 Job route', calc: '📐 Map distance', manual: '✎ Typed in' };
+  function milesPanel(modes) {
+    if (!ML.list && !ML.loading) loadMiles();
+    if (MP.run) mapWatch();
+    const box = mapBox();
+    const run = MP.run && tripById(MP.run.id);
+    box.classList.toggle('ml-map', !run);
+    if (MP.map) setTimeout(() => MP.map.invalidateSize(), 0);
+    MP.stats = h('span', { class: 'map-stats' });
+    const list = ML.list || [];
+    const total = list.reduce((n, x) => n + x.meters, 0);
+    const amount = Math.round((total / mlPer()) * ML.rate);
+    const people = amAdmin() && !ML.member ? Object.entries(list.reduce((o, x) => ((o[x.memberId] = (o[x.memberId] || 0) + x.meters), o), {})) : [];
+    const period = h('select', { 'aria-label': 'When', onchange: (e) => { ML.period = e.target.value; ML.list = null; renderTool(true); } }, [['month', 'This month'], ['last', 'Last month'], ['year', 'This year'], ['all', 'All time']].map(([k, l]) => h('option', { value: k, selected: ML.period === k }, l)));
+    const who = amAdmin() ? h('select', { 'aria-label': 'Whose', onchange: (e) => { ML.member = e.target.value; ML.list = null; renderTool(true); } }, h('option', { value: '' }, 'Everyone'), (S.workspace?.members || []).map((m) => h('option', { value: m.id, selected: ML.member === m.id }, m.id === S.me.memberId ? `${m.name} (you)` : m.name))) : null;
+    const csv = async () => {
+      const [from, to] = mlRange();
+      const r = await fetch(`/api/mileage?csv=1&from=${from}&to=${to}${ML.member ? '&member=' + ML.member : ''}`, { headers: { Authorization: 'Bearer ' + S.token } });
+      if (!r.ok) return toast('Couldn’t make the file. Try again.');
+      const a = h('a', { href: URL.createObjectURL(await r.blob()), download: `Mileage ${from.startsWith('0000') ? 'all' : from} to ${to.startsWith('9999') ? todayKey() : to}.csv` });
+      document.body.append(a);
+      a.click();
+      a.remove();
+    };
+    const rateBtn = amAdmin() ? h('button', { class: 'link', onclick: rateSheet }, 'Change') : null;
+    setTimeout(runStats);
+    return [
+      modes,
+      h('div', { class: 'map-run' + (run ? ' on' : '') },
+        run ? h('span', { class: 'map-rec' }) : null,
+        run ? MP.stats : h('span', { class: 'map-stats' }, run ? '' : MP.geoErr || 'Track a drive live, or add one'),
+        run ? h('button', { class: 'btn small primary-btn', onclick: stopRun }, run.kind === 'drive' ? 'Stop and log miles' : 'Stop run')
+          : h('span', { class: 'ml-btns' }, h('button', { class: 'btn small primary-btn', onclick: () => { MP.mode = 'miles'; startRun('drive'); } }, '▶ Track my mileage'), h('button', { class: 'btn small', onclick: () => mileSheet(null) }, '+ Add a trip'))),
+      run && run.kind !== 'drive' ? h('p', { class: 'day-hint' }, 'A canvassing run is going. Stop it to track a drive.') : null,
+      run ? box : null,
+      h('div', { class: 'ml-sum' },
+        h('div', { class: 'ml-top' }, period, who, h('button', { class: 'btn small', disabled: !list.length, onclick: csv }, 'Download CSV')),
+        h('div', { class: 'ml-big' }, h('b', {}, ML.list ? fmtMiles(total) : '…'), h('span', {}, ML.rate ? `${fmtMoney2(amount)} at ${fmtMoney2(ML.rate)}/${ML.unit}` : 'No rate set'), rateBtn),
+        people.length > 1 ? h('div', { class: 'ml-people' }, people.sort((a, b) => b[1] - a[1]).map(([id, m]) => h('button', { class: 'chip', onclick: () => { ML.member = id; ML.list = null; renderTool(true); } }, `${memberName(id)} ${fmtMiles(m)}`))) : null),
+      run ? null : box,
+      h('section', {}, h('h3', {}, 'Trips'),
+        !ML.list ? h('p', { class: 'day-hint' }, 'Loading…')
+          : list.length ? list.slice(0, 200).map((x) => h('div', { class: 'bill map-row' + (ML.show === x.id ? ' on' : ''), onclick: () => mileSheet(x) },
+            h('span', { class: 'bill-name' }, x.purpose || [x.from, x.to].filter(Boolean).join(' → ') || 'A trip',
+              h('small', {}, [dayName(x.date), x.purpose ? [x.from, x.to].filter(Boolean).join(' → ') : '', x.roundTrip ? 'round trip' : '', HOW[x.how], amAdmin() && !ML.member && x.memberId !== S.me.memberId ? memberName(x.memberId) : ''].filter(Boolean).join(' · '))),
+            h('span', { class: 'bill-right' }, h('b', {}, fmtMiles(x.meters)), ML.rate ? h('small', {}, fmtMoney2(Math.round((x.meters / mlPer()) * ML.rate))) : null)))
+          : h('p', { class: 'day-hint' }, 'No trips yet. Press Track my mileage when you set off (keep Kloomie open with the screen on, since phones stop sharing location with web pages when they lock), or Add a trip to work it out from addresses or type it in. On a day with job visits, Job routes can log the whole day’s driving in one go.')),
+    ];
+  }
+  function drawDrives(fit) {
+    for (const t of MP.trips) {
+      const live = t.id === MP.run?.id;
+      if (t.kind !== 'drive' || (!live && t.id !== ML.showTrip) || (t.path.length < 2 && !live)) continue;
+      const line = L.polyline(t.path.map((x) => [x[0], x[1]]), { color: '#6b5cf0', weight: live ? 6 : 5, opacity: 0.9 });
+      line.addTo(MP.group);
+      if (live) MP.live = line;
+      if (!live && fit && t.path.length > 1) MP.map.fitBounds(line.getBounds(), { padding: [30, 30] });
+    }
+    if (ML.line?.length > 1) {
+      const line = L.polyline(ML.line, { color: '#6b5cf0', weight: 5, opacity: 0.85, dashArray: '8 6' }).addTo(MP.group);
+      if (fit) MP.map.fitBounds(line.getBounds(), { padding: [30, 30] });
+    }
+  }
+  function rateSheet() {
+    const rate = h('input', { type: 'number', min: 0, step: '0.001', value: (ML.rate / 100).toFixed(3).replace(/0$/, '') });
+    const unit = h('select', {}, [['mi', 'per mile'], ['km', 'per kilometre']].map(([k, l]) => h('option', { value: k, selected: ML.unit === k }, l)));
+    sheet('Mileage rate', [h('p', { class: 'day-hint' }, 'What the team pays people back, or claims, for each mile driven for work. Use your tax authority’s standard rate if you claim it (in the US, the IRS sets one each year).'), h('div', { class: 'row2' }, h('label', {}, 'Rate ($)', rate), h('label', {}, 'For each', unit))], async () => {
+      S.workspace = await api('PATCH', '/workspace', { mileRate: Math.round(Number(rate.value) * 100), mileUnit: unit.value });
+      ML.list = null;
+      renderTool(true);
+    });
+  }
+  // One trip: new (with anything already known, like a tracked drive's distance), or one to change.
+  function mileSheet(x, preset = {}) {
+    const v = { date: todayKey(), from: '', to: '', purpose: '', roundTrip: false, meters: 0, how: 'manual', ...(x || {}), ...preset };
+    const date = h('input', { type: 'date', value: v.date });
+    const from = h('input', { value: v.from, placeholder: 'The shop, home, a job address…' });
+    const to = h('input', { value: v.to, placeholder: 'Where you went' });
+    const purpose = h('input', { value: v.purpose, placeholder: 'e.g. Quote at the Smith job, supplies run' });
+    const round = h('input', { type: 'checkbox', checked: !!v.roundTrip });
+    const dist = h('input', { type: 'number', min: 0, step: '0.1', inputmode: 'decimal', value: v.meters ? (v.meters / mlPer()).toFixed(1) : '' });
+    let how = v.how, line = null;
+    dist.addEventListener('input', () => { how = v.how === 'gps' || v.how === 'route' ? v.how : 'manual'; });
+    const note = h('p', { class: 'day-hint ml-note' }, v.how === 'gps' ? 'Tracked on your phone while you drove.' : v.how === 'route' ? 'The road miles of the day’s job route.' : '');
+    const calc = ML.maps ? h('button', { class: 'btn small', type: 'button', onclick: async () => {
+      if (!from.value.trim() || !to.value.trim()) return toast('Enter where you started and where you went.');
+      calc.disabled = true;
+      calc.textContent = 'Working it out…';
+      try {
+        const r = await api('POST', '/mileage/calc', { from: from.value, to: to.value, roundTrip: round.checked });
+        dist.value = (r.meters / mlPer()).toFixed(1);
+        how = 'calc';
+        line = r.line;
+        note.textContent = `About ${fmtMins(r.mins)} of driving by road${round.checked ? ', there and back' : ''}.`;
+      } catch (e) { toast(e.message); }
+      calc.disabled = false;
+      calc.textContent = '📐 Work out the miles';
+    } }, '📐 Work out the miles') : null;
+    const who = !x && amAdmin() ? h('select', {}, (S.workspace?.members || []).map((m) => h('option', { value: m.id, selected: m.id === (preset.memberId || S.me.memberId) }, m.id === S.me.memberId ? `${m.name} (you)` : m.name))) : null;
+    const del = x ? h('button', { class: 'btn danger', type: 'button' }, 'Delete') : null;
+    if (del) del.addEventListener('click', () => confirmClick(del, async () => { await api('DELETE', '/mileage/' + x.id); closeSheet(); ML.list = (ML.list || []).filter((y) => y.id !== x.id); renderTool(true); }));
+    const showTrip = x?.tripId && tripById(x.tripId) ? h('button', { class: 'btn small', type: 'button', onclick: () => { ML.showTrip = x.tripId; closeSheet(); mapDraw(true); } }, 'Show the drive on the map') : null;
+    sheet(x ? 'Trip' : 'Add a trip', [
+      who ? h('label', {}, 'Whose trip', who) : null,
+      h('div', { class: 'row2' }, h('label', {}, 'Day', date), h('label', {}, ML.unit === 'km' ? 'Kilometres' : 'Miles', dist)),
+      h('label', {}, 'From', from),
+      h('label', {}, 'To', to),
+      h('label', { class: 'check' }, round, ' Round trip (there and back)'),
+      h('div', { class: 'ml-calc' }, calc, showTrip),
+      note,
+      h('label', {}, 'What for', purpose),
+      del ? h('div', { class: 'btns' }, del) : null,
+    ], async () => {
+      const meters = Math.round(Number(dist.value) * mlPer());
+      if (!(meters > 0)) throw new Error(ML.maps ? 'Enter how far, or press Work out the miles.' : 'Enter how far you drove.');
+      const body = { date: date.value, from: from.value, to: to.value, purpose: purpose.value, roundTrip: round.checked, meters, how, ...(v.tripId ? { tripId: v.tripId } : {}), ...(v.routeDate ? { routeDate: v.routeDate } : {}), ...(who ? { memberId: who.value } : {}) };
+      const saved = x ? await api('PATCH', '/mileage/' + x.id, body) : await api('POST', '/mileage', body);
+      ML.list = null;
+      ML.line = line;
+      toast(`${x ? 'Saved' : 'Logged'}: ${fmtMiles(saved.meters)}`);
+      if (MP.mode !== 'miles') { MP.mode = 'miles'; }
+      if (toolOpen !== 'map') openTool('map'); else renderTool(true);
+      mapDraw(true);
+    }, x ? 'Save' : 'Log trip');
+  }
+  // A tracked drive just ended: log it, with where it started and ended filled in once they're looked up.
+  function driveDone(t) {
+    if (!(t.dist > 0)) return toast('No distance was recorded. Keep Kloomie open with the screen on while you drive.');
+    ML.showTrip = t.id;
+    mileSheet(null, { meters: t.dist, how: 'gps', tripId: t.id, date: dayKey(new Date(t.startedAt)) });
+    const ends = [t.path[0], t.path.at(-1)];
+    ends.forEach((p, i) => p && api('GET', `/geo?lat=${p[0]}&lng=${p[1]}`).then(({ address }) => {
+      const inp = document.querySelectorAll('#sheet input:not([type])')[i];
+      if (address && inp && !inp.value) inp.value = address;
+    }).catch(() => {}));
+  }
+  // A day's job route as mileage: its road miles, from the base (or first stop) and back. Logged once per day;
+  // logging it again updates that trip.
+  async function routeMiles(r) {
+    const day = RT.date || todayKey(), member = RT.member || S.me.memberId;
+    const had = (await api('GET', `/mileage?from=${day}&to=${day}${amAdmin() ? '&member=' + member : ''}`).catch(() => ({ list: [] }))).list.find((x) => x.routeDate === day && x.memberId === member);
+    if (!ML.list) await loadMiles();
+    const names = r.stops.map((s) => s.label.replace(/^[^:]+:\s*/, '')).slice(0, 4).join(', ') + (r.stops.length > 4 ? '…' : '');
+    mileSheet(had || null, { meters: r.meters, how: 'route', routeDate: day, date: day, from: r.base?.address || r.stops[0]?.address || '', to: r.base ? r.base.address : r.stops.at(-1)?.address || '', roundTrip: !!r.base, purpose: had?.purpose || `Job visits: ${names}`, memberId: member });
+  }
+
   function mapTool() {
-    const modes = toolOn('projects') ? h('div', { class: 'seg map-mode' }, [['canvass', 'Canvassing'], ['routes', 'Job routes']].map(([k, l]) => h('button', { class: (MP.mode || 'canvass') === k ? 'on' : '', onclick: () => { MP.mode = k; renderTool(true); mapDraw(true); } }, l))) : null;
+    const modes = h('div', { class: 'seg map-mode' }, [['canvass', 'Canvassing'], ['miles', 'Mileage'], ...(toolOn('projects') ? [['routes', 'Job routes']] : [])].map(([k, l]) => h('button', { class: (MP.mode || 'canvass') === k ? 'on' : '', onclick: () => { MP.mode = k; renderTool(true); mapDraw(true); } }, l)));
+    if (MP.mode === 'miles') return milesPanel(modes);
     if (MP.mode === 'routes' && toolOn('projects')) {
       const box = mapBox();
+      box.classList.remove('ml-map');
       if (MP.map) setTimeout(() => MP.map.invalidateSize(), 0);
       const rp = routePanel();
       return [modes, rp[0], box, ...rp.slice(1)];
     }
     mapWatch();
     const box = mapBox();
+    box.classList.remove('ml-map');
     if (MP.map) setTimeout(() => MP.map.invalidateSize(), 0);
     const run = MP.run && tripById(MP.run.id);
     MP.stats = h('span', { class: 'map-stats' });
@@ -11738,7 +11917,7 @@
     const backs = MP.pins.filter((p) => p.kind === 'back' && !p.done && inCamp(p)).sort((a, b) => (a.due || '9999').localeCompare(b.due || '9999') || b.createdAt - a.createdAt);
     const doneBacks = MP.pins.filter((p) => p.kind === 'back' && p.done && inCamp(p)).length;
     const leads = MP.pins.filter((p) => p.kind === 'lead' && inCamp(p));
-    const trips = MP.trips.filter((t) => inCamp(t) && t.id !== MP.run?.id).slice(0, 30);
+    const trips = MP.trips.filter((t) => t.kind !== 'drive' && inCamp(t) && t.id !== MP.run?.id).slice(0, 30);
     const flyers = MP.pins.filter((p) => p.kind === 'flyer' && inCamp(p)).length;
     const big = (label, cls, fn) => h('button', { class: 'map-act ' + cls, onclick: fn }, label);
     const tripMenu = (anchor, t) => openMenu(anchor, [
@@ -11752,7 +11931,7 @@
       h('div', { class: 'map-run' + (run ? ' on' : '') },
         run ? h('span', { class: 'map-rec' }) : null,
         run ? MP.stats : h('span', { class: 'map-stats' }, MP.geoErr || (hereNow() ? 'Ready when you are' : 'Finding your location…')),
-        run ? h('button', { class: 'btn small primary-btn', onclick: stopRun }, 'Stop run') : h('button', { class: 'btn small primary-btn', onclick: startRun }, 'Start a run')),
+        run ? h('button', { class: 'btn small primary-btn', onclick: stopRun }, run.kind === 'drive' ? 'Stop and log miles' : 'Stop run') : h('button', { class: 'btn small primary-btn', onclick: () => startRun() }, 'Start a run')),
       MP.draw ? drawBar() : h('div', { class: 'map-acts' },
         big('Flyer left', 'flyer', () => placeFor(dropFlyer)),
         big('Come back…', 'back', () => placeFor((at) => pinSheet(newPin('back', at), true))),

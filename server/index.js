@@ -14,7 +14,7 @@ import { providers as calProviders, ics as ICS } from './calendar.js';
 import { llms, llmError, complete } from './llm.js';
 import { fileText, officeKind } from './extract.js';
 import { PdfError, stampPdf, addCertificate, pageCount, writeDoc } from './pdf.js';
-import { routesOn, dayRoute } from './routes.js';
+import { routesOn, dayRoute, driveDistance } from './routes.js';
 import { projectsModule } from './projects.js';
 import { invoicesModule } from './invoices.js';
 import { publicApiModule } from './publicapi.js';
@@ -44,7 +44,7 @@ fs.mkdirSync(FILES_DIR, { recursive: true });
 // Everything lives in memory; save() hands the whole thing to the store a moment later.
 const IMPORT_PATH = path.join(DATA_DIR, 'import-pending.json');
 const store = await openStore({ url: process.env.DATABASE_URL, file: DB_PATH, importFile: IMPORT_PATH });
-let db = { workspaces: {}, tokens: {}, items: {}, entries: {}, tasks: {}, uploads: {}, campaigns: {}, goals: {}, attempts: {}, lists: {}, templates: {}, calendars: {}, ai: {}, pss: {}, sends: {}, bills: {}, meetings: {}, money: {}, budgets: {}, plans: {}, sidekick: {}, vaults: {}, vaultItems: {}, signs: {}, signatures: {}, trips: {}, pins: {}, zones: {}, comments: {}, users: {}, resets: {}, invites: {}, exports: {}, contacts: {}, optouts: {}, unsubs: {}, gcontacts: {}, automations: {}, notices: {}, calfeeds: {}, pushSubs: {}, keys: {} };
+let db = { workspaces: {}, tokens: {}, items: {}, entries: {}, tasks: {}, uploads: {}, campaigns: {}, goals: {}, attempts: {}, lists: {}, templates: {}, calendars: {}, ai: {}, pss: {}, sends: {}, bills: {}, meetings: {}, money: {}, budgets: {}, plans: {}, sidekick: {}, vaults: {}, vaultItems: {}, signs: {}, signatures: {}, trips: {}, pins: {}, zones: {}, comments: {}, users: {}, resets: {}, invites: {}, exports: {}, contacts: {}, optouts: {}, unsubs: {}, gcontacts: {}, automations: {}, notices: {}, calfeeds: {}, pushSubs: {}, keys: {}, mileage: {} };
 const loaded = await store.load();
 if (loaded.db) db = { ...db, ...loaded.db };
 if (loaded.fromFile) console.log(`Moving ${path.basename(loaded.fromFile)} into Postgres.`);
@@ -3783,6 +3783,7 @@ const pinNews = (p) => broadcast(p.wsId, { type: 'map', pin: publicPin(p), forMe
 function applyTrip(t, body, ws, auth) {
   if (body.name !== undefined) t.name = cleanText(body.name, 120);
   if (body.campaignId !== undefined) t.campaignId = mapCampaign(ws, auth, body.campaignId);
+  if (body.kind !== undefined) t.kind = body.kind === 'drive' ? 'drive' : null; // a drive tracked for mileage, not a canvassing run
   if (body.endedAt !== undefined) t.endedAt = Number.isFinite(body.endedAt) ? Math.min(Date.now() + 60_000, Math.max(t.startedAt, body.endedAt)) : null;
   // New points along the way: [lat, lng, time]. Jumps faster than a car on a highway are GPS noise.
   if (Array.isArray(body.add)) {
@@ -6163,6 +6164,79 @@ async function api(req, res, url) {
       zones: Object.values(db.zones).filter(mine).sort((p, q) => q.createdAt - p.createdAt).slice(0, 5000).map(publicZone),
     });
   }
+  // Mileage: each person's business driving, logged by tracking it live, from a day's job route, worked out from
+  // addresses, or typed in. People see their own; owners and admins see everyone's (and can log for someone).
+  if (a === 'mileage') {
+    const admin = isAdmin(auth);
+    const mayAct = (x) => x.memberId === auth.memberId || admin;
+    if (b === 'calc' && m === 'POST') {
+      if (!routesOn()) return send(res, 400, { error: 'Working out distances isn’t turned on for this team’s server yet. Type the miles in instead.' });
+      const body = await readJson(req);
+      const stops = [body.from, ...(Array.isArray(body.stops) ? body.stops : []), body.to].map((x) => cleanText(x, 200)).filter(Boolean).slice(0, 12);
+      if (stops.length < 2) return send(res, 400, { error: 'Enter where you started and where you went.' });
+      const out = await driveDistance(stops, { near: ws.settings.base || null, roundTrip: !!body.roundTrip }).catch((e) => ({ error: e.message }));
+      return send(res, out.error ? 400 : 200, out);
+    }
+    if (!b && m === 'GET') {
+      const q = new URL(req.url, 'http://x').searchParams;
+      const from = isDay(q.get('from')) ? q.get('from') : '0000-01-01', to = isDay(q.get('to')) ? q.get('to') : '9999-12-31';
+      const who = admin ? q.get('member') || null : auth.memberId;
+      const list = Object.values(db.mileage).filter((x) => x.wsId === ws.id && (!who || x.memberId === who) && (admin || x.memberId === auth.memberId) && x.date >= from && x.date <= to)
+        .sort((p, q) => q.date.localeCompare(p.date) || q.createdAt - p.createdAt);
+      const rate = ws.settings.mileRate ?? 70, unit = ws.settings.mileUnit || 'mi';
+      const per = unit === 'km' ? 1000 : 1609.344;
+      if (q.get('csv')) {
+        const cell = (v) => { const t = String(v ?? ''); return /[",\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t; };
+        const rows = [['Date', 'Person', 'From', 'To', 'Purpose', unit === 'km' ? 'Kilometres' : 'Miles', 'Round trip', 'How', `Amount at ${(rate / 100).toFixed(2)}/${unit}`],
+          ...list.map((x) => [x.date, memberIn(ws.id, x.memberId)?.name || x.by, x.from, x.to, x.purpose, (x.meters / per).toFixed(1), x.roundTrip ? 'yes' : '', { gps: 'Tracked', route: 'Job route', calc: 'Map distance', manual: 'Typed in' }[x.how] || x.how, ((x.meters / per) * rate / 100).toFixed(2)])];
+        const total = list.reduce((n, x) => n + x.meters, 0) / per;
+        rows.push(['Total', '', '', '', '', total.toFixed(1), '', '', (total * rate / 100).toFixed(2)]);
+        res.writeHead(200, { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': `attachment; filename="mileage ${from === '0000-01-01' ? 'all' : from} to ${to === '9999-12-31' ? 'now' : to}.csv"`, 'Cache-Control': 'no-store' });
+        return res.end('\ufeff' + rows.map((r) => r.map(cell).join(',')).join('\n'));
+      }
+      return send(res, 200, { list, rate, unit, maps: routesOn() });
+    }
+    const clean = (x, body) => {
+      if (body.date !== undefined) { if (!isDay(body.date)) throw badRequest('Pick a day.'); x.date = body.date; }
+      for (const k of ['from', 'to']) if (body[k] !== undefined) x[k] = cleanText(body[k], 200);
+      if (body.purpose !== undefined) x.purpose = cleanText(body.purpose, 300);
+      if (body.roundTrip !== undefined) x.roundTrip = !!body.roundTrip;
+      if (body.meters !== undefined) {
+        const v = Math.round(Number(body.meters));
+        if (!Number.isFinite(v) || v <= 0 || v > 5_000_000) throw badRequest('Enter how far you drove.');
+        x.meters = v;
+      }
+      if (body.how !== undefined) x.how = ['gps', 'route', 'calc', 'manual'].includes(body.how) ? body.how : 'manual';
+      if (body.tripId !== undefined) x.tripId = body.tripId && db.trips[body.tripId]?.memberId === x.memberId ? body.tripId : null;
+      if (body.routeDate !== undefined) x.routeDate = isDay(body.routeDate) ? body.routeDate : null;
+      x.updatedAt = Date.now();
+      return x;
+    };
+    if (!b && m === 'POST') {
+      const body = await readJson(req);
+      const memberId = admin && body.memberId && memberIn(ws.id, body.memberId) ? body.memberId : auth.memberId;
+      if (Object.values(db.mileage).filter((x) => x.wsId === ws.id && x.memberId === memberId).length >= 20000) return send(res, 400, { error: 'That’s a lot of trips. Delete some old ones first.' });
+      const x = clean({ id: rid(), wsId: ws.id, memberId, by: memberIn(ws.id, memberId).name, date: dayIn(tzOf(ws)), from: '', to: '', purpose: '', meters: 0, roundTrip: false, how: 'manual', tripId: null, routeDate: null, createdAt: Date.now() }, body);
+      if (!x.meters) return send(res, 400, { error: 'Enter how far you drove.' });
+      db.mileage[x.id] = x;
+      save();
+      return send(res, 200, x);
+    }
+    const x = b && db.mileage[b];
+    if (!x || x.wsId !== ws.id || !mayAct(x)) return send(res, 404, { error: 'That trip isn’t here.' });
+    if (m === 'PATCH') {
+      clean(x, await readJson(req));
+      save();
+      return send(res, 200, x);
+    }
+    if (m === 'DELETE') {
+      delete db.mileage[x.id];
+      save();
+      return send(res, 200, { ok: true });
+    }
+    return send(res, 405, { error: 'Method not allowed' });
+  }
+
   if (a === 'geo' && m === 'GET') {
     const lat = Number(url.searchParams.get('lat')), lng = Number(url.searchParams.get('lng'));
     if (!okLat(lat) || !okLng(lng)) return send(res, 400, { error: 'Bad location.' });
@@ -7232,6 +7306,12 @@ async function api(req, res, url) {
     if (body.memberEmail !== undefined) {
       if (!isAdmin(auth)) return send(res, 403, { error: 'Only team owners and admins can change who sends campaign email.' });
       ws.settings.memberEmail = !!body.memberEmail;
+    }
+    // Mileage: what the team pays (or claims) per mile or kilometre, in cents.
+    if (body.mileRate !== undefined || body.mileUnit !== undefined) {
+      if (!isAdmin(auth)) return send(res, 403, { error: 'Only team owners and admins can change the mileage rate.' });
+      if (body.mileRate !== undefined) ws.settings.mileRate = Math.max(0, Math.min(1000, Math.round(Number(body.mileRate) || 0)));
+      if (body.mileUnit !== undefined) ws.settings.mileUnit = body.mileUnit === 'km' ? 'km' : 'mi';
     }
     // Where the day's routes start and end: the shop, the yard, the office.
     if (body.base !== undefined) {
