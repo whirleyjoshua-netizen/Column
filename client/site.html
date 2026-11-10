@@ -199,7 +199,11 @@
     nav .links { display: flex; gap: 22px; margin-left: auto; align-items: center; font-size: 15px; }
     nav .links a:not(.btn) { color: var(--muted); text-decoration: none; }
     nav .links a:not(.btn):hover { color: var(--text); }
+    nav .links a, .brand { white-space: nowrap; }
+    nav .links .xs { display: none; }
     @media (max-width: 760px) { nav .links .hide-s { display: none; } nav .links { gap: 14px; } }
+    @media (max-width: 480px) { nav { gap: 12px; height: 64px; } .brand { font-size: 22px; gap: 8px; } .brand img { width: 34px; height: 34px; } nav .links { gap: 12px; font-size: 14px; } }
+    @media (max-width: 390px) { nav .links .full { display: none; } nav .links .xs { display: inline; } }
 
     .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; background: var(--accent); color: #fff; text-decoration: none; font-weight: 600; border-radius: 10px; padding: 13px 22px; box-shadow: 0 1px 2px rgba(20,18,31,.12), 0 8px 20px -10px rgba(107,76,240,.6); transition: background .15s, transform .15s; }
     .btn:hover { background: var(--accent-ink); transform: translateY(-1px); }
@@ -342,7 +346,7 @@
         <a class="hide-s" href="#pricing">Pricing</a>
         <a class="hide-s" href="#faq">Questions</a>
         <a href="{{APP}}/">Sign in</a>
-        <a class="btn small" href="{{APP}}/?start=1">Start free trial</a>
+        <a class="btn small" href="{{APP}}/?start=1"><span class="full">Start free trial</span><span class="xs">Try free</span></a>
       </div>
     </nav>
   </header>
