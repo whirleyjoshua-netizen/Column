@@ -67,6 +67,22 @@ export const TECH_TEMPLATE = {
     ], views: [
       { name: 'All sprints', kind: 'table', sortBy: 'start' },
     ] },
+    { key: 'tests', name: 'Test cases', singular: 'Test case', icon: '🧪', primary: 'title', fields: [
+      { key: 'title', name: 'Test', type: 'text' },
+      { key: 'result', name: 'Result', type: 'select', choices: [c('Not run', 'gray'), c('Pass', 'green'), c('Fail', 'rose'), c('Blocked', 'amber')] },
+      { key: 'feature', name: 'Feature', type: 'link', target: 'features' },
+      { key: 'release', name: 'Release', type: 'link', target: 'releases' },
+      { key: 'platforms', name: 'Platforms', type: 'multi', choices: [c('Web', 'blue'), c('iPhone', 'gray'), c('Android', 'green'), c('Desktop', 'violet')] },
+      { key: 'tester', name: 'Tester', type: 'person' },
+      { key: 'ran', name: 'Last run', type: 'date' },
+      { key: 'steps', name: 'Steps', type: 'text', long: true },
+      { key: 'expected', name: 'Expected', type: 'text', long: true },
+      { key: 'actual', name: 'What happened', type: 'text', long: true, hint: 'When it fails: what you saw instead' },
+      { key: 'bug', name: 'Bug', type: 'link', target: 'work' },
+    ], views: [
+      { name: 'Test run', kind: 'board', groupBy: 'result' },
+      { name: 'All tests', kind: 'table' },
+    ] },
     { key: 'releases', name: 'Releases', singular: 'Release', icon: '🚀', primary: 'name', fields: [
       { key: 'name', name: 'Version', type: 'text' },
       { key: 'status', name: 'Status', type: 'select', choices: [c('Planned', 'gray'), c('In testing', 'amber'), c('Released', 'green')] },
@@ -88,4 +104,4 @@ export function techPrefix(name) {
 }
 
 // Projects made from step 1 of this template, before sprints and the roadmap timeline: what to add to them.
-export const TECH_LATER = { types: ['sprints'], fields: { work: ['sprint'] }, views: { work: ['Sprint'], features: ['Roadmap'] } };
+export const TECH_LATER = { types: ['sprints', 'tests'], fields: { work: ['sprint'] }, views: { work: ['Sprint'], features: ['Roadmap'] } };

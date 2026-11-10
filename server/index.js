@@ -5252,6 +5252,31 @@ async function api(req, res, url) {
       return send(res, 200, { ok: true });
     }
   }
+  // Release notes for a software project's release, drafted by the team's AI from what's in it: finished stories
+  // and fixed bugs (directly, or through their feature), and serious bugs still open as known issues.
+  if (a === 'records' && c === 'release-notes' && m === 'POST') {
+    const at = PJ.recordAt(b, ws.id, auth.memberId);
+    if (!at || at.p.template !== 'tech' || at.t.key !== 'releases') return send(res, 404, { error: 'That release is gone.' });
+    const { rec, p } = at;
+    const work = p.types.find((x) => x.key === 'work'), feats = p.types.find((x) => x.key === 'features');
+    const k = (tp, key) => tp?.fields.find((f) => f.key === key);
+    const name = (tp, r) => String(r.values[tp.primary] ?? '');
+    const featIn = new Set(Object.values(db.records).filter((r) => r.projectId === p.id && r.typeId === feats?.id && (r.values[k(feats, 'release')?.id] || []).includes(rec.id)).map((r) => r.id));
+    const items = Object.values(db.records).filter((r) => r.projectId === p.id && r.typeId === work?.id && ((r.values[k(work, 'release')?.id] || []).includes(rec.id) || (r.values[k(work, 'feature')?.id] || []).some((id) => featIn.has(id))));
+    const label = (f, r) => f?.choices.find((x) => x.id === r.values[f.id])?.label || '';
+    const done = items.filter((r) => r.values[k(work, 'status')?.id] === k(work, 'status')?.choices.at(-1)?.id);
+    const open = items.filter((r) => !done.includes(r) && label(k(work, 'type'), r) === 'Bug' && ['Critical', 'High'].includes(label(k(work, 'severity'), r)));
+    if (!done.length) return send(res, 400, { error: 'Nothing in this release is done yet, so there’s nothing to write up.' });
+    const line = (r) => `- [${label(k(work, 'type'), r) || 'Item'}] ${name(work, r)}${r.values[k(work, 'description')?.id] ? ': ' + clipText(r.values[k(work, 'description').id], 300) : ''}`;
+    try {
+      const out = replyJson(await aiAsk(ws, auth.memberId,
+        'You write release notes for a software product, for the people who use it. Group them as “What’s new” (stories and tasks people will notice), “Fixed” (bugs), and “Known issues” (only the open bugs listed). Plain, friendly and short; say what changed for the user, not how it was built. Leave out internal chores nobody would notice. Never invent features or fixes that aren’t listed. Reply with JSON only: {"text":"markdown with # headings and - bullets"}',
+        `Release: ${name(at.t, rec)}\nProduct: ${p.name}\n\nDone in this release:\n${done.map(line).join('\n')}\n\nOpen serious bugs:\n${open.length ? open.map(line).join('\n') : '(none)'}`, 'writing'));
+      return send(res, 200, { text: clipText(String(out.text || ''), 8000), done: done.length, open: open.length });
+    } catch (e) {
+      return send(res, e.status || 502, { error: e.message });
+    }
+  }
   // Asking the customer for a review: emailed now (with the team's review link), and the text for a phone.
   if (a === 'records' && c === 'review-request' && m === 'POST') {
     const at = PJ.recordAt(b, ws.id, auth.memberId);

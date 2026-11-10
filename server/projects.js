@@ -313,7 +313,7 @@ export function projectsModule({ db, save, broadcast, rid, hold = null, cleanTex
     t.fields = src.fields.filter((f) => f.type !== 'link' || typeIdOf(f.target)).map((f) => ({ id: rid(8), key: f.key, name: f.name, type: f.type, ...(f.choices ? { choices: f.choices.map((c) => ({ id: rid(6), label: c.label, color: c.color })) } : {}), ...(f.type === 'link' ? { target: typeIdOf(f.target), many: !!f.many } : {}), ...(f.type === 'autonumber' ? { prefix: f.prefix || '', next: f.start || 1, start: f.start || 1 } : {}), ...fieldExtras(f) }));
     t.primary = t.fields.find((f) => f.key === src.primary)?.id || t.fields[0].id;
     // A new record starts at the first stage, so it never sits in "No status".
-    for (const f of t.fields) if ((f.key === 'stage' || f.key === 'status') && f.choices?.length) f.default = f.choices[0].id;
+    for (const f of t.fields) if ((f.key === 'stage' || f.key === 'status' || f.key === 'result') && f.choices?.length) f.default = f.choices[0].id;
     // A field shown only when another is set a certain way (a bug's steps to reproduce), and views narrowed to
     // some records (Bugs): by key and choice label in the definition, by id here.
     const byKey = (k) => t.fields.find((f) => f.key === k);
@@ -859,6 +859,18 @@ export function projectsModule({ db, save, broadcast, rid, hold = null, cleanTex
       const p = b && db.projects[b];
       if (!p || p.wsId !== ws.id || !sees(p, auth.memberId)) return send(res, 404, { error: 'That project is gone.' });
       if (m === 'GET' && c === 'records') return send(res, 200, Object.values(db.records).filter((r) => r.projectId === p.id).map(publicRecord));
+      // A new test run: tests (all, or one release's) back to Not run.
+      if (m === 'POST' && c === 'test-run') {
+        const body = await readJson(req);
+        const t = p.types.find((x) => x.key === 'tests');
+        const rf = t?.fields.find((f) => f.key === 'result');
+        const relF = t?.fields.find((f) => f.key === 'release');
+        if (!rf) return send(res, 400, { error: 'This project has no test cases.' });
+        const list = Object.values(db.records).filter((r) => r.projectId === p.id && r.typeId === t.id && (!body.releaseId || (r.values[relF?.id] || []).includes(body.releaseId)));
+        for (const r of list) if (r.values[rf.id] !== rf.choices[0].id) updateRecord(ws, p, t, r, { [rf.id]: rf.choices[0].id }, auth.member);
+        save();
+        return send(res, 200, { reset: list.length });
+      }
       if (m === 'POST' && c === 'template') {
         const body = await readJson(req, 10_000);
         if (Object.values(db.projectTemplates).filter((x) => x.wsId === ws.id).length >= 50) return send(res, 400, { error: 'A team can keep 50 templates. Delete one first.' });
@@ -1014,6 +1026,7 @@ export function projectsModule({ db, save, broadcast, rid, hold = null, cleanTex
         if (held) return send(res, held.status, held.body);
         const before = { ...rec.values };
         applyValues(ws, p, t, rec, body.values, { addChoices: false });
+        techAfter(ws, p, t, rec, before, auth);
         logChanges(ws, p, t, rec, before, auth.member);
         if (body.docId !== undefined) rec.docId = db.items[body.docId]?.wsId === ws.id && db.items[body.docId].type === 'text' ? body.docId : null;
         rec.updatedAt = Date.now();
@@ -1610,6 +1623,44 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
   }
   upgradeTech();
 
+  // A software project's tests: a test that fails makes a bug (with its steps and what was expected) linked to it,
+  // unless an open one is linked already; a test that's run notes when and who.
+  function techAfter(ws, p, t, rec, before, auth) {
+    if (p.template !== 'tech' || t.key !== 'tests') return;
+    const k = (tp, key) => tp.fields.find((f) => f.key === key);
+    const rf = k(t, 'result');
+    if (!rf || rec.values[rf.id] === before[rf.id]) return;
+    const label = rf.choices.find((c) => c.id === rec.values[rf.id])?.label;
+    if (label === 'Pass' || label === 'Fail' || label === 'Blocked') {
+      const ran = {};
+      if (k(t, 'ran')) ran[k(t, 'ran').id] = new Date().toISOString().slice(0, 10);
+      if (k(t, 'tester') && !rec.values[k(t, 'tester').id]) ran[k(t, 'tester').id] = auth.memberId;
+      applyValues(ws, p, t, rec, ran, { addChoices: false });
+    }
+    if (label !== 'Fail') return;
+    const work = p.types.find((x) => x.key === 'work');
+    const bugF = k(t, 'bug'), st = work && k(work, 'status');
+    if (!work || !bugF || !st) return;
+    const done = st.choices.at(-1)?.id;
+    const open = (rec.values[bugF.id] || []).map((id) => db.records[id]).find((b) => b && b.values[st.id] !== done);
+    if (open) { recordActivity(open.id, { kind: 'note', note: `The test “${recName(p, rec)}” failed again`, by: auth.member, memberId: auth.memberId }); return; }
+    const ch = (f, l) => f?.choices.find((c) => c.label === l)?.id;
+    const v = (key) => rec.values[k(t, key)?.id];
+    const vals = { [work.primary]: `Test failed: ${recName(p, rec)}`.slice(0, 200) };
+    const put = (key, val) => { const f = k(work, key); if (f && val != null && val !== '') vals[f.id] = val; };
+    put('type', ch(k(work, 'type'), 'Bug'));
+    put('severity', ch(k(work, 'severity'), 'Medium'));
+    put('priority', ch(k(work, 'priority'), 'High'));
+    put('steps', v('steps'));
+    put('expected', v('expected'));
+    put('actual', v('actual'));
+    put('feature', v('feature'));
+    put('release', v('release'));
+    const bug = newRecord(ws, p, work, auth, vals, null, { addChoices: false });
+    recordNews(bug, 'record.created', auth.member);
+    applyValues(ws, p, t, rec, { [bugF.id]: [bug.id] }, { addChoices: false });
+    recordActivity(bug.id, { kind: 'note', note: `Made from the failed test “${recName(p, rec)}”`, by: auth.member, memberId: auth.memberId });
+  }
   // A change made by something other than a person editing (GitHub moving a card): applied, logged, announced.
   function updateRecord(ws, p, t, rec, values, by) {
     const before = { ...rec.values };

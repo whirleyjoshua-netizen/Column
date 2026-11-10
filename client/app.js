@@ -8433,7 +8433,8 @@
         h('button', { class: 'icon-btn', 'aria-label': 'All projects', html: I.back, onclick: () => { PR.open = null; renderProjects(); } }),
         h('span', { class: 'pj-ic' }, p.icon), h('b', { class: 'pj-name' }, p.name), p.private ? h('small', { title: 'Private' }, '🔒') : null,
         h('div', { class: 'pj-types' }, p.types.map((x) => h('button', { class: x.id === t.id ? 'on' : null, onclick: () => { PR.type = x.id; PR.view = null; PR.panel = null; renderProjects(); } }, `${x.icon || ''} ${x.name}`, h('small', {}, String(prRecs(p.id).filter((r) => r.typeId === x.id).length))))),
-        isTech(p) ? h('div', { class: 'pj-tools' }, h('button', { class: 'btn small', onclick: () => standupSheet(p) }, '☀️ Standup'), h('button', { class: 'btn small', onclick: () => techDocsSheet(p) }, '📚 Docs'), h('button', { class: 'btn small', onclick: () => githubSheet(p) }, '🐙 GitHub')) : null,
+        isTech(p) ? h('div', { class: 'pj-tools' }, h('button', { class: 'btn small', onclick: () => standupSheet(p) }, '☀️ Standup'), h('button', { class: 'btn small', onclick: () => techDocsSheet(p) }, '📚 Docs'), h('button', { class: 'btn small', onclick: () => githubSheet(p) }, '🐙 GitHub'),
+          t.key === 'tests' ? h('button', { class: 'btn small', onclick: async () => { try { const o = await api('POST', `/projects/${p.id}/test-run`, {}); PR.records.set(p.id, await api('GET', `/projects/${p.id}/records`)); renderProjects(); toast(`New test run: ${plural(o.reset, 'test')} to run`); } catch (e) { toast(e.message); } } }, '🧪 New test run') : null) : null,
         h('button', { class: 'icon-btn', 'aria-label': 'Project options', html: I.more, onclick: more }),
         h('button', { class: 'icon-btn', 'aria-label': 'Close Projects', html: I.close, onclick: closeProjects })),
       h('div', { class: 'pj-bar' },
@@ -8829,6 +8830,53 @@
       !prs.length && !commits.length ? h('p', { class: 'day-hint' }, p.github === undefined ? `Put ${key} in a branch, pull request or commit and it shows here (connect GitHub from 🐙 GitHub at the top).` : `Put ${key} in a branch, pull request or commit and it shows here.`) : null);
   }
 
+  // ----- releases: is it ready to ship, a fresh test run, and release notes drafted by AI -----
+  function prReadiness(p, t, r) {
+    const work = p.types.find((x) => x.key === 'work'), feats = p.types.find((x) => x.key === 'features'), tests = p.types.find((x) => x.key === 'tests');
+    const k = (tp, key) => tp?.fields.find((f) => f.key === key);
+    const lab = (f, x) => f?.choices.find((c) => c.id === x.values[f.id])?.label || '';
+    const recs = prRecs(p.id);
+    const featIn = new Set(recs.filter((x) => x.typeId === feats?.id && (x.values[k(feats, 'release')?.id] || []).includes(r.id)).map((x) => x.id));
+    const items = recs.filter((x) => x.typeId === work?.id && ((x.values[k(work, 'release')?.id] || []).includes(r.id) || (x.values[k(work, 'feature')?.id] || []).some((id) => featIn.has(id))));
+    const doneId = k(work, 'status')?.choices.at(-1)?.id;
+    const open = items.filter((x) => x.values[k(work, 'status')?.id] !== doneId);
+    const bugs = open.filter((x) => lab(k(work, 'type'), x) === 'Bug' && ['Critical', 'High'].includes(lab(k(work, 'severity'), x)));
+    const ts = recs.filter((x) => x.typeId === tests?.id && ((x.values[k(tests, 'release')?.id] || []).includes(r.id) || (x.values[k(tests, 'feature')?.id] || []).some((id) => featIn.has(id))));
+    const count = (l) => ts.filter((x) => lab(k(tests, 'result'), x) === l).length;
+    const failed = count('Fail') + count('Blocked'), notRun = count('Not run') + ts.filter((x) => !x.values[k(tests, 'result')?.id]).length;
+    const blockers = [open.length ? `${plural(open.length, 'work item')} not done` : '', bugs.length ? `${plural(bugs.length, 'serious bug')} open` : '', failed ? `${plural(failed, 'test')} failing or blocked` : '', notRun ? `${plural(notRun, 'test')} not run` : ''].filter(Boolean);
+    const go = (x) => { PR.type = x.typeId; PR.view = null; PR.panel = x.id; renderProjects(); };
+    const notes = async (btn) => {
+      btn.disabled = true;
+      btn.textContent = 'Writing…';
+      try {
+        const out = await api('POST', `/records/${r.id}/release-notes`);
+        const ta = h('textarea', { rows: 16 });
+        ta.value = out.text;
+        const nf = k(t, 'notes');
+        sheet(`Release notes · ${recName(t, r)}`, [h('p', { class: 'day-hint' }, `From ${plural(out.done, 'finished item')}${out.open ? ` and ${plural(out.open, 'open serious bug')}` : ''}. Edit it before you share it.`), ta,
+          h('div', { class: 'btns' }, h('button', { class: 'btn', onclick: () => { copyText(ta.value); toast('Copied'); } }, 'Copy'), h('button', { class: 'btn', onclick: async () => { closeSheet(); try { const d = await techFolder(p); const it = await api('POST', '/items', { type: 'text', dirId: d.id, doc: { title: `${recName(t, r)} release notes`, blocks: ColumnDocs.fromText(ta.value) } }); upsert(it); openDoc(it); } catch (e) { toast(e.message); } } }, 'Make it a doc'))],
+          nf ? async () => { await prSet(p, r, nf, ta.value.trim() || null); toast('Saved as the release notes'); } : null, 'Save as the release notes');
+      } catch (e) {
+        toast(e.message);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = '✦ Draft release notes';
+      }
+    };
+    const nb = h('button', { class: 'btn small' }, '✦ Draft release notes');
+    nb.addEventListener('click', () => notes(nb));
+    return h('div', { class: 'pj-items pj-job-blk rl-blk' },
+      h('div', { class: 'pj-it-h' }, h('b', {}, '🚦 Ready to ship?'), h('span', { style: 'flex:1' }), nb,
+        ts.length ? h('button', { class: 'btn small', onclick: async () => { try { const o = await api('POST', `/projects/${p.id}/test-run`, { releaseId: r.id }); PR.records.set(p.id, await api('GET', `/projects/${p.id}/records`)); renderProjects(); toast(`New test run: ${plural(o.reset, 'test')} to run`); } catch (e) { toast(e.message); } } }, '🧪 New test run') : null),
+      h('p', { class: blockers.length ? 'rl-no' : 'rl-yes' }, !items.length ? 'Nothing is in this release yet. Link work items or features to it.' : blockers.length ? '⚠ Not yet: ' + blockers.join(' · ') : '✓ Ready to ship: everything’s done, no serious bugs open, and every test passed.'),
+      h('div', { class: 'rl-stats' },
+        h('span', {}, h('b', {}, `${items.length - open.length}/${items.length}`), ' work done'),
+        h('span', {}, h('b', {}, String(bugs.length)), ' serious bugs open'),
+        ts.length ? h('span', {}, h('b', {}, `${count('Pass')}/${ts.length}`), ' tests passed') : h('span', { class: 'day-hint' }, 'No test cases for it yet')),
+      ...[...bugs, ...open.filter((x) => !bugs.includes(x))].slice(0, 6).map((x) => h('button', { class: 'pj-link rl-item', onclick: () => go(x) }, `${k(work, 'number') && x.values[k(work, 'number').id] ? x.values[k(work, 'number').id] + ' ' : ''}${recName(work, x)}`, h('small', {}, ' · ' + [lab(k(work, 'status'), x), bugs.includes(x) ? lab(k(work, 'severity'), x) : ''].filter(Boolean).join(' · ')))));
+  }
+
   // ----- the roadmap timeline: records as bars from start to end, grouped (by phase), with progress and warnings -----
   const shortDay = (k) => keyDate(k).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
   // How much of a record's work is done: the records that link to it whose status is at the last stage.
@@ -9103,6 +9151,7 @@
       ...(job ? [] : itemFields.map((f) => prItems(p, t, r, f))),
       h('div', { class: 'pj-fields' }, fields.filter((f) => !top.includes(f)).map(fieldRow)),
       isTech(p) && t.key === 'work' ? prGithub(p, t, r) : null,
+      isTech(p) && t.key === 'releases' ? prReadiness(p, t, r) : null,
       ...(job ? itemFields.map((f) => prItems(p, t, r, f)) : []),
       job ? prJobMoney(p, t, r) : null,
       ...richFields.map((f) => prRichBlock(p, t, r, f)),
