@@ -135,8 +135,9 @@ try {
 
   // What the AI hears.
   asked.length = 0;
-  await maria('POST', '/hq/import', { url: SITE + '/' });
+  await maria('POST', '/ai/doc', { mode: 'write', ask: 'A short proposal' });
   const sys = asked[0]?.sys || '';
+  ok(!(await (async () => { asked.length = 0; await maria('POST', '/hq/import', { url: SITE + '/' }); return asked[0].sys; })()).includes('What the team has told Kloomie'), 'the website import itself doesn’t get the profile (it’s building it)');
   ok(sys.includes('We make homes cooler and calmer') && sys.includes('Never pushy') && sys.includes('Countdown deals') && sys.includes('Needs an owner’s OK first'), 'approved entries reach the AI: what we do, values with what to avoid, rules');
   ok(sys.includes('Plantation shutters') && !sys.includes('Motorized roller shades'), 'an accepted service reaches the AI; a dismissed one doesn’t');
 

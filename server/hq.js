@@ -53,6 +53,22 @@ const ESSENTIALS = ['about', 'service', 'area', 'mission', 'value', 'voice', 'go
 const PAGE_HINT = /about|story|who-we|mission|value|service|product|pricing|price|cost|faq|question|area|location|warrant|guarantee|review|testimonial|team|process|how-it|why/i;
 const PAGE_ORDER = [/about|story|who-we|mission|value/i, /service|product/i, /pricing|price|cost/i, /faq|question/i, /review|testimonial/i, /warrant|guarantee|process|how-it|why/i, /area|location/i, /team/i];
 const MAX_PAGES = 7;
+// The kinds of AI work, and what each needs to know. kinds: 'all', or a list; areas: which values apply (a value
+// with no areas applies everywhere); needs: what to flag when it's missing; null kinds: nothing (the profile tools).
+const BASICS = ['about', 'service', 'area', 'different'];
+export const TASKS = {
+  general: { label: 'anything', kinds: 'all', voice: true, rules: true },
+  customer: { label: 'writing to a customer', kinds: [...BASICS, 'mission', 'value', 'voice', 'prefer', 'avoid', 'never', 'why', 'objection', 'culture', 'policy', 'pricing', 'rule'], areas: ['customers', 'sales', 'marketing'], needs: ['voice'], voice: true, rules: true },
+  sales: { label: 'moving a customer, deal or job forward', kinds: [...BASICS, 'notwanted', 'value', 'voice', 'prefer', 'avoid', 'never', 'goal', 'ideal', 'why', 'objection', 'process', 'policy', 'pricing', 'rule'], areas: ['sales', 'customers', 'jobs'], needs: ['ideal', 'voice'], voice: true, rules: true },
+  writing: { label: 'writing a document', kinds: [...BASICS, 'model', 'mission', 'story', 'value', 'voice', 'prefer', 'avoid', 'never', 'vision', 'goal', 'ideal', 'why', 'culture', 'process', 'policy', 'pricing', 'rule'], needs: ['voice'], voice: true, rules: true },
+  internal: { label: 'notes and reports for the team', kinds: [...BASICS, 'mission', 'value', 'goal', 'culture', 'process', 'policy', 'rule'], areas: ['team', 'jobs', 'money'], rules: true },
+  plan: { label: 'planning work', kinds: [...BASICS, 'model', 'notwanted', 'mission', 'value', 'vision', 'goal', 'ideal', 'culture', 'process', 'policy', 'rule'], needs: ['goal'], rules: true },
+  jobs: { label: 'pricing and running jobs', kinds: ['service', 'area', 'notwanted', 'value', 'never', 'process', 'policy', 'pricing', 'rule'], areas: ['jobs', 'customers', 'money'], needs: ['pricing'], rules: true },
+  money: { label: 'money and budgets', kinds: ['model', 'value', 'vision', 'goal', 'pricing', 'policy', 'rule'], areas: ['money'], needs: ['goal'], rules: true },
+  profile: { label: 'setting up the profile', kinds: null },
+};
+const PER_KIND = 8;
+const MAX_PROMPT = 6000;
 const PAGE_BYTES = 1_500_000;
 const PAGE_CHARS = 6000;
 
@@ -122,24 +138,45 @@ export function hqModule({ db, save, broadcast, rid, cleanText, readJson, send, 
     };
   }
 
-  // ---------- what the AI hears ----------
-  // The approved entries, grouped the way a person would brief a new hire. This replaces the old brand block, and
-  // step 3 narrows it to what each kind of work needs.
-  function prompt(ws) {
+  // ---------- what the AI hears: the behavior engine ----------
+  // Each kind of AI work gets the parts of the profile that bear on it, not all of it: an email to a customer
+  // needs the voice, the customer-facing values and what never to promise; a plan needs the goals, the work the
+  // team doesn't want and the rules; an estimate needs the services, prices and policies. Values that name the
+  // areas they matter in only go to work in those areas. What the work needs but the profile doesn't have is
+  // named, so the AI says so instead of making it up.
+  function prompt(ws, task = 'general') {
+    const t = TASKS[task] || TASKS.general;
+    if (!t.kinds) return '';
     const es = approved(ws.id);
     if (!es.length) return '';
+    const fits = (x) => t.kinds === 'all' || t.kinds.includes(x.kind);
+    const inArea = (x) => !t.areas || !x.areas?.length || x.areas.some((a) => t.areas.includes(a));
+    const horizon = { quarter: 0, year: 1, long: 2 };
+    const mine = es.filter((x) => fits(x) && inArea(x)).sort((a, b) => (a.priority || 2) - (b.priority || 2) || (horizon[a.horizon] ?? 3) - (horizon[b.horizon] ?? 3));
     const line = (x) => {
+      if (KINDS[x.kind].one) return `- ${KINDS[x.kind].name}: ${x.text || x.title}`;
       const head = [x.title, x.text].filter(Boolean).join(': ');
-      const more = [x.do?.length && `Do: ${x.do.join('; ')}`, x.dont?.length && `Never: ${x.dont.join('; ')}`, x.target && `Target: ${x.target}`, x.deadline && `By ${x.deadline}`,
+      const more = [x.priority === 1 && (x.kind === 'goal' ? 'Top priority' : 'Most important'), x.horizon && { long: 'Long term', year: 'This year', quarter: 'This quarter' }[x.horizon],
+        x.do?.length && `Do: ${x.do.join('; ')}`, x.dont?.length && `Never: ${x.dont.join('; ')}`, x.target && `Target: ${x.target}`, x.deadline && `By ${x.deadline}`,
         x.level && { auto: 'Fine to do without asking', approval: 'Needs an owner’s OK first', never: 'Never do this' }[x.level]].filter(Boolean).join('. ');
       return `- ${head}${more ? ` (${more})` : ''}`;
     };
     const parts = PILLARS.map((p) => {
-      const mine = es.filter((x) => x.pillar === p.key).sort((a, b) => (a.priority || 2) - (b.priority || 2));
-      if (!mine.length) return '';
-      return `${p.name}:\n${mine.map((x) => (KINDS[x.kind].one ? `- ${KINDS[x.kind].name}: ${x.text || x.title}` : line(x))).join('\n')}`;
+      const group = [];
+      for (const k of p.kinds) group.push(...mine.filter((x) => x.kind === k).slice(0, PER_KIND));
+      return group.length ? `${p.name}:\n${group.map(line).join('\n')}` : '';
     }).filter(Boolean);
-    return `\n\nWhat the team has told Kloomie about their business. Follow it in anything you write or plan for them, and don’t contradict it or make up facts about the business that aren’t here:\n${parts.join('\n')}`;
+    let text = parts.join('\n');
+    if (text.length > MAX_PROMPT) text = text.slice(0, MAX_PROMPT).replace(/\n[^\n]*$/, '');
+    const have = new Set(es.map((x) => x.kind));
+    const missing = (t.needs || []).filter((k) => !have.has(k)).map((k) => KINDS[k].name.toLowerCase());
+    return [
+      `\n\nWhat the team has told Kloomie about their business, for this kind of work (${t.label}). Follow it, don’t contradict it, and don’t make up facts about the business that aren’t here.`,
+      text ? text : '',
+      t.voice && have.has('voice') ? 'Write in their tone of voice. Use the words they use and avoid the ones they avoid.' : '',
+      t.rules && have.has('rule') ? 'Where a rule says something needs an owner’s OK, say it needs their OK rather than doing it or promising it.' : '',
+      missing.length ? `Their profile doesn’t say yet: ${missing.join(', ')}. If your answer depends on it, say so plainly instead of guessing.` : '',
+    ].filter(Boolean).join('\n');
   }
   // The old brand fields, read from HQ, for the brand card and anything else that still asks for them.
   function brandText(ws) {
@@ -311,7 +348,7 @@ Aim for 8 to 25 entries. Use one entry per service. Write in plain words, in the
     const words = pages.reduce((n, p) => n + p.text.split(/\s+/).length, 0);
     if (words < 40) throw Object.assign(new Error('That site has almost no text Kloomie can read (it may be built entirely in JavaScript or images). Try another page, or fill in your profile by hand.'), { status: 400 });
     const brief = pages.map((p) => [`PAGE ${p.url}`, p.title && `Title: ${p.title}`, p.meta && `Description: ${p.meta}`, p.ld && `Structured data: ${p.ld}`, p.text].filter(Boolean).join('\n')).join('\n\n---\n\n');
-    const out = replyJson(await aiAsk(ws, auth.memberId, IMPORT_SYSTEM, `The business is called ${ws.name}.\n\n${brief}`));
+    const out = replyJson(await aiAsk(ws, auth.memberId, IMPORT_SYSTEM, `The business is called ${ws.name}.\n\n${brief}`, 'profile'));
     const added = suggest(ws, auth, out.entries, (e) => ({ type: 'website', url: pages.find((p) => p.url === e.url)?.url || pages[0].url, why: cleanText(e.why, 300) }));
     ws.hqImport = { url: pages[0].url, at: Date.now(), by: auth.member, pages: pages.map((p) => ({ url: p.url, title: cleanText(p.title, 120) })), count: added.length, gaps: list(out.gaps, 8, 200) };
     save();
@@ -341,7 +378,7 @@ Reply with JSON only: {"reply":"what you say next, ending with your question","e
     turns.push({ role: 'owner', text: said, by: auth.member, at: Date.now() });
     const history = turns.slice(-30).map((t) => ({ role: t.role === 'owner' ? 'user' : 'assistant', text: t.text }));
     if (history[0].role === 'assistant') history.unshift({ role: 'user', text: 'Let’s set up my company profile.' });
-    const out = replyJson(await aiRun(ws, auth.memberId, `${INTERVIEW_SYSTEM}\n\nThe business is called ${ws.name}. What the profile has so far:\n${profileBrief(ws.id)}`, history));
+    const out = replyJson(await aiRun(ws, auth.memberId, `${INTERVIEW_SYSTEM}\n\nThe business is called ${ws.name}. What the profile has so far:\n${profileBrief(ws.id)}`, history, 'profile'));
     const added = suggest(ws, auth, out.entries, () => ({ type: 'interview', why: clipTo(said, 300) }));
     turns.push({ role: 'kloomie', text: cleanText(out.reply, 2000) || 'Thanks. What else should I know?', at: Date.now(), suggested: added.map((x) => x.id), done: !!out.done });
     ws.hqChat = { turns: turns.slice(-60), updatedAt: Date.now() };
@@ -362,7 +399,7 @@ Reply with JSON only: {"entries":[${ENTRY_SHAPE.replace('"why":"where this came 
   async function readDocs(ws, auth, ids) {
     const { files, names, used } = await itemFiles(ws, auth, ids);
     if (!files.length) throw Object.assign(new Error('Kloomie can read PDFs, pictures, and Word, Excel, PowerPoint and text files. Pick one of those.'), { status: 400 });
-    const out = replyJson(await aiRun(ws, auth.memberId, DOC_SYSTEM, [{ role: 'user', text: `The business is called ${ws.name}. Their documents are attached: ${names.join('; ')}.`, files }]));
+    const out = replyJson(await aiRun(ws, auth.memberId, DOC_SYSTEM, [{ role: 'user', text: `The business is called ${ws.name}. Their documents are attached: ${names.join('; ')}.`, files }], 'profile'));
     const fileOf = (e) => names.find((n) => n === e.file) || names[0];
     const added = suggest(ws, auth, out.entries, (e) => ({ type: 'doc', name: cleanText(fileOf(e), 200), itemId: used[names.indexOf(fileOf(e))] || null, why: cleanText(e.why, 300) }));
     ws.hqDocs = [...(ws.hqDocs || []).filter((x) => !names.includes(x.name)), ...names.map((n, i) => ({ name: cleanText(n, 200), itemId: used[i] || null, at: Date.now(), by: auth.member, count: added.filter((x) => x.source.name === n).length }))].slice(-30);

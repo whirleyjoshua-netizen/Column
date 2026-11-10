@@ -487,8 +487,8 @@ function serveLogo(req, res, url) {
   });
 }
 // The short parts go into every AI request.
-function brandPrompt(ws) {
-  return HQ ? HQ.prompt(ws) : '';
+function brandPrompt(ws, task) {
+  return HQ ? HQ.prompt(ws, task) : '';
 }
 
 // Shared-passphrase teams become per-person: everyone who has signed in or posted becomes a member with no
@@ -3979,12 +3979,12 @@ function aiUse(ai) {
   const models = ai.keys[provider].models;
   return { provider, model: provider === ai.provider && models.some((m) => m.id === ai.model) ? ai.model : llms[provider].pick(models) };
 }
-async function aiAsk(ws, memberId, system, prompt) {
+async function aiAsk(ws, memberId, system, prompt, task = 'general') {
   const ai = aiOf(ws.id, memberId);
   const use = aiUse(ai);
   if (!use) throw Object.assign(new Error('Add your AI key in Settings → AI to use this.'), { status: 400 });
   try {
-    return await complete(llms[use.provider], { key: unseal(ai.keys[use.provider].sealed).key, model: use.model, system: system + brandPrompt(ws), prompt });
+    return await complete(llms[use.provider], { key: unseal(ai.keys[use.provider].sealed).key, model: use.model, system: system + brandPrompt(ws, task), prompt });
   } catch (e) {
     console.error('AI request failed:', e.message);
     throw Object.assign(new Error(llmError(e)), { status: 502 });
@@ -4038,7 +4038,7 @@ async function aiReport(ws, auth, c, body) {
     'whether one person or role has much more open work than the rest, and the next steps. For a main campaign, say which sub-campaigns are moving and which are behind. ' +
     'Use only what the data shows: never invent names, numbers or results. If little was logged, say so plainly and keep it short. ' +
     'Write 4 to 8 short lines of plain text, no headings and no markdown, at most a few dashes for a list. Reply with the findings only.',
-    prompt);
+    prompt, 'internal');
   return { text: text.trim() };
 }
 
@@ -4063,7 +4063,7 @@ async function aiOpeners(ws, auth, body) {
     'Use what their details say (their business, city, line of work); never invent facts about them, and when there is little to go on keep it simple and true. ' +
     'One sentence each, under 30 words, plain and friendly, no greeting (the email already has one), no flattery, no exclamation marks, and it must lead into the rest of the email. ' +
     'Reply with JSON only: {"lines":[{"i":0,"text":"…"}]} with one line for every person, by their number.',
-    prompt);
+    prompt, 'customer');
   const lines = Array.isArray(replyJson(text).lines) ? replyJson(text).lines : [];
   return { lines: lines.filter((x) => people.some((y) => y.i === Number(x?.i))).map((x) => ({ i: Number(x.i), text: cleanText(x.text, 600) })).filter((x) => x.text) };
 }
@@ -4150,7 +4150,7 @@ ${clipText(x.transcript, 120_000)}`,
     'campaign’s outcomes that fits best, and who was met. Use only what was said: never invent names, numbers, dates or commitments. ' +
     'If nothing fits a campaign, use null. Reply with JSON only: {"title":"","summary":[""],"decisions":[""],"actions":[{"text":"","due":null,"who":null,"goalId":null}],' +
     '"campaignId":null,"outcome":null,"contact":null,"contactId":null}',
-    prompt);
+    prompt, 'internal');
   const j = replyJson(text);
   const camp = camps.find((c) => c.id === j.campaignId) || null;
   const goalIds = new Set(camp ? Object.values(db.goals).filter((g) => g.campaignId === camp.id).map((g) => g.id) : []);
@@ -4255,7 +4255,7 @@ async function aiTask(ws, auth, t, body) {
   const today = isDay(body.today) ? body.today : dayIn(auth.tz);
   const extra = cleanText(body.ask, 2000);
   const prompt = [`Today is ${today}.`, taskBrief(ws, auth, t), extra ? `What they asked for: ${extra}` : ''].filter(Boolean).join('\n\n');
-  const system = `You help someone on a small business team get one task done. ${tool.ask} Reply with JSON only, in this shape: ${tool.shape}` + brandPrompt(ws);
+  const system = `You help someone on a small business team get one task done. ${tool.ask} Reply with JSON only, in this shape: ${tool.shape}` + brandPrompt(ws, { email: 'customer', script: 'sales', doc: 'writing' }[body.tool] || 'internal');
   let out;
   try {
     out = await llms[use.provider].run({ key: unseal(ai.keys[use.provider].sealed).key, model: use.model, system, history: [{ role: 'user', text: prompt }], tools: [], web: tool.web, exec: () => Promise.reject(new Error('No tools')) });
@@ -4332,7 +4332,7 @@ async function aiDoc(ws, auth, body) {
     'Write plain markdown: # heading, ## subheading, ### small heading, - bullet, 1. numbered, - [ ] to-do, > quote, **bold**, *italic*, [text](https://link). Short paragraphs. No title line at the top unless they asked for one.',
     'Reply with JSON only: {"text":"the markdown","title":"a short title for the doc, only when drafting the whole doc and it has none, else null"}',
   ].join('\n');
-  const j = replyJson(await aiAsk(ws, auth.memberId, system, prompt));
+  const j = replyJson(await aiAsk(ws, auth.memberId, system, prompt, 'writing'));
   return { text: clipText(String(j.text || '').trim(), 40_000), title: j.title ? clipText(String(j.title).trim(), 140) : null };
 }
 
@@ -4359,7 +4359,7 @@ async function aiRecord(ws, auth, body) {
     'Kinds of step: a task with a date; a change to one of the option fields (only to an option that exists); a message to send (email or text), written out ready to send, short and in the team’s voice; or a call with what to say and ask.',
     'Reply with JSON only: {"read":"…","steps":[{"kind":"task","text":"","due":"YYYY-MM-DD"|null,"why":""} | {"kind":"stage","field":"field name","to":"option","why":""} | {"kind":"message","channel":"email"|"text","subject":"","text":"","why":""} | {"kind":"call","text":"what to say and ask","why":""}]}',
   ].join('\n');
-  const j = replyJson(await aiAsk(ws, auth.memberId, system, prompt));
+  const j = replyJson(await aiAsk(ws, auth.memberId, system, prompt, 'sales'));
   const str = (v, n) => clipText(String(v ?? '').trim(), n);
   const steps = (Array.isArray(j.steps) ? j.steps : []).slice(0, 4).map((x) => {
     if (x?.kind === 'task' && x.text) return { kind: 'task', text: str(x.text, 300), due: isDay(x.due) ? x.due : null, why: str(x.why, 300) };
@@ -4414,7 +4414,7 @@ async function aiEstimate(ws, auth, body) {
   ].join('\n');
   let out;
   try {
-    out = await llms[use.provider].run({ key: unseal(ai.keys[use.provider].sealed).key, model: use.model, system: system + brandPrompt(ws), history: [{ role: 'user', text: prompt, files }], tools: [], web: false, exec: () => Promise.reject(new Error('No tools')) });
+    out = await llms[use.provider].run({ key: unseal(ai.keys[use.provider].sealed).key, model: use.model, system: system + brandPrompt(ws, 'jobs'), history: [{ role: 'user', text: prompt, files }], tools: [], web: false, exec: () => Promise.reject(new Error('No tools')) });
   } catch (e) {
     console.error('Estimate failed:', e.message);
     throw Object.assign(new Error(llmError(e)), { status: 502 });
@@ -4483,7 +4483,7 @@ async function aiPlan(ws, auth, c, body) {
     'each with 1 to 6 concrete tasks a person can do in one sitting, phrased as actions. Give due dates (YYYY-MM-DD) within the campaign’s ' +
     'dates, from today on, when timing matters; otherwise null. Stick to what the brief supports: never invent leads, contacts or facts. ' + WHO_RULE + ' ' +
     'Reply with JSON only, in this shape: {"goals":[{"title":"","kind":"tasks"|"count","target":null|number,"outcomes":[],"methods":[],"due":null|"YYYY-MM-DD","tasks":[{"text":"","due":null|"YYYY-MM-DD","who":null|""}]}]}',
-    prompt);
+    prompt, 'plan');
   const day = (v) => (isDay(v) && v >= today && (!c.end || v <= c.end) ? v : null);
   const out = (Array.isArray(replyJson(text).goals) ? replyJson(text).goals : []).slice(0, 6).map((g) => ({
     title: clipText(String(g?.title || '').trim(), 200),
@@ -4814,7 +4814,7 @@ async function skTurn(ws, auth, x, today, say) {
   if (files.length) history.find((m) => m.role === 'user').files = files;
   let out;
   try {
-    out = await llms[use.provider].run({ key: unseal(ai.keys[use.provider].sealed).key, model: use.model, system: SK_SYSTEM(x.kind, !!x.campaignId || x.status === 'built') + brandPrompt(ws), history, tools: [], web: false, exec: () => Promise.reject(new Error('No tools')) });
+    out = await llms[use.provider].run({ key: unseal(ai.keys[use.provider].sealed).key, model: use.model, system: SK_SYSTEM(x.kind, !!x.campaignId || x.status === 'built') + brandPrompt(ws, x.kind === 'money' ? 'money' : 'plan'), history, tools: [], web: false, exec: () => Promise.reject(new Error('No tools')) });
   } catch (e) {
     console.error('Sidekick request failed:', e.message);
     throw Object.assign(new Error(llmError(e)), { status: 502 });
@@ -7737,13 +7737,13 @@ const PJ = projectsModule({ db, save, broadcast, rid, cleanText, isDay, readJson
 });
 // Invoices for jobs, and the team's own Stripe account for card payments (invoices.js).
 // For Company HQ: a conversation with the team's AI, and the files someone picked, ready for it to read.
-async function aiRun(ws, memberId, system, history) {
+async function aiRun(ws, memberId, system, history, task = 'general') {
   const ai = aiOf(ws.id, memberId);
   const use = aiUse(ai);
   if (!use) throw Object.assign(new Error('Add your AI key in Settings → AI to use this.'), { status: 400 });
   let out;
   try {
-    out = await llms[use.provider].run({ key: unseal(ai.keys[use.provider].sealed).key, model: use.model, system: system + brandPrompt(ws), history, tools: [], web: false, exec: () => Promise.reject(new Error('No tools')) });
+    out = await llms[use.provider].run({ key: unseal(ai.keys[use.provider].sealed).key, model: use.model, system: system + brandPrompt(ws, task), history, tools: [], web: false, exec: () => Promise.reject(new Error('No tools')) });
   } catch (e) {
     console.error('AI request failed:', e.message);
     throw Object.assign(new Error(llmError(e)), { status: 502 });
