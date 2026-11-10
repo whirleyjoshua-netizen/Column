@@ -72,6 +72,16 @@ Customer portal), and a webhook to `PUBLIC_URL/stripe/webhook` for `checkout.ses
 `STRIPE_WEBHOOK_SECRET` (the webhook's signing secret) and, if the price isn't $15, `SEAT_PRICE_CENTS` (what the app
 shows). `STRIPE_API` points it at a stand-in, for tests.
 
+## QuickBooks Online
+
+An owner or admin connects their QuickBooks company in Settings → Connections → QuickBooks. Sent invoices and their
+payments are copied in, and payments recorded in QuickBooks come back (server/quickbooks.js). In the
+[Intuit Developer portal](https://developer.intuit.com/): create an app with the *Accounting* scope, and add the redirect URI
+`PUBLIC_URL/oauth/quickbooks/callback` under *Keys & credentials* (development and production each have their own
+keys). Set `QBO_CLIENT_ID` and `QBO_CLIENT_SECRET`. `QBO_ENV=production` uses real companies; anything else uses
+sandbox companies. Production keys need Intuit's app details filled in (a privacy policy, terms, the host's address).
+`QBO_API`, `QBO_AUTH_URL`, `QBO_TOKEN_URL` and `QBO_REVOKE_URL` point it at a stand-in, for tests.
+
 ## Calendars (Google / Outlook)
 
 Everyone connects their own calendars in ⚙ Settings → Calendars. Events show in their Day (only they see them), and blocks

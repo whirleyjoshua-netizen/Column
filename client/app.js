@@ -656,6 +656,8 @@
       if (msg.budget) S.budgets.push(msg.budget);
       renderDay();
       renderTool();
+    } else if (msg.type === 'quickbooks') {
+      if (S.qbo) api('GET', '/quickbooks').then((y) => { S.qbo = y; $('#settings .qbo-sec')?.replaceWith(qboSection()); }).catch(() => {});
     } else if (msg.type === 'hq') {
       if (HQ.data || toolOpen === 'hq') loadHq();
     } else if (msg.type === 'pss' || msg.type === 'contacts' || msg.type === 'gcontacts') {
@@ -9536,6 +9538,7 @@
         inv.status !== 'void' && inv.balance > 0 ? act('Record a payment', async () => { try { await saveIt(); paymentSheet(inv); } catch (e) { toast(e.message); } }) : null,
         del),
       inv.status !== 'void' && !S.payments?.connected ? h('small', { class: 'day-hint' }, 'To take cards on the customer’s page, connect your Stripe account in Settings → Connections.') : null,
+      inv.qbo?.id ? h('small', { class: 'day-hint' }, inv.qbo.voided ? '✓ Voided in QuickBooks too.' : '✓ In QuickBooks, with its payments.') : inv.qbo?.error ? h('small', { class: 'err' }, 'Not in QuickBooks yet: ' + inv.qbo.error) : null,
     ].filter(Boolean), inv.status === 'void' ? null : async () => { await saveIt(); toast('Invoice saved'); });
   }
   function paymentSheet(inv) {
@@ -9551,6 +9554,42 @@
     }, 'Record payment');
   }
   // Settings → Connections: the team's own Stripe account, so customers can pay invoices by card.
+  // QuickBooks Online: sent invoices and their payments go into the team's books; payments recorded there come back.
+  function qboSection() {
+    const sec = h('section', { class: 'qbo-sec' }, h('h3', {}, 'QuickBooks'));
+    const x = S.qbo;
+    if (!x) {
+      api('GET', '/quickbooks').then((y) => { S.qbo = y; $('#settings .qbo-sec')?.replaceWith(qboSection()); }).catch(() => {});
+      return sec.append(h('p', { class: 'day-hint' }, 'Loading…')), sec;
+    }
+    if (!x.configured && !x.connected) return h('section', { class: 'qbo-sec', hidden: true });
+    const redo = (y) => { S.qbo = y; sec.replaceWith(qboSection()); };
+    if (!x.connected) {
+      const go = async () => {
+        try {
+          const { url } = await api('POST', '/quickbooks/connect');
+          window.open(url, '_blank');
+          toast('Finish signing in to QuickBooks in your browser.');
+        } catch (e) { toast(e.message); }
+      };
+      sec.append(h('p', { class: 'day-hint' }, 'Keep your books up to date without typing anything twice. Each invoice you send from Kloomie goes into QuickBooks Online under the same number, billed to the same customer, and every payment goes with it. Payments you record in QuickBooks come back here, so the job shows as paid.'),
+        h('div', { class: 'btns' }, h('button', { class: 'btn primary-btn', onclick: go }, 'Connect QuickBooks')));
+      return sec;
+    }
+    const off = h('button', { class: 'btn small danger', 'data-label': '1' }, 'Disconnect');
+    off.addEventListener('click', () => confirmClick(off, () => api('DELETE', '/quickbooks').then(redo).catch((e) => toast(e.message))));
+    const now = h('button', { class: 'btn small' }, x.busy ? 'Syncing…' : 'Sync now');
+    now.onclick = async () => { now.textContent = 'Syncing…'; now.disabled = true; const y = await api('POST', '/quickbooks/sync').catch((e) => toast(e.message)); if (y) redo(y); };
+    const earlier = x.from ? h('button', { class: 'btn small', onclick: async () => { const y = await api('POST', '/quickbooks/earlier').catch((e) => toast(e.message)); if (y) { redo(y); toast('Copying your earlier invoices too'); } } }, 'Copy earlier invoices too') : null;
+    sec.append(...[
+      h('p', {}, `✓ Connected to ${x.company}${x.sandbox ? ' (sandbox)' : ''} by ${x.by}. Invoices you send${x.from ? ` from ${new Date(x.from).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} on` : ''} go into QuickBooks with their payments, and payments recorded there come back.`),
+      h('p', { class: 'day-hint' }, `${x.copied} invoice${x.copied === 1 ? '' : 's'} in QuickBooks${x.waiting ? ` · ${x.waiting} waiting` : ''}${x.syncedAt ? ' · checked ' + ago(x.syncedAt) : ''}`),
+      x.error ? h('p', { class: 'err' }, x.error) : null,
+      ...(x.failed || []).map((f) => h('small', { class: 'err' }, `${f.number}: ${f.error}`)),
+      h('div', { class: 'btns' }, now, earlier, off),
+    ].filter(Boolean));
+    return sec;
+  }
   function paySection() {
     const sec = h('section', { class: 'pay-sec' }, h('h3', {}, 'Card payments (Stripe)'));
     const x = S.payments;
@@ -14251,6 +14290,7 @@
       s.append(aiSection());
       loadAi();
       if (amAdmin()) s.append(paySection());
+      if (amAdmin()) s.append(qboSection());
       if (amAdmin()) s.append(gcSection());
       if (amAdmin() && (!S.pss || S.pss.connected || S.pss.available)) s.append(pssSection());
       if (amAdmin()) s.append(intSection());

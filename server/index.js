@@ -18,6 +18,7 @@ import { routesOn, dayRoute } from './routes.js';
 import { projectsModule } from './projects.js';
 import { invoicesModule } from './invoices.js';
 import { publicApiModule } from './publicapi.js';
+import { quickbooksModule } from './quickbooks.js';
 import { EVENTS as HOOK_EVENTS } from './projects.js';
 import { hqModule } from './hq.js';
 import { openStore, Fenced } from './store.js';
@@ -5134,6 +5135,8 @@ async function api(req, res, url) {
     return send(res, 200, await askReview(ws, at.rec, auth.member));
   }
   {
+    const qb = await QB.route(req, res, parts, auth, ws);
+    if (qb !== null) return;
     const out = await HQ.route(req, res, parts, auth, ws);
     if (out !== null) return;
   }
@@ -7782,7 +7785,7 @@ async function itemFiles(ws, auth, ids) {
 HQ = hqModule({ db, save, broadcast, rid, cleanText, readJson, send, isAdmin, aiAsk, aiRun, itemFiles, replyJson, allowLocal: process.env.ALLOW_LOCAL_FETCH === '1' });
 for (const ws of Object.values(db.workspaces)) if (HQ.migrate(ws)) save();
 
-const INV = invoicesModule({ db, save, broadcast, rid, cleanText, readJson, send, badRequest, escHtml, brandOf, logoUrl, teamDay, offline, seal, unseal, stripeCall: stripe.callWith, PJ, isAdmin, jobOfRecord, jobLabel, moveJob, publicUrl: PUBLIC_URL, emit: (...a) => PJ.emit(...a),
+const INV = invoicesModule({ db, save, broadcast, rid, cleanText, readJson, send, badRequest, escHtml, brandOf, logoUrl, teamDay, offline, seal, unseal, stripeCall: stripe.callWith, PJ, isAdmin, jobOfRecord, jobLabel, moveJob, publicUrl: PUBLIC_URL, emit: (...a) => { PJ.emit(...a); QB.soon(a[0]); },
   // A payment is money in on the business's Finance, under the team's owner.
   addMoney: (ws, { amount, day, note }) => {
     const owner = ws.members.find((m) => m.role === 'owner') || ws.members[0];
@@ -7793,6 +7796,8 @@ const INV = invoicesModule({ db, save, broadcast, rid, cleanText, readJson, send
   },
   dropMoneyId: (id) => { if (db.money[id]) dropMoney(db.money[id]); },
 });
+// QuickBooks Online: invoices and payments into the team's books, payments recorded there back (quickbooks.js).
+const QB = quickbooksModule({ db, save, broadcast, cleanText, readJson, send, seal, unseal, isAdmin, INV, publicUrl: PUBLIC_URL, alarm, offline, teamDay });
 // The public API for Contacts, Tasks, Visits and Invoices, and webhooks apps subscribe to (publicapi.js).
 const API = publicApiModule({ db, save, broadcast, rid, cleanText, readJson, send, badRequest, PJ, INV, isAdmin, teamDay, EVENTS: HOOK_EVENTS, EMAIL_RE,
   publicContact, contactsOf, newContact, applyContact, contactNews, refreshLiveSoon, automate, CONTACT_MAX, emailKey, phoneKey,
@@ -7906,6 +7911,7 @@ const server = http.createServer(async (req, res) => {
   if (url.pathname === '/developers') return serveStatic(req, res, new URL('/developers.html', 'http://x'));
   if (url.pathname === '/terms' || url.pathname === '/privacy' || url.pathname === '/help') return serveStatic(req, res, new URL(url.pathname + '.html', 'http://x'));
   if (url.pathname.startsWith('/brand/') && (req.method === 'GET' || req.method === 'HEAD')) return serveLogo(req, res, url);
+  if (url.pathname === '/oauth/quickbooks/callback') return QB.callback(req, res, url).catch((e) => { alarm('Connecting QuickBooks failed', e); if (!res.headersSent) send(res, 500, 'Something went wrong connecting QuickBooks.'); });
   if (url.pathname.startsWith('/oauth/')) return oauthCallback(req, res, url).catch((e) => {
     alarm('Connecting a calendar failed', e);
     if (!res.headersSent) send(res, 500, 'Something went wrong connecting your calendar.');
@@ -8075,6 +8081,7 @@ async function eraseTeam(ws) {
   const files = teamFiles(wsId);
   await Promise.all(Object.values(db.calendars).filter((x) => x.wsId === wsId).map(revokeCalendar));
   if (db.gcontacts[wsId]) await revokeCalendar({ provider: 'google', tokens: db.gcontacts[wsId].tokens });
+  await QB.disconnect(wsId).catch(() => {});
   for (const sock of sockets.get(wsId) || []) sock.close(4001, 'Team deleted');
   sockets.delete(wsId);
   let n = 0;
