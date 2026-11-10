@@ -2856,9 +2856,13 @@ const pssLead = (x) => ({
   createdAt: Date.parse(x?.created_at) || null, stageChangedAt: Date.parse(x?.stage_changed_at) || null,
   dne: !!x?.do_not_email, unsub: /^https:\/\/\S+$/.test(x?.unsubscribe_url || '') ? x.unsubscribe_url.slice(0, 300) : null,
 });
+// PSS is Premier Shade Solutions' own site, so only its team gets the connector: a team that has (or had) it
+// connected, or one named in PSS_TEAMS (team ids, comma-separated; * for every team, as the tests use).
+const pssTeams = () => String(process.env.PSS_TEAMS || '').split(',').map((x) => x.trim()).filter(Boolean);
+const pssAllowed = (ws) => !!db.pss[ws.id] || !!ws.pssEver || pssTeams().includes('*') || pssTeams().includes(ws.id);
 function pssState(ws) {
   const p = db.pss[ws.id];
-  if (!p) return { connected: false };
+  if (!p) return { connected: false, available: pssAllowed(ws) };
   return {
     connected: true, url: p.url, last4: p.last4, by: p.by, at: p.at, syncedAt: p.syncedAt || null, error: p.error || null, count: contactsOf(ws.id).filter((x) => x.ext?.pss).length, dne: contactsOf(ws.id).filter((x) => x.ext?.pss && x.extDne).length, syncing: pssBusy.has(ws.id),
     pushedAt: p.pushedAt || null, pushError: p.pushError || null, waiting: toPush(ws.id).length,
@@ -6357,6 +6361,7 @@ async function api(req, res, url) {
     if (!isAdmin(auth)) return send(res, 403, { error: 'Only team owners and admins can do that.' });
     if (m === 'GET' && !b) return send(res, 200, pssState(ws));
     if (m === 'PUT' && !b) {
+      if (!pssAllowed(ws)) return send(res, 403, { error: 'PSS isn’t available for this team.' });
       const body = await readJson(req);
       const url = pssUrl(body.url);
       const key = String(body.key || '').trim();
@@ -6364,6 +6369,7 @@ async function api(req, res, url) {
       if (!/^[\w-]{20,200}$/.test(key)) return send(res, 400, { error: 'That doesn’t look like a PSS key.' });
       await pssGet(url, key, '/api/column/leads?limit=1');
       db.pss[ws.id] = { url, sealed: seal({ key }), last4: key.slice(-4), by: auth.member, at: Date.now(), dne: [] };
+      ws.pssEver = true;
       await syncPss(ws);
       return send(res, 200, pssState(ws));
     }
@@ -7880,6 +7886,11 @@ setInterval(() => {
 setInterval(runSchedules, 30_000);
 setInterval(syncAllCalendars, 30_000);
 // Before Contacts, PSS's leads were kept on the connection. They become contacts, once.
+// A team that has PSS connected keeps the connector even if it disconnects later.
+for (const wsId of Object.keys(db.pss)) {
+  const ws = db.workspaces[wsId];
+  if (ws && !ws.pssEver) { ws.pssEver = true; save(); }
+}
 for (const [wsId, p] of Object.entries(db.pss)) {
   if (!Array.isArray(p.leads)) continue;
   if (db.workspaces[wsId]) fillContacts(db.workspaces[wsId], 'pss', p.leads);

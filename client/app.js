@@ -7023,7 +7023,8 @@
       return;
     }
     const sec = $('#settings .pss-sec');
-    if (sec && !sec.contains(document.activeElement)) sec.replaceWith(pssSection());
+    if (sec && !(S.pss?.connected || S.pss?.available)) sec.remove();
+    else if (sec && !sec.contains(document.activeElement)) sec.replaceWith(pssSection());
     $('#settings .gc-sec')?.replaceWith(gcSection());
   }
   // Connecting other apps to Projects: API keys (each shown once) and webhooks (with their deliveries).
@@ -13877,7 +13878,7 @@
       loadAi();
       if (amAdmin()) s.append(paySection());
       if (amAdmin()) s.append(gcSection());
-      if (amAdmin()) s.append(pssSection());
+      if (amAdmin() && (!S.pss || S.pss.connected || S.pss.available)) s.append(pssSection());
       if (amAdmin()) s.append(intSection());
     }
 
