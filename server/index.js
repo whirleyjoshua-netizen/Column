@@ -23,6 +23,7 @@ import { EVENTS as HOOK_EVENTS } from './projects.js';
 import { hqModule } from './hq.js';
 import { openStore, Fenced } from './store.js';
 import { createMailer } from './mail.js';
+import { createPush } from './push.js';
 import * as stripe from './stripe.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -40,7 +41,7 @@ fs.mkdirSync(FILES_DIR, { recursive: true });
 // Everything lives in memory; save() hands the whole thing to the store a moment later.
 const IMPORT_PATH = path.join(DATA_DIR, 'import-pending.json');
 const store = await openStore({ url: process.env.DATABASE_URL, file: DB_PATH, importFile: IMPORT_PATH });
-let db = { workspaces: {}, tokens: {}, items: {}, entries: {}, tasks: {}, uploads: {}, campaigns: {}, goals: {}, attempts: {}, lists: {}, templates: {}, calendars: {}, ai: {}, pss: {}, sends: {}, bills: {}, meetings: {}, money: {}, budgets: {}, plans: {}, sidekick: {}, vaults: {}, vaultItems: {}, signs: {}, signatures: {}, trips: {}, pins: {}, zones: {}, comments: {}, users: {}, resets: {}, invites: {}, exports: {}, contacts: {}, optouts: {}, unsubs: {}, gcontacts: {}, automations: {}, notices: {}, calfeeds: {} };
+let db = { workspaces: {}, tokens: {}, items: {}, entries: {}, tasks: {}, uploads: {}, campaigns: {}, goals: {}, attempts: {}, lists: {}, templates: {}, calendars: {}, ai: {}, pss: {}, sends: {}, bills: {}, meetings: {}, money: {}, budgets: {}, plans: {}, sidekick: {}, vaults: {}, vaultItems: {}, signs: {}, signatures: {}, trips: {}, pins: {}, zones: {}, comments: {}, users: {}, resets: {}, invites: {}, exports: {}, contacts: {}, optouts: {}, unsubs: {}, gcontacts: {}, automations: {}, notices: {}, calfeeds: {}, pushSubs: {}, keys: {} };
 const loaded = await store.load();
 if (loaded.db) db = { ...db, ...loaded.db };
 if (loaded.fromFile) console.log(`Moving ${path.basename(loaded.fromFile)} into Postgres.`);
@@ -62,6 +63,11 @@ for (const ws of Object.values(db.workspaces)) {
     ch.memberIds = ws.members.filter((m) => m !== owner).map((m) => m.id);
   }
 }
+
+// Who a task or campaign was last announced to, so "assigned you" goes out once, when it's handed over.
+const assignKey = (t) => t.assigneeId || (t.roleId ? 'role:' + t.roleId : null) || (t.castId ? 'cast:' + t.castId : null);
+for (const t of Object.values(db.tasks)) if (t.toldTo === undefined) t.toldTo = assignKey(t);
+for (const c of Object.values(db.campaigns)) if (c.toldTo === undefined) c.toldTo = c.assigneeId || null;
 
 // Writes wait for a 200 ms lull so bursts become one write, but never longer than 2 s behind,
 // so steady activity can't hold changes in memory indefinitely.
@@ -290,6 +296,7 @@ const mailer = createMailer({
   token: process.env.RESEND_API_KEY, from: process.env.MAIL_FROM, appName: APP_NAME,
   outbox: process.env.MAIL_OUTBOX === '1' ? path.join(DATA_DIR, 'outbox') : null,
 });
+const push = createPush({ db, save, contact: process.env.VAPID_SUBJECT || 'mailto:hello@kloomie.com' });
 // ---------- alerts: serious errors are emailed to ALERT_EMAIL ----------
 // Grouped, at most one email every 15 minutes, so a loop of failures doesn't flood the inbox.
 // Problems with someone's own connections (their calendar, their AI key) are theirs, not alerts.
@@ -1527,8 +1534,7 @@ const isAdmin = (auth) => ADMIN_ROLES.includes(auth?.role);
 const isAdminId = (wsId, memberId) => db.workspaces[wsId]?.members.some((m) => m.id === memberId && ADMIN_ROLES.includes(m.role));
 function broadcast(wsId, msg) {
   visRev++;
-  const set = sockets.get(wsId);
-  if (!set) return;
+  const set = sockets.get(wsId) || new Set();
   if (msg.type === 'workspace') {
     const ws = db.workspaces[wsId];
     for (const s of set) if (s.readyState === 1) s.send(JSON.stringify({ type: 'workspace', workspace: publicWorkspace(ws, s.meta.memberId) }));
@@ -1542,7 +1548,13 @@ function broadcast(wsId, msg) {
   const data = JSON.stringify(msg);
   for (const s of set) if (hide && s.readyState === 1 && (!seesItemDir(inDir, s.meta.memberId) || (msg.type === 'item:update' && !seesOwn('item', inDir, s.meta.memberId)))) s.send(hide);
   const task = msg.type === 'task' && msg.task && db.tasks[msg.task.id];
-  for (const s of set) if (s.readyState === 1 && seesCampaign(campaignId, s.meta.memberId) && seesFeed(feed, s.meta.memberId) && seesItemDir(inDir, s.meta.memberId) && seesTemplate(msg.template, s.meta.memberId) && seesEntry(msg.entry, s.meta.memberId) && (!msg.forMember || msg.forMember === s.meta.memberId) && (!msg.forAdmins || isAdminId(wsId, s.meta.memberId)) && (!msg.bill || seesBill(wsId, msg.bill, s.meta.memberId)) && (!inDir || seesOwn('item', inDir, s.meta.memberId)) && (!task || seesOwn('task', task, s.meta.memberId)) && PJ.seesMsg(msg, s.meta.memberId)) s.send(data);
+  const sees = (mid) => seesCampaign(campaignId, mid) && seesFeed(feed, mid) && seesItemDir(inDir, mid) && seesTemplate(msg.template, mid) && seesEntry(msg.entry, mid) && (!msg.forMember || msg.forMember === mid) && (!msg.forAdmins || isAdminId(wsId, mid)) && (!msg.bill || seesBill(wsId, msg.bill, mid)) && (!inDir || seesOwn('item', inDir, mid)) && (!task || seesOwn('task', task, mid)) && PJ.seesMsg(msg, mid);
+  for (const s of set) if (s.readyState === 1 && sees(s.meta.memberId)) s.send(data);
+  try {
+    alertsFor(wsId, msg, sees);
+  } catch (e) {
+    console.error('Notifying failed:', e.message);
+  }
 }
 
 // ---------- campaigns: campaign → goals → tasks, plus logged attempts (each call or email and its outcome) ----------
@@ -2361,12 +2373,115 @@ function autoAction(x, a, ctx) {
 }
 // A note for one person, on their Home until they clear it (and a pop-up if they're on).
 const publicNotice = ({ wsId, ...n }) => n;
-function notify(wsId, memberId, { title, text, campaignId = null, taskId = null }) {
-  const n = { id: rid(), wsId, memberId, title: clipText(title, 80), text: clipText(text, 600), campaignId, taskId, at: Date.now() };
-  db.notices[n.id] = n;
+// Notices are what the bell up top lists (the ones with no kind, from automations, also sit on Home). Each one
+// also goes to the person's phone or computer as a push, unless they're looking at Kloomie right now.
+// `key` folds repeats into one (three files from the same link → "3 files"), while it's unread and recent.
+function notify(wsId, memberId, { title, text, campaignId = null, taskId = null, kind = null, go = null, key = null, more = null }) {
+  if (!memberIn(wsId, memberId)) return null;
   const mine = Object.values(db.notices).filter((y) => y.wsId === wsId && y.memberId === memberId).sort((p, q) => q.at - p.at);
-  for (const old of mine.slice(50)) delete db.notices[old.id];
+  let n = key && mine.find((y) => y.key === key && !y.read && Date.now() - y.at < 10 * 60_000);
+  if (n) {
+    n.count = (n.count || 1) + 1;
+    Object.assign(n, { title: clipText(title, 80), text: clipText(more ? more(n.count) : text, 600), at: Date.now() });
+  } else {
+    n = { id: rid(), wsId, memberId, title: clipText(title, 80), text: clipText(text, 600), campaignId, taskId, kind, go, key, read: false, at: Date.now() };
+    db.notices[n.id] = n;
+    for (const old of mine.slice(49)) delete db.notices[old.id];
+  }
+  save();
   broadcast(wsId, { type: 'notice', notice: publicNotice(n), forMember: memberId });
+  pushTo(wsId, memberId, { title: n.title, body: n.text, tag: key || n.id, go: go || (taskId ? 'task:' + taskId : campaignId ? 'camp:' + campaignId : 'bell') });
+  return n;
+}
+// Someone is "looking" when a Kloomie window of theirs is open, showing and in front. Then the app tells them itself.
+function looking(wsId, memberId) {
+  for (const s of sockets.get(wsId) || []) if (s.readyState === 1 && s.meta.memberId === memberId && s.meta.visible) return true;
+  return false;
+}
+function pushTo(wsId, memberId, note, { always = false } = {}) {
+  if (!always && looking(wsId, memberId)) return;
+  if (!push.subsOf(wsId, memberId).length) return;
+  const count = Object.values(db.notices).filter((n) => n.wsId === wsId && n.memberId === memberId && !n.read).length;
+  push.send(wsId, memberId, { title: note.title, body: note.body || '', tag: note.tag || null, url: note.go ? '/?go=' + encodeURIComponent(note.go) : '/', count }).catch((e) => console.error('Push failed:', e.message));
+}
+
+// What a change means for each person, worked out where the server tells the apps (so only people allowed to see it
+// hear about it): a mention, a file through a link, a task or campaign handed to them, "you're up", a quote answered.
+// Plain new messages and files are a push only (Chat has its own dot), and each person can turn those off.
+const pushLine = (it) => clipText(it.type === 'message' || it.type === 'text' ? String(it.text || '').replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim() : it.type === 'sealed' ? `🔒 Sealed: ${it.label || 'a secret'}` : it.name || 'a file', 160);
+const mentions = (text, name) => new RegExp(`(^|[\\s(>])@(here|${String(name).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})(?![\\w])`, 'i').test(String(text));
+const assignQueue = new Map(); // memberId → what was handed to them in the last second, told as one
+function queueAssigned(ws, memberId, byId, kind, x) {
+  const k = ws.id + ':' + memberId;
+  if (!assignQueue.has(k)) {
+    assignQueue.set(k, []);
+    setTimeout(() => {
+      const list = assignQueue.get(k) || [];
+      assignQueue.delete(k);
+      const camps = list.filter((a) => a.kind === 'campaign'), tasks = list.filter((a) => a.kind === 'task');
+      if (!list.length) return;
+      const by = [...new Set(list.map((a) => memberIn(ws.id, a.byId)?.name).filter(Boolean))].join(', ') || 'Kloomie';
+      const plural = (n, one) => (n === 1 ? 'a ' + one : `${n} ${one}s`);
+      const what = camps.length ? plural(camps.length, 'campaign') : plural(tasks.length, 'task');
+      const text = camps.length ? camps.map((a) => a.x.name).join(' · ') + (tasks.length ? ` · ${plural(tasks.length, 'task')}` : '')
+        : tasks.slice(0, 3).map((a) => clipText(a.x.text, tasks.length === 1 ? 140 : 60)).join(' · ') + (tasks.length > 3 ? ' …' : '') + (tasks.length === 1 && tasks[0].x.due ? ` · due ${tasks[0].x.due}` : '');
+      notify(ws.id, memberId, { kind: 'assigned', title: `${by} assigned you ${what}`, text, go: camps.length ? 'camp:' + camps[0].x.id : tasks.length === 1 ? 'task:' + tasks[0].x.id : 'tasks', campaignId: camps[0]?.x.id || null, taskId: tasks.length === 1 ? tasks[0].x.id : null });
+    }, 1000);
+  }
+  assignQueue.get(k).push({ kind, byId, x });
+}
+function alertsFor(wsId, msg, sees) {
+  const ws = db.workspaces[wsId];
+  if (!ws) return;
+  if (msg.type === 'item:add') {
+    const it = db.items[msg.item.id];
+    if (!it || it.status !== 'ready' || Date.now() - it.createdAt > 5 * 60_000) return;
+    const ch = it.channelId && ws.channels.find((x) => x.id === it.channelId);
+    const st = it.stackId && ws.stacks.find((x) => x.id === it.stackId);
+    const where = ch ? ' in #' + ch.name : it.parentId ? ' in a thread' : st ? ' in ' + st.name : '';
+    const body = pushLine(it), go = 'item:' + it.id;
+    for (const mb of ws.members) {
+      if ((it.memberId && mb.id === it.memberId) || !sees(mb.id)) continue;
+      if (it.viaLink) notify(ws.id, mb.id, { kind: 'files', title: `${it.viaLink} sent files${st ? ' to ' + st.name : ''}`, text: body, go, key: 'link:' + (it.stackId || ''), more: (n) => `${n} files` });
+      else if (it.type === 'message' && mentions(it.text, mb.name)) notify(ws.id, mb.id, { kind: 'mention', title: `${it.by} mentioned you${where}`, text: body, go });
+      else if (mb.pushAll !== false) pushTo(ws.id, mb.id, { title: `${it.by}${where}`, body, go });
+    }
+  } else if (msg.type === 'task') {
+    const t = db.tasks[msg.task.id];
+    if (!t) return;
+    const k = assignKey(t);
+    if (k !== (t.toldTo ?? null)) {
+      t.toldTo = k;
+      save();
+      if (k && t.assignedBy) {
+        const to = t.assigneeId ? [t.assigneeId] : t.roleId ? ws.members.filter((x) => (x.roleIds || []).includes(t.roleId)).map((x) => x.id) : [];
+        for (const id of to) if (id !== t.assignedBy && sees(id)) queueAssigned(ws, id, t.assignedBy, 'task', t);
+      }
+    }
+    if (!t.done && t.upTold) t.upTold = false;
+    if (t.done && !t.upTold && Date.now() - (t.doneAt || 0) < 30_000) {
+      t.upTold = true;
+      save();
+      for (const d of Object.values(db.tasks)) {
+        if (d.wsId !== wsId || d.done || !d.blockedBy?.includes(t.id) || taskWaitsOn(d) || !d.assigneeId) continue;
+        if (memberIn(wsId, d.assigneeId)?.name === t.doneBy) continue;
+        notify(wsId, d.assigneeId, { kind: 'up', title: 'You’re up', text: `“${clipText(d.text, 120)}”` + (t.doneBy ? ` · ${t.doneBy} finished what it was waiting on` : ''), taskId: d.id, go: 'task:' + d.id });
+      }
+    }
+  } else if (msg.type === 'campaign') {
+    const c = db.campaigns[msg.campaign.id];
+    if (!c) return;
+    const k = c.assigneeId || null;
+    if (k === (c.toldTo ?? null)) return;
+    c.toldTo = k;
+    save();
+    if (k && c.assignedBy && c.assignedBy !== k && sees(k)) queueAssigned(ws, k, c.assignedBy, 'campaign', c);
+  } else if (msg.type === 'doc:mention' || msg.type === 'comment:mention') {
+    const doc = msg.type === 'doc:mention';
+    notify(wsId, msg.forMember, { kind: 'mention', title: doc ? `${msg.by} mentioned you in “${clipText(msg.title, 50)}”` : `${msg.by} mentioned you in a comment on “${clipText(msg.title, 40)}”`, text: doc ? 'Open the doc to see where' : msg.text, go: 'doc:' + msg.docId });
+  } else if (msg.type === 'quote:answer') {
+    for (const mb of ws.members) if (sees(mb.id)) notify(wsId, mb.id, { kind: 'quote', title: msg.act === 'accept' ? 'Quote accepted' : 'Quote declined', text: `${msg.name} · ${msg.title}`, go: 'rec:' + msg.recordId });
+  }
 }
 function runAutomationSchedules(now) {
   for (const x of Object.values(db.automations)) {
@@ -5087,6 +5202,7 @@ async function api(req, res, url) {
   }
 
   if (a === 'logout' && m === 'POST') {
+    push.drop((x) => x.token === auth.token);
     delete db.tokens[auth.token];
     save();
     return send(res, 200, { ok: true });
@@ -6361,10 +6477,47 @@ async function api(req, res, url) {
   if (a === 'notices') {
     const mine = () => Object.values(db.notices).filter((n) => n.wsId === ws.id && n.memberId === auth.memberId).sort((p, q) => q.at - p.at);
     if (m === 'GET' && !b) return send(res, 200, mine().map(publicNotice));
+    // Opening the bell marks what's in it seen.
+    if (m === 'POST' && b === 'read') {
+      for (const n of mine()) n.read = true;
+      save();
+      broadcast(ws.id, { type: 'notice:read', forMember: auth.memberId });
+      return send(res, 200, { ok: true });
+    }
     if (m === 'DELETE') {
       for (const n of mine()) if (!b || n.id === b) delete db.notices[n.id];
       save();
       broadcast(ws.id, { type: 'notice:remove', id: b || null, forMember: auth.memberId });
+      return send(res, 200, { ok: true });
+    }
+    return send(res, 405, { error: 'Method not allowed' });
+  }
+
+  // Push: this device's address for notes while Kloomie is closed, and what the person wants pushed.
+  if (a === 'push') {
+    const me = ws.members.find((x) => x.id === auth.memberId);
+    if (!b && m === 'GET') {
+      const endpoint = new URL(req.url, 'http://x').searchParams.get('endpoint');
+      return send(res, 200, { key: push.publicKey(), all: me.pushAll !== false, here: endpoint ? push.has(endpoint) : false, devices: push.subsOf(ws.id, me.id).map((x) => x.device || 'A device') });
+    }
+    if (!b && m === 'POST') {
+      const body = await readJson(req, 10_000);
+      push.add({ wsId: ws.id, memberId: me.id, token: auth.token, deviceId: auth.deviceId, device: auth.device, sub: body.sub });
+      return send(res, 200, { ok: true });
+    }
+    if (!b && m === 'DELETE') {
+      push.remove((await readJson(req, 10_000)).endpoint);
+      return send(res, 200, { ok: true });
+    }
+    if (b === 'prefs' && m === 'PUT') {
+      const body = await readJson(req);
+      if (body.all !== undefined) me.pushAll = !!body.all;
+      save();
+      return send(res, 200, { all: me.pushAll !== false });
+    }
+    if (b === 'test' && m === 'POST') {
+      if (!push.subsOf(ws.id, me.id).length) return send(res, 400, { error: 'Turn notifications on for this device first.' });
+      pushTo(ws.id, me.id, { title: 'Notifications are on', body: 'This is what it looks like when something comes in.', tag: 'test', go: 'bell' }, { always: true });
       return send(res, 200, { ok: true });
     }
     return send(res, 405, { error: 'Method not allowed' });
@@ -7928,7 +8081,7 @@ server.on('upgrade', (req, socket, head) => {
     return socket.destroy();
   }
   wss.handleUpgrade(req, socket, head, (s) => {
-    s.meta = { wsId: auth.wsId, memberId: auth.memberId, member: auth.member, device: auth.device, deviceId: auth.deviceId, token: auth.token };
+    s.meta = { wsId: auth.wsId, memberId: auth.memberId, member: auth.member, device: auth.device, deviceId: auth.deviceId, token: auth.token, visible: true };
     s.alive = true;
     s.on('pong', () => (s.alive = true));
     if (!sockets.has(auth.wsId)) sockets.set(auth.wsId, new Set());
@@ -7941,6 +8094,11 @@ server.on('upgrade', (req, socket, head) => {
       try {
         msg = JSON.parse(raw);
       } catch {
+        return;
+      }
+      // Whether this window is showing (so pushes wait while someone's looking at Kloomie).
+      if (msg?.type === 'vis') {
+        s.meta.visible = !!msg.visible;
         return;
       }
       if (msg?.type !== 'doc:here') return;
@@ -8144,6 +8302,7 @@ async function removeMember(ws, m) {
   for (const x of Object.values(db.vaultItems)) if (theirs(x)) delete db.vaultItems[x.id];
   delete db.vaults[vaultKey(wsId, id)];
   for (const x of Object.values(db.calfeeds)) if (theirs(x)) delete db.calfeeds[x.id];
+  for (const x of Object.values(db.pushSubs)) if (theirs(x)) delete db.pushSubs[x.id];
   delete db.signatures[sigKey(wsId, id)];
   delete db.ai[`${wsId}:${id}`];
   for (const x of Object.values(db.sidekick)) if (theirs(x)) {

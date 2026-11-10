@@ -413,6 +413,7 @@
       if (hadConnection) loadState().catch(() => {}); // catch up on anything missed
       hadConnection = true;
       if (DV.doc) docTell(DV.doc);
+      tellVis(true);
     };
     s.onmessage = (e) => { handle(JSON.parse(e.data)); homeSoon(); };
     s.onclose = (e) => {
@@ -465,7 +466,7 @@
       const it = S.items.find((y) => y.id === msg.docId);
       const open = () => { if (!it) return; openDoc(it).then(() => { if (DV.doc) { DV.doc.side = 'comments'; docSide(DV.doc); } }); };
       toast(`${msg.by} mentioned you in a comment on “${msg.title}”: ${msg.text}`, it ? { label: 'Open', run: open } : undefined);
-      if (S.notify && document.hidden && 'Notification' in window && Notification.permission === 'granted') {
+      if (localNote()) {
         try {
           const n = new Notification(`${msg.by} mentioned you in a comment`, { body: msg.text, icon: '/icon-128.png' });
           n.onclick = () => { window.focus(); open(); };
@@ -475,7 +476,7 @@
       const it = S.items.find((y) => y.id === msg.docId);
       const open = () => it && openDoc(it);
       toast(`${msg.by} mentioned you in “${msg.title}”`, it ? { label: 'Open', run: open } : undefined);
-      if (S.notify && document.hidden && 'Notification' in window && Notification.permission === 'granted') {
+      if (localNote()) {
         try {
           const n = new Notification(`${msg.by} mentioned you`, { body: msg.title, icon: '/icon-128.png' });
           n.onclick = () => { window.focus(); open(); };
@@ -542,10 +543,18 @@
       renderDay();
       refreshLinks();
     } else if (msg.type === 'notice') {
+      const had = (S.notices || []).some((n) => n.id === msg.notice.id);
       S.notices = [msg.notice, ...(S.notices || []).filter((n) => n.id !== msg.notice.id)];
-      notice(msg.notice.title, msg.notice.text, () => setTab('home'));
+      drawBell();
+      // Tasks, quotes, files and doc mentions already pop up from the app's own news; these are the rest.
+      if (!msg.notice.kind) notice(msg.notice.title, msg.notice.text, () => setTab('home'));
+      else if (msg.notice.kind === 'mention' && msg.notice.go?.startsWith('item:') && !had) notice(msg.notice.title, msg.notice.text, () => goTo(msg.notice.go));
+    } else if (msg.type === 'notice:read') {
+      for (const n of S.notices || []) n.read = true;
+      drawBell();
     } else if (msg.type === 'notice:remove') {
       S.notices = msg.id ? (S.notices || []).filter((n) => n.id !== msg.id) : [];
+      drawBell();
     } else if (msg.type === 'automation' || msg.type === 'automation:remove') {
       if (S.automations) S.automations = msg.automation ? [...S.automations.filter((x) => x.id !== msg.automation.id), msg.automation] : S.automations.filter((x) => x.id !== msg.id);
       renderAutos();
@@ -686,7 +695,7 @@
 
   function incoming(it) {
     if (it.viaLink) linkArrived(it);
-    if (S.notify && document.hidden && 'Notification' in window && Notification.permission === 'granted') {
+    if (localNote()) {
       const body = it.type === 'message' ? plainText(it.text).slice(0, 140) : it.type === 'text' ? it.text.slice(0, 140) : it.type === 'sealed' ? `🔒 Sealed: ${it.label || 'a secret'}` : `${it.name}${it.size ? ' · ' + fmtSize(it.size) : ''}`;
       try {
         const ch = channelById(it.channelId);
@@ -700,6 +709,141 @@
 
   // ---------- file requests: a link customers use to send files into a stack ----------
   const reqLive = (st) => st?.request && (!st.request.expiresAt || st.request.expiresAt > Date.now());
+  // ---------- notifications: the bell up top, and pushes to this device while Kloomie is closed ----------
+  // A pop-up from the open app itself, when it's in the background. A device that gets pushes leaves it to them.
+  const localNote = () => S.notify && !S.pushHere && document.hidden && 'Notification' in window && Notification.permission === 'granted';
+  const unreadNotes = () => (S.notices || []).filter((n) => !n.read).length;
+  function drawBell() {
+    const n = unreadNotes();
+    const b = $('#bellN');
+    if (!b) return;
+    b.textContent = n > 9 ? '9+' : String(n);
+    b.classList.toggle('hidden', !n);
+    $('#bellBtn').setAttribute('aria-label', n ? `Notifications, ${n} new` : 'Notifications');
+    try { if (navigator.setAppBadge) n ? navigator.setAppBadge(n) : navigator.clearAppBadge(); } catch {}
+    if ($('#bellPop') && !$('#bellPop').classList.contains('hidden')) bellList();
+  }
+  const NOTE_ICON = { mention: '@', assigned: '👤', up: '▶', files: '📥', quote: '✓' };
+  // Where a notice (or a push someone tapped) takes you.
+  function goTo(go) {
+    if (!go) return;
+    const [kind, id] = [go.slice(0, go.indexOf(':') < 0 ? go.length : go.indexOf(':')), go.includes(':') ? go.slice(go.indexOf(':') + 1) : ''];
+    closeBell();
+    if (kind === 'bell') return openBell();
+    if (kind === 'tasks') return showTasks();
+    if (kind === 'task') { const t = taskById(id); return t ? (goalById(t.goalId) ? showStep(t) : showTasks()) : showTasks(); }
+    if (kind === 'camp') return campById(id) ? openCampaign(id) : setTab('camps');
+    if (kind === 'rec') return openRecord(id);
+    const it = S.items.find((x) => x.id === id);
+    if (!it) return toast('That isn’t here any more.');
+    if (kind === 'doc' || it.type === 'text') return openDoc(it);
+    if (it.type === 'message') return jumpTo(it);
+    setTab('column');
+    if (it.stackId && stackById(it.stackId)) setPanes([`stack:${it.stackId}`, ...S.panes.slice(1)]);
+    if (it.type === 'file' || it.type === 'folder') openPreview(it);
+  }
+  function bellList() {
+    const pop = $('#bellPop');
+    const notes = S.notices || [];
+    const clear = h('button', { class: 'linkish', onclick: () => { S.notices = []; drawBell(); renderHome(); api('DELETE', '/notices').catch(() => {}); } }, 'Clear all');
+    pop.replaceChildren(
+      h('div', { class: 'bell-h' }, h('b', {}, 'Notifications'), notes.length ? clear : null),
+      pushNudge(),
+      notes.length ? h('div', { class: 'bell-list' }, notes.slice(0, 30).map((n) => h('button', { class: 'bell-row' + (n.read ? '' : ' new'), onclick: () => (n.go ? goTo(n.go) : n.taskId && taskById(n.taskId) ? (closeBell(), showStep(taskById(n.taskId))) : n.campaignId ? (closeBell(), openCampaign(n.campaignId)) : null) },
+        h('span', { class: 'need-ic' }, NOTE_ICON[n.kind] || '⚙'),
+        h('span', { class: 'need-text' }, h('b', {}, n.title), n.text ? h('small', {}, n.text) : null, h('small', { class: 'bell-when' }, ago(n.at))))))
+        : h('p', { class: 'bell-empty' }, 'Nothing yet. Mentions, tasks given to you, files sent through your links and answered quotes show up here.'));
+  }
+  function openBell() {
+    let pop = $('#bellPop');
+    if (!pop) {
+      pop = h('div', { id: 'bellPop', class: 'bell-pop hidden', role: 'dialog', 'aria-label': 'Notifications' });
+      document.body.append(pop);
+      document.addEventListener('pointerdown', (e) => { if (!pop.classList.contains('hidden') && !pop.contains(e.target) && !$('#bellBtn').contains(e.target)) closeBell(); });
+      document.addEventListener('keydown', (e) => e.key === 'Escape' && closeBell());
+    }
+    pop.classList.remove('hidden');
+    bellList();
+    if (unreadNotes()) {
+      setTimeout(() => {
+        for (const n of S.notices || []) n.read = true;
+        drawBell();
+      }, 1500); // long enough to see which are new
+      api('POST', '/notices/read').catch(() => {});
+    }
+  }
+  function closeBell() { $('#bellPop')?.classList.add('hidden'); }
+  $('#bellBtn').addEventListener('click', () => ($('#bellPop') && !$('#bellPop').classList.contains('hidden') ? closeBell() : openBell()));
+
+  // Push needs a service worker and the Push API; the desktop app gets its pop-ups from the open window instead.
+  // On an iPhone or iPad it only works from the Home Screen app (Share → Add to Home Screen), on iOS 16.4 or later.
+  const pushCan = () => !desktop && 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+  const iosTab = () => /iP(hone|ad|od)/.test(navigator.userAgent) && !navigator.standalone && !matchMedia('(display-mode: standalone)').matches;
+  const b64key = (s) => { const b = atob((s + '='.repeat((4 - (s.length % 4)) % 4)).replace(/-/g, '+').replace(/_/g, '/')); return Uint8Array.from(b, (c) => c.charCodeAt(0)); };
+  let swReg = null;
+  async function pushSetup() {
+    if (!('serviceWorker' in navigator) || desktop) return;
+    try {
+      swReg = await navigator.serviceWorker.register('/sw.js');
+      navigator.serviceWorker.addEventListener('message', (e) => e.data?.type === 'go' && goTo(e.data.go));
+      if (!pushCan()) return;
+      const sub = await swReg.pushManager.getSubscription();
+      if (sub && Notification.permission === 'granted') {
+        await api('POST', '/push', { sub: sub.toJSON() }); // the server may have forgotten it (or it's a new login here)
+        S.pushHere = true;
+      }
+    } catch {}
+  }
+  async function pushOn() {
+    if (!pushCan()) throw new Error(iosTab() ? 'On iPhone, add Kloomie to your Home Screen first (Share → Add to Home Screen), then turn this on from there.' : 'This browser can’t get notifications while Kloomie is closed.');
+    const perm = Notification.permission === 'granted' ? 'granted' : await Notification.requestPermission();
+    if (perm !== 'granted') throw new Error('Notifications are blocked for Kloomie. Allow them in your browser or phone settings, then try again.');
+    swReg ||= await navigator.serviceWorker.register('/sw.js');
+    await navigator.serviceWorker.ready;
+    const { key } = await api('GET', '/push');
+    let sub = await swReg.pushManager.getSubscription();
+    if (!sub) sub = await swReg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64key(key) });
+    await api('POST', '/push', { sub: sub.toJSON() });
+    S.pushHere = true;
+    S.notify = true;
+    store.set('notify', true);
+  }
+  async function pushOff() {
+    const sub = await swReg?.pushManager.getSubscription().catch(() => null);
+    if (sub) {
+      await api('DELETE', '/push', { endpoint: sub.endpoint }).catch(() => {});
+      await sub.unsubscribe().catch(() => {});
+    }
+    S.pushHere = false;
+  }
+  // In the bell: one line saying how to get these on this device when they're not on yet.
+  function pushNudge() {
+    if (S.pushHere || (desktop && S.notify) || store.get('pushNudged', 0) > 2) return null;
+    const ios = iosTab();
+    if (!pushCan() && !ios && !desktop) return null;
+    return h('div', { class: 'bell-nudge' },
+      h('span', {}, ios ? 'Get these on your iPhone even when Kloomie is closed: tap Share, then Add to Home Screen, and turn notifications on from there.' : 'Get these on this device even when Kloomie is closed.'),
+      ios ? null : h('button', { class: 'btn small primary-btn', onclick: async (e) => {
+        try {
+          if (desktop) { if ((await Notification.requestPermission()) !== 'granted') throw new Error('Notifications are blocked for Kloomie in your system settings.'); S.notify = true; store.set('notify', true); }
+          else await pushOn();
+          toast('Notifications are on for this device');
+          bellList();
+        } catch (er) { toast(er.message); }
+      } }, 'Turn on'),
+      h('button', { class: 'icon-btn', 'aria-label': 'Not now', html: I.close, onclick: () => { store.set('pushNudged', store.get('pushNudged', 0) + 1); store.set('pushNudgedAt', Date.now()); bellList(); } }));
+  }
+  // The server holds pushes while a Kloomie window of yours is open and in front.
+  const visNow = () => !document.hidden && document.hasFocus();
+  let visSent = null;
+  function tellVis(force) {
+    const v = visNow();
+    if (!force && v === visSent) return;
+    visSent = v;
+    if (sock?.readyState === 1) sock.send(JSON.stringify({ type: 'vis', visible: v }));
+  }
+  for (const ev of ['visibilitychange', 'focus', 'blur', 'pagehide', 'pageshow']) (ev === 'visibilitychange' ? document : window).addEventListener(ev, () => tellVis());
+
   const reqUrl = (st) => abs('/r/' + st.request.token);
   function requestSheet(stackId, justMade) {
     const st = stackById(stackId);
@@ -751,7 +895,7 @@
   // A toast, and a desktop notification when the app is in the background.
   function notice(title, body, show) {
     toast(body ? `${title}: ${body}` : title, { label: 'Show', run: show });
-    if (S.notify && document.hidden && 'Notification' in window && Notification.permission === 'granted') {
+    if (localNote()) {
       try {
         const n = new Notification(title, { body: body || '', icon: '/icon-128.png', silent: false });
         n.onclick = () => { window.focus(); show(); };
@@ -764,7 +908,7 @@
     const body = `“${t.text.slice(0, 120)}”` + (by ? ` · ${by} finished what it was waiting on` : '') + (t.due ? ` · due ${dueLabel(t.due)}` : '');
     const show = () => (goalById(t.goalId) ? showStep(t) : showTasks());
     toast(`${title}: ${body}`, { label: 'Show', run: show });
-    if (by && S.notify && document.hidden && 'Notification' in window && Notification.permission === 'granted') {
+    if (by && localNote()) {
       try {
         const n = new Notification(title, { body, icon: '/icon-128.png', silent: false });
         n.onclick = () => { window.focus(); show(); };
@@ -789,7 +933,7 @@
       : tasks.slice(0, 3).map((t) => t.text.slice(0, 60)).join(' · ') + (tasks.length > 3 ? ' …' : '');
     const show = camps.length ? () => openCampaign(camps[0].id) : showTasks;
     toast(`${title}: ${body}`, { label: 'Show', run: show });
-    if (S.notify && document.hidden && 'Notification' in window && Notification.permission === 'granted') {
+    if (localNote()) {
       try {
         const n = new Notification(title, { body, icon: '/icon-128.png', silent: false });
         n.onclick = () => { window.focus(); show(); };
@@ -828,6 +972,8 @@
     S.notices = st.notices || [];
     S.start = st.start || null;
     HM.startAt = Date.now();
+    drawBell();
+    api('GET', '/push').then((x) => { S.pushAll = x.all; }).catch(() => {});
     S.money = st.money || [];
     S.budgets = st.budgets || [];
     S.projects = st.projects || [];
@@ -877,6 +1023,13 @@
     accountNudge();
   }
 
+    pushSetup();
+    // Opened from a notification: go where it points.
+    const go = new URLSearchParams(location.search).get('go');
+    if (go) {
+      history.replaceState(null, '', location.pathname);
+      setTimeout(() => goTo(go), 300);
+    }
   // ---------- inviting people by email (owners) ----------
   // Each invite is a link that joins one person, once, within 14 days. It's emailed when this server can
   // send email, and shown here to copy either way (only right after it's made: Kloomie keeps no copy).
@@ -4616,8 +4769,8 @@
     const row = (ic, cls, title, sub, run) => h('button', { class: 'need-row ' + cls, onclick: run }, h('span', { class: 'need-ic' }, ic), h('span', { class: 'need-text' }, h('b', {}, title), sub ? h('small', {}, sub) : null));
     const ICON = { sign: '✓', stuck: '⏳', role: '👤', late: '!', nobody: '?', checkin: '🩺', auto: '⚙' };
     const steps = [...d.up, ...d.late, ...d.dueToday].slice(0, 8);
-    const notes = S.notices || [];
-    const clearNote = (n) => { S.notices = notes.filter((y) => !n || y.id !== n.id); renderHome(); api('DELETE', '/notices' + (n ? '/' + n.id : '')).catch(() => {}); };
+    const notes = (S.notices || []).filter((n) => !n.kind); // from automations; the rest live in the bell
+    const clearNote = (n) => { const gone = n ? [n] : notes; S.notices = (S.notices || []).filter((y) => !gone.includes(y)); renderHome(); drawBell(); for (const x of gone) api('DELETE', '/notices/' + x.id).catch(() => {}); };
     const needsN = d.needs.length + (d.late.length ? 1 : 0);
     const summary = [needsN ? `${plural(needsN, 'thing')} need${needsN === 1 ? 's' : ''} you` : 'nothing needs you', d.next.length ? `${d.next.length} still on today` : 'your day is clear', d.feeds.reduce((n, f) => n + f.n, 0) ? `${d.feeds.reduce((n, f) => n + f.n, 0)} new in chat` : ''].filter(Boolean).join(' · ');
     const activity = [
@@ -9001,7 +9154,7 @@
     const go = () => openProject(msg.projectId).then(() => { PR.panel = msg.recordId; renderProjects(); });
     const said = `${msg.name} ${msg.act === 'accept' ? 'accepted' : 'declined'} ${msg.title}${msg.total ? ' (' + money(msg.total) + ')' : ''}`;
     toast(msg.act === 'accept' ? '🎉 ' + said : said, { label: 'Open', run: go });
-    if (S.notify && document.hidden && 'Notification' in window && Notification.permission === 'granted') {
+    if (localNote()) {
       try {
         const n = new Notification(msg.act === 'accept' ? 'Quote accepted' : 'Quote declined', { body: said, icon: '/icon-128.png' });
         n.onclick = () => { window.focus(); go(); };
@@ -14251,8 +14404,16 @@
 
       // This device
       const dev = h('section', {}, h('h3', {}, 'This device'));
-      if ('Notification' in window) {
-        dev.append(toggleRow('Notifications', 'When something arrives from another device, or a task or campaign is assigned to you', S.notify && Notification.permission === 'granted', async (on, input) => {
+      if (pushCan() || iosTab()) {
+        dev.append(toggleRow('Notifications', iosTab() ? 'On iPhone, add Kloomie to your Home Screen first (Share → Add to Home Screen) and turn this on from there' : 'On this device, even when Kloomie is closed: mentions, tasks given to you, files through your links, answered quotes, and new messages if you want them', !!S.pushHere, async (on, input) => {
+          try {
+            if (on) await pushOn();
+            else { await pushOff(); S.notify = false; store.set('notify', false); }
+            renderSettings();
+          } catch (e) { input.checked = false; toast(e.message); }
+        }));
+      } else if ('Notification' in window) {
+        dev.append(toggleRow('Notifications', 'While Kloomie is open in the background: messages, files, mentions and tasks given to you', S.notify && Notification.permission === 'granted', async (on, input) => {
           if (on && Notification.permission !== 'granted') {
             const p = await Notification.requestPermission();
             if (p !== 'granted') { input.checked = false; toast('Notifications blocked by the system'); return; }
@@ -14303,6 +14464,12 @@
       const people = h('section', {}, h('h3', {}, `People · ${ws.members.length}`));
       const sorted = [...ws.members].sort((a, b) => (b.id === me?.id) - (a.id === me?.id) || a.name.localeCompare(b.name));
       for (const mb of sorted) {
+      if (S.pushHere || S.notify) {
+        dev.append(toggleRow('New messages and files too', 'Not just what’s for you: everything new in the chats and stacks you’re in (for all your devices)', S.pushAll !== false, async (on, input) => {
+          try { S.pushAll = (await api('PUT', '/push/prefs', { all: on })).all; } catch (e) { input.checked = !on; toast(e.message); }
+        }));
+      }
+      if (S.pushHere) dev.append(h('div', { class: 'srow' }, h('span', {}, 'Check it works', h('small', {}, 'Sends a notification to your devices that have them on')), h('button', { class: 'btn', onclick: () => api('POST', '/push/test').then(() => toast('Sent. Check your notifications.'), (e) => toast(e.message)) }, 'Send a test')));
         const you = mb.id === me?.id;
         const notes = [{ owner: 'Owner', admin: 'Admin' }[mb.role] || 'Member', ...rolesOf(mb.id).map((r) => r.name), mb.hasPassword ? null : 'no password yet', onlineIds.has(mb.id) ? 'online' : null].filter(Boolean).join(' · ');
         const row = h('div', { class: 'srow person' },
