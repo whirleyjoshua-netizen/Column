@@ -80,7 +80,7 @@ payments are copied in, and payments recorded in QuickBooks come back (server/qu
 `PUBLIC_URL/oauth/quickbooks/callback` under *Keys & credentials* (development and production each have their own
 keys). Set `QBO_CLIENT_ID` and `QBO_CLIENT_SECRET`. `QBO_ENV=production` uses real companies; anything else uses
 sandbox companies. Production keys need Intuit's app details filled in (a privacy policy, terms, the host's address).
-`QBO_API`, `QBO_AUTH_URL`, `QBO_TOKEN_URL` and `QBO_REVOKE_URL` point it at a stand-in, for tests.
+Intuit's sign-in addresses come from its discovery document. `QBO_API` and `QBO_DISCOVERY_URL` (or `QBO_AUTH_URL`, `QBO_TOKEN_URL` and `QBO_REVOKE_URL`) point it at a stand-in, for tests.
 
 ## Calendars (Google / Outlook)
 

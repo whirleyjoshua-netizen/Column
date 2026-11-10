@@ -209,7 +209,7 @@
       signOutLocal();
       throw new Error('Signed out');
     }
-    if (!res.ok) throw new Error(data.error || 'Request failed');
+    if (!res.ok) throw Object.assign(new Error(data.error || 'Request failed'), { status: res.status, data });
     // Held by the team's rules until an owner OKs it (rules.js): nothing changed, so it's not a success.
     if (res.status === 202 && data.pending) {
       toast(data.error);
@@ -305,6 +305,9 @@
     $('#modeHint').classList.toggle('hidden', !hint);
     $('#modeSeg').classList.toggle('hidden', mode === 'invite');
     for (const k of ['team', 'code', 'name', 'email', 'pass', 'device']) $(`#${k}Field`).classList.toggle('hidden', !M.fields.includes(k));
+    // The two-step code only shows once the server asks for it.
+    $('#otpField').classList.add('hidden');
+    $('#loginForm').otp.value = '';
     const pw = $('#loginForm').password;
     pw.autocomplete = mode === 'signin' || mode === 'teamname' ? 'current-password' : 'new-password';
     pw.placeholder = mode === 'join' || mode === 'create' ? 'At least 8 characters' : '';
@@ -355,8 +358,17 @@
         name: f.name.value.trim(),
         device: f.device.value || guessDevice(),
         deviceId: S.deviceId,
+        otp: $('#otpField').classList.contains('hidden') ? undefined : f.otp.value.trim(),
       };
       const r = await api('POST', '/auth', body).catch((e) => {
+        // Two-step sign-in: the password was right; now the code from their app.
+        if (e.data?.twoStep) {
+          const first = $('#otpField').classList.contains('hidden');
+          $('#otpField').classList.remove('hidden');
+          f.otp.value = '';
+          f.otp.focus();
+          throw new Error(first ? 'Two-step sign-in is on for this account. Enter the 6-digit code from your authenticator app.' : e.message);
+        }
         throw mode === 'signin' && /don’t match/.test(e.message) ? new Error(e.message + ' Signed in before with your team name? Use “Sign in with team name instead”.') : e;
       });
       if (S.adding && r.workspace.id === S.workspace?.id && !r.accounts) throw new Error('You’re already signed in to ' + r.workspace.name + '.');
@@ -10341,6 +10353,59 @@
     ].filter(Boolean));
     return sec;
   }
+  // Two-step sign-in: a code from an authenticator app after the password. Belongs to an email account.
+  function twoStepSection() {
+    const sec = h('section', { class: 'ts2-sec' }, h('h3', {}, 'Two-step sign-in'));
+    const redo = () => sec.replaceWith(twoStepSection());
+    api('GET', '/account/two-step').then((x) => {
+      const hint = h('p', { class: 'day-hint' }, 'After your password, Kloomie also asks for a 6-digit code from an app on your phone (Google Authenticator, Microsoft Authenticator, 1Password, Authy…). Someone who learns your password still can’t get in.');
+      if (!x.on) {
+        const go = async () => {
+          try {
+            const k = await api('POST', '/account/two-step/start');
+            const code = h('input', { inputmode: 'numeric', autocomplete: 'one-time-code', placeholder: '123456' });
+            sheet('Turn on two-step sign-in', [
+              h('p', {}, '1. Scan this with your authenticator app:'),
+              h('img', { src: k.qr, alt: 'QR code for your authenticator app', class: 'ts2-qr' }),
+              h('p', { class: 'day-hint' }, 'Can’t scan? Add an account by hand with this key: ', h('code', { class: 'ts2-key' }, k.secret), ' ', h('a', { href: k.uri }, 'On this phone? Open it in your app')),
+              h('label', {}, '2. Type the 6-digit code it shows', code),
+            ], async () => {
+              const y = await api('POST', '/account/two-step/confirm', { code: code.value.trim() });
+              redo();
+              setTimeout(() => backupSheet(y.backup, true));
+            }, 'Turn on');
+            setTimeout(() => code.focus(), 50);
+          } catch (e) { toast(e.message); }
+        };
+        sec.append(hint, h('div', { class: 'btns' }, h('button', { class: 'btn', onclick: go }, 'Turn on')));
+        return;
+      }
+      const ask = (title, run, label) => {
+        const pw = h('input', { type: 'password', autocomplete: 'current-password', placeholder: 'Your password' });
+        const code = h('input', { inputmode: 'numeric', autocomplete: 'one-time-code', placeholder: 'Code from your app (or a backup code)' });
+        sheet(title, [h('label', {}, 'Password', pw), h('label', {}, 'Code', code)], () => run({ password: pw.value, code: code.value.trim() }), label);
+      };
+      sec.append(
+        h('p', {}, `✓ On since ${new Date(x.since).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}. ${x.backupLeft} backup code${x.backupLeft === 1 ? '' : 's'} left.`),
+        x.backupLeft <= 3 ? h('p', { class: 'warn' }, 'You’re running low on backup codes. Make new ones and keep them somewhere safe.') : null,
+        h('div', { class: 'btns' },
+          h('button', { class: 'btn', onclick: () => ask('New backup codes', async (b) => { const y = await api('POST', '/account/two-step/backup', b); redo(); setTimeout(() => backupSheet(y.backup, false)); }, 'Make new codes') }, 'New backup codes'),
+          h('button', { class: 'btn danger', onclick: () => ask('Turn off two-step sign-in', async (b) => { await api('DELETE', '/account/two-step', b); toast('Two-step sign-in is off'); redo(); }, 'Turn off') }, 'Turn off')),
+      );
+    }).catch((e) => sec.append(h('p', { class: 'day-hint' }, /email/.test(e.message) ? 'Add your email above first: two-step sign-in belongs to an email account.' : e.message)));
+    return sec;
+  }
+  function backupSheet(codes, first) {
+    const text = codes.join('\n');
+    sheet(first ? 'Two-step sign-in is on' : 'Your new backup codes', [
+      h('p', {}, 'If you lose your phone, sign in with one of these instead of a code. Each works once.' + (first ? '' : ' Your old ones no longer work.')),
+      h('pre', { class: 'ts2-codes' }, text),
+      h('div', { class: 'btns' },
+        h('button', { class: 'btn', onclick: () => { copyText(text); toast('Copied'); } }, 'Copy'),
+        h('button', { class: 'btn', onclick: () => { const a = h('a', { href: URL.createObjectURL(new Blob([`Kloomie backup codes\n\n${text}\n`], { type: 'text/plain' })), download: 'kloomie-backup-codes.txt' }); a.click(); } }, 'Download')),
+      h('p', { class: 'day-hint' }, 'Keep them somewhere safe, like your password manager. This is the only time they’re shown.'),
+    ], async () => {}, 'Done');
+  }
   function paySection() {
     const sec = h('section', { class: 'pay-sec' }, h('h3', {}, 'Card payments (Stripe)'));
     const x = S.payments;
@@ -15397,6 +15462,8 @@
         me?.hasPassword ? null : h('p', { class: 'warn' }, 'You don’t have a password yet. Set one so you can sign in on new devices.'),
         me?.hasPassword ? h('div', { class: 'stack-row' }, cur) : null,
         h('div', { class: 'stack-row' }, next, h('button', { class: 'btn', onclick: savePw }, 'Save'))));
+
+      s.append(twoStepSection());
 
       // Account
       const devices = S.online.filter((d) => d.memberId === S.me.memberId).map((d) => `${d.device}${d.deviceId === S.deviceId ? ' (this)' : ''}`).join(', ');

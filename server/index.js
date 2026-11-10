@@ -19,6 +19,7 @@ import { projectsModule } from './projects.js';
 import { invoicesModule } from './invoices.js';
 import { publicApiModule } from './publicapi.js';
 import { quickbooksModule } from './quickbooks.js';
+import { twoStepModule } from './twostep.js';
 import { EVENTS as HOOK_EVENTS } from './projects.js';
 import { hqModule } from './hq.js';
 import { rulesModule } from './rules.js';
@@ -433,7 +434,7 @@ const needsConfirm = (auth) => mailer.mode !== 'off' && !userOf(auth.ws.members.
 const meAccount = (ws, memberId) => {
   const mem = ws.members.find((x) => x.id === memberId);
   const u = userOf(mem);
-  return { email: u?.email || null, emailVerified: !!u?.emailVerified, pendingEmail: u?.pendingEmail || null, mail: mailer.mode !== 'off', bar: mem?.bar || null };
+  return { email: u?.email || null, emailVerified: !!u?.emailVerified, pendingEmail: u?.pendingEmail || null, mail: mailer.mode !== 'off', bar: mem?.bar || null, twoStep: TS.on(u) };
 };
 // What each person keeps on their tab bar after Home and Day (theirs alone, in their order). Null: the usual three.
 const BAR_KEYS = ['column', 'chat', 'camps', 'sidekick', 'docs', 'projects', 'bills', 'contacts', 'email', 'folders', 'meetings', 'map', 'signs', 'vault'];
@@ -5033,6 +5034,9 @@ async function api(req, res, url) {
         loginFailed(keys);
         return send(res, 401, { error: 'That email and password don’t match. Check them, or use Forgot password.' });
       }
+      // Two-step sign-in: the code from their app too.
+      const g = TS.gate(u, body.otp, () => loginFailed(keys));
+      if (g) return send(res, g.status, g.body);
       const teams = membersOf(u).filter(({ ws, m }) => !ws.deleteAt || m.role === 'owner');
       if (!teams.length) return send(res, 404, { error: 'This account isn’t in a team yet. Use Join team with an invite code, or Create team.' });
       const all = teams.map(({ ws, m }) => ({ token: session(ws, m), workspace: publicWorkspace(ws, m.id), member: m.name }));
@@ -5063,6 +5067,10 @@ async function api(req, res, url) {
     if (email && mode !== 'signin') {
       user = userByEmail(email);
       if (user && !passOk(user, password)) return refuse('That email already has an account. Use its password, or sign in with it instead.');
+      if (user) {
+        const g = TS.gate(user, body.otp, () => loginFailed(tries));
+        if (g) return send(res, g.status, g.body);
+      }
       if (!user && String(password).length < 8) return send(res, 400, { error: 'Choose a password of at least 8 characters.' });
     }
     let ws = Object.values(db.workspaces).find((w) => w.slug === slug);
@@ -5111,6 +5119,8 @@ async function api(req, res, url) {
         if (!member) return send(res, 404, { error: `No one called “${who}” in ${ws.name}. New here? Use Join team with the invite code.` });
         if (!hasPass(member)) return send(res, 401, { error: 'No password set for this name yet. Use Join team with the invite code to set one.' });
         if (!passOk(credOf(member), password)) return refuse('Wrong password.');
+        const g = TS.gate(userOf(member), body.otp, () => loginFailed(tries));
+        if (g) return send(res, g.status, g.body);
       }
     }
     const token = session(ws, member);
@@ -7159,6 +7169,11 @@ async function api(req, res, url) {
 
   if (a === 'account') {
     const me = ws.members.find((x) => x.id === auth.memberId);
+    // Two-step sign-in (twostep.js): set up, backup codes, turn off. Changes need the password and a code.
+    if (b === 'two-step') {
+      const keys = ['ip:' + clientIp(req), 'twostep:' + me.id];
+      return TS.route(req, res, userOf(me), c, { passOk: (p) => passOk(credOf(me), p), blocked: () => loginBlocked(keys), failed: () => loginFailed(keys) });
+    }
     if (b === 'bar' && !c && m === 'PUT') {
       const { bar } = await readJson(req);
       if (bar !== null && !Array.isArray(bar)) return send(res, 400, { error: 'That isn’t a list of tabs.' });
@@ -8179,6 +8194,8 @@ const INV = invoicesModule({ db, save, broadcast, rid, hold, cleanText, readJson
   },
   dropMoneyId: (id) => { if (db.money[id]) dropMoney(db.money[id]); },
 });
+// Two-step sign-in with an authenticator app (twostep.js).
+const TS = twoStepModule({ db, save, seal, unseal, readJson, send, appName: process.env.APP_NAME || 'Kloomie' });
 // QuickBooks Online: invoices and payments into the team's books, payments recorded there back (quickbooks.js).
 const QB = quickbooksModule({ db, save, broadcast, cleanText, readJson, send, seal, unseal, isAdmin, INV, PJ, publicUrl: PUBLIC_URL, alarm, offline, teamDay });
 // The public API for Contacts, Tasks, Visits and Invoices, and webhooks apps subscribe to (publicapi.js).

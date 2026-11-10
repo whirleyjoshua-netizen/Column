@@ -38,9 +38,27 @@ export function quickbooksModule({ db, save, broadcast, cleanText, readJson, sen
   const configured = () => !!(env('QBO_CLIENT_ID') && env('QBO_CLIENT_SECRET'));
   const sandbox = () => env('QBO_ENV') !== 'production';
   const apiBase = () => env('QBO_API') || (sandbox() ? 'https://sandbox-quickbooks.api.intuit.com' : 'https://quickbooks.api.intuit.com');
-  const authUrl = () => env('QBO_AUTH_URL') || 'https://appcenter.intuit.com/connect/oauth2';
-  const tokenUrl = () => env('QBO_TOKEN_URL') || 'https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer';
-  const revokeUrl = () => env('QBO_REVOKE_URL') || 'https://developer.api.intuit.com/v2/oauth2/tokens/revoke';
+  // Intuit's sign-in addresses come from its discovery document (as Intuit asks), kept for a day; if Intuit can't be
+  // reached, the last ones it gave, or these.
+  const KNOWN = { auth: 'https://appcenter.intuit.com/connect/oauth2', token: 'https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer', revoke: 'https://developer.api.intuit.com/v2/oauth2/tokens/revoke' };
+  const discoveryUrl = () => env('QBO_DISCOVERY_URL') || `https://developer.api.intuit.com/.well-known/${sandbox() ? 'openid_sandbox_configuration' : 'openid_configuration'}`;
+  let found = null, foundAt = 0;
+  async function endpoints() {
+    if (found && Date.now() - foundAt < 24 * 3600_000) return found;
+    try {
+      const d = await (await fetch(discoveryUrl(), { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(10_000) })).json();
+      if (d.authorization_endpoint && d.token_endpoint) {
+        found = { auth: d.authorization_endpoint, token: d.token_endpoint, revoke: d.revocation_endpoint || KNOWN.revoke };
+        foundAt = Date.now();
+      }
+    } catch (e) {
+      console.error('Intuit discovery document unavailable:', e.message);
+    }
+    return found || KNOWN;
+  }
+  const authUrl = async () => env('QBO_AUTH_URL') || (await endpoints()).auth;
+  const tokenUrl = async () => env('QBO_TOKEN_URL') || (await endpoints()).token;
+  const revokeUrl = async () => env('QBO_REVOKE_URL') || (await endpoints()).revoke;
   const redirect = () => `${publicUrl}/oauth/quickbooks/callback`;
   const basic = () => 'Basic ' + Buffer.from(`${env('QBO_CLIENT_ID')}:${env('QBO_CLIENT_SECRET')}`).toString('base64');
   const pending = new Map(); // state -> { wsId, memberId, exp }
@@ -52,7 +70,7 @@ export function quickbooksModule({ db, save, broadcast, cleanText, readJson, sen
 
   // ---------- Intuit sign-in ----------
   async function tokenCall(form) {
-    const r = await fetch(tokenUrl(), { method: 'POST', headers: { Authorization: basic(), Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams(form) });
+    const r = await fetch(await tokenUrl(), { method: 'POST', headers: { Authorization: basic(), Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams(form) });
     const j = await r.json().catch(() => ({}));
     if (!r.ok) throw Object.assign(new Error(j.error_description || j.error || `Intuit said ${r.status}`), { auth: r.status === 400 || r.status === 401 });
     return { access: j.access_token, refresh: j.refresh_token, exp: Date.now() + (j.expires_in || 3600) * 1000, refreshExp: Date.now() + (j.x_refresh_token_expires_in || 8640000) * 1000 };
@@ -369,7 +387,7 @@ export function quickbooksModule({ db, save, broadcast, cleanText, readJson, sen
   async function revoke(c) {
     try {
       const t = unseal(c.tokens);
-      await fetch(revokeUrl(), { method: 'POST', headers: { Authorization: basic(), Accept: 'application/json', 'Content-Type': 'application/json' }, body: JSON.stringify({ token: t.refresh }) });
+      await fetch(await revokeUrl(), { method: 'POST', headers: { Authorization: basic(), Accept: 'application/json', 'Content-Type': 'application/json' }, body: JSON.stringify({ token: t.refresh }) });
     } catch {}
   }
   async function disconnect(wsId) {
@@ -390,7 +408,7 @@ export function quickbooksModule({ db, save, broadcast, cleanText, readJson, sen
       if (!configured()) return send(res, 400, { error: 'QuickBooks isn’t set up on this Kloomie server yet.' });
       const st = crypto.randomBytes(18).toString('base64url');
       pending.set(st, { wsId: ws.id, memberId: auth.memberId, exp: Date.now() + 15 * 60_000 });
-      const url = `${authUrl()}?` + new URLSearchParams({ client_id: env('QBO_CLIENT_ID'), response_type: 'code', scope: SCOPE, redirect_uri: redirect(), state: st });
+      const url = `${await authUrl()}?` + new URLSearchParams({ client_id: env('QBO_CLIENT_ID'), response_type: 'code', scope: SCOPE, redirect_uri: redirect(), state: st });
       return send(res, 200, { url });
     }
     const c = db.qbo[ws.id];

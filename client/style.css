@@ -2268,3 +2268,7 @@ button.hq-entry:hover { background: var(--card-hover); }
 .ai-test { display: flex; gap: 8px; align-items: flex-start; padding: 6px 0; border-top: 1px solid var(--line); }
 .ai-test span { display: flex; flex-direction: column; gap: 2px; }
 .ai-test small { color: var(--muted); font-size: 12px; }
+
+.ts2-qr { display: block; width: 210px; height: 210px; margin: 6px auto 10px; border-radius: 8px; background: #fff; }
+.ts2-key { user-select: all; word-break: break-all; }
+.ts2-codes { font-family: var(--mono); font-size: 14px; line-height: 1.7; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px 14px; columns: 2; user-select: all; }

@@ -33,6 +33,7 @@ const fake = http.createServer(async (req, res) => {
     if (f.grant_type === 'refresh_token') { if (f.refresh_token !== Q.refresh) return out(400, { error: 'invalid_grant' }); Q.refreshes++; return out(200, issue(shortTokens)); }
     return out(400, { error: 'unsupported_grant_type' });
   }
+  if (u.pathname === '/.well-known/openid_sandbox_configuration') { Q.discovered = (Q.discovered || 0) + 1; return out(200, { issuer: F, authorization_endpoint: F + '/connect', token_endpoint: F + '/token', revocation_endpoint: F + '/revoke' }); }
   if (u.pathname === '/revoke') { Q.revoked.push(JSON.parse(raw).token); return out(200, {}); }
   const m = u.pathname.match(/^\/v3\/company\/R1\/(.+)$/);
   if (!m) return out(404, {});
@@ -88,7 +89,7 @@ const fake = http.createServer(async (req, res) => {
 });
 await new Promise((r) => fake.listen(F_PORT, '127.0.0.1', r));
 const srv = spawn('node', ['index.js'], { cwd: new URL('../server', import.meta.url).pathname, env: { ...process.env, PORT: String(PORT), PUBLIC_URL: B, DATA_DIR: DIR, MAIL_OUTBOX: '1', RESEND_API_KEY: '', DATABASE_URL: '', STRIPE_SECRET_KEY: '',
-  QBO_CLIENT_ID: 'cid', QBO_CLIENT_SECRET: 'csecret', QBO_API: F, QBO_AUTH_URL: F + '/connect', QBO_TOKEN_URL: F + '/token', QBO_REVOKE_URL: F + '/revoke', QBO_TICK_MS: '400', QBO_SOON_MS: '100', QBO_PULL_MS: '2500' }, stdio: ['ignore', 'pipe', 'pipe'] });
+  QBO_CLIENT_ID: 'cid', QBO_CLIENT_SECRET: 'csecret', QBO_API: F, QBO_DISCOVERY_URL: F + '/.well-known/openid_sandbox_configuration', QBO_TICK_MS: '400', QBO_SOON_MS: '100', QBO_PULL_MS: '2500' }, stdio: ['ignore', 'pipe', 'pipe'] });
 srv.log = ''; srv.stdout.on('data', (d) => (srv.log += d)); srv.stderr.on('data', (d) => (srv.log += d));
 for (let i = 0; i < 100; i++) { try { if ((await fetch(B + '/api/health')).ok) break; } catch {} await sleep(150); }
 const call = (tok) => async (m, p, body) => {
@@ -119,6 +120,7 @@ try {
   // Connecting.
   r = await jo('POST', '/quickbooks/connect');
   const auth = new URL(r.body.url);
+  ok(Q.discovered === 1, 'Intuit’s sign-in addresses come from its discovery document');
   ok(auth.origin + auth.pathname === F + '/connect' && auth.searchParams.get('scope') === 'com.intuit.quickbooks.accounting' && auth.searchParams.get('redirect_uri') === B + '/oauth/quickbooks/callback', 'connect sends them to Intuit for the accounting scope');
   const st = auth.searchParams.get('state');
   ok(/expired/i.test(await (await fetch(`${B}/oauth/quickbooks/callback?code=good&state=made-up&realmId=R1`)).text()), 'a made-up state is refused');
