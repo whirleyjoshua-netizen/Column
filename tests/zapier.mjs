@@ -93,6 +93,18 @@ try {
   r = await run(App.creates.record_payment.operation.perform, { invoice_id: inv.id, amount: 100, method: 'check', reference: 'QB-77' });
   ok(r.paid === 100, 'the same reference again isn’t counted twice');
 
+  // Dropdowns instead of typing ids.
+  r = await run(App.triggers.jobs.operation.perform);
+  ok(r.some((x) => x.id === job.id && /AC tune-up/.test(x.name)), 'the Job dropdown lists the job by name');
+  r = await run(App.triggers.unpaid_invoices.operation.perform);
+  ok(r.some((x) => x.id === inv.id && /\$200 owed/.test(x.name)), 'the Invoice dropdown lists what’s still owed');
+  r = await run(App.triggers.contact_list.operation.perform);
+  ok(r.some((x) => x.id === dana.id && /Dana Ruiz/.test(x.name)), 'the Contact dropdown lists Dana');
+  const t2 = await run(App.creates.create_task.operation.perform, { text: 'Order parts' });
+  r = await run(App.triggers.open_tasks.operation.perform);
+  ok(r.some((x) => x.id === t2.id) && !r.some((x) => x.id === task.id), 'the Task dropdown lists open tasks, not done ones');
+  try { await appTester(App.authentication.test, { authData: { api_key: key, server: 'http://evil.example/x' } }); ok(false, 'a non-https address is refused'); } catch (e) { ok(/https:\/\/app\.kloomie\.com/.test(e.message), 'a Kloomie address that isn’t plain https is refused'); }
+
   // Instant triggers: subscribing, a signed delivery, a tampered one, and unsubscribing.
   const targetUrl = `http://127.0.0.1:${H_PORT}/hooks/catch/123/abc`;
   const sub = await run(App.triggers.new_contact.operation.performSubscribe, {}, { targetUrl });

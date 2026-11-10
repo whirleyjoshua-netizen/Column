@@ -13,10 +13,14 @@ const dataOf = (res) => (res.data !== undefined ? res.data : res.json);
 const authentication = {
   type: 'custom',
   fields: [
-    { key: 'api_key', label: 'API key', type: 'password', required: true, helpText: 'In Kloomie, go to **Settings → Connections → Connect other apps** and click **New API key**. An owner or admin makes it, and it’s shown once. Choose **Read and write** so actions work.' },
-    { key: 'server', label: 'Kloomie address', type: 'string', required: false, default: 'https://app.kloomie.com', helpText: 'Leave this as it is unless your team runs Kloomie at its own address.' },
+    { key: 'api_key', label: 'API key', type: 'password', required: true, helpText: 'In Kloomie, go to **Settings → Connections → Connect other apps** and click **New API key** ([how](https://app.kloomie.com/developers#auth)). An owner or admin makes it, and it’s shown once. Choose **Read and write** so actions work.' },
+    { key: 'server', label: 'Kloomie address', type: 'string', required: false, default: 'https://app.kloomie.com', helpText: 'Leave this as it is unless your team runs Kloomie at its own address ([more](https://app.kloomie.com/developers#auth)). It must start with https://.' },
   ],
-  test: async (z, bundle) => dataOf(await z.request({ url: `${base(bundle)}/me` })),
+  test: async (z, bundle) => {
+    const server = String(bundle.authData.server || '').trim();
+    if (server && !/^(https:\/\/[a-z0-9.-]+|http:\/\/(localhost|127\.0\.0\.1))(:\d+)?\/?$/i.test(server)) throw new z.errors.Error('The Kloomie address should look like https://app.kloomie.com, with nothing after it.', 'InvalidData', 400);
+    return dataOf(await z.request({ url: `${base(bundle)}/me` }));
+  },
   connectionLabel: '{{bundle.inputData.team}} ({{bundle.inputData.key}})',
 };
 
@@ -107,6 +111,37 @@ const triggers = [
   hookTrigger({ key: 'payment_received', noun: 'Payment', label: 'Payment Received', description: 'Triggers on every payment on an invoice: card, cash, check, or one recorded in your books.', event: 'payment.received', sample: samplePayment, list: async (z, b) => (await get(z, b, '/invoices', { order: 'newest', limit: 25 })).flatMap((inv) => inv.payments.map((p) => ({ id: p.id, invoice_id: inv.id, invoice_number: inv.number, job_id: inv.job_id, payment: p, invoice: inv, created_at: p.date }))).slice(0, 10) }),
   hookTrigger({ key: 'file_received', noun: 'File', label: 'Files Received', description: 'Triggers when a customer sends files through a Kloomie file request link.', event: 'file.received', sample: sampleFile }),
   hookTrigger({ key: 'document_signed', noun: 'Document', label: 'Document Signed', description: 'Triggers when someone signs a document you sent for signature.', event: 'document.signed', sample: sampleSigned }),
+  // For dropdowns: recent contacts, open tasks, unpaid invoices, jobs.
+  {
+    key: 'contact_list', noun: 'Contact', display: { label: 'Recent Contacts', description: 'Lists recent contacts, for choosing one.', hidden: true },
+    operation: { perform: async (z, b) => (await get(z, b, '/contacts', { order: 'newest', limit: 100 })).map((c) => ({ id: c.id, name: [c.name || c.company, c.email || c.phone].filter(Boolean).join(' · ') })), sample: { id: 'c9AbCdEfGh', name: 'Dana Ruiz · dana@example.com' } },
+  },
+  {
+    key: 'open_tasks', noun: 'Task', display: { label: 'Open Tasks', description: 'Lists tasks not done yet, for choosing one.', hidden: true },
+    operation: { perform: async (z, b) => (await get(z, b, '/tasks', { order: 'newest', done: 'false', limit: 100 })).filter((t) => !t.campaign).map((t) => ({ id: t.id, name: `${t.text}${t.assignee ? ' · ' + t.assignee.name : ''}${t.due ? ' · due ' + t.due : ''}` })), sample: { id: 't4AbCdEfGh', name: 'Call Dana back · Sam · due 2026-12-01' } },
+  },
+  {
+    key: 'unpaid_invoices', noun: 'Invoice', display: { label: 'Unpaid Invoices', description: 'Lists sent invoices with money still owed, for choosing one.', hidden: true },
+    operation: { perform: async (z, b) => (await get(z, b, '/invoices', { order: 'newest', limit: 100 })).filter((x) => ['sent', 'viewed', 'partial'].includes(x.status)).map((x) => ({ id: x.id, name: `${x.number} · ${x.customer.name || x.title} · $${x.balance} owed` })), sample: { id: 'i1AbCdEfGh', name: 'INV-1001 · Dana Ruiz · $300 owed' } },
+  },
+  {
+    key: 'jobs', noun: 'Job', display: { label: 'Jobs', description: 'Lists jobs from the team’s Jobs lists, for choosing one.', hidden: true },
+    operation: {
+      perform: async (z, b) => {
+        const d = dataOf(await z.request({ url: `${base(b)}/projects` }));
+        const out = [];
+        for (const p of (d && d.projects) || []) {
+          for (const t of p.types.filter((x) => x.key.startsWith('trade_') || /job/i.test(x.name))) {
+            const r = dataOf(await z.request({ url: `${base(b)}/projects/${p.id}/${t.key}/records`, params: { limit: 500 } }));
+            const name = t.fields.find((f) => f.primary);
+            for (const rec of (r && r.records) || []) out.push({ id: rec.id, name: `${(name && rec.fields[name.key]) || t.singular || 'Job'}${p.name ? ' · ' + p.name : ''}`, updated: rec.updated_at });
+          }
+        }
+        return out.sort((x, y) => (x.updated < y.updated ? 1 : -1)).slice(0, 200).map(({ id, name }) => ({ id, name }));
+      },
+      sample: { id: 'r8AbCdEfGh', name: 'AC tune-up · Jobs' },
+    },
+  },
   // For dropdowns: the team's people.
   {
     key: 'members', noun: 'Person', display: { label: 'Team Members', description: 'Lists the people on the team, for choosing who a task or visit is for.', hidden: true },
@@ -143,7 +178,7 @@ const creates = [
     key: 'update_contact', noun: 'Contact',
     display: { label: 'Update Contact', description: 'Changes a contact’s details. Find the contact first with Find Contact.' },
     operation: {
-      inputFields: [{ key: 'contact_id', label: 'Contact', required: true, search: 'find_contact.id', helpText: 'The contact’s Kloomie id, usually from Find Contact.' }, ...contactFields.filter((f) => f.key !== 'external_id'), { key: 'do_not_contact', label: 'Do not contact', type: 'boolean' }],
+      inputFields: [{ key: 'contact_id', label: 'Contact', required: true, dynamic: 'contact_list.id.name', search: 'find_contact.id', helpText: 'Pick a recent contact, or use Find Contact.' }, ...contactFields.filter((f) => f.key !== 'external_id'), { key: 'do_not_contact', label: 'Do not contact', type: 'boolean' }],
       perform: async (z, b) => {
         const i = b.inputData;
         const body = { ...pick(i, contactFields.map((f) => f.key)), ...(i.do_not_contact !== undefined && i.do_not_contact !== '' ? { do_not_contact: i.do_not_contact === true || i.do_not_contact === 'true' } : {}) };
@@ -160,7 +195,7 @@ const creates = [
         { key: 'text', label: 'Task', required: true },
         { key: 'due', label: 'Due', type: 'datetime' },
         { key: 'assignee_id', label: 'For', dynamic: 'members.id.name' },
-        { key: 'job_id', label: 'Job ID', helpText: 'A job’s Kloomie id, to put the task on that job.' },
+        { key: 'job_id', label: 'Job', dynamic: 'jobs.id.name', helpText: 'Put the task on a job (optional).' },
         { key: 'priority', label: 'Priority', choices: { 0: 'Normal', 1: 'Low', 2: 'Medium', 3: 'High' } },
       ],
       perform: async (z, b) => {
@@ -174,7 +209,7 @@ const creates = [
     key: 'complete_task', noun: 'Task',
     display: { label: 'Complete Task', description: 'Ticks off a task (not a campaign step, which is worked in Kloomie).' },
     operation: {
-      inputFields: [{ key: 'task_id', label: 'Task ID', required: true }],
+      inputFields: [{ key: 'task_id', label: 'Task', required: true, dynamic: 'open_tasks.id.name' }],
       perform: async (z, b) => send(z, b, 'PATCH', `/tasks/${encodeURIComponent(b.inputData.task_id)}`, { done: true }),
       sample: { ...sampleTask, id: 't4AbCdEfGh', done: true, done_by: 'Zapier (API)' },
     },
@@ -184,7 +219,7 @@ const creates = [
     display: { label: 'Book Visit', description: 'Books a visit to a job, for one person or a crew. Good for booking tools like Calendly.' },
     operation: {
       inputFields: [
-        { key: 'job_id', label: 'Job ID', required: true, helpText: 'The job’s Kloomie id.' },
+        { key: 'job_id', label: 'Job', required: true, dynamic: 'jobs.id.name' },
         { key: 'date', label: 'Day', type: 'datetime', required: true },
         { key: 'start', label: 'Starts at', helpText: 'A time like 09:30 or 2:15pm. Leave empty for any time that day.' },
         { key: 'end', label: 'Ends at', helpText: 'A time like 11:00.' },
@@ -205,7 +240,7 @@ const creates = [
     display: { label: 'Record Payment', description: 'Records a payment taken somewhere else (your books, a bank transfer, cash) on a sent invoice.' },
     operation: {
       inputFields: [
-        { key: 'invoice_id', label: 'Invoice', required: true, search: 'find_invoice.id', helpText: 'The invoice’s Kloomie id, usually from Find Invoice.' },
+        { key: 'invoice_id', label: 'Invoice', required: true, dynamic: 'unpaid_invoices.id.name', search: 'find_invoice.id', helpText: 'Pick an unpaid invoice, or use Find Invoice.' },
         { key: 'amount', label: 'Amount (dollars)', type: 'number', required: true },
         { key: 'method', label: 'How', choices: { cash: 'Cash', check: 'Check', card: 'Card', bank: 'Bank transfer', other: 'Other' }, default: 'other' },
         { key: 'date', label: 'Day', type: 'datetime' },
