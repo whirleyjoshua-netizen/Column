@@ -676,6 +676,8 @@
       renderTool();
     } else if (msg.type === 'quickbooks') {
       if (S.qbo) api('GET', '/quickbooks').then((y) => { S.qbo = y; $('#settings .qbo-sec')?.replaceWith(qboSection()); }).catch(() => {});
+    } else if (msg.type === 'github') {
+      if (GH.p?.id === msg.projectId && $('#sheet:not(.hidden) .gh-sheet')) githubSheet(GH.p);
     } else if (msg.type === 'standup') {
       if (SU.p?.id === msg.projectId && $('#sheet:not(.hidden) .su-report')) standupSheet(SU.p, SU.day);
     } else if (msg.type === 'approvals') {
@@ -8431,7 +8433,7 @@
         h('button', { class: 'icon-btn', 'aria-label': 'All projects', html: I.back, onclick: () => { PR.open = null; renderProjects(); } }),
         h('span', { class: 'pj-ic' }, p.icon), h('b', { class: 'pj-name' }, p.name), p.private ? h('small', { title: 'Private' }, '🔒') : null,
         h('div', { class: 'pj-types' }, p.types.map((x) => h('button', { class: x.id === t.id ? 'on' : null, onclick: () => { PR.type = x.id; PR.view = null; PR.panel = null; renderProjects(); } }, `${x.icon || ''} ${x.name}`, h('small', {}, String(prRecs(p.id).filter((r) => r.typeId === x.id).length))))),
-        isTech(p) ? h('div', { class: 'pj-tools' }, h('button', { class: 'btn small', onclick: () => standupSheet(p) }, '☀️ Standup'), h('button', { class: 'btn small', onclick: () => techDocsSheet(p) }, '📚 Docs')) : null,
+        isTech(p) ? h('div', { class: 'pj-tools' }, h('button', { class: 'btn small', onclick: () => standupSheet(p) }, '☀️ Standup'), h('button', { class: 'btn small', onclick: () => techDocsSheet(p) }, '📚 Docs'), h('button', { class: 'btn small', onclick: () => githubSheet(p) }, '🐙 GitHub')) : null,
         h('button', { class: 'icon-btn', 'aria-label': 'Project options', html: I.more, onclick: more }),
         h('button', { class: 'icon-btn', 'aria-label': 'Close Projects', html: I.close, onclick: closeProjects })),
       h('div', { class: 'pj-bar' },
@@ -8771,6 +8773,62 @@
     ].filter(Boolean));
   }
 
+  // ----- GitHub: a repository webhook ties pull requests and commits to work items by their key -----
+  const GH = { p: null, data: null };
+  async function githubSheet(p) {
+    GH.p = p;
+    try {
+      GH.data = await api('GET', `/projects/${p.id}/github`);
+    } catch (e) {
+      return toast(e.message);
+    }
+    drawGithub();
+  }
+  function drawGithub() {
+    const { p, data: g } = GH;
+    const can = amAdmin() || p.memberId === S.me?.memberId;
+    const keyF = workTypeOf(p) && workTypeOf(p).fields.find((f) => f.type === 'autonumber');
+    const ex = `${(keyF?.prefix || 'APP-')}12`;
+    const copyRow = (label, v) => h('div', { class: 'gh-copy' }, h('small', {}, label), h('code', {}, v), h('button', { class: 'btn small', onclick: () => { copyText(v); toast('Copied'); } }, 'Copy'));
+    const connect = async () => { try { GH.data = await api('POST', `/projects/${p.id}/github`); drawGithub(); } catch (e) { toast(e.message); } };
+    const how = h('p', { class: 'day-hint' }, `Put a work item’s key in a branch name, pull request title or commit message (like ${ex.toLowerCase()}-login-fix or “Fixes ${ex}”). Opening a pull request moves the item to Code review, merging it moves it to Testing, and its commits show on the item. Publishing a release on GitHub marks the release with the same version Released.`);
+    if (!g.connected) return sheet('Connect GitHub', [h('span', { class: 'gh-sheet hidden' }), how, can ? h('div', { class: 'btns' }, h('button', { class: 'btn primary-btn', onclick: connect }, 'Connect a repository')) : h('p', { class: 'day-hint' }, 'Ask whoever made the project, or an owner or admin, to connect it.')].filter(Boolean));
+    const live = g.lastEventAt;
+    sheet('GitHub', [
+      h('span', { class: 'gh-sheet hidden' }),
+      h('p', {}, live ? h('span', {}, '✓ ', h('b', {}, g.repo || 'Connected'), ` · last heard ${ago(g.lastEventAt)} (${g.lastEvent})`) : h('span', {}, '⏳ Waiting for GitHub’s first delivery.')),
+      can && g.secret ? h('div', { class: 'gh-steps' },
+        h('b', {}, live ? 'The webhook' : 'Add a webhook in GitHub'),
+        h('ol', {},
+          h('li', {}, 'In your repository on GitHub, open Settings → Webhooks → Add webhook.'),
+          h('li', {}, copyRow('Payload URL', g.url)),
+          h('li', {}, 'Content type: application/json'),
+          h('li', {}, copyRow('Secret', g.secret)),
+          h('li', {}, 'Which events: choose “Let me select individual events” and tick Pull requests, Pushes and Releases.'),
+          h('li', {}, 'Click Add webhook. GitHub sends a test right away, and this page shows it.'))) : null,
+      how,
+      can ? h('label', { class: 'pick' }, h('input', { type: 'checkbox', checked: g.move, onchange: async (e) => { GH.data = await api('PATCH', `/projects/${p.id}/github`, { move: e.target.checked }).catch((er) => toast(er.message)) || GH.data; } }), 'Move cards when pull requests open and merge') : null,
+      can ? h('div', { class: 'btns' }, h('button', { class: 'btn small', onclick: connect }, 'New address and secret'), (() => { const b = h('button', { class: 'btn small danger', 'data-label': '1' }, 'Disconnect'); b.addEventListener('click', () => confirmClick(b, async () => { GH.data = await api('DELETE', `/projects/${p.id}/github`).catch((e) => toast(e.message)) || GH.data; drawGithub(); })); return b; })()) : null,
+    ].filter(Boolean));
+  }
+  const workTypeOf = (p) => p.types.find((t) => t.key === 'work');
+  const slugify = (s) => String(s || '').toLowerCase().normalize('NFKD').replace(/[^\w\s-]/g, '').trim().replace(/[\s_-]+/g, '-').slice(0, 40).replace(/-$/, '');
+  // On a work item: its branch name to copy, and the pull requests and commits that mention it.
+  function prGithub(p, t, r) {
+    const keyF = t.fields.find((f) => f.type === 'autonumber');
+    const key = keyF && r.values[keyF.id];
+    if (!key) return null;
+    const branch = `${String(key).toLowerCase()}-${slugify(recName(t, r))}`;
+    const prs = r.github?.prs || [];
+    const commits = r.github?.commits || [];
+    const STATE = { open: ['Open', 'green'], draft: ['Draft', 'gray'], merged: ['Merged', 'violet'], closed: ['Closed', 'rose'] };
+    return h('div', { class: 'pj-items pj-job-blk gh-blk' },
+      h('div', { class: 'pj-it-h' }, h('b', {}, '🐙 Code'), h('span', { style: 'flex:1' }), h('button', { class: 'btn small', title: branch, onclick: () => { copyText(branch); toast(`Copied: ${branch}`); } }, 'Copy branch name')),
+      prs.length ? prs.map((x) => h('a', { class: 'gh-pr', href: x.url, target: '_blank', rel: 'noopener' }, pjChip({ label: STATE[x.state]?.[0] || x.state, color: STATE[x.state]?.[1] || 'gray' }), h('span', {}, `#${x.number} ${x.title}`), h('small', {}, [x.author, ago(x.updatedAt)].filter(Boolean).join(' · ')))) : null,
+      commits.length ? commits.slice(0, 5).map((x) => h('a', { class: 'gh-commit', href: x.url, target: '_blank', rel: 'noopener' }, h('code', {}, x.short), h('span', {}, x.message), h('small', {}, [x.author, ago(x.at)].filter(Boolean).join(' · ')))) : null,
+      !prs.length && !commits.length ? h('p', { class: 'day-hint' }, p.github === undefined ? `Put ${key} in a branch, pull request or commit and it shows here (connect GitHub from 🐙 GitHub at the top).` : `Put ${key} in a branch, pull request or commit and it shows here.`) : null);
+  }
+
   // ----- the roadmap timeline: records as bars from start to end, grouped (by phase), with progress and warnings -----
   const shortDay = (k) => keyDate(k).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
   // How much of a record's work is done: the records that link to it whose status is at the last stage.
@@ -9044,6 +9102,7 @@
       top.length ? h('div', { class: 'pj-fields' }, top.map(fieldRow)) : null,
       ...(job ? [] : itemFields.map((f) => prItems(p, t, r, f))),
       h('div', { class: 'pj-fields' }, fields.filter((f) => !top.includes(f)).map(fieldRow)),
+      isTech(p) && t.key === 'work' ? prGithub(p, t, r) : null,
       ...(job ? itemFields.map((f) => prItems(p, t, r, f)) : []),
       job ? prJobMoney(p, t, r) : null,
       ...richFields.map((f) => prRichBlock(p, t, r, f)),

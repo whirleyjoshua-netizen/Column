@@ -23,6 +23,7 @@ import { EVENTS as HOOK_EVENTS } from './projects.js';
 import { hqModule } from './hq.js';
 import { rulesModule } from './rules.js';
 import { standupModule } from './standup.js';
+import { githubModule } from './github.js';
 import { Readable } from 'node:stream';
 import { EventEmitter } from 'node:events';
 import { openStore, Fenced } from './store.js';
@@ -5128,6 +5129,8 @@ async function api(req, res, url) {
   }
 
   // Someone signing a document they were sent: the link is their way in, no account.
+  // GitHub telling a software project about pull requests, pushes and releases (github.js): signed, no sign-in.
+  if (a === 'github' && b === 'hook' && c && m === 'POST') return GH.hook(req, res, c);
   if (a === 'public' && b === 'sign') return signApi(req, res, c, d);
   if (a === 'public' && b === 'request') return requestApi(req, res, url, c, d);
 
@@ -5266,6 +5269,10 @@ async function api(req, res, url) {
   }
   {
     const out = await INV.route(req, res, parts, auth, ws);
+    if (out !== null) return;
+  }
+  if (a === 'projects' && c === 'github') {
+    const out = await GH.route(req, res, parts, auth, ws);
     if (out !== null) return;
   }
   if (a === 'projects' && c === 'standup') {
@@ -8065,6 +8072,7 @@ async function writePlaybook(ws, auth, title, md, id) {
   const made = addItem(baseItem(auth, { type: 'text', text: docText(doc.title || title, doc.blocks), dirId: dir.id, title: doc.title || title, blocks: doc.blocks, refs: docRefs(doc.blocks), v: 0, pinned: true, editedAt: Date.now() }));
   return publicItem(made);
 }
+const GH = githubModule({ db, save, broadcast, rid, cleanText, readJson, send, seal, unseal, isAdmin, PJ, sees: (p, mid) => PJ.sees(p, mid), publicUrl: PUBLIC_URL });
 // Daily standups on a project (standup.js): a blocker becomes a task for the project lead.
 const STANDUP = standupModule({ db, save, broadcast, rid, cleanText, readJson, send, notify, sees: (p, mid) => PJ.sees(p, mid), teamDay: (wsId) => teamDay(wsId),
   localNow: (ws) => { const n = localNow(tzOf(ws), Date.now()); return { day: n.date, weekday: n.dow, minutes: n.min }; },

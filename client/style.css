@@ -2233,3 +2233,14 @@ button.hq-entry:hover { background: var(--card-hover); }
 .su-block { color: #f59e0b; }
 .su-set { display: flex; flex-direction: column; gap: 8px; border-top: 1px solid var(--line); padding-top: 10px; }
 @media (prefers-color-scheme: light) { .su-block { color: #b45309; } .su-entry.blocked { border-color: #d97706; } }
+
+/* GitHub */
+.gh-steps ol { margin: 6px 0 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px; font-size: 13.5px; }
+.gh-copy { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.gh-copy small { color: var(--muted); min-width: 80px; }
+.gh-copy code { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; background: var(--card-hover); padding: 4px 8px; border-radius: 6px; }
+.gh-pr, .gh-commit { display: flex; align-items: center; gap: 8px; padding: 5px 2px; color: var(--text); text-decoration: none; font-size: 13px; min-width: 0; }
+.gh-pr > span:not(.pj-chip), .gh-commit > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gh-pr small, .gh-commit small { color: var(--muted); font-size: 11.5px; white-space: nowrap; }
+.gh-commit code { font-size: 11.5px; color: var(--muted); }
+.gh-pr:hover, .gh-commit:hover { background: var(--card-hover); border-radius: 6px; }

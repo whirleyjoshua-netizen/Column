@@ -178,7 +178,8 @@ export function projectsModule({ db, save, broadcast, rid, hold = null, cleanTex
     return !id || sees(db.projects[id], memberId);
   };
 
-  const publicProject = ({ wsId, ...p }) => p;
+  // The GitHub hook's address and secret stay on the server; the app only hears whether it's connected, and to what.
+  const publicProject = ({ wsId, github, ...p }) => ({ ...p, ...(github ? { github: { connected: true, repo: github.repo || null } } : {}) });
   // A record goes out with the contacts it points at (name and how to reach them), so whoever does the job can
   // call the customer and find the place, even if they can't open Contacts.
   const publicRecord = ({ wsId, log, ...r }) => {
@@ -1609,5 +1610,14 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
   }
   upgradeTech();
 
-  return { route, v1, keyAuth, makeHook, publicHook, deliver, emit, quoteOf, quotePage, seesMsg, stateFor, sees, recordActivity, recordNews, words, fillFromProject, fromProjectOk, recordStory, priceList, recordAt, itemsTotals, TEMPLATES: Object.fromEntries(Object.entries(TEMPLATES).map(([k, t]) => [k, { name: t.name, icon: t.icon, about: t.about }])) };
+  // A change made by something other than a person editing (GitHub moving a card): applied, logged, announced.
+  function updateRecord(ws, p, t, rec, values, by) {
+    const before = { ...rec.values };
+    applyValues(ws, p, t, rec, values, { addChoices: false });
+    logChanges(ws, p, t, rec, before, by);
+    rec.updatedAt = Date.now();
+    recordNews(rec, 'record.updated', by);
+  }
+
+  return { updateRecord, route, v1, keyAuth, makeHook, publicHook, deliver, emit, quoteOf, quotePage, seesMsg, stateFor, sees, recordActivity, recordNews, words, fillFromProject, fromProjectOk, recordStory, priceList, recordAt, itemsTotals, TEMPLATES: Object.fromEntries(Object.entries(TEMPLATES).map(([k, t]) => [k, { name: t.name, icon: t.icon, about: t.about }])) };
 }
