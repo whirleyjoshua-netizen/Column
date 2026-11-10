@@ -8110,6 +8110,7 @@ const server = http.createServer(async (req, res) => {
   if (url.pathname === '/developers') return serveStatic(req, res, new URL('/developers.html', 'http://x'));
   if (url.pathname === '/terms' || url.pathname === '/privacy' || url.pathname === '/help') return serveStatic(req, res, new URL(url.pathname + '.html', 'http://x'));
   if (url.pathname.startsWith('/brand/') && (req.method === 'GET' || req.method === 'HEAD')) return serveLogo(req, res, url);
+  if (url.pathname === '/quickbooks/disconnected' && (req.method === 'GET' || req.method === 'HEAD')) return QB.disconnectedPage(req, res);
   if (url.pathname === '/oauth/quickbooks/callback') return QB.callback(req, res, url).catch((e) => { alarm('Connecting QuickBooks failed', e); if (!res.headersSent) send(res, 500, 'Something went wrong connecting QuickBooks.'); });
   if (url.pathname.startsWith('/oauth/')) return oauthCallback(req, res, url).catch((e) => {
     alarm('Connecting a calendar failed', e);

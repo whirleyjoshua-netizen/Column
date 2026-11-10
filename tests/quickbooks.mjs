@@ -47,6 +47,7 @@ const fake = http.createServer(async (req, res) => {
     return out(200, { QueryResponse: list.length ? { [w[1]]: list } : {} });
   }
   if (path === 'cdc') {
+    Q.cdc = (Q.cdc || 0) + 1;
     const since = Date.parse(u.searchParams.get('changedSince'));
     return out(200, { CDCResponse: [{ QueryResponse: [{ Payment: Q.Payment.filter((p) => p.at > since) }] }] });
   }
@@ -87,7 +88,7 @@ const fake = http.createServer(async (req, res) => {
 });
 await new Promise((r) => fake.listen(F_PORT, '127.0.0.1', r));
 const srv = spawn('node', ['index.js'], { cwd: new URL('../server', import.meta.url).pathname, env: { ...process.env, PORT: String(PORT), PUBLIC_URL: B, DATA_DIR: DIR, MAIL_OUTBOX: '1', RESEND_API_KEY: '', DATABASE_URL: '', STRIPE_SECRET_KEY: '',
-  QBO_CLIENT_ID: 'cid', QBO_CLIENT_SECRET: 'csecret', QBO_API: F, QBO_AUTH_URL: F + '/connect', QBO_TOKEN_URL: F + '/token', QBO_REVOKE_URL: F + '/revoke', QBO_TICK_MS: '400', QBO_SOON_MS: '100' }, stdio: ['ignore', 'pipe', 'pipe'] });
+  QBO_CLIENT_ID: 'cid', QBO_CLIENT_SECRET: 'csecret', QBO_API: F, QBO_AUTH_URL: F + '/connect', QBO_TOKEN_URL: F + '/token', QBO_REVOKE_URL: F + '/revoke', QBO_TICK_MS: '400', QBO_SOON_MS: '100', QBO_PULL_MS: '2500' }, stdio: ['ignore', 'pipe', 'pipe'] });
 srv.log = ''; srv.stdout.on('data', (d) => (srv.log += d)); srv.stderr.on('data', (d) => (srv.log += d));
 for (let i = 0; i < 100; i++) { try { if ((await fetch(B + '/api/health')).ok) break; } catch {} await sleep(150); }
 const call = (tok) => async (m, p, body) => {
@@ -235,6 +236,14 @@ try {
   await sleep(900);
   ok(Q.Estimate.length === 3 && noQuote.id, 'a job whose quote was never sent isn’t copied');
 
+  // Asking QuickBooks what changed is metered, so it's spaced out (2.5s here, 20 minutes for real), not every tick.
+  const cdc0 = Q.cdc || 0;
+  await sleep(3000);
+  ok((Q.cdc || 0) - cdc0 <= 2, `idle, it asks QuickBooks what changed only every so often: ${(Q.cdc || 0) - cdc0} times in 3s, with a check every 0.4s`);
+  const b2 = Q.cdc || 0;
+  await jo('POST', '/quickbooks/sync');
+  ok((Q.cdc || 0) > b2, 'Sync now asks right away');
+
   // Earlier invoices, when asked.
   r = await jo('POST', '/quickbooks/earlier');
   ok(await until(() => Q.Invoice.some((x) => x.DocNumber === early.number)), `asked for: ${early.number} from before is copied too`);
@@ -247,6 +256,9 @@ try {
   const dbText = fs.readFileSync(DIR + '/db.json', 'utf8');
   ok(!dbText.includes(Q.access) && !dbText.includes(Q.refresh), 'the tokens are kept sealed');
   ok(!JSON.stringify((await jo('GET', '/quickbooks')).body).includes('rt_'), 'and never sent to the app');
+
+  const dp = await fetch(B + '/quickbooks/disconnected');
+  ok(dp.status === 200 && /disconnected from QuickBooks/.test(await dp.text()), 'the page Intuit sends people to after disconnecting there explains it');
 
   // Disconnecting.
   const lastRefresh = Q.refresh;

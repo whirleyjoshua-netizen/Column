@@ -23,6 +23,10 @@ const env = (k) => process.env[k] || '';
 const SCOPE = 'com.intuit.quickbooks.accounting';
 const MINOR = '75';
 const TICK = Number(env('QBO_TICK_MS')) || 3 * 60_000;
+// Asking QuickBooks what changed (payments recorded there) is a metered read for Intuit, so it's done every
+// 20 minutes per company, or when someone presses Sync now. Sending Kloomie's own changes isn't metered and
+// happens right away.
+const PULL = Number(env('QBO_PULL_MS')) || 20 * 60_000;
 const ITEM = 'Kloomie services';
 const TAX_ITEM = 'Sales tax (from Kloomie)';
 
@@ -143,7 +147,7 @@ export function quickbooksModule({ db, save, broadcast, cleanText, readJson, sen
 
   // ---------- one run for a team ----------
   const toCopy = (c, inv) => inv.wsId === c.wsId && inv.status !== 'draft' && (inv.createdAt >= (c.from || 0) || inv.qbo?.id);
-  async function run(ws) {
+  async function run(ws, pull) {
     const c = db.qbo[ws.id];
     if (!c || offline(ws.id)) return;
     let did = 0;
@@ -167,7 +171,7 @@ export function quickbooksModule({ db, save, broadcast, cleanText, readJson, sen
         fails.push(`${inv.number}: ${e.message}`);
       }
     }
-    did += await pullPayments(c, ws);
+    if (pull || Date.now() - (c.pulledAt || 0) >= PULL) did += await pullPayments(c, ws);
     c.syncedAt = Date.now();
     c.error = fails.length ? `${fails.length} thing${fails.length > 1 ? 's' : ''} didn’t copy. ${fails[0].slice(0, 300)}` : null;
     return did;
@@ -281,7 +285,7 @@ export function quickbooksModule({ db, save, broadcast, cleanText, readJson, sen
   // Payments recorded in QuickBooks since last time, against invoices that came from Kloomie.
   async function pullPayments(c, ws) {
     const byQbo = new Map(Object.values(db.invoices).filter((x) => x.wsId === ws.id && x.qbo?.id && x.status !== 'void').map((x) => [x.qbo.id, x]));
-    if (!byQbo.size) return 0;
+    if (!byQbo.size) { c.pulledAt = Date.now(); return 0; }
     const since = new Date(Math.max(c.pulledAt || c.at, Date.now() - 29 * 864e5) - 5 * 60_000).toISOString();
     const started = Date.now();
     const out = await qb(c, 'GET', `/cdc?entities=Payment&changedSince=${encodeURIComponent(since)}`);
@@ -309,15 +313,15 @@ export function quickbooksModule({ db, save, broadcast, cleanText, readJson, sen
     return did;
   }
   // One run at a time for a team; asking while one runs waits for it.
-  function sync(ws) {
+  function sync(ws, pull = false) {
     if (busy.has(ws.id)) return busy.get(ws.id);
     const c = db.qbo[ws.id];
     if (!c) return Promise.resolve(0);
     const p = (async () => {
       try {
-        return await run(ws);
+        return await run(ws, pull);
       } catch (e) {
-        if (db.qbo[ws.id] === c) c.error = e.auth ? 'QuickBooks’ sign-in expired. Connect it again.' : 'Couldn’t reach QuickBooks: ' + String(e.message).slice(0, 300);
+        if (db.qbo[ws.id] === c) c.error = e.auth ? 'QuickBooks’ sign-in expired, or Kloomie was disconnected in QuickBooks. Connect it again.' : 'Couldn’t reach QuickBooks: ' + String(e.message).slice(0, 300);
         if (!e.auth) console.error('QuickBooks sync failed:', e.message);
         return 0;
       } finally {
@@ -385,7 +389,8 @@ export function quickbooksModule({ db, save, broadcast, cleanText, readJson, sen
     const c = db.qbo[ws.id];
     if (!c) return send(res, 400, { error: 'Connect QuickBooks first.' });
     if (m === 'POST' && b === 'sync') {
-      await sync(ws);
+      if (busy.has(ws.id)) await busy.get(ws.id);
+      await sync(ws, true);
       return send(res, 200, state(ws));
     }
     // Earlier invoices too: everything already sent, not just what's made from now on.
@@ -436,7 +441,13 @@ export function quickbooksModule({ db, save, broadcast, cleanText, readJson, sen
       return page(res, 'Not connected', 'Something went wrong talking to QuickBooks. Try again in a minute.');
     }
   }
+  // Where Intuit sends someone who disconnects Kloomie from inside QuickBooks (the app's Disconnect URL). Nothing
+  // here says which team, so it only explains; that team's next sync finds the access gone and says so in Settings.
+  function disconnectedPage(req, res) {
+    res.setHeader('X-Robots-Tag', 'noindex');
+    return page(res, 'Kloomie is disconnected from QuickBooks', 'Kloomie can no longer reach that QuickBooks company. Quotes, invoices and payments already copied stay in both places. To connect again, open Kloomie → Settings → Connections → QuickBooks.');
+  }
   const escapeHtml = (s) => String(s).replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch]);
 
-  return { route, callback, soon, sync, disconnect, state };
+  return { route, callback, disconnectedPage, soon, sync, disconnect, state };
 }
