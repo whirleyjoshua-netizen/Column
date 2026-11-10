@@ -7957,8 +7957,31 @@ async function itemFiles(ws, auth, ids) {
   }
   return { files, names, used };
 }
+// The Company Playbook (hq.js) as a doc in a Company HQ folder; made again, the same doc changes (with its history).
+async function writePlaybook(ws, auth, title, md, id) {
+  const doc = textToDoc(md);
+  const it = id && db.items[id]?.wsId === ws.id && db.items[id].type === 'text' ? db.items[id] : null;
+  if (it) {
+    const now = docOf(it);
+    histPush(it, { title: now.title, blocks: now.blocks, at: it.editedAt || it.createdAt, by: it.lastBy || it.by }, auth.member, true);
+    Object.assign(it, { title: doc.title || title, blocks: doc.blocks, v: (it.v || 0) + 1, editedAt: Date.now(), lastBy: auth.member, pinned: true });
+    it.text = docText(it.title, it.blocks);
+    it.refs = docRefs(it.blocks);
+    save();
+    broadcast(ws.id, { type: 'item:update', item: publicItem(it) });
+    return publicItem(it);
+  }
+  let dir = ws.dirs.find((d) => d.name === 'Company HQ' && !d.parentId && !d.private);
+  if (!dir) {
+    dir = { id: rid(8), name: 'Company HQ', parentId: null, private: false, ownerId: auth.memberId, createdAt: Date.now() };
+    ws.dirs.push(dir);
+    broadcast(ws.id, { type: 'workspace' });
+  }
+  const made = addItem(baseItem(auth, { type: 'text', text: docText(doc.title || title, doc.blocks), dirId: dir.id, title: doc.title || title, blocks: doc.blocks, refs: docRefs(doc.blocks), v: 0, pinned: true, editedAt: Date.now() }));
+  return publicItem(made);
+}
 RULES = rulesModule({ db, save, broadcast, rid, cleanText, readJson, send, notify, replay: replayAs });
-HQ = hqModule({ db, save, broadcast, rid, cleanText, readJson, send, isAdmin, aiAsk, aiRun, itemFiles, replyJson, enforced: (ws) => RULES.promptLines(ws), allowLocal: process.env.ALLOW_LOCAL_FETCH === '1' });
+HQ = hqModule({ db, save, broadcast, rid, cleanText, readJson, send, isAdmin, aiAsk, aiRun, itemFiles, replyJson, enforced: (ws) => RULES.promptLines(ws), writePlaybook, allowLocal: process.env.ALLOW_LOCAL_FETCH === '1' });
 for (const ws of Object.values(db.workspaces)) if (HQ.migrate(ws)) save();
 
 const INV = invoicesModule({ db, save, broadcast, rid, hold, cleanText, readJson, send, badRequest, escHtml, brandOf, logoUrl, teamDay, offline, seal, unseal, stripeCall: stripe.callWith, PJ, isAdmin, jobOfRecord, jobLabel, moveJob, publicUrl: PUBLIC_URL, emit: (...a) => { PJ.emit(...a); QB.soon(a[0]); },

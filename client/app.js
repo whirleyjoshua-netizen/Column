@@ -998,6 +998,7 @@
     loadSigns();
     loadPss();
     loadApprovals();
+    if (amAdmin()) loadHq();
     S.panes = S.panes.map((v) => (v.startsWith('stack:') && !stackById(v.slice(6)) ? 'files' : v));
     $('#wsName').textContent = S.workspace.name;
     document.title = `${S.workspace.name} · Kloomie`;
@@ -3554,13 +3555,18 @@
   function toolResult(t, tool, r) {
     const camp = campById(goalById(t.goalId)?.campaignId);
     const area = (v, rows) => { const x = h('textarea', { rows }); x.value = v || ''; return x; };
-    const copy = (get) => h('button', { type: 'button', class: 'btn small', onclick: () => copyText(get()) }, 'Copy');
+    // Using a draft after changing it teaches Kloomie how the team writes (Company HQ learns from edits).
+    let learnt = '';
+    const learn = (kind, draft, final) => { if (final !== draft && final !== learnt) { learnt = final; api('POST', '/hq/learn', { kind, draft, final }).catch(() => {}); } };
+    const copy = (get, kind, draft) => h('button', { type: 'button', class: 'btn small', onclick: () => { copyText(get()); if (kind) learn(kind, draft, get()); } }, 'Copy');
     if (r.kind === 'email') {
       const subject = h('input', { value: r.subject });
       const body = area(r.body, 12);
+      const draft = `${r.subject}\n\n${r.body}`;
+      const final = () => `${subject.value}\n\n${body.value}`;
       return sheet('Email draft', [h('label', {}, 'Subject', subject), h('label', {}, 'Message', body),
-        h('div', { class: 'btns' }, copy(() => `${subject.value}\n\n${body.value}`), h('button', { type: 'button', class: 'btn small', onclick: () => noteOnTask(t, 'Email: ' + subject.value, body.value).then(closeSheet, (e) => toast(e.message)) }, 'Save on the task'))],
-      async () => { M.subject = subject.value; M.body = body.value; M.campaignId = camp?.id || ''; openTool('email'); }, 'Open in Email');
+        h('div', { class: 'btns' }, copy(final, 'email', draft), h('button', { type: 'button', class: 'btn small', onclick: () => { learn('email', draft, final()); noteOnTask(t, 'Email: ' + subject.value, body.value).then(closeSheet, (e) => toast(e.message)); } }, 'Save on the task'))],
+      async () => { learn('email', draft, final()); M.subject = subject.value; M.body = body.value; M.campaignId = camp?.id || ''; openTool('email'); }, 'Open in Email');
     }
     if (r.kind === 'list') {
       const name = h('input', { value: r.name });
@@ -3588,10 +3594,11 @@
     }
     const title = h('input', { value: r.title });
     const text = area(r.text, 16);
-    if (r.kind === 'doc') return sheet('Document draft', [h('label', {}, 'Title', title), h('label', {}, 'Text · # heading, - bullet', text), h('div', { class: 'btns' }, copy(() => text.value))],
-      async () => { const it = await noteOnTask(t, title.value, text.value); if (it) openDoc(it); }, 'Save as a doc on the task');
-    return sheet(tool === 'script' ? 'Call script' : r.title, [h('label', {}, 'Title', title), text, h('div', { class: 'btns' }, copy(() => text.value))],
-      () => noteOnTask(t, title.value, text.value), 'Save on the task');
+    const kindOf = r.kind === 'doc' ? 'doc' : tool === 'script' ? 'script' : null;
+    if (r.kind === 'doc') return sheet('Document draft', [h('label', {}, 'Title', title), h('label', {}, 'Text · # heading, - bullet', text), h('div', { class: 'btns' }, copy(() => text.value, 'doc', r.text))],
+      async () => { learn('doc', r.text, text.value); const it = await noteOnTask(t, title.value, text.value); if (it) openDoc(it); }, 'Save as a doc on the task');
+    return sheet(tool === 'script' ? 'Call script' : r.title, [h('label', {}, 'Title', title), text, h('div', { class: 'btns' }, copy(() => text.value, kindOf, r.text))],
+      () => { if (kindOf) learn(kindOf, r.text, text.value); return noteOnTask(t, title.value, text.value); }, 'Save on the task');
   }
 
   function assignMenu(anchor, t) {
@@ -4446,6 +4453,8 @@
     const me = S.me?.memberId;
     const today = todayKey();
     const out = [];
+    if (amAdmin() && HQ.data?.review) out.push({ kind: 'review', text: 'Are your goals still right?', sub: `It’s been 3 months since anyone checked ${plural(HQ.data.review.goals, 'goal')} in Company HQ`, run: () => { openTool('hq'); setTimeout(() => $('#tool .hq-review')?.scrollIntoView({ block: 'center' }), 60); } });
+    if (amAdmin() && HQ.data?.entries.some((x) => x.status === 'suggested' && x.source?.type === 'learned')) out.push({ kind: 'learned', text: 'Kloomie noticed how you edit drafts', sub: 'A writing preference to accept or dismiss, in Company HQ', run: () => { openTool('hq'); setTimeout(() => $('#tool .hq-sugg')?.scrollIntoView({ block: 'start' }), 60); } });
     if (RU.data?.canApprove) for (const x of RU.data.approvals.filter((y) => y.status === 'pending')) out.push({ kind: 'approve', text: `${x.by} needs your OK`, sub: `${x.summary} · ${ago(x.at)}`, run: () => approvalSheet(x.id) });
     if (amAdmin()) for (const x of (S.automations || []).filter(autoFailing)) out.push({ kind: 'auto', text: `Automation “${x.name}” didn’t run`, sub: x.runs[0].note, run: () => { openSettings('automations', '.auto-list'); setTimeout(() => autoSheet(x), 50); } });
     for (const t of S.tasks) if (t.submitted && !t.done && t.submitted.byId !== me && maySign(t)) out.push({ kind: 'sign', text: `Sign off “${shortText(t.text, 60)}”`, sub: `${t.submitted.by} sent it ${ago(t.submitted.at)}`, run: () => showStep(t) });
@@ -4467,7 +4476,7 @@
   }
   function overviewView() {
     const needs = needsYou();
-    const ICON = { sign: '✓', stuck: '⏳', role: '👤', late: '!', nobody: '?', checkin: '🩺', approve: '✋' };
+    const ICON = { sign: '✓', stuck: '⏳', role: '👤', late: '!', nobody: '?', checkin: '🩺', approve: '✋', review: '🎯', learned: '✎' };
     const live = S.campaigns.filter((c) => c.status === 'active').sort((a, b) => (a.end || '9999') < (b.end || '9999') ? -1 : 1);
     const mains = live.filter((c) => !c.parentId || !live.some((x) => x.id === c.parentId));
     const row = (c, sub) => {
@@ -4781,7 +4790,7 @@
     const card = (cls, title, n, action, ...body) => h('section', { class: 'home-card ' + cls },
       h('div', { class: 'hc-h' }, h('b', {}, title), n ? h('span', { class: 'hc-n' }, String(n)) : null, action ? h('button', { class: 'linkish hc-go', onclick: action[1] }, action[0]) : null), ...body);
     const row = (ic, cls, title, sub, run) => h('button', { class: 'need-row ' + cls, onclick: run }, h('span', { class: 'need-ic' }, ic), h('span', { class: 'need-text' }, h('b', {}, title), sub ? h('small', {}, sub) : null));
-    const ICON = { sign: '✓', stuck: '⏳', role: '👤', late: '!', nobody: '?', checkin: '🩺', auto: '⚙', approve: '✋' };
+    const ICON = { sign: '✓', stuck: '⏳', role: '👤', late: '!', nobody: '?', checkin: '🩺', auto: '⚙', approve: '✋', review: '🎯', learned: '✎' };
     const steps = [...d.up, ...d.late, ...d.dueToday].slice(0, 8);
     const notes = (S.notices || []).filter((n) => !n.kind); // from automations; the rest live in the bell
     const clearNote = (n) => { const gone = n ? [n] : notes; S.notices = (S.notices || []).filter((y) => !gone.includes(y)); renderHome(); drawBell(); for (const x of gone) api('DELETE', '/notices/' + x.id).catch(() => {}); };
@@ -7776,10 +7785,11 @@
       return;
     }
     if (toolOpen === 'hq') renderTool();
+    renderHome?.();
   }
   const hqKind = (k) => HQ.data?.kinds[k] || { name: k };
   const hqPillar = (k) => HQ.data?.pillars.find((p) => p.key === k);
-  const HQ_FROM = { website: () => 'from your website', interview: () => 'from the interview', doc: (s) => `from ${s.name || 'a document'}` };
+  const HQ_FROM = { website: () => 'from your website', interview: () => 'from the interview', doc: (s) => `from ${s.name || 'a document'}`, learned: () => 'learned from your edits' };
   const HQ_LEVEL = { auto: 'Fine without asking', approval: 'Needs an owner’s OK', never: 'Never' };
   const HQ_HORIZON = { long: 'Long term', year: 'This year', quarter: 'This quarter' };
   const HQ_AREAS = [['sales', 'Sales'], ['customers', 'Customers'], ['jobs', 'Jobs'], ['marketing', 'Marketing'], ['money', 'Money'], ['team', 'Team']];
@@ -7816,6 +7826,9 @@
       k.principle ? h('label', {}, 'How important', prio) : null,
       k.rule ? h('label', {}, 'Kloomie may do this', level) : null,
       sugg && x.source?.url ? h('p', { class: 'day-hint' }, 'From ', h('a', { href: x.source.url, target: '_blank', rel: 'noopener' }, x.source.url.replace(/^https?:\/\//, '')), x.source.why ? ` · ${x.source.why}` : '') : null,
+      sugg && x.source?.type === 'interview' ? h('p', { class: 'day-hint' }, `From what you said: “${x.source.why}”`) : null,
+      sugg && x.source?.type === 'learned' ? h('p', { class: 'day-hint' }, `Learned from how drafts were edited${x.source.why ? ': ' + x.source.why : ''}`) : null,
+      sugg && x.source?.type === 'doc' ? h('p', { class: 'day-hint' }, `From ${x.source.name || 'a document'}${x.source.why ? ' · ' + x.source.why : ''}`) : null,
       del ? h('div', { class: 'btns' }, del) : null,
     ].filter(Boolean), async () => {
       const body = { kind, title: title.value, text: text.value, ...(k.principle ? { do: doIt.value, dont: dont.value, areas: areas.filter((a) => a.cb.checked).map((a) => a.v), priority: Number(prio.value) } : {}),
@@ -7959,6 +7972,40 @@
       d.docs.files.length ? h('p', { class: 'day-hint' }, 'Read: ' + d.docs.files.slice(-6).map((x) => `${x.name} (${plural(x.count, 'suggestion')})`).join(' · ')) : null,
       d.docs.gaps.length ? h('p', { class: 'day-hint' }, 'They don’t settle: ' + d.docs.gaps.join(' · ')) : null);
   }
+  // Every three months: are the goals still the goals?
+  function hqReview(d) {
+    const goals = d.entries.filter((x) => x.kind === 'goal' && x.status === 'approved');
+    return h('section', { class: 'hq-import hq-review' },
+      h('b', {}, '🎯 Are these still your priorities?'),
+      h('p', { class: 'day-hint' }, 'It’s been three months. The AI plans around these, so keep them current.'),
+      goals.map((x) => hqEntry(x, true)),
+      h('div', { class: 'btns' }, h('button', { class: 'btn primary-btn', onclick: async () => { hqTook(await api('POST', '/hq/review').catch((e) => toast(e.message))); toast('Thanks. Kloomie will check again in three months.'); } }, 'Still right'),
+        h('button', { class: 'btn', onclick: () => hqSheet('goal') }, '+ Add a goal')));
+  }
+  // The Company Playbook: a doc made from what's approved, and how much Kloomie is learning from edits.
+  function hqPlaybook(d, admin) {
+    const pb = d.playbook;
+    const it = pb && S.items.find((x) => x.id === pb.id);
+    const make = async (btn) => {
+      btn.disabled = true;
+      try {
+        const out = await api('POST', '/hq/playbook');
+        upsert(out.item);
+        hqTook(out);
+        toast(pb ? 'Playbook updated' : 'Playbook made', { label: 'Open', run: () => openDoc(S.items.find((x) => x.id === out.item.id) || out.item) });
+      } catch (e) {
+        toast(e.message);
+        btn.disabled = false;
+      }
+    };
+    const btn = admin ? h('button', { class: 'btn primary-btn' }, pb ? 'Update the Playbook' : 'Make the Playbook') : null;
+    btn?.addEventListener('click', () => make(btn));
+    return h('section', { class: 'hq-import' },
+      h('b', {}, '📘 Company Playbook'),
+      h('p', { class: 'day-hint' }, 'Everything here as one document your team can read: who you are, what you won’t compromise, where you’re going, how you sound, how you work and how you decide. ' + (pb ? `Last made ${ago(pb.at)}${pb.by ? ' by ' + pb.by : ''}.` : 'It’s kept in a Company HQ folder, with its history.')),
+      h('div', { class: 'btns' }, btn, it ? h('button', { class: 'btn', onclick: () => openDoc(it) }, 'Open it') : null),
+      admin && d.learning ? h('p', { class: 'day-hint' }, `Learning from your edits: when someone changes an AI email, document or call script before using it, Kloomie keeps both. Every ${d.learning.every} it looks for what keeps changing and suggests it here.${d.learning.edits ? ` ${plural(d.learning.edits, 'edited draft')} since the last look.` : ''}`) : null);
+  }
   // One kind's entries under its name: short ones (a service, a word to avoid) as chips, the rest in full.
   function hqGroup(list, admin) {
     if (!list.length) return null;
@@ -7999,8 +8046,10 @@
         h('p', { class: 'day-hint' }, d.import ? `Read ${new Date(d.import.at).toLocaleDateString()}: ${plural(d.import.pages.length, 'page')}. Read it again after you change the site.` : 'Kloomie reads your home page and pages like About, Services and FAQ, and suggests entries from what they say. Nothing is added until you accept it.'),
         h('div', { class: 'row-in' }, url, go),
         d.import?.gaps?.length ? h('p', { class: 'day-hint' }, 'Your site doesn’t say: ' + d.import.gaps.join(' · ')) : null) : null,
+      admin && d.review ? hqReview(d) : null,
       admin ? hqDocs(d) : null,
       admin ? hqChat(d) : null,
+      hqPlaybook(d, admin),
       admin && sugg.length ? h('section', { class: 'hq-sugg' },
         h('div', { class: 'hq-sugg-h' }, h('b', {}, `${plural(sugg.length, 'suggestion')} to review`), h('span', { style: 'flex:1' }),
           h('button', { class: 'btn small primary-btn', onclick: acceptAll }, 'Accept all'),

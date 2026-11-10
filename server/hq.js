@@ -46,7 +46,9 @@ export const KINDS = {
 const AREAS = ['sales', 'customers', 'jobs', 'marketing', 'money', 'team'];
 const HORIZONS = ['long', 'year', 'quarter'];
 const LEVELS = ['auto', 'approval', 'never'];
-const SOURCES = ['owner', 'website', 'brand', 'ai', 'interview', 'doc'];
+const SOURCES = ['owner', 'website', 'brand', 'ai', 'interview', 'doc', 'learned'];
+const LEARN_EVERY = 3; // edited drafts before Kloomie looks for a pattern
+const REVIEW_DAYS = Number(process.env.HQ_REVIEW_DAYS || 90); // how often goals get a "still right?" check
 // What a profile needs before the AI has enough to go on: one of each.
 const ESSENTIALS = ['about', 'service', 'area', 'mission', 'value', 'voice', 'goal', 'ideal', 'process', 'rule'];
 
@@ -72,7 +74,7 @@ const MAX_PROMPT = 6000;
 const PAGE_BYTES = 1_500_000;
 const PAGE_CHARS = 6000;
 
-export function hqModule({ db, save, broadcast, rid, cleanText, readJson, send, isAdmin, aiAsk, aiRun, itemFiles, replyJson, enforced = () => [], allowLocal = false }) {
+export function hqModule({ db, save, broadcast, rid, cleanText, readJson, send, isAdmin, aiAsk, aiRun, itemFiles, replyJson, enforced = () => [], writePlaybook = null, allowLocal = false }) {
   db.hq ||= {};
   const entriesOf = (wsId) => Object.values(db.hq).filter((x) => x.wsId === wsId).sort((a, b) => a.createdAt - b.createdAt);
   const approved = (wsId) => entriesOf(wsId).filter((x) => x.status === 'approved');
@@ -109,6 +111,7 @@ export function hqModule({ db, save, broadcast, rid, cleanText, readJson, send, 
     if (status === 'approved') Object.assign(x, { approvedBy: by, approvedAt: Date.now() });
     // Some kinds are one per team (the mission, the tone of voice): an approved one replaces the last.
     if (status === 'approved' && KINDS[x.kind].one) for (const y of approved(ws.id)) if (y.kind === x.kind) delete db.hq[y.id];
+    if (status === 'approved' && x.kind === 'goal') ws.hqReviewedAt = Date.now();
     db.hq[x.id] = x;
     return x;
   }
@@ -121,8 +124,9 @@ export function hqModule({ db, save, broadcast, rid, cleanText, readJson, send, 
   }
 
   // How complete the profile is: the essentials it has (approved), and what's still missing.
-  function progress(wsId) {
-    const have = new Set(approved(wsId).map((x) => x.kind));
+  function progress(ws) {
+    const have = new Set(approved(ws.id).map((x) => x.kind));
+    if (enforced(ws).length) have.add('rule'); // a rule Kloomie enforces counts
     const missing = ESSENTIALS.filter((k) => !have.has(k));
     return { done: ESSENTIALS.length - missing.length, of: ESSENTIALS.length, pct: Math.round(((ESSENTIALS.length - missing.length) / ESSENTIALS.length) * 100), missing: missing.map((k) => ({ kind: k, name: KINDS[k].name, pillar: pillarOf(k) })) };
   }
@@ -131,10 +135,13 @@ export function hqModule({ db, save, broadcast, rid, cleanText, readJson, send, 
     return {
       pillars: PILLARS, kinds: KINDS,
       entries: entriesOf(ws.id).filter((x) => admin || x.status === 'approved').map(publicEntry),
-      progress: progress(ws.id),
+      progress: progress(ws),
       import: admin ? ws.hqImport || null : null,
       chat: admin ? { opening: OPENING, turns: chatOf(ws) } : null,
       docs: admin ? { files: ws.hqDocs || [], gaps: ws.hqDocGaps || [] } : null,
+      learning: admin ? { edits: (ws.hqEdits || []).filter((x) => !x.read).length, every: LEARN_EVERY, lastAt: ws.hqLearnAt || null } : null,
+      review: reviewDue(ws),
+      playbook: ws.hqPlaybook || null,
     };
   }
 
@@ -411,12 +418,107 @@ Reply with JSON only: {"entries":[${ENTRY_SHAPE.replace('"why":"where this came 
     return { added: added.length, files: names.length, gaps: ws.hqDocGaps };
   }
 
+  // ---------- learning from edits ----------
+  // When someone uses an AI draft (an email, a document, a call script) after changing it, the before and after
+  // are kept. Every few, the AI looks for what keeps changing (shorter, no exclamation marks, a sign-off, a word
+  // they always swap) and suggests it as a lasting preference; one-off fixes to the content are ignored.
+  const LEARN_SYSTEM = `You compare AI drafts with how someone at a small business changed them before using them. Find lasting preferences for how this business writes: tone, length, structure, words they add or always remove, greetings and sign-offs, claims they take out. Ignore one-off fixes to facts or content. Only suggest a preference that shows up in at least two of the edits, or one that is unmistakable.
+
+Kinds you can use: voice (Tone of voice: a full replacement description of how they sound, folding in what you see), prefer (Words we use), avoid (Words we avoid), never (Never promise or claim).
+
+Reply with JSON only: {"entries":[${ENTRY_SHAPE}],"seen":"one plain sentence on what you noticed, or empty"}. Use "why" to say what the edits showed, briefly. If there's no clear pattern, return no entries.`;
+  async function learnNow(ws, memberId, by) {
+    const fresh = (ws.hqEdits || []).filter((x) => !x.read);
+    if (fresh.length < LEARN_EVERY) return null;
+    for (const x of fresh) x.read = true;
+    ws.hqLearnAt = Date.now();
+    const brief = fresh.map((x, i) => `EDIT ${i + 1} (${x.kind}, by ${x.by})\nDRAFT:\n${x.draft}\n\nWHAT THEY USED:\n${x.final}`).join('\n\n---\n\n');
+    const voice = approved(ws.id).find((x) => x.kind === 'voice');
+    // On the AI key of whoever's edit tipped it over, else an owner's or admin's (keys are each person's own).
+    const history = [{ role: 'user', text: `The business is called ${ws.name}.${voice ? ` Their tone of voice so far: ${voice.text}` : ''}\n\n${brief}` }];
+    let text = null;
+    for (const id of [memberId, ...ws.members.filter((m) => m.role === 'owner' || m.role === 'admin').map((m) => m.id)]) {
+      try {
+        text = await aiRun(ws, id, LEARN_SYSTEM, history, 'profile');
+        break;
+      } catch (e) {
+        if (e.status !== 400) throw e;
+      }
+    }
+    if (text == null) {
+      for (const x of fresh) x.read = false; // nobody has a key yet: try again on the next edit
+      save();
+      return null;
+    }
+    const out = replyJson(text);
+    const added = suggest(ws, { member: by }, (Array.isArray(out.entries) ? out.entries : []).filter((e) => ['voice', 'prefer', 'avoid', 'never'].includes(e?.kind)), (e) => ({ type: 'learned', why: cleanText(e.why || out.seen, 300) }));
+    ws.hqLearned = { at: Date.now(), seen: cleanText(out.seen, 300), count: added.length };
+    save();
+    news(ws.id);
+    return added;
+  }
+  function learn(ws, auth, body) {
+    const kind = ['email', 'doc', 'script', 'message'].includes(body.kind) ? body.kind : 'other';
+    const draft = cleanText(body.draft, 4000);
+    const final = cleanText(body.final, 4000);
+    if (!draft || !final || draft === final) return { kept: false };
+    // A tiny change (a typo) teaches nothing.
+    const a = draft.split(/\s+/), b = final.split(/\s+/);
+    const shared = a.filter((w, i) => b[i] === w).length;
+    if (Math.abs(a.length - b.length) < 3 && shared / Math.max(a.length, b.length) > 0.95) return { kept: false };
+    ws.hqEdits = [...(ws.hqEdits || []), { kind, draft, final, by: auth.member, at: Date.now() }].slice(-20);
+    save();
+    // Looked at in the background: the person using the draft doesn't wait.
+    if (ws.hqEdits.filter((x) => !x.read).length >= LEARN_EVERY) learnNow(ws, auth.memberId, auth.member).catch((e) => console.error('Learning from edits failed:', e.message));
+    return { kept: true };
+  }
+
+  // ---------- the quarterly check on goals ----------
+  function reviewDue(ws) {
+    const goals = approved(ws.id).filter((x) => x.kind === 'goal');
+    if (!goals.length) return null;
+    const since = ws.hqReviewedAt || Math.min(...goals.map((x) => x.approvedAt || x.createdAt));
+    return Date.now() - since > REVIEW_DAYS * 864e5 ? { since, goals: goals.length } : null;
+  }
+
+  // ---------- the Company Playbook ----------
+  // A living doc made from what's approved: who the business is, why it exists, what it won't compromise, where
+  // it's going, who it serves, how it sounds, how it works and how it decides. Kept in the Company HQ folder,
+  // with the doc's own history; making it again updates the same doc.
+  function playbookText(ws) {
+    const es = approved(ws.id);
+    const of = (...kinds) => kinds.flatMap((k) => es.filter((x) => x.kind === k));
+    const one = (k) => es.find((x) => x.kind === k)?.text || '';
+    const item = (x) => `- ${x.title || KINDS[x.kind].name}${x.text && x.title ? ': ' + x.text : !x.title && x.text ? ': ' + x.text : ''}`;
+    const sec = (title, lines) => (lines.filter(Boolean).length ? [`## ${title}`, ...lines.filter(Boolean), ''] : []);
+    const horizon = { quarter: 'This quarter', year: 'This year', long: 'Long term' };
+    const goals = of('goal').sort((a, b) => ['quarter', 'year', 'long'].indexOf(a.horizon) - ['quarter', 'year', 'long'].indexOf(b.horizon) || (a.priority || 2) - (b.priority || 2));
+    const rules = of('rule');
+    const level = { auto: 'fine without asking', approval: 'needs an owner’s OK', never: 'never' };
+    const missing = progress(ws).missing.map((m) => m.name.toLowerCase());
+    return [
+      `# ${ws.name} Company Playbook`,
+      `How ${ws.name} works, and how Kloomie and its AI understand the business. Made from Company HQ on ${new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}; make it again there after the profile changes.`,
+      '',
+      ...sec('Who we are', [one('about'), of('service').length ? `What we offer: ${of('service').map((x) => x.title || x.text).join(', ')}.` : '', one('area') && `Where we work: ${one('area')}`, one('model') && `How we make money: ${one('model')}`, ...of('different').map(item), ...of('notwanted').map((x) => `- Work we don’t take: ${x.title || x.text}${x.title && x.text ? ' (' + x.text + ')' : ''}`)]),
+      ...sec('Why we exist', [one('mission') && `Mission: ${one('mission')}`, one('story')]),
+      ...sec('What we never compromise', of('value').sort((a, b) => (a.priority || 2) - (b.priority || 2)).flatMap((x) => [item(x), ...(x.do || []).map((d) => `  - Do: ${d}`), ...(x.dont || []).map((d) => `  - Never: ${d}`)])),
+      ...sec('Where we’re going', [one('vision') && `Where we’re headed: ${one('vision')}`, ...goals.map((x) => `- ${horizon[x.horizon] || 'Goal'}: ${x.title || x.text}${x.target ? ` (target: ${x.target})` : ''}${x.deadline ? `, by ${x.deadline}` : ''}${x.priority === 1 ? ' · top priority' : ''}`)]),
+      ...sec('Who we serve', [...of('ideal').map(item), ...of('why').map((x) => `- Why they choose us: ${x.title || x.text}${x.title && x.text ? ': ' + x.text : ''}`), ...of('objection').map((x) => `- When they push back: ${x.title || x.text}${x.title && x.text ? ': ' + x.text : ''}`)]),
+      ...sec('How we sound', [one('voice'), ...of('prefer').map((x) => `- We say: ${x.title || x.text}${x.title && x.text ? ' (' + x.text + ')' : ''}`), ...of('avoid').map((x) => `- We don’t say: ${x.title || x.text}${x.title && x.text ? ' (' + x.text + ')' : ''}`), ...of('never').map((x) => `- We never promise: ${x.title || ''}${x.title && x.text ? ': ' : ''}${x.text || ''}`)]),
+      ...sec('How we work', [...of('process').map(item), ...of('policy').map(item), ...of('pricing').map(item), ...of('culture').map(item)]),
+      ...sec('How we decide', [...enforced(ws).map((l) => l.replace(/^- /, '- Enforced: ')), ...rules.map((x) => `- ${x.title || ''}${x.title && x.text ? ': ' : ''}${x.text || ''} (${level[x.level] || 'needs an owner’s OK'})`)]),
+      ...sec('Still to fill in', missing.length ? [`Company HQ doesn’t have these yet: ${missing.join(', ')}.`] : []),
+    ].join('\n').trim();
+  }
+
   // ---------- routes: /api/hq ----------
   async function route(req, res, parts, auth, ws) {
     const [a, b, c, d] = parts;
     if (a !== 'hq') return null;
     const m = req.method;
     if (!b && m === 'GET') return send(res, 200, state(ws, auth));
+    if (b === 'learn' && !c && m === 'POST') return send(res, 200, learn(ws, auth, await readJson(req)));
     if (!isAdmin(auth)) return send(res, 403, { error: 'Only team owners and admins can change Company HQ.' });
     if (b === 'import' && !c && m === 'POST') {
       const body = await readJson(req);
@@ -427,6 +529,21 @@ Reply with JSON only: {"entries":[${ENTRY_SHAPE.replace('"why":"where this came 
         if (!e.status) console.error('Website import failed:', e.message);
         return send(res, e.status || 502, { error: e.status ? e.message : 'Couldn’t read the site just now. Try again in a minute.' });
       }
+    }
+    if (b === 'playbook' && !c && m === 'POST') {
+      if (!writePlaybook) return send(res, 400, { error: 'Not available' });
+      if (!approved(ws.id).length) return send(res, 400, { error: 'Add something to Company HQ first: the Playbook is made from it.' });
+      const it = await writePlaybook(ws, auth, `${ws.name} Company Playbook`, playbookText(ws), ws.hqPlaybook?.id || null);
+      ws.hqPlaybook = { id: it.id, at: Date.now(), by: auth.member };
+      save();
+      news(ws.id);
+      return send(res, 200, { item: it, ...state(ws, auth) });
+    }
+    if (b === 'review' && !c && m === 'POST') {
+      ws.hqReviewedAt = Date.now();
+      save();
+      news(ws.id);
+      return send(res, 200, state(ws, auth));
     }
     if (b === 'interview' && !c && (m === 'POST' || m === 'DELETE')) {
       try {
@@ -483,6 +600,7 @@ Reply with JSON only: {"entries":[${ENTRY_SHAPE.replace('"why":"where this came 
       try { fields = clean(body, x); } catch (e) { return send(res, 400, { error: e.message }); }
       Object.assign(x, fields, { updatedAt: Date.now(), editedBy: auth.member });
       if (body.approve) approveIn(ws, x, auth.member);
+      if (x.kind === 'goal' && x.status === 'approved') ws.hqReviewedAt = Date.now();
       save();
       news(ws.id);
       return send(res, 200, { entry: publicEntry(x), ...state(ws, auth) });
@@ -502,5 +620,5 @@ Reply with JSON only: {"entries":[${ENTRY_SHAPE.replace('"why":"where this came 
     return send(res, 405, { error: 'Method not allowed' });
   }
 
-  return { route, prompt, brandText, setBrandText, migrate, state, progress, readSite };
+  return { route, prompt, brandText, setBrandText, migrate, state, progress, readSite, playbookText, learnNow };
 }
