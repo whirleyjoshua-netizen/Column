@@ -79,7 +79,7 @@ const claude = {
 
 // ---------- OpenAI (Responses API) ----------
 async function openaiCall(key, pathname, body) {
-  const res = await fetch('https://api.openai.com/v1' + pathname, {
+  const res = await fetch((process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1') + pathname, {
     method: body ? 'POST' : 'GET',
     headers: { Authorization: 'Bearer ' + key, ...(body ? { 'Content-Type': 'application/json' } : {}) },
     body: body ? JSON.stringify(body) : undefined,
@@ -128,7 +128,7 @@ const openai = {
 
 // ---------- Gemini ----------
 async function geminiCall(key, pathname, body) {
-  const res = await fetch('https://generativelanguage.googleapis.com/v1beta' + pathname, {
+  const res = await fetch((process.env.GEMINI_BASE_URL || 'https://generativelanguage.googleapis.com') + '/v1beta' + pathname, {
     method: body ? 'POST' : 'GET',
     headers: { 'x-goog-api-key': key, ...(body ? { 'Content-Type': 'application/json' } : {}) },
     body: body ? JSON.stringify(body) : undefined,

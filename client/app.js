@@ -661,6 +661,8 @@
       if (x && was && x.status !== was.status && (x.status === 'signed' || x.status === 'declined')) {
         toast(`${x.signer.name} ${x.status === 'signed' ? 'signed' : 'declined to sign'} “${x.name}”`, { label: 'Details', run: () => signSheet(x) });
       }
+    } else if (msg.type === 'postiz') {
+      api('GET', '/postiz').then((y) => { S.postiz = y; if (AG.data) AG.postiz = y; $('#settings .pz-sec')?.replaceWith(postizSection()); renderTool(); }).catch(() => {});
     } else if (msg.type === 'agent' || msg.type === 'agent:remove') {
       agNews(msg);
     } else if (msg.type === 'sidekick' || msg.type === 'sidekick:remove') {
@@ -8319,7 +8321,7 @@
     execute: ['Execute', 'Makes routine changes itself (tasks, time, records, docs). Emails wait for your yes.'],
     automate: ['Automate', 'As Execute, and runs its scheduled workflows on its own.'],
   };
-  const AG_TOOL_NAMES = { look_at_day: 'Your calendar and day', list_tasks: 'Tasks', list_projects: 'Jobs & projects (the setup)', find_records: 'Jobs, leads and deals', read_record: 'A record’s full history', list_campaigns: 'Campaigns', find_contacts: 'Contacts', team_schedule: 'The team’s visits', plan_route: 'Routes', find_docs: 'Docs', read_doc: 'A doc’s text', create_task: 'Make tasks', update_task: 'Reschedule, reassign or finish tasks', schedule_time: 'Put time on your calendar', move_time: 'Move time it put there', save_contact: 'Save contacts', create_project: 'Start projects', create_record: 'Add jobs, leads, deals…', update_record: 'Update records', log_note: 'Log calls and notes', book_visit: 'Book visits', write_doc: 'Write docs', draft_email: 'Draft emails', notify_me: 'Send you a heads-up' };
+  const AG_TOOL_NAMES = { look_at_day: 'Your calendar and day', list_tasks: 'Tasks', list_projects: 'Jobs & projects (the setup)', find_records: 'Jobs, leads and deals', read_record: 'A record’s full history', list_campaigns: 'Campaigns', find_contacts: 'Contacts', team_schedule: 'The team’s visits', plan_route: 'Routes', find_docs: 'Docs', read_doc: 'A doc’s text', create_task: 'Make tasks', update_task: 'Reschedule, reassign or finish tasks', schedule_time: 'Put time on your calendar', move_time: 'Move time it put there', save_contact: 'Save contacts', create_project: 'Start projects', create_record: 'Add jobs, leads, deals…', update_record: 'Update records', log_note: 'Log calls and notes', book_visit: 'Book visits', write_doc: 'Write docs', draft_email: 'Draft emails', notify_me: 'Send you a heads-up', marketing_snapshot: 'What’s bringing in work (leads by source, jobs won, campaigns, posts)', find_customers: 'Past and recent customers', list_channels: 'Your social channels', social_posts: 'Your posts in Postiz', create_campaign: 'Start campaigns with goals and tasks', make_list: 'Make lists of people to reach', make_image: 'Make pictures (on your OpenAI or Gemini key)', draft_social_post: 'Draft social and Google posts', draft_email_campaign: 'Draft email campaigns' };
   const AG_STATUS = { requested: 'Starting', planning: 'Planning', running: 'Working', awaiting: 'Needs your yes', completed: 'Done', failed: 'Didn’t finish', blocked: 'Has a question', cancelled: 'Stopped' };
   const AG_DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
   const agRunning = (x) => ['requested', 'planning', 'running'].includes(x.status);
@@ -8336,7 +8338,7 @@
   async function loadAgents() {
     if (AG.loading || !toolOn('agents')) return;
     AG.loading = true;
-    try { AG.data = await api('GET', '/agents'); } catch {}
+    try { AG.data = await api('GET', '/agents'); AG.postiz = await api('GET', '/postiz').catch(() => null); } catch {}
     AG.loading = false;
     renderTool();
     renderHome();
@@ -8410,9 +8412,9 @@
     const waiting = agWaiting();
     const busy = Object.values(d.agents).filter((a) => a.busy).length;
     return [
-      h('div', { class: 'ag-hero' }, h('b', {}, 'Meet your team'), h('p', { class: 'day-hint' }, 'Three specialists who organize the work for you, in your tasks, calendar, jobs and docs. Tell them what needs doing; they work out who does what.')),
+      h('div', { class: 'ag-hero' }, h('b', {}, 'Meet your team'), h('p', { class: 'day-hint' }, 'Four specialists who organize the work for you, in your tasks, calendar, jobs, campaigns and docs. Tell them what needs doing; they work out who does what.')),
       agNoKey(),
-      agBox('team', 'What needs to get done? e.g. Plan my day · Follow up with customers who went quiet · I just landed a job for 12 blinds across three properties, organize it', 'Ask your team'),
+      agBox('team', 'What needs to get done? e.g. Plan my day · Follow up with customers who went quiet · I just landed a job for 12 blinds across three properties, organize it · Plan next month’s marketing', 'Ask your team'),
       h('div', { class: 'ag-sec-h' }, h('b', {}, 'Your specialists'), h('small', {}, busy ? `${busy} working` : `${Object.keys(d.agents).length} ready`)),
       h('div', { class: 'ag-cards' }, Object.entries(d.agents).map(([k, a]) => h('button', { class: 'ag-card', onclick: () => agOpen(k, 'overview') },
         h('span', { class: 'ag-ic' }, a.icon),
@@ -8490,7 +8492,7 @@
         on.addEventListener('change', () => put(on.checked ? [...a.schedules, { workflow: w.key, days: w.sched?.days || [1, 2, 3, 4, 5], at: w.sched?.at ?? 8 * 60 }] : a.schedules.filter((x) => x.workflow !== w.key)));
         const time = h('input', { type: 'time', value: timeStr(s?.at ?? w.sched?.at ?? 480), disabled: !s, 'aria-label': w.name + ' time' });
         time.addEventListener('change', () => { const [hh, mm] = time.value.split(':').map(Number); put(a.schedules.map((x) => (x.workflow === w.key ? { ...x, at: hh * 60 + mm } : x))); });
-        return h('div', { class: 'ag-sched' + (s ? ' on' : '') }, h('label', { class: 'ag-sched-t' }, on, h('b', {}, w.name)),
+        return h('div', { class: 'ag-sched' + (s ? ' on' : '') }, h('label', { class: 'ag-sched-t' }, on, h('b', {}, w.name), w.monthly ? h('small', { class: 'day-hint' }, 'first week of the month') : null),
           h('div', { class: 'ag-days' }, AG_DAYS.map((dn, i) => h('button', { class: 'ag-day' + (s?.days.includes(i) ? ' on' : ''), disabled: !s, 'aria-pressed': String(!!s?.days.includes(i)), onclick: () => { const days = s.days.includes(i) ? s.days.filter((x) => x !== i) : [...s.days, i]; if (days.length) put(a.schedules.map((x) => (x.workflow === w.key ? { ...x, days } : x))); } }, dn[0]))),
           time);
       }),
@@ -8517,6 +8519,8 @@
     if (c.kind === 'project') { closeTool(); return openProject(c.id); }
     if (c.kind === 'doc') { closeTool(); return goTo('doc:' + c.id); }
     if (c.kind === 'contact') return openTool('contacts');
+    if (c.kind === 'campaign') { closeTool(); return campById(c.id) ? openCampaign(c.id) : setTab('camps'); }
+    if (c.kind === 'image') { const it = S.items.find((y) => y.id === c.id); return it ? openPreview(it) : toast('That picture isn’t here any more.'); }
   }
   async function agStep(x, ids, what, args) {
     try {
@@ -8536,7 +8540,10 @@
   function agStepRow(x, s) {
     if (s.kind === 'read') return h('div', { class: 'ag-step read' + (s.status === 'failed' ? ' failed' : '') }, h('span', { class: 'ag-step-ic' }, s.status === 'failed' ? '⚠' : '·'), h('span', {}, s.label, s.error ? h('small', {}, s.error) : null));
     if (s.kind === 'handoff') return h('div', { class: 'ag-step handoff' }, h('span', { class: 'ag-step-ic' }, '→'), h('span', {}, s.label));
-    const links = (s.changed || []).filter((c) => c.id && s.status === 'done').map((c) => h('button', { class: 'linkish', onclick: () => agGo(c) }, 'Open'));
+    const links = (s.changed || []).filter((c) => c.id && s.status === 'done' && c.kind !== 'post').map((c) => h('button', { class: 'linkish', onclick: () => agGo(c) }, 'Open'));
+    const pic = s.tool === 'make_image' && s.status === 'done' && S.items.find((y) => y.id === s.changed?.[0]?.id);
+    if (s.tool === 'draft_social_post' && s.status === 'proposed') return agPostDraft(x, s);
+    if (s.tool === 'draft_email_campaign' && s.status === 'proposed') return agCampaignDraft(x, s);
     if (s.tool === 'draft_email' && s.status === 'proposed') {
       const to = h('input', { value: s.args.to_email || '', 'aria-label': 'To' });
       const sub = h('input', { value: s.args.subject || '', 'aria-label': 'Subject' });
@@ -8554,11 +8561,78 @@
       h('span', { class: 'ag-step-ic' }, AG_ICON[s.status] || '·'),
       h('span', { class: 'ag-step-t' }, h('span', {}, s.label), s.why ? h('small', {}, s.why) : null,
         s.status === 'held' ? h('small', { class: 'ag-held' }, s.error || 'Waiting for an owner’s OK') : s.status === 'failed' || (s.error && s.status === 'done') ? h('small', { class: 'ag-err' }, s.error) : null,
-        s.status === 'suggested' ? h('small', {}, 'Suggestion only (Observe)') : null),
+        s.status === 'suggested' ? h('small', {}, 'Suggestion only (Observe)') : null,
+        pic ? h('img', { class: 'ag-pic', src: fileUrl(pic), alt: s.label, loading: 'lazy', onclick: () => openPreview(pic) }) : null),
       h('span', { class: 'ag-step-act' },
         s.status === 'proposed' ? [h('button', { class: 'btn small primary-btn', onclick: (e) => { e.currentTarget.disabled = true; agStep(x, [s.id], 'approve'); } }, 'Approve'), h('button', { class: 'btn small', onclick: () => agStep(x, [s.id], 'skip') }, 'Skip')] : null,
         ...links,
         s.status === 'done' && s.undo ? h('button', { class: 'linkish', onclick: () => agStep(x, [s.id], 'undo') }, 'Undo') : null));
+  }
+  // A post waiting for a yes: change the words, channels, time or picture, then post or schedule it through Postiz.
+  const agLocal = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}T${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  function agPostDraft(x, s) {
+    const a = s.args;
+    const pz = AG.postiz;
+    const chans = (pz?.channels || []).filter((c) => c.usable);
+    const want = (Array.isArray(a.channels) ? a.channels : [a.channels]).map((v) => String(v || '').toLowerCase());
+    const picked = new Set(chans.filter((c) => want.some((w) => [c.id.toLowerCase(), c.name.toLowerCase(), c.kindName.toLowerCase(), c.kind].includes(w))).map((c) => c.id));
+    const body = h('textarea', { rows: 5, 'aria-label': 'Post' });
+    body.value = a.text || '';
+    const count = h('small', { class: 'day-hint' });
+    const recount = () => { const n = body.value.length; const lim = Math.min(...chans.filter((c) => picked.has(c.id)).map((c) => ({ x: 280, threads: 500, bluesky: 300, mastodon: 500 })[c.kind] || Infinity)); count.textContent = `${n} characters${Number.isFinite(lim) ? ` of ${lim}` : ''}`; count.classList.toggle('err', n > lim); };
+    body.addEventListener('input', recount);
+    const chips = h('div', { class: 'ag-chans' }, chans.map((c) => {
+      const b = h('button', { type: 'button', class: 'chip' + (picked.has(c.id) ? ' on' : ''), 'aria-pressed': String(picked.has(c.id)) }, `${c.kindName} · ${c.name}`);
+      b.onclick = () => { picked.has(c.id) ? picked.delete(c.id) : picked.add(c.id); b.classList.toggle('on'); b.setAttribute('aria-pressed', String(picked.has(c.id))); recount(); };
+      return b;
+    }));
+    const whenSel = h('select', { 'aria-label': 'When' }, h('option', { value: 'now' }, 'Post now'), h('option', { value: 'at' }, 'Schedule for…'), h('option', { value: 'draft' }, 'Save as a draft in Postiz'));
+    const at = h('input', { type: 'datetime-local', 'aria-label': 'When to post' });
+    const m = String(a.when || '').match(/^(\d{4}-\d{2}-\d{2})[ T](\d{1,2}):(\d{2})/);
+    if (m) { whenSel.value = 'at'; at.value = `${m[1]}T${m[2].padStart(2, '0')}:${m[3]}`; } else { whenSel.value = a.when === 'draft' ? 'draft' : 'now'; at.value = agLocal(new Date(Date.now() + 864e5)); }
+    const showAt = () => { at.hidden = whenSel.value !== 'at'; go.textContent = whenSel.value === 'at' ? 'Schedule' : whenSel.value === 'draft' ? 'Save to Postiz' : 'Post now'; };
+    let image = a.image_id || null;
+    const it = image && S.items.find((y) => y.id === image);
+    const picBox = h('div', { class: 'ag-post-pic' }, it ? [h('img', { src: fileUrl(it), alt: 'Picture for the post', onclick: () => openPreview(it) }), h('button', { class: 'linkish', onclick: () => { image = null; picBox.replaceChildren(h('small', { class: 'day-hint' }, 'No picture (Instagram needs one)')); } }, 'Remove picture')] : h('small', { class: 'day-hint' }, 'No picture'));
+    const go = h('button', { class: 'btn small primary-btn', disabled: !pz?.connected });
+    whenSel.addEventListener('change', showAt);
+    go.onclick = () => {
+      if (!picked.size) return toast('Pick at least one channel.');
+      go.disabled = true;
+      agStep(x, [s.id], 'approve', { text: body.value, channels: [...picked], when: whenSel.value === 'at' ? at.value.replace('T', ' ') : whenSel.value, image_id: image });
+    };
+    showAt();
+    recount();
+    return h('div', { class: 'ag-step email post' },
+      h('div', { class: 'ag-email-h' }, h('b', {}, '📣 Draft post'), s.why ? h('small', {}, s.why) : null),
+      pz?.connected ? chips : h('p', { class: 'ag-note' }, h('span', {}, 'Postiz isn’t connected, so copy this and post it yourself, or an owner can connect Postiz in Settings → Connections.')),
+      body, count, picBox,
+      pz?.connected ? h('div', { class: 'ag-when' }, whenSel, at) : null,
+      h('div', { class: 'ag-step-act' }, pz?.connected ? go : null,
+        h('button', { class: 'btn small', onclick: () => copyText(body.value) }, 'Copy'),
+        it ? h('a', { class: 'btn small', href: fileUrl(it, { dl: true }), download: it.name }, 'Save picture') : null,
+        h('button', { class: 'btn small', onclick: () => agStep(x, [s.id], 'skip') }, 'Don’t post')));
+  }
+  // An email to many people, waiting for a yes: the words and who it goes to.
+  function agCampaignDraft(x, s) {
+    const a = s.args;
+    let ids = (a.contact_ids || []).slice();
+    const sub = h('input', { value: a.subject || '', 'aria-label': 'Subject' });
+    const body = h('textarea', { rows: 9, 'aria-label': 'Email' });
+    body.value = a.body || '';
+    const who = h('div', { class: 'ag-who' });
+    const go = h('button', { class: 'btn small primary-btn' });
+    const draw = () => {
+      go.textContent = `Send to ${ids.length}`;
+      go.disabled = !ids.length;
+      who.replaceChildren(...ids.slice(0, 60).map((id) => h('span', { class: 'chip on' }, s.names?.[id] || 'Contact', h('button', { class: 'ag-x', 'aria-label': 'Leave out', onclick: () => { ids = ids.filter((y) => y !== id); draw(); } }, '×'))), ...(ids.length > 60 ? [h('small', { class: 'day-hint' }, `and ${ids.length - 60} more`)] : []));
+    };
+    go.onclick = () => { go.disabled = true; agStep(x, [s.id], 'approve', { subject: sub.value, body: body.value, contact_ids: ids }); };
+    draw();
+    return h('div', { class: 'ag-step email' },
+      h('div', { class: 'ag-email-h' }, h('b', {}, '✉ Draft email campaign'), s.why ? h('small', {}, s.why) : null, h('small', {}, 'From your Gmail or Outlook, with your footer and an unsubscribe link. People marked do not contact are left out. {First name} becomes each person’s first name.')),
+      h('label', {}, 'To', who), h('label', {}, 'Subject', sub), body,
+      h('div', { class: 'ag-step-act' }, go, h('button', { class: 'btn small', onclick: () => copyText(`${sub.value}\n\n${body.value}`) }, 'Copy'), h('button', { class: 'btn small', onclick: () => agStep(x, [s.id], 'skip') }, 'Don’t send')));
   }
   function agRunView(x) {
     const d = AG.data;
@@ -10890,6 +10964,43 @@
       h('p', { class: 'day-hint' }, 'Text customers from your own business number: on my way, visit reminders, review requests, and two-way texts on each contact. You use your own Twilio account, and Twilio bills you directly (a number is about a dollar or two a month, and each text a cent or so). In Twilio, buy a number, then copy the Account SID and Auth token from the Console home page.'),
       h('label', {}, 'Account SID', sid), h('label', {}, 'Auth token', token), h('label', {}, 'Twilio phone number', number),
       h('div', { class: 'btns' }, h('button', { class: 'btn primary-btn', onclick: go }, 'Connect Twilio')));
+    return sec;
+  }
+  // Social posting through the team's own Postiz account: the Marketing Manager drafts, you approve, Postiz posts.
+  function postizSection() {
+    const sec = h('section', { class: 'pz-sec' }, h('h3', {}, 'Social posts (Postiz)'));
+    const x = S.postiz;
+    if (!x) {
+      api('GET', '/postiz').then((y) => { S.postiz = y; $('#settings .pz-sec')?.replaceWith(postizSection()); }).catch(() => {});
+      return sec.append(h('p', { class: 'day-hint' }, 'Loading…')), sec;
+    }
+    const redo = (y) => { S.postiz = y; if (AG.data) AG.postiz = y; sec.replaceWith(postizSection()); };
+    if (x.connected) {
+      const off = h('button', { class: 'btn small danger', 'data-label': '1' }, 'Disconnect');
+      off.addEventListener('click', () => confirmClick(off, () => api('DELETE', '/postiz').then(redo).catch((e) => toast(e.message))));
+      const again = h('button', { class: 'btn small' }, 'Check channels again');
+      again.onclick = async () => { again.disabled = true; const y = await api('POST', '/postiz/refresh').catch((e) => toast(e.message)); if (y) { redo(y); toast('Channels checked'); } else again.disabled = false; };
+      const ok = x.channels.filter((c) => c.usable), other = x.channels.filter((c) => !c.usable);
+      sec.append(...[
+        h('p', {}, `✓ Connected${x.url ? ` to ${x.url.replace(/\/api\/public\/v1$/, '')}` : ''} by ${x.by} (key ending ${x.last4}). Your Marketing Manager drafts posts for these channels, and each one goes out only when you say yes.`),
+        ok.length ? h('div', { class: 'pz-chans' }, ok.map((c) => h('span', { class: 'pz-chan' }, c.picture ? h('img', { src: c.picture, alt: '', loading: 'lazy' }) : null, h('b', {}, c.name), h('small', {}, c.kindName)))) : h('p', { class: 'warn' }, 'No channels Kloomie can post to yet. Link Facebook, Instagram, LinkedIn, Google Business Profile, X, Threads, Bluesky or Mastodon in Postiz, then check again.'),
+        other.length ? h('p', { class: 'day-hint' }, `Also in your Postiz, not posted to from Kloomie: ${other.map((c) => `${c.name} (${c.kindName}${c.disabled ? ', off in Postiz' : ''})`).join(', ')}.`) : null,
+        x.error ? h('p', { class: 'err' }, x.error) : null,
+        h('div', { class: 'btns' }, again, off),
+      ].filter(Boolean));
+      return sec;
+    }
+    const key = h('input', { type: 'password', placeholder: 'Postiz API key', autocomplete: 'off', 'aria-label': 'Postiz API key' });
+    const url = h('input', { placeholder: 'Only if you host Postiz yourself: https://postiz.yourbusiness.com', 'aria-label': 'Your own Postiz address' });
+    const go = h('button', { class: 'btn primary-btn' }, 'Connect Postiz');
+    go.onclick = async () => {
+      go.disabled = true; go.textContent = 'Checking…';
+      try { redo(await api('PUT', '/postiz', { key: key.value, url: url.value })); toast('Postiz connected'); } catch (e) { toast(e.message); go.disabled = false; go.textContent = 'Connect Postiz'; }
+    };
+    sec.append(
+      h('p', { class: 'day-hint' }, 'Post to Facebook, Instagram, LinkedIn, Google Business Profile, X, Threads, Bluesky and Mastodon from Kloomie. Your Marketing Manager writes the posts (and the pictures, on your OpenAI or Gemini key), and nothing goes out until you approve it. You use your own Postiz account (postiz.com), and Postiz bills you directly. In Postiz, link your channels, then copy the key from Settings → Public API.'),
+      h('label', {}, 'API key', key), h('label', {}, 'Your own Postiz address (optional)', url),
+      h('div', { class: 'btns' }, go));
     return sec;
   }
   // QuickBooks Online: sent invoices and their payments go into the team's books; payments recorded there come back.
@@ -15889,6 +16000,7 @@
       if (amAdmin()) s.append(paySection());
       if (amAdmin()) s.append(qboSection());
       if (amAdmin()) s.append(textingSection());
+      if (amAdmin()) s.append(postizSection());
       if (amAdmin()) s.append(leadSection());
       if (amAdmin()) s.append(gcSection());
       if (amAdmin() && (!S.pss || S.pss.connected || S.pss.available)) s.append(pssSection());

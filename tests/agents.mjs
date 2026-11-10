@@ -55,7 +55,7 @@ const ai = http.createServer((req, res) => {
     const lastUser = [...msgs].reverse().find((m) => m.role === 'user' && typeof m.content === 'string');
     asked.push({ sys, msgs: JSON.stringify(msgs), tools: (j.tools || []).map((t) => t.name) });
     const reply = (content, stop = 'end_turn') => res.end(JSON.stringify({ id: 'm', type: 'message', role: 'assistant', model: 'claude-test', content, stop_reason: stop, stop_sequence: null, usage: { input_tokens: 1, output_tokens: 1 } }));
-    if (sys.includes('You coordinate three specialists')) {
+    if (sys.includes('You coordinate four specialists')) {
       const u = text(msgs[0].content).toLowerCase();
       if (u.includes('vague')) return reply([{ type: 'text', text: JSON.stringify({ question: 'Which customer do you mean?', parts: [] }) }]);
       return reply([{ type: 'text', text: JSON.stringify({ summary: 'Sales records it, Operations preps the visit', parts: [{ agent: 'sales', ask: 'Customer wants a quote: set the quote task' }, { agent: 'ops', ask: 'Customer wants a quote: prep the visit' }], question: null }) }]);
@@ -96,7 +96,7 @@ try {
   const steps = (x) => x.parts.flatMap((p) => p.steps);
 
   r = await ada('GET', '/agents');
-  ok(r.status === 200 && Object.keys(r.body.agents).join() === 'chief,sales,ops' && r.body.agents.chief.level === 'execute', 'three agents, each at execute (balanced) to start');
+  ok(r.status === 200 && Object.keys(r.body.agents).join() === 'chief,sales,ops,marketing' && Object.values(r.body.agents).every((a) => a.level === 'execute'), 'four agents, each at execute (balanced) to start');
   ok(r.body.agents.sales.tools.find((x) => x.key === 'draft_email').important && !r.body.agents.chief.tools.some((x) => x.key === 'draft_email'), 'each has its own tools; emailing is marked important');
   ok((await ada('GET', '/state')).body.workspace.tools?.agents !== false, 'Agents are on for the team');
 

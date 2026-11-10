@@ -83,13 +83,44 @@ export const AGENTS = {
       { key: 'closeout', name: 'Close out a job', ask: 'Close out this job: confirm what was delivered, write the completion report as a doc, and set up any follow-up (invoice, review request, warranty check):\n\n', paste: true },
     ],
   },
+  marketing: {
+    name: 'Marketing Manager', icon: '📣', tags: 'Campaigns · Content · Reviews',
+    purpose: 'Brings in the right customers, in your voice, and keeps track of what actually works.',
+    duties: [
+      'Plans marketing month by month around your goals, seasons and slow spells',
+      'Builds campaigns with goals, tasks and the right people to reach',
+      'Writes emails, posts, flyers and offers in your brand voice',
+      'Makes pictures for posts and flyers on your AI key',
+      'Schedules posts to your social channels and Google profile through Postiz',
+      'Wins back past customers and asks happy ones for reviews and referrals',
+      'Reports which lead sources and campaigns bring jobs and money, and what to do about it',
+    ],
+    tools: ['marketing_snapshot', 'find_customers', 'list_channels', 'social_posts', 'list_campaigns', 'find_records', 'read_record', 'find_contacts', 'find_docs', 'read_doc', 'list_tasks', 'look_at_day', 'create_campaign', 'make_list', 'create_task', 'update_task', 'schedule_time', 'write_doc', 'make_image', 'draft_social_post', 'draft_email_campaign', 'notify_me'],
+    rules: [
+      'Ground everything in the business: read the business profile (it comes with these instructions) and marketing_snapshot before planning. Write for their ideal customer, in their voice, about what makes them different. Generic marketing copy is a failure.',
+      'Never invent reviews, testimonials, statistics, awards, prices, discounts or offers. Use an offer only if the person or the business profile gave it; otherwise propose one and say it needs their OK.',
+      'Only market to people who can be contacted: skip anyone marked do not contact, and use email for people who gave an address. Texts need consent, so suggest them as tasks rather than sending.',
+      'Posts: fit each channel (short and local for Google, visual for Instagram, which needs a picture). Use real photos of their work when they have them (say so in the post) or make_image for a picture. Keep picture prompts free of words and logos, since image models misspell them. A week of posts beats one big post.',
+      'Emails to many people: one clear message and one ask, personal (use {First name}), short, from the person. Draft it with draft_email_campaign; it goes only when they say yes.',
+      'Measure: tie every campaign to a goal you can count (leads, booked estimates, jobs won), and say how you will know if it worked.',
+    ],
+    workflows: [
+      { key: 'plan', name: 'Monthly marketing plan', ask: 'Make my marketing plan for the next month: what to focus on and why (from what has been bringing in work, the season, my goals and slow spots), the campaigns to run with their goals and tasks, a content calendar, and what to stop. Write it up as a doc and set up the first campaign.', sched: { days: [1], at: 8 * 60 }, monthly: true },
+      { key: 'campaign', name: 'Build a campaign', ask: 'Build this campaign end to end: the campaign with goals and tasks, who to reach (a list), the emails and posts, and any picture it needs:\n\n', paste: true },
+      { key: 'winback', name: 'Win back past customers', ask: 'Find past customers we haven’t worked for in a year or more, and set up a win-back campaign: the list, a personal check-in email with a reason to come back (ask me before any discount), and follow-up tasks.' },
+      { key: 'reviews', name: 'Reviews & referrals', ask: 'Find customers whose jobs finished recently and were happy, and set up a review and referral push: who to ask, the email asking for a review (and a referral), and tasks to follow up.' },
+      { key: 'content', name: 'Content week', ask: 'Plan and draft next week’s posts for my channels: 3 to 5 posts in my voice that show real work, tips and local relevance, with pictures where they help, scheduled at good times.', sched: { days: [4], at: 9 * 60 } },
+      { key: 'neighbors', name: 'Neighbor blitz', ask: 'For this job, plan a neighbor blitz: a door-hanger or flyer for the streets around it (as a doc), a Google post about the job, and tasks for when and where to drop them:\n\n', paste: true },
+      { key: 'report', name: 'What’s working', ask: 'Report what’s working in my marketing: leads and jobs won by source, how each campaign did against its goal, posts and emails sent, and the three things to do more of, change or stop.', sched: { days: [1], at: 7 * 60 } },
+    ],
+  },
 };
 export const LEVELS = ['observe', 'prepare', 'execute', 'automate'];
 const KEEP_RUNS = 80;
 const MAX_PARTS = 4;
 const MAX_TURN_CHARS = 30_000;
 
-export function agentsModule({ db, save, broadcast, rid, cleanText, readJson, send, notify, replay, run: llmRun, sendEmail, textToDoc, PJ, isAdminId, localNow, tzOf, fmtMinutes, hasAi = () => true }) {
+export function agentsModule({ db, save, broadcast, rid, cleanText, readJson, send, notify, replay, run: llmRun, sendEmail, textToDoc, PJ, isAdminId, localNow, tzOf, fmtMinutes, hasAi = () => true, POSTIZ = null, makeImageItem, itemFile, noContact = (c) => !!c.dne }) {
   db.agentRuns ||= {};
   db.agentPrefs ||= {};
   // Anything still running when the server stopped (a deploy, a restart) can't pick up where it was: say so.
@@ -457,14 +488,283 @@ export function agentsModule({ db, save, broadcast, rid, cleanText, readJson, se
         return { ok: true, result: { sent: true }, changed: [] };
       },
     },
+
+    // ---------- marketing ----------
+    marketing_snapshot: {
+      kind: 'read', label: (a) => `Looked at the last ${Number(a.days) > 0 ? Math.round(Number(a.days)) : 90} days of marketing`,
+      description: 'What is bringing in work: new leads by source and how many became jobs or deals and how much they were worth (owners and admins), work started by month for the last year (to see seasons), campaigns and their results, email campaigns sent, and posts on social channels.',
+      parameters: { type: 'object', properties: { days: { type: 'number', description: 'how far back, default 90' } } },
+      async run(cx, a) {
+        const days = Math.max(7, Math.min(730, Number(a.days) || 90));
+        const since = Date.now() - days * 864e5;
+        const s = await cx.state();
+        const out = { days };
+        // Records the person can see, with whether they count as won and what they're worth.
+        const recs = Object.values(db.records).filter((r) => r.wsId === cx.ws.id && db.projects[r.projectId] && PJ.sees(db.projects[r.projectId], cx.memberId));
+        const won = (r) => { const t = typeOfRec(r); return !!t?.fields.some((f) => f.type === 'select' && WON.test(f.choices?.find((c) => c.id === r.values[f.id])?.label || '')); };
+        const worth = (r) => { const t = typeOfRec(r); const f = t?.fields.find((x) => x.type === 'money' && r.values[x.id] != null); return f ? r.values[f.id] / 100 : 0; };
+        const months = {};
+        for (const r of recs) if (r.createdAt > Date.now() - 365 * 864e5) { const k = new Date(r.createdAt).toISOString().slice(0, 7); months[k] = (months[k] || 0) + 1; }
+        out.workStartedByMonth = Object.fromEntries(Object.entries(months).sort());
+        if (isAdminId(cx.ws.id, cx.memberId)) {
+          const bySource = {};
+          const links = contactRecords(cx.ws.id);
+          for (const c of Object.values(db.contacts)) {
+            if (c.wsId !== cx.ws.id || (c.createdAt || 0) < since) continue;
+            const src = c.source || 'Not recorded';
+            const mine = (links.get(c.id) || []).filter((r) => db.projects[r.projectId] && PJ.sees(db.projects[r.projectId], cx.memberId));
+            const g = (bySource[src] ||= { leads: 0, becameWork: 0, won: 0, wonValue: 0 });
+            g.leads++;
+            if (mine.length) g.becameWork++;
+            const w = mine.filter(won);
+            if (w.length) { g.won++; g.wonValue += w.reduce((n, r) => n + worth(r), 0); }
+          }
+          out.leadsBySource = bySource;
+          out.contacts = { total: Object.values(db.contacts).filter((c) => c.wsId === cx.ws.id).length, doNotContact: Object.values(db.contacts).filter((c) => c.wsId === cx.ws.id && noContact(c)).length };
+        } else out.leadsBySource = 'Only owners and admins can see Contacts.';
+        const wonRecent = recs.filter((r) => (r.updatedAt || r.createdAt) > since && won(r));
+        out.won = { count: wonRecent.length, value: Math.round(wonRecent.reduce((n, r) => n + worth(r), 0)), byList: wonRecent.reduce((m, r) => { const n = typeOfRec(r)?.name || '?'; m[n] = (m[n] || 0) + 1; return m; }, {}) };
+        out.campaigns = s.campaigns.filter((c) => c.status !== 'done' || (c.end && Date.parse(c.end) > since)).slice(0, 20).map((c) => {
+          const tries = s.attempts.filter((x) => x.campaignId === c.id && x.at > since);
+          const outcomes = tries.reduce((m, x) => { m[x.outcome] = (m[x.outcome] || 0) + 1; return m; }, {});
+          return { id: c.id, name: c.name, status: c.status, start: c.start, end: c.end, goals: s.goals.filter((g) => g.campaignId === c.id).map((g) => `${g.title}${g.kind === 'count' ? ` (target ${g.target})` : ''}`).slice(0, 6), logged: tries.length, outcomes };
+        });
+        const sends = Object.values(db.sends).filter((x) => x.wsId === cx.ws.id && x.createdAt > since && (isAdminId(cx.ws.id, cx.memberId) || x.memberId === cx.memberId));
+        out.emailCampaigns = sends.slice(-15).map((x) => ({ subject: x.subject, when: new Date(x.createdAt).toISOString().slice(0, 10), to: x.to.length, sent: x.to.filter((r) => r.status === 'sent').length, campaign: db.campaigns[x.campaignId]?.name || null }));
+        if (POSTIZ?.connected(cx.ws)) {
+          try {
+            const p = await POSTIZ.posts(cx.ws, since, Date.now() + 30 * 864e5);
+            out.posts = { published: p.filter((x) => x.state === 'PUBLISHED').length, scheduled: p.filter((x) => x.state === 'QUEUE').length, failed: p.filter((x) => x.state === 'ERROR').map((x) => `${x.channel}: ${x.error}`).slice(0, 5) };
+          } catch (e) { out.posts = 'Couldn’t read posts from Postiz: ' + e.message; }
+        } else out.posts = 'Postiz isn’t connected, so posts can be drafted to copy but not scheduled from Kloomie.';
+        // What's already drafted and waiting for the person's yes, in any assignment, so nothing is drafted twice.
+        out.waitingForYes = runsOf(cx.ws.id, cx.memberId).flatMap((r) => r.parts.flatMap((p) => p.steps.filter((st) => st.status === 'proposed' && st.kind === 'write').map((st) => `${st.label} (in “${r.title}”)`))).slice(0, 20);
+        return out;
+      },
+    },
+    find_customers: {
+      kind: 'read', label: (a) => `Found ${{ past: 'past customers', recent: 'recent customers', leads: 'leads who never booked', all: 'customers' }[a.who] || 'customers'}`,
+      description: 'People in Contacts by their history with the business (owners and admins): past (last job 12 to 36 months ago, by default), recent (a job in the last 3 months), leads (never had a job), or all. Filter by source, city or tag; need: email or phone. Each comes with their last job and whether they can be contacted.',
+      parameters: { type: 'object', properties: { who: { type: 'string', enum: ['past', 'recent', 'leads', 'all'] }, months_min: { type: 'number' }, months_max: { type: 'number' }, source: { type: 'string' }, city: { type: 'string' }, tag: { type: 'string' }, need: { type: 'string', enum: ['email', 'phone'] } } },
+      async run(cx, a) {
+        if (!isAdminId(cx.ws.id, cx.memberId)) throw new Error('Only owners and admins can see Contacts.');
+        const who = a.who || 'all';
+        const m = (n, d) => Date.now() - (Number(n) > 0 ? Number(n) : d) * 30.4 * 864e5;
+        const links = contactRecords(cx.ws.id);
+        const seen = (r) => db.projects[r.projectId] && PJ.sees(db.projects[r.projectId], cx.memberId);
+        const jobs = new Map([...links].map(([id, list]) => [id, list.filter(seen).sort((p, q) => jobDate(q) - jobDate(p))[0]]).filter(([, r]) => r)); // contact id → their latest job or deal they can see
+        const out = [];
+        for (const c of Object.values(db.contacts)) {
+          if (c.wsId !== cx.ws.id) continue;
+          const j = jobs.get(c.id);
+          const at = j ? jobDate(j) : 0;
+          if (who === 'past' && !(j && at <= m(a.months_min, 12) && at >= m(a.months_max, 36))) continue;
+          if (who === 'recent' && !(j && at >= m(a.months_min, 3))) continue;
+          if (who === 'leads' && j) continue;
+          if (a.source && !same(c.source, a.source)) continue;
+          if (a.city && !same(c.city, a.city)) continue;
+          if (a.tag && !(c.tags || []).some((t) => same(t, a.tag))) continue;
+          if (a.need === 'email' && !c.email) continue;
+          if (a.need === 'phone' && !c.phone) continue;
+          out.push({ id: c.id, name: c.name, email: c.email || undefined, phone: c.phone || undefined, city: c.city || undefined, source: c.source || undefined, tags: c.tags?.length ? c.tags : undefined, lastJob: j ? { what: recTitle(j.id), when: new Date(at).toISOString().slice(0, 10) } : undefined, doNotContact: noContact(c) || undefined });
+          if (out.length >= 200) break;
+        }
+        return { count: out.length, canEmail: out.filter((x) => x.email && !x.doNotContact).length, people: out.slice(0, 80), more: out.length > 80 ? out.length - 80 : undefined };
+      },
+    },
+    list_channels: {
+      kind: 'read', label: () => 'Checked your social channels',
+      description: 'The social channels connected through Postiz (Facebook, Instagram, LinkedIn, Google Business Profile, X, Threads, Bluesky, Mastodon) that posts can go to.',
+      parameters: { type: 'object', properties: {} },
+      async run(cx) {
+        if (!POSTIZ?.connected(cx.ws)) return { connected: false, note: 'Postiz isn’t connected. Draft posts anyway: the person can copy them, or an owner can connect Postiz in Settings → Connections.' };
+        const p = POSTIZ.pub(cx.ws);
+        if (!p.checkedAt || Date.now() - p.checkedAt > 10 * 60_000) await POSTIZ.refresh(cx.ws).catch(() => {});
+        const q = POSTIZ.pub(cx.ws);
+        return { connected: true, channels: q.channels.filter((x) => x.usable).map((x) => ({ name: x.name, platform: x.kindName, needsPicture: x.kind.startsWith('instagram') || undefined })), notUsable: q.channels.filter((x) => !x.usable).map((x) => `${x.name} (${x.kindName}${x.disabled ? ', switched off in Postiz' : ', not supported yet'})`) };
+      },
+    },
+    social_posts: {
+      kind: 'read', label: () => 'Looked at your posts',
+      description: 'Posts in Postiz: recently published, scheduled, and any that failed, with the reason.',
+      parameters: { type: 'object', properties: { days_back: { type: 'number' }, days_ahead: { type: 'number' } } },
+      async run(cx, a) {
+        if (!POSTIZ?.connected(cx.ws)) return { connected: false };
+        const list = await POSTIZ.posts(cx.ws, Date.now() - (Number(a.days_back) || 14) * 864e5, Date.now() + (Number(a.days_ahead) || 30) * 864e5);
+        return { posts: list.slice(0, 40) };
+      },
+    },
+    create_campaign: {
+      kind: 'write', label: (a) => `Campaign: ${words(a.name, 80)}${(a.goals || []).length ? ` with ${a.goals.length} goal${a.goals.length === 1 ? '' : 's'}` : ''}`,
+      description: 'Start a campaign in Campaigns (it gets its own chat feed and stack): name, brief (who it is for, the message, the offer if any, how success is measured), dates, and goals. A goal is "tasks" (done when its tasks are) or "count" (a number of logged calls or emails to reach, with target). Tasks have text, due (YYYY-MM-DD) and assignee (a team member’s or role’s name).',
+      parameters: { type: 'object', properties: { name: { type: 'string' }, brief: { type: 'string' }, start: { type: 'string' }, end: { type: 'string' }, goals: { type: 'array', items: { type: 'object', properties: { title: { type: 'string' }, kind: { type: 'string', enum: ['tasks', 'count'] }, target: { type: 'number' }, due: { type: 'string' }, tasks: { type: 'array', items: { type: 'object', properties: { text: { type: 'string' }, due: { type: 'string' }, assignee: { type: 'string' } } } } } } }, why: { type: 'string' } }, required: ['name', 'brief'] },
+      async run(cx, a) {
+        const r = await cx.call('POST', '/api/campaigns', { name: a.name, brief: a.brief, start: isDay(a.start) ? a.start : cx.today, end: isDay(a.end) ? a.end : null });
+        if (r.status >= 300) throw new Error(r.body?.error || 'Couldn’t start the campaign.');
+        const c = r.body;
+        const notes = [];
+        for (const g of (Array.isArray(a.goals) ? a.goals : []).slice(0, 6)) {
+          const gr = await cx.call('POST', '/api/goals', { campaignId: c.id, title: g.title, kind: g.kind === 'count' ? 'count' : 'tasks', ...(g.kind === 'count' ? { target: Number(g.target) || 10 } : {}), due: isDay(g.due) ? g.due : null });
+          if (gr.status >= 300) { notes.push(`Goal “${g.title}”: ${gr.body?.error}`); continue; }
+          for (const t of (Array.isArray(g.tasks) ? g.tasks : []).slice(0, 12)) {
+            let w = {};
+            try { w = who(cx, t.assignee); } catch (e) { notes.push(e.message); }
+            const tr = await cx.call('POST', '/api/tasks', { text: t.text, due: isDay(t.due) ? t.due : null, goalId: gr.body.id, ...w });
+            if (tr.status >= 300) notes.push(`Task “${t.text}”: ${tr.body?.error}`);
+          }
+        }
+        return { ok: true, result: { done: true, id: c.id, notes: notes.length ? notes : undefined }, changed: [{ kind: 'campaign', id: c.id, label: c.name }], undo: { method: 'DELETE', path: '/api/campaigns/' + c.id } };
+      },
+    },
+    make_list: {
+      kind: 'write', label: (a) => `List “${words(a.name, 60)}”${a.contact_ids?.length ? ` of ${a.contact_ids.length}` : ''} on ${campName(a.campaign) || 'a campaign'}`,
+      description: 'Make a list of people to reach on a campaign (owners and admins): give contact_ids from find_customers, or a filter (sources, cities, stages, days: only contacts added in the last 7, 30 or 90 days, need: email or phone) for a list that keeps itself up to date from Contacts.',
+      parameters: { type: 'object', properties: { campaign: { type: 'string', description: 'campaign id or name' }, name: { type: 'string' }, contact_ids: { type: 'array', items: { type: 'string' } }, filter: { type: 'object', properties: { sources: { type: 'array', items: { type: 'string' } }, cities: { type: 'array', items: { type: 'string' } }, stages: { type: 'array', items: { type: 'string' } }, days: { type: 'number' }, need: { type: 'string' } } }, why: { type: 'string' } }, required: ['campaign', 'name'] },
+      async run(cx, a) {
+        const c = campOf(cx, a.campaign);
+        let body;
+        if (Array.isArray(a.contact_ids) && a.contact_ids.length) {
+          const people = a.contact_ids.map((id) => db.contacts[id]).filter((x) => x?.wsId === cx.ws.id && !noContact(x)).slice(0, 2000);
+          if (!people.length) throw new Error('None of those people can be contacted.');
+          body = { campaignId: c.id, name: a.name, columns: ['Name', 'Email', 'Phone', 'City', 'Company'], rows: people.map((x) => ({ cells: [x.name || '', x.email || '', x.phone || '', x.city || '', x.company || ''] })) };
+        } else if (a.filter) body = { campaignId: c.id, name: a.name, live: a.filter };
+        else throw new Error('Give contact_ids or a filter.');
+        const r = await cx.call('POST', '/api/lists', body);
+        return done(r, { kind: 'campaign', id: c.id, label: `${a.name} (${r.body?.rows?.length ?? 0} people)` }, r.body?.id ? { undo: { method: 'DELETE', path: '/api/lists/' + r.body.id } } : {});
+      },
+    },
+    make_image: {
+      kind: 'write', label: (a) => `Picture: ${words(a.title || a.prompt, 90)}`,
+      description: 'Make a picture for a post, flyer or email with the team’s OpenAI or Gemini key (Claude can’t make pictures). Describe the scene in detail: subject, setting, light, style, in keeping with the brand. No words, prices or logos in the picture (they come out misspelled). shape: square (most posts), portrait (Instagram, stories, flyers) or landscape (Facebook, Google, email). It is saved in Kloomie, and its id can go on a post.',
+      parameters: { type: 'object', properties: { prompt: { type: 'string' }, title: { type: 'string', description: 'a short name for the file' }, shape: { type: 'string', enum: ['square', 'portrait', 'landscape'] }, why: { type: 'string' } }, required: ['prompt'] },
+      async run(cx, a, part) {
+        if (part && part.steps.filter((x) => x.tool === 'make_image' && x.status === 'done').length >= 4) throw new Error('That’s four pictures for this assignment; reuse one.');
+        const it = await makeImageItem(cx.ws, cx.memberId, { prompt: a.prompt, shape: a.shape, name: a.title, by: `${memberOf(cx.ws, cx.memberId).name}’s Marketing Manager` });
+        return { ok: true, result: { done: true, id: it.id, note: 'Use this id as image_id on a post.' }, changed: [{ kind: 'image', id: it.id, label: it.name }], undo: { method: 'DELETE', path: '/api/items/' + it.id } };
+      },
+    },
+    draft_social_post: {
+      kind: 'write', important: true, label: (a, cx) => `Post to ${chanNames(cx, a.channels) || 'social'}${a.when && a.when !== 'now' ? ` (${a.when === 'draft' ? 'as a draft in Postiz' : a.when})` : ''}: ${words(a.text, 90)}`,
+      description: 'Draft a social or Google Business Profile post. It is never posted until the person reads it and says yes; then it goes out through Postiz. channels: names or platforms from list_channels (e.g. ["Instagram", "Google Business Profile"]). when: "now", "draft" (save it in Postiz), or a local date and time "YYYY-MM-DD HH:MM" on the team’s clock. image_id: a picture from make_image or a photo in Kloomie (Instagram needs one). link and cta (BOOK, CALL, LEARN_MORE, GET_OFFER, SIGN_UP, ORDER, SHOP) add a button on Google posts. Without Postiz it is still useful: the person can copy it.',
+      parameters: { type: 'object', properties: { channels: { type: 'array', items: { type: 'string' } }, text: { type: 'string' }, when: { type: 'string' }, image_id: { type: 'string' }, link: { type: 'string' }, cta: { type: 'string' }, why: { type: 'string' } }, required: ['channels', 'text'] },
+      check(cx, a) {
+        if (a.image_id && !imageOk(cx, a.image_id)) throw new Error('That picture isn’t in Kloomie (or isn’t a picture). Use an id from make_image.');
+        if (!String(a.text || '').trim()) throw new Error('The post has no words.');
+        if (/\[[^\]]{2,60}\]/.test(a.text)) throw new Error('The post still has a [placeholder] in it (like a photo note or a link to fill in). Write it without one; say what photo to add in your report instead.');
+        if (POSTIZ?.connected(cx.ws)) {
+          const chs = POSTIZ.pick(cx.ws, a.channels);
+          if (!chs.length) throw new Error(`None of those channels are connected. Connected: ${POSTIZ.usable(cx.ws).map((x) => `${x.name} (${x.kindName})`).join(', ') || 'none'}.`);
+          const needs = chs.filter((x) => x.kind.startsWith('instagram'));
+          if (needs.length && !a.image_id) throw new Error('Instagram posts need a picture. Add image_id (make_image), or leave Instagram out.');
+          const tooLong = chs.find((x) => ({ x: 280, threads: 500, bluesky: 300, mastodon: 500 })[x.kind] < String(a.text).length);
+          if (tooLong) throw new Error(`That’s too long for ${tooLong.kindName}. Write a shorter version for it as its own post.`);
+        }
+        if (a.when && !['now', 'draft'].includes(a.when) && !localTime(cx.ws, a.when)) throw new Error('Give when as "now", "draft" or a local date and time like 2026-11-14 09:30.');
+        if (a.link && !/^https:\/\//.test(a.link)) throw new Error('A link must start with https://');
+      },
+      async run(cx, a) {
+        if (!POSTIZ?.connected(cx.ws)) throw new Error('Postiz isn’t connected, so this can’t be posted from Kloomie. Copy it, or ask an owner to connect Postiz in Settings → Connections.');
+        const channels = POSTIZ.pick(cx.ws, a.channels);
+        if (!channels.length) throw new Error(`None of those channels are connected in Postiz. Connected: ${POSTIZ.usable(cx.ws).map((x) => `${x.name} (${x.kindName})`).join(', ') || 'none'}.`);
+        let when = a.when || 'now';
+        if (!['now', 'draft'].includes(when)) {
+          const t = localTime(cx.ws, when);
+          if (!t) throw new Error('That time doesn’t look right.');
+          if (t < Date.now() + 60_000) when = 'now';
+          else when = new Date(t).toISOString();
+        }
+        const image = a.image_id ? await itemFile(cx.ws, cx.memberId, a.image_id) : null;
+        const out = await POSTIZ.post(cx.ws, { channels, text: String(a.text), image, when, link: a.link, cta: a.cta });
+        return { ok: true, result: { done: true, type: out.type, channels: channels.map((x) => x.name) }, changed: [{ kind: 'post', id: out.posts[0]?.id, label: `${channels.map((x) => x.name).join(', ')}${out.type === 'schedule' ? ' · scheduled' : out.type === 'draft' ? ' · draft in Postiz' : ''}` }], ...(out.type !== 'now' && out.posts.length ? { undo: { postiz: out.posts.map((x) => x.id) } } : {}) };
+      },
+    },
+    draft_email_campaign: {
+      kind: 'write', important: true, label: (a) => `Email campaign to ${(a.contact_ids || []).length} people: ${words(a.subject, 80)}`,
+      description: 'Draft one email to many people (owners and admins), sent from the person’s connected Gmail or Outlook with the team’s footer and an unsubscribe link, logged on the campaign. It is never sent until the person reads it and says yes. contact_ids from find_customers. Write {First name} where their first name goes. One message, one ask, short and personal.',
+      parameters: { type: 'object', properties: { contact_ids: { type: 'array', items: { type: 'string' } }, subject: { type: 'string' }, body: { type: 'string' }, campaign: { type: 'string', description: 'campaign id or name, to log it there' }, why: { type: 'string' } }, required: ['contact_ids', 'subject', 'body'] },
+      check(cx, a) {
+        if (!isAdminId(cx.ws.id, cx.memberId)) throw new Error('Only owners and admins can email from Contacts.');
+        const ok = (a.contact_ids || []).filter((id) => db.contacts[id]?.wsId === cx.ws.id && db.contacts[id].email && !noContact(db.contacts[id]));
+        if (!ok.length) throw new Error('None of those people can be emailed (no address, or marked do not contact).');
+        if (/\[[^\]]{2,30}\]/.test(a.body)) throw new Error('The email still has a [placeholder] in it. Fill it in, or use {First name} for their name.');
+      },
+      // The draft shows who it goes to by name, and how many were left out (no address, or do not contact).
+      decorate(cx, a, step) {
+        const all = [...new Set(a.contact_ids || [])];
+        const ok = all.filter((id) => db.contacts[id]?.wsId === cx.ws.id && db.contacts[id].email && !noContact(db.contacts[id]));
+        a.contact_ids = ok;
+        step.names = Object.fromEntries(ok.slice(0, 500).map((id) => [id, db.contacts[id].name || db.contacts[id].email]));
+        if (all.length > ok.length) step.why = cleanText(`${step.why ? step.why + ' · ' : ''}${all.length - ok.length} left out (no email, or do not contact)`, 300);
+      },
+      async run(cx, a) {
+        const people = (a.contact_ids || []).map((id) => db.contacts[id]).filter((x) => x?.wsId === cx.ws.id && x.email && !noContact(x));
+        const c = a.campaign ? campOf(cx, a.campaign, true) : null;
+        const r = await cx.call('POST', '/api/mail/sends', { subject: a.subject, body: a.body, ...(c ? { campaignId: c.id } : {}), to: people.map((x) => ({ email: x.email, name: x.name || '', first: String(x.name || '').trim().split(/\s+/)[0] || '', contactId: x.id })) });
+        if (r.status >= 300) throw new Error(r.body?.error || 'The email didn’t go.');
+        return { ok: true, result: { done: true, sending: r.body.to?.length }, changed: c ? [{ kind: 'campaign', id: c.id, label: `${c.name} · ${r.body.to?.length} emails going out` }] : [] };
+      },
+    },
   };
   // The coordinator's way to bring in another specialist partway through.
   const HANDOFF = {
-    description: 'Hand part of this request to another specialist, with what they need to know: chief (Chief of Staff: time, calendar, priorities), sales (Client & Sales Manager: leads, customers, emails, proposals), ops (Operations Manager: jobs, checklists, visits, routes).',
+    description: 'Hand part of this request to another specialist, with what they need to know: chief (Chief of Staff: time, calendar, priorities), sales (Client & Sales Manager: one lead or customer, replies, proposals), ops (Operations Manager: jobs, checklists, visits, routes), marketing (Marketing Manager: campaigns, posts, pictures, email campaigns, reviews).',
     parameters: { type: 'object', properties: { agent: { type: 'string', enum: Object.keys(AGENTS) }, ask: { type: 'string' } }, required: ['agent', 'ask'] },
   };
 
   // ---------- helpers the tools share ----------
+  // Marketing helpers: a record's list, what counts as won, campaigns by id or name, local times on the team's clock.
+  const WON = /\b(won|paid|complete|completed|done|installed|invoiced|accepted|closed won|customer)\b/i;
+  const typeOfRec = (r) => db.projects[r.projectId]?.types.find((t) => t.id === r.typeId);
+  const campName = (v) => (db.campaigns[v]?.name || v || '').toString().slice(0, 60);
+  function campOf(cx, v, quiet) {
+    const all = Object.values(db.campaigns).filter((c) => c.wsId === cx.ws.id);
+    const c = db.campaigns[v]?.wsId === cx.ws.id ? db.campaigns[v] : all.find((x) => same(x.name, v));
+    if (!c && !quiet) throw new Error(`No campaign called ${v}. Campaigns: ${all.filter((x) => x.status !== 'done').map((x) => x.name).slice(0, 15).join(', ') || 'none yet'}.`);
+    return c || null;
+  }
+  // The jobs and deals each contact had: named by a Contacts field (trade jobs), or through a linked record with
+  // their email (a job's client, a deal's contact). contact id → records, newest first.
+  function contactRecords(wsId) {
+    const byEmail = new Map();
+    for (const c of Object.values(db.contacts)) if (c.wsId === wsId && c.email) byEmail.set(c.email.trim().toLowerCase(), c.id);
+    const out = new Map();
+    for (const r of Object.values(db.records)) {
+      if (r.wsId !== wsId) continue;
+      // A record holding someone's email itself is a person (a client, a CRM contact), not work done for them;
+      // a job or deal names them through a Contacts field or by linking to that person's record.
+      const ids = new Set();
+      for (const v of Object.values(r.values || {})) {
+        if (typeof v === 'string' && db.contacts[v]?.wsId === wsId) ids.add(v);
+        else if (Array.isArray(v)) for (const id of v.slice(0, 10)) {
+          const o = db.records[id];
+          if (o?.wsId !== wsId) continue;
+          for (const w of Object.values(o.values || {})) if (typeof w === 'string' && w.includes('@') && byEmail.has(w.trim().toLowerCase())) ids.add(byEmail.get(w.trim().toLowerCase()));
+        }
+      }
+      for (const id of ids) (out.get(id) || out.set(id, []).get(id)).push(r);
+    }
+    for (const list of out.values()) list.sort((p, q) => q.createdAt - p.createdAt);
+    return out;
+  }
+  // When a job or deal happened: its install, close or finish date when it has one, else when it was made.
+  function jobDate(r) {
+    const t = typeOfRec(r);
+    const f = t?.fields.find((x) => x.type === 'date' && /install|close|complete|finish|done|job date|^date$/i.test(x.name) && /^\d{4}-\d{2}-\d{2}$/.test(r.values[x.id] || ''));
+    return f ? Date.parse(r.values[f.id] + 'T12:00:00Z') : r.createdAt;
+  }
+  // Channels as people know them (Instagram, Premier Shades), whether the post named them or picked them by id.
+  const chanNames = (cx, list) => { const names = (Array.isArray(list) ? list : [list]).filter(Boolean); const hit = cx && POSTIZ?.connected(cx.ws) ? POSTIZ.pick(cx.ws, names) : []; return hit.length ? [...new Set(hit.map((x) => x.kindName))].join(', ') : names.join(', '); };
+  const imageOk = (cx, id) => { const it = db.items[id]; return !!it && it.wsId === cx.ws.id && it.type === 'file' && /^image\/(png|jpe?g|webp|gif)$/.test(it.mime || ''); };
+  // "2026-11-14 09:30" on the team's clock, as a moment in time (or null).
+  function localTime(ws, v) {
+    const m = String(v || '').trim().match(/^(\d{4}-\d{2}-\d{2})[ T](\d{1,2}):(\d{2})/);
+    if (!m) return null;
+    const guess = Date.parse(`${m[1]}T${m[2].padStart(2, '0')}:${m[3]}:00Z`);
+    if (!Number.isFinite(guess)) return null;
+    const there = localNow(tzOf(ws), guess);
+    const off = Date.parse(`${there.date}T00:00:00Z`) + there.min * 60_000 - guess;
+    return guess - off;
+  }
   const same = (x, y) => String(x ?? '').trim().toLowerCase() === String(y ?? '').trim().toLowerCase() && String(x ?? '').trim() !== '';
   const mineTask = (cx, t) => t.assigneeId === cx.memberId || (!t.assigneeId && !t.roleId && t.memberId === cx.memberId) || (t.roleId && (memberOf(cx.ws, cx.memberId)?.roleIds || []).includes(t.roleId));
   const taskLine = (cx, t) => ({ id: t.id, task: t.text.slice(0, 200), due: t.due || null, priority: t.priority || undefined, for: t.assigneeId ? nameOf(cx.ws, t.assigneeId) : t.roleId ? (cx.ws.roles || []).find((r) => r.id === t.roleId)?.name : undefined, campaign: t.goalId ? db.campaigns[db.goals[t.goalId]?.campaignId]?.name : undefined, about: t.recordId ? recTitle(t.recordId) : undefined, waitingOn: t.blockedBy?.length ? true : undefined });
@@ -541,7 +841,8 @@ export function agentsModule({ db, save, broadcast, rid, cleanText, readJson, se
       `Today is ${now.date} (${['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][now.dow]}), it is ${fmtMinutes(now.min)} on the team’s clock.`,
       `The team: ${team}.`,
       `How you work: look before you act (read the day, tasks, records you need), then do the work with your tools so it lands in Kloomie as real tasks, calendar time, records and docs, not just advice. Don’t duplicate: check whether a task, record or contact already exists before making one. Use names exactly as the tools give them. Never invent facts, prices, customers or commitments; where something is missing, say so in your report or ask. ${allowed} You can’t delete anything.`,
-      coordinated ? 'You are one of three specialists on this request (Chief of Staff, Client & Sales Manager, Operations Manager). Do your part only; use hand_off if another specialist must do something that is theirs.' : 'If part of the request belongs to another specialist (time and priorities: chief; customers and sales: sales; delivery, jobs and logistics: ops), use hand_off for that part.',
+      coordinated ? 'You are one of the specialists on this request (Chief of Staff, Client & Sales Manager, Operations Manager, Marketing Manager). Do your part only; use hand_off if another specialist must do something that is theirs.' : 'If part of the request belongs to another specialist (time and priorities: chief; individual customers and sales: sales; delivery, jobs and logistics: ops; marketing, campaigns, posts and reviews: marketing), use hand_off for that part.',
+      a.rules ? `How you do this job well:\n${a.rules.map((r) => '- ' + r).join('\n')}` : '',
       prefs.instructions ? `Standing instructions from ${me?.name || 'the person'} for you:\n${prefs.instructions}` : '',
       'Finish with a short report to the person in plain words: what you found, what you did (and what is waiting for their yes), and what they should do next. No preamble. Use short lines or bullets.',
     ].filter(Boolean).join('\n\n');
@@ -598,6 +899,11 @@ export function agentsModule({ db, save, broadcast, rid, cleanText, readJson, se
       step.args = args;
       part.steps.push(step);
       const ask = level === 'observe' ? 'suggest' : level === 'prepare' || tool.important ? 'propose' : 'run';
+      // A draft that can't work (a missing picture, a bad time, nobody to email) goes back to be fixed, not to the person.
+      if (tool.check && ask !== 'run') {
+        try { tool.check(cx, args); } catch (e) { step.status = 'failed'; step.error = cleanText(e.message, 300); news(x); throw e; }
+      }
+      if (tool.decorate) { tool.decorate(cx, args, step); step.label = cleanText(safeLabel(tool, args, cx), 200); }
       if (ask === 'suggest' && !tool.quiet) {
         step.status = 'suggested';
         news(x);
@@ -608,7 +914,7 @@ export function agentsModule({ db, save, broadcast, rid, cleanText, readJson, se
         news(x);
         return { proposed: true, note: tool.important ? 'Saved as a draft for the person to read and send. Carry on as if it will go out; don’t draft it again.' : 'Saved for the person to approve. Carry on as if it will happen; don’t propose it again.' };
       }
-      return applyStep(x, cx, step);
+      return applyStep(x, cx, step, part);
     };
     const history = [...(part.history || []), { role: 'user', text: !part.reply && (x.parts.length > 1 || part.from) ? handoffContext(x, part) : part.ask }];
     try {
@@ -636,10 +942,11 @@ export function agentsModule({ db, save, broadcast, rid, cleanText, readJson, se
   const safeLabel = (tool, args, cx) => { try { return tool.label(args || {}, cx); } catch { return 'Step'; } };
 
   // Running a change (now, or when the person approves it), keeping what it changed and how to undo it.
-  async function applyStep(x, cx, step) {
+  async function applyStep(x, cx, step, part) {
     const tool = TOOLS[step.tool];
     try {
-      const out = await tool.run(cx, step.args || {});
+      tool.check?.(cx, step.args || {});
+      const out = await tool.run(cx, step.args || {}, part);
       if (out.held) {
         step.status = 'held';
         step.approvalId = out.held.approvalId;
@@ -650,7 +957,7 @@ export function agentsModule({ db, save, broadcast, rid, cleanText, readJson, se
       step.status = 'done';
       step.doneAt = Date.now();
       step.changed = out.changed || [];
-      if (out.undo?.path && !/undefined/.test(out.undo.path)) step.undo = out.undo;
+      if ((out.undo?.path && !/undefined/.test(out.undo.path)) || out.undo?.postiz?.length) step.undo = out.undo;
       news(x);
       return out.result || { done: true };
     } catch (e) {
@@ -717,12 +1024,13 @@ export function agentsModule({ db, save, broadcast, rid, cleanText, readJson, se
   }
   // The coordinator: which specialists, in what order, each with its part. Asks first if it can't tell.
   async function coordinate(ws, x) {
-    const system = `You coordinate three specialists for a small-business owner in Kloomie:
+    const system = `You coordinate four specialists for a small-business owner in Kloomie:
 - chief: Chief of Staff (the day and week, priorities, calendar, task lists, turning commitments into tasks)
-- sales: Client & Sales Manager (leads, customers, contacts, replies and follow-ups, proposals, the sales pipeline, customer meetings)
+- sales: Client & Sales Manager (one lead or customer at a time: replies and follow-ups, proposals, the sales pipeline, customer meetings)
 - ops: Operations Manager (delivering won work: jobs and projects, checklists, work orders, materials, visits, routes, closeout)
-Give the request to the one specialist whose job it is. Most requests need only one: planning the person's own day, week or tasks is the Chief of Staff alone; a lead or customer is Sales alone; a job to deliver is Operations alone. Split it (2 or at most 3 assignments, in the order they should happen) only when it clearly needs work from more than one area, like a new customer who needs a quote and a visit booked. Each specialist can also bring in another partway through if it turns out they need to, so don't add one just in case. If the request is too unclear to start, ask one short question instead.
-Reply with JSON only: {"summary":"one line on the plan","parts":[{"agent":"chief|sales|ops","ask":""}],"question":null}`;
+- marketing: Marketing Manager (reaching many people: marketing plans, campaigns, email campaigns, social and Google posts, pictures, reviews and referrals, what's working)
+Give the request to the one specialist whose job it is. Most requests need only one: planning the person's own day, week or tasks is the Chief of Staff alone; a lead or customer is Sales alone; a job to deliver is Operations alone; posts, campaigns or getting more customers is Marketing alone. Split it (2 or at most 3 assignments, in the order they should happen) only when it clearly needs work from more than one area, like a new customer who needs a quote and a visit booked. Each specialist can also bring in another partway through if it turns out they need to, so don't add one just in case. If the request is too unclear to start, ask one short question instead.
+Reply with JSON only: {"summary":"one line on the plan","parts":[{"agent":"chief|sales|ops|marketing","ask":""}],"question":null}`;
     const out = await llmRun(ws, x.memberId, { system, history: [{ role: 'user', text: x.ask }], tools: [], exec: () => Promise.reject(new Error('No tools')), task: 'plan' });
     let j = {};
     try { j = JSON.parse(String(out).slice(String(out).indexOf('{'), String(out).lastIndexOf('}') + 1)); } catch {}
@@ -756,6 +1064,7 @@ Reply with JSON only: {"summary":"one line on the plan","parts":[{"agent":"chief
         for (const s of pr.schedules || []) {
           const wf = AGENTS[agent].workflows.find((w) => w.key === s.workflow);
           if (!wf || wf.paste || !s.days?.includes(now.dow) || now.min < s.at || s.last === now.date) continue;
+          if (wf.monthly && Number(now.date.slice(8)) > 7) continue; // a monthly one: the first of those weekdays in the month
           if (now.min > s.at + 180) continue; // missed by hours (server was down): skip today rather than run late
           s.last = now.date;
           save();
@@ -884,12 +1193,22 @@ Reply with JSON only: {"summary":"one line on the plan","parts":[{"agent":"chief
         const { p, s } = at;
         const cx = cxFor(x, p.agent);
         if (body.do === 'approve' && s.status === 'proposed') {
-          if (body.args && ids.length === 1 && s.tool === 'draft_email') for (const k of ['to_name', 'to_email', 'subject', 'body']) if (typeof body.args[k] === 'string') s.args[k] = body.args[k].slice(0, 20_000);
+          // What the person may change in a draft before saying yes.
+          const EDIT = { draft_email: ['to_name', 'to_email', 'subject', 'body'], draft_social_post: ['text', 'when', 'link', 'cta', 'image_id', 'channels'], draft_email_campaign: ['subject', 'body', 'contact_ids'] }[s.tool] || [];
+          if (body.args && ids.length === 1) for (const k of EDIT) {
+            const v = body.args[k];
+            if (typeof v === 'string') s.args[k] = v.slice(0, 20_000);
+            else if (v === null && ['image_id', 'link', 'cta'].includes(k)) delete s.args[k];
+            else if (Array.isArray(v) && ['channels', 'contact_ids'].includes(k)) s.args[k] = v.filter((y) => typeof y === 'string').slice(0, 2000);
+          }
           s.approvedAt = Date.now();
-          try { await applyStep(x, cx, s); } catch {}
+          try { await applyStep(x, cx, s, p); } catch {}
           s.label = cleanText(safeLabel(TOOLS[s.tool], s.args, cx), 200);
         } else if (body.do === 'skip' && s.status === 'proposed') s.status = 'skipped';
-        else if (body.do === 'undo' && s.status === 'done' && s.undo) {
+        else if (body.do === 'undo' && s.status === 'done' && s.undo?.postiz) {
+          // A scheduled post comes out of Postiz before it goes.
+          try { for (const id of s.undo.postiz) await POSTIZ.remove(cx.ws, id); s.status = 'undone'; s.undoneAt = Date.now(); s.error = null; } catch (e) { s.error = cleanText(e.message, 300); }
+        } else if (body.do === 'undo' && s.status === 'done' && s.undo) {
           const r = await cx.call(s.undo.method, s.undo.path, s.undo.body);
           if (r.status === 202 && r.body?.pending) s.error = cleanText(r.body.error, 300);
           else if (r.status < 300) { s.status = 'undone'; s.undoneAt = Date.now(); s.error = null; } else s.error = cleanText(r.body?.error || 'Couldn’t undo it.', 300);

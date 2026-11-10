@@ -29,6 +29,8 @@ import { standupModule } from './standup.js';
 import { githubModule } from './github.js';
 import { techAiModule } from './techai.js';
 import { agentsModule } from './agents.js';
+import { postizModule } from './postiz.js';
+import { makeImage } from './images.js';
 import { Readable } from 'node:stream';
 import { EventEmitter } from 'node:events';
 import { openStore, Fenced } from './store.js';
@@ -5354,6 +5356,10 @@ async function api(req, res, url) {
     const out = await INV.route(req, res, parts, auth, ws);
     if (out !== null) return;
   }
+  if (a === 'postiz') {
+    const out = await POSTIZ.route(req, res, parts, auth, ws);
+    if (out !== null) return;
+  }
   if (a === 'agents') {
     const out = await AGENTS_M.route(req, res, parts, auth, ws);
     if (out !== null) return;
@@ -8229,7 +8235,32 @@ async function agentEmail(ws, memberId, { name, email, subject, text }) {
   await mailer.customerEmail(email, { team: ws.name, replyTo: memberReply(ws, memberId), subject, heading: subject, lines: String(text).split(/\n+/).filter((l) => l.trim()), tag: 'agent' });
   return { from: `${ws.name} (through Kloomie)` };
 }
-const AGENTS_M = agentsModule({ db, save, broadcast, rid, cleanText, readJson, send, notify, replay: replayAs, run: agentLlm, sendEmail: agentEmail, textToDoc, PJ, isAdminId, localNow, tzOf, fmtMinutes, hasAi: (wsId, memberId) => !!aiUse(aiOf(wsId, memberId)) });
+// Postiz (postiz.js): social posting through the team's own Postiz account.
+const POSTIZ = postizModule({ db, save, broadcast, cleanText, readJson, send, seal, unseal, isAdmin, allowLocal: process.env.ALLOW_LOCAL_WEBHOOKS === '1', cloudUrl: process.env.POSTIZ_URL || undefined });
+// A picture made on the person's OpenAI or Gemini key (images.js), kept in Kloomie as a file.
+async function makeImageItem(ws, memberId, { prompt, shape, name, by }) {
+  const ai = aiOf(ws.id, memberId);
+  const keys = {};
+  for (const k of ['openai', 'gemini']) if (ai.keys?.[k]?.sealed) keys[k] = unseal(ai.keys[k].sealed).key;
+  const text = cleanText(prompt, 4000);
+  if (!text) throw badRequest('Describe the picture.');
+  const out = await makeImage(keys, text, { shape: ['square', 'portrait', 'landscape'].includes(shape) ? shape : 'square', prefer: aiUse(ai)?.provider });
+  if (out.bytes.length > 25_000_000) throw Object.assign(new Error('That picture came back too big.'), { status: 502 });
+  const ext = { 'image/jpeg': 'jpg', 'image/webp': 'webp' }[out.mime] || 'png';
+  const file = `${(cleanText(name, 80) || 'Picture').replace(/[\\/:*?"<>|]+/g, '').replace(/\.(png|jpe?g|webp)$/i, '')}.${ext}`;
+  const id = rid();
+  await fsp.writeFile(path.join(FILES_DIR, id), out.bytes);
+  const me = ws.members.find((m) => m.id === memberId);
+  return addItem({ ...baseItem({ wsId: ws.id, member: by || me?.name, memberId, device: 'Kloomie', deviceId: null }, { type: 'file', name: file, size: out.bytes.length, mime: out.mime }), id, pinned: true, madeWith: { provider: out.provider, model: out.model, prompt: text.slice(0, 1000) } });
+}
+// A picture in Kloomie, for a post: only one this person can see.
+async function itemFile(ws, memberId, id) {
+  const it = db.items[id];
+  const me = ws.members.find((m) => m.id === memberId);
+  if (!it || it.wsId !== ws.id || it.type !== 'file' || !/^image\//.test(it.mime || '') || !canSee({ wsId: ws.id, memberId, role: me?.role }, 'item', it)) throw badRequest('That picture isn’t in Kloomie any more.');
+  return { bytes: await fsp.readFile(path.join(FILES_DIR, it.id)), name: it.name, mime: it.mime };
+}
+const AGENTS_M = agentsModule({ db, save, broadcast, rid, cleanText, readJson, send, notify, replay: replayAs, run: agentLlm, sendEmail: agentEmail, textToDoc, PJ, isAdminId, localNow, tzOf, fmtMinutes, hasAi: (wsId, memberId) => !!aiUse(aiOf(wsId, memberId)), POSTIZ, makeImageItem, itemFile, noContact });
 const GH = githubModule({ db, save, broadcast, rid, cleanText, readJson, send, seal, unseal, isAdmin, PJ, sees: (p, mid) => PJ.sees(p, mid), publicUrl: PUBLIC_URL });
 // Daily standups on a project (standup.js): a blocker becomes a task for the project lead.
 const STANDUP = standupModule({ db, save, broadcast, rid, cleanText, readJson, send, notify, sees: (p, mid) => PJ.sees(p, mid), teamDay: (wsId) => teamDay(wsId),

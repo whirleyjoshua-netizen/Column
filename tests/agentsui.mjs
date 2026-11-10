@@ -12,6 +12,7 @@ FS.mkdirSync(DIR, { recursive: true });
 const PORT = 4719, APP = `http://127.0.0.1:${PORT}/`, AI_PORT = 4718;
 const SHOTS = process.env.SHOTS || '';
 const launch = (port, dir) => spawn('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', ['--headless=new', `--remote-debugging-port=${port}`, `--user-data-dir=${S}/dk/${dir}`, '--no-first-run', '--window-size=1300,900', 'about:blank'], { stdio: 'ignore' });
+FS.rmSync(`${S}/dk/chrome5`, { recursive: true, force: true }); // a fresh profile, never one a closing Chrome still holds
 const chrome = launch(9337, 'chrome5');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let fails = 0;
@@ -80,10 +81,10 @@ const ai = http.createServer((req, res) => {
     const lastUser = [...msgs].reverse().find((m) => m.role === 'user' && typeof m.content === 'string');
     asked.push({ sys, msgs: JSON.stringify(msgs), tools: (j.tools || []).map((t) => t.name) });
     const reply = (content, stop = 'end_turn') => res.end(JSON.stringify({ id: 'm', type: 'message', role: 'assistant', model: 'claude-test', content, stop_reason: stop, stop_sequence: null, usage: { input_tokens: 1, output_tokens: 1 } }));
-    if (sys.includes('You coordinate three specialists') && text(msgs[0].content).includes('something vague') && !text(msgs[0].content).includes('They answered')) return reply([{ type: 'text', text: JSON.stringify({ question: 'Which customer do you mean?', parts: [] }) }]);
-    if (sys.includes('You coordinate three specialists') && text(msgs[0].content).includes('They answered')) return reply([{ type: 'text', text: JSON.stringify({ summary: 'Chief handles it', parts: [{ agent: 'chief', ask: 'answered: the Garcia one' }], question: null }) }]);
+    if (sys.includes('You coordinate four specialists') && text(msgs[0].content).includes('something vague') && !text(msgs[0].content).includes('They answered')) return reply([{ type: 'text', text: JSON.stringify({ question: 'Which customer do you mean?', parts: [] }) }]);
+    if (sys.includes('You coordinate four specialists') && text(msgs[0].content).includes('They answered')) return reply([{ type: 'text', text: JSON.stringify({ summary: 'Chief handles it', parts: [{ agent: 'chief', ask: 'answered: the Garcia one' }], question: null }) }]);
     if (text(lastUser?.content).toLowerCase().includes('slow test') && msgs.length === 1) return setTimeout(() => reply([{ type: 'text', text: 'Slow done.' }]), 5000);
-    if (sys.includes('You coordinate three specialists')) return reply([{ type: 'text', text: JSON.stringify({ summary: 'The Chief of Staff plans your day', parts: [{ agent: 'chief', ask: 'Plan my day today' }], question: null }) }]);
+    if (sys.includes('You coordinate four specialists')) return reply([{ type: 'text', text: JSON.stringify({ summary: 'The Chief of Staff plans your day', parts: [{ agent: 'chief', ask: 'Plan my day today' }], question: null }) }]);
     const key = Object.keys(SCRIPTS).find((k) => text(lastUser?.content).toLowerCase().includes(k));
     // Turns since the last plain user message.
     const n = msgs.length - 1 - msgs.lastIndexOf(lastUser);
@@ -110,8 +111,8 @@ try {
   ok(await A.until(`!document.querySelector('#app').classList.contains('hidden')`), 'Ada is in');
   ok(await A.until(`[...document.querySelectorAll('#tabs button[data-tab]')].map((b) => b.textContent).join() === 'Home,Day,Stacks,Chat,Campaigns,Agents'`), 'Agents is on the tab bar');
   await A.click('#tabs [data-tab=agents]');
-  ok(await A.until(`document.querySelector('#tool h2')?.textContent.includes('Your team') && document.querySelectorAll('#tool .ag-card').length === 3`), 'the Agents tab opens Your team, with three specialists');
-  ok(await A.ev(`[...document.querySelectorAll('#tool .ag-card b')].map((b) => b.textContent).join('|') === 'Chief of Staff|Client & Sales Manager|Operations Manager'`), 'Chief of Staff, Client & Sales Manager, Operations Manager');
+  ok(await A.until(`document.querySelector('#tool h2')?.textContent.includes('Your team') && document.querySelectorAll('#tool .ag-card').length === 4`), 'the Agents tab opens Your team, with four specialists');
+  ok(await A.ev(`[...document.querySelectorAll('#tool .ag-card b')].map((b) => b.textContent).join('|') === 'Chief of Staff|Client & Sales Manager|Operations Manager|Marketing Manager'`), 'Chief of Staff, Client & Sales Manager, Operations Manager, Marketing Manager');
   ok(await A.ev(`[...document.querySelectorAll('#tool .ag-state')].every((x) => x.textContent === 'Ready') && !document.querySelector('#tool .ag-nokey')`), 'all ready, and the AI key is there');
   await shot(A, 'ag-team');
 
@@ -137,7 +138,7 @@ try {
   await A.click('#tabs [data-tab=agents]');
   await A.until(`!!document.querySelector('#tool .ag-back, #tool .ag-card')`);
   if (await A.ev(`!!document.querySelector('#tool .ag-run-h')`)) await A.ev(`document.querySelector('#tool .ag-back').click()`);
-  await A.until(`document.querySelectorAll('#tool .ag-card').length === 3`);
+  await A.until(`document.querySelectorAll('#tool .ag-card').length === 4`);
   ok(await A.ev(`document.querySelector('#tool .ag-runs').textContent.includes('Plan my day please')`), 'recent activity lists the assignment');
   await A.ev(`[...document.querySelectorAll('#tool .ag-card')][1].click()`);
   ok(await A.until(`document.querySelector('#tool .ag-prof-h b')?.textContent === 'Client & Sales Manager'`), 'a specialist’s profile');
@@ -311,7 +312,7 @@ try {
   await sleep(200);
   ok(await A.ev(`[...document.querySelectorAll('#menu button')].some((b) => b.textContent.includes('Your team') && b.textContent.includes('waiting for your yes'))`), 'off the bar, Your team is in Tools, saying what’s waiting');
   await A.ev(`[...document.querySelectorAll('#menu button')].find((b) => b.textContent.includes('Your team')).click()`);
-  ok(await A.until(`document.querySelectorAll('#tool .ag-card').length === 3`), 'and opens from there');
+  ok(await A.until(`document.querySelectorAll('#tool .ag-card').length === 4`), 'and opens from there');
   await A.ev(`document.querySelector('#tool [aria-label=Close]').click()`);
   // No AI key
   await api('DELETE', '/ai/keys/anthropic');
@@ -335,7 +336,7 @@ try {
   // Phone
   await A.cmd('Emulation.setDeviceMetricsOverride', { width: 375, height: 800, deviceScaleFactor: 2, mobile: true });
   await A.click('#tabs [data-tab=agents]');
-  await A.until(`document.querySelectorAll('#tool .ag-card').length === 3`);
+  await A.until(`document.querySelectorAll('#tool .ag-card').length === 4`);
   await sleep(300);
   ok(await A.ev(`document.documentElement.scrollWidth <= innerWidth && document.querySelector('#tool').scrollWidth <= document.querySelector('#tool').clientWidth + 1`), 'nothing runs off the side on a phone');
   await shot(A, 'ag-phone');

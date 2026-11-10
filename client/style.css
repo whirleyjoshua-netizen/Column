@@ -2400,3 +2400,22 @@ button.hq-entry:hover { background: var(--card-hover); }
 
 .lead-row { display: flex; flex-direction: column; gap: 4px; margin: 10px 0; }
 .lead-row b { font-size: 13px; }
+
+/* Marketing: post and email-campaign drafts, pictures, Postiz channels */
+.ag-pic { display: block; max-width: 180px; max-height: 180px; margin-top: 6px; border-radius: 8px; border: 1px solid var(--line); cursor: zoom-in; object-fit: cover; }
+.ag-chans, .ag-who { display: flex; flex-wrap: wrap; gap: 5px; }
+.ag-chans .chip, .ag-who .chip { border: 1px solid var(--line); background: var(--card); color: var(--text); font-size: 12.5px; }
+.ag-chans .chip.on { border-color: var(--accent); background: var(--accent-soft); }
+.ag-who .chip { display: inline-flex; align-items: center; gap: 4px; }
+.ag-x { background: none; border: 0; color: var(--muted); cursor: pointer; padding: 0 2px; font-size: 14px; line-height: 1; }
+.ag-x:hover { color: var(--danger); }
+.ag-post-pic { display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap; }
+.ag-post-pic img { max-width: 160px; max-height: 160px; border-radius: 8px; border: 1px solid var(--line); cursor: zoom-in; object-fit: cover; }
+.ag-when { display: flex; gap: 8px; flex-wrap: wrap; }
+.ag-when select, .ag-when input { font: inherit; font-size: 13.5px; }
+.ag-step small.err { color: var(--danger); }
+.pz-chans { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 10px; }
+.pz-chan { display: inline-flex; align-items: center; gap: 6px; padding: 5px 9px; border: 1px solid var(--line); border-radius: 99px; font-size: 13px; }
+.pz-chan img { width: 18px; height: 18px; border-radius: 50%; object-fit: cover; }
+.pz-chan small { color: var(--muted); }
+.pz-sec input { width: 100%; }
