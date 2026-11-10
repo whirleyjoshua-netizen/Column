@@ -76,7 +76,10 @@ export function quickbooksModule({ db, save, broadcast, cleanText, readJson, sen
     const j = await r.json().catch(() => ({}));
     if (!r.ok || j.Fault) {
       const e = (j.Fault?.Error || [])[0] || {};
-      throw Object.assign(new Error(e.Detail || e.Message || `QuickBooks said ${r.status}`), { code: e.code, status: r.status, auth: r.status === 401 || r.status === 403 });
+      // Intuit's id for this request, so their support can find it: logged, and shown with the error in Settings.
+      const tid = r.headers.get('intuit_tid') || '';
+      console.error(`QuickBooks ${method} ${path.split('?')[0]} → ${r.status}${e.code ? ' code ' + e.code : ''}${tid ? ' intuit_tid ' + tid : ''}: ${e.Detail || e.Message || ''}`);
+      throw Object.assign(new Error(`${e.Detail || e.Message || `QuickBooks said ${r.status}`}${tid ? ` (Intuit ref ${tid})` : ''}`), { code: e.code, status: r.status, tid, auth: r.status === 401 || r.status === 403 });
     }
     return j;
   }
