@@ -220,7 +220,9 @@ def from_kloomie(raw_body: bytes, header: str, secret: str) -> bool:
   </table>
 
   <h2>Using it with Zapier or Make</h2>
-  <p>Use their webhook trigger with the address they give you as a Kloomie webhook, and their HTTP action with your API key in the <code>Authorization</code> header to add or update things. <code>match_existing</code> on contacts, PUT by <code>external_id</code>, and a payment's <code>reference</code> all keep repeated runs from making duplicates.</p>
+  <p><b>Zapier:</b> Kloomie has its own Zapier app. <a href="https://zapier.com/developer/public-invite/249576/3ce3c0fb9bd4e67c0b2ba97a95b5fdf1/">Add Kloomie to your Zapier account</a>, then sign in with an API key. It has instant triggers for everything above (contacts, tasks, visits, invoices, payments, files, signatures), actions to add or update contacts, add and complete tasks, book visits and record payments, and searches for contacts and invoices.</p>
+  <p><b>Make, or anything else:</b>
+ Use their webhook trigger with the address they give you as a Kloomie webhook, and their HTTP action with your API key in the <code>Authorization</code> header to add or update things. <code>match_existing</code> on contacts, PUT by <code>external_id</code>, and a payment's <code>reference</code> all keep repeated runs from making duplicates.</p>
 </main>
 </body>
 </html>

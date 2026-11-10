@@ -7474,6 +7474,7 @@
     ]);
     sec.append(
       h('p', { class: 'day-hint' }, 'Let other tools (Zapier, Make, your website, your own code) read and write your contacts, tasks, visits, jobs and invoices, and hear the moment something happens. ', h('a', { href: '/developers', target: '_blank', rel: 'noopener' }, 'Developer docs')),
+      h('p', {}, h('a', { class: 'btn small', href: 'https://zapier.com/developer/public-invite/249576/3ce3c0fb9bd4e67c0b2ba97a95b5fdf1/', target: '_blank', rel: 'noopener' }, 'Use Kloomie in Zapier'), ' ', h('span', { class: 'day-hint' }, 'Connects Kloomie to thousands of other apps. Make an API key below, then paste it when Zapier asks.')),
       h('h4', {}, 'API keys'),
       ...INT.keys.map((k) => h('div', { class: 'srow' }, h('span', {}, k.name, h('small', {}, `${k.prefix}… · ${k.write ? 'read & write' : 'read only'} · ${k.lastUsedAt ? 'used ' + ago(k.lastUsedAt) : 'never used'} · by ${k.by}`)),
         h('button', { class: 'btn small danger', 'data-label': '1', onclick: (e) => confirmClick(e.currentTarget, async () => { await api('DELETE', '/integrations/keys/' + k.id).catch((er) => toast(er.message)); INT.keys = INT.keys.filter((x) => x.id !== k.id); redraw(); }) }, 'Delete'))),
