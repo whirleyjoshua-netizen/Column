@@ -20,6 +20,7 @@ import { invoicesModule } from './invoices.js';
 import { publicApiModule } from './publicapi.js';
 import { quickbooksModule } from './quickbooks.js';
 import { twoStepModule } from './twostep.js';
+import { twilioModule } from './twilio.js';
 import { EVENTS as HOOK_EVENTS } from './projects.js';
 import { hqModule } from './hq.js';
 import { rulesModule } from './rules.js';
@@ -3337,6 +3338,13 @@ function jobCustomer(rec) {
   return (cf && db.contacts[rec.values[cf.id]]) || null;
 }
 const emailable = (c) => !!c && !noContact(c) && EMAIL_RE.test(c.email || '');
+// Can be texted from the team's Twilio number.
+const textable = (c) => !!c && !noContact(c) && !!c.phone && TW.on(c.wsId) && !!TW.e164(c.phone);
+const reachable = (c) => emailable(c) || textable(c);
+async function twilioText(ws, rec, c, text, by, what) {
+  if (!textable(c)) return false;
+  return TW.sendText(ws.id, c, text, by, { recordId: rec?.id, what }).then(() => { if (rec) PJ.recordActivity(rec.id, { kind: 'text', what, note: `Texted ${c.phone}`, by }); return true; }, (e) => (console.error('Customer text failed:', e.message), false));
+}
 const firstName = (c) => String(c?.name || '').trim().split(/\s+/)[0] || 'there';
 const jobAddress = (rec) => { const af = jobOfRecord(rec)?.t.fields.find((f) => f.key === 'address'); return (af && rec.values[af.id]) || ''; };
 const longDay = (d) => new Date(d + 'T12:00:00Z').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', timeZone: 'UTC' });
@@ -3352,7 +3360,8 @@ async function tellCustomer(ws, rec, c, { tag, subject, heading, lines, button, 
     emailed = await mailer.customerEmail(c.email, { team: ws.name, replyTo, subject, heading, lines, button, tag }).then(() => true, (e) => (console.error('Customer email failed:', e.message), false));
   }
   if (emailed) PJ.recordActivity(rec.id, { kind: 'email', what, note: `Emailed ${c.email}`, by });
-  return { emailed, email: emailable(c) ? c.email : null, dne: !!c && noContact(c), sms: c && !noContact(c) && c.phone ? smsOf(c, text) : null };
+  const texted = await twilioText(ws, rec, c, text, by, what);
+  return { emailed, texted, email: emailable(c) ? c.email : null, dne: !!c && noContact(c), sms: !texted && c && !noContact(c) && c.phone ? smsOf(c, text) : null };
 }
 // On my way: the customer hears who's coming and about when.
 async function onMyWay(ws, auth, rec, v, minutes, send) {
@@ -3363,7 +3372,10 @@ async function onMyWay(ws, auth, rec, v, minutes, send) {
   const text = `Hi ${firstName(c)}, it's ${who} from ${ws.name}. I'm on my way and should be there around ${fmtMinutes(Math.round(at / 5) * 5)} (about ${mins} minutes).`;
   const out = send
     ? await tellCustomer(ws, rec, c, { tag: 'on-my-way', subject: `${who} from ${ws.name} is on the way`, heading: `${who} is on the way`, lines: [`Hi ${firstName(c)},`, `${who} from ${ws.name} is on the way for your ${v.kind.toLowerCase()} and should be there around ${fmtMinutes(Math.round(at / 5) * 5)}, in about ${mins} minutes.`, jobAddress(rec) ? `Address: ${jobAddress(rec)}` : ''].filter(Boolean), text, replyTo: memberReply(ws, auth.memberId), by: auth.member, what: 'on my way sent' })
-    : { emailed: false, email: emailable(c) ? c.email : null, dne: !!c && noContact(c), sms: c && !noContact(c) && c.phone ? smsOf(c, text) : null };
+    : await (async () => {
+      const texted = await twilioText(ws, rec, c, text, auth.member, 'on my way sent');
+      return { emailed: false, texted, email: emailable(c) ? c.email : null, dne: !!c && noContact(c), sms: !texted && c && !noContact(c) && c.phone ? smsOf(c, text) : null };
+    })();
   for (const e of visitEntries(v.id)) e.omw = Date.now();
   save();
   return out;
@@ -3399,10 +3411,10 @@ function jobChanged(rec) {
   if (was === undefined || was === now || now !== 'Paid' || rec.reviewAsked || rec.reviewDue) return;
   const ws = db.workspaces[rec.wsId];
   const cm = custMsgsOf(ws);
-  if (cm.reviews && cm.reviewUrl && emailable(jobCustomer(rec))) rec.reviewDue = Date.now() + REVIEW_DELAY;
+  if (cm.reviews && cm.reviewUrl && reachable(jobCustomer(rec))) rec.reviewDue = Date.now() + REVIEW_DELAY;
 }
 async function custMsgTick() {
-  if (mailer.mode === 'off') return;
+  if (mailer.mode === 'off' && !Object.keys(db.twilio || {}).length) return;
   const now = Date.now();
   // Reviews that are due.
   for (const rec of Object.values(db.records)) {
@@ -3422,7 +3434,7 @@ async function custMsgTick() {
     const rec = db.records[list[0].recordId];
     for (const e of visitEntries(visitId)) e.reminded = now;
     save();
-    if (rec && emailable(jobCustomer(rec))) await remindVisit(ws, rec, publicVisit(list));
+    if (rec && reachable(jobCustomer(rec))) await remindVisit(ws, rec, publicVisit(list));
   }
 }
 setInterval(() => custMsgTick().catch((e) => alarm('Customer messages failed', e)), CM_TICK).unref?.();
@@ -5179,6 +5191,10 @@ async function api(req, res, url) {
   // Work this change opens up: whoever it's for hears they're up, once the change is made.
   if (m !== 'GET' && HANDOFF_ROUTES.has(a)) { const opened = openings(ws, auth.tz); res.once('finish', () => opened(auth.member, auth.memberId)); }
   const locked = readOnlyBlock(ws, a, m);
+  if (!locked || m === 'GET') {
+    const tw = await TW.route(req, res, parts, auth, ws);
+    if (tw !== null) return;
+  }
   if (locked) return send(res, 402, { error: locked, billing: true });
 
   // Billing: everyone sees where the team stands; owners subscribe and manage it, on Stripe's own pages.
@@ -8247,6 +8263,10 @@ const INV = invoicesModule({ db, save, broadcast, rid, hold, cleanText, readJson
   },
   dropMoneyId: (id) => { if (db.money[id]) dropMoney(db.money[id]); },
 });
+// Texting through the team's own Twilio account (twilio.js).
+const notifyAdmins = (wsId, n) => { for (const mb of db.workspaces[wsId]?.members || []) if (isAdminId(wsId, mb.id)) notify(wsId, mb.id, n); };
+const TW = twilioModule({ db, save, broadcast, seal, unseal, readJson, send, isAdmin, rid, cleanText, publicUrl: PUBLIC_URL, contactsOf, phoneKey, noContact, newContact, contactNews, notifyAdmins,
+  hook: (wsId, type, data) => hook(wsId, type, () => (type.startsWith('contact.') ? API.apiContact(data) : data), 'Text message'), alarm, offline, teamDay });
 // Two-step sign-in with an authenticator app (twostep.js).
 const TS = twoStepModule({ db, save, seal, unseal, readJson, send, appName: process.env.APP_NAME || 'Kloomie' });
 // QuickBooks Online: invoices and payments into the team's books, payments recorded there back (quickbooks.js).
@@ -8367,6 +8387,7 @@ const server = http.createServer(async (req, res) => {
   if (url.pathname === '/developers') return serveStatic(req, res, new URL('/developers.html', 'http://x'));
   if (url.pathname === '/terms' || url.pathname === '/privacy' || url.pathname === '/help') return serveStatic(req, res, new URL(url.pathname + '.html', 'http://x'));
   if (url.pathname.startsWith('/brand/') && (req.method === 'GET' || req.method === 'HEAD')) return serveLogo(req, res, url);
+  if (url.pathname.startsWith('/twilio/sms/') || url.pathname.startsWith('/twilio/status/')) return TW.incoming(req, res, url).catch((e) => { alarm('A Twilio message failed', e); if (!res.headersSent) send(res, 500, 'Error'); });
   if (url.pathname === '/quickbooks/disconnected' && (req.method === 'GET' || req.method === 'HEAD')) return QB.disconnectedPage(req, res);
   if (url.pathname === '/quickbooks/done' && (req.method === 'GET' || req.method === 'HEAD')) return QB.donePage(req, res, url);
   if (url.pathname === '/oauth/quickbooks/callback') return QB.callback(req, res, url).catch((e) => { alarm('Connecting QuickBooks failed', e); if (!res.headersSent) send(res, 500, 'Something went wrong connecting QuickBooks.'); });
@@ -8545,6 +8566,7 @@ async function eraseTeam(ws) {
   await Promise.all(Object.values(db.calendars).filter((x) => x.wsId === wsId).map(revokeCalendar));
   if (db.gcontacts[wsId]) await revokeCalendar({ provider: 'google', tokens: db.gcontacts[wsId].tokens });
   await QB.disconnect(wsId).catch(() => {});
+  await TW.disconnect(wsId).catch(() => {});
   for (const sock of sockets.get(wsId) || []) sock.close(4001, 'Team deleted');
   sockets.delete(wsId);
   let n = 0;

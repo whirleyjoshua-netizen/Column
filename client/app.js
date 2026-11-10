@@ -690,6 +690,11 @@
       if (msg.budget) S.budgets.push(msg.budget);
       renderDay();
       renderTool();
+    } else if (msg.type === 'texting') {
+      if (S.texting) api('GET', '/texting').then((y) => { S.texting = y; $('#settings .tw-sec')?.replaceWith(textingSection()); }).catch(() => {});
+    } else if (msg.type === 'text') {
+      const box = document.querySelector(`.tw-thread[data-contact="${msg.text.contactId}"]`);
+      if (box) box.dispatchEvent(new CustomEvent('text', { detail: msg.text }));
     } else if (msg.type === 'quickbooks') {
       if (S.qbo) api('GET', '/quickbooks').then((y) => { S.qbo = y; $('#settings .qbo-sec')?.replaceWith(qboSection()); }).catch(() => {});
     } else if (msg.type === 'github') {
@@ -763,6 +768,7 @@
     if (kind === 'task') { const t = taskById(id); return t ? (goalById(t.goalId) ? showStep(t) : showTasks()) : showTasks(); }
     if (kind === 'camp') return campById(id) ? openCampaign(id) : setTab('camps');
     if (kind === 'rec') return openRecord(id);
+    if (kind === 'contact') return openContactById(id);
     if (kind === 'approval') return approvalSheet(id);
     if (kind === 'agent') return AG.data ? agOpen('run:' + id) : (AG.view = 'run:' + id, openTool('agents'));
     if (kind === 'standup') { const p = projById(id); if (!p) return toast('That project is gone.'); return openProject(id).then(() => standupSheet(p)); }
@@ -7434,6 +7440,7 @@
     ['Visits', [['visit.scheduled', 'A visit is booked'], ['visit.changed', 'A visit moves or changes'], ['visit.done', 'A visit is done'], ['visit.cancelled', 'A visit is called off']]],
     ['Invoices', [['invoice.created', 'An invoice is made'], ['invoice.sent', 'An invoice is sent'], ['invoice.paid', 'An invoice is paid in full'], ['invoice.voided', 'An invoice is voided'], ['payment.received', 'A payment comes in']]],
     ['Files & signatures', [['file.received', 'A customer sends files through a link'], ['document.signed', 'A document is signed']]],
+    ['Text messages', [['text.received', 'A customer texts your Twilio number']]],
     ['Projects records', [['record.created', 'A record is added'], ['record.updated', 'A record changes'], ['record.deleted', 'A record is deleted']]],
   ];
   function intSection() {
@@ -7698,6 +7705,7 @@
       h('label', { class: 'pick' }, dne, 'Do not contact', h('small', {}, ' Never emailed, and left off call lists’ email.')),
       x?.extDne ? h('p', { class: 'day-hint' }, 'Unsubscribed in PSS too.') : null,
       x && toolOn('projects') ? contactJobs(x) : null,
+      x ? contactTexts(x) : null,
       del ? h('div', { class: 'btns' }, del) : null,
     ].filter(Boolean), async () => {
       const body = Object.fromEntries(Object.entries(f).filter(([, el]) => !el.disabled).map(([k, el]) => [k, el.value]));
@@ -7707,6 +7715,38 @@
       renderTool();
       if (!x) toast(`Added ${contactName(y)}`);
     }, x ? 'Save' : 'Add');
+  }
+  // Texts with this contact, through the team's Twilio number: the thread, new ones live, and a box to send.
+  function contactTexts(x) {
+    const wrap = h('div', { class: 'tw-thread', 'data-contact': x.id });
+    if (!S.texting) api('GET', '/texting').then((y) => { S.texting = y; }).catch(() => {});
+    const list = h('div', { class: 'tw-msgs' });
+    const draw = (msgs) => {
+      list.replaceChildren(...msgs.map((t) => h('div', { class: 'tw-msg ' + t.dir }, h('p', {}, t.body), h('small', {}, `${t.dir === 'in' ? 'Them' : t.by} · ${ago(t.at)}${t.dir === 'out' && t.status && !['sent', 'delivered', 'received'].includes(t.status) ? ' · ' + t.status : ''}${t.error ? ' · ' + t.error : ''}`))));
+      list.scrollTop = list.scrollHeight;
+    };
+    let msgs = [];
+    api('GET', `/contacts/${x.id}/texts`).then((y) => { msgs = y; draw(msgs); if (!msgs.length && !S.texting?.connected) wrap.remove(); }).catch(() => wrap.remove());
+    wrap.addEventListener('text', (e) => { msgs = [...msgs.filter((t) => t.id !== e.detail.id), e.detail]; draw(msgs); });
+    const box = h('textarea', { rows: 2, placeholder: x.dne ? 'Marked do not contact' : 'Write a text…', disabled: !!x.dne || !x.phone });
+    const sendIt = async () => {
+      if (!box.value.trim()) return;
+      try {
+        const t = await api('POST', `/contacts/${x.id}/texts`, { body: box.value });
+        box.value = '';
+        msgs = [...msgs.filter((y) => y.id !== t.id), t];
+        draw(msgs);
+      } catch (e) { toast(e.message); }
+    };
+    box.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) sendIt(); });
+    wrap.append(h('small', { class: 'hint' }, 'Texts'), list,
+      S.texting?.connected === false ? h('p', { class: 'day-hint' }, 'Connect Twilio in Settings → Connections to text from Kloomie.') : !x.phone ? h('p', { class: 'day-hint' }, 'Add a phone number to text them.') : h('div', { class: 'tw-send' }, box, h('button', { type: 'button', class: 'btn small primary-btn', onclick: sendIt, disabled: !!x.dne }, 'Send')));
+    return wrap;
+  }
+  async function openContactById(id) {
+    if (!S.contacts) S.contacts = (await api('GET', '/contacts').catch(() => ({ contacts: [] }))).contacts;
+    const x = S.contacts.find((y) => y.id === id);
+    return x ? contactSheet(x) : toast('That contact isn’t here any more.');
   }
   function dupesSheet(groups) {
     const rows = groups.map((g) => {
@@ -10522,6 +10562,8 @@
   }
   function custSaid(out, who, what) {
     if (out.dne) return toast(`${who} is marked do not contact, so nothing was sent.`);
+    if (out.emailed && out.texted) return toast(`${what} emailed and texted to ${who}`);
+    if (out.texted) return toast(`${what} texted to ${who}`);
     if (out.emailed) return toast(`${what} emailed to ${who}`);
     if (!out.email) return toast(`${who} has no email address. Text them instead.`);
     toast('Email isn’t working right now. Text them instead.');
@@ -10536,6 +10578,7 @@
         const out = await api('POST', `/visits/${v.id}/on-my-way`, { minutes: Number(mins.value), email });
         closeSheet();
         if (email) custSaid(out, who, 'On my way');
+        else if (out.texted) toast(`On my way texted to ${who}`);
         else textCustomer(out.sms);
       } catch (e) { toast(e.message); }
     };
@@ -10712,6 +10755,43 @@
     }, 'Record payment');
   }
   // Settings → Connections: the team's own Stripe account, so customers can pay invoices by card.
+  // Text messages through the team's own Twilio account.
+  function textingSection() {
+    const sec = h('section', { class: 'tw-sec' }, h('h3', {}, 'Text messages (Twilio)'));
+    const x = S.texting;
+    if (!x) {
+      api('GET', '/texting').then((y) => { S.texting = y; $('#settings .tw-sec')?.replaceWith(textingSection()); }).catch(() => {});
+      return sec.append(h('p', { class: 'day-hint' }, 'Loading…')), sec;
+    }
+    const redo = (y) => { S.texting = y; sec.replaceWith(textingSection()); };
+    if (x.connected) {
+      const off = h('button', { class: 'btn small danger', 'data-label': '1' }, 'Disconnect');
+      off.addEventListener('click', () => confirmClick(off, () => api('DELETE', '/texting').then(redo).catch((e) => toast(e.message))));
+      const test = async () => {
+        const num = h('input', { type: 'tel', placeholder: 'Your mobile number' });
+        sheet('Send a test text', [h('label', {}, 'Send it to', num)], async () => { await api('POST', '/texting/test', { to: num.value }); toast('Test text sent'); }, 'Send');
+      };
+      sec.append(...[
+        h('p', {}, `✓ Texting from ${x.number} (${x.account}), connected by ${x.by}. On my way, visit reminders and review requests are texted to customers, and you can text anyone from their contact. Replies come back to the contact.`),
+        x.trial ? h('p', { class: 'warn' }, 'This is a Twilio trial account: it can only text numbers you’ve verified in Twilio, and texts start with a trial note. Upgrade in Twilio to text customers.') : null,
+        h('p', { class: 'day-hint' }, 'Texting customers in the US needs your business registered with the carriers (A2P 10DLC) in Twilio: Messaging → Regulatory compliance. Until it’s approved, texts to US numbers may be blocked.'),
+        x.error ? h('p', { class: 'err' }, x.error) : null,
+        h('div', { class: 'btns' }, h('button', { class: 'btn small', onclick: test }, 'Send a test text'), off),
+      ].filter(Boolean));
+      return sec;
+    }
+    const sid = h('input', { placeholder: 'AC…', autocomplete: 'off' });
+    const token = h('input', { type: 'password', placeholder: 'Auth token', autocomplete: 'off' });
+    const number = h('input', { type: 'tel', placeholder: '+1 702 555 0142' });
+    const go = async () => {
+      try { redo(await api('PUT', '/texting', { sid: sid.value, token: token.value, number: number.value })); toast('Twilio connected'); } catch (e) { toast(e.message); }
+    };
+    sec.append(
+      h('p', { class: 'day-hint' }, 'Text customers from your own business number: on my way, visit reminders, review requests, and two-way texts on each contact. You use your own Twilio account, and Twilio bills you directly (a number is about a dollar or two a month, and each text a cent or so). In Twilio, buy a number, then copy the Account SID and Auth token from the Console home page.'),
+      h('label', {}, 'Account SID', sid), h('label', {}, 'Auth token', token), h('label', {}, 'Twilio phone number', number),
+      h('div', { class: 'btns' }, h('button', { class: 'btn primary-btn', onclick: go }, 'Connect Twilio')));
+    return sec;
+  }
   // QuickBooks Online: sent invoices and their payments go into the team's books; payments recorded there come back.
   function qboSection() {
     const sec = h('section', { class: 'qbo-sec' }, h('h3', {}, 'QuickBooks'));
@@ -15708,6 +15788,7 @@
       loadAi();
       if (amAdmin()) s.append(paySection());
       if (amAdmin()) s.append(qboSection());
+      if (amAdmin()) s.append(textingSection());
       if (amAdmin()) s.append(gcSection());
       if (amAdmin() && (!S.pss || S.pss.connected || S.pss.available)) s.append(pssSection());
       if (amAdmin()) s.append(intSection());

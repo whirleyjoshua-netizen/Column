@@ -67,8 +67,10 @@ try {
 
   // The new-webhook sheet.
   await A.ev(`[...document.querySelectorAll('#settings .int-sec button')].find((b) => /New webhook/.test(b.textContent)).click()`);
-  ok(await A.until(`document.querySelectorAll('.int-events > div').length === 6`), 'a new webhook offers six groups of events');
-  ok(await A.ev(`[...document.querySelectorAll('.int-events b')].map((b) => b.textContent).join('|')`) === 'Contacts|Tasks|Visits|Invoices|Files & signatures|Projects records', 'Contacts, Tasks, Visits, Invoices, Files & signatures, Projects records');
+  ok(await A.until(`document.querySelectorAll('.int-events > div').length === 7`), 'a new webhook offers seven groups of events');
+  ok(await A.ev(`[...document.querySelectorAll('.int-events b')].map((b) => b.textContent).join('|')`) === 'Contacts|Tasks|Visits|Invoices|Files & signatures|Text messages|Projects records', 'Contacts, Tasks, Visits, Invoices, Files & signatures, Text messages, Projects records');
+  await A.ev(`document.querySelector('#sheet [aria-label=Close]')?.click()`);
+  ok(await A.until(`/Connect Twilio/.test(document.querySelector('#settings .tw-sec')?.textContent || '')`), 'Connections has Text messages (Twilio) with Connect Twilio');
   ok(!A.errors.length, 'no errors on the page' + (A.errors.length ? ': ' + A.errors[0] : ''));
   A.close();
 } catch (e) {

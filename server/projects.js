@@ -35,7 +35,7 @@ export const EVENTS = [...RECORD_EVENTS,
   'task.created', 'task.done',
   'visit.scheduled', 'visit.changed', 'visit.done', 'visit.cancelled',
   'invoice.created', 'invoice.sent', 'invoice.paid', 'invoice.voided', 'payment.received',
-  'file.received', 'document.signed'];
+  'file.received', 'document.signed', 'text.received'];
 
 const keyOf = (name) => String(name || '').toLowerCase().normalize('NFKD').replace(/[^\w\s-]/g, '').trim().replace(/[\s-]+/g, '_').replace(/^(\d)/, '_$1').slice(0, 40) || 'field';
 // A key not used yet among these: "stage", then "stage_2"…
@@ -258,7 +258,7 @@ export function projectsModule({ db, save, broadcast, rid, hold = null, cleanTex
     if (!rec) return null;
     const e = logTo(rec, entry);
     // A call, email or meeting is contact: the record's "Last contacted" day moves up.
-    if (['call', 'email', 'meeting'].includes(entry.kind)) {
+    if (['call', 'email', 'meeting', 'text'].includes(entry.kind)) {
       const p = db.projects[rec.projectId];
       const t = p && typeOf(p, rec.typeId);
       const lc = t && fieldOf(t, 'last_contacted');

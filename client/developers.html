@@ -177,6 +177,7 @@ GET /projects/$PROJECT/deals/records?updated_since=2026-11-02T00:00:00Z&amp;limi
     <tr><td><code>invoice.created</code> <code>invoice.sent</code> <code>invoice.paid</code> <code>invoice.voided</code></td><td>An invoice is made, first sent, paid in full, or voided</td><td>the invoice</td></tr>
     <tr><td><code>payment.received</code></td><td>Any payment on an invoice: card, cash, or one recorded through the API</td><td><code>{"invoice_id", "invoice_number", "job_id", "payment", "invoice"}</code></td></tr>
     <tr><td><code>file.received</code></td><td>A customer sends files through a file request link</td><td><code>{"file", "from", "stack", "request_id"}</code></td></tr>
+    <tr><td><code>text.received</code></td><td>A customer texts the team's Twilio number (Settings → Connections → Text messages)</td><td><code>{"id", "from", "body", "contact_id", "contact_name", "received_at"}</code></td></tr>
     <tr><td><code>document.signed</code></td><td>Someone signs a document sent for signature</td><td><code>{"id", "document", "signer", "signed_name", "signed_at", "file"}</code></td></tr>
     <tr><td><code>record.created</code> <code>record.updated</code> <code>record.deleted</code></td><td>A Projects record (a job, a deal…) is added, changed or deleted. Only these can be narrowed to one project.</td><td>the record</td></tr>
   </table>
