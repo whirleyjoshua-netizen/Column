@@ -22,6 +22,7 @@ import { quickbooksModule } from './quickbooks.js';
 import { EVENTS as HOOK_EVENTS } from './projects.js';
 import { hqModule } from './hq.js';
 import { rulesModule } from './rules.js';
+import { standupModule } from './standup.js';
 import { Readable } from 'node:stream';
 import { EventEmitter } from 'node:events';
 import { openStore, Fenced } from './store.js';
@@ -5267,6 +5268,10 @@ async function api(req, res, url) {
     const out = await INV.route(req, res, parts, auth, ws);
     if (out !== null) return;
   }
+  if (a === 'projects' && c === 'standup') {
+    const out = await STANDUP.route(req, res, parts, auth, ws);
+    if (out !== null) return;
+  }
   if (a === 'projects' || a === 'records' || a === 'integrations' || a === 'project-templates') {
     const out = await PJ.route(req, res, parts, auth, ws);
     if (out !== null) return;
@@ -8060,6 +8065,18 @@ async function writePlaybook(ws, auth, title, md, id) {
   const made = addItem(baseItem(auth, { type: 'text', text: docText(doc.title || title, doc.blocks), dirId: dir.id, title: doc.title || title, blocks: doc.blocks, refs: docRefs(doc.blocks), v: 0, pinned: true, editedAt: Date.now() }));
   return publicItem(made);
 }
+// Daily standups on a project (standup.js): a blocker becomes a task for the project lead.
+const STANDUP = standupModule({ db, save, broadcast, rid, cleanText, readJson, send, notify, sees: (p, mid) => PJ.sees(p, mid), teamDay: (wsId) => teamDay(wsId),
+  localNow: (ws) => { const n = localNow(tzOf(ws), Date.now()); return { day: n.date, weekday: n.dow, minutes: n.min }; },
+  makeTask: (ws, auth, { text, due, assigneeId }) => {
+    const t = applyTask({ id: rid(), wsId: ws.id, by: auth.member, createdAt: Date.now(), text: '', done: false, doneAt: null, due: null, priority: 0, goalId: null, assigneeId: null }, { text, due, assigneeId });
+    t.assignedBy = auth.memberId;
+    db.tasks[t.id] = t;
+    save();
+    broadcast(ws.id, { type: 'task', task: publicTask(t) });
+    hook(ws.id, 'task.created', () => API.apiTask(t), auth.member);
+    return t;
+  } });
 RULES = rulesModule({ db, save, broadcast, rid, cleanText, readJson, send, notify, replay: replayAs });
 HQ = hqModule({ db, save, broadcast, rid, cleanText, readJson, send, isAdmin, aiAsk, aiRun, itemFiles, replyJson, enforced: (ws) => RULES.promptLines(ws), writePlaybook, allowLocal: process.env.ALLOW_LOCAL_FETCH === '1' });
 for (const ws of Object.values(db.workspaces)) if (HQ.migrate(ws)) save();

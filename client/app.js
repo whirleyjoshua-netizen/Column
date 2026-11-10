@@ -676,6 +676,8 @@
       renderTool();
     } else if (msg.type === 'quickbooks') {
       if (S.qbo) api('GET', '/quickbooks').then((y) => { S.qbo = y; $('#settings .qbo-sec')?.replaceWith(qboSection()); }).catch(() => {});
+    } else if (msg.type === 'standup') {
+      if (SU.p?.id === msg.projectId && $('#sheet:not(.hidden) .su-report')) standupSheet(SU.p, SU.day);
     } else if (msg.type === 'approvals') {
       loadApprovals();
     } else if (msg.type === 'hq') {
@@ -744,6 +746,7 @@
     if (kind === 'camp') return campById(id) ? openCampaign(id) : setTab('camps');
     if (kind === 'rec') return openRecord(id);
     if (kind === 'approval') return approvalSheet(id);
+    if (kind === 'standup') { const p = projById(id); if (!p) return toast('That project is gone.'); return openProject(id).then(() => standupSheet(p)); }
     const it = S.items.find((x) => x.id === id);
     if (!it) return toast('That isn’t here any more.');
     if (kind === 'doc' || it.type === 'text') return openDoc(it);
@@ -8428,6 +8431,7 @@
         h('button', { class: 'icon-btn', 'aria-label': 'All projects', html: I.back, onclick: () => { PR.open = null; renderProjects(); } }),
         h('span', { class: 'pj-ic' }, p.icon), h('b', { class: 'pj-name' }, p.name), p.private ? h('small', { title: 'Private' }, '🔒') : null,
         h('div', { class: 'pj-types' }, p.types.map((x) => h('button', { class: x.id === t.id ? 'on' : null, onclick: () => { PR.type = x.id; PR.view = null; PR.panel = null; renderProjects(); } }, `${x.icon || ''} ${x.name}`, h('small', {}, String(prRecs(p.id).filter((r) => r.typeId === x.id).length))))),
+        isTech(p) ? h('div', { class: 'pj-tools' }, h('button', { class: 'btn small', onclick: () => standupSheet(p) }, '☀️ Standup'), h('button', { class: 'btn small', onclick: () => techDocsSheet(p) }, '📚 Docs')) : null,
         h('button', { class: 'icon-btn', 'aria-label': 'Project options', html: I.more, onclick: more }),
         h('button', { class: 'icon-btn', 'aria-label': 'Close Projects', html: I.close, onclick: closeProjects })),
       h('div', { class: 'pj-bar' },
@@ -8679,6 +8683,94 @@
       h('p', { class: 'day-hint pj-count' }, `${recs.length.toLocaleString()} ${recs.length === 1 ? (t.singular || 'record').toLowerCase() : t.name.toLowerCase()}${shown.length < recs.length ? ` · showing the first ${shown.length}, search to narrow it down` : ''}`)];
   }
   // ----- board -----
+  // ----- a software project's docs and daily standup -----
+  const TECH_DOC = { features: ['prd', 'Write the requirements (PRD)'], work: ['spec', 'Write a technical spec'], releases: ['releasenotes', 'Write the release notes'] };
+  const isTech = (p) => p?.template === 'tech';
+  // Its own docs folder, made the first time it's needed.
+  async function techFolder(p) {
+    const name = `${p.name} docs`;
+    let d = dirs().find((x) => x.name === name && !x.parentId);
+    if (!d) {
+      d = await api('POST', '/dirs', { name, parentId: null, private: !!p.private });
+      if (!dirById(d.id)) S.workspace.dirs = [...dirs(), d];
+    }
+    return d;
+  }
+  async function techNewDoc(p, k, title) {
+    try {
+      const d = await techFolder(p);
+      const tpl = DOC_TEMPLATES[k].make();
+      const it = await api('POST', '/items', { type: 'text', dirId: d.id, doc: { title: title || tpl.title, blocks: tpl.blocks } });
+      upsert(it);
+      openDoc(it, { fresh: false });
+    } catch (e) {
+      toast(e.message);
+    }
+  }
+  function techDocsSheet(p) {
+    const linked = prRecs(p.id).filter((r) => r.docId).map((r) => ({ r, it: S.items.find((x) => x.id === r.docId) })).filter((x) => x.it);
+    const d = dirs().find((x) => x.name === `${p.name} docs` && !x.parentId);
+    const inFolder = d ? S.items.filter((x) => x.dirId === d.id && x.type === 'text' && !linked.some((y) => y.it.id === x.id)) : [];
+    const row = (it, sub) => h('button', { class: 'need-row', onclick: () => { closeSheet(); openDoc(it); } }, h('span', { class: 'need-ic' }, '📄'), h('span', { class: 'need-text' }, h('b', {}, docTitle(it)), h('small', {}, sub)));
+    const kinds = ['prd', 'spec', 'adr', 'setup', 'runbook', 'releasenotes'];
+    sheet(`${p.name} · docs`, [
+      h('p', { class: 'day-hint' }, 'Requirements, specs, decisions, setup and runbooks for this project, kept in one place. A feature, work item or release can have its own doc: open it and use the doc button.'),
+      h('div', { class: 'dv-start-row' }, kinds.map((k) => h('button', { title: DOC_TEMPLATES[k].sub, onclick: () => { closeSheet(); techNewDoc(p, k); } }, '+ ' + DOC_TEMPLATES[k].name))),
+      linked.length ? h('small', { class: 'hq-kind' }, 'On features, work and releases') : null,
+      ...linked.map(({ r, it }) => row(it, recName(prType(p, r.typeId), r))),
+      inFolder.length ? h('small', { class: 'hq-kind' }, `In ${p.name} docs`) : null,
+      ...inFolder.sort((a, b) => (b.editedAt || b.createdAt) - (a.editedAt || a.createdAt)).map((it) => row(it, `Edited ${ago(it.editedAt || it.createdAt)}`)),
+      !linked.length && !inFolder.length ? h('p', { class: 'day-hint' }, 'No docs yet.') : null,
+    ].filter(Boolean));
+  }
+  // The standup: today's three answers, and the team's report for the day.
+  const SU = { p: null, day: null, data: null };
+  async function standupSheet(p, day) {
+    SU.p = p;
+    SU.day = day || todayKey();
+    try {
+      SU.data = await api('GET', `/projects/${p.id}/standup?day=${SU.day}`);
+    } catch (e) {
+      return toast(e.message);
+    }
+    drawStandup();
+  }
+  function drawStandup() {
+    const { p, data } = SU;
+    const today = SU.day === todayKey();
+    const mine = data.entries.find((x) => x.memberId === S.me?.memberId);
+    const box = (label, v, ph) => { const t = h('textarea', { rows: 2, placeholder: ph }); t.value = v || ''; return h('label', {}, label, t); };
+    const did = box('What did you finish?', mine?.did, 'Finished the login screen');
+    const doing = box('What are you working on today?', mine?.doing, 'Sign in with Google');
+    const blocked = box('Is anything in your way?', mine?.blocked, 'Leave empty if nothing is');
+    const val = (l) => l.querySelector('textarea').value;
+    const owner = ['owner', 'admin'].includes(S.workspace?.members?.find((m) => m.id === S.me?.memberId)?.role) || p.memberId === S.me?.memberId;
+    const settings = owner ? h('div', { class: 'su-set' },
+      h('label', { class: 'pick' }, h('input', { type: 'checkbox', checked: data.on, onchange: async (e) => { SU.data = await api('PATCH', `/projects/${p.id}/standup`, { on: e.target.checked }).catch((er) => toast(er.message)) || SU.data; drawStandup(); } }), 'Remind everyone each weekday morning'),
+      h('label', {}, 'Blockers go to', h('select', { onchange: async (e) => { SU.data = await api('PATCH', `/projects/${p.id}/standup`, { leadId: e.target.value }).catch((er) => toast(er.message)) || SU.data; } }, (S.workspace?.members || []).map((m) => h('option', { value: m.id, selected: m.id === data.leadId }, m.name))))) : null;
+    const step = (n) => standupSheet(p, addDaysKey(SU.day, n));
+    sheet(`${p.name} · standup`, [
+      h('div', { class: 'su-day' }, h('button', { class: 'icon-btn', 'aria-label': 'Day before', html: I.left, onclick: () => step(-1) }), h('b', {}, today ? 'Today' : dayName(SU.day)), h('button', { class: 'icon-btn', 'aria-label': 'Day after', html: I.right, disabled: today, onclick: () => step(1) })),
+      today ? h('div', { class: 'su-form' }, did, doing, blocked,
+        h('div', { class: 'btns' }, h('button', { class: 'btn primary-btn', onclick: async () => {
+          try {
+            SU.data = await api('POST', `/projects/${p.id}/standup`, { did: val(did), doing: val(doing), blocked: val(blocked) });
+            toast(val(blocked).trim() ? `Posted. ${memberName(SU.data.leadId)} gets a task to unblock you.` : 'Posted');
+            drawStandup();
+          } catch (e) { toast(e.message); }
+        } }, mine ? 'Update' : 'Post'))) : null,
+      h('div', { class: 'su-report' },
+        h('div', { class: 'sp-col-h' }, h('b', {}, 'The team'), h('small', {}, `${data.entries.length} posted${data.blockers ? ` · ⚠ ${plural(data.blockers, 'blocker')}` : ''}`)),
+        data.entries.length ? data.entries.map((x) => h('div', { class: 'su-entry' + (x.blocked ? ' blocked' : '') },
+          h('div', { class: 'sp-person-h' }, avatar(x.memberId), h('b', {}, memberName(x.memberId)), h('small', {}, ' ' + ago(x.at))),
+          x.did ? h('p', {}, h('small', {}, 'Finished '), x.did) : null,
+          x.doing ? h('p', {}, h('small', {}, 'Today '), x.doing) : null,
+          x.blocked ? h('p', { class: 'su-block' }, h('small', {}, '⚠ Blocked '), x.blocked) : null)) : h('p', { class: 'day-hint' }, 'Nobody has posted yet.'),
+        data.waiting.length ? h('p', { class: 'day-hint' }, 'Not posted: ' + data.waiting.map(memberName).join(', ')) : null),
+      settings,
+    ].filter(Boolean));
+  }
+
   // ----- the roadmap timeline: records as bars from start to end, grouped (by phase), with progress and warnings -----
   const shortDay = (k) => keyDate(k).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
   // How much of a record's work is done: the records that link to it whose status is at the last stage.
@@ -8915,9 +9007,11 @@
       if (from.length) back.push({ o, f, from });
     }
     const doc = r.docId && S.items.find((x) => x.id === r.docId);
+    const techDoc = isTech(p) && TECH_DOC[t.key];
     const notes = async () => {
       if (doc) return openDoc(doc);
-      const it = await prCall('POST', '/items', { type: 'text', doc: { title: recName(t, r), blocks: [] } });
+      const tpl = techDoc ? DOC_TEMPLATES[techDoc[0]].make() : null;
+      const it = await prCall('POST', '/items', { type: 'text', ...(techDoc ? { dirId: (await techFolder(p).catch(() => null))?.id } : {}), doc: { title: tpl ? `${recName(t, r)} · ${tpl.title.toLowerCase()}` : recName(t, r), blocks: tpl ? tpl.blocks : [] } });
       if (!it) return;
       upsert(it);
       await prCall('PATCH', '/records/' + r.id, { docId: it.id }).then((y) => y && prUpsertRecord(y));
@@ -8955,7 +9049,7 @@
       ...richFields.map((f) => prRichBlock(p, t, r, f)),
       prActivity(p, t, r),
       ...back.map(({ o, f, from }) => h('div', { class: 'pj-back' }, h('h4', {}, `${o.name} · ${f.name}`), from.map((x) => h('button', { class: 'pj-link', onclick: () => { PR.type = o.id; PR.view = null; PR.panel = x.id; renderProjects(); } }, recName(o, x), o.fields.find((y) => y.type === 'money') && x.values[o.fields.find((y) => y.type === 'money').id] ? h('small', {}, ' · ' + money(x.values[o.fields.find((y) => y.type === 'money').id])) : null)))),
-      h('button', { class: 'btn pj-notes', onclick: notes }, doc ? `📄 Notes · ${docSnippet(doc) ? shortText(docSnippet(doc), 50) : 'open'}` : '📄 Add notes (a doc)'),
+      h('button', { class: 'btn pj-notes', onclick: notes }, doc ? `📄 ${techDoc ? docTitle(doc) : 'Notes'} · ${docSnippet(doc) ? shortText(docSnippet(doc), 50) : 'open'}` : techDoc ? '📄 ' + techDoc[1] : '📄 Add notes (a doc)'),
       h('small', { class: 'pj-meta' }, `Added by ${r.by} · ${ago(r.createdAt)}${r.updatedAt > r.createdAt + 1000 ? ` · changed ${ago(r.updatedAt)}` : ''}${r.extId ? ` · from another app (${r.extId})` : ''}`));
   }
   // ----- spreadsheets in and out -----
@@ -10997,6 +11091,12 @@
       { id: ColumnDocs.uid(), type: 'toggle', runs: [{ text: '“It costs too much”' }] }, { id: ColumnDocs.uid(), type: 'p', indent: 1, runs: [] },
       ...ColumnDocs.fromText('# Close\nBook the next step: …')] }) },
     sop: { name: 'Process guide', sub: 'Steps anyone can follow', make: () => ({ title: 'How we…', blocks: ColumnDocs.fromText('# When to use this\n# Steps\n1. \n2. \n3. \n# Checklist\n- [ ] \n# Who to ask\n') }) },
+    prd: { tech: true, name: 'Requirements (PRD)', sub: 'Problem, who it’s for, what it must do, how we’ll know', make: () => ({ title: 'Requirements', blocks: ColumnDocs.fromText('# The problem\nWhat’s wrong today, and for whom.\n# Who it’s for\n- \n# What it must do\n- [ ] \n# Out of scope\n- \n# How we’ll know it worked\n- \n# Open questions\n- ') }) },
+    spec: { tech: true, name: 'Technical spec', sub: 'Approach, data, APIs, risks, rollout', make: () => ({ title: 'Technical spec', blocks: ColumnDocs.fromText('# Summary\nWhat we’re building, in two sentences.\n# Approach\n# Data and schema\n- \n# APIs\n- \n# Risks and edge cases\n- \n# Testing\n- [ ] \n# Rollout\n- ') }) },
+    adr: { tech: true, name: 'Decision record', sub: 'The decision, options, why, who decided', make: () => ({ title: `Decision: …`, blocks: ColumnDocs.fromText(`# Decision\nWhat we decided, in one line.\n# Context\nWhat made us decide now.\n# Options we considered\n1. \n2. \n# Why this one\n# Consequences\n- \n# Decided by\n${new Date().toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' })} · `) }) },
+    setup: { tech: true, name: 'Setup guide', sub: 'Get a new developer running', make: () => ({ title: 'Setup guide', blocks: ColumnDocs.fromText('# What you need\n- \n# Get the code\n```\ngit clone …\n```\n# Run it locally\n1. \n2. \n# Environment variables\n- \n# Run the tests\n# Who to ask\n') }) },
+    runbook: { tech: true, name: 'Runbook', sub: 'Deploy, roll back, what to do when it breaks', make: () => ({ title: 'Runbook', blocks: ColumnDocs.fromText('# Deploy\n1. \n# Roll back\n1. \n# When it breaks\n## Symptom\n## Check\n## Fix\n# Who’s on call\n') }) },
+    releasenotes: { tech: true, name: 'Release notes', sub: 'What’s new, fixed, known issues', make: () => ({ title: 'Release notes', blocks: ColumnDocs.fromText('# What’s new\n- \n# Fixed\n- \n# Known issues\n- \n# Thanks\n') }) },
     meeting: { name: 'Meeting notes', sub: 'Who, notes, decisions, action items', make: () => ({ title: `Meeting · ${new Date().toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`, blocks: ColumnDocs.fromText('# Who was there\n- \n# Notes\n- \n# Decisions\n- \n# Action items\n- [ ] ') }) },
   };
   // Under the title of an empty doc: start from a template, or have AI draft it.
@@ -11011,7 +11111,7 @@
       h('small', {}, 'Start from'),
       h('div', { class: 'dv-start-row' },
         h('button', { class: 'dv-start-ai', onclick: () => docAskDraft(x) }, '✦ Draft it with AI'),
-        Object.entries(DOC_TEMPLATES).map(([k, t]) => h('button', { title: t.sub, onclick: () => use(k) }, t.name)))].filter(Boolean));
+        Object.entries(DOC_TEMPLATES).filter(([, t]) => !t.tech || (S.projects || []).some(isTech)).map(([k, t]) => h('button', { title: t.sub, onclick: () => use(k) }, t.name)))].filter(Boolean));
   }
   function docAskDraft(x) {
     const ask = h('textarea', { rows: 3, placeholder: 'What’s this doc for? e.g. a one-page offer for fleet managers, or a recap of this week’s calls' });
@@ -11040,7 +11140,7 @@
       await patchTask(now, { files: [...new Set([...(now.files || []), it.id])] });
       openDoc(it);
     };
-    openMenu(anchor, [{ head: 'Write a doc for this task' }, { label: 'Blank doc', run: () => make(null) }, ...Object.entries(DOC_TEMPLATES).map(([k, x]) => ({ label: h('span', { class: 'tool-item' }, x.name, h('small', {}, x.sub)), run: () => make(k) }))]);
+    openMenu(anchor, [{ head: 'Write a doc for this task' }, { label: 'Blank doc', run: () => make(null) }, ...Object.entries(DOC_TEMPLATES).filter(([, x]) => !x.tech).map(([k, x]) => ({ label: h('span', { class: 'tool-item' }, x.name, h('small', {}, x.sub)), run: () => make(k) }))]);
   }
 
   // ----- Word documents: read, edit and save as .docx, or make a PDF to sign or send -----

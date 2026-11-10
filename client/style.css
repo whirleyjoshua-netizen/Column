@@ -2220,3 +2220,16 @@ button.hq-entry:hover { background: var(--card-hover); }
 .sp-person.over .sp-person-h small { color: #f59e0b; }
 .sp-empty { padding: 30px 10px; text-align: center; max-width: 480px; margin: 0 auto; }
 @media (prefers-color-scheme: light) { .sp-ok { color: #15803d; } .sp-warn, .sp-person.over .sp-person-h small { color: #b45309; } }
+
+/* software project: docs and standup */
+.pj-tools { display: flex; gap: 6px; margin-left: auto; }
+.su-day { display: flex; align-items: center; gap: 8px; justify-content: center; }
+.su-form textarea { width: 100%; }
+.su-report { display: flex; flex-direction: column; gap: 6px; border-top: 1px solid var(--line); padding-top: 10px; margin-top: 4px; }
+.su-entry { border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; }
+.su-entry.blocked { border-color: #f59e0b; }
+.su-entry p { margin: 4px 0 0; font-size: 13.5px; white-space: pre-wrap; }
+.su-entry p small { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; margin-right: 4px; }
+.su-block { color: #f59e0b; }
+.su-set { display: flex; flex-direction: column; gap: 8px; border-top: 1px solid var(--line); padding-top: 10px; }
+@media (prefers-color-scheme: light) { .su-block { color: #b45309; } .su-entry.blocked { border-color: #d97706; } }
