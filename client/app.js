@@ -1199,11 +1199,8 @@
     const sendIt = async () => {
       const text = ta.value;
       if (!text.trim() && !links.length) return;
-      // "/vault …" goes into the vault, never into the stack or chat.
-      if (/^\/vault(\s|$)/i.test(text.trim())) {
-        if (!toolOn('vault')) return toast('The vault is switched off for this team.');
-        return vaultQuick({ text: text.trim(), onSaved: clearBox });
-      }
+      // "/doc …", "/spent …", "/vault …": straight into that tool, never posted. Unknown ones post as typed.
+      if (!links.length && runSlash(view, text, clearBox)) return;
       const sent = links.splice(0);
       const body = [text.trim(), sent.map((l) => linkToken(l.type, l.id)).join(' ')].filter(Boolean).join('\n');
       ta.value = '';
@@ -1219,8 +1216,9 @@
       }
     };
     let mentionKey = () => false;
+    let slashKey = () => false;
     ta.addEventListener('keydown', (e) => {
-      if (mentionKey(e)) return;
+      if (slashKey(e) || mentionKey(e)) return;
       if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
         e.preventDefault();
         sendIt();
@@ -1250,10 +1248,15 @@
       { label: 'New Word document', run: () => newDocSheet(destOf(view)) },
       viewStack(view) ? { label: '📥 Request files from someone…', run: () => requestSheet(viewStack(view)) } : null,
     ].filter(Boolean)) }, '+');
-    if (!chat) return h('div', { class: 'composer' }, add, ta);
+    if (!chat) {
+      const box = h('div', { class: 'composer-wrap' }, h('div', { class: 'composer' }, add, ta));
+      slashKey = slashAuto(box, ta, view, clearBox);
+      return box;
+    }
     const linkBtn = h('button', { class: 'add link-btn', title: 'Link a stack, file or task  ([[)', 'aria-label': 'Link a stack, file or task', html: I.link, onclick: () => openPicker(wrap, addLink) });
     const wrap = h('div', { class: 'composer-wrap' }, tray, h('div', { class: 'composer' }, viewThread(view) ? null : add, linkBtn, ta));
     mentionKey = mentionAuto(wrap, ta);
+    slashKey = slashAuto(wrap, ta, view, clearBox);
     return wrap;
   }
 
@@ -1504,6 +1507,98 @@
         sel = (sel + (e.key === 'ArrowDown' ? 1 : -1) + rows.length) % rows.length;
         draw();
       } else if (e.key === 'Enter' || e.key === 'Tab') pick(rows[sel].name);
+      else if (e.key === 'Escape') close();
+      else return false;
+      e.preventDefault();
+      e.stopPropagation();
+      return true;
+    };
+  }
+
+  // ---------- "/" commands: from a stack or chat box straight into a tool ----------
+  // What's typed after the command fills in that tool's form, so "/spent 45 gas" opens Money out with $45 and
+  // "gas". Each one shows only when its tool is on (and the person may use it); one that's off says so.
+  const moneyArgs = (t) => {
+    const m = t.match(/(?:^|\s)\$?(\d[\d,]*(?:\.\d{1,2})?)(?=\s|$)/);
+    if (!m) return { amount: '', rest: t };
+    return { amount: m[1].replace(/,/g, ''), rest: (t.slice(0, m.index) + ' ' + t.slice(m.index + m[0].length)).replace(/\s+/g, ' ').trim() };
+  };
+  // Fill the open sheet's first box (for forms that only take a whole record).
+  const fillFirst = (v) => setTimeout(() => { const el = $('#sheet input:not([type=hidden]):not([type=checkbox]), #sheet textarea'); if (el && v) { el.value = v; el.dispatchEvent(new Event('input')); } });
+  function slashCommands(view) {
+    const stack = viewStack(view);
+    const off = (name) => `${name} is switched off for this team.`;
+    return [
+      { cmd: 'task', also: ['day', 'todo'], hint: 'Add to your Day', arg: 'what to do', run: (t) => openSheet({ text: t, date: todayKey() }) },
+      { cmd: 'doc', hint: 'Start a doc here', arg: 'title', run: (t) => newDoc(destOf(view), { title: t }) },
+      { cmd: 'vault', hint: 'Save to your vault, locked', arg: 'code, login, note…', on: toolOn('vault'), off: off('The vault'), keep: true, run: (t, clear) => vaultQuick({ text: t, onSaved: clear }) },
+      { cmd: 'sealed', also: ['secret'], hint: 'Send a sealed note (opens with a code)', arg: 'the secret', run: (t) => { sealNote(destOf(view)); setTimeout(() => { const el = $('#sheet textarea'); if (el) el.value = t; }); } },
+      { cmd: 'spent', also: ['expense'], hint: 'Money out, in Finance', arg: '45 gas', on: toolOn('bills'), off: off('Finance'), run: (t) => { const a = moneyArgs(t); moneySheet(null, 'out', { note: a.rest, amount: a.amount }); } },
+      { cmd: 'income', also: ['earned'], hint: 'Money in, in Finance', arg: '1200 Smith job', on: toolOn('bills'), off: off('Finance'), run: (t) => { const a = moneyArgs(t); moneySheet(null, 'in', { note: a.rest, amount: a.amount }); } },
+      { cmd: 'bill', hint: 'A bill to pay, with a reminder', arg: 'Electric 140', on: toolOn('bills'), off: off('Finance'), run: (t) => { const a = moneyArgs(t); billSheet(null, { name: a.rest, amount: a.amount }); } },
+      { cmd: 'budget', hint: 'Set a monthly budget', arg: 'Gas 400', on: toolOn('bills'), off: off('Finance'), run: (t) => { const a = moneyArgs(t); budgetSheet(null, a.rest, a.amount); } },
+      { cmd: 'finance', also: ['money'], hint: 'Open Finance', on: toolOn('bills'), off: off('Finance'), run: () => openTool('bills') },
+      { cmd: 'contact', hint: 'Add a contact', arg: 'name', on: toolOn('contacts') && amAdmin(), off: toolOn('contacts') ? 'Contacts are for team owners and admins.' : off('Contacts'), run: (t) => { contactSheet(null); fillFirst(t); } },
+      { cmd: 'contacts', hint: 'Open Contacts', on: toolOn('contacts') && amAdmin(), off: toolOn('contacts') ? 'Contacts are for team owners and admins.' : off('Contacts'), run: () => openTool('contacts') },
+      { cmd: 'campaign', hint: 'Start a campaign', arg: 'name', run: (t) => { campaignSheet(null); fillFirst(t); } },
+      { cmd: 'job', also: ['jobs', 'projects'], hint: 'Open Jobs & projects', on: toolOn('projects'), off: off('Jobs & projects'), run: () => showProjects() },
+      { cmd: 'meeting', also: ['record'], hint: 'Record a meeting, get the notes', arg: 'what it’s about', on: toolOn('meetings'), off: off('Meeting notes'), run: (t) => askRecord(t) },
+      { cmd: 'sidekick', also: ['ask'], hint: 'Plan it with Sidekick', on: toolOn('sidekick'), off: off('Sidekick'), run: () => { SK.open = null; openTool('sidekick'); } },
+      { cmd: 'plan', hint: 'Open the Planner', run: () => openTool('planner') },
+      { cmd: 'map', hint: 'Open the Map', on: toolOn('map'), off: off('Map'), run: () => openMap() },
+      { cmd: 'sign', also: ['signature'], hint: 'Open Signatures', on: toolOn('signs'), off: off('Signatures'), run: () => openTool('signs') },
+      { cmd: 'email', hint: 'Open Email', on: toolOn('email') && mayEmail(), off: toolOn('email') ? 'Your team’s owners haven’t turned on email for members.' : off('Email'), run: () => openTool('email') },
+      { cmd: 'folders', hint: 'Open Folders', on: toolOn('folders'), off: off('Folders'), run: () => openTool('folders') },
+      stack ? { cmd: 'request', hint: 'Ask someone to send files into this stack', run: () => requestSheet(stack) } : null,
+    ].filter(Boolean).map((c) => ({ on: true, ...c }));
+  }
+  const findSlash = (view, w) => slashCommands(view).find((c) => c.cmd === w || c.also?.includes(w));
+  // True when the text was a command (run, or refused because its tool is off).
+  function runSlash(view, text, clear) {
+    const m = text.trim().match(/^\/([a-z]+)(?:\s+([\s\S]*))?$/i);
+    const c = m && findSlash(view, m[1].toLowerCase());
+    if (!c) return false;
+    if (!c.on) { toast(c.off); return true; }
+    if (!c.keep) clear();
+    c.run(c.keep ? text.trim() : (m[2] || '').trim(), clear);
+    return true;
+  }
+  // The list that opens on "/" at the start of the box.
+  function slashAuto(wrap, ta, view, clear) {
+    let pop = null, rows = [], sel = 0;
+    const close = () => { pop?.remove(); pop = null; };
+    const pick = (c) => {
+      close();
+      if (c.arg) {
+        ta.value = '/' + c.cmd + ' ';
+        ta.setSelectionRange(ta.value.length, ta.value.length);
+        ta.focus();
+      } else runSlash(view, '/' + c.cmd, clear);
+    };
+    const draw = () => {
+      pop.replaceChildren(h('div', { class: 'mh' }, 'Commands'), ...rows.map((c, i) =>
+        h('button', { class: 'pk-row' + (i === sel ? ' on' : ''), onpointerdown: (e) => { e.preventDefault(); pick(c); } },
+          h('span', { class: 'pk-label' }, h('b', {}, '/' + c.cmd), c.arg ? h('small', { class: 'slash-arg' }, ' ' + c.arg) : null),
+          h('span', { class: 'pk-sub' }, c.hint))));
+      pop.querySelector('.on')?.scrollIntoView({ block: 'nearest' });
+    };
+    ta.addEventListener('input', () => {
+      const m = ta.value.match(/^\/([a-z]*)$/i);
+      if (!m) return close();
+      const q = m[1].toLowerCase();
+      rows = slashCommands(view).filter((c) => c.on && [c.cmd, ...(c.also || [])].some((w) => w.startsWith(q)));
+      if (!rows.length) return close();
+      sel = 0;
+      if (!pop) wrap.append((pop = h('div', { class: 'picker mention-pop slash-pop' })));
+      draw();
+    });
+    ta.addEventListener('blur', close);
+    return (e) => {
+      if (!pop) return false;
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        sel = (sel + (e.key === 'ArrowDown' ? 1 : -1) + rows.length) % rows.length;
+        draw();
+      } else if (e.key === 'Enter' || e.key === 'Tab') pick(rows[sel]);
       else if (e.key === 'Escape') close();
       else return false;
       e.preventDefault();
@@ -12588,9 +12683,9 @@
         paid.map(({ b, p }) => h('div', { class: 'bill-hist' }, h('span', {}, b.name, h('small', {}, ` · due ${dueLabel(p.due)}${p.auto ? ' · autopay' : ''}`)), h('span', {}, money(p.amount))))) : null,
     ];
   }
-  function billSheet(b) {
-    const name = h('input', { value: b?.name || '', placeholder: 'Electric, Rent, Truck loan…' });
-    const amount = h('input', { value: b ? (b.amount / 100).toFixed(2) : '', placeholder: '0.00', inputmode: 'decimal' });
+  function billSheet(b, preset) {
+    const name = h('input', { value: b?.name || preset?.name || '', placeholder: 'Electric, Rent, Truck loan…' });
+    const amount = h('input', { value: b ? (b.amount / 100).toFixed(2) : preset?.amount || '', placeholder: '0.00', inputmode: 'decimal' });
     const due = h('input', { type: 'date', value: b?.due || todayKey() });
     const repeat = h('select', {}, BILL_REPEATS.map(([v, t]) => h('option', { value: v, selected: (b?.repeat || 'monthly') === v }, t)));
     const mineOrNew = !b || b.memberId === S.me?.memberId;
@@ -12767,7 +12862,7 @@
   // preset: a new entry's campaign and note, when it's logged from a step.
   function moneySheet(x, kind, preset) {
     kind = x?.kind || kind || 'out';
-    const amount = h('input', { value: x ? (x.amount / 100).toFixed(2) : '', placeholder: '0.00', inputmode: 'decimal' });
+    const amount = h('input', { value: x ? (x.amount / 100).toFixed(2) : preset?.amount || '', placeholder: '0.00', inputmode: 'decimal' });
     const day = h('input', { type: 'date', value: x?.day || todayKey() });
     const cat = catInput(kind, x?.category);
     const note = h('input', { value: x?.note || preset?.note || '', placeholder: kind === 'in' ? 'Who paid, what for' : 'Where, what for' });
@@ -12798,9 +12893,9 @@
       renderTool();
     }, x ? 'Save' : 'Add');
   }
-  function budgetSheet(b, category) {
+  function budgetSheet(b, category, amount) {
     const cat = catInput('out', b?.category || category || '');
-    const limit = h('input', { value: b ? (b.limit / 100).toFixed(0) : '', placeholder: '400', inputmode: 'decimal' });
+    const limit = h('input', { value: b ? (b.limit / 100).toFixed(0) : amount || '', placeholder: '400', inputmode: 'decimal' });
     const scope = h('select', { disabled: !!b || !amOwner() }, h('option', { value: 'personal' }, 'Personal'), h('option', { value: 'business', selected: (b?.scope || (billScope === 'business' ? 'business' : 'personal')) === 'business' }, 'Business'));
     const del = b ? h('button', { class: 'btn small danger', 'data-label': '1' }, 'Remove budget') : null;
     del?.addEventListener('click', () => confirmClick(del, async () => {

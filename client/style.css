@@ -536,6 +536,8 @@ button.ln-chip:hover, .ln-task:hover { background: var(--card-hover); }
 .badge.at { background: #f5b942; color: #1a1a1a; }
 .mention-pop { max-height: min(280px, 50vh); overflow-y: auto; padding: 4px; }
 .mention-pop .mh { font-size: 10.5px; color: var(--muted); padding: 4px 8px 3px; text-transform: uppercase; letter-spacing: 0.05em; }
+.slash-pop .pk-label b { font-weight: 600; }
+.slash-pop .slash-arg { color: var(--muted); font-size: 11.5px; }
 .at-ic { background: var(--accent-soft); font-size: 11px; font-weight: 700; border-radius: 50%; }
 
 /* ⌘K palette */
