@@ -51,6 +51,7 @@ const SOURCES = ['owner', 'website', 'brand', 'ai'];
 const ESSENTIALS = ['about', 'service', 'area', 'mission', 'value', 'voice', 'goal', 'ideal', 'process', 'rule'];
 
 const PAGE_HINT = /about|story|who-we|mission|value|service|product|pricing|price|cost|faq|question|area|location|warrant|guarantee|review|testimonial|team|process|how-it|why/i;
+const PAGE_ORDER = [/about|story|who-we|mission|value/i, /service|product/i, /pricing|price|cost/i, /faq|question/i, /review|testimonial/i, /warrant|guarantee|process|how-it|why/i, /area|location/i, /team/i];
 const MAX_PAGES = 7;
 const PAGE_BYTES = 1_500_000;
 const PAGE_CHARS = 6000;
@@ -252,8 +253,15 @@ export function hqModule({ db, save, broadcast, rid, cleanText, readJson, send, 
     }
     const pages = [{ url: first.url.href, ...readPage(first.html, first.url) }];
     const seen = new Set([first.url.href.replace(/\/$/, '')]);
+    // The pages that say the most about a business first; one page from each section (a site's twenty
+    // service-area pages count as one).
+    const rank = (l) => { const i = PAGE_ORDER.findIndex((re) => re.test(l.href + ' ' + l.label)); return i < 0 ? PAGE_ORDER.length : i; };
+    const sections = new Set();
     const next = pages[0].links.filter((l) => PAGE_HINT.test(l.href + ' ' + l.label) && !/\.(pdf|jpe?g|png|gif|zip)$/i.test(l.href))
-      .filter((l) => { const k = l.href.replace(/\/$/, ''); if (seen.has(k)) return false; seen.add(k); return true; }).slice(0, MAX_PAGES - 1);
+      .filter((l) => { const k = l.href.replace(/\/$/, ''); if (seen.has(k)) return false; seen.add(k); return true; })
+      .sort((a, b) => rank(a) - rank(b))
+      .filter((l) => { const parts = new URL(l.href).pathname.split('/').filter(Boolean); if (parts.length < 2) return true; if (sections.has(parts[0])) return false; sections.add(parts[0]); return true; })
+      .slice(0, MAX_PAGES - 1);
     const more = await Promise.all(next.map(async (l) => {
       try { const p = await getPage(await publicUrl(l.href)); return { url: p.url.href, ...readPage(p.html, p.url) }; } catch { return null; }
     }));
