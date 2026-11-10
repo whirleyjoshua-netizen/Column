@@ -60,8 +60,8 @@ const MAX_PAGES = 7;
 const BASICS = ['about', 'service', 'area', 'different'];
 export const TASKS = {
   general: { label: 'anything', kinds: 'all', voice: true, rules: true },
-  customer: { label: 'writing to a customer', kinds: [...BASICS, 'mission', 'value', 'voice', 'prefer', 'avoid', 'never', 'why', 'objection', 'culture', 'policy', 'pricing', 'rule'], areas: ['customers', 'sales', 'marketing'], needs: ['voice'], voice: true, rules: true },
-  sales: { label: 'moving a customer, deal or job forward', kinds: [...BASICS, 'notwanted', 'value', 'voice', 'prefer', 'avoid', 'never', 'goal', 'ideal', 'why', 'objection', 'process', 'policy', 'pricing', 'rule'], areas: ['sales', 'customers', 'jobs'], needs: ['ideal', 'voice'], voice: true, rules: true },
+  customer: { label: 'writing to a customer', kinds: [...BASICS, 'mission', 'value', 'voice', 'prefer', 'avoid', 'never', 'why', 'objection', 'culture', 'process', 'policy', 'pricing', 'rule'], areas: ['customers', 'sales', 'marketing'], needs: ['voice', 'pricing'], voice: true, rules: true },
+  sales: { label: 'moving a customer, deal or job forward', kinds: [...BASICS, 'notwanted', 'value', 'voice', 'prefer', 'avoid', 'never', 'goal', 'ideal', 'why', 'objection', 'process', 'policy', 'pricing', 'rule'], areas: ['sales', 'customers', 'jobs'], needs: ['ideal', 'voice', 'pricing'], voice: true, rules: true },
   writing: { label: 'writing a document', kinds: [...BASICS, 'model', 'mission', 'story', 'value', 'voice', 'prefer', 'avoid', 'never', 'vision', 'goal', 'ideal', 'why', 'culture', 'process', 'policy', 'pricing', 'rule'], needs: ['voice'], voice: true, rules: true },
   internal: { label: 'notes and reports for the team', kinds: [...BASICS, 'mission', 'value', 'goal', 'culture', 'process', 'policy', 'rule'], areas: ['team', 'jobs', 'money'], rules: true },
   plan: { label: 'planning work', kinds: [...BASICS, 'model', 'notwanted', 'mission', 'value', 'vision', 'goal', 'ideal', 'culture', 'process', 'policy', 'rule'], needs: ['goal'], rules: true },
@@ -179,11 +179,11 @@ export function hqModule({ db, save, broadcast, rid, cleanText, readJson, send, 
     const have = new Set(es.map((x) => x.kind));
     const missing = (t.needs || []).filter((k) => !have.has(k)).map((k) => KINDS[k].name.toLowerCase());
     return [
-      `\n\nWhat the team has told Kloomie about their business, for this kind of work (${t.label}). Follow it, don’t contradict it, and don’t make up facts about the business that aren’t here.`,
+      `\n\nWhat the team has told Kloomie about their business, for this kind of work (${t.label}). Follow it and don’t contradict it. Don’t make up facts about the business that aren’t here: no prices, fees, dates, policies, procedures, services or history they haven’t given. Where something is needed and missing, leave a short [gap in brackets] for them to fill, or say what you’d need to know.`,
       text ? text : '',
       enforcedLines.length ? `Rules Kloomie enforces for this team (people can’t get around these, so don’t suggest it):\n${enforcedLines.join('\n')}` : '',
       t.voice && have.has('voice') ? 'Write in their tone of voice. Use the words they use and avoid the ones they avoid.' : '',
-      t.rules && (have.has('rule') || enforcedLines.length) ? 'Where a rule says something needs an owner’s OK, say it needs their OK rather than doing it or promising it.' : '',
+      t.rules && (have.has('rule') || enforcedLines.length) ? 'Where a rule says something needs an owner’s OK, don’t do it or promise it. To a customer, just say you’ll check and come back to them; don’t mention an owner, who may be the person writing.' : '',
       missing.length ? `Their profile doesn’t say yet: ${missing.join(', ')}. If your answer depends on it, say so plainly instead of guessing.` : '',
     ].filter(Boolean).join('\n');
   }

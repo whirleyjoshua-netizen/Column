@@ -4320,7 +4320,7 @@ const TASK_TOOLS = {
     shape: '{"title":"short title","text":"plain text: short paragraphs and lines starting with - for lists","sources":["page title: https://…"]}' },
   contacts: { web: true, ask: 'Find real people or businesses this task should reach, with their public phone numbers, emails and websites. Search the web. Include only what you actually found on a page, with that page as the source: never guess or make up a name, number or email. Leave a field empty when you didn’t find it. Up to 40.',
     shape: '{"name":"a short name for the list","note":"one or two lines: what you searched and anything to know","rows":[{"name":"contact person or empty","business":"","phone":"","email":"","website":"","city":"","source":"https://…"}]}' },
-  email: { web: false, ask: 'Draft the email this task calls for, ready to send. Use {first name} where the recipient’s first name goes. Keep it short and specific, in the team’s voice.',
+  email: { web: false, ask: 'Draft the email this task calls for, ready to send. If the task or request names the person, write to them by name; use {first name} only when it will go to many people. Keep it short and specific, in the team’s voice. Never put in a price, date or promise the business hasn’t given you: say what happens next instead.',
     shape: '{"subject":"","body":"plain text"}' },
   script: { web: false, ask: 'Write a call script for this task: an opener, two or three questions, answers to the likely objections, and how to close or book the next step. Short lines someone can glance at mid-call.',
     shape: '{"title":"","text":"plain text: lines starting with # for section headings and - for points"}' },

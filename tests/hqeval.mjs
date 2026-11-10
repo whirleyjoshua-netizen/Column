@@ -52,7 +52,7 @@ ok(famJob.includes('$38 a square foot') && famJob.includes('Never promise a date
 ok(P(clean, 'jobs').includes('doesn’t say yet: pricing') && P(clean, 'jobs').includes('Standard every time'), '7 · the cleaning company has no prices yet: the estimate is told to say so, not guess');
 const famTeam = P(family, 'internal');
 ok(famTeam.includes('We fix our own mistakes') && !famTeam.includes('Customer before the sale'), '8 · team notes get the team value, not the customer-only one');
-ok(famEmail.includes('needs their OK') && famEmail.includes('Over 10% off'), '9 · a rule needing an OK: the email says it needs their OK rather than offering it');
+ok(famEmail.includes('you’ll check and come back') && famEmail.includes('Over 10% off'), '9 · a rule needing an OK: the email doesn’t offer it, and tells the customer you’ll check');
 ok(![famEmail, famPlan, famJob, famTeam, P(family, 'general')].some((x) => x.includes('Solar screens')), '10 · a suggestion nobody accepted never reaches the AI');
 ok(P(clean, 'sales').includes('doesn’t say yet: ideal customer') && !P(family, 'customer').includes('doesn’t say yet'), '11 · what’s missing is named per kind of work');
 ok(P(family, 'profile') === '' && P({ id: 'empty' }, 'customer') === '', '12 · the profile tools, and an empty profile, add nothing');
