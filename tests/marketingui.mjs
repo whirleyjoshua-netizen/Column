@@ -115,7 +115,7 @@ const fake = http.createServer((req, res) => {
   });
 });
 await new Promise((r) => fake.listen(FAKE, '127.0.0.1', r));
-const srv = spawn('node', ['index.js'], { cwd: new URL('../server', import.meta.url).pathname, env: { ...process.env, PORT: String(PORT), DATA_DIR: DIR, MAIL_OUTBOX: '1', DATABASE_URL: '', ALLOW_LOCAL_WEBHOOKS: '1', ANTHROPIC_BASE_URL: F, OPENAI_BASE_URL: F + '/oa', GEMINI_BASE_URL: F + '/gm', POSTIZ_URL: F + '/pz/public/v1' }, stdio: ['ignore', 'pipe', 'pipe'] });
+const srv = spawn('node', ['index.js'], { cwd: new URL('../server', import.meta.url).pathname, env: { ...process.env, PORT: String(PORT), DATA_DIR: DIR, MAIL_OUTBOX: '1', DATABASE_URL: '', ALLOW_LOCAL_WEBHOOKS: '1', ANTHROPIC_BASE_URL: F, OPENAI_BASE_URL: F + '/oa', GEMINI_BASE_URL: F + '/gm', POSTIZ_URL: F + '/pz/public/v1', POSTIZ_CLIENT_ID: 'pca_test', POSTIZ_CLIENT_SECRET: 'pcs_test', POSTIZ_AUTHORIZE_URL: F + '/pzauth/authorize', POSTIZ_TOKEN_URL: F + '/pz/oauth/token' }, stdio: ['ignore', 'pipe', 'pipe'] });
 srv.log = ''; srv.stdout.on('data', (d) => (srv.log += d)); srv.stderr.on('data', (d) => (srv.log += d));
 for (let i = 0; i < 100; i++) { try { if ((await fetch(APP + 'api/health')).ok) break; } catch {} await sleep(150); }
 today = new Date().toLocaleDateString('en-CA');
@@ -153,6 +153,8 @@ try {
   await A.until(`!!document.querySelector('#settings')`);
   await A.ev(`(() => { const b = [...document.querySelectorAll('#settings button, #settings [role=tab]')].find((x) => /Connections/.test(x.textContent)); b && b.click(); return true; })()`);
   ok(await A.until(`!!document.querySelector('#settings .pz-sec input[type=password]')`), 'Settings → Connections has Social posts (Postiz)');
+  ok(await A.ev(`[...document.querySelectorAll('#settings .pz-sec button')].some((b) => b.textContent === 'Connect with Postiz') && !document.querySelector('#settings .pz-sec details').open && document.querySelector('#settings .pz-sec details summary').textContent.includes('API key instead')`), 'with Kloomie’s Postiz app set up: Connect with Postiz first, and an API key tucked underneath');
+  await A.ev(`document.querySelector('#settings .pz-sec details').open = true`);
   await A.ev(`(() => { document.querySelector('#settings .pz-sec input[type=password]').value = 'pz-wrong-key-999'; [...document.querySelectorAll('#settings .pz-sec button')].find((b) => b.textContent === 'Connect Postiz').click(); return true; })()`);
   ok(await A.until(`[...document.querySelectorAll('.toast, #toast')].some((x) => /didn’t accept the API key/.test(x.textContent))`), 'a wrong key is refused, with why');
   await A.until(`[...document.querySelectorAll('#settings .pz-sec button')].some((b) => b.textContent === 'Connect Postiz' && !b.disabled)`);

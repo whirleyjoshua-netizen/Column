@@ -8239,7 +8239,7 @@ async function agentEmail(ws, memberId, { name, email, subject, text }) {
   return { from: `${ws.name} (through Kloomie)` };
 }
 // Postiz (postiz.js): social posting through the team's own Postiz account.
-const POSTIZ = postizModule({ db, save, broadcast, cleanText, readJson, send, seal, unseal, isAdmin, allowLocal: process.env.ALLOW_LOCAL_WEBHOOKS === '1', cloudUrl: process.env.POSTIZ_URL || undefined });
+const POSTIZ = postizModule({ db, save, broadcast, cleanText, readJson, send, seal, unseal, isAdmin, rid, alarm, allowLocal: process.env.ALLOW_LOCAL_WEBHOOKS === '1', cloudUrl: process.env.POSTIZ_URL || undefined });
 // A picture made on the person's OpenAI or Gemini key (images.js), kept in Kloomie as a file.
 async function makeImageItem(ws, memberId, { prompt, shape, name, by }) {
   const ai = aiOf(ws.id, memberId);
@@ -8461,6 +8461,8 @@ const server = http.createServer(async (req, res) => {
   if (url.pathname === '/quickbooks/done' && (req.method === 'GET' || req.method === 'HEAD')) return QB.donePage(req, res, url);
   if (url.pathname === '/dropbox/done' && (req.method === 'GET' || req.method === 'HEAD')) return DBX.donePage(req, res, url);
   if (url.pathname === '/oauth/dropbox/callback') return DBX.callback(req, res, url).catch((e) => { alarm('Connecting Dropbox failed', e); if (!res.headersSent) send(res, 500, 'Something went wrong connecting Dropbox.'); });
+  if (url.pathname === '/postiz/done' && (req.method === 'GET' || req.method === 'HEAD')) return POSTIZ.donePage(req, res, url);
+  if (url.pathname === '/oauth/postiz/callback') return POSTIZ.callback(req, res, url).catch((e) => { alarm('Connecting Postiz failed', e); if (!res.headersSent) send(res, 500, 'Something went wrong connecting Postiz.'); });
   if (url.pathname === '/oauth/quickbooks/callback') return QB.callback(req, res, url).catch((e) => { alarm('Connecting QuickBooks failed', e); if (!res.headersSent) send(res, 500, 'Something went wrong connecting QuickBooks.'); });
   if (url.pathname.startsWith('/oauth/')) return oauthCallback(req, res, url).catch((e) => {
     alarm('Connecting a calendar failed', e);

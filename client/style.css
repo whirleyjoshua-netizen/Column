@@ -2438,3 +2438,6 @@ button.hq-entry:hover { background: var(--card-hover); }
 .dbx-foot { display: flex; justify-content: space-between; align-items: center; gap: 8px; color: var(--muted); }
 .dbx-count { color: var(--accent); font-weight: 600; }
 .dbx-more { align-self: center; }
+.pz-more { margin-top: 10px; }
+.pz-more summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+.pz-more[open] summary { margin-bottom: 8px; }

@@ -36,12 +36,25 @@ const privateIp = (ip) => {
   return s === '::1' || s === '::' || s.startsWith('fc') || s.startsWith('fd') || s.startsWith('fe80') || s.startsWith('::ffff:127.') || s.startsWith('::ffff:10.') || s.startsWith('::ffff:192.168.');
 };
 
-export function postizModule({ db, save, broadcast, cleanText, readJson, send, seal, unseal, isAdmin, allowLocal = false, cloudUrl = CLOUD }) {
+// "Connect with Postiz": Kloomie's OAuth app in Postiz (Settings → Developers there). The person approves on Postiz's
+// own page and comes back with a token that works like an API key and doesn't expire (they can revoke it in Postiz →
+// Settings → Approved Apps). The app's id and secret live only in the server's settings.
+const OAUTH = {
+  id: () => process.env.POSTIZ_CLIENT_ID || '',
+  secret: () => process.env.POSTIZ_CLIENT_SECRET || '',
+  authorize: () => process.env.POSTIZ_AUTHORIZE_URL || 'https://platform.postiz.com/oauth/authorize',
+  token: () => process.env.POSTIZ_TOKEN_URL || 'https://api.postiz.com/oauth/token',
+};
+const STATE_MS = 10 * 60_000;
+
+export function postizModule({ db, save, broadcast, cleanText, readJson, send, seal, unseal, isAdmin, rid, alarm = () => {}, allowLocal = false, cloudUrl = CLOUD }) {
+  const oauthOn = () => !!(OAUTH.id() && OAUTH.secret());
+  const pending = new Map(); // state → { wsId, memberId, exp }
   const conn = (ws) => ws.postiz || null;
   const pub = (ws) => {
     const c = conn(ws);
-    if (!c) return { connected: false };
-    return { connected: true, url: c.url === cloudUrl ? null : c.url, last4: c.last4, at: c.at, by: c.by, channels: c.channels || [], checkedAt: c.checkedAt || null, error: c.error || null };
+    if (!c) return { connected: false, oauth: oauthOn() };
+    return { connected: true, oauth: oauthOn(), via: c.via || 'key', url: c.url === cloudUrl ? null : c.url, last4: c.via === 'oauth' ? null : c.last4, org: c.org || null, at: c.at, by: c.by, channels: c.channels || [], checkedAt: c.checkedAt || null, error: c.error || null };
   };
   // A self-hosted address must be a public https site (Kloomie won't call into private networks).
   async function baseUrl(v) {
@@ -146,6 +159,54 @@ export function postizModule({ db, save, broadcast, cleanText, readJson, send, s
     }
   }
 
+  // Postiz comes back here with a one-time code. Like QuickBooks, this answers with a redirect, never a page, so the
+  // code never sits in a page that could pass it on; /postiz/done says how it went.
+  const DONE = {
+    connected: ['Postiz connected', 'Your Marketing Manager can now post to the channels in your Postiz. You can close this window.'],
+    expired: ['Link expired', 'Start again from Kloomie → Settings → Connections → Social posts.'],
+    denied: ['Not connected', 'Postiz access wasn’t granted. You can close this window.'],
+    role: ['Not connected', 'Only team owners and admins can connect Postiz.'],
+    failed: ['Not connected', 'Something went wrong talking to Postiz. Try again in a minute.'],
+  };
+  const done = (res, how) => { res.writeHead(302, { Location: `/postiz/done?r=${how}`, 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer' }); res.end(); };
+  function donePage(req, res, url) {
+    const [title, msg] = DONE[url.searchParams.get('r')] || DONE.failed;
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'X-Robots-Tag': 'noindex', 'Cache-Control': 'no-store' });
+    res.end(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${title}</title><body style="font:15px system-ui;background:#111;color:#eee;display:grid;place-items:center;height:90vh;text-align:center"><div><h2>${title}</h2><p>${msg}</p></div><script>try{window.opener&&window.opener.postMessage({postiz:${JSON.stringify(url.searchParams.get('r') || 'failed')}},location.origin)}catch(e){}</script></body>`);
+  }
+  async function callback(req, res, url) {
+    const st = url.searchParams.get('state') || '';
+    const pend = pending.get(st);
+    pending.delete(st);
+    if (!pend || pend.exp < Date.now()) return done(res, 'expired');
+    if (url.searchParams.get('error')) return done(res, 'denied');
+    const ws = db.workspaces[pend.wsId];
+    const who = ws?.members.find((x) => x.id === pend.memberId);
+    if (!who || !['owner', 'admin'].includes(who.role)) return done(res, 'role');
+    const code = url.searchParams.get('code') || '';
+    if (!code) return done(res, 'failed');
+    try {
+      const r = await fetch(OAUTH.token(), { method: 'POST', signal: AbortSignal.timeout(TIMEOUT), headers: { 'content-type': 'application/json' }, body: JSON.stringify({ grant_type: 'authorization_code', code, client_id: OAUTH.id(), client_secret: OAUTH.secret() }) });
+      const tok = await r.json().catch(() => null);
+      if (!r.ok || !/^pos_/.test(String(tok?.access_token || ''))) throw new Error(`Postiz token exchange: ${r.status} ${cleanText(tok?.error || tok?.message || '', 120)}`);
+      const was = ws.postiz;
+      ws.postiz = { key: seal({ key: tok.access_token }), via: 'oauth', org: cleanText(tok.id, 80) || null, url: cloudUrl, at: Date.now(), by: who.name, channels: [] };
+      try {
+        await refresh(ws);
+        if (ws.postiz.error) throw new Error(ws.postiz.error);
+      } catch (e) {
+        ws.postiz = was;
+        throw e;
+      }
+      save();
+      broadcast(ws.id, { type: 'postiz' });
+      return done(res, 'connected');
+    } catch (e) {
+      alarm('Connecting Postiz failed', e);
+      return done(res, 'failed');
+    }
+  }
+
   // /api/postiz: connect (key, optional self-hosted address), see channels, check again, disconnect. Owners and admins.
   async function route(req, res, parts, auth, ws) {
     const [a, b] = parts;
@@ -153,6 +214,15 @@ export function postizModule({ db, save, broadcast, cleanText, readJson, send, s
     const m = req.method;
     if (m === 'GET' && !b) return send(res, 200, pub(ws));
     if (!isAdmin(auth)) return send(res, 403, { error: 'Only team owners and admins can connect Postiz.' });
+    // Start "Connect with Postiz": the address of Postiz's approval page for this person.
+    if (m === 'POST' && b === 'connect') {
+      if (!oauthOn()) return send(res, 400, { error: 'Connecting with Postiz isn’t set up on this server. Use an API key instead.' });
+      const state = rid(24);
+      for (const [k, v] of pending) if (v.exp < Date.now()) pending.delete(k);
+      pending.set(state, { wsId: ws.id, memberId: auth.memberId, exp: Date.now() + STATE_MS });
+      const q = new URLSearchParams({ client_id: OAUTH.id(), response_type: 'code', state });
+      return send(res, 200, { url: `${OAUTH.authorize()}?${q}` });
+    }
     if (m === 'PUT' && !b) {
       const body = await readJson(req, 10_000);
       const key = String(body.key || '').trim();
@@ -187,5 +257,5 @@ export function postizModule({ db, save, broadcast, cleanText, readJson, send, s
     }
     return send(res, 405, { error: 'Method not allowed' });
   }
-  return { route, pub, refresh, usable, pick, post, posts, remove, connected: (ws) => !!conn(ws) };
+  return { route, callback, donePage, pub, refresh, usable, pick, post, posts, remove, connected: (ws) => !!conn(ws) };
 }

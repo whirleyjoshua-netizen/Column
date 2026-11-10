@@ -664,6 +664,7 @@
         toast(`${x.signer.name} ${x.status === 'signed' ? 'signed' : 'declined to sign'} “${x.name}”`, { label: 'Details', run: () => signSheet(x) });
       }
     } else if (msg.type === 'postiz') {
+      if (S.postiz && !S.postiz.connected) toast('Postiz connected');
       api('GET', '/postiz').then((y) => { S.postiz = y; if (AG.data) AG.postiz = y; $('#settings .pz-sec')?.replaceWith(postizSection()); renderTool(); }).catch(() => {});
     } else if (msg.type === 'agent' || msg.type === 'agent:remove') {
       agNews(msg);
@@ -11084,7 +11085,8 @@
       again.onclick = async () => { again.disabled = true; const y = await api('POST', '/postiz/refresh').catch((e) => toast(e.message)); if (y) { redo(y); toast('Channels checked'); } else again.disabled = false; };
       const ok = x.channels.filter((c) => c.usable), other = x.channels.filter((c) => !c.usable);
       sec.append(...[
-        h('p', {}, `✓ Connected${x.url ? ` to ${x.url.replace(/\/api\/public\/v1$/, '')}` : ''} by ${x.by} (key ending ${x.last4}). Your Marketing Manager drafts posts for these channels, and each one goes out only when you say yes.`),
+        h('p', {}, `✓ Connected${x.url ? ` to ${x.url.replace(/\/api\/public\/v1$/, '')}` : ''} by ${x.by}${x.via === 'oauth' ? ' with Postiz’s approval page' : ` (key ending ${x.last4})`}. Your Marketing Manager drafts posts for these channels, and each one goes out only when you say yes.`),
+        x.via === 'oauth' ? h('p', { class: 'day-hint' }, 'To stop Kloomie posting, disconnect here, or remove Kloomie in Postiz → Settings → Approved Apps.') : null,
         ok.length ? h('div', { class: 'pz-chans' }, ok.map((c) => h('span', { class: 'pz-chan' }, c.picture ? h('img', { src: c.picture, alt: '', loading: 'lazy' }) : null, h('b', {}, c.name), h('small', {}, c.kindName)))) : h('p', { class: 'warn' }, 'No channels Kloomie can post to yet. Link Facebook, Instagram, LinkedIn, Google Business Profile, X, Threads, Bluesky or Mastodon in Postiz, then check again.'),
         other.length ? h('p', { class: 'day-hint' }, `Also in your Postiz, not posted to from Kloomie: ${other.map((c) => `${c.name} (${c.kindName}${c.disabled ? ', off in Postiz' : ''})`).join(', ')}.`) : null,
         x.error ? h('p', { class: 'err' }, x.error) : null,
@@ -11099,10 +11101,20 @@
       go.disabled = true; go.textContent = 'Checking…';
       try { redo(await api('PUT', '/postiz', { key: key.value, url: url.value })); toast('Postiz connected'); } catch (e) { toast(e.message); go.disabled = false; go.textContent = 'Connect Postiz'; }
     };
-    sec.append(
-      h('p', { class: 'day-hint' }, 'Post to Facebook, Instagram, LinkedIn, Google Business Profile, X, Threads, Bluesky and Mastodon from Kloomie. Your Marketing Manager writes the posts (and the pictures, on your OpenAI or Gemini key), and nothing goes out until you approve it. You use your own Postiz account (postiz.com), and Postiz bills you directly. In Postiz, link your channels, then copy the key from Settings → Public API.'),
-      h('label', {}, 'API key', key), h('label', {}, 'Your own Postiz address (optional)', url),
-      h('div', { class: 'btns' }, go));
+    const about = h('p', { class: 'day-hint' }, 'Post to Facebook, Instagram, LinkedIn, Google Business Profile, X, Threads, Bluesky and Mastodon from Kloomie. Your Marketing Manager writes the posts (and the pictures, on your OpenAI or Gemini key), and nothing goes out until you approve it. You use your own Postiz account (postiz.com), and Postiz bills you directly. Link your channels in Postiz first.');
+    const keyForm = [h('p', { class: 'day-hint' }, 'In Postiz, copy the key from Settings → Public API.'), h('label', {}, 'API key', key), h('label', {}, 'Your own Postiz address (optional)', url), h('div', { class: 'btns' }, go)];
+    if (!x.oauth) return sec.append(about, ...keyForm), sec;
+    // The easy way: approve Kloomie on Postiz's own page. A key (or a Postiz you host yourself) is still there.
+    const oauth = h('button', { class: 'btn primary-btn' }, 'Connect with Postiz');
+    oauth.onclick = async () => {
+      try {
+        const { url: to } = await api('POST', '/postiz/connect');
+        window.open(to, '_blank');
+        toast('Approve Kloomie in the Postiz window, then come back.');
+      } catch (e) { toast(e.message); }
+    };
+    sec.append(about, h('div', { class: 'btns' }, oauth),
+      h('details', { class: 'pz-more' }, h('summary', {}, 'Use an API key instead (or Postiz on your own server)'), ...keyForm));
     return sec;
   }
   // QuickBooks Online: sent invoices and their payments go into the team's books; payments recorded there come back.

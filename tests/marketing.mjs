@@ -44,10 +44,17 @@ const fake = http.createServer((req, res) => {
     const out = (code, body) => { res.writeHead(code, { 'content-type': 'application/json' }); res.end(JSON.stringify(body)); };
     const u = new URL(req.url, F);
     // Postiz
+    if (u.pathname === '/pz/oauth/token') {
+      const j = JSON.parse(raw.toString() || '{}');
+      seen.token = j;
+      if (j.client_id !== 'pca_test' || j.client_secret !== 'pcs_test') return out(401, { error: 'invalid_client' });
+      if (j.grant_type !== 'authorization_code' || j.code !== 'good-code') return out(400, { error: 'invalid_grant' });
+      return out(200, { id: 'org_1', cus: 'cus_x', access_token: 'pos_oauth_token_1', token_type: 'bearer' });
+    }
     if (u.pathname.startsWith('/pz/public/v1')) {
       const p = u.pathname.slice('/pz/public/v1'.length);
       seen.pz.push({ method: req.method, p, auth: req.headers.authorization, body: req.headers['content-type']?.includes('json') ? JSON.parse(raw.toString() || 'null') : raw.length });
-      if (req.headers.authorization !== 'pz-good-key-123') return out(401, { message: 'Unauthorized' });
+      if (!['pz-good-key-123', 'pos_oauth_token_1'].includes(req.headers.authorization)) return out(401, { message: 'Unauthorized' });
       if (p === '/integrations') return out(200, [
         { id: 'fb1', name: 'Premier Shades', identifier: 'facebook', picture: 'https://x.test/a.png', disabled: false, profile: 'premier' },
         { id: 'ig1', name: 'premiershades', identifier: 'instagram', picture: '', disabled: false, profile: 'premiershades' },
@@ -86,7 +93,7 @@ const fake = http.createServer((req, res) => {
   });
 });
 await new Promise((r) => fake.listen(FAKE, '127.0.0.1', r));
-const srv = spawn('node', ['index.js'], { cwd: new URL('../server', import.meta.url).pathname, env: { ...process.env, PORT: String(PORT), DATA_DIR: DIR, MAIL_OUTBOX: '1', DATABASE_URL: '', ALLOW_LOCAL_WEBHOOKS: '1', ANTHROPIC_BASE_URL: F, OPENAI_BASE_URL: F + '/oa', GEMINI_BASE_URL: F + '/gm', POSTIZ_URL: F + '/pz/public/v1' }, stdio: ['ignore', 'pipe', 'pipe'] });
+const srv = spawn('node', ['index.js'], { cwd: new URL('../server', import.meta.url).pathname, env: { ...process.env, PORT: String(PORT), DATA_DIR: DIR, MAIL_OUTBOX: '1', DATABASE_URL: '', ALLOW_LOCAL_WEBHOOKS: '1', ANTHROPIC_BASE_URL: F, OPENAI_BASE_URL: F + '/oa', GEMINI_BASE_URL: F + '/gm', POSTIZ_URL: F + '/pz/public/v1', POSTIZ_CLIENT_ID: 'pca_test', POSTIZ_CLIENT_SECRET: 'pcs_test', POSTIZ_AUTHORIZE_URL: F + '/pzauth/authorize', POSTIZ_TOKEN_URL: F + '/pz/oauth/token' }, stdio: ['ignore', 'pipe', 'pipe'] });
 srv.log = ''; srv.stdout.on('data', (d) => (srv.log += d)); srv.stderr.on('data', (d) => (srv.log += d));
 for (let i = 0; i < 100; i++) { try { if ((await fetch(B + '/api/health')).ok) break; } catch {} await sleep(150); }
 const call = (tok) => async (m, p, body) => {
@@ -224,6 +231,33 @@ try {
   r = await ada('PATCH', '/agents/marketing', { level: 'automate', schedules: [{ workflow: 'plan', days: [0, 1, 2, 3, 4, 5, 6], at: 0 }, { workflow: 'campaign', days: [1], at: 60 }] });
   ok(r.body.schedules.length === 1 && r.body.workflows.find((w) => w.key === 'plan').monthly, 'the monthly plan can be scheduled (a paste-in one can’t)');
   ok((await ada('DELETE', '/postiz')).body.connected === false, 'disconnect Postiz');
+
+  // ----- Connect with Postiz (OAuth) -----
+  ok((await ada('GET', '/postiz')).body.oauth === true, 'with Kloomie’s Postiz app set up, Connect with Postiz is offered');
+  ok((await ben('POST', '/postiz/connect')).status === 403, 'only owners and admins start it');
+  r = await ada('POST', '/postiz/connect');
+  const au = new URL(r.body.url);
+  const state = au.searchParams.get('state');
+  ok(au.origin + au.pathname === F + '/pzauth/authorize' && au.searchParams.get('client_id') === 'pca_test' && au.searchParams.get('response_type') === 'code' && state.length >= 20, 'it sends Ada to Postiz’s approval page with Kloomie’s app id and a one-time state');
+  const cb = (q) => fetch(B + '/oauth/postiz/callback?' + new URLSearchParams(q), { redirect: 'manual' });
+  let res2 = await cb({ code: 'good-code', state: 'made-up' });
+  ok(res2.status === 302 && res2.headers.get('location') === '/postiz/done?r=expired', 'an unknown state is refused (and answered with a redirect, never a page)');
+  res2 = await cb({ code: 'good-code', state });
+  ok(res2.status === 302 && res2.headers.get('location') === '/postiz/done?r=connected', 'coming back with the code connects it');
+  ok(seen.token.grant_type === 'authorization_code' && seen.token.code === 'good-code' && seen.token.client_secret === 'pcs_test', 'the code is swapped for a token with Kloomie’s app secret, on the server');
+  r = await ada('GET', '/postiz');
+  ok(r.body.connected && r.body.via === 'oauth' && r.body.org === 'org_1' && r.body.channels.length === 4 && !JSON.stringify(r.body).includes('pos_oauth'), 'connected through Postiz, with the channels; the token never comes back to the app');
+  ok(seen.pz.at(-1).auth === 'pos_oauth_token_1', 'and the token is used like a key');
+  res2 = await cb({ code: 'good-code', state });
+  ok(res2.headers.get('location') === '/postiz/done?r=expired', 'a state works once');
+  r = await ada('POST', '/postiz/connect');
+  res2 = await cb({ error: 'access_denied', state: new URL(r.body.url).searchParams.get('state') });
+  ok(res2.headers.get('location') === '/postiz/done?r=denied', 'saying no in Postiz is understood');
+  r = await ada('POST', '/postiz/connect');
+  res2 = await cb({ code: 'bad-code', state: new URL(r.body.url).searchParams.get('state') });
+  ok(res2.headers.get('location') === '/postiz/done?r=failed' && (await ada('GET', '/postiz')).body.via === 'oauth', 'a code Postiz won’t take fails, and the connection already there stays');
+  const page = await (await fetch(B + '/postiz/done?r=connected')).text();
+  ok(page.includes('Postiz connected') && page.includes('postMessage'), 'the done page says so (and tells the Kloomie window)');
 } catch (e) {
   console.log('FAIL ' + e.stack);
   fails++;
