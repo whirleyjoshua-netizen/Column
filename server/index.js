@@ -17,6 +17,7 @@ import { PdfError, stampPdf, addCertificate, pageCount, writeDoc } from './pdf.j
 import { routesOn, dayRoute } from './routes.js';
 import { projectsModule } from './projects.js';
 import { invoicesModule } from './invoices.js';
+import { hqModule } from './hq.js';
 import { openStore, Fenced } from './store.js';
 import { createMailer } from './mail.js';
 import * as stripe from './stripe.js';
@@ -449,13 +450,14 @@ const publicWorkspace = (ws, memberId) => ({
 // Owners set it; everyone sees it. AI drafts follow it, and the logo and accent colour brand the app and share pages.
 const BRAND_TEXT = { mission: 1000, values: 3000, tone: 3000, about: 6000 };
 const isHex = (v) => /^#[0-9a-f]{6}$/i.test(String(v));
-const brandOf = (ws) => ({ mission: '', values: '', tone: '', about: '', colors: [], accent: null, logo: null, ...ws.brand });
+// The words (mission, values, tone, about) now live in Company HQ; ws.brand keeps the look: logo and colours.
+let HQ = null;
+const brandOf = (ws) => ({ mission: '', values: '', tone: '', about: '', colors: [], accent: null, logo: null, ...ws.brand, ...(HQ ? HQ.brandText(ws) : {}) });
 const logoPath = (logo) => path.join(FILES_DIR, 'brand-' + logo.id);
 const logoUrl = (logo) => logo && `/brand/${logo.id}`;
 const publicBrand = (ws) => ({ ...brandOf(ws), logo: logoUrl(ws.brand?.logo) || null });
 function applyBrand(ws, body) {
-  const b = brandOf(ws);
-  for (const [k, max] of Object.entries(BRAND_TEXT)) if (body[k] !== undefined) b[k] = String(body[k] || '').trim().slice(0, max);
+  const { mission, values, tone, about, ...b } = { colors: [], accent: null, logo: null, ...ws.brand };
   if (body.colors !== undefined) {
     b.colors = (Array.isArray(body.colors) ? body.colors : []).filter((x) => isHex(x?.hex)).slice(0, 8)
       .map((x) => ({ hex: x.hex.toLowerCase(), name: String(x.name || '').trim().slice(0, 30) }));
@@ -483,10 +485,7 @@ function serveLogo(req, res, url) {
 }
 // The short parts go into every AI request.
 function brandPrompt(ws) {
-  const b = brandOf(ws);
-  const lines = [b.mission && `Mission: ${b.mission}`, b.values && `Core values:\n${b.values}`, b.tone && `Tone of voice:\n${b.tone}`, b.about && `What the business does and who it serves:\n${b.about}`].filter(Boolean);
-  if (!lines.length) return '';
-  return [`\n\nThe team’s brand and culture. Follow it in anything you write or plan for them:`, ...lines].join('\n');
+  return HQ ? HQ.prompt(ws) : '';
 }
 
 // Shared-passphrase teams become per-person: everyone who has signed in or posted becomes a member with no
@@ -5107,6 +5106,10 @@ async function api(req, res, url) {
     return send(res, 200, await askReview(ws, at.rec, auth.member));
   }
   {
+    const out = await HQ.route(req, res, parts, auth, ws);
+    if (out !== null) return;
+  }
+  {
     const out = await INV.route(req, res, parts, auth, ws);
     if (out !== null) return;
   }
@@ -6992,7 +6995,9 @@ async function api(req, res, url) {
     if (!isAdmin(auth)) return send(res, 403, { error: 'Only team owners and admins can change the brand.' });
     const old = ws.brand?.logo;
     if (m === 'PATCH' && !b) {
-      applyBrand(ws, await readJson(req, 100_000));
+      const body = await readJson(req, 100_000);
+      applyBrand(ws, body);
+      if (Object.keys(BRAND_TEXT).some((k) => body[k] !== undefined)) HQ.setBrandText(ws, Object.fromEntries(Object.keys(BRAND_TEXT).map((k) => [k, body[k] === undefined ? undefined : String(body[k] || '').slice(0, BRAND_TEXT[k])])), auth.member);
     } else if (b === 'logo' && m === 'PUT') {
       const { data } = await readJson(req, 3_000_000);
       const buf = Buffer.from(String(data || '').replace(/^data:[^,]*,/, ''), 'base64');
@@ -7691,6 +7696,9 @@ const PJ = projectsModule({ db, save, broadcast, rid, cleanText, isDay, readJson
   },
 });
 // Invoices for jobs, and the team's own Stripe account for card payments (invoices.js).
+HQ = hqModule({ db, save, broadcast, rid, cleanText, readJson, send, isAdmin, aiAsk, replyJson, allowLocal: process.env.ALLOW_LOCAL_FETCH === '1' });
+for (const ws of Object.values(db.workspaces)) if (HQ.migrate(ws)) save();
+
 const INV = invoicesModule({ db, save, broadcast, rid, cleanText, readJson, send, badRequest, escHtml, brandOf, logoUrl, teamDay, offline, seal, unseal, stripeCall: stripe.callWith, PJ, isAdmin, jobOfRecord, jobLabel, moveJob, publicUrl: PUBLIC_URL,
   // A payment is money in on the business's Finance, under the team's owner.
   addMoney: (ws, { amount, day, note }) => {

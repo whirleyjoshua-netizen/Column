@@ -656,6 +656,8 @@
       if (msg.budget) S.budgets.push(msg.budget);
       renderDay();
       renderTool();
+    } else if (msg.type === 'hq') {
+      if (HQ.data || toolOpen === 'hq') loadHq();
     } else if (msg.type === 'pss' || msg.type === 'contacts' || msg.type === 'gcontacts') {
       loadPss();
     } else if ((msg.type === 'contact' || msg.type === 'contact:remove') && S.contacts) {
@@ -7507,8 +7509,155 @@
     }, l ? 'Save' : 'Add to campaign');
   }
 
+  // ---------- Company HQ: what Kloomie knows about the business ----------
+  // Entries under seven pillars. The AI follows the approved ones in everything it writes and plans; suggestions
+  // (from reading the team's website) wait here for an owner or admin to accept, edit or dismiss them.
+  const HQ = { data: null, busy: false, open: null };
+  async function loadHq() {
+    try {
+      HQ.data = await api('GET', '/hq');
+    } catch {
+      return;
+    }
+    if (toolOpen === 'hq') renderTool();
+  }
+  const hqKind = (k) => HQ.data?.kinds[k] || { name: k };
+  const hqPillar = (k) => HQ.data?.pillars.find((p) => p.key === k);
+  const HQ_LEVEL = { auto: 'Fine without asking', approval: 'Needs an owner’s OK', never: 'Never' };
+  const HQ_HORIZON = { long: 'Long term', year: 'This year', quarter: 'This quarter' };
+  const HQ_AREAS = [['sales', 'Sales'], ['customers', 'Customers'], ['jobs', 'Jobs'], ['marketing', 'Marketing'], ['money', 'Money'], ['team', 'Team']];
+  function hqTook(out) {
+    HQ.data = { ...HQ.data, ...out };
+    renderTool(true);
+  }
+  // Add or change one entry. A suggestion's sheet saves and accepts it.
+  function hqSheet(kind, x) {
+    const k = hqKind(kind);
+    const sugg = x?.status === 'suggested';
+    const title = h('input', { value: x?.title || '', placeholder: k.one ? '' : k.hint });
+    const text = h('textarea', { rows: k.one ? 4 : 3, placeholder: k.one ? k.hint : 'More detail, if it helps (optional)' });
+    text.value = x?.text || '';
+    const lines = (v, ph) => { const t = h('textarea', { rows: 3, placeholder: ph }); t.value = (v || []).join('\n'); return t; };
+    const doIt = lines(x?.do, 'One per line, e.g.\nGive people time to decide');
+    const dont = lines(x?.dont, 'One per line, e.g.\nCountdown deals or pressure to sign today');
+    const areas = HQ_AREAS.map(([v, l]) => ({ v, cb: h('input', { type: 'checkbox', checked: (x?.areas || []).includes(v) }), l }));
+    const prio = h('select', {}, [[1, 'Most important'], [2, 'Important'], [3, 'Nice to have']].map(([v, l]) => h('option', { value: v, selected: (x?.priority || 2) === v }, l)));
+    const horizon = h('select', {}, Object.entries(HQ_HORIZON).map(([v, l]) => h('option', { value: v, selected: (x?.horizon || 'year') === v }, l)));
+    const target = h('input', { value: x?.target || '', placeholder: 'e.g. 10 accounts, $250k' });
+    const deadline = h('input', { type: 'date', value: x?.deadline || '' });
+    const level = h('select', {}, Object.entries(HQ_LEVEL).map(([v, l]) => h('option', { value: v, selected: (x?.level || 'approval') === v }, l)));
+    const del = x ? h('button', { type: 'button', class: 'btn small danger', 'data-label': '1' }, sugg ? 'Dismiss' : 'Delete') : null;
+    del?.addEventListener('click', () => confirmClick(del, async () => { hqTook(await api('DELETE', '/hq/entries/' + x.id).catch((e) => toast(e.message))); closeSheet(); }));
+    sheet(`${x ? (sugg ? 'Suggested' : 'Edit') : 'Add'}: ${k.name}`, [
+      h('p', { class: 'day-hint' }, hqPillar(x?.pillar || HQ.data.pillars.find((p) => p.kinds.includes(kind))?.key)?.name || ''),
+      k.one ? null : h('label', {}, k.principle ? 'The value, in a few words' : k.goal ? 'The goal' : 'What it is', title),
+      h('label', {}, k.one ? k.name : 'Details', text),
+      k.principle ? h('div', { class: 'row2' }, h('label', {}, 'What it looks like in practice', doIt), h('label', {}, 'What to avoid', dont)) : null,
+      k.principle ? h('div', { class: 'live-field' }, 'Where it matters most', h('div', { class: 'live-stages' }, areas.map((a) => h('label', { class: 'pick' }, a.cb, a.l)))) : null,
+      k.goal ? h('div', { class: 'row2' }, h('label', {}, 'When', horizon), h('label', {}, 'Target', target)) : null,
+      k.goal ? h('div', { class: 'row2' }, h('label', {}, 'By', deadline), h('label', {}, 'How important', prio)) : null,
+      k.principle ? h('label', {}, 'How important', prio) : null,
+      k.rule ? h('label', {}, 'Kloomie may do this', level) : null,
+      sugg && x.source?.url ? h('p', { class: 'day-hint' }, 'From ', h('a', { href: x.source.url, target: '_blank', rel: 'noopener' }, x.source.url.replace(/^https?:\/\//, '')), x.source.why ? ` · ${x.source.why}` : '') : null,
+      del ? h('div', { class: 'btns' }, del) : null,
+    ].filter(Boolean), async () => {
+      const body = { kind, title: title.value, text: text.value, ...(k.principle ? { do: doIt.value, dont: dont.value, areas: areas.filter((a) => a.cb.checked).map((a) => a.v), priority: Number(prio.value) } : {}),
+        ...(k.goal ? { horizon: horizon.value, target: target.value, deadline: deadline.value || null, priority: Number(prio.value) } : {}), ...(k.rule ? { level: level.value } : {}) };
+      hqTook(x ? await api('PATCH', '/hq/entries/' + x.id, { ...body, approve: sugg }) : await api('POST', '/hq/entries', body));
+      toast(sugg ? 'Added to your profile' : 'Saved');
+    }, sugg ? 'Accept' : 'Save');
+    setTimeout(() => (k.one ? text : title).focus(), 50);
+  }
+  function hqAddMenu(p, anchor) {
+    openMenu(anchor, [{ head: p.name }, ...p.kinds.map((k) => ({ label: hqKind(k).name, run: () => hqSheet(k) }))]);
+  }
+  async function hqImport(url, btn) {
+    if (!url.trim()) return toast('Enter your website’s address.');
+    HQ.busy = true;
+    btn.disabled = true;
+    btn.textContent = 'Reading your site…';
+    try {
+      const out = await api('POST', '/hq/import', { url });
+      hqTook(out);
+      toast(out.added ? `Found ${plural(out.added, 'suggestion')} on ${plural(out.pages, 'page')}. Review them below.` : 'Nothing new on the site to suggest.');
+    } catch (e) {
+      toast(e.message);
+    } finally {
+      HQ.busy = false;
+      renderTool(true);
+    }
+  }
+  function hqEntry(x, admin, label = true) {
+    const k = hqKind(x.kind);
+    const meta = [x.horizon && HQ_HORIZON[x.horizon], x.target && `Target: ${x.target}`, x.deadline && `by ${dueLabel(x.deadline).toLowerCase()}`, x.level && HQ_LEVEL[x.level],
+      x.priority === 1 ? 'Most important' : null, x.source?.type === 'website' ? 'from your website' : null].filter(Boolean).join(' · ');
+    return h(admin ? 'button' : 'div', { type: admin ? 'button' : null, class: 'hq-entry' + (x.status === 'suggested' ? ' sugg' : ''), onclick: admin ? () => hqSheet(x.kind, x) : null },
+      label ? h('small', {}, k.name) : null,
+      x.title ? h('b', {}, x.title) : null,
+      x.text ? h('span', {}, x.text) : null,
+      x.do?.length ? h('span', { class: 'hq-do' }, '✓ ' + x.do.join(' · ')) : null,
+      x.dont?.length ? h('span', { class: 'hq-dont' }, '✕ ' + x.dont.join(' · ')) : null,
+      meta ? h('small', { class: 'hq-meta' }, meta) : null);
+  }
+  // One kind's entries under its name: short ones (a service, a word to avoid) as chips, the rest in full.
+  function hqGroup(list, admin) {
+    if (!list.length) return null;
+    const short = (x) => x.title && !x.text && !x.do?.length && !x.dont?.length && !x.target && !x.level;
+    return h('div', { class: 'hq-group' }, h('small', { class: 'hq-kind' }, hqKind(list[0].kind).name),
+      list.every(short) ? h('div', { class: 'hq-chips' }, list.map((x) => admin ? h('button', { class: 'chip', onclick: () => hqSheet(x.kind, x) }, x.title) : h('span', { class: 'chip' }, x.title)))
+        : list.map((x) => hqEntry(x, admin, false)));
+  }
+  function hqTool() {
+    const d = HQ.data;
+    if (!d) {
+      loadHq();
+      return [h('p', { class: 'day-hint' }, 'Loading…')];
+    }
+    const admin = amAdmin();
+    const pr = d.progress;
+    const sugg = d.entries.filter((x) => x.status === 'suggested');
+    const url = h('input', { type: 'url', placeholder: 'yourbusiness.com', value: d.import?.url || '' });
+    const go = h('button', { class: 'btn primary-btn', disabled: HQ.busy }, HQ.busy ? 'Reading your site…' : d.import ? 'Read it again' : 'Read my site');
+    go.addEventListener('click', () => hqImport(url.value, go));
+    url.addEventListener('keydown', (e) => e.key === 'Enter' && hqImport(url.value, go));
+    const acceptAll = async () => {
+      try {
+        hqTook(await api('POST', '/hq/suggestions/accept'));
+        toast(`Added ${sugg.length} ${sugg.length === 1 ? 'entry' : 'entries'} to your profile`);
+      } catch (e) {
+        toast(e.message);
+      }
+    };
+    return [
+      h('p', { class: 'day-hint hq-intro' }, 'What Kloomie knows about your business. Sidekick, Docs and every AI button follow what’s here, so what they write sounds like you and fits how you work.'),
+      h('div', { class: 'hq-progress' },
+        h('div', { class: 'hq-pct' }, h('b', {}, `${pr.pct}%`), h('span', {}, `Your profile · ${pr.done} of ${pr.of} essentials`)),
+        h('div', { class: 'hq-bar' }, h('i', { style: `width:${pr.pct}%` })),
+        pr.missing.length ? h('div', { class: 'hq-missing' }, h('small', {}, 'Still to add:'), pr.missing.map((m) => admin ? h('button', { class: 'chip', onclick: () => hqSheet(m.kind) }, '+ ' + m.name) : h('span', { class: 'chip' }, m.name))) : h('small', { class: 'day-hint' }, 'The essentials are all here. Keep adding as the business grows.')),
+      admin ? h('section', { class: 'hq-import' },
+        h('b', {}, d.import ? 'Your website' : 'Start from your website'),
+        h('p', { class: 'day-hint' }, d.import ? `Read ${new Date(d.import.at).toLocaleDateString()}: ${plural(d.import.pages.length, 'page')}. Read it again after you change the site.` : 'Kloomie reads your home page and pages like About, Services and FAQ, and suggests entries from what they say. Nothing is added until you accept it.'),
+        h('div', { class: 'row-in' }, url, go),
+        d.import?.gaps?.length ? h('p', { class: 'day-hint' }, 'Your site doesn’t say: ' + d.import.gaps.join(' · ')) : null) : null,
+      admin && sugg.length ? h('section', { class: 'hq-sugg' },
+        h('div', { class: 'hq-sugg-h' }, h('b', {}, `${plural(sugg.length, 'suggestion')} to review`), h('span', { style: 'flex:1' }),
+          h('button', { class: 'btn small primary-btn', onclick: acceptAll }, 'Accept all'),
+          h('button', { class: 'btn small', onclick: async () => hqTook(await api('POST', '/hq/suggestions/dismiss').catch((e) => toast(e.message))) }, 'Dismiss all')),
+        sugg.map((x) => h('div', { class: 'hq-sugg-row' }, hqEntry(x, true),
+          h('div', { class: 'hq-sugg-act' },
+            h('button', { class: 'btn small primary-btn', onclick: async () => hqTook(await api('POST', `/hq/entries/${x.id}/approve`).catch((e) => toast(e.message))) }, 'Accept'),
+            h('button', { class: 'icon-btn', 'aria-label': 'Dismiss', html: I.close, onclick: async () => hqTook(await api('DELETE', '/hq/entries/' + x.id).catch((e) => toast(e.message))) }))))) : null,
+      h('div', { class: 'hq-pillars' }, d.pillars.map((p) => {
+        const mine = d.entries.filter((x) => x.pillar === p.key && x.status === 'approved');
+        return h('section', { class: 'hq-pillar' },
+          h('div', { class: 'hq-pillar-h' }, h('div', {}, h('b', {}, p.name), h('small', {}, p.about)), admin ? h('button', { class: 'btn small', onclick: (e) => hqAddMenu(p, e.currentTarget) }, '+ Add') : null),
+          mine.length ? p.kinds.map((k) => hqGroup(mine.filter((x) => x.kind === k), admin)) : h('p', { class: 'day-hint' }, admin ? 'Nothing here yet.' : 'Nothing here yet. An owner can add it.'));
+      })),
+    ];
+  }
+
   // ---------- tools: small apps that open in a drawer, so the tabs stay as they are ----------
-  const TOOLS = { sidekick: { name: 'Sidekick', render: sidekickTool }, docs: { name: 'Docs', render: docsTool }, bills: { name: 'Finance', render: financeTool }, contacts: { name: 'Contacts', render: contactsTool }, email: { name: 'Email', render: emailTool }, meetings: { name: 'Meeting notes', render: meetingsTool }, planner: { name: 'Planner', render: plannerTool }, folders: { name: 'Folders', render: foldersTool }, map: { name: 'Map', render: mapTool }, signs: { name: 'Signatures', render: signsTool }, vault: { name: 'Vault', render: vaultTool } };
+  const TOOLS = { hq: { name: 'Company HQ', render: hqTool }, sidekick: { name: 'Sidekick', render: sidekickTool }, docs: { name: 'Docs', render: docsTool }, bills: { name: 'Finance', render: financeTool }, contacts: { name: 'Contacts', render: contactsTool }, email: { name: 'Email', render: emailTool }, meetings: { name: 'Meeting notes', render: meetingsTool }, planner: { name: 'Planner', render: plannerTool }, folders: { name: 'Folders', render: foldersTool }, map: { name: 'Map', render: mapTool }, signs: { name: 'Signatures', render: signsTool }, vault: { name: 'Vault', render: vaultTool } };
   let toolOpen = null;
   $('#toolsBtn').addEventListener('click', (e) => {
     const soon = billsSoon().length;
@@ -7517,6 +7666,7 @@
     openMenu(e.currentTarget, [
       ...(offBar.length ? [{ head: 'Views' }, ...offBar.map((k) => ({ label: h('span', { class: 'tool-item' }, BAR_ITEMS[k].label, k === 'chat' && $('#tabs [data-tab="home"]')?.classList.contains('dot') ? h('small', {}, 'new messages') : null), on: S.tab === k, run: () => openBarItem(k) }))] : []),
       { head: 'Tools' },
+      { label: h('span', { class: 'tool-item' }, '🏢 Company HQ', HQ.data && amAdmin() && HQ.data.entries.some((x) => x.status === 'suggested') ? h('small', {}, 'suggestions to review') : null), on: toolOpen === 'hq', run: () => openTool('hq') },
       toolOn('sidekick') ? { label: h('span', { class: 'tool-item' }, '✦ Sidekick', skNudges().length ? h('small', {}, `${skNudges().length} need${skNudges().length === 1 ? 's' : ''} a look`) : null), on: toolOpen === 'sidekick', run: () => { SK.open = null; openTool('sidekick'); } } : null,
       toolOn('docs') ? { label: 'Docs', on: toolOpen === 'docs', run: () => openTool('docs') } : null,
       toolOn('projects') ? { label: 'Jobs & projects', run: showProjects } : null,
@@ -13688,7 +13838,8 @@
         ? 'Set your mission, values, tone of voice, logo and colours. AI drafts follow them, and your logo and colour brand Kloomie for everyone.'
         : 'Your team owner hasn’t set the brand up yet.'));
     }
-    if (owner || set) sec.append(h('button', { class: 'btn', onclick: brandSheet }, owner ? (set ? 'Edit brand & culture' : 'Set up brand & culture') : 'View all'));
+    if (owner || set) sec.append(h('div', { class: 'btns' }, h('button', { class: 'btn', onclick: brandSheet }, owner ? (set ? 'Edit brand & culture' : 'Set up brand & culture') : 'View all'),
+      h('button', { class: 'btn', onclick: () => openTool('hq') }, '🏢 Open Company HQ')));
     return sec;
   }
 
@@ -13764,7 +13915,7 @@
 
     sheet('Brand & culture', [
       h('p', { class: 'day-hint' }, owner
-        ? 'Everything AI drafts for the team (reports, plans) follows this.'
+        ? 'Everything AI drafts for the team (reports, plans) follows this. There’s more to tell Kloomie in Company HQ: services, goals, how you work and your rules.'
         : 'Set by your team owner. Everything AI drafts for the team follows it.'),
       h('label', {}, 'Logo', h('div', { class: 'brand-logo-row' }, logoImg, owner ? h('span', { class: 'btns' }, upLogo, rmLogo, file) : (b.logo ? null : h('small', {}, 'None yet')))),
       h('label', {}, 'Mission statement', mission),
