@@ -10829,6 +10829,32 @@
     }, 'Record payment');
   }
   // Settings → Connections: the team's own Stripe account, so customers can pay invoices by card.
+  // Leads from the website: a form page of the team's own, to link to or embed, and a lead webhook for other tools.
+  function leadSection() {
+    const sec = h('section', { class: 'lead-sec' }, h('h3', {}, 'Lead form & lead webhook'));
+    api('GET', '/lead-capture').then((x) => {
+      const redo = () => sec.replaceWith(leadSection());
+      const save = (body) => api('PUT', '/lead-capture', body).then(redo).catch((e) => toast(e.message));
+      const hint = h('p', { class: 'day-hint' }, 'New leads straight into Contacts, from your website or any tool. Each one tells owners and admins, and sets off your automations (start a campaign for every new lead, for example). Someone already in Contacts with the same email or phone is updated instead of added twice.');
+      if (!x.on) return sec.append(hint, h('div', { class: 'btns' }, h('button', { class: 'btn primary-btn', onclick: () => save({ on: true }) }, 'Turn on')));
+      const embed = `<iframe src="${x.formUrl}?embed=1" style="width:100%;max-width:560px;height:640px;border:0" title="Contact us"></iframe>`;
+      const row = (label, value, note) => h('div', { class: 'lead-row' }, h('b', {}, label), h('div', { class: 'int-secret' }, h('code', {}, value), h('button', { class: 'btn small', onclick: () => { copyText(value); toast('Copied'); } }, 'Copy')), note ? h('small', { class: 'day-hint' }, note) : null);
+      const stage = h('input', { value: x.stage || '', placeholder: 'New' });
+      const tags = h('input', { value: (x.tags || []).join(', '), placeholder: 'website' });
+      const title = h('input', { value: x.title || '', placeholder: 'Contact ' + S.workspace.name });
+      const newKey = h('button', { class: 'btn small danger', 'data-label': '1' }, 'New link');
+      newKey.addEventListener('click', () => confirmClick(newKey, () => api('POST', '/lead-capture/new-key').then(redo).catch((e) => toast(e.message))));
+      sec.append(hint,
+        h('p', {}, `✓ On. ${x.count ? `${x.count} lead${x.count === 1 ? '' : 's'} so far${x.last ? ', the last ' + ago(x.last) : ''}.` : 'No leads yet.'}`),
+        row('Form link', x.formUrl, h('span', {}, 'Share it, or put it on your site’s Contact button. ', h('a', { href: x.formUrl, target: '_blank', rel: 'noopener' }, 'Open it'))),
+        row('Embed on your website', embed, 'Paste this where the form should go on your site.'),
+        row('Lead webhook', x.webhookUrl, 'POST leads here as JSON or a form, from your site, a form builder or a lead service: name (or first_name and last_name), email, phone, company, address, city, message, source.'),
+        h('div', { class: 'row2' }, h('label', {}, 'New leads start at stage', stage), h('label', {}, 'And get tags', tags)),
+        h('label', {}, 'Form title', title),
+        h('div', { class: 'btns' }, h('button', { class: 'btn small', onclick: () => save({ stage: stage.value, tags: tags.value, title: title.value }) }, 'Save'), newKey, h('button', { class: 'btn small', onclick: () => save({ on: false }) }, 'Turn off')));
+    }).catch((e) => sec.append(h('p', { class: 'err' }, e.message)));
+    return sec;
+  }
   // Text messages through the team's own Twilio account.
   function textingSection() {
     const sec = h('section', { class: 'tw-sec' }, h('h3', {}, 'Text messages (Twilio)'));
@@ -15863,6 +15889,7 @@
       if (amAdmin()) s.append(paySection());
       if (amAdmin()) s.append(qboSection());
       if (amAdmin()) s.append(textingSection());
+      if (amAdmin()) s.append(leadSection());
       if (amAdmin()) s.append(gcSection());
       if (amAdmin() && (!S.pss || S.pss.connected || S.pss.available)) s.append(pssSection());
       if (amAdmin()) s.append(intSection());

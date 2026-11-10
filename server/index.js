@@ -21,6 +21,7 @@ import { publicApiModule } from './publicapi.js';
 import { quickbooksModule } from './quickbooks.js';
 import { twoStepModule } from './twostep.js';
 import { twilioModule } from './twilio.js';
+import { leadsModule } from './leads.js';
 import { EVENTS as HOOK_EVENTS } from './projects.js';
 import { hqModule } from './hq.js';
 import { rulesModule } from './rules.js';
@@ -5194,6 +5195,8 @@ async function api(req, res, url) {
   if (!locked || m === 'GET') {
     const tw = await TW.route(req, res, parts, auth, ws);
     if (tw !== null) return;
+    const lc = await LEADS.route(req, res, parts, auth, ws);
+    if (lc !== null) return;
   }
   if (locked) return send(res, 402, { error: locked, billing: true });
 
@@ -8284,6 +8287,9 @@ function cloudScripts() {
   const c = cloudPickers();
   return [c.dropbox ? ' https://www.dropbox.com' : '', c.google ? ' https://apis.google.com https://accounts.google.com https://www.gstatic.com' : '', c.onedrive ? ' https://js.live.net' : ''].join('');
 }
+// Leads from the team's website and other tools (leads.js).
+const LEADS = leadsModule({ db, save, readJson, send, isAdmin, cleanText, contactsOf, newContact, applyContact, emailKey, phoneKey, EMAIL_RE, contactNews, refreshLiveSoon, automate,
+  hook: (wsId, type, x) => hook(wsId, type, () => API.apiContact(x), 'Lead'), notifyAdmins, escHtml, brandOf, logoUrl, clientIp, CONTACT_MAX, publicUrl: PUBLIC_URL, offline, teamDay });
 // Two-step sign-in with an authenticator app (twostep.js).
 const TS = twoStepModule({ db, save, seal, unseal, readJson, send, appName: process.env.APP_NAME || 'Kloomie' });
 // QuickBooks Online: invoices and payments into the team's books, payments recorded there back (quickbooks.js).
@@ -8374,6 +8380,9 @@ const server = http.createServer(async (req, res) => {
   if (url.pathname.startsWith('/s/') && (req.method === 'GET' || req.method === 'HEAD')) return serveShare(req, res, url);
   // A quote sent to a customer: they read it and accept or decline.
   if (url.pathname.startsWith('/q/') && (req.method === 'GET' || req.method === 'POST')) return PJ.quotePage(req, res, url);
+  // Leads: the team's lead form page, and its lead webhook (leads.js).
+  if (url.pathname.startsWith('/l/') && (req.method === 'GET' || req.method === 'POST')) return LEADS.formPage(req, res, url).catch((e) => { alarm('A lead form failed', e); if (!res.headersSent) send(res, 500, 'Something went wrong. Please try again.'); });
+  if (url.pathname.startsWith('/hooks/lead/')) return LEADS.webhook(req, res, url).catch((e) => { alarm('A lead webhook failed', e); if (!res.headersSent) send(res, 500, { error: 'Something went wrong.' }); });
   // An invoice sent to a customer: they read it and pay it by card.
   if (url.pathname.startsWith('/i/') && (req.method === 'GET' || req.method === 'POST')) return INV.page(req, res, url);
   if (url.pathname.startsWith('/sign/') && req.method === 'GET') {

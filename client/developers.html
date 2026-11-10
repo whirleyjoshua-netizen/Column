@@ -42,6 +42,7 @@
   <p>Contacts, tasks and invoices list the same way: <code>{"data": [ … ], "next_cursor": …}</code>, oldest change first. Page with <code>?limit=</code> (up to 500) and <code>?cursor=</code>, and ask for only what changed with <code>?updated_since=</code> (see <a href="#sync">Syncing</a>). For the latest few, newest first (what a polling trigger wants), use <code>?order=newest&amp;limit=25</code>. Money is in dollars, dates look like <code>2026-11-30</code>, times of day like <code>"09:30"</code>, and moments are ISO times.</p>
 
   <h2 id="contacts">Contacts</h2>
+  <p class="note">Just sending leads from a website or lead service? You don't need an API key: turn on <b>Settings → Connections → Lead form &amp; lead webhook</b> and POST to its lead webhook address (JSON or a form, from a server or straight from a browser) with <code>name</code> (or <code>first_name</code> and <code>last_name</code>), <code>email</code>, <code>phone</code>, <code>company</code>, <code>address</code>, <code>city</code>, <code>message</code> and <code>source</code>. It answers <code>{"ok": true, "contact_id": "…", "added": true}</code>.</p>
   <p>The team's people: customers, leads, anyone you call or email.</p>
   <table>
     <tr><td><span class="m get">GET</span></td><td><code>/contacts</code></td><td>Contacts. Find someone with <code>?email=</code> or <code>?phone=</code> (however it's written), or filter by <code>?stage=</code> or <code>?tag=</code>.</td></tr>

@@ -71,6 +71,7 @@ try {
   ok(await A.ev(`[...document.querySelectorAll('.int-events b')].map((b) => b.textContent).join('|')`) === 'Contacts|Tasks|Visits|Invoices|Files & signatures|Text messages|Projects records', 'Contacts, Tasks, Visits, Invoices, Files & signatures, Text messages, Projects records');
   await A.ev(`document.querySelector('#sheet [aria-label=Close]')?.click()`);
   ok(await A.until(`/Connect Twilio/.test(document.querySelector('#settings .tw-sec')?.textContent || '')`), 'Connections has Text messages (Twilio) with Connect Twilio');
+  ok(await A.until(`/Lead form/.test(document.querySelector('#settings .lead-sec')?.textContent || '') && !!document.querySelector('#settings .lead-sec button')`), 'and Lead form & lead webhook, with Turn on');
   ok(!A.errors.length, 'no errors on the page' + (A.errors.length ? ': ' + A.errors[0] : ''));
   A.close();
 } catch (e) {

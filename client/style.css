@@ -2397,3 +2397,6 @@ button.hq-entry:hover { background: var(--card-hover); }
 .tw-msg small { color: var(--muted); font-size: 11px; }
 .tw-send { display: flex; gap: 6px; align-items: flex-end; }
 .tw-send textarea { flex: 1; }
+
+.lead-row { display: flex; flex-direction: column; gap: 4px; margin: 10px 0; }
+.lead-row b { font-size: 13px; }
