@@ -175,7 +175,10 @@
     };
   }
 
+  let lastToast = { msg: null, at: 0 };
   function toast(msg, action) {
+    if (!msg || (typeof msg === 'string' && msg === lastToast.msg && Date.now() - lastToast.at < 2000)) return;
+    lastToast = { msg, at: Date.now() };
     const el = h('div', { class: 'toast' }, msg);
     if (action) el.append(h('button', { onclick: () => { action.run(); el.remove(); } }, action.label));
     $('#toasts').append(el);
@@ -207,6 +210,12 @@
       throw new Error('Signed out');
     }
     if (!res.ok) throw new Error(data.error || 'Request failed');
+    // Held by the team's rules until an owner OKs it (rules.js): nothing changed, so it's not a success.
+    if (res.status === 202 && data.pending) {
+      toast(data.error);
+      loadApprovals();
+      throw Object.assign(new Error(data.error), { pending: true });
+    }
     return data;
   }
 
@@ -667,6 +676,8 @@
       renderTool();
     } else if (msg.type === 'quickbooks') {
       if (S.qbo) api('GET', '/quickbooks').then((y) => { S.qbo = y; $('#settings .qbo-sec')?.replaceWith(qboSection()); }).catch(() => {});
+    } else if (msg.type === 'approvals') {
+      loadApprovals();
     } else if (msg.type === 'hq') {
       if (HQ.data || toolOpen === 'hq') loadHq();
     } else if (msg.type === 'pss' || msg.type === 'contacts' || msg.type === 'gcontacts') {
@@ -732,6 +743,7 @@
     if (kind === 'task') { const t = taskById(id); return t ? (goalById(t.goalId) ? showStep(t) : showTasks()) : showTasks(); }
     if (kind === 'camp') return campById(id) ? openCampaign(id) : setTab('camps');
     if (kind === 'rec') return openRecord(id);
+    if (kind === 'approval') return approvalSheet(id);
     const it = S.items.find((x) => x.id === id);
     if (!it) return toast('That isn’t here any more.');
     if (kind === 'doc' || it.type === 'text') return openDoc(it);
@@ -985,6 +997,7 @@
     loadSignature();
     loadSigns();
     loadPss();
+    loadApprovals();
     S.panes = S.panes.map((v) => (v.startsWith('stack:') && !stackById(v.slice(6)) ? 'files' : v));
     $('#wsName').textContent = S.workspace.name;
     document.title = `${S.workspace.name} · Kloomie`;
@@ -4433,6 +4446,7 @@
     const me = S.me?.memberId;
     const today = todayKey();
     const out = [];
+    if (RU.data?.canApprove) for (const x of RU.data.approvals.filter((y) => y.status === 'pending')) out.push({ kind: 'approve', text: `${x.by} needs your OK`, sub: `${x.summary} · ${ago(x.at)}`, run: () => approvalSheet(x.id) });
     if (amAdmin()) for (const x of (S.automations || []).filter(autoFailing)) out.push({ kind: 'auto', text: `Automation “${x.name}” didn’t run`, sub: x.runs[0].note, run: () => { openSettings('automations', '.auto-list'); setTimeout(() => autoSheet(x), 50); } });
     for (const t of S.tasks) if (t.submitted && !t.done && t.submitted.byId !== me && maySign(t)) out.push({ kind: 'sign', text: `Sign off “${shortText(t.text, 60)}”`, sub: `${t.submitted.by} sent it ${ago(t.submitted.at)}`, run: () => showStep(t) });
     for (const c of S.campaigns.filter((x) => x.status === 'active' && runsIt(x))) {
@@ -4453,7 +4467,7 @@
   }
   function overviewView() {
     const needs = needsYou();
-    const ICON = { sign: '✓', stuck: '⏳', role: '👤', late: '!', nobody: '?', checkin: '🩺' };
+    const ICON = { sign: '✓', stuck: '⏳', role: '👤', late: '!', nobody: '?', checkin: '🩺', approve: '✋' };
     const live = S.campaigns.filter((c) => c.status === 'active').sort((a, b) => (a.end || '9999') < (b.end || '9999') ? -1 : 1);
     const mains = live.filter((c) => !c.parentId || !live.some((x) => x.id === c.parentId));
     const row = (c, sub) => {
@@ -4767,7 +4781,7 @@
     const card = (cls, title, n, action, ...body) => h('section', { class: 'home-card ' + cls },
       h('div', { class: 'hc-h' }, h('b', {}, title), n ? h('span', { class: 'hc-n' }, String(n)) : null, action ? h('button', { class: 'linkish hc-go', onclick: action[1] }, action[0]) : null), ...body);
     const row = (ic, cls, title, sub, run) => h('button', { class: 'need-row ' + cls, onclick: run }, h('span', { class: 'need-ic' }, ic), h('span', { class: 'need-text' }, h('b', {}, title), sub ? h('small', {}, sub) : null));
-    const ICON = { sign: '✓', stuck: '⏳', role: '👤', late: '!', nobody: '?', checkin: '🩺', auto: '⚙' };
+    const ICON = { sign: '✓', stuck: '⏳', role: '👤', late: '!', nobody: '?', checkin: '🩺', auto: '⚙', approve: '✋' };
     const steps = [...d.up, ...d.late, ...d.dueToday].slice(0, 8);
     const notes = (S.notices || []).filter((n) => !n.kind); // from automations; the rest live in the bell
     const clearNote = (n) => { const gone = n ? [n] : notes; S.notices = (S.notices || []).filter((y) => !gone.includes(y)); renderHome(); drawBell(); for (const x of gone) api('DELETE', '/notices/' + x.id).catch(() => {}); };
@@ -7678,6 +7692,79 @@
     }, l ? 'Save' : 'Add to campaign');
   }
 
+  // ---------- rules and approvals ----------
+  // What needs an owner's OK (or isn't allowed), enforced by the server; and the requests waiting for an OK.
+  const RU = { data: null };
+  async function loadApprovals() {
+    try {
+      RU.data = await api('GET', '/approvals');
+    } catch {
+      return;
+    }
+    renderHome?.();
+    if (toolOpen === 'hq') renderTool();
+  }
+  const RU_LEVEL = [['auto', 'Anyone can'], ['approval', 'Needs an owner’s OK'], ['never', 'Not allowed']];
+  const ruAmount = (a, n) => (a.unit === 'percent' ? `${n}%` : a.unit === 'dollars' ? '$' + Number(n).toLocaleString('en-US') : '');
+  // Company HQ → Rules & boundaries: the rules Kloomie enforces. Owners change them; everyone can read them.
+  function rulesBox() {
+    const d = RU.data;
+    if (!d) return h('p', { class: 'day-hint' }, 'Loading…');
+    const owner = S.workspace?.members?.find((m) => m.id === S.me?.memberId)?.role === 'owner';
+    const save = async (patch) => {
+      try {
+        RU.data = { ...RU.data, ...(await api('PUT', '/rules', patch)) };
+        toast('Rule saved');
+        renderTool(true);
+      } catch (e) {
+        toast(e.message);
+      }
+    };
+    const rows = Object.entries(d.actions).map(([k, a]) => {
+      const r = d.rules[k];
+      if (!owner) return h('div', { class: 'ru-row' }, h('b', {}, a.name), h('span', {}, `${RU_LEVEL.find(([v]) => v === r.level)[1]}${a.unit && r.level !== 'auto' ? ` over ${ruAmount(a, r.over)}` : ''}`));
+      const level = h('select', { 'aria-label': a.name, onchange: () => save({ [k]: { level: level.value, over: over?.value } }) }, RU_LEVEL.map(([v, l]) => h('option', { value: v, selected: r.level === v }, l)));
+      const over = a.unit ? h('input', { class: 'ru-over', inputmode: 'decimal', value: r.over, 'aria-label': `${a.name}: over how much`, onchange: () => save({ [k]: { level: level.value, over: over.value } }) }) : null;
+      return h('div', { class: 'ru-row' }, h('div', {}, h('b', {}, a.name), h('small', {}, a.about)),
+        h('div', { class: 'ru-ctl' }, level, a.unit ? h('span', { class: 'ru-unit' }, 'over', a.unit === 'dollars' ? ' $' : '', over, a.unit === 'percent' ? '%' : '') : null));
+    });
+    const who = owner ? h('select', { onchange: (e) => save({ approvers: e.target.value }) }, [['owners', 'Owners'], ['admins', 'Owners and admins']].map(([v, l]) => h('option', { value: v, selected: d.rules.approvers === v }, l))) : null;
+    return h('div', { class: 'ru-box' },
+      h('small', { class: 'hq-kind' }, 'Enforced by Kloomie'),
+      h('p', { class: 'day-hint' }, 'These aren’t just for the AI: Kloomie holds the change until someone who can approve says OK. Owners can always act.'),
+      rows,
+      h('div', { class: 'ru-row' }, h('b', {}, 'Who can approve'), owner ? who : h('span', {}, d.rules.approvers === 'admins' ? 'Owners and admins' : 'Owners')));
+  }
+  function approvalSheet(id) {
+    const x = RU.data?.approvals.find((y) => y.id === id);
+    if (!x) {
+      loadApprovals().then(() => RU.data?.approvals.some((y) => y.id === id) && approvalSheet(id));
+      return;
+    }
+    const note = h('input', { placeholder: 'A note for them (optional)' });
+    const decide = async (yes) => {
+      try {
+        const out = await api('POST', `/approvals/${x.id}/${yes ? 'approve' : 'decline'}`, { note: note.value });
+        RU.data = { ...RU.data, ...out };
+        closeSheet();
+        toast(out.approval.status === 'failed' ? `Couldn’t do it: ${out.approval.error}` : yes ? 'Approved and done' : 'Declined');
+        renderHome?.();
+      } catch (e) {
+        toast(e.message);
+      }
+    };
+    const waiting = x.status === 'pending';
+    const mine = x.byId === S.me?.memberId;
+    const takeBack = async () => { try { RU.data = { ...RU.data, ...(await api('DELETE', '/approvals/' + x.id)) }; closeSheet(); toast('Request taken back'); } catch (e) { toast(e.message); } };
+    sheet(waiting ? `${x.by} needs an OK` : 'Request', [
+      h('p', {}, h('b', {}, x.summary)),
+      h('p', { class: 'day-hint' }, `${x.by} asked ${ago(x.at)}.${x.decidedBy ? ` ${x.decidedBy} ${x.status === 'failed' ? 'approved it, but it couldn’t be done' : x.status} ${ago(x.decidedAt)}.` : ''}${x.error ? ' ' + x.error : ''}${x.note ? ` “${x.note}”` : ''}`),
+      waiting && RU.data.canApprove && !mine ? h('label', {}, 'Note', note) : null,
+      waiting && RU.data.canApprove && !mine ? h('div', { class: 'btns' }, h('button', { class: 'btn primary-btn', onclick: () => decide(true) }, '✓ Approve'), h('button', { class: 'btn', onclick: () => decide(false) }, 'Decline')) : null,
+      waiting && mine ? h('div', { class: 'btns' }, h('button', { class: 'btn', onclick: takeBack }, 'Take back my request')) : null,
+    ].filter(Boolean));
+  }
+
   // ---------- Company HQ: what Kloomie knows about the business ----------
   // Entries under seven pillars. The AI follows the approved ones in everything it writes and plans; suggestions
   // (from reading the team's website) wait here for an owner or admin to accept, edit or dismiss them.
@@ -7924,9 +8011,11 @@
             h('button', { class: 'icon-btn', 'aria-label': 'Dismiss', html: I.close, onclick: async () => hqTook(await api('DELETE', '/hq/entries/' + x.id).catch((e) => toast(e.message))) }))))) : null,
       h('div', { class: 'hq-pillars' }, d.pillars.map((p) => {
         const mine = d.entries.filter((x) => x.pillar === p.key && x.status === 'approved');
-        return h('section', { class: 'hq-pillar' },
+        return h('section', { class: 'hq-pillar' + (p.key === 'rules' ? ' wide' : '') },
           h('div', { class: 'hq-pillar-h' }, h('div', {}, h('b', {}, p.name), h('small', {}, p.about)), admin ? h('button', { class: 'btn small', onclick: (e) => hqAddMenu(p, e.currentTarget) }, '+ Add') : null),
-          mine.length ? p.kinds.map((k) => hqGroup(mine.filter((x) => x.kind === k), admin)) : h('p', { class: 'day-hint' }, admin ? 'Nothing here yet.' : 'Nothing here yet. An owner can add it.'));
+          p.key === 'rules' ? rulesBox() : null,
+          p.key === 'rules' && mine.length ? h('small', { class: 'hq-kind' }, 'For the AI to follow') : null,
+          mine.length ? p.kinds.map((k) => hqGroup(mine.filter((x) => x.kind === k), admin)) : p.key === 'rules' ? null : h('p', { class: 'day-hint' }, admin ? 'Nothing here yet.' : 'Nothing here yet. An owner can add it.'));
       })),
     ];
   }

@@ -21,6 +21,9 @@ import { publicApiModule } from './publicapi.js';
 import { quickbooksModule } from './quickbooks.js';
 import { EVENTS as HOOK_EVENTS } from './projects.js';
 import { hqModule } from './hq.js';
+import { rulesModule } from './rules.js';
+import { Readable } from 'node:stream';
+import { EventEmitter } from 'node:events';
 import { openStore, Fenced } from './store.js';
 import { createMailer } from './mail.js';
 import { createPush } from './push.js';
@@ -235,6 +238,7 @@ function liveSession(token) {
   return session;
 }
 function authFrom(req, url) {
+  if (req.replay) return req.replay; // an approved request, replayed as the person who asked (rules.js)
   const h = req.headers.authorization || '';
   const token = h.startsWith('Bearer ') ? h.slice(7) : url.searchParams.get('t');
   const session = liveSession(token);
@@ -5253,6 +5257,8 @@ async function api(req, res, url) {
   {
     const qb = await QB.route(req, res, parts, auth, ws);
     if (qb !== null) return;
+    const rules = await RULES.route(req, res, parts, auth, ws);
+    if (rules !== null) return;
     const out = await HQ.route(req, res, parts, auth, ws);
     if (out !== null) return;
   }
@@ -7865,7 +7871,23 @@ async function importData(req, res) {
 }
 
 // Projects and the public API (projects.js).
-const PJ = projectsModule({ db, save, broadcast, rid, cleanText, isDay, readJson, send, badRequest, isOwnerId, escHtml, brandOf, logoUrl, teamDay, offline, allowLocalHooks: process.env.ALLOW_LOCAL_WEBHOOKS === '1',
+// Rules and approvals (rules.js). An approved request is replayed through the API as the person who asked.
+let RULES = null;
+async function replayAs(ws, memberId, approvalId, { method, path: p, body }) {
+  const me = ws.members.find((m) => m.id === memberId);
+  const req = Readable.from(body == null ? [] : [Buffer.from(JSON.stringify(body))]);
+  Object.assign(req, { method, url: p, headers: { 'content-type': 'application/json' }, socket: { remoteAddress: 'replay' } });
+  req.replay = { token: null, wsId: ws.id, ws, memberId, member: me.name, role: me.role, tz: tzOf(ws), approved: approvalId };
+  const res = new EventEmitter();
+  let status = 200, out = '';
+  Object.assign(res, { headersSent: false, setHeader() {}, getHeader() {}, writeHead(code) { status = code; this.headersSent = true; return this; }, write(c) { out += c; return true; }, end(c) { if (c) out += c; this.emit('finish'); } });
+  await api(req, res, new URL(p, 'http://replay'));
+  let parsed = null;
+  try { parsed = JSON.parse(out); } catch {}
+  return { status, body: parsed };
+}
+const hold = (...a) => RULES.hold(...a);
+const PJ = projectsModule({ db, save, broadcast, rid, hold, cleanText, isDay, readJson, send, badRequest, isOwnerId, escHtml, brandOf, logoUrl, teamDay, offline, allowLocalHooks: process.env.ALLOW_LOCAL_WEBHOOKS === '1',
   onRecordGone: (rec) => { dropVisits(rec); INV.dropFor(rec); },
   onRecordNews: (rec) => jobChanged(rec),
   // A follow-up from a record's timeline: a task for whoever logged it, about the record.
@@ -7935,10 +7957,11 @@ async function itemFiles(ws, auth, ids) {
   }
   return { files, names, used };
 }
-HQ = hqModule({ db, save, broadcast, rid, cleanText, readJson, send, isAdmin, aiAsk, aiRun, itemFiles, replyJson, allowLocal: process.env.ALLOW_LOCAL_FETCH === '1' });
+RULES = rulesModule({ db, save, broadcast, rid, cleanText, readJson, send, notify, replay: replayAs });
+HQ = hqModule({ db, save, broadcast, rid, cleanText, readJson, send, isAdmin, aiAsk, aiRun, itemFiles, replyJson, enforced: (ws) => RULES.promptLines(ws), allowLocal: process.env.ALLOW_LOCAL_FETCH === '1' });
 for (const ws of Object.values(db.workspaces)) if (HQ.migrate(ws)) save();
 
-const INV = invoicesModule({ db, save, broadcast, rid, cleanText, readJson, send, badRequest, escHtml, brandOf, logoUrl, teamDay, offline, seal, unseal, stripeCall: stripe.callWith, PJ, isAdmin, jobOfRecord, jobLabel, moveJob, publicUrl: PUBLIC_URL, emit: (...a) => { PJ.emit(...a); QB.soon(a[0]); },
+const INV = invoicesModule({ db, save, broadcast, rid, hold, cleanText, readJson, send, badRequest, escHtml, brandOf, logoUrl, teamDay, offline, seal, unseal, stripeCall: stripe.callWith, PJ, isAdmin, jobOfRecord, jobLabel, moveJob, publicUrl: PUBLIC_URL, emit: (...a) => { PJ.emit(...a); QB.soon(a[0]); },
   // A payment is money in on the business's Finance, under the team's owner.
   addMoney: (ws, { amount, day, note }) => {
     const owner = ws.members.find((m) => m.role === 'owner') || ws.members[0];

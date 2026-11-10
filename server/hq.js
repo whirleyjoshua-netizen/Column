@@ -72,7 +72,7 @@ const MAX_PROMPT = 6000;
 const PAGE_BYTES = 1_500_000;
 const PAGE_CHARS = 6000;
 
-export function hqModule({ db, save, broadcast, rid, cleanText, readJson, send, isAdmin, aiAsk, aiRun, itemFiles, replyJson, allowLocal = false }) {
+export function hqModule({ db, save, broadcast, rid, cleanText, readJson, send, isAdmin, aiAsk, aiRun, itemFiles, replyJson, enforced = () => [], allowLocal = false }) {
   db.hq ||= {};
   const entriesOf = (wsId) => Object.values(db.hq).filter((x) => x.wsId === wsId).sort((a, b) => a.createdAt - b.createdAt);
   const approved = (wsId) => entriesOf(wsId).filter((x) => x.status === 'approved');
@@ -148,7 +148,8 @@ export function hqModule({ db, save, broadcast, rid, cleanText, readJson, send, 
     const t = TASKS[task] || TASKS.general;
     if (!t.kinds) return '';
     const es = approved(ws.id);
-    if (!es.length) return '';
+    const enforcedLines = t.rules ? enforced(ws) : [];
+    if (!es.length && !enforcedLines.length) return '';
     const fits = (x) => t.kinds === 'all' || t.kinds.includes(x.kind);
     const inArea = (x) => !t.areas || !x.areas?.length || x.areas.some((a) => t.areas.includes(a));
     const horizon = { quarter: 0, year: 1, long: 2 };
@@ -173,8 +174,9 @@ export function hqModule({ db, save, broadcast, rid, cleanText, readJson, send, 
     return [
       `\n\nWhat the team has told Kloomie about their business, for this kind of work (${t.label}). Follow it, don’t contradict it, and don’t make up facts about the business that aren’t here.`,
       text ? text : '',
+      enforcedLines.length ? `Rules Kloomie enforces for this team (people can’t get around these, so don’t suggest it):\n${enforcedLines.join('\n')}` : '',
       t.voice && have.has('voice') ? 'Write in their tone of voice. Use the words they use and avoid the ones they avoid.' : '',
-      t.rules && have.has('rule') ? 'Where a rule says something needs an owner’s OK, say it needs their OK rather than doing it or promising it.' : '',
+      t.rules && (have.has('rule') || enforcedLines.length) ? 'Where a rule says something needs an owner’s OK, say it needs their OK rather than doing it or promising it.' : '',
       missing.length ? `Their profile doesn’t say yet: ${missing.join(', ')}. If your answer depends on it, say so plainly instead of guessing.` : '',
     ].filter(Boolean).join('\n');
   }

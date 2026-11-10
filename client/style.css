@@ -2147,3 +2147,13 @@ button.hq-entry:hover { background: var(--card-hover); }
 .bell-nudge { display: flex; align-items: center; gap: 8px; margin: 0 0 8px; padding: 9px 10px; border-radius: 9px; background: var(--accent-soft); font-size: 12.5px; }
 .bell-nudge > span { flex: 1; }
 .bell-h .linkish { background: none; border: 0; padding: 0; color: var(--accent); cursor: pointer; }
+
+/* rules and approvals */
+.hq-pillar.wide { grid-column: 1 / -1; }
+.ru-box { display: flex; flex-direction: column; gap: 4px; padding-bottom: 6px; }
+.ru-box p { margin: 0 0 4px; }
+.ru-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; padding: 7px 0; border-top: 1px solid var(--line); font-size: 13px; }
+.ru-row small { display: block; color: var(--muted); font-size: 12px; }
+.ru-ctl { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ru-unit { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); }
+.ru-over { width: 80px; }

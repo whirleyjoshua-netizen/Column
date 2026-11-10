@@ -158,7 +158,7 @@ export const TEMPLATES = {
   },
 };
 
-export function projectsModule({ db, save, broadcast, rid, cleanText, isDay, readJson, send, badRequest, isOwnerId, escHtml, brandOf, logoUrl, teamDay, offline, makeTask, onRecords, onRecordGone, onRecordNews, allowLocalHooks = false }) {
+export function projectsModule({ db, save, broadcast, rid, hold = null, cleanText, isDay, readJson, send, badRequest, isOwnerId, escHtml, brandOf, logoUrl, teamDay, offline, makeTask, onRecords, onRecordGone, onRecordNews, allowLocalHooks = false }) {
   const bad = (msg) => badRequest(msg);
   db.projects ||= {};
   db.records ||= {};
@@ -392,6 +392,17 @@ export function projectsModule({ db, save, broadcast, rid, cleanText, isDay, rea
     const costed = rows.some((r) => r.cost != null);
     const cost = rows.reduce((n, r) => n + Math.round((r.qty || 0) * (r.cost || 0)), 0);
     return { subtotal, discount, tax, total, ...(costed ? { cost, margin: subtotal - discount - cost, marginPct: subtotal - discount ? Math.round(((subtotal - discount - cost) / (subtotal - discount)) * 1000) / 10 : 0 } : {}) };
+  }
+  // The biggest discount on a record's price lines, as a percent of what they add up to; and the rules check
+  // (rules.js) for a change that raises it.
+  const discountPct = (t, values) => Math.max(0, ...t.fields.filter((f) => f.type === 'items').map((f) => { const x = itemsTotals(values[f.id]); return x.subtotal > 0 ? (x.discount / x.subtotal) * 100 : 0; }));
+  function holdDiscount(ws, auth, p, t, rec, values, req, body) {
+    if (!hold || !values) return null;
+    const trial = { ...(rec || { id: null }), values: { ...(rec?.values || {}) } };
+    try { applyValues(ws, p, t, trial, values, { addChoices: false }); } catch { return null; }
+    const now = discountPct(t, trial.values);
+    if (now <= discountPct(t, rec?.values || {}) + 0.01) return null;
+    return hold(ws, auth, 'discount', { amount: now, summary: `${Math.round(now * 10) / 10}% discount on ${rec ? recName(p, rec) : t.singular || 'a new record'}`, target: { projectId: p.id, recordId: rec?.id || null }, req: { method: req.method, path: req.url, body } });
   }
   // A value made to fit its field, or undefined to clear it. Unknown choices are added when allowed (imports
   // and the API), so a sync never fails on a new stage name.
@@ -832,6 +843,8 @@ export function projectsModule({ db, save, broadcast, rid, cleanText, isDay, rea
         const body = await readJson(req, 200_000);
         const t = typeOf(p, body.typeId);
         if (!t) return send(res, 400, { error: 'Pick which list it goes in.' });
+        const held = holdDiscount(ws, auth, p, t, null, body.values, req, body);
+        if (held) return send(res, held.status, held.body);
         const rec = newRecord(ws, p, t, auth, body.values, body.extId, { addChoices: false });
         recordNews(rec, 'record.created', auth.member);
         return send(res, 200, publicRecord(rec));
@@ -921,6 +934,8 @@ export function projectsModule({ db, save, broadcast, rid, cleanText, isDay, rea
       const t = typeOf(p, rec.typeId);
       if (m === 'PATCH' && !c) {
         const body = await readJson(req, 200_000);
+        const held = holdDiscount(ws, auth, p, t, rec, body.values, req, body);
+        if (held) return send(res, held.status, held.body);
         const before = { ...rec.values };
         applyValues(ws, p, t, rec, body.values, { addChoices: false });
         logChanges(ws, p, t, rec, before, auth.member);
@@ -930,6 +945,8 @@ export function projectsModule({ db, save, broadcast, rid, cleanText, isDay, rea
         return send(res, 200, publicRecord(rec));
       }
       if (m === 'DELETE' && !c) {
+        const held = hold?.(ws, auth, 'deleteRecord', { summary: `Delete ${recName(p, rec)}`, target: { projectId: p.id, recordId: rec.id }, req: { method: 'DELETE', path: req.url, body: null } });
+        if (held) return send(res, held.status, held.body);
         recordGone(rec, auth.member);
         return send(res, 200, { ok: true });
       }

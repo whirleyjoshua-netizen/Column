@@ -14,7 +14,7 @@ const METHODS = ['cash', 'check', 'card', 'bank', 'other'];
 const DUE_DAYS = 14;
 const CHECK_MS = Number(process.env.INVOICE_CHECK_MS) || 5 * 60_000;
 
-export function invoicesModule({ db, save, broadcast, rid, cleanText, readJson, send, badRequest, escHtml, brandOf, logoUrl, teamDay, offline, seal, unseal, stripeCall, PJ, isAdmin, jobOfRecord, jobLabel, moveJob, addMoney, dropMoneyId, publicUrl, emit = () => {} }) {
+export function invoicesModule({ db, save, broadcast, rid, hold = null, cleanText, readJson, send, badRequest, escHtml, brandOf, logoUrl, teamDay, offline, seal, unseal, stripeCall, PJ, isAdmin, jobOfRecord, jobLabel, moveJob, addMoney, dropMoneyId, publicUrl, emit = () => {} }) {
   db.invoices ||= {};
   db.payKeys ||= {};
   const money = (c) => ((c || 0) / 100).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
@@ -238,6 +238,10 @@ export function invoicesModule({ db, save, broadcast, rid, cleanText, readJson, 
     if (c === 'send' && m === 'POST') {
       if (inv.status === 'void') return send(res, 400, { error: 'This invoice was voided.' });
       if (totals(inv).total <= 0) return send(res, 400, { error: 'Add what you’re billing for first: the total is $0.' });
+      if (!inv.sentAt) {
+        const held = hold?.(ws, auth, 'invoice', { amount: totals(inv).total / 100, summary: `Send ${inv.number} for ${money(totals(inv).total)} to ${inv.to.name || 'the customer'}`, target: { invoiceId: inv.id, recordId: inv.recordId }, req: { method: 'POST', path: req.url, body: {} } });
+        if (held) return send(res, held.status, held.body);
+      }
       inv.token ||= crypto.randomBytes(18).toString('base64url');
       const first = !inv.sentAt;
       if (!inv.sentAt) {
