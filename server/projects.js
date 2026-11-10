@@ -14,7 +14,7 @@ import crypto from 'node:crypto';
 import dns from 'node:dns/promises';
 import net from 'node:net';
 import { TRADES, tradeType, tradeMenu } from './trades.js';
-import { TECH_TEMPLATE, techPrefix } from './tech.js';
+import { TECH_TEMPLATE, TECH_LATER, techPrefix } from './tech.js';
 
 export const FIELD_TYPES = ['text', 'number', 'money', 'date', 'select', 'multi', 'person', 'email', 'phone', 'url', 'checkbox', 'link', 'items', 'autonumber', 'files',
   // For jobs at a customer's place: who it's for (a contact), what gets done on site, what was measured, the
@@ -324,7 +324,7 @@ export function projectsModule({ db, save, broadcast, rid, hold = null, cleanTex
     }
     t.views = src.views.map((v) => {
       const ff = v.filter && byKey(v.filter.field);
-      return { id: rid(8), name: v.name, kind: v.kind, ...(v.groupBy ? { groupBy: byKey(v.groupBy)?.id } : {}), sort: v.sortBy ? { field: byKey(v.sortBy)?.id, dir: 'asc' } : null, ...(ff ? { filter: { field: ff.id, is: choiceIds(ff, v.filter.is) } } : {}) };
+      return { id: rid(8), name: v.name, kind: v.kind, ...(v.groupBy ? { groupBy: byKey(v.groupBy)?.id } : {}), ...(v.start ? { start: byKey(v.start)?.id } : {}), ...(v.end ? { end: byKey(v.end)?.id } : {}), ...(v.sprint ? { sprint: byKey(v.sprint)?.id } : {}), sort: v.sortBy ? { field: byKey(v.sortBy)?.id, dir: 'asc' } : null, ...(ff ? { filter: { field: ff.id, is: choiceIds(ff, v.filter.is) } } : {}) };
     });
     return t;
   }
@@ -779,7 +779,22 @@ export function projectsModule({ db, save, broadcast, rid, hold = null, cleanTex
           t.views.push(v);
         }
         if (body.name !== undefined) v.name = name(60) || v.name;
-        if (body.kind !== undefined) v.kind = body.kind === 'board' ? 'board' : 'table';
+        if (body.kind !== undefined) v.kind = ['board', 'timeline', 'sprint'].includes(body.kind) ? body.kind : 'table';
+        const dateField = (id) => t.fields.some((f) => f.id === id && f.type === 'date');
+        if (body.start !== undefined) v.start = dateField(body.start) ? body.start : v.start;
+        if (body.end !== undefined) v.end = dateField(body.end) ? body.end : v.end;
+        if (v.kind === 'timeline' && !v.start && !v.end) {
+          const ds = t.fields.filter((f) => f.type === 'date');
+          if (!ds.length) throw bad('A timeline needs a date field, like Start or Target date.');
+          v.start = ds[0].id;
+          v.end = (ds[1] || ds[0]).id;
+        }
+        if (body.sprint !== undefined) v.sprint = t.fields.some((f) => f.id === body.sprint && f.type === 'link') ? body.sprint : v.sprint;
+        if (v.kind === 'sprint' && !v.sprint) {
+          const l = t.fields.find((f) => f.type === 'link' && p.types.find((x) => x.id === f.target)?.fields.some((y) => y.type === 'date'));
+          if (!l) throw bad('A sprint view needs a link to a list of sprints with dates.');
+          v.sprint = l.id;
+        }
         if (body.groupBy !== undefined) v.groupBy = t.fields.some((f) => f.id === body.groupBy && f.type === 'select') ? body.groupBy : v.groupBy;
         if (v.kind === 'board' && !v.groupBy) {
           const sel = t.fields.find((f) => f.type === 'select');
@@ -950,6 +965,48 @@ export function projectsModule({ db, save, broadcast, rid, hold = null, cleanTex
       const p = rec && db.projects[rec.projectId];
       if (!rec || rec.wsId !== ws.id || !sees(p, auth.memberId)) return send(res, 404, { error: 'That record is gone.' });
       const t = typeOf(p, rec.typeId);
+      // Finishing a sprint: it's marked Done and what isn't done moves to the next sprint (made if there's none)
+      // or back to the backlog.
+      if (c === 'finish-sprint' && m === 'POST') {
+        const body = await readJson(req);
+        const work = p.types.find((x) => x.fields.some((f) => f.type === 'link' && f.target === t.id && f.key === 'sprint'));
+        const sf = work?.fields.find((f) => f.type === 'link' && f.target === t.id && f.key === 'sprint');
+        const stf = work?.fields.find((f) => f.key === 'status' && f.type === 'select');
+        if (!sf || !stf) return send(res, 400, { error: 'That isn’t a sprint.' });
+        const doneId = stf.choices.at(-1)?.id;
+        const k = (key) => t.fields.find((f) => f.key === key);
+        const left = Object.values(db.records).filter((r) => r.projectId === p.id && r.typeId === work.id && (r.values[sf.id] || []).includes(rec.id) && r.values[stf.id] !== doneId);
+        let next = null;
+        if (body.to === 'next') {
+          const end = rec.values[k('end')?.id] || rec.values[k('start')?.id] || null;
+          next = Object.values(db.records).filter((r) => r.projectId === p.id && r.typeId === t.id && r.id !== rec.id && (!end || (r.values[k('start')?.id] || '') > end) && r.values[k('status')?.id] !== k('status')?.choices.at(-1)?.id)
+            .sort((a, b) => String(a.values[k('start')?.id] || '').localeCompare(String(b.values[k('start')?.id] || '')))[0] || null;
+          if (!next) {
+            const s0 = rec.values[k('start')?.id], e0 = rec.values[k('end')?.id];
+            const len = s0 && e0 ? Math.max(1, Math.round((Date.parse(e0) - Date.parse(s0)) / 864e5)) : 13;
+            const day = (d, n) => new Date(Date.parse(d + 'T12:00:00Z') + n * 864e5).toISOString().slice(0, 10);
+            const start = e0 ? day(e0, 1) : new Date().toISOString().slice(0, 10);
+            const num = Number(String(recName(p, rec)).match(/(\d+)\s*$/)?.[1]);
+            next = newRecord(ws, p, t, auth, { [t.primary]: num ? String(recName(p, rec)).replace(/(\d+)\s*$/, String(num + 1)) : 'Next sprint', ...(k('start') ? { [k('start').id]: start } : {}), ...(k('end') ? { [k('end').id]: day(start, len) } : {}), ...(k('capacity') && rec.values[k('capacity').id] != null ? { [k('capacity').id]: rec.values[k('capacity').id] } : {}) }, null, { addChoices: false });
+            recordNews(next, 'record.created', auth.member);
+          }
+        }
+        for (const r of left) {
+          const before = { ...r.values };
+          applyValues(ws, p, work, r, { [sf.id]: next ? [next.id] : null }, { addChoices: false });
+          logChanges(ws, p, work, r, before, auth.member);
+          r.updatedAt = Date.now();
+          recordNews(r, 'record.updated', auth.member);
+        }
+        if (k('status')) {
+          const before = { ...rec.values };
+          applyValues(ws, p, t, rec, { [k('status').id]: k('status').choices.at(-1)?.id }, { addChoices: false });
+          logChanges(ws, p, t, rec, before, auth.member);
+          recordNews(rec, 'record.updated', auth.member);
+        }
+        save();
+        return send(res, 200, { moved: left.length, next: next ? publicRecord(next) : null });
+      }
       if (m === 'PATCH' && !c) {
         const body = await readJson(req, 200_000);
         const held = holdDiscount(ws, auth, p, t, rec, body.values, req, body);
@@ -1515,6 +1572,42 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
     const p = rec && db.projects[rec.projectId];
     return rec && rec.wsId === wsId && sees(p, memberId) ? { rec, p, t: typeOf(p, rec.typeId) } : null;
   };
+
+  // Technology projects made before sprints and the roadmap timeline get them: the Sprints list, the Sprint field
+  // on work items, and the Sprint and Roadmap views, put where the template has them.
+  function upgradeTech() {
+    for (const p of Object.values(db.projects)) {
+      if (p.template !== 'tech') continue;
+      let changed = false;
+      const ids = () => Object.fromEntries(p.types.map((t) => [t.key, t.id]));
+      const src = (k) => TECH_TEMPLATE.types.find((x) => x.key === k);
+      for (const k of TECH_LATER.types) if (!p.types.some((t) => t.key === k)) { p.types.push(typeFrom(src(k), (kk) => ids()[kk])); changed = true; }
+      for (const t of p.types) {
+        const want = [...(TECH_LATER.fields[t.key] || []), ...(TECH_LATER.views[t.key] || [])];
+        if (!want.length || !src(t.key)) continue;
+        const fresh = typeFrom(src(t.key), (kk) => ids()[kk]);
+        for (const k of TECH_LATER.fields[t.key] || []) {
+          if (t.fields.some((f) => f.key === k)) continue;
+          const f = fresh.fields.find((x) => x.key === k);
+          const after = src(t.key).fields[src(t.key).fields.findIndex((x) => x.key === k) - 1]?.key;
+          const at = t.fields.findIndex((x) => x.key === after);
+          t.fields.splice(at >= 0 ? at + 1 : t.fields.length, 0, f);
+          changed = true;
+        }
+        const idOf = (fid) => { const k = fresh.fields.find((x) => x.id === fid)?.key; return t.fields.find((x) => x.key === k)?.id; };
+        for (const name of TECH_LATER.views[t.key] || []) {
+          if (t.views.some((v) => v.name === name)) continue;
+          const v = { ...fresh.views.find((x) => x.name === name) };
+          for (const k of ['groupBy', 'start', 'end', 'sprint']) if (v[k]) v[k] = idOf(v[k]);
+          if (v.sort?.field) v.sort = { ...v.sort, field: idOf(v.sort.field) };
+          t.views.splice(Math.min(src(t.key).views.findIndex((x) => x.name === name), t.views.length), 0, v);
+          changed = true;
+        }
+      }
+      if (changed) save();
+    }
+  }
+  upgradeTech();
 
   return { route, v1, keyAuth, makeHook, publicHook, deliver, emit, quoteOf, quotePage, seesMsg, stateFor, sees, recordActivity, recordNews, words, fillFromProject, fromProjectOk, recordStory, priceList, recordAt, itemsTotals, TEMPLATES: Object.fromEntries(Object.entries(TEMPLATES).map(([k, t]) => [k, { name: t.name, icon: t.icon, about: t.about }])) };
 }

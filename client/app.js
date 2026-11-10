@@ -8415,10 +8415,11 @@
       { label: 'Delete project', danger: true, run: async () => { if (await prCall('DELETE', '/projects/' + p.id)) { S.projects = S.projects.filter((x) => x.id !== p.id); PR.open = null; renderProjects(); } } },
     ].filter(Boolean));
     const search = h('input', { type: 'search', class: 'pj-search', value: PR.q, placeholder: `Search ${t.name.toLowerCase()}`, 'aria-label': 'Search' });
-    search.addEventListener('input', () => { PR.q = search.value; const b = $('#projects .pj-body'); if (b) b.replaceChildren(...(v.kind === 'board' ? prBoard(p, t, v) : prTable(p, t, v)).filter(Boolean)); });
+    search.addEventListener('input', () => { PR.q = search.value; const b = $('#projects .pj-body'); if (b) b.replaceChildren(...prViewBody(p, t, v).filter(Boolean)); });
     const viewMenu = (e, x) => openMenu(e.currentTarget, [
       { label: 'Rename view', run: () => { const i = h('input', { value: x.name }); sheet('Rename view', [h('label', {}, 'Name', i)], () => prSchema(p, { op: 'updateView', typeId: t.id, viewId: x.id, name: i.value })); } },
       { label: x.kind === 'board' ? 'Show as a table' : 'Show as a board', run: () => prSchema(p, { op: 'updateView', typeId: t.id, viewId: x.id, kind: x.kind === 'board' ? 'table' : 'board' }) },
+      x.kind !== 'timeline' && t.fields.some((f) => f.type === 'date') ? { label: 'Show as a timeline', run: () => prSchema(p, { op: 'updateView', typeId: t.id, viewId: x.id, kind: 'timeline' }) } : null,
       ...(x.kind === 'board' ? t.fields.filter((f) => f.type === 'select').map((f) => ({ label: `Columns by ${f.name}`, on: x.groupBy === f.id, run: () => prSchema(p, { op: 'updateView', typeId: t.id, viewId: x.id, groupBy: f.id }) })) : []),
       t.views.length > 1 ? { label: 'Delete view', danger: true, run: () => { PR.view = null; prSchema(p, { op: 'removeView', typeId: t.id, viewId: x.id }); } } : null,
     ].filter(Boolean));
@@ -8430,13 +8431,13 @@
         h('button', { class: 'icon-btn', 'aria-label': 'Project options', html: I.more, onclick: more }),
         h('button', { class: 'icon-btn', 'aria-label': 'Close Projects', html: I.close, onclick: closeProjects })),
       h('div', { class: 'pj-bar' },
-        h('div', { class: 'pj-views' }, t.views.map((x) => h('button', { class: x.id === v.id ? 'on' : null, onclick: () => { PR.view = x.id; renderProjects(); }, oncontextmenu: (e) => { e.preventDefault(); viewMenu(e, x); } }, x.kind === 'board' ? '▥ ' : '☰ ', x.name)),
+        h('div', { class: 'pj-views' }, t.views.map((x) => h('button', { class: x.id === v.id ? 'on' : null, onclick: () => { PR.view = x.id; renderProjects(); }, oncontextmenu: (e) => { e.preventDefault(); viewMenu(e, x); } }, { board: '▥ ', timeline: '▤ ', sprint: '🏃 ' }[x.kind] || '☰ ', x.name)),
           h('button', { class: 'pj-view-more', title: 'This view', 'aria-label': 'View options', onclick: (e) => viewMenu(e, v) }, '⌄'),
           h('button', { class: 'pj-view-add', title: 'Add a view', onclick: (e) => openMenu(e.currentTarget, [{ label: '☰ Table', run: () => prSchema(p, { op: 'addView', typeId: t.id, name: 'Table', kind: 'table' }, true) }, { label: '▥ Board', run: () => prSchema(p, { op: 'addView', typeId: t.id, name: 'Board', kind: 'board' }, true) }]) }, '+')),
         search,
         h('button', { class: 'btn primary-btn', onclick: () => prNew(p, t) }, `+ New ${(t.singular || 'record').toLowerCase()}`)),
       h('div', { class: 'pj-main' },
-        h('div', { class: 'pj-body' + (v.kind === 'board' ? ' board' : '') }, ...(PR.loading === p.id ? [h('p', { class: 'day-hint' }, 'Loading…')] : v.kind === 'board' ? prBoard(p, t, v) : prTable(p, t, v)).filter(Boolean)),
+        h('div', { class: 'pj-body' + (v.kind === 'board' ? ' board' : '') }, ...(PR.loading === p.id ? [h('p', { class: 'day-hint' }, 'Loading…')] : prViewBody(p, t, v)).filter(Boolean)),
         PR.panel ? prPanel(p, PR.panel) : null),
     ];
   }
@@ -8678,6 +8679,161 @@
       h('p', { class: 'day-hint pj-count' }, `${recs.length.toLocaleString()} ${recs.length === 1 ? (t.singular || 'record').toLowerCase() : t.name.toLowerCase()}${shown.length < recs.length ? ` · showing the first ${shown.length}, search to narrow it down` : ''}`)];
   }
   // ----- board -----
+  // ----- the roadmap timeline: records as bars from start to end, grouped (by phase), with progress and warnings -----
+  const shortDay = (k) => keyDate(k).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  // How much of a record's work is done: the records that link to it whose status is at the last stage.
+  function prProgress(p, t, r) {
+    let all = 0, done = 0;
+    for (const o of p.types) {
+      const links = o.fields.filter((f) => f.type === 'link' && f.target === t.id && o.id !== t.id);
+      const st = o.fields.find((f) => f.key === 'status' && f.type === 'select');
+      if (!links.length || !st) continue;
+      for (const x of prRecs(p.id)) if (x.typeId === o.id && links.some((f) => (x.values[f.id] || []).includes(r.id))) { all++; if (x.values[st.id] === st.choices.at(-1)?.id) done++; }
+    }
+    return all ? { all, done, pct: Math.round((done / all) * 100) } : null;
+  }
+  function prTimeline(p, t, v) {
+    const sF = prField(t, v.start), eF = prField(t, v.end) || sF;
+    const g = prField(t, v.groupBy);
+    const stF = t.fields.find((f) => f.key === 'status' && f.type === 'select');
+    const depF = t.fields.find((f) => f.type === 'link' && f.target === t.id);
+    const recs = prShown(p, t, v);
+    const span = (r) => { const a = r.values[sF?.id], b = r.values[eF?.id]; if (!a && !b) return null; const x = a || b, y = b && b >= x ? b : x; return [x, y]; };
+    const dated = recs.filter(span), undated = recs.filter((r) => !span(r));
+    const open = (r) => { PR.panel = r.id; renderProjects(); };
+    if (!dated.length) return [h('p', { class: 'day-hint' }, `Give ${t.name.toLowerCase()} a ${(sF || eF)?.name.toLowerCase() || 'date'} to see them on the timeline.`), ...undated.map((r) => h('button', { class: 'pj-link', onclick: () => open(r) }, recName(t, r)))];
+    const ms = (k) => Date.parse(k + 'T12:00:00');
+    let min = Math.min(Date.now(), ...dated.map((r) => ms(span(r)[0]))), max = Math.max(Date.now(), ...dated.map((r) => ms(span(r)[1])));
+    min = new Date(new Date(min).getFullYear(), new Date(min).getMonth(), 1).getTime();
+    max = Math.max(max + 7 * 864e5, min + 60 * 864e5);
+    const pct = (x) => ((x - min) / (max - min)) * 100;
+    const months = [];
+    for (let d = new Date(min); d.getTime() < max && pct(d.getTime()) < 94; d = new Date(d.getFullYear(), d.getMonth() + 1, 1)) months.push(h('span', { style: `left:${pct(d.getTime())}%` }, d.toLocaleDateString(undefined, { month: 'short', year: d.getMonth() === 0 ? 'numeric' : undefined })));
+    const today = h('i', { class: 'tl-today', style: `left:${pct(Date.now())}%`, title: 'Today' });
+    const row = (r) => {
+      const [a, b] = span(r);
+      const c = stF && stF.choices.find((x) => x.id === r.values[stF.id]);
+      const prog = prProgress(p, t, r);
+      // Starting before something it depends on is finished.
+      const late = depF ? (r.values[depF.id] || []).map((id) => recById(p.id, id)).filter((d) => d && span(d) && span(d)[1] > a) : [];
+      return h('div', { class: 'tl-row' },
+        h('button', { class: 'tl-name', onclick: () => open(r) }, h('b', {}, recName(t, r)), h('small', {}, [prog ? `${prog.pct}% · ${prog.done}/${prog.all} done` : c?.label || '', late.length ? ` · ⚠ starts before ${late.map((d) => recName(t, d)).join(', ')} ends` : ''].join(''))),
+        h('div', { class: 'tl-track' },
+          h('button', { class: 'tl-bar' + (late.length ? ' warn' : '') + (PR.panel === r.id ? ' on' : ''), style: `left:${pct(ms(a))}%;width:${Math.max(1.2, pct(ms(b) + 864e5) - pct(ms(a)))}%;--c:${PF_COLOR[c?.color] || PF_COLOR.blue}`, title: `${recName(t, r)} · ${shortDay(a)}${b !== a ? ' – ' + shortDay(b) : ''}`, onclick: () => open(r) },
+            prog ? h('i', { style: `width:${prog.pct}%` }) : null)));
+    };
+    const groups = g ? [...g.choices.map((c) => ({ c, list: dated.filter((r) => r.values[g.id] === c.id) })), { c: { label: `No ${g.name.toLowerCase()}`, color: 'gray' }, list: dated.filter((r) => !r.values[g.id]) }] : [{ c: null, list: dated }];
+    return [h('div', { class: 'tl' },
+      h('div', { class: 'tl-row tl-head' }, h('div', { class: 'tl-name' }), h('div', { class: 'tl-track' }, months, today)),
+      ...groups.filter((x) => x.list.length).flatMap((x) => [x.c ? h('div', { class: 'tl-group', style: `--c:${PF_COLOR[x.c.color] || PF_COLOR.gray}` }, x.c.label) : null, ...x.list.sort((m, n) => span(m)[0].localeCompare(span(n)[0])).map(row)]).filter(Boolean)),
+      undated.length ? h('p', { class: 'day-hint' }, 'No dates yet: ', ...undated.map((r) => h('button', { class: 'pj-link', onclick: () => open(r) }, recName(t, r)))) : null];
+  }
+
+  // ----- the sprint planner: the backlog on one side, the sprint by person on the other -----
+  const fkey = (tp, k) => tp?.fields.find((f) => f.key === k);
+  function prSprint(p, t, v) {
+    const sf = prField(t, v.sprint);
+    const st = sf && prType(p, sf.target);
+    if (!st) return [h('p', { class: 'day-hint' }, 'A sprint view needs a link to a list of sprints.')];
+    const [sStart, sEnd, sStatus, sGoal, sCap] = ['start', 'end', 'status', 'goal', 'capacity'].map((k) => fkey(st, k));
+    const est = fkey(t, 'estimate') || t.fields.find((f) => f.type === 'number');
+    const who = fkey(t, 'assignee') || t.fields.find((f) => f.type === 'person');
+    const status = fkey(t, 'status');
+    const pri = fkey(t, 'priority');
+    const keyF = t.fields.find((f) => f.type === 'autonumber');
+    const doneId = status?.choices.at(-1)?.id;
+    const sDone = sStatus?.choices.at(-1)?.id;
+    const sprints = prRecs(p.id).filter((r) => r.typeId === st.id).sort((a, b) => String(a.values[sStart?.id] || '').localeCompare(String(b.values[sStart?.id] || '')));
+    const today = todayKey();
+    const live = (s) => s.values[sStatus?.id] !== sDone;
+    const cur = sprints.find((x) => x.id === PR.sprint) || sprints.find((x) => sStatus && x.values[sStatus.id] === sStatus.choices.find((c) => c.label === 'Active')?.id)
+      || sprints.find((x) => live(x) && (x.values[sStart?.id] || '') <= today && (x.values[sEnd?.id] || '9') >= today) || sprints.find(live) || sprints.at(-1);
+    const newBtn = h('button', { class: 'btn small', onclick: () => sprintSheet(p, st, sprints) }, '+ New sprint');
+    if (!cur) return [h('div', { class: 'sp-empty' }, h('p', {}, 'Plan your work in short sprints: one or two weeks, with a goal. Pick work from the backlog, and Kloomie shows who has too much.'), h('button', { class: 'btn primary-btn', onclick: () => sprintSheet(p, st, sprints) }, 'Plan the first sprint'))];
+    const items = prRecs(p.id).filter((r) => r.typeId === t.id);
+    const inSprint = items.filter((r) => (r.values[sf.id] || []).includes(cur.id));
+    const inLive = (r) => (r.values[sf.id] || []).some((id) => { const s = sprints.find((x) => x.id === id); return s && live(s); });
+    const pIdx = (r) => { const i = pri?.choices.findIndex((c) => c.id === r.values[pri.id]); return i == null || i < 0 ? 99 : i; };
+    const backlog = items.filter((r) => r.values[status?.id] !== doneId && !inLive(r)).sort((a, b) => pIdx(a) - pIdx(b) || a.createdAt - b.createdAt);
+    const pts = (r) => Number(r.values[est?.id]) || 0;
+    const total = inSprint.reduce((n, r) => n + pts(r), 0);
+    const done = inSprint.filter((r) => r.values[status?.id] === doneId).reduce((n, r) => n + pts(r), 0);
+    const a = cur.values[sStart?.id], b = cur.values[sEnd?.id];
+    const days = a && b ? Math.max(1, Math.round((Date.parse(b) - Date.parse(a)) / 864e5) + 1) : null;
+    const gone = a ? Math.min(days || 0, Math.max(0, Math.round((Date.parse(today) - Date.parse(a)) / 864e5) + 1)) : 0;
+    const expect = days ? (total * gone) / days : 0;
+    const cap = Number(cur.values[sCap?.id]) || 10;
+    const people = new Map();
+    for (const r of inSprint) { const k = r.values[who?.id] || ''; if (!people.has(k)) people.set(k, []); people.get(k).push(r); }
+    const move = (r, into) => prSet(p, r, sf, into ? [cur.id] : null);
+    const line = (r, inside) => h('div', { class: 'sp-item' + (r.values[status?.id] === doneId ? ' done' : '') },
+      h('button', { class: 'sp-open', onclick: () => { PR.panel = r.id; renderProjects(); } }, keyF && r.values[keyF.id] ? h('small', { class: 'pj-auto' }, r.values[keyF.id]) : null, h('span', {}, recName(t, r))),
+      status && r.values[status.id] ? pjChip(status.choices.find((c) => c.id === r.values[status.id]) || { label: '', color: 'gray' }) : null,
+      h('span', { class: 'sp-pts', title: est ? est.name : '' }, pts(r) ? String(pts(r)) : '–'),
+      !inside && who && r.values[who.id] ? avatar(r.values[who.id]) : null,
+      h('button', { class: 'icon-btn sp-mv', title: inside ? 'Back to the backlog' : 'Add to this sprint', onclick: () => move(r, !inside) }, inside ? '↩' : '→'));
+    const sel = h('select', { 'aria-label': 'Sprint', onchange: (e) => { PR.sprint = e.target.value; renderProjects(); } }, sprints.map((x) => h('option', { value: x.id, selected: x.id === cur.id }, `${recName(st, x)}${x.values[sStart?.id] ? ` · ${shortDay(x.values[sStart.id])}–${x.values[sEnd?.id] ? shortDay(x.values[sEnd.id]) : ''}` : ''}${live(x) ? '' : ' · done'}`)));
+    const stLabel = sStatus?.choices.find((c) => c.id === cur.values[sStatus.id])?.label;
+    const start = stLabel === 'Planned' && sStatus ? h('button', { class: 'btn small primary-btn', onclick: () => prSet(p, cur, sStatus, sStatus.choices.find((c) => c.label === 'Active')?.id) }, 'Start sprint') : null;
+    const finish = live(cur) && stLabel !== 'Planned' ? h('button', { class: 'btn small', onclick: () => finishSprint(p, cur, inSprint.filter((r) => r.values[status?.id] !== doneId)) }, 'Finish sprint…') : null;
+    const behind = days && gone && done + 0.001 < expect - total * 0.15;
+    return [h('div', { class: 'sp' },
+      h('div', { class: 'sp-head' }, sel, stLabel ? pjChip(sStatus.choices.find((c) => c.id === cur.values[sStatus.id])) : null, h('span', { style: 'flex:1' }), start, finish, newBtn,
+        h('button', { class: 'btn small', onclick: () => { PR.panel = cur.id; PR.type = st.id; PR.view = null; renderProjects(); } }, 'Edit sprint')),
+      cur.values[sGoal?.id] ? h('p', { class: 'sp-goal' }, '🎯 ', cur.values[sGoal.id]) : null,
+      h('div', { class: 'sp-stats' },
+        h('div', {}, h('b', {}, `${done} / ${total}`), h('small', {}, 'points done')),
+        h('div', { class: 'hq-bar sp-bar' }, h('i', { style: `width:${total ? Math.round((done / total) * 100) : 0}%` })),
+        days ? h('div', {}, h('b', {}, String(Math.max(0, days - gone))), h('small', {}, `of ${days} days left`)) : null,
+        days && total ? h('div', { class: behind ? 'sp-warn' : 'sp-ok' }, behind ? '⚠ Behind: at this pace it won’t all finish' : gone ? '✓ On track' : 'Not started yet') : null),
+      h('div', { class: 'sp-cols' },
+        h('section', { class: 'sp-col' }, h('div', { class: 'sp-col-h' }, h('b', {}, 'Backlog'), h('small', {}, `${backlog.length} · ${backlog.reduce((n, r) => n + pts(r), 0)} points`)),
+          backlog.length ? backlog.map((r) => line(r, false)) : h('p', { class: 'day-hint' }, 'Nothing waiting.')),
+        h('section', { class: 'sp-col' }, h('div', { class: 'sp-col-h' }, h('b', {}, recName(st, cur)), h('small', {}, `${inSprint.length} · ${total} points · ${cap} each`)),
+          inSprint.length ? [...people.entries()].sort((x, y) => (x[0] ? 0 : 1) - (y[0] ? 0 : 1)).map(([id, list]) => {
+            const sum = list.reduce((n, r) => n + pts(r), 0);
+            return h('div', { class: 'sp-person' + (id && sum > cap ? ' over' : '') },
+              h('div', { class: 'sp-person-h' }, id ? avatar(id) : null, h('b', {}, id ? memberName(id) : 'Nobody yet'), h('span', { style: 'flex:1' }), h('small', {}, id ? `${sum} / ${cap} points` : `${sum} points`), id && sum > cap ? h('small', { class: 'sp-warn' }, ' ⚠ too much') : null),
+              list.map((r) => line(r, true)));
+          }) : h('p', { class: 'day-hint' }, 'Add work from the backlog with →.'))))];
+  }
+  function sprintSheet(p, st, sprints) {
+    const [sStart, sEnd, sStatus, sGoal, sCap] = ['start', 'end', 'status', 'goal', 'capacity'].map((k) => fkey(st, k));
+    const last = sprints.at(-1);
+    const from = last?.values[sEnd?.id] && last.values[sEnd.id] >= todayKey() ? addDaysKey(last.values[sEnd.id], 1) : todayKey();
+    const name = h('input', { value: `Sprint ${sprints.length + 1}` });
+    const start = h('input', { type: 'date', value: from });
+    const len = h('select', {}, [[6, '1 week'], [13, '2 weeks'], [20, '3 weeks']].map(([n, l]) => h('option', { value: n, selected: n === 13 }, l)));
+    const goal = h('textarea', { rows: 2, placeholder: 'What this sprint is for, in a sentence' });
+    const cap = h('input', { inputmode: 'numeric', value: last?.values[sCap?.id] ?? 10 });
+    sheet('New sprint', [h('label', {}, 'Name', name), h('div', { class: 'row2' }, h('label', {}, 'Starts', start), h('label', {}, 'Length', len)), h('label', {}, 'Sprint goal', goal), h('label', {}, 'Points one person can finish', cap)], async () => {
+      const vals = { [st.primary]: name.value.trim() || 'Sprint', ...(sStart ? { [sStart.id]: start.value } : {}), ...(sEnd ? { [sEnd.id]: addDaysKey(start.value, Number(len.value)) } : {}), ...(sGoal && goal.value.trim() ? { [sGoal.id]: goal.value.trim() } : {}), ...(sCap ? { [sCap.id]: cap.value } : {}), ...(sStatus ? { [sStatus.id]: sStatus.choices[0].id } : {}) };
+      const r = await api('POST', `/projects/${p.id}/records`, { typeId: st.id, values: vals });
+      prUpsertRecord(r);
+      PR.sprint = r.id;
+      renderProjects();
+    }, 'Create sprint');
+  }
+  function finishSprint(p, cur, left) {
+    const go = async (to) => {
+      try {
+        const out = await api('POST', `/records/${cur.id}/finish-sprint`, { to });
+        PR.records.set(p.id, await api('GET', `/projects/${p.id}/records`));
+        if (out.next) PR.sprint = out.next.id;
+        closeSheet();
+        renderProjects();
+        toast(out.moved ? `${plural(out.moved, 'item')} moved ${to === 'next' ? 'to ' + (out.next ? recName(prType(p, cur.typeId), out.next) : 'the next sprint') : 'back to the backlog'}` : 'Sprint finished');
+      } catch (e) {
+        toast(e.message);
+      }
+    };
+    sheet(`Finish ${recName(prType(p, cur.typeId), cur)}`, [
+      h('p', {}, left.length ? `${plural(left.length, 'item')} ${left.length === 1 ? 'isn’t' : 'aren’t'} done.` : 'Everything in it is done. Nice.'),
+      left.length ? h('div', { class: 'btns' }, h('button', { class: 'btn primary-btn', onclick: () => go('next') }, 'Move them to the next sprint'), h('button', { class: 'btn', onclick: () => go('backlog') }, 'Back to the backlog')) : h('div', { class: 'btns' }, h('button', { class: 'btn primary-btn', onclick: () => go('backlog') }, 'Finish it')),
+    ]);
+  }
+
+  const prViewBody = (p, t, v) => (v.kind === 'board' ? prBoard(p, t, v) : v.kind === 'timeline' ? prTimeline(p, t, v) : v.kind === 'sprint' ? prSprint(p, t, v) : prTable(p, t, v));
   function prBoard(p, t, v) {
     const g = prField(t, v.groupBy) || t.fields.find((f) => f.type === 'select');
     if (!g) return [h('p', { class: 'day-hint' }, 'A board needs a field with options, like Stage.')];

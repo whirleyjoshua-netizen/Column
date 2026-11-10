@@ -22,6 +22,7 @@ export const TECH_TEMPLATE = {
       { key: 'estimate', name: 'Estimate', type: 'number', hint: 'Story points' },
       { key: 'feature', name: 'Feature', type: 'link', target: 'features' },
       { key: 'release', name: 'Release', type: 'link', target: 'releases' },
+      { key: 'sprint', name: 'Sprint', type: 'link', target: 'sprints' },
       { key: 'labels', name: 'Labels', type: 'multi', choices: [c('Frontend', 'blue'), c('Backend', 'violet'), c('Design', 'rose'), c('DevOps', 'teal'), c('Docs', 'gray')] },
       { key: 'due', name: 'Due', type: 'date' },
       { key: 'severity', name: 'Severity', type: 'select', choices: [c('Critical', 'rose'), c('High', 'amber'), c('Medium', 'blue'), c('Low', 'gray')], hint: 'How bad it is, apart from how soon to fix it', ...bugOnly },
@@ -36,6 +37,7 @@ export const TECH_TEMPLATE = {
       { key: 'files', name: 'Attachments', type: 'files' },
     ], views: [
       { name: 'Board', kind: 'board', groupBy: 'status' },
+      { name: 'Sprint', kind: 'sprint', sprint: 'sprint' },
       { name: 'All work', kind: 'table', sortBy: 'number' },
       { name: 'Bugs', kind: 'table', sortBy: 'number', filter: { field: 'type', is: ['Bug'] } },
     ] },
@@ -51,8 +53,19 @@ export const TECH_TEMPLATE = {
       { key: 'depends', name: 'Depends on', type: 'link', target: 'features', many: true },
       { key: 'description', name: 'What and why', type: 'text', long: true },
     ], views: [
-      { name: 'Roadmap', kind: 'board', groupBy: 'phase' },
+      { name: 'Roadmap', kind: 'timeline', start: 'start', end: 'target', groupBy: 'phase' },
+      { name: 'By phase', kind: 'board', groupBy: 'phase' },
       { name: 'All features', kind: 'table', sortBy: 'target' },
+    ] },
+    { key: 'sprints', name: 'Sprints', singular: 'Sprint', icon: '🏃', primary: 'name', fields: [
+      { key: 'name', name: 'Sprint', type: 'text' },
+      { key: 'status', name: 'Status', type: 'select', choices: [c('Planned', 'gray'), c('Active', 'amber'), c('Done', 'green')] },
+      { key: 'start', name: 'Start', type: 'date' },
+      { key: 'end', name: 'End', type: 'date' },
+      { key: 'goal', name: 'Sprint goal', type: 'text', long: true },
+      { key: 'capacity', name: 'Points per person', type: 'number', hint: 'What one person can finish in this sprint' },
+    ], views: [
+      { name: 'All sprints', kind: 'table', sortBy: 'start' },
     ] },
     { key: 'releases', name: 'Releases', singular: 'Release', icon: '🚀', primary: 'name', fields: [
       { key: 'name', name: 'Version', type: 'text' },
@@ -73,3 +86,6 @@ export function techPrefix(name) {
   const p = words.length > 1 ? words.slice(0, 3).map((w) => w[0]).join('') : words[0].slice(0, 3);
   return (p.length >= 2 ? p : 'APP') + '-';
 }
+
+// Projects made from step 1 of this template, before sprints and the roadmap timeline: what to add to them.
+export const TECH_LATER = { types: ['sprints'], fields: { work: ['sprint'] }, views: { work: ['Sprint'], features: ['Roadmap'] } };
