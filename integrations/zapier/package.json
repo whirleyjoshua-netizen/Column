@@ -1,0 +1,16 @@
+{
+  "name": "kloomie-zapier",
+  "version": "1.0.0",
+  "description": "Kloomie for Zapier: triggers when contacts, tasks, visits, invoices, payments, files and signatures happen in Kloomie; actions to add contacts, tasks and visits and record payments; searches for contacts and invoices.",
+  "main": "index.js",
+  "private": true,
+  "scripts": {
+    "test": "node test.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "zapier-platform-core": "19.3.0"
+  }
+}

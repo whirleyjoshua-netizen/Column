@@ -319,6 +319,7 @@ export function publicApiModule(deps) {
       if (qs.get('status')) all = all.filter((x) => x.status === qs.get('status') || (qs.get('status') === 'overdue' && INV.apiInvoice(x).overdue));
       if (qs.get('job_id')) all = all.filter((x) => x.recordId === qs.get('job_id'));
       if (qs.get('contact_id')) all = all.filter((x) => x.to.contactId === qs.get('contact_id'));
+      if (qs.get('number')) all = all.filter((x) => x.number.toLowerCase() === qs.get('number').trim().toLowerCase());
       return page(res, qs, all, (x) => x.updatedAt || x.createdAt, INV.apiInvoice);
     }
     const inv = db.invoices[id];

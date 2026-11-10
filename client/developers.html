@@ -86,7 +86,7 @@
   <h2 id="invoices">Invoices</h2>
   <p>Invoices are made and sent from a job in Kloomie. Other apps read them, and record payments taken somewhere else (your books, a bank transfer, cash).</p>
   <table>
-    <tr><td><span class="m get">GET</span></td><td><code>/invoices</code></td><td>Invoices. <code>?status=</code> (draft, sent, viewed, partial, paid, void, or overdue), <code>?job_id=</code>, <code>?contact_id=</code>.</td></tr>
+    <tr><td><span class="m get">GET</span></td><td><code>/invoices</code></td><td>Invoices. <code>?status=</code> (draft, sent, viewed, partial, paid, void, or overdue), <code>?job_id=</code>, <code>?contact_id=</code>, <code>?number=INV-1001</code>.</td></tr>
     <tr><td><span class="m get">GET</span></td><td><code>/invoices/{id}</code></td><td>One invoice.</td></tr>
     <tr><td><span class="m post">POST</span></td><td><code>/invoices/{id}/payments</code></td><td>Record a payment: <code>{"amount": 250.00, "method": "check", "date", "note", "reference"}</code>. <code>method</code> is cash, check, card, bank or other. A <code>reference</code> sent twice is only counted once.</td></tr>
   </table>
