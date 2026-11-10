@@ -2109,6 +2109,18 @@ button.hq-entry:hover { background: var(--card-hover); }
 .hq-entry .hq-dont { color: #f87171; }
 .hq-entry .hq-meta { text-transform: none; letter-spacing: 0; font-size: 12px; }
 .hq-sugg .hq-entry { margin: 0; }
+.hq-chat { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; margin-bottom: 12px; }
+.hq-chat-log { max-height: 360px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; margin: 6px 0 10px; }
+.hq-turn { max-width: 85%; }
+.hq-turn p { margin: 0; padding: 8px 12px; border-radius: 12px; font-size: 14px; line-height: 1.45; white-space: pre-wrap; }
+.hq-turn.kloomie p { background: var(--card-hover); }
+.hq-turn.owner { align-self: flex-end; }
+.hq-turn.owner p { background: var(--accent); color: #fff; }
+.hq-turn-sugg { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.hq-chat-in { display: flex; gap: 8px; align-items: flex-end; }
+.hq-chat-in textarea { flex: 1; min-width: 0; resize: vertical; }
+.hq-picks { display: flex; flex-direction: column; gap: 6px; max-height: 50vh; overflow-y: auto; }
+.hq-import .btns { display: flex; gap: 8px; flex-wrap: wrap; }
 .hq-group { display: flex; flex-direction: column; gap: 2px; }
 .hq-kind { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; margin-top: 4px; }
 .hq-chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px 0; }

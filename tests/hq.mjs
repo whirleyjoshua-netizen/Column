@@ -43,7 +43,14 @@ const ai = http.createServer((req, res) => {
     const user = JSON.stringify(j.messages);
     asked.push({ sys, user });
     let out = { text: 'ok' };
-    if (sys.includes('set up its company profile')) out = { entries: [
+    if (sys.includes('interviewing the owner')) out = JSON.stringify(j.messages.at(-1)).includes('passed around')
+      ? { reply: 'So nobody gets passed around. Would you call that a core value? And who are your best customers?', entries: [{ kind: 'value', title: 'One team, start to finish', text: 'Customers deal with us from the first call to the install.', do: ['Same person on every call'], dont: ['Handing people off'] }, { kind: 'teleport', title: 'x' }], done: false }
+      : { reply: 'Thanks! That’s everything for now.', entries: [], done: true };
+    if (sys.includes('own documents')) out = { entries: [
+      { kind: 'pricing', title: 'Free measure', text: 'In-home measures are free.', file: 'prices.txt', why: 'top of the price sheet' },
+      { kind: 'policy', title: 'Deposit', text: '50% to order.', file: 'prices.txt' },
+      { kind: 'rule', title: 'Refunds', text: 'Any refund needs the owner.', level: 'approval', file: 'prices.txt' }], gaps: ['Warranty terms'] };
+    if (sys.includes('pages from the business')) out = { entries: [
       { kind: 'about', title: '', text: 'Custom blinds, shades and shutters for homes across the Las Vegas Valley.', why: 'Home page', url: SITE + '/' },
       { kind: 'service', title: 'Motorized roller shades', text: '', why: 'Services page', url: SITE + '/services' },
       { kind: 'service', title: 'Plantation shutters', text: '', why: 'Services page', url: SITE + '/services' },
@@ -60,10 +67,10 @@ await new Promise((r) => ai.listen(AI_PORT, '127.0.0.1', r));
 const srv = spawn('node', ['index.js'], { cwd: new URL('../server', import.meta.url).pathname, env: { ...process.env, PORT: String(PORT), DATA_DIR: DIR, MAIL_OUTBOX: '1', DATABASE_URL: '', ANTHROPIC_BASE_URL: `http://127.0.0.1:${AI_PORT}`, ALLOW_LOCAL_FETCH: '1' }, stdio: ['ignore', 'pipe', 'pipe'] });
 srv.log = ''; srv.stdout.on('data', (d) => (srv.log += d)); srv.stderr.on('data', (d) => (srv.log += d));
 for (let i = 0; i < 100; i++) { try { if ((await fetch(B + '/api/health')).ok) break; } catch {} await sleep(150); }
-const call = (tok) => async (m, p, body) => {
+const call = (tok) => Object.assign(async (m, p, body) => {
   const r = await fetch(B + '/api' + p, { method: m, headers: { 'content-type': 'application/json', ...(tok ? { authorization: 'Bearer ' + tok } : {}) }, body: body ? JSON.stringify(body) : undefined });
   return { status: r.status, body: await r.json().catch(() => null) };
-};
+}, { tok });
 const t = Date.now();
 try {
   let r = await call()('POST', '/auth', { mode: 'create', workspace: 'Desert ' + t, name: 'Maria', email: `maria${t}@t.test`, password: 'longenough1', device: 'Mac', deviceId: 'd1' });
@@ -99,7 +106,7 @@ try {
   ok(r.status === 200 && r.body.added === 5 && r.body.pages >= 3, `the import follows the redirect, reads ${r.body.pages} pages and suggests ${r.body.added} entries`);
   ok(seen.includes('/about') && seen.includes('/services'), 'it read the About and Services pages it found on the home page');
   ok(!seen.includes('/blog/post-1'), 'but not pages that say nothing about the business, like a blog post');
-  const imp = asked.find((x) => x.sys.includes('set up its company profile'));
+  const imp = asked.find((x) => x.sys.includes('pages from the business'));
   ok(imp && imp.user.includes('Maria started Desert Shade') && imp.user.includes('Motorized roller shades') && !imp.user.includes('tracking'), 'the AI got the pages’ words, without their scripts');
   const sugg = r.body.entries.filter((x) => x.status === 'suggested');
   ok(sugg.length === 5 && sugg.every((x) => x.source.type === 'website' && x.source.url.startsWith(SITE)), 'every suggestion says which page it came from');
@@ -132,6 +139,38 @@ try {
   const sys = asked[0]?.sys || '';
   ok(sys.includes('We make homes cooler and calmer') && sys.includes('Never pushy') && sys.includes('Countdown deals') && sys.includes('Needs an owner’s OK first'), 'approved entries reach the AI: what we do, values with what to avoid, rules');
   ok(sys.includes('Plantation shutters') && !sys.includes('Motorized roller shades'), 'an accepted service reaches the AI; a dismissed one doesn’t');
+
+  // The interview.
+  r = await maria('GET', '/hq');
+  ok(r.body.chat.turns.length === 0 && /your story/.test(r.body.chat.opening) && (await sam('GET', '/hq')).body.chat === null, 'the interview starts with your story (and members don’t see it)');
+  ok((await sam('POST', '/hq/interview', { text: 'hi' })).status === 403 && (await maria('POST', '/hq/interview', { text: '  ' })).status === 400, 'only owners and admins answer, and an empty answer is refused');
+  asked.length = 0;
+  r = await maria('POST', '/hq/interview', { text: 'We started in 2015. Customers never get passed around; they deal with me the whole way.' });
+  const iv = asked.find((x) => x.sys.includes('interviewing the owner'));
+  ok(r.status === 200 && r.body.added === 1 && r.body.chat.turns.length === 3 && r.body.chat.turns[0].text === r.body.chat.opening, 'an answer gets a reply, and the opening question is kept in the conversation');
+  ok(iv && iv.sys.includes('What the profile has so far') && iv.sys.includes('Show up on time') && iv.user.includes('passed around'), 'the AI hears what the profile already has, and the answer');
+  const ivEntry = r.body.entries.find((x) => x.source?.type === 'interview');
+  ok(ivEntry?.status === 'suggested' && ivEntry.dont[0] === 'Handing people off' && /passed around/.test(ivEntry.source.why) && r.body.chat.turns[2].suggested[0] === ivEntry.id, 'it becomes a suggestion, linked to the reply, with what was said');
+  r = await maria('POST', '/hq/interview', { text: 'That covers it.' });
+  ok(r.body.chat.turns.at(-1).done === true && r.body.chat.turns.length === 5, 'the interview can finish');
+  r = await maria('DELETE', '/hq/interview');
+  ok(r.body.chat.turns.length === 0 && r.body.entries.some((x) => x.id === ivEntry.id), 'start over clears the conversation, not the suggestions');
+
+  // Documents.
+  const up = async (tok, name, body) => (await fetch(B + '/api/upload?' + new URLSearchParams({ name }), { method: 'PUT', headers: { authorization: 'Bearer ' + tok }, body })).json();
+  const prices = await up(maria.tok, 'prices.txt', 'PRICE SHEET\nMeasure: free\nDeposit: 50% to order\nDiscounts over 10% need Maria.');
+  ok((await maria('POST', '/hq/docs', { itemIds: [] })).status === 400, 'reading needs a file');
+  asked.length = 0;
+  r = await maria('POST', '/hq/docs', { itemIds: [prices.id] });
+  const dq = asked.find((x) => x.sys.includes('own documents'));
+  ok(r.status === 200 && r.body.added === 3 && dq?.user.includes('Discounts over 10% need Maria'), 'a price sheet is read and suggests 3 entries');
+  const fromDoc = r.body.entries.filter((x) => x.source?.type === 'doc');
+  ok(fromDoc.length === 3 && fromDoc.every((x) => x.source.name === 'prices.txt' && x.source.itemId === prices.id && x.status === 'suggested'), 'each says which file it came from');
+  ok(r.body.docs.files[0].name === 'prices.txt' && r.body.docs.files[0].count === 3 && r.body.docs.gaps[0] === 'Warranty terms', 'the files read and what they don’t settle are kept');
+  ok(fromDoc.find((x) => x.kind === 'rule').level === 'approval', 'a rule keeps its level');
+  r = await call()('POST', '/auth', { mode: 'create', workspace: 'Other ' + t, name: 'Zed', email: `zed${t}@t.test`, password: 'longenough3', device: 'Mac', deviceId: 'd3' });
+  const zed = call(r.body.token);
+  ok((await zed('POST', '/hq/docs', { itemIds: [prices.id] })).status === 400, 'another team can’t read your files');
 } catch (e) {
   console.log('FAIL ' + e.stack);
   fails++;

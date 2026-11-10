@@ -7526,7 +7526,7 @@
   // ---------- Company HQ: what Kloomie knows about the business ----------
   // Entries under seven pillars. The AI follows the approved ones in everything it writes and plans; suggestions
   // (from reading the team's website) wait here for an owner or admin to accept, edit or dismiss them.
-  const HQ = { data: null, busy: false, open: null };
+  const HQ = { data: null, busy: false, open: null, asking: false, reading: false, draft: '' };
   async function loadHq() {
     try {
       HQ.data = await api('GET', '/hq');
@@ -7537,6 +7537,7 @@
   }
   const hqKind = (k) => HQ.data?.kinds[k] || { name: k };
   const hqPillar = (k) => HQ.data?.pillars.find((p) => p.key === k);
+  const HQ_FROM = { website: () => 'from your website', interview: () => 'from the interview', doc: (s) => `from ${s.name || 'a document'}` };
   const HQ_LEVEL = { auto: 'Fine without asking', approval: 'Needs an owner’s OK', never: 'Never' };
   const HQ_HORIZON = { long: 'Long term', year: 'This year', quarter: 'This quarter' };
   const HQ_AREAS = [['sales', 'Sales'], ['customers', 'Customers'], ['jobs', 'Jobs'], ['marketing', 'Marketing'], ['money', 'Money'], ['team', 'Team']];
@@ -7604,7 +7605,7 @@
   function hqEntry(x, admin, label = true) {
     const k = hqKind(x.kind);
     const meta = [x.horizon && HQ_HORIZON[x.horizon], x.target && `Target: ${x.target}`, x.deadline && `by ${dueLabel(x.deadline).toLowerCase()}`, x.level && HQ_LEVEL[x.level],
-      x.priority === 1 ? 'Most important' : null, x.source?.type === 'website' ? 'from your website' : null].filter(Boolean).join(' · ');
+      x.priority === 1 ? 'Most important' : null, HQ_FROM[x.source?.type]?.(x.source)].filter(Boolean).join(' · ');
     return h(admin ? 'button' : 'div', { type: admin ? 'button' : null, class: 'hq-entry' + (x.status === 'suggested' ? ' sugg' : ''), onclick: admin ? () => hqSheet(x.kind, x) : null },
       label ? h('small', {}, k.name) : null,
       x.title ? h('b', {}, x.title) : null,
@@ -7612,6 +7613,109 @@
       x.do?.length ? h('span', { class: 'hq-do' }, '✓ ' + x.do.join(' · ')) : null,
       x.dont?.length ? h('span', { class: 'hq-dont' }, '✕ ' + x.dont.join(' · ')) : null,
       meta ? h('small', { class: 'hq-meta' }, meta) : null);
+  }
+  // The interview: Kloomie asks, the owner answers, and answers turn into suggestions to accept.
+  async function hqAnswer(text) {
+    if (!text.trim() || HQ.asking) return;
+    HQ.asking = true;
+    HQ.draft = '';
+    const turns = HQ.data.chat.turns.length ? HQ.data.chat.turns : [{ role: 'kloomie', text: HQ.data.chat.opening }];
+    HQ.data.chat = { ...HQ.data.chat, turns: [...turns, { role: 'owner', text, pending: true }] };
+    renderTool(true);
+    try {
+      hqTook(await api('POST', '/hq/interview', { text }));
+    } catch (e) {
+      HQ.draft = text;
+      HQ.data.chat = { ...HQ.data.chat, turns: turns };
+      toast(e.message);
+    } finally {
+      HQ.asking = false;
+      renderTool(true);
+      setTimeout(() => { const t = $('#tool .hq-chat-in textarea'); if (t) { t.focus(); const l = $('#tool .hq-chat-log'); if (l) l.scrollTop = l.scrollHeight; } }, 30);
+    }
+  }
+  function hqChat(d) {
+    const turns = d.chat.turns.length ? d.chat.turns : [{ role: 'kloomie', text: d.chat.opening }];
+    const byId = new Map(d.entries.map((x) => [x.id, x]));
+    const input = h('textarea', { rows: 3, placeholder: 'Answer in your own words…', disabled: HQ.asking });
+    input.value = HQ.draft;
+    input.addEventListener('input', () => { HQ.draft = input.value; });
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) hqAnswer(input.value); });
+    const log = h('div', { class: 'hq-chat-log' }, turns.map((t) => h('div', { class: 'hq-turn ' + t.role },
+      h('p', {}, t.text),
+      (t.suggested || []).map((id) => byId.get(id)).filter(Boolean).length ? h('div', { class: 'hq-turn-sugg' }, (t.suggested || []).map((id) => byId.get(id)).filter(Boolean).map((x) => x.status === 'approved'
+        ? h('span', { class: 'chip on' }, '✓ ' + (x.title || hqKind(x.kind).name))
+        : h('button', { class: 'chip', title: 'Accept, or open to edit', onclick: () => hqSheet(x.kind, x) }, '+ ' + hqKind(x.kind).name + ': ' + (x.title || x.text).slice(0, 50)))) : null)),
+      HQ.asking ? h('div', { class: 'hq-turn kloomie' }, h('p', { class: 'day-hint' }, 'Thinking…')) : null);
+    setTimeout(() => { log.scrollTop = log.scrollHeight; }, 0);
+    const done = turns.at(-1)?.done;
+    return h('section', { class: 'hq-chat' },
+      h('div', { class: 'hq-sugg-h' }, h('b', {}, 'Let’s get to know your business'), h('span', { style: 'flex:1' }),
+        d.chat.turns.length ? h('button', { class: 'btn small', onclick: async () => hqTook(await api('DELETE', '/hq/interview').catch((e) => toast(e.message))) }, 'Start over') : null),
+      d.chat.turns.length ? null : h('p', { class: 'day-hint' }, 'A short conversation: your story, what you believe, who you serve, where you’re going and how you work. What you say turns into suggestions you can accept. Stop any time and come back later.'),
+      log,
+      h('div', { class: 'hq-chat-in' }, input, h('button', { class: 'btn primary-btn', disabled: HQ.asking, onclick: () => hqAnswer(input.value) }, HQ.asking ? '…' : done ? 'Add more' : 'Answer')));
+  }
+  // Documents: upload a price sheet, handbook or template (kept in a Company HQ folder), or pick files already here.
+  async function hqFolder() {
+    let dir = dirs().find((x) => x.name === 'Company HQ' && !x.parentId);
+    if (!dir) {
+      dir = await api('POST', '/dirs', { name: 'Company HQ', parentId: null, private: false });
+      if (!dirById(dir.id)) S.workspace.dirs = [...dirs(), dir];
+    }
+    return dir;
+  }
+  async function hqRead(ids) {
+    if (!ids.length) return;
+    HQ.reading = true;
+    renderTool(true);
+    try {
+      const out = await api('POST', '/hq/docs', { itemIds: ids });
+      hqTook(out);
+      toast(out.added ? `Found ${plural(out.added, 'suggestion')} in ${plural(out.files, 'file')}. Review them below.` : 'Nothing new in those to suggest.');
+    } catch (e) {
+      toast(e.message);
+    } finally {
+      HQ.reading = false;
+      renderTool(true);
+    }
+  }
+  async function hqUpload(files) {
+    if (!files.length) return;
+    HQ.reading = true;
+    renderTool(true);
+    try {
+      const dir = await hqFolder();
+      const ids = [];
+      for (const f of [...files].slice(0, 5)) ids.push((await uploadFile(f, { dirId: dir.id })).id);
+      HQ.reading = false;
+      await hqRead(ids);
+    } catch (e) {
+      HQ.reading = false;
+      renderTool(true);
+      toast(e.message);
+    }
+  }
+  function hqPick() {
+    const files = S.items.filter((x) => (x.type === 'file' && /\.(pdf|docx?|xlsx|pptx|txt|md|csv|png|jpe?g|webp)$/i.test(x.name)) || (x.type === 'text' && x.title != null)).sort((a, b) => b.createdAt - a.createdAt).slice(0, 40);
+    if (!files.length) return toast('No files here yet. Upload one instead.');
+    const picks = files.map((x) => ({ x, cb: h('input', { type: 'checkbox' }) }));
+    sheet('Read files already in Kloomie', [h('p', { class: 'day-hint' }, 'Pick up to 5: a price sheet, handbook, proposal template, checklist or agreement.'),
+      h('div', { class: 'hq-picks' }, picks.map((p) => h('label', { class: 'pick' }, p.cb, p.x.type === 'text' ? '📄 ' + docTitle(p.x) : p.x.name)))], async () => {
+      const ids = picks.filter((p) => p.cb.checked).map((p) => p.x.id).slice(0, 5);
+      if (!ids.length) throw new Error('Pick a file first.');
+      hqRead(ids);
+    }, 'Read them');
+  }
+  function hqDocs(d) {
+    const file = h('input', { type: 'file', multiple: true, class: 'hidden', accept: '.pdf,.doc,.docx,.xlsx,.pptx,.txt,.md,.csv,image/*' });
+    file.addEventListener('change', () => { const f = [...file.files]; file.value = ''; hqUpload(f); });
+    return h('section', { class: 'hq-import' },
+      h('b', {}, 'Your documents'),
+      h('p', { class: 'day-hint' }, 'Price sheets, a handbook, proposal templates, checklists, agreements: Kloomie reads them and suggests your prices, policies, steps and rules. Uploads are kept in a Company HQ folder.'),
+      h('div', { class: 'btns' }, h('button', { class: 'btn primary-btn', disabled: HQ.reading, onclick: () => file.click() }, HQ.reading ? 'Reading…' : 'Upload files'), h('button', { class: 'btn', disabled: HQ.reading, onclick: hqPick }, 'Pick from Kloomie'), file),
+      d.docs.files.length ? h('p', { class: 'day-hint' }, 'Read: ' + d.docs.files.slice(-6).map((x) => `${x.name} (${plural(x.count, 'suggestion')})`).join(' · ')) : null,
+      d.docs.gaps.length ? h('p', { class: 'day-hint' }, 'They don’t settle: ' + d.docs.gaps.join(' · ')) : null);
   }
   // One kind's entries under its name: short ones (a service, a word to avoid) as chips, the rest in full.
   function hqGroup(list, admin) {
@@ -7653,6 +7757,8 @@
         h('p', { class: 'day-hint' }, d.import ? `Read ${new Date(d.import.at).toLocaleDateString()}: ${plural(d.import.pages.length, 'page')}. Read it again after you change the site.` : 'Kloomie reads your home page and pages like About, Services and FAQ, and suggests entries from what they say. Nothing is added until you accept it.'),
         h('div', { class: 'row-in' }, url, go),
         d.import?.gaps?.length ? h('p', { class: 'day-hint' }, 'Your site doesn’t say: ' + d.import.gaps.join(' · ')) : null) : null,
+      admin ? hqDocs(d) : null,
+      admin ? hqChat(d) : null,
       admin && sugg.length ? h('section', { class: 'hq-sugg' },
         h('div', { class: 'hq-sugg-h' }, h('b', {}, `${plural(sugg.length, 'suggestion')} to review`), h('span', { style: 'flex:1' }),
           h('button', { class: 'btn small primary-btn', onclick: acceptAll }, 'Accept all'),

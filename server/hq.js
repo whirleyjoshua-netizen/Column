@@ -46,7 +46,7 @@ export const KINDS = {
 const AREAS = ['sales', 'customers', 'jobs', 'marketing', 'money', 'team'];
 const HORIZONS = ['long', 'year', 'quarter'];
 const LEVELS = ['auto', 'approval', 'never'];
-const SOURCES = ['owner', 'website', 'brand', 'ai'];
+const SOURCES = ['owner', 'website', 'brand', 'ai', 'interview', 'doc'];
 // What a profile needs before the AI has enough to go on: one of each.
 const ESSENTIALS = ['about', 'service', 'area', 'mission', 'value', 'voice', 'goal', 'ideal', 'process', 'rule'];
 
@@ -56,7 +56,7 @@ const MAX_PAGES = 7;
 const PAGE_BYTES = 1_500_000;
 const PAGE_CHARS = 6000;
 
-export function hqModule({ db, save, broadcast, rid, cleanText, readJson, send, isAdmin, aiAsk, replyJson, allowLocal = false }) {
+export function hqModule({ db, save, broadcast, rid, cleanText, readJson, send, isAdmin, aiAsk, aiRun, itemFiles, replyJson, allowLocal = false }) {
   db.hq ||= {};
   const entriesOf = (wsId) => Object.values(db.hq).filter((x) => x.wsId === wsId).sort((a, b) => a.createdAt - b.createdAt);
   const approved = (wsId) => entriesOf(wsId).filter((x) => x.status === 'approved');
@@ -117,6 +117,8 @@ export function hqModule({ db, save, broadcast, rid, cleanText, readJson, send, 
       entries: entriesOf(ws.id).filter((x) => admin || x.status === 'approved').map(publicEntry),
       progress: progress(ws.id),
       import: admin ? ws.hqImport || null : null,
+      chat: admin ? { opening: OPENING, turns: chatOf(ws) } : null,
+      docs: admin ? { files: ws.hqDocs || [], gaps: ws.hqDocGaps || [] } : null,
     };
   }
 
@@ -278,26 +280,96 @@ Reply with JSON only, in this shape:
 
 Aim for 8 to 25 entries. Use one entry per service. Write in plain words, in the business's own voice where you can. Skip anything that's generic filler.`;
 
+  // What the AI suggested, kept as suggestions: known kinds only, and nothing the profile already has.
+  function suggest(ws, auth, entries, sourceOf) {
+    const have = entriesOf(ws.id);
+    const same = (a, b) => a.kind === b.kind && (a.title || a.text).toLowerCase().trim() === (b.title || b.text).toLowerCase().trim();
+    const added = [];
+    for (const e of (Array.isArray(entries) ? entries : []).slice(0, 40)) {
+      let fields;
+      try { fields = clean({ ...e, areas: Array.isArray(e?.areas) ? e.areas : [] }); } catch { continue; }
+      if (have.concat(added).some((y) => same(y, fields))) continue;
+      added.push(add(ws, fields, { status: 'suggested', source: sourceOf(e), by: auth.member }));
+    }
+    return added;
+  }
+  const KIND_LIST = PILLARS.map((p) => `- ${p.name}: ${p.kinds.map((k) => `${k} (${KINDS[k].name})`).join(', ')}`).join('\n');
+  const ENTRY_SHAPE = '{"kind":"service","title":"short name","text":"one or two plain sentences","do":["kind value only: what it looks like in practice"],"dont":["kind value only: what to avoid"],"horizon":"kind goal only: long|year|quarter","target":"kind goal only","level":"kind rule only: auto|approval|never","why":"where this came from"}';
+  // A short summary of the profile so far, so the AI asks about what's missing and doesn't repeat what's there.
+  function profileBrief(wsId) {
+    const es = entriesOf(wsId);
+    const by = PILLARS.map((p) => {
+      const mine = es.filter((x) => x.pillar === p.key);
+      return `${p.name}: ${mine.length ? mine.map((x) => `${KINDS[x.kind].name}${x.status === 'suggested' ? ' (suggested)' : ''}: ${clipTo(x.title || x.text, 80)}`).join('; ') : 'nothing yet'}`;
+    });
+    return by.join('\n');
+  }
+  const clipTo = (s, n) => (String(s || '').length > n ? String(s).slice(0, n) + '…' : String(s || ''));
+
   async function importSite(ws, auth, raw) {
     const pages = await readSite(raw);
     const words = pages.reduce((n, p) => n + p.text.split(/\s+/).length, 0);
     if (words < 40) throw Object.assign(new Error('That site has almost no text Kloomie can read (it may be built entirely in JavaScript or images). Try another page, or fill in your profile by hand.'), { status: 400 });
     const brief = pages.map((p) => [`PAGE ${p.url}`, p.title && `Title: ${p.title}`, p.meta && `Description: ${p.meta}`, p.ld && `Structured data: ${p.ld}`, p.text].filter(Boolean).join('\n')).join('\n\n---\n\n');
     const out = replyJson(await aiAsk(ws, auth.memberId, IMPORT_SYSTEM, `The business is called ${ws.name}.\n\n${brief}`));
-    const have = entriesOf(ws.id);
-    const same = (a, b) => a.kind === b.kind && (a.title || a.text).toLowerCase().trim() === (b.title || b.text).toLowerCase().trim();
-    const added = [];
-    for (const e of (Array.isArray(out.entries) ? out.entries : []).slice(0, 40)) {
-      let fields;
-      try { fields = clean({ ...e, areas: [] }); } catch { continue; }
-      if (have.concat(added).some((y) => same(y, fields))) continue;
-      const pageUrl = pages.find((p) => p.url === e.url)?.url || pages[0].url;
-      added.push(add(ws, fields, { status: 'suggested', source: { type: 'website', url: pageUrl, why: cleanText(e.why, 300) }, by: auth.member }));
-    }
+    const added = suggest(ws, auth, out.entries, (e) => ({ type: 'website', url: pages.find((p) => p.url === e.url)?.url || pages[0].url, why: cleanText(e.why, 300) }));
     ws.hqImport = { url: pages[0].url, at: Date.now(), by: auth.member, pages: pages.map((p) => ({ url: p.url, title: cleanText(p.title, 120) })), count: added.length, gaps: list(out.gaps, 8, 200) };
     save();
     news(ws.id);
     return { added: added.length, pages: pages.length, gaps: ws.hqImport.gaps };
+  }
+
+  // ---------- the interview ----------
+  // Kloomie asks one question at a time, the way a good consultant would: your story, what you believe, who you
+  // serve, where you're going, how work gets done, and what needs your OK. Each answer can turn into suggestions.
+  const OPENING = 'Let’s start with your story. How did the business begin, and what made you want to build it?';
+  const INTERVIEW_SYSTEM = `You are interviewing the owner of a small business so Kloomie can learn how the business thinks and works. Be warm, curious and brief, like a good consultant over coffee.
+
+Cover these topics, roughly in this order, skipping what the profile already covers well: their story; what makes them different and what they won't compromise on (values); who their best customers are and why they choose them; where they want the business in a few years and what matters most this year; how work flows from first call to getting paid; what Kloomie may do without asking and what needs their OK; how they like to sound.
+
+Each turn: reflect back what you heard in a few words, then ask ONE question. When an answer reveals a value, a rule or a goal, name it and check it ("So nobody gets passed around: would you call that a core value?"). Never more than three short sentences. Use plain words; no jargon like "operating principles".
+
+From the owner's latest answer, suggest profile entries that capture what they actually said (not what you guess). Kinds:
+${KIND_LIST}
+
+Reply with JSON only: {"reply":"what you say next, ending with your question","entries":[${ENTRY_SHAPE}],"done":false}. Set done to true only when every topic is covered; then thank them and say they can keep adding any time.`;
+  const chatOf = (ws) => ws.hqChat?.turns || [];
+  async function interview(ws, auth, text) {
+    const said = cleanText(text, 4000);
+    if (!said) throw Object.assign(new Error('Write an answer first.'), { status: 400 });
+    const turns = chatOf(ws).length ? chatOf(ws) : [{ role: 'kloomie', text: OPENING, at: Date.now() }];
+    turns.push({ role: 'owner', text: said, by: auth.member, at: Date.now() });
+    const history = turns.slice(-30).map((t) => ({ role: t.role === 'owner' ? 'user' : 'assistant', text: t.text }));
+    if (history[0].role === 'assistant') history.unshift({ role: 'user', text: 'Let’s set up my company profile.' });
+    const out = replyJson(await aiRun(ws, auth.memberId, `${INTERVIEW_SYSTEM}\n\nThe business is called ${ws.name}. What the profile has so far:\n${profileBrief(ws.id)}`, history));
+    const added = suggest(ws, auth, out.entries, () => ({ type: 'interview', why: clipTo(said, 300) }));
+    turns.push({ role: 'kloomie', text: cleanText(out.reply, 2000) || 'Thanks. What else should I know?', at: Date.now(), suggested: added.map((x) => x.id), done: !!out.done });
+    ws.hqChat = { turns: turns.slice(-60), updatedAt: Date.now() };
+    save();
+    news(ws.id);
+    return { added: added.length };
+  }
+
+  // ---------- documents ----------
+  // Files already in Kloomie (a price sheet, a handbook, a proposal template): Word, Excel, PowerPoint and text are
+  // read as words; PDFs and pictures go to the AI whole.
+  const DOC_SYSTEM = `You help a small business set up its company profile in Kloomie. You are given the business's own documents (for example a price sheet, a handbook, a proposal template, a checklist or a service agreement). Suggest profile entries using ONLY what the documents say. Never invent facts, numbers, prices or policies. Templates and letters show how the business sounds: suggest a tone of voice or words they use when that's clear.
+
+Kinds you can use, by pillar:
+${KIND_LIST}
+
+Reply with JSON only: {"entries":[${ENTRY_SHAPE.replace('"why":"where this came from"', '"why":"which document and where in it","file":"the file name it came from"')}],"gaps":["important things the documents don't settle"]}. One entry per price, policy, step or rule. Aim for 5 to 30 entries.`;
+  async function readDocs(ws, auth, ids) {
+    const { files, names, used } = await itemFiles(ws, auth, ids);
+    if (!files.length) throw Object.assign(new Error('Kloomie can read PDFs, pictures, and Word, Excel, PowerPoint and text files. Pick one of those.'), { status: 400 });
+    const out = replyJson(await aiRun(ws, auth.memberId, DOC_SYSTEM, [{ role: 'user', text: `The business is called ${ws.name}. Their documents are attached: ${names.join('; ')}.`, files }]));
+    const fileOf = (e) => names.find((n) => n === e.file) || names[0];
+    const added = suggest(ws, auth, out.entries, (e) => ({ type: 'doc', name: cleanText(fileOf(e), 200), itemId: used[names.indexOf(fileOf(e))] || null, why: cleanText(e.why, 300) }));
+    ws.hqDocs = [...(ws.hqDocs || []).filter((x) => !names.includes(x.name)), ...names.map((n, i) => ({ name: cleanText(n, 200), itemId: used[i] || null, at: Date.now(), by: auth.member, count: added.filter((x) => x.source.name === n).length }))].slice(-30);
+    ws.hqDocGaps = list(out.gaps, 8, 200);
+    save();
+    news(ws.id);
+    return { added: added.length, files: names.length, gaps: ws.hqDocGaps };
   }
 
   // ---------- routes: /api/hq ----------
@@ -315,6 +387,32 @@ Aim for 8 to 25 entries. Use one entry per service. Write in plain words, in the
       } catch (e) {
         if (!e.status) console.error('Website import failed:', e.message);
         return send(res, e.status || 502, { error: e.status ? e.message : 'Couldn’t read the site just now. Try again in a minute.' });
+      }
+    }
+    if (b === 'interview' && !c && (m === 'POST' || m === 'DELETE')) {
+      try {
+        if (m === 'DELETE') {
+          delete ws.hqChat;
+          save();
+          return send(res, 200, state(ws, auth));
+        }
+        const out = await interview(ws, auth, (await readJson(req)).text);
+        return send(res, 200, { ...out, ...state(ws, auth) });
+      } catch (e) {
+        if (!e.status) console.error('Interview failed:', e.message);
+        return send(res, e.status || 502, { error: e.status ? e.message : 'Couldn’t get an answer just now. Try again in a minute.' });
+      }
+    }
+    if (b === 'docs' && !c && m === 'POST') {
+      const body = await readJson(req);
+      const ids = [...new Set((Array.isArray(body.itemIds) ? body.itemIds : []).map(String))].slice(0, 5);
+      if (!ids.length) return send(res, 400, { error: 'Pick a file first.' });
+      try {
+        const out = await readDocs(ws, auth, ids);
+        return send(res, 200, { ...out, ...state(ws, auth) });
+      } catch (e) {
+        if (!e.status) console.error('Reading documents failed:', e.message);
+        return send(res, e.status || 502, { error: e.status ? e.message : 'Couldn’t read those just now. Try again in a minute.' });
       }
     }
     if (b === 'entries' && !c && m === 'POST') {

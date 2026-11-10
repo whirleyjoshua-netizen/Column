@@ -7733,7 +7733,53 @@ const PJ = projectsModule({ db, save, broadcast, rid, cleanText, isDay, readJson
   },
 });
 // Invoices for jobs, and the team's own Stripe account for card payments (invoices.js).
-HQ = hqModule({ db, save, broadcast, rid, cleanText, readJson, send, isAdmin, aiAsk, replyJson, allowLocal: process.env.ALLOW_LOCAL_FETCH === '1' });
+// For Company HQ: a conversation with the team's AI, and the files someone picked, ready for it to read.
+async function aiRun(ws, memberId, system, history) {
+  const ai = aiOf(ws.id, memberId);
+  const use = aiUse(ai);
+  if (!use) throw Object.assign(new Error('Add your AI key in Settings → AI to use this.'), { status: 400 });
+  let out;
+  try {
+    out = await llms[use.provider].run({ key: unseal(ai.keys[use.provider].sealed).key, model: use.model, system: system + brandPrompt(ws), history, tools: [], web: false, exec: () => Promise.reject(new Error('No tools')) });
+  } catch (e) {
+    console.error('AI request failed:', e.message);
+    throw Object.assign(new Error(llmError(e)), { status: 502 });
+  }
+  if (out.refused) throw Object.assign(new Error(out.text), { status: 502 });
+  return out.text;
+}
+async function itemFiles(ws, auth, ids) {
+  const files = [];
+  const names = [];
+  const used = [];
+  let room = 14 * 1024 * 1024;
+  for (const id of ids) {
+    const it = db.items[id];
+    if (!it || it.wsId !== ws.id || !canSee(auth, 'item', it)) continue;
+    if (it.type === 'text') {
+      files.push({ name: (it.title || 'Doc') + '.md', text: clipText(it.text || '', 60_000) });
+      names.push((it.title || 'Doc') + '.md');
+      used.push(id);
+      continue;
+    }
+    const kind = it.type === 'file' && skFileKind(it.name, it.mime || '');
+    if (!kind || it.size > 10 * 1024 * 1024 || it.size > room) continue;
+    const buf = await fsp.readFile(path.join(FILES_DIR, it.id)).catch(() => null);
+    if (!buf) continue;
+    if (kind === 'text') {
+      try {
+        files.push({ name: it.name, text: clipText(fileText(buf, it.name), 60_000) });
+      } catch {
+        continue;
+      }
+    } else files.push({ name: it.name, mime: it.mime, data: buf.toString('base64') });
+    names.push(it.name);
+    used.push(id);
+    room -= it.size;
+  }
+  return { files, names, used };
+}
+HQ = hqModule({ db, save, broadcast, rid, cleanText, readJson, send, isAdmin, aiAsk, aiRun, itemFiles, replyJson, allowLocal: process.env.ALLOW_LOCAL_FETCH === '1' });
 for (const ws of Object.values(db.workspaces)) if (HQ.migrate(ws)) save();
 
 const INV = invoicesModule({ db, save, broadcast, rid, cleanText, readJson, send, badRequest, escHtml, brandOf, logoUrl, teamDay, offline, seal, unseal, stripeCall: stripe.callWith, PJ, isAdmin, jobOfRecord, jobLabel, moveJob, publicUrl: PUBLIC_URL, emit: (...a) => PJ.emit(...a),
