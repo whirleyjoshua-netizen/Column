@@ -78,8 +78,15 @@ In a stack, **+** offers each service that's set up here. The browser opens that
 what's picked straight from it and uploads it like any file, so the server never fetches outside addresses. Each needs
 a public id, and the page only allows that service's picker script when its id is set:
 
-- **Dropbox:** make an app at https://www.dropbox.com/developers/apps (Scoped access, App folder or Full Dropbox; the
-  Chooser needs no permissions), add `PUBLIC_URL`'s domain under *Chooser/Saver/Embedder domains*, set `DROPBOX_APP_KEY`.
+- **Dropbox, listed inside Kloomie (recommended):** make an app at https://www.dropbox.com/developers/apps with Scoped
+  access and **Full Dropbox**. Add the redirect URI `PUBLIC_URL/oauth/dropbox/callback`. On Permissions tick
+  `account_info.read`, `files.metadata.read` and `files.content.read`, then submit. Set `DROPBOX_APP_KEY` and
+  `DROPBOX_APP_SECRET`. Each person connects their own Dropbox once from **+ → From Dropbox**. Their folders and files
+  then show in a sheet in Kloomie (browse, search, tick, Add), and the server copies each picked file over
+  (`server/dropbox.js`). There's no popup, so it works in the desktop and home-screen apps too. A dev-status Dropbox
+  app works for 500 people; apply for production in the app console before that.
+- **Dropbox Chooser (fallback):** with only `DROPBOX_APP_KEY` set, Dropbox's Chooser popup is used instead. Add
+  `PUBLIC_URL`'s domain under *Chooser/Saver/Embedder domains*. The popup can't hand files back to installed apps.
 - **Google Drive:** in the Google Cloud project, enable the *Google Picker API* and *Google Drive API*, make an API key
   restricted to those and to `PUBLIC_URL`, add `PUBLIC_URL` as an authorized JavaScript origin on the OAuth client, and
   add the `drive.file` scope (non-sensitive: Kloomie only sees picked files). Set `GOOGLE_PICKER_API_KEY` and

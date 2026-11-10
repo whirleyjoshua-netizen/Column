@@ -22,6 +22,7 @@ import { quickbooksModule } from './quickbooks.js';
 import { twoStepModule } from './twostep.js';
 import { twilioModule } from './twilio.js';
 import { leadsModule } from './leads.js';
+import { dropboxModule } from './dropbox.js';
 import { EVENTS as HOOK_EVENTS } from './projects.js';
 import { hqModule } from './hq.js';
 import { rulesModule } from './rules.js';
@@ -5199,6 +5200,8 @@ async function api(req, res, url) {
     if (tw !== null) return;
     const lc = await LEADS.route(req, res, parts, auth, ws);
     if (lc !== null) return;
+    const dbx = await DBX.route(req, res, parts, auth, ws);
+    if (dbx !== null) return;
   }
   if (locked) return send(res, 402, { error: locked, billing: true });
 
@@ -8309,7 +8312,9 @@ const TW = twilioModule({ db, save, broadcast, seal, unseal, readJson, send, isA
 function cloudPickers() {
   const e = (k) => process.env[k] || '';
   return {
-    dropbox: e('DROPBOX_APP_KEY') || null,
+    // Dropbox: with the app's secret, its files are listed inside Kloomie (dropbox.js); with only the key, its Chooser popup.
+    dropbox: e('DROPBOX_APP_KEY') && !e('DROPBOX_APP_SECRET') ? e('DROPBOX_APP_KEY') : null,
+    dropboxList: !!(e('DROPBOX_APP_KEY') && e('DROPBOX_APP_SECRET')),
     google: e('GOOGLE_PICKER_API_KEY') && e('GOOGLE_CLIENT_ID') ? { clientId: e('GOOGLE_CLIENT_ID'), apiKey: e('GOOGLE_PICKER_API_KEY'), appId: e('GOOGLE_PROJECT_NUMBER') || '' } : null,
     onedrive: e('ONEDRIVE_CLIENT_ID') || null,
   };
@@ -8318,6 +8323,8 @@ function cloudScripts() {
   const c = cloudPickers();
   return [c.dropbox ? ' https://www.dropbox.com' : '', c.google ? ' https://apis.google.com https://accounts.google.com https://www.gstatic.com' : '', c.onedrive ? ' https://js.live.net' : ''].join('');
 }
+// Dropbox listed inside Kloomie, per person (dropbox.js).
+const DBX = dropboxModule({ db, rid, save, send, readJson, seal, unseal, broadcast, publicUrl: PUBLIC_URL, receiveUpload, addItem, baseItem, uploadPlace, publicItem, FILES_DIR, mimeFor, cleanName, alarm });
 // Leads from the team's website and other tools (leads.js).
 const LEADS = leadsModule({ db, save, readJson, send, isAdmin, cleanText, contactsOf, newContact, applyContact, emailKey, phoneKey, EMAIL_RE, contactNews, refreshLiveSoon, automate,
   hook: (wsId, type, x) => hook(wsId, type, () => API.apiContact(x), 'Lead'), notifyAdmins, escHtml, brandOf, logoUrl, clientIp, CONTACT_MAX, publicUrl: PUBLIC_URL, offline, teamDay });
@@ -8452,6 +8459,8 @@ const server = http.createServer(async (req, res) => {
   if (url.pathname.startsWith('/twilio/sms/') || url.pathname.startsWith('/twilio/status/')) return TW.incoming(req, res, url).catch((e) => { alarm('A Twilio message failed', e); if (!res.headersSent) send(res, 500, 'Error'); });
   if (url.pathname === '/quickbooks/disconnected' && (req.method === 'GET' || req.method === 'HEAD')) return QB.disconnectedPage(req, res);
   if (url.pathname === '/quickbooks/done' && (req.method === 'GET' || req.method === 'HEAD')) return QB.donePage(req, res, url);
+  if (url.pathname === '/dropbox/done' && (req.method === 'GET' || req.method === 'HEAD')) return DBX.donePage(req, res, url);
+  if (url.pathname === '/oauth/dropbox/callback') return DBX.callback(req, res, url).catch((e) => { alarm('Connecting Dropbox failed', e); if (!res.headersSent) send(res, 500, 'Something went wrong connecting Dropbox.'); });
   if (url.pathname === '/oauth/quickbooks/callback') return QB.callback(req, res, url).catch((e) => { alarm('Connecting QuickBooks failed', e); if (!res.headersSent) send(res, 500, 'Something went wrong connecting QuickBooks.'); });
   if (url.pathname.startsWith('/oauth/')) return oauthCallback(req, res, url).catch((e) => {
     alarm('Connecting a calendar failed', e);
@@ -8653,6 +8662,7 @@ async function removeMember(ws, m) {
   const hand = (x, k = 'memberId') => { if (x[k] === id) x[k] = heir ? heir.id : null; };
   signOutWhere(ws, id);
   await Promise.all(Object.values(db.calendars).filter(theirs).map(async (conn) => { await revokeCalendar(conn); disconnectCalendar(conn); }));
+  DBX.forget(wsId, id);
   for (const n of Object.values(db.notices)) if (theirs(n)) delete db.notices[n.id];
   // Google Contacts reads their Google account, so it goes with them; its people stay.
   if (db.gcontacts[wsId]?.memberId === id) await gcDisconnect(wsId);

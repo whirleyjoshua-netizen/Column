@@ -637,6 +637,8 @@
       loadState().catch(() => {});
     } else if (msg.type === 'export') {
       document.dispatchEvent(new CustomEvent('column:export'));
+    } else if (msg.type === 'dropbox') {
+      if (dbxSheet?.box.isConnected) dbxSheet.refresh();
     } else if (msg.type === 'calendars') {
       if (!$('#settings').classList.contains('hidden')) loadCalendars();
     } else if (msg.type === 'meeting' || msg.type === 'meeting:remove') {
@@ -1453,7 +1455,7 @@
       { label: 'Upload files…', run: () => pickFiles(destOf(view)) },
       S.cloud?.google ? { label: 'From Google Drive…', run: () => fromDrive(destOf(view)) } : null,
       S.cloud?.onedrive ? { label: 'From OneDrive…', run: () => fromOneDrive(destOf(view)) } : null,
-      S.cloud?.dropbox ? { label: 'From Dropbox…', run: () => fromDropbox(destOf(view)) } : null,
+      S.cloud?.dropboxList ? { label: 'From Dropbox…', run: () => dropboxSheet(destOf(view)) } : S.cloud?.dropbox ? { label: 'From Dropbox…', run: () => fromDropbox(destOf(view)) } : null,
       { label: 'New Word document', run: () => newDocSheet(destOf(view)) },
       viewStack(view) ? { label: '📥 Request files from someone…', run: () => requestSheet(viewStack(view)) } : null,
     ].filter(Boolean)) }, '+');
@@ -2634,6 +2636,105 @@
       await loadScript('https://www.dropbox.com/static/api/2/dropins.js', { id: 'dropboxjs', 'data-app-key': S.cloud.dropbox });
       window.Dropbox.choose({ linkType: 'direct', multiselect: true, success: (files) => importAll(files.map((f) => ({ url: f.link, name: f.name })), dest) });
     } catch (e) { toast(e.message); }
+  }
+  // Dropbox listed right here (dropbox.js): connect once, then browse folders or search, tick files and Add. The server
+  // copies each one from Dropbox into the stack, so there's no popup window (it works in the desktop and phone apps too).
+  let dbxSheet = null; // the open list, so a connection finished in another window refreshes it
+  async function importDropbox(f, dest) {
+    const u = { key: newId(), name: f.name, size: f.size || 0, loaded: 0, ...dest };
+    S.uploads.set(u.key, u);
+    render();
+    try {
+      upsert(await api('POST', '/dropbox/import', { id: f.id, ...dest }));
+    } finally {
+      S.uploads.delete(u.key);
+      render();
+    }
+  }
+  function dropboxSheet(dest) {
+    const box = h('div', { class: 'dbx' });
+    const picked = new Map(); // id → entry
+    let at = ''; // folder path ('' is the top)
+    let cursor = null;
+    let q = '';
+    let seq = 0;
+    const count = h('small', { class: 'dbx-count' });
+    const search = h('input', { type: 'search', placeholder: 'Search your Dropbox', 'aria-label': 'Search your Dropbox' });
+    const crumbs = h('div', { class: 'dbx-crumbs' });
+    const list = h('div', { class: 'dbx-list', role: 'list' });
+    const more = h('button', { class: 'btn dbx-more hidden', type: 'button', onclick: () => load(true) }, 'Show more');
+    const note = h('p', { class: 'dbx-note' });
+    const tally = () => { count.textContent = picked.size ? `${picked.size} picked` : ''; };
+    const row = (x) => {
+      if (x.folder) return h('button', { class: 'dbx-row dbx-folder', type: 'button', role: 'listitem', onclick: () => { at = x.path; q = ''; search.value = ''; load(); } },
+        h('span', { class: 'dbx-ic', html: I.folder || '📁' }), h('span', { class: 'dbx-name' }, x.name), h('span', { class: 'dbx-meta' }, '›'));
+      const cb = h('input', { type: 'checkbox', disabled: !x.downloadable });
+      cb.checked = picked.has(x.id);
+      cb.addEventListener('change', () => { if (cb.checked) picked.set(x.id, x); else picked.delete(x.id); tally(); });
+      return h('label', { class: 'dbx-row' + (x.downloadable ? '' : ' off'), role: 'listitem', title: x.downloadable ? x.path : 'Dropbox doesn’t let this kind of file be downloaded' }, cb,
+        h('span', { class: 'dbx-name' }, x.name), h('span', { class: 'dbx-meta' }, x.downloadable ? fmtSize(x.size) : 'can’t add'));
+    };
+    const drawCrumbs = () => {
+      crumbs.innerHTML = '';
+      if (q) return crumbs.append(h('span', {}, `Results for “${q}”`), h('button', { class: 'link', type: 'button', onclick: () => { q = ''; search.value = ''; load(); } }, 'Back to folders'));
+      const parts = at.split('/').filter(Boolean);
+      crumbs.append(h('button', { class: 'link', type: 'button', onclick: () => { at = ''; load(); } }, 'Dropbox'));
+      parts.forEach((p, i) => crumbs.append(' / ', i === parts.length - 1 ? h('span', {}, p) : h('button', { class: 'link', type: 'button', onclick: () => { at = '/' + parts.slice(0, i + 1).join('/'); load(); } }, p)));
+    };
+    async function load(next) {
+      const mine = ++seq;
+      drawCrumbs();
+      note.textContent = '';
+      if (!next) { list.innerHTML = ''; list.append(h('p', { class: 'dbx-note' }, 'Loading…')); }
+      try {
+        const r = q ? await api('GET', '/dropbox/search?q=' + encodeURIComponent(q))
+          : await api('GET', '/dropbox/list?' + new URLSearchParams(next && cursor ? { cursor } : { path: at }));
+        if (mine !== seq) return;
+        if (!next) list.innerHTML = '';
+        cursor = r.cursor || null;
+        more.classList.toggle('hidden', !cursor || !!q);
+        list.append(...r.entries.map(row));
+        if (!list.children.length) list.append(h('p', { class: 'dbx-note' }, q ? 'Nothing in your Dropbox matches that.' : 'This folder is empty.'));
+      } catch (e) {
+        if (mine !== seq) return;
+        if (e.data?.reconnect) return showConnect(e.message);
+        list.innerHTML = '';
+        list.append(h('p', { class: 'err' }, e.message));
+      }
+    }
+    let timer;
+    search.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(() => { q = search.value.trim(); load(); }, 350); });
+    function showConnect(why) {
+      box.innerHTML = '';
+      box.append(h('p', { class: 'dbx-note' }, why || 'Connect your Dropbox once, and its files show up here to add to Kloomie. Kloomie only reads: it never changes anything in your Dropbox.'),
+        h('button', { class: 'btn primary-btn', type: 'button', onclick: async (e) => {
+          e.currentTarget.disabled = true;
+          try {
+            const { url } = await api('POST', '/dropbox/connect');
+            window.open(url, '_blank');
+            box.querySelector('.dbx-note').textContent = 'Finish in the Dropbox window that opened. This list fills in by itself when you’re done.';
+          } catch (err) { toast(err.message); e.currentTarget.disabled = false; }
+        } }, 'Connect Dropbox'));
+    }
+    async function start() {
+      box.innerHTML = '';
+      box.append(h('p', { class: 'dbx-note' }, 'Loading…'));
+      let st;
+      try { st = await api('GET', '/dropbox'); } catch (e) { box.innerHTML = ''; return box.append(h('p', { class: 'err' }, e.message)); }
+      if (!st.connected || st.error) return showConnect(st.error);
+      box.innerHTML = '';
+      box.append(search, crumbs, list, more, h('div', { class: 'dbx-foot' }, h('small', {}, st.account || st.name || 'Your Dropbox', ' · ',
+        h('button', { class: 'link', type: 'button', onclick: async () => { await api('DELETE', '/dropbox').catch(() => {}); picked.clear(); tally(); showConnect('Dropbox disconnected. Connect again any time.'); } }, 'Disconnect')), count), note);
+      load();
+    }
+    sheet('Add from Dropbox', [box], async () => {
+      if (!picked.size) throw new Error('Tick the files to add.');
+      const files = [...picked.values()];
+      toast(files.length === 1 ? `Adding ${files[0].name}…` : `Adding ${files.length} files…`);
+      for (const f of files) queue(() => importDropbox(f, dest));
+    }, 'Add');
+    dbxSheet = { box, refresh: start };
+    start();
   }
   // Google Docs, Sheets and Slides come as Word, Excel and PowerPoint files.
   const GOOGLE_EXPORT = { 'application/vnd.google-apps.document': ['application/vnd.openxmlformats-officedocument.wordprocessingml.document', '.docx'], 'application/vnd.google-apps.spreadsheet': ['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', '.xlsx'], 'application/vnd.google-apps.presentation': ['application/vnd.openxmlformats-officedocument.presentationml.presentation', '.pptx'], 'application/vnd.google-apps.drawing': ['image/png', '.png'] };
