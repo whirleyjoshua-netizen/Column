@@ -1897,7 +1897,7 @@ body.platform-darwin .pj-head, body.platform-darwin .pj-top { padding-left: 80px
 .start-row.done b { text-decoration: line-through; }
 .start-list .need-row:nth-of-type(2) { border-top: 0; }
 .start-help { display: inline-block; margin-top: 6px; font-size: 12px; color: var(--accent); }
-@media (max-width: 860px) { .start-list { grid-template-columns: 1fr; } .start-list .need-row:nth-of-type(2) { border-top: 1px solid var(--line); } }
+@media (max-width: 860px) { .start-list { grid-template-columns: minmax(0, 1fr); } .start-list .need-row:nth-of-type(2) { border-top: 1px solid var(--line); } }
 /* jobs: the customer, checklists, rows found on site, sign-off, permits, the trade picker */
 .pj-cust { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: var(--bg); display: flex; flex-direction: column; gap: 8px; }
 .pj-cust.empty { flex-direction: row; align-items: center; gap: 8px; color: var(--muted); }
@@ -2055,3 +2055,21 @@ body.platform-darwin .pj-head, body.platform-darwin .pj-top { padding-left: 80px
 .cal-feed .cal-btns { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .cal-feed a.btn { text-decoration: none; }
 .cal-feed-url { width: 100%; margin-top: 8px; font-size: 12px; color: var(--muted); }
+
+/* tab bar: each person's own tabs; past what fits, it scrolls sideways instead of squashing */
+.tabs { display: flex; overflow-x: auto; scrollbar-width: none; }
+.tabs button[data-tab] { flex: 1 0 auto; }
+.tabs::-webkit-scrollbar { display: none; }
+.tabs button { padding: 5px 8px; overflow: visible; }
+.tabs .tabs-edit { flex: none; width: 28px; padding: 5px 0; display: grid; place-items: center; opacity: .55; }
+.tabs .tabs-edit:hover { opacity: 1; }
+.tabs .tabs-edit svg { width: 14px; height: 14px; }
+.bar-edit { display: flex; flex-direction: column; gap: 4px; margin: 10px 0 12px; }
+.bar-row { display: flex; align-items: center; gap: 10px; padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+.bar-row > span:first-of-type { flex: 1; font-weight: 550; }
+.bar-row small { color: var(--muted); font-size: 11.5px; }
+.bar-row.off > span:first-of-type { color: var(--muted); font-weight: 450; }
+.bar-row.fixed { opacity: .65; }
+.bar-move { display: flex; gap: 2px; }
+.bar-move .icon-btn { width: 26px; height: 26px; }
+.bar-move .icon-btn:disabled { opacity: .3; }

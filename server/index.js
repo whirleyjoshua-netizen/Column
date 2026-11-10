@@ -412,9 +412,12 @@ function makeInvite(ws, auth, email) {
 // Things that count (campaign email, later billing) wait for a confirmed email, once email works here.
 const needsConfirm = (auth) => mailer.mode !== 'off' && !userOf(auth.ws.members.find((x) => x.id === auth.memberId))?.emailVerified;
 const meAccount = (ws, memberId) => {
-  const u = userOf(ws.members.find((x) => x.id === memberId));
-  return { email: u?.email || null, emailVerified: !!u?.emailVerified, pendingEmail: u?.pendingEmail || null, mail: mailer.mode !== 'off' };
+  const mem = ws.members.find((x) => x.id === memberId);
+  const u = userOf(mem);
+  return { email: u?.email || null, emailVerified: !!u?.emailVerified, pendingEmail: u?.pendingEmail || null, mail: mailer.mode !== 'off', bar: mem?.bar || null };
 };
+// What each person keeps on their tab bar after Home and Day (theirs alone, in their order). Null: the usual three.
+const BAR_KEYS = ['column', 'chat', 'camps', 'sidekick', 'docs', 'projects', 'bills', 'contacts', 'email', 'folders', 'meetings', 'map', 'signs', 'vault'];
 
 // A private campaign's feed and stack are hidden from people outside it, and so is a feed you weren't invited to.
 // The tools a team uses, which owners and admins switch on and off (Settings → Team). A new team starts with
@@ -6810,6 +6813,14 @@ async function api(req, res, url) {
 
   if (a === 'account') {
     const me = ws.members.find((x) => x.id === auth.memberId);
+    if (b === 'bar' && !c && m === 'PUT') {
+      const { bar } = await readJson(req);
+      if (bar !== null && !Array.isArray(bar)) return send(res, 400, { error: 'That isn’t a list of tabs.' });
+      if (bar === null) delete me.bar;
+      else me.bar = [...new Set(bar.filter((k) => BAR_KEYS.includes(k)))];
+      save();
+      return send(res, 200, { bar: me.bar || null });
+    }
     // Leaving this team, or deleting the whole account (every team it's in). Both need the password.
     if ((b === 'leave' || b === 'delete') && m === 'POST') {
       const { password } = await readJson(req);

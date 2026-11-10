@@ -499,6 +499,7 @@
       if (!!S.workspace?.deleteAt !== !!msg.workspace.deleteAt) return location.reload();
       S.workspace = msg.workspace;
       drawBillingBar();
+      renderTabs();
       if (mailWas !== !!S.workspace.settings?.memberEmail) loadPss();
       applyBrand();
       refreshLinks();
@@ -838,6 +839,7 @@
     $('#wsName').textContent = S.workspace.name;
     document.title = `${S.workspace.name} · Kloomie`;
     applyBrand();
+    renderTabs();
     buildPanes();
     renderDay();
     renderCamps();
@@ -2610,9 +2612,95 @@
     renderDay();
   }
 
+  // ----- the tab bar: Home and Day always, then whatever each person picks, in their order -----
+  // Views switch the main area; tools open their drawer (Jobs opens over the app). Anything not on the bar is in Tools.
+  const BAR_DEFAULT = ['column', 'chat', 'camps'];
+  const BAR_ITEMS = {
+    column: { label: 'Stacks', view: true },
+    chat: { label: 'Chat', view: true },
+    camps: { label: 'Campaigns', view: true },
+    sidekick: { label: 'Sidekick', ok: () => toolOn('sidekick'), open: () => { SK.open = null; openTool('sidekick'); } },
+    docs: { label: 'Docs', ok: () => toolOn('docs') },
+    projects: { label: 'Jobs', ok: () => toolOn('projects'), open: () => showProjects() },
+    bills: { label: 'Finance', ok: () => toolOn('bills') },
+    contacts: { label: 'Contacts', ok: () => toolOn('contacts') && amAdmin() },
+    email: { label: 'Email', ok: () => toolOn('email') && mayEmail() },
+    folders: { label: 'Folders', ok: () => toolOn('folders') },
+    meetings: { label: 'Meetings', ok: () => toolOn('meetings') },
+    map: { label: 'Map', ok: () => toolOn('map'), open: () => openMap() },
+    signs: { label: 'Signatures', ok: () => toolOn('signs'), open: () => { SG.filter = null; openTool('signs'); } },
+    vault: { label: 'Vault', ok: () => toolOn('vault'), open: () => { VK.filter = null; openTool('vault'); } },
+  };
+  const barMine = () => (Array.isArray(S.me?.bar) ? S.me.bar : BAR_DEFAULT).filter((k) => BAR_ITEMS[k]);
+  const barKeys = () => barMine().filter((k) => !BAR_ITEMS[k].ok || BAR_ITEMS[k].ok());
+  const onBar = (k) => barKeys().includes(k);
+  function openBarItem(k) {
+    const it = BAR_ITEMS[k];
+    if (!it) return;
+    if (it.view) {
+      closeProjects();
+      return setTab(k);
+    }
+    if (toolOpen === k) return closeTool();
+    it.open ? it.open() : openTool(k);
+    markTabs();
+  }
+  function renderTabs() {
+    const nav = $('#tabs');
+    if (!nav) return;
+    const btn = (k, label) => h('button', { 'data-tab': k }, label);
+    nav.replaceChildren(btn('home', 'Home'), btn('day', 'Day'), ...barKeys().map((k) => btn(k, BAR_ITEMS[k].label)),
+      h('button', { class: 'tabs-edit', title: 'Change your tabs', 'aria-label': 'Change your tabs', html: I.edit || '✎', onclick: (e) => { e.stopPropagation(); barSheet(); } }));
+    markTabs();
+    renderChatSide();
+  }
+  function markTabs() {
+    const jobs = !$('#projects').classList.contains('hidden');
+    for (const b of $('#tabs').children) {
+      const k = b.dataset.tab;
+      if (!k) continue;
+      const it = BAR_ITEMS[k];
+      b.classList.toggle('on', it && !it.view ? (k === 'projects' ? jobs : toolOpen === k) : !jobs && k === S.tab);
+    }
+  }
+  function barSheet() {
+    let keys = barMine().slice();
+    const usable = Object.keys(BAR_ITEMS).filter((k) => !BAR_ITEMS[k].ok || BAR_ITEMS[k].ok() || keys.includes(k));
+    const list = h('div', { class: 'bar-edit' });
+    const draw = () => {
+      const order = [...keys, ...usable.filter((k) => !keys.includes(k))];
+      list.replaceChildren(
+        ...['Home', 'Day'].map((l) => h('div', { class: 'bar-row fixed' }, h('input', { type: 'checkbox', checked: true, disabled: true }), h('span', {}, l), h('small', {}, 'Always there'))),
+        ...order.map((k) => {
+          const on = keys.includes(k);
+          const i = keys.indexOf(k);
+          const off = BAR_ITEMS[k].ok && !BAR_ITEMS[k].ok();
+          const box = h('input', { type: 'checkbox', checked: on, 'aria-label': 'Show ' + BAR_ITEMS[k].label });
+          box.addEventListener('change', () => { keys = box.checked ? [...keys, k] : keys.filter((x) => x !== k); draw(); });
+          const move = (d) => { const j = i + d; [keys[i], keys[j]] = [keys[j], keys[i]]; draw(); };
+          return h('div', { class: 'bar-row' + (on ? '' : ' off'), 'data-key': k }, box, h('span', {}, BAR_ITEMS[k].label), off ? h('small', {}, 'Switched off for the team') : null,
+            on ? h('span', { class: 'bar-move' },
+              h('button', { class: 'icon-btn', 'aria-label': 'Move ' + BAR_ITEMS[k].label + ' left', disabled: i === 0, onclick: () => move(-1) }, '↑'),
+              h('button', { class: 'icon-btn', 'aria-label': 'Move ' + BAR_ITEMS[k].label + ' right', disabled: i === keys.length - 1, onclick: () => move(1) }, '↓')) : null);
+        }));
+    };
+    draw();
+    sheet('Your tabs', [
+      h('p', { class: 'muted' }, 'Pick what sits next to Home and Day, and the order. Only you see your tabs. Anything you leave off is still in Tools (the grid button at the top).'),
+      list,
+      h('button', { class: 'btn small', onclick: () => { keys = BAR_DEFAULT.slice(); draw(); } }, 'Back to the usual'),
+    ], async () => {
+      const same = keys.join() === BAR_DEFAULT.join();
+      const r = await api('PUT', '/account/bar', { bar: same ? null : keys });
+      S.me.bar = r.bar;
+      renderTabs();
+      if (S.tab !== 'home' && S.tab !== 'day' && !onBar(S.tab)) setTab('home');
+    });
+  }
+
   function setTab(tab) {
     S.tab = tab;
-    for (const b of $('#tabs').children) b.classList.toggle('on', b.dataset.tab === tab);
+    markTabs();
     $('#home').classList.toggle('hidden', tab !== 'home');
     if (tab === 'home') renderHome();
     $('#day').classList.toggle('hidden', tab !== 'day');
@@ -2624,8 +2712,11 @@
     if (tab === 'chat') openChannel(C.view);
   }
   $('#tabs').addEventListener('click', (e) => {
-    const b = e.target.closest('button');
-    if (b) setTab(b.dataset.tab);
+    const b = e.target.closest('button[data-tab]');
+    if (!b) return;
+    if (BAR_ITEMS[b.dataset.tab]) return openBarItem(b.dataset.tab);
+    closeProjects();
+    setTab(b.dataset.tab);
   });
 
   function goDay(k) {
@@ -6836,7 +6927,9 @@
   function renderChatSide() {
     if (!S.workspace) return;
     const views = ['chat', ...(S.workspace.channels || []).map((c) => 'ch:' + c.id)];
-    $('#tabs [data-tab="chat"]').classList.toggle('dot', views.some((v) => !(S.tab === 'chat' && v === C.view) && unread(v)));
+    const news = views.some((v) => !(S.tab === 'chat' && v === C.view) && unread(v));
+    $('#tabs [data-tab="chat"]')?.classList.toggle('dot', news);
+    $('#tabs [data-tab="home"]')?.classList.toggle('dot', news && !$('#tabs [data-tab="chat"]'));
     if (!C.side) return;
     if (C.side.querySelector('.rename')) return; // don't yank an input out from under the user
     const channels = S.workspace.channels || [];
@@ -7420,7 +7513,9 @@
   $('#toolsBtn').addEventListener('click', (e) => {
     const soon = billsSoon().length;
     const tight = budgetAlerts().length;
+    const offBar = ['column', 'chat', 'camps'].filter((k) => !onBar(k));
     openMenu(e.currentTarget, [
+      ...(offBar.length ? [{ head: 'Views' }, ...offBar.map((k) => ({ label: h('span', { class: 'tool-item' }, BAR_ITEMS[k].label, k === 'chat' && $('#tabs [data-tab="home"]')?.classList.contains('dot') ? h('small', {}, 'new messages') : null), on: S.tab === k, run: () => openBarItem(k) }))] : []),
       { head: 'Tools' },
       toolOn('sidekick') ? { label: h('span', { class: 'tool-item' }, '✦ Sidekick', skNudges().length ? h('small', {}, `${skNudges().length} need${skNudges().length === 1 ? 's' : ''} a look`) : null), on: toolOpen === 'sidekick', run: () => { SK.open = null; openTool('sidekick'); } } : null,
       toolOn('docs') ? { label: 'Docs', on: toolOpen === 'docs', run: () => openTool('docs') } : null,
@@ -7433,6 +7528,7 @@
       toolOn('map') ? { label: h('span', { class: 'tool-item' }, 'Map', MP.run ? h('small', {}, 'recording a run') : null), on: toolOpen === 'map', run: () => openMap() } : null,
       toolOn('signs') ? { label: h('span', { class: 'tool-item' }, 'Signatures', SG.list.some((x) => x.status === 'sent' || x.status === 'viewed') ? h('small', {}, `${SG.list.filter((x) => x.status === 'sent' || x.status === 'viewed').length} waiting`) : null), on: toolOpen === 'signs', run: () => { SG.filter = null; openTool('signs'); } } : null,
       toolOn('vault') ? { label: h('span', { class: 'tool-item' }, 'Vault', VK.key ? h('small', {}, 'unlocked') : null), on: toolOpen === 'vault', run: () => { VK.filter = null; openTool('vault'); } } : null,
+      { label: 'Change your tabs…', run: barSheet },
     ].filter(Boolean));
   });
   function openTool(name) {
@@ -7441,11 +7537,13 @@
     $('#tool').classList.remove('hidden');
     $('#tool').classList.toggle('side', name === 'folders'); // beside the stacks, so cards can be dragged in
     renderTool();
+    markTabs();
   }
   function closeTool() {
     toolOpen = null;
     if (!MP.run) mapUnwatch();
     $('#tool').classList.add('hidden');
+    markTabs();
   }
   // Holds off while you're typing in it, so a redraw can't eat what you wrote. Sidekick keeps its own draft.
   function renderTool(force) {
@@ -7675,9 +7773,12 @@
     closeTool();
     $('#projects').classList.remove('hidden');
     renderProjects();
+    markTabs();
   }
   function closeProjects() {
+    if ($('#projects').classList.contains('hidden')) return;
     $('#projects').classList.add('hidden');
+    markTabs();
   }
   function renderProjects() {
     const root = $('#projects');
@@ -13804,6 +13905,8 @@
       );
       s.append(h('section', {}, h('h3', {}, 'Layout'), seg,
         h('p', { style: 'margin-top:8px;font-size:11.5px' }, 'Use the tabs at the top of each column to switch what it shows: everything, files, or a stack.')));
+      s.append(h('section', {}, h('h3', {}, 'Your tabs'),
+        h('div', { class: 'srow' }, h('span', {}, ['Home', 'Day', ...barKeys().map((k) => BAR_ITEMS[k].label)].join(' · '), h('small', {}, 'Only you see your tabs')), h('button', { class: 'btn', onclick: barSheet }, 'Change'))));
 
       // Stacks
       const stackSec = h('section', {}, h('h3', {}, 'Stacks (folders)'));
