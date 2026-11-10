@@ -48,7 +48,7 @@ await sleep(1200);
 const tabs = () => A.ev(`[...document.querySelectorAll('#tabs button[data-tab]')].map((b) => b.textContent + (b.classList.contains('on') ? '*' : ''))`);
 const names = async () => (await tabs()).map((t) => t.replace('*', '')).join(',');
 
-ok(await names() === 'Home,Day,Stacks,Chat,Campaigns', 'starts with the usual tabs: ' + await names());
+ok(await names() === 'Home,Day,Stacks,Chat,Campaigns,Agents', 'starts with the usual tabs: ' + await names());
 ok(await A.ev(`!!document.querySelector('#tabs .tabs-edit')`), 'a pencil to change them');
 ok((await api('GET', '/state')).me.bar === null, 'nothing saved yet');
 ok((await api('GET', '/state')).workspace.stacks.length === 0, 'a new team has no stacks yet');
@@ -68,8 +68,8 @@ await tick('chat'); await tick('camps'); await tick('bills'); await tick('projec
 await A.ev(`document.querySelector('#sheet .bar-row[data-key=projects] [aria-label^="Move Jobs left"]').click()`);
 await A.ev(`[...document.querySelectorAll('#sheet .btns button')].pop().click()`);
 await A.until(`document.querySelector('#sheet').classList.contains('hidden')`);
-ok(await names() === 'Home,Day,Stacks,Jobs,Finance', 'bar is now ' + await names());
-ok(JSON.stringify((await api('GET', '/state')).me.bar) === '["column","projects","bills"]', 'saved on the server, so other devices get it');
+ok(await names() === 'Home,Day,Stacks,Agents,Jobs,Finance', 'bar is now ' + await names());
+ok(JSON.stringify((await api('GET', '/state')).me.bar) === '["column","agents","projects","bills"]', 'saved on the server, so other devices get it');
 
 // A tool tab opens its drawer and lights up; again closes it
 await A.click('#tabs [data-tab=bills]');
@@ -103,7 +103,7 @@ await A.ev(`location.reload()`).catch(() => {});
 await sleep(1500);
 await A.until(`!document.querySelector('#app').classList.contains('hidden')`);
 await sleep(600);
-ok(await names() === 'Home,Day,Stacks,Jobs,Finance', 'same tabs after a reload');
+ok(await names() === 'Home,Day,Stacks,Agents,Jobs,Finance', 'same tabs after a reload');
 
 // Settings shows it too
 await A.click('#settingsBtn');
@@ -128,7 +128,7 @@ await A.until(`!document.querySelector('#sheet').classList.contains('hidden')`);
 await A.ev(`[...document.querySelectorAll('#sheet button')].find((b) => b.textContent === 'Back to the usual').click()`);
 await A.ev(`[...document.querySelectorAll('#sheet .btns button')].pop().click()`);
 await A.until(`document.querySelector('#sheet').classList.contains('hidden')`);
-ok(await names() === 'Home,Day,Stacks,Chat,Campaigns' && (await api('GET', '/state')).me.bar === null, 'Back to the usual resets it');
+ok(await names() === 'Home,Day,Stacks,Chat,Campaigns,Agents' && (await api('GET', '/state')).me.bar === null, 'Back to the usual resets it');
 
 // Junk is ignored
 const r = await api('PUT', '/account/bar', { bar: ['chat', 'nope', 'chat', 'home'] });

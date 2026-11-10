@@ -26,6 +26,7 @@ import { rulesModule } from './rules.js';
 import { standupModule } from './standup.js';
 import { githubModule } from './github.js';
 import { techAiModule } from './techai.js';
+import { agentsModule } from './agents.js';
 import { Readable } from 'node:stream';
 import { EventEmitter } from 'node:events';
 import { openStore, Fenced } from './store.js';
@@ -439,14 +440,15 @@ const meAccount = (ws, memberId) => {
 // What each person keeps on their tab bar after Home and Day (theirs alone, in their order). Null: the usual three.
 const PIN_RE = /^(rec|proj|camp|chan|stack|doc):[A-Za-z0-9_-]{1,64}$/;
 const MAX_PINS = 12;
-const BAR_KEYS = ['column', 'chat', 'camps', 'sidekick', 'docs', 'projects', 'bills', 'contacts', 'email', 'folders', 'meetings', 'map', 'signs', 'vault'];
+const BAR_KEYS = ['column', 'chat', 'camps', 'agents', 'sidekick', 'docs', 'projects', 'bills', 'contacts', 'email', 'folders', 'meetings', 'map', 'signs', 'vault'];
 
 // A private campaign's feed and stack are hidden from people outside it, and so is a feed you weren't invited to.
 // The tools a team uses, which owners and admins switch on and off (Settings → Team). A new team starts with
 // a simple set; a team from before switches keeps everything but Projects, which is parked.
-const TOOL_KEYS = ['sidekick', 'docs', 'contacts', 'email', 'folders', 'signs', 'bills', 'meetings', 'map', 'vault', 'projects'];
-const NEW_TEAM_TOOLS = ['sidekick', 'docs', 'contacts', 'email', 'folders', 'signs'];
-const toolsOf = (ws) => Object.fromEntries(TOOL_KEYS.map((k) => [k, ws.settings?.tools ? ws.settings.tools[k] === true : k !== 'projects']));
+const TOOL_KEYS = ['agents', 'sidekick', 'docs', 'contacts', 'email', 'folders', 'signs', 'bills', 'meetings', 'map', 'vault', 'projects'];
+const NEW_TEAM_TOOLS = ['agents', 'sidekick', 'docs', 'contacts', 'email', 'folders', 'signs'];
+// Agents came later: on for teams that haven't switched them off.
+const toolsOf = (ws) => Object.fromEntries(TOOL_KEYS.map((k) => [k, ws.settings?.tools ? (k === 'agents' ? ws.settings.tools[k] !== false : ws.settings.tools[k] === true) : k !== 'projects']));
 const publicWorkspace = (ws, memberId) => ({
   tools: toolsOf(ws),
   billing: publicBilling(ws),
@@ -5333,6 +5335,10 @@ async function api(req, res, url) {
     const out = await INV.route(req, res, parts, auth, ws);
     if (out !== null) return;
   }
+  if (a === 'agents') {
+    const out = await AGENTS_M.route(req, res, parts, auth, ws);
+    if (out !== null) return;
+  }
   if ((a === 'projects' && c === 'ai-feature') || (a === 'records' && c === 'ai-tests')) {
     const out = await TECHAI.route(req, res, parts, auth, ws);
     if (out !== null) return;
@@ -8061,11 +8067,11 @@ async function importData(req, res) {
 // Projects and the public API (projects.js).
 // Rules and approvals (rules.js). An approved request is replayed through the API as the person who asked.
 let RULES = null;
-async function replayAs(ws, memberId, approvalId, { method, path: p, body }) {
+async function replayAs(ws, memberId, approvalId, { method, path: p, body }, as = null) {
   const me = ws.members.find((m) => m.id === memberId);
   const req = Readable.from(body == null ? [] : [Buffer.from(JSON.stringify(body))]);
   Object.assign(req, { method, url: p, headers: { 'content-type': 'application/json' }, socket: { remoteAddress: 'replay' } });
-  req.replay = { token: null, wsId: ws.id, ws, memberId, member: me.name, role: me.role, tz: tzOf(ws), approved: approvalId };
+  req.replay = { token: null, wsId: ws.id, ws, memberId, member: as || me.name, role: me.role, tz: tzOf(ws), approved: approvalId, ...(as ? { agent: true } : {}) };
   const res = new EventEmitter();
   let status = 200, out = '';
   Object.assign(res, { headersSent: false, setHeader() {}, getHeader() {}, writeHead(code) { status = code; this.headersSent = true; return this; }, write(c) { out += c; return true; }, end(c) { if (c) out += c; this.emit('finish'); } });
@@ -8169,6 +8175,40 @@ async function writePlaybook(ws, auth, title, md, id) {
   return publicItem(made);
 }
 const TECHAI = techAiModule({ db, save, cleanText, readJson, send, aiAsk, replyJson, PJ });
+// Agents (agents.js): the person's own AI with tools, working through the API as them.
+async function agentLlm(ws, memberId, { system, history, tools, exec, task }) {
+  const ai = aiOf(ws.id, memberId);
+  const use = aiUse(ai);
+  if (!use) throw Object.assign(new Error('Add your AI key in Settings → AI to use your agents.'), { status: 400 });
+  let out;
+  try {
+    out = await llms[use.provider].run({ key: unseal(ai.keys[use.provider].sealed).key, model: use.model, system: system + brandPrompt(ws, task), history, tools, web: false, exec });
+  } catch (e) {
+    console.error('Agent AI request failed:', e.message);
+    throw Object.assign(new Error(llmError(e)), { status: 502 });
+  }
+  if (out.refused) throw Object.assign(new Error(out.text), { status: 502 });
+  return out.text;
+}
+// An email an agent drafted and the person approved: from their own Gmail or Outlook when connected, otherwise
+// from Kloomie under the team's name with replies to them. Never to anyone marked do not contact.
+async function agentEmail(ws, memberId, { name, email, subject, text }) {
+  if (!EMAIL_RE.test(String(email || ''))) throw badRequest('That email address doesn’t look right.');
+  if (doNotEmail(ws.id).has(emailKey(email))) throw badRequest(`${email} asked not to be contacted.`);
+  const conn = mailConn(ws.id, memberId);
+  if (conn) {
+    try {
+      await calProviders[conn.provider].sendMail(await calToken(conn), mailMime(conn.account, { name, email }, subject, text, ''));
+    } catch (e) {
+      throw new Error(e.auth ? `${mailboxName(conn)}’s sign-in expired. Connect it again in Settings.` : `${mailboxName(conn)} didn’t send it: ` + String(e.message).slice(0, 200));
+    }
+    return { from: conn.account };
+  }
+  if (mailer.mode === 'off') throw new Error('Email isn’t set up. Connect Gmail or Outlook in Settings → Calendar & email.');
+  await mailer.customerEmail(email, { team: ws.name, replyTo: memberReply(ws, memberId), subject, heading: subject, lines: String(text).split(/\n+/).filter((l) => l.trim()), tag: 'agent' });
+  return { from: `${ws.name} (through Kloomie)` };
+}
+const AGENTS_M = agentsModule({ db, save, broadcast, rid, cleanText, readJson, send, notify, replay: replayAs, run: agentLlm, sendEmail: agentEmail, textToDoc, PJ, isAdminId, localNow, tzOf, fmtMinutes, hasAi: (wsId, memberId) => !!aiUse(aiOf(wsId, memberId)) });
 const GH = githubModule({ db, save, broadcast, rid, cleanText, readJson, send, seal, unseal, isAdmin, PJ, sees: (p, mid) => PJ.sees(p, mid), publicUrl: PUBLIC_URL });
 // Daily standups on a project (standup.js): a blocker becomes a task for the project lead.
 const STANDUP = standupModule({ db, save, broadcast, rid, cleanText, readJson, send, notify, sees: (p, mid) => PJ.sees(p, mid), teamDay: (wsId) => teamDay(wsId),
@@ -8575,6 +8615,8 @@ async function removeMember(ws, m) {
     delete db.sidekick[x.id];
   }
   for (const x of Object.values(db.plans)) if (theirs(x)) delete db.plans[x.id];
+  for (const x of Object.values(db.agentRuns || {})) if (theirs(x)) delete db.agentRuns[x.id];
+  delete (db.agentPrefs || {})[`${wsId}:${id}`];
   for (const x of Object.values(db.exports)) if (theirs(x)) dropExport(x);
   // Passed on: the business keeps these.
   for (const coll of ['signs', 'meetings', 'pins', 'trips', 'zones', 'money', 'bills', 'budgets']) for (const x of Object.values(db[coll])) if (theirs(x)) hand(x);
@@ -8663,6 +8705,7 @@ async function buildExport(x) {
     zones: (y) => y.memberId === me.id,
     plans: (y) => y.memberId === me.id,
     sidekick: (y) => y.memberId === me.id,
+    agentRuns: (y) => y.memberId === me.id,
     projects: (y) => PJ.sees(y, me.id),
     records: (y) => PJ.sees(db.projects[y.projectId], me.id),
     projectTemplates: () => !mineOnly,

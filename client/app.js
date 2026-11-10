@@ -661,6 +661,8 @@
       if (x && was && x.status !== was.status && (x.status === 'signed' || x.status === 'declined')) {
         toast(`${x.signer.name} ${x.status === 'signed' ? 'signed' : 'declined to sign'} “${x.name}”`, { label: 'Details', run: () => signSheet(x) });
       }
+    } else if (msg.type === 'agent' || msg.type === 'agent:remove') {
+      agNews(msg);
     } else if (msg.type === 'sidekick' || msg.type === 'sidekick:remove') {
       S.sidekick = (S.sidekick || []).filter((x) => x.id !== (msg.sidekick?.id || msg.id));
       if (msg.sidekick) S.sidekick.unshift(msg.sidekick);
@@ -750,7 +752,7 @@
     try { if (navigator.setAppBadge) n ? navigator.setAppBadge(n) : navigator.clearAppBadge(); } catch {}
     if ($('#bellPop') && !$('#bellPop').classList.contains('hidden')) bellList();
   }
-  const NOTE_ICON = { mention: '@', assigned: '👤', up: '▶', files: '📥', quote: '✓' };
+  const NOTE_ICON = { mention: '@', assigned: '👤', up: '▶', files: '📥', quote: '✓', agent: '👥' };
   // Where a notice (or a push someone tapped) takes you.
   function goTo(go) {
     if (!go) return;
@@ -762,6 +764,7 @@
     if (kind === 'camp') return campById(id) ? openCampaign(id) : setTab('camps');
     if (kind === 'rec') return openRecord(id);
     if (kind === 'approval') return approvalSheet(id);
+    if (kind === 'agent') return AG.data ? agOpen('run:' + id) : (AG.view = 'run:' + id, openTool('agents'));
     if (kind === 'standup') { const p = projById(id); if (!p) return toast('That project is gone.'); return openProject(id).then(() => standupSheet(p)); }
     const it = S.items.find((x) => x.id === id);
     if (!it) return toast('That isn’t here any more.');
@@ -1017,6 +1020,7 @@
     loadSigns();
     loadPss();
     loadApprovals();
+    loadAgents();
     if (amAdmin()) loadHq();
     S.panes = S.panes.map((v) => (v.startsWith('stack:') && !stackById(v.slice(6)) ? 'files' : v));
     $('#wsName').textContent = S.workspace.name;
@@ -2806,11 +2810,12 @@
 
   // ----- the tab bar: Home and Day always, then whatever each person picks, in their order -----
   // Views switch the main area; tools open their drawer (Jobs opens over the app). Anything not on the bar is in Tools.
-  const BAR_DEFAULT = ['column', 'chat', 'camps'];
+  const BAR_DEFAULT = ['column', 'chat', 'camps', 'agents'];
   const BAR_ITEMS = {
     column: { label: 'Stacks', view: true },
     chat: { label: 'Chat', view: true },
     camps: { label: 'Campaigns', view: true },
+    agents: { label: 'Agents', ok: () => toolOn('agents'), open: () => agOpen('team') },
     sidekick: { label: 'Sidekick', ok: () => toolOn('sidekick'), open: () => { SK.open = null; openTool('sidekick'); } },
     docs: { label: 'Docs', ok: () => toolOn('docs') },
     projects: { label: 'Jobs', ok: () => toolOn('projects'), open: () => showProjects() },
@@ -4571,6 +4576,7 @@
     const out = [];
     if (amAdmin() && HQ.data?.review) out.push({ kind: 'review', text: 'Are your goals still right?', sub: `It’s been 3 months since anyone checked ${plural(HQ.data.review.goals, 'goal')} in Company HQ`, run: () => { openTool('hq'); setTimeout(() => $('#tool .hq-review')?.scrollIntoView({ block: 'center' }), 60); } });
     if (amAdmin() && HQ.data?.entries.some((x) => x.status === 'suggested' && x.source?.type === 'learned')) out.push({ kind: 'learned', text: 'Kloomie noticed how you edit drafts', sub: 'A writing preference to accept or dismiss, in Company HQ', run: () => { openTool('hq'); setTimeout(() => $('#tool .hq-sugg')?.scrollIntoView({ block: 'start' }), 60); } });
+    for (const x of agWaiting()) out.push({ kind: 'agent', text: `${x.agent === 'team' ? 'Your team' : AG.data.agents[x.agent]?.name} needs your yes`, sub: `${x.title} · ${plural(agSteps(x).filter((y) => y.status === 'proposed').length, 'thing')} to approve`, run: () => agOpen('run:' + x.id) });
     if (RU.data?.canApprove) for (const x of RU.data.approvals.filter((y) => y.status === 'pending')) out.push({ kind: 'approve', text: `${x.by} needs your OK`, sub: `${x.summary} · ${ago(x.at)}`, run: () => approvalSheet(x.id) });
     if (amAdmin()) for (const x of (S.automations || []).filter(autoFailing)) out.push({ kind: 'auto', text: `Automation “${x.name}” didn’t run`, sub: x.runs[0].note, run: () => { openSettings('automations', '.auto-list'); setTimeout(() => autoSheet(x), 50); } });
     for (const t of S.tasks) if (t.submitted && !t.done && t.submitted.byId !== me && maySign(t)) out.push({ kind: 'sign', text: `Sign off “${shortText(t.text, 60)}”`, sub: `${t.submitted.by} sent it ${ago(t.submitted.at)}`, run: () => showStep(t) });
@@ -4592,7 +4598,7 @@
   }
   function overviewView() {
     const needs = needsYou();
-    const ICON = { sign: '✓', stuck: '⏳', role: '👤', late: '!', nobody: '?', checkin: '🩺', approve: '✋', review: '🎯', learned: '✎' };
+    const ICON = { sign: '✓', stuck: '⏳', role: '👤', late: '!', nobody: '?', checkin: '🩺', approve: '✋', review: '🎯', learned: '✎', agent: '👥' };
     const live = S.campaigns.filter((c) => c.status === 'active').sort((a, b) => (a.end || '9999') < (b.end || '9999') ? -1 : 1);
     const mains = live.filter((c) => !c.parentId || !live.some((x) => x.id === c.parentId));
     const row = (c, sub) => {
@@ -4906,7 +4912,7 @@
     const card = (cls, title, n, action, ...body) => h('section', { class: 'home-card ' + cls },
       h('div', { class: 'hc-h' }, h('b', {}, title), n ? h('span', { class: 'hc-n' }, String(n)) : null, action ? h('button', { class: 'linkish hc-go', onclick: action[1] }, action[0]) : null), ...body);
     const row = (ic, cls, title, sub, run) => h('button', { class: 'need-row ' + cls, onclick: run }, h('span', { class: 'need-ic' }, ic), h('span', { class: 'need-text' }, h('b', {}, title), sub ? h('small', {}, sub) : null));
-    const ICON = { sign: '✓', stuck: '⏳', role: '👤', late: '!', nobody: '?', checkin: '🩺', auto: '⚙', approve: '✋', review: '🎯', learned: '✎' };
+    const ICON = { sign: '✓', stuck: '⏳', role: '👤', late: '!', nobody: '?', checkin: '🩺', auto: '⚙', approve: '✋', review: '🎯', learned: '✎', agent: '👥' };
     const steps = [...d.up, ...d.late, ...d.dueToday].slice(0, 8);
     const notes = (S.notices || []).filter((n) => !n.kind); // from automations; the rest live in the bell
     const clearNote = (n) => { const gone = n ? [n] : notes; S.notices = (S.notices || []).filter((y) => !gone.includes(y)); renderHome(); drawBell(); for (const x of gone) api('DELETE', '/notices/' + x.id).catch(() => {}); };
@@ -8190,8 +8196,291 @@
     ];
   }
 
+  // ---------- Your team: three agents you hand work to (agents.js on the server) ----------
+  // The team page asks the coordinator; each agent has a profile (overview, its work, schedules, settings); an
+  // assignment shows every step it took, with Approve, Skip and Undo, and you can reply to carry it on.
+  const AG = { data: null, view: 'team', tab: 'overview', busy: false, draft: '', loading: false };
+  const AG_LEVELS = {
+    observe: ['Observe', 'Reads and reports. Changes nothing; tells you what it would do.'],
+    prepare: ['Prepare', 'Drafts everything. Every change waits for your yes.'],
+    execute: ['Execute', 'Makes routine changes itself (tasks, time, records, docs). Emails wait for your yes.'],
+    automate: ['Automate', 'As Execute, and runs its scheduled workflows on its own.'],
+  };
+  const AG_TOOL_NAMES = { look_at_day: 'Your calendar and day', list_tasks: 'Tasks', list_projects: 'Jobs & projects (the setup)', find_records: 'Jobs, leads and deals', read_record: 'A record’s full history', list_campaigns: 'Campaigns', find_contacts: 'Contacts', team_schedule: 'The team’s visits', plan_route: 'Routes', find_docs: 'Docs', read_doc: 'A doc’s text', create_task: 'Make tasks', update_task: 'Reschedule, reassign or finish tasks', schedule_time: 'Put time on your calendar', move_time: 'Move time it put there', save_contact: 'Save contacts', create_project: 'Start projects', create_record: 'Add jobs, leads, deals…', update_record: 'Update records', log_note: 'Log calls and notes', book_visit: 'Book visits', write_doc: 'Write docs', draft_email: 'Draft emails', notify_me: 'Send you a heads-up' };
+  const AG_STATUS = { requested: 'Starting', planning: 'Planning', running: 'Working', awaiting: 'Needs your yes', completed: 'Done', failed: 'Didn’t finish', blocked: 'Has a question', cancelled: 'Stopped' };
+  const AG_DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const agRunning = (x) => ['requested', 'planning', 'running'].includes(x.status);
+  const agSteps = (x) => x.parts.flatMap((p) => p.steps);
+  const agWaiting = () => (AG.data?.runs || []).filter((x) => agSteps(x).some((s) => s.status === 'proposed'));
+  const agWho = (x) => (x.agent === 'team' ? [...new Set(x.parts.map((p) => p.agent))].map((k) => AG.data.agents[k]?.icon).join(' ') || '👥' : AG.data.agents[x.agent]?.icon);
+  // Keeps whichever copy of an assignment is newer: live updates can arrive before the answer to the request.
+  function agPut(x) {
+    const have = AG.data.runs.find((y) => y.id === x.id);
+    if (have && (have.v || 0) > (x.v || 0)) return have;
+    AG.data.runs = [x, ...AG.data.runs.filter((y) => y.id !== x.id)].sort((a, b) => b.createdAt - a.createdAt);
+    return x;
+  }
+  async function loadAgents() {
+    if (AG.loading || !toolOn('agents')) return;
+    AG.loading = true;
+    try { AG.data = await api('GET', '/agents'); } catch {}
+    AG.loading = false;
+    renderTool();
+    renderHome();
+  }
+  function agNews(msg) {
+    if (!AG.data) return;
+    if (msg.type === 'agent:remove') AG.data.runs = AG.data.runs.filter((x) => x.id !== msg.id);
+    else {
+      const was = AG.data.runs.find((x) => x.id === msg.run.id);
+      if (agPut(msg.run) !== msg.run) return;
+      if (was && agRunning(was) && !agRunning(msg.run) && !(toolOpen === 'agents' && AG.view === 'run:' + msg.run.id)) toast(`${msg.run.agent === 'team' ? 'Your team' : AG.data.agents[msg.run.agent]?.name}: ${msg.run.title} · ${AG_STATUS[msg.run.status].toLowerCase()}`, { label: 'Show', run: () => agOpen('run:' + msg.run.id) });
+      // The stats and busy flags come with the agents; fetch them again when something finishes.
+      if (was && agRunning(was) !== agRunning(msg.run)) api('GET', '/agents').then((d) => { AG.data.agents = d.agents; renderTool(); }).catch(() => {});
+    }
+    if (toolOpen === 'agents') renderTool(AG.view.startsWith('run:'));
+    renderHome();
+  }
+  function agOpen(view, tab) {
+    AG.view = view || 'team';
+    if (tab) AG.tab = tab;
+    if (toolOpen !== 'agents') { closeProjects(); openTool('agents'); } else renderTool(true);
+    $('#tool').scrollTop = 0;
+  }
+  async function agAsk(agent, ask, workflow) {
+    if (AG.busy) return;
+    AG.busy = true;
+    try {
+      const x = await api('POST', '/agents/runs', { agent, ask, workflow });
+      agPut(x);
+      AG.draft = '';
+      AG.busy = false;
+      agOpen('run:' + x.id);
+    } catch (e) {
+      AG.busy = false;
+      toast(e.message);
+      renderTool(true);
+    }
+  }
+  function agentsTool() {
+    const d = AG.data;
+    if (!d) {
+      loadAgents();
+      return [h('p', { class: 'day-hint' }, 'Loading…')];
+    }
+    if (AG.view.startsWith('run:')) {
+      const x = d.runs.find((y) => y.id === AG.view.slice(4));
+      if (x) return agRunView(x);
+      AG.view = 'team';
+    }
+    if (d.agents[AG.view]) return agProfile(AG.view, d.agents[AG.view]);
+    return agTeam(d);
+  }
+  const agNoKey = () => (AG.data.ai ? null : h('div', { class: 'ag-nokey' }, h('span', {}, 'Your agents work on your own AI key. Add one first.'), h('button', { class: 'btn small primary-btn', onclick: () => openSettings('connections', '.ai-sec') }, 'Add your AI key')));
+  function agBox(agent, placeholder, label) {
+    const ta = h('textarea', { class: 'ag-ask', rows: 3, placeholder, 'aria-label': label });
+    ta.value = AG.draft;
+    ta.addEventListener('input', () => (AG.draft = ta.value));
+    const go = h('button', { class: 'btn primary-btn', disabled: AG.busy || !AG.data.ai }, AG.busy ? 'Sending…' : label);
+    go.addEventListener('click', () => (ta.value.trim() ? agAsk(agent, ta.value) : ta.focus()));
+    ta.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) go.click(); });
+    return h('div', { class: 'ag-box' }, ta, h('div', { class: 'ag-box-f' }, h('small', { class: 'day-hint' }, '⌘↵ to send'), go));
+  }
+  function agState(k, a) {
+    if (a.busy) return h('span', { class: 'ag-state busy' }, 'Working…');
+    if (a.paused) return h('span', { class: 'ag-state' }, 'Paused');
+    if (a.stats.waiting) return h('span', { class: 'ag-state wait' }, `${a.stats.waiting} to approve`);
+    return h('span', { class: 'ag-state ok' }, 'Ready');
+  }
+  function agTeam(d) {
+    const waiting = agWaiting();
+    const busy = Object.values(d.agents).filter((a) => a.busy).length;
+    return [
+      h('div', { class: 'ag-hero' }, h('b', {}, 'Meet your team'), h('p', { class: 'day-hint' }, 'Three specialists who organize the work for you, in your tasks, calendar, jobs and docs. Tell them what needs doing; they work out who does what.')),
+      agNoKey(),
+      agBox('team', 'What needs to get done? e.g. Plan my day · Follow up with customers who went quiet · I just landed a job for 12 blinds across three properties, organize it', 'Ask your team'),
+      h('div', { class: 'ag-sec-h' }, h('b', {}, 'Your specialists'), h('small', {}, busy ? `${busy} working` : `${Object.keys(d.agents).length} ready`)),
+      h('div', { class: 'ag-cards' }, Object.entries(d.agents).map(([k, a]) => h('button', { class: 'ag-card', onclick: () => agOpen(k, 'overview') },
+        h('span', { class: 'ag-ic' }, a.icon),
+        h('span', { class: 'ag-card-t' }, h('b', {}, a.name), h('small', {}, a.tags)),
+        h('span', { class: 'ag-card-r' }, agState(k, a), h('small', { class: 'ag-lvl' }, AG_LEVELS[a.level][0]))))),
+      waiting.length ? h('section', { class: 'ag-waiting' }, h('div', { class: 'ag-sec-h' }, h('b', {}, 'Waiting for your yes')), waiting.map((x) => agRunRow(x, `${agSteps(x).filter((s) => s.status === 'proposed').length} to approve`))) : null,
+      h('div', { class: 'ag-sec-h' }, h('b', {}, 'Recent activity')),
+      d.runs.length ? h('div', { class: 'ag-runs' }, d.runs.slice(0, 15).map((x) => agRunRow(x))) : h('p', { class: 'day-hint' }, 'Nothing yet. Try “Plan my day”, or open a specialist for their one-tap workflows.'),
+    ];
+  }
+  function agRunRow(x, note) {
+    return h('button', { class: 'ag-run-row', onclick: () => agOpen('run:' + x.id) },
+      h('span', { class: 'ag-ic sm' }, agWho(x)),
+      h('span', { class: 'ag-run-t' }, h('b', {}, x.title), h('small', {}, `${x.agent === 'team' ? 'Your team' : AG.data.agents[x.agent]?.name} · ${ago(x.createdAt)}${x.scheduled ? ' · on schedule' : ''}`)),
+      h('span', { class: 'ag-chip s-' + x.status }, note || AG_STATUS[x.status]));
+  }
+  function agPaste(k, wf) {
+    const ta = h('textarea', { rows: 8, placeholder: 'Paste the email, notes or details here' });
+    sheet(wf.name, [h('p', { class: 'muted' }, wf.ask.replace(/:\s*$/, '.')), ta], () => {
+      if (!ta.value.trim()) throw new Error('Paste or describe it first.');
+      return agAsk(k, ta.value, wf.key);
+    }, 'Hand it over');
+  }
+  function agProfile(k, a) {
+    const tabs = [['overview', 'Overview'], ['work', 'Work'], ['schedules', 'Schedules'], ['settings', 'Settings']];
+    const mine = AG.data.runs.filter((x) => x.parts.some((p) => p.agent === k));
+    const body = {
+      overview: () => [
+        h('p', {}, a.purpose),
+        h('div', { class: 'ag-sub' }, 'What it does'),
+        h('ul', { class: 'ag-duties' }, a.duties.map((x) => h('li', {}, x))),
+        h('div', { class: 'ag-sub' }, 'What it can use'),
+        h('div', { class: 'ag-tools' },
+          h('div', {}, h('small', {}, 'Reads'), h('p', {}, a.tools.filter((t) => t.kind === 'read').map((t) => AG_TOOL_NAMES[t.key]).join(' · '))),
+          h('div', {}, h('small', {}, a.level === 'observe' ? 'Would do (only suggests at Observe)' : a.level === 'prepare' ? 'Prepares (you approve each)' : 'Does'), h('p', {}, a.tools.filter((t) => t.kind === 'write' && !t.important).map((t) => AG_TOOL_NAMES[t.key]).join(' · '))),
+          a.tools.some((t) => t.important) ? h('div', {}, h('small', {}, 'Always asks you first'), h('p', {}, a.tools.filter((t) => t.important).map((t) => AG_TOOL_NAMES[t.key] + ' (it never sends without you)').join(' · '))) : null,
+          h('div', {}, h('small', {}, 'Never'), h('p', {}, 'Deletes anything, or sees more than you can see. Your team’s rules (Company HQ) still apply to it.'))),
+        h('div', { class: 'ag-sub' }, 'This week'),
+        h('div', { class: 'ag-stats' }, [[a.stats.week, 'assignments'], [a.stats.done, 'things done'], [a.stats.approved, 'approved'], [a.stats.skipped, 'skipped'], [a.stats.undone, 'undone']].map(([n, l]) => h('span', {}, h('b', {}, String(n)), h('small', {}, l)))),
+      ],
+      work: () => (mine.length ? [h('div', { class: 'ag-runs' }, mine.slice(0, 30).map((x) => agRunRow(x)))] : [h('p', { class: 'day-hint' }, 'No assignments yet. Use a workflow above, or ask it something.')]),
+      schedules: () => agSchedules(k, a),
+      settings: () => agSettings(k, a),
+    }[AG.tab] || (() => []);
+    return [
+      h('button', { class: 'linkish ag-back', onclick: () => agOpen('team') }, '‹ Your team'),
+      h('div', { class: 'ag-prof-h' }, h('span', { class: 'ag-ic lg' }, a.icon), h('div', {}, h('b', {}, a.name), h('small', {}, a.tags)), agState(k, a)),
+      agNoKey(),
+      h('div', { class: 'ag-wfs' }, a.workflows.map((wf) => h('button', { class: 'chip', disabled: !AG.data.ai || AG.busy, onclick: () => (wf.paste ? agPaste(k, wf) : agAsk(k, '', wf.key)) }, wf.name + (wf.paste ? '…' : '')))),
+      agBox(k, `Ask the ${a.name} anything in its area`, 'Hand it over'),
+      h('div', { class: 'ag-tabs', role: 'tablist' }, tabs.map(([t, l]) => h('button', { class: AG.tab === t ? 'on' : '', role: 'tab', 'aria-selected': String(AG.tab === t), onclick: () => { AG.tab = t; renderTool(true); } }, l))),
+      h('div', { class: 'ag-tab-body' }, ...body()),
+    ];
+  }
+  async function agSave(k, body, msg) {
+    try {
+      AG.data.agents[k] = await api('PATCH', '/agents/' + k, body);
+      if (msg) toast(msg);
+      renderTool(true);
+    } catch (e) {
+      toast(e.message);
+    }
+  }
+  function agSchedules(k, a) {
+    const can = a.workflows.filter((w) => !w.paste);
+    const at = (w) => a.schedules.find((s) => s.workflow === w.key);
+    const put = (list) => agSave(k, { schedules: list });
+    const timeStr = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+    return [
+      a.level !== 'automate' ? h('div', { class: 'ag-note' }, h('span', {}, 'Schedules only run at Automate. It’s at ' + AG_LEVELS[a.level][0] + ' now.'), h('button', { class: 'btn small', onclick: () => agSave(k, { level: 'automate' }, 'Set to Automate') }, 'Switch to Automate')) : null,
+      h('p', { class: 'day-hint' }, 'Workflows it runs by itself, on your team’s clock. You get a notification with the result, and anything that needs your yes waits for you.'),
+      ...can.map((w) => {
+        const s = at(w);
+        const on = h('input', { type: 'checkbox', checked: !!s, 'aria-label': 'Run ' + w.name + ' on a schedule' });
+        on.addEventListener('change', () => put(on.checked ? [...a.schedules, { workflow: w.key, days: w.sched?.days || [1, 2, 3, 4, 5], at: w.sched?.at ?? 8 * 60 }] : a.schedules.filter((x) => x.workflow !== w.key)));
+        const time = h('input', { type: 'time', value: timeStr(s?.at ?? w.sched?.at ?? 480), disabled: !s, 'aria-label': w.name + ' time' });
+        time.addEventListener('change', () => { const [hh, mm] = time.value.split(':').map(Number); put(a.schedules.map((x) => (x.workflow === w.key ? { ...x, at: hh * 60 + mm } : x))); });
+        return h('div', { class: 'ag-sched' + (s ? ' on' : '') }, h('label', { class: 'ag-sched-t' }, on, h('b', {}, w.name)),
+          h('div', { class: 'ag-days' }, AG_DAYS.map((dn, i) => h('button', { class: 'ag-day' + (s?.days.includes(i) ? ' on' : ''), disabled: !s, 'aria-pressed': String(!!s?.days.includes(i)), onclick: () => { const days = s.days.includes(i) ? s.days.filter((x) => x !== i) : [...s.days, i]; if (days.length) put(a.schedules.map((x) => (x.workflow === w.key ? { ...x, days } : x))); } }, dn[0]))),
+          time);
+      }),
+      h('label', { class: 'ag-pause' }, (() => { const c = h('input', { type: 'checkbox', checked: a.paused }); c.addEventListener('change', () => agSave(k, { paused: c.checked }, c.checked ? 'Paused' : 'Running again')); return c; })(), h('span', {}, 'Pause all of its schedules')),
+    ];
+  }
+  function agSettings(k, a) {
+    const ins = h('textarea', { rows: 5, placeholder: `Anything the ${a.name} should always do or know. e.g. ${{ chief: 'Keep Friday afternoons free. I do estimates in the mornings.', sales: 'Always offer a free in-home measure. Follow up after 3 days, then 7.', ops: 'Every install gets a photo of the finished windows. Order fabric 10 days ahead.' }[k]}` });
+    ins.value = a.instructions || '';
+    return [
+      h('div', { class: 'ag-sub' }, 'How far it may go'),
+      h('div', { class: 'ag-levels', role: 'radiogroup' }, Object.entries(AG_LEVELS).map(([lv, [name, about]]) => h('button', { class: 'ag-level' + (a.level === lv ? ' on' : ''), role: 'radio', 'aria-checked': String(a.level === lv), onclick: () => agSave(k, { level: lv }) }, h('b', {}, name + (lv === 'execute' ? ' (recommended)' : '')), h('small', {}, about)))),
+      h('div', { class: 'ag-sub' }, 'Standing instructions'),
+      h('p', { class: 'day-hint' }, 'Only for you and this agent. Your business profile in Company HQ applies to every agent already.'),
+      ins,
+      h('button', { class: 'btn small', onclick: () => agSave(k, { instructions: ins.value }, 'Saved') }, 'Save instructions'),
+    ];
+  }
+  // Where a changed thing lives in the app.
+  function agGo(c) {
+    if (c.kind === 'task') return goTo('task:' + c.id);
+    if (c.kind === 'entry') { closeTool(); setTab('day'); if (c.date) goDay(c.date); return; }
+    if (c.kind === 'record') { closeTool(); return prLoadAll().then(() => openRecord(c.id)); }
+    if (c.kind === 'project') { closeTool(); return openProject(c.id); }
+    if (c.kind === 'doc') { closeTool(); return goTo('doc:' + c.id); }
+    if (c.kind === 'contact') return openTool('contacts');
+  }
+  async function agStep(x, ids, what, args) {
+    try {
+      const y = await api('POST', `/agents/runs/${x.id}/steps`, { do: what, ids, ...(args ? { args } : {}) });
+      const now = agPut(y);
+      const s = agSteps(now).find((z) => z.id === ids[0]);
+      if (s?.error && ids.length === 1) toast(s.error);
+      else if (what === 'undo') toast('Undone');
+      renderTool(true);
+      renderHome();
+      api('GET', '/agents').then((d) => { AG.data.agents = d.agents; renderTool(); }).catch(() => {});
+    } catch (e) {
+      toast(e.message);
+    }
+  }
+  const AG_ICON = { done: '✓', proposed: '○', held: '⏳', suggested: '💡', failed: '⚠', undone: '↺', skipped: '–' };
+  function agStepRow(x, s) {
+    if (s.kind === 'read') return h('div', { class: 'ag-step read' + (s.status === 'failed' ? ' failed' : '') }, h('span', { class: 'ag-step-ic' }, s.status === 'failed' ? '⚠' : '·'), h('span', {}, s.label, s.error ? h('small', {}, s.error) : null));
+    if (s.kind === 'handoff') return h('div', { class: 'ag-step handoff' }, h('span', { class: 'ag-step-ic' }, '→'), h('span', {}, s.label));
+    const links = (s.changed || []).filter((c) => c.id && s.status === 'done').map((c) => h('button', { class: 'linkish', onclick: () => agGo(c) }, 'Open'));
+    if (s.tool === 'draft_email' && s.status === 'proposed') {
+      const to = h('input', { value: s.args.to_email || '', 'aria-label': 'To' });
+      const sub = h('input', { value: s.args.subject || '', 'aria-label': 'Subject' });
+      const body = h('textarea', { rows: 8, 'aria-label': 'Email' });
+      body.value = s.args.body || '';
+      return h('div', { class: 'ag-step email' },
+        h('div', { class: 'ag-email-h' }, h('b', {}, '✉ Draft email'), s.why ? h('small', {}, s.why) : null),
+        h('label', {}, 'To ' + (s.args.to_name ? `(${s.args.to_name})` : ''), to), h('label', {}, 'Subject', sub), body,
+        h('div', { class: 'ag-step-act' },
+          h('button', { class: 'btn small primary-btn', onclick: (e) => { e.currentTarget.disabled = true; agStep(x, [s.id], 'approve', { to_email: to.value, subject: sub.value, body: body.value }); } }, 'Send'),
+          h('button', { class: 'btn small', onclick: () => copyText(`${sub.value}\n\n${body.value}`) }, 'Copy'),
+          h('button', { class: 'btn small', onclick: () => agStep(x, [s.id], 'skip') }, 'Don’t send')));
+    }
+    return h('div', { class: 'ag-step act s-' + s.status },
+      h('span', { class: 'ag-step-ic' }, AG_ICON[s.status] || '·'),
+      h('span', { class: 'ag-step-t' }, h('span', {}, s.label), s.why ? h('small', {}, s.why) : null,
+        s.status === 'held' ? h('small', { class: 'ag-held' }, s.error || 'Waiting for an owner’s OK') : s.status === 'failed' || (s.error && s.status === 'done') ? h('small', { class: 'ag-err' }, s.error) : null,
+        s.status === 'suggested' ? h('small', {}, 'Suggestion only (Observe)') : null),
+      h('span', { class: 'ag-step-act' },
+        s.status === 'proposed' ? [h('button', { class: 'btn small primary-btn', onclick: (e) => { e.currentTarget.disabled = true; agStep(x, [s.id], 'approve'); } }, 'Approve'), h('button', { class: 'btn small', onclick: () => agStep(x, [s.id], 'skip') }, 'Skip')] : null,
+        ...links,
+        s.status === 'done' && s.undo ? h('button', { class: 'linkish', onclick: () => agStep(x, [s.id], 'undo') }, 'Undo') : null));
+  }
+  function agRunView(x) {
+    const d = AG.data;
+    const proposed = agSteps(x).filter((s) => s.status === 'proposed' && s.tool !== 'draft_email');
+    const reply = h('textarea', { class: 'ag-ask', rows: 2, placeholder: x.status === 'blocked' ? 'Your answer' : 'Ask a follow-up, or tell it what to change' });
+    const send = h('button', { class: 'btn small primary-btn' }, x.status === 'blocked' ? 'Answer' : 'Send');
+    send.addEventListener('click', async () => {
+      if (!reply.value.trim()) return reply.focus();
+      send.disabled = true;
+      try { agPut(await api('POST', `/agents/runs/${x.id}/reply`, { text: reply.value })); renderTool(true); } catch (e) { toast(e.message); send.disabled = false; }
+    });
+    const more = (e) => openMenu(e.currentTarget, [
+      { label: 'Copy the report', run: () => copyText(x.parts.map((p) => `${d.agents[p.agent].name}:\n${p.report || ''}`).join('\n\n')) },
+      agRunning(x) ? null : { label: 'Delete this assignment', danger: true, run: async () => { await api('POST', `/agents/runs/${x.id}/delete`).catch((er) => toast(er.message)); AG.data.runs = AG.data.runs.filter((r) => r.id !== x.id); agOpen('team'); } },
+    ].filter(Boolean));
+    return [
+      h('div', { class: 'ag-run-top' }, h('button', { class: 'linkish ag-back', onclick: () => agOpen(x.agent === 'team' ? 'team' : x.agent, 'work') }, '‹ ' + (x.agent === 'team' ? 'Your team' : d.agents[x.agent].name)), h('span', { style: 'flex:1' }), h('button', { class: 'icon-btn', 'aria-label': 'Assignment options', html: I.more, onclick: more })),
+      h('div', { class: 'ag-run-h' }, h('b', {}, x.title), h('span', { class: 'ag-chip s-' + x.status }, AG_STATUS[x.status])),
+      h('small', { class: 'day-hint' }, `${x.agent === 'team' ? 'Your team' : d.agents[x.agent].name} · ${ago(x.createdAt)}${x.scheduled ? ' · on schedule' : ''}`),
+      x.title !== x.ask.split('\n')[0] && !x.workflow ? h('p', { class: 'ag-asked' }, x.ask.slice(0, 600)) : null,
+      x.plan ? h('p', { class: 'ag-plan' }, '👥 ' + x.plan) : null,
+      agRunning(x) ? h('div', { class: 'ag-working' }, h('span', { class: 'ag-spin' }), h('span', {}, x.status === 'planning' ? 'Working out who does what…' : 'Working…'), h('span', { style: 'flex:1' }), h('button', { class: 'btn small', onclick: () => api('POST', `/agents/runs/${x.id}/cancel`).catch((e) => toast(e.message)) }, 'Stop')) : null,
+      proposed.length > 1 ? h('div', { class: 'ag-note' }, h('span', {}, `${proposed.length} changes waiting for your yes`), h('button', { class: 'btn small primary-btn', onclick: () => agStep(x, proposed.map((s) => s.id), 'approve') }, 'Approve all'), h('button', { class: 'btn small', onclick: () => agStep(x, proposed.map((s) => s.id), 'skip') }, 'Skip all')) : null,
+      ...x.parts.filter((p) => p.status !== 'planned' || agRunning(x)).map((p) => h('section', { class: 'ag-part' },
+        h('div', { class: 'ag-part-h' }, h('span', { class: 'ag-ic sm' }, d.agents[p.agent].icon), h('b', {}, p.reply ? 'You asked: ' + p.ask.slice(0, 120) : d.agents[p.agent].name), p.from ? h('small', {}, 'from the ' + d.agents[p.from].name) : null, p.status === 'planned' ? h('small', {}, 'up next') : null),
+        p.steps.length ? h('div', { class: 'ag-steps' }, p.steps.map((s) => agStepRow(x, s))) : null,
+        p.report ? h('div', { class: 'ag-report' }, p.report) : null,
+        p.error ? h('p', { class: 'ag-err' }, p.error) : null)),
+      x.question ? h('div', { class: 'ag-q' }, h('b', {}, '❓ ' + x.question)) : null,
+      x.error && !x.parts.some((p) => p.error) ? h('p', { class: 'ag-err' }, x.error) : null,
+      agRunning(x) ? null : h('div', { class: 'ag-box' }, reply, h('div', { class: 'ag-box-f' }, h('span'), send)),
+    ];
+  }
+
   // ---------- tools: small apps that open in a drawer, so the tabs stay as they are ----------
-  const TOOLS = { hq: { name: 'Company HQ', render: hqTool }, sidekick: { name: 'Sidekick', render: sidekickTool }, docs: { name: 'Docs', render: docsTool }, bills: { name: 'Finance', render: financeTool }, contacts: { name: 'Contacts', render: contactsTool }, email: { name: 'Email', render: emailTool }, meetings: { name: 'Meeting notes', render: meetingsTool }, planner: { name: 'Planner', render: plannerTool }, folders: { name: 'Folders', render: foldersTool }, map: { name: 'Map', render: mapTool }, signs: { name: 'Signatures', render: signsTool }, vault: { name: 'Vault', render: vaultTool } };
+  const TOOLS = { agents: { name: 'Your team', render: agentsTool }, hq: { name: 'Company HQ', render: hqTool }, sidekick: { name: 'Sidekick', render: sidekickTool }, docs: { name: 'Docs', render: docsTool }, bills: { name: 'Finance', render: financeTool }, contacts: { name: 'Contacts', render: contactsTool }, email: { name: 'Email', render: emailTool }, meetings: { name: 'Meeting notes', render: meetingsTool }, planner: { name: 'Planner', render: plannerTool }, folders: { name: 'Folders', render: foldersTool }, map: { name: 'Map', render: mapTool }, signs: { name: 'Signatures', render: signsTool }, vault: { name: 'Vault', render: vaultTool } };
   let toolOpen = null;
   $('#toolsBtn').addEventListener('click', (e) => {
     const soon = billsSoon().length;
@@ -8200,6 +8489,7 @@
     openMenu(e.currentTarget, [
       // Sidekick always comes first, above everything else.
       toolOn('sidekick') ? { label: h('span', { class: 'tool-item' }, '✦ Sidekick', skNudges().length ? h('small', {}, `${skNudges().length} need${skNudges().length === 1 ? 's' : ''} a look`) : null), on: toolOpen === 'sidekick', run: () => { SK.open = null; openTool('sidekick'); } } : null,
+      toolOn('agents') && !onBar('agents') ? { label: h('span', { class: 'tool-item' }, '👥 Your team', agWaiting().length ? h('small', {}, `${agWaiting().length} waiting for your yes`) : null), on: toolOpen === 'agents', run: () => agOpen('team') } : null,
       ...(offBar.length ? [{ head: 'Views' }, ...offBar.map((k) => ({ label: h('span', { class: 'tool-item' }, BAR_ITEMS[k].label, k === 'chat' && $('#tabs [data-tab="home"]')?.classList.contains('dot') ? h('small', {}, 'new messages') : null), on: S.tab === k, run: () => openBarItem(k) }))] : []),
       { head: 'Tools' },
       { label: h('span', { class: 'tool-item' }, '🏢 Company HQ', HQ.data && amAdmin() && HQ.data.entries.some((x) => x.status === 'suggested') ? h('small', {}, 'suggestions to review') : null), on: toolOpen === 'hq', run: () => openTool('hq') },
@@ -15472,7 +15762,7 @@
       }
       if (admin) {
         // The tools the team uses. Switched off, a tool leaves everyone's Tools menu; nothing in it is deleted.
-        const TOOL_ROWS = [['sidekick', 'Sidekick', 'Plans campaigns with you'], ['docs', 'Docs', 'Write and share pages'], ['contacts', 'Contacts', 'Your customers and leads (owners and admins)'],
+        const TOOL_ROWS = [['agents', 'Agents', 'Your team: Chief of Staff, Sales and Operations'], ['sidekick', 'Sidekick', 'Plans campaigns with you'], ['docs', 'Docs', 'Write and share pages'], ['contacts', 'Contacts', 'Your customers and leads (owners and admins)'],
           ['email', 'Email', 'Campaign email from Outlook or Gmail'], ['folders', 'Folders', 'Files in folders'], ['signs', 'Signatures', 'Send PDFs to be signed'], ['bills', 'Finance', 'Bills, money in and out, budgets'],
           ['meetings', 'Meeting notes', 'Record a call, get the notes'], ['map', 'Map', 'Pins, routes and canvassing runs'], ['vault', 'Vault', 'Codes and logins, locked on your device'], ['projects', 'Jobs & projects', 'Jobs by trade, quotes and CRM pipelines']];
         const tools = ws.tools || {};

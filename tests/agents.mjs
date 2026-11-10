@@ -1,0 +1,240 @@
+// Agents: the three specialists working through the API as the person. Reads change nothing; at execute, routine
+// changes land as real tasks, calendar time, contacts, records and docs (made "by Ada's Chief of Staff"), each
+// kept as a step with what it changed and how to undo it; emails always wait for a yes and go out only then;
+// prepare proposes everything, observe only suggests; the coordinator splits a request across specialists and
+// each hears what the others did; hand_off brings another one in; the team's rules still hold; schedules run at
+// automate; and nobody sees anyone else's agents.
+import fs from 'node:fs';
+import http from 'node:http';
+import { spawn } from 'node:child_process';
+const S = (await import('node:path')).resolve(process.argv[2]);
+const DIR = S + '/dk/agents';
+fs.rmSync(DIR, { recursive: true, force: true });
+fs.mkdirSync(DIR, { recursive: true });
+const PORT = 4721, B = `http://127.0.0.1:${PORT}`, AI_PORT = 4720;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+let fails = 0;
+const ok = (c, msg) => { console.log((c ? 'PASS ' : 'FAIL ') + msg); if (!c) fails++; };
+
+// A stand-in for Claude that follows a script per request: which tools to call on each turn, then a report.
+const asked = [];
+const text = (c) => (typeof c === 'string' ? c : (c || []).map((b) => b.text || (b.type === 'tool_result' ? b.content : '')).join(' '));
+let today = '';
+const SCRIPTS = {
+  'plan my day': (n, sys, last) => [
+    [['look_at_day', {}], ['list_tasks', { which: 'overdue' }]],
+    [['create_task', { text: 'Call the blind supplier about the Smith order', due: today, priority: 1, why: 'It was overdue' }], ['schedule_time', { text: 'Finish the Jones proposal', date: today, start: '9:00am', end: '10:30am' }]],
+    'Your day: supplier call first, then the Jones proposal 9 to 10:30.',
+  ][n],
+  'new lead': (n) => [
+    [['list_projects', {}]],
+    [['save_contact', { name: 'Maria Lopez', email: 'maria@lopez.test', phone: '555-0101', company: 'Lopez Dental' }], ['create_record', { project: 'Sales', list: 'Contacts', values: { Name: 'Maria Lopez', Email: 'maria@lopez.test', Stage: 'Lead' } }]],
+    [['create_record', { project: 'Sales', list: 'Deals', values: { Name: 'Lopez Dental office blinds', Stage: 'Proposal', Value: '4200', Contact: 'maria@lopez.test', Bogus: 'x' } }], ['draft_email', { to_name: 'Maria Lopez', to_email: 'maria@lopez.test', subject: 'Your office window coverings', body: 'Hi Maria,\n\nThanks for reaching out about blinds for Lopez Dental. Could we visit Tuesday or Wednesday morning to measure?\n\nBest,\nAda' }], ['create_task', { text: 'Follow up with Maria Lopez', due: today }]],
+    'Lead recorded, reply drafted for you to send, follow-up set.',
+  ][n],
+  'prepare test': (n) => [[['create_task', { text: 'A proposed task' }], ['create_task', { text: 'Another proposed task' }]], 'Two tasks proposed.'][n],
+  'observe test': (n) => [[['look_at_day', {}], ['create_task', { text: 'Should not exist' }]], 'I would add a task.'][n],
+  'install checklist': (n) => [[['write_doc', { title: 'Smith install checklist', text: '# Before\n- [ ] Confirm measurements\n- [ ] Load 12 blinds' }]], 'Checklist written.'][n],
+  'handoff test': (n) => [[['hand_off', { agent: 'ops', ask: 'Write the install checklist for the Smith job' }]], 'Handed the checklist to Operations.'][n],
+  'customer wants a quote': (n, sys) => (sys.startsWith('You are the Client & Sales Manager')
+    ? [[['create_task', { text: 'Send the Kim quote', due: today }]], 'Quote task set.'][n]
+    : [[['create_task', { text: 'Prep the Kim estimate visit', due: today }]], 'Visit prep set.'][n]),
+  'member undo': (n) => [[['create_record', { project: 'Sales', list: 'Deals', values: { Name: 'Ben deal' } }]], 'Deal made.'][n],
+  'contacts as member': (n) => [[['find_contacts', { query: 'maria' }]], 'Couldn’t open Contacts.'][n],
+  'morning briefing': (n) => [[['look_at_day', {}]], 'Briefing: nothing urgent.'][n],
+  'follow up more': (n) => [[['create_task', { text: 'Second follow-up' }]], 'Added another.'][n],
+};
+const ai = http.createServer((req, res) => {
+  let b = ''; req.on('data', (c) => (b += c)); req.on('end', () => {
+    res.setHeader('content-type', 'application/json');
+    if (req.url.startsWith('/v1/models')) return res.end(JSON.stringify({ data: [{ id: 'claude-test', display_name: 'Test', type: 'model', created_at: '2026-01-01T00:00:00Z' }], has_more: false }));
+    const j = JSON.parse(b);
+    const sys = typeof j.system === 'string' ? j.system : JSON.stringify(j.system);
+    const msgs = j.messages;
+    const lastUser = [...msgs].reverse().find((m) => m.role === 'user' && typeof m.content === 'string');
+    asked.push({ sys, msgs: JSON.stringify(msgs), tools: (j.tools || []).map((t) => t.name) });
+    const reply = (content, stop = 'end_turn') => res.end(JSON.stringify({ id: 'm', type: 'message', role: 'assistant', model: 'claude-test', content, stop_reason: stop, stop_sequence: null, usage: { input_tokens: 1, output_tokens: 1 } }));
+    if (sys.includes('You coordinate three specialists')) {
+      const u = text(msgs[0].content).toLowerCase();
+      if (u.includes('vague')) return reply([{ type: 'text', text: JSON.stringify({ question: 'Which customer do you mean?', parts: [] }) }]);
+      return reply([{ type: 'text', text: JSON.stringify({ summary: 'Sales records it, Operations preps the visit', parts: [{ agent: 'sales', ask: 'Customer wants a quote: set the quote task' }, { agent: 'ops', ask: 'Customer wants a quote: prep the visit' }], question: null }) }]);
+    }
+    const key = Object.keys(SCRIPTS).find((k) => text(lastUser?.content).toLowerCase().includes(k));
+    // Turns since the last plain user message.
+    const n = msgs.length - 1 - msgs.lastIndexOf(lastUser);
+    const step = key ? SCRIPTS[key](Math.floor(n / 2), sys) : 'Done.';
+    if (typeof step === 'string' || !step) return reply([{ type: 'text', text: step || 'Done.' }]);
+    reply([{ type: 'text', text: 'Working on it.' }, ...step.map(([name, input], i) => ({ type: 'tool_use', id: `tu_${n}_${i}`, name, input }))], 'tool_use');
+  });
+});
+await new Promise((r) => ai.listen(AI_PORT, '127.0.0.1', r));
+const srv = spawn('node', ['index.js'], { cwd: new URL('../server', import.meta.url).pathname, env: { ...process.env, PORT: String(PORT), DATA_DIR: DIR, MAIL_OUTBOX: '1', DATABASE_URL: '', AGENT_TICK_MS: '500', ANTHROPIC_BASE_URL: `http://127.0.0.1:${AI_PORT}` }, stdio: ['ignore', 'pipe', 'pipe'] });
+srv.log = ''; srv.stdout.on('data', (d) => (srv.log += d)); srv.stderr.on('data', (d) => (srv.log += d));
+for (let i = 0; i < 100; i++) { try { if ((await fetch(B + '/api/health')).ok) break; } catch {} await sleep(150); }
+const call = (tok) => async (m, p, body) => {
+  const r = await fetch(B + '/api' + p, { method: m, headers: { 'content-type': 'application/json', ...(tok ? { authorization: 'Bearer ' + tok } : {}) }, body: body ? JSON.stringify(body) : undefined });
+  return { status: r.status, body: await r.json().catch(() => null) };
+};
+const t = Date.now();
+try {
+  let r = await call()('POST', '/auth', { mode: 'create', workspace: 'Premier ' + t, name: 'Ada', email: `ada${t}@t.test`, password: 'longenough1', device: 'Mac', deviceId: 'd1' });
+  const ada = call(r.body.token);
+  const code = (await ada('GET', '/state')).body.workspace.inviteCode;
+  const ben = call((await call()('POST', '/auth', { mode: 'join', workspace: 'Premier ' + t, code, name: 'Ben', email: `ben${t}@t.test`, password: 'longenough2', device: 'Mac', deviceId: 'd2' })).body.token);
+  await ada('PUT', '/ai/keys/anthropic', { key: 'sk-ant-test-key-1234567890' });
+  await ben('PUT', '/ai/keys/anthropic', { key: 'sk-ant-test-key-0987654321' });
+  await ada('PATCH', '/workspace', { tools: { projects: true } });
+  const st = (await ada('GET', '/state')).body;
+  today = new Date().toLocaleDateString('en-CA'); // the team's clock is this machine's when no time zone is sent
+  const wait = async (tok, id) => { for (let i = 0; i < 80; i++) { const x = (await tok('GET', '/agents/runs/' + id)).body; if (x && !['requested', 'planning', 'running'].includes(x.status)) return x; await sleep(100); } return (await tok('GET', '/agents/runs/' + id)).body; };
+  const steps = (x) => x.parts.flatMap((p) => p.steps);
+
+  r = await ada('GET', '/agents');
+  ok(r.status === 200 && Object.keys(r.body.agents).join() === 'chief,sales,ops' && r.body.agents.chief.level === 'execute', 'three agents, each at execute (balanced) to start');
+  ok(r.body.agents.sales.tools.find((x) => x.key === 'draft_email').important && !r.body.agents.chief.tools.some((x) => x.key === 'draft_email'), 'each has its own tools; emailing is marked important');
+  ok((await ada('GET', '/state')).body.workspace.tools?.agents !== false, 'Agents are on for the team');
+
+  // ----- Chief of Staff, at execute: Plan my day -----
+  await ada('POST', '/tasks', { text: 'Old overdue thing', due: '2020-01-01' });
+  r = await ada('POST', '/agents/runs', { agent: 'chief', workflow: 'plan_day' });
+  let x = await wait(ada, r.body.id);
+  ok(x.status === 'completed' && x.title === 'Plan my day' && /supplier call first/.test(x.parts[0].report), 'Plan my day: the Chief of Staff finishes with a report');
+  const sc = asked.find((q) => q.sys.includes('You are the Chief of Staff'));
+  ok(sc.sys.includes('Ada') && sc.sys.includes('Ben') && sc.tools.includes('schedule_time') && !sc.tools.includes('draft_email') && sc.tools.includes('hand_off'), 'it hears who it works for and the team, with only its own tools (and hand_off)');
+  ok(asked.some((q) => q.msgs.includes('Old overdue thing')), 'it reads the overdue task through the person’s own view');
+  const s1 = steps(x);
+  ok(s1.filter((s) => s.kind === 'read').length === 2 && s1.find((s) => s.tool === 'create_task').status === 'done' && s1.find((s) => s.tool === 'schedule_time').status === 'done', 'two reads, then the task and the time block are done');
+  let state = (await ada('GET', '/state')).body;
+  const madeTask = state.tasks.find((y) => y.text === 'Call the blind supplier about the Smith order');
+  const madeEntry = state.entries.find((y) => y.text === 'Finish the Jones proposal');
+  ok(madeTask && madeTask.due === today && madeTask.by === 'Ada’s Chief of Staff', 'a real task in the Day, made by “Ada’s Chief of Staff”');
+  ok(madeEntry && madeEntry.start === 540 && madeEntry.end === 630, 'and real time on the calendar, 9 to 10:30');
+  const st1 = s1.find((s) => s.tool === 'create_task');
+  ok(st1.changed[0].id === madeTask.id && st1.why === 'It was overdue' && /Call the blind supplier/.test(st1.label), 'the step says what changed and why');
+  r = await ada('POST', `/agents/runs/${x.id}/steps`, { do: 'undo', id: st1.id });
+  ok(steps(r.body).find((s) => s.id === st1.id).status === 'undone' && !(await ada('GET', '/state')).body.tasks.some((y) => y.id === madeTask.id), 'Undo takes the task away again');
+
+  // ----- Client & Sales Manager: a new lead -----
+  await ada('POST', '/projects', { template: 'crm', name: 'Sales' });
+  r = await ada('POST', '/agents/runs', { agent: 'sales', workflow: 'lead', ask: 'From: Maria Lopez <maria@lopez.test>\nWe need blinds for our dental office.' });
+  ok((await ada('POST', '/agents/runs', { agent: 'sales', workflow: 'lead' })).status === 400, 'a paste-in workflow needs something pasted');
+  x = await wait(ada, r.body.id);
+  const s2 = steps(x);
+  ok(x.status === 'awaiting', 'the lead run waits for a yes (the email)');
+  state = (await ada('GET', '/state')).body;
+  const contact = (await ada('GET', '/contacts')).body.contacts.find((c) => c.email === 'maria@lopez.test');
+  ok(contact && contact.company === 'Lopez Dental', 'the contact is saved in Contacts');
+  const recs = (await ada('GET', `/projects/${state.projects.find((p) => p.name === 'Sales').id}/records`)).body;
+  const deal = recs.find((y) => Object.values(y.values).includes('Lopez Dental office blinds'));
+  const sales = state.projects.find((p) => p.name === 'Sales');
+  const dealT = sales.types.find((y) => y.id === deal?.typeId);
+  const F = (k) => dealT.fields.find((f) => f.key === k || f.name === k);
+  ok(deal && deal.values[F('value').id] === 420000 && deal.values[F('stage').id] === F('stage').choices.find((c) => c.label === 'Proposal').id, 'a deal in the Sales project, $4,200 at Proposal (names and labels matched to Kloomie’s own)');
+  const crmContact = recs.find((y) => Object.values(y.values).includes('Maria Lopez'));
+  ok(crmContact && deal.values[F('contact').id]?.[0] === crmContact.id && deal.values[dealT.primary] === 'Lopez Dental office blinds', 'its name in the Deal field, and linked to Maria’s contact record (found by her email)');
+  const em = s2.find((s) => s.tool === 'draft_email');
+  ok(em.status === 'proposed' && !fs.existsSync(DIR + '/outbox') || (em.status === 'proposed' && !fs.readdirSync(DIR + '/outbox').some((f) => fs.readFileSync(DIR + '/outbox/' + f, 'utf8').includes('maria@lopez.test'))), 'the reply is a draft: nothing has been emailed');
+  ok(s2.find((s) => s.tool === 'create_task' && s.status === 'done'), 'the follow-up task is made');
+  // Edit the draft, then send it.
+  r = await ada('POST', `/agents/runs/${x.id}/steps`, { do: 'approve', id: em.id, args: { body: 'Hi Maria,\n\nTuesday at 9 works for us to measure.\n\nAda' } });
+  const em2 = steps(r.body).find((s) => s.id === em.id);
+  ok(em2.status === 'done' && r.body.status === 'completed', 'approving sends it, and the assignment is complete');
+  const sent = fs.readdirSync(DIR + '/outbox').map((f) => fs.readFileSync(DIR + '/outbox/' + f, 'utf8')).find((f) => f.includes('maria@lopez.test'));
+  ok(sent && sent.includes('Tuesday at 9') && !sent.includes('Wednesday morning'), 'with the person’s edits');
+
+  // ----- Prepare: everything waits; approve one, skip one -----
+  await ada('PATCH', '/agents/chief', { level: 'prepare' });
+  r = await ada('POST', '/agents/runs', { agent: 'chief', ask: 'prepare test' });
+  x = await wait(ada, r.body.id);
+  const [p1, p2] = steps(x);
+  ok(x.status === 'awaiting' && p1.status === 'proposed' && p2.status === 'proposed' && !(await ada('GET', '/state')).body.tasks.some((y) => y.text === 'A proposed task'), 'at prepare, changes are proposed and nothing is made');
+  r = await ada('POST', `/agents/runs/${x.id}/steps`, { do: 'approve', id: p1.id });
+  await ada('POST', `/agents/runs/${x.id}/steps`, { do: 'skip', id: p2.id });
+  x = (await ada('GET', '/agents/runs/' + x.id)).body;
+  state = (await ada('GET', '/state')).body;
+  ok(state.tasks.some((y) => y.text === 'A proposed task') && !state.tasks.some((y) => y.text === 'Another proposed task') && x.status === 'completed', 'approve makes it, skip doesn’t, and then it’s complete');
+
+  // ----- Observe: suggestions only -----
+  await ada('PATCH', '/agents/chief', { level: 'observe' });
+  r = await ada('POST', '/agents/runs', { agent: 'chief', ask: 'observe test' });
+  x = await wait(ada, r.body.id);
+  ok(steps(x).find((s) => s.tool === 'create_task').status === 'suggested' && !(await ada('GET', '/state')).body.tasks.some((y) => y.text === 'Should not exist'), 'at observe, a change is only a suggestion');
+  ok(asked.at(-1).sys.includes('only look and report'), 'and it’s told so');
+  await ada('PATCH', '/agents/chief', { level: 'execute' });
+
+  // ----- Hand-off: the Chief of Staff brings in Operations -----
+  r = await ada('POST', '/agents/runs', { agent: 'chief', ask: 'handoff test' });
+  x = await wait(ada, r.body.id);
+  ok(x.parts.length === 2 && x.parts[1].agent === 'ops' && x.parts[1].from === 'chief' && x.parts[1].status === 'completed', 'hand_off adds an Operations part, which runs next');
+  ok((await ada('GET', '/state')).body.items.some((y) => y.title === 'Smith install checklist'), 'and Operations writes the checklist doc');
+  ok(asked.some((q) => q.sys.includes('Operations Manager') && q.msgs.includes('What the Chief of Staff did')), 'Operations hears what the Chief of Staff did');
+
+  // ----- The coordinator: one request, two specialists -----
+  r = await ada('POST', '/agents/runs', { agent: 'team', ask: 'New customer Kim: the customer wants a quote and a visit next week' });
+  x = await wait(ada, r.body.id);
+  ok(x.plan === 'Sales records it, Operations preps the visit' && x.parts.map((p) => p.agent).join() === 'sales,ops' && x.status === 'completed', 'Ask your team: the coordinator splits it between Sales and Operations, in order');
+  state = (await ada('GET', '/state')).body;
+  ok(state.tasks.some((y) => y.text === 'Send the Kim quote' && y.by === 'Ada’s Client & Sales Manager') && state.tasks.some((y) => y.text === 'Prep the Kim estimate visit' && y.by === 'Ada’s Operations Manager'), 'each specialist’s work lands under its own name');
+  ok(asked.some((q) => q.sys.includes('Operations Manager') && q.msgs.includes('Send the Kim quote')), 'Operations hears what Sales did');
+  r = await ada('POST', '/agents/runs', { agent: 'team', ask: 'something vague' });
+  x = await wait(ada, r.body.id);
+  ok(x.status === 'blocked' && x.question === 'Which customer do you mean?', 'when it can’t tell, the coordinator asks first');
+
+  // ----- Replying carries on the same assignment -----
+  const done1 = (await ada('GET', '/agents')).body.runs.find((y) => y.title === 'Plan my day');
+  r = await ada('POST', `/agents/runs/${done1.id}/reply`, { text: 'follow up more on that' });
+  x = await wait(ada, done1.id);
+  ok(x.parts.length === 2 && x.parts[1].reply && steps(x).some((s) => s.label.includes('Second follow-up')), 'a reply runs again in the same assignment');
+  ok(asked.at(-1).msgs.includes('supplier call first'), 'remembering what it said before');
+
+  // ----- The team's own rules still apply: Ben's undo of a deal needs Ada's OK -----
+  await ada('PUT', '/rules', { deleteRecord: { level: 'approval' } });
+  r = await ben('POST', '/agents/runs', { agent: 'sales', ask: 'member undo' });
+  x = await wait(ben, r.body.id);
+  const bd = steps(x).find((s) => s.tool === 'create_record');
+  ok(bd.status === 'done', 'Ben’s Sales Manager makes a deal');
+  r = await ben('POST', `/agents/runs/${x.id}/steps`, { do: 'undo', id: bd.id });
+  ok(steps(r.body).find((s) => s.id === bd.id).status === 'done' && /OK/.test(steps(r.body).find((s) => s.id === bd.id).error), 'undoing it (a delete) waits for an owner’s OK under the team’s rules');
+  r = await ben('POST', '/agents/runs', { agent: 'sales', ask: 'contacts as member' });
+  x = await wait(ben, r.body.id);
+  ok(steps(x)[0].status === 'failed' && /owners and admins/.test(steps(x)[0].error), 'Ben’s agent can’t open Contacts, because Ben can’t');
+
+  // ----- Nobody sees anyone else's agents -----
+  ok((await ben('GET', '/agents/runs/' + done1.id)).status === 404 && !(await ben('GET', '/agents')).body.runs.some((y) => y.id === done1.id), 'Ben can’t see Ada’s assignments');
+
+  // ----- Settings and schedules -----
+  ok((await ada('PATCH', '/agents/sales', { level: 'boss' })).status === 400, 'an unknown level is refused');
+  r = await ada('PATCH', '/agents/sales', { instructions: 'Always offer a free measure.' });
+  ok(r.body.instructions === 'Always offer a free measure.', 'standing instructions are kept');
+  r = await ada('POST', '/agents/runs', { agent: 'sales', ask: 'contacts as member' });
+  await wait(ada, r.body.id);
+  ok(asked.at(-1).sys.includes('Always offer a free measure.'), 'and the agent hears them');
+  const now = new Date();
+  const nowMin = now.getHours() * 60 + now.getMinutes();
+  r = await ada('PATCH', '/agents/chief', { level: 'automate', schedules: [{ workflow: 'briefing', days: [0, 1, 2, 3, 4, 5, 6], at: nowMin }, { workflow: 'inbox', days: [1], at: 60 }, { workflow: 'nope', days: [1], at: 60 }] });
+  ok(r.body.schedules.length === 1 && r.body.schedules[0].workflow === 'briefing', 'schedules keep only workflows that can run alone');
+  let sched = null;
+  for (let i = 0; i < 40 && !sched; i++) { await sleep(150); sched = (await ada('GET', '/agents')).body.runs.find((y) => y.scheduled && y.title === 'Morning briefing'); }
+  ok(sched, 'at automate, the morning briefing runs on its own');
+  if (sched) sched = await wait(ada, sched.id);
+  await sleep(300);
+  ok((await ada('GET', '/state')).body.notices.some((n) => n.title.startsWith('Chief of Staff: Morning briefing')), 'and the result comes as a notification');
+  await sleep(1200);
+  ok((await ada('GET', '/agents')).body.runs.filter((y) => y.scheduled).length === 1, 'once a day, not every tick');
+  r = (await ada('GET', '/agents')).body.agents;
+  ok(r.chief.stats.done >= 3 && r.chief.stats.undone === 1 && r.chief.stats.skipped === 1 && r.chief.stats.approved === 1, 'each agent’s record: done, approved, skipped, undone');
+
+  // ----- Stop, delete, switch off -----
+  r = await ada('POST', `/agents/runs/${done1.id}/delete`);
+  ok(r.status === 200 && (await ada('GET', '/agents/runs/' + done1.id)).status === 404, 'an assignment can be deleted');
+  await ada('PATCH', '/workspace', { tools: { agents: false } });
+  ok((await ada('GET', '/agents')).status === 403, 'switched off for the team: no agents');
+} catch (e) {
+  console.log('FAIL ' + e.stack);
+  fails++;
+}
+srv.kill();
+ai.close();
+if (fails) console.log(srv.log.split('\n').slice(-25).join('\n'));
+console.log(fails ? fails + ' failed' : 'all passed');
+process.exit(fails ? 1 : 0);
