@@ -43,7 +43,7 @@ await A.ev(`(() => { document.querySelector('[data-mode=create]').click(); const
 ok(await A.until(`!document.querySelector('#app').classList.contains('hidden')`), 'Jo signed in');
 const tok = await A.ev(`JSON.parse(localStorage.getItem('column.token'))`);
 const api = async (m, p, body) => (await fetch(APP + 'api' + p, { method: m, headers: { 'content-type': 'application/json', authorization: 'Bearer ' + tok }, body: body ? JSON.stringify(body) : undefined })).json();
-await api('PATCH', '/workspace', { tools: { bills: true, projects: true, docs: true } });
+await api('PATCH', '/workspace', { tools: { bills: true, projects: true, docs: true, sidekick: true } });
 await sleep(1200);
 const tabs = () => A.ev(`[...document.querySelectorAll('#tabs button[data-tab]')].map((b) => b.textContent + (b.classList.contains('on') ? '*' : ''))`);
 const names = async () => (await tabs()).map((t) => t.replace('*', '')).join(',');
@@ -87,6 +87,8 @@ ok(await A.until(`document.querySelector('#projects').classList.contains('hidden
 await A.click('#toolsBtn');
 await sleep(200);
 ok(await A.ev(`[...document.querySelectorAll('.menu button, #menu button')].some((b) => b.textContent.startsWith('Chat'))`), 'Chat is in Tools when it is off the bar');
+ok(await A.ev(`document.querySelector('#menu').firstElementChild?.textContent.includes('Sidekick')`), 'Sidekick is the first thing in Tools, above the views');
+ok(await A.ev(`![...document.querySelectorAll('#menu button')].some((b) => b.textContent.includes('Change your tabs'))`), 'and Tools no longer has Change your tabs (the pencil and Settings do that)');
 await A.ev(`[...document.querySelectorAll('.menu button, #menu button')].find((b) => b.textContent.startsWith('Chat')).click()`);
 ok(await A.until(`!document.querySelector('#chat').classList.contains('hidden')`), 'and opens from there');
 

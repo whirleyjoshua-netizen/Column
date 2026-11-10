@@ -8095,10 +8095,11 @@
     const tight = budgetAlerts().length;
     const offBar = ['column', 'chat', 'camps'].filter((k) => !onBar(k));
     openMenu(e.currentTarget, [
+      // Sidekick always comes first, above everything else.
+      toolOn('sidekick') ? { label: h('span', { class: 'tool-item' }, '✦ Sidekick', skNudges().length ? h('small', {}, `${skNudges().length} need${skNudges().length === 1 ? 's' : ''} a look`) : null), on: toolOpen === 'sidekick', run: () => { SK.open = null; openTool('sidekick'); } } : null,
       ...(offBar.length ? [{ head: 'Views' }, ...offBar.map((k) => ({ label: h('span', { class: 'tool-item' }, BAR_ITEMS[k].label, k === 'chat' && $('#tabs [data-tab="home"]')?.classList.contains('dot') ? h('small', {}, 'new messages') : null), on: S.tab === k, run: () => openBarItem(k) }))] : []),
       { head: 'Tools' },
       { label: h('span', { class: 'tool-item' }, '🏢 Company HQ', HQ.data && amAdmin() && HQ.data.entries.some((x) => x.status === 'suggested') ? h('small', {}, 'suggestions to review') : null), on: toolOpen === 'hq', run: () => openTool('hq') },
-      toolOn('sidekick') ? { label: h('span', { class: 'tool-item' }, '✦ Sidekick', skNudges().length ? h('small', {}, `${skNudges().length} need${skNudges().length === 1 ? 's' : ''} a look`) : null), on: toolOpen === 'sidekick', run: () => { SK.open = null; openTool('sidekick'); } } : null,
       toolOn('docs') ? { label: 'Docs', on: toolOpen === 'docs', run: () => openTool('docs') } : null,
       toolOn('projects') ? { label: 'Jobs & projects', run: showProjects } : null,
       toolOn('bills') ? { label: h('span', { class: 'tool-item' }, 'Finance', soon || tight ? h('small', {}, [soon ? `${soon} due soon` : '', tight ? `${tight} budget${tight === 1 ? '' : 's'} nearly used` : ''].filter(Boolean).join(' · ')) : null), on: toolOpen === 'bills', run: () => openTool('bills') } : null,
@@ -8109,7 +8110,6 @@
       toolOn('map') ? { label: h('span', { class: 'tool-item' }, 'Map', MP.run ? h('small', {}, MP.run && tripById(MP.run.id)?.kind === 'drive' ? 'tracking mileage' : 'canvassing run going') : null), on: toolOpen === 'map', run: () => openMap() } : null,
       toolOn('signs') ? { label: h('span', { class: 'tool-item' }, 'Signatures', SG.list.some((x) => x.status === 'sent' || x.status === 'viewed') ? h('small', {}, `${SG.list.filter((x) => x.status === 'sent' || x.status === 'viewed').length} waiting`) : null), on: toolOpen === 'signs', run: () => { SG.filter = null; openTool('signs'); } } : null,
       toolOn('vault') ? { label: h('span', { class: 'tool-item' }, 'Vault', VK.key ? h('small', {}, 'unlocked') : null), on: toolOpen === 'vault', run: () => { VK.filter = null; openTool('vault'); } } : null,
-      { label: 'Change your tabs…', run: barSheet },
     ].filter(Boolean));
   });
   function openTool(name) {
