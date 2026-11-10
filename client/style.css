@@ -2253,3 +2253,4 @@ button.hq-entry:hover { background: var(--card-hover); }
 .rl-item { display: block; text-align: left; margin: 2px 0; }
 .rl-item small { color: var(--muted); }
 @media (prefers-color-scheme: light) { .rl-yes { color: #15803d; } .rl-no { color: #b45309; } }
+.ml-fin { display: block; margin-top: 6px; color: var(--muted); font-size: 11.5px; }

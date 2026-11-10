@@ -3420,6 +3420,29 @@ async function custMsgTick() {
 }
 setInterval(() => custMsgTick().catch((e) => alarm('Customer messages failed', e)), CM_TICK).unref?.();
 
+// ---------- mileage in Finance ----------
+// Each trip is also a business expense ("Mileage") under the person who drove, at the rate when it was logged, so
+// changing the rate doesn't rewrite past months. Editing the trip updates it; deleting the trip removes it.
+const MILE_PER = { mi: 1609.344, km: 1000 };
+const mileCents = (ws, x) => Math.round((x.meters / MILE_PER[x.unit || ws.settings.mileUnit || 'mi']) * (x.rate ?? ws.settings.mileRate ?? 70));
+const mileMoneyOn = (ws) => ws.settings.mileFinance !== false && toolsOf(ws).bills;
+function syncMileMoney(ws, x) {
+  const old = x.moneyId && db.money[x.moneyId];
+  const amount = mileCents(ws, x);
+  if (!mileMoneyOn(ws) || amount <= 0) {
+    if (old) dropMoney(old);
+    x.moneyId = null;
+    return;
+  }
+  const unit = x.unit || ws.settings.mileUnit || 'mi';
+  const what = x.purpose || [x.from, x.to].filter(Boolean).join(' → ') || 'A trip';
+  const y = old || { id: rid(), wsId: ws.id, createdAt: Date.now(), kind: 'out', scope: 'business', category: 'Mileage', campaignId: null, goalId: null, billId: null, mileageId: x.id };
+  Object.assign(y, { memberId: x.memberId, by: x.by, amount, day: x.date, note: cleanText(`${what} · ${(x.meters / MILE_PER[unit]).toFixed(1)} ${unit}`, 200) });
+  db.money[y.id] = y;
+  x.moneyId = y.id;
+  moneyNews(y);
+}
+
 // ---------- finance: money in and out, budgets, and money goals on campaigns ----------
 // Entries are seen like bills: personal ones by their owner only, business ones by the team's owners too.
 // Tagging one to a campaign counts it as that campaign's cost (out) or earnings (in); tagging it to a money
@@ -6201,6 +6224,7 @@ async function api(req, res, url) {
       zones: Object.values(db.zones).filter(mine).sort((p, q) => q.createdAt - p.createdAt).slice(0, 5000).map(publicZone),
     });
   }
+  // (Mileage in Finance: see syncMileMoney.)
   // Mileage: each person's business driving, logged by tracking it live, from a day's job route, worked out from
   // addresses, or typed in. People see their own; owners and admins see everyone's (and can log for someone).
   if (a === 'mileage') {
@@ -6225,13 +6249,13 @@ async function api(req, res, url) {
       if (q.get('csv')) {
         const cell = (v) => { const t = String(v ?? ''); return /[",\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t; };
         const rows = [['Date', 'Person', 'From', 'To', 'Purpose', unit === 'km' ? 'Kilometres' : 'Miles', 'Round trip', 'How', `Amount at ${(rate / 100).toFixed(2)}/${unit}`],
-          ...list.map((x) => [x.date, memberIn(ws.id, x.memberId)?.name || x.by, x.from, x.to, x.purpose, (x.meters / per).toFixed(1), x.roundTrip ? 'yes' : '', { gps: 'Tracked', route: 'Job route', calc: 'Map distance', manual: 'Typed in' }[x.how] || x.how, ((x.meters / per) * rate / 100).toFixed(2)])];
+          ...list.map((x) => [x.date, memberIn(ws.id, x.memberId)?.name || x.by, x.from, x.to, x.purpose, (x.meters / per).toFixed(1), x.roundTrip ? 'yes' : '', { gps: 'Tracked', route: 'Job route', calc: 'Map distance', manual: 'Typed in' }[x.how] || x.how, (mileCents(ws, x) / 100).toFixed(2)])];
         const total = list.reduce((n, x) => n + x.meters, 0) / per;
-        rows.push(['Total', '', '', '', '', total.toFixed(1), '', '', (total * rate / 100).toFixed(2)]);
+        rows.push(['Total', '', '', '', '', total.toFixed(1), '', '', (list.reduce((n, x) => n + mileCents(ws, x), 0) / 100).toFixed(2)]);
         res.writeHead(200, { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': `attachment; filename="mileage ${from === '0000-01-01' ? 'all' : from} to ${to === '9999-12-31' ? 'now' : to}.csv"`, 'Cache-Control': 'no-store' });
         return res.end('\ufeff' + rows.map((r) => r.map(cell).join(',')).join('\n'));
       }
-      return send(res, 200, { list, rate, unit, maps: routesOn() });
+      return send(res, 200, { list, rate, unit, maps: routesOn(), finance: mileMoneyOn(ws) });
     }
     const clean = (x, body) => {
       if (body.date !== undefined) { if (!isDay(body.date)) throw badRequest('Pick a day.'); x.date = body.date; }
@@ -6253,9 +6277,10 @@ async function api(req, res, url) {
       const body = await readJson(req);
       const memberId = admin && body.memberId && memberIn(ws.id, body.memberId) ? body.memberId : auth.memberId;
       if (Object.values(db.mileage).filter((x) => x.wsId === ws.id && x.memberId === memberId).length >= 20000) return send(res, 400, { error: 'That’s a lot of trips. Delete some old ones first.' });
-      const x = clean({ id: rid(), wsId: ws.id, memberId, by: memberIn(ws.id, memberId).name, date: dayIn(tzOf(ws)), from: '', to: '', purpose: '', meters: 0, roundTrip: false, how: 'manual', tripId: null, routeDate: null, createdAt: Date.now() }, body);
+      const x = clean({ id: rid(), wsId: ws.id, memberId, by: memberIn(ws.id, memberId).name, date: dayIn(tzOf(ws)), from: '', to: '', purpose: '', meters: 0, roundTrip: false, how: 'manual', tripId: null, routeDate: null, rate: ws.settings.mileRate ?? 70, unit: ws.settings.mileUnit || 'mi', moneyId: null, createdAt: Date.now() }, body);
       if (!x.meters) return send(res, 400, { error: 'Enter how far you drove.' });
       db.mileage[x.id] = x;
+      syncMileMoney(ws, x);
       save();
       return send(res, 200, x);
     }
@@ -6263,10 +6288,13 @@ async function api(req, res, url) {
     if (!x || x.wsId !== ws.id || !mayAct(x)) return send(res, 404, { error: 'That trip isn’t here.' });
     if (m === 'PATCH') {
       clean(x, await readJson(req));
+      if (x.memberId) x.by = memberIn(ws.id, x.memberId)?.name || x.by;
+      syncMileMoney(ws, x);
       save();
       return send(res, 200, x);
     }
     if (m === 'DELETE') {
+      if (db.money[x.moneyId]) dropMoney(db.money[x.moneyId]);
       delete db.mileage[x.id];
       save();
       return send(res, 200, { ok: true });
@@ -7336,7 +7364,10 @@ async function api(req, res, url) {
     if (body.tools && typeof body.tools === 'object') {
       const next = toolsOf(ws);
       for (const k of TOOL_KEYS) if (body.tools[k] !== undefined) next[k] = !!body.tools[k];
+      const finWas = mileMoneyOn(ws);
       ws.settings.tools = next;
+      // Finance switched on or off: mileage trips gain or lose their expenses with it.
+      if (finWas !== mileMoneyOn(ws)) for (const x of Object.values(db.mileage)) if (x.wsId === ws.id) syncMileMoney(ws, x);
     }
     if (body.expireHours !== undefined) ws.settings.expireHours = Math.max(0, Number(body.expireHours) || 0);
     if (body.visibility !== undefined) ws.settings.visibility = body.visibility === 'own' ? 'own' : 'all';
@@ -7349,6 +7380,12 @@ async function api(req, res, url) {
       if (!isAdmin(auth)) return send(res, 403, { error: 'Only team owners and admins can change the mileage rate.' });
       if (body.mileRate !== undefined) ws.settings.mileRate = Math.max(0, Math.min(1000, Math.round(Number(body.mileRate) || 0)));
       if (body.mileUnit !== undefined) ws.settings.mileUnit = body.mileUnit === 'km' ? 'km' : 'mi';
+    }
+    // Whether trips also go in Finance as business expenses. Turning it on adds the trips logged while it was off.
+    if (body.mileFinance !== undefined) {
+      if (!isAdmin(auth)) return send(res, 403, { error: 'Only team owners and admins can change this.' });
+      ws.settings.mileFinance = !!body.mileFinance;
+      for (const x of Object.values(db.mileage)) if (x.wsId === ws.id) syncMileMoney(ws, x);
     }
     // Where the day's routes start and end: the shop, the yard, the office.
     if (body.base !== undefined) {
@@ -8113,6 +8150,16 @@ const STANDUP = standupModule({ db, save, broadcast, rid, cleanText, readJson, s
 RULES = rulesModule({ db, save, broadcast, rid, cleanText, readJson, send, notify, replay: replayAs });
 HQ = hqModule({ db, save, broadcast, rid, cleanText, readJson, send, isAdmin, aiAsk, aiRun, itemFiles, replyJson, enforced: (ws) => RULES.promptLines(ws), writePlaybook, allowLocal: process.env.ALLOW_LOCAL_FETCH === '1' });
 for (const ws of Object.values(db.workspaces)) if (HQ.migrate(ws)) save();
+// Trips logged before mileage went into Finance: keep the rate they were logged at, and add their expense.
+for (const x of Object.values(db.mileage)) {
+  const ws = db.workspaces[x.wsId];
+  if (!ws || x.moneyId !== undefined) continue;
+  x.rate ??= ws.settings.mileRate ?? 70;
+  x.unit ??= ws.settings.mileUnit || 'mi';
+  x.moneyId = null;
+  syncMileMoney(ws, x);
+  save();
+}
 
 const INV = invoicesModule({ db, save, broadcast, rid, hold, cleanText, readJson, send, badRequest, escHtml, brandOf, logoUrl, teamDay, offline, seal, unseal, stripeCall: stripe.callWith, PJ, isAdmin, jobOfRecord, jobLabel, moveJob, publicUrl: PUBLIC_URL, emit: (...a) => { PJ.emit(...a); QB.soon(a[0]); },
   // A payment is money in on the business's Finance, under the team's owner.

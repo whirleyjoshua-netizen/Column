@@ -86,15 +86,40 @@ r = await jo('POST', '/mileage', { memberId: samId, purpose: 'Logged for Sam', m
 ok(r.body.memberId === samId, 'an owner can log a trip for someone');
 await jo('DELETE', '/mileage/' + r.body.id);
 
+// ---- each trip is also a business expense in Finance ----
+const fin = async (who) => (await who('GET', '/state')).body.money.filter((x) => x.category === 'Mileage');
+ok((await fin(sam)).length === 0, 'with Finance switched off for the team, trips stay out of it');
+await jo('PATCH', '/workspace', { tools: { bills: true } });
+let mine = await fin(sam);
+ok(mine.length === 1 && mine[0].amount === Math.round(10000 / MI * 70) && mine[0].kind === 'out' && mine[0].scope === 'business' && mine[0].day === today && mine[0].note === 'Quote at the Smith job · 6.2 mi', 'switching Finance on puts Sam’s trip in it: ' + JSON.stringify(mine[0] && { amount: mine[0].amount, note: mine[0].note }));
+ok((await fin(jo)).some((x) => x.id === mine[0].id), 'the owner sees it too (business money)');
+await sam('PATCH', '/mileage/' + s1.id, { meters: 20000 });
+mine = await fin(sam);
+ok(mine.length === 1 && mine[0].amount === Math.round(20000 / MI * 70) && mine[0].note.endsWith('12.4 mi'), 'changing the trip changes the expense');
+await sam('PATCH', '/mileage/' + s1.id, { meters: 10000 });
+const tmp = (await sam('POST', '/mileage', { purpose: 'Throwaway', meters: 5000 })).body;
+ok((await fin(sam)).length === 2, 'a new trip adds one');
+await sam('DELETE', '/mileage/' + tmp.id);
+ok((await fin(sam)).length === 1, 'deleting the trip takes it out of Finance');
+ok((await sam('PATCH', '/workspace', { mileFinance: false })).status === 403, 'only owners and admins switch it off');
+await jo('PATCH', '/workspace', { mileFinance: false });
+ok((await fin(sam)).length === 0 && (await fin(jo)).length === 0, 'switched off, the expenses go');
+await jo('PATCH', '/workspace', { mileFinance: true });
+ok((await fin(sam)).length === 1 && (await fin(jo)).length === 2, 'switched back on, every trip is back (Jo’s January bank run too)');
+
 // ---- the rate and the CSV ----
 ok((await sam('PATCH', '/workspace', { mileRate: 100 })).status === 403, 'only owners and admins set the rate');
 r = await jo('PATCH', '/workspace', { mileRate: 72.5, mileUnit: 'mi' });
 ok(r.body.settings.mileRate === 73 && r.body.settings.mileUnit === 'mi', 'Jo sets it (in cents)');
+ok((await fin(sam))[0].amount === Math.round(10000 / MI * 70), 'a new rate doesn’t change trips already logged');
+const at73 = (await sam('POST', '/mileage', { purpose: 'After the change', meters: 10000 })).body;
+ok((await fin(sam)).find((x) => x.mileageId === at73.id || x.note.startsWith('After the change'))?.amount === Math.round(10000 / MI * 73), 'trips after it use the new rate');
+await sam('DELETE', '/mileage/' + at73.id);
 r = await jo('GET', '/mileage?csv=1');
 ok(/text\/csv/.test(r.type) && r.text.includes('Quote at the Smith job') && r.text.includes('Map distance') && r.text.includes('Amount at 0.73/mi'), 'the CSV has each trip, how it was logged and the amount');
 const lastLine = r.text.trim().split('\n').pop();
 const miles = 10000 / MI + 3;
-ok(lastLine.startsWith('Total') && lastLine.includes(miles.toFixed(1)) && lastLine.includes((miles * 0.73).toFixed(2)), 'with a total line: ' + lastLine);
+ok(lastLine.startsWith('Total') && lastLine.includes(miles.toFixed(1)) && lastLine.includes(((Math.round(10000 / MI * 70) + Math.round(3 * 70)) / 100).toFixed(2)), 'with a total line, each trip at its own rate: ' + lastLine);
 ok((await call()('GET', '/mileage?csv=1')).status === 401, 'nobody signed out gets it');
 
 // ---- a drive tracked on the map ----

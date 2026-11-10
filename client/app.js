@@ -12114,8 +12114,10 @@
   // ----- Mileage: business driving, for reimbursing people or claiming it at tax time -----
   // Four ways in: track a drive live (GPS), log a day's job route (its road miles), work it out from addresses
   // (road distance), or type it. People see their own; owners and admins see everyone's.
-  const ML = { list: null, rate: 70, unit: 'mi', maps: false, period: 'month', member: '', loading: null, show: null };
+  const ML = { list: null, rate: 70, unit: 'mi', maps: false, finance: false, period: 'month', member: '', loading: null, show: null };
   const mlPer = () => (ML.unit === 'km' ? 1000 : 1609.344);
+  // What a trip comes to, at the rate it was logged at (a new rate doesn't change past trips).
+  const mlCents = (x) => Math.round((x.meters / (x.unit === 'km' ? 1000 : x.unit === 'mi' ? 1609.344 : mlPer())) * (x.rate ?? ML.rate));
   const fmtMiles = (m) => `${(m / mlPer()).toFixed(1)} ${ML.unit}`;
   const fmtMoney2 = (cents) => '$' + (cents / 100).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   function mlRange() {
@@ -12128,7 +12130,7 @@
   function loadMiles() {
     const [from, to] = mlRange();
     const q = `/mileage?from=${from}&to=${to}${ML.member ? '&member=' + ML.member : ''}`;
-    ML.loading = api('GET', q).then((x) => { Object.assign(ML, { list: x.list, rate: x.rate, unit: x.unit, maps: x.maps }); }).catch((e) => { ML.list = []; toast(e.message); }).finally(() => { ML.loading = null; if (MP.mode === 'miles') renderTool(true); });
+    ML.loading = api('GET', q).then((x) => { Object.assign(ML, { list: x.list, rate: x.rate, unit: x.unit, maps: x.maps, finance: x.finance }); }).catch((e) => { ML.list = []; toast(e.message); }).finally(() => { ML.loading = null; if (MP.mode === 'miles') renderTool(true); });
     return ML.loading;
   }
   const HOW = { gps: '📍 Tracked', route: '🛣 Job route', calc: '📐 Map distance', manual: '✎ Typed in' };
@@ -12142,7 +12144,7 @@
     MP.stats = h('span', { class: 'map-stats' });
     const list = ML.list || [];
     const total = list.reduce((n, x) => n + x.meters, 0);
-    const amount = Math.round((total / mlPer()) * ML.rate);
+    const amount = list.reduce((n, x) => n + mlCents(x), 0);
     const people = amAdmin() && !ML.member ? Object.entries(list.reduce((o, x) => ((o[x.memberId] = (o[x.memberId] || 0) + x.meters), o), {})) : [];
     const period = h('select', { 'aria-label': 'When', onchange: (e) => { ML.period = e.target.value; ML.list = null; renderTool(true); } }, [['month', 'This month'], ['last', 'Last month'], ['year', 'This year'], ['all', 'All time']].map(([k, l]) => h('option', { value: k, selected: ML.period === k }, l)));
     const who = amAdmin() ? h('select', { 'aria-label': 'Whose', onchange: (e) => { ML.member = e.target.value; ML.list = null; renderTool(true); } }, h('option', { value: '' }, 'Everyone'), (S.workspace?.members || []).map((m) => h('option', { value: m.id, selected: ML.member === m.id }, m.id === S.me.memberId ? `${m.name} (you)` : m.name))) : null;
@@ -12168,15 +12170,16 @@
       run ? box : null,
       h('div', { class: 'ml-sum' },
         h('div', { class: 'ml-top' }, period, who, h('button', { class: 'btn small', disabled: !list.length, onclick: csv }, 'Download CSV')),
-        h('div', { class: 'ml-big' }, h('b', {}, ML.list ? fmtMiles(total) : '…'), h('span', {}, ML.rate ? `${fmtMoney2(amount)} at ${fmtMoney2(ML.rate)}/${ML.unit}` : 'No rate set'), rateBtn),
-        people.length > 1 ? h('div', { class: 'ml-people' }, people.sort((a, b) => b[1] - a[1]).map(([id, m]) => h('button', { class: 'chip', onclick: () => { ML.member = id; ML.list = null; renderTool(true); } }, `${memberName(id)} ${fmtMiles(m)}`))) : null),
+        h('div', { class: 'ml-big' }, h('b', {}, ML.list ? fmtMiles(total) : '…'), h('span', {}, ML.rate || amount ? `${fmtMoney2(amount)} · rate ${fmtMoney2(ML.rate)}/${ML.unit}` : 'No rate set'), rateBtn),
+        ML.finance ? h('small', { class: 'ml-fin' }, 'Each trip is also in Finance as a business expense (Mileage).') : null),
+        people.length > 1 ? h('div', { class: 'ml-people' }, people.sort((a, b) => b[1] - a[1]).map(([id, m]) => h('button', { class: 'chip', onclick: () => { ML.member = id; ML.list = null; renderTool(true); } }, `${memberName(id)} ${fmtMiles(m)}`))) : null,
       run ? null : box,
       h('section', {}, h('h3', {}, 'Trips'),
         !ML.list ? h('p', { class: 'day-hint' }, 'Loading…')
           : list.length ? list.slice(0, 200).map((x) => h('div', { class: 'bill map-row' + (ML.show === x.id ? ' on' : ''), onclick: () => mileSheet(x) },
             h('span', { class: 'bill-name' }, x.purpose || [x.from, x.to].filter(Boolean).join(' → ') || 'A trip',
               h('small', {}, [dayName(x.date), x.purpose ? [x.from, x.to].filter(Boolean).join(' → ') : '', x.roundTrip ? 'round trip' : '', HOW[x.how], amAdmin() && !ML.member && x.memberId !== S.me.memberId ? memberName(x.memberId) : ''].filter(Boolean).join(' · '))),
-            h('span', { class: 'bill-right' }, h('b', {}, fmtMiles(x.meters)), ML.rate ? h('small', {}, fmtMoney2(Math.round((x.meters / mlPer()) * ML.rate))) : null)))
+            h('span', { class: 'bill-right' }, h('b', {}, fmtMiles(x.meters)), mlCents(x) ? h('small', {}, fmtMoney2(mlCents(x))) : null)))
           : h('p', { class: 'day-hint' }, 'No trips yet. Press Track my mileage when you set off (keep Kloomie open with the screen on, since phones stop sharing location with web pages when they lock), or Add a trip to work it out from addresses or type it in. On a day with job visits, Job routes can log the whole day’s driving in one go.')),
     ];
   }
@@ -12197,8 +12200,10 @@
   function rateSheet() {
     const rate = h('input', { type: 'number', min: 0, step: '0.001', value: (ML.rate / 100).toFixed(3).replace(/0$/, '') });
     const unit = h('select', {}, [['mi', 'per mile'], ['km', 'per kilometre']].map(([k, l]) => h('option', { value: k, selected: ML.unit === k }, l)));
-    sheet('Mileage rate', [h('p', { class: 'day-hint' }, 'What the team pays people back, or claims, for each mile driven for work. Use your tax authority’s standard rate if you claim it (in the US, the IRS sets one each year).'), h('div', { class: 'row2' }, h('label', {}, 'Rate ($)', rate), h('label', {}, 'For each', unit))], async () => {
-      S.workspace = await api('PATCH', '/workspace', { mileRate: Math.round(Number(rate.value) * 100), mileUnit: unit.value });
+    const fin = h('input', { type: 'checkbox', checked: S.workspace?.settings?.mileFinance !== false });
+    sheet('Mileage rate', [h('p', { class: 'day-hint' }, 'What the team pays people back, or claims, for each mile driven for work. Use your tax authority’s standard rate if you claim it (in the US, the IRS sets one each year). A new rate counts from now on; trips already logged keep theirs.'), h('div', { class: 'row2' }, h('label', {}, 'Rate ($)', rate), h('label', {}, 'For each', unit)),
+      toolOn('bills') ? h('label', { class: 'check' }, fin, ' Put each trip in Finance as a business expense (category Mileage)') : null], async () => {
+      S.workspace = await api('PATCH', '/workspace', { mileRate: Math.round(Number(rate.value) * 100), mileUnit: unit.value, ...(toolOn('bills') ? { mileFinance: fin.checked } : {}) });
       ML.list = null;
       renderTool(true);
     });
@@ -12242,6 +12247,7 @@
       h('div', { class: 'ml-calc' }, calc, showTrip),
       note,
       h('label', {}, 'What for', purpose),
+      ML.finance ? h('p', { class: 'day-hint' }, x?.moneyId || !x ? 'Also goes in Finance as a business expense, at the mileage rate.' : '') : null,
       del ? h('div', { class: 'btns' }, del) : null,
     ], async () => {
       const meters = Math.round(Number(dist.value) * mlPer());
