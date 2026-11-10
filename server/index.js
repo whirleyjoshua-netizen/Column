@@ -5379,6 +5379,7 @@ async function api(req, res, url) {
       .map(publicItem);
     return send(res, 200, {
       workspace: publicWorkspace(ws, auth.memberId),
+      cloud: cloudPickers(),
       me: { memberId: auth.memberId, member: auth.member, device: auth.device, deviceId: auth.deviceId, ...meAccount(ws, auth.memberId) },
       notices: Object.values(db.notices).filter((n) => n.wsId === ws.id && n.memberId === auth.memberId).sort((p, q) => q.at - p.at).map(publicNotice),
       start: startList(ws, auth),
@@ -8037,8 +8038,9 @@ function serveStatic(req, res, url) {
   if (rel === '/' || !path.extname(rel)) rel = '/index.html';
   const file = path.join(CLIENT_DIR, rel);
   if (!file.startsWith(CLIENT_DIR + path.sep)) return send(res, 403, 'Forbidden');
-  // Only Kloomie's own script runs on its pages: markup that slips in from a file or message can't run code.
-  const csp = path.extname(file) === '.html' ? { 'Content-Security-Policy': "script-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'" } : {};
+  // Only Kloomie's own script runs on its pages: markup that slips in from a file or message can't run code. The
+  // file pickers of Google Drive, OneDrive and Dropbox are let in too, each only when it's set up here.
+  const csp = path.extname(file) === '.html' ? { 'Content-Security-Policy': `script-src 'self'${cloudScripts()}; object-src 'none'; base-uri 'none'; form-action 'self'` } : {};
   // Video, like the website's walkthrough, streams in pieces so it plays and scrubs on phones and Safari.
   if (/^\.(mp4|webm)$/.test(path.extname(file))) return serveFile(req, res, file, { name: path.basename(file), mime: MIME[path.extname(file)], cache: 'public, max-age=86400' });
   // Libraries in /vendor/ have their version in the folder name, so they never change.
@@ -8267,6 +8269,21 @@ const INV = invoicesModule({ db, save, broadcast, rid, hold, cleanText, readJson
 const notifyAdmins = (wsId, n) => { for (const mb of db.workspaces[wsId]?.members || []) if (isAdminId(wsId, mb.id)) notify(wsId, mb.id, n); };
 const TW = twilioModule({ db, save, broadcast, seal, unseal, readJson, send, isAdmin, rid, cleanText, publicUrl: PUBLIC_URL, contactsOf, phoneKey, noContact, newContact, contactNews, notifyAdmins,
   hook: (wsId, type, data) => hook(wsId, type, () => (type.startsWith('contact.') ? API.apiContact(data) : data), 'Text message'), alarm, offline, teamDay });
+// Files from Google Drive, OneDrive and Dropbox: the browser opens each one's own file picker, downloads what's picked
+// straight from there and uploads it into the stack like any file, so Kloomie never fetches outside addresses. These
+// are the pickers' public ids (made to be in a web page); a picker shows only when its id is set.
+function cloudPickers() {
+  const e = (k) => process.env[k] || '';
+  return {
+    dropbox: e('DROPBOX_APP_KEY') || null,
+    google: e('GOOGLE_PICKER_API_KEY') && e('GOOGLE_CLIENT_ID') ? { clientId: e('GOOGLE_CLIENT_ID'), apiKey: e('GOOGLE_PICKER_API_KEY'), appId: e('GOOGLE_PROJECT_NUMBER') || '' } : null,
+    onedrive: e('ONEDRIVE_CLIENT_ID') || null,
+  };
+}
+function cloudScripts() {
+  const c = cloudPickers();
+  return [c.dropbox ? ' https://www.dropbox.com' : '', c.google ? ' https://apis.google.com https://accounts.google.com https://www.gstatic.com' : '', c.onedrive ? ' https://js.live.net' : ''].join('');
+}
 // Two-step sign-in with an authenticator app (twostep.js).
 const TS = twoStepModule({ db, save, seal, unseal, readJson, send, appName: process.env.APP_NAME || 'Kloomie' });
 // QuickBooks Online: invoices and payments into the team's books, payments recorded there back (quickbooks.js).

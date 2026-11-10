@@ -1010,6 +1010,7 @@
     S.templates = st.templates || [];
     S.bills = st.bills || [];
     S.notices = st.notices || [];
+    S.cloud = st.cloud || {};
     drawBell();
     api('GET', '/push').then((x) => { S.pushAll = x.all; }).catch(() => {});
     S.start = st.start || null;
@@ -1448,6 +1449,9 @@
       { label: '🔒 Sealed note…', run: () => sealNote(destOf(view)) },
       toolOn('vault') ? { label: '🔐 Save to my vault…', run: () => vaultQuick({ text: ta.value, onSaved: clearBox }) } : null,
       { label: 'Upload files…', run: () => pickFiles(destOf(view)) },
+      S.cloud?.google ? { label: 'From Google Drive…', run: () => fromDrive(destOf(view)) } : null,
+      S.cloud?.onedrive ? { label: 'From OneDrive…', run: () => fromOneDrive(destOf(view)) } : null,
+      S.cloud?.dropbox ? { label: 'From Dropbox…', run: () => fromDropbox(destOf(view)) } : null,
       { label: 'New Word document', run: () => newDocSheet(destOf(view)) },
       viewStack(view) ? { label: '📥 Request files from someone…', run: () => requestSheet(viewStack(view)) } : null,
     ].filter(Boolean)) }, '+');
@@ -2596,6 +2600,73 @@
     }
     setRetrying(false);
     return api('POST', `/uploads/${id}/done`);
+  }
+
+  // ----- files from Google Drive, OneDrive and Dropbox -----
+  // Each service's own picker; the browser downloads what's picked from there and uploads it here like any file.
+  const scriptsLoaded = new Map();
+  const loadScript = (src, attrs = {}) => {
+    if (!scriptsLoaded.has(src)) scriptsLoaded.set(src, new Promise((ok, fail) => {
+      const s = document.createElement('script');
+      s.src = src;
+      for (const [k, v] of Object.entries(attrs)) s.setAttribute(k, v);
+      s.onload = ok;
+      s.onerror = () => { scriptsLoaded.delete(src); fail(new Error('Couldn’t load the file picker. Check your connection and try again.')); };
+      document.head.append(s);
+    }));
+    return scriptsLoaded.get(src);
+  };
+  async function importFrom(url, name, dest, headers = {}) {
+    const r = await fetch(url, { headers });
+    if (!r.ok) throw new Error(`Couldn’t download ${name} (${r.status}).`);
+    const blob = await r.blob();
+    return uploadFile(new File([blob], name, { type: blob.type || '' }), dest);
+  }
+  const importAll = (list, dest) => {
+    if (!list.length) return;
+    toast(list.length === 1 ? `Adding ${list[0].name}…` : `Adding ${list.length} files…`);
+    for (const f of list) queue(() => importFrom(f.url, f.name, dest, f.headers).catch((e) => toast(e.message)));
+  };
+  async function fromDropbox(dest) {
+    try {
+      await loadScript('https://www.dropbox.com/static/api/2/dropins.js', { id: 'dropboxjs', 'data-app-key': S.cloud.dropbox });
+      window.Dropbox.choose({ linkType: 'direct', multiselect: true, success: (files) => importAll(files.map((f) => ({ url: f.link, name: f.name })), dest) });
+    } catch (e) { toast(e.message); }
+  }
+  // Google Docs, Sheets and Slides come as Word, Excel and PowerPoint files.
+  const GOOGLE_EXPORT = { 'application/vnd.google-apps.document': ['application/vnd.openxmlformats-officedocument.wordprocessingml.document', '.docx'], 'application/vnd.google-apps.spreadsheet': ['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', '.xlsx'], 'application/vnd.google-apps.presentation': ['application/vnd.openxmlformats-officedocument.presentationml.presentation', '.pptx'], 'application/vnd.google-apps.drawing': ['image/png', '.png'] };
+  let driveToken = null;
+  async function fromDrive(dest) {
+    const g = S.cloud.google;
+    try {
+      await Promise.all([loadScript('https://accounts.google.com/gsi/client'), loadScript('https://apis.google.com/js/api.js')]);
+      await new Promise((ok) => window.gapi.load('picker', ok));
+      // Only the files picked are shared with Kloomie (drive.file), never the rest of the Drive.
+      if (!driveToken || driveToken.exp < Date.now()) {
+        driveToken = await new Promise((ok, fail) => window.google.accounts.oauth2.initTokenClient({ client_id: g.clientId, scope: 'https://www.googleapis.com/auth/drive.file', callback: (t) => (t.error ? fail(new Error('Google Drive access wasn’t granted.')) : ok({ token: t.access_token, exp: Date.now() + (t.expires_in - 60) * 1000 })) }).requestAccessToken());
+      }
+      const P = window.google.picker;
+      new P.PickerBuilder().addView(new P.DocsView().setIncludeFolders(true).setSelectFolderEnabled(false)).enableFeature(P.Feature.MULTISELECT_ENABLED)
+        .setOAuthToken(driveToken.token).setDeveloperKey(g.apiKey).setAppId(g.appId).setOrigin(location.origin)
+        .setCallback((data) => {
+          if (data[P.Response.ACTION] !== P.Action.PICKED) return;
+          const auth = { Authorization: 'Bearer ' + driveToken.token };
+          importAll(data[P.Response.DOCUMENTS].map((d) => {
+            const x = GOOGLE_EXPORT[d.mimeType];
+            const id = encodeURIComponent(d.id);
+            return x ? { url: `https://www.googleapis.com/drive/v3/files/${id}/export?mimeType=${encodeURIComponent(x[0])}`, name: d.name.replace(/\.[^.]*$/, '') + x[1], headers: auth }
+              : { url: `https://www.googleapis.com/drive/v3/files/${id}?alt=media`, name: d.name, headers: auth };
+          }), dest);
+        }).build().setVisible(true);
+    } catch (e) { toast(e.message); }
+  }
+  async function fromOneDrive(dest) {
+    try {
+      await loadScript('https://js.live.net/v7.2/OneDrive.js');
+      window.OneDrive.open({ clientId: S.cloud.onedrive, action: 'download', multiSelect: true, advanced: { redirectUri: location.origin + '/' },
+        success: (files) => importAll(files.value.map((f) => ({ url: f['@microsoft.graph.downloadUrl'], name: f.name })), dest),
+        error: (e) => toast(e?.message || 'OneDrive didn’t share the files.') });
+    } catch (e) { toast(e.message); }
   }
 
   // dest: { stackId, channelId }, where the upload lands.

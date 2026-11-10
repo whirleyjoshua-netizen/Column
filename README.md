@@ -72,6 +72,21 @@ Customer portal), and a webhook to `PUBLIC_URL/stripe/webhook` for `checkout.ses
 `STRIPE_WEBHOOK_SECRET` (the webhook's signing secret) and, if the price isn't $15, `SEAT_PRICE_CENTS` (what the app
 shows). `STRIPE_API` points it at a stand-in, for tests.
 
+## Files from Google Drive, OneDrive and Dropbox
+
+In a stack, **+** offers each service that's set up here. The browser opens that service's own file picker, downloads
+what's picked straight from it and uploads it like any file, so the server never fetches outside addresses. Each needs
+a public id, and the page only allows that service's picker script when its id is set:
+
+- **Dropbox:** make an app at https://www.dropbox.com/developers/apps (Scoped access, App folder or Full Dropbox; the
+  Chooser needs no permissions), add `PUBLIC_URL`'s domain under *Chooser/Saver/Embedder domains*, set `DROPBOX_APP_KEY`.
+- **Google Drive:** in the Google Cloud project, enable the *Google Picker API* and *Google Drive API*, make an API key
+  restricted to those and to `PUBLIC_URL`, add `PUBLIC_URL` as an authorized JavaScript origin on the OAuth client, and
+  add the `drive.file` scope (non-sensitive: Kloomie only sees picked files). Set `GOOGLE_PICKER_API_KEY` and
+  `GOOGLE_PROJECT_NUMBER` (uses `GOOGLE_CLIENT_ID`).
+- **OneDrive:** an Azure app registration for personal and work accounts with `PUBLIC_URL/` as a SPA redirect URI and
+  the Files.Read delegated permission; set `ONEDRIVE_CLIENT_ID`.
+
 ## QuickBooks Online
 
 An owner or admin connects their QuickBooks company in Settings → Connections → QuickBooks. Sent invoices and their
