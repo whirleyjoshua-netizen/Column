@@ -8106,7 +8106,7 @@
       toolOn('email') && mayEmail() ? { label: h('span', { class: 'tool-item' }, 'Email', (S.mail?.sends || []).some((x) => x.status === 'sending') ? h('small', {}, 'sending…') : null), on: toolOpen === 'email', run: () => openTool('email') } : null,
       toolOn('folders') ? { label: 'Folders', on: toolOpen === 'folders', run: () => openTool('folders') } : null,
       toolOn('meetings') ? { label: 'Meeting notes', on: toolOpen === 'meetings', run: () => openTool('meetings') } : null,
-      toolOn('map') ? { label: h('span', { class: 'tool-item' }, 'Map', MP.run ? h('small', {}, 'recording a run') : null), on: toolOpen === 'map', run: () => openMap() } : null,
+      toolOn('map') ? { label: h('span', { class: 'tool-item' }, 'Map', MP.run ? h('small', {}, MP.run && tripById(MP.run.id)?.kind === 'drive' ? 'tracking mileage' : 'canvassing run going') : null), on: toolOpen === 'map', run: () => openMap() } : null,
       toolOn('signs') ? { label: h('span', { class: 'tool-item' }, 'Signatures', SG.list.some((x) => x.status === 'sent' || x.status === 'viewed') ? h('small', {}, `${SG.list.filter((x) => x.status === 'sent' || x.status === 'viewed').length} waiting`) : null), on: toolOpen === 'signs', run: () => { SG.filter = null; openTool('signs'); } } : null,
       toolOn('vault') ? { label: h('span', { class: 'tool-item' }, 'Vault', VK.key ? h('small', {}, 'unlocked') : null), on: toolOpen === 'vault', run: () => { VK.filter = null; openTool('vault'); } } : null,
       { label: 'Change your tabs…', run: barSheet },
@@ -11909,7 +11909,7 @@
     if (MP.me) runPoint(MP.me);
     mapDraw();
     renderTool(true);
-    toast(drive ? 'Tracking your mileage. Keep Kloomie open with the screen on while you drive.' : hereNow() ? 'Run started. Keep Kloomie open while you go.' : 'Run started. Waiting for your location…');
+    toast(drive ? 'Tracking your mileage. Keep Kloomie open with the screen on while you drive.' : hereNow() ? 'Canvassing run started. Keep Kloomie open while you go.' : 'Canvassing run started. Waiting for your location…');
   }
   // A point every 8 m or so, once the phone knows where it is to within 35 m.
   function runPoint(me) {
@@ -11949,7 +11949,7 @@
     mapDraw();
     renderTool(true);
     if (t?.kind === 'drive') driveDone(t);
-    else if (t) toast(`Run saved: ${fmtDist(t.dist || 0)} in ${fmtLength(t.endedAt - t.startedAt)}, ${plural(MP.pins.filter((p) => p.tripId === t.id && p.kind === 'flyer').length, 'flyer')}.`);
+    else if (t) toast(`Canvassing run saved: ${fmtDist(t.dist || 0)} in ${fmtLength(t.endedAt - t.startedAt)}, ${plural(MP.pins.filter((p) => p.tripId === t.id && p.kind === 'flyer').length, 'flyer')}.`);
   }
   const runFlyers = (t) => MP.pins.filter((p) => p.tripId === t.id && p.kind === 'flyer').length;
   function runStats() {
@@ -12455,24 +12455,25 @@
     const leads = MP.pins.filter((p) => p.kind === 'lead' && inCamp(p));
     const trips = MP.trips.filter((t) => t.kind !== 'drive' && inCamp(t) && t.id !== MP.run?.id).slice(0, 30);
     const flyers = MP.pins.filter((p) => p.kind === 'flyer' && inCamp(p)).length;
-    const big = (label, cls, fn) => h('button', { class: 'map-act ' + cls, onclick: fn }, label);
+    // Quiet buttons, each with a dot in the colour its pin has on the map.
+    const act = (label, cls, fn, title) => h('button', { class: 'map-act ' + cls, title, onclick: fn }, h('i', { class: 'map-dot' }), h('span', {}, label));
     const tripMenu = (anchor, t) => openMenu(anchor, [
       { label: 'Show on the map', run: () => showTrip(t) },
       { label: 'Mark its streets done', run: () => runDone(t) },
-      { label: 'Rename…', run: () => { const name = h('input', { value: t.name || '', placeholder: 'Maple Ave and around' }); sheet('Name this run', [h('label', {}, 'Name', name)], () => { t.name = name.value.trim(); mapSend('PATCH', '/trips/' + t.id, { name: t.name }); renderTool(); }); } },
-      { label: 'Delete run', danger: true, run: () => { MP.trips = MP.trips.filter((x) => x.id !== t.id); mapSend('DELETE', '/trips/' + t.id); mapDraw(); renderTool(); } },
+      { label: 'Rename…', run: () => { const name = h('input', { value: t.name || '', placeholder: 'Maple Ave and around' }); sheet('Name this canvassing run', [h('label', {}, 'Name', name)], () => { t.name = name.value.trim(); mapSend('PATCH', '/trips/' + t.id, { name: t.name }); renderTool(); }); } },
+      { label: 'Delete canvassing run', danger: true, run: () => { MP.trips = MP.trips.filter((x) => x.id !== t.id); mapSend('DELETE', '/trips/' + t.id); mapDraw(); renderTool(); } },
     ]);
     const out = [
       modes,
       h('div', { class: 'map-run' + (run ? ' on' : '') },
         run ? h('span', { class: 'map-rec' }) : null,
         run ? MP.stats : h('span', { class: 'map-stats' }, MP.geoErr || (hereNow() ? 'Ready when you are' : 'Finding your location…')),
-        run ? h('button', { class: 'btn small primary-btn', onclick: stopRun }, run.kind === 'drive' ? 'Stop and log miles' : 'Stop run') : h('button', { class: 'btn small primary-btn', onclick: () => startRun() }, 'Start a run')),
+        run ? h('button', { class: 'btn small primary-btn', onclick: stopRun }, run.kind === 'drive' ? 'Stop and log miles' : 'Stop canvassing run') : h('button', { class: 'btn small primary-btn', onclick: () => startRun() }, '▶ Start canvassing run')),
       MP.draw ? drawBar() : h('div', { class: 'map-acts' },
-        big('Flyer left', 'flyer', () => placeFor(dropFlyer)),
-        big('Come back…', 'back', () => placeFor((at) => pinSheet(newPin('back', at), true))),
-        big('Lead…', 'lead', () => placeFor((at) => pinSheet(newPin('lead', at), true))),
-        h('button', { class: 'map-act done', onclick: () => startDraw('line') }, 'Mark a street or block done')),
+        act('Flyer left', 'flyer', () => placeFor(dropFlyer), 'Drop a flyer pin where you are (or tap the map)'),
+        act('Come back', 'back', () => placeFor((at) => pinSheet(newPin('back', at), true)), 'A spot to come back to, with a note and a date'),
+        act('Lead', 'lead', () => placeFor((at) => pinSheet(newPin('lead', at), true)), 'Someone interested: name, phone, email'),
+        act('Street done', 'done', () => startDraw('line'), 'Mark a street or block as covered')),
       box,
       h('div', { class: 'map-filters' },
         h('div', { class: 'seg map-show' }, [['all', 'All'], ['done', `Done ${MP.zones.filter(inCamp).length}`], ['flyer', `Flyers ${flyers}`], ['back', `Come back ${backs.length}`], ['lead', `Leads ${leads.length}`]].map(([k, l]) =>
@@ -12490,12 +12491,12 @@
       leads.length ? h('section', {}, h('h3', {}, 'Leads'), leads.slice(0, 50).map((p) => h('div', { class: 'bill map-row', onclick: () => showOnMap(p) },
         h('span', { class: 'bill-name' }, p.name || pinTitle(p), h('small', {}, [p.phone, p.address].filter(Boolean).join(' · ') || p.note || '')),
         p.phone ? h('a', { class: 'btn small', href: 'tel:' + p.phone.replace(/[^\d+]/g, ''), onclick: (e) => e.stopPropagation() }, 'Call') : null))) : null,
-      h('section', {}, h('h3', {}, 'Runs'),
+      h('section', {}, h('h3', {}, 'Canvassing runs'),
         trips.length ? trips.map((t) => h('div', { class: 'bill map-row', onclick: () => showTrip(t) },
           h('span', { class: 'bill-name' }, t.name || `${dayName(dayKey(new Date(t.startedAt)))} · ${new Date(t.startedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`,
             h('small', {}, [fmtDist(t.dist || 0), t.endedAt ? fmtLength(t.endedAt - t.startedAt) : 'not finished', plural(runFlyers(t), 'flyer'), campById(t.campaignId)?.name].filter(Boolean).join(' · '))),
           h('button', { class: 't-btn', html: I.more, 'aria-label': 'More', onclick: (e) => { e.stopPropagation(); tripMenu(e.currentTarget, t); } }))) :
-          h('p', { class: 'day-hint' }, 'Press Start a run when you head out. Kloomie draws your path while it’s open, so you can see which streets you’ve covered. Keep the screen on: a phone stops sharing its location with a web page when the screen locks.')),
+          h('p', { class: 'day-hint' }, 'Press Start canvassing run when you head out. Kloomie draws your path while it’s open, so you can see which streets you’ve covered. Keep the screen on: a phone stops sharing its location with a web page when the screen locks.')),
     ];
     setTimeout(runStats);
     return out;

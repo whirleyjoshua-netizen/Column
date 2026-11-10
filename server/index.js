@@ -6335,7 +6335,7 @@ async function api(req, res, url) {
       // Sent twice (no answer the first time, so the phone tried again): the first one stands.
       if (had) return had.wsId === ws.id && had.memberId === auth.memberId ? send(res, 200, pub(had)) : send(res, 409, { error: 'Try again.' });
       const count = Object.values(store).filter((x) => x.wsId === ws.id && x.memberId === auth.memberId).length;
-      if (count >= (a === 'trips' ? 2000 : 20000)) return send(res, 400, { error: `You have too many ${{ trips: 'runs', pins: 'pins', zones: 'done streets' }[a]} saved. Delete some old ones first.` });
+      if (count >= (a === 'trips' ? 2000 : 20000)) return send(res, 400, { error: `You have too many ${{ trips: 'canvassing runs and drives', pins: 'pins', zones: 'done streets' }[a]} saved. Delete some old ones first.` });
       const base = { id, wsId: ws.id, memberId: auth.memberId, by: auth.member, createdAt: Date.now(), campaignId: null };
       let x;
       if (a === 'zones') {
