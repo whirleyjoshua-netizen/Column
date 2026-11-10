@@ -178,7 +178,8 @@ const mimeFor = (name, given) => (given && given !== 'application/octet-stream' 
 
 function send(res, code, body, headers = {}) {
   const isObj = typeof body === 'object' && !Buffer.isBuffer(body);
-  res.writeHead(code, { 'Content-Type': isObj ? 'application/json' : 'text/plain', ...headers });
+  // Answers with data are never kept by browsers or proxies along the way.
+  res.writeHead(code, { 'Content-Type': isObj ? 'application/json' : 'text/plain', ...(isObj ? { 'Cache-Control': 'no-store' } : {}), ...headers });
   res.end(isObj ? JSON.stringify(body) : body);
 }
 
@@ -8227,7 +8228,10 @@ function serveSitemap(req, res) {
   send(res, 200, `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls}\n</urlset>\n`, { 'Content-Type': 'application/xml; charset=utf-8', 'Cache-Control': 'public, max-age=3600' });
 }
 
+const ALLOWED_METHODS = new Set(['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']);
 const server = http.createServer(async (req, res) => {
+  // TRACE and other methods nothing here uses are turned away.
+  if (!ALLOWED_METHODS.has(req.method)) { res.writeHead(405, { Allow: [...ALLOWED_METHODS].join(', '), 'Content-Type': 'text/plain' }); return res.end('Method not allowed'); }
   const url = new URL(req.url, 'http://x');
   const moved = movedTo(req, url) || siteMove(req, url);
   if (moved) {
@@ -8294,6 +8298,7 @@ const server = http.createServer(async (req, res) => {
   if (url.pathname === '/terms' || url.pathname === '/privacy' || url.pathname === '/help') return serveStatic(req, res, new URL(url.pathname + '.html', 'http://x'));
   if (url.pathname.startsWith('/brand/') && (req.method === 'GET' || req.method === 'HEAD')) return serveLogo(req, res, url);
   if (url.pathname === '/quickbooks/disconnected' && (req.method === 'GET' || req.method === 'HEAD')) return QB.disconnectedPage(req, res);
+  if (url.pathname === '/quickbooks/done' && (req.method === 'GET' || req.method === 'HEAD')) return QB.donePage(req, res, url);
   if (url.pathname === '/oauth/quickbooks/callback') return QB.callback(req, res, url).catch((e) => { alarm('Connecting QuickBooks failed', e); if (!res.headersSent) send(res, 500, 'Something went wrong connecting QuickBooks.'); });
   if (url.pathname.startsWith('/oauth/')) return oauthCallback(req, res, url).catch((e) => {
     alarm('Connecting a calendar failed', e);

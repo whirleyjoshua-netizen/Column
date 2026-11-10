@@ -123,8 +123,10 @@ try {
   const st = auth.searchParams.get('state');
   ok(/expired/i.test(await (await fetch(`${B}/oauth/quickbooks/callback?code=good&state=made-up&realmId=R1`)).text()), 'a made-up state is refused');
   shortTokens = true;
-  const page = await (await fetch(`${B}/oauth/quickbooks/callback?code=good&state=${st}&realmId=R1`)).text();
-  ok(/QuickBooks connected/.test(page) && /Cool Air LLC/.test(page), 'connected to Cool Air LLC');
+  const cbRes = await fetch(`${B}/oauth/quickbooks/callback?code=good&state=${st}&realmId=R1`, { redirect: 'manual' });
+  ok(cbRes.status === 302 && cbRes.headers.get('location') === '/quickbooks/done?r=connected' && !(await cbRes.text()).includes('<'), 'coming back from Intuit (code and company in the address) answers with a redirect, never a page');
+  const page = await (await fetch(B + cbRes.headers.get('location'))).text();
+  ok(/QuickBooks connected/.test(page), 'which says QuickBooks is connected');
   ok(/expired/i.test(await (await fetch(`${B}/oauth/quickbooks/callback?code=good&state=${st}&realmId=R1`)).text()), 'the same link can’t be used twice');
   r = await jo('GET', '/quickbooks');
   ok(r.body.connected && r.body.company === 'Cool Air LLC' && r.body.by === 'Jo', 'Settings shows the company and who connected it');
@@ -255,6 +257,9 @@ try {
   await sleep(700);
   const dbText = fs.readFileSync(DIR + '/db.json', 'utf8');
   ok(!dbText.includes(Q.access) && !dbText.includes(Q.refresh), 'the tokens are kept sealed');
+  ok(!/"realmId"\s*:/.test(dbText) && !dbText.includes('"R1"'), 'and so is the company id');
+  ok(await new Promise((r) => http.request(B + '/', { method: 'TRACE' }, (x) => { x.resume(); r(x.statusCode === 405); }).on('error', () => r(false)).end()), 'TRACE is turned away');
+  ok((await fetch(B + '/api/quickbooks', { headers: { authorization: 'Bearer x' } })).headers.get('cache-control') === 'no-store', 'answers with data aren’t cached');
   ok(!JSON.stringify((await jo('GET', '/quickbooks')).body).includes('rt_'), 'and never sent to the app');
 
   const dp = await fetch(B + '/quickbooks/disconnected');

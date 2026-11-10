@@ -32,6 +32,9 @@ const TAX_ITEM = 'Sales tax (from Kloomie)';
 
 export function quickbooksModule({ db, save, broadcast, cleanText, readJson, send, seal, unseal, isAdmin, INV, PJ, publicUrl, alarm, offline, teamDay }) {
   db.qbo ||= {};
+  // The company id is kept encrypted, like the tokens (Intuit's rule). Connections from before are moved over.
+  const realmOf = (c) => (c.realm ? unseal(c.realm).id : c.realmId);
+  for (const c of Object.values(db.qbo)) if (c.realmId) { c.realm = seal({ id: c.realmId }); delete c.realmId; save(); }
   const configured = () => !!(env('QBO_CLIENT_ID') && env('QBO_CLIENT_SECRET'));
   const sandbox = () => env('QBO_ENV') !== 'production';
   const apiBase = () => env('QBO_API') || (sandbox() ? 'https://sandbox-quickbooks.api.intuit.com' : 'https://quickbooks.api.intuit.com');
@@ -66,7 +69,7 @@ export function quickbooksModule({ db, save, broadcast, cleanText, readJson, sen
 
   // ---------- the QuickBooks API ----------
   async function qb(c, method, path, body, retried = false) {
-    const url = `${apiBase()}/v3/company/${encodeURIComponent(c.realmId)}${path}${path.includes('?') ? '&' : '?'}minorversion=${MINOR}`;
+    const url = `${apiBase()}/v3/company/${encodeURIComponent(realmOf(c))}${path}${path.includes('?') ? '&' : '?'}minorversion=${MINOR}`;
     const r = await fetch(url, { method, headers: { Authorization: 'Bearer ' + (await token(c)), Accept: 'application/json', ...(body ? { 'Content-Type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(30_000) });
     if (r.status === 401 && !retried) {
       const t = unseal(c.tokens);
@@ -78,7 +81,8 @@ export function quickbooksModule({ db, save, broadcast, cleanText, readJson, sen
       const e = (j.Fault?.Error || [])[0] || {};
       // Intuit's id for this request, so their support can find it: logged, and shown with the error in Settings.
       const tid = r.headers.get('intuit_tid') || '';
-      console.error(`QuickBooks ${method} ${path.split('?')[0]} → ${r.status}${e.code ? ' code ' + e.code : ''}${tid ? ' intuit_tid ' + tid : ''}: ${e.Detail || e.Message || ''}`);
+      // Logged without QuickBooks' message, which can hold customers' names: the call, the status, the code, Intuit's ref.
+      console.error(`QuickBooks ${method} ${path.split('?')[0].replace(/\/\d+$/, '/…')} → ${r.status}${e.code ? ' code ' + e.code : ''}${tid ? ' intuit_tid ' + tid : ''}`);
       throw Object.assign(new Error(`${e.Detail || e.Message || `QuickBooks said ${r.status}`}${tid ? ` (Intuit ref ${tid})` : ''}`), { code: e.code, status: r.status, tid, auth: r.status === 401 || r.status === 403 });
     }
     return j;
@@ -325,7 +329,7 @@ export function quickbooksModule({ db, save, broadcast, cleanText, readJson, sen
         return await run(ws, pull);
       } catch (e) {
         if (db.qbo[ws.id] === c) c.error = e.auth ? 'QuickBooks’ sign-in expired, or Kloomie was disconnected in QuickBooks. Connect it again.' : 'Couldn’t reach QuickBooks: ' + String(e.message).slice(0, 300);
-        if (!e.auth) console.error('QuickBooks sync failed:', e.message);
+        if (!e.auth) console.error('QuickBooks sync failed', e.code ? 'code ' + e.code : '', e.tid ? 'intuit_tid ' + e.tid : '');
         return 0;
       } finally {
         if (db.qbo[ws.id] === c) c.tried = Date.now();
@@ -410,23 +414,40 @@ export function quickbooksModule({ db, save, broadcast, cleanText, readJson, sen
     return send(res, 405, { error: 'Method not allowed' });
   }
   const page = (res, title, msg) => send(res, 200, `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${title}</title><body style="font:15px system-ui;background:#111;color:#eee;display:grid;place-items:center;height:90vh;text-align:center"><div><h2>${title}</h2><p>${msg}</p></div></body>`, { 'Content-Type': 'text/html; charset=utf-8' });
+  // Intuit comes back here with the code and the company id in the address. Per Intuit's security rules this answers
+  // with a redirect, never a page, so those never sit in a page that could pass them on; /quickbooks/done says how it went.
+  const DONE = {
+    connected: ['QuickBooks connected', 'Quotes and invoices you send from Kloomie now go into QuickBooks, with their payments. You can close this window.'],
+    expired: ['Link expired', 'Start again from Kloomie → Settings → Connections.'],
+    denied: ['Not connected', 'QuickBooks access wasn’t granted. You can close this window.'],
+    role: ['Not connected', 'Only team owners and admins can connect QuickBooks.'],
+    company: ['Not connected', 'QuickBooks didn’t say which company. Try again.'],
+    failed: ['Not connected', 'Something went wrong talking to QuickBooks. Try again in a minute.'],
+  };
+  const done = (res, how) => { res.writeHead(302, { Location: `/quickbooks/done?r=${how}`, 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer' }); res.end(); };
+  function donePage(req, res, url) {
+    const [title, msg] = DONE[url.searchParams.get('r')] || DONE.failed;
+    res.setHeader('X-Robots-Tag', 'noindex');
+    res.setHeader('Cache-Control', 'no-store');
+    return page(res, title, msg);
+  }
   async function callback(req, res, url) {
     const st = url.searchParams.get('state') || '';
     const pend = pending.get(st);
     pending.delete(st);
-    if (!pend || pend.exp < Date.now()) return page(res, 'Link expired', 'Start again from Kloomie → Settings → Connections.');
-    if (url.searchParams.get('error')) return page(res, 'Not connected', 'QuickBooks access wasn’t granted. You can close this window.');
+    if (!pend || pend.exp < Date.now()) return done(res, 'expired');
+    if (url.searchParams.get('error')) return done(res, 'denied');
     const ws = db.workspaces[pend.wsId];
     const who = ws?.members.find((x) => x.id === pend.memberId);
-    if (!who || !['owner', 'admin'].includes(who.role)) return page(res, 'Not connected', 'Only team owners and admins can connect QuickBooks.');
+    if (!who || !['owner', 'admin'].includes(who.role)) return done(res, 'role');
     const realmId = url.searchParams.get('realmId');
-    if (!realmId) return page(res, 'Not connected', 'QuickBooks didn’t say which company. Try again.');
+    if (!realmId) return done(res, 'company');
     try {
       const tok = await tokenCall({ grant_type: 'authorization_code', code: url.searchParams.get('code') || '', redirect_uri: redirect() });
       const old = db.qbo[ws.id];
-      const c = { wsId: ws.id, realmId, company: '', sandbox: sandbox(), memberId: who.id, by: who.name, tokens: seal(tok), at: Date.now(), from: Date.now(), syncedAt: null, pulledAt: null, error: null, customers: {} };
+      const c = { wsId: ws.id, realm: seal({ id: realmId }), company: '', sandbox: sandbox(), memberId: who.id, by: who.name, tokens: seal(tok), at: Date.now(), from: Date.now(), syncedAt: null, pulledAt: null, error: null, customers: {} };
       // The same company again keeps what it already copied; a different one starts over.
-      if (old?.realmId === realmId) Object.assign(c, { from: old.from, customers: old.customers || {}, itemId: old.itemId, taxItemId: old.taxItemId, pulledAt: old.pulledAt, quoteNext: old.quoteNext });
+      if (old && realmOf(old) === realmId) Object.assign(c, { from: old.from, customers: old.customers || {}, itemId: old.itemId, taxItemId: old.taxItemId, pulledAt: old.pulledAt, quoteNext: old.quoteNext });
       else if (old) {
         await revoke(old);
         for (const inv of Object.values(db.invoices)) if (inv.wsId === ws.id) delete inv.qbo;
@@ -437,11 +458,11 @@ export function quickbooksModule({ db, save, broadcast, cleanText, readJson, sen
       db.qbo[ws.id] = c;
       save();
       broadcast(ws.id, { type: 'quickbooks', forAdmins: true });
-      sync(ws);
-      return page(res, 'QuickBooks connected', `${escapeHtml(c.company)} is linked. Quotes and invoices you send from Kloomie now go into QuickBooks, with their payments. You can close this window.`);
+      sync(ws, true);
+      return done(res, 'connected');
     } catch (e) {
       alarm('Connecting QuickBooks failed', e);
-      return page(res, 'Not connected', 'Something went wrong talking to QuickBooks. Try again in a minute.');
+      return done(res, 'failed');
     }
   }
   // Where Intuit sends someone who disconnects Kloomie from inside QuickBooks (the app's Disconnect URL). Nothing
@@ -452,5 +473,5 @@ export function quickbooksModule({ db, save, broadcast, cleanText, readJson, sen
   }
   const escapeHtml = (s) => String(s).replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch]);
 
-  return { route, callback, disconnectedPage, soon, sync, disconnect, state };
+  return { route, callback, donePage, disconnectedPage, soon, sync, disconnect, state };
 }
