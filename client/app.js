@@ -618,9 +618,11 @@
       renderCamps();
       renderDay();
       refreshLinks();
+      if (pinned('camp:' + x.id)) renderTabs();
     } else if (msg.type === 'campaign:remove' || msg.type === 'goal:remove' || msg.type === 'attempt:remove' || msg.type === 'list:remove') {
       const key = { 'campaign:remove': 'campaigns', 'goal:remove': 'goals', 'attempt:remove': 'attempts', 'list:remove': 'lists' }[msg.type];
       S[key] = S[key].filter((y) => y.id !== msg.id);
+      if (pinned('camp:' + msg.id)) renderTabs();
       renderCamps();
       renderDay();
       refreshLinks();
@@ -1301,6 +1303,7 @@
     store.set('panes', panes);
     desktop?.setLayout(panes.length);
     buildPanes();
+    if (S.me?.pins?.length) markTabs();
   }
 
   function buildPanes() {
@@ -2834,11 +2837,68 @@
     it.open ? it.open() : openTool(k);
     markTabs();
   }
+  // ----- pins: one particular job, project, campaign, feed, stack or doc, after the tabs. Only you see yours. -----
+  const PIN_KINDS = {
+    rec: { icon: '🛠️', name: 'Job or record', label: (id) => { const at = recEverywhere(id); return at?.p && recName(prType(at.p, at.r.typeId), at.r); }, open: (id) => prLoadAll().then(() => openRecord(id)), on: (id) => !$('#projects').classList.contains('hidden') && PR.panel === id },
+    proj: { icon: '📋', name: 'Project', label: (id) => projById(id)?.name, gone: (id) => !projById(id), open: (id) => openProject(id), on: (id) => !$('#projects').classList.contains('hidden') && PR.open === id && !PR.panel },
+    camp: { icon: '🎯', name: 'Campaign', label: (id) => campById(id)?.name, gone: (id) => !campById(id), open: (id) => { closeProjects(); openCampaign(id); }, on: (id) => S.tab === 'camps' && K.open === id },
+    chan: { icon: '#', name: 'Chat feed', label: (id) => channelById(id)?.name, gone: (id) => !channelById(id), open: (id) => { closeProjects(); setTab('chat'); openChannel('ch:' + id); }, on: (id) => S.tab === 'chat' && C.view === 'ch:' + id },
+    stack: { icon: '🗂️', name: 'Stack', label: (id) => stackById(id)?.name, gone: (id) => !stackById(id), open: (id) => { closeProjects(); showStack(id); }, on: (id) => S.tab === 'column' && S.panes[0] === 'stack:' + id },
+    doc: { icon: '📄', name: 'Doc', label: (id) => { const d = S.items.find((x) => x.id === id); return d && docTitle(d); }, gone: (id) => !S.items.some((x) => x.id === id), open: (id) => { closeProjects(); goTo('doc:' + id); }, on: () => false },
+  };
+  const pinParts = (go) => [go.slice(0, go.indexOf(':')), go.slice(go.indexOf(':') + 1)];
+  const pinsMine = () => (S.me?.pins || []).filter((x) => PIN_KINDS[pinParts(x.go)[0]]);
+  // Things that are gone (a deleted campaign) drop off the bar but stay in the list until unpinned.
+  const pinsShown = () => pinsMine().filter((x) => { const [k, id] = pinParts(x.go); return !PIN_KINDS[k].gone?.(id); });
+  const pinLabel = (x) => { const [k, id] = pinParts(x.go); return PIN_KINDS[k].label(id) || x.label; };
+  const pinned = (go) => pinsMine().some((x) => x.go === go);
+  async function savePins(pins) {
+    const was = S.me.pins;
+    S.me.pins = pins;
+    renderTabs();
+    try { S.me.pins = (await api('PUT', '/account/pins', { pins })).pins; renderTabs(); } catch (e) { S.me.pins = was; renderTabs(); toast(e.message); }
+  }
+  function togglePin(go, label) {
+    if (pinned(go)) return savePins(pinsMine().filter((x) => x.go !== go)).then(() => toast('Unpinned from the top bar'));
+    if (pinsMine().length >= 12) return toast('That’s 12 pins already. Unpin one first (the pencil on the tab bar).');
+    return savePins([...pinsMine(), { go, label: shortText(label || 'Pinned', 60) }]).then(() => toast('Pinned to the top bar'));
+  }
+  // The menu row each pinnable thing adds to its own ⋯ menu.
+  const pinRow = (go, label) => ({ label: pinned(go) ? 'Unpin from the top bar' : '📌 Pin to the top bar', run: () => togglePin(go, label) });
+  function openPin(go) {
+    const [k, id] = pinParts(go);
+    PIN_KINDS[k]?.open(id);
+    if (toolOpen) closeTool();
+    setTimeout(() => { markTabs(); $(`#tabs [data-pin="${go}"]`)?.scrollIntoView({ block: 'nearest', inline: 'nearest' }); }, 0);
+  }
+  // Hold a pin on a phone for its menu (right-click on a computer); the click after a hold doesn't open it.
+  function longPress(b, fn) {
+    let t = null;
+    const stop = () => clearTimeout(t);
+    b.addEventListener('pointerdown', (e) => { if (e.pointerType === 'mouse') return; stop(); t = setTimeout(() => { b._held = true; fn(); }, 550); });
+    for (const ev of ['pointerup', 'pointercancel', 'pointerleave']) b.addEventListener(ev, stop);
+  }
+  function pinMenu(x, anchor) {
+    openMenu(anchor, [
+      { label: 'Open', run: () => openPin(x.go) },
+      { label: 'Unpin', run: () => togglePin(x.go) },
+      { label: 'Change your tabs and pins…', run: () => barSheet() },
+    ]);
+  }
+
   function renderTabs() {
     const nav = $('#tabs');
     if (!nav) return;
     const btn = (k, label) => h('button', { 'data-tab': k }, label);
+    const pin = (x) => {
+      const b = h('button', { class: 'tab-pin', 'data-pin': x.go, title: PIN_KINDS[pinParts(x.go)[0]].name + ': ' + pinLabel(x) }, h('span', { class: 'tab-pin-ic' }, PIN_KINDS[pinParts(x.go)[0]].icon), h('span', { class: 'tab-pin-name' }, pinLabel(x)));
+      b.addEventListener('contextmenu', (e) => { e.preventDefault(); pinMenu(x, b); });
+      longPress(b, () => pinMenu(x, b));
+      return b;
+    };
+    const pins = pinsShown();
     nav.replaceChildren(btn('home', 'Home'), btn('day', 'Day'), ...barKeys().map((k) => btn(k, BAR_ITEMS[k].label)),
+      ...(pins.length ? [h('span', { class: 'tabs-sep', 'aria-hidden': 'true' }), ...pins.map(pin)] : []),
       h('button', { class: 'tabs-edit', title: 'Change your tabs', 'aria-label': 'Change your tabs', html: I.edit || '✎', onclick: (e) => { e.stopPropagation(); barSheet(); } }));
     markTabs();
     renderChatSide();
@@ -2846,6 +2906,7 @@
   function markTabs() {
     const jobs = !$('#projects').classList.contains('hidden');
     for (const b of $('#tabs').children) {
+      if (b.dataset.pin) { const [pk, id] = pinParts(b.dataset.pin); b.classList.toggle('on', !!PIN_KINDS[pk]?.on(id)); continue; }
       const k = b.dataset.tab;
       if (!k) continue;
       const it = BAR_ITEMS[k];
@@ -2874,14 +2935,49 @@
         }));
     };
     draw();
+    // Pinned things, after the tabs: reorder, unpin, or pin another project, campaign, feed or stack from here.
+    let pins = pinsMine().slice();
+    const pinList = h('div', { class: 'bar-edit' });
+    const drawPins = () => {
+      pinList.replaceChildren(
+        ...pins.map((x, i) => {
+          const [k, id] = pinParts(x.go);
+          const move = (d) => { [pins[i], pins[i + d]] = [pins[i + d], pins[i]]; drawPins(); };
+          return h('div', { class: 'bar-row', 'data-pin': x.go }, h('span', {}, PIN_KINDS[k].icon + ' ' + pinLabel(x)), h('small', {}, PIN_KINDS[k].gone?.(id) ? 'Not there any more' : PIN_KINDS[k].name),
+            h('span', { class: 'bar-move' },
+              h('button', { class: 'icon-btn', 'aria-label': 'Move ' + pinLabel(x) + ' left', disabled: i === 0, onclick: () => move(-1) }, '↑'),
+              h('button', { class: 'icon-btn', 'aria-label': 'Move ' + pinLabel(x) + ' right', disabled: i === pins.length - 1, onclick: () => move(1) }, '↓'),
+              h('button', { class: 'icon-btn', 'aria-label': 'Unpin ' + pinLabel(x), html: I.close, onclick: () => { pins = pins.filter((y) => y !== x); drawPins(); } })));
+        }),
+        pins.length ? null : h('p', { class: 'muted small' }, 'Nothing pinned yet. Use 📌 Pin to the top bar in a job’s, project’s, campaign’s, doc’s or feed’s ⋯ menu, or pick one here.'));
+    };
+    drawPins();
+    const addPin = (e) => {
+      const opt = (k, id, name) => ({ label: PIN_KINDS[k].icon + ' ' + name, run: () => { if (pins.length >= 12) return toast('That’s 12 pins already.'); pins.push({ go: k + ':' + id, label: shortText(name, 60) }); drawPins(); } });
+      const left = (k, list) => list.filter((x) => !pins.some((y) => y.go === k + ':' + x.id));
+      const group = (head, k, list, name) => (left(k, list).length ? [{ head }, ...left(k, list).slice(0, 25).map((x) => opt(k, x.id, name(x)))] : []);
+      const items = [
+        ...(toolOn('projects') ? group('Projects', 'proj', S.projects || [], (x) => x.name) : []),
+        ...group('Campaigns', 'camp', (S.campaigns || []).filter((c) => c.status !== 'done'), (x) => x.name),
+        ...group('Chat feeds', 'chan', (S.workspace?.channels || []).filter((c) => !c.memberIds || c.ownerId === S.me?.memberId || c.memberIds.includes(S.me?.memberId)), (x) => x.name),
+        ...group('Stacks', 'stack', S.workspace?.stacks || [], (x) => x.name),
+        { note: 'For one job or doc, open it and use 📌 in its ⋯ menu.' },
+      ];
+      openMenu(e.currentTarget, items);
+    };
     sheet('Your tabs', [
       h('p', { class: 'muted' }, 'Pick what sits next to Home and Day, and the order. Only you see your tabs. Anything you leave off is still in Tools (the grid button at the top).'),
       list,
       h('button', { class: 'btn small', onclick: () => { keys = BAR_DEFAULT.slice(); draw(); } }, 'Back to the usual'),
+      h('h4', { class: 'bar-h' }, '📌 Pinned'),
+      h('p', { class: 'muted' }, 'One job, project, campaign, feed, stack or doc you keep going back to, one tap away after your tabs.'),
+      pinList,
+      h('button', { class: 'btn small', onclick: addPin }, '+ Pin something'),
     ], async () => {
       const same = keys.join() === BAR_DEFAULT.join();
       const r = await api('PUT', '/account/bar', { bar: same ? null : keys });
       S.me.bar = r.bar;
+      if (pins.map((x) => x.go).join() !== pinsMine().map((x) => x.go).join()) S.me.pins = (await api('PUT', '/account/pins', { pins })).pins;
       renderTabs();
       if (S.tab !== 'home' && S.tab !== 'day' && !onBar(S.tab)) setTab('home');
     });
@@ -2901,6 +2997,8 @@
     if (tab === 'chat') openChannel(C.view);
   }
   $('#tabs').addEventListener('click', (e) => {
+    const pb = e.target.closest('button[data-pin]');
+    if (pb) { if (pb._held) return (pb._held = false); return openPin(pb.dataset.pin); }
     const b = e.target.closest('button[data-tab]');
     if (!b) return;
     if (BAR_ITEMS[b.dataset.tab]) return openBarItem(b.dataset.tab);
@@ -4880,6 +4978,7 @@
     if (S.tab !== 'camps') setTab('camps');
     else renderCamps();
     $('#camps').scrollTop = 0;
+    markTabs();
   }
 
   // Re-render, unless someone is typing in here; then wait until they're done.
@@ -6530,6 +6629,7 @@
   function campaignMenu(anchor, c) {
     const owner = c.ownerId === S.me?.memberId;
     openMenu(anchor, [
+      pinRow('camp:' + c.id, c.name),
       { label: 'Edit details…', run: () => campaignSheet(c) },
       ...(c.parentId ? [] : [{ label: 'Add a sub-campaign…', run: () => campaignSheet(null, c) }]),
       { label: c.assigneeId ? `Responsible: ${memberName(c.assigneeId)}…` : 'Assign to…', run: () => assignCampaignMenu(anchor, c) },
@@ -6897,6 +6997,7 @@
     const ch = channelById(viewChannel(view));
     C.title.replaceChildren(h('span', { class: 'hash' }, '#'), ch ? ch.name : 'general');
     $('#chat').classList.remove('side-open');
+    if (S.me?.pins?.length) markTabs();
     checkThread();
     chatChanged();
   }
@@ -7097,6 +7198,7 @@
       : [{ note: 'In this feed: ' + [ch.ownerId, ...ch.memberIds].map(memberName).join(', ') },
          { label: 'Leave feed', danger: true, run: () => wsCall('POST', '/channels/' + ch.id + '/leave') }];
     openMenu(anchor, [
+      pinRow('chan:' + ch.id, ch.name),
       ...people,
       { label: 'Rename', run: () => {
         const nameEl = row.querySelector('.ch-name');
@@ -8420,6 +8522,7 @@
     PR.view = v.id;
     const recs = prRecs(p.id).filter((r) => r.typeId === t.id);
     const more = (e) => openMenu(e.currentTarget, [
+      pinRow('proj:' + p.id, p.name),
       { label: 'Rename project', run: () => { const i = h('input', { value: p.name }); sheet('Rename project', [h('label', {}, 'Name', i)], async () => { const y = await api('PATCH', '/projects/' + p.id, { name: i.value }); prUpsertProject(y); renderProjects(); }); } },
       { label: `Import ${t.name.toLowerCase()} from a spreadsheet…`, run: () => prImport(p, t) },
       { label: `Export ${t.name.toLowerCase()} as CSV`, run: () => prExport(p, t) },
@@ -9236,7 +9339,7 @@
     const top = itemFields.length && !job ? fields.filter((f) => ['client', 'status', 'number'].includes(f.key)) : [];
     return h('aside', { class: 'pj-panel' + (itemFields.length || richFields.length ? ' wide' : ''), 'data-id': r.id },
       h('div', { class: 'pj-panel-h' }, h('small', {}, `${t.icon || ''} ${t.singular || t.name}`), h('span', { style: 'flex:1' }),
-        h('button', { class: 'icon-btn', 'aria-label': 'Record options', html: I.more, onclick: (e) => openMenu(e.currentTarget, [{ label: `Delete this ${(t.singular || 'record').toLowerCase()}`, danger: true, run: async () => { if (await prCall('DELETE', '/records/' + r.id)) { PR.records.set(p.id, prRecs(p.id).filter((x) => x.id !== r.id)); PR.panel = null; renderProjects(); } } }]) }),
+        h('button', { class: 'icon-btn', 'aria-label': 'Record options', html: I.more, onclick: (e) => openMenu(e.currentTarget, [pinRow('rec:' + r.id, recName(t, r)), { label: `Delete this ${(t.singular || 'record').toLowerCase()}`, danger: true, run: async () => { if (await prCall('DELETE', '/records/' + r.id)) { PR.records.set(p.id, prRecs(p.id).filter((x) => x.id !== r.id)); PR.panel = null; renderProjects(); } } }]) }),
         h('button', { class: 'icon-btn', 'aria-label': 'Close', html: I.close, onclick: () => { PR.panel = null; PR.visit = null; renderProjects(); } })),
       title,
       custFields.length ? prVisitBar(p, t, r) : null,
@@ -9312,6 +9415,7 @@
     else if (msg.type === 'record') prUpsertRecord(msg.record);
     else if (msg.type === 'record:log') { if (PR.logs.has(msg.recordId)) PR.logs.set(msg.recordId, msg.log); }
     else if (msg.type === 'record:remove' && PR.records.has(msg.projectId)) PR.records.set(msg.projectId, prRecs(msg.projectId).filter((x) => x.id !== msg.id));
+    if (pinned('proj:' + (msg.project?.id || msg.id)) || pinned('rec:' + msg.record?.id)) renderTabs();
     prSoon();
   }
 
@@ -10709,6 +10813,7 @@
     const it = x.item();
     const open = x.comments.filter((c) => !c.resolved).length;
     const more = (e) => openMenu(e.currentTarget, [
+      pinRow('doc:' + x.id, docTitle(it)),
       { label: 'Export as Word (.docx)', run: () => docExport(x, 'docx') },
       { label: 'Export as PDF', run: () => docExport(x, 'pdf') },
       { label: 'Send for signature…', run: () => docExport(x, 'sign') },

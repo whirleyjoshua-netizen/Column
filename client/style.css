@@ -2278,3 +2278,11 @@ button.hq-entry:hover { background: var(--card-hover); }
 .map-act.back { --d: #e8930c; }
 .map-act.lead { --d: #2f7bf5; }
 .map-act.done { --d: #1f9d55; }
+
+/* pins on the tab bar: one job, campaign, feed, stack or doc, after a thin divider */
+.tabs .tabs-sep { flex: none; width: 1px; margin: 5px 3px; background: var(--line); }
+.tabs button.tab-pin { flex: none; max-width: 150px; display: inline-flex; align-items: center; gap: 4px; min-width: 0; }
+.tabs .tab-pin-ic { flex: none; font-size: 11px; }
+.tabs .tab-pin-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.bar-h { margin: 16px 0 2px; font-size: 14px; }
+.bar-row[data-pin] > span:first-of-type { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }

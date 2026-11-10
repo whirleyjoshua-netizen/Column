@@ -434,9 +434,11 @@ const needsConfirm = (auth) => mailer.mode !== 'off' && !userOf(auth.ws.members.
 const meAccount = (ws, memberId) => {
   const mem = ws.members.find((x) => x.id === memberId);
   const u = userOf(mem);
-  return { email: u?.email || null, emailVerified: !!u?.emailVerified, pendingEmail: u?.pendingEmail || null, mail: mailer.mode !== 'off', bar: mem?.bar || null, twoStep: TS.on(u) };
+  return { email: u?.email || null, emailVerified: !!u?.emailVerified, pendingEmail: u?.pendingEmail || null, mail: mailer.mode !== 'off', bar: mem?.bar || null, pins: mem?.pins || [], twoStep: TS.on(u) };
 };
 // What each person keeps on their tab bar after Home and Day (theirs alone, in their order). Null: the usual three.
+const PIN_RE = /^(rec|proj|camp|chan|stack|doc):[A-Za-z0-9_-]{1,64}$/;
+const MAX_PINS = 12;
 const BAR_KEYS = ['column', 'chat', 'camps', 'sidekick', 'docs', 'projects', 'bills', 'contacts', 'email', 'folders', 'meetings', 'map', 'signs', 'vault'];
 
 // A private campaign's feed and stack are hidden from people outside it, and so is a feed you weren't invited to.
@@ -7181,6 +7183,17 @@ async function api(req, res, url) {
       else me.bar = [...new Set(bar.filter((k) => BAR_KEYS.includes(k)))];
       save();
       return send(res, 200, { bar: me.bar || null });
+    }
+    // Pinned things on the tab bar: a job, a project, a campaign, a feed, a stack or a doc. Only the person sees them;
+    // the label is what it was called when pinned, for things the app only loads later (a job).
+    if (b === 'pins' && !c && m === 'PUT') {
+      const { pins } = await readJson(req);
+      if (!Array.isArray(pins)) return send(res, 400, { error: 'That isn’t a list of pins.' });
+      const seen = new Set();
+      me.pins = pins.filter((x) => typeof x?.go === 'string' && PIN_RE.test(x.go) && !seen.has(x.go) && seen.add(x.go)).slice(0, MAX_PINS).map((x) => ({ go: x.go, label: cleanText(x.label, 60) || 'Pinned' }));
+      if (!me.pins.length) delete me.pins;
+      save();
+      return send(res, 200, { pins: me.pins || [] });
     }
     // Leaving this team, or deleting the whole account (every team it's in). Both need the password.
     if ((b === 'leave' || b === 'delete') && m === 'POST') {
