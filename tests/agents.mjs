@@ -43,6 +43,7 @@ const SCRIPTS = {
   'contacts as member': (n) => [[['find_contacts', { query: 'maria' }]], 'Couldn’t open Contacts.'][n],
   'morning briefing': (n) => [[['look_at_day', {}]], 'Briefing: nothing urgent.'][n],
   'follow up more': (n) => [[['create_task', { text: 'Second follow-up' }]], 'Added another.'][n],
+  'restart test': (n) => [[['create_task', { text: 'Made before the restart' }]], 'never'][n],
 };
 const ai = http.createServer((req, res) => {
   let b = ''; req.on('data', (c) => (b += c)); req.on('end', () => {
@@ -63,14 +64,19 @@ const ai = http.createServer((req, res) => {
     // Turns since the last plain user message.
     const n = msgs.length - 1 - msgs.lastIndexOf(lastUser);
     const step = key ? SCRIPTS[key](Math.floor(n / 2), sys) : 'Done.';
+    if (key === 'restart test' && n > 0) return; // hangs: the server is restarted while it waits
     if (typeof step === 'string' || !step) return reply([{ type: 'text', text: step || 'Done.' }]);
     reply([{ type: 'text', text: 'Working on it.' }, ...step.map(([name, input], i) => ({ type: 'tool_use', id: `tu_${n}_${i}`, name, input }))], 'tool_use');
   });
 });
 await new Promise((r) => ai.listen(AI_PORT, '127.0.0.1', r));
-const srv = spawn('node', ['index.js'], { cwd: new URL('../server', import.meta.url).pathname, env: { ...process.env, PORT: String(PORT), DATA_DIR: DIR, MAIL_OUTBOX: '1', DATABASE_URL: '', AGENT_TICK_MS: '500', ANTHROPIC_BASE_URL: `http://127.0.0.1:${AI_PORT}` }, stdio: ['ignore', 'pipe', 'pipe'] });
-srv.log = ''; srv.stdout.on('data', (d) => (srv.log += d)); srv.stderr.on('data', (d) => (srv.log += d));
-for (let i = 0; i < 100; i++) { try { if ((await fetch(B + '/api/health')).ok) break; } catch {} await sleep(150); }
+const boot = async () => {
+  const p = spawn('node', ['index.js'], { cwd: new URL('../server', import.meta.url).pathname, env: { ...process.env, PORT: String(PORT), DATA_DIR: DIR, MAIL_OUTBOX: '1', DATABASE_URL: '', AGENT_TICK_MS: '500', ANTHROPIC_BASE_URL: `http://127.0.0.1:${AI_PORT}` }, stdio: ['ignore', 'pipe', 'pipe'] });
+  p.log = ''; p.stdout.on('data', (d) => (p.log += d)); p.stderr.on('data', (d) => (p.log += d));
+  for (let i = 0; i < 100; i++) { try { if ((await fetch(B + '/api/health')).ok) break; } catch {} await sleep(150); }
+  return p;
+};
+let srv = await boot();
 const call = (tok) => async (m, p, body) => {
   const r = await fetch(B + '/api' + p, { method: m, headers: { 'content-type': 'application/json', ...(tok ? { authorization: 'Bearer ' + tok } : {}) }, body: body ? JSON.stringify(body) : undefined });
   return { status: r.status, body: await r.json().catch(() => null) };
@@ -223,6 +229,18 @@ try {
   ok((await ada('GET', '/agents')).body.runs.filter((y) => y.scheduled).length === 1, 'once a day, not every tick');
   r = (await ada('GET', '/agents')).body.agents;
   ok(r.chief.stats.done >= 3 && r.chief.stats.undone === 1 && r.chief.stats.skipped === 1 && r.chief.stats.approved === 1, 'each agent’s record: done, approved, skipped, undone');
+
+  // ----- A restart (a deploy) partway through: the assignment says so instead of spinning forever -----
+  await ada('PATCH', '/agents/chief', { level: 'execute' });
+  r = await ada('POST', '/agents/runs', { agent: 'chief', ask: 'restart test' });
+  const rid0 = r.body.id;
+  for (let i = 0; i < 50; i++) { if ((await ada('GET', '/agents/runs/' + rid0)).body.parts[0].steps.length) break; await sleep(100); }
+  srv.kill('SIGTERM');
+  await new Promise((res) => srv.on('exit', res));
+  srv = await boot();
+  x = (await ada('GET', '/agents/runs/' + rid0)).body;
+  ok(x.status === 'failed' && /restarted/.test(x.error) && x.parts[0].steps[0].status === 'done', 'after a restart mid-run: marked as interrupted, keeping what it had done');
+  ok((await ada('GET', '/state')).body.tasks.some((y) => y.text === 'Made before the restart'), 'and what it made is still there');
 
   // ----- Stop, delete, switch off -----
   r = await ada('POST', `/agents/runs/${done1.id}/delete`);

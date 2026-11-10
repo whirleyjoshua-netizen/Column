@@ -92,6 +92,14 @@ const MAX_TURN_CHARS = 30_000;
 export function agentsModule({ db, save, broadcast, rid, cleanText, readJson, send, notify, replay, run: llmRun, sendEmail, textToDoc, PJ, isAdminId, localNow, tzOf, fmtMinutes, hasAi = () => true }) {
   db.agentRuns ||= {};
   db.agentPrefs ||= {};
+  // Anything still running when the server stopped (a deploy, a restart) can't pick up where it was: say so.
+  for (const x of Object.values(db.agentRuns)) {
+    if (!['requested', 'planning', 'running'].includes(x.status)) continue;
+    for (const p of x.parts) if (['planned', 'running'].includes(p.status)) { p.status = p.steps.length ? 'failed' : 'cancelled'; if (p.steps.length) p.error = 'Kloomie restarted while this was running. What’s listed here was done; ask again to finish it.'; }
+    x.status = x.parts.some((p) => p.steps.some((st) => st.status === 'proposed')) ? 'awaiting' : 'failed';
+    x.error = 'Kloomie restarted while this was running. Ask again to finish it.';
+    x.finishedAt = Date.now();
+  }
   const prefKey = (wsId, memberId) => `${wsId}:${memberId}`;
   // Each person's own settings for each agent: how far it may go, standing instructions, and when it runs.
   function prefsOf(wsId, memberId) {
@@ -673,6 +681,7 @@ export function agentsModule({ db, save, broadcast, rid, cleanText, readJson, se
         }
         x.parts = plan.parts.map((p) => ({ id: rid(6), agent: p.agent, ask: p.ask, status: 'planned', steps: [] }));
         x.plan = plan.summary;
+        x.status = 'running';
         news(x);
       }
       for (let i = 0; i < x.parts.length && i < MAX_PARTS; i++) {
@@ -711,7 +720,7 @@ export function agentsModule({ db, save, broadcast, rid, cleanText, readJson, se
 - chief: Chief of Staff (the day and week, priorities, calendar, task lists, turning commitments into tasks)
 - sales: Client & Sales Manager (leads, customers, contacts, replies and follow-ups, proposals, the sales pipeline, customer meetings)
 - ops: Operations Manager (delivering won work: jobs and projects, checklists, work orders, materials, visits, routes, closeout)
-Split the request into 1 to 3 assignments in the order they should happen, each given to one specialist with exactly what they should do. Only include a specialist if the request needs them. If the request is too unclear to start, ask one short question instead.
+Give the request to the one specialist whose job it is. Most requests need only one: planning the person's own day, week or tasks is the Chief of Staff alone; a lead or customer is Sales alone; a job to deliver is Operations alone. Split it (2 or at most 3 assignments, in the order they should happen) only when it clearly needs work from more than one area, like a new customer who needs a quote and a visit booked. Each specialist can also bring in another partway through if it turns out they need to, so don't add one just in case. If the request is too unclear to start, ask one short question instead.
 Reply with JSON only: {"summary":"one line on the plan","parts":[{"agent":"chief|sales|ops","ask":""}],"question":null}`;
     const out = await llmRun(ws, x.memberId, { system, history: [{ role: 'user', text: x.ask }], tools: [], exec: () => Promise.reject(new Error('No tools')), task: 'plan' });
     let j = {};

@@ -7417,6 +7417,7 @@
         save.textContent = 'Checking…';
         try {
           S.ai = await api('PUT', '/ai/keys/' + k, { key: input.value });
+          if (AG.data) loadAgents(); // the agents work on this key
           sec.replaceWith(aiSection());
         } catch (e) {
           toast(e.message);
@@ -7427,6 +7428,7 @@
       const remove = h('button', { class: 'btn small danger' }, 'Remove');
       remove.addEventListener('click', () => confirmClick(remove, async () => {
         S.ai = await api('DELETE', '/ai/keys/' + k).catch((e) => (toast(e.message), S.ai));
+        if (AG.data) loadAgents();
         sec.replaceWith(aiSection());
       }));
       sec.append(h('div', { class: 'srow' },
@@ -8353,6 +8355,7 @@
     renderHome();
   }
   function agOpen(view, tab) {
+    if (toolOpen !== 'agents' && AG.data) loadAgents(); // fresh counts and key state each time it opens
     AG.view = view || 'team';
     if (tab) AG.tab = tab;
     if (toolOpen !== 'agents') { closeProjects(); openTool('agents'); } else renderTool(true);
