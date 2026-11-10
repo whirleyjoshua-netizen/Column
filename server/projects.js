@@ -150,7 +150,7 @@ export const TEMPLATES = {
   },
 };
 
-export function projectsModule({ db, save, broadcast, rid, cleanText, isDay, readJson, send, badRequest, isOwnerId, escHtml, brandOf, logoUrl, teamDay, offline, makeTask, onRecords, onRecordGone, allowLocalHooks = false }) {
+export function projectsModule({ db, save, broadcast, rid, cleanText, isDay, readJson, send, badRequest, isOwnerId, escHtml, brandOf, logoUrl, teamDay, offline, makeTask, onRecords, onRecordGone, onRecordNews, allowLocalHooks = false }) {
   const bad = (msg) => badRequest(msg);
   db.projects ||= {};
   db.records ||= {};
@@ -587,6 +587,7 @@ export function projectsModule({ db, save, broadcast, rid, cleanText, isDay, rea
     broadcast(p.wsId, { type: 'project', project: publicProject(p), projectId: p.id });
   }
   function recordNews(rec, event, by) {
+    onRecordNews?.(rec);
     recordsChanged(rec.projectId);
     save();
     broadcast(rec.wsId, { type: 'record', record: publicRecord(rec), projectId: rec.projectId });

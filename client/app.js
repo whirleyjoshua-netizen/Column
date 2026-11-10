@@ -8817,7 +8817,8 @@
     const rows = (list || []).map((v) => h('button', { type: 'button', class: 'pj-visit' + (v.done ? ' done' : '') + (v.id === PR.visit ? ' on' : ''), onclick: () => visitSheet(p, t, r, v) },
       h('b', {}, v.kind), h('span', {}, visitWhen(v)), h('span', { class: 'pj-visit-who' }, v.memberIds.map((id) => avatar(id))), v.done ? h('small', {}, '✓ done') : null));
     return h('div', { class: 'pj-items pj-job-blk' }, h('div', { class: 'pj-it-h' }, h('b', {}, '🗓 Visits'), h('span', { style: 'flex:1' }), h('button', { class: 'btn small primary-btn', onclick: () => visitSheet(p, t, r) }, '+ Schedule a visit')),
-      list ? (rows.length ? h('div', { class: 'pj-visits' }, rows) : h('p', { class: 'day-hint' }, 'Nothing booked yet. A visit goes on the Day of everyone going, and on their calendar.')) : h('p', { class: 'day-hint' }, 'Loading…'));
+      list ? (rows.length ? h('div', { class: 'pj-visits' }, rows) : h('p', { class: 'day-hint' }, 'Nothing booked yet. A visit goes on the Day of everyone going, and on their calendar.')) : h('p', { class: 'day-hint' }, 'Loading…'),
+      t.trade && (list || []).some((v) => v.done) ? h('div', { class: 'pj-it-add' }, h('button', { class: 'pj-newrow', onclick: () => askForReview(t, r) }, r.reviewAsked ? `⭐ Review asked ${ago(r.reviewAsked)} · ask again` : '⭐ Ask for a review')) : null);
   }
   // Book or change a visit: what kind, when, who's going, a note for them.
   function visitSheet(p, t, r, v, pre = {}) {
@@ -8847,6 +8848,7 @@
       h('div', {}, h('small', { class: 'hint' }, 'Who’s going'), crew),
       h('label', {}, 'Note', note),
       v ? h('div', { class: 'btns' }, done, del) : null,
+      v && !v.done ? h('div', { class: 'btns' }, h('button', { type: 'button', class: 'btn small', onclick: () => omwSheet(p, t, r, v) }, '🚗 On my way'), h('button', { type: 'button', class: 'btn small', onclick: () => remindNow(t, r, v) }, '🔔 Remind the customer')) : null,
     ].filter(Boolean), async () => {
       if (!going.size) throw new Error('Pick who’s going.');
       const body = { kind: kind.value, date: date.value, start: fromHm(start.value), end: fromHm(end.value), memberIds: [...going], note: note.value, flex: flex.checked };
@@ -8876,8 +8878,81 @@
       h('div', {}, h('b', {}, v.kind), h('span', {}, visitWhen(v)), h('span', { class: 'pj-visit-who' }, v.memberIds.map((id) => avatar(id)))),
       v.note ? h('p', {}, v.note) : null,
       h('div', { class: 'btns' },
+        v.done ? null : h('button', { class: 'btn small', onclick: () => omwSheet(p, t, r, v) }, '🚗 On my way'),
         h('button', { class: 'btn small' + (v.done ? '' : ' primary-btn'), onclick: async () => { await api('PATCH', '/visits/' + v.id, { done: !v.done }).catch((e) => toast(e.message)); } }, v.done ? 'Not done' : '✓ Visit done'),
         h('button', { class: 'btn small', onclick: () => visitSheet(p, t, r, v) }, 'Change')));
+  }
+
+  // ----- customer messages: on my way, reminders, review requests -----
+  // The server emails the customer under the team's name; a text is written for you and opened in your phone's
+  // Messages app (on a computer it's copied instead).
+  const smsLink = (phone, body) => `sms:${phone}${/iPhone|iPad|Macintosh/.test(navigator.userAgent) ? '&' : '?'}body=${encodeURIComponent(body)}`;
+  const onPhone = () => /iPhone|iPad|Android/.test(navigator.userAgent);
+  function textCustomer(sms) {
+    if (!sms?.phone) return toast('There’s no phone number for them.');
+    if (onPhone()) location.href = smsLink(sms.phone, sms.body);
+    else { copyText(sms.body); toast(`Message copied: text it to ${sms.phone}`); }
+  }
+  function custSaid(out, who, what) {
+    if (out.dne) return toast(`${who} is marked do not contact, so nothing was sent.`);
+    if (out.emailed) return toast(`${what} emailed to ${who}`);
+    if (!out.email) return toast(`${who} has no email address. Text them instead.`);
+    toast('Email isn’t working right now. Text them instead.');
+  }
+  const custOfJob = (t, r) => { const f = t.fields.find((x) => x.type === 'contact' && r.values[x.id]); return f ? custOf(r.values[f.id]) : null; };
+  function omwSheet(p, t, r, v) {
+    const c = custOfJob(t, r);
+    const who = c?.name || 'the customer';
+    const mins = h('select', {}, [10, 15, 20, 30, 45, 60, 90].map((n) => h('option', { value: n, selected: n === 20 }, `${n} minutes`)));
+    const go = async (email) => {
+      try {
+        const out = await api('POST', `/visits/${v.id}/on-my-way`, { minutes: Number(mins.value), email });
+        closeSheet();
+        if (email) custSaid(out, who, 'On my way');
+        else textCustomer(out.sms);
+      } catch (e) { toast(e.message); }
+    };
+    sheet(`On my way · ${who}`, [
+      h('label', {}, 'I’ll be there in about', mins),
+      c?.dne ? h('p', { class: 'day-hint' }, `${who} is marked do not contact.`) : null,
+      h('div', { class: 'btns' },
+        c?.phone && !c?.dne ? h('button', { class: 'btn primary-btn', onclick: () => go(false) }, `📱 Text ${firstOf(who) || who}`) : null,
+        c?.email && !c?.dne ? h('button', { class: 'btn' + (c?.phone ? '' : ' primary-btn'), onclick: () => go(true) }, `✉ Email ${firstOf(who) || who}`) : null),
+      !c?.phone && !c?.email ? h('p', { class: 'day-hint' }, 'There’s no phone or email for this customer. Add one in Contacts.') : null,
+    ].filter(Boolean));
+  }
+  async function remindNow(t, r, v) {
+    const c = custOfJob(t, r);
+    try {
+      const out = await api('POST', `/visits/${v.id}/remind`);
+      custSaid(out, c?.name || 'The customer', 'Reminder');
+      if (!out.emailed && out.sms) textCustomer(out.sms);
+    } catch (e) { toast(e.message); }
+  }
+  async function askForReview(t, r) {
+    const c = custOfJob(t, r);
+    if (!S.workspace?.custMsgs?.reviewUrl) return amAdmin() ? openSettings('general', '.cm-sec') : toast('Ask an owner to add the team’s review link in Settings.');
+    try {
+      const out = await api('POST', `/records/${r.id}/review-request`);
+      custSaid(out, c?.name || 'The customer', 'Review request');
+      if (!out.emailed && out.sms) textCustomer(out.sms);
+    } catch (e) { toast(e.message); }
+  }
+  // Settings → General (owners and admins): what customers hear from the team by themselves.
+  function custMsgSection() {
+    const cm = S.workspace.custMsgs || {};
+    const rem = h('input', { type: 'checkbox', checked: !!cm.reminders });
+    const rev = h('input', { type: 'checkbox', checked: !!cm.reviews });
+    const url = h('input', { type: 'url', value: cm.reviewUrl || '', placeholder: 'https://g.page/r/…/review' });
+    const save = () => api('PATCH', '/workspace', { custMsgs: { reminders: rem.checked, reviews: rev.checked, reviewUrl: url.value.trim() } }).then((w) => { S.workspace = w; toast('Saved'); }).catch((e) => { toast(e.message); rev.checked = !!S.workspace.custMsgs?.reviews; });
+    rem.addEventListener('change', save);
+    rev.addEventListener('change', save);
+    url.addEventListener('change', save);
+    return h('section', { class: 'cm-sec' }, h('h3', {}, 'Customer messages'),
+      h('label', { class: 'pick' }, rem, 'Email customers a reminder the day before a visit'),
+      h('label', { class: 'pick' }, rev, 'Ask for a review an hour after a job is paid'),
+      h('label', {}, 'Your review link (Google, Yelp, Facebook…)', url),
+      h('p', { style: 'margin-top:8px;font-size:11.5px' }, 'Emails come from your team’s name, and replies go to you. Anyone on a job can also send “On my way” from the visit, by text from their own phone or by email. Customers marked do not contact get nothing.'));
   }
 
   // ----- invoices: billing the customer for a job, getting paid, and what the job cost (owners and admins) -----
@@ -13600,6 +13675,7 @@
       newInp.addEventListener('keydown', (e) => e.key === 'Enter' && addStack());
       stackSec.append(h('div', { class: 'stack-row' }, newInp, h('button', { class: 'btn', onclick: addStack }, 'Add')));
       s.append(stackSec);
+      if (amAdmin() && toolOn('projects')) s.append(custMsgSection());
 
       // Auto-clear
       const sel = h('select', {},

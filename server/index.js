@@ -428,6 +428,7 @@ const publicWorkspace = (ws, memberId) => ({
   id: ws.id,
   name: ws.name,
   settings: ws.settings,
+  custMsgs: custMsgsOf(ws),
   tz: tzOf(ws),
   deleteAt: ws.deleteAt || null,
   deleteBy: ws.deleteAt ? ws.deleteBy : null,
@@ -991,6 +992,8 @@ function setVisit(ws, auth, rec, visitId, body, old = []) {
     const had = old.find((e) => e.memberId === memberId);
     const e = applyEntry(had ? { ...had } : { id: rid(), wsId: ws.id, memberId, by: auth.member, deviceId: auth.deviceId, createdAt: Date.now(), text: '', date: null, start: null, end: null, done: base.done || false, color: 'green', taskId: null }, fields);
     Object.assign(e, { recordId: rec.id, projectId: rec.projectId, visitId, visit: kind, note, flex: body.flex !== undefined ? !!body.flex : !!base.flex });
+    // Moved to another day or time: the customer gets a reminder for the new one.
+    if (had && (had.date !== e.date || had.start !== e.start)) e.reminded = null;
     db.entries[e.id] = e;
     out.push(e);
     broadcast(ws.id, { type: 'entry', entry: publicEntry(e) });
@@ -3099,6 +3102,111 @@ function runAutopay() {
   }
 }
 
+// ---------- customer messages: on my way, visit reminders, review requests ----------
+// Email goes out under the team's name from Kloomie's address, and replies go to whoever sent it (the owner, for
+// the ones Kloomie sends by itself). Texts go from the person's own phone: Kloomie writes the message and the app
+// opens their Messages app with it, so there's no texting service to sign up for. Customers marked do not contact
+// get nothing. Reminders and review requests are off until an owner or admin turns them on.
+const CM_TICK = Number(process.env.CUSTMSG_TICK_MS) || 5 * 60_000;
+const REVIEW_DELAY = process.env.REVIEW_DELAY_MS != null ? Number(process.env.REVIEW_DELAY_MS) : 3600_000;
+const REMIND_FROM = 9 * 60; // reminders go out from 9am the day before, on the team's clock
+const custMsgsOf = (ws) => ({ reminders: false, reviews: false, reviewUrl: '', ...ws.custMsgs });
+function jobCustomer(rec) {
+  const j = jobOfRecord(rec);
+  const cf = j?.t.fields.find((f) => f.type === 'contact' && rec.values[f.id]);
+  return (cf && db.contacts[rec.values[cf.id]]) || null;
+}
+const emailable = (c) => !!c && !noContact(c) && EMAIL_RE.test(c.email || '');
+const firstName = (c) => String(c?.name || '').trim().split(/\s+/)[0] || 'there';
+const jobAddress = (rec) => { const af = jobOfRecord(rec)?.t.fields.find((f) => f.key === 'address'); return (af && rec.values[af.id]) || ''; };
+const longDay = (d) => new Date(d + 'T12:00:00Z').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', timeZone: 'UTC' });
+const visitTime = (v) => v.flex || v.start == null ? 'during the day' : v.end != null && v.end - v.start > 60 ? `between ${fmtMinutes(v.start)} and ${fmtMinutes(v.end)}` : `at ${fmtMinutes(v.start)}`;
+const ownerReply = (ws) => ownerEmails(ws)[0] || undefined;
+const memberReply = (ws, memberId) => { const u = userOf(memberById(ws, memberId)); return u?.email && u.emailVerified ? u.email : ownerReply(ws); };
+// What a text would say, and where to: the app opens it in the person's Messages app.
+const smsOf = (c, body) => ({ phone: String(c?.phone || '').replace(/[^\d+]/g, ''), body });
+// One message to a customer: emailed when they have an address (and email works here), and a text to send.
+async function tellCustomer(ws, rec, c, { tag, subject, heading, lines, button, text, replyTo, by, what }) {
+  let emailed = false;
+  if (emailable(c) && mailer.mode !== 'off') {
+    emailed = await mailer.customerEmail(c.email, { team: ws.name, replyTo, subject, heading, lines, button, tag }).then(() => true, (e) => (console.error('Customer email failed:', e.message), false));
+  }
+  if (emailed) PJ.recordActivity(rec.id, { kind: 'email', what, note: `Emailed ${c.email}`, by });
+  return { emailed, email: emailable(c) ? c.email : null, dne: !!c && noContact(c), sms: c && !noContact(c) && c.phone ? smsOf(c, text) : null };
+}
+// On my way: the customer hears who's coming and about when.
+async function onMyWay(ws, auth, rec, v, minutes, send) {
+  const c = jobCustomer(rec);
+  const mins = Math.max(5, Math.min(240, Math.round(Number(minutes) || 20)));
+  const at = localNow(tzOf(ws), Date.now() + mins * 60_000).min;
+  const who = auth.member.split(/\s+/)[0];
+  const text = `Hi ${firstName(c)}, it's ${who} from ${ws.name}. I'm on my way and should be there around ${fmtMinutes(Math.round(at / 5) * 5)} (about ${mins} minutes).`;
+  const out = send
+    ? await tellCustomer(ws, rec, c, { tag: 'on-my-way', subject: `${who} from ${ws.name} is on the way`, heading: `${who} is on the way`, lines: [`Hi ${firstName(c)},`, `${who} from ${ws.name} is on the way for your ${v.kind.toLowerCase()} and should be there around ${fmtMinutes(Math.round(at / 5) * 5)}, in about ${mins} minutes.`, jobAddress(rec) ? `Address: ${jobAddress(rec)}` : ''].filter(Boolean), text, replyTo: memberReply(ws, auth.memberId), by: auth.member, what: 'on my way sent' })
+    : { emailed: false, email: emailable(c) ? c.email : null, dne: !!c && noContact(c), sms: c && !noContact(c) && c.phone ? smsOf(c, text) : null };
+  for (const e of visitEntries(v.id)) e.omw = Date.now();
+  save();
+  return out;
+}
+const reminderText = (ws, c, v, rec) => `Hi ${firstName(c)}, this is ${ws.name}: a reminder we're coming ${longDay(v.date)} ${visitTime(v)} for your ${v.kind.toLowerCase()}${jobAddress(rec) ? ' at ' + jobAddress(rec) : ''}. Reply if you need to change it.`;
+async function remindVisit(ws, rec, v, by = 'Kloomie') {
+  const c = jobCustomer(rec);
+  const out = await tellCustomer(ws, rec, c, { tag: 'visit-reminder', subject: `Reminder: ${ws.name} is coming ${v.date === dayIn(tzOf(ws), Date.now() + 864e5) ? 'tomorrow' : longDay(v.date)}`, heading: `See you ${longDay(v.date)}`,
+    lines: [`Hi ${firstName(c)},`, `This is a reminder that ${ws.name} is coming ${longDay(v.date)} ${visitTime(v)} for your ${v.kind.toLowerCase()}.`, jobAddress(rec) ? `Address: ${jobAddress(rec)}` : '', 'Need to change it? Just reply to this email.'].filter(Boolean),
+    text: reminderText(ws, c, v, rec), replyTo: ownerReply(ws), by, what: 'visit reminder sent' });
+  return out;
+}
+const reviewText = (ws, c, url) => `Hi ${firstName(c)}, thanks for choosing ${ws.name}! If you have a minute, a quick review would mean a lot to us: ${url}`;
+async function askReview(ws, rec, by = 'Kloomie') {
+  const { reviewUrl } = custMsgsOf(ws);
+  const c = jobCustomer(rec);
+  rec.reviewAsked = Date.now();
+  rec.reviewDue = null;
+  save();
+  return tellCustomer(ws, rec, c, { tag: 'review-request', subject: `Thanks from ${ws.name}`, heading: `Thank you, ${firstName(c)}!`,
+    lines: [`Thanks for choosing ${ws.name}. We hope you're happy with the work.`, 'If you have a minute, a quick review helps a small business like ours more than anything.'],
+    button: { label: 'Leave a review', url: reviewUrl }, text: reviewText(ws, c, reviewUrl), replyTo: ownerReply(ws), by, what: 'review request sent' });
+}
+// A job reaching Paid asks for a review an hour later, once, when the team has that turned on. The stage it was at
+// last time is kept on the job, so only a move to Paid counts (not a job that was already paid).
+function jobChanged(rec) {
+  const j = jobOfRecord(rec);
+  const st = j?.t.trade && j.t.fields.find((f) => f.key === 'status' && f.type === 'select');
+  if (!st) return;
+  const now = st.choices.find((c) => c.id === rec.values[st.id])?.label || '';
+  const was = rec.stageWas;
+  rec.stageWas = now;
+  if (was === undefined || was === now || now !== 'Paid' || rec.reviewAsked || rec.reviewDue) return;
+  const ws = db.workspaces[rec.wsId];
+  const cm = custMsgsOf(ws);
+  if (cm.reviews && cm.reviewUrl && emailable(jobCustomer(rec))) rec.reviewDue = Date.now() + REVIEW_DELAY;
+}
+async function custMsgTick() {
+  if (mailer.mode === 'off') return;
+  const now = Date.now();
+  // Reviews that are due.
+  for (const rec of Object.values(db.records)) {
+    if (!rec.reviewDue || rec.reviewDue > now || offline(rec.wsId)) continue;
+    const ws = db.workspaces[rec.wsId];
+    if (!custMsgsOf(ws).reviews || !custMsgsOf(ws).reviewUrl) { rec.reviewDue = null; continue; }
+    await askReview(ws, rec);
+  }
+  // Visits tomorrow, once it's 9am today on the team's clock.
+  const groups = new Map();
+  for (const e of Object.values(db.entries)) if (e.visitId && !e.done && !e.reminded) (groups.get(e.visitId) || groups.set(e.visitId, []).get(e.visitId)).push(e);
+  for (const [visitId, list] of groups) {
+    const ws = db.workspaces[list[0].wsId];
+    if (!ws || offline(ws.id) || !custMsgsOf(ws).reminders || billingOf(ws).readOnly) continue;
+    const here = localNow(tzOf(ws), now);
+    if (list[0].date !== dayIn(tzOf(ws), now + 864e5) || here.min < REMIND_FROM) continue;
+    const rec = db.records[list[0].recordId];
+    for (const e of visitEntries(visitId)) e.reminded = now;
+    save();
+    if (rec && emailable(jobCustomer(rec))) await remindVisit(ws, rec, publicVisit(list));
+  }
+}
+setInterval(() => custMsgTick().catch((e) => alarm('Customer messages failed', e)), CM_TICK).unref?.();
+
 // ---------- finance: money in and out, budgets, and money goals on campaigns ----------
 // Entries are seen like bills: personal ones by their owner only, business ones by the team's owners too.
 // Tagging one to a campaign counts it as that campaign's cost (out) or earnings (in); tagging it to a money
@@ -4908,6 +5016,18 @@ async function api(req, res, url) {
     const at = rec && PJ.recordAt(rec.id, ws.id, auth.memberId);
     if (!at || !list.length) return send(res, 404, { error: 'That visit is gone.' });
     if (m === 'PATCH') return send(res, 200, setVisit(ws, auth, rec, b, await readJson(req, 20_000), list));
+    // On my way, or a reminder sent now: emailed to the customer when asked, and the text for the person's phone.
+    if (m === 'POST' && c === 'on-my-way') {
+      const body = await readJson(req, 5_000);
+      return send(res, 200, await onMyWay(ws, auth, rec, publicVisit(list), body.minutes, body.email !== false));
+    }
+    if (m === 'POST' && c === 'remind') {
+      const v = publicVisit(list);
+      const out = await remindVisit(ws, rec, v, auth.member);
+      for (const e of list) e.reminded = Date.now();
+      save();
+      return send(res, 200, out);
+    }
     if (m === 'DELETE') {
       for (const e of list) {
         delete db.entries[e.id];
@@ -4919,6 +5039,13 @@ async function api(req, res, url) {
       visitNews(rec);
       return send(res, 200, { ok: true });
     }
+  }
+  // Asking the customer for a review: emailed now (with the team's review link), and the text for a phone.
+  if (a === 'records' && c === 'review-request' && m === 'POST') {
+    const at = PJ.recordAt(b, ws.id, auth.memberId);
+    if (!at || !jobOfRecord(at.rec)) return send(res, 404, { error: 'That job is gone.' });
+    if (!custMsgsOf(ws).reviewUrl) return send(res, 400, { error: 'Add your review link first, in Settings → General → Customer messages.' });
+    return send(res, 200, await askReview(ws, at.rec, auth.member));
   }
   {
     const out = await INV.route(req, res, parts, auth, ws);
@@ -6801,6 +6928,20 @@ async function api(req, res, url) {
       if (!isAdmin(auth)) return send(res, 403, { error: 'Only team owners and admins can change where routes start.' });
       ws.settings.base = cleanText(body.base, 200);
     }
+    // What customers hear from the team by themselves: visit reminders, and a review request once a job's paid.
+    if (body.custMsgs && typeof body.custMsgs === 'object') {
+      if (!isAdmin(auth)) return send(res, 403, { error: 'Only team owners and admins can change customer messages.' });
+      const cm = { ...custMsgsOf(ws) };
+      if (body.custMsgs.reminders !== undefined) cm.reminders = !!body.custMsgs.reminders;
+      if (body.custMsgs.reviews !== undefined) cm.reviews = !!body.custMsgs.reviews;
+      if (body.custMsgs.reviewUrl !== undefined) {
+        const u = String(body.custMsgs.reviewUrl || '').trim();
+        if (u && !/^https:\/\/[^\s<>"]{4,500}$/.test(u)) return send(res, 400, { error: 'The review link should start with https://' });
+        cm.reviewUrl = u;
+      }
+      if (cm.reviews && !cm.reviewUrl) return send(res, 400, { error: 'Add your review link (Google, Yelp…) to send review requests.' });
+      ws.custMsgs = cm;
+    }
     // What an hour of work costs the business, for what jobs cost. Kept off the settings everyone sees.
     if (body.laborRate !== undefined) {
       if (!isAdmin(auth)) return send(res, 403, { error: 'Only team owners and admins can set the labor rate.' });
@@ -7422,6 +7563,7 @@ async function importData(req, res) {
 // Projects and the public API (projects.js).
 const PJ = projectsModule({ db, save, broadcast, rid, cleanText, isDay, readJson, send, badRequest, isOwnerId, escHtml, brandOf, logoUrl, teamDay, offline, allowLocalHooks: process.env.ALLOW_LOCAL_WEBHOOKS === '1',
   onRecordGone: (rec) => { dropVisits(rec); INV.dropFor(rec); },
+  onRecordNews: (rec) => jobChanged(rec),
   // A follow-up from a record's timeline: a task for whoever logged it, about the record.
   makeTask: (ws, auth, { text, due, recordId }) => {
     const t = applyTask({ id: rid(), wsId: ws.id, by: auth.member, createdAt: Date.now(), text: '', done: false, doneAt: null, due: null, priority: 0, goalId: null, assigneeId: null }, { text, due, assigneeId: auth.memberId, recordId });

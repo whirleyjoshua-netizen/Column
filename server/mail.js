@@ -10,18 +10,21 @@ const esc = (t) => String(t).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&
 
 export function createMailer({ token, from, outbox, appName }) {
   const mode = token && from ? 'resend' : outbox ? 'outbox' : 'off';
-  async function send({ to, subject, text, html, tag }) {
+  // fromName: whose name the email comes in under (a team writing to its customer), still from our address.
+  async function send({ to, subject, text, html, tag, fromName, replyTo }) {
     if (mode === 'off') throw new Error('Email isn’t set up on this server.');
+    const addr = /<([^>]+)>/.exec(from || '')?.[1] || from;
+    const sender = fromName ? `"${String(fromName).replace(/["\\<>\r\n]/g, '').slice(0, 60)}" <${addr}>` : from;
     if (mode === 'outbox') {
       fs.mkdirSync(outbox, { recursive: true });
       const file = path.join(outbox, `${Date.now()}-${crypto.randomBytes(4).toString('hex')}.json`);
-      fs.writeFileSync(file, JSON.stringify({ to, subject, text, html, tag, at: Date.now() }));
+      fs.writeFileSync(file, JSON.stringify({ to, subject, text, html, tag, fromName, replyTo, at: Date.now() }));
       return { ok: true };
     }
     const r = await fetch('https://api.resend.com/emails', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ from, to: [to], subject, text, html, tags: tag ? [{ name: 'kind', value: tag }] : undefined }),
+      body: JSON.stringify({ from: sender, to: [to], subject, text, html, ...(replyTo ? { reply_to: replyTo } : {}), tags: tag ? [{ name: 'kind', value: tag }] : undefined }),
       signal: AbortSignal.timeout(15_000),
     });
     if (!r.ok) {
@@ -32,11 +35,11 @@ export function createMailer({ token, from, outbox, appName }) {
   }
 
   // One plain layout for every email: a heading, a few lines, maybe a code or a button.
-  function layout({ heading, lines, code, button, foot }) {
+  function layout({ heading, lines, code, button, foot, brand }) {
     const html = `<!doctype html><html><body style="margin:0;background:#f3f3f6;font:15px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#16161a">
 <div style="max-width:480px;margin:0 auto;padding:28px 16px">
 <div style="background:#fff;border-radius:14px;padding:24px">
-<div style="font-weight:700;font-size:13px;color:#6b5cf0;margin-bottom:14px">${esc(appName)}</div>
+<div style="font-weight:700;font-size:13px;color:#6b5cf0;margin-bottom:14px">${esc(brand || appName)}</div>
 <h1 style="font-size:19px;margin:0 0 10px">${esc(heading)}</h1>
 ${lines.map((l) => `<p style="margin:0 0 12px">${esc(l)}</p>`).join('')}
 ${code ? `<div style="font:700 30px/1 ui-monospace,Menlo,monospace;letter-spacing:6px;background:#f3f3f6;border-radius:10px;padding:16px;text-align:center;margin:16px 0">${esc(code)}</div>` : ''}
@@ -47,6 +50,13 @@ ${button ? `<p style="margin:18px 0"><a href="${esc(button.url)}" style="display
     const text = [heading, '', ...lines, code ? `\n    ${code}\n` : '', button ? `${button.label}: ${button.url}\n` : '', foot].filter((x) => x !== '').join('\n');
     return { html, text };
   }
+
+  // A team writing to one of its customers: on the way, a visit tomorrow, asking for a review. It comes in under
+  // the team's name, and replies go to the team.
+  const customerEmail = (to, { team, replyTo, subject, heading, lines, button, tag }) => send({
+    to, tag, subject, fromName: team, replyTo,
+    ...layout({ brand: team, heading, lines, button, foot: `Sent by ${team} with ${appName}. Reply to this email to reach them.` }),
+  });
 
   const codeEmail = (to, code) => send({
     to, tag: 'verify',
@@ -176,5 +186,5 @@ ${button ? `<p style="margin:18px 0"><a href="${esc(button.url)}" style="display
     });
   };
 
-  return { mode, send, codeEmail, alertEmail, resetEmail, inviteEmail, emailChanged, teamDeleting, teamKept, accountDeleted, exportReady, welcomeEmail, trialEmail };
+  return { mode, send, customerEmail, codeEmail, alertEmail, resetEmail, inviteEmail, emailChanged, teamDeleting, teamKept, accountDeleted, exportReady, welcomeEmail, trialEmail };
 }
