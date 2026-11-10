@@ -2036,6 +2036,8 @@ body.platform-darwin .pj-head, body.platform-darwin .pj-top { padding-left: 80px
 .pj-inv-pay { display: flex; align-items: center; gap: 10px; font-size: 13px; padding: 4px 0; border-bottom: 1px solid var(--line); }
 .pj-inv-pay span { flex: 1; }
 .pj-inv-pay small { color: var(--muted); }
+.cm-url { display: flex; flex-direction: column; gap: 5px; margin-top: 8px; font-size: 12px; color: var(--muted); }
+.cm-url input { width: 100%; }
 .pay-sec .row-in { display: flex; gap: 8px; }
 .pay-sec .row-in input { flex: 1; min-width: 0; }
 @media (prefers-color-scheme: light) {

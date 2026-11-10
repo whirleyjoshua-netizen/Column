@@ -8941,17 +8941,15 @@
   // Settings → General (owners and admins): what customers hear from the team by themselves.
   function custMsgSection() {
     const cm = S.workspace.custMsgs || {};
-    const rem = h('input', { type: 'checkbox', checked: !!cm.reminders });
-    const rev = h('input', { type: 'checkbox', checked: !!cm.reviews });
     const url = h('input', { type: 'url', value: cm.reviewUrl || '', placeholder: 'https://g.page/r/…/review' });
     const save = () => api('PATCH', '/workspace', { custMsgs: { reminders: rem.checked, reviews: rev.checked, reviewUrl: url.value.trim() } }).then((w) => { S.workspace = w; toast('Saved'); }).catch((e) => { toast(e.message); rev.checked = !!S.workspace.custMsgs?.reviews; });
-    rem.addEventListener('change', save);
-    rev.addEventListener('change', save);
+    const remRow = toggleRow('Visit reminders', 'Email customers the day before a visit', cm.reminders, save);
+    const revRow = toggleRow('Review requests', 'Ask for a review an hour after a job is paid', cm.reviews, save);
+    const rem = remRow.querySelector('input');
+    const rev = revRow.querySelector('input');
     url.addEventListener('change', save);
-    return h('section', { class: 'cm-sec' }, h('h3', {}, 'Customer messages'),
-      h('label', { class: 'pick' }, rem, 'Email customers a reminder the day before a visit'),
-      h('label', { class: 'pick' }, rev, 'Ask for a review an hour after a job is paid'),
-      h('label', {}, 'Your review link (Google, Yelp, Facebook…)', url),
+    return h('section', { class: 'cm-sec' }, h('h3', {}, 'Customer messages'), remRow, revRow,
+      h('label', { class: 'cm-url' }, 'Your review link (Google, Yelp, Facebook…)', url),
       h('p', { style: 'margin-top:8px;font-size:11.5px' }, 'Emails come from your team’s name, and replies go to you. Anyone on a job can also send “On my way” from the visit, by text from their own phone or by email. Customers marked do not contact get nothing.'));
   }
 
@@ -8964,6 +8962,8 @@
   const PAY_METHODS = [['cash', 'Cash'], ['check', 'Check'], ['card', 'Card (in person)'], ['bank', 'Bank transfer'], ['other', 'Other']];
   async function loadInvoices(r, force) {
     if (PR.invoices.has(r.id) && !force) return;
+    // Whether Stripe is connected decides what the invoice says about card payments, so know it before one opens.
+    if (!S.payments) api('GET', '/payments/stripe').then((y) => { S.payments = y; }).catch(() => {});
     const [list, cost] = await Promise.all([api('GET', `/records/${r.id}/invoices`).catch(() => null), api('GET', `/records/${r.id}/costing`).catch(() => null)]);
     if (list) PR.invoices.set(r.id, list);
     if (cost) PR.costing.set(r.id, cost);
