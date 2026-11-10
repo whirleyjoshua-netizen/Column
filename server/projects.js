@@ -14,6 +14,7 @@ import crypto from 'node:crypto';
 import dns from 'node:dns/promises';
 import net from 'node:net';
 import { TRADES, tradeType, tradeMenu } from './trades.js';
+import { TECH_TEMPLATE, techPrefix } from './tech.js';
 
 export const FIELD_TYPES = ['text', 'number', 'money', 'date', 'select', 'multi', 'person', 'email', 'phone', 'url', 'checkbox', 'link', 'items', 'autonumber', 'files',
   // For jobs at a customer's place: who it's for (a contact), what gets done on site, what was measured, the
@@ -70,6 +71,7 @@ const CLIENTS_TYPE = { key: 'clients', name: 'Clients', singular: 'Client', icon
 // other (links, the primary field, a board's column) by key here, and by id once made.
 const choice = (label, color) => ({ label, color });
 export const TEMPLATES = {
+  tech: TECH_TEMPLATE,
   crm: {
     name: 'CRM', icon: '🤝', about: 'Contacts, companies and deals, with a pipeline board',
     types: [
@@ -307,11 +309,23 @@ export function projectsModule({ db, save, broadcast, rid, hold = null, cleanTex
   // A list from its definition. Links find their list by key among `others`; one with nowhere to point is left out.
   function typeFrom(src, typeIdOf) {
     const t = { id: rid(8), key: src.key, name: src.name, singular: src.singular, icon: src.icon, ...(src.trade ? { trade: src.trade } : {}) };
-    t.fields = src.fields.filter((f) => f.type !== 'link' || typeIdOf(f.target)).map((f) => ({ id: rid(8), key: f.key, name: f.name, type: f.type, ...(f.choices ? { choices: f.choices.map((c) => ({ id: rid(6), label: c.label, color: c.color })) } : {}), ...(f.type === 'link' ? { target: typeIdOf(f.target), many: false } : {}), ...(f.type === 'autonumber' ? { prefix: f.prefix || '', next: f.start || 1, start: f.start || 1 } : {}), ...fieldExtras(f) }));
+    t.fields = src.fields.filter((f) => f.type !== 'link' || typeIdOf(f.target)).map((f) => ({ id: rid(8), key: f.key, name: f.name, type: f.type, ...(f.choices ? { choices: f.choices.map((c) => ({ id: rid(6), label: c.label, color: c.color })) } : {}), ...(f.type === 'link' ? { target: typeIdOf(f.target), many: !!f.many } : {}), ...(f.type === 'autonumber' ? { prefix: f.prefix || '', next: f.start || 1, start: f.start || 1 } : {}), ...fieldExtras(f) }));
     t.primary = t.fields.find((f) => f.key === src.primary)?.id || t.fields[0].id;
     // A new record starts at the first stage, so it never sits in "No status".
     for (const f of t.fields) if ((f.key === 'stage' || f.key === 'status') && f.choices?.length) f.default = f.choices[0].id;
-    t.views = src.views.map((v) => ({ id: rid(8), name: v.name, kind: v.kind, ...(v.groupBy ? { groupBy: t.fields.find((f) => f.key === v.groupBy)?.id } : {}), sort: v.sortBy ? { field: t.fields.find((f) => f.key === v.sortBy)?.id, dir: 'asc' } : null }));
+    // A field shown only when another is set a certain way (a bug's steps to reproduce), and views narrowed to
+    // some records (Bugs): by key and choice label in the definition, by id here.
+    const byKey = (k) => t.fields.find((f) => f.key === k);
+    const choiceIds = (f, labels) => (labels || []).map((l) => f?.choices?.find((c) => c.label === l)?.id).filter(Boolean);
+    for (const f of t.fields) {
+      const sf = src.fields.find((x) => x.key === f.key);
+      const on = sf?.showIf && byKey(sf.showIf.field);
+      if (on) f.showIf = { field: on.id, is: choiceIds(on, sf.showIf.is) };
+    }
+    t.views = src.views.map((v) => {
+      const ff = v.filter && byKey(v.filter.field);
+      return { id: rid(8), name: v.name, kind: v.kind, ...(v.groupBy ? { groupBy: byKey(v.groupBy)?.id } : {}), sort: v.sortBy ? { field: byKey(v.sortBy)?.id, dir: 'asc' } : null, ...(ff ? { filter: { field: ff.id, is: choiceIds(ff, v.filter.is) } } : {}) };
+    });
     return t;
   }
   // What a job field carries besides its type: a checklist's or readings' starting lines, how a measurement is
@@ -324,6 +338,7 @@ export function projectsModule({ db, save, broadcast, rid, hold = null, cleanTex
       out.unit = ['in', 'ft', 'cm', 'm'].includes(f.unit) ? f.unit : out.mode === 'wh' ? 'in' : 'ft';
     }
     if (f.hint) out.hint = cleanText(f.hint, 120);
+    if (f.type === 'text' && f.long) out.long = true;
     return out;
   }
   // A Jobs project from the trades a team does: a list for each.
@@ -410,7 +425,7 @@ export function projectsModule({ db, save, broadcast, rid, hold = null, cleanTex
     if (v === null || v === undefined || v === '') return undefined;
     const str = (n) => cleanText(v, n);
     switch (f.type) {
-      case 'text': return str(2000) || undefined;
+      case 'text': return str(f.long ? 8000 : 2000) || undefined;
       case 'email': {
         const e = str(200).toLowerCase();
         if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)) throw bad(`${f.name}: “${str(60)}” isn’t an email address.`);
@@ -815,9 +830,12 @@ export function projectsModule({ db, save, broadcast, rid, hold = null, cleanTex
       if (m === 'POST' && !b) {
         const body = await readJson(req, 50_000);
         const trades = body.template === 'trades';
+        const tech = body.template === 'tech';
         const { types, template, icon } = trades ? { types: fromTrades(body.trades), template: 'trades', icon: '🛠️' } : fromTemplate(body.template, ws.id);
         const own = template === 'custom' && db.projectTemplates[String(body.template).slice(7)];
         const p = { id: rid(), wsId: ws.id, name: cleanText(body.name, 80) || own?.name || (trades ? 'Jobs' : TEMPLATES[template].name), icon: cleanText(body.icon, 8) || icon || TEMPLATES[template].icon, template, types, private: !!body.private, memberIds: [], memberId: auth.memberId, by: auth.member, createdAt: Date.now(), updatedAt: Date.now() };
+        // A software project's keys start with letters from its name: Atlas → ATL-1.
+        if (tech) for (const t of p.types) for (const f of t.fields) if (f.type === 'autonumber') f.prefix = techPrefix(p.name);
         db.projects[p.id] = p;
         projectNews(p);
         return send(res, 200, publicProject(p));

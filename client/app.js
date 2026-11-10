@@ -8375,7 +8375,7 @@
   function newProjectSheet() {
     let tpl = 'crm';
     const name = h('input', { placeholder: 'Sales', maxlength: 80 });
-    const TPL = { crm: ['🤝', 'CRM', 'Contacts, companies and deals, with a pipeline board'], bids: ['📐', 'Bids & Quotes', 'Jobs you bid on, quotes customers accept online, jobs, clients, a price list'], trades: ['🛠️', 'Jobs (by trade)', 'Pick the kinds of work you do: each gets its own job details, checklist and stages'], jobs: ['🚚', 'Jobs & Installs', 'Jobs from scheduled to paid, with crews, dates and photos'], blank: ['📁', 'Blank', 'One list to shape as you like'] };
+    const TPL = { tech: ['💻', 'Technology & software', 'Work items on a development board, features on a roadmap, releases, sprints'], crm: ['🤝', 'CRM', 'Contacts, companies and deals, with a pipeline board'], bids: ['📐', 'Bids & Quotes', 'Jobs you bid on, quotes customers accept online, jobs, clients, a price list'], trades: ['🛠️', 'Jobs (by trade)', 'Pick the kinds of work you do: each gets its own job details, checklist and stages'], jobs: ['🚚', 'Jobs & Installs', 'Jobs from scheduled to paid, with crews, dates and photos'], blank: ['📁', 'Blank', 'One list to shape as you like'] };
     api('GET', '/project-templates').then((list) => {
       for (const x of list) TPL['custom:' + x.id] = ['⭐', x.name, x.about || x.lists.join(', '), x];
       if (list.length) draw();
@@ -8497,6 +8497,7 @@
     if (f.type === 'link') { const to = prType(p, f.target); return v.map((id) => recById(p.id, id)).filter(Boolean).map((r) => h('button', { class: 'pj-link', onclick: (e) => { e.stopPropagation(); PR.type = r.typeId; PR.view = null; PR.panel = r.id; renderProjects(); } }, recName(to, r))); }
     if (f.type === 'items') { const tt = itemsTotals(v); return h('span', { class: 'pj-num', title: `${v.rows.length} line${v.rows.length === 1 ? '' : 's'}${tt.cost != null ? ` · margin ${tt.marginPct}%` : ''}` }, money(tt.total)); }
     if (f.type === 'autonumber') return h('span', { class: 'pj-num pj-auto' }, v);
+    if (f.type === 'text' && f.long) return h('span', { class: 'pj-long' }, v);
     if (f.type === 'files') return v.map((id) => S.items.find((x) => x.id === id)).filter(Boolean).map((it) => h('button', { class: 'pj-link', onclick: (e) => { e.stopPropagation(); openPreview(it); } }, '📎 ' + shortText(it.name, 28)));
     if (f.type === 'checklist') { const done = v.items.filter((x) => x.done).length; return h('span', { class: 'pj-clmini', title: `${done} of ${v.items.length} done` }, h('span', { class: 'pj-cl-bar' }, h('i', { style: `width:${v.items.length ? Math.round((done / v.items.length) * 100) : 0}%` })), h('small', {}, `${done}/${v.items.length}`)); }
     if (f.type === 'materials') { const c = materialsCost(v); return h('span', { class: 'pj-num' }, `${v.rows.length} item${v.rows.length === 1 ? '' : 's'}${c ? ' · ' + money(c) : ''}`); }
@@ -8555,6 +8556,19 @@
         { label: `+ New ${(to?.singular || 'record').toLowerCase()}…`, run: async () => { const n = await prNewQuick(p, to); if (n) set(f.many ? [...cur, n.id] : [n.id]); } },
         cur.length ? { label: 'Clear', run: () => set(null) } : null,
       ].filter(Boolean));
+    }
+    // Longer words (a description, steps to reproduce): a box that grows; Enter is a new line, ⌘/Ctrl+Enter or
+    // clicking away saves.
+    if (f.type === 'text' && f.long) {
+      const ta = h('textarea', { class: 'pj-input pj-long-in', rows: Math.min(14, Math.max(4, String(v || '').split('\n').length + 1)) });
+      ta.value = v || '';
+      let gone = false;
+      const end = (save) => { if (gone) return; gone = true; ta.replaceWith(anchor); if (save && ta.value.trim() !== String(v || '')) set(ta.value.trim() || null); };
+      ta.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) end(true); if (e.key === 'Escape') end(false); });
+      ta.addEventListener('blur', () => end(true));
+      anchor.replaceWith(ta);
+      ta.focus();
+      return;
     }
     // Words, numbers, money, dates: a box in place of the value.
     const inp = h('input', { class: 'pj-input', type: f.type === 'date' ? 'date' : f.type === 'number' || f.type === 'money' ? 'text' : f.type === 'email' ? 'email' : 'text', inputmode: f.type === 'number' || f.type === 'money' ? 'decimal' : null, value: v == null ? '' : f.type === 'money' ? (v / 100).toFixed(v % 100 ? 2 : 0) : v });
@@ -8753,10 +8767,12 @@
       await prCall('PATCH', '/records/' + r.id, { docId: it.id }).then((y) => y && prUpsertRecord(y));
       openDoc(it, { fresh: false });
     };
-    const fields = t.fields.filter((f) => f.id !== t.primary && f.type !== 'items' && f.type !== 'contact' && !PR_RICH.includes(f.type));
+    // A field only for some records (a bug's steps to reproduce) shows when it applies, or when it has something in it.
+    const applies = (f) => !f.showIf || f.showIf.is.includes(String(r.values[f.showIf.field] ?? '')) || (r.values[f.id] != null && r.values[f.id] !== '');
+    const fields = t.fields.filter((f) => f.id !== t.primary && f.type !== 'items' && f.type !== 'contact' && !PR_RICH.includes(f.type) && applies(f));
     const itemFields = t.fields.filter((f) => f.type === 'items');
     const custFields = t.fields.filter((f) => f.type === 'contact');
-    const richFields = t.fields.filter((f) => PR_RICH.includes(f.type) && !f.hidden);
+    const richFields = t.fields.filter((f) => PR_RICH.includes(f.type) && !f.hidden && applies(f));
     const fieldRow = (f) => {
       const val = h('div', { class: 'pj-cell' }, prShow(p, f, r.values[f.id]) ?? (f.type === 'checkbox' ? h('span', { class: 'pj-check' }) : h('span', { class: 'pj-empty-v' }, 'Empty')));
       val.addEventListener('click', (e) => { if (e.target.closest('a, .pj-link')) return; prEdit(val, p, t, r, f); });
