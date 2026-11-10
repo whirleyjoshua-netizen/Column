@@ -17,6 +17,8 @@ import { PdfError, stampPdf, addCertificate, pageCount, writeDoc } from './pdf.j
 import { routesOn, dayRoute } from './routes.js';
 import { projectsModule } from './projects.js';
 import { invoicesModule } from './invoices.js';
+import { publicApiModule } from './publicapi.js';
+import { EVENTS as HOOK_EVENTS } from './projects.js';
 import { hqModule } from './hq.js';
 import { openStore, Fenced } from './store.js';
 import { createMailer } from './mail.js';
@@ -1011,7 +1013,37 @@ function setVisit(ws, auth, rec, visitId, body, old = []) {
   if (!old.length) advanceJob(rec, kind, false);
   if (body.done === true) advanceJob(rec, kind, true);
   visitNews(rec);
-  return publicVisit(out);
+  const v = publicVisit(out);
+  hook(ws.id, !old.length ? 'visit.scheduled' : body.done === true && !old.every((e) => e.done) ? 'visit.done' : 'visit.changed', () => API.apiVisit(v), auth.member);
+  return v;
+}
+// One visit called off: every person's copy goes.
+function dropVisit(ws, rec, list, by) {
+  const v = API.apiVisit(publicVisit(list));
+  for (const e of list) {
+    delete db.entries[e.id];
+    broadcast(ws.id, { type: 'entry:remove', id: e.id, forMember: e.memberId });
+    pushEntry(e, 'delete');
+  }
+  save();
+  syncJob(rec);
+  visitNews(rec);
+  hook(ws.id, 'visit.cancelled', () => v, by);
+}
+// Who a job is for, as other apps see it: its contact, and the address the work is at.
+function jobCustomerOut(rec) {
+  const j = jobOfRecord(rec);
+  if (!j) return null;
+  const cf = j.t.fields.find((f) => f.type === 'contact' && rec.values[f.id]);
+  const c = cf && db.contacts[rec.values[cf.id]];
+  const af = j.t.fields.find((f) => f.key === 'address');
+  const address = (af && rec.values[af.id]) || [c?.address, c?.city].filter(Boolean).join(', ');
+  return c || address ? { contact_id: c?.id || null, name: c?.name || c?.company || '', email: c?.email || '', phone: c?.phone || '', address: address || '' } : null;
+}
+// A webhook event from somewhere in the app. The data is only worked out when some webhook wants it.
+function hook(wsId, type, data, by) {
+  if (!Object.values(db.webhooks || {}).some((h) => h.wsId === wsId && h.active && !h.projectId && h.events.includes(type))) return;
+  try { PJ.emit(wsId, type, typeof data === 'function' ? data() : data, by); } catch (e) { alarm('A webhook event failed to build', e); }
 }
 // A job deleted takes its visits with it.
 function dropVisits(rec) {
@@ -2776,6 +2808,7 @@ function fillContacts(ws, src, people, { announce = false } = {}) {
   }
   refreshLiveSoon(ws.id);
   if (announce) for (const [kind, x] of news) if (db.contacts[x.id]) automate(ws.id, kind, { contact: x, stage: x.stage, who: src === 'pss' ? 'PSS' : 'Google Contacts' });
+  for (const [kind, x] of news) if (kind === 'contact.added' && db.contacts[x.id]) hook(ws.id, 'contact.created', () => API.apiContact(x), src === 'pss' ? 'PSS' : 'Google Contacts');
 }
 // A disconnected connector's people stay as the team's own contacts, editable, still linked so connecting
 // again finds them.
@@ -3471,6 +3504,7 @@ async function requestApi(req, res, url, token, part) {
   r.lastAt = Date.now();
   if (r.taskId) toolDone(r.taskId, { by: r.by, byId: r.memberId, note: `Files from ${from}`, file: item.id });
   automate(ws.id, 'file.arrived', { file: item, from, campaign: db.campaigns[st.campaignId] || null, who: r.by, whoId: r.memberId });
+  hook(ws.id, 'file.received', () => ({ file: { id: item.id, name: item.name, size: item.size, type: item.mime }, from, stack: { id: st.id, name: st.name }, request_id: r.id }), from);
   save();
   // Just the count: a full workspace update would rebuild everyone's columns mid-typing.
   broadcast(ws.id, { type: 'stack:request', stackId: st.id, count: r.count, lastAt: r.lastAt });
@@ -3552,6 +3586,7 @@ async function signApi(req, res, token, part) {
     Object.assign(x, { status: 'signed', signedAt, signedName: typed, signedHash: sha256(bytes), signedItemId: item.id });
     if (x.taskId) toolDone(x.taskId, { by: x.by, byId: x.memberId, note: `Signed by ${x.signer.name}`, file: item.id });
     automate(x.wsId, 'sign.signed', { document: x.name, from: x.signer.name, file: item, campaign: db.campaigns[x.campaignId] || null, who: x.by, whoId: x.memberId });
+    hook(x.wsId, 'document.signed', () => ({ id: x.id, document: x.name, signer: { name: x.signer.name, email: x.signer.email || null }, signed_name: typed, signed_at: new Date(signedAt).toISOString(), file: { id: item.id, name: item.name } }), x.signer.name);
   } catch (e) {
     x.events = x.events.filter((e2) => !/^(Agreed to sign|Signed as)/.test(e2.what));
     throw e;
@@ -4803,7 +4838,7 @@ async function api(req, res, url) {
   if (a === 'up') return send(res, saveFails >= 3 ? 503 : 200, { ok: saveFails < 3 });
   if (a === 'health') return send(res, 200, { ok: true, app: 'column', data: store.mode, saving: saveFails ? 'retrying' : 'ok', mail: mailer.mode !== 'off' });
   // The public API, for other apps: its own keys, not a person's sign-in.
-  if (a === 'v1') return PJ.v1(req, res, parts.slice(1));
+  if (a === 'v1') return API.handle(req, res, parts.slice(1));
 
   // Forgot password: the same answer whether or not there's an account, so nobody can use it to check.
   if (a === 'auth' && b === 'forgot' && m === 'POST') {
@@ -5087,14 +5122,7 @@ async function api(req, res, url) {
       return send(res, 200, out);
     }
     if (m === 'DELETE') {
-      for (const e of list) {
-        delete db.entries[e.id];
-        broadcast(ws.id, { type: 'entry:remove', id: e.id, forMember: e.memberId });
-        pushEntry(e, 'delete');
-      }
-      save();
-      syncJob(rec);
-      visitNews(rec);
+      dropVisit(ws, rec, list, auth.member);
       return send(res, 200, { ok: true });
     }
   }
@@ -5250,6 +5278,7 @@ async function api(req, res, url) {
       if (t.recordId) PJ.recordActivity(t.recordId, { kind: 'task', what: 'added', note: t.text, taskId: t.id, by: auth.member });
       save();
       broadcast(ws.id, { type: 'task', task: publicTask(t) });
+      hook(ws.id, 'task.created', () => API.apiTask(t), auth.member);
       if (t.goalId && t.assigneeId) resyncVisibility(ws.id, [t.assigneeId]);
       return send(res, 200, publicTask(t));
     }
@@ -5274,6 +5303,8 @@ async function api(req, res, url) {
       } else if (body.done && !t.done) {
         next.doneBy = auth.member;
         setImmediate(() => db.tasks[next.id]?.done && automate(ws.id, 'task.done', { task: next, campaign: taskCamp(next), who: auth.member, whoId: auth.memberId }));
+        setImmediate(() => db.tasks[next.id]?.done && hook(ws.id, 'task.done', () => API.apiTask(db.tasks[next.id]), auth.member));
+        next.updatedAt = Date.now();
         if (next.signoff) next.approved = { by: auth.member, at: Date.now() };
         next.submitted = null;
         next.returned = null;
@@ -6214,6 +6245,7 @@ async function api(req, res, url) {
       contactNews(ws.id, x);
       refreshLiveSoon(ws.id);
       automate(ws.id, 'contact.added', { contact: x, stage: x.stage, who: auth.member, whoId: auth.memberId });
+      hook(ws.id, 'contact.created', () => API.apiContact(x), auth.member);
       return send(res, 200, publicContact(x));
     }
     // A spreadsheet's rows. Someone already here (same email or phone) gets the empty fields filled and the
@@ -6243,6 +6275,7 @@ async function api(req, res, url) {
         index(y);
         count++;
         added++;
+        hook(ws.id, 'contact.created', () => API.apiContact(y), auth.member);
       }
       save();
       contactsNews(ws.id);
@@ -6269,15 +6302,18 @@ async function api(req, res, url) {
       save();
       contactNews(ws.id, x);
       if (x.stage !== wasStage && x.stage) automate(ws.id, 'contact.stage', { contact: x, stage: x.stage, who: auth.member, whoId: auth.memberId });
+      hook(ws.id, 'contact.updated', () => API.apiContact(x), auth.member);
       refreshLiveSoon(ws.id);
       return send(res, 200, publicContact(x));
     }
     if (m === 'DELETE') {
       if (x.via) return send(res, 400, { error: 'This contact comes from PSS, so it would come back. Remove it in PSS, or mark it do not contact.' });
+      const gone = API.apiContact(x);
       delete db.contacts[x.id];
       save();
       broadcast(ws.id, { type: 'contact:remove', id: x.id, forAdmins: true });
       refreshLiveSoon(ws.id);
+      hook(ws.id, 'contact.deleted', () => gone, auth.member);
       return send(res, 200, { ok: true });
     }
     return send(res, 405, { error: 'Method not allowed' });
@@ -7683,6 +7719,7 @@ const PJ = projectsModule({ db, save, broadcast, rid, cleanText, isDay, readJson
     db.tasks[t.id] = t;
     save();
     broadcast(ws.id, { type: 'task', task: publicTask(t) });
+    hook(ws.id, 'task.created', () => API.apiTask(t), auth.member);
     return t;
   },
   // Campaign lists made from a project follow its records.
@@ -7699,7 +7736,7 @@ const PJ = projectsModule({ db, save, broadcast, rid, cleanText, isDay, readJson
 HQ = hqModule({ db, save, broadcast, rid, cleanText, readJson, send, isAdmin, aiAsk, replyJson, allowLocal: process.env.ALLOW_LOCAL_FETCH === '1' });
 for (const ws of Object.values(db.workspaces)) if (HQ.migrate(ws)) save();
 
-const INV = invoicesModule({ db, save, broadcast, rid, cleanText, readJson, send, badRequest, escHtml, brandOf, logoUrl, teamDay, offline, seal, unseal, stripeCall: stripe.callWith, PJ, isAdmin, jobOfRecord, jobLabel, moveJob, publicUrl: PUBLIC_URL,
+const INV = invoicesModule({ db, save, broadcast, rid, cleanText, readJson, send, badRequest, escHtml, brandOf, logoUrl, teamDay, offline, seal, unseal, stripeCall: stripe.callWith, PJ, isAdmin, jobOfRecord, jobLabel, moveJob, publicUrl: PUBLIC_URL, emit: (...a) => PJ.emit(...a),
   // A payment is money in on the business's Finance, under the team's owner.
   addMoney: (ws, { amount, day, note }) => {
     const owner = ws.members.find((m) => m.role === 'owner') || ws.members[0];
@@ -7710,6 +7747,10 @@ const INV = invoicesModule({ db, save, broadcast, rid, cleanText, readJson, send
   },
   dropMoneyId: (id) => { if (db.money[id]) dropMoney(db.money[id]); },
 });
+// The public API for Contacts, Tasks, Visits and Invoices, and webhooks apps subscribe to (publicapi.js).
+const API = publicApiModule({ db, save, broadcast, rid, cleanText, readJson, send, badRequest, PJ, INV, isAdmin, teamDay, EVENTS: HOOK_EVENTS, EMAIL_RE,
+  publicContact, contactsOf, newContact, applyContact, contactNews, refreshLiveSoon, automate, CONTACT_MAX, emailKey, phoneKey,
+  applyTask, publicTask, syncEntries, setVisit, visitEntries, publicVisit, dropVisit, jobOfRecord, jobLabel, jobCustomer: jobCustomerOut, VISIT_KINDS, fmtMinutes });
 
 // Addresses the app used to live at (OLD_HOSTS, comma-separated) send people on to PUBLIC_URL, so links
 // in old emails, signing requests and quotes keep working. Only pages move: /api/ answers on every address,

@@ -7122,8 +7122,16 @@
     else if (sec && !sec.contains(document.activeElement)) sec.replaceWith(pssSection());
     $('#settings .gc-sec')?.replaceWith(gcSection());
   }
-  // Connecting other apps to Projects: API keys (each shown once) and webhooks (with their deliveries).
+  // Connecting other apps: API keys (each shown once) and webhooks (with their deliveries).
   const INT = { keys: null, hooks: null };
+  const HOOK_EVENTS = [
+    ['Contacts', [['contact.created', 'A contact is added'], ['contact.updated', 'A contact changes'], ['contact.deleted', 'A contact is deleted']]],
+    ['Tasks', [['task.created', 'A task is added'], ['task.done', 'A task is done']]],
+    ['Visits', [['visit.scheduled', 'A visit is booked'], ['visit.changed', 'A visit moves or changes'], ['visit.done', 'A visit is done'], ['visit.cancelled', 'A visit is called off']]],
+    ['Invoices', [['invoice.created', 'An invoice is made'], ['invoice.sent', 'An invoice is sent'], ['invoice.paid', 'An invoice is paid in full'], ['invoice.voided', 'An invoice is voided'], ['payment.received', 'A payment comes in']]],
+    ['Files & signatures', [['file.received', 'A customer sends files through a link'], ['document.signed', 'A document is signed']]],
+    ['Projects records', [['record.created', 'A record is added'], ['record.updated', 'A record changes'], ['record.deleted', 'A record is deleted']]],
+  ];
   function intSection() {
     const sec = h('section', { class: 'int-sec' }, h('h3', {}, 'Connect other apps'));
     const redraw = () => sec.replaceWith(intSection());
@@ -7135,8 +7143,8 @@
     const secretSheet = (title, what, value, note) => sheet(title, [h('p', { class: 'day-hint' }, note), h('div', { class: 'int-secret' }, h('code', {}, value), h('button', { class: 'btn small', onclick: () => { copyText(value); toast('Copied'); } }, 'Copy')), h('p', { class: 'day-hint' }, `This is the only time the ${what} is shown. Keep it somewhere safe.`)], async () => {}, 'Done');
     const newKey = () => {
       const name = h('input', { placeholder: 'Zapier' });
-      const write = h('select', {}, h('option', { value: '1' }, 'Read and write records'), h('option', { value: '0' }, 'Read only'));
-      sheet('New API key', [h('label', {}, 'What it’s for', name), h('label', {}, 'Can', write), h('p', { class: 'day-hint' }, 'The key reaches every project that isn’t private. Anyone with it can do what you pick here.')], async () => {
+      const write = h('select', {}, h('option', { value: '1' }, 'Read and write'), h('option', { value: '0' }, 'Read only'));
+      sheet('New API key', [h('label', {}, 'What it’s for', name), h('label', {}, 'Can', write), h('p', { class: 'day-hint' }, 'The key reaches the team’s contacts, tasks, visits, invoices and every project that isn’t private. Anyone with it can do what you pick here.')], async () => {
         const k = await api('POST', '/integrations/keys', { name: name.value || 'API key', write: write.value === '1' });
         INT.keys = [...INT.keys, k];
         redraw();
@@ -7145,10 +7153,16 @@
     };
     const newHook = () => {
       const url = h('input', { type: 'url', placeholder: 'https://hooks.zapier.com/…' });
-      const proj = h('select', {}, h('option', { value: '' }, 'Every project'), (S.projects || []).filter((p) => !p.private).map((p) => h('option', { value: p.id }, p.name)));
-      const evs = [['record.created', 'A record is added'], ['record.updated', 'A record changes'], ['record.deleted', 'A record is deleted']].map(([k, label]) => ({ k, cb: h('input', { type: 'checkbox', checked: true }), label }));
-      sheet('New webhook', [h('label', {}, 'Send to', url), h('label', {}, 'For', proj), ...evs.map((x) => h('label', { class: 'pick' }, x.cb, x.label)), h('p', { class: 'day-hint' }, 'Kloomie sends a signed POST with the record each time. Failed sends are tried again over ten minutes.')], async () => {
-        const w = await api('POST', '/integrations/webhooks', { url: url.value, projectId: proj.value || null, events: evs.filter((x) => x.cb.checked).map((x) => x.k) });
+      const projs = (S.projects || []).filter((p) => !p.private);
+      const proj = h('select', {}, h('option', { value: '' }, 'Everything in Kloomie'), projs.map((p) => h('option', { value: p.id }, 'Only records in ' + p.name)));
+      const groups = HOOK_EVENTS.map(([title, list]) => ({ title, list: list.map(([k, label]) => ({ k, cb: h('input', { type: 'checkbox', checked: k.startsWith('record.') || ['contact.created', 'invoice.paid', 'visit.scheduled'].includes(k) }), label })) }));
+      const evs = groups.flatMap((g) => g.list);
+      const box = h('div', { class: 'int-events' });
+      const draw = () => box.replaceChildren(...groups.filter((g) => !proj.value || g.title === 'Projects records').map((g) => h('div', {}, h('b', {}, g.title), ...g.list.map((x) => h('label', { class: 'pick' }, x.cb, x.label)))));
+      proj.onchange = draw;
+      draw();
+      sheet('New webhook', [h('label', {}, 'Send to', url), h('label', {}, 'For', proj), box, h('p', { class: 'day-hint' }, 'Kloomie sends a signed POST each time one of these happens. Failed sends are tried again over ten minutes.')], async () => {
+        const w = await api('POST', '/integrations/webhooks', { url: url.value, projectId: proj.value || null, events: evs.filter((x) => x.cb.checked && (!proj.value || x.k.startsWith('record.'))).map((x) => x.k) });
         INT.hooks = [...INT.hooks, w];
         redraw();
         setTimeout(() => secretSheet('Webhook signing secret', 'secret', w.secret, 'Check each delivery’s X-Kloomie-Signature with this secret (how: see the developer docs).'));
@@ -7161,14 +7175,14 @@
       { label: 'Delete', danger: true, run: async () => { await api('DELETE', '/integrations/webhooks/' + w.id).catch((er) => toast(er.message)); INT.hooks = INT.hooks.filter((x) => x.id !== w.id); redraw(); } },
     ]);
     sec.append(
-      h('p', { class: 'day-hint' }, 'Let other tools (Zapier, Make, your website, your own code) read and write Projects records, and hear when they change. ', h('a', { href: '/developers', target: '_blank', rel: 'noopener' }, 'Developer docs')),
+      h('p', { class: 'day-hint' }, 'Let other tools (Zapier, Make, your website, your own code) read and write your contacts, tasks, visits, jobs and invoices, and hear the moment something happens. ', h('a', { href: '/developers', target: '_blank', rel: 'noopener' }, 'Developer docs')),
       h('h4', {}, 'API keys'),
       ...INT.keys.map((k) => h('div', { class: 'srow' }, h('span', {}, k.name, h('small', {}, `${k.prefix}… · ${k.write ? 'read & write' : 'read only'} · ${k.lastUsedAt ? 'used ' + ago(k.lastUsedAt) : 'never used'} · by ${k.by}`)),
         h('button', { class: 'btn small danger', 'data-label': '1', onclick: (e) => confirmClick(e.currentTarget, async () => { await api('DELETE', '/integrations/keys/' + k.id).catch((er) => toast(er.message)); INT.keys = INT.keys.filter((x) => x.id !== k.id); redraw(); }) }, 'Delete'))),
       h('button', { class: 'btn small', onclick: newKey }, '+ New API key'),
       h('h4', {}, 'Webhooks'),
       ...INT.hooks.map((w) => h('div', { class: 'srow' }, h('span', {}, h('span', { class: 'live' + (w.active ? ' on' : '') }), shortText(w.url.replace(/^https?:\/\//, ''), 46),
-        h('small', {}, `${w.projectId ? (S.projects || []).find((p) => p.id === w.projectId)?.name || 'a project' : 'every project'} · ${w.events.map((x) => x.split('.')[1]).join(', ')}${!w.active ? ' · paused' + (w.failures >= 20 ? ' after 20 failures' : '') : w.log?.[0] ? ` · last ${w.log[0].ok ? 'sent' : 'failed'} ${ago(w.log[0].at)}` : ''}`)),
+        h('small', {}, `${w.projectId ? (S.projects || []).find((p) => p.id === w.projectId)?.name || 'a project' : 'everything'} · ${w.events.length > 4 ? w.events.length + ' events' : w.events.join(', ')}${w.keyId ? ' · added by an app' : ''}${!w.active ? ' · paused' + (w.failures >= 20 ? ' after 20 failures' : '') : w.log?.[0] ? ` · last ${w.log[0].ok ? 'sent' : 'failed'} ${ago(w.log[0].at)}` : ''}`)),
         h('button', { class: 'icon-btn', 'aria-label': 'Webhook options', html: I.more, onclick: (e) => hookMenu(e, w) }))),
       h('button', { class: 'btn small', onclick: newHook }, '+ New webhook'));
     return sec;

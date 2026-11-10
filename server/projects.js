@@ -26,7 +26,15 @@ const MAX_RECORDS = 50_000; // per team
 const MAX_TYPES = 20;
 const MAX_FIELDS = 60;
 const MAX_VIEWS = 20;
-const EVENTS = ['record.created', 'record.updated', 'record.deleted'];
+const RECORD_EVENTS = ['record.created', 'record.updated', 'record.deleted'];
+// Everything a webhook can hear. record.* come from Projects (and can be narrowed to one project); the rest
+// come from across the team's Kloomie and go to webhooks set for every project.
+export const EVENTS = [...RECORD_EVENTS,
+  'contact.created', 'contact.updated', 'contact.deleted',
+  'task.created', 'task.done',
+  'visit.scheduled', 'visit.changed', 'visit.done', 'visit.cancelled',
+  'invoice.created', 'invoice.sent', 'invoice.paid', 'invoice.voided', 'payment.received',
+  'file.received', 'document.signed'];
 
 const keyOf = (name) => String(name || '').toLowerCase().normalize('NFKD').replace(/[^\w\s-]/g, '').trim().replace(/[\s-]+/g, '_').replace(/^(\d)/, '_$1').slice(0, 40) || 'field';
 // A key not used yet among these: "stage", then "stage_2"…
@@ -994,15 +1002,7 @@ export function projectsModule({ db, save, broadcast, rid, cleanText, isDay, rea
       if (b === 'webhooks') {
         if (m === 'GET' && !c) return send(res, 200, Object.values(db.webhooks).filter((h) => h.wsId === ws.id).map(publicHook));
         if (m === 'POST' && !c) {
-          const body = await readJson(req, 10_000);
-          const url = await hookUrl(body.url);
-          const p = body.projectId ? db.projects[body.projectId] : null;
-          if (body.projectId && (!p || p.wsId !== ws.id)) return send(res, 404, { error: 'That project is gone.' });
-          if (p?.private) return send(res, 400, { error: 'Private projects don’t send webhooks.' });
-          const h = { id: rid(), wsId: ws.id, url, projectId: p?.id || null, events: (Array.isArray(body.events) ? body.events : EVENTS).filter((e) => EVENTS.includes(e)), secret: 'whsec_' + crypto.randomBytes(24).toString('base64url'), active: true, failures: 0, log: [], by: auth.member, createdAt: Date.now() };
-          if (!h.events.length) h.events = [...EVENTS];
-          db.webhooks[h.id] = h;
-          save();
+          const h = await makeHook(ws, await readJson(req, 10_000), auth.member);
           return send(res, 200, { ...publicHook(h), secret: h.secret });
         }
         const h = c && db.webhooks[c];
@@ -1015,7 +1015,7 @@ export function projectsModule({ db, save, broadcast, rid, cleanText, isDay, rea
           const body = await readJson(req, 10_000);
           if (body.active !== undefined) { h.active = !!body.active; if (h.active) h.failures = 0; }
           if (body.url !== undefined) h.url = await hookUrl(body.url);
-          if (Array.isArray(body.events)) h.events = body.events.filter((e) => EVENTS.includes(e));
+          if (Array.isArray(body.events)) h.events = hookEvents(body.events, h.projectId);
           save();
           return send(res, 200, publicHook(h));
         }
@@ -1220,15 +1220,14 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
     if (unknown.length) throw bad(`Unknown field${unknown.length > 1 ? 's' : ''}: ${unknown.slice(0, 5).join(', ')}. This list has: ${t.fields.map((f) => f.key).join(', ')}.`);
     return fields;
   };
-  async function v1(req, res, parts) {
-    const a = keyAuth(req);
+  async function v1(req, res, parts, a = keyAuth(req)) {
     if (!a) return send(res, 401, { error: 'Send a valid API key: Authorization: Bearer col_…' });
     if (a.limited) return send(res, 429, { error: 'Too many requests. The limit is 300 a minute per key.' });
     const { ws, auth, key } = a;
     const m = req.method;
     if (parts[0] !== 'projects') {
       if (parts[0] === 'me' && m === 'GET') return send(res, 200, { team: ws.name, key: key.name, write: key.write });
-      return send(res, 404, { error: 'Not found. Start at GET /api/v1/projects.' });
+      return send(res, 404, { error: 'Not found. See https://app.kloomie.com/developers for what’s here.' });
     }
     const [, p_, t_, sub_, rid_, extra_] = parts;
     const sub2 = rid_ && rid_ !== 'external' ? extra_ : null;
@@ -1348,6 +1347,32 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
     }
     return u.toString();
   }
+  // The events a webhook listens for: the ones asked for, or all of them. One narrowed to a project hears only its records.
+  const hookEvents = (list, projectId) => {
+    const allowed = projectId ? RECORD_EVENTS : EVENTS;
+    const out = (Array.isArray(list) ? list : []).filter((e) => allowed.includes(e));
+    return out.length ? [...new Set(out)] : [...allowed];
+  };
+  // A webhook, made in Settings or by an app subscribing with its key (how Zapier's instant triggers work).
+  async function makeHook(ws, body, by, keyId = null) {
+    const url = await hookUrl(body.url);
+    const p = body.projectId ? db.projects[body.projectId] : null;
+    if (body.projectId && (!p || p.wsId !== ws.id)) throw Object.assign(new Error('That project is gone.'), { status: 404 });
+    if (p?.private) throw bad('Private projects don’t send webhooks.');
+    if (Object.values(db.webhooks).filter((h) => h.wsId === ws.id).length >= 100) throw bad('A team can have up to 100 webhooks. Delete some you no longer use.');
+    const h = { id: rid(), wsId: ws.id, url, projectId: p?.id || null, events: hookEvents(body.events, p?.id), secret: 'whsec_' + crypto.randomBytes(24).toString('base64url'), active: true, failures: 0, log: [], by, keyId, createdAt: Date.now() };
+    db.webhooks[h.id] = h;
+    save();
+    return h;
+  }
+  // Something happened outside Projects (a contact added, an invoice paid…): every webhook for it hears.
+  function emit(wsId, type, data, by = 'Kloomie') {
+    if (!EVENTS.includes(type) || offline(wsId)) return;
+    const hooks = Object.values(db.webhooks).filter((h) => h.wsId === wsId && h.active && !h.projectId && h.events.includes(type));
+    if (!hooks.length) return;
+    const event = { id: 'evt_' + rid(), type, created_at: new Date().toISOString(), by, data };
+    for (const h of hooks) deliver(h, event);
+  }
   function hooksFire(rec, type, by) {
     const hooks = Object.values(db.webhooks).filter((h) => h.wsId === rec.wsId && h.active && h.events.includes(type) && (!h.projectId || h.projectId === rec.projectId));
     if (!hooks.length) return;
@@ -1426,5 +1451,5 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
     return rec && rec.wsId === wsId && sees(p, memberId) ? { rec, p, t: typeOf(p, rec.typeId) } : null;
   };
 
-  return { route, v1, quotePage, seesMsg, stateFor, sees, recordActivity, recordNews, words, fillFromProject, fromProjectOk, recordStory, priceList, recordAt, itemsTotals, TEMPLATES: Object.fromEntries(Object.entries(TEMPLATES).map(([k, t]) => [k, { name: t.name, icon: t.icon, about: t.about }])) };
+  return { route, v1, keyAuth, makeHook, publicHook, deliver, emit, quotePage, seesMsg, stateFor, sees, recordActivity, recordNews, words, fillFromProject, fromProjectOk, recordStory, priceList, recordAt, itemsTotals, TEMPLATES: Object.fromEntries(Object.entries(TEMPLATES).map(([k, t]) => [k, { name: t.name, icon: t.icon, about: t.about }])) };
 }

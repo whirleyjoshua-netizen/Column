@@ -14,7 +14,7 @@ const METHODS = ['cash', 'check', 'card', 'bank', 'other'];
 const DUE_DAYS = 14;
 const CHECK_MS = Number(process.env.INVOICE_CHECK_MS) || 5 * 60_000;
 
-export function invoicesModule({ db, save, broadcast, rid, cleanText, readJson, send, badRequest, escHtml, brandOf, logoUrl, teamDay, offline, seal, unseal, stripeCall, PJ, isAdmin, jobOfRecord, jobLabel, moveJob, addMoney, dropMoneyId, publicUrl }) {
+export function invoicesModule({ db, save, broadcast, rid, cleanText, readJson, send, badRequest, escHtml, brandOf, logoUrl, teamDay, offline, seal, unseal, stripeCall, PJ, isAdmin, jobOfRecord, jobLabel, moveJob, addMoney, dropMoneyId, publicUrl, emit = () => {} }) {
   db.invoices ||= {};
   db.payKeys ||= {};
   const money = (c) => ((c || 0) / 100).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
@@ -29,7 +29,23 @@ export function invoicesModule({ db, save, broadcast, rid, cleanText, readJson, 
   };
   const overdue = (inv) => !!inv.due && ['sent', 'viewed', 'partial'].includes(inv.status) && inv.due < teamDay(inv.wsId);
   const publicInvoice = ({ wsId, sessions, ...x }) => ({ ...x, ...totals({ ...x }), overdue: overdue({ wsId, ...x }), url: x.token ? `${publicUrl}/i/${x.token}` : null });
-  const news = (inv) => broadcast(inv.wsId, { type: 'invoice', invoice: publicInvoice(inv), projectId: inv.projectId, forAdmins: true });
+  const news = (inv) => {
+    inv.updatedAt = Date.now();
+    broadcast(inv.wsId, { type: 'invoice', invoice: publicInvoice(inv), projectId: inv.projectId, forAdmins: true });
+  };
+  // An invoice as other apps see it (the API and webhooks): dollars, plain names, ISO times.
+  const iso = (t) => (t ? new Date(t).toISOString() : null);
+  const d$ = (c) => Math.round(c || 0) / 100;
+  function apiInvoice(inv) {
+    const t = totals(inv);
+    return { id: inv.id, number: inv.number, job_id: inv.recordId, title: inv.title, status: inv.status, overdue: overdue(inv), issued: inv.issued || null, due: inv.due || null,
+      customer: { contact_id: inv.to.contactId || null, name: inv.to.name, email: inv.to.email, phone: inv.to.phone, address: inv.to.address },
+      lines: inv.lines.rows.map((r) => ({ description: r.desc, qty: r.qty, unit: r.unit, price: d$(r.price), total: d$(Math.round(r.qty * r.price)), ...(r.taxable === false ? { taxable: false } : {}) })),
+      tax_rate: inv.lines.taxRate || 0, subtotal: d$(t.subtotal), discount: d$(t.discount), tax: d$(t.tax), total: d$(t.total), paid: d$(t.paid), balance: d$(t.balance),
+      payments: inv.payments.map((x) => ({ id: x.id, amount: d$(x.amount), method: x.method, note: x.note, date: x.day, by: x.by })),
+      note: inv.note || '', url: inv.token ? `${publicUrl}/i/${inv.token}` : null,
+      created_at: iso(inv.createdAt), updated_at: iso(inv.updatedAt || inv.createdAt), sent_at: iso(inv.sentAt), paid_at: iso(inv.paidAt) };
+  }
 
   // Line items in the same shape as a job's price lines: { rows: [{ desc, qty, unit, price }], taxRate, discount }.
   function cleanLines(v) {
@@ -71,6 +87,7 @@ export function invoicesModule({ db, save, broadcast, rid, cleanText, readJson, 
     inv.status = paid > 0 && balance <= 0 && total > 0 ? 'paid' : paid > 0 ? 'partial' : inv.viewedAt ? 'viewed' : inv.sentAt ? 'sent' : 'draft';
     inv.paidAt = inv.status === 'paid' ? inv.paidAt || Date.now() : null;
     const rec = db.records[inv.recordId];
+    if (inv.status === 'paid' && was !== 'paid') setImmediate(() => emit(inv.wsId, 'invoice.paid', apiInvoice(inv), who));
     if (rec && inv.status === 'paid' && was !== 'paid') {
       moveJob(rec, 'Paid');
       PJ.recordActivity(rec.id, { kind: 'quote', what: 'invoice paid', note: `${inv.number} · ${money(total)}`, by: who });
@@ -84,6 +101,7 @@ export function invoicesModule({ db, save, broadcast, rid, cleanText, readJson, 
     settle(inv, by);
     save();
     news(inv);
+    emit(inv.wsId, 'payment.received', { invoice_id: inv.id, invoice_number: inv.number, job_id: inv.recordId, payment: { id: p.id, amount: d$(p.amount), method: p.method, note: p.note, date: p.day, by: p.by }, invoice: apiInvoice(inv) }, by);
     return p;
   }
 
@@ -188,6 +206,7 @@ export function invoicesModule({ db, save, broadcast, rid, cleanText, readJson, 
         db.invoices[inv.id] = inv;
         save();
         news(inv);
+        emit(ws.id, 'invoice.created', apiInvoice(inv), auth.member);
         return send(res, 200, publicInvoice(inv));
       }
       return send(res, 405, { error: 'Method not allowed' });
@@ -220,6 +239,7 @@ export function invoicesModule({ db, save, broadcast, rid, cleanText, readJson, 
       if (inv.status === 'void') return send(res, 400, { error: 'This invoice was voided.' });
       if (totals(inv).total <= 0) return send(res, 400, { error: 'Add what you’re billing for first: the total is $0.' });
       inv.token ||= crypto.randomBytes(18).toString('base64url');
+      const first = !inv.sentAt;
       if (!inv.sentAt) {
         inv.sentAt = Date.now();
         inv.issued = teamDay(ws.id);
@@ -231,6 +251,7 @@ export function invoicesModule({ db, save, broadcast, rid, cleanText, readJson, 
       settle(inv, auth.member);
       save();
       news(inv);
+      if (first) emit(ws.id, 'invoice.sent', apiInvoice(inv), auth.member);
       return send(res, 200, publicInvoice(inv));
     }
     if (c === 'void' && m === 'POST') {
@@ -238,6 +259,7 @@ export function invoicesModule({ db, save, broadcast, rid, cleanText, readJson, 
       inv.status = 'void';
       save();
       news(inv);
+      emit(ws.id, 'invoice.voided', apiInvoice(inv), auth.member);
       return send(res, 200, publicInvoice(inv));
     }
     if (c === 'payments' && m === 'POST' && !d) {
@@ -361,5 +383,5 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
 </style></head><body><main>${inner}</main><footer>Sent with Kloomie</footer></body></html>`);
   }
 
-  return { route, page, dropFor, costing, publicInvoice, payInfo, checkAll, STATUSES };
+  return { route, page, dropFor, costing, publicInvoice, apiInvoice, addPayment, totals, payInfo, checkAll, STATUSES, METHODS };
 }

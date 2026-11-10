@@ -26,15 +26,77 @@
 <body>
 <main>
   <h1>Kloomie API</h1>
-  <p class="lead">Read and write the records in your Projects (contacts, companies, deals, anything you track) from other apps, and hear the moment they change.</p>
-  <nav><a href="#auth">Keys</a><a href="#schema">Projects &amp; fields</a><a href="#records">Records</a><a href="#values">Field values</a><a href="#sync">Syncing</a><a href="#errors">Errors &amp; limits</a><a href="#webhooks">Webhooks</a></nav>
+  <p class="lead">Read and write your contacts, tasks, visits, invoices and Projects records from other apps, and hear the moment something happens.</p>
+  <nav><a href="#auth">Keys</a><a href="#contacts">Contacts</a><a href="#tasks">Tasks</a><a href="#visits">Visits</a><a href="#invoices">Invoices</a><a href="#schema">Projects &amp; fields</a><a href="#records">Records</a><a href="#values">Field values</a><a href="#sync">Syncing</a><a href="#errors">Errors &amp; limits</a><a href="#webhooks">Webhooks</a><a href="#subscribe">Subscribing</a></nav>
 
   <h2 id="auth">Keys</h2>
-  <p>A team owner makes an API key in <b>Settings → Connections → Connect other apps</b>. It's shown once. Send it with every request:</p>
+  <p>A team owner or admin makes an API key in <b>Settings → Connections → Connect other apps</b>. It's shown once. Send it with every request:</p>
   <pre><code>Authorization: Bearer col_…</code></pre>
-  <p>The base address is your Kloomie server followed by <code>/api/v1</code>, for example <code>https://app.kloomie.com/api/v1</code>. A key reaches every project that isn't private. A key can be <b>read and write</b> or <b>read only</b>. Deleting it in Settings stops it at once.</p>
+  <p>The base address is your Kloomie server followed by <code>/api/v1</code>, for example <code>https://app.kloomie.com/api/v1</code>. A key reaches the team's contacts, tasks, visits and invoices, and every project that isn't private. A key can be <b>read and write</b> or <b>read only</b>. Deleting it in Settings stops it at once. Contacts and invoices need a key made by someone who is still an owner or admin.</p>
   <pre><code>curl https://app.kloomie.com/api/v1/me -H "Authorization: Bearer $COLUMN_KEY"
-{"team":"Premier","key":"Zapier","write":true}</code></pre>
+{"team":"Premier","key":"Zapier","write":true,"role":"owner","events":["record.created", …]}</code></pre>
+  <table>
+    <tr><td><span class="m get">GET</span></td><td><code>/members</code></td><td>The team: <code>[{"id", "name", "role"}]</code>. Anywhere a person goes in, send their id or name.</td></tr>
+  </table>
+  <h3>Lists</h3>
+  <p>Contacts, tasks and invoices list the same way: <code>{"data": [ … ], "next_cursor": …}</code>, oldest change first. Page with <code>?limit=</code> (up to 500) and <code>?cursor=</code>, and ask for only what changed with <code>?updated_since=</code> (see <a href="#sync">Syncing</a>). For the latest few, newest first (what a polling trigger wants), use <code>?order=newest&amp;limit=25</code>. Money is in dollars, dates look like <code>2026-11-30</code>, times of day like <code>"09:30"</code>, and moments are ISO times.</p>
+
+  <h2 id="contacts">Contacts</h2>
+  <p>The team's people: customers, leads, anyone you call or email.</p>
+  <table>
+    <tr><td><span class="m get">GET</span></td><td><code>/contacts</code></td><td>Contacts. Find someone with <code>?email=</code> or <code>?phone=</code> (however it's written), or filter by <code>?stage=</code> or <code>?tag=</code>.</td></tr>
+    <tr><td><span class="m post">POST</span></td><td><code>/contacts</code></td><td>Add one. With <code>"match_existing": true</code>, someone already here with the same email or phone gets their empty details filled in instead, and the answer has <code>"matched": true</code>. Good for web forms and lead sources.</td></tr>
+    <tr><td><span class="m get">GET</span></td><td><code>/contacts/{id}</code></td><td>One contact.</td></tr>
+    <tr><td><span class="m patch">PATCH</span></td><td><code>/contacts/{id}</code></td><td>Change some details.</td></tr>
+    <tr><td><span class="m del">DELETE</span></td><td><code>/contacts/{id}</code></td><td>Delete one. People synced in from Google Contacts can't be deleted here, since they'd come back.</td></tr>
+    <tr><td><span class="m get">GET</span> <span class="m put">PUT</span></td><td><code>/contacts/external/{external_id}</code></td><td>Find, or upsert, by your system's id.</td></tr>
+  </table>
+  <pre><code>curl -X POST https://app.kloomie.com/api/v1/contacts -H "Authorization: Bearer $COLUMN_KEY" -H "Content-Type: application/json" \
+  -d '{"name": "Dana Ruiz", "email": "dana@example.com", "phone": "555-010-0100", "source": "Website", "tags": ["lead"], "match_existing": true}'
+→ { "id": "c9…", "external_id": null, "name": "Dana Ruiz", "company": "", "email": "dana@example.com", "phone": "555-010-0100",
+    "address": "", "city": "", "source": "Website", "stage": "", "note": "", "tags": ["lead"], "do_not_contact": false,
+    "assigned_to": null, "synced_from": null, "created_at": "…", "updated_at": "…" }</code></pre>
+  <p>A contact's details: <code>name</code>, <code>company</code>, <code>email</code>, <code>phone</code>, <code>address</code>, <code>city</code>, <code>source</code>, <code>stage</code>, <code>note</code>, <code>tags</code> (a list, or one string with commas), <code>do_not_contact</code> and <code>external_id</code>. A contact synced from somewhere else (<code>synced_from</code>) keeps the details that place owns, like its name and email.</p>
+
+  <h2 id="tasks">Tasks</h2>
+  <table>
+    <tr><td><span class="m get">GET</span></td><td><code>/tasks</code></td><td>Tasks. <code>?done=true|false</code>, <code>?assignee_id=</code>, <code>?job_id=</code>.</td></tr>
+    <tr><td><span class="m post">POST</span></td><td><code>/tasks</code></td><td>Add one: <code>{"text", "due", "assignee", "job_id", "priority"}</code>. Only <code>text</code> is needed; <code>assignee</code> is a name or member id.</td></tr>
+    <tr><td><span class="m get">GET</span></td><td><code>/tasks/{id}</code></td><td>One task.</td></tr>
+    <tr><td><span class="m patch">PATCH</span></td><td><code>/tasks/{id}</code></td><td>Change it, or tick it off with <code>{"done": true}</code>. Steps in a campaign are worked in Kloomie, since they can wait on others and need sign-offs.</td></tr>
+  </table>
+  <pre><code>{ "id": "t4…", "text": "Call Dana back", "due": "2026-12-01", "done": false, "done_at": null, "done_by": null,
+  "assignee": { "id": "m2…", "name": "Sam" }, "job_id": "r8…", "campaign": null, "priority": 0,
+  "created_by": "Zapier (API)", "created_at": "…", "updated_at": "…" }</code></pre>
+
+  <h2 id="visits">Visits</h2>
+  <p>Someone (or a crew) going to a job on a day, maybe at a time. The jobs themselves are records in a Projects list (see <a href="#records">Records</a>).</p>
+  <table>
+    <tr><td><span class="m get">GET</span></td><td><code>/visits</code></td><td>Visits between <code>?from=</code> and <code>?to=</code> (dates; the next 30 days if left out, up to a year). <code>?member_id=</code>, <code>?job_id=</code>.</td></tr>
+    <tr><td><span class="m post">POST</span></td><td><code>/visits</code></td><td>Book one: <code>{"job_id", "date", "start", "end", "kind", "crew_ids", "note", "flexible"}</code>. <code>kind</code> is one of Estimate, Measure, Install, Service, Repair, Maintenance, Inspection, Follow-up, Delivery, Cleaning or Visit. Leave out <code>start</code> for any time that day.</td></tr>
+    <tr><td><span class="m get">GET</span></td><td><code>/visits/{id}</code></td><td>One visit.</td></tr>
+    <tr><td><span class="m patch">PATCH</span></td><td><code>/visits/{id}</code></td><td>Move or change it, or mark it <code>{"done": true}</code>.</td></tr>
+    <tr><td><span class="m del">DELETE</span></td><td><code>/visits/{id}</code></td><td>Call it off.</td></tr>
+  </table>
+  <pre><code>{ "id": "v3…", "job_id": "r8…", "job": "AC tune-up · Dana Ruiz", "kind": "Service", "date": "2026-12-02",
+  "start": "09:30", "end": "11:00", "all_day": false, "flexible": false, "done": false, "note": "Gate code on file",
+  "crew": [{ "id": "m2…", "name": "Sam" }], "booked_by": "Jo",
+  "customer": { "contact_id": "c9…", "name": "Dana Ruiz", "email": "dana@example.com", "phone": "555-010-0100", "address": "10 A St" } }</code></pre>
+
+  <h2 id="invoices">Invoices</h2>
+  <p>Invoices are made and sent from a job in Kloomie. Other apps read them, and record payments taken somewhere else (your books, a bank transfer, cash).</p>
+  <table>
+    <tr><td><span class="m get">GET</span></td><td><code>/invoices</code></td><td>Invoices. <code>?status=</code> (draft, sent, viewed, partial, paid, void, or overdue), <code>?job_id=</code>, <code>?contact_id=</code>.</td></tr>
+    <tr><td><span class="m get">GET</span></td><td><code>/invoices/{id}</code></td><td>One invoice.</td></tr>
+    <tr><td><span class="m post">POST</span></td><td><code>/invoices/{id}/payments</code></td><td>Record a payment: <code>{"amount": 250.00, "method": "check", "date", "note", "reference"}</code>. <code>method</code> is cash, check, card, bank or other. A <code>reference</code> sent twice is only counted once.</td></tr>
+  </table>
+  <pre><code>{ "id": "i1…", "number": "INV-1001", "job_id": "r8…", "title": "AC tune-up · Dana Ruiz", "status": "partial", "overdue": false,
+  "issued": "2026-11-20", "due": "2026-12-04",
+  "customer": { "contact_id": "c9…", "name": "Dana Ruiz", "email": "dana@example.com", "phone": "…", "address": "10 A St" },
+  "lines": [{ "description": "Tune-up", "qty": 1, "unit": "", "price": 300, "total": 300 }],
+  "tax_rate": 0, "subtotal": 300, "discount": 0, "tax": 0, "total": 300, "paid": 100, "balance": 200,
+  "payments": [{ "id": "p1…", "amount": 100, "method": "check", "note": "", "date": "2026-11-20", "by": "Zapier (API)" }],
+  "note": "", "url": "https://app.kloomie.com/i/…", "created_at": "…", "updated_at": "…", "sent_at": "…", "paid_at": null }</code></pre>
 
   <h2 id="schema">Projects &amp; fields</h2>
   <p>A project has <b>lists</b> (Contacts, Companies, Deals…), and each list has <b>fields</b>. Every list and field has a <b>key</b>, like <code>contacts</code> or <code>close_date</code>, that never changes when someone renames it in Kloomie. Use keys in your code.</p>
@@ -106,10 +168,22 @@ GET /projects/$PROJECT/deals/records?updated_since=2026-11-02T00:00:00Z&amp;limi
   <p>Each key can make <b>300 requests a minute</b>. A team can keep 50,000 records.</p>
 
   <h2 id="webhooks">Webhooks</h2>
-  <p>A team owner adds a webhook in Settings with an <code>https://</code> address, for every project or one. Kloomie sends a <code>POST</code> when a record is added, changed or deleted:</p>
+  <p>A team owner or admin adds a webhook in Settings with an <code>https://</code> address, or an app subscribes one with its key (<a href="#subscribe">below</a>). Kloomie sends a <code>POST</code> each time one of its events happens:</p>
+  <table>
+    <tr><th>Event</th><th>When</th><th><code>data</code></th></tr>
+    <tr><td><code>contact.created</code> <code>contact.updated</code> <code>contact.deleted</code></td><td>A contact is added (in Kloomie, by import, through the API, or synced in), changed, or deleted</td><td>the contact</td></tr>
+    <tr><td><code>task.created</code> <code>task.done</code></td><td>A task is added, or ticked off</td><td>the task</td></tr>
+    <tr><td><code>visit.scheduled</code> <code>visit.changed</code> <code>visit.done</code> <code>visit.cancelled</code></td><td>A visit is booked, moved or changed, done, or called off</td><td>the visit</td></tr>
+    <tr><td><code>invoice.created</code> <code>invoice.sent</code> <code>invoice.paid</code> <code>invoice.voided</code></td><td>An invoice is made, first sent, paid in full, or voided</td><td>the invoice</td></tr>
+    <tr><td><code>payment.received</code></td><td>Any payment on an invoice: card, cash, or one recorded through the API</td><td><code>{"invoice_id", "invoice_number", "job_id", "payment", "invoice"}</code></td></tr>
+    <tr><td><code>file.received</code></td><td>A customer sends files through a file request link</td><td><code>{"file", "from", "stack", "request_id"}</code></td></tr>
+    <tr><td><code>document.signed</code></td><td>Someone signs a document sent for signature</td><td><code>{"id", "document", "signer", "signed_name", "signed_at", "file"}</code></td></tr>
+    <tr><td><code>record.created</code> <code>record.updated</code> <code>record.deleted</code></td><td>A Projects record (a job, a deal…) is added, changed or deleted. Only these can be narrowed to one project.</td><td>the record</td></tr>
+  </table>
+  <p>A record event looks like this. The others are the same without <code>project</code> and <code>list</code>:</p>
   <pre><code>{
   "id": "evt_9fQ…",
-  "type": "record.updated",            // record.created, record.updated, record.deleted (or "ping" from Send a test)
+  "type": "record.updated",            // any event above (or "ping" from Send a test)
   "created_at": "2026-11-02T17:05:00.000Z",
   "by": "Sam",                         // who made the change; an API key shows as "Zapier (API)"
   "project": { "id": "Hk2…", "name": "Sales" },
@@ -137,8 +211,16 @@ def from_kloomie(raw_body: bytes, header: str, secret: str) -> bool:
     return hmac.compare_digest(want, parts["v1"])</code></pre>
   <p>Answer with any <code>2xx</code> within 10 seconds. Anything else is tried again after 30 seconds, 2 minutes and 8 minutes. After 20 failures in a row the webhook pauses; turn it back on in Settings. The last 20 deliveries show there too. Webhook addresses must be public: private network addresses are refused. Records in private projects are never sent.</p>
 
+  <h2 id="subscribe">Subscribing to webhooks from an app</h2>
+  <p>An app that wants to hear about things (like Zapier's instant triggers) can add and remove its own webhooks with its key, without anyone visiting Settings. They show in Settings too, marked as added by an app.</p>
+  <table>
+    <tr><td><span class="m post">POST</span></td><td><code>/webhooks</code></td><td><code>{"url": "https://…", "events": ["contact.created"]}</code>, or <code>"event"</code> for one. Returns the webhook and its <code>secret</code>, shown this once. Leave out <code>events</code> for all of them.</td></tr>
+    <tr><td><span class="m get">GET</span></td><td><code>/webhooks</code></td><td>The webhooks this key added.</td></tr>
+    <tr><td><span class="m del">DELETE</span></td><td><code>/webhooks/{id}</code></td><td>Remove one this key added.</td></tr>
+  </table>
+
   <h2>Using it with Zapier or Make</h2>
-  <p>Use their webhook trigger with the address they give you as a Kloomie webhook, and their HTTP action with your API key in the <code>Authorization</code> header to add or update records (PUT by <code>external_id</code> keeps runs from making duplicates).</p>
+  <p>Use their webhook trigger with the address they give you as a Kloomie webhook, and their HTTP action with your API key in the <code>Authorization</code> header to add or update things. <code>match_existing</code> on contacts, PUT by <code>external_id</code>, and a payment's <code>reference</code> all keep repeated runs from making duplicates.</p>
 </main>
 </body>
 </html>
