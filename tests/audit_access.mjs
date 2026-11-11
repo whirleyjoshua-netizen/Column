@@ -3,6 +3,7 @@
 // E5  making a webhook through the API is a write (read-only keys can't), and keys whose maker isn't an owner or admin
 //     don't hear about contacts, invoices, payments or texts.
 import fs from 'node:fs';
+import http from 'node:http';
 import { spawn } from 'node:child_process';
 const S = (await import('node:path')).resolve(process.argv[2] || '.');
 const DIR = S + '/dk/audit_access';
@@ -77,6 +78,24 @@ try {
   const texts2 = (list.data || []).map((x) => x.text || x.title);
   ok(texts2.includes('OPEN-TASK') && !texts2.includes('SECRET-TASK'), 'E4 the API’s task list leaves out private campaigns’ tasks');
   ok((await call(adminKey)('GET', '/v1/tasks/' + secretTask.id)).status === 404, 'E4 and won’t give one by id');
+
+  // E5 at delivery: a webhook made by an admin's key stops hearing contact events once that admin is a member again.
+  const got = [];
+  const recv = http.createServer(async (req, res) => { let b = ''; for await (const c of req) b += c; got.push(JSON.parse(b).type); res.end('ok'); });
+  await new Promise((r2) => recv.listen(4922, '127.0.0.1', r2));
+  await jo('PATCH', '/members/' + bobId, { role: 'admin' });
+  const bobKey2 = (await bob('POST', '/integrations/keys', { name: 'bob2' })).body.token;
+  r = await call(bobKey2)('POST', '/v1/webhooks', { url: 'http://127.0.0.1:4922/hook', events: ['contact.created'] });
+  ok(r.status === 201, 'E5 (setup) an admin’s key subscribes to new contacts');
+  await jo('POST', '/contacts', { name: 'First One', email: 'first@x.test' });
+  await sleep(800);
+  ok(got.includes('contact.created'), 'E5 (setup) and hears about one while they’re an admin');
+  got.length = 0;
+  await jo('PATCH', '/members/' + bobId, { role: 'member' });
+  await jo('POST', '/contacts', { name: 'Second One', email: 'second@x.test' });
+  await sleep(800);
+  ok(!got.includes('contact.created'), 'E5 once they’re a member, their key’s webhook hears no more contacts');
+  recv.close();
 } catch (e) {
   ok(false, 'threw: ' + e.stack);
 } finally {

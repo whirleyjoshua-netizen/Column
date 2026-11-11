@@ -407,6 +407,7 @@ export function quickbooksModule({ db, save, broadcast, cleanText, readJson, sen
     if (m === 'POST' && b === 'connect') {
       if (!configured()) return send(res, 400, { error: 'QuickBooks isn’t set up on this Kloomie server yet.' });
       const st = crypto.randomBytes(18).toString('base64url');
+      for (const [k, v] of pending) if (v.exp < Date.now()) pending.delete(k);
       pending.set(st, { wsId: ws.id, memberId: auth.memberId, exp: Date.now() + 15 * 60_000 });
       const url = `${await authUrl()}?` + new URLSearchParams({ client_id: env('QBO_CLIENT_ID'), response_type: 'code', scope: SCOPE, redirect_uri: redirect(), state: st });
       return send(res, 200, { url });

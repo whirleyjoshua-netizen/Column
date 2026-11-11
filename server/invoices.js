@@ -8,6 +8,7 @@
 // kept sealed, and each Pay now opens a Stripe Checkout page made with it. Coming back from Checkout records the
 // payment; a check every few minutes catches anyone who paid and closed the tab.
 import crypto from 'node:crypto';
+import { isDay } from './dates.js';
 
 const STATUSES = ['draft', 'sent', 'viewed', 'partial', 'paid', 'void'];
 const METHODS = ['cash', 'check', 'card', 'bank', 'other'];
@@ -256,7 +257,7 @@ export function invoicesModule({ notifyAdmins = null, db, save, broadcast, rid, 
         inv.lines = cleanLines(body.lines);
         closeSessions(inv).catch(() => {});
       }
-      if (body.due !== undefined) inv.due = /^\d{4}-\d{2}-\d{2}$/.test(String(body.due)) ? body.due : null;
+      if (body.due !== undefined) inv.due = isDay(body.due) ? body.due : null;
       if (body.note !== undefined) inv.note = String(body.note || '').replace(/\r\n?/g, '\n').trim().slice(0, 2000);
       if (body.title !== undefined) inv.title = cleanText(body.title, 200) || inv.title;
       if (body.to && typeof body.to === 'object') for (const k of ['name', 'email', 'phone', 'address']) if (body.to[k] !== undefined) inv.to[k] = cleanText(body.to[k], k === 'address' ? 300 : 120);
@@ -304,7 +305,7 @@ export function invoicesModule({ notifyAdmins = null, db, save, broadcast, rid, 
       const amount = Math.round(Number(String(body.amount ?? '').replace(/[$,\s]/g, '')) * 100);
       if (!Number.isFinite(amount) || amount <= 0 || amount > 1e11) return send(res, 400, { error: 'Enter the amount paid, like 250.00' });
       if (amount > totals(inv).balance) return send(res, 400, { error: `That’s more than the ${money(totals(inv).balance)} still owed.` });
-      const on = /^\d{4}-\d{2}-\d{2}$/.test(String(body.day || '')) ? body.day : null;
+      const on = isDay(body.day) ? body.day : null;
       addPayment(inv, { amount, method: METHODS.includes(body.method) ? body.method : 'other', note: cleanText(body.note, 200), day: on, by: auth.member });
       return send(res, 200, publicInvoice(inv));
     }

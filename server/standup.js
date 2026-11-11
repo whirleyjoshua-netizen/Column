@@ -4,6 +4,8 @@
 const TICK_MS = Number(process.env.STANDUP_TICK_MS) || 10 * 60_000;
 const FROM = Number(process.env.STANDUP_FROM ?? 9 * 60); // minutes after midnight, team time
 
+import { isDay } from './dates.js';
+
 export function standupModule({ db, save, broadcast, rid, cleanText, readJson, send, notify, makeTask, teamDay, localNow, sees }) {
   db.standups ||= {};
   const on = (p) => !!p.standup?.on;
@@ -32,7 +34,7 @@ export function standupModule({ db, save, broadcast, rid, cleanText, readJson, s
     const url = new URL(req.url, 'http://x');
     const today = teamDay(ws.id);
     if (m === 'GET') {
-      const day = /^\d{4}-\d{2}-\d{2}$/.test(url.searchParams.get('day') || '') ? url.searchParams.get('day') : today;
+      const day = isDay(url.searchParams.get('day')) ? url.searchParams.get('day') : today;
       return send(res, 200, report(ws, p, day));
     }
     if (m === 'POST') {

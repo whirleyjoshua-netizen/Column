@@ -1728,7 +1728,15 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
   // Something happened outside Projects (a contact added, an invoice paid…): every webhook for it hears.
   function emit(wsId, type, data, by = 'Kloomie') {
     if (!EVENTS.includes(type) || offline(wsId)) return;
-    const hooks = Object.values(db.webhooks).filter((h) => h.wsId === wsId && h.active && !h.projectId && h.events.includes(type));
+    // A webhook made through an API key hears contacts, invoices, payments and texts only while that key's maker is an
+    // owner or admin now (checked as each event goes out, not just when it was made).
+    const mayHear = (h) => {
+      if (!h.keyId || !/^(contact|invoice|payment|text)\./.test(type)) return true;
+      const k = db.apiKeys[h.keyId];
+      const mb = k && db.workspaces[wsId]?.members.find((x) => x.id === k.memberId);
+      return !!mb && (mb.role === 'owner' || mb.role === 'admin');
+    };
+    const hooks = Object.values(db.webhooks).filter((h) => h.wsId === wsId && h.active && !h.projectId && h.events.includes(type) && mayHear(h));
     if (!hooks.length) return;
     const event = { id: 'evt_' + rid(), type, created_at: new Date().toISOString(), by, data };
     for (const h of hooks) deliver(h, event);

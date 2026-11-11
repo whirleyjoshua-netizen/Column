@@ -53,8 +53,8 @@ Reviewer areas: A sign-in and accounts · B team isolation (no cross-team access
 | G4 | A team can end up with two Stripe subscriptions; an old one's events can take over billing. | fixed (tests/audit_billing.mjs): one open subscription checkout at a time; a second live subscription never takes over and owners are told |
 | G5 / E9 | Stripe subscription webhooks are applied in arrival order (a late "incomplete" can lock a paying team). | fixed (tests/audit_billing.mjs): subscription events are applied from what Stripe says now, not the event copy |
 | G6 | Removing a member silently deletes their job visits. | fixed (tests/audit_money.mjs): someone removed loses their place on shared visits; a visit only they were on goes to an owner, who is told |
-| G7 | A repeat rule's UNTIL (UTC) is compared with local dates, adding one extra occurrence. | reported |
-| G8 | Two quick edits to a new block create two calendar events. | reported |
+| G7 | A repeat rule's UNTIL (UTC) is compared with local dates, adding one extra occurrence. | fixed (tests/audit_dates.mjs) |
+| G8 | Two quick edits to a new block create two calendar events. | fixed (tests/audit_calendar.mjs) |
 | GRD-1 | No HSTS on app.kloomie.com or www.kloomie.com. | fixed 402bc6e |
 | GRD-2 / H11 | No frame-ancestors or X-Frame-Options (clickjacking on approve, pay and delete buttons). | fixed 402bc6e (audit_critical) |
 | B2 | POST /api/clear lets any member delete everyone's unpinned messages and files (the single delete correctly refuses). | fixed (tests/audit_access.mjs: one mayDelete rule for deleting and clearing) |
@@ -84,3 +84,23 @@ Each low item is reproduced and fixed in turn, the same way as the rest.
 - **Tests opening a page have side effects:** opening a sent quote marks it Viewed, so quote.mjs now expects Sent or Viewed after reading the form.
 - **F7 adjustment:** at first I made learning use only the person's own key. hqlearn.mjs showed the intended design (a member's edits teach the team's voice on an owner's key), so the fix kept that and added the hourly limit, which removes the unlimited-spend problem.
 - **The machine was overloaded** (load average 20 to 30, the screen recorder replayd near 150% CPU for hours), so browser tests timed out at random steps. Server-level checks confirmed the features (for example, bid to quote) while the browser tests were unreliable.
+
+## Batch 6 (tests/audit_misc.mjs)
+- **E8 fixed:** a COLUMN_SECRET_KEY with stray spaces is trimmed; one that's set but malformed stops the server instead of quietly sealing with another key.
+- **H8 fixed:** a file can't be named "." or ".." (stored as "_..").
+- **G10 fixed:** the API refuses impossible times (25:00, 9:75) instead of changing them.
+- **G11 fixed:** one shared isDay (server/dates.js) checks real calendar days everywhere a day is accepted: entries, tasks, bills, invoices, payments, the API, HQ deadlines and standups.
+- **B9 fixed:** a team being deleted can't change texting, lead capture or Dropbox.
+- **E7 fixed as a precaution, not reproduced:** the calendar connection pages escape what they show and allow no script. The real path, an account name from Google or Microsoft, couldn't be produced in a test.
+- **E12 fixed:** an Apple calendar whose app-specific password stopped working isn't retried every few minutes.
+- **E16 fixed (status order):** a Twilio status only moves forward. Won't fix: capping contacts made by inbound texts. A cap would drop a real customer's message, and flooding would mean someone paying for texts to the team's own number.
+- **E17 fixed:** expired sign-in starts are pruned (calendars, QuickBooks).
+- **G9 fixed:** someone added to a visit that has already been reminded about doesn't set off a second reminder.
+- **G7 fixed:** a repeating event's end (UNTIL) is compared as a moment, so an evening event doesn't get one extra day.
+- **G8 fixed:** pushes to a connected calendar queue per block, so quick edits make one event; a deleted calendar's entries are cleaned up.
+- **E5 (delivery) fixed:** a webhook checks its maker's role again when it delivers, not only when it is made.
+- **D (crash):** a crash now writes the last moment's changes before the server stops.
+
+## Areas the stopped reviewers didn't finish (C, D), reviewed by hand
+- **D (files):** every kind of stored file (uploads, folder files, doc history, signing PDFs, meeting audio, Sidekick files, exports, logos, upload parts) is removed when its owner is deleted and when a team is erased. Stale resumable uploads are swept after 24 hours. Saving is debounced with retries, fencing and a flush on shutdown (a crash now flushes too). Low, not fixed: no sweep for files left on disk by a crash mid-write.
+- **C (public pages):** every public route was listed. All secret links are 96 bits or more of randomness. Server-built pages escape what they show, and shared docs check link schemes when saved and allow no script. Unauthenticated writes are rate-limited or signature-checked. /import needs IMPORT_TOKEN (24+ characters, constant-time) and only works on an empty database. Recommendation: remove IMPORT_TOKEN from Railway unless a migration is in progress.

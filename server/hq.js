@@ -8,6 +8,7 @@
 // Services and FAQ), and asks the team's AI to suggest entries from what the pages actually say.
 import dns from 'node:dns/promises';
 import { privateIp, safeFetch } from './safefetch.js';
+import { isDay } from './dates.js';
 
 export const PILLARS = [
   { key: 'identity', name: 'Company identity', about: 'Who you are and what you do', kinds: ['about', 'service', 'area', 'model', 'different', 'notwanted'] },
@@ -98,7 +99,7 @@ export function hqModule({ db, save, broadcast, rid, cleanText, readJson, send, 
     if (k.goal) {
       x.horizon = HORIZONS.includes(pick('horizon')) ? pick('horizon') : 'year';
       x.target = cleanText(pick('target'), 120);
-      x.deadline = /^\d{4}-\d{2}-\d{2}$/.test(pick('deadline') || '') ? pick('deadline') : null;
+      x.deadline = isDay(pick('deadline')) ? pick('deadline') : null;
       x.priority = [1, 2, 3].includes(Number(pick('priority'))) ? Number(pick('priority')) : 2;
     }
     if (k.rule) x.level = LEVELS.includes(pick('level')) ? pick('level') : 'approval';

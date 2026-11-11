@@ -104,7 +104,8 @@ export function twilioModule({ db, save, broadcast, seal, unseal, readJson, send
     if (kind === 'status') {
       const t = Object.values(db.texts).find((x) => x.wsId === wsId && x.sid === p.MessageSid);
       if (t) {
-        t.status = p.MessageStatus || t.status;
+        const RANK = { queued: 0, accepted: 0, sending: 1, sent: 2, delivered: 3, undelivered: 3, failed: 3, read: 4 };
+        if (p.MessageStatus && (RANK[p.MessageStatus] ?? 0) >= (RANK[t.status] ?? 0)) t.status = p.MessageStatus;
         if (p.ErrorCode) t.error = `Error ${p.ErrorCode}${p.ErrorCode === '30034' ? ': the number isn’t registered for US texting yet (A2P 10DLC)' : ''}`;
         save();
         news(t);

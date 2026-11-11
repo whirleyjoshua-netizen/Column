@@ -6,6 +6,8 @@
 // day as "09:30", people by id with their name alongside. Lists page the same way records do: oldest change
 // first with updated_since and a cursor (for syncing), or order=newest for the latest few (for polling).
 
+import { isDay } from './dates.js';
+
 export function publicApiModule(deps) {
   const { db, save, broadcast, rid, cleanText, readJson, send, badRequest, PJ, INV, isAdmin, teamDay } = deps;
   const iso = (t) => (t ? new Date(t).toISOString() : null);
@@ -26,14 +28,16 @@ export function publicApiModule(deps) {
     if (typeof v === 'number') return Math.round(v);
     const m = String(v).trim().match(/^(\d{1,2}):(\d{2})\s*(am|pm)?$/i);
     if (!m) throw badRequest(`Send ${name} as a time like "09:30" or "2:15pm".`);
-    let h = Number(m[1]) % (m[3] ? 12 : 24);
+    const hh = Number(m[1]), mm = Number(m[2]);
+    if (mm > 59 || (m[3] ? hh < 1 || hh > 12 : hh > 23)) throw badRequest(`${name} isn’t a real time: ${String(v).trim()}.`);
+    let h = hh % (m[3] ? 12 : 24);
     if (m[3]?.toLowerCase() === 'pm') h += 12;
-    return h * 60 + Number(m[2]);
+    return h * 60 + mm;
   };
   const dayIn = (v, name) => {
     if (v == null || v === '') return null;
     const s = String(v).slice(0, 10);
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) throw badRequest(`Send ${name} as a date like 2026-11-20.`);
+    if (!isDay(s)) throw badRequest(`Send ${name} as a real date like 2026-11-20.`);
     return s;
   };
 

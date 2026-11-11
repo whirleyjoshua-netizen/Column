@@ -24,6 +24,7 @@ import { twilioModule } from './twilio.js';
 import { leadsModule } from './leads.js';
 import { dropboxModule } from './dropbox.js';
 import { safeFetch } from './safefetch.js';
+import { isDay } from './dates.js';
 import { EVENTS as HOOK_EVENTS } from './projects.js';
 import { hqModule } from './hq.js';
 import { rulesModule } from './rules.js';
@@ -144,7 +145,9 @@ const rid = (n = 12) => crypto.randomBytes(n).toString('base64url');
 // or a random key kept next to the data on first run. Lose the key and connections need redoing.
 // COLUMN_SECRET_KEY is that file's key itself (64 hex characters), to move it off the disk unchanged.
 const SECRET = (() => {
-  if (/^[0-9a-f]{64}$/i.test(process.env.COLUMN_SECRET_KEY || '')) return Buffer.from(process.env.COLUMN_SECRET_KEY, 'hex');
+  const envKey = String(process.env.COLUMN_SECRET_KEY || '').trim();
+  if (/^[0-9a-f]{64}$/i.test(envKey)) return Buffer.from(envKey, 'hex');
+  if (envKey) { console.error('COLUMN_SECRET_KEY is set but isn’t 64 hex characters. Fix it; nothing is saved with another key.'); process.exit(1); }
   if (process.env.COLUMN_SECRET) return crypto.createHash('sha256').update(process.env.COLUMN_SECRET).digest();
   if (store.mode === 'postgres') console.warn('The key for saved connections is still a file on this server’s disk. Copy it into COLUMN_SECRET_KEY before moving off the disk.');
   const file = path.join(DATA_DIR, 'secret.key');
@@ -358,7 +361,7 @@ for (const ev of ['uncaughtException', 'unhandledRejection']) {
   process.on(ev, (e) => {
     alarm('The server crashed', e);
     clearTimeout(alerts.timer);
-    Promise.race([sendAlerts(), new Promise((r) => setTimeout(r, 5000))]).finally(() => process.exit(1));
+    Promise.race([Promise.allSettled([sendAlerts(), writeNow()]), new Promise((r) => setTimeout(r, 5000))]).finally(() => process.exit(1));
   });
 }
 
@@ -923,7 +926,7 @@ function pinDocFiles(ws, blocks) {
 // Times are minutes from midnight in the user's local day; date is YYYY-MM-DD.
 const COLORS = ['violet', 'blue', 'green', 'amber', 'rose'];
 const REPEATS = ['daily', 'weekdays', 'weekly', 'monthly'];
-const isDay = (v) => /^\d{4}-\d{2}-\d{2}$/.test(String(v));
+// isDay (dates.js): a real calendar day written YYYY-MM-DD.
 const dayList = (v) => (Array.isArray(v) ? [...new Set(v.filter(isDay))].sort().slice(-1000) : []);
 const badRequest = (msg) => Object.assign(new Error(msg), { status: 400 });
 
@@ -941,7 +944,7 @@ function applyEntry(e, body) {
   };
   if (body.text !== undefined) e.text = String(body.text || '').trim().slice(0, 5000);
   if (body.date !== undefined) {
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(body.date))) throw badRequest('Bad date');
+    if (!isDay(body.date)) throw badRequest('Bad date');
     e.date = body.date;
   }
   if (body.start !== undefined) e.start = minutes(body.start, 1439);
@@ -1041,8 +1044,10 @@ function setVisit(ws, auth, rec, visitId, body, old = []) {
     const had = old.find((e) => e.memberId === memberId);
     const e = applyEntry(had ? { ...had } : { id: rid(), wsId: ws.id, memberId, by: auth.member, deviceId: auth.deviceId, createdAt: Date.now(), text: '', date: null, start: null, end: null, done: base.done || false, color: 'green', taskId: null }, fields);
     Object.assign(e, { recordId: rec.id, projectId: rec.projectId, visitId, visit: kind, note, flex: body.flex !== undefined ? !!body.flex : !!base.flex });
-    // Moved to another day or time: the customer gets a reminder for the new one.
+    // Moved to another day or time: the customer gets a reminder for the new one. Someone added to a visit that's
+    // already been reminded about doesn't set off a second reminder.
     if (had && (had.date !== e.date || had.start !== e.start)) e.reminded = null;
+    else if (!had && old[0]?.reminded && old[0].date === e.date && old[0].start === e.start) e.reminded = old[0].reminded;
     db.entries[e.id] = e;
     out.push(e);
     broadcast(ws.id, { type: 'entry', entry: publicEntry(e) });
@@ -1118,7 +1123,7 @@ const publicTask = (t) => ({ ...publicEntry(t), waiting: isWaiting(t) });
 function applyTask(t, body) {
   if (body.text !== undefined) t.text = String(body.text || '').trim().slice(0, 5000);
   if (body.due !== undefined) {
-    if (body.due !== null && !/^\d{4}-\d{2}-\d{2}$/.test(body.due)) throw badRequest('Bad due date.');
+    if (body.due !== null && !isDay(body.due)) throw badRequest('Bad due date.');
     t.due = body.due;
   }
   if (body.repeat !== undefined) t.repeat = REPEATS.includes(body.repeat) ? body.repeat : null;
@@ -1276,7 +1281,7 @@ const declaredSize = (req) => { const n = Number(req.headers['content-length']);
 const cleanRel = (p) => String(p || 'file').replace(/\\/g, '/').split('/').filter((x) => x && x !== '.' && x !== '..').join('/') || 'file';
 const isTextFile = (it) => (it.mime || '').startsWith('text/') || /\.(json|js|ts|css|html|md|csv|tsv|txt|log|py|sh|ya?ml|xml)$/i.test(it.name);
 const isWordFile = (it) => /\.docx$/i.test(it.name) || it.mime === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
-const cleanName = (n) => String(n || 'file').replace(/[\/\\]/g, '_').slice(0, 255);
+const cleanName = (n) => { const s = String(n || 'file').replace(/[\/\\]/g, '_').slice(0, 255); return /^\.+$/.test(s) ? '_' + s : s || 'file'; };
 
 // Resumable uploads: a session holds the bytes received so far in FILES_DIR/.part-<id>.
 const partPath = (up) => path.join(FILES_DIR, '.part-' + up.id);
@@ -1868,7 +1873,7 @@ const goalSaved = (id) => Object.values(db.money).reduce((n, x) => (x.goalId ===
 const publicGoal = ({ wsId, ...g }) => (g.kind === 'money' ? { ...g, saved: goalSaved(g.id) } : g);
 const publicAttempt = ({ wsId, ...x }) => x;
 const publicList = ({ wsId, ...l }) => l;
-const isDate = (v) => v === null || /^\d{4}-\d{2}-\d{2}$/.test(String(v));
+const isDate = (v) => v === null || isDay(v);
 
 const subsOf = (c) => Object.values(db.campaigns).filter((x) => x.parentId === c.id);
 // ----- a campaign's roles (its cast) -----
@@ -2742,7 +2747,7 @@ async function oauthCallback(req, res, url) {
   const provider = url.pathname.split('/')[2];
   const p = calProviders[provider];
   const pend = oauthPending.get(url.searchParams.get('state') || '');
-  const page = (title, msg) => send(res, 200, `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${title}</title><body style="font:15px system-ui;background:#111;color:#eee;display:grid;place-items:center;height:90vh;text-align:center"><div><h2>${title}</h2><p>${msg}</p></div></body>`, { 'Content-Type': 'text/html; charset=utf-8' });
+  const page = (title, msg) => send(res, 200, `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${escHtml(title)}</title><body style="font:15px system-ui;background:#111;color:#eee;display:grid;place-items:center;height:90vh;text-align:center"><div><h2>${escHtml(title)}</h2><p>${escHtml(msg)}</p></div></body>`, { 'Content-Type': 'text/html; charset=utf-8', 'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'" });
   if (!p || !pend || pend.provider !== provider || pend.exp < Date.now()) return page('Link expired', 'Start again from Kloomie → Settings → Calendars.');
   oauthPending.delete(url.searchParams.get('state'));
   if (pend.kind === 'contacts') return url.searchParams.get('error') ? page('Not connected', 'Contacts access wasn’t granted. You can close this window.') : gcCallback(res, url, pend, page);
@@ -2897,15 +2902,27 @@ async function syncCalendar(conn) {
 }
 function syncAllCalendars() {
   for (const conn of Object.values(db.calendars)) {
-    if (offline(conn.wsId) || conn.error?.startsWith('Sign-in') || Date.now() - (conn.lastSync || 0) < SYNC_EVERY) continue;
+    if (offline(conn.wsId) || conn.error?.startsWith('Sign-in') || conn.error?.startsWith('Apple stopped') || Date.now() - (conn.lastSync || 0) < SYNC_EVERY) continue;
     syncCalendar(conn).catch(() => {});
   }
 }
 
 // After an entry is saved or deleted in Kloomie, send it to the calendar it's linked to (or, for a new
 // block, to its maker's chosen calendar). Runs after the response; failures show on the connection.
-async function pushEntry(ref, action) {
-  const e = action === 'delete' ? ref : db.entries[ref];
+// One block's calendar changes go one at a time, in order: a second edit right after a new block waits for the event
+// to be made, then updates it (two at once would make two events).
+const pushQueue = new Map();
+const deletedCal = new Map(); // block id → the event made for it just after it was deleted
+function pushEntry(ref, action) {
+  const id = action === 'delete' ? ref?.id : ref;
+  const next = (pushQueue.get(id) || Promise.resolve()).then(() => pushEntryNow(ref, action)).catch(() => {});
+  pushQueue.set(id, next);
+  next.finally(() => { if (pushQueue.get(id) === next) pushQueue.delete(id); });
+  return next;
+}
+async function pushEntryNow(ref, action) {
+  // A block deleted while its event was being made: the delete uses the event the make left behind.
+  const e = action === 'delete' ? (ref?.cal ? ref : { ...ref, cal: deletedCal.get(ref?.id) || ref?.cal }) : db.entries[ref];
   if (!e || (e.cal?.span)) return;
   let conn = e.cal ? db.calendars[e.cal.connId] : null;
   if (!e.cal) {
@@ -2923,10 +2940,15 @@ async function pushEntry(ref, action) {
     else {
       const eventId = await p.create(token, conn.writeCalId, entryEvent(e, conn.tz));
       const cur = db.entries[e.id];
+      const cal = { connId: conn.id, calId: conn.writeCalId, eventId, imported: false };
       if (cur) {
-        cur.cal = { connId: conn.id, calId: conn.writeCalId, eventId, imported: false };
+        cur.cal = cal;
         save();
         broadcast(cur.wsId, { type: 'entry', entry: publicEntry(cur) });
+      } else {
+        // Deleted while the event was being made: the queued delete takes it out of the calendar too.
+        deletedCal.set(e.id, cal);
+        setTimeout(() => deletedCal.delete(e.id), 60_000);
       }
     }
   } catch (err) {
@@ -3494,7 +3516,7 @@ const BILL_REPEATS = ['once', 'weekly', 'monthly', 'quarterly', 'yearly'];
 const BILL_HISTORY = 60;
 const seesBill = (wsId, b, memberId) => b.memberId === memberId || (b.scope === 'business' && isOwnerId(wsId, memberId));
 const publicBill = ({ wsId, ...b }) => b;
-const validDay = (v) => (/^\d{4}-\d{2}-\d{2}$/.test(String(v)) && !Number.isNaN(Date.parse(v + 'T00:00:00Z')) ? v : null);
+const validDay = (v) => (isDay(v) ? v : null);
 // The next due date after `due`, keeping the original day of the month (the 31st stays the 31st, or the month's last day).
 function nextDue(b, due) {
   if (b.repeat === 'weekly') return addDays(due, 7);
@@ -4101,7 +4123,7 @@ function applyPin(x, body, ws, auth) {
   }
   for (const [k, n] of [['note', 2000], ['address', 200], ['name', 120], ['phone', 40], ['email', 200]]) if (body[k] !== undefined) x[k] = cleanText(body[k], n);
   if (body.due !== undefined) {
-    if (body.due !== null && body.due !== '' && !/^\d{4}-\d{2}-\d{2}$/.test(body.due)) throw badRequest('Bad date.');
+    if (body.due !== null && body.due !== '' && !isDay(body.due)) throw badRequest('Bad date.');
     x.due = body.due || null;
   }
   if (body.done !== undefined) x.done = !!body.done;
@@ -5440,6 +5462,9 @@ async function api(req, res, url) {
   const { ws } = auth;
   // Work this change opens up: whoever it's for hears they're up, once the change is made.
   if (m !== 'GET' && HANDOFF_ROUTES.has(a)) { const opened = openings(ws, auth.tz); res.once('finish', () => opened(auth.member, auth.memberId)); }
+  if (ws.deleteAt && m !== 'GET' && (a === 'texting' || a === 'lead-capture' || a === 'dropbox' || (a === 'contacts' && parts[2] === 'texts'))) {
+    return send(res, 423, { error: 'This team is being deleted. Cancel the deletion in Settings to use it again.' });
+  }
   const locked = readOnlyBlock(ws, a, m);
   if (!locked || m === 'GET') {
     const tw = await TW.route(req, res, parts, auth, ws);
@@ -5959,6 +5984,7 @@ async function api(req, res, url) {
       }
       const state = rid(18);
       const wantMail = !!mail && !!p.sendMail;
+      for (const [k, v] of oauthPending) if (v.exp < Date.now()) oauthPending.delete(k);
       oauthPending.set(state, { wsId: ws.id, memberId: auth.memberId, provider, tz: validTz(tz), mail: wantMail, exp: Date.now() + 15 * 60_000 });
       return send(res, 200, { url: p.authUrl(`${PUBLIC_URL}/oauth/${provider}/callback`, state, wantMail) });
     }

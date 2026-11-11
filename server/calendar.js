@@ -281,7 +281,8 @@ const WD = ['SU', 'MO', 'TU', 'WE', 'TH', 'FR', 'SA'];
 // Repeating events, for a server that hands back the rule instead of expanding it: daily, weekly (by day),
 // monthly (by date, or "2nd Tuesday") and yearly, with INTERVAL, COUNT, UNTIL and EXDATE. Dates are walked on
 // the event's own wall clock, so 9am stays 9am across daylight saving.
-function expandRule(rule, startKey, limitKey, cap = 1500) {
+// afterUntil(k): whether day k's occurrence is past the rule's end (a moment for timed events; see the caller).
+function expandRule(rule, startKey, limitKey, cap = 1500, afterUntil = null) {
   const r = Object.fromEntries(rule.split(';').map((x) => x.split('=')).map(([k, v]) => [k.toUpperCase(), v]));
   const freq = r.FREQ, step = Math.max(1, +r.INTERVAL || 1), count = +r.COUNT || 0;
   const until = r.UNTIL ? `${r.UNTIL.slice(0, 4)}-${r.UNTIL.slice(4, 6)}-${r.UNTIL.slice(6, 8)}` : null;
@@ -292,7 +293,7 @@ function expandRule(rule, startKey, limitKey, cap = 1500) {
   let n = 0;
   const take = (k) => {
     if (k < startKey) return true;
-    if ((until && k > until) || k > limitKey || (count && n >= count) || out.length >= cap) return false;
+    if ((afterUntil ? afterUntil(k) : until && k > until) || k > limitKey || (count && n >= count) || out.length >= cap) return false;
     n++;
     out.push(k);
     return true;
@@ -371,7 +372,16 @@ function veventsToEvents(href, vevents, from, to, defTz) {
     const ex = new Set(v.EXDATE.map((x) => icsTime(x, st.tz)).filter(Boolean).map((t) => (t.allDay ? t.date : t.ms)));
     const startKey = st.allDay ? st.date : dayKey(st.wall[0], st.wall[1], st.wall[2]);
     const limitKey = new Date(to.getTime() + 86400_000).toISOString().slice(0, 10);
-    for (const k of expandRule(v.RRULE.value, startKey, limitKey)) {
+    // UNTIL with a time is a moment (UTC when it ends in Z): an occurrence counts if it starts at or before it, on the
+    // event's own clock, rather than comparing calendar days in different time zones.
+    const U = /UNTIL=(\d{8})T(\d{6})(Z?)/i.exec(v.RRULE.value);
+    let afterUntil = null;
+    if (U && !st.allDay) {
+      const n = (a, b) => +(U[1] + U[2]).slice(a, b);
+      const untilMs = U[3] ? Date.UTC(n(0, 4), n(4, 6) - 1, n(6, 8), n(8, 10), n(10, 12), n(12, 14)) : zoned(n(0, 4), n(4, 6), n(6, 8), n(8, 10), n(10, 12), n(12, 14), st.tz);
+      afterUntil = (k) => { const [y, m, d] = keyParts(k); return zoned(y, m, d, st.wall[3], st.wall[4], st.wall[5], st.tz) > untilMs; };
+    }
+    for (const k of expandRule(v.RRULE.value, startKey, limitKey, 1500, afterUntil)) {
       const [y, m, d] = keyParts(k);
       const one = st.allDay ? { allDay: true, date: k } : { allDay: false, tz: st.tz, ms: zoned(y, m, d, st.wall[3], st.wall[4], st.wall[5], st.tz) };
       const key = one.allDay ? one.date : one.ms;
