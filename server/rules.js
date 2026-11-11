@@ -40,6 +40,9 @@ export function rulesModule({ db, save, broadcast, rid, cleanText, readJson, sen
     if (auth.approved && db.approvals[auth.approved]?.action === action) return null;
     if (canApprove(ws, auth.memberId)) return null;
     if (r.level === 'never') return { status: 403, body: { error: `${ruleText(action, r)} isn’t allowed on this team.` } };
+    // F4: the public API can't wait for an OK, so it's refused there (the key's maker can do it in Kloomie, where it
+    // goes for an OK).
+    if (auth.api) return { status: 403, body: { error: `${ruleText(action, r)} needs an OK on this team, so it can’t be done through the API. Do it in Kloomie, where it’s sent for an OK.` } };
     const x = {
       id: rid(), wsId: ws.id, action, amount, summary: cleanText(summary, 300) || ACTIONS[action].name, target,
       req: req ? { method: req.method, path: req.path, body: req.body } : null,

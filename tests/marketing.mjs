@@ -6,6 +6,7 @@
 // starts a campaign with goals and tasks and a list, makes a picture, and drafts posts and an email campaign that
 // wait for a yes; a draft that can't work goes back to it; approving (with edits) posts through Postiz or emails
 // from the person's mailbox; a scheduled post can be undone; monthly schedules run in the first week only.
+import './cookiejar.mjs'; // a browser's cookies: connecting an account finishes in the browser that started it
 import fs from 'node:fs';
 import http from 'node:http';
 import { spawn } from 'node:child_process';

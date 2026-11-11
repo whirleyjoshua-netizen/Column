@@ -22,7 +22,7 @@ const anaId = (await ana('GET', '/state')).body.me.memberId;
 const samId = (await sam('GET', '/state')).body.me.memberId;
 const heardSam = [], heardAna = [];
 for (const [tok, list] of [[sm.token, heardSam], [an.token, heardAna]]) {
-  const s = new WebSocket(`ws://127.0.0.1:4797/ws?t=${tok}`);
+  const s = new WebSocket(`ws://127.0.0.1:4797/ws`, { headers: { authorization: 'Bearer ' + tok } });
   s.on('message', (d) => list.push(JSON.parse(d)));
   await new Promise((r) => s.on('open', r));
 }

@@ -52,7 +52,7 @@ ok(c2.follows === c1.id, 'a campaign can come after another');
 r = await jo('PATCH', '/campaigns/' + c1.id, { follows: c2.id });
 ok(r.status === 400, 'two campaigns can’t each come after the other');
 const heard = [];
-const sock = new WebSocket(`ws://127.0.0.1:4797/ws?t=${s.token}`);
+const sock = new WebSocket(`ws://127.0.0.1:4797/ws`, { headers: { authorization: 'Bearer ' + s.token } });
 sock.on('message', (d) => heard.push(JSON.parse(d)));
 await new Promise((res) => sock.on('open', res));
 await jo('PATCH', '/campaigns/' + c1.id, { status: 'done' });

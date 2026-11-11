@@ -11,8 +11,8 @@ const b = await auth({ workspace: team, password: 'secret2', name: 'Sam', mode: 
 const Bc = call(b.token);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const heardB = [], heardA = [];
-const wsB = new WebSocket(`ws://127.0.0.1:4797/ws?t=${b.token}`);
-const wsA = new WebSocket(`ws://127.0.0.1:4797/ws?t=${a.token}`);
+const wsB = new WebSocket(`ws://127.0.0.1:4797/ws`, { headers: { authorization: 'Bearer ' + b.token } });
+const wsA = new WebSocket(`ws://127.0.0.1:4797/ws`, { headers: { authorization: 'Bearer ' + a.token } });
 wsB.on('message', (d) => heardB.push(JSON.parse(d)));
 wsA.on('message', (d) => heardA.push(JSON.parse(d)));
 await Promise.all([new Promise((r) => wsB.on('open', r)), new Promise((r) => wsA.on('open', r))]);

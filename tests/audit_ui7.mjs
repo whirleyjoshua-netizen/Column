@@ -57,10 +57,24 @@ try {
   ok(href === url, `H10 the link's address stays whole (${href})`);
   ok(await A.ev(`![...document.querySelectorAll('.bubble a')].some((a) => a.querySelector('.mention') || a.getAttribute('href')?.includes('<'))`), 'H10 no mention markup inside the link');
 
+  // H3: a picture posted to the feed shows, from an address with the file key and never the sign-in.
+  const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAEklEQVR4nGP4z8CAFWEXHbQSACj/P8Fu7N9hAAAAAElFTkSuQmCC', 'base64');
+  const upr = await fetch(`${B}/api/upload?name=site.png`, { method: 'PUT', headers: { authorization: 'Bearer ' + r0.body.token, 'content-type': 'image/png' }, body: PNG });
+  ok(upr.ok, `(setup) a picture is posted (${upr.status})`);
+  const pic = await upr.json();
+  await A.ev(`location.href = '/?view=${pic.id}'; true`);
+  await sleep(500);
+  const shown = await A.until(`[...document.querySelectorAll('img')].some((i) => i.src.includes('/api/files/${pic.id}') && i.complete && i.naturalWidth === 8)`);
+  ok(shown, 'H3 the picture opens and shows in the browser');
+  const src = await A.ev(`[...document.querySelectorAll('img')].find((i) => i.src.includes('/api/files/'))?.src || ''`);
+  ok(src && !src.includes(encodeURIComponent(r0.body.token)) && !src.includes(r0.body.token), 'H3 its address doesn’t carry the sign-in');
+  ok(await A.ev(`(async () => { const s = [...document.querySelectorAll('img')].find((i) => i.src.includes('/api/files/')).src; return (await fetch(s)).ok; })()`), 'H3 and the file opens from that address');
+
   // H9: a project whose icon is a bit of HTML.
   const p = await jo('POST', '/projects', { template: 'trades', trades: ['hvac'], name: 'Iconproj', icon: '<b>X</b>' });
   ok(p.status === 200, `(setup) a project with an HTML icon (${p.status})`);
-  await A.ev('location.reload()');
+  await A.ev(`location.href = '/'; true`);
+  await sleep(500);
   ok(await A.until(`!document.querySelector('#app').classList.contains('hidden') && !!document.querySelector('button[data-tab=chat]')`), '(setup) the app reloads');
   await A.tap(`[...document.querySelectorAll('button[data-tab=chat]')].find((e) => e.offsetParent)`);
   ok(await A.until(`[...document.querySelectorAll('.link-btn')].some((e) => e.offsetParent)`), '(setup) Chat has the link button');

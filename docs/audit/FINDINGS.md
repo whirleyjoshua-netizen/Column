@@ -23,7 +23,7 @@ Reviewer areas: A sign-in and accounts · B team isolation (no cross-team access
 | A1 / E2 | Removing a member leaves their API keys working (now as a member), and any webhooks those keys made keep pushing team events. | fixed e3c442b, live (tests/audit_auth.mjs) |
 | A2 | Linking a name-only login to an email account asks only for the password, so two-step sign-in can be bypassed; after linking, password change, account delete and email change reach the victim's account. | fixed (tests/audit_auth.mjs) |
 | B1 | A removed or logged-out member's open live connection keeps receiving team updates (sockets are found through tokens, and the token is already gone). | fixed: endSession closes the connection; broadcast drops connections whose session or member is gone (audit_auth) |
-| H3 | The full session token is put in URLs (file links, image sources, the export link, drag-out data), and files are cached for a year after sign-out. | reported |
+| H3 | The full session token is put in URLs (file links, image sources, the export link, drag-out data), and files are cached for a year after sign-out. | fixed (tests/audit_urls.mjs, audit_ui7.mjs in Chrome): addresses carry a per-sign-in file key that only reads files, exports and live updates and ends with the sign-in; the sign-in itself is refused in any address; signing out sends Clear-Site-Data "cache" |
 | D2 | No storage limit per team or overall on a 5 GB shared volume. Anonymous file-request links accept 500 MB × 200 files per hour per address; editing writes the whole body before the size check; Dropbox import has no size check. | fixed (tests/audit_storage.mjs): MAX_FILE_MB, TEAM_STORAGE_MB and DISK_RESERVE_MB, checked before reading when the size is declared and enforced while arriving; resumable uploads checked at start and per chunk; file-request links and Dropbox import too |
 | E1 | Self-hosted Postiz address: checked once when saved, then fetched with redirects followed and no re-check, and the reply is shown back. That makes it a readable request into private or internal addresses, plus unbounded reply size. | fixed (tests/audit_safefetch.mjs): server/safefetch.js checks the address at connect time (no DNS-rebinding gap), refuses non-public ranges including IPv4 inside IPv6, follows no redirects unless asked, caps the reply; used by Postiz, webhooks, the HQ website reader and PSS |
 | F2 | Any member can publish to the company's social accounts through the Marketing agent (draft_social_post has no role check; connecting Postiz is admin-only). | fixed in code: Postiz tools are owner/admin only for agents too (an agent test with a connected Postiz is still to add) |
@@ -43,9 +43,9 @@ Reviewer areas: A sign-in and accounts · B team isolation (no cross-team access
 | E3 | The private-network guard for webhooks, Postiz and HQ can be bypassed (DNS rebinding between check and fetch, IPv4-mapped IPv6, missing ranges, any port). | fixed with E1 (one shared private-address list) |
 | E4 | Public API tasks ignore visibility; task webhooks include private campaign tasks. | fixed (tests/audit_access.mjs): API tasks follow canSee and leave out private campaigns and projects; webhooks skip private tasks, visits and campaign-stack files |
 | E5 / B6 | Webhook subscriptions over the API skip write and role checks (member keys get contact, invoice, payment and text events). | fixed at subscribe time (tests/audit_access.mjs); re-checking the maker's role at delivery is still to do |
-| E6 | OAuth state isn't tied to the browser that started it, all providers (consent phishing attaches a victim's account to an attacker's team). | reported |
+| E6 | OAuth state isn't tied to the browser that started it, all providers (consent phishing attaches a victim's account to an attacker's team). | fixed (tests/audit_oauth.mjs): server/oauthbind.js marks the starting browser with an HttpOnly SameSite=Lax cookie; any other browser (the desktop app's system browser, or a phishing victim) sees which team and person it connects to and must confirm (a server-signed, one-use link) |
 | F3 | Approving the same agent step or held rule twice at once runs it twice (emails or posts sent twice). | fixed 5d09311 (tests/audit_agents.mjs, reproduced with MAIL_OUTBOX_DELAY_MS so the test mailer waits like a real send) |
-| F4 | Team rules are bypassed via the public API, project and list deletes, and editing a sent invoice's lines. | reported |
+| F4 | Team rules are bypassed via the public API, project and list deletes, and editing a sent invoice's lines. | fixed (tests/audit_rules.mjs): the API refuses what needs an OK; deleting a project or list with records needs the delete-record OK; raising a sent invoice over the limit needs the invoice OK |
 | F5 | Agents look up admin-only contacts by name for members and expose their email, phone and address. | fixed (tests/audit_send.mjs): only an owner’s or admin’s agent finds a contact by name |
 | F6 | Outside text isn't marked untrusted in agent prompts, and execute-level writes can copy private data into shared places. | reported |
 | F7 | Any member can spend an owner's or admin's AI key through /api/hq/learn. | fixed (tests/audit_send.mjs): learning runs at most once an hour per team (an owner’s or admin’s key can still pay, by design), and edits are marked learned only after it works |
@@ -62,7 +62,7 @@ Reviewer areas: A sign-in and accounts · B team isolation (no cross-team access
 | B4 | The public API ignores the billing read-only lock. | fixed (tests/audit_billing.mjs): API writes get 402 when the team is read-only, 423 while it is being deleted |
 | B5 | /api/v1/tasks and visit, task and file webhooks expose private campaigns and private projects. | fixed with E4 |
 | H4 | The Leaflet popup takes raw HTML from the team's route start address. | fixed: the start address is put in the popup as text |
-| H5 | Electron: openExternal with any scheme, file: navigation allowed, IPC trusts any page, screen capture with no picker, unsigned builds. | reported |
+| H5 | Electron: openExternal with any scheme, file: navigation allowed, IPC trusts any page, screen capture with no picker, unsigned builds. | fixed (tests/audit_desktop.mjs, in the real app): desktop/guard.js; links leave only as http(s)/mailto/tel; the window stays on the server or the setup page; IPC only from the server's main frame; a page can't change the server; downloads only from the server; "show in folder" only inside Downloads/Kloomie; screen capture only for the server's page. Not fixed here: signing and notarizing the builds needs an Apple Developer ID and a Windows code-signing certificate |
 | H6 | Push notifications keep going to signed-out devices. | same as A7 |
 | H7 | Contacts, records and agent data stay in memory across sign-out and sign-in in the same tab. | fixed: signing out reloads the page, so nothing loaded stays in memory |
 
@@ -116,3 +116,10 @@ Each low item is reproduced and fixed in turn, the same way as the rest.
 
 ## Sign-offs (9746763, column-91), reviewed
 Every route checks the person can see the record and is scoped to the team; the read-only block runs before it; the filled-in PDF downloads only, with nosniff; the app and the signing page show form text as text; emails go through the platform send limits and do-not-email list. Low, not fixed: a PDF used as a form is readable by anyone who can see a record using it, even if the file itself was private to whoever made the form; the filled-in PDF is rebuilt on every download, with no limit per person.
+
+## Batch 8 (tests/audit_oauth.mjs, audit_rules.mjs, audit_urls.mjs, audit_ui7.mjs in Chrome)
+- **E6, F4, H3 fixed** (see the table). Each test fails on the code before (9746763).
+- **H10 refined:** no @mention is marked anywhere inside a link, its words included.
+- Tests that drive a sign-in with fetch use tests/cookiejar.mjs (cookies like one browser); WebSockets in tests send the sign-in as a header.
+- **H5 fixed** (see the table). Needs a new desktop release (a v* tag) to reach installed apps.
+- **Stale test fixed:** qboui looked for the old "Lead form" title.

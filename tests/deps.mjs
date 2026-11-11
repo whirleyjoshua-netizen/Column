@@ -17,7 +17,7 @@ const b = await auth({ mode: 'join', workspace: 'deps ' + t0, code, name: 'Sam',
 const sam = call(b.token);
 const samId = (await sam('GET', '/state')).body.me.memberId;
 const heard = [];
-const sock = new WebSocket(`ws://127.0.0.1:4797/ws?t=${b.token}`);
+const sock = new WebSocket(`ws://127.0.0.1:4797/ws`, { headers: { authorization: 'Bearer ' + b.token } });
 sock.on('message', (d) => heard.push(JSON.parse(d)));
 await new Promise((r) => sock.on('open', r));
 const task = async (id) => (await jo('GET', '/state')).body.tasks.find((x) => x.id === id);

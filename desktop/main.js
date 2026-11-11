@@ -7,6 +7,9 @@ const fsp = require('node:fs/promises');
 const os = require('node:os');
 const { Readable } = require('node:stream');
 const { pipeline } = require('node:stream/promises');
+const { externalOk, cfgPatch, makeTrust, insideDir } = require('./guard.js');
+// Tests run the app with its own settings folder, so a real install's settings are never touched.
+if (process.env.KLOOMIE_USER_DATA) app.setPath('userData', process.env.KLOOMIE_USER_DATA);
 
 const isMac = process.platform === 'darwin';
 const COL_WIDTH = 340;
@@ -40,6 +43,13 @@ function onServer(url) {
   } catch {
     return false;
   }
+}
+// H5: only the Kloomie server's pages (and the app's own setup page) may talk to the app, and links leave it only as
+// web, email or phone links (desktop/guard.js).
+const trust = makeTrust({ onServer, setupFile: path.join(__dirname, 'setup.html') });
+function openOut(url) {
+  if (externalOk(url)) shell.openExternal(url);
+  else log('blocked opening', String(url).slice(0, 80));
 }
 function saveCfg() {
   fs.mkdirSync(path.dirname(CFG_PATH), { recursive: true });
@@ -124,25 +134,25 @@ function createWindow() {
         },
       };
     }
-    shell.openExternal(url);
+    openOut(url);
     return { action: 'deny' };
   });
   // Links inside a popped-out file open in the real browser too.
   win.webContents.on('did-create-window', (child) => {
     child.webContents.setWindowOpenHandler(({ url }) => {
-      shell.openExternal(url);
+      openOut(url);
       return { action: 'deny' };
     });
     child.webContents.on('will-navigate', (e, url) => {
       e.preventDefault();
-      shell.openExternal(url);
+      openOut(url);
     });
   });
+  // The window stays on the Kloomie server (or the setup page): anything else opens outside, if it's a web link.
   win.webContents.on('will-navigate', (e, url) => {
-    if (cfg.serverUrl && !onServer(url) && !url.startsWith('file:')) {
-      e.preventDefault();
-      shell.openExternal(url);
-    }
+    if (trust.pageOk(url)) return;
+    e.preventDefault();
+    openOut(url);
   });
   win.webContents.on('did-fail-load', (_e, code, desc, url, isMain) => {
     if (isMain && onServer(url)) loadSetup(`Couldn't reach ${cfg.serverUrl} (${desc}). Is the server running?`);
@@ -286,13 +296,19 @@ async function saveItem(info) {
 }
 
 // ---------- IPC ----------
-ipcMain.handle('get-config', () => cfg);
-ipcMain.handle('set-config', (_e, patch) => applyCfg(patch || {}));
-ipcMain.on('set-layout', (_e, panes) => setWidth(Number(panes) || 1));
-ipcMain.on('prefetch', (_e, info) => {
-  if (info && (info.size || 0) <= PREFETCH_LIMIT) ensureCached(info).catch(() => {});
-});
+// Every message is checked: from the main frame of the Kloomie server's page (or the setup page), with files only
+// from the Kloomie server, and paths only inside the app's own Downloads folder.
+const ok = (fn) => (e, ...a) => (trust.sender(e) ? fn(e, ...a) : (log('ignored a message from', e?.senderFrame?.url || '?'), undefined));
+const infoOk = (info) => !!info && typeof info === 'object' && typeof info.id === 'string' && typeof info.name === 'string'
+  && (info.type === 'folder' ? Array.isArray(info.files) && info.files.every((f) => f && typeof f.relPath === 'string' && onServer(f.url)) : onServer(info.url));
+ipcMain.handle('get-config', ok(() => cfg));
+ipcMain.handle('set-config', ok((_e, patch) => applyCfg(cfgPatch(patch))));
+ipcMain.on('set-layout', ok((_e, panes) => setWidth(Math.max(1, Math.min(2, Number(panes) || 1)))));
+ipcMain.on('prefetch', ok((_e, info) => {
+  if (infoOk(info) && (info.size || 0) <= PREFETCH_LIMIT) ensureCached(info).catch(() => {});
+}));
 ipcMain.on('start-drag', (e, info) => {
+  if (!trust.sender(e) || !infoOk(info)) { e.returnValue = false; return; }
   const p = info && cachedPath(info);
   if (p && fs.existsSync(p)) {
     e.sender.startDrag({ file: p, icon: dragIcon });
@@ -302,16 +318,16 @@ ipcMain.on('start-drag', (e, info) => {
     e.returnValue = false;
   }
 });
-ipcMain.handle('save', (_e, info) => saveItem(info));
-ipcMain.on('reveal', (_e, p) => p && shell.showItemInFolder(p));
-ipcMain.on('open-folder', openSaveDir);
-ipcMain.on('copy-text', (_e, text) => clipboard.writeText(String(text || '')));
-ipcMain.on('change-server', () => loadSetup());
-ipcMain.on('set-next', (_e, info) => {
+ipcMain.handle('save', ok((_e, info) => { if (!infoOk(info)) throw new Error('That file isn’t from your Kloomie server.'); return saveItem(info); }));
+ipcMain.on('reveal', ok((_e, p) => insideDir(p, SAVE_DIR()) && shell.showItemInFolder(p)));
+ipcMain.on('open-folder', ok(openSaveDir));
+ipcMain.on('copy-text', ok((_e, text) => clipboard.writeText(String(text || '').slice(0, 100_000))));
+ipcMain.on('change-server', ok(() => loadSetup()));
+ipcMain.on('set-next', ok((_e, info) => {
   next = info && typeof info === 'object' ? { title: String(info.title || '').slice(0, 60), items: (info.items || []).slice(0, 8).map((i) => ({ label: String(i.label || '').slice(0, 80) })) } : null;
   updateTray();
-});
-ipcMain.handle('connect', async (_e, raw) => {
+}));
+ipcMain.handle('connect', ok(async (_e, raw) => {
   let url = String(raw || '').trim().replace(/\/+$/, '');
   // No http:// or https:// typed: try the secure address first, then plain (a server on the local network).
   const tries = /^https?:\/\//.test(url) ? [url] : ['https://' + url, 'http://' + url];
@@ -326,7 +342,7 @@ ipcMain.handle('connect', async (_e, raw) => {
   cfg.serverUrl = url;
   saveCfg();
   win.loadURL(url);
-});
+}));
 
 // ---------- lifecycle ----------
 app.on('second-instance', () => {
@@ -337,7 +353,9 @@ app.whenReady().then(() => {
   if (isMac) app.dock.setIcon(appIcon);
   // A Kloomie page asking for the screen gets the computer's sound with no picker: it only ever asks
   // to record a meeting, and throws the picture away.
-  session.defaultSession.setDisplayMediaRequestHandler((_req, cb) => {
+  // H5: only the Kloomie server's page gets it.
+  session.defaultSession.setDisplayMediaRequestHandler((req, cb) => {
+    if (!onServer(req.securityOrigin || req.frame?.url || '')) { log('refused screen capture for', req.securityOrigin || '?'); return cb({}); }
     desktopCapturer.getSources({ types: ['screen'] }).then((s) => cb(s[0] ? { video: s[0], audio: 'loopback' } : {})).catch(() => cb({}));
   });
   fs.rmSync(CACHE_DIR, { recursive: true, force: true });

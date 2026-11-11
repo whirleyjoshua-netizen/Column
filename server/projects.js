@@ -617,7 +617,7 @@ export function projectsModule({ seal = (x) => x, unseal = (x) => x, db, save, b
     try { applyValues(ws, p, t, trial, values, { addChoices: false }); } catch { return null; }
     const now = discountPct(t, trial.values);
     if (now <= discountPct(t, rec?.values || {}) + 0.01) return null;
-    return hold(ws, auth, 'discount', { amount: now, summary: `${Math.round(now * 10) / 10}% discount on ${rec ? recName(p, rec) : t.singular || 'a new record'}`, target: { projectId: p.id, recordId: rec?.id || null }, req: { method: req.method, path: req.url, body } });
+    return hold(ws, auth, 'discount', { amount: now, summary: `${Math.round(now * 10) / 10}% discount on ${rec ? recName(p, rec) : t.singular || 'a new record'}`, target: { projectId: p.id, recordId: rec?.id || null }, req: req ? { method: req.method, path: req.url, body } : null });
   }
   // A value made to fit its field, or undefined to clear it. Unknown choices are added when allowed (imports
   // and the API), so a sync never fails on a new stage name.
@@ -1092,6 +1092,12 @@ export function projectsModule({ seal = (x) => x, unseal = (x) => x, db, save, b
       }
       if (m === 'POST' && c === 'schema') {
         const body = await readJson(req, 200_000);
+        if (body.op === 'removeType') {
+          const t = typeOf(p, body.typeId);
+          const n = t ? Object.values(db.records).filter((r) => r.projectId === p.id && r.typeId === t.id).length : 0;
+          const held = n ? hold?.(ws, auth, 'deleteRecord', { summary: `Delete the list ${t.name} in ${p.name} and its ${n} record${n === 1 ? '' : 's'}`, target: { projectId: p.id }, req: { method: 'POST', path: req.url, body } }) : null;
+          if (held) return send(res, held.status, held.body);
+        }
         const out = schemaOp(p, body);
         projectNews(p);
         return send(res, 200, { project: publicProject(p), made: out });
@@ -1163,6 +1169,9 @@ export function projectsModule({ seal = (x) => x, unseal = (x) => x, db, save, b
       }
       if (m === 'DELETE' && !c) {
         if (!canManage(p, auth)) return send(res, 403, { error: 'Only whoever made the project and team admins can delete it.' });
+        const n = Object.values(db.records).filter((r) => r.projectId === p.id).length;
+        const held = n ? hold?.(ws, auth, 'deleteRecord', { summary: `Delete the project ${p.name} and its ${n} record${n === 1 ? '' : 's'}`, target: { projectId: p.id }, req: { method: 'DELETE', path: req.url, body: null } }) : null;
+        if (held) return send(res, held.status, held.body);
         for (const r of Object.values(db.records)) if (r.projectId === p.id) delete db.records[r.id];
         delete db.projects[p.id];
         for (const h of Object.values(db.webhooks)) if (h.projectId === p.id) delete db.webhooks[h.id];
@@ -1593,7 +1602,8 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
   async function v1(req, res, parts, a = keyAuth(req)) {
     if (!a) return send(res, 401, { error: 'Send a valid API key: Authorization: Bearer col_…' });
     if (a.limited) return send(res, 429, { error: 'Too many requests. The limit is 300 a minute per key.' });
-    const { ws, auth, key } = a;
+    const { ws, key } = a;
+    const auth = { ...a.auth, api: true }; // F4: rules that need an OK refuse instead of waiting (rules.js)
     const m = req.method;
     if (parts[0] !== 'projects') {
       if (parts[0] === 'me' && m === 'GET') return send(res, 200, { team: ws.name, key: key.name, write: key.write });
@@ -1627,6 +1637,7 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
     if (m === 'POST' && !rid_) {
       write();
       const body = await readJson(req, 200_000);
+      { const held = holdDiscount(ws, auth, p, t, null, inFields(t, body.fields), null, null); if (held) return send(res, held.status, held.body); }
       if (body.external_id && Object.values(db.records).some((r) => r.projectId === p.id && r.typeId === t.id && r.extId === String(body.external_id))) return send(res, 409, { error: 'A record with that external_id is already here. Use PUT …/records/external/:id to update it.' });
       const rec = newRecord(ws, p, t, auth, inFields(t, body.fields), body.external_id, { addChoices: true });
       recordNews(rec, 'record.created', auth.member);
@@ -1641,6 +1652,7 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
         write();
         const body = await readJson(req, 200_000);
         const fields = inFields(t, body.fields);
+        { const held = holdDiscount(ws, auth, p, t, rec || null, fields, null, null); if (held) return send(res, held.status, held.body); }
         if (rec) {
           const before = { ...rec.values };
           applyValues(ws, p, t, rec, fields, { addChoices: true });
@@ -1676,6 +1688,7 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
     if (m === 'PATCH') {
       write();
       const body = await readJson(req, 200_000);
+      { const held = holdDiscount(ws, auth, p, t, rec, inFields(t, body.fields), null, null); if (held) return send(res, held.status, held.body); }
       const before = { ...rec.values };
       applyValues(ws, p, t, rec, inFields(t, body.fields), { addChoices: true });
       if (quoteLocked(t, rec, before)) { rec.values = before; throw bad('The customer accepted this quote, so its lines can’t change.'); }
@@ -1687,6 +1700,8 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
     }
     if (m === 'DELETE') {
       write();
+      const held = hold?.(ws, auth, 'deleteRecord', { summary: `Delete ${recName(p, rec)}`, target: { projectId: p.id, recordId: rec.id } });
+      if (held) return send(res, held.status, held.body);
       recordGone(rec, auth.member);
       return send(res, 200, { deleted: true, id: rec.id });
     }

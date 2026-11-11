@@ -30,7 +30,7 @@ const PULL = Number(env('QBO_PULL_MS')) || 20 * 60_000;
 const ITEM = 'Kloomie services';
 const TAX_ITEM = 'Sales tax (from Kloomie)';
 
-export function quickbooksModule({ db, save, broadcast, cleanText, readJson, send, seal, unseal, isAdmin, INV, PJ, publicUrl, alarm, offline, teamDay }) {
+export function quickbooksModule({ bind, db, save, broadcast, cleanText, readJson, send, seal, unseal, isAdmin, INV, PJ, publicUrl, alarm, offline, teamDay }) {
   db.qbo ||= {};
   // The company id is kept encrypted, like the tokens (Intuit's rule). Connections from before are moved over.
   const realmOf = (c) => (c.realm ? unseal(c.realm).id : c.realmId);
@@ -408,7 +408,7 @@ export function quickbooksModule({ db, save, broadcast, cleanText, readJson, sen
       if (!configured()) return send(res, 400, { error: 'QuickBooks isn’t set up on this Kloomie server yet.' });
       const st = crypto.randomBytes(18).toString('base64url');
       for (const [k, v] of pending) if (v.exp < Date.now()) pending.delete(k);
-      pending.set(st, { wsId: ws.id, memberId: auth.memberId, exp: Date.now() + 15 * 60_000 });
+      pending.set(st, { wsId: ws.id, memberId: auth.memberId, browser: bind.start(req, res), exp: Date.now() + 15 * 60_000 });
       const url = `${await authUrl()}?` + new URLSearchParams({ client_id: env('QBO_CLIENT_ID'), response_type: 'code', scope: SCOPE, redirect_uri: redirect(), state: st });
       return send(res, 200, { url });
     }
@@ -454,11 +454,12 @@ export function quickbooksModule({ db, save, broadcast, cleanText, readJson, sen
   async function callback(req, res, url) {
     const st = url.searchParams.get('state') || '';
     const pend = pending.get(st);
-    pending.delete(st);
-    if (!pend || pend.exp < Date.now()) return done(res, 'expired');
-    if (url.searchParams.get('error')) return done(res, 'denied');
+    if (!pend || pend.exp < Date.now()) { pending.delete(st); return done(res, 'expired'); }
     const ws = db.workspaces[pend.wsId];
     const who = ws?.members.find((x) => x.id === pend.memberId);
+    if (who && bind.gate(req, res, url, pend, { what: 'QuickBooks', team: ws.name, person: who.name })) return;
+    pending.delete(st);
+    if (url.searchParams.get('error')) return done(res, 'denied');
     if (!who || !['owner', 'admin'].includes(who.role)) return done(res, 'role');
     const realmId = url.searchParams.get('realmId');
     if (!realmId) return done(res, 'company');

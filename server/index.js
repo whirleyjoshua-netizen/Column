@@ -24,6 +24,7 @@ import { twilioModule } from './twilio.js';
 import { leadsModule } from './leads.js';
 import { dropboxModule } from './dropbox.js';
 import { safeFetch } from './safefetch.js';
+import { oauthBind } from './oauthbind.js';
 import { isDay } from './dates.js';
 import { EVENTS as HOOK_EVENTS } from './projects.js';
 import { hqModule } from './hq.js';
@@ -260,10 +261,32 @@ function liveSession(token) {
   }
   return session;
 }
+// H3: what goes in an address (file links, image sources, the export link, the live connection) is the sign-in's
+// file key, never the sign-in itself. The key only reads files, exports and live updates, and ends with the sign-in.
+const fileKeys = new Map(); // file key -> sign-in token
+function fileKeyOf(token) {
+  const s = db.tokens[token];
+  if (!s) return null;
+  if (!s.fileKey) { s.fileKey = rid(24); save(); }
+  fileKeys.set(s.fileKey, token);
+  return s.fileKey;
+}
+const URL_KEY_OK = /^\/api\/(files\/[\w-]+|folders\/[\w-]+\/(zip|files\/\d+)|exports\/[\w-]+\/file)$/;
+function urlKey(req, url) {
+  const k = url.searchParams.get('t');
+  if (!k || k.length > 64 || !['GET', 'HEAD'].includes(req.method) || !(URL_KEY_OK.test(url.pathname) || url.pathname === '/ws')) return null;
+  let tok = fileKeys.get(k);
+  if (!tok || db.tokens[tok]?.fileKey !== k) {
+    // Keys from before a restart: look once through the sign-ins.
+    tok = Object.entries(db.tokens).find(([, s]) => s.fileKey === k)?.[0];
+    if (tok) fileKeys.set(k, tok);
+  }
+  return tok && db.tokens[tok]?.fileKey === k ? tok : null;
+}
 function authFrom(req, url) {
   if (req.replay) return req.replay; // an approved request, replayed as the person who asked (rules.js)
   const h = req.headers.authorization || '';
-  const token = h.startsWith('Bearer ') ? h.slice(7) : url.searchParams.get('t');
+  const token = h.startsWith('Bearer ') ? h.slice(7) : urlKey(req, url);
   const session = liveSession(token);
   const ws = session ? db.workspaces[session.wsId] : null;
   const member = ws?.members.find((x) => x.id === session.memberId);
@@ -312,6 +335,7 @@ function ensureOwner(ws, m) {
 // Ending a session: the token goes, its live connection closes and its device stops getting notifications.
 function endSession(tok) {
   const sess = db.tokens[tok];
+  if (sess?.fileKey) fileKeys.delete(sess.fileKey);
   delete db.tokens[tok];
   push.drop((x) => x.token === tok);
   for (const sock of sockets.get(sess?.wsId) || []) if (sock.meta.token === tok) sock.close(4001, 'Signed out');
@@ -2745,6 +2769,7 @@ function presence(wsId) {
 // so an edit or delete on either side follows to the other. Repeating entries and events spanning
 // several days stay one-way for now.
 const oauthPending = new Map(); // state -> who is connecting
+const OAUTH_BIND = oauthBind({ secure: PUBLIC_URL.startsWith('https:') }); // E6: sign-ins finish in the browser that started them, or after a confirm
 const publicCalendarConn = ({ tokens, wsId, ...x }) => x;
 const SYNC_EVERY = 3 * 60_000;
 const syncing = new Set();
@@ -2756,6 +2781,11 @@ async function oauthCallback(req, res, url) {
   const pend = oauthPending.get(url.searchParams.get('state') || '');
   const page = (title, msg) => send(res, 200, `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${escHtml(title)}</title><body style="font:15px system-ui;background:#111;color:#eee;display:grid;place-items:center;height:90vh;text-align:center"><div><h2>${escHtml(title)}</h2><p>${escHtml(msg)}</p></div></body>`, { 'Content-Type': 'text/html; charset=utf-8', 'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'" });
   if (!p || !pend || pend.provider !== provider || pend.exp < Date.now()) return page('Link expired', 'Start again from Kloomie → Settings → Calendars.');
+  {
+    const pws = db.workspaces[pend.wsId];
+    const pm = pws?.members.find((x) => x.id === pend.memberId);
+    if (pm && OAUTH_BIND.gate(req, res, url, pend, { what: pend.kind === 'contacts' ? 'Google Contacts' : `your ${p.name} calendar${pend.mail ? ' and email' : ''}`, team: pws.name, person: pm.name })) return;
+  }
   oauthPending.delete(url.searchParams.get('state'));
   if (pend.kind === 'contacts') return url.searchParams.get('error') ? page('Not connected', 'Contacts access wasn’t granted. You can close this window.') : gcCallback(res, url, pend, page);
   if (url.searchParams.get('error')) return page('Not connected', 'Calendar access wasn’t granted. You can close this window.');
@@ -5564,7 +5594,8 @@ async function api(req, res, url) {
   if (a === 'logout' && m === 'POST') {
     endSession(auth.token);
     save();
-    return send(res, 200, { ok: true });
+    // Files this browser kept (they're cached as never changing) go too.
+    return send(res, 200, { ok: true }, { 'Clear-Site-Data': '"cache"' });
   }
 
   // A job's visits: list, schedule, change, cancel.
@@ -5687,7 +5718,7 @@ async function api(req, res, url) {
     return send(res, 200, {
       workspace: publicWorkspace(ws, auth.memberId),
       cloud: cloudPickers(),
-      me: { memberId: auth.memberId, member: auth.member, device: auth.device, deviceId: auth.deviceId, ...meAccount(ws, auth.memberId) },
+      me: { memberId: auth.memberId, member: auth.member, device: auth.device, deviceId: auth.deviceId, fileKey: req.replay ? null : fileKeyOf(auth.token), ...meAccount(ws, auth.memberId) },
       notices: Object.values(db.notices).filter((n) => n.wsId === ws.id && n.memberId === auth.memberId).sort((p, q) => q.at - p.at).map(publicNotice),
       start: startList(ws, auth),
       items,
@@ -5994,7 +6025,7 @@ async function api(req, res, url) {
       const state = rid(18);
       const wantMail = !!mail && !!p.sendMail;
       for (const [k, v] of oauthPending) if (v.exp < Date.now()) oauthPending.delete(k);
-      oauthPending.set(state, { wsId: ws.id, memberId: auth.memberId, provider, tz: validTz(tz), mail: wantMail, exp: Date.now() + 15 * 60_000 });
+      oauthPending.set(state, { wsId: ws.id, memberId: auth.memberId, provider, tz: validTz(tz), mail: wantMail, browser: OAUTH_BIND.start(req, res), exp: Date.now() + 15 * 60_000 });
       return send(res, 200, { url: p.authUrl(`${PUBLIC_URL}/oauth/${provider}/callback`, state, wantMail) });
     }
     const conn = b && db.calendars[b];
@@ -7059,7 +7090,8 @@ async function api(req, res, url) {
     if (m === 'POST' && b === 'connect') {
       if (!calProviders.google.configured()) return send(res, 400, { error: 'Google isn’t set up on this server yet.' });
       const state = rid(18);
-      oauthPending.set(state, { wsId: ws.id, memberId: auth.memberId, provider: 'google', kind: 'contacts', exp: Date.now() + 15 * 60_000 });
+      for (const [k, v] of oauthPending) if (v.exp < Date.now()) oauthPending.delete(k);
+      oauthPending.set(state, { wsId: ws.id, memberId: auth.memberId, provider: 'google', kind: 'contacts', browser: OAUTH_BIND.start(req, res), exp: Date.now() + 15 * 60_000 });
       return send(res, 200, { url: calProviders.google.contactsUrl(`${PUBLIC_URL}/oauth/google/callback`, state) });
     }
     if (!db.gcontacts[ws.id]) return send(res, 404, { error: 'Google Contacts isn’t connected.' });
@@ -8686,7 +8718,7 @@ async function agentEmail(ws, memberId, { name, email, subject, text }) {
   return { from: `${ws.name} (through Kloomie)` };
 }
 // Postiz (postiz.js): social posting through the team's own Postiz account.
-const POSTIZ = postizModule({ db, save, broadcast, cleanText, readJson, send, seal, unseal, isAdmin, rid, alarm, allowLocal: process.env.ALLOW_LOCAL_WEBHOOKS === '1', cloudUrl: process.env.POSTIZ_URL || undefined });
+const POSTIZ = postizModule({ bind: OAUTH_BIND, db, save, broadcast, cleanText, readJson, send, seal, unseal, isAdmin, rid, alarm, allowLocal: process.env.ALLOW_LOCAL_WEBHOOKS === '1', cloudUrl: process.env.POSTIZ_URL || undefined });
 // A picture made on the person's OpenAI or Gemini key (images.js), kept in Kloomie as a file.
 async function makeImageItem(ws, memberId, { prompt, shape, name, by }) {
   const ai = aiOf(ws.id, memberId);
@@ -8792,14 +8824,14 @@ function cloudScripts() {
   return [c.dropbox ? ' https://www.dropbox.com' : '', c.google ? ' https://apis.google.com https://accounts.google.com https://www.gstatic.com' : '', c.onedrive ? ' https://js.live.net' : ''].join('');
 }
 // Dropbox listed inside Kloomie, per person (dropbox.js).
-const DBX = dropboxModule({ noRoom: (...a) => noRoom(...a), db, rid, save, send, readJson, seal, unseal, broadcast, publicUrl: PUBLIC_URL, receiveUpload, addItem, baseItem, uploadPlace, publicItem, FILES_DIR, mimeFor, cleanName, alarm });
+const DBX = dropboxModule({ bind: OAUTH_BIND, noRoom: (...a) => noRoom(...a), db, rid, save, send, readJson, seal, unseal, broadcast, publicUrl: PUBLIC_URL, receiveUpload, addItem, baseItem, uploadPlace, publicItem, FILES_DIR, mimeFor, cleanName, alarm });
 // Leads from the team's website and other tools (leads.js).
 const LEADS = leadsModule({ db, save, readJson, send, isAdmin, cleanText, contactsOf, newContact, applyContact, emailKey, phoneKey, EMAIL_RE, contactNews, refreshLiveSoon, automate,
   hook: (wsId, type, x) => hook(wsId, type, () => API.apiContact(x), 'Lead'), notifyAdmins, escHtml, brandOf, logoUrl, clientIp, CONTACT_MAX, publicUrl: PUBLIC_URL, offline, teamDay });
 // Two-step sign-in with an authenticator app (twostep.js).
 const TS = twoStepModule({ db, save, seal, unseal, readJson, send, appName: process.env.APP_NAME || 'Kloomie' });
 // QuickBooks Online: invoices and payments into the team's books, payments recorded there back (quickbooks.js).
-const QB = quickbooksModule({ db, save, broadcast, cleanText, readJson, send, seal, unseal, isAdmin, INV, PJ, publicUrl: PUBLIC_URL, alarm, offline, teamDay });
+const QB = quickbooksModule({ bind: OAUTH_BIND, db, save, broadcast, cleanText, readJson, send, seal, unseal, isAdmin, INV, PJ, publicUrl: PUBLIC_URL, alarm, offline, teamDay });
 // The public API for Contacts, Tasks, Visits and Invoices, and webhooks apps subscribe to (publicapi.js).
 const API = publicApiModule({ canSee: (...a) => canSee(...a), privateTask: (t) => privateTask(t), readOnlyMsg: (ws) => readOnlyBlock(ws, 'v1', 'POST'), db, save, broadcast, rid, cleanText, readJson, send, badRequest, PJ, INV, isAdmin, teamDay, EVENTS: HOOK_EVENTS, EMAIL_RE,
   publicContact, contactsOf, newContact, applyContact, contactNews, refreshLiveSoon, automate, CONTACT_MAX, emailKey, phoneKey,

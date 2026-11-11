@@ -1,5 +1,6 @@
 // Campaign email from Gmail: connecting Gmail to send, each email going out through Gmail with the sender's
 // signature and (without PSS) Kloomie's own unsubscribe link, and that link unsubscribing them.
+import './cookiejar.mjs'; // a browser's cookies: connecting an account finishes in the browser that started it
 import fs from 'node:fs';
 import http from 'node:http';
 import { spawn } from 'node:child_process';

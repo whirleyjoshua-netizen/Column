@@ -39,7 +39,7 @@ const OAUTH = {
 };
 const STATE_MS = 10 * 60_000;
 
-export function postizModule({ db, save, broadcast, cleanText, readJson, send, seal, unseal, isAdmin, rid, alarm = () => {}, allowLocal = false, cloudUrl = CLOUD }) {
+export function postizModule({ bind, db, save, broadcast, cleanText, readJson, send, seal, unseal, isAdmin, rid, alarm = () => {}, allowLocal = false, cloudUrl = CLOUD }) {
   const oauthOn = () => !!(OAUTH.id() && OAUTH.secret());
   const pending = new Map(); // state → { wsId, memberId, exp }
   const conn = (ws) => ws.postiz || null;
@@ -176,11 +176,12 @@ export function postizModule({ db, save, broadcast, cleanText, readJson, send, s
   async function callback(req, res, url) {
     const st = url.searchParams.get('state') || '';
     const pend = pending.get(st);
-    pending.delete(st);
-    if (!pend || pend.exp < Date.now()) return done(res, 'expired');
-    if (url.searchParams.get('error')) return done(res, 'denied');
+    if (!pend || pend.exp < Date.now()) { pending.delete(st); return done(res, 'expired'); }
     const ws = db.workspaces[pend.wsId];
     const who = ws?.members.find((x) => x.id === pend.memberId);
+    if (who && bind.gate(req, res, url, pend, { what: 'Postiz', team: ws.name, person: who.name })) return;
+    pending.delete(st);
+    if (url.searchParams.get('error')) return done(res, 'denied');
     if (!who || !['owner', 'admin'].includes(who.role)) return done(res, 'role');
     const code = url.searchParams.get('code') || '';
     if (!code) return done(res, 'failed');
@@ -218,7 +219,7 @@ export function postizModule({ db, save, broadcast, cleanText, readJson, send, s
       if (!oauthOn()) return send(res, 400, { error: 'Connecting with Postiz isn’t set up on this server. Use an API key instead.' });
       const state = rid(24);
       for (const [k, v] of pending) if (v.exp < Date.now()) pending.delete(k);
-      pending.set(state, { wsId: ws.id, memberId: auth.memberId, exp: Date.now() + STATE_MS });
+      pending.set(state, { wsId: ws.id, memberId: auth.memberId, browser: bind.start(req, res), exp: Date.now() + STATE_MS });
       const q = new URLSearchParams({ client_id: OAUTH.id(), response_type: 'code', state });
       return send(res, 200, { url: `${OAUTH.authorize()}?${q}` });
     }

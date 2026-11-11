@@ -154,7 +154,8 @@
     if (/Linux/.test(ua)) return 'Linux';
     return 'Device';
   }
-  const t = () => encodeURIComponent(S.token);
+  // H3: addresses carry the sign-in's file key (it only reads files and live updates), never the sign-in itself.
+  const t = () => encodeURIComponent(S.me?.fileKey || '');
   const abs = (p) => location.origin + p;
   function fileUrl(it, { dl = false, idx = null } = {}) {
     let p;
@@ -1261,7 +1262,7 @@
       h('span', {}, x.status === 'ready' ? `Ready · ${fmtSize(x.size)}` : x.status === 'building' ? 'Being made…' : 'Didn’t work',
         h('small', {}, x.status === 'ready' ? `made ${ago(x.readyAt)} · kept until ${new Date(x.expiresAt).toLocaleDateString()}` : x.error || `started ${ago(x.createdAt)}`)),
       h('span', { class: 'btns' },
-        x.status === 'ready' ? h('a', { class: 'btn small', href: `/api/exports/${x.id}/file?t=${encodeURIComponent(S.token)}`, download: '' }, 'Download') : null,
+        x.status === 'ready' ? h('a', { class: 'btn small', href: `/api/exports/${x.id}/file?t=${t()}`, download: '' }, 'Download') : null,
         h('button', { class: 'btn small danger', onclick: () => api('DELETE', '/exports/' + x.id).then((r) => draw(r.exports), (e) => toast(e.message)) }, x.status === 'building' ? 'Cancel' : 'Delete')))));
     const load = () => (sec.isConnected || !sec.parentNode ? api('GET', '/exports').then((r) => draw(r.exports), () => {}) : null);
     const go = h('button', { class: 'btn', onclick: () => api('POST', '/exports', { kind }).then((r) => { draw(r.exports); toast(S.me.email ? 'Making your export. We’ll email you when it’s ready.' : 'Making your export. It shows here when it’s ready.'); }, (e) => toast(e.message)) }, team ? 'Export team' : 'Export my things');
@@ -1688,10 +1689,18 @@
     if (!html.includes('@')) return html;
     const me = S.workspace?.members?.find((m) => m.id === S.me?.memberId)?.name.toLowerCase();
     const re = mentionRe(mentionNames().map(esc), 'gi');
-    return html.split(/(<[^>]*>)/).map((part) => (part.startsWith('<') ? part : part.replace(re, (_, pre, name) => {
-      const self = name.toLowerCase() === 'here' || esc(me || '') === name.toLowerCase();
-      return `${pre}<span class="mention${self ? ' me' : ''}">@${name}</span>`;
-    }))).join('');
+    let inLink = 0;
+    return html.split(/(<[^>]*>)/).map((part) => {
+      if (part.startsWith('<')) {
+        if (/^<a[\s>]/i.test(part)) inLink++;
+        else if (/^<\/a>/i.test(part)) inLink = Math.max(0, inLink - 1);
+        return part;
+      }
+      return inLink ? part : part.replace(re, (_, pre, name) => {
+        const self = name.toLowerCase() === 'here' || esc(me || '') === name.toLowerCase();
+        return `${pre}<span class="mention${self ? ' me' : ''}">@${name}</span>`;
+      });
+    }).join('');
   }
 
   // Autocomplete for "@" in a chat composer. Returns a keydown hook; true means it used the key.

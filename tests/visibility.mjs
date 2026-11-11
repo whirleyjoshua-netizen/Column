@@ -53,7 +53,7 @@ try {
 
   // Ken listens live from here on.
   const live = [];
-  const sock = new WebSocket(`ws://127.0.0.1:${PORT}/ws?t=${kt}`);
+  const sock = new WebSocket(`ws://127.0.0.1:${PORT}/ws`, { headers: { authorization: 'Bearer ' + kt } });
   sock.on('message', (d) => live.push(JSON.parse(d)));
   await new Promise((res) => sock.on('open', res));
 

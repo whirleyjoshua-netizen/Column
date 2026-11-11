@@ -254,7 +254,13 @@ export function invoicesModule({ notifyAdmins = null, db, save, broadcast, rid, 
       if (inv.status === 'void') return send(res, 400, { error: 'This invoice was voided.' });
       if (body.lines !== undefined) {
         if (inv.payments.length) return send(res, 400, { error: 'This invoice has payments on it, so its lines can’t change. Void it and make a new one.' });
-        inv.lines = cleanLines(body.lines);
+        const lines = cleanLines(body.lines);
+        const was = totals(inv).total, next = totals({ ...inv, lines }).total;
+        if (inv.sentAt && next > was) {
+          const held = hold?.(ws, auth, 'invoice', { amount: next / 100, summary: `Change ${inv.number} (already sent) from ${money(was)} to ${money(next)} for ${inv.to.name || 'the customer'}`, target: { invoiceId: inv.id, recordId: inv.recordId }, req: { method: 'PATCH', path: req.url, body } });
+          if (held) return send(res, held.status, held.body);
+        }
+        inv.lines = lines;
         closeSessions(inv).catch(() => {});
       }
       if (body.due !== undefined) inv.due = isDay(body.due) ? body.due : null;

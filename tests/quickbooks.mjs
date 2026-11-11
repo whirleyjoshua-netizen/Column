@@ -2,6 +2,7 @@
 // customer, lines, discount and tax; payments taken in Kloomie recorded there; payments recorded there coming back
 // (the job moves to Paid) without echoing; voids followed; an invoice number already there linked, not doubled;
 // earlier invoices only when asked; tokens refreshed and kept sealed; members kept out; disconnecting revokes.
+import './cookiejar.mjs'; // a browser's cookies: connecting an account finishes in the browser that started it
 import fs from 'node:fs';
 import http from 'node:http';
 import { spawn } from 'node:child_process';

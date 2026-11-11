@@ -1,5 +1,6 @@
 // Google Contacts as a connector: an admin connects it, everyone in "My contacts" comes into Contacts (matched to
 // people already there), stays current, keeps what the team adds, and stays when it's disconnected.
+import './cookiejar.mjs'; // a browser's cookies: connecting an account finishes in the browser that started it
 import fs from 'node:fs';
 import http from 'node:http';
 import { spawn } from 'node:child_process';

@@ -6,7 +6,7 @@ const a = await (await fetch(B + '/api/auth', { method: 'POST', headers: { 'cont
 const vOf = async (u) => (await (await fetch(u)).text()).match(/name="v" value="([^"]+)"/)?.[1] || ''; // the accept form's fingerprint, as a browser sends it
 const A = req(a.token);
 const heard = [];
-const ws = new WebSocket(`ws://127.0.0.1:4797/ws?t=${a.token}`);
+const ws = new WebSocket(`ws://127.0.0.1:4797/ws`, { headers: { authorization: 'Bearer ' + a.token } });
 ws.on('message', (d) => heard.push(JSON.parse(d)));
 await new Promise((r) => ws.on('open', r));
 const p = await A('POST', '/api/projects', { template: 'bids', name: 'Estimating' });

@@ -100,7 +100,7 @@ await sleep(500);
 ok(pushesTo('kenphone').length === 1 && decrypt(phone, pushesTo('kenphone')[0].body).title === 'Jo mentioned you', 'then only what’s for him comes through (@here counts)');
 
 // ---- while he's looking at Kloomie, it waits ----
-const sock = new WebSocket(`ws://127.0.0.1:${PORT}/ws?t=${kTok}`);
+const sock = new WebSocket(`ws://127.0.0.1:${PORT}/ws`, { headers: { authorization: 'Bearer ' + kTok } });
 await new Promise((res) => sock.on('open', res));
 const seen = [];
 sock.on('message', (d) => seen.push(JSON.parse(d)));

@@ -1,6 +1,7 @@
 // Dropbox listed inside Kloomie, against a stand-in Dropbox: connecting (per person), the folder list and search,
 // adding a picked file into a stack (the bytes arrive), files Dropbox can't download refused, an expired sign-in asking
 // to reconnect (never signing you out of Kloomie), disconnecting, and the old Chooser used only without the secret.
+import './cookiejar.mjs'; // a browser's cookies: connecting an account finishes in the browser that started it
 import fs from 'node:fs';
 import http from 'node:http';
 import { spawn } from 'node:child_process';

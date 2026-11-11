@@ -108,7 +108,7 @@ try {
   r = await call()('POST', '/auth', { mode: 'email', email: `jo${t}@t.test`, password: 'longenough1', device: 'Tab', deviceId: 'd9' });
   const tok9 = r.body.token;
   const { default: WebSocket } = await import('../server/node_modules/ws/index.js');
-  const sock = new WebSocket(`ws://127.0.0.1:${PORT}/ws?t=${tok9}`);
+  const sock = new WebSocket(`ws://127.0.0.1:${PORT}/ws`, { headers: { authorization: 'Bearer ' + tok9 } });
   await new Promise((res) => sock.on('open', res));
   let closed = false;
   sock.on('close', () => (closed = true));
@@ -121,7 +121,7 @@ try {
   r = await call()('POST', '/auth', { mode: 'join', workspace: 'Aud ' + t, code: (await jo('GET', '/state')).body.workspace.inviteCode, name: 'Kim', password: 'kimpass11', device: 'Mac', deviceId: 'k1' });
   const kimTok = r.body.token;
   const kimId = (await jo('GET', '/state')).body.workspace.members.find((x) => x.name === 'Kim').id;
-  const ks = new WebSocket(`ws://127.0.0.1:${PORT}/ws?t=${kimTok}`);
+  const ks = new WebSocket(`ws://127.0.0.1:${PORT}/ws`, { headers: { authorization: 'Bearer ' + kimTok } });
   await new Promise((res) => ks.on('open', res));
   let kimClosed = false, kimHeard = false;
   ks.on('close', () => (kimClosed = true));

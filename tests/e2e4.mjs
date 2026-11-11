@@ -128,7 +128,7 @@ await A.until(`false`, 3000);
 const docx = (await JA('GET', '/state')).items.find((x) => x.name === 'Fleet offer.docx');
 ok(!!docx, 'the Word file was made');
 if (docx) {
-  const bytes = Buffer.from(await (await fetch(APP + `api/files/${docx.id}?t=${tokA}`)).arrayBuffer());
+  const bytes = Buffer.from(await (await fetch(APP + `api/files/${docx.id}`, { headers: { authorization: 'Bearer ' + tokA } })).arrayBuffer());
   FS.writeFileSync(process.argv[2] + '/dk/out.docx', bytes);
   const list = execSync(`unzip -l ${process.argv[2]}/dk/out.docx`).toString();
   const xml = execSync(`unzip -p ${process.argv[2]}/dk/out.docx word/document.xml`).toString();

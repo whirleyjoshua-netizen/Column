@@ -58,7 +58,7 @@ ok(ex?.status === 'ready' && ex.size > 100, 'it’s ready a moment later: ' + JS
 await sleep(300);
 ok(mails().some((m) => m.to === `jo${t}@t.test` && /export of Expo .* is ready/.test(m.subject)), 'she gets an email saying it’s ready');
 
-const get = async (tok, id) => fetch(`${B}/api/exports/${id}/file${tok ? '?t=' + encodeURIComponent(tok) : ''}`);
+const get = async (tok, id) => fetch(`${B}/api/exports/${id}/file`, tok ? { headers: { authorization: 'Bearer ' + tok } } : {});
 let res = await get(null, ex.id);
 ok(res.status === 401, 'downloading needs a sign-in');
 res = await get(k.token, ex.id);

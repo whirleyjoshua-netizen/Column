@@ -13,7 +13,7 @@ const CONTENT = process.env.DROPBOX_CONTENT || 'https://content.dropboxapi.com';
 const AUTH = process.env.DROPBOX_AUTH || 'https://www.dropbox.com';
 const SCOPES = 'account_info.read files.metadata.read files.content.read';
 
-export function dropboxModule({ noRoom = () => null, db, rid, save, send, readJson, seal, unseal, broadcast, publicUrl, receiveUpload, addItem, baseItem, uploadPlace, publicItem, FILES_DIR, mimeFor, cleanName, alarm }) {
+export function dropboxModule({ bind, noRoom = () => null, db, rid, save, send, readJson, seal, unseal, broadcast, publicUrl, receiveUpload, addItem, baseItem, uploadPlace, publicItem, FILES_DIR, mimeFor, cleanName, alarm }) {
   db.dropbox ||= {};
   const env = (k) => process.env[k] || '';
   const configured = () => !!(env('DROPBOX_APP_KEY') && env('DROPBOX_APP_SECRET'));
@@ -80,7 +80,7 @@ export function dropboxModule({ noRoom = () => null, db, rid, save, send, readJs
       if (!configured()) return send(res, 400, { error: 'Dropbox isn’t set up on this server yet.' });
       if (m === 'POST' && b === 'connect') {
         const state = crypto.randomBytes(18).toString('base64url');
-        pending.set(state, { wsId: ws.id, memberId: auth.memberId, exp: Date.now() + 15 * 60_000 });
+        pending.set(state, { wsId: ws.id, memberId: auth.memberId, browser: bind.start(req, res), exp: Date.now() + 15 * 60_000 });
         for (const [s, p] of pending) if (p.exp < Date.now()) pending.delete(s);
         const url = `${AUTH}/oauth2/authorize?` + new URLSearchParams({ client_id: env('DROPBOX_APP_KEY'), response_type: 'code', token_access_type: 'offline', redirect_uri: redirect(), state, scope: SCOPES });
         return send(res, 200, { url });
@@ -152,11 +152,13 @@ export function dropboxModule({ noRoom = () => null, db, rid, save, send, readJs
   async function callback(req, res, url) {
     const st = url.searchParams.get('state') || '';
     const pend = pending.get(st);
-    pending.delete(st);
-    if (!pend || pend.exp < Date.now()) return done(res, 'expired');
-    if (url.searchParams.get('error')) return done(res, 'denied');
+    if (!pend || pend.exp < Date.now()) { pending.delete(st); return done(res, 'expired'); }
     const ws = db.workspaces[pend.wsId];
-    if (!ws?.members.some((x) => x.id === pend.memberId)) return done(res, 'expired');
+    const who = ws?.members.find((x) => x.id === pend.memberId);
+    if (who && bind.gate(req, res, url, pend, { what: 'Dropbox', team: ws.name, person: who.name })) return;
+    pending.delete(st);
+    if (url.searchParams.get('error')) return done(res, 'denied');
+    if (!who) return done(res, 'expired');
     try {
       const j = await tokenCall({ grant_type: 'authorization_code', code: url.searchParams.get('code') || '', redirect_uri: redirect() });
       if (!j.refresh_token) return done(res, 'failed');
