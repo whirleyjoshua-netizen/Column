@@ -9300,6 +9300,7 @@
         h('small', {}, p.types.map((t) => (PR.records.has(p.id) ? `${prRecs(p.id).filter((r) => r.typeId === t.id).length} ${t.name.toLowerCase()}` : t.name)).join(' · ')))))
         : h('div', { class: 'pj-empty' }, h('h3', {}, 'Choose how your team works'), h('p', {}, 'Each starts with the lists, details and stages that kind of work needs. You can change any of it later, or add more projects.'),
           h('div', { class: 'pj-kinds' }, PJ_KINDS.map((x) => pjKindCard(x, false, () => (x.k === 'trades' ? newTradesProject('', false) : newProjectSheet(x.k))))),
+          pjDescribeBtn(),
           h('button', { class: 'linkish', onclick: () => newProjectSheet('ops') }, 'Or start from a blank list')),
     ];
   }
@@ -9310,11 +9311,17 @@
     { k: 'creative', c: 'rose', ic: '🎨', name: 'Creative & Agencies', sub: 'Clients, campaigns, deliverables, approvals', tags: ['Clients', 'Deliverables', 'Approvals'] },
     { k: 'ops', c: 'green', ic: '📋', name: 'Business Operations', sub: 'Processes, teams, workflows, projects', tags: ['Projects', 'Tasks', 'Pipelines'] },
   ];
-  // Business operations has more than one way to start.
-  const PJ_OPS = [['team', '📋', 'Team projects', 'Projects, tasks and owners, plus the processes you repeat'], ['crm', '🤝', 'Sales pipeline', 'Contacts, companies and deals on a board'], ['blank', '📁', 'Start blank', 'One list to shape as you like']];
+  // Some kinds have more than one way to start.
+  const PJ_SUBS = {
+    creative: [['creative', '🎨', 'Agency client work', 'Client projects, deliverables with sign-off, proposals clients accept online'], ['ugc', '🎬', 'UGC', 'Creators, brand campaigns, content from brief to posted, payouts']],
+    ops: [['team', '📋', 'Team projects', 'Projects, tasks and owners, plus the processes you repeat'], ['crm', '🤝', 'Sales pipeline', 'Contacts, companies and deals on a board'], ['blank', '📁', 'Start blank', 'One list to shape as you like']],
+  };
   const pjKindCard = (x, on, onclick) => h('button', { type: 'button', class: `pj-kind c-${x.c}${on ? ' on' : ''}`, 'aria-pressed': String(!!on), onclick },
     h('span', { class: 'pj-kind-art', 'aria-hidden': 'true' }, h('span', { class: 'pj-kind-ic' }, x.ic), h('span', { class: 'pj-kind-tags' }, x.tags.map((tg) => h('i', {}, tg)))),
     h('b', {}, x.name), h('small', {}, x.sub));
+  // For a business none of the kinds fit: say how it works, and Sidekick drafts the project.
+  const pjDescribeBtn = () => h('button', { type: 'button', class: 'pj-describe', onclick: () => describeProjectSheet() },
+    h('span', { class: 'pj-ic' }, '✨'), h('span', {}, h('b', {}, 'Something else? Describe how you work'), h('small', {}, 'Sidekick drafts the lists, details and stages for your business. You look it over before anything is made.')));
   // Jobs for a trade business: pick the kinds of work, and whether they bid on jobs (adds bids, quotes, clients, a price list).
   function newTradesProject(name, priv) {
     const bids = h('input', { type: 'checkbox' });
@@ -9323,20 +9330,22 @@
   }
   function newProjectSheet(kind = null) {
     let pick = kind || 'trades';
-    let ops = 'team';
+    const sub = { creative: 'creative', ops: 'team' };
     let own = null;
     const OWN = [];
     const name = h('input', { maxlength: 80 });
     const priv = h('input', { type: 'checkbox' });
     const kinds = h('div', { class: 'pj-kinds' });
-    const opsRow = h('div', { class: 'pj-tpls pj-ops' });
+    const subRow = h('div', { class: 'pj-tpls pj-ops' });
     const mine = h('div');
-    const tplOf = () => (own ? 'custom:' + own.id : pick === 'ops' ? ops : pick);
-    const label = () => (own ? own.name : pick === 'trades' ? 'Jobs' : pick === 'tech' ? 'Atlas' : pick === 'creative' ? 'Client work' : PJ_OPS.find((x) => x[0] === ops)[2]);
+    const tplOf = () => (own ? 'custom:' + own.id : PJ_SUBS[pick] ? sub[pick] : pick);
+    const label = () => (own ? own.name : pick === 'trades' ? 'Jobs' : pick === 'tech' ? 'Atlas' : PJ_SUBS[pick].find((x) => x[0] === sub[pick])[2].replace('Agency client work', 'Client work'));
     const draw = () => {
       kinds.replaceChildren(...PJ_KINDS.map((x) => pjKindCard(x, !own && pick === x.k, () => { pick = x.k; own = null; draw(); })));
-      opsRow.hidden = own || pick !== 'ops';
-      opsRow.replaceChildren(...PJ_OPS.map(([k, ic, nm, about]) => h('button', { type: 'button', class: 'pj-tpl' + (ops === k ? ' on' : ''), onclick: () => { ops = k; draw(); } }, h('span', { class: 'pj-ic' }, ic), h('b', {}, nm), h('small', {}, about))));
+      const opts = !own && PJ_SUBS[pick];
+      subRow.hidden = !opts;
+      subRow.dataset.n = opts ? opts.length : 0;
+      subRow.replaceChildren(...(opts || []).map(([k, ic, nm, about]) => h('button', { type: 'button', class: 'pj-tpl' + (sub[pick] === k ? ' on' : ''), onclick: () => { sub[pick] = k; draw(); } }, h('span', { class: 'pj-ic' }, ic), h('b', {}, nm), h('small', {}, about))));
       mine.replaceChildren(...(OWN.length ? [h('small', { class: 'hint' }, 'Your templates'), h('div', { class: 'pj-tpls' }, OWN.map((x) => h('button', { type: 'button', class: 'pj-tpl' + (own === x ? ' on' : ''), onclick: () => { own = own === x ? null : x; draw(); } }, h('span', { class: 'pj-ic' }, '⭐'), h('b', {}, x.name), h('small', {}, x.about || x.lists.join(', ')),
         x.memberId === S.me?.memberId || amAdmin() ? h('span', { class: 'pj-tpl-del', role: 'button', title: 'Delete this template', onclick: async (e) => { e.stopPropagation(); try { await api('DELETE', '/project-templates/' + x.id); OWN.splice(OWN.indexOf(x), 1); if (own === x) own = null; draw(); } catch (er) { toast(er.message); } } }, '×') : null)))] : []));
       name.placeholder = label();
@@ -9344,7 +9353,7 @@
       if (go) go.textContent = !own && pick === 'trades' ? 'Next: your kinds of work' : 'Create';
     };
     api('GET', '/project-templates').then((list) => { OWN.push(...list); if (list.length) draw(); }).catch(() => {});
-    sheet('New project', [h('p', { class: 'day-hint' }, 'Choose how your team works. Each starts with the lists, details and stages that work needs, and you can change any of it later.'), kinds, opsRow, mine,
+    sheet('New project', [h('p', { class: 'day-hint' }, 'Choose how your team works. Each starts with the lists, details and stages that work needs, and you can change any of it later.'), kinds, subRow, pjDescribeBtn(), mine,
       h('label', {}, 'Name', name), h('label', { class: 'pick' }, priv, 'Private: only me and people I add')], async () => {
       if (!own && pick === 'trades') return setTimeout(() => newTradesProject(name.value.trim(), priv.checked), 0);
       const p = await api('POST', '/projects', { template: tplOf(), name: name.value.trim() || label(), private: priv.checked });
@@ -9353,6 +9362,57 @@
       openProject(p.id);
     }, 'Create');
     draw();
+  }
+  // Describe how you work → a draft project to look over → Create. Nothing is made until Create.
+  function describeProjectSheet(text = '') {
+    const box = h('textarea', { rows: 6, maxlength: 3000, placeholder: 'We’re a tow company. Calls come from AAA, police and customers. We dispatch a driver, tow to our yard or a shop, and charge by the mile plus storage per day. We need photos before hookup and a signed release.' });
+    box.value = text;
+    const err = h('p', { class: 'err' });
+    const go = h('button', { type: 'button', class: 'btn primary-btn' }, '✦ Draft it');
+    go.addEventListener('click', async () => {
+      const said = box.value.trim();
+      if (!said) return void (err.textContent = 'Say how your business works first.');
+      err.textContent = '';
+      go.disabled = true;
+      go.textContent = 'Drafting…';
+      try {
+        const r = await api('POST', '/project-templates/describe', { text: said });
+        describePreview(said, r.draft, r.questions || []);
+      } catch (e) {
+        err.textContent = e.message;
+        go.disabled = false;
+        go.textContent = '✦ Draft it';
+      }
+    });
+    sheet('Describe how you work', [h('p', { class: 'day-hint' }, 'Say what you do, how a job (or order, or case) comes in, the steps it goes through, and what you need to write down along the way. Sidekick drafts a project for it, using your team’s AI key.'), box, err, h('div', { class: 'btns' }, h('span', { style: 'flex:1' }), go)]);
+  }
+  function describePreview(said, draft, questions) {
+    const name = h('input', { maxlength: 80, value: draft.name || '' });
+    const priv = h('input', { type: 'checkbox' });
+    const FT = { text: 'Text', number: 'Number', money: 'Money', date: 'Date', select: 'Choice', multi: 'Choices', person: 'Person', email: 'Email', phone: 'Phone', url: 'Link', checkbox: 'Yes/no', link: 'Link to', files: 'Files', contact: 'Customer', checklist: 'Checklist', signature: 'Signature', items: 'Line items' };
+    const lists = draft.types.map((t) => {
+      const stage = t.fields.find((f) => f.key === 'status' && f.choices) || t.fields.find((f) => f.type === 'select');
+      return h('section', { class: 'pj-draft-list' }, h('h4', {}, h('span', {}, t.icon), ' ', t.name),
+        stage ? h('div', { class: 'pj-draft-stages' }, stage.choices.map((c) => pjChip(c))) : null,
+        h('div', { class: 'pj-draft-fields' }, t.fields.filter((f) => f !== stage).map((f) => h('span', {}, f.name, h('small', {}, f.type === 'link' ? `→ ${draft.types.find((x) => x.key === f.target)?.name || ''}` : FT[f.type] || f.type)))));
+    });
+    const create = h('button', { type: 'button', class: 'btn primary-btn' }, 'Create project');
+    const err = h('p', { class: 'err' });
+    create.addEventListener('click', async () => {
+      create.disabled = true;
+      try {
+        const p = await api('POST', '/projects', { template: 'described', spec: draft, name: name.value.trim() || draft.name || 'New project', private: priv.checked });
+        closeSheet();
+        prUpsertProject(p);
+        PR.records.set(p.id, []);
+        openProject(p.id);
+      } catch (e) { err.textContent = e.message; create.disabled = false; }
+    });
+    sheet(`${draft.icon || '✨'} Your project, drafted`, [h('p', { class: 'day-hint' }, 'Look it over. Once it’s made, you can rename, add or remove any list, field or stage, and save it as a template for your team.'),
+      h('div', { class: 'pj-draft' }, lists),
+      questions.length ? h('div', { class: 'pj-draft-q' }, h('b', {}, 'Worth deciding'), h('ul', {}, questions.map((q) => h('li', {}, q)))) : null,
+      h('label', {}, 'Name', name), h('label', { class: 'pick' }, priv, 'Private: only me and people I add'), err,
+      h('div', { class: 'btns' }, h('button', { type: 'button', class: 'btn', onclick: () => describeProjectSheet(said) }, '← Change the description'), h('span', { style: 'flex:1' }), create)]);
   }
 
   // ----- one project -----

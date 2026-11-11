@@ -12,7 +12,7 @@ export const FAMILIES = {
   project: { name: 'Remodel and building', about: 'Multi-day projects, often with permits', stages: ['Estimate', 'Approved', 'Permit', 'In progress', 'Inspection', 'Punch list', 'Complete', 'Paid'] },
   recurring: { name: 'Recurring outdoor and home services', about: 'The same customers every week or month', stages: ['Scheduled', 'Done', 'Skipped', 'Invoiced', 'Paid'] },
   cleaning: { name: 'Cleaning, restoration and hauling', about: 'Cleans, damage jobs, junk and moves', stages: ['New', 'Scheduled', 'In progress', 'Done', 'Invoiced', 'Paid'] },
-  mobile: { name: 'Mobile and specialty services', about: 'You go to the customer: cars, pets, inspections', stages: ['Booked', 'On the way', 'In progress', 'Done', 'Paid'] },
+  mobile: { name: 'Mobile and specialty services', about: 'You go to the customer: towing, deliveries, cars, pets, inspections', stages: ['Booked', 'On the way', 'In progress', 'Done', 'Paid'] },
 };
 
 // Field shorthands: [key, name, type, extra].
@@ -178,6 +178,20 @@ export const TRADES = {
   auto: { family: 'mobile', name: 'Mobile auto detailing and repair', icon: '🚗', job: 'Vehicle service', fields: [
     t('vehicle', 'Vehicle (year, make, model)'), t('plate', 'Plate / VIN'), one('package', 'Package', ['Wash', 'Interior', 'Full detail', 'Ceramic', 'Repair']), t('condition', 'Condition notes')],
     checklist: ['Walk-around photos', 'Do the service', 'Final photos', 'Customer checks the car'] },
+  // A trade can have its own stages (towing moves differently from a pet groom) and call its address something else.
+  towing: { family: 'mobile', name: 'Towing and roadside', icon: '🛻', job: 'Tow', address: 'Pickup location',
+    stages: ['Call in', 'Dispatched', 'En route', 'On scene', 'Towing', 'Dropped off', 'Stored', 'Invoiced', 'Paid'], fields: [
+    one('kind', 'Call type', ['Tow', 'Jump start', 'Lockout', 'Tire change', 'Fuel delivery', 'Winch-out', 'Accident', 'Impound', 'Private property']),
+    one('source', 'Who called', ['Customer', 'Motor club', 'Police', 'Body shop', 'Dealer', 'Property manager']), t('reference', 'Motor club / police / PO #'),
+    t('vehicle', 'Vehicle (year, make, model, color)'), t('plate', 'Plate'), t('vin', 'VIN'), t('dropoff', 'Drop-off location'),
+    n('miles', 'Miles towed'), one('truck', 'Truck', ['Flatbed', 'Wheel-lift', 'Heavy duty', 'Service truck']), yes('keys', 'Keys with the vehicle'),
+    d('stored', 'In storage since'), t('damage', 'Existing damage')],
+    checklist: ['Confirm the location and vehicle', 'Walk-around photos before hookup', 'Note existing damage', 'Release signed (customer or officer)', 'Secure the vehicle', 'Photos at drop-off', 'Payment or PO number taken'] },
+  courier: { family: 'mobile', name: 'Courier and delivery', icon: '📦', job: 'Delivery', address: 'Pickup address',
+    stages: ['Booked', 'Picked up', 'In transit', 'Delivered', 'Invoiced', 'Paid'], fields: [
+    t('dropoff', 'Delivery address'), t('recipient', 'Recipient'), n('pieces', 'Pieces'), n('weight', 'Weight (lb)'),
+    one('speed', 'Service', ['Same day', 'Rush', 'Scheduled', 'Route']), t('instructions', 'Delivery instructions')],
+    checklist: ['Confirm pickup', 'Photo at pickup', 'Photo at delivery', 'Recipient signs'] },
   pets: { family: 'mobile', name: 'Mobile pet grooming', icon: '🐶', job: 'Grooming', fields: [
     t('pet', 'Pet name'), t('breed', 'Breed'), one('service', 'Service', ['Bath', 'Full groom', 'Nails', 'De-shed']), t('notes', 'Behavior / health notes')],
     checklist: ['Check in the pet', 'Groom', 'Photo', 'Hand back to the owner'] },
@@ -198,8 +212,8 @@ export function tradeType(key) {
     fields: [
       { key: 'job', name: 'Job', type: 'text' },
       { key: 'customer', name: 'Customer', type: 'contact' },
-      { key: 'status', name: 'Status', type: 'select', choices: choices(fam.stages) },
-      { key: 'address', name: 'Address', type: 'text' },
+      { key: 'status', name: 'Status', type: 'select', choices: choices(tr.stages || fam.stages) },
+      { key: 'address', name: tr.address || 'Address', type: 'text' },
       { key: 'scheduled', name: 'Scheduled', type: 'date' },
       { key: 'crew', name: 'Assigned to', type: 'person' },
       { key: 'value', name: 'Value', type: 'money' },

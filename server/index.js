@@ -30,6 +30,7 @@ import { rulesModule } from './rules.js';
 import { standupModule } from './standup.js';
 import { githubModule } from './github.js';
 import { techAiModule } from './techai.js';
+import { describeModule } from './describe.js';
 import { agentsModule } from './agents.js';
 import { postizModule } from './postiz.js';
 import { makeImage } from './images.js';
@@ -5614,6 +5615,10 @@ async function api(req, res, url) {
     const out = await AGENTS_M.route(req, res, parts, auth, ws);
     if (out !== null) return;
   }
+  if (a === 'project-templates' && b === 'describe') {
+    const out = await DESCRIBE.route(req, res, parts, auth, ws);
+    if (out !== null) return;
+  }
   if ((a === 'projects' && c === 'ai-feature') || (a === 'records' && c === 'ai-tests')) {
     const out = await TECHAI.route(req, res, parts, auth, ws);
     if (out !== null) return;
@@ -8534,6 +8539,7 @@ async function writePlaybook(ws, auth, title, md, id) {
   return publicItem(made);
 }
 const TECHAI = techAiModule({ db, save, cleanText, readJson, send, aiAsk, replyJson, PJ });
+const DESCRIBE = describeModule({ cleanText, readJson, send, aiAsk, replyJson, PJ });
 // Agents (agents.js): the person's own AI with tools, working through the API as them.
 async function agentLlm(ws, memberId, { system, history, tools, exec, task }) {
   const ai = aiOf(ws.id, memberId);

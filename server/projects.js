@@ -198,6 +198,67 @@ export const TEMPLATES = {
       ], views: [{ name: 'By status', kind: 'board', groupBy: 'status' }, { name: 'All proposals', kind: 'table' }] },
     ],
   },
+  // UGC (user-generated content): creators, the brand campaigns they make content for, each piece from brief to
+  // posted (with the brand's sign-off), and what each creator is owed. Brands are Contacts.
+  ugc: {
+    name: 'UGC', icon: '🎬', about: 'Creators, brand campaigns, content from brief to posted, payouts',
+    types: [
+      { key: 'content', name: 'Content', singular: 'Piece', icon: '🎬', primary: 'name', fields: [
+        { key: 'name', name: 'Piece', type: 'text' },
+        { key: 'creator', name: 'Creator', type: 'link', target: 'creators' },
+        { key: 'campaign', name: 'Campaign', type: 'link', target: 'campaigns' },
+        { key: 'status', name: 'Status', type: 'select', choices: [choice('Brief sent', 'gray'), choice('Creator accepted', 'blue'), choice('Product shipped', 'teal'), choice('Filming', 'violet'), choice('Draft in', 'amber'), choice('Brand review', 'violet'), choice('Changes asked', 'rose'), choice('Approved', 'green'), choice('Posted', 'teal'), choice('Paid', 'green')] },
+        { key: 'format', name: 'Format', type: 'select', choices: [choice('Video', 'violet'), choice('Photo', 'blue'), choice('Testimonial', 'green'), choice('Unboxing', 'amber'), choice('How-to', 'teal'), choice('Hook test', 'rose')] },
+        { key: 'platforms', name: 'For', type: 'multi', choices: [choice('TikTok', 'gray'), choice('Instagram', 'rose'), choice('YouTube', 'rose'), choice('Facebook', 'blue'), choice('Paid ads', 'amber'), choice('Website', 'teal')] },
+        { key: 'hook', name: 'Hook / angle', type: 'text' },
+        { key: 'script', name: 'Script', type: 'text', long: true },
+        { key: 'due', name: 'Draft due', type: 'date' },
+        { key: 'round', name: 'Revision round', type: 'number' },
+        { key: 'feedback', name: 'Brand feedback', type: 'text', long: true },
+        { key: 'drafts', name: 'Drafts', type: 'files' },
+        { key: 'final', name: 'Final files', type: 'files' },
+        { key: 'live_link', name: 'Posted at', type: 'url' },
+        { key: 'signoff', name: 'Brand sign-off', type: 'signature' },
+      ], views: [{ name: 'Board', kind: 'board', groupBy: 'status' }, { name: 'By due date', kind: 'table', sortBy: 'due' }] },
+      { key: 'creators', name: 'Creators', singular: 'Creator', icon: '🤳', primary: 'name', fields: [
+        { key: 'name', name: 'Creator', type: 'text' },
+        { key: 'handle', name: 'Handle', type: 'text' },
+        { key: 'email', name: 'Email', type: 'email' },
+        { key: 'phone', name: 'Phone', type: 'phone' },
+        { key: 'platforms', name: 'Platforms', type: 'multi', choices: [choice('TikTok', 'gray'), choice('Instagram', 'rose'), choice('YouTube', 'rose'), choice('Facebook', 'blue')] },
+        { key: 'niche', name: 'Niche', type: 'multi', choices: [choice('Beauty', 'rose'), choice('Fitness', 'green'), choice('Food', 'amber'), choice('Tech', 'blue'), choice('Home', 'teal'), choice('Pets', 'violet'), choice('Parenting', 'gray')] },
+        { key: 'rate', name: 'Rate per piece', type: 'money' },
+        { key: 'portfolio', name: 'Portfolio', type: 'url' },
+        { key: 'samples', name: 'Samples', type: 'files' },
+        { key: 'address', name: 'Ship-to address', type: 'text' },
+        { key: 'status', name: 'Status', type: 'select', choices: [choice('Prospect', 'gray'), choice('Active', 'green'), choice('Paused', 'amber'), choice('Not a fit', 'rose')] },
+        { key: 'rating', name: 'Rating', type: 'select', choices: [choice('★', 'gray'), choice('★★', 'amber'), choice('★★★', 'amber'), choice('★★★★', 'green'), choice('★★★★★', 'green')] },
+      ], views: [{ name: 'All creators', kind: 'table' }, { name: 'By status', kind: 'board', groupBy: 'status' }] },
+      { key: 'campaigns', name: 'Campaigns', singular: 'Campaign', icon: '📣', primary: 'name', fields: [
+        { key: 'name', name: 'Campaign', type: 'text' },
+        { key: 'customer', name: 'Brand', type: 'contact' },
+        { key: 'status', name: 'Status', type: 'select', choices: [choice('Pitch', 'gray'), choice('Signed', 'blue'), choice('Casting', 'violet'), choice('In production', 'amber'), choice('Delivered', 'green'), choice('Wrapped', 'teal')] },
+        { key: 'product', name: 'Product', type: 'text' },
+        { key: 'pieces', name: 'Pieces promised', type: 'number' },
+        { key: 'budget', name: 'Budget', type: 'money' },
+        { key: 'rights', name: 'Usage rights', type: 'select', choices: [choice('Organic only', 'gray'), choice('Paid ads 30 days', 'blue'), choice('Paid ads 90 days', 'violet'), choice('Paid ads 1 year', 'amber'), choice('Perpetual', 'rose')] },
+        { key: 'start', name: 'Start', type: 'date' },
+        { key: 'due', name: 'Due', type: 'date' },
+        { key: 'brief', name: 'Brief', type: 'text', long: true },
+        { key: 'files', name: 'Brand assets', type: 'files' },
+        { key: 'lead', name: 'Lead', type: 'person' },
+      ], views: [{ name: 'Board', kind: 'board', groupBy: 'status' }, { name: 'Timeline', kind: 'timeline', start: 'start', end: 'due' }] },
+      { key: 'payouts', name: 'Payouts', singular: 'Payout', icon: '💸', primary: 'name', fields: [
+        { key: 'name', name: 'Payout', type: 'text' },
+        { key: 'creator', name: 'Creator', type: 'link', target: 'creators' },
+        { key: 'piece', name: 'Piece', type: 'link', target: 'content' },
+        { key: 'amount', name: 'Amount', type: 'money' },
+        { key: 'status', name: 'Status', type: 'select', choices: [choice('Owed', 'amber'), choice('Paid', 'green'), choice('On hold', 'rose')] },
+        { key: 'paid_on', name: 'Paid on', type: 'date' },
+        { key: 'method', name: 'How', type: 'select', choices: [choice('PayPal', 'blue'), choice('Bank transfer', 'teal'), choice('Venmo', 'violet'), choice('Check', 'gray')] },
+      ], views: [{ name: 'By status', kind: 'board', groupBy: 'status' }, { name: 'All payouts', kind: 'table', sortBy: 'paid_on' }] },
+    ],
+  },
   // Business operations: team projects, the tasks in them, and the processes the team repeats.
   team: {
     name: 'Team projects', icon: '📋', about: 'Projects, tasks and owners, plus the processes your team repeats',
@@ -432,6 +493,62 @@ export function projectsModule({ db, save, broadcast, rid, hold = null, cleanTex
       t.id = ids[src.key];
       return t;
     });
+  }
+  // A project described in words and drafted by the AI (or edited by hand before it's made): kept only to what a
+  // template can hold. Lists, fields and choices are capped; field types are the safe everyday ones; links point only
+  // at lists in the same draft; the stage field is called status so new records start at the first stage; views are
+  // made here (a board by stage, a table, a timeline when there are two dates), not taken from the draft.
+  const SPEC_TYPES = ['text', 'number', 'money', 'date', 'select', 'multi', 'person', 'email', 'phone', 'url', 'checkbox', 'link', 'files', 'contact', 'checklist', 'signature', 'items'];
+  const SPEC_COLORS = ['gray', 'blue', 'violet', 'amber', 'teal', 'rose', 'green'];
+  const slug = (x) => String(x || '').toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 30);
+  const iconOf = (x, d) => { const v = String(x || '').trim(); return v && [...v].length <= 4 && !/[<>&"'\w]/.test(v) ? v : d; };
+  function cleanSpec(spec) {
+    const raw = Array.isArray(spec?.types) ? spec.types.slice(0, 8) : [];
+    const used = new Set();
+    const lists = raw.map((t, i) => {
+      let key = slug(t?.name) || 'list' + (i + 1);
+      while (used.has(key)) key += '_' + (i + 1);
+      used.add(key);
+      return { t, key };
+    }).filter(({ t }) => cleanText(t?.name, 40));
+    const keys = new Set(lists.map((x) => x.key));
+    const byName = new Map(lists.map(({ t, key }) => [String(t.name).toLowerCase(), key]));
+    const types = lists.map(({ t, key }) => {
+      const name = cleanText(t.name, 40);
+      const fkeys = new Set();
+      const fields = [];
+      for (const f of (Array.isArray(t.fields) ? t.fields : []).slice(0, 30)) {
+        const fname = cleanText(f?.name, 40);
+        if (!fname) continue;
+        let type = SPEC_TYPES.includes(f?.type) ? f.type : 'text';
+        // Keys come from names, never from the draft; the one exception is the stage field, always status.
+        let fk = slug(fname) || 'field';
+        if (type === 'select' && (f?.stage === true || f?.key === 'status') && !fkeys.has('status')) fk = 'status';
+        while (fkeys.has(fk)) fk += '_2';
+        const out = { key: fk, name: fname, type };
+        if (type === 'select' || type === 'multi') {
+          const labels = [...new Set((Array.isArray(f.choices) ? f.choices : []).map((c) => cleanText(typeof c === 'string' ? c : c?.label, 40)).filter(Boolean))].slice(0, 15);
+          if (!labels.length) { out.type = 'text'; } else out.choices = labels.map((label, n) => ({ label, color: SPEC_COLORS[n % SPEC_COLORS.length] }));
+        }
+        if (type === 'link') {
+          const to = keys.has(slug(f.target)) ? slug(f.target) : byName.get(String(f.target || '').toLowerCase());
+          if (!to || to === key) { out.type = 'text'; } else out.target = to;
+        }
+        if (type === 'checklist') out.list = (Array.isArray(f.list) ? f.list : []).map((x) => cleanText(x, 120)).filter(Boolean).slice(0, 30);
+        if (type === 'text' && f.long) out.long = true;
+        fkeys.add(out.key);
+        fields.push(out);
+      }
+      // The name comes first and is plain text.
+      let first = fields.findIndex((f) => f.type === 'text');
+      if (first < 0) { fields.unshift({ key: fkeys.has('name') ? 'name_1' : 'name', name: cleanText(t.singular, 40) || 'Name', type: 'text' }); first = 0; }
+      else if (first > 0) fields.unshift(...fields.splice(first, 1));
+      const stage = fields.find((f) => f.key === 'status' && f.type === 'select') || fields.find((f) => f.type === 'select');
+      const dates = fields.filter((f) => f.type === 'date');
+      const views = [...(stage ? [{ name: 'Board', kind: 'board', groupBy: stage.key }] : []), { name: 'All ' + name.toLowerCase(), kind: 'table' }, ...(dates.length >= 2 ? [{ name: 'Timeline', kind: 'timeline', start: dates[0].key, end: dates[1].key }] : [])];
+      return { key, name, singular: cleanText(t.singular, 40) || name.replace(/s$/, ''), icon: iconOf(t.icon, '📄'), primary: fields[0].key, fields, views };
+    });
+    return { name: cleanText(spec?.name, 80), icon: iconOf(spec?.icon, '✨'), about: cleanText(spec?.about, 200), types };
   }
   // For teams that bid on work: the Bids & Quotes lists (bids, quotes, clients, price list) beside their trade jobs.
   const BID_LISTS = () => buildTypes(TEMPLATES.bids.types.filter((t) => t.key !== 'jobs'));
@@ -928,9 +1045,11 @@ export function projectsModule({ db, save, broadcast, rid, hold = null, cleanTex
         const body = await readJson(req, 50_000);
         const trades = body.template === 'trades';
         const tech = body.template === 'tech';
-        const { types, template, icon } = trades ? { types: body.bids === true ? [...fromTrades(body.trades, MAX_TYPES - 4), ...BID_LISTS()] : fromTrades(body.trades), template: 'trades', icon: '🛠️' } : fromTemplate(body.template, ws.id);
+        const described = body.template === 'described' && cleanSpec(body.spec);
+        if (described && !described.types.length) throw bad('Describe at least one list.');
+        const { types, template, icon } = described ? { types: buildTypes(described.types), template: 'described', icon: described.icon } : trades ? { types: body.bids === true ? [...fromTrades(body.trades, MAX_TYPES - 4), ...BID_LISTS()] : fromTrades(body.trades), template: 'trades', icon: '🛠️' } : fromTemplate(body.template, ws.id);
         const own = template === 'custom' && db.projectTemplates[String(body.template).slice(7)];
-        const p = { id: rid(), wsId: ws.id, name: cleanText(body.name, 80) || own?.name || (trades ? 'Jobs' : TEMPLATES[template].name), icon: cleanText(body.icon, 8) || icon || TEMPLATES[template].icon, template, types, private: !!body.private, memberIds: [], memberId: auth.memberId, by: auth.member, createdAt: Date.now(), updatedAt: Date.now() };
+        const p = { id: rid(), wsId: ws.id, name: cleanText(body.name, 80) || own?.name || (described ? described.name || 'New project' : trades ? 'Jobs' : TEMPLATES[template].name), icon: cleanText(body.icon, 8) || icon || TEMPLATES[template].icon, template, types, private: !!body.private, memberIds: [], memberId: auth.memberId, by: auth.member, createdAt: Date.now(), updatedAt: Date.now() };
         // A software project's keys start with letters from its name: Atlas → ATL-1.
         if (tech) for (const t of p.types) for (const f of t.fields) if (f.type === 'autonumber') f.prefix = techPrefix(p.name);
         db.projects[p.id] = p;
@@ -1773,5 +1892,5 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
     return rec;
   }
 
-  return { createRecord, publicRecord, updateRecord, route, v1, keyAuth, makeHook, publicHook, deliver, emit, quoteOf, quotePage, seesMsg, stateFor, sees, recordActivity, recordNews, words, fillFromProject, fromProjectOk, recordStory, priceList, recordAt, itemsTotals, TEMPLATES: Object.fromEntries(Object.entries(TEMPLATES).map(([k, t]) => [k, { name: t.name, icon: t.icon, about: t.about }])) };
+  return { cleanSpec, createRecord, publicRecord, updateRecord, route, v1, keyAuth, makeHook, publicHook, deliver, emit, quoteOf, quotePage, seesMsg, stateFor, sees, recordActivity, recordNews, words, fillFromProject, fromProjectOk, recordStory, priceList, recordAt, itemsTotals, TEMPLATES: Object.fromEntries(Object.entries(TEMPLATES).map(([k, t]) => [k, { name: t.name, icon: t.icon, about: t.about }])) };
 }

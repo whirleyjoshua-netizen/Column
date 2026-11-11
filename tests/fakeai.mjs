@@ -16,6 +16,18 @@ http.createServer((req, res) => {
         { kind: 'stage', field: 'Stage', to: 'Customer', why: 'test' },
         { kind: 'stage', field: 'Stage', to: 'Martian', why: 'should be dropped' },
         { kind: 'message', channel: 'email', subject: 'Fleet pricing', text: 'Hi Ben, here is the pricing for your 14 vans.', why: 'Keep it moving' } ] };
+    } else if (sys.includes('You design work-tracking projects')) {
+      // A towing business, with a few things the server must clean up: an unknown field type, a link to a list that
+      // isn't there, a stage field not first, markup in a name, and too many choices.
+      out = { name: 'Towing', icon: '🛻', about: 'Calls to drop-off', questions: ['Do you charge storage from day one?'], types: [
+        { name: 'Tows', singular: 'Tow', icon: '🛻', fields: [
+          { name: 'Stage', type: 'select', stage: true, choices: ['Call in', 'Dispatched', 'En route', 'On scene', 'Dropped off', 'Paid'] },
+          { name: 'Tow', type: 'text' }, { name: 'Customer', type: 'contact' }, { name: 'Vehicle', type: 'link', target: 'Vehicles' },
+          { name: 'Miles', type: 'number' }, { name: 'Photos', type: 'files' }, { name: 'Release', type: 'signature' },
+          { name: 'Hookup', type: 'checklist', list: ['Walk-around photos', 'Note damage'] }, { name: 'Weird', type: 'hologram' },
+          { name: 'Yard', type: 'link', target: 'Nowhere' }, { name: '<img src=x onerror=alert(1)>Notes', type: 'text', long: true },
+          { name: 'Reason', type: 'select', choices: Array.from({ length: 30 }, (_, i) => 'R' + i) }, { name: 'Pickup', type: 'date' }, { name: 'Drop-off', type: 'date' }] },
+        { name: 'Vehicles', singular: 'Vehicle', icon: '🚗', fields: [{ name: 'Plate', type: 'text' }, { name: 'VIN', type: 'text' }, { name: 'Make', type: 'text' }] }] };
     } else if (sys.includes('You are an estimator')) {
       const id = (user.match(/\[([\w-]{8,24})\] Ceramic/) || [])[1];
       const hasPdf = /"type":"document"|application\/pdf|"mime":"application\/pdf"/.test(user);

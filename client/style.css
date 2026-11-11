@@ -2520,3 +2520,21 @@ button.hq-entry:hover { background: var(--card-hover); }
 .pj-empty > .linkish { background: none; border: 0; color: var(--muted); text-decoration: underline; cursor: pointer; font-size: 13px; }
 .pj-empty > .linkish:hover { color: var(--text); }
 @media (max-width: 520px) { .pj-ops { grid-template-columns: 1fr; } }
+/* Something else? Describe how you work: the draft to look over. */
+.pj-describe { display: flex; align-items: center; gap: 12px; width: 100%; margin: 10px 0 4px; padding: 12px 14px; border: 1px dashed color-mix(in srgb, var(--accent) 55%, var(--line)); border-radius: 12px; background: var(--accent-soft); color: var(--text); text-align: left; cursor: pointer; }
+.pj-describe:hover { border-style: solid; }
+.pj-describe .pj-ic { font-size: 22px; }
+.pj-describe > span:last-child { display: flex; flex-direction: column; gap: 2px; }
+.pj-describe small { color: var(--muted); font-size: 12px; }
+.pj-empty > .pj-describe { max-width: 680px; margin: 0 auto 12px; }
+.pj-ops[data-n="2"] { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.pj-draft { display: flex; flex-direction: column; gap: 10px; max-height: 46vh; overflow: auto; }
+.pj-draft-list { border: 1px solid var(--line); border-radius: 10px; background: var(--card); padding: 10px 12px; }
+.pj-draft-list h4 { margin: 0 0 8px; font-size: 14px; }
+.pj-draft-stages { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 8px; }
+.pj-draft-fields { display: flex; flex-wrap: wrap; gap: 6px; }
+.pj-draft-fields > span { display: inline-flex; align-items: baseline; gap: 5px; padding: 3px 9px; border-radius: 99px; background: var(--panel); border: 1px solid var(--line); font-size: 12.5px; }
+.pj-draft-fields small { color: var(--faint); font-size: 11px; }
+.pj-draft-q { margin-top: 10px; font-size: 13px; color: var(--muted); }
+.pj-draft-q ul { margin: 4px 0 0; padding-left: 18px; }
+@media (max-width: 520px) { .pj-ops[data-n="2"] { grid-template-columns: 1fr; } }
