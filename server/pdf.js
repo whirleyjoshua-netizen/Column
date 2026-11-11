@@ -350,3 +350,106 @@ export async function writeDoc(blocks, { title = '' } = {}) {
   }
   return doc.save();
 }
+
+// A sign-off or acknowledgment form as a PDF, laid out here so we know where every box lands: the team and form
+// title, details about the job (rows), the form's lines (headings, paragraphs, checkboxes, a table of line items),
+// then a signature block. With `base` (an uploaded PDF form), its pages come first and the details and signature
+// block go on a page added after them. Returns the bytes and the boxes (PDF points, bottom-left corner):
+// [{ type: 'check' | 'sig' | 'name' | 'date', page, x, y, w, h, label }].
+export async function writeForm({ base = null, team = '', title = '', rows = [], lines = [], intro = '' } = {}) {
+  const doc = base ? await loadPdf(base) : await PDFDocument.create();
+  if (title) doc.setTitle(title);
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+  const bold = await doc.embedFont(StandardFonts.HelveticaBold);
+  const [W, H, M] = [612, 792, 56];
+  const fields = [];
+  let page, pi, y;
+  const newPage = () => {
+    page = doc.addPage([W, H]);
+    pi = doc.getPageCount() - 1;
+    y = H - M;
+  };
+  const room = (n) => { if (y - n < M) newPage(); };
+  const wrap = (t, f, size, width) => {
+    const out = [];
+    for (const para of safeText(f, t).split('\n')) {
+      let line = '';
+      for (const word of para.split(/\s+/)) {
+        if (!word) continue;
+        const next = line ? line + ' ' + word : word;
+        if (f.widthOfTextAtSize(next, size) <= width || !line) { line = next; continue; }
+        out.push(line);
+        line = word;
+      }
+      out.push(line);
+    }
+    return out;
+  };
+  const write = (t, { f = font, size = 11, x = M, width = W - M - x, color = INK, gap = 1.45 } = {}) => {
+    for (const l of wrap(t, f, size, width)) {
+      room(size * gap);
+      // A word wider than the line is cut to fit rather than run off the page.
+      let s = l;
+      while (s.length > 1 && f.widthOfTextAtSize(s, size) > width) s = s.slice(0, -1);
+      page.drawText(s, { x, y: y - size, size, font: f, color });
+      y -= size * gap;
+    }
+  };
+  newPage();
+  if (team) write(team, { size: 9, color: GREY });
+  write(title || 'Sign-off', { f: bold, size: 20, gap: 1.3 });
+  y -= 8;
+  for (const [label, value] of rows) {
+    if (!String(value || '').trim()) continue;
+    const top = y;
+    write(label, { size: 9, color: GREY, width: 110 });
+    const after = y;
+    y = top;
+    write(String(value), { x: M + 120, size: 10.5 });
+    y = Math.min(y, after) - 2;
+  }
+  if (rows.length) y -= 10;
+  if (intro) { write(intro); y -= 6; }
+  for (const l of lines) {
+    if (l.kind === 'h') { y -= 6; write(l.text, { f: bold, size: 13 }); y -= 2; }
+    else if (l.kind === 'p') { write(l.text); y -= 4; }
+    else if (l.kind === 'check') {
+      room(18);
+      const s = 11;
+      page.drawRectangle({ x: M, y: y - s - 1, width: s, height: s, borderColor: INK, borderWidth: 0.8 });
+      fields.push({ type: 'check', id: l.id, page: pi, x: M, y: y - s - 1, w: s, h: s, label: String(l.text).slice(0, 60) });
+      write(l.text, { x: M + s + 8 });
+      y -= 3;
+    } else if (l.kind === 'items' && l.rows?.length) {
+      const cols = [M, W - M - 190, W - M - 120, W - M - 60];
+      room(30);
+      [['Item', 0], ['Qty', 1], ['Price', 2], ['Total', 3]].forEach(([t, i]) => page.drawText(t, { x: cols[i], y: y - 9, size: 9, font: bold, color: GREY }));
+      y -= 16;
+      for (const r of l.rows) {
+        const top = y;
+        write(r.desc || '', { size: 10, width: cols[1] - M - 10 });
+        const after = y;
+        room(14);
+        [[r.qty, 1], [r.price, 2], [r.total, 3]].forEach(([t, i]) => page.drawText(safeText(font, String(t ?? '')), { x: cols[i], y: top - 10, size: 10, font, color: INK }));
+        y = Math.min(after, top - 14) - 2;
+      }
+      if (l.total) { y -= 2; room(16); page.drawText(safeText(bold, 'Total  ' + l.total), { x: cols[2], y: y - 11, size: 11, font: bold, color: INK }); y -= 18; }
+      y -= 6;
+    }
+  }
+  // The signature block stays together: a line to sign on, the name printed beside it, and the date.
+  y -= 14;
+  room(96);
+  page.drawText('Signature', { x: M, y: y - 9, size: 9, font, color: GREY });
+  page.drawText('Name', { x: M + 270, y: y - 9, size: 9, font, color: GREY });
+  y -= 14;
+  fields.push({ type: 'sig', page: pi, x: M, y: y - 54, w: 240, h: 50, label: 'Signature' });
+  fields.push({ type: 'name', page: pi, x: M + 270, y: y - 22, w: W - M - (M + 270), h: 18, label: 'Name' });
+  page.drawLine({ start: { x: M, y: y - 56 }, end: { x: M + 240, y: y - 56 }, thickness: 0.7, color: GREY });
+  page.drawLine({ start: { x: M + 270, y: y - 24 }, end: { x: W - M, y: y - 24 }, thickness: 0.7, color: GREY });
+  page.drawText('Date', { x: M + 270, y: y - 38, size: 9, font, color: GREY });
+  fields.push({ type: 'date', page: pi, x: M + 270, y: y - 64, w: 160, h: 18, label: 'Date' });
+  page.drawLine({ start: { x: M + 270, y: y - 66 }, end: { x: M + 430, y: y - 66 }, thickness: 0.7, color: GREY });
+  y -= 80;
+  return { bytes: Buffer.from(await doc.save()), fields, pages: doc.getPageCount() };
+}

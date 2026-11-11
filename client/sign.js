@@ -160,6 +160,20 @@
       node.classList.add('filled');
       node.style.cssText += ';justify-content:flex-start;padding-left:3px;color:#111;font-weight:400;font-family:Helvetica,Arial,sans-serif;' + font;
       node.textContent = today;
+    } else if (f.type === 'check') {
+      // A line of a sign-off form they can tick.
+      node.classList.add('chk');
+      node.setAttribute('role', 'checkbox');
+      node.setAttribute('aria-label', f.label || 'Tick');
+      node.tabIndex = 0;
+      node.refresh = () => {
+        const on = V.values[f.id] === true;
+        node.setAttribute('aria-checked', String(on));
+        node.classList.toggle('filled', on);
+        node.textContent = on ? '✓' : '';
+      };
+      node.addEventListener('click', () => { V.values[f.id] = V.values[f.id] !== true; node.refresh(); });
+      node.addEventListener('keydown', (e) => (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), node.click()));
     } else if (f.type === 'name') {
       node.refresh = () => {
         node.classList.toggle('filled', !!V.name.trim());

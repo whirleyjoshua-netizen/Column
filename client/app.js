@@ -9507,8 +9507,8 @@
   }
   const pjChip = (c) => h('span', { class: 'pj-chip', style: `--c:${PF_COLOR[c.color] || PF_COLOR.gray}` }, c.label);
   // A value as it shows in a cell or card.
-  function prShow(p, f, v) {
-    if (v == null || v === '' || (Array.isArray(v) && !v.length)) return null;
+  function prShow(p, f, v, r) {
+    if (v == null || v === '' || (Array.isArray(v) && !v.length)) return f.type === 'signature' ? signPending(r, f) : null;
     if (f.type === 'select') { const c = f.choices.find((x) => x.id === v); return c ? pjChip(c) : null; }
     if (f.type === 'multi') return v.map((id) => f.choices.find((x) => x.id === id)).filter(Boolean).map(pjChip);
     if (f.type === 'person') return [avatar(v), ' ', memberName(v)];
@@ -9631,6 +9631,7 @@
       v.sort ? { label: 'Newest first (no sort)', run: () => prSchema(p, { op: 'updateView', typeId: t.id, viewId: v.id, sort: null }) } : null,
       { label: 'Rename', run: () => { const i = h('input', { value: f.name }); sheet('Rename field', [h('label', {}, 'Name', i), h('p', { class: 'day-hint' }, `Apps connected to Kloomie still find it as “${f.key}”.`)], () => prSchema(p, { op: 'updateField', typeId: t.id, fieldId: f.id, name: i.value })); } },
       f.choices ? { label: 'Edit options…', run: () => prEditChoices(p, t, f) } : null,
+      f.type === 'signature' ? { label: 'Sign-off form…', run: async () => { const forms = await signForms(true); openMenu(e.target, [{ head: `The form every ${(t.singular || 'record').toLowerCase()} signs` }, ...forms.map((x) => ({ label: x.name, on: f.form === x.id, run: () => prSchema(p, { op: 'updateField', typeId: t.id, fieldId: f.id, form: x.id }) })), { label: 'No form: the plain sign-off', on: !f.form, run: () => prSchema(p, { op: 'updateField', typeId: t.id, fieldId: f.id, form: null }) }, { head: '' }, { label: '✏️ Make a form…', run: () => signFormSheet(p, t, null, (x) => prSchema(p, { op: 'updateField', typeId: t.id, fieldId: f.id, form: x.id })) }, { label: '⬆️ Upload a PDF form…', run: () => signFormUpload((x) => prSchema(p, { op: 'updateField', typeId: t.id, fieldId: f.id, form: x.id })) }]); } } : null,
       f.id !== t.primary ? { label: 'Hide', run: () => prSchema(p, { op: 'updateField', typeId: t.id, fieldId: f.id, hidden: true }) } : null,
       t.fields.some((x) => x.hidden) ? { label: 'Show hidden fields', run: async () => { for (const x of t.fields.filter((y) => y.hidden)) await prCall('POST', `/projects/${p.id}/schema`, { op: 'updateField', typeId: t.id, fieldId: x.id, hidden: false }).then((y) => y && prUpsertProject(y.project)); renderProjects(); } } : null,
       f.id !== t.primary ? { label: 'Delete field', danger: true, run: () => prSchema(p, { op: 'removeField', typeId: t.id, fieldId: f.id }) } : null,
@@ -9695,7 +9696,7 @@
       h('tbody', {}, shown.map((r) => h('tr', { class: PR.panel === r.id ? 'on' : null, 'data-id': r.id },
         cols.map((f) => {
           if (f.id === t.primary) return h('td', { class: 'pj-first' }, h('button', { class: 'pj-open', onclick: () => { PR.panel = r.id; renderProjects(); } }, recName(t, r)));
-          const cell = h('div', { class: 'pj-cell' + (f.type === 'checkbox' ? ' center' : '') }, prShow(p, f, r.values[f.id]) ?? (f.type === 'checkbox' ? h('span', { class: 'pj-check' }) : ''));
+          const cell = h('div', { class: 'pj-cell' + (f.type === 'checkbox' ? ' center' : '') }, prShow(p, f, r.values[f.id], r) ?? (f.type === 'checkbox' ? h('span', { class: 'pj-check' }) : ''));
           cell.addEventListener('click', (e) => { if (e.target.closest('a, .pj-link')) return; prEdit(cell, p, t, r, f); });
           return h('td', {}, cell);
         }), h('td', {})))),
@@ -10145,7 +10146,8 @@
     const card = (r) => {
       const el = h('div', { class: 'pj-card-r' + (PR.panel === r.id ? ' on' : ''), 'data-id': r.id, onclick: () => { PR.panel = r.id; renderProjects(); } },
         h('b', {}, recName(t, r)),
-        ...cardFields.map((f) => { const s2 = prShow(p, f, r.values[f.id]); return s2 == null ? null : h('div', { class: 'pj-card-f' }, s2); }));
+        ...cardFields.map((f) => { const s2 = prShow(p, f, r.values[f.id], r); return s2 == null ? null : h('div', { class: 'pj-card-f' }, s2); }),
+        ...t.fields.filter((f) => f.type === 'signature' && !r.values[f.id] && !cardFields.includes(f)).map((f) => { const c = signPending(r, f); return c ? h('div', { class: 'pj-card-f' }, c) : null; }));
       // Drag a card to another column to change its stage.
       el.addEventListener('pointerdown', (ev) => {
         let ghost = null, over = null, at = null, roll = null;
@@ -10231,7 +10233,7 @@
     const custFields = t.fields.filter((f) => f.type === 'contact');
     const richFields = t.fields.filter((f) => PR_RICH.includes(f.type) && !f.hidden && applies(f));
     const fieldRow = (f) => {
-      const val = h('div', { class: 'pj-cell' }, prShow(p, f, r.values[f.id]) ?? (f.type === 'checkbox' ? h('span', { class: 'pj-check' }) : h('span', { class: 'pj-empty-v' }, 'Empty')));
+      const val = h('div', { class: 'pj-cell' }, prShow(p, f, r.values[f.id], r) ?? (f.type === 'checkbox' ? h('span', { class: 'pj-check' }) : h('span', { class: 'pj-empty-v' }, 'Empty')));
       val.addEventListener('click', (e) => { if (e.target.closest('a, .pj-link')) return; prEdit(val, p, t, r, f); });
       return h('div', { class: 'pj-frow' + (f.hidden ? ' hid' : '') }, h('span', { class: 'pj-flabel' }, h('span', { class: 'pj-fic' }, PF_IC[f.type]), f.name), val);
     };
@@ -10330,7 +10332,7 @@
     }
     return PR.logs.get(r.id);
   }
-  const ACT_IC = { created: '✦', change: '↻', call: '☏', email: '✉', meeting: '👥', note: '📝', task: '✓', quote: '🧾' };
+  const ACT_IC = { created: '✦', change: '↻', call: '☏', email: '✉', meeting: '👥', note: '📝', task: '✓', quote: '🧾', sign: '✍️' };
   function prLogLine(e) {
     const who = h('b', {}, e.by || 'Someone');
     const said = {
@@ -10341,6 +10343,7 @@
       meeting: [who, ' met with them'],
       note: [who, ' noted'],
       task: [who, e.what === 'done' ? ' finished a task' : ' added a task'],
+      sign: [who, { sent: ' sent it to sign', viewed: ' opened it to sign', signed: ' signed', declined: ' declined to sign', cancelled: ' cancelled the signing request' }[e.what] || ' updated a sign-off'],
       quote: [who, { sent: ' sent the quote', viewed: ' opened the quote', accepted: ' accepted the quote', declined: ' declined the quote' }[e.what] || ' updated the quote'],
     }[e.kind] || [who];
     const body = e.kind === 'task' || e.note ? e.note : '';
@@ -10933,31 +10936,179 @@
   }
 
   // The customer's sign-off: their name and a signature drawn with a finger or a mouse.
-  function prSignature(p, t, r, f) {
-    const v = r.values[f.id];
-    if (v) return prBlock(f, h('button', { class: 'pj-it-x', onclick: () => prSet(p, r, f, null) }, 'Clear'),
-      h('div', { class: 'pj-sig-done' }, v.image ? h('img', { src: v.image, alt: 'Signature' }) : null, h('small', {}, `Signed by ${v.name} · ${new Date(v.at).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}`)));
-    const cust = t.fields.find((x) => x.type === 'contact' && r.values[x.id]);
-    const name = h('input', { class: 'pj-it-in', placeholder: 'Their name', value: cust ? r.people?.[r.values[cust.id]]?.name || '' : '' });
+  // ----- sign-offs: a form on the field (the list's, or this record's), signed here or sent to sign online -----
+  const SIGN_STATE = { sent: ['✉ Sent to sign', 'blue'], viewed: ['👁 Opened', 'violet'], declined: ['✕ Declined', 'rose'], expired: ['⌛ Link expired', 'amber'] };
+  const signPending = (r, f) => { const s = r?.signoffs?.[f.id]; const x = s && SIGN_STATE[s.status]; return x ? h('span', { class: 'pj-chip', style: `--c:${PF_COLOR[x[1]]}`, title: `${x[0]}: ${s.to?.name || ''}` }, x[0]) : null; };
+  let SF = null;
+  const signForms = async (fresh = false) => (SF && !fresh ? SF : (SF = await api('GET', '/sign-forms').catch(() => SF || [])));
+  const signFormOf = (r, f) => { const id = r.signForms?.[f.id] || f.form; return id ? (SF || []).find((x) => x.id === id) || null : null; };
+  // A pad to sign on, with a finger, pen or mouse.
+  function signPad() {
     const pad = h('canvas', { class: 'pj-sig', width: 600, height: 180 });
     const g = pad.getContext('2d');
-    g.lineWidth = 3;
-    g.lineCap = 'round';
-    g.strokeStyle = '#16161a';
+    Object.assign(g, { lineWidth: 3, lineCap: 'round', strokeStyle: '#16161a' });
     let drawing = false;
     let inked = false;
     const at = (e) => { const b = pad.getBoundingClientRect(); return [((e.clientX - b.left) / b.width) * pad.width, ((e.clientY - b.top) / b.height) * pad.height]; };
     pad.addEventListener('pointerdown', (e) => { drawing = true; inked = true; pad.setPointerCapture(e.pointerId); g.beginPath(); g.moveTo(...at(e)); });
     pad.addEventListener('pointermove', (e) => { if (!drawing) return; g.lineTo(...at(e)); g.stroke(); });
     pad.addEventListener('pointerup', () => { drawing = false; });
-    const clear = h('button', { class: 'pj-it-x', onclick: () => { g.clearRect(0, 0, pad.width, pad.height); inked = false; } }, 'Clear');
-    const saveIt = h('button', { class: 'btn small primary-btn', onclick: () => {
-      if (!name.value.trim()) return toast('Who’s signing?');
-      if (!inked) return toast('Have them sign in the box.');
-      prSet(p, r, f, { name: name.value.trim(), image: pad.toDataURL('image/png') });
-    } }, 'Save sign-off');
-    return prBlock(f, clear, h('p', { class: 'day-hint' }, 'Hand the phone over: they sign below to say the work is done.'), name, pad, h('div', { class: 'btns' }, saveIt));
+    return { pad, inked: () => inked, data: () => pad.toDataURL('image/png'), clear: () => { g.clearRect(0, 0, pad.width, pad.height); inked = false; } };
   }
+  async function signPdfOpen(r, f) {
+    try {
+      const res = await fetch(`/api/signoff/${r.id}/${f.id}/pdf`, { headers: { Authorization: 'Bearer ' + S.token, 'X-Time-Zone': Intl.DateTimeFormat().resolvedOptions().timeZone } });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Couldn’t make the PDF.');
+      window.open(URL.createObjectURL(await res.blob()), '_blank');
+    } catch (e) { toast(e.message); }
+  }
+  function prSignature(p, t, r, f) {
+    const v = r.values[f.id];
+    if (!SF) signForms().then(() => renderProjects());
+    if (v) {
+      const it = v.itemId && S.items.find((x) => x.id === v.itemId);
+      return prBlock(f, h('button', { class: 'pj-it-x', title: 'Clear the sign-off (the signed PDF stays in your files)', onclick: () => prSet(p, r, f, null) }, 'Clear'),
+        h('div', { class: 'pj-sig-done' }, v.image ? h('img', { src: v.image, alt: 'Signature' }) : null,
+          h('small', {}, `${v.form ? v.form + ' · ' : ''}Signed by ${v.name}${v.how ? ' ' + v.how : ''} · ${new Date(v.at).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}`),
+          v.itemId ? h('button', { class: 'pj-link', onclick: () => (it ? openPreview(it) : window.open(fileUrl({ id: v.itemId, type: 'file' }), '_blank')) }, '📄 Signed PDF') : null));
+    }
+    const form = signFormOf(r, f);
+    const so = r.signoffs?.[f.id];
+    const out = so && SIGN_STATE[so.status];
+    const formBtn = h('button', { class: 'pj-it-x pj-so-form', title: 'The form they sign', onclick: (e) => signFormMenu(e, p, t, r, f) }, form ? `📄 ${form.name}` : '📄 Choose a form');
+    const sent = out ? h('div', { class: 'pj-so-out' }, signPending(r, f), h('span', {}, ` ${so.to?.name || ''}${so.to?.email ? ' · ' + so.to.email : ''}`),
+      h('span', { style: 'flex:1' }),
+      ['sent', 'viewed'].includes(so.status) ? [
+        h('button', { class: 'btn small', onclick: async () => { try { const y = await api('POST', `/signoff/${r.id}/${f.id}/remind`); toast(y.emailed === 'mailbox' ? 'Reminder sent from your email' : 'Reminder sent'); } catch (e) { toast(e.message); } } }, 'Remind'),
+        h('button', { class: 'btn small', onclick: async () => { try { const y = await api('GET', `/signoff/${r.id}/${f.id}/link`); await navigator.clipboard.writeText(y.link); toast('Link copied'); } catch (e) { toast(e.message); } } }, 'Copy link'),
+        h('button', { class: 'btn small', onclick: async () => { try { const y = await api('POST', `/signoff/${r.id}/${f.id}/cancel`); prUpsertRecord(y.record); renderProjects(); } catch (e) { toast(e.message); } } }, 'Cancel')] : null) : null;
+    const waiting = out && ['sent', 'viewed'].includes(so.status);
+    return prBlock(f, formBtn,
+      sent,
+      h('p', { class: 'day-hint' }, waiting ? 'They have the link. It fills in here when they sign.' : form ? `They read “${form.name}”, filled in from this ${(t.singular || 'record').toLowerCase()}, and sign.` : 'They sign to say the work is done. Choose a form to have them read and accept one first.'),
+      waiting ? null : h('div', { class: 'btns pj-so-btns' },
+        h('button', { class: 'btn small primary-btn', onclick: () => signHereSheet(p, t, r, f) }, '✍️ Sign here'),
+        h('button', { class: 'btn small', onclick: () => signSendSheet(p, t, r, f) }, out ? '✉ Send again' : '✉ Send to sign')));
+  }
+  // The filled-in form, read and signed on this device.
+  async function signHereSheet(p, t, r, f) {
+    let pv;
+    try { pv = await api('GET', `/signoff/${r.id}/${f.id}/preview`); } catch (e) { return toast(e.message); }
+    const ticks = new Set();
+    const line = (l) => l.kind === 'h' ? h('h4', {}, l.text) : l.kind === 'p' ? h('p', {}, l.text)
+      : l.kind === 'check' ? h('label', { class: 'pick so-check' }, (() => { const c = h('input', { type: 'checkbox' }); c.addEventListener('change', () => (c.checked ? ticks.add(l.id) : ticks.delete(l.id))); return c; })(), h('span', {}, l.text))
+      : l.kind === 'items' ? h('table', { class: 'so-items' }, h('tr', {}, ['Item', 'Qty', 'Price', 'Total'].map((x) => h('th', {}, x))), l.rows.map((x) => h('tr', {}, [x.desc, x.qty, x.price, x.total].map((y) => h('td', {}, String(y))))), l.total ? h('tr', {}, h('td', { colspan: 3 }, h('b', {}, 'Total')), h('td', {}, h('b', {}, l.total))) : null) : null;
+    const doc = h('div', { class: 'so-doc' }, h('h3', {}, pv.title),
+      pv.rows.length ? h('dl', { class: 'so-rows' }, pv.rows.flatMap(([k, x]) => [h('dt', {}, k), h('dd', {}, x)])) : null,
+      pv.form?.kind === 'pdf' ? h('button', { class: 'btn small', onclick: () => signPdfOpen(r, f) }, `📄 Read “${pv.form.name}”`) : null,
+      pv.intro ? h('p', {}, pv.intro) : null, pv.lines.map(line));
+    const name = h('input', { value: pv.signer.name, placeholder: 'Their full name', autocomplete: 'off' });
+    const email = h('input', { type: 'email', value: pv.signer.email, placeholder: 'Their email (for their copy)' });
+    const agree = h('input', { type: 'checkbox' });
+    const pad = signPad();
+    sheet(`✍️ ${f.name}`, [h('p', { class: 'day-hint' }, 'Hand them the device. They read the form, tick what applies and sign.'), doc,
+      h('label', {}, 'Who’s signing', name), h('label', {}, 'Email them a signed copy', email),
+      h('label', { class: 'pick so-consent' }, agree, h('span', {}, pv.consent)),
+      h('div', { class: 'so-pad-h' }, h('small', { class: 'hint' }, 'Sign here'), h('button', { type: 'button', class: 'pj-it-x', onclick: pad.clear }, 'Clear')), pad.pad,
+    ], async () => {
+      if (!name.value.trim()) throw new Error('Who’s signing?');
+      if (!agree.checked) throw new Error('They need to tick the box to agree to sign electronically.');
+      if (!pad.inked()) throw new Error('Have them sign in the box.');
+      const y = await api('POST', `/signoff/${r.id}/${f.id}/sign`, { consent: true, name: name.value.trim(), email: email.value.trim(), sig: pad.data(), checks: [...ticks] });
+      prUpsertRecord(y.record);
+      renderProjects();
+      toast(email.value.trim() ? 'Signed. Their copy is on its way.' : 'Signed');
+    }, 'Save sign-off');
+    // It opens at the top of the form, not wherever the first box to tick is.
+    document.activeElement?.blur();
+    doc.scrollTop = 0;
+  }
+  // Sent to sign on Kloomie's signing page: from your own Gmail or Outlook when it's connected, otherwise from Kloomie.
+  async function signSendSheet(p, t, r, f) {
+    let pv;
+    try { pv = await api('GET', `/signoff/${r.id}/${f.id}/preview`); } catch (e) { return toast(e.message); }
+    const name = h('input', { value: pv.signer.name, placeholder: 'Their full name' });
+    const email = h('input', { type: 'email', value: pv.signer.email, placeholder: 'name@example.com' });
+    const msg = h('textarea', { rows: 3, placeholder: 'A note for them (optional)' });
+    sheet(`✉ Send “${pv.title}” to sign`, [h('p', { class: 'day-hint' }, 'They get a link to read the form, filled in from this record, and sign it on any device. It fills in here when they do, and they get a copy.'),
+      h('label', {}, 'Who signs', name), h('label', {}, 'Their email', email), h('label', {}, 'Message', msg),
+      h('button', { type: 'button', class: 'btn small', onclick: () => signPdfOpen(r, f) }, '📄 See what they’ll get'),
+    ], async () => {
+      const y = await api('POST', `/signoff/${r.id}/${f.id}/send`, { name: name.value.trim(), email: email.value.trim(), message: msg.value.trim() });
+      prUpsertRecord(y.record);
+      renderProjects();
+      if (y.emailed) toast(y.emailed === 'mailbox' ? 'Sent from your email' : `Sent to ${email.value.trim()}`);
+      else { try { await navigator.clipboard.writeText(y.link); } catch {} toast('Couldn’t email it, so the link is copied. Send it to them yourself.'); }
+    }, 'Send');
+  }
+  // Which form: for every record in the list, or just this one. Make one, upload one, or edit it.
+  async function signFormMenu(e, p, t, r, f) {
+    const anchor = e.currentTarget;
+    const forms = await signForms(true);
+    const own = r.signForms?.[f.id];
+    const st = t.fields.find((x) => x.key === 'status' && x.type === 'select') || t.fields.find((x) => x.type === 'select');
+    const setList = (id) => prSchema(p, { op: 'updateField', typeId: t.id, fieldId: f.id, form: id });
+    const setOne = async (id) => { try { prUpsertRecord(await api('POST', `/signoff/${r.id}/${f.id}/form`, { formId: id })); renderProjects(); } catch (er) { toast(er.message); } };
+    const cur = signFormOf(r, f);
+    openMenu(anchor, [
+      { head: `Every ${(t.singular || 'record').toLowerCase()} in ${t.name}` },
+      ...forms.map((x) => ({ label: x.name, on: f.form === x.id && !own, run: () => { if (own) setOne(null); setList(x.id); } })),
+      { label: 'No form: the plain sign-off', on: !f.form && !own, run: () => { if (own) setOne(null); setList(null); } },
+      { head: 'Only this one' },
+      ...forms.map((x) => ({ label: x.name, on: own === x.id, run: () => setOne(x.id) })),
+      { head: '' },
+      { label: '✏️ Make a form…', run: () => signFormSheet(p, t, null, (x) => setList(x.id)) },
+      { label: '⬆️ Upload a PDF form…', run: () => signFormUpload((x) => setList(x.id)) },
+      cur && cur.kind === 'text' ? { label: `Edit “${cur.name}”…`, run: () => signFormSheet(p, t, cur, () => renderProjects()) } : null,
+      { label: '📄 See it filled in (PDF)', run: () => signPdfOpen(r, f) },
+      st ? { label: `When signed: ${st.choices.find((c) => c.id === f.onSigned)?.label ? 'move to ' + st.choices.find((c) => c.id === f.onSigned).label : 'stage stays'}…`, run: () => openMenu(anchor, [{ head: `When it’s signed, move ${st.name} to` }, ...st.choices.map((c) => ({ label: c.label, on: f.onSigned === c.id, run: () => prSchema(p, { op: 'updateField', typeId: t.id, fieldId: f.id, onSigned: c.id }) })), { label: 'Don’t move it', on: !f.onSigned, run: () => prSchema(p, { op: 'updateField', typeId: t.id, fieldId: f.id, onSigned: null }) }]) } : null,
+    ].filter(Boolean));
+  }
+  // Ready-made forms to start from; every {blank} fills in from the record.
+  const SIGN_PRESETS = [
+    ['Completion sign-off', 'Work completed: {job}', '# The work\n{line_items}\nI confirm that {company} has completed the work described above at {address}, and that I’m satisfied with it.\n[ ] The work area was left clean\n[ ] I was shown how everything works\n[ ] I have no damage to report'],
+    ['Work authorization', 'Work authorization: {job}', 'I authorize {company} to carry out the work below at {address}.\n{line_items}\nEstimated total: {total}. Any extra work will be agreed with me before it’s done.\n[ ] I own the property, or I’m allowed to approve this work\n[ ] I agree to the price above'],
+    ['Vehicle release (towing)', 'Vehicle release: {job}', 'I authorize {company} to tow the vehicle below from {address}.\nVehicle: {Vehicle (year, make, model, color)} · Plate: {Plate}\n[ ] I’ve removed my valuables, or accept the company isn’t responsible for items left inside\n[ ] Existing damage was noted before hookup\nStorage fees may apply after the first 24 hours.'],
+    ['Deliverable approval', 'Approval: {job}', 'I’ve reviewed “{job}” for {project} and approve it as final.\n[ ] No further changes are needed\n[ ] {company} may deliver and publish it'],
+    ['Content usage rights (UGC)', 'Content usage rights: {job}', 'I, the creator, grant {company} and its client the right to use “{job}” as agreed for this campaign.\n[ ] The content is my own original work\n[ ] I have permission from everyone who appears in it\n[ ] I’ll keep the content up for the agreed time'],
+  ];
+  function signFormSheet(p, t, form, done) {
+    const name = h('input', { value: form?.name || '', placeholder: 'Completion sign-off', maxlength: 80 });
+    const title = h('input', { value: form?.title || '', placeholder: 'Work completed: {job}', maxlength: 160 });
+    const body = h('textarea', { rows: 10, class: 'so-body' });
+    body.value = form?.body || '';
+    const put = (x) => { const at = body.selectionStart ?? body.value.length; body.value = body.value.slice(0, at) + x + body.value.slice(body.selectionEnd ?? at); body.focus(); body.selectionStart = body.selectionEnd = at + x.length; };
+    const blanks = ['{customer}', '{job}', '{address}', '{date}', '{total}', '{line_items}', '{company}', ...t.fields.filter((x) => !['signature', 'files', 'checklist', 'contact'].includes(x.type) && x.id !== t.primary).slice(0, 12).map((x) => `{${x.name}}`)];
+    const presets = form ? null : h('div', { class: 'so-presets' }, h('small', { class: 'hint' }, 'Start from'), SIGN_PRESETS.map(([n, ti, b]) => h('button', { type: 'button', class: 'pj-link', onclick: () => { name.value = n; title.value = ti; body.value = b; } }, n)));
+    sheet(form ? `Edit “${form.name}”` : 'Make a sign-off form', [presets, h('label', {}, 'Name', name), h('label', {}, 'Title on the form', title),
+      h('label', {}, 'What it says', body),
+      h('div', { class: 'so-blanks' }, h('button', { type: 'button', class: 'pj-link', onclick: () => put('\n[ ] ') }, '☐ Checkbox line'), h('button', { type: 'button', class: 'pj-link', onclick: () => put('\n# ') }, '# Heading'), blanks.map((x) => h('button', { type: 'button', class: 'pj-link', onclick: () => put(x) }, x))),
+      h('p', { class: 'day-hint' }, 'Blanks in {curly brackets} fill in from each record: the customer, the job, the address, today’s date, the total, or any field by its name. {line_items} adds the price lines. Lines that start with [ ] are boxes they can tick. The signature, their name and the date go at the end.'),
+    ], async () => {
+      const x = await api(form ? 'PATCH' : 'POST', form ? `/sign-forms/${form.id}` : '/sign-forms', { name: name.value.trim(), title: title.value.trim(), body: body.value });
+      await signForms(true);
+      done?.(x);
+      toast(form ? 'Form saved' : `“${x.name}” is ready`);
+    }, form ? 'Save' : 'Save form');
+  }
+  function signFormUpload(done) {
+    const input = h('input', { type: 'file', accept: 'application/pdf,.pdf', class: 'hidden' });
+    input.addEventListener('change', async () => {
+      const file = input.files[0];
+      input.remove();
+      if (!file) return;
+      try {
+        const it = await uploadFile(file, {});
+        const x = await api('POST', '/sign-forms', { name: file.name.replace(/\.pdf$/i, ''), kind: 'pdf', itemId: it.id });
+        await signForms(true);
+        done?.(x);
+        toast(`“${x.name}” is ready. They read its pages, then sign on a page added after them.`);
+      } catch (e) { toast(e.message); }
+    });
+    document.body.append(input);
+    input.click();
+  }
+
 
   function prPermit(p, t, r, f) {
     const v = { ...(r.values[f.id] || { status: 'To apply' }) };

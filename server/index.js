@@ -13,7 +13,7 @@ import { createZip, streamZip, zipSize } from './zip.js';
 import { providers as calProviders, ics as ICS } from './calendar.js';
 import { llms, llmError, complete } from './llm.js';
 import { fileText, officeKind } from './extract.js';
-import { PdfError, stampPdf, addCertificate, pageCount, writeDoc } from './pdf.js';
+import { PdfError, stampPdf, addCertificate, pageCount, writeDoc, writeForm } from './pdf.js';
 import { routesOn, dayRoute, driveDistance } from './routes.js';
 import { projectsModule } from './projects.js';
 import { invoicesModule } from './invoices.js';
@@ -31,6 +31,7 @@ import { standupModule } from './standup.js';
 import { githubModule } from './github.js';
 import { techAiModule } from './techai.js';
 import { describeModule } from './describe.js';
+import { signoffModule } from './signoff.js';
 import { agentsModule } from './agents.js';
 import { postizModule } from './postiz.js';
 import { makeImage } from './images.js';
@@ -3847,7 +3848,7 @@ function publicSign(x) {
   const { wsId, token, ...rest } = x;
   return { ...rest, status: signStatus(x), link: signLink(x) };
 }
-const signNews = (x) => broadcast(x.wsId, { type: 'sign', sign: publicSign(x), forMember: x.memberId });
+const signNews = (x) => { broadcast(x.wsId, { type: 'sign', sign: publicSign(x), forMember: x.memberId }); SIGNOFF.sync(x); };
 function signEvent(x, what, req) {
   x.events.push({ at: Date.now(), what, ...(req ? { ip: clientIp(req), ua: String(req.headers['user-agent'] || '').slice(0, 200) } : {}) });
   x.events = x.events.slice(-200);
@@ -3956,9 +3957,12 @@ async function signApi(req, res, token, part) {
   if (x.fields.some((f) => f.type === 'ini') && !images.ini) return send(res, 400, { error: 'Add your initials.' });
   const date = cleanText(body.date, 40) || dayIn(okTz(req.headers['x-time-zone']) || tzOf(ws));
   const values = body.values && typeof body.values === 'object' ? body.values : {};
+  // A checkbox (a sign-off form's "[ ]" line) is ticked or left; everything else is text.
   const marks = x.fields.map((f) =>
     f.type === 'sig' || f.type === 'ini' ? { ...f, type: 'image', image: f.type }
-      : { ...f, type: 'text', size: 0, text: f.type === 'date' ? date : f.type === 'name' ? typed : cleanText(values[f.id], 300) });
+      : f.type === 'check' ? (values[f.id] === true ? { ...f, type: 'check' } : null)
+      : { ...f, type: 'text', size: 0, text: f.type === 'date' ? date : f.type === 'name' ? typed : cleanText(values[f.id], 300) }).filter(Boolean);
+  if (x.fields.some((f) => f.type === 'check')) x.checks = x.fields.filter((f) => f.type === 'check' && values[f.id] === true).map((f) => f.id);
   x.busy = true;
   try {
     signEvent(x, `Agreed to sign electronically: “${CONSENT}”`, req);
@@ -3983,6 +3987,7 @@ async function signApi(req, res, token, part) {
     const item = await addPdf({ wsId: x.wsId, member: x.by, memberId: sender ? x.memberId : null, device: 'Signature', deviceId: null }, bytes, copyName(x.name, 'signed'), x);
     Object.assign(x, { status: 'signed', signedAt, signedName: typed, signedHash: sha256(bytes), signedItemId: item.id });
     if (x.taskId) toolDone(x.taskId, { by: x.by, byId: x.memberId, note: `Signed by ${x.signer.name}`, file: item.id });
+    if (x.recordId) await SIGNOFF.finish(x, item, typed, images.sig);
     automate(x.wsId, 'sign.signed', { document: x.name, from: x.signer.name, file: item, campaign: db.campaigns[x.campaignId] || null, who: x.by, whoId: x.memberId });
     hook(x.wsId, 'document.signed', () => ({ id: x.id, document: x.name, signer: { name: x.signer.name, email: x.signer.email || null }, signed_name: typed, signed_at: new Date(signedAt).toISOString(), file: { id: item.id, name: item.name } }), x.signer.name);
   } catch (e) {
@@ -5613,6 +5618,10 @@ async function api(req, res, url) {
   }
   if (a === 'agents') {
     const out = await AGENTS_M.route(req, res, parts, auth, ws);
+    if (out !== null) return;
+  }
+  if (a === 'signoff' || a === 'sign-forms') {
+    const out = await SIGNOFF.route(req, res, parts, auth, ws);
     if (out !== null) return;
   }
   if (a === 'project-templates' && b === 'describe') {
@@ -8540,6 +8549,55 @@ async function writePlaybook(ws, auth, title, md, id) {
 }
 const TECHAI = techAiModule({ db, save, cleanText, readJson, send, aiAsk, replyJson, PJ });
 const DESCRIBE = describeModule({ cleanText, readJson, send, aiAsk, replyJson, PJ });
+// Sign-offs on jobs and records: forms, signing here or online, and the record filling in when it's signed.
+const SIGNOFF = signoffModule({
+  db, save, broadcast, rid, cleanText, readJson, send, badRequest, PJ, EMAIL_RE, CONSENT, SIGN_DAYS,
+  dayIn, okTz, tzOf, utc, sha256, pngData, pdfWork, writeForm, stampPdf, addCertificate, addPdf, canSee, isPdf,
+  signEvent, signLink, signStatus, signNews: (x) => signNews(x),
+  readItem: (it) => fsp.readFile(path.join(FILES_DIR, it.id)),
+  async writeSignFiles(x, unsigned, signed) {
+    await fsp.writeFile(signPath(x), unsigned);
+    if (signed) await fsp.writeFile(signPath(x, true), signed);
+  },
+  // What happens after any signature, for one signed here (online ones do this in signApi).
+  afterSigned(x, item, typed) {
+    automate(x.wsId, 'sign.signed', { document: x.name, from: x.signer.name, file: item, campaign: null, who: x.by, whoId: x.memberId });
+    hook(x.wsId, 'document.signed', () => ({ id: x.id, document: x.name, signer: { name: x.signer.name, email: x.signer.email || null }, signed_name: typed, signed_at: new Date(x.signedAt).toISOString(), file: { id: item.id, name: item.name }, in_person: true }), x.signer.name);
+  },
+  // An email to the signer from the team: through Kloomie's own address, as the team, replies going to the sender.
+  emailCustomer: (ws, memberId, to, msg) => SIGNOFF_MAIL(ws, memberId, to, msg),
+  // The signing link: from the sender's own Gmail or Outlook when it's connected, otherwise from Kloomie as the team.
+  async emailSignLink(ws, auth, x, again = false) {
+    if (doNotEmail(ws.id).has(emailKey(x.signer.email))) { signEvent(x, `Not emailed: ${x.signer.email} asked not to be contacted`); return null; }
+    const first = x.signer.name.split(/\s+/)[0];
+    const doc = x.name.replace(/\.pdf$/i, '');
+    const until = new Date(x.expiresAt).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
+    const conn = mailConn(ws.id, auth.memberId);
+    if (conn) {
+      const text = `Hi ${first},\n\n${again ? 'A reminder: ' : ''}${auth.member} at ${ws.name} sent you “${doc}” to sign.\n\n${x.message ? x.message + '\n\n' : ''}Read it and sign here:\n${signLink(x)}\n\nThe link works until ${until}.\n`;
+      try {
+        await calProviders[conn.provider].sendMail(await calToken(conn), mailMime(conn.account, x.signer, `${again ? 'Reminder: please' : 'Please'} sign: ${doc}`, text, ''));
+        signEvent(x, `${again ? 'Reminder emailed' : 'Emailed'} to ${x.signer.email} from ${conn.account}`);
+        return 'mailbox';
+      } catch (e) {
+        console.error('Sign link from mailbox failed, trying Kloomie:', e.message);
+      }
+    }
+    const ok = await SIGNOFF_MAIL(ws, auth.memberId, x.signer.email, {
+      subject: `${again ? 'Reminder: please' : 'Please'} sign: ${doc}`, heading: `${again ? 'A reminder: ' : ''}${doc}`,
+      lines: [`Hi ${first},`, `${auth.member} at ${ws.name} sent you “${doc}” to sign.`, ...(x.message ? [x.message] : []), `The link works until ${until}.`],
+      button: { label: 'Read and sign', url: signLink(x) }, tag: 'sign-request',
+    });
+    if (ok) signEvent(x, `${again ? 'Reminder emailed' : 'Emailed'} to ${x.signer.email} from Kloomie`);
+    return ok ? 'kloomie' : null;
+  },
+});
+function SIGNOFF_MAIL(ws, memberId, to, msg) {
+  if (mailer.mode === 'off' || doNotEmail(ws.id).has(emailKey(to))) return Promise.resolve(false);
+  const held = platformSendBlock(ws);
+  if (held) { console.error('Sign-off email held:', ws.id, held); return Promise.resolve(false); }
+  return mailer.customerEmail(to, { team: ws.name, replyTo: memberReply(ws, memberId), ...msg }).then(() => true, (e) => (console.error('Sign-off email failed:', e.message), false));
+}
 // Agents (agents.js): the person's own AI with tools, working through the API as them.
 async function agentLlm(ws, memberId, { system, history, tools, exec, task }) {
   const ai = aiOf(ws.id, memberId);

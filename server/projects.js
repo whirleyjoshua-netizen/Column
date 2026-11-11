@@ -579,6 +579,7 @@ export function projectsModule({ db, save, broadcast, rid, hold = null, cleanTex
       for (const f of t.fields) {
         if (f.target) f.target = map.get(f.target);
         if (f.default) f.default = map.get(f.default);
+        if (f.onSigned) { f.onSigned = map.get(f.onSigned); if (!f.onSigned) delete f.onSigned; }
       }
       t.fields = t.fields.filter((f) => f.type !== 'link' || f.target);
       for (const v of t.views) {
@@ -948,6 +949,16 @@ export function projectsModule({ db, save, broadcast, rid, hold = null, cleanTex
         if (body.many !== undefined && f.type === 'link') f.many = !!body.many;
         if (Array.isArray(body.list) && (f.type === 'checklist' || f.type === 'readings')) f.list = fieldExtras({ type: f.type, list: body.list }).list;
         if (body.unit !== undefined && f.type === 'measure') f.unit = fieldExtras({ type: 'measure', mode: f.mode, unit: body.unit }).unit;
+        // A sign-off's form (one of the team's, or none for the plain sign-off) and the stage a record moves to once signed.
+        if (body.form !== undefined && f.type === 'signature') {
+          if (body.form && db.signForms?.[body.form]?.wsId !== p.wsId) throw bad('That form is gone.');
+          if (body.form) f.form = String(body.form); else delete f.form;
+        }
+        if (body.onSigned !== undefined && f.type === 'signature') {
+          const st = t.fields.find((x) => x.key === 'status' && x.type === 'select') || t.fields.find((x) => x.type === 'select');
+          if (body.onSigned && !st?.choices.some((c) => c.id === body.onSigned)) throw bad('That stage is gone.');
+          if (body.onSigned) f.onSigned = String(body.onSigned); else delete f.onSigned;
+        }
         return f;
       }
       case 'moveField': {

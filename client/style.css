@@ -2538,3 +2538,24 @@ button.hq-entry:hover { background: var(--card-hover); }
 .pj-draft-q { margin-top: 10px; font-size: 13px; color: var(--muted); }
 .pj-draft-q ul { margin: 4px 0 0; padding-left: 18px; }
 @media (max-width: 520px) { .pj-ops[data-n="2"] { grid-template-columns: 1fr; } }
+/* Sign-offs: the form shown to sign here, what's out for signature, and the form maker. */
+.pj-so-form { max-width: 55%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pj-so-out { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 2px 0 6px; font-size: 13px; }
+.pj-so-btns { justify-content: flex-start; gap: 6px; }
+.so-doc { border: 1px solid var(--line); border-radius: 10px; background: var(--card); padding: 14px 16px; max-height: 42vh; overflow: auto; font-size: 14px; line-height: 1.5; }
+.so-doc h3 { margin: 0 0 8px; font-size: 17px; }
+.so-doc h4 { margin: 12px 0 4px; font-size: 14px; }
+.so-doc p { margin: 6px 0; }
+.so-rows { display: grid; grid-template-columns: max-content 1fr; gap: 2px 14px; margin: 0 0 10px; font-size: 13px; }
+.so-rows dt { color: var(--muted); }
+.so-rows dd { margin: 0; }
+.so-check { align-items: flex-start; margin: 6px 0; }
+.so-items { width: 100%; border-collapse: collapse; font-size: 13px; margin: 6px 0; }
+.so-items th { text-align: left; color: var(--muted); font-weight: 600; border-bottom: 1px solid var(--line); padding: 4px 6px; }
+.so-items td { padding: 4px 6px; border-bottom: 1px solid var(--line); }
+.so-consent { align-items: flex-start; font-size: 12.5px; color: var(--muted); }
+.so-pad-h { display: flex; align-items: center; justify-content: space-between; margin-top: 4px; }
+.so-presets, .so-blanks { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.so-presets { margin-bottom: 4px; }
+.so-body { font-family: var(--mono); font-size: 12.5px; }
+.so-consent input, .so-check input { flex: none; margin-top: 2px; }
