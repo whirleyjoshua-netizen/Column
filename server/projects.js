@@ -154,6 +154,82 @@ export const TEMPLATES = {
     name: 'Jobs & Installs', icon: '🛠️', about: 'Jobs from scheduled to paid, with crews, dates and photos',
     types: [JOBS_TYPE, CLIENTS_TYPE],
   },
+  // Creative & Agencies: client projects, the deliverables in them (with the client's sign-off), and proposals the
+  // client accepts online (a proposal has line items, so it gets the same accept page quotes do). Clients are Contacts.
+  creative: {
+    name: 'Client work', icon: '🎨', about: 'Clients, campaigns, deliverables, approvals',
+    types: [
+      { key: 'projects', name: 'Projects', singular: 'Project', icon: '🎯', primary: 'name', fields: [
+        { key: 'name', name: 'Project', type: 'text' },
+        { key: 'customer', name: 'Client', type: 'contact' },
+        { key: 'status', name: 'Status', type: 'select', choices: [choice('Brief', 'gray'), choice('In progress', 'blue'), choice('Client review', 'violet'), choice('Approved', 'teal'), choice('Delivered', 'green'), choice('On hold', 'amber')] },
+        { key: 'kind', name: 'Kind', type: 'select', choices: [choice('Campaign', 'violet'), choice('Brand', 'blue'), choice('Website', 'teal'), choice('Video', 'amber'), choice('Social', 'rose'), choice('Print', 'gray')] },
+        { key: 'lead', name: 'Lead', type: 'person' },
+        { key: 'start', name: 'Start', type: 'date' },
+        { key: 'due', name: 'Due', type: 'date' },
+        { key: 'budget', name: 'Budget', type: 'money' },
+        { key: 'brief', name: 'Brief', type: 'text', long: true },
+        { key: 'files', name: 'Files', type: 'files' },
+      ], views: [{ name: 'Board', kind: 'board', groupBy: 'status' }, { name: 'Timeline', kind: 'timeline', start: 'start', end: 'due' }, { name: 'All projects', kind: 'table', sortBy: 'due' }] },
+      { key: 'deliverables', name: 'Deliverables', singular: 'Deliverable', icon: '📦', primary: 'name', fields: [
+        { key: 'name', name: 'Deliverable', type: 'text' },
+        { key: 'project', name: 'Project', type: 'link', target: 'projects' },
+        { key: 'status', name: 'Status', type: 'select', choices: [choice('To do', 'gray'), choice('In progress', 'blue'), choice('Internal review', 'amber'), choice('Client review', 'violet'), choice('Changes asked', 'rose'), choice('Approved', 'green')] },
+        { key: 'owner', name: 'Owner', type: 'person' },
+        { key: 'due', name: 'Due', type: 'date' },
+        { key: 'round', name: 'Revision round', type: 'number' },
+        { key: 'feedback', name: 'Client feedback', type: 'text', long: true },
+        { key: 'files', name: 'Files', type: 'files' },
+        { key: 'signoff', name: 'Client sign-off', type: 'signature' },
+      ], views: [{ name: 'Board', kind: 'board', groupBy: 'status' }, { name: 'By due date', kind: 'table', sortBy: 'due' }] },
+      { key: 'proposals', name: 'Proposals', singular: 'Proposal', icon: '🧾', primary: 'title', fields: [
+        { key: 'title', name: 'Proposal', type: 'text' },
+        { key: 'number', name: 'Number', type: 'autonumber', prefix: 'P-', start: 1001 },
+        { key: 'customer', name: 'Client', type: 'contact' },
+        { key: 'status', name: 'Status', type: 'select', choices: [choice('Draft', 'gray'), choice('Sent', 'blue'), choice('Viewed', 'violet'), choice('Accepted', 'green'), choice('Declined', 'rose'), choice('Expired', 'amber')] },
+        { key: 'items', name: 'Line items', type: 'items' },
+        { key: 'issued', name: 'Issued', type: 'date' },
+        { key: 'valid_until', name: 'Valid until', type: 'date' },
+        { key: 'project', name: 'Project', type: 'link', target: 'projects' },
+        { key: 'terms', name: 'Terms', type: 'text' },
+        { key: 'owner', name: 'Owner', type: 'person' },
+        { key: 'accepted_by', name: 'Accepted by', type: 'text' },
+        { key: 'accepted_on', name: 'Accepted on', type: 'date' },
+      ], views: [{ name: 'By status', kind: 'board', groupBy: 'status' }, { name: 'All proposals', kind: 'table' }] },
+    ],
+  },
+  // Business operations: team projects, the tasks in them, and the processes the team repeats.
+  team: {
+    name: 'Team projects', icon: '📋', about: 'Projects, tasks and owners, plus the processes your team repeats',
+    types: [
+      { key: 'projects', name: 'Projects', singular: 'Project', icon: '📋', primary: 'name', fields: [
+        { key: 'name', name: 'Project', type: 'text' },
+        { key: 'status', name: 'Status', type: 'select', choices: [choice('Planned', 'gray'), choice('In progress', 'blue'), choice('At risk', 'amber'), choice('Done', 'green'), choice('On hold', 'rose')] },
+        { key: 'owner', name: 'Owner', type: 'person' },
+        { key: 'team', name: 'Team', type: 'select', choices: [choice('Operations', 'blue'), choice('Sales', 'green'), choice('Finance', 'amber'), choice('People', 'violet'), choice('Admin', 'gray')] },
+        { key: 'priority', name: 'Priority', type: 'select', choices: [choice('Low', 'gray'), choice('Medium', 'amber'), choice('High', 'rose')] },
+        { key: 'start', name: 'Start', type: 'date' },
+        { key: 'due', name: 'Due', type: 'date' },
+        { key: 'goal', name: 'Goal', type: 'text', long: true },
+      ], views: [{ name: 'Board', kind: 'board', groupBy: 'status' }, { name: 'Timeline', kind: 'timeline', start: 'start', end: 'due' }, { name: 'All projects', kind: 'table', sortBy: 'due' }] },
+      { key: 'tasks', name: 'Tasks', singular: 'Task', icon: '✅', primary: 'name', fields: [
+        { key: 'name', name: 'Task', type: 'text' },
+        { key: 'project', name: 'Project', type: 'link', target: 'projects' },
+        { key: 'status', name: 'Status', type: 'select', choices: [choice('To do', 'gray'), choice('Doing', 'blue'), choice('Waiting', 'amber'), choice('Done', 'green')] },
+        { key: 'assignee', name: 'Assigned to', type: 'person' },
+        { key: 'due', name: 'Due', type: 'date' },
+        { key: 'notes', name: 'Notes', type: 'text', long: true },
+      ], views: [{ name: 'Board', kind: 'board', groupBy: 'status' }, { name: 'By due date', kind: 'table', sortBy: 'due' }] },
+      { key: 'processes', name: 'Processes', singular: 'Process', icon: '🔁', primary: 'name', fields: [
+        { key: 'name', name: 'Process', type: 'text' },
+        { key: 'owner', name: 'Owner', type: 'person' },
+        { key: 'frequency', name: 'How often', type: 'select', choices: [choice('Daily', 'blue'), choice('Weekly', 'violet'), choice('Monthly', 'amber'), choice('Quarterly', 'teal'), choice('As needed', 'gray')] },
+        { key: 'steps', name: 'Steps', type: 'checklist', list: [] },
+        { key: 'last_done', name: 'Last done', type: 'date' },
+        { key: 'notes', name: 'Notes', type: 'text', long: true },
+      ], views: [{ name: 'All processes', kind: 'table' }] },
+    ],
+  },
   blank: {
     name: 'Blank', icon: '📁', about: 'One list to shape as you like',
     types: [{ key: 'items', name: 'Items', singular: 'Item', icon: '📄', primary: 'name', fields: [{ key: 'name', name: 'Name', type: 'text' }, { key: 'status', name: 'Status', type: 'select', choices: [choice('To do', 'gray'), choice('Doing', 'blue'), choice('Done', 'green')] }], views: [{ name: 'All', kind: 'table' }, { name: 'Board', kind: 'board', groupBy: 'status' }] }],
@@ -343,11 +419,22 @@ export function projectsModule({ db, save, broadcast, rid, hold = null, cleanTex
     return out;
   }
   // A Jobs project from the trades a team does: a list for each.
-  function fromTrades(keys) {
-    const picked = [...new Set((Array.isArray(keys) ? keys : []).map(String))].filter((k) => TRADES[k]).slice(0, MAX_TYPES);
+  function fromTrades(keys, room = MAX_TYPES) {
+    const picked = [...new Set((Array.isArray(keys) ? keys : []).map(String))].filter((k) => TRADES[k]).slice(0, room);
     if (!picked.length) throw bad('Pick at least one kind of work.');
     return picked.map((k) => typeFrom(tradeType(k), () => null));
   }
+  // Lists from definitions, with fresh ids and links pointing at each other.
+  function buildTypes(srcTypes) {
+    const ids = Object.fromEntries(srcTypes.map((t) => [t.key, rid(8)]));
+    return srcTypes.map((src) => {
+      const t = typeFrom(src, (k) => ids[k]);
+      t.id = ids[src.key];
+      return t;
+    });
+  }
+  // For teams that bid on work: the Bids & Quotes lists (bids, quotes, clients, price list) beside their trade jobs.
+  const BID_LISTS = () => buildTypes(TEMPLATES.bids.types.filter((t) => t.key !== 'jobs'));
   function fromTemplate(key, wsId) {
     // A team's own template: its lists, fields and views, with new ids throughout.
     if (String(key).startsWith('custom:')) {
@@ -355,13 +442,7 @@ export function projectsModule({ db, save, broadcast, rid, hold = null, cleanTex
       if (own && own.wsId === wsId) return { types: cloneTypes(own.types), template: 'custom', icon: own.icon };
     }
     const tpl = TEMPLATES[key] || TEMPLATES.blank;
-    const ids = Object.fromEntries(tpl.types.map((t) => [t.key, rid(8)]));
-    const types = tpl.types.map((src) => {
-      const t = typeFrom(src, (k) => ids[k]);
-      t.id = ids[src.key];
-      return t;
-    });
-    return { types, template: tpl === TEMPLATES[key] ? key : 'blank' };
+    return { types: buildTypes(tpl.types), template: tpl === TEMPLATES[key] ? key : 'blank' };
   }
   // Lists copied with every id made new, and everything that points at an id following it.
   function cloneTypes(types) {
@@ -847,7 +928,7 @@ export function projectsModule({ db, save, broadcast, rid, hold = null, cleanTex
         const body = await readJson(req, 50_000);
         const trades = body.template === 'trades';
         const tech = body.template === 'tech';
-        const { types, template, icon } = trades ? { types: fromTrades(body.trades), template: 'trades', icon: '🛠️' } : fromTemplate(body.template, ws.id);
+        const { types, template, icon } = trades ? { types: body.bids === true ? [...fromTrades(body.trades, MAX_TYPES - 4), ...BID_LISTS()] : fromTrades(body.trades), template: 'trades', icon: '🛠️' } : fromTemplate(body.template, ws.id);
         const own = template === 'custom' && db.projectTemplates[String(body.template).slice(7)];
         const p = { id: rid(), wsId: ws.id, name: cleanText(body.name, 80) || own?.name || (trades ? 'Jobs' : TEMPLATES[template].name), icon: cleanText(body.icon, 8) || icon || TEMPLATES[template].icon, template, types, private: !!body.private, memberIds: [], memberId: auth.memberId, by: auth.member, createdAt: Date.now(), updatedAt: Date.now() };
         // A software project's keys start with letters from its name: Atlas → ATL-1.

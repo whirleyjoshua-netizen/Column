@@ -9293,36 +9293,66 @@
   function projectsHome() {
     const list = [...(S.projects || [])].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
     return [
-      h('div', { class: 'pj-head' }, h('button', { class: 'icon-btn', 'aria-label': 'Close Projects', html: I.close, onclick: closeProjects }), h('h2', {}, 'Jobs & projects'), h('span', { style: 'flex:1' }), h('button', { class: 'btn primary-btn', onclick: newProjectSheet }, '+ New project')),
+      h('div', { class: 'pj-head' }, h('button', { class: 'icon-btn', 'aria-label': 'Close Projects', html: I.close, onclick: closeProjects }), h('h2', {}, 'Jobs & projects'), h('span', { style: 'flex:1' }), h('button', { class: 'btn primary-btn', onclick: () => newProjectSheet() }, '+ New project')),
       list.length ? h('div', { class: 'pj-grid' }, list.map((p) => h('button', { class: 'pj-card', onclick: () => openProject(p.id) },
         h('span', { class: 'pj-ic' }, p.icon || '📁'),
         h('b', {}, p.name, p.private ? h('small', { title: 'Private' }, ' 🔒') : null),
         h('small', {}, p.types.map((t) => (PR.records.has(p.id) ? `${prRecs(p.id).filter((r) => r.typeId === t.id).length} ${t.name.toLowerCase()}` : t.name)).join(' · ')))))
-        : h('div', { class: 'pj-empty' }, h('p', {}, 'Jobs for every kind of work you do, with the details, checklist and stages that trade needs. Or keep track of deals, bids and quotes, vendors: anything with a list of records and stages.'),
-          h('div', { class: 'btns' }, h('button', { class: 'btn primary-btn', onclick: () => tradePicker('What kind of work do you do?', async (keys) => { const p = await newJobsProject(keys); if (p) openProject(p.id); }) }, 'Set up Jobs'), h('button', { class: 'btn', onclick: newProjectSheet }, 'Another kind of project'))),
+        : h('div', { class: 'pj-empty' }, h('h3', {}, 'Choose how your team works'), h('p', {}, 'Each starts with the lists, details and stages that kind of work needs. You can change any of it later, or add more projects.'),
+          h('div', { class: 'pj-kinds' }, PJ_KINDS.map((x) => pjKindCard(x, false, () => (x.k === 'trades' ? newTradesProject('', false) : newProjectSheet(x.k))))),
+          h('button', { class: 'linkish', onclick: () => newProjectSheet('ops') }, 'Or start from a blank list')),
     ];
   }
-  function newProjectSheet() {
-    let tpl = 'crm';
-    const name = h('input', { placeholder: 'Sales', maxlength: 80 });
-    const TPL = { tech: ['💻', 'Technology & software', 'Work items on a development board, features on a roadmap, releases, sprints'], crm: ['🤝', 'CRM', 'Contacts, companies and deals, with a pipeline board'], bids: ['📐', 'Bids & Quotes', 'Jobs you bid on, quotes customers accept online, jobs, clients, a price list'], trades: ['🛠️', 'Jobs (by trade)', 'Pick the kinds of work you do: each gets its own job details, checklist and stages'], jobs: ['🚚', 'Jobs & Installs', 'Jobs from scheduled to paid, with crews, dates and photos'], blank: ['📁', 'Blank', 'One list to shape as you like'] };
-    api('GET', '/project-templates').then((list) => {
-      for (const x of list) TPL['custom:' + x.id] = ['⭐', x.name, x.about || x.lists.join(', '), x];
-      if (list.length) draw();
-    }).catch(() => {});
-    const pick = h('div', { class: 'pj-tpls' });
-    const draw = () => pick.replaceChildren(...Object.entries(TPL).map(([k, [ic, nm, about, own]]) => h('button', { type: 'button', class: 'pj-tpl' + (tpl === k ? ' on' : ''), onclick: () => { tpl = k; draw(); } }, h('span', { class: 'pj-ic' }, ic), h('b', {}, nm), h('small', {}, own ? `Your template · ${about}` : about),
-      own && (own.memberId === S.me?.memberId || amAdmin()) ? h('span', { class: 'pj-tpl-del', role: 'button', title: 'Delete this template', onclick: async (e) => { e.stopPropagation(); await api('DELETE', '/project-templates/' + own.id).catch((er) => toast(er.message)); delete TPL[k]; if (tpl === k) tpl = 'crm'; draw(); } }, '×') : null)));
-    draw();
+  // The kinds of work a project can be set up for: each starts with the lists, fields and stages that work needs.
+  const PJ_KINDS = [
+    { k: 'trades', c: 'amber', ic: '🏗️', name: 'Construction & Trades', sub: 'Jobs, crews, materials, estimates, installs', tags: ['Jobs', 'Crews', 'Estimates'] },
+    { k: 'tech', c: 'blue', ic: '💻', name: 'Technology & Software', sub: 'Products, sprints, bugs, code, releases', tags: ['Sprints', 'Bugs', 'Releases'] },
+    { k: 'creative', c: 'rose', ic: '🎨', name: 'Creative & Agencies', sub: 'Clients, campaigns, deliverables, approvals', tags: ['Clients', 'Deliverables', 'Approvals'] },
+    { k: 'ops', c: 'green', ic: '📋', name: 'Business Operations', sub: 'Processes, teams, workflows, projects', tags: ['Projects', 'Tasks', 'Pipelines'] },
+  ];
+  // Business operations has more than one way to start.
+  const PJ_OPS = [['team', '📋', 'Team projects', 'Projects, tasks and owners, plus the processes you repeat'], ['crm', '🤝', 'Sales pipeline', 'Contacts, companies and deals on a board'], ['blank', '📁', 'Start blank', 'One list to shape as you like']];
+  const pjKindCard = (x, on, onclick) => h('button', { type: 'button', class: `pj-kind c-${x.c}${on ? ' on' : ''}`, 'aria-pressed': String(!!on), onclick },
+    h('span', { class: 'pj-kind-art', 'aria-hidden': 'true' }, h('span', { class: 'pj-kind-ic' }, x.ic), h('span', { class: 'pj-kind-tags' }, x.tags.map((tg) => h('i', {}, tg)))),
+    h('b', {}, x.name), h('small', {}, x.sub));
+  // Jobs for a trade business: pick the kinds of work, and whether they bid on jobs (adds bids, quotes, clients, a price list).
+  function newTradesProject(name, priv) {
+    const bids = h('input', { type: 'checkbox' });
+    tradePicker('What kind of work do you do?', async (keys) => { const p = await newJobsProject(keys, { bids: bids.checked, name, private: priv }); if (p) openProject(p.id); },
+      { extra: h('label', { class: 'pick pj-bids' }, bids, h('span', {}, 'We bid on jobs too', h('small', {}, 'Adds Bids, Quotes customers accept online, Clients and a Price list'))) });
+  }
+  function newProjectSheet(kind = null) {
+    let pick = kind || 'trades';
+    let ops = 'team';
+    let own = null;
+    const OWN = [];
+    const name = h('input', { maxlength: 80 });
     const priv = h('input', { type: 'checkbox' });
-    sheet('New project', [h('label', {}, 'Name', name), h('div', {}, h('small', { class: 'hint' }, 'Start from'), pick), h('label', { class: 'pick' }, priv, 'Private: only me and people I add')], async () => {
-      // Jobs ask what kind of work, then set up a list for each.
-      if (tpl === 'trades') return setTimeout(() => tradePicker('What kind of work do you do?', async (keys) => { const p = await newJobsProject(keys); if (p) openProject(p.id); }), 0);
-      const p = await api('POST', '/projects', { template: tpl, name: name.value.trim() || TPL[tpl][1], private: priv.checked });
+    const kinds = h('div', { class: 'pj-kinds' });
+    const opsRow = h('div', { class: 'pj-tpls pj-ops' });
+    const mine = h('div');
+    const tplOf = () => (own ? 'custom:' + own.id : pick === 'ops' ? ops : pick);
+    const label = () => (own ? own.name : pick === 'trades' ? 'Jobs' : pick === 'tech' ? 'Atlas' : pick === 'creative' ? 'Client work' : PJ_OPS.find((x) => x[0] === ops)[2]);
+    const draw = () => {
+      kinds.replaceChildren(...PJ_KINDS.map((x) => pjKindCard(x, !own && pick === x.k, () => { pick = x.k; own = null; draw(); })));
+      opsRow.hidden = own || pick !== 'ops';
+      opsRow.replaceChildren(...PJ_OPS.map(([k, ic, nm, about]) => h('button', { type: 'button', class: 'pj-tpl' + (ops === k ? ' on' : ''), onclick: () => { ops = k; draw(); } }, h('span', { class: 'pj-ic' }, ic), h('b', {}, nm), h('small', {}, about))));
+      mine.replaceChildren(...(OWN.length ? [h('small', { class: 'hint' }, 'Your templates'), h('div', { class: 'pj-tpls' }, OWN.map((x) => h('button', { type: 'button', class: 'pj-tpl' + (own === x ? ' on' : ''), onclick: () => { own = own === x ? null : x; draw(); } }, h('span', { class: 'pj-ic' }, '⭐'), h('b', {}, x.name), h('small', {}, x.about || x.lists.join(', ')),
+        x.memberId === S.me?.memberId || amAdmin() ? h('span', { class: 'pj-tpl-del', role: 'button', title: 'Delete this template', onclick: async (e) => { e.stopPropagation(); try { await api('DELETE', '/project-templates/' + x.id); OWN.splice(OWN.indexOf(x), 1); if (own === x) own = null; draw(); } catch (er) { toast(er.message); } } }, '×') : null)))] : []));
+      name.placeholder = label();
+      const go = $('#sheet .sheet > .btns .primary-btn');
+      if (go) go.textContent = !own && pick === 'trades' ? 'Next: your kinds of work' : 'Create';
+    };
+    api('GET', '/project-templates').then((list) => { OWN.push(...list); if (list.length) draw(); }).catch(() => {});
+    sheet('New project', [h('p', { class: 'day-hint' }, 'Choose how your team works. Each starts with the lists, details and stages that work needs, and you can change any of it later.'), kinds, opsRow, mine,
+      h('label', {}, 'Name', name), h('label', { class: 'pick' }, priv, 'Private: only me and people I add')], async () => {
+      if (!own && pick === 'trades') return setTimeout(() => newTradesProject(name.value.trim(), priv.checked), 0);
+      const p = await api('POST', '/projects', { template: tplOf(), name: name.value.trim() || label(), private: priv.checked });
       prUpsertProject(p);
       PR.records.set(p.id, []);
       openProject(p.id);
     }, 'Create');
+    draw();
   }
 
   // ----- one project -----
@@ -10884,7 +10914,7 @@
   const prRichBlock = (p, t, r, f) => (f.type === 'checklist' ? prChecklist(p, t, r, f) : f.type === 'signature' ? prSignature(p, t, r, f) : f.type === 'permit' ? prPermit(p, t, r, f) : prRows(p, t, r, f));
 
   // "What kind of work do you do?": the trades, by family, to pick one or several.
-  async function tradePicker(title, done, { except = [], button = 'Set it up' } = {}) {
+  async function tradePicker(title, done, { except = [], button = 'Set it up', extra = null } = {}) {
     const fams = await api('GET', '/project-templates/trades').catch((e) => (toast(e.message), null));
     if (!fams) return;
     const picked = new Set();
@@ -10896,10 +10926,10 @@
         return b;
       })))));
     go.addEventListener('click', () => { closeSheet(); done([...picked]); });
-    sheet(title, [h('p', { class: 'day-hint' }, 'Pick everything you do. Each gets its own job details, checklist and stages, and you can change any of it later.'), grid, h('div', { class: 'btns' }, go)]);
+    sheet(title, [h('p', { class: 'day-hint' }, 'Pick everything you do. Each gets its own job details, checklist and stages, and you can change any of it later.'), grid, extra, h('div', { class: 'btns' }, go)]);
   }
-  async function newJobsProject(trades) {
-    const p = await api('POST', '/projects', { template: 'trades', trades, name: 'Jobs' }).catch((e) => (toast(e.message), null));
+  async function newJobsProject(trades, { bids = false, name = '', private: priv = false } = {}) {
+    const p = await api('POST', '/projects', { template: 'trades', trades, name: name || 'Jobs', ...(bids ? { bids: true } : {}), ...(priv ? { private: true } : {}) }).catch((e) => (toast(e.message), null));
     if (!p) return null;
     prUpsertProject(p);
     PR.records.set(p.id, []);
@@ -16510,7 +16540,7 @@
         // The tools the team uses. Switched off, a tool leaves everyone's Tools menu; nothing in it is deleted.
         const TOOL_ROWS = [['agents', 'Agents', 'Your team: Chief of Staff, Sales, Operations and Marketing'], ['sidekick', 'Sidekick', 'Plans campaigns with you'], ['docs', 'Docs', 'Write and share pages'], ['contacts', 'Contacts', 'Your customers and leads (owners and admins)'],
           ['email', 'Email', 'Campaign email from Outlook or Gmail'], ['folders', 'Folders', 'Files in folders'], ['signs', 'Signatures', 'Send PDFs to be signed'], ['bills', 'Finance', 'Bills, money in and out, budgets'],
-          ['meetings', 'Meeting notes', 'Record a call, get the notes'], ['map', 'Map', 'Pins, routes and canvassing runs'], ['vault', 'Vault', 'Codes and logins, locked on your device'], ['projects', 'Jobs & projects', 'Jobs by trade, quotes and CRM pipelines']];
+          ['meetings', 'Meeting notes', 'Record a call, get the notes'], ['map', 'Map', 'Pins, routes and canvassing runs'], ['vault', 'Vault', 'Codes and logins, locked on your device'], ['projects', 'Jobs & projects', 'Trades, software, client work and team projects']];
         const tools = ws.tools || {};
         s.append(h('section', { class: 'tools-sec' }, h('h3', {}, 'Tools'),
           h('p', { class: 'day-hint' }, 'Turn on what your team uses. A tool you turn off leaves everyone’s Tools menu; nothing in it is deleted.'),
