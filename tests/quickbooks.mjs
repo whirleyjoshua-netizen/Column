@@ -96,6 +96,7 @@ const call = (tok) => async (m, p, body) => {
   const r = await fetch(B + '/api' + p, { method: m, headers: { 'content-type': 'application/json', ...(tok ? { authorization: 'Bearer ' + tok } : {}) }, body: body ? JSON.stringify(body) : undefined });
   return { status: r.status, body: await r.json().catch(() => null) };
 };
+const vOf = async (u) => (await (await fetch(u)).text()).match(/name="v" value="([^"]+)"/)?.[1] || ''; // the accept form's fingerprint, as a browser sends it
 const t = Date.now();
 try {
   let r = await call()('POST', '/auth', { mode: 'create', workspace: 'Qb ' + t, name: 'Jo', email: `jo${t}@t.test`, password: 'longenough1', device: 'Mac', deviceId: 'd1' });
@@ -209,7 +210,7 @@ try {
   await jo('PATCH', `/records/${qjob.id}`, { values: { [fid('price')]: { rows: [{ desc: 'Heat pump', qty: 1, price: '3900' }, { desc: 'Labor', qty: 6, price: '95' }], taxRate: 8.25 } } });
   ok(await until(() => Q.Estimate.find((x) => x.Id === est.Id)?.Line[0].SalesItemLineDetail.UnitPrice === 3900), 'a new price before they answer updates the estimate');
   // Accepted on the customer's page.
-  await fetch(`${B}/q/${token}/accept`, { method: 'POST', body: new URLSearchParams({ name: 'Lee Park' }), redirect: 'manual' });
+  await fetch(`${B}/q/${token}/accept`, { method: 'POST', body: new URLSearchParams({ name: 'Lee Park', v: await vOf(`${B}/q/${token}`) }), redirect: 'manual' });
   ok(await until(() => Q.Estimate.find((x) => x.Id === est.Id)?.TxnStatus === 'Accepted'), 'accepted by the customer: Accepted there');
   est = Q.Estimate.find((x) => x.Id === est.Id);
   ok(est.AcceptedBy === 'Lee Park' && /^\d{4}-\d{2}-\d{2}$/.test(est.AcceptedDate), 'with who accepted it and when');

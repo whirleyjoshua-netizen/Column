@@ -916,6 +916,7 @@ export function projectsModule({ db, save, broadcast, rid, hold = null, cleanTex
             if (rec) {
               const before = { ...rec.values };
               applyValues(ws, p, t, rec, row, { addChoices: true });
+              if (quoteLocked(t, rec, before)) rec.values = before; // an accepted quote's lines stay as accepted
               logChanges(ws, p, t, rec, before, auth.member);
               rec.updatedAt = Date.now();
               broadcast(rec.wsId, { type: 'record', record: publicRecord(rec), projectId: p.id });
@@ -1026,6 +1027,10 @@ export function projectsModule({ db, save, broadcast, rid, hold = null, cleanTex
         if (held) return send(res, held.status, held.body);
         const before = { ...rec.values };
         applyValues(ws, p, t, rec, body.values, { addChoices: false });
+        if (quoteLocked(t, rec, before)) {
+          rec.values = before;
+          return send(res, 400, { error: 'The customer accepted this quote, so its lines can’t change. Make a new quote for the changes.' });
+        }
         techAfter(ws, p, t, rec, before, auth);
         logChanges(ws, p, t, rec, before, auth.member);
         if (body.docId !== undefined) rec.docId = db.items[body.docId]?.wsId === ws.id && db.items[body.docId].type === 'text' ? body.docId : null;
@@ -1178,13 +1183,18 @@ export function projectsModule({ db, save, broadcast, rid, hold = null, cleanTex
     if (req.method === 'POST' && (act === 'accept' || act === 'decline')) {
       const form = await readForm(req);
       const name = cleanText(form.name, 120);
+      const itemsF = t.fields.find((f) => f.type === 'items');
+      const shown = itemsF ? rec.values[itemsF.id] || { rows: [] } : null;
+      if (act === 'accept' && itemsF && form.v !== linesKey(shown)) {
+        return quoteHtml(res, 409, db.workspaces[rec.wsId], `<h1>This quote changed</h1><p class="muted">It was updated after you opened it, so please look at it again before accepting.</p><p><a href="/q/${token}">See the quote as it is now</a></p>`);
+      }
       if (!['accepted', 'declined'].includes(status) && !expired && (act === 'decline' || name)) {
         setStatus(p, t, rec, act === 'accept' ? 'Accepted' : 'Declined');
         const by = fieldOf(t, 'accepted_by');
         const on = fieldOf(t, 'accepted_on');
         if (by?.type === 'text') rec.values[by.id] = act === 'accept' ? name : `Declined${name ? ' by ' + name : ''}${form.reason ? ': ' + cleanText(form.reason, 500) : ''}`;
         if (on?.type === 'date') rec.values[on.id] = today(rec.wsId);
-        rec.answer = { act, name, reason: cleanText(form.reason, 500), at: Date.now() };
+        rec.answer = { act, name, reason: cleanText(form.reason, 500), at: Date.now(), ...(act === 'accept' && shown ? { lines: JSON.parse(JSON.stringify(shown)), total: itemsTotals(shown).total } : {}) };
         logTo(rec, { kind: 'quote', what: act === 'accept' ? 'accepted' : 'declined', by: name || 'The customer', note: rec.answer.reason || '' });
         rec.updatedAt = Date.now();
         const items = t.fields.find((f) => f.type === 'items');
@@ -1204,6 +1214,13 @@ export function projectsModule({ db, save, broadcast, rid, hold = null, cleanTex
     }
     return quoteHtml(res, 200, ws, quoteBody(q, token, expired));
   }
+  // A fingerprint of a quote's lines: the customer accepts exactly what they saw, or not at all.
+  const linesKey = (data) => crypto.createHash('sha256').update(JSON.stringify(data || { rows: [] })).digest('hex').slice(0, 24);
+  // An accepted quote's lines don't change after the customer said yes (make a new quote instead).
+  const quoteLocked = (t, rec, before) => {
+    const items = t.fields.find((f) => f.type === 'items');
+    return !!(items && rec.answer?.act === 'accept' && JSON.stringify(before[items.id] ?? null) !== JSON.stringify(rec.values[items.id] ?? null));
+  };
   const quoteTitle = (t, rec) => {
     const num = t.fields.find((f) => f.type === 'autonumber');
     return [num && rec.values[num.id], rec.values[t.primary]].filter(Boolean).join(' · ') || t.singular || 'Quote';
@@ -1224,7 +1241,7 @@ export function projectsModule({ db, save, broadcast, rid, hold = null, cleanTex
     const answer = status === 'accepted' ? `<div class="done ok">✓ Accepted${v('accepted_by') ? ' by ' + escHtml(v('accepted_by')) : ''}${v('accepted_on') ? ' on ' + day(v('accepted_on')) : ''}. Thank you!</div>`
       : status === 'declined' ? '<div class="done">This quote was declined. Thanks for letting us know.</div>'
       : expired ? `<div class="done">This quote expired on ${day(v('valid_until'))}. Contact us for an updated one.</div>`
-      : `<form class="accept" method="post" action="/q/${token}/accept"><label>Type your full name to accept this quote<input name="name" required maxlength="120" autocomplete="name"></label><button>Accept quote · ${money(tot.total)}</button></form>
+      : `<form class="accept" method="post" action="/q/${token}/accept"><input type="hidden" name="v" value="${linesKey(data)}"><label>Type your full name to accept this quote<input name="name" required maxlength="120" autocomplete="name"></label><button>Accept quote · ${money(tot.total)}</button></form>
          <details class="decline"><summary>Decline</summary><form method="post" action="/q/${token}/decline"><label>Your name<input name="name" maxlength="120" autocomplete="name"></label><label>Anything we should know? (optional)<textarea name="reason" rows="3" maxlength="500"></textarea></label><button class="ghost">Decline quote</button></form></details>`;
     return `<header>${brand.logo ? `<img class="brand" src="${logoUrl(brand.logo)}" alt="">` : ''}<div><b>${escHtml(ws.name)}</b></div></header>
       <h1>${escHtml(quoteTitle(t, rec))}</h1>
@@ -1412,6 +1429,7 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
         if (rec) {
           const before = { ...rec.values };
           applyValues(ws, p, t, rec, fields, { addChoices: true });
+          if (quoteLocked(t, rec, before)) { rec.values = before; throw bad('The customer accepted this quote, so its lines can’t change.'); }
           logChanges(ws, p, t, rec, before, auth.member);
           rec.updatedAt = Date.now();
           recordNews(rec, 'record.updated', auth.member);
@@ -1445,6 +1463,7 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
       const body = await readJson(req, 200_000);
       const before = { ...rec.values };
       applyValues(ws, p, t, rec, inFields(t, body.fields), { addChoices: true });
+      if (quoteLocked(t, rec, before)) { rec.values = before; throw bad('The customer accepted this quote, so its lines can’t change.'); }
       logChanges(ws, p, t, rec, before, auth.member);
       if (body.external_id !== undefined) rec.extId = body.external_id ? cleanText(body.external_id, 200) : null;
       rec.updatedAt = Date.now();

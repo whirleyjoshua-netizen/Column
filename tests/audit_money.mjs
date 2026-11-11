@@ -87,6 +87,35 @@ try {
   inv2 = (await jo('POST', `/invoices/${inv2.id}/send`)).body;
   r = await call(key)('POST', `/v1/invoices/${inv2.id}/payments`, { amount: '5000' });
   ok(r.status === 400, 'G1 the API can’t record more than is owed either');
+
+  // G2: merging or deleting a contact keeps jobs pointing at the right person.
+  const fidOf = (k) => tp.fields.find((f) => f.key === k)?.id;
+  const older = (await jo('POST', '/contacts', { name: 'Ann Lee', email: 'ann@x.test' })).body;
+  await sleep(20);
+  const dup = (await jo('POST', '/contacts', { name: 'Ann Lee', phone: '555-0199' })).body;
+  const annJob = (await jo('POST', `/projects/${p.id}/records`, { typeId: tp.id, values: { job: 'Blinds', customer: dup.id ?? dup.contact?.id } })).body;
+  await jo('POST', '/contacts/merge', { ids: [older.id ?? older.contact?.id, dup.id ?? dup.contact?.id] });
+  const recs = (await jo('GET', `/projects/${p.id}/records`)).body;
+  const after = (Array.isArray(recs) ? recs : recs.records || []).find((x) => x.id === annJob.id);
+  ok(after?.values[fidOf('customer')] === (older.id ?? older.contact?.id), 'G2 after merging two contacts, the job’s customer is the one that was kept');
+  const gone = (await jo('POST', '/contacts', { name: 'Gus Gone', email: 'gus@x.test' })).body;
+  const gusJob = (await jo('POST', `/projects/${p.id}/records`, { typeId: tp.id, values: { job: 'Shutters', customer: gone.id ?? gone.contact?.id } })).body;
+  await jo('DELETE', '/contacts/' + (gone.id ?? gone.contact?.id));
+  const recs2 = (await jo('GET', `/projects/${p.id}/records`)).body;
+  const after2 = (Array.isArray(recs2) ? recs2 : recs2.records || []).find((x) => x.id === gusJob.id);
+  ok(after2 && !after2.values[fidOf('customer')], 'G2 after deleting a contact, the job doesn’t point at someone who no longer exists');
+
+  // G6: removing someone doesn't silently cancel a job visit only they were going to.
+  const code = (await jo('GET', '/state')).body.workspace.inviteCode;
+  r = await call()('POST', '/auth', { mode: 'join', workspace: 'Money ' + t, code, name: 'Tech', email: `tech${t}@t.test`, password: 'longenough2', device: 'Mac', deviceId: 'd9' });
+  const techId = (await jo('GET', '/state')).body.workspace.members.find((x) => x.name === 'Tech').id;
+  r = await jo('POST', `/records/${job.id}/visits`, { date: '2099-01-15', start: 540, end: 600, kind: 'Install', memberIds: [techId] });
+  ok(r.status === 200, 'G6 (setup) an install booked for the tech');
+  await jo('DELETE', '/members/' + techId);
+  const vs = (await jo('GET', `/records/${job.id}/visits`)).body;
+  const list = Array.isArray(vs) ? vs : vs.visits || [];
+  ok(list.some((v) => v.date === '2099-01-15'), 'G6 the install is still on the job after the tech is removed');
+  ok((await jo('GET', '/state')).body.notices.some((n) => /visit is yours/.test(n.title)), 'G6 and the owner is told it’s theirs for now');
 } catch (e) {
   ok(false, 'threw: ' + e.stack);
 } finally {

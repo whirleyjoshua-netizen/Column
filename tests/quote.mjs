@@ -3,6 +3,7 @@ const B = 'http://127.0.0.1:4797';
 const ok = (c, msg) => { console.log((c ? 'PASS ' : 'FAIL ') + msg); if (!c) process.exitCode = 1; };
 const req = (tok) => async (m, p, body, raw) => { const r = await fetch(B + p, { method: m, headers: { 'content-type': 'application/json', ...(tok ? { authorization: 'Bearer ' + tok } : {}) }, body: body ? JSON.stringify(body) : undefined }); const j = await r.json().catch(() => null); if (raw) return { status: r.status, body: j }; if (!r.ok) throw new Error(p + ' ' + r.status + ' ' + JSON.stringify(j)); return j; };
 const a = await (await fetch(B + '/api/auth', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ workspace: 'q' + Date.now(), password: 'secret1', name: 'Jo', mode: 'create', device: 'x', deviceId: 'd1' }) })).json();
+const vOf = async (u) => (await (await fetch(u)).text()).match(/name="v" value="([^"]+)"/)?.[1] || ''; // the accept form's fingerprint, as a browser sends it
 const A = req(a.token);
 const heard = [];
 const ws = new WebSocket(`ws://127.0.0.1:4797/ws?t=${a.token}`);
@@ -52,7 +53,7 @@ let recs = await A('GET', `/api/projects/${p.id}/records`);
 const stOf = (r) => F('quotes', 'status').choices.find((c) => c.id === r.values[F('quotes', 'status').id])?.label;
 ok(stOf(recs.find((r) => r.id === q1.id)) === 'Viewed', 'opening it marks the quote Viewed');
 // accept
-const acc = await fetch(url + '/accept', { method: 'POST', body: new URLSearchParams({ name: 'Maria Lopez' }), redirect: 'manual' });
+const acc = await fetch(url + '/accept', { method: 'POST', body: new URLSearchParams({ name: 'Maria Lopez', v: await vOf(url) }), redirect: 'manual' });
 ok(acc.status === 303, 'accepting redirects back to the page');
 recs = await A('GET', `/api/projects/${p.id}/records`);
 const q1n = recs.find((r) => r.id === q1.id);
@@ -72,8 +73,8 @@ ok(stOf(q4n) === 'Declined' && q4n.values[F('quotes', 'accepted_by').id] === 'De
 // accept needs a name
 const q5 = await add('quotes', { title: 'Name check', items: { rows: [{ desc: 'x', qty: 1, price: 10 }] } });
 const s5 = await A('POST', `/api/records/${q5.id}/share`, {});
-await fetch(`${B}/q/${s5.share.token}/accept`, { method: 'POST', body: new URLSearchParams({ name: '' }), redirect: 'manual' });
-ok(stOf((await A('GET', `/api/projects/${p.id}/records`)).find((r) => r.id === q5.id)) === 'Sent', 'accepting without a name does nothing');
+await fetch(`${B}/q/${s5.share.token}/accept`, { method: 'POST', body: new URLSearchParams({ name: '', v: await vOf(`${B}/q/${s5.share.token}`) }), redirect: 'manual' });
+ok(['Sent', 'Viewed'].includes(stOf((await A('GET', `/api/projects/${p.id}/records`)).find((r) => r.id === q5.id))), 'accepting without a name does nothing (opening the page to get its form marks it Viewed, nothing more)');
 // expired
 const q6 = await add('quotes', { title: 'Old', valid_until: '2020-01-01', items: { rows: [{ desc: 'x', qty: 1, price: 10 }] } });
 const s6 = await A('POST', `/api/records/${q6.id}/share`, {});

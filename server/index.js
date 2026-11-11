@@ -1602,6 +1602,17 @@ function seatsSoon(ws) {
   }, 3_000));
 }
 // What Stripe says about a subscription, onto the team it's for.
+// The team's subscription is the one it has unless that one has ended; another live one appearing never silently
+// replaces it (that would mean the team pays twice): it's kept apart and the owners are told to cancel one.
+function takeSub(ws, sub) {
+  const b = ws.billing || {};
+  const mineLive = b.sub && LIVE_SUB.includes(b.status) && b.sub !== sub.id;
+  if (!mineLive) return applySub(ws, sub);
+  if (LIVE_SUB.includes(sub.status)) {
+    alarm('A team has two live subscriptions', new Error(`${ws.id}: ${b.sub} and ${sub.id}`));
+    for (const mb of ws.members) if (mb.role === 'owner') notify(ws.id, mb.id, { title: 'This team is subscribed twice', text: 'Open Manage billing and cancel the extra subscription, so you’re only charged once.', kind: 'billing', key: 'twosubs:' + sub.id });
+  }
+}
 function applySub(ws, sub) {
   const b = (ws.billing ||= {});
   const item = sub.items?.data?.[0];
@@ -1701,11 +1712,11 @@ async function stripeWebhook(req, res) {
   try {
     if (ev.type === 'checkout.session.completed' && o.mode === 'subscription') {
       const ws = db.workspaces[o.client_reference_id] || wsForStripe(o.metadata, o.customer);
-      if (ws && o.subscription) applySub(ws, await stripe.call('GET', `/subscriptions/${o.subscription}`));
+      if (ws?.billing?.checkout?.id === o.id) delete ws.billing.checkout;
+      if (ws && o.subscription) takeSub(ws, await stripe.call('GET', `/subscriptions/${o.subscription}`));
     } else if (/^customer\.subscription\.(created|updated|deleted)$/.test(ev.type)) {
       const ws = wsForStripe(o.metadata, o.customer);
-      // Only the team's current subscription counts; an old one ending doesn't end a new one.
-      if (ws && (!ws.billing?.sub || ws.billing.sub === o.id || ev.type !== 'customer.subscription.deleted')) applySub(ws, o);
+      if (ws) takeSub(ws, await stripe.call('GET', `/subscriptions/${encodeURIComponent(o.id)}`).catch(() => o));
     }
   } catch (e) {
     alarm('A Stripe webhook failed', e);
@@ -5439,6 +5450,12 @@ async function api(req, res, url) {
     if (!stripe.configured()) return send(res, 400, { error: 'Billing isn’t set up on this server.' });
     if (m === 'POST' && b === 'checkout') {
       if (ws.billing?.sub && LIVE_SUB.includes(ws.billing.status)) return send(res, 409, { error: 'This team is already subscribed. Use Manage billing.' });
+      const open = ws.billing?.checkout;
+      if (open && open.exp > Date.now()) {
+        const cur = await stripe.call('GET', `/checkout/sessions/${encodeURIComponent(open.id)}`).catch(() => null);
+        if (cur?.status === 'open' && cur.url) return send(res, 200, { url: cur.url });
+        if (cur?.status === 'complete') return send(res, 409, { error: 'That payment just went through. It can take a moment to show here.' });
+      }
       const me = ws.members.find((x) => x.id === auth.memberId);
       if (!ws.billing?.customer) {
         const c = await stripe.call('POST', '/customers', { name: ws.name, email: userOf(me)?.email || undefined, metadata: { wsId: ws.id } });
@@ -5451,6 +5468,8 @@ async function api(req, res, url) {
         subscription_data: { metadata: { wsId: ws.id } }, allow_promotion_codes: 'true',
         success_url: `${PUBLIC_URL}/?billing=done`, cancel_url: `${PUBLIC_URL}/?billing=cancel`,
       });
+      ws.billing.checkout = { id: session.id, exp: Date.now() + 23 * 3_600_000 };
+      save();
       return send(res, 200, { url: session.url });
     }
     if (m === 'POST' && b === 'portal') {
@@ -9051,6 +9070,23 @@ async function removeMember(ws, m, { removed = false } = {}) {
     hand(ch, 'ownerId');
     if (ch.memberIds) ch.memberIds = ch.memberIds.filter((x) => x !== id);
   }
+  // Job visits aren't only theirs: the customer is still expecting someone. Their place on a visit others are also on
+  // is dropped; a visit only they were going to goes to an owner, who's told, so it can be given to someone.
+  const visitJobs = new Set();
+  for (const e of Object.values(db.entries)) {
+    if (!theirs(e) || !e.visitId) continue;
+    const others = Object.values(db.entries).some((o) => o.visitId === e.visitId && o.id !== e.id && o.memberId !== id);
+    if (others || !heir) {
+      delete db.entries[e.id];
+      broadcast(wsId, { type: 'entry:remove', id: e.id, forMember: id });
+    } else {
+      e.memberId = heir.id;
+      delete e.cal;
+      notify(wsId, heir.id, { title: `${m.name}’s visit is yours for now`, text: `${e.text || 'A visit'} on ${e.date}. Give it to whoever’s going instead.`, kind: 'visit', key: 'visit-handed:' + e.id });
+    }
+    if (e.recordId) visitJobs.add(e.recordId);
+  }
+  for (const rid2 of visitJobs) { const rec = db.records[rid2]; if (rec) { syncJob(rec); visitNews(rec); } }
   // Only ever theirs: their Day, personal money, vault, signature, AI keys, Sidekick, plans.
   for (const e of Object.values(db.entries)) if (theirs(e)) delete db.entries[e.id];
   for (const x of Object.values(db.money)) if (theirs(x) && x.scope !== 'business') dropMoney(x);

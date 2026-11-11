@@ -35,6 +35,7 @@ async function tab(url) {
 }
 
 
+const vOf = async (u) => (await (await fetch(u)).text()).match(/name="v" value="([^"]+)"/)?.[1] || ''; // the accept form's fingerprint, as a browser sends it
 const A = await tab(APP);
 await A.until(`!!document.querySelector('#loginLinks a')`);
 await A.ev(`(() => { document.querySelector('[data-mode=create]').click(); const f = document.querySelector('#loginForm'); f.workspace.value = 'qt${Date.now()}'; f.name.value = 'Jo'; f.password.value = 'secret1'; f.device.value = 'A'; if (f.email && f.code !== undefined) { f.email.value = f.name.value.toLowerCase().replace(/[^a-z]/g, '') + f.workspace.value.replace(/[^a-z0-9]/gi, '') + '@t.test'; if (f.password.value.length < 8) f.password.value += 'pad1'; } f.requestSubmit(); })()`);
@@ -110,7 +111,7 @@ const link = APP + 'q/' + recs.find((r) => r.id === q.id).share.token;
 const page = await (await fetch(link)).text();
 ok(page.includes('Q-1001 · Showroom tint') && page.includes('Desert Auto') && page.includes('Maria Lopez') && page.includes('$2,232.83') && !page.includes('$70.00') && !page.includes('$840'), 'the customer page has the quote and client, not our costs');
 ok(await A.until(`[...document.querySelectorAll('#projects .pj-col')].find((c) => c.querySelector('.pj-col-h b').textContent === 'Viewed')?.textContent.includes('Showroom tint')`), 'when the customer opens it, it moves to Viewed');
-await fetch(link + '/accept', { method: 'POST', body: new URLSearchParams({ name: 'Maria Lopez' }), redirect: 'manual' });
+await fetch(link + '/accept', { method: 'POST', body: new URLSearchParams({ name: 'Maria Lopez', v: await vOf(link) }), redirect: 'manual' });
 ok(await A.until(`[...document.querySelectorAll('#toasts *')].some((t) => t.textContent.includes('Maria Lopez accepted Q-1001 · Showroom tint ($2,232.83)'))`), 'the team is told Maria accepted, with the total');
 ok(await A.until(`[...document.querySelectorAll('#projects .pj-col')].find((c) => c.querySelector('.pj-col-h b').textContent === 'Accepted')?.querySelector('.pj-col-sum')?.textContent === '$2,232.83'`), 'it moves to Accepted, and the column totals it');
 // PDF

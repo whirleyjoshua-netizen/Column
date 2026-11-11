@@ -100,9 +100,12 @@ try {
   ok(await until(async () => (await J('GET', '/api/billing')).body.seats === 3), 'and the team shows 3 seats');
 
   // it ends
-  r = await hook({ type: 'customer.subscription.updated', data: { object: { ...sub, status: 'past_due' } } });
+  // Stripe's own copy changes first (Kloomie reads it back, rather than trusting the event's copy).
+  sub.status = 'past_due';
+  r = await hook({ type: 'customer.subscription.updated', data: { object: { ...sub } } });
   ok((await J('GET', '/api/billing')).body.state === 'past_due' && (await J('POST', '/api/tasks', { text: 'still ok' })).status === 200, 'a failed payment warns but keeps working while Stripe retries');
-  await hook({ type: 'customer.subscription.deleted', data: { object: { ...sub, status: 'canceled' } } });
+  sub.status = 'canceled';
+  await hook({ type: 'customer.subscription.deleted', data: { object: { ...sub } } });
   r = await J('GET', '/api/billing');
   ok(r.body.state === 'ended' && r.body.readOnly, 'a cancelled subscription makes the team read-only again');
   ok(/subscription has ended/.test((await J('POST', '/api/tasks', { text: 'x' })).body.error), 'saying the subscription ended');
