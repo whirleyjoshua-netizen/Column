@@ -13,7 +13,7 @@ const CONTENT = process.env.DROPBOX_CONTENT || 'https://content.dropboxapi.com';
 const AUTH = process.env.DROPBOX_AUTH || 'https://www.dropbox.com';
 const SCOPES = 'account_info.read files.metadata.read files.content.read';
 
-export function dropboxModule({ db, rid, save, send, readJson, seal, unseal, broadcast, publicUrl, receiveUpload, addItem, baseItem, uploadPlace, publicItem, FILES_DIR, mimeFor, cleanName, alarm }) {
+export function dropboxModule({ noRoom = () => null, db, rid, save, send, readJson, seal, unseal, broadcast, publicUrl, receiveUpload, addItem, baseItem, uploadPlace, publicItem, FILES_DIR, mimeFor, cleanName, alarm }) {
   db.dropbox ||= {};
   const env = (k) => process.env[k] || '';
   const configured = () => !!(env('DROPBOX_APP_KEY') && env('DROPBOX_APP_SECRET'));
@@ -117,6 +117,8 @@ export function dropboxModule({ db, rid, save, send, readJson, seal, unseal, bro
         const meta = await rpc(c, 'files/get_metadata', { path: id });
         if (meta['.tag'] !== 'file') return send(res, 400, { error: 'Only files can be added, not folders.' });
         if (meta.is_downloadable === false) return send(res, 400, { error: `${meta.name} can’t be downloaded from Dropbox (it’s a Dropbox Paper or cloud document).` });
+        const full = noRoom(ws.id, Number(meta.size) || 0);
+        if (full) return send(res, 413, { error: full });
         const token = await access(c);
         const r = await fetch(`${CONTENT}/2/files/download`, { method: 'POST', headers: { authorization: 'Bearer ' + token, 'Dropbox-API-Arg': headerArg({ path: id }) } });
         if (!r.ok || !r.body) throw fail(`Couldn’t download ${meta.name} from Dropbox.`, 502);

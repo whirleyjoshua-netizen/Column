@@ -23,6 +23,7 @@ import { twoStepModule } from './twostep.js';
 import { twilioModule } from './twilio.js';
 import { leadsModule } from './leads.js';
 import { dropboxModule } from './dropbox.js';
+import { safeFetch } from './safefetch.js';
 import { EVENTS as HOOK_EVENTS } from './projects.js';
 import { hqModule } from './hq.js';
 import { rulesModule } from './rules.js';
@@ -1085,7 +1086,19 @@ function jobCustomerOut(rec) {
 // A webhook event from somewhere in the app. The data is only worked out when some webhook wants it.
 function hook(wsId, type, data, by) {
   if (!Object.values(db.webhooks || {}).some((h) => h.wsId === wsId && h.active && !h.projectId && h.events.includes(type))) return;
-  try { PJ.emit(wsId, type, typeof data === 'function' ? data() : data, by); } catch (e) { alarm('A webhook event failed to build', e); }
+  try {
+    const d = typeof data === 'function' ? data() : data;
+    if (hookPrivate(wsId, type, d)) return;
+    PJ.emit(wsId, type, d, by);
+  } catch (e) { alarm('A webhook event failed to build', e); }
+}
+const privateRecord = (recordId) => { const r = recordId && db.records[recordId]; return !!(r && db.projects[r.projectId]?.private); };
+const privateTask = (t) => !!t && (!!taskCamp(t)?.private || privateRecord(t.recordId));
+function hookPrivate(wsId, type, d) {
+  if (type.startsWith('task.')) return privateTask(db.tasks[d?.id]);
+  if (type.startsWith('visit.')) return privateRecord(d?.job_id);
+  if (type === 'file.received') { const st = db.workspaces[wsId]?.stacks.find((x) => x.id === d?.stack?.id); return !!(st?.campaignId && db.campaigns[st.campaignId]?.private); }
+  return false;
 }
 // A job deleted takes its visits with it.
 function dropVisits(rec) {
@@ -1211,21 +1224,51 @@ function serveFile(req, res, filePath, { name, mime, download, cache }) {
   fs.createReadStream(filePath).pipe(res);
 }
 
-async function receiveUpload(req, dest) {
+// Storage limits. Files live on one disk shared by every team, so: a size per file, a total per team, and uploads
+// stop while the disk is nearly full (whatever the team's own total). All adjustable without a deploy.
+const MB = 1024 * 1024;
+const MAX_FILE = (Number(process.env.MAX_FILE_MB) || 1024) * MB;
+const TEAM_STORAGE = (Number(process.env.TEAM_STORAGE_MB) || 2048) * MB;
+const DISK_RESERVE = (Number(process.env.DISK_RESERVE_MB) || 300) * MB;
+function teamBytes(wsId) {
+  let n = 0;
+  for (const it of Object.values(db.items)) if (it.wsId === wsId && (it.type === 'file' || it.type === 'folder')) n += Number(it.size) || 0;
+  for (const up of Object.values(db.uploads)) if (up.wsId === wsId) n += Number(up.size) || 0;
+  return n;
+}
+function diskFree() {
+  try { const s = fs.statfsSync(FILES_DIR); return s.bavail * s.bsize; } catch { return Infinity; }
+}
+const mbText = (n) => (n >= 1024 * MB ? `${Math.round((n / (1024 * MB)) * 10) / 10} GB` : `${Math.round(n / MB)} MB`);
+// Null when there's room for `bytes` more in this team; otherwise why not.
+function noRoom(wsId, bytes, { perFile = MAX_FILE } = {}) {
+  if (bytes > perFile) return `That file is too big. The limit is ${mbText(perFile)}.`;
+  if (teamBytes(wsId) + bytes > TEAM_STORAGE) return `This team’s files are full (${mbText(TEAM_STORAGE)}). Delete some old ones to make room.`;
+  if (diskFree() - bytes < DISK_RESERVE) return 'Kloomie is short of space for files right now. Try again later.';
+  return null;
+}
+// Writes what's coming in to dest, never more than max bytes (it stops and throws as soon as it's over).
+async function receiveUpload(req, dest, max = MAX_FILE) {
   let size = 0;
   let crc = 0;
+  let over = false;
   req.on('data', (c) => {
     size += c.length;
     crc = zlib.crc32(c, crc);
+    if (size > max && !over) { over = true; req.destroy(Object.assign(new Error('Too big'), { status: 413 })); }
   });
   try {
     await pipeline(req, fs.createWriteStream(dest));
   } catch (e) {
     await fsp.rm(dest, { force: true });
+    if (over) throw Object.assign(new Error(`That file is too big. The limit is ${mbText(max)}.`), { status: 413 });
     throw Object.assign(new Error('Upload interrupted'), { status: 400 });
   }
   return { size, crc };
 }
+// The size a request says it has, checked before reading it (a request with no size can't be checked up front, so
+// receiveUpload's limit is what stops it).
+const declaredSize = (req) => { const n = Number(req.headers['content-length']); return Number.isFinite(n) && n >= 0 ? n : null; };
 
 // Folder-relative path with no way to climb out of the folder.
 const cleanRel = (p) => String(p || 'file').replace(/\\/g, '/').split('/').filter((x) => x && x !== '.' && x !== '..').join('/') || 'file';
@@ -1463,6 +1506,21 @@ function seesDir(ws, dirId, memberId) {
   return !!r && (!r.private || r.ownerId === memberId);
 }
 const validDir = (ws, dirId, memberId) => (dirId && seesDir(ws, dirId, memberId) ? dirId : null);
+// Who can see what's in a folder: the whole team, or one person (a private top folder). Null means not in a folder.
+const dirAudience = (ws, dirId) => { if (!dirId) return 'team'; const r = dirRoot(ws, dirId); return r?.private ? 'only:' + r.ownerId : 'team'; };
+// Moving something where different people can see it is for whoever it belongs to (or an owner or admin), and into
+// someone's private folder only if everything moved is theirs: nobody can hide the team's things, or delete them by
+// leaving, by moving them into a private folder of their own.
+function mayMoveDir(ws, auth, d, toParent) {
+  const now = dirAudience(ws, d.id);
+  const next = toParent ? dirAudience(ws, toParent) : d.private ? 'only:' + d.ownerId : 'team';
+  if (now === next) return true;
+  if (isAdmin(auth)) return true;
+  const tree = dirTree(ws, d.id);
+  if (ws.dirs.some((x) => tree.includes(x.id) && x.ownerId && x.ownerId !== auth.memberId)) return false;
+  return !Object.values(db.items).some((it) => it.wsId === ws.id && tree.includes(it.dirId) && !ownsItem(auth, it));
+}
+const mayMoveItem = (ws, auth, it, toDir) => dirAudience(ws, it.dirId) === dirAudience(ws, toDir) || isAdmin(auth) || ownsItem(auth, it);
 const dirDepth = (ws, dirId) => {
   let n = 0;
   for (let d = ws.dirs.find((x) => x.id === dirId); d && n <= DIR_DEPTH; d = ws.dirs.find((x) => x.id === d.parentId)) n++;
@@ -3002,6 +3060,36 @@ function duplicateGroups(wsId) {
 }
 // Folds the others into the first (the oldest): its empty fields filled, tags and notes added, any
 // connector link kept, and calls logged against them pointed at it.
+// Everything that points at a contact, pointed at another (after a merge) or cleared (after a delete): contact fields
+// on records (a job's customer, a deal's contact), text threads, list rows, email sends and logged calls. Otherwise a
+// job would point at a contact that's gone, and its reminders and messages would silently reach nobody.
+function repointContact(wsId, fromId, toId = null) {
+  for (const r of Object.values(db.records)) {
+    if (r.wsId !== wsId) continue;
+    const t = db.projects[r.projectId]?.types.find((x) => x.id === r.typeId);
+    let changed = false;
+    for (const f of t?.fields || []) {
+      if (f.type !== 'contact' || r.values[f.id] !== fromId) continue;
+      if (toId) r.values[f.id] = toId;
+      else delete r.values[f.id];
+      changed = true;
+    }
+    if (changed) { r.updatedAt = Date.now(); PJ.recordNews(r, 'record.updated', 'Kloomie'); }
+  }
+  for (const x of Object.values(db.texts || {})) if (x.wsId === wsId && x.contactId === fromId) x.contactId = toId;
+  for (const l of Object.values(db.lists)) if (l.wsId === wsId) for (const row of l.rows || []) if (row.contactId === fromId) row.contactId = toId;
+  for (const s of Object.values(db.sends)) if (s.wsId === wsId) for (const row of s.to || []) if (row.contactId === fromId) row.contactId = toId;
+  for (const a of Object.values(db.attempts)) if (a.contactId === fromId) a.contactId = toId; // contact ids are unique across teams
+}
+// Whether a record (a job's customer, a deal's contact) points at this contact.
+function contactInUse(wsId, id) {
+  for (const r of Object.values(db.records)) {
+    if (r.wsId !== wsId) continue;
+    const t = db.projects[r.projectId]?.types.find((x) => x.id === r.typeId);
+    if ((t?.fields || []).some((f) => f.type === 'contact' && r.values[f.id] === id)) return true;
+  }
+  return false;
+}
 function mergeContacts(keep, others) {
   for (const y of others) {
     if (y.via && !keep.via) { for (const k of ownsOf(y.via)) keep[k] = y[k]; keep.via = y.via; }
@@ -3011,7 +3099,7 @@ function mergeContacts(keep, others) {
     keep.ext = { ...y.ext, ...keep.ext };
     for (const k of ['dne', 'extDne', 'assignedTo', 'lostReason', 'unsub']) if (y[k] && !keep[k]) keep[k] = y[k];
     keep.createdAt = Math.min(keep.createdAt, y.createdAt);
-    for (const a of Object.values(db.attempts)) if (a.contactId === y.id) a.contactId = keep.id;
+    repointContact(keep.wsId, y.id, keep.id);
     delete db.contacts[y.id];
   }
   keep.updatedAt = Date.now();
@@ -3060,7 +3148,8 @@ function fillContacts(ws, src, people, { announce = false } = {}) {
   for (const x of contactsOf(ws.id)) {
     if (!x.ext?.[src] || kept.has(x.id)) continue;
     // Gone from there: it goes too, unless the team made it theirs (a note, tags, do-not-contact, or a stage the connector doesn't set).
-    if (x.via === src && !x.note && !x.tags.length && !x.dne && !(x.stage && !ownsOf(src).includes('stage'))) { delete db.contacts[x.id]; continue; }
+    // Still a job's or deal's contact: kept as an ordinary contact (no longer from the connector), not lost.
+    if (x.via === src && !x.note && !x.tags.length && !x.dne && !(x.stage && !ownsOf(src).includes('stage'))) { if (contactInUse(x.wsId, x.id)) { delete x.via; continue; } repointContact(x.wsId, x.id, null); delete db.contacts[x.id]; continue; }
     const { [src]: _, ...rest } = x.ext;
     Object.assign(x, { ext: rest, via: x.via === src ? null : x.via, extDne: false, unsub: null });
   }
@@ -3125,13 +3214,14 @@ function pssUrl(v) {
     return null;
   }
   const local = ['localhost', '127.0.0.1', '[::1]'].includes(u.hostname);
-  return u.protocol === 'https:' || (local && u.protocol === 'http:') ? u.origin : null;
+  return u.protocol === 'https:' || (local && u.protocol === 'http:' && !PUBLIC_URL.startsWith('https://')) ? u.origin : null;
 }
 async function pssGet(url, key, route, body) {
   let r;
   try {
-    r = await fetch(url + route, {
-      method: body ? 'POST' : 'GET', redirect: 'error', signal: AbortSignal.timeout(20_000),
+    const local = !PUBLIC_URL.startsWith('https://') && /^http:\/\/(localhost|127\.0\.0\.1|\[::1\])(:|\/|$)/.test(url);
+    r = await safeFetch(url + route, {
+      method: body ? 'POST' : 'GET', timeout: 20_000, maxBytes: 20_000_000, allowLocal: local,
       headers: { authorization: `Bearer ${key}`, ...(body ? { 'content-type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined,
     });
   } catch {
@@ -3783,10 +3873,12 @@ async function requestApi(req, res, url, token, part) {
   const len = Number(req.headers['content-length']);
   if (!Number.isFinite(len)) return send(res, 411, { error: 'Missing file size' });
   if (len > REQ_MAX) return send(res, 413, { error: 'That file is too big. The limit is 500 MB.' });
+  const full = noRoom(ws.id, len, { perFile: REQ_MAX });
+  if (full) { req.resume(); return send(res, 413, { error: 'This link can’t take more files right now. Let whoever sent it know.' }); }
   const name = cleanName(url.searchParams.get('name'));
   const from = String(url.searchParams.get('from') || '').replace(/\s+/g, ' ').trim().slice(0, 60) || 'Someone';
   const id = rid();
-  const { size } = await receiveUpload(req, path.join(FILES_DIR, id));
+  const { size } = await receiveUpload(req, path.join(FILES_DIR, id), Math.min(REQ_MAX, len));
   // Kept (pinned) so auto-clear never throws away what a customer sent.
   const item = addItem({
     id, wsId: ws.id, by: from + ' (link)', memberId: r.memberId, device: 'Upload link', deviceId: null, createdAt: Date.now(),
@@ -6760,6 +6852,7 @@ async function api(req, res, url) {
     if (m === 'DELETE') {
       if (x.via) return send(res, 400, { error: 'This contact comes from PSS, so it would come back. Remove it in PSS, or mark it do not contact.' });
       const gone = API.apiContact(x);
+      repointContact(ws.id, x.id, null);
       delete db.contacts[x.id];
       save();
       broadcast(ws.id, { type: 'contact:remove', id: x.id, forAdmins: true });
@@ -7699,6 +7792,7 @@ async function api(req, res, url) {
         const pid = body.parentId || null;
         if (pid && dirTree(ws, d.id).includes(pid)) return send(res, 400, { error: 'A folder can’t go inside itself.' });
         if (!parentOk(pid)) return send(res, 404, { error: 'That folder is gone' });
+        if (!mayMoveDir(ws, auth, d, pid)) return send(res, 403, { error: 'That would change who can see things other people made. Ask whoever made them, or an owner or admin.' });
         const deepest = Math.max(...dirTree(ws, d.id).map((id) => dirDepth(ws, id))) - dirDepth(ws, d.id) + 1;
         if ((pid ? dirDepth(ws, pid) : 0) + deepest > DIR_DEPTH) return send(res, 400, { error: `Folders go ${DIR_DEPTH} deep at most.` });
         d.parentId = pid;
@@ -7997,6 +8091,7 @@ async function api(req, res, url) {
       // Saving to a folder takes it out of its stack; moving it to a stack takes it out of its folder.
       if (body.dirId !== undefined && it.type !== 'message' && !it.channelId) {
         if (body.dirId && !validDir(ws, body.dirId, auth.memberId)) return send(res, 404, { error: 'That folder is gone' });
+        if (!mayMoveItem(ws, auth, it, body.dirId || null)) return send(res, 403, { error: 'That would change who can see something someone else made. Ask them, or an owner or admin.' });
         if (it.dirId && !body.dirId) it.pinned = true;
         it.dirId = body.dirId || null;
         if (it.dirId) it.stackId = null;
@@ -8032,6 +8127,8 @@ async function api(req, res, url) {
       const body = await readJson(req);
       const size = Math.floor(Number(body.size));
       if (!Number.isFinite(size) || size < 0) return send(res, 400, { error: 'Bad size' });
+      const full = noRoom(ws.id, size);
+      if (full) return send(res, 413, { error: full });
       let target;
       if (body.folder) {
         const folder = db.items[body.folder];
@@ -8061,14 +8158,21 @@ async function api(req, res, url) {
       await fsp.truncate(partPath(up), up.received);
       let n = 0;
       let crc = up.crc;
+      let over = false;
+      const room = up.size - up.received;
+      // A chunk that says it's bigger than what's left is refused before it's read (a clear answer, not a cut-off).
+      if ((declaredSize(req) ?? 0) > room) { req.resume(); return send(res, 400, { error: 'More data than expected', offset: up.received }); }
       req.on('data', (chunk) => {
         n += chunk.length;
         crc = zlib.crc32(chunk, crc);
+        // Never more than the size it started with: stop as soon as a chunk goes past it.
+        if (n > room && !over) { over = true; req.destroy(new Error('Too much')); }
       });
       try {
         await pipeline(req, fs.createWriteStream(partPath(up), { flags: 'a' }));
       } catch {
-        return send(res, 400, { error: 'Chunk interrupted', offset: up.received });
+        await fsp.truncate(partPath(up), up.received).catch(() => {});
+        return send(res, 400, { error: over ? 'More data than expected' : 'Chunk interrupted', offset: up.received });
       }
       if (up.received + n > up.size) {
         await fsp.truncate(partPath(up), up.received);
@@ -8121,6 +8225,8 @@ async function api(req, res, url) {
       }
       const relPath = cleanRel(url.searchParams.get('relPath'));
       const fid = rid();
+      const full = noRoom(ws.id, declaredSize(req) || 0);
+      if (full) { req.resume(); return send(res, 413, { error: full }); }
       const { size, crc } = await receiveUpload(req, path.join(FILES_DIR, fid));
       folder.files.push({ fid, relPath, size, crc, mtime: Number(url.searchParams.get('mtime')) || Date.now() });
       folder.size = folder.files.reduce((n, f) => n + f.size, 0);
@@ -8129,6 +8235,8 @@ async function api(req, res, url) {
     }
     const name = cleanName(url.searchParams.get('name'));
     const id = rid();
+    const full = noRoom(ws.id, declaredSize(req) || 0);
+    if (full) { req.resume(); return send(res, 413, { error: full }); }
     const { size } = await receiveUpload(req, path.join(FILES_DIR, id));
     const item = addItem({
       ...baseItem(auth, { type: 'file', name, size, mime: mimeFor(name, url.searchParams.get('type')) }),
@@ -8179,11 +8287,16 @@ async function api(req, res, url) {
     const word = isWordFile(it);
     if (!isTextFile(it) && !word) return send(res, 400, { error: 'Only text files and Word documents can be edited here.' });
     const tmp = path.join(FILES_DIR, '.edit-' + rid());
-    const { size } = await receiveUpload(req, tmp);
-    if (size > (word ? 100_000_000 : 5_000_000)) {
-      await fsp.rm(tmp, { force: true });
-      return send(res, 413, { error: 'Too big to edit here' });
+    const limit = word ? 100_000_000 : 5_000_000;
+    if ((declaredSize(req) || 0) > limit) { req.resume(); return send(res, 413, { error: 'Too big to edit here' }); }
+    const full = noRoom(ws.id, Math.max(0, (declaredSize(req) || 0) - (Number(it.size) || 0)));
+    if (full) { req.resume(); return send(res, 413, { error: full }); }
+    try {
+      await receiveUpload(req, tmp, limit);
+    } catch (e) {
+      return send(res, e.status === 413 ? 413 : 400, { error: e.status === 413 ? 'Too big to edit here' : e.message });
     }
+    const size = (await fsp.stat(tmp)).size;
     // A Word document is a zip; anything else would leave a file Word can't open.
     if (word) {
       const fh = await fsp.open(tmp);
@@ -8540,7 +8653,7 @@ function cloudScripts() {
   return [c.dropbox ? ' https://www.dropbox.com' : '', c.google ? ' https://apis.google.com https://accounts.google.com https://www.gstatic.com' : '', c.onedrive ? ' https://js.live.net' : ''].join('');
 }
 // Dropbox listed inside Kloomie, per person (dropbox.js).
-const DBX = dropboxModule({ db, rid, save, send, readJson, seal, unseal, broadcast, publicUrl: PUBLIC_URL, receiveUpload, addItem, baseItem, uploadPlace, publicItem, FILES_DIR, mimeFor, cleanName, alarm });
+const DBX = dropboxModule({ noRoom: (...a) => noRoom(...a), db, rid, save, send, readJson, seal, unseal, broadcast, publicUrl: PUBLIC_URL, receiveUpload, addItem, baseItem, uploadPlace, publicItem, FILES_DIR, mimeFor, cleanName, alarm });
 // Leads from the team's website and other tools (leads.js).
 const LEADS = leadsModule({ db, save, readJson, send, isAdmin, cleanText, contactsOf, newContact, applyContact, emailKey, phoneKey, EMAIL_RE, contactNews, refreshLiveSoon, automate,
   hook: (wsId, type, x) => hook(wsId, type, () => API.apiContact(x), 'Lead'), notifyAdmins, escHtml, brandOf, logoUrl, clientIp, CONTACT_MAX, publicUrl: PUBLIC_URL, offline, teamDay });
@@ -8549,7 +8662,7 @@ const TS = twoStepModule({ db, save, seal, unseal, readJson, send, appName: proc
 // QuickBooks Online: invoices and payments into the team's books, payments recorded there back (quickbooks.js).
 const QB = quickbooksModule({ db, save, broadcast, cleanText, readJson, send, seal, unseal, isAdmin, INV, PJ, publicUrl: PUBLIC_URL, alarm, offline, teamDay });
 // The public API for Contacts, Tasks, Visits and Invoices, and webhooks apps subscribe to (publicapi.js).
-const API = publicApiModule({ db, save, broadcast, rid, cleanText, readJson, send, badRequest, PJ, INV, isAdmin, teamDay, EVENTS: HOOK_EVENTS, EMAIL_RE,
+const API = publicApiModule({ canSee: (...a) => canSee(...a), privateTask: (t) => privateTask(t), readOnlyMsg: (ws) => readOnlyBlock(ws, 'v1', 'POST'), db, save, broadcast, rid, cleanText, readJson, send, badRequest, PJ, INV, isAdmin, teamDay, EVENTS: HOOK_EVENTS, EMAIL_RE,
   publicContact, contactsOf, newContact, applyContact, contactNews, refreshLiveSoon, automate, CONTACT_MAX, emailKey, phoneKey,
   applyTask, publicTask, syncEntries, setVisit, visitEntries, publicVisit, dropVisit, jobOfRecord, jobLabel, jobCustomer: jobCustomerOut, VISIT_KINDS, fmtMinutes });
 

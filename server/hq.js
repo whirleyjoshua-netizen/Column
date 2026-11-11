@@ -7,7 +7,7 @@
 // The website import reads the team's own public site (the home page and a handful of its pages, like About,
 // Services and FAQ), and asks the team's AI to suggest entries from what the pages actually say.
 import dns from 'node:dns/promises';
-import net from 'node:net';
+import { privateIp, safeFetch } from './safefetch.js';
 
 export const PILLARS = [
   { key: 'identity', name: 'Company identity', about: 'Who you are and what you do', kinds: ['about', 'service', 'area', 'model', 'different', 'notwanted'] },
@@ -229,14 +229,6 @@ export function hqModule({ db, save, broadcast, rid, cleanText, readJson, send, 
   }
 
   // ---------- reading the team's website ----------
-  const privateIp = (ip) => {
-    if (net.isIPv4(ip)) {
-      const [a1, b1] = ip.split('.').map(Number);
-      return a1 === 10 || a1 === 127 || a1 === 0 || (a1 === 169 && b1 === 254) || (a1 === 172 && b1 >= 16 && b1 <= 31) || (a1 === 192 && b1 === 168) || (a1 === 100 && b1 >= 64 && b1 <= 127);
-    }
-    const s = ip.toLowerCase();
-    return s === '::1' || s === '::' || s.startsWith('fc') || s.startsWith('fd') || s.startsWith('fe80') || s.startsWith('::ffff:');
-  };
   async function publicUrl(v) {
     let u;
     try {
@@ -257,24 +249,14 @@ export function hqModule({ db, save, broadcast, rid, cleanText, readJson, send, 
   async function getPage(start) {
     let u = start;
     for (let hop = 0; hop < 4; hop++) {
-      const r = await fetch(u, { redirect: 'manual', signal: AbortSignal.timeout(10_000), headers: { 'user-agent': 'Mozilla/5.0 (compatible; KloomieBot/1.0; +https://www.kloomie.com)', accept: 'text/html,application/xhtml+xml' } });
-      if (r.status >= 300 && r.status < 400 && r.headers.get('location')) {
-        u = await publicUrl(new URL(r.headers.get('location'), u).href);
+      const r = await safeFetch(u.href, { allowLocal, httpsOnly: false, timeout: 10_000, maxBytes: PAGE_BYTES, truncate: true, headers: { 'user-agent': 'Mozilla/5.0 (compatible; KloomieBot/1.0; +https://www.kloomie.com)', accept: 'text/html,application/xhtml+xml' } });
+      if (r.status >= 300 && r.status < 400 && r.headers.location) {
+        u = await publicUrl(new URL(r.headers.location, u).href);
         continue;
       }
       if (!r.ok) throw new Error(`${u.hostname} answered ${r.status}`);
-      if (!/html/i.test(r.headers.get('content-type') || 'text/html')) throw new Error('Not a web page');
-      const reader = r.body.getReader();
-      const chunks = [];
-      let n = 0;
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        n += value.length;
-        if (n > PAGE_BYTES) { reader.cancel().catch(() => {}); break; }
-        chunks.push(value);
-      }
-      return { url: u, html: Buffer.concat(chunks).toString('utf8') };
+      if (!/html/i.test(r.headers['content-type'] || 'text/html')) throw new Error('Not a web page');
+      return { url: u, html: await r.text() };
     }
     throw new Error('Too many redirects');
   }

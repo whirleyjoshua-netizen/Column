@@ -16,6 +16,8 @@ export function createMailer({ token, from, outbox, appName }) {
     const addr = /<([^>]+)>/.exec(from || '')?.[1] || from;
     const sender = fromName ? `"${String(fromName).replace(/["\\<>\r\n]/g, '').slice(0, 60)}" <${addr}>` : from;
     if (mode === 'outbox') {
+      // Tests can make the stand-in take as long as a real send (Resend answers over the network), to catch races.
+      if (Number(process.env.MAIL_OUTBOX_DELAY_MS) > 0) await new Promise((r) => setTimeout(r, Number(process.env.MAIL_OUTBOX_DELAY_MS)));
       fs.mkdirSync(outbox, { recursive: true });
       const file = path.join(outbox, `${Date.now()}-${crypto.randomBytes(4).toString('hex')}.json`);
       fs.writeFileSync(file, JSON.stringify({ to, subject, text, html, tag, fromName, replyTo, at: Date.now() }));

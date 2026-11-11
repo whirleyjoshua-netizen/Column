@@ -9,6 +9,8 @@
 export function publicApiModule(deps) {
   const { db, save, broadcast, rid, cleanText, readJson, send, badRequest, PJ, INV, isAdmin, teamDay } = deps;
   const iso = (t) => (t ? new Date(t).toISOString() : null);
+  // A task the key's maker can see in Kloomie (their visibility rules), and not a private campaign's or project's.
+  const apiSees = (auth, t) => (deps.canSee ? deps.canSee(auth, 'task', t) : true) && !deps.privateTask?.(t);
   const fail = (status, msg) => Object.assign(new Error(msg), { status });
   const memberOut = (ws, id) => { const m = id && ws.members.find((x) => x.id === id); return m ? { id: m.id, name: m.name } : null; };
   const memberIn = (ws, v) => {
@@ -177,7 +179,7 @@ export function publicApiModule(deps) {
     const m = req.method;
     if (!id) {
       if (m === 'GET') {
-        let all = Object.values(db.tasks).filter((t) => t.wsId === ws.id);
+        let all = Object.values(db.tasks).filter((t) => t.wsId === ws.id && apiSees(auth, t));
         if (qs.get('done') === 'true' || qs.get('done') === 'false') all = all.filter((t) => !!t.done === (qs.get('done') === 'true'));
         if (qs.get('assignee_id')) all = all.filter((t) => t.assigneeId === qs.get('assignee_id'));
         if (qs.get('job_id')) all = all.filter((t) => t.recordId === qs.get('job_id'));
@@ -196,13 +198,13 @@ export function publicApiModule(deps) {
         if (t.recordId) PJ.recordActivity(t.recordId, { kind: 'task', what: 'added', note: t.text, taskId: t.id, by: auth.member });
         save();
         broadcast(ws.id, { type: 'task', task: deps.publicTask(t) });
-        PJ.emit(ws.id, 'task.created', apiTask(t), auth.member);
+        if (!deps.privateTask?.(t)) PJ.emit(ws.id, 'task.created', apiTask(t), auth.member);
         return send(res, 201, apiTask(t));
       }
       throw fail(405, 'Use GET or POST.');
     }
     const t = db.tasks[id];
-    if (!t || t.wsId !== ws.id) return send(res, 404, { error: 'No task with that id.' });
+    if (!t || t.wsId !== ws.id || !apiSees(auth, t)) return send(res, 404, { error: 'No task with that id.' });
     if (m === 'GET') return send(res, 200, apiTask(t));
     if (m === 'PATCH') {
       write();
@@ -227,7 +229,7 @@ export function publicApiModule(deps) {
       broadcast(ws.id, { type: 'task', task: deps.publicTask(next) });
       if (finished) {
         setImmediate(() => db.tasks[next.id]?.done && deps.automate(ws.id, 'task.done', { task: next, campaign: null, who: auth.member, whoId: auth.memberId }));
-        PJ.emit(ws.id, 'task.done', apiTask(next), auth.member);
+        if (!deps.privateTask?.(next)) PJ.emit(ws.id, 'task.done', apiTask(next), auth.member);
       }
       return send(res, 200, apiTask(next));
     }
@@ -378,6 +380,11 @@ export function publicApiModule(deps) {
     if (a.limited) return send(res, 429, { error: 'Too many requests. The limit is 300 a minute per key.' });
     const [what, ...rest] = parts;
     const { ws, auth, key } = a;
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+      if (ws.deleteAt) return send(res, 423, { error: 'This team is being deleted, so nothing can be changed.' });
+      const locked = deps.readOnlyMsg?.(ws);
+      if (locked) return send(res, 402, { error: locked });
+    }
     const qs = new URL(req.url, 'http://x').searchParams;
     const write = () => { if (!key.write) throw fail(403, 'This key can only read.'); };
     if (what === 'me' && req.method === 'GET') return send(res, 200, { team: ws.name, key: key.name, write: key.write, role: auth.role, events: deps.EVENTS });

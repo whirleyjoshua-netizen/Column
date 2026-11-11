@@ -122,8 +122,9 @@ export function rulesModule({ db, save, broadcast, rid, cleanText, readJson, sen
     if (!x) return send(res, 404, { error: 'That request is gone.' });
     if (m === 'POST' && (c === 'approve' || c === 'decline')) {
       if (!canApprove(ws, auth.memberId)) return send(res, 403, { error: 'Only the people who approve can do that.' });
-      if (x.status !== 'pending') return send(res, 409, { error: `That was already ${x.status}.` });
       const body = await readJson(req);
+      // Checked after reading, and decide() marks it before anything waits, so it can't be decided twice at once.
+      if (x.status !== 'pending') return send(res, 409, { error: `That was already ${x.status}.` });
       await decide(ws, auth, x, c === 'approve', body.note);
       return send(res, 200, { approval: publicApproval(x), ...state(ws, auth) });
     }

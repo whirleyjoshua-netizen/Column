@@ -20,15 +20,15 @@ Reviewer areas: A sign-in and accounts · B team isolation (no cross-team access
 ## High
 | ID | Finding | Status |
 |---|---|---|
-| A1 / E2 | Removing a member leaves their API keys working (now as a member), and any webhooks those keys made keep pushing team events. | fixed (tests/audit_auth.mjs: fails on 2c97941, passes after) |
+| A1 / E2 | Removing a member leaves their API keys working (now as a member), and any webhooks those keys made keep pushing team events. | fixed e3c442b, live (tests/audit_auth.mjs) |
 | A2 | Linking a name-only login to an email account asks only for the password, so two-step sign-in can be bypassed; after linking, password change, account delete and email change reach the victim's account. | fixed (tests/audit_auth.mjs) |
 | B1 | A removed or logged-out member's open live connection keeps receiving team updates (sockets are found through tokens, and the token is already gone). | fixed: endSession closes the connection; broadcast drops connections whose session or member is gone (audit_auth) |
 | H3 | The full session token is put in URLs (file links, image sources, the export link, drag-out data), and files are cached for a year after sign-out. | reported |
-| D2 | No storage limit per team or overall on a 5 GB shared volume. Anonymous file-request links accept 500 MB × 200 files per hour per address; editing writes the whole body before the size check; Dropbox import has no size check. | reported |
-| E1 | Self-hosted Postiz address: checked once when saved, then fetched with redirects followed and no re-check, and the reply is shown back. That makes it a readable request into private or internal addresses, plus unbounded reply size. | reported |
+| D2 | No storage limit per team or overall on a 5 GB shared volume. Anonymous file-request links accept 500 MB × 200 files per hour per address; editing writes the whole body before the size check; Dropbox import has no size check. | fixed (tests/audit_storage.mjs): MAX_FILE_MB, TEAM_STORAGE_MB and DISK_RESERVE_MB, checked before reading when the size is declared and enforced while arriving; resumable uploads checked at start and per chunk; file-request links and Dropbox import too |
+| E1 | Self-hosted Postiz address: checked once when saved, then fetched with redirects followed and no re-check, and the reply is shown back. That makes it a readable request into private or internal addresses, plus unbounded reply size. | fixed (tests/audit_safefetch.mjs): server/safefetch.js checks the address at connect time (no DNS-rebinding gap), refuses non-public ranges including IPv4 inside IPv6, follows no redirects unless asked, caps the reply; used by Postiz, webhooks, the HQ website reader and PSS |
 | F2 | Any member can publish to the company's social accounts through the Marketing agent (draft_social_post has no role check; connecting Postiz is admin-only). | fixed in code: Postiz tools are owner/admin only for agents too (an agent test with a connected Postiz is still to add) |
 | G1 | A customer can be charged twice: each Pay click opens a new Stripe session for the full balance and old ones stay valid. Paid sessions and manual or API payments aren't checked against the balance, which is clamped to 0 so overpayment is hidden. | fixed (tests/audit_money.mjs: one open card page, reused; closed in Stripe when a payment is recorded, the lines change or it's voided; manual and API payments capped at what's owed; any overpayment flagged to admins) |
-| G2 | Merging or deleting a contact leaves job and record contact fields, texts and list rows pointing at a contact that no longer exists. Reminders and "on my way" silently go to nobody, and invoices lose "Bill to". | reported |
+| G2 | Merging or deleting a contact leaves job and record contact fields, texts and list rows pointing at a contact that no longer exists. Reminders and "on my way" silently go to nobody, and invoices lose "Bill to". | fixed (tests/audit_money.mjs): repointContact on merge, delete and connector drops; a connector contact still on a job is kept, unlinked |
 
 ## Medium
 | ID | Finding | Status |
@@ -40,8 +40,8 @@ Reviewer areas: A sign-in and accounts · B team isolation (no cross-team access
 | A7 / H6 | Signing out (everywhere, password reset or change) leaves push notifications going to that device. | fixed: endSession drops that device's subscription (audit_auth) |
 | A8 | Wrong current-password tries on change-password and email change aren't limited, and scrypt runs synchronously on the request path. | fixed (tests/audit_auth.mjs) |
 | A9 | Unconfirmed accounts can send email from Kloomie's own sender through agents and customer messages. | reported |
-| E3 | The private-network guard for webhooks, Postiz and HQ can be bypassed (DNS rebinding between check and fetch, IPv4-mapped IPv6, missing ranges, any port). | reported |
-| E4 | Public API tasks ignore visibility; task webhooks include private campaign tasks. | reported |
+| E3 | The private-network guard for webhooks, Postiz and HQ can be bypassed (DNS rebinding between check and fetch, IPv4-mapped IPv6, missing ranges, any port). | fixed with E1 (one shared private-address list) |
+| E4 | Public API tasks ignore visibility; task webhooks include private campaign tasks. | fixed (tests/audit_access.mjs): API tasks follow canSee and leave out private campaigns and projects; webhooks skip private tasks, visits and campaign-stack files |
 | E5 / B6 | Webhook subscriptions over the API skip write and role checks (member keys get contact, invoice, payment and text events). | fixed at subscribe time (tests/audit_access.mjs); re-checking the maker's role at delivery is still to do |
 | E6 | OAuth state isn't tied to the browser that started it, all providers (consent phishing attaches a victim's account to an attacker's team). | reported |
 | F3 | Approving the same agent step or held rule twice at once runs it twice (emails or posts sent twice). | reported |
@@ -58,9 +58,9 @@ Reviewer areas: A sign-in and accounts · B team isolation (no cross-team access
 | GRD-1 | No HSTS on app.kloomie.com or www.kloomie.com. | fixed 402bc6e |
 | GRD-2 / H11 | No frame-ancestors or X-Frame-Options (clickjacking on approve, pay and delete buttons). | fixed 402bc6e (audit_critical) |
 | B2 | POST /api/clear lets any member delete everyone's unpinned messages and files (the single delete correctly refuses). | fixed (tests/audit_access.mjs: one mayDelete rule for deleting and clearing) |
-| B3 | A member can move a team folder into their own private folder (hiding it), and leaving the team then deletes it. | reported (reviewer reproduced) |
-| B4 | The public API ignores the billing read-only lock. | reported |
-| B5 | /api/v1/tasks and visit, task and file webhooks expose private campaigns and private projects. | reported (same root as E4) |
+| B3 | A member can move a team folder into their own private folder (hiding it), and leaving the team then deletes it. | fixed (tests/audit_access.mjs): a move that changes who can see something needs the owner (or an admin), and into a private folder only if everything moved is theirs |
+| B4 | The public API ignores the billing read-only lock. | fixed (tests/audit_billing.mjs): API writes get 402 when the team is read-only, 423 while it is being deleted |
+| B5 | /api/v1/tasks and visit, task and file webhooks expose private campaigns and private projects. | fixed with E4 |
 | H4 | The Leaflet popup takes raw HTML from the team's route start address. | reported |
 | H5 | Electron: openExternal with any scheme, file: navigation allowed, IPC trusts any page, screen capture with no picker, unsigned builds. | reported |
 | H6 | Push notifications keep going to signed-out devices. | same as A7 |

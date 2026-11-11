@@ -51,6 +51,32 @@ try {
   const adminKey = (await jo('POST', '/integrations/keys', { name: 'jo' })).body.token;
   r = await call(adminKey)('POST', '/v1/webhooks', { url: 'http://127.0.0.1:9/hook', events: ['contact.created'] });
   ok(r.status === 201 && r.body.events.includes('contact.created'), 'E5 an owner’s key still can');
+
+  // B3: nobody can hide the team's folders or files (or delete them by leaving) by moving them into a private folder.
+  const st = async () => (await jo('GET', '/state')).body;
+  await jo('PATCH', '/members/' + bobId, { role: 'member' });
+  const mine = (await bob('POST', '/dirs', { name: 'Mine', private: true })).body;
+  const mineId = mine.id ?? (await bob('GET', '/state')).body.workspace.dirs.find((x) => x.name === 'Mine')?.id;
+  await jo('POST', '/dirs', { name: 'Team stuff' });
+  const teamId = (await st()).workspace.dirs.find((x) => x.name === 'Team stuff').id;
+  const jodoc = (await jo('POST', '/items', { type: 'text', text: 'JO-DOC', dirId: teamId })).body;
+  r = await bob('PATCH', '/dirs/' + teamId, { parentId: mineId });
+  ok(r.status === 403 && (await st()).workspace.dirs.some((x) => x.id === teamId && !x.parentId), 'B3 a member can’t move a team folder into their private folder');
+  r = await bob('PATCH', '/items/' + jodoc.id, { dirId: mineId });
+  ok(r.status === 403, 'B3 or someone else’s file');
+  const bobdoc = (await bob('POST', '/items', { type: 'text', text: 'BOB-DOC', dirId: teamId })).body;
+  r = await bob('PATCH', '/items/' + bobdoc.id, { dirId: mineId });
+  ok(r.status === 200, 'B3 their own file they can move where they like');
+
+  // E4/B5: private campaigns' tasks don't come out through the API (lists, by id) or webhooks.
+  const priv = (await jo('POST', '/campaigns', { name: 'SECRET-CAMPAIGN', private: true })).body;
+  const goal = (await jo('POST', '/goals', { campaignId: priv.id, title: 'Steps', kind: 'tasks' })).body;
+  const secretTask = (await jo('POST', '/tasks', { goalId: goal.id, text: 'SECRET-TASK' })).body;
+  await jo('POST', '/tasks', { text: 'OPEN-TASK' });
+  const list = (await call(adminKey)('GET', '/v1/tasks?limit=100')).body;
+  const texts2 = (list.data || []).map((x) => x.text || x.title);
+  ok(texts2.includes('OPEN-TASK') && !texts2.includes('SECRET-TASK'), 'E4 the API’s task list leaves out private campaigns’ tasks');
+  ok((await call(adminKey)('GET', '/v1/tasks/' + secretTask.id)).status === 404, 'E4 and won’t give one by id');
 } catch (e) {
   ok(false, 'threw: ' + e.stack);
 } finally {

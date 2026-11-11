@@ -126,6 +126,9 @@ const MAX_TURN_CHARS = 30_000;
 export function agentsModule({ db, save, broadcast, rid, cleanText, readJson, send, notify, replay, run: llmRun, sendEmail, textToDoc, PJ, isAdminId, localNow, tzOf, fmtMinutes, hasAi = () => true, POSTIZ = null, makeImageItem, itemFile, noContact = (c) => !!c.dne, canPicture = () => true, describeImages = async () => ({}) }) {
   db.agentRuns ||= {};
   db.agentPrefs ||= {};
+  // A step that was being approved when the server stopped may or may not have gone out: never run it again
+  // automatically; say so, so the person can check.
+  for (const x of Object.values(db.agentRuns)) for (const p of x.parts || []) for (const st of p.steps || []) if (st.status === 'sending') { st.status = 'failed'; st.error = 'Kloomie restarted while this was going out. Check whether it went before trying again.'; }
   // Anything still running when the server stopped (a deploy, a restart) can't pick up where it was: say so.
   for (const x of Object.values(db.agentRuns)) {
     if (!['requested', 'planning', 'running'].includes(x.status)) continue;
@@ -1291,7 +1294,9 @@ Reply with JSON only: {"summary":"one line on the plan","parts":[{"agent":"chief
         if (!at) continue;
         const { p, s } = at;
         const cx = cxFor(x, p.agent);
+        if (body.do === 'approve' && s.status === 'proposed' && ids.length > 1 && TOOLS[s.tool]?.important) continue;
         if (body.do === 'approve' && s.status === 'proposed') {
+          s.status = 'sending';
           // What the person may change in a draft before saying yes.
           const EDIT = { draft_email: ['to_name', 'to_email', 'subject', 'body'], draft_social_post: ['text', 'when', 'link', 'cta', 'image_id', 'channels'], draft_email_campaign: ['subject', 'body', 'contact_ids'], post_to_chat: ['text', 'feed'] }[s.tool] || [];
           if (body.args && ids.length === 1) for (const k of EDIT) {
@@ -1302,6 +1307,7 @@ Reply with JSON only: {"summary":"one line on the plan","parts":[{"agent":"chief
           }
           s.approvedAt = Date.now();
           try { await applyStep(x, cx, s, p); } catch {}
+          if (s.status === 'sending') s.status = 'failed';
           s.label = cleanText(safeLabel(TOOLS[s.tool], s.args, cx), 200);
         } else if (body.do === 'skip' && s.status === 'proposed') s.status = 'skipped';
         else if (body.do === 'undo' && s.status === 'done' && s.undo?.postiz) {

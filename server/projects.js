@@ -12,7 +12,7 @@
 //   came from Kloomie, retried when the other end is down.
 import crypto from 'node:crypto';
 import dns from 'node:dns/promises';
-import net from 'node:net';
+import { privateIp, safeFetch } from './safefetch.js';
 import { TRADES, tradeType, tradeMenu } from './trades.js';
 import { TECH_TEMPLATE, TECH_LATER, techPrefix } from './tech.js';
 
@@ -1461,14 +1461,6 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
 
   // ---------- webhooks ----------
   // Only public web addresses: a webhook can't be pointed at the server's own network.
-  const privateIp = (ip) => {
-    if (net.isIPv4(ip)) {
-      const [a1, b1] = ip.split('.').map(Number);
-      return a1 === 10 || a1 === 127 || a1 === 0 || (a1 === 169 && b1 === 254) || (a1 === 172 && b1 >= 16 && b1 <= 31) || (a1 === 192 && b1 === 168) || (a1 === 100 && b1 >= 64 && b1 <= 127);
-    }
-    const s = ip.toLowerCase();
-    return s === '::1' || s === '::' || s.startsWith('fc') || s.startsWith('fd') || s.startsWith('fe80') || s.startsWith('::ffff:127.') || s.startsWith('::ffff:10.') || s.startsWith('::ffff:192.168.');
-  };
   async function hookUrl(v) {
     let u;
     try {
@@ -1532,7 +1524,9 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
     let status = 0, error = null;
     try {
       if (!allowLocalHooks) await hookUrl(h.url); // the address could point somewhere private by now
-      const r = await fetch(h.url, { method: 'POST', redirect: 'manual', headers: { 'Content-Type': 'application/json', 'User-Agent': 'Kloomie-Webhooks/1', 'X-Kloomie-Event': event.type, 'X-Kloomie-Delivery': event.id, 'X-Kloomie-Signature': `t=${ts},v1=${sig}`, 'X-Column-Event': event.type, 'X-Column-Delivery': event.id, 'X-Column-Signature': `t=${ts},v1=${sig}` }, body, signal: AbortSignal.timeout(10_000) });
+      // Checked again as the connection is made (the name could point somewhere private by now); no redirects; the
+      // reply is read and dropped, up to a small limit.
+      const r = await safeFetch(h.url, { method: 'POST', allowLocal: allowLocalHooks, httpsOnly: !allowLocalHooks, timeout: 10_000, maxBytes: 64_000, truncate: true, headers: { 'Content-Type': 'application/json', 'User-Agent': 'Kloomie-Webhooks/1', 'X-Kloomie-Event': event.type, 'X-Kloomie-Delivery': event.id, 'X-Kloomie-Signature': `t=${ts},v1=${sig}`, 'X-Column-Event': event.type, 'X-Column-Delivery': event.id, 'X-Column-Signature': `t=${ts},v1=${sig}` }, body });
       status = r.status;
     } catch (e) {
       error = e.message;

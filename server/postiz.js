@@ -7,7 +7,7 @@
 // Public API (docs.postiz.com/public-api): base https://api.postiz.com/public/v1, or
 // https://<their domain>/api/public/v1 when self-hosted; the key goes in Authorization with no "Bearer".
 import dns from 'node:dns/promises';
-import net from 'node:net';
+import { privateIp, safeFetch } from './safefetch.js';
 
 const CLOUD = 'https://api.postiz.com/public/v1';
 // Channels Kloomie posts to, with the settings each needs. Others (YouTube, TikTok, Reddit, Pinterest…) need
@@ -27,14 +27,6 @@ export const POSTIZ_KINDS = {
 const GMB_CTAS = ['BOOK', 'ORDER', 'SHOP', 'LEARN_MORE', 'SIGN_UP', 'GET_OFFER', 'CALL'];
 const TIMEOUT = 20_000;
 
-const privateIp = (ip) => {
-  if (net.isIPv4(ip)) {
-    const [a, b] = ip.split('.').map(Number);
-    return a === 10 || a === 127 || a === 0 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127);
-  }
-  const s = ip.toLowerCase();
-  return s === '::1' || s === '::' || s.startsWith('fc') || s.startsWith('fd') || s.startsWith('fe80') || s.startsWith('::ffff:127.') || s.startsWith('::ffff:10.') || s.startsWith('::ffff:192.168.');
-};
 
 // "Connect with Postiz": Kloomie's OAuth app in Postiz (Settings → Developers there). The person approves on Postiz's
 // own page and comes back with a token that works like an API key and doesn't expire (they can revoke it in Postiz →
@@ -74,11 +66,16 @@ export function postizModule({ db, save, broadcast, cleanText, readJson, send, s
   }
   async function call(c, method, path, body, { form } = {}) {
     const key = unseal(c.key).key;
-    const res = await fetch(c.url + path, {
-      method, signal: AbortSignal.timeout(TIMEOUT),
-      headers: { Authorization: key, ...(body && !form ? { 'content-type': 'application/json' } : {}) },
-      body: form || (body ? JSON.stringify(body) : undefined),
-    }).catch((e) => { throw Object.assign(new Error(e.name === 'TimeoutError' ? 'Postiz didn’t answer in time. Try again.' : 'Couldn’t reach Postiz.'), { status: 502 }); });
+    // A form (a picture upload) goes as its encoded bytes, so it can be sent the same safe way.
+    let payload = body ? JSON.stringify(body) : undefined, type = body ? 'application/json' : null;
+    if (form) {
+      const enc = new Response(form);
+      payload = Buffer.from(await enc.arrayBuffer());
+      type = enc.headers.get('content-type');
+    }
+    const res = await safeFetch(c.url + path, {
+      method, timeout: TIMEOUT, maxBytes: 5_000_000, allowLocal, headers: { Authorization: key, ...(type ? { 'content-type': type } : {}) }, body: payload,
+    }).catch((e) => { throw Object.assign(new Error(e.code === 'TIMEOUT' ? 'Postiz didn’t answer in time. Try again.' : e.code === 'BLOCKED' ? 'That Postiz address is on a private network.' : 'Couldn’t reach Postiz.'), { status: 502 }); });
     const data = await res.json().catch(() => null);
     if (res.status === 401 || res.status === 403) throw Object.assign(new Error('Postiz didn’t accept the API key. Check it in Postiz → Settings → Public API and connect again.'), { status: 400, auth: true });
     if (res.status === 429) throw Object.assign(new Error('Postiz says too many posts this hour. Try again later.'), { status: 429 });
