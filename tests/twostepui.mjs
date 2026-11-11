@@ -39,7 +39,13 @@ try {
   await A.until(`!!document.querySelector('#settings [role=tab]')`);
   await A.ev(`[...document.querySelectorAll('#settings [role=tab]')].find((x) => /Account/.test(x.textContent)).click()`);
   ok(await A.until(`/Turn on/.test(document.querySelector('#settings .ts2-sec')?.textContent || '')`), 'Settings → Account has Two-step sign-in with Turn on');
+  // Two-step needs a confirmed email (the code that was emailed) and the password.
+  const outbox = DIR + '/outbox';
+  const code = fs.readdirSync(outbox).sort().map((f) => JSON.parse(fs.readFileSync(outbox + '/' + f, 'utf8'))).filter((x) => x.to === email).at(-1).text.match(/\b(\d{6})\b/)[1];
+  await A.ev(`fetch('/api/account/verify', { method: 'POST', headers: { authorization: 'Bearer ' + JSON.parse(localStorage.getItem('column.token')), 'content-type': 'application/json' }, body: JSON.stringify({ code: '${code}' }) })`);
   await A.ev(`[...document.querySelectorAll('#settings .ts2-sec button')].find((b) => b.textContent === 'Turn on').click()`);
+  ok(await A.until(`!!document.querySelector('#sheet:not(.hidden) input[type=password]')`), 'turning it on asks for the password first');
+  await A.ev(`(() => { const i = document.querySelector('#sheet input[type=password]'); i.value = 'secret1pad'; document.querySelector('#sheet .primary-btn').click(); })()`);
   ok(await A.until(`document.querySelector('#sheet:not(.hidden) img.ts2-qr')?.naturalWidth > 100`), 'a QR code to scan');
   const secret = (await A.ev(`document.querySelector('#sheet .ts2-key').textContent`)).replace(/\s/g, '');
   ok(/^[A-Z2-7]{32}$/.test(secret), 'and the key to type in by hand');

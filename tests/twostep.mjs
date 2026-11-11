@@ -28,7 +28,13 @@ try {
   const jo = call(r.body.token);
   ok((await jo('GET', '/account/two-step')).body.on === false, 'off to start with');
   // Turning it on.
-  r = await jo('POST', '/account/two-step/start');
+  // Turning it on needs a confirmed email and the password.
+  ok((await jo('POST', '/account/two-step/start', { password: 'longenough1' })).status === 403, 'not before the email is confirmed');
+  const OUT = DIR + '/outbox';
+  const vcode = fs.readdirSync(OUT).sort().map((f) => JSON.parse(fs.readFileSync(OUT + '/' + f, 'utf8'))).filter((x) => x.to === email).at(-1).text.match(/\b(\d{6})\b/)[1];
+  await jo('POST', '/account/verify', { code: vcode });
+  ok((await jo('POST', '/account/two-step/start', {})).status === 403, 'not without the password');
+  r = await jo('POST', '/account/two-step/start', { password: 'longenough1' });
   const secret = r.body.secret.replace(/\s/g, '');
   ok(/^[A-Z2-7]{32}$/.test(secret) && r.body.uri.startsWith('otpauth://totp/Kloomie:') && r.body.uri.includes('issuer=Kloomie') && r.body.qr.startsWith('data:image/svg+xml;base64,'), 'a secret, an otpauth link and a QR code to scan');
   ok((await jo('GET', '/account/two-step')).body.on === false, 'not on until a code is entered');
@@ -80,7 +86,7 @@ try {
   ok((await signin()).status === 200, 'and the password alone signs in again');
 
   // Wrong codes count toward the lockout (last: it locks this address for a while).
-  const s2 = (await jo('POST', '/account/two-step/start')).body.secret.replace(/\s/g, '');
+  const s2 = (await jo('POST', '/account/two-step/start', { password: 'longenough1' })).body.secret.replace(/\s/g, '');
   await jo('POST', '/account/two-step/confirm', { code: totp(s2, step()) });
   let locked = false;
   for (let i = 0; i < 12 && !locked; i++) locked = (await signin({ otp: '000000' })).status === 429;

@@ -334,6 +334,7 @@ export function publicApiModule(deps) {
       const amount = Math.round(Number(String(body.amount ?? '').replace(/[$,\s]/g, '')) * 100);
       if (!Number.isFinite(amount) || amount <= 0 || amount > 1e11) throw badRequest('Send amount in dollars, like 250.00');
       const ref = body.reference ? cleanText(body.reference, 120) : null;
+      if (amount > INV.totals(inv).balance && !(ref && inv.payments.some((p) => p.ref === ref))) throw badRequest('That’s more than is still owed on this invoice.');
       if (ref && inv.payments.some((p) => p.ref === ref)) return send(res, 200, { ...INV.apiInvoice(inv), duplicate: true });
       const p = INV.addPayment(inv, { amount, method: INV.METHODS.includes(body.method) ? body.method : 'other', note: cleanText(body.note, 200), day: dayIn(body.date, 'date'), by: auth.member });
       if (ref) { p.ref = ref; save(); }
@@ -343,12 +344,20 @@ export function publicApiModule(deps) {
   }
 
   // ---------- webhooks an app subscribes to ----------
-  async function webhooks(req, res, ws, auth, key, [id]) {
+  async function webhooks(req, res, ws, auth, key, [id], write) {
     const m = req.method;
+    if (m !== 'GET') write();
     if (!id && m === 'GET') return send(res, 200, { data: Object.values(db.webhooks).filter((h) => h.wsId === ws.id && h.keyId === key.id).map(PJ.publicHook) });
     if (!id && m === 'POST') {
       const body = await readJson(req, 10_000);
-      const events = body.events ?? (body.event ? [body.event] : undefined);
+      let events = body.events ?? (body.event ? [body.event] : undefined);
+      // Contacts, invoices, payments and texts are owners' and admins' to see, so only their keys hear about them.
+      if (!isAdmin(auth)) {
+        const adminOnly = (e) => /^(contact|invoice|payment|text)\./.test(e);
+        const asked = Array.isArray(events) ? events : deps.EVENTS;
+        events = asked.filter((e) => !adminOnly(e));
+        if (Array.isArray(body.events ?? (body.event ? [body.event] : null)) && !events.length) return send(res, 403, { error: 'Only keys made by owners and admins can hear about contacts, invoices, payments and texts.' });
+      }
       const h = await PJ.makeHook(ws, { url: body.url ?? body.target_url, events, projectId: body.project_id || null }, `${key.name} (API)`, key.id);
       return send(res, 201, { ...PJ.publicHook(h), secret: h.secret });
     }
@@ -373,7 +382,7 @@ export function publicApiModule(deps) {
     const write = () => { if (!key.write) throw fail(403, 'This key can only read.'); };
     if (what === 'me' && req.method === 'GET') return send(res, 200, { team: ws.name, key: key.name, write: key.write, role: auth.role, events: deps.EVENTS });
     if (what === 'members' && req.method === 'GET') return send(res, 200, { data: ws.members.map((x) => ({ id: x.id, name: x.name, role: x.role })) });
-    if (what === 'webhooks') return webhooks(req, res, ws, auth, key, rest);
+    if (what === 'webhooks') return webhooks(req, res, ws, auth, key, rest, write);
     if (PARTS[what]) return PARTS[what](req, res, ws, auth, write, qs, rest);
     return PJ.v1(req, res, parts, a);
   }

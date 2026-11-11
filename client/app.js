@@ -1144,6 +1144,8 @@
     const me = S.workspace.members.find((m) => m.id === S.me.memberId);
     const email = h('input', { type: 'email', autocomplete: 'email', placeholder: 'you@company.com', value: store.get('email', '') });
     const pw = h('input', { type: 'password', autocomplete: me?.hasPassword ? 'current-password' : 'new-password' });
+    const otp = h('input', { inputmode: 'numeric', autocomplete: 'one-time-code', placeholder: '123456' });
+    const otpRow = h('label', { class: 'hidden' }, 'Code from that account’s authenticator app (or a backup code)', otp);
     sheet('Add your email', [
       h('p', { class: 'day-hint' }, nudge
         ? 'Kloomie now signs in with your email. Add yours so you can sign in to all your teams at once and reset your password if you forget it.'
@@ -1151,8 +1153,16 @@
       h('label', {}, 'Email', email),
       h('label', {}, me?.hasPassword ? 'Your password (to confirm it’s you)' : 'Choose a password (at least 8 characters)', pw),
       h('p', { class: 'day-hint' }, 'Already added this email in another team? Use that account’s password and the two logins become one.'),
+      otpRow,
     ], async () => {
-      const r = await api('POST', '/account/email', { email: email.value.trim(), password: pw.value });
+      let r;
+      try {
+        r = await api('POST', '/account/email', { email: email.value.trim(), password: pw.value, ...(otp.value.trim() ? { otp: otp.value.trim() } : {}) });
+      } catch (e) {
+        // That account has two-step sign-in on: ask for the code from its app.
+        if (e.data?.twoStep) { otpRow.classList.remove('hidden'); otp.focus(); }
+        throw e;
+      }
       Object.assign(S.me, r);
       store.set('email', r.email);
       drawConfirmBar();
@@ -11470,9 +11480,14 @@
     api('GET', '/account/two-step').then((x) => {
       const hint = h('p', { class: 'day-hint' }, 'After your password, Kloomie also asks for a 6-digit code from an app on your phone (Google Authenticator, Microsoft Authenticator, 1Password, Authy…). Someone who learns your password still can’t get in.');
       if (!x.on) {
-        const go = async () => {
+        const go = () => {
+          const pw = h('input', { type: 'password', autocomplete: 'current-password', placeholder: 'Your password' });
+          // The QR sheet opens once this one has closed (a sheet closes itself after its button's work is done).
+          sheet('Turn on two-step sign-in', [h('p', { class: 'day-hint' }, 'First, your password, so only you can turn it on.'), h('label', {}, 'Password', pw)], () => { const v = pw.value; setTimeout(() => start(v)); }, 'Next');
+        };
+        const start = async (password) => {
           try {
-            const k = await api('POST', '/account/two-step/start');
+            const k = await api('POST', '/account/two-step/start', { password });
             const code = h('input', { inputmode: 'numeric', autocomplete: 'one-time-code', placeholder: '123456' });
             sheet('Turn on two-step sign-in', [
               h('p', {}, '1. Scan this with your authenticator app:'),
@@ -16454,7 +16469,13 @@
           const make = (role, label) => (mb.role !== role && (owner || role !== 'owner') ? { label, run: () => peopleCall('PATCH', '/members/' + mb.id, { role }) } : null);
           row.append(h('button', { class: 'icon-btn', 'aria-label': 'Options for ' + mb.name, html: I.more, onclick: (e) => openMenu(e.currentTarget, [
             make('owner', 'Make owner'), make('admin', 'Make admin'), make('member', 'Make member'),
-            { label: 'Reset password', danger: true, run: () => peopleCall('POST', `/members/${mb.id}/reset`).then(() => toast(`${mb.name} is signed out. They can set a new password with Join team.`)) },
+            { label: 'Reset password', danger: true, run: () => api('POST', `/members/${mb.id}/reset`).then((w) => {
+              S.workspace = w;
+              renderSettings();
+              if (!w.claimCode) return toast(`${mb.name} is signed out.`);
+              // Only shown now: the code that lets this one person set a new password.
+              sheet(`${mb.name}’s reset code`, [h('p', {}, `${mb.name} is signed out. Give them this code (it works once, for 7 days). They choose Join team, type their name, the invite code and this reset code, and pick a new password.`), h('p', { class: 'reset-code' }, h('code', {}, w.claimCode), ' ', h('button', { class: 'btn small', onclick: () => { copyText(w.claimCode); toast('Copied'); } }, 'Copy'))], null);
+            }).catch((e) => toast(e.message)) },
             { label: 'Remove from team', danger: true, run: () => peopleCall('DELETE', '/members/' + mb.id) },
           ].filter(Boolean)) }));
         }

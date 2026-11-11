@@ -669,6 +669,7 @@ export function agentsModule({ db, save, broadcast, rid, cleanText, readJson, se
       description: 'The social channels connected through Postiz (Facebook, Instagram, LinkedIn, Google Business Profile, X, Threads, Bluesky, Mastodon) that posts can go to.',
       parameters: { type: 'object', properties: {} },
       async run(cx) {
+        if (!isAdminId(cx.ws.id, cx.memberId)) return { connected: false, note: 'Only owners and admins post to the company’s social accounts. Draft the post as text instead; an owner or admin can post it.' };
         if (!POSTIZ?.connected(cx.ws)) return { connected: false, note: 'Postiz isn’t connected. Draft posts anyway: the person can copy them, or an owner can connect Postiz in Settings → Connections.' };
         const p = POSTIZ.pub(cx.ws);
         if (!p.checkedAt || Date.now() - p.checkedAt > 10 * 60_000) await POSTIZ.refresh(cx.ws).catch(() => {});
@@ -681,6 +682,7 @@ export function agentsModule({ db, save, broadcast, rid, cleanText, readJson, se
       description: 'Posts in Postiz: recently published, scheduled, and any that failed, with the reason.',
       parameters: { type: 'object', properties: { days_back: { type: 'number' }, days_ahead: { type: 'number' } } },
       async run(cx, a) {
+        if (!isAdminId(cx.ws.id, cx.memberId)) return { connected: false, note: 'Only owners and admins see the company’s social posts.' };
         if (!POSTIZ?.connected(cx.ws)) return { connected: false };
         const list = await POSTIZ.posts(cx.ws, Date.now() - (Number(a.days_back) || 14) * 864e5, Date.now() + (Number(a.days_ahead) || 30) * 864e5);
         return { posts: list.slice(0, 40) };

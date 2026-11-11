@@ -195,7 +195,9 @@ function send(res, code, body, headers = {}) {
 const LOGIN_TRIES = 10;
 const LOGIN_WINDOW = 15 * 60_000;
 const loginFails = new Map(); // key -> { n, since }
-const clientIp = (req) => (process.env.TRUST_PROXY ? String(req.headers['x-forwarded-for'] || '').split(',')[0].trim() : '') || req.socket.remoteAddress || '?';
+// Behind Railway's proxy the address it saw is the last X-Forwarded-For entry (earlier ones are whatever the client
+// sent, so they can't be trusted). Right whether the proxy appends to the header or replaces it.
+const clientIp = (req) => (process.env.TRUST_PROXY ? String(req.headers['x-forwarded-for'] || '').split(',').map((x) => x.trim()).filter(Boolean).pop() : '') || req.socket.remoteAddress || '?';
 function loginBlocked(keys) {
   const now = Date.now();
   return keys.some((k) => {
@@ -211,7 +213,11 @@ function loginFailed(keys) {
     if (!f || now - f.since > LOGIN_WINDOW) loginFails.set(k, { n: 1, since: now });
     else f.n++;
   }
-  if (loginFails.size > 50_000) loginFails.clear();
+  // Too many to keep: forget the expired ones, then the oldest, never all at once (that would reset every lockout).
+  if (loginFails.size > 50_000) {
+    for (const [k, f] of loginFails) if (now - f.since > LOGIN_WINDOW) loginFails.delete(k);
+    for (const k of loginFails.keys()) { if (loginFails.size <= 40_000) break; loginFails.delete(k); }
+  }
 }
 
 async function readJson(req, limit = 1_000_000) {
@@ -238,7 +244,7 @@ function liveSession(token) {
   const now = Date.now();
   if (!session.lastSeen) session.lastSeen = now; // sign-ins from before this count from now
   if (now - session.lastSeen > SESSION_DAYS * 86_400_000) {
-    delete db.tokens[token];
+    endSession(token);
     save();
     return null;
   }
@@ -297,8 +303,16 @@ function checkInvite(ws, code) {
 function ensureOwner(ws, m) {
   if (!ws.members.some((x) => x.role === 'owner')) m.role = 'owner';
 }
+// Ending a session: the token goes, its live connection closes and its device stops getting notifications.
+function endSession(tok) {
+  const sess = db.tokens[tok];
+  delete db.tokens[tok];
+  push.drop((x) => x.token === tok);
+  for (const sock of sockets.get(sess?.wsId) || []) if (sock.meta.token === tok) sock.close(4001, 'Signed out');
+}
 function signOutMember(ws, memberId) {
-  for (const [tok, sess] of Object.entries(db.tokens)) if (sess.memberId === memberId) delete db.tokens[tok];
+  for (const [tok, sess] of Object.entries(db.tokens)) if (sess.memberId === memberId && sess.wsId === ws.id) endSession(tok);
+  push.drop((x) => x.wsId === ws.id && x.memberId === memberId);
   for (const s of sockets.get(ws.id) || []) if (s.meta.memberId === memberId) s.close(4001, 'Signed out');
 }
 const publicMember = (m) => ({ id: m.id, name: m.name, role: m.role, roleIds: m.roleIds || [], hasPassword: hasPass(m) });
@@ -375,8 +389,7 @@ function signOutWhere(ws, memberId, keepDevice, onlyToken) {
   for (const [tok, sess] of Object.entries(db.tokens)) {
     if (sess.memberId !== memberId || sess.wsId !== ws.id) continue;
     if (onlyToken ? tok !== onlyToken : keepDevice && sess.deviceId === keepDevice) continue;
-    delete db.tokens[tok];
-    for (const sock of sockets.get(ws.id) || []) if (sock.meta.token === tok) sock.close(4001, 'Signed out');
+    endSession(tok);
   }
 }
 // The places an account (or an old login) is signed in, for Settings.
@@ -472,7 +485,8 @@ const publicWorkspace = (ws, memberId) => ({
   dirs: ws.dirs.filter((d) => seesDir(ws, d.id, memberId)),
   members: ws.members.map(publicMember),
   roles: ws.roles || [],
-  inviteCode: ws.inviteCode,
+  // The code lets anyone join, so only the people who can change it see it.
+  inviteCode: isAdminId(ws.id, memberId) ? ws.inviteCode : undefined,
   brand: publicBrand(ws),
 });
 
@@ -1653,6 +1667,10 @@ const isOwnerId = (wsId, memberId) => db.workspaces[wsId]?.members.some((m) => m
 // team, make owners, export the whole team and keep the business's money.
 const ADMIN_ROLES = ['owner', 'admin'];
 const isAdmin = (auth) => ADMIN_ROLES.includes(auth?.role);
+// Deleting one thing, or clearing many: someone else's messages only by an owner or admin (shared files and notes by
+// anyone who can see them, as always). One rule for every way of deleting.
+const ownsItem = (auth, it) => (it.memberId ? it.memberId === auth.memberId : it.deviceId === auth.deviceId);
+const mayDelete = (auth, it) => !(it.type === 'message' && !ownsItem(auth, it) && !isAdmin(auth));
 const isAdminId = (wsId, memberId) => db.workspaces[wsId]?.members.some((m) => m.id === memberId && ADMIN_ROLES.includes(m.role));
 function broadcast(wsId, msg) {
   visRev++;
@@ -1671,7 +1689,9 @@ function broadcast(wsId, msg) {
   for (const s of set) if (hide && s.readyState === 1 && (!seesItemDir(inDir, s.meta.memberId) || (msg.type === 'item:update' && !seesOwn('item', inDir, s.meta.memberId)))) s.send(hide);
   const task = msg.type === 'task' && msg.task && db.tasks[msg.task.id];
   const sees = (mid) => seesCampaign(campaignId, mid) && seesFeed(feed, mid) && seesItemDir(inDir, mid) && seesTemplate(msg.template, mid) && seesEntry(msg.entry, mid) && (!msg.forMember || msg.forMember === mid) && (!msg.forAdmins || isAdminId(wsId, mid)) && (!msg.bill || seesBill(wsId, msg.bill, mid)) && (!inDir || seesOwn('item', inDir, mid)) && (!task || seesOwn('task', task, mid)) && PJ.seesMsg(msg, mid);
-  for (const s of set) if (s.readyState === 1 && sees(s.meta.memberId)) s.send(data);
+  const live = (s) => s.readyState === 1 && (!s.meta.token || db.tokens[s.meta.token]) && db.workspaces[wsId]?.members.some((x) => x.id === s.meta.memberId);
+  for (const s of set) if (!live(s) && s.readyState === 1) s.close(4001, 'Signed out');
+  for (const s of set) if (live(s) && sees(s.meta.memberId)) s.send(data);
   try {
     alertsFor(wsId, msg, sees);
   } catch (e) {
@@ -5225,15 +5245,24 @@ async function api(req, res, url) {
         linkMember(member, user);
       } else setPassword(member, password);
     } else {
-      if (!ws) return send(res, 404, { error: 'No team with that name. Create it instead?' });
+      // The same answer whether the team doesn't exist or the code (or name and password) is wrong, so nobody can
+      // find out which teams or people exist by trying.
+      if (!ws) return refuse(mode === 'join' ? 'That team name and invite code don’t match.' : 'That team, name and password don’t match.');
       member = ws.members.find((x) => x.nameKey === nameKey(who));
       if (ws.deleteAt && (mode !== 'signin' || member?.role !== 'owner')) return send(res, 403, { error: 'This team is being deleted, so nobody can sign in or join. Ask an owner if that’s a mistake.' });
       if (mode === 'join' || mode === 'invite') {
-        if (mode === 'join' && !checkInvite(ws, code)) return refuse('Wrong invite code.');
+        if (mode === 'join' && !checkInvite(ws, code)) return refuse('That team name and invite code don’t match.');
         const mine = user && ws.members.find((x) => x.userId === user.id);
         if (mine) member = mine; // already on this team with this account
         else {
           if (member && hasPass(member)) return send(res, 409, { error: 'Someone here already uses that name. Sign in instead, or pick another name.' });
+          // Someone already here with no password (their password was reset): only with the code their admin was given.
+          if (member) {
+            const c = String(body.claim || '').replace(/[\s-]/g, '').toUpperCase();
+            const ok = member.claim && member.claim.exp > Date.now() && c && crypto.timingSafeEqual(Buffer.from(sha('claim:' + c)), Buffer.from(member.claim.hash));
+            if (!ok) { loginFailed(tries); return send(res, 409, { error: 'Someone here already uses that name. If it’s you, ask your admin for the reset code and type it in, or pick another name.', claim: true }); }
+            delete member.claim;
+          }
           member ||= newMember(ws, who, 'member');
           if (email) {
             if (!user) (user = newUser(email, password)), (fresh = true);
@@ -5242,9 +5271,9 @@ async function api(req, res, url) {
           ensureOwner(ws, member);
         }
       } else {
-        if (!member) return send(res, 404, { error: `No one called “${who}” in ${ws.name}. New here? Use Join team with the invite code.` });
+        if (!member) return refuse('That team, name and password don’t match.');
         if (!hasPass(member)) return send(res, 401, { error: 'No password set for this name yet. Use Join team with the invite code to set one.' });
-        if (!passOk(credOf(member), password)) return refuse('Wrong password.');
+        if (!passOk(credOf(member), password)) return refuse('That team, name and password don’t match.');
         const g = TS.gate(userOf(member), body.otp, () => loginFailed(tries));
         if (g) return send(res, g.status, g.body);
       }
@@ -5380,8 +5409,7 @@ async function api(req, res, url) {
   }
 
   if (a === 'logout' && m === 'POST') {
-    push.drop((x) => x.token === auth.token);
-    delete db.tokens[auth.token];
+    endSession(auth.token);
     save();
     return send(res, 200, { ok: true });
   }
@@ -7339,7 +7367,7 @@ async function api(req, res, url) {
     // Two-step sign-in (twostep.js): set up, backup codes, turn off. Changes need the password and a code.
     if (b === 'two-step') {
       const keys = ['ip:' + clientIp(req), 'twostep:' + me.id];
-      return TS.route(req, res, userOf(me), c, { passOk: (p) => passOk(credOf(me), p), blocked: () => loginBlocked(keys), failed: () => loginFailed(keys) });
+      return TS.route(req, res, userOf(me), c, { passOk: (p) => passOk(credOf(me), p), blocked: () => loginBlocked(keys), failed: () => loginFailed(keys), needsConfirm: () => mailer.mode !== 'off' && !userOf(me)?.emailVerified });
     }
     if (b === 'bar' && !c && m === 'PUT') {
       const { bar } = await readJson(req);
@@ -7400,7 +7428,7 @@ async function api(req, res, url) {
       return send(res, 200, { ok: true });
     }
     if (b === 'email' && !c && m === 'POST') {
-      const { email: raw, password } = await readJson(req);
+      const { email: raw, password, otp } = await readJson(req);
       const email = cleanEmail(raw);
       if (userOf(me)) return send(res, 400, { error: 'Your login already has an email.' });
       if (!okEmail(email)) return send(res, 400, { error: 'That email address doesn’t look right.' });
@@ -7414,6 +7442,9 @@ async function api(req, res, url) {
           return send(res, 403, { error: 'That email already has an account. Enter its password to join them up.' });
         }
         if (ws.members.some((x) => x.userId === u.id)) return send(res, 409, { error: 'That account is already someone else on this team.' });
+        // An account with two-step sign-in on: the password alone isn't enough to join it up.
+        const g = TS.gate(u, otp, () => loginFailed(keys));
+        if (g) return send(res, g.status, g.body);
         linkMember(me, u);
       } else {
         if (me.hash && !passOk(me, password)) {
@@ -7443,7 +7474,9 @@ async function api(req, res, url) {
       const { email: raw, password } = await readJson(req);
       const email = cleanEmail(raw);
       if (!okEmail(email)) return send(res, 400, { error: 'That email address doesn’t look right.' });
-      if (!passOk(u, password)) return send(res, 403, { error: 'Your password isn’t right.' });
+      const pwKeys = ['ip:' + clientIp(req), 'pw:' + u.id];
+      if (loginBlocked(pwKeys)) return send(res, 429, { error: 'Too many wrong tries. Wait 15 minutes, then try again.' });
+      if (!passOk(u, password)) { loginFailed(pwKeys); return send(res, 403, { error: 'Your password isn’t right.' }); }
       if (email === u.email) return send(res, 400, { error: 'That’s already your email.' });
       if (userByEmail(email) || Object.values(db.users).some((x) => x.pendingEmail === email && x !== u)) return send(res, 409, { error: 'That email belongs to another account.' });
       if (mailer.mode === 'off') {
@@ -7491,7 +7524,9 @@ async function api(req, res, url) {
       const { current, next } = await readJson(req);
       const me = ws.members.find((x) => x.id === auth.memberId);
       const cred = credOf(me);
-      if (cred.hash && !passOk(cred, current)) return send(res, 403, { error: 'Current password is wrong.' });
+      const pwKeys = ['ip:' + clientIp(req), 'pw:' + (userOf(me)?.id || me.id)];
+      if (loginBlocked(pwKeys)) return send(res, 429, { error: 'Too many wrong tries. Wait 15 minutes, then try again.' });
+      if (cred.hash && !passOk(cred, current)) { loginFailed(pwKeys); return send(res, 403, { error: 'Current password is wrong.' }); }
       if (String(next || '').length < 8) return send(res, 400, { error: 'Password must be at least 8 characters.' });
       setPassword(cred, String(next));
       if (userOf(me)) signOutUser(userOf(me), auth.deviceId); // other devices, in every team
@@ -7505,15 +7540,22 @@ async function api(req, res, url) {
       // An admin looks after members: not other admins or owners, and can't make anyone an owner.
       if (auth.role !== 'owner' && target.role !== 'member') return send(res, 403, { error: 'Only team owners can change other admins and owners.' });
       if (m === 'DELETE') {
-        await removeMember(ws, target);
+        await removeMember(ws, target, { removed: true });
         return send(res, 200, publicWorkspace(ws, auth.memberId));
       } else if (c === 'reset' && m === 'POST') {
         // Someone with an account resets it from their email; without email working, they're unlinked
         // here and choose a new password with the invite code, like before accounts.
         if (userOf(target) && mailer.mode !== 'off') return send(res, 400, { error: `${target.name} has an email on their account, so they can use Forgot password on the sign-in screen.` });
+        // A one-time code for that person only: rejoining under their name needs it (and the invite code), so nobody
+        // else on the team can take the name over in between.
+        const claim = crypto.randomBytes(5).toString('hex').toUpperCase().replace(/(.{5})/, '$1-');
         target.userId = null;
         target.salt = target.hash = null;
+        target.claim = { hash: sha('claim:' + claim.replace(/-/g, '')), exp: Date.now() + 7 * 86_400_000 };
         signOutMember(ws, target.id);
+        save();
+        broadcast(ws.id, { type: 'workspace' });
+        return send(res, 200, { ...publicWorkspace(ws, auth.memberId), claimCode: claim });
       } else if (m === 'PATCH') {
         const { role } = await readJson(req);
         if (role === 'owner' && auth.role !== 'owner') return send(res, 403, { error: 'Only team owners can make someone an owner.' });
@@ -7973,14 +8015,14 @@ async function api(req, res, url) {
       return send(res, 200, publicItem(it));
     }
     if (m === 'DELETE') {
-      if (it.type === 'message' && !own && !isAdmin(auth)) return send(res, 403, { error: 'You can only delete your own messages.' });
+      if (!mayDelete(auth, it)) return send(res, 403, { error: 'You can only delete your own messages.' });
       deleteItem(it.id);
       return send(res, 200, { ok: true });
     }
   }
 
   if (a === 'clear' && m === 'POST') {
-    for (const it of Object.values(db.items)) if (it.wsId === ws.id && !it.pinned && !it.dirId && canSee(auth, 'item', it)) deleteItem(it.id);
+    for (const it of Object.values(db.items)) if (it.wsId === ws.id && !it.pinned && !it.dirId && canSee(auth, 'item', it) && mayDelete(auth, it)) deleteItem(it.id);
     return send(res, 200, { ok: true });
   }
 
@@ -8465,7 +8507,7 @@ for (const x of Object.values(db.mileage)) {
   save();
 }
 
-const INV = invoicesModule({ db, save, broadcast, rid, hold, cleanText, readJson, send, badRequest, escHtml, brandOf, logoUrl, teamDay, offline, seal, unseal, stripeCall: stripe.callWith, PJ, isAdmin, jobOfRecord, jobLabel, moveJob, publicUrl: PUBLIC_URL, emit: (...a) => { PJ.emit(...a); QB.soon(a[0]); },
+const INV = invoicesModule({ notifyAdmins: (...a) => notifyAdmins(...a), db, save, broadcast, rid, hold, cleanText, readJson, send, badRequest, escHtml, brandOf, logoUrl, teamDay, offline, seal, unseal, stripeCall: stripe.callWith, PJ, isAdmin, jobOfRecord, jobLabel, moveJob, publicUrl: PUBLIC_URL, emit: (...a) => { PJ.emit(...a); QB.soon(a[0]); },
   // A payment is money in on the business's Finance, under the team's owner.
   addMoney: (ws, { amount, day, note }) => {
     const owner = ws.members.find((m) => m.role === 'owner') || ws.members[0];
@@ -8849,13 +8891,21 @@ async function eraseTeam(ws) {
 // ---------- someone leaves a team: they leave, an owner removes them, or they delete their account ----------
 // Their private things go. What they shared stays with the team, under their name. What only they could
 // see but the business needs (signing requests, meeting notes, map pins, campaigns they ran) passes to an owner.
-async function removeMember(ws, m) {
+async function removeMember(ws, m, { removed = false } = {}) {
   const id = m.id;
   const wsId = ws.id;
   const heir = ws.members.find((x) => x.role === 'owner' && x.id !== id);
   const theirs = (x) => x?.wsId === wsId && x.memberId === id;
   const hand = (x, k = 'memberId') => { if (x[k] === id) x[k] = heir ? heir.id : null; };
-  signOutWhere(ws, id);
+  signOutMember(ws, id);
+  // Their API keys stop working, and the webhooks those keys set up stop hearing anything.
+  const keyIds = new Set(Object.values(db.apiKeys).filter((k) => k.wsId === wsId && k.memberId === id).map((k) => k.id));
+  for (const k of keyIds) delete db.apiKeys[k];
+  for (const hk of Object.values(db.webhooks || {})) if (hk.wsId === wsId && hk.keyId && keyIds.has(hk.keyId)) delete db.webhooks[hk.id];
+  // Invite links they sent can't be used. Someone an admin removed can't just join again with the code they knew, so
+  // it's replaced (someone leaving on their own doesn't change the code the team has shared).
+  for (const inv of Object.values(db.invites)) if (inv.wsId === wsId && inv.byId === id) delete db.invites[inv.id];
+  if (removed && ws.inviteCode) ws.inviteCode = newInviteCode();
   await Promise.all(Object.values(db.calendars).filter(theirs).map(async (conn) => { await revokeCalendar(conn); disconnectCalendar(conn); }));
   DBX.forget(wsId, id);
   for (const n of Object.values(db.notices)) if (theirs(n)) delete db.notices[n.id];

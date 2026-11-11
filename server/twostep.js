@@ -60,7 +60,7 @@ export function twoStepModule({ db, save, seal, unseal, readJson, send, appName 
   const status = (u) => ({ on: on(u), since: u?.twoStep?.on ? u.twoStep.at : null, backupLeft: u?.twoStep?.on ? (u.twoStep.backup || []).length : 0 });
 
   // /api/account/two-step… for the signed-in person's account.
-  async function route(req, res, u, sub, { passOk, blocked, failed }) {
+  async function route(req, res, u, sub, { passOk, blocked, failed, needsConfirm }) {
     const m = req.method;
     if (!u) return send(res, 400, { error: 'Add your email first: two-step sign-in belongs to an email account.' });
     if (m === 'GET' && !sub) return send(res, 200, status(u));
@@ -68,6 +68,11 @@ export function twoStepModule({ db, save, seal, unseal, readJson, send, appName 
     // Turning it on: a new secret to scan (not active until a code from it is entered).
     if (m === 'POST' && sub === 'start') {
       if (on(u)) return send(res, 409, { error: 'Two-step sign-in is already on.' });
+      // Only the person who knows the password can turn it on (a borrowed session can't lock them out), and only on an
+      // email they've confirmed is theirs.
+      if (blocked()) return send(res, 429, { error: 'Too many wrong tries. Wait 15 minutes, then try again.' });
+      if (!passOk(body.password)) { failed(); return send(res, 403, { error: 'Type your password to turn on two-step sign-in.' }); }
+      if (needsConfirm?.()) return send(res, 403, { error: 'Confirm your email first (we sent you a code), then turn on two-step sign-in.' });
       const secret = b32(crypto.randomBytes(20));
       u.twoStep = { on: false, secret: seal({ s: secret }), startedAt: Date.now() };
       save();

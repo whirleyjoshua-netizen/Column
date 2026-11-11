@@ -14,7 +14,7 @@ const METHODS = ['cash', 'check', 'card', 'bank', 'other'];
 const DUE_DAYS = 14;
 const CHECK_MS = Number(process.env.INVOICE_CHECK_MS) || 5 * 60_000;
 
-export function invoicesModule({ db, save, broadcast, rid, hold = null, cleanText, readJson, send, badRequest, escHtml, brandOf, logoUrl, teamDay, offline, seal, unseal, stripeCall, PJ, isAdmin, jobOfRecord, jobLabel, moveJob, addMoney, dropMoneyId, publicUrl, emit = () => {} }) {
+export function invoicesModule({ notifyAdmins = null, db, save, broadcast, rid, hold = null, cleanText, readJson, send, badRequest, escHtml, brandOf, logoUrl, teamDay, offline, seal, unseal, stripeCall, PJ, isAdmin, jobOfRecord, jobLabel, moveJob, addMoney, dropMoneyId, publicUrl, emit = () => {} }) {
   db.invoices ||= {};
   db.payKeys ||= {};
   const money = (c) => ((c || 0) / 100).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
@@ -95,6 +95,7 @@ export function invoicesModule({ db, save, broadcast, rid, hold = null, cleanTex
   }
   function addPayment(inv, { amount, method, note, day: on, by, session = null }) {
     const ws = db.workspaces[inv.wsId];
+    if (!session) closeSessions(inv).catch(() => {});
     const p = { id: rid(), amount, method, note: note || '', day: on || teamDay(inv.wsId), by, at: Date.now(), ...(session ? { session } : {}) };
     p.moneyId = addMoney(ws, { amount, day: p.day, note: `${inv.number}${inv.to.name ? ' · ' + inv.to.name : ''}${method === 'card' ? ' (card)' : ''}` });
     inv.payments.push(p);
@@ -105,10 +106,29 @@ export function invoicesModule({ db, save, broadcast, rid, hold = null, cleanTex
     return p;
   }
 
+  const paying = new Set(); // invoices whose card page is being opened right now (one at a time)
   // ---------- the team's Stripe account ----------
   const keyOf = (wsId) => { const k = db.payKeys[wsId]; try { return k ? unseal(k.key).key : null; } catch { return null; } };
   const payInfo = (wsId) => { const k = db.payKeys[wsId]; return k ? { connected: true, account: k.account, live: k.live, at: k.at, by: k.by } : { connected: false }; };
 
+  // Only one card page can be open for an invoice, for what's owed right now. When what's owed changes (a payment is
+  // recorded, the lines change, it's voided) the open page is closed in Stripe, so an old one can't be paid as well.
+  async function closeSessions(inv, keep = null) {
+    const key = keyOf(inv.wsId);
+    if (!key) return;
+    for (const s of inv.sessions || []) {
+      if (s.done || s.id === keep) continue;
+      try {
+        const cs = await stripeCall(key, 'POST', `/checkout/sessions/${encodeURIComponent(s.id)}/expire`, {});
+        if (cs.status === 'expired') s.done = true;
+      } catch {
+        // Already paid or already closed: checking it records a payment if there was one.
+        await checkSession(inv, s.id).catch(() => {});
+        if (!s.done) s.done = true;
+      }
+    }
+    save();
+  }
   // A Checkout session that came back paid becomes a payment, once.
   async function checkSession(inv, sid) {
     const s = inv.sessions.find((x) => x.id === sid);
@@ -120,7 +140,17 @@ export function invoicesModule({ db, save, broadcast, rid, hold = null, cleanTex
       return false;
     }
     s.done = true;
-    if (!inv.payments.some((x) => x.session === sid)) addPayment(inv, { amount: cs.amount_total ?? s.amount, method: 'card', note: 'Paid online', by: inv.to.name ? `${inv.to.name} (customer)` : 'Customer', session: sid });
+    if (!inv.payments.some((x) => x.session === sid)) {
+      const amount = cs.amount_total ?? s.amount;
+      const owed = totals(inv).balance;
+      addPayment(inv, { amount, method: 'card', note: 'Paid online', by: inv.to.name ? `${inv.to.name} (customer)` : 'Customer', session: sid });
+      // The card was charged more than was owed (it shouldn't happen any more, but if it does the team must know).
+      if (amount > owed) {
+        inv.overpaid = (inv.overpaid || 0) + (amount - owed);
+        save();
+        notifyAdmins?.(inv.wsId, { title: `${inv.number} was paid ${money(amount - owed)} too much`, text: 'Refund the difference in your Stripe dashboard.', kind: 'invoice', key: 'overpaid:' + inv.id + ':' + sid });
+      }
+    }
     broadcast(inv.wsId, { type: 'invoice:paid', invoiceId: inv.id, recordId: inv.recordId, projectId: inv.projectId, number: inv.number, amount: cs.amount_total ?? s.amount, name: inv.to.name, forAdmins: true });
     return true;
   }
@@ -224,6 +254,7 @@ export function invoicesModule({ db, save, broadcast, rid, hold = null, cleanTex
       if (body.lines !== undefined) {
         if (inv.payments.length) return send(res, 400, { error: 'This invoice has payments on it, so its lines can’t change. Void it and make a new one.' });
         inv.lines = cleanLines(body.lines);
+        closeSessions(inv).catch(() => {});
       }
       if (body.due !== undefined) inv.due = /^\d{4}-\d{2}-\d{2}$/.test(String(body.due)) ? body.due : null;
       if (body.note !== undefined) inv.note = String(body.note || '').replace(/\r\n?/g, '\n').trim().slice(0, 2000);
@@ -261,6 +292,7 @@ export function invoicesModule({ db, save, broadcast, rid, hold = null, cleanTex
     if (c === 'void' && m === 'POST') {
       if (inv.payments.length) return send(res, 400, { error: 'Remove its payments first: a paid invoice can’t be voided.' });
       inv.status = 'void';
+      closeSessions(inv).catch(() => {});
       save();
       news(inv);
       emit(ws.id, 'invoice.voided', apiInvoice(inv), auth.member);
@@ -271,6 +303,7 @@ export function invoicesModule({ db, save, broadcast, rid, hold = null, cleanTex
       const body = await readJson(req, 5_000);
       const amount = Math.round(Number(String(body.amount ?? '').replace(/[$,\s]/g, '')) * 100);
       if (!Number.isFinite(amount) || amount <= 0 || amount > 1e11) return send(res, 400, { error: 'Enter the amount paid, like 250.00' });
+      if (amount > totals(inv).balance) return send(res, 400, { error: `That’s more than the ${money(totals(inv).balance)} still owed.` });
       const on = /^\d{4}-\d{2}-\d{2}$/.test(String(body.day || '')) ? body.day : null;
       addPayment(inv, { amount, method: METHODS.includes(body.method) ? body.method : 'other', note: cleanText(body.note, 200), day: on, by: auth.member });
       return send(res, 200, publicInvoice(inv));
@@ -318,7 +351,17 @@ export function invoicesModule({ db, save, broadcast, rid, hold = null, cleanTex
       const { balance } = totals(inv);
       if (!key || balance <= 0 || inv.status === 'void') { res.writeHead(303, { Location: `/i/${token}` }); return res.end(); }
       const back = `${publicUrl}/i/${token}`;
+      if (paying.has(inv.id)) { res.writeHead(303, { Location: `/i/${token}` }); return res.end(); }
+      paying.add(inv.id);
       try {
+        const open = (inv.sessions || []).filter((x) => !x.done);
+        for (const s of open) {
+          const cur = await stripeCall(key, 'GET', `/checkout/sessions/${encodeURIComponent(s.id)}`).catch(() => null);
+          if (cur?.payment_status === 'paid') { await checkSession(inv, s.id); res.writeHead(303, { Location: `/i/${token}?paid=${encodeURIComponent(s.id)}` }); return res.end(); }
+          if (cur?.status === 'open' && s.amount === balance && cur.url) { res.writeHead(303, { Location: cur.url }); return res.end(); }
+        }
+        await closeSessions(inv);
+        if (totals(inv).balance !== balance || inv.status === 'void') { res.writeHead(303, { Location: `/i/${token}` }); return res.end(); }
         const cs = await stripeCall(key, 'POST', '/checkout/sessions', {
           mode: 'payment', success_url: `${back}?paid={CHECKOUT_SESSION_ID}`, cancel_url: back,
           'line_items[0][quantity]': '1', 'line_items[0][price_data][currency]': 'usd', 'line_items[0][price_data][unit_amount]': String(balance),
@@ -333,6 +376,8 @@ export function invoicesModule({ db, save, broadcast, rid, hold = null, cleanTex
         return res.end();
       } catch (e) {
         return html(res, 502, ws, `<h1>Couldn’t start the payment</h1><p class="muted">The card payment page didn’t open (${escHtml(e.message)}). Try again in a minute, or contact ${escHtml(ws.name)}.</p><p><a href="/i/${token}">Back to the invoice</a></p>`);
+      } finally {
+        paying.delete(inv.id);
       }
     }
     if (act) return html(res, 404, null, '<h1>Not found</h1>');

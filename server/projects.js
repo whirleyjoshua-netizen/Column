@@ -1324,8 +1324,10 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
     rate.set(k.id, r);
     if (r.n > 300) return { limited: true };
     if (now - (k.lastUsedAt || 0) > 60_000) { k.lastUsedAt = now; save(); }
+    // A key works only while the person who made it is on the team, with their role now.
     const mb = ws.members.find((x) => x.id === k.memberId);
-    return { key: k, ws, auth: { wsId: ws.id, memberId: k.memberId, member: `${k.name} (API)`, role: mb?.role || 'member' } };
+    if (!mb) return null;
+    return { key: k, ws, auth: { wsId: ws.id, memberId: k.memberId, member: `${k.name} (API)`, role: mb.role } };
   }
   function outValue(ws, f, v) {
     if (v == null) return null;

@@ -52,7 +52,7 @@ try {
   const sub = r.body;
   ok(r.status === 201 && sub.secret?.startsWith('whsec_') && sub.events.length === 10, 'subscribing gives the hook and its signing secret');
   ok((await K('GET', '/v1/webhooks')).body.data.length === 1 && (await R('GET', '/v1/webhooks')).body.data.length === 0, 'a key lists only the hooks it made');
-  ok((await R('DELETE', '/v1/webhooks/' + sub.id)).status === 404, 'and can’t remove another key’s');
+  ok([403, 404].includes((await R('DELETE', '/v1/webhooks/' + sub.id)).status) && (await K('GET', '/v1/webhooks')).body.data.length === 1, 'and can’t remove another key’s (a read-only key can’t remove any)');
   ok((await jo('GET', '/integrations/webhooks')).body.some((h) => h.id === sub.id), 'the team sees it in Settings too');
   r = await K('POST', '/v1/webhooks', { url: 'http://127.0.0.1:1/x', events: ['nonsense'] });
   ok(r.status === 201 && r.body.events.length > 15, 'no known events asked for means all of them');
