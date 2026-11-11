@@ -10,7 +10,7 @@ const S = (await import('node:path')).resolve(process.argv[2] || '.');
 const DIR = S + '/dk/audit_critical';
 fs.rmSync(DIR, { recursive: true, force: true });
 fs.mkdirSync(DIR, { recursive: true });
-const PORT = 4783, AI = 4784, B = `http://127.0.0.1:${PORT}`;
+const PORT = 4903, AI = 4904, B = `http://127.0.0.1:${PORT}`;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let fails = 0;
 const ok = (c, msg) => { console.log((c ? 'PASS ' : 'FAIL ') + msg); if (!c) fails++; };
