@@ -65,7 +65,7 @@ await B.cmd('Emulation.setDeviceMetricsOverride', { width: 420, height: 820, dev
 await B.cmd('Page.navigate', { url: link });
 ok(await B.until(`document.querySelector('#modeHint')?.textContent.includes('Olive invited you to join olive co ${t}')`), 'the link opens Column saying who invited her to which team');
 const shown = `[...document.querySelectorAll('#loginForm label')].filter((l) => !l.classList.contains('hidden')).map((l) => l.firstChild.textContent.trim()).join(',')`;
-ok(await B.ev(shown) === 'Your name,Email,Password,This device' && await B.ev(`document.querySelector('#modeSeg').classList.contains('hidden')`), 'it asks only for her name, email and password');
+ok(await B.ev(shown) === 'Your name,Email,Password' && await B.ev(`document.querySelector('#modeSeg').classList.contains('hidden')`), 'it asks only for her name, email and password');
 ok(await B.ev(`document.querySelector('#loginForm').email.value`) === pat, 'with her email filled in');
 await shot(B, 'inv-join.png');
 await B.ev(`(() => { const f = document.querySelector('#loginForm'); f.name.value = 'Pat'; f.password.value = 'patpassword'; f.requestSubmit(); })()`);

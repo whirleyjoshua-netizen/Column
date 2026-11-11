@@ -115,7 +115,7 @@ const fake = http.createServer((req, res) => {
   });
 });
 await new Promise((r) => fake.listen(FAKE, '127.0.0.1', r));
-const srv = spawn('node', ['index.js'], { cwd: new URL('../server', import.meta.url).pathname, env: { ...process.env, PORT: String(PORT), DATA_DIR: DIR, MAIL_OUTBOX: '1', DATABASE_URL: '', ALLOW_LOCAL_WEBHOOKS: '1', ANTHROPIC_BASE_URL: F, OPENAI_BASE_URL: F + '/oa', GEMINI_BASE_URL: F + '/gm', POSTIZ_URL: F + '/pz/public/v1', POSTIZ_CLIENT_ID: 'pca_test', POSTIZ_CLIENT_SECRET: 'pcs_test', POSTIZ_AUTHORIZE_URL: F + '/pzauth/authorize', POSTIZ_TOKEN_URL: F + '/pz/oauth/token' }, stdio: ['ignore', 'pipe', 'pipe'] });
+const srv = spawn('node', ['index.js'], { cwd: new URL('../server', import.meta.url).pathname, env: { ...process.env, SKIP_SETUP: '1', PORT: String(PORT), DATA_DIR: DIR, MAIL_OUTBOX: '1', DATABASE_URL: '', ALLOW_LOCAL_WEBHOOKS: '1', ANTHROPIC_BASE_URL: F, OPENAI_BASE_URL: F + '/oa', GEMINI_BASE_URL: F + '/gm', POSTIZ_URL: F + '/pz/public/v1', POSTIZ_CLIENT_ID: 'pca_test', POSTIZ_CLIENT_SECRET: 'pcs_test', POSTIZ_AUTHORIZE_URL: F + '/pzauth/authorize', POSTIZ_TOKEN_URL: F + '/pz/oauth/token' }, stdio: ['ignore', 'pipe', 'pipe'] });
 srv.log = ''; srv.stdout.on('data', (d) => (srv.log += d)); srv.stderr.on('data', (d) => (srv.log += d));
 for (let i = 0; i < 100; i++) { try { if ((await fetch(APP + 'api/health')).ok) break; } catch {} await sleep(150); }
 today = new Date().toLocaleDateString('en-CA');

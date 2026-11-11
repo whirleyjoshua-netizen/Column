@@ -34,7 +34,7 @@ try {
   const J = call(r.body.token), wsId = r.body.workspace.id;
   let st = (await J('GET', '/state')).body;
   const keys = (st.start || []).map((x) => x.key);
-  ok(keys.join() === 'invite,calendar,contacts,campaign,ai', 'an owner of a new team gets the list (a calendar step, since Apple Calendar or the subscribe link always works; no email step when this server can’t send): ' + keys.join());
+  ok(keys.join() === 'hq,ai,campaign,calendar,contacts,invite,agents', 'an owner of a new team gets the list: the business profile first, a calendar step (Apple Calendar or the subscribe link always works), no email step when this server can’t send: ' + keys.join());
   ok(st.start.every((x) => !x.done), 'nothing is ticked yet');
 
   await sleep(1200);
@@ -55,7 +55,7 @@ try {
   r = await J('GET', '/home/start');
   const done = Object.fromEntries(r.body.start.map((x) => [x.key, x.done]));
   ok(done.campaign && done.contacts && done.invite && !done.ai, 'a campaign, a contact and a teammate tick their steps; the AI key is still to do');
-  ok((await Sm('GET', '/state')).body.start === null, 'members don’t get the list');
+  ok((await Sm('GET', '/state')).body.start.map((x) => x.key).join() === 'calendar,ai,agents', 'someone who joins gets their own short list: calendar, AI key, agents');
   await J('PUT', '/ai/keys/anthropic', { key: 'k' }).catch(() => {});
 
   // Trial reminders: 3 days, 1 day, ended. Each once.

@@ -289,10 +289,10 @@
   const LOGIN_MODES = {
     signin: { btn: 'Sign in', hint: '', fields: ['email', 'pass', 'device'] },
     teamname: { btn: 'Sign in', hint: 'For logins that don’t have an email yet.', fields: ['team', 'name', 'pass', 'device'] },
-    join: { btn: 'Join team', hint: 'New to a team? Ask someone on it for the invite code. Already have an account? Use its email and password.', fields: ['team', 'code', 'name', 'email', 'pass', 'device'] },
-    create: { btn: 'Create team', hint: 'Start a new team. You’ll get an invite code to share in Settings.', fields: ['team', 'name', 'email', 'pass', 'device'] },
+    join: { btn: 'Join team', hint: 'New to a team? Ask someone on it for the invite code. Already have an account? Use its email and password.', fields: ['team', 'code', 'name', 'email', 'pass'] },
+    create: { btn: 'Start free trial', hint: 'For your business, on your own or with a team. You can invite people any time.', fields: ['team', 'name', 'email', 'pass'] },
     forgot: { btn: 'Send reset link', hint: 'We’ll email you a link to choose a new password.', fields: ['email'] },
-    invite: { btn: 'Join team', hint: '', fields: ['name', 'email', 'pass', 'device'] },
+    invite: { btn: 'Join team', hint: '', fields: ['name', 'email', 'pass'] },
   };
   function setLoginMode(mode) {
     S.loginMode = mode;
@@ -305,6 +305,9 @@
     $('#modeHint').classList.toggle('hidden', !hint);
     $('#modeSeg').classList.toggle('hidden', mode === 'invite');
     for (const k of ['team', 'code', 'name', 'email', 'pass', 'device']) $(`#${k}Field`).classList.toggle('hidden', !M.fields.includes(k));
+    // Starting out it's the business's name (someone on their own has no “team”); this device is named for them.
+    $('#teamField').firstChild.textContent = mode === 'create' ? 'Business name' : 'Team name';
+    $('#loginForm').workspace.placeholder = mode === 'create' ? 'e.g. Premier Shade Solutions' : 'e.g. premier-studio';
     // The two-step code only shows once the server asks for it.
     $('#otpField').classList.add('hidden');
     $('#loginForm').otp.value = '';
@@ -1034,6 +1037,7 @@
     loadApprovals();
     loadAgents();
     if (amAdmin()) loadHq();
+    if (amAdmin() && S.workspace.setup?.pending) { if (!S.ai) api('GET', '/ai').then((x) => (S.ai = x)).catch(() => {}); openSetup(); }
     S.panes = S.panes.map((v) => (v.startsWith('stack:') && !stackById(v.slice(6)) ? 'files' : v));
     $('#wsName').textContent = S.workspace.name;
     document.title = `${S.workspace.name} · Kloomie`;
@@ -4989,6 +4993,148 @@
   let homeTimer = 0;
   const homeSoon = () => { if (S.tab !== 'home' || homeTimer) return; homeTimer = setTimeout(() => { homeTimer = 0; renderHome(); }, 250); };
   setInterval(homeSoon, 60_000);
+  // ---------- Setup: two minutes after sign-up, so Kloomie is shaped for this business ----------
+  // Just me or a team; what kind of business (switches on the right tools and starts the right project); the AI key;
+  // the website (Company HQ reads it); the calendar. Every step can be skipped, and each does its work through the
+  // usual routes. Owners and admins of a team that hasn't finished it see it once, when they arrive.
+  const SET = { step: 0, solo: null, kind: null, trades: new Set(), made: false, busy: false, found: null };
+  const SU_KINDS = {
+    trades: ['🛠️', 'Trades & field service', 'Installs, repairs, cleaning, contracting: jobs at customers’ places', { projects: true, map: true, bills: true }],
+    services: ['🤝', 'Agency or services', 'Consulting, design, marketing, professional services: clients and projects', { projects: true, bills: true }],
+    store: ['🛍️', 'Store or restaurant', 'Customers, promotions and regulars', { bills: true }],
+    software: ['💻', 'Software or tech', 'Building a product: roadmap, sprints, bugs and releases', { projects: true }],
+    other: ['✨', 'Something else', 'Start with the basics and switch tools on as you go', {}],
+  };
+  function openSetup() {
+    if ($('#setupWrap')) return;
+    document.body.append(h('div', { id: 'setupWrap', class: 'su-wrap', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Set up Kloomie' }, h('div', { class: 'su-card' })));
+    drawSetup();
+  }
+  function closeSetup() { $('#setupWrap')?.remove(); renderHome(); }
+  async function finishSetup(skipped) {
+    try { const r = await api('PATCH', '/setup', { done: true }); S.start = r.start; } catch {}
+    if (S.workspace) S.workspace.setup = { ...(S.workspace.setup || {}), pending: false };
+    closeSetup();
+    if (!skipped) toast('You’re set up. Your next steps are on Home.');
+  }
+  // The steps this person gets: trades pick their kinds of work; the website step needs an AI key.
+  const suSteps = () => ['who', 'kind', ...(SET.kind === 'trades' ? ['trades'] : []), 'ai', 'site', 'calendar'];
+  function drawSetup() {
+    const card = $('#setupWrap .su-card');
+    if (!card) return;
+    const steps = suSteps();
+    const key = steps[Math.min(SET.step, steps.length - 1)];
+    const next = () => { SET.step++; drawSetup(); };
+    const back = SET.step ? h('button', { class: 'linkish', onclick: () => { SET.step--; drawSetup(); } }, '‹ Back') : h('span');
+    const dots = h('div', { class: 'su-dots', 'aria-label': `Step ${SET.step + 1} of ${steps.length}` }, steps.map((_, i) => h('i', { class: i === SET.step ? 'on' : i < SET.step ? 'done' : '' })));
+    const opt = (on, ic, title, sub, run) => h('button', { class: 'su-opt' + (on ? ' on' : ''), 'aria-pressed': String(!!on), onclick: run }, h('span', { class: 'su-ic' }, ic), h('span', {}, h('b', {}, title), h('small', {}, sub)));
+    const body = {
+      who: () => [
+        h('h2', {}, `Welcome to Kloomie${S.me?.member ? ', ' + S.me.member.split(' ')[0] : ''}`),
+        h('p', { class: 'muted' }, 'Two minutes to shape Kloomie for your business. You can skip anything and change it all later.'),
+        h('div', { class: 'su-opts' },
+          opt(SET.solo === true, '🙋', 'Just me', 'I run things myself (for now)', async () => { SET.solo = true; api('PATCH', '/setup', { solo: true }).catch(() => {}); next(); }),
+          opt(SET.solo === false, '👥', 'Me and my team', 'I’ll invite the people I work with', async () => { SET.solo = false; api('PATCH', '/setup', { solo: false }).catch(() => {}); next(); })),
+      ],
+      kind: () => [
+        h('h2', {}, 'What kind of business?'),
+        h('p', { class: 'muted' }, 'So the right tools are on, and your first project is ready.'),
+        h('div', { class: 'su-opts' }, Object.entries(SU_KINDS).map(([k, [ic, title, sub]]) => opt(SET.kind === k, ic, title, sub, async () => {
+          SET.kind = k;
+          api('PATCH', '/setup', { kind: k }).catch(() => {});
+          if (k !== 'trades') await suApply();
+          next();
+        }))),
+      ],
+      trades: () => {
+        const grid = h('div', { class: 'su-trades' }, h('p', { class: 'day-hint' }, 'Loading…'));
+        const go = h('button', { class: 'btn primary-btn', disabled: !SET.trades.size }, SET.trades.size ? 'Set up my Jobs' : 'Pick what you do');
+        api('GET', '/project-templates/trades').then((fams) => grid.replaceChildren(...fams.map((fm) => h('section', {}, h('h4', {}, fm.name), h('div', { class: 'pj-trade-row' }, fm.trades.map((x) => {
+          const b = h('button', { type: 'button', class: 'pj-trade', 'aria-pressed': String(SET.trades.has(x.key)) }, h('span', {}, x.icon), x.name);
+          b.onclick = () => { SET.trades.has(x.key) ? SET.trades.delete(x.key) : SET.trades.add(x.key); b.setAttribute('aria-pressed', String(SET.trades.has(x.key))); go.disabled = !SET.trades.size; go.textContent = SET.trades.size ? 'Set up my Jobs' : 'Pick what you do'; };
+          return b;
+        })))))).catch((e) => grid.replaceChildren(h('p', { class: 'err' }, e.message)));
+        go.onclick = async () => { go.disabled = true; go.textContent = 'Setting up…'; await suApply(); next(); };
+        return [h('h2', {}, 'What do you do?'), h('p', { class: 'muted' }, 'Pick everything. Each kind of work gets its own job details, checklist and stages.'), grid, h('div', { class: 'su-go' }, go)];
+      },
+      ai: () => {
+        if (S.ai && Object.keys(S.ai.keys || {}).length) return [h('h2', {}, 'Your AI key'), h('p', {}, '✓ Your AI key is already set up. Your agents and Sidekick are ready.'), h('div', { class: 'su-go' }, h('button', { class: 'btn primary-btn', onclick: next }, 'Next'))];
+        const prov = h('select', { 'aria-label': 'Provider' }, h('option', { value: 'anthropic' }, 'Claude (Anthropic)'), h('option', { value: 'openai' }, 'OpenAI'), h('option', { value: 'gemini' }, 'Google Gemini'));
+        const key = h('input', { type: 'password', placeholder: 'Paste your API key', autocomplete: 'off', 'aria-label': 'API key' });
+        const go = h('button', { class: 'btn primary-btn' }, 'Save and continue');
+        go.onclick = async () => {
+          if (!key.value.trim()) return key.focus();
+          go.disabled = true;
+          try { S.ai = await api('PUT', '/ai/keys/' + prov.value, { key: key.value.trim() }); if (AG.data) loadAgents(); next(); } catch (e) { toast(e.message); go.disabled = false; }
+        };
+        return [
+          h('h2', {}, 'Switch on your AI team'),
+          h('p', { class: 'muted' }, 'Your agents (Chief of Staff, Sales, Operations, Marketing) and Sidekick work on your own AI key, so you pay the provider directly for what you use: usually a few dollars a month. Claude is what we recommend.'),
+          h('div', { class: 'su-row' }, prov, key),
+          h('p', { class: 'day-hint' }, 'Get one at console.anthropic.com (Claude), platform.openai.com or aistudio.google.com. It’s kept encrypted and never shown again.'),
+          h('div', { class: 'su-go' }, h('button', { class: 'linkish', onclick: next }, 'I’ll do this later'), go)];
+      },
+      site: () => {
+        const hasAi = S.ai && Object.keys(S.ai.keys || {}).length;
+        if (SET.found) {
+          const accept = h('button', { class: 'btn primary-btn' }, `Add ${SET.found.added} to my profile`);
+          accept.onclick = async () => { accept.disabled = true; try { await api('POST', '/hq/suggestions/accept'); toast('Added to Company HQ'); } catch (e) { toast(e.message); } next(); };
+          return [h('h2', {}, 'Here’s what Kloomie found'), h('p', {}, `Kloomie read ${SET.found.pages} page${SET.found.pages === 1 ? '' : 's'} of your site and found ${SET.found.added} things about your business: what you do, where, your voice, what makes you different.`), SET.found.gaps?.length ? h('p', { class: 'day-hint' }, 'Your site doesn’t say: ' + SET.found.gaps.join(' · ') + '. You can add these in Company HQ.') : null, h('div', { class: 'su-go' }, h('button', { class: 'linkish', onclick: next }, 'I’ll look in Company HQ later'), accept)].filter(Boolean);
+        }
+        const url = h('input', { type: 'url', placeholder: 'yourbusiness.com', 'aria-label': 'Your website' });
+        const go = h('button', { class: 'btn primary-btn', disabled: !hasAi }, 'Read my site');
+        go.onclick = async () => {
+          if (!url.value.trim()) return url.focus();
+          go.disabled = true; go.textContent = 'Reading your site…';
+          try { SET.found = await api('POST', '/hq/import', { url: url.value.trim() }); HQ.data = null; drawSetup(); } catch (e) { toast(e.message); go.disabled = false; go.textContent = 'Read my site'; }
+        };
+        url.addEventListener('keydown', (e) => e.key === 'Enter' && go.click());
+        return [
+          h('h2', {}, 'Tell Kloomie about your business'),
+          h('p', { class: 'muted' }, 'Kloomie reads your website and fills in your business profile: what you do, where, who for, and how you sound. Every email, post and plan your agents write then sounds like you.'),
+          h('div', { class: 'su-row' }, url, go),
+          hasAi ? null : h('p', { class: 'day-hint' }, 'Reading your site needs your AI key (the step before). You can do it later in Company HQ.'),
+          h('div', { class: 'su-go' }, h('button', { class: 'linkish', onclick: next }, hasAi ? 'No website, or later' : 'Skip for now'))].filter(Boolean);
+      },
+      calendar: () => {
+        const wrap = h('div', { class: 'su-cal' }, h('p', { class: 'day-hint' }, 'Loading…'));
+        api('GET', '/calendars').then((c) => {
+          const ready = Object.entries(c.providers || {}).filter(([, on]) => on);
+          wrap.replaceChildren(...(ready.length ? ready.map(([k]) => h('button', { class: 'btn', onclick: async () => {
+            if (k === 'apple') { await finishSetup(true); return openSettings('connections', '.cal-sec'); }
+            try { const { url } = await api('POST', '/calendars/connect', { provider: k, tz: myTz(), mail: k !== 'apple' }); window.open(url, '_blank'); toast('Finish signing in in the new tab. Your calendar shows up in your Day.'); } catch (e) { toast(e.message); }
+          } }, 'Connect ' + CAL_NAMES[k])) : [h('p', { class: 'day-hint' }, 'You can put your Kloomie Day in your phone’s calendar from Settings → Connections.')]));
+        }).catch(() => wrap.replaceChildren());
+        return [
+          h('h2', {}, 'Bring in your calendar'),
+          h('p', { class: 'muted' }, 'Your meetings show up in your Day, and your agents plan around them. Google and Outlook also let you send email from your own address.'),
+          wrap,
+          h('div', { class: 'su-go' }, h('button', { class: 'btn primary-btn', onclick: () => finishSetup() }, 'Finish'))];
+      },
+    }[key];
+    card.replaceChildren(
+      h('div', { class: 'su-top' }, back, dots, h('button', { class: 'linkish su-skip', onclick: () => finishSetup(true) }, 'Skip setup')),
+      ...body().filter(Boolean));
+    card.querySelector('input')?.focus();
+  }
+  // What the kind of business switches on and starts: tools, and a first project (Jobs for trades, a sales pipeline
+  // for services, Technology & software). Once, even if they step back and forth.
+  async function suApply() {
+    if (SET.made) return;
+    const k = SET.kind;
+    const tools = SU_KINDS[k]?.[3] || {};
+    try {
+      if (Object.keys(tools).length) S.workspace = await api('PATCH', '/workspace', { tools });
+      if (k === 'trades' && SET.trades.size) await newJobsProject([...SET.trades]);
+      else if (k === 'services') prUpsertProject(await api('POST', '/projects', { template: 'crm', name: 'Sales pipeline' }));
+      else if (k === 'software') prUpsertProject(await api('POST', '/projects', { template: 'tech', name: S.workspace?.name || 'Our product' }));
+      SET.made = true;
+      renderTabs();
+    } catch (e) {
+      toast(e.message);
+    }
+  }
+
   // Get started: a new team's first steps, ticked by the server from what's been done. Most of them get done
   // elsewhere (Settings, Google's sign-in tab), so while Home is open the list is checked again now and then.
   const START = {
@@ -4997,7 +5143,11 @@
     email: ['Connect your email', 'Send from your own Gmail or Outlook, so replies come back to you.', () => openTool('email')],
     contacts: ['Add your contacts', 'Import a spreadsheet, add people by hand, or connect Google Contacts.', () => openTool('contacts')],
     campaign: ['Start your first campaign', 'A launch, an outreach push, anything with a finish line. Sidekick can plan it with you.', () => { setTab('camps'); openCampaign(null); campaignSheet(); }],
-    ai: ['Add your AI key', 'Sidekick plans and drafts for you, on your own Claude, OpenAI or Gemini key.', () => openSettings('connections', '.ai-sec')],
+    ai: ['Add your AI key', 'Your agents and Sidekick plan and draft for you, on your own Claude, OpenAI or Gemini key.', () => openSettings('connections', '.ai-sec')],
+    hq: ['Tell Kloomie about your business', 'Read your website, or answer a few questions. Every AI feature then sounds like you.', () => openTool('hq')],
+    job: ['Add your first job', 'Put a real job in Jobs: who it’s for, where, and when you’re going.', () => showProjects()],
+    work: ['Add your first piece of work', 'A story, task or bug on your development board.', () => showProjects()],
+    agents: ['Give your agents a first job', 'Try “Plan my week” or “What’s working”. They do the work in your tasks, calendar and jobs.', () => agOpen('team')],
   };
   function startSoon() {
     if (!S.start || Date.now() - (HM.startAt || 0) < 5_000) return;
@@ -5018,7 +5168,7 @@
     const st = S.start;
     if (!st?.some((x) => !x.done)) return null;
     const done = st.filter((x) => x.done).length;
-    return card('start wide', 'Get started', `${done} of ${st.length}`, ['Hide', hideStart],
+    return card('start wide', amAdmin() ? 'Get started' : `Welcome to ${S.workspace?.name || 'the team'}`, `${done} of ${st.length}`, ['Hide', hideStart],
       h('div', { class: 'start-bar' }, h('i', { style: `width:${Math.round((done / st.length) * 100)}%` })),
       h('div', { class: 'start-list' }, st.filter((x) => START[x.key]).map((x, i) => {
         const [title, sub, run] = START[x.key];

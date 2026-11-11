@@ -53,7 +53,7 @@ ok(await A.until(`document.querySelector('#loginLinks').textContent.includes('Fo
 await shot(A, 'acct-signin.png');
 // Create a team with an email
 await A.ev(`document.querySelector('[data-mode=create]').click()`);
-ok(await A.ev(`${shown}`) === 'Team name,Your name,Email,Password,This device', 'creating a team asks for team, name, email and password');
+ok(await A.ev(`${shown}`) === 'Business name,Your name,Email,Password', 'creating a team asks for the business’s name, your name, email and password (this device is named for you)');
 await A.ev(`(() => { const f = document.querySelector('#loginForm'); f.workspace.value = 'kim co ${t}'; f.name.value = 'Kim'; f.email.value = '${em}'; f.password.value = 'kimpassword'; f.requestSubmit(); })()`);
 ok(await A.until(`!document.querySelector('#app').classList.contains('hidden')`), 'Kim’s team opens');
 ok(await A.until(`document.querySelector('#confirmBar')?.textContent.includes('${em}')`), 'a bar asks her to confirm her email');

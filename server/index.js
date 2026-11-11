@@ -451,6 +451,7 @@ const BAR_KEYS = ['column', 'chat', 'camps', 'agents', 'sidekick', 'docs', 'proj
 // The tools a team uses, which owners and admins switch on and off (Settings → Team). A new team starts with
 // a simple set; a team from before switches keeps everything but Projects, which is parked.
 const TOOL_KEYS = ['agents', 'sidekick', 'docs', 'contacts', 'email', 'folders', 'signs', 'bills', 'meetings', 'map', 'vault', 'projects'];
+const SETUP_KINDS = ['trades', 'services', 'store', 'software', 'other'];
 const NEW_TEAM_TOOLS = ['agents', 'sidekick', 'docs', 'contacts', 'email', 'folders', 'signs'];
 // Agents came later: on for teams that haven't switched them off.
 const toolsOf = (ws) => Object.fromEntries(TOOL_KEYS.map((k) => [k, ws.settings?.tools ? (k === 'agents' ? ws.settings.tools[k] !== false : ws.settings.tools[k] === true) : k !== 'projects']));
@@ -462,6 +463,7 @@ const publicWorkspace = (ws, memberId) => ({
   settings: ws.settings,
   custMsgs: custMsgsOf(ws),
   tz: tzOf(ws),
+  setup: ws.setup || null,
   deleteAt: ws.deleteAt || null,
   deleteBy: ws.deleteAt ? ws.deleteBy : null,
   stacks: ws.stacks.filter((x) => seesCampaign(x.campaignId, memberId)),
@@ -1463,19 +1465,39 @@ function applySub(ws, sub) {
 // START_DAYS, until everything's done or the person hides it. Items for tools that are off, or that need
 // something this server doesn't have, are left out.
 const START_DAYS = 30;
+// Made for the person: owners and admins in a team's first 30 days get the steps that set the business up (no
+// invites for someone on their own; the first job for trades, the first work item for software, the first campaign
+// otherwise); someone who joined a team gets their own few steps for their first 30 days there.
 function startList(ws, auth) {
   const me = ws.members.find((x) => x.id === auth.memberId);
-  if (!isAdmin(auth) || !me || me.startHidden || Date.now() - (ws.createdAt || 0) > START_DAYS * 86_400_000) return null;
+  if (!me || me.startHidden) return null;
   const tools = toolsOf(ws);
+  const setup = ws.setup || {};
   // A calendar can always be linked (Apple Calendar, or the subscribe link); email needs Google or Outlook set up.
   const mailOn = Object.values(calProviders).some((p) => p.sendMail && p.configured());
+  const cal = Object.values(db.calendars).some((x) => x.wsId === ws.id && x.memberId === auth.memberId) || Object.values(db.calfeeds).some((x) => x.wsId === ws.id && x.memberId === auth.memberId);
+  const ai = !!aiUse(aiOf(ws.id, auth.memberId));
+  const asked = Object.values(db.agentRuns || {}).some((x) => x.wsId === ws.id && x.memberId === auth.memberId);
+  const agents = tools.agents && ['agents', asked];
+  if (!isAdmin(auth)) {
+    if (Date.now() - (me.createdAt || ws.createdAt || 0) > START_DAYS * 86_400_000) return null;
+    return [['calendar', cal], (tools.sidekick || tools.agents) && ['ai', ai], agents].filter(Boolean).map(([key, done]) => ({ key, done }));
+  }
+  if (Date.now() - (ws.createdAt || 0) > START_DAYS * 86_400_000) return null;
+  const hq = Object.values(db.hq || {}).filter((x) => x.wsId === ws.id && x.status === 'approved').length >= 3;
+  const recs = (tpl) => Object.values(db.records).some((r) => r.wsId === ws.id && db.projects[r.projectId]?.template === tpl);
+  const first = tools.projects && setup.kind === 'trades' ? ['job', recs('trades') || recs('jobs')]
+    : tools.projects && setup.kind === 'software' ? ['work', recs('tech')]
+    : ['campaign', Object.values(db.campaigns).some((c) => c.wsId === ws.id)];
   const items = [
-    ['invite', ws.members.length > 1 || Object.values(db.invites).some((x) => x.wsId === ws.id)],
-    ['calendar', Object.values(db.calendars).some((x) => x.wsId === ws.id && x.memberId === auth.memberId) || Object.values(db.calfeeds).some((x) => x.wsId === ws.id && x.memberId === auth.memberId)],
+    ['hq', hq],
+    (tools.sidekick || tools.agents) && ['ai', ai],
+    first,
+    ['calendar', cal],
     mailOn && tools.email && ['email', !!mailConn(ws.id, auth.memberId)],
     tools.contacts && ['contacts', contactsOf(ws.id).length > 0],
-    ['campaign', Object.values(db.campaigns).some((c) => c.wsId === ws.id)],
-    tools.sidekick && ['ai', !!aiUse(aiOf(ws.id, auth.memberId))],
+    !setup.solo && ['invite', ws.members.length > 1 || Object.values(db.invites).some((x) => x.wsId === ws.id)],
+    agents,
   ].filter(Boolean);
   return items.map(([key, done]) => ({ key, done }));
 }
@@ -5111,6 +5133,8 @@ async function api(req, res, url) {
         members: [],
         inviteCode: newInviteCode(),
         billing: { trialEnds: Date.now() + TRIAL_DAYS * 86_400_000 },
+        // The guided setup after sign-up: just me or a team, what kind of business, the website, the AI key.
+        ...(process.env.SKIP_SETUP === '1' ? {} : { setup: { pending: true } }), // test servers skip it
       };
       db.workspaces[ws.id] = ws;
       member = newMember(ws, who, 'owner');
@@ -6723,6 +6747,19 @@ async function api(req, res, url) {
 
   if (a === 'home' && b === 'brief' && m === 'POST') return send(res, 200, await homeBrief(ws, auth, await readJson(req, 40_000)));
   // Home's Get started list: where it stands, and hiding it for good (for this person).
+  // The guided setup after sign-up. The app does the work through the usual routes (tools, a starter project, the
+  // website, the AI key); this keeps the answers and whether it's finished. Owners and admins.
+  if (a === 'setup' && !b && m === 'PATCH') {
+    if (!isAdmin(auth)) return send(res, 403, { error: 'Only team owners and admins set the team up.' });
+    const body = await readJson(req, 5_000);
+    const st = (ws.setup ||= {});
+    if (body.solo !== undefined) st.solo = !!body.solo;
+    if (body.kind !== undefined) st.kind = SETUP_KINDS.includes(body.kind) ? body.kind : 'other';
+    if (body.done) Object.assign(st, { pending: false, doneAt: Date.now(), by: auth.member });
+    save();
+    broadcast(ws.id, { type: 'workspace' });
+    return send(res, 200, { setup: st, start: startList(ws, auth) });
+  }
   if (a === 'home' && b === 'start') {
     if (m === 'GET') return send(res, 200, { start: startList(ws, auth) });
     if (m === 'DELETE') {
