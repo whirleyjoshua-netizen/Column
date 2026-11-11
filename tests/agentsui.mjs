@@ -13,6 +13,7 @@ const PORT = 4719, APP = `http://127.0.0.1:${PORT}/`, AI_PORT = 4718;
 const SHOTS = process.env.SHOTS || '';
 const launch = (port, dir) => spawn('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', ['--headless=new', `--remote-debugging-port=${port}`, `--user-data-dir=${S}/dk/${dir}`, '--no-first-run', '--window-size=1300,900', 'about:blank'], { stdio: 'ignore' });
 FS.rmSync(`${S}/dk/chrome5`, { recursive: true, force: true }); // a fresh profile, never one a closing Chrome still holds
+try { (await import('node:child_process')).execSync('pkill -f remote-debugging-port=9337'); await new Promise((r) => setTimeout(r, 500)); } catch {} // a Chrome left on this port from an earlier run
 const chrome = launch(9337, 'chrome5');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let fails = 0;

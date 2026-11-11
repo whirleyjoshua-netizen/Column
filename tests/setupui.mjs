@@ -14,6 +14,7 @@ FS.mkdirSync(DIR, { recursive: true });
 const PORT = 4709, APP = `http://127.0.0.1:${PORT}/`, AI_PORT = 4708, SITE_PORT = 4707, SITE = `http://127.0.0.1:${SITE_PORT}`;
 FS.rmSync(`${S}/dk/chrome7`, { recursive: true, force: true });
 const launch = (port, dir) => spawn('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', ['--headless=new', `--remote-debugging-port=${port}`, `--user-data-dir=${S}/dk/${dir}`, '--no-first-run', '--window-size=1300,900', 'about:blank'], { stdio: 'ignore' });
+try { (await import('node:child_process')).execSync('pkill -f remote-debugging-port=9339'); await new Promise((r) => setTimeout(r, 500)); } catch {} // a Chrome left on this port from an earlier run
 const chrome = launch(9339, 'chrome7');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let fails = 0;

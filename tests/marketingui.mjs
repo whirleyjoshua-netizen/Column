@@ -15,6 +15,7 @@ const PORT = 4713, APP = `http://127.0.0.1:${PORT}/`, FAKE = 4712, F = `http://1
 const SHOTS = process.env.SHOTS || '';
 const launch = (port, dir) => spawn('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', ['--headless=new', `--remote-debugging-port=${port}`, `--user-data-dir=${S}/dk/${dir}`, '--no-first-run', '--window-size=1300,900', 'about:blank'], { stdio: 'ignore' });
 FS.rmSync(`${S}/dk/chrome6`, { recursive: true, force: true }); // a fresh profile, never one a closing Chrome still holds
+try { (await import('node:child_process')).execSync('pkill -f remote-debugging-port=9338'); await new Promise((r) => setTimeout(r, 500)); } catch {} // a Chrome left on this port from an earlier run
 const chrome = launch(9338, 'chrome6');
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
