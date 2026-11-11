@@ -1154,10 +1154,13 @@ function contentDisposition(kind, name) {
 // as plain bytes. SVG keeps its type so it still shows as a picture inside the app, but opened on its own it downloads
 // and can't run script. Every file goes out with nosniff and a policy that allows no script.
 const INLINE_OK = /^(image\/(png|jpe?g|gif|webp|heic|heif|avif|bmp)|video\/(mp4|quicktime|webm|x-matroska|ogg)|audio\/(mpeg|mp4|wav|x-wav|flac|ogg|webm|aac|x-m4a)|application\/pdf|text\/plain)\s*(;|$)/i;
+const DOWNLOAD_OK = /^(application\/(zip|x-zip-compressed|gzip|x-7z-compressed|x-rar-compressed|msword|vnd\.ms-[\w.+-]+|vnd\.openxmlformats-officedocument\.[\w.+-]+|vnd\.oasis\.opendocument\.[\w.+-]+|json|rtf|octet-stream)|text\/(csv|tab-separated-values|calendar|markdown))\s*(;|$)/i;
 function fileType(mime) {
   const m = String(mime || '').trim();
   if (INLINE_OK.test(m)) return { type: m, inline: true };
   if (/^image\/svg\+xml\s*(;|$)/i.test(m)) return { type: 'image/svg+xml', inline: false };
+  // Kinds browsers never run as a page keep their type (so they download as what they are), always as attachments.
+  if (DOWNLOAD_OK.test(m)) return { type: m, inline: false };
   return { type: 'application/octet-stream', inline: false };
 }
 function serveFile(req, res, filePath, { name, mime, download, cache }) {

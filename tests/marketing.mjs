@@ -306,7 +306,7 @@ try {
   res2 = await cb({ code: 'bad-code', state: new URL(r.body.url).searchParams.get('state') });
   ok(res2.headers.get('location') === '/postiz/done?r=failed' && (await ada('GET', '/postiz')).body.via === 'oauth', 'a code Postiz won’t take fails, and the connection already there stays');
   const page = await (await fetch(B + '/postiz/done?r=connected')).text();
-  ok(page.includes('Postiz connected') && page.includes('postMessage'), 'the done page says so (and tells the Kloomie window)');
+  ok(page.includes('Postiz connected') && !/<script/i.test(page), 'the done page says so (and runs no script: nothing in the app listens for one)');
 } catch (e) {
   console.log('FAIL ' + e.stack);
   fails++;
