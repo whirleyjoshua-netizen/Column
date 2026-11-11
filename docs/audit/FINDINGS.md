@@ -148,3 +148,13 @@ Every route checks the person can see the record and is scoped to the team; the 
 - **B11 fixed:** a private campaign's stack can't be renamed by someone outside it; a locked doc is deleted, moved or shared only by whoever made it or an admin; files go into a folder still uploading only from its uploader; the API finds members by their account's email.
 - **Sign-off lows fixed:** a private PDF used as a form isn't shown to people who can't see it; a filled-in form is made at most 20 times a minute per person.
 - **Stale tests fixed:** leave (its check on the owner's empty AI settings), qboui (batch 8); e2e6 fixed by column-91 (dcbf870). tech2 was a port clash in the audit's own test runner, not a bug.
+
+## Phase 4: operations (docs/OPERATIONS.md)
+- **O1 fixed, found by the restore drill:** restoring from a daily backup crashed the server on start. Taking in import-pending.json calls save() at startup, before `visRev` was declared (since b0a5310), so the server died and the restore never landed. `visRev` is now declared before save(). tests/restore_drill.mjs (on a throwaway Postgres database) proves backup → every row deleted → restore → sign-ins, words and files back, taken in once; it failed at "the server takes the backup in" before the fix.
+- **O2 fixed:** Node pinned to 24.x (it was ">=22", so a new major could arrive with any deploy). Dependencies were already pinned by the lockfile and `npm ci`.
+- **O3 added:** tests on every push and pull request (.github/workflows/tests.yml runs tests/ci.sh: 58 tests that need no browser or shared server). Browser and desktop tests stay on the Mac (tests/run.sh).
+- **O4 found, needs a decision:** uploaded files aren't backed up anywhere but the Railway volume, and the daily backups sit on that same volume. Railway volume backups or object storage would fix it.
+- **O5 found, needs a decision:** Neon's free plan keeps 6 hours of history (and 1 GB per branch; 32 MB used). A paid plan keeps 7 days or more.
+- **O6 found, needs a decision:** Railway deploys main without waiting for the tests (checkSuites: false in .railway/railway.ts); with the Tests workflow, checkSuites: true makes it wait.
+- Data loss, as it stands: within 6 hours, none (Neon restore); after that, back to the start of the day (daily backup, 14 days); a lost volume loses every file.
+- Audit test runner: tests that hard-code ports were clashing with the runner's own remapped ports (tech2 on 4731, push on 4741/4742, and a leftover server from 9 Nov on 4781). The runner now uses 4991–4997.

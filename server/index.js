@@ -140,6 +140,8 @@ function writeNow() {
   }).finally(() => { writing = null; });
   return writing;
 }
+// Ops: declared before save(), which runs while the server starts (after a restore it has data to write at once).
+let visRev = 0;
 function save() {
   visRev++;
   if (importing) return;
@@ -1878,7 +1880,6 @@ function myTask(t, memberId) {
     || (!t.memberId && !!t.by && nameKey(t.by) === me.nameKey));
 }
 // Which campaigns a member has a task in, worked out once per change (visRev moves on every save and broadcast).
-let visRev = 0;
 const taskCampsMemo = new Map();
 function taskCamps(wsId, memberId) {
   const hit = taskCampsMemo.get(memberId);

@@ -221,8 +221,8 @@ const kMsg = await K2('POST', '/items', { type: 'message', text: 'Done with the 
 await K2('POST', '/tasks', { text: 'Sign the delivery note', assigneeId: jo });
 ok(await A.until(`document.querySelector('#bellN').textContent === '2'`, 5000), 'the bell shows 2 new: ' + await A.ev(`document.querySelector('#bellN').textContent`));
 ok(await A.ev(`![...document.querySelectorAll('.home-card.notes')].length`), 'they’re in the bell, not on Home');
-await A.click('#bellBtn');
-ok(await A.until(`document.querySelectorAll('#bellPop .bell-row.new').length === 2`), 'opening it lists them, marked new');
+// Counted in the same step as the click: they're shown as new for 1.5 seconds, then marked seen.
+ok((await A.ev(`(() => { document.querySelector('#bellBtn').click(); return document.querySelectorAll('#bellPop .bell-row.new').length; })()`)) === 2, 'opening it lists them, marked new');
 ok(await A.ev(`document.querySelector('#bellPop').textContent.includes('Ken mentioned you') && document.querySelector('#bellPop').textContent.includes('Ken assigned you a task')`), 'saying what happened');
 ok(await A.until(`document.querySelector('#bellN').classList.contains('hidden')`, 4000), 'and the count goes once seen');
 ok((await J('GET', '/state')).notices.every((n) => n.read), 'read on the server too (so her other devices agree)');

@@ -1,0 +1,33 @@
+# Runs the tests that work anywhere (tests/ci.sh) on every push to main and every pull request.
+# Browser and desktop-app tests still run on a Mac with tests/run.sh.
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: |
+            server/package-lock.json
+            integrations/zapier/package-lock.json
+      - run: npm --prefix server ci
+      - run: npm --prefix integrations/zapier ci
+      - run: bash tests/ci.sh
