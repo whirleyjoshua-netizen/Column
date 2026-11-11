@@ -129,3 +129,22 @@ Every route checks the person can see the record and is scoped to the team; the 
 - **A11 fixed:** wrong passwords lock the address after 10 (and the address and account together after 10); an account is locked for everyone only after 50, so a few guesses can't lock someone else out.
 - **A14 fixed:** "Sign out everywhere else" and a new password keep only this sign-in and the other sign-ins this browser holds (sent as proof), not every sign-in claiming the same device id.
 - **F6 fixed:** every tool result goes back to the model marked as data, never instructions, and the agent is told so each time. Once a run has read something private (a private project's records, a private campaign), its later changes wait for the person's yes even at execute level.
+
+## Batch 10 (tests/audit_batch10.mjs, audit_billing2.mjs, audit_agents3.mjs, audit_signoff.mjs, quickbooks.mjs, audit_calendar.mjs, zapier.mjs; each fails on cda5a30)
+- **G15 fixed:** identical rows in one bank statement (two $4.50 coffees on a day) are each kept; importing the same file again still adds nothing.
+- **G13 fixed:** a payment removed in Kloomie that was copied to QuickBooks is deleted there; one that came from QuickBooks is removed there (and then leaves Kloomie by itself).
+- **G14 fixed:** an invoice payment's Finance line is changed or removed only on the invoice; a job goes back from Paid to Invoiced when its invoice is no longer paid.
+- **G16 fixed:** a visit's event deleted in someone's connected calendar takes them off the visit (or cancels it), through the visit's own path; the job's Scheduled day comes off when its last visit goes (a typed-in day stays), and the timeline says why.
+- **G12 fixed:** deleting a team stops its renewal at once (and turns it back on if undone); if the final cancel fails, the team is kept and it's tried again.
+- **E15 fixed:** QuickBooks links to an invoice or estimate already there under the same number only when the customer (and, for invoices, the total) match; anything else is left alone and reported.
+- **E18 fixed:** the Zapier app refuses a real delivery when it has no secret to check it with (needs `zapier push` to reach Zapier).
+- **E19 fixed:** webhook deliveries go out at most 4 at a time per team, up to 2,000 waiting (the reply was already read and capped by safeFetch).
+- **F8 fixed:** calls to the AI time out after 3 minutes; stopping an assignment ends it at once (no more paid calls); scheduled runs wait their turn (3 at a time per person).
+- **F9 fixed:** a hand-off made while answering a follow-up runs.
+- **F10 fixed:** a step's label and errors name only what the person can see (records, tasks, docs, blocks, campaigns).
+- **F11 fixed:** a record can be linked only to a doc the person can see, and the AI reads it only for someone who can.
+- **B7 fixed:** with "members see only theirs", live updates about handed-off, signed-off or returned tasks and about saved campaigns reach only those who'd see them.
+- **B10 fixed:** items from before accounts get an owner once (the sign-in that posted them, then the name); a device id is never proof of ownership.
+- **B11 fixed:** a private campaign's stack can't be renamed by someone outside it; a locked doc is deleted, moved or shared only by whoever made it or an admin; files go into a folder still uploading only from its uploader; the API finds members by their account's email.
+- **Sign-off lows fixed:** a private PDF used as a form isn't shown to people who can't see it; a filled-in form is made at most 20 times a minute per person.
+- **Stale tests fixed:** leave (its check on the owner's empty AI settings), qboui (batch 8); e2e6 fixed by column-91 (dcbf870). tech2 was a port clash in the audit's own test runner, not a bug.

@@ -44,7 +44,8 @@ const handleErrors = (response, z) => {
 function signedByKloomie(bundle) {
   const raw = bundle.rawRequest;
   const secret = bundle.subscribeData && bundle.subscribeData.secret;
-  if (!raw || !secret) return true; // Zapier's editor and tests run perform without a delivery
+  if (!raw) return true; // Zapier's editor and tests run perform without a delivery
+  if (!secret) return false; // a real delivery to a subscription with no secret can't be checked: refused (E18)
   const headers = raw.headers || {};
   const key = Object.keys(headers).find((k) => /kloomie-signature$/i.test(k));
   const header = key && String(headers[key]);

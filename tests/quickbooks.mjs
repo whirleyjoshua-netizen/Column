@@ -53,6 +53,8 @@ const fake = http.createServer(async (req, res) => {
     const since = Date.parse(u.searchParams.get('changedSince'));
     return out(200, { CDCResponse: [{ QueryResponse: [{ Payment: Q.Payment.filter((p) => p.at > since) }] }] });
   }
+  const gp = path.match(/^payment\/(\w+)$/);
+  if (gp && req.method === 'GET') { const x = Q.Payment.find((y) => y.Id === gp[1]); return x ? out(200, { Payment: { SyncToken: '0', ...x } }) : out(404, {}); }
   const g = path.match(/^invoice\/(\w+)$/);
   if (g && req.method === 'GET') { const inv = Q.Invoice.find((x) => x.Id === g[1]); return inv ? out(200, { Invoice: inv }) : out(404, {}); }
   const ge = path.match(/^estimate\/(\w+)$/);
@@ -84,6 +86,7 @@ const fake = http.createServer(async (req, res) => {
       }
       const e = { Id: String(++Q.seq), SyncToken: '0', TxnStatus: 'Pending', ...body }; e.TotalAmt = total(e); Q.Estimate.push(e); return out(200, { Estimate: e });
     }
+    if (path === 'payment' && u.searchParams.get('operation') === 'delete') { const x = Q.Payment.find((y) => y.Id === body.Id); if (x) Object.assign(x, { status: 'Deleted', at: Date.now(), byKloomie: true }); return out(200, { Payment: { Id: body.Id, status: 'Deleted' } }); }
     if (path === 'payment') { const p = { Id: String(++Q.seq), ...body, at: Date.now() }; Q.Payment.push(p); return out(200, { Payment: p }); }
   }
   out(404, { Fault: { Error: [{ Message: 'Unknown ' + path }] } });
@@ -186,11 +189,13 @@ try {
   await jo('POST', `/invoices/${inv2.id}/void`);
   ok(await until(() => Q.Invoice.find((x) => x.DocNumber === inv2.number)?.voided), 'voided in Kloomie, voided there');
 
-  // A number already in QuickBooks is linked, not doubled.
+  // One already in QuickBooks under the same number, for the same customer and total (an earlier copy that didn't
+  // finish), is linked, not doubled. (E15: anything else under that number is left alone; see below.)
   const n3 = 'INV-' + (Number(inv2.number.split('-')[1]) + 1);
-  Q.Invoice.push({ Id: 'HAND1', SyncToken: '0', DocNumber: n3, Line: [], TotalAmt: 0, CustomerRef: { value: '9' } });
   const inv3 = (await jo('POST', `/records/${job.id}/invoices`)).body;
   ok(inv3.number === n3, 'the next invoice gets that number: ' + n3);
+  const custId = Q.Customer.find((x) => x.DisplayName === inv3.to.name)?.Id;
+  Q.Invoice.push({ Id: 'HAND1', SyncToken: '0', DocNumber: n3, Line: [], TotalAmt: inv3.total / 100, CustomerRef: { value: custId } });
   await jo('POST', `/invoices/${inv3.id}/send`);
   ok(await until(async () => (await jo('GET', '/invoices/' + inv3.id)).body.qbo?.id === 'HAND1'), 'it links to the one already there');
   ok(Q.Invoice.filter((x) => x.DocNumber === n3).length === 1, 'without making a second');
@@ -268,6 +273,40 @@ try {
 
   const dp = await fetch(B + '/quickbooks/disconnected');
   ok(dp.status === 200 && /disconnected from QuickBooks/.test(await dp.text()), 'the page Intuit sends people to after disconnecting there explains it');
+
+  // G13 and G14: removing payments, on either side.
+  inv = (await jo('GET', '/invoices/' + inv.id)).body;
+  const fromQb = inv.payments.find((x) => x.by === 'QuickBooks');
+  r = await jo('DELETE', `/invoices/${inv.id}/payments/${fromQb.id}`);
+  ok(r.status === 400 && /QuickBooks/.test(r.body.error), 'G13 a payment that came from QuickBooks is removed there, not here');
+  Object.assign(Q.Payment.find((x) => x.Id === 'QP1'), { status: 'Deleted', at: Date.now() });
+  ok(await until(async () => !(await jo('GET', '/invoices/' + inv.id)).body.payments.some((x) => x.by === 'QuickBooks'), 6000), 'G13 deleted in QuickBooks, it goes from Kloomie too');
+  inv = (await jo('GET', '/invoices/' + inv.id)).body;
+  ok(inv.status === 'partial', `G13 and the invoice is part paid again (${inv.status})`);
+  const stageOf = async () => { const rr = (await jo('GET', `/projects/${p.id}/records`)).body.find?.((x) => x.id === job.id); const sf = tp.fields.find((f) => f.key === 'status'); return sf.choices.find((c) => c.id === rr?.values[sf.id])?.label; };
+  ok((await stageOf()) === 'Invoiced', `G14 the job goes back from Paid to Invoiced (${await stageOf()})`);
+  const money = (await jo('GET', '/state')).body.money || (await jo('GET', '/money')).body;
+  const line = (Array.isArray(money) ? money : money?.entries || []).find((x) => x.category === 'Client payment' && x.amount === 10000);
+  if (line) {
+    r = await jo('DELETE', '/money/' + line.id);
+    ok(r.status === 400, 'G14 the Finance line of an invoice payment can’t be deleted in Finance');
+    r = await jo('PATCH', '/money/' + line.id, { amount: '5' });
+    ok(r.status === 400, 'G14 nor its amount changed there');
+  } else ok(false, 'G14 (setup) the $100 payment shows in Finance');
+  const check = inv.payments.find((x) => x.method === 'check');
+  const qp = Q.Payment.find((x) => x.TotalAmt === 100 && x.Line?.[0]?.LinkedTxn?.[0]?.TxnId === qi.Id);
+  r = await jo('DELETE', `/invoices/${inv.id}/payments/${check.id}`);
+  ok(r.status === 200, '(setup) the $100 check is removed in Kloomie');
+  ok(await until(() => qp?.status === 'Deleted' && qp.byKloomie), 'G13 and it’s deleted in QuickBooks too');
+  if (line) ok(!((await jo('GET', '/state')).body.money || []).some?.((x) => x.id === line.id), 'G14 and its Finance line goes with it');
+
+  // E15: an invoice typed into QuickBooks by hand under the same number, for someone else, is left alone.
+  const inv5 = (await jo('POST', `/records/${job.id}/invoices`)).body;
+  Q.Invoice.push({ Id: 'HAND2', SyncToken: '0', DocNumber: inv5.number, CustomerRef: { value: '999' }, TotalAmt: 1, Line: [{ Amount: 1, DetailType: 'SalesItemLineDetail', SalesItemLineDetail: { Qty: 1, UnitPrice: 1 } }] });
+  await jo('POST', `/invoices/${inv5.id}/send`);
+  ok(await until(async () => ((await jo('GET', '/quickbooks')).body.error || '').includes(inv5.number)), 'E15 a same-numbered invoice for another customer is reported, not linked');
+  const hand = Q.Invoice.find((x) => x.Id === 'HAND2');
+  ok(hand.TotalAmt === 1 && hand.SyncToken === '0' && !hand.voided && Q.Invoice.filter((x) => x.DocNumber === inv5.number).length === 1, 'E15 and the one in QuickBooks isn’t changed');
 
   // Disconnecting.
   const lastRefresh = Q.refresh;

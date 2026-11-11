@@ -118,6 +118,10 @@ try {
     await run(App.triggers.new_contact.operation.perform, {}, { cleanedRequest: d.body, rawRequest: { headers: d.headers, content: d.content.replace('Lee Park', 'Mallory') }, subscribeData: sub });
     ok(false, 'a tampered delivery is refused');
   } catch (e) { ok(/signed by Kloomie/.test(e.message), 'a tampered delivery is refused'); }
+  try {
+    await run(App.triggers.new_contact.operation.perform, {}, { cleanedRequest: d.body, rawRequest: { headers: d.headers, content: d.content }, subscribeData: { ...sub, secret: undefined } });
+    ok(false, 'E18 a delivery to a subscription with no secret is refused');
+  } catch (e) { ok(/signed by Kloomie/.test(e.message), 'E18 a delivery to a subscription with no secret is refused'); }
   r = await run(App.triggers.new_contact.operation.perform, {}, { cleanedRequest: { ...d.body, type: 'contact.deleted' }, rawRequest: { headers: d.headers, content: d.content }, subscribeData: sub });
   ok(r.length === 0, 'an event this Zap didn’t ask for is ignored');
   r = await run(App.triggers.new_contact.operation.performList);

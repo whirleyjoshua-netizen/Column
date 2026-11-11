@@ -35,6 +35,29 @@ try {
   await sleep(2500);
   const after = Object.keys((await store()).work || {}).length;
   ok(after - before === 1, `G8 one event in the calendar, not two (${after - before} made)`);
+
+  // G16: a visit's event deleted in the calendar cancels the visit through the visit's own path, so the job follows.
+  await jo('PATCH', '/workspace', { tools: { projects: true } });
+  const p = (await jo('POST', '/projects', { template: 'trades', trades: ['hvac'] })).body;
+  const tp = p.types[0];
+  const job = (await jo('POST', `/projects/${p.id}/records`, { typeId: tp.id, values: { job: 'Ruiz AC tune-up' } })).body;
+  const vday = new Date(Date.now() + 3 * 864e5).toISOString().slice(0, 10);
+  const v = (await jo('POST', `/records/${job.id}/visits`, { date: vday, start: 540, end: 600 })).body;
+  ok(!!v?.id, '(setup) a visit on the job');
+  const sched = () => jo('GET', `/projects/${p.id}/records`).then((x) => x.body.find((y) => y.id === job.id)?.values[tp.fields.find((f) => f.key === 'scheduled').id] || null);
+  ok((await sched()) === vday, '(setup) the job is scheduled for it');
+  let file = null;
+  for (let i = 0; i < 40 && !file; i++) { await sleep(150); file = Object.entries((await store()).work || {}).find(([, txt]) => txt.includes('Ruiz'))?.[0]; }
+  ok(!!file, '(setup) the visit went to the calendar');
+  await fetch(`http://127.0.0.1:${DAV}/_edit`, { method: 'POST', body: JSON.stringify({ cal: 'work', file, text: null }) }); // deleted in the calendar
+  ok(!Object.keys((await store()).work || {}).includes(file), '(setup) the event is gone from the calendar');
+  const conn = (await jo('GET', '/calendars')).body.connections[0];
+  let gone = false;
+  for (let i = 0; i < 20 && !gone; i++) { await jo('POST', `/calendars/${conn.id}/sync`); gone = (await jo('GET', `/records/${job.id}/visits`)).body.length === 0; if (!gone) await sleep(300); }
+  ok(gone, 'G16 deleted in the calendar, the visit is cancelled');
+  ok((await sched()) === null, 'G16 and the job’s Scheduled day follows');
+  const log = (await jo('GET', `/records/${job.id}/log`)).body || [];
+  ok(log.some((x) => /deleted the .* visit in their calendar/.test(x.note || '')), 'G16 the job’s timeline says why');
 } catch (e) {
   ok(false, 'threw: ' + e.stack);
 } finally {

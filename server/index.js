@@ -76,6 +76,16 @@ if (Object.keys(db.tokens).some((k) => !k.startsWith('h:'))) {
   // Saved with the next change; converting again after a restart gives the same hashes.
 }
 for (const [k, keys] of Object.entries(db.agentKeys || {})) db.ai[k] ||= { keys, provider: null, model: null };
+// B10: items from before accounts get an owner once (the sign-in that posted them, then the name they were posted
+// under). A device id a browser sends is never proof that something is theirs; one with no owner is an admin's to change.
+for (const it of Object.values(db.items)) {
+  if (it.memberId || !it.wsId) continue;
+  const ws = db.workspaces[it.wsId];
+  if (!ws) continue;
+  const bySess = it.deviceId && Object.values(db.tokens).find((s) => s.wsId === it.wsId && s.deviceId === it.deviceId)?.memberId;
+  const id = (bySess && ws.members.some((m) => m.id === bySess) && bySess) || (it.by && ws.members.find((m) => m.name === it.by)?.id) || null;
+  if (id) it.memberId = id;
+}
 for (const ws of Object.values(db.workspaces)) {
   ws.channels ||= [];
   ws.chatFolders ||= [];
@@ -1043,7 +1053,7 @@ function visitsOf(recordId) {
   return [...groups.values()].map(publicVisit).sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : (a.start ?? -1) - (b.start ?? -1)));
 }
 // The job's Scheduled day is its next visit's, and Assigned to its lead, so the board and lists stay true.
-function syncJob(rec) {
+function syncJob(rec, gone = null) {
   const j = jobOfRecord(rec);
   if (!j) return;
   const vs = visitsOf(rec.id).filter((v) => !v.done);
@@ -1053,6 +1063,8 @@ function syncJob(rec) {
   const cf = j.t.fields.find((f) => f.key === 'crew' && f.type === 'person');
   let changed = false;
   if (sf && next && rec.values[sf.id] !== next.date) { rec.values[sf.id] = next.date; changed = true; }
+  // G16: the last visit cancelled: its day comes off the job (a day typed in by hand stays).
+  if (sf && !next && gone && rec.values[sf.id] === gone.date) { delete rec.values[sf.id]; changed = true; }
   if (cf && next && !next.memberIds.includes(rec.values[cf.id])) { rec.values[cf.id] = next.memberIds[0]; changed = true; }
   if (changed) { rec.updatedAt = Date.now(); PJ.recordNews(rec, 'record.updated', 'Kloomie'); }
 }
@@ -1073,6 +1085,18 @@ function moveJob(rec, want) {
   if (to == null || to < 0 || to <= at) return;
   rec.values[st.id] = st.choices[to].id;
   rec.updatedAt = Date.now();
+  PJ.recordNews(rec, 'record.updated', 'Kloomie');
+}
+function jobBack(rec) {
+  const j = jobOfRecord(rec);
+  const st = j?.t.fields.find((f) => f.key === 'status' && f.type === 'select');
+  if (!st) return;
+  const now = st.choices.find((c) => c.id === rec.values[st.id]);
+  const back = st.choices.find((c) => c.label.toLowerCase() === 'invoiced');
+  if (!now || !back || now.label.toLowerCase() !== 'paid') return;
+  rec.values[st.id] = back.id;
+  rec.updatedAt = Date.now();
+  PJ.recordActivity(rec.id, { kind: 'change', field: st.name, from: now.label, to: back.label, by: 'Kloomie' });
   PJ.recordNews(rec, 'record.updated', 'Kloomie');
 }
 function visitNews(rec) {
@@ -1122,14 +1146,15 @@ function setVisit(ws, auth, rec, visitId, body, old = []) {
 }
 // One visit called off: every person's copy goes.
 function dropVisit(ws, rec, list, by) {
-  const v = API.apiVisit(publicVisit(list));
+  const was = publicVisit(list);
+  const v = API.apiVisit(was);
   for (const e of list) {
     delete db.entries[e.id];
     broadcast(ws.id, { type: 'entry:remove', id: e.id, forMember: e.memberId });
     pushEntry(e, 'delete');
   }
   save();
-  syncJob(rec);
+  syncJob(rec, was);
   visitNews(rec);
   hook(ws.id, 'visit.cancelled', () => v, by);
 }
@@ -1580,7 +1605,7 @@ function mayMoveDir(ws, auth, d, toParent) {
   if (ws.dirs.some((x) => tree.includes(x.id) && x.ownerId && x.ownerId !== auth.memberId)) return false;
   return !Object.values(db.items).some((it) => it.wsId === ws.id && tree.includes(it.dirId) && !ownsItem(auth, it));
 }
-const mayMoveItem = (ws, auth, it, toDir) => dirAudience(ws, it.dirId) === dirAudience(ws, toDir) || isAdmin(auth) || ownsItem(auth, it);
+const mayMoveItem = (ws, auth, it, toDir) => (it.type !== 'text' || canEditDoc(it, auth)) && (dirAudience(ws, it.dirId) === dirAudience(ws, toDir) || isAdmin(auth) || ownsItem(auth, it));
 const dirDepth = (ws, dirId) => {
   let n = 0;
   for (let d = ws.dirs.find((x) => x.id === dirId); d && n <= DIR_DEPTH; d = ws.dirs.find((x) => x.id === d.parentId)) n++;
@@ -1799,8 +1824,8 @@ const ADMIN_ROLES = ['owner', 'admin'];
 const isAdmin = (auth) => ADMIN_ROLES.includes(auth?.role);
 // Deleting one thing, or clearing many: someone else's messages only by an owner or admin (shared files and notes by
 // anyone who can see them, as always). One rule for every way of deleting.
-const ownsItem = (auth, it) => (it.memberId ? it.memberId === auth.memberId : it.deviceId === auth.deviceId);
-const mayDelete = (auth, it) => !(it.type === 'message' && !ownsItem(auth, it) && !isAdmin(auth));
+const ownsItem = (auth, it) => !!it.memberId && it.memberId === auth.memberId; // B10: never by device id
+const mayDelete = (auth, it) => !(it.type === 'message' && !ownsItem(auth, it) && !isAdmin(auth)) && (it.type !== 'text' || canEditDoc(it, auth));
 const isAdminId = (wsId, memberId) => db.workspaces[wsId]?.members.some((m) => m.id === memberId && ADMIN_ROLES.includes(m.role));
 function broadcast(wsId, msg) {
   visRev++;
@@ -1817,7 +1842,7 @@ function broadcast(wsId, msg) {
   const inDir = msg.item && db.items[msg.item.id];
   const data = JSON.stringify(msg);
   for (const s of set) if (hide && s.readyState === 1 && (!seesItemDir(inDir, s.meta.memberId) || (msg.type === 'item:update' && !seesOwn('item', inDir, s.meta.memberId)))) s.send(hide);
-  const task = msg.type === 'task' && msg.task && db.tasks[msg.task.id];
+  const task = msg.task?.id && db.tasks[msg.task.id];
   const sees = (mid) => seesCampaign(campaignId, mid) && seesFeed(feed, mid) && seesItemDir(inDir, mid) && seesTemplate(msg.template, mid) && seesEntry(msg.entry, mid) && (!msg.forMember || msg.forMember === mid) && (!msg.forAdmins || isAdminId(wsId, mid)) && (!msg.bill || seesBill(wsId, msg.bill, mid)) && (!inDir || seesOwn('item', inDir, mid)) && (!task || seesOwn('task', task, mid)) && PJ.seesMsg(msg, mid);
   const live = (s) => s.readyState === 1 && (!s.meta.token || db.tokens[s.meta.token]) && db.workspaces[wsId]?.members.some((x) => x.id === s.meta.memberId);
   for (const s of set) if (!live(s) && s.readyState === 1) s.close(4001, 'Signed out');
@@ -1907,7 +1932,7 @@ function campaignOfMsg(msg) {
 }
 // A saved campaign is private when the campaign it came from was.
 function seesTemplate(t, memberId) {
-  if (t && !seesOwn('template', t, memberId)) return false;
+  if (t && !seesOwn('template', (t.id && db.templates[t.id]) || t, memberId)) return false;
   const c = t?.campaign;
   return !c || !c.private || t.ownerId === memberId || t.assigneeId === memberId || c.memberIds.includes(memberId);
 }
@@ -2924,7 +2949,15 @@ async function syncCalendar(conn) {
         ours.add(e.cal.eventId);
         const ev = byId.get(e.cal.eventId);
         if (!ev) {
-          if (inWindow(e)) dropEntry(e);
+          if (!inWindow(e)) continue;
+          const rec = e.visitId && db.records[e.recordId];
+          if (!rec) { dropEntry(e); continue; }
+          const list = Object.values(db.entries).filter((x) => x.visitId === e.visitId);
+          delete e.cal; // already gone from the calendar
+          deletedCal.delete(e.id);
+          PJ.recordActivity(rec.id, { kind: 'note', note: `${who?.name || 'Someone'} deleted the ${e.date} visit in their calendar${list.length > 1 ? ', so they’re off it' : ', so it’s cancelled'}`, by: who?.name || 'Calendar' });
+          if (list.length <= 1) dropVisit(ws, rec, list, who?.name || 'Calendar');
+          else { dropEntry(e); save(); syncJob(rec); visitNews(rec); }
           continue;
         }
         const [piece] = eventPieces(ev, conn.tz);
@@ -4829,7 +4862,8 @@ async function aiRecord(ws, auth, body) {
   const { rec, t } = at;
   const today = isDay(body.today) ? body.today : dayIn(auth.tz);
   const selects = t.fields.filter((f) => f.type === 'select');
-  const doc = rec.docId && db.items[rec.docId];
+  const linked = rec.docId && db.items[rec.docId];
+  const doc = linked && linked.wsId === ws.id && canSee(auth, 'item', linked) ? linked : null;
   const prompt = [
     `Today is ${today} (${new Date(today + 'T12:00:00Z').toLocaleDateString('en-US', { weekday: 'long', timeZone: 'UTC' })}). The person asking is ${auth.member}.`,
     teamLine(ws, auth.memberId),
@@ -5592,6 +5626,12 @@ async function api(req, res, url) {
       }
       ws.deleteAt = Date.now() + DELETE_DAYS * 86_400_000;
       ws.deleteBy = auth.member;
+      if (ws.billing?.sub && LIVE_SUB.includes(ws.billing.status) && stripe.configured()) {
+        try {
+          await stripe.call('POST', `/subscriptions/${encodeURIComponent(ws.billing.sub)}`, { cancel_at_period_end: true });
+          ws.billing.endForDelete = true;
+        } catch (e) { alarm('Stopping a deleted team’s renewal failed', e); }
+      }
       // Everyone but the owners is signed out now.
       for (const x of ws.members) if (x.role !== 'owner') signOutWhere(ws, x.id);
       save();
@@ -5603,6 +5643,12 @@ async function api(req, res, url) {
       if (!ws.deleteAt) return send(res, 200, publicWorkspace(ws, auth.memberId));
       delete ws.deleteAt;
       delete ws.deleteBy;
+      if (ws.billing?.endForDelete && stripe.configured()) {
+        try {
+          await stripe.call('POST', `/subscriptions/${encodeURIComponent(ws.billing.sub)}`, { cancel_at_period_end: false });
+          delete ws.billing.endForDelete;
+        } catch (e) { alarm('Turning a kept team’s renewal back on failed', e); }
+      }
       save();
       broadcast(ws.id, { type: 'workspace' });
       tellTeam(ws, (to) => mailer.teamKept(to, { team: ws.name, by: auth.member }));
@@ -6195,6 +6241,7 @@ async function api(req, res, url) {
       const scope = body.scope === 'business' && auth.role === 'owner' ? 'business' : 'personal';
       const have = new Set(Object.values(db.money).filter((x) => x.wsId === ws.id && x.key).map((x) => x.key));
       const added = [];
+      const inFile = new Map(); // G15: how many times each row has come up in this file
       let skipped = 0;
       for (const r of rows) {
         const n = Number(String(r?.amount ?? '').replace(/[$,\s]/g, ''));
@@ -6202,7 +6249,10 @@ async function api(req, res, url) {
         if (!day || !Number.isFinite(n) || !n) { skipped++; continue; }
         const x = { ...newMoney(auth), kind: n > 0 ? 'in' : 'out', day, scope, note: cleanText(r.note, 200), category: cleanText(r.category, 40) };
         x.amount = Math.min(1e11, Math.round(Math.abs(n) * 100));
-        x.key = moneyKey(x);
+        const base = moneyKey(x);
+        const nth = inFile.get(base) || 0;
+        inFile.set(base, nth + 1);
+        x.key = nth ? `${base}.${nth}` : base;
         if (have.has(x.key)) { skipped++; continue; }
         have.add(x.key);
         db.money[x.id] = x;
@@ -6229,8 +6279,10 @@ async function api(req, res, url) {
     }
     const x = b && db.money[b];
     if (!x || x.wsId !== ws.id || !seesBill(ws.id, x, auth.memberId)) return send(res, 404, { error: 'Not found' });
+    const fromInv = x.invoiceId ? db.invoices[x.invoiceId] : x.category === 'Client payment' && x.by === 'Kloomie' ? Object.values(db.invoices).find((v) => v.wsId === ws.id && v.payments.some((p) => p.moneyId === x.id)) : null;
     if (m === 'PATCH') {
       const body = await readJson(req, 20_000);
+      if (fromInv && ['amount', 'day', 'kind', 'scope'].some((k) => body[k] !== undefined)) return send(res, 400, { error: `This is a payment on ${fromInv.number}. Change it on the invoice, so the two stay the same.` });
       if (body.scope !== undefined && x.memberId !== auth.memberId) delete body.scope;
       const was = { ...x };
       applyMoney(x, body, auth);
@@ -6240,6 +6292,7 @@ async function api(req, res, url) {
       return send(res, 200, publicMoney(x));
     }
     if (m === 'DELETE') {
+      if (fromInv) return send(res, 400, { error: `This is a payment on ${fromInv.number}. Remove the payment on the invoice, so the two stay the same.` });
       dropMoney(x);
       save();
       return send(res, 200, { ok: true });
@@ -7978,7 +8031,8 @@ async function api(req, res, url) {
     } else if (m === 'PATCH' && b) {
       const { name } = await readJson(req);
       const s = ws.stacks.find((x) => x.id === b);
-      if (s && String(name || '').trim()) s.name = String(name).trim().slice(0, 40);
+      if (!s || !seesCampaign(s.campaignId, auth.memberId)) return send(res, 404, { error: 'Not found' });
+      if (String(name || '').trim()) s.name = String(name).trim().slice(0, 40);
     } else if (m === 'DELETE' && b) {
       if (ws.stacks.find((x) => x.id === b)?.campaignId) return send(res, 400, { error: 'This stack belongs to a campaign. Delete the campaign instead.' });
       ws.stacks = ws.stacks.filter((x) => x.id !== b);
@@ -8090,7 +8144,7 @@ async function api(req, res, url) {
     const it = b && db.items[b];
     if (!it || it.wsId !== ws.id || !canSee(auth, 'item', it)) return send(res, 404, { error: 'Not found' });
     // Messages: only the author edits; the author or an owner deletes.
-    const own = it.memberId ? it.memberId === auth.memberId : it.deviceId === auth.deviceId;
+    const own = ownsItem(auth, it);
     // Opened (the code worked on their device): it's noted, and a burn-after-reading card is gone, unless the
     // sender opened their own.
     if (c === 'opened' && it.type === 'sealed' && m === 'POST') {
@@ -8169,6 +8223,7 @@ async function api(req, res, url) {
       return send(res, 200, publicItem(it));
     }
     if (c === 'share' && (it.type === 'file' || it.type === 'folder' || it.type === 'text')) {
+      if (it.type === 'text' && m !== 'GET' && !canEditDoc(it, auth)) return send(res, 403, { error: 'This doc is locked. Only whoever made it and team admins can share it.' });
       if (m === 'POST') {
         const { hours, live } = await readJson(req, 500_000);
         const h = Number(hours) > 0 ? Math.min(Number(hours), 24 * 365) : null;
@@ -8189,6 +8244,7 @@ async function api(req, res, url) {
     if (c) return send(res, 404, { error: 'Not found' });
     if (m === 'PATCH') {
       const body = await readJson(req, 300_000);
+      if (it.type === 'text' && !canEditDoc(it, auth) && ['stackId', 'dirId', 'channelId', 'campaignId'].some((k) => body[k] !== undefined)) return send(res, 403, { error: 'This doc is locked. Only whoever made it and team admins can move it.' });
       if (body.text !== undefined) {
         // Notes (text cards) are shared, like text files. Messages belong to whoever sent them.
         if (it.type !== 'text' && (it.type !== 'message' || !own)) return send(res, 403, { error: 'You can only edit your own messages.' });
@@ -8259,7 +8315,7 @@ async function api(req, res, url) {
       let target;
       if (body.folder) {
         const folder = db.items[body.folder];
-        if (!folder || folder.wsId !== ws.id || folder.type !== 'folder' || folder.status !== 'uploading') return send(res, 404, { error: 'Folder not found' });
+        if (!folder || folder.wsId !== ws.id || folder.type !== 'folder' || folder.status !== 'uploading' || !ownsItem(auth, folder)) return send(res, 404, { error: 'Folder not found' });
         target = { folder: folder.id, relPath: cleanRel(body.relPath), mtime: Number(body.mtime) || Date.now() };
       } else {
         target = { name: cleanName(body.name), type: String(body.type || '').slice(0, 200), stackId: validStack(ws, body.stackId, auth.memberId), channelId: validChannel(ws, body.channelId, auth.memberId), dirId: validDir(ws, body.dirId, auth.memberId) };
@@ -8347,7 +8403,7 @@ async function api(req, res, url) {
     const folderId = url.searchParams.get('folder');
     if (folderId) {
       const folder = db.items[folderId];
-      if (!folder || folder.wsId !== ws.id || folder.type !== 'folder' || folder.status !== 'uploading') {
+      if (!folder || folder.wsId !== ws.id || folder.type !== 'folder' || folder.status !== 'uploading' || !ownsItem(auth, folder)) {
         return send(res, 404, { error: 'Folder not found' });
       }
       const relPath = cleanRel(url.searchParams.get('relPath'));
@@ -8546,7 +8602,7 @@ async function replayAs(ws, memberId, approvalId, { method, path: p, body }, as 
   return { status, body: parsed };
 }
 const hold = (...a) => RULES.hold(...a);
-const PJ = projectsModule({ seal, unseal, db, save, broadcast, rid, hold, cleanText, isDay, readJson, send, badRequest, isOwnerId, escHtml, brandOf, logoUrl, teamDay, offline, allowLocalHooks: process.env.ALLOW_LOCAL_WEBHOOKS === '1',
+const PJ = projectsModule({ canSeeItem: (auth, it) => canSee(auth, 'item', it), seal, unseal, db, save, broadcast, rid, hold, cleanText, isDay, readJson, send, badRequest, isOwnerId, escHtml, brandOf, logoUrl, teamDay, offline, allowLocalHooks: process.env.ALLOW_LOCAL_WEBHOOKS === '1',
   onRecordGone: (rec) => { dropVisits(rec); INV.dropFor(rec); },
   onRecordNews: (rec) => { jobChanged(rec); if (rec.share || rec.qbo?.estId) QB.soon(rec.wsId); },
   // A follow-up from a record's timeline: a task for whoever logged it, about the record.
@@ -8788,7 +8844,7 @@ async function itemFile(ws, memberId, id) {
   if (!it || it.wsId !== ws.id || it.type !== 'file' || !/^image\//.test(it.mime || '') || !canSee({ wsId: ws.id, memberId, role: me?.role }, 'item', it)) throw badRequest('That picture isn’t in Kloomie any more.');
   return { bytes: await fsp.readFile(path.join(FILES_DIR, it.id)), name: it.name, mime: it.mime };
 }
-const AGENTS_M = agentsModule({ db, save, broadcast, rid, cleanText, readJson, send, notify, replay: replayAs, run: agentLlm, sendEmail: agentEmail, textToDoc, PJ, isAdminId, localNow, tzOf, fmtMinutes, hasAi: (wsId, memberId) => !!aiUse(aiOf(wsId, memberId)), POSTIZ, makeImageItem, itemFile, noContact, describeImages, canPicture: (wsId, memberId) => ['openai', 'gemini'].some((k) => !!aiOf(wsId, memberId).keys?.[k]?.sealed) });
+const AGENTS_M = agentsModule({ sees: (memberId, kind, x) => (kind === 'campaign' ? seesCampaign(x.id, memberId) : canSee({ memberId }, kind, x)), db, save, broadcast, rid, cleanText, readJson, send, notify, replay: replayAs, run: agentLlm, sendEmail: agentEmail, textToDoc, PJ, isAdminId, localNow, tzOf, fmtMinutes, hasAi: (wsId, memberId) => !!aiUse(aiOf(wsId, memberId)), POSTIZ, makeImageItem, itemFile, noContact, describeImages, canPicture: (wsId, memberId) => ['openai', 'gemini'].some((k) => !!aiOf(wsId, memberId).keys?.[k]?.sealed) });
 const GH = githubModule({ db, save, broadcast, rid, cleanText, readJson, send, seal, unseal, isAdmin, PJ, sees: (p, mid) => PJ.sees(p, mid), publicUrl: PUBLIC_URL });
 // Daily standups on a project (standup.js): a blocker becomes a task for the project lead.
 const STANDUP = standupModule({ db, save, broadcast, rid, cleanText, readJson, send, notify, sees: (p, mid) => PJ.sees(p, mid), teamDay: (wsId) => teamDay(wsId),
@@ -8816,11 +8872,11 @@ for (const x of Object.values(db.mileage)) {
   save();
 }
 
-const INV = invoicesModule({ notifyAdmins: (...a) => notifyAdmins(...a), db, save, broadcast, rid, hold, cleanText, readJson, send, badRequest, escHtml, brandOf, logoUrl, teamDay, offline, seal, unseal, stripeCall: stripe.callWith, PJ, isAdmin, jobOfRecord, jobLabel, moveJob, publicUrl: PUBLIC_URL, emit: (...a) => { PJ.emit(...a); QB.soon(a[0]); },
+const INV = invoicesModule({ notifyAdmins: (...a) => notifyAdmins(...a), jobBack: (rec) => jobBack(rec), onPaymentGone: (...a) => QB.paymentGone(...a), db, save, broadcast, rid, hold, cleanText, readJson, send, badRequest, escHtml, brandOf, logoUrl, teamDay, offline, seal, unseal, stripeCall: stripe.callWith, PJ, isAdmin, jobOfRecord, jobLabel, moveJob, publicUrl: PUBLIC_URL, emit: (...a) => { PJ.emit(...a); QB.soon(a[0]); },
   // A payment is money in on the business's Finance, under the team's owner.
-  addMoney: (ws, { amount, day, note }) => {
+  addMoney: (ws, { amount, day, note, invoiceId = null }) => {
     const owner = ws.members.find((m) => m.role === 'owner') || ws.members[0];
-    const x = { id: rid(), wsId: ws.id, memberId: owner.id, by: 'Kloomie', createdAt: Date.now(), kind: 'in', amount, day, category: 'Client payment', note: cleanText(note, 200), scope: 'business', campaignId: null, goalId: null, billId: null };
+    const x = { id: rid(), invoiceId, wsId: ws.id, memberId: owner.id, by: 'Kloomie', createdAt: Date.now(), kind: 'in', amount, day, category: 'Client payment', note: cleanText(note, 200), scope: 'business', campaignId: null, goalId: null, billId: null };
     db.money[x.id] = x;
     moneyNews(x);
     return x.id;
@@ -9178,7 +9234,19 @@ async function revokeCalendar(conn) {
 async function eraseTeam(ws) {
   const wsId = ws.id;
   // A team that's gone stops paying.
-  if (ws.billing?.sub && LIVE_SUB.includes(ws.billing.status) && stripe.configured()) await stripe.call('DELETE', `/subscriptions/${ws.billing.sub}`).catch((e) => alarm('Cancelling a deleted team’s subscription failed', e));
+  if (ws.billing?.sub && LIVE_SUB.includes(ws.billing.status) && stripe.configured()) {
+    try {
+      await stripe.call('DELETE', `/subscriptions/${encodeURIComponent(ws.billing.sub)}`);
+    } catch (e) {
+      // Already gone at Stripe is fine; anything else: keep the team and try again later.
+      if (!/resource_missing|No such subscription/i.test(String(e.message))) {
+        alarm('Cancelling a deleted team’s subscription failed; the team is kept until it works', e);
+        ws.deleteAt ||= Date.now();
+        save();
+        return false;
+      }
+    }
+  }
   const files = teamFiles(wsId);
   await Promise.all(Object.values(db.calendars).filter((x) => x.wsId === wsId).map(revokeCalendar));
   if (db.gcontacts[wsId]) await revokeCalendar({ provider: 'google', tokens: db.gcontacts[wsId].tokens });

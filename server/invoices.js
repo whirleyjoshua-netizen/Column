@@ -15,7 +15,7 @@ const METHODS = ['cash', 'check', 'card', 'bank', 'other'];
 const DUE_DAYS = 14;
 const CHECK_MS = Number(process.env.INVOICE_CHECK_MS) || 5 * 60_000;
 
-export function invoicesModule({ notifyAdmins = null, db, save, broadcast, rid, hold = null, cleanText, readJson, send, badRequest, escHtml, brandOf, logoUrl, teamDay, offline, seal, unseal, stripeCall, PJ, isAdmin, jobOfRecord, jobLabel, moveJob, addMoney, dropMoneyId, publicUrl, emit = () => {} }) {
+export function invoicesModule({ jobBack = () => {}, onPaymentGone = () => {}, notifyAdmins = null, db, save, broadcast, rid, hold = null, cleanText, readJson, send, badRequest, escHtml, brandOf, logoUrl, teamDay, offline, seal, unseal, stripeCall, PJ, isAdmin, jobOfRecord, jobLabel, moveJob, addMoney, dropMoneyId, publicUrl, emit = () => {} }) {
   db.invoices ||= {};
   db.payKeys ||= {};
   const money = (c) => ((c || 0) / 100).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
@@ -88,17 +88,25 @@ export function invoicesModule({ notifyAdmins = null, db, save, broadcast, rid, 
     inv.status = paid > 0 && balance <= 0 && total > 0 ? 'paid' : paid > 0 ? 'partial' : inv.viewedAt ? 'viewed' : inv.sentAt ? 'sent' : 'draft';
     inv.paidAt = inv.status === 'paid' ? inv.paidAt || Date.now() : null;
     const rec = db.records[inv.recordId];
+    if (rec && was === 'paid' && inv.status !== 'paid') jobBack(rec); // G14
     if (inv.status === 'paid' && was !== 'paid') setImmediate(() => emit(inv.wsId, 'invoice.paid', apiInvoice(inv), who));
     if (rec && inv.status === 'paid' && was !== 'paid') {
       moveJob(rec, 'Paid');
       PJ.recordActivity(rec.id, { kind: 'quote', what: 'invoice paid', note: `${inv.number} · ${money(total)}`, by: who });
     }
   }
+  function removePayment(inv, p, by) {
+    inv.payments = inv.payments.filter((x) => x !== p);
+    if (p.moneyId) dropMoneyId(p.moneyId);
+    settle(inv, by);
+    save();
+    news(inv);
+  }
   function addPayment(inv, { amount, method, note, day: on, by, session = null }) {
     const ws = db.workspaces[inv.wsId];
     if (!session) closeSessions(inv).catch(() => {});
     const p = { id: rid(), amount, method, note: note || '', day: on || teamDay(inv.wsId), by, at: Date.now(), ...(session ? { session } : {}) };
-    p.moneyId = addMoney(ws, { amount, day: p.day, note: `${inv.number}${inv.to.name ? ' · ' + inv.to.name : ''}${method === 'card' ? ' (card)' : ''}` });
+    p.moneyId = addMoney(ws, { invoiceId: inv.id, amount, day: p.day, note: `${inv.number}${inv.to.name ? ' · ' + inv.to.name : ''}${method === 'card' ? ' (card)' : ''}` });
     inv.payments.push(p);
     settle(inv, by);
     save();
@@ -319,11 +327,9 @@ export function invoicesModule({ notifyAdmins = null, db, save, broadcast, rid, 
       const p = inv.payments.find((x) => x.id === d);
       if (!p) return send(res, 404, { error: 'That payment is gone.' });
       if (p.session) return send(res, 400, { error: 'A card payment is refunded in your Stripe dashboard, not removed here.' });
-      inv.payments = inv.payments.filter((x) => x !== p);
-      if (p.moneyId) dropMoneyId(p.moneyId);
-      settle(inv, auth.member);
-      save();
-      news(inv);
+      if (p.ref?.startsWith('qbo:')) return send(res, 400, { error: 'This payment came from QuickBooks. Remove it there, and it goes from here too.' });
+      removePayment(inv, p, auth.member);
+      if (p.qbo) onPaymentGone(ws, inv, p);
       return send(res, 200, publicInvoice(inv));
     }
     if (m === 'DELETE' && !c) {
@@ -439,5 +445,5 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
 </style></head><body><main>${inner}</main><footer>Sent with Kloomie</footer></body></html>`);
   }
 
-  return { route, page, dropFor, costing, publicInvoice, apiInvoice, addPayment, totals, payInfo, checkAll, STATUSES, METHODS };
+  return { route, page, dropFor, costing, publicInvoice, apiInvoice, addPayment, removePayment, totals, payInfo, checkAll, STATUSES, METHODS };
 }

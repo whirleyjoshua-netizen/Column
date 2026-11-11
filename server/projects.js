@@ -297,7 +297,7 @@ export const TEMPLATES = {
   },
 };
 
-export function projectsModule({ seal = (x) => x, unseal = (x) => x, db, save, broadcast, rid, hold = null, cleanText, isDay, readJson, send, badRequest, isOwnerId, escHtml, brandOf, logoUrl, teamDay, offline, makeTask, onRecords, onRecordGone, onRecordNews, allowLocalHooks = false }) {
+export function projectsModule({ canSeeItem = () => true, seal = (x) => x, unseal = (x) => x, db, save, broadcast, rid, hold = null, cleanText, isDay, readJson, send, badRequest, isOwnerId, escHtml, brandOf, logoUrl, teamDay, offline, makeTask, onRecords, onRecordGone, onRecordNews, allowLocalHooks = false }) {
   const bad = (msg) => badRequest(msg);
   db.projects ||= {};
   db.records ||= {};
@@ -1253,7 +1253,7 @@ export function projectsModule({ seal = (x) => x, unseal = (x) => x, db, save, b
         }
         techAfter(ws, p, t, rec, before, auth);
         logChanges(ws, p, t, rec, before, auth.member);
-        if (body.docId !== undefined) rec.docId = db.items[body.docId]?.wsId === ws.id && db.items[body.docId].type === 'text' ? body.docId : null;
+        if (body.docId !== undefined) rec.docId = db.items[body.docId]?.wsId === ws.id && db.items[body.docId].type === 'text' && canSeeItem(auth, db.items[body.docId]) ? body.docId : null;
         rec.updatedAt = Date.now();
         recordNews(rec, 'record.updated', auth.member);
         return send(res, 200, publicRecord(rec));
@@ -1773,8 +1773,28 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
   }
   // Signed like Stripe: X-Kloomie-Signature: t=<seconds>,v1=<hmac of "t.body">. The X-Column-* copies are for receivers set up before the rename. Tried 4 times over ~10 minutes.
   const DELAYS = [0, 30_000, 120_000, 480_000];
+  // E19: at most 4 deliveries at a time for a team (an import making 500 contacts doesn't open 500 connections);
+  // the rest wait their turn, up to 2,000.
+  const HOOK_AT_ONCE = 4, HOOK_WAITING = 2000;
+  const hookSlots = new Map();
+  function hookSlot(wsId) {
+    const s = hookSlots.get(wsId) || hookSlots.set(wsId, { n: 0, q: [] }).get(wsId);
+    const release = () => { s.n--; const next = s.q.shift(); if (next) next(); else if (!s.n) hookSlots.delete(wsId); };
+    if (s.n < HOOK_AT_ONCE) { s.n++; return Promise.resolve(release); }
+    if (s.q.length >= HOOK_WAITING) return Promise.resolve(null);
+    return new Promise((r) => s.q.push(() => { s.n++; r(release); }));
+  }
   async function deliver(h, event, attempt = 0) {
     if (offline(h.wsId)) return;
+    const release = await hookSlot(h.wsId);
+    if (!release) {
+      h.log = [{ at: Date.now(), event: event.type, id: event.id, status: 0, ok: false, ms: 0, error: 'Skipped: too many waiting to go out at once', attempt: attempt + 1 }, ...(h.log || [])].slice(0, 20);
+      return save();
+    }
+    try { await deliverNow(h, event, attempt); } finally { release(); }
+  }
+  async function deliverNow(h, event, attempt) {
+    if (offline(h.wsId) || !db.webhooks[h.id]) return;
     const body = JSON.stringify(event);
     const ts = Math.floor(Date.now() / 1000);
     const sig = crypto.createHmac('sha256', hookSecret(h)).update(`${ts}.${body}`).digest('hex');

@@ -83,7 +83,7 @@ export function signoffModule(d) {
   }
   // Everything a signer sees, for this record: the form's title, the job's details, the lines, and for an uploaded
   // form its pages first.
-  async function render(ws, at, day) {
+  async function render(ws, at, day, auth) {
     const form = formFor(ws, at);
     const b = blanks(ws, at, day);
     const title = fill(form?.title || form?.name || at.f.name, ws, at, b).slice(0, 160);
@@ -94,6 +94,8 @@ export function signoffModule(d) {
     if (form?.kind === 'pdf') {
       const it = db.items[form.itemId];
       if (!it || it.wsId !== ws.id) throw bad('The PDF for this form is gone. Choose another form.');
+      // Audit: a PDF someone keeps private isn't shown to people who can't see it, just because it's a form.
+      if (auth && !d.canSee(auth, 'item', it)) throw bad('This form’s PDF is somewhere you can’t see. Ask whoever made the form to put it where the team can.');
       base = await d.readItem(it);
       intro = `By signing, I confirm I have read and accept “${form.name}” above.`;
     }
@@ -164,6 +166,16 @@ export function signoffModule(d) {
   }
   const fileName = (r) => (r.title || 'Sign-off').replace(/[\\/:*?"<>|]+/g, ' ').trim().slice(0, 120) + '.pdf';
 
+  const made = new Map(); // memberId -> times a form was made in the last minute
+  function tooMany(auth) {
+    const now = Date.now();
+    const list = (made.get(auth.memberId) || []).filter((x) => now - x < 60_000);
+    if (list.length >= 20) return true;
+    list.push(now);
+    made.set(auth.memberId, list);
+    if (made.size > 5000) for (const [k, v] of made) if (!v.some((x) => now - x < 60_000)) made.delete(k);
+    return false;
+  }
   async function route(req, res, parts, auth, ws) {
     const [a, b, c, e] = parts;
     const m = req.method;
@@ -220,15 +232,16 @@ export function signoffModule(d) {
       return send(res, 200, PJ.publicRecord(at.rec));
     }
     // What the signer will see, filled in, for signing here.
+    if (['preview', 'pdf', 'sign', 'send'].includes(e) && tooMany(auth)) return send(res, 429, { error: 'That’s a lot of forms in a minute. Wait a moment, then try again.' });
     if (e === 'preview' && m === 'GET') {
-      const r = await render(ws, at, day);
+      const r = await render(ws, at, day, auth);
       const cn = contactOf(at);
       return send(res, 200, { form: r.form ? publicForm(r.form) : null, title: r.title, rows: r.rows.filter(([, v]) => String(v || '').trim()), lines: r.lines, intro: r.intro, pages: r.pages,
         signer: { name: cn ? cn.name || '' : '', email: cn?.email || '' }, consent: d.CONSENT });
     }
     // The filled-in form as a PDF, to read or print (always downloaded, never opened as a page).
     if (e === 'pdf' && m === 'GET') {
-      const r = await render(ws, at, day);
+      const r = await render(ws, at, day, auth);
       res.writeHead(200, { 'Content-Type': 'application/pdf', 'Content-Disposition': `attachment; filename="${fileName(r).replace(/"/g, '')}"`, 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'no-store', 'Content-Length': r.bytes.length });
       return res.end(r.bytes);
     }
@@ -246,7 +259,7 @@ export function signoffModule(d) {
       const signer = signerOf(body, at);
       const sig = d.pngData(body.sig);
       if (!sig) return send(res, 400, { error: 'Have them sign in the box.' });
-      const r = await render(ws, at, day);
+      const r = await render(ws, at, day, auth);
       const ticked = new Set((Array.isArray(body.checks) ? body.checks : []).map(String));
       const marks = r.fields.map((f) => (f.type === 'sig' ? { ...f, type: 'image', image: 'sig' } : f.type === 'name' ? { ...f, type: 'text', text: signer.name } : f.type === 'date' ? { ...f, type: 'text', text: day }
         : f.type === 'check' && ticked.has(f.id) ? { ...f, type: 'check' } : null)).filter(Boolean);
@@ -284,7 +297,7 @@ export function signoffModule(d) {
       if (open) return send(res, 409, { error: `It’s already with ${pending.to.name}. Remind them, or cancel it to send a new one.` });
       const signer = signerOf(body, at);
       if (!signer.email) return send(res, 400, { error: 'Add their email address so the link can reach them.' });
-      const r = await render(ws, at, day);
+      const r = await render(ws, at, day, auth);
       const kinds = { sig: 'sig', name: 'name', date: 'date', check: 'check' };
       const x = {
         id: rid(), wsId: ws.id, memberId: auth.memberId, by: auth.member, itemId: null, name: fileName(r), title: r.title, signer, message: cleanText(body.message, 2000),

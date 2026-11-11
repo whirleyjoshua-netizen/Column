@@ -123,7 +123,7 @@ const PHOTO_MAX = 5_000_000; // what AI models take as a picture
 const MAX_PARTS = 4;
 const MAX_TURN_CHARS = 30_000;
 
-export function agentsModule({ db, save, broadcast, rid, cleanText, readJson, send, notify, replay, run: llmRun, sendEmail, textToDoc, PJ, isAdminId, localNow, tzOf, fmtMinutes, hasAi = () => true, POSTIZ = null, makeImageItem, itemFile, noContact = (c) => !!c.dne, canPicture = () => true, describeImages = async () => ({}) }) {
+export function agentsModule({ sees = () => true, db, save, broadcast, rid, cleanText, readJson, send, notify, replay, run: llmRun, sendEmail, textToDoc, PJ, isAdminId, localNow, tzOf, fmtMinutes, hasAi = () => true, POSTIZ = null, makeImageItem, itemFile, noContact = (c) => !!c.dne, canPicture = () => true, describeImages = async () => ({}) }) {
   db.agentRuns ||= {};
   db.agentPrefs ||= {};
   // A step that was being approved when the server stopped may or may not have gone out: never run it again
@@ -814,8 +814,8 @@ export function agentsModule({ db, save, broadcast, rid, cleanText, readJson, se
   const typeOfRec = (r) => db.projects[r.projectId]?.types.find((t) => t.id === r.typeId);
   const campName = (v) => (db.campaigns[v]?.name || v || '').toString().slice(0, 60);
   function campOf(cx, v, quiet) {
-    const all = Object.values(db.campaigns).filter((c) => c.wsId === cx.ws.id);
-    const c = db.campaigns[v]?.wsId === cx.ws.id ? db.campaigns[v] : all.find((x) => same(x.name, v));
+    const all = Object.values(db.campaigns).filter((c) => c.wsId === cx.ws.id && sees(cx.memberId, 'campaign', c));
+    const c = all.find((x) => x.id === v) || all.find((x) => same(x.name, v));
     if (!c && !quiet) throw new Error(`No campaign called ${v}. Campaigns: ${all.filter((x) => x.status !== 'done').map((x) => x.name).slice(0, 15).join(', ') || 'none yet'}.`);
     return c || null;
   }
@@ -868,10 +868,19 @@ export function agentsModule({ db, save, broadcast, rid, cleanText, readJson, se
   const same = (x, y) => String(x ?? '').trim().toLowerCase() === String(y ?? '').trim().toLowerCase() && String(x ?? '').trim() !== '';
   const mineTask = (cx, t) => t.assigneeId === cx.memberId || (!t.assigneeId && !t.roleId && t.memberId === cx.memberId) || (t.roleId && (memberOf(cx.ws, cx.memberId)?.roleIds || []).includes(t.roleId));
   const taskLine = (cx, t) => ({ id: t.id, task: t.text.slice(0, 200), due: t.due || null, priority: t.priority || undefined, for: t.assigneeId ? nameOf(cx.ws, t.assigneeId) : t.roleId ? (cx.ws.roles || []).find((r) => r.id === t.roleId)?.name : undefined, campaign: t.goalId ? db.campaigns[db.goals[t.goalId]?.campaignId]?.name : undefined, about: t.recordId ? recTitle(t.recordId) : undefined, waitingOn: t.blockedBy?.length ? true : undefined });
-  const taskText = (id) => db.tasks[id]?.text?.slice(0, 80);
-  const entryText = (id) => db.entries[id]?.text?.slice(0, 80);
-  const docTitle = (id) => db.items[id]?.title;
-  const recTitle = (id) => { const r = db.records[id]; const p = r && db.projects[r.projectId]; const t = p?.types.find((x) => x.id === r.typeId); return t ? String(r.values[t.primary] ?? '') || 'Untitled' : null; };
+  // F10: while a step's label is made (safeLabel), only what the person can see is named.
+  let labelCx = null;
+  const seen = (kind, x) => !!x && (!labelCx || (x.wsId === labelCx.ws.id && sees(labelCx.memberId, kind, x)));
+  const taskText = (id) => (seen('task', db.tasks[id]) ? db.tasks[id].text?.slice(0, 80) : undefined);
+  const entryText = (id) => (seen('entry', db.entries[id]) ? db.entries[id].text?.slice(0, 80) : undefined);
+  const docTitle = (id) => (seen('item', db.items[id]) ? db.items[id].title : undefined);
+  const recTitle = (id) => {
+    const r = db.records[id];
+    const p = r && db.projects[r.projectId];
+    if (labelCx && (!r || r.wsId !== labelCx.ws.id || !PJ.sees(p, labelCx.memberId))) return null;
+    const t = p?.types.find((x) => x.id === r.typeId);
+    return t ? String(r.values[t.primary] ?? '') || 'Untitled' : null;
+  };
   // A list's name for one of its records (Deals → deal), for step labels.
   const singularOf = (project, list) => { const t = Object.values(db.projects).filter((p) => same(p.name, project)).flatMap((p) => p.types).find((x) => same(x.name, list) || same(x.singular, list)); return (t?.singular || list || 'record').toLowerCase(); };
   const primaryOf = (a) => { const v = a.values || {}; return v.Name || v.Title || v.name || v.title || Object.values(v).find((x) => typeof x === 'string') || ''; };
@@ -987,7 +996,7 @@ export function agentsModule({ db, save, broadcast, rid, cleanText, readJson, se
     const tools = a.tools.filter((k) => k !== 'make_image' || pics).map((k) => ({ name: k, description: TOOLS[k].description, parameters: TOOLS[k].parameters }));
     if (x.parts.length < MAX_PARTS) tools.push({ name: 'hand_off', ...HANDOFF });
     const exec = async (name, args) => {
-      if (x.status === 'cancelled') throw new Error('The person stopped this assignment. Stop now.');
+      if (x.status === 'cancelled') throw Object.assign(new Error('The person stopped this assignment.'), { stop: true });
       if (name === 'hand_off') {
         if (!AGENTS[args.agent] || args.agent === part.agent) throw new Error('Can’t hand that off; do it yourself or say so in the report.');
         // Already coming up in this request: add to its brief rather than run it twice.
@@ -1061,7 +1070,7 @@ export function agentsModule({ db, save, broadcast, rid, cleanText, readJson, se
       ...before.map((p) => `What the ${AGENTS[p.agent].name} did:\n${p.steps.filter((s) => s.kind !== 'read').map((s) => `- ${s.label} [${s.status}]${s.changed?.length ? ' ids: ' + s.changed.map((c) => `${c.kind} ${c.id}`).join(', ') : ''}`).join('\n') || '- nothing changed'}\nTheir report: ${p.report || p.error || ''}`),
     ].filter(Boolean).join('\n\n').slice(0, MAX_TURN_CHARS);
   }
-  const safeLabel = (tool, args, cx) => { try { return tool.label(args || {}, cx); } catch { return 'Step'; } };
+  const safeLabel = (tool, args, cx) => { labelCx = cx; try { return tool.label(args || {}, cx); } catch { return 'Step'; } finally { labelCx = null; } };
 
   // Running a change (now, or when the person approves it), keeping what it changed and how to undo it.
   async function applyStep(x, cx, step, part) {
@@ -1188,6 +1197,7 @@ Reply with JSON only: {"summary":"one line on the plan","parts":[{"agent":"chief
           if (!wf || wf.paste || !s.days?.includes(now.dow) || now.min < s.at || s.last === now.date) continue;
           if (wf.monthly && Number(now.date.slice(8)) > 7) continue; // a monthly one: the first of those weekdays in the month
           if (now.min > s.at + 180) continue; // missed by hours (server was down): skip today rather than run late
+          if (runsOf(ws.id, memberId).filter((x) => ['requested', 'planning', 'running'].includes(x.status)).length >= 3) continue; // busy: next tick
           s.last = now.date;
           save();
           newRun(ws, memberId, { agent, ask: wf.ask, title: wf.name, workflow: wf.key, scheduled: true });
@@ -1301,7 +1311,15 @@ Reply with JSON only: {"summary":"one line on the plan","parts":[{"agent":"chief
       x.status = 'running';
       x.error = null;
       news(x);
-      (async () => { await runPart(x, part); finish(x); })().catch((e) => console.error('Agent reply failed:', e.message));
+      (async () => {
+        await runPart(x, part);
+        // Anything it handed off while answering runs next, as in a first assignment.
+        for (let i = 0; i < x.parts.length && i < MAX_PARTS; i++) {
+          if (x.status === 'cancelled') break;
+          if (x.parts[i].status === 'planned') await runPart(x, x.parts[i]);
+        }
+        finish(x);
+      })().catch((e) => console.error('Agent reply failed:', e.message));
       return send(res, 200, publicRun(x));
     }
     // Decide on a step: approve (run it now, with any edits to a draft), skip, or undo one already done.

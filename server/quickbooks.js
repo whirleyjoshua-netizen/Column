@@ -217,6 +217,9 @@ export function quickbooksModule({ bind, db, save, broadcast, cleanText, readJso
     if (!x.id) {
       // Already there under this number (an earlier run that didn't finish, or typed in by hand): link to it.
       const found = (await query(c, `select * from Invoice where DocNumber = '${esc(inv.number)}'`)).Invoice?.[0];
+      if (found && (found.CustomerRef?.value !== (await customerFor(c, inv.to)) || cents(found.TotalAmt) !== INV.totals(inv).total)) {
+        throw new Error(`QuickBooks already has an invoice numbered ${inv.number} for another customer or amount, so Kloomie left it alone. Change the number on one of them.`);
+      }
       if (found) Object.assign(x, { id: found.Id, linked: true, hash: linesHash(inv) });
       else {
         const body = await invoiceBody(c, inv);
@@ -278,6 +281,9 @@ export function quickbooksModule({ bind, db, save, broadcast, cleanText, readJso
     let did = 0;
     if (!x.estId) {
       const found = (await query(c, `select * from Estimate where DocNumber = '${esc(num)}'`)).Estimate?.[0];
+      if (found && found.CustomerRef?.value !== (await customerFor(c, q.customer || {}))) {
+        throw new Error(`QuickBooks already has an estimate numbered ${num} for another customer, so Kloomie left it alone. Change the number on one of them.`);
+      }
       if (found) Object.assign(x, { estId: found.Id, linked: true, hash: quoteHash(q), status: found.TxnStatus });
       else {
         const made = (await qb(c, 'POST', '/estimate', await estimateBody(c, q, rec))).Estimate;
@@ -317,7 +323,11 @@ export function quickbooksModule({ bind, db, save, broadcast, cleanText, readJso
     const pays = (out.CDCResponse?.[0]?.QueryResponse || []).flatMap((r) => r.Payment || []);
     let did = 0;
     for (const pay of pays) {
-      if (pay.status === 'Deleted') continue;
+      // G13: deleted in QuickBooks: it goes from Kloomie too (a card payment from Stripe stays; that's refunded there).
+      if (pay.status === 'Deleted') {
+        for (const inv of byQbo.values()) for (const p of inv.payments.filter((x) => x.qbo === pay.Id && !x.session)) { INV.removePayment(inv, p, 'QuickBooks'); did++; }
+        continue;
+      }
       for (const line of pay.Line || []) {
         for (const lt of line.LinkedTxn || []) {
           const inv = lt.TxnType === 'Invoice' && byQbo.get(lt.TxnId);
@@ -494,5 +504,19 @@ export function quickbooksModule({ bind, db, save, broadcast, cleanText, readJso
   }
   const escapeHtml = (s) => String(s).replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch]);
 
-  return { route, callback, donePage, disconnectedPage, soon, sync, disconnect, state };
+  // G13: a payment removed in Kloomie that had been copied there is deleted there too.
+  async function paymentGone(ws, inv, p) {
+    const c = db.qbo[ws.id];
+    if (!c || !p.qbo) return;
+    try {
+      const cur = (await qb(c, 'GET', `/payment/${encodeURIComponent(p.qbo)}`)).Payment;
+      if (cur && cur.status !== 'Deleted') await qb(c, 'POST', '/payment?operation=delete', { Id: p.qbo, SyncToken: cur.SyncToken });
+    } catch (e) {
+      alarm('Removing a payment in QuickBooks failed', e);
+      c.error = `A ${'$' + (p.amount / 100).toFixed(2)} payment removed from ${inv.number} in Kloomie couldn’t be removed in QuickBooks. Remove it there by hand.`;
+      save();
+      broadcast(ws.id, { type: 'quickbooks', forAdmins: true });
+    }
+  }
+  return { route, callback, donePage, disconnectedPage, soon, sync, disconnect, state, paymentGone };
 }

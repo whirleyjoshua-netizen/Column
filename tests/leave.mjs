@@ -107,7 +107,7 @@ await stop();
 const raw = fs.readFileSync(DIR + '/db.json', 'utf8');
 for (const mark of ['KEN-DAY-ENTRY', 'KEN-PERSONAL-MONEY', 'KEN-PRIVATE-CAMPAIGN', 'KEN-PRIVATE-FOLDER', 'KEN-PRIVATE-DOC', 'LU-DAY-ENTRY', 'KEN-SOLO-TEAM-DOC', `ken${t}@t.test`]) ok(!raw.includes(mark), `${mark} is gone from the data`);
 const dbj = JSON.parse(raw);
-ok(dbj.ai[`${a.workspace.id}:${kenId}`] === undefined && dbj.ai[`${a.workspace.id}:${a.workspace.members[0].id}`] === undefined, 'his AI key in Alpha is gone');
+ok(!Object.keys(dbj.ai).some((k) => k.endsWith(':' + kenId)), 'his AI key in Alpha is gone (nothing of his is left in AI settings)');
 console.log(fails ? fails + ' failed' : 'all passed');
 ai.kill();
 process.exit(fails ? 1 : 0);

@@ -13,11 +13,14 @@ const MAX_STEPS = 16;
 const clip = (s, n) => (s.length > n ? s.slice(0, n) + '…' : s);
 const isPdf = (f) => f.mime === 'application/pdf';
 const fileHeading = (f) => `File: ${f.name}\n\n${f.text}`;
+const CALL_MS = 180_000;
+// A tool's error goes back to the model to deal with; a stop (the person cancelled) ends the run at once (F8).
 const toolResult = async (exec, name, args, onStep) => {
   onStep?.(name);
   try {
     return { ok: true, out: JSON.stringify(await exec(name, args ?? {})) };
   } catch (e) {
+    if (e?.stop) throw e;
     return { ok: false, out: JSON.stringify({ error: String(e.message || e) }) };
   }
 };
@@ -39,7 +42,7 @@ const claude = {
   },
   pick: (models) => (models.find((m) => m.id === 'claude-opus-5-5') || models[0])?.id,
   async run({ key, model, system, history, tools, web, exec, onStep }) {
-    const client = new Anthropic({ apiKey: key, maxRetries: 2 });
+    const client = new Anthropic({ apiKey: key, maxRetries: 2, timeout: CALL_MS });
     const defs = tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.parameters }));
     if (web) defs.push({ type: WEB_SEARCH_NEW.test(model) ? 'web_search_20260209' : 'web_search_20250305', name: 'web_search', max_uses: 5 });
     // Files are cached with the system prompt, so a long conversation about them doesn't pay for them each turn.
@@ -80,6 +83,7 @@ const claude = {
 // ---------- OpenAI (Responses API) ----------
 async function openaiCall(key, pathname, body) {
   const res = await fetch((process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1') + pathname, {
+    signal: AbortSignal.timeout(CALL_MS),
     method: body ? 'POST' : 'GET',
     headers: { Authorization: 'Bearer ' + key, ...(body ? { 'Content-Type': 'application/json' } : {}) },
     body: body ? JSON.stringify(body) : undefined,
@@ -129,6 +133,7 @@ const openai = {
 // ---------- Gemini ----------
 async function geminiCall(key, pathname, body) {
   const res = await fetch((process.env.GEMINI_BASE_URL || 'https://generativelanguage.googleapis.com') + '/v1beta' + pathname, {
+    signal: AbortSignal.timeout(CALL_MS),
     method: body ? 'POST' : 'GET',
     headers: { 'x-goog-api-key': key, ...(body ? { 'Content-Type': 'application/json' } : {}) },
     body: body ? JSON.stringify(body) : undefined,

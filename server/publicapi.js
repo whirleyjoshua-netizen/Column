@@ -18,7 +18,7 @@ export function publicApiModule(deps) {
   const memberIn = (ws, v) => {
     if (v == null || v === '') return null;
     const s = String(v).trim().toLowerCase();
-    const m = ws.members.find((x) => x.id === v) || ws.members.find((x) => x.name.toLowerCase() === s) || ws.members.find((x) => (x.email || '').toLowerCase() === s);
+    const m = ws.members.find((x) => x.id === v) || ws.members.find((x) => x.name.toLowerCase() === s) || ws.members.find((x) => ((x.userId && db.users?.[x.userId]?.email) || x.email || '').toLowerCase() === s);
     if (!m) throw badRequest(`No one on the team called “${String(v).slice(0, 60)}”. Use a member id or name.`);
     return m.id;
   };
