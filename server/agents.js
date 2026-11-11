@@ -365,8 +365,8 @@ export function agentsModule({ db, save, broadcast, rid, cleanText, readJson, se
         if (a.assignee) Object.assign(body, who(cx, a.assignee));
         const before = Object.fromEntries(Object.keys(body).map((k) => [k, t[k] ?? null]));
         if (body.assigneeId || body.roleId) Object.assign(before, { assigneeId: t.assigneeId || null, roleId: t.roleId || null });
-        const r = await cx.call('PATCH', '/api/tasks/' + a.id, body);
-        return done(r, { kind: 'task', id: a.id, label: t.text }, { undo: { method: 'PATCH', path: '/api/tasks/' + a.id, body: before } });
+        const r = await cx.call('PATCH', '/api/tasks/' + t.id, body);
+        return done(r, { kind: 'task', id: a.id, label: t.text }, { undo: { method: 'PATCH', path: '/api/tasks/' + t.id, body: before } });
       },
     },
     schedule_time: {
@@ -393,8 +393,8 @@ export function agentsModule({ db, save, broadcast, rid, cleanText, readJson, se
         if (a.end !== undefined) body.end = parseTime(a.end);
         else if (body.start != null && e.start != null && e.end != null) body.end = Math.min(1440, body.start + (e.end - e.start));
         const before = { date: e.date, start: e.start, end: e.end };
-        const r = await cx.call('PATCH', '/api/entries/' + a.id, body);
-        return done(r, { kind: 'entry', id: a.id, label: e.text, date: body.date || e.date }, { undo: { method: 'PATCH', path: '/api/entries/' + a.id, body: before } });
+        const r = await cx.call('PATCH', '/api/entries/' + e.id, body);
+        return done(r, { kind: 'entry', id: a.id, label: e.text, date: body.date || e.date }, { undo: { method: 'PATCH', path: '/api/entries/' + e.id, body: before } });
       },
     },
     save_contact: {
@@ -447,8 +447,11 @@ export function agentsModule({ db, save, broadcast, rid, cleanText, readJson, se
       description: 'Write on a record’s timeline what happened: a call, email, meeting or note. follow_up (YYYY-MM-DD) also makes a follow-up task.',
       parameters: { type: 'object', properties: { record_id: { type: 'string' }, kind: { type: 'string', enum: ['note', 'call', 'email', 'meeting'] }, text: { type: 'string' }, follow_up: { type: 'string' }, why: { type: 'string' } }, required: ['record_id', 'text'] },
       async run(cx, a) {
-        const r = await cx.call('POST', `/api/records/${a.record_id}/log`, { kind: a.kind || 'note', note: a.text, ...(isDay(a.follow_up) ? { followUp: a.follow_up } : {}) });
-        return done(r, { kind: 'record', id: a.record_id, label: recTitle(a.record_id) });
+        // Only a record this person can see, and its id as Kloomie has it: never text from the model in the address.
+        const at = PJ.recordAt(String(a.record_id || ''), cx.ws.id, cx.memberId);
+        if (!at) throw new Error('No record you can see with that id.');
+        const r = await cx.call('POST', `/api/records/${at.rec.id}/log`, { kind: a.kind || 'note', note: a.text, ...(isDay(a.follow_up) ? { followUp: a.follow_up } : {}) });
+        return done(r, { kind: 'record', id: at.rec.id, label: recTitle(at.rec.id) });
       },
     },
     book_visit: {
@@ -456,10 +459,12 @@ export function agentsModule({ db, save, broadcast, rid, cleanText, readJson, se
       description: 'Book a visit on a job (an estimate, install, service call…): date, times, and who goes (names; the person themselves if left out). It goes on their calendars and the team schedule.',
       parameters: { type: 'object', properties: { record_id: { type: 'string' }, date: { type: 'string' }, start: { type: 'string' }, end: { type: 'string' }, kind: { type: 'string' }, people: { type: 'array', items: { type: 'string' } }, why: { type: 'string' } }, required: ['record_id', 'date'] },
       async run(cx, a) {
+        const at = PJ.recordAt(String(a.record_id || ''), cx.ws.id, cx.memberId);
+        if (!at) throw new Error('No job you can see with that id.');
         const memberIds = (Array.isArray(a.people) ? a.people : []).map((n) => cx.ws.members.find((m) => same(m.name, n))?.id).filter(Boolean);
         const start = parseTime(a.start);
-        const r = await cx.call('POST', `/api/records/${a.record_id}/visits`, { date: a.date, start, end: start == null ? null : parseTime(a.end) ?? Math.min(1440, start + 60), ...(a.kind ? { kind: a.kind } : {}), ...(memberIds.length ? { memberIds } : {}) });
-        return done(r, { kind: 'record', id: a.record_id, label: recTitle(a.record_id) }, r.body?.id ? { undo: { method: 'DELETE', path: `/api/visits/${r.body.id}` } } : {});
+        const r = await cx.call('POST', `/api/records/${at.rec.id}/visits`, { date: a.date, start, end: start == null ? null : parseTime(a.end) ?? Math.min(1440, start + 60), ...(a.kind ? { kind: a.kind } : {}), ...(memberIds.length ? { memberIds } : {}) });
+        return done(r, { kind: 'record', id: at.rec.id, label: recTitle(at.rec.id) }, r.body?.id ? { undo: { method: 'DELETE', path: `/api/visits/${r.body.id}` } } : {});
       },
     },
     write_doc: {
@@ -478,7 +483,8 @@ export function agentsModule({ db, save, broadcast, rid, cleanText, readJson, se
       parameters: { type: 'object', properties: { to_name: { type: 'string' }, to_email: { type: 'string' }, subject: { type: 'string' }, body: { type: 'string' }, record_id: { type: 'string' }, why: { type: 'string' } }, required: ['to_email', 'subject', 'body'] },
       async run(cx, a) {
         const out = await sendEmail(cx.ws, cx.memberId, { name: a.to_name || '', email: a.to_email, subject: a.subject, text: a.body });
-        if (a.record_id && PJ.recordAt(String(a.record_id), cx.ws.id, cx.memberId)) await cx.call('POST', `/api/records/${a.record_id}/log`, { kind: 'email', note: `Emailed ${a.to_name || a.to_email}: ${a.subject}` });
+        const logAt = a.record_id && PJ.recordAt(String(a.record_id), cx.ws.id, cx.memberId);
+        if (logAt) await cx.call('POST', `/api/records/${logAt.rec.id}/log`, { kind: 'email', note: `Emailed ${a.to_name || a.to_email}: ${a.subject}` });
         return { ok: true, result: { sent: true, from: out.from }, changed: a.record_id ? [{ kind: 'record', id: a.record_id, label: recTitle(a.record_id) }] : [] };
       },
     },

@@ -141,7 +141,8 @@ export function dropboxModule({ db, rid, save, send, readJson, seal, unseal, bro
   };
   const done = (res, how) => { res.writeHead(302, { Location: `/dropbox/done?r=${how}`, 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer' }); res.end(); };
   function donePage(req, res, url) {
-    const [title, msg] = PAGES[url.searchParams.get('r')] || PAGES.failed;
+    const r = url.searchParams.get('r');
+    const [title, msg] = Object.hasOwn(PAGES, r || '') ? PAGES[r] : PAGES.failed;
     return send(res, 200, `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><meta name="robots" content="noindex"><title>${title}</title><body style="font:15px system-ui;background:#111;color:#eee;display:grid;place-items:center;height:90vh;text-align:center;padding:0 16px"><div><h2>${title}</h2><p>${msg}</p></div></body>`,
       { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
   }

@@ -170,9 +170,11 @@ export function postizModule({ db, save, broadcast, cleanText, readJson, send, s
   };
   const done = (res, how) => { res.writeHead(302, { Location: `/postiz/done?r=${how}`, 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer' }); res.end(); };
   function donePage(req, res, url) {
-    const [title, msg] = DONE[url.searchParams.get('r')] || DONE.failed;
-    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'X-Robots-Tag': 'noindex', 'Cache-Control': 'no-store' });
-    res.end(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${title}</title><body style="font:15px system-ui;background:#111;color:#eee;display:grid;place-items:center;height:90vh;text-align:center"><div><h2>${title}</h2><p>${msg}</p></div><script>try{window.opener&&window.opener.postMessage({postiz:${JSON.stringify(url.searchParams.get('r') || 'failed')}},location.origin)}catch(e){}</script></body>`);
+    // Only our own fixed words go in the page: nothing from the address, and no script at all.
+    const r = url.searchParams.get('r');
+    const [title, msg] = Object.hasOwn(DONE, r || '') ? DONE[r] : DONE.failed;
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'X-Robots-Tag': 'noindex', 'Cache-Control': 'no-store', 'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'", 'X-Content-Type-Options': 'nosniff' });
+    res.end(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${title}</title><body style="font:15px system-ui;background:#111;color:#eee;display:grid;place-items:center;height:90vh;text-align:center"><div><h2>${title}</h2><p>${msg}</p></div></body>`);
   }
   async function callback(req, res, url) {
     const st = url.searchParams.get('state') || '';

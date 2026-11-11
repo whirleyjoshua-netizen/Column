@@ -1149,6 +1149,17 @@ function contentDisposition(kind, name) {
 }
 
 // Serves a file with Range support so videos/music stream and scrub.
+// Files people upload are served from Kloomie's own address, so nothing in one may ever run as a page here. Only kinds
+// a browser shows without running code open in place (pictures, video, audio, PDF, plain text); anything else downloads
+// as plain bytes. SVG keeps its type so it still shows as a picture inside the app, but opened on its own it downloads
+// and can't run script. Every file goes out with nosniff and a policy that allows no script.
+const INLINE_OK = /^(image\/(png|jpe?g|gif|webp|heic|heif|avif|bmp)|video\/(mp4|quicktime|webm|x-matroska|ogg)|audio\/(mpeg|mp4|wav|x-wav|flac|ogg|webm|aac|x-m4a)|application\/pdf|text\/plain)\s*(;|$)/i;
+function fileType(mime) {
+  const m = String(mime || '').trim();
+  if (INLINE_OK.test(m)) return { type: m, inline: true };
+  if (/^image\/svg\+xml\s*(;|$)/i.test(m)) return { type: 'image/svg+xml', inline: false };
+  return { type: 'application/octet-stream', inline: false };
+}
 function serveFile(req, res, filePath, { name, mime, download, cache }) {
   let stat;
   try {
@@ -1156,11 +1167,16 @@ function serveFile(req, res, filePath, { name, mime, download, cache }) {
   } catch {
     return send(res, 404, { error: 'File missing' });
   }
+  const ft = fileType(mime);
+  const pdf = /^application\/pdf/i.test(ft.type);
   const headers = {
-    'Content-Type': mime,
+    'Content-Type': ft.type,
     'Accept-Ranges': 'bytes',
-    'Content-Disposition': contentDisposition(download ? 'attachment' : 'inline', name),
+    'Content-Disposition': contentDisposition(download || !ft.inline ? 'attachment' : 'inline', name),
     'Cache-Control': cache || 'private, max-age=31536000, immutable',
+    'X-Content-Type-Options': 'nosniff',
+    // The browser's own PDF viewer needs plugins, which sandbox would block; it never runs script on this address.
+    'Content-Security-Policy': pdf ? "default-src 'none'; img-src data:; style-src 'unsafe-inline'; frame-ancestors 'self'" : "default-src 'none'; img-src 'self' data:; media-src 'self'; style-src 'unsafe-inline'; sandbox; frame-ancestors 'self'",
   };
   const range = req.headers.range && /^bytes=(\d*)-(\d*)$/.exec(req.headers.range);
   if (range && stat.size > 0) {
@@ -8165,13 +8181,14 @@ function clientVersion() {
 }
 
 function serveStatic(req, res, url) {
-  let rel = decodeURIComponent(url.pathname);
+  let rel;
+  try { rel = decodeURIComponent(url.pathname); } catch { return send(res, 400, 'Bad request'); }
   if (rel === '/' || !path.extname(rel)) rel = '/index.html';
   const file = path.join(CLIENT_DIR, rel);
   if (!file.startsWith(CLIENT_DIR + path.sep)) return send(res, 403, 'Forbidden');
   // Only Kloomie's own script runs on its pages: markup that slips in from a file or message can't run code. The
   // file pickers of Google Drive, OneDrive and Dropbox are let in too, each only when it's set up here.
-  const csp = path.extname(file) === '.html' ? { 'Content-Security-Policy': `script-src 'self'${cloudScripts()}; object-src 'none'; base-uri 'none'; form-action 'self'` } : {};
+  const csp = path.extname(file) === '.html' ? { 'Content-Security-Policy': `script-src 'self'${cloudScripts()}; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'self'` } : {};
   // Video, like the website's walkthrough, streams in pieces so it plays and scrubs on phones and Safari.
   if (/^\.(mp4|webm)$/.test(path.extname(file))) return serveFile(req, res, file, { name: path.basename(file), mime: MIME[path.extname(file)], cache: 'public, max-age=86400' });
   // Libraries in /vendor/ have their version in the folder name, so they never change.
@@ -8216,7 +8233,21 @@ async function importData(req, res) {
 // Projects and the public API (projects.js).
 // Rules and approvals (rules.js). An approved request is replayed through the API as the person who asked.
 let RULES = null;
+// Only a plain Kloomie address can be replayed: /api/ then simple segments (no "." or ".." steps, no escapes), and a
+// query of plain values. An id that came from a model or a user can't steer a replay to some other route.
+const REPLAY_PATH = /^\/api(\/[A-Za-z0-9_\-:]+)+$/;
+const REPLAY_QUERY = /^[A-Za-z0-9_\-:=&.]*$/;
+function replayPathOk(p) {
+  const s = String(p || '');
+  const q = s.indexOf('?');
+  const path = q < 0 ? s : s.slice(0, q), query = q < 0 ? '' : s.slice(q + 1);
+  return REPLAY_PATH.test(path) && REPLAY_QUERY.test(query) && new URL(s, 'http://replay').pathname === path;
+}
 async function replayAs(ws, memberId, approvalId, { method, path: p, body }, as = null) {
+  if (!replayPathOk(p)) {
+    console.error('Refused a replay to an odd address:', String(p).slice(0, 120));
+    return { status: 400, body: { error: 'That isn’t an address Kloomie can do that at.' } };
+  }
   const me = ws.members.find((m) => m.id === memberId);
   const req = Readable.from(body == null ? [] : [Buffer.from(JSON.stringify(body))]);
   Object.assign(req, { method, url: p, headers: { 'content-type': 'application/json' }, socket: { remoteAddress: 'replay' } });
@@ -8505,7 +8536,7 @@ const SITE_URL = SITE_HOST ? 'https://' + SITE_HOST : PUBLIC_URL;
 function serveSite(req, res) {
   fs.readFile(path.join(CLIENT_DIR, 'site.html'), 'utf8', (err, html) => {
     if (err) return send(res, 404, 'Not found');
-    send(res, 200, html.replaceAll('{{APP}}', PUBLIC_URL).replaceAll('{{SITE}}', SITE_URL), { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache', 'Content-Security-Policy': "script-src 'self'; object-src 'none'; base-uri 'none'" });
+    send(res, 200, html.replaceAll('{{APP}}', PUBLIC_URL).replaceAll('{{SITE}}', SITE_URL), { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache', 'Content-Security-Policy': "script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'self'" });
   });
 }
 // Search engines: the website is indexed; the app's address is not (its pages are sign-in screens and private links).
@@ -8520,7 +8551,24 @@ function serveSitemap(req, res) {
 }
 
 const ALLOWED_METHODS = new Set(['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']);
-const server = http.createServer(async (req, res) => {
+// One request going wrong (a bad address, a bug in a page) answers that request with an error; it never stops the
+// server for everyone. Real crashes elsewhere still restart it (see the crash handler above).
+const server = http.createServer((req, res) => {
+  handleRequest(req, res).catch((e) => {
+    console.error('Request failed:', req.method, String(req.url || '').slice(0, 200), e?.stack || e);
+    if (res.headersSent) return res.destroy();
+    send(res, e instanceof URIError ? 400 : 500, e instanceof URIError ? 'Bad request' : 'Something went wrong.');
+  });
+});
+// Every response: browsers keep to https, don't guess types, don't send full addresses to other sites, and other sites
+// can't frame Kloomie (a page meant to be embedded, like the lead form, says so with its own frame-ancestors, which
+// browsers honour over X-Frame-Options).
+const HTTPS_ONLY = PUBLIC_URL.startsWith('https://');
+async function handleRequest(req, res) {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  if (HTTPS_ONLY) res.setHeader('Strict-Transport-Security', 'max-age=31536000');
   // TRACE and other methods nothing here uses are turned away.
   if (!ALLOWED_METHODS.has(req.method)) { res.writeHead(405, { Allow: [...ALLOWED_METHODS].join(', '), 'Content-Type': 'text/plain' }); return res.end('Method not allowed'); }
   const url = new URL(req.url, 'http://x');
@@ -8611,7 +8659,7 @@ const server = http.createServer(async (req, res) => {
     if (!res.headersSent) send(res, 500, 'Something went wrong connecting your calendar.');
   });
   serveStatic(req, res, url);
-});
+}
 
 const wss = new WebSocketServer({ noServer: true });
 server.on('upgrade', (req, socket, head) => {

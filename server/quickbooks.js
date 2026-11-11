@@ -444,7 +444,8 @@ export function quickbooksModule({ db, save, broadcast, cleanText, readJson, sen
   };
   const done = (res, how) => { res.writeHead(302, { Location: `/quickbooks/done?r=${how}`, 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer' }); res.end(); };
   function donePage(req, res, url) {
-    const [title, msg] = DONE[url.searchParams.get('r')] || DONE.failed;
+    const r = url.searchParams.get('r');
+    const [title, msg] = Object.hasOwn(DONE, r || '') ? DONE[r] : DONE.failed;
     res.setHeader('X-Robots-Tag', 'noindex');
     res.setHeader('Cache-Control', 'no-store');
     return page(res, title, msg);
