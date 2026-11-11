@@ -544,6 +544,7 @@
       teamSoon();
       renderDay();
     } else if (msg.type === 'invoice') {
+      lkForget('invoice', msg.invoice?.id || msg.id);
       invoiceNews(msg.invoice);
     } else if (msg.type === 'invoice:remove') {
       PR.invoices.set(msg.recordId, (PR.invoices.get(msg.recordId) || []).filter((x) => x.id !== msg.id));
@@ -1400,13 +1401,13 @@
     const tray = h('div', { class: 'tray hidden' });
     const drawTray = () => {
       tray.replaceChildren(...links.map((l, i) => h('span', { class: 'tray-chip' },
-        h('span', { class: 'ln-ic', html: l.type === 'stack' ? I.stack : l.type === 'task' ? I.task : l.type === 'campaign' ? I.target : I.link }),
-        h('span', { class: 'ln-text' }, linkName(l)),
+        h('span', { class: 'ln-ic', html: l.type === 'stack' ? I.stack : l.type === 'task' ? I.task : l.type === 'campaign' ? I.target : LK_TYPES.includes(l.type) || l.type === 'doc' ? null : I.link }, LK_TYPES.includes(l.type) || l.type === 'doc' ? ({ doc: '📄', record: '📋', project: '📁', visit: '📅', contact: '👤', meeting: '📝', agent: '👥', hq: '🏢', invoice: '🧾', sign: '✍️' })[l.type] : null),
+        h('span', { class: 'ln-text' }, l.label || linkName(l)),
         h('button', { 'aria-label': 'Remove', html: I.close, onclick: () => { links.splice(i, 1); drawTray(); } }))));
       tray.classList.toggle('hidden', !links.length);
     };
     const addLink = (r) => {
-      if (!links.some((l) => l.type === r.type && l.id === r.id)) links.push({ type: r.type, id: r.id });
+      if (!links.some((l) => l.type === r.type && l.id === r.id)) links.push({ type: r.type, id: r.id, label: r.label });
       drawTray();
       ta.focus();
     };
@@ -1471,7 +1472,7 @@
       slashKey = slashAuto(box, ta, view, clearBox);
       return box;
     }
-    const linkBtn = h('button', { class: 'add link-btn', title: 'Link a stack, file or task  ([[)', 'aria-label': 'Link a stack, file or task', html: I.link, onclick: () => openPicker(wrap, addLink) });
+    const linkBtn = h('button', { class: 'add link-btn', title: 'Link a job, doc, task, file…  ([[)', 'aria-label': 'Link something', html: I.link, onclick: () => openPicker(wrap, addLink) });
     const wrap = h('div', { class: 'composer-wrap' }, tray, h('div', { class: 'composer' }, viewThread(view) ? null : add, linkBtn, ta));
     mentionKey = mentionAuto(wrap, ta);
     slashKey = slashAuto(wrap, ta, view, clearBox);
@@ -1914,7 +1915,25 @@
 
   // ---------- links in chat: [[file:<id>]], [[stack:<id>]], [[task:<id>]] ----------
   // They point at the live thing, so renames, ticks and deletes show up in old messages too.
-  const LINK_RE = /\[\[(file|stack|task|campaign|doc):([\w-]+)\]\]/g;
+  const LINK_RE = /\[\[(file|stack|task|campaign|doc|record|project|visit|invoice|sign|contact|agent|meeting|hq):([\w-]+)\]\]/g;
+  // Links to things this app may not have loaded (a job, an invoice, a signature request…) are described by the
+  // server, for this person: a name and a line, or that they can't open it. Asked for in batches, kept until they change.
+  const LK = { info: new Map(), want: new Set(), timer: null };
+  const LK_TYPES = ['record', 'project', 'visit', 'invoice', 'sign', 'contact', 'agent', 'meeting', 'hq'];
+  const LK_NAMES = { record: 'A record', project: 'A project', visit: 'A visit', invoice: 'An invoice', sign: 'A signature request', contact: 'A contact', agent: 'An agent assignment', meeting: 'Meeting notes', hq: 'Company HQ' };
+  function lkInfo(type, id) {
+    const k = `${type}:${id}`;
+    if (LK.info.has(k)) return LK.info.get(k);
+    LK.want.add(k);
+    clearTimeout(LK.timer);
+    LK.timer = setTimeout(async () => {
+      const links = [...LK.want].map((x) => ({ type: x.slice(0, x.indexOf(':')), id: x.slice(x.indexOf(':') + 1) }));
+      LK.want.clear();
+      try { const r = await api('POST', '/links', { links }); for (const [key, v] of Object.entries(r.links)) LK.info.set(key, v); refreshLinks(); } catch {}
+    }, 60);
+    return null;
+  }
+  const lkForget = (type, id) => { if (LK.info.delete(`${type}:${id}`)) refreshLinks(); };
   const linkToken = (type, id) => `[[${type}:${id}]]`;
   const linksIn = (text) => [...text.matchAll(LINK_RE)].map(([, type, id]) => ({ type, id }));
   const stripLinks = (text) => text.replace(LINK_RE, '').trim();
@@ -1926,6 +1945,7 @@
     if (type === 'stack') return stackById(id)?.name || 'Removed stack';
     if (type === 'campaign') return campById(id)?.name || 'Campaign';
     if (type === 'doc') { const d = S.items.find((x) => x.id === id && x.type === 'text'); return d ? docTitle(d) : 'Removed doc'; }
+    if (LK_TYPES.includes(type)) return lkInfo(type, id)?.label || LK_NAMES[type];
     return taskById(id)?.text || 'Deleted task';
   }
   // Message text with links spelled out, for notifications and copying.
@@ -1942,8 +1962,25 @@
     setSub('tasks');
   }
 
+  // Where each kind of link opens.
+  async function lkOpen(type, id, info) {
+    if (type === 'record') { await prLoadAll(); return openRecord(id); }
+    if (type === 'project') return openProject(id);
+    if ((type === 'visit' || type === 'invoice') && info?.recordId) { await prLoadAll(); return openRecord(info.recordId); }
+    if (type === 'sign') { const x = SG.list.find((y) => y.id === id); return x ? signSheet(x) : openTool('signs'); }
+    if (type === 'contact') { const x = (S.contacts || []).find((y) => y.id === id); return x ? contactSheet(x) : openTool('contacts'); }
+    if (type === 'agent') return agOpen('run:' + id);
+    if (type === 'meeting') { const x = (S.meetings || []).find((y) => y.id === id); return x ? meetingSheet(x) : openTool('meetings'); }
+    if (type === 'hq') return openTool('hq');
+  }
   function linkEl({ type, id }) {
     const gone = (msg) => h('div', { class: 'ln ln-gone' }, msg);
+    if (LK_TYPES.includes(type)) {
+      const info = lkInfo(type, id);
+      if (!info) return h('div', { class: 'ln ln-chip ln-wait' }, h('span', { class: 'ln-text' }, LK_NAMES[type] + '…'));
+      if (!info.ok) return h('div', { class: 'ln ln-chip ln-gone', title: info.sub }, h('span', { class: 'ln-ic' }, info.icon || '🔒'), h('span', { class: 'ln-text' }, info.label), h('span', { class: 'ln-sub' }, info.sub || 'You can’t open it'));
+      return h('button', { class: 'ln ln-chip ln-' + type, title: 'Open', onclick: () => lkOpen(type, id, info) }, h('span', { class: 'ln-ic' }, info.icon || '🔗'), h('span', { class: 'ln-text' }, info.label), info.sub ? h('span', { class: 'ln-sub' }, info.sub) : null);
+    }
     if (type === 'doc') {
       const d = S.items.find((x) => x.id === id && x.type === 'text');
       if (!d) return gone('Doc no longer available');
@@ -2015,7 +2052,8 @@
 
   function openPicker(wrap, onPick) {
     if (picker) return closePicker();
-    const q = h('input', { class: 'pk-q', placeholder: 'Link a stack, file or task…', spellcheck: 'false', 'aria-label': 'Search' });
+    if (toolOn('projects') && (S.projects || []).some((p) => !PR.records.has(p.id))) prLoadAll().then(() => picker && picker._draw?.()).catch(() => {});
+    const q = h('input', { class: 'pk-q', placeholder: 'Link a job, doc, task, file, campaign…', spellcheck: 'false', 'aria-label': 'Search' });
     const list = h('div', { class: 'pk-list' });
     let rows = [];
     let sel = 0;
@@ -2034,6 +2072,14 @@
         ['Campaigns', S.campaigns.filter((c) => hit(c.name)).map((c) => ({ type: 'campaign', id: c.id, label: c.name, icon: I.target, sub: Math.round(campProgress(c) * 100) + '%' }))],
         ['Tasks', S.tasks.filter((t) => hit(t.text)).sort((a, b) => a.done - b.done || b.createdAt - a.createdAt)
           .map((t) => ({ type: 'task', id: t.id, label: t.text, icon: I.task, sub: t.done ? 'done' : taskSlot(t)?.label }))],
+        ['Docs', S.items.filter((x) => x.type === 'text' && hit(docTitle(x))).sort((a, b) => (b.editedAt || b.createdAt) - (a.editedAt || a.createdAt)).map((x) => ({ type: 'doc', id: x.id, label: docTitle(x), icon: '📄', sub: docWhere(x) }))],
+        ['Jobs & records', [...PR.records].flatMap(([pid, list]) => { const p = projById(pid); return p ? list.map((r) => ({ p, r, t: prType(p, r.typeId) })) : []; }).filter(({ t, r }) => t && hit(recName(t, r))).sort((a, b) => (b.r.updatedAt || b.r.createdAt) - (a.r.updatedAt || a.r.createdAt)).map(({ p, r, t }) => ({ type: 'record', id: r.id, label: recName(t, r), icon: t.icon || '📋', sub: `${t.singular || t.name} · ${p.name}` }))],
+        ['Projects', (S.projects || []).filter((p) => hit(p.name)).map((p) => ({ type: 'project', id: p.id, label: p.name, icon: p.icon || '📁', sub: 'Project' }))],
+        ['Visits', S.entries.filter((e) => e.visitId && e.date >= todayKey() && hit(e.text)).sort((a, b) => a.date.localeCompare(b.date)).map((e) => ({ type: 'visit', id: e.visitId, label: e.text, icon: '📅', sub: e.date + (e.start != null ? ' · ' + fmtTime(e.start) : '') }))],
+        ...(amAdmin() && S.contacts ? [['Contacts', S.contacts.filter((c) => hit(c.name || c.email || '')).map((c) => ({ type: 'contact', id: c.id, label: c.name || c.email, icon: '👤', sub: c.company || c.email || '' }))]] : []),
+        ['Meeting notes', (S.meetings || []).filter((x) => hit(x.title || '')).map((x) => ({ type: 'meeting', id: x.id, label: x.title || 'Meeting notes', icon: '📝', sub: 'Meeting notes' }))],
+        ['Agent assignments', (AG.data?.runs || []).filter((x) => hit(x.title)).map((x) => ({ type: 'agent', id: x.id, label: x.title, icon: '👥', sub: x.agent === 'team' ? 'Your team' : AG.data.agents[x.agent]?.name }))],
+        ['Company HQ', hit('company hq business profile playbook') ? [{ type: 'hq', id: 'profile', label: 'Company HQ', icon: '🏢', sub: 'What we do, how we sound, how we work' }] : []],
       ];
       rows = [];
       list.replaceChildren();
@@ -2069,12 +2115,15 @@
       }
     });
     picker = h('div', { class: 'picker' }, q, list);
+    picker._draw = draw;
     wrap.append(picker);
     draw();
     q.focus();
   }
 
   // Post a link into a feed.
+  // A Share to chat button for a sheet: pick the feed, and a link to the thing is posted there.
+  const shareBtn = (token, label = 'Share to chat') => h('button', { type: 'button', class: 'btn small', onclick: (e) => shareMenu(e.currentTarget, token) }, label);
   function shareMenu(anchor, token) {
     const send = async (view, name) => {
       try {
@@ -8035,7 +8084,7 @@
       x?.extDne ? h('p', { class: 'day-hint' }, 'Unsubscribed in PSS too.') : null,
       x && toolOn('projects') ? contactJobs(x) : null,
       x ? contactTexts(x) : null,
-      del ? h('div', { class: 'btns' }, del) : null,
+      x ? h('div', { class: 'btns' }, shareBtn(linkToken('contact', x.id)), del) : null,
     ].filter(Boolean), async () => {
       const body = Object.fromEntries(Object.entries(f).filter(([, el]) => !el.disabled).map(([k, el]) => [k, el.value]));
       Object.assign(body, { tags: tags.value, dne: dne.checked });
@@ -8533,6 +8582,7 @@
     };
     return [
       h('p', { class: 'day-hint hq-intro' }, 'What Kloomie knows about your business. Sidekick, Docs and every AI button follow what’s here, so what they write sounds like you and fits how you work.'),
+      h('div', { class: 'btns hq-share' }, shareBtn(linkToken('hq', 'profile'), 'Share Company HQ in chat')),
       h('div', { class: 'hq-progress' },
         h('div', { class: 'hq-pct' }, h('b', {}, `${pr.pct}%`), h('span', {}, `Your profile · ${pr.done} of ${pr.of} essentials`)),
         h('div', { class: 'hq-bar' }, h('i', { style: `width:${pr.pct}%` })),
@@ -8575,7 +8625,7 @@
     execute: ['Execute', 'Makes routine changes itself (tasks, time, records, docs). Emails wait for your yes.'],
     automate: ['Automate', 'As Execute, and runs its scheduled workflows on its own.'],
   };
-  const AG_TOOL_NAMES = { look_at_day: 'Your calendar and day', list_tasks: 'Tasks', list_projects: 'Jobs & projects (the setup)', find_records: 'Jobs, leads and deals', read_record: 'A record’s full history', list_campaigns: 'Campaigns', find_contacts: 'Contacts', team_schedule: 'The team’s visits', plan_route: 'Routes', find_docs: 'Docs', read_doc: 'A doc’s text', create_task: 'Make tasks', update_task: 'Reschedule, reassign or finish tasks', schedule_time: 'Put time on your calendar', move_time: 'Move time it put there', save_contact: 'Save contacts', create_project: 'Start projects', create_record: 'Add jobs, leads, deals…', update_record: 'Update records', log_note: 'Log calls and notes', book_visit: 'Book visits', write_doc: 'Write docs', draft_email: 'Draft emails', notify_me: 'Send you a heads-up', marketing_snapshot: 'What’s bringing in work (leads by source, jobs won, campaigns, posts)', find_customers: 'Past and recent customers', list_channels: 'Your social channels', social_posts: 'Your posts in Postiz', create_campaign: 'Start campaigns with goals and tasks', make_list: 'Make lists of people to reach', make_image: 'Make pictures (on your OpenAI or Gemini key)', draft_social_post: 'Draft social and Google posts', draft_email_campaign: 'Draft email campaigns', find_photos: 'Your photos (Folders, Stacks, job photos, chat)', look_at_photos: 'Look at photos to pick the right ones' };
+  const AG_TOOL_NAMES = { look_at_day: 'Your calendar and day', list_tasks: 'Tasks', list_projects: 'Jobs & projects (the setup)', find_records: 'Jobs, leads and deals', read_record: 'A record’s full history', list_campaigns: 'Campaigns', find_contacts: 'Contacts', team_schedule: 'The team’s visits', plan_route: 'Routes', find_docs: 'Docs', read_doc: 'A doc’s text', create_task: 'Make tasks', update_task: 'Reschedule, reassign or finish tasks', schedule_time: 'Put time on your calendar', move_time: 'Move time it put there', save_contact: 'Save contacts', create_project: 'Start projects', create_record: 'Add jobs, leads, deals…', update_record: 'Update records', log_note: 'Log calls and notes', book_visit: 'Book visits', write_doc: 'Write docs', draft_email: 'Draft emails', notify_me: 'Send you a heads-up', marketing_snapshot: 'What’s bringing in work (leads by source, jobs won, campaigns, posts)', find_customers: 'Past and recent customers', list_channels: 'Your social channels', social_posts: 'Your posts in Postiz', create_campaign: 'Start campaigns with goals and tasks', make_list: 'Make lists of people to reach', make_image: 'Make pictures (on your OpenAI or Gemini key)', draft_social_post: 'Draft social and Google posts', draft_email_campaign: 'Draft email campaigns', find_photos: 'Your photos (Folders, Stacks, job photos, chat)', post_to_chat: 'Post in your team’s chat feeds', look_at_photos: 'Look at photos to pick the right ones' };
   const AG_STATUS = { requested: 'Starting', planning: 'Planning', running: 'Working', awaiting: 'Needs your yes', completed: 'Done', failed: 'Didn’t finish', blocked: 'Has a question', cancelled: 'Stopped' };
   const AG_DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
   const agRunning = (x) => ['requested', 'planning', 'running'].includes(x.status);
@@ -8598,6 +8648,7 @@
     renderHome();
   }
   function agNews(msg) {
+    lkForget('agent', msg.run?.id || msg.id);
     if (!AG.data) return;
     if (msg.type === 'agent:remove') AG.data.runs = AG.data.runs.filter((x) => x.id !== msg.id);
     else {
@@ -8798,6 +8849,7 @@
     const pic = s.tool === 'make_image' && s.status === 'done' && S.items.find((y) => y.id === s.changed?.[0]?.id);
     if (s.tool === 'draft_social_post' && s.status === 'proposed') return agPostDraft(x, s);
     if (s.tool === 'draft_email_campaign' && s.status === 'proposed') return agCampaignDraft(x, s);
+    if (s.tool === 'post_to_chat' && s.status === 'proposed') return agChatDraft(x, s);
     if (s.tool === 'draft_email' && s.status === 'proposed') {
       const to = h('input', { value: s.args.to_email || '', 'aria-label': 'To' });
       const sub = h('input', { value: s.args.subject || '', 'aria-label': 'Subject' });
@@ -8867,6 +8919,19 @@
         it ? h('a', { class: 'btn small', href: fileUrl(it, { dl: true }), download: it.name }, 'Save picture') : null,
         h('button', { class: 'btn small', onclick: () => agStep(x, [s.id], 'skip') }, 'Don’t post')));
   }
+  // A message for a chat feed, waiting for a yes: which feed, and the words.
+  function agChatDraft(x, s) {
+    const feeds = [['general', '# general'], ...(S.workspace.channels || []).map((c) => [c.name, '# ' + c.name])];
+    const sel = h('select', { 'aria-label': 'Feed' }, feeds.map(([v, l]) => h('option', { value: v, selected: String(s.args.feed || 'general').replace(/^#/, '').toLowerCase() === v.toLowerCase() }, l)));
+    const body = h('textarea', { rows: 5, 'aria-label': 'Message' });
+    body.value = s.args.text || '';
+    return h('div', { class: 'ag-step email' },
+      h('div', { class: 'ag-email-h' }, h('b', {}, '💬 Message for the team'), s.why ? h('small', {}, s.why) : null, h('small', {}, 'Links to what this assignment made are added under it.')),
+      h('label', {}, 'Post in', sel), body,
+      h('div', { class: 'ag-step-act' },
+        h('button', { class: 'btn small primary-btn', onclick: (e) => { e.currentTarget.disabled = true; agStep(x, [s.id], 'approve', { text: body.value, feed: sel.value }); } }, 'Post'),
+        h('button', { class: 'btn small', onclick: () => agStep(x, [s.id], 'skip') }, 'Don’t post')));
+  }
   // An email to many people, waiting for a yes: the words and who it goes to.
   function agCampaignDraft(x, s) {
     const a = s.args;
@@ -8891,7 +8956,7 @@
   function agRunView(x) {
     const d = AG.data;
     // Approve all covers routine changes; posts and emails are read and sent one at a time.
-    const proposed = agSteps(x).filter((s) => s.status === 'proposed' && !['draft_email', 'draft_social_post', 'draft_email_campaign'].includes(s.tool));
+    const proposed = agSteps(x).filter((s) => s.status === 'proposed' && !['draft_email', 'draft_social_post', 'draft_email_campaign', 'post_to_chat'].includes(s.tool));
     const reply = h('textarea', { class: 'ag-ask', rows: 2, placeholder: x.status === 'blocked' ? 'Your answer' : 'Ask a follow-up, or tell it what to change' });
     const send = h('button', { class: 'btn small primary-btn' }, x.status === 'blocked' ? 'Answer' : 'Send');
     send.addEventListener('click', async () => {
@@ -8901,6 +8966,8 @@
     });
     const more = (e) => openMenu(e.currentTarget, [
       { label: 'Copy the report', run: () => copyText(x.parts.map((p) => `${d.agents[p.agent].name}:\n${p.report || ''}`).join('\n\n')) },
+      // Shared with the report written out, so teammates (who can't open someone else's agents) can read it.
+      { label: 'Share to chat…', run: () => shareMenu(e.target, `👥 ${x.title}\n${x.parts.map((p) => p.report || '').filter(Boolean).join('\n\n').slice(0, 3500)}\n${linkToken('agent', x.id)}`) },
       agRunning(x) ? null : { label: 'Delete this assignment', danger: true, run: async () => { await api('POST', `/agents/runs/${x.id}/delete`).catch((er) => toast(er.message)); AG.data.runs = AG.data.runs.filter((r) => r.id !== x.id); agOpen('team'); } },
     ].filter(Boolean));
     return [
@@ -9257,6 +9324,7 @@
     const recs = prRecs(p.id).filter((r) => r.typeId === t.id);
     const more = (e) => openMenu(e.currentTarget, [
       pinRow('proj:' + p.id, p.name),
+      { label: 'Share to chat…', run: () => shareMenu(e.target, linkToken('project', p.id)) },
       { label: 'Rename project', run: () => { const i = h('input', { value: p.name }); sheet('Rename project', [h('label', {}, 'Name', i)], async () => { const y = await api('PATCH', '/projects/' + p.id, { name: i.value }); prUpsertProject(y); renderProjects(); }); } },
       { label: `Import ${t.name.toLowerCase()} from a spreadsheet…`, run: () => prImport(p, t) },
       { label: `Export ${t.name.toLowerCase()} as CSV`, run: () => prExport(p, t) },
@@ -10073,7 +10141,7 @@
     const top = itemFields.length && !job ? fields.filter((f) => ['client', 'status', 'number'].includes(f.key)) : [];
     return h('aside', { class: 'pj-panel' + (itemFields.length || richFields.length ? ' wide' : ''), 'data-id': r.id },
       h('div', { class: 'pj-panel-h' }, h('small', {}, `${t.icon || ''} ${t.singular || t.name}`), h('span', { style: 'flex:1' }),
-        h('button', { class: 'icon-btn', 'aria-label': 'Record options', html: I.more, onclick: (e) => openMenu(e.currentTarget, [pinRow('rec:' + r.id, recName(t, r)), { label: `Delete this ${(t.singular || 'record').toLowerCase()}`, danger: true, run: async () => { if (await prCall('DELETE', '/records/' + r.id)) { PR.records.set(p.id, prRecs(p.id).filter((x) => x.id !== r.id)); PR.panel = null; renderProjects(); } } }]) }),
+        h('button', { class: 'icon-btn', 'aria-label': 'Record options', html: I.more, onclick: (e) => openMenu(e.currentTarget, [pinRow('rec:' + r.id, recName(t, r)), { label: 'Share to chat…', run: () => shareMenu(e.target, linkToken('record', r.id)) }, { label: `Delete this ${(t.singular || 'record').toLowerCase()}`, danger: true, run: async () => { if (await prCall('DELETE', '/records/' + r.id)) { PR.records.set(p.id, prRecs(p.id).filter((x) => x.id !== r.id)); PR.panel = null; renderProjects(); } } }]) }),
         h('button', { class: 'icon-btn', 'aria-label': 'Close', html: I.close, onclick: () => { PR.panel = null; PR.visit = null; renderProjects(); } })),
       title,
       custFields.length ? prVisitBar(p, t, r) : null,
@@ -10146,7 +10214,7 @@
     if (msg.type === 'project') prUpsertProject(msg.project);
     else if (msg.type === 'project:remove') { S.projects = (S.projects || []).filter((x) => x.id !== msg.id); PR.records.delete(msg.id); if (PR.open === msg.id) PR.open = null; }
     else if (msg.type === 'project:access') api('GET', '/projects').then((list) => { S.projects = list; for (const id of [...PR.records.keys()]) if (!list.some((x) => x.id === id)) PR.records.delete(id); renderProjects(); }).catch(() => {});
-    else if (msg.type === 'record') prUpsertRecord(msg.record);
+    else if (msg.type === 'record') { prUpsertRecord(msg.record); lkForget('record', msg.record.id); }
     else if (msg.type === 'record:log') { if (PR.logs.has(msg.recordId)) PR.logs.set(msg.recordId, msg.log); }
     else if (msg.type === 'record:remove' && PR.records.has(msg.projectId)) PR.records.set(msg.projectId, prRecs(msg.projectId).filter((x) => x.id !== msg.id));
     if (pinned('proj:' + (msg.project?.id || msg.id)) || pinned('rec:' + msg.record?.id)) renderTabs();
@@ -10917,7 +10985,7 @@
       h('label', { class: 'pick' }, flex, 'Any time that day', h('small', {}, ' The time is a guess: the route can move it to save driving.')),
       h('div', {}, h('small', { class: 'hint' }, 'Who’s going'), crew),
       h('label', {}, 'Note', note),
-      v ? h('div', { class: 'btns' }, done, del) : null,
+      v ? h('div', { class: 'btns' }, done, shareBtn(linkToken('visit', v.id)), del) : null,
       v && !v.done ? h('div', { class: 'btns' }, h('button', { type: 'button', class: 'btn small', onclick: () => omwSheet(p, t, r, v) }, '🚗 On my way'), h('button', { type: 'button', class: 'btn small', onclick: () => remindNow(t, r, v) }, '🔔 Remind the customer')) : null,
     ].filter(Boolean), async () => {
       if (!going.size) throw new Error('Pick who’s going.');
@@ -11140,6 +11208,7 @@
       h('div', { class: 'btns' },
         inv.status === 'void' ? null : inv.token ? [act('🔗 Copy customer link', () => { copyText(invUrl(inv)); toast('Link copied'); }, 'primary-btn'), act('Open as the customer sees it', () => open(invUrl(inv), '_blank', 'noopener'))] : act('📨 Send to customer', sendIt, 'primary-btn'),
         inv.status !== 'void' && inv.balance > 0 ? act('Record a payment', async () => { try { await saveIt(); paymentSheet(inv); } catch (e) { toast(e.message); } }) : null,
+        inv.id ? shareBtn(linkToken('invoice', inv.id)) : null,
         del),
       inv.status !== 'void' && !S.payments?.connected ? h('small', { class: 'day-hint' }, 'To take cards on the customer’s page, connect your Stripe account in Settings → Connections.') : null,
       inv.qbo?.id ? h('small', { class: 'day-hint' }, inv.qbo.voided ? '✓ Voided in QuickBooks too.' : '✓ In QuickBooks, with its payments.') : inv.qbo?.error ? h('small', { class: 'err' }, 'Not in QuickBooks yet: ' + inv.qbo.error) : null,
@@ -11751,6 +11820,7 @@
     const open = x.comments.filter((c) => !c.resolved).length;
     const more = (e) => openMenu(e.currentTarget, [
       pinRow('doc:' + x.id, docTitle(it)),
+      { label: 'Share to chat…', run: () => shareMenu(e.target, linkToken('doc', x.id)) },
       { label: 'Export as Word (.docx)', run: () => docExport(x, 'docx') },
       { label: 'Export as PDF', run: () => docExport(x, 'pdf') },
       { label: 'Send for signature…', run: () => docExport(x, 'sign') },
@@ -13924,7 +13994,7 @@
       h('p', { class: 'sign-who' }, h('span', { class: `sign-st st-${x.status}` }, SIGN_STATUS[x.status]), ` ${x.signer.name} · ${x.signer.email}`),
       fresh ? h('p', { class: 'day-hint' }, 'Here’s their link. Email it from Kloomie, or copy it into your own email or text.') : null,
       open ? h('div', { class: 'sign-link' }, h('input', { value: x.link, readonly: true, 'aria-label': 'Signing link', onfocus: (e) => e.target.select() }), copy) : null,
-      open ? h('div', { class: 'btns' }, mail, cancel) : null,
+      open ? h('div', { class: 'btns' }, mail, shareBtn(linkToken('sign', x.id)), cancel) : null,
       x.status === 'signed' ? h('div', { class: 'btns' }, signed ? h('button', { class: 'btn small primary-btn', onclick: () => { closeSheet(); openPreview(signed); } }, 'Open the signed copy') : h('span', { class: 'day-hint' }, 'The signed copy was removed from Kloomie.')) : null,
       x.declineReason ? h('p', {}, `Their reason: “${x.declineReason}”`) : null,
       h('div', { class: 'any-h' }, 'History'),
@@ -15689,7 +15759,7 @@
       acts.length ? h('div', { class: 'live-field' }, 'Next steps · ticked ones become tasks', actBox) : null,
       logRow,
       x.transcript ? h('details', { class: 'meet-tx' }, h('summary', {}, 'Transcript'), h('pre', {}, x.transcript)) : null,
-      del,
+      h('div', { class: 'btns' }, shareBtn(x.noteId && S.items.some((y) => y.id === x.noteId) ? linkToken('doc', x.noteId) : linkToken('meeting', x.id)), del),
     ], async () => {
       const c = campById(camp.value);
       const keep = acts.filter((y) => y.cb.checked);

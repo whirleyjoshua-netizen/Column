@@ -161,7 +161,7 @@ try {
 
   r = await ada('GET', '/agents');
   ok(Object.keys(r.body.agents).join() === 'chief,sales,ops,marketing' && r.body.agents.marketing.name === 'Marketing Manager', 'four agents now, with the Marketing Manager');
-  ok(r.body.agents.marketing.tools.filter((x) => x.important).map((x) => x.key).sort().join() === 'draft_email_campaign,draft_social_post', 'posting and email campaigns always wait for a yes');
+  ok(r.body.agents.marketing.tools.filter((x) => x.important).map((x) => x.key).sort().join() === 'draft_email_campaign,draft_social_post,post_to_chat', 'posting, email campaigns and team chat messages always wait for a yes');
 
   // ----- What's working -----
   r = await ada('POST', '/agents/runs', { agent: 'marketing', ask: 'what is working' });

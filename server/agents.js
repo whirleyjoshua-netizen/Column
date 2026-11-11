@@ -29,7 +29,7 @@ export const AGENTS = {
       'Turns commitments in emails you paste into tasks',
       'Prepares your end-of-day summary and plans the week',
     ],
-    tools: ['look_at_day', 'list_tasks', 'find_records', 'read_record', 'list_campaigns', 'team_schedule', 'plan_route', 'find_docs', 'read_doc', 'create_task', 'update_task', 'schedule_time', 'move_time', 'write_doc', 'notify_me'],
+    tools: ['look_at_day', 'list_tasks', 'find_records', 'read_record', 'list_campaigns', 'team_schedule', 'plan_route', 'find_docs', 'read_doc', 'create_task', 'update_task', 'schedule_time', 'move_time', 'write_doc', 'post_to_chat', 'notify_me'],
     workflows: [
       { key: 'briefing', name: 'Morning briefing', ask: 'Give me my morning briefing: what matters today, what is overdue or at risk, and the first thing I should do. Keep it short.', sched: { days: [1, 2, 3, 4, 5], at: 7 * 60 } },
       { key: 'plan_day', name: 'Plan my day', ask: 'Plan my day today: put my tasks into open time around what is already booked, most important first, with breaks, and tell me what won’t fit and what to move or hand off.' },
@@ -51,7 +51,7 @@ export const AGENTS = {
       'Books customer meetings and prepares a brief beforehand',
       'Finds deals that have gone quiet and plans the next step',
     ],
-    tools: ['find_records', 'read_record', 'list_projects', 'find_contacts', 'look_at_day', 'list_tasks', 'list_campaigns', 'team_schedule', 'find_docs', 'read_doc', 'create_task', 'update_task', 'save_contact', 'create_record', 'update_record', 'log_note', 'book_visit', 'schedule_time', 'move_time', 'write_doc', 'draft_email', 'notify_me'],
+    tools: ['find_records', 'read_record', 'list_projects', 'find_contacts', 'look_at_day', 'list_tasks', 'list_campaigns', 'team_schedule', 'find_docs', 'read_doc', 'create_task', 'update_task', 'save_contact', 'create_record', 'update_record', 'log_note', 'book_visit', 'schedule_time', 'move_time', 'write_doc', 'draft_email', 'post_to_chat', 'notify_me'],
     workflows: [
       { key: 'lead', name: 'Handle a new lead', ask: 'A new lead came in. Record them (contact and lead or deal), draft my reply, suggest times to meet, and set the follow-up:\n\n', paste: true },
       { key: 'radar', name: 'Follow-up radar', ask: 'Run the follow-up radar: find leads, deals and quotes with no reply or no contact in a while, and set up the next step for each (a task, and a drafted follow-up email where there’s an address).', sched: { days: [1, 3, 5], at: 8 * 60 } },
@@ -73,7 +73,7 @@ export const AGENTS = {
       'Checks project health and says what’s slipping',
       'Closes jobs out with a completion report',
     ],
-    tools: ['list_projects', 'find_records', 'read_record', 'list_tasks', 'look_at_day', 'team_schedule', 'plan_route', 'find_docs', 'read_doc', 'find_photos', 'look_at_photos', 'create_project', 'create_record', 'update_record', 'log_note', 'book_visit', 'create_task', 'update_task', 'schedule_time', 'move_time', 'write_doc', 'draft_email', 'notify_me'],
+    tools: ['list_projects', 'find_records', 'read_record', 'list_tasks', 'look_at_day', 'team_schedule', 'plan_route', 'find_docs', 'read_doc', 'find_photos', 'look_at_photos', 'create_project', 'create_record', 'update_record', 'log_note', 'book_visit', 'create_task', 'update_task', 'schedule_time', 'move_time', 'write_doc', 'draft_email', 'post_to_chat', 'notify_me'],
     workflows: [
       { key: 'kickoff', name: 'Project kickoff', ask: 'We just won this work. Organize it: the job (or project), the tasks in order with who and when, a materials list, visits, and a completion checklist:\n\n', paste: true },
       { key: 'prep', name: 'Job preparation', ask: 'Prepare for the jobs coming up in the next few days: a checklist for each, what to bring or order, and anything missing before we can start.' },
@@ -95,7 +95,7 @@ export const AGENTS = {
       'Wins back past customers and asks happy ones for reviews and referrals',
       'Reports which lead sources and campaigns bring jobs and money, and what to do about it',
     ],
-    tools: ['marketing_snapshot', 'find_customers', 'list_channels', 'social_posts', 'find_photos', 'look_at_photos', 'list_campaigns', 'find_records', 'read_record', 'find_contacts', 'find_docs', 'read_doc', 'list_tasks', 'look_at_day', 'create_campaign', 'make_list', 'create_task', 'update_task', 'schedule_time', 'write_doc', 'make_image', 'draft_social_post', 'draft_email_campaign', 'notify_me'],
+    tools: ['marketing_snapshot', 'find_customers', 'list_channels', 'social_posts', 'find_photos', 'look_at_photos', 'list_campaigns', 'find_records', 'read_record', 'find_contacts', 'find_docs', 'read_doc', 'list_tasks', 'look_at_day', 'create_campaign', 'make_list', 'create_task', 'update_task', 'schedule_time', 'write_doc', 'make_image', 'draft_social_post', 'draft_email_campaign', 'post_to_chat', 'notify_me'],
     rules: [
       'Ground everything in the business: read the business profile (it comes with these instructions) and marketing_snapshot before planning. Write for their ideal customer, in their voice, about what makes them different. Generic marketing copy is a failure.',
       'Never invent reviews, testimonials, statistics, awards, prices, discounts or offers. Use an offer only if the person or the business profile gave it; otherwise propose one and say it needs their OK.',
@@ -492,6 +492,23 @@ export function agentsModule({ db, save, broadcast, rid, cleanText, readJson, se
       },
     },
 
+    post_to_chat: {
+      kind: 'write', important: true, label: (a) => `Post in #${a.feed || 'general'}: ${words(a.text, 90)}`,
+      description: 'Post a message in one of the team’s chat feeds: share a plan, a heads-up, or what you made so the team sees it. It waits for the person’s yes. feed: a feed’s name (general if left out). Links to the docs, jobs, campaigns and tasks you made in this assignment are added under it automatically, so don’t paste ids.',
+      parameters: { type: 'object', properties: { feed: { type: 'string' }, text: { type: 'string' }, why: { type: 'string' } }, required: ['text'] },
+      check(cx, a) {
+        if (!String(a.text || '').trim()) throw new Error('The message has no words.');
+        if (a.feed && !feedOf(cx, a.feed)) throw new Error(`No feed called ${a.feed} that you can post in. Feeds: general, ${cx.ws.channels.filter((c) => canFeed(cx, c)).map((c) => c.name).slice(0, 20).join(', ')}.`);
+      },
+      async run(cx, a, part) {
+        const ch = a.feed && !/^#?general$/i.test(a.feed) ? feedOf(cx, a.feed) : null;
+        const LINKS = { doc: 'doc', record: 'record', campaign: 'campaign', task: 'task', project: 'project' };
+        const tokens = [...new Set((part?.steps || []).filter((st) => st.status === 'done').flatMap((st) => st.changed || []).filter((c) => LINKS[c.kind] && c.id).map((c) => `[[${LINKS[c.kind]}:${c.id}]]`))].slice(0, 8);
+        const r = await cx.call('POST', '/api/items', { type: 'message', text: [String(a.text).trim(), tokens.join(' ')].filter(Boolean).join('\n'), ...(ch ? { channelId: ch.id } : {}) });
+        if (r.status >= 300) throw new Error(r.body?.error || 'It didn’t post.');
+        return { ok: true, result: { done: true, posted: ch ? '#' + ch.name : '#general' }, changed: [] };
+      },
+    },
     // ---------- the business's own photos ----------
     find_photos: {
       kind: 'read', label: (a) => (a.query || a.job ? `Looked for photos${a.query ? ` of “${words(a.query, 40)}”` : ''}${a.job ? ` from ${recTitle(a.job) || words(a.job, 40)}` : ''}` : 'Looked through your photos'),
@@ -823,6 +840,9 @@ export function agentsModule({ db, save, broadcast, rid, cleanText, readJson, se
   }
   // Channels as people know them (Instagram, Premier Shades), whether the post named them or picked them by id.
   const chanNames = (cx, list) => { const names = (Array.isArray(list) ? list : [list]).filter(Boolean); const hit = cx && POSTIZ?.connected(cx.ws) ? POSTIZ.pick(cx.ws, names) : []; return hit.length ? [...new Set(hit.map((x) => x.kindName))].join(', ') : names.join(', '); };
+  // Feeds this person can post in: open ones, and invite-only ones they're in.
+  const canFeed = (cx, c) => !c.memberIds || c.ownerId === cx.memberId || c.memberIds.includes(cx.memberId);
+  const feedOf = (cx, name) => { const n = String(name || '').replace(/^#/, ''); return /^general$/i.test(n) ? { id: null, name: 'general' } : cx.ws.channels.find((c) => same(c.name, n) && canFeed(cx, c)) || null; };
   const imageOk = (cx, id) => { const it = db.items[id]; return !!it && it.wsId === cx.ws.id && it.type === 'file' && /^image\/(png|jpe?g|webp|gif)$/.test(it.mime || ''); };
   // "2026-11-14 09:30" on the team's clock, as a moment in time (or null).
   function localTime(ws, v) {
@@ -1265,7 +1285,7 @@ Reply with JSON only: {"summary":"one line on the plan","parts":[{"agent":"chief
         const cx = cxFor(x, p.agent);
         if (body.do === 'approve' && s.status === 'proposed') {
           // What the person may change in a draft before saying yes.
-          const EDIT = { draft_email: ['to_name', 'to_email', 'subject', 'body'], draft_social_post: ['text', 'when', 'link', 'cta', 'image_id', 'channels'], draft_email_campaign: ['subject', 'body', 'contact_ids'] }[s.tool] || [];
+          const EDIT = { draft_email: ['to_name', 'to_email', 'subject', 'body'], draft_social_post: ['text', 'when', 'link', 'cta', 'image_id', 'channels'], draft_email_campaign: ['subject', 'body', 'contact_ids'], post_to_chat: ['text', 'feed'] }[s.tool] || [];
           if (body.args && ids.length === 1) for (const k of EDIT) {
             const v = body.args[k];
             if (typeof v === 'string') s.args[k] = v.slice(0, 20_000);

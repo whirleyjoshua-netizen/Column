@@ -1336,8 +1336,8 @@ footer{margin-top:18px;font-size:11.5px;color:var(--muted)}
 </style></head><body><main>${top}${body}<footer>${from}</footer></main></body></html>`);
 }
 
-// Messages link to things as [[file:<id>]], [[stack:<id>]], [[task:<id>]]. A linked file is pinned so auto-clear never breaks the link.
-const LINK_RE = /\[\[(file|stack|task|campaign|doc):([\w-]+)\]\]/g;
+// Messages link to things as [[file:<id>]], [[stack:<id>]], [[task:<id>]], [[record:<id>]]… A linked file is pinned so auto-clear never breaks the link.
+const LINK_RE = /\[\[(file|stack|task|campaign|doc|record|project|visit|invoice|sign|contact|agent|meeting|hq):([\w-]+)\]\]/g;
 function pinLinked(ws, text) {
   for (const [, kind, id] of text.matchAll(LINK_RE)) {
     const it = kind === 'file' && db.items[id];
@@ -1346,6 +1346,69 @@ function pinLinked(ws, text) {
     broadcast(ws.id, { type: 'item:update', item: publicItem(it) });
   }
   save();
+}
+
+// What a link in chat is, for this person: enough to draw it (a name, a line under it) and open it, or that they
+// can't open it. Never more than they could see by opening it themselves.
+function linkInfo(ws, auth, type, id) {
+  const no = (label, sub) => ({ ok: false, label, sub });
+  const day = (d) => (d ? new Date(d + 'T12:00:00Z').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' }) : '');
+  if (type === 'record') {
+    const at = PJ.recordAt(id, ws.id, auth.memberId);
+    if (!at) return no('A record', 'You can’t open it');
+    const f = (pred) => at.t.fields.find(pred);
+    const st = f((x) => x.type === 'select' && ['status', 'stage'].includes(x.key));
+    const dt = f((x) => x.type === 'date' && at.rec.values[x.id]);
+    const money = f((x) => x.type === 'money' && at.rec.values[x.id] != null);
+    const sub = [at.t.singular || at.t.name, st && st.choices.find((c) => c.id === at.rec.values[st.id])?.label, dt && day(at.rec.values[dt.id]), money && '$' + (at.rec.values[money.id] / 100).toLocaleString('en-US')].filter(Boolean).join(' · ');
+    return { ok: true, label: String(at.rec.values[at.t.primary] ?? '') || 'Untitled', sub, projectId: at.p.id, icon: at.t.icon || '📋' };
+  }
+  if (type === 'project') {
+    const p = db.projects[id];
+    if (!p || p.wsId !== ws.id || !PJ.sees(p, auth.memberId)) return no('A project', 'You can’t open it');
+    return { ok: true, label: p.name, sub: p.types.map((t) => t.name).slice(0, 3).join(' · '), icon: p.icon || '📁' };
+  }
+  if (type === 'visit') {
+    const e = visitEntries(id)[0];
+    const at = e && PJ.recordAt(e.recordId, ws.id, auth.memberId);
+    if (!at) return no('A visit', 'You can’t open it');
+    const who = [...new Set(visitEntries(id).map((x) => memberById(ws, x.memberId)?.name).filter(Boolean))].join(', ');
+    return { ok: true, label: String(at.rec.values[at.t.primary] ?? '') || 'A job', sub: [day(e.date), e.start != null ? fmtMinutes(e.start) : '', who].filter(Boolean).join(' · '), recordId: at.rec.id, icon: '📅' };
+  }
+  if (type === 'invoice') {
+    const inv = db.invoices?.[id];
+    if (!inv || inv.wsId !== ws.id) return no('An invoice', 'It’s gone');
+    if (!isAdmin(auth)) return no('An invoice', 'Owners and admins can open invoices');
+    const t = INV.totals(inv);
+    const status = { draft: 'Draft', sent: 'Sent', viewed: 'Viewed', partial: 'Part paid', paid: 'Paid', void: 'Void' }[inv.status] || inv.status;
+    return { ok: true, label: `Invoice ${inv.number || ''}`.trim(), sub: [status, '$' + (t.total / 100).toLocaleString('en-US', { minimumFractionDigits: 2 }), t.balance && inv.status !== 'void' && inv.status !== 'draft' ? `$${(t.balance / 100).toLocaleString('en-US', { minimumFractionDigits: 2 })} due` : ''].filter(Boolean).join(' · '), recordId: inv.recordId || null, icon: '🧾' };
+  }
+  if (type === 'sign') {
+    const x = db.signs[id];
+    if (!x || x.wsId !== ws.id) return no('A signature request', 'It’s gone');
+    if (x.memberId !== auth.memberId) return no(`Signature request: ${x.name}`, `Sent by ${x.by}`);
+    return { ok: true, label: x.name, sub: `${x.signer.name} · ${signStatus(x)}`, icon: '✍️' };
+  }
+  if (type === 'contact') {
+    const c = db.contacts[id];
+    if (!c || c.wsId !== ws.id) return no('A contact', 'They’re gone');
+    if (!isAdmin(auth)) return no('A contact', 'Owners and admins can open contacts');
+    return { ok: true, label: c.name || c.email || 'Contact', sub: [c.company, c.city].filter(Boolean).join(' · '), icon: '👤' };
+  }
+  if (type === 'agent') {
+    const x = db.agentRuns?.[id];
+    if (!x || x.wsId !== ws.id) return no('An agent assignment', 'It’s gone');
+    if (x.memberId !== auth.memberId) return no(`Agent assignment: ${x.title}`, `${memberById(ws, x.memberId)?.name || 'Someone'}’s agents`);
+    return { ok: true, label: x.title, sub: { completed: 'Done', awaiting: 'Needs a yes', running: 'Working', failed: 'Didn’t finish' }[x.status] || x.status, icon: '👥' };
+  }
+  if (type === 'meeting') {
+    const x = db.meetings[id];
+    if (!x || x.wsId !== ws.id) return no('Meeting notes', 'They’re gone');
+    if (x.memberId !== auth.memberId) return no(`Meeting notes: ${x.title || 'a meeting'}`, `${x.by || 'Someone'}’s notes`);
+    return { ok: true, label: x.title || 'Meeting notes', sub: x.createdAt ? new Date(x.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '', icon: '📝' };
+  }
+  if (type === 'hq') return { ok: true, label: 'Company HQ', sub: 'What we do, how we sound, how we work', icon: '🏢' };
+  return no('Something', 'Not available');
 }
 
 function validStack(ws, stackId, memberId) {
@@ -6749,6 +6812,17 @@ async function api(req, res, url) {
   // Home's Get started list: where it stands, and hiding it for good (for this person).
   // The guided setup after sign-up. The app does the work through the usual routes (tools, a starter project, the
   // website, the AI key); this keeps the answers and whether it's finished. Owners and admins.
+  // Links in chat this app hasn't loaded (a job, an invoice, a signature request…): what each one is for this person.
+  if (a === 'links' && !b && m === 'POST') {
+    const { links } = await readJson(req, 20_000);
+    const out = {};
+    for (const l of (Array.isArray(links) ? links : []).slice(0, 100)) {
+      const type = String(l?.type || ''), id = String(l?.id || '');
+      if (!/^(record|project|visit|invoice|sign|contact|agent|meeting|hq)$/.test(type) || !/^[\w-]{1,64}$/.test(id)) continue;
+      out[`${type}:${id}`] = linkInfo(ws, auth, type, id);
+    }
+    return send(res, 200, { links: out });
+  }
   if (a === 'setup' && !b && m === 'PATCH') {
     if (!isAdmin(auth)) return send(res, 403, { error: 'Only team owners and admins set the team up.' });
     const body = await readJson(req, 5_000);

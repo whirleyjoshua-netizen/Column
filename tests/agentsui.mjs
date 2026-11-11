@@ -107,6 +107,7 @@ const shot = async (A, n) => { if (!SHOTS) return; await sleep(600); const r = a
 let A;
 try {
   A = await tab(APP);
+  await A.until(`location.origin === new URL(${JSON.stringify(APP)}).origin`, 20000); // the page is really there before the token goes in
   await A.ev(`localStorage.setItem('column.token', JSON.stringify(${JSON.stringify(auth.token)})); location.reload(); true`).catch(() => {});
   await sleep(1200);
   ok(await A.until(`!document.querySelector('#app').classList.contains('hidden')`), 'Ada is in');

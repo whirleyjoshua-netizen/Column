@@ -2492,3 +2492,6 @@ button.hq-entry:hover { background: var(--card-hover); }
 .lead-map-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 10px; padding: 6px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
 .lead-map-row span { min-width: 0; overflow-wrap: anywhere; }
 .lead-map-row small { color: var(--muted); }
+.ln-wait { opacity: .6; }
+.ln-chip.ln-gone .ln-ic { opacity: .7; }
+.hq-share { margin: -4px 0 12px; }
