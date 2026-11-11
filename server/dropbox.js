@@ -23,7 +23,7 @@ export function dropboxModule({ noRoom = () => null, db, rid, save, send, readJs
   const fail = (msg, status = 400, extra = {}) => Object.assign(new Error(msg), { status, ...extra });
 
   async function tokenCall(form) {
-    const r = await fetch(`${API}/oauth2/token`, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    const r = await fetch(`${API}/oauth2/token`, { signal: AbortSignal.timeout(20_000), method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({ ...form, client_id: env('DROPBOX_APP_KEY'), client_secret: env('DROPBOX_APP_SECRET') }) });
     const j = await r.json().catch(() => ({}));
     if (!r.ok || !j.access_token) throw fail('Dropbox didn’t accept the sign-in.', 502, { auth: r.status === 400 || r.status === 401 });
@@ -48,7 +48,7 @@ export function dropboxModule({ noRoom = () => null, db, rid, save, send, readJs
   }
   async function rpc(c, endpoint, body) {
     const token = await access(c);
-    const r = await fetch(`${API}/2/${endpoint}`, { method: 'POST', headers: { authorization: 'Bearer ' + token, ...(body === undefined ? {} : { 'content-type': 'application/json' }) }, body: body === undefined ? undefined : JSON.stringify(body) });
+    const r = await fetch(`${API}/2/${endpoint}`, { signal: AbortSignal.timeout(30_000), method: 'POST', headers: { authorization: 'Bearer ' + token, ...(body === undefined ? {} : { 'content-type': 'application/json' }) }, body: body === undefined ? undefined : JSON.stringify(body) });
     if (r.status === 401) { c.error = 'Dropbox sign-in expired. Connect again.'; save(); throw fail(c.error, 409, { reconnect: true }); }
     const j = await r.json().catch(() => null);
     if (!r.ok) {
@@ -120,7 +120,8 @@ export function dropboxModule({ noRoom = () => null, db, rid, save, send, readJs
         const full = noRoom(ws.id, Number(meta.size) || 0);
         if (full) return send(res, 413, { error: full });
         const token = await access(c);
-        const r = await fetch(`${CONTENT}/2/files/download`, { method: 'POST', headers: { authorization: 'Bearer ' + token, 'Dropbox-API-Arg': headerArg({ path: id }) } });
+        // Big files can take a while: ten minutes, then it gives up.
+        const r = await fetch(`${CONTENT}/2/files/download`, { signal: AbortSignal.timeout(600_000), method: 'POST', headers: { authorization: 'Bearer ' + token, 'Dropbox-API-Arg': headerArg({ path: id }) } });
         if (!r.ok || !r.body) throw fail(`Couldn’t download ${meta.name} from Dropbox.`, 502);
         const name = cleanName(meta.name);
         const fid = rid();
@@ -174,7 +175,11 @@ export function dropboxModule({ noRoom = () => null, db, rid, save, send, readJs
   }
   // A person leaving a team takes their Dropbox link with them.
   function forget(wsId, memberId) {
-    if (db.dropbox[keyOf(wsId, memberId)]) { delete db.dropbox[keyOf(wsId, memberId)]; save(); }
+    const c = db.dropbox[keyOf(wsId, memberId)];
+    if (!c) return;
+    rpc(c, 'auth/token/revoke').catch(() => {});
+    delete db.dropbox[keyOf(wsId, memberId)];
+    save();
   }
   return { route, callback, donePage, configured, forget };
 }

@@ -1687,10 +1687,11 @@
   function mentionify(html) {
     if (!html.includes('@')) return html;
     const me = S.workspace?.members?.find((m) => m.id === S.me?.memberId)?.name.toLowerCase();
-    return html.replace(mentionRe(mentionNames().map(esc), 'gi'), (_, pre, name) => {
+    const re = mentionRe(mentionNames().map(esc), 'gi');
+    return html.split(/(<[^>]*>)/).map((part) => (part.startsWith('<') ? part : part.replace(re, (_, pre, name) => {
       const self = name.toLowerCase() === 'here' || esc(me || '') === name.toLowerCase();
       return `${pre}<span class="mention${self ? ' me' : ''}">@${name}</span>`;
-    });
+    }))).join('');
   }
 
   // Autocomplete for "@" in a chat composer. Returns a keydown hook; true means it used the key.
@@ -2101,7 +2102,7 @@
           rows.push(r);
           const icon = r.it
             ? kind(r.it) === 'image' ? h('img', { class: 'pk-ic', src: fileUrl(r.it), alt: '' }) : h('span', { class: 'pk-ic pk-ext', html: r.it.type === 'folder' ? I.folder : null }, r.it.type === 'folder' ? null : (ext(r.it.name) || 'file').slice(0, 4))
-            : h('span', { class: 'pk-ic', html: r.icon });
+            : Object.values(I).includes(r.icon) ? h('span', { class: 'pk-ic', html: r.icon }) : h('span', { class: 'pk-ic' }, r.icon || '');
           list.append(h('button', { class: 'pk-row' + (i === sel ? ' on' : ''), onclick: () => pick(r) },
             icon, h('span', { class: 'pk-label' }, r.label), r.sub ? h('span', { class: 'pk-sub' }, r.sub) : null));
         }

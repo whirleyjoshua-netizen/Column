@@ -104,3 +104,15 @@ Each low item is reproduced and fixed in turn, the same way as the rest.
 ## Areas the stopped reviewers didn't finish (C, D), reviewed by hand
 - **D (files):** every kind of stored file (uploads, folder files, doc history, signing PDFs, meeting audio, Sidekick files, exports, logos, upload parts) is removed when its owner is deleted and when a team is erased. Stale resumable uploads are swept after 24 hours. Saving is debounced with retries, fencing and a flush on shutdown (a crash now flushes too). Low, not fixed: no sweep for files left on disk by a crash mid-write.
 - **C (public pages):** every public route was listed. All secret links are 96 bits or more of randomness. Server-built pages escape what they show, and shared docs check link schemes when saved and allow no script. Unauthenticated writes are rate-limited or signature-checked. /import needs IMPORT_TOKEN (24+ characters, constant-time) and only works on an empty database. Recommendation: remove IMPORT_TOKEN from Railway unless a migration is in progress.
+
+## Batch 7 (tests/audit_batch7.mjs, tests/audit_ui7.mjs in Chrome)
+- **A15 fixed:** while someone is switching to a new email (waiting for its code), nobody else can start an account with that address, and confirming the switch checks again. Before, both ended up with the same email.
+- **E14 fixed:** webhook signing secrets are kept sealed like other secrets. A new webhook shows its secret once; older ones are sealed when the server starts; deliveries still sign the same way.
+- **B8 fixed:** a read-only team (trial over, no subscription) can still delete itself, change or reset passwords and remove people, but can't change settings or roles.
+- **E13 (Dropbox) fixed:** disconnecting Dropbox also revokes the token at Dropbox. Google revoke still needs a real-account test.
+- **E11 fixed:** calls to Google, Microsoft, QuickBooks and Dropbox give up after a while (20–30 seconds; downloads 10 minutes), so a hung call can't freeze a team's sync.
+- **H9 fixed:** a project's icon is shown as text; only Kloomie's own icons are drawn as pictures. (Icons are 8 characters at most, so this was HTML, not script.)
+- **H10 fixed:** an @mention inside a link's address leaves the link whole.
+
+## Sign-offs (9746763, column-91), reviewed
+Every route checks the person can see the record and is scoped to the team; the read-only block runs before it; the filled-in PDF downloads only, with nosniff; the app and the signing page show form text as text; emails go through the platform send limits and do-not-email list. Low, not fixed: a PDF used as a form is readable by anyone who can see a record using it, even if the file itself was private to whoever made the form; the filled-in PDF is rebuilt on every download, with no limit per person.

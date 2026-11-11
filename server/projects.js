@@ -297,7 +297,7 @@ export const TEMPLATES = {
   },
 };
 
-export function projectsModule({ db, save, broadcast, rid, hold = null, cleanText, isDay, readJson, send, badRequest, isOwnerId, escHtml, brandOf, logoUrl, teamDay, offline, makeTask, onRecords, onRecordGone, onRecordNews, allowLocalHooks = false }) {
+export function projectsModule({ seal = (x) => x, unseal = (x) => x, db, save, broadcast, rid, hold = null, cleanText, isDay, readJson, send, badRequest, isOwnerId, escHtml, brandOf, logoUrl, teamDay, offline, makeTask, onRecords, onRecordGone, onRecordNews, allowLocalHooks = false }) {
   const bad = (msg) => badRequest(msg);
   db.projects ||= {};
   db.records ||= {};
@@ -1534,7 +1534,11 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
   // label, people by name or id, money in dollars, links as record ids.
   const sha = (s) => crypto.createHash('sha256').update(s).digest('hex');
   const publicKey = ({ hash, wsId, ...k }) => k;
-  const publicHook = ({ secret, wsId, ...h }) => ({ ...h, log: (h.log || []).slice(0, 20) });
+  const publicHook = ({ secret, sealed, wsId, ...h }) => ({ ...h, log: (h.log || []).slice(0, 20) });
+  let sealedOld = 0;
+  for (const h of Object.values(db.webhooks || {})) if (h.secret && !h.sealed) { h.sealed = seal({ s: h.secret }); delete h.secret; sealedOld++; }
+  if (sealedOld) save();
+  const hookSecret = (h) => (h.sealed ? unseal(h.sealed).s : h.secret);
   const rate = new Map();
   function keyAuth(req) {
     const hdr = req.headers.authorization || '';
@@ -1720,10 +1724,11 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
     if (body.projectId && (!p || p.wsId !== ws.id)) throw Object.assign(new Error('That project is gone.'), { status: 404 });
     if (p?.private) throw bad('Private projects don’t send webhooks.');
     if (Object.values(db.webhooks).filter((h) => h.wsId === ws.id).length >= 100) throw bad('A team can have up to 100 webhooks. Delete some you no longer use.');
-    const h = { id: rid(), wsId: ws.id, url, projectId: p?.id || null, events: hookEvents(body.events, p?.id), secret: 'whsec_' + crypto.randomBytes(24).toString('base64url'), active: true, failures: 0, log: [], by, keyId, createdAt: Date.now() };
+    const plain = 'whsec_' + crypto.randomBytes(24).toString('base64url');
+    const h = { id: rid(), wsId: ws.id, url, projectId: p?.id || null, events: hookEvents(body.events, p?.id), sealed: seal({ s: plain }), active: true, failures: 0, log: [], by, keyId, createdAt: Date.now() };
     db.webhooks[h.id] = h;
     save();
-    return h;
+    return { ...h, secret: plain }; // the only time the secret is shown
   }
   // Something happened outside Projects (a contact added, an invoice paid…): every webhook for it hears.
   function emit(wsId, type, data, by = 'Kloomie') {
@@ -1757,7 +1762,7 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
     if (offline(h.wsId)) return;
     const body = JSON.stringify(event);
     const ts = Math.floor(Date.now() / 1000);
-    const sig = crypto.createHmac('sha256', h.secret).update(`${ts}.${body}`).digest('hex');
+    const sig = crypto.createHmac('sha256', hookSecret(h)).update(`${ts}.${body}`).digest('hex');
     const started = Date.now();
     let status = 0, error = null;
     try {

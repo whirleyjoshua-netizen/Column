@@ -70,7 +70,7 @@ export function quickbooksModule({ db, save, broadcast, cleanText, readJson, sen
 
   // ---------- Intuit sign-in ----------
   async function tokenCall(form) {
-    const r = await fetch(await tokenUrl(), { method: 'POST', headers: { Authorization: basic(), Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams(form) });
+    const r = await fetch(await tokenUrl(), { signal: AbortSignal.timeout(20_000), method: 'POST', headers: { Authorization: basic(), Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams(form) });
     const j = await r.json().catch(() => ({}));
     if (!r.ok) throw Object.assign(new Error(j.error_description || j.error || `Intuit said ${r.status}`), { auth: r.status === 400 || r.status === 401 });
     return { access: j.access_token, refresh: j.refresh_token, exp: Date.now() + (j.expires_in || 3600) * 1000, refreshExp: Date.now() + (j.x_refresh_token_expires_in || 8640000) * 1000 };
@@ -387,7 +387,7 @@ export function quickbooksModule({ db, save, broadcast, cleanText, readJson, sen
   async function revoke(c) {
     try {
       const t = unseal(c.tokens);
-      await fetch(await revokeUrl(), { method: 'POST', headers: { Authorization: basic(), Accept: 'application/json', 'Content-Type': 'application/json' }, body: JSON.stringify({ token: t.refresh }) });
+      await fetch(await revokeUrl(), { signal: AbortSignal.timeout(10_000), method: 'POST', headers: { Authorization: basic(), Accept: 'application/json', 'Content-Type': 'application/json' }, body: JSON.stringify({ token: t.refresh }) });
     } catch {}
   }
   async function disconnect(wsId) {

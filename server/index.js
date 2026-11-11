@@ -430,6 +430,12 @@ function checkCode(u, code) {
     throw badRequest(v.tries >= 5 ? 'Too many wrong codes. Send a new one.' : 'That code isn’t right. Check the email and try again.');
   }
   if (u.pendingEmail) {
+    if (Object.values(db.users).some((x) => x !== u && x.email === u.pendingEmail)) {
+      delete u.pendingEmail;
+      delete u.verify;
+      save();
+      throw badRequest('That email now belongs to another account, so your email stays as it was.');
+    }
     const old = u.email;
     u.email = u.pendingEmail;
     delete u.pendingEmail;
@@ -1586,8 +1592,9 @@ function billingOf(ws) {
 const publicBilling = (ws) => ({ ...billingOf(ws), price: SEAT_PRICE, members: ws.members.length, hasCustomer: !!ws.billing?.customer });
 // What a read-only team may still do: sign in and out, its own account, export, leave or delete, and pay.
 const READ_ONLY_OK = new Set(['billing', 'exports', 'account', 'auth', 'logout', 'workspace', 'members', 'signature', 'ai']);
-function readOnlyBlock(ws, a, m) {
-  if (m === 'GET' || m === 'HEAD' || READ_ONLY_OK.has(a) || !billingOf(ws).readOnly) return null;
+function readOnlyBlock(ws, a, m, b, c) {
+  const okHere = READ_ONLY_OK.has(a) && (a !== 'workspace' || b === 'delete') && (a !== 'members' || (b === 'me' && c === 'password') || c === 'reset' || m === 'DELETE');
+  if (m === 'GET' || m === 'HEAD' || okHere || !billingOf(ws).readOnly) return null;
   return billingOf(ws).state === 'ended' ? 'This team’s subscription has ended, so Kloomie is read-only. An owner can subscribe again in Settings → Team → Billing.' : 'This team’s free trial has ended, so Kloomie is read-only. An owner can subscribe in Settings → Team → Billing.';
 }
 // The subscription's seats follow the team, a moment after someone joins or leaves.
@@ -5343,6 +5350,8 @@ async function api(req, res, url) {
     let fresh = false;
     if (email && mode !== 'signin') {
       user = userByEmail(email);
+      // An address another account is switching to is spoken for until that switch is confirmed or dropped.
+      if (!user && Object.values(db.users).some((x) => x.pendingEmail === email)) return refuse('That email already has an account. Use its password, or sign in with it instead.');
       if (user && !passOk(user, password)) return refuse('That email already has an account. Use its password, or sign in with it instead.');
       if (user) {
         const g = TS.gate(user, body.otp, () => loginFailed(tries));
@@ -5465,7 +5474,7 @@ async function api(req, res, url) {
   if (ws.deleteAt && m !== 'GET' && (a === 'texting' || a === 'lead-capture' || a === 'dropbox' || (a === 'contacts' && parts[2] === 'texts'))) {
     return send(res, 423, { error: 'This team is being deleted. Cancel the deletion in Settings to use it again.' });
   }
-  const locked = readOnlyBlock(ws, a, m);
+  const locked = readOnlyBlock(ws, a, m, parts[1], parts[2]);
   if (!locked || m === 'GET') {
     const tw = await TW.route(req, res, parts, auth, ws);
     if (tw !== null) return;
@@ -8480,7 +8489,7 @@ async function replayAs(ws, memberId, approvalId, { method, path: p, body }, as 
   return { status, body: parsed };
 }
 const hold = (...a) => RULES.hold(...a);
-const PJ = projectsModule({ db, save, broadcast, rid, hold, cleanText, isDay, readJson, send, badRequest, isOwnerId, escHtml, brandOf, logoUrl, teamDay, offline, allowLocalHooks: process.env.ALLOW_LOCAL_WEBHOOKS === '1',
+const PJ = projectsModule({ seal, unseal, db, save, broadcast, rid, hold, cleanText, isDay, readJson, send, badRequest, isOwnerId, escHtml, brandOf, logoUrl, teamDay, offline, allowLocalHooks: process.env.ALLOW_LOCAL_WEBHOOKS === '1',
   onRecordGone: (rec) => { dropVisits(rec); INV.dropFor(rec); },
   onRecordNews: (rec) => { jobChanged(rec); if (rec.share || rec.qbo?.estId) QB.soon(rec.wsId); },
   // A follow-up from a record's timeline: a task for whoever logged it, about the record.

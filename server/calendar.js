@@ -17,6 +17,7 @@ async function call(url, { method = 'GET', token, body, form, raw, headers = {} 
       ...headers,
     },
     body: body ? JSON.stringify(body) : form ? new URLSearchParams(form) : raw,
+    signal: AbortSignal.timeout(30_000),
   });
   if (res.status === 202 || res.status === 204 || (method === 'DELETE' && (res.status === 404 || res.status === 410))) return null;
   const text = await res.text();
