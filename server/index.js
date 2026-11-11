@@ -440,7 +440,7 @@ const needsConfirm = (auth) => mailer.mode !== 'off' && !userOf(auth.ws.members.
 const meAccount = (ws, memberId) => {
   const mem = ws.members.find((x) => x.id === memberId);
   const u = userOf(mem);
-  return { email: u?.email || null, emailVerified: !!u?.emailVerified, pendingEmail: u?.pendingEmail || null, mail: mailer.mode !== 'off', bar: mem?.bar || null, pins: mem?.pins || [], twoStep: TS.on(u) };
+  return { email: u?.email || null, emailVerified: !!u?.emailVerified, pendingEmail: u?.pendingEmail || null, mail: mailer.mode !== 'off', bar: mem?.bar || null, pins: mem?.pins || [], feedTop: !!mem?.feedTop, twoStep: TS.on(u) };
 };
 // What each person keeps on their tab bar after Home and Day (theirs alone, in their order). Null: the usual three.
 const PIN_RE = /^(rec|proj|camp|chan|stack|doc):[A-Za-z0-9_-]{1,64}$/;
@@ -7221,6 +7221,14 @@ async function api(req, res, url) {
     }
     // Pinned things on the tab bar: a job, a project, a campaign, a feed, a stack or a doc. Only the person sees them;
     // the label is what it was called when pinned, for things the app only loads later (a job).
+    // Newest at the top in Stacks and Files, for this person only (the standard is newest at the bottom, like a chat).
+    if (b === 'feed' && !c && m === 'PUT') {
+      const { newestTop } = await readJson(req);
+      if (newestTop) me.feedTop = true;
+      else delete me.feedTop;
+      save();
+      return send(res, 200, { newestTop: !!me.feedTop });
+    }
     if (b === 'pins' && !c && m === 'PUT') {
       const { pins } = await readJson(req);
       if (!Array.isArray(pins)) return send(res, 400, { error: 'That isn’t a list of pins.' });

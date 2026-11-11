@@ -1300,7 +1300,9 @@
   const viewThread = (v) => (v.startsWith('th:') ? v.slice(3) : null);
   const destOf = (v) => (viewThread(v) ? { parentId: viewThread(v) } : { stackId: viewStack(v), channelId: viewChannel(v) });
   const isChatView = (v) => v === 'chat' || v.startsWith('ch:') || v.startsWith('th:');
-  const newestAtBottom = (v) => v === 'all' || isChatView(v);
+  // Newest at the bottom everywhere, like a chat; anyone can choose newest at the top for Stacks and Files (Settings →
+  // General, kept with their account). Chat and replies always read top to bottom.
+  const newestAtBottom = (v) => isChatView(v) || !S.me?.feedTop;
 
   function itemsFor(view) {
     const th = viewThread(view);
@@ -16022,7 +16024,13 @@
         h('button', { class: S.panes.length === 2 ? 'on' : null, onclick: () => { setPanes(['all', 'files']); renderSettings(); } }, 'Split into two')
       );
       s.append(h('section', {}, h('h3', {}, 'Layout'), seg,
-        h('p', { style: 'margin-top:8px;font-size:11.5px' }, 'Use the tabs at the top of each column to switch what it shows: everything, files, or a stack.')));
+        h('p', { style: 'margin-top:8px;font-size:11.5px' }, 'Use the tabs at the top of each column to switch what it shows: everything, files, or a stack.'),
+        toggleRow('Newest at the top', 'In Everything, Files and your stacks. Off: the newest is at the bottom, like a chat. Only for you, on all your devices', !!S.me?.feedTop, async (on, input) => {
+          const was = !!S.me.feedTop;
+          S.me.feedTop = on;
+          buildPanes();
+          try { S.me.feedTop = (await api('PUT', '/account/feed', { newestTop: on })).newestTop; } catch (e) { S.me.feedTop = was; input.checked = was; buildPanes(); toast(e.message); }
+        })));
       s.append(h('section', {}, h('h3', {}, 'Your tabs'),
         h('div', { class: 'srow' }, h('span', {}, ['Home', 'Day', ...barKeys().map((k) => BAR_ITEMS[k].label)].join(' · '), h('small', {}, 'Only you see your tabs')), h('button', { class: 'btn', onclick: barSheet }, 'Change'))));
 
