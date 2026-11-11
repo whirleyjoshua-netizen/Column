@@ -26,6 +26,8 @@ async function tab(url) {
   const type = async (t) => { await cmd('Input.insertText', { text: t }); await sleep(40); };
   const until = async (expr, ms = 5000) => { const end = Date.now() + ms; while (Date.now() < end) { if (await ev(expr).catch(() => false)) return true; await sleep(100); } return false; };
   const tap = async (expr) => {
+    // Wait for what's tapped to be there (a menu or panel can take a moment to draw on a busy machine).
+    await until(`!!(${expr})`, 8000);
     const [x, y] = await ev(`(() => { const e = ${expr}; e.scrollIntoView({ block: 'center' }); const r = e.getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; })()`);
     for (const type of ['mouseMoved', 'mousePressed', 'mouseReleased']) await cmd('Input.dispatchMouseEvent', { type, x, y, button: 'left', buttons: type === 'mousePressed' ? 1 : 0, clickCount: 1 });
     await sleep(80);
@@ -40,8 +42,9 @@ await A.ev(`(() => { document.querySelector('[data-mode=create]').click(); const
 ok(await A.until(`!document.querySelector('#app').classList.contains('hidden')`), 'signed in');
 // This suite uses tools a new team starts without: switch them all on.
 await A.ev(`fetch('/api/workspace', { method: 'PATCH', headers: { authorization: 'Bearer ' + JSON.parse(localStorage.getItem('column.token')), 'content-type': 'application/json' }, body: JSON.stringify({ tools: { sidekick: true, docs: true, contacts: true, email: true, folders: true, signs: true, bills: true, meetings: true, map: true, vault: true, projects: true } }) }).then((r) => r.ok)`);
-await A.until(`document.querySelector('#toolsBtn') && true`, 500);
-await sleep(1200);
+// The tools just switched on: reload so the app starts with them (no guessing how long the live update takes).
+await A.ev(`location.reload()`);
+await A.until(`!document.querySelector('#app')?.classList.contains('hidden') && !!document.querySelector('#toolsBtn')`, 15000);
 const token = await A.ev(`JSON.parse(localStorage.getItem('column.token'))`);
 const api = async (m, p, body) => (await fetch(APP + 'api' + p, { method: m, headers: { 'content-type': 'application/json', authorization: 'Bearer ' + token }, body: body ? JSON.stringify(body) : undefined })).json();
 await A.tap(`document.querySelector('#toolsBtn')`); await A.tap(`[...document.querySelectorAll('#menu button')].find((b) => b.textContent === 'Jobs & projects')`);
