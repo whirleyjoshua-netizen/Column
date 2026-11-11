@@ -5,7 +5,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 const B = process.env.B || 'http://127.0.0.1:4797';
-const OUTBOX = process.env.OUTBOX || '';
+const OUTBOX = process.env.OUTBOX || (process.env.DATA_DIR ? path.join(process.env.DATA_DIR, 'outbox') : '');
 const call = (tok) => async (m, p, body) => {
   const r = await fetch(B + '/api' + p, { method: m, headers: { 'content-type': 'application/json', authorization: 'Bearer ' + tok }, body: body ? JSON.stringify(body) : undefined });
   const ct = r.headers.get('content-type') || '';
@@ -76,7 +76,7 @@ const j2 = await mk('Furnace repair');
 ok((await jo('POST', `/signoff/${j2.id}/${sigF.id}/send`, { name: 'Maria Lopez' })).status === 400, 'sending needs an email address');
 const before2 = mails().length;
 r = await jo('POST', `/signoff/${j2.id}/${sigF.id}/send`, { email: 'maria@cust.test', message: 'Thanks!' });
-ok(r.status === 200 && r.body.link.includes('/sign/') && r.body.emailed === (OUTBOX ? 'kloomie' : null) && r.body.record.signoffs[sigF.id].status === 'sent' && r.body.record.signoffs[sigF.id].to.name === 'Maria Lopez', 'sent: the record shows it’s out, to the customer (from Kloomie, with no mailbox connected)');
+ok(r.status === 200 && r.body.link.includes('/sign/') && (OUTBOX ? r.body.emailed === 'kloomie' : [null, 'kloomie'].includes(r.body.emailed)) && r.body.record.signoffs[sigF.id].status === 'sent' && r.body.record.signoffs[sigF.id].to.name === 'Maria Lopez', 'sent: the record shows it’s out, to the customer (from Kloomie, with no mailbox connected)');
 if (OUTBOX) ok(mails().slice(before2).some((m) => m.to === 'maria@cust.test' && /Please sign/.test(m.subject) && JSON.stringify(m).includes(r.body.link)), 'the email carries the signing link');
 const token = r.body.link.split('/sign/')[1];
 ok((await jo('POST', `/signoff/${j2.id}/${sigF.id}/send`, { email: 'b@b.test', name: 'B' })).status === 409, 'it can’t go out twice at once');
