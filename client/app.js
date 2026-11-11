@@ -780,6 +780,7 @@
     if (kind === 'rec') return openRecord(id);
     if (kind === 'contact') return openContactById(id);
     if (kind === 'approval') return approvalSheet(id);
+    if (kind === 'card') return openTool('cards');
     if (kind === 'agent') return AG.data ? agOpen('run:' + id) : (AG.view = 'run:' + id, openTool('agents'));
     if (kind === 'standup') { const p = projById(id); if (!p) return toast('That project is gone.'); return openProject(id).then(() => standupSheet(p)); }
     const it = S.items.find((x) => x.id === id);
@@ -1784,6 +1785,7 @@
       { cmd: 'meeting', also: ['record'], hint: 'Record a meeting, get the notes', arg: 'what it’s about', on: toolOn('meetings'), off: off('Meeting notes'), run: (t) => askRecord(t) },
       { cmd: 'sidekick', also: ['ask'], hint: 'Plan it with Sidekick', on: toolOn('sidekick'), off: off('Sidekick'), run: () => { SK.open = null; openTool('sidekick'); } },
       { cmd: 'plan', hint: 'Open the Planner', run: () => openTool('planner') },
+      { cmd: 'card', hint: 'Your business card', on: toolOn('cards'), off: off('Business cards'), run: () => openTool('cards') },
       { cmd: 'map', hint: 'Open the Map', on: toolOn('map'), off: off('Map'), run: () => openMap() },
       { cmd: 'miles', also: ['mileage', 'drove'], hint: 'Log a drive for mileage', arg: '23 supplies run', on: toolOn('map'), off: off('Map'), run: async (t) => { const a = moneyArgs(t); if (!ML.list) await loadMiles(); mileSheet(null, { purpose: a.rest, meters: a.amount ? Math.round(Number(a.amount) * mlPer()) : 0 }); } },
       { cmd: 'sign', also: ['signature'], hint: 'Open Signatures', on: toolOn('signs'), off: off('Signatures'), run: () => openTool('signs') },
@@ -9010,7 +9012,7 @@
   }
 
   // ---------- tools: small apps that open in a drawer, so the tabs stay as they are ----------
-  const TOOLS = { agents: { name: 'Your team', render: agentsTool }, hq: { name: 'Company HQ', render: hqTool }, sidekick: { name: 'Sidekick', render: sidekickTool }, docs: { name: 'Docs', render: docsTool }, bills: { name: 'Finance', render: financeTool }, contacts: { name: 'Contacts', render: contactsTool }, email: { name: 'Email', render: emailTool }, meetings: { name: 'Meeting notes', render: meetingsTool }, planner: { name: 'Planner', render: plannerTool }, folders: { name: 'Folders', render: foldersTool }, map: { name: 'Map', render: mapTool }, signs: { name: 'Signatures', render: signsTool }, vault: { name: 'Vault', render: vaultTool } };
+  const TOOLS = { agents: { name: 'Your team', render: agentsTool }, hq: { name: 'Company HQ', render: hqTool }, sidekick: { name: 'Sidekick', render: sidekickTool }, docs: { name: 'Docs', render: docsTool }, bills: { name: 'Finance', render: financeTool }, contacts: { name: 'Contacts', render: contactsTool }, email: { name: 'Email', render: emailTool }, meetings: { name: 'Meeting notes', render: meetingsTool }, planner: { name: 'Planner', render: plannerTool }, folders: { name: 'Folders', render: foldersTool }, map: { name: 'Map', render: mapTool }, signs: { name: 'Signatures', render: signsTool }, cards: { name: 'Business card', render: cardTool }, vault: { name: 'Vault', render: vaultTool } };
   let toolOpen = null;
   $('#toolsBtn').addEventListener('click', (e) => {
     const soon = billsSoon().length;
@@ -9032,6 +9034,7 @@
       toolOn('meetings') ? { label: 'Meeting notes', on: toolOpen === 'meetings', run: () => openTool('meetings') } : null,
       toolOn('map') ? { label: h('span', { class: 'tool-item' }, 'Map', MP.run ? h('small', {}, MP.run && tripById(MP.run.id)?.kind === 'drive' ? 'tracking mileage' : 'canvassing run going') : null), on: toolOpen === 'map', run: () => openMap() } : null,
       toolOn('signs') ? { label: h('span', { class: 'tool-item' }, 'Signatures', SG.list.some((x) => x.status === 'sent' || x.status === 'viewed') ? h('small', {}, `${SG.list.filter((x) => x.status === 'sent' || x.status === 'viewed').length} waiting`) : null), on: toolOpen === 'signs', run: () => { SG.filter = null; openTool('signs'); } } : null,
+      toolOn('cards') ? { label: 'Business card', on: toolOpen === 'cards', run: () => openTool('cards') } : null,
       toolOn('vault') ? { label: h('span', { class: 'tool-item' }, 'Vault', VK.key ? h('small', {}, 'unlocked') : null), on: toolOpen === 'vault', run: () => { VK.filter = null; openTool('vault'); } } : null,
     ].filter(Boolean));
   });
@@ -14294,6 +14297,126 @@
   }
   const signsFor = (c) => SG.list.filter((x) => x.campaignId === c.id).length;
 
+  // ----- Business card: your own card at /c/<address>, to share by link, text, QR code or an NFC sticker -----
+  // What people share back lands in Contacts (cards.js). The edit is kept here while it's being typed, so the
+  // tool can redraw without losing it.
+  const CD = { card: null, edit: null, loading: false, saving: false };
+  const CARD_OFF = { new: 'Not on yet. Fill it in and turn it on.', off: 'Turned off: nobody can open it.', confirm: 'Confirm your email (Settings → Account) to turn your card on.', tool: 'Business cards are off for your team.', gone: 'Not available.' };
+  async function loadCard(force) {
+    if (CD.loading || (CD.card && !force)) return;
+    CD.loading = true;
+    try {
+      CD.card = await api('GET', '/card');
+      CD.edit = { ...CD.card, links: CD.card.links.map((l) => ({ label: l.label, url: l.url })) };
+    } catch (e) { toast(e.message); }
+    CD.loading = false;
+    renderTool(true);
+  }
+  const cardFields = () => { const e = CD.edit; return { name: e.name, title: e.title, company: e.company, phone: e.phone, email: e.email, about: e.about, handle: e.handle, links: e.links.filter((l) => l.url.trim()), showLogo: e.showLogo, ask: e.ask }; };
+  async function saveCard(extra = {}) {
+    if (CD.saving) return;
+    CD.saving = true;
+    try {
+      CD.card = await api('PUT', '/card', { ...cardFields(), ...extra });
+      CD.edit = { ...CD.card, links: CD.card.links.map((l) => ({ label: l.label, url: l.url })) };
+      toast(extra.on === true ? 'Your card is on' : extra.on === false ? 'Your card is off' : 'Saved');
+    } catch (e) { toast(e.message); }
+    CD.saving = false;
+    renderTool(true);
+  }
+  // A photo is made small here (a square, 512 pixels) before it goes up.
+  function cardPhoto(file) {
+    if (!file) return;
+    if (!CD.card?.id) return toast('Save your card first, then add a photo.');
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = async () => {
+      URL.revokeObjectURL(url);
+      const s = Math.min(img.width, img.height);
+      const cv = document.createElement('canvas');
+      cv.width = cv.height = Math.min(512, s);
+      cv.getContext('2d').drawImage(img, (img.width - s) / 2, (img.height - s) / 2, s, s, 0, 0, cv.width, cv.height);
+      try { CD.card = await api('PUT', '/card/photo', { data: cv.toDataURL('image/jpeg', 0.86) }); renderTool(true); } catch (e) { toast(e.message); }
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); toast('That photo couldn’t be read. Try a JPEG or PNG.'); };
+    img.src = url;
+  }
+  function cardQrSheet() {
+    const c = CD.card;
+    sheet('Your card’s QR code', [h('p', { class: 'day-hint' }, 'Hold this up: they point their phone’s camera at it and your card opens. No app needed.'),
+      h('img', { class: 'card-qr', src: c.qr, alt: 'QR code for ' + c.url }), h('p', { class: 'card-url' }, c.url)]);
+  }
+  async function cardNfc(btn) {
+    try {
+      // Android Chrome only: writes the card's link onto a blank NFC card or sticker held to the phone.
+      const w = new window.NDEFReader();
+      btn.textContent = 'Hold the tag to your phone…';
+      await w.write({ records: [{ recordType: 'url', data: CD.card.url }] });
+      toast('Written. Tapping the tag now opens your card.');
+    } catch (e) { toast(e.name === 'AbortError' ? 'Stopped' : 'Couldn’t write the tag: ' + e.message); }
+    btn.textContent = 'Write to an NFC tag';
+  }
+  function cardTool() {
+    if (!CD.card) { loadCard(); return [h('p', { class: 'day-hint' }, 'Loading your card…')]; }
+    const c = CD.card, e = CD.edit;
+    const live = c.id && !c.off;
+    const inp = (k, label, attrs = {}) => {
+      const x = h(attrs.rows ? 'textarea' : 'input', { maxlength: attrs.max || 80, ...(attrs.type ? { type: attrs.type } : {}), ...(attrs.rows ? { rows: attrs.rows } : {}), placeholder: attrs.ph || '' });
+      x.value = e[k] || '';
+      x.addEventListener('input', () => { e[k] = x.value; });
+      return h('label', { class: 'card-field' }, label, x);
+    };
+    const linkRows = h('div', { class: 'card-links' });
+    const drawLinks = () => linkRows.replaceChildren(...e.links.map((l, i) => {
+      const lb = h('input', { maxlength: 40, placeholder: 'Label (Book a time)' });
+      const u = h('input', { maxlength: 500, placeholder: 'Address (cal.com/you)', inputmode: 'url' });
+      lb.value = l.label; u.value = l.url;
+      lb.addEventListener('input', () => { l.label = lb.value; });
+      u.addEventListener('input', () => { l.url = u.value; });
+      return h('div', { class: 'card-link' }, lb, u, h('button', { class: 'icon-btn', 'aria-label': 'Remove this link', html: I.close, onclick: () => { e.links.splice(i, 1); drawLinks(); } }),
+        c.links[i] && c.links[i].url === l.url && c.id ? h('small', {}, `${c.links[i].taps} tap${c.links[i].taps === 1 ? '' : 's'}`) : null);
+    }), e.links.length < 8 ? h('button', { class: 'btn small', onclick: () => { e.links.push({ label: '', url: '' }); drawLinks(); linkRows.querySelectorAll('.card-link input')[e.links.length * 2 - 2]?.focus(); } }, '+ Add a link') : null);
+    drawLinks();
+    const handle = h('input', { maxlength: 30, class: 'card-handle' });
+    handle.value = e.handle;
+    handle.addEventListener('input', () => { e.handle = handle.value.toLowerCase().replace(/[^a-z0-9-]/g, ''); });
+    const photo = h('input', { type: 'file', accept: 'image/*', hidden: true });
+    photo.addEventListener('change', () => { const f = photo.files[0]; photo.value = ''; cardPhoto(f); });
+    const share = async () => { try { if (navigator.share) await navigator.share({ title: e.name || 'My card', url: c.url }); else copyText(c.url); } catch {} };
+    const nfc = 'NDEFReader' in window ? h('button', { class: 'btn small', onclick: (ev) => cardNfc(ev.currentTarget) }, 'Write to an NFC tag') : null;
+    return [
+      h('div', { class: 'card-status' + (live ? ' on' : '') },
+        h('span', {}, live ? h('b', {}, 'Your card is on') : h('b', {}, 'Your card is off'), h('small', {}, live ? c.url : CARD_OFF[c.off] || '')),
+        h('label', { class: 'toggle' }, (() => { const t = h('input', { type: 'checkbox' }); t.checked = !!live; t.addEventListener('change', () => saveCard({ on: t.checked })); return t; })(), h('i'))),
+      live ? h('div', { class: 'card-share' },
+        h('button', { class: 'btn primary-btn', onclick: share }, navigator.share ? 'Share or text it' : 'Copy link'),
+        h('button', { class: 'btn', onclick: cardQrSheet }, 'Show QR code'),
+        h('a', { class: 'btn', href: c.url, target: '_blank', rel: 'noopener' }, 'Open my card'),
+        navigator.share ? h('button', { class: 'btn', onclick: () => copyText(c.url) }, 'Copy link') : null, nfc) : null,
+      live ? h('p', { class: 'day-hint' }, nfc ? 'Tap to share: hold a blank NFC card or sticker to this phone and choose Write to an NFC tag. Then anyone who taps it with their phone gets your card.'
+        : 'Tap to share: put your card’s link on an NFC card or sticker (most sellers program it for you). Anyone who taps it with their phone gets your card.') : null,
+      c.id ? h('div', { class: 'card-stats' }, [['views', 'Opened'], ['saves', 'Saved you'], ['leads', 'Shared their info']].map(([k, label]) => h('span', {}, h('b', {}, String(c[k] || 0)), label))) : null,
+      c.recent?.length ? h('div', {}, h('div', { class: 'any-h' }, 'Shared their info'), h('div', { class: 'card-recent' }, c.recent.slice(0, 8).map((x) =>
+        h(amAdmin() && toolOn('contacts') ? 'button' : 'div', { class: 'card-person', ...(amAdmin() && toolOn('contacts') ? { onclick: () => openContactById(x.contactId) } : {}) }, h('b', {}, x.name), h('small', {}, [x.phone, x.email, new Date(x.at).toLocaleDateString([], { month: 'short', day: 'numeric' })].filter(Boolean).join(' · ')))))) : null,
+      h('div', { class: 'any-h' }, 'On your card'),
+      h('div', { class: 'card-photo' }, c.photo ? h('img', { src: c.photo, alt: '' }) : h('span', {}, (e.name || '?').split(/\s+/).slice(0, 2).map((w) => w[0] || '').join('').toUpperCase()),
+        h('div', {}, h('button', { class: 'btn small', onclick: () => (c.id ? photo.click() : toast('Save your card first, then add a photo.')) }, c.photo ? 'Change photo' : 'Add a photo'),
+          c.photo ? h('button', { class: 'btn small', onclick: async () => { try { CD.card = await api('DELETE', '/card/photo'); renderTool(true); } catch (er) { toast(er.message); } } }, 'Remove') : null), photo),
+      inp('name', 'Name'), inp('title', 'Title', { ph: 'Owner, Project manager…' }), inp('company', 'Company'),
+      inp('phone', 'Phone (for Call and Text)', { type: 'tel', max: 40 }), inp('email', 'Email', { type: 'email', max: 120 }), inp('about', 'A line about you (optional)', { rows: 3, max: 300, ph: 'What you do, where you work' }),
+      h('div', { class: 'any-h' }, 'Links'),
+      h('p', { class: 'day-hint' }, 'Your website, booking page, reviews, Instagram, a quote form or a payment link.'),
+      linkRows,
+      h('div', { class: 'any-h' }, 'Options'),
+      toggleRow('Show the team logo', null, e.showLogo, (on) => { e.showLogo = on; }),
+      toolOn('contacts') ? toggleRow('“Share your info”', 'People who open your card can leave their name, phone and email. They go into the team’s Contacts and you’re told.', e.ask, (on) => { e.ask = on; }) : null,
+      h('label', { class: 'card-field' }, 'Your card’s address', h('span', { class: 'card-addr' }, h('small', {}, location.host + '/c/'), handle)),
+      h('div', { class: 'btns' },
+        c.id ? h('button', { class: 'btn danger', onclick: (ev) => confirmClick(ev.currentTarget, async () => { try { await api('DELETE', '/card'); CD.card = null; loadCard(true); } catch (er) { toast(er.message); } }) }, 'Delete card') : null,
+        h('button', { class: 'btn primary-btn', disabled: CD.saving, onclick: () => saveCard(c.id ? {} : { on: true }) }, c.id ? 'Save' : 'Save and turn on')),
+    ];
+  }
+
   // ----- vault: a safe box locked with your own passphrase -----
   // Items are encrypted here, in the browser (AES-GCM, with a key made from the passphrase by PBKDF2), and
   // only the encrypted blobs go to the server. The key lives in memory while it's unlocked: locking, five
@@ -16761,7 +16884,7 @@
         // The tools the team uses. Switched off, a tool leaves everyone's Tools menu; nothing in it is deleted.
         const TOOL_ROWS = [['agents', 'Agents', 'Your team: Chief of Staff, Sales, Operations and Marketing'], ['sidekick', 'Sidekick', 'Plans campaigns with you'], ['docs', 'Docs', 'Write and share pages'], ['contacts', 'Contacts', 'Your customers and leads (owners and admins)'],
           ['email', 'Email', 'Campaign email from Outlook or Gmail'], ['folders', 'Folders', 'Files in folders'], ['signs', 'Signatures', 'Send PDFs to be signed'], ['bills', 'Finance', 'Bills, money in and out, budgets'],
-          ['meetings', 'Meeting notes', 'Record a call, get the notes'], ['map', 'Map', 'Pins, routes and canvassing runs'], ['vault', 'Vault', 'Codes and logins, locked on your device'], ['projects', 'Jobs & projects', 'Trades, software, client work and team projects']];
+          ['meetings', 'Meeting notes', 'Record a call, get the notes'], ['map', 'Map', 'Pins, routes and canvassing runs'], ['vault', 'Vault', 'Codes and logins, locked on your device'], ['projects', 'Jobs & projects', 'Trades, software, client work and team projects'], ['cards', 'Business cards', 'Everyone’s own card to share by link, text, QR code or NFC']];
         const tools = ws.tools || {};
         s.append(h('section', { class: 'tools-sec' }, h('h3', {}, 'Tools'),
           h('p', { class: 'day-hint' }, 'Turn on what your team uses. A tool you turn off leaves everyone’s Tools menu; nothing in it is deleted.'),

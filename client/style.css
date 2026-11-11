@@ -2559,3 +2559,35 @@ button.hq-entry:hover { background: var(--card-hover); }
 .so-presets { margin-bottom: 4px; }
 .so-body { font-family: var(--mono); font-size: 12.5px; }
 .so-consent input, .so-check input { flex: none; margin-top: 2px; }
+
+/* Business card (Tools → Business card) */
+.card-status { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); margin-bottom: 10px; }
+.card-status.on { border-color: var(--accent); background: var(--accent-soft); }
+.card-status span { min-width: 0; }
+.card-status small { display: block; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.card-share { display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 0 6px; }
+.card-share .btn { text-decoration: none; }
+.card-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 12px 0; }
+.card-stats span { border: 1px solid var(--line); border-radius: 10px; padding: 8px; text-align: center; color: var(--muted); font-size: 12px; }
+.card-stats b { display: block; color: var(--text); font-size: 20px; }
+.card-recent { display: flex; flex-direction: column; gap: 4px; }
+.card-person { display: block; text-align: left; width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--text); font: inherit; }
+button.card-person { cursor: pointer; }
+button.card-person:hover { background: var(--card-hover); }
+.card-person small { display: block; color: var(--muted); }
+.card-photo { display: flex; align-items: center; gap: 12px; margin: 6px 0 10px; }
+.card-photo > img, .card-photo > span { width: 64px; height: 64px; border-radius: 50%; object-fit: cover; flex: none; }
+.card-photo > span { display: flex; align-items: center; justify-content: center; background: var(--accent-soft); color: var(--accent); font-weight: 700; font-size: 22px; }
+.card-photo > div { display: flex; gap: 6px; flex-wrap: wrap; }
+.card-links { display: flex; flex-direction: column; gap: 8px; margin-bottom: 8px; }
+.card-link { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr) auto; gap: 6px; align-items: center; }
+.card-link small { grid-column: 1 / -1; color: var(--muted); font-size: 11px; margin-top: -4px; }
+.card-addr { display: flex; align-items: center; gap: 2px; }
+.card-addr small { color: var(--muted); white-space: nowrap; }
+.card-addr input { flex: 1; min-width: 0; }
+.card-qr { display: block; width: min(320px, 100%); height: auto; margin: 8px auto; background: #fff; border-radius: 12px; padding: 8px; }
+.card-url { text-align: center; color: var(--muted); overflow-wrap: anywhere; }
+@media (max-width: 520px) { .card-link { grid-template-columns: minmax(0, 1fr) auto; } .card-link input:nth-child(2) { grid-column: 1; } }
+.card-field { display: block; margin: 10px 0; font-size: 13px; font-weight: 600; color: var(--muted); }
+.card-field > input, .card-field > textarea { display: block; width: 100%; margin-top: 4px; box-sizing: border-box; }
+.card-field .card-addr { margin-top: 4px; font-weight: 400; }

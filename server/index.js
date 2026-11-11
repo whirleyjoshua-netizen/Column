@@ -34,6 +34,8 @@ import { githubModule } from './github.js';
 import { techAiModule } from './techai.js';
 import { describeModule } from './describe.js';
 import { signoffModule } from './signoff.js';
+import { cardsModule } from './cards.js';
+import { qrSvg } from './qr.js';
 import { agentsModule } from './agents.js';
 import { postizModule } from './postiz.js';
 import { makeImage } from './images.js';
@@ -534,11 +536,12 @@ const BAR_KEYS = ['column', 'chat', 'camps', 'agents', 'sidekick', 'docs', 'proj
 // A private campaign's feed and stack are hidden from people outside it, and so is a feed you weren't invited to.
 // The tools a team uses, which owners and admins switch on and off (Settings → Team). A new team starts with
 // a simple set; a team from before switches keeps everything but Projects, which is parked.
-const TOOL_KEYS = ['agents', 'sidekick', 'docs', 'contacts', 'email', 'folders', 'signs', 'bills', 'meetings', 'map', 'vault', 'projects'];
+const TOOL_KEYS = ['agents', 'sidekick', 'docs', 'contacts', 'email', 'folders', 'signs', 'bills', 'meetings', 'map', 'vault', 'projects', 'cards'];
 const SETUP_KINDS = ['trades', 'services', 'store', 'software', 'other'];
-const NEW_TEAM_TOOLS = ['agents', 'sidekick', 'docs', 'contacts', 'email', 'folders', 'signs'];
-// Agents came later: on for teams that haven't switched them off.
-const toolsOf = (ws) => Object.fromEntries(TOOL_KEYS.map((k) => [k, ws.settings?.tools ? (k === 'agents' ? ws.settings.tools[k] !== false : ws.settings.tools[k] === true) : k !== 'projects']));
+const NEW_TEAM_TOOLS = ['agents', 'sidekick', 'docs', 'contacts', 'email', 'folders', 'signs', 'cards'];
+// Agents and business cards came later: on for teams that haven't switched them off.
+const LATER_TOOLS = ['agents', 'cards'];
+const toolsOf = (ws) => Object.fromEntries(TOOL_KEYS.map((k) => [k, ws.settings?.tools ? (LATER_TOOLS.includes(k) ? ws.settings.tools[k] !== false : ws.settings.tools[k] === true) : k !== 'projects']));
 const publicWorkspace = (ws, memberId) => ({
   tools: toolsOf(ws),
   billing: publicBilling(ws),
@@ -5759,6 +5762,10 @@ async function api(req, res, url) {
     const out = await SIGNOFF.route(req, res, parts, auth, ws);
     if (out !== null) return;
   }
+  if (a === 'card') {
+    const out = await CARDS.route(req, res, parts, auth, ws, userOf(ws.members.find((x) => x.id === auth.memberId)));
+    if (out !== null) return;
+  }
   if (a === 'project-templates' && b === 'describe') {
     const out = await DESCRIBE.route(req, res, parts, auth, ws);
     if (out !== null) return;
@@ -8908,6 +8915,11 @@ function cloudScripts() {
 // Dropbox listed inside Kloomie, per person (dropbox.js).
 const DBX = dropboxModule({ bind: OAUTH_BIND, noRoom: (...a) => noRoom(...a), db, rid, save, send, readJson, seal, unseal, broadcast, publicUrl: PUBLIC_URL, receiveUpload, addItem, baseItem, uploadPlace, publicItem, FILES_DIR, mimeFor, cleanName, alarm });
 // Leads from the team's website and other tools (leads.js).
+// Business cards (cards.js): each person's card at /c/<handle>; what visitors share lands in Contacts.
+const CARDS = cardsModule({ db, save, readJson, send, rid, escHtml, brandOf, logoUrl, imageType, FILES_DIR, clientIp, publicUrl: PUBLIC_URL, offline, teamDay: (...a) => teamDay(...a),
+  toolOn: (ws, k) => !!ws && toolsOf(ws)[k], confirmed: (wsId, memberId) => mailer.mode === 'off' || !!userOf(db.workspaces[wsId]?.members.find((x) => x.id === memberId))?.emailVerified,
+  memberIn: (...a) => memberIn(...a), isAdminId, contactsOf, newContact, applyContact, emailKey, phoneKey, EMAIL_RE, contactNews, refreshLiveSoon: (...a) => refreshLiveSoon(...a), automate: (...a) => automate(...a),
+  hook: (wsId, type, x) => hook(wsId, type, () => API.apiContact(x), 'Business card'), notify: (...a) => notify(...a), CONTACT_MAX, qrSvg });
 const LEADS = leadsModule({ db, save, readJson, send, isAdmin, cleanText, contactsOf, newContact, applyContact, emailKey, phoneKey, EMAIL_RE, contactNews, refreshLiveSoon, automate,
   hook: (wsId, type, x) => hook(wsId, type, () => API.apiContact(x), 'Lead'), notifyAdmins, escHtml, brandOf, logoUrl, clientIp, CONTACT_MAX, publicUrl: PUBLIC_URL, offline, teamDay });
 // Two-step sign-in with an authenticator app (twostep.js).
@@ -9025,6 +9037,8 @@ async function handleRequest(req, res) {
   // A quote sent to a customer: they read it and accept or decline.
   if (url.pathname.startsWith('/q/') && (req.method === 'GET' || req.method === 'POST')) return PJ.quotePage(req, res, url);
   // Leads: the team's lead form page, and its lead webhook (leads.js).
+  if (url.pathname === '/card.js' && req.method === 'GET') return CARDS.script(req, res);
+  if (url.pathname.startsWith('/c/')) return CARDS.publicRoute(req, res, url).catch((e) => { alarm('A business card page failed', e); if (!res.headersSent) send(res, 500, 'Something went wrong. Please try again.'); });
   if (url.pathname.startsWith('/l/') && (req.method === 'GET' || req.method === 'POST')) return LEADS.formPage(req, res, url).catch((e) => { alarm('A lead form failed', e); if (!res.headersSent) send(res, 500, 'Something went wrong. Please try again.'); });
   if (url.pathname.startsWith('/hooks/lead/')) return LEADS.webhook(req, res, url).catch((e) => { alarm('A lead webhook failed', e); if (!res.headersSent) send(res, 500, { error: 'Something went wrong.' }); });
   // An invoice sent to a customer: they read it and pay it by card.
@@ -9220,6 +9234,7 @@ function teamFiles(wsId) {
   for (const x of Object.values(db.sidekick)) if (mine(x)) for (const f of x.files || []) files.push(skPath(f));
   for (const x of Object.values(db.uploads)) if (mine(x)) files.push(partPath(x));
   for (const x of Object.values(db.exports)) if (mine(x)) files.push(exportPath(x), exportPath(x) + '.part');
+  files.push(...CARDS.files(wsId));
   const logo = db.workspaces[wsId]?.brand?.logo;
   if (logo) files.push(logoPath(logo));
   return files;
@@ -9286,6 +9301,7 @@ async function removeMember(ws, m, { removed = false } = {}) {
   if (removed && ws.inviteCode) ws.inviteCode = newInviteCode();
   await Promise.all(Object.values(db.calendars).filter(theirs).map(async (conn) => { await revokeCalendar(conn); disconnectCalendar(conn); }));
   DBX.forget(wsId, id);
+  CARDS.forgetMember(wsId, id);
   for (const n of Object.values(db.notices)) if (theirs(n)) delete db.notices[n.id];
   // Google Contacts reads their Google account, so it goes with them; its people stay.
   if (db.gcontacts[wsId]?.memberId === id) await gcDisconnect(wsId);
@@ -9436,6 +9452,7 @@ async function buildExport(x) {
     signs: (y) => y.memberId === me.id,
     pins: (y) => y.memberId === me.id,
     trips: (y) => y.memberId === me.id,
+    cards: (y) => y.memberId === me.id,
     zones: (y) => y.memberId === me.id,
     plans: (y) => y.memberId === me.id,
     sidekick: (y) => y.memberId === me.id,
