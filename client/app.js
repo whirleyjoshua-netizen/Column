@@ -417,8 +417,8 @@
       sock?.close();
     } catch {}
     S.items = [];
-    $('#settings').classList.add('hidden');
-    showLogin();
+    // Start clean: contacts, records, agent runs and everything else loaded stay with the person who signed out.
+    location.reload();
   }
 
   // ---------- realtime ----------
@@ -11692,7 +11692,7 @@
       if (pop) m.bindPopup(pop, { maxWidth: 260 });
       m.addTo(MP.group);
     };
-    if (r.base) pin(r.base.lat, r.base.lng, '⌂', 'base', `Start: ${r.base.address}`);
+    if (r.base) pin(r.base.lat, r.base.lng, '⌂', 'base', () => h('div', { class: 'rt-pop' }, 'Start: ', r.base.address));
     for (const s of r.stops) pin(s.lat, s.lng, String(s.n), s.done ? 'done' : s.flex ? 'flex' : '', () => h('div', { class: 'rt-pop' }, h('b', {}, s.label), h('small', {}, [s.start != null ? fmtTime(s.start) : 'Any time', s.address].join(' · ')), h('button', { class: 'btn small', onclick: () => openJob(s.projectId, s.recordId, s.id) }, 'Open job')));
     if (fit) {
       const pts = [...r.stops.map((s) => [s.lat, s.lng]), ...(r.base ? [[r.base.lat, r.base.lng]] : [])];

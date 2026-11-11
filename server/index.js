@@ -3585,7 +3585,9 @@ const smsOf = (c, body) => ({ phone: String(c?.phone || '').replace(/[^\d+]/g, '
 // One message to a customer: emailed when they have an address (and email works here), and a text to send.
 async function tellCustomer(ws, rec, c, { tag, subject, heading, lines, button, text, replyTo, by, what }) {
   let emailed = false;
-  if (emailable(c) && mailer.mode !== 'off') {
+  const held = emailable(c) && mailer.mode !== 'off' ? platformSendBlock(ws) : null;
+  if (held) console.error('Customer email held:', ws.id, held);
+  if (emailable(c) && mailer.mode !== 'off' && !held) {
     emailed = await mailer.customerEmail(c.email, { team: ws.name, replyTo, subject, heading, lines, button, tag }).then(() => true, (e) => (console.error('Customer email failed:', e.message), false));
   }
   if (emailed) PJ.recordActivity(rec.id, { kind: 'email', what, note: `Emailed ${c.email}`, by });
@@ -8549,6 +8551,23 @@ async function agentLlm(ws, memberId, { system, history, tools, exec, task }) {
 }
 // An email an agent drafted and the person approved: from their own Gmail or Outlook when connected, otherwise
 // from Kloomie under the team's name with replies to them. Never to anyone marked do not contact.
+// Email sent from Kloomie's own address (a team without its own Gmail or Outlook connected): only for confirmed
+// accounts when real email is on (or REQUIRE_CONFIRMED_SEND in tests), and a daily limit per team, so nobody can sign up
+// and send email under Kloomie's name.
+const PLATFORM_DAY_MAX = Number(process.env.PLATFORM_EMAILS_PER_DAY) || 200;
+const platformSent = new Map();
+function platformSendBlock(ws, memberId = null) {
+  if (mailer.mode === 'resend' || process.env.REQUIRE_CONFIRMED_SEND === '1') {
+    const okAcct = memberId ? !!userOf(ws.members.find((m) => m.id === memberId))?.emailVerified : ws.members.some((m) => ADMIN_ROLES.includes(m.role) && userOf(m)?.emailVerified);
+    if (!okAcct) return 'Confirm your email first (we sent you a code). Until then Kloomie can’t send email for this team.';
+  }
+  const k = ws.id + ':' + teamDay(ws.id);
+  const n = platformSent.get(k) || 0;
+  if (n >= PLATFORM_DAY_MAX) return `This team has sent ${PLATFORM_DAY_MAX} emails through Kloomie today. Connect your own Gmail or Outlook in Settings to send more.`;
+  if (platformSent.size > 20_000) platformSent.clear();
+  platformSent.set(k, n + 1);
+  return null;
+}
 async function agentEmail(ws, memberId, { name, email, subject, text }) {
   if (!EMAIL_RE.test(String(email || ''))) throw badRequest('That email address doesn’t look right.');
   if (doNotEmail(ws.id).has(emailKey(email))) throw badRequest(`${email} asked not to be contacted.`);
@@ -8562,6 +8581,8 @@ async function agentEmail(ws, memberId, { name, email, subject, text }) {
     return { from: conn.account };
   }
   if (mailer.mode === 'off') throw new Error('Email isn’t set up. Connect Gmail or Outlook in Settings → Calendar & email.');
+  const blocked = platformSendBlock(ws, memberId);
+  if (blocked) throw badRequest(blocked);
   await mailer.customerEmail(email, { team: ws.name, replyTo: memberReply(ws, memberId), subject, heading: subject, lines: String(text).split(/\n+/).filter((l) => l.trim()), tag: 'agent' });
   return { from: `${ws.name} (through Kloomie)` };
 }

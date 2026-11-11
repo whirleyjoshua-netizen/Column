@@ -412,13 +412,15 @@ Reply with JSON only: {"entries":[${ENTRY_SHAPE}],"seen":"one plain sentence on 
   async function learnNow(ws, memberId, by) {
     const fresh = (ws.hqEdits || []).filter((x) => !x.read);
     if (fresh.length < LEARN_EVERY) return null;
-    for (const x of fresh) x.read = true;
+    if (Date.now() - (ws.hqLearnAt || 0) < 3_600_000) return null;
     ws.hqLearnAt = Date.now();
     const brief = fresh.map((x, i) => `EDIT ${i + 1} (${x.kind}, by ${x.by})\nDRAFT:\n${x.draft}\n\nWHAT THEY USED:\n${x.final}`).join('\n\n---\n\n');
     const voice = approved(ws.id).find((x) => x.kind === 'voice');
     // On the AI key of whoever's edit tipped it over, else an owner's or admin's (keys are each person's own).
     const history = [{ role: 'user', text: `The business is called ${ws.name}.${voice ? ` Their tone of voice so far: ${voice.text}` : ''}\n\n${brief}` }];
     let text = null;
+    // The edits teach the team's voice whoever made them, so an owner's or admin's key can pay for it, but only once an
+    // hour per team (above), so nobody can run up someone else's AI bill by sending edits.
     for (const id of [memberId, ...ws.members.filter((m) => m.role === 'owner' || m.role === 'admin').map((m) => m.id)]) {
       try {
         text = await aiRun(ws, id, LEARN_SYSTEM, history, 'profile');
@@ -428,10 +430,12 @@ Reply with JSON only: {"entries":[${ENTRY_SHAPE}],"seen":"one plain sentence on 
       }
     }
     if (text == null) {
-      for (const x of fresh) x.read = false; // nobody has a key yet: try again on the next edit
+      ws.hqLearnAt = 0; // nobody has a key yet: try again on the next edit
       save();
       return null;
     }
+    // Learned: these edits won't be sent again.
+    for (const x of fresh) x.read = true;
     const out = replyJson(text);
     const added = suggest(ws, { member: by }, (Array.isArray(out.entries) ? out.entries : []).filter((e) => ['voice', 'prefer', 'avoid', 'never'].includes(e?.kind)), (e) => ({ type: 'learned', why: cleanText(e.why || out.seen, 300) }));
     ws.hqLearned = { at: Date.now(), seen: cleanText(out.seen, 300), count: added.length };

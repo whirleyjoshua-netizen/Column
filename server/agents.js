@@ -906,7 +906,11 @@ export function agentsModule({ db, save, broadcast, rid, cleanText, readJson, se
       else if (f.type === 'number') out[f.id] = Number(String(v).replace(/[,\s]/g, '')) || 0;
       else if (f.type === 'checkbox') out[f.id] = v === true || /^(yes|true|1|done)$/i.test(String(v));
       else if (f.type === 'date') { if (isDay(v)) out[f.id] = v; else bad.push(k); }
-      else if (f.type === 'contact') { const c = Object.values(db.contacts).find((x) => x.wsId === cx.ws.id && (same(x.name, v) || same(x.email, v) || x.id === v)); if (c) out[f.id] = c.id; else bad.push(`${k} (save the contact first)`); }
+      else if (f.type === 'contact') {
+        // Members can't look in Contacts, so their agent can't either: only an owner's or admin's finds one by name.
+        const c = isAdminId(cx.ws.id, cx.memberId) ? Object.values(db.contacts).find((x) => x.wsId === cx.ws.id && (same(x.name, v) || same(x.email, v) || x.id === v)) : null;
+        if (c) out[f.id] = c.id; else bad.push(`${k} (${isAdminId(cx.ws.id, cx.memberId) ? 'save the contact first' : 'only owners and admins pick contacts'})`);
+      }
       else if (f.type === 'link') out[f.id] = (Array.isArray(v) ? v : [v]).map((x) => (db.records[x]?.wsId === cx.ws.id ? x : Object.values(db.records).find((r) => r.typeId === f.target && (same(recTitle(r.id), x) || Object.values(r.values).some((y) => typeof y === 'string' && y.includes('@') && same(y, x))))?.id)).filter(Boolean);
       else if (f.type === 'checklist') out[f.id] = { items: (Array.isArray(v) ? v : String(v).split('\n')).map((x) => (typeof x === 'object' ? { text: cleanText(x.text, 300), done: !!x.done } : { text: cleanText(String(x).replace(/^[-*\s[\]x]+/i, ''), 300) })).filter((x) => x.text).slice(0, 60) };
       else out[f.id] = String(v).slice(0, 8000);
