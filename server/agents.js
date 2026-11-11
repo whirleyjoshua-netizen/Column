@@ -73,7 +73,7 @@ export const AGENTS = {
       'Checks project health and says what’s slipping',
       'Closes jobs out with a completion report',
     ],
-    tools: ['list_projects', 'find_records', 'read_record', 'list_tasks', 'look_at_day', 'team_schedule', 'plan_route', 'find_docs', 'read_doc', 'create_project', 'create_record', 'update_record', 'log_note', 'book_visit', 'create_task', 'update_task', 'schedule_time', 'move_time', 'write_doc', 'draft_email', 'notify_me'],
+    tools: ['list_projects', 'find_records', 'read_record', 'list_tasks', 'look_at_day', 'team_schedule', 'plan_route', 'find_docs', 'read_doc', 'find_photos', 'look_at_photos', 'create_project', 'create_record', 'update_record', 'log_note', 'book_visit', 'create_task', 'update_task', 'schedule_time', 'move_time', 'write_doc', 'draft_email', 'notify_me'],
     workflows: [
       { key: 'kickoff', name: 'Project kickoff', ask: 'We just won this work. Organize it: the job (or project), the tasks in order with who and when, a materials list, visits, and a completion checklist:\n\n', paste: true },
       { key: 'prep', name: 'Job preparation', ask: 'Prepare for the jobs coming up in the next few days: a checklist for each, what to bring or order, and anything missing before we can start.' },
@@ -95,12 +95,14 @@ export const AGENTS = {
       'Wins back past customers and asks happy ones for reviews and referrals',
       'Reports which lead sources and campaigns bring jobs and money, and what to do about it',
     ],
-    tools: ['marketing_snapshot', 'find_customers', 'list_channels', 'social_posts', 'list_campaigns', 'find_records', 'read_record', 'find_contacts', 'find_docs', 'read_doc', 'list_tasks', 'look_at_day', 'create_campaign', 'make_list', 'create_task', 'update_task', 'schedule_time', 'write_doc', 'make_image', 'draft_social_post', 'draft_email_campaign', 'notify_me'],
+    tools: ['marketing_snapshot', 'find_customers', 'list_channels', 'social_posts', 'find_photos', 'look_at_photos', 'list_campaigns', 'find_records', 'read_record', 'find_contacts', 'find_docs', 'read_doc', 'list_tasks', 'look_at_day', 'create_campaign', 'make_list', 'create_task', 'update_task', 'schedule_time', 'write_doc', 'make_image', 'draft_social_post', 'draft_email_campaign', 'notify_me'],
     rules: [
       'Ground everything in the business: read the business profile (it comes with these instructions) and marketing_snapshot before planning. Write for their ideal customer, in their voice, about what makes them different. Generic marketing copy is a failure.',
       'Never invent reviews, testimonials, statistics, awards, prices, discounts or offers. Use an offer only if the person or the business profile gave it; otherwise propose one and say it needs their OK.',
       'Only market to people who can be contacted: skip anyone marked do not contact, and use email for people who gave an address. Texts need consent, so suggest them as tasks rather than sending.',
-      'Posts: fit each channel (short and local for Google, visual for Instagram, which needs a picture). Use real photos of their work when they have them (say so in the post) or make_image for a picture. Keep picture prompts free of words and logos, since image models misspell them. A week of posts beats one big post.',
+      'Posts: fit each channel (short and local for Google, visual for Instagram, which needs a picture). A week of posts beats one big post.',
+      'Pictures: their own photos first. find_photos, then look_at_photos to pick ones that show the work well (good light, a finished result, before and after). Make a picture with make_image only when there is no real photo that fits, and keep its prompt free of words and logos (image models misspell them).',
+      'A photo from a customer’s job: say which job in the post’s why, never name the customer or show their address in the post, and remind the person once to check the customer is happy for photos of their home to be shared.',
       'Emails to many people: one clear message and one ask, personal (use {First name}), short, from the person. Draft it with draft_email_campaign; it goes only when they say yes.',
       'Measure: tie every campaign to a goal you can count (leads, booked estimates, jobs won), and say how you will know if it worked.',
     ],
@@ -117,10 +119,11 @@ export const AGENTS = {
 };
 export const LEVELS = ['observe', 'prepare', 'execute', 'automate'];
 const KEEP_RUNS = 80;
+const PHOTO_MAX = 5_000_000; // what AI models take as a picture
 const MAX_PARTS = 4;
 const MAX_TURN_CHARS = 30_000;
 
-export function agentsModule({ db, save, broadcast, rid, cleanText, readJson, send, notify, replay, run: llmRun, sendEmail, textToDoc, PJ, isAdminId, localNow, tzOf, fmtMinutes, hasAi = () => true, POSTIZ = null, makeImageItem, itemFile, noContact = (c) => !!c.dne, canPicture = () => true }) {
+export function agentsModule({ db, save, broadcast, rid, cleanText, readJson, send, notify, replay, run: llmRun, sendEmail, textToDoc, PJ, isAdminId, localNow, tzOf, fmtMinutes, hasAi = () => true, POSTIZ = null, makeImageItem, itemFile, noContact = (c) => !!c.dne, canPicture = () => true, describeImages = async () => ({}) }) {
   db.agentRuns ||= {};
   db.agentPrefs ||= {};
   // Anything still running when the server stopped (a deploy, a restart) can't pick up where it was: say so.
@@ -489,6 +492,72 @@ export function agentsModule({ db, save, broadcast, rid, cleanText, readJson, se
       },
     },
 
+    // ---------- the business's own photos ----------
+    find_photos: {
+      kind: 'read', label: (a) => (a.query || a.job ? `Looked for photos${a.query ? ` of “${words(a.query, 40)}”` : ''}${a.job ? ` from ${recTitle(a.job) || words(a.job, 40)}` : ''}` : 'Looked through your photos'),
+      description: 'The business’s own photos in Kloomie that the person can see: in Folders, in Stacks (each campaign has one), on jobs (their Photos), and dropped into chat. Filter by words in the name or where it is (query), where (folders, stacks, jobs, chat), a job or record (id or name), or how recent (days). Each comes with where it is, its job if it has one, and what it shows if it has been looked at before. Use look_at_photos to see the ones that might fit. Real photos of real work beat made-up pictures.',
+      parameters: { type: 'object', properties: { query: { type: 'string' }, where: { type: 'string', enum: ['folders', 'stacks', 'jobs', 'chat', 'all'] }, job: { type: 'string' }, days: { type: 'number' } } },
+      async run(cx, a) {
+        const s = await cx.state();
+        const onJob = new Map(); // photo id → the record it's on
+        for (const r of Object.values(db.records)) {
+          if (r.wsId !== cx.ws.id || !db.projects[r.projectId] || !PJ.sees(db.projects[r.projectId], cx.memberId)) continue;
+          const t = typeOfRec(r);
+          for (const f of t?.fields || []) if (f.type === 'files') for (const id of r.values[f.id] || []) onJob.set(id, r);
+        }
+        const dirName = (id) => { const names = []; for (let d = (cx.ws.dirs || []).find((x) => x.id === id), i = 0; d && i < 10; d = (cx.ws.dirs || []).find((x) => x.id === d.parentId), i++) names.unshift(d.name); return names.join(' / '); };
+        const jobRec = a.job ? (db.records[a.job]?.wsId === cx.ws.id ? db.records[a.job] : Object.values(db.records).find((r) => r.wsId === cx.ws.id && same(recTitle(r.id), a.job))) : null;
+        if (a.job && !jobRec) throw new Error(`No job or record called ${a.job}.`);
+        const q = String(a.query || '').toLowerCase();
+        const since = Number(a.days) > 0 ? Date.now() - Number(a.days) * 864e5 : 0;
+        const out = [];
+        for (const it of s.items) {
+          if (it.type !== 'file' || !/^image\//.test(it.mime || '') || (it.createdAt || 0) < since) continue;
+          const r = onJob.get(it.id);
+          const where = r ? 'jobs' : it.dirId ? 'folders' : it.channelId ? 'chat' : 'stacks';
+          if (a.where && a.where !== 'all' && a.where !== where) continue;
+          if (jobRec && r?.id !== jobRec.id) continue;
+          const place = r ? `Photos on ${recTitle(r.id)}` : it.dirId ? `Folder: ${dirName(it.dirId)}` : it.channelId ? `Chat: #${cx.ws.channels.find((c) => c.id === it.channelId)?.name || 'feed'}` : it.stackId ? `Stack: ${cx.ws.stacks.find((x) => x.id === it.stackId)?.name || 'a stack'}` : 'Everything';
+          const seen = db.items[it.id]?.seen?.text;
+          if (q && !`${it.name} ${place} ${seen || ''}`.toLowerCase().includes(q)) continue;
+          const kind = it.mime.replace('image/', '');
+          out.push({ id: it.id, name: it.name, where: place, ...(r ? { job: { id: r.id, name: recTitle(r.id) } } : {}), added: new Date(it.createdAt).toISOString().slice(0, 10), by: it.by, ...(seen ? { shows: seen } : {}), ...(!/^(jpeg|jpg|png|webp|gif)$/.test(kind) ? { note: `${kind.toUpperCase()} can’t be posted or looked at; ask for a JPG or PNG` } : it.size > PHOTO_MAX ? { note: 'too large to look at (over 5 MB); it can still be posted' } : {}) });
+        }
+        out.sort((x, y) => y.added.localeCompare(x.added));
+        return { count: out.length, photos: out.slice(0, 60), more: out.length > 60 ? out.length - 60 : undefined, none: out.length ? undefined : 'No photos found. Suggest the person add photos of their work (to a job’s Photos, a Folder or a Stack); make a picture only if they want one now.' };
+      },
+    },
+    look_at_photos: {
+      kind: 'read', label: (a) => `Looked at ${(a.ids || []).length} photo${(a.ids || []).length === 1 ? '' : 's'}`,
+      description: 'Look at up to 6 of the business’s photos (ids from find_photos) and get what each shows, how good it is, and what it would suit (a before or after shot, a detail, a team photo; good light or not). What was seen is remembered, so looking again costs nothing.',
+      parameters: { type: 'object', properties: { ids: { type: 'array', items: { type: 'string' } } }, required: ['ids'] },
+      async run(cx, a) {
+        const s = await cx.state();
+        const mine = new Set(s.items.map((it) => it.id));
+        const ids = [...new Set(Array.isArray(a.ids) ? a.ids : [])].filter((id) => mine.has(id) && db.items[id]?.type === 'file' && /^image\//.test(db.items[id].mime || '')).slice(0, 6);
+        if (!ids.length) throw new Error('None of those are photos you can see. Use ids from find_photos.');
+        const out = {};
+        const fresh = [];
+        for (const id of ids) {
+          const it = db.items[id];
+          if (it.seen?.text) out[id] = it.seen.text;
+          else if (!/^image\/(jpeg|png|webp|gif)$/.test(it.mime)) out[id] = `Can’t be looked at (${it.mime.replace('image/', '').toUpperCase()}).`;
+          else if (it.size > PHOTO_MAX) out[id] = 'Too large to look at (over 5 MB).';
+          else fresh.push(it);
+        }
+        if (fresh.length) {
+          const seen = await describeImages(cx.ws, cx.memberId, fresh);
+          for (const it of fresh) {
+            const text = cleanText(seen[it.id] || '', 600);
+            if (!text) { out[it.id] = 'Couldn’t tell what this shows.'; continue; }
+            it.seen = { text, at: Date.now() };
+            out[it.id] = text;
+          }
+          save();
+        }
+        return { photos: ids.map((id) => ({ id, name: db.items[id].name, shows: out[id] })) };
+      },
+    },
     // ---------- marketing ----------
     marketing_snapshot: {
       kind: 'read', label: (a) => `Looked at the last ${Number(a.days) > 0 ? Math.round(Number(a.days)) : 90} days of marketing`,

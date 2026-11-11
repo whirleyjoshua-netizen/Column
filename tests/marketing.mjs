@@ -34,6 +34,13 @@ const SCRIPTS = {
     'Campaign set up; a post and an email are waiting for you.',
   ][n],
   'gemini picture': (n) => [[['make_image', { prompt: 'A storefront with awnings', title: 'Storefront', shape: 'landscape' }], ['draft_social_post', { channels: ['Facebook'], text: 'Look at this install!\n\n[Photo: the Ortiz shutters]' }]], 'Made it.'][n],
+  'photo post': (n) => [
+    [['find_photos', {}]],
+    [['look_at_photos', { ids: ids.photos }]],
+    [['look_at_photos', { ids: ids.photos }], ['draft_social_post', { channels: ['Facebook'], text: 'Fresh shutters in Henderson: bright, clean and cool.', image_id: ids.jobPhoto, why: 'The Ortiz shutters job (after shot)' }]],
+    'Drafted a post with the Ortiz after shot.',
+  ][n],
+  'job photos only': (n) => [[['find_photos', { where: 'jobs' }], ['find_photos', { job: 'Ortiz shutters' }], ['find_photos', { query: 'kitchen' }]], 'Done.'][n],
   'claude only picture': (n) => [[['make_image', { prompt: 'Anything' }]], 'Could not.'][n],
 };
 const fake = http.createServer((req, res) => {
@@ -80,6 +87,12 @@ const fake = http.createServer((req, res) => {
     const msgs = j.messages;
     seen.asked.push({ sys, msgs: JSON.stringify(msgs), tools: (j.tools || []).map((t) => t.name) });
     const reply = (content, stop = 'end_turn') => out(200, { id: 'm', type: 'message', role: 'assistant', model: 'claude-test', content, stop_reason: stop, stop_sequence: null, usage: { input_tokens: 1, output_tokens: 1 } });
+    if (sys.includes('describe a small business’s own photos')) {
+      const blocks = msgs[0].content;
+      seen.vision = (seen.vision || 0) + 1;
+      seen.visionImages = blocks.filter((b) => b.type === 'image').length;
+      return reply([{ type: 'text', text: JSON.stringify({ photos: blocks.filter((b) => b.type === 'image').map((_, i) => ({ n: i + 1, text: i === 0 ? 'After shot: white plantation shutters in a bright living room, good light. A house number is readable through the window.' : 'In-progress shot of a kitchen window with a tape measure, a bit dark.' })) }) }]);
+    }
     const lastUser = [...msgs].reverse().find((m) => m.role === 'user' && typeof m.content === 'string');
     const key = Object.keys(SCRIPTS).find((k) => text(lastUser?.content).toLowerCase().includes(k));
     const n = msgs.length - 1 - msgs.lastIndexOf(lastUser);
@@ -104,9 +117,11 @@ const t = Date.now();
 try {
   today = new Date().toLocaleDateString('en-CA');
   let r = await call()('POST', '/auth', { mode: 'create', workspace: 'Premier ' + t, name: 'Ada', email: `ada${t}@t.test`, password: 'longenough1', device: 'Mac', deviceId: 'd1' });
-  const ada = call(r.body.token);
+  const adaTok = r.body.token;
+  const ada = call(adaTok);
   const code = (await ada('GET', '/state')).body.workspace.inviteCode;
-  const ben = call((await call()('POST', '/auth', { mode: 'join', workspace: 'Premier ' + t, code, name: 'Ben', email: `ben${t}@t.test`, password: 'longenough2', device: 'Mac', deviceId: 'd2' })).body.token);
+  const benTok = (await call()('POST', '/auth', { mode: 'join', workspace: 'Premier ' + t, code, name: 'Ben', email: `ben${t}@t.test`, password: 'longenough2', device: 'Mac', deviceId: 'd2' })).body.token;
+  const ben = call(benTok);
   await ada('PUT', '/ai/keys/anthropic', { key: 'sk-ant-test-key-1234567890' });
   await ada('PUT', '/ai/keys/openai', { key: 'sk-openai-test-key-1234567890' });
   await ada('PATCH', '/workspace', { tools: { projects: true } });
@@ -208,6 +223,40 @@ try {
   r = await ada('POST', `/agents/runs/${x.id}/steps`, { do: 'approve', id: em.id, args: { subject: 'A quick check-in' } });
   const e2 = steps(r.body).find((y) => y.id === em.id);
   ok(e2.status === 'failed' && /Confirm your email|Connect Outlook or Gmail/.test(e2.error), 'approving goes through the usual checks (a confirmed email, a connected mailbox) and says what’s missing: ' + e2.error);
+
+  // ----- The business's own photos -----
+  const up = async (tok, name, mime, q = '') => (await fetch(B + `/api/upload?name=${encodeURIComponent(name)}&type=${encodeURIComponent(mime)}${q}`, { method: 'POST', headers: { authorization: 'Bearer ' + tok }, body: PNG })).json();
+  const dir = (await ada('POST', '/dirs', { name: 'Marketing photos' })).body;
+  const benDir = (await ben('POST', '/dirs', { name: 'Ben private', private: true })).body;
+  const camp1 = (await ada('GET', '/state')).body.campaigns.find((c) => c.name === 'Fall win-back');
+  const inFolder = await up(adaTok, 'kitchen-in-progress.jpg', 'image/jpeg', `&dirId=${dir.id}`);
+  const inStack = await up(adaTok, 'team-photo.png', 'image/png', `&stackId=${camp1.stackId}`);
+  const onJob = await up(adaTok, 'ortiz-after.jpg', 'image/jpeg');
+  await ada('PATCH', '/records/' + samJob.id, { values: { [jt.fields.find((f) => f.key === 'photos').id]: [onJob.id] } });
+  const heic = await up(adaTok, 'IMG_2041.HEIC', 'image/heic');
+  const benOnly = await up(benTok, 'ben-secret.jpg', 'image/jpeg', `&dirId=${benDir.id}`);
+  ids.photos = [onJob.id, inFolder.id];
+  ids.jobPhoto = onJob.id;
+  await ada('PUT', '/ai/keys/openai', { key: 'sk-openai-test-key-1234567890' });
+  seen.asked.length = 0;
+  r = await ada('POST', '/agents/runs', { agent: 'marketing', ask: 'photo post' });
+  x = await wait(ada, r.body.id);
+  const fp = seen.asked.find((q) => q.msgs.includes('ortiz-after.jpg'))?.msgs || '';
+  ok(fp.includes('Photos on Ortiz shutters') && fp.includes('Folder: Marketing photos') && fp.includes('Stack: Fall win-back') && fp.includes('team-photo.png'), 'find_photos finds photos on jobs, in Folders and in a campaign’s Stack, and says where each is');
+  ok(fp.includes('HEIC can’t be posted') && !fp.includes('ben-secret'), 'an iPhone HEIC is flagged as not postable, and Ben’s private folder isn’t visible to Ada’s agent');
+  ok(seen.vision === 1 && seen.visionImages === 2, 'look_at_photos shows the two photos to Ada’s AI, as pictures');
+  ok(fp.includes('After shot: white plantation shutters') === false && seen.asked.some((q) => q.msgs.includes('After shot: white plantation shutters') && q.msgs.includes('house number')), 'and the agent hears what each shows, including what shouldn’t be posted');
+  const ps = steps(x).find((y) => y.tool === 'draft_social_post');
+  ok(ps.status === 'proposed' && ps.args.image_id === onJob.id && /Ortiz shutters/.test(ps.why), 'it drafts a post with the real job photo, saying which job');
+  ok(steps(x).filter((y) => y.tool === 'look_at_photos').length === 2 && seen.vision === 1, 'looking at the same photos again uses what was already seen (no second AI call)');
+  const msys2 = seen.asked.find((q) => q.sys.includes('You are the Marketing Manager')).sys;
+  ok(msys2.includes('their own photos first') && msys2.includes('check the customer is happy'), 'it’s told to use their own photos first, and to check with the customer');
+  r = await ada('POST', '/agents/runs', { agent: 'marketing', ask: 'job photos only' });
+  x = await wait(ada, r.body.id);
+  const outs = seen.asked.filter((q) => q.msgs.includes('job photos only')).at(-1).msgs;
+  ok(outs.includes('ortiz-after.jpg') && (outs.match(/kitchen-in-progress/g) || []).length >= 1, 'filters: on jobs, from one job, and by words (a photo’s name or what it was seen to show)');
+  ok(steps(x).every((y) => y.status === 'done'), 'all three searches work');
+  void heic; void inStack; void benOnly;
 
   // ----- Pictures on Gemini; a Claude-only team is told -----
   await ada('DELETE', '/ai/keys/openai');

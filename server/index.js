@@ -8301,6 +8301,27 @@ async function makeImageItem(ws, memberId, { prompt, shape, name, by }) {
   const me = ws.members.find((m) => m.id === memberId);
   return addItem({ ...baseItem({ wsId: ws.id, member: by || me?.name, memberId, device: 'Kloomie', deviceId: null }, { type: 'file', name: file, size: out.bytes.length, mime: out.mime }), id, pinned: true, madeWith: { provider: out.provider, model: out.model, prompt: text.slice(0, 1000) } });
 }
+// What the business's own photos show, for the Marketing Manager to pick from: one look by the person's own AI
+// (all three providers see pictures), in plain words, flagging what shouldn't be posted. id → description.
+async function describeImages(ws, memberId, items) {
+  const ai = aiOf(ws.id, memberId);
+  const use = aiUse(ai);
+  if (!use) throw Object.assign(new Error('Add your AI key in Settings → AI to look at photos.'), { status: 400 });
+  const files = [];
+  for (const it of items) files.push({ name: it.name, mime: it.mime, data: (await fsp.readFile(path.join(FILES_DIR, it.id))).toString('base64') });
+  const system = 'You describe a small business’s own photos so its Marketing Manager can pick ones for social posts. For each photo, in order: what it shows in one or two plain, specific sentences (the room, the product, the finish, the setting); whether it looks like a before, after, in-progress, detail or team shot; and how good it is to post (light, focus, clutter). Flag anything that shouldn’t be posted: a readable address or house number, a car plate, people’s faces, personal photos or papers, a customer’s name. Don’t guess at things you can’t see. Reply with JSON only: {"photos":[{"n":1,"text":""}]}';
+  let out;
+  try {
+    out = await llms[use.provider].run({ key: unseal(ai.keys[use.provider].sealed).key, model: use.model, system, history: [{ role: 'user', text: `${items.length} photo${items.length === 1 ? '' : 's'}, in this order: ${items.map((it, i) => `${i + 1}. ${it.name}`).join('; ')}`, files }], tools: [], web: false, exec: () => Promise.reject(new Error('No tools')) });
+  } catch (e) {
+    console.error('Looking at photos failed:', e.message);
+    throw Object.assign(new Error(llmError(e)), { status: 502 });
+  }
+  const j = replyJson(out.text || '');
+  const res = {};
+  for (const x of Array.isArray(j.photos) ? j.photos : []) { const it = items[Number(x?.n) - 1]; if (it) res[it.id] = clipText(String(x.text || '').trim(), 600); }
+  return res;
+}
 // A picture in Kloomie, for a post: only one this person can see.
 async function itemFile(ws, memberId, id) {
   const it = db.items[id];
@@ -8308,7 +8329,7 @@ async function itemFile(ws, memberId, id) {
   if (!it || it.wsId !== ws.id || it.type !== 'file' || !/^image\//.test(it.mime || '') || !canSee({ wsId: ws.id, memberId, role: me?.role }, 'item', it)) throw badRequest('That picture isn’t in Kloomie any more.');
   return { bytes: await fsp.readFile(path.join(FILES_DIR, it.id)), name: it.name, mime: it.mime };
 }
-const AGENTS_M = agentsModule({ db, save, broadcast, rid, cleanText, readJson, send, notify, replay: replayAs, run: agentLlm, sendEmail: agentEmail, textToDoc, PJ, isAdminId, localNow, tzOf, fmtMinutes, hasAi: (wsId, memberId) => !!aiUse(aiOf(wsId, memberId)), POSTIZ, makeImageItem, itemFile, noContact, canPicture: (wsId, memberId) => ['openai', 'gemini'].some((k) => !!aiOf(wsId, memberId).keys?.[k]?.sealed) });
+const AGENTS_M = agentsModule({ db, save, broadcast, rid, cleanText, readJson, send, notify, replay: replayAs, run: agentLlm, sendEmail: agentEmail, textToDoc, PJ, isAdminId, localNow, tzOf, fmtMinutes, hasAi: (wsId, memberId) => !!aiUse(aiOf(wsId, memberId)), POSTIZ, makeImageItem, itemFile, noContact, describeImages, canPicture: (wsId, memberId) => ['openai', 'gemini'].some((k) => !!aiOf(wsId, memberId).keys?.[k]?.sealed) });
 const GH = githubModule({ db, save, broadcast, rid, cleanText, readJson, send, seal, unseal, isAdmin, PJ, sees: (p, mid) => PJ.sees(p, mid), publicUrl: PUBLIC_URL });
 // Daily standups on a project (standup.js): a blocker becomes a task for the project lead.
 const STANDUP = standupModule({ db, save, broadcast, rid, cleanText, readJson, send, notify, sees: (p, mid) => PJ.sees(p, mid), teamDay: (wsId) => teamDay(wsId),
