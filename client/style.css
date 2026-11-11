@@ -2467,3 +2467,28 @@ button.hq-entry:hover { background: var(--card-hover); }
 .su-trades h4 { margin: 4px 0 6px; font-size: 13px; color: var(--muted); }
 .su-cal { display: flex; flex-wrap: wrap; gap: 8px; }
 .su-wrap .linkish { background: none; border: 0; padding: 0; color: var(--accent); font: inherit; cursor: pointer; }
+/* Leads from websites, funnels & forms (Settings → Connections) */
+.lead-sec h4 { margin: 16px 0 6px; font-size: 13px; }
+.lead-sec .lead-row { display: flex; grid-template-columns: none; border: 0; border-left: 0; padding: 0; background: none; cursor: default; flex-direction: column; align-items: stretch; text-align: left; gap: 4px; margin: 10px 0; }
+.lead-sec .lead-row .int-secret { align-self: flex-start; max-width: 100%; }
+.lead-sec .lead-row code { overflow-wrap: anywhere; }
+.lead-sec .lead-row:hover { background: none; }
+.lead-sec select { max-width: 100%; }
+.lead-guide ol { margin: 8px 0; padding-left: 20px; font-size: 13px; display: flex; flex-direction: column; gap: 4px; }
+.lead-log { display: flex; flex-direction: column; gap: 4px; }
+.lead-entry { border: 1px solid var(--line); border-radius: 9px; padding: 2px 8px 4px; }
+.lead-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; width: 100%; background: none; border: 0; padding: 6px 0 2px; color: var(--text); text-align: left; cursor: pointer; font-size: 13px; }
+.lead-res { font-weight: 600; font-size: 12px; }
+.lead-entry.added .lead-res { color: var(--ok, #2f9e44); }
+.lead-entry.refused .lead-res, .lead-entry.spam .lead-res { color: var(--danger, #e03131); }
+.lead-entry.test .lead-res { color: var(--accent); }
+.lead-who { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lead-head small { color: var(--muted); font-size: 11.5px; }
+.lead-fields { overflow-x: auto; padding: 4px 0; }
+.lead-fields table { border-collapse: collapse; width: 100%; font-size: 12px; }
+.lead-fields th, .lead-fields td { text-align: left; padding: 3px 6px; border-bottom: 1px solid var(--line); vertical-align: top; overflow-wrap: anywhere; }
+.lead-fields th { color: var(--muted); font-weight: 600; }
+.lead-fields tr.off td { color: var(--muted); }
+.lead-map-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 10px; padding: 6px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
+.lead-map-row span { min-width: 0; overflow-wrap: anywhere; }
+.lead-map-row small { color: var(--muted); }

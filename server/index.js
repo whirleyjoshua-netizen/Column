@@ -8434,6 +8434,8 @@ const server = http.createServer(async (req, res) => {
   if (url.pathname === '/.well-known/microsoft-identity-association.json' && process.env.MS_CLIENT_ID) {
     return send(res, 200, JSON.stringify({ associatedApplications: [{ applicationId: process.env.MS_CLIENT_ID }] }), { 'Content-Type': 'application/json', 'Cache-Control': 'public, max-age=3600' });
   }
+  // The website snippet (leads.js): a script other sites load, so it's answered on every address before any move.
+  if (url.pathname === '/k.js' && (req.method === 'GET' || req.method === 'HEAD')) return LEADS.snippetJs(req, res);
   const moved = movedTo(req, url) || siteMove(req, url);
   if (moved) {
     // Temporary (302/307, not remembered by browsers), so the move can be undone; 307 keeps a form's POST a POST.

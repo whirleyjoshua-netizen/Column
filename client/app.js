@@ -11159,27 +11159,116 @@
   }
   // Settings → Connections: the team's own Stripe account, so customers can pay invoices by card.
   // Leads from the website: a form page of the team's own, to link to or embed, and a lead webhook for other tools.
+  // How to connect each kind of website, funnel or form tool: the steps, with this team's own snippet, address or link
+  // filled in. "snippet" = the one-line website script, "hook" = the lead webhook, "form" = the form link, "embed" =
+  // the form embedded, "zap" = through Zapier.
+  const LEAD_GUIDES = [
+    ['site', 'My own website (any)', 'snippet', ['Copy the line below.', 'Paste it into your site’s code just before </body>, on every page with a form (most site builders have a “custom code”, “footer code” or “scripts” setting for this).', 'Send your contact form once yourself, then check Recent leads below.'], 'Your form keeps working exactly as before; Kloomie gets a copy of each one sent. Forms with a password are never copied, and card numbers and similar fields are skipped. To leave one form out, add data-kloomie-ignore to its <form> tag.'],
+    ['wordpress', 'WordPress (Contact Form 7, WPForms, Gravity Forms, Elementor…)', 'snippet', ['Copy the line below.', 'Easiest: install a header-and-footer plugin such as WPCode, add a new snippet in the Footer, paste the line and save. (Or paste it before </body> in your theme’s footer.php.)', 'Send one of your forms yourself, then check Recent leads below.'], 'Works with whatever form plugin you use, with no plugin settings to change. Elementor Pro forms can also use the lead webhook: Actions After Submit → Webhook → paste the webhook address.'],
+    ['wix', 'Wix', 'snippet', ['Copy the line below.', 'In Wix: Settings → Custom Code (under Advanced) → + Add Custom Code. Paste it, choose All pages, place it in Body – end, and Apply. (Custom code needs a paid Wix plan with a connected domain.)', 'Send your form yourself, then check Recent leads below.'], 'If your Wix form doesn’t show up in Recent leads, use the Kloomie form instead: add an Embed → Embed HTML element and paste the “Embed the Kloomie form” code. Or connect Wix Forms through Zapier.'],
+    ['squarespace', 'Squarespace', 'snippet', ['Copy the line below.', 'In Squarespace: Settings → Advanced → Code Injection → Footer. Paste it and Save. (Code Injection needs a Business plan or higher.)', 'Send your form yourself, then check Recent leads below.'], 'On a Personal plan, use a Code Block with the “Embed the Kloomie form” code, or connect your form’s Storage to Zapier.'],
+    ['webflow', 'Webflow', 'hook', ['In Webflow: Site settings → Integrations → Webhooks → Add webhook.', 'Trigger type: Form submission. Webhook URL: paste the address below. Save.', 'Publish the site, send your form once, then check Recent leads below.'], 'Or paste the website snippet in Site settings → Custom code → Footer code (needs a paid site plan).'],
+    ['shopify', 'Shopify', 'snippet', ['Copy the line below.', 'In Shopify: Online Store → Themes → … → Edit code → layout/theme.liquid. Paste the line just before </body> and Save.', 'Send your store’s contact form once, then check Recent leads below.'], ''],
+    ['godaddy', 'GoDaddy Website Builder', 'embed', ['In the editor, add a section → HTML (or Embed).', 'Paste the “Embed the Kloomie form” code below.', 'Publish, send the form once, then check Recent leads below.'], 'GoDaddy’s own contact form can’t send anywhere else, so use the Kloomie form in its place.'],
+    ['clickfunnels', 'ClickFunnels', 'hook', ['In ClickFunnels 2.0: open your workspace Settings → Webhooks (or Automations → a workflow triggered by “Opt-in form submitted” → Webhook step).', 'Add a new endpoint and paste the webhook address below. Pick the contact or form-submission event and save.', 'Opt in on your funnel once, then check Recent leads below.'], 'Older ClickFunnels 1.0 accounts: Funnel → Settings → Webhooks → New webhook, event “contact.created”.'],
+    ['highlevel', 'GoHighLevel (LeadConnector)', 'hook', ['In HighLevel: Automation → Workflows → Create workflow.', 'Trigger: Form Submitted (pick your form). Action: Webhook → method POST → URL: paste the address below.', 'Save and publish the workflow, submit the form once, then check Recent leads below.'], 'The same works for Survey Submitted, Appointment booked or Facebook Lead Form Submitted triggers.'],
+    ['leadpages', 'Leadpages', 'snippet', ['Copy the line below.', 'In the Leadpages editor: Settings (gear) → Tracking Code → paste it in the body/footer box. Save and publish.', 'Opt in once, then check Recent leads below.'], 'Or connect your Leadpages form through Zapier.'],
+    ['unbounce', 'Unbounce', 'hook', ['Open the page → Integrations tab → Webhooks → Add a webhook.', 'Paste the webhook address below as the URL. Save.', 'Republish if needed, submit the form once, then check Recent leads below.'], ''],
+    ['kartra', 'Kartra, Systeme.io and other funnel builders', 'hook', ['Look for “Webhook”, “Send to URL”, “Integrations” or “Automation → HTTP request” in the form’s or funnel’s settings.', 'Paste the webhook address below and choose POST.', 'Submit the form once, then check Recent leads below.'], 'No webhook option? Most of them connect to Zapier: use the Zapier steps.'],
+    ['typeform', 'Typeform', 'hook', ['Open the form → Connect → Webhooks → Add a webhook.', 'Paste the webhook address below, save, and switch the webhook on.', 'Use “Send test request” in Typeform, then check Recent leads below.'], 'Kloomie reads Typeform’s answers by their question: email and phone questions are picked up on their own; use Match fields for the rest.'],
+    ['jotform', 'Jotform', 'hook', ['Open the form → Settings → Integrations → search “Webhooks”.', 'Paste the webhook address below and Complete Integration.', 'Submit the form once, then check Recent leads below.'], ''],
+    ['tally', 'Tally', 'hook', ['Open the form → Integrations → Webhooks → Connect.', 'Paste the webhook address below and save.', 'Submit the form once, then check Recent leads below.'], ''],
+    ['google', 'Google Forms', 'zap', ['In Zapier, make a Zap: trigger Google Forms → New Form Response.', 'Action: Kloomie → Create or update contact (use Kloomie in Zapier from Settings → Connect other apps).', 'Match name, email and phone, test it, and turn the Zap on.'], 'Google Forms can’t send to a web address on its own, so Zapier carries it.'],
+    ['facebook', 'Facebook & Instagram lead ads', 'zap', ['In Zapier, make a Zap: trigger Facebook Lead Ads → New Lead (pick your page and form).', 'Action: Kloomie → Create or update contact.', 'Match the fields, test it, and turn the Zap on.'], 'Using GoHighLevel? Its “Facebook Lead Form Submitted” trigger plus a Webhook action works too.'],
+    ['calendly', 'Calendly and booking tools', 'zap', ['In Zapier, make a Zap: trigger Calendly → Invitee Created.', 'Action: Kloomie → Create or update contact.', 'Match name, email and phone, test it, and turn the Zap on.'], 'Booking tools with their own webhooks (Acuity, Cal.com) can post straight to the webhook address instead.'],
+    ['other', 'Anything else (Zapier, Make, a developer)', 'hook', ['If the tool can send to a URL (a webhook): paste the address below and choose POST.', 'If not: connect it to Zapier or Make and use Kloomie’s Create contact action, or post to the webhook address from there.', 'Send one, then check Recent leads below.'], 'The webhook takes JSON, a form or multipart, nested or flat, in any field names; Match fields sorts out the rest. Developers: see /developers.'],
+  ];
+  const LEAD_TO = { name: 'Name', first: 'First name', last: 'Last name', email: 'Email', phone: 'Phone', company: 'Company', address: 'Address', city: 'City', message: 'Message', source: 'Source', note: 'Note (as “field: value”)', ignore: 'Leave out' };
+  const LEAD_VIA = { form: 'Kloomie form', webhook: 'Webhook', snippet: 'Website', test: 'Test' };
+  const LEAD_RESULT = { added: 'New contact', updated: 'Updated contact', refused: 'Not added', spam: 'Spam, kept out', test: 'Test, not saved' };
+
   function leadSection() {
-    const sec = h('section', { class: 'lead-sec' }, h('h3', {}, 'Lead form & lead webhook'));
+    const sec = h('section', { class: 'lead-sec' }, h('h3', {}, 'Leads from websites, funnels & forms'));
     api('GET', '/lead-capture').then((x) => {
       const redo = () => sec.replaceWith(leadSection());
       const save = (body) => api('PUT', '/lead-capture', body).then(redo).catch((e) => toast(e.message));
-      const hint = h('p', { class: 'day-hint' }, 'New leads straight into Contacts, from your website or any tool. Each one tells owners and admins, and sets off your automations (start a campaign for every new lead, for example). Someone already in Contacts with the same email or phone is updated instead of added twice.');
+      const hint = h('p', { class: 'day-hint' }, 'New leads straight into Contacts from your website, funnels and form tools. Each one tells owners and admins, and sets off your automations (start a campaign for every new lead, for example). Someone already in Contacts with the same email or phone is updated instead of added twice.');
       if (!x.on) return sec.append(hint, h('div', { class: 'btns' }, h('button', { class: 'btn primary-btn', onclick: () => save({ on: true }) }, 'Turn on')));
       const embed = `<iframe src="${x.formUrl}?embed=1" style="width:100%;max-width:560px;height:640px;border:0" title="Contact us"></iframe>`;
       const row = (label, value, note) => h('div', { class: 'lead-row' }, h('b', {}, label), h('div', { class: 'int-secret' }, h('code', {}, value), h('button', { class: 'btn small', onclick: () => { copyText(value); toast('Copied'); } }, 'Copy')), note ? h('small', { class: 'day-hint' }, note) : null);
+      const pieces = {
+        snippet: () => row('Website snippet', x.snippet, 'One line for your site. Every form sent there also lands here.'),
+        hook: () => row('Lead webhook address', x.webhookUrl, 'For tools that can send to a URL. JSON, a form or multipart; any field names.'),
+        embed: () => row('Embed the Kloomie form', embed, 'Paste where the form should go on your site.'),
+        form: () => row('Kloomie form link', x.formUrl, h('span', {}, 'Share it, or link your site’s Contact button to it. ', h('a', { href: x.formUrl, target: '_blank', rel: 'noopener' }, 'Open it'))),
+        zap: () => h('div', { class: 'btns' }, h('button', { class: 'btn small', onclick: () => window.open('https://zapier.com/developer/public-invite/249576/3ce3c0fb9bd4e67c0b2ba97a95b5fdf1/', '_blank', 'noopener') }, 'Use Kloomie in Zapier')),
+      };
+
+      // 1. Connect: pick the tool, see its steps.
+      const pick = h('select', { 'aria-label': 'Connect a website or tool' }, h('option', { value: '' }, 'Choose your website or tool…'), LEAD_GUIDES.map(([k, label]) => h('option', { value: k }, label)));
+      const guide = h('div', { class: 'lead-guide' });
+      const showGuide = (k) => {
+        guide.innerHTML = '';
+        const g = LEAD_GUIDES.find((y) => y[0] === k);
+        try { store.set('leadGuide', k || ''); } catch {}
+        if (!g) return;
+        const [, label, kind, steps, tip] = g;
+        guide.append(h('ol', {}, steps.map((t) => h('li', {}, t))), pieces[kind](), tip ? h('p', { class: 'day-hint' }, tip) : null);
+      };
+      pick.addEventListener('change', () => showGuide(pick.value));
+      pick.value = store.get('leadGuide', '') || '';
+      showGuide(pick.value);
+
+      // 2. Recent leads, with a test.
+      const logBox = h('div', { class: 'lead-log' });
+      const drawLog = (log) => {
+        logBox.innerHTML = '';
+        if (!log.length) return logBox.append(h('p', { class: 'day-hint' }, 'Nothing yet. Send your form once, or press Send a test lead.'));
+        for (const e of log) {
+          const open = h('div', { class: 'lead-fields hidden' }, e.error ? h('p', { class: 'err' }, e.error) : null,
+            e.fields?.length ? h('table', {}, h('tr', {}, h('th', {}, 'Field'), h('th', {}, 'Value'), h('th', {}, 'Went to')), e.fields.map((f) => h('tr', { class: f.to === 'ignore' ? 'off' : null }, h('td', {}, f.k), h('td', {}, f.v), h('td', {}, LEAD_TO[f.to] || f.to)))) : h('p', { class: 'day-hint' }, 'No fields.'));
+          logBox.append(h('div', { class: 'lead-entry ' + e.result },
+            h('button', { class: 'lead-head', type: 'button', onclick: () => open.classList.toggle('hidden') },
+              h('span', { class: 'lead-res' }, LEAD_RESULT[e.result] || e.result), h('span', { class: 'lead-who' }, e.who || '—'),
+              h('small', {}, [LEAD_VIA[e.via] || e.via, e.from, ago(e.at)].filter(Boolean).join(' · '))),
+            e.contactId ? h('button', { class: 'link', type: 'button', onclick: () => { $('#settings').classList.add('hidden'); goTo('contact:' + e.contactId); } }, 'Open contact') : null, open));
+        }
+      };
+      drawLog(x.log || []);
+      const testBtn = h('button', { class: 'btn small', onclick: async () => {
+        try { const r = await api('POST', '/lead-capture/test', {}); drawLog(r.log); toast(r.ok ? 'Test read fine. Open it below to see where each field went.' : 'The test had no email or phone.'); } catch (e) { toast(e.message); }
+      } }, 'Send a test lead');
+      const clearBtn = h('button', { class: 'btn small', onclick: async () => { try { drawLog((await api('DELETE', '/lead-capture/log')).log); } catch (e) { toast(e.message); } } }, 'Clear');
+
+      // 3. Match fields: every field name seen so far, and where it goes.
+      const seen = Object.entries(x.seen || {}).sort((a, b) => b[1].at - a[1].at);
+      const auto = {};
+      for (const e of x.log || []) for (const f of e.fields || []) if (!(f.k in auto)) auto[f.k] = f.to;
+      const sels = new Map();
+      const mapRows = seen.map(([k, info]) => {
+        const sel = h('select', {}, h('option', { value: '' }, `Automatic (${LEAD_TO[auto[k]] || 'note'})`), x.targets.map((t) => h('option', { value: t }, LEAD_TO[t])));
+        sel.value = x.map?.[k] || '';
+        sels.set(k, sel);
+        return h('div', { class: 'lead-map-row' }, h('span', {}, h('b', {}, k), info.ex ? h('small', {}, ' e.g. ' + info.ex) : null), sel);
+      });
+      const saveMap = h('button', { class: 'btn small', onclick: () => save({ map: Object.fromEntries([...sels].filter(([, sel]) => sel.value).map(([k, sel]) => [k, sel.value])) }) }, 'Save matches');
+
+      // Settings.
       const stage = h('input', { value: x.stage || '', placeholder: 'New' });
       const tags = h('input', { value: (x.tags || []).join(', '), placeholder: 'website' });
       const title = h('input', { value: x.title || '', placeholder: 'Contact ' + S.workspace.name });
       const newKey = h('button', { class: 'btn small danger', 'data-label': '1' }, 'New link');
       newKey.addEventListener('click', () => confirmClick(newKey, () => api('POST', '/lead-capture/new-key').then(redo).catch((e) => toast(e.message))));
+
       sec.append(hint,
         h('p', {}, `✓ On. ${x.count ? `${x.count} lead${x.count === 1 ? '' : 's'} so far${x.last ? ', the last ' + ago(x.last) : ''}.` : 'No leads yet.'}`),
-        row('Form link', x.formUrl, h('span', {}, 'Share it, or put it on your site’s Contact button. ', h('a', { href: x.formUrl, target: '_blank', rel: 'noopener' }, 'Open it'))),
-        row('Embed on your website', embed, 'Paste this where the form should go on your site.'),
-        row('Lead webhook', x.webhookUrl, 'POST leads here as JSON or a form, from your site, a form builder or a lead service: name (or first_name and last_name), email, phone, company, address, city, message, source.'),
+        h('h4', {}, 'Connect your website or tool'), pick, guide,
+        h('h4', {}, 'Recent leads'), h('p', { class: 'day-hint' }, 'The last 30 that came in, from anywhere, and what Kloomie did with each. Tap one to see every field and where it went.'), logBox, h('div', { class: 'btns' }, testBtn, clearBtn),
+        h('h4', {}, 'Match fields'), seen.length ? h('p', { class: 'day-hint' }, 'Field names your forms have sent. Kloomie matches the usual ones by itself; choose where any other one should go. Anything not matched is kept in the contact’s note.') : h('p', { class: 'day-hint' }, 'Once a form has sent a lead, its field names show here so you can choose where each one goes.'),
+        ...mapRows, seen.length ? h('div', { class: 'btns' }, saveMap) : null,
+        h('h4', {}, 'All your links'), pieces.snippet(), pieces.hook(), pieces.form(), pieces.embed(),
         h('div', { class: 'row2' }, h('label', {}, 'New leads start at stage', stage), h('label', {}, 'And get tags', tags)),
-        h('label', {}, 'Form title', title),
+        h('label', {}, 'Kloomie form title', title),
         h('div', { class: 'btns' }, h('button', { class: 'btn small', onclick: () => save({ stage: stage.value, tags: tags.value, title: title.value }) }, 'Save'), newKey, h('button', { class: 'btn small', onclick: () => save({ on: false }) }, 'Turn off')));
     }).catch((e) => sec.append(h('p', { class: 'err' }, e.message)));
     return sec;
