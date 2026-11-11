@@ -123,3 +123,9 @@ Every route checks the person can see the record and is scoped to the team; the 
 - Tests that drive a sign-in with fetch use tests/cookiejar.mjs (cookies like one browser); WebSockets in tests send the sign-in as a header.
 - **H5 fixed** (see the table). Needs a new desktop release (a v* tag) to reach installed apps.
 - **Stale test fixed:** qboui looked for the old "Lead form" title.
+
+## Batch 9 (tests/audit_signin.mjs, tests/audit_agents2.mjs; each fails on cda5a30)
+- **A12 fixed:** only a hash of each sign-in is stored (sign-ins from before are converted at start; push subscriptions follow), so a copy of the data can't be used to sign in; a sign-in ends 180 days after it was made, however much it's used. Inside the server auth.token is that hash. Note: going back to code before this would sign everyone out once.
+- **A11 fixed:** wrong passwords lock the address after 10 (and the address and account together after 10); an account is locked for everyone only after 50, so a few guesses can't lock someone else out.
+- **A14 fixed:** "Sign out everywhere else" and a new password keep only this sign-in and the other sign-ins this browser holds (sent as proof), not every sign-in claiming the same device id.
+- **F6 fixed:** every tool result goes back to the model marked as data, never instructions, and the agent is told so each time. Once a run has read something private (a private project's records, a private campaign), its later changes wait for the person's yes even at execute level.

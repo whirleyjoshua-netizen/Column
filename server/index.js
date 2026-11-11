@@ -67,6 +67,14 @@ console.log(`Data: ${store.mode === 'postgres' ? 'Postgres' : DB_PATH}`);
 // Agents became smart buttons: the keys people saved for them are their AI keys now; agents' sign-ins go.
 // (Old agents and their keys stay in the data file, unused, so going back to them loses nothing.)
 for (const [tok, sess] of Object.entries(db.tokens)) if (sess.agentId) delete db.tokens[tok];
+// A12: sign-ins are kept by their hash only (the sign-in itself lives only in the browser).
+const tokKey = (raw) => 'h:' + crypto.createHash('sha256').update('kloomie-session:' + String(raw)).digest('hex');
+if (Object.keys(db.tokens).some((k) => !k.startsWith('h:'))) {
+  const was = new Map();
+  for (const [tok, sess] of Object.entries(db.tokens)) if (!tok.startsWith('h:')) { const k = tokKey(tok); db.tokens[k] = sess; delete db.tokens[tok]; was.set(tok, k); }
+  for (const x of Object.values(db.pushSubs || {})) if (x.token && was.has(x.token)) x.token = was.get(x.token);
+  // Saved with the next change; converting again after a restart gives the same hashes.
+}
 for (const [k, keys] of Object.entries(db.agentKeys || {})) db.ai[k] ||= { keys, provider: null, model: null };
 for (const ws of Object.values(db.workspaces)) {
   ws.channels ||= [];
@@ -205,17 +213,24 @@ const loginFails = new Map(); // key -> { n, since }
 // Behind Railway's proxy the address it saw is the last X-Forwarded-For entry (earlier ones are whatever the client
 // sent, so they can't be trusted). Right whether the proxy appends to the header or replaces it.
 const clientIp = (req) => (process.env.TRUST_PROXY ? String(req.headers['x-forwarded-for'] || '').split(',').map((x) => x.trim()).filter(Boolean).pop() : '') || req.socket.remoteAddress || '?';
+const ACCOUNT_TRIES = 50;
+const triesFor = (k) => (/^(email|pw|name):/.test(k) ? ACCOUNT_TRIES : LOGIN_TRIES);
+// The keys: the address, the account (email, password owner or team name), and the two together.
+const withPairs = (keys) => {
+  const ip = keys.find((k) => k.startsWith('ip:'));
+  return ip ? [...keys, ...keys.filter((k) => /^(email|pw|name):/.test(k)).map((k) => 'pair:' + ip + '|' + k)] : keys;
+};
 function loginBlocked(keys) {
   const now = Date.now();
-  return keys.some((k) => {
+  return withPairs(keys).some((k) => {
     const f = loginFails.get(k);
     if (f && now - f.since > LOGIN_WINDOW) loginFails.delete(k);
-    return f && now - f.since <= LOGIN_WINDOW && f.n >= LOGIN_TRIES;
+    return f && now - f.since <= LOGIN_WINDOW && f.n >= triesFor(k);
   });
 }
 function loginFailed(keys) {
   const now = Date.now();
-  for (const k of keys) {
+  for (const k of withPairs(keys)) {
     const f = loginFails.get(k);
     if (!f || now - f.since > LOGIN_WINDOW) loginFails.set(k, { n: 1, since: now });
     else f.n++;
@@ -245,12 +260,13 @@ async function readJson(req, limit = 1_000_000) {
 
 // A sign-in ends after 30 days without being used. When it was last used is noted at most once an hour.
 const SESSION_DAYS = 30;
+const SESSION_MAX_DAYS = 180; // A12: however much it's used, a sign-in ends this long after it was made
 function liveSession(token) {
   const session = token ? db.tokens[token] : null;
   if (!session) return null;
   const now = Date.now();
   if (!session.lastSeen) session.lastSeen = now; // sign-ins from before this count from now
-  if (now - session.lastSeen > SESSION_DAYS * 86_400_000) {
+  if (now - session.lastSeen > SESSION_DAYS * 86_400_000 || (session.createdAt && now - session.createdAt > SESSION_MAX_DAYS * 86_400_000)) {
     endSession(token);
     save();
     return null;
@@ -286,7 +302,7 @@ function urlKey(req, url) {
 function authFrom(req, url) {
   if (req.replay) return req.replay; // an approved request, replayed as the person who asked (rules.js)
   const h = req.headers.authorization || '';
-  const token = h.startsWith('Bearer ') ? h.slice(7) : urlKey(req, url);
+  const token = h.startsWith('Bearer ') ? (h.length < 200 ? tokKey(h.slice(7)) : null) : urlKey(req, url);
   const session = liveSession(token);
   const ws = session ? db.workspaces[session.wsId] : null;
   const member = ws?.members.find((x) => x.id === session.memberId);
@@ -412,15 +428,22 @@ function linkMember(m, u) {
   m.salt = m.hash = null;
 }
 // Signs the account out everywhere, or everywhere but one device (its sign-ins to every team stay).
-function signOutUser(u, keepDevice) {
-  for (const { ws, m } of membersOf(u)) signOutWhere(ws, m.id, keepDevice);
+function signOutUser(u, keep) {
+  for (const { ws, m } of membersOf(u)) signOutWhere(ws, m.id, keep);
 }
-function signOutWhere(ws, memberId, keepDevice, onlyToken) {
+// keep: the sign-ins (their hashes) to leave alone.
+function signOutWhere(ws, memberId, keep, onlyToken) {
   for (const [tok, sess] of Object.entries(db.tokens)) {
     if (sess.memberId !== memberId || sess.wsId !== ws.id) continue;
-    if (onlyToken ? tok !== onlyToken : keepDevice && sess.deviceId === keepDevice) continue;
+    if (onlyToken ? tok !== onlyToken : keep?.has(tok)) continue;
     endSession(tok);
   }
+}
+// A14: this sign-in, plus the other sign-ins this browser shows it holds (its other teams on the same account).
+function keepOf(auth, body) {
+  const keep = new Set([auth.token]);
+  for (const raw of (Array.isArray(body?.keep) ? body.keep : []).slice(0, 50)) if (typeof raw === 'string' && raw.length < 200) keep.add(tokKey(raw));
+  return keep;
 }
 // The places an account (or an old login) is signed in, for Settings.
 const sessionId = (tok) => sha('session:' + tok).slice(0, 16);
@@ -5329,7 +5352,7 @@ async function api(req, res, url) {
     const email = cleanEmail(body.email);
     const session = (ws, member) => {
       const token = rid(24);
-      db.tokens[token] = {
+      db.tokens[tokKey(token)] = {
         wsId: ws.id,
         memberId: member.id,
         device: String(device || 'Device').trim().slice(0, 40) || 'Device',
@@ -7700,8 +7723,9 @@ async function api(req, res, url) {
       return send(res, 200, { ok: true });
     }
     if (b === 'signout-others' && m === 'POST') {
-      if (u) signOutUser(u, auth.deviceId);
-      else signOutWhere(ws, me.id, auth.deviceId);
+      const keep = keepOf(auth, await readJson(req).catch(() => ({})));
+      if (u) signOutUser(u, keep);
+      else signOutWhere(ws, me.id, keep);
       save();
       return send(res, 200, { ok: true });
     }
@@ -7716,7 +7740,8 @@ async function api(req, res, url) {
 
   if (a === 'members') {
     if (b === 'me' && c === 'password' && m === 'POST') {
-      const { current, next } = await readJson(req);
+      const body = await readJson(req);
+      const { current, next } = body;
       const me = ws.members.find((x) => x.id === auth.memberId);
       const cred = credOf(me);
       const pwKeys = ['ip:' + clientIp(req), 'pw:' + (userOf(me)?.id || me.id)];
@@ -7724,8 +7749,8 @@ async function api(req, res, url) {
       if (cred.hash && !passOk(cred, current)) { loginFailed(pwKeys); return send(res, 403, { error: 'Current password is wrong.' }); }
       if (String(next || '').length < 8) return send(res, 400, { error: 'Password must be at least 8 characters.' });
       setPassword(cred, String(next));
-      if (userOf(me)) signOutUser(userOf(me), auth.deviceId); // other devices, in every team
-      else signOutWhere(ws, me.id, auth.deviceId);
+      if (userOf(me)) signOutUser(userOf(me), keepOf(auth, body)); // other devices, in every team
+      else signOutWhere(ws, me.id, keepOf(auth, body));
       ensureOwner(ws, me);
     } else {
       if (!isAdmin(auth)) return send(res, 403, { error: 'Only team owners and admins can do that.' });

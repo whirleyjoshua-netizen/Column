@@ -16828,7 +16828,7 @@
         try { list = await api('GET', '/account/sessions'); } catch (e) { return where.replaceChildren(h('h3', {}, 'Where you’re signed in'), h('p', { class: 'warn' }, e.message)); }
         const others = list.filter((x) => !x.here);
         const outAll = h('button', { class: 'btn danger', 'data-label': '1' }, 'Sign out of all other devices');
-        outAll.addEventListener('click', () => confirmClick(outAll, () => api('POST', '/account/signout-others').then(() => { toast('Signed out everywhere else'); drawWhere(); }, (e) => toast(e.message))));
+        outAll.addEventListener('click', () => confirmClick(outAll, () => api('POST', '/account/signout-others', { keep: accounts().map((a) => a.token) }).then(() => { toast('Signed out everywhere else'); drawWhere(); }, (e) => toast(e.message))));
         where.replaceChildren(...[h('h3', {}, 'Where you’re signed in'),
           ...list.map((x) => h('div', { class: 'srow sess-row' },
             h('span', {}, x.device, x.here ? ' (this device)' : '', h('small', {}, `${x.team} · ${x.here ? 'now' : 'last used ' + ago(x.lastSeen)}`)),
@@ -16844,7 +16844,7 @@
       const next = h('input', { type: 'password', placeholder: me?.hasPassword ? 'New password' : 'Choose a password', autocomplete: 'new-password' });
       const savePw = async () => {
         try {
-          S.workspace = await api('POST', '/members/me/password', { current: cur.value, next: next.value });
+          S.workspace = await api('POST', '/members/me/password', { current: cur.value, next: next.value, keep: accounts().map((a) => a.token) });
           toast('Password saved');
           renderSettings();
         } catch (e) {
