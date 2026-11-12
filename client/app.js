@@ -781,6 +781,7 @@
     if (kind === 'contact') return openContactById(id);
     if (kind === 'approval') return approvalSheet(id);
     if (kind === 'card') return openTool('cards');
+    if (kind === 'asset') return openAsset(id);
     if (kind === 'agent') return AG.data ? agOpen('run:' + id) : (AG.view = 'run:' + id, openTool('agents'));
     if (kind === 'standup') { const p = projById(id); if (!p) return toast('That project is gone.'); return openProject(id).then(() => standupSheet(p)); }
     const it = S.items.find((x) => x.id === id);
@@ -9230,8 +9231,8 @@
   const recById = (pid, id) => prRecs(pid).find((r) => r.id === id);
   const recName = (t, r) => String(r?.values[t.primary] ?? '').trim() || 'Untitled';
   const PF_COLOR = { gray: '#8b8b98', blue: '#4ea1ff', green: '#3ddc97', amber: '#ffb547', rose: '#ff6b8b', violet: '#8b7cff', teal: '#2dd4bf' };
-  const PF_IC = { text: 'Aa', number: '#', money: '$', date: '📅', select: '◉', multi: '☰', person: '👤', email: '@', phone: '☏', url: '🔗', checkbox: '☑', link: '↗', items: '🧾', autonumber: '№', files: '📎', contact: '👤', checklist: '☑', measure: '📏', equipment: '⚙', materials: '🧱', readings: '📈', signature: '✍', permit: '📋' };
-  const PF_NAME = { text: 'Text', number: 'Number', money: 'Money', date: 'Date', select: 'Options (one)', multi: 'Options (many)', person: 'Person', email: 'Email', phone: 'Phone', url: 'Web link', checkbox: 'Checkbox', link: 'Link to another list', items: 'Line items (quote, estimate)', autonumber: 'Auto number', files: 'Files', contact: 'Customer (from Contacts)', checklist: 'Checklist', measure: 'Measurements', equipment: 'Equipment', materials: 'Materials and parts', readings: 'Readings', signature: 'Sign-off (signature)', permit: 'Permit' };
+  const PF_IC = { text: 'Aa', number: '#', money: '$', date: '📅', select: '◉', multi: '☰', person: '👤', email: '@', phone: '☏', url: '🔗', checkbox: '☑', link: '↗', items: '🧾', autonumber: '№', files: '📎', contact: '👤', checklist: '☑', measure: '📏', equipment: '⚙', materials: '🧱', readings: '📈', signature: '✍', permit: '📋', location: '📍', job: '🛠', secret: '🔒' };
+  const PF_NAME = { text: 'Text', number: 'Number', money: 'Money', date: 'Date', select: 'Options (one)', multi: 'Options (many)', person: 'Person', email: 'Email', phone: 'Phone', url: 'Web link', checkbox: 'Checkbox', link: 'Link to another list', items: 'Line items (quote, estimate)', autonumber: 'Auto number', files: 'Files', contact: 'Customer (from Contacts)', checklist: 'Checklist', measure: 'Measurements', equipment: 'Equipment', materials: 'Materials and parts', readings: 'Readings', signature: 'Sign-off (signature)', permit: 'Permit', location: 'Where it is (address and spot)', job: 'Job it’s at (from another project)', secret: 'Locked (a combo or code)' };
   const prCall = async (method, path, body) => {
     try {
       return await api(method, path, body);
@@ -9327,7 +9328,7 @@
   // Some kinds have more than one way to start.
   const PJ_SUBS = {
     creative: [['creative', '🎨', 'Agency client work', 'Client projects, deliverables with sign-off, proposals clients accept online'], ['ugc', '🎬', 'UGC', 'Creators, brand campaigns, content from brief to posted, payouts']],
-    ops: [['team', '📋', 'Team projects', 'Projects, tasks and owners, plus the processes you repeat'], ['crm', '🤝', 'Sales pipeline', 'Contacts, companies and deals on a board'], ['blank', '📁', 'Start blank', 'One list to shape as you like']],
+    ops: [['team', '📋', 'Team projects', 'Projects, tasks and owners, plus the processes you repeat'], ['crm', '🤝', 'Sales pipeline', 'Contacts, companies and deals on a board'], ['assets', '📦', 'Equipment & assets', 'Gear that moves between sites: where it is, the job it’s at, its lock combo, a label to scan'], ['blank', '📁', 'Start blank', 'One list to shape as you like']],
   };
   const pjKindCard = (x, on, onclick) => h('button', { type: 'button', class: `pj-kind c-${x.c}${on ? ' on' : ''}`, 'aria-pressed': String(!!on), onclick },
     h('span', { class: 'pj-kind-art', 'aria-hidden': 'true' }, h('span', { class: 'pj-kind-ic' }, x.ic), h('span', { class: 'pj-kind-tags' }, x.tags.map((tg) => h('i', {}, tg)))),
@@ -9441,6 +9442,7 @@
       { label: 'Rename project', run: () => { const i = h('input', { value: p.name }); sheet('Rename project', [h('label', {}, 'Name', i)], async () => { const y = await api('PATCH', '/projects/' + p.id, { name: i.value }); prUpsertProject(y); renderProjects(); }); } },
       { label: `Import ${t.name.toLowerCase()} from a spreadsheet…`, run: () => prImport(p, t) },
       { label: `Export ${t.name.toLowerCase()} as CSV`, run: () => prExport(p, t) },
+      t.scan ? { label: `🏷 Print labels for ${t.name.toLowerCase()}…`, run: () => prLabels(p, t) } : null,
       { label: 'Add a list…', run: () => prReadyMenu(e.target, p) },
       { label: 'Save as a template…', run: () => prSaveTemplate(p) },
       { head: '' },
@@ -9473,6 +9475,7 @@
           h('button', { class: 'pj-view-add', title: 'Add a view', onclick: (e) => openMenu(e.currentTarget, [{ label: '☰ Table', run: () => prSchema(p, { op: 'addView', typeId: t.id, name: 'Table', kind: 'table' }, true) }, { label: '▥ Board', run: () => prSchema(p, { op: 'addView', typeId: t.id, name: 'Board', kind: 'board' }, true) }]) }, '+')),
         search,
         h('button', { class: 'btn primary-btn', onclick: () => prNew(p, t) }, `+ New ${(t.singular || 'record').toLowerCase()}`)),
+      t.scan && PR.loading !== p.id ? assetCounts(p, t, recs) : null,
       h('div', { class: 'pj-main' },
         h('div', { class: 'pj-body' + (v.kind === 'board' ? ' board' : '') }, ...(PR.loading === p.id ? [h('p', { class: 'day-hint' }, 'Loading…')] : prViewBody(p, t, v)).filter(Boolean)),
         PR.panel ? prPanel(p, PR.panel) : null),
@@ -9516,6 +9519,9 @@
     if (f.type === 'readings') return v.rows.filter((x) => x.value !== '').map((x) => `${x.label} ${x.value}${x.unit ? ' ' + x.unit : ''}`).join(', ');
     if (f.type === 'signature') return 'Signed by ' + v.name;
     if (f.type === 'permit') return [v.status, v.number].filter(Boolean).join(' · ');
+    if (f.type === 'location') return locText(v);
+    if (f.type === 'job') return jobName(v);
+    if (f.type === 'secret') return v.set ? '••••' : '';
     return String(v);
   }
   const pjChip = (c) => h('span', { class: 'pj-chip', style: `--c:${PF_COLOR[c.color] || PF_COLOR.gray}` }, c.label);
@@ -9542,6 +9548,9 @@
     if (f.type === 'signature') return h('span', { class: 'pj-chip', style: `--c:${PF_COLOR.green}` }, '✓ Signed');
     if (f.type === 'permit') { const tone = { Approved: 'blue', 'Inspection booked': 'violet', Passed: 'green', Failed: 'rose', Applied: 'amber' }[v.status] || 'gray'; return pjChip({ label: v.status + (v.number ? ' · #' + v.number : ''), color: tone }); }
     if (f.type === 'contact' || f.type === 'measure' || f.type === 'equipment' || f.type === 'readings') return prText(p, f, v) || null;
+    if (f.type === 'location') return h('span', { class: 'as-loc', title: v.at ? 'Since ' + new Date(v.at).toLocaleString() : '' }, '📍 ', locText(v), v.at ? h('small', {}, ' · ' + ago(v.at)) : null);
+    if (f.type === 'job') return h('button', { class: 'pj-link', onclick: (e) => { e.stopPropagation(); openRecord(v); } }, '🛠 ' + (jobName(v) || 'A job'));
+    if (f.type === 'secret') return h('span', { class: 'pj-chip', style: `--c:${PF_COLOR.gray}` }, '🔒 Saved');
     return String(v);
   }
   async function prSet(p, r, f, value) {
@@ -9557,6 +9566,9 @@
     if (f.type === 'autonumber') return toast('Kloomie numbers these itself.');
     if (f.type === 'items') { PR.panel = r.id; return renderProjects(); }
     if (f.type === 'contact') return pickContact((x) => set(x.id));
+    if (f.type === 'location') return locSheet(p, t, r, f);
+    if (f.type === 'job') return jobPick(p, t, r, f);
+    if (f.type === 'secret') return lockedSheet(p, t, r, f);
     // Job fields with more to them open in the job's panel, at that block.
     if (PR_RICH.includes(f.type)) { PR.panel = r.id; renderProjects(); return setTimeout(() => $(`#projects .pj-panel [data-field="${f.id}"]`)?.scrollIntoView({ block: 'start', behavior: 'smooth' }), 50); }
     if (f.type === 'files') {
@@ -9645,6 +9657,7 @@
       { label: 'Rename', run: () => { const i = h('input', { value: f.name }); sheet('Rename field', [h('label', {}, 'Name', i), h('p', { class: 'day-hint' }, `Apps connected to Kloomie still find it as “${f.key}”.`)], () => prSchema(p, { op: 'updateField', typeId: t.id, fieldId: f.id, name: i.value })); } },
       f.choices ? { label: 'Edit options…', run: () => prEditChoices(p, t, f) } : null,
       f.type === 'signature' ? { label: 'Sign-off form…', run: async () => { const forms = await signForms(true); openMenu(e.target, [{ head: `The form every ${(t.singular || 'record').toLowerCase()} signs` }, ...forms.map((x) => ({ label: x.name, on: f.form === x.id, run: () => prSchema(p, { op: 'updateField', typeId: t.id, fieldId: f.id, form: x.id }) })), { label: 'No form: the plain sign-off', on: !f.form, run: () => prSchema(p, { op: 'updateField', typeId: t.id, fieldId: f.id, form: null }) }, { head: '' }, { label: '✏️ Make a form…', run: () => signFormSheet(p, t, null, (x) => prSchema(p, { op: 'updateField', typeId: t.id, fieldId: f.id, form: x.id })) }, { label: '⬆️ Upload a PDF form…', run: () => signFormUpload((x) => prSchema(p, { op: 'updateField', typeId: t.id, fieldId: f.id, form: x.id })) }]); } } : null,
+      f.type === 'secret' && (p.memberId === S.me?.memberId || amAdmin()) ? { label: 'Who can see it…', run: () => openMenu(e.target, [{ head: `Who can see the ${f.name.toLowerCase()}` }, { label: `Everyone who can open ${p.name}`, on: f.reveal !== 'managers', run: () => prSchema(p, { op: 'updateField', typeId: t.id, fieldId: f.id, reveal: 'team' }) }, { label: 'Only whoever made the project and team admins', on: f.reveal === 'managers', run: () => prSchema(p, { op: 'updateField', typeId: t.id, fieldId: f.id, reveal: 'managers' }) }]) } : null,
       f.id !== t.primary ? { label: 'Hide', run: () => prSchema(p, { op: 'updateField', typeId: t.id, fieldId: f.id, hidden: true }) } : null,
       t.fields.some((x) => x.hidden) ? { label: 'Show hidden fields', run: async () => { for (const x of t.fields.filter((y) => y.hidden)) await prCall('POST', `/projects/${p.id}/schema`, { op: 'updateField', typeId: t.id, fieldId: x.id, hidden: false }).then((y) => y && prUpsertProject(y.project)); renderProjects(); } } : null,
       f.id !== t.primary ? { label: 'Delete field', danger: true, run: () => prSchema(p, { op: 'removeField', typeId: t.id, fieldId: f.id }) } : null,
@@ -9667,7 +9680,7 @@
       await prSchema(p, { op: 'addField', typeId: t.id, name: name.value, type: type.value, choices: opts.value.split('\n').map((x) => x.trim()).filter(Boolean), target: target.value, many: many.checked, prefix: prefix.value, start: start.value });
     }, 'Add field');
   }
-  const PF_TYPES = ['text', 'select', 'multi', 'number', 'money', 'date', 'person', 'email', 'phone', 'url', 'checkbox', 'link', 'items', 'autonumber', 'files', 'contact', 'checklist', 'measure', 'equipment', 'materials', 'readings', 'signature', 'permit'];
+  const PF_TYPES = ['text', 'select', 'multi', 'number', 'money', 'date', 'person', 'email', 'phone', 'url', 'checkbox', 'link', 'items', 'autonumber', 'files', 'contact', 'checklist', 'measure', 'equipment', 'materials', 'readings', 'signature', 'permit', 'location', 'job', 'secret'];
   function prAddType(p) {
     const name = h('input', { placeholder: 'Jobs' });
     sheet('Add a list', [h('label', {}, 'Name', name), h('p', { class: 'day-hint' }, 'A new kind of record in this project, like Jobs or Vendors. It starts with a Name field; add more after.')], async () => {
@@ -10256,9 +10269,10 @@
     const top = itemFields.length && !job ? fields.filter((f) => ['client', 'status', 'number'].includes(f.key)) : [];
     return h('aside', { class: 'pj-panel' + (itemFields.length || richFields.length ? ' wide' : ''), 'data-id': r.id },
       h('div', { class: 'pj-panel-h' }, h('small', {}, `${t.icon || ''} ${t.singular || t.name}`), h('span', { style: 'flex:1' }),
-        h('button', { class: 'icon-btn', 'aria-label': 'Record options', html: I.more, onclick: (e) => openMenu(e.currentTarget, [pinRow('rec:' + r.id, recName(t, r)), { label: 'Share to chat…', run: () => shareMenu(e.target, linkToken('record', r.id)) }, { label: `Delete this ${(t.singular || 'record').toLowerCase()}`, danger: true, run: async () => { if (await prCall('DELETE', '/records/' + r.id)) { PR.records.set(p.id, prRecs(p.id).filter((x) => x.id !== r.id)); PR.panel = null; renderProjects(); } } }]) }),
+        h('button', { class: 'icon-btn', 'aria-label': 'Record options', html: I.more, onclick: (e) => openMenu(e.currentTarget, [pinRow('rec:' + r.id, recName(t, r)), { label: 'Share to chat…', run: () => shareMenu(e.target, linkToken('record', r.id)) }, t.scan ? { label: 'New label (the old one stops working)…', run: async () => { try { await api('POST', `/records/${r.id}/tag`); prLabels(p, t, [r.id]); } catch (er) { toast(er.message); } } } : null, { label: `Delete this ${(t.singular || 'record').toLowerCase()}`, danger: true, run: async () => { if (await prCall('DELETE', '/records/' + r.id)) { PR.records.set(p.id, prRecs(p.id).filter((x) => x.id !== r.id)); PR.panel = null; renderProjects(); } } }].filter(Boolean)) }),
         h('button', { class: 'icon-btn', 'aria-label': 'Close', html: I.close, onclick: () => { PR.panel = null; PR.visit = null; renderProjects(); } })),
       title,
+      t.scan ? assetBar(p, t, r) : null,
       custFields.length ? prVisitBar(p, t, r) : null,
       ...custFields.map((f) => prCustomer(p, t, r, f)),
       custFields.length ? prVisits(p, t, r) : null,
@@ -10272,6 +10286,7 @@
       ...(job ? itemFields.map((f) => prItems(p, t, r, f)) : []),
       job ? prJobMoney(p, t, r) : null,
       ...richFields.map((f) => prRichBlock(p, t, r, f)),
+      t.scan ? assetMoves(p, t, r) : equipmentHere(p, t, r),
       prActivity(p, t, r),
       ...back.map(({ o, f, from }) => h('div', { class: 'pj-back' }, h('h4', {}, `${o.name} · ${f.name}`), from.map((x) => h('button', { class: 'pj-link', onclick: () => { PR.type = o.id; PR.view = null; PR.panel = x.id; renderProjects(); } }, recName(o, x), o.fields.find((y) => y.type === 'money') && x.values[o.fields.find((y) => y.type === 'money').id] ? h('small', {}, ' · ' + money(x.values[o.fields.find((y) => y.type === 'money').id])) : null)))),
       h('button', { class: 'btn pj-notes', onclick: notes }, doc ? `📄 ${techDoc ? docTitle(doc) : 'Notes'} · ${docSnippet(doc) ? shortText(docSnippet(doc), 50) : 'open'}` : techDoc ? '📄 ' + techDoc[1] : '📄 Add notes (a doc)'),
@@ -10345,12 +10360,14 @@
     }
     return PR.logs.get(r.id);
   }
-  const ACT_IC = { created: '✦', change: '↻', call: '☏', email: '✉', meeting: '👥', note: '📝', task: '✓', quote: '🧾', sign: '✍️' };
+  const ACT_IC = { created: '✦', change: '↻', call: '☏', email: '✉', meeting: '👥', note: '📝', task: '✓', quote: '🧾', sign: '✍️', move: '📍', reveal: '🔒' };
   function prLogLine(e) {
     const who = h('b', {}, e.by || 'Someone');
     const said = {
       created: [who, ' added this'],
       change: [who, ` changed ${e.field}: `, h('s', {}, e.from || 'empty'), ' → ', h('b', {}, e.to || 'empty')],
+      move: [who, ' moved it', e.from ? [' from ', h('s', {}, e.from)] : null, ' to ', h('b', {}, e.to || 'a spot on the map')],
+      reveal: [who, ` looked at the ${String(e.what || 'locked field').toLowerCase()}`],
       call: [who, ' called', e.outcome ? [' · ', h('span', { class: 'pj-out' }, e.outcome)] : null, e.campaign ? h('small', {}, ` · ${e.campaign}`) : null],
       email: [who, ' emailed', e.campaign ? h('small', {}, ` · ${e.campaign}`) : null],
       meeting: [who, ' met with them'],
@@ -10419,6 +10436,234 @@
     }, 'Add task');
     setTimeout(() => text.focus());
   }
+  // ----- equipment & assets: gear that moves between sites -----
+  // An Equipment list (t.scan) has items with a number, a status, where each is (a location field), the job it's at
+  // (a job field: a record in another project), who has it, and a locked field for a lock combo. Each item has a label:
+  // a QR code for /a/<tag> that opens it here, with Move here, the job, Report a problem and its status at the top.
+  const fieldOfType = (t, type) => t.fields.find((f) => f.type === type && !f.hidden);
+  const statusOf = (t) => t.fields.find((f) => f.key === 'status' && f.type === 'select');
+  const locText = (v) => (v ? v.address || (Number.isFinite(v.lat) ? `${v.lat.toFixed(5)}, ${v.lng.toFixed(5)}` : '') : '');
+  const mapsHref = (v) => (Number.isFinite(v?.lat) ? `https://www.google.com/maps/search/?api=1&query=${v.lat},${v.lng}` : v?.address ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(v.address)}` : null);
+  // The job an item is at, by name: from the item (the server sends it), else from the records loaded here.
+  function jobName(id) {
+    for (const list of PR.records.values()) for (const x of list) if (x.jobs?.[id]) return x.jobs[id].name;
+    const at = recEverywhere(id);
+    return at ? recName(prType(at.p, at.r.typeId), at.r) : '';
+  }
+  // Where I am: the phone's GPS, then the street address there (Kloomie asks OpenStreetMap).
+  function whereAmI() {
+    return new Promise((ok, bad) => {
+      if (!navigator.geolocation) return bad(new Error('This browser can’t tell where you are.'));
+      navigator.geolocation.getCurrentPosition(async (pos) => {
+        const lat = Math.round(pos.coords.latitude * 1e6) / 1e6, lng = Math.round(pos.coords.longitude * 1e6) / 1e6;
+        const address = await api('GET', `/geo?lat=${lat}&lng=${lng}`).then((x) => x.address).catch(() => null);
+        ok({ lat, lng, address: address || '' });
+      }, () => bad(new Error('Kloomie couldn’t get your location. Allow location for this site, or type the address.')), { enableHighAccuracy: true, timeout: 15000, maximumAge: 30000 });
+    });
+  }
+  // Moving an item to where I am, in one tap; if the phone can't say where that is, the address box opens.
+  async function moveHere(p, t, r, f) {
+    toast('Finding where you are…');
+    try {
+      const at = await whereAmI();
+      if (await prSet(p, r, f, at)) toast(`Moved to ${locText(at)}`);
+    } catch (e) {
+      toast(e.message);
+      locSheet(p, t, r, f);
+    }
+  }
+  function locSheet(p, t, r, f) {
+    const v = r.values[f.id];
+    let spot = Number.isFinite(v?.lat) ? { lat: v.lat, lng: v.lng } : null;
+    const address = h('input', { value: v?.address || '', placeholder: '1200 Warm Springs Rd, Henderson', autocomplete: 'street-address' });
+    const note = h('small', { class: 'day-hint' }, spot ? `Spot: ${spot.lat.toFixed(5)}, ${spot.lng.toFixed(5)}` : 'No spot yet: type the address, or use where you are.');
+    const gps = h('button', { type: 'button', class: 'btn', onclick: async () => {
+      gps.disabled = true;
+      note.textContent = 'Finding where you are…';
+      try { const at = await whereAmI(); spot = { lat: at.lat, lng: at.lng }; if (at.address) address.value = at.address; note.textContent = `Spot: ${at.lat.toFixed(5)}, ${at.lng.toFixed(5)}`; } catch (e) { note.textContent = e.message; }
+      gps.disabled = false;
+    } }, '📍 Use where I am');
+    sheet(`Where is ${recName(t, r)}?`, [h('label', {}, f.name, address), h('div', { class: 'btns' }, gps), note,
+      v ? h('button', { type: 'button', class: 'linkish', onclick: () => { prSet(p, r, f, null); closeSheet(); } }, 'Clear where it is') : null], async () => {
+      if (!address.value.trim() && !spot) throw new Error('Type the address, or use where you are.');
+      await prSet(p, r, f, { address: address.value.trim(), ...(spot || {}) });
+    }, 'Save');
+    setTimeout(() => address.focus());
+  }
+  // The job an item is at: a record from another project the whole team can see (or this one), searched by name.
+  async function jobPick(p, t, r, f) {
+    await prLoadAll();
+    const jobLike = (x) => !!(x.trade || x.key === 'jobs' || x.fields.some((y) => y.type === 'contact'));
+    const all = [];
+    for (const q of S.projects || []) {
+      if (q.private && q.id !== p.id) continue;
+      for (const x of prRecs(q.id)) {
+        const xt = prType(q, x.typeId);
+        if (!xt || xt.scan || x.id === r.id) continue;
+        all.push({ id: x.id, name: recName(xt, x), where: `${q.icon || ''} ${q.name} · ${xt.singular || xt.name}`, job: jobLike(xt), at: x.updatedAt || x.createdAt });
+      }
+    }
+    all.sort((a, b) => b.job - a.job || b.at - a.at);
+    const q = h('input', { type: 'search', placeholder: 'Search jobs', 'aria-label': 'Search jobs' });
+    const list = h('div', { class: 'as-picks' });
+    const cur = r.values[f.id];
+    const draw = () => {
+      const s = q.value.trim().toLowerCase();
+      const hits = all.filter((x) => !s || x.name.toLowerCase().includes(s) || x.where.toLowerCase().includes(s)).slice(0, 30);
+      list.replaceChildren(...hits.map((x) => h('button', { type: 'button', class: 'as-pick' + (x.id === cur ? ' on' : ''), onclick: async () => { closeSheet(); if (await prSet(p, r, f, x.id)) toast(`${recName(t, r)} is at ${x.name}`); } }, h('b', {}, x.name), h('small', {}, x.where))),
+        hits.length ? '' : h('p', { class: 'day-hint' }, all.length ? 'No job by that name.' : 'No jobs yet. Jobs come from your other projects (not private ones).'));
+    };
+    q.addEventListener('input', draw);
+    draw();
+    sheet(`Which job is ${recName(t, r)} at?`, [q, list, cur ? h('button', { type: 'button', class: 'linkish', onclick: () => { closeSheet(); prSet(p, r, f, null); } }, 'Not at a job') : null], null, null);
+    setTimeout(() => q.focus());
+  }
+  // A locked field: Show (logged on the timeline), change it, or clear it.
+  function lockedSheet(p, t, r, f) {
+    const set = !!r.values[f.id];
+    const shown = h('div', { class: 'as-secret' }, set ? h('span', { class: 'as-dots' }, '••••••') : h('small', { class: 'day-hint' }, 'Nothing saved yet.'));
+    const show = set ? h('button', { type: 'button', class: 'btn primary-btn', onclick: async () => {
+      try {
+        const x = await api('POST', `/records/${r.id}/reveal/${f.id}`);
+        const val = h('code', { class: 'as-code' }, x.value);
+        shown.replaceChildren(val, h('button', { type: 'button', class: 'btn small', onclick: () => copyText(x.value).then(() => toast('Copied')) }, 'Copy'));
+        show.remove();
+        PR.logs.delete(r.id);
+        setTimeout(() => { if (val.isConnected) shown.replaceChildren(h('span', { class: 'as-dots' }, '••••••'), h('small', { class: 'day-hint' }, ' Hidden again.')); }, 30000);
+      } catch (e) { toast(e.message); }
+    } }, '👁 Show') : null;
+    const input = h('input', { type: 'text', autocomplete: 'off', spellcheck: 'false', placeholder: set ? 'Type a new one to change it' : '4-1-7-9' });
+    sheet(`${f.name} · ${recName(t, r)}`, [shown, show, h('label', {}, set ? 'Change it' : 'Save one', input),
+      h('p', { class: 'day-hint' }, `Kept locked on Kloomie’s server. ${f.reveal === 'managers' ? `Only whoever made ${p.name} and team admins can see it.` : `Everyone who can open ${p.name} can see it.`} Each look is on the timeline. It isn’t in exports or connected apps.`),
+      set ? h('button', { type: 'button', class: 'linkish', onclick: () => { closeSheet(); prSet(p, r, f, null); } }, 'Clear it') : null], async () => {
+      if (input.value.trim()) await prSet(p, r, f, input.value.trim());
+    }, 'Save');
+  }
+  // The top of an item: Move here, the job, a problem, its label, and its status in one tap.
+  function assetBar(p, t, r) {
+    const lf = fieldOfType(t, 'location'), jf = fieldOfType(t, 'job'), sf = statusOf(t);
+    const loc = lf && r.values[lf.id];
+    const jobId = jf && r.values[jf.id];
+    const seen = Math.max(r.seenAt || 0, loc?.at || 0);
+    const href = mapsHref(loc);
+    return h('div', { class: 'as-bar' },
+      h('div', { class: 'as-where' },
+        h('span', { class: 'as-pin', 'aria-hidden': 'true' }, '📍'),
+        h('div', {}, h('b', {}, loc ? locText(loc) : 'Not placed yet'),
+          h('small', {}, [jobId ? `At ${jobName(jobId) || 'a job'}` : null, seen ? `checked ${ago(seen)}${r.seenBy && r.seenAt >= (loc?.at || 0) ? ' by ' + r.seenBy : ''}` : null].filter(Boolean).join(' · ') || 'Tap Move here when it’s dropped off')),
+        href ? h('a', { class: 'btn small', href, target: '_blank', rel: 'noopener' }, 'Directions') : null),
+      h('div', { class: 'as-acts' },
+        lf ? h('button', { class: 'btn primary-btn', onclick: () => moveHere(p, t, r, lf) }, '📍 Move here') : null,
+        lf ? h('button', { class: 'btn', onclick: () => locSheet(p, t, r, lf) }, 'Type an address') : null,
+        jf ? h('button', { class: 'btn', onclick: () => jobPick(p, t, r, jf) }, jobId ? '🛠 Change job' : '🛠 Assign to a job') : null,
+        h('button', { class: 'btn', onclick: () => problemSheet(p, t, r) }, '⚠️ Report a problem'),
+        h('button', { class: 'btn', onclick: () => prLabels(p, t, [r.id]) }, '🏷 Label')),
+      sf ? h('div', { class: 'seg as-status', role: 'group', 'aria-label': sf.name }, sf.choices.map((c) => h('button', { type: 'button', class: r.values[sf.id] === c.id ? 'on' : null, onclick: () => prSet(p, r, sf, c.id) }, c.label))) : null);
+  }
+  function problemSheet(p, t, r) {
+    const sf = statusOf(t);
+    const repair = sf?.choices.find((c) => /repair|broken|problem/i.test(c.label));
+    const note = h('textarea', { rows: 3, placeholder: 'Lock won’t open, a camera is down, the battery is low…' });
+    const mark = repair ? h('input', { type: 'checkbox', checked: true }) : null;
+    sheet(`A problem with ${recName(t, r)}`, [note, mark ? h('label', { class: 'pick' }, mark, `Mark it ${repair.label}`) : null], async () => {
+      if (!note.value.trim()) throw new Error('Say what’s wrong.');
+      PR.logs.set(r.id, await api('POST', `/records/${r.id}/log`, { kind: 'note', note: '⚠️ Problem: ' + note.value.trim() }));
+      if (mark?.checked) await prSet(p, r, sf, repair.id);
+      renderProjects();
+      toast('Problem noted on its timeline');
+    }, 'Save');
+    setTimeout(() => note.focus());
+  }
+  // Where it's been: every move, newest first, with who moved it.
+  function assetMoves(p, t, r) {
+    const log = prLog(r);
+    const moves = (log || []).filter((e) => e.kind === 'move');
+    if (!moves.length) return null;
+    return h('div', { class: 'pj-tasks as-moves' }, h('h4', {}, 'Where it’s been'),
+      moves.slice(0, 12).map((e) => h('div', { class: 'as-move' }, h('span', { 'aria-hidden': 'true' }, '📍'),
+        h('div', {}, mapsHref({ lat: e.lat, lng: e.lng, address: e.to }) ? h('a', { href: mapsHref({ lat: e.lat, lng: e.lng, address: e.to }), target: '_blank', rel: 'noopener' }, e.to || 'A spot on the map') : e.to,
+          h('small', {}, ` · ${e.by || 'Someone'} · ${new Date(e.at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: new Date(e.at).getFullYear() === new Date().getFullYear() ? undefined : 'numeric' })}`)))));
+  }
+  // On a job: the equipment there (items whose job field points at it), from any project.
+  function equipmentHere(p, t, r) {
+    if (t.scan) return null;
+    const out = [];
+    for (const [pid, list] of PR.records) {
+      const q = projById(pid);
+      for (const x of list) {
+        const xt = q && prType(q, x.typeId);
+        if (xt?.scan && xt.fields.some((f) => f.type === 'job' && x.values[f.id] === r.id)) out.push({ q, xt, x });
+      }
+    }
+    if (!out.length) return null;
+    return h('div', { class: 'pj-back' }, h('h4', {}, '📦 Equipment here'), out.map(({ q, xt, x }) => {
+      const sf = statusOf(xt);
+      const c = sf && sf.choices.find((y) => y.id === x.values[sf.id]);
+      const num = xt.fields.find((f) => f.type === 'autonumber');
+      return h('button', { class: 'pj-link', onclick: () => openRecord(x.id) }, [num && x.values[num.id] ? x.values[num.id] + ' ' : '', recName(xt, x)].join(''), c ? h('small', {}, ' · ' + c.label) : null);
+    }));
+  }
+  // Counts across the list: out, at the yard, in repair, and items nobody has checked on in 30 days.
+  function assetCounts(p, t, recs) {
+    const sf = statusOf(t), lf = fieldOfType(t, 'location');
+    const stale = recs.filter((r) => Date.now() - Math.max(r.seenAt || 0, (lf && r.values[lf.id]?.at) || 0, r.createdAt) > 30 * 864e5);
+    const tiles = (sf?.choices || []).map((c) => [c.label, recs.filter((r) => r.values[sf.id] === c.id).length, c.color]).filter(([, n], i) => n || i < 3);
+    return h('div', { class: 'as-counts' },
+      tiles.map(([label, n, color]) => h('div', { class: 'as-count', style: `--c:${PF_COLOR[color] || PF_COLOR.gray}` }, h('b', {}, String(n)), h('small', {}, label))),
+      h('button', { class: 'as-count' + (stale.length ? ' warn' : ''), title: 'Not scanned, moved or added in the last 30 days', onclick: (e) => { if (!stale.length) return; openMenu(e.currentTarget, [{ head: 'Not checked on in 30 days' }, ...stale.slice(0, 30).map((r) => ({ label: recName(t, r), run: () => { PR.panel = r.id; renderProjects(); } }))]); } }, h('b', {}, String(stale.length)), h('small', {}, 'Not checked in 30 days')),
+      lf ? h('button', { class: 'btn small', onclick: () => assetMap(p, t, recs) }, '🗺 Map') : null,
+      h('button', { class: 'btn small', onclick: () => prLabels(p, t) }, '🏷 Print labels'));
+  }
+  // Every item with a spot, on a map.
+  function assetMap(p, t, recs) {
+    const lf = fieldOfType(t, 'location'), sf = statusOf(t);
+    const placed = recs.filter((r) => Number.isFinite(r.values[lf.id]?.lat));
+    const box = h('div', { class: 'as-map' }, h('p', { class: 'day-hint' }, 'Loading the map…'));
+    sheet(`${t.name} on the map`, [box, h('p', { class: 'day-hint' }, `${placed.length} of ${recs.length} have a spot. Items placed by typing an address only aren’t shown.`)], null, null);
+    loadLeaflet().then(() => {
+      box.replaceChildren();
+      const map = L.map(box).setView([39.5, -98.35], 4);
+      L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>' }).addTo(map);
+      for (const r of placed) {
+        const v = r.values[lf.id];
+        const c = sf && sf.choices.find((y) => y.id === r.values[sf.id]);
+        L.marker([v.lat, v.lng], { icon: L.divIcon({ className: 'rt-pin as-mpin', html: '<span>📦</span>', iconSize: [26, 26], iconAnchor: [13, 13] }) })
+          .bindPopup(() => h('div', { class: 'rt-pop' }, h('b', {}, recName(t, r)), h('small', {}, [c?.label, locText(v)].filter(Boolean).join(' · ')), h('button', { class: 'btn small', onclick: () => { closeSheet(); PR.panel = r.id; renderProjects(); } }, 'Open')), { maxWidth: 260 }).addTo(map);
+      }
+      if (placed.length) map.fitBounds(placed.map((r) => [r.values[lf.id].lat, r.values[lf.id].lng]), { maxZoom: 15, padding: [30, 30] });
+      setTimeout(() => map.invalidateSize(), 200);
+    }).catch((e) => box.replaceChildren(h('p', { class: 'day-hint' }, e.message)));
+  }
+  // Labels to print: a QR code, the number and name for each item (or the ones asked for), on a sheet of stickers.
+  async function prLabels(p, t, ids) {
+    let x;
+    try { x = await api('GET', `/projects/${p.id}/labels?typeId=${t.id}`); } catch (e) { return toast(e.message); }
+    const labels = ids ? x.labels.filter((l) => ids.includes(l.id)) : x.labels;
+    if (!labels.length) return toast(`No ${t.name.toLowerCase()} yet.`);
+    if (x.labels.some((l) => !prRecs(p.id).find((r) => r.id === l.id)?.tag)) PR.records.set(p.id, await api('GET', `/projects/${p.id}/records`).catch(() => prRecs(p.id)));
+    const sheetEl = h('div', { id: 'labelSheet', class: 'as-labels' }, labels.map((l) => h('div', { class: 'as-label' },
+      h('img', { src: l.qr, alt: '' }),
+      h('div', {}, h('b', {}, l.number || ''), h('span', {}, l.name), h('small', {}, `Scan to open in ${S.workspace?.name || 'Kloomie'}`)))));
+    $('#labelSheet')?.remove();
+    document.body.append(sheetEl);
+    sheet(`Print ${labels.length === 1 ? 'a label' : labels.length + ' labels'}`, [
+      h('div', { class: 'as-labels as-preview' }, labels.slice(0, 6).map((l) => h('div', { class: 'as-label' }, h('img', { src: l.qr, alt: '' }), h('div', {}, h('b', {}, l.number || ''), h('span', {}, l.name))))),
+      labels.length > 6 ? h('small', { class: 'day-hint' }, `and ${labels.length - 6} more`) : null,
+      h('p', { class: 'day-hint' }, 'Print on sticker paper (or plain paper and tape), and put each on its item where it stays dry. Scanning one with a phone’s camera opens the item here, for people on your team who can see this project. A label that’s lost or copied can be replaced from the item’s ⋯ menu.'),
+    ], () => { window.print(); }, 'Print');
+    const gone = () => { if (!$('#sheet') || $('#sheet').classList.contains('hidden')) { sheetEl.remove(); clearInterval(watch); } };
+    const watch = setInterval(gone, 1000);
+  }
+  // A scanned label (the QR code's /a/<tag> opens Kloomie at ?go=asset:<tag>): the item, with its scan bar.
+  async function openAsset(tag) {
+    let x;
+    try { x = await api('POST', `/records/by-tag/${encodeURIComponent(tag)}`); } catch { return toast('That label isn’t one of this team’s, or you can’t see its project. On more than one team? Switch teams and scan it again.'); }
+    if (!projById(x.projectId)) S.projects = await api('GET', '/projects').catch(() => S.projects);
+    await openProject(x.projectId, x.typeId);
+    PR.type = x.typeId; PR.view = null; PR.panel = x.id;
+    renderProjects();
+  }
+
   // Every visible project's records, for mentions in docs and the Finance forecast. Loaded once, then live.
   let prAllLoading = null;
   function prLoadAll() {

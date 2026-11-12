@@ -7,7 +7,7 @@ set -u
 cd "$(dirname "$0")"
 WORK="${1:-${RUNNER_TEMP:-/tmp}/kloomie-ci}"
 mkdir -p "$WORK"
-TESTS="admin agents alerts apiwide audit_access audit_agents audit_agents2 audit_agents3 audit_auth audit_batch10
+TESTS="admin agents alerts apiwide assets audit_access audit_agents audit_agents2 audit_agents3 audit_auth audit_batch10
   audit_batch7 audit_billing audit_billing2 audit_critical audit_dates audit_misc audit_money audit_oauth audit_quote
   audit_rules audit_safefetch audit_send audit_signin audit_signoff audit_storage audit_urls billing cards chatlinks contacts
   custmsg delteam dropbox export gcontacts gmail hq hqeval hqlearn invoices leads leadsources marketing onboard

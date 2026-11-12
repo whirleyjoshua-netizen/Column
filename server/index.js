@@ -8610,7 +8610,7 @@ async function replayAs(ws, memberId, approvalId, { method, path: p, body }, as 
   return { status, body: parsed };
 }
 const hold = (...a) => RULES.hold(...a);
-const PJ = projectsModule({ canSeeItem: (auth, it) => canSee(auth, 'item', it), seal, unseal, db, save, broadcast, rid, hold, cleanText, isDay, readJson, send, badRequest, isOwnerId, escHtml, brandOf, logoUrl, teamDay, offline, allowLocalHooks: process.env.ALLOW_LOCAL_WEBHOOKS === '1',
+const PJ = projectsModule({ canSeeItem: (auth, it) => canSee(auth, 'item', it), seal, unseal, db, save, broadcast, rid, hold, cleanText, isDay, readJson, send, badRequest, isOwnerId, escHtml, brandOf, logoUrl, teamDay, offline, allowLocalHooks: process.env.ALLOW_LOCAL_WEBHOOKS === '1', qrSvg, publicUrl: PUBLIC_URL,
   onRecordGone: (rec) => { dropVisits(rec); INV.dropFor(rec); },
   onRecordNews: (rec) => { jobChanged(rec); if (rec.share || rec.qbo?.estId) QB.soon(rec.wsId); },
   // A follow-up from a record's timeline: a task for whoever logged it, about the record.
@@ -9037,6 +9037,14 @@ async function handleRequest(req, res) {
   // A quote sent to a customer: they read it and accept or decline.
   if (url.pathname.startsWith('/q/') && (req.method === 'GET' || req.method === 'POST')) return PJ.quotePage(req, res, url);
   // Leads: the team's lead form page, and its lead webhook (leads.js).
+  // An equipment label (a QR code on the item): opens Kloomie at the item, which then asks the server whether this
+  // person may see it. Every tag that could be one looks the same from here, so there's nothing to learn by guessing.
+  if (url.pathname.startsWith('/a/') && req.method === 'GET') {
+    const tag = url.pathname.slice(3);
+    if (!/^[A-Za-z0-9]{10}$/.test(tag)) return send(res, 404, 'Not found');
+    res.writeHead(302, { Location: `/?go=asset:${tag}`, 'Referrer-Policy': 'no-referrer', 'Cache-Control': 'no-store' });
+    return res.end();
+  }
   if (url.pathname === '/card.js' && req.method === 'GET') return CARDS.script(req, res);
   if (url.pathname.startsWith('/c/')) return CARDS.publicRoute(req, res, url).catch((e) => { alarm('A business card page failed', e); if (!res.headersSent) send(res, 500, 'Something went wrong. Please try again.'); });
   if (url.pathname.startsWith('/l/') && (req.method === 'GET' || req.method === 'POST')) return LEADS.formPage(req, res, url).catch((e) => { alarm('A lead form failed', e); if (!res.headersSent) send(res, 500, 'Something went wrong. Please try again.'); });
@@ -9465,6 +9473,8 @@ async function buildExport(x) {
   };
   const data = {};
   for (const [coll, ok] of Object.entries(sees)) data[coll] = Object.values(db[coll] || {}).filter((y) => inWs(y) && ok(y) && made(y));
+  // Locked fields (lock combos, codes) stay out of exports, even sealed.
+  data.records = data.records.map(({ secrets, ...y }) => y);
   const sig = db.signatures[sigKey(ws.id, me.id)];
   if (sig) data.signatures = [sig];
   if (!mineOnly && me.role === 'owner' && db.pss[ws.id]) data.pss = { dne: db.pss[ws.id].dne || [] };

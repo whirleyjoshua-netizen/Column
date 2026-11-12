@@ -181,7 +181,8 @@ export function agentsModule({ sees = () => true, db, save, broadcast, rid, clea
     if (f.type === 'link') return (v || []).map((id) => db.records[id]).filter(Boolean).map((r) => String(r.values[db.projects[r.projectId]?.types.find((x) => x.id === r.typeId)?.primary] ?? '')).join(', ') || null;
     if (f.type === 'checkbox') return v ? 'yes' : 'no';
     if (f.type === 'checklist') return (v.items || []).map((x) => (x.done ? '☑ ' : '☐ ') + x.text).join('; ') || null;
-    if (['items', 'files', 'signature', 'measure', 'equipment', 'materials', 'readings', 'permit'].includes(f.type)) return null;
+    if (f.type === 'location') return v.address ? words(v.address, 200) : null;
+    if (['items', 'files', 'signature', 'measure', 'equipment', 'materials', 'readings', 'permit', 'secret', 'job'].includes(f.type)) return null;
     return words(v, 200);
   };
   const recLine = (ws, r, extra = 6) => {

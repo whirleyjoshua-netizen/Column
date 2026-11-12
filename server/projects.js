@@ -19,7 +19,15 @@ import { TECH_TEMPLATE, TECH_LATER, techPrefix } from './tech.js';
 export const FIELD_TYPES = ['text', 'number', 'money', 'date', 'select', 'multi', 'person', 'email', 'phone', 'url', 'checkbox', 'link', 'items', 'autonumber', 'files',
   // For jobs at a customer's place: who it's for (a contact), what gets done on site, what was measured, the
   // equipment there, materials used, readings taken, the permit, and the customer's sign-off.
-  'contact', 'checklist', 'measure', 'equipment', 'materials', 'readings', 'signature', 'permit'];
+  'contact', 'checklist', 'measure', 'equipment', 'materials', 'readings', 'signature', 'permit',
+  // For gear that moves between sites (Equipment & assets): where it is now (an address and the spot, every move on
+  // the timeline), the job it's at (a record in another project), and a locked field for a lock combo or a code,
+  // sealed on the server and kept out of the record itself (rec.secrets), shown only when asked for and allowed.
+  'location', 'job', 'secret'];
+// Who can see what's in a locked field: everyone who sees the project, or only those who manage it.
+const REVEAL = ['team', 'managers'];
+const REVEALS_AN_HOUR = 30;
+const TAG_RE = /^[A-Za-z0-9]{10}$/;
 export const PERMIT_STATUS = ['Not needed', 'To apply', 'Applied', 'Approved', 'Inspection booked', 'Passed', 'Failed'];
 const MEASURE_MODES = ['wh', 'area', 'length'];
 const COLORS = ['gray', 'blue', 'green', 'amber', 'rose', 'violet', 'teal'];
@@ -291,13 +299,33 @@ export const TEMPLATES = {
       ], views: [{ name: 'All processes', kind: 'table' }] },
     ],
   },
+  // Gear that moves between sites: camera towers, generators, trailers, tools, laptops. Each item has a label (a QR
+  // code) that opens it in Kloomie to move it, assign it to a job or report a problem.
+  assets: {
+    name: 'Equipment & assets', icon: '📦', about: 'Gear that moves between sites: where each item is, the job it’s at, who has it, its lock combo, and a label to scan',
+    types: [
+      { key: 'assets', name: 'Equipment', singular: 'Item', icon: '📦', primary: 'name', scan: true, fields: [
+        { key: 'name', name: 'Item', type: 'text' },
+        { key: 'number', name: 'Number', type: 'autonumber', prefix: 'A-', start: 101 },
+        { key: 'status', name: 'Status', type: 'select', choices: [choice('At the yard', 'gray'), choice('Deployed', 'blue'), choice('In repair', 'amber'), choice('Lost', 'rose'), choice('Retired', 'violet')] },
+        { key: 'kind', name: 'Kind', type: 'select', choices: [choice('Camera tower', 'blue'), choice('Generator', 'amber'), choice('Trailer', 'teal'), choice('Tool', 'gray'), choice('Other', 'violet')] },
+        { key: 'location', name: 'Where it is', type: 'location' },
+        { key: 'job', name: 'Job it’s at', type: 'job' },
+        { key: 'holder', name: 'Who has it', type: 'person' },
+        { key: 'serial', name: 'Serial / ID', type: 'text' },
+        { key: 'combo', name: 'Lock combo', type: 'secret', reveal: 'team', hint: 'Only shown when someone taps Show, and every look is on the timeline' },
+        { key: 'photos', name: 'Photos', type: 'files' },
+        { key: 'details', name: 'Details', type: 'text', long: true },
+      ], views: [{ name: 'Board', kind: 'board', groupBy: 'status' }, { name: 'All equipment', kind: 'table', sortBy: 'number' }] },
+    ],
+  },
   blank: {
     name: 'Blank', icon: '📁', about: 'One list to shape as you like',
     types: [{ key: 'items', name: 'Items', singular: 'Item', icon: '📄', primary: 'name', fields: [{ key: 'name', name: 'Name', type: 'text' }, { key: 'status', name: 'Status', type: 'select', choices: [choice('To do', 'gray'), choice('Doing', 'blue'), choice('Done', 'green')] }], views: [{ name: 'All', kind: 'table' }, { name: 'Board', kind: 'board', groupBy: 'status' }] }],
   },
 };
 
-export function projectsModule({ canSeeItem = () => true, seal = (x) => x, unseal = (x) => x, db, save, broadcast, rid, hold = null, cleanText, isDay, readJson, send, badRequest, isOwnerId, escHtml, brandOf, logoUrl, teamDay, offline, makeTask, onRecords, onRecordGone, onRecordNews, allowLocalHooks = false }) {
+export function projectsModule({ canSeeItem = () => true, seal = (x) => x, unseal = (x) => x, db, save, broadcast, rid, hold = null, cleanText, isDay, readJson, send, badRequest, isOwnerId, escHtml, brandOf, logoUrl, teamDay, offline, makeTask, onRecords, onRecordGone, onRecordNews, allowLocalHooks = false, qrSvg = null, publicUrl = '' }) {
   const bad = (msg) => badRequest(msg);
   db.projects ||= {};
   db.records ||= {};
@@ -319,15 +347,44 @@ export function projectsModule({ canSeeItem = () => true, seal = (x) => x, unsea
   const publicProject = ({ wsId, github, ...p }) => ({ ...p, ...(github ? { github: { connected: true, repo: github.repo || null } } : {}) });
   // A record goes out with the contacts it points at (name and how to reach them), so whoever does the job can
   // call the customer and find the place, even if they can't open Contacts.
-  const publicRecord = ({ wsId, log, ...r }) => {
+  // What's in a locked field (rec.secrets) never goes out with a record: only that one is set ({ set, at } in values).
+  // The job an item is at goes out with its name and project, when that project isn't private.
+  const publicRecord = ({ wsId, log, secrets, ...r }) => {
     const p = db.projects[r.projectId];
     const t = p?.types.find((x) => x.id === r.typeId);
+    const jobIds = (t?.fields || []).filter((f) => f.type === 'job' && r.values[f.id]).map((f) => r.values[f.id]);
+    if (jobIds.length) {
+      const jobs = {};
+      for (const id of jobIds) { const j = jobOk(wsId, p, id); if (j) jobs[id] = j; }
+      r = { ...r, jobs };
+    }
     const ids = (t?.fields || []).filter((f) => f.type === 'contact' && r.values[f.id]).map((f) => r.values[f.id]);
     if (!ids.length) return r;
     const people = {};
     for (const id of ids) { const c = db.contacts[id]; if (c) people[id] = { name: c.name || '', company: c.company || '', phone: c.phone || '', email: c.email || '', address: c.address || '', city: c.city || '' }; }
     return { ...r, people };
   };
+  // A job an item can be at: a record of the same team, in this project or one that isn't private (everyone who sees
+  // the item sees the job's name). Its name, project and list, or null.
+  function jobOk(wsId, p, id) {
+    const j = db.records[id];
+    const jp = j && db.projects[j.projectId];
+    if (!jp || j.wsId !== wsId || (jp.private && jp.id !== p?.id)) return null;
+    const jt = jp.types.find((x) => x.id === j.typeId);
+    return { name: String(j.values[jt?.primary] ?? '').trim() || jt?.singular || 'Job', project: jp.name, projectId: jp.id, typeId: j.typeId };
+  }
+  // A label's tag: random, unique, and new whenever a label is remade (the old one stops working).
+  const TAG_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
+  function newTag() {
+    for (;;) {
+      const tag = Array.from(crypto.randomBytes(10), (b) => TAG_CHARS[b % TAG_CHARS.length]).join('');
+      if (!Object.values(db.records).some((r) => r.tag === tag)) return tag;
+    }
+  }
+  const labelUrl = (tag) => `${publicUrl}/a/${tag}`;
+  const labelQr = (tag) => (qrSvg ? 'data:image/svg+xml;base64,' + Buffer.from(qrSvg(labelUrl(tag), { scale: 8 })).toString('base64') : null);
+  // Looks at locked fields, per person, in the last hour.
+  const looks = new Map();
   const typeOf = (p, typeId) => p.types.find((t) => t.id === typeId || t.key === typeId);
   const fieldOf = (t, id) => t.fields.find((f) => f.id === id || f.key === id);
 
@@ -367,6 +424,9 @@ export function projectsModule({ canSeeItem = () => true, seal = (x) => x, unsea
     if (f.type === 'readings') return v.rows.filter((r) => r.value !== '').map((r) => `${r.label} ${r.value}${r.unit ? ' ' + r.unit : ''}`).join(', ');
     if (f.type === 'signature') return `signed by ${v.name}`;
     if (f.type === 'permit') return [v.status, v.number ? '#' + v.number : '', v.inspection ? 'inspection ' + v.inspection : ''].filter(Boolean).join(' · ');
+    if (f.type === 'location') return v.address || (Number.isFinite(v.lat) ? `${v.lat.toFixed(5)}, ${v.lng.toFixed(5)}` : '');
+    if (f.type === 'job') return jobOk(ws.id, p, v)?.name || '';
+    if (f.type === 'secret') return v.set ? 'set' : '';
     return String(v).slice(0, 120);
   }
   // Measurements in words: how many and the total area or length.
@@ -385,8 +445,13 @@ export function projectsModule({ canSeeItem = () => true, seal = (x) => x, unsea
       if (f.type === 'autonumber') continue;
       const a = JSON.stringify(before[f.id] ?? null), b = JSON.stringify(rec.values[f.id] ?? null);
       if (a === b) continue;
+      // A locked field: only that it changed, never what it was or is.
+      if (f.type === 'secret') { logTo(rec, { kind: 'change', field: f.name, from: '', to: rec.values[f.id] ? 'a new one (hidden)' : 'cleared', by }); continue; }
       const from = words(ws, p, f, before[f.id]), to = words(ws, p, f, rec.values[f.id]);
-      if (from !== to) logTo(rec, { kind: 'change', field: f.name, from, to, by });
+      // A move: each one kept (not merged with the last), with the spot, for where the item has been.
+      const loc = f.type === 'location' && rec.values[f.id];
+      if (loc && (from !== to || loc.lat !== before[f.id]?.lat || loc.lng !== before[f.id]?.lng)) logTo(rec, { kind: 'move', field: f.name, from, to, by, ...(Number.isFinite(loc.lat) ? { lat: loc.lat, lng: loc.lng } : {}) });
+      else if (from !== to) logTo(rec, { kind: 'change', field: f.name, from, to, by });
     }
   }
   // Activity from elsewhere: a call logged from a campaign's list, a task made or done.
@@ -446,7 +511,7 @@ export function projectsModule({ canSeeItem = () => true, seal = (x) => x, unsea
   // ---------- making projects from templates ----------
   // A list from its definition. Links find their list by key among `others`; one with nowhere to point is left out.
   function typeFrom(src, typeIdOf) {
-    const t = { id: rid(8), key: src.key, name: src.name, singular: src.singular, icon: src.icon, ...(src.trade ? { trade: src.trade } : {}) };
+    const t = { id: rid(8), key: src.key, name: src.name, singular: src.singular, icon: src.icon, ...(src.trade ? { trade: src.trade } : {}), ...(src.scan ? { scan: true } : {}) };
     t.fields = src.fields.filter((f) => f.type !== 'link' || typeIdOf(f.target)).map((f) => ({ id: rid(8), key: f.key, name: f.name, type: f.type, ...(f.choices ? { choices: f.choices.map((c) => ({ id: rid(6), label: c.label, color: c.color })) } : {}), ...(f.type === 'link' ? { target: typeIdOf(f.target), many: !!f.many } : {}), ...(f.type === 'autonumber' ? { prefix: f.prefix || '', next: f.start || 1, start: f.start || 1 } : {}), ...fieldExtras(f) }));
     t.primary = t.fields.find((f) => f.key === src.primary)?.id || t.fields[0].id;
     // A new record starts at the first stage, so it never sits in "No status".
@@ -475,6 +540,7 @@ export function projectsModule({ canSeeItem = () => true, seal = (x) => x, unsea
       out.mode = MEASURE_MODES.includes(f.mode) ? f.mode : 'wh';
       out.unit = ['in', 'ft', 'cm', 'm'].includes(f.unit) ? f.unit : out.mode === 'wh' ? 'in' : 'ft';
     }
+    if (f.type === 'secret') out.reveal = REVEAL.includes(f.reveal) ? f.reveal : 'team';
     if (f.hint) out.hint = cleanText(f.hint, 120);
     if (f.type === 'text' && f.long) out.long = true;
     return out;
@@ -621,7 +687,7 @@ export function projectsModule({ canSeeItem = () => true, seal = (x) => x, unsea
   }
   // A value made to fit its field, or undefined to clear it. Unknown choices are added when allowed (imports
   // and the API), so a sync never fails on a new stage name.
-  function cleanValue(ws, p, t, f, v, { addChoices = false } = {}) {
+  function cleanValue(ws, p, t, f, v, { addChoices = false, rec = null } = {}) {
     if (v === null || v === undefined || v === '') return undefined;
     const str = (n) => cleanText(v, n);
     switch (f.type) {
@@ -763,6 +829,25 @@ export function projectsModule({ canSeeItem = () => true, seal = (x) => x, unsea
         const status = PERMIT_STATUS.find((x) => x.toLowerCase() === String(v.status || '').toLowerCase()) || (v.number ? 'Applied' : 'To apply');
         return { status, ...(v.number ? { number: cleanText(v.number, 40) } : {}), ...(isDay(String(v.inspection || '')) ? { inspection: v.inspection } : {}) };
       }
+      // Where an item is: an address, the spot (from the phone's GPS) or both, and when it got there.
+      case 'location': {
+        const o = typeof v === 'object' ? v : { address: v };
+        const address = cleanText(o.address, 200);
+        const has = o.lat != null && o.lat !== '' && o.lng != null && o.lng !== '';
+        const lat = Number(o.lat), lng = Number(o.lng);
+        if (has && !(Number.isFinite(lat) && Math.abs(lat) <= 90 && Number.isFinite(lng) && Math.abs(lng) <= 180)) throw bad(`${f.name}: that spot isn’t on the map.`);
+        if (!address && !has) return undefined;
+        const at = Number.isFinite(o.at) && o.at <= Date.now() + 60_000 ? o.at : Date.now();
+        return { ...(address ? { address } : {}), ...(has ? { lat: Math.round(lat * 1e6) / 1e6, lng: Math.round(lng * 1e6) / 1e6 } : {}), at };
+      }
+      // The job an item is at: a record of the team's in this project or one that isn't private, not the item itself.
+      case 'job': {
+        const id = String(typeof v === 'object' ? v.id ?? '' : v);
+        if (id === rec?.id || !jobOk(ws.id, p, id)) throw bad(`${f.name}: pick a job from a project everyone on the team can see.`);
+        return id;
+      }
+      // Kept in rec.secrets by applyValues; never a value of its own.
+      case 'secret': return undefined;
       case 'link': {
         const ids = [...new Set((Array.isArray(v) ? v : [v]).map(String))].filter((id) => {
           const r = db.records[id];
@@ -800,7 +885,17 @@ export function projectsModule({ canSeeItem = () => true, seal = (x) => x, unsea
     for (const [k, v] of Object.entries(values)) {
       const f = fieldOf(t, k);
       if (!f || f.type === 'autonumber') continue;
-      const val = cleanValue(ws, p, t, f, v, opts);
+      // A locked field: words in are sealed into rec.secrets; empty clears it; anything else (the { set } marker
+      // sent back) leaves it as it is.
+      if (f.type === 'secret') {
+        if (v === null || v === undefined || v === '') { if (rec.secrets) delete rec.secrets[f.id]; delete rec.values[f.id]; }
+        else if (typeof v === 'string' || typeof v === 'number') {
+          const s = cleanText(v, 500);
+          if (s) { (rec.secrets ||= {})[f.id] = seal({ s }); rec.values[f.id] = { set: true, at: Date.now() }; }
+        }
+        continue;
+      }
+      const val = cleanValue(ws, p, t, f, v, { ...opts, rec });
       if (val === undefined) delete rec.values[f.id];
       else rec.values[f.id] = val;
     }
@@ -831,9 +926,13 @@ export function projectsModule({ canSeeItem = () => true, seal = (x) => x, unsea
     delete db.records[rec.id];
     // Links to it go too.
     for (const r of Object.values(db.records)) {
-      if (r.projectId !== rec.projectId) continue;
+      if (r.wsId !== rec.wsId) continue;
       let changed = false;
-      for (const [k, v] of Object.entries(r.values)) {
+      // Items at it (a job field, from any project) aren't any more.
+      const rp = db.projects[r.projectId];
+      for (const f of (rp && typeOf(rp, r.typeId)?.fields) || []) if (f.type === 'job' && r.values[f.id] === rec.id) { delete r.values[f.id]; changed = true; }
+      if (r.projectId !== rec.projectId && !changed) continue;
+      for (const [k, v] of Object.entries(r.projectId === rec.projectId ? r.values : {})) {
         if (Array.isArray(v) && v.includes(rec.id)) {
           const rest = v.filter((x) => x !== rec.id);
           if (rest.length) r.values[k] = rest;
@@ -855,7 +954,7 @@ export function projectsModule({ canSeeItem = () => true, seal = (x) => x, unsea
   const teamRecords = (wsId) => Object.values(db.records).filter((r) => r.wsId === wsId).length;
   function newRecord(ws, p, t, auth, values, extId, opts) {
     if (teamRecords(ws.id) >= MAX_RECORDS) throw bad(`A team can keep ${MAX_RECORDS.toLocaleString()} records. Delete some first.`);
-    const rec = { id: rid(), wsId: ws.id, projectId: p.id, typeId: t.id, values: {}, extId: extId ? cleanText(extId, 200) : null, by: auth.member, memberId: auth.memberId, createdAt: Date.now(), updatedAt: Date.now() };
+    const rec = { id: rid(), wsId: ws.id, projectId: p.id, typeId: t.id, values: {}, extId: extId ? cleanText(extId, 200) : null, by: auth.member, memberId: auth.memberId, createdAt: Date.now(), updatedAt: Date.now(), ...(t.scan ? { tag: newTag() } : {}) };
     for (const f of t.fields) if (f.type === 'autonumber') rec.values[f.id] = `${f.prefix || ''}${(f.next = (f.next || 1) + 1) - 1}`;
     for (const f of t.fields) if (f.default && f.choices?.some((c) => c.id === f.default)) rec.values[f.id] = f.default;
     // A new job starts with its trade's checklist to tick, and the readings it takes, ready to fill in.
@@ -914,7 +1013,7 @@ export function projectsModule({ canSeeItem = () => true, seal = (x) => x, unsea
         if (t.fields.length >= MAX_FIELDS) throw bad(`A list can have ${MAX_FIELDS} fields.`);
         const type = FIELD_TYPES.includes(body.type) ? body.type : 'text';
         const nm = name(60) || 'Field';
-        const f = { id: rid(8), key: freeKey(nm, new Set(t.fields.map((x) => x.key))), name: nm, type, ...fieldExtras({ type, list: body.list, mode: body.mode, unit: body.unit }) };
+        const f = { id: rid(8), key: freeKey(nm, new Set(t.fields.map((x) => x.key))), name: nm, type, ...fieldExtras({ type, list: body.list, mode: body.mode, unit: body.unit, reveal: body.reveal }) };
         if (type === 'select' || type === 'multi') f.choices = (Array.isArray(body.choices) ? body.choices : []).slice(0, 100).map((c, i) => ({ id: rid(6), label: cleanText(c?.label ?? c, 60), color: COLORS.includes(c?.color) ? c.color : COLORS[i % COLORS.length] })).filter((c) => c.label);
         if (type === 'autonumber') {
           f.prefix = cleanText(body.prefix, 10);
@@ -947,6 +1046,7 @@ export function projectsModule({ canSeeItem = () => true, seal = (x) => x, unsea
           }
         }
         if (body.many !== undefined && f.type === 'link') f.many = !!body.many;
+        if (body.reveal !== undefined && f.type === 'secret') f.reveal = REVEAL.includes(body.reveal) ? body.reveal : f.reveal;
         if (Array.isArray(body.list) && (f.type === 'checklist' || f.type === 'readings')) f.list = fieldExtras({ type: f.type, list: body.list }).list;
         if (body.unit !== undefined && f.type === 'measure') f.unit = fieldExtras({ type: 'measure', mode: f.mode, unit: body.unit }).unit;
         // A sign-off's form (one of the team's, or none for the plain sign-off) and the stage a record moves to once signed.
@@ -975,7 +1075,7 @@ export function projectsModule({ canSeeItem = () => true, seal = (x) => x, unsea
         if (f.id === t.primary) throw bad('That’s the name of each record. Rename it instead.');
         t.fields = t.fields.filter((x) => x !== f);
         for (const v of t.views) if (v.groupBy === f.id) { v.kind = 'table'; delete v.groupBy; }
-        for (const r of Object.values(db.records)) if (r.projectId === p.id && r.typeId === t.id) delete r.values[f.id];
+        for (const r of Object.values(db.records)) if (r.projectId === p.id && r.typeId === t.id) { delete r.values[f.id]; if (r.secrets) delete r.secrets[f.id]; }
         return null;
       }
       case 'addView':
@@ -1050,6 +1150,18 @@ export function projectsModule({ canSeeItem = () => true, seal = (x) => x, unsea
       }
       return send(res, 200, out.sort((x, y) => y.createdAt - x.createdAt).slice(0, 100));
     }
+    // A scanned label: the item it's on, for someone on its team who sees its project (anyone else: not found).
+    // The item is marked seen, by whom and when, so the team knows what hasn't been checked on in a while.
+    if (a === 'records' && b === 'by-tag' && m === 'POST') {
+      const rec = TAG_RE.test(c || '') ? Object.values(db.records).find((r) => r.tag === c && r.wsId === ws.id) : null;
+      const p = rec && db.projects[rec.projectId];
+      if (!p || !sees(p, auth.memberId)) return send(res, 404, { error: 'That label isn’t one of your team’s, or you can’t see what it’s on.' });
+      rec.seenAt = Date.now();
+      rec.seenBy = auth.member;
+      save();
+      broadcast(rec.wsId, { type: 'record', record: publicRecord(rec), projectId: rec.projectId });
+      return send(res, 200, { id: rec.id, projectId: p.id, typeId: rec.typeId });
+    }
     if (a === 'projects') {
       if (m === 'GET' && !b) return send(res, 200, Object.values(db.projects).filter((p) => p.wsId === ws.id && sees(p, auth.memberId)).map(publicProject));
       if (m === 'POST' && !b) {
@@ -1082,6 +1194,17 @@ export function projectsModule({ canSeeItem = () => true, seal = (x) => x, unsea
         save();
         return send(res, 200, { reset: list.length });
       }
+      // Labels to print: a QR code for each item in a list (made for those without one yet), its number and name.
+      if (m === 'GET' && c === 'labels') {
+        const t = typeOf(p, new URL(req.url, 'http://x').searchParams.get('typeId') || '');
+        if (!t) return send(res, 400, { error: 'Pick which list to print labels for.' });
+        const num = t.fields.find((f) => f.type === 'autonumber');
+        let made = 0;
+        const list = Object.values(db.records).filter((r) => r.projectId === p.id && r.typeId === t.id).sort((x, y) => x.createdAt - y.createdAt).slice(0, 500);
+        for (const r of list) if (!r.tag) { r.tag = newTag(); made++; }
+        if (made) save();
+        return send(res, 200, { labels: list.map((r) => ({ id: r.id, name: recName(p, r), number: num ? r.values[num.id] || '' : '', tag: r.tag, url: labelUrl(r.tag), qr: labelQr(r.tag) })) });
+      }
       if (m === 'POST' && c === 'template') {
         const body = await readJson(req, 10_000);
         if (Object.values(db.projectTemplates).filter((x) => x.wsId === ws.id).length >= 50) return send(res, 400, { error: 'A team can keep 50 templates. Delete one first.' });
@@ -1092,6 +1215,8 @@ export function projectsModule({ canSeeItem = () => true, seal = (x) => x, unsea
       }
       if (m === 'POST' && c === 'schema') {
         const body = await readJson(req, 200_000);
+        // Who sees a locked field is up to those who manage the project.
+        if (body.op === 'updateField' && body.reveal !== undefined && !canManage(p, auth)) return send(res, 403, { error: 'Only whoever made the project and team admins can change who sees this.' });
         if (body.op === 'removeType') {
           const t = typeOf(p, body.typeId);
           const n = t ? Object.values(db.records).filter((r) => r.projectId === p.id && r.typeId === t.id).length : 0;
@@ -1199,6 +1324,31 @@ export function projectsModule({ canSeeItem = () => true, seal = (x) => x, unsea
       const p = rec && db.projects[rec.projectId];
       if (!rec || rec.wsId !== ws.id || !sees(p, auth.memberId)) return send(res, 404, { error: 'That record is gone.' });
       const t = typeOf(p, rec.typeId);
+      // What's in a locked field, for someone allowed: everyone who sees the project, or (when the field says so) only
+      // those who manage it. Every look goes on the timeline (who and when, never what), at most 30 an hour each.
+      if (c === 'reveal' && d && m === 'POST') {
+        const f = fieldOf(t, d);
+        if (f?.type !== 'secret') return send(res, 404, { error: 'That field is gone.' });
+        if (f.reveal === 'managers' && !canManage(p, auth)) return send(res, 403, { error: `Only whoever made ${p.name} and team admins can see the ${f.name.toLowerCase()}.` });
+        const sealed = rec.secrets?.[f.id];
+        if (!sealed) return send(res, 404, { error: `No ${f.name.toLowerCase()} is saved here.` });
+        const now = Date.now();
+        const mine = (looks.get(auth.memberId) || []).filter((x) => now - x < 3600_000);
+        if (mine.length >= REVEALS_AN_HOUR) return send(res, 429, { error: 'That’s a lot of looks in an hour. Try again later.' });
+        looks.set(auth.memberId, [...mine, now]);
+        let value;
+        try { value = unseal(sealed).s; } catch { return send(res, 500, { error: 'That couldn’t be opened. Save it again.' }); }
+        logTo(rec, { kind: 'reveal', what: f.name, by: auth.member, memberId: auth.memberId });
+        save();
+        return send(res, 200, { value });
+      }
+      // A new label: a new tag, so the old label stops working.
+      if (c === 'tag' && m === 'POST') {
+        rec.tag = newTag();
+        save();
+        broadcast(rec.wsId, { type: 'record', record: publicRecord(rec), projectId: rec.projectId });
+        return send(res, 200, { tag: rec.tag, url: labelUrl(rec.tag), qr: labelQr(rec.tag) });
+      }
       // Finishing a sprint: it's marked Done and what isn't done moves to the next sprint (made if there's none)
       // or back to the backlog.
       if (c === 'finish-sprint' && m === 'POST') {
@@ -1577,6 +1727,8 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
     if (f.type === 'multi') return v.map((id) => f.choices.find((c) => c.id === id)?.label).filter(Boolean);
     if (f.type === 'person') { const m = ws.members.find((x) => x.id === v); return m ? { id: m.id, name: m.name } : null; }
     if (f.type === 'link') return f.many ? v : v[0] ?? null;
+    if (f.type === 'secret') return { set: true }; // never what it is
+    if (f.type === 'location') return { address: v.address ?? null, lat: v.lat ?? null, lng: v.lng ?? null, at: new Date(v.at).toISOString() };
     if (f.type === 'items') {
       const t2 = itemsTotals(v);
       const d = (c) => c / 100;
