@@ -24,7 +24,7 @@ ok(r.status === 200 && r.body.length === 6 && all.length >= 35 && all.some((x) =
 // A Jobs project for a blinds installer that also does HVAC.
 r = await jo('POST', '/projects', { template: 'trades', trades: ['blinds', 'hvac', 'nope'] });
 const p = r.body;
-ok(r.status === 200 && p.name === 'Jobs' && p.types.length === 2, 'a Jobs project with a list for each trade picked (unknown ones left out)');
+ok(r.status === 200 && p.name === 'Jobs' && p.types.filter((x) => x.trade).length === 2 && p.types.map((x) => x.key).join() === 'trade_blinds,trade_hvac,plans,equipment,licenses', 'a Jobs project with a list for each trade picked (unknown ones left out), plus service plans, customer equipment and licenses');
 const blinds = p.types.find((x) => x.key === 'trade_blinds'), hvac = p.types.find((x) => x.key === 'trade_hvac');
 const fk = (t, key) => t.fields.find((f) => f.key === key);
 ok(fk(blinds, 'customer').type === 'contact' && fk(blinds, 'measurements').type === 'measure' && fk(blinds, 'measurements').mode === 'wh' && fk(blinds, 'measurements').unit === 'in', 'blinds jobs: a customer and window measurements in inches');

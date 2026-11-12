@@ -4918,7 +4918,9 @@
     for (const e of c.events) { AUTO_WHEN[e.type] = e.label; AUTO_WORDS[e.type] = e.words; }
     return AUTO_CAT;
   }
-  const AUTO_DO = { task: 'Make a task', post: 'Post in a feed', campaign: 'Start a saved campaign', notify: 'Notify people', contact: 'Change the contact' };
+  const AUTO_DO = { task: 'Make a task', post: 'Post in a feed', campaign: 'Start a saved campaign', notify: 'Notify people', contact: 'Change the contact', record: 'Change the job or record', create: 'Add a job or record' };
+  // The fields an automation can set (the server checks the same): plain values, never price lines or files.
+  const AUTO_SET_T = ['text', 'number', 'money', 'date', 'select', 'multi', 'checkbox', 'person', 'email', 'phone', 'url'];
   const AUTO_WORDS = {
     'task.done': ['task', 'campaign', 'who'], 'file.received': ['file', 'from', 'campaign'], 'document.signed': ['document', 'from', 'campaign', 'who'],
     'contact.created': ['contact', 'stage', 'who'], 'contact.stage': ['contact', 'stage', 'who'], 'attempt.logged': ['contact', 'outcome', 'note', 'campaign', 'who'],
@@ -4936,7 +4938,9 @@
   const DOWS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
   function autoSummary(x) {
     const t = x.trigger;
+    const dateF = t.kind === 'record.date' && projById(t.projectId)?.types.find((y) => y.id === t.typeId)?.fields.find((f) => f.id === t.fieldId);
     const when = t.kind === 'schedule' ? `Every ${t.slots?.[0] ? t.slots[0].days.map((d) => DOWS[d]).join(', ') + ' at ' + hhmm(t.slots[0].time) : '…'}`
+      : t.kind === 'record.date' ? `${t.days ? `${plural(Math.abs(t.days), 'day')} ${t.days < 0 ? 'before' : 'after'}` : 'On'} ${dateF ? dateF.name : 'a date'} in ${projById(t.projectId)?.name || 'a project'}`
       : (AUTO_WHEN[t.kind] || t.kind) + [t.projectId && projById(t.projectId) ? ` in ${projById(t.projectId).name}` : '', t.to ? ` to ${t.to}` : '', t.over ? ` over $${t.over}` : '', t.direction ? (t.direction === 'in' ? ' (money in)' : ' (money out)') : '', t.campaignId && campById(t.campaignId) ? ` in ${campById(t.campaignId).name}` : '', t.stage ? ` to ${stageLabel(t.stage)}` : '', t.outcome ? ` as ${t.outcome}` : '', t.statuses?.length ? ` (${t.statuses.map((v) => HEALTH_L[v]).join(' or ')})` : ''].join('');
     const said = (list) => list.map((a) => (a.kind === 'wait' ? `wait ${a.amount} ${a.unit}` : a.kind === 'if' ? `if ${a.when.map((c) => '{' + c.field + '}').join(' and ')}: ${said(a.then) || 'nothing'}${a.else?.length ? '; otherwise ' + said(a.else) : ''}` : (AUTO_DO[a.kind] || a.kind).toLowerCase())).join(', ');
     return `${when} → ${said(x.actions)}`;
@@ -4952,6 +4956,9 @@
     { name: 'Good call? Follow up', why: 'When a call is logged as Interested, make a follow-up task for whoever made it', trigger: { kind: 'attempt.logged', outcome: 'Interested' }, actions: [{ kind: 'task', text: 'Send {contact} a quote', assignee: 'who', dueIn: 1, campaign: 'same' }] },
     { name: 'New customer? Onboard them', why: 'When a contact becomes a Customer, the owners hear it’s time to onboard them', trigger: { kind: 'contact.stage', stage: 'customer' }, actions: [{ kind: 'notify', text: '{contact} is a new customer. Time to onboard them.', to: ['owners'] }] },
     { name: 'Off track? Tell the owners', why: 'When a campaign is checked in at risk or off track, the owners hear why', trigger: { kind: 'campaign.checkin', statuses: ['atRisk', 'offTrack'] }, actions: [{ kind: 'notify', text: '{who} checked in on {campaign}: {note}', to: ['owners'] }] },
+    { name: 'License expiring? Owners hear', why: '30 days before a license or insurance expires, the owners get a note (Licenses & insurance list)', trigger: { kind: 'record.date', days: -30, time: '08:00' }, actions: [{ kind: 'notify', text: '{record} expires {date}. Time to renew.', to: ['owners'] }] },
+    { name: 'Plan renewing? Call them', why: '14 days before a service plan renews, make a task to call the customer', trigger: { kind: 'record.date', days: -14, time: '08:00' }, actions: [{ kind: 'task', text: 'Call about renewing {record} ({date})', assignee: '', dueIn: 3, campaign: '' }] },
+    { name: 'Done? Send the bill', why: 'When a job moves to Done, whoever moved it gets a task to send the invoice', trigger: { kind: 'record.stage', to: 'Done' }, actions: [{ kind: 'task', text: 'Send the invoice for {record}', assignee: 'who', dueIn: 0, campaign: '' }] },
     { name: 'Monday goals', why: 'Every Monday at 9, ask the team for the week’s goals', trigger: { kind: 'schedule', slots: [{ days: [1], time: '09:00' }] }, actions: [{ kind: 'post', text: 'Good morning! What are your goals for this week?', channelId: 'general' }] },
   ];
   function automationsTool() {
@@ -5024,6 +5031,28 @@
         sel.addEventListener('change', () => { t.projectId = sel.value || null; t.typeId = null; t.to = null; draw(); });
         only.push(h('label', {}, 'In', sel));
         const p = projById(t.projectId);
+        if (p) {
+          const ls = h('select', { class: 'auto-list' }, opt('', 'Any list', t.typeId || ''), p.types.map((y) => opt(y.id, y.name, t.typeId || '')));
+          ls.addEventListener('change', () => { t.typeId = ls.value || null; t.fieldId = null; draw(); });
+          only.push(h('label', {}, 'List', ls));
+        }
+        if (fl.includes('date')) {
+          const lt = p?.types.find((y) => y.id === t.typeId);
+          const dates = (lt?.fields || []).filter((f) => f.type === 'date' || (f.type === 'formula' && f.format === 'date'));
+          if (!t.fieldId && dates[0]) t.fieldId = dates[0].id;
+          const df = h('select', { class: 'auto-datef' }, dates.length ? dates.map((f) => opt(f.id, f.name, t.fieldId)) : opt('', lt ? 'This list has no date' : 'Pick a project and list first', ''));
+          df.addEventListener('change', () => (t.fieldId = df.value));
+          t.days ??= 0;
+          const n = h('input', { type: 'number', min: 0, max: 365, value: Math.abs(t.days), class: 'auto-days', 'aria-label': 'How many days' });
+          const side = h('select', { class: 'auto-side', 'aria-label': 'Before or after' }, opt('before', 'days before', t.days < 0 ? 'before' : 'after'), opt('after', 'days after', t.days < 0 ? 'before' : 'after'));
+          const setDays = () => (t.days = (side.value === 'before' ? -1 : 1) * Math.abs(Math.round(Number(n.value) || 0)));
+          n.addEventListener('input', setDays);
+          side.addEventListener('change', setDays);
+          const at = h('input', { type: 'time', value: t.time || '08:00' });
+          at.addEventListener('change', () => (t.time = at.value || '08:00'));
+          only.push(h('label', {}, 'Date', df), h('div', { class: 'row2' }, h('label', {}, 'When', n), h('label', {}, '', side)), h('label', {}, 'At', at),
+            h('small', { class: 'hint' }, '0 days is on the day. Before a date it goes off any day until the date (a license added with 10 days left still warns); once for each date.'));
+        }
         if (fl.includes('to')) {
           const stages = [...new Set((p ? p.types : projs.flatMap((x) => x.types)).flatMap((ty) => (ty.fields.find((f) => f.type === 'select' && ['status', 'stage'].includes(f.key)) || ty.fields.find((f) => f.type === 'select'))?.choices || []).map((c) => c.label))];
           const to = h('select', { class: 'auto-to' }, opt('', 'Any stage', t.to || ''), stages.map((v) => opt(v, v, t.to || '')));
@@ -5080,7 +5109,9 @@
         const k = h('select', { class: 'auto-step-kind', 'aria-label': 'What this step does' }, Object.entries(AUTO_DO).map(([v, l]) => opt(v, l, a.kind)), opt('wait', 'Wait…', a.kind), depth < 3 ? opt('if', 'Only if…', a.kind) : null);
         k.addEventListener('change', () => {
           list[i] = k.value === 'if' ? { kind: 'if', when: [{ field: fields.includes('stage') ? 'stage' : fields[0], op: 'is', value: '' }], then: [{ kind: 'notify', text: '', to: [] }], else: [] }
-            : k.value === 'wait' ? { kind: 'wait', amount: 1, unit: 'days' } : { kind: k.value, text: a.text || '', to: [], channelId: 'same' };
+            : k.value === 'wait' ? { kind: 'wait', amount: 1, unit: 'days' }
+            : k.value === 'record' || k.value === 'create' ? { kind: k.value, projectId: t.projectId || S.projects?.[0]?.id || '', typeId: t.projectId ? t.typeId || '' : '', set: [] }
+            : { kind: k.value, text: a.text || '', to: [], channelId: 'same' };
           draw();
         });
         const text = (ph) => { const el = h('input', { value: a.text || '', placeholder: ph }); el.addEventListener('input', () => (a.text = el.value)); return el; };
@@ -5117,6 +5148,33 @@
           const tag = h('input', { value: a.tag || '', placeholder: 'onboarded' });
           tag.addEventListener('input', () => (a.tag = tag.value.trim()));
           f.push(h('div', { class: 'row2' }, h('label', {}, 'Set stage to', st), h('label', {}, 'Add tag', tag)));
+        }
+        if (a.kind === 'record' || a.kind === 'create') {
+          const projs = S.projects || [];
+          const ap = projById(a.projectId);
+          const ps = h('select', { class: 'auto-rec-proj', 'aria-label': 'Project' }, projs.map((x) => opt(x.id, x.name, a.projectId)));
+          ps.addEventListener('change', () => { a.projectId = ps.value; a.typeId = ''; a.set = []; draw(); });
+          if (ap && !ap.types.some((y) => y.id === a.typeId)) a.typeId = ap.types[0]?.id || '';
+          const lt = ap?.types.find((y) => y.id === a.typeId);
+          const ls = h('select', { class: 'auto-rec-list', 'aria-label': 'List' }, (ap?.types || []).map((y) => opt(y.id, y.name, a.typeId)));
+          ls.addEventListener('change', () => { a.typeId = ls.value; a.set = []; draw(); });
+          a.set ||= [];
+          const can = (lt?.fields || []).filter((f) => AUTO_SET_T.includes(f.type));
+          const setRow = (x, si) => {
+            const fs = h('select', { class: 'auto-set-f', 'aria-label': 'Field' }, can.map((f) => opt(f.id, f.name, x.field)));
+            fs.addEventListener('change', () => { x.field = fs.value; x.value = ''; draw(); });
+            const f = can.find((y) => y.id === x.field);
+            let val;
+            if (f?.type === 'select') { val = h('select', {}, opt('', 'Empty', x.value || ''), f.choices.map((c) => opt(c.id, c.label, x.value || ''))); val.addEventListener('change', () => (x.value = val.value)); }
+            else if (f?.type === 'person') { val = h('select', {}, opt('', 'Nobody', x.value || ''), opt('who', 'Whoever set it off', x.value || ''), people.map((m) => opt(m.id, m.name, x.value || ''))); val.addEventListener('change', () => (x.value = val.value)); }
+            else if (f?.type === 'checkbox') { val = h('select', {}, opt('true', 'Ticked', String(!!x.value)), opt('false', 'Not ticked', String(!!x.value))); val.addEventListener('change', () => (x.value = val.value === 'true')); }
+            else { val = h('input', { value: x.value ?? '', placeholder: f?.type === 'date' ? 'today+3, or 2026-12-01' : f?.type === 'money' || f?.type === 'number' ? '250' : '{record} …', 'aria-label': 'Value' }); val.addEventListener('input', () => (x.value = val.value)); }
+            return h('div', { class: 'auto-set-row' }, fs, val, h('button', { class: 'icon-btn', 'aria-label': 'Remove', html: I.close, onclick: () => { a.set.splice(si, 1); draw(); } }));
+          };
+          f.push(h('div', { class: 'row2' }, h('label', {}, 'In', ps), h('label', {}, 'List', ls)),
+            ...a.set.map(setRow),
+            can.length && a.set.length < 10 ? h('button', { class: 'linkish', onclick: () => { a.set.push({ field: (can.find((y) => !a.set.some((z) => z.field === y.id)) || can[0]).id, value: '' }); draw(); } }, '+ Set a field') : null,
+            h('small', { class: 'hint' }, a.kind === 'record' ? `Changes the ${(lt?.singular || 'record').toLowerCase()} that set it off, when it’s in this list. On its timeline as this automation.` : `Adds one to ${lt?.name || 'the list'}, named after what set it off unless you set its name, for the same customer and linked back when it can be.`));
         }
         if (a.kind === 'wait') {
           const n = h('input', { type: 'number', min: 1, max: 999, value: a.amount ?? 1, class: 'auto-wait-n', 'aria-label': 'How long' });
@@ -9357,8 +9415,8 @@
   const recById = (pid, id) => prRecs(pid).find((r) => r.id === id);
   const recName = (t, r) => String(r?.values[t.primary] ?? '').trim() || 'Untitled';
   const PF_COLOR = { gray: '#8b8b98', blue: '#4ea1ff', green: '#3ddc97', amber: '#ffb547', rose: '#ff6b8b', violet: '#8b7cff', teal: '#2dd4bf' };
-  const PF_IC = { text: 'Aa', number: '#', money: '$', date: '📅', select: '◉', multi: '☰', person: '👤', email: '@', phone: '☏', url: '🔗', checkbox: '☑', link: '↗', items: '🧾', autonumber: '№', files: '📎', contact: '👤', checklist: '☑', measure: '📏', equipment: '⚙', materials: '🧱', readings: '📈', signature: '✍', permit: '📋', location: '📍', job: '🛠', secret: '🔒' };
-  const PF_NAME = { text: 'Text', number: 'Number', money: 'Money', date: 'Date', select: 'Options (one)', multi: 'Options (many)', person: 'Person', email: 'Email', phone: 'Phone', url: 'Web link', checkbox: 'Checkbox', link: 'Link to another list', items: 'Line items (quote, estimate)', autonumber: 'Auto number', files: 'Files', contact: 'Customer (from Contacts)', checklist: 'Checklist', measure: 'Measurements', equipment: 'Equipment', materials: 'Materials and parts', readings: 'Readings', signature: 'Sign-off (signature)', permit: 'Permit', location: 'Where it is (address and spot)', job: 'Job it’s at (from another project)', secret: 'Locked (a combo or code)' };
+  const PF_IC = { text: 'Aa', number: '#', money: '$', date: '📅', select: '◉', multi: '☰', person: '👤', email: '@', phone: '☏', url: '🔗', checkbox: '☑', link: '↗', items: '🧾', autonumber: '№', files: '📎', contact: '👤', checklist: '☑', measure: '📏', equipment: '⚙', materials: '🧱', readings: '📈', signature: '✍', permit: '📋', location: '📍', job: '🛠', secret: '🔒', formula: 'ƒ', rollup: 'Σ' };
+  const PF_NAME = { text: 'Text', number: 'Number', money: 'Money', date: 'Date', select: 'Options (one)', multi: 'Options (many)', person: 'Person', email: 'Email', phone: 'Phone', url: 'Web link', checkbox: 'Checkbox', link: 'Link to another list', items: 'Line items (quote, estimate)', autonumber: 'Auto number', files: 'Files', contact: 'Customer (from Contacts)', checklist: 'Checklist', measure: 'Measurements', equipment: 'Equipment', materials: 'Materials and parts', readings: 'Readings', signature: 'Sign-off (signature)', permit: 'Permit', location: 'Where it is (address and spot)', job: 'Job it’s at (from another project)', secret: 'Locked (a combo or code)', formula: 'Formula (worked out from other fields)', rollup: 'Rollup (adds up linked records)' };
   const prCall = async (method, path, body) => {
     try {
       return await api(method, path, body);
@@ -9583,6 +9641,8 @@
       { label: 'Rename view', run: () => { const i = h('input', { value: x.name }); sheet('Rename view', [h('label', {}, 'Name', i)], () => prSchema(p, { op: 'updateView', typeId: t.id, viewId: x.id, name: i.value })); } },
       { label: x.kind === 'board' ? 'Show as a table' : 'Show as a board', run: () => prSchema(p, { op: 'updateView', typeId: t.id, viewId: x.id, kind: x.kind === 'board' ? 'table' : 'board' }) },
       x.kind !== 'timeline' && t.fields.some((f) => f.type === 'date') ? { label: 'Show as a timeline', run: () => prSchema(p, { op: 'updateView', typeId: t.id, viewId: x.id, kind: 'timeline' }) } : null,
+      x.kind !== 'calendar' && t.fields.some((f) => f.type === 'date') ? { label: 'Show as a calendar', run: () => prSchema(p, { op: 'updateView', typeId: t.id, viewId: x.id, kind: 'calendar' }) } : null,
+      ...(x.kind === 'calendar' ? t.fields.filter((f) => f.type === 'date').map((f) => ({ label: `By ${f.name}`, on: x.start === f.id, run: () => prSchema(p, { op: 'updateView', typeId: t.id, viewId: x.id, start: f.id }) })) : []),
       ...(x.kind === 'board' ? t.fields.filter((f) => f.type === 'select').map((f) => ({ label: `Columns by ${f.name}`, on: x.groupBy === f.id, run: () => prSchema(p, { op: 'updateView', typeId: t.id, viewId: x.id, groupBy: f.id }) })) : []),
       t.views.length > 1 ? { label: 'Delete view', danger: true, run: () => { PR.view = null; prSchema(p, { op: 'removeView', typeId: t.id, viewId: x.id }); } } : null,
     ].filter(Boolean));
@@ -9596,9 +9656,9 @@
         h('button', { class: 'icon-btn', 'aria-label': 'Project options', html: I.more, onclick: more }),
         h('button', { class: 'icon-btn', 'aria-label': 'Close Projects', html: I.close, onclick: closeProjects })),
       h('div', { class: 'pj-bar' },
-        h('div', { class: 'pj-views' }, t.views.map((x) => h('button', { class: x.id === v.id ? 'on' : null, onclick: () => { PR.view = x.id; renderProjects(); }, oncontextmenu: (e) => { e.preventDefault(); viewMenu(e, x); } }, { board: '▥ ', timeline: '▤ ', sprint: '🏃 ' }[x.kind] || '☰ ', x.name)),
+        h('div', { class: 'pj-views' }, t.views.map((x) => h('button', { class: x.id === v.id ? 'on' : null, onclick: () => { PR.view = x.id; renderProjects(); }, oncontextmenu: (e) => { e.preventDefault(); viewMenu(e, x); } }, { board: '▥ ', timeline: '▤ ', sprint: '🏃 ', calendar: '📅 ' }[x.kind] || '☰ ', x.name)),
           h('button', { class: 'pj-view-more', title: 'This view', 'aria-label': 'View options', onclick: (e) => viewMenu(e, v) }, '⌄'),
-          h('button', { class: 'pj-view-add', title: 'Add a view', onclick: (e) => openMenu(e.currentTarget, [{ label: '☰ Table', run: () => prSchema(p, { op: 'addView', typeId: t.id, name: 'Table', kind: 'table' }, true) }, { label: '▥ Board', run: () => prSchema(p, { op: 'addView', typeId: t.id, name: 'Board', kind: 'board' }, true) }]) }, '+')),
+          h('button', { class: 'pj-view-add', title: 'Add a view', onclick: (e) => openMenu(e.currentTarget, [{ label: '☰ Table', run: () => prSchema(p, { op: 'addView', typeId: t.id, name: 'Table', kind: 'table' }, true) }, { label: '▥ Board', run: () => prSchema(p, { op: 'addView', typeId: t.id, name: 'Board', kind: 'board' }, true) }, t.fields.some((f) => f.type === 'date') ? { label: '📅 Calendar', run: () => prSchema(p, { op: 'addView', typeId: t.id, name: 'Calendar', kind: 'calendar' }, true) } : null].filter(Boolean)) }, '+')),
         search,
         h('button', { class: 'btn primary-btn', onclick: () => prNew(p, t) }, `+ New ${(t.singular || 'record').toLowerCase()}`)),
       t.scan && PR.loading !== p.id ? assetCounts(p, t, recs) : null,
@@ -9648,7 +9708,28 @@
     if (f.type === 'location') return locText(v);
     if (f.type === 'job') return jobName(v);
     if (f.type === 'secret') return v.set ? '••••' : '';
+    if (CALC_T.has(f.type)) { const k = calcKind(p, f); return k === 'money' ? money(v) : k === 'days' ? plural(v, 'day') : k === 'date' ? v : Number(v).toLocaleString(); }
     return String(v);
+  }
+  // Formulas and rollups come worked out by the server (in the record's values): money in cents, a day, or a number.
+  const CALC_T = new Set(['formula', 'rollup']);
+  const NUM_T = ['number', 'money', 'date', 'checkbox', 'items', 'formula', 'rollup'];
+  const listOfField = (p, f) => p.types.find((x) => x.fields.includes(f));
+  function calcKind(p, f, depth = 0) {
+    if (f.type === 'formula') return f.format || 'number';
+    if (f.fn === 'count' || f.fn === 'checked' || depth > 8) return 'number';
+    const lf = listOfField(p, f)?.fields.find((x) => x.id === f.via);
+    const of = lf && prType(p, lf.target)?.fields.find((x) => x.id === f.of);
+    const k = !of ? 'number' : CALC_T.has(of.type) ? calcKind(p, of, depth + 1) : of.type;
+    return k === 'money' || k === 'items' ? 'money' : k === 'date' ? 'date' : 'number';
+  }
+  // A formula as people write it: its fields by name (it's kept by id, so a rename doesn't break it).
+  const fxText = (p, f) => { const t = listOfField(p, f); return String(f.expr || '').replace(/\{#(\w+)\}/g, (m, id) => `{${t?.fields.find((g) => g.id === id)?.name || 'a field that’s gone'}}`); };
+  const ROLL_FN = { count: 'How many', sum: 'Add up', avg: 'Average', min: 'Lowest / earliest', max: 'Highest / latest', checked: 'How many are ticked' };
+  function calcAbout(p, f) {
+    if (f.type === 'formula') return '= ' + fxText(p, f);
+    const t = listOfField(p, f), lf = t?.fields.find((x) => x.id === f.via), to = lf && prType(p, lf.target), of = to?.fields.find((x) => x.id === f.of);
+    return `${ROLL_FN[f.fn] || f.fn}${of ? ' ' + of.name : ''} of ${lf?.name || 'the linked records'}`;
   }
   const pjChip = (c) => h('span', { class: 'pj-chip', style: `--c:${PF_COLOR[c.color] || PF_COLOR.gray}` }, c.label);
   // A value as it shows in a cell or card.
@@ -9677,6 +9758,7 @@
     if (f.type === 'location') return h('span', { class: 'as-loc', title: v.at ? 'Since ' + new Date(v.at).toLocaleString() : '' }, '📍 ', locText(v), v.at ? h('small', {}, ' · ' + ago(v.at)) : null);
     if (f.type === 'job') return h('button', { class: 'pj-link', onclick: (e) => { e.stopPropagation(); openRecord(v); } }, '🛠 ' + (jobName(v) || 'A job'));
     if (f.type === 'secret') return h('span', { class: 'pj-chip', style: `--c:${PF_COLOR.gray}` }, '🔒 Saved');
+    if (CALC_T.has(f.type)) return calcKind(p, f) === 'date' ? h('span', { class: 'pj-calc', title: calcAbout(p, f) }, dueLabel(v)) : h('span', { class: 'pj-num pj-calc', title: calcAbout(p, f) }, prText(p, f, v));
     return String(v);
   }
   async function prSet(p, r, f, value) {
@@ -9690,6 +9772,7 @@
     const set = (val) => prSet(p, r, f, val);
     if (f.type === 'checkbox') return set(!v);
     if (f.type === 'autonumber') return toast('Kloomie numbers these itself.');
+    if (CALC_T.has(f.type)) return toast(`Kloomie works this out: ${calcAbout(p, f)}`);
     if (f.type === 'items') { PR.panel = r.id; return renderProjects(); }
     if (f.type === 'contact') return pickContact((x) => set(x.id));
     if (f.type === 'location') return locSheet(p, t, r, f);
@@ -9782,6 +9865,7 @@
       v.sort ? { label: 'Newest first (no sort)', run: () => prSchema(p, { op: 'updateView', typeId: t.id, viewId: v.id, sort: null }) } : null,
       { label: 'Rename', run: () => { const i = h('input', { value: f.name }); sheet('Rename field', [h('label', {}, 'Name', i), h('p', { class: 'day-hint' }, `Apps connected to Kloomie still find it as “${f.key}”.`)], () => prSchema(p, { op: 'updateField', typeId: t.id, fieldId: f.id, name: i.value })); } },
       f.choices ? { label: 'Edit options…', run: () => prEditChoices(p, t, f) } : null,
+      CALC_T.has(f.type) ? { label: f.type === 'formula' ? 'Edit the formula…' : 'Change what it adds up…', run: () => prCalcSheet(p, t, f) } : null,
       f.type === 'signature' ? { label: 'Sign-off form…', run: async () => { const forms = await signForms(true); openMenu(e.target, [{ head: `The form every ${(t.singular || 'record').toLowerCase()} signs` }, ...forms.map((x) => ({ label: x.name, on: f.form === x.id, run: () => prSchema(p, { op: 'updateField', typeId: t.id, fieldId: f.id, form: x.id }) })), { label: 'No form: the plain sign-off', on: !f.form, run: () => prSchema(p, { op: 'updateField', typeId: t.id, fieldId: f.id, form: null }) }, { head: '' }, { label: '✏️ Make a form…', run: () => signFormSheet(p, t, null, (x) => prSchema(p, { op: 'updateField', typeId: t.id, fieldId: f.id, form: x.id })) }, { label: '⬆️ Upload a PDF form…', run: () => signFormUpload((x) => prSchema(p, { op: 'updateField', typeId: t.id, fieldId: f.id, form: x.id })) }]); } } : null,
       f.type === 'secret' && (p.memberId === S.me?.memberId || amAdmin()) ? { label: 'Who can see it…', run: () => openMenu(e.target, [{ head: `Who can see the ${f.name.toLowerCase()}` }, { label: `Everyone who can open ${p.name}`, on: f.reveal !== 'managers', run: () => prSchema(p, { op: 'updateField', typeId: t.id, fieldId: f.id, reveal: 'team' }) }, { label: 'Only whoever made the project and team admins', on: f.reveal === 'managers', run: () => prSchema(p, { op: 'updateField', typeId: t.id, fieldId: f.id, reveal: 'managers' }) }]) } : null,
       f.id !== t.primary ? { label: 'Hide', run: () => prSchema(p, { op: 'updateField', typeId: t.id, fieldId: f.id, hidden: true }) } : null,
@@ -9800,13 +9884,47 @@
     const start = h('input', { value: '1001', inputmode: 'numeric' });
     const numWrap = h('div', { class: 'row2 hidden' }, h('label', {}, 'Starts with', prefix), h('label', {}, 'First number', start));
     const linkWrap = h('div', { class: 'hidden' }, h('label', {}, 'Links to', target), h('label', { class: 'pick' }, many, 'More than one'));
-    type.addEventListener('change', () => { optWrap.classList.toggle('hidden', !['select', 'multi'].includes(type.value)); linkWrap.classList.toggle('hidden', type.value !== 'link'); numWrap.classList.toggle('hidden', type.value !== 'autonumber'); });
-    sheet(`Add a field to ${t.name}`, [h('label', {}, 'Name', name), h('label', {}, 'Kind', type), optWrap, linkWrap, numWrap], async () => {
+    const calc = calcParts(p, t, null);
+    const calcWrap = h('div', { class: 'hidden' }, calc.formula, calc.rollup);
+    type.addEventListener('change', () => { optWrap.classList.toggle('hidden', !['select', 'multi'].includes(type.value)); linkWrap.classList.toggle('hidden', type.value !== 'link'); numWrap.classList.toggle('hidden', type.value !== 'autonumber'); calcWrap.classList.toggle('hidden', !CALC_T.has(type.value)); calc.show(type.value); });
+    sheet(`Add a field to ${t.name}`, [h('label', {}, 'Name', name), h('label', {}, 'Kind', type), optWrap, linkWrap, numWrap, calcWrap], async () => {
       if (!name.value.trim()) throw new Error('Name the field.');
-      await prSchema(p, { op: 'addField', typeId: t.id, name: name.value, type: type.value, choices: opts.value.split('\n').map((x) => x.trim()).filter(Boolean), target: target.value, many: many.checked, prefix: prefix.value, start: start.value });
+      await prSchema(p, { op: 'addField', typeId: t.id, name: name.value, type: type.value, choices: opts.value.split('\n').map((x) => x.trim()).filter(Boolean), target: target.value, many: many.checked, prefix: prefix.value, start: start.value, ...(CALC_T.has(type.value) ? calc.body(type.value) : {}) });
     }, 'Add field');
   }
-  const PF_TYPES = ['text', 'select', 'multi', 'number', 'money', 'date', 'person', 'email', 'phone', 'url', 'checkbox', 'link', 'items', 'autonumber', 'files', 'contact', 'checklist', 'measure', 'equipment', 'materials', 'readings', 'signature', 'permit', 'location', 'job', 'secret'];
+  // What a formula or rollup is made of: the formula (with its fields to tap in) and what it comes out as; or the
+  // link it goes through, what it does, and which field of the linked list.
+  function calcParts(p, t, f) {
+    const expr = h('input', { class: 'pf-expr', value: f?.type === 'formula' ? fxText(p, f) : '', placeholder: '{Price} * {Qty}', spellcheck: 'false', autocomplete: 'off' });
+    const nums = t.fields.filter((x) => NUM_T.includes(x.type) && x !== f);
+    const chips = h('div', { class: 'pf-chips' }, nums.map((x) => h('button', { type: 'button', class: 'pj-chip', onclick: () => { const at = expr.selectionStart ?? expr.value.length; expr.value = expr.value.slice(0, at) + `{${x.name}}` + expr.value.slice(expr.selectionEnd ?? at); expr.focus(); } }, x.name)));
+    const fmt = h('select', {}, [['number', 'A number'], ['money', 'Money'], ['days', 'Days'], ['date', 'A date']].map(([k, l]) => h('option', { value: k, selected: (f?.format || 'number') === k }, l)));
+    const formula = h('div', { class: 'pf-calc' }, h('label', {}, 'Formula', expr), nums.length ? chips : null,
+      h('small', { class: 'hint' }, 'Use + − × ÷ and brackets, if(test, yes, no), round(x, places), min, max and today(). Dates count in days: {Due} - today() is the days left; {Start} + 30 is a date.'),
+      h('label', {}, 'It comes out as', fmt));
+    const links = t.fields.filter((x) => x.type === 'link');
+    const via = h('select', {}, links.length ? links.map((x) => h('option', { value: x.id, selected: f?.via === x.id }, x.name)) : h('option', { value: '' }, 'Add a link to another list first'));
+    const fn = h('select', {}, Object.entries(ROLL_FN).map(([k, l]) => h('option', { value: k, selected: (f?.fn || 'sum') === k }, l)));
+    const of = h('select');
+    const ofWrap = h('label', {}, 'Of', of);
+    const fillOf = () => {
+      const to = prType(p, links.find((x) => x.id === via.value)?.target);
+      of.replaceChildren(...(to?.fields || []).filter((x) => (fn.value === 'checked' ? x.type === 'checkbox' : NUM_T.includes(x.type))).map((x) => h('option', { value: x.id, selected: f?.of === x.id }, x.name)));
+      ofWrap.classList.toggle('hidden', fn.value === 'count');
+    };
+    via.addEventListener('change', fillOf);
+    fn.addEventListener('change', fillOf);
+    fillOf();
+    const rollup = h('div', { class: 'pf-calc' }, h('label', {}, 'Through', via), h('label', {}, 'It shows', fn), ofWrap);
+    const show = (k) => { formula.classList.toggle('hidden', k !== 'formula'); rollup.classList.toggle('hidden', k !== 'rollup'); };
+    show(f?.type || 'formula');
+    return { formula, rollup, show, body: (k) => (k === 'formula' ? { expr: expr.value, format: fmt.value } : { via: via.value, fn: fn.value, of: of.value || null }) };
+  }
+  function prCalcSheet(p, t, f) {
+    const c = calcParts(p, t, f);
+    sheet(f.type === 'formula' ? `Formula · ${f.name}` : `Rollup · ${f.name}`, [f.type === 'formula' ? c.formula : c.rollup], () => prSchema(p, { op: 'updateField', typeId: t.id, fieldId: f.id, ...c.body(f.type) }));
+  }
+  const PF_TYPES = ['text', 'select', 'multi', 'number', 'money', 'date', 'person', 'email', 'phone', 'url', 'checkbox', 'link', 'items', 'autonumber', 'files', 'contact', 'checklist', 'measure', 'equipment', 'materials', 'readings', 'signature', 'permit', 'location', 'job', 'secret', 'formula', 'rollup'];
   function prAddType(p) {
     const name = h('input', { placeholder: 'Jobs' });
     sheet('Add a list', [h('label', {}, 'Name', name), h('p', { class: 'day-hint' }, 'A new kind of record in this project, like Jobs or Vendors. It starts with a Name field; add more after.')], async () => {
@@ -10285,7 +10403,57 @@
     ]);
   }
 
-  const prViewBody = (p, t, v) => (v.kind === 'board' ? prBoard(p, t, v) : v.kind === 'timeline' ? prTimeline(p, t, v) : v.kind === 'sprint' ? prSprint(p, t, v) : prTable(p, t, v));
+  const prViewBody = (p, t, v) => (v.kind === 'board' ? prBoard(p, t, v) : v.kind === 'timeline' ? prTimeline(p, t, v) : v.kind === 'sprint' ? prSprint(p, t, v) : v.kind === 'calendar' ? prCalendar(p, t, v) : prTable(p, t, v));
+  // ----- the calendar: a month, each record on the day in its date field; drag one to another day to move it -----
+  function prCalendar(p, t, v) {
+    const dF = prField(t, v.start);
+    if (!dF) return [h('p', { class: 'day-hint' }, 'This calendar’s date field is gone. Pick another view.')];
+    const stF = t.fields.find((f) => f.key === 'status' && f.type === 'select') || t.fields.find((f) => f.type === 'select');
+    const recs = prShown(p, t, v);
+    const today = todayKey();
+    const month = /^\d{4}-\d{2}$/.test(PR.calMonth || '') ? PR.calMonth : today.slice(0, 7);
+    const [y, mo] = month.split('-').map(Number);
+    const first = new Date(y, mo - 1, 1);
+    const shift = (n) => { const d = new Date(y, mo - 1 + n, 1); PR.calMonth = `${d.getFullYear()}-${pad2(d.getMonth() + 1)}`; renderProjects(); };
+    const byDay = new Map();
+    for (const r of recs) { const d = r.values[dF.id]; if (d && d.startsWith(month)) byDay.set(d, [...(byDay.get(d) || []), r]); }
+    const undated = recs.filter((r) => !r.values[dF.id]).length;
+    const chip = (r) => {
+      const c = stF && stF.choices.find((x) => x.id === r.values[stF.id]);
+      const b = h('button', { class: 'cal-rec' + (PR.panel === r.id ? ' on' : ''), draggable: 'true', style: `--c:${PF_COLOR[c?.color] || PF_COLOR.blue}`, title: [recName(t, r), c?.label].filter(Boolean).join(' · '), onclick: () => { PR.panel = r.id; renderProjects(); } }, recName(t, r));
+      b.addEventListener('dragstart', (e) => e.dataTransfer.setData('text/plain', r.id));
+      return b;
+    };
+    const cell = (d) => {
+      const key = `${month}-${pad2(d)}`;
+      const list = (byDay.get(key) || []).sort((a, b) => recName(t, a).localeCompare(recName(t, b)));
+      const el = h('div', { class: 'cal-cell' + (key === today ? ' today' : ''), 'data-day': key },
+        h('div', { class: 'cal-d' }, h('span', {}, d), h('button', { class: 'cal-add', 'aria-label': `New ${(t.singular || 'record').toLowerCase()} on ${shortDay(key)}`, onclick: () => prNew(p, t, { [dF.id]: key }) }, '+')),
+        ...list.slice(0, 4).map(chip),
+        list.length > 4 ? h('button', { class: 'cal-more', onclick: () => sheet(shortDay(key), [h('div', { class: 'cal-list' }, list.map(chip))], null) }, `+${list.length - 4} more`) : null);
+      el.addEventListener('dragover', (e) => { e.preventDefault(); el.classList.add('drop'); });
+      el.addEventListener('dragleave', () => el.classList.remove('drop'));
+      el.addEventListener('drop', async (e) => {
+        e.preventDefault();
+        el.classList.remove('drop');
+        const r = recById(p.id, e.dataTransfer.getData('text/plain'));
+        if (r && r.values[dF.id] !== key) await prSet(p, r, dF, key);
+      });
+      return el;
+    };
+    const days = new Date(y, mo, 0).getDate();
+    return [h('div', { class: 'cal' },
+      h('div', { class: 'cal-head' },
+        h('button', { class: 'icon-btn', 'aria-label': 'Previous month', onclick: () => shift(-1) }, '‹'),
+        h('b', {}, first.toLocaleDateString(undefined, { month: 'long', year: 'numeric' })),
+        h('button', { class: 'icon-btn', 'aria-label': 'Next month', onclick: () => shift(1) }, '›'),
+        month !== today.slice(0, 7) ? h('button', { class: 'btn small', onclick: () => { PR.calMonth = null; renderProjects(); } }, 'Today') : null,
+        h('small', { class: 'muted' }, `By ${dF.name.toLowerCase()}${undated ? ` · ${plural(undated, t.singular?.toLowerCase() || 'record')} with no date` : ''}`)),
+      h('div', { class: 'cal-grid' },
+        ...['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((d) => h('div', { class: 'cal-dow' }, d)),
+        ...Array.from({ length: first.getDay() }, () => h('div', { class: 'cal-cell blank' })),
+        ...Array.from({ length: days }, (_, i) => cell(i + 1))))];
+  }
   function prBoard(p, t, v) {
     const g = prField(t, v.groupBy) || t.fields.find((f) => f.type === 'select');
     if (!g) return [h('p', { class: 'day-hint' }, 'A board needs a field with options, like Stage.')];
@@ -10471,6 +10639,7 @@
     else if (msg.type === 'project:remove') { S.projects = (S.projects || []).filter((x) => x.id !== msg.id); PR.records.delete(msg.id); if (PR.open === msg.id) PR.open = null; }
     else if (msg.type === 'project:access') api('GET', '/projects').then((list) => { S.projects = list; for (const id of [...PR.records.keys()]) if (!list.some((x) => x.id === id)) PR.records.delete(id); renderProjects(); }).catch(() => {});
     else if (msg.type === 'record') { prUpsertRecord(msg.record); lkForget('record', msg.record.id); }
+    else if (msg.type === 'records:refresh' && PR.records.has(msg.projectId)) api('GET', `/projects/${msg.projectId}/records`).then((list) => { PR.records.set(msg.projectId, list); prSoon(); }).catch(() => {});
     else if (msg.type === 'record:log') { if (PR.logs.has(msg.recordId)) PR.logs.set(msg.recordId, msg.log); }
     else if (msg.type === 'record:remove' && PR.records.has(msg.projectId)) PR.records.set(msg.projectId, prRecs(msg.projectId).filter((x) => x.id !== msg.id));
     if (pinned('proj:' + (msg.project?.id || msg.id)) || pinned('rec:' + msg.record?.id)) renderTabs();
@@ -10799,8 +10968,13 @@
     return prAllLoading;
   }
   const recEverywhere = (id) => { for (const [pid, list] of PR.records) { const r = list.find((x) => x.id === id); if (r) return { p: projById(pid), r }; } return null; };
-  function openRecord(id) {
-    const at = recEverywhere(id);
+  async function openRecord(id) {
+    let at = recEverywhere(id);
+    // A job in a project not opened yet this visit (a link from the bell, a push, a chat): ask which project it's in.
+    if (!at?.p) {
+      const info = await api('POST', '/links', { links: [{ type: 'record', id }] }).then((x) => x.links?.['record:' + id]).catch(() => null);
+      if (info?.ok && projById(info.projectId)) { await openProject(info.projectId); at = recEverywhere(id); }
+    }
     if (!at?.p) return toast('That record isn’t here any more.');
     openProject(at.p.id, at.r.typeId).then(() => { PR.type = at.r.typeId; PR.view = null; PR.panel = id; renderProjects(); });
   }
@@ -10934,7 +11108,7 @@
     if (j) { PR.type = jt.id; PR.view = null; PR.panel = j.id; renderProjects(); toast('Job made from the quote. Set the install date and crew.'); }
   }
   // Ready-made lists a project can add, and saving a project's shape as a template.
-  const READY = [['jobs', '🛠️ Jobs', 'Scheduled to paid, with crews and dates'], ['clients', '🏢 Clients', 'Who you work for'], ['contacts', '👤 Contacts', 'People, with stage and source'], ['deals', '💰 Deals', 'A pipeline with values'], ['companies', '🏢 Companies', 'Businesses'], ['quotes', '🧾 Quotes', 'Numbered quotes customers accept online'], ['bids', '📐 Bids', 'Jobs you bid on'], ['price_list', '🏷️ Price list', 'Your items and prices']];
+  const READY = [['jobs', '🛠️ Jobs', 'Scheduled to paid, with crews and dates'], ['clients', '🏢 Clients', 'Who you work for'], ['contacts', '👤 Contacts', 'People, with stage and source'], ['deals', '💰 Deals', 'A pipeline with values'], ['companies', '🏢 Companies', 'Businesses'], ['quotes', '🧾 Quotes', 'Numbered quotes customers accept online'], ['bids', '📐 Bids', 'Jobs you bid on'], ['price_list', '🏷️ Price list', 'Your items and prices'], ['plans', '🔁 Service plans', 'Memberships and recurring agreements, with renewals'], ['equipment', '⚙️ Customer equipment', 'Each customer’s units: model, serial, age, warranty'], ['licenses', '🪪 Licenses & insurance', 'What the business keeps current, with days left']];
   function prReadyMenu(anchor, p) {
     const left = READY.filter(([k]) => !p.types.some((t) => t.key === k));
     const trades = p.types.filter((t) => t.trade).map((t) => t.trade);

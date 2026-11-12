@@ -3035,11 +3035,12 @@ function dueSlots(x, now) {
 // every run is logged. No AI here: the same thing happens every time.
 // What can set one off is FL.EVENTS (server/flows.js): every tool, one list, also what the app's editor shows.
 const AUTO_TRIGGERS = FL.EVENTS.map((e) => e.type);
-const AUTO_ACTIONS = ['task', 'post', 'campaign', 'notify', 'contact'];
+// record: change the job or record it's about; create: add one (to any list its maker can see).
+const AUTO_ACTIONS = ['task', 'post', 'campaign', 'notify', 'contact', 'record', 'create'];
 const AUTO_RUNS = 30;
 const AUTO_MAX = 50;
 let automating = 0;
-const publicAutomation = ({ wsId, recent, ran, ...x }) => ({ ...x, waiting: Object.values(db.flowWaits || {}).filter((w) => w.autoId === x.id).length });
+const publicAutomation = ({ wsId, recent, ran, dateRan, ...x }) => ({ ...x, waiting: Object.values(db.flowWaits || {}).filter((w) => w.autoId === x.id).length });
 function applyAutomation(x, body, ws) {
   if (body.name !== undefined) x.name = cleanText(body.name, 80) || 'Automation';
   if (body.on !== undefined) x.on = !!body.on;
@@ -3069,10 +3070,25 @@ function applyAutomation(x, body, ws) {
       if (!slots.length) throw badRequest('Pick the days and time it runs.');
       Object.assign(x, { auto: true, slots, tz: validTz(t.tz || ws.tz), since: x.since || Date.now(), ran: x.ran || [] });
     } else Object.assign(x, { auto: false, slots: [], ran: [] });
+    // A record's date: N days before, on or after the day in one of its date fields, at a time of day.
+    if (t.kind === 'record.date') {
+      const p = proj && db.projects[proj];
+      const lt = p && typeOfP(p, t.typeId);
+      if (!lt) throw badRequest('Pick the project and list whose dates it watches.');
+      const df = PJ.dateField(lt, t.fieldId);
+      if (!df) throw badRequest('Pick one of its date fields.');
+      const days = Math.round(Number(t.days) || 0);
+      if (Math.abs(days) > 365) throw badRequest('Up to 365 days before or after.');
+      const time = /^([01]\d|2[0-3]):[0-5]\d$/.test(t.time || '') ? t.time : '08:00';
+      if (x.dateField !== df.id) x.dateRan = {};
+      Object.assign(x.trigger, { fieldId: df.id, days, time, tz: validTz(t.tz || ws.tz) });
+      x.dateField = df.id;
+      x.dateSince ||= teamDay(ws.id);
+    }
   }
   if (body.actions !== undefined) {
     // Steps: actions, "only if" (with "otherwise") and waits (cleanSteps); the actions in them, checked as before.
-    const list = cleanSteps(body.actions, ws, 0, { n: 0 });
+    const list = cleanSteps(body.actions, ws, 0, { n: 0 }, x.memberId);
     const acts = stepActions(list);
     if (!acts.length) throw badRequest('Add at least one thing for it to do.');
     for (const a of acts) {
@@ -3093,9 +3109,17 @@ function applyAutomation(x, body, ws) {
   return x;
 }
 // One action, cleaned (what each kind takes), or null.
-function cleanAction(a, ws) {
+function cleanAction(a, ws, who) {
   const kind = AUTO_ACTIONS.includes(a?.kind) ? a.kind : null;
   if (!kind) return null;
+  // A record changed or added: in a list of a project its maker can see, setting only plain fields.
+  if (kind === 'record' || kind === 'create') {
+    const p = db.projects[a.projectId];
+    if (!p || p.wsId !== ws.id || !PJ.sees(p, who)) throw badRequest('That project is gone, or you can’t see it.');
+    const lt = typeOfP(p, a.typeId);
+    if (!lt) throw badRequest('Pick which list.');
+    return { kind, projectId: p.id, typeId: lt.id, set: PJ.autoSetClean(ws, lt, a.set) };
+  }
   const text = cleanText(a.text, 1000);
   if (kind === 'task') return { kind, text, assignee: /^(who|role:[\w-]+|[\w-]{6,})$/.test(a.assignee || '') ? a.assignee : '', dueIn: a.dueIn === '' || a.dueIn == null ? null : Math.max(0, Math.min(90, Math.round(Number(a.dueIn)) || 0)), campaign: a.campaign === 'same' || (a.campaign && db.campaigns[a.campaign]?.wsId === ws.id) ? a.campaign : '' };
   if (kind === 'post') return { kind, text, channelId: a.channelId === 'same' || a.channelId === 'general' || ws.channels.some((c) => c.id === a.channelId) ? a.channelId : 'general' };
@@ -3149,6 +3173,8 @@ function automate(wsId, kind, ctx = {}) {
   }
 }
 const typeOfP = (p, id) => p?.types.find((t) => t.id === id) || null;
+// Who did it, from the name a record's news carries: only when one person on the team has that name.
+const whoByName = (wsId, name) => { const ms = (db.workspaces[wsId]?.members || []).filter((m) => m.name === name); return ms.length === 1 ? ms[0].id : null; };
 const wantsEvent = (wsId, kind) => Object.values(db.automations).some((x) => x.wsId === wsId && x.on && x.trigger.kind === kind);
 // A record's stage: its status or stage choice (or its first choice field), as a label.
 function recordStage(p, t, rec) {
@@ -3162,7 +3188,7 @@ function recordEvent(rec, type, by, more = {}) {
   const t = p && typeOfP(p, rec.typeId);
   if (!p || !t) return;
   const stage = recordStage(p, t, rec);
-  const base = { project: p, list: t, recordName: String(rec.values[t.primary] ?? ''), who: by, stageLabel: stage };
+  const base = { record: rec, project: p, list: t, recordName: String(rec.values[t.primary] ?? ''), who: by, whoId: whoByName(rec.wsId, by), stageLabel: stage };
   if (type === 'record.updated' || type === 'record.created') {
     const was = rec.flowStage;
     rec.flowStage = stage;
@@ -3179,7 +3205,7 @@ function eventFromHook(wsId, type, d, by) {
   const rec = d?.job_id && db.records[d.job_id];
   const p = rec && db.projects[rec.projectId];
   const lt = p && typeOfP(p, rec.typeId);
-  const at = rec ? { project: p, list: lt, recordName: lt ? String(rec.values[lt.primary] ?? '') : '' } : {};
+  const at = rec ? { record: rec, project: p, list: lt, recordName: lt ? String(rec.values[lt.primary] ?? '') : '' } : {};
   if (type.startsWith('visit.')) return automate(wsId, type, { ...at, recordName: d.job || at.recordName, date: d.date, time: d.start || '', crew: (d.crew || []).map((m) => m.name).join(', '), who: by, private: privateRecord(d.job_id) });
   if (type === 'text.received') return automate(wsId, type, { contact: db.contacts[d.contact_id] || { name: d.contact_name || d.from }, phone: d.from, text: clipText(d.body, 300), who: 'Text message' });
   if (type === 'task.created') { const t = db.tasks[d.id]; return t && automate(wsId, type, { task: t, campaign: taskCamp(t), who: by, whoId: t.memberId, private: privateTask(t) }); }
@@ -3222,7 +3248,7 @@ const WHEN_OPS = ['is', 'not', 'contains', 'over', 'under', 'empty', 'set'];
 const WAIT_UNITS = { minutes: 60_000, hours: 3600_000, days: 864e5 };
 // Tests only: waits go by this many times faster (FLOW_TIME_SCALE=0.001 makes a minute 60 ms). Never set live.
 const FLOW_SCALE = Number(process.env.FLOW_TIME_SCALE) > 0 ? Number(process.env.FLOW_TIME_SCALE) : 1;
-function cleanSteps(list, ws, depth, count) {
+function cleanSteps(list, ws, depth, count, who) {
   return (Array.isArray(list) ? list : []).map((a) => {
     if (count.n >= STEP_MAX) throw badRequest(`An automation has ${STEP_MAX} steps at most.`);
     count.n++;
@@ -3236,9 +3262,9 @@ function cleanSteps(list, ws, depth, count) {
       if (depth >= IF_DEPTH) throw badRequest(`“Only if” can go ${IF_DEPTH} deep at most.`);
       const when = (Array.isArray(a.when) ? a.when : []).slice(0, 5).map((c) => ({ field: /^\w{1,20}$/.test(c?.field || '') ? c.field : null, op: WHEN_OPS.includes(c?.op) ? c.op : 'is', value: cleanText(c?.value, 200) })).filter((c) => c.field);
       if (!when.length) throw badRequest('Say what “only if” checks.');
-      return { kind: 'if', when, then: cleanSteps(a.then, ws, depth + 1, count), else: cleanSteps(a.else, ws, depth + 1, count) };
+      return { kind: 'if', when, then: cleanSteps(a.then, ws, depth + 1, count, who), else: cleanSteps(a.else, ws, depth + 1, count, who) };
     }
-    return cleanAction(a, ws);
+    return cleanAction(a, ws, who);
   }).filter(Boolean);
 }
 const stepActions = (list) => list.flatMap((s) => (s.kind === 'if' ? [...stepActions(s.then), ...stepActions(s.else)] : s.kind === 'wait' ? [] : [s]));
@@ -3299,7 +3325,7 @@ function resumeSteps(x, ctx, stack, i, log) {
 // What a waiting run keeps: what it's about, by id, and the words as they were.
 const CTX_WORDS = ['who', 'whoId', 'from', 'stage', 'stageLabel', 'outcome', 'document', 'note', 'date', 'recordName', 'customer', 'amount', 'invoice', 'time', 'crew', 'phone', 'text', 'doc', 'pin', 'category', 'status', 'direction', 'private', 'ownersOnly'];
 function ctxSnap(ctx) {
-  const out = { ids: { task: ctx.task?.id, campaign: ctx.campaign?.id, contact: ctx.contact?.id || null, contactName: ctx.contact && !ctx.contact.id ? ctx.contact.name || '' : null, file: ctx.file?.id, project: ctx.project?.id, list: ctx.list?.id } };
+  const out = { ids: { task: ctx.task?.id, campaign: ctx.campaign?.id, contact: ctx.contact?.id || null, contactName: ctx.contact && !ctx.contact.id ? ctx.contact.name || '' : null, file: ctx.file?.id, project: ctx.project?.id, list: ctx.list?.id, record: ctx.record?.id } };
   for (const k of CTX_WORDS) if (ctx[k] !== undefined && ctx[k] !== null) out[k] = ctx[k];
   return JSON.parse(JSON.stringify(out));
 }
@@ -3308,7 +3334,8 @@ function ctxBack(s) {
   const p = ids.project && db.projects[ids.project];
   return { ...words, task: ids.task ? db.tasks[ids.task] : undefined, campaign: ids.campaign ? db.campaigns[ids.campaign] : undefined,
     contact: ids.contact ? db.contacts[ids.contact] : ids.contactName != null ? { name: ids.contactName } : undefined,
-    file: ids.file ? db.items[ids.file] : undefined, project: p || undefined, list: p && ids.list ? typeOfP(p, ids.list) || undefined : undefined };
+    file: ids.file ? db.items[ids.file] : undefined, project: p || undefined, list: p && ids.list ? typeOfP(p, ids.list) || undefined : undefined,
+    record: ids.record && db.records[ids.record]?.projectId === p?.id ? db.records[ids.record] : undefined };
 }
 function waitFor(x, ctx, w, log) {
   const mine = Object.values(db.flowWaits).filter((y) => y.autoId === x.id).length;
@@ -3385,6 +3412,29 @@ function autoAction(x, a, ctx) {
     }
     for (const id of ids) notify(ws.id, id, { title: x.name, text: say, campaignId: ctx.campaign?.id || null, taskId: ctx.task?.id || null });
     return `Notified ${ids.size} ${ids.size === 1 ? 'person' : 'people'}`;
+  }
+  // The job or record it's about, changed; or one added. As its maker: only where they can still see, and through
+  // the same path as a person's edit (applied, on the record's timeline as the automation, announced).
+  if (a.kind === 'record' || a.kind === 'create') {
+    const p = db.projects[a.projectId];
+    const lt = p && p.wsId === ws.id && typeOfP(p, a.typeId);
+    if (!lt) throw new Error('its list is gone');
+    if (!memberIn(ws.id, x.memberId) || !PJ.sees(p, x.memberId)) throw new Error(`its maker can’t see ${p.name} any more`);
+    const fill = (text) => autoFill(text, ctx, ws.id);
+    const src = ctx.record?.id && db.records[ctx.record.id];
+    if (a.kind === 'record') {
+      if (!src || src.projectId !== p.id || src.typeId !== lt.id) return `Nothing to change: it wasn’t about ${(lt.singular || 'a record').toLowerCase()} in ${p.name}`;
+      PJ.autoUpdate(ws, p, lt, src, PJ.autoSetValues(ws, lt, a.set, fill, ctx.whoId), { name: x.name, memberId: x.memberId });
+      return `Changed ${clipText(PJ.recName(p, src), 50)}`;
+    }
+    const values = PJ.autoSetValues(ws, lt, a.set, fill, ctx.whoId);
+    if (values[lt.primary] == null) values[lt.primary] = ctx.recordName || x.name;
+    if (src) PJ.carryOver(p, lt, src, values);
+    // About a contact (a lead came in): the record is for them.
+    const cf = !src && ctx.contact?.id && db.contacts[ctx.contact.id]?.wsId === ws.id && lt.fields.find((f) => f.type === 'contact');
+    if (cf && values[cf.id] == null) values[cf.id] = ctx.contact.id;
+    const made = PJ.createRecord(ws, p, lt, { member: x.name, memberId: x.memberId }, values);
+    return `Added ${(lt.singular || 'a record').toLowerCase()} “${clipText(PJ.recName(p, made), 50)}”`;
   }
   if (a.kind === 'contact') {
     const c = ctx.contact?.id && db.contacts[ctx.contact.id];
@@ -3515,10 +3565,47 @@ function runAutomationSchedules(now) {
   }
 }
 
+// Dates on records: once a minute, each "N days before / on / after" automation looks at its list. Before a date it
+// goes off any day from then until the date (a license added with 10 days left still warns); on or after, on that
+// day or within a week if the server was off, never for dates from before the automation was made. Once per record
+// and date (a date changed is a new one); past its 30 runs an hour, the rest wait for the next hour.
+const DATE_SWEEP_MS = Number(process.env.DATE_SWEEP_MS) > 0 ? Number(process.env.DATE_SWEEP_MS) : 60_000;
+let dateSwept = 0;
+const dayGap = (a, b) => Math.round((Date.parse(b + 'T00:00:00Z') - Date.parse(a + 'T00:00:00Z')) / 864e5);
+function runDateTriggers(now) {
+  if (now - dateSwept < DATE_SWEEP_MS) return;
+  dateSwept = now;
+  for (const x of Object.values(db.automations)) {
+    const tr = x.trigger;
+    if (!x.on || tr.kind !== 'record.date' || offline(x.wsId)) continue;
+    const p = db.projects[tr.projectId];
+    const lt = p && p.wsId === x.wsId && typeOfP(p, tr.typeId);
+    if (!lt || !memberIn(x.wsId, x.memberId) || !PJ.sees(p, x.memberId)) continue;
+    const L = localNow(tr.tz, now);
+    const [hh, mm] = (tr.time || '08:00').split(':').map(Number);
+    if (L.min < hh * 60 + mm) continue;
+    const today = L.date;
+    x.dateRan ||= {};
+    for (const rec of Object.values(db.records)) {
+      if (rec.projectId !== p.id || rec.typeId !== lt.id) continue;
+      const d = PJ.dateOf(p, lt, rec, tr.fieldId);
+      if (!d || x.dateRan[rec.id] === d) continue;
+      const fire = addDays(d, tr.days);
+      if (fire > today) continue;
+      if (tr.days < 0 ? today > d : fire < (x.dateSince || today) || dayGap(fire, today) > 7) continue;
+      if ((x.recent || []).filter((at) => at > now - 3600_000).length >= AUTO_RUNS) break;
+      x.dateRan[rec.id] = d;
+      runAutomation(x, { record: rec, project: p, list: lt, recordName: PJ.recName(p, rec), stageLabel: recordStage(p, lt, rec), date: d, who: 'Kloomie' });
+    }
+    for (const id of Object.keys(x.dateRan)) if (!db.records[id]) delete x.dateRan[id];
+  }
+}
+
 function runSchedules() {
   const now = Date.now();
   let ran = false;
   runAutomationSchedules(now);
+  runDateTriggers(now);
   if (Object.keys(db.flowWaits).length) { runWaits(now); ran = true; }
   for (const tpl of Object.values(db.templates)) {
     if (offline(tpl.wsId)) continue;

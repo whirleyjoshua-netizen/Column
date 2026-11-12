@@ -13,7 +13,8 @@
 import crypto from 'node:crypto';
 import dns from 'node:dns/promises';
 import { privateIp, safeFetch } from './safefetch.js';
-import { TRADES, tradeType, tradeMenu } from './trades.js';
+import { TRADES, tradeType, tradeMenu, companionTypes, COMPANIONS } from './trades.js';
+import * as FX from './formula.js';
 import { TECH_TEMPLATE, TECH_LATER, techPrefix } from './tech.js';
 
 export const FIELD_TYPES = ['text', 'number', 'money', 'date', 'select', 'multi', 'person', 'email', 'phone', 'url', 'checkbox', 'link', 'items', 'autonumber', 'files',
@@ -23,7 +24,14 @@ export const FIELD_TYPES = ['text', 'number', 'money', 'date', 'select', 'multi'
   // For gear that moves between sites (Equipment & assets): where it is now (an address and the spot, every move on
   // the timeline), the job it's at (a record in another project), and a locked field for a lock combo or a code,
   // sealed on the server and kept out of the record itself (rec.secrets), shown only when asked for and allowed.
-  'location', 'job', 'secret'];
+  'location', 'job', 'secret',
+  // Worked out, never typed in: a formula from the record's own fields ({Price} * {Qty}, {Expires} - today()), and a
+  // rollup over the records a link field points at (the parts' cost added up). Kept nowhere: the server works them
+  // out each time a record goes out, so the app, the API, webhooks and automations all see the same number.
+  'formula', 'rollup'];
+const CALC = new Set(['formula', 'rollup']);
+// What a formula or rollup can read: things that are numbers, or count as one (a date in days, a tick as 1).
+const NUMERIC = ['number', 'money', 'date', 'checkbox', 'items', 'formula', 'rollup'];
 // Who can see what's in a locked field: everyone who sees the project, or only those who manage it.
 const REVEAL = ['team', 'managers'];
 const REVEALS_AN_HOUR = 30;
@@ -352,6 +360,7 @@ export function projectsModule({ onEvent = null, canSeeItem = () => true, seal =
   const publicRecord = ({ wsId, log, secrets, flowStage, ...r }) => {
     const p = db.projects[r.projectId];
     const t = p?.types.find((x) => x.id === r.typeId);
+    if (p && t && t.fields.some((f) => CALC.has(f.type))) r = { ...r, values: { ...r.values, ...calcValues(p, t, { ...r, wsId }) } };
     const jobIds = (t?.fields || []).filter((f) => f.type === 'job' && r.values[f.id]).map((f) => r.values[f.id]);
     if (jobIds.length) {
       const jobs = {};
@@ -387,6 +396,128 @@ export function projectsModule({ onEvent = null, canSeeItem = () => true, seal =
   const looks = new Map();
   const typeOf = (p, typeId) => p.types.find((t) => t.id === typeId || t.key === typeId);
   const fieldOf = (t, id) => t.fields.find((f) => f.id === id || f.key === id);
+
+  // ---------- formulas and rollups: worked out when a record goes out, never kept ----------
+  const trees = new Map();
+  const treeOf = (f) => {
+    if (!trees.has(f.expr)) { if (trees.size > 5000) trees.clear(); trees.set(f.expr, FX.parse(f.expr, () => true)); }
+    return trees.get(f.expr);
+  };
+  // A list's fields by name (any case) or key, for writing a formula; byId: is this a field of the list?
+  const resolver = (t) => (x, byId) => (byId ? t.fields.some((f) => f.id === x) : (t.fields.find((f) => f.name.toLowerCase() === x.toLowerCase()) || t.fields.find((f) => f.key === x))?.id || null);
+  // What a rollup comes out as: money if it adds up money, a date for the earliest or latest date, else a number.
+  function rollupFormat(p, t, f, depth = 0) {
+    if (f.fn === 'count' || f.fn === 'checked' || depth > 8) return 'number';
+    const lf = fieldOf(t, f.via);
+    const to = lf?.type === 'link' && typeOf(p, lf.target);
+    const of = to && fieldOf(to, f.of);
+    const k = !of ? 'number' : of.type === 'formula' ? of.format : of.type === 'rollup' ? rollupFormat(p, to, of, depth + 1) : of.type;
+    return k === 'money' || k === 'items' ? 'money' : k === 'date' ? 'date' : 'number';
+  }
+  const calcFormat = (p, t, f) => (f.type === 'formula' ? f.format || 'number' : rollupFormat(p, t, f));
+  // A field's value as a formula reads it: money and quote lines in dollars, a date in days, a tick as 1. An empty
+  // number or amount is 0; an empty date is nothing (so the formula comes out empty, not as a date in 1970).
+  function numOf(p, t, rec, f, depth) {
+    if (!f) return null;
+    if (CALC.has(f.type)) {
+      const v = calcOne(p, t, rec, f, depth + 1);
+      if (v == null) return null;
+      const k = calcFormat(p, t, f);
+      return k === 'money' ? v / 100 : k === 'date' ? FX.dayNum(v) : v;
+    }
+    const v = rec.values[f.id];
+    if (f.type === 'number') return v ?? 0;
+    if (f.type === 'money') return v == null ? 0 : v / 100;
+    if (f.type === 'date') return v ? FX.dayNum(v) : null;
+    if (f.type === 'checkbox') return v ? 1 : 0;
+    if (f.type === 'items') return v ? itemsTotals(v).total / 100 : 0;
+    return null;
+  }
+  const asFormat = (k, v) => (v == null || !Number.isFinite(v) ? null : k === 'money' ? Math.round(v * 100) : k === 'date' ? FX.numDay(v) : k === 'days' ? Math.round(v) : Math.round(v * 1e6) / 1e6);
+  function calcOne(p, t, rec, f, depth = 0) {
+    if (depth > 8) return null; // a chain this long is a loop that got past the check
+    if (f.type === 'formula') {
+      let tree;
+      try { tree = treeOf(f); } catch { return null; }
+      return asFormat(f.format || 'number', FX.evaluate(tree, (id) => numOf(p, t, rec, fieldOf(t, id), depth), FX.dayNum(teamDay(rec.wsId))));
+    }
+    const lf = fieldOf(t, f.via);
+    const to = lf?.type === 'link' && typeOf(p, lf.target);
+    if (!to) return null;
+    // Only records of this project: whoever sees the record sees what it adds up.
+    const list = (Array.isArray(rec.values[lf.id]) ? rec.values[lf.id] : []).map((id) => db.records[id]).filter((r) => r && r.projectId === p.id && r.typeId === to.id);
+    if (f.fn === 'count') return list.length;
+    const of = fieldOf(to, f.of);
+    if (!of) return null;
+    const nums = list.map((r) => numOf(p, to, r, of, depth)).filter((x) => x != null);
+    if (f.fn === 'checked') return nums.filter(Boolean).length;
+    const k = rollupFormat(p, t, f);
+    if (f.fn === 'sum') return asFormat(k, nums.reduce((a, b) => a + b, 0));
+    if (!nums.length) return null;
+    const v = f.fn === 'avg' ? nums.reduce((a, b) => a + b, 0) / nums.length : f.fn === 'min' ? Math.min(...nums) : Math.max(...nums);
+    return asFormat(k, v);
+  }
+  function calcValues(p, t, rec) {
+    const out = {};
+    for (const f of t.fields) if (CALC.has(f.type)) { const v = calcOne(p, t, rec, f); if (v != null) out[f.id] = v; }
+    return out;
+  }
+  // A formula that would read itself, however far round.
+  function loops(t, start) {
+    const seen = new Set();
+    const walk = (f) => {
+      if (!f || f.type !== 'formula' || seen.has(f.id)) return false;
+      seen.add(f.id);
+      let r;
+      try { r = FX.refs(treeOf(f)); } catch { return false; }
+      return [...r].some((id) => id === start.id || walk(fieldOf(t, id)));
+    };
+    return walk(start);
+  }
+  // A formula written by someone: kept with its fields by id, reading only what it can, never itself.
+  function setFormula(t, f, text, format) {
+    let expr;
+    try { expr = FX.store(text, resolver(t)); } catch (e) { throw bad(`${f.name}: ${e.message}`); }
+    for (const id of FX.refs(FX.parse(expr, () => true))) {
+      const g = fieldOf(t, id);
+      if (!g) throw bad(`${f.name}: one of its fields is gone.`);
+      if (!NUMERIC.includes(g.type)) throw bad(`${f.name}: ${g.name} isn’t a number, amount, date, tick, total or another formula, so a formula can’t use it.`);
+    }
+    const was = { expr: f.expr, format: f.format };
+    f.expr = expr;
+    if (format !== undefined || !f.format) f.format = FX.FORMATS.includes(format) ? format : f.format || 'number';
+    if (loops(t, f)) { Object.assign(f, was); if (!was.expr) delete f.expr; throw bad(`${f.name}: that would use itself.`); }
+  }
+  function setRollup(p, t, f, body) {
+    const lf = fieldOf(t, body.via ?? f.via);
+    if (lf?.type !== 'link') throw bad('A rollup goes through a link to another list. Add a link field first.');
+    const to = typeOf(p, lf.target);
+    const fn = FX.ROLLUP_FNS.includes(body.fn ?? f.fn) ? body.fn ?? f.fn : 'count';
+    const of = fn === 'count' ? null : to && fieldOf(to, body.of ?? f.of);
+    if (fn !== 'count' && !of) throw bad(`Pick which field of ${to?.name || 'the linked list'} to add up.`);
+    if (of && fn === 'checked' && of.type !== 'checkbox') throw bad('“How many are ticked” needs a tick box field.');
+    if (of && !NUMERIC.includes(of.type)) throw bad(`${of.name} isn’t a number, amount, date or tick, so it can’t be added up.`);
+    Object.assign(f, { via: lf.id, fn, of: of ? of.id : null });
+  }
+  // A linked record changed: the records adding it up go out again with their new totals.
+  function rollupsFollow(rec) {
+    const p = db.projects[rec.projectId];
+    if (!p) return;
+    const via = p.types.flatMap((o) => o.fields.filter((f) => f.type === 'rollup').map((f) => ({ o, lf: fieldOf(o, f.via) }))).filter((x) => x.lf?.type === 'link' && x.lf.target === rec.typeId);
+    if (!via.length) return;
+    for (const r of Object.values(db.records)) {
+      if (r.projectId !== p.id || r.id === rec.id) continue;
+      if (via.some(({ o, lf }) => r.typeId === o.id && Array.isArray(r.values[lf.id]) && r.values[lf.id].includes(rec.id))) broadcast(r.wsId, { type: 'record', record: publicRecord(r), projectId: r.projectId });
+    }
+  }
+  // A record's date field (or a formula that comes out as a date), as a day: what a date trigger watches.
+  function dateOf(p, t, rec, fieldId) {
+    const f = fieldOf(t, fieldId);
+    if (!f) return null;
+    if (f.type === 'date') return rec.values[f.id] || null;
+    if (f.type === 'formula' && f.format === 'date') return calcOne(p, t, rec, f) || null;
+    return null;
+  }
 
   // ---------- a record's timeline ----------
   // What happened to a record, newest first: made, fields changed, quotes sent and answered, calls and emails
@@ -514,6 +645,8 @@ export function projectsModule({ onEvent = null, canSeeItem = () => true, seal =
     const t = { id: rid(8), key: src.key, name: src.name, singular: src.singular, icon: src.icon, ...(src.trade ? { trade: src.trade } : {}), ...(src.scan ? { scan: true } : {}) };
     t.fields = src.fields.filter((f) => f.type !== 'link' || typeIdOf(f.target)).map((f) => ({ id: rid(8), key: f.key, name: f.name, type: f.type, ...(f.choices ? { choices: f.choices.map((c) => ({ id: rid(6), label: c.label, color: c.color })) } : {}), ...(f.type === 'link' ? { target: typeIdOf(f.target), many: !!f.many } : {}), ...(f.type === 'autonumber' ? { prefix: f.prefix || '', next: f.start || 1, start: f.start || 1 } : {}), ...fieldExtras(f) }));
     t.primary = t.fields.find((f) => f.key === src.primary)?.id || t.fields[0].id;
+    // Formulas in a definition name their fields; here they're kept by id.
+    for (const f of t.fields) if (f.type === 'formula') { const sf = src.fields.find((x) => x.key === f.key); f.expr = FX.store(sf.expr, resolver(t)); f.format = FX.FORMATS.includes(sf.format) ? sf.format : 'number'; }
     // A new record starts at the first stage, so it never sits in "No status".
     for (const f of t.fields) if ((f.key === 'stage' || f.key === 'status' || f.key === 'result') && f.choices?.length) f.default = f.choices[0].id;
     // A field shown only when another is set a certain way (a bug's steps to reproduce), and views narrowed to
@@ -549,7 +682,8 @@ export function projectsModule({ onEvent = null, canSeeItem = () => true, seal =
   function fromTrades(keys, room = MAX_TYPES) {
     const picked = [...new Set((Array.isArray(keys) ? keys : []).map(String))].filter((k) => TRADES[k]).slice(0, room);
     if (!picked.length) throw bad('Pick at least one kind of work.');
-    return picked.map((k) => typeFrom(tradeType(k), () => null));
+    const extra = companionTypes(picked).slice(0, Math.max(0, room - picked.length));
+    return [...picked.map((k) => typeFrom(tradeType(k), () => null)), ...extra.map((x) => typeFrom(x, () => null))];
   }
   // Lists from definitions, with fresh ids and links pointing at each other.
   function buildTypes(srcTypes) {
@@ -920,6 +1054,7 @@ export function projectsModule({ onEvent = null, canSeeItem = () => true, seal =
     recordsChanged(rec.projectId);
     save();
     broadcast(rec.wsId, { type: 'record', record: publicRecord(rec), projectId: rec.projectId });
+    rollupsFollow(rec);
     hooksFire(rec, event, by);
   }
   function recordGone(rec, by) {
@@ -984,7 +1119,7 @@ export function projectsModule({ onEvent = null, canSeeItem = () => true, seal =
       // A ready-made list (Jobs, Contacts, Price list…), its links pointing at this project's lists by key.
       case 'addTypeFrom': {
         if (p.types.length >= MAX_TYPES) throw bad(`A project can have ${MAX_TYPES} kinds of records.`);
-        const src = String(body.key).startsWith('trade_') ? tradeType(String(body.key).slice(6)) : Object.values(TEMPLATES).flatMap((x) => x.types).find((x) => x.key === body.key);
+        const src = String(body.key).startsWith('trade_') ? tradeType(String(body.key).slice(6)) : COMPANIONS[body.key] || Object.values(TEMPLATES).flatMap((x) => x.types).find((x) => x.key === body.key);
         if (!src) throw bad('That list isn’t one of the ready-made ones.');
         if (p.types.some((x) => x.key === src.key)) throw bad(`This project already has ${src.name}.`);
         const nt = typeFrom(src, (k) => p.types.find((x) => x.key === k)?.id);
@@ -1027,6 +1162,8 @@ export function projectsModule({ onEvent = null, canSeeItem = () => true, seal =
           f.target = to.id;
           f.many = !!body.many;
         }
+        if (type === 'formula') setFormula(t, f, body.expr, body.format);
+        if (type === 'rollup') setRollup(p, t, f, body);
         t.fields.push(f);
         return f;
       }
@@ -1046,6 +1183,8 @@ export function projectsModule({ onEvent = null, canSeeItem = () => true, seal =
           }
         }
         if (body.many !== undefined && f.type === 'link') f.many = !!body.many;
+        if (f.type === 'formula' && (body.expr !== undefined || body.format !== undefined)) setFormula(t, f, body.expr ?? f.expr, body.format);
+        if (f.type === 'rollup' && (body.via !== undefined || body.fn !== undefined || body.of !== undefined)) setRollup(p, t, f, body);
         if (body.reveal !== undefined && f.type === 'secret') f.reveal = REVEAL.includes(body.reveal) ? body.reveal : f.reveal;
         if (Array.isArray(body.list) && (f.type === 'checklist' || f.type === 'readings')) f.list = fieldExtras({ type: f.type, list: body.list }).list;
         if (body.unit !== undefined && f.type === 'measure') f.unit = fieldExtras({ type: 'measure', mode: f.mode, unit: body.unit }).unit;
@@ -1089,10 +1228,16 @@ export function projectsModule({ onEvent = null, canSeeItem = () => true, seal =
           t.views.push(v);
         }
         if (body.name !== undefined) v.name = name(60) || v.name;
-        if (body.kind !== undefined) v.kind = ['board', 'timeline', 'sprint'].includes(body.kind) ? body.kind : 'table';
+        if (body.kind !== undefined) v.kind = ['board', 'timeline', 'sprint', 'calendar'].includes(body.kind) ? body.kind : 'table';
         const dateField = (id) => t.fields.some((f) => f.id === id && f.type === 'date');
         if (body.start !== undefined) v.start = dateField(body.start) ? body.start : v.start;
         if (body.end !== undefined) v.end = dateField(body.end) ? body.end : v.end;
+        // A calendar: each record on the day in its date field (Scheduled, Due…).
+        if (v.kind === 'calendar' && !v.start) {
+          const ds = t.fields.find((f) => f.type === 'date');
+          if (!ds) { if (body.op === 'addView') t.views.pop(); else v.kind = 'table'; throw bad('A calendar needs a date field, like Scheduled or Due.'); }
+          v.start = ds.id;
+        }
         if (v.kind === 'timeline' && !v.start && !v.end) {
           const ds = t.fields.filter((f) => f.type === 'date');
           if (!ds.length) throw bad('A timeline needs a date field, like Start or Target date.');
@@ -1225,6 +1370,9 @@ export function projectsModule({ onEvent = null, canSeeItem = () => true, seal =
         }
         const out = schemaOp(p, body);
         projectNews(p);
+        // A formula or rollup added or changed (or a field one reads): the apps showing it fetch its records again,
+        // worked out the new way.
+        if (/^(addField|updateField|removeField)$/.test(body.op) && p.types.some((t) => t.fields.some((f) => CALC.has(f.type)))) broadcast(p.wsId, { type: 'records:refresh', projectId: p.id });
         return send(res, 200, { project: publicProject(p), made: out });
       }
       if (m === 'POST' && c === 'records') {
@@ -1740,11 +1888,13 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
     return v;
   }
   function outRecord(ws, p, t, r) {
+    const calc = calcValues(p, t, r);
+    const out = (f) => (CALC.has(f.type) ? (calc[f.id] == null ? null : calcFormat(p, t, f) === 'money' ? calc[f.id] / 100 : calc[f.id]) : outValue(ws, f, r.values[f.id]));
     return { id: r.id, external_id: r.extId || null, type: t.key, created_at: new Date(r.createdAt).toISOString(), updated_at: new Date(r.updatedAt).toISOString(),
-      fields: Object.fromEntries(t.fields.map((f) => [f.key, outValue(ws, f, r.values[f.id])])) };
+      fields: Object.fromEntries(t.fields.map((f) => [f.key, out(f)])) };
   }
   const outSchema = (p) => ({ id: p.id, name: p.name, template: p.template, types: p.types.map((t) => ({ key: t.key, name: t.name, singular: t.singular,
-    fields: t.fields.map((f) => ({ key: f.key, name: f.name, type: f.type, ...(f.type === 'autonumber' ? { read_only: true } : {}), ...(f.choices ? { options: f.choices.map((c) => c.label) } : {}), ...(f.type === 'link' ? { links_to: p.types.find((x) => x.id === f.target)?.key, many: !!f.many } : {}), ...(f.id === t.primary ? { primary: true } : {}) })) })) });
+    fields: t.fields.map((f) => ({ key: f.key, name: f.name, type: f.type, ...(f.type === 'autonumber' || CALC.has(f.type) ? { read_only: true } : {}), ...(f.choices ? { options: f.choices.map((c) => c.label) } : {}), ...(f.type === 'link' ? { links_to: p.types.find((x) => x.id === f.target)?.key, many: !!f.many } : {}), ...(f.id === t.primary ? { primary: true } : {}) })) })) });
   // Fields from outside, by key.
   const inFields = (t, fields) => {
     if (!fields || typeof fields !== 'object' || Array.isArray(fields)) throw bad('Send fields as an object of field keys and values.');
@@ -2099,6 +2249,69 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
     recordNews(rec, 'record.updated', by);
   }
 
+  // ---------- what an automation can do to records (index.js runs it, as its maker) ----------
+  // The fields it can set: plain values. Never price lines (they have their own rule, the discount OK), files,
+  // signatures, locked fields or anything worked out. What it sets goes through applyValues like anyone's edit.
+  const AUTO_SET = ['text', 'number', 'money', 'date', 'select', 'multi', 'checkbox', 'person', 'email', 'phone', 'url'];
+  const WORDS_RE = /\{\w+\}/;
+  function autoSetClean(ws, t, set) {
+    return (Array.isArray(set) ? set : []).slice(0, 10).map((x) => {
+      const f = fieldOf(t, x?.field);
+      if (!f) throw bad('One of the fields it sets is gone.');
+      if (!AUTO_SET.includes(f.type)) throw bad(`An automation can’t set ${f.name}: ${f.type === 'items' ? 'price lines have their own rules' : 'it isn’t a plain value'}.`);
+      let value = x.value == null ? '' : typeof x.value === 'boolean' ? x.value : cleanText(String(x.value), 1000);
+      const choice = (v) => { const c = f.choices.find((y) => y.id === v || y.label.toLowerCase() === String(v).trim().toLowerCase()); if (!c) throw bad(`${f.name}: “${String(v).slice(0, 40)}” isn’t one of its options.`); return c.id; };
+      if (f.type === 'checkbox') value = value === true || value === 'true' || value === 'yes';
+      else if (value === '') value = '';
+      else if (f.type === 'select') value = choice(value);
+      else if (f.type === 'multi') value = String(value).split(/\s*,\s*/).filter(Boolean).slice(0, 20).map(choice).join(',');
+      else if (f.type === 'person' && value !== 'who' && !ws.members.some((m) => m.id === value)) throw bad(`${f.name}: pick someone on the team, or whoever set it off.`);
+      else if (f.type === 'date' && !/^today([+-]\d{1,3})?$/.test(value) && !isDay(value)) throw bad(`${f.name}: a day like 2026-12-01, or today, today+3, today-1.`);
+      else if ((f.type === 'number' || f.type === 'money') && !WORDS_RE.test(value) && !Number.isFinite(Number(String(value).replace(/[$,\s]/g, '')))) throw bad(`${f.name}: “${String(value).slice(0, 40)}” isn’t a number.`);
+      return { field: f.id, value };
+    });
+  }
+  // Those, as values for a record when it runs: the words filled in, today+N as a day in the team's time zone,
+  // "who" as whoever set it off (when they're on the team), empty as cleared.
+  function autoSetValues(ws, t, set, fill, whoId) {
+    const out = {};
+    for (const x of set || []) {
+      const f = fieldOf(t, x.field);
+      if (!f) continue;
+      let v = x.value;
+      if (v === '') { out[f.id] = null; continue; }
+      if (f.type === 'date' && /^today/.test(v)) v = FX.numDay(FX.dayNum(teamDay(ws.id)) + Number(v.slice(5) || 0));
+      else if (f.type === 'person' && v === 'who') { if (!ws.members.some((m) => m.id === whoId)) continue; v = whoId; }
+      else if (f.type === 'multi') v = String(v).split(',').filter(Boolean);
+      else if (typeof v === 'string') v = fill(v);
+      out[f.id] = v;
+    }
+    return out;
+  }
+  // A record an automation adds about another: for the same customer, and linked back to it when the list has a
+  // link to the other's list.
+  function carryOver(p, t, src, values) {
+    const st = typeOf(p, src.typeId);
+    const from = st?.fields.find((f) => f.type === 'contact' && src.values[f.id]);
+    const to = t.fields.find((f) => f.type === 'contact');
+    if (from && to && values[to.id] == null) values[to.id] = src.values[from.id];
+    const link = src.projectId === p.id && t.fields.find((f) => f.type === 'link' && f.target === src.typeId);
+    if (link && values[link.id] == null) values[link.id] = [src.id];
+    return values;
+  }
+  // An automation's change to a record: the same as a person's edit (a test case failing files its bug), on the
+  // record's timeline as the automation.
+  function autoUpdate(ws, p, t, rec, values, who) {
+    const before = { ...rec.values };
+    applyValues(ws, p, t, rec, values, { addChoices: false });
+    techAfter(ws, p, t, rec, before, { member: who.name, memberId: who.memberId });
+    logChanges(ws, p, t, rec, before, who.name);
+    rec.updatedAt = Date.now();
+    recordNews(rec, 'record.updated', who.name);
+  }
+  // A list's date field (or a formula that comes out as a date), for a trigger on it.
+  const dateField = (t, id) => { const f = fieldOf(t, id); return f && (f.type === 'date' || (f.type === 'formula' && f.format === 'date')) ? f : null; };
+
   // A record made by Kloomie for someone (an AI plan they accepted): made, announced.
   function createRecord(ws, p, t, auth, values) {
     const rec = newRecord(ws, p, t, auth, values, null, { addChoices: false });
@@ -2138,5 +2351,5 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
     projectNews(p);
     return { project: p, made, skipped };
   }
-  return { importProject, cleanSpec, createRecord, publicRecord, updateRecord, route, v1, keyAuth, makeHook, publicHook, deliver, emit, quoteOf, quotePage, seesMsg, stateFor, sees, recordActivity, recordNews, words, fillFromProject, fromProjectOk, recordStory, priceList, recordAt, itemsTotals, TEMPLATES: Object.fromEntries(Object.entries(TEMPLATES).map(([k, t]) => [k, { name: t.name, icon: t.icon, about: t.about }])) };
+  return { autoSetClean, autoSetValues, autoUpdate, carryOver, dateField, dateOf, recName, importProject, cleanSpec, createRecord, publicRecord, updateRecord, route, v1, keyAuth, makeHook, publicHook, deliver, emit, quoteOf, quotePage, seesMsg, stateFor, sees, recordActivity, recordNews, words, fillFromProject, fromProjectOk, recordStory, priceList, recordAt, itemsTotals, TEMPLATES: Object.fromEntries(Object.entries(TEMPLATES).map(([k, t]) => [k, { name: t.name, icon: t.icon, about: t.about }])) };
 }

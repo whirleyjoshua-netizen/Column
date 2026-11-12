@@ -217,7 +217,11 @@ export function tradeType(key) {
       { key: 'scheduled', name: 'Scheduled', type: 'date' },
       { key: 'crew', name: 'Assigned to', type: 'person' },
       { key: 'value', name: 'Value', type: 'money' },
-      { key: 'access', name: 'Access notes', type: 'text', hint: 'Gate code, lockbox, pets, parking' },
+      { key: 'access', name: 'Access notes', type: 'text', hint: 'Pets, parking, which door' },
+      // Codes are sealed (shown on Show, each look on the timeline), never in a notes field anyone can read.
+      { key: 'entry', name: 'Gate / lockbox code', type: 'secret' },
+      ...(EXTRA[tr.family] || []).filter((f) => !tr.fields.some((x) => x[0] === f.key)),
+      ...(FOR_TRADE[key] || []),
       { key: 'price', name: 'Price', type: 'items' },
       ...tr.fields.map(spec),
       { key: 'checklist', name: 'Checklist', type: 'checklist', list: tr.checklist },
@@ -225,8 +229,76 @@ export function tradeType(key) {
       { key: 'after', name: 'After photos', type: 'files' },
       { key: 'signoff', name: 'Customer sign-off', type: 'signature' },
     ],
-    views: [{ name: 'Board', kind: 'board', groupBy: 'status' }, { name: 'By date', kind: 'table', sortBy: 'scheduled' }],
+    views: [{ name: 'Board', kind: 'board', groupBy: 'status' }, { name: 'Calendar', kind: 'calendar', start: 'scheduled' }, { name: 'By date', kind: 'table', sortBy: 'scheduled' }],
   };
+}
+
+// What a family's jobs also ask (docs/research/reports/Kloomie trade workflows research.md): installers and
+// builders need the HOA's approval before outside work, and builders need the year the home was built (homes
+// before 1978 come under the EPA's lead-safe rules).
+const HOA = { key: 'hoa', name: 'HOA approval', type: 'select', choices: choices(['No HOA', 'Needs approval', 'Submitted', 'Approved', 'Denied']) };
+const EXTRA = {
+  install: [HOA],
+  project: [{ key: 'year', name: 'Year built', type: 'number', hint: 'Before 1978: lead-safe work rules apply' }, HOA],
+};
+// And what one trade asks: in the Las Vegas valley the water district sets each address's watering days by group.
+const FOR_TRADE = {
+  lawn: [{ key: 'watering', name: 'Watering group', type: 'text', hint: 'The water district’s group for this address' }],
+  irrigation: [{ key: 'watering', name: 'Watering group', type: 'text', hint: 'The water district’s group for this address' }],
+};
+
+// Lists a trades project gets beside its jobs. Service plans: the memberships and recurring agreements that repair
+// and route businesses live on. Customer equipment: the customer's own units (not the company's gear), with their
+// history, warranty and age. Licenses & insurance: what the business must keep current, with days left.
+const often2 = (labels) => ({ type: 'select', choices: choices(labels) });
+export const COMPANIONS = {
+  plans: { key: 'plans', name: 'Service plans', singular: 'Plan', icon: '🔁', primary: 'plan', fields: [
+    { key: 'plan', name: 'Plan', type: 'text' },
+    { key: 'customer', name: 'Customer', type: 'contact' },
+    { key: 'status', name: 'Status', ...often2(['Active', 'Paused', 'Cancelled', 'Ended']) },
+    { key: 'often', name: 'How often', ...often2(['Weekly', 'Every 2 weeks', 'Monthly', 'Every 2 months', 'Quarterly', 'Twice a year', 'Yearly']) },
+    { key: 'visits', name: 'Visits a year', type: 'number' },
+    { key: 'price', name: 'Price', type: 'money' },
+    { key: 'billing', name: 'Billing', ...often2(['Monthly autopay', 'Yearly up front', 'Each visit']) },
+    { key: 'discount', name: 'Member discount %', type: 'number' },
+    { key: 'started', name: 'Started', type: 'date' },
+    { key: 'renews', name: 'Renews', type: 'date' },
+    { key: 'next', name: 'Next visit due', type: 'date' },
+    { key: 'notes', name: 'Notes', type: 'text', long: true },
+  ], views: [{ name: 'Board', kind: 'board', groupBy: 'status' }, { name: 'Renewing', kind: 'table', sortBy: 'renews' }, { name: 'Calendar', kind: 'calendar', start: 'next' }] },
+  equipment: { key: 'equipment', name: 'Customer equipment', singular: 'Unit', icon: '⚙️', primary: 'name', fields: [
+    { key: 'name', name: 'Name', type: 'text', hint: 'e.g. Upstairs AC, Pool pump' },
+    { key: 'customer', name: 'Customer', type: 'contact' },
+    { key: 'unit', name: 'Make, model, serial', type: 'equipment' },
+    { key: 'where', name: 'Where it is', type: 'text', hint: 'Attic, side yard, garage' },
+    { key: 'installed', name: 'Installed', type: 'date' },
+    { key: 'age', name: 'Age (years)', type: 'formula', expr: 'round((today() - {Installed}) / 365, 1)', format: 'number' },
+    { key: 'warranty', name: 'Warranty ends', type: 'date' },
+    { key: 'serviced', name: 'Last serviced', type: 'date' },
+    { key: 'notes', name: 'Notes', type: 'text', long: true },
+  ], views: [{ name: 'All', kind: 'table', sortBy: 'name' }] },
+  licenses: { key: 'licenses', name: 'Licenses & insurance', singular: 'License', icon: '🪪', primary: 'name', fields: [
+    { key: 'name', name: 'Name', type: 'text' },
+    { key: 'kind', name: 'Kind', ...often2(['Contractor license (NSCB)', 'State business license', 'County or city business license', 'General liability insurance', 'Workers’ comp', 'Bond', 'Vehicle insurance', 'Certification (EPA, ISA, pest…)', 'Vehicle registration', 'Other']) },
+    { key: 'number', name: 'Number', type: 'text' },
+    { key: 'whose', name: 'Whose', type: 'person', hint: 'Empty for the business' },
+    { key: 'limit', name: 'Limit', type: 'money', hint: 'A contractor license’s monetary limit' },
+    { key: 'expires', name: 'Expires', type: 'date' },
+    { key: 'left', name: 'Days left', type: 'formula', expr: '{Expires} - today()', format: 'days' },
+    { key: 'files', name: 'Copies', type: 'files' },
+    { key: 'notes', name: 'Notes', type: 'text', long: true },
+  ], views: [{ name: 'By expiry', kind: 'table', sortBy: 'expires' }, { name: 'Calendar', kind: 'calendar', start: 'expires' }] },
+};
+// Which of them a trades project gets, from the trades picked: plans for repair, recurring and cleaning work;
+// equipment for repair work and the trades that service a customer's units; licenses for everyone.
+const UNIT_TRADES = new Set(['pool', 'irrigation', 'security', 'ev', 'garage']);
+export function companionTypes(keys) {
+  const fams = new Set(keys.map((k) => TRADES[k]?.family).filter(Boolean));
+  return [
+    ...(['service', 'recurring', 'cleaning'].some((f) => fams.has(f)) ? [COMPANIONS.plans] : []),
+    ...(fams.has('service') || keys.some((k) => UNIT_TRADES.has(k)) ? [COMPANIONS.equipment] : []),
+    COMPANIONS.licenses,
+  ];
 }
 
 // The trades grouped by family, for the "what kind of work do you do?" picker.

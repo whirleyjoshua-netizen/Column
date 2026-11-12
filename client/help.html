@@ -41,6 +41,7 @@
     <li><a href="#kinds">Jobs &amp; projects: choose how you work</a></li>
     <li><a href="#signoff">Sign-offs and acknowledgments</a></li>
     <li><a href="#cards">Business cards</a></li>
+    <li><a href="#formulas">Formulas, rollups and calendars</a></li>
     <li><a href="#assets">Equipment and assets</a></li>
     <li><a href="#jobs">Jobs</a></li>
     <li><a href="#connect">Email and calendars</a></li>
@@ -184,6 +185,15 @@
     <li><b>Your address:</b> change the end of your card’s link under Options. Turn the card off any time; owners and admins can switch Business cards off for the team in <b>Settings → Team → Tools</b>. If you leave the team, your card goes too.</li>
   </ul>
 
+  <h2 id="formulas">Formulas, rollups and calendars</h2>
+  <p>Add these to any list in Jobs &amp; projects with the <b>+</b> at the end of a table’s columns.</p>
+  <ul>
+    <li><b>Formula:</b> worked out from the record’s other fields, like <code>{Price} * {Qty}</code> or <code>{Value} * 1.08</code>. Tap a field’s name to put it in. You can use + − × ÷, brackets, <code>if(test, yes, no)</code>, <code>round(x, places)</code>, <code>min</code>, <code>max</code>, <code>abs</code> and <code>today()</code>. Dates count in days: <code>{Expires} - today()</code> is the days left, and <code>{Start} + 30</code> is the date 30 days on. Say whether it comes out as a number, money, days or a date. Renaming a field doesn’t break a formula that uses it.</li>
+    <li><b>Rollup:</b> adds up the records a link field points at: how many there are, the total, average, lowest or highest of one of their fields, or how many are ticked. For example, the total cost of the parts linked to a job. It changes when one of them does.</li>
+    <li>Formulas and rollups are worked out by Kloomie, so they’re the same in the app, in exports, through the API and in webhooks. You can’t type into them.</li>
+    <li><b>Calendar view:</b> any list with a date gets one from <b>+</b> next to its views, or <b>Show as a calendar</b> in a view’s menu. Pick which date it goes by (Scheduled, Due, Renews…).</li>
+  </ul>
+
   <h2 id="assets">Equipment and assets</h2>
   <p>Keep track of gear that moves between sites, like camera towers, generators, trailers, tools and laptops: where each one is, the job it’s at, who has it, and its lock combo. In <b>Jobs &amp; projects</b>, make a new project and pick <b>Business Operations → Equipment &amp; assets</b>.</p>
   <ul>
@@ -204,7 +214,18 @@
     <li><b>On site:</b> tick off the checklist, enter measurements (it totals openings or square feet), equipment with model and serial, materials and their cost, and readings.</li>
     <li><b>Sign-off:</b> the customer reads a form filled in from the job and signs, here or from a link (see <a href="#signoff">Sign-offs and acknowledgments</a>).</li>
     <li><b>Photos and permits:</b> before and after photos, and the permit number, status and inspection day for trades that need one.</li>
+    <li><b>Gate and lockbox codes:</b> kept locked, not in the notes. They show when someone taps Show, and each look goes on the job’s timeline.</li>
+    <li><b>Calendar:</b> each trade’s jobs on a month calendar by their scheduled day. Drag a job to another day to move it, or tap + on a day to add one there.</li>
+    <li><b>Where it matters:</b> installers and builders are asked about HOA approval; builders get the year the home was built (homes before 1978 come under lead-safe work rules); lawn care and irrigation get the address’s watering group.</li>
   </ul>
+  <h3 id="jobs-lists">Service plans, customer equipment, licenses</h3>
+  <p>A Jobs project also gets lists beside the jobs:</p>
+  <ul>
+    <li><b>Service plans</b> (repair, recurring and cleaning work): each customer’s membership or agreement, with how often, visits a year, price, billing, member discount, when it renews and when the next visit is due.</li>
+    <li><b>Customer equipment</b> (repair work, pools, irrigation, security, EV chargers, garage doors): each customer’s own units, with make, model and serial, where it is, when it was installed, its age worked out, warranty and last service. This is the customer’s gear, not your company’s (that’s <a href="#assets">Equipment and assets</a>).</li>
+    <li><b>Licenses &amp; insurance</b> (every trade): contractor license, business licenses, insurance, bonds and certifications, with the number, limit, expiry and days left. Add the “License expiring? Owners hear” automation to be told 30 days ahead.</li>
+  </ul>
+  <p>Any project can add these from <b>⋯ → Add a list</b>.</p>
   <h3>Visits and the team schedule</h3>
   <p>On a job, click <b>Schedule a visit</b>: say what it’s for (measure, install, service…), when, and who’s going. It goes on the Day of everyone going, and on their Google, Outlook or Apple calendar if it’s connected. Tapping it there opens the job, with that visit at the top and <b>Visit done</b>. Moving one person’s copy moves everyone’s.</p>
   <p>The job keeps up by itself: its Scheduled day and Assigned to follow the next visit, and its stage moves forward, so booking a measure makes it Measure booked, and finishing the install makes it Installed.</p>
@@ -327,6 +348,8 @@
   <p>Owners and admins can set up “when this happens, do that” in <span class="path">Settings → Automations</span>. For example: when a step is done, make a follow-up task; when a contact becomes a customer, tell the owners; every Monday at 9, post in #general.</p>
   <p>Start from a recipe or build your own. Each automation keeps a log of what it did. If one fails, a dot shows on the Automations tab.</p>
   <p><b>What can set one off:</b> something from any tool. Tasks and contacts; calls, check-ins and finished campaigns; a job or record added, moved to a stage (however it got there: in the app, through the API or a customer answering a quote) or deleted; a quote accepted or declined; a visit scheduled, done or cancelled; an invoice sent or paid and a payment in (only over an amount, if you like); the business’s money in or out; files and signatures; a text from a customer; a new doc; a pin dropped on the Map for a campaign; or a schedule. Narrow it to one project and stage, one campaign, or an amount.</p>
+  <p><b>Dates on records:</b> <b>A date on a job or record comes up</b> goes off a number of days before, on or after a date in a list: 30 days before a license expires, 14 days before a plan renews, the day after a job for a review. Before a date, it goes off on any day up to the date itself, so a license added with 10 days left still warns. It goes off once for each date, and again if the date changes.</p>
+  <p><b>Changing records:</b> a step can <b>Change the job or record</b> that set it off (assign whoever moved it, set a date like today+3, fill in a field with {words}), or <b>Add a job or record</b> to any list you can see. A record it adds is for the same customer and links back when it can. It sets plain fields only, never price lines (they need their own OKs). Each change goes on the record’s timeline under the automation’s name, and what an automation adds never sets off another automation.</p>
   <p><b>Deciding and waiting:</b> a step can be <b>Only if…</b> (for example only if {amount} is over 1000, or {stage} is Lead), with its own steps and an <b>Otherwise</b>; and <b>Wait…</b> from a minute to 90 days, then carry on (“wait 2 days, then check in”). After a wait it acts on things as they are by then: a contact renamed meanwhile is named as they are now. Runs that are waiting show on the automation, and you can stop one. Changing an automation’s steps stops the runs waiting in the old ones.</p>
   <p><b>What stays private:</b> something in a private campaign, project or folder only sets off an automation narrowed to that campaign or project, made by someone who can see it. The business’s money only sets off owners’ automations, and nobody’s own money ever does.</p>
 
