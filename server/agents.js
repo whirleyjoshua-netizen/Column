@@ -328,7 +328,10 @@ export function agentsModule({ sees = () => true, db, save, broadcast, rid, clea
         const s = await cx.state();
         const q = String(a.query || '').toLowerCase();
         const docs = s.items.filter((it) => it.type === 'text' && (!q || (it.title || '').toLowerCase().includes(q) || String(it.text || '').toLowerCase().includes(q)));
-        return { docs: docs.slice(-30).reverse().map((it) => ({ id: it.id, title: it.title || String(it.text || '').split('\n')[0].slice(0, 100), edited: new Date(it.editedAt || it.createdAt).toISOString().slice(0, 10) })) };
+        // Title matches first, then the most recently edited (an import can bring hundreds of pages).
+        const inTitle = (it) => (q && (it.title || '').toLowerCase().includes(q) ? 1 : 0);
+        docs.sort((a, b) => inTitle(b) - inTitle(a) || (b.editedAt || b.createdAt) - (a.editedAt || a.createdAt));
+        return { docs: docs.slice(0, 30).map((it) => ({ id: it.id, title: it.title || String(it.text || '').split('\n')[0].slice(0, 100), edited: new Date(it.editedAt || it.createdAt).toISOString().slice(0, 10), ...(it.underId ? { inside: s.items.find((y) => y.id === it.underId)?.title || null } : {}) })) };
       },
     },
     read_doc: {

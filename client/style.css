@@ -1545,9 +1545,54 @@ body.platform-darwin .dv-bar { padding-left: 80px; }
 .dk-selected .dk-pg { background: var(--accent-soft); }
 .dk-vw { margin: 4px 0; }
 .dk-vw.gone { color: var(--muted); font-style: italic; padding: 6px 8px; }
-.dk-view-card { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); cursor: pointer; font: inherit; color: inherit; }
-.dk-view-card:hover { background: var(--card-hover); }
-.dk-view-card small { margin-left: auto; color: var(--muted); }
+.dv-head { position: relative; }
+.dv-cover { position: relative; margin: -8px -8px 10px; }
+.dv-cover img { width: 100%; height: 190px; object-fit: cover; border-radius: 10px; display: block; }
+.dv-cover-btns { position: absolute; right: 10px; bottom: 10px; display: flex; gap: 6px; opacity: 0; transition: opacity .12s; }
+.dv-cover:hover .dv-cover-btns, .dv-cover:focus-within .dv-cover-btns { opacity: 1; }
+@media (hover: none) { .dv-cover-btns { opacity: 1; } }
+.dv-icon { font-size: 44px; line-height: 1; border: 0; background: none; padding: 2px; border-radius: 8px; cursor: pointer; }
+.dv-head.has-cover .dv-icon { margin-top: -38px; position: relative; }
+.dv-icon:hover:not([disabled]) { background: var(--card-hover); }
+.dv-head-add { display: flex; gap: 12px; font-size: 12.5px; opacity: 0; transition: opacity .12s; min-height: 20px; }
+.docview:hover .dv-head-add, .dv-head-add:focus-within { opacity: 1; }
+@media (hover: none) { .dv-head-add { opacity: 1; } }
+.dk-pg-ic { flex: none; }
+.ask-q { font-weight: 650; margin: 0 0 8px; }
+.ask-a p { margin: 4px 0; line-height: 1.5; }
+.ask-ref { border: 0; background: var(--accent-soft); color: var(--accent); border-radius: 4px; padding: 0 4px; margin: 0 1px; font: inherit; font-size: 11px; font-weight: 700; cursor: pointer; vertical-align: 1px; }
+.ask-src { margin-top: 12px; display: flex; flex-direction: column; gap: 4px; }
+.ask-src h4 { margin: 0 0 2px; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.ask-s { text-align: left; border: 1px solid var(--line); border-radius: 6px; background: var(--card); padding: 6px 8px; font: inherit; font-size: 13px; color: inherit; cursor: pointer; }
+.ask-s:hover { background: var(--card-hover); }
+.pk-ask { color: var(--accent); font-weight: 700; }
+.dk-em { margin: 4px 0; }
+.dk-em-frame { position: relative; width: 100%; border-radius: 8px; overflow: hidden; background: var(--card); border: 1px solid var(--line); }
+.dk-em-frame iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+.dk-em-link { display: inline-block; margin-top: 3px; font-size: 12px; color: var(--muted); }
+.dk-em-in { width: 100%; padding: 9px 10px; border: 1px dashed var(--line); border-radius: 8px; background: var(--card); font: inherit; font-size: 13.5px; color: inherit; outline: none; }
+.dk-em.gone { color: var(--muted); font-style: italic; }
+.dk-vw { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; background: var(--card); }
+.dk-vt-h { display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px; }
+.dk-vt-h small { color: var(--muted); }
+.dk-vt-name { border: 0; background: none; padding: 0; font: inherit; font-weight: 650; color: inherit; cursor: pointer; }
+.dk-vt-name:hover { text-decoration: underline; }
+.dk-vt-wrap { overflow-x: auto; max-width: 100%; }
+.dk-vt { border-collapse: collapse; width: 100%; font-size: 13px; }
+.dk-vt th { text-align: left; color: var(--muted); font-weight: 550; font-size: 11.5px; padding: 4px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.dk-vt td { padding: 5px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+.dk-vt-row { cursor: pointer; }
+.dk-vt-row:hover { background: var(--card-hover); }
+.dk-vt-none { color: var(--muted); margin: 4px 0; font-size: 13px; }
+.dk-vt-more { margin-top: 4px; font-size: 12.5px; }
+.dk-vt-add { width: 100%; margin-top: 6px; border: 0; border-top: 1px dashed var(--line); background: none; padding: 6px 2px; font: inherit; font-size: 13px; color: inherit; outline: none; }
+.dk-vb { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 4px; }
+.dk-vb-lane { flex: 0 0 170px; display: flex; flex-direction: column; gap: 4px; }
+.dk-vb-h { display: flex; justify-content: space-between; align-items: center; font-size: 12px; margin-bottom: 2px; }
+.dk-vb-h small { color: var(--muted); }
+.dk-vb-card { text-align: left; border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; background: var(--bg); font: inherit; font-size: 13px; color: inherit; cursor: pointer; }
+.dk-vb-card:hover { background: var(--card-hover); }
+.dk-vb-more { color: var(--muted); font-size: 11.5px; }
 /* docs: mentions, live blocks, to-dos that are tasks */
 .dk-ref { display: inline; padding: 0 3px; border-radius: 4px; background: var(--accent-soft); color: var(--accent); font-weight: 550; cursor: pointer; white-space: nowrap; }
 .dk-ref:hover { text-decoration: underline; }

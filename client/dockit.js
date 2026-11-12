@@ -25,6 +25,8 @@ window.ColumnDocs = (() => {
     { type: 'divider', label: 'Divider', hint: 'A line between sections', keys: 'divider line hr rule ---' },
     { type: 'table', label: 'Table', hint: 'Rows and columns', keys: 'table grid rows columns' },
     { type: 'page', label: 'Page', hint: 'A page inside this one', keys: 'page subpage sub-page child nested inside wiki' },
+    { type: 'embed', label: 'Embed', hint: 'A video, map, Figma or Google doc', keys: 'embed video youtube vimeo loom map google maps figma sheet slides iframe' },
+    { type: 'view', label: 'Project table', hint: 'A list from Jobs & projects, kept up to date', keys: 'table database view board records project crm list notion jobs' },
     { type: 'image', label: 'Image', hint: 'Upload a picture', keys: 'image picture photo img' },
     { type: 'file', label: 'File', hint: 'Attach a file', keys: 'file attachment upload pdf' },
     { type: 'ai', label: 'Write with AI', hint: 'Ask for a section, a list, a summary…', keys: 'ai write draft generate assistant sidekick ✦' },
@@ -38,6 +40,37 @@ window.ColumnDocs = (() => {
     { type: 'live:list', live: 'list', label: 'Call list', hint: 'How far through a list you are', keys: 'call list prospects contacted live' },
     { type: 'live:pipeline', live: 'pipeline', label: 'Pipeline', hint: 'A project’s deals or quotes by stage, with totals', keys: 'pipeline deals quotes bids stages project crm forecast live' },
   ];
+  // What a link shows inside a doc: only these services, each as its own player address (the same rules as
+  // server/notion.js embedSrc; tests/docs_embeds.mjs checks they agree).
+  function embedSrc(raw) {
+    let u;
+    try { u = new URL(String(raw || '').trim()); } catch { return null; }
+    if (u.protocol !== 'https:') return null;
+    const host = u.hostname.replace(/^www\./, '').toLowerCase();
+    const id = (re, s) => re.exec(s)?.[1] || null;
+    let v;
+    if (host === 'youtube.com' || host === 'm.youtube.com') {
+      v = u.pathname === '/watch' ? u.searchParams.get('v') : id(/^\/(?:shorts|embed|live)\/([\w-]{6,20})/, u.pathname);
+      return v && /^[\w-]{6,20}$/.test(v) ? { kind: 'YouTube', src: `https://www.youtube-nocookie.com/embed/${v}`, ratio: 56.25 } : null;
+    }
+    if (host === 'youtu.be') return (v = id(/^\/([\w-]{6,20})$/, u.pathname)) ? { kind: 'YouTube', src: `https://www.youtube-nocookie.com/embed/${v}`, ratio: 56.25 } : null;
+    if (host === 'vimeo.com') return (v = id(/^\/(\d{4,12})(?:\/|$)/, u.pathname)) ? { kind: 'Vimeo', src: `https://player.vimeo.com/video/${v}`, ratio: 56.25 } : null;
+    if (host === 'loom.com') return (v = id(/^\/(?:share|embed)\/([0-9a-f]{16,40})/, u.pathname)) ? { kind: 'Loom', src: `https://www.loom.com/embed/${v}`, ratio: 56.25 } : null;
+    if ((host === 'google.com' || host === 'maps.google.com') && /^\/maps(\/|$)/.test(u.pathname)) {
+      const q = u.searchParams.get('q') || decodeURIComponent(id(/^\/maps\/(?:place|search)\/([^/@]+)/, u.pathname) || '').replace(/\+/g, ' ');
+      return q && q.length <= 300 ? { kind: 'Google Maps', src: `https://maps.google.com/maps?q=${encodeURIComponent(q)}&output=embed`, ratio: 60 } : null;
+    }
+    if (host === 'figma.com' && /^\/(file|design|proto|board)\/[\w-]{10,40}/.test(u.pathname)) return { kind: 'Figma', src: `https://www.figma.com/embed?embed_host=kloomie&url=${encodeURIComponent(u.origin + u.pathname)}`, ratio: 62.5 };
+    if (host === 'docs.google.com') {
+      const m = /^\/(document|spreadsheets|presentation|forms)\/d\/(e\/)?([\w-]{20,80})/.exec(u.pathname);
+      if (!m) return null;
+      const kind = { document: 'Google Doc', spreadsheets: 'Google Sheet', presentation: 'Google Slides', forms: 'Google Form' }[m[1]];
+      const tail = m[1] === 'forms' ? 'viewform?embedded=true' : 'preview';
+      return { kind, src: `https://docs.google.com/${m[1]}/d/${m[2] || ''}${m[3]}/${tail}`, ratio: m[1] === 'presentation' ? 59 : 75 };
+    }
+    return null;
+  }
+
   let pageName = () => 'Untitled';
   const LIVE_NAME = { campaign: 'Campaign summary', goal: 'Goal progress', tasks: 'Task list', calls: 'Call stats', budgets: 'Budgets', list: 'Call list', pipeline: 'Pipeline' };
   const LABEL = Object.fromEntries(COMMANDS.map((c) => [c.type, c.label]));
@@ -405,6 +438,7 @@ window.ColumnDocs = (() => {
       if (b.type === 'live') return `[${LIVE_NAME[b.source]}]`;
       if (b.type === 'page') return `${pad}[Page: ${pageName(b)}]`;
       if (b.type === 'view') return `${pad}[Table]`;
+      if (b.type === 'embed') return b.url ? pad + b.url : '';
       return pad + t;
     }).join('\n');
   }
@@ -452,6 +486,7 @@ window.ColumnDocs = (() => {
         into.append(el('p', {}, el('b', {}, lines[0])), ...lines.slice(1).map((l) => el('p', {}, l)));
       } else if (b.type === 'page') into.append(el('p', {}, '📄 ' + pageName(b)));
       else if (b.type === 'view') into.append(el('p', {}, '📊 A table in Kloomie'));
+      else if (b.type === 'embed') { if (b.url) into.append(el('p', {}, el('a', { href: b.url }, `${embedSrc(b.url)?.kind || 'Link'}: ${b.url}`))); }
       else into.append(runsEl(b.runs, el('p')));
     }
     return root;
@@ -482,6 +517,7 @@ window.ColumnDocs = (() => {
         else out.push({ t: 'p', runs: [{ text: `[${b.name || 'File'}]`, i: true }] });
       } else if (b.type === 'page') out.push({ t: 'p', runs: [{ text: '📄 ' + pageName(b) }] });
       else if (b.type === 'view') out.push({ t: 'p', runs: [{ text: '📊 A table in Kloomie', i: true }] });
+      else if (b.type === 'embed') { if (b.url) out.push({ t: 'p', runs: [{ text: `${embedSrc(b.url)?.kind || 'Link'}: ${b.url}`, link: b.url }] }); }
       else out.push({ t: 'p', runs: runs(b.runs) });
     }
     return out;
@@ -646,6 +682,7 @@ window.ColumnDocs = (() => {
       else if (b.type === 'table') r.append(tableEl(b));
       else if (b.type === 'page') r.append(pageEl(b));
       else if (b.type === 'view') r.append(viewEl(b));
+      else if (b.type === 'embed') r.append(embedEl(b));
       else {
         const lead = b.type === 'ul' ? el('span', { class: 'dk-lead dk-bullet', contenteditable: 'false' }, ['•', '◦', '▪'][(b.indent || 0) % 3])
           : b.type === 'ol' ? el('span', { class: 'dk-lead dk-num', contenteditable: 'false' }, num + '.')
@@ -698,6 +735,33 @@ window.ColumnDocs = (() => {
       if (!p) return el('div', { class: 'dk-pg gone', contenteditable: 'false' }, el('span', { class: 'dk-page-ic' }, '📄'), el('span', { class: 'dk-page-n' }, 'A page that’s been moved or deleted'));
       return el('div', { class: 'dk-pg', role: 'link', tabindex: '0', contenteditable: 'false', title: 'Open the page' }, el('span', { class: 'dk-page-ic' }, p.icon || '📄'),
         el('span', { class: 'dk-page-n' }, p.title || 'Untitled'), p.pages ? el('small', {}, p.pages === 1 ? '1 page inside' : p.pages + ' pages inside') : null);
+    }
+    // A video, map or design: the service's own player in a sandbox, made from the link; without a link yet, a box
+    // to paste one into.
+    function embedEl(b) {
+      const e = b.url && embedSrc(b.url);
+      if (e) {
+        return el('div', { class: 'dk-em', contenteditable: 'false' },
+          el('div', { class: 'dk-em-frame', style: `padding-top:${e.ratio}%` },
+            el('iframe', { src: e.src, title: e.kind, loading: 'lazy', sandbox: 'allow-scripts allow-same-origin allow-popups allow-presentation allow-forms', allow: 'fullscreen; picture-in-picture; encrypted-media', referrerpolicy: 'strict-origin-when-cross-origin' })),
+          el('a', { class: 'dk-em-link', href: b.url, target: '_blank', rel: 'noopener noreferrer' }, `${e.kind} · open it there`));
+      }
+      if (S.ro) return el('div', { class: 'dk-em gone', contenteditable: 'false' }, 'An embed with no link yet');
+      const inp = el('input', { class: 'dk-em-in', placeholder: 'Paste a YouTube, Vimeo, Loom, Google Maps, Figma or Google Docs link, then Enter', 'aria-label': 'Link to embed' });
+      for (const ev of ['beforeinput', 'input', 'paste', 'keyup']) inp.addEventListener(ev, (x) => x.stopPropagation());
+      inp.addEventListener('keydown', (x) => {
+        x.stopPropagation();
+        if (x.key !== 'Enter') return;
+        x.preventDefault();
+        const url = inp.value.trim();
+        if (!embedSrc(url)) return opts.toast?.('That link can’t be shown here. Paste a YouTube, Vimeo, Loom, Google Maps, Figma or Google Docs link, or add it as a link instead.');
+        snap();
+        b.url = url;
+        render();
+        changed();
+      });
+      setTimeout(() => inp.isConnected && document.activeElement !== inp && !document.activeElement?.closest?.('.dk-em') && inp.focus(), 0);
+      return el('div', { class: 'dk-em', contenteditable: 'false' }, inp);
     }
     // A project's records in the doc, for those who can see the project.
     function viewEl(b) {
@@ -1476,7 +1540,7 @@ window.ColumnDocs = (() => {
     }
     // Your signature, when the app knows how to find it.
     const SIG_CMD = { type: 'signature', label: 'My signature', hint: 'Your name and details, from Settings', keys: 'signature sign-off sig name contact details' };
-    const commands = () => (opts.signature ? [...COMMANDS, SIG_CMD] : COMMANDS);
+    const commands = () => [...COMMANDS.filter((c) => c.type !== 'view' || opts.pickView), ...(opts.signature ? [SIG_CMD] : [])];
     function pickSlash(cmd) {
       const s = S.slash;
       closeSlash();
@@ -1554,6 +1618,23 @@ window.ColumnDocs = (() => {
         if (empty && fromSlash) focus(b.id);
         return pickFiles(b.id, type === 'image');
       }
+      // A project's list: which one is picked first.
+      if (type === 'view') {
+        render();
+        const anchor = rowOf(b.id);
+        Promise.resolve(opts.pickView?.(anchor)).then((pick) => {
+          if (!pick || !byId(b.id)) return;
+          snap();
+          const n = newBlock('view', { source: 'project', ...pick });
+          const after = newBlock('p', lvl);
+          if (empty && b.type === 'p') S.blocks.splice(idx(b.id), 1, n, after);
+          else insertAfter(b.id, [n, after]);
+          render();
+          focus(after.id);
+          changed();
+        });
+        return;
+      }
       // A page: made on the server (which puts its block here), then opened.
       if (type === 'page') {
         if (!opts.newPage) { render(); return opts.toast?.('Pages can’t be added here.'); }
@@ -1569,7 +1650,7 @@ window.ColumnDocs = (() => {
         render();
         return opts.newPage(after);
       }
-      if (type === 'divider' || type === 'table') {
+      if (type === 'divider' || type === 'table' || type === 'embed') {
         const n = newBlock(type, lvl);
         const after = newBlock('p', lvl);
         if (empty && b.type === 'p') S.blocks.splice(idx(b.id), 1, n, after);
@@ -1751,6 +1832,7 @@ window.ColumnDocs = (() => {
       }
       if (b.type === 'file') rows.push({ label: 'Open', run: () => opts.openFile?.(b.itemId) });
       if (b.type === 'page') rows.push({ label: 'Open the page', run: () => opts.openPage?.(b.docId) });
+      if (b.type === 'view' && !S.ro) rows.push(b.mode === 'board' ? { label: 'Show as a table', run: () => { snap(); delete b.mode; render(); changed(); } } : { label: 'Show as a board (by stage)', run: () => { snap(); b.mode = 'board'; render(); changed(); } });
       if (b.type === 'todo' && opts.makeTask) {
         rows.push({ head: 'Task' });
         if (!b.taskId) rows.push({ label: 'Make it a task', run: () => { if (!runsText(b.runs).trim()) return opts.toast?.('Write the to-do first.'); linkTask(b); } });
@@ -1917,8 +1999,8 @@ window.ColumnDocs = (() => {
       if (e.target.closest('.dk-task-bits')) return;
       if (e.target.closest('.dk-live-body button, .dk-live-body a, .dk-live-body input')) return;
       if (e.target.closest('.dk-pg') && b?.type === 'page' && !e.shiftKey) { e.preventDefault(); return opts.openPage?.(b.docId); }
-      if (e.target.closest('.dk-vw button, .dk-vw a, .dk-vw input')) return;
-      if (e.target.closest('.dk-figure, .dk-file, .dk-hr, .dk-lv, .dk-pg, .dk-vw')) {
+      if (e.target.closest('.dk-vw button, .dk-vw a, .dk-vw input, .dk-em input, .dk-em a')) return;
+      if (e.target.closest('.dk-figure, .dk-file, .dk-hr, .dk-lv, .dk-pg, .dk-vw, .dk-em')) {
         e.preventDefault();
         if (b.type === 'file' && (e.detail > 1 || S.sel.includes(id))) return opts.openFile?.(b.itemId);
         return e.shiftKey && S.anchor ? select(range(S.anchor, id), S.anchor) : select([id]);
@@ -2038,6 +2120,10 @@ window.ColumnDocs = (() => {
         const r = rowOf(b.id);
         if (!r) continue;
         if (b.type === 'live') r.querySelector('.dk-lv')?.replaceWith(liveEl(b));
+        // A project's list and a page inside: as they are now (records added, a page renamed).
+        if (b.type === 'view' && !r.contains(at)) r.querySelector('.dk-vw')?.replaceWith(viewEl(b));
+        if (b.type === 'view' && r.contains(at)) { const fresh = viewEl(b); const old = r.querySelector('.dk-vw'); old?.querySelector('.dk-vt-wrap, .dk-vb, .dk-vt-none')?.replaceWith(fresh.querySelector('.dk-vt-wrap, .dk-vb, .dk-vt-none') || ''); old?.querySelector('.dk-vt-h small')?.replaceWith(fresh.querySelector('.dk-vt-h small') || ''); }
+        if (b.type === 'page') r.querySelector('.dk-pg')?.replaceWith(pageEl(b));
         if (b.type === 'todo') {
           const done = isDone(b);
           r.classList.toggle('dk-done', done);
@@ -2178,7 +2264,7 @@ window.ColumnDocs = (() => {
   }
 
   // Sub-pages are named as they're called now: the app says how (out.pageName = (docId) => title).
-  const out = { editor, diff, apply, toText, toHtml, toPdf, fromText, fromHtml, runsText, uid, LABEL, pageName: null };
+  const out = { editor, diff, apply, toText, toHtml, toPdf, fromText, fromHtml, runsText, uid, LABEL, embedSrc, pageName: null };
   pageName = (b) => out.pageName?.(b.docId) || 'Untitled';
   return out;
 })();

@@ -461,7 +461,7 @@
 
   function handle(msg) {
     // An open doc's live blocks, tasks and links follow the numbers.
-    if (DV.doc && /^(task|goal|campaign|attempt|list|money|budget|item)/.test(msg.type)) setTimeout(docLiveSoon);
+    if (DV.doc && /^(task|goal|campaign|attempt|list|money|budget|item|record|project)/.test(msg.type)) setTimeout(docLiveSoon);
     if (msg.type === 'item:add') {
       const isNew = !S.items.some((x) => x.id === msg.item.id);
       upsert(msg.item);
@@ -637,6 +637,9 @@
     } else if (msg.type === 'template:remove') {
       S.templates = S.templates.filter((y) => y.id !== msg.id);
       renderCamps();
+    } else if (msg.type === 'doc-templates') {
+      DT.list = null;
+      if (DV.doc) docStarter(DV.doc);
     } else if (msg.type === 'import') {
       notionNews(msg);
     } else if (msg.type === 'resync') {
@@ -7479,6 +7482,21 @@
     el.classList.add('flash');
   }
 
+  // The answer to a question, from the docs and records this person can see, with each source to open.
+  async function askSheet(question) {
+    const body = h('div', { class: 'ask-body' }, h('p', { class: 'day-hint ask-wait' }, 'Reading your docs and records…'));
+    sheet('Ask', [h('p', { class: 'ask-q' }, question), body], null);
+    let r;
+    try { r = await api('POST', '/ai/ask', { q: question, today: todayKey() }); } catch (e) { return body.replaceChildren(h('p', { class: 'err' }, e.message)); }
+    const open = (x) => () => { closeSheet(); if (x.kind === 'doc') { const d = docById(x.id); if (d) openDoc(d); else toast('That doc isn’t here any more.'); } else { prLoadAll().then(() => openRecord(x.id)); } };
+    const byN = new Map(r.sources.map((x) => [x.n, x]));
+    // The answer as text, with [n] as a tap to its source.
+    const line = (t) => t.split(/(\[\d+\])/).map((part) => { const n = /^\[(\d+)\]$/.exec(part)?.[1]; const x = n && byN.get(Number(n)); return x ? h('button', { class: 'ask-ref', title: x.title, onclick: open(x) }, n) : part.replace(/\*\*/g, ''); });
+    body.replaceChildren(
+      h('div', { class: 'ask-a' }, r.answer.split('\n').filter((l) => l.trim()).map((l) => (/^\s*[-*]\s+/.test(l) ? h('p', { class: 'ask-li' }, '• ', ...line(l.replace(/^\s*[-*]\s+/, ''))) : h('p', {}, ...line(l))))),
+      r.sources.length ? h('div', { class: 'ask-src' }, h('h4', {}, 'Sources'), r.sources.map((x) => h('button', { class: 'ask-s', onclick: open(x) }, h('b', {}, x.n), ' ', x.kind === 'doc' ? '📄 ' : '📊 ', x.title))) : null,
+      h('p', { class: 'day-hint' }, 'From what you can see in Kloomie, on your own AI key. Check anything important in its source.'));
+  }
   function openPalette() {
     if (palette) return closePalette();
     const q = h('input', { class: 'pk-q', placeholder: 'Jump to a feed, or search everything…', spellcheck: 'false', 'aria-label': 'Search' });
@@ -7507,16 +7525,21 @@
             html: mark(plainText(x.text), s), sub: `${isMine(x) ? 'You' : x.by} · ${feedOf(x)}${x.parentId ? ' thread' : ''} · ${ago(x.createdAt)}`, two: true, run: () => jumpTo(x) }))],
           ['Files', S.items.filter((x) => (x.type === 'file' || x.type === 'folder') && hit(x.name)).sort((a, b) => b.createdAt - a.createdAt).slice(0, 10)
             .map((x) => ({ icon: h('span', { class: 'pk-ic', html: x.type === 'folder' ? I.folder : I.link }), label: x.name, sub: fmtSize(x.size), run: () => openPreview(x) }))],
-          ['Docs', S.items.filter((x) => x.type === 'text' && hit(x.text)).sort((a, b) => (b.editedAt || b.createdAt) - (a.editedAt || a.createdAt)).slice(0, 10)
+          ['Docs', S.items.filter((x) => x.type === 'text' && (hit(x.text) || hit(docTitle(x)))).sort((a, b) => (hit(docTitle(b)) - hit(docTitle(a))) || (b.editedAt || b.createdAt) - (a.editedAt || a.createdAt)).slice(0, 10)
             .map((x) => ({ icon: h('span', { class: 'pk-ic', html: I.copy }), label: docTitle(x), sub: `${[docWhere(x), ...docPath(x).map(docTitle)].join(' › ')} · ${ago(x.editedAt || x.createdAt)}`, two: true, run: () => openDoc(x) }))],
           ['Campaigns', [...S.campaigns.filter((c) => hit(c.name) || hit(c.brief)).map((c) => ({ icon: h('span', { class: 'pk-ic', html: I.target }), label: c.name, sub: Math.round(campProgress(c) * 100) + '%', run: () => openCampaign(c.id) })),
             ...S.goals.filter((g) => hit(g.title)).slice(0, 10).map((g) => ({ icon: h('span', { class: 'pk-ic', html: I.target }), label: g.title, sub: `${campById(g.campaignId)?.name} · ${goalProgress(g).label}`, run: () => openCampaign(g.campaignId) }))]],
           ['Tasks', S.tasks.filter((t) => hit(t.text)).slice(0, 10)
             .map((t) => ({ icon: h('span', { class: 'pk-ic', html: I.task }), label: t.text, sub: t.done ? 'done' : taskSlot(t)?.label, run: () => (goalById(t.goalId) ? openCampaign(goalById(t.goalId).campaignId) : showTasks()) }))],
+          ['Records', [...PR.records.entries()].flatMap(([pid, recs]) => { const p = projById(pid); return p ? recs.map((r) => ({ p, r, t: p.types.find((y) => y.id === r.typeId) })) : []; })
+            .filter(({ r, t }) => t && hit(recName(t, r))).slice(0, 10)
+            .map(({ p, r, t }) => ({ icon: h('span', { class: 'pk-ic' }, t.icon || p.icon || '📊'), label: recName(t, r), sub: `${p.name} · ${t.singular || t.name}`, run: () => openRecord(r.id) }))],
           ['Stacks', S.workspace.stacks.filter((x) => hit(x.name))
             .map((x) => ({ icon: h('span', { class: 'pk-ic', html: I.stack }), label: x.name, sub: `${stackCount(x.id)} items`, run: () => showStack(x.id) }))],
         );
       }
+      // A question (a few words): ask the team's own docs and records, with the answer's sources.
+      if (s.length >= 8 && /\s/.test(s)) groups.unshift(['Ask', [{ icon: h('span', { class: 'pk-ic pk-ask' }, '✦'), label: `Ask: “${q.value.trim()}”`, sub: 'An answer from your docs and records, with where it came from', two: true, run: () => askSheet(q.value.trim()) }]]);
       rows = [];
       list.replaceChildren();
       for (const [title, all] of groups) {
@@ -7549,6 +7572,9 @@
     document.body.append(palette);
     draw();
     q.focus();
+    // Records come with Jobs & projects: loaded now if they aren't yet, and the list drawn again.
+    const box = palette;
+    if (toolOn('projects') && (S.projects || []).some((p) => !PR.records.has(p.id))) prLoadAll().then(() => palette === box && draw()).catch(() => {});
   }
   document.addEventListener('keydown', (e) => {
     if (e.key.toLowerCase() === 'k' && (e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && S.workspace && !$('#app').classList.contains('hidden')) {
@@ -12283,6 +12309,38 @@
       toast(e.message);
     }
   }
+  // A page's icon (an emoji) and cover (a picture), above its title.
+  const DOC_ICONS = ['📄', '📘', '📋', '🛠️', '🏗️', '🦺', '💰', '📞', '🎯', '✅', '📦', '🚚', '🏠', '🔧', '🧰', '📐', '📅', '💡', '⚠️', '📌', '🧾', '👷', '🌿', '⭐'];
+  function docHeadDraw(x) {
+    const box = $('#docview .dv-head');
+    if (!box || DV.doc !== x) return;
+    const it = x.item();
+    const ro = x.ed.readOnly;
+    const set = async (body) => {
+      try { const r = await api('PATCH', `/items/${x.id}/doc`, body); upsert({ ...x.item(), icon: r.icon || undefined, cover: r.cover || undefined }); docHeadDraw(x); docBar(x); } catch (e) { toast(e.message); }
+    };
+    const pickIcon = (e) => openMenu(e.currentTarget, [{ emojis: DOC_ICONS, run: (em) => set({ icon: em }) }, ...(it.icon ? [{ label: 'Remove the icon', run: () => set({ icon: '' }) }] : [])]);
+    const pickCover = () => {
+      const inp = h('input', { type: 'file', accept: 'image/png,image/jpeg,image/gif,image/webp', class: 'hidden' });
+      inp.onchange = async () => {
+        const f = inp.files[0];
+        if (!f) return;
+        const up = await uploadFile(f, x.item().dirId ? { dirId: x.item().dirId } : { stackId: x.item().stackId || null }).catch((er) => toast(er.message));
+        if (up) set({ cover: up.id });
+      };
+      inp.click();
+    };
+    const cover = it.cover && S.items.find((y) => y.id === it.cover);
+    box.replaceChildren(...[
+      cover ? h('div', { class: 'dv-cover' }, h('img', { src: fileUrl(cover), alt: '' }),
+        ro ? null : h('span', { class: 'dv-cover-btns' }, h('button', { class: 'btn small dv-cover-change', onclick: pickCover }, 'Change cover'), h('button', { class: 'btn small', onclick: () => set({ cover: null }) }, 'Remove'))) : null,
+      it.icon ? h('button', { class: 'dv-icon', title: ro ? '' : 'Change the icon', 'aria-label': 'Page icon', disabled: ro || null, onclick: pickIcon }, it.icon) : null,
+      ro ? null : h('div', { class: 'dv-head-add' },
+        it.icon ? null : h('button', { class: 'linkish dv-add-icon', onclick: pickIcon }, '☺ Add icon'),
+        cover ? null : h('button', { class: 'linkish dv-add-cover', onclick: pickCover }, '🖼 Add cover')),
+    ].filter(Boolean));
+    box.classList.toggle('has-cover', !!cover);
+  }
   // To the trash, with Undo. Pages inside go with it.
   async function docTrash(it) {
     const n = docKidsOf(it.id).length;
@@ -12383,18 +12441,11 @@
         return f && f.type === 'file' ? { name: f.name, url: fileUrl(f), image: kind(f) === 'image', size: fmtSize(f.size) } : null;
       },
       openFile: (id) => { const f = S.items.find((y) => y.id === id); if (f) openPreview(f); },
-      pageInfo: (id) => { const d = docById(id); return d ? { title: docTitle(d), pages: docKidsOf(id).length } : null; },
+      pageInfo: (id) => { const d = docById(id); return d ? { title: docTitle(d), icon: d.icon || null, pages: docKidsOf(id).length } : null; },
       openPage: (id) => { const d = docById(id); if (d) openDoc(d); else toast('That page has been moved or deleted.'); },
       newPage: (after) => docNewPage(x, after),
-      view: (b) => {
-        const p = b.source === 'project' && projById(b.ref);
-        if (!p) return null;
-        const recs = PR.records.get(p.id);
-        const t = p.types.find((y) => y.id === b.sub) || p.types[0];
-        const n = recs ? recs.filter((r) => !t || r.typeId === t.id).length : null;
-        return h('button', { class: 'dk-view-card', type: 'button', onclick: () => { closeDoc(); openProject(p.id, t?.id); } },
-          h('span', { class: 'dk-view-ic' }, p.icon || '📊'), h('b', {}, p.name), h('small', {}, (n != null ? plural(n, (t?.singular || 'row').toLowerCase()) + ' · ' : '') + 'Open in Jobs & projects'));
-      },
+      view: (b) => docViewShow(x, b),
+      pickView: toolOn('projects') ? docPickView : null,
       menu: openMenu,
       toast,
       refInfo: docRefInfo,
@@ -12420,9 +12471,10 @@
     view.replaceChildren(
       h('div', { class: 'dv-bar' }),
       h('div', { class: 'dv-body' },
-        h('div', { class: 'dv-scroll' }, h('div', { class: 'dv-page' }, x.ed.el, h('div', { class: 'dv-start' }), h('div', { class: 'dv-links' }))),
+        h('div', { class: 'dv-scroll' }, h('div', { class: 'dv-page' }, h('div', { class: 'dv-head' }), x.ed.el, h('div', { class: 'dv-start' }), h('div', { class: 'dv-links' }))),
         h('aside', { class: 'dv-side hidden' })));
     docBar(x);
+    docHeadDraw(x);
     docLinksDraw(x);
     docStarter(x);
     docTasksSync(x);
@@ -12452,6 +12504,7 @@
       { head: '' },
       { label: it.share ? 'Public link…' : 'Share a public link…', run: () => docShareMenu(e.target, x) },
       { label: 'Version history', run: () => { x.side = 'history'; docSide(x); } },
+      { label: 'Save as a team template…', run: () => docSaveTemplate(x) },
       docCanLock(it) ? { label: it.locked ? 'Unlock: let everyone edit' : 'Lock: only you, owners and admins can edit', run: () => api('PATCH', '/items/' + x.id, { locked: !it.locked }).then(upsert).then(() => docLockChanged(x), (er) => toast(er.message)) } : null,
       { head: '' },
       { label: docStarred(it.id) ? '★ Starred · unstar' : '☆ Star it', run: () => docStar(it) },
@@ -12463,7 +12516,7 @@
     ].filter(Boolean));
     // Where it is: its place, then each page it's inside.
     const crumbs = h('span', { class: 'dv-where' }, h('button', { class: 'link dv-crumb', title: 'All docs', onclick: docsLibrary }, docWhere(it)),
-      ...docPath(it).flatMap((p) => [h('span', { class: 'dv-sep', 'aria-hidden': 'true' }, '›'), h('button', { class: 'link dv-crumb', onclick: () => openDoc(p) }, docTitle(p))]));
+      ...docPath(it).flatMap((p) => [h('span', { class: 'dv-sep', 'aria-hidden': 'true' }, '›'), h('button', { class: 'link dv-crumb', onclick: () => openDoc(p) }, (p.icon ? p.icon + ' ' : '') + docTitle(p))]));
     bar.replaceChildren(...[
       h('button', { class: 'icon-btn', 'aria-label': 'Close doc', title: toolOpen === 'docs' ? 'Back to all docs' : 'Close', html: I.back, onclick: () => closeDoc() }),
       h('button', { class: 'btn small dv-lib', title: 'Every doc you can see, with search', onclick: docsLibrary }, 'All docs'),
@@ -12613,9 +12666,10 @@
   function docShareMenu(anchor, x) {
     const it = x.item();
     const lives = () => Object.fromEntries(x.ed.blocks.filter((b) => b.type === 'live').map((b) => [b.id, docLiveLines(b)]));
-    const share = async (hours, said = 'Public link copied. Anyone with it can read this doc.') => {
+    const kids = (() => { const all = new Set([x.id]); for (let grew = true; grew;) { grew = false; for (const y of S.items) if (y.type === 'text' && y.underId && all.has(y.underId) && !all.has(y.id)) { all.add(y.id); grew = true; } } return all.size - 1; })();
+    const share = async (hours, said = 'Public link copied. Anyone with it can read this doc.', pages = !!it.share?.pages) => {
       await docSave(x);
-      const y = await api('POST', `/items/${x.id}/share`, { hours, live: lives() }).catch((e) => toast(e.message));
+      const y = await api('POST', `/items/${x.id}/share`, { hours, live: lives(), pages }).catch((e) => toast(e.message));
       if (!y) return;
       upsert(y);
       copyText(shareUrl(y));
@@ -12626,10 +12680,12 @@
       { head: it.share.expiresAt ? `Public until ${new Date(it.share.expiresAt).toLocaleDateString()}` : 'Public link' },
       { label: 'Copy the link', run: () => { copyText(shareUrl(it)); toast('Link copied'); } },
       { label: 'Open the public page', run: () => open(shareUrl(it), '_blank', 'noopener') },
+      it.share.pages ? { note: `Its ${plural(kids, 'page')} inside are on it too (and any added later).` } : kids ? { label: `Add the ${plural(kids, 'page')} inside, as a small site`, run: () => share(it.share.expiresAt ? Math.max(1, (it.share.expiresAt - Date.now()) / 3600_000) : 0, `The pages inside are on the link now. Copied.`, true) } : null,
       x.ed.blocks.some((b) => b.type === 'live') ? { label: 'Update the numbers on it', run: () => share(it.share.expiresAt ? Math.max(1, (it.share.expiresAt - Date.now()) / 3600_000) : 0, 'Numbers updated on the public page, link copied') } : null,
       { label: 'Turn off the public link', danger: true, run: async () => { const y = await api('DELETE', `/items/${x.id}/share`).catch((e) => toast(e.message)); if (y) { upsert(y); docBar(x); toast('Public link turned off'); } } },
     ].filter(Boolean));
     openMenu(anchor, [{ head: 'Make a public link' }, { note: 'Anyone with the link can read it, not edit it.' },
+      ...(kids ? [{ label: `With the ${plural(kids, 'page')} inside, as a small site (no expiry)`, run: () => share(0, `Public site copied: this doc and the ${plural(kids, 'page')} inside.`, true) }] : []),
       { label: 'No expiry', run: () => share(0) }, { label: 'For 24 hours', run: () => share(24) }, { label: 'For 7 days', run: () => share(168) }, { label: 'For 30 days', run: () => share(720) }]);
   }
 
@@ -12798,7 +12854,7 @@
       const sub = tree ? (inside.length ? plural(inside.length, 'page') + ' inside' : '') : pathLine(x);
       const row = h('div', { class: 'bill doc-row' + (tree ? ' doc-tree' : ''), style: `--in:${lvl}`, 'data-doc': x.id, onclick: () => openDoc(x) },
         tree ? (inside.length ? h('button', { class: 'doc-arrow' + (open ? ' open' : ''), 'aria-label': open ? 'Hide the pages inside' : 'Show the pages inside', 'aria-expanded': String(open), onclick: (e) => { e.stopPropagation(); if (open) DK.open.delete(x.id); else DK.open.add(x.id); draw(); } }) : h('span', { class: 'doc-arrow none', 'aria-hidden': 'true' })) : null,
-        h('span', { class: 'bill-name' }, h('span', { class: 'doc-t' }, docStarred(x.id) ? h('span', { class: 'doc-star', title: 'Starred' }, '★ ') : null, docTitle(x)),
+        h('span', { class: 'bill-name' }, h('span', { class: 'doc-t' }, docStarred(x.id) ? h('span', { class: 'doc-star', title: 'Starred' }, '★ ') : null, x.icon ? h('span', { class: 'doc-ic', 'aria-hidden': 'true' }, x.icon + ' ') : null, docTitle(x)),
           h('small', {}, [sub, docSnippet(x)].filter(Boolean).join(' · '))),
         h('span', { class: 'bill-right' }, sg ? h('button', { class: `doc-sign s-${sg.status}`, title: `Sent to ${sg.signer.name}`, onclick: (e) => { e.stopPropagation(); openTool('signs'); } }, SIGN_BADGE[sg.status]) : null,
           h('small', {}, ago(x.editedAt || x.createdAt))),
@@ -12852,6 +12908,63 @@
         DK.trash ? null : h('button', { class: 'btn small docs-trash', title: 'Deleted docs, for 30 days', onclick: () => { DK.trash = true; renderTool(); } }, '🗑 Trash')),
       list,
     ];
+  }
+
+  // ----- a project's list in a doc: its newest records as a table or a board by stage, opened and added to here -----
+  // Only for those who can see the project (S.projects is what this person sees); the doc's own text says only [Table].
+  const VIEW_ROWS = 25;
+  const VIEW_SKIP = ['items', 'checklist', 'readings', 'equipment', 'materials', 'signature', 'files', 'secret', 'measure', 'permit'];
+  function docViewShow(x, b) {
+    const p = b.source === 'project' && projById(b.ref);
+    if (!p) return null;
+    const t = p.types.find((y) => y.id === b.sub) || p.types[0];
+    if (!t) return null;
+    const open = () => { closeDoc(); openProject(p.id, t.id); };
+    const head = h('div', { class: 'dk-vt-h' }, h('button', { class: 'dk-vt-name', type: 'button', title: 'Open in Jobs & projects', onclick: open }, `${p.icon || '📊'} ${p.name}${p.types.length > 1 ? ' · ' + t.name : ''}`));
+    if (!PR.records.has(p.id)) { prLoadAll().then(docLiveSoon).catch(() => {}); return [head, h('p', { class: 'dk-vt-none' }, 'Loading…')]; }
+    const recs = prRecs(p.id).filter((r) => r.typeId === t.id).sort((a, c) => (c.updatedAt || c.createdAt) - (a.updatedAt || a.createdAt));
+    head.append(h('small', {}, plural(recs.length, (t.singular || 'row').toLowerCase())));
+    const first = prField(t, t.primary);
+    const cols = [first, ...t.fields.filter((f) => f.id !== t.primary && !f.hidden && !VIEW_SKIP.includes(f.type))].filter(Boolean).slice(0, 5);
+    const stage = t.fields.find((f) => f.type === 'select' && ['status', 'stage'].includes(f.key)) || t.fields.find((f) => f.type === 'select');
+    const go = (r) => (e) => { e.stopPropagation(); closeDoc(); openRecord(r.id); };
+    let body;
+    if (b.mode === 'board' && stage) {
+      const lanes = [...stage.choices.map((c) => ({ c, recs: recs.filter((r) => r.values[stage.id] === c.id) })), { c: null, recs: recs.filter((r) => !stage.choices.some((c) => c.id === r.values[stage.id])) }].filter((l) => l.c || l.recs.length);
+      body = h('div', { class: 'dk-vb' }, lanes.map((l) => h('div', { class: 'dk-vb-lane' }, h('div', { class: 'dk-vb-h' }, l.c ? pjChip(l.c) : 'No ' + stage.name.toLowerCase(), h('small', {}, l.recs.length)),
+        l.recs.slice(0, 12).map((r) => h('button', { class: 'dk-vb-card', type: 'button', onclick: go(r) }, recName(t, r) || 'Untitled')), l.recs.length > 12 ? h('small', { class: 'dk-vb-more' }, `${l.recs.length - 12} more`) : null)));
+    } else {
+      body = h('div', { class: 'dk-vt-wrap' }, h('table', { class: 'dk-vt' },
+        h('thead', {}, h('tr', {}, cols.map((f) => h('th', {}, f.name)))),
+        h('tbody', {}, recs.slice(0, VIEW_ROWS).map((r) => h('tr', { class: 'dk-vt-row', 'data-rec': r.id, onclick: go(r) }, cols.map((f, i) => h('td', {}, i === 0 ? recName(t, r) || 'Untitled' : prShow(p, f, r.values[f.id], r))))))));
+    }
+    // A new one, named here (the rest is filled in on the record).
+    const add = !x.ed?.readOnly && first && first.type === 'text' ? h('input', { class: 'dk-vt-add', placeholder: `+ New ${(t.singular || 'row').toLowerCase()}`, 'aria-label': `New ${(t.singular || 'row').toLowerCase()} in ${p.name}` }) : null;
+    if (add) {
+      for (const ev of ['beforeinput', 'input', 'paste', 'keyup']) add.addEventListener(ev, (e) => e.stopPropagation());
+      add.addEventListener('keydown', async (e) => {
+        e.stopPropagation();
+        if (e.key === 'Escape') add.blur();
+        if (e.key !== 'Enter' || !add.value.trim()) return;
+        e.preventDefault();
+        const name = add.value.trim();
+        add.value = '';
+        const r = await prNewQuick(p, t, { [first.id]: name });
+        if (r) toast(`Added “${name}” to ${p.name}`);
+        DV.viewFocus = b.id;
+        docLiveSoon();
+      });
+      // After adding one, the box is ready for the next.
+      if (DV.viewFocus === b.id) setTimeout(() => { DV.viewFocus = null; if (add.isConnected) add.focus(); }, 0);
+    }
+    return [head, recs.length ? body : h('p', { class: 'dk-vt-none' }, `No ${(t.name || 'rows').toLowerCase()} yet.`),
+      recs.length > VIEW_ROWS && b.mode !== 'board' ? h('button', { class: 'link dk-vt-more', type: 'button', onclick: open }, `All ${recs.length} in Jobs & projects`) : null, add].filter(Boolean);
+  }
+  function docPickView(anchor) {
+    const rows = [];
+    for (const p of S.projects || []) rows.push({ head: `${p.icon || ''} ${p.name}` }, ...p.types.map((t) => ({ label: `${t.icon || ''} ${t.name}`, p, t })));
+    if (!rows.length) { toast('Make a project first (Tools → Jobs & projects).'); return null; }
+    return new Promise((done) => openMenu(anchor, rows.map((r) => (r.head ? r : { label: r.label, run: () => done({ ref: r.p.id, sub: r.t.id }) }))));
   }
 
   // ----- bringing docs in: a Notion export, or a Markdown, text or Word file (Google Docs come as Word) -----
@@ -13232,6 +13345,12 @@
     setup: { tech: true, name: 'Setup guide', sub: 'Get a new developer running', make: () => ({ title: 'Setup guide', blocks: ColumnDocs.fromText('# What you need\n- \n# Get the code\n```\ngit clone …\n```\n# Run it locally\n1. \n2. \n# Environment variables\n- \n# Run the tests\n# Who to ask\n') }) },
     runbook: { tech: true, name: 'Runbook', sub: 'Deploy, roll back, what to do when it breaks', make: () => ({ title: 'Runbook', blocks: ColumnDocs.fromText('# Deploy\n1. \n# Roll back\n1. \n# When it breaks\n## Symptom\n## Check\n## Fix\n# Who’s on call\n') }) },
     releasenotes: { tech: true, name: 'Release notes', sub: 'What’s new, fixed, known issues', make: () => ({ title: 'Release notes', blocks: ColumnDocs.fromText('# What’s new\n- \n# Fixed\n- \n# Known issues\n- \n# Thanks\n') }) },
+    safety: { name: 'Safety talk', sub: 'Toolbox talk: hazards, controls, who attended', make: () => ({ title: `Safety talk · ${new Date().toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`, blocks: ColumnDocs.fromText('# Today’s topic\nWhat we’re talking about and why it matters on this job.\n# Hazards on this site\n- \n# How we stay safe\n- [ ] PPE checked (hard hats, eye and ear protection, boots, gloves)\n- [ ] Ladders and scaffolding inspected\n- [ ] Power tools and cords checked\n- [ ] Work area clear and marked\n# If something goes wrong\nWho to call, where the first aid kit is, the nearest hospital.\n# Who attended\n- ') }) },
+    onboarding: { name: 'New hire onboarding', sub: 'First day to first month, step by step', make: () => ({ title: 'New hire onboarding', blocks: ColumnDocs.fromText('# Welcome\nWho we are, what we do and how we work.\n# Before day one\n- [ ] Paperwork and payroll set up\n- [ ] Uniform, tools and PPE ready\n- [ ] Added to Kloomie and the team chat\n# Day one\n- [ ] Meet the crew and the lead\n- [ ] Safety walk-through\n- [ ] Shadow a job\n# First week\n- [ ] Learn our process for a typical job\n- [ ] Vehicle and equipment check-out\n# First month\n- [ ] Lead part of a job with a mentor\n- [ ] Check-in: what’s going well, what’s not\n# Who to ask\n- ') }) },
+    pricebook: { name: 'Price book', sub: 'What you charge, with notes for quoting', make: () => ({ title: 'Price book', blocks: [...ColumnDocs.fromText('# How we price\nMinimums, travel, and when to add a margin.'), { id: ColumnDocs.uid(), type: 'table', header: true, rows: [[[{ text: 'Item' }], [{ text: 'Unit' }], [{ text: 'Price' }], [{ text: 'Notes' }]], [[], [], [], []], [[], [], [], []]] }, ...ColumnDocs.fromText('# Add-ons\n- \n# When to call the office\nAnything unusual, over budget, or outside our area.')] }) },
+    handover: { name: 'Job handover', sub: 'What the customer gets when the job’s done', make: () => ({ title: 'Job handover', blocks: ColumnDocs.fromText('# What we did\nThe work, the materials and anything that changed from the quote.\n# Looking after it\n- \n# Warranty\nWhat’s covered, for how long, and how to reach us.\n# Before we leave\n- [ ] Walk-through with the customer\n- [ ] Site cleaned up\n- [ ] Photos of the finished work\n- [ ] Sign-off\n# Thank you\nHow to leave a review or refer a friend.') }) },
+    inspection: { name: 'Site inspection', sub: 'What was checked, found and recommended', make: () => ({ title: `Site inspection · ${new Date().toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`, blocks: ColumnDocs.fromText('# The site\nAddress, who was there, the weather.\n# What we checked\n- [ ] \n# What we found\n- \n# Photos\n# What we recommend\n1. \n# Next steps\n- [ ] ') }) },
+    closeout: { name: 'Job close-out', sub: 'Everything done before a job is closed', make: () => ({ title: 'Job close-out', blocks: ColumnDocs.fromText('# Close-out checklist\n- [ ] Final walk-through and punch list done\n- [ ] Customer sign-off\n- [ ] Photos uploaded to the job\n- [ ] Leftover materials returned or logged\n- [ ] Tools and equipment back at the yard\n- [ ] Invoice sent\n- [ ] Review request sent\n# Notes for next time\n- ') }) },
     meeting: { name: 'Meeting notes', sub: 'Who, notes, decisions, action items', make: () => ({ title: `Meeting · ${new Date().toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`, blocks: ColumnDocs.fromText('# Who was there\n- \n# Notes\n- \n# Decisions\n- \n# Action items\n- [ ] ') }) },
   };
   // Under the title of an empty doc: start from a template, or have AI draft it.
@@ -13242,11 +13361,54 @@
     const it = S.items.find((y) => y.id === x.id);
     const c = docCampaign(it) || campById(goalById(taskById(x.taskId)?.goalId)?.campaignId);
     const use = (k) => { const t = DOC_TEMPLATES[k].make(c); x.ed.replace(t.blocks, x.ed.title.trim() || t.title); x.templated = k; docStarter(x); };
+    if (!DT.list && !DT.loading) DT.loading = api('GET', '/doc-templates').then((l) => { DT.list = l; if (DV.doc === x) docStarter(x); }).catch(() => {}).finally(() => (DT.loading = null));
+    const useTeam = async (t) => {
+      try {
+        // What's on the page reaches the server first, so the template replaces it rather than being added to.
+        await docFlush(x);
+        await api('POST', `/doc-templates/${t.id}/use`, { into: x.id, title: x.ed.title.trim() || undefined });
+        await docReload(x);
+        x.templated = 'team:' + t.id;
+        docStarter(x);
+        docHeadDraw(x);
+        toast(t.pages ? `Started from “${t.name}”, with ${plural(t.pages, 'page')} inside` : `Started from “${t.name}”`);
+      } catch (e) {
+        toast(e.message);
+      }
+    };
     box.replaceChildren(...[
       h('small', {}, 'Start from'),
       h('div', { class: 'dv-start-row' },
         h('button', { class: 'dv-start-ai', onclick: () => docAskDraft(x) }, '✦ Draft it with AI'),
-        Object.entries(DOC_TEMPLATES).filter(([, t]) => !t.tech || (S.projects || []).some(isTech)).map(([k, t]) => h('button', { title: t.sub, onclick: () => use(k) }, t.name)))].filter(Boolean));
+        Object.entries(DOC_TEMPLATES).filter(([, t]) => !t.tech || (S.projects || []).some(isTech)).map(([k, t]) => h('button', { title: t.sub, onclick: () => use(k) }, t.name))),
+      DT.list?.length ? h('small', {}, 'Your team’s templates · ', h('button', { class: 'linkish', onclick: docTemplatesSheet }, 'Manage')) : null,
+      DT.list?.length ? h('div', { class: 'dv-start-row dv-team-tpl' }, DT.list.map((t) => h('button', { title: t.about || `Saved by ${t.by}`, onclick: () => useTeam(t) }, `${t.icon ? t.icon + ' ' : ''}${t.name}${t.pages ? ` (+${t.pages})` : ''}`))) : null].filter(Boolean));
+  }
+  // The team's own doc templates: saved from a doc (with its pages), started from on an empty doc.
+  const DT = { list: null, loading: null };
+  function docSaveTemplate(x) {
+    const it = x.item();
+    const name = h('input', { value: docTitle(it) === 'Untitled' ? '' : docTitle(it), placeholder: 'Job handover', 'aria-label': 'Template name' });
+    const about = h('input', { placeholder: 'What it’s for (optional)', 'aria-label': 'What it’s for' });
+    const n = docKidsOf(it.id).length;
+    sheet('Save as a team template', [
+      h('p', { class: 'day-hint' }, `Everyone on the team can start a doc from it${n ? `, with copies of the ${plural(n, 'page')} inside` : ''}. To-dos come without their tasks.`),
+      h('label', { class: 'field' }, h('span', {}, 'Name'), name), h('label', { class: 'field' }, h('span', {}, 'What it’s for'), about),
+    ], async () => {
+      await docSave(x);
+      await api('POST', '/doc-templates', { docId: it.id, name: name.value.trim(), about: about.value.trim() });
+      DT.list = null;
+      toast('Saved as a team template');
+    }, 'Save template');
+  }
+  async function docTemplatesSheet() {
+    const list = h('div', { class: 'dt-list' });
+    const draw = () => list.replaceChildren(...(DT.list?.length ? DT.list.map((t) => h('div', { class: 'bill' }, h('span', { class: 'bill-name' }, `${t.icon ? t.icon + ' ' : ''}${t.name}`, h('small', {}, [t.about, t.pages ? plural(t.pages, 'page') + ' inside' : '', 'saved by ' + t.by].filter(Boolean).join(' · '))),
+      t.memberId === S.me?.memberId || amAdmin() ? h('button', { class: 'btn small danger', 'data-label': '1', onclick: (e) => confirmClick(e.currentTarget, async () => { try { await api('DELETE', '/doc-templates/' + t.id); DT.list = DT.list.filter((y) => y.id !== t.id); draw(); } catch (er) { toast(er.message); } }) }, 'Delete') : null))
+      : [h('p', { class: 'day-hint' }, 'No team templates yet. Save one from a doc’s ••• menu.')]));
+    sheet('Team doc templates', [list], null);
+    if (!DT.list) DT.list = await api('GET', '/doc-templates').catch(() => []);
+    draw();
   }
   function docAskDraft(x) {
     const ask = h('textarea', { rows: 3, placeholder: 'What’s this doc for? e.g. a one-page offer for fleet managers, or a recap of this week’s calls' });

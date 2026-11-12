@@ -332,6 +332,11 @@ export function mdToBlocks(md, opts) {
       const f = opts.file?.(m[2], m[1]);
       if (f) { endPara(); add(withIndent({ type: 'file', itemId: f.itemId, name: f.name })); continue; }
     }
+    // A video, map or design on a line of its own (Notion writes its embeds as a link): an embed.
+    if ((m = /^\[([^\]]*)\]\((https:\/\/[^()\s]+)\)$/.exec(t)) || (m = /^(https:\/\/\S+)$/.exec(t))) {
+      const url = m[2] || m[1];
+      if (embedSrc(url)) { endPara(); add(withIndent({ type: 'embed', url })); continue; }
+    }
     // A page inside this one, on a line of its own: its block goes here.
     if ((m = /^\[([^\]]*)\]\(((?:[^()\s]|\([^)]*\))*)\)$/.exec(t))) {
       const docId = opts.page?.(m[2]);
@@ -352,6 +357,37 @@ export function mdToBlocks(md, opts) {
 }
 const decodeSafe = (s) => { try { return decodeURIComponent(s); } catch { return s; } };
 const runsText = (runs) => runs.map((r) => r.text).join('');
+
+// What a link shows inside a doc (an embed): only these services, each as its own player address. The same rules
+// are in client/dockit.js (embedSrc) and server/notion.js; tests/docs_embeds.mjs checks they agree.
+export function embedSrc(raw) {
+  let u;
+  try { u = new URL(String(raw || '').trim()); } catch { return null; }
+  if (u.protocol !== 'https:') return null;
+  const host = u.hostname.replace(/^www\./, '').toLowerCase();
+  const id = (re, s) => re.exec(s)?.[1] || null;
+  let v;
+  if (host === 'youtube.com' || host === 'm.youtube.com') {
+    v = u.pathname === '/watch' ? u.searchParams.get('v') : id(/^\/(?:shorts|embed|live)\/([\w-]{6,20})/, u.pathname);
+    return v && /^[\w-]{6,20}$/.test(v) ? { kind: 'YouTube', src: `https://www.youtube-nocookie.com/embed/${v}`, ratio: 56.25 } : null;
+  }
+  if (host === 'youtu.be') return (v = id(/^\/([\w-]{6,20})$/, u.pathname)) ? { kind: 'YouTube', src: `https://www.youtube-nocookie.com/embed/${v}`, ratio: 56.25 } : null;
+  if (host === 'vimeo.com') return (v = id(/^\/(\d{4,12})(?:\/|$)/, u.pathname)) ? { kind: 'Vimeo', src: `https://player.vimeo.com/video/${v}`, ratio: 56.25 } : null;
+  if (host === 'loom.com') return (v = id(/^\/(?:share|embed)\/([0-9a-f]{16,40})/, u.pathname)) ? { kind: 'Loom', src: `https://www.loom.com/embed/${v}`, ratio: 56.25 } : null;
+  if ((host === 'google.com' || host === 'maps.google.com') && /^\/maps(\/|$)/.test(u.pathname)) {
+    const q = u.searchParams.get('q') || decodeURIComponent(id(/^\/maps\/(?:place|search)\/([^/@]+)/, u.pathname) || '').replace(/\+/g, ' ');
+    return q && q.length <= 300 ? { kind: 'Google Maps', src: `https://maps.google.com/maps?q=${encodeURIComponent(q)}&output=embed`, ratio: 60 } : null;
+  }
+  if (host === 'figma.com' && /^\/(file|design|proto|board)\/[\w-]{10,40}/.test(u.pathname)) return { kind: 'Figma', src: `https://www.figma.com/embed?embed_host=kloomie&url=${encodeURIComponent(u.origin + u.pathname)}`, ratio: 62.5 };
+  if (host === 'docs.google.com') {
+    const m = /^\/(document|spreadsheets|presentation|forms)\/d\/(e\/)?([\w-]{20,80})/.exec(u.pathname);
+    if (!m) return null;
+    const kind = { document: 'Google Doc', spreadsheets: 'Google Sheet', presentation: 'Google Slides', forms: 'Google Form' }[m[1]];
+    const tail = m[1] === 'forms' ? 'viewform?embedded=true' : 'preview';
+    return { kind, src: `https://docs.google.com/${m[1]}/d/${m[2] || ''}${m[3]}/${tail}`, ratio: m[1] === 'presentation' ? 59 : 75 };
+  }
+  return null;
+}
 
 // ---------- CSV, and a database's columns ----------
 export function parseCsv(text) {
