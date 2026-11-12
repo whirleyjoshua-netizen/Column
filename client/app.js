@@ -4938,7 +4938,8 @@
     const t = x.trigger;
     const when = t.kind === 'schedule' ? `Every ${t.slots?.[0] ? t.slots[0].days.map((d) => DOWS[d]).join(', ') + ' at ' + hhmm(t.slots[0].time) : '…'}`
       : (AUTO_WHEN[t.kind] || t.kind) + [t.projectId && projById(t.projectId) ? ` in ${projById(t.projectId).name}` : '', t.to ? ` to ${t.to}` : '', t.over ? ` over $${t.over}` : '', t.direction ? (t.direction === 'in' ? ' (money in)' : ' (money out)') : '', t.campaignId && campById(t.campaignId) ? ` in ${campById(t.campaignId).name}` : '', t.stage ? ` to ${stageLabel(t.stage)}` : '', t.outcome ? ` as ${t.outcome}` : '', t.statuses?.length ? ` (${t.statuses.map((v) => HEALTH_L[v]).join(' or ')})` : ''].join('');
-    return `${when} → ${x.actions.map((a) => AUTO_DO[a.kind].toLowerCase()).join(', ')}`;
+    const said = (list) => list.map((a) => (a.kind === 'wait' ? `wait ${a.amount} ${a.unit}` : a.kind === 'if' ? `if ${a.when.map((c) => '{' + c.field + '}').join(' and ')}: ${said(a.then) || 'nothing'}${a.else?.length ? '; otherwise ' + said(a.else) : ''}` : (AUTO_DO[a.kind] || a.kind).toLowerCase())).join(', ');
+    return `${when} → ${said(x.actions)}`;
   }
   const AUTO_RECIPES = [
     { name: 'Quote accepted? Schedule it', why: 'When a customer accepts a quote, make a task to schedule the job', trigger: { kind: 'quote.accepted' }, actions: [{ kind: 'task', text: 'Schedule {record} for {customer} ({amount})', assignee: '', dueIn: 1, campaign: '' }] },
@@ -4965,11 +4966,13 @@
       sw.addEventListener('change', () => api('PATCH', '/automations/' + x.id, { on: sw.checked }).catch((e) => toast(e.message)));
       return h('div', { class: 'auto-row' + (x.on ? '' : ' off') + (autoFailing(x) ? ' failing' : '') },
         h('button', { class: 'auto-main', onclick: () => autoSheet(x) }, h('b', {}, x.name), h('small', {}, autoSummary(x)),
-          h('small', { class: last && !last.ok ? 'err' : 'muted' }, last ? `${last.ok ? 'Ran' : 'Didn’t run'} ${ago(last.at)} · ${last.note}` : 'Hasn’t run yet', x.count ? ` · ${plural(x.count, 'run')} in all` : '')),
+          h('small', { class: last && !last.ok ? 'err' : 'muted' }, last ? `${last.ok ? 'Ran' : 'Didn’t run'} ${ago(last.at)} · ${last.note}` : 'Hasn’t run yet', x.count ? ` · ${plural(x.count, 'run')} in all` : ''),
+          x.waiting ? h('small', { class: 'auto-waiting' }, `⏳ ${plural(x.waiting, 'run')} waiting`) : null),
         h('label', { class: 'toggle', title: x.on ? 'On' : 'Off' }, sw, h('i')),
         h('button', { class: 'icon-btn', 'aria-label': 'Options', html: I.more, onclick: (e) => openMenu(e.currentTarget, [
           { label: 'Edit…', run: () => autoSheet(x) },
           ...(x.trigger.kind === 'schedule' ? [{ label: 'Run it now', run: () => api('POST', `/automations/${x.id}/run`).then(() => toast('Ran it')).catch((er) => toast(er.message)) }] : []),
+          x.waiting ? { label: `Waiting runs (${x.waiting})…`, run: () => autoWaitsSheet(x) } : null,
           { label: 'Recent runs…', run: () => sheet(`Runs · ${x.name}`, [x.runs?.length ? h('div', { class: 'int-log' }, x.runs.map((r) => h('div', { class: r.ok ? 'ok' : 'bad' }, h('b', {}, r.ok ? '✓' : '✕'), ` ${ago(r.at)} · ${r.note}`))) : h('p', { class: 'day-hint' }, 'It hasn’t run yet.')], async () => {}, 'Close') },
           { label: 'Delete', danger: true, run: () => api('DELETE', '/automations/' + x.id).catch((er) => toast(er.message)) },
         ]) }));
@@ -4982,7 +4985,19 @@
       h('div', { class: 'auto-recipes' }, AUTO_RECIPES.map((r) => h('button', { class: 'auto-recipe', onclick: () => autoSheet(null, r) }, h('b', {}, r.name), h('small', {}, r.why)))),
     ];
   }
-  // Make or change one: what sets it off (and only when…), then up to five things it does.
+  // The runs of one that are waiting, each to stop.
+  async function autoWaitsSheet(x) {
+    const box = h('div', { class: 'int-log' }, h('p', { class: 'day-hint' }, 'Loading…'));
+    sheet(`Waiting · ${x.name}`, [box], null);
+    const draw = async () => {
+      const list = await api('GET', `/automations/${x.id}/waits`).catch((e) => (toast(e.message), []));
+      box.replaceChildren(...(list.length ? list.map((w) => h('div', { class: 'bill' }, h('span', { class: 'bill-name' }, w.about || 'A run', h('small', {}, `Started ${ago(w.startedAt)} · goes on ${new Date(w.at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`)),
+        h('button', { class: 'btn small danger', 'data-label': '1', onclick: (e) => confirmClick(e.currentTarget, async () => { await api('DELETE', `/automations/${x.id}/waits/${w.id}`).catch((er) => toast(er.message)); draw(); }) }, 'Stop it')))
+        : [h('p', { class: 'day-hint' }, 'Nothing is waiting.')]));
+    };
+    draw();
+  }
+  // Make or change one: what sets it off (and only when…), then its steps: actions, waits, "only if".
   function autoSheet(x, recipe) {
     const src = x || recipe || {};
     const dr = { name: src.name || '', trigger: JSON.parse(JSON.stringify(src.trigger || { kind: 'task.done' })), actions: JSON.parse(JSON.stringify(src.actions || [{ kind: 'task', text: '', assignee: '', dueIn: null, campaign: '' }])) };
@@ -5053,9 +5068,21 @@
         only.push(h('div', { class: 'picks' }, DOWS.map((d, i) => { const cb = h('input', { type: 'checkbox', checked: slot.days.includes(i) }); cb.addEventListener('change', () => (slot.days = cb.checked ? [...slot.days, i].sort() : slot.days.filter((y) => y !== i))); return h('label', { class: 'pick' }, cb, d); })), h('label', {}, 'At', time));
       }
       const words = (AUTO_WORDS[t.kind] || []).map((w) => `{${w}}`).join(' ');
-      const action = (a, i) => {
-        const k = h('select', {}, Object.entries(AUTO_DO).map(([v, l]) => opt(v, l, a.kind)));
-        k.addEventListener('change', () => { dr.actions[i] = { kind: k.value, text: a.text || '', to: [], channelId: 'same' }; draw(); });
+      // A step: an action, a wait, or "only if" with its own steps (and "otherwise"), in the list it's in.
+      const fields = ['amount', ...(AUTO_WORDS[t.kind] || [])].filter((v, n, all) => all.indexOf(v) === n);
+      const countSteps = (list) => list.reduce((n, s) => n + 1 + (s.kind === 'if' ? countSteps(s.then || []) + countSteps(s.else || []) : 0), 0);
+      const roomForMore = () => countSteps(dr.actions) < 20;
+      const stepList = (list, depth, label) => h('div', { class: 'auto-steps' + (depth ? ' nested' : '') },
+        label ? h('div', { class: 'auto-steps-h' }, label) : null,
+        ...list.map((a, i) => action(a, i, list, depth)),
+        roomForMore() ? h('button', { class: 'btn small auto-add-step', onclick: () => { list.push({ kind: 'notify', text: '', to: [] }); draw(); } }, depth ? '+ Step' : '+ Another step') : null);
+      const action = (a, i, list = dr.actions, depth = 0) => {
+        const k = h('select', { class: 'auto-step-kind', 'aria-label': 'What this step does' }, Object.entries(AUTO_DO).map(([v, l]) => opt(v, l, a.kind)), opt('wait', 'Wait…', a.kind), depth < 3 ? opt('if', 'Only if…', a.kind) : null);
+        k.addEventListener('change', () => {
+          list[i] = k.value === 'if' ? { kind: 'if', when: [{ field: fields.includes('stage') ? 'stage' : fields[0], op: 'is', value: '' }], then: [{ kind: 'notify', text: '', to: [] }], else: [] }
+            : k.value === 'wait' ? { kind: 'wait', amount: 1, unit: 'days' } : { kind: k.value, text: a.text || '', to: [], channelId: 'same' };
+          draw();
+        });
         const text = (ph) => { const el = h('input', { value: a.text || '', placeholder: ph }); el.addEventListener('input', () => (a.text = el.value)); return el; };
         const f = [];
         if (a.kind === 'task') {
@@ -5091,13 +5118,34 @@
           tag.addEventListener('input', () => (a.tag = tag.value.trim()));
           f.push(h('div', { class: 'row2' }, h('label', {}, 'Set stage to', st), h('label', {}, 'Add tag', tag)));
         }
-        return h('div', { class: 'auto-act' }, h('div', { class: 'auto-act-h' }, h('b', {}, `${i + 1}.`), k, dr.actions.length > 1 ? h('button', { class: 'icon-btn', 'aria-label': 'Remove', html: I.close, onclick: () => { dr.actions.splice(i, 1); draw(); } }) : null), ...f);
+        if (a.kind === 'wait') {
+          const n = h('input', { type: 'number', min: 1, max: 999, value: a.amount ?? 1, class: 'auto-wait-n', 'aria-label': 'How long' });
+          n.addEventListener('input', () => (a.amount = Math.max(1, Number(n.value) || 1)));
+          const u = h('select', { class: 'auto-wait-u', 'aria-label': 'Minutes, hours or days' }, opt('minutes', 'minutes', a.unit), opt('hours', 'hours', a.unit), opt('days', 'days', a.unit));
+          u.addEventListener('change', () => (a.unit = u.value));
+          f.push(h('div', { class: 'row2' }, h('label', {}, 'Wait', n), h('label', {}, '', u)), h('small', { class: 'hint' }, 'Then it carries on with the steps below, about what set it off as it is by then (up to 90 days).'));
+        }
+        if (a.kind === 'if') {
+          a.when ||= [];
+          const cond = (c, ci) => {
+            const fs = h('select', { class: 'auto-if-field', 'aria-label': 'What it checks' }, fields.map((w) => opt(w, `{${w}}`, c.field)));
+            fs.addEventListener('change', () => (c.field = fs.value));
+            const os = h('select', { class: 'auto-if-op', 'aria-label': 'How' }, [['is', 'is'], ['not', 'isn’t'], ['contains', 'has'], ['over', 'is over'], ['under', 'is under'], ['set', 'is filled in'], ['empty', 'is empty']].map(([v, l]) => opt(v, l, c.op)));
+            os.addEventListener('change', () => { c.op = os.value; draw(); });
+            const val = h('input', { value: c.value || '', placeholder: c.field === 'amount' ? '1000' : 'Customer', class: 'auto-if-val', 'aria-label': 'Value' });
+            val.addEventListener('input', () => (c.value = val.value));
+            return h('div', { class: 'auto-if-row' }, ci ? h('small', {}, 'and') : null, fs, os, ['set', 'empty'].includes(c.op) ? null : val,
+              a.when.length > 1 ? h('button', { class: 'icon-btn', 'aria-label': 'Remove this check', html: I.close, onclick: () => { a.when.splice(ci, 1); draw(); } }) : null);
+          };
+          f.push(...a.when.map(cond), a.when.length < 5 ? h('button', { class: 'linkish', onclick: () => { a.when.push({ field: fields[0], op: 'is', value: '' }); draw(); } }, '+ and…') : null,
+            stepList(a.then ||= [], depth + 1, 'Then'), stepList(a.else ||= [], depth + 1, 'Otherwise'));
+        }
+        return h('div', { class: 'auto-act' + (a.kind === 'if' ? ' auto-if' : a.kind === 'wait' ? ' auto-wait' : '') }, h('div', { class: 'auto-act-h' }, h('b', {}, `${i + 1}.`), k, list.length > 1 || depth ? h('button', { class: 'icon-btn', 'aria-label': 'Remove', html: I.close, onclick: () => { list.splice(i, 1); draw(); } }) : null), ...f);
       };
       box.replaceChildren(
         h('label', {}, 'Name', name),
         h('div', { class: 'auto-step' }, h('div', { class: 'auto-step-h' }, 'When'), h('label', {}, '', kind), ...only),
-        h('div', { class: 'auto-step' }, h('div', { class: 'auto-step-h' }, 'Then'), ...dr.actions.map(action),
-          dr.actions.length < 5 ? h('button', { class: 'btn small', onclick: () => { dr.actions.push({ kind: 'notify', text: '', to: [] }); draw(); } }, '+ Another action') : null),
+        h('div', { class: 'auto-step' }, h('div', { class: 'auto-step-h' }, 'Then'), stepList(dr.actions, 0)),
         words ? h('p', { class: 'day-hint' }, `Words that fill themselves in: ${words}`) : null);
     };
     draw();

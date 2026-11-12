@@ -28,7 +28,7 @@ posted a private campaign's task to the whole team. Webhooks already skipped pri
    - Docs come from creating one, and Map pins from a campaign's pins only.
    - Something private runs only an automation narrowed to it whose maker can see it.
    - Old trigger names (file.arrived, sign.signed, contact.added) are renamed once at start.
-2. **A step engine:** conditions on any field ("only if the amount is over…, the stage is…"), branches, waits that
+2. **A step engine** (built): conditions on any field ("only if the amount is over…, the stage is…"), branches, waits that
    survive a restart ("wait 2 days, then…") kept in the database, a run history with each step, and cancelling a
    waiting run. The no-loop and per-hour rules stay.
 3. **Actions for every tool**, through the same functions the app and the API use, so the same permissions and team
@@ -44,3 +44,11 @@ posted a private campaign's task to the whole team. Webhooks already skipped pri
    ready-made flows for each trade.
 
 Each step: server tests that fail on the code before, and real-browser tests (headless Chrome, phone width too).
+
+## Where it is
+
+- Step 1 is live as 1ff6ba8.
+- Step 2 (if/otherwise, waits in `db.flowWaits`, waiting runs listed and stopped) is in the commit after it.
+- Flows then pauses: the owner put the Jobs & projects engine round (see the team's engine plan) first. Steps 3–5
+  come after it.
+- New events for the engine round go into `server/flows.js` `EVENTS` and fire through `automate()`.

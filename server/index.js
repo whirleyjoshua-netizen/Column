@@ -63,7 +63,7 @@ fs.mkdirSync(FILES_DIR, { recursive: true });
 // Everything lives in memory; save() hands the whole thing to the store a moment later.
 const IMPORT_PATH = path.join(DATA_DIR, 'import-pending.json');
 const store = await openStore({ url: process.env.DATABASE_URL, file: DB_PATH, importFile: IMPORT_PATH });
-let db = { workspaces: {}, tokens: {}, items: {}, entries: {}, tasks: {}, uploads: {}, campaigns: {}, goals: {}, attempts: {}, lists: {}, templates: {}, calendars: {}, ai: {}, pss: {}, sends: {}, bills: {}, meetings: {}, money: {}, budgets: {}, plans: {}, sidekick: {}, vaults: {}, vaultItems: {}, signs: {}, signatures: {}, trips: {}, pins: {}, zones: {}, comments: {}, users: {}, resets: {}, invites: {}, exports: {}, contacts: {}, optouts: {}, unsubs: {}, gcontacts: {}, automations: {}, notices: {}, calfeeds: {}, pushSubs: {}, keys: {}, mileage: {}, trash: {}, docTemplates: {} };
+let db = { workspaces: {}, tokens: {}, items: {}, entries: {}, tasks: {}, uploads: {}, campaigns: {}, goals: {}, attempts: {}, lists: {}, templates: {}, calendars: {}, ai: {}, pss: {}, sends: {}, bills: {}, meetings: {}, money: {}, budgets: {}, plans: {}, sidekick: {}, vaults: {}, vaultItems: {}, signs: {}, signatures: {}, trips: {}, pins: {}, zones: {}, comments: {}, users: {}, resets: {}, invites: {}, exports: {}, contacts: {}, optouts: {}, unsubs: {}, gcontacts: {}, automations: {}, notices: {}, calfeeds: {}, pushSubs: {}, keys: {}, mileage: {}, trash: {}, docTemplates: {}, flowWaits: {} };
 const loaded = await store.load();
 if (loaded.db) db = { ...db, ...loaded.db };
 if (loaded.fromFile) console.log(`Moving ${path.basename(loaded.fromFile)} into Postgres.`);
@@ -3039,7 +3039,7 @@ const AUTO_ACTIONS = ['task', 'post', 'campaign', 'notify', 'contact'];
 const AUTO_RUNS = 30;
 const AUTO_MAX = 50;
 let automating = 0;
-const publicAutomation = ({ wsId, recent, ran, ...x }) => x;
+const publicAutomation = ({ wsId, recent, ran, ...x }) => ({ ...x, waiting: Object.values(db.flowWaits || {}).filter((w) => w.autoId === x.id).length });
 function applyAutomation(x, body, ws) {
   if (body.name !== undefined) x.name = cleanText(body.name, 80) || 'Automation';
   if (body.on !== undefined) x.on = !!body.on;
@@ -3071,22 +3071,20 @@ function applyAutomation(x, body, ws) {
     } else Object.assign(x, { auto: false, slots: [], ran: [] });
   }
   if (body.actions !== undefined) {
-    const list = (Array.isArray(body.actions) ? body.actions : []).slice(0, 5).map((a) => {
-      const kind = AUTO_ACTIONS.includes(a?.kind) ? a.kind : null;
-      if (!kind) return null;
-      const text = cleanText(a.text, 1000);
-      if (kind === 'task') return { kind, text, assignee: /^(who|role:[\w-]+|[\w-]{6,})$/.test(a.assignee || '') ? a.assignee : '', dueIn: a.dueIn === '' || a.dueIn == null ? null : Math.max(0, Math.min(90, Math.round(Number(a.dueIn)) || 0)), campaign: a.campaign === 'same' || (a.campaign && db.campaigns[a.campaign]?.wsId === ws.id) ? a.campaign : '' };
-      if (kind === 'post') return { kind, text, channelId: a.channelId === 'same' || a.channelId === 'general' || ws.channels.some((c) => c.id === a.channelId) ? a.channelId : 'general' };
-      if (kind === 'campaign') return db.templates[a.templateId]?.wsId === ws.id ? { kind, templateId: a.templateId } : null;
-      if (kind === 'notify') return { kind, text, to: (Array.isArray(a.to) ? a.to : []).filter((v) => ['owners', 'admins', 'who'].includes(v) || ws.members.some((m) => m.id === v)).slice(0, 20) };
-      if (kind === 'contact') return { kind, stage: cleanText(a.stage, 40), tag: cleanText(a.tag, 40) };
-      return null;
-    }).filter(Boolean);
-    if (!list.length) throw badRequest('Add at least one thing for it to do.');
-    for (const a of list) {
+    // Steps: actions, "only if" (with "otherwise") and waits (cleanSteps); the actions in them, checked as before.
+    const list = cleanSteps(body.actions, ws, 0, { n: 0 });
+    const acts = stepActions(list);
+    if (!acts.length) throw badRequest('Add at least one thing for it to do.');
+    for (const a of acts) {
       if ((a.kind === 'task' || a.kind === 'post' || a.kind === 'notify') && !a.text) throw badRequest('Write what it should say.');
       if (a.kind === 'notify' && !a.to.length) throw badRequest('Pick who to notify.');
       if (a.kind === 'contact' && !a.stage && !a.tag) throw badRequest('Pick a stage or a tag for the contact.');
+    }
+    // Runs waiting in the old steps would go on from the wrong place: they're dropped.
+    if (x.actions && JSON.stringify(x.actions) !== JSON.stringify(list)) {
+      const gone = Object.values(db.flowWaits).filter((w) => w.autoId === x.id);
+      for (const w of gone) delete db.flowWaits[w.id];
+      if (gone.length) x.runs = [{ at: Date.now(), ok: false, note: `${gone.length} waiting ${gone.length === 1 ? 'run was' : 'runs were'} dropped: the steps changed` }, ...(x.runs || [])].slice(0, 20);
     }
     x.actions = list;
   }
@@ -3094,13 +3092,29 @@ function applyAutomation(x, body, ws) {
   if (!x.actions?.length) throw badRequest('Add at least one thing for it to do.');
   return x;
 }
+// One action, cleaned (what each kind takes), or null.
+function cleanAction(a, ws) {
+  const kind = AUTO_ACTIONS.includes(a?.kind) ? a.kind : null;
+  if (!kind) return null;
+  const text = cleanText(a.text, 1000);
+  if (kind === 'task') return { kind, text, assignee: /^(who|role:[\w-]+|[\w-]{6,})$/.test(a.assignee || '') ? a.assignee : '', dueIn: a.dueIn === '' || a.dueIn == null ? null : Math.max(0, Math.min(90, Math.round(Number(a.dueIn)) || 0)), campaign: a.campaign === 'same' || (a.campaign && db.campaigns[a.campaign]?.wsId === ws.id) ? a.campaign : '' };
+  if (kind === 'post') return { kind, text, channelId: a.channelId === 'same' || a.channelId === 'general' || ws.channels.some((c) => c.id === a.channelId) ? a.channelId : 'general' };
+  if (kind === 'campaign') return db.templates[a.templateId]?.wsId === ws.id ? { kind, templateId: a.templateId } : null;
+  if (kind === 'notify') return { kind, text, to: (Array.isArray(a.to) ? a.to : []).filter((v) => ['owners', 'admins', 'who'].includes(v) || ws.members.some((m) => m.id === v)).slice(0, 20) };
+  if (kind === 'contact') return { kind, stage: cleanText(a.stage, 40), tag: cleanText(a.tag, 40) };
+  return null;
+}
 // {task}, {campaign}, {contact}, {file}, {from}, {who}, {stage}, {outcome}, {document}, {note}, {date} in what it writes.
 function autoFill(text, ctx, wsId) {
-  const v = { task: ctx.task?.text, campaign: ctx.campaign?.name, contact: ctx.contact ? ctx.contact.name || ctx.contact.company || ctx.contact.email || ctx.contact.phone : '', file: ctx.file?.name,
+  const v = autoVars(ctx, wsId);
+  return String(text || '').replace(/\{(\w+)\}/g, (m, k) => (k in v ? String(v[k] ?? '') : m)).trim();
+}
+// The words an event fills in, by name (what {…} in an action and "only if" read).
+function autoVars(ctx, wsId) {
+  return { task: ctx.task?.text, campaign: ctx.campaign?.name, contact: ctx.contact ? ctx.contact.name || ctx.contact.company || ctx.contact.email || ctx.contact.phone : '', file: ctx.file?.name,
     from: ctx.from, who: ctx.who, stage: ctx.stageLabel || (ctx.stage ? stageLabel(ctx.stage) : ''), outcome: ctx.outcome, document: ctx.document, note: ctx.note, date: ctx.date || teamDay(wsId),
     record: ctx.recordName, project: ctx.project?.name, list: ctx.list?.name, customer: ctx.customer, amount: ctx.amount != null ? '$' + Number(ctx.amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '',
-    invoice: ctx.invoice, time: ctx.time, crew: ctx.crew, phone: ctx.phone, text: ctx.text, doc: ctx.doc, pin: ctx.pin, category: ctx.category };
-  return String(text || '').replace(/\{(\w+)\}/g, (m, k) => (k in v ? String(v[k] ?? '') : m)).trim();
+    invoice: ctx.invoice, time: ctx.time, crew: ctx.crew, phone: ctx.phone, text: ctx.text, doc: ctx.doc, pin: ctx.pin, category: ctx.category, status: ctx.status };
 }
 function autoMatches(t, ctx) {
   if (t.campaignId && ctx.campaign?.id !== t.campaignId && ctx.campaign?.parentId !== t.campaignId) return false;
@@ -3186,8 +3200,9 @@ function runAutomation(x, ctx) {
   const did = [];
   automating++;
   try {
-    for (const a of x.actions) did.push(autoAction(x, a, ctx));
-    autoLog(x, true, did.filter(Boolean).join(' · '));
+    const r = execSteps(x, ctx, [], 0, did);
+    if (r.wait) waitFor(x, ctx, r.wait, did);
+    autoLog(x, true, did.filter(Boolean).join(' · ') || 'nothing to do this time');
   } catch (e) {
     autoLog(x, false, (did.length ? did.join(' · ') + ' · then ' : '') + e.message);
   } finally {
@@ -3195,6 +3210,144 @@ function runAutomation(x, ctx) {
     save();
   }
 }
+// ---------- Flows, step 2: steps that decide and wait ----------
+// An automation's actions are its steps, and a step can also be "only if…" (with "otherwise") or "wait". Ifs read
+// the words the event fills in ({amount}, {stage}, {customer}…). A wait is kept in the database (db.flowWaits) with
+// where it is in the steps and what it's about (by id, read fresh when it goes on, so it acts on how things are
+// then), and goes on from runSchedules every 30 seconds, after a restart too. Changing an automation's steps drops
+// what was waiting in the old ones; a run that would go on while it's off is dropped and logged. Still no loops (its
+// work sets nothing off), still 30 runs an hour (going on after a wait isn't a new run).
+const STEP_MAX = 20, IF_DEPTH = 3, WAIT_MAX_DAYS = 90, WAITS_PER = 500, WAITS_TEAM = 5000;
+const WHEN_OPS = ['is', 'not', 'contains', 'over', 'under', 'empty', 'set'];
+const WAIT_UNITS = { minutes: 60_000, hours: 3600_000, days: 864e5 };
+// Tests only: waits go by this many times faster (FLOW_TIME_SCALE=0.001 makes a minute 60 ms). Never set live.
+const FLOW_SCALE = Number(process.env.FLOW_TIME_SCALE) > 0 ? Number(process.env.FLOW_TIME_SCALE) : 1;
+function cleanSteps(list, ws, depth, count) {
+  return (Array.isArray(list) ? list : []).map((a) => {
+    if (count.n >= STEP_MAX) throw badRequest(`An automation has ${STEP_MAX} steps at most.`);
+    count.n++;
+    if (a?.kind === 'wait') {
+      const unit = WAIT_UNITS[a.unit] ? a.unit : 'days';
+      const amount = Math.round(Number(a.amount));
+      if (!(amount >= 1) || amount * WAIT_UNITS[unit] > WAIT_MAX_DAYS * 864e5) throw badRequest(`A wait is from 1 minute to ${WAIT_MAX_DAYS} days.`);
+      return { kind: 'wait', amount, unit };
+    }
+    if (a?.kind === 'if') {
+      if (depth >= IF_DEPTH) throw badRequest(`“Only if” can go ${IF_DEPTH} deep at most.`);
+      const when = (Array.isArray(a.when) ? a.when : []).slice(0, 5).map((c) => ({ field: /^\w{1,20}$/.test(c?.field || '') ? c.field : null, op: WHEN_OPS.includes(c?.op) ? c.op : 'is', value: cleanText(c?.value, 200) })).filter((c) => c.field);
+      if (!when.length) throw badRequest('Say what “only if” checks.');
+      return { kind: 'if', when, then: cleanSteps(a.then, ws, depth + 1, count), else: cleanSteps(a.else, ws, depth + 1, count) };
+    }
+    return cleanAction(a, ws);
+  }).filter(Boolean);
+}
+const stepActions = (list) => list.flatMap((s) => (s.kind === 'if' ? [...stepActions(s.then), ...stepActions(s.else)] : s.kind === 'wait' ? [] : [s]));
+// What an "only if" reads: the words the event fills in, as they are now.
+function autoWhen(when, ctx, wsId) {
+  const v = autoVars(ctx, wsId);
+  return when.every((c) => {
+    const got = String(v[c.field] ?? '').trim();
+    const num = (s) => Number(String(s).replace(/[$,\s]/g, ''));
+    if (c.op === 'empty') return !got;
+    if (c.op === 'set') return !!got;
+    if (c.op === 'over') return got !== '' && num(got) > num(c.value);
+    if (c.op === 'under') return got !== '' && num(got) < num(c.value);
+    if (c.op === 'contains') return got.toLowerCase().includes(c.value.toLowerCase());
+    if (c.op === 'not') return !sameText(got, c.value);
+    return sameText(got, c.value);
+  });
+}
+const whenText = (when) => when.map((c) => `{${c.field}} ${{ is: 'is', not: 'isn’t', contains: 'has', over: 'is over', under: 'is under', empty: 'is empty', set: 'is filled in' }[c.op]}${['empty', 'set'].includes(c.op) ? '' : ' ' + c.value}`).join(' and ');
+// The list a place in the steps points into: [] is the automation's own; { at, key } goes into steps[at].then/else.
+function stepList(x, stack) {
+  let list = x.actions;
+  for (const s of stack) {
+    const st = list?.[s.at];
+    if (!st || st.kind !== 'if') return null;
+    list = st[s.key] || [];
+  }
+  return list;
+}
+// Runs the steps from a place on; an "only if" goes into its yes or no list, then on after it. A wait stops here.
+function execSteps(x, ctx, stack, i, log) {
+  const list = stepList(x, stack);
+  if (!list) return {};
+  for (; i < list.length; i++) {
+    const s = list[i];
+    if (s.kind === 'wait') return { wait: { stack, i: i + 1, ms: s.amount * WAIT_UNITS[s.unit], label: `${s.amount} ${s.amount === 1 ? s.unit.slice(0, -1) : s.unit}` } };
+    if (s.kind === 'if') {
+      const yes = autoWhen(s.when, ctx, x.wsId);
+      log.push(`${yes ? 'Yes' : 'No'}: ${whenText(s.when)}`);
+      const r = execSteps(x, ctx, [...stack, { at: i, key: yes ? 'then' : 'else' }], 0, log);
+      if (r.wait) return r;
+      continue;
+    }
+    const did = autoAction(x, s, ctx);
+    if (did) log.push(did);
+  }
+  return {};
+}
+function resumeSteps(x, ctx, stack, i, log) {
+  let r = execSteps(x, ctx, stack, i, log);
+  while (!r.wait && stack.length) {
+    const last = stack.at(-1);
+    stack = stack.slice(0, -1);
+    r = execSteps(x, ctx, stack, last.at + 1, log);
+  }
+  return r;
+}
+// What a waiting run keeps: what it's about, by id, and the words as they were.
+const CTX_WORDS = ['who', 'whoId', 'from', 'stage', 'stageLabel', 'outcome', 'document', 'note', 'date', 'recordName', 'customer', 'amount', 'invoice', 'time', 'crew', 'phone', 'text', 'doc', 'pin', 'category', 'status', 'direction', 'private', 'ownersOnly'];
+function ctxSnap(ctx) {
+  const out = { ids: { task: ctx.task?.id, campaign: ctx.campaign?.id, contact: ctx.contact?.id || null, contactName: ctx.contact && !ctx.contact.id ? ctx.contact.name || '' : null, file: ctx.file?.id, project: ctx.project?.id, list: ctx.list?.id } };
+  for (const k of CTX_WORDS) if (ctx[k] !== undefined && ctx[k] !== null) out[k] = ctx[k];
+  return JSON.parse(JSON.stringify(out));
+}
+function ctxBack(s) {
+  const { ids = {}, ...words } = s;
+  const p = ids.project && db.projects[ids.project];
+  return { ...words, task: ids.task ? db.tasks[ids.task] : undefined, campaign: ids.campaign ? db.campaigns[ids.campaign] : undefined,
+    contact: ids.contact ? db.contacts[ids.contact] : ids.contactName != null ? { name: ids.contactName } : undefined,
+    file: ids.file ? db.items[ids.file] : undefined, project: p || undefined, list: p && ids.list ? typeOfP(p, ids.list) || undefined : undefined };
+}
+function waitFor(x, ctx, w, log) {
+  const mine = Object.values(db.flowWaits).filter((y) => y.autoId === x.id).length;
+  const team = Object.values(db.flowWaits).filter((y) => y.wsId === x.wsId).length;
+  if (mine >= WAITS_PER || team >= WAITS_TEAM) return log.push(`didn’t wait: ${mine >= WAITS_PER ? `${WAITS_PER} runs of it are already waiting` : 'the team has too many runs waiting'}`), false;
+  const y = { id: rid(), wsId: x.wsId, autoId: x.id, stack: w.stack, i: w.i, at: Date.now() + w.ms * FLOW_SCALE, startedAt: Date.now(), ctx: ctxSnap(ctx), about: autoAbout(ctx) };
+  db.flowWaits[y.id] = y;
+  log.push(`waits ${w.label}`);
+  return true;
+}
+// A line on what a run is about, for the list of waiting runs (only names its maker could see when it started).
+const autoAbout = (ctx) => clipText([ctx.recordName, ctx.contact?.name, ctx.task?.text, ctx.customer, ctx.invoice, ctx.doc, ctx.document, ctx.campaign?.name].filter(Boolean)[0] || ctx.date || '', 80);
+const publicWait = ({ wsId, ctx, stack, i, ...w }) => w;
+function runWaits(now) {
+  for (const w of Object.values(db.flowWaits)) {
+    if (w.at > now) continue;
+    delete db.flowWaits[w.id];
+    const x = db.automations[w.autoId];
+    if (!x) continue;
+    if (!x.on || offline(x.wsId)) { autoLog(x, false, `A run waiting since ${new Date(w.startedAt).toISOString().slice(0, 10)} was dropped: it was off`); continue; }
+    const ctx = ctxBack(w.ctx);
+    // Still allowed? Something may have become private while it waited.
+    const priv = !!(ctx.private || ctx.campaign?.private || ctx.project?.private);
+    const mine = (x.trigger.campaignId && x.trigger.campaignId === (ctx.campaign?.parentId || ctx.campaign?.id) && seesCampaign(x.trigger.campaignId, x.memberId)) || (x.trigger.projectId && x.trigger.projectId === ctx.project?.id && PJ.sees(ctx.project, x.memberId));
+    if ((priv && !mine) || (ctx.ownersOnly && !isOwnerId(x.wsId, x.memberId))) { autoLog(x, false, 'A waiting run was dropped: what it’s about is private now'); continue; }
+    const log = [];
+    automating++;
+    try {
+      const r = resumeSteps(x, ctx, w.stack, w.i, log);
+      if (r.wait) waitFor(x, ctx, r.wait, log);
+      autoLog(x, true, 'After waiting: ' + (log.join(' · ') || 'nothing left to do'));
+    } catch (e) {
+      autoLog(x, false, 'After waiting: ' + (log.length ? log.join(' · ') + ' · then ' : '') + e.message);
+    } finally {
+      automating--;
+    }
+  }
+}
+
 function autoAction(x, a, ctx) {
   const ws = db.workspaces[x.wsId];
   const say = autoFill(a.text, ctx, ws.id);
@@ -3366,6 +3519,7 @@ function runSchedules() {
   const now = Date.now();
   let ran = false;
   runAutomationSchedules(now);
+  if (Object.keys(db.flowWaits).length) { runWaits(now); ran = true; }
   for (const tpl of Object.values(db.templates)) {
     if (offline(tpl.wsId)) continue;
     for (const slot of dueSlots(tpl, now)) {
@@ -7734,7 +7888,18 @@ async function api(req, res, url) {
       broadcast(ws.id, { type: 'automation', automation: publicAutomation(x), forAdmins: true });
       return send(res, 200, publicAutomation(x));
     }
+    // What's waiting, and stopping one.
+    if (c === 'waits' && m === 'GET' && !d) return send(res, 200, Object.values(db.flowWaits).filter((w) => w.autoId === x.id).sort((p, q) => p.at - q.at).map(publicWait));
+    if (c === 'waits' && m === 'DELETE' && d) {
+      const w = db.flowWaits[d];
+      if (!w || w.autoId !== x.id) return send(res, 404, { error: 'That run isn’t waiting any more.' });
+      delete db.flowWaits[w.id];
+      autoLog(x, false, `A waiting run was stopped by ${auth.member}`);
+      save();
+      return send(res, 200, { ok: true });
+    }
     if (m === 'DELETE' && !c) {
+      for (const w of Object.values(db.flowWaits)) if (w.autoId === x.id) delete db.flowWaits[w.id];
       delete db.automations[x.id];
       save();
       broadcast(ws.id, { type: 'automation:remove', id: x.id, forAdmins: true });
@@ -10007,7 +10172,7 @@ setInterval(() => {
   for (const up of Object.values(db.uploads)) if (now - up.touched > 24 * 3600_000 || !db.workspaces[up.wsId]) dropUpload(up);
 }, 60_000);
 
-setInterval(runSchedules, 30_000);
+setInterval(runSchedules, Number(process.env.SCHEDULE_TICK_MS) || 30_000);
 setInterval(syncAllCalendars, 30_000);
 // Before Contacts, PSS's leads were kept on the connection. They become contacts, once.
 // A team that has PSS connected keeps the connector even if it disconnects later.
