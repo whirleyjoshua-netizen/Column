@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Page not found · Kloomie</title>
+  <meta name="robots" content="noindex">
+  <link rel="icon" href="/favicon.png">
+  <style>
+    :root { --bg: #ffffff; --text: #14121f; --muted: #5d5a70; --line: #eae7f2; --accent: #6b4cf0; --tint: rgba(107, 76, 240, .08); color-scheme: light; }
+    @media (prefers-color-scheme: dark) { :root { --bg: #111115; --text: #ececf1; --muted: #9a98a8; --line: #2a2a32; --accent: #8b7cff; --tint: rgba(139, 124, 255, .14); color-scheme: dark; } }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: var(--bg); color: var(--text); font: 16px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif; padding: 24px 16px; }
+    main { max-width: 520px; text-align: center; }
+    .code { display: inline-block; font-weight: 700; color: var(--accent); background: var(--tint); border-radius: 99px; padding: 4px 12px; font-size: 14px; }
+    h1 { font-size: clamp(28px, 6vw, 40px); line-height: 1.1; letter-spacing: -.02em; margin: 16px 0 10px; }
+    p { color: var(--muted); margin: 0 0 24px; }
+    nav { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; }
+    a { display: inline-block; padding: 10px 16px; border-radius: 10px; border: 1px solid var(--line); color: var(--text); text-decoration: none; font-weight: 600; }
+    a.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  </style>
+</head>
+<body>
+  <main>
+    <span class="code">404</span>
+    <h1>That page isn’t here</h1>
+    <p>The address may be mistyped, or the page has moved. Kloomie is the all-in-one team app for small businesses.</p>
+    <nav>
+      <a class="primary" href="/">Kloomie home</a>
+      <a href="/help">Help</a>
+      <a href="/download">Get the app</a>
+      <a href="{{APP}}">Sign in</a>
+    </nav>
+  </main>
+</body>
+</html>

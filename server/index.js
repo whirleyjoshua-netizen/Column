@@ -218,8 +218,31 @@ const mimeFor = (name, given) => (given && given !== 'application/octet-stream' 
 function send(res, code, body, headers = {}) {
   const isObj = typeof body === 'object' && !Buffer.isBuffer(body);
   // Answers with data are never kept by browsers or proxies along the way.
-  res.writeHead(code, { 'Content-Type': isObj ? 'application/json' : 'text/plain', ...(isObj ? { 'Cache-Control': 'no-store' } : {}), ...headers });
-  res.end(isObj ? JSON.stringify(body) : body);
+  const head = { 'Content-Type': isObj ? 'application/json' : 'text/plain', ...(isObj ? { 'Cache-Control': 'no-store' } : {}), ...headers };
+  const data = isObj ? JSON.stringify(body) : body;
+  const packed = squeeze(res, code, head, data);
+  if (packed) { head['Content-Encoding'] = packed.enc; head.Vary = head.Vary ? head.Vary + ', Accept-Encoding' : 'Accept-Encoding'; }
+  res.writeHead(code, head);
+  res.end(packed ? packed.body : data);
+}
+// Text (pages, scripts, styles, data) goes out compressed when the browser takes it: brotli, else gzip. Pictures,
+// video, files and anything small go as they are. The same file again (the app's script, a page) is compressed once
+// and kept (by a hash of what it is, the last 40); data changes each time, so it's packed quickly and not kept.
+const SQUEEZE_TYPES = /^(text\/|application\/(json|javascript|xml|manifest\+json)|image\/svg\+xml)/;
+const squeezed = new Map();
+function squeeze(res, code, head, data) {
+  const accept = String(res.req?.headers['accept-encoding'] || '');
+  if (code === 204 || code === 304 || head['Content-Encoding'] || !SQUEEZE_TYPES.test(String(head['Content-Type'] || ''))) return null;
+  const enc = /\bbr\b/.test(accept) ? 'br' : /\bgzip\b/.test(accept) ? 'gzip' : null;
+  const buf = enc && (Buffer.isBuffer(data) ? data : typeof data === 'string' ? Buffer.from(data) : null);
+  if (!buf || buf.length < 1024) return null;
+  const kept = /no-store/.test(String(head['Cache-Control'] || '')) ? null : crypto.createHash('sha1').update(buf).digest('hex') + enc;
+  if (kept && squeezed.has(kept)) return { enc, body: squeezed.get(kept) };
+  const body = enc === 'br'
+    ? zlib.brotliCompressSync(buf, { params: { [zlib.constants.BROTLI_PARAM_QUALITY]: kept ? 9 : 4, [zlib.constants.BROTLI_PARAM_SIZE_HINT]: buf.length } })
+    : zlib.gzipSync(buf, { level: kept ? 9 : 5 });
+  if (kept) { squeezed.set(kept, body); if (squeezed.size > 40) squeezed.delete(squeezed.keys().next().value); }
+  return { enc, body };
 }
 
 // ---------- sign-in limits: wrong passwords and invite codes, counted per address and per name ----------
@@ -9628,11 +9651,16 @@ function serveStatic(req, res, url) {
   const csp = path.extname(file) === '.html' ? { 'Content-Security-Policy': `script-src 'self'${cloudScripts()}; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'self'` } : {};
   // Video, like the website's walkthrough, streams in pieces so it plays and scrubs on phones and Safari.
   if (/^\.(mp4|webm)$/.test(path.extname(file))) return serveFile(req, res, file, { name: path.basename(file), mime: MIME[path.extname(file)], cache: 'public, max-age=86400' });
-  // Libraries in /vendor/ have their version in the folder name, so they never change.
-  const cache = rel.startsWith('/vendor/') ? 'public, max-age=31536000, immutable' : 'no-cache';
+  // Libraries in /vendor/ have their version in the folder name, so they never change. Pictures and icons are kept
+  // for a day. The app's own files are checked each time (they change with every update), by an ETag, so an
+  // unchanged one is a 304 with nothing to download.
+  const ext = path.extname(file).toLowerCase();
+  const cache = rel.startsWith('/vendor/') ? 'public, max-age=31536000, immutable' : /^\.(png|jpe?g|webp|gif|ico|svg|woff2?)$/.test(ext) ? 'public, max-age=86400' : 'no-cache';
   fs.readFile(file, (err, data) => {
     if (err) return send(res, 404, 'Not found');
-    send(res, 200, data, { 'Content-Type': MIME[path.extname(file)] || 'application/octet-stream', 'Cache-Control': cache, ...csp });
+    const etag = '"' + crypto.createHash('sha1').update(data).digest('base64url').slice(0, 20) + '"';
+    if (req.headers['if-none-match'] === etag) { res.writeHead(304, { ETag: etag, 'Cache-Control': cache }); return res.end(); }
+    send(res, 200, data, { 'Content-Type': MIME[ext] || 'application/octet-stream', 'Cache-Control': cache, ETag: etag, ...csp });
   });
 }
 
@@ -10043,7 +10071,16 @@ function siteMove(req, url) {
   if (!SITE_HOST || url.pathname.startsWith('/api/')) return null;
   if (host === SITE_HOST.replace(/^www\./, '') && host !== SITE_HOST) return `https://${SITE_HOST}${url.pathname}${url.search}`;
   if (host !== SITE_HOST || SITE_PAGES.has(url.pathname) || path.extname(url.pathname)) return null;
-  return PUBLIC_URL + url.pathname + url.search;
+  // The app's own addresses (a card, a quote, an invite, a signing link…) go to the app; anything else isn't a page
+  // of the website, and gets a real 404 there (not the app's sign-in, which search engines read as a page).
+  return APP_PATHS.test(url.pathname) ? PUBLIC_URL + url.pathname + url.search : null;
+}
+const APP_PATHS = /^\/(?:(?:a|api|brand|c|cal|i|join|l|oauth|q|r|reset|s|sign|unsubscribe|hooks|twilio|quickbooks|dropbox|postiz|stripe)(?:\/|$)|(?:developers|import|ws|card\.js|k\.js)$)/;
+const siteMissing = (req, url) => onSite(req) && !SITE_PAGES.has(url.pathname) && !path.extname(url.pathname) && !APP_PATHS.test(url.pathname);
+function serveMissing(req, res) {
+  fs.readFile(path.join(CLIENT_DIR, '404.html'), 'utf8', (err, html) => {
+    send(res, 404, err ? 'Not found' : html.replaceAll('{{APP}}', PUBLIC_URL), { 'Content-Type': err ? 'text/plain' : 'text/html; charset=utf-8', 'Cache-Control': 'no-cache', 'Content-Security-Policy': "default-src 'self'; script-src 'none'; style-src 'unsafe-inline'; img-src 'self'; base-uri 'none'; frame-ancestors 'none'" });
+  });
 }
 const onSite = (req) => !!SITE_HOST && String(req.headers.host || '').toLowerCase() === SITE_HOST;
 const SITE_URL = SITE_HOST ? 'https://' + SITE_HOST : PUBLIC_URL;
@@ -10059,8 +10096,11 @@ function serveRobots(req, res) {
   const body = onSite(req) || !SITE_HOST ? `User-agent: *\nAllow: /\n\nSitemap: ${SITE_URL}/sitemap.xml\n` : 'User-agent: *\nAllow: /terms\nAllow: /privacy\nAllow: /help\nAllow: /download\nDisallow: /\n';
   send(res, 200, body, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'public, max-age=3600' });
 }
+// Each page with the day its file last changed (Google reads lastmod; it ignores changefreq and priority).
+const SITE_FILES = { '/': 'site.html', '/help': 'help.html', '/download': 'download.html', '/terms': 'terms.html', '/privacy': 'privacy.html' };
 function serveSitemap(req, res) {
-  const urls = SITE_MAP.map((p) => `  <url><loc>${SITE_URL}${p}</loc><changefreq>${p === '/' ? 'weekly' : 'monthly'}</changefreq><priority>${p === '/' ? '1.0' : '0.5'}</priority></url>`).join('\n');
+  const changed = (p) => (fs.statSync(path.join(CLIENT_DIR, SITE_FILES[p] || 'site.html'), { throwIfNoEntry: false })?.mtime || new Date()).toISOString().slice(0, 10);
+  const urls = SITE_MAP.map((p) => `  <url><loc>${SITE_URL}${p}</loc><lastmod>${changed(p)}</lastmod></url>`).join('\n');
   send(res, 200, `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls}\n</urlset>\n`, { 'Content-Type': 'application/xml; charset=utf-8', 'Cache-Control': 'public, max-age=3600' });
 }
 
@@ -10105,6 +10145,7 @@ async function handleRequest(req, res) {
   }
   if (url.pathname === '/robots.txt') return serveRobots(req, res);
   if (url.pathname === '/sitemap.xml') return serveSitemap(req, res);
+  if (siteMissing(req, url)) return serveMissing(req, res);
   // Pages served on both addresses name the website's copy as the one to index; the app itself stays out of search.
   if (SITE_HOST && ['/terms', '/privacy', '/help', '/download', '/get'].includes(url.pathname)) res.setHeader('Link', `<${SITE_URL}${url.pathname === '/get' ? '/download' : url.pathname}>; rel="canonical"`);
   else if (SITE_HOST && !onSite(req) && req.method === 'GET' && !path.extname(url.pathname)) res.setHeader('X-Robots-Tag', 'noindex');
