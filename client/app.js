@@ -4901,15 +4901,27 @@
   }
 
   // ---------- Automations: "when this happens, do that" (owners and admins) ----------
+  // What can set one off, from every tool: the server's list (GET /automations/catalog), loaded with the automations.
+  // AUTO_WHEN and AUTO_WORDS are filled from it; these are only what shows before it's loaded.
   const AUTO_WHEN = {
-    'task.done': 'A task or step is done', 'file.arrived': 'Files come in on a request link', 'sign.signed': 'A document is signed',
-    'contact.added': 'A contact is added', 'contact.stage': 'A contact’s stage changes', 'attempt.logged': 'A call or email is logged',
+    'task.done': 'A task or step is done', 'file.received': 'Files come in on a request link', 'document.signed': 'A document is signed',
+    'contact.created': 'A contact is added', 'contact.stage': 'A contact’s stage changes', 'attempt.logged': 'A call or email is logged',
     'campaign.done': 'A campaign is marked finished', 'campaign.checkin': 'Someone checks in on a campaign', schedule: 'On a schedule',
   };
+  const AUTO_CAT = { events: null, tools: {} };
+  const autoFilters = (kind) => AUTO_CAT.events?.find((e) => e.type === kind)?.filters || [];
+  async function autoCatalog() {
+    if (AUTO_CAT.events) return AUTO_CAT;
+    const c = await api('GET', '/automations/catalog');
+    AUTO_CAT.events = c.events;
+    AUTO_CAT.tools = c.tools;
+    for (const e of c.events) { AUTO_WHEN[e.type] = e.label; AUTO_WORDS[e.type] = e.words; }
+    return AUTO_CAT;
+  }
   const AUTO_DO = { task: 'Make a task', post: 'Post in a feed', campaign: 'Start a saved campaign', notify: 'Notify people', contact: 'Change the contact' };
   const AUTO_WORDS = {
-    'task.done': ['task', 'campaign', 'who'], 'file.arrived': ['file', 'from', 'campaign'], 'sign.signed': ['document', 'from', 'campaign', 'who'],
-    'contact.added': ['contact', 'stage', 'who'], 'contact.stage': ['contact', 'stage', 'who'], 'attempt.logged': ['contact', 'outcome', 'note', 'campaign', 'who'],
+    'task.done': ['task', 'campaign', 'who'], 'file.received': ['file', 'from', 'campaign'], 'document.signed': ['document', 'from', 'campaign', 'who'],
+    'contact.created': ['contact', 'stage', 'who'], 'contact.stage': ['contact', 'stage', 'who'], 'attempt.logged': ['contact', 'outcome', 'note', 'campaign', 'who'],
     'campaign.done': ['campaign', 'who'], 'campaign.checkin': ['campaign', 'note', 'who'], schedule: ['date'],
   };
   // Automations live in Settings → Automations; redraw it there when they change.
@@ -4925,20 +4937,25 @@
   function autoSummary(x) {
     const t = x.trigger;
     const when = t.kind === 'schedule' ? `Every ${t.slots?.[0] ? t.slots[0].days.map((d) => DOWS[d]).join(', ') + ' at ' + hhmm(t.slots[0].time) : '…'}`
-      : AUTO_WHEN[t.kind] + [t.campaignId && campById(t.campaignId) ? ` in ${campById(t.campaignId).name}` : '', t.stage ? ` to ${stageLabel(t.stage)}` : '', t.outcome ? ` as ${t.outcome}` : '', t.statuses?.length ? ` (${t.statuses.map((v) => HEALTH_L[v]).join(' or ')})` : ''].join('');
+      : (AUTO_WHEN[t.kind] || t.kind) + [t.projectId && projById(t.projectId) ? ` in ${projById(t.projectId).name}` : '', t.to ? ` to ${t.to}` : '', t.over ? ` over $${t.over}` : '', t.direction ? (t.direction === 'in' ? ' (money in)' : ' (money out)') : '', t.campaignId && campById(t.campaignId) ? ` in ${campById(t.campaignId).name}` : '', t.stage ? ` to ${stageLabel(t.stage)}` : '', t.outcome ? ` as ${t.outcome}` : '', t.statuses?.length ? ` (${t.statuses.map((v) => HEALTH_L[v]).join(' or ')})` : ''].join('');
     return `${when} → ${x.actions.map((a) => AUTO_DO[a.kind].toLowerCase()).join(', ')}`;
   }
   const AUTO_RECIPES = [
-    { name: 'Signed? Schedule the work', why: 'When a document is signed, make a task to schedule the work', trigger: { kind: 'sign.signed' }, actions: [{ kind: 'task', text: 'Schedule the work for {document}', assignee: '', dueIn: 1, campaign: 'same' }] },
-    { name: 'Files in? Tell the campaign', why: 'When files come in on a link, post it in the campaign’s feed', trigger: { kind: 'file.arrived' }, actions: [{ kind: 'post', text: '{from} sent {file}', channelId: 'same' }] },
+    { name: 'Quote accepted? Schedule it', why: 'When a customer accepts a quote, make a task to schedule the job', trigger: { kind: 'quote.accepted' }, actions: [{ kind: 'task', text: 'Schedule {record} for {customer} ({amount})', assignee: '', dueIn: 1, campaign: '' }] },
+    { name: 'Job won? Tell the crew', why: 'When a job moves to a stage, post it for the team', trigger: { kind: 'record.stage', to: 'Won' }, actions: [{ kind: 'post', text: '{record} is {stage} 🎉', channelId: 'general' }] },
+    { name: 'Paid? Say thanks', why: 'When a payment comes in, make a task to thank the customer', trigger: { kind: 'payment.received' }, actions: [{ kind: 'task', text: 'Thank {customer} for paying {amount} on {invoice}', assignee: '', dueIn: 0, campaign: '' }] },
+    { name: 'Big spend? Owners hear', why: 'When the business spends over $1,000, the owners hear what on', trigger: { kind: 'money.added', over: 1000, direction: 'out' }, actions: [{ kind: 'notify', text: '{amount} on {category}: {note}', to: ['owners'] }] },
+    { name: 'Customer texted? Follow up', why: 'When a text comes in, whoever’s on the office gets a task to answer it', trigger: { kind: 'text.received' }, actions: [{ kind: 'notify', text: '{contact} texted: {text}', to: ['admins'] }] },
+    { name: 'Signed? Schedule the work', why: 'When a document is signed, make a task to schedule the work', trigger: { kind: 'document.signed' }, actions: [{ kind: 'task', text: 'Schedule the work for {document}', assignee: '', dueIn: 1, campaign: 'same' }] },
+    { name: 'Files in? Tell the campaign', why: 'When files come in on a link, post it in the campaign’s feed', trigger: { kind: 'file.received' }, actions: [{ kind: 'post', text: '{from} sent {file}', channelId: 'same' }] },
     { name: 'Good call? Follow up', why: 'When a call is logged as Interested, make a follow-up task for whoever made it', trigger: { kind: 'attempt.logged', outcome: 'Interested' }, actions: [{ kind: 'task', text: 'Send {contact} a quote', assignee: 'who', dueIn: 1, campaign: 'same' }] },
     { name: 'New customer? Onboard them', why: 'When a contact becomes a Customer, the owners hear it’s time to onboard them', trigger: { kind: 'contact.stage', stage: 'customer' }, actions: [{ kind: 'notify', text: '{contact} is a new customer. Time to onboard them.', to: ['owners'] }] },
     { name: 'Off track? Tell the owners', why: 'When a campaign is checked in at risk or off track, the owners hear why', trigger: { kind: 'campaign.checkin', statuses: ['atRisk', 'offTrack'] }, actions: [{ kind: 'notify', text: '{who} checked in on {campaign}: {note}', to: ['owners'] }] },
     { name: 'Monday goals', why: 'Every Monday at 9, ask the team for the week’s goals', trigger: { kind: 'schedule', slots: [{ days: [1], time: '09:00' }] }, actions: [{ kind: 'post', text: 'Good morning! What are your goals for this week?', channelId: 'general' }] },
   ];
   function automationsTool() {
-    if (!S.automations) {
-      api('GET', '/automations').then((x) => { S.automations = x; renderAutos(); }).catch((e) => toast(e.message));
+    if (!S.automations || !AUTO_CAT.events) {
+      Promise.all([api('GET', '/automations'), autoCatalog()]).then(([x]) => { S.automations = x; renderAutos(); }).catch((e) => toast(e.message));
       return [h('p', { class: 'day-hint' }, 'Loading…')];
     }
     const all = [...S.automations].sort((a, b) => a.createdAt - b.createdAt);
@@ -4972,6 +4989,8 @@
     const box = h('div', { class: 'auto-edit' });
     const opt = (v, label, sel) => h('option', { value: v, selected: v === sel }, label);
     const camps = S.campaigns.filter((c) => c.status !== 'done' || c.id === dr.trigger.campaignId);
+    dr.trigger.kind = { 'file.arrived': 'file.received', 'sign.signed': 'document.signed', 'contact.added': 'contact.created' }[dr.trigger.kind] || dr.trigger.kind;
+    if (!AUTO_CAT.events) autoCatalog().then(() => box.isConnected && draw()).catch(() => {});
     const stages = [...new Set((S.contacts || []).map((c) => c.stage).filter(Boolean))];
     const outcomes = [...new Set(S.campaigns.flatMap((c) => c.outcomes || []))];
     const people = S.workspace.members;
@@ -4979,20 +4998,46 @@
       const t = dr.trigger;
       const name = h('input', { value: dr.name, placeholder: 'e.g. Signed? Schedule the work' });
       name.addEventListener('input', () => (dr.name = name.value));
-      const kind = h('select', {}, Object.entries(AUTO_WHEN).map(([k, v]) => opt(k, v, t.kind)));
+      const groups = AUTO_CAT.events ? Object.entries(AUTO_CAT.tools).map(([tool, label]) => [label, AUTO_CAT.events.filter((e) => e.tool === tool)]).filter(([, l]) => l.length) : [['', Object.entries(AUTO_WHEN).map(([type, label]) => ({ type, label }))]];
+      const kind = h('select', { class: 'auto-kind', 'aria-label': 'What sets it off' }, groups.map(([label, list]) => (label ? h('optgroup', { label }, list.map((e) => opt(e.type, e.label, t.kind))) : list.map((e) => opt(e.type, e.label, t.kind)))));
       kind.addEventListener('change', () => { dr.trigger = { kind: kind.value, ...(kind.value === 'schedule' ? { slots: [{ days: [1], time: '09:00' }] } : {}) }; draw(); });
       const only = [];
-      if (['task.done', 'sign.signed', 'attempt.logged', 'campaign.done', 'campaign.checkin', 'file.arrived'].includes(t.kind)) {
+      const fl = autoFilters(t.kind);
+      if (fl.includes('project')) {
+        const projs = S.projects || [];
+        const sel = h('select', { class: 'auto-proj' }, opt('', 'Any project', t.projectId || ''), projs.map((p) => opt(p.id, p.name, t.projectId || '')));
+        sel.addEventListener('change', () => { t.projectId = sel.value || null; t.typeId = null; t.to = null; draw(); });
+        only.push(h('label', {}, 'In', sel));
+        const p = projById(t.projectId);
+        if (fl.includes('to')) {
+          const stages = [...new Set((p ? p.types : projs.flatMap((x) => x.types)).flatMap((ty) => (ty.fields.find((f) => f.type === 'select' && ['status', 'stage'].includes(f.key)) || ty.fields.find((f) => f.type === 'select'))?.choices || []).map((c) => c.label))];
+          const to = h('select', { class: 'auto-to' }, opt('', 'Any stage', t.to || ''), stages.map((v) => opt(v, v, t.to || '')));
+          to.addEventListener('change', () => (t.to = to.value || null));
+          only.push(h('label', {}, 'Moves to', to));
+        }
+      }
+      if (fl.includes('over')) {
+        const over = h('input', { type: 'number', min: 0, step: '0.01', value: t.over ?? '', placeholder: 'Any amount', class: 'auto-over' });
+        over.addEventListener('input', () => (t.over = over.value === '' ? null : Number(over.value)));
+        only.push(h('label', {}, 'At least ($)', over));
+      }
+      if (fl.includes('direction')) {
+        const dir = h('select', {}, opt('', 'Money in or out', t.direction || ''), opt('in', 'Money in', t.direction || ''), opt('out', 'Money out', t.direction || ''));
+        dir.addEventListener('change', () => (t.direction = dir.value || null));
+        only.push(h('label', {}, 'Which', dir));
+      }
+      if (t.kind === 'money.added') only.push(h('small', { class: 'hint' }, 'The business’s money only (never anyone’s own), and only owners’ automations hear it.'));
+      if (fl.includes('campaign')) {
         const sel = h('select', {}, opt('', 'Any campaign', t.campaignId || ''), camps.map((c) => opt(c.id, c.name, t.campaignId || '')));
         sel.addEventListener('change', () => (t.campaignId = sel.value || null));
         only.push(h('label', {}, 'In', sel));
       }
-      if (t.kind === 'contact.stage' || t.kind === 'contact.added') {
+      if (t.kind === 'contact.stage' || t.kind === 'contact.created') {
         const st = h('input', { value: t.stage ? stageLabel(t.stage) : '', placeholder: t.kind === 'contact.stage' ? 'Customer' : 'Any stage', list: 'autoStages' });
         st.addEventListener('input', () => (t.stage = st.value.trim().toLowerCase().replace(/\s+/g, '_') || null));
         only.push(h('label', {}, t.kind === 'contact.stage' ? 'Changes to' : 'With the stage', st), h('datalist', { id: 'autoStages' }, stages.map((v) => h('option', { value: stageLabel(v) }))));
       }
-      if (t.kind === 'attempt.logged') {
+      if (fl.includes('outcome') || t.kind === 'attempt.logged') {
         const oc = h('select', {}, opt('', 'Any outcome', t.outcome || ''), outcomes.map((v) => opt(v, v, t.outcome || '')));
         oc.addEventListener('change', () => (t.outcome = oc.value || null));
         only.push(h('label', {}, 'Logged as', oc));

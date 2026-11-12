@@ -1,5 +1,6 @@
 // Kloomie sync server: accounts/teams, file storage, and live updates over WebSocket.
 import * as NT from './notion.js';
+import * as FL from './flows.js';
 import http from 'node:http';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
@@ -1234,6 +1235,9 @@ function jobCustomerOut(rec) {
 }
 // A webhook event from somewhere in the app. The data is only worked out when some webhook wants it.
 function hook(wsId, type, data, by) {
+  try {
+    if (wantsEvent(wsId, type)) eventFromHook(wsId, type, typeof data === 'function' ? data() : data, by);
+  } catch (e) { alarm('An automation event failed to build', e); }
   if (!Object.values(db.webhooks || {}).some((h) => h.wsId === wsId && h.active && !h.projectId && h.events.includes(type))) return;
   try {
     const d = typeof data === 'function' ? data() : data;
@@ -1603,6 +1607,17 @@ function useDocTemplate(ws, auth, x, body) {
 // five a day per person; the job lives in memory (a restart stops it, and what it made so far is taken back out).
 const IMPORT_PAGES = 3000, IMPORT_ROWS = 10_000, IMPORT_FILES = 3000, IMPORT_PER_DAY = 5;
 // An import a restart cut off: what it had made goes (its records with its projects), so nothing is left half-made.
+function flowsStart() {
+  let n = 0;
+  for (const x of Object.values(db.automations)) if (x.trigger && FL.LEGACY[x.trigger.kind]) { x.trigger.kind = FL.LEGACY[x.trigger.kind]; n++; }
+  for (const rec of Object.values(db.records)) {
+    if (rec.flowStage !== undefined) continue;
+    const p = db.projects[rec.projectId];
+    const t = p && typeOfP(p, rec.typeId);
+    if (t) { rec.flowStage = recordStage(p, t, rec); n++; }
+  }
+  if (n) save();
+}
 function dropCutImports() {
   let n = 0;
   for (const it of Object.values(db.items)) if (it.importing) { removeItemFiles(it); delete db.items[it.id]; n++; }
@@ -3018,7 +3033,8 @@ function dueSlots(x, now) {
 // actions make a task, post to a feed, start a saved campaign, notify people (it lands on their Home), or change a
 // contact. What an automation does never sets off another one (no loops), each runs at most 30 times an hour, and
 // every run is logged. No AI here: the same thing happens every time.
-const AUTO_TRIGGERS = ['task.done', 'file.arrived', 'sign.signed', 'contact.added', 'contact.stage', 'attempt.logged', 'campaign.done', 'campaign.checkin', 'schedule'];
+// What can set one off is FL.EVENTS (server/flows.js): every tool, one list, also what the app's editor shows.
+const AUTO_TRIGGERS = FL.EVENTS.map((e) => e.type);
 const AUTO_ACTIONS = ['task', 'post', 'campaign', 'notify', 'contact'];
 const AUTO_RUNS = 30;
 const AUTO_MAX = 50;
@@ -3028,14 +3044,24 @@ function applyAutomation(x, body, ws) {
   if (body.name !== undefined) x.name = cleanText(body.name, 80) || 'Automation';
   if (body.on !== undefined) x.on = !!body.on;
   if (body.trigger !== undefined) {
-    const t = body.trigger || {};
+    const t = { ...(body.trigger || {}) };
+    t.kind = FL.LEGACY[t.kind] || t.kind;
     if (!AUTO_TRIGGERS.includes(t.kind)) throw badRequest('Pick what sets it off.');
-    const camp = t.campaignId && db.campaigns[t.campaignId]?.wsId === ws.id ? t.campaignId : null;
+    const allow = new Set(FL.EVENT[t.kind].filters);
+    // A campaign or project it's narrowed to must be one its maker can see (that's how it may hear private ones).
+    const camp = allow.has('campaign') && t.campaignId && db.campaigns[t.campaignId]?.wsId === ws.id && seesCampaign(t.campaignId, x.memberId) ? t.campaignId : null;
+    const proj = allow.has('project') && t.projectId && db.projects[t.projectId]?.wsId === ws.id && PJ.sees(db.projects[t.projectId], x.memberId) ? t.projectId : null;
+    if (t.projectId && allow.has('project') && !proj) throw badRequest('That project is gone, or you can’t see it.');
+    const over = Number(t.over);
     x.trigger = {
       kind: t.kind, campaignId: camp,
       stackId: t.stackId && ws.stacks.some((st) => st.id === t.stackId) ? t.stackId : null,
-      stage: cleanText(t.stage, 40) || null, outcome: cleanText(t.outcome, 40) || null,
-      statuses: (Array.isArray(t.statuses) ? t.statuses : []).filter((v) => HEALTH.includes(v)),
+      stage: allow.has('stage') ? cleanText(t.stage, 40) || null : null, outcome: allow.has('outcome') ? cleanText(t.outcome, 40) || null : null,
+      statuses: allow.has('statuses') ? (Array.isArray(t.statuses) ? t.statuses : []).filter((v) => HEALTH.includes(v)) : [],
+      projectId: proj, typeId: proj && typeOfP(db.projects[proj], t.typeId) ? t.typeId : null,
+      to: allow.has('to') ? cleanText(t.to, 40) || null : null,
+      over: allow.has('over') && Number.isFinite(over) && over > 0 ? Math.round(over * 100) / 100 : null,
+      direction: allow.has('direction') && ['in', 'out'].includes(t.direction) ? t.direction : null,
     };
     // On a schedule: weekdays and times, in the team's time zone (the same slots saved campaigns use).
     if (t.kind === 'schedule') {
@@ -3071,20 +3097,82 @@ function applyAutomation(x, body, ws) {
 // {task}, {campaign}, {contact}, {file}, {from}, {who}, {stage}, {outcome}, {document}, {note}, {date} in what it writes.
 function autoFill(text, ctx, wsId) {
   const v = { task: ctx.task?.text, campaign: ctx.campaign?.name, contact: ctx.contact ? ctx.contact.name || ctx.contact.company || ctx.contact.email || ctx.contact.phone : '', file: ctx.file?.name,
-    from: ctx.from, who: ctx.who, stage: ctx.stage ? stageLabel(ctx.stage) : '', outcome: ctx.outcome, document: ctx.document, note: ctx.note, date: teamDay(wsId) };
+    from: ctx.from, who: ctx.who, stage: ctx.stageLabel || (ctx.stage ? stageLabel(ctx.stage) : ''), outcome: ctx.outcome, document: ctx.document, note: ctx.note, date: ctx.date || teamDay(wsId),
+    record: ctx.recordName, project: ctx.project?.name, list: ctx.list?.name, customer: ctx.customer, amount: ctx.amount != null ? '$' + Number(ctx.amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '',
+    invoice: ctx.invoice, time: ctx.time, crew: ctx.crew, phone: ctx.phone, text: ctx.text, doc: ctx.doc, pin: ctx.pin, category: ctx.category };
   return String(text || '').replace(/\{(\w+)\}/g, (m, k) => (k in v ? String(v[k] ?? '') : m)).trim();
 }
 function autoMatches(t, ctx) {
   if (t.campaignId && ctx.campaign?.id !== t.campaignId && ctx.campaign?.parentId !== t.campaignId) return false;
+  if (t.projectId && ctx.project?.id !== t.projectId) return false;
+  if (t.typeId && ctx.list?.id !== t.typeId) return false;
+  if (t.to && !sameText(ctx.stageLabel, t.to)) return false;
+  if (t.over != null && !(Number(ctx.amount) >= t.over)) return false;
+  if (t.direction && ctx.direction !== t.direction) return false;
   if (t.stackId && ctx.file?.stackId !== t.stackId) return false;
   if (t.stage && !sameText(ctx.stage, t.stage)) return false;
   if (t.outcome && ctx.outcome !== t.outcome) return false;
   if (t.statuses?.length && !t.statuses.includes(ctx.status)) return false;
   return true;
 }
+// The bus: everything that happens in a tool comes through here once. Automations hear it; (webhooks hear their own
+// events from hook(), and those that only webhooks had are passed on here too). Something private (a private
+// campaign's or project's, or one marked so) sets off only an automation narrowed to that campaign or project, whose
+// maker can still see it, so nothing private goes out to people who can't see it.
 function automate(wsId, kind, ctx = {}) {
-  if (automating || offline(wsId)) return;
-  for (const x of Object.values(db.automations)) if (x.wsId === wsId && x.on && x.trigger.kind === kind && autoMatches(x.trigger, ctx)) runAutomation(x, ctx);
+  kind = FL.LEGACY[kind] || kind;
+  if (automating || offline(wsId) || !FL.EVENT[kind]) return;
+  const priv = !!(ctx.private || ctx.campaign?.private || (ctx.campaign?.parentId && db.campaigns[ctx.campaign.parentId]?.private) || ctx.project?.private);
+  for (const x of Object.values(db.automations)) {
+    if (x.wsId !== wsId || !x.on || x.trigger.kind !== kind || !autoMatches(x.trigger, ctx)) continue;
+    if (ctx.ownersOnly && !isOwnerId(wsId, x.memberId)) continue;
+    if (priv) {
+      const mine = (x.trigger.campaignId && x.trigger.campaignId === (ctx.campaign?.parentId || ctx.campaign?.id) && seesCampaign(x.trigger.campaignId, x.memberId))
+        || (x.trigger.projectId && x.trigger.projectId === ctx.project?.id && PJ.sees(ctx.project, x.memberId));
+      if (!mine) continue;
+    }
+    runAutomation(x, ctx);
+  }
+}
+const typeOfP = (p, id) => p?.types.find((t) => t.id === id) || null;
+const wantsEvent = (wsId, kind) => Object.values(db.automations).some((x) => x.wsId === wsId && x.on && x.trigger.kind === kind);
+// A record's stage: its status or stage choice (or its first choice field), as a label.
+function recordStage(p, t, rec) {
+  const f = t.fields.find((x) => x.type === 'select' && ['status', 'stage'].includes(x.key)) || t.fields.find((x) => x.type === 'select');
+  return f ? f.choices?.find((c) => c.id === rec.values[f.id])?.label || '' : '';
+}
+// Every change to a record comes here (from Projects' one place for record news). A move to another stage is told
+// whatever made it (the app, the API, a customer's answer, an import), by comparing with the stage last told.
+function recordEvent(rec, type, by, more = {}) {
+  const p = db.projects[rec.projectId];
+  const t = p && typeOfP(p, rec.typeId);
+  if (!p || !t) return;
+  const stage = recordStage(p, t, rec);
+  const base = { project: p, list: t, recordName: String(rec.values[t.primary] ?? ''), who: by, stageLabel: stage };
+  if (type === 'record.updated' || type === 'record.created') {
+    const was = rec.flowStage;
+    rec.flowStage = stage;
+    if (type === 'record.created') return automate(rec.wsId, 'record.created', base);
+    if (stage && was !== undefined && was !== stage) automate(rec.wsId, 'record.stage', { ...base, from: was || 'no stage' });
+    return;
+  }
+  if (type === 'record.deleted') return automate(rec.wsId, 'record.deleted', base);
+  if (type === 'quote.accepted' || type === 'quote.declined') return automate(rec.wsId, type, { ...base, customer: by, amount: more.amount != null ? more.amount / 100 : null });
+}
+// Events only webhooks heard before Flows: visits, texts, tasks made, invoices and payments, from their payloads.
+function eventFromHook(wsId, type, d, by) {
+  if (!FL.EVENT[type] || !wantsEvent(wsId, type)) return;
+  const rec = d?.job_id && db.records[d.job_id];
+  const p = rec && db.projects[rec.projectId];
+  const lt = p && typeOfP(p, rec.typeId);
+  const at = rec ? { project: p, list: lt, recordName: lt ? String(rec.values[lt.primary] ?? '') : '' } : {};
+  if (type.startsWith('visit.')) return automate(wsId, type, { ...at, recordName: d.job || at.recordName, date: d.date, time: d.start || '', crew: (d.crew || []).map((m) => m.name).join(', '), who: by, private: privateRecord(d.job_id) });
+  if (type === 'text.received') return automate(wsId, type, { contact: db.contacts[d.contact_id] || { name: d.contact_name || d.from }, phone: d.from, text: clipText(d.body, 300), who: 'Text message' });
+  if (type === 'task.created') { const t = db.tasks[d.id]; return t && automate(wsId, type, { task: t, campaign: taskCamp(t), who: by, whoId: t.memberId, private: privateTask(t) }); }
+  if (type.startsWith('invoice.') || type === 'payment.received') {
+    const inv = d.invoice_id ? db.invoices?.[d.invoice_id] : null;
+    return automate(wsId, type, { ...at, invoice: d.number || d.invoice_number, customer: d.customer?.name || inv?.to?.name || '', amount: type === 'payment.received' ? d.payment?.amount : d.total, who: by, private: privateRecord(d.job_id) });
+  }
 }
 function autoLog(x, ok, note) {
   x.runs = [{ at: Date.now(), ok, note: clipText(note || '', 240) }, ...(x.runs || [])].slice(0, 20);
@@ -4302,7 +4390,7 @@ function syncMileMoney(ws, x) {
 // Tagging one to a campaign counts it as that campaign's cost (out) or earnings (in); tagging it to a money
 // goal fills that goal. Budgets are a monthly limit per spending category, personal or business.
 const MONEY_IMPORT = 2000;
-const publicMoney = ({ wsId, key, ...x }) => x;
+const publicMoney = ({ wsId, key, flowTold, ...x }) => x;
 const publicBudget = ({ wsId, ...x }) => x;
 const cents = (v, what = 'the amount') => {
   const n = Math.round(Number(String(v ?? '').replace(/[$,\s]/g, '')) * 100);
@@ -4322,6 +4410,11 @@ function moneyTouches(x, ws) {
 function moneyNews(x) {
   broadcast(x.wsId, { type: 'money', money: publicMoney(x), bill: x });
   moneyTouches(x);
+  // New business money (or a customer's payment) is an event, heard only by owners' automations, once.
+  if (!x.flowTold && (x.scope === 'business' || x.invoiceId) && Date.now() - x.createdAt < 3600_000) {
+    x.flowTold = true;
+    automate(x.wsId, 'money.added', { amount: x.amount / 100, category: x.category || '', note: x.note || '', direction: x.kind === 'in' ? 'in' : 'out', who: x.by, ownersOnly: true });
+  }
 }
 function dropMoney(x) {
   delete db.money[x.id];
@@ -7365,6 +7458,7 @@ async function api(req, res, url) {
       store[x.id] = x;
       save();
       news(x);
+      if (a === 'pins') automate(ws.id, 'pin.dropped', { pin: [x.kind, x.address || x.name].filter(Boolean).join(' · '), note: x.note || '', campaign: db.campaigns[x.campaignId] || null, who: auth.member, whoId: auth.memberId, private: !x.campaignId });
       return send(res, 200, pub(x));
     }
     const x = b && store[b];
@@ -7615,6 +7709,7 @@ async function api(req, res, url) {
   // The PSS admin connection, which fills Contacts. Owners only.
   if (a === 'automations') {
     if (!isAdmin(auth)) return send(res, 403, { error: 'Only team owners and admins can set up automations.' });
+    if (b === 'catalog' && m === 'GET') return send(res, 200, FL.catalog());
     const mine = () => Object.values(db.automations).filter((x) => x.wsId === ws.id).sort((p, q) => p.createdAt - q.createdAt);
     if (m === 'GET' && !b) return send(res, 200, mine().map(publicAutomation));
     if (m === 'POST' && !b) {
@@ -8730,6 +8825,7 @@ async function api(req, res, url) {
       if (!parent && !host && channelId && !where.channelId) return send(res, 404, { error: 'Feed not found' });
       const item = addItem(baseItem(auth, { type, text: t, ...where, ...(made ? { title: made.title, blocks: made.blocks, refs: docRefs(made.blocks), v: 0, pinned: true, editedAt: Date.now() } : {}) }));
       if (host) docPageBlock(host, item.id, { add: true, after });
+      if (type === 'text') automate(ws.id, 'doc.created', { doc: item.title || docOf(item).title || 'Untitled', who: auth.member, whoId: auth.memberId, campaign: db.campaigns[ws.stacks.find((st) => st.id === topItem(item).stackId)?.campaignId] || null, private: placeAudience(ws, topItem(item)) !== 'team' });
       if (type === 'message') pinLinked(ws, t);
       if (made) {
         pinDocFiles(ws, made.blocks);
@@ -9344,7 +9440,7 @@ async function replayAs(ws, memberId, approvalId, { method, path: p, body }, as 
   return { status, body: parsed };
 }
 const hold = (...a) => RULES.hold(...a);
-const PJ = projectsModule({ canSeeItem: (auth, it) => canSee(auth, 'item', it), seal, unseal, db, save, broadcast, rid, hold, cleanText, isDay, readJson, send, badRequest, isOwnerId, escHtml, brandOf, logoUrl, teamDay, offline, allowLocalHooks: process.env.ALLOW_LOCAL_WEBHOOKS === '1', qrSvg, publicUrl: PUBLIC_URL,
+const PJ = projectsModule({ onEvent: (...a) => recordEvent(...a), canSeeItem: (auth, it) => canSee(auth, 'item', it), seal, unseal, db, save, broadcast, rid, hold, cleanText, isDay, readJson, send, badRequest, isOwnerId, escHtml, brandOf, logoUrl, teamDay, offline, allowLocalHooks: process.env.ALLOW_LOCAL_WEBHOOKS === '1', qrSvg, publicUrl: PUBLIC_URL,
   onRecordGone: (rec) => { dropVisits(rec); INV.dropFor(rec); },
   onRecordNews: (rec) => { jobChanged(rec); if (rec.share || rec.qbo?.estId) QB.soon(rec.wsId); },
   // A follow-up from a record's timeline: a task for whoever logged it, about the record.
@@ -9614,7 +9710,7 @@ for (const x of Object.values(db.mileage)) {
   save();
 }
 
-const INV = invoicesModule({ notifyAdmins: (...a) => notifyAdmins(...a), jobBack: (rec) => jobBack(rec), onPaymentGone: (...a) => QB.paymentGone(...a), db, save, broadcast, rid, hold, cleanText, readJson, send, badRequest, escHtml, brandOf, logoUrl, teamDay, offline, seal, unseal, stripeCall: stripe.callWith, PJ, isAdmin, jobOfRecord, jobLabel, moveJob, publicUrl: PUBLIC_URL, emit: (...a) => { PJ.emit(...a); QB.soon(a[0]); },
+const INV = invoicesModule({ notifyAdmins: (...a) => notifyAdmins(...a), jobBack: (rec) => jobBack(rec), onPaymentGone: (...a) => QB.paymentGone(...a), db, save, broadcast, rid, hold, cleanText, readJson, send, badRequest, escHtml, brandOf, logoUrl, teamDay, offline, seal, unseal, stripeCall: stripe.callWith, PJ, isAdmin, jobOfRecord, jobLabel, moveJob, publicUrl: PUBLIC_URL, emit: (...a) => { PJ.emit(...a); QB.soon(a[0]); try { eventFromHook(a[0], a[1], a[2], a[3]); } catch (e) { alarm('An automation event failed to build', e); } },
   // A payment is money in on the business's Finance, under the team's owner.
   addMoney: (ws, { amount, day, note, invoiceId = null }) => {
     const owner = ws.members.find((m) => m.role === 'owner') || ws.members[0];
@@ -10349,6 +10445,7 @@ runAutopay();
 migratePeople();
 migrateDay();
 dropCutImports();
+flowsStart();
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`\n  Kloomie server running\n`);
   console.log(`  This machine:   http://localhost:${PORT}`);

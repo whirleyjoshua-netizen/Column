@@ -325,7 +325,7 @@ export const TEMPLATES = {
   },
 };
 
-export function projectsModule({ canSeeItem = () => true, seal = (x) => x, unseal = (x) => x, db, save, broadcast, rid, hold = null, cleanText, isDay, readJson, send, badRequest, isOwnerId, escHtml, brandOf, logoUrl, teamDay, offline, makeTask, onRecords, onRecordGone, onRecordNews, allowLocalHooks = false, qrSvg = null, publicUrl = '' }) {
+export function projectsModule({ onEvent = null, canSeeItem = () => true, seal = (x) => x, unseal = (x) => x, db, save, broadcast, rid, hold = null, cleanText, isDay, readJson, send, badRequest, isOwnerId, escHtml, brandOf, logoUrl, teamDay, offline, makeTask, onRecords, onRecordGone, onRecordNews, allowLocalHooks = false, qrSvg = null, publicUrl = '' }) {
   const bad = (msg) => badRequest(msg);
   db.projects ||= {};
   db.records ||= {};
@@ -349,7 +349,7 @@ export function projectsModule({ canSeeItem = () => true, seal = (x) => x, unsea
   // call the customer and find the place, even if they can't open Contacts.
   // What's in a locked field (rec.secrets) never goes out with a record: only that one is set ({ set, at } in values).
   // The job an item is at goes out with its name and project, when that project isn't private.
-  const publicRecord = ({ wsId, log, secrets, ...r }) => {
+  const publicRecord = ({ wsId, log, secrets, flowStage, ...r }) => {
     const p = db.projects[r.projectId];
     const t = p?.types.find((x) => x.id === r.typeId);
     const jobIds = (t?.fields || []).filter((f) => f.type === 'job' && r.values[f.id]).map((f) => r.values[f.id]);
@@ -1570,6 +1570,7 @@ export function projectsModule({ canSeeItem = () => true, seal = (x) => x, unsea
         const items = t.fields.find((f) => f.type === 'items');
         broadcast(rec.wsId, { type: 'quote:answer', projectId: p.id, recordId: rec.id, act, name: name || 'The customer', title: quoteTitle(t, rec), total: items ? itemsTotals(rec.values[items.id]).total : 0 });
         recordNews(rec, 'record.updated', name ? `${name} (customer)` : 'Customer');
+        try { onEvent?.(rec, act === 'accept' ? 'quote.accepted' : 'quote.declined', name || 'The customer', { amount: rec.answer.total }); } catch (e) { console.error('Automation event failed:', e.message); }
       }
       res.writeHead(303, { Location: `/q/${token}` });
       return res.end();
@@ -1914,6 +1915,8 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
     for (const h of hooks) deliver(h, event);
   }
   function hooksFire(rec, type, by) {
+    // Automations hear every record change (index.js works out what it means: added, moved to a stage, deleted).
+    try { onEvent?.(rec, type, by); } catch (e) { console.error('Automation event failed:', e.message); }
     const hooks = Object.values(db.webhooks).filter((h) => h.wsId === rec.wsId && h.active && h.events.includes(type) && (!h.projectId || h.projectId === rec.projectId));
     if (!hooks.length) return;
     const p = db.projects[rec.projectId];
