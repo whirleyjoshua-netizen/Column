@@ -3093,10 +3093,13 @@
     map: { label: 'Map', ok: () => toolOn('map'), open: () => openMap() },
     signs: { label: 'Signatures', ok: () => toolOn('signs'), open: () => { SG.filter = null; openTool('signs'); } },
     vault: { label: 'Vault', ok: () => toolOn('vault'), open: () => { VK.filter = null; openTool('vault'); } },
+    news: { label: 'News', ok: () => toolOn('news') },
   };
   const barMine = () => (Array.isArray(S.me?.bar) ? S.me.bar : BAR_DEFAULT).filter((k) => BAR_ITEMS[k]);
   const barKeys = () => barMine().filter((k) => !BAR_ITEMS[k].ok || BAR_ITEMS[k].ok());
   const onBar = (k) => barKeys().includes(k);
+  // News (news.js): each person's own; on their tabs when they want it, with a card on Home.
+  const NEWS = window.ColumnNews({ h, api, toast, sheet, openMenu, ago, confirmClick, fileKey: () => S.me?.fileKey, redrawHome: () => renderHome(), onBar: () => onBar('news'), open: () => openBarItem('news') });
   function openBarItem(k) {
     const it = BAR_ITEMS[k];
     if (!it) return;
@@ -3250,6 +3253,7 @@
       S.me.bar = r.bar;
       if (pins.map((x) => x.go).join() !== pinsMine().map((x) => x.go).join()) S.me.pins = (await api('PUT', '/account/pins', { pins })).pins;
       renderTabs();
+      renderHome(); // a card that follows a tab (News) comes or goes with it
       if (S.tab !== 'home' && S.tab !== 'day' && !onBar(S.tab)) setTab('home');
     });
   }
@@ -5515,6 +5519,7 @@
             h('span', { class: 'hcm-name' }, h('b', {}, c.name), h('small', {}, [campDates(c), forMe ? `${forMe} for you` : ''].filter(Boolean).join(' · '))),
             healthPill(c, hl), h('span', { class: 'hcm-bar' }, h('i', { style: `width:${pctOf(campProgress(c))}` })), h('small', { class: 'hcm-pct' }, pctOf(campProgress(c))))))) : null,
         card('came', 'What came in', activity.length, null, activity.length ? h('div', {}, activity) : h('p', { class: 'day-hint' }, 'You’re all caught up.')),
+        toolOn('news') ? NEWS.homeCard(card) : null,
         d.bills.length ? card('bills', 'Bills this week', d.bills.length, ['Finance', () => openTool('bills')],
           h('div', {}, d.bills.slice(0, 5).map((b) => row('$', b.due < d.today ? 'late' : 'nobody', `${b.name} · ${money(b.amount)}`, b.due < d.today ? `was due ${dueLabel(b.due)}` : `due ${dueLabel(b.due)}`, () => openTool('bills'))))) : null));
   }
@@ -9197,7 +9202,7 @@
   }
 
   // ---------- tools: small apps that open in a drawer, so the tabs stay as they are ----------
-  const TOOLS = { agents: { name: 'Your team', render: agentsTool }, hq: { name: 'Company HQ', render: hqTool }, sidekick: { name: 'Sidekick', render: sidekickTool }, docs: { name: 'Docs', render: docsTool }, bills: { name: 'Finance', render: financeTool }, contacts: { name: 'Contacts', render: contactsTool }, email: { name: 'Email', render: emailTool }, meetings: { name: 'Meeting notes', render: meetingsTool }, planner: { name: 'Planner', render: plannerTool }, folders: { name: 'Folders', render: foldersTool }, map: { name: 'Map', render: mapTool }, signs: { name: 'Signatures', render: signsTool }, cards: { name: 'Business card', render: cardTool }, vault: { name: 'Vault', render: vaultTool } };
+  const TOOLS = { agents: { name: 'Your team', render: agentsTool }, hq: { name: 'Company HQ', render: hqTool }, sidekick: { name: 'Sidekick', render: sidekickTool }, docs: { name: 'Docs', render: docsTool }, bills: { name: 'Finance', render: financeTool }, contacts: { name: 'Contacts', render: contactsTool }, email: { name: 'Email', render: emailTool }, meetings: { name: 'Meeting notes', render: meetingsTool }, planner: { name: 'Planner', render: plannerTool }, folders: { name: 'Folders', render: foldersTool }, map: { name: 'Map', render: mapTool }, signs: { name: 'Signatures', render: signsTool }, cards: { name: 'Business card', render: cardTool }, vault: { name: 'Vault', render: vaultTool }, news: { name: 'News', render: () => NEWS.render() } };
   let toolOpen = null;
   $('#toolsBtn').addEventListener('click', (e) => {
     const soon = billsSoon().length;
@@ -17809,7 +17814,7 @@
         // The tools the team uses. Switched off, a tool leaves everyone's Tools menu; nothing in it is deleted.
         const TOOL_ROWS = [['agents', 'Agents', 'Your team: Chief of Staff, Sales, Operations and Marketing'], ['sidekick', 'Sidekick', 'Plans campaigns with you'], ['docs', 'Docs', 'Write and share pages'], ['contacts', 'Contacts', 'Your customers and leads (owners and admins)'],
           ['email', 'Email', 'Campaign email from Outlook or Gmail'], ['folders', 'Folders', 'Files in folders'], ['signs', 'Signatures', 'Send PDFs to be signed'], ['bills', 'Finance', 'Bills, money in and out, budgets'],
-          ['meetings', 'Meeting notes', 'Record a call, get the notes'], ['map', 'Map', 'Pins, routes and canvassing runs'], ['vault', 'Vault', 'Codes and logins, locked on your device'], ['projects', 'Jobs & projects', 'Trades, software, client work and team projects'], ['cards', 'Business cards', 'Everyone’s own card to share by link, text, QR code or NFC']];
+          ['meetings', 'Meeting notes', 'Record a call, get the notes'], ['map', 'Map', 'Pins, routes and canvassing runs'], ['vault', 'Vault', 'Codes and logins, locked on your device'], ['projects', 'Jobs & projects', 'Trades, software, client work and team projects'], ['cards', 'Business cards', 'Everyone’s own card to share by link, text, QR code or NFC'], ['news', 'News', 'Each person’s own news, if they turn it on in their tabs']];
         const tools = ws.tools || {};
         s.append(h('section', { class: 'tools-sec' }, h('h3', {}, 'Tools'),
           h('p', { class: 'day-hint' }, 'Turn on what your team uses. A tool you turn off leaves everyone’s Tools menu; nothing in it is deleted.'),

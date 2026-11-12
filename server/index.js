@@ -37,6 +37,7 @@ import { techAiModule } from './techai.js';
 import { describeModule } from './describe.js';
 import { signoffModule } from './signoff.js';
 import { cardsModule } from './cards.js';
+import { newsModule } from './news.js';
 import { qrSvg } from './qr.js';
 import { agentsModule } from './agents.js';
 import { postizModule } from './postiz.js';
@@ -303,7 +304,7 @@ function fileKeyOf(token) {
   fileKeys.set(s.fileKey, token);
   return s.fileKey;
 }
-const URL_KEY_OK = /^\/api\/(files\/[\w-]+|folders\/[\w-]+\/(zip|files\/\d+)|exports\/[\w-]+\/file)$/;
+const URL_KEY_OK = /^\/api\/(files\/[\w-]+|news\/img\/[\w-]+|folders\/[\w-]+\/(zip|files\/\d+)|exports\/[\w-]+\/file)$/;
 function urlKey(req, url) {
   const k = url.searchParams.get('t');
   if (!k || k.length > 64 || !['GET', 'HEAD'].includes(req.method) || !(URL_KEY_OK.test(url.pathname) || url.pathname === '/ws')) return null;
@@ -533,16 +534,17 @@ const meAccount = (ws, memberId) => {
 // What each person keeps on their tab bar after Home and Day (theirs alone, in their order). Null: the usual three.
 const PIN_RE = /^(rec|proj|camp|chan|stack|doc):[A-Za-z0-9_-]{1,64}$/;
 const MAX_PINS = 12;
-const BAR_KEYS = ['column', 'chat', 'camps', 'agents', 'sidekick', 'docs', 'projects', 'bills', 'contacts', 'email', 'folders', 'meetings', 'map', 'signs', 'vault'];
+const BAR_KEYS = ['column', 'chat', 'camps', 'agents', 'sidekick', 'docs', 'projects', 'bills', 'contacts', 'email', 'folders', 'meetings', 'map', 'signs', 'vault', 'news'];
 
 // A private campaign's feed and stack are hidden from people outside it, and so is a feed you weren't invited to.
 // The tools a team uses, which owners and admins switch on and off (Settings → Team). A new team starts with
 // a simple set; a team from before switches keeps everything but Projects, which is parked.
-const TOOL_KEYS = ['agents', 'sidekick', 'docs', 'contacts', 'email', 'folders', 'signs', 'bills', 'meetings', 'map', 'vault', 'projects', 'cards'];
+const TOOL_KEYS = ['agents', 'sidekick', 'docs', 'contacts', 'email', 'folders', 'signs', 'bills', 'meetings', 'map', 'vault', 'projects', 'cards', 'news'];
 const SETUP_KINDS = ['trades', 'services', 'store', 'software', 'other'];
-const NEW_TEAM_TOOLS = ['agents', 'sidekick', 'docs', 'contacts', 'email', 'folders', 'signs', 'cards'];
-// Agents and business cards came later: on for teams that haven't switched them off.
-const LATER_TOOLS = ['agents', 'cards'];
+const NEW_TEAM_TOOLS = ['agents', 'sidekick', 'docs', 'contacts', 'email', 'folders', 'signs', 'cards', 'news'];
+// Agents, business cards and News came later: on for teams that haven't switched them off. (News is still each
+// person's own to turn on, in their tabs.)
+const LATER_TOOLS = ['agents', 'cards', 'news'];
 const toolsOf = (ws) => Object.fromEntries(TOOL_KEYS.map((k) => [k, ws.settings?.tools ? (LATER_TOOLS.includes(k) ? ws.settings.tools[k] !== false : ws.settings.tools[k] === true) : k !== 'projects']));
 const publicWorkspace = (ws, memberId) => ({
   tools: toolsOf(ws),
@@ -6660,6 +6662,10 @@ async function api(req, res, url) {
     const out = await SIGNOFF.route(req, res, parts, auth, ws);
     if (out !== null) return;
   }
+  if (a === 'news') {
+    const out = await NEWS.route(req, res, parts, auth, ws);
+    if (out !== null) return;
+  }
   if (a === 'card') {
     const out = await CARDS.route(req, res, parts, auth, ws, userOf(ws.members.find((x) => x.id === auth.memberId)));
     if (out !== null) return;
@@ -9601,7 +9607,7 @@ async function api(req, res, url) {
 // so devices that stay open (like the desktop app in the tray) pick up updates.
 let clientVer = { key: '', hash: '' };
 function clientVersion() {
-  const files = ['index.html', 'app.js', 'style.css', 'pdfkit.js', 'wordkit.js'].map((f) => path.join(CLIENT_DIR, f));
+  const files = ['index.html', 'app.js', 'style.css', 'pdfkit.js', 'wordkit.js', 'dockit.js', 'news.js', 'news.css'].map((f) => path.join(CLIENT_DIR, f));
   const key = files.map((f) => fs.statSync(f, { throwIfNoEntry: false })?.mtimeMs || 0).join(':');
   if (key !== clientVer.key) {
     const h = crypto.createHash('sha256');
@@ -10002,6 +10008,9 @@ const CARDS = cardsModule({ db, save, readJson, send, rid, escHtml, brandOf, log
   toolOn: (ws, k) => !!ws && toolsOf(ws)[k], confirmed: (wsId, memberId) => mailer.mode === 'off' || !!userOf(db.workspaces[wsId]?.members.find((x) => x.id === memberId))?.emailVerified,
   memberIn: (...a) => memberIn(...a), isAdminId, contactsOf, newContact, applyContact, emailKey, phoneKey, EMAIL_RE, contactNews, refreshLiveSoon: (...a) => refreshLiveSoon(...a), automate: (...a) => automate(...a),
   hook: (wsId, type, x) => hook(wsId, type, () => API.apiContact(x), 'Business card'), notify: (...a) => notify(...a), CONTACT_MAX, qrSvg });
+// News (news.js): each person's own news from publishers' feeds, ranked by what they like.
+const NEWS = newsModule({ db, save, readJson, send, rid, cleanText, aiAsk: (...a) => aiAsk(...a), replyJson: (...a) => replyJson(...a), toolOn: (ws, k) => !!ws && toolsOf(ws)[k], allowLocal: process.env.ALLOW_LOCAL_FETCH === '1',
+  topics: process.env.ALLOW_LOCAL_FETCH === '1' && process.env.NEWS_TEST_TOPICS ? JSON.parse(process.env.NEWS_TEST_TOPICS) : null });
 const LEADS = leadsModule({ db, save, readJson, send, isAdmin, cleanText, contactsOf, newContact, applyContact, emailKey, phoneKey, EMAIL_RE, contactNews, refreshLiveSoon, automate,
   hook: (wsId, type, x) => hook(wsId, type, () => API.apiContact(x), 'Lead'), notifyAdmins, escHtml, brandOf, logoUrl, clientIp, CONTACT_MAX, publicUrl: PUBLIC_URL, offline, teamDay });
 // Two-step sign-in with an authenticator app (twostep.js).
@@ -10462,6 +10471,7 @@ async function removeMember(ws, m, { removed = false } = {}) {
   for (const x of Object.values(db.plans)) if (theirs(x)) delete db.plans[x.id];
   for (const x of Object.values(db.agentRuns || {})) if (theirs(x)) delete db.agentRuns[x.id];
   delete (db.agentPrefs || {})[`${wsId}:${id}`];
+  NEWS.forget(wsId, id);
   for (const x of Object.values(db.exports)) if (theirs(x)) dropExport(x);
   // Passed on: the business keeps these.
   for (const coll of ['signs', 'meetings', 'pins', 'trips', 'zones', 'money', 'bills', 'budgets']) for (const x of Object.values(db[coll])) if (theirs(x)) hand(x);
