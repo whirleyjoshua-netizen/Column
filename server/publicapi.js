@@ -45,7 +45,7 @@ export function publicApiModule(deps) {
   // order=newest: the most recent first (what a polling trigger wants), no cursor.
   function page(res, qs, all, changedAt, out) {
     const limit = Math.max(1, Math.min(500, Number(qs.get('limit')) || 100));
-    if (qs.get('order') === 'newest') return send(res, 200, { data: all.sort((x, y) => changedAt(y) - changedAt(x)).slice(0, limit).map(out), next_cursor: null });
+    if (qs.get('order') === 'newest') return send(res, 200, { data: all.sort((x, y) => changedAt(y) - changedAt(x) || (y.createdAt || 0) - (x.createdAt || 0)).slice(0, limit).map(out), next_cursor: null });
     const since = Date.parse(qs.get('updated_since') || '') || 0;
     const list = all.filter((x) => changedAt(x) > since).sort((x, y) => changedAt(x) - changedAt(y) || (x.id < y.id ? -1 : 1));
     const after = qs.get('cursor') || '';
