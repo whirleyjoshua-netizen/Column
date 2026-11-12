@@ -1515,6 +1515,31 @@ body.platform-darwin .dv-bar { padding-left: 80px; }
 .doc-card .snippet { font: inherit; font-size: 12px; white-space: normal; color: var(--muted); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .docs-list { display: flex; flex-direction: column; }
 .doc-row { cursor: pointer; }
+/* docs: the library's tree, stars, the trash, and pages inside pages */
+.docs-h { margin: 14px 0 2px; font-size: 11.5px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); font-weight: 600; }
+.doc-tree { padding-left: calc(4px + var(--in, 0) * 18px); }
+.doc-arrow { flex: none; width: 22px; height: 22px; border: 0; background: none; color: var(--muted); cursor: pointer; border-radius: 5px; font-size: 12px; transition: transform .12s; }
+.doc-arrow::before { content: '▸'; }
+.doc-arrow.none::before { content: '•'; }
+.doc-arrow.open { transform: rotate(90deg); }
+.doc-arrow:hover { background: var(--card-hover); }
+.doc-arrow.none { display: inline-flex; align-items: center; justify-content: center; cursor: default; font-size: 10px; opacity: .5; }
+.doc-star { color: #e5a50a; }
+.doc-acts { display: flex; gap: 2px; opacity: 0; transition: opacity .1s; }
+.doc-row:hover .doc-acts, .doc-row:focus-within .doc-acts, .doc-acts.on { opacity: 1; }
+@media (hover: none) { .doc-acts { opacity: 1; } }
+.docs-trash { margin-left: auto; }
+.docs-trash-h { flex: 1; }
+.trash-row { cursor: default; }
+.dv-crumb { color: var(--muted); font-size: 12px; padding: 0; max-width: 16em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
+.dv-crumb:hover { color: var(--text); }
+.dv-sep { margin: 0 4px; color: var(--muted); }
+.dv-star { color: #e5a50a; }
+.dk-page { display: flex; align-items: center; gap: 8px; padding: 6px 8px; margin: 2px 0; border-radius: 6px; cursor: pointer; font-weight: 550; text-decoration: underline; text-decoration-color: var(--line); text-underline-offset: 3px; }
+.dk-page:hover { background: var(--card-hover); }
+.dk-page small { color: var(--muted); font-weight: 400; text-decoration: none; }
+.dk-page.gone { color: var(--muted); font-style: italic; cursor: default; text-decoration: none; font-weight: 400; }
+.dk-selected .dk-page { background: var(--accent-soft); }
 /* docs: mentions, live blocks, to-dos that are tasks */
 .dk-ref { display: inline; padding: 0 3px; border-radius: 4px; background: var(--accent-soft); color: var(--accent); font-weight: 550; cursor: pointer; white-space: nowrap; }
 .dk-ref:hover { text-decoration: underline; }

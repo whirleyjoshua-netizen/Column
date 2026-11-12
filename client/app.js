@@ -509,7 +509,7 @@
       }
     } else if (msg.type === 'item:remove') {
       S.items = S.items.filter((x) => x.id !== msg.id);
-      if (DV.doc?.id === msg.id) { closeDoc(true); toast('That doc was deleted.'); }
+      if (DV.doc?.id === msg.id) { const mine = DV.doc.trashing; closeDoc(true); if (!mine) toast('That doc was moved to the trash.'); }
       if (msg.id === VIEW_ID) openViewer();
       checkThread();
       render();
@@ -1326,7 +1326,7 @@
     const th = viewThread(view);
     if (th) return S.items.filter((x) => x.id === th || x.parentId === th).sort((a, b) => a.createdAt - b.createdAt);
     const ch = viewChannel(view);
-    let list = S.items.filter((x) => (x.channelId || null) === ch && !x.parentId && !x.dirId);
+    let list = S.items.filter((x) => (x.channelId || null) === ch && !x.parentId && !x.dirId && !x.underId);
     if (view === 'files') list = list.filter((x) => x.type !== 'message');
     else if (view === 'chat') list = list.filter((x) => x.type === 'message');
     else if (view.startsWith('stack:')) list = list.filter((x) => x.stackId === viewStack(view));
@@ -1580,7 +1580,7 @@
     }
     if (it.type === 'message' && isMine(it)) a.append(btn(I.edit, 'Edit', (b) => editMessage(b.closest('.msg'), it)));
     if (it.type !== 'message' || isMine(it) || amAdmin()) {
-      a.append(btn(I.trash, it.type === 'message' ? 'Delete message' : 'Delete everywhere', (b) => confirmClick(b, () => api('DELETE', '/items/' + it.id).catch((e) => toast(e.message)))));
+      a.append(btn(I.trash, it.type === 'message' ? 'Delete message' : it.type === 'text' ? 'Move to trash' : 'Delete everywhere', (b) => (it.type === 'text' ? docTrash(it) : confirmClick(b, () => api('DELETE', '/items/' + it.id).catch((e) => toast(e.message))))));
     }
     return a;
   }
@@ -1961,7 +1961,7 @@
   const linksIn = (text) => [...text.matchAll(LINK_RE)].map(([, type, id]) => ({ type, id }));
   const stripLinks = (text) => text.replace(LINK_RE, '').trim();
   const linkedFile = (id) => S.items.find((x) => x.id === id && (x.type === 'file' || x.type === 'folder'));
-  const stackCount = (id) => S.items.filter((x) => x.stackId === id && !x.channelId).length;
+  const stackCount = (id) => S.items.filter((x) => x.stackId === id && !x.channelId && !x.underId).length;
 
   function linkName({ type, id }) {
     if (type === 'file') return linkedFile(id)?.name || 'Removed file';
@@ -6782,7 +6782,7 @@
   }
 
   // Notes are text cards in the campaign's stack, so they sit in the stack next to its files.
-  const notesOf = (c) => S.items.filter((it) => it.stackId === c.stackId && it.type === 'text').sort((a, b) => (b.editedAt || b.createdAt) - (a.editedAt || a.createdAt));
+  const notesOf = (c) => S.items.filter((it) => it.stackId === c.stackId && it.type === 'text' && !it.underId).sort((a, b) => (b.editedAt || b.createdAt) - (a.editedAt || a.createdAt));
   function notesMenu(anchor, c) {
     const notes = notesOf(c);
     openMenu(anchor, [
@@ -7501,7 +7501,7 @@
           ['Files', S.items.filter((x) => (x.type === 'file' || x.type === 'folder') && hit(x.name)).sort((a, b) => b.createdAt - a.createdAt).slice(0, 10)
             .map((x) => ({ icon: h('span', { class: 'pk-ic', html: x.type === 'folder' ? I.folder : I.link }), label: x.name, sub: fmtSize(x.size), run: () => openPreview(x) }))],
           ['Docs', S.items.filter((x) => x.type === 'text' && hit(x.text)).sort((a, b) => (b.editedAt || b.createdAt) - (a.editedAt || a.createdAt)).slice(0, 10)
-            .map((x) => ({ icon: h('span', { class: 'pk-ic', html: I.copy }), label: docTitle(x), sub: `${docWhere(x)} · ${ago(x.editedAt || x.createdAt)}`, two: true, run: () => openDoc(x) }))],
+            .map((x) => ({ icon: h('span', { class: 'pk-ic', html: I.copy }), label: docTitle(x), sub: `${[docWhere(x), ...docPath(x).map(docTitle)].join(' › ')} · ${ago(x.editedAt || x.createdAt)}`, two: true, run: () => openDoc(x) }))],
           ['Campaigns', [...S.campaigns.filter((c) => hit(c.name) || hit(c.brief)).map((c) => ({ icon: h('span', { class: 'pk-ic', html: I.target }), label: c.name, sub: Math.round(campProgress(c) * 100) + '%', run: () => openCampaign(c.id) })),
             ...S.goals.filter((g) => hit(g.title)).slice(0, 10).map((g) => ({ icon: h('span', { class: 'pk-ic', html: I.target }), label: g.title, sub: `${campById(g.campaignId)?.name} · ${goalProgress(g).label}`, run: () => openCampaign(g.campaignId) }))]],
           ['Tasks', S.tasks.filter((t) => hit(t.text)).slice(0, 10)
@@ -9081,7 +9081,7 @@
     for (let i = 0; i < out.length; i++) for (const d of dirs()) if (d.parentId === out[i]) out.push(d.id);
     return out;
   };
-  const dirItems = (id) => S.items.filter((x) => x.dirId === id && !x.parentId);
+  const dirItems = (id) => S.items.filter((x) => x.dirId === id && !x.parentId && !x.underId);
   const dirCount = (id) => { const t = new Set(dirTreeIds(id)); return S.items.filter((x) => t.has(x.dirId)).length; };
   // Every folder, parents first, for the pickers. skip: a folder (and what's in it) to leave out.
   const dirFlat = (skip) => {
@@ -9757,7 +9757,7 @@
   function techDocsSheet(p) {
     const linked = prRecs(p.id).filter((r) => r.docId).map((r) => ({ r, it: S.items.find((x) => x.id === r.docId) })).filter((x) => x.it);
     const d = dirs().find((x) => x.name === `${p.name} docs` && !x.parentId);
-    const inFolder = d ? S.items.filter((x) => x.dirId === d.id && x.type === 'text' && !linked.some((y) => y.it.id === x.id)) : [];
+    const inFolder = d ? S.items.filter((x) => x.dirId === d.id && x.type === 'text' && !x.underId && !linked.some((y) => y.it.id === x.id)) : [];
     const row = (it, sub) => h('button', { class: 'need-row', onclick: () => { closeSheet(); openDoc(it); } }, h('span', { class: 'need-ic' }, '📄'), h('span', { class: 'need-text' }, h('b', {}, docTitle(it)), h('small', {}, sub)));
     const kinds = ['prd', 'spec', 'adr', 'setup', 'runbook', 'releasenotes'];
     sheet(`${p.name} · docs`, [
@@ -12242,6 +12242,96 @@
   const docSnippet = (it) => (it.title != null ? it.text : it.text.trim()).split('\n').slice(1)
     .map((l) => l.trim().replace(/^(#{1,3}|[-*+•]|\d+[.)]|>|\[[ xX]\]|```|---|\|)\s*/, '').replace(/\s*\|\s*/g, ' · ')).filter(Boolean).join(' · ').slice(0, 160);
   const docWhere = (it) => (it.dirId ? dirById(it.dirId)?.name || 'A folder' : stackById(it.stackId)?.name || 'Stacks');
+  // ----- pages inside pages: a doc's underId is the doc it's in; the server keeps it where its top page is -----
+  const docById = (id) => S.items.find((y) => y.id === id && y.type === 'text');
+  const docParent = (it) => (it?.underId ? docById(it.underId) : null);
+  const docKidsOf = (id) => S.items.filter((y) => y.type === 'text' && y.underId === id);
+  const docPath = (it) => { const out = []; for (let p = docParent(it), i = 0; p && i < 10; p = docParent(p), i++) out.unshift(p); return out; };
+  ColumnDocs.pageName = (id) => { const d = docById(id); return d ? docTitle(d) : 'A page that’s been moved or deleted'; };
+  // Waits for what's typed to reach the server (a new page goes after a block the server must already have).
+  async function docFlush(x) {
+    for (let i = 0; i < 30; i++) {
+      const { ops, order, title } = docLocal(x);
+      if (!x.busy && !ops.length && !order && title === undefined) return;
+      if (!x.busy) await docSave(x);
+      else await new Promise((r) => setTimeout(r, 150));
+    }
+  }
+  async function docNewPage(x, after) {
+    if (x) await docFlush(x);
+    try {
+      const it = await api('POST', '/items', { type: 'text', underId: x ? x.id : undefined, after, doc: { title: '', blocks: [] } });
+      upsert(it);
+      openDoc(it, { fresh: true });
+    } catch (e) {
+      toast(e.message);
+    }
+  }
+  async function docAddPageInside(parent) {
+    try {
+      const it = await api('POST', '/items', { type: 'text', underId: parent.id, doc: { title: '', blocks: [] } });
+      upsert(it);
+      openDoc(it, { fresh: true });
+    } catch (e) {
+      toast(e.message);
+    }
+  }
+  // To the trash, with Undo. Pages inside go with it.
+  async function docTrash(it) {
+    const n = docKidsOf(it.id).length;
+    if (DV.doc?.id === it.id) DV.doc.trashing = true;
+    try {
+      const r = await api('DELETE', '/items/' + it.id);
+      const gone = new Set([it.id]);
+      for (let grew = true; grew;) { grew = false; for (const y of S.items) if (y.underId && gone.has(y.underId) && !gone.has(y.id)) { gone.add(y.id); grew = true; } }
+      S.items = S.items.filter((y) => !gone.has(y.id));
+      if (DV.doc?.id === it.id) closeDoc(true);
+      else if (toolOpen === 'docs' && !DV.doc) renderTool();
+      toast(`“${docTitle(it)}”${n ? ' and the pages inside it' : ''} moved to the trash`, { label: 'Undo', run: () => docRestore2(r.trash?.id || it.id) });
+    } catch (e) {
+      if (DV.doc) DV.doc.trashing = false;
+      toast(e.message);
+    }
+  }
+  async function docRestore2(id) {
+    try {
+      const it = await api('POST', `/trash/${id}/restore`);
+      upsert(it);
+      toast(`“${docTitle(it)}” is back${it.underId && docParent(it) ? ' in ' + docTitle(docParent(it)) : ' in ' + docWhere(it)}.`);
+      if (toolOpen === 'docs') renderTool();
+    } catch (e) {
+      toast(e.message);
+    }
+  }
+  // Starred docs, this person's own, at the top of Docs.
+  const docStarred = (id) => (S.me?.stars || []).includes(id);
+  async function docStar(it) {
+    const was = S.me.stars || [];
+    const next = docStarred(it.id) ? was.filter((x) => x !== it.id) : [it.id, ...was];
+    S.me.stars = next;
+    try { S.me.stars = (await api('PUT', '/account/stars', { docs: next })).stars; } catch (e) { S.me.stars = was; toast(e.message); }
+    if (toolOpen === 'docs') renderTool();
+    if (DV.doc?.id === it.id) docBar(DV.doc);
+  }
+  // Into another doc: a picker of the docs this one can go inside (not itself or a page inside it).
+  function docMoveInto(it, anchor) {
+    const mine = new Set([it.id]);
+    for (let grew = true; grew;) { grew = false; for (const y of S.items) if (y.type === 'text' && y.underId && mine.has(y.underId) && !mine.has(y.id)) { mine.add(y.id); grew = true; } }
+    const rows = S.items.filter((y) => y.type === 'text' && !mine.has(y.id) && y.id !== it.underId).sort((a, b) => (b.editedAt || b.createdAt) - (a.editedAt || a.createdAt)).slice(0, 40)
+      .map((y) => ({ label: h('span', { class: 'mfile' }, h('span', { class: 'mfile-name' }, docTitle(y)), h('small', { class: 'mfile-when' }, [...docPath(y).map(docTitle), docWhere(y)].reverse().join(' · '))), run: () => docMoveTo(it, { underId: y.id }) }));
+    openMenu(anchor, [{ head: 'Put it inside…' }, ...(it.underId ? [{ label: 'Out to a page of its own', run: () => docMoveTo(it, { underId: null }) }] : []), ...(rows.length ? rows : [{ head: 'No other docs yet' }])]);
+  }
+  async function docMoveTo(it, body) {
+    try {
+      upsert(await api('PATCH', '/items/' + it.id, body));
+      const p = docParent(S.items.find((y) => y.id === it.id));
+      toast(p ? `Moved into ${docTitle(p)}` : 'Moved');
+      if (DV.doc?.id === it.id) docBar(DV.doc);
+      if (toolOpen === 'docs') renderTool();
+    } catch (e) {
+      toast(e.message);
+    }
+  }
   async function newDoc(dest = {}, start = {}) {
     try {
       const it = await api('POST', '/items', { type: 'text', doc: { title: start.title || '', blocks: start.blocks || [] }, ...dest });
@@ -12286,6 +12376,9 @@
         return f && f.type === 'file' ? { name: f.name, url: fileUrl(f), image: kind(f) === 'image', size: fmtSize(f.size) } : null;
       },
       openFile: (id) => { const f = S.items.find((y) => y.id === id); if (f) openPreview(f); },
+      pageInfo: (id) => { const d = docById(id); return d ? { title: docTitle(d), pages: docKidsOf(id).length } : null; },
+      openPage: (id) => { const d = docById(id); if (d) openDoc(d); else toast('That page has been moved or deleted.'); },
+      newPage: (after) => docNewPage(x, after),
       menu: openMenu,
       toast,
       refInfo: docRefInfo,
@@ -12345,14 +12438,21 @@
       { label: 'Version history', run: () => { x.side = 'history'; docSide(x); } },
       docCanLock(it) ? { label: it.locked ? 'Unlock: let everyone edit' : 'Lock: only you, owners and admins can edit', run: () => api('PATCH', '/items/' + x.id, { locked: !it.locked }).then(upsert).then(() => docLockChanged(x), (er) => toast(er.message)) } : null,
       { head: '' },
+      { label: docStarred(it.id) ? '★ Starred · unstar' : '☆ Star it', run: () => docStar(it) },
+      x.ed.readOnly ? null : { label: '📄 Add a page inside', run: () => docNewPage(x) },
+      { label: it.underId ? 'Move into another doc… (or out)' : 'Move into another doc…', run: () => docMoveInto(it, e.target) },
       { label: it.dirId ? `In ${docWhere(it)} · move it` : 'Save to folder', run: () => folderMenu(it, e.target) },
       { label: 'Move to stack', run: () => stackMenu(it, e.target) },
-      docCanEdit(it) ? { label: 'Delete doc', danger: true, run: async () => { await api('DELETE', '/items/' + x.id).catch((er) => toast(er.message)); closeDoc(true); } } : null,
+      docCanEdit(it) ? { label: '🗑 Move to trash', run: () => docTrash(it) } : null,
     ].filter(Boolean));
+    // Where it is: its place, then each page it's inside.
+    const crumbs = h('span', { class: 'dv-where' }, h('button', { class: 'link dv-crumb', title: 'All docs', onclick: docsLibrary }, docWhere(it)),
+      ...docPath(it).flatMap((p) => [h('span', { class: 'dv-sep', 'aria-hidden': 'true' }, '›'), h('button', { class: 'link dv-crumb', onclick: () => openDoc(p) }, docTitle(p))]));
     bar.replaceChildren(...[
       h('button', { class: 'icon-btn', 'aria-label': 'Close doc', title: toolOpen === 'docs' ? 'Back to all docs' : 'Close', html: I.back, onclick: () => closeDoc() }),
       h('button', { class: 'btn small dv-lib', title: 'Every doc you can see, with search', onclick: docsLibrary }, 'All docs'),
-      h('span', { class: 'dv-where' }, docWhere(it)),
+      crumbs,
+      docStarred(it.id) ? h('button', { class: 'icon-btn dv-star on', title: 'Starred · tap to unstar', 'aria-label': 'Unstar', onclick: () => docStar(it) }, '★') : null,
       it.locked ? h('span', { class: 'dv-badge', title: `Locked by ${it.lockedBy || 'its maker'}: only they and team admins can edit` }, x.ed.readOnly ? '🔒 Read only' : '🔒 Locked') : null,
       x.status,
       x.here.length ? h('span', { class: 'dv-here', title: x.here.map((p) => p.name).join(', ') + ' also here' }, x.here.slice(0, 5).map((p) => h('i', { style: `--h:${p.hue}` }, p.name[0].toUpperCase()))) : null,
@@ -12655,26 +12755,84 @@
   const SIGN_BADGE = { sent: 'Waiting for signature', viewed: 'Opened by signer', signed: 'Signed', expired: 'Signing link expired', declined: 'Signer declined' };
   const docSign = (x) => SG.list.find((y) => y.docId === x.id && SIGN_BADGE[y.status]);
   // The Docs tool: every doc you can see, newest first.
-  const DK = { q: '' };
+  const DK = { q: '', open: new Set(), trash: false };
+  // Docs: starred and recent first, then every doc where it's kept (a folder or a stack), with the pages inside each
+  // one under it. Search looks in every page; the trash keeps deleted docs for 30 days.
   function docsTool() {
     const all = S.items.filter((x) => x.type === 'text').sort((a, b) => (b.editedAt || b.createdAt) - (a.editedAt || a.createdAt));
     const list = h('div', { class: 'docs-list' });
+    const kids = new Map();
+    for (const d of all) if (d.underId && docById(d.underId)) (kids.get(d.underId) || kids.set(d.underId, []).get(d.underId)).push(d);
+    const pathLine = (x) => [docWhere(x), ...docPath(x).map(docTitle)].join(' › ');
+    const rowMenu = (e, x) => {
+      e.stopPropagation();
+      const at = e.currentTarget;
+      openMenu(at, [
+        { label: docStarred(x.id) ? '★ Unstar' : '☆ Star it', run: () => docStar(x) },
+        docCanEdit(x) ? { label: '📄 Add a page inside', run: () => docAddPageInside(x) } : null,
+        { label: 'Move into another doc…', run: () => docMoveInto(x, at) },
+        docCanEdit(x) ? { label: '🗑 Move to trash', run: () => docTrash(x) } : null,
+      ].filter(Boolean));
+    };
+    // One doc's row; in the tree, an arrow opens the pages inside it.
+    const docRow = (x, { lvl = 0, tree = false } = {}) => {
+      const sg = docSign(x);
+      const inside = kids.get(x.id) || [];
+      const open = DK.open.has(x.id);
+      const sub = tree ? (inside.length ? plural(inside.length, 'page') + ' inside' : '') : pathLine(x);
+      const row = h('div', { class: 'bill doc-row' + (tree ? ' doc-tree' : ''), style: `--in:${lvl}`, 'data-doc': x.id, onclick: () => openDoc(x) },
+        tree ? (inside.length ? h('button', { class: 'doc-arrow' + (open ? ' open' : ''), 'aria-label': open ? 'Hide the pages inside' : 'Show the pages inside', 'aria-expanded': String(open), onclick: (e) => { e.stopPropagation(); if (open) DK.open.delete(x.id); else DK.open.add(x.id); draw(); } }) : h('span', { class: 'doc-arrow none', 'aria-hidden': 'true' })) : null,
+        h('span', { class: 'bill-name' }, h('span', { class: 'doc-t' }, docStarred(x.id) ? h('span', { class: 'doc-star', title: 'Starred' }, '★ ') : null, docTitle(x)),
+          h('small', {}, [sub, docSnippet(x)].filter(Boolean).join(' · '))),
+        h('span', { class: 'bill-right' }, sg ? h('button', { class: `doc-sign s-${sg.status}`, title: `Sent to ${sg.signer.name}`, onclick: (e) => { e.stopPropagation(); openTool('signs'); } }, SIGN_BADGE[sg.status]) : null,
+          h('small', {}, ago(x.editedAt || x.createdAt))),
+        h('span', { class: 'doc-acts' },
+          docCanEdit(x) ? h('button', { class: 'icon-btn small doc-add', title: 'Add a page inside', 'aria-label': 'Add a page inside ' + docTitle(x), onclick: (e) => { e.stopPropagation(); docAddPageInside(x); } }, '+') : null,
+          h('button', { class: 'icon-btn small doc-more', title: 'More', 'aria-label': 'More for ' + docTitle(x), html: I.more, onclick: (e) => rowMenu(e, x) })));
+      return tree && open ? [row, ...inside.flatMap((k) => docRow(k, { lvl: lvl + 1, tree: true }))] : [row];
+    };
+    const head = (t) => h('h4', { class: 'docs-h' }, t);
     const draw = () => {
+      if (DK.trash) return drawTrash();
       const s = DK.q.trim().toLowerCase();
-      const hits = all.filter((x) => !s || x.text.toLowerCase().includes(s)).slice(0, 200);
-      list.replaceChildren(...(hits.length ? hits.map((x) => {
-        const sg = docSign(x);
-        return h('div', { class: 'bill doc-row', onclick: () => openDoc(x) },
-          h('span', { class: 'bill-name' }, docTitle(x), h('small', {}, [docWhere(x), docSnippet(x)].filter(Boolean).join(' · '))),
-          h('span', { class: 'bill-right' }, sg ? h('button', { class: `doc-sign s-${sg.status}`, title: `Sent to ${sg.signer.name}`, onclick: (e) => { e.stopPropagation(); openTool('signs'); } }, SIGN_BADGE[sg.status]) : null,
-            h('small', {}, ago(x.editedAt || x.createdAt))));
-      }) : [h('p', { class: 'day-hint' }, s ? 'No doc has that in it.' : 'No docs yet. Start one: a plan, a script, meeting notes, a process to follow.')]));
+      if (s) {
+        const hits = all.filter((x) => x.text.toLowerCase().includes(s) || docTitle(x).toLowerCase().includes(s)).slice(0, 200);
+        return list.replaceChildren(...(hits.length ? hits.flatMap((x) => docRow(x)) : [h('p', { class: 'day-hint' }, 'No doc has that in it.')]));
+      }
+      if (!all.length) return list.replaceChildren(h('p', { class: 'day-hint' }, 'No docs yet. Start one: a plan, a script, meeting notes, a process to follow. Pages can go inside pages, like a handbook.'));
+      const stars = (S.me?.stars || []).map(docById).filter(Boolean);
+      // Top pages, grouped by where they're kept.
+      const groups = new Map();
+      for (const x of all) {
+        if (x.underId && docById(x.underId)) continue;
+        const key = docWhere(x);
+        (groups.get(key) || groups.set(key, []).get(key)).push(x);
+      }
+      list.replaceChildren(
+        ...(stars.length ? [head('Starred'), ...stars.flatMap((x) => docRow(x))] : []),
+        ...(all.length > 6 ? [head('Recent'), ...all.slice(0, 5).flatMap((x) => docRow(x))] : []),
+        ...[...groups.entries()].sort((a, b) => a[0].localeCompare(b[0])).flatMap(([where, docs]) => [head(where), ...docs.flatMap((x) => docRow(x, { tree: true }))]));
+    };
+    const drawTrash = async () => {
+      list.replaceChildren(h('p', { class: 'day-hint dv-loading' }, 'Opening the trash…'));
+      let rows;
+      try { rows = await api('GET', '/trash'); } catch (e) { return list.replaceChildren(h('p', { class: 'day-hint' }, e.message)); }
+      if (!DK.trash) return;
+      const left = (e) => Math.max(1, Math.ceil((e.until - Date.now()) / 864e5));
+      list.replaceChildren(h('p', { class: 'day-hint' }, 'Deleted docs stay here for 30 days, with the pages inside them, then they’re gone for good. You see the ones you deleted or made (owners and admins see all).'),
+        ...(rows.length ? rows.map((e) => h('div', { class: 'bill doc-row trash-row', 'data-trash': e.id },
+          h('span', { class: 'bill-name' }, h('span', {}, e.title), h('small', {}, [`Deleted by ${e.by} ${ago(e.at)}`, e.pages ? plural(e.pages, 'page') + ' inside' : '', `gone in ${plural(left(e), 'day')}`].filter(Boolean).join(' · '))),
+          h('span', { class: 'doc-acts on' },
+            h('button', { class: 'btn small trash-back', onclick: async (ev) => { ev.stopPropagation(); await docRestore2(e.id); draw(); } }, 'Put back'),
+            h('button', { class: 'btn small danger trash-gone', 'data-label': '1', onclick: (ev) => { ev.stopPropagation(); confirmClick(ev.currentTarget, async () => { try { await api('DELETE', '/trash/' + e.id); toast('Deleted for good'); draw(); } catch (er) { toast(er.message); } }); } }, 'Delete for good'))))
+          : [h('p', { class: 'day-hint' }, 'The trash is empty.')]));
     };
     draw();
     return [
       h('div', { class: 'dir-tools' },
-        h('input', { type: 'search', class: 'dir-search', value: DK.q, placeholder: 'Search docs', 'aria-label': 'Search docs', oninput: (e) => { DK.q = e.target.value; draw(); } }),
-        h('button', { class: 'btn primary-btn', onclick: () => newDoc() }, '+ New doc')),
+        DK.trash ? h('button', { class: 'btn small', onclick: () => { DK.trash = false; renderTool(); } }, '← All docs') : h('input', { type: 'search', class: 'dir-search', value: DK.q, placeholder: 'Search docs', 'aria-label': 'Search docs', oninput: (e) => { DK.q = e.target.value; draw(); } }),
+        DK.trash ? h('b', { class: 'docs-trash-h' }, 'Trash') : h('button', { class: 'btn primary-btn', onclick: () => newDoc() }, '+ New doc'),
+        DK.trash ? null : h('button', { class: 'btn small docs-trash', title: 'Deleted docs, for 30 days', onclick: () => { DK.trash = true; renderTool(); } }, '🗑 Trash')),
       list,
     ];
   }
@@ -12948,7 +13106,10 @@
     const from = docsMentioning(['doc:' + x.id], x.id);
     const it = S.items.find((y) => y.id === x.id);
     const tasks = S.tasks.filter((t) => t.docId === x.id);
-    box.replaceChildren(...[...(from.length ? [h('h4', {}, `Linked from ${from.length === 1 ? '1 doc' : from.length + ' docs'}`), ...from.map((d) => h('button', { class: 'dv-link', onclick: () => openDoc(d) }, '📄 ', docTitle(d), h('small', {}, ' · ' + docWhere(d))))] : []),
+    // Pages inside that have no block here (their block was taken out): still in this doc, listed at the end.
+    const placed = new Set(x.ed.blocks.filter((b) => b.type === 'page').map((b) => b.docId));
+    const loose = docKidsOf(x.id).filter((d) => !placed.has(d.id));
+    box.replaceChildren(...[...(loose.length ? [h('h4', {}, 'More pages inside'), ...loose.map((d) => h('button', { class: 'dv-link', onclick: () => openDoc(d) }, '📄 ', docTitle(d)))] : []),...(from.length ? [h('h4', {}, `Linked from ${from.length === 1 ? '1 doc' : from.length + ' docs'}`), ...from.map((d) => h('button', { class: 'dv-link', onclick: () => openDoc(d) }, '📄 ', docTitle(d), h('small', {}, ' · ' + docWhere(d))))] : []),
       ...(tasks.length ? [h('small', { class: 'dv-tasks-note' }, `${plural(tasks.length, 'task')} made here · ${tasks.filter((t) => t.done).length} done`)] : []),
       it?.editedAt ? h('small', { class: 'dv-edited' }, `Edited ${ago(it.editedAt)}`) : null].filter(Boolean));
   }

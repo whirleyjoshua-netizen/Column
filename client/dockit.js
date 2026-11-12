@@ -24,6 +24,7 @@ window.ColumnDocs = (() => {
     { type: 'code', label: 'Code', hint: 'Monospaced text', keys: 'code snippet ```' },
     { type: 'divider', label: 'Divider', hint: 'A line between sections', keys: 'divider line hr rule ---' },
     { type: 'table', label: 'Table', hint: 'Rows and columns', keys: 'table grid rows columns' },
+    { type: 'page', label: 'Page', hint: 'A page inside this one', keys: 'page subpage sub-page child nested inside wiki' },
     { type: 'image', label: 'Image', hint: 'Upload a picture', keys: 'image picture photo img' },
     { type: 'file', label: 'File', hint: 'Attach a file', keys: 'file attachment upload pdf' },
     { type: 'ai', label: 'Write with AI', hint: 'Ask for a section, a list, a summary…', keys: 'ai write draft generate assistant sidekick ✦' },
@@ -37,6 +38,7 @@ window.ColumnDocs = (() => {
     { type: 'live:list', live: 'list', label: 'Call list', hint: 'How far through a list you are', keys: 'call list prospects contacted live' },
     { type: 'live:pipeline', live: 'pipeline', label: 'Pipeline', hint: 'A project’s deals or quotes by stage, with totals', keys: 'pipeline deals quotes bids stages project crm forecast live' },
   ];
+  let pageName = () => 'Untitled';
   const LIVE_NAME = { campaign: 'Campaign summary', goal: 'Goal progress', tasks: 'Task list', calls: 'Call stats', budgets: 'Budgets', list: 'Call list', pipeline: 'Pipeline' };
   const LABEL = Object.fromEntries(COMMANDS.map((c) => [c.type, c.label]));
   const PH = { p: 'Type “/” for blocks', h1: 'Heading 1', h2: 'Heading 2', h3: 'Heading 3', ul: 'List', ol: 'List', todo: 'To-do', toggle: 'Toggle', quote: 'Quote', callout: 'Write something', code: 'Code' };
@@ -401,6 +403,7 @@ window.ColumnDocs = (() => {
       if (b.type === 'table') return b.rows.map((r) => '| ' + r.map(runsText).join(' | ') + ' |').join('\n');
       if (b.type === 'file') return `[${b.name || 'File'}]`;
       if (b.type === 'live') return `[${LIVE_NAME[b.source]}]`;
+      if (b.type === 'page') return `${pad}[Page: ${pageName(b)}]`;
       return pad + t;
     }).join('\n');
   }
@@ -446,7 +449,8 @@ window.ColumnDocs = (() => {
       } else if (b.type === 'live') {
         const lines = live?.(b) || [LIVE_NAME[b.source]];
         into.append(el('p', {}, el('b', {}, lines[0])), ...lines.slice(1).map((l) => el('p', {}, l)));
-      } else into.append(runsEl(b.runs, el('p')));
+      } else if (b.type === 'page') into.append(el('p', {}, '📄 ' + pageName(b)));
+      else into.append(runsEl(b.runs, el('p')));
     }
     return root;
   }
@@ -474,7 +478,8 @@ window.ColumnDocs = (() => {
         const pic = await pics?.(b.itemId);
         if (pic) out.push({ t: 'img', src: pic.src, w: pic.w, h: pic.h });
         else out.push({ t: 'p', runs: [{ text: `[${b.name || 'File'}]`, i: true }] });
-      } else out.push({ t: 'p', runs: runs(b.runs) });
+      } else if (b.type === 'page') out.push({ t: 'p', runs: [{ text: '📄 ' + pageName(b) }] });
+      else out.push({ t: 'p', runs: runs(b.runs) });
     }
     return out;
   }
@@ -636,6 +641,7 @@ window.ColumnDocs = (() => {
       else if (b.type === 'live') r.append(liveEl(b));
       else if (b.type === 'file') r.append(fileEl(b));
       else if (b.type === 'table') r.append(tableEl(b));
+      else if (b.type === 'page') r.append(pageEl(b));
       else {
         const lead = b.type === 'ul' ? el('span', { class: 'dk-lead dk-bullet', contenteditable: 'false' }, ['•', '◦', '▪'][(b.indent || 0) % 3])
           : b.type === 'ol' ? el('span', { class: 'dk-lead dk-num', contenteditable: 'false' }, num + '.')
@@ -681,6 +687,13 @@ window.ColumnDocs = (() => {
       if (!f) return el('div', { class: 'dk-file gone' }, `${b.name || 'A file'} isn’t here any more`);
       if (f.image) return el('figure', { class: 'dk-figure' }, el('img', { src: f.url, alt: f.name || '', loading: 'lazy', draggable: 'false' }), el('figcaption', {}, f.name));
       return el('div', { class: 'dk-file', role: 'button', tabindex: '0' }, el('span', { class: 'dk-file-ic' }, '📎'), el('span', { class: 'dk-file-n' }, f.name || b.name), f.size ? el('small', {}, f.size) : null);
+    }
+    // A page inside this one: its name, as it's called now, and how many pages are inside it.
+    function pageEl(b) {
+      const p = opts.pageInfo?.(b.docId);
+      if (!p) return el('div', { class: 'dk-page gone', contenteditable: 'false' }, el('span', { class: 'dk-page-ic' }, '📄'), el('span', { class: 'dk-page-n' }, 'A page that’s been moved or deleted'));
+      return el('div', { class: 'dk-page', role: 'link', tabindex: '0', contenteditable: 'false', title: 'Open the page' }, el('span', { class: 'dk-page-ic' }, p.icon || '📄'),
+        el('span', { class: 'dk-page-n' }, p.title || 'Untitled'), p.pages ? el('small', {}, p.pages === 1 ? '1 page inside' : p.pages + ' pages inside') : null);
     }
     function tableEl(b) {
       const t = el('table', { class: 'dk-table' + (b.header ? ' head' : '') });
@@ -1144,6 +1157,7 @@ window.ColumnDocs = (() => {
         e.preventDefault();
         const b = byId(ids[0]);
         if (b?.type === 'file') return opts.openFile?.(b.itemId);
+        if (b?.type === 'page') return opts.openPage?.(b.docId);
         return TEXT.has(b?.type) || b?.type === 'table' ? focus(b.id, 'end') : null;
       }
       if (k === 'Tab') { e.preventDefault(); snap(); indent(ids, e.shiftKey ? -1 : 1); render(); select(ids); return changed(); }
@@ -1529,6 +1543,21 @@ window.ColumnDocs = (() => {
         if (empty && fromSlash) focus(b.id);
         return pickFiles(b.id, type === 'image');
       }
+      // A page: made on the server (which puts its block here), then opened.
+      if (type === 'page') {
+        if (!opts.newPage) { render(); return opts.toast?.('Pages can’t be added here.'); }
+        // Typed on an empty line: the page takes that line's place.
+        let after = b.id;
+        if (empty && b.type === 'p' && S.blocks.length > 1) {
+          snap();
+          const i = idx(b.id);
+          after = i > 0 ? S.blocks[i - 1].id : null;
+          S.blocks.splice(i, 1);
+          changed();
+        }
+        render();
+        return opts.newPage(after);
+      }
       if (type === 'divider' || type === 'table') {
         const n = newBlock(type, lvl);
         const after = newBlock('p', lvl);
@@ -1710,6 +1739,7 @@ window.ColumnDocs = (() => {
           { label: b.header ? 'First row as plain cells' : 'First row as headings', run: () => { snap(); b.header = !b.header; if (!b.header) delete b.header; render(); changed(); } });
       }
       if (b.type === 'file') rows.push({ label: 'Open', run: () => opts.openFile?.(b.itemId) });
+      if (b.type === 'page') rows.push({ label: 'Open the page', run: () => opts.openPage?.(b.docId) });
       if (b.type === 'todo' && opts.makeTask) {
         rows.push({ head: 'Task' });
         if (!b.taskId) rows.push({ label: 'Make it a task', run: () => { if (!runsText(b.runs).trim()) return opts.toast?.('Write the to-do first.'); linkTask(b); } });
@@ -1826,6 +1856,7 @@ window.ColumnDocs = (() => {
         const ref = e.target.closest('.dk-ref');
         if (ref) { e.preventDefault(); return opts.openRef?.({ k: ref.dataset.k, id: ref.dataset.id }); }
         if (e.target.closest('.dk-figure, .dk-file') && b?.type === 'file') return opts.openFile?.(b.itemId);
+        if (e.target.closest('.dk-page') && b?.type === 'page') { e.preventDefault(); return opts.openPage?.(b.docId); }
         if (e.target.closest('.dk-grip')) { e.preventDefault(); return blockMenu(e.target, b); }
         if (e.target.closest('a') && (isMac ? e.metaKey : e.ctrlKey)) { e.preventDefault(); return open(e.target.closest('a').href, '_blank', 'noopener'); }
         if (e.target.closest('.dk-check, .dk-arrow, .dk-emoji, .dk-add, .dk-tbl-add')) e.preventDefault();
@@ -1874,7 +1905,8 @@ window.ColumnDocs = (() => {
       }
       if (e.target.closest('.dk-task-bits')) return;
       if (e.target.closest('.dk-live-body button, .dk-live-body a, .dk-live-body input')) return;
-      if (e.target.closest('.dk-figure, .dk-file, .dk-hr, .dk-lv')) {
+      if (e.target.closest('.dk-page') && b?.type === 'page' && !e.shiftKey) { e.preventDefault(); return opts.openPage?.(b.docId); }
+      if (e.target.closest('.dk-figure, .dk-file, .dk-hr, .dk-lv, .dk-page')) {
         e.preventDefault();
         if (b.type === 'file' && (e.detail > 1 || S.sel.includes(id))) return opts.openFile?.(b.itemId);
         return e.shiftKey && S.anchor ? select(range(S.anchor, id), S.anchor) : select([id]);
@@ -2133,5 +2165,8 @@ window.ColumnDocs = (() => {
     };
   }
 
-  return { editor, diff, apply, toText, toHtml, toPdf, fromText, fromHtml, runsText, uid, LABEL };
+  // Sub-pages are named as they're called now: the app says how (out.pageName = (docId) => title).
+  const out = { editor, diff, apply, toText, toHtml, toPdf, fromText, fromHtml, runsText, uid, LABEL, pageName: null };
+  pageName = (b) => out.pageName?.(b.docId) || 'Untitled';
+  return out;
 })();

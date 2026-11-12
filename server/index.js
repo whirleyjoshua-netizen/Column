@@ -61,7 +61,7 @@ fs.mkdirSync(FILES_DIR, { recursive: true });
 // Everything lives in memory; save() hands the whole thing to the store a moment later.
 const IMPORT_PATH = path.join(DATA_DIR, 'import-pending.json');
 const store = await openStore({ url: process.env.DATABASE_URL, file: DB_PATH, importFile: IMPORT_PATH });
-let db = { workspaces: {}, tokens: {}, items: {}, entries: {}, tasks: {}, uploads: {}, campaigns: {}, goals: {}, attempts: {}, lists: {}, templates: {}, calendars: {}, ai: {}, pss: {}, sends: {}, bills: {}, meetings: {}, money: {}, budgets: {}, plans: {}, sidekick: {}, vaults: {}, vaultItems: {}, signs: {}, signatures: {}, trips: {}, pins: {}, zones: {}, comments: {}, users: {}, resets: {}, invites: {}, exports: {}, contacts: {}, optouts: {}, unsubs: {}, gcontacts: {}, automations: {}, notices: {}, calfeeds: {}, pushSubs: {}, keys: {}, mileage: {} };
+let db = { workspaces: {}, tokens: {}, items: {}, entries: {}, tasks: {}, uploads: {}, campaigns: {}, goals: {}, attempts: {}, lists: {}, templates: {}, calendars: {}, ai: {}, pss: {}, sends: {}, bills: {}, meetings: {}, money: {}, budgets: {}, plans: {}, sidekick: {}, vaults: {}, vaultItems: {}, signs: {}, signatures: {}, trips: {}, pins: {}, zones: {}, comments: {}, users: {}, resets: {}, invites: {}, exports: {}, contacts: {}, optouts: {}, unsubs: {}, gcontacts: {}, automations: {}, notices: {}, calfeeds: {}, pushSubs: {}, keys: {}, mileage: {}, trash: {} };
 const loaded = await store.load();
 if (loaded.db) db = { ...db, ...loaded.db };
 if (loaded.fromFile) console.log(`Moving ${path.basename(loaded.fromFile)} into Postgres.`);
@@ -526,7 +526,7 @@ const needsConfirm = (auth) => mailer.mode !== 'off' && !userOf(auth.ws.members.
 const meAccount = (ws, memberId) => {
   const mem = ws.members.find((x) => x.id === memberId);
   const u = userOf(mem);
-  return { email: u?.email || null, emailVerified: !!u?.emailVerified, pendingEmail: u?.pendingEmail || null, mail: mailer.mode !== 'off', bar: mem?.bar || null, pins: mem?.pins || [], feedTop: !!mem?.feedTop, twoStep: TS.on(u) };
+  return { email: u?.email || null, emailVerified: !!u?.emailVerified, pendingEmail: u?.pendingEmail || null, mail: mailer.mode !== 'off', bar: mem?.bar || null, pins: mem?.pins || [], stars: mem?.docStars || [], feedTop: !!mem?.feedTop, twoStep: TS.on(u) };
 };
 // What each person keeps on their tab bar after Home and Day (theirs alone, in their order). Null: the usual three.
 const PIN_RE = /^(rec|proj|camp|chan|stack|doc):[A-Za-z0-9_-]{1,64}$/;
@@ -646,7 +646,10 @@ function publicItem(it) {
 // The blocks go out only when the doc is opened. Notes from before docs have only text: they read as blocks
 // the first time they're opened, and become blocks for good the first time they're edited.
 // Blocks are flat; nesting is an indent. Text is runs of plain text with marks, never markup.
-const DOC_TYPES = ['p', 'h1', 'h2', 'h3', 'ul', 'ol', 'todo', 'quote', 'callout', 'code', 'toggle', 'divider', 'table', 'file', 'live'];
+// A page block is where a sub-page sits in its parent: { type: 'page', docId }. The sub-page itself is a doc of its
+// own (it.underId is the parent), placed and seen as its top page is.
+const DOC_TYPES = ['p', 'h1', 'h2', 'h3', 'ul', 'ol', 'todo', 'quote', 'callout', 'code', 'toggle', 'divider', 'table', 'file', 'live', 'page'];
+const DOC_DEPTH = 8; // pages inside pages, at most this deep (like folders)
 // A mention points at something else in Kloomie. A live block shows numbers from it, or a snapshot of them.
 const DOC_REFS = ['member', 'campaign', 'goal', 'task', 'doc', 'record'];
 const DOC_LIVE = ['campaign', 'goal', 'tasks', 'calls', 'budgets', 'list', 'pipeline'];
@@ -718,6 +721,10 @@ function cleanDocBlock(v) {
     if (!x.itemId) return null;
     x.name = cleanText(v.name, 255);
   }
+  if (type === 'page') {
+    x.docId = docId(v.docId);
+    if (!x.docId) return null;
+  }
   return x;
 }
 const runsText = (runs) => (runs || []).map((r) => r.text).join('');
@@ -740,6 +747,7 @@ function docText(title, blocks) {
     if (b.type === 'divider') return '---';
     if (b.type === 'table') return b.rows.map((r) => '| ' + r.map(runsText).join(' | ') + ' |').join('\n');
     if (b.type === 'file') return `[${b.name || 'File'}]`;
+    if (b.type === 'page') return `${pad}[Page: ${db.items[b.docId]?.title || 'Untitled'}]`;
     if (b.type === 'live') return `[${{ campaign: 'Campaign summary', goal: 'Goal progress', tasks: 'Task list', calls: 'Call stats', budgets: 'Budgets', list: 'Call list', pipeline: 'Pipeline' }[b.source]}${b.snap ? ' as of ' + fmtDay(b.snap.at) : ''}]`;
     return pad + t;
   });
@@ -943,6 +951,8 @@ function docShareHtml(it, token) {
           const f = db.items[b.itemId];
           return f?.type === 'file' && /^image\/(png|jpe?g|gif|webp)$/.test(f.mime || '') ? `<img src="/s/${token}/img/${f.id}" alt="${escHtml(f.name)}">` : `<p class="muted">📎 ${escHtml(b.name || f?.name || 'A file')}</p>`;
         },
+        // A sub-page shows by name only: its own words aren't part of this link.
+        page: () => (db.items[b.docId]?.underId === it.id ? `<div class="li"><span class="mk">📄</span><div>${escHtml(db.items[b.docId].title || 'Untitled')}</div></div>` : ''),
         live: () => {
           const lines = live[b.id] || [];
           return `<div class="live"><b>${escHtml(lines[0] || 'Numbers')}</b>${lines.slice(1).map((l) => `<div>${escHtml(l)}</div>`).join('')}</div>`;
@@ -1383,14 +1393,104 @@ function removeItemFiles(it) {
   if (it.type === 'folder') for (const f of it.files || []) fsp.rm(path.join(FILES_DIR, f.fid), { force: true }).catch(() => {});
 }
 
-function deleteItem(id) {
+function deleteItem(id, withParent) {
   const it = db.items[id];
   if (!it) return;
   if (it.type === 'message') for (const r of Object.values(db.items)) if (r.parentId === id) deleteItem(r.id);
+  // A doc goes with the pages inside it, so none is left without the page that decides who sees it.
+  if (it.type === 'text') for (const r of Object.values(db.items)) if (r.underId === id) deleteItem(r.id, true);
+  if (it.underId && !withParent) docPageBlock(db.items[it.underId], id, {});
   removeItemFiles(it);
   delete db.items[id];
   save();
   broadcast(it.wsId, { type: 'item:remove', id });
+}
+
+// ---------- pages inside pages ----------
+// A sub-page's block in its parent: put in (after a block, or at the end) or taken out. Editors with the parent
+// open get the change as from any other editor.
+function docPageBlock(parent, childId, { add, after } = {}) {
+  if (!parent || parent.type !== 'text') return;
+  const now = docOf(parent);
+  let ops;
+  if (add) {
+    if (now.blocks.some((b) => b.type === 'page' && b.docId === childId)) return;
+    const at = docId(after) && now.blocks.some((b) => b.id === after) ? after : now.blocks.at(-1)?.id || null;
+    ops = [{ set: { id: rid(8), type: 'page', docId: childId }, after: at }];
+  } else {
+    ops = now.blocks.filter((b) => b.type === 'page' && b.docId === childId).map((b) => ({ del: b.id }));
+    if (!ops.length) return;
+  }
+  parent.blocks = applyDocOps(now.blocks, ops, null);
+  parent.title = now.title;
+  parent.text = docText(parent.title, parent.blocks);
+  parent.refs = docRefs(parent.blocks);
+  parent.v = (parent.v || 0) + 1;
+  parent.editedAt = Date.now();
+  parent.pinned = true;
+  save();
+  broadcast(parent.wsId, { type: 'doc', id: parent.id, item: { id: parent.id }, v: parent.v, ops, sid: 'server' });
+  broadcast(parent.wsId, { type: 'item:update', item: publicItem(parent) });
+}
+// A doc and its pages are kept where the top page is: its folder, or its stack and feed.
+function docPlace(list, top) {
+  for (const x of list) {
+    x.dirId = top.dirId || null;
+    x.stackId = top.dirId ? null : top.stackId || null;
+    x.channelId = top.dirId ? null : top.channelId || null;
+  }
+}
+// Page blocks name only this doc's own sub-pages (a block pointing anywhere else would show another doc's title).
+const ownPageOps = (it, ops) => ops.filter((o) => o.set?.type !== 'page' || (db.items[o.set.docId]?.underId === it.id && db.items[o.set.docId].wsId === it.wsId));
+
+// ---------- the trash: deleted docs, with the pages inside them, for 30 days ----------
+// A trashed doc leaves db.items, so nothing that lists, searches, shares, exports or tells about items sees it.
+// Its comments, history and pictures stay until it's deleted for good. Whoever deleted it, whoever made it and the
+// team's owners and admins see it in the trash (if they could still see it where it was) and can put it back.
+const TRASH_DAYS = 30;
+function trashDoc(ws, auth, it) {
+  const list = docTree(it);
+  const e = { id: it.id, wsId: ws.id, at: Date.now(), by: auth.member, byId: auth.memberId, items: list.map((x) => ({ ...x })), from: { underId: it.underId || null } };
+  if (it.underId) docPageBlock(db.items[it.underId], it.id, {});
+  for (const x of list.slice().reverse()) delete db.items[x.id];
+  db.trash[e.id] = e;
+  save();
+  for (const x of list) broadcast(ws.id, { type: 'item:remove', id: x.id });
+  return e;
+}
+const seesTrash = (auth, e) => !!e && e.wsId === auth.wsId && (e.byId === auth.memberId || e.items[0]?.memberId === auth.memberId || isAdmin(auth)) && canSee(auth, 'item', e.items[0]);
+const publicTrash = (e) => ({ id: e.id, at: e.at, by: e.by, title: e.items[0].title || docOf(e.items[0]).title || 'Untitled', pages: e.items.length - 1, dirId: e.items[0].dirId || null, stackId: e.items[0].stackId || null, underId: e.from.underId, until: e.at + TRASH_DAYS * 864e5 });
+function restoreDoc(ws, auth, e) {
+  const [root, ...rest] = e.items;
+  const lvl = { [root.id]: 0 };
+  let height = 0;
+  for (const x of rest) height = Math.max(height, (lvl[x.id] = (lvl[x.underId] ?? 0) + 1));
+  // Back inside the page it was in, if that's still here and this person may change it; otherwise a top page
+  // where it was (or in the main stack, if that's gone).
+  const parent = e.from.underId && db.items[e.from.underId];
+  const back = parent?.type === 'text' && canSee(auth, 'item', parent) && canEditDoc(parent, auth) && docLevel(parent) + 1 + height <= DOC_DEPTH ? parent : null;
+  if (back) {
+    root.underId = back.id;
+    docPlace(e.items, topItem(back));
+  } else {
+    delete root.underId;
+    const dir = validDir(ws, root.dirId, auth.memberId);
+    docPlace(e.items, dir ? { dirId: dir } : { stackId: validStack(ws, root.stackId, auth.memberId), channelId: validChannel(ws, root.channelId, auth.memberId) });
+  }
+  delete db.trash[e.id];
+  for (const x of e.items) db.items[x.id] = x;
+  if (back) docPageBlock(back, root.id, { add: true });
+  save();
+  for (const x of e.items) broadcast(ws.id, { type: 'item:add', item: publicItem(x) });
+  return root;
+}
+function purgeTrash(which) {
+  for (const e of Object.values(db.trash)) {
+    if (!which(e)) continue;
+    for (const x of e.items) removeItemFiles(x);
+    delete db.trash[e.id];
+  }
+  save();
 }
 
 function addItem(item) {
@@ -1610,6 +1710,16 @@ function mayMoveDir(ws, auth, d, toParent) {
   if (ws.dirs.some((x) => tree.includes(x.id) && x.ownerId && x.ownerId !== auth.memberId)) return false;
   return !Object.values(db.items).some((it) => it.wsId === ws.id && tree.includes(it.dirId) && !ownsItem(auth, it));
 }
+// Who sees what's in a place: a folder's audience, a private campaign's people, an invite-only feed's, or the team.
+function placeAudience(ws, p) {
+  if (p?.dirId) return dirAudience(ws, p.dirId);
+  const st = p?.stackId && ws.stacks.find((x) => x.id === p.stackId);
+  const ch = p?.channelId && ws.channels.find((x) => x.id === p.channelId);
+  const c = db.campaigns[ch?.campaignId || st?.campaignId];
+  if (c?.private) return 'camp:' + c.id;
+  if (ch?.memberIds) return 'feed:' + ch.id;
+  return 'team';
+}
 const mayMoveItem = (ws, auth, it, toDir) => (it.type !== 'text' || canEditDoc(it, auth)) && (dirAudience(ws, it.dirId) === dirAudience(ws, toDir) || isAdmin(auth) || ownsItem(auth, it));
 const dirDepth = (ws, dirId) => {
   let n = 0;
@@ -1621,7 +1731,40 @@ const dirTree = (ws, dirId) => {
   for (let i = 0; i < out.length; i++) for (const d of ws.dirs) if (d.parentId === out[i]) out.push(d.id);
   return out;
 };
-const seesItemDir = (it, memberId) => !it?.dirId || seesDir(db.workspaces[it.wsId], it.dirId, memberId);
+// What decides who sees an item: a reply's message, or a sub-page's top page (all the way up). A sub-page is
+// stored where its top page is, but who sees it is read from the top page, so nothing that moves one without the
+// other can show a sub-page to someone who can't see the page it's in.
+function topItem(x) {
+  if (!x) return x;
+  if (x.parentId) return db.items[x.parentId] || x;
+  let t = x;
+  for (let i = 0; t.underId && i <= DOC_DEPTH + 1; i++) {
+    const up = db.items[t.underId];
+    if (!up || up.wsId !== x.wsId) break;
+    t = up;
+  }
+  return t;
+}
+const seesItemDir = (it, memberId) => { const t = topItem(it); return !t?.dirId || seesDir(db.workspaces[t.wsId], t.dirId, memberId); };
+// A doc and every page inside it, the doc first.
+function docKids(wsId) {
+  const kids = new Map();
+  for (const x of Object.values(db.items)) if (x.underId && x.type === 'text' && x.wsId === wsId) (kids.get(x.underId) || kids.set(x.underId, []).get(x.underId)).push(x);
+  return kids;
+}
+function docTree(it) {
+  const kids = docKids(it.wsId);
+  const out = [it], seen = new Set([it.id]);
+  for (let i = 0; i < out.length; i++) for (const k of kids.get(out[i].id) || []) if (!seen.has(k.id)) { seen.add(k.id); out.push(k); }
+  return out;
+}
+// How many levels a doc's pages go below it (0: none), and how deep it sits (1: a top page).
+function docHeight(it) {
+  const kids = docKids(it.wsId);
+  const below = (x, n) => (n > DOC_DEPTH ? n : Math.max(n, ...(kids.get(x.id) || []).map((y) => below(y, n + 1))));
+  return below(it, 0);
+}
+const docLevel = (it) => { let n = 1; for (let t = it; t.underId && db.items[t.underId] && n <= DOC_DEPTH + 1; t = db.items[t.underId]) n++; return n; };
 
 // Chat feeds (#channels), optionally grouped into folders. Items with a channelId live only in that feed.
 // A feed is invite-only: its creator and the people they add. A campaign's feed follows the campaign instead.
@@ -1632,7 +1775,7 @@ function seesFeed(ch, memberId) {
   return !ch.memberIds || ch.ownerId === memberId || ch.memberIds.includes(memberId);
 }
 function feedOfItem(it) {
-  const top = it.parentId ? db.items[it.parentId] || it : it;
+  const top = topItem(it);
   return top.channelId ? db.workspaces[it.wsId]?.channels.find((c) => c.id === top.channelId) : null;
 }
 const managesFeed = (ch, auth) => ch.ownerId === auth.memberId || isAdmin(auth);
@@ -1896,7 +2039,7 @@ function seesOwn(kind, x, memberId) {
   if (!x || !ownOnly(x.wsId, memberId)) return true;
   if (kind === 'task') return !!campaignOf('task', x) || myTask(x, memberId);
   if (kind === 'item') {
-    const top = x.parentId ? db.items[x.parentId] || x : x;
+    const top = topItem(x);
     return !!campaignOf('item', x) || !!top.channelId || top.type === 'message' || top.memberId === memberId;
   }
   if (kind === 'template') return x.ownerId === memberId;
@@ -1916,7 +2059,7 @@ function campaignOf(kind, x) {
   if (kind === 'task') return x.goalId ? db.goals[x.goalId]?.campaignId || null : null;
   if (kind === 'entry') return x.taskId ? campaignOf('task', db.tasks[x.taskId]) : null;
   if (kind === 'item') {
-    const top = x.parentId ? db.items[x.parentId] || x : x;
+    const top = topItem(x);
     return ws?.channels.find((c) => c.id === top.channelId)?.campaignId || ws?.stacks.find((st) => st.id === top.stackId)?.campaignId || null;
   }
   return null;
@@ -2327,6 +2470,7 @@ function deleteCampaign(ws, c) {
   for (const x of Object.values(db.attempts)) if (x.campaignId === c.id) delete db.attempts[x.id];
   for (const l of Object.values(db.lists)) if (l.campaignId === c.id) delete db.lists[l.id];
   for (const it of Object.values(db.items)) if (it.wsId === ws.id && campaignOf('item', it) === c.id) deleteItem(it.id);
+  purgeTrash((e) => e.wsId === ws.id && campaignOf('item', e.items[0]) === c.id);
   ws.channels = ws.channels.filter((x) => x.campaignId !== c.id);
   ws.stacks = ws.stacks.filter((x) => x.campaignId !== c.id);
   delete db.campaigns[c.id];
@@ -7675,6 +7819,15 @@ async function api(req, res, url) {
       save();
       return send(res, 200, { pins: me.pins || [] });
     }
+    // Starred docs, at the top of Docs for this person only.
+    if (b === 'stars' && !c && m === 'PUT') {
+      const { docs } = await readJson(req);
+      if (!Array.isArray(docs)) return send(res, 400, { error: 'That isn’t a list of docs.' });
+      me.docStars = [...new Set(docs.filter((id) => docId(id) && db.items[id]?.type === 'text' && db.items[id].wsId === ws.id && canSee(auth, 'item', db.items[id])))].slice(0, 50);
+      if (!me.docStars.length) delete me.docStars;
+      save();
+      return send(res, 200, { stars: me.docStars || [] });
+    }
     // Leaving this team, or deleting the whole account (every team it's in). Both need the password.
     if ((b === 'leave' || b === 'delete') && m === 'POST') {
       const { password } = await readJson(req);
@@ -8085,6 +8238,7 @@ async function api(req, res, url) {
         if (ch.ownerId && !managesFeed(ch, auth)) return send(res, 403, { error: 'Only the person who made this feed can delete it.' });
         ws.channels = ws.channels.filter((x) => x.id !== b);
         for (const it of Object.values(db.items)) if (it.wsId === ws.id && it.channelId === b) deleteItem(it.id);
+        purgeTrash((e) => e.wsId === ws.id && e.items[0].channelId === b);
       } else return send(res, 405, { error: 'Method not allowed' });
     }
     save();
@@ -8114,7 +8268,7 @@ async function api(req, res, url) {
 
   if (a === 'items') {
     if (m === 'POST' && !b) {
-      const { type, text, stackId, channelId, parentId, dirId, doc, sealed } = await readJson(req, 4_000_000);
+      const { type, text, stackId, channelId, parentId, dirId, doc, sealed, underId, after } = await readJson(req, 4_000_000);
       // A sealed card: something secret, encrypted in the sender's browser with a one-time code they pass on
       // themselves. Kloomie only keeps the scrambled blob; it can burn after reading and expire.
       if (type === 'sealed') {
@@ -8130,7 +8284,8 @@ async function api(req, res, url) {
       }
       if (!['text', 'message'].includes(type)) return send(res, 400, { error: 'Bad type' });
       // A doc made as one: a title and blocks, and it can start empty. It never auto-clears.
-      const made = type === 'text' && doc && typeof doc === 'object' ? { title: cleanText(doc.title, 300), blocks: (Array.isArray(doc.blocks) ? doc.blocks.slice(0, DOC_BLOCKS) : []).map(cleanDocBlock).filter(Boolean) } : null;
+      // A new doc has no pages inside it yet, so it has no page blocks.
+      const made = type === 'text' && doc && typeof doc === 'object' ? { title: cleanText(doc.title, 300), blocks: (Array.isArray(doc.blocks) ? doc.blocks.slice(0, DOC_BLOCKS) : []).map(cleanDocBlock).filter((x) => x && x.type !== 'page') } : null;
       const t = made ? docText(made.title, made.blocks) : String(text || '').slice(0, 200_000);
       if (!made && !t.trim()) return send(res, 400, { error: 'Empty' });
       // A reply lives in its parent's thread and feed. Threads are one level deep.
@@ -8138,10 +8293,22 @@ async function api(req, res, url) {
       if (parentId && (type !== 'message' || !parent || parent.wsId !== ws.id || parent.type !== 'message' || parent.parentId || !canSee(auth, 'item', parent))) {
         return send(res, 400, { error: 'That thread is gone' });
       }
-      const dir = type === 'text' && !parent ? validDir(ws, dirId, auth.memberId) : null;
-      const where = parent ? { parentId: parent.id, channelId: parent.channelId || null } : dir ? { dirId: dir } : { stackId: validStack(ws, stackId, auth.memberId), channelId: validChannel(ws, channelId, auth.memberId) };
-      if (!parent && channelId && !where.channelId) return send(res, 404, { error: 'Feed not found' });
+      // A page inside another doc: kept where that doc's top page is, seen by whoever sees it, and only made by
+      // someone who may change that doc (it gets the new page's block).
+      const host = underId != null ? db.items[underId] : null;
+      if (underId != null) {
+        if (type !== 'text' || !host || host.wsId !== ws.id || host.type !== 'text' || !canSee(auth, 'item', host)) return send(res, 404, { error: 'That doc is gone.' });
+        if (!canEditDoc(host, auth)) return send(res, 403, { error: 'That doc is locked. Only whoever made it and team admins can add pages to it.' });
+        if (docLevel(host) >= DOC_DEPTH) return send(res, 400, { error: `Pages go ${DOC_DEPTH} deep at most.` });
+      }
+      const dir = type === 'text' && !parent && !host ? validDir(ws, dirId, auth.memberId) : null;
+      const top = host && topItem(host);
+      const where = parent ? { parentId: parent.id, channelId: parent.channelId || null }
+        : host ? { underId: host.id, dirId: top.dirId || null, stackId: top.dirId ? null : top.stackId || null, channelId: top.dirId ? null : top.channelId || null, pinned: true }
+        : dir ? { dirId: dir } : { stackId: validStack(ws, stackId, auth.memberId), channelId: validChannel(ws, channelId, auth.memberId) };
+      if (!parent && !host && channelId && !where.channelId) return send(res, 404, { error: 'Feed not found' });
       const item = addItem(baseItem(auth, { type, text: t, ...where, ...(made ? { title: made.title, blocks: made.blocks, refs: docRefs(made.blocks), v: 0, pinned: true, editedAt: Date.now() } : {}) }));
+      if (host) docPageBlock(host, item.id, { add: true, after });
       if (type === 'message') pinLinked(ws, t);
       if (made) {
         pinDocFiles(ws, made.blocks);
@@ -8192,7 +8359,7 @@ async function api(req, res, url) {
       if (m !== 'PATCH') return send(res, 405, { error: 'Method not allowed' });
       if (!canEditDoc(it, auth)) return send(res, 403, { error: 'This doc is locked. Only whoever made it and team admins can edit it.' });
       const body = await readJson(req, 4_000_000);
-      const ops = cleanDocOps(body.ops);
+      const ops = ownPageOps(it, cleanDocOps(body.ops));
       const order = Array.isArray(body.order) ? body.order.slice(0, DOC_BLOCKS * 2).filter(docId) : null;
       const title = body.title !== undefined ? cleanText(body.title, 300) : undefined;
       const now = docOf(it);
@@ -8252,7 +8419,7 @@ async function api(req, res, url) {
     if (c) return send(res, 404, { error: 'Not found' });
     if (m === 'PATCH') {
       const body = await readJson(req, 300_000);
-      if (it.type === 'text' && !canEditDoc(it, auth) && ['stackId', 'dirId', 'channelId', 'campaignId'].some((k) => body[k] !== undefined)) return send(res, 403, { error: 'This doc is locked. Only whoever made it and team admins can move it.' });
+      if (it.type === 'text' && !canEditDoc(it, auth) && ['stackId', 'dirId', 'channelId', 'campaignId', 'underId'].some((k) => body[k] !== undefined)) return send(res, 403, { error: 'This doc is locked. Only whoever made it and team admins can move it.' });
       if (body.text !== undefined) {
         // Notes (text cards) are shared, like text files. Messages belong to whoever sent them.
         if (it.type !== 'text' && (it.type !== 'message' || !own)) return send(res, 403, { error: 'You can only edit your own messages.' });
@@ -8279,6 +8446,38 @@ async function api(req, res, url) {
         it.locked = !!body.locked;
         it.lockedBy = it.locked ? auth.member : null;
       }
+      // A doc moves with the pages inside it: into another doc (body.underId), out to a top page where it is
+      // (underId null), or to a folder or a stack. Moving it where different people would see it is for whoever made
+      // it and every page inside (or an owner or admin), as for anything else.
+      if (it.type === 'text' && (body.underId !== undefined || ((body.dirId !== undefined || body.stackId !== undefined) && (it.underId || docTree(it).length > 1)))) {
+        const tree = docTree(it);
+        let host = null, place;
+        if (body.underId) {
+          host = db.items[body.underId];
+          if (!host || host.wsId !== ws.id || host.type !== 'text' || !canSee(auth, 'item', host)) return send(res, 404, { error: 'That doc is gone.' });
+          if (tree.includes(host)) return send(res, 400, { error: 'A page can’t go inside itself.' });
+          if (!canEditDoc(host, auth)) return send(res, 403, { error: 'That doc is locked. Only whoever made it and team admins can add pages to it.' });
+          if (docLevel(host) + 1 + docHeight(it) > DOC_DEPTH) return send(res, 400, { error: `Pages go ${DOC_DEPTH} deep at most.` });
+          place = topItem(host);
+        } else if (body.dirId) {
+          if (!validDir(ws, body.dirId, auth.memberId)) return send(res, 404, { error: 'That folder is gone' });
+          place = { dirId: body.dirId };
+        } else if (body.stackId !== undefined) place = { stackId: validStack(ws, body.stackId, auth.memberId) };
+        else if (body.dirId !== undefined) place = { stackId: null };
+        else place = { ...topItem(it) };
+        if (placeAudience(ws, topItem(it)) !== placeAudience(ws, place) && !isAdmin(auth) && !tree.every((x) => ownsItem(auth, x))) return send(res, 403, { error: 'That would change who can see something someone else made. Ask them, or an owner or admin.' });
+        const was = it.underId && it.underId !== host?.id ? db.items[it.underId] : null;
+        if (was && !canEditDoc(was, auth)) return send(res, 403, { error: `“${was.title || 'Untitled'}” is locked. Only whoever made it and team admins can take pages out of it.` });
+        if (was) docPageBlock(was, it.id, {});
+        if (host) it.underId = host.id;
+        else delete it.underId;
+        docPlace(tree, place);
+        for (const x of tree) x.pinned = true;
+        if (host) docPageBlock(host, it.id, { add: true, after: body.after });
+        save();
+        for (const x of tree) broadcast(ws.id, { type: 'item:update', item: publicItem(x) });
+        return send(res, 200, publicItem(it));
+      }
       // Saving to a folder takes it out of its stack; moving it to a stack takes it out of its folder.
       if (body.dirId !== undefined && it.type !== 'message' && !it.channelId) {
         if (body.dirId && !validDir(ws, body.dirId, auth.memberId)) return send(res, 404, { error: 'That folder is gone' });
@@ -8287,7 +8486,10 @@ async function api(req, res, url) {
         it.dirId = body.dirId || null;
         if (it.dirId) it.stackId = null;
       } else if (body.stackId !== undefined) {
-        it.stackId = validStack(ws, body.stackId, auth.memberId);
+        const to = validStack(ws, body.stackId, auth.memberId);
+        // Into or out of a private campaign's stack changes who sees it, like a private folder does.
+        if (placeAudience(ws, it) !== placeAudience(ws, { stackId: to, channelId: it.channelId }) && !isAdmin(auth) && !ownsItem(auth, it)) return send(res, 403, { error: 'That would change who can see something someone else made. Ask them, or an owner or admin.' });
+        it.stackId = to;
         if (it.dirId) it.pinned = true; // fresh out of a folder: don't let auto-clear take it straight away
         it.dirId = null;
       }
@@ -8301,10 +8503,34 @@ async function api(req, res, url) {
       return send(res, 200, publicItem(it));
     }
     if (m === 'DELETE') {
-      if (!mayDelete(auth, it)) return send(res, 403, { error: 'You can only delete your own messages.' });
+      if (!mayDelete(auth, it)) return send(res, 403, { error: it.type === 'text' ? 'This doc is locked. Only whoever made it and team admins can delete it.' : 'You can only delete your own messages.' });
+      // A doc (and the pages inside it) goes to the trash for 30 days; anything else is gone.
+      if (it.type === 'text') {
+        const was = it.underId && db.items[it.underId];
+        if (was && !canEditDoc(was, auth)) return send(res, 403, { error: `“${was.title || 'Untitled'}” is locked. Only whoever made it and team admins can take pages out of it.` });
+        const e = trashDoc(ws, auth, it);
+        return send(res, 200, { ok: true, trash: publicTrash(e) });
+      }
       deleteItem(it.id);
       return send(res, 200, { ok: true });
     }
+  }
+
+  // The trash: docs deleted in the last 30 days that this person may see, to put back or delete for good.
+  if (a === 'trash') {
+    if (m === 'GET' && !b) return send(res, 200, Object.values(db.trash).filter((e) => seesTrash(auth, e)).sort((x, y) => y.at - x.at).map(publicTrash));
+    const e = b && db.trash[b];
+    if (!seesTrash(auth, e)) return send(res, 404, { error: 'That’s no longer in the trash.' });
+    if (c === 'restore' && m === 'POST') {
+      const root = restoreDoc(ws, auth, e);
+      return send(res, 200, publicItem(root));
+    }
+    if (!c && m === 'DELETE') {
+      if (!canEditDoc(e.items[0], auth)) return send(res, 403, { error: 'This doc is locked. Only whoever made it and team admins can delete it for good.' });
+      purgeTrash((x) => x === e);
+      return send(res, 200, { ok: true });
+    }
+    return send(res, 405, { error: 'Method not allowed' });
   }
 
   if (a === 'clear' && m === 'POST') {
@@ -9165,6 +9391,8 @@ setInterval(() => {
     const h = ws.settings.expireHours;
     if (h > 0 && !it.pinned && !it.dirId && it.status === 'ready' && now - it.createdAt > h * 3600_000) deleteItem(it.id);
   }
+  // Docs in the trash for 30 days are deleted for good (and a team's that's gone, at once).
+  if (Object.values(db.trash).some((e) => !db.workspaces[e.wsId] || now - e.at > TRASH_DAYS * 864e5)) purgeTrash((e) => !db.workspaces[e.wsId] || now - e.at > TRASH_DAYS * 864e5);
   for (const it of Object.values(db.items)) {
     if (it.share && !liveShare(it)) {
       it.share = null;
@@ -9237,6 +9465,7 @@ function teamFiles(wsId) {
     if (it.type === 'text') files.push(histPath(it.id));
     if (it.type === 'folder') for (const f of it.files || []) files.push(path.join(FILES_DIR, f.fid));
   }
+  for (const e of Object.values(db.trash)) if (mine(e)) for (const it of e.items) files.push(histPath(it.id));
   for (const x of Object.values(db.signs)) if (mine(x)) files.push(signPath(x, false), signPath(x, true));
   for (const x of Object.values(db.meetings)) if (mine(x)) files.push(meetPath(x));
   for (const x of Object.values(db.sidekick)) if (mine(x)) for (const f of x.files || []) files.push(skPath(f));
@@ -9331,10 +9560,12 @@ async function removeMember(ws, m, { removed = false } = {}) {
   const gone = new Set();
   for (const d of ws.dirs) if (!d.parentId && d.private && d.ownerId === id) for (const x of dirTree(ws, d.id)) gone.add(x);
   for (const it of Object.values(db.items)) if (it.wsId === wsId && it.dirId && gone.has(it.dirId)) deleteItem(it.id);
+  purgeTrash((e) => e.wsId === wsId && gone.has(e.items[0].dirId));
   ws.dirs = ws.dirs.filter((d) => !gone.has(d.id));
   for (const d of ws.dirs) hand(d, 'ownerId');
   const lone = new Set(ws.channels.filter((ch) => !ch.campaignId && ch.memberIds && ch.ownerId === id && !ch.memberIds.some((x) => x !== id)).map((ch) => ch.id));
   for (const it of Object.values(db.items)) if (it.wsId === wsId && lone.has(it.channelId)) deleteItem(it.id);
+  purgeTrash((e) => e.wsId === wsId && lone.has(e.items[0].channelId));
   ws.channels = ws.channels.filter((ch) => !lone.has(ch.id));
   for (const ch of ws.channels) {
     hand(ch, 'ownerId');

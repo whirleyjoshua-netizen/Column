@@ -76,9 +76,12 @@ wsB.close();
 await sleep(300);
 const gone = heardA.filter((m) => m.type === 'doc:here').at(-1);
 ok(gone && !gone.people.some((p) => p.name === 'Sam'), 'Sam leaves when his window closes');
-// deleting the doc takes its comments and history
+// deleting the doc puts it in the trash, history and all; deleting it for good takes its comments and history
 await A('DELETE', `/items/${d.id}`);
 await sleep(200);
 const fs = await import('node:fs');
-ok(!fs.existsSync(process.argv[2] + `/dk/data/files/dochist-${d.id}.json`), 'deleting the doc removes its history');
+ok(fs.existsSync(process.argv[2] + `/dk/data/files/dochist-${d.id}.json`), 'a doc in the trash keeps its history (it can be put back)');
+await A('DELETE', `/trash/${d.id}`);
+await sleep(200);
+ok(!fs.existsSync(process.argv[2] + `/dk/data/files/dochist-${d.id}.json`), 'deleting it for good removes its history');
 wsA.close();
