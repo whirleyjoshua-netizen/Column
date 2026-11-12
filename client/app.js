@@ -637,6 +637,8 @@
     } else if (msg.type === 'template:remove') {
       S.templates = S.templates.filter((y) => y.id !== msg.id);
       renderCamps();
+    } else if (msg.type === 'import') {
+      notionNews(msg);
     } else if (msg.type === 'resync') {
       // Who can see a private campaign or feed changed.
       loadState().catch(() => {});
@@ -1578,6 +1580,7 @@
       if (!it.channelId) a.append(btn(I.folder, it.dirId ? `In ${dirById(it.dirId)?.name || 'a folder'} · move it` : 'Save to folder', (b) => folderMenu(it, b), it.dirId ? 'on' : null));
       if (!it.channelId) a.append(btn(I.stack, it.dirId ? 'Move to a stack (out of the folder)' : 'Move to stack', (b) => stackMenu(it, b)));
     }
+    if (docable(it)) a.append(btn(I.copy, 'Make it a doc', () => makeItDoc(it)));
     if (it.type === 'message' && isMine(it)) a.append(btn(I.edit, 'Edit', (b) => editMessage(b.closest('.msg'), it)));
     if (it.type !== 'message' || isMine(it) || amAdmin()) {
       a.append(btn(I.trash, it.type === 'message' ? 'Delete message' : it.type === 'text' ? 'Move to trash' : 'Delete everywhere', (b) => (it.type === 'text' ? docTrash(it) : confirmClick(b, () => api('DELETE', '/items/' + it.id).catch((e) => toast(e.message))))));
@@ -2332,6 +2335,7 @@
         ? h('button', { class: 'btn', title: 'Keep it open beside the campaign', onclick: () => { close(); dockOpen(campOfItem(it), { type: 'file', id: it.id }); } }, 'Keep beside')
         : h('button', { class: 'btn', title: 'Keep it open next to Kloomie', onclick: () => { close(); popOut(it); } }, 'Open in new window'),
       !standalone && campOfItem(it) && it.type === 'file' ? h('button', { class: 'btn', onclick: () => { close(); useSheet(campOfItem(it), it); } }, 'Use as…') : null,
+      !standalone && docable(it) ? h('button', { class: 'btn pv-makedoc', title: 'A doc of its own, to edit and link (the file stays)', onclick: () => { close(true); makeItDoc(it); } }, 'Make it a doc') : null,
       it.type !== 'text' ? h('button', { class: 'btn', onclick: () => download(it) }, it.type === 'folder' ? 'Download all (.zip)' : 'Download') : null));
     pv.classList.remove('hidden');
   }
@@ -6433,7 +6437,7 @@
     const runs = [...l.runs].sort((a, b) => !!a.doneAt - !!b.doneAt || b.createdAt - a.createdAt);
     const all = K.showAll['runs:' + l.id];
     const add = h('input', { class: 'goal-add', placeholder: l.agenda ? 'Start a meeting… “Monday standup”' : 'Start a run… “Acme onboarding”', 'aria-label': 'Start a run' });
-    add.addEventListener('keydown', (e) => e.key === 'Enter' && add.value.trim() && startRun(l, add.value.trim()));
+    add.addEventListener('keydown', (e) => e.key === 'Enter' && add.value.trim() && startListRun(l, add.value.trim()));
     return [
       ...(all ? runs : runs.slice(0, 5)).map((run) => {
         const n = l.rows.filter((r) => run.ticks[r.id]).length;
@@ -6450,11 +6454,14 @@
       h('button', { class: 'link', onclick: close }, 'Hide'),
     ].filter(Boolean);
   }
-  async function startRun(l, name) {
+  async function startListRun(l, name) {
     try {
       const { list, run } = await api('POST', `/lists/${l.id}/runs`, { name });
       upsertList(list);
       K.runOpen = run.id;
+      // The box it was typed in still has the focus, and Campaigns doesn't redraw under someone typing: let go of it,
+      // so the new run shows (open) at once.
+      if ($('#camps')?.contains(document.activeElement)) document.activeElement.blur();
       renderCamps();
       return run;
     } catch (e) {
@@ -7622,7 +7629,7 @@
     ]);
   }
 
-  function folderMenu(f, anchor, head) {
+  function feedFolderMenu(f, anchor, head) {
     openMenu(anchor, [
       { label: 'New feed in folder', run: () => {
         C.collapsed[f.id] = false;
@@ -7664,7 +7671,7 @@
         h('span', { class: 'caret', html: I.down }),
         h('span', { class: 'ch-name' }, f.name),
         total ? h('span', { class: 'badge' }, total) : null,
-        h('button', { class: 'ch-more', 'aria-label': 'Folder options', html: I.more, onclick: (e) => { e.stopPropagation(); folderMenu(f, e.currentTarget, fh); } })
+        h('button', { class: 'ch-more', 'aria-label': 'Folder options', html: I.more, onclick: (e) => { e.stopPropagation(); feedFolderMenu(f, e.currentTarget, fh); } })
       );
       out.push(fh);
       // A closed folder still shows the open feed and any with unread messages.
@@ -12379,6 +12386,15 @@
       pageInfo: (id) => { const d = docById(id); return d ? { title: docTitle(d), pages: docKidsOf(id).length } : null; },
       openPage: (id) => { const d = docById(id); if (d) openDoc(d); else toast('That page has been moved or deleted.'); },
       newPage: (after) => docNewPage(x, after),
+      view: (b) => {
+        const p = b.source === 'project' && projById(b.ref);
+        if (!p) return null;
+        const recs = PR.records.get(p.id);
+        const t = p.types.find((y) => y.id === b.sub) || p.types[0];
+        const n = recs ? recs.filter((r) => !t || r.typeId === t.id).length : null;
+        return h('button', { class: 'dk-view-card', type: 'button', onclick: () => { closeDoc(); openProject(p.id, t?.id); } },
+          h('span', { class: 'dk-view-ic' }, p.icon || '📊'), h('b', {}, p.name), h('small', {}, (n != null ? plural(n, (t?.singular || 'row').toLowerCase()) + ' · ' : '') + 'Open in Jobs & projects'));
+      },
       menu: openMenu,
       toast,
       refInfo: docRefInfo,
@@ -12832,9 +12848,83 @@
       h('div', { class: 'dir-tools' },
         DK.trash ? h('button', { class: 'btn small', onclick: () => { DK.trash = false; renderTool(); } }, '← All docs') : h('input', { type: 'search', class: 'dir-search', value: DK.q, placeholder: 'Search docs', 'aria-label': 'Search docs', oninput: (e) => { DK.q = e.target.value; draw(); } }),
         DK.trash ? h('b', { class: 'docs-trash-h' }, 'Trash') : h('button', { class: 'btn primary-btn', onclick: () => newDoc() }, '+ New doc'),
+        DK.trash ? null : h('button', { class: 'btn small docs-import', title: 'Bring in pages from Notion', onclick: notionSheet }, 'Import'),
         DK.trash ? null : h('button', { class: 'btn small docs-trash', title: 'Deleted docs, for 30 days', onclick: () => { DK.trash = true; renderTool(); } }, '🗑 Trash')),
       list,
     ];
+  }
+
+  // ----- bringing docs in: a Notion export, or a Markdown, text or Word file (Google Docs come as Word) -----
+  const IM = { job: null, view: null };
+  function notionSheet() {
+    const file = h('input', { type: 'file', accept: '.zip,application/zip', class: 'im-file', 'aria-label': 'The Notion export (.zip)' });
+    const who = h('select', { class: 'im-who', 'aria-label': 'Who sees it' }, h('option', { value: 'me' }, 'Only me (move it to the team when it’s ready)'), h('option', { value: 'team' }, 'Everyone on the team'));
+    const projOn = toolOn('projects');
+    const status = h('div', { class: 'im-status', role: 'status', 'aria-live': 'polite' });
+    const go = h('button', { class: 'btn primary-btn im-go', onclick: () => start() }, 'Bring it in');
+    const body = [
+      h('p', { class: 'day-hint' }, 'In Notion: ', h('b', {}, 'Settings → Export'), ', choose ', h('b', {}, 'Markdown & CSV'), ', include subpages and ', h('b', {}, 'Create folders for subpages'), ', then upload the .zip it gives you here.'),
+      h('p', { class: 'day-hint' }, 'Every page becomes a doc, with the pages inside it inside it. Pictures and files come too, and links between pages still work. ',
+        projOn ? 'Databases become projects in Jobs & projects, each row a record with its page.' : 'Databases become tables in a doc' + (amAdmin() ? ' (turn on Jobs & projects in Settings → Team first to bring them in as projects you can sort, filter and put on a board).' : '.')),
+      h('label', { class: 'field' }, h('span', {}, 'The export'), file),
+      h('label', { class: 'field' }, h('span', {}, 'Who sees it'), who),
+      status,
+      h('div', { class: 'btns' }, h('span', { style: 'flex:1' }), go),
+    ];
+    sheet('Import from Notion', body, null);
+    const show = (j) => {
+      IM.job = j;
+      if (!$('#sheet .im-status')) return;
+      if (j.status === 'running') status.replaceChildren(h('p', {}, `${j.step}… ${j.total ? `${Math.min(j.done, j.total)} of ${plural(j.total, 'page')}` : ''}`), h('button', { class: 'btn small', onclick: () => api('POST', `/import/${j.id}/stop`).catch(() => {}) }, 'Stop'));
+      else if (j.status === 'failed') { status.replaceChildren(h('p', { class: 'err' }, j.error)); go.disabled = false; }
+      else {
+        const r = j.report || {};
+        status.replaceChildren(h('p', { class: 'im-done' }, `✓ Brought in ${plural(r.pages || 0, 'page')}${r.tables ? `, ${plural(r.tables, 'database')} (${plural(r.rows || 0, 'row')})` : ''}${r.files ? ` and ${plural(r.files, 'file')}` : ''}.`),
+          ...(r.notes || []).map((n) => h('p', { class: 'day-hint' }, n)),
+          h('div', { class: 'btns' }, h('button', { class: 'btn primary-btn im-open', onclick: () => { closeSheet(); const top = j.topId && docById(j.topId); if (top) openDoc(top); else { DK.q = ''; DK.trash = false; openTool('docs'); } } }, j.topId ? 'Open it' : 'See them in Docs')));
+        go.remove();
+      }
+    };
+    IM.view = show;
+    async function start() {
+      const f = file.files[0];
+      if (!f) return status.replaceChildren(h('p', { class: 'err' }, 'Pick the .zip from Notion first.'));
+      if (!/\.zip$/i.test(f.name)) return status.replaceChildren(h('p', { class: 'err' }, 'That isn’t a .zip. Notion gives you one when you export as “Markdown & CSV”.'));
+      go.disabled = true;
+      const bar = h('div', { class: 'pbar c-violet' }, h('i', { style: 'width:0%' }));
+      status.replaceChildren(h('p', {}, 'Uploading the export…'), bar);
+      try {
+        const progress = (n) => { bar.firstChild.style.width = Math.round((n / Math.max(1, f.size)) * 100) + '%'; };
+        const up = f.size > CHUNK ? await putResumable(f, { name: f.name, type: f.type || 'application/zip', stackId: null, channelId: null, dirId: null }, progress, null) : await put('/api/upload?' + new URLSearchParams({ name: f.name, type: f.type || 'application/zip' }), f, progress);
+        upsert(up);
+        show(await api('POST', '/import/notion', { itemId: up.id, private: who.value !== 'team', projects: true }));
+        // The server tells this person as it goes; asking now and then covers a dropped connection.
+        const poll = async () => { if (IM.job?.status !== 'running') return; try { show(await api('GET', '/import/' + IM.job.id)); } catch {} setTimeout(poll, 2000); };
+        setTimeout(poll, 2000);
+      } catch (e) {
+        status.replaceChildren(h('p', { class: 'err' }, e.message));
+        go.disabled = false;
+      }
+    }
+  }
+  function notionNews(msg) {
+    if (msg.job && IM.job?.id === msg.job.id) IM.view?.(msg.job);
+    if (msg.job?.status === 'done' && !$('#sheet .im-status')) toast(`Brought in from Notion: ${plural(msg.job.report?.pages || 0, 'page')}`);
+  }
+  // A Markdown, text or Word file as a doc of its own, next to the file (the file stays).
+  const docable = (it) => it?.type === 'file' && /\.(md|markdown|txt|docx)$/i.test(it.name || '');
+  async function makeItDoc(it) {
+    try {
+      let made;
+      if (/\.docx$/i.test(it.name)) {
+        const blocks = ColumnDocs.fromHtml((await renderDocx(await fileBuf(it))).outerHTML);
+        made = await api('POST', '/items', { type: 'text', doc: { title: it.name.replace(/\.docx$/i, ''), blocks }, ...(it.dirId ? { dirId: it.dirId } : { stackId: it.stackId || null }) });
+      } else made = await api('POST', '/import/markdown', { itemId: it.id });
+      upsert(made);
+      openDoc(made);
+    } catch (e) {
+      toast(e.message);
+    }
   }
 
   // ----- connections: mentions, live blocks, to-dos that are tasks, and what links to what -----

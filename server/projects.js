@@ -2103,5 +2103,37 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
     return rec;
   }
 
-  return { cleanSpec, createRecord, publicRecord, updateRecord, route, v1, keyAuth, makeHook, publicHook, deliver, emit, quoteOf, quotePage, seesMsg, stateFor, sees, recordActivity, recordNews, words, fillFromProject, fromProjectOk, recordStory, priceList, recordAt, itemsTotals, TEMPLATES: Object.fromEntries(Object.entries(TEMPLATES).map(([k, t]) => [k, { name: t.name, icon: t.icon, about: t.about }])) };
+  // A table brought in from elsewhere (a Notion database): a project with one list, its fields from the table's
+  // columns (cleaned as any described project's are), and a record per row. Rows that don't fit are counted, not
+  // guessed at. docs[i], when there is one, is the row's own page, linked as the record's doc.
+  function importProject(ws, auth, { name, columns, rows, docs = [], private: priv = false }) {
+    const spec = cleanSpec({ name, icon: '📊', types: [{ name: cleanText(name, 40) || 'Table', singular: 'Row', icon: '📄', fields: columns.map((c) => ({ name: c.name, type: c.type, choices: c.choices, long: c.long })) }] });
+    if (!spec.types.length) throw bad('That table has no columns.');
+    const types = buildTypes(spec.types);
+    const p = { id: rid(), wsId: ws.id, name: cleanText(name, 80) || 'Table', icon: '📊', template: 'described', types, private: !!priv, memberIds: [], memberId: auth.memberId, by: auth.member, createdAt: Date.now(), updatedAt: Date.now() };
+    db.projects[p.id] = p;
+    const t = types[0];
+    // Columns to fields: cleanSpec keeps them in order, with the name moved first.
+    const fieldOf = new Map();
+    const src = spec.types[0].fields;
+    columns.forEach((c, i) => { const k = src.find((f) => f.name === cleanText(c.name, 40))?.key; const f = k && t.fields.find((x) => x.key === k); if (f && !fieldOf.has(i)) fieldOf.set(i, f); });
+    let made = 0, skipped = 0;
+    rows.forEach((row, n) => {
+      const values = {};
+      row.forEach((v, i) => { const f = fieldOf.get(i); if (f && v !== undefined && v !== '') values[f.id] = v; });
+      let rec;
+      try { rec = newRecord(ws, p, t, auth, values, null, { addChoices: false }); }
+      catch (e) {
+        // A value that doesn't fit its field: the row comes in with the fields that do.
+        const plain = Object.fromEntries(Object.entries(values).filter(([id]) => { try { const trial = { values: {} }; applyValues(ws, p, t, trial, { [id]: values[id] }, { addChoices: false }); return true; } catch { return false; } }));
+        try { rec = newRecord(ws, p, t, auth, plain, null, { addChoices: false }); } catch { skipped++; return; }
+      }
+      if (docs[n] && db.items[docs[n]]?.wsId === ws.id) rec.docId = docs[n];
+      made++;
+    });
+    save();
+    projectNews(p);
+    return { project: p, made, skipped };
+  }
+  return { importProject, cleanSpec, createRecord, publicRecord, updateRecord, route, v1, keyAuth, makeHook, publicHook, deliver, emit, quoteOf, quotePage, seesMsg, stateFor, sees, recordActivity, recordNews, words, fillFromProject, fromProjectOk, recordStory, priceList, recordAt, itemsTotals, TEMPLATES: Object.fromEntries(Object.entries(TEMPLATES).map(([k, t]) => [k, { name: t.name, icon: t.icon, about: t.about }])) };
 }

@@ -1528,18 +1528,26 @@ body.platform-darwin .dv-bar { padding-left: 80px; }
 .doc-acts { display: flex; gap: 2px; opacity: 0; transition: opacity .1s; }
 .doc-row:hover .doc-acts, .doc-row:focus-within .doc-acts, .doc-acts.on { opacity: 1; }
 @media (hover: none) { .doc-acts { opacity: 1; } }
-.docs-trash { margin-left: auto; }
+.docs-import { margin-left: auto; }
+.im-status { margin: 10px 0; display: flex; flex-direction: column; gap: 6px; }
+.im-status .pbar { height: 6px; }
+.im-done { font-weight: 600; }
 .docs-trash-h { flex: 1; }
 .trash-row { cursor: default; }
 .dv-crumb { color: var(--muted); font-size: 12px; padding: 0; max-width: 16em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
 .dv-crumb:hover { color: var(--text); }
 .dv-sep { margin: 0 4px; color: var(--muted); }
 .dv-star { color: #e5a50a; }
-.dk-page { display: flex; align-items: center; gap: 8px; padding: 6px 8px; margin: 2px 0; border-radius: 6px; cursor: pointer; font-weight: 550; text-decoration: underline; text-decoration-color: var(--line); text-underline-offset: 3px; }
-.dk-page:hover { background: var(--card-hover); }
-.dk-page small { color: var(--muted); font-weight: 400; text-decoration: none; }
-.dk-page.gone { color: var(--muted); font-style: italic; cursor: default; text-decoration: none; font-weight: 400; }
-.dk-selected .dk-page { background: var(--accent-soft); }
+.dk-pg { display: flex; align-items: center; gap: 8px; padding: 6px 8px; margin: 2px 0; border-radius: 6px; cursor: pointer; font-weight: 550; text-decoration: underline; text-decoration-color: var(--line); text-underline-offset: 3px; }
+.dk-pg:hover { background: var(--card-hover); }
+.dk-pg small { color: var(--muted); font-weight: 400; text-decoration: none; }
+.dk-pg.gone { color: var(--muted); font-style: italic; cursor: default; text-decoration: none; font-weight: 400; }
+.dk-selected .dk-pg { background: var(--accent-soft); }
+.dk-vw { margin: 4px 0; }
+.dk-vw.gone { color: var(--muted); font-style: italic; padding: 6px 8px; }
+.dk-view-card { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); cursor: pointer; font: inherit; color: inherit; }
+.dk-view-card:hover { background: var(--card-hover); }
+.dk-view-card small { margin-left: auto; color: var(--muted); }
 /* docs: mentions, live blocks, to-dos that are tasks */
 .dk-ref { display: inline; padding: 0 3px; border-radius: 4px; background: var(--accent-soft); color: var(--accent); font-weight: 550; cursor: pointer; white-space: nowrap; }
 .dk-ref:hover { text-decoration: underline; }

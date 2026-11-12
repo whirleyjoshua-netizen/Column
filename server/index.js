@@ -1,4 +1,5 @@
 // Kloomie sync server: accounts/teams, file storage, and live updates over WebSocket.
+import * as NT from './notion.js';
 import http from 'node:http';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
@@ -648,7 +649,9 @@ function publicItem(it) {
 // Blocks are flat; nesting is an indent. Text is runs of plain text with marks, never markup.
 // A page block is where a sub-page sits in its parent: { type: 'page', docId }. The sub-page itself is a doc of its
 // own (it.underId is the parent), placed and seen as its top page is.
-const DOC_TYPES = ['p', 'h1', 'h2', 'h3', 'ul', 'ol', 'todo', 'quote', 'callout', 'code', 'toggle', 'divider', 'table', 'file', 'live', 'page'];
+// A view block shows a project's records in the doc ({ type: 'view', source: 'project', ref }); each reader sees it only
+// if they can see the project, so its name is never part of the doc's own text.
+const DOC_TYPES = ['p', 'h1', 'h2', 'h3', 'ul', 'ol', 'todo', 'quote', 'callout', 'code', 'toggle', 'divider', 'table', 'file', 'live', 'page', 'view'];
 const DOC_DEPTH = 8; // pages inside pages, at most this deep (like folders)
 // A mention points at something else in Kloomie. A live block shows numbers from it, or a snapshot of them.
 const DOC_REFS = ['member', 'campaign', 'goal', 'task', 'doc', 'record'];
@@ -725,6 +728,12 @@ function cleanDocBlock(v) {
     x.docId = docId(v.docId);
     if (!x.docId) return null;
   }
+  if (type === 'view') {
+    if (v.source !== 'project' || !docId(v.ref)) return null;
+    x.source = 'project';
+    x.ref = v.ref;
+    if (docId(v.sub)) x.sub = v.sub;
+  }
   return x;
 }
 const runsText = (runs) => (runs || []).map((r) => r.text).join('');
@@ -748,6 +757,7 @@ function docText(title, blocks) {
     if (b.type === 'table') return b.rows.map((r) => '| ' + r.map(runsText).join(' | ') + ' |').join('\n');
     if (b.type === 'file') return `[${b.name || 'File'}]`;
     if (b.type === 'page') return `${pad}[Page: ${db.items[b.docId]?.title || 'Untitled'}]`;
+    if (b.type === 'view') return `${pad}[Table]`;
     if (b.type === 'live') return `[${{ campaign: 'Campaign summary', goal: 'Goal progress', tasks: 'Task list', calls: 'Call stats', budgets: 'Budgets', list: 'Call list', pipeline: 'Pipeline' }[b.source]}${b.snap ? ' as of ' + fmtDay(b.snap.at) : ''}]`;
     return pad + t;
   });
@@ -835,6 +845,7 @@ function docRefs(blocks) {
     for (const r of [...(b.runs || []), ...(b.rows || []).flat(2)]) if (r.ref) out.add(r.ref.k + ':' + r.ref.id);
     if (b.taskId) out.add('task:' + b.taskId);
     if (b.type === 'live' && b.ref) out.add((['tasks', 'calls'].includes(b.source) ? 'campaign' : b.source === 'pipeline' ? 'project' : b.source) + ':' + b.ref);
+    if (b.type === 'view') out.add('project:' + b.ref);
   }
   return [...out].slice(0, 300);
 }
@@ -952,6 +963,7 @@ function docShareHtml(it, token) {
           return f?.type === 'file' && /^image\/(png|jpe?g|gif|webp)$/.test(f.mime || '') ? `<img src="/s/${token}/img/${f.id}" alt="${escHtml(f.name)}">` : `<p class="muted">📎 ${escHtml(b.name || f?.name || 'A file')}</p>`;
         },
         // A sub-page shows by name only: its own words aren't part of this link.
+        view: () => '<p class="muted">📊 A table in Kloomie</p>',
         page: () => (db.items[b.docId]?.underId === it.id ? `<div class="li"><span class="mk">📄</span><div>${escHtml(db.items[b.docId].title || 'Untitled')}</div></div>` : ''),
         live: () => {
           const lines = live[b.id] || [];
@@ -1491,6 +1503,237 @@ function purgeTrash(which) {
     delete db.trash[e.id];
   }
   save();
+}
+
+// ---------- bringing in a Notion export (server/notion.js reads it; this makes the docs, files and tables) ----------
+// The zip comes in as an ordinary upload (so its size counts and is limited as it arrives), then an import job turns
+// it into a new folder: each page a doc, the pages inside it as pages inside the doc, its pictures and files as files,
+// links between pages as mentions (so "Linked from" works), and each database as a project (when the team uses
+// Jobs & projects) or as tables in a doc. Nothing in the zip is ever used as a path. One import per team at a time,
+// five a day per person; the job lives in memory (a restart stops it, and what it made so far is taken back out).
+const IMPORT_PAGES = 3000, IMPORT_ROWS = 10_000, IMPORT_FILES = 3000, IMPORT_PER_DAY = 5;
+// An import a restart cut off: what it had made goes (its records with its projects), so nothing is left half-made.
+function dropCutImports() {
+  let n = 0;
+  for (const it of Object.values(db.items)) if (it.importing) { removeItemFiles(it); delete db.items[it.id]; n++; }
+  for (const p of Object.values(db.projects || {})) if (p.importing) { for (const r of Object.values(db.records || {})) if (r.projectId === p.id) delete db.records[r.id]; delete db.projects[p.id]; n++; }
+  for (const ws of Object.values(db.workspaces)) if (ws.dirs?.some((d) => d.importing)) { ws.dirs = ws.dirs.filter((d) => !d.importing); n++; }
+  if (n) { console.log(`Took out ${n} things an unfinished import had made.`); save(); }
+}
+const imports = new Map();
+const importsBy = new Map(); // memberId -> times
+const publicImport = (j) => ({ id: j.id, status: j.status, step: j.step, done: j.done, total: j.total, report: j.report, error: j.error || null, dirId: j.dirId || null, topId: j.topId || null });
+function importNews(j) {
+  broadcast(j.wsId, { type: 'import', forMember: j.memberId, job: publicImport(j) });
+}
+async function runNotionImport(ws, auth, j, zipItem, opts) {
+  const made = { items: [], files: [], projects: [], dir: null };
+  const temp = [];
+  const zips = [];
+  try {
+    j.step = 'Reading the export';
+    importNews(j);
+    const outer = await NT.openZip(path.join(FILES_DIR, zipItem.id));
+    zips.push(outer);
+    let files = outer.entries.map((e) => ({ name: e.name, entry: e, zip: outer }));
+    // Notion splits big exports into zips inside the zip ("Part-1.zip"…): each is opened in turn.
+    const inner = files.filter((f) => /\.zip$/i.test(f.name));
+    if (inner.length > NT.LIMITS.nested) throw badRequest(`That export holds ${inner.length} zips; Kloomie takes up to ${NT.LIMITS.nested}.`);
+    for (const f of inner) {
+      const room = TEAM_STORAGE - teamBytes(ws.id);
+      const tmp = path.join(FILES_DIR, `import-${j.id}-${temp.length}.zip`);
+      temp.push(tmp);
+      await outer.save(f.entry, tmp, Math.max(0, Math.min(room, MAX_FILE)));
+      const z = await NT.openZip(tmp);
+      zips.push(z);
+      files.push(...z.entries.map((e) => ({ name: e.name, entry: e, zip: z })));
+    }
+    files = files.filter((f) => !/\.zip$/i.test(f.name));
+    const tree = NT.notionTree(files);
+    const nodes = [...tree.pages.values(), ...tree.dbs.values()];
+    if (!nodes.length) throw badRequest('There are no pages in that zip. In Notion: Settings → Export, “Markdown & CSV”, then upload the .zip it gives you.');
+    if (nodes.length > IMPORT_PAGES) throw badRequest(`That export has ${nodes.length.toLocaleString()} pages; Kloomie takes ${IMPORT_PAGES.toLocaleString()} at once. Export a part of the workspace.`);
+    const report = { pages: 0, tables: 0, rows: 0, files: 0, projects: 0, notes: [] };
+    j.report = report;
+    j.total = nodes.length;
+    const note = (t) => { if (report.notes.length < 30 && !report.notes.includes(t)) report.notes.push(t); };
+
+    // Where it all goes: a new folder, the person's own unless they chose the team's.
+    const stamp = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+    const d = { id: rid(8), name: cleanText(opts.name, 60) || `From Notion · ${stamp}`, parentId: null, private: !!opts.private, ownerId: auth.memberId, createdAt: Date.now(), importing: j.id };
+    if (ws.dirs.length >= 2000) throw badRequest('That’s a lot of folders. Delete some first.');
+    ws.dirs.push(d);
+    made.dir = d;
+    j.dirId = d.id;
+
+    // Every page and database gets its doc's id first, so links between them can be made as each is written.
+    // Pages more than 8 deep go inside the page 8 levels down.
+    const order = [];
+    const walk = (x, parent, lv) => {
+      if (x.docId) return;
+      x.docId = rid();
+      x.under = parent ? parent.docId : null;
+      order.push(x);
+      // A page 8 levels down can't have pages inside: what was inside it sits beside it instead.
+      const host = lv < DOC_DEPTH ? x : parent;
+      const kids = [...(x.kids || []), ...(x.rows || [])];
+      if (lv >= DOC_DEPTH && kids.length) note('Pages more than 8 levels deep were put beside the page 8 levels down.');
+      for (const k of kids) walk(k, host, lv < DOC_DEPTH ? lv + 1 : lv);
+    };
+    for (const r of tree.roots) walk(r, null, 1);
+    for (const x of nodes) walk(x, null, 1); // anything the tree didn't reach
+    const underOf = new Map();
+    for (const y of order) if (y.under) (underOf.get(y.under) || underOf.set(y.under, []).get(y.under)).push(y);
+    // Marked as being imported until it's done: a restart part-way takes it all back out (at start, below).
+    const base = { dirId: d.id, stackId: null, channelId: null, pinned: true, importing: j.id };
+    const newDoc = (x) => ({ ...baseItem(auth, { type: 'text', text: '', ...base }), id: x.docId, title: cleanText(x.title, 300), blocks: [], refs: [], v: 0, editedAt: Date.now(), ...(x.under ? { underId: x.under } : {}), importedFrom: 'notion' });
+    for (const x of order) { db.items[x.docId] = newDoc(x); made.items.push(x.docId); }
+
+    // Pictures and files the pages use: saved as files in the folder, within the team's room.
+    const asset = new Map();
+    const saveAsset = async (a) => {
+      if (asset.has(a.key)) return asset.get(a.key);
+      asset.set(a.key, null);
+      if (report.files >= IMPORT_FILES) { note(`Only the first ${IMPORT_FILES} files were brought in.`); return null; }
+      const full = noRoom(ws.id, a.entry.entry.usize);
+      if (full) { note(full); return null; }
+      const id = rid();
+      try {
+        const size = await a.entry.zip.save(a.entry.entry, path.join(FILES_DIR, id), Math.min(MAX_FILE, TEAM_STORAGE - teamBytes(ws.id)));
+        const it = { ...baseItem(auth, { type: 'file', name: cleanName(a.name), size, mime: mimeFor(a.name) }), id, ...base, importedFrom: 'notion' };
+        db.items[id] = it;
+        made.files.push(id);
+        report.files++;
+        const out = { itemId: id, name: it.name };
+        asset.set(a.key, out);
+        return out;
+      } catch (e) {
+        note(e.message);
+        return null;
+      }
+    };
+
+    // The pages, in order: Markdown to blocks; a line that's a link to a page inside becomes that page's block.
+    let n = 0;
+    j.step = 'Making the pages';
+    for (const x of order) {
+      n++;
+      await new Promise((r) => setImmediate(r));
+      if (n % 25 === 0) { j.done = n; importNews(j); }
+      if (imports.get(j.id)?.cancel) throw badRequest('Stopped.');
+      const it = db.items[x.docId];
+      if (tree.dbs.has(x.key)) continue; // tables after
+      let md = '';
+      try { md = (await x.entry.zip.read(x.entry.entry, NT.LIMITS.textBytes)).toString('utf8'); } catch (e) {
+        // A page that can't be read isn't brought in (the pages inside it still are, in an empty page).
+        note(e.message);
+        if (!underOf.get(x.docId)?.length) { delete db.items[x.docId]; made.items = made.items.filter((y) => y !== x.docId); continue; }
+      }
+      // Files first: what the page links to, saved so its blocks can point at them.
+      for (const mm of md.matchAll(/\]\(((?:[^()\s]|\([^)]*\))+)\)/g)) {
+        const to = NT.resolveLink(tree, x.key, mm[1]);
+        if (to && tree.assets.get(to.key) === to) await saveAsset(to);
+      }
+      const kids = new Set((underOf.get(x.docId) || []).map((k) => k.docId));
+      const placed = new Set();
+      const out = NT.mdToBlocks(md, {
+        id: () => rid(8),
+        row: !!x.db,
+        link: (href) => {
+          const to = NT.resolveLink(tree, x.key, href);
+          if (to?.docId) return { ref: { k: 'doc', id: to.docId } };
+          if (to) return null;
+          return /^(https?:\/\/|mailto:|tel:)/i.test(href) ? { link: href } : null;
+        },
+        page: (href) => { const to = NT.resolveLink(tree, x.key, href); if (to?.docId && kids.has(to.docId) && !placed.has(to.docId)) { placed.add(to.docId); return to.docId; } return null; },
+        file: (href) => { const to = NT.resolveLink(tree, x.key, href); return to && asset.get(to.key) ? asset.get(to.key) : null; },
+      });
+      // Pages inside that the page didn't link to (or that went deeper than 8 levels) go at the end.
+      const under = (underOf.get(x.docId) || []).filter((y) => !placed.has(y.docId));
+      const blocks = [...out.blocks, ...under.map((y) => ({ id: rid(8), type: 'page', docId: y.docId }))].slice(0, DOC_BLOCKS).map(cleanDocBlock).filter(Boolean);
+      if (out.blocks.length > DOC_BLOCKS) note(`A page longer than ${DOC_BLOCKS} blocks was cut short.`);
+      it.blocks = blocks;
+      if (out.title && !x.db) it.title = cleanText(out.title, 300);
+      report.pages++;
+    }
+
+    // Databases: a project each (rows as records, each row's page as its doc), or tables in the doc.
+    j.step = 'Making the tables';
+    importNews(j);
+    const asProjects = opts.projects && toolsOf(ws).projects;
+    for (const x of order) {
+      const dbn = tree.dbs.get(x.key);
+      if (!dbn) continue;
+      const it = db.items[x.docId];
+      let rows = [];
+      try { rows = NT.parseCsv((await dbn.entry.zip.read(dbn.entry.entry, NT.LIMITS.textBytes * 4)).toString('utf8')); } catch (e) { note(e.message); }
+      const [header = [], ...data] = rows;
+      if (report.rows + data.length > IMPORT_ROWS) { note(`Only the first ${IMPORT_ROWS.toLocaleString()} rows were brought in.`); data.length = Math.max(0, IMPORT_ROWS - report.rows); }
+      report.rows += data.length;
+      report.tables++;
+      // Each row's own page, matched by its name.
+      const pool = new Map();
+      for (const r of dbn.rows) (pool.get(r.title) || pool.set(r.title, []).get(r.title)).push(r);
+      const rowDoc = data.map((r) => { const list = pool.get(NT.cellText(r[0])); const p = list?.shift(); return p && db.items[p.docId]?.blocks.length ? p.docId : null; });
+      // Row pages with nothing written in them aren't kept: the row has it all.
+      for (const r of dbn.rows) if (!db.items[r.docId]?.blocks.length && !rowDoc.includes(r.docId)) { delete db.items[r.docId]; made.items = made.items.filter((y) => y !== r.docId); report.pages--; }
+      const cols = NT.guessColumns(header, data);
+      const blocks = [];
+      if (asProjects && header.length) {
+        const r = PJ.importProject(ws, auth, { name: dbn.title, columns: cols, rows: data.map((row) => cols.map((c, i) => NT.cellValue(c, row[i]))), docs: rowDoc, private: !!opts.private });
+        r.project.importing = j.id;
+        made.projects.push(r.project.id);
+        report.projects++;
+        if (r.skipped) note(`${r.skipped} rows of “${dbn.title}” couldn’t be brought in.`);
+        blocks.push({ id: rid(8), type: 'view', source: 'project', ref: r.project.id });
+      } else if (header.length) {
+        const cell = (v) => (NT.cellText(v) ? [{ text: NT.cellText(v).slice(0, 2000) }] : []);
+        for (let i = 0; i < Math.max(1, data.length); i += 99) blocks.push({ id: rid(8), type: 'table', header: true, rows: [header, ...data.slice(i, i + 99)].map((r) => r.slice(0, 20).map(cell)) });
+        if (header.length > 20) note(`Tables keep their first 20 columns (“${dbn.title}” had ${header.length}).`);
+        if (opts.projects && !toolsOf(ws).projects) note('Databases came in as tables because Jobs & projects is off for this team.');
+      }
+      const rowPages = (underOf.get(x.docId) || []).filter((y) => db.items[y.docId]);
+      if (rowPages.length) blocks.push({ id: rid(8), type: 'h3', runs: [{ text: 'Pages' }] }, ...rowPages.map((y) => ({ id: rid(8), type: 'page', docId: y.docId })));
+      it.blocks = blocks.slice(0, DOC_BLOCKS).map(cleanDocBlock).filter(Boolean);
+      j.done = ++n;
+    }
+    // Text, references and titles now every doc is in place.
+    for (const id of made.items) {
+      const it = db.items[id];
+      if (!it) continue;
+      it.blocks = it.blocks.filter((b) => b.type !== 'page' || db.items[b.docId]?.underId === it.id);
+      it.text = docText(it.title, it.blocks);
+      it.refs = docRefs(it.blocks);
+    }
+    for (const id of [...made.items, ...made.files]) if (db.items[id]) delete db.items[id].importing;
+    for (const id of made.projects) if (db.projects[id]) delete db.projects[id].importing;
+    delete d.importing;
+    const tops = made.items.filter((id) => db.items[id] && !db.items[id].importing && !db.items[id].underId);
+    j.topId = tops.length === 1 ? tops[0] : null;
+    save();
+    // The zip has done its job.
+    deleteItem(zipItem.id);
+    j.status = 'done';
+    j.step = 'Done';
+    j.done = j.total;
+    broadcast(ws.id, { type: 'workspace' });
+    broadcast(ws.id, { type: 'resync' });
+    importNews(j);
+  } catch (e) {
+    // Anything made so far goes back out, so a failed import leaves nothing half-made.
+    for (const id of [...made.items, ...made.files]) { const it = db.items[id]; if (it) { removeItemFiles(it); delete db.items[id]; } }
+    for (const id of made.projects) { for (const r of Object.values(db.records)) if (r.projectId === id) delete db.records[r.id]; delete db.projects[id]; }
+    if (made.dir) ws.dirs = ws.dirs.filter((x) => x.id !== made.dir.id);
+    save();
+    j.status = 'failed';
+    j.error = e.status ? e.message : 'That export couldn’t be brought in.';
+    if (!e.status) console.error('Notion import:', e.stack);
+    broadcast(ws.id, { type: 'workspace' });
+    importNews(j);
+  } finally {
+    for (const z of zips) await z.close().catch(() => {});
+    for (const f of temp) await fsp.rm(f, { force: true }).catch(() => {});
+  }
 }
 
 function addItem(item) {
@@ -8516,6 +8759,47 @@ async function api(req, res, url) {
     }
   }
 
+  // Bringing in a Notion export: an uploaded .zip becomes a folder of docs (and tables), as a job with progress.
+  if (a === 'import') {
+    if (b === 'notion' && !c && m === 'POST') {
+      const body = await readJson(req);
+      const zip = db.items[body.itemId];
+      if (!zip || zip.wsId !== ws.id || zip.type !== 'file' || !canSee(auth, 'item', zip) || !ownsItem(auth, zip)) return send(res, 404, { error: 'That upload is gone. Upload the .zip again.' });
+      if (!/\.zip$/i.test(zip.name)) return send(res, 400, { error: 'That isn’t a .zip. In Notion: Settings → Export, “Markdown & CSV”.' });
+      if ([...imports.values()].some((x) => x.wsId === ws.id && x.status === 'running')) return send(res, 409, { error: 'Something is already being brought in for this team. Wait for it to finish.' });
+      const now = Date.now();
+      const mine = (importsBy.get(auth.memberId) || []).filter((x) => now - x < 864e5);
+      if (mine.length >= IMPORT_PER_DAY) return send(res, 429, { error: `That’s ${IMPORT_PER_DAY} imports today. Try again tomorrow.` });
+      importsBy.set(auth.memberId, [...mine, now]);
+      const job = { id: rid(8), wsId: ws.id, memberId: auth.memberId, status: 'running', step: 'Starting', done: 0, total: 0, report: null, at: now };
+      imports.set(job.id, job);
+      for (const [k, x] of imports) if (now - x.at > 6 * 3600_000) imports.delete(k);
+      runNotionImport(ws, { ...auth }, job, zip, { private: body.private !== false, projects: body.projects !== false, name: body.name });
+      return send(res, 200, publicImport(job));
+    }
+    // A Markdown or text file as a doc beside it (the file stays).
+    if (b === 'markdown' && !c && m === 'POST') {
+      const body = await readJson(req);
+      const f = db.items[body.itemId];
+      if (!f || f.wsId !== ws.id || f.type !== 'file' || !canSee(auth, 'item', f)) return send(res, 404, { error: 'That file is gone.' });
+      if (!/\.(md|markdown|txt)$/i.test(f.name)) return send(res, 400, { error: 'Only Markdown and text files can be made into a doc here.' });
+      if (f.size > NT.LIMITS.textBytes) return send(res, 400, { error: 'That file is too long to make into a doc.' });
+      const md = (await fsp.readFile(path.join(FILES_DIR, f.id), 'utf8').catch(() => null));
+      if (md == null) return send(res, 404, { error: 'That file is gone.' });
+      const out = NT.mdToBlocks(md, { id: () => rid(8), link: (href) => (/^(https?:\/\/|mailto:|tel:)/i.test(href) ? { link: href } : null) });
+      const blocks = out.blocks.slice(0, DOC_BLOCKS).map(cleanDocBlock).filter((x) => x && x.type !== 'page' && x.type !== 'file');
+      const title = cleanText(out.title || f.name.replace(/\.(md|markdown|txt)$/i, ''), 300);
+      const where = f.dirId ? { dirId: f.dirId } : { stackId: f.stackId || null, channelId: f.channelId || null };
+      const item = addItem(baseItem(auth, { type: 'text', text: docText(title, blocks), ...where, title, blocks, refs: docRefs(blocks), v: 0, pinned: true, editedAt: Date.now() }));
+      return send(res, 200, publicItem(item));
+    }
+    const job = b && imports.get(b);
+    if (!job || job.wsId !== ws.id || job.memberId !== auth.memberId) return send(res, 404, { error: 'That import is gone.' });
+    if (!c && m === 'GET') return send(res, 200, publicImport(job));
+    if (c === 'stop' && m === 'POST') { job.cancel = true; return send(res, 200, publicImport(job)); }
+    return send(res, 405, { error: 'Method not allowed' });
+  }
+
   // The trash: docs deleted in the last 30 days that this person may see, to put back or delete for good.
   if (a === 'trash') {
     if (m === 'GET' && !b) return send(res, 200, Object.values(db.trash).filter((e) => seesTrash(auth, e)).sort((x, y) => y.at - x.at).map(publicTrash));
@@ -9840,6 +10124,7 @@ runAutopay();
 
 migratePeople();
 migrateDay();
+dropCutImports();
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`\n  Kloomie server running\n`);
   console.log(`  This machine:   http://localhost:${PORT}`);

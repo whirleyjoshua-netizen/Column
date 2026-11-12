@@ -153,7 +153,34 @@ account and has a daily cap (A9). Webhook deliveries go out at most 4 at a time 
 most 20 times a minute (sign-offs). Wrong passwords lock the place they come from, not the account owner (A11). When
 adding something that sends, stores, calls a paid service or does heavy work, add its limit in the same change.
 
-## 12. Tests that prove something
+## 12. Reading what people upload: time and size are limits too
+
+**The mistakes (found building Docs import, before release).** A Markdown reader for Notion exports used lazy regexes
+and joined lines by copying arrays: one 5 MB page of marks that never close took 82 seconds, and Kloomie is one
+process, so everyone's app would have frozen. A zip's sizes are what the zip claims, not what it inflates to. A job
+that writes as it goes can be cut off by a restart and leave half its work.
+
+**The practice.**
+- Parse uploaded text in one pass with a bounded look-ahead (native `indexOf` within a window), cap the text per
+  block, and stop at the most the result can hold (a doc's 5000 blocks). Time a hostile input in the test.
+- Inflate with `maxOutputLength` or count bytes while streaming; never trust a header's size. Names inside an
+  archive are titles, never paths.
+- Yield (`setImmediate`) between units of a long job, so other requests get their turn.
+- Mark what a long job makes (`importing: jobId`) until it finishes, and take marked things out at start
+  (`dropCutImports`). A failed job takes back what it made.
+
+## 13. A class name is a selector
+
+**The mistake.** A block's row gets the class `dk-<type>`, and the page link inside it was also given `dk-page`, so
+`closest('.dk-page')` matched the whole row and tapping the drag handle opened the page. Give inner parts names no
+outer element can have.
+
+A name is a selector in code too. `client/app.js` is one closure, so a second `function importSheet` silently
+replaced Contacts' own, and two older pairs had done the same for months: a chat folder's options opened the
+save-to-folder menu, and starting a checklist run with Enter started a GPS run on the Map. `tests/dupnames.mjs` (in
+CI) now fails on any name declared twice at a file's top level. Search for a name before giving a function one.
+
+## 14. Tests that prove something
 
 - Write the test first, run it on the old code, and see it fail. A test that passes on the broken code proves
   nothing (several audit tests were rewritten when they did).
@@ -170,6 +197,8 @@ adding something that sends, stores, calls a paid service or does heavy work, ad
 - [ ] Every place this data turns into text checks who's reading.
 - [ ] No secret stored in plain text; nothing that can act as the person in a URL.
 - [ ] Outgoing calls have timeouts; outside addresses go through `safeFetch`.
+- [ ] Uploaded files are read with size caps enforced while reading, in bounded time (a hostile input is timed in
+      the test); long jobs yield and leave nothing half-made after a failure or a restart.
 - [ ] Text goes into pages as text.
 - [ ] Anything that sends, stores or costs has a limit.
 - [ ] Startup code and migrations tested on old data.

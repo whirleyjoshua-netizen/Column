@@ -404,6 +404,7 @@ window.ColumnDocs = (() => {
       if (b.type === 'file') return `[${b.name || 'File'}]`;
       if (b.type === 'live') return `[${LIVE_NAME[b.source]}]`;
       if (b.type === 'page') return `${pad}[Page: ${pageName(b)}]`;
+      if (b.type === 'view') return `${pad}[Table]`;
       return pad + t;
     }).join('\n');
   }
@@ -450,6 +451,7 @@ window.ColumnDocs = (() => {
         const lines = live?.(b) || [LIVE_NAME[b.source]];
         into.append(el('p', {}, el('b', {}, lines[0])), ...lines.slice(1).map((l) => el('p', {}, l)));
       } else if (b.type === 'page') into.append(el('p', {}, '📄 ' + pageName(b)));
+      else if (b.type === 'view') into.append(el('p', {}, '📊 A table in Kloomie'));
       else into.append(runsEl(b.runs, el('p')));
     }
     return root;
@@ -479,6 +481,7 @@ window.ColumnDocs = (() => {
         if (pic) out.push({ t: 'img', src: pic.src, w: pic.w, h: pic.h });
         else out.push({ t: 'p', runs: [{ text: `[${b.name || 'File'}]`, i: true }] });
       } else if (b.type === 'page') out.push({ t: 'p', runs: [{ text: '📄 ' + pageName(b) }] });
+      else if (b.type === 'view') out.push({ t: 'p', runs: [{ text: '📊 A table in Kloomie', i: true }] });
       else out.push({ t: 'p', runs: runs(b.runs) });
     }
     return out;
@@ -642,6 +645,7 @@ window.ColumnDocs = (() => {
       else if (b.type === 'file') r.append(fileEl(b));
       else if (b.type === 'table') r.append(tableEl(b));
       else if (b.type === 'page') r.append(pageEl(b));
+      else if (b.type === 'view') r.append(viewEl(b));
       else {
         const lead = b.type === 'ul' ? el('span', { class: 'dk-lead dk-bullet', contenteditable: 'false' }, ['•', '◦', '▪'][(b.indent || 0) % 3])
           : b.type === 'ol' ? el('span', { class: 'dk-lead dk-num', contenteditable: 'false' }, num + '.')
@@ -691,9 +695,16 @@ window.ColumnDocs = (() => {
     // A page inside this one: its name, as it's called now, and how many pages are inside it.
     function pageEl(b) {
       const p = opts.pageInfo?.(b.docId);
-      if (!p) return el('div', { class: 'dk-page gone', contenteditable: 'false' }, el('span', { class: 'dk-page-ic' }, '📄'), el('span', { class: 'dk-page-n' }, 'A page that’s been moved or deleted'));
-      return el('div', { class: 'dk-page', role: 'link', tabindex: '0', contenteditable: 'false', title: 'Open the page' }, el('span', { class: 'dk-page-ic' }, p.icon || '📄'),
+      if (!p) return el('div', { class: 'dk-pg gone', contenteditable: 'false' }, el('span', { class: 'dk-page-ic' }, '📄'), el('span', { class: 'dk-page-n' }, 'A page that’s been moved or deleted'));
+      return el('div', { class: 'dk-pg', role: 'link', tabindex: '0', contenteditable: 'false', title: 'Open the page' }, el('span', { class: 'dk-page-ic' }, p.icon || '📄'),
         el('span', { class: 'dk-page-n' }, p.title || 'Untitled'), p.pages ? el('small', {}, p.pages === 1 ? '1 page inside' : p.pages + ' pages inside') : null);
+    }
+    // A project's records in the doc, for those who can see the project.
+    function viewEl(b) {
+      let shown;
+      try { shown = opts.view?.(b); } catch { shown = null; }
+      if (!shown) return el('div', { class: 'dk-vw gone', contenteditable: 'false' }, '📊 A table you can’t open (or that’s been deleted)');
+      return el('div', { class: 'dk-vw', contenteditable: 'false' }, shown);
     }
     function tableEl(b) {
       const t = el('table', { class: 'dk-table' + (b.header ? ' head' : '') });
@@ -1856,7 +1867,7 @@ window.ColumnDocs = (() => {
         const ref = e.target.closest('.dk-ref');
         if (ref) { e.preventDefault(); return opts.openRef?.({ k: ref.dataset.k, id: ref.dataset.id }); }
         if (e.target.closest('.dk-figure, .dk-file') && b?.type === 'file') return opts.openFile?.(b.itemId);
-        if (e.target.closest('.dk-page') && b?.type === 'page') { e.preventDefault(); return opts.openPage?.(b.docId); }
+        if (e.target.closest('.dk-pg') && b?.type === 'page') { e.preventDefault(); return opts.openPage?.(b.docId); }
         if (e.target.closest('.dk-grip')) { e.preventDefault(); return blockMenu(e.target, b); }
         if (e.target.closest('a') && (isMac ? e.metaKey : e.ctrlKey)) { e.preventDefault(); return open(e.target.closest('a').href, '_blank', 'noopener'); }
         if (e.target.closest('.dk-check, .dk-arrow, .dk-emoji, .dk-add, .dk-tbl-add')) e.preventDefault();
@@ -1905,8 +1916,9 @@ window.ColumnDocs = (() => {
       }
       if (e.target.closest('.dk-task-bits')) return;
       if (e.target.closest('.dk-live-body button, .dk-live-body a, .dk-live-body input')) return;
-      if (e.target.closest('.dk-page') && b?.type === 'page' && !e.shiftKey) { e.preventDefault(); return opts.openPage?.(b.docId); }
-      if (e.target.closest('.dk-figure, .dk-file, .dk-hr, .dk-lv, .dk-page')) {
+      if (e.target.closest('.dk-pg') && b?.type === 'page' && !e.shiftKey) { e.preventDefault(); return opts.openPage?.(b.docId); }
+      if (e.target.closest('.dk-vw button, .dk-vw a, .dk-vw input')) return;
+      if (e.target.closest('.dk-figure, .dk-file, .dk-hr, .dk-lv, .dk-pg, .dk-vw')) {
         e.preventDefault();
         if (b.type === 'file' && (e.detail > 1 || S.sel.includes(id))) return opts.openFile?.(b.itemId);
         return e.shiftKey && S.anchor ? select(range(S.anchor, id), S.anchor) : select([id]);

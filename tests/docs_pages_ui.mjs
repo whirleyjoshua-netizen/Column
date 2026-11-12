@@ -78,10 +78,10 @@ try {
 
   // Back up the breadcrumb: the handbook shows the page as a block that opens it.
   await A.tap(`[...document.querySelectorAll('#docview .dv-crumb')].find((b) => b.textContent === 'Handbook')`);
-  ok(await A.until(`document.querySelector('#docview .dk-title')?.textContent === 'Handbook' && document.querySelector('#docview .dk-page .dk-page-n')?.textContent === 'Safety rules'`), 'the handbook shows “Safety rules” as a page block');
+  ok(await A.until(`document.querySelector('#docview .dk-title')?.textContent === 'Handbook' && document.querySelector('#docview .dk-pg .dk-page-n')?.textContent === 'Safety rules'`), 'the handbook shows “Safety rules” as a page block');
   const order = await A.ev(`[...document.querySelectorAll('#docview .dk-row')].map((r) => r.classList.contains('dk-page') ? 'page' : r.dataset.id).join(',')`);
   ok(order === 'intro1,page', `the page took the empty line's place, after the line above it (${order})`);
-  await A.tap(`document.querySelector('#docview .dk-page')`);
+  await A.tap(`document.querySelector('#docview .dk-pg')`);
   ok(await A.until(`document.querySelector('#docview .dk-title')?.textContent === 'Safety rules'`), 'tapping the block opens the page');
 
   // The library: a tree, "+" adds a page inside.
@@ -139,8 +139,8 @@ try {
   await sleep(600);
   ok(await A.ev(`document.documentElement.scrollWidth <= 392`), 'Docs fits a phone (no sideways scroll)');
   await A.tap(row('Handbook'));
-  await A.until(`document.querySelector('#docview .dk-page')`);
-  await A.tap(`document.querySelector('#docview .dk-page')`);
+  await A.until(`document.querySelector('#docview .dk-pg')`);
+  await A.tap(`document.querySelector('#docview .dk-pg')`);
   await A.until(`[...document.querySelectorAll('#docview .dv-crumb')].length >= 2`);
   ok(await A.ev(`(() => { const b = document.querySelector('#docview .dv-bar'); return b.scrollWidth <= b.clientWidth + 2 && document.documentElement.scrollWidth <= 392; })()`), 'a page’s bar with its breadcrumb fits a phone');
   ok(!A.errors.length, 'no errors in the page' + (A.errors.length ? ': ' + A.errors.join(' | ').slice(0, 300) : ''));
