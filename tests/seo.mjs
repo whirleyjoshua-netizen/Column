@@ -79,6 +79,37 @@ try {
   ok(/team app/i.test(h1) && /small business/i.test(h1), `its main heading says what it is (“${h1.trim()}”)`);
   r = await get(SITE, '/download');
   ok(/<title>[^<]*(Mac|Windows)[^<]*<\/title>/.test(text(r)), 'the download page’s title says where Kloomie runs');
+
+  // Help, one page per topic (made from help.html, so there's one copy to keep up).
+  r = await get(SITE, '/help');
+  const hub = text(r);
+  const topicLinks = [...hub.matchAll(/href="\/help\/([a-z0-9-]+)"/g)].map((m) => m[1]);
+  ok(r.status === 200 && topicLinks.length >= 20 && topicLinks.includes('jobs-for-trades') && topicLinks.includes('getting-started'), `/help is a hub linking every topic’s own page (${topicLinks.length})`);
+  ok(!/<h2 id="billing">/.test(hub) && /\$15 a person|Billing/.test(hub), 'the hub lists topics, not the whole text');
+  ok(/<script src="\/help\.js"/.test(hub) && /"mileage":"jobs-for-trades"/.test(hub), 'an old link to a part of Help (/help#mileage) is sent to its topic’s page');
+  r = await get(SITE, '/help/jobs-for-trades', { 'accept-encoding': 'br' });
+  const tp = text(r);
+  ok(r.status === 200 && /<title>Jobs[^<]*· Kloomie Help<\/title>/.test(tp) && /<h1>Jobs<\/h1>/.test(tp), 'a topic has its own page, title and heading');
+  ok(tp.includes(`<link rel="canonical" href="https://${SITE}/help/jobs-for-trades">`), 'naming itself as the copy to index');
+  const td = /<meta name="description" content="([^"]*)"/.exec(tp)?.[1] || '';
+  ok(td.length > 40 && td.length <= 160 && !/</.test(td), `with its own description (${td.length} characters)`);
+  ok(/"@type":"BreadcrumbList"/.test(tp) && tp.includes(`"item":"https://${SITE}/help"`) && /Kloomie<\/a> · <a href="\/help">Help<\/a>/.test(tp), 'with breadcrumbs, on the page and for search engines');
+  ok(/id="mileage"/.test(tp) && /Visits and the team schedule/.test(tp), 'all of the topic is there, its own parts too');
+  ok(tp.includes('href="/help/sign-offs"') && !/href="#signoff"/.test(tp), 'links to other topics go to their pages');
+  ok(/"@type":"VideoObject"/.test(tp) && /"contentUrl":"https:\/\/[^"]+\/videos\/trades\.mp4"/.test(tp), 'its video is described for search engines');
+  ok(/href="\/help\/[a-z0-9-]+"[^>]*>[^<]*‹|‹[^<]*<\/a>|rel="prev"/.test(tp) || /rel="next"/.test(tp), 'and it links to the topics before and after it');
+  r = await get(SITE, '/help/jobs');
+  ok(r.status === 301 && r.headers.location === '/help/jobs-for-trades', 'a topic’s old short name moves to its page');
+  r = await get(SITE, '/help/nothing-here');
+  ok(r.status === 404, 'a topic that isn’t there is a 404');
+  r = await get(APPH, '/help/billing');
+  ok(r.status === 200 && r.headers.link === `<https://${SITE}/help/billing>; rel="canonical"`, 'on the app’s address too, naming the website’s copy');
+  r = await get(SITE, '/sitemap.xml');
+  ok(text(r).includes(`<loc>https://${SITE}/help/jobs-for-trades</loc>`) && (text(r).match(/\/help\//g) || []).length >= 20, 'the sitemap lists every topic');
+  r = await get(SITE, '/help.html');
+  ok(r.status === 301 && r.headers.location === '/help', 'the file Help is made from isn’t a second copy of it');
+  r = await get(SITE, '/help.js');
+  ok(r.status === 200 && /javascript/.test(r.headers['content-type'] || ''), '(the small script for old links is served)');
 } catch (e) {
   console.log('FAIL threw: ' + e.stack);
   fails++;

@@ -8,6 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import zlib from 'node:zlib';
+import { helpDocs } from './helpdocs.js';
 import { pipeline } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
@@ -10068,13 +10069,28 @@ function siteMove(req, url) {
   const host = String(req.headers.host || '').toLowerCase();
   if (!SITE_HOST || url.pathname.startsWith('/api/')) return null;
   if (host === SITE_HOST.replace(/^www\./, '') && host !== SITE_HOST) return `https://${SITE_HOST}${url.pathname}${url.search}`;
-  if (host !== SITE_HOST || SITE_PAGES.has(url.pathname) || path.extname(url.pathname)) return null;
+  if (host !== SITE_HOST || SITE_PAGES.has(url.pathname) || HELP_PAGE.test(url.pathname) || path.extname(url.pathname)) return null;
   // The app's own addresses (a card, a quote, an invite, a signing link…) go to the app; anything else isn't a page
   // of the website, and gets a real 404 there (not the app's sign-in, which search engines read as a page).
   return APP_PATHS.test(url.pathname) ? PUBLIC_URL + url.pathname + url.search : null;
 }
 const APP_PATHS = /^\/(?:(?:a|api|brand|c|cal|i|join|l|oauth|q|r|reset|s|sign|unsubscribe|hooks|twilio|quickbooks|dropbox|postiz|stripe)(?:\/|$)|(?:developers|import|ws|card\.js|k\.js)$)/;
-const siteMissing = (req, url) => onSite(req) && !SITE_PAGES.has(url.pathname) && !path.extname(url.pathname) && !APP_PATHS.test(url.pathname);
+const siteMissing = (req, url) => onSite(req) && !SITE_PAGES.has(url.pathname) && !HELP_PAGE.test(url.pathname) && !path.extname(url.pathname) && !APP_PATHS.test(url.pathname);
+// Help's pages, one per topic (server/helpdocs.js makes them from client/help.html).
+const HELP_PAGE = /^\/help\/[a-z0-9-]{1,60}$/;
+const HELP = helpDocs({ clientDir: CLIENT_DIR });
+const videoDate = (src) => { const st = /^\/videos\/[\w-]+\.mp4$/.test(src) && fs.statSync(path.join(CLIENT_DIR, src), { throwIfNoEntry: false }); return st ? st.mtime.toISOString().slice(0, 10) : null; };
+const HELP_CSP = "script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'self'";
+function serveHelp(req, res, url) {
+  if (url.pathname === '/help') {
+    const html = HELP.hub(SITE_URL);
+    return html ? send(res, 200, html, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache', 'Content-Security-Policy': HELP_CSP }) : send(res, 404, 'Not found');
+  }
+  const out = HELP.topic(url.pathname.slice(6), SITE_URL, videoDate);
+  if (out?.moved) { res.writeHead(301, { Location: out.moved, 'Cache-Control': 'public, max-age=86400' }); return res.end(); }
+  if (!out) return onSite(req) ? serveMissing(req, res) : send(res, 404, 'Not found');
+  send(res, 200, out.html, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache', 'Content-Security-Policy': HELP_CSP });
+}
 function serveMissing(req, res) {
   fs.readFile(path.join(CLIENT_DIR, '404.html'), 'utf8', (err, html) => {
     send(res, 404, err ? 'Not found' : html.replaceAll('{{APP}}', PUBLIC_URL), { 'Content-Type': err ? 'text/plain' : 'text/html; charset=utf-8', 'Cache-Control': 'no-cache', 'Content-Security-Policy': "default-src 'self'; script-src 'none'; style-src 'unsafe-inline'; img-src 'self'; base-uri 'none'; frame-ancestors 'none'" });
@@ -10098,7 +10114,8 @@ function serveRobots(req, res) {
 const SITE_FILES = { '/': 'site.html', '/help': 'help.html', '/download': 'download.html', '/terms': 'terms.html', '/privacy': 'privacy.html' };
 function serveSitemap(req, res) {
   const changed = (p) => (fs.statSync(path.join(CLIENT_DIR, SITE_FILES[p] || 'site.html'), { throwIfNoEntry: false })?.mtime || new Date()).toISOString().slice(0, 10);
-  const urls = SITE_MAP.map((p) => `  <url><loc>${SITE_URL}${p}</loc><lastmod>${changed(p)}</lastmod></url>`).join('\n');
+  const urls = [...SITE_MAP.map((p) => `  <url><loc>${SITE_URL}${p}</loc><lastmod>${changed(p)}</lastmod></url>`),
+    ...HELP.slugs().map((s) => `  <url><loc>${SITE_URL}/help/${s}</loc><lastmod>${changed('/help')}</lastmod></url>`)].join('\n');
   send(res, 200, `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls}\n</urlset>\n`, { 'Content-Type': 'application/xml; charset=utf-8', 'Cache-Control': 'public, max-age=3600' });
 }
 
@@ -10145,7 +10162,7 @@ async function handleRequest(req, res) {
   if (url.pathname === '/sitemap.xml') return serveSitemap(req, res);
   if (siteMissing(req, url)) return serveMissing(req, res);
   // Pages served on both addresses name the website's copy as the one to index; the app itself stays out of search.
-  if (SITE_HOST && ['/terms', '/privacy', '/help', '/download', '/get'].includes(url.pathname)) res.setHeader('Link', `<${SITE_URL}${url.pathname === '/get' ? '/download' : url.pathname}>; rel="canonical"`);
+  if (SITE_HOST && (['/terms', '/privacy', '/help', '/download', '/get'].includes(url.pathname) || HELP_PAGE.test(url.pathname))) res.setHeader('Link', `<${SITE_URL}${url.pathname === '/get' ? '/download' : url.pathname}>; rel="canonical"`);
   else if (SITE_HOST && !onSite(req) && req.method === 'GET' && !path.extname(url.pathname)) res.setHeader('X-Robots-Tag', 'noindex');
   if (url.pathname.startsWith('/api/')) {
     res.setHeader('Access-Control-Allow-Origin', '*');
@@ -10207,7 +10224,10 @@ async function handleRequest(req, res) {
   }
   if (url.pathname === '/download' || url.pathname === '/get') return serveStatic(req, res, new URL('/download.html', 'http://x'));
   if (url.pathname === '/developers') return serveStatic(req, res, new URL('/developers.html', 'http://x'));
-  if (url.pathname === '/terms' || url.pathname === '/privacy' || url.pathname === '/help') return serveStatic(req, res, new URL(url.pathname + '.html', 'http://x'));
+  if (url.pathname === '/help' || HELP_PAGE.test(url.pathname)) return serveHelp(req, res, url);
+  // The file Help's pages are made from isn't a page of its own (it would be the whole of Help twice over).
+  if (url.pathname === '/help.html') { res.writeHead(301, { Location: '/help', 'Cache-Control': 'public, max-age=86400' }); return res.end(); }
+  if (url.pathname === '/terms' || url.pathname === '/privacy') return serveStatic(req, res, new URL(url.pathname + '.html', 'http://x'));
   if (url.pathname.startsWith('/brand/') && (req.method === 'GET' || req.method === 'HEAD')) return serveLogo(req, res, url);
   if (url.pathname.startsWith('/twilio/sms/') || url.pathname.startsWith('/twilio/status/')) return TW.incoming(req, res, url).catch((e) => { alarm('A Twilio message failed', e); if (!res.headersSent) send(res, 500, 'Error'); });
   if (url.pathname === '/quickbooks/disconnected' && (req.method === 'GET' || req.method === 'HEAD')) return QB.disconnectedPage(req, res);
