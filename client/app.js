@@ -1216,7 +1216,7 @@
       h('button', { class: 'btn small', onclick: confirm }, 'Confirm'),
       h('button', { class: 'btn small', onclick: () => api('POST', '/account/verify/send').then(() => toast('New code sent'), (e) => toast(e.message)) }, 'Send a new code'),
       h('button', { class: 'icon-btn', 'aria-label': 'Hide for now', html: I.close, onclick: () => { S.confirmHidden = true; drawConfirmBar(); } }));
-    $('#tabs').before(bar);
+    $('#main > .bar').after(bar);
   }
 
   // ---------- billing: a free trial, then a subscription on Stripe's own pages (owners) ----------
@@ -1241,7 +1241,7 @@
     const bar = h('div', { id: 'billingBar', class: 'confirm-bar billing-bar' + (b.readOnly ? ' ended' : '') }, h('span', {}, msg, owner ? '' : ' Ask a team owner to subscribe.'),
       owner ? h('button', { class: 'btn small primary-btn', onclick: () => billingGo(b.state === 'past_due' ? 'portal' : 'checkout') }, b.state === 'past_due' ? 'Update card' : 'Subscribe') : null,
       b.readOnly ? null : h('button', { class: 'icon-btn', 'aria-label': 'Hide for now', html: I.close, onclick: () => { S.billingHidden = true; drawBillingBar(); } }));
-    $('#tabs').before(bar);
+    $('#main > .bar').after(bar);
   }
   function billingSection() {
     const b = S.workspace.billing || {};
@@ -3074,7 +3074,7 @@
     renderDay();
   }
 
-  // ----- the tab bar: Home and Day always, then whatever each person picks, in their order -----
+  // ----- your tabs (in the side toolbar): Home and Day always, then whatever each person picks, in their order -----
   // Views switch the main area; tools open their drawer (Jobs opens over the app). Anything not on the bar is in Tools.
   const BAR_DEFAULT = ['column', 'chat', 'camps', 'agents'];
   const BAR_ITEMS = {
@@ -3094,6 +3094,26 @@
     signs: { label: 'Signatures', ok: () => toolOn('signs'), open: () => { SG.filter = null; openTool('signs'); } },
     vault: { label: 'Vault', ok: () => toolOn('vault'), open: () => { VK.filter = null; openTool('vault'); } },
     news: { label: 'News', ok: () => toolOn('news') },
+  };
+  const TAB_IC = {
+    home: svg('<path d="M4 11l8-7 8 7v8a1 1 0 0 1-1 1h-4v-6h-6v6H5a1 1 0 0 1-1-1z"/>'),
+    day: svg('<rect x="4" y="5" width="16" height="15" rx="2"/><path d="M4 10h16M9 3v4M15 3v4"/>'),
+    column: svg('<path d="m12 3 9 5-9 5-9-5z"/><path d="m3 13 9 5 9-5"/>'),
+    chat: svg('<path d="M5 5h14a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H9l-4 3V6a1 1 0 0 1 1-1z"/>'),
+    camps: svg('<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="4"/><circle cx="12" cy="12" r=".5"/>'),
+    agents: svg('<circle cx="9" cy="8" r="3.5"/><path d="M3 20a6 6 0 0 1 12 0"/><path d="M16 4.5a3.5 3.5 0 0 1 0 7M21 20a6 6 0 0 0-4-5.6"/>'),
+    sidekick: svg('<path d="M12 3l1.9 5.6L19.5 10l-5.6 1.9L12 17.5l-1.9-5.6L4.5 10l5.6-1.4z"/>'),
+    docs: svg('<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h6"/>'),
+    projects: svg('<rect x="3" y="7" width="18" height="13" rx="2"/><path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M3 13h18"/>'),
+    bills: svg('<path d="M12 3v18M16.5 7.5c0-1.7-2-3-4.5-3s-4.5 1.3-4.5 3S9.5 10.5 12 11s4.5 1.3 4.5 3.5-2 3-4.5 3-4.5-1.3-4.5-3"/>'),
+    contacts: svg('<circle cx="12" cy="9" r="3.5"/><path d="M5 20a7 7 0 0 1 14 0"/>'),
+    email: svg('<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/>'),
+    folders: svg('<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>'),
+    meetings: svg('<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/>'),
+    map: svg('<path d="M12 21s-6-5.5-6-11a6 6 0 0 1 12 0c0 5.5-6 11-6 11z"/><circle cx="12" cy="10" r="2.2"/>'),
+    signs: svg('<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M14 6l4 4"/>'),
+    vault: svg('<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>'),
+    news: svg('<rect x="3" y="5" width="15" height="15" rx="2"/><path d="M18 9h3v9a2 2 0 0 1-2 2M7 9h7M7 13h7M7 17h4"/>'),
   };
   const barMine = () => (Array.isArray(S.me?.bar) ? S.me.bar : BAR_DEFAULT).filter((k) => BAR_ITEMS[k]);
   const barKeys = () => barMine().filter((k) => !BAR_ITEMS[k].ok || BAR_ITEMS[k].ok());
@@ -3133,12 +3153,12 @@
     try { S.me.pins = (await api('PUT', '/account/pins', { pins })).pins; renderTabs(); } catch (e) { S.me.pins = was; renderTabs(); toast(e.message); }
   }
   function togglePin(go, label) {
-    if (pinned(go)) return savePins(pinsMine().filter((x) => x.go !== go)).then(() => toast('Unpinned from the top bar'));
-    if (pinsMine().length >= 12) return toast('That’s 12 pins already. Unpin one first (the pencil on the tab bar).');
-    return savePins([...pinsMine(), { go, label: shortText(label || 'Pinned', 60) }]).then(() => toast('Pinned to the top bar'));
+    if (pinned(go)) return savePins(pinsMine().filter((x) => x.go !== go)).then(() => toast('Unpinned from the sidebar'));
+    if (pinsMine().length >= 12) return toast('That’s 12 pins already. Unpin one first (Change your tabs, in the sidebar).');
+    return savePins([...pinsMine(), { go, label: shortText(label || 'Pinned', 60) }]).then(() => toast('Pinned to the sidebar'));
   }
   // The menu row each pinnable thing adds to its own ⋯ menu.
-  const pinRow = (go, label) => ({ label: pinned(go) ? 'Unpin from the top bar' : '📌 Pin to the top bar', run: () => togglePin(go, label) });
+  const pinRow = (go, label) => ({ label: pinned(go) ? 'Unpin from the sidebar' : '📌 Pin to the sidebar', run: () => togglePin(go, label) });
   function openPin(go) {
     const [k, id] = pinParts(go);
     PIN_KINDS[k]?.open(id);
@@ -3163,7 +3183,7 @@
   function renderTabs() {
     const nav = $('#tabs');
     if (!nav) return;
-    const btn = (k, label) => h('button', { 'data-tab': k }, label);
+    const btn = (k, label) => h('button', { 'data-tab': k, title: label }, h('span', { class: 'tab-ic', html: TAB_IC[k] || TAB_IC.docs }), h('span', { class: 'tab-l' }, label));
     const pin = (x) => {
       const b = h('button', { class: 'tab-pin', 'data-pin': x.go, title: PIN_KINDS[pinParts(x.go)[0]].name + ': ' + pinLabel(x) }, h('span', { class: 'tab-pin-ic' }, PIN_KINDS[pinParts(x.go)[0]].icon), h('span', { class: 'tab-pin-name' }, pinLabel(x)));
       b.addEventListener('contextmenu', (e) => { e.preventDefault(); pinMenu(x, b); });
@@ -3173,7 +3193,7 @@
     const pins = pinsShown();
     nav.replaceChildren(btn('home', 'Home'), btn('day', 'Day'), ...barKeys().map((k) => btn(k, BAR_ITEMS[k].label)),
       ...(pins.length ? [h('span', { class: 'tabs-sep', 'aria-hidden': 'true' }), ...pins.map(pin)] : []),
-      h('button', { class: 'tabs-edit', title: 'Change your tabs', 'aria-label': 'Change your tabs', html: I.edit || '✎', onclick: (e) => { e.stopPropagation(); barSheet(); } }));
+      h('button', { class: 'tabs-edit', title: 'Change your tabs', 'aria-label': 'Change your tabs', onclick: (e) => { e.stopPropagation(); closeSide(); barSheet(); } }, h('span', { class: 'tab-ic', html: I.edit || '✎' }), h('span', { class: 'tab-l' }, 'Change your tabs')));
     markTabs();
     renderChatSide();
   }
@@ -3223,7 +3243,7 @@
               h('button', { class: 'icon-btn', 'aria-label': 'Move ' + pinLabel(x) + ' right', disabled: i === pins.length - 1, onclick: () => move(1) }, '↓'),
               h('button', { class: 'icon-btn', 'aria-label': 'Unpin ' + pinLabel(x), html: I.close, onclick: () => { pins = pins.filter((y) => y !== x); drawPins(); } })));
         }),
-        pins.length ? null : h('p', { class: 'muted small' }, 'Nothing pinned yet. Use 📌 Pin to the top bar in a job’s, project’s, campaign’s, doc’s or feed’s ⋯ menu, or pick one here.'));
+        pins.length ? null : h('p', { class: 'muted small' }, 'Nothing pinned yet. Use 📌 Pin to the sidebar in a job’s, project’s, campaign’s, doc’s or feed’s ⋯ menu, or pick one here.'));
     };
     drawPins();
     const addPin = (e) => {
@@ -3271,7 +3291,66 @@
     if (tab === 'day') renderDay();
     if (tab === 'chat') openChannel(C.view);
   }
+  // ---------- the side toolbar ----------
+  // When there's room (900px and wider) it's a sidebar, which can fold to icons (this device remembers). In a docked
+  // column or on a phone it's a drawer: ☰ opens it, so does a swipe in from the left edge; picking something, tapping
+  // outside it, Escape or a swipe back closes it.
+  const SIDE = { folded: !!store.get('sideFolded', false) };
+  const wideMq = matchMedia('(min-width: 900px)');
+  const sideOpen = () => $('#app').classList.contains('side-open');
+  let animT = 0;
+  const sideAnim = () => { $('#app').classList.add('side-anim'); clearTimeout(animT); animT = setTimeout(() => $('#app').classList.remove('side-anim'), 260); };
+  function sideLayout() {
+    const wide = wideMq.matches;
+    document.body.classList.toggle('wide', wide);
+    document.body.classList.toggle('side-folded', wide && SIDE.folded);
+    $('#sideFold').setAttribute('aria-pressed', SIDE.folded ? 'true' : 'false');
+    $('#sideFold').title = $('#sideFold').ariaLabel = SIDE.folded ? 'Open the sidebar' : 'Fold the sidebar';
+    if (wide) closeSide();
+  }
+  function openSide(byKey) {
+    if (wideMq.matches || sideOpen()) return;
+    sideAnim();
+    $('#app').classList.add('side-open');
+    $('#scrim').hidden = false;
+    $('#menuBtn').setAttribute('aria-expanded', 'true');
+    // From the keyboard, focus goes into it; a tap doesn't ring anything.
+    if (byKey) setTimeout(() => ($('#tabs button.on') || $('#tabs button'))?.focus({ preventScroll: true }), 30);
+  }
+  function closeSide() {
+    if (!sideOpen()) return;
+    if (!wideMq.matches) sideAnim();
+    $('#app').classList.remove('side-open');
+    $('#scrim').hidden = true;
+    $('#menuBtn').setAttribute('aria-expanded', 'false');
+  }
+  $('#menuBtn').addEventListener('click', (e) => (sideOpen() ? closeSide() : openSide(e.detail === 0)));
+  $('#sideClose').addEventListener('click', closeSide);
+  $('#scrim').addEventListener('click', closeSide);
+  $('#sideFold').addEventListener('click', () => { SIDE.folded = !SIDE.folded; store.set('sideFolded', SIDE.folded); sideLayout(); });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && sideOpen()) closeSide(); });
+  wideMq.addEventListener('change', sideLayout);
+  sideLayout();
+  {
+    let sw = null;
+    document.addEventListener('touchstart', (e) => {
+      const t = e.touches[0];
+      if (wideMq.matches || e.touches.length !== 1) return (sw = null);
+      // From the very edge to open; anywhere on the open drawer to close.
+      sw = sideOpen() ? { x: t.clientX, y: t.clientY, close: true } : t.clientX <= 22 ? { x: t.clientX, y: t.clientY } : null;
+    }, { passive: true });
+    document.addEventListener('touchmove', (e) => {
+      if (!sw) return;
+      const t = e.touches[0], dx = t.clientX - sw.x, dy = Math.abs(t.clientY - sw.y);
+      if (dy > 40) return (sw = null);
+      if (!sw.close && dx > 44) { sw = null; openSide(); }
+      else if (sw.close && dx < -44) { sw = null; closeSide(); }
+    }, { passive: true });
+    document.addEventListener('touchend', () => (sw = null), { passive: true });
+  }
+
   $('#tabs').addEventListener('click', (e) => {
+    if (e.target.closest('button')) closeSide();
     const pb = e.target.closest('button[data-pin]');
     if (pb) { if (pb._held) return (pb._held = false); return openPin(pb.dataset.pin); }
     const b = e.target.closest('button[data-tab]');
@@ -7830,6 +7909,7 @@
     const news = views.some((v) => !(S.tab === 'chat' && v === C.view) && unread(v));
     $('#tabs [data-tab="chat"]')?.classList.toggle('dot', news);
     $('#tabs [data-tab="home"]')?.classList.toggle('dot', news && !$('#tabs [data-tab="chat"]'));
+    $('#menuBtn')?.classList.toggle('dot', !!$('#tabs button.dot'));
     if (!C.side) return;
     if (C.side.querySelector('.rename')) return; // don't yank an input out from under the user
     const channels = S.workspace.channels || [];
@@ -7871,6 +7951,7 @@
 
   // ---------- settings ----------
   $('#settingsBtn').addEventListener('click', () => {
+    closeSide();
     closeTool();
     const s = $('#settings');
     if (s.classList.toggle('hidden')) return;
@@ -9208,7 +9289,9 @@
     const soon = billsSoon().length;
     const tight = budgetAlerts().length;
     const offBar = ['column', 'chat', 'camps'].filter((k) => !onBar(k));
-    openMenu(e.currentTarget, [
+    // Picking a tool from the drawer closes the drawer too.
+    const closing = (rows) => rows.map((r) => (r?.run ? { ...r, run: () => { closeSide(); r.run(); } } : r));
+    openMenu(e.currentTarget, closing([
       // Sidekick always comes first, above everything else.
       toolOn('sidekick') ? { label: h('span', { class: 'tool-item' }, '✦ Sidekick', skNudges().length ? h('small', {}, `${skNudges().length} need${skNudges().length === 1 ? 's' : ''} a look`) : null), on: toolOpen === 'sidekick', run: () => { SK.open = null; openTool('sidekick'); } } : null,
       toolOn('agents') && !onBar('agents') ? { label: h('span', { class: 'tool-item' }, '👥 Your team', agWaiting().length ? h('small', {}, `${agWaiting().length} waiting for your yes`) : null), on: toolOpen === 'agents', run: () => agOpen('team') } : null,
@@ -9226,7 +9309,8 @@
       toolOn('signs') ? { label: h('span', { class: 'tool-item' }, 'Signatures', SG.list.some((x) => x.status === 'sent' || x.status === 'viewed') ? h('small', {}, `${SG.list.filter((x) => x.status === 'sent' || x.status === 'viewed').length} waiting`) : null), on: toolOpen === 'signs', run: () => { SG.filter = null; openTool('signs'); } } : null,
       toolOn('cards') ? { label: 'Business card', on: toolOpen === 'cards', run: () => openTool('cards') } : null,
       toolOn('vault') ? { label: h('span', { class: 'tool-item' }, 'Vault', VK.key ? h('small', {}, 'unlocked') : null), on: toolOpen === 'vault', run: () => { VK.filter = null; openTool('vault'); } } : null,
-    ].filter(Boolean));
+      toolOn('news') ? { label: 'News', on: toolOpen === 'news', run: () => openTool('news') } : null,
+    ].filter(Boolean)));
   });
   function openTool(name) {
     toolOpen = name;
@@ -17728,7 +17812,11 @@
       }
       if (desktop) {
         dev.append(
-          toggleRow('Always on top', 'Keep the column above other windows', S.desktopCfg.alwaysOnTop, (on) => { S.desktopCfg.alwaysOnTop = on; desktop.setConfig({ alwaysOnTop: on }); }),
+          h('div', { class: 'srow desk-mode' }, h('span', {}, 'Window', h('small', {}, 'A slim column docked to the edge of the screen, or a full-size window like any other app')),
+            h('div', { class: 'seg' },
+              h('button', { class: S.desktopCfg.full ? null : 'on', 'data-mode': 'column', onclick: () => { S.desktopCfg.full = false; desktop.setConfig({ full: false }); renderSettings(); } }, 'Column'),
+              h('button', { class: S.desktopCfg.full ? 'on' : null, 'data-mode': 'full', onclick: () => { S.desktopCfg.full = true; desktop.setConfig({ full: true }); renderSettings(); } }, 'Full size'))),
+          toggleRow('Always on top', 'Keep the window above other windows', S.desktopCfg.alwaysOnTop, (on) => { S.desktopCfg.alwaysOnTop = on; desktop.setConfig({ alwaysOnTop: on }); }),
           toggleRow('Auto-save incoming files', 'Copy everything that arrives into Downloads/Kloomie', S.desktopCfg.autoSave, (on) => { S.desktopCfg.autoSave = on; desktop.setConfig({ autoSave: on }); }),
           toggleRow('Open at login', null, S.desktopCfg.openAtLogin, (on) => { S.desktopCfg.openAtLogin = on; desktop.setConfig({ openAtLogin: on }); }),
           desktop.setNext && desktop.platform === 'darwin' ? toggleRow('Next event in menu bar', 'Show what’s on now or next beside the menu-bar icon', S.desktopCfg.trayNext !== false, (on) => { S.desktopCfg.trayNext = on; desktop.setConfig({ trayNext: on }); }) : null,

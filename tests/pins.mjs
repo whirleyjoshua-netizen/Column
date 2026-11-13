@@ -67,7 +67,7 @@ ok(await A.until(`[...document.querySelectorAll('#camps *')].some((e) => e.textC
 await A.ev(`[...document.querySelectorAll('#camps *')].find((e) => e.children.length === 0 && e.textContent === 'Spring blinds push').click()`);
 ok(await A.until(`!!document.querySelector('[aria-label="Campaign options"]')`), 'campaign opens');
 await A.click('[aria-label="Campaign options"]');
-ok(await menuPick('/Pin to the top bar/'), 'its menu has 📌 Pin to the top bar');
+ok(await menuPick('/Pin to the sidebar/'), 'its menu has 📌 Pin to the sidebar');
 ok(await A.until(`[...document.querySelectorAll('#tabs .tab-pin')].some((b) => b.textContent.includes('Spring blinds push'))`), 'the campaign is on the tab bar');
 ok(await A.ev(`!!document.querySelector('#tabs .tabs-sep')`), 'after a divider');
 await sleep(400);
@@ -86,14 +86,14 @@ ok(await A.until(`[...document.querySelectorAll('#projects *')].some((e) => e.ch
 await A.ev(`[...document.querySelectorAll('#projects *')].find((e) => e.children.length === 0 && e.textContent === 'Smith kitchen shades').click()`);
 ok(await A.until(`!!document.querySelector('.pj-panel [aria-label="Record options"]')`), 'the job opens');
 await A.click('.pj-panel [aria-label="Record options"]');
-ok(await menuPick('/Pin to the top bar/'), 'the job’s menu has Pin to the top bar');
+ok(await menuPick('/Pin to the sidebar/'), 'the job’s menu has Pin to the sidebar');
 ok(await A.until(`[...document.querySelectorAll('#tabs .tab-pin')].some((b) => b.textContent.includes('Smith kitchen shades'))`), 'the job is pinned');
 
 // Pin a feed from the chat side
 await A.click('#tabs [data-tab=chat]');
 ok(await A.until(`!document.querySelector('#projects:not(.hidden)')`), 'Chat closes Jobs');
 await A.ev(`[...document.querySelectorAll('.ch-row')].find((r) => r.textContent.includes('crew')).querySelector('.ch-more').click()`);
-ok(await menuPick('/Pin to the top bar/'), 'a feed’s menu has Pin to the top bar');
+ok(await menuPick('/Pin to the sidebar/'), 'a feed’s menu has Pin to the sidebar');
 ok(await A.until(`(${pins.toString().replace(/^\(\) => A\.ev\(`/, '').replace(/`\)$/, '')}).length === 3`), 'three pins now: ' + (await pins()).join(', '));
 
 // Open each from the bar

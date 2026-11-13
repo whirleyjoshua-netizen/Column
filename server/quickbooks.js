@@ -442,7 +442,7 @@ export function quickbooksModule({ bind, db, save, broadcast, cleanText, readJso
     }
     return send(res, 405, { error: 'Method not allowed' });
   }
-  const page = (res, title, msg) => send(res, 200, `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${title}</title><body style="font:15px system-ui;background:#111;color:#eee;display:grid;place-items:center;height:90vh;text-align:center"><div><h2>${title}</h2><p>${msg}</p></div></body>`, { 'Content-Type': 'text/html; charset=utf-8' });
+  const page = (res, title, msg) => send(res, 200, `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${title}</title><body style="font:15px system-ui;background:#f6f6f8;color:#17171c;display:grid;place-items:center;height:90vh;text-align:center"><div><h2>${title}</h2><p>${msg}</p></div></body>`, { 'Content-Type': 'text/html; charset=utf-8' });
   // Intuit comes back here with the code and the company id in the address. Per Intuit's security rules this answers
   // with a redirect, never a page, so those never sit in a page that could pass them on; /quickbooks/done says how it went.
   const DONE = {

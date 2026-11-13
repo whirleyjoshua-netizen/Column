@@ -1,4 +1,4 @@
-// Kloomie desktop shell: a slim window docked to the screen edge, tray/menu-bar icon,
+// Kloomie desktop shell: a slim window docked to the screen edge (Column) or a normal window (Full size), tray/menu-bar icon,
 // global hotkey, and native drag-out of files to Finder/Explorer/desktop.
 const { app, BrowserWindow, Tray, Menu, globalShortcut, ipcMain, nativeImage, screen, shell, clipboard, session, desktopCapturer } = require('electron');
 const path = require('node:path');
@@ -25,7 +25,7 @@ if (isMac) app.commandLine.appendSwitch('enable-features', 'MacLoopbackAudioForS
 
 // ---------- config ----------
 const CFG_PATH = path.join(app.getPath('userData'), 'config.json');
-let cfg = { serverUrl: DEFAULT_SERVER, alwaysOnTop: false, autoSave: false, openAtLogin: false, panes: 1, trayNext: true };
+let cfg = { serverUrl: DEFAULT_SERVER, alwaysOnTop: false, autoSave: false, openAtLogin: false, panes: 1, trayNext: true, full: false, fullBounds: null };
 try {
   cfg = { ...cfg, ...JSON.parse(fs.readFileSync(CFG_PATH, 'utf8')) };
 } catch {}
@@ -86,19 +86,52 @@ let win = null;
 let tray = null;
 let quitting = false;
 
-function createWindow() {
+// Two ways to have the window: Column, a slim strip docked to the right edge of the screen (one or two panes wide),
+// or Full size, a normal window like any other app's, where it was last left (or centred, if that screen is gone).
+function columnBounds() {
   const { workArea } = screen.getPrimaryDisplay();
   const width = cfg.panes > 1 ? COL_WIDTH * 2 : COL_WIDTH;
+  return { x: workArea.x + workArea.width - width, y: workArea.y, width, height: workArea.height };
+}
+function fullBounds() {
+  const b = cfg.fullBounds;
+  if (b && [b.x, b.y, b.width, b.height].every(Number.isFinite)) {
+    const wa = screen.getDisplayMatching(b).workArea;
+    const seen = Math.min(b.x + b.width, wa.x + wa.width) - Math.max(b.x, wa.x) > 200 && Math.min(b.y + b.height, wa.y + wa.height) - Math.max(b.y, wa.y) > 120;
+    if (seen) return { x: Math.round(b.x), y: Math.round(b.y), width: Math.max(FULL_MIN.width, Math.round(b.width)), height: Math.max(FULL_MIN.height, Math.round(b.height)) };
+  }
+  const { workArea: wa } = screen.getPrimaryDisplay();
+  const width = Math.min(1320, wa.width - 80), height = Math.min(880, wa.height - 60);
+  return { x: wa.x + Math.round((wa.width - width) / 2), y: wa.y + Math.round((wa.height - height) / 2), width, height };
+}
+const FULL_MIN = { width: 720, height: 480 };
+function setMode(full) {
+  if (!win) return;
+  if (full) {
+    win.setMinimumSize(FULL_MIN.width, FULL_MIN.height);
+    win.setBounds(fullBounds(), true);
+  } else {
+    win.setMinimumSize(260, 320);
+    win.setBounds(columnBounds(), true);
+  }
+  win.show();
+  win.focus();
+}
+let boundsTimer = null;
+function keepFullBounds() {
+  clearTimeout(boundsTimer);
+  boundsTimer = setTimeout(() => { if (cfg.full && win && !win.isMinimized() && !win.isFullScreen()) { cfg.fullBounds = win.getBounds(); saveCfg(); } }, 400);
+}
+
+function createWindow() {
+  const b = cfg.full ? fullBounds() : columnBounds();
   win = new BrowserWindow({
-    width,
-    height: workArea.height,
-    x: workArea.x + workArea.width - width,
-    y: workArea.y,
-    minWidth: 260,
-    minHeight: 320,
+    ...b,
+    minWidth: cfg.full ? FULL_MIN.width : 260,
+    minHeight: cfg.full ? FULL_MIN.height : 320,
     title: 'Kloomie',
     icon: appIcon,
-    backgroundColor: '#111115',
+    backgroundColor: '#f6f6f8', // always white, like the app
     alwaysOnTop: cfg.alwaysOnTop,
     autoHideMenuBar: true,
     show: false,
@@ -109,6 +142,8 @@ function createWindow() {
       nodeIntegration: false,
     },
   });
+  win.on('resize', keepFullBounds);
+  win.on('move', keepFullBounds);
   win.once('ready-to-show', () => { log('ready-to-show', JSON.stringify(win.getBounds())); win.show(); win.focus(); });
   win.webContents.on('did-finish-load', () => { log('loaded', win.webContents.getURL()); if (!win.isVisible()) { win.show(); win.focus(); } });
   win.webContents.on('render-process-gone', (_e, d) => log('renderer gone', JSON.stringify(d)));
@@ -129,7 +164,7 @@ function createWindow() {
         action: 'allow',
         overrideBrowserWindowOptions: {
           width: Math.max(420, width), height: Math.min(900, workArea.height), x: workArea.x + Math.max(0, win.getBounds().x - workArea.x - Math.max(420, width)), y: workArea.y,
-          title: 'Kloomie', icon: appIcon, backgroundColor: '#111115', autoHideMenuBar: true,
+          title: 'Kloomie', icon: appIcon, backgroundColor: '#f6f6f8', autoHideMenuBar: true,
           webPreferences: { contextIsolation: true, nodeIntegration: false },
         },
       };
@@ -181,6 +216,7 @@ function setWidth(panes) {
   if (!win) return;
   cfg.panes = panes;
   saveCfg();
+  if (cfg.full) return; // a full-size window keeps its size; the panes just share it
   const b = win.getBounds();
   const target = panes > 1 ? Math.max(b.width, COL_WIDTH * 2) : COL_WIDTH;
   if (target === b.width) return;
@@ -210,6 +246,9 @@ function trayMenu() {
   return Menu.buildFromTemplate([
     ...today,
     { label: win?.isVisible() ? 'Hide Kloomie' : 'Show Kloomie', click: toggle },
+    { label: 'Column', type: 'radio', checked: !cfg.full, click: () => applyCfg({ full: false }) },
+    { label: 'Full size', type: 'radio', checked: !!cfg.full, click: () => applyCfg({ full: true }) },
+    { type: 'separator' },
     { label: 'Always on top', type: 'checkbox', checked: cfg.alwaysOnTop, click: (i) => applyCfg({ alwaysOnTop: i.checked }) },
     { label: 'Open Downloads/Kloomie', click: openSaveDir },
     { label: 'Change server…', click: () => { win.show(); loadSetup(); } },
@@ -231,6 +270,7 @@ function applyCfg(patch) {
   if ('alwaysOnTop' in patch) win?.setAlwaysOnTop(!!cfg.alwaysOnTop, 'floating');
   if ('openAtLogin' in patch) app.setLoginItemSettings({ openAtLogin: !!cfg.openAtLogin, openAsHidden: true });
   if ('trayNext' in patch) updateTray();
+  if ('full' in patch) { setMode(!!cfg.full); updateTray(); }
   saveCfg();
 }
 

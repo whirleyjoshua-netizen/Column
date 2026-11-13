@@ -14,7 +14,7 @@ function externalOk(url) {
 }
 
 // The settings a page may change. Which server the app talks to is changed only by connecting (setup page).
-const CFG_KEYS = new Set(['alwaysOnTop', 'autoSave', 'openAtLogin', 'trayNext']);
+const CFG_KEYS = new Set(['alwaysOnTop', 'autoSave', 'openAtLogin', 'trayNext', 'full']);
 function cfgPatch(patch) {
   const out = {};
   if (!patch || typeof patch !== 'object') return out;

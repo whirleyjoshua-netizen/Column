@@ -109,7 +109,7 @@ ok(await names() === 'Home,Day,Stacks,Agents,Jobs,Finance', 'same tabs after a r
 await A.click('#settingsBtn');
 ok(await A.until(`[...document.querySelectorAll('#settings h3')].some((x) => x.textContent === 'Your tabs')`), 'Settings → General has Your tabs');
 
-// Phone width: nothing squashed, the bar scrolls instead
+// Phone width: nothing squashed
 await A.cmd('Emulation.setDeviceMetricsOverride', { width: 360, height: 760, deviceScaleFactor: 2, mobile: true });
 await A.ev(`document.querySelector('#settings').classList.add('hidden')`);
 await api('PUT', '/account/bar', { bar: ['column', 'chat', 'camps', 'projects', 'bills', 'docs'] });
@@ -117,8 +117,13 @@ await A.ev(`location.reload()`).catch(() => {});
 await sleep(1500);
 await A.until(`!document.querySelector('#app').classList.contains('hidden')`);
 await sleep(600);
+// On a phone the tabs are in the side drawer (☰), one under another (2026-11-12: the side toolbar).
+await A.ev(`document.querySelector('#menuBtn').click(); true`);
+await sleep(400);
 ok(await A.ev(`[...document.querySelectorAll('#tabs button')].every((b) => b.scrollWidth <= b.clientWidth + 1)`), 'no tab label is cut off on a phone');
-ok(await A.ev(`document.querySelector('#tabs').scrollWidth > document.querySelector('#tabs').clientWidth`), 'the bar scrolls sideways when there are many');
+ok(await A.ev(`(() => { const bs = [...document.querySelectorAll('#tabs button[data-tab]')]; const d = document.querySelector('#side').getBoundingClientRect(); return bs.length === 8 && bs.every((b, i) => { const r = b.getBoundingClientRect(); return r.left >= d.left && r.right <= d.right + 1 && (!i || r.top > bs[i - 1].getBoundingClientRect().top); }); })()`), 'the drawer lists them all, one under another, none squashed');
+await A.ev(`document.querySelector('#scrim').click(); true`);
+await sleep(300);
 ok(await A.ev(`document.documentElement.scrollWidth <= innerWidth`), 'the page itself does not scroll sideways');
 ok(await A.ev(`document.querySelector('#home').scrollWidth <= document.querySelector('#home').clientWidth + 1`), 'Home fits the phone (Get started rows included)');
 

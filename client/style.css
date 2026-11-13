@@ -1,34 +1,20 @@
+/* Kloomie is always white (the owner, 2026-11-12): one light look on every device, whatever the computer is set to. */
 :root {
-  --bg: #111115;
-  --panel: #18181d;
-  --card: #1f1f25;
-  --card-hover: #26262d;
-  --line: #2a2a32;
-  --text: #ececf1;
-  --muted: #8b8b98;
-  --faint: #55555f;
-  --accent: #8b7cff;
-  --accent-soft: rgba(139, 124, 255, 0.14);
-  --danger: #ff6b6b;
-  --ok: #3ddc97;
+  --bg: #f6f6f8;
+  --panel: #ffffff;
+  --card: #ffffff;
+  --card-hover: #f1f1f5;
+  --line: #e4e4ea;
+  --text: #17171c;
+  --muted: #6b6b78;
+  --faint: #a5a5b0;
+  --accent: #6b5cf0;
+  --accent-soft: rgba(107, 92, 240, 0.1);
+  --danger: #d92d20;
+  --ok: #15924f;
   --radius: 12px;
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  color-scheme: dark;
-}
-@media (prefers-color-scheme: light) {
-  :root {
-    --bg: #f6f6f8;
-    --panel: #ffffff;
-    --card: #ffffff;
-    --card-hover: #f1f1f5;
-    --line: #e4e4ea;
-    --text: #17171c;
-    --muted: #6b6b78;
-    --faint: #a5a5b0;
-    --accent: #6b5cf0;
-    --accent-soft: rgba(107, 92, 240, 0.1);
-    color-scheme: light;
-  }
+  color-scheme: light;
 }
 
 * { box-sizing: border-box; }
@@ -80,7 +66,8 @@ input:focus, textarea:focus, select:focus { border-color: var(--accent); }
 .seg button.on { background: var(--card-hover); color: var(--text); }
 
 /* ---------- column ---------- */
-.app { height: 100%; display: flex; flex-direction: column; position: relative; }
+.app { height: 100%; display: flex; flex-direction: row; position: relative; }
+.main { flex: 1; min-width: 0; height: 100%; display: flex; flex-direction: column; position: relative; }
 .bar {
   display: flex; align-items: center; gap: 8px;
   height: 44px; flex: none;
@@ -110,11 +97,63 @@ input:focus, textarea:focus, select:focus { border-color: var(--accent); }
 /* desktop window chrome */
 body.desktop .bar { -webkit-app-region: drag; }
 body.desktop .bar button, body.desktop .bar .devices, body.desktop .bar .ws { -webkit-app-region: no-drag; }
-body.platform-darwin .bar { padding-left: 76px; }
+body.platform-darwin:not(.wide) .bar { padding-left: 76px; }
 
 .panes { flex: 1; display: flex; min-height: 0; }
 .pane { flex: 1; min-width: 0; display: flex; flex-direction: column; position: relative; }
 .pane + .pane { border-left: 1px solid var(--line); }
+
+/* ---------- the shell: a side toolbar instead of tabs across the top ----------
+   900px and wider: a sidebar (folds to icons). Narrower (a docked column, a phone): a drawer from the left. */
+body { --side-w: 0px; }
+body.wide { --side-w: 233px; }
+body.wide.side-folded { --side-w: 61px; }
+#side { display: flex; flex-direction: column; flex: none; width: 232px; height: 100%; background: var(--panel); border-right: 1px solid var(--line); z-index: 58; /* over full-screen views (45), under menus and pop-ups (60) */ padding-bottom: env(safe-area-inset-bottom); }
+#side .side-top { display: flex; align-items: center; gap: 6px; min-height: 44px; padding: env(safe-area-inset-top) 8px 0 16px; flex: none; }
+#side .side-brand { flex: 1; font-weight: 700; font-size: 14.5px; letter-spacing: -.01em; white-space: nowrap; overflow: hidden; }
+#side .tabs { display: flex; flex-direction: column; gap: 1px; flex: 1; min-height: 0; margin: 0; padding: 6px 8px; background: none; border: 0; border-radius: 0; overflow-x: hidden; overflow-y: auto; }
+#side .tabs button, #side .side-foot button { position: relative; display: flex; align-items: center; gap: 10px; width: 100%; max-width: none; min-height: 34px; flex: none; padding: 7px 10px; border: 0; border-radius: 8px; background: none; color: var(--muted); font-size: 13.5px; font-weight: 550; text-align: left; white-space: nowrap; overflow: hidden; opacity: 1; cursor: pointer; }
+#side .tabs button:hover, #side .side-foot button:hover { background: var(--card-hover); color: var(--text); }
+#side .tabs button.on { background: var(--accent-soft); color: var(--accent); }
+#side .tab-ic { width: 18px; height: 18px; flex: none; display: grid; place-items: center; font-size: 13px; }
+#side .tab-ic svg { width: 18px; height: 18px; }
+#side .tab-l, #side .tab-pin-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+#side .tabs .tabs-sep { width: auto; height: auto; margin: 14px 10px 4px; background: none; color: var(--faint); font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; flex: none; }
+#side .tabs .tabs-sep::before { content: 'Pinned'; }
+#side .tabs .tab-pin-ic { width: 18px; flex: none; text-align: center; font-size: 13px; }
+#side .tabs .tabs-edit { margin-top: 8px; }
+#side .tabs .tabs-edit svg { width: 16px; height: 16px; }
+#side .tabs button.dot::after { content: ""; flex: none; width: 7px; height: 7px; margin: 0 0 0 auto; border-radius: 50%; background: var(--accent); }
+#side .side-foot { flex: none; display: flex; flex-direction: column; gap: 1px; padding: 6px 8px 10px; border-top: 1px solid var(--line); }
+.menu-btn, #sideClose { display: none; }
+.menu-btn.dot::after { content: ""; position: absolute; top: 5px; right: 4px; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
+.menu-btn { position: relative; }
+.scrim { position: fixed; inset: 0; z-index: 57; background: rgba(23, 23, 28, 0.3); }
+.scrim[hidden] { display: none; }
+body:not(.wide) #side { position: fixed; top: 0; bottom: 0; left: 0; width: min(280px, 86vw); transform: translateX(-102%); visibility: hidden; }
+body:not(.wide) .app.side-open #side { transform: none; visibility: visible; box-shadow: 0 0 40px rgba(0, 0, 0, 0.16); }
+/* It slides only when someone opens or closes it, never when the window changes size. */
+body:not(.wide) .app.side-anim #side { transition: transform .2s ease, visibility 0s linear .2s; }
+body:not(.wide) .app.side-anim.side-open #side { transition: transform .2s ease; }
+body:not(.wide) .menu-btn { display: grid; margin-left: -6px; }
+body:not(.wide) #sideClose { display: grid; }
+/* As a sidebar it's part of the page: previews, sheets and pop-ups go over it (it's a flex item, so its z-index would count). */
+body.wide #side { z-index: auto; }
+body:not(.wide) #sideFold { display: none; }
+body.wide.side-folded #side { width: 60px; }
+body.wide.side-folded #side .tab-l, body.wide.side-folded #side .side-brand, body.wide.side-folded #side .tabs-sep, body.wide.side-folded #side .tab-pin-name { display: none; }
+body.wide.side-folded #side .tabs button, body.wide.side-folded #side .side-foot button { justify-content: center; padding: 7px 0; }
+body.wide.side-folded #side .tabs button.dot::after { position: absolute; top: 6px; right: 9px; }
+body.wide.side-folded #side .side-top { justify-content: center; padding-left: 0; padding-right: 0; }
+/* The desktop app: the window is dragged by the top of the toolbar; on a Mac its buttons sit above it. */
+body.desktop #side .side-top { -webkit-app-region: drag; }
+body.desktop #side .side-top button { -webkit-app-region: no-drag; }
+body.desktop.platform-darwin #side .side-top { padding-top: 34px; }
+/* Full-screen views (a doc, Jobs & projects) leave the sidebar where it is. */
+body.wide .docview, body.wide .projects { left: var(--side-w); }
+body.wide.platform-darwin .dv-bar, body.wide.platform-darwin .pj-head, body.wide.platform-darwin .pj-top { padding-left: 16px; }
+/* Settings and tools fill the page beside the sidebar, with the writing kept to a readable width. */
+body.wide .settings:not(.side) { padding-left: max(24px, calc((100% - 920px) / 2)); padding-right: max(24px, calc((100% - 920px) / 2)); }
 
 .chips { display: flex; gap: 4px; padding: 7px 8px; overflow-x: auto; scrollbar-width: none; flex: none; border-bottom: 1px solid var(--line); }
 .chips::-webkit-scrollbar { display: none; }
@@ -530,7 +569,7 @@ button.ln-chip:hover, .ln-task:hover { background: var(--card-hover); }
 
 /* mentions */
 .mention { color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); border-radius: 4px; padding: 0 2px; font-weight: 600; }
-.mention.me { color: #f5b942; background: rgba(245, 185, 66, 0.16); }
+.mention.me { color: #9a6200; background: rgba(245, 185, 66, 0.2); }
 .msg.mine .mention { color: #fff; background: rgba(255, 255, 255, 0.2); }
 .msg.at-me .bubble { box-shadow: inset 3px 0 0 #f5b942; }
 .badge.at { background: #f5b942; color: #1a1a1a; }
@@ -2122,11 +2161,10 @@ body.platform-darwin .pj-head, body.platform-darwin .pj-top { padding-left: 80px
 .cm-url input { width: 100%; }
 .pay-sec .row-in { display: flex; gap: 8px; }
 .pay-sec .row-in input { flex: 1; min-width: 0; }
-@media (prefers-color-scheme: light) {
   .pj-inv-st.s-partial { background: #fff4d6; color: #8a5a00; }
   .pj-inv-st.s-paid { background: #e3f6ec; color: #126b3d; }
   .pj-inv-st.late { background: #fde8e7; color: #b42318; }
-}
+
 
 /* Calendars: Apple steps and the subscribe link */
 .apple-steps { margin: 0 0 12px; padding-left: 20px; font-size: 13px; line-height: 1.6; color: var(--muted); }
@@ -2201,10 +2239,9 @@ button.hq-entry:hover { background: var(--card-hover); }
 .hq-group { display: flex; flex-direction: column; gap: 2px; }
 .hq-kind { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; margin-top: 4px; }
 .hq-chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px 0; }
-@media (prefers-color-scheme: light) {
   .hq-entry .hq-do { color: #15803d; }
   .hq-entry .hq-dont { color: #b91c1c; }
-}
+
 
 /* notifications: the bell up top and its list */
 .bell-btn { position: relative; }
@@ -2296,7 +2333,8 @@ button.hq-entry:hover { background: var(--card-hover); }
 .sp-person-h small { color: var(--muted); }
 .sp-person.over .sp-person-h small { color: #f59e0b; }
 .sp-empty { padding: 30px 10px; text-align: center; max-width: 480px; margin: 0 auto; }
-@media (prefers-color-scheme: light) { .sp-ok { color: #15803d; } .sp-warn, .sp-person.over .sp-person-h small { color: #b45309; } }
+ .sp-ok { color: #15803d; } .sp-warn, .sp-person.over .sp-person-h small { color: #b45309; }
+
 
 /* software project: docs and standup */
 .pj-tools { display: flex; gap: 6px; margin-left: auto; }
@@ -2309,7 +2347,8 @@ button.hq-entry:hover { background: var(--card-hover); }
 .su-entry p small { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; margin-right: 4px; }
 .su-block { color: #f59e0b; }
 .su-set { display: flex; flex-direction: column; gap: 8px; border-top: 1px solid var(--line); padding-top: 10px; }
-@media (prefers-color-scheme: light) { .su-block { color: #b45309; } .su-entry.blocked { border-color: #d97706; } }
+ .su-block { color: #b45309; } .su-entry.blocked { border-color: #d97706; }
+
 
 /* GitHub */
 .gh-steps ol { margin: 6px 0 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px; font-size: 13.5px; }
@@ -2329,7 +2368,8 @@ button.hq-entry:hover { background: var(--card-hover); }
 .rl-stats b { color: var(--text); }
 .rl-item { display: block; text-align: left; margin: 2px 0; }
 .rl-item small { color: var(--muted); }
-@media (prefers-color-scheme: light) { .rl-yes { color: #15803d; } .rl-no { color: #b45309; } }
+ .rl-yes { color: #15803d; } .rl-no { color: #b45309; }
+
 .ml-fin { display: block; margin-top: 6px; color: var(--muted); font-size: 11.5px; }
 
 /* AI plans for software projects */

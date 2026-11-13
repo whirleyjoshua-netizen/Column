@@ -1038,8 +1038,7 @@ function docSharePage(res, it, token, brand, root = it) {
   res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Content-Security-Policy': "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'" });
   res.end(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${escHtml(it.title || 'Doc')}</title><style>
-:root{color-scheme:light dark;--bg:#f6f6f8;--card:#fff;--text:#16161a;--muted:#6b6b76;--line:#e4e4ea;--soft:#f1f1f5;--accent:#6b5cf0}
-@media (prefers-color-scheme:dark){:root{--bg:#111115;--card:#1a1a20;--text:#ececf1;--muted:#8d8d99;--line:#2a2a32;--soft:#22222a;--accent:#8b7cff}}
+:root{color-scheme:light;--bg:#f6f6f8;--card:#fff;--text:#16161a;--muted:#6b6b76;--line:#e4e4ea;--soft:#f1f1f5;--accent:#6b5cf0}
 ${brand?.accent ? `:root{--accent:${brand.accent}}` : ''}
 body{margin:0;background:var(--bg);color:var(--text);font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;padding:24px 16px}
 article{background:var(--card);border-radius:14px;max-width:760px;margin:0 auto;padding:36px 44px;box-shadow:0 10px 40px rgba(0,0,0,.08);word-break:break-word}
@@ -1969,8 +1968,7 @@ function sharePage(res, code, body, title = 'Kloomie', brand = null) {
   });
   res.end(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${escHtml(title)}</title><style>
-:root{color-scheme:light dark;--bg:#f6f6f8;--card:#fff;--text:#16161a;--muted:#6b6b76;--accent:#7c6cf6}
-@media (prefers-color-scheme:dark){:root{--bg:#111115;--card:#1a1a20;--text:#ececf1;--muted:#8d8d99}}
+:root{color-scheme:light;--bg:#f6f6f8;--card:#fff;--text:#16161a;--muted:#6b6b76;--accent:#7c6cf6}
 body{margin:0;min-height:100vh;display:grid;place-items:center;background:var(--bg);color:var(--text);font:15px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;padding:16px;box-sizing:border-box}
 main{background:var(--card);border-radius:16px;padding:24px;width:min(560px,100%);box-shadow:0 10px 40px rgba(0,0,0,.12);text-align:center}
 img,video{max-width:100%;max-height:60vh;border-radius:10px;display:block;margin:0 auto 16px}audio{width:100%;margin-bottom:16px}
@@ -3668,7 +3666,7 @@ async function oauthCallback(req, res, url) {
   const provider = url.pathname.split('/')[2];
   const p = calProviders[provider];
   const pend = oauthPending.get(url.searchParams.get('state') || '');
-  const page = (title, msg) => send(res, 200, `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${escHtml(title)}</title><body style="font:15px system-ui;background:#111;color:#eee;display:grid;place-items:center;height:90vh;text-align:center"><div><h2>${escHtml(title)}</h2><p>${escHtml(msg)}</p></div></body>`, { 'Content-Type': 'text/html; charset=utf-8', 'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'" });
+  const page = (title, msg) => send(res, 200, `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${escHtml(title)}</title><body style="font:15px system-ui;background:#f6f6f8;color:#17171c;display:grid;place-items:center;height:90vh;text-align:center"><div><h2>${escHtml(title)}</h2><p>${escHtml(msg)}</p></div></body>`, { 'Content-Type': 'text/html; charset=utf-8', 'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'" });
   if (!p || !pend || pend.provider !== provider || pend.exp < Date.now()) return page('Link expired', 'Start again from Kloomie → Settings → Calendars.');
   {
     const pws = db.workspaces[pend.wsId];

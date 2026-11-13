@@ -36,7 +36,7 @@ export function oauthBind({ secure = false, secret = crypto.randomBytes(32) } = 
       'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; form-action 'none'; frame-ancestors 'none'",
     });
     res.end(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><meta name="robots" content="noindex"><title>Connect ${esc(what)} to Kloomie?</title>
-<body style="font:15px system-ui;background:#111;color:#eee;display:grid;place-items:center;min-height:90vh;margin:0;padding:0 16px"><div style="max-width:440px">
+<body style="font:15px system-ui;background:#f6f6f8;color:#17171c;display:grid;place-items:center;min-height:90vh;margin:0;padding:0 16px"><div style="max-width:440px">
 <h2>Connect ${esc(what)} to Kloomie?</h2>
 <p>This connects the account you just signed in with to <b>${esc(person)}</b> on the Kloomie team <b>“${esc(team)}”</b>.</p>
 <p>Only continue if that’s you and you started this in Kloomie yourself. If someone sent you this link, close this page: nothing has been connected.</p>

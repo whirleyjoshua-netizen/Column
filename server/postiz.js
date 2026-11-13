@@ -171,7 +171,7 @@ export function postizModule({ bind, db, save, broadcast, cleanText, readJson, s
     const r = url.searchParams.get('r');
     const [title, msg] = Object.hasOwn(DONE, r || '') ? DONE[r] : DONE.failed;
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'X-Robots-Tag': 'noindex', 'Cache-Control': 'no-store', 'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'", 'X-Content-Type-Options': 'nosniff' });
-    res.end(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${title}</title><body style="font:15px system-ui;background:#111;color:#eee;display:grid;place-items:center;height:90vh;text-align:center"><div><h2>${title}</h2><p>${msg}</p></div></body>`);
+    res.end(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${title}</title><body style="font:15px system-ui;background:#f6f6f8;color:#17171c;display:grid;place-items:center;height:90vh;text-align:center"><div><h2>${title}</h2><p>${msg}</p></div></body>`);
   }
   async function callback(req, res, url) {
     const st = url.searchParams.get('state') || '';

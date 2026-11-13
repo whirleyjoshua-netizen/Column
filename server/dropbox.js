@@ -146,7 +146,7 @@ export function dropboxModule({ bind, noRoom = () => null, db, rid, save, send, 
   function donePage(req, res, url) {
     const r = url.searchParams.get('r');
     const [title, msg] = Object.hasOwn(PAGES, r || '') ? PAGES[r] : PAGES.failed;
-    return send(res, 200, `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><meta name="robots" content="noindex"><title>${title}</title><body style="font:15px system-ui;background:#111;color:#eee;display:grid;place-items:center;height:90vh;text-align:center;padding:0 16px"><div><h2>${title}</h2><p>${msg}</p></div></body>`,
+    return send(res, 200, `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><meta name="robots" content="noindex"><title>${title}</title><body style="font:15px system-ui;background:#f6f6f8;color:#17171c;display:grid;place-items:center;height:90vh;text-align:center;padding:0 16px"><div><h2>${title}</h2><p>${msg}</p></div></body>`,
       { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
   }
   async function callback(req, res, url) {
