@@ -4814,7 +4814,7 @@ function cleanBlocks(list, budget = { blocks: 20000, pics: 30 }, inCell = false)
     } else if (b.t === 'img' && typeof b.src === 'string' && budget.pics-- > 0) {
       const m = /^data:image\/(png|jpeg);base64,([A-Za-z0-9+/=]+)$/.exec(b.src);
       if (!m || m[2].length > 11_000_000) continue;
-      out.push({ t: 'img', w: Math.max(0, Math.min(5000, +b.w || 0)), img: { type: m[1] === 'png' ? 'png' : 'jpg', bytes: Buffer.from(m[2], 'base64') } });
+      out.push({ t: 'img', w: Math.max(0, Math.min(5000, +b.w || 0)), img: { type: m[1] === 'png' ? 'png' : 'jpg', bytes: new Uint8Array(Buffer.from(m[2], 'base64')) } }); // its own memory: pdf-lib reads a JPEG from the start of .buffer, and a small Buffer shares a pool
     }
   }
   return out;

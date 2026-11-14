@@ -1584,6 +1584,7 @@
       if (!it.channelId) a.append(btn(I.stack, it.dirId ? 'Move to a stack (out of the folder)' : 'Move to stack', (b) => stackMenu(it, b)));
     }
     if (inChat(it) && ['file', 'text', 'message'].includes(it.type) && (it.type !== 'message' || stripLinks(it.text))) a.append(btn(I.stack, 'Keep a copy in a stack or folder', (b) => copyMenu(it, b)));
+    if ((isChatView(view) || it.channelId) && signTarget(it)) a.append(btn(I.edit, 'Sign it', () => signInChat(signTarget(it), view || (it.channelId ? 'ch:' + it.channelId : 'chat')), 'sign-btn'));
     if (docable(it)) a.append(btn(I.copy, 'Make it a doc', () => makeItDoc(it)));
     if (it.type === 'message' && isMine(it)) a.append(btn(I.edit, 'Edit', (b) => editMessage(b.closest('.msg'), it)));
     if (it.type !== 'message' || isMine(it) || amAdmin()) {
@@ -2300,7 +2301,7 @@
 
   // ---------- preview ----------
   // standalone: the whole page is this file (a window of its own), so there's nothing to close back to.
-  function openPreview(it, { standalone = false, edit = false, sign = false } = {}) {
+  function openPreview(it, { standalone = false, edit = false, sign = false, mine = false, onSigned = null } = {}) {
     if (it.type === 'text' && !standalone) return openDoc(it);
     if (it.type === 'sealed') return sealOpen(it);
     const pv = $('#preview');
@@ -2316,7 +2317,7 @@
     if (k === 'image') pv.append(h('img', { src: fileUrl(it), alt: it.name }));
     else if (k === 'video') pv.append(h('video', { src: fileUrl(it), controls: true, autoplay: true, playsinline: true }));
     else if (k === 'audio') pv.append(h('div', { style: 'color:#fff;font-size:15px' }, it.name), h('audio', { src: fileUrl(it), controls: true, autoplay: true }));
-    else if (k === 'pdf') pv.append(pdfView(it, { sign }));
+    else if (k === 'pdf') pv.append(pdfView(it, { sign, mine, onSigned }));
     else if (k === 'text') pv.append(h('pre', { html: linkify(it.text) }));
     else if (k === 'docx') pv.append(wordView(it, { edit, close: () => (standalone ? null : close(true)) }));
     else if (k === 'textfile') {
@@ -7864,6 +7865,70 @@
     // From somewhere else in Kloomie (a card that isn't in chat): it moves, as dragging between stacks does.
     if (at.to.dirId) return saveToDir(it, at.to.dirId);
     return api('PATCH', '/items/' + it.id, { stackId: at.to.stackId }).then(upsert).catch((er) => toast(er.message));
+  }
+
+  // ---------- sign it, right in the chat ----------
+  // A PDF, Word file, photo, note or message in a feed: one tap opens it to sign with your saved signature (drawn
+  // the first time). Anything that isn't a PDF becomes one first, next to it. The signed copy lands next to it too,
+  // and is posted to the feed when the feed wouldn't show it by itself (#general shows messages only).
+  const signableFile = (it) => !!it && it.status === 'ready' && (kind(it) === 'pdf' || kind(it) === 'docx' || (it.type === 'file' && /^image\/(png|jpe?g|webp|gif)$/.test(it.mime || '')));
+  // What "Sign it" signs: the thing itself; for a message, the file it links to, or its own words when they're long
+  // enough to be something to sign (pasted terms, an agreement), not every "ok, see you at 9".
+  function signTarget(it) {
+    if (it.type === 'file') return signableFile(it) ? it : null;
+    if (it.type === 'text') return it.status === 'ready' ? it : null;
+    if (it.type !== 'message') return null;
+    const f = linksIn(it.text).map((l) => l.type === 'file' && linkedFile(l.id)).find(signableFile);
+    if (f) return f;
+    const t = stripLinks(it.text);
+    return t.length >= 120 || t.split('\n').filter((l) => l.trim()).length >= 3 ? it : null;
+  }
+  // A photo as a JPEG for a PDF page (any size picture, kept under 2000px on its longest side).
+  async function photoForPdf(it) {
+    const bmp = await createImageBitmap(await (await fetch(fileUrl(it))).blob());
+    const k = Math.min(1, 2000 / Math.max(bmp.width, bmp.height));
+    const c = document.createElement('canvas');
+    c.width = Math.round(bmp.width * k);
+    c.height = Math.round(bmp.height * k);
+    const g = c.getContext('2d');
+    g.fillStyle = '#fff';
+    g.fillRect(0, 0, c.width, c.height);
+    g.drawImage(bmp, 0, 0, c.width, c.height);
+    return { t: 'img', src: c.toDataURL('image/jpeg', 0.88), w: 5000 };
+  }
+  async function pdfToSign(it) {
+    const first = (t) => t.split('\n').find((l) => l.trim())?.trim().slice(0, 60) || 'Message';
+    const name = it.type === 'file' ? it.name.replace(/\.[^.]+$/, '') : it.type === 'text' ? docTitle(it) : first(plainText(it.text));
+    let blocks;
+    if (kind(it) === 'docx') { const doc = await ColumnWord.read(await fileBuf(it)); blocks = await ColumnWord.outline(doc.el, doc); }
+    else if (it.type === 'file') blocks = [await photoForPdf(it)];
+    else if (it.type === 'text') { const d = await api('GET', `/items/${it.id}/doc`); blocks = await ColumnDocs.toPdf(d.title || '', d.blocks, async () => null, docLiveLines); }
+    else blocks = plainText(it.text).split('\n').filter((l) => l.trim()).map((l) => ({ t: 'p', runs: [{ text: l }] }));
+    const out = await api('POST', '/docs/pdf', { itemId: it.id, name, blocks });
+    upsert(out);
+    return out;
+  }
+  async function signInChat(it, view) {
+    try {
+      let pdf = it;
+      if (kind(it) !== 'pdf') {
+        toast('Making a PDF to sign…');
+        pdf = await pdfToSign(it);
+      }
+      openPreview(pdf, { mine: true, onSigned: (out) => signedInChat(out, view) });
+    } catch (e) { toast(e.message); }
+  }
+  async function signedInChat(out, view) {
+    upsert(out);
+    const pv = $('#preview');
+    pv.classList.add('hidden');
+    pv.innerHTML = '';
+    // A feed of its own shows the signed copy as it is; #general and threads show messages, so it's posted there.
+    const shown = !!out.channelId && !viewThread(view);
+    try {
+      if (!shown) await api('POST', '/items', { type: 'message', text: `✍️ Signed\n${linkToken('file', out.id)}`, ...destOf(view) });
+      toast(`Signed: ${out.name}`, { label: 'Open', run: () => openPreview(S.items.find((x) => x.id === out.id) || out) });
+    } catch (e) { toast(e.message); }
   }
 
   // ---------- ⌘K: jump to a feed, or search messages, files, tasks and stacks ----------
@@ -15131,16 +15196,18 @@
   }
 
   // sign: open straight into placing someone else's signature boxes.
-  function pdfView(it, { docked = false, sign = false } = {}) {
+  // mine: opened to sign it yourself (from chat): the Sign tool is picked straight away, and onSigned hears about
+  // the signed copy once it's saved.
+  function pdfView(it, { docked = false, sign = false, mine = false, onSigned = null } = {}) {
     const key = `${it.id}:${it.editedAt || it.createdAt}:${docked ? 'dock' : 'full'}${sign ? ':sign' : ''}`;
-    if (pdfViews.has(key)) return pdfViews.get(key);
+    if (!mine && pdfViews.has(key)) return pdfViews.get(key);
     const P = { marks: [], form: {}, fields: [], tool: null, sending: sign, zoom: 1, doc: null, view: null, width: 0, run: 0 };
     const bar = h('div', { class: 'pdf-bar' });
     const hint = h('div', { class: 'pdf-hint hidden' });
     const host = h('div', { class: 'pdf-pages' }, h('p', { class: 'day-hint' }, 'Opening…'));
     const scroll = h('div', { class: 'pdf-scroll' }, host);
     const el = h('div', { class: 'pdf' + (docked ? ' docked' : '') }, bar, h('div', { class: 'pdf-body' }, hint, scroll));
-    pdfViews.set(key, el);
+    if (!mine) pdfViews.set(key, el);
     if (pdfViews.size > 6) pdfViews.delete(pdfViews.keys().next().value);
     const marks = () => (P.sending ? P.fields : P.marks);
     const dirty = () => P.marks.length > 0 || Object.keys(P.form).length > 0;
@@ -15166,6 +15233,7 @@
     ColumnPdf.open(fileUrl(it)).then((doc) => {
       P.doc = doc;
       layout();
+      if (mine) pick('sig');
     }).catch(() => host.replaceChildren(h('p', { class: 'day-hint' }, 'Couldn’t open this PDF. '), h('button', { class: 'btn small', onclick: () => download(it) }, 'Download it')));
 
     async function fillPage(p) {
@@ -15350,7 +15418,7 @@
           tool('text', 'Text', 'Type anywhere on the page'), tool('date', 'Date', 'Today’s date'), tool('check', '✓', 'A checkmark'),
           tool('sig', 'Sign', 'Your signature'), tool('ini', 'Initials', 'Your initials'),
           h('span', { class: 'pdf-gap' }),
-          dirty() ? h('button', { class: 'btn small primary-btn', title: 'Saves a new PDF next to this one. This one stays as it is.', onclick: saveCopy }, 'Save a copy') : null,
+          dirty() ? h('button', { class: 'btn small primary-btn', title: 'Saves a new PDF next to this one. This one stays as it is.', onclick: saveCopy }, mine ? 'Done: save the signed copy' : 'Save a copy') : null,
           h('button', { class: 'btn small', title: 'Get someone else’s signature', onclick: () => sendMode(true) }, 'Send for signature'),
         ].filter(Boolean));
       }
@@ -15370,6 +15438,7 @@
         P.form = {};
         refill();
         drawBar();
+        if (onSigned) return onSigned(item);
         toast(`Saved “${item.name}”`, { label: 'Open', run: () => openPreview(S.items.find((x) => x.id === item.id) || item) });
       } catch (err) {
         toast(err.message);
