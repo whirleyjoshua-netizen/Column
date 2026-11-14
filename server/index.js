@@ -41,7 +41,7 @@ import { signoffModule } from './signoff.js';
 import { cardsModule } from './cards.js';
 import { newsModule } from './news.js';
 import { qrSvg } from './qr.js';
-import { agentsModule } from './agents.js';
+import { agentsModule, AGENTS } from './agents.js';
 import { postizModule } from './postiz.js';
 import { makeImage } from './images.js';
 import { Readable } from 'node:stream';
@@ -583,7 +583,8 @@ const publicWorkspace = (ws, memberId) => ({
   deleteAt: ws.deleteAt || null,
   deleteBy: ws.deleteAt ? ws.deleteBy : null,
   stacks: ws.stacks.filter((x) => seesCampaign(x.campaignId, memberId)),
-  channels: ws.channels.filter((x) => seesFeed(x, memberId)),
+  channels: publicChannels(ws, memberId),
+  chatPins: publicChatPins(ws, ws.chatPins, memberId),
   chatFolders: ws.chatFolders,
   dirs: ws.dirs.filter((d) => seesDir(ws, d.id, memberId)),
   members: ws.members.map(publicMember),
@@ -2163,6 +2164,36 @@ function validChannel(ws, channelId, memberId) {
   const ch = channelId && ws.channels.find((c) => c.id === channelId);
   return ch && seesFeed(ch, memberId) ? channelId : null;
 }
+// ---------- pinned to a chat: a stack, doc, folder or agent kept at the top of a feed ----------
+// Pins belong to the feed (ws.chatPins for #general), so everyone in it sees them. What each one is, though, is
+// worked out for each reader: a pin to something they can't open is a locked chip with no name or id.
+const CHAT_PIN_KINDS = ['stack', 'doc', 'dir', 'agent'];
+const CHAT_PINS = 8;
+// True or false: whether this person can open what the pin points at. Null: it's gone, for everyone.
+function chatPinSees(ws, p, memberId) {
+  if (p.kind === 'stack') { const st = ws.stacks.find((x) => x.id === p.id); return st ? seesCampaign(st.campaignId, memberId) : null; }
+  if (p.kind === 'dir') return ws.dirs.some((d) => d.id === p.id) ? seesDir(ws, p.id, memberId) : null;
+  if (p.kind === 'doc') { const it = db.items[p.id]; return it && it.wsId === ws.id && it.type === 'text' ? canSee({ memberId, wsId: ws.id }, 'item', it) : null; }
+  if (p.kind === 'agent') return Object.hasOwn(AGENTS, p.id) ? true : null;
+  return null;
+}
+function chatPinLabel(ws, p) {
+  if (p.kind === 'stack') return { label: ws.stacks.find((x) => x.id === p.id)?.name || 'Stack' };
+  if (p.kind === 'dir') return { label: ws.dirs.find((d) => d.id === p.id)?.name || 'Folder' };
+  if (p.kind === 'doc') { const it = db.items[p.id]; return { label: it.title || docOf(it).title || 'Untitled', icon: it.icon || undefined }; }
+  return { label: AGENTS[p.id].name, icon: AGENTS[p.id].icon };
+}
+function publicChatPins(ws, pins, memberId) {
+  const out = [];
+  for (const p of pins || []) {
+    const sees = chatPinSees(ws, p, memberId);
+    if (sees === null) continue;
+    out.push(sees ? { pid: p.pid, kind: p.kind, id: p.id, ...chatPinLabel(ws, p) } : { pid: p.pid, kind: p.kind, locked: true });
+  }
+  return out;
+}
+const publicChannels = (ws, memberId) => ws.channels.filter((x) => seesFeed(x, memberId)).map((ch) => (ch.pins ? { ...ch, pins: publicChatPins(ws, ch.pins, memberId) } : ch));
+
 function validChatFolder(ws, folderId) {
   return folderId && ws.chatFolders.some((f) => f.id === folderId) ? folderId : null;
 }
@@ -9006,6 +9037,33 @@ async function api(req, res, url) {
     return send(res, 200, publicWorkspace(ws, auth.memberId));
   }
 
+  if (a === 'channels' && b && c === 'pins') {
+    const ch = b === 'general' ? null : ws.channels.find((x) => x.id === b);
+    if ((b !== 'general' && !ch) || !seesFeed(ch, auth.memberId)) return send(res, 404, { error: 'Not found' });
+    const list = ch ? (ch.pins ||= []) : (ws.chatPins ||= []);
+    let narrower = false;
+    if (m === 'POST' && !d) {
+      const body = await readJson(req);
+      const kind = String(body.kind || ''), id = String(body.id || '').slice(0, 64);
+      if (!CHAT_PIN_KINDS.includes(kind)) return send(res, 400, { error: 'Stacks, docs, folders and agents can be pinned to a chat.' });
+      if (!chatPinSees(ws, { kind, id }, auth.memberId)) return send(res, 404, { error: 'That isn’t there any more.' });
+      // Gone things drop off before counting.
+      for (let i = list.length - 1; i >= 0; i--) if (chatPinSees(ws, list[i], auth.memberId) === null) list.splice(i, 1);
+      if (list.some((p) => p.kind === kind && p.id === id)) return send(res, 409, { error: 'That’s already pinned here.' });
+      if (list.length >= CHAT_PINS) return send(res, 400, { error: `A chat holds ${CHAT_PINS} pins. Take one off first.` });
+      list.push({ pid: rid(8), kind, id, by: auth.memberId, at: Date.now() });
+      // Not everyone in the feed can open it: they see a locked chip. The person pinning is told.
+      narrower = ws.members.some((x) => seesFeed(ch, x.id) && !chatPinSees(ws, { kind, id }, x.id));
+    } else if (m === 'DELETE' && d) {
+      const i = list.findIndex((p) => p.pid === d);
+      if (i < 0) return send(res, 404, { error: 'That pin is gone.' });
+      list.splice(i, 1);
+    } else return send(res, 405, { error: 'Method not allowed' });
+    save();
+    broadcast(ws.id, { type: 'workspace' });
+    return send(res, 200, { ...publicWorkspace(ws, auth.memberId), narrower });
+  }
+
   if (a === 'channels') {
     let resync = false;
     if (m === 'POST' && !b) {
@@ -9237,6 +9295,44 @@ async function api(req, res, url) {
       save();
       broadcast(ws.id, { type: 'item:update', item: publicItem(it) });
       return send(res, 200, publicItem(it));
+    }
+    // A copy of something in chat (or anywhere) into a stack or folder; the original stays where it is. Nobody new
+    // may see something someone else made, unless an owner or admin copies it.
+    if (c === 'copy' && m === 'POST') {
+      const body = await readJson(req);
+      let place;
+      if (body.dirId) {
+        if (!validDir(ws, body.dirId, auth.memberId)) return send(res, 404, { error: 'That folder is gone' });
+        place = { dirId: body.dirId, stackId: null, channelId: null };
+      } else if (body.stackId) {
+        const to = validStack(ws, body.stackId, auth.memberId);
+        if (!to) return send(res, 404, { error: 'That stack is gone' });
+        place = { stackId: to, channelId: null };
+      } else return send(res, 400, { error: 'Pick a stack or folder to copy it into.' });
+      if (!['file', 'message', 'text'].includes(it.type) || it.status !== 'ready') return send(res, 400, { error: 'Files, messages and notes can be copied.' });
+      const seesPlace = (memberId) => (place.dirId ? seesDir(ws, place.dirId, memberId) : !!validStack(ws, place.stackId, memberId));
+      if (!ownsItem(auth, it) && !isAdmin(auth) && ws.members.some((x) => seesPlace(x.id) && !canSee({ memberId: x.id, wsId: ws.id }, 'item', it))) {
+        return send(res, 403, { error: 'That would show something someone else posted to people who can’t see it now. Ask them, or an owner or admin.' });
+      }
+      if (it.type === 'file') {
+        const full = noRoom(ws.id, it.size || 0);
+        if (full) return send(res, 413, { error: full });
+        const id = rid();
+        await fsp.copyFile(path.join(FILES_DIR, it.id), path.join(FILES_DIR, id));
+        const item = addItem({ ...baseItem(auth, { type: 'file', name: it.name, size: it.size, mime: it.mime }), id, ...place, copiedFrom: it.id });
+        return send(res, 200, publicItem(item));
+      }
+      if (it.type === 'message') {
+        const t = it.text.replace(LINK_RE, '').trim();
+        if (!t) return send(res, 400, { error: 'That message is only links. Drag what it links to instead.' });
+        const item = addItem(baseItem(auth, { type: 'text', text: t, ...place, copiedFrom: it.id }));
+        return send(res, 200, publicItem(item));
+      }
+      // A note or doc: its words and blocks, without the pages inside it.
+      const dc = it.blocks ? docOf(it) : null;
+      const blocks = dc ? dc.blocks.filter((x) => x.type !== 'page') : null;
+      const item = addItem(baseItem(auth, { type: 'text', text: dc ? docText(dc.title, blocks) : it.text, ...(dc ? { title: dc.title, blocks, refs: docRefs(blocks), v: 0, pinned: true, editedAt: Date.now() } : {}), ...place, copiedFrom: it.id }));
+      return send(res, 200, publicItem(item));
     }
     if (c) return send(res, 404, { error: 'Not found' });
     if (m === 'PATCH') {
@@ -10654,7 +10750,7 @@ async function buildExport(x) {
     : {
         name: ws.name, createdAt: ws.createdAt, tz: tzOf(ws), settings: ws.settings, brand: ws.brand, roles: ws.roles,
         members: ws.members.map((m) => ({ id: m.id, name: m.name, role: m.role, roleIds: m.roleIds || [], createdAt: m.createdAt })),
-        stacks: ws.stacks.filter((st) => seesCampaign(st.campaignId, me.id)), channels: ws.channels.filter((ch) => seesFeed(ch, me.id)),
+        stacks: ws.stacks.filter((st) => seesCampaign(st.campaignId, me.id)), channels: publicChannels(ws, me.id),
         chatFolders: ws.chatFolders, dirs: ws.dirs.filter((d) => seesDir(ws, d.id, me.id)),
       };
 

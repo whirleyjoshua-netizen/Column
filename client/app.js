@@ -1583,6 +1583,7 @@
       if (!it.channelId) a.append(btn(I.folder, it.dirId ? `In ${dirById(it.dirId)?.name || 'a folder'} · move it` : 'Save to folder', (b) => folderMenu(it, b), it.dirId ? 'on' : null));
       if (!it.channelId) a.append(btn(I.stack, it.dirId ? 'Move to a stack (out of the folder)' : 'Move to stack', (b) => stackMenu(it, b)));
     }
+    if (inChat(it) && ['file', 'text', 'message'].includes(it.type) && (it.type !== 'message' || stripLinks(it.text))) a.append(btn(I.stack, 'Keep a copy in a stack or folder', (b) => copyMenu(it, b)));
     if (docable(it)) a.append(btn(I.copy, 'Make it a doc', () => makeItDoc(it)));
     if (it.type === 'message' && isMine(it)) a.append(btn(I.edit, 'Edit', (b) => editMessage(b.closest('.msg'), it)));
     if (it.type !== 'message' || isMine(it) || amAdmin()) {
@@ -1875,7 +1876,7 @@
     const links = linksIn(it.text);
     const text = links.length ? stripLinks(it.text) : it.text;
     return h('article', { class: 'msg' + (mine ? ' mine' : '') + (atMe ? ' at-me' : '') },
-      h('div', { class: 'who' }, `${mine ? 'You' : it.by} · ${it.device} · `, h('span', { 'data-ago': it.createdAt }, ago(it.createdAt)),
+      h('div', { class: 'who', draggable: 'true', title: 'Drag into a pinned stack to keep it', ondragstart: (e) => { S.internalDrag = true; S.dragItem = { it, at: Date.now() }; e.dataTransfer.effectAllowed = 'copy'; e.dataTransfer.setData('text/plain', plainText(it.text)); }, ondragend: () => (S.internalDrag = false) }, `${mine ? 'You' : it.by} · ${it.device} · `, h('span', { 'data-ago': it.createdAt }, ago(it.createdAt)),
         it.editedAt ? h('span', { class: 'edited', title: 'Edited ' + new Date(it.editedAt).toLocaleString() }, ' · edited') : null),
       text ? h('div', { class: 'bubble', html: mentionify(linkify(text)) }) : null,
       links.length ? h('div', { class: 'links' }, links.map(linkEl)) : null,
@@ -2488,6 +2489,14 @@
       tr.classList.add('file-over');
       return;
     }
+    const cd = S.token && chatDropAt(e.target);
+    document.querySelectorAll('.chat-over').forEach((x) => x !== cd?.el && x.classList.remove('chat-over'));
+    if (cd) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'copy';
+      cd.el.classList.add('chat-over');
+      return;
+    }
     if (S.internalDrag || !S.token) return;
     e.preventDefault();
     if (dropCampaign()) return $('#camps').classList.add('dropping');
@@ -2536,10 +2545,16 @@
       const fromKloomie = columnDragged(e);
       S.internalDrag = false;
       S.dragItem = null;
-      if (fromKloomie) return attachToTask(t, [], [fromColumn]);
+      if (fromKloomie) return attachToTask(t, [], [fromKloomie]);
       if (hasFiles(e.dataTransfer)) return attachToTask(t, [...e.dataTransfer.files]);
       return;
     }
+    const cd = S.token && chatDropAt(e.target);
+    document.querySelectorAll('.chat-over').forEach((x) => x.classList.remove('chat-over'));
+    if (cd) return chatDrop(cd);
+    // Files from the computer dropped on a pinned stack's chip go into that stack.
+    const chip = S.token && !S.internalDrag && hasFiles(e.dataTransfer) && e.target.closest?.('.ch-pins .cp[data-kind="stack"]:not(.locked)');
+    if (chip) return [...e.dataTransfer.files].forEach((f) => queue(() => uploadFile(f, { stackId: chip.dataset.id, channelId: null })));
     if (S.internalDrag || !S.token) return;
     const dt = e.dataTransfer;
     const camp = dropCampaign();
@@ -7636,7 +7651,8 @@
         h('button', { class: 'icon-btn ch-menu', 'aria-label': 'Feeds', html: I.menu, onclick: () => root.classList.toggle('side-open') }),
         C.title,
         h('button', { class: 'icon-btn ch-search', title: 'Search  (⌘K)', 'aria-label': 'Search', html: I.search, onclick: () => openPalette() })
-      )
+      ),
+      (C.pinbar = h('div', { class: 'ch-pins', 'aria-label': 'Pinned to this chat' }))
     );
     root.append(C.side, h('div', { class: 'ch-scrim', onclick: () => root.classList.remove('side-open') }), C.main);
   }
@@ -7660,6 +7676,7 @@
     }
     const ch = channelById(viewChannel(view));
     C.title.replaceChildren(h('span', { class: 'hash' }, '#'), ch ? ch.name : 'general');
+    drawChatPins();
     $('#chat').classList.remove('side-open');
     if (S.me?.pins?.length) markTabs();
     checkThread();
@@ -7675,6 +7692,7 @@
     if (C.view !== feed) openChannel(feed);
     if (C.thread?._view === 'th:' + id) return C.thread.querySelector('textarea')?.focus();
     closeThread();
+    closeShelf();
     const pane = h('section', { class: 'pane chat-pane', 'data-i': 't' });
     pane._view = 'th:' + id;
     pane._cards = new Map();
@@ -7700,6 +7718,152 @@
     const id = C.thread && viewThread(C.thread._view);
     const root = id && S.items.find((x) => x.id === id);
     if (id && (!root || (root.channelId ? 'ch:' + root.channelId : 'chat') !== C.view)) closeThread();
+  }
+
+  // ---------- pinned to a chat: a stack, doc, folder or agent at the top of the feed, for everyone in it ----------
+  // A pinned stack opens beside the feed (where threads open): browse and search it, drag its cards into the chat to
+  // link them, and drag files and messages from the chat (or the computer) into it. The server says what each pin is
+  // for this person; a pin to something they can't open comes as a locked chip.
+  const CHAT_PIN = {
+    stack: { icon: '🗂️', name: 'Stack', label: (id) => stackById(id)?.name, open: (id) => openShelf(id), full: (id) => showStack(id) },
+    doc: { icon: '📄', name: 'Doc', label: (id) => { const d = docById(id); return d && docTitle(d); }, open: (id) => goTo('doc:' + id) },
+    dir: { icon: '📁', name: 'Folder', label: (id) => dirById(id)?.name, open: (id) => openFolder(id) },
+    agent: { icon: '🤖', name: 'Agent', label: () => null, open: (id) => agOpen(id) },
+  };
+  const CHAT_AGENTS = [['chief', '🧭', 'Chief of Staff'], ['sales', '🤝', 'Client & Sales Manager'], ['ops', '🛠️', 'Operations Manager'], ['marketing', '📣', 'Marketing Manager']];
+  const chatFeedKey = () => viewChannel(C.view || 'chat') || 'general';
+  const chatPins = () => (chatFeedKey() === 'general' ? S.workspace?.chatPins : channelById(chatFeedKey())?.pins) || [];
+  const chatPinName = (p) => (p.locked ? 'Private' : CHAT_PIN[p.kind]?.label(p.id) || p.label || CHAT_PIN[p.kind]?.name);
+  function drawChatPins() {
+    if (!C.pinbar) return;
+    const pins = chatPins().filter((p) => CHAT_PIN[p.kind]);
+    C.pinbar.replaceChildren(...pins.map(chatPinChip), h('button', { class: 'cp-add', title: 'Pin a stack, doc, folder or agent to this chat', onclick: (e) => chatPinMenu(e.currentTarget) }, pins.length ? '+' : '📌 Pin a stack, doc or folder'));
+    C.pinbar.classList.toggle('none', !pins.length);
+    // The open stack was unpinned or deleted, or the feed changed.
+    const sid = C.shelf && viewStack(C.shelf._view);
+    if (sid && (!stackById(sid) || !pins.some((p) => p.kind === 'stack' && p.id === sid))) closeShelf();
+    C.pinbar.querySelectorAll('.cp').forEach((x) => x.classList.toggle('on', !!sid && x.dataset.kind === 'stack' && x.dataset.id === sid));
+  }
+  function chatPinChip(p) {
+    const k = CHAT_PIN[p.kind];
+    const name = chatPinName(p);
+    const chip = h('div', { class: 'cp' + (p.locked ? ' locked' : ''), 'data-kind': p.kind, 'data-id': p.id || '' },
+      h('button', { class: 'cp-open', title: p.locked ? 'Pinned by someone in this chat. Only some people here can open it.' : `${k.name}: ${name}`, disabled: p.locked, onclick: () => k.open(p.id) },
+        h('span', { class: 'cp-ic' }, p.locked ? '🔒' : p.icon || k.icon), h('span', { class: 'cp-name' }, name)),
+      h('button', { class: 'cp-x', title: 'Unpin from this chat', 'aria-label': 'Unpin ' + name, html: I.close, onclick: () => chatUnpin(p) }));
+    return chip;
+  }
+  async function chatPin(kind, id) {
+    try {
+      const r = await api('POST', `/channels/${chatFeedKey()}/pins`, { kind, id });
+      const { narrower, ...ws } = r;
+      S.workspace = ws;
+      drawChatPins();
+      if (narrower) toast('Pinned. Not everyone in this chat can open it: they see a locked pin.');
+      if (kind === 'stack') openShelf(id);
+    } catch (e) { toast(e.message); }
+  }
+  async function chatUnpin(p) {
+    try {
+      const { narrower, ...ws } = await api('DELETE', `/channels/${chatFeedKey()}/pins/${p.pid}`);
+      S.workspace = ws;
+      drawChatPins();
+    } catch (e) { toast(e.message); }
+  }
+  function chatPinMenu(anchor) {
+    const have = new Set(chatPins().map((p) => `${p.kind}:${p.id}`));
+    const row = (kind, id, label) => (have.has(`${kind}:${id}`) ? null : { label, run: () => chatPin(kind, id) });
+    const docs = S.items.filter((x) => x.type === 'text' && !x.underId).sort((a, b) => (b.editedAt || b.createdAt) - (a.editedAt || a.createdAt)).slice(0, 6);
+    const sec = (head, rows) => (rows.filter(Boolean).length ? [{ head }, ...rows.filter(Boolean)] : []);
+    const rows = [
+      ...sec('Stacks', (S.workspace.stacks || []).map((st) => row('stack', st.id, '🗂️ ' + st.name))),
+      ...sec('Docs', docs.map((d) => row('doc', d.id, (d.icon || '📄') + ' ' + docTitle(d)))),
+      ...(toolOn('folders') ? sec('Folders', dirs().filter((d) => !d.parentId).map((d) => row('dir', d.id, '📁 ' + d.name))) : []),
+      ...(toolOn('agents') ? sec('Agents', CHAT_AGENTS.map(([id, ic, n]) => row('agent', id, ic + ' ' + n))) : []),
+    ];
+    openMenu(anchor, rows.length ? rows : [{ note: 'Make a stack, doc or folder first.' }]);
+  }
+
+  // The pinned stack beside the feed. Its pane is a stack pane like any other: cards, search, drop to upload.
+  function openShelf(stackId) {
+    const st = stackById(stackId);
+    if (!st) return;
+    if (C.shelf?._view === 'stack:' + stackId) return closeShelf();
+    closeThread();
+    closeShelf();
+    const pane = h('section', { class: 'pane shelf-pane', 'data-i': 's' });
+    pane._view = 'stack:' + stackId;
+    pane._cards = new Map();
+    pane._list = h('div', { class: 'list' + (newestAtBottom(pane._view) ? ' bottom' : '') });
+    pane.append(filterBar(pane), pane._list, composer(pane));
+    C.shelfBox = h('aside', { class: 'ch-thread ch-shelf' },
+      h('div', { class: 'ch-head' },
+        h('div', { class: 'ch-title' }, '🗂️ ', st.name),
+        h('div', { class: 'shelf-acts' },
+          h('button', { class: 'btn small', title: 'Open the whole stack', onclick: () => showStack(stackId) }, 'Open'),
+          h('button', { class: 'icon-btn th-close', 'aria-label': 'Close stack', html: I.close, onclick: closeShelf }))),
+      h('p', { class: 'shelf-hint' }, 'Drag cards into the chat to share them · drag chat files and messages here to keep them'),
+      pane);
+    $('#chat').append(C.shelfBox);
+    $('#chat').classList.add('shelf-open');
+    C.shelf = pane;
+    renderPane(pane, true);
+    drawChatPins();
+  }
+  function closeShelf() {
+    if (!C.shelfBox) return;
+    C.shelfBox.remove();
+    C.shelfBox = C.shelf = null;
+    $('#chat').classList.remove('shelf-open');
+    drawChatPins();
+  }
+  // In chat, means it lives in a feed (and isn't already somewhere else).
+  const inChat = (it) => it.type === 'message' || !!it.channelId;
+  async function copyInto(it, to) {
+    try {
+      upsert(await api('POST', `/items/${it.id}/copy`, to));
+      render();
+      const name = to.stackId ? stackById(to.stackId)?.name : dirById(to.dirId)?.name;
+      if (!(to.stackId && C.shelf?._view === 'stack:' + to.stackId)) toast(`Copied to ${name || 'it'}`, { label: 'Open', run: () => (to.stackId ? showStack(to.stackId) : openFolder(to.dirId)) });
+    } catch (e) { toast(e.message); }
+  }
+  function copyMenu(it, anchor) {
+    const pinned = chatPins().filter((p) => p.kind === 'stack' && stackById(p.id)).map((p) => p.id);
+    const stacks = [...S.workspace.stacks].sort((a, b) => pinned.includes(b.id) - pinned.includes(a.id));
+    openMenu(anchor, [
+      { head: 'Keep a copy in a stack' },
+      ...stacks.map((st) => ({ label: (pinned.includes(st.id) ? '📌 ' : '') + st.name, run: () => copyInto(it, { stackId: st.id }) })),
+      ...(stacks.length ? [] : [{ note: 'Create stacks in ⚙ Settings' }]),
+      ...(toolOn('folders') && dirs().length ? [{ head: 'Or a folder' }, ...dirFlat().map(({ d, depth }) => ({ label: dirLabel(d, depth), run: () => copyInto(it, { dirId: d.id }) }))] : []),
+    ]);
+  }
+  // Where a drag in chat would land: the open stack (or a pinned stack's or folder's chip) takes things from the
+  // feed; the feed takes cards from the open stack, as links.
+  function chatDropAt(target) {
+    const it = S.internalDrag && S.dragItem?.it;
+    if (!it || S.tab !== 'chat' || !target?.closest) return null;
+    const chip = target.closest('.ch-pins .cp:not(.locked)');
+    if (chip && (chip.dataset.kind === 'stack' || chip.dataset.kind === 'dir')) return { el: chip, to: chip.dataset.kind === 'stack' ? { stackId: chip.dataset.id } : { dirId: chip.dataset.id } };
+    if (C.shelf && target.closest('.ch-shelf')) {
+      const sid = viewStack(C.shelf._view);
+      return it.stackId === sid && !inChat(it) ? null : { el: C.shelf, to: { stackId: sid } };
+    }
+    if (target.closest('.ch-main') && !inChat(it) && (it.type === 'file' || it.type === 'folder' || it.type === 'text')) return { el: C.pane, feed: true };
+    return null;
+  }
+  function chatDrop(at) {
+    const it = S.dragItem.it;
+    S.internalDrag = false;
+    S.dragItem = null;
+    if (at.feed) {
+      const view = C.view;
+      const kind = it.type === 'text' ? 'doc' : 'file';
+      return api('POST', '/items', { type: 'message', text: linkToken(kind, it.id), ...destOf(view) }).catch((er) => toast(er.message));
+    }
+    if (inChat(it)) return copyInto(it, at.to);
+    // From somewhere else in Kloomie (a card that isn't in chat): it moves, as dragging between stacks does.
+    if (at.to.dirId) return saveToDir(it, at.to.dirId);
+    return api('PATCH', '/items/' + it.id, { stackId: at.to.stackId }).then(upsert).catch((er) => toast(er.message));
   }
 
   // ---------- ⌘K: jump to a feed, or search messages, files, tasks and stacks ----------
@@ -7913,6 +8077,7 @@
 
   function renderChatSide() {
     if (!S.workspace) return;
+    drawChatPins();
     const views = ['chat', ...(S.workspace.channels || []).map((c) => 'ch:' + c.id)];
     const news = views.some((v) => !(S.tab === 'chat' && v === C.view) && unread(v));
     for (const n of tabNavs()) {
