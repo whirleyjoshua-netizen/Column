@@ -139,6 +139,12 @@ body:not(.wide) .menu-btn { display: grid; margin-left: -6px; }
 body:not(.wide) #sideClose { display: grid; }
 /* As a sidebar it's part of the page: previews, sheets and pop-ups go over it (it's a flex item, so its z-index would count). */
 body.wide #side { z-index: auto; }
+/* Tabs across the top, as they were, only in a docked column (body.column: narrow, with a mouse). */
+#topTabs { display: none; }
+body.column #topTabs { display: flex; }
+#topTabs .tab-ic { display: none; }
+#topTabs .tabs-edit .tab-ic { display: grid; place-items: center; }
+#topTabs .tabs-edit .tab-l { display: none; }
 body:not(.wide) #sideFold { display: none; }
 body.wide.side-folded #side { width: 60px; }
 body.wide.side-folded #side .tab-l, body.wide.side-folded #side .side-brand, body.wide.side-folded #side .tabs-sep, body.wide.side-folded #side .tab-pin-name { display: none; }

@@ -2,7 +2,7 @@
 // tabs across the top, and always white.
 // - 900px and wider: a sidebar with labels that opens what you pick, folds to icons (remembered on this device),
 //   and stays put while Settings, a tool or a full-screen view (a doc, Jobs) fills the page beside it.
-// - A docked column (340px) and a phone: a hidden drawer. ☰ opens it; picking something, tapping outside it or
+// - A docked column (340px): your tabs across the top, as before, and the drawer too. A phone: just the drawer. ☰ opens it; picking something, tapping outside it or
 //   Escape closes it; All tools works from it; on a phone a swipe in from the left edge opens it and a swipe back
 //   closes it. Closed, it can't be tabbed into.
 // - White everywhere, even on a computer set to dark mode; nothing spills off a phone's screen.
@@ -101,8 +101,15 @@ try {
   ok(await A.until(`!${shown('#side')}`, 2000) && (await A.ev(shown('#menuBtn'))), 'the toolbar is hidden, with ☰ in the header');
   await sleep(300);
   ok(await A.ev(`(() => { document.querySelector('#tabs [data-tab=day]').focus(); return document.activeElement !== document.querySelector('#tabs [data-tab=day]'); })()`), 'closed, it can’t be tabbed into');
+  // The owner, later on 2026-11-12: in a column, the tabs go back across the top too (the drawer stays).
+  ok(await A.until(shown('#topTabs')) && (await A.ev(`document.body.classList.contains('column')`)), 'a column has your tabs across the top again');
+  const top = await A.ev(`[...document.querySelectorAll('#topTabs [data-tab]')].map((b) => b.textContent)`);
+  ok(JSON.stringify(top) === JSON.stringify(labels), `the same tabs as the drawer (${top})`);
+  await A.tap(`document.querySelector('#topTabs [data-tab=day]')`);
+  ok(await A.until(`!document.querySelector('#day').classList.contains('hidden') && document.querySelector('#topTabs [data-tab=day]').classList.contains('on') && document.querySelector('#tabs [data-tab=day]').classList.contains('on')`), 'a tab at the top opens it, marked in both places');
+  ok(!(await A.ev(shown('#side'))), 'without opening the drawer');
   await A.tap(`document.querySelector('#menuBtn')`);
-  ok(await A.until(shown('#side')) && (await A.ev(`!document.querySelector('#scrim').hidden && document.querySelector('#menuBtn').getAttribute('aria-expanded') === 'true'`)), '☰ opens it over the page');
+  ok(await A.until(shown('#side')) && (await A.ev(`!document.querySelector('#scrim').hidden && document.querySelector('#menuBtn').getAttribute('aria-expanded') === 'true'`)), '☰ still opens the drawer over the page');
   await A.tap(`document.querySelector('#tabs [data-tab=column]')`);
   ok(await A.until(`!document.querySelector('#panes').classList.contains('hidden')`) && await A.until(`!${shown('#side')}`), 'picking Stacks opens it and closes the drawer');
   await A.tap(`document.querySelector('#menuBtn')`);
@@ -126,6 +133,9 @@ try {
   // A phone: the drawer, and a swipe in from the left edge.
   await A.cmd('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
   await A.cmd('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 1 });
+  await A.cmd('Emulation.setEmitTouchEventsForMouse', { enabled: true, configuration: 'mobile' });
+  ok(await A.until(`!document.body.classList.contains('column')`, 3000) && !(await A.ev(shown('#topTabs'))), 'a phone (a touch screen) has just the drawer, no tabs across the top');
+  await A.cmd('Emulation.setEmitTouchEventsForMouse', { enabled: false });
   await A.tap(`document.querySelector('#tabs [data-tab=home]') && document.querySelector('#menuBtn')`);
   await A.tap(`document.querySelector('#tabs [data-tab=home]')`);
   await A.until(`!${shown('#side')}`);

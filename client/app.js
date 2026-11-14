@@ -3163,7 +3163,7 @@
     const [k, id] = pinParts(go);
     PIN_KINDS[k]?.open(id);
     if (toolOpen) closeTool();
-    setTimeout(() => { markTabs(); $(`#tabs [data-pin="${go}"]`)?.scrollIntoView({ block: 'nearest', inline: 'nearest' }); }, 0);
+    setTimeout(() => { markTabs(); for (const n of tabNavs()) n.querySelector(`[data-pin="${go}"]`)?.scrollIntoView({ block: 'nearest', inline: 'nearest' }); }, 0);
   }
   // Hold a pin on a phone for its menu (right-click on a computer); the click after a hold doesn't open it.
   function longPress(b, fn) {
@@ -3180,6 +3180,8 @@
     ]);
   }
 
+  // The same tabs in two places: the side toolbar (#tabs) and, in a docked column, across the top (#topTabs).
+  const tabNavs = () => [$('#tabs'), $('#topTabs')].filter(Boolean);
   function renderTabs() {
     const nav = $('#tabs');
     if (!nav) return;
@@ -3191,7 +3193,7 @@
       return b;
     };
     const pins = pinsShown();
-    nav.replaceChildren(btn('home', 'Home'), btn('day', 'Day'), ...barKeys().map((k) => btn(k, BAR_ITEMS[k].label)),
+    for (const n of tabNavs()) n.replaceChildren(btn('home', 'Home'), btn('day', 'Day'), ...barKeys().map((k) => btn(k, BAR_ITEMS[k].label)),
       ...(pins.length ? [h('span', { class: 'tabs-sep', 'aria-hidden': 'true' }), ...pins.map(pin)] : []),
       h('button', { class: 'tabs-edit', title: 'Change your tabs', 'aria-label': 'Change your tabs', onclick: (e) => { e.stopPropagation(); closeSide(); barSheet(); } }, h('span', { class: 'tab-ic', html: I.edit || '✎' }), h('span', { class: 'tab-l' }, 'Change your tabs')));
     markTabs();
@@ -3199,7 +3201,7 @@
   }
   function markTabs() {
     const jobs = !$('#projects').classList.contains('hidden');
-    for (const b of $('#tabs').children) {
+    for (const b of tabNavs().flatMap((n) => [...n.children])) {
       if (b.dataset.pin) { const [pk, id] = pinParts(b.dataset.pin); b.classList.toggle('on', !!PIN_KINDS[pk]?.on(id)); continue; }
       const k = b.dataset.tab;
       if (!k) continue;
@@ -3297,6 +3299,7 @@
   // outside it, Escape or a swipe back closes it.
   const SIDE = { folded: !!store.get('sideFolded', false) };
   const wideMq = matchMedia('(min-width: 900px)');
+  const mouseMq = matchMedia('(hover: hover) and (pointer: fine)');
   const sideOpen = () => $('#app').classList.contains('side-open');
   let animT = 0;
   const sideAnim = () => { $('#app').classList.add('side-anim'); clearTimeout(animT); animT = setTimeout(() => $('#app').classList.remove('side-anim'), 260); };
@@ -3304,6 +3307,8 @@
     const wide = wideMq.matches;
     document.body.classList.toggle('wide', wide);
     document.body.classList.toggle('side-folded', wide && SIDE.folded);
+    // A docked column (narrow, with a mouse) keeps its tabs across the top too; a phone has just the drawer.
+    document.body.classList.toggle('column', !wide && mouseMq.matches);
     $('#sideFold').setAttribute('aria-pressed', SIDE.folded ? 'true' : 'false');
     $('#sideFold').title = $('#sideFold').ariaLabel = SIDE.folded ? 'Open the sidebar' : 'Fold the sidebar';
     if (wide) closeSide();
@@ -3330,6 +3335,7 @@
   $('#sideFold').addEventListener('click', () => { SIDE.folded = !SIDE.folded; store.set('sideFolded', SIDE.folded); sideLayout(); });
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && sideOpen()) closeSide(); });
   wideMq.addEventListener('change', sideLayout);
+  mouseMq.addEventListener('change', sideLayout);
   sideLayout();
   {
     let sw = null;
@@ -3349,7 +3355,7 @@
     document.addEventListener('touchend', () => (sw = null), { passive: true });
   }
 
-  $('#tabs').addEventListener('click', (e) => {
+  const onTabClick = (e) => {
     if (e.target.closest('button')) closeSide();
     const pb = e.target.closest('button[data-pin]');
     if (pb) { if (pb._held) return (pb._held = false); return openPin(pb.dataset.pin); }
@@ -3358,7 +3364,9 @@
     if (BAR_ITEMS[b.dataset.tab]) return openBarItem(b.dataset.tab);
     closeProjects();
     setTab(b.dataset.tab);
-  });
+  };
+  $('#tabs').addEventListener('click', onTabClick);
+  $('#topTabs').addEventListener('click', onTabClick);
 
   function goDay(k) {
     D.date = k;
@@ -7907,8 +7915,10 @@
     if (!S.workspace) return;
     const views = ['chat', ...(S.workspace.channels || []).map((c) => 'ch:' + c.id)];
     const news = views.some((v) => !(S.tab === 'chat' && v === C.view) && unread(v));
-    $('#tabs [data-tab="chat"]')?.classList.toggle('dot', news);
-    $('#tabs [data-tab="home"]')?.classList.toggle('dot', news && !$('#tabs [data-tab="chat"]'));
+    for (const n of tabNavs()) {
+      n.querySelector('[data-tab="chat"]')?.classList.toggle('dot', news);
+      n.querySelector('[data-tab="home"]')?.classList.toggle('dot', news && !n.querySelector('[data-tab="chat"]'));
+    }
     $('#menuBtn')?.classList.toggle('dot', !!$('#tabs button.dot'));
     if (!C.side) return;
     if (C.side.querySelector('.rename')) return; // don't yank an input out from under the user
