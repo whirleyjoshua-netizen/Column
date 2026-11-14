@@ -130,6 +130,8 @@ await A.tap(`document.querySelector('#projects .pj-top [aria-label="All projects
 await A.tap(`document.querySelector('#projects [aria-label="Close Projects"]')`);
 await openTools('Finance');
 ok(await A.until(`[...document.querySelectorAll('#tool .pj-fc')].some((x) => x.textContent.includes('Sales · Deals') && x.textContent.includes('$6,200 won') && x.textContent.includes('$12,500'))`), 'Finance shows the pipeline: $12,500 open closing this month, $6,200 won');
+// Full size (2026-11-14): Finance's overview is a dashboard, the month on the left and bills beside it.
+ok(await A.until(`(() => { const c = document.querySelectorAll('#tool .fin-dash > .fin-col'); return c.length === 2 && c[0].getBoundingClientRect().right <= c[1].getBoundingClientRect().left + 1 && !!c[0].querySelector('.fin-sum') && c[1].querySelector('h3')?.textContent === 'Bills'; })()`), 'at full size Finance’s overview has the month and the bills side by side');
 ok(!A.errors.length, 'no page errors' + (A.errors.length ? ': ' + A.errors.join(' / ') : ''));
 A.close(); chrome.kill();
 console.log(fails ? fails + ' failed' : 'all passed');

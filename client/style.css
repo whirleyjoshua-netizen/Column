@@ -252,6 +252,10 @@ body.wide .dv-tree.folded { width: 44px; padding: 10px 4px; align-items: center;
 .dvt-ic { flex: none; width: 18px; text-align: center; font-size: 13px; }
 .dvt-t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dvt-add { border: 0; background: none; color: var(--accent); font: inherit; font-size: 12.5px; text-align: left; padding: 6px 8px; cursor: pointer; }
+/* Finance at full size: the month beside the bills. */
+.fin-dash { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 20px; align-items: start; margin-top: 4px; }
+.fin-col { min-width: 0; padding: 14px 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); }
+.fin-col > h3:first-child { margin-top: 0; }
 /* The desktop app: the window is dragged by the top of the toolbar; on a Mac its buttons sit above it. */
 body.desktop #side .side-top { -webkit-app-region: drag; }
 body.desktop #side .side-top button { -webkit-app-region: no-drag; }

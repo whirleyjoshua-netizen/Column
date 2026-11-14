@@ -17227,7 +17227,10 @@
     return [
       h('div', { class: 'seg' }, [['overview', 'Overview'], ['flow', 'In & out'], ['bills', 'Bills']].map(([k, t]) => h('button', { class: FIN.tab === k ? 'on' : null, onclick: () => tab(k) }, t))),
       hasBiz ? h('div', { class: 'seg seg-sm' }, [['all', 'All'], ['personal', 'Personal'], ['business', 'Business']].map(([v, t]) => h('button', { class: billScope === v ? 'on' : null, onclick: () => scope(v) }, t))) : null,
-      ...(FIN.tab === 'bills' ? billsTab() : FIN.tab === 'flow' ? flowTab() : overviewTab()),
+      // Full size: the overview is a dashboard, the month (totals, budgets, pipeline) beside the bills coming up.
+      ...(FIN.tab === 'bills' ? billsTab() : FIN.tab === 'flow' ? flowTab() : document.body.classList.contains('wide')
+        ? [h('div', { class: 'fin-dash' }, h('section', { class: 'fin-col' }, ...overviewTab().filter(Boolean)), h('section', { class: 'fin-col' }, h('h3', {}, 'Bills'), ...billsTab().filter(Boolean)))]
+        : overviewTab()),
     ];
   }
   function monthNav() {
