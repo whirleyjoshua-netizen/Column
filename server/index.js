@@ -9,6 +9,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import zlib from 'node:zlib';
 import { helpDocs } from './helpdocs.js';
+import { sitePages } from './sitepages.js';
 import { pipeline } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
@@ -10069,17 +10070,27 @@ function siteMove(req, url) {
   const host = String(req.headers.host || '').toLowerCase();
   if (!SITE_HOST || url.pathname.startsWith('/api/')) return null;
   if (host === SITE_HOST.replace(/^www\./, '') && host !== SITE_HOST) return `https://${SITE_HOST}${url.pathname}${url.search}`;
-  if (host !== SITE_HOST || SITE_PAGES.has(url.pathname) || HELP_PAGE.test(url.pathname) || path.extname(url.pathname)) return null;
+  // The landing pages belong to the website: on the app's address they move there for good.
+  if (host !== SITE_HOST && LANDING.test(url.pathname) && !url.pathname.startsWith('/api/')) return { to: SITE_URL + url.pathname, permanent: true };
+  if (host !== SITE_HOST || SITE_PAGES.has(url.pathname) || HELP_PAGE.test(url.pathname) || LANDING.test(url.pathname) || path.extname(url.pathname)) return null;
   // The app's own addresses (a card, a quote, an invite, a signing link…) go to the app; anything else isn't a page
   // of the website, and gets a real 404 there (not the app's sign-in, which search engines read as a page).
   return APP_PATHS.test(url.pathname) ? PUBLIC_URL + url.pathname + url.search : null;
 }
 const APP_PATHS = /^\/(?:(?:a|api|brand|c|cal|i|join|l|oauth|q|r|reset|s|sign|unsubscribe|hooks|twilio|quickbooks|dropbox|postiz|stripe)(?:\/|$)|(?:developers|import|ws|card\.js|k\.js)$)/;
-const siteMissing = (req, url) => onSite(req) && !SITE_PAGES.has(url.pathname) && !HELP_PAGE.test(url.pathname) && !path.extname(url.pathname) && !APP_PATHS.test(url.pathname);
+const siteMissing = (req, url) => onSite(req) && !SITE_PAGES.has(url.pathname) && !HELP_PAGE.test(url.pathname) && !LANDING.test(url.pathname) && !path.extname(url.pathname) && !APP_PATHS.test(url.pathname);
+// Landing pages (server/sitepages.js): a feature, a kind of business, a comparison, and the /features hub.
+const LANDING = /^\/(?:features|(?:features|for|compare)\/[a-z0-9-]{1,60})$/;
+const SITEPAGES = sitePages({ videoDate: (src) => videoDate(src) });
+function serveLanding(req, res, url) {
+  const out = SITEPAGES.page(url.pathname.slice(1), SITE_URL, PUBLIC_URL);
+  if (!out) return onSite(req) ? serveMissing(req, res) : send(res, 404, 'Not found');
+  send(res, 200, out.html, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache', 'Content-Security-Policy': "script-src 'none'; object-src 'none'; base-uri 'none'; frame-ancestors 'self'" });
+}
 // Help's pages, one per topic (server/helpdocs.js makes them from client/help.html).
 const HELP_PAGE = /^\/help\/[a-z0-9-]{1,60}$/;
 const HELP = helpDocs({ clientDir: CLIENT_DIR });
-const videoDate = (src) => { const st = /^\/videos\/[\w-]+\.mp4$/.test(src) && fs.statSync(path.join(CLIENT_DIR, src), { throwIfNoEntry: false }); return st ? st.mtime.toISOString().slice(0, 10) : null; };
+const videoDate = (src) => { const st = /^\/(?:videos\/)?[\w-]+\.mp4$/.test(src) && fs.statSync(path.join(CLIENT_DIR, src), { throwIfNoEntry: false }); return st ? st.mtime.toISOString().slice(0, 10) : null; };
 const HELP_CSP = "script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'self'";
 function serveHelp(req, res, url) {
   if (url.pathname === '/help') {
@@ -10110,12 +10121,14 @@ function serveRobots(req, res) {
   const body = onSite(req) || !SITE_HOST ? `User-agent: *\nAllow: /\n\nSitemap: ${SITE_URL}/sitemap.xml\n` : 'User-agent: *\nAllow: /terms\nAllow: /privacy\nAllow: /help\nAllow: /download\nDisallow: /\n';
   send(res, 200, body, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'public, max-age=3600' });
 }
+const LANDING_CHANGED = (fs.statSync(new URL('./sitepages.js', import.meta.url), { throwIfNoEntry: false })?.mtime || new Date()).toISOString().slice(0, 10);
 // Each page with the day its file last changed (Google reads lastmod; it ignores changefreq and priority).
 const SITE_FILES = { '/': 'site.html', '/help': 'help.html', '/download': 'download.html', '/terms': 'terms.html', '/privacy': 'privacy.html' };
 function serveSitemap(req, res) {
   const changed = (p) => (fs.statSync(path.join(CLIENT_DIR, SITE_FILES[p] || 'site.html'), { throwIfNoEntry: false })?.mtime || new Date()).toISOString().slice(0, 10);
   const urls = [...SITE_MAP.map((p) => `  <url><loc>${SITE_URL}${p}</loc><lastmod>${changed(p)}</lastmod></url>`),
-    ...HELP.slugs().map((s) => `  <url><loc>${SITE_URL}/help/${s}</loc><lastmod>${changed('/help')}</lastmod></url>`)].join('\n');
+    ...HELP.slugs().map((s) => `  <url><loc>${SITE_URL}/help/${s}</loc><lastmod>${changed('/help')}</lastmod></url>`),
+    ...SITEPAGES.paths().map((p) => `  <url><loc>${SITE_URL}${p}</loc><lastmod>${LANDING_CHANGED}</lastmod></url>`)].join('\n');
   send(res, 200, `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls}\n</urlset>\n`, { 'Content-Type': 'application/xml; charset=utf-8', 'Cache-Control': 'public, max-age=3600' });
 }
 
@@ -10149,6 +10162,7 @@ async function handleRequest(req, res) {
   // The website snippet (leads.js): a script other sites load, so it's answered on every address before any move.
   if (url.pathname === '/k.js' && (req.method === 'GET' || req.method === 'HEAD')) return LEADS.snippetJs(req, res);
   const moved = movedTo(req, url) || siteMove(req, url);
+  if (moved?.permanent) { res.writeHead(301, { Location: moved.to, 'Cache-Control': 'public, max-age=86400' }); return res.end(); }
   if (moved) {
     // Temporary (302/307, not remembered by browsers), so the move can be undone; 307 keeps a form's POST a POST.
     res.writeHead(req.method === 'GET' || req.method === 'HEAD' ? 302 : 307, { Location: moved, 'Cache-Control': 'no-store' });
@@ -10225,6 +10239,7 @@ async function handleRequest(req, res) {
   if (url.pathname === '/download' || url.pathname === '/get') return serveStatic(req, res, new URL('/download.html', 'http://x'));
   if (url.pathname === '/developers') return serveStatic(req, res, new URL('/developers.html', 'http://x'));
   if (url.pathname === '/help' || HELP_PAGE.test(url.pathname)) return serveHelp(req, res, url);
+  if (LANDING.test(url.pathname)) return serveLanding(req, res, url);
   // The file Help's pages are made from isn't a page of its own (it would be the whole of Help twice over).
   if (url.pathname === '/help.html') { res.writeHead(301, { Location: '/help', 'Cache-Control': 'public, max-age=86400' }); return res.end(); }
   if (url.pathname === '/terms' || url.pathname === '/privacy') return serveStatic(req, res, new URL(url.pathname + '.html', 'http://x'));

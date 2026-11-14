@@ -299,6 +299,7 @@
     .eyebrow { display: inline-block; font-size: 14px; font-weight: 600; color: var(--accent-ink); background: var(--tint); border-radius: 99px; padding: 5px 12px; margin: 0 0 20px; }
     .display { font-size: clamp(38px, 6vw, 66px); line-height: 1.03; font-weight: 800; letter-spacing: -.035em; margin: 0 0 22px; }
     .display span { color: var(--accent); }
+    .tile h3 a, .who a { color: inherit; text-decoration: none; } .tile h3 a:hover, .who a:hover { color: var(--accent-ink); text-decoration: underline; }
     .lead { font-size: 19px; color: var(--muted); margin: 0 0 30px; max-width: 31em; }
     .ctas { display: flex; gap: 10px; flex-wrap: wrap; }
     .trust { display: flex; gap: 8px 20px; flex-wrap: wrap; margin-top: 22px; font-size: 14px; color: var(--muted); list-style: none; padding: 0; }
@@ -501,7 +502,7 @@
         <div class="bento">
           <article class="tile big">
             <span class="badge"><svg class="ico" aria-hidden="true"><use href="#i-drop"/></svg></span>
-            <h3>File sharing across every device</h3>
+            <h3><a href="/features/file-sharing">File sharing across every device</a></h3>
             <p>Drop in files, folders, photos and links. They’re on every computer and phone on the team the moment you let go, and drag back out to your desktop.</p>
             <div class="column" aria-hidden="true">
               <div class="card new"><div class="ci"><svg class="ico"><use href="#i-photo"/></svg></div><div><b>Site photos, Elm St</b><small>12 photos · from Dana’s phone</small></div><span class="tag">New</span></div>
@@ -510,13 +511,13 @@
               <div class="card"><div class="ci"><svg class="ico"><use href="#i-mail"/></svg></div><div><b>March newsletter</b><small>from your Gmail · 214 sent</small></div></div>
             </div>
           </article>
-          <article class="tile"><span class="badge"><svg class="ico" aria-hidden="true"><use href="#i-cal"/></svg></span><h3>Daily planner with calendar sync</h3><p>Tasks and time blocks beside your Google, Outlook or Apple calendar. Changes go both ways, and your Day can show up in any calendar app.</p></article>
-          <article class="tile"><span class="badge"><svg class="ico" aria-hidden="true"><use href="#i-phone"/></svg></span><h3>Call lists and follow-ups</h3><p>Turn a spreadsheet into a call list, log every call, and see who’s next.</p></article>
-          <article class="tile"><span class="badge"><svg class="ico" aria-hidden="true"><use href="#i-mail"/></svg></span><h3>Email campaigns from Gmail or Outlook</h3><p>Send from your own address, with an unsubscribe link on every message.</p></article>
+          <article class="tile"><span class="badge"><svg class="ico" aria-hidden="true"><use href="#i-cal"/></svg></span><h3><a href="/features/daily-planner">Daily planner with calendar sync</a></h3><p>Tasks and time blocks beside your Google, Outlook or Apple calendar. Changes go both ways, and your Day can show up in any calendar app.</p></article>
+          <article class="tile"><span class="badge"><svg class="ico" aria-hidden="true"><use href="#i-phone"/></svg></span><h3><a href="/features/call-lists-and-campaigns">Call lists and follow-ups</a></h3><p>Turn a spreadsheet into a call list, log every call, and see who’s next.</p></article>
+          <article class="tile"><span class="badge"><svg class="ico" aria-hidden="true"><use href="#i-mail"/></svg></span><h3><a href="/features/email-campaigns">Email campaigns from Gmail or Outlook</a></h3><p>Send from your own address, with an unsubscribe link on every message.</p></article>
           <article class="tile"><span class="badge"><svg class="ico" aria-hidden="true"><use href="#i-people"/></svg></span><h3>Contact management</h3><p>Customers and leads in one list, with duplicates merged and do-not-contact honored everywhere.</p></article>
-          <article class="tile wide"><span class="badge"><svg class="ico" aria-hidden="true"><use href="#i-pen"/></svg></span><h3>Documents and e-signatures</h3><p>Write quotes and pages, fill in PDFs, and send them for electronic signature. Signed copies come back with a signing record, right next to the original.</p></article>
-          <article class="tile"><span class="badge"><svg class="ico" aria-hidden="true"><use href="#i-money"/></svg></span><h3>Bills and budgets</h3><p>Money in and out, bills due, and budgets for the owner.</p></article>
-          <article class="tile"><span class="badge"><svg class="ico" aria-hidden="true"><use href="#i-lock"/></svg></span><h3>And more</h3><p>Meeting notes, route planning for canvassing, and a vault for gate codes.</p></article>
+          <article class="tile wide"><span class="badge"><svg class="ico" aria-hidden="true"><use href="#i-pen"/></svg></span><h3><a href="/features/e-signatures">Documents and e-signatures</a></h3><p>Write quotes and pages, fill in PDFs, and send them for electronic signature. Signed copies come back with a signing record, right next to the original.</p></article>
+          <article class="tile"><span class="badge"><svg class="ico" aria-hidden="true"><use href="#i-money"/></svg></span><h3><a href="/features/finance">Bills and budgets</a></h3><p>Money in and out, bills due, and budgets for the owner.</p></article>
+          <article class="tile"><span class="badge"><svg class="ico" aria-hidden="true"><use href="#i-lock"/></svg></span><h3><a href="/features">And more</a></h3><p>Meeting notes, route planning for canvassing, and a vault for gate codes.</p></article>
         </div>
       </div>
     </section>
@@ -527,13 +528,13 @@
         <h2 id="who-h">Built for small teams that work on the move</h2>
         <p class="intro">From two people to a few dozen, in the office and out on jobs.</p>
         <ul class="who">
-          <li>Contractors and home services</li>
-          <li>Field sales teams</li>
-          <li>Installers and trades</li>
-          <li>Real estate teams</li>
-          <li>Agencies and studios</li>
-          <li>Cleaning and maintenance</li>
-          <li>Nonprofits and community groups</li>
+          <li><a href="/for/contractors">Contractors and home services</a></li>
+          <li><a href="/for/field-sales">Field sales teams</a></li>
+          <li><a href="/features/jobs-for-trades">Installers and trades</a></li>
+          <li><a href="/for/real-estate-teams">Real estate teams</a></li>
+          <li><a href="/for/agencies">Agencies and studios</a></li>
+          <li><a href="/for/cleaning-businesses">Cleaning and maintenance</a></li>
+          <li><a href="/for/nonprofits">Nonprofits and community groups</a></li>
         </ul>
       </div>
     </section>
@@ -611,6 +612,7 @@
   <footer>
     <div class="wrap">
       <span class="co"><img src="/icon-128.png" width="22" height="22" alt="">© 2026 Cultural Architects Collective LLC</span>
+      <a href="/features">Features</a>
       <a href="/download">Download</a>
       <a href="/help">Help</a>
       <a href="/terms">Terms</a>

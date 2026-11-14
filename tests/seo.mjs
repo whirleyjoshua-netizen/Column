@@ -110,6 +110,34 @@ try {
   ok(r.status === 301 && r.headers.location === '/help', 'the file Help is made from isn’t a second copy of it');
   r = await get(SITE, '/help.js');
   ok(r.status === 200 && /javascript/.test(r.headers['content-type'] || ''), '(the small script for old links is served)');
+
+  // Landing pages: a feature with its video, a kind of business, the hub; linked from the home page.
+  r = await get(SITE, '/features/file-sharing', { 'accept-encoding': 'br' });
+  let lp = text(r);
+  ok(r.status === 200 && /<h1>[^<]+<\/h1>/.test(lp) && /<title>[^<]*File sharing[^<]*\| Kloomie<\/title>/i.test(lp), 'a feature has its own page');
+  ok(lp.includes(`<link rel="canonical" href="https://${SITE}/features/file-sharing">`) && /"@type":"VideoObject"/.test(lp) && /stacks\.mp4/.test(lp) && /"@type":"BreadcrumbList"/.test(lp) && /"@type":"FAQPage"/.test(lp), 'with its canonical address, its video, breadcrumbs and questions for search engines');
+  const ld = (/<meta name="description" content="([^"]*)"/.exec(lp)?.[1] || '').length;
+  ok(ld > 70 && ld <= 160, `and a description that fits a search result (${ld})`);
+  r = await get(SITE, '/for/contractors');
+  lp = text(r);
+  ok(r.status === 200 && /href="\/features\/jobs-for-trades"/.test(lp), 'a kind of business has its page, linking to the features it uses');
+  r = await get(SITE, '/features');
+  lp = text(r);
+  const nFeat = (lp.match(/href="\/features\/[a-z-]+"/g) || []).length, nFor = (lp.match(/href="\/for\/[a-z-]+"/g) || []).length;
+  ok(r.status === 200 && nFeat >= 8 && nFor >= 6, `the hub lists them (${nFeat} features, ${nFor} kinds of business)`);
+  r = await get(SITE, '/compare/kloomie-vs-jobber');
+  lp = text(r);
+  ok(r.status === 200 && /<table>/.test(lp) && /November 13, 2026/.test(lp) && /href="https:\/\/www\.getjobber\.com\/pricing\/" rel="nofollow noopener"/.test(lp) && /Choose Jobber if/.test(lp), 'a comparison has a table, its prices dated and linked to their source, and says when the other one fits');
+  ok((text(await get(SITE, '/features')).match(/href="\/compare\/[a-z0-9-]+"/g) || []).length >= 5, 'and the hub lists the comparisons');
+  r = await get(SITE, '/features/nope');
+  ok(r.status === 404, 'a page that isn’t there is a 404');
+  r = await get(APPH, '/features/file-sharing');
+  ok(r.status === 301 && r.headers.location === `https://${SITE}/features/file-sharing`, 'on the app’s address it moves to the website');
+  r = await get(SITE, '/');
+  lp = text(r);
+  ok(/href="\/for\/contractors"/.test(lp) && /href="\/features\/e-signatures"/.test(lp) && /href="\/features"/.test(lp), 'the home page links to them');
+  r = await get(SITE, '/sitemap.xml');
+  ok(text(r).includes(`<loc>https://${SITE}/for/field-sales</loc>`) && text(r).includes(`<loc>https://${SITE}/features</loc>`), 'and the sitemap lists them');
 } catch (e) {
   console.log('FAIL threw: ' + e.stack);
   fails++;
