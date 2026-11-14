@@ -196,6 +196,33 @@ body.wide .docview, body.wide .projects { right: var(--skd-w); }
 .sk-dock .ag-wfs .chip, .sk-dock .chip { border: 1px solid var(--line); background: var(--card); color: var(--text); }
 .sk-dock.sk-over { outline: 2px dashed var(--accent); outline-offset: -6px; }
 @media (max-width: 520px) { .sk-btn-l { display: none; } .sk-btn { padding: 0 10px; } }
+/* Day at full size: Day | Week, and the week as seven columns on one timeline. A narrow window never shows it. */
+.day-view { display: none; }
+body.wide .day-view:not(.hidden) { display: inline-grid; grid-auto-flow: column; margin-left: 8px; }
+body.wide .day-view button { padding: 4px 12px; font-size: 12.5px; }
+.week { --gut: 52px; min-width: 0; }
+.wk-head { position: sticky; top: 0; z-index: 4; display: grid; grid-template-columns: var(--gut) repeat(7, minmax(0, 1fr)); background: var(--bg); border-bottom: 1px solid var(--line); }
+.wk-day { min-width: 0; padding: 4px 3px 6px; border-left: 1px solid var(--line); }
+.wk-dh { display: flex; align-items: baseline; gap: 6px; width: 100%; padding: 4px 6px; border: 0; border-radius: 8px; background: none; color: var(--muted); cursor: pointer; font: inherit; }
+.wk-dh:hover { background: var(--card-hover); color: var(--text); }
+.wk-dh small { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; font-weight: 600; }
+.wk-dh b { font-size: 17px; color: var(--text); }
+.wk-dh.today b { color: #fff; background: var(--accent); border-radius: 999px; min-width: 26px; text-align: center; padding: 0 6px; }
+.wk-any { display: flex; flex-direction: column; gap: 2px; margin-top: 3px; }
+.wk-chip { display: block; width: 100%; text-align: left; padding: 2px 6px; border: 0; border-radius: 5px; background: var(--panel); color: var(--text); font: inherit; font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
+.wk-chip.task { background: var(--accent-soft); }
+.wk-chip.done { text-decoration: line-through; color: var(--muted); }
+.wk-more { border: 0; background: none; color: var(--accent); font: inherit; font-size: 11px; text-align: left; padding: 0 6px; cursor: pointer; }
+.wk-grid { position: relative; display: grid; grid-template-columns: var(--gut) repeat(7, minmax(0, 1fr)); }
+.wk-hours { position: relative; }
+.wk-hours .hour { left: 0; right: auto; width: var(--gut); border-top: 0; }
+.wk-hours .hour::after { display: none; }
+.wk-col { position: relative; border-left: 1px solid var(--line); cursor: copy; background-image: repeating-linear-gradient(to bottom, var(--line) 0, var(--line) 1px, transparent 1px, transparent 56px); background-position: 0 var(--wk-off, 0); }
+.wk-col.today { background-color: color-mix(in srgb, var(--accent-soft) 45%, transparent); }
+.wk-col .block { font-size: 12px; }
+.wk-col .now { left: 0; }
+.wk-pin { position: absolute; left: 2px; right: 2px; height: 18px; padding: 0 5px; border-radius: 5px; background: var(--card); border: 1px solid var(--line); font-size: 11px; line-height: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; z-index: 2; cursor: grab; }
+.wk-pin.done { text-decoration: line-through; color: var(--muted); }
 /* The desktop app: the window is dragged by the top of the toolbar; on a Mac its buttons sit above it. */
 body.desktop #side .side-top { -webkit-app-region: drag; }
 body.desktop #side .side-top button { -webkit-app-region: no-drag; }

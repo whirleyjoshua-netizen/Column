@@ -58,7 +58,7 @@ await A.tap(`document.querySelector('#tabs [data-tab=day]')`);
 await A.tap(`[...document.querySelectorAll('.day-sub button')].find((b) => b.textContent === 'Tasks')`);
 await sleep(500);
 await A.cmd('Page.captureScreenshot', {}).then((r) => FS.writeFileSync(process.argv[2] + '/dk/tasks1.png', Buffer.from(r.result.data, 'base64')));
-ok(await A.ev(`document.querySelectorAll('#day .seg').length`) === 1, 'only one row of tabs (Schedule | Tasks)');
+ok(await A.ev(`[...document.querySelectorAll('#day .seg')].filter((x) => x.offsetParent).length`) === 1, 'only one row of tabs (Schedule | Tasks); the Day | Week switch is for the schedule');
 await A.tap(`document.querySelector('.task-bar .tb-pick')`);
 await sleep(200);
 await A.cmd('Page.captureScreenshot', {}).then((r) => FS.writeFileSync(process.argv[2] + '/dk/tasks2.png', Buffer.from(r.result.data, 'base64')));

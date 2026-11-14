@@ -3081,7 +3081,7 @@
   ];
 
   // ----- view state -----
-  const D = { date: todayKey(), scrolledFor: null, sub: store.get('daySub', 'schedule'), mine: store.get('tasksMine', false), taskView: store.get('taskView', 'mine'), campsOpen: new Set(store.get('stepsOpen', [])) };
+  const D = { date: todayKey(), view: store.get('dayView', 'week'), scrolledFor: null, sub: store.get('daySub', 'schedule'), mine: store.get('tasksMine', false), taskView: store.get('taskView', 'mine'), campsOpen: new Set(store.get('stepsOpen', [])) };
 
   function setSub(sub) {
     D.sub = sub;
@@ -3348,6 +3348,7 @@
     $('#sideFold').setAttribute('aria-pressed', SIDE.folded ? 'true' : 'false');
     $('#sideFold').title = $('#sideFold').ariaLabel = SIDE.folded ? 'Open the sidebar' : 'Fold the sidebar';
     if (wide) closeSide();
+    if (S.tab === 'day' && D.scroll) { D.scrolledFor = null; renderDay(); } // a Week shows only at full size
   }
   function openSide(byKey) {
     if (wideMq.matches || sideOpen()) return;
@@ -3431,10 +3432,12 @@
     root.append(
       D.seg,
       D.head = h('div', { class: 'day-head' },
-        h('button', { class: 'icon-btn', 'aria-label': 'Previous day', html: I.left, onclick: () => goDay(addDays(D.date, -1)) }),
+        D.prevBtn = h('button', { class: 'icon-btn', 'aria-label': 'Previous day', html: I.left, onclick: () => goDay(addDays(D.date, weekOn() ? -7 : -1)) }),
         h('div', { class: 'day-title-wrap' }, D.title, pick),
         D.todayBtn,
-        h('button', { class: 'icon-btn', 'aria-label': 'Next day', html: I.right, onclick: () => goDay(addDays(D.date, 1)) })
+        D.nextBtn = h('button', { class: 'icon-btn', 'aria-label': 'Next day', html: I.right, onclick: () => goDay(addDays(D.date, weekOn() ? 7 : 1)) }),
+        // Full size: Day or Week (this device remembers). A narrow window always shows one day.
+        D.viewSeg = h('div', { class: 'seg day-view' }, [['day', 'Day'], ['week', 'Week']].map(([v, l]) => h('button', { 'data-view': v, onclick: () => { D.view = v; store.set('dayView', v); D.scrolledFor = null; renderDay(); } }, l)))
       ),
       D.scroll,
       dayComposer()
@@ -3538,7 +3541,13 @@
     D.title.replaceChildren(...(rel ? [h('b', {}, rel), ' '] : []), h('span', {}, rel ? long.replace(/^\w+,?\s*/, '') : long));
     D.pick.value = k;
     D.todayBtn.classList.toggle('hidden', isToday);
+    const week = weekOn();
+    for (const b of D.viewSeg.children) b.classList.toggle('on', b.dataset.view === (week ? 'week' : 'day'));
+    D.viewSeg.classList.toggle('hidden', D.sub !== 'schedule');
+    D.prevBtn.ariaLabel = week ? 'Previous week' : 'Previous day';
+    D.nextBtn.ariaLabel = week ? 'Next week' : 'Next day';
     if (D.sub === 'team') return renderTeam(k);
+    if (week) return renderWeek(k);
 
     const entries = entriesOn(k);
     const anytime = entries.filter((e) => e.start == null).sort((a, b) => a.done - b.done || a.createdAt - b.createdAt);
@@ -3637,6 +3646,77 @@
       const first = [...blocks, ...pins].sort((a, b) => a.start - b.start)[0];
       const target = isToday ? nowMin() - 60 : first ? first.start - 30 : 8 * 60;
       D.scroll.scrollTop = tl.offsetTop + y(Math.max(h0 * 60, target)) - 8;
+    } else D.scroll.scrollTop = keep;
+  }
+
+  // ----- the week (full size): seven days side by side on one timeline, Sunday first -----
+  const weekOn = () => D.view === 'week' && D.sub === 'schedule' && document.body.classList.contains('wide');
+  const weekStart = (k) => addDays(k, -keyDate(k).getDay());
+  function renderWeek(k) {
+    const first = weekStart(k);
+    const days = Array.from({ length: 7 }, (_, i) => addDays(first, i));
+    const today = todayKey();
+    const fmt = (d, o) => keyDate(d).toLocaleDateString(undefined, o);
+    const last = days[6];
+    D.title.replaceChildren(h('b', {}, days.includes(today) ? 'This week' : fmt(first, { month: 'long' })), ' ',
+      h('span', {}, `${fmt(first, { month: 'short', day: 'numeric' })} – ${fmt(last, keyDate(first).getMonth() === keyDate(last).getMonth() ? { day: 'numeric' } : { month: 'short', day: 'numeric' })}`));
+    D.todayBtn.classList.toggle('hidden', days.includes(today));
+    const per = days.map((d) => {
+      const entries = entriesOn(d);
+      return { d, entries, blocks: entries.filter((e) => e.start != null && e.end != null).sort((a, b) => a.start - b.start || b.end - a.end), pins: entries.filter((e) => e.start != null && e.end == null).sort((a, b) => a.start - b.start), any: entries.filter((e) => e.start == null) };
+    });
+    const timed = per.flatMap((p) => [...p.blocks, ...p.pins]);
+    const h0 = Math.min(6, ...timed.map((e) => Math.floor(e.start / 60)));
+    const y = (m) => ((m - h0 * 60) / 60) * HOUR;
+    const keep = D.scroll.scrollTop;
+    // Each day's name (opens that day) and what's not on the clock: due tasks, bills, anytime notes.
+    const head = h('div', { class: 'wk-head' }, h('div', { class: 'wk-gut' }), per.map((p) => {
+      const due = S.tasks.filter((t) => !t.done && forMe(t) && (t.due === p.d || (p.d === today && isOverdue(t))) && !p.entries.some((e) => e.taskId === t.id));
+      const bills = billsDueOn(p.d);
+      const extra = [...p.any.map((e) => ({ text: e.text, done: e.done, open: () => openSheet(e) })), ...due.map((t) => ({ text: t.text, task: true, open: () => openSheet({ text: t.text, taskId: t.id, date: p.d }) })), ...bills.map((b) => ({ text: '💵 ' + b.name, open: () => openTool('bills') }))];
+      return h('div', { class: 'wk-day' },
+        h('button', { class: 'wk-dh' + (p.d === today ? ' today' : ''), 'data-date': p.d, title: 'Open ' + dayName(p.d), onclick: () => { D.view = 'day'; store.set('dayView', 'day'); goDay(p.d); } },
+          h('small', {}, fmt(p.d, { weekday: 'short' })), h('b', {}, fmt(p.d, { day: 'numeric' }))),
+        extra.length ? h('div', { class: 'wk-any' }, extra.slice(0, 3).map((x) => h('button', { class: 'wk-chip' + (x.done ? ' done' : '') + (x.task ? ' task' : ''), title: x.text, onclick: x.open }, x.text)),
+          extra.length > 3 ? h('button', { class: 'wk-more', onclick: () => { D.view = 'day'; store.set('dayView', 'day'); goDay(p.d); } }, `+${extra.length - 3} more`) : null) : null);
+    }));
+    const grid = h('div', { class: 'wk-grid', style: `height:${(24 - h0) * HOUR}px` });
+    const gut = h('div', { class: 'wk-gut wk-hours' });
+    for (let hr = h0; hr < 24; hr++) gut.append(h('div', { class: 'hour', style: `top:${y(hr * 60)}px` }, h('span', {}, fmtTime(hr * 60))));
+    grid.append(gut);
+    for (const p of per) {
+      const col = h('div', { class: 'wk-col' + (p.d === today ? ' today' : ''), 'data-date': p.d });
+      col._h0 = h0;
+      const cols = layoutBlocks(p.blocks);
+      for (const b of p.blocks) {
+        const { col: c, n } = cols.get(b.id);
+        const top = y(b.start);
+        const ht = Math.max(y(b.end) - top, 20);
+        const el = h('div', { class: `block c-${b.color || 'violet'}${b.done ? ' done' : ''}${ht < 44 ? ' short' : ''}`, style: `top:${top + 1}px;height:${ht - 2}px;left:calc(2px + (100% - 4px) * ${c / n});width:calc((100% - 4px) / ${n} - 2px)`, onclick: (ev) => { ev.stopPropagation(); openSheet(b); } },
+          h('div', { class: 'b-title' }, repeatMark(b), b.text), h('div', { class: 'b-time' }, `${fmtTime(b.start)} – ${fmtTime(b.end)}`), h('div', { class: 'b-resize', title: 'Drag to change the end time' }));
+        el.addEventListener('pointerdown', (ev) => dragTime(ev, b, el, ev.target.closest('.b-resize') ? 'end' : 'move'));
+        col.append(el);
+      }
+      for (const pn of p.pins) {
+        const el = h('div', { class: 'wk-pin' + (pn.done ? ' done' : ''), style: `top:${y(pn.start) - 9}px`, title: pn.text, onclick: (ev) => { ev.stopPropagation(); openSheet(pn); } }, h('span', { class: 'p-time' }, fmtTime(pn.start)), ' ', pn.text);
+        el.addEventListener('pointerdown', (ev) => dragTime(ev, pn, el, 'pin'));
+        col.append(el);
+      }
+      if (p.d === today) col.append(h('div', { class: 'now', style: `top:${y(nowMin())}px` }));
+      col.addEventListener('click', (ev) => {
+        if (ev.target.closest('.block, .wk-pin')) return;
+        const r = col.getBoundingClientRect();
+        const m = Math.round((((ev.clientY - r.top) / HOUR) * 60 + h0 * 60) / 15) * 15;
+        openSheet({ date: p.d, start: Math.max(0, Math.min(m, 1425)) });
+      });
+      grid.append(col);
+    }
+    D.scroll.replaceChildren(h('div', { class: 'week' }, head, grid));
+    if (D.scrolledFor !== 'w' + first && D.scroll.clientHeight) {
+      D.scrolledFor = 'w' + first;
+      const firstT = timed.sort((a, b) => a.start - b.start)[0];
+      const target = days.includes(today) ? nowMin() - 60 : firstT ? firstT.start - 30 : 8 * 60;
+      D.scroll.scrollTop = grid.offsetTop + y(Math.max(h0 * 60, target)) - head.offsetHeight - 8;
     } else D.scroll.scrollTop = keep;
   }
 
