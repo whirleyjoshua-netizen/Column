@@ -13190,6 +13190,7 @@
     view.replaceChildren(
       h('div', { class: 'dv-bar' }),
       h('div', { class: 'dv-body' },
+        h('aside', { class: 'dv-tree' + (store.get('dvTree', true) ? '' : ' folded'), 'aria-label': 'Pages' }),
         h('div', { class: 'dv-scroll' }, h('div', { class: 'dv-page' }, h('div', { class: 'dv-head' }), x.ed.el, h('div', { class: 'dv-start' }), h('div', { class: 'dv-links' }))),
         h('aside', { class: 'dv-side hidden' })));
     docBar(x);
@@ -13247,6 +13248,36 @@
       it.share ? h('button', { class: 'btn small dv-pub', title: 'Anyone with the link can read this doc', onclick: (e) => docShareMenu(e.currentTarget, x) }, '🌐 Public') : null,
       h('button', { class: 'btn small' + (x.side === 'comments' ? ' on' : ''), title: 'Comments', onclick: () => { x.side = x.side === 'comments' ? null : 'comments'; docSide(x); } }, '💬' + (open ? ' ' + open : '')),
       h('button', { class: 'icon-btn', 'aria-label': 'Doc options', html: I.more, onclick: more })].filter(Boolean));
+    docTreeDraw(x);
+  }
+  // Full size: the doc's family as a tree beside it (its top page and every page inside, this one marked), then
+  // starred and recent docs. Folds away (this device remembers); a narrow window doesn't show it.
+  function docTreeDraw(x) {
+    const box = $('#docview .dv-tree');
+    if (!box || DV.doc !== x) return;
+    const it = x.item();
+    const folded = box.classList.contains('fold') || box.classList.contains('folded');
+    const toggle = h('button', { class: 'icon-btn dvt-fold', title: folded ? 'Show pages' : 'Hide pages', 'aria-label': folded ? 'Show pages' : 'Hide pages', html: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/></svg>',
+      onclick: () => { box.classList.toggle('folded'); store.set('dvTree', !box.classList.contains('folded')); docTreeDraw(x); } });
+    if (folded) return box.replaceChildren(toggle);
+    const top = docPath(it)[0] || it;
+    const open = new Set([it.id, ...docPath(it).map((p) => p.id)]);
+    const row = (d, lvl) => h('button', { class: 'dvt-row' + (d.id === it.id ? ' on' : ''), style: `--in:${lvl}`, title: docTitle(d), onclick: () => d.id !== it.id && openDoc(d) },
+      h('span', { class: 'dvt-ic' }, d.icon || (docKidsOf(d.id).length ? '📁' : '📄')), h('span', { class: 'dvt-t' }, docTitle(d)));
+    // Every page of the family, opened along the way to this one (others show their pages when they're short).
+    const walk = (d, lvl) => [row(d, lvl), ...(open.has(d.id) || lvl < 1 ? docKidsOf(d.id).sort((a, b) => docTitle(a).localeCompare(docTitle(b))).flatMap((k) => walk(k, lvl + 1)) : [])];
+    const starred = (S.me?.stars || []).map(docById).filter((d) => d && d.id !== top.id && !d.trashed).slice(0, 6);
+    const recent = S.items.filter((y) => y.type === 'text' && !y.underId && y.id !== top.id && !starred.includes(y) && !y.trashed).sort((a, b) => (b.editedAt || b.createdAt) - (a.editedAt || a.createdAt)).slice(0, 6);
+    box.replaceChildren(...[
+      h('div', { class: 'dvt-h' }, h('b', {}, 'Pages'), toggle),
+      ...walk(top, 0),
+      x.ed.readOnly ? null : h('button', { class: 'dvt-add', onclick: () => docNewPage(x) }, '+ Add a page inside'),
+      starred.length ? h('div', { class: 'dvt-h' }, h('b', {}, 'Starred')) : null,
+      ...starred.map((d) => row(d, 0)),
+      recent.length ? h('div', { class: 'dvt-h' }, h('b', {}, 'Recent')) : null,
+      ...recent.map((d) => row(d, 0)),
+      h('button', { class: 'dvt-add', onclick: docsLibrary }, 'All docs…'),
+    ].filter(Boolean));
   }
   function docLockChanged(x) {
     const ro = !docCanEdit(x.item());

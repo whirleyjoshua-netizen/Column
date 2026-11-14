@@ -238,6 +238,20 @@ body.wide .day-view button { padding: 4px 12px; font-size: 12.5px; }
 .ct-td a:hover { color: var(--accent); }
 .ct-name { display: flex; align-items: center; gap: 6px; }
 .ct-name small { color: var(--muted); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; }
+/* A doc at full size: its pages as a tree on the left (folds away). Narrow windows don't show it. */
+.dv-tree { display: none; }
+body.wide .dv-tree { display: flex; flex-direction: column; gap: 1px; flex: none; width: 240px; overflow-y: auto; padding: 10px 8px 30px; border-right: 1px solid var(--line); background: var(--panel); }
+body.wide .dv-tree.folded { width: 44px; padding: 10px 4px; align-items: center; }
+.dvt-h { display: flex; align-items: center; justify-content: space-between; margin: 10px 6px 4px; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--faint); }
+.dvt-h:first-child { margin-top: 0; }
+.dvt-h b { font-weight: 600; }
+.dvt-fold { width: 28px; height: 28px; }
+.dvt-row { display: flex; align-items: center; gap: 7px; width: 100%; min-height: 30px; padding: 4px 8px 4px calc(8px + var(--in, 0) * 16px); border: 0; border-radius: 7px; background: none; color: var(--muted); font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
+.dvt-row:hover { background: var(--card-hover); color: var(--text); }
+.dvt-row.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.dvt-ic { flex: none; width: 18px; text-align: center; font-size: 13px; }
+.dvt-t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dvt-add { border: 0; background: none; color: var(--accent); font: inherit; font-size: 12.5px; text-align: left; padding: 6px 8px; cursor: pointer; }
 /* The desktop app: the window is dragged by the top of the toolbar; on a Mac its buttons sit above it. */
 body.desktop #side .side-top { -webkit-app-region: drag; }
 body.desktop #side .side-top button { -webkit-app-region: no-drag; }

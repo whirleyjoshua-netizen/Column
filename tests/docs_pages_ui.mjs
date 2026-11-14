@@ -84,6 +84,13 @@ try {
   ok(order === 'intro1,page', `the page took the empty line's place, after the line above it (${order})`);
   await A.tap(`document.querySelector('#docview .dk-pg')`);
   ok(await A.until(`document.querySelector('#docview .dk-title')?.textContent === 'Safety rules'`), 'tapping the block opens the page');
+  // Full size (2026-11-14): the doc's pages as a tree beside it.
+  ok(await A.until(`(() => { const t = document.querySelector('#docview .dv-tree'); return t && t.offsetWidth > 150 && [...t.querySelectorAll('.dvt-row .dvt-t')].map((r) => r.textContent).join('|').includes('Handbook|Safety rules'); })()`), 'at full size the pages show as a tree beside the doc');
+  ok(await A.ev(`document.querySelector('#docview .dv-tree .dvt-row.on')?.textContent.includes('Safety rules')`), 'with this page marked');
+  await A.tap(`[...document.querySelectorAll('#docview .dv-tree .dvt-row')].find((r) => r.textContent.includes('Handbook'))`);
+  ok(await A.until(`document.querySelector('#docview .dk-title')?.textContent === 'Handbook' && document.querySelector('#docview .dv-tree .dvt-row.on')?.textContent.includes('Handbook')`), 'tapping a page in the tree opens it');
+  await A.tap(`[...document.querySelectorAll('#docview .dv-tree .dvt-row')].find((r) => r.textContent.includes('Safety rules'))`);
+  await A.until(`document.querySelector('#docview .dk-title')?.textContent === 'Safety rules'`);
 
   // The library: a tree, "+" adds a page inside.
   await A.tap(`document.querySelector('#docview .dv-lib')`);
