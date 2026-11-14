@@ -94,6 +94,18 @@ await A.ev(`[...document.querySelectorAll('#sheet label.pick')].find((l) => l.te
 await A.tap(`document.querySelector('#sheet .primary-btn')`);
 ok(await A.until(`[...document.querySelectorAll('#tool .contact-row')].find((r) => r.textContent.includes('Robin Diaz'))?.querySelector('.dne')`), 'marked do not contact');
 ok(await A.ev(`[...document.querySelectorAll('#tool .contact-row')].find((r) => r.textContent.includes('Robin Diaz')).querySelector('input[type=checkbox]').disabled`), 'and can’t be picked for email');
+// Full size (2026-11-14): a table with columns you can sort by.
+ok(await A.until(`[...document.querySelectorAll('#tool .ct-th button')].map((b) => b.textContent.replace(/[↑↓]/g, '').trim()).join('|') === 'Name|Company|Stage|Phone|Email|City|Source'`), 'at full size Contacts is a table: Name, Company, Stage, Phone, Email, City, Source');
+const names = () => A.ev(`[...document.querySelectorAll('#tool .contact-row .contact-name')].map((b) => b.textContent)`);
+await A.ev(`[...document.querySelectorAll('#tool .ct-th button')].find((b) => b.textContent.startsWith('Name')).click()`);
+await sleep(200);
+let ns = await names();
+ok(ns.length > 2 && ns.every((n, i) => !i || ns[i - 1].localeCompare(n) <= 0), `sorted by name (${ns.join(', ')})`);
+await A.ev(`[...document.querySelectorAll('#tool .ct-th button')].find((b) => b.textContent.startsWith('Name')).click()`);
+await sleep(200);
+ns = await names();
+ok(ns.every((n, i) => !i || ns[i - 1].localeCompare(n) >= 0), 'again: the other way');
+ok(await A.ev(`(() => { const r = [...document.querySelectorAll('#tool .contact-row')].find((x) => x.textContent.includes('Robin Diaz')); return r.querySelectorAll('.ct-td').length >= 6; })()`), 'each person on one row, a cell per column');
 
 // search
 await A.ev(`(() => { const q = document.querySelector('#tool input[type=search]'); q.value = 'roofing'; q.dispatchEvent(new Event('input')); })()`);

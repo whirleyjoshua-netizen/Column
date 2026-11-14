@@ -223,6 +223,21 @@ body.wide .day-view button { padding: 4px 12px; font-size: 12.5px; }
 .wk-col .now { left: 0; }
 .wk-pin { position: absolute; left: 2px; right: 2px; height: 18px; padding: 0 5px; border-radius: 5px; background: var(--card); border: 1px solid var(--line); font-size: 11px; line-height: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; z-index: 2; cursor: grab; }
 .wk-pin.done { text-decoration: line-through; color: var(--muted); }
+/* Contacts at full size: a table. */
+.contacts.ct-table { display: block; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--card); }
+.ct-th, .ct-tr { display: grid; grid-template-columns: 26px minmax(0, 1.5fr) minmax(0, 1fr) minmax(0, .8fr) minmax(0, 1fr) minmax(0, 1.5fr) minmax(0, .8fr) minmax(0, .8fr); align-items: center; column-gap: 12px; padding: 0 12px; }
+.ct-th { position: sticky; top: 0; z-index: 1; background: var(--panel); border-bottom: 1px solid var(--line); min-height: 34px; }
+.ct-th button { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border: 0; background: none; padding: 0; text-align: left; font: inherit; font-size: 11.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); cursor: pointer; }
+.ct-th button:hover, .ct-th button.on { color: var(--text); }
+.contacts.ct-table .contact.ct-tr > input { margin: 0; }
+.contacts.ct-table .contact.ct-tr { display: grid; align-items: center; gap: 0 12px; padding: 0 12px; border-top: 0; min-height: 40px; border-bottom: 1px solid var(--line); margin: 0; border-radius: 0; background: none; }
+.contacts.ct-table .ct-tr:hover { background: var(--card-hover); }
+.contacts.ct-table .ct-tr:last-child { border-bottom: 0; }
+.ct-td { min-width: 0; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ct-td a { color: inherit; }
+.ct-td a:hover { color: var(--accent); }
+.ct-name { display: flex; align-items: center; gap: 6px; }
+.ct-name small { color: var(--muted); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; }
 /* The desktop app: the window is dragged by the top of the toolbar; on a Mac its buttons sit above it. */
 body.desktop #side .side-top { -webkit-app-region: drag; }
 body.desktop #side .side-top button { -webkit-app-region: no-drag; }
@@ -232,6 +247,8 @@ body.wide .docview, body.wide .projects { left: var(--side-w); }
 body.wide.platform-darwin .dv-bar, body.wide.platform-darwin .pj-head, body.wide.platform-darwin .pj-top { padding-left: 16px; }
 /* Settings and tools fill the page beside the sidebar, with the writing kept to a readable width. */
 body.wide .settings:not(.side) { padding-left: max(24px, calc((100% - 920px) / 2)); padding-right: max(24px, calc((100% - 920px) / 2)); }
+/* Tools that are tables or dashboards (Contacts, Finance) use the width, up to a comfortable 1400px. */
+body.wide .settings.tool.wide-tool:not(.side) { padding-left: max(24px, calc((100% - 1400px) / 2)); padding-right: max(24px, calc((100% - 1400px) / 2)); }
 
 .chips { display: flex; gap: 4px; padding: 7px 8px; overflow-x: auto; scrollbar-width: none; flex: none; border-bottom: 1px solid var(--line); }
 .chips::-webkit-scrollbar { display: none; }

@@ -3349,6 +3349,7 @@
     $('#sideFold').title = $('#sideFold').ariaLabel = SIDE.folded ? 'Open the sidebar' : 'Fold the sidebar';
     if (wide) closeSide();
     if (S.tab === 'day' && D.scroll) { D.scrolledFor = null; renderDay(); } // a Week shows only at full size
+    setTimeout(() => { if (toolOpen) renderTool(true); }); // tools lay out for the width (Contacts is a table at full size); later, as this also runs while the app starts
   }
   function openSide(byKey) {
     if (wideMq.matches || sideOpen()) return;
@@ -8616,7 +8617,7 @@
   }
   // ---------- Contacts: the team's people (owners only) ----------
   // Typed in, imported from a spreadsheet, or filled by PSS. Tick people to email them; tap one to change it.
-  const CT = { q: '', stage: '', picked: new Set() };
+  const CT = { q: '', stage: '', picked: new Set(), sort: store.get('ctSort', null) };
   const contactName = (x) => x.name || x.company || x.email || x.phone || 'No name';
   const ctPhone = (v) => { const d = String(v || '').replace(/\D/g, '').slice(-10); return d.length >= 7 ? d : ''; };
   // The same person twice: the same email or phone. PSS's people are never put together with each other.
@@ -8663,10 +8664,28 @@
       const n = q.value.trim().toLowerCase();
       const hits = all.filter((x) => (!CT.stage || x.stage === CT.stage) && (!n || [x.name, x.company, x.phone, x.email, x.city, x.address, ...(x.tags || [])].some((v) => (v || '').toLowerCase().includes(n))));
       count.textContent = hits.length === all.length ? plural(all.length, 'contact') : `${hits.length.toLocaleString()} of ${all.length.toLocaleString()}`;
-      box.replaceChildren(...hits.slice(0, 150).map((x) => {
+      // Full size: a table, sortable by any column (this device remembers). Narrow: one card per person.
+      const wide = document.body.classList.contains('wide');
+      box.classList.toggle('ct-table', wide);
+      const COLS = [['name', 'Name', (x) => contactName(x)], ['company', 'Company', (x) => (x.name ? x.company : '') || ''], ['stage', 'Stage', (x) => (x.stage ? stageLabel(x.stage) : '')], ['phone', 'Phone', (x) => x.phone || ''], ['email', 'Email', (x) => x.email || ''], ['city', 'City', (x) => x.city || ''], ['source', 'Source', (x) => [x.source, x.assignedTo ? '→ ' + x.assignedTo : ''].filter(Boolean).join(' ')]];
+      if (wide && CT.sort) { const c = COLS.find((y) => y[0] === CT.sort.key); if (c) hits.sort((a, b) => (c[2](a) || '\uffff').localeCompare(c[2](b) || '\uffff', undefined, { numeric: true, sensitivity: 'base' }) * CT.sort.dir); }
+      const head = wide ? h('div', { class: 'ct-th' }, h('span'), COLS.map(([k, l]) => h('button', { class: CT.sort?.key === k ? 'on' : null, onclick: () => { CT.sort = CT.sort?.key === k ? { key: k, dir: -CT.sort.dir } : { key: k, dir: 1 }; store.set('ctSort', CT.sort); show(); } }, l, CT.sort?.key === k ? (CT.sort.dir > 0 ? ' ↑' : ' ↓') : ''))) : null;
+      box.replaceChildren(...(head ? [head] : []), ...hits.slice(0, wide ? 500 : 150).map((x) => {
         const can = MAIL_RE.test(x.email.trim()) && !x.dne && !no.has(x.email.toLowerCase());
         const cb = h('input', { type: 'checkbox', checked: CT.picked.has(x.id), disabled: !can, title: can ? 'Select to email' : x.email ? 'Do not contact' : 'No email address', 'aria-label': 'Select ' + contactName(x) });
         cb.addEventListener('change', () => { if (cb.checked) CT.picked.add(x.id); else CT.picked.delete(x.id); act(); });
+        const badges = [x.stage && !wide ? h('span', { class: 'lead-stage' }, stageLabel(x.stage)) : null,
+          x.dne ? h('span', { class: 'lead-stage dne', title: x.extDne ? 'Unsubscribed in PSS' : 'Marked do not contact' }, 'Do not contact') : null,
+          vaultLinked('contact', x.id) || vaultLinked('contact', x.pss) ? h('button', { class: 'link vault-tag', title: 'In your vault', onclick: () => openVaultFor('contact', vaultLinked('contact', x.id) ? x.id : x.pss) }, '🔒') : null];
+        if (wide) return h('div', { class: 'contact contact-row ct-tr' }, cb,
+          h('div', { class: 'ct-td ct-name' }, h('button', { class: 'link contact-name', title: 'Open', onclick: () => contactSheet(x) }, h('b', {}, contactName(x))), ...badges.filter(Boolean),
+            (x.tags || []).length ? h('small', {}, (x.tags || []).map((t) => '#' + t).join(' ')) : null),
+          h('div', { class: 'ct-td' }, COLS[1][2](x)),
+          h('div', { class: 'ct-td' }, x.stage ? h('span', { class: 'lead-stage' }, stageLabel(x.stage)) : ''),
+          h('div', { class: 'ct-td' }, x.phone ? h('a', { href: 'tel:' + x.phone.replace(/[^\d+]/g, '') }, x.phone) : ''),
+          h('div', { class: 'ct-td' }, x.email ? (x.dne ? h('s', {}, x.email) : h('a', { href: 'mailto:' + x.email }, x.email)) : ''),
+          h('div', { class: 'ct-td' }, x.city || ''),
+          h('div', { class: 'ct-td' }, COLS[6][2](x)));
         return h('div', { class: 'contact contact-row' }, cb,
           h('div', { class: 'contact-main' },
             h('div', { class: 'contact-top' }, h('button', { class: 'link contact-name', title: 'Open', onclick: () => contactSheet(x) }, h('b', {}, contactName(x))),
@@ -8677,7 +8696,7 @@
             h('small', { class: 'contact-reach' },
               x.phone ? h('a', { href: 'tel:' + x.phone.replace(/[^\d+]/g, '') }, x.phone) : null,
               x.email ? (x.dne ? h('s', {}, x.email) : h('a', { href: 'mailto:' + x.email }, x.email)) : null)));
-      }), ...(hits.length > 150 ? [h('p', { class: 'day-hint' }, 'Showing the newest 150. Search to narrow it down.')] : []));
+      }), ...(hits.length > (wide ? 500 : 150) ? [h('p', { class: 'day-hint' }, `Showing ${wide ? 500 : 'the newest 150'}. Search to narrow it down.`)] : []));
       act();
     };
     q.addEventListener('input', show);
@@ -9655,6 +9674,7 @@
     $('#settings').classList.add('hidden');
     $('#tool').classList.remove('hidden');
     $('#tool').classList.toggle('side', name === 'folders' && S.tab === 'column'); // beside the stacks, so cards can be dragged in
+    $('#tool').classList.toggle('wide-tool', ['contacts', 'bills'].includes(name));
     if (name === 'docs' || name === 'folders') store.set('docsSide', name);
     renderTool();
     markTabs();
