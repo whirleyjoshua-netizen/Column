@@ -47,8 +47,7 @@ const stack = (await api('GET', '/state')).workspace.stacks.find((x) => x.campai
 const d = await api('POST', '/items', { type: 'text', stackId: stack.id, doc: { title: '', blocks: [] } });
 await sleep(500);
 const openFromTool = async (title) => {
-  await A.tap(`document.querySelector('#toolsBtn')`);
-  await A.tap(`[...document.querySelectorAll('#menu button')].find((b) => b.textContent.startsWith('Docs'))`);
+  await A.ev(`(document.querySelector('#tabs [data-tab=docs]').click(), document.querySelector('#tool .df-switch [data-df=docs]')?.click())`); // in Workspace now (2026-11-14)
   await A.tap(`[...document.querySelectorAll('#tool .doc-row')].find((r) => r.textContent.startsWith(${JSON.stringify(title)}))`);
 };
 await openFromTool('Untitled');

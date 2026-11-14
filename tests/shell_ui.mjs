@@ -68,10 +68,10 @@ try {
   const side = await A.ev(rect('#side'));
   ok(side.l === 0 && side.w >= 220 && side.w <= 240, `a sidebar on the left when there’s room (${JSON.stringify(side)})`);
   ok(!(await A.ev(shown('#menuBtn'))) && (await A.ev(`document.body.classList.contains('wide')`)), 'no ☰ when the sidebar is there');
-  const labels = await A.ev(`[...document.querySelectorAll('#tabs [data-tab]')].map((b) => b.textContent)`);
-  ok(JSON.stringify(labels) === JSON.stringify(['Home', 'Day', 'Stacks', 'Chat', 'Campaigns', 'Docs']), `Home, Day and your tabs, by name (${labels})`);
+  const labels = await A.ev(`[...document.querySelectorAll('#tabs [data-tab]:not(.tab-sub)')].map((b) => b.textContent)`);
+  ok(JSON.stringify(labels) === JSON.stringify(['Home', 'Day', 'Chat', 'Agents', 'Workspace']), `Home, Day, Chat, Agents and Workspace, by name, whatever tabs were saved before (${labels})`);
   ok(await A.ev(`[...document.querySelectorAll('#tabs [data-tab]')].every((b) => b.querySelector('.tab-ic svg'))`), 'each with an icon');
-  ok(await A.ev(shown('#toolsBtn')) && await A.ev(shown('#settingsBtn')) && await A.ev(shown('#tabs .tabs-edit')), 'All tools, Settings and Change your tabs are in it');
+  ok(await A.ev(shown('#toolsBtn')) && await A.ev(shown('#settingsBtn')) && await A.ev(shown('#tabs .tabs-edit')), 'All tools, Settings and Your pins are in it');
   await A.tap(`document.querySelector('#tabs [data-tab=chat]')`);
   ok(await A.until(`!document.querySelector('#chat').classList.contains('hidden') && document.querySelector('#tabs [data-tab=chat]').classList.contains('on')`), 'picking Chat opens it and marks it');
   // Settings fills the page beside the sidebar.
@@ -103,14 +103,14 @@ try {
   ok(await A.ev(`(() => { document.querySelector('#tabs [data-tab=day]').focus(); return document.activeElement !== document.querySelector('#tabs [data-tab=day]'); })()`), 'closed, it can’t be tabbed into');
   // The owner, later on 2026-11-12: in a column, the tabs go back across the top too (the drawer stays).
   ok(await A.until(shown('#topTabs')) && (await A.ev(`document.body.classList.contains('column')`)), 'a column has your tabs across the top again');
-  const top = await A.ev(`[...document.querySelectorAll('#topTabs [data-tab]')].map((b) => b.textContent)`);
+  const top = await A.ev(`[...document.querySelectorAll('#topTabs [data-tab]:not(.tab-sub)')].map((b) => b.textContent)`);
   ok(JSON.stringify(top) === JSON.stringify(labels), `the same tabs as the drawer (${top})`);
   await A.tap(`document.querySelector('#topTabs [data-tab=day]')`);
   ok(await A.until(`!document.querySelector('#day').classList.contains('hidden') && document.querySelector('#topTabs [data-tab=day]').classList.contains('on') && document.querySelector('#tabs [data-tab=day]').classList.contains('on')`), 'a tab at the top opens it, marked in both places');
   ok(!(await A.ev(shown('#side'))), 'without opening the drawer');
   await A.tap(`document.querySelector('#menuBtn')`);
   ok(await A.until(shown('#side')) && (await A.ev(`!document.querySelector('#scrim').hidden && document.querySelector('#menuBtn').getAttribute('aria-expanded') === 'true'`)), '☰ still opens the drawer over the page');
-  await A.tap(`document.querySelector('#tabs [data-tab=column]')`);
+  await A.tap(`(document.querySelector('#toolsBtn').click(), [...document.querySelectorAll('#menu button')].find((b) => b.textContent.includes('Stacks')))`);
   ok(await A.until(`!document.querySelector('#panes').classList.contains('hidden')`) && await A.until(`!${shown('#side')}`), 'picking Stacks opens it and closes the drawer');
   await A.tap(`document.querySelector('#menuBtn')`);
   await A.until(shown('#side'));
@@ -125,8 +125,15 @@ try {
   await A.tap(`document.querySelector('#menuBtn')`);
   await A.until(shown('#side'));
   await A.tap(`document.querySelector('#toolsBtn')`);
-  await A.tap(`[...document.querySelectorAll('#menu button')].find((b) => b.textContent.trim() === 'Docs')`);
+  await A.tap(`[...document.querySelectorAll('#menu button')].find((b) => b.textContent.startsWith('Signatures'))`);
   ok(await A.until(`!document.querySelector('#tool').classList.contains('hidden')`) && await A.until(`!${shown('#side')}`), 'All tools works from the drawer, and picking one closes it');
+  await A.ev(`document.querySelector('#tool .icon-btn')?.click(); true`);
+  // In the drawer, Workspace's tabs sit under Workspace.
+  await A.tap(`document.querySelector('#menuBtn')`);
+  await A.until(shown('#side'));
+  ok(await A.ev(shown('#tabs .tab-sub[data-tab=docs]')) && !(await A.ev(shown('#topTabs .tab-sub'))), 'the drawer lists Workspace’s tabs under it (the top row doesn’t)');
+  await A.tap(`document.querySelector('#tabs .tab-sub[data-tab=docs]')`);
+  ok(await A.until(`!document.querySelector('#tool').classList.contains('hidden') && document.querySelector('#tool h2').textContent.startsWith('Folders & Docs')`) && await A.until(`!${shown('#side')}`), 'Folders & Docs opens from there and the drawer closes');
   await A.ev(`document.querySelector('#tool .icon-btn')?.click(); true`);
   ok(await A.ev(`document.documentElement.scrollWidth <= innerWidth`), 'nothing spills sideways in a column');
 

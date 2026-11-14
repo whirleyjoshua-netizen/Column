@@ -49,8 +49,7 @@ const api = (m, p, b) => fetch(APP + 'api' + p, { method: m, headers: { authoriz
 const doc = await api('POST', '/items', { type: 'text', doc: { title: 'Service agreement', blocks: [{ id: 'a', type: 'p', runs: [{ text: 'We’ll tint 12 windows for $1,800.' }] }] } });
 ok(!!doc.id, 'a doc to send');
 
-await A.tap(`document.querySelector('#toolsBtn')`);
-await A.tap(`[...document.querySelectorAll('#menu button')].find((b) => b.textContent === 'Docs')`);
+await A.ev(`(document.querySelector('#tabs [data-tab=docs]').click(), document.querySelector('#tool .df-switch [data-df=docs]')?.click())`); // in Workspace now (2026-11-14)
 await A.tap(`[...document.querySelectorAll('#tool .doc-row')].find((r) => r.textContent.includes('Service agreement'))`);
 ok(await A.until(`document.querySelector('#docview .dk-title')?.textContent === 'Service agreement'`), 'the doc opens');
 await A.tap(`document.querySelector('#docview [aria-label="Doc options"]')`);
@@ -77,8 +76,7 @@ await sleep(300);
 await A.ev(`document.querySelector('#preview .close')?.click()`);
 await A.ev(`document.querySelector('#docview [aria-label="Close doc"]')?.click()`);
 await sleep(300);
-await A.tap(`document.querySelector('#toolsBtn')`);
-await A.tap(`[...document.querySelectorAll('#menu button')].find((b) => b.textContent === 'Docs')`);
+await A.ev(`(document.querySelector('#tabs [data-tab=docs]').click(), document.querySelector('#tool .df-switch [data-df=docs]')?.click())`); // in Workspace now (2026-11-14)
 ok(await A.until(`[...document.querySelectorAll('#tool .doc-row')].find((r) => r.textContent.includes('Service agreement'))?.querySelector('.doc-sign')?.textContent === 'Waiting for signature'`), 'the Docs library shows it waiting for a signature');
 
 // they sign
@@ -102,8 +100,7 @@ await A.ev(`document.querySelector('#settings .icon-btn[aria-label=Close], #sett
 await sleep(300);
 const d2 = await api('POST', '/items', { type: 'text', doc: { title: 'Letter', blocks: [{ id: 'a', type: 'p', runs: [{ text: 'Thanks for your business.' }] }, { id: 'b', type: 'p', runs: [] }] } });
 await A.ev(`document.querySelector('#tool [aria-label=Close]')?.click()`);
-await A.tap(`document.querySelector('#toolsBtn')`);
-await A.tap(`[...document.querySelectorAll('#menu button')].find((b) => b.textContent === 'Docs')`);
+await A.ev(`(document.querySelector('#tabs [data-tab=docs]').click(), document.querySelector('#tool .df-switch [data-df=docs]')?.click())`); // in Workspace now (2026-11-14)
 await A.tap(`[...document.querySelectorAll('#tool .doc-row')].find((r) => r.textContent.includes('Letter'))`);
 ok(await A.until(`document.querySelector('#docview .dk-title')?.textContent === 'Letter'`), 'a doc opens');
 await A.ev(`(() => { const r = [...document.querySelectorAll('#docview .dk-text')].at(-1); r.focus(); getSelection().collapse(r, 0); })()`);

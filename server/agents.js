@@ -235,16 +235,16 @@ export function agentsModule({ sees = () => true, db, save, broadcast, rid, clea
       },
     },
     list_projects: {
-      kind: 'read', label: () => 'Looked over Jobs & projects',
-      description: 'Every project in Jobs & projects the person can see, with its lists (e.g. Jobs, Leads, Deals, Quotes) and each list’s fields and choices. Use before creating or updating records, to get names right.',
+      kind: 'read', label: () => 'Looked over Projects',
+      description: 'Every project in Projects the person can see, with its lists (e.g. Jobs, Leads, Deals, Quotes) and each list’s fields and choices. Use before creating or updating records, to get names right.',
       parameters: { type: 'object', properties: {} },
       async run(cx) {
         return { projects: Object.values(db.projects).filter((p) => p.wsId === cx.ws.id && PJ.sees(p, cx.memberId)).map((p) => ({ id: p.id, name: p.name, template: p.template, lists: p.types.map((t) => ({ name: t.name, singular: t.singular, fields: t.fields.filter((f) => !['autonumber', 'files', 'signature', 'items'].includes(f.type)).map((f) => ({ name: f.name, type: f.type, ...(f.choices ? { choices: f.choices.map((c) => c.label) } : {}) })) })) })) };
       },
     },
     find_records: {
-      kind: 'read', label: (a) => (a.query ? `Searched Jobs & projects for “${words(a.query, 40)}”` : 'Searched Jobs & projects'),
-      description: 'Records in Jobs & projects (jobs, leads, deals, quotes, contacts, work items…). Filter by words, project, list, a status/stage choice, or quiet_days (no activity for at least that many days).',
+      kind: 'read', label: (a) => (a.query ? `Searched Projects for “${words(a.query, 40)}”` : 'Searched Projects'),
+      description: 'Records in Projects (jobs, leads, deals, quotes, contacts, work items…). Filter by words, project, list, a status/stage choice, or quiet_days (no activity for at least that many days).',
       parameters: { type: 'object', properties: { query: { type: 'string' }, project: { type: 'string' }, list: { type: 'string' }, status: { type: 'string', description: 'a status or stage choice, e.g. Proposal sent' }, quiet_days: { type: 'number' } } },
       async run(cx, a) {
         const q = String(a.query || '').toLowerCase();
@@ -419,7 +419,7 @@ export function agentsModule({ sees = () => true, db, save, broadcast, rid, clea
     },
     create_project: {
       kind: 'write', label: (a) => `New project: ${words(a.name, 80)}`,
-      description: 'Start a new project in Jobs & projects from a template: crm (contacts and deals), bids (quotes and bids), jobs (jobs and installs, with clients), blank (one simple list), tech (software). Most jobs belong in an existing project as a record instead.',
+      description: 'Start a new project in Projects from a template: crm (contacts and deals), bids (quotes and bids), jobs (jobs and installs, with clients), blank (one simple list), tech (software). Most jobs belong in an existing project as a record instead.',
       parameters: { type: 'object', properties: { template: { type: 'string' }, name: { type: 'string' }, why: { type: 'string' } }, required: ['template', 'name'] },
       async run(cx, a) {
         const r = await cx.call('POST', '/api/projects', { template: a.template, name: a.name });

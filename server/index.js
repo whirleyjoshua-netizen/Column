@@ -1822,7 +1822,7 @@ async function runNotionImport(ws, auth, j, zipItem, opts) {
         const cell = (v) => (NT.cellText(v) ? [{ text: NT.cellText(v).slice(0, 2000) }] : []);
         for (let i = 0; i < Math.max(1, data.length); i += 99) blocks.push({ id: rid(8), type: 'table', header: true, rows: [header, ...data.slice(i, i + 99)].map((r) => r.slice(0, 20).map(cell)) });
         if (header.length > 20) note(`Tables keep their first 20 columns (“${dbn.title}” had ${header.length}).`);
-        if (opts.projects && !toolsOf(ws).projects) note('Databases came in as tables because Jobs & projects is off for this team.');
+        if (opts.projects && !toolsOf(ws).projects) note('Databases came in as tables because Projects is off for this team.');
       }
       const rowPages = (underOf.get(x.docId) || []).filter((y) => db.items[y.docId]);
       if (rowPages.length) blocks.push({ id: rid(8), type: 'h3', runs: [{ text: 'Pages' }] }, ...rowPages.map((y) => ({ id: rid(8), type: 'page', docId: y.docId })));

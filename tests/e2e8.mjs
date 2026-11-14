@@ -60,7 +60,7 @@ await api('POST', `/projects/${bq.id}/records`, { typeId: P.price_list.id, value
 const cl = await api('POST', `/projects/${bq.id}/records`, { typeId: P.clients.id, values: { name: 'Desert Auto', address: '12 Main St, Las Vegas' } });
 await api('POST', `/projects/${bq.id}/records`, { typeId: P.bids.id, values: { job: 'Library glazing', scope: 'Tint the office windows' } });
 await sleep(400);
-const openProjects = async () => { await A.tap(`document.querySelector('#toolsBtn')`); await A.tap(`[...document.querySelectorAll('#menu button')].find((b) => b.textContent === 'Jobs & projects')`); };
+const openProjects = async () => { await A.until(`!!document.querySelector('#tabs [data-tab=projects]')`, 10000); await A.ev(`document.querySelector('#tabs [data-tab=projects]').click()`); };
 await openProjects();
 await A.tap(`[...document.querySelectorAll('#projects .pj-card')].find((x) => x.textContent.includes('Sales'))`);
 await A.tap(`[...document.querySelectorAll('#projects .pj-open')].find((b) => b.textContent === 'Ben Ortiz')`);

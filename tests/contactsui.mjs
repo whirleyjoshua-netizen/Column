@@ -47,8 +47,7 @@ await sleep(800);
 const token = await A.ev(`JSON.parse(localStorage.getItem('column.token'))`);
 const api = (m, p, b) => fetch(APP + 'api' + p, { method: m, headers: { authorization: 'Bearer ' + token, 'content-type': 'application/json' }, body: b ? JSON.stringify(b) : undefined }).then((r) => r.json());
 const openContacts = async () => {
-  await A.tap(`document.querySelector('#toolsBtn')`);
-  await A.tap(`[...document.querySelectorAll('#menu button')].find((b) => b.textContent === 'Contacts')`);
+  await A.ev(`document.querySelector('#tabs [data-tab=contacts]').click()`); // in Workspace now (2026-11-14)
 };
 await openContacts();
 ok(await A.until(`document.querySelector('#tool')?.textContent.includes('Nobody here yet')`), 'Contacts opens without PSS, empty, saying how to fill it');
@@ -99,11 +98,11 @@ ok(await A.ev(`[...document.querySelectorAll('#tool .contact-row')].find((r) => 
 // search
 await A.ev(`(() => { const q = document.querySelector('#tool input[type=search]'); q.value = 'roofing'; q.dispatchEvent(new Event('input')); })()`);
 ok(await A.until(`document.querySelectorAll('#tool .contact-name').length === 1`), 'search finds by company');
-ok(!/\bnull\b/.test(await A.ev(`document.querySelector('#tool').innerText`)), 'nothing stray shows under the list');
+{ const tx = await A.ev(`document.querySelector('#tool').innerText`); ok(!/\bnull\b/.test(tx), 'nothing stray shows under the list' + (/\bnull\b/.test(tx) ? ': ' + tx.slice(0, 300) : '')); }
 // a call list for a campaign, from Contacts
 await api('POST', '/campaigns', { name: 'Spring calls' });
 await A.tap(`document.querySelector('#tool [aria-label=Close]')`).catch(() => {});
-await A.tap(`document.querySelector('[data-tab=camps]')`);
+await A.ev(`document.querySelector('#tabs [data-tab=camps]').click()`);
 await A.until(`[...document.querySelectorAll('.camp-card')].some((b) => b.textContent.includes('Spring calls'))`);
 await A.tap(`[...document.querySelectorAll('.camp-card')].find((b) => b.textContent.includes('Spring calls'))`);
 await A.until(`[...document.querySelectorAll('#camps button')].some((b) => b.textContent.startsWith('Files'))`);

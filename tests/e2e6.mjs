@@ -49,7 +49,7 @@ await A.ev(`location.reload()`);
 await A.until(`!document.querySelector('#app')?.classList.contains('hidden') && !!document.querySelector('#toolsBtn')`, 15000);
 const token = await A.ev(`JSON.parse(localStorage.getItem('column.token'))`);
 const api = async (m, p, body) => (await fetch(APP + 'api' + p, { method: m, headers: { 'content-type': 'application/json', authorization: 'Bearer ' + token }, body: body ? JSON.stringify(body) : undefined })).json();
-await A.tap(`document.querySelector('#toolsBtn')`); await A.tap(`[...document.querySelectorAll('#menu button')].find((b) => b.textContent === 'Jobs & projects')`);
+await A.until(`!!document.querySelector('#tabs [data-tab=projects]')`, 10000); await A.ev(`document.querySelector('#tabs [data-tab=projects]').click()`);
 await A.tap(`[...document.querySelectorAll('#projects .btn')].find((b) => b.textContent === '+ New project' || b.textContent.startsWith('Start with'))`);
 // Construction & Trades (the default card), named, then the trade picker with "We bid on jobs too".
 await A.until(`!!document.querySelector('#sheet .pj-kind.on')?.textContent.includes('Construction & Trades')`);
@@ -146,7 +146,7 @@ await sleep(1000);
 await A.tap(`[...document.querySelectorAll('#projects .pj-qbar .btn')].find((b) => b.textContent === 'Make a quote from this bid')`);
 ok(await A.until(`document.querySelector('#projects .pj-panel .pj-title')?.value === 'Henderson Library glazing' && [...document.querySelectorAll('#projects .pj-panel .pj-frow')].some((r) => r.textContent.includes('Q-1002'))`), 'Make a quote from this bid opens Q-1002 named after the job');
 ok(await A.until(`document.querySelector('#projects .pj-it-total b')?.textContent === '$30,400.00' && [...document.querySelectorAll('#projects .pj-panel .pj-link')].some((b) => b.textContent === 'Henderson Library glazing') && [...document.querySelectorAll('#projects .pj-panel .pj-link')].some((b) => b.textContent === 'Desert Auto')`), 'with the estimate’s lines, the client and a link back to the bid');
-ok(!(await A.ev(`!!document.querySelector('[data-tab=projects]')`)), 'there is no Projects tab any more');
+ok(await A.ev(`document.querySelector('#workTabs [data-tab=projects]')?.classList.contains('on')`), 'Projects is lit in Workspace’s tabs');
 await A.ev(`document.body.focus()`);
 await A.key('Escape');
 ok(await A.until(`!document.querySelector('#projects .pj-panel')`), 'Esc closes the record');

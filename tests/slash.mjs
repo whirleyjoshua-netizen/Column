@@ -57,7 +57,7 @@ const shut = () => A.ev(`(() => { document.querySelector('#sheet').classList.add
 const sheetVals = () => A.ev(`[...document.querySelectorAll('#sheet input, #sheet textarea')].map((i) => i.value)`);
 const sheetTitle = () => A.ev(`document.querySelector('#sheet:not(.hidden) h2')?.textContent || ''`);
 
-await A.tap(`document.querySelector('[data-tab=column]')`);
+await A.tap(`(document.querySelector('#toolsBtn').click(), [...document.querySelectorAll('#menu button')].find((b) => b.textContent.includes('Stacks')))`);
 // The list
 await typeIn('/');
 ok(await A.until(`(() => { const t = document.querySelector('.slash-pop')?.textContent || ''; return ['/task', '/doc', '/vault', '/spent', '/budget', '/contact'].every((c) => t.includes(c)); })()`), '“/” lists the commands');
@@ -93,7 +93,7 @@ await A.ev(`document.querySelector('.slash-pop')?.remove()`);
 await A.key('Enter');
 ok(await A.until(`true`) && await (async () => { for (let i = 0; i < 30; i++) { const st = await JA('GET', '/state'); if (st.items.some((x) => x.type === 'text' && x.title === 'Smith quote')) return true; await sleep(200); } return false; })(), '/doc Smith quote makes a doc called “Smith quote”');
 await A.key('Escape'); await sleep(300);
-await A.ev(`document.querySelector('[data-tab=column]').click()`); await sleep(500);
+await A.ev(`(document.querySelector('#toolsBtn').click(), [...document.querySelectorAll('#menu button')].find((b) => b.textContent.includes('Stacks'))).click()`); await sleep(500);
 // Not a command: posts as typed
 await typeIn('/usr/bin is the folder');
 await A.key('Enter');

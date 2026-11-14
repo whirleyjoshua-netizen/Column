@@ -45,8 +45,7 @@ const stack = (await api('GET', '/state')).workspace.stacks.find((x) => x.campai
 const d = await api('POST', '/items', { type: 'text', stackId: stack.id, doc: { title: 'Fleet notes', blocks: [{ id: 'p1', type: 'p', runs: [] }] } });
 await sleep(500);
 // open it from the Docs tool
-await A.tap(`document.querySelector('#toolsBtn')`);
-await A.tap(`[...document.querySelectorAll('#menu button')].find((b) => b.textContent.startsWith('Docs'))`);
+await A.ev(`(document.querySelector('#tabs [data-tab=docs]').click(), document.querySelector('#tool .df-switch [data-df=docs]')?.click())`); // in Workspace now (2026-11-14)
 await A.tap(`[...document.querySelectorAll('#tool .doc-row')].find((r) => r.textContent.startsWith('Fleet notes'))`);
 ok(await A.until(`document.querySelector('#docview .dk-title')?.textContent === 'Fleet notes'`), 'doc opened from the Docs tool');
 await A.ev(`(() => { const r = document.querySelector('#docview .dk-p-t'); r.focus(); getSelection().collapse(r, 0); })()`);

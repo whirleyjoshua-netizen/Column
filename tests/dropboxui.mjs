@@ -68,7 +68,7 @@ try {
   await A.ev(`(() => { document.querySelector('[data-mode=create]').click(); const f = document.querySelector('#loginForm'); f.workspace.value = '${team}'; f.name.value = 'Jo'; f.password.value = 'secret1pad'; f.device.value = 'Jo laptop'; f.email.value = 'jo${team}@t.test'; f.requestSubmit(); })()`);
   ok(await A.until(`!document.querySelector('#app').classList.contains('hidden')`), 'Jo is in');
   const tok = await A.ev(`JSON.parse(localStorage.getItem('column.token'))`);
-  await A.ev(`document.querySelector('#tabs [data-tab=column]')?.click()`);
+  await A.ev(`(document.querySelector('#toolsBtn').click(), [...document.querySelectorAll('#menu button')].find((b) => b.textContent.includes('Stacks')))?.click()`);
   ok(await A.until(`!!document.querySelector('.composer .add')`), 'Stacks has its + button');
   await A.ev(`[...document.querySelectorAll('.composer .add')].find((b) => b.offsetParent).click()`);
   ok(await A.until(`[...document.querySelectorAll('#menu button')].some((b) => b.textContent === 'From Dropbox…')`), 'the + menu offers From Dropbox…');

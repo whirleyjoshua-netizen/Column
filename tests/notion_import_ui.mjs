@@ -45,7 +45,8 @@ async function tab(url) {
 }
 const row = (title) => `[...document.querySelectorAll('.docs-list .doc-row')].find((r) => r.querySelector('.doc-t')?.textContent.replace('★ ', '') === ${JSON.stringify(title)})`;
 const treeRow = (title) => `[...document.querySelectorAll('.docs-list .doc-tree')].find((r) => r.querySelector('.doc-t')?.textContent.replace('★ ', '') === ${JSON.stringify(title)})`;
-const menuBtn = (label) => `[...document.querySelectorAll('#menu button')].find((b) => b.textContent.includes(${JSON.stringify(label)}))`;
+// Docs is in Workspace now (Folders & Docs), not All tools (2026-11-14).
+const menuBtn = (label) => (label === 'Docs' ? `((document.querySelector('#tabs [data-tab=docs]').click(), document.querySelector('#tool .df-switch [data-df=docs]')?.click()), document.querySelector('#tool h2'))` : `[...document.querySelectorAll('#menu button')].find((b) => b.textContent.includes(${JSON.stringify(label)}))`);
 
 try {
   for (let i = 0; i < 100; i++) { try { if ((await fetch(APP + 'api/health')).ok) break; } catch {} await sleep(150); }
@@ -57,6 +58,7 @@ try {
   ok(await A.until(`!document.querySelector('#app')?.classList.contains('hidden') && !!document.querySelector('#toolsBtn')`, 20000), 'signed in');
   await A.tap(`document.querySelector('#toolsBtn')`);
   await A.tap(menuBtn('Docs'));
+  await A.until(`!!document.querySelector('.docs-import')`);
   await A.tap(`document.querySelector('.docs-import')`);
   ok(await A.until(`document.querySelector('#sheet .sheet h2')?.textContent.includes('Import from Notion') && document.querySelector('#sheet .day-hint')?.textContent.includes('Markdown & CSV')`), 'Import opens, saying how to export from Notion');
   ok(await A.ev(`document.querySelector('#sheet').textContent.includes('Databases become tables in a doc')`), 'it says what databases become here (Jobs & projects is off)');

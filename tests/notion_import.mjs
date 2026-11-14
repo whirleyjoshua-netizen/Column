@@ -69,7 +69,7 @@ try {
   ok(r.body.status === 'done', `the export comes in (${r.body.status} ${r.body.error || ''})`);
   const rep = r.body.report;
   ok(rep.pages >= 6 && rep.tables === 1 && rep.rows === 3 && rep.files === 1, `the report counts it: ${JSON.stringify({ pages: rep.pages, tables: rep.tables, rows: rep.rows, files: rep.files })}`);
-  ok(rep.notes.some((n) => /too big/.test(n)) && rep.notes.some((n) => /tables because Jobs & projects is off/.test(n)), 'and says what it couldn’t: the huge page, and databases as tables');
+  ok(rep.notes.some((n) => /too big/.test(n)) && rep.notes.some((n) => /tables because Projects is off/.test(n)), 'and says what it couldn’t: the huge page, and databases as tables');
   const ws = (await rico('GET', '/state')).body.workspace;
   const dir = ws.dirs.find((d) => d.id === r.body.dirId);
   ok(dir && dir.private && /^From Notion/.test(dir.name), 'it goes into a new private folder');

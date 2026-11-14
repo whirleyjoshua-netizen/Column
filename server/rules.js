@@ -9,7 +9,7 @@
 export const ACTIONS = {
   discount: { name: 'Giving a discount', what: 'a discount', unit: 'percent', over: 10, about: 'On a job’s or quote’s price lines.' },
   invoice: { name: 'Sending an invoice', what: 'an invoice', unit: 'dollars', over: 5000, about: 'Sending it to the customer.' },
-  deleteRecord: { name: 'Deleting a job or record', what: 'deleting a job or record', about: 'Jobs, quotes, leads: anything in Jobs & projects.' },
+  deleteRecord: { name: 'Deleting a job or record', what: 'deleting a job or record', about: 'Jobs, quotes, leads: anything in Projects.' },
 };
 const LEVELS = ['auto', 'approval', 'never'];
 const KEEP_DAYS = 60;

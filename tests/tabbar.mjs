@@ -43,101 +43,91 @@ await A.ev(`(() => { document.querySelector('[data-mode=create]').click(); const
 ok(await A.until(`!document.querySelector('#app').classList.contains('hidden')`), 'Jo signed in');
 const tok = await A.ev(`JSON.parse(localStorage.getItem('column.token'))`);
 const api = async (m, p, body) => (await fetch(APP + 'api' + p, { method: m, headers: { 'content-type': 'application/json', authorization: 'Bearer ' + tok }, body: body ? JSON.stringify(body) : undefined })).json();
-await api('PATCH', '/workspace', { tools: { bills: true, projects: true, docs: true, sidekick: true } });
-await sleep(1200);
-const tabs = () => A.ev(`[...document.querySelectorAll('#tabs button[data-tab]')].map((b) => b.textContent + (b.classList.contains('on') ? '*' : ''))`);
+await sleep(1500); // the live connection is up, so the switch reaches this page
+const patched = await api('PATCH', '/workspace', { tools: { bills: true, projects: true, docs: true, sidekick: true, meetings: true } });
+ok(patched.tools?.projects === true || patched.workspace?.tools?.projects === true || !patched.error, 'tools switched on' + (patched.error ? ': ' + patched.error : ''));
+await A.ev(`(() => { for (const k of Object.keys(localStorage)) if (/workLast|docsSide/.test(k)) localStorage.removeItem(k); return true; })()`);
+ok(await A.until(`!!document.querySelector('#tabs [data-tab=projects]')`), 'Projects is in Workspace once the team turns it on');
+const tabs = () => A.ev(`[...document.querySelectorAll('#tabs button[data-tab]:not(.tab-sub)')].map((b) => b.querySelector('.tab-l').textContent + (b.classList.contains('on') ? '*' : ''))`);
 const names = async () => (await tabs()).map((t) => t.replace('*', '')).join(',');
+const strip = () => A.ev(`(() => { const s = document.querySelector('#workTabs'); return s && !s.hidden && getComputedStyle(s).display !== 'none' ? [...s.querySelectorAll('button')].map((b) => b.textContent + (b.classList.contains('on') ? '*' : '')).join(',') : ''; })()`);
+const menuItems = () => A.ev(`[...document.querySelectorAll('#menu button')].map((b) => b.textContent)`);
 
-ok(await names() === 'Home,Day,Stacks,Chat,Campaigns,Agents', 'starts with the usual tabs: ' + await names());
-ok(await A.ev(`!!document.querySelector('#tabs .tabs-edit')`), 'a pencil to change them');
-ok((await api('GET', '/state')).me.bar === null, 'nothing saved yet');
-ok((await api('GET', '/state')).workspace.stacks.length === 0, 'a new team has no stacks yet');
-await A.click('#tabs [data-tab=column]');
-ok(await A.until(`[...document.querySelectorAll('#panes .chip')].map((c) => c.textContent).join('|') === 'Everything|Files'`), 'Stacks shows Everything and Files before any stack is made');
-await A.ev(`[...document.querySelectorAll('#panes .chip')].find((c) => c.textContent === 'Files').click()`);
-ok(await A.until(`document.querySelector('#panes .chip.on')?.textContent === 'Files'`), 'and Files can be picked');
-await A.ev(`[...document.querySelectorAll('#panes .chip')].find((c) => c.textContent === 'Everything').click()`);
+// The same short toolbar for everyone (2026-11-14): Home, Day, Chat, Agents, Workspace.
+ok(await names() === 'Home,Day,Chat,Agents,Workspace', 'the toolbar is Home, Day, Chat, Agents, Workspace: ' + await names());
+ok(await A.ev(`!!document.querySelector('#tabs .tabs-edit')`), 'a pencil for your pins');
+ok(await strip() === '', 'no Workspace strip until you are in Workspace');
+
+// Workspace: its tabs across the top at full size; it opens where you were last.
+await A.click('#tabs [data-tab=work]');
+ok(await A.until(`!document.querySelector('#tool').classList.contains('hidden') && document.querySelector('#tool h2').textContent.includes('Sidekick')`), 'Workspace opens Sidekick first');
+ok(await strip() === 'Sidekick*,Contacts,Projects,Campaigns,Folders & Docs', 'the strip across the top: ' + await strip());
+ok((await tabs()).includes('Workspace*'), 'Workspace is lit in the toolbar');
+ok(await A.ev(`getComputedStyle(document.querySelector('#tabs .tab-sub')).display === 'none'`), 'at full size the sidebar does not repeat the sub-tabs');
+ok(await A.until(`document.querySelector('#tool').getBoundingClientRect().top >= document.querySelector('#workTabs').getBoundingClientRect().bottom - 1`, 1500), 'the tool starts under the strip, not over it');
+await A.click('#workTabs [data-tab=projects]');
+ok(await A.until(`!document.querySelector('#projects').classList.contains('hidden') && document.querySelector('#tool').classList.contains('hidden')`), 'Projects opens (and Sidekick closes)');
+ok(await A.ev(`document.querySelector('#projects h2').textContent === 'Projects'`), 'Jobs is called Projects now');
+ok(await A.ev(`document.querySelector('#projects').getBoundingClientRect().top >= document.querySelector('#workTabs').getBoundingClientRect().bottom - 1`), 'Projects starts under the strip');
+await A.click('#workTabs [data-tab=camps]');
+ok(await A.until(`document.querySelector('#projects').classList.contains('hidden') && !document.querySelector('#campsWrap').classList.contains('hidden')`), 'Campaigns opens in Workspace');
+ok(await strip() === 'Sidekick,Contacts,Projects,Campaigns*,Folders & Docs', 'Campaigns is lit in the strip: ' + await strip());
+await A.click('#workTabs [data-tab=docs]');
+ok(await A.until(`document.querySelector('#tool h2')?.textContent.startsWith('Folders & Docs') && !document.querySelector('#tool').classList.contains('hidden')`), 'Folders & Docs opens');
+ok(await A.ev(`[...document.querySelectorAll('#tool .df-switch button')].map((b) => b.textContent).join() === 'Docs,Folders'`), 'with a Docs | Folders switch');
+await A.ev(`document.querySelector('#tool .df-switch [data-df=folders]').click()`);
+ok(await A.until(`!!document.querySelector('#tool .dir-crumbs') && document.querySelector('#tool .df-switch [data-df=folders]').classList.contains('on')`), 'Folders shows in the same tool');
+ok((await strip()).includes('Folders & Docs*'), 'and the strip still marks Folders & Docs');
+await A.click('#workTabs [data-tab=docs]');
+ok(await A.ev(`!document.querySelector('#tool').classList.contains('hidden')`), 'tapping the open tab again keeps it open');
+await A.click('#tabs [data-tab=day]');
+ok(await A.until(`!document.querySelector('#day').classList.contains('hidden') && document.querySelector('#tool').classList.contains('hidden')`), 'Day leaves Workspace');
+ok(await strip() === '', 'and the strip goes');
+await A.click('#tabs [data-tab=work]');
+ok(await A.until(`!document.querySelector('#tool').classList.contains('hidden') && !!document.querySelector('#tool .dir-crumbs')`), 'Workspace comes back where you were (Folders)');
 await A.click('#tabs [data-tab=home]');
 
-// Change: drop Chat and Campaigns, add Finance and Jobs, move Jobs before Finance
-await A.click('#tabs .tabs-edit');
-ok(await A.until(`document.querySelector('#sheet:not(.hidden) h2')?.textContent.includes('Your tabs')`), 'the Your tabs sheet opens');
-ok(await A.ev(`document.querySelectorAll('#sheet .bar-row.fixed input:disabled').length === 2`), 'Home and Day are fixed');
-const tick = (k) => A.ev(`(() => { const b = document.querySelector('#sheet .bar-row[data-key=${k}] input'); b.click(); return true; })()`);
-await tick('chat'); await tick('camps'); await tick('bills'); await tick('projects');
-await A.ev(`document.querySelector('#sheet .bar-row[data-key=projects] [aria-label^="Move Jobs left"]').click()`);
-await A.ev(`[...document.querySelectorAll('#sheet .btns button')].pop().click()`);
-await A.until(`document.querySelector('#sheet').classList.contains('hidden')`);
-ok(await names() === 'Home,Day,Stacks,Agents,Jobs,Finance', 'bar is now ' + await names());
-ok(JSON.stringify((await api('GET', '/state')).me.bar) === '["column","agents","projects","bills"]', 'saved on the server, so other devices get it');
-
-// A tool tab opens its drawer and lights up; again closes it
-await A.click('#tabs [data-tab=bills]');
-ok(await A.until(`!document.querySelector('#tool').classList.contains('hidden') && document.querySelector('#tool h2').textContent.includes('Finance')`), 'Finance tab opens Finance');
-ok((await tabs()).includes('Finance*'), 'Finance tab is lit while open');
-await A.click('#tabs [data-tab=bills]');
-ok(await A.until(`document.querySelector('#tool').classList.contains('hidden')`), 'tapping it again closes it');
-await A.click('#tabs [data-tab=projects]');
-ok(await A.until(`!document.querySelector('#projects').classList.contains('hidden')`), 'Jobs tab opens Jobs');
-ok((await tabs()).includes('Jobs*'), 'Jobs tab is lit');
-await A.click('#tabs [data-tab=day]');
-ok(await A.until(`document.querySelector('#projects').classList.contains('hidden') && !document.querySelector('#day').classList.contains('hidden')`), 'Day closes Jobs and shows the day');
-
-// Views left off the bar are in Tools
+// All tools: the rest. Not Workspace's tabs, not News.
 await A.click('#toolsBtn');
 await sleep(200);
-ok(await A.ev(`[...document.querySelectorAll('.menu button, #menu button')].some((b) => b.textContent.startsWith('Chat'))`), 'Chat is in Tools when it is off the bar');
-ok(await A.ev(`document.querySelector('#menu').firstElementChild?.textContent.includes('Sidekick')`), 'Sidekick is the first thing in Tools, above the views');
-ok(await A.ev(`![...document.querySelectorAll('#menu button')].some((b) => b.textContent.includes('Change your tabs'))`), 'and Tools no longer has Change your tabs (the pencil and Settings do that)');
-await A.ev(`[...document.querySelectorAll('.menu button, #menu button')].find((b) => b.textContent.startsWith('Chat')).click()`);
-ok(await A.until(`!document.querySelector('#chat').classList.contains('hidden')`), 'and opens from there');
+const items = (await menuItems()).join('|');
+ok(items.includes('Stacks') && items.includes('Finance') && items.includes('Meeting notes'), 'Stacks, Finance and Meeting notes are in All tools: ' + items);
+ok(!/Sidekick|Contacts|Jobs|Projects|Folders|Docs|News|Campaigns/.test(items), 'Workspace’s tabs and News are not');
+await A.ev(`[...document.querySelectorAll('#menu button')].find((b) => b.textContent.includes('Stacks')).click()`);
+ok(await A.until(`!document.querySelector('#panes').classList.contains('hidden')`), 'Stacks opens from All tools');
+ok(await A.until(`[...document.querySelectorAll('#panes .chip')].map((c) => c.textContent).join('|') === 'Everything|Files'`), 'Stacks shows Everything and Files before any stack is made');
 
 // Team switches win
-await api('PATCH', '/workspace', { tools: { bills: false } });
-ok(await A.until(`!document.querySelector('#tabs [data-tab=bills]')`), 'Finance leaves the bar when the team switches it off');
-await api('PATCH', '/workspace', { tools: { bills: true } });
-ok(await A.until(`!!document.querySelector('#tabs [data-tab=bills]')`), 'and comes back when it is on again');
+await api('PATCH', '/workspace', { tools: { projects: false } });
+ok(await A.until(`!document.querySelector('#tabs [data-tab=projects]')`), 'Projects leaves Workspace when the team switches it off');
+await api('PATCH', '/workspace', { tools: { projects: true } });
+ok(await A.until(`!!document.querySelector('#tabs [data-tab=projects]')`), 'and comes back when it is on again');
 
-// Survives a reload
-await A.ev(`location.reload()`).catch(() => {});
-await sleep(1500);
-await A.until(`!document.querySelector('#app').classList.contains('hidden')`);
-await sleep(600);
-ok(await names() === 'Home,Day,Stacks,Agents,Jobs,Finance', 'same tabs after a reload');
-
-// Settings shows it too
+// News: on Home when you turn it on in Settings, never in the toolbar.
+ok(!(await A.ev(`!!document.querySelector('#tabs [data-tab=news]')`)), 'News is not in the toolbar');
 await A.click('#settingsBtn');
-ok(await A.until(`[...document.querySelectorAll('#settings h3')].some((x) => x.textContent === 'Your tabs')`), 'Settings → General has Your tabs');
+ok(await A.until(`[...document.querySelectorAll('#settings h3')].some((x) => x.textContent === 'News')`), 'Settings → General has News');
+ok(await A.ev(`[...document.querySelectorAll('#settings h3')].some((x) => x.textContent === 'Pinned')`), 'and Pinned');
+await A.ev(`[...document.querySelectorAll('#settings .srow')].find((r) => r.textContent.startsWith('News on Home')).querySelector('input').click()`);
+ok(await (async () => { for (let i = 0; i < 30; i++) { if (JSON.stringify((await api('GET', '/state')).me.bar) === '["news"]') return true; await sleep(100); } return false; })(), 'turning it on is kept with the account');
 
-// Phone width: nothing squashed
+// Phone width: Workspace's tabs sit under it in the drawer; no strip.
 await A.cmd('Emulation.setDeviceMetricsOverride', { width: 360, height: 760, deviceScaleFactor: 2, mobile: true });
 await A.ev(`document.querySelector('#settings').classList.add('hidden')`);
-await api('PUT', '/account/bar', { bar: ['column', 'chat', 'camps', 'projects', 'bills', 'docs'] });
 await A.ev(`location.reload()`).catch(() => {});
 await sleep(1500);
 await A.until(`!document.querySelector('#app').classList.contains('hidden')`);
 await sleep(600);
-// On a phone the tabs are in the side drawer (☰), one under another (2026-11-12: the side toolbar).
 await A.ev(`document.querySelector('#menuBtn').click(); true`);
 await sleep(400);
 ok(await A.ev(`[...document.querySelectorAll('#tabs button')].every((b) => b.scrollWidth <= b.clientWidth + 1)`), 'no tab label is cut off on a phone');
-ok(await A.ev(`(() => { const bs = [...document.querySelectorAll('#tabs button[data-tab]')]; const d = document.querySelector('#side').getBoundingClientRect(); return bs.length === 8 && bs.every((b, i) => { const r = b.getBoundingClientRect(); return r.left >= d.left && r.right <= d.right + 1 && (!i || r.top > bs[i - 1].getBoundingClientRect().top); }); })()`), 'the drawer lists them all, one under another, none squashed');
-await A.ev(`document.querySelector('#scrim').click(); true`);
-await sleep(300);
+ok(await A.ev(`(() => { const bs = [...document.querySelectorAll('#tabs button[data-tab]')].filter((b) => getComputedStyle(b).display !== 'none'); const d = document.querySelector('#side').getBoundingClientRect(); return bs.map((b) => b.dataset.tab).join() === 'home,day,chat,agents,work,sidekick,contacts,projects,camps,docs' && bs.every((b, i) => { const r = b.getBoundingClientRect(); return r.left >= d.left && r.right <= d.right + 1 && (!i || r.top > bs[i - 1].getBoundingClientRect().top); }); })()`), 'the drawer lists them one under another, Workspace’s tabs under it');
+await A.ev(`document.querySelector('#tabs [data-tab=contacts]').click(); true`);
+ok(await A.until(`!document.querySelector('#tool').classList.contains('hidden') && document.querySelector('#tool h2').textContent.includes('Contacts')`), 'Contacts opens from the drawer');
+ok(await strip() === '', 'no strip on a phone');
+await A.ev(`document.querySelector('#tool h2 button').click(); true`);
 ok(await A.ev(`document.documentElement.scrollWidth <= innerWidth`), 'the page itself does not scroll sideways');
 ok(await A.ev(`document.querySelector('#home').scrollWidth <= document.querySelector('#home').clientWidth + 1`), 'Home fits the phone (Get started rows included)');
-
-// Back to the usual
-await A.click('#tabs .tabs-edit');
-await A.until(`!document.querySelector('#sheet').classList.contains('hidden')`);
-await A.ev(`[...document.querySelectorAll('#sheet button')].find((b) => b.textContent === 'Back to the usual').click()`);
-await A.ev(`[...document.querySelectorAll('#sheet .btns button')].pop().click()`);
-await A.until(`document.querySelector('#sheet').classList.contains('hidden')`);
-ok(await names() === 'Home,Day,Stacks,Chat,Campaigns,Agents' && (await api('GET', '/state')).me.bar === null, 'Back to the usual resets it');
-
-// Junk is ignored
-const r = await api('PUT', '/account/bar', { bar: ['chat', 'nope', 'chat', 'home'] });
-ok(JSON.stringify(r.bar) === '["chat"]', 'unknown and repeated tabs are dropped');
 
 ok(A.errors.length === 0, 'no script errors' + (A.errors.length ? ': ' + A.errors.join(' | ') : ''));
 A.close();

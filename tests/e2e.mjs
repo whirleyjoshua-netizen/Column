@@ -38,7 +38,7 @@ await sleep(1500);
 const token = await A.ev(`JSON.parse(localStorage.getItem('column.token'))`);
 const api = async (m, p, body) => (await fetch(APP + 'api' + p, { method: m, headers: { 'content-type': 'application/json', authorization: 'Bearer ' + token }, body: body ? JSON.stringify(body) : undefined })).json();
 const old = await api('POST', '/items', { type: 'text', text: 'Old note\n- first\n- second' });
-await A.click('[data-tab=column]');
+await A.ev(`(document.querySelector('#toolsBtn').click(), [...document.querySelectorAll('#menu button')].find((b) => b.textContent.includes('Stacks'))).click()`);
 ok(await A.until(`[...document.querySelectorAll('.doc-card .doc-card-t')].some((e) => e.textContent === 'Old note')`), 'an old note shows as a doc card with its title');
 // new doc from the composer's +
 await A.tap(`[...document.querySelectorAll('.composer .add')].find((b) => b.offsetParent)`);
@@ -56,7 +56,7 @@ ok(body.blocks?.map((b) => b.type).join() === 'h1,todo' && body.blocks[1].runs[0
 // the same doc open in a second tab: changes go both ways
 const B = await tab(APP);
 ok(await B.until(`!document.querySelector('#app').classList.contains('hidden')`), 'second tab signed in');
-await B.click('[data-tab=column]');
+await B.ev(`(document.querySelector('#toolsBtn').click(), [...document.querySelectorAll('#menu button')].find((b) => b.textContent.includes('Stacks'))).click()`);
 await B.until(`[...document.querySelectorAll('.doc-card .doc-card-t')].some((e) => e.textContent === 'Launch plan')`);
 await B.ev(`[...document.querySelectorAll('.doc-card')].find((c) => c.querySelector('.doc-card-t').textContent === 'Launch plan').querySelector('.meta').click()`);
 ok(await B.until(`document.querySelector('#docview .dk-title')?.textContent === 'Launch plan'`), 'second tab opens the doc');
@@ -80,7 +80,7 @@ await A.ev(`document.querySelector('.dv-bar [aria-label="Close doc"]').click()`)
 ok(await A.ev(`document.querySelector('#docview').classList.contains('hidden')`), 'the back button closes the doc');
 await A.cmd('Page.reload');
 await A.until(`!document.querySelector('#app').classList.contains('hidden')`);
-await A.click('[data-tab=column]');
+await A.ev(`(document.querySelector('#toolsBtn').click(), [...document.querySelectorAll('#menu button')].find((b) => b.textContent.includes('Stacks'))).click()`);
 await A.until(`[...document.querySelectorAll('.doc-card .doc-card-t')].some((e) => e.textContent === 'Launch plan')`);
 await A.ev(`[...document.querySelectorAll('.doc-card')].find((c) => c.querySelector('.doc-card-t').textContent === 'Launch plan').querySelector('.meta').click()`);
 ok(await A.until(`[...document.querySelectorAll('#docview .dk-text')].map((e) => e.textContent).join('|') === 'Steps this week|Call 10 shops|Book 3 visits!'`), 'after a reload the doc has everything: ' + await A.ev(`[...document.querySelectorAll('#docview .dk-text')].map((e) => e.textContent).join('|')`));
@@ -90,8 +90,7 @@ await A.ev(`[...document.querySelectorAll('.doc-card')].find((c) => c.querySelec
 ok(await A.until(`[...document.querySelectorAll('#docview .dk-ul .dk-text')].map((e) => e.textContent).join() === 'first,second'`), 'an old note opens as a doc with its bullets');
 // Docs tool
 await A.ev(`document.querySelector('.dv-bar [aria-label="Close doc"]').click()`);
-await A.tap(`document.querySelector('#toolsBtn')`);
-await A.tap(`[...document.querySelectorAll('#menu button')].find((b) => b.textContent.startsWith('Docs'))`);
+await A.ev(`(document.querySelector('#tabs [data-tab=docs]').click(), document.querySelector('#tool .df-switch [data-df=docs]')?.click())`); // in Workspace now (2026-11-14)
 ok(await A.until(`[...document.querySelectorAll('#tool .doc-row .bill-name')].some((e) => e.textContent.startsWith('Launch plan'))`), 'the Docs tool lists the docs');
 ok(!A.errors.length && !B.errors.length, 'no page errors' + (A.errors.length + B.errors.length ? ': ' + [...A.errors, ...B.errors].join(' / ') : ''));
 A.close(); B.close(); chrome.kill();

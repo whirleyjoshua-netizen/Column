@@ -1,6 +1,6 @@
 // News: each person's own current events and articles, from publishers' feeds, ranked by what they chose and
-// what they liked (server/news.js). A tab each person turns on for themselves (Change your tabs), and a card on
-// Home with the top few. 👍 and 👎 teach it; "What it learned" shows what it took from them and can start over.
+// what they liked (server/news.js). Each person turns on its card on Home for themselves (Settings → General): the
+// top few, and Open News for the rest. 👍 and 👎 teach it; "What it learned" shows what it took from them and can start over.
 // Everything from a feed is outside text: it goes into the page as text, links only when they're http(s).
 window.ColumnNews = (deps) => {
   const { h, api, toast, sheet, openMenu, ago, confirmClick, fileKey, redrawHome, onBar, open } = deps;
@@ -204,7 +204,7 @@ window.ColumnNews = (deps) => {
     try { draw(await api('GET', '/news/learned')); } catch (e) { box.replaceChildren(h('p', { class: 'err' }, e.message)); }
   }
 
-  // Home: the top few, when News is on their tabs and they didn't turn the card off.
+  // Home: the top few, when they turned News on Home on (and didn't turn the card off in Topics).
   function homeCard(card) {
     if (!onBar()) return null;
     if (NW.prefs && NW.prefs.home === false) return null;

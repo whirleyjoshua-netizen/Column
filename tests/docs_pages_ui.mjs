@@ -39,7 +39,8 @@ async function tab(url) {
   return { ev, key, type, until, tap, cmd, errors, close: () => ws.close() };
 }
 const row = (title) => `[...document.querySelectorAll('.docs-list .doc-row')].find((r) => r.querySelector('.doc-t')?.textContent.replace('★ ', '') === ${JSON.stringify(title)})`;
-const menuBtn = (label) => `[...document.querySelectorAll('#menu button')].find((b) => b.textContent.includes(${JSON.stringify(label)}))`;
+// Docs is in Workspace now (Folders & Docs), not All tools (2026-11-14).
+const menuBtn = (label) => (label === 'Docs' ? `((document.querySelector('#tabs [data-tab=docs]').click(), document.querySelector('#tool .df-switch [data-df=docs]')?.click()), document.querySelector('#tool h2'))` : `[...document.querySelectorAll('#menu button')].find((b) => b.textContent.includes(${JSON.stringify(label)}))`);
 
 try {
   for (let i = 0; i < 100; i++) { try { if ((await fetch(APP + 'api/health')).ok) break; } catch {} await sleep(150); }

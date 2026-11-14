@@ -111,7 +111,7 @@ try {
   await A.ev(`localStorage.setItem('column.token', JSON.stringify(${JSON.stringify(auth.token)})); location.reload(); true`).catch(() => {});
   await sleep(1200);
   ok(await A.until(`!document.querySelector('#app').classList.contains('hidden')`), 'Ada is in');
-  ok(await A.until(`[...document.querySelectorAll('#tabs button[data-tab]')].map((b) => b.textContent).join() === 'Home,Day,Stacks,Chat,Campaigns,Agents'`), 'Agents is on the tab bar');
+  ok(await A.until(`[...document.querySelectorAll('#tabs button[data-tab]:not(.tab-sub)')].map((b) => b.textContent).join() === 'Home,Day,Chat,Agents,Workspace'`), 'Agents is on the tab bar');
   await A.click('#tabs [data-tab=agents]');
   ok(await A.until(`document.querySelector('#tool h2')?.textContent.includes('Your team') && document.querySelectorAll('#tool .ag-card').length === 4`), 'the Agents tab opens Your team, with four specialists');
   ok(await A.ev(`[...document.querySelectorAll('#tool .ag-card b')].map((b) => b.textContent).join('|') === 'Chief of Staff|Client & Sales Manager|Operations Manager|Marketing Manager'`), 'Chief of Staff, Client & Sales Manager, Operations Manager, Marketing Manager');
@@ -304,16 +304,14 @@ try {
   await A.ev(`[...document.querySelectorAll('#bellPop .bell-row')].find((r) => r.textContent.includes('to approve')).click()`);
   ok(await A.until(`document.querySelector('#tool .ag-run-h b')?.textContent === 'two proposals'`), 'the notification opens the assignment');
   await A.ev(`document.querySelector('#tool [aria-label=Close]').click()`);
-  // Off the bar: in Tools. Switched off: gone.
+  // Agents is always in the toolbar now (2026-11-14), whatever tabs someone had saved before.
   await api('PUT', '/account/bar', { bar: ['column', 'chat'] });
   await A.ev(`location.reload()`).catch(() => {});
   await sleep(1500);
   await A.until(`!document.querySelector('#app').classList.contains('hidden')`);
   await sleep(500);
-  await A.click('#toolsBtn');
-  await sleep(200);
-  ok(await A.ev(`[...document.querySelectorAll('#menu button')].some((b) => b.textContent.includes('Your team') && b.textContent.includes('waiting for your yes'))`), 'off the bar, Your team is in Tools, saying what’s waiting');
-  await A.ev(`[...document.querySelectorAll('#menu button')].find((b) => b.textContent.includes('Your team')).click()`);
+  ok(await A.ev(`!!document.querySelector('#tabs [data-tab=agents]')`), 'Agents stays in the toolbar even with old saved tabs');
+  await A.click('#tabs [data-tab=agents]');
   ok(await A.until(`document.querySelectorAll('#tool .ag-card').length === 4`), 'and opens from there');
   await A.ev(`document.querySelector('#tool [aria-label=Close]').click()`);
   // No AI key

@@ -47,7 +47,7 @@ await A.ev(`location.reload()`);
 await A.until(`!document.querySelector('#app')?.classList.contains('hidden') && !!document.querySelector('#toolsBtn')`, 15000);
 const token = await A.ev(`JSON.parse(localStorage.getItem('column.token'))`);
 const api = async (m, p, body) => (await fetch(APP + 'api' + p, { method: m, headers: { 'content-type': 'application/json', authorization: 'Bearer ' + token }, body: body ? JSON.stringify(body) : undefined })).json();
-await A.tap(`document.querySelector('#toolsBtn')`); await A.tap(`[...document.querySelectorAll('#menu button')].find((b) => b.textContent === 'Jobs & projects')`);
+await A.until(`!!document.querySelector('#tabs [data-tab=projects]')`, 10000); await A.ev(`document.querySelector('#tabs [data-tab=projects]').click()`);
 ok(await A.until(`!!document.querySelector('#projects .pj-empty')`), 'Projects tab, empty to start');
 ok(await A.ev(`[...document.querySelectorAll('#projects .pj-empty .pj-kind b')].map((b) => b.textContent).join('|')`) === 'Construction & Trades|Technology & Software|Creative & Agencies|Business Operations', 'it offers the four kinds of work');
 await A.tap(`[...document.querySelectorAll('#projects .pj-empty .pj-kind')].find((b) => b.textContent.includes('Business Operations'))`);
@@ -142,7 +142,7 @@ ok(csv === 'Sales - Contacts.csv' && csvText.includes('Luis Vega') && csvText.in
 const B = await tab(APP);
 await B.until(`!document.querySelector('#app').classList.contains('hidden')`);
 await sleep(800);
-await B.tap(`document.querySelector('#toolsBtn')`); await B.tap(`[...document.querySelectorAll('#menu button')].find((b) => b.textContent === 'Jobs & projects')`);
+await B.until(`!!document.querySelector('#tabs [data-tab=projects]')`, 10000); await B.ev(`document.querySelector('#tabs [data-tab=projects]').click()`);
 await B.tap(`[...document.querySelectorAll('#projects .pj-card')].find((c) => c.textContent.includes('Sales'))`);
 await B.until(`document.querySelector('#projects .pj-table')?.textContent.includes('Luis Vega')`);
 await A.tap(`[...document.querySelectorAll('#projects .pj-bar .btn')].find((b) => b.textContent.startsWith('+ New contact'))`);
@@ -176,7 +176,7 @@ const V = async (m, p, body) => { const r = await fetch(APP + 'api/v1' + p, { me
 const made = await V('PUT', `/projects/${proj.id}/contacts/records/external/crm-42`, { fields: { name: 'Ana Ruiz', email: 'ana@ruiz.com', stage: 'Lead', owner: 'Jo' } });
 ok(made.status === 201, 'the key adds a contact through the API');
 await A.ev(`document.querySelector('#settings').classList.add('hidden')`);
-await A.tap(`document.querySelector('#toolsBtn')`); await A.tap(`[...document.querySelectorAll('#menu button')].find((b) => b.textContent === 'Jobs & projects')`);
+await A.until(`!!document.querySelector('#tabs [data-tab=projects]')`, 10000); await A.ev(`document.querySelector('#tabs [data-tab=projects]').click()`);
 ok(await A.until(`document.querySelector('#projects .pj-table')?.textContent.includes('Ana Ruiz')`, 4000), 'reopening Projects, the contact the API added is there');
 await sleep(500);
 const ev = got.find((g) => JSON.parse(g.b).data?.fields?.name === 'Ana Ruiz');

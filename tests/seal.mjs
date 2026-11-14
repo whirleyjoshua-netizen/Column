@@ -56,7 +56,7 @@ await B.ev(`(() => { document.querySelector('[data-mode=join]').click(); const f
 const sj = await B.until(`!document.querySelector('#app').classList.contains('hidden')`); if (!sj) console.log('SAM:', await B.ev(`document.querySelector('#loginErr')?.textContent + ' | ' + location.href`)); ok(sj, 'Sam joined');
 await sleep(1000);
 // Jo: a sealed note from the stack's +
-await A.tap(`document.querySelector('[data-tab=column]')`);
+await A.tap(`(document.querySelector('#toolsBtn').click(), [...document.querySelectorAll('#menu button')].find((b) => b.textContent.includes('Stacks')))`);
 await A.tap(`[...document.querySelectorAll('.composer .add')].find((b) => b.offsetParent)`);
 await A.tap(`[...document.querySelectorAll('#menu button')].find((b) => b.textContent.includes('Sealed note'))`);
 await A.ev(`(() => { const s = document.querySelector('#sheet'); s.querySelector('input').value = 'Shop alarm'; s.querySelector('textarea').value = 'Alarm code 4417, disarm within 30s'; [...s.querySelectorAll('input')][1].value = 'Alarm code'; })()`);
@@ -69,7 +69,7 @@ ok(card && card.label === 'Alarm code' && card.burn && card.expiresAt > Date.now
 const raw = FS.readFileSync(process.argv[2] + '/dk/data/db.json', 'utf8');
 ok(!/(?<![0-9a-zA-Z_-])4417(?![0-9a-zA-Z_-])/.test(raw) && !raw.includes(code.replace(/-/g, '')), 'neither the secret nor the code is anywhere in Column’s data file');
 // Sam sees the card and opens it
-await B.tap(`document.querySelector('[data-tab=column]')`);
+await B.tap(`(document.querySelector('#toolsBtn').click(), [...document.querySelectorAll('#menu button')].find((b) => b.textContent.includes('Stacks')))`);
 ok(await B.until(`[...document.querySelectorAll('.sealed-card')].some((c) => c.textContent.includes('Alarm code') && c.textContent.includes('Sealed by Jo') && c.textContent.includes('burns after reading'))`), 'Sam sees a sealed card: label, sender, burns after reading');
 await B.tap(`[...document.querySelectorAll('.sealed-card .meta')].find((c) => c.textContent.includes('Alarm code'))`);
 await B.until(`!!document.querySelector('#sheet .seal-in')`);

@@ -151,6 +151,21 @@ body.wide.side-folded #side .tab-l, body.wide.side-folded #side .side-brand, bod
 body.wide.side-folded #side .tabs button, body.wide.side-folded #side .side-foot button { justify-content: center; padding: 7px 0; }
 body.wide.side-folded #side .tabs button.dot::after { position: absolute; top: 6px; right: 9px; }
 body.wide.side-folded #side .side-top { justify-content: center; padding-left: 0; padding-right: 0; }
+/* Workspace: its tabs run across the top of the page at full size; in the drawer they sit under Workspace. */
+#side .tabs button.tab-sub { padding-left: 38px; font-size: 13px; }
+#side .tabs button.tab-sub .tab-ic { display: none; }
+body.wide #side .tabs button.tab-sub, #topTabs .tab-sub { display: none; }
+.work-tabs { display: none; }
+body.wide .work-tabs:not([hidden]) { display: flex; gap: 2px; flex: none; height: 40px; align-items: stretch; padding: 0 16px; border-bottom: 1px solid var(--line); background: var(--bg); overflow-x: auto; scrollbar-width: none; }
+.work-tabs button { display: inline-flex; align-items: center; gap: 7px; padding: 0 12px; border: 0; border-bottom: 2px solid transparent; margin-bottom: -1px; background: none; color: var(--muted); font: inherit; font-size: 13.5px; font-weight: 550; white-space: nowrap; cursor: pointer; }
+.work-tabs button:hover { color: var(--text); }
+.work-tabs button.on { color: var(--accent); border-bottom-color: var(--accent); }
+.work-tabs .tab-ic { display: grid; place-items: center; width: 16px; height: 16px; }
+.work-tabs .tab-ic svg { width: 16px; height: 16px; }
+/* Under the strip: a Workspace tool, and Projects, start below it instead of covering it. */
+body.wide.work-on .settings.tool { top: var(--work-in, 84px); }
+body.wide.work-on .projects { top: var(--work-y, 84px); }
+.df-switch { margin: 0 0 14px; max-width: 260px; }
 /* The desktop app: the window is dragged by the top of the toolbar; on a Mac its buttons sit above it. */
 body.desktop #side .side-top { -webkit-app-region: drag; }
 body.desktop #side .side-top button { -webkit-app-region: no-drag; }

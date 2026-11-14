@@ -76,9 +76,7 @@ ok((await pins()).some((x) => x.endsWith('*')), 'lit while that campaign is open
 
 // Pin a job from the record panel
 await A.ev(`openRecord && 0`).catch(() => {});
-await A.click('#toolsBtn'); await sleep(200);
-await menuPick('/^.?Jobs|Projects/');
-await A.ev(`document.querySelector('#menu').classList.add('hidden')`);
+await A.click('#tabs [data-tab=projects]'); // Projects is in Workspace (2026-11-14)
 await A.until(`!document.querySelector('#projects').classList.contains('hidden')`);
 await sleep(300);
 await A.ev(`[...document.querySelectorAll('#projects *')].find((e) => e.children.length === 0 && e.textContent === 'Installs')?.click()`);

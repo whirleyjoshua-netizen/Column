@@ -1790,7 +1790,7 @@
       { cmd: 'contact', hint: 'Add a contact', arg: 'name', on: toolOn('contacts') && amAdmin(), off: toolOn('contacts') ? 'Contacts are for team owners and admins.' : off('Contacts'), run: (t) => { contactSheet(null); fillFirst(t); } },
       { cmd: 'contacts', hint: 'Open Contacts', on: toolOn('contacts') && amAdmin(), off: toolOn('contacts') ? 'Contacts are for team owners and admins.' : off('Contacts'), run: () => openTool('contacts') },
       { cmd: 'campaign', hint: 'Start a campaign', arg: 'name', run: (t) => { campaignSheet(null); fillFirst(t); } },
-      { cmd: 'job', also: ['jobs', 'projects'], hint: 'Open Jobs & projects', on: toolOn('projects'), off: off('Jobs & projects'), run: () => showProjects() },
+      { cmd: 'job', also: ['jobs', 'projects'], hint: 'Open Projects', on: toolOn('projects'), off: off('Projects'), run: () => showProjects() },
       { cmd: 'meeting', also: ['record'], hint: 'Record a meeting, get the notes', arg: 'what it’s about', on: toolOn('meetings'), off: off('Meeting notes'), run: (t) => askRecord(t) },
       { cmd: 'sidekick', also: ['ask'], hint: 'Plan it with Sidekick', on: toolOn('sidekick'), off: off('Sidekick'), run: () => { SK.open = null; openTool('sidekick'); } },
       { cmd: 'plan', hint: 'Open the Planner', run: () => openTool('planner') },
@@ -3090,17 +3090,22 @@
     renderDay();
   }
 
-  // ----- your tabs (in the side toolbar): Home and Day always, then whatever each person picks, in their order -----
-  // Views switch the main area; tools open their drawer (Jobs opens over the app). Anything not on the bar is in Tools.
-  const BAR_DEFAULT = ['column', 'chat', 'camps', 'agents'];
+  // ----- the side toolbar's tabs: the same for everyone, so it stays short -----
+  // Home, Day, Chat, Agents and Workspace. Workspace groups the everyday tools (Sidekick, Contacts, Projects,
+  // Campaigns, Folders & Docs): at full size they run across the top of the page; in the drawer (a docked column, a
+  // phone) they sit under Workspace. Everything else is in All tools. News is on Home (turned on in Settings).
+  const MAIN_TABS = ['chat', 'agents', 'work'];
+  const WORK_TABS = ['sidekick', 'contacts', 'projects', 'camps', 'docs'];
   const BAR_ITEMS = {
     column: { label: 'Stacks', view: true },
     chat: { label: 'Chat', view: true },
     camps: { label: 'Campaigns', view: true },
     agents: { label: 'Agents', ok: () => toolOn('agents'), open: () => agOpen('team') },
+    work: { label: 'Workspace', ok: () => workKeys().length > 0, open: () => openBarItem(workLast()) },
     sidekick: { label: 'Sidekick', ok: () => toolOn('sidekick'), open: () => { SK.open = null; openTool('sidekick'); } },
-    docs: { label: 'Docs', ok: () => toolOn('docs') },
-    projects: { label: 'Jobs', ok: () => toolOn('projects'), open: () => showProjects() },
+    // Docs and Folders are the same things (a doc is an item, and folders hold items): one tab, a switch between them.
+    docs: { label: 'Folders & Docs', ok: () => toolOn('docs') || toolOn('folders'), open: () => openTool(docsSide()), on: () => toolOpen === 'docs' || toolOpen === 'folders' },
+    projects: { label: 'Projects', ok: () => toolOn('projects'), open: () => showProjects() },
     bills: { label: 'Finance', ok: () => toolOn('bills') },
     contacts: { label: 'Contacts', ok: () => toolOn('contacts') && amAdmin() },
     email: { label: 'Email', ok: () => toolOn('email') && mayEmail() },
@@ -3111,6 +3116,18 @@
     vault: { label: 'Vault', ok: () => toolOn('vault'), open: () => { VK.filter = null; openTool('vault'); } },
     news: { label: 'News', ok: () => toolOn('news') },
   };
+  const itemOk = (k) => !BAR_ITEMS[k].ok || BAR_ITEMS[k].ok();
+  const workKeys = () => WORK_TABS.filter(itemOk);
+  // Workspace opens where you were last (this device remembers).
+  const workLast = () => { const k = store.get('workLast', null); return workKeys().includes(k) ? k : workKeys()[0]; };
+  // Folders & Docs opens on the side you used last; Folders sits beside your stacks only when they're showing.
+  const docsSide = () => (toolOn('folders') && (store.get('docsSide', 'docs') === 'folders' || !toolOn('docs')) ? 'folders' : 'docs');
+  // What's open now, if it's one of Workspace's tabs.
+  const workOpen = () => {
+    if (!$('#projects').classList.contains('hidden')) return 'projects';
+    if (toolOpen) return WORK_TABS.find((k) => (BAR_ITEMS[k].on ? BAR_ITEMS[k].on() : toolOpen === k)) || null;
+    return S.tab === 'camps' ? 'camps' : null;
+  };
   const TAB_IC = {
     home: svg('<path d="M4 11l8-7 8 7v8a1 1 0 0 1-1 1h-4v-6h-6v6H5a1 1 0 0 1-1-1z"/>'),
     day: svg('<rect x="4" y="5" width="16" height="15" rx="2"/><path d="M4 10h16M9 3v4M15 3v4"/>'),
@@ -3118,6 +3135,7 @@
     chat: svg('<path d="M5 5h14a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H9l-4 3V6a1 1 0 0 1 1-1z"/>'),
     camps: svg('<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="4"/><circle cx="12" cy="12" r=".5"/>'),
     agents: svg('<circle cx="9" cy="8" r="3.5"/><path d="M3 20a6 6 0 0 1 12 0"/><path d="M16 4.5a3.5 3.5 0 0 1 0 7M21 20a6 6 0 0 0-4-5.6"/>'),
+    work: svg('<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M8 4v5"/>'),
     sidekick: svg('<path d="M12 3l1.9 5.6L19.5 10l-5.6 1.9L12 17.5l-1.9-5.6L4.5 10l5.6-1.4z"/>'),
     docs: svg('<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h6"/>'),
     projects: svg('<rect x="3" y="7" width="18" height="13" rx="2"/><path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M3 13h18"/>'),
@@ -3131,14 +3149,26 @@
     vault: svg('<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>'),
     news: svg('<rect x="3" y="5" width="15" height="15" rx="2"/><path d="M18 9h3v9a2 2 0 0 1-2 2M7 9h7M7 13h7M7 17h4"/>'),
   };
-  const barMine = () => (Array.isArray(S.me?.bar) ? S.me.bar : BAR_DEFAULT).filter((k) => BAR_ITEMS[k]);
-  const barKeys = () => barMine().filter((k) => !BAR_ITEMS[k].ok || BAR_ITEMS[k].ok());
-  const onBar = (k) => barKeys().includes(k);
-  // News (news.js): each person's own; on their tabs when they want it, with a card on Home.
-  const NEWS = window.ColumnNews({ h, api, toast, sheet, openMenu, ago, confirmClick, fileKey: () => S.me?.fileKey, redrawHome: () => renderHome(), onBar: () => onBar('news'), open: () => openBarItem('news') });
+  const barKeys = () => MAIN_TABS.filter(itemOk);
+  const onBar = (k) => barKeys().includes(k) || workKeys().includes(k);
+  // News on Home is each person's own choice (Settings → General), kept with their account.
+  const newsOn = () => toolOn('news') && Array.isArray(S.me?.bar) && S.me.bar.includes('news');
+  // News (news.js): each person's own, a card on Home when they turn it on (Settings → General).
+  const NEWS = window.ColumnNews({ h, api, toast, sheet, openMenu, ago, confirmClick, fileKey: () => S.me?.fileKey, redrawHome: () => renderHome(), onBar: newsOn, open: () => openTool('news') });
   function openBarItem(k) {
     const it = BAR_ITEMS[k];
     if (!it) return;
+    if (k === 'work' && workOpen()) return markTabs(); // already in it
+    // One of Workspace's tabs: it takes the page (whatever else was open closes), and tapping it again keeps it.
+    if (WORK_TABS.includes(k)) {
+      store.set('workLast', k);
+      if (workOpen() === k) return markTabs();
+      if (k !== 'projects') closeProjects();
+      if (toolOpen && (it.view || k === 'projects')) closeTool();
+      if (it.view) return setTab(k);
+      it.open ? it.open() : openTool(k);
+      return markTabs();
+    }
     if (it.view) {
       closeProjects();
       return setTab(k);
@@ -3170,7 +3200,7 @@
   }
   function togglePin(go, label) {
     if (pinned(go)) return savePins(pinsMine().filter((x) => x.go !== go)).then(() => toast('Unpinned from the sidebar'));
-    if (pinsMine().length >= 12) return toast('That’s 12 pins already. Unpin one first (Change your tabs, in the sidebar).');
+    if (pinsMine().length >= 12) return toast('That’s 12 pins already. Unpin one first (Your pins, in the sidebar).');
     return savePins([...pinsMine(), { go, label: shortText(label || 'Pinned', 60) }]).then(() => toast('Pinned to the sidebar'));
   }
   // The menu row each pinnable thing adds to its own ⋯ menu.
@@ -3192,7 +3222,7 @@
     openMenu(anchor, [
       { label: 'Open', run: () => openPin(x.go) },
       { label: 'Unpin', run: () => togglePin(x.go) },
-      { label: 'Change your tabs and pins…', run: () => barSheet() },
+      { label: 'Change your pins…', run: () => barSheet() },
     ]);
   }
 
@@ -3209,44 +3239,36 @@
       return b;
     };
     const pins = pinsShown();
-    for (const n of tabNavs()) n.replaceChildren(btn('home', 'Home'), btn('day', 'Day'), ...barKeys().map((k) => btn(k, BAR_ITEMS[k].label)),
+    // In the drawer, Workspace's tabs sit under it (at full size they're across the top of the page instead).
+    const sub = (k) => { const b = btn(k, BAR_ITEMS[k].label); b.classList.add('tab-sub'); return b; };
+    for (const n of tabNavs()) n.replaceChildren(btn('home', 'Home'), btn('day', 'Day'), ...barKeys().flatMap((k) => (k === 'work' ? [btn(k, BAR_ITEMS[k].label), ...workKeys().map(sub)] : [btn(k, BAR_ITEMS[k].label)])),
       ...(pins.length ? [h('span', { class: 'tabs-sep', 'aria-hidden': 'true' }), ...pins.map(pin)] : []),
-      h('button', { class: 'tabs-edit', title: 'Change your tabs', 'aria-label': 'Change your tabs', onclick: (e) => { e.stopPropagation(); closeSide(); barSheet(); } }, h('span', { class: 'tab-ic', html: I.edit || '✎' }), h('span', { class: 'tab-l' }, 'Change your tabs')));
+      h('button', { class: 'tabs-edit', title: 'Your pins', 'aria-label': 'Your pins', onclick: (e) => { e.stopPropagation(); closeSide(); barSheet(); } }, h('span', { class: 'tab-ic', html: I.edit || '✎' }), h('span', { class: 'tab-l' }, 'Your pins')));
+    $('#workTabs')?.replaceChildren(...workKeys().map((k) => h('button', { 'data-tab': k }, h('span', { class: 'tab-ic', html: TAB_IC[k] || TAB_IC.docs }), h('span', { class: 'tab-l' }, BAR_ITEMS[k].label))));
     markTabs();
     renderChatSide();
   }
   function markTabs() {
     const jobs = !$('#projects').classList.contains('hidden');
-    for (const b of tabNavs().flatMap((n) => [...n.children])) {
+    const work = workOpen();
+    // The strip across the top shows while you're in Workspace (at full size; CSS hides it otherwise).
+    document.body.classList.toggle('work-on', !!work);
+    const strip = $('#workTabs');
+    if (strip) {
+      strip.hidden = !work;
+      // Where the strip ends (a banner under the header pushes it down): tools and Projects start below it.
+      if (work && document.body.classList.contains('wide')) { const r = strip.getBoundingClientRect(); document.body.style.setProperty('--work-y', r.bottom + 'px'); document.body.style.setProperty('--work-in', (r.bottom - $('#main').getBoundingClientRect().top) + 'px'); }
+    }
+    for (const b of [...tabNavs(), strip].filter(Boolean).flatMap((n) => [...n.children])) {
       if (b.dataset.pin) { const [pk, id] = pinParts(b.dataset.pin); b.classList.toggle('on', !!PIN_KINDS[pk]?.on(id)); continue; }
       const k = b.dataset.tab;
       if (!k) continue;
       const it = BAR_ITEMS[k];
-      b.classList.toggle('on', it && !it.view ? (k === 'projects' ? jobs : toolOpen === k) : !jobs && k === S.tab);
+      b.classList.toggle('on', k === 'work' ? !!work : WORK_TABS.includes(k) ? work === k : it && !it.view ? toolOpen === k : !jobs && !work && k === S.tab);
     }
   }
+  // Your pins: one job, project, campaign, feed, stack or doc each, after the tabs. Reorder, unpin or add one here.
   function barSheet() {
-    let keys = barMine().slice();
-    const usable = Object.keys(BAR_ITEMS).filter((k) => !BAR_ITEMS[k].ok || BAR_ITEMS[k].ok() || keys.includes(k));
-    const list = h('div', { class: 'bar-edit' });
-    const draw = () => {
-      const order = [...keys, ...usable.filter((k) => !keys.includes(k))];
-      list.replaceChildren(
-        ...['Home', 'Day'].map((l) => h('div', { class: 'bar-row fixed' }, h('input', { type: 'checkbox', checked: true, disabled: true }), h('span', {}, l), h('small', {}, 'Always there'))),
-        ...order.map((k) => {
-          const on = keys.includes(k);
-          const i = keys.indexOf(k);
-          const off = BAR_ITEMS[k].ok && !BAR_ITEMS[k].ok();
-          const box = h('input', { type: 'checkbox', checked: on, 'aria-label': 'Show ' + BAR_ITEMS[k].label });
-          box.addEventListener('change', () => { keys = box.checked ? [...keys, k] : keys.filter((x) => x !== k); draw(); });
-          const move = (d) => { const j = i + d; [keys[i], keys[j]] = [keys[j], keys[i]]; draw(); };
-          return h('div', { class: 'bar-row' + (on ? '' : ' off'), 'data-key': k }, box, h('span', {}, BAR_ITEMS[k].label), off ? h('small', {}, 'Switched off for the team') : null,
-            on ? h('span', { class: 'bar-move' },
-              h('button', { class: 'icon-btn', 'aria-label': 'Move ' + BAR_ITEMS[k].label + ' left', disabled: i === 0, onclick: () => move(-1) }, '↑'),
-              h('button', { class: 'icon-btn', 'aria-label': 'Move ' + BAR_ITEMS[k].label + ' right', disabled: i === keys.length - 1, onclick: () => move(1) }, '↓')) : null);
-        }));
-    };
-    draw();
     // Pinned things, after the tabs: reorder, unpin, or pin another project, campaign, feed or stack from here.
     let pins = pinsMine().slice();
     const pinList = h('div', { class: 'bar-edit' });
@@ -3277,22 +3299,13 @@
       ];
       openMenu(e.currentTarget, items);
     };
-    sheet('Your tabs', [
-      h('p', { class: 'muted' }, 'Pick what sits next to Home and Day, and the order. Only you see your tabs. Anything you leave off is still in Tools (the grid button at the top).'),
-      list,
-      h('button', { class: 'btn small', onclick: () => { keys = BAR_DEFAULT.slice(); draw(); } }, 'Back to the usual'),
-      h('h4', { class: 'bar-h' }, '📌 Pinned'),
-      h('p', { class: 'muted' }, 'One job, project, campaign, feed, stack or doc you keep going back to, one tap away after your tabs.'),
+    sheet('Your pins', [
+      h('p', { class: 'muted' }, 'One job, project, campaign, feed, stack or doc you keep going back to, one tap away under your tabs. Only you see your pins.'),
       pinList,
       h('button', { class: 'btn small', onclick: addPin }, '+ Pin something'),
     ], async () => {
-      const same = keys.join() === BAR_DEFAULT.join();
-      const r = await api('PUT', '/account/bar', { bar: same ? null : keys });
-      S.me.bar = r.bar;
       if (pins.map((x) => x.go).join() !== pinsMine().map((x) => x.go).join()) S.me.pins = (await api('PUT', '/account/pins', { pins })).pins;
       renderTabs();
-      renderHome(); // a card that follows a tab (News) comes or goes with it
-      if (S.tab !== 'home' && S.tab !== 'day' && !onBar(S.tab)) setTab('home');
     });
   }
 
@@ -3377,12 +3390,15 @@
     if (pb) { if (pb._held) return (pb._held = false); return openPin(pb.dataset.pin); }
     const b = e.target.closest('button[data-tab]');
     if (!b) return;
+    // Another tab leaves Workspace: its tool closes (a tool from All tools stays, as before).
+    if (b.dataset.tab !== 'work' && !WORK_TABS.includes(b.dataset.tab) && toolOpen && workOpen()) closeTool();
     if (BAR_ITEMS[b.dataset.tab]) return openBarItem(b.dataset.tab);
     closeProjects();
     setTab(b.dataset.tab);
   };
   $('#tabs').addEventListener('click', onTabClick);
   $('#topTabs').addEventListener('click', onTabClick);
+  $('#workTabs').addEventListener('click', onTabClick);
 
   function goDay(k) {
     D.date = k;
@@ -8044,7 +8060,7 @@
     document.body.append(palette);
     draw();
     q.focus();
-    // Records come with Jobs & projects: loaded now if they aren't yet, and the list drawn again.
+    // Records come with Projects: loaded now if they aren't yet, and the list drawn again.
     const box = palette;
     if (toolOn('projects') && (S.projects || []).some((p) => !PR.records.has(p.id))) prLoadAll().then(() => palette === box && draw()).catch(() => {});
   }
@@ -9158,7 +9174,7 @@
     execute: ['Execute', 'Makes routine changes itself (tasks, time, records, docs). Emails wait for your yes.'],
     automate: ['Automate', 'As Execute, and runs its scheduled workflows on its own.'],
   };
-  const AG_TOOL_NAMES = { look_at_day: 'Your calendar and day', list_tasks: 'Tasks', list_projects: 'Jobs & projects (the setup)', find_records: 'Jobs, leads and deals', read_record: 'A record’s full history', list_campaigns: 'Campaigns', find_contacts: 'Contacts', team_schedule: 'The team’s visits', plan_route: 'Routes', find_docs: 'Docs', read_doc: 'A doc’s text', create_task: 'Make tasks', update_task: 'Reschedule, reassign or finish tasks', schedule_time: 'Put time on your calendar', move_time: 'Move time it put there', save_contact: 'Save contacts', create_project: 'Start projects', create_record: 'Add jobs, leads, deals…', update_record: 'Update records', log_note: 'Log calls and notes', book_visit: 'Book visits', write_doc: 'Write docs', draft_email: 'Draft emails', notify_me: 'Send you a heads-up', marketing_snapshot: 'What’s bringing in work (leads by source, jobs won, campaigns, posts)', find_customers: 'Past and recent customers', list_channels: 'Your social channels', social_posts: 'Your posts in Postiz', create_campaign: 'Start campaigns with goals and tasks', make_list: 'Make lists of people to reach', make_image: 'Make pictures (on your OpenAI or Gemini key)', draft_social_post: 'Draft social and Google posts', draft_email_campaign: 'Draft email campaigns', find_photos: 'Your photos (Folders, Stacks, job photos, chat)', post_to_chat: 'Post in your team’s chat feeds', look_at_photos: 'Look at photos to pick the right ones' };
+  const AG_TOOL_NAMES = { look_at_day: 'Your calendar and day', list_tasks: 'Tasks', list_projects: 'Projects (the setup)', find_records: 'Jobs, leads and deals', read_record: 'A record’s full history', list_campaigns: 'Campaigns', find_contacts: 'Contacts', team_schedule: 'The team’s visits', plan_route: 'Routes', find_docs: 'Docs', read_doc: 'A doc’s text', create_task: 'Make tasks', update_task: 'Reschedule, reassign or finish tasks', schedule_time: 'Put time on your calendar', move_time: 'Move time it put there', save_contact: 'Save contacts', create_project: 'Start projects', create_record: 'Add jobs, leads, deals…', update_record: 'Update records', log_note: 'Log calls and notes', book_visit: 'Book visits', write_doc: 'Write docs', draft_email: 'Draft emails', notify_me: 'Send you a heads-up', marketing_snapshot: 'What’s bringing in work (leads by source, jobs won, campaigns, posts)', find_customers: 'Past and recent customers', list_channels: 'Your social channels', social_posts: 'Your posts in Postiz', create_campaign: 'Start campaigns with goals and tasks', make_list: 'Make lists of people to reach', make_image: 'Make pictures (on your OpenAI or Gemini key)', draft_social_post: 'Draft social and Google posts', draft_email_campaign: 'Draft email campaigns', find_photos: 'Your photos (Folders, Stacks, job photos, chat)', post_to_chat: 'Post in your team’s chat feeds', look_at_photos: 'Look at photos to pick the right ones' };
   const AG_STATUS = { requested: 'Starting', planning: 'Planning', running: 'Working', awaiting: 'Needs your yes', completed: 'Done', failed: 'Didn’t finish', blocked: 'Has a question', cancelled: 'Stopped' };
   const AG_DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
   const agRunning = (x) => ['requested', 'planning', 'running'].includes(x.status);
@@ -9523,40 +9539,32 @@
   }
 
   // ---------- tools: small apps that open in a drawer, so the tabs stay as they are ----------
-  const TOOLS = { agents: { name: 'Your team', render: agentsTool }, hq: { name: 'Company HQ', render: hqTool }, sidekick: { name: 'Sidekick', render: sidekickTool }, docs: { name: 'Docs', render: docsTool }, bills: { name: 'Finance', render: financeTool }, contacts: { name: 'Contacts', render: contactsTool }, email: { name: 'Email', render: emailTool }, meetings: { name: 'Meeting notes', render: meetingsTool }, planner: { name: 'Planner', render: plannerTool }, folders: { name: 'Folders', render: foldersTool }, map: { name: 'Map', render: mapTool }, signs: { name: 'Signatures', render: signsTool }, cards: { name: 'Business card', render: cardTool }, vault: { name: 'Vault', render: vaultTool }, news: { name: 'News', render: () => NEWS.render() } };
+  const TOOLS = { agents: { name: 'Your team', render: agentsTool }, hq: { name: 'Company HQ', render: hqTool }, sidekick: { name: 'Sidekick', render: sidekickTool }, docs: { name: 'Folders & Docs', render: docsTool }, bills: { name: 'Finance', render: financeTool }, contacts: { name: 'Contacts', render: contactsTool }, email: { name: 'Email', render: emailTool }, meetings: { name: 'Meeting notes', render: meetingsTool }, planner: { name: 'Planner', render: plannerTool }, folders: { name: 'Folders & Docs', render: foldersTool }, map: { name: 'Map', render: mapTool }, signs: { name: 'Signatures', render: signsTool }, cards: { name: 'Business card', render: cardTool }, vault: { name: 'Vault', render: vaultTool }, news: { name: 'News', render: () => NEWS.render() } };
   let toolOpen = null;
   $('#toolsBtn').addEventListener('click', (e) => {
     const soon = billsSoon().length;
     const tight = budgetAlerts().length;
-    const offBar = ['column', 'chat', 'camps'].filter((k) => !onBar(k));
-    // Picking a tool from the drawer closes the drawer too.
+    // Picking a tool from the drawer closes the drawer too. Workspace's tabs (Sidekick, Contacts, Projects,
+    // Campaigns, Folders & Docs) aren't here: they're under Workspace.
     const closing = (rows) => rows.map((r) => (r?.run ? { ...r, run: () => { closeSide(); r.run(); } } : r));
     openMenu(e.currentTarget, closing([
-      // Sidekick always comes first, above everything else.
-      toolOn('sidekick') ? { label: h('span', { class: 'tool-item' }, '✦ Sidekick', skNudges().length ? h('small', {}, `${skNudges().length} need${skNudges().length === 1 ? 's' : ''} a look`) : null), on: toolOpen === 'sidekick', run: () => { SK.open = null; openTool('sidekick'); } } : null,
-      toolOn('agents') && !onBar('agents') ? { label: h('span', { class: 'tool-item' }, '👥 Your team', agWaiting().length ? h('small', {}, `${agWaiting().length} waiting for your yes`) : null), on: toolOpen === 'agents', run: () => agOpen('team') } : null,
-      ...(offBar.length ? [{ head: 'Views' }, ...offBar.map((k) => ({ label: h('span', { class: 'tool-item' }, BAR_ITEMS[k].label, k === 'chat' && $('#tabs [data-tab="home"]')?.classList.contains('dot') ? h('small', {}, 'new messages') : null), on: S.tab === k, run: () => openBarItem(k) }))] : []),
-      { head: 'Tools' },
+      { label: h('span', { class: 'tool-item' }, '🗂️ Stacks'), on: S.tab === 'column' && !toolOpen, run: () => { closeTool(); closeProjects(); setTab('column'); } },
       { label: h('span', { class: 'tool-item' }, '🏢 Company HQ', HQ.data && amAdmin() && HQ.data.entries.some((x) => x.status === 'suggested') ? h('small', {}, 'suggestions to review') : null), on: toolOpen === 'hq', run: () => openTool('hq') },
-      toolOn('docs') ? { label: 'Docs', on: toolOpen === 'docs', run: () => openTool('docs') } : null,
-      toolOn('projects') ? { label: 'Jobs & projects', run: showProjects } : null,
       toolOn('bills') ? { label: h('span', { class: 'tool-item' }, 'Finance', soon || tight ? h('small', {}, [soon ? `${soon} due soon` : '', tight ? `${tight} budget${tight === 1 ? '' : 's'} nearly used` : ''].filter(Boolean).join(' · ')) : null), on: toolOpen === 'bills', run: () => openTool('bills') } : null,
-      toolOn('contacts') && amAdmin() ? { label: 'Contacts', on: toolOpen === 'contacts', run: () => openTool('contacts') } : null,
       toolOn('email') && mayEmail() ? { label: h('span', { class: 'tool-item' }, 'Email', (S.mail?.sends || []).some((x) => x.status === 'sending') ? h('small', {}, 'sending…') : null), on: toolOpen === 'email', run: () => openTool('email') } : null,
-      toolOn('folders') ? { label: 'Folders', on: toolOpen === 'folders', run: () => openTool('folders') } : null,
       toolOn('meetings') ? { label: 'Meeting notes', on: toolOpen === 'meetings', run: () => openTool('meetings') } : null,
       toolOn('map') ? { label: h('span', { class: 'tool-item' }, 'Map', MP.run ? h('small', {}, MP.run && tripById(MP.run.id)?.kind === 'drive' ? 'tracking mileage' : 'canvassing run going') : null), on: toolOpen === 'map', run: () => openMap() } : null,
       toolOn('signs') ? { label: h('span', { class: 'tool-item' }, 'Signatures', SG.list.some((x) => x.status === 'sent' || x.status === 'viewed') ? h('small', {}, `${SG.list.filter((x) => x.status === 'sent' || x.status === 'viewed').length} waiting`) : null), on: toolOpen === 'signs', run: () => { SG.filter = null; openTool('signs'); } } : null,
       toolOn('cards') ? { label: 'Business card', on: toolOpen === 'cards', run: () => openTool('cards') } : null,
       toolOn('vault') ? { label: h('span', { class: 'tool-item' }, 'Vault', VK.key ? h('small', {}, 'unlocked') : null), on: toolOpen === 'vault', run: () => { VK.filter = null; openTool('vault'); } } : null,
-      toolOn('news') ? { label: 'News', on: toolOpen === 'news', run: () => openTool('news') } : null,
     ].filter(Boolean)));
   });
   function openTool(name) {
     toolOpen = name;
     $('#settings').classList.add('hidden');
     $('#tool').classList.remove('hidden');
-    $('#tool').classList.toggle('side', name === 'folders'); // beside the stacks, so cards can be dragged in
+    $('#tool').classList.toggle('side', name === 'folders' && S.tab === 'column'); // beside the stacks, so cards can be dragged in
+    if (name === 'docs' || name === 'folders') store.set('docsSide', name);
     renderTool();
     markTabs();
   }
@@ -9573,7 +9581,10 @@
     if (!toolOn(toolOpen)) return closeTool(); // switched off for the team
     if (!force && el.contains(document.activeElement) && document.activeElement.matches('input, textarea, select')) return;
     const keep = el.scrollTop;
-    el.replaceChildren(h('h2', {}, TOOLS[toolOpen].name, h('button', { class: 'icon-btn', html: I.close, 'aria-label': 'Close', onclick: closeTool })), ...TOOLS[toolOpen].render().filter(Boolean));
+    // Folders & Docs: one tool, a switch between the two sides when both are on for the team.
+    const both = (toolOpen === 'docs' || toolOpen === 'folders') && toolOn('docs') && toolOn('folders');
+    const dfSwitch = both ? h('div', { class: 'seg df-switch', role: 'tablist' }, [['docs', 'Docs'], ['folders', 'Folders']].map(([k, l]) => h('button', { class: toolOpen === k ? 'on' : null, role: 'tab', 'aria-selected': String(toolOpen === k), 'data-df': k, onclick: () => toolOpen !== k && openTool(k) }, l))) : null;
+    el.replaceChildren(...[h('h2', {}, TOOLS[toolOpen].name, h('button', { class: 'icon-btn', html: I.close, 'aria-label': 'Close', onclick: closeTool })), dfSwitch, ...TOOLS[toolOpen].render()].filter(Boolean));
     el.scrollTop = keep;
   }
 
@@ -9820,7 +9831,7 @@
   function projectsHome() {
     const list = [...(S.projects || [])].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
     return [
-      h('div', { class: 'pj-head' }, h('button', { class: 'icon-btn', 'aria-label': 'Close Projects', html: I.close, onclick: closeProjects }), h('h2', {}, 'Jobs & projects'), h('span', { style: 'flex:1' }), h('button', { class: 'btn primary-btn', onclick: () => newProjectSheet() }, '+ New project')),
+      h('div', { class: 'pj-head' }, h('button', { class: 'icon-btn', 'aria-label': 'Close Projects', html: I.close, onclick: closeProjects }), h('h2', {}, 'Projects'), h('span', { style: 'flex:1' }), h('button', { class: 'btn primary-btn', onclick: () => newProjectSheet() }, '+ New project')),
       list.length ? h('div', { class: 'pj-grid' }, list.map((p) => h('button', { class: 'pj-card', onclick: () => openProject(p.id) },
         h('span', { class: 'pj-ic' }, p.icon || '📁'),
         h('b', {}, p.name, p.private ? h('small', { title: 'Private' }, ' 🔒') : null),
@@ -11310,7 +11321,7 @@
   // A campaign call list made from a project's records, kept current as they change.
   function prListSheet(c) {
     const projects = (S.projects || []);
-    if (!projects.length) return toast('Make a project first (Tools → Projects).');
+    if (!projects.length) return toast('Make a project first (Workspace → Projects).');
     const proj = h('select', {}, projects.map((p) => h('option', { value: p.id }, p.name)));
     const list = h('select');
     const field = h('select');
@@ -13516,7 +13527,7 @@
     const t = p.types.find((y) => y.id === b.sub) || p.types[0];
     if (!t) return null;
     const open = () => { closeDoc(); openProject(p.id, t.id); };
-    const head = h('div', { class: 'dk-vt-h' }, h('button', { class: 'dk-vt-name', type: 'button', title: 'Open in Jobs & projects', onclick: open }, `${p.icon || '📊'} ${p.name}${p.types.length > 1 ? ' · ' + t.name : ''}`));
+    const head = h('div', { class: 'dk-vt-h' }, h('button', { class: 'dk-vt-name', type: 'button', title: 'Open in Projects', onclick: open }, `${p.icon || '📊'} ${p.name}${p.types.length > 1 ? ' · ' + t.name : ''}`));
     if (!PR.records.has(p.id)) { prLoadAll().then(docLiveSoon).catch(() => {}); return [head, h('p', { class: 'dk-vt-none' }, 'Loading…')]; }
     const recs = prRecs(p.id).filter((r) => r.typeId === t.id).sort((a, c) => (c.updatedAt || c.createdAt) - (a.updatedAt || a.createdAt));
     head.append(h('small', {}, plural(recs.length, (t.singular || 'row').toLowerCase())));
@@ -13554,12 +13565,12 @@
       if (DV.viewFocus === b.id) setTimeout(() => { DV.viewFocus = null; if (add.isConnected) add.focus(); }, 0);
     }
     return [head, recs.length ? body : h('p', { class: 'dk-vt-none' }, `No ${(t.name || 'rows').toLowerCase()} yet.`),
-      recs.length > VIEW_ROWS && b.mode !== 'board' ? h('button', { class: 'link dk-vt-more', type: 'button', onclick: open }, `All ${recs.length} in Jobs & projects`) : null, add].filter(Boolean);
+      recs.length > VIEW_ROWS && b.mode !== 'board' ? h('button', { class: 'link dk-vt-more', type: 'button', onclick: open }, `All ${recs.length} in Projects`) : null, add].filter(Boolean);
   }
   function docPickView(anchor) {
     const rows = [];
     for (const p of S.projects || []) rows.push({ head: `${p.icon || ''} ${p.name}` }, ...p.types.map((t) => ({ label: `${t.icon || ''} ${t.name}`, p, t })));
-    if (!rows.length) { toast('Make a project first (Tools → Jobs & projects).'); return null; }
+    if (!rows.length) { toast('Make a project first (Workspace → Projects).'); return null; }
     return new Promise((done) => openMenu(anchor, rows.map((r) => (r.head ? r : { label: r.label, run: () => done({ ref: r.p.id, sub: r.t.id }) }))));
   }
 
@@ -13574,7 +13585,7 @@
     const body = [
       h('p', { class: 'day-hint' }, 'In Notion: ', h('b', {}, 'Settings → Export'), ', choose ', h('b', {}, 'Markdown & CSV'), ', include subpages and ', h('b', {}, 'Create folders for subpages'), ', then upload the .zip it gives you here.'),
       h('p', { class: 'day-hint' }, 'Every page becomes a doc, with the pages inside it inside it. Pictures and files come too, and links between pages still work. ',
-        projOn ? 'Databases become projects in Jobs & projects, each row a record with its page.' : 'Databases become tables in a doc' + (amAdmin() ? ' (turn on Jobs & projects in Settings → Team first to bring them in as projects you can sort, filter and put on a board).' : '.')),
+        projOn ? 'Databases become projects in Projects, each row a record with its page.' : 'Databases become tables in a doc' + (amAdmin() ? ' (turn on Projects in Settings → Team first to bring them in as projects you can sort, filter and put on a board).' : '.')),
       h('label', { class: 'field' }, h('span', {}, 'The export'), file),
       h('label', { class: 'field' }, h('span', {}, 'Who sees it'), who),
       status,
@@ -13815,7 +13826,7 @@
         const ts = p.types.filter((t) => t.fields.some((f) => f.type === 'select'));
         if (ts.length) rows.push({ head: p.name }, ...ts.map((t) => ({ label: `${t.icon || ''} ${t.name}`, run: null, t, p })));
       }
-      if (!rows.length) { toast('Make a project first (Tools → Projects).'); return null; }
+      if (!rows.length) { toast('Make a project first (Workspace → Projects).'); return null; }
       return new Promise((done) => openMenu(anchor, rows.map((r) => (r.head ? r : { label: r.label, run: () => done({ ref: r.p.id, sub: r.t.id }) }))));
     }
     const it = S.items.find((x) => x.id === DV.doc?.id);
@@ -17987,8 +17998,19 @@
           buildPanes();
           try { S.me.feedTop = (await api('PUT', '/account/feed', { newestTop: on })).newestTop; } catch (e) { S.me.feedTop = was; input.checked = was; buildPanes(); toast(e.message); }
         })));
-      s.append(h('section', {}, h('h3', {}, 'Your tabs'),
-        h('div', { class: 'srow' }, h('span', {}, ['Home', 'Day', ...barKeys().map((k) => BAR_ITEMS[k].label)].join(' · '), h('small', {}, 'Only you see your tabs')), h('button', { class: 'btn', onclick: barSheet }, 'Change'))));
+      // News lives on Home, for whoever turns it on (each person's own).
+      if (toolOn('news')) s.append(h('section', {}, h('h3', {}, 'News'),
+        toggleRow('News on Home', 'Your top stories on Home, from the topics and sites you pick. Only for you', newsOn(), async (on, input) => {
+          const was = S.me.bar;
+          const extra = (Array.isArray(was) ? was : []).filter((k) => k !== 'news');
+          S.me.bar = on ? [...extra, 'news'] : extra;
+          renderHome();
+          try { S.me.bar = (await api('PUT', '/account/bar', { bar: S.me.bar })).bar; } catch (e) { S.me.bar = was; input.checked = newsOn(); toast(e.message); }
+          renderHome();
+        }),
+        h('div', { class: 'srow' }, h('span', {}, 'Your news', h('small', {}, 'Read it all, pick topics and sources, see what it learned')), h('button', { class: 'btn', onclick: () => { $('#settings').classList.add('hidden'); openTool('news'); } }, 'Open News'))));
+      s.append(h('section', {}, h('h3', {}, 'Pinned'),
+        h('div', { class: 'srow' }, h('span', {}, pinsMine().length ? pinsMine().map(pinLabel).join(' · ') : 'Nothing pinned', h('small', {}, 'Only you see your pins')), h('button', { class: 'btn', onclick: barSheet }, 'Change'))));
 
       // Stacks
       const stackSec = h('section', {}, h('h3', {}, 'Stacks (folders)'));
@@ -18146,7 +18168,7 @@
         // The tools the team uses. Switched off, a tool leaves everyone's Tools menu; nothing in it is deleted.
         const TOOL_ROWS = [['agents', 'Agents', 'Your team: Chief of Staff, Sales, Operations and Marketing'], ['sidekick', 'Sidekick', 'Plans campaigns with you'], ['docs', 'Docs', 'Write and share pages'], ['contacts', 'Contacts', 'Your customers and leads (owners and admins)'],
           ['email', 'Email', 'Campaign email from Outlook or Gmail'], ['folders', 'Folders', 'Files in folders'], ['signs', 'Signatures', 'Send PDFs to be signed'], ['bills', 'Finance', 'Bills, money in and out, budgets'],
-          ['meetings', 'Meeting notes', 'Record a call, get the notes'], ['map', 'Map', 'Pins, routes and canvassing runs'], ['vault', 'Vault', 'Codes and logins, locked on your device'], ['projects', 'Jobs & projects', 'Trades, software, client work and team projects'], ['cards', 'Business cards', 'Everyone’s own card to share by link, text, QR code or NFC'], ['news', 'News', 'Each person’s own news, if they turn it on in their tabs']];
+          ['meetings', 'Meeting notes', 'Record a call, get the notes'], ['map', 'Map', 'Pins, routes and canvassing runs'], ['vault', 'Vault', 'Codes and logins, locked on your device'], ['projects', 'Projects', 'Trades, software, client work and team projects'], ['cards', 'Business cards', 'Everyone’s own card to share by link, text, QR code or NFC'], ['news', 'News', 'Each person’s own news, if they turn it on in their tabs']];
         const tools = ws.tools || {};
         s.append(h('section', { class: 'tools-sec' }, h('h3', {}, 'Tools'),
           h('p', { class: 'day-hint' }, 'Turn on what your team uses. A tool you turn off leaves everyone’s Tools menu; nothing in it is deleted.'),

@@ -60,7 +60,9 @@ const month = new Date().toISOString().slice(0, 7);
 await add('deals', { name: 'Fleet tint', value: 12500, stage: ch('deals', 'stage', 'Proposal'), close_date: month + '-28', contact: ben.id });
 await add('deals', { name: 'Showroom', value: 6200, stage: ch('deals', 'stage', 'Won'), close_date: month + '-03' });
 await sleep(400);
-const openTools = async (label) => { await A.tap(`document.querySelector('#toolsBtn')`); await A.tap(`[...document.querySelectorAll('#menu button')].find((b) => b.textContent.startsWith(${JSON.stringify(label)}))`); };
+// Docs and Projects are in Workspace now (2026-11-14); the rest in All tools.
+const WORK = { Docs: 'docs', 'Jobs & projects': 'projects' };
+const openTools = async (label) => { if (WORK[label]) return A.ev(`document.querySelector('#tabs [data-tab=${WORK[label]}]').click()`); await A.tap(`document.querySelector('#toolsBtn')`); await A.tap(`[...document.querySelectorAll('#menu button')].find((b) => b.textContent.startsWith(${JSON.stringify(label)}))`); };
 await openTools('Jobs & projects');
 await A.tap(`[...document.querySelectorAll('#projects .pj-card')].find((x) => x.textContent.includes('Sales'))`);
 await A.tap(`[...document.querySelectorAll('#projects .pj-open')].find((b) => b.textContent === 'Ben Ortiz')`);
@@ -84,7 +86,7 @@ ok(await A.until(`[...document.querySelectorAll('#projects .pj-tl')].some((x) =>
 const c = await api('POST', '/campaigns', { name: 'Call qualified' });
 await api('PATCH', `/records/${ben.id}`, { values: { [F('contacts', 'stage').id]: ch('contacts', 'stage', 'Qualified') } });
 await A.tap(`document.querySelector('#projects [aria-label="Close Projects"]')`);
-await A.tap(`document.querySelector('[data-tab=camps]')`);
+await A.ev(`document.querySelector('#tabs [data-tab=camps]').click()`);
 await A.tap(`[...document.querySelectorAll('.camp-card')].find((b) => b.textContent.includes('Call qualified'))`);
 await A.until(`[...document.querySelectorAll('#camps button')].some((b) => b.textContent.startsWith('Files'))`);
 await A.tap(`[...document.querySelectorAll('#camps button')].find((b) => b.textContent.startsWith('Files'))`);

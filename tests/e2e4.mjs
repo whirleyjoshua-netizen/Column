@@ -58,8 +58,8 @@ const pic = await (await fetch(APP + 'api/upload?name=dot.png&type=image/png', {
 const d = await JA('POST', '/items', { type: 'text', doc: { title: 'Fleet offer', blocks: [{ id: 'a1', type: 'p', runs: [{ text: 'We tint fleets in a day.' }] }, { id: 'a2', type: 'file', itemId: pic.id, name: 'dot.png' }, { id: 'a3', type: 'p', runs: [{ text: 'Price on request.' }] }] } });
 await sleep(500);
 const openIt = async (T) => {
-  await T.tap(`document.querySelector('#toolsBtn')`);
-  await T.tap(`[...document.querySelectorAll('#menu button')].find((b) => b.textContent.startsWith('Docs'))`);
+  await T.ev(`(document.querySelector('#tabs [data-tab=docs]').click(), document.querySelector('#tool .df-switch [data-df=docs]')?.click())`); // in Workspace now (2026-11-14)
+  await T.until(`[...document.querySelectorAll('#tool .doc-row')].some((r) => r.textContent.startsWith('Fleet offer'))`);
   await T.tap(`[...document.querySelectorAll('#tool .doc-row')].find((r) => r.textContent.startsWith('Fleet offer'))`);
   return T.until(`document.querySelector('#docview .dk-title')?.textContent === 'Fleet offer'`);
 };

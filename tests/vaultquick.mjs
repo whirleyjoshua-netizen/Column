@@ -60,7 +60,7 @@ const typeIn = async (t) => {
 };
 
 // 1. "/vault …" in a stack, before the vault exists: set it up, and the form opens with what was typed.
-await A.tap(`document.querySelector('[data-tab=column]')`);
+await A.tap(`(document.querySelector('#toolsBtn').click(), [...document.querySelectorAll('#menu button')].find((b) => b.textContent.includes('Stacks')))`);
 await typeIn('/vault gate code 4471 at Smith job');
 await A.key('Enter');
 ok(await A.until(`!!document.querySelector('#tool input[type=password]')`), '/vault with no vault yet opens vault setup');

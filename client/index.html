@@ -55,9 +55,7 @@
       <nav class="tabs" id="tabs">
         <button data-tab="home" class="on">Home</button>
         <button data-tab="day">Day</button>
-        <button data-tab="column">Stacks</button>
         <button data-tab="chat">Chat</button>
-        <button data-tab="camps">Campaigns</button>
       </nav>
       <div class="side-foot">
         <button id="toolsBtn" title="All tools" aria-label="Tools"><span class="tab-ic"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="6" height="6" rx="1.5"/><rect x="14" y="4" width="6" height="6" rx="1.5"/><rect x="4" y="14" width="6" height="6" rx="1.5"/><rect x="14" y="14" width="6" height="6" rx="1.5"/></svg></span><span class="tab-l">All tools</span></button>
@@ -83,6 +81,8 @@
     </header>
     <!-- In a docked column (a narrow window with a mouse) your tabs also run across the top, as they used to. -->
     <nav class="tabs top-tabs" id="topTabs" aria-label="Your tabs"></nav>
+    <!-- Workspace's tabs (Sidekick, Contacts, Projects, Campaigns, Folders & Docs) across the top, at full size. -->
+    <nav class="work-tabs" id="workTabs" aria-label="Workspace" hidden></nav>
     <section id="home" class="home-wrap"></section>
     <section id="day" class="day hidden"></section>
     <main class="panes hidden" id="panes"></main>

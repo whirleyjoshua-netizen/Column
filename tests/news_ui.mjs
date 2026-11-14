@@ -1,4 +1,4 @@
-// News in a real browser (headless Chrome): turned on in "Change your tabs"; the tab shows articles as text with
+// News in a real browser (headless Chrome): turned on in Settings → General (a card on Home); the tab shows articles as text with
 // safe links and pictures through the server; 👍 and 👎 work (👎 takes it out, with undo); searching keeps the
 // cursor in the box; Topics & sources adds a topic, a word to follow and your own site; What it learned shows
 // what it took; Home gets a "News for you" card that opens News; it fits a phone.
@@ -76,13 +76,14 @@ try {
   ok(await A.until(`!document.querySelector('#app')?.classList.contains('hidden') && !!document.querySelector('#tabs .tabs-edit')`, 20000), 'signed in');
   ok(await A.ev(`!document.querySelector('#tabs [data-tab=news]') && !document.querySelector('#home .home-card.news')`), 'News is off until you turn it on: no tab, no Home card');
 
-  // Turn it on in Change your tabs.
-  await A.tap(`document.querySelector('#tabs .tabs-edit')`);
-  await A.tap(`document.querySelector('#sheet .bar-row[data-key=news] input[type=checkbox]')`);
-  await A.tap(`document.querySelector('#sheet .primary-btn')`);
-  ok(await A.until(`!!document.querySelector('#tabs [data-tab=news]')`), 'turned on in Change your tabs, News is on the tab bar');
+  // Turn it on in Settings → General (News lives on Home, not in the toolbar, since 2026-11-14).
+  await A.tap(`document.querySelector('#settingsBtn')`);
+  await A.until(`[...document.querySelectorAll('#settings .srow')].some((r) => r.textContent.startsWith('News on Home'))`);
+  await A.ev(`[...document.querySelectorAll('#settings .srow')].find((r) => r.textContent.startsWith('News on Home')).querySelector('input').click(); true`);
+  await A.ev(`document.querySelector('#settings [aria-label=Close]').click(); true`);
+  ok(!(await A.ev(`!!document.querySelector('#tabs [data-tab=news]')`)), 'News stays out of the toolbar');
   ok(await A.until(`!!document.querySelector('#home .home-card.news') && document.querySelectorAll('#home .home-card.news .nw-hrow').length >= 3`, 15000), 'Home gets a “News for you” card with the top stories');
-  await A.tap(`document.querySelector('#tabs [data-tab=news]')`);
+  await A.tap(`[...document.querySelectorAll('#home .home-card.news button')].find((b) => b.textContent.includes('Open News'))`);
   ok(await A.until(`document.querySelectorAll('#tool .nw-item').length >= 4`, 15000), 'the News tab lists articles');
   const shape = await A.ev(`(() => { const items = [...document.querySelectorAll('#tool .nw-item')]; const links = [...document.querySelectorAll('#tool a')];
     return { scripts: document.querySelectorAll('#tool script, #tool [onerror]').length, pwned: window.PWNED || 0,
