@@ -166,6 +166,36 @@ body.wide .work-tabs:not([hidden]) { display: flex; gap: 2px; flex: none; height
 body.wide.work-on .settings.tool { top: var(--work-in, 84px); }
 body.wide.work-on .projects { top: var(--work-y, 84px); }
 .df-switch { margin: 0 0 14px; max-width: 260px; }
+/* Sidekick, on every page: ✦ in the header opens a panel on the right at full size, a sheet from the bottom when narrow. */
+body { --skd-w: 0px; }
+body.wide.sk-open { --skd-w: 400px; }
+.sk-btn { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 12px; margin-left: auto; border: 1px solid var(--line); border-radius: 999px; background: var(--card); color: var(--text); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; flex: none; }
+.sk-btn span:first-child { color: var(--accent); }
+.sk-btn:hover, .sk-btn.on { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+.bar .sk-btn + .bell-btn { margin-left: 0; }
+.sk-dock[hidden] { display: none; }
+.sk-dock { display: flex; flex-direction: column; background: var(--bg); min-height: 0; }
+body.wide .sk-dock { flex: none; width: 400px; height: 100%; border-left: 1px solid var(--line); }
+body:not(.wide) .sk-dock { position: fixed; left: 0; right: 0; bottom: 0; height: min(86vh, 760px); z-index: 59; border-radius: 16px 16px 0 0; box-shadow: 0 -12px 40px rgba(0, 0, 0, 0.18); padding-bottom: env(safe-area-inset-bottom); }
+.sk-scrim { z-index: 58; }
+body.wide .docview, body.wide .projects { right: var(--skd-w); }
+.skd-head { display: flex; align-items: center; gap: 6px; min-height: 44px; padding: 0 8px 0 14px; border-bottom: 1px solid var(--line); flex: none; }
+.skd-title { flex: 1; font-size: 14.5px; }
+.skd-title::first-letter { color: var(--accent); }
+.skd-page { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 10px 14px 0; padding: 7px 10px; border-radius: 9px; background: var(--accent-soft); font-size: 12.5px; color: var(--muted); flex: none; }
+.skd-page b { color: var(--text); }
+.skd-page.off { background: var(--panel); }
+.skd-body { flex: 1; min-height: 0; overflow-y: auto; padding: 12px 14px 24px; }
+.skd-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 4px; }
+.skd-chips .chip { border: 1px solid var(--line); background: var(--card); color: var(--text); }
+.skd-chips .chip:hover:not(:disabled) { border-color: var(--accent); }
+.skd-team { display: block; margin-top: 16px; }
+.sk-dock .linkish { background: none; border: 0; padding: 0; color: var(--accent); font: inherit; font-size: 13px; cursor: pointer; }
+.sk-dock .linkish:hover { text-decoration: underline; }
+.sk-dock .ag-back { display: none; } /* the panel's own ‹ goes back */
+.sk-dock .ag-wfs .chip, .sk-dock .chip { border: 1px solid var(--line); background: var(--card); color: var(--text); }
+.sk-dock.sk-over { outline: 2px dashed var(--accent); outline-offset: -6px; }
+@media (max-width: 520px) { .sk-btn-l { display: none; } .sk-btn { padding: 0 10px; } }
 /* The desktop app: the window is dragged by the top of the toolbar; on a Mac its buttons sit above it. */
 body.desktop #side .side-top { -webkit-app-region: drag; }
 body.desktop #side .side-top button { -webkit-app-region: no-drag; }
@@ -1063,7 +1093,7 @@ body.viewer .preview pre, body.viewer .preview .pv-edit, body.viewer .preview .d
 .sk-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--warn, #ffb547); flex: none; }
 .sk-top { display: flex; align-items: center; gap: 8px; margin: -4px 0 10px; } .sk-top b { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #tool.sk-over { outline: 2px dashed var(--accent); outline-offset: -6px; }
-#tool.sk-over::before { content: 'Drop for Sidekick to read'; position: sticky; top: 0; z-index: 5; display: block; margin: 0 0 8px; padding: 8px; border-radius: 10px; text-align: center; font-size: 12.5px; font-weight: 600; color: #fff; background: var(--accent); }
+#tool.sk-over::before, .sk-dock.sk-over .skd-body::before { content: 'Drop for Sidekick to read'; position: sticky; top: 0; z-index: 5; display: block; margin: 0 0 8px; padding: 8px; border-radius: 10px; text-align: center; font-size: 12.5px; font-weight: 600; color: #fff; background: var(--accent); }
 .sk-msg.me:has(.sk-sent-file) { display: flex; flex-wrap: wrap; gap: 6px; }
 .sk-sent-file { display: inline-flex; align-items: center; gap: 5px; font-size: 12.5px; }
 .camp-card-wrap { display: flex; flex-direction: column; margin-bottom: 8px; } .camp-card-wrap .camp-card { margin-bottom: 0; }

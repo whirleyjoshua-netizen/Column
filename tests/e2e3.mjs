@@ -133,10 +133,10 @@ const post = st2.items.find((x) => x.type === 'message' && x.text.includes('Repo
 ok(post?.text.includes(`[[doc:${rep?.id}]]`), 'the feed post links the doc');
 // Sidekick proposes a doc; applying makes it
 await A.tap(`[...document.querySelectorAll('button')].find((b) => b.textContent.includes('Sidekick') && b.closest('#camps'))`);
-ok(await A.until(`[...document.querySelectorAll('#tool .sk-card-h')].some((x) => x.textContent === 'Doc')`, 6000), 'Sidekick proposes a Doc card');
-await A.tap(`[...document.querySelectorAll('#tool .sk-card')].find((x) => x.querySelector('.sk-card-h').textContent === 'Doc').querySelector('.primary-btn')`);
-await A.until(`[...document.querySelectorAll('#tool .sk-ready .primary-btn')].length > 0`);
-await A.tap(`document.querySelector('#tool .sk-ready .primary-btn')`);
+ok(await A.until(`[...document.querySelectorAll('#skDock .sk-card-h')].some((x) => x.textContent === 'Doc')`, 6000), 'Sidekick proposes a Doc card');
+await A.tap(`[...document.querySelectorAll('#skDock .sk-card')].find((x) => x.querySelector('.sk-card-h').textContent === 'Doc').querySelector('.primary-btn')`);
+await A.until(`[...document.querySelectorAll('#skDock .sk-ready .primary-btn')].length > 0`);
+await A.tap(`document.querySelector('#skDock .sk-ready .primary-btn')`);
 await sleep(1500);
 const skDoc = (await api('GET', '/state')).items.find((x) => x.type === 'text' && x.title === 'Fleet push · weekly report');
 const skBody = skDoc && await api('GET', `/items/${skDoc.id}/doc`);

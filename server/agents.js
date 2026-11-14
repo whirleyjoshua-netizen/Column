@@ -1051,7 +1051,7 @@ export function agentsModule({ sees = () => true, db, save, broadcast, rid, clea
       }
       return applyStep(x, cx, step, part);
     };
-    const history = [...(part.history || []), { role: 'user', text: !part.reply && (x.parts.length > 1 || part.from) ? handoffContext(x, part) : part.ask }];
+    const history = [...(part.history || []), { role: 'user', text: !part.reply && (x.parts.length > 1 || part.from) ? handoffContext(x, part) : [part.ask, !part.reply && !(part.history || []).length ? pageLine(x.page) : ''].filter(Boolean).join('\n\n') }];
     try {
       const out = await llmRun(ws, x.memberId, { system: systemFor(ws, x.memberId, part.agent, level, prefs, x.agent === 'team') + (a.tools.includes('make_image') && !pics ? '\n\nPictures: there is no OpenAI or Gemini key on this account, so you can’t make pictures. Don’t try; suggest real job photos, and mention once that adding an OpenAI or Gemini key in Settings → AI lets you make them.' : ''), history, tools, exec, task: part.agent === 'sales' ? 'customer' : part.agent === 'ops' ? 'jobs' : 'plan' });
       part.report = cleanText(out, 6000);
@@ -1070,6 +1070,7 @@ export function agentsModule({ sees = () => true, db, save, broadcast, rid, clea
     const before = x.parts.filter((p) => p !== part && p.status !== 'planned' && p.status !== 'running');
     return [
       `The request from the person: ${x.ask}`,
+      pageLine(x.page),
       part.ask && part.ask !== x.ask ? `Your part: ${part.ask}` : '',
       ...before.map((p) => `What the ${AGENTS[p.agent].name} did:\n${p.steps.filter((s) => s.kind !== 'read').map((s) => `- ${s.label} [${s.status}]${s.changed?.length ? ' ids: ' + s.changed.map((c) => `${c.kind} ${c.id}`).join(', ') : ''}`).join('\n') || '- nothing changed'}\nTheir report: ${p.report || p.error || ''}`),
     ].filter(Boolean).join('\n\n').slice(0, MAX_TURN_CHARS);
@@ -1166,7 +1167,7 @@ export function agentsModule({ sees = () => true, db, save, broadcast, rid, clea
 - marketing: Marketing Manager (reaching many people: marketing plans, campaigns, email campaigns, social and Google posts, pictures, reviews and referrals, what's working)
 Give the request to the one specialist whose job it is. Most requests need only one: planning the person's own day, week or tasks is the Chief of Staff alone; a lead or customer is Sales alone; a job to deliver is Operations alone; posts, campaigns or getting more customers is Marketing alone. Split it (2 or at most 3 assignments, in the order they should happen) only when it clearly needs work from more than one area, like a new customer who needs a quote and a visit booked. Each specialist can also bring in another partway through if it turns out they need to, so don't add one just in case. If the request is too unclear to start, ask one short question instead.
 Reply with JSON only: {"summary":"one line on the plan","parts":[{"agent":"chief|sales|ops|marketing","ask":""}],"question":null}`;
-    const out = await llmRun(ws, x.memberId, { system, history: [{ role: 'user', text: x.ask }], tools: [], exec: () => Promise.reject(new Error('No tools')), task: 'plan' });
+    const out = await llmRun(ws, x.memberId, { system, history: [{ role: 'user', text: [x.ask, pageLine(x.page)].filter(Boolean).join('\n\n') }], tools: [], exec: () => Promise.reject(new Error('No tools')), task: 'plan' });
     let j = {};
     try { j = JSON.parse(String(out).slice(String(out).indexOf('{'), String(out).lastIndexOf('}') + 1)); } catch {}
     if (j.question && !(Array.isArray(j.parts) && j.parts.length)) return { question: cleanText(j.question, 300) };
@@ -1174,9 +1175,14 @@ Reply with JSON only: {"summary":"one line on the plan","parts":[{"agent":"chief
     return { summary: cleanText(j.summary, 300), parts: parts.length ? parts : [{ agent: 'chief', ask: x.ask }] };
   }
 
-  function newRun(ws, memberId, { agent, ask, title, workflow = null, scheduled = false }) {
+  // What the person was looking at when they asked Sidekick (a job, a campaign, a doc…), so "this" means something.
+  // Their own words about their own screen: it only steers the agents, whose tools still see only what they can.
+  const PAGE_KINDS = { record: 'Job or record', project: 'Project', campaign: 'Campaign', doc: 'Doc', contact: 'Contact', channel: 'Chat feed', stack: 'Stack', day: 'Their Day', tool: 'Tool' };
+  const cleanPage = (p) => (p && typeof p === 'object' && PAGE_KINDS[p.kind] ? { kind: p.kind, id: cleanText(String(p.id || ''), 60), label: cleanText(String(p.label || ''), 120) } : null);
+  const pageLine = (pg) => (pg ? `The person is looking at: ${PAGE_KINDS[pg.kind]} “${pg.label}”${pg.id ? ` (id ${pg.id})` : ''}. When they say “this” or “here”, they mean it.` : '');
+  function newRun(ws, memberId, { agent, ask, title, workflow = null, scheduled = false, page = null }) {
     const x = {
-      id: rid(), wsId: ws.id, memberId, agent, ask: cleanText(ask, MAX_TURN_CHARS), title: cleanText(title, 120) || cleanText(String(ask).split('\n')[0], 120),
+      id: rid(), wsId: ws.id, memberId, agent, page: cleanPage(page), ask: cleanText(ask, MAX_TURN_CHARS), title: cleanText(title, 120) || cleanText(String(ask).split('\n')[0], 120),
       workflow, scheduled, status: 'requested', createdAt: Date.now(), parts: agent === 'team' ? [] : [{ id: rid(6), agent, ask: cleanText(ask, MAX_TURN_CHARS), status: 'planned', steps: [] }],
     };
     db.agentRuns[x.id] = x;
@@ -1275,7 +1281,7 @@ Reply with JSON only: {"summary":"one line on the plan","parts":[{"agent":"chief
       const ask = wf ? wf.ask + (wf.paste ? extra : extra ? `\n\nAlso: ${extra}` : '') : extra;
       if (!ask.trim() || (wf?.paste && !extra)) return send(res, 400, { error: wf?.paste ? 'Paste or describe it first.' : 'Say what you need.' });
       if (runsOf(ws.id, auth.memberId).filter((x) => ['requested', 'planning', 'running'].includes(x.status)).length >= 3) return send(res, 429, { error: 'Your team is busy with three assignments. Wait for one to finish.' });
-      const x = newRun(ws, auth.memberId, { agent, ask, title: wf ? wf.name + (extra && !wf.paste ? '' : '') : body.title, workflow: wf?.key || null });
+      const x = newRun(ws, auth.memberId, { agent, ask, title: wf ? wf.name + (extra && !wf.paste ? '' : '') : body.title, workflow: wf?.key || null, page: body.page });
       return send(res, 200, publicRun(x));
     }
     const x = b === 'runs' && c && db.agentRuns[c];

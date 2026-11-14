@@ -2451,12 +2451,12 @@
   }
   function clearDropping() {
     document.querySelectorAll('.dropping').forEach((p) => p.classList.remove('dropping'));
-    $('#tool')?.classList.remove('sk-over');
+    $('#tool')?.classList.remove('sk-over'); $('#skDock')?.classList.remove('sk-over');
   }
   // Something dragged out of Kloomie, to be used as it is rather than uploaded again (the desktop app drags a copy).
   const columnDragged = (e) => (S.dragItem && Date.now() - S.dragItem.at < 60_000 && (S.internalDrag || [...(e.dataTransfer.files || [])].some((f) => f.name === S.dragItem.it.name)) ? S.dragItem.it : null);
   // An open Sidekick takes files dropped on it to read.
-  const skDropAt = (target) => S.token && toolOpen === 'sidekick' && target?.closest?.('#tool');
+  const skDropAt = (target) => S.token && SKD.open && SKD.view === 'plan' && SK.open && target?.closest?.('#skDock');
   // An open campaign takes the drop itself: files go to its stack, and lists become call lists.
   const dropCampaign = () => S.tab === 'camps' && campById(K.open);
   window.addEventListener('dragenter', (e) => {
@@ -2469,7 +2469,7 @@
   const taskAt = (target) => { const tr = target?.closest?.('.task-row[data-id]'); return tr && taskById(tr.dataset.id) ? tr : null; };
   window.addEventListener('dragover', (e) => {
     const sk = skDropAt(e.target) && (hasFiles(e.dataTransfer) || (S.internalDrag && ['file', 'text'].includes(S.dragItem?.it.type)));
-    $('#tool')?.classList.toggle('sk-over', !!sk);
+    $('#skDock')?.classList.toggle('sk-over', !!sk);
     if (sk) {
       e.preventDefault();
       e.dataTransfer.dropEffect = 'copy';
@@ -3091,11 +3091,13 @@
   }
 
   // ----- the side toolbar's tabs: the same for everyone, so it stays short -----
-  // Home, Day, Chat, Agents and Workspace. Workspace groups the everyday tools (Sidekick, Contacts, Projects,
-  // Campaigns, Folders & Docs): at full size they run across the top of the page; in the drawer (a docked column, a
+  // Home, Day, Chat, Agents and Workspace. Workspace groups the everyday tools (Contacts, Projects, Campaigns,
+  // Folders & Docs); Sidekick is on every page (✦ in the header): at full size they run across the top of the page; in the drawer (a docked column, a
   // phone) they sit under Workspace. Everything else is in All tools. News is on Home (turned on in Settings).
+  // Sidekick's panel (the owner, 2026-11-14): one assistant on every page. See "Sidekick, on every page".
+  const SKD = { open: false, view: 'home', draft: '', busy: false, noPage: false, here: false };
   const MAIN_TABS = ['chat', 'agents', 'work'];
-  const WORK_TABS = ['sidekick', 'contacts', 'projects', 'camps', 'docs'];
+  const WORK_TABS = ['contacts', 'projects', 'camps', 'docs'];
   const BAR_ITEMS = {
     column: { label: 'Stacks', view: true },
     chat: { label: 'Chat', view: true },
@@ -3253,6 +3255,7 @@
     renderChatSide();
   }
   function markTabs() {
+    dockPageChanged();
     const jobs = !$('#projects').classList.contains('hidden');
     const work = workOpen();
     // The strip across the top shows while you're in Workspace (at full size; CSS hides it otherwise).
@@ -9207,14 +9210,17 @@
     else {
       const was = AG.data.runs.find((x) => x.id === msg.run.id);
       if (agPut(msg.run) !== msg.run) return;
-      if (was && agRunning(was) && !agRunning(msg.run) && !(toolOpen === 'agents' && AG.view === 'run:' + msg.run.id)) toast(`${msg.run.agent === 'team' ? 'Your team' : AG.data.agents[msg.run.agent]?.name}: ${msg.run.title} · ${AG_STATUS[msg.run.status].toLowerCase()}`, { label: 'Show', run: () => agOpen('run:' + msg.run.id) });
+      if (was && agRunning(was) && !agRunning(msg.run) && !(toolOpen === 'agents' && AG.view === 'run:' + msg.run.id) && !(SKD.open && SKD.view === 'run:' + msg.run.id)) toast(`${msg.run.agent === 'team' ? 'Your team' : AG.data.agents[msg.run.agent]?.name}: ${msg.run.title} · ${AG_STATUS[msg.run.status].toLowerCase()}`, { label: 'Show', run: () => agOpen('run:' + msg.run.id) });
       // The stats and busy flags come with the agents; fetch them again when something finishes.
       if (was && agRunning(was) !== agRunning(msg.run)) api('GET', '/agents').then((d) => { AG.data.agents = d.agents; renderTool(); }).catch(() => {});
     }
     if (toolOpen === 'agents') renderTool(AG.view.startsWith('run:'));
+    else if (SKD.open) renderDock(SKD.view.startsWith('run:'));
     renderHome();
   }
   function agOpen(view, tab) {
+    // From inside Sidekick's panel: an assignment opens there, and “‹ Your team” goes back to Sidekick's start.
+    if (SKD.open && SKD.here && (!view || view === 'team' || view.startsWith('run:'))) { SKD.view = view?.startsWith('run:') ? view : 'home'; return renderDock(true); }
     if (toolOpen !== 'agents' && AG.data) loadAgents(); // fresh counts and key state each time it opens
     AG.view = view || 'team';
     if (tab) AG.tab = tab;
@@ -9564,6 +9570,7 @@
     ].filter(Boolean)));
   });
   function openTool(name) {
+    if (name === 'sidekick') return openDock('plan');
     toolOpen = name;
     $('#settings').classList.add('hidden');
     $('#tool').classList.remove('hidden');
@@ -9580,6 +9587,7 @@
   }
   // Holds off while you're typing in it, so a redraw can't eat what you wrote. Sidekick keeps its own draft.
   function renderTool(force) {
+    if (SKD.open) renderDock(force);
     const el = $('#tool');
     if (!toolOpen || el.classList.contains('hidden')) return;
     if (!toolOn(toolOpen)) return closeTool(); // switched off for the team
@@ -16206,8 +16214,8 @@
       SK.busy = false;
       renderTool(true);
       if (path.endsWith('/say') || path === '/sidekick') {
-        $('#tool .sk-end')?.scrollIntoView({ block: 'end' });
-        $('#tool .sk-say')?.focus();
+        $('#skDock .sk-end')?.scrollIntoView({ block: 'end' });
+        $('#skDock .sk-say')?.focus();
       }
     }
   }
@@ -16240,6 +16248,146 @@
     const n = skCards(x).filter((y) => y.state === 'accepted').length;
     return n ? `Planning · ${n} accepted` : 'Planning';
   }
+  // ---------- Sidekick, on every page (the owner, 2026-11-14) ----------
+  // One assistant instead of two: ✦ in the header opens a panel beside whatever you're doing (on the right at full
+  // size; a sheet from the bottom in a docked column or on a phone). Ask it anything and Your team (agents.js) does
+  // the work across the app, told what you're looking at; the campaign, schedule and budget planners are skills it
+  // starts here. Agents (the tab) stays as the place to see the team, approve, undo and set how far each may go.
+  const skdOn = () => toolOn('agents') || toolOn('sidekick');
+  // What's on screen, so “this job” means something. The person can drop it for one question.
+  function skPage() {
+    if (DV.doc) return { kind: 'doc', id: DV.doc.id, label: docTitle(DV.doc) };
+    if (!$('#projects').classList.contains('hidden')) {
+      if (PR.panel) { const l = PIN_KINDS.rec.label(PR.panel); if (l) return { kind: 'record', id: PR.panel, label: l }; }
+      if (PR.open && projById(PR.open)) return { kind: 'project', id: PR.open, label: projById(PR.open).name };
+      return { kind: 'tool', id: 'projects', label: 'Projects' };
+    }
+    if (toolOpen && toolOpen !== 'agents' && TOOLS[toolOpen]) return { kind: 'tool', id: toolOpen, label: TOOLS[toolOpen].name };
+    if (S.tab === 'camps' && K.open && campById(K.open)) return { kind: 'campaign', id: K.open, label: campById(K.open).name };
+    if (S.tab === 'chat' && C.view.startsWith('ch:') && channelById(C.view.slice(3))) return { kind: 'channel', id: C.view.slice(3), label: channelById(C.view.slice(3)).name };
+    if (S.tab === 'column' && S.panes[0]?.startsWith('stack:') && stackById(S.panes[0].slice(6))) return { kind: 'stack', id: S.panes[0].slice(6), label: stackById(S.panes[0].slice(6)).name };
+    if (S.tab === 'day') return { kind: 'day', id: D.date, label: dueLabel(D.date) };
+    return null;
+  }
+  const dockWide = () => document.body.classList.contains('wide');
+  function openDock(view) {
+    if (!skdOn()) return toast('Sidekick is switched off for your team.');
+    SKD.open = true;
+    if (view) SKD.view = view;
+    SKD.noPage = false;
+    document.body.classList.add('sk-open');
+    $('#skDock').hidden = false;
+    $('#skScrim').hidden = dockWide();
+    $('#skBtn')?.classList.add('on');
+    closeSide();
+    if (toolOn('agents') && !AG.data) loadAgents();
+    renderDock(true);
+    setTimeout(() => { if (SKD.view === 'home') $('#skDock .skd-ask')?.focus({ preventScroll: true }); }, 30);
+  }
+  function closeDock() {
+    if (!SKD.open) return;
+    SKD.open = false;
+    document.body.classList.remove('sk-open');
+    $('#skDock').hidden = true;
+    $('#skScrim').hidden = true;
+    $('#skBtn')?.classList.remove('on');
+  }
+  // A page change (another tab, a job opened) redraws the “looking at” line.
+  const dockPageChanged = () => { if (SKD.open && (SKD.view === 'home' || (SKD.view === 'plan' && !SK.open))) renderDock(); };
+  async function skdAsk(ask, workflow, agent = 'team') {
+    if (SKD.busy) return;
+    SKD.busy = true;
+    renderDock(true);
+    try {
+      const page = SKD.noPage ? null : skPage();
+      const x = await api('POST', '/agents/runs', { agent, ask, workflow, page });
+      if (!AG.data) await loadAgents();
+      if (AG.data) agPut(x);
+      SKD.draft = '';
+      SKD.view = 'run:' + x.id;
+    } catch (e) {
+      if (/AI key|Settings → AI/.test(e.message)) toast(e.message, { label: 'Open Settings', run: () => openSettings('connections', '.ai') });
+      else toast(e.message);
+    }
+    SKD.busy = false;
+    renderDock(true);
+  }
+  function skdHome(pg) {
+    const agentsOk = toolOn('agents');
+    const noKey = AG.data && !AG.data.ai;
+    const ta = h('textarea', { class: 'skd-ask', rows: 3, placeholder: pg && !SKD.noPage ? `Ask about ${pg.label}, or anything: plan my week, follow up with quiet customers, organize this job…` : 'What do you need? Plan my week · Follow up with customers who went quiet · Organize a new job · Plan next month’s marketing', 'aria-label': 'Ask Sidekick' });
+    ta.value = SKD.draft;
+    ta.addEventListener('input', () => (SKD.draft = ta.value));
+    const go = h('button', { class: 'btn primary-btn skd-go', disabled: SKD.busy || noKey }, SKD.busy ? 'Sending…' : 'Ask');
+    go.addEventListener('click', () => (ta.value.trim() ? skdAsk(ta.value.trim()) : ta.focus()));
+    ta.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); go.click(); } });
+    const chip = (label, run, on = true) => (on ? h('button', { class: 'chip', disabled: SKD.busy, onclick: run }, label) : null);
+    const plan = (kind) => () => { SKD.view = 'plan'; SK.open = null; skStart(kind); };
+    // Waiting for a yes first, then what you've worked on lately: assignments and plans together, newest first.
+    const waiting = agentsOk && AG.data ? agWaiting() : [];
+    const recent = [
+      ...(agentsOk && AG.data ? AG.data.runs.slice(0, 12).map((x) => ({ at: x.createdAt, el: () => agRunRow(x, waiting.includes(x) ? 'Needs your yes' : null) })) : []),
+      ...(toolOn('sidekick') ? (S.sidekick || []).filter((y) => y.status !== 'done').slice(0, 8).map((y) => ({ at: y.updatedAt, el: () => h('button', { class: 'ag-run-row', onclick: () => { SK.open = y.id; SKD.view = 'plan'; renderDock(true); } },
+        h('span', { class: 'ag-ic sm' }, '✦'), h('span', { class: 'ag-run-t' }, h('b', {}, y.title), h('small', {}, `${{ schedule: 'Schedule', money: 'Budget' }[y.kind] || 'Campaign'} plan · ${ago(y.updatedAt)}`)), h('span', { class: 'ag-chip' }, skStatus(y))) })) : []),
+    ].sort((a, b) => b.at - a.at).slice(0, 12);
+    return [
+      noKey ? h('div', { class: 'ag-nokey' }, h('span', {}, 'Sidekick works on your own AI key. Add one first.'), h('button', { class: 'btn small primary-btn', onclick: () => openSettings('connections', '.ai') }, 'Add a key')) : null,
+      agentsOk ? h('div', { class: 'ag-box skd-box' }, ta, h('div', { class: 'ag-box-f' }, h('small', { class: 'day-hint' }, 'Your team does the work, and asks before anything important'), go)) : null,
+      h('div', { class: 'skd-chips' },
+        chip('Plan my day', () => skdAsk('', 'plan_day', 'chief'), agentsOk),
+        chip('Plan a campaign', plan('campaign'), toolOn('sidekick')),
+        chip('Plan my schedule', plan('schedule'), toolOn('sidekick')),
+        chip('Plan my budget', plan('money'), toolOn('sidekick')),
+        chip('Follow-up radar', () => skdAsk('', 'radar', 'sales'), agentsOk)),
+      waiting.length ? h('div', { class: 'ag-sec-h' }, h('b', {}, 'Waiting for your yes')) : null,
+      ...waiting.map((x) => agRunRow(x, `${agSteps(x).filter((st) => st.status === 'proposed').length} to approve`)),
+      recent.length ? h('div', { class: 'ag-sec-h' }, h('b', {}, 'Recent')) : null,
+      recent.length ? h('div', { class: 'ag-runs' }, recent.map((r) => r.el())) : h('p', { class: 'day-hint' }, 'Ask for something, or start with a plan above. What gets done lands in your tasks, calendar, jobs, campaigns and docs.'),
+      agentsOk ? h('button', { class: 'linkish skd-team', onclick: () => { closeDock(); agOpen('team'); } }, 'Your team: approvals, settings and schedules ›') : null,
+    ];
+  }
+  function renderDock(force) {
+    const el = $('#skDock');
+    if (!SKD.open || !el) return;
+    if (!force && el.contains(document.activeElement) && document.activeElement.matches('input, textarea, select')) return;
+    const body = el.querySelector('.skd-body');
+    const keep = body ? body.scrollTop : 0;
+    let view = SKD.view;
+    let content;
+    if (view.startsWith('run:')) {
+      if (!AG.data) { loadAgents(); content = [h('p', { class: 'day-hint' }, 'Loading…')]; }
+      else { const x = AG.data.runs.find((y) => y.id === view.slice(4)); if (x) content = agRunView(x); else view = SKD.view = 'home'; }
+    } else if (view === 'plan') {
+      const x = SK.open && skById(SK.open);
+      if (x) content = skView(x);
+      else if (SK.busy) content = [h('p', { class: 'day-hint' }, 'Starting your plan…')];
+      else view = 'home'; // shows the start, but a plan that's on its way (from a campaign, Finance) still opens here
+    }
+    const pg = skPage();
+    // Leaving a page out is for that page: another page counts again.
+    const pk = pg ? pg.kind + ':' + pg.id : '';
+    if (pk !== SKD.pageKey) { SKD.pageKey = pk; SKD.noPage = false; }
+    if (view === 'home') content = skdHome(pg);
+    el.replaceChildren(...[
+      h('div', { class: 'skd-head' },
+        view !== 'home' ? h('button', { class: 'icon-btn', 'aria-label': 'Back to Sidekick', title: 'Back', html: I.left, onclick: () => { SKD.view = 'home'; SK.open = null; renderDock(true); } }) : null,
+        h('b', { class: 'skd-title' }, '✦ Sidekick'),
+        h('button', { class: 'icon-btn', 'aria-label': 'Close Sidekick', title: 'Close', html: I.close, onclick: closeDock })),
+      view === 'home' && pg ? h('div', { class: 'skd-page' + (SKD.noPage ? ' off' : '') },
+        h('span', {}, SKD.noPage ? 'Not using this page' : 'Looking at ', SKD.noPage ? null : h('b', {}, pg.label)),
+        h('button', { class: 'linkish', onclick: () => { SKD.noPage = !SKD.noPage; renderDock(true); } }, SKD.noPage ? 'Use it' : 'Leave it out')) : null,
+      h('div', { class: 'skd-body' }, ...(content || []).filter(Boolean))].filter(Boolean));
+    el.querySelector('.skd-body').scrollTop = view === SKD.lastView ? keep : 0;
+    SKD.lastView = view;
+  }
+  $('#skBtn').addEventListener('click', () => (SKD.open ? closeDock() : openDock()));
+  $('#skScrim').addEventListener('click', closeDock);
+  // A click inside the panel: links in an assignment (‹ Your team, another assignment) stay in the panel.
+  $('#skDock').addEventListener('click', () => { SKD.here = true; setTimeout(() => (SKD.here = false), 0); }, true);
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && SKD.open && !dockWide() && !document.querySelector('#sheet:not(.hidden)')) closeDock(); });
+  // ⌘J (Ctrl+J) opens and closes it from anywhere.
+  document.addEventListener('keydown', (e) => { if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'j' && S.token) { e.preventDefault(); SKD.open ? closeDock() : openDock(); } });
+
   function sidekickTool() {
     const x = SK.open && skById(SK.open);
     if (x) return skView(x);

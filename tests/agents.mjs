@@ -242,6 +242,18 @@ try {
   ok(x.status === 'failed' && /restarted/.test(x.error) && x.parts[0].steps[0].status === 'done', 'after a restart mid-run: marked as interrupted, keeping what it had done');
   ok((await ada('GET', '/state')).body.tasks.some((y) => y.text === 'Made before the restart'), 'and what it made is still there');
 
+  // ----- Sidekick (2026-11-14): asked from a page, the team hears what the person is looking at -----
+  {
+    const before = asked.length;
+    r = await ada('POST', '/agents/runs', { agent: 'chief', ask: 'follow up more on this', page: { kind: 'campaign', id: 'c_spring', label: 'Spring push' } });
+    ok(r.status === 200 && r.body.page?.label === 'Spring push', 'an assignment keeps the page it was asked from');
+    for (let i = 0; i < 60 && !asked.slice(before).some((a) => a.msgs.includes('Spring push')); i++) await sleep(100);
+    ok(asked.slice(before).some((a) => a.msgs.includes('looking at') && a.msgs.includes('Spring push') && a.msgs.includes('c_spring')), 'and the agent is told what the person is looking at');
+    const junk = await ada('POST', '/agents/runs', { agent: 'chief', ask: 'follow up more', page: { kind: '<script>', id: 'x'.repeat(500), label: 'y'.repeat(900) } });
+    ok(junk.status === 200 && !junk.body.page, 'a page of an unknown kind is dropped');
+    for (let i = 0; i < 60; i++) { const d = (await ada('GET', '/agents')).body; if (!d.runs.some((x) => ['requested', 'planning', 'running'].includes(x.status))) break; await sleep(150); }
+  }
+
   // ----- Stop, delete, switch off -----
   r = await ada('POST', `/agents/runs/${done1.id}/delete`);
   ok(r.status === 200 && (await ada('GET', '/agents/runs/' + done1.id)).status === 404, 'an assignment can be deleted');
