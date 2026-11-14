@@ -91,7 +91,7 @@ try {
   const main = await A.ev(rect('#main'));
   ok(dock.w >= 380 && dock.r >= (await A.ev('innerWidth')) - 1 && main.r <= dock.l + 1, `at full size it sits on the right, beside the page (${JSON.stringify({ dock, main })})`);
   ok(await A.until(`document.querySelector('#skDock .skd-page')?.textContent.startsWith('Looking at')`), 'it says what you are looking at (your Day)');
-  ok(await A.ev(`[...document.querySelectorAll('#skDock .skd-chips .chip')].map((b) => b.textContent).join('|')`) === 'Plan my day|Plan a campaign|Plan my schedule|Plan my budget|Follow-up radar', 'with plans to start from: the team’s and the planners’');
+  ok(await A.ev(`[...document.querySelectorAll('#skDock .skd-chips .chip')].map((b) => b.textContent).join('|')`) === '✦ Plan my business|Plan my day|Plan a campaign|Plan my schedule|Plan my budget|Follow-up radar', 'with plans to start from: the team’s and the planners’');
 
   // Ask: the team does it, and the assignment shows right there.
   await A.tap(`document.querySelector('#skDock .skd-ask')`);
@@ -108,6 +108,15 @@ try {
   await A.tap(`document.querySelector('#skDock .skd-head [aria-label="Back to Sidekick"]')`);
   await A.tap(`document.querySelector('#skDock .skd-page .linkish')`);
   ok(await A.until(`document.querySelector('#skDock .skd-page').classList.contains('off')`), 'the page can be left out of a question');
+
+  // Plan my business: the whole setup proposed as drafts, nothing changed until you say yes.
+  await A.tap(`document.querySelector('#skDock .skd-head [aria-label="Back to Sidekick"]')`).catch(() => {});
+  await A.until(`!!document.querySelector('#skDock .skd-chips')`);
+  await A.tap(`[...document.querySelectorAll('#skDock .skd-chips .chip')].find((b) => b.textContent.includes('Plan my business'))`);
+  ok(await A.until(`document.querySelector('#skDock .ag-run-h')?.textContent.includes('Plan my business')`, 8000), 'Plan my business opens as an assignment in the panel');
+  ok(await A.until(`[...document.querySelectorAll('#skDock .ag-step')].some((x) => x.textContent.includes('Task from the panel')) && !!document.querySelector('#skDock .ag-step .primary-btn, #skDock .ag-note .primary-btn')`, 12000), 'its changes wait for a yes, with buttons to approve');
+  ok(asked.some((a) => a.msgs.includes('plan for the person to review') && a.msgs.includes('Plan my business')), 'the team is told it is a plan to review');
+  await A.tap(`document.querySelector('#skDock .skd-head [aria-label="Back to Sidekick"]')`);
 
   // It stays beside your work: a tool, Projects.
   await A.click('#tabs [data-tab=contacts]');

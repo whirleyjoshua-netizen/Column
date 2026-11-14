@@ -29,7 +29,7 @@ export const AGENTS = {
       'Turns commitments in emails you paste into tasks',
       'Prepares your end-of-day summary and plans the week',
     ],
-    tools: ['look_at_day', 'list_tasks', 'find_records', 'read_record', 'list_campaigns', 'team_schedule', 'plan_route', 'find_docs', 'read_doc', 'create_task', 'update_task', 'schedule_time', 'move_time', 'write_doc', 'post_to_chat', 'notify_me'],
+    tools: ['look_at_day', 'list_tasks', 'find_records', 'read_record', 'list_campaigns', 'team_schedule', 'plan_route', 'find_docs', 'read_doc', 'look_at_money', 'set_budget', 'add_bill', 'create_task', 'update_task', 'schedule_time', 'move_time', 'write_doc', 'post_to_chat', 'notify_me'],
     workflows: [
       { key: 'briefing', name: 'Morning briefing', ask: 'Give me my morning briefing: what matters today, what is overdue or at risk, and the first thing I should do. Keep it short.', sched: { days: [1, 2, 3, 4, 5], at: 7 * 60 } },
       { key: 'plan_day', name: 'Plan my day', ask: 'Plan my day today: put my tasks into open time around what is already booked, most important first, with breaks, and tell me what won’t fit and what to move or hand off.' },
@@ -355,6 +355,44 @@ export function agentsModule({ sees = () => true, db, save, broadcast, rid, clea
         const body = { text: a.text, due: isDay(a.due) ? a.due : null, priority: [0, 1, 2].includes(Number(a.priority)) ? Number(a.priority) : 0, ...who(cx, a.assignee), ...(a.record_id ? { recordId: a.record_id } : {}) };
         const r = await cx.call('POST', '/api/tasks', body);
         return done(r, { kind: 'task', id: r.body?.id, label: r.body?.text }, { undo: { method: 'DELETE', path: '/api/tasks/' + r.body?.id } });
+      },
+    },
+    // ----- money: budgets and bills (Finance), for planning the business -----
+    look_at_money: {
+      kind: 'read', label: () => 'Looked at budgets and bills',
+      description: 'The person’s monthly budgets and the bills they track in Finance (business ones too, for an owner): category and monthly limit; bill name, amount, how often and next due date. Look before proposing budgets or bills, so you don’t add one twice.',
+      parameters: { type: 'object', properties: {} },
+      async run(cx) {
+        const owner = cx.ws.members.find((mb) => mb.id === cx.memberId)?.role === 'owner';
+        const mine = (x) => x.wsId === cx.ws.id && (x.memberId === cx.memberId || (x.scope === 'business' && owner));
+        const dollars = (c) => Math.round(c) / 100;
+        return {
+          budgets: Object.values(db.budgets || {}).filter(mine).map((b) => ({ category: b.category, perMonth: dollars(b.limit), scope: b.scope })),
+          bills: Object.values(db.bills || {}).filter((b) => mine(b) && !b.stopped).map((b) => ({ name: b.name, amount: dollars(b.amount), repeat: b.repeat, due: b.due, scope: b.scope, autopay: !!b.autopay })).slice(0, 60),
+          canUseBusiness: owner,
+        };
+      },
+    },
+    set_budget: {
+      kind: 'write', label: (a) => `Budget: ${words(a.category, 40)} · $${Number(a.limit) || 0} a month${a.scope === 'business' ? ' (business)' : ''}`,
+      description: 'Set a monthly budget in Finance for a spending category (Fuel, Ads, Materials, Software…), in dollars. scope: business (owners only; shared with the owners) or personal. Kloomie warns on the Day when one is nearly used.',
+      parameters: { type: 'object', properties: { category: { type: 'string' }, limit: { type: 'number', description: 'Dollars per month' }, scope: { type: 'string', enum: ['business', 'personal'] }, why: { type: 'string' } }, required: ['category', 'limit'] },
+      check(cx, a) { if (!cleanText(a.category, 40) || !(Number(a.limit) > 0)) throw new Error('A budget needs a category and a monthly amount above 0.'); },
+      async run(cx, a) {
+        const scope = a.scope === 'business' ? 'business' : 'personal';
+        const before = Object.values(db.budgets || {}).find((b) => b.wsId === cx.ws.id && b.memberId === cx.memberId && b.scope === scope && String(b.category).toLowerCase() === String(a.category).trim().toLowerCase());
+        const r = await cx.call('PUT', '/api/budgets', { category: a.category, limit: Number(a.limit), scope });
+        return done(r, { kind: 'budget', id: r.body?.id, label: a.category }, { undo: { method: 'PUT', path: '/api/budgets', body: { category: a.category, scope, limit: before ? before.limit / 100 : 0 } } });
+      },
+    },
+    add_bill: {
+      kind: 'write', label: (a) => `Bill: ${words(a.name, 60)} · $${Number(a.amount) || 0} ${a.repeat || 'monthly'}, next due ${a.due}${a.scope === 'business' ? ' (business)' : ''}`,
+      description: 'Track a bill in Finance: name, amount in dollars, the next date it’s due (YYYY-MM-DD), how often (once, weekly, monthly, quarterly, yearly), business (owners only) or personal. It shows on the Day when due.',
+      parameters: { type: 'object', properties: { name: { type: 'string' }, amount: { type: 'number' }, due: { type: 'string', description: 'YYYY-MM-DD' }, repeat: { type: 'string', enum: ['once', 'weekly', 'monthly', 'quarterly', 'yearly'] }, scope: { type: 'string', enum: ['business', 'personal'] }, autopay: { type: 'boolean' }, why: { type: 'string' } }, required: ['name', 'amount', 'due'] },
+      check(cx, a) { if (!cleanText(a.name, 80) || !isDay(a.due) || !(Number(a.amount) >= 0)) throw new Error('A bill needs a name, an amount and a due date (YYYY-MM-DD).'); },
+      async run(cx, a) {
+        const r = await cx.call('POST', '/api/bills', { name: a.name, amount: Number(a.amount), due: a.due, repeat: a.repeat || 'monthly', scope: a.scope === 'business' ? 'business' : 'personal', autopay: !!a.autopay });
+        return done(r, { kind: 'bill', id: r.body?.id, label: a.name }, { undo: { method: 'DELETE', path: '/api/bills/' + r.body?.id } });
       },
     },
     update_task: {
@@ -1033,7 +1071,7 @@ export function agentsModule({ sees = () => true, db, save, broadcast, rid, clea
       // A change: done now, or kept for a yes.
       step.args = args;
       part.steps.push(step);
-      const ask = level === 'observe' ? 'suggest' : level === 'prepare' || tool.important || x.sawPrivate ? 'propose' : 'run';
+      const ask = x.asPlan ? 'propose' : level === 'observe' ? 'suggest' : level === 'prepare' || tool.important || x.sawPrivate ? 'propose' : 'run';
       // A draft that can't work (a missing picture, a bad time, nobody to email) goes back to be fixed, not to the person.
       if (tool.check && ask !== 'run') {
         try { tool.check(cx, args); } catch (e) { step.status = 'failed'; step.error = cleanText(e.message, 300); news(x); throw e; }
@@ -1051,7 +1089,7 @@ export function agentsModule({ sees = () => true, db, save, broadcast, rid, clea
       }
       return applyStep(x, cx, step, part);
     };
-    const history = [...(part.history || []), { role: 'user', text: !part.reply && (x.parts.length > 1 || part.from) ? handoffContext(x, part) : [part.ask, !part.reply && !(part.history || []).length ? pageLine(x.page) : ''].filter(Boolean).join('\n\n') }];
+    const history = [...(part.history || []), { role: 'user', text: !part.reply && (x.parts.length > 1 || part.from) ? handoffContext(x, part) : [part.ask, ...(!part.reply && !(part.history || []).length ? [pageLine(x.page), planLine(x)] : [])].filter(Boolean).join('\n\n') }];
     try {
       const out = await llmRun(ws, x.memberId, { system: systemFor(ws, x.memberId, part.agent, level, prefs, x.agent === 'team') + (a.tools.includes('make_image') && !pics ? '\n\nPictures: there is no OpenAI or Gemini key on this account, so you can’t make pictures. Don’t try; suggest real job photos, and mention once that adding an OpenAI or Gemini key in Settings → AI lets you make them.' : ''), history, tools, exec, task: part.agent === 'sales' ? 'customer' : part.agent === 'ops' ? 'jobs' : 'plan' });
       part.report = cleanText(out, 6000);
@@ -1071,6 +1109,7 @@ export function agentsModule({ sees = () => true, db, save, broadcast, rid, clea
     return [
       `The request from the person: ${x.ask}`,
       pageLine(x.page),
+      planLine(x),
       part.ask && part.ask !== x.ask ? `Your part: ${part.ask}` : '',
       ...before.map((p) => `What the ${AGENTS[p.agent].name} did:\n${p.steps.filter((s) => s.kind !== 'read').map((s) => `- ${s.label} [${s.status}]${s.changed?.length ? ' ids: ' + s.changed.map((c) => `${c.kind} ${c.id}`).join(', ') : ''}`).join('\n') || '- nothing changed'}\nTheir report: ${p.report || p.error || ''}`),
     ].filter(Boolean).join('\n\n').slice(0, MAX_TURN_CHARS);
@@ -1167,7 +1206,7 @@ export function agentsModule({ sees = () => true, db, save, broadcast, rid, clea
 - marketing: Marketing Manager (reaching many people: marketing plans, campaigns, email campaigns, social and Google posts, pictures, reviews and referrals, what's working)
 Give the request to the one specialist whose job it is. Most requests need only one: planning the person's own day, week or tasks is the Chief of Staff alone; a lead or customer is Sales alone; a job to deliver is Operations alone; posts, campaigns or getting more customers is Marketing alone. Split it (2 or at most 3 assignments, in the order they should happen) only when it clearly needs work from more than one area, like a new customer who needs a quote and a visit booked. Each specialist can also bring in another partway through if it turns out they need to, so don't add one just in case. If the request is too unclear to start, ask one short question instead.
 Reply with JSON only: {"summary":"one line on the plan","parts":[{"agent":"chief|sales|ops|marketing","ask":""}],"question":null}`;
-    const out = await llmRun(ws, x.memberId, { system, history: [{ role: 'user', text: [x.ask, pageLine(x.page)].filter(Boolean).join('\n\n') }], tools: [], exec: () => Promise.reject(new Error('No tools')), task: 'plan' });
+    const out = await llmRun(ws, x.memberId, { system, history: [{ role: 'user', text: [x.ask, pageLine(x.page), planLine(x)].filter(Boolean).join('\n\n') }], tools: [], exec: () => Promise.reject(new Error('No tools')), task: 'plan' });
     let j = {};
     try { j = JSON.parse(String(out).slice(String(out).indexOf('{'), String(out).lastIndexOf('}') + 1)); } catch {}
     if (j.question && !(Array.isArray(j.parts) && j.parts.length)) return { question: cleanText(j.question, 300) };
@@ -1179,10 +1218,12 @@ Reply with JSON only: {"summary":"one line on the plan","parts":[{"agent":"chief
   // Their own words about their own screen: it only steers the agents, whose tools still see only what they can.
   const PAGE_KINDS = { record: 'Job or record', project: 'Project', campaign: 'Campaign', doc: 'Doc', contact: 'Contact', channel: 'Chat feed', stack: 'Stack', day: 'Their Day', tool: 'Tool' };
   const cleanPage = (p) => (p && typeof p === 'object' && PAGE_KINDS[p.kind] ? { kind: p.kind, id: cleanText(String(p.id || ''), 60), label: cleanText(String(p.label || ''), 120) } : null);
+  // A plan (Plan my business): every change is held as a draft the person approves one by one, at any level.
+  const planLine = (x) => (x.asPlan ? 'This is a plan for the person to review: every change you make is held as a draft they approve one by one, so propose the whole plan now (do not ask first), each change separately, and say in your report how the pieces fit together.' : '');
   const pageLine = (pg) => (pg ? `The person is looking at: ${PAGE_KINDS[pg.kind]} “${pg.label}”${pg.id ? ` (id ${pg.id})` : ''}. When they say “this” or “here”, they mean it.` : '');
-  function newRun(ws, memberId, { agent, ask, title, workflow = null, scheduled = false, page = null }) {
+  function newRun(ws, memberId, { agent, ask, title, workflow = null, scheduled = false, page = null, plan = false }) {
     const x = {
-      id: rid(), wsId: ws.id, memberId, agent, page: cleanPage(page), ask: cleanText(ask, MAX_TURN_CHARS), title: cleanText(title, 120) || cleanText(String(ask).split('\n')[0], 120),
+      id: rid(), wsId: ws.id, memberId, agent, page: cleanPage(page), asPlan: !!plan, ask: cleanText(ask, MAX_TURN_CHARS), title: cleanText(title, 120) || cleanText(String(ask).split('\n')[0], 120),
       workflow, scheduled, status: 'requested', createdAt: Date.now(), parts: agent === 'team' ? [] : [{ id: rid(6), agent, ask: cleanText(ask, MAX_TURN_CHARS), status: 'planned', steps: [] }],
     };
     db.agentRuns[x.id] = x;
@@ -1281,7 +1322,7 @@ Reply with JSON only: {"summary":"one line on the plan","parts":[{"agent":"chief
       const ask = wf ? wf.ask + (wf.paste ? extra : extra ? `\n\nAlso: ${extra}` : '') : extra;
       if (!ask.trim() || (wf?.paste && !extra)) return send(res, 400, { error: wf?.paste ? 'Paste or describe it first.' : 'Say what you need.' });
       if (runsOf(ws.id, auth.memberId).filter((x) => ['requested', 'planning', 'running'].includes(x.status)).length >= 3) return send(res, 429, { error: 'Your team is busy with three assignments. Wait for one to finish.' });
-      const x = newRun(ws, auth.memberId, { agent, ask, title: wf ? wf.name + (extra && !wf.paste ? '' : '') : body.title, workflow: wf?.key || null, page: body.page });
+      const x = newRun(ws, auth.memberId, { agent, ask, title: wf ? wf.name + (extra && !wf.paste ? '' : '') : body.title, workflow: wf?.key || null, page: body.page, plan: body.plan === true });
       return send(res, 200, publicRun(x));
     }
     const x = b === 'runs' && c && db.agentRuns[c];

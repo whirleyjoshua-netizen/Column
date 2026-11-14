@@ -9280,7 +9280,7 @@
     execute: ['Execute', 'Makes routine changes itself (tasks, time, records, docs). Emails wait for your yes.'],
     automate: ['Automate', 'As Execute, and runs its scheduled workflows on its own.'],
   };
-  const AG_TOOL_NAMES = { look_at_day: 'Your calendar and day', list_tasks: 'Tasks', list_projects: 'Projects (the setup)', find_records: 'Jobs, leads and deals', read_record: 'A record’s full history', list_campaigns: 'Campaigns', find_contacts: 'Contacts', team_schedule: 'The team’s visits', plan_route: 'Routes', find_docs: 'Docs', read_doc: 'A doc’s text', create_task: 'Make tasks', update_task: 'Reschedule, reassign or finish tasks', schedule_time: 'Put time on your calendar', move_time: 'Move time it put there', save_contact: 'Save contacts', create_project: 'Start projects', create_record: 'Add jobs, leads, deals…', update_record: 'Update records', log_note: 'Log calls and notes', book_visit: 'Book visits', write_doc: 'Write docs', draft_email: 'Draft emails', notify_me: 'Send you a heads-up', marketing_snapshot: 'What’s bringing in work (leads by source, jobs won, campaigns, posts)', find_customers: 'Past and recent customers', list_channels: 'Your social channels', social_posts: 'Your posts in Postiz', create_campaign: 'Start campaigns with goals and tasks', make_list: 'Make lists of people to reach', make_image: 'Make pictures (on your OpenAI or Gemini key)', draft_social_post: 'Draft social and Google posts', draft_email_campaign: 'Draft email campaigns', find_photos: 'Your photos (Folders, Stacks, job photos, chat)', post_to_chat: 'Post in your team’s chat feeds', look_at_photos: 'Look at photos to pick the right ones' };
+  const AG_TOOL_NAMES = { look_at_money: 'Budgets and bills', set_budget: 'Budgets', add_bill: 'Bills', look_at_day: 'Your calendar and day', list_tasks: 'Tasks', list_projects: 'Projects (the setup)', find_records: 'Jobs, leads and deals', read_record: 'A record’s full history', list_campaigns: 'Campaigns', find_contacts: 'Contacts', team_schedule: 'The team’s visits', plan_route: 'Routes', find_docs: 'Docs', read_doc: 'A doc’s text', create_task: 'Make tasks', update_task: 'Reschedule, reassign or finish tasks', schedule_time: 'Put time on your calendar', move_time: 'Move time it put there', save_contact: 'Save contacts', create_project: 'Start projects', create_record: 'Add jobs, leads, deals…', update_record: 'Update records', log_note: 'Log calls and notes', book_visit: 'Book visits', write_doc: 'Write docs', draft_email: 'Draft emails', notify_me: 'Send you a heads-up', marketing_snapshot: 'What’s bringing in work (leads by source, jobs won, campaigns, posts)', find_customers: 'Past and recent customers', list_channels: 'Your social channels', social_posts: 'Your posts in Postiz', create_campaign: 'Start campaigns with goals and tasks', make_list: 'Make lists of people to reach', make_image: 'Make pictures (on your OpenAI or Gemini key)', draft_social_post: 'Draft social and Google posts', draft_email_campaign: 'Draft email campaigns', find_photos: 'Your photos (Folders, Stacks, job photos, chat)', post_to_chat: 'Post in your team’s chat feeds', look_at_photos: 'Look at photos to pick the right ones' };
   const AG_STATUS = { requested: 'Starting', planning: 'Planning', running: 'Working', awaiting: 'Needs your yes', completed: 'Done', failed: 'Didn’t finish', blocked: 'Has a question', cancelled: 'Stopped' };
   const AG_DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
   const agRunning = (x) => ['requested', 'planning', 'running'].includes(x.status);
@@ -16425,13 +16425,15 @@
   }
   // A page change (another tab, a job opened) redraws the “looking at” line.
   const dockPageChanged = () => { if (SKD.open && (SKD.view === 'home' || (SKD.view === 'plan' && !SK.open))) renderDock(); };
-  async function skdAsk(ask, workflow, agent = 'team') {
+  // Plan my business: the team proposes the whole setup as drafts to approve one by one (agents.js asPlan).
+  const BUSINESS_ASK = 'Plan my business. Use what you know about it (Company HQ: what we do, our customers, how we work, our goals) and look at what is already set up first, so nothing is added twice. Propose, as separate changes I can approve one by one: the projects to track our work (from a template, or a list of our own) if we don’t have them; the campaigns to bring in work, with goals; a weekly schedule of time blocks for me (selling, doing the work, admin); monthly budgets for our main costs and the recurring bills to track; and the first tasks to get it going. Then write it up as a one-page plan doc, including the automations worth setting up later. If you know too little about the business, say what to fill in under Company HQ first and keep the plan short.';
+  async function skdAsk(ask, workflow, agent = 'team', plan = false) {
     if (SKD.busy) return;
     SKD.busy = true;
     renderDock(true);
     try {
       const page = SKD.noPage ? null : skPage();
-      const x = await api('POST', '/agents/runs', { agent, ask, workflow, page });
+      const x = await api('POST', '/agents/runs', { agent, ask, workflow, page, ...(plan ? { plan: true, title: 'Plan my business' } : {}) });
       if (!AG.data) await loadAgents();
       if (AG.data) agPut(x);
       SKD.draft = '';
@@ -16465,6 +16467,7 @@
       noKey ? h('div', { class: 'ag-nokey' }, h('span', {}, 'Sidekick works on your own AI key. Add one first.'), h('button', { class: 'btn small primary-btn', onclick: () => openSettings('connections', '.ai') }, 'Add a key')) : null,
       agentsOk ? h('div', { class: 'ag-box skd-box' }, ta, h('div', { class: 'ag-box-f' }, h('small', { class: 'day-hint' }, 'Your team does the work, and asks before anything important'), go)) : null,
       h('div', { class: 'skd-chips' },
+        chip('✦ Plan my business', () => skdAsk(BUSINESS_ASK, null, 'team', true), agentsOk),
         chip('Plan my day', () => skdAsk('', 'plan_day', 'chief'), agentsOk),
         chip('Plan a campaign', plan('campaign'), toolOn('sidekick')),
         chip('Plan my schedule', plan('schedule'), toolOn('sidekick')),

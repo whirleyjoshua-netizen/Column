@@ -43,6 +43,11 @@ const SCRIPTS = {
   'contacts as member': (n) => [[['find_contacts', { query: 'maria' }]], 'Couldn’t open Contacts.'][n],
   'morning briefing': (n) => [[['look_at_day', {}]], 'Briefing: nothing urgent.'][n],
   'follow up more': (n) => [[['create_task', { text: 'Second follow-up' }]], 'Added another.'][n],
+  'money plan': (n) => [
+    [['look_at_money', {}]],
+    [['set_budget', { category: 'Fuel', limit: 300, scope: 'business', why: 'Trucks run daily' }], ['add_bill', { name: 'Truck lease', amount: 450, due: today, repeat: 'monthly', scope: 'business', why: 'Fixed cost' }]],
+    'Planned your money: a fuel budget and the truck lease.',
+  ][n],
   'restart test': (n) => [[['create_task', { text: 'Made before the restart' }]], 'never'][n],
 };
 const ai = http.createServer((req, res) => {
@@ -252,6 +257,37 @@ try {
     const junk = await ada('POST', '/agents/runs', { agent: 'chief', ask: 'follow up more', page: { kind: '<script>', id: 'x'.repeat(500), label: 'y'.repeat(900) } });
     ok(junk.status === 200 && !junk.body.page, 'a page of an unknown kind is dropped');
     for (let i = 0; i < 60; i++) { const d = (await ada('GET', '/agents')).body; if (!d.runs.some((x) => ['requested', 'planning', 'running'].includes(x.status))) break; await sleep(150); }
+  }
+
+  // ----- Plan my business (2026-11-14): money tools, and a plan where every change waits for a yes -----
+  {
+    await ada('PATCH', '/agents/chief', { level: 'execute' });
+    r = await ada('POST', '/agents/runs', { agent: 'chief', ask: 'money plan for the business', plan: true });
+    ok(r.status === 200 && r.body.asPlan === true, 'a plan run is marked as a plan');
+    let x;
+    for (let i = 0; i < 60; i++) { x = (await ada('GET', '/agents/runs/' + r.body.id)).body; if (!['requested', 'planning', 'running'].includes(x.status)) break; await sleep(150); }
+    const steps = x.parts.flatMap((p) => p.steps);
+    const read = steps.find((st) => st.tool === 'look_at_money');
+    ok(read && read.status === 'done', 'it can look at budgets and bills');
+    const bud = steps.find((st) => st.tool === 'set_budget'), bill = steps.find((st) => st.tool === 'add_bill');
+    ok(x.status === 'awaiting' && bud?.status === 'proposed' && bill?.status === 'proposed', 'even at execute, a plan only proposes: the budget and the bill wait for a yes');
+    let st = (await ada('GET', '/state')).body;
+    ok(!st.budgets.some((b) => b.category === 'Fuel') && !st.bills.some((b) => b.name === 'Truck lease'), 'nothing changed yet');
+    r = await ada('POST', `/agents/runs/${x.id}/steps`, { do: 'approve', ids: [bud.id, bill.id] });
+    for (let i = 0; i < 30; i++) { st = (await ada('GET', '/state')).body; if (st.budgets.some((b) => b.category === 'Fuel') && st.bills.some((b) => b.name === 'Truck lease')) break; await sleep(100); }
+    ok(st.budgets.some((b) => b.category === 'Fuel' && b.limit === 30000 && b.scope === 'business'), 'approved: a $300 business fuel budget');
+    ok(st.bills.some((b) => b.name === 'Truck lease' && b.amount === 45000 && b.repeat === 'monthly'), 'and the $450 monthly truck lease bill');
+    x = (await ada('GET', '/agents/runs/' + x.id)).body;
+    const bstep = x.parts.flatMap((p) => p.steps).find((s2) => s2.tool === 'add_bill');
+    r = await ada('POST', `/agents/runs/${x.id}/steps`, { do: 'undo', id: bstep.id });
+    st = (await ada('GET', '/state')).body;
+    ok(r.status === 200 && !st.bills.some((b) => b.name === 'Truck lease'), 'and the bill can be undone');
+    const bud2 = x.parts.flatMap((p) => p.steps).find((s2) => s2.tool === 'set_budget');
+    r = await ada('POST', `/agents/runs/${x.id}/steps`, { do: 'undo', id: bud2.id });
+    st = (await ada('GET', '/state')).body;
+    ok(r.status === 200 && !st.budgets.some((b) => b.category === 'Fuel'), 'so can the budget');
+    r = await ada('GET', '/agents');
+    ok(r.body.agents.chief.tools.some((t) => t.key === 'set_budget') && r.body.agents.chief.tools.some((t) => t.key === 'add_bill'), 'the Chief of Staff lists the money tools');
   }
 
   // ----- Stop, delete, switch off -----
