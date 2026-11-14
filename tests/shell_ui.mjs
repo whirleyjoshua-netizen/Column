@@ -101,12 +101,19 @@ try {
   ok(await A.until(`!${shown('#side')}`, 2000) && (await A.ev(shown('#menuBtn'))), 'the toolbar is hidden, with ☰ in the header');
   await sleep(300);
   ok(await A.ev(`(() => { document.querySelector('#tabs [data-tab=day]').focus(); return document.activeElement !== document.querySelector('#tabs [data-tab=day]'); })()`), 'closed, it can’t be tabbed into');
-  // The owner, later on 2026-11-12: in a column, the tabs go back across the top too (the drawer stays).
-  ok(await A.until(shown('#topTabs')) && (await A.ev(`document.body.classList.contains('column')`)), 'a column has your tabs across the top again');
-  const top = await A.ev(`[...document.querySelectorAll('#topTabs [data-tab]:not(.tab-sub)')].map((b) => b.textContent)`);
-  ok(JSON.stringify(top) === JSON.stringify(labels), `the same tabs as the drawer (${top})`);
-  await A.tap(`document.querySelector('#topTabs [data-tab=day]')`);
-  ok(await A.until(`!document.querySelector('#day').classList.contains('hidden') && document.querySelector('#topTabs [data-tab=day]').classList.contains('on') && document.querySelector('#tabs [data-tab=day]').classList.contains('on')`), 'a tab at the top opens it, marked in both places');
+  // The owner, 2026-11-14: in a column and on a phone, the row across the top is your pins, in the old tab style
+  // (the tabs themselves are in ☰). Nothing pinned, no row.
+  ok(await A.ev(`document.body.classList.contains('column')`) && !(await A.ev(shown('#topTabs'))), 'a column with nothing pinned has no row across the top');
+  const authed = { 'content-type': 'application/json', authorization: 'Bearer ' + a.token };
+  const camp = await (await fetch(APP + 'api/campaigns', { method: 'POST', headers: authed, body: JSON.stringify({ name: 'Spring push' }) })).json();
+  const campId = camp.campaign?.id || camp.id;
+  await fetch(APP + 'api/account/pins', { method: 'PUT', headers: authed, body: JSON.stringify({ pins: [{ go: 'camp:' + campId, label: 'Spring push' }] }) });
+  await A.ev(`location.reload(); true`);
+  ok(await A.until(shown('#topTabs'), 20000), 'pin something and your pins run across the top');
+  const top = await A.ev(`[...document.querySelectorAll('#topTabs button')].filter((b) => getComputedStyle(b).display !== 'none').map((b) => b.dataset.pin || b.dataset.tab || b.className)`);
+  ok(top[0] === 'camp:' + campId && !top.some((x) => ['home', 'day', 'chat', 'agents', 'work'].includes(x)), `only pins up there, not the tabs (${top})`);
+  await A.tap(`document.querySelector('#topTabs [data-pin]')`);
+  ok(await A.until(`document.querySelector('#topTabs [data-pin]').classList.contains('on') && document.querySelector('#tabs [data-pin]').classList.contains('on')`), 'a pin at the top opens it, marked in both places');
   ok(!(await A.ev(shown('#side'))), 'without opening the drawer');
   await A.tap(`document.querySelector('#menuBtn')`);
   ok(await A.until(shown('#side')) && (await A.ev(`!document.querySelector('#scrim').hidden && document.querySelector('#menuBtn').getAttribute('aria-expanded') === 'true'`)), '☰ still opens the drawer over the page');
@@ -141,7 +148,7 @@ try {
   await A.cmd('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
   await A.cmd('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 1 });
   await A.cmd('Emulation.setEmitTouchEventsForMouse', { enabled: true, configuration: 'mobile' });
-  ok(await A.until(`!document.body.classList.contains('column')`, 3000) && !(await A.ev(shown('#topTabs'))), 'a phone (a touch screen) has just the drawer, no tabs across the top');
+  ok(await A.until(`!document.body.classList.contains('column')`, 3000) && (await A.ev(shown('#topTabs [data-pin]'))) && !(await A.ev(shown('#topTabs [data-tab=home]'))), 'a phone has its pins across the top too, and the tabs in the drawer');
   await A.cmd('Emulation.setEmitTouchEventsForMouse', { enabled: false });
   await A.tap(`document.querySelector('#tabs [data-tab=home]') && document.querySelector('#menuBtn')`);
   await A.tap(`document.querySelector('#tabs [data-tab=home]')`);

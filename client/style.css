@@ -139,9 +139,9 @@ body:not(.wide) .menu-btn { display: grid; margin-left: -6px; }
 body:not(.wide) #sideClose { display: grid; }
 /* As a sidebar it's part of the page: previews, sheets and pop-ups go over it (it's a flex item, so its z-index would count). */
 body.wide #side { z-index: auto; }
-/* Tabs across the top, as they were, only in a docked column (body.column: narrow, with a mouse). */
+/* Your pins as tabs across the top, in a docked column and on a phone, when you have any (the tabs are in ☰). */
 #topTabs { display: none; }
-body.column #topTabs { display: flex; }
+body:not(.wide) #topTabs.has-pins { display: flex; }
 #topTabs .tab-ic { display: none; }
 #topTabs .tabs-edit .tab-ic { display: grid; place-items: center; }
 #topTabs .tabs-edit .tab-l { display: none; }

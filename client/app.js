@@ -3226,7 +3226,7 @@
     ]);
   }
 
-  // The same tabs in two places: the side toolbar (#tabs) and, in a docked column, across the top (#topTabs).
+  // The side toolbar (#tabs), and your pins across the top in a docked column or on a phone (#topTabs).
   const tabNavs = () => [$('#tabs'), $('#topTabs')].filter(Boolean);
   function renderTabs() {
     const nav = $('#tabs');
@@ -3241,9 +3241,13 @@
     const pins = pinsShown();
     // In the drawer, Workspace's tabs sit under it (at full size they're across the top of the page instead).
     const sub = (k) => { const b = btn(k, BAR_ITEMS[k].label); b.classList.add('tab-sub'); return b; };
-    for (const n of tabNavs()) n.replaceChildren(btn('home', 'Home'), btn('day', 'Day'), ...barKeys().flatMap((k) => (k === 'work' ? [btn(k, BAR_ITEMS[k].label), ...workKeys().map(sub)] : [btn(k, BAR_ITEMS[k].label)])),
-      ...(pins.length ? [h('span', { class: 'tabs-sep', 'aria-hidden': 'true' }), ...pins.map(pin)] : []),
-      h('button', { class: 'tabs-edit', title: 'Your pins', 'aria-label': 'Your pins', onclick: (e) => { e.stopPropagation(); closeSide(); barSheet(); } }, h('span', { class: 'tab-ic', html: I.edit || '✎' }), h('span', { class: 'tab-l' }, 'Your pins')));
+    const edit = () => h('button', { class: 'tabs-edit', title: 'Your pins', 'aria-label': 'Your pins', onclick: (e) => { e.stopPropagation(); closeSide(); barSheet(); } }, h('span', { class: 'tab-ic', html: I.edit || '✎' }), h('span', { class: 'tab-l' }, 'Your pins'));
+    $('#tabs').replaceChildren(btn('home', 'Home'), btn('day', 'Day'), ...barKeys().flatMap((k) => (k === 'work' ? [btn(k, BAR_ITEMS[k].label), ...workKeys().map(sub)] : [btn(k, BAR_ITEMS[k].label)])),
+      ...(pins.length ? [h('span', { class: 'tabs-sep', 'aria-hidden': 'true' }), ...pins.map(pin)] : []), edit());
+    // In a docked column and on a phone, the row across the top is your pins, as tabs (the owner, 2026-11-14), so
+    // what you keep going back to is one tap away without opening ☰. Nothing pinned, no row.
+    const top = $('#topTabs');
+    if (top) { top.replaceChildren(...pins.map(pin), ...(pins.length ? [edit()] : [])); top.classList.toggle('has-pins', pins.length > 0); }
     $('#workTabs')?.replaceChildren(...workKeys().map((k) => h('button', { 'data-tab': k }, h('span', { class: 'tab-ic', html: TAB_IC[k] || TAB_IC.docs }), h('span', { class: 'tab-l' }, BAR_ITEMS[k].label))));
     markTabs();
     renderChatSide();
