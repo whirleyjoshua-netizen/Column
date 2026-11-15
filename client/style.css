@@ -2928,3 +2928,7 @@ button.as-count.warn { border-left-color: #ffb547; }
 .chat-pane.chat-over { outline: 2px dashed var(--accent); outline-offset: -4px; }
 .msg .who[draggable] { cursor: grab; }
 .menu { max-height: calc(100vh - 24px); overflow-y: auto; }
+
+/* Ask someone in the feed to sign: pick one */
+.ask-picks { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 10px; }
+.ask-pick.on { background: var(--accent, #2563eb); color: #fff; border-color: transparent; }

@@ -1584,7 +1584,11 @@
       if (!it.channelId) a.append(btn(I.stack, it.dirId ? 'Move to a stack (out of the folder)' : 'Move to stack', (b) => stackMenu(it, b)));
     }
     if (inChat(it) && ['file', 'text', 'message'].includes(it.type) && (it.type !== 'message' || stripLinks(it.text))) a.append(btn(I.stack, 'Keep a copy in a stack or folder', (b) => copyMenu(it, b)));
-    if ((isChatView(view) || it.channelId) && signTarget(it)) a.append(btn(I.edit, 'Sign it', () => signInChat(signTarget(it), view || (it.channelId ? 'ch:' + it.channelId : 'chat')), 'sign-btn'));
+    if ((isChatView(view) || it.channelId) && signTarget(it)) {
+      const v = view || (it.channelId ? 'ch:' + it.channelId : 'chat');
+      a.append(btn(I.edit, 'Sign it', () => signInChat(signTarget(it), v), 'sign-btn'));
+      if (feedPeople(it, v).length) a.append(btn(I.share, 'Ask someone in this feed to sign', () => askToSign(signTarget(it), it, v), 'ask-btn'));
+    }
     if (docable(it)) a.append(btn(I.copy, 'Make it a doc', () => makeItDoc(it)));
     if (it.type === 'message' && isMine(it)) a.append(btn(I.edit, 'Edit', (b) => editMessage(b.closest('.msg'), it)));
     if (it.type !== 'message' || isMine(it) || amAdmin()) {
@@ -1998,7 +2002,7 @@
     if (type === 'record') { await prLoadAll(); return openRecord(id); }
     if (type === 'project') return openProject(id);
     if ((type === 'visit' || type === 'invoice') && info?.recordId) { await prLoadAll(); return openRecord(info.recordId); }
-    if (type === 'sign') { const x = SG.list.find((y) => y.id === id); return x ? signSheet(x) : openTool('signs'); }
+    if (type === 'sign') { if (info?.signUrl) return window.open(info.signUrl, '_blank', 'noopener'); const x = SG.list.find((y) => y.id === id); return x ? signSheet(x) : openTool('signs'); }
     if (type === 'contact') { const x = (S.contacts || []).find((y) => y.id === id); return x ? contactSheet(x) : openTool('contacts'); }
     if (type === 'agent') return agOpen('run:' + id);
     if (type === 'meeting') { const x = (S.meetings || []).find((y) => y.id === id); return x ? meetingSheet(x) : openTool('meetings'); }
@@ -2301,7 +2305,7 @@
 
   // ---------- preview ----------
   // standalone: the whole page is this file (a window of its own), so there's nothing to close back to.
-  function openPreview(it, { standalone = false, edit = false, sign = false, mine = false, onSigned = null } = {}) {
+  function openPreview(it, { standalone = false, edit = false, sign = false, mine = false, onSigned = null, ask = null } = {}) {
     if (it.type === 'text' && !standalone) return openDoc(it);
     if (it.type === 'sealed') return sealOpen(it);
     const pv = $('#preview');
@@ -2317,7 +2321,7 @@
     if (k === 'image') pv.append(h('img', { src: fileUrl(it), alt: it.name }));
     else if (k === 'video') pv.append(h('video', { src: fileUrl(it), controls: true, autoplay: true, playsinline: true }));
     else if (k === 'audio') pv.append(h('div', { style: 'color:#fff;font-size:15px' }, it.name), h('audio', { src: fileUrl(it), controls: true, autoplay: true }));
-    else if (k === 'pdf') pv.append(pdfView(it, { sign, mine, onSigned }));
+    else if (k === 'pdf') pv.append(pdfView(it, { sign, mine, onSigned, ask }));
     else if (k === 'text') pv.append(h('pre', { html: linkify(it.text) }));
     else if (k === 'docx') pv.append(wordView(it, { edit, close: () => (standalone ? null : close(true)) }));
     else if (k === 'textfile') {
@@ -8032,6 +8036,23 @@
     try {
       if (!shown) await api('POST', '/items', { type: 'message', text: `✍️ Signed\n${linkToken('file', out.id)}`, ...destOf(view) });
       toast(`Signed: ${out.name}`, { label: 'Open', run: () => openPreview(S.items.find((x) => x.id === out.id) || out) });
+    } catch (e) { toast(e.message); }
+  }
+
+  // Who else is in the feed this item is in (#general: the whole team; a feed with picked people: them and its owner).
+  function feedPeople(it, view) {
+    const chId = viewThread(view) ? S.items.find((x) => x.id === viewThread(view))?.channelId : viewChannel(view) ?? it.channelId;
+    const ch = chId && (S.workspace?.channels || []).find((c) => c.id === chId);
+    const ids = ch?.memberIds ? new Set([ch.ownerId, ...ch.memberIds]) : null;
+    return (S.workspace?.members || []).filter((m) => m.id !== S.me?.memberId && (!ids || ids.has(m.id)));
+  }
+  async function askToSign(target, it, view) {
+    try {
+      const pdf = kind(target) === 'pdf' ? target : (toast('Making a PDF to sign…'), await pdfToSign(target));
+      const chId = viewThread(view) ? S.items.find((x) => x.id === viewThread(view))?.channelId : viewChannel(view) ?? it.channelId;
+      const pv = $('#preview');
+      openPreview(pdf, { sign: true, ask: { feed: chId || 'general', people: feedPeople(it, view), onSent: () => { pv.classList.add('hidden'); pv.innerHTML = ''; } } });
+      toast('Click where they sign, then Next.');
     } catch (e) { toast(e.message); }
   }
 
@@ -15352,16 +15373,17 @@
   // sign: open straight into placing someone else's signature boxes.
   // mine: opened to sign it yourself (from chat): the Sign tool is picked straight away, and onSigned hears about
   // the signed copy once it's saved.
-  function pdfView(it, { docked = false, sign = false, mine = false, onSigned = null } = {}) {
+  // ask: opened from chat to ask a teammate in the feed to sign ({ feed, people, onSent }).
+  function pdfView(it, { docked = false, sign = false, mine = false, onSigned = null, ask = null } = {}) {
     const key = `${it.id}:${it.editedAt || it.createdAt}:${docked ? 'dock' : 'full'}${sign ? ':sign' : ''}`;
-    if (!mine && pdfViews.has(key)) return pdfViews.get(key);
+    if (!mine && !ask && pdfViews.has(key)) return pdfViews.get(key);
     const P = { marks: [], form: {}, fields: [], tool: null, sending: sign, zoom: 1, doc: null, view: null, width: 0, run: 0 };
     const bar = h('div', { class: 'pdf-bar' });
     const hint = h('div', { class: 'pdf-hint hidden' });
     const host = h('div', { class: 'pdf-pages' }, h('p', { class: 'day-hint' }, 'Opening…'));
     const scroll = h('div', { class: 'pdf-scroll' }, host);
     const el = h('div', { class: 'pdf' + (docked ? ' docked' : '') }, bar, h('div', { class: 'pdf-body' }, hint, scroll));
-    if (!mine) pdfViews.set(key, el);
+    if (!mine && !ask) pdfViews.set(key, el);
     if (pdfViews.size > 6) pdfViews.delete(pdfViews.keys().next().value);
     const marks = () => (P.sending ? P.fields : P.marks);
     const dirty = () => P.marks.length > 0 || Object.keys(P.form).length > 0;
@@ -15563,7 +15585,7 @@
         const n = P.fields.length;
         bar.replaceChildren(h('b', { class: 'pdf-what' }, 'Their boxes:'), ...SEND_TOOLS.map(([t, l]) => tool(t, l)), h('span', { class: 'pdf-gap' }),
           h('button', { class: 'btn small', onclick: () => sendMode(false) }, 'Cancel'),
-          h('button', { class: 'btn small primary-btn', disabled: !P.fields.some((f) => f.type === 'sig'), onclick: () => sendSheet(it, P, () => sendMode(false)) }, n ? `Next (${n})` : 'Next'));
+          h('button', { class: 'btn small primary-btn', disabled: !P.fields.some((f) => f.type === 'sig'), onclick: () => (ask ? askSignSheet(it, P, ask) : sendSheet(it, P, () => sendMode(false))) }, n ? `Next (${n})` : 'Next'));
       } else {
         bar.replaceChildren(...[
           h('button', { class: 'btn small', title: 'Smaller', 'aria-label': 'Smaller', onclick: () => zoomBy(-0.25) }, '−'),
@@ -15602,6 +15624,33 @@
     }
     drawBar();
     return el;
+  }
+
+  // Who in this feed signs it: a teammate, asked in the chat (an @mention with the request), who signs in the app.
+  // Someone outside the team goes the usual way, by email.
+  function askSignSheet(it, P, ask) {
+    let who = null;
+    const msg = h('textarea', { rows: 2, placeholder: 'A note for them (optional)' });
+    const picks = h('div', { class: 'picks ask-picks' }, ask.people.length ? ask.people.map((m) => {
+      const b = h('button', { type: 'button', class: 'btn small ask-pick', 'data-id': m.id }, m.name);
+      b.onclick = () => { who = m; picks.querySelectorAll('.ask-pick').forEach((x) => x.classList.toggle('on', x === b)); };
+      return b;
+    }) : h('small', {}, 'Nobody else is in this feed.'));
+    const n = P.fields.length;
+    sheet('Who signs it?', [
+      h('p', { class: 'day-hint' }, `“${it.name}” · ${n} box${n === 1 ? '' : 'es'} for them to fill`),
+      picks, h('label', {}, 'Message', msg),
+      h('p', { class: 'day-hint' }, 'They’re asked right here in the chat and sign in Kloomie. The signed copy lands in this feed. ',
+        h('a', { href: '#', onclick: (e) => { e.preventDefault(); closeSheet(); sendSheet(it, P, () => { P.sending = false; ask.onSent(); }); } }, 'Someone outside the team?')),
+    ], async () => {
+      if (!who) throw new Error('Pick who signs it.');
+      const fields = P.fields.map(({ id, type, page, x, y, w, h: ht }) => ({ id, type, page, x, y, w, h: ht }));
+      const x = await api('POST', '/signs', { itemId: it.id, signerId: who.id, channelId: ask.feed, message: msg.value, fields });
+      upsertSign(x);
+      P.fields = [];
+      ask.onSent(x);
+      toast(`Asked ${who.name} to sign`);
+    }, 'Ask them');
   }
 
   function sendSheet(it, P, done) {

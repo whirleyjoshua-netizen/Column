@@ -2032,6 +2032,11 @@ function linkInfo(ws, auth, type, id) {
   if (type === 'sign') {
     const x = db.signs[id];
     if (!x || x.wsId !== ws.id) return no('A signature request', 'It’s gone');
+    if (x.signerId && x.signerId === auth.memberId) {
+      // The teammate asked to sign: the signing page is theirs alone, while it's open.
+      const st = signStatus(x), open = st === 'sent' || st === 'viewed';
+      return { ok: true, label: x.name, sub: open ? `${x.by} asked you to sign` : `${x.by} asked you to sign · ${st}`, icon: '✍️', toSign: open, ...(open ? { signUrl: signLink(x) } : {}) };
+    }
     if (x.memberId !== auth.memberId) return no(`Signature request: ${x.name}`, `Sent by ${x.by}`);
     return { ok: true, label: x.name, sub: `${x.signer.name} · ${signStatus(x)}`, icon: '✍️' };
   }
@@ -4845,6 +4850,16 @@ function signEvent(x, what, req) {
   x.events.push({ at: Date.now(), what, ...(req ? { ip: clientIp(req), ua: String(req.headers['user-agent'] || '').slice(0, 200) } : {}) });
   x.events = x.events.slice(-200);
 }
+// Asking a teammate in chat: an @mention in the feed with a link to the request (the feed asked from if they're both
+// in it, else the document's own feed). Only the signer's link opens the signing page (linkInfo).
+function askInChat(ws, auth, x, it, mate, from) {
+  const fit = (id) => validChannel(ws, id, auth.memberId) && validChannel(ws, id, mate.id);
+  const chatItem = !it.stackId && !it.dirId;
+  const channelId = from === 'general' ? null : from && fit(from) ? from : chatItem ? it.channelId : null;
+  if (!chatItem && !(from && (from === 'general' || fit(from)))) return;
+  const text = `✍️ @${mate.name}, please sign “${x.name.replace(/\.pdf$/i, '')}”.${x.message ? '\n' + x.message : ''}\n[[sign:${x.id}]]`;
+  addItem(baseItem({ ...auth, wsId: ws.id }, { type: 'message', text, channelId }));
+}
 const utc = (t) => new Date(t).toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
 const CONSENT = 'I agree to use electronic records and signatures for this document. I can ask the sender for a paper copy instead, and I can download a copy of the signed document.';
 
@@ -4967,11 +4982,11 @@ async function signApi(req, res, token, part) {
       rows: [
         ['Document', x.name], ['Pages', `${x.pages} (this certificate is added after them)`], ['Request', x.id],
         ['Fingerprint of the document as sent (SHA-256)', x.hash],
-        ['Sent by', `${x.by}, ${ws?.name || ''}`], ['Signer', `${x.signer.name} <${x.signer.email}>`], ['Signed as', typed], ['Signed', utc(signedAt)],
+        ['Sent by', `${x.by}, ${ws?.name || ''}`], ['Signer', x.signer.email ? `${x.signer.name} <${x.signer.email}>` : `${x.signer.name} (${ws?.name || 'the team'})`], ['Signed as', typed], ['Signed', utc(signedAt)],
       ],
       images: [['Signature', images.sig], ...(images.ini ? [['Initials', images.ini]] : [])],
       events: x.events.map(at),
-      note: 'Made with Kloomie. The signer reached this document through a private link sent to the email address above. Each line of the history shows when it happened, the network address it came from, and the browser used.',
+      note: (x.signerId ? `Made with Kloomie. The signer is on the team ${ws?.name || ''} and was asked in Kloomie; they reached this document through a private link shown only to them while signed in.` : 'Made with Kloomie. The signer reached this document through a private link sent to the email address above.') + ' Each line of the history shows when it happened, the network address it came from, and the browser used.',
     });
     const bytes = await doc.save();
     await fsp.writeFile(signPath(x, true), bytes);
@@ -7359,10 +7374,16 @@ async function api(req, res, url) {
       const it = db.items[body.itemId];
       if (!it || it.wsId !== ws.id || it.status !== 'ready' || !canSee(auth, 'item', it)) return send(res, 404, { error: 'Not found' });
       if (!isPdf(it)) return send(res, 400, { error: 'Only PDFs can be sent for signature.' });
-      const name = cleanText(body.signer?.name, 120);
-      const email = cleanText(body.signer?.email, 200).toLowerCase();
+      // A teammate (signerId) signs in the app: their name and email come from the team, and they have to be
+      // able to see the document. Anyone else is a name and an email.
+      const mate = body.signerId != null ? memberById(ws, String(body.signerId)) : null;
+      if (body.signerId != null && !mate) return send(res, 400, { error: 'They aren’t on this team.' });
+      if (mate && mate.id === auth.memberId) return send(res, 400, { error: 'That’s you. Choose Sign it instead.' });
+      if (mate && !canSee({ ws, memberId: mate.id }, 'item', it)) return send(res, 400, { error: `${mate.name} can’t see this document, so they can’t sign it.` });
+      const name = mate ? mate.name : cleanText(body.signer?.name, 120);
+      const email = mate ? userOf(mate)?.email || '' : cleanText(body.signer?.email, 200).toLowerCase();
       if (!name) return send(res, 400, { error: 'Add the name of the person signing.' });
-      if (!EMAIL_RE.test(email)) return send(res, 400, { error: 'Add their email address.' });
+      if (!mate && !EMAIL_RE.test(email)) return send(res, 400, { error: 'Add their email address.' });
       const fields = cleanMarks(body.fields, SIGN_FIELDS);
       if (fields.length > 100) return send(res, 400, { error: 'That’s too many boxes. 100 at most.' });
       if (!fields.some((f) => f.type === 'sig')) return send(res, 400, { error: 'Add at least one signature box for them.' });
@@ -7373,13 +7394,14 @@ async function api(req, res, url) {
       const x = {
         id: rid(), wsId: ws.id, memberId: auth.memberId, by: auth.member, itemId: it.id, name: it.name, stackId: it.stackId, channelId: it.channelId, dirId: it.dirId || null, docId: it.fromDoc || null,
         campaignId: camp && camp.wsId === ws.id && seesCampaign(camp.id, auth.memberId) ? camp.id : null, taskId: stepOf(ws, auth, body.taskId),
-        signer: { name, email }, message: String(body.message ?? '').replace(/\r\n?/g, '\n').trim().slice(0, 2000), fields, pages,
+        signer: { name, email }, signerId: mate?.id || null, message: String(body.message ?? '').replace(/\r\n?/g, '\n').trim().slice(0, 2000), fields, pages,
         token: rid(24), hash: sha256(bytes), status: 'sent', events: [], createdAt: Date.now(), expiresAt: Date.now() + SIGN_DAYS * 86_400_000,
       };
       await fsp.writeFile(signPath(x), bytes);
       signEvent(x, `Sent by ${auth.member} (${ws.name})`, req);
       db.signs[x.id] = x;
       if (x.taskId) toolStarted(x.taskId, 'sign', x.id, `With ${name} to sign`);
+      if (mate) askInChat(ws, auth, x, it, mate, body.channelId);
       save();
       signNews(x);
       return send(res, 200, publicSign(x));
