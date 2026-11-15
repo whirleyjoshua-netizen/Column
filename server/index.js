@@ -10133,7 +10133,21 @@ const CARDS = cardsModule({ db, save, readJson, send, rid, escHtml, brandOf, log
   memberIn: (...a) => memberIn(...a), isAdminId, contactsOf, newContact, applyContact, emailKey, phoneKey, EMAIL_RE, contactNews, refreshLiveSoon: (...a) => refreshLiveSoon(...a), automate: (...a) => automate(...a),
   hook: (wsId, type, x) => hook(wsId, type, () => API.apiContact(x), 'Business card'), notify: (...a) => notify(...a), CONTACT_MAX, qrSvg });
 // News (news.js): each person's own news from publishers' feeds, ranked by what they like.
-const NEWS = newsModule({ db, save, readJson, send, rid, cleanText, aiAsk: (...a) => aiAsk(...a), replyJson: (...a) => replyJson(...a), toolOn: (ws, k) => !!ws && toolsOf(ws)[k], allowLocal: process.env.ALLOW_LOCAL_FETCH === '1',
+// Kloomie's own AI key (KLOOMIE_AI_KEY, Anthropic), used only for the free news brief for people without a key of
+// their own: a small model, capped per person, per team and in all each day (NEWS_BRIEF_FREE_* to change the caps).
+const HOUSE_AI = { key: process.env.KLOOMIE_AI_KEY || '', model: process.env.KLOOMIE_AI_MODEL || 'claude-haiku-5-5' };
+async function houseAsk(system, prompt) {
+  try {
+    return await complete(llms.anthropic, { key: HOUSE_AI.key, model: HOUSE_AI.model, system, prompt });
+  } catch (e) {
+    console.error('Kloomie AI request failed:', e.status || '', e.message);
+    throw Object.assign(new Error('Couldn’t write a brief right now. Try again in a bit.'), { status: 502 });
+  }
+}
+const freeCap = (name, dflt) => { const n = parseInt(process.env[name], 10); return Number.isFinite(n) && n >= 0 ? n : dflt; };
+const NEWS = newsModule({ db, save, readJson, send, rid, cleanText, aiAsk: (...a) => aiAsk(...a), replyJson: (...a) => replyJson(...a),
+  houseAsk: HOUSE_AI.key ? houseAsk : null, hasOwnAi: (ws, memberId) => { const ai = db.ai[`${ws.id}:${memberId}`]; return !!(ai && aiUse(ai)); },
+  free: { person: freeCap('NEWS_BRIEF_FREE_PER_DAY', 3), team: freeCap('NEWS_BRIEF_FREE_TEAM', 30), total: freeCap('NEWS_BRIEF_FREE_TOTAL', 2000) }, toolOn: (ws, k) => !!ws && toolsOf(ws)[k], allowLocal: process.env.ALLOW_LOCAL_FETCH === '1',
   topics: process.env.ALLOW_LOCAL_FETCH === '1' && process.env.NEWS_TEST_TOPICS ? JSON.parse(process.env.NEWS_TEST_TOPICS) : null });
 const LEADS = leadsModule({ db, save, readJson, send, isAdmin, cleanText, contactsOf, newContact, applyContact, emailKey, phoneKey, EMAIL_RE, contactNews, refreshLiveSoon, automate,
   hook: (wsId, type, x) => hook(wsId, type, () => API.apiContact(x), 'Lead'), notifyAdmins, escHtml, brandOf, logoUrl, clientIp, CONTACT_MAX, publicUrl: PUBLIC_URL, offline, teamDay });

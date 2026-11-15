@@ -30,6 +30,8 @@ const fake = http.createServer((req, res) => {
   if (FEEDS[u]) { res.setHeader('content-type', 'application/rss+xml'); return res.end(FEEDS[u]()); }
   if (u === '/site.html') { res.setHeader('content-type', 'text/html'); return res.end('<html><head><link rel="alternate" type="application/rss+xml" href="/local.xml"></head></html>'); }
   if (u === '/pic.png') { res.setHeader('content-type', 'image/png'); return res.end(PNG); }
+  // Stands in for Anthropic, for the free brief on Kloomie's key.
+  if (u === '/v1/messages') { req.resume(); return req.on('end', () => { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ id: 'm', type: 'message', role: 'assistant', model: 'claude-haiku-5-5', content: [{ type: 'text', text: JSON.stringify({ brief: '- First story in brief [1]', used: [1] }) }], stop_reason: 'end_turn', stop_sequence: null, usage: { input_tokens: 1, output_tokens: 1 } })); }); }
   res.statusCode = 404; res.end('no');
 });
 await new Promise((r) => fake.listen(FEED, '127.0.0.1', r));
@@ -40,7 +42,7 @@ const TOPICS = [
   { id: 'tech', label: 'Technology', group: 'Science & tech', feeds: [] },
   { id: 'hvac', label: 'HVAC', group: 'Trades', feeds: [{ name: 'HVAC Wire', url: F + '/hvac.xml' }] },
 ];
-const srv = spawn('node', ['index.js'], { cwd: new URL('../server', import.meta.url).pathname, env: { ...process.env, PORT: String(PORT), PUBLIC_URL: APP.slice(0, -1), DATA_DIR: DIR + '/data', MAIL_OUTBOX: '', RESEND_API_KEY: '', DATABASE_URL: '', STRIPE_SECRET_KEY: '', SKIP_SETUP: '1', ALLOW_LOCAL_FETCH: '1', NEWS_TEST_TOPICS: JSON.stringify(TOPICS) }, stdio: 'ignore' });
+const srv = spawn('node', ['index.js'], { cwd: new URL('../server', import.meta.url).pathname, env: { ...process.env, PORT: String(PORT), PUBLIC_URL: APP.slice(0, -1), DATA_DIR: DIR + '/data', MAIL_OUTBOX: '', RESEND_API_KEY: '', DATABASE_URL: '', STRIPE_SECRET_KEY: '', SKIP_SETUP: '1', KLOOMIE_AI_KEY: 'sk-ant-house-ui-test', ANTHROPIC_BASE_URL: F, ALLOW_LOCAL_FETCH: '1', NEWS_TEST_TOPICS: JSON.stringify(TOPICS) }, stdio: 'ignore' });
 const chrome = spawn('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', ['--headless=new', `--remote-debugging-port=${CDP}`, `--user-data-dir=${DIR}/chrome`, '--no-first-run', '--window-size=1200,900', 'about:blank'], { stdio: 'ignore' });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let fails = 0;
@@ -149,6 +151,11 @@ try {
   await A.tap(`document.querySelector('#tabs [data-tab=home]')`);
   await A.tap(`[...document.querySelectorAll('#home .home-card.news button')].find((b) => b.textContent === 'Open News')`);
   ok(await A.until(`!document.querySelector('#tool').classList.contains('hidden') && !!document.querySelector('#tool .nw')`), '“Open News” on the Home card opens the tab');
+
+  // Brief me, with no AI key of your own: free from Kloomie, and it says how many are left today.
+  await A.tap(`document.querySelector('#tool .nw-brief-btn')`);
+  ok(await A.until(`/First story in brief/.test(document.querySelector('#tool .nw-brief')?.textContent || '')`), 'Brief me works without your own AI key');
+  ok(await A.ev(`document.querySelector('#tool .nw-free')?.textContent.includes('2 more today')`), 'and says it’s free from Kloomie, with 2 more today');
 
   // A phone
   await A.cmd('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });

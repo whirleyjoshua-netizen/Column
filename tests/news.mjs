@@ -60,7 +60,7 @@ const ai = http.createServer((req, res) => {
     res.setHeader('content-type', 'application/json');
     if (req.url.startsWith('/v1/models')) return res.end(JSON.stringify({ data: [{ id: 'claude-test', display_name: 'T', type: 'model', created_at: '2026-01-01T00:00:00Z' }], has_more: false }));
     const j = JSON.parse(b);
-    seen.push({ system: typeof j.system === 'string' ? j.system : JSON.stringify(j.system), user: j.messages.map((m) => (typeof m.content === 'string' ? m.content : m.content.map((c) => c.text || '').join(''))).join('\n') });
+    seen.push({ model: j.model, key: req.headers['x-api-key'], system: typeof j.system === 'string' ? j.system : JSON.stringify(j.system), user: j.messages.map((m) => (typeof m.content === 'string' ? m.content : m.content.map((c) => c.text || '').join(''))).join('\n') });
     const text = JSON.stringify({ brief: '- Heat pump rebates grow [1]\n- Something else [2][40]', used: [1, 2, 40] });
     res.end(JSON.stringify({ id: 'm', type: 'message', role: 'assistant', model: 'claude-test', content: [{ type: 'text', text }], stop_reason: 'end_turn', stop_sequence: null, usage: { input_tokens: 1, output_tokens: 1 } }));
   });
@@ -74,8 +74,9 @@ const TOPICS = [
   { id: 'hvac', label: 'HVAC', group: 'Trades', feeds: [{ name: 'HVAC Atom', url: F + '/hvac.xml' }] },
 ];
 let srv;
+let extraEnv = {};
 const start = async () => {
-  srv = spawn('node', ['index.js'], { cwd: new URL('../server', import.meta.url).pathname, env: { ...process.env, PORT: String(PORT), PUBLIC_URL: B, DATA_DIR: DIR, MAIL_OUTBOX: '1', RESEND_API_KEY: '', DATABASE_URL: '', STRIPE_SECRET_KEY: '', SKIP_SETUP: '1', ANTHROPIC_BASE_URL: `http://127.0.0.1:${AI}`, ALLOW_LOCAL_FETCH: '1', NEWS_TEST_TOPICS: JSON.stringify(TOPICS) }, stdio: ['ignore', 'pipe', 'pipe'] });
+  srv = spawn('node', ['index.js'], { cwd: new URL('../server', import.meta.url).pathname, env: { ...process.env, KLOOMIE_AI_KEY: '', ...extraEnv, PORT: String(PORT), PUBLIC_URL: B, DATA_DIR: DIR, MAIL_OUTBOX: '1', RESEND_API_KEY: '', DATABASE_URL: '', STRIPE_SECRET_KEY: '', SKIP_SETUP: '1', ANTHROPIC_BASE_URL: `http://127.0.0.1:${AI}`, ALLOW_LOCAL_FETCH: '1', NEWS_TEST_TOPICS: JSON.stringify(TOPICS) }, stdio: ['ignore', 'pipe', 'pipe'] });
   srv.log = ''; srv.stdout.on('data', (d) => (srv.log += d)); srv.stderr.on('data', (d) => (srv.log += d));
   for (let i = 0; i < 100; i++) { try { if ((await fetch(B + '/api/health')).ok) break; } catch {} await sleep(150); }
 };
@@ -236,6 +237,36 @@ try {
   r = await rico('GET', '/news');
   ok(r.status === 200 && JSON.stringify(r.body.prefs.topics) === '["hvac"]' && r.body.prefs.follow[0] === 'permits' && r.body.prefs.home === false, 'choices survive a restart');
   ok(r.body.articles.length === 2, 'and the news is read again after it');
+
+  // Kloomie pays for the brief when someone has no AI key of their own: a small model, a few a day.
+  extraEnv = { KLOOMIE_AI_KEY: 'sk-ant-house-key-000000', NEWS_BRIEF_FREE_PER_DAY: '3', NEWS_BRIEF_FREE_TEAM: '3', NEWS_BRIEF_FREE_TOTAL: '100' };
+  await stop();
+  await start();
+  r = await sam('POST', '/news/brief', {});
+  ok(r.status === 200 && /Heat pump/.test(r.body.text) && r.body.free === true && r.body.left === 2, `no key of your own: a free brief, with how many are left today (${r.status} ${JSON.stringify(r.body).slice(0, 120)})`);
+  ok(seen.at(-1).key === 'sk-ant-house-key-000000' && seen.at(-1).model === 'claude-haiku-5-5', `on Kloomie’s key and the small model (${seen.at(-1).model})`);
+  ok(!/sk-ant-house/.test(JSON.stringify(r.body)), 'the key never goes back to the app');
+  r = await rico('POST', '/news/brief', {});
+  ok(r.status === 200 && !r.body.free && seen.at(-1).key === 'sk-ant-test-key-1234567890', 'someone with their own key still uses theirs, and it doesn’t count');
+  await rico('DELETE', '/ai/keys/anthropic');
+  ok((await sam('POST', '/news/brief', {})).body.left === 1, 'a second free brief');
+  r = await rico('POST', '/news/brief', {});
+  ok(r.status === 200 && r.body.free && r.body.left === 2, 'Rico, now without a key, gets free ones too');
+  r = await sam('POST', '/news/brief', {});
+  ok(r.status === 429 && /team/.test(r.body.error) && /own AI key/.test(r.body.error), `the team’s free briefs for the day run out, even with one of Sam’s left (${r.status} ${r.body.error})`);
+  const calls = seen.length;
+  await sleep(1200);
+  await stop();
+  extraEnv = { ...extraEnv, NEWS_BRIEF_FREE_TEAM: '30' };
+  await start();
+  ok((await sam('POST', '/news/brief', {})).body.left === 0, 'what’s been used today survives a restart (Sam’s third, and last)');
+  r = await sam('POST', '/news/brief', {});
+  ok(r.status === 429 && /3 free briefs/.test(r.body.error) && seen.length === calls + 1, `then Sam’s own free briefs for today run out, with no call to the AI (${r.body.error})`);
+  extraEnv = { ...extraEnv, NEWS_BRIEF_FREE_TOTAL: '4' };
+  await stop();
+  await start();
+  r = await rico('POST', '/news/brief', {});
+  ok(r.status === 429 && /tomorrow/.test(r.body.error) && seen.length === calls + 1, `and a ceiling for all of Kloomie each day (${r.body.error})`);
 } catch (e) {
   ok(false, 'threw: ' + e.stack);
 }

@@ -97,7 +97,9 @@ window.ColumnNews = (deps) => {
     return h('div', { class: 'nw-brief' },
       h('div', { class: 'nw-brief-h' }, h('b', {}, '✦ Your brief'), h('small', {}, ago(NW.brief.at)), h('button', { class: 'icon-btn', 'aria-label': 'Close the brief', onclick: () => { NW.brief = null; redraw(); } }, '×')),
       ...String(NW.brief.text).split('\n').filter((l) => l.trim()).map((l) => h('p', {}, l.replace(/^\s*[-*•]\s*/, '• ').replace(/\*\*/g, ''))),
-      used.length ? h('small', { class: 'nw-also' }, 'From ', ...used.flatMap((x, i) => [i ? ' · ' : '', `[${x.n}] `, safeLink(x.link) ? h('a', { href: safeLink(x.link), target: '_blank', rel: 'noopener noreferrer' }, x.source) : x.source])) : null);
+      used.length ? h('small', { class: 'nw-also' }, 'From ', ...used.flatMap((x, i) => [i ? ' · ' : '', `[${x.n}] `, safeLink(x.link) ? h('a', { href: safeLink(x.link), target: '_blank', rel: 'noopener noreferrer' }, x.source) : x.source])) : null,
+      // A free brief (on Kloomie's key): how many more today.
+      NW.brief.free ? h('small', { class: 'nw-also nw-free' }, NW.brief.left ? `Free from Kloomie · ${NW.brief.left} more today` : 'Free from Kloomie · that’s all for today. Add your own AI key in Settings → AI for more.') : null);
   }
 
   // The tab itself: one lasting root, so the search box keeps its place (and the cursor) while the rest redraws.
@@ -107,7 +109,7 @@ window.ColumnNews = (deps) => {
     let t;
     search.addEventListener('input', () => { NW.q = search.value; clearTimeout(t); t = setTimeout(() => load(true), 350); });
     chips = h('div', { class: 'nw-chips', role: 'tablist' });
-    briefBtn = h('button', { class: 'btn small nw-brief-btn', onclick: doBrief, title: 'A short brief of your top stories, with your own AI key' }, '✦ Brief me');
+    briefBtn = h('button', { class: 'btn small nw-brief-btn', onclick: doBrief, title: 'A short brief of your top stories' }, '✦ Brief me');
     body = h('div', { class: 'nw-main' });
     root = h('div', { class: 'nw' }, h('div', { class: 'nw-top' }, chips,
       h('div', { class: 'nw-tools' }, search, briefBtn,
