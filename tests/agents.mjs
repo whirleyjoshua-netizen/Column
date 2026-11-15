@@ -269,6 +269,7 @@ try {
     const steps = x.parts.flatMap((p) => p.steps);
     const read = steps.find((st) => st.tool === 'look_at_money');
     ok(read && read.status === 'done', 'it can look at budgets and bills');
+    ok(asked.some((q) => q.msgs.includes('plan for the person to review') && q.msgs.includes('Company HQ is empty')), 'a plan tells the agents where Company HQ is, and that no HQ section means it is empty (live, 2026-11-15, they went looking for it in docs)');
     const bud = steps.find((st) => st.tool === 'set_budget'), bill = steps.find((st) => st.tool === 'add_bill');
     ok(x.status === 'awaiting' && bud?.status === 'proposed' && bill?.status === 'proposed', 'even at execute, a plan only proposes: the budget and the bill wait for a yes');
     let st = (await ada('GET', '/state')).body;
