@@ -127,11 +127,29 @@ try {
   ok(await A.until(shown('#projects')) && (await A.ev(rect('#projects'))).r <= (await A.ev(rect('#skDock'))).l + 1, 'Projects fills the space beside it');
   ok(!/\bnull\b/.test(await A.ev(`document.querySelector('#skDock').innerText`)), 'nothing stray in the panel');
 
+  // The campaign's own side panel ("Keep beside") still works: it shares no code with Sidekick's (they were once
+  // both named renderDock, and the second hid the first).
+  {
+    const c = await api('POST', '/campaigns', { name: 'Dock test' });
+    const camp = c.campaign || c;
+    const up = await (await fetch(APP + 'api/upload?name=Script.txt&type=text/plain', { method: 'PUT', headers: { authorization: 'Bearer ' + auth.token }, body: 'Hello, this is the call script.' })).json();
+    await api('PATCH', '/items/' + (up.id || up.item?.id), { stackId: camp.stackId });
+    await A.ev(`document.querySelector('#tabs [data-tab=camps]').click(); true`);
+    ok(await A.until(`[...document.querySelectorAll('.camp-card')].some((b) => b.textContent.includes('Dock test'))`, 8000), 'the campaign is listed');
+    await A.ev(`[...document.querySelectorAll('.camp-card')].find((b) => b.textContent.includes('Dock test')).click(); true`);
+    await A.until(`[...document.querySelectorAll('#camps button')].some((b) => /Files/.test(b.textContent))`, 8000);
+    await A.ev(`[...document.querySelectorAll('#camps button')].find((b) => /Files/.test(b.textContent)).click(); true`);
+    await A.until(`[...document.querySelectorAll('#menu button')].some((b) => b.textContent.includes('Script.txt'))`);
+    await A.ev(`[...document.querySelectorAll('#menu button')].find((b) => b.textContent.includes('Script.txt')).click(); true`);
+    ok(await A.until(`!document.querySelector('#dock').classList.contains('hidden') && document.querySelector('#dock').textContent.includes('call script')`, 8000), 'a campaign file kept beside it opens in the campaign’s own panel');
+    ok(await A.ev(shown('#skDock')), 'with Sidekick’s panel still open as well');
+  }
+
   // ⌘J closes and opens it.
   await A.cmd('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'j', code: 'KeyJ', windowsVirtualKeyCode: 74, modifiers: 4 });
   await A.cmd('Input.dispatchKeyEvent', { type: 'keyUp', key: 'j', code: 'KeyJ', windowsVirtualKeyCode: 74, modifiers: 4 });
   ok(await A.until(`!${shown('#skDock')}`), '⌘J closes it');
-  ok((await A.ev(rect('#projects'))).r >= (await A.ev('innerWidth')) - 1, 'and the page takes the room back');
+  ok((await A.ev(rect('#main'))).r >= (await A.ev('innerWidth')) - 1, 'and the page takes the room back');
 
   // A phone: a sheet from the bottom, over the page.
   await A.cmd('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });

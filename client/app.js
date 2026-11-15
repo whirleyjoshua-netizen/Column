@@ -9314,12 +9314,12 @@
       if (was && agRunning(was) !== agRunning(msg.run)) api('GET', '/agents').then((d) => { AG.data.agents = d.agents; renderTool(); }).catch(() => {});
     }
     if (toolOpen === 'agents') renderTool(AG.view.startsWith('run:'));
-    else if (SKD.open) renderDock(SKD.view.startsWith('run:'));
+    else if (SKD.open) renderSkDock(SKD.view.startsWith('run:'));
     renderHome();
   }
   function agOpen(view, tab) {
     // From inside Sidekick's panel: an assignment opens there, and “‹ Your team” goes back to Sidekick's start.
-    if (SKD.open && SKD.here && (!view || view === 'team' || view.startsWith('run:'))) { SKD.view = view?.startsWith('run:') ? view : 'home'; return renderDock(true); }
+    if (SKD.open && SKD.here && (!view || view === 'team' || view.startsWith('run:'))) { SKD.view = view?.startsWith('run:') ? view : 'home'; return renderSkDock(true); }
     if (toolOpen !== 'agents' && AG.data) loadAgents(); // fresh counts and key state each time it opens
     AG.view = view || 'team';
     if (tab) AG.tab = tab;
@@ -9687,7 +9687,7 @@
   }
   // Holds off while you're typing in it, so a redraw can't eat what you wrote. Sidekick keeps its own draft.
   function renderTool(force) {
-    if (SKD.open) renderDock(force);
+    if (SKD.open) renderSkDock(force);
     const el = $('#tool');
     if (!toolOpen || el.classList.contains('hidden')) return;
     if (!toolOn(toolOpen)) return closeTool(); // switched off for the team
@@ -16412,7 +16412,7 @@
     $('#skBtn')?.classList.add('on');
     closeSide();
     if (toolOn('agents') && !AG.data) loadAgents();
-    renderDock(true);
+    renderSkDock(true);
     setTimeout(() => { if (SKD.view === 'home') $('#skDock .skd-ask')?.focus({ preventScroll: true }); }, 30);
   }
   function closeDock() {
@@ -16424,13 +16424,13 @@
     $('#skBtn')?.classList.remove('on');
   }
   // A page change (another tab, a job opened) redraws the “looking at” line.
-  const dockPageChanged = () => { if (SKD.open && (SKD.view === 'home' || (SKD.view === 'plan' && !SK.open))) renderDock(); };
+  const dockPageChanged = () => { if (SKD.open && (SKD.view === 'home' || (SKD.view === 'plan' && !SK.open))) renderSkDock(); };
   // Plan my business: the team proposes the whole setup as drafts to approve one by one (agents.js asPlan).
   const BUSINESS_ASK = 'Plan my business. Use what you know about it (Company HQ: what we do, our customers, how we work, our goals) and look at what is already set up first, so nothing is added twice. Propose, as separate changes I can approve one by one: the projects to track our work (from a template, or a list of our own) if we don’t have them; the campaigns to bring in work, with goals; a weekly schedule of time blocks for me (selling, doing the work, admin); monthly budgets for our main costs and the recurring bills to track; and the first tasks to get it going. Then write it up as a one-page plan doc, including the automations worth setting up later. If you know too little about the business, say what to fill in under Company HQ first and keep the plan short.';
   async function skdAsk(ask, workflow, agent = 'team', plan = false) {
     if (SKD.busy) return;
     SKD.busy = true;
-    renderDock(true);
+    renderSkDock(true);
     try {
       const page = SKD.noPage ? null : skPage();
       const x = await api('POST', '/agents/runs', { agent, ask, workflow, page, ...(plan ? { plan: true, title: 'Plan my business' } : {}) });
@@ -16443,7 +16443,7 @@
       else toast(e.message);
     }
     SKD.busy = false;
-    renderDock(true);
+    renderSkDock(true);
   }
   function skdHome(pg) {
     const agentsOk = toolOn('agents');
@@ -16460,7 +16460,7 @@
     const waiting = agentsOk && AG.data ? agWaiting() : [];
     const recent = [
       ...(agentsOk && AG.data ? AG.data.runs.slice(0, 12).map((x) => ({ at: x.createdAt, el: () => agRunRow(x, waiting.includes(x) ? 'Needs your yes' : null) })) : []),
-      ...(toolOn('sidekick') ? (S.sidekick || []).filter((y) => y.status !== 'done').slice(0, 8).map((y) => ({ at: y.updatedAt, el: () => h('button', { class: 'ag-run-row', onclick: () => { SK.open = y.id; SKD.view = 'plan'; renderDock(true); } },
+      ...(toolOn('sidekick') ? (S.sidekick || []).filter((y) => y.status !== 'done').slice(0, 8).map((y) => ({ at: y.updatedAt, el: () => h('button', { class: 'ag-run-row', onclick: () => { SK.open = y.id; SKD.view = 'plan'; renderSkDock(true); } },
         h('span', { class: 'ag-ic sm' }, '✦'), h('span', { class: 'ag-run-t' }, h('b', {}, y.title), h('small', {}, `${{ schedule: 'Schedule', money: 'Budget' }[y.kind] || 'Campaign'} plan · ${ago(y.updatedAt)}`)), h('span', { class: 'ag-chip' }, skStatus(y))) })) : []),
     ].sort((a, b) => b.at - a.at).slice(0, 12);
     return [
@@ -16480,7 +16480,7 @@
       agentsOk ? h('button', { class: 'linkish skd-team', onclick: () => { closeDock(); agOpen('team'); } }, 'Your team: approvals, settings and schedules ›') : null,
     ];
   }
-  function renderDock(force) {
+  function renderSkDock(force) {
     const el = $('#skDock');
     if (!SKD.open || !el) return;
     if (!force && el.contains(document.activeElement) && document.activeElement.matches('input, textarea, select')) return;
@@ -16504,12 +16504,12 @@
     if (view === 'home') content = skdHome(pg);
     el.replaceChildren(...[
       h('div', { class: 'skd-head' },
-        view !== 'home' ? h('button', { class: 'icon-btn', 'aria-label': 'Back to Sidekick', title: 'Back', html: I.left, onclick: () => { SKD.view = 'home'; SK.open = null; renderDock(true); } }) : null,
+        view !== 'home' ? h('button', { class: 'icon-btn', 'aria-label': 'Back to Sidekick', title: 'Back', html: I.left, onclick: () => { SKD.view = 'home'; SK.open = null; renderSkDock(true); } }) : null,
         h('b', { class: 'skd-title' }, '✦ Sidekick'),
         h('button', { class: 'icon-btn', 'aria-label': 'Close Sidekick', title: 'Close', html: I.close, onclick: closeDock })),
       view === 'home' && pg ? h('div', { class: 'skd-page' + (SKD.noPage ? ' off' : '') },
         h('span', {}, SKD.noPage ? 'Not using this page' : 'Looking at ', SKD.noPage ? null : h('b', {}, pg.label)),
-        h('button', { class: 'linkish', onclick: () => { SKD.noPage = !SKD.noPage; renderDock(true); } }, SKD.noPage ? 'Use it' : 'Leave it out')) : null,
+        h('button', { class: 'linkish', onclick: () => { SKD.noPage = !SKD.noPage; renderSkDock(true); } }, SKD.noPage ? 'Use it' : 'Leave it out')) : null,
       h('div', { class: 'skd-body' }, ...(content || []).filter(Boolean))].filter(Boolean));
     el.querySelector('.skd-body').scrollTop = view === SKD.lastView ? keep : 0;
     SKD.lastView = view;
