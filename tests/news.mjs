@@ -153,6 +153,16 @@ try {
   ok(!r.body.dislikes.some((x) => /chef|celebrity/.test(x.k)) && r.body.reactions === 1, 'undo takes it back exactly (no drift from changing your mind)');
   ok((await rico('GET', '/news')).body.articles.some((a) => a.id === chef.id), 'and it shows again');
   ok(before !== JSON.stringify(r.body), 'what it learned did change while it was a “not for me”');
+  // One "not for me" is about that story, not the whole topic or paper (found live 2026-11-15: passing on one
+  // sports story in Top stories turned For you into nearly all Technology).
+  let list = (await rico('GET', '/news')).body.articles;
+  const stadium = list.find((a) => /stadium/.test(a.title));
+  const rankOf = (l) => l.filter((a) => a.id !== stadium.id).findIndex((a) => /Storm/.test(a.title));
+  const stormBefore = rankOf(list);
+  await rico('POST', '/news/react', { id: stadium.id, v: -1 });
+  list = (await rico('GET', '/news')).body.articles;
+  ok(stormBefore >= 0 && rankOf(list) <= stormBefore, `passing on one story doesn’t sink an unrelated one from the same paper and topic (${stormBefore} → ${rankOf(list)})`);
+  await rico('POST', '/news/react', { id: stadium.id, v: 0 });
   ok((await rico('POST', '/news/react', { id: 'gone', v: 1 })).status === 404 && (await rico('POST', '/news/react', { id: chef.id, v: 5 })).status === 400, 'a like needs a real article and a real value');
 
   // Words and sources

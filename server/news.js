@@ -336,8 +336,10 @@ export function newsModule({ db, save, readJson, send, rid, toolOn, aiAsk, reply
     // Like: its words, source and topics count for more. Not for me: less. Undo takes it back.
     const n = Math.max(4, a.w.length);
     for (const w of a.w) bump(p.w, w, (v * (w.includes(' ') ? 1.4 : 1)) / Math.sqrt(n), 6);
-    bump(p.s, a.srcId, v * 0.5, 3);
-    for (const x of a.topics) bump(p.t, x, v * 0.3, 2);
+    // A reaction is mostly about that story's words. Its paper and topic move only a little each time, so one
+    // "not for me" on a sports story doesn't sink all of Top stories; many reactions the same way still add up.
+    bump(p.s, a.srcId, v * 0.1, 3);
+    for (const x of a.topics) bump(p.t, x, v * 0.05, 2);
     const ks = Object.keys(p.w);
     if (ks.length > LIMITS.words) ks.sort((x, y) => Math.abs(p.w[x]) - Math.abs(p.w[y])).slice(0, ks.length - LIMITS.words).forEach((k) => delete p.w[k]);
   }
