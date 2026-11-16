@@ -3147,3 +3147,9 @@ body:not(.wide) .wl-row > [data-k=open] { grid-area: open; }
 body:not(.wide) .wl-row > [data-k=overdue] { grid-area: overdue; }
 body:not(.wide) .wl-row > [data-k=due] { grid-area: due; }
 body:not(.wide) .wl-row > .wl-stat:not([data-k=open]):not([data-k=overdue]):not([data-k=due]), body:not(.wide) .wl-row > .wl-spark { display: none; }
+/* Workspace: the workspace you're in, first in the strip */
+#workTabs .ws-switch { display: inline-flex; align-items: center; gap: 6px; max-width: 240px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--text); font: inherit; font-weight: 600; cursor: pointer; flex: none; }
+#workTabs .ws-switch:hover { background: var(--bg); }
+#workTabs .ws-sw-n { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#workTabs .ws-sw-c { color: var(--muted); font-size: 11px; }
+#workTabs .ws-sw-sep { width: 1px; align-self: stretch; margin: 6px 4px; background: var(--line); flex: none; }

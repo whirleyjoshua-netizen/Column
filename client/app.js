@@ -241,16 +241,21 @@
     store.set('token', token);
     location.reload();
   }
+  // Your workspaces (a team, in the code): the one you're in, the others you're signed in to, and a new one or one
+  // to join, both on your own account (the owner, 2026-11-15: "switch workspace or add new workspace").
   function teamMenu(anchor) {
     openMenu(anchor, [
-      { head: 'Teams' },
+      { head: 'Workspaces' },
       ...accounts().map((a) => (a.token === S.token ? { label: '✓ ' + S.workspace.name, on: true, run: () => {} } : { label: a.ws, run: () => switchTeam(a.token) })),
-      { label: '+ Add a team', run: addTeam },
+      { label: '+ New workspace', run: () => addTeam('create') },
+      { label: 'Join a workspace', run: () => addTeam('join') },
+      { label: 'Sign in to another', run: () => addTeam('signin') },
     ]);
   }
-  function addTeam() {
+  function addTeam(mode = 'signin') {
     S.adding = true;
-    S.loginMode = 'signin';
+    S.addMode = mode;
+    S.loginMode = mode;
     showLogin();
   }
   $('.ws').addEventListener('click', (e) => teamMenu(e.currentTarget));
@@ -271,14 +276,15 @@
     $('#app').classList.add('hidden');
     $('#login').classList.remove('hidden');
     const f = $('#loginForm');
-    f.name.value = store.get('name', '');
-    f.email.value = store.get('email', '');
+    // Adding a workspace: it's the same you, so your name and email are filled in.
+    f.name.value = (S.adding && S.me?.member) || store.get('name', '');
+    f.email.value = (S.adding && S.me?.email) || store.get('email', '');
     f.device.value = store.get('device', guessDevice());
     f.workspace.value = S.adding ? '' : store.get('lastWorkspace', '');
     $('#loginBack').classList.toggle('hidden', !S.adding);
     if (S.adding) $('#loginBack').textContent = 'Back to ' + (S.workspace?.name || 'your team');
     // The website's "Start free trial" opens here with ?start=1.
-    setLoginMode(S.invite ? 'invite' : !S.adding && new URLSearchParams(location.search).has('start') ? 'create' : 'signin');
+    setLoginMode(S.invite ? 'invite' : S.adding ? S.addMode || 'signin' : new URLSearchParams(location.search).has('start') ? 'create' : 'signin');
     if (S.invite) f.email.value = S.invite.email;
     // Forgot password only shows when this server can send email.
     fetch('/api/health').then((r) => r.json()).then((x) => { S.mailOn = !!x.mail; setLoginMode(S.loginMode); }).catch(() => {});
@@ -300,14 +306,16 @@
     const tab = mode === 'teamname' || mode === 'forgot' ? 'signin' : mode;
     for (const x of $('#modeSeg').children) x.classList.toggle('on', x.dataset.mode === tab);
     const M = LOGIN_MODES[mode];
-    $('#loginBtn').textContent = mode === 'invite' && S.invite ? `Join ${S.invite.team}` : M.btn;
-    const hint = mode === 'invite' && S.invite ? `${S.invite.by} invited you to join ${S.invite.team}. Choose your name and a password. Already have an account? Use its email and password.` : M.hint;
+    const adding = S.adding && (mode === 'create' || mode === 'join');
+    $('#loginBtn').textContent = mode === 'invite' && S.invite ? `Join ${S.invite.team}` : adding ? (mode === 'create' ? 'Create workspace' : 'Join workspace') : M.btn;
+    const hint = mode === 'invite' && S.invite ? `${S.invite.by} invited you to join ${S.invite.team}. Choose your name and a password. Already have an account? Use its email and password.`
+      : adding ? (mode === 'create' ? 'A new workspace on your account, with its own people, work and free trial. Use your account’s password.' : 'Join someone else’s workspace with its name and invite code. Use your account’s password.') : M.hint;
     $('#modeHint').textContent = hint;
     $('#modeHint').classList.toggle('hidden', !hint);
     $('#modeSeg').classList.toggle('hidden', mode === 'invite');
     for (const k of ['team', 'code', 'name', 'email', 'pass', 'device']) $(`#${k}Field`).classList.toggle('hidden', !M.fields.includes(k));
     // Starting out it's the business's name (someone on their own has no “team”); this device is named for them.
-    $('#teamField').firstChild.textContent = mode === 'create' ? 'Business name' : 'Team name';
+    $('#teamField').firstChild.textContent = adding ? 'Workspace name' : mode === 'create' ? 'Business name' : 'Team name';
     $('#loginForm').workspace.placeholder = mode === 'create' ? 'e.g. Premier Shade Solutions' : 'e.g. premier-studio';
     // The two-step code only shows once the server asks for it.
     $('#otpField').classList.add('hidden');
@@ -1078,6 +1086,8 @@
       return connect();
     }
     $('#login').classList.add('hidden');
+    // The workspace you're in is always on your list, so you can switch back to it from another.
+    if (S.token && !VIEW_ID) keepAccount(S.token, S.workspace, S.me?.member);
     if (S.workspace.deleteAt) {
       // Locked while it waits to be erased: only the lock screen, listening in case another owner cancels.
       drawDeleteLock();
@@ -3298,7 +3308,9 @@
     // Your pins (the owner, 2026-11-16): a 📌 drop-down right next to Tools, at the far right, instead of a row of them.
     const pinsBtn = h('button', { class: 'pins-btn', title: 'Your pins', 'aria-label': 'Your pins', 'aria-haspopup': 'menu', onclick: (e) => { e.stopPropagation(); pinsDrop(e.currentTarget); } },
       h('span', { class: 'tab-ic', html: PIN_IC.pin }), pins.length ? h('span', { class: 'pins-n' }, String(pins.length)) : null, h('span', { class: 'pins-caret', html: PIN_IC.caret }));
-    $('#workTabs')?.replaceChildren(...workKeys().filter((k) => k !== 'tools').map(wbtn), pinsBtn, ...(workKeys().includes('tools') ? [wbtn('tools')] : []));
+    // First, the workspace you're in: its name opens your workspaces (switch, new, join).
+    const wsBtn = S.workspace && h('button', { class: 'ws-switch', title: 'Switch workspace', onclick: (e) => { e.stopPropagation(); teamMenu(e.currentTarget); } }, h('span', { class: 'ws-sw-n' }, S.workspace.name), h('span', { class: 'ws-sw-c', 'aria-hidden': 'true' }, '▾'));
+    $('#workTabs')?.replaceChildren(...(wsBtn ? [wsBtn, h('span', { class: 'ws-sw-sep', 'aria-hidden': 'true' })] : []), ...workKeys().filter((k) => k !== 'tools').map(wbtn), pinsBtn, ...(workKeys().includes('tools') ? [wbtn('tools')] : []));
     markTabs();
     renderChatSide();
   }

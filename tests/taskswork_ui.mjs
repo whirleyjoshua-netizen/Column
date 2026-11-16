@@ -48,7 +48,7 @@ try {
   await A.tap(`document.querySelector('#tabs [data-tab=chat]')`);
   await A.tap(`document.querySelector('#tabs [data-tab=work]')`);
   ok(await A.until(`!document.querySelector('#day').classList.contains('hidden')`), 'opening Workspace lands on Tasks');
-  ok(await A.until(`(() => { const b = document.querySelector('#workTabs button'); return b?.dataset.tab === 'day' && b.textContent === 'Tasks' && b.classList.contains('on'); })()`), 'Tasks is Workspace’s first tab, and it’s marked');
+  ok(await A.until(`(() => { const b = document.querySelector('#workTabs button[data-tab]'); return b?.dataset.tab === 'day' && b.textContent === 'Tasks' && b.classList.contains('on'); })()`), 'Tasks is Workspace’s first tab, and it’s marked');
   const modes = await A.ev(`[...document.querySelectorAll('#day .day-modes button:not(.hidden)')].map((b) => b.textContent).join(',')`);
   ok(modes === 'Month,Week,Day,List,Team', 'one switch for the view: ' + modes);
   await A.tap(`[...document.querySelectorAll('#day .day-modes button')].find((b) => b.textContent === 'List')`);
