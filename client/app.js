@@ -5236,7 +5236,31 @@
     };
     draw();
   }
-  // Make or change one: what sets it off (and only when…), then its steps: actions, waits, "only if".
+  // What a step still needs before it can be saved (the server checks the same), for the builder's red marks.
+  function autoProblem(a) {
+    const has = (v) => String(v ?? '').trim() !== '';
+    if (['task', 'post', 'notify', 'text', 'vault'].includes(a.kind) && !has(a.text)) return 'Write what it should say';
+    if (a.kind === 'notify' && !a.to?.length) return 'Pick who to notify';
+    if (a.kind === 'contact' && !has(a.stage) && !has(a.tag)) return 'Pick a stage or a tag';
+    if (a.kind === 'email' && (!has(a.subject) || !has(a.text))) return 'Write the subject and the message';
+    if (a.kind === 'campaign' && !a.templateId) return 'Pick a saved campaign';
+    if (a.kind === 'doc' && !a.templateId) return 'Pick a doc template';
+    if ((a.kind === 'record' || a.kind === 'create') && (!a.projectId || !a.typeId)) return 'Pick the project and list';
+    if (a.kind === 'webhook' && !/^https?:\/\/\S+$/.test(a.url || '')) return 'Enter the web address';
+    if (a.kind === 'if' && (!a.when?.length || a.when.some((c) => !['set', 'empty'].includes(c.op) && !has(c.value)))) return 'Say what it checks';
+    return '';
+  }
+  // One line about a step, for a folded one.
+  function autoLine(a) {
+    if (a.kind === 'wait') return `Wait ${a.amount} ${a.unit}`;
+    if (a.kind === 'if') return 'Only if ' + (a.when || []).map((c) => `{${c.field}} ${{ is: 'is', not: 'isn’t', contains: 'has', over: 'is over', under: 'is under', empty: 'is empty', set: 'is filled in' }[c.op] || c.op}${['set', 'empty'].includes(c.op) ? '' : ' ' + (c.value || '…')}`).join(' and ');
+    const said = a.text || a.subject || a.title || a.url || '';
+    return (AUTO_DO[a.kind] || a.kind) + (said ? ': ' + said : '');
+  }
+  // Make or change one, in the builder: the whole automation as a flow, full screen. What sets it off at the top,
+  // then each step under it; "only if" splits into Then and Otherwise side by side. A + between steps adds one there,
+  // a step's ⋮⋮ drags it anywhere (into a branch too), ▾ folds it. "Test it" walks it on the last real event (or a
+  // made-up one) and lights the way it would go, with what each step would do; a past run lights the way it went.
   function autoSheet(x, recipe) {
     const src = x || recipe || {};
     const dr = { name: src.name || '', trigger: JSON.parse(JSON.stringify(src.trigger || { kind: 'task.done' })), actions: JSON.parse(JSON.stringify(src.actions || [{ kind: 'task', text: '', assignee: '', dueIn: null, campaign: '' }])) };
@@ -5248,8 +5272,37 @@
     const stages = [...new Set((S.contacts || []).map((c) => c.stage).filter(Boolean))];
     const outcomes = [...new Set(S.campaigns.flatMap((c) => c.outcomes || []))];
     const people = S.workspace.members;
+    const B = { folded: new WeakSet(), lit: null, would: null, test: null, run: '', focus: null, reg: null, drag: null };
+    // Typing doesn't redraw, so the red marks and the count follow it here.
+    const marks = () => {
+      let n = 0;
+      for (const el of box.querySelectorAll('.auto-act')) {
+        const p = el._step ? autoProblem(el._step) : '';
+        if (p) n++;
+        el.classList.toggle('bad', !!p);
+        const b = el.querySelector(':scope > .auto-act-h > .auto-bad');
+        if (b) { b.hidden = !p; b.title = p; b.setAttribute('aria-label', p); }
+      }
+      const c = box.querySelector('.auto-probs');
+      if (c) { c.hidden = !n; c.textContent = `${n} ${n === 1 ? 'step needs' : 'steps need'} something`; }
+    };
+    box.addEventListener('input', marks);
+    box.addEventListener('change', marks);
+    box.addEventListener('focusin', (e) => { if (e.target.matches('input:not([type]), input[type=text], textarea')) B.focus = e.target; });
+    const allSteps = (list) => list.flatMap((y) => [y, ...(y.kind === 'if' ? [...allSteps(y.then || []), ...allSteps(y.else || [])] : [])]);
+    const testIt = async () => {
+      try {
+        const r = await api('POST', '/automations/test', { name: dr.name || 'Test', trigger: { ...dr.trigger, tz: myTz() }, actions: dr.actions });
+        Object.assign(B, { lit: new Set(r.path), would: new Map(r.steps.map((y) => [y.at, y])), test: { about: r.about }, run: '' });
+      } catch (e) {
+        Object.assign(B, { lit: null, would: null, test: { err: e.message } });
+      }
+      draw();
+    };
+    const clearLit = () => { Object.assign(B, { lit: null, would: null, test: null, run: '' }); draw(); };
     const draw = () => {
       const t = dr.trigger;
+      B.reg = { lists: new Map(), nodes: new Map() };
       const name = h('input', { value: dr.name, placeholder: 'e.g. Signed? Schedule the work' });
       name.addEventListener('input', () => (dr.name = name.value));
       const groups = AUTO_CAT.events ? Object.entries(AUTO_CAT.tools).map(([tool, label]) => [label, AUTO_CAT.events.filter((e) => e.tool === tool)]).filter(([, l]) => l.length) : [['', Object.entries(AUTO_WHEN).map(([type, label]) => ({ type, label }))]];
@@ -5333,11 +5386,41 @@
       const fields = ['amount', ...(AUTO_WORDS[t.kind] || [])].filter((v, n, all) => all.indexOf(v) === n);
       const countSteps = (list) => list.reduce((n, s) => n + 1 + (s.kind === 'if' ? countSteps(s.then || []) + countSteps(s.else || []) : 0), 0);
       const roomForMore = () => countSteps(dr.actions) < 20;
-      const stepList = (list, depth, label) => h('div', { class: 'auto-steps' + (depth ? ' nested' : '') },
-        label ? h('div', { class: 'auto-steps-h' }, label) : null,
-        ...list.map((a, i) => action(a, i, list, depth)),
-        roomForMore() ? h('button', { class: 'btn small auto-add-step', onclick: () => { list.push({ kind: 'notify', text: '', to: [] }); draw(); } }, depth ? '+ Step' : '+ Another step') : null);
-      const action = (a, i, list = dr.actions, depth = 0) => {
+      const newStep = () => ({ kind: 'notify', text: '', to: [] });
+      // Moving a step (dragged by its ⋮⋮) to a place in a list: never into itself, and "only if" 3 deep at most.
+      const ifDepth = (y) => (y.kind === 'if' ? 1 + Math.max(0, ...[...(y.then || []), ...(y.else || [])].map(ifDepth)) : 0);
+      const holds = (y, list) => y.kind === 'if' && (y.then === list || y.else === list || [...(y.then || []), ...(y.else || [])].some((z) => holds(z, list)));
+      const moveStep = (at, list, i, depth) => {
+        const src = B.reg.nodes.get(at);
+        B.drag = null;
+        if (!src) return;
+        const y = src.list[src.i];
+        if (holds(y, list)) return toast('A step can’t go inside itself.');
+        if (depth + ifDepth(y) > 3) return toast('“Only if” can go 3 deep at most.');
+        src.list.splice(src.i, 1);
+        if (src.list === list && src.i < i) i--;
+        list.splice(i, 0, y);
+        draw();
+      };
+      const dropAt = (el, list, i, depth) => {
+        el.addEventListener('dragover', (e) => { if (B.drag) { e.preventDefault(); el.classList.add('over'); } });
+        el.addEventListener('dragleave', () => el.classList.remove('over'));
+        el.addEventListener('drop', (e) => { e.preventDefault(); el.classList.remove('over'); moveStep(B.drag || e.dataTransfer.getData('text/plain'), list, i, depth); });
+        return el;
+      };
+      const ins = (list, i, depth) => dropAt(h('div', { class: 'auto-ins' }, roomForMore() ? h('button', { class: 'auto-ins-btn', title: 'Add a step here', 'aria-label': 'Add a step here', onclick: () => { list.splice(i, 0, newStep()); draw(); } }, '+') : null), list, i, depth);
+      const stepList = (list, depth, label, pre = '') => {
+        B.reg.lists.set(pre, list);
+        const kids = [];
+        list.forEach((a, i) => kids.push(ins(list, i, depth), action(a, i, list, depth, pre + i)));
+        return h('div', { class: 'auto-steps' + (depth ? ' nested' : ''), 'data-list': pre },
+          label ? h('div', { class: 'auto-steps-h' }, label) : null,
+          ...kids,
+          roomForMore() ? dropAt(h('button', { class: 'btn small auto-add-step', onclick: () => { list.push(newStep()); draw(); } }, depth ? '+ Step' : '+ Another step'), list, list.length, depth) : null,
+          depth ? null : h('div', { class: 'auto-end' }, 'Done'));
+      };
+      const action = (a, i, list = dr.actions, depth = 0, at = String(i)) => {
+        B.reg.nodes.set(at, { list, i });
         const k = h('select', { class: 'auto-step-kind', 'aria-label': 'What this step does' }, Object.entries(AUTO_DO).filter(([v]) => autoDoOk(v) || v === a.kind).map(([v, l]) => opt(v, l, a.kind)), opt('wait', 'Wait…', a.kind), depth < 3 ? opt('if', 'Only if…', a.kind) : null);
         k.addEventListener('change', () => {
           list[i] = k.value === 'if' ? { kind: 'if', when: [{ field: fields.includes('stage') ? 'stage' : fields[0], op: 'is', value: '' }], then: [{ kind: 'notify', text: '', to: [] }], else: [] }
@@ -5522,16 +5605,63 @@
             return h('div', { class: 'auto-if-row' }, ci ? h('small', {}, 'and') : null, fs, os, ['set', 'empty'].includes(c.op) ? null : val,
               a.when.length > 1 ? h('button', { class: 'icon-btn', 'aria-label': 'Remove this check', html: I.close, onclick: () => { a.when.splice(ci, 1); draw(); } }) : null);
           };
-          f.push(...a.when.map(cond), a.when.length < 5 ? h('button', { class: 'linkish', onclick: () => { a.when.push({ field: fields[0], op: 'is', value: '' }); draw(); } }, '+ and…') : null,
-            stepList(a.then ||= [], depth + 1, 'Then'), stepList(a.else ||= [], depth + 1, 'Otherwise'));
+          f.push(...a.when.map(cond), a.when.length < 5 ? h('button', { class: 'linkish', onclick: () => { a.when.push({ field: fields[0], op: 'is', value: '' }); draw(); } }, '+ and…') : null);
         }
-        return h('div', { class: 'auto-act' + (a.kind === 'if' ? ' auto-if' : a.kind === 'wait' ? ' auto-wait' : '') }, h('div', { class: 'auto-act-h' }, h('b', {}, `${i + 1}.`), k, list.length > 1 || depth ? h('button', { class: 'icon-btn', 'aria-label': 'Remove', html: I.close, onclick: () => { list.splice(i, 1); draw(); } }) : null), ...f);
+        const branches = a.kind === 'if' ? h('div', { class: 'auto-branches' }, stepList(a.then ||= [], depth + 1, 'Then', at + '.then.'), stepList(a.else ||= [], depth + 1, 'Otherwise', at + '.else.')) : null;
+        const prob = autoProblem(a);
+        const folded = B.folded.has(a);
+        const grip = h('span', { class: 'auto-grip', draggable: 'true', title: 'Drag to move' }, '⋮⋮');
+        grip.addEventListener('dragstart', (e) => { B.drag = at; e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', at); });
+        grip.addEventListener('dragend', () => (B.drag = null));
+        const menu = [
+          { label: 'Duplicate', run: () => { if (!roomForMore()) return toast('An automation has 20 steps at most.'); list.splice(i + 1, 0, JSON.parse(JSON.stringify(a))); draw(); } },
+          i > 0 ? { label: 'Move up', run: () => { list.splice(i - 1, 0, list.splice(i, 1)[0]); draw(); } } : null,
+          i < list.length - 1 ? { label: 'Move down', run: () => { list.splice(i + 1, 0, list.splice(i, 1)[0]); draw(); } } : null,
+        ].filter(Boolean);
+        const would = B.would?.get(at);
+        const node = h('div', { class: 'auto-act' + (a.kind === 'if' ? ' auto-if' : a.kind === 'wait' ? ' auto-wait' : '') + (prob ? ' bad' : '') + (B.lit ? (B.lit.has(at) ? ' lit' : ' dim') : '') + (folded ? ' folded' : ''), 'data-at': at },
+          h('div', { class: 'auto-act-h' }, grip, h('b', {}, `${i + 1}.`), k, h('span', { class: 'auto-bad', title: prob, 'aria-label': prob, hidden: !prob }, '!'),
+            h('button', { class: 'icon-btn auto-fold', 'aria-label': folded ? 'Unfold this step' : 'Fold this step', title: folded ? 'Unfold' : 'Fold', onclick: () => { folded ? B.folded.delete(a) : B.folded.add(a); draw(); } }, folded ? '▸' : '▾'),
+            h('button', { class: 'icon-btn auto-more', 'aria-label': 'Step options', html: I.more, onclick: (e) => openMenu(e.currentTarget, menu) }),
+            list.length > 1 || depth ? h('button', { class: 'icon-btn', 'aria-label': 'Remove', html: I.close, onclick: () => { list.splice(i, 1); draw(); } }) : null),
+          would ? h('div', { class: 'auto-would' + (would.yes === false ? ' no' : '') }, would.said) : null,
+          folded ? h('small', { class: 'auto-fold-line' }, autoLine(a)) : null,
+          ...(folded ? [] : f), branches);
+        node._step = a;
+        return node;
+      };
+      const every = allSteps(dr.actions);
+      const problems = every.filter((y) => autoProblem(y)).length;
+      const anyOpen = every.some((y) => !B.folded.has(y));
+      const pastRuns = (x?.runs || []).filter((r) => r.path?.length);
+      const runSel = h('select', { class: 'auto-runs', 'aria-label': 'Show a past run' }, opt('', 'Show a past run…', B.run), pastRuns.map((r, n) => opt(String(n), `${r.ok ? '✓' : '✕'} Run ${ago(r.at)}`, B.run)));
+      runSel.addEventListener('change', () => {
+        const r = pastRuns[Number(runSel.value)];
+        if (!r) return clearLit();
+        Object.assign(B, { lit: new Set(r.path), would: null, test: { about: `${r.ok ? 'Ran' : 'Didn’t run'} ${ago(r.at)}: ${r.note}` }, run: runSel.value });
+        draw();
+      });
+      // Words: a tap puts {word} where the cursor was, in the step being written.
+      const putWord = (w) => {
+        const el = B.focus;
+        if (!el?.isConnected) return toast('Click into a step’s text first, then on a word.');
+        const at = el.selectionStart ?? el.value.length;
+        el.setRangeText(`{${w}}`, at, el.selectionEnd ?? at, 'end');
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.focus();
       };
       box.replaceChildren(
         h('label', {}, 'Name', name),
-        h('div', { class: 'auto-step' }, h('div', { class: 'auto-step-h' }, 'When'), h('label', {}, '', kind), ...only),
-        h('div', { class: 'auto-step' }, h('div', { class: 'auto-step-h' }, 'Then'), stepList(dr.actions, 0)),
-        words ? h('p', { class: 'day-hint' }, `Words that fill themselves in: ${words}`) : null);
+        h('div', { class: 'auto-tools' },
+          h('button', { class: 'btn small auto-test-btn', onclick: testIt }, '▶ Test it'),
+          every.length ? h('button', { class: 'btn small auto-foldall', onclick: () => { for (const y of every) anyOpen ? B.folded.add(y) : B.folded.delete(y); draw(); } }, anyOpen ? 'Fold all' : 'Unfold all') : null,
+          pastRuns.length ? runSel : null,
+          h('span', { class: 'auto-probs', hidden: !problems }, `${problems} ${problems === 1 ? 'step needs' : 'steps need'} something`)),
+        B.test ? h('div', { class: 'auto-test' + (B.test.err ? ' err' : '') }, h('span', {}, B.test.err || B.test.about), h('button', { class: 'linkish auto-test-clear', onclick: clearLit }, 'Clear')) : null,
+        h('div', { class: 'auto-canvas' },
+          h('div', { class: 'auto-step auto-trigger' + (B.lit ? ' lit' : '') }, h('div', { class: 'auto-step-h' }, 'When'), h('label', {}, '', kind), ...only),
+          h('div', { class: 'auto-step auto-flow' }, h('div', { class: 'auto-step-h' }, 'Then'), stepList(dr.actions, 0))),
+        words ? h('div', { class: 'auto-words' }, h('span', {}, 'Words that fill themselves in:'), (AUTO_WORDS[t.kind] || []).map((w) => h('button', { class: 'auto-word', title: `Put {${w}} where the cursor is`, onmousedown: (e) => e.preventDefault(), onclick: () => putWord(w) }, `{${w}}`))) : null);
     };
     draw();
     sheet(x ? `Automation · ${x.name}` : recipe ? recipe.name : 'New automation', [box], async () => {
@@ -5541,6 +5671,7 @@
       renderAutos();
       if (!x) toast(`“${y.name}” is on`);
     }, x ? 'Save' : 'Turn it on');
+    $('#sheet .sheet')?.classList.add('auto-builder');
   }
 
   // ---------- Home: what needs you, what's on today, how the work is going, and what came in ----------

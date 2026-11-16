@@ -3262,10 +3262,21 @@ function autoMatches(t, ctx) {
 // events from hook(), and those that only webhooks had are passed on here too). Something private (a private
 // campaign's or project's, or one marked so) sets off only an automation narrowed to that campaign or project, whose
 // maker can still see it, so nothing private goes out to people who can't see it.
+// The last few things that happened of each kind, in memory only (by id, as a waiting run keeps them), for the
+// builder's "Test it". Nothing private, nothing for owners only.
+const lastEvents = new Map();
+function rememberEvent(wsId, kind, ctx) {
+  const k = wsId + ':' + kind;
+  const list = [{ at: Date.now(), ctx: ctxSnap(ctx) }, ...(lastEvents.get(k) || [])].slice(0, 10);
+  lastEvents.delete(k);
+  lastEvents.set(k, list);
+  if (lastEvents.size > 20_000) lastEvents.delete(lastEvents.keys().next().value);
+}
 function automate(wsId, kind, ctx = {}) {
   kind = FL.LEGACY[kind] || kind;
   if (FLOWING.getStore() || offline(wsId) || !FL.EVENT[kind]) return;
   const priv = !!(ctx.private || ctx.campaign?.private || (ctx.campaign?.parentId && db.campaigns[ctx.campaign.parentId]?.private) || ctx.project?.private);
+  if (!priv && !ctx.ownersOnly) rememberEvent(wsId, kind, ctx);
   for (const x of Object.values(db.automations)) {
     if (x.wsId !== wsId || !x.on || x.trigger.kind !== kind || !autoMatches(x.trigger, ctx)) continue;
     if (ctx.ownersOnly && !isOwnerId(wsId, x.memberId)) continue;
@@ -3319,8 +3330,9 @@ function eventFromHook(wsId, type, d, by) {
     return automate(wsId, type, { ...at, invoice: d.number || d.invoice_number, customer: d.customer?.name || inv?.to?.name || '', amount: type === 'payment.received' ? d.payment?.amount : d.total, who: by, private: privateRecord(d.job_id) });
   }
 }
-function autoLog(x, ok, note) {
-  x.runs = [{ at: Date.now(), ok, note: clipText(note || '', 1000) }, ...(x.runs || [])].slice(0, 20);
+// path: where in the steps it went ("0", "1.then.0"…), so the builder can light up the way a run took.
+function autoLog(x, ok, note, path = null) {
+  x.runs = [{ at: Date.now(), ok, note: clipText(note || '', 1000), ...(path?.length ? { path: path.slice(0, 60) } : {}) }, ...(x.runs || [])].slice(0, 20);
   if (ok) x.count = (x.count || 0) + 1;
   broadcast(x.wsId, { type: 'automation', automation: publicAutomation(x), forAdmins: true });
 }
@@ -3329,13 +3341,14 @@ function runAutomation(x, ctx) {
   if (x.recent.length >= AUTO_RUNS) return Promise.resolve(autoLog(x, false, `Skipped: it already ran ${AUTO_RUNS} times this hour`));
   x.recent.push(Date.now());
   const did = [];
+  did.path = [];
   return FLOWING.run({ autoId: x.id }, async () => {
     try {
       const r = await execSteps(x, ctx, [], 0, did);
       if (r.wait) waitFor(x, ctx, r.wait, did);
-      autoLog(x, true, did.filter(Boolean).join(' · ') || 'nothing to do this time');
+      autoLog(x, true, did.filter(Boolean).join(' · ') || 'nothing to do this time', did.path);
     } catch (e) {
-      autoLog(x, false, (did.length ? did.join(' · ') + ' · then ' : '') + e.message);
+      autoLog(x, false, (did.length ? did.join(' · ') + ' · then ' : '') + e.message, did.path);
     } finally {
       save();
     }
@@ -3400,11 +3413,13 @@ function stepList(x, stack) {
   return list;
 }
 // Runs the steps from a place on; an "only if" goes into its yes or no list, then on after it. A wait stops here.
+const stepAt = (stack, i) => [...stack.map((s) => `${s.at}.${s.key}`), i].join('.');
 async function execSteps(x, ctx, stack, i, log) {
   const list = stepList(x, stack);
   if (!list) return {};
   for (; i < list.length; i++) {
     const s = list[i];
+    log.path?.push(stepAt(stack, i));
     if (s.kind === 'wait') return { wait: { stack, i: i + 1, ms: s.amount * WAIT_UNITS[s.unit], label: `${s.amount} ${s.amount === 1 ? s.unit.slice(0, -1) : s.unit}` } };
     if (s.kind === 'if') {
       const yes = autoWhen(s.when, ctx, x.wsId);
@@ -3467,18 +3482,78 @@ function runWaits(now) {
     const mine = (x.trigger.campaignId && x.trigger.campaignId === (ctx.campaign?.parentId || ctx.campaign?.id) && seesCampaign(x.trigger.campaignId, x.memberId)) || (x.trigger.projectId && x.trigger.projectId === ctx.project?.id && PJ.sees(ctx.project, x.memberId));
     if ((priv && !mine) || (ctx.ownersOnly && !isOwnerId(x.wsId, x.memberId))) { autoLog(x, false, 'A waiting run was dropped: what it’s about is private now'); continue; }
     const log = [];
+    log.path = [];
     FLOWING.run({ autoId: x.id }, async () => {
       try {
         const r = await resumeSteps(x, ctx, w.stack, w.i, log);
         if (r.wait) waitFor(x, ctx, r.wait, log);
-        autoLog(x, true, 'After waiting: ' + (log.join(' · ') || 'nothing left to do'));
+        autoLog(x, true, 'After waiting: ' + (log.join(' · ') || 'nothing left to do'), log.path);
       } catch (e) {
-        autoLog(x, false, 'After waiting: ' + (log.length ? log.join(' · ') + ' · then ' : '') + e.message);
+        autoLog(x, false, 'After waiting: ' + (log.length ? log.join(' · ') + ' · then ' : '') + e.message, log.path);
       } finally {
         save();
       }
     });
   }
+}
+
+// ---------- the builder's "Test it": the way it would go, and what each step would do, doing nothing ----------
+// About the last time it would have gone off (if that was something its maker can see), or a made-up example. Every
+// step is walked, waits included (it says it would wait), and nothing is changed, sent or asked for.
+function sampleCtx(t, auth) {
+  return { recordName: 'Sample job', record: null, project: t.projectId ? db.projects[t.projectId] : null, contact: { name: 'Sample customer' }, customer: 'Sample customer', amount: t.over != null ? t.over + 50 : 250,
+    stageLabel: t.to || 'Done', stage: t.stage || 'customer', from: t.kind === 'record.stage' ? 'Scheduled' : 'Sample sender', who: auth.member, whoId: auth.memberId, date: teamDay(auth.ws.id), task: { text: 'Sample task' },
+    campaign: t.campaignId ? db.campaigns[t.campaignId] : { name: 'Sample campaign' }, note: 'Sample note', text: 'Sample text message', file: { name: 'sample.pdf' }, document: 'Sample agreement.pdf',
+    doc: 'Sample doc', pin: 'Sample pin', invoice: 'INV-0000', category: 'Jobs', phone: '+1 702 555 0100', crew: auth.member, time: '9:00', outcome: t.outcome || 'Interested', status: t.statuses?.[0] || 'onTrack', direction: t.direction || 'in' };
+}
+function testCtx(x, auth) {
+  for (const e of lastEvents.get(x.wsId + ':' + x.trigger.kind) || []) {
+    const ctx = ctxBack(e.ctx);
+    if (!autoMatches(x.trigger, ctx)) continue;
+    if (ctx.project && !PJ.sees(ctx.project, auth.memberId)) continue;
+    if (ctx.campaign?.id && !seesCampaign(ctx.campaign.id, auth.memberId)) continue;
+    return { ctx, about: `The last time: ${autoAbout(ctx) || FL.EVENT[x.trigger.kind].label.toLowerCase()} (${new Date(e.at).toISOString().slice(11, 16)} UTC)`, sample: false };
+  }
+  return { ctx: sampleCtx(x.trigger, auth), about: 'A made-up example (nothing like this has happened since Kloomie last started)', sample: true };
+}
+function autoDescribe(x, a, ctx, ws) {
+  const fill = (v) => clipText(autoFill(v, ctx, ws.id), 140);
+  const nameOf = (id) => ws.members.find((m) => m.id === id)?.name;
+  const c = ['text', 'email'].includes(a.kind) ? flowContact(ctx, ws.id) : null;
+  const custName = c ? contactName(c) : ctx.contact?.name || ctx.customer || 'the customer';
+  switch (a.kind) {
+    case 'task': return `Make the task “${fill(a.text)}”${a.assignee === 'who' ? ` for ${ctx.who || 'whoever set it off'}` : a.assignee && nameOf(a.assignee) ? ` for ${nameOf(a.assignee)}` : ''}`;
+    case 'post': return `Post “${fill(a.text)}” in ${a.channelId === 'same' ? 'the campaign’s feed' : '#' + (ws.channels.find((y) => y.id === a.channelId)?.name || 'general')}`;
+    case 'notify': return `Notify ${a.to.map((v) => ({ owners: 'the owners', admins: 'owners and admins', who: ctx.who || 'whoever set it off' }[v] || nameOf(v) || 'someone')).join(', ')}: “${fill(a.text)}”`;
+    case 'campaign': return `Start the saved campaign “${db.templates[a.templateId]?.name || '?'}”`;
+    case 'contact': return `Change ${ctx.contact?.name || 'the contact'}: ${[a.stage && 'stage ' + a.stage, a.tag && 'tag ' + a.tag].filter(Boolean).join(', ')}`;
+    case 'record': return `Change ${ctx.recordName || 'the job or record'} in ${db.projects[a.projectId]?.name || 'its project'}`;
+    case 'create': return `Add a ${(typeOfP(db.projects[a.projectId], a.typeId)?.singular || 'record').toLowerCase()} to ${db.projects[a.projectId]?.name || 'a project'}`;
+    case 'visit': return `Book ${a.visit === 'Visit' ? 'a visit' : 'the ' + a.visit.toLowerCase()} on ${ctx.recordName || 'the job'} for ${addDays(teamDay(ws.id), a.inDays)}${a.start ? ' at ' + a.start : ''}`;
+    case 'invoice': return `Make an invoice for ${ctx.recordName || 'the job'}${a.send ? ', then ask for an OK to send it' : ' (a draft)'}`;
+    case 'text': return `Ask for an OK to text ${custName}: “${fill(a.text)}”`;
+    case 'email': return `Ask for an OK to email ${custName}: ${fill(a.subject)}`;
+    case 'money': return `Add ${a.amount != null ? dollars(a.amount) : ctx.amount != null ? dollars(ctx.amount) : 'the {amount}'} ${a.direction === 'in' ? 'in' : 'out'} to Finance`;
+    case 'doc': return `Write the doc “${fill(a.title) || db.docTemplates[a.templateId]?.name || 'from the template'}”`;
+    case 'vault': return `Put a sealed note in ${a.to === 'maker' ? (nameOf(x.memberId) || 'your') + '’s' : a.to === 'who' ? (ctx.who || 'whoever set it off') + '’s' : (nameOf(a.to) || 'someone') + '’s'} vault`;
+    case 'webhook': { let host = a.url; try { host = new URL(a.url).host; } catch {} return `Send what happened to ${host}${a.secretId ? ', with its key' : ''}`; }
+    default: return a.kind;
+  }
+}
+function dryRun(x, ctx, ws, stack, out) {
+  const list = stepList(x, stack) || [];
+  for (let i = 0; i < list.length; i++) {
+    const s = list[i], at = stepAt(stack, i);
+    if (s.kind === 'wait') { out.push({ at, said: `Wait ${s.amount} ${s.amount === 1 ? s.unit.slice(0, -1) : s.unit}, then go on` }); continue; }
+    if (s.kind === 'if') {
+      const yes = autoWhen(s.when, ctx, x.wsId);
+      out.push({ at, said: `${yes ? 'Yes' : 'No'}: ${whenText(s.when)}`, yes });
+      dryRun(x, ctx, ws, [...stack, { at: i, key: yes ? 'then' : 'else' }], out);
+      continue;
+    }
+    out.push({ at, said: autoDescribe(x, s, ctx, ws) });
+  }
+  return out;
 }
 
 // ---------- Flows, step 3: actions in every tool, through the app's own routes ----------
@@ -8278,6 +8353,13 @@ async function api(req, res, url) {
       if (!y || y.wsId !== ws.id) return send(res, 404, { error: 'That key is gone.' });
       if (m === 'DELETE') { delete db.flowSecrets[y.id]; save(); return send(res, 200, { ok: true }); }
       return send(res, 405, { error: 'Method not allowed' });
+    }
+    // "Test it", from the builder: an automation as it's being built (checked as if it were saved), walked through.
+    if (b === 'test' && m === 'POST' && !c) {
+      const y = applyAutomation({ id: 'test', wsId: ws.id, memberId: auth.memberId, on: false }, await readJson(req, 50_000), ws);
+      const { ctx, about, sample } = testCtx(y, auth);
+      const steps = dryRun(y, ctx, ws, [], []);
+      return send(res, 200, { about, sample, steps, path: steps.map((st) => st.at) });
     }
     const x = b && db.automations[b];
     if (!x || x.wsId !== ws.id) return send(res, 404, { error: 'Not found' });

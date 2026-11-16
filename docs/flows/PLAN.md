@@ -83,5 +83,21 @@ Each step: server tests that fail on the code before, and real-browser tests (he
     as a Bearer token. It's https only, with a 10-second limit, and only owners and admins can add it.
   - Tests: `tests/flows_vault.mjs` (CI; opens the drops with WebCrypto, as the app does, and checks the saved data
     holds nothing readable) and `tests/flows_vault_ui.mjs` (Chrome).
-- Next: step 5 (agents as steps, the visual editor, trade templates).
+- Step 4 is live as d47220b.
+- The visual builder (the editor part of step 5, asked for by the owner on 2026-11-16) is built:
+  - Editing an automation opens it full screen, as a flow: what sets it off at the top, the steps under it, and
+    "Only if" split into Then and Otherwise side by side (one above the other on a phone).
+  - A + between steps adds one there. A step's ⋮⋮ drags it anywhere, into a branch too; it can't go inside itself,
+    and "Only if" goes 3 deep at most. Each step's menu has Duplicate and Move up/down. ▾ folds a step to one line,
+    and the bar can fold or unfold them all.
+  - A step that's missing something is marked red as you type (`autoProblem`, the same checks the server makes), and
+    the bar counts them. Word chips put {word} where the cursor is.
+  - "Test it" (`POST /api/automations/test`) walks the automation as it's being built, on the last real event of
+    its kind that matches and that its maker can see (`lastEvents`, in memory, never private or owners-only), or on a
+    made-up one. It lights the way it would go and says what each step would do, and it changes, sends and asks for
+    nothing.
+  - Each run keeps the way it went (`run.path`: "0", "1.then.0"…), and "Show a past run" lights it on the canvas.
+  - Tests: `tests/flows_builder.mjs` (CI) and `tests/flows_builder_ui.mjs` (Chrome).
+- Next, the rest of step 5: agents as steps (in agents.js, after checking with column-91) and ready-made flows for
+  each trade.
 - New events for the engine round go into `server/flows.js` `EVENTS` and fire through `automate()`.

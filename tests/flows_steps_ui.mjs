@@ -106,7 +106,7 @@ try {
   await A.ev(`document.querySelector('#sheet .sheet h2 [aria-label=Close]')?.click(); true`);
   await A.tap(`[...document.querySelectorAll('#tool .auto-row')].find((r) => r.textContent.includes('Sort new contacts')).querySelector('.auto-main')`);
   await sleep(500);
-  ok(await A.ev(`document.documentElement.scrollWidth <= 392 && document.querySelector('#sheet .sheet').getBoundingClientRect().right <= 391 && !!document.querySelector('#sheet .auto-steps.nested')`), 'the editor, nested steps and all, fits a phone');
+  ok(await A.until(`document.documentElement.scrollWidth <= 392 && document.querySelector('#sheet .sheet').getBoundingClientRect().right <= 391 && !!document.querySelector('#sheet .auto-steps.nested')`, 4000), 'the editor, nested steps and all, fits a phone');
   ok(!A.errors.length, 'no errors in the page' + (A.errors.length ? ': ' + A.errors.join(' | ').slice(0, 300) : ''));
 } catch (e) {
   ok(false, 'threw: ' + e.stack);
