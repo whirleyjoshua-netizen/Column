@@ -67,5 +67,21 @@ Each step: server tests that fail on the code before, and real-browser tests (he
   - New route: `POST /api/contacts/:id/email`.
   - Tests: `tests/flows_actions.mjs` (CI) and `tests/flows_actions_ui.mjs` (Chrome: build it in the editor, move a
     job, OK the email and the invoice from Home, at phone width too).
-- Next: step 4 (vault drop, sealed flow secrets), then step 5 (agents as steps, the visual editor, trade templates).
+- Step 3 is live as c692312.
+- Step 4 (vault drops, automation keys, sending to another app) is built:
+  - Drop key: each vault gets one when it's set up or next unlocked, made in the browser. It's a P-256 key pair; the
+    public half goes to the server, and the private half is stored only encrypted with the vault's own key.
+  - The "Put a sealed note in a vault" step goes to the maker, whoever set it off, or a named person. It seals the
+    note to that drop key (`sealToVault`: one-time ECDH, HKDF-SHA256, AES-256-GCM) before anything is saved, so the
+    server can never read it.
+  - The note waits in `db.vaultDrops`. On the next unlock the browser opens it and keeps it as an ordinary vault item.
+  - The run log only says a note was left, never what was in it. Starting the vault over throws drops away, and so
+    does leaving the team.
+  - Automation keys (`db.flowSecrets`, `/api/automations/secrets`) are sealed with `seal` and never shown again
+    (only the last four), and automations refer to them by id.
+  - The "Send to another app" step posts what happened (the event's words) as JSON through `safeFetch`, with the key
+    as a Bearer token. It's https only, with a 10-second limit, and only owners and admins can add it.
+  - Tests: `tests/flows_vault.mjs` (CI; opens the drops with WebCrypto, as the app does, and checks the saved data
+    holds nothing readable) and `tests/flows_vault_ui.mjs` (Chrome).
+- Next: step 5 (agents as steps, the visual editor, trade templates).
 - New events for the engine round go into `server/flows.js` `EVENTS` and fire through `automate()`.

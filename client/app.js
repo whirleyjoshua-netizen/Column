@@ -785,6 +785,7 @@
     if (kind === 'rec') return openRecord(id);
     if (kind === 'contact') return openContactById(id);
     if (kind === 'approval') return approvalSheet(id);
+    if (kind === 'vault') return openTool('vault');
     if (kind === 'card') return openTool('cards');
     if (kind === 'asset') return openAsset(id);
     if (kind === 'agent') return AG.data ? agOpen('run:' + id) : (AG.view = 'run:' + id, openTool('agents'));
@@ -5138,10 +5139,12 @@
     return AUTO_CAT;
   }
   const AUTO_DO = { task: 'Make a task', post: 'Post in a feed', campaign: 'Start a saved campaign', notify: 'Notify people', contact: 'Change the contact', record: 'Change the job or record', create: 'Add a job or record',
-    visit: 'Book a visit on the job', invoice: 'Bill the job (an invoice)', text: 'Text the customer (after an OK)', email: 'Email the customer (after an OK)', money: 'Add money to Finance', doc: 'Write a doc from a template' };
+    visit: 'Book a visit on the job', invoice: 'Bill the job (an invoice)', text: 'Text the customer (after an OK)', email: 'Email the customer (after an OK)', money: 'Add money to Finance', doc: 'Write a doc from a template',
+    vault: 'Put a sealed note in a vault', webhook: 'Send to another app (a web address)' };
+  const AUTO_KEYS = { list: null };
   // Who may pick which (the server checks the same): billing and messaging customers are for owners and admins, the
   // business's money for owners.
-  const autoDoOk = (k) => (k === 'money' ? amOwner() : ['invoice', 'text', 'email'].includes(k) ? amAdmin() : true);
+  const autoDoOk = (k) => (k === 'money' ? amOwner() : ['invoice', 'text', 'email', 'webhook'].includes(k) ? amAdmin() : true);
   // The fields an automation can set (the server checks the same): plain values, never price lines or files.
   const AUTO_SET_T = ['text', 'number', 'money', 'date', 'select', 'multi', 'checkbox', 'person', 'email', 'phone', 'url'];
   const AUTO_WORDS = {
@@ -5333,6 +5336,8 @@
             : k.value === 'email' ? { kind: 'email', subject: '', text: a.text || '' }
             : k.value === 'money' ? { kind: 'money', direction: 'in', amount: '', category: '', note: '' }
             : k.value === 'doc' ? { kind: 'doc', templateId: DT.list?.[0]?.id || '', title: '' }
+            : k.value === 'vault' ? { kind: 'vault', to: 'maker', title: '', text: '' }
+            : k.value === 'webhook' ? { kind: 'webhook', url: '', secretId: null }
             : { kind: k.value, text: a.text || '', to: [], channelId: 'same' };
           draw();
         });
@@ -5451,6 +5456,40 @@
           title.addEventListener('input', () => (a.title = title.value));
           f.push(h('label', {}, 'Template', sel), h('label', {}, 'Title', title),
             h('small', { class: 'hint' }, tpls.length || !DT.list ? 'A new doc from the template, for the whole team, by this automation.' : 'Save a doc as a template first (open a doc, ⋯ → Save as a team template).'));
+        }
+        if (a.kind === 'vault') {
+          const to = h('select', { class: 'auto-vault-to', 'aria-label': 'Whose vault' }, opt('maker', 'Mine (who made this)', a.to || 'maker'), opt('who', 'Whoever set it off', a.to || 'maker'), people.map((m) => opt(m.id, m.name, a.to || 'maker')));
+          to.addEventListener('change', () => (a.to = to.value));
+          const title = h('input', { value: a.title || '', placeholder: 'Gate code for {record}', class: 'auto-vault-title' });
+          title.addEventListener('input', () => (a.title = title.value));
+          const body = h('textarea', { rows: 3, placeholder: 'What goes in it: {record}, {customer}, {note}…', class: 'auto-vault-text' }, a.text || '');
+          body.addEventListener('input', () => (a.text = body.value));
+          f.push(h('label', {}, 'Whose vault', to), h('label', {}, 'Title', title), h('label', {}, 'Note', body),
+            h('small', { class: 'hint' }, 'Sealed to their vault before it’s saved: nobody, Kloomie included, can read it after that. It waits until they next unlock their vault, then it’s theirs. The run log only says it was left.'));
+        }
+        if (a.kind === 'webhook') {
+          if (!AUTO_KEYS.list && !AUTO_KEYS.loading) AUTO_KEYS.loading = api('GET', '/automations/secrets').then((l) => { AUTO_KEYS.list = l; if (box.isConnected) draw(); }).catch(() => {}).finally(() => (AUTO_KEYS.loading = null));
+          const url = h('input', { value: a.url || '', placeholder: 'https://hooks.zapier.com/…', class: 'auto-hook-url', inputmode: 'url' });
+          url.addEventListener('input', () => (a.url = url.value.trim()));
+          const keys = AUTO_KEYS.list || [];
+          const ks = h('select', { class: 'auto-hook-key', 'aria-label': 'Key' }, opt('', 'No key', a.secretId || ''), keys.map((y) => opt(y.id, `${y.name} (…${y.last4})`, a.secretId || '')), opt('+', '+ Add a key…', ''));
+          const adding = h('div', { class: 'auto-key-new', hidden: true });
+          const kn = h('input', { placeholder: 'Name, like Zapier hook', class: 'auto-key-name' });
+          const kv = h('input', { type: 'password', autocomplete: 'off', placeholder: 'Paste the key', class: 'auto-key-value' });
+          const save = h('button', { class: 'btn small primary-btn auto-key-save' }, 'Keep it sealed');
+          save.addEventListener('click', async () => {
+            try {
+              const y = await api('POST', '/automations/secrets', { name: kn.value.trim(), value: kv.value.trim() });
+              kv.value = '';
+              AUTO_KEYS.list = [...(AUTO_KEYS.list || []), y];
+              a.secretId = y.id;
+              draw();
+            } catch (e) { toast(e.message); }
+          });
+          adding.append(h('div', { class: 'row2' }, kn, kv), save, h('small', { class: 'hint' }, 'Sealed on Kloomie’s server and never shown again (only its last four). Sent as “Authorization: Bearer …”.'));
+          ks.addEventListener('change', () => { if (ks.value === '+') { adding.hidden = false; kn.focus(); } else { adding.hidden = true; a.secretId = ks.value || null; } });
+          f.push(h('label', {}, 'Address', url), h('label', {}, 'Key', ks), adding,
+            h('small', { class: 'hint' }, 'Sends what happened ({record}, {amount}, {customer}… whatever this one fills in) as JSON, every time it runs. Only public https addresses; it gives up after 10 seconds.'));
         }
         if (a.kind === 'wait') {
           const n = h('input', { type: 'number', min: 1, max: 999, value: a.amount ?? 1, class: 'auto-wait-n', 'aria-label': 'How long' });
@@ -16069,9 +16108,10 @@
   async function loadVault() {
     try {
       const v = await api('GET', '/vault');
-      VK.meta = v.salt ? { salt: v.salt, iters: v.iters, check: v.check } : null;
+      VK.meta = v.salt ? { salt: v.salt, iters: v.iters, check: v.check, drop: v.drop || null } : null;
       VK.raw = v.items || [];
-      if (VK.key) await vaultDecryptAll();
+      VK.drops = v.drops || [];
+      if (VK.key) { await vaultDecryptAll(); await vaultDropsIn(); }
     } catch {}
     renderCamps();
     renderTool();
@@ -16097,8 +16137,50 @@
     VK.key = key;
     vaultTouch();
     await vaultDecryptAll();
+    await vaultDropsIn();
     renderTool();
     renderCamps();
+  }
+  // Drops (automations, Flows step 4): notes sealed on the server to this vault's drop key. The key pair is made here
+  // once the vault is unlocked: the public half goes to the server, the private half only encrypted with the vault's
+  // own key. Each drop is opened here (ECDH, HKDF-SHA256, AES-GCM) and kept as an ordinary item, then thrown away.
+  async function vaultDropsIn() {
+    if (!VK.key || !VK.meta || VK.dropping) return;
+    VK.dropping = true;
+    let kept = 0;
+    try {
+      const C = crypto.subtle, P256 = { name: 'ECDH', namedCurve: 'P-256' };
+      if (!VK.meta.drop) {
+        const kp = await C.generateKey(P256, true, ['deriveBits']);
+        const pub = b64u(new Uint8Array(await C.exportKey('raw', kp.publicKey)));
+        const priv = await vaultSeal(VK.key, b64u(new Uint8Array(await C.exportKey('pkcs8', kp.privateKey))));
+        VK.meta.drop = (await api('POST', '/vault/dropkey', { pub, priv })).drop;
+      }
+      if (!VK.drops?.length) return;
+      const priv = await C.importKey('pkcs8', unb64u(await vaultOpen(VK.key, VK.meta.drop.priv)), P256, false, ['deriveBits']);
+      for (const d of VK.drops) {
+        try {
+          const epk = await C.importKey('raw', unb64u(d.epk), P256, false, []);
+          const hk = await C.importKey('raw', await C.deriveBits({ name: 'ECDH', public: epk }, priv, 256), 'HKDF', false, ['deriveKey']);
+          const k = await C.deriveKey({ name: 'HKDF', hash: 'SHA-256', salt: unb64u(d.epk), info: new TextEncoder().encode('kloomie-vault-drop') }, hk, { name: 'AES-GCM', length: 256 }, false, ['decrypt']);
+          const x = await vaultOpen(k, d.blob);
+          const item = { kind: 'note', title: String(x.title || 'From an automation').slice(0, 120), note: `${String(x.note || '')}\n\n(Left by the automation “${String(x.from || d.from || '')}”)`.trim() };
+          await api('POST', '/vault/items', { blob: await vaultSeal(VK.key, item) });
+          await api('DELETE', '/vault/drops/' + d.id);
+          kept++;
+        } catch (e) {
+          console.warn('A vault drop couldn’t be opened', e);
+        }
+      }
+    } catch (e) {
+      console.warn('Vault drops', e);
+    } finally {
+      VK.dropping = false;
+    }
+    if (kept) {
+      toast(kept === 1 ? 'A sealed note from an automation is in your vault now' : `${kept} sealed notes from automations are in your vault now`);
+      await loadVault();
+    }
   }
   function vaultLock() {
     if (!VK.key && !VK.items) return;
@@ -16221,6 +16303,7 @@
     setTimeout(() => pass.focus());
     return [
       h('div', { class: 'vault-lock' }, h('span', { class: 'vault-big', html: I.lock }), h('b', {}, 'Your vault is locked'),
+        VK.drops?.length ? h('p', { class: 'day-hint vault-drops' }, VK.drops.length === 1 ? 'A sealed note from an automation is waiting. Unlock to keep it.' : `${VK.drops.length} sealed notes from automations are waiting. Unlock to keep them.`) : null,
         h('div', { class: 'vault-unlock' }, pass, go), err, reset),
     ];
   }
@@ -16240,12 +16323,14 @@
         const salt = b64u(crypto.getRandomValues(new Uint8Array(16)));
         const key = await vaultDerive(pass.value, salt, VAULT_ITERS);
         const v = await api('POST', '/vault/setup', { salt, iters: VAULT_ITERS, check: await vaultSeal(key, VAULT_CHECK), reset });
-        VK.meta = { salt: v.salt, iters: v.iters, check: v.check };
+        VK.meta = { salt: v.salt, iters: v.iters, check: v.check, drop: null };
         VK.raw = [];
         VK.items = [];
         VK.key = key;
         VK.resetting = false;
+        VK.drops = [];
         vaultTouch();
+        vaultDropsIn();
         renderTool();
         renderCamps();
         if (VK.draft) { const d = VK.draft; VK.draft = null; vaultQuick(d); }

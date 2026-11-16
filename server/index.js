@@ -67,7 +67,7 @@ fs.mkdirSync(FILES_DIR, { recursive: true });
 // Everything lives in memory; save() hands the whole thing to the store a moment later.
 const IMPORT_PATH = path.join(DATA_DIR, 'import-pending.json');
 const store = await openStore({ url: process.env.DATABASE_URL, file: DB_PATH, importFile: IMPORT_PATH });
-let db = { workspaces: {}, tokens: {}, items: {}, entries: {}, tasks: {}, uploads: {}, campaigns: {}, goals: {}, attempts: {}, lists: {}, templates: {}, calendars: {}, ai: {}, pss: {}, sends: {}, bills: {}, meetings: {}, money: {}, budgets: {}, plans: {}, sidekick: {}, vaults: {}, vaultItems: {}, signs: {}, signatures: {}, trips: {}, pins: {}, zones: {}, comments: {}, users: {}, resets: {}, invites: {}, exports: {}, contacts: {}, optouts: {}, unsubs: {}, gcontacts: {}, automations: {}, notices: {}, calfeeds: {}, pushSubs: {}, keys: {}, mileage: {}, trash: {}, docTemplates: {}, flowWaits: {} };
+let db = { workspaces: {}, tokens: {}, items: {}, entries: {}, tasks: {}, uploads: {}, campaigns: {}, goals: {}, attempts: {}, lists: {}, templates: {}, calendars: {}, ai: {}, pss: {}, sends: {}, bills: {}, meetings: {}, money: {}, budgets: {}, plans: {}, sidekick: {}, vaults: {}, vaultItems: {}, signs: {}, signatures: {}, trips: {}, pins: {}, zones: {}, comments: {}, users: {}, resets: {}, invites: {}, exports: {}, contacts: {}, optouts: {}, unsubs: {}, gcontacts: {}, automations: {}, notices: {}, calfeeds: {}, pushSubs: {}, keys: {}, mileage: {}, trash: {}, docTemplates: {}, flowWaits: {}, vaultDrops: {}, flowSecrets: {} };
 const loaded = await store.load();
 if (loaded.db) db = { ...db, ...loaded.db };
 if (loaded.fromFile) console.log(`Moving ${path.basename(loaded.fromFile)} into Postgres.`);
@@ -3099,7 +3099,9 @@ function dueSlots(x, now) {
 const AUTO_TRIGGERS = FL.EVENTS.map((e) => e.type);
 // record: change the job or record it's about; create: add one (to any list its maker can see). Flows step 3: book a
 // visit, make (and send) an invoice, text or email the customer, add the business's money, write a doc from a template.
-const AUTO_ACTIONS = ['task', 'post', 'campaign', 'notify', 'contact', 'record', 'create', 'visit', 'invoice', 'text', 'email', 'money', 'doc'];
+// Step 4: drop a sealed note into a person's vault, and send what happened to another app (a web address, with a key
+// from the team's sealed automation keys).
+const AUTO_ACTIONS = ['task', 'post', 'campaign', 'notify', 'contact', 'record', 'create', 'visit', 'invoice', 'text', 'email', 'money', 'doc', 'vault', 'webhook'];
 const AUTO_RUNS = 30;
 const AUTO_MAX = 50;
 // Set while an automation's own work runs, through every await of the routes it calls: what it does sets nothing off.
@@ -3160,6 +3162,7 @@ function applyAutomation(x, body, ws) {
       if (a.kind === 'notify' && !a.to.length) throw badRequest('Pick who to notify.');
       if (a.kind === 'contact' && !a.stage && !a.tag) throw badRequest('Pick a stage or a tag for the contact.');
       if (a.kind === 'text' && !a.text) throw badRequest('Write the text.');
+      if (a.kind === 'vault' && !a.text) throw badRequest('Write what goes in the vault.');
       if (a.kind === 'email' && (!a.subject || !a.text)) throw badRequest('Write the email’s subject and message.');
     }
     // Runs waiting in the old steps would go on from the wrong place: they're dropped.
@@ -3201,6 +3204,21 @@ function cleanAction(a, ws, who) {
     const n = a.amount === '' || a.amount == null ? null : Number(String(a.amount).replace(/[$,\s]/g, ''));
     if (n != null && !(n > 0 && n <= 1e9)) throw badRequest('The amount is a number of dollars, like 250, or leave it empty to use the {amount} of what set it off.');
     return { kind, direction: a.direction === 'in' ? 'in' : 'out', amount: n == null ? null : Math.round(n * 100) / 100, category: cleanText(a.category, 40), note: cleanText(a.note, 200) };
+  }
+  if (kind === 'vault') {
+    const to = a.to === 'who' || a.to === 'maker' ? a.to : ws.members.some((m) => m.id === a.to) ? a.to : 'maker';
+    return { kind, to, title: cleanText(a.title, 120), text: String(a.text ?? '').replace(/\r\n?/g, '\n').trim().slice(0, 5000) };
+  }
+  if (kind === 'webhook') {
+    if (!isAdminId(ws.id, who)) throw badRequest('Only owners and admins can have an automation send to another app.');
+    let u;
+    try { u = new URL(String(a.url || '').trim()); } catch { throw badRequest('Enter the web address to send to, starting with https://'); }
+    if (u.protocol !== 'https:' && !(process.env.ALLOW_LOCAL_WEBHOOKS === '1' && u.protocol === 'http:')) throw badRequest('The address has to start with https://');
+    if (u.username || u.password) throw badRequest('Put the key in the automation keys, not in the address.');
+    if (u.href.length > 500) throw badRequest('That address is too long.');
+    const sec = a.secretId ? db.flowSecrets[a.secretId] : null;
+    if (a.secretId && (!sec || sec.wsId !== ws.id)) throw badRequest('That key is gone.');
+    return { kind, url: u.href, secretId: sec?.id || null };
   }
   if (kind === 'doc') {
     const tpl = db.docTemplates[a.templateId];
@@ -3532,6 +3550,40 @@ async function flowAction(x, a, ctx, ws) {
     const m = (await flowCall(x, 'POST', '/api/money', { kind: a.direction, amount, day: teamDay(ws.id), scope: 'business', category: a.category || ctx.category || '', note: autoFill(a.note || '{record}', ctx, ws.id) })).body;
     return `Added ${dollars(m.amount / 100)} ${m.kind === 'in' ? 'in' : 'out'} to Finance`;
   }
+  // Into a person's vault, sealed to its drop key: the server can lock it but never open it again; the note stays
+  // waiting until they next unlock their vault, where it becomes an item. The log never says what was in it.
+  if (a.kind === 'vault') {
+    const to = a.to === 'who' ? (ws.members.some((m) => m.id === ctx.whoId) ? ctx.whoId : null) : a.to === 'maker' ? x.memberId : a.to;
+    const m = to && memberIn(ws.id, to);
+    if (!m) return 'Nothing put in a vault: no one on the team set it off';
+    const v = db.vaults[vaultKey(ws.id, m.id)];
+    if (!v?.dropPub) return `Nothing put in ${m.name}’s vault: they haven’t opened their vault since it could take drops`;
+    if (Object.values(db.vaultDrops).filter((d) => d.wsId === ws.id && d.memberId === m.id).length >= VAULT_DROPS) return `Nothing put in ${m.name}’s vault: ${VAULT_DROPS} drops are already waiting for them to open it`;
+    const sealed = sealToVault(v.dropPub, { kind: 'note', title: autoFill(a.title, ctx, ws.id) || x.name, note: autoFill(a.text, ctx, ws.id), from: x.name, at: Date.now() });
+    const d = { id: rid(), wsId: ws.id, memberId: m.id, ...sealed, from: clipText(x.name, 80), at: Date.now() };
+    db.vaultDrops[d.id] = d;
+    broadcast(ws.id, { type: 'vault', forMember: m.id });
+    notify(ws.id, m.id, { title: 'Something new for your vault', text: `The automation “${x.name}” left you a sealed note. Open your vault to keep it.`, kind: 'vault', go: 'vault' });
+    return `Put a sealed note in ${m.name}’s vault`;
+  }
+  // To another app: what happened (the words the event fills in), as JSON, with the team's key if it has one. Through
+  // safeFetch (public addresses only, a timeout, no redirects); the reply is only checked for success.
+  if (a.kind === 'webhook') {
+    const sec = a.secretId ? db.flowSecrets[a.secretId] : null;
+    if (a.secretId && (!sec || sec.wsId !== ws.id)) throw new Error('its key is gone');
+    if (!isAdminId(ws.id, x.memberId)) throw new Error('its maker isn’t an owner or admin any more');
+    const words = Object.fromEntries(Object.entries(autoVars(ctx, ws.id)).filter(([, v]) => v != null && v !== '').map(([k, v]) => [k, String(v)]));
+    const body = JSON.stringify({ automation: x.name, event: x.trigger.kind, at: new Date().toISOString(), team: ws.name, words });
+    let r;
+    try {
+      r = await safeFetch(a.url, { method: 'POST', allowLocal: process.env.ALLOW_LOCAL_WEBHOOKS === '1', httpsOnly: process.env.ALLOW_LOCAL_WEBHOOKS !== '1', timeout: 10_000, maxBytes: 16_000, truncate: true,
+        headers: { 'Content-Type': 'application/json', 'User-Agent': 'Kloomie-Automations/1', ...(sec ? { Authorization: 'Bearer ' + unseal(sec.sealed).v } : {}) }, body });
+    } catch (e) {
+      throw new Error(`${new URL(a.url).host} couldn’t be reached (${e.code === 'BLOCKED' ? 'that address isn’t allowed' : clipText(e.message, 80)})`);
+    }
+    if (r.status >= 300) throw new Error(`${new URL(a.url).host} said ${r.status}`);
+    return `Sent to ${new URL(a.url).host}`;
+  }
   if (a.kind === 'doc') {
     if (!db.docTemplates[a.templateId]) throw new Error('its doc template is gone');
     const it = (await flowCall(x, 'POST', `/api/doc-templates/${a.templateId}/use`, { title: autoFill(a.title, ctx, ws.id) || undefined })).body;
@@ -3541,7 +3593,7 @@ async function flowAction(x, a, ctx, ws) {
 
 async function autoAction(x, a, ctx) {
   const ws = db.workspaces[x.wsId];
-  if (['visit', 'invoice', 'text', 'email', 'money', 'doc'].includes(a.kind)) return flowAction(x, a, ctx, ws);
+  if (['visit', 'invoice', 'text', 'email', 'money', 'doc', 'vault', 'webhook'].includes(a.kind)) return flowAction(x, a, ctx, ws);
   const say = autoFill(a.text, ctx, ws.id);
   if (a.kind === 'task') {
     const camp = a.campaign === 'same' ? ctx.campaign : db.campaigns[a.campaign];
@@ -5118,8 +5170,29 @@ async function signApi(req, res, token, part) {
 // that key, so a wrong passphrase can be told apart), and each item's encrypted blob. Links to a campaign
 // or contact are kept readable so the campaign can show a lock; what's in the item isn't.
 // Lose the passphrase and the contents are gone: starting over deletes them.
-const VAULT_ITEMS = 1000;
+const VAULT_ITEMS = 1000, VAULT_DROPS = 200;
 const B64 = /^[\w-]+$/;
+// Drops (Flows step 4): something an automation puts in a person's vault. The vault keeps a drop key: a P-256 public
+// key the server can seal to, whose private half is kept encrypted with the vault's own key (so only an unlocked
+// vault opens it). Sealing: a new key pair each time, ECDH with the drop key, HKDF-SHA256 (salt: the one-time public
+// key, info "kloomie-vault-drop") to an AES-256-GCM key. The browser opens it on unlock and keeps it as a vault item.
+function sealToVault(pubB64, value) {
+  const e = crypto.createECDH('prime256v1');
+  const epk = e.generateKeys();
+  const key = Buffer.from(crypto.hkdfSync('sha256', e.computeSecret(Buffer.from(pubB64, 'base64url')), epk, Buffer.from('kloomie-vault-drop'), 32));
+  const iv = crypto.randomBytes(12);
+  const c = crypto.createCipheriv('aes-256-gcm', key, iv);
+  const ct = Buffer.concat([c.update(JSON.stringify(value), 'utf8'), c.final(), c.getAuthTag()]);
+  return { epk: epk.toString('base64url'), blob: Buffer.concat([iv, ct]).toString('base64url') };
+}
+function dropPubOk(v) {
+  const t = String(v || '');
+  if (!B64.test(t) || t.length > 100) return false;
+  const b = Buffer.from(t, 'base64url');
+  if (b.length !== 65 || b[0] !== 4) return false;
+  try { const e = crypto.createECDH('prime256v1'); e.generateKeys(); e.computeSecret(b); return true; } catch { return false; }
+}
+const publicDrop = ({ wsId, memberId, ...d }) => d;
 const vaultKey = (wsId, memberId) => `${wsId}:${memberId}`;
 const publicVaultItem = ({ wsId, memberId, ...x }) => x;
 function vaultBlob(v, max) {
@@ -7552,7 +7625,8 @@ async function api(req, res, url) {
     const key = vaultKey(ws.id, auth.memberId);
     const mine = () => Object.values(db.vaultItems).filter((x) => x.wsId === ws.id && x.memberId === auth.memberId);
     const v = db.vaults[key];
-    if (m === 'GET' && !b) return send(res, 200, v ? { salt: v.salt, iters: v.iters, check: v.check, items: mine().map(publicVaultItem) } : { salt: null });
+    const drops = () => Object.values(db.vaultDrops).filter((d) => d.wsId === ws.id && d.memberId === auth.memberId).sort((p, q) => p.at - q.at);
+    if (m === 'GET' && !b) return send(res, 200, v ? { salt: v.salt, iters: v.iters, check: v.check, items: mine().map(publicVaultItem), drop: v.dropPub ? { pub: v.dropPub, priv: v.dropPriv } : null, drops: drops().map(publicDrop) } : { salt: null });
     // Set up, or start over with a new passphrase (which deletes everything in it).
     if (m === 'POST' && b === 'setup') {
       const body = await readJson(req, 10_000);
@@ -7561,12 +7635,31 @@ async function api(req, res, url) {
       if (!(iters >= 100_000 && iters <= 10_000_000)) return send(res, 400, { error: 'Bad key settings.' });
       const next = { wsId: ws.id, memberId: auth.memberId, salt: vaultBlob(body.salt, 64), iters, check: vaultBlob(body.check, 200), createdAt: Date.now() };
       for (const x of mine()) delete db.vaultItems[x.id];
+      for (const d of drops()) delete db.vaultDrops[d.id];
       db.vaults[key] = next;
       save();
       broadcast(ws.id, { type: 'vault', forMember: auth.memberId });
       return send(res, 200, { salt: next.salt, iters, check: next.check, items: [] });
     }
     if (!v) return send(res, 400, { error: 'Set up your vault first.' });
+    // The drop key, made in the browser once the vault is unlocked: set once (starting over clears it).
+    if (b === 'dropkey' && m === 'POST') {
+      const body = await readJson(req, 10_000);
+      if (v.dropPub) return send(res, 409, { error: 'Your vault already takes drops.' });
+      if (!dropPubOk(body.pub)) return send(res, 400, { error: 'That isn’t a drop key.' });
+      v.dropPub = String(body.pub);
+      v.dropPriv = vaultBlob(body.priv, 2000);
+      save();
+      return send(res, 200, { drop: { pub: v.dropPub, priv: v.dropPriv } });
+    }
+    // A drop, once it's kept as an item (or thrown away).
+    if (b === 'drops' && c && m === 'DELETE') {
+      const d = db.vaultDrops[c];
+      if (!d || d.wsId !== ws.id || d.memberId !== auth.memberId) return send(res, 404, { error: 'Not found' });
+      delete db.vaultDrops[d.id];
+      save();
+      return send(res, 200, { ok: true });
+    }
     if (b === 'items') {
       if (m === 'POST' && !c) {
         if (mine().length >= VAULT_ITEMS) return send(res, 400, { error: `A vault holds up to ${VAULT_ITEMS} items.` });
@@ -8163,6 +8256,28 @@ async function api(req, res, url) {
       save();
       broadcast(ws.id, { type: 'automation', automation: publicAutomation(x), forAdmins: true });
       return send(res, 200, publicAutomation(x));
+    }
+    // Keys automations send with (a token for another app): sealed on the server, never shown again, only the last
+    // four. Deleting one makes the automations that use it fail (and say so) until they're given another.
+    if (b === 'secrets') {
+      const keys = () => Object.values(db.flowSecrets).filter((y) => y.wsId === ws.id).sort((p, q) => p.at - q.at);
+      const pub = ({ id, name, last4, by, at }) => ({ id, name, last4, by, at, used: Object.values(db.automations).filter((y) => y.wsId === ws.id && JSON.stringify(y.actions).includes(`"secretId":"${id}"`)).length });
+      if (m === 'GET' && !c) return send(res, 200, keys().map(pub));
+      if (m === 'POST' && !c) {
+        const body = await readJson(req, 10_000);
+        const name = cleanText(body.name, 60), value = String(body.value ?? '').trim();
+        if (!name) return send(res, 400, { error: 'Name the key, like “Zapier hook”.' });
+        if (value.length < 8 || value.length > 4000 || /[\r\n]/.test(value)) return send(res, 400, { error: 'Paste the key: one line, at least 8 characters.' });
+        if (keys().length >= 50) return send(res, 400, { error: 'A team can keep 50 automation keys.' });
+        const y = { id: rid(), wsId: ws.id, name, sealed: seal({ v: value }), last4: value.slice(-4), by: auth.member, at: Date.now() };
+        db.flowSecrets[y.id] = y;
+        save();
+        return send(res, 200, pub(y));
+      }
+      const y = c && db.flowSecrets[c];
+      if (!y || y.wsId !== ws.id) return send(res, 404, { error: 'That key is gone.' });
+      if (m === 'DELETE') { delete db.flowSecrets[y.id]; save(); return send(res, 200, { ok: true }); }
+      return send(res, 405, { error: 'Method not allowed' });
     }
     const x = b && db.automations[b];
     if (!x || x.wsId !== ws.id) return send(res, 404, { error: 'Not found' });
@@ -10793,6 +10908,7 @@ async function removeMember(ws, m, { removed = false } = {}) {
   for (const x of Object.values(db.bills)) if (theirs(x) && x.scope !== 'business') delete db.bills[x.id];
   for (const x of Object.values(db.budgets)) if (theirs(x) && x.scope !== 'business') delete db.budgets[x.id];
   for (const x of Object.values(db.vaultItems)) if (theirs(x)) delete db.vaultItems[x.id];
+  for (const x of Object.values(db.vaultDrops)) if (theirs(x)) delete db.vaultDrops[x.id];
   delete db.vaults[vaultKey(wsId, id)];
   for (const x of Object.values(db.calfeeds)) if (theirs(x)) delete db.calfeeds[x.id];
   for (const x of Object.values(db.pushSubs)) if (theirs(x)) delete db.pushSubs[x.id];
