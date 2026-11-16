@@ -46,9 +46,8 @@ try {
   await A.until(`location.href.startsWith(${JSON.stringify(APP)}) && document.readyState === 'complete'`, 15000);
   await A.ev(`localStorage.setItem('column.token', ${JSON.stringify(JSON.stringify(a.token))}); location.reload(); true`);
   ok(await A.until(`!document.querySelector('#app')?.classList.contains('hidden') && !!document.querySelector('#settingsBtn')`, 20000), 'signed in');
-  await A.tap(`document.querySelector('#settingsBtn')`);
-  await A.tap(`[...document.querySelectorAll('#settings [role=tab]')].find((b) => b.textContent === 'Automations')`);
-  await A.tap(`[...document.querySelectorAll('#settings button')].find((b) => b.textContent === '+ New automation')`);
+  await A.until(`!!document.querySelector('#tabs [data-tab=automations]')`, 10000); await A.ev(`document.querySelector('#tabs [data-tab=automations]').click(); true`); // in Workspace now (2026-11-14)
+  await A.tap(`[...document.querySelectorAll('#tool button')].find((b) => b.textContent === '+ New automation')`);
   await A.until(`!!document.querySelector('#sheet .auto-kind')`);
   await A.pick(`document.querySelector('#sheet .auto-kind')`, 'contact.created');
   await A.fill(`document.querySelector('#sheet .auto-edit input')`, 'Sort new contacts');
@@ -82,10 +81,10 @@ try {
   await A.fill(`${last}.querySelector('input')`, 'TWO DAYS LATER {contact}');
   await A.pick(`[...${last}.querySelectorAll('select')][1]`, 'general');
   await A.tap(`[...document.querySelectorAll('#sheet .btns button')].find((b) => b.textContent === 'Turn it on')`);
-  ok(await A.until(`[...document.querySelectorAll('#settings .auto-row b')].some((b) => b.textContent === 'Sort new contacts')`), 'saved');
+  ok(await A.until(`[...document.querySelectorAll('#tool .auto-row b')].some((b) => b.textContent === 'Sort new contacts')`), 'saved');
   const saved = (await api('GET', '/automations')).find((x) => x.name === 'Sort new contacts');
   ok(saved && saved.actions.map((s) => s.kind).join() === 'if,wait,post' && saved.actions[0].then[0].text === 'LEAD {contact}' && saved.actions[0].else[0].text === 'OTHER {contact}' && saved.actions[1].amount === 2, 'with its nested steps, as built');
-  ok(await A.ev(`[...document.querySelectorAll('#settings .auto-row small')].some((s) => s.textContent.includes('if {stage}') && s.textContent.includes('wait 2 days'))`), 'its summary says what it decides and how long it waits');
+  ok(await A.ev(`[...document.querySelectorAll('#tool .auto-row small')].some((s) => s.textContent.includes('if {stage}') && s.textContent.includes('wait 2 days'))`), 'its summary says what it decides and how long it waits');
 
   // It runs: each contact the right way, and the wait.
   await api('POST', '/contacts', { name: 'Ana', stage: 'lead' });
@@ -94,8 +93,8 @@ try {
   let g = [];
   for (let i = 0; i < 40; i++) { g = await general(); if (g.includes('LEAD Ana') && g.includes('OTHER Bo')) break; await sleep(150); }
   ok(g.includes('LEAD Ana') && g.includes('OTHER Bo') && !g.includes('OTHER Ana') && !g.includes('LEAD Bo'), 'each contact goes the right way');
-  ok(await A.until(`[...document.querySelectorAll('#settings .auto-waiting')].some((s) => /2 runs waiting/.test(s.textContent))`), 'two runs wait, and the list says so');
-  await A.tap(`[...document.querySelectorAll('#settings .auto-row')].find((r) => r.textContent.includes('Sort new contacts')).querySelector('[aria-label="Options"]')`);
+  ok(await A.until(`[...document.querySelectorAll('#tool .auto-waiting')].some((s) => /2 runs waiting/.test(s.textContent))`), 'two runs wait, and the list says so');
+  await A.tap(`[...document.querySelectorAll('#tool .auto-row')].find((r) => r.textContent.includes('Sort new contacts')).querySelector('[aria-label="Options"]')`);
   await A.tap(`[...document.querySelectorAll('#menu button')].find((b) => b.textContent.startsWith('Waiting runs'))`);
   ok(await A.until(`document.querySelectorAll('#sheet .int-log .bill').length === 2`), 'the waiting runs are listed, about Ana and Bo');
   await A.tap(`[...document.querySelectorAll('#sheet .int-log .bill')].find((r) => r.textContent.includes('Bo')).querySelector('button')`);
@@ -105,7 +104,7 @@ try {
   ok(g.includes('TWO DAYS LATER Ana') && !g.includes('TWO DAYS LATER Bo'), 'after the wait Ana’s goes on; Bo’s was stopped');
   await A.cmd('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
   await A.ev(`document.querySelector('#sheet .sheet h2 [aria-label=Close]')?.click(); true`);
-  await A.tap(`[...document.querySelectorAll('#settings .auto-row')].find((r) => r.textContent.includes('Sort new contacts')).querySelector('.auto-main')`);
+  await A.tap(`[...document.querySelectorAll('#tool .auto-row')].find((r) => r.textContent.includes('Sort new contacts')).querySelector('.auto-main')`);
   await sleep(500);
   ok(await A.ev(`document.documentElement.scrollWidth <= 392 && document.querySelector('#sheet .sheet').getBoundingClientRect().right <= 391 && !!document.querySelector('#sheet .auto-steps.nested')`), 'the editor, nested steps and all, fits a phone');
   ok(!A.errors.length, 'no errors in the page' + (A.errors.length ? ': ' + A.errors.join(' | ').slice(0, 300) : ''));

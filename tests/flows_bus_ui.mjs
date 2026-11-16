@@ -54,10 +54,18 @@ try {
   await A.until(`location.href.startsWith(${JSON.stringify(APP)}) && document.readyState === 'complete'`, 15000);
   await A.ev(`localStorage.setItem('column.token', ${JSON.stringify(JSON.stringify(a.token))}); location.reload(); true`);
   ok(await A.until(`!document.querySelector('#app')?.classList.contains('hidden') && !!document.querySelector('#settingsBtn')`, 20000), 'signed in');
-  await A.tap(`document.querySelector('#settingsBtn')`);
-  await A.tap(`[...document.querySelectorAll('#settings [role=tab]')].find((b) => b.textContent === 'Automations')`);
-  ok(await A.until(`[...document.querySelectorAll('#settings .auto-recipe b')].some((b) => b.textContent === 'Quote accepted? Schedule it')`), 'Automations shows recipes from every tool (Quote accepted? Schedule it)');
-  await A.tap(`[...document.querySelectorAll('#settings button')].find((b) => b.textContent === '+ New automation')`);
+  // Automations moved out of Settings into Workspace (2026-11-14); Settings → Team points there.
+  await A.ev(`document.querySelector('#settingsBtn').click(); true`);
+  await A.until(`!document.querySelector('#settings').classList.contains('hidden')`);
+  ok(!(await A.ev(`[...document.querySelectorAll('#settings [role=tab]')].some((b) => b.textContent.startsWith('Automations'))`)), 'Settings has no Automations tab any more');
+  await A.ev(`[...document.querySelectorAll('#settings [role=tab]')].find((b) => b.textContent === 'Team').click(); true`);
+  ok(await A.until(`document.querySelector('#settings .auto-moved')?.textContent.includes('Workspace')`), 'Settings → Team says Automations are in Workspace now');
+  await A.ev(`document.querySelector('#settings .auto-moved .btn').click(); true`);
+  ok(await A.until(`document.querySelector('#tool h2')?.textContent.startsWith('Automations') && document.querySelector('#settings').classList.contains('hidden')`), 'its Open button opens Workspace → Automations');
+  ok(await A.ev(`!!document.querySelector('#workTabs [data-tab=automations].on')`), 'lit in Workspace’s tabs');
+  await A.until(`!!document.querySelector('#tabs [data-tab=automations]')`, 10000); await A.ev(`document.querySelector('#tabs [data-tab=automations]').click(); true`); // in Workspace now (2026-11-14)
+  ok(await A.until(`[...document.querySelectorAll('#tool .auto-recipe b')].some((b) => b.textContent === 'Quote accepted? Schedule it')`), 'Automations shows recipes from every tool (Quote accepted? Schedule it)');
+  await A.tap(`[...document.querySelectorAll('#tool button')].find((b) => b.textContent === '+ New automation')`);
   ok(await A.until(`document.querySelectorAll('#sheet .auto-kind optgroup').length >= 8`), 'what sets it off is grouped by tool');
   const groups = await A.ev(`[...document.querySelectorAll('#sheet .auto-kind optgroup')].map((g) => g.label).join(', ')`);
   ok(/Jobs & projects/.test(groups) && /Invoices & Finance/.test(groups) && /Map/.test(groups) && /Texts/.test(groups), `including ${groups}`);
@@ -75,16 +83,16 @@ try {
   await A.type('{record} is {stage}!');
   await A.pick(`[...document.querySelectorAll('#sheet .auto-act select')][1]`, 'general');
   await A.tap(`[...document.querySelectorAll('#sheet .btns button')].find((b) => b.textContent === 'Turn it on')`);
-  ok(await A.until(`[...document.querySelectorAll('#settings .auto-row b')].some((b) => b.textContent === 'Deal won') && [...document.querySelectorAll('#settings .auto-row small')].some((s) => s.textContent.includes('in Sales') && s.textContent.includes('to ' + ${JSON.stringify(won.label)}))`), 'it’s on, summed up with its project and stage');
+  ok(await A.until(`[...document.querySelectorAll('#tool .auto-row b')].some((b) => b.textContent === 'Deal won') && [...document.querySelectorAll('#tool .auto-row small')].some((s) => s.textContent.includes('in Sales') && s.textContent.includes('to ' + ${JSON.stringify(won.label)}))`), 'it’s on, summed up with its project and stage');
   await api('PATCH', `/records/${rec.id}`, { values: { [stageF.id]: won.id } });
   const posted = async () => (await api('GET', '/state')).items.some((x) => x.type === 'message' && !x.channelId && x.text === `Smith deal is ${won.label}!`);
   let hit = false;
   for (let i = 0; i < 30 && !hit; i++) { hit = await posted(); if (!hit) await sleep(200); }
   ok(hit, `moving the deal to ${won.label} posts it in #general`);
-  ok(await A.until(`[...document.querySelectorAll('#settings .auto-row small')].some((s) => s.textContent.startsWith('Ran'))`), 'and the automation says it ran');
+  ok(await A.until(`[...document.querySelectorAll('#tool .auto-row small')].some((s) => s.textContent.startsWith('Ran'))`), 'and the automation says it ran');
 
   // A recipe opens filled in.
-  await A.tap(`[...document.querySelectorAll('#settings .auto-recipe')].find((b) => b.textContent.includes('Quote accepted'))`);
+  await A.tap(`[...document.querySelectorAll('#tool .auto-recipe')].find((b) => b.textContent.includes('Quote accepted'))`);
   ok(await A.until(`document.querySelector('#sheet .auto-kind')?.value === 'quote.accepted' && [...document.querySelectorAll('#sheet .auto-act input')].some((i) => i.value.includes('{customer}'))`), 'the Quote accepted recipe opens filled in');
   await A.cmd('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
   await sleep(500);

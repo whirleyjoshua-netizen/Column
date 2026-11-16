@@ -3101,7 +3101,7 @@
   // Sidekick's panel (the owner, 2026-11-14): one assistant on every page. See "Sidekick, on every page".
   const SKD = { open: false, view: 'home', draft: '', busy: false, noPage: false, here: false };
   const MAIN_TABS = ['chat', 'agents', 'work'];
-  const WORK_TABS = ['contacts', 'projects', 'camps', 'docs'];
+  const WORK_TABS = ['contacts', 'projects', 'camps', 'docs', 'automations'];
   const BAR_ITEMS = {
     column: { label: 'Stacks', view: true },
     chat: { label: 'Chat', view: true },
@@ -3112,6 +3112,8 @@
     // Docs and Folders are the same things (a doc is an item, and folders hold items): one tab, a switch between them.
     docs: { label: 'Folders & Docs', ok: () => toolOn('docs') || toolOn('folders'), open: () => openTool(docsSide()), on: () => toolOpen === 'docs' || toolOpen === 'folders' },
     projects: { label: 'Projects', ok: () => toolOn('projects'), open: () => showProjects() },
+    // Automations (the owner, 2026-11-14): something you build and watch, so it's in Workspace, not Settings. Owners and admins.
+    automations: { label: 'Automations', ok: () => amAdmin() },
     bills: { label: 'Finance', ok: () => toolOn('bills') },
     contacts: { label: 'Contacts', ok: () => toolOn('contacts') && amAdmin() },
     email: { label: 'Email', ok: () => toolOn('email') && mayEmail() },
@@ -3142,6 +3144,7 @@
     camps: svg('<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="4"/><circle cx="12" cy="12" r=".5"/>'),
     agents: svg('<circle cx="9" cy="8" r="3.5"/><path d="M3 20a6 6 0 0 1 12 0"/><path d="M16 4.5a3.5 3.5 0 0 1 0 7M21 20a6 6 0 0 0-4-5.6"/>'),
     work: svg('<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M8 4v5"/>'),
+    automations: svg('<path d="M13 3 5 14h6l-1 7 8-11h-6z"/>'),
     sidekick: svg('<path d="M12 3l1.9 5.6L19.5 10l-5.6 1.9L12 17.5l-1.9-5.6L4.5 10l5.6-1.4z"/>'),
     docs: svg('<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h6"/>'),
     projects: svg('<rect x="3" y="7" width="18" height="13" rx="2"/><path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M3 13h18"/>'),
@@ -5059,7 +5062,7 @@
     if (amAdmin() && HQ.data?.entries.some((x) => x.status === 'suggested' && x.source?.type === 'learned')) out.push({ kind: 'learned', text: 'Kloomie noticed how you edit drafts', sub: 'A writing preference to accept or dismiss, in Company HQ', run: () => { openTool('hq'); setTimeout(() => $('#tool .hq-sugg')?.scrollIntoView({ block: 'start' }), 60); } });
     for (const x of agWaiting()) out.push({ kind: 'agent', text: `${x.agent === 'team' ? 'Your team' : AG.data.agents[x.agent]?.name} needs your yes`, sub: `${x.title} · ${plural(agSteps(x).filter((y) => y.status === 'proposed').length, 'thing')} to approve`, run: () => agOpen('run:' + x.id) });
     if (RU.data?.canApprove) for (const x of RU.data.approvals.filter((y) => y.status === 'pending')) out.push({ kind: 'approve', text: `${x.by} needs your OK`, sub: `${x.summary} · ${ago(x.at)}`, run: () => approvalSheet(x.id) });
-    if (amAdmin()) for (const x of (S.automations || []).filter(autoFailing)) out.push({ kind: 'auto', text: `Automation “${x.name}” didn’t run`, sub: x.runs[0].note, run: () => { openSettings('automations', '.auto-list'); setTimeout(() => autoSheet(x), 50); } });
+    if (amAdmin()) for (const x of (S.automations || []).filter(autoFailing)) out.push({ kind: 'auto', text: `Automation “${x.name}” didn’t run`, sub: x.runs[0].note, run: () => { openBarItem('automations'); setTimeout(() => autoSheet(x), 50); } });
     for (const t of S.tasks) if (t.submitted && !t.done && t.submitted.byId !== me && maySign(t)) out.push({ kind: 'sign', text: `Sign off “${shortText(t.text, 60)}”`, sub: `${t.submitted.by} sent it ${ago(t.submitted.at)}`, run: () => showStep(t) });
     for (const c of S.campaigns.filter((x) => x.status === 'active' && runsIt(x))) {
       for (const { t, b } of stuckSteps(c)) out.push({ kind: 'stuck', text: `Stuck: “${shortText(t.text, 50)}”`, sub: `${c.name} · waiting on “${shortText(stepName(b), 40)}”${stepWho(b) ? ' · ' + stepWho(b) : ''}${b.due && b.due < today ? `, due ${dueLabel(b.due)}` : b.submitted ? ', waiting for sign-off' : ''}`, run: () => showStep(b) });
@@ -5141,14 +5144,8 @@
     'contact.created': ['contact', 'stage', 'who'], 'contact.stage': ['contact', 'stage', 'who'], 'attempt.logged': ['contact', 'outcome', 'note', 'campaign', 'who'],
     'campaign.done': ['campaign', 'who'], 'campaign.checkin': ['campaign', 'note', 'who'], schedule: ['date'],
   };
-  // Automations live in Settings → Automations; redraw it there when they change.
-  const renderAutos = () => {
-    const st = $('#settings');
-    if (st.classList.contains('hidden') || S.setTab !== 'automations' || st.contains(document.activeElement) && document.activeElement.matches('input, textarea, select')) return;
-    const keep = st.scrollTop;
-    renderSettings();
-    st.scrollTop = keep;
-  };
+  // Automations live in Workspace → Automations (a tool); redraw it there when they change.
+  const renderAutos = () => { if (toolOpen === 'automations') renderTool(); };
   const autoFailing = (x) => x.on && x.runs?.[0] && !x.runs[0].ok && Date.now() - x.runs[0].at < 3 * 864e5;
   const DOWS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
   function autoSummary(x) {
@@ -9669,7 +9666,7 @@
   }
 
   // ---------- tools: small apps that open in a drawer, so the tabs stay as they are ----------
-  const TOOLS = { agents: { name: 'Your team', render: agentsTool }, hq: { name: 'Company HQ', render: hqTool }, sidekick: { name: 'Sidekick', render: sidekickTool }, docs: { name: 'Folders & Docs', render: docsTool }, bills: { name: 'Finance', render: financeTool }, contacts: { name: 'Contacts', render: contactsTool }, email: { name: 'Email', render: emailTool }, meetings: { name: 'Meeting notes', render: meetingsTool }, planner: { name: 'Planner', render: plannerTool }, folders: { name: 'Folders & Docs', render: foldersTool }, map: { name: 'Map', render: mapTool }, signs: { name: 'Signatures', render: signsTool }, cards: { name: 'Business card', render: cardTool }, vault: { name: 'Vault', render: vaultTool }, news: { name: 'News', render: () => NEWS.render() } };
+  const TOOLS = { agents: { name: 'Your team', render: agentsTool }, hq: { name: 'Company HQ', render: hqTool }, sidekick: { name: 'Sidekick', render: sidekickTool }, docs: { name: 'Folders & Docs', render: docsTool }, bills: { name: 'Finance', render: financeTool }, contacts: { name: 'Contacts', render: contactsTool }, email: { name: 'Email', render: emailTool }, meetings: { name: 'Meeting notes', render: meetingsTool }, planner: { name: 'Planner', render: plannerTool }, folders: { name: 'Folders & Docs', render: foldersTool }, map: { name: 'Map', render: mapTool }, signs: { name: 'Signatures', render: signsTool }, cards: { name: 'Business card', render: cardTool }, automations: { name: 'Automations', render: () => automationsTool() }, vault: { name: 'Vault', render: vaultTool }, news: { name: 'News', render: () => NEWS.render() } };
   let toolOpen = null;
   $('#toolsBtn').addEventListener('click', (e) => {
     const soon = billsSoon().length;
@@ -18307,7 +18304,7 @@
     return box;
   }
 
-  const SET_TABS = [['general', 'General'], ['team', 'Team'], ['connections', 'Connections'], ['automations', 'Automations'], ['account', 'Account']];
+  const SET_TABS = [['general', 'General'], ['team', 'Team'], ['connections', 'Connections'], ['account', 'Account']];
   function renderSettings() {
     const s = $('#settings');
     const ws = S.workspace;
@@ -18534,7 +18531,9 @@
         h('div', { class: 'btns' }, h('button', { class: 'btn danger', onclick: deleteTeamSheet }, 'Delete team…'))));
     }
 
-    if (tab === 'automations') s.append(h('section', { class: 'auto-sec' }, h('h3', {}, 'Automations'), ...automationsTool()));
+    // Automations moved to Workspace (2026-11-14); help and older videos still send people here.
+    if (tab === 'team' && amAdmin()) s.append(h('section', { class: 'auto-moved' }, h('h3', {}, 'Automations'),
+      h('div', { class: 'srow' }, h('span', {}, 'Automations are in Workspace now', h('small', {}, 'Workspace → Automations')), h('button', { class: 'btn', onclick: () => { s.classList.add('hidden'); openBarItem('automations'); } }, 'Open'))));
 
     if (tab === 'account') {
       // Your email

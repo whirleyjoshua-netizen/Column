@@ -101,10 +101,9 @@ try {
 
   // The automation editor: a record's date, and steps that change and add records.
   await A.tap(`[...document.querySelectorAll('#projects .pj-top .icon-btn')].find((b) => b.getAttribute('aria-label') === 'Close Projects')`);
-  await A.tap(`document.querySelector('#settingsBtn')`);
-  await A.tap(`[...document.querySelectorAll('#settings [role=tab]')].find((b) => b.textContent === 'Automations')`);
-  ok(await A.until(`[...document.querySelectorAll('#settings .auto-recipe b')].some((b) => b.textContent === 'License expiring? Owners hear')`), 'there’s a recipe for licenses about to expire');
-  await A.tap(`[...document.querySelectorAll('#settings .auto-recipe')].find((b) => b.textContent.includes('License expiring'))`);
+  await A.until(`!!document.querySelector('#tabs [data-tab=automations]')`, 10000); await A.ev(`document.querySelector('#tabs [data-tab=automations]').click(); true`); // in Workspace now (2026-11-14)
+  ok(await A.until(`[...document.querySelectorAll('#tool .auto-recipe b')].some((b) => b.textContent === 'License expiring? Owners hear')`), 'there’s a recipe for licenses about to expire');
+  await A.tap(`[...document.querySelectorAll('#tool .auto-recipe')].find((b) => b.textContent.includes('License expiring'))`);
   ok(await A.until(`document.querySelector('#sheet .auto-kind')?.value === 'record.date' && !!document.querySelector('#sheet .auto-proj')`), 'it opens on “A date on a job or record comes up”, asking which project');
   await A.pick(`document.querySelector('#sheet .auto-proj')`, p.id);
   const lic = p.types.find((x) => x.key === 'licenses');
@@ -121,11 +120,11 @@ try {
   await A.tap(`document.querySelector('#sheet .auto-set-row input')`);
   await A.type('Renewal reminder sent {date}');
   await A.tap(`[...document.querySelectorAll('#sheet .btns button')].find((b) => b.textContent === 'Turn it on')`);
-  ok(await A.until(`[...document.querySelectorAll('#settings .auto-row small')].some((s) => s.textContent.startsWith('30 days before Expires in'))`), 'it’s saved, and its summary reads “30 days before Expires in …”');
+  ok(await A.until(`[...document.querySelectorAll('#tool .auto-row small')].some((s) => s.textContent.startsWith('30 days before Expires in'))`), 'it’s saved, and its summary reads “30 days before Expires in …”');
   const saved = (await api('GET', '/automations')).find((x) => x.name === 'License expiring? Owners hear');
   ok(saved?.trigger.typeId === lic.id && saved.trigger.days === -30 && saved.actions[1]?.kind === 'record' && saved.actions[1].set[0]?.field === notes.id, 'with the list, the days and the field it sets');
   await A.cmd('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
-  await A.tap(`[...document.querySelectorAll('#settings .auto-main')].find((b) => b.textContent.includes('License expiring'))`);
+  await A.tap(`[...document.querySelectorAll('#tool .auto-main')].find((b) => b.textContent.includes('License expiring'))`);
   await A.until(`!!document.querySelector('#sheet .auto-set-row')`);
   await sleep(400);
   ok(await A.ev(`document.documentElement.scrollWidth <= 392 && document.querySelector('#sheet .sheet').getBoundingClientRect().right <= 391`), 'the editor still fits a phone');
