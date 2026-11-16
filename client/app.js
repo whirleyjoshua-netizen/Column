@@ -10324,9 +10324,13 @@
     const row = (x) => h('button', { class: 'inv-row' + (x.low ? ' low' : ''), 'data-item': x.id, onclick: () => invItemSheet(x.id) },
       h('span', { class: 'inv-name' }, h('b', {}, x.name), h('small', {}, [x.sku, x.category].filter(Boolean).join(' · '))),
       h('span', { class: 'inv-qty' }, h('span', { class: 'inv-qty-n' }, h('b', {}, invQty(at(x))), ' ' + x.unit, x.low ? h('span', { class: 'inv-low' }, 'Low') : null),
+        x.track === 'units' && (x.units.out || x.units.repair) ? h('small', {}, [x.units.out && `${x.units.out} out`, x.units.repair && `${x.units.repair} in repair`].filter(Boolean).join(' · ')) : null,
         !INVS.place && Object.values(x.stock).filter((v) => v > 0).length > 1 ? h('small', {}, Object.entries(x.stock).filter(([, v]) => v > 0).map(([p, v]) => `${invPlace(p)?.name || '?'} ${invQty(v)}`).join(' · ')) : null),
       admin ? h('span', { class: 'inv-val' }, x.value != null ? invMoney(INVS.place ? Math.round(at(x) * x.cost) : x.value) : '') : null);
+    const assetProjects = admin ? (S.projects || []).filter((p) => p.template === 'assets' && !INVS.imported?.has(p.id) && !d.movedIn?.includes(p.id)) : [];
     return [...out,
+      ...assetProjects.map((p) => h('div', { class: 'inv-import', 'data-project': p.id }, h('span', {}, h('b', {}, `${p.icon || '📦'} ${p.name}`), h('small', {}, 'Your equipment list in Projects. Move it into Inventory: each item comes with its status, where it is, the job it’s at, its combo and its label (the stickers keep working).')),
+        h('button', { class: 'btn small primary-btn inv-import-go', onclick: async (e) => { e.currentTarget.disabled = true; try { const r = await api('POST', '/inventory/import-project/' + p.id); (INVS.imported ||= new Set()).add(p.id); toast(r.made ? `Moved ${r.made} into Inventory` : 'Already in Inventory'); await loadInventory(); } catch (er) { toast(er.message); e.currentTarget.disabled = false; } } }, 'Move into Inventory'))),
       h('div', { class: 'inv-filters' }, placeSel, catSel, h('button', { class: 'chip inv-f-low' + (INVS.low ? ' on' : ''), 'aria-pressed': String(INVS.low), onclick: () => { INVS.low = !INVS.low; renderTool(true); } }, `Low stock${d.low.length ? ` (${d.low.length})` : ''}`)),
       list.length ? h('div', { class: 'inv-list' }, list.map(row))
         : h('p', { class: 'day-hint' }, d.items.length ? 'Nothing matches.' : admin ? 'Nothing here yet. Add the things you keep: parts, materials, supplies. Say how many you have and where, and set a reorder point to hear when it’s running low.' : 'Nothing in inventory yet. An owner or admin adds the items.')];
@@ -10367,6 +10371,7 @@
     try { got = await api('GET', '/inventory/items/' + id); } catch (e) { return toast(e.message); }
     const x = got.item, admin = INVS.data?.canManage;
     const places = INVS.data.places;
+    if (x.track === 'units') return invUnitsSheet(x, got, admin);
     const act = (kind, p) => h('button', { class: 'btn small inv-act', 'data-act': kind, onclick: () => invMoveSheet(x, kind, p?.id) }, { use: 'Use', move: 'Move', count: 'Count', return: 'Bring back', receive: 'Receive' }[kind]);
     const rows = places.filter((p) => (x.stock[p.id] || 0) > 0 || admin).map((p) => h('div', { class: 'inv-at', 'data-place': p.id },
       h('span', {}, h('b', {}, p.name), h('small', {}, `${invQty(x.stock[p.id] || 0)} ${x.unit}`)),
@@ -10412,6 +10417,110 @@
     }, title.split(' ')[0]);
     setTimeout(() => n.focus(), 50);
   }
+
+  // ---------- equipment: one by one ----------
+  const INV_STATUS = { available: ['Available', 'green'], out: ['Out', 'blue'], repair: ['In repair', 'amber'], lost: ['Lost', 'rose'], retired: ['Retired', 'gray'] };
+  const invWho = (id) => S.workspace.members.find((m) => m.id === id)?.name || 'someone';
+  const invUnitWhere = (u) => (u.status === 'out' ? `with ${invWho(u.memberId)}${u.jobId ? ' · on a job' : ''}` : u.placeId ? invPlace(u.placeId)?.name || '' : '') + (u.location?.address ? ` · last seen ${u.location.address}` : '');
+  function invUnitsSheet(x, got, admin) {
+    const row = (u) => h('button', { class: 'inv-unit s-' + u.status, 'data-unit': u.id, onclick: () => invUnitSheet(u.id) },
+      h('span', {}, h('b', {}, u.name), h('small', {}, [u.serial, invUnitWhere(u)].filter(Boolean).join(' · '))),
+      h('span', { class: 'inv-status c-' + INV_STATUS[u.status][1] }, INV_STATUS[u.status][0]));
+    const c = x.units;
+    sheet(x.name, [
+      h('p', { class: 'day-hint' }, [x.sku && 'SKU ' + x.sku, x.category, 'tracked one by one'].filter(Boolean).join(' · ')),
+      h('div', { class: 'inv-sum' }, h('div', { class: 'inv-stat' + (x.low ? ' inv-warn' : '') }, h('b', {}, String(c.available)), h('small', {}, 'Available')), h('div', { class: 'inv-stat' }, h('b', {}, String(c.out)), h('small', {}, 'Out')), h('div', { class: 'inv-stat' }, h('b', {}, String(c.repair)), h('small', {}, 'In repair')), admin && x.value != null ? h('div', { class: 'inv-stat' }, h('b', {}, invMoney(x.value)), h('small', {}, 'Value')) : null),
+      got.units.length ? h('div', { class: 'inv-units' }, got.units.map(row)) : h('p', { class: 'day-hint' }, 'None yet.'),
+      h('div', { class: 'btns' }, admin ? h('button', { class: 'btn small primary-btn inv-unit-add', onclick: () => invUnitForm(x, null) }, '+ Add one') : null, got.units.length ? h('button', { class: 'btn small inv-labels', onclick: () => invLabels(x) }, '🏷 Print labels') : null, admin ? h('button', { class: 'btn small', onclick: () => invItemForm(x) }, 'Edit details') : null),
+    ], null);
+  }
+  async function invUnitSheet(id) {
+    let got;
+    try { got = await api('GET', '/inventory/units/' + id); } catch (e) { return toast(e.message); }
+    const u = got.unit, x = got.item, admin = INVS.data?.canManage;
+    if (!INVS.data) await loadInventory();
+    const act = async (body, done) => { try { await api('POST', `/inventory/units/${u.id}/act`, body); toast(done); await loadInventory(); invUnitSheet(u.id); } catch (e) { toast(e.message); } };
+    const btn = (label, cls, run) => h('button', { class: 'btn small ' + cls, onclick: run }, label);
+    const here = async () => { toast('Finding where you are…'); try { const at = await whereAmI(); act({ act: 'here', ...at }, 'Noted where it is'); } catch (e) { toast(e.message); } };
+    const comboBox = h('span', { class: 'inv-combo' });
+    const reveal = async () => { try { const r = await api('POST', `/inventory/units/${u.id}/reveal`); comboBox.replaceChildren(h('code', {}, r.value)); setTimeout(() => comboBox.replaceChildren(), 30_000); } catch (e) { toast(e.message); } };
+    const acts = u.status === 'retired' ? [admin ? btn('Found it / back in use', 'inv-u-found', () => invUnitPlace(u, 'found')) : null]
+      : [
+        u.status === 'available' ? btn('Check out', 'primary-btn inv-u-out', () => invCheckout(u)) : null,
+        u.status === 'out' ? btn('Bring back', 'primary-btn inv-u-back', () => invUnitPlace(u, 'return')) : null,
+        u.status !== 'out' && u.status !== 'lost' ? btn('Move', 'inv-u-move', () => invUnitPlace(u, 'move')) : null,
+        btn('📍 It’s here', 'inv-u-here', here),
+        u.status === 'repair' ? btn('Fixed', 'inv-u-fixed', () => act({ act: 'fixed' }, 'Back in use')) : btn('Report a problem', 'inv-u-repair', () => { const n = h('input', { placeholder: 'What’s wrong', class: 'inv-u-note' }); sheet('Report a problem', [h('p', {}, h('b', {}, u.name)), h('label', {}, 'What’s wrong', n)], async () => { await api('POST', `/inventory/units/${u.id}/act`, { act: 'repair', note: n.value }); toast('Marked in repair'); await loadInventory(); }, 'Report it'); }),
+        admin && u.status === 'lost' ? btn('Found it', 'inv-u-found', () => invUnitPlace(u, 'found')) : null,
+        admin && u.status !== 'lost' ? btn('Lost', 'danger inv-u-lost', () => act({ act: 'lost' }, 'Marked lost')) : null,
+      ];
+    sheet(u.name, [
+      h('p', { class: 'day-hint' }, [x.name, u.serial && 'Serial ' + u.serial].filter(Boolean).join(' · ')),
+      h('p', {}, h('span', { class: 'inv-status c-' + INV_STATUS[u.status][1] }, INV_STATUS[u.status][0]), ' ', invUnitWhere(u)),
+      u.location ? h('p', { class: 'day-hint' }, `Last seen ${u.location.address || `${u.location.lat}, ${u.location.lng}`} · ${ago(u.location.at)}`, ' ', h('a', { href: `https://www.openstreetmap.org/?mlat=${u.location.lat}&mlon=${u.location.lng}#map=17/${u.location.lat}/${u.location.lng}`, target: '_blank', rel: 'noopener' }, 'Map')) : null,
+      h('div', { class: 'btns inv-u-acts' }, acts.filter(Boolean)),
+      u.hasCombo ? h('p', { class: 'inv-combo-row' }, 'Lock combo: ', comboBox, h('button', { class: 'linkish inv-u-reveal', onclick: reveal }, 'Show'), h('small', { class: 'muted' }, ' (every look is logged)')) : null,
+      u.notes ? h('p', { class: 'inv-notes' }, u.notes) : null,
+      admin ? h('div', { class: 'btns' }, h('button', { class: 'btn small', onclick: () => invUnitForm(x, u) }, 'Edit'), h('button', { class: 'btn small', onclick: () => invLabels(x, [u.id]) }, '🏷 Print its label'), u.status !== 'retired' ? h('button', { class: 'btn small danger', 'data-label': '1', onclick: (e) => confirmClick(e.currentTarget, () => act({ act: 'retire' }, 'Retired')) }, 'Retire') : null) : null,
+      h('h3', { class: 'inv-h' }, 'History'),
+      got.moves.length ? h('div', { class: 'inv-moves' }, got.moves.map((m) => invUnitLine(m))) : null,
+    ], null);
+  }
+  const INV_UVERB = { add: 'added it', checkout: 'checked it out', return: 'brought it back', move: 'moved it', here: 'noted it at', repair: 'reported a problem', fixed: 'marked it fixed', lost: 'marked it lost', found: 'found it', retire: 'retired it', reveal: 'looked at the combo' };
+  function invUnitLine(m) {
+    const to = m.to ? ' to ' + (invPlace(m.to)?.name || '?') : '';
+    return h('div', { class: 'inv-move k-' + m.kind }, h('span', {}, h('b', {}, m.by), ' ' + (INV_UVERB[m.kind] || m.kind) + (m.kind === 'here' ? ' ' + m.note : to) + (m.toMember ? ' for ' + invWho(m.toMember) : '') + (m.jobId && m.kind === 'checkout' ? ' · for a job' : '') + (m.note && m.kind !== 'here' && m.kind !== 'reveal' ? ` · “${m.note}”` : '')), h('small', {}, ago(m.at)));
+  }
+  async function invCheckout(u) {
+    const who = h('select', { class: 'inv-co-who' }, S.workspace.members.map((m) => h('option', { value: m.id, selected: m.id === S.me?.memberId }, m.name)));
+    await prLoadAll().catch(() => {});
+    const jobs = [...PR.records.entries()].flatMap(([pid, list]) => { const p = projById(pid); return p && p.template !== 'assets' ? list.map((r) => ({ id: r.id, name: prType(p, r.typeId) ? recName(prType(p, r.typeId), r) : 'Untitled', p: p.name, at: r.updatedAt || r.createdAt || 0 })) : []; }).sort((a, b) => b.at - a.at).slice(0, 300);
+    const job = h('select', { class: 'inv-co-job' }, h('option', { value: '' }, 'No job'), jobs.map((j) => h('option', { value: j.id }, `${j.name} · ${j.p}`)));
+    const note = h('input', { class: 'inv-co-note', placeholder: 'Optional' });
+    sheet('Check out', [h('p', {}, h('b', {}, u.name)), h('label', {}, 'Who’s taking it', who), h('label', {}, 'For a job', job), h('label', {}, 'Note', note)], async () => {
+      await api('POST', `/inventory/units/${u.id}/act`, { act: 'checkout', memberId: who.value, jobId: job.value || undefined, note: note.value });
+      toast('Checked out');
+      await loadInventory();
+    }, 'Check it out');
+  }
+  function invUnitPlace(u, act) {
+    const place = h('select', { class: 'inv-up-place' }, INVS.data.places.filter((p) => p.id !== u.placeId || act !== 'move').map((p) => h('option', { value: p.id }, p.name)));
+    const note = h('input', { class: 'inv-up-note', placeholder: act === 'return' ? 'Anything wrong with it? (optional)' : 'Optional' });
+    const title = { return: 'Bring it back', move: 'Move it', found: 'Found it' }[act];
+    sheet(title, [h('p', {}, h('b', {}, u.name)), h('label', {}, act === 'move' ? 'To' : 'Where it is now', place), h('label', {}, 'Note', note)], async () => {
+      await api('POST', `/inventory/units/${u.id}/act`, { act, placeId: place.value, note: note.value });
+      toast({ return: 'Brought back', move: 'Moved', found: 'Back in use' }[act]);
+      await loadInventory();
+    }, { return: 'Bring it back', move: 'Move it', found: 'Save' }[act]);
+  }
+  function invUnitForm(x, u) {
+    const name = h('input', { value: u?.name || '', placeholder: `${x.name} ${(x.units?.available || 0) + (x.units?.out || 0) + 1}`, class: 'inv-uf-name' });
+    const serial = h('input', { value: u?.serial || '', placeholder: 'SN-1234', class: 'inv-uf-serial' });
+    const combo = h('input', { type: 'password', autocomplete: 'off', placeholder: u?.hasCombo ? 'Leave empty to keep it' : 'A lock combo or code (optional)', class: 'inv-uf-combo' });
+    const notes = h('textarea', { rows: 2, class: 'inv-uf-notes', placeholder: 'Anything to know' }, u?.notes || '');
+    const place = u ? null : h('select', { class: 'inv-uf-place' }, INVS.data.places.map((p) => h('option', { value: p.id }, p.name)));
+    sheet(u ? 'Edit ' + u.name : 'Add a ' + x.name.toLowerCase(), [h('div', { class: 'row2' }, h('label', {}, 'Name', name), h('label', {}, 'Serial or ID', serial)), place ? h('label', {}, 'Where it is', place) : null, h('label', {}, 'Lock combo', combo), h('small', { class: 'hint' }, 'Kept sealed. Anyone on the team can tap Show; every look is logged.'), h('label', {}, 'Notes', notes)], async () => {
+      const body = { name: name.value, serial: serial.value, notes: notes.value, ...(combo.value ? { combo: combo.value } : {}), ...(place ? { placeId: place.value } : {}) };
+      await api(u ? 'PATCH' : 'POST', u ? '/inventory/units/' + u.id : `/inventory/items/${x.id}/units`, body);
+      toast(u ? 'Saved' : 'Added');
+      await loadInventory();
+    }, u ? 'Save' : 'Add it');
+  }
+  async function invLabels(x, ids) {
+    let r;
+    try { r = await api('GET', `/inventory/items/${x.id}/labels`); } catch (e) { return toast(e.message); }
+    const labels = ids ? r.labels.filter((l) => ids.includes(l.id)) : r.labels;
+    if (!labels.length) return toast('Nothing to label.');
+    const sheetEl = h('div', { id: 'labelSheet', class: 'as-labels' }, labels.map((l) => h('div', { class: 'as-label' }, h('img', { src: l.qr, alt: '' }), h('div', {}, h('b', {}, l.number || ''), h('span', {}, l.name), h('small', {}, `Scan to open in ${S.workspace?.name || 'Kloomie'}`)))));
+    $('#labelSheet')?.remove();
+    document.body.append(sheetEl);
+    sheet(`Print ${labels.length === 1 ? 'a label' : labels.length + ' labels'}`, [
+      h('div', { class: 'as-labels as-preview' }, labels.slice(0, 6).map((l) => h('div', { class: 'as-label' }, h('img', { src: l.qr, alt: '' }), h('div', {}, h('b', {}, l.number || ''), h('span', {}, l.name))))),
+      labels.length > 6 ? h('small', { class: 'day-hint' }, `and ${labels.length - 6} more`) : null,
+      h('p', { class: 'day-hint' }, 'Print on sticker paper and put each on its item where it stays dry. A phone’s camera opens it here, for people on your team: check it out, bring it back, note where it is.'),
+    ], () => { window.print(); }, 'Print');
+    const watch = setInterval(() => { if (!$('#sheet') || $('#sheet').classList.contains('hidden')) { sheetEl.remove(); clearInterval(watch); } }, 1000);
+  }
   function invItemForm(x) {
     const v = x || { unit: 'each' };
     const inp = (k, ph, type = 'text') => { const e = h('input', { type, value: v[k] ?? '', placeholder: ph, class: 'inv-f-' + k, ...(type === 'number' ? { min: 0, step: 'any' } : {}) }); return e; };
@@ -10419,10 +10528,12 @@
     const f = { name: inp('name', '16x25 air filter'), sku: inp('sku', 'FLT-1625'), category: inp('category', 'Filters'), unit: inp('unit', 'each, box, ft…'), cost: money('cost'), price: money('price'), reorderAt: inp('reorderAt', 'e.g. 10', 'number'), reorderQty: inp('reorderQty', 'e.g. 40', 'number'), supplier: inp('supplier', 'Who you buy it from'), onHand: inp('onHand', '0', 'number') };
     const notes = h('textarea', { rows: 2, class: 'inv-f-notes', placeholder: 'Anything to know' }, v.notes || '');
     const place = h('select', { class: 'inv-f-place' }, INVS.data.places.map((p) => h('option', { value: p.id }, p.name)));
+    const track = x ? null : h('select', { class: 'inv-f-track' }, h('option', { value: 'stock' }, 'By count: parts, materials, supplies'), h('option', { value: 'units' }, 'One by one: equipment, each with a serial and a label'));
     const del = x ? h('button', { class: 'btn small danger', 'data-label': '1' }, 'Delete') : null;
     del?.addEventListener('click', () => confirmClick(del, async () => { try { await api('DELETE', '/inventory/items/' + x.id); closeSheet(); await loadInventory(); } catch (e) { toast(e.message); } }));
     sheet(x ? 'Edit item' : 'New item', [
       h('label', {}, 'Name', f.name),
+      track ? h('label', {}, 'Track it', track) : null,
       h('div', { class: 'row2' }, h('label', {}, 'SKU or part number', f.sku), h('label', {}, 'Category', f.category)),
       h('div', { class: 'row2' }, h('label', {}, 'Unit', f.unit), h('label', {}, 'Supplier', f.supplier)),
       h('div', { class: 'row2' }, h('label', {}, 'Cost each ($)', f.cost), h('label', {}, 'Price each ($)', f.price)),
@@ -10434,7 +10545,7 @@
     ], async () => {
       const body = Object.fromEntries(Object.entries(f).filter(([k]) => k !== 'onHand' || !x).map(([k, e]) => [k, e.value]));
       body.notes = notes.value;
-      if (!x) body.placeId = place.value || undefined;
+      if (!x) { body.placeId = place.value || undefined; body.track = track.value; }
       await api(x ? 'PATCH' : 'POST', x ? '/inventory/items/' + x.id : '/inventory/items', body);
       toast(x ? 'Saved' : 'Added');
       await loadInventory();
@@ -12286,6 +12397,10 @@
   }
   // A scanned label (the QR code's /a/<tag> opens Kloomie at ?go=asset:<tag>): the item, with its scan bar.
   async function openAsset(tag) {
+    if (toolOn('inventory')) {
+      const u = await api('POST', `/inventory/scan/${encodeURIComponent(tag)}`).catch(() => null);
+      if (u) { openTool('inventory'); await loadInventory(); return invUnitSheet(u.unitId); }
+    }
     let x;
     try { x = await api('POST', `/records/by-tag/${encodeURIComponent(tag)}`); } catch { return toast('That label isn’t one of this team’s, or you can’t see its project. On more than one team? Switch teams and scan it again.'); }
     if (!projById(x.projectId)) S.projects = await api('GET', '/projects').catch(() => S.projects);

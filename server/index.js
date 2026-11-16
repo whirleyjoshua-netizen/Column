@@ -10603,7 +10603,13 @@ for (const x of Object.values(db.mileage)) {
 // Inventory (inventory.js): items, places, stock at each place, and the ledger of every movement.
 const STOCK = inventoryModule({ db, save, broadcast, rid, cleanText, readJson, send, isAdmin,
   recordAt: (id, wsId, memberId) => PJ.recordAt(id, wsId, memberId),
-  taskOk: (auth, id) => { const t = db.tasks[id]; return !!t && t.wsId === auth.ws.id && canSee(auth, 'task', t); } });
+  taskOk: (auth, id) => { const t = db.tasks[id]; return !!t && t.wsId === auth.ws.id && canSee(auth, 'task', t); },
+  seal, unseal,
+  // Labels share one set of codes with Equipment & assets records, so a code is never on two things.
+  newTag: () => { const C = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789'; for (;;) { const tag = Array.from(crypto.randomBytes(10), (b) => C[b % C.length]).join(''); if (!Object.values(db.records).some((r) => r.tag === tag) && !Object.values(db.invUnits || {}).some((u) => u.tag === tag)) return tag; } },
+  labelUrl: (tag) => `${PUBLIC_URL}/a/${tag}`,
+  labelQr: (tag) => 'data:image/svg+xml;base64,' + Buffer.from(qrSvg(`${PUBLIC_URL}/a/${tag}`, { scale: 8 })).toString('base64'),
+  projectFor: (pid, wsId, memberId) => { const p = db.projects[pid]; return p && p.wsId === wsId && PJ.sees(p, memberId) ? { p, records: Object.values(db.records).filter((r) => r.projectId === p.id) } : null; } });
 const INV = invoicesModule({ notifyAdmins: (...a) => notifyAdmins(...a), jobBack: (rec) => jobBack(rec), onPaymentGone: (...a) => QB.paymentGone(...a), db, save, broadcast, rid, hold, cleanText, readJson, send, badRequest, escHtml, brandOf, logoUrl, teamDay, offline, seal, unseal, stripeCall: stripe.callWith, PJ, isAdmin, jobOfRecord, jobLabel, moveJob, publicUrl: PUBLIC_URL, emit: (...a) => { PJ.emit(...a); QB.soon(a[0]); try { eventFromHook(a[0], a[1], a[2], a[3]); } catch (e) { alarm('An automation event failed to build', e); } },
   // A payment is money in on the business's Finance, under the team's owner.
   addMoney: (ws, { amount, day, note, invoiceId = null }) => {
