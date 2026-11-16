@@ -47,10 +47,12 @@ try {
   const A = await tab(APP);
   await A.until(`location.href.startsWith(${JSON.stringify(APP)}) && document.readyState === 'complete'`, 15000);
   await A.ev(`localStorage.setItem('column.token', ${JSON.stringify(JSON.stringify(a.token))}); location.reload()`);
-  ok(await A.until(`!document.querySelector('#app')?.classList.contains('hidden') && !!document.querySelector('#toolsBtn')`, 15000), 'signed in');
-  await A.tap(`document.querySelector('#toolsBtn')`);
-  await A.tap(`[...document.querySelectorAll('#menu button')].find((b) => b.textContent === 'Business card')`);
-  ok(await A.until(`document.querySelector('#tool h2')?.textContent.startsWith('Business card') && !!document.querySelector('#tool .card-status')`), 'Tools → Business card opens the editor');
+  ok(await A.until(`!document.querySelector('#app')?.classList.contains('hidden') && !!document.querySelector('#settingsBtn')`, 15000), 'signed in');
+  // Business card is in Settings → Business (2026-11-16).
+  await A.tap(`document.querySelector('#settingsBtn')`);
+  await A.tap(`[...document.querySelectorAll('#settings .set-tabs button')].find((b) => b.textContent === 'Business')`);
+  await A.tap(`document.querySelector('#settings [data-biz=cards] button')`);
+  ok(await A.until(`document.querySelector('#tool h2')?.textContent.startsWith('Business card') && !!document.querySelector('#tool .card-status')`), 'Settings → Business → Business card opens the editor');
   ok(await A.ev(`[...document.querySelectorAll('#tool label')].find((l) => l.textContent.startsWith('Name'))?.querySelector('input').value === 'Maria Lopez'`), 'filled in from the account');
   const fill = async (label, text) => { await A.tap(`[...document.querySelectorAll('#tool label')].find((l) => l.textContent.startsWith(${JSON.stringify(label)})).querySelector('input, textarea')`); await A.ev(`document.activeElement.select?.()`); await A.type(text); };
   await fill('Title', 'Owner');

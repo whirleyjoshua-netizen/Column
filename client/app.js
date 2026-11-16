@@ -3109,12 +3109,15 @@
   // ----- the side toolbar's tabs: the same for everyone, so it stays short -----
   // Home, Day, Chat, Agents and Workspace. Workspace groups the everyday tools (Contacts, Projects, Campaigns,
   // Folders & Docs); Sidekick is on every page (✦ in the header): at full size they run across the top of the page; in the drawer (a docked column, a
-  // phone) they sit under Workspace. Everything else is in All tools. News is on Home (turned on in Settings).
+  // phone) they sit under Workspace. Workspace → Tools has the rest (the owner, 2026-11-16: All tools left the sidebar);
+  // Company HQ, Business card and Signatures are in Settings → Business. News is on Home (turned on in Settings).
   // Sidekick's panel (the owner, 2026-11-14): one assistant on every page. See "Sidekick, on every page".
   const SKD = { open: false, view: 'home', draft: '', busy: false, noPage: false, here: false };
   const MAIN_TABS = ['chat', 'agents', 'work'];
   // Tasks (the owner, 2026-11-15): what was Day is Workspace's first tab, and Workspace always opens on it.
-  const WORK_TABS = ['day', 'contacts', 'projects', 'camps', 'docs', 'automations'];
+  const WORK_TABS = ['day', 'contacts', 'projects', 'camps', 'docs', 'automations', 'tools'];
+  // What Workspace → Tools lists. Stacks is a view (S.tab 'column'); the rest open in #tool. While one is open, Tools stays lit.
+  const TOOL_PAGE = ['column', 'bills', 'email', 'meetings', 'map', 'vault'];
   const BAR_ITEMS = {
     column: { label: 'Stacks', view: true },
     chat: { label: 'Chat', view: true },
@@ -3128,6 +3131,7 @@
     projects: { label: 'Projects', ok: () => toolOn('projects'), open: () => showProjects() },
     // Automations (the owner, 2026-11-14): something you build and watch, so it's in Workspace, not Settings. Owners and admins.
     automations: { label: 'Automations', ok: () => amAdmin() },
+    tools: { label: 'Tools', open: () => openTool('tools'), on: () => toolOpen === 'tools' || TOOL_PAGE.includes(toolOpen) },
     bills: { label: 'Finance', ok: () => toolOn('bills') },
     contacts: { label: 'Contacts', ok: () => toolOn('contacts') && amAdmin() },
     email: { label: 'Email', ok: () => toolOn('email') && mayEmail() },
@@ -3148,7 +3152,7 @@
   const workOpen = () => {
     if (!$('#projects').classList.contains('hidden')) return 'projects';
     if (toolOpen) return WORK_TABS.find((k) => (BAR_ITEMS[k].on ? BAR_ITEMS[k].on() : toolOpen === k)) || null;
-    return S.tab === 'camps' || S.tab === 'day' ? S.tab : null;
+    return S.tab === 'camps' || S.tab === 'day' ? S.tab : S.tab === 'column' ? 'tools' : null;
   };
   const TAB_IC = {
     home: svg('<path d="M4 11l8-7 8 7v8a1 1 0 0 1-1 1h-4v-6h-6v6H5a1 1 0 0 1-1-1z"/>'),
@@ -3159,6 +3163,7 @@
     agents: svg('<circle cx="9" cy="8" r="3.5"/><path d="M3 20a6 6 0 0 1 12 0"/><path d="M16 4.5a3.5 3.5 0 0 1 0 7M21 20a6 6 0 0 0-4-5.6"/>'),
     work: svg('<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M8 4v5"/>'),
     automations: svg('<path d="M13 3 5 14h6l-1 7 8-11h-6z"/>'),
+    tools: svg('<rect x="4" y="4" width="6" height="6" rx="1.5"/><rect x="14" y="4" width="6" height="6" rx="1.5"/><rect x="4" y="14" width="6" height="6" rx="1.5"/><rect x="14" y="14" width="6" height="6" rx="1.5"/>'),
     sidekick: svg('<path d="M12 3l1.9 5.6L19.5 10l-5.6 1.9L12 17.5l-1.9-5.6L4.5 10l5.6-1.4z"/>'),
     docs: svg('<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h6"/>'),
     projects: svg('<rect x="3" y="7" width="18" height="13" rx="2"/><path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M3 13h18"/>'),
@@ -3185,7 +3190,8 @@
     // One of Workspace's tabs: it takes the page (whatever else was open closes), and tapping it again keeps it.
     if (WORK_TABS.includes(k)) {
       store.set('workLast', k);
-      if (workOpen() === k) return markTabs();
+      // Tools again, from one of its tools, goes back to the list.
+      if (workOpen() === k && !(k === 'tools' && toolOpen !== 'tools')) return markTabs();
       if (k !== 'projects') closeProjects();
       if (toolOpen && (it.view || k === 'projects')) closeTool();
       if (it.view) return setTab(k);
@@ -3222,12 +3228,12 @@
     try { S.me.pins = (await api('PUT', '/account/pins', { pins })).pins; renderTabs(); } catch (e) { S.me.pins = was; renderTabs(); toast(e.message); }
   }
   function togglePin(go, label) {
-    if (pinned(go)) return savePins(pinsMine().filter((x) => x.go !== go)).then(() => toast('Unpinned from the sidebar'));
-    if (pinsMine().length >= 12) return toast('That’s 12 pins already. Unpin one first (Your pins, in the sidebar).');
-    return savePins([...pinsMine(), { go, label: shortText(label || 'Pinned', 60) }]).then(() => toast('Pinned to the sidebar'));
+    if (pinned(go)) return savePins(pinsMine().filter((x) => x.go !== go)).then(() => toast('Unpinned from Workspace'));
+    if (pinsMine().length >= 12) return toast('That’s 12 pins already. Unpin one first (📌 in Workspace’s top bar).');
+    return savePins([...pinsMine(), { go, label: shortText(label || 'Pinned', 60) }]).then(() => toast('Pinned to Workspace'));
   }
   // The menu row each pinnable thing adds to its own ⋯ menu.
-  const pinRow = (go, label) => ({ label: pinned(go) ? 'Unpin from the sidebar' : '📌 Pin to the sidebar', run: () => togglePin(go, label) });
+  const pinRow = (go, label) => ({ label: pinned(go) ? 'Unpin from Workspace' : '📌 Pin to Workspace', run: () => togglePin(go, label) });
   function openPin(go) {
     const [k, id] = pinParts(go);
     PIN_KINDS[k]?.open(id);
@@ -3249,7 +3255,8 @@
     ]);
   }
 
-  // The side toolbar (#tabs), and your pins across the top in a docked column or on a phone (#topTabs).
+  // The side toolbar (#tabs), and your pins: after Workspace's tabs at full size (#workTabs), across the top in a docked
+  // column or on a phone (#topTabs). Not in the sidebar (the owner, 2026-11-16), so it stays short.
   const tabNavs = () => [$('#tabs'), $('#topTabs')].filter(Boolean);
   function renderTabs() {
     const nav = $('#tabs');
@@ -3265,13 +3272,13 @@
     // In the drawer, Workspace's tabs sit under it (at full size they're across the top of the page instead).
     const sub = (k) => { const b = btn(k, BAR_ITEMS[k].label); b.classList.add('tab-sub'); return b; };
     const edit = () => h('button', { class: 'tabs-edit', title: 'Your pins', 'aria-label': 'Your pins', onclick: (e) => { e.stopPropagation(); closeSide(); barSheet(); } }, h('span', { class: 'tab-ic', html: I.edit || '✎' }), h('span', { class: 'tab-l' }, 'Your pins'));
-    $('#tabs').replaceChildren(btn('home', 'Home'), ...barKeys().flatMap((k) => (k === 'work' ? [btn(k, BAR_ITEMS[k].label), ...workKeys().map(sub)] : [btn(k, BAR_ITEMS[k].label)])),
-      ...(pins.length ? [h('span', { class: 'tabs-sep', 'aria-hidden': 'true' }), ...pins.map(pin)] : []), edit());
+    $('#tabs').replaceChildren(btn('home', 'Home'), ...barKeys().flatMap((k) => (k === 'work' ? [btn(k, BAR_ITEMS[k].label), ...workKeys().map(sub)] : [btn(k, BAR_ITEMS[k].label)])));
     // In a docked column and on a phone, the row across the top is your pins, as tabs (the owner, 2026-11-14), so
     // what you keep going back to is one tap away without opening ☰. Nothing pinned, no row.
     const top = $('#topTabs');
     if (top) { top.replaceChildren(...pins.map(pin), ...(pins.length ? [edit()] : [])); top.classList.toggle('has-pins', pins.length > 0); }
-    $('#workTabs')?.replaceChildren(...workKeys().map((k) => h('button', { 'data-tab': k }, h('span', { class: 'tab-ic', html: TAB_IC[k] || TAB_IC.docs }), h('span', { class: 'tab-l' }, BAR_ITEMS[k].label))));
+    $('#workTabs')?.replaceChildren(...workKeys().map((k) => h('button', { 'data-tab': k }, h('span', { class: 'tab-ic', html: TAB_IC[k] || TAB_IC.docs }), h('span', { class: 'tab-l' }, BAR_ITEMS[k].label))),
+      ...(pins.length ? [h('span', { class: 'tabs-sep', 'aria-hidden': 'true' }), ...pins.map(pin)] : []), edit());
     markTabs();
     renderChatSide();
   }
@@ -3311,7 +3318,7 @@
               h('button', { class: 'icon-btn', 'aria-label': 'Move ' + pinLabel(x) + ' right', disabled: i === pins.length - 1, onclick: () => move(1) }, '↓'),
               h('button', { class: 'icon-btn', 'aria-label': 'Unpin ' + pinLabel(x), html: I.close, onclick: () => { pins = pins.filter((y) => y !== x); drawPins(); } })));
         }),
-        pins.length ? null : h('p', { class: 'muted small' }, 'Nothing pinned yet. Use 📌 Pin to the sidebar in a job’s, project’s, campaign’s, doc’s or feed’s ⋯ menu, or pick one here.'));
+        pins.length ? null : h('p', { class: 'muted small' }, 'Nothing pinned yet. Use 📌 Pin to Workspace in a job’s, project’s, campaign’s, doc’s or feed’s ⋯ menu, or pick one here.'));
     };
     drawPins();
     const addPin = (e) => {
@@ -3328,7 +3335,7 @@
       openMenu(e.currentTarget, items);
     };
     sheet('Your pins', [
-      h('p', { class: 'muted' }, 'One job, project, campaign, feed, stack or doc you keep going back to, one tap away under your tabs. Only you see your pins.'),
+      h('p', { class: 'muted' }, 'One job, project, campaign, feed, stack or doc you keep going back to, one tap away in Workspace’s top bar (across the top on a phone). Only you see your pins.'),
       pinList,
       h('button', { class: 'btn small', onclick: addPin }, '+ Pin something'),
     ], async () => {
@@ -3420,7 +3427,7 @@
     if (pb) { if (pb._held) return (pb._held = false); return openPin(pb.dataset.pin); }
     const b = e.target.closest('button[data-tab]');
     if (!b) return;
-    // Another tab leaves Workspace: its tool closes (a tool from All tools stays, as before).
+    // Another tab leaves Workspace: its tool closes (one opened from Settings, like Company HQ, stays).
     if (b.dataset.tab !== 'work' && !WORK_TABS.includes(b.dataset.tab) && toolOpen && workOpen()) closeTool();
     if (BAR_ITEMS[b.dataset.tab]) return openBarItem(b.dataset.tab);
     closeProjects();
@@ -9864,26 +9871,29 @@
   }
 
   // ---------- tools: small apps that open in a drawer, so the tabs stay as they are ----------
-  const TOOLS = { agents: { name: 'Your team', render: agentsTool }, hq: { name: 'Company HQ', render: hqTool }, sidekick: { name: 'Sidekick', render: sidekickTool }, docs: { name: 'Folders & Docs', render: docsTool }, bills: { name: 'Finance', render: financeTool }, contacts: { name: 'Contacts', render: contactsTool }, email: { name: 'Email', render: emailTool }, meetings: { name: 'Meeting notes', render: meetingsTool }, planner: { name: 'Planner', render: plannerTool }, folders: { name: 'Folders & Docs', render: foldersTool }, map: { name: 'Map', render: mapTool }, signs: { name: 'Signatures', render: signsTool }, cards: { name: 'Business card', render: cardTool }, automations: { name: 'Automations', render: () => automationsTool() }, vault: { name: 'Vault', render: vaultTool }, news: { name: 'News', render: () => NEWS.render() } };
+  const TOOLS = { agents: { name: 'Your team', render: agentsTool }, hq: { name: 'Company HQ', render: hqTool }, sidekick: { name: 'Sidekick', render: sidekickTool }, docs: { name: 'Folders & Docs', render: docsTool }, bills: { name: 'Finance', render: financeTool }, contacts: { name: 'Contacts', render: contactsTool }, email: { name: 'Email', render: emailTool }, meetings: { name: 'Meeting notes', render: meetingsTool }, planner: { name: 'Planner', render: plannerTool }, folders: { name: 'Folders & Docs', render: foldersTool }, map: { name: 'Map', render: mapTool }, signs: { name: 'Signatures', render: signsTool }, cards: { name: 'Business card', render: cardTool }, automations: { name: 'Automations', render: () => automationsTool() }, tools: { name: 'Tools', render: toolsPage }, vault: { name: 'Vault', render: vaultTool }, news: { name: 'News', render: () => NEWS.render() } };
   let toolOpen = null;
-  $('#toolsBtn').addEventListener('click', (e) => {
+  // Workspace → Tools (the owner, 2026-11-16, in place of All tools in the sidebar): the tools that aren't a tab of
+  // their own. Each opens in Workspace, with Tools still lit across the top; Tools again comes back here.
+  function toolsPage() {
     const soon = billsSoon().length;
     const tight = budgetAlerts().length;
-    // Picking a tool from the drawer closes the drawer too. Workspace's tabs (Sidekick, Contacts, Projects,
-    // Campaigns, Folders & Docs) aren't here: they're under Workspace.
-    const closing = (rows) => rows.map((r) => (r?.run ? { ...r, run: () => { closeSide(); r.run(); } } : r));
-    openMenu(e.currentTarget, closing([
-      { label: h('span', { class: 'tool-item' }, '🗂️ Stacks'), on: S.tab === 'column' && !toolOpen, run: () => { closeTool(); closeProjects(); setTab('column'); } },
-      { label: h('span', { class: 'tool-item' }, '🏢 Company HQ', HQ.data && amAdmin() && HQ.data.entries.some((x) => x.status === 'suggested') ? h('small', {}, 'suggestions to review') : null), on: toolOpen === 'hq', run: () => openTool('hq') },
-      toolOn('bills') ? { label: h('span', { class: 'tool-item' }, 'Finance', soon || tight ? h('small', {}, [soon ? `${soon} due soon` : '', tight ? `${tight} budget${tight === 1 ? '' : 's'} nearly used` : ''].filter(Boolean).join(' · ')) : null), on: toolOpen === 'bills', run: () => openTool('bills') } : null,
-      toolOn('email') && mayEmail() ? { label: h('span', { class: 'tool-item' }, 'Email', (S.mail?.sends || []).some((x) => x.status === 'sending') ? h('small', {}, 'sending…') : null), on: toolOpen === 'email', run: () => openTool('email') } : null,
-      toolOn('meetings') ? { label: 'Meeting notes', on: toolOpen === 'meetings', run: () => openTool('meetings') } : null,
-      toolOn('map') ? { label: h('span', { class: 'tool-item' }, 'Map', MP.run ? h('small', {}, MP.run && tripById(MP.run.id)?.kind === 'drive' ? 'tracking mileage' : 'canvassing run going') : null), on: toolOpen === 'map', run: () => openMap() } : null,
-      toolOn('signs') ? { label: h('span', { class: 'tool-item' }, 'Signatures', SG.list.some((x) => x.status === 'sent' || x.status === 'viewed') ? h('small', {}, `${SG.list.filter((x) => x.status === 'sent' || x.status === 'viewed').length} waiting`) : null), on: toolOpen === 'signs', run: () => { SG.filter = null; openTool('signs'); } } : null,
-      toolOn('cards') ? { label: 'Business card', on: toolOpen === 'cards', run: () => openTool('cards') } : null,
-      toolOn('vault') ? { label: h('span', { class: 'tool-item' }, 'Vault', VK.key ? h('small', {}, 'unlocked') : null), on: toolOpen === 'vault', run: () => { VK.filter = null; openTool('vault'); } } : null,
-    ].filter(Boolean)));
-  });
+    const waiting = SG.list.filter((x) => x.status === 'sent' || x.status === 'viewed').length;
+    const ROWS = {
+      column: { name: 'Stacks', sub: 'Cards, files and links in shared stacks', run: () => { closeTool(); closeProjects(); setTab('column'); } },
+      bills: { name: 'Finance', sub: [soon ? `${soon} due soon` : '', tight ? `${tight} budget${tight === 1 ? '' : 's'} nearly used` : ''].filter(Boolean).join(' · ') || 'Money in and out, budgets and bills', ok: () => toolOn('bills') },
+      email: { name: 'Email', sub: (S.mail?.sends || []).some((x) => x.status === 'sending') ? 'Sending…' : 'Send to your contacts and lists', ok: () => toolOn('email') && mayEmail() },
+      meetings: { name: 'Meeting notes', sub: 'Record a meeting, get notes and tasks', ok: () => toolOn('meetings') },
+      map: { name: 'Map', sub: MP.run ? (tripById(MP.run.id)?.kind === 'drive' ? 'Tracking mileage' : 'Canvassing run going') : 'Routes, canvassing and mileage', ok: () => toolOn('map'), run: () => openMap() },
+      vault: { name: 'Vault', sub: VK.key ? 'Unlocked' : 'Passwords and secrets, locked', ok: () => toolOn('vault'), run: () => { VK.filter = null; openTool('vault'); } },
+    };
+    const rows = TOOL_PAGE.filter((k) => !ROWS[k].ok || ROWS[k].ok());
+    return [
+      h('p', { class: 'muted small' }, waiting && toolOn('signs') ? `Company HQ, your business card and signatures are in Settings → Business (${waiting} signature${waiting === 1 ? '' : 's'} waiting).` : 'Company HQ, your business card and signatures are in Settings → Business.'),
+      h('div', { class: 'tools-page' }, rows.map((k) => h('button', { class: 'tools-card', 'data-tool': k, onclick: () => (ROWS[k].run ? ROWS[k].run() : openTool(k)) },
+        h('span', { class: 'tab-ic', html: TAB_IC[k] || TAB_IC.tools }), h('span', { class: 'tool-item' }, ROWS[k].name, h('small', {}, ROWS[k].sub))))),
+    ];
+  }
   function openTool(name) {
     if (name === 'sidekick') return openDock('plan');
     toolOpen = name;
@@ -18558,7 +18568,7 @@
     return box;
   }
 
-  const SET_TABS = [['general', 'General'], ['team', 'Team'], ['connections', 'Connections'], ['account', 'Account']];
+  const SET_TABS = [['general', 'General'], ['team', 'Team'], ['business', 'Business'], ['connections', 'Connections'], ['account', 'Account']];
   function renderSettings() {
     const s = $('#settings');
     const ws = S.workspace;
@@ -18788,6 +18798,17 @@
     // Automations moved to Workspace (2026-11-14); help and older videos still send people here.
     if (tab === 'team' && amAdmin()) s.append(h('section', { class: 'auto-moved' }, h('h3', {}, 'Automations'),
       h('div', { class: 'srow' }, h('span', {}, 'Automations are in Workspace now', h('small', {}, 'Workspace → Automations')), h('button', { class: 'btn', onclick: () => { s.classList.add('hidden'); openBarItem('automations'); } }, 'Open'))));
+
+    // Business (the owner, 2026-11-16): Company HQ, your business card and signatures, from All tools.
+    if (tab === 'business') {
+      const go = (k, run) => () => { s.classList.add('hidden'); run ? run() : openTool(k); };
+      const row = (k, name, sub, run) => h('div', { class: 'srow', 'data-biz': k }, h('span', {}, name, h('small', {}, sub)), h('button', { class: 'btn', onclick: go(k, run) }, 'Open'));
+      const waiting = SG.list.filter((x) => x.status === 'sent' || x.status === 'viewed').length;
+      s.append(h('section', {}, h('h3', {}, 'Your business'),
+        row('hq', 'Company HQ', HQ.data && amAdmin() && HQ.data.entries.some((x) => x.status === 'suggested') ? 'Suggestions to review' : 'What Kloomie knows about your business, and the rules it follows'),
+        toolOn('cards') ? row('cards', 'Business card', 'Your own card page, QR code and share link') : null,
+        toolOn('signs') ? row('signs', 'Signatures', waiting ? `${waiting} waiting to be signed` : 'Send documents to sign and see who signed', () => { SG.filter = null; openTool('signs'); }) : null));
+    }
 
     if (tab === 'account') {
       // Your email

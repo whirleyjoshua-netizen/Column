@@ -38,7 +38,7 @@ await sleep(1500);
 const token = await A.ev(`JSON.parse(localStorage.getItem('column.token'))`);
 const api = async (m, p, body) => (await fetch(APP + 'api' + p, { method: m, headers: { 'content-type': 'application/json', authorization: 'Bearer ' + token }, body: body ? JSON.stringify(body) : undefined })).json();
 const old = await api('POST', '/items', { type: 'text', text: 'Old note\n- first\n- second' });
-await A.ev(`(document.querySelector('#toolsBtn').click(), [...document.querySelectorAll('#menu button')].find((b) => b.textContent.includes('Stacks'))).click()`);
+await A.ev(`(document.querySelector('#tabs [data-tab=tools]').click(), document.querySelector('#tool [data-tool=column]')).click()`);
 ok(await A.until(`[...document.querySelectorAll('.doc-card .doc-card-t')].some((e) => e.textContent === 'Old note')`), 'an old note shows as a doc card with its title');
 // new doc from the composer's +
 await A.tap(`[...document.querySelectorAll('.composer .add')].find((b) => b.offsetParent)`);
@@ -56,7 +56,7 @@ ok(body.blocks?.map((b) => b.type).join() === 'h1,todo' && body.blocks[1].runs[0
 // the same doc open in a second tab: changes go both ways
 const B = await tab(APP);
 ok(await B.until(`!document.querySelector('#app').classList.contains('hidden')`), 'second tab signed in');
-await B.ev(`(document.querySelector('#toolsBtn').click(), [...document.querySelectorAll('#menu button')].find((b) => b.textContent.includes('Stacks'))).click()`);
+await B.ev(`(document.querySelector('#tabs [data-tab=tools]').click(), document.querySelector('#tool [data-tool=column]')).click()`);
 await B.until(`[...document.querySelectorAll('.doc-card .doc-card-t')].some((e) => e.textContent === 'Launch plan')`);
 await B.ev(`[...document.querySelectorAll('.doc-card')].find((c) => c.querySelector('.doc-card-t').textContent === 'Launch plan').querySelector('.meta').click()`);
 ok(await B.until(`document.querySelector('#docview .dk-title')?.textContent === 'Launch plan'`), 'second tab opens the doc');
@@ -80,7 +80,7 @@ await A.ev(`document.querySelector('.dv-bar [aria-label="Close doc"]').click()`)
 ok(await A.ev(`document.querySelector('#docview').classList.contains('hidden')`), 'the back button closes the doc');
 await A.cmd('Page.reload');
 await A.until(`!document.querySelector('#app').classList.contains('hidden')`);
-await A.ev(`(document.querySelector('#toolsBtn').click(), [...document.querySelectorAll('#menu button')].find((b) => b.textContent.includes('Stacks'))).click()`);
+await A.ev(`(document.querySelector('#tabs [data-tab=tools]').click(), document.querySelector('#tool [data-tool=column]')).click()`);
 await A.until(`[...document.querySelectorAll('.doc-card .doc-card-t')].some((e) => e.textContent === 'Launch plan')`);
 await A.ev(`[...document.querySelectorAll('.doc-card')].find((c) => c.querySelector('.doc-card-t').textContent === 'Launch plan').querySelector('.meta').click()`);
 ok(await A.until(`[...document.querySelectorAll('#docview .dk-text')].map((e) => e.textContent).join('|') === 'Steps this week|Call 10 shops|Book 3 visits!'`), 'after a reload the doc has everything: ' + await A.ev(`[...document.querySelectorAll('#docview .dk-text')].map((e) => e.textContent).join('|')`));

@@ -55,8 +55,8 @@ try {
   const A = await tab(APP);
   await A.until(`location.href.startsWith(${JSON.stringify(APP)}) && document.readyState === 'complete'`, 15000);
   await A.ev(`localStorage.setItem('column.token', ${JSON.stringify(JSON.stringify(a.token))}); location.reload(); true`);
-  ok(await A.until(`!document.querySelector('#app')?.classList.contains('hidden') && !!document.querySelector('#toolsBtn')`, 20000), 'signed in');
-  await A.tap(`document.querySelector('#toolsBtn')`);
+  ok(await A.until(`!document.querySelector('#app')?.classList.contains('hidden') && !!document.querySelector('#settingsBtn')`, 20000), 'signed in');
+  await A.ev(`document.querySelector('#tabs [data-tab=docs]').click()`);
   await A.tap(menuBtn('Docs'));
   await A.until(`!!document.querySelector('.docs-import')`);
   await A.tap(`document.querySelector('.docs-import')`);
@@ -85,7 +85,7 @@ try {
   const api = async (m, p, b) => (await fetch(APP + 'api' + p, { method: m, headers: { 'content-type': 'application/json', authorization: 'Bearer ' + a.token }, body: b ? JSON.stringify(b) : undefined })).json();
   const md = await (await fetch(APP + 'api/upload?name=' + encodeURIComponent('Install steps.md'), { method: 'PUT', headers: { authorization: 'Bearer ' + a.token }, body: '# Install steps\n\n- Measure twice\n- [ ] Order brackets\n' })).json();
   await A.ev(`location.href = '/?go=file:${md.id}'; true`);
-  await A.until(`document.readyState === 'complete' && !!document.querySelector('#toolsBtn')`, 20000);
+  await A.until(`document.readyState === 'complete' && !!document.querySelector('#settingsBtn')`, 20000);
   const offered = await A.until(`!!document.querySelector('#preview:not(.hidden) .pv-makedoc')`, 15000);
   if (!offered) console.log(await A.ev(`JSON.stringify({ href: location.href, pv: document.querySelector('#preview')?.className, bar: document.querySelector('#preview .pv-bar')?.textContent, n: document.querySelectorAll('button[aria-label="Make it a doc"]').length })`));
   ok(offered, 'opening the Markdown file offers “Make it a doc”');

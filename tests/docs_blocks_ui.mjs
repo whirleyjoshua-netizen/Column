@@ -61,7 +61,7 @@ try {
   const A = await tab(APP);
   await A.until(`location.href.startsWith(${JSON.stringify(APP)}) && document.readyState === 'complete'`, 15000);
   await A.ev(`localStorage.setItem('column.token', ${JSON.stringify(JSON.stringify(a.token))}); location.reload(); true`);
-  ok(await A.until(`!document.querySelector('#app')?.classList.contains('hidden') && !!document.querySelector('#toolsBtn')`, 20000), 'signed in');
+  ok(await A.until(`!document.querySelector('#app')?.classList.contains('hidden') && !!document.querySelector('#settingsBtn')`, 20000), 'signed in');
   ok(JSON.stringify(await A.ev(`JSON.stringify(${JSON.stringify(CASES)}.map((u) => ColumnDocs.embedSrc(u)))`)) === JSON.stringify(JSON.stringify(CASES.map((u) => embedSrc(u)))), 'the browser and the server agree on what every link embeds as');
   const openTeamPage = async () => { await A.ev(`location.href = '/?go=doc:${doc.id}'; true`); await A.until(`document.querySelector('#docview .dk-title')?.textContent === 'Team page'`, 20000); };
   await openTeamPage();

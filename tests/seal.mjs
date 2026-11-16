@@ -43,7 +43,7 @@ await A.ev(`(() => { document.querySelector('[data-mode=create]').click(); const
 ok(await A.until(`!document.querySelector('#app').classList.contains('hidden')`), 'Jo signed in');
 // This suite uses tools a new team starts without: switch them all on.
 await A.ev(`fetch('/api/workspace', { method: 'PATCH', headers: { authorization: 'Bearer ' + JSON.parse(localStorage.getItem('column.token')), 'content-type': 'application/json' }, body: JSON.stringify({ tools: { sidekick: true, docs: true, contacts: true, email: true, folders: true, signs: true, bills: true, meetings: true, map: true, vault: true, projects: true } }) }).then((r) => r.ok)`);
-await A.until(`document.querySelector('#toolsBtn') && true`, 500);
+await A.until(`document.querySelector('#settingsBtn') && true`, 500);
 await sleep(1200);
 const tokA = await A.ev(`JSON.parse(localStorage.getItem('column.token'))`);
 const api = (tok) => async (m, p, body) => (await fetch(APP + 'api' + p, { method: m, headers: { 'content-type': 'application/json', authorization: 'Bearer ' + tok }, body: body ? JSON.stringify(body) : undefined })).json();
@@ -56,7 +56,7 @@ await B.ev(`(() => { document.querySelector('[data-mode=join]').click(); const f
 const sj = await B.until(`!document.querySelector('#app').classList.contains('hidden')`); if (!sj) console.log('SAM:', await B.ev(`document.querySelector('#loginErr')?.textContent + ' | ' + location.href`)); ok(sj, 'Sam joined');
 await sleep(1000);
 // Jo: a sealed note from the stack's +
-await A.tap(`(document.querySelector('#toolsBtn').click(), [...document.querySelectorAll('#menu button')].find((b) => b.textContent.includes('Stacks')))`);
+await A.tap(`(document.querySelector('#tabs [data-tab=tools]').click(), document.querySelector('#tool [data-tool=column]'))`);
 await A.tap(`[...document.querySelectorAll('.composer .add')].find((b) => b.offsetParent)`);
 await A.tap(`[...document.querySelectorAll('#menu button')].find((b) => b.textContent.includes('Sealed note'))`);
 await A.ev(`(() => { const s = document.querySelector('#sheet'); s.querySelector('input').value = 'Shop alarm'; s.querySelector('textarea').value = 'Alarm code 4417, disarm within 30s'; [...s.querySelectorAll('input')][1].value = 'Alarm code'; })()`);
@@ -69,7 +69,7 @@ ok(card && card.label === 'Alarm code' && card.burn && card.expiresAt > Date.now
 const raw = FS.readFileSync(process.argv[2] + '/dk/data/db.json', 'utf8');
 ok(!/(?<![0-9a-zA-Z_-])4417(?![0-9a-zA-Z_-])/.test(raw) && !raw.includes(code.replace(/-/g, '')), 'neither the secret nor the code is anywhere in Column’s data file');
 // Sam sees the card and opens it
-await B.tap(`(document.querySelector('#toolsBtn').click(), [...document.querySelectorAll('#menu button')].find((b) => b.textContent.includes('Stacks')))`);
+await B.tap(`(document.querySelector('#tabs [data-tab=tools]').click(), document.querySelector('#tool [data-tool=column]'))`);
 ok(await B.until(`[...document.querySelectorAll('.sealed-card')].some((c) => c.textContent.includes('Alarm code') && c.textContent.includes('Sealed by Jo') && c.textContent.includes('burns after reading'))`), 'Sam sees a sealed card: label, sender, burns after reading');
 await B.tap(`[...document.querySelectorAll('.sealed-card .meta')].find((c) => c.textContent.includes('Alarm code'))`);
 await B.until(`!!document.querySelector('#sheet .seal-in')`);
@@ -84,7 +84,7 @@ ok(await B.ev(`!!document.querySelector('#sheet .seal-burn')`), 'Sam is told it 
 ok(await A.until(`![...document.querySelectorAll('.sealed-card')].length`, 4000), 'the card is gone from Jo’s stack too');
 await B.ev(`document.querySelector('#sheet .primary-btn').click()`);
 // From the vault, kept (no burn)
-await A.tap(`document.querySelector('#toolsBtn')`); await A.tap(`[...document.querySelectorAll('#menu button')].find((b) => b.textContent.startsWith('Vault'))`);
+await A.tap(`(document.querySelector('#tabs [data-tab=tools]').click(), document.querySelector('#tool [data-tool=vault]'))`);
 await A.until(`!!document.querySelector('#tool input[type=password]')`);
 await A.ev(`(() => { const ins = [...document.querySelectorAll('#tool input')]; ins[0].value = 'correct horse battery'; ins[1].value = 'correct horse battery'; const cb = document.querySelector('#tool input[type=checkbox]'); if (cb) cb.checked = true; })()`);
 await A.tap(`[...document.querySelectorAll('#tool .btn')].find((b) => b.textContent === 'Set up my vault')`);

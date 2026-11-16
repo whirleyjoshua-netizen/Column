@@ -162,6 +162,23 @@ body.wide .work-tabs:not([hidden]) { display: flex; gap: 2px; flex: none; height
 .work-tabs button.on { color: var(--accent); border-bottom-color: var(--accent); }
 .work-tabs .tab-ic { display: grid; place-items: center; width: 16px; height: 16px; }
 .work-tabs .tab-ic svg { width: 16px; height: 16px; }
+/* Your pins, after Workspace's tabs (2026-11-16), and the pencil to change them. */
+.work-tabs .tabs-sep { flex: none; width: 1px; margin: 10px 6px; background: var(--line); }
+.work-tabs button.tab-pin { flex: none; max-width: 180px; min-width: 0; gap: 5px; }
+.work-tabs .tab-pin-ic { flex: none; font-size: 12px; }
+.work-tabs .tab-pin-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.work-tabs .tabs-edit { flex: none; padding: 0 10px; opacity: .6; }
+.work-tabs .tabs-edit:hover { opacity: 1; }
+.work-tabs .tabs-edit .tab-l { display: none; }
+.work-tabs .tabs-edit svg { width: 14px; height: 14px; }
+/* Workspace → Tools: one card per tool. */
+.tools-page { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; margin-top: 10px; }
+.tools-card { display: flex; align-items: flex-start; gap: 12px; padding: 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+.tools-card:hover { border-color: var(--accent); }
+.tools-card .tab-ic { display: grid; place-items: center; flex: none; width: 34px; height: 34px; border-radius: 9px; background: var(--soft, rgba(127,127,127,.08)); color: var(--accent); }
+.tools-card .tab-ic svg { width: 18px; height: 18px; }
+.tools-card .tool-item { flex-direction: column; gap: 2px; font-weight: 600; min-width: 0; }
+.tools-card .tool-item small { font-weight: 400; font-size: 12px; }
 /* Under the strip: a Workspace tool, and Projects, start below it instead of covering it. */
 body.wide.work-on .settings.tool { top: var(--work-in, 84px); }
 body.wide.work-on .projects { top: var(--work-y, 84px); }

@@ -46,7 +46,7 @@ ok(await A.until(`!document.querySelector('#app').classList.contains('hidden')`)
 await A.ev(`fetch('/api/workspace', { method: 'PATCH', headers: { authorization: 'Bearer ' + JSON.parse(localStorage.getItem('column.token')), 'content-type': 'application/json' }, body: JSON.stringify({ tools: { sidekick: true, docs: true, contacts: true, email: true, folders: true, signs: true, bills: true, meetings: true, map: true, vault: true, projects: true } }) }).then((r) => r.ok)`);
 // The tools just switched on: reload so the app starts with them (no guessing how long the live update takes).
 await A.ev(`location.reload()`);
-await A.until(`!document.querySelector('#app')?.classList.contains('hidden') && !!document.querySelector('#toolsBtn')`, 15000);
+await A.until(`!document.querySelector('#app')?.classList.contains('hidden') && !!document.querySelector('#settingsBtn')`, 15000);
 const token = await A.ev(`JSON.parse(localStorage.getItem('column.token'))`);
 const api = async (m, p, body) => (await fetch(APP + 'api' + p, { method: m, headers: { 'content-type': 'application/json', authorization: 'Bearer ' + token }, body: body ? JSON.stringify(body) : undefined })).json();
 const p = await api('POST', '/projects', { template: 'crm', name: 'Sales' });
@@ -60,9 +60,9 @@ const month = new Date().toISOString().slice(0, 7);
 await add('deals', { name: 'Fleet tint', value: 12500, stage: ch('deals', 'stage', 'Proposal'), close_date: month + '-28', contact: ben.id });
 await add('deals', { name: 'Showroom', value: 6200, stage: ch('deals', 'stage', 'Won'), close_date: month + '-03' });
 await sleep(400);
-// Docs and Projects are in Workspace now (2026-11-14); the rest in All tools.
+// Docs and Projects are in Workspace now (2026-11-14); the rest in Workspace → Tools (2026-11-16).
 const WORK = { Docs: 'docs', 'Jobs & projects': 'projects' };
-const openTools = async (label) => { if (WORK[label]) return A.ev(`document.querySelector('#tabs [data-tab=${WORK[label]}]').click()`); await A.tap(`document.querySelector('#toolsBtn')`); await A.tap(`[...document.querySelectorAll('#menu button')].find((b) => b.textContent.startsWith(${JSON.stringify(label)}))`); };
+const openTools = async (label) => { if (WORK[label]) return A.ev(`document.querySelector('#tabs [data-tab=${WORK[label]}]').click()`); await A.ev(`document.querySelector('#tabs [data-tab=tools]').click()`); await A.tap(`[...document.querySelectorAll('#tool [data-tool]')].find((b) => b.textContent.startsWith(${JSON.stringify(label)}))`); };
 await openTools('Jobs & projects');
 await A.tap(`[...document.querySelectorAll('#projects .pj-card')].find((x) => x.textContent.includes('Sales'))`);
 await A.tap(`[...document.querySelectorAll('#projects .pj-open')].find((b) => b.textContent === 'Ben Ortiz')`);

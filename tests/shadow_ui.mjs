@@ -49,7 +49,7 @@ try {
   const A = await tab(APP);
   await A.until(`location.href.startsWith(${JSON.stringify(APP)}) && document.readyState === 'complete'`, 15000);
   await A.ev(`localStorage.setItem('column.token', ${JSON.stringify(JSON.stringify(a.token))}); location.reload(); true`);
-  ok(await A.until(`!document.querySelector('#app')?.classList.contains('hidden') && !!document.querySelector('#toolsBtn')`, 20000), 'signed in');
+  ok(await A.until(`!document.querySelector('#app')?.classList.contains('hidden') && !!document.querySelector('#settingsBtn')`, 20000), 'signed in');
 
   // A chat folder's options are the folder's.
   await A.tap(`[...document.querySelectorAll('#tabs button[data-tab=chat]')].find((e) => e.offsetParent)`);
@@ -61,7 +61,7 @@ try {
 
   // Enter in "Start a run…" starts a checklist run, not a Map run.
   await A.ev(`location.href = '/?go=camp:${c.id}'; true`);
-  await A.until(`document.readyState === 'complete' && !!document.querySelector('#toolsBtn')`, 20000);
+  await A.until(`document.readyState === 'complete' && !!document.querySelector('#settingsBtn')`, 20000);
   await A.tap(`[...document.querySelectorAll('.clist-name')].find((b) => b.textContent === 'Install checklist')`);
   await A.tap(`document.querySelector('input[aria-label="Start a run"]')`);
   await A.cmd('Input.insertText', { text: 'Smith house' });

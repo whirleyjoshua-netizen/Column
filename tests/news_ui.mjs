@@ -75,7 +75,7 @@ try {
   const A = await tab(APP);
   await A.until(`location.href.startsWith(${JSON.stringify(APP)}) && document.readyState === 'complete'`, 15000);
   await A.ev(`localStorage.setItem('column.token', ${JSON.stringify(JSON.stringify(a.token))}); location.reload(); true`);
-  ok(await A.until(`!document.querySelector('#app')?.classList.contains('hidden') && !!document.querySelector('#tabs .tabs-edit')`, 20000), 'signed in');
+  ok(await A.until(`!document.querySelector('#app')?.classList.contains('hidden') && !!document.querySelector('#settingsBtn')`, 20000), 'signed in');
   ok(await A.ev(`!document.querySelector('#tabs [data-tab=news]') && !document.querySelector('#home .home-card.news')`), 'News is off until you turn it on: no tab, no Home card');
 
   // Turn it on in Settings → General (News lives on Home, not in the toolbar, since 2026-11-14).

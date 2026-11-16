@@ -164,9 +164,9 @@ await A.ev(`(() => { document.querySelector('[data-mode=signin]').click(); const
 ok(await A.until(`!document.querySelector('#app').classList.contains('hidden')`, 12000), 'Jo is in the app');
 await A.ev(`fetch('/api/workspace', { method: 'PATCH', headers: { authorization: 'Bearer ' + JSON.parse(localStorage.getItem('column.token')), 'content-type': 'application/json' }, body: JSON.stringify({ tools: { map: true, projects: true } }) }).then((r) => r.ok)`);
 await sleep(800);
-await A.click('#toolsBtn');
+await A.ev(`document.querySelector('#tabs [data-tab=tools]').click()`);
 await sleep(200);
-await A.ev(`[...document.querySelectorAll('#menu button')].find((b) => b.textContent.startsWith('Map')).click()`);
+await A.ev(`document.querySelector('#tool [data-tool=map]').click()`);
 ok(await A.until(`[...document.querySelectorAll('#tool .map-mode button')].some((b) => b.textContent === 'Mileage')`), 'the Map has a Mileage section');
 await A.ev(`[...document.querySelectorAll('#tool .map-mode button')].find((b) => b.textContent === 'Mileage').click()`);
 ok(await A.until(`document.querySelector('#tool .ml-big b')?.textContent.endsWith('mi') && document.querySelectorAll('#tool .map-row').length === 1`), 'it shows this month’s miles and trips: ' + await A.ev(`document.querySelector('#tool .ml-big')?.textContent`));

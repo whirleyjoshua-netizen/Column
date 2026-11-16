@@ -60,7 +60,7 @@ try {
   const tok = await A.ev(`JSON.parse(localStorage.getItem('column.token'))`);
   const st = await (await fetch(APP + 'api/state', { headers: { authorization: 'Bearer ' + tok } })).json();
   ok(st.cloud?.dropbox === 'testappkey' && !st.cloud.google && !st.cloud.onedrive, 'the app is told which pickers are set up');
-  await A.ev(`(document.querySelector('#toolsBtn').click(), [...document.querySelectorAll('#menu button')].find((b) => b.textContent.includes('Stacks')))?.click()`);
+  await A.ev(`(document.querySelector('#tabs [data-tab=tools]').click(), document.querySelector('#tool [data-tool=column]'))?.click()`);
   ok(await A.until(`!!document.querySelector('.composer .add')`), 'Stacks has its + button');
   await A.ev(`[...document.querySelectorAll('.composer .add')].find((b) => b.offsetParent).click()`);
   ok(await A.until(`[...document.querySelectorAll('#menu button')].some((b) => b.textContent === 'From Dropbox…')`), 'the + menu offers From Dropbox…');

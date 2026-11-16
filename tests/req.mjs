@@ -53,7 +53,7 @@ import http from 'node:http';
 // A stack for the job, opened in Jo's column
 await JA('POST', '/stacks', { name: 'Smith job' });
 const stk = (await JA('GET', '/state')).workspace.stacks.find((s) => s.name === 'Smith job');
-await A.tap(`(document.querySelector('#toolsBtn').click(), [...document.querySelectorAll('#menu button')].find((b) => b.textContent.includes('Stacks')))`);
+await A.tap(`(document.querySelector('#tabs [data-tab=tools]').click(), document.querySelector('#tool [data-tool=column]'))`);
 await A.until(`[...document.querySelectorAll('.pane .chip')].some((c) => c.textContent === 'Smith job')`);
 await A.tap(`[...document.querySelectorAll('.pane .chip')].find((c) => c.textContent === 'Smith job')`);
 await A.tap(`[...document.querySelectorAll('.composer .add')].find((b) => b.offsetParent)`);

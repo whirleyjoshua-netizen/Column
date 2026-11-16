@@ -91,7 +91,7 @@ try {
   ok(saved && saved.actions.map((s) => s.kind).join() === 'vault,webhook' && saved.actions[0].to === 'maker' && !!saved.actions[1].secretId, 'with its two steps, as built');
 
   // The vault: set up, which makes its drop key.
-  await A.tap(`(document.querySelector('#toolsBtn').click(), [...document.querySelectorAll('#menu button')].find((b) => b.textContent.startsWith('Vault')))`);
+  await A.tap(`(document.querySelector('#tabs [data-tab=tools]').click(), document.querySelector('#tool [data-tool=vault]'))`);
   ok(await A.until(`!!document.querySelector('#tool input[type=password]')`), 'the vault asks to be set up');
   await A.ev(`(() => { const ins = [...document.querySelectorAll('#tool input')]; ins[0].value = 'correct horse battery'; ins[1].value = 'correct horse battery'; document.querySelector('#tool input[type=checkbox]').checked = true; })()`);
   await A.tap(`[...document.querySelectorAll('#tool .btn')].find((b) => b.textContent === 'Set up my vault')`);
@@ -111,7 +111,7 @@ try {
   await addRec('Elm Rd');
   for (let i = 0; i < 60; i++) { v = await api('GET', '/vault'); if (v.drops.length === 1) break; await sleep(200); }
   ok(v.drops.length === 1 && !JSON.stringify(v).includes('7310'), 'locked, the drop waits, sealed');
-  await A.tap(`(document.querySelector('#toolsBtn').click(), [...document.querySelectorAll('#menu button')].find((b) => b.textContent.startsWith('Vault')))`);
+  await A.tap(`(document.querySelector('#tabs [data-tab=tools]').click(), document.querySelector('#tool [data-tool=vault]'))`);
   ok(await A.until(`document.querySelector('#tool .vault-drops')?.textContent === 'A sealed note from an automation is waiting. Unlock to keep it.'`), 'the locked vault says a sealed note is waiting');
   await A.ev(`document.querySelector('#tool .vault-unlock input').value = 'correct horse battery'; true`);
   await A.tap(`[...document.querySelectorAll('#tool .vault-unlock button')].find((b) => b.textContent === 'Unlock')`);

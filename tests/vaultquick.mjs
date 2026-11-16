@@ -42,7 +42,7 @@ await A.ev(`(() => { document.querySelector('[data-mode=create]').click(); const
 ok(await A.until(`!document.querySelector('#app').classList.contains('hidden')`), 'Jo signed in');
 // This suite uses tools a new team starts without: switch them all on.
 await A.ev(`fetch('/api/workspace', { method: 'PATCH', headers: { authorization: 'Bearer ' + JSON.parse(localStorage.getItem('column.token')), 'content-type': 'application/json' }, body: JSON.stringify({ tools: { sidekick: true, docs: true, contacts: true, email: true, folders: true, signs: true, bills: true, meetings: true, map: true, vault: true, projects: true } }) }).then((r) => r.ok)`);
-await A.until(`document.querySelector('#toolsBtn') && true`, 500);
+await A.until(`document.querySelector('#settingsBtn') && true`, 500);
 await sleep(1200);
 const tokA = await A.ev(`JSON.parse(localStorage.getItem('column.token'))`);
 const api = (tok) => async (m, p, body) => (await fetch(APP + 'api' + p, { method: m, headers: { 'content-type': 'application/json', authorization: 'Bearer ' + tok }, body: body ? JSON.stringify(body) : undefined })).json();
@@ -60,7 +60,7 @@ const typeIn = async (t) => {
 };
 
 // 1. "/vault …" in a stack, before the vault exists: set it up, and the form opens with what was typed.
-await A.tap(`(document.querySelector('#toolsBtn').click(), [...document.querySelectorAll('#menu button')].find((b) => b.textContent.includes('Stacks')))`);
+await A.tap(`(document.querySelector('#tabs [data-tab=tools]').click(), document.querySelector('#tool [data-tool=column]'))`);
 await typeIn('/vault gate code 4471 at Smith job');
 await A.key('Enter');
 ok(await A.until(`!!document.querySelector('#tool input[type=password]')`), '/vault with no vault yet opens vault setup');
