@@ -719,7 +719,7 @@
     } else if (msg.type === 'approvals') {
       loadApprovals();
     } else if (msg.type === 'hq') {
-      if (HQ.data || toolOpen === 'hq') loadHq();
+      if (HQ.data || toolShown('hq')) loadHq();
     } else if (msg.type === 'pss' || msg.type === 'contacts' || msg.type === 'gcontacts') {
       loadPss();
     } else if ((msg.type === 'contact' || msg.type === 'contact:remove') && S.contacts) {
@@ -3131,7 +3131,8 @@
     projects: { label: 'Projects', ok: () => toolOn('projects'), open: () => showProjects() },
     // Automations (the owner, 2026-11-14): something you build and watch, so it's in Workspace, not Settings. Owners and admins.
     automations: { label: 'Automations', ok: () => amAdmin() },
-    tools: { label: 'Tools', open: () => openTool('tools'), on: () => toolOpen === 'tools' || TOOL_PAGE.includes(toolOpen) },
+    // Tools (the owner, 2026-11-16): at the far right of the strip; it opens the split on the right, beside the page.
+    tools: { label: 'Tools', open: () => openTool('tools'), on: () => false },
     bills: { label: 'Finance', ok: () => toolOn('bills') },
     contacts: { label: 'Contacts', ok: () => toolOn('contacts') && amAdmin() },
     email: { label: 'Email', ok: () => toolOn('email') && mayEmail() },
@@ -3188,10 +3189,11 @@
     if (!it) return;
     if (k === 'work' && workOpen()) return markTabs(); // already in it
     // One of Workspace's tabs: it takes the page (whatever else was open closes), and tapping it again keeps it.
+    // Tools opens the split on the right and leaves the page as it is; again, from one of its tools, back to the list.
+    if (k === 'tools') { openSplit('tools'); return markTabs(); }
     if (WORK_TABS.includes(k)) {
       store.set('workLast', k);
-      // Tools again, from one of its tools, goes back to the list.
-      if (workOpen() === k && !(k === 'tools' && toolOpen !== 'tools')) return markTabs();
+      if (workOpen() === k) return markTabs();
       if (k !== 'projects') closeProjects();
       if (toolOpen && (it.view || k === 'projects')) closeTool();
       if (it.view) return setTab(k);
@@ -3277,8 +3279,9 @@
     // what you keep going back to is one tap away without opening ☰. Nothing pinned, no row.
     const top = $('#topTabs');
     if (top) { top.replaceChildren(...pins.map(pin), ...(pins.length ? [edit()] : [])); top.classList.toggle('has-pins', pins.length > 0); }
-    $('#workTabs')?.replaceChildren(...workKeys().map((k) => h('button', { 'data-tab': k }, h('span', { class: 'tab-ic', html: TAB_IC[k] || TAB_IC.docs }), h('span', { class: 'tab-l' }, BAR_ITEMS[k].label))),
-      ...(pins.length ? [h('span', { class: 'tabs-sep', 'aria-hidden': 'true' }), ...pins.map(pin)] : []), edit());
+    const wbtn = (k) => h('button', { 'data-tab': k }, h('span', { class: 'tab-ic', html: TAB_IC[k] || TAB_IC.docs }), h('span', { class: 'tab-l' }, BAR_ITEMS[k].label));
+    $('#workTabs')?.replaceChildren(...workKeys().filter((k) => k !== 'tools').map(wbtn),
+      ...(pins.length ? [h('span', { class: 'tabs-sep', 'aria-hidden': 'true' }), ...pins.map(pin)] : []), edit(), ...(workKeys().includes('tools') ? [wbtn('tools')] : []));
     markTabs();
     renderChatSide();
   }
@@ -3299,7 +3302,7 @@
       const k = b.dataset.tab;
       if (!k) continue;
       const it = BAR_ITEMS[k];
-      b.classList.toggle('on', k === 'work' ? !!work : WORK_TABS.includes(k) ? work === k : it && !it.view ? toolOpen === k : !jobs && !work && k === S.tab);
+      b.classList.toggle('on', k === 'tools' ? work === 'tools' || !!splitOpen : k === 'work' ? !!work : WORK_TABS.includes(k) ? work === k : it && !it.view ? toolOpen === k : !jobs && !work && k === S.tab);
     }
   }
   // Your pins: one job, project, campaign, feed, stack or doc each, after the tabs. Reorder, unpin or add one here.
@@ -5137,8 +5140,8 @@
     const me = S.me?.memberId;
     const today = todayKey();
     const out = [];
-    if (amAdmin() && HQ.data?.review) out.push({ kind: 'review', text: 'Are your goals still right?', sub: `It’s been 3 months since anyone checked ${plural(HQ.data.review.goals, 'goal')} in Company HQ`, run: () => { openTool('hq'); setTimeout(() => $('#tool .hq-review')?.scrollIntoView({ block: 'center' }), 60); } });
-    if (amAdmin() && HQ.data?.entries.some((x) => x.status === 'suggested' && x.source?.type === 'learned')) out.push({ kind: 'learned', text: 'Kloomie noticed how you edit drafts', sub: 'A writing preference to accept or dismiss, in Company HQ', run: () => { openTool('hq'); setTimeout(() => $('#tool .hq-sugg')?.scrollIntoView({ block: 'start' }), 60); } });
+    if (amAdmin() && HQ.data?.review) out.push({ kind: 'review', text: 'Are your goals still right?', sub: `It’s been 3 months since anyone checked ${plural(HQ.data.review.goals, 'goal')} in Company HQ`, run: () => { openTool('hq'); setTimeout(() => toolBox('hq').querySelector('.hq-review')?.scrollIntoView({ block: 'center' }), 60); } });
+    if (amAdmin() && HQ.data?.entries.some((x) => x.status === 'suggested' && x.source?.type === 'learned')) out.push({ kind: 'learned', text: 'Kloomie noticed how you edit drafts', sub: 'A writing preference to accept or dismiss, in Company HQ', run: () => { openTool('hq'); setTimeout(() => toolBox('hq').querySelector('.hq-sugg')?.scrollIntoView({ block: 'start' }), 60); } });
     for (const x of agWaiting()) out.push({ kind: 'agent', text: `${x.agent === 'team' ? 'Your team' : AG.data.agents[x.agent]?.name} needs your yes`, sub: `${x.title} · ${plural(agSteps(x).filter((y) => y.status === 'proposed').length, 'thing')} to approve`, run: () => agOpen('run:' + x.id) });
     if (RU.data?.canApprove) for (const x of RU.data.approvals.filter((y) => y.status === 'pending')) out.push({ kind: 'approve', text: `${x.by} needs your OK`, sub: `${x.summary} · ${ago(x.at)}`, run: () => approvalSheet(x.id) });
     if (amAdmin()) for (const x of (S.automations || []).filter(autoFailing)) out.push({ kind: 'auto', text: `Automation “${x.name}” didn’t run`, sub: x.runs[0].note, run: () => { openBarItem('automations'); setTimeout(() => autoSheet(x), 50); } });
@@ -9382,7 +9385,7 @@
       return;
     }
     renderHome?.();
-    if (toolOpen === 'hq') renderTool();
+    if (toolShown('hq')) renderTool();
   }
   const RU_LEVEL = [['auto', 'Anyone can'], ['approval', 'Needs an owner’s OK'], ['never', 'Not allowed']];
   const ruAmount = (a, n) => (a.unit === 'percent' ? `${n}%` : a.unit === 'dollars' ? '$' + Number(n).toLocaleString('en-US') : '');
@@ -9455,7 +9458,7 @@
     } catch {
       return;
     }
-    if (toolOpen === 'hq') renderTool();
+    if (toolShown('hq')) renderTool();
     renderHome?.();
   }
   const hqKind = (k) => HQ.data?.kinds[k] || { name: k };
@@ -9557,7 +9560,7 @@
     } finally {
       HQ.asking = false;
       renderTool(true);
-      setTimeout(() => { const t = $('#tool .hq-chat-in textarea'); if (t) { t.focus(); const l = $('#tool .hq-chat-log'); if (l) l.scrollTop = l.scrollHeight; } }, 30);
+      setTimeout(() => { const t = toolBox('hq').querySelector('.hq-chat-in textarea'); if (t) { t.focus(); const l = toolBox('hq').querySelector('.hq-chat-log'); if (l) l.scrollTop = l.scrollHeight; } }, 30);
     }
   }
   function hqChat(d) {
@@ -10122,14 +10125,22 @@
   // ---------- tools: small apps that open in a drawer, so the tabs stay as they are ----------
   const TOOLS = { agents: { name: 'Your team', render: agentsTool }, hq: { name: 'Company HQ', render: hqTool }, sidekick: { name: 'Sidekick', render: sidekickTool }, docs: { name: 'Folders & Docs', render: docsTool }, bills: { name: 'Finance', render: financeTool }, contacts: { name: 'Contacts', render: contactsTool }, email: { name: 'Email', render: emailTool }, meetings: { name: 'Meeting notes', render: meetingsTool }, planner: { name: 'Planner', render: plannerTool }, folders: { name: 'Folders & Docs', render: foldersTool }, map: { name: 'Map', render: mapTool }, signs: { name: 'Signatures', render: signsTool }, cards: { name: 'Business card', render: cardTool }, automations: { name: 'Automations', render: () => automationsTool() }, tools: { name: 'Tools', render: toolsPage }, vault: { name: 'Vault', render: vaultTool }, news: { name: 'News', render: () => NEWS.render() } };
   let toolOpen = null;
+  // The split (the owner, 2026-11-16): Tools, and every tool in it or in Settings → Business, opens in a panel on the
+  // right of whatever page is showing, wherever it's opened from (a link, Home, Sidekick, Settings), with a button to
+  // fill the page and back. On a phone it fills the screen, as tools always have. One at a time; the page stays.
+  const SPLIT_TOOLS = new Set(['tools', 'bills', 'email', 'meetings', 'map', 'vault', 'hq', 'cards', 'signs']);
+  let splitOpen = null;
+  let splitFull = false;
+  const toolShown = (k) => toolOpen === k || splitOpen === k;
+  const toolBox = (k) => (splitOpen === k ? $('#split') : $('#tool'));
   // Workspace → Tools (the owner, 2026-11-16, in place of All tools in the sidebar): the tools that aren't a tab of
-  // their own. Each opens in Workspace, with Tools still lit across the top; Tools again comes back here.
+  // their own. The list and each tool open in the split on the right; ‹ Tools comes back here. Stacks is a page.
   function toolsPage() {
     const soon = billsSoon().length;
     const tight = budgetAlerts().length;
     const waiting = SG.list.filter((x) => x.status === 'sent' || x.status === 'viewed').length;
     const ROWS = {
-      column: { name: 'Stacks', sub: 'Cards, files and links in shared stacks', run: () => { closeTool(); closeProjects(); setTab('column'); } },
+      column: { name: 'Stacks', sub: 'Cards, files and links in shared stacks', run: () => { closeSplit(); closeTool(); closeProjects(); setTab('column'); } },
       bills: { name: 'Finance', sub: [soon ? `${soon} due soon` : '', tight ? `${tight} budget${tight === 1 ? '' : 's'} nearly used` : ''].filter(Boolean).join(' · ') || 'Money in and out, budgets and bills', ok: () => toolOn('bills') },
       email: { name: 'Email', sub: (S.mail?.sends || []).some((x) => x.status === 'sending') ? 'Sending…' : 'Send to your contacts and lists', ok: () => toolOn('email') && mayEmail() },
       meetings: { name: 'Meeting notes', sub: 'Record a meeting, get notes and tasks', ok: () => toolOn('meetings') },
@@ -10145,6 +10156,7 @@
   }
   function openTool(name) {
     if (name === 'sidekick') return openDock('plan');
+    if (SPLIT_TOOLS.has(name)) return openSplit(name);
     toolOpen = name;
     $('#settings').classList.add('hidden');
     $('#tool').classList.remove('hidden');
@@ -10160,9 +10172,59 @@
     $('#tool').classList.add('hidden');
     markTabs();
   }
+  function openSplit(name) {
+    if (splitOpen !== name) splitFull = false; // a new tool starts beside the page
+    splitOpen = name;
+    $('#settings').classList.add('hidden');
+    const el = $('#split');
+    el.classList.remove('hidden');
+    el.classList.toggle('wide-tool', name === 'bills');
+    document.body.classList.add('split-on');
+    document.body.classList.toggle('split-full', splitFull);
+    closeSide();
+    renderSplit(true);
+    el.scrollTop = 0;
+    markTabs();
+  }
+  function closeSplit() {
+    if (!splitOpen) return;
+    const was = splitOpen;
+    splitOpen = null;
+    splitFull = false;
+    if (was === 'map' && !MP.run && toolOpen !== 'map') mapUnwatch();
+    $('#split').classList.add('hidden');
+    document.body.classList.remove('split-on', 'split-full');
+    markTabs();
+  }
+  function sizeSplit() {
+    splitFull = !splitFull;
+    document.body.classList.toggle('split-full', splitFull);
+    renderSplit(true);
+  }
+  function renderSplit(force) {
+    const el = $('#split');
+    if (!splitOpen || el.classList.contains('hidden')) return;
+    if (!toolOn(splitOpen)) return closeSplit();
+    if (!force && el.contains(document.activeElement) && document.activeElement.matches('input, textarea, select')) return;
+    const keep = el.scrollTop;
+    const back = splitOpen !== 'tools' && TOOL_PAGE.includes(splitOpen);
+    el.replaceChildren(
+      h('div', { class: 'split-head' },
+        back ? h('button', { class: 'icon-btn split-back', title: 'Back to Tools', 'aria-label': 'Back to Tools', onclick: () => openSplit('tools') }, '‹') : null,
+        h('h2', { class: 'split-title' }, TOOLS[splitOpen].name),
+        h('button', { class: 'icon-btn split-size', title: splitFull ? 'Back to the side' : 'Full size', 'aria-label': splitFull ? 'Back to the side' : 'Full size', 'aria-pressed': String(splitFull), onclick: sizeSplit, html: splitFull ? SPLIT_IC.in : SPLIT_IC.out }),
+        h('button', { class: 'icon-btn split-close', title: 'Close', 'aria-label': 'Close', html: I.close, onclick: closeSplit })),
+      h('div', { class: 'split-body' }, ...TOOLS[splitOpen].render().filter(Boolean)));
+    el.scrollTop = keep;
+  }
+  const SPLIT_IC = {
+    out: svg('<path d="M14 4h6v6M10 20H4v-6M20 4l-7 7M4 20l7-7"/>'),
+    in: svg('<path d="M20 10h-6V4M4 14h6v6M14 10l7-7M10 14l-7 7"/>'),
+  };
   // Holds off while you're typing in it, so a redraw can't eat what you wrote. Sidekick keeps its own draft.
   function renderTool(force) {
     if (SKD.open) renderSkDock(force);
+    renderSplit(force);
     const el = $('#tool');
     if (!toolOpen || el.classList.contains('hidden')) return;
     if (!toolOn(toolOpen)) return closeTool(); // switched off for the team
@@ -15257,7 +15319,7 @@
     store.set('mapRun', null);
     MP.wake?.release?.().catch(() => {});
     MP.wake = null;
-    if (toolOpen !== 'map') mapUnwatch();
+    if (!toolShown('map')) mapUnwatch();
     mapDraw();
     renderTool(true);
     if (t?.kind === 'drive') driveDone(t);
@@ -15720,7 +15782,7 @@
       ML.line = line;
       toast(`${x ? 'Saved' : 'Logged'}: ${fmtMiles(saved.meters)}`);
       if (MP.mode !== 'miles') { MP.mode = 'miles'; }
-      if (toolOpen !== 'map') openTool('map'); else renderTool(true);
+      if (!toolShown('map')) openTool('map'); else renderTool(true);
       mapDraw(true);
     }, x ? 'Save' : 'Log trip');
   }
@@ -16502,7 +16564,7 @@
     // A new item being typed is the person's own words, not the vault's: keep the form, ask for the passphrase again.
     $('#sheet .vault-new')?._locked?.();
     // The drawer won't redraw under someone typing, so take the focus out first: locked has to hide it.
-    if ($('#tool').contains(document.activeElement)) document.activeElement.blur();
+    if ($('#tool').contains(document.activeElement) || $('#split').contains(document.activeElement)) document.activeElement.blur();
     renderTool();
   }
   function vaultTouch() {
@@ -17894,7 +17956,7 @@
   // From Projects: open deals and quotes, what's due to close this month, and what was won in it.
   function finForecast(ym) {
     if (!(S.projects || []).length) return null;
-    if ((S.projects || []).some((p) => !PR.records.has(p.id))) { prLoadAll().then(() => toolOpen === 'bills' && renderTool()); return null; }
+    if ((S.projects || []).some((p) => !PR.records.has(p.id))) { prLoadAll().then(() => toolShown('bills') && renderTool()); return null; }
     const rows = [];
     for (const p of S.projects) for (const t of p.types) {
       const pl = pipelineOf(p, t);

@@ -91,10 +91,10 @@ try {
   ok(saved && saved.actions.map((s) => s.kind).join() === 'vault,webhook' && saved.actions[0].to === 'maker' && !!saved.actions[1].secretId, 'with its two steps, as built');
 
   // The vault: set up, which makes its drop key.
-  await A.tap(`(document.querySelector('#tabs [data-tab=tools]').click(), document.querySelector('#tool [data-tool=vault]'))`);
-  ok(await A.until(`!!document.querySelector('#tool input[type=password]')`), 'the vault asks to be set up');
-  await A.ev(`(() => { const ins = [...document.querySelectorAll('#tool input')]; ins[0].value = 'correct horse battery'; ins[1].value = 'correct horse battery'; document.querySelector('#tool input[type=checkbox]').checked = true; })()`);
-  await A.tap(`[...document.querySelectorAll('#tool .btn')].find((b) => b.textContent === 'Set up my vault')`);
+  await A.tap(`(document.querySelector('#tabs [data-tab=tools]').click(), document.querySelector('#split [data-tool=vault]'))`);
+  ok(await A.until(`!!document.querySelector('#split input[type=password]')`), 'the vault asks to be set up');
+  await A.ev(`(() => { const ins = [...document.querySelectorAll('#split input')]; ins[0].value = 'correct horse battery'; ins[1].value = 'correct horse battery'; document.querySelector('#split input[type=checkbox]').checked = true; })()`);
+  await A.tap(`[...document.querySelectorAll('#split .btn')].find((b) => b.textContent === 'Set up my vault')`);
   let v;
   for (let i = 0; i < 60; i++) { v = await api('GET', '/vault'); if (v.drop) break; await sleep(200); }
   ok(!!v.drop?.pub && !!v.drop.priv, 'setting it up makes its drop key (the private half sealed with the vault’s key)');
@@ -103,7 +103,7 @@ try {
   await addRec('Oak St');
   for (let i = 0; i < 60; i++) { v = await api('GET', '/vault'); if (v.items.length === 1 && !v.drops.length) break; await sleep(200); }
   ok(v.items.length === 1 && v.drops.length === 0, 'with the vault open, the note is kept as an item at once');
-  ok(await A.until(`document.querySelector('#tool')?.textContent.includes('Lockbox for Oak St')`), 'and shows in the vault');
+  ok(await A.until(`document.querySelector('#split')?.textContent.includes('Lockbox for Oak St')`), 'and shows in the vault');
   ok(got.length === 1 && got[0].auth === 'Bearer zk_test_keepthissecret_AB12' && got[0].body.words.record === 'Oak St', 'the other app got what happened, with the key');
 
   // Locked (a reload forgets the key): it waits, and unlocking keeps it.
@@ -111,14 +111,14 @@ try {
   await addRec('Elm Rd');
   for (let i = 0; i < 60; i++) { v = await api('GET', '/vault'); if (v.drops.length === 1) break; await sleep(200); }
   ok(v.drops.length === 1 && !JSON.stringify(v).includes('7310'), 'locked, the drop waits, sealed');
-  await A.tap(`(document.querySelector('#tabs [data-tab=tools]').click(), document.querySelector('#tool [data-tool=vault]'))`);
-  ok(await A.until(`document.querySelector('#tool .vault-drops')?.textContent === 'A sealed note from an automation is waiting. Unlock to keep it.'`), 'the locked vault says a sealed note is waiting');
-  await A.ev(`document.querySelector('#tool .vault-unlock input').value = 'correct horse battery'; true`);
-  await A.tap(`[...document.querySelectorAll('#tool .vault-unlock button')].find((b) => b.textContent === 'Unlock')`);
-  ok(await A.until(`document.querySelector('#tool')?.textContent.includes('Lockbox for Elm Rd')`, 15000), 'unlocked, it’s kept and shows');
+  await A.tap(`(document.querySelector('#tabs [data-tab=tools]').click(), document.querySelector('#split [data-tool=vault]'))`);
+  ok(await A.until(`document.querySelector('#split .vault-drops')?.textContent === 'A sealed note from an automation is waiting. Unlock to keep it.'`), 'the locked vault says a sealed note is waiting');
+  await A.ev(`document.querySelector('#split .vault-unlock input').value = 'correct horse battery'; true`);
+  await A.tap(`[...document.querySelectorAll('#split .vault-unlock button')].find((b) => b.textContent === 'Unlock')`);
+  ok(await A.until(`document.querySelector('#split')?.textContent.includes('Lockbox for Elm Rd')`, 15000), 'unlocked, it’s kept and shows');
   v = await api('GET', '/vault');
   ok(v.items.length === 2 && v.drops.length === 0, 'two items, nothing waiting');
-  await A.tap(`[...document.querySelectorAll('#tool button, #tool .vault-row')].find((b) => b.textContent.includes('Lockbox for Elm Rd'))`);
+  await A.tap(`[...document.querySelectorAll('#split button, #split .vault-row')].find((b) => b.textContent.includes('Lockbox for Elm Rd'))`);
   ok(await A.until(`(() => { const sh = document.querySelector('#sheet'); return !!sh && (sh.textContent + [...sh.querySelectorAll('textarea, input')].map((x) => x.value).join(' ')).includes('Lockbox code for Elm Rd: 7310'); })()`), 'opened, it has the note, words filled in');
   await A.cmd('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
   await sleep(400);

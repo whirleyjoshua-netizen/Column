@@ -166,15 +166,15 @@ await A.ev(`fetch('/api/workspace', { method: 'PATCH', headers: { authorization:
 await sleep(800);
 await A.ev(`document.querySelector('#tabs [data-tab=tools]').click()`);
 await sleep(200);
-await A.ev(`document.querySelector('#tool [data-tool=map]').click()`);
-ok(await A.until(`[...document.querySelectorAll('#tool .map-mode button')].some((b) => b.textContent === 'Mileage')`), 'the Map has a Mileage section');
-await A.ev(`[...document.querySelectorAll('#tool .map-mode button')].find((b) => b.textContent === 'Mileage').click()`);
-ok(await A.until(`document.querySelector('#tool .ml-big b')?.textContent.endsWith('mi') && document.querySelectorAll('#tool .map-row').length === 1`), 'it shows this month’s miles and trips: ' + await A.ev(`document.querySelector('#tool .ml-big')?.textContent`));
-ok(await A.ev(`document.querySelector('#tool .ml-big').textContent.includes('$0.73/mi')`), 'and what they come to at the rate');
-ok(await A.ev(`[...document.querySelectorAll('#tool .ml-people .chip')].length === 0`), 'no per-person split while only one person drove this month');
+await A.ev(`document.querySelector('#split [data-tool=map]').click()`);
+ok(await A.until(`[...document.querySelectorAll('#split .map-mode button')].some((b) => b.textContent === 'Mileage')`), 'the Map has a Mileage section');
+await A.ev(`[...document.querySelectorAll('#split .map-mode button')].find((b) => b.textContent === 'Mileage').click()`);
+ok(await A.until(`document.querySelector('#split .ml-big b')?.textContent.endsWith('mi') && document.querySelectorAll('#split .map-row').length === 1`), 'it shows this month’s miles and trips: ' + await A.ev(`document.querySelector('#split .ml-big')?.textContent`));
+ok(await A.ev(`document.querySelector('#split .ml-big').textContent.includes('$0.73/mi')`), 'and what they come to at the rate');
+ok(await A.ev(`[...document.querySelectorAll('#split .ml-people .chip')].length === 0`), 'no per-person split while only one person drove this month');
 
 // Add a trip, working the miles out from the map
-await A.ev(`[...document.querySelectorAll('#tool button')].find((b) => b.textContent === '+ Add a trip').click()`);
+await A.ev(`[...document.querySelectorAll('#split button')].find((b) => b.textContent === '+ Add a trip').click()`);
 ok(await A.until(`document.querySelector('#sheet:not(.hidden) h2')?.textContent.startsWith('Add a trip')`), 'Add a trip opens the form');
 await A.ev(`(() => { const ins = document.querySelectorAll('#sheet input:not([type])'); ins[0].value = '1 Shop Way'; ins[1].value = 'Supply Yard'; ins[2].value = 'Lumber'; document.querySelector('#sheet input[type=checkbox]').click(); return 1; })()`);
 await A.ev(`[...document.querySelectorAll('#sheet button')].find((b) => b.textContent.includes('Work out the miles')).click()`);
@@ -186,15 +186,15 @@ r = (await jo('GET', '/mileage?from=' + today + '&to=' + today)).body.list.find(
 ok(r && r.how === 'calc' && r.roundTrip && r.meters === Math.round(Number((32000 / MI).toFixed(1)) * MI), 'saved as a round trip worked out from the map');
 
 // Track a drive live: the phone moves 30 m a second along a street
-await A.ev(`[...document.querySelectorAll('#tool button')].find((b) => b.textContent.includes('Track my mileage')).click()`);
-ok(await A.until(`[...document.querySelectorAll('#tool button')].some((b) => b.textContent === 'Stop and log miles')`), 'Track my mileage starts tracking');
+await A.ev(`[...document.querySelectorAll('#split button')].find((b) => b.textContent.includes('Track my mileage')).click()`);
+ok(await A.until(`[...document.querySelectorAll('#split button')].some((b) => b.textContent === 'Stop and log miles')`), 'Track my mileage starts tracking');
 for (let i = 1; i <= 12; i++) {
   await A.cmd('Emulation.setGeolocationOverride', { latitude: here.lat + i * 0.00027, longitude: here.lng, accuracy: 5 });
   await sleep(1000);
 }
-const shown = await A.ev(`document.querySelector('#tool .map-stats').textContent`);
+const shown = await A.ev(`document.querySelector('#split .map-stats').textContent`);
 ok(/^0\.\d mi · /.test(shown), 'the live counter shows the distance so far: ' + shown);
-await A.ev(`[...document.querySelectorAll('#tool button')].find((b) => b.textContent === 'Stop and log miles').click()`);
+await A.ev(`[...document.querySelectorAll('#split button')].find((b) => b.textContent === 'Stop and log miles').click()`);
 ok(await A.until(`document.querySelector('#sheet:not(.hidden) h2')?.textContent.startsWith('Add a trip') && Number(document.querySelector('#sheet input[type=number]').value) > 0.15`), 'stopping opens the form with the tracked distance: ' + await A.ev(`document.querySelector('#sheet input[type=number]')?.value`));
 await A.ev(`(() => { document.querySelectorAll('#sheet input:not([type])')[2].value = 'Drive to the Jones job'; return 1; })()`);
 await A.ev(`[...document.querySelectorAll('#sheet .btns button')].pop().click()`);
@@ -203,8 +203,8 @@ r = (await jo('GET', '/mileage?from=' + today + '&to=' + today)).body.list.find(
 ok(r && r.how === 'gps' && r.tripId && r.meters > 250 && r.meters < 400, 'saved as a tracked drive, with its path: ' + (r && r.meters) + ' m');
 const st = (await jo('GET', '/map')).body;
 ok(st?.trips?.some((x) => x.id === r?.tripId && x.kind === 'drive' && x.path.length > 5), 'the drive’s path is kept, marked as a drive');
-await A.ev(`[...document.querySelectorAll('#tool .map-mode button')].find((b) => b.textContent === 'Canvassing').click()`);
-ok(await A.until(`!!document.querySelector('#tool .map-run')`) && !(await A.ev(`[...document.querySelectorAll('#tool .map-row')].some((x) => x.textContent.includes('0.2 mi') || x.textContent.includes('Jones'))`)), 'drives don’t show up as canvassing runs');
+await A.ev(`[...document.querySelectorAll('#split .map-mode button')].find((b) => b.textContent === 'Canvassing').click()`);
+ok(await A.until(`!!document.querySelector('#split .map-run')`) && !(await A.ev(`[...document.querySelectorAll('#split .map-row')].some((x) => x.textContent.includes('0.2 mi') || x.textContent.includes('Jones'))`)), 'drives don’t show up as canvassing runs');
 
 // A day's job route, logged as mileage in one tap (from the shop, two jobs, and back: 60 km)
 const joId = (await jo('GET', '/state')).body.me.memberId;
@@ -213,23 +213,23 @@ const pj = (await jo('POST', '/projects', { template: 'trades', trades: ['hvac']
 const job = async (name, address) => (await jo('POST', `/projects/${pj.id}/records`, { typeId: pj.types[0].id, values: { job: name, address } })).body;
 const ja = await job('Job A', '10 A St'), jc = await job('Job C', '30 C St');
 for (const [j, start] of [[ja, 540], [jc, 660]]) await jo('POST', `/records/${j.id}/visits`, { kind: 'Service', date: today, start, end: start + 60, memberIds: [joId] });
-await A.ev(`[...document.querySelectorAll('#tool .map-mode button')].find((b) => b.textContent === 'Job routes').click()`);
-ok(await A.until(`[...document.querySelectorAll('#tool button')].some((b) => b.textContent.includes('as mileage'))`, 8000), 'the day’s job route offers to log its miles: ' + await A.ev(`[...document.querySelectorAll('#tool button')].find((b) => b.textContent.includes('as mileage'))?.textContent`));
-await A.ev(`[...document.querySelectorAll('#tool button')].find((b) => b.textContent.includes('as mileage')).click()`);
+await A.ev(`[...document.querySelectorAll('#split .map-mode button')].find((b) => b.textContent === 'Job routes').click()`);
+ok(await A.until(`[...document.querySelectorAll('#split button')].some((b) => b.textContent.includes('as mileage'))`, 8000), 'the day’s job route offers to log its miles: ' + await A.ev(`[...document.querySelectorAll('#split button')].find((b) => b.textContent.includes('as mileage'))?.textContent`));
+await A.ev(`[...document.querySelectorAll('#split button')].find((b) => b.textContent.includes('as mileage')).click()`);
 ok(await A.until(`document.querySelector('#sheet:not(.hidden)') && document.querySelector('#sheet input[type=number]').value === (60000 / 1609.344).toFixed(1)`), 'the form has the route’s road miles');
 ok(await A.ev(`document.querySelectorAll('#sheet input:not([type])')[2].value.startsWith('Job visits:') && document.querySelector('#sheet input[type=checkbox]').checked`), 'with what it was for (the jobs) and as a round trip from the shop');
 await A.ev(`[...document.querySelectorAll('#sheet .btns button')].pop().click()`);
 await A.until(`document.querySelector('#sheet').classList.contains('hidden')`);
 r = (await jo('GET', '/mileage?from=' + today + '&to=' + today + '&member=' + joId)).body.list.filter((x) => x.how === 'route');
 ok(r.length === 1 && r[0].routeDate === today && r[0].from === '1 Shop Way', 'saved as the day’s job route');
-await A.ev(`[...document.querySelectorAll('#tool .map-mode button')].find((b) => b.textContent === 'Job routes').click()`);
-await A.until(`[...document.querySelectorAll('#tool button')].some((b) => b.textContent.includes('as mileage'))`, 8000);
-await A.ev(`[...document.querySelectorAll('#tool button')].find((b) => b.textContent.includes('as mileage')).click()`);
+await A.ev(`[...document.querySelectorAll('#split .map-mode button')].find((b) => b.textContent === 'Job routes').click()`);
+await A.until(`[...document.querySelectorAll('#split button')].some((b) => b.textContent.includes('as mileage'))`, 8000);
+await A.ev(`[...document.querySelectorAll('#split button')].find((b) => b.textContent.includes('as mileage')).click()`);
 ok(await A.until(`document.querySelector('#sheet:not(.hidden) h2')?.textContent === 'Trip'`), 'logging the same day again opens that trip instead of a second one');
 await A.ev(`document.querySelector('#sheet h2 .icon-btn').click()`);
 
 // /miles in a chat box
-await A.ev(`document.querySelector('#tool h2 .icon-btn').click()`);
+await A.ev(`document.querySelector('#split .split-close').click()`);
 await A.click('#tabs [data-tab=chat]');
 await A.until(`!!document.querySelector('#chat textarea')`);
 await A.ev(`(() => { const ta = [...document.querySelectorAll('#chat textarea')].find((x) => x.offsetParent); ta.focus(); return 1; })()`);

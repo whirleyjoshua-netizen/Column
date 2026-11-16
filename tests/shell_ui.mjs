@@ -118,9 +118,9 @@ try {
   await A.tap(`document.querySelector('#menuBtn')`);
   ok(await A.until(shown('#side')) && (await A.ev(`!document.querySelector('#scrim').hidden && document.querySelector('#menuBtn').getAttribute('aria-expanded') === 'true'`)), '☰ still opens the drawer over the page');
   await A.tap(`document.querySelector('#tabs .tab-sub[data-tab=tools]')`);
-  ok(await A.until(`!document.querySelector('#tool').classList.contains('hidden') && document.querySelector('#tool h2').textContent.startsWith('Tools')`) && await A.until(`!${shown('#side')}`), 'Workspace → Tools opens from the drawer, and the drawer closes');
-  await A.tap(`document.querySelector('#tool [data-tool=column]')`);
-  ok(await A.until(`!document.querySelector('#panes').classList.contains('hidden') && document.querySelector('#tool').classList.contains('hidden')`), 'picking Stacks there opens it: ' + await A.ev(`[document.querySelector('#panes').className, document.querySelector('#tool').className].join(' / ')`));
+  ok(await A.until(`!document.querySelector('#split').classList.contains('hidden') && document.querySelector('#split .split-title').textContent === 'Tools' && Math.round(document.querySelector('#split').getBoundingClientRect().width) === innerWidth`) && await A.until(`!${shown('#side')}`), 'Workspace → Tools opens from the drawer, filling the screen in a column, and the drawer closes');
+  await A.tap(`document.querySelector('#split [data-tool=column]')`);
+  ok(await A.until(`!document.querySelector('#panes').classList.contains('hidden') && document.querySelector('#split').classList.contains('hidden')`), 'picking Stacks there opens it: ' + await A.ev(`[document.querySelector('#panes').className, document.querySelector('#split').className].join(' / ')`));
   await A.tap(`document.querySelector('#menuBtn')`);
   await A.until(shown('#side'));
   // Outside the drawer: the strip of page still showing on its right.
@@ -134,8 +134,8 @@ try {
   await A.tap(`document.querySelector('#menuBtn')`);
   await A.until(shown('#side'));
   await A.tap(`document.querySelector('#tabs .tab-sub[data-tab=tools]')`);
-  ok(await A.until(`!document.querySelector('#tool').classList.contains('hidden') && document.querySelector('#tool h2').textContent.startsWith('Tools')`) && await A.until(`!${shown('#side')}`), 'Workspace → Tools works from the drawer, and picking it closes the drawer');
-  await A.ev(`document.querySelector('#tool .icon-btn')?.click(); true`);
+  ok(await A.until(`!document.querySelector('#split').classList.contains('hidden') && document.querySelector('#split .split-title').textContent === 'Tools' && Math.round(document.querySelector('#split').getBoundingClientRect().width) === innerWidth`) && await A.until(`!${shown('#side')}`), 'Workspace → Tools works from the drawer, and picking it closes the drawer');
+  await A.ev(`document.querySelector('#split .split-close')?.click(); true`);
   // In the drawer, Workspace's tabs sit under Workspace.
   await A.tap(`document.querySelector('#menuBtn')`);
   await A.until(shown('#side'));

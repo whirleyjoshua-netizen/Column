@@ -139,8 +139,8 @@ ok(await A.ev(`[...document.querySelectorAll('#settings .tools-sec .srow')].find
 await A.ev(`[...document.querySelectorAll('#settings .tools-sec .srow')].find((r) => r.textContent.startsWith('Map')).querySelector('input').click()`);
 await sleep(600);
 await A.ev(`document.querySelector('#settings').classList.add('hidden'); document.querySelector('#tabs [data-tab=tools]').click()`);
-ok(await A.until(`!!document.querySelector('#tool [data-tool=map]')`), 'switched on, Map is in Workspace → Tools');
-ok(!(await A.ev(`!!document.querySelector('#tool [data-tool=vault], #tool [data-tool=bills]')`)), 'tools left off aren’t');
+ok(await A.until(`!!document.querySelector('#split [data-tool=map]')`), 'switched on, Map is in Workspace → Tools');
+ok(!(await A.ev(`!!document.querySelector('#split [data-tool=vault], #split [data-tool=bills]')`)), 'tools left off aren’t');
 await A.key('Escape');
 await A.cmd('Page.captureScreenshot', {}).then((r) => FS.writeFileSync(S + '/dk/contacts.png', Buffer.from(r.result.data, 'base64')));
 ok(!A.errors.length, 'no errors on the page: ' + A.errors.join(' | '));

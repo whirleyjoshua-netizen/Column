@@ -171,6 +171,10 @@ body.wide .work-tabs:not([hidden]) { display: flex; gap: 2px; flex: none; height
 .work-tabs .tabs-edit:hover { opacity: 1; }
 .work-tabs .tabs-edit .tab-l { display: none; }
 .work-tabs .tabs-edit svg { width: 14px; height: 14px; }
+.work-tabs button[data-tab=tools] { margin-left: auto; } /* Tools at the far right (2026-11-16) */
+/* With the split open the strip is narrower: icons, and the name only on the tab that's open. */
+body.wide.split-on:not(.split-full) .work-tabs button:not(.on) .tab-l, body.wide.split-on:not(.split-full) .work-tabs .tab-pin:not(.on) .tab-pin-name { display: none; }
+body.wide.split-on:not(.split-full) .work-tabs button { padding: 0 9px; }
 /* Workspace → Tools: one card per tool. */
 .tools-page { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; margin-top: 10px; }
 .tools-card { display: flex; align-items: flex-start; gap: 12px; padding: 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); color: var(--text); font: inherit; text-align: left; cursor: pointer; }
@@ -195,7 +199,22 @@ body.wide.sk-open { --skd-w: 400px; }
 body.wide .sk-dock { flex: none; width: 400px; height: 100%; border-left: 1px solid var(--line); }
 body:not(.wide) .sk-dock { position: fixed; left: 0; right: 0; bottom: 0; height: min(86vh, 760px); z-index: 59; border-radius: 16px 16px 0 0; box-shadow: 0 -12px 40px rgba(0, 0, 0, 0.18); padding-bottom: env(safe-area-inset-bottom); }
 .sk-scrim { z-index: 58; }
-body.wide .docview, body.wide .projects { right: var(--skd-w); }
+body.wide .docview, body.wide .projects { right: calc(var(--skd-w) + var(--split-w)); }
+/* The split (2026-11-16): a tool on the right of the page, beside it (not over it); full size covers the page; a phone, the screen. */
+body { --split-w: 0px; }
+body.wide.split-on:not(.split-full) { --split-w: clamp(400px, 42vw, 760px); }
+#split.hidden { display: none; }
+body.wide #split { position: relative; inset: auto; flex: none; width: var(--split-w); height: 100%; border-left: 1px solid var(--line); z-index: 2; padding: 0 18px 30px; animation: none; }
+body.wide.split-full #split { position: fixed; top: 0; bottom: 0; left: var(--side-w); right: var(--skd-w); width: auto; z-index: 47; border-left: 0; padding: 0 32px 40px; }
+body:not(.wide) #split { position: fixed; inset: 0; z-index: 47; padding: 0 14px 30px; padding-top: env(safe-area-inset-top); }
+.split-head { position: sticky; top: 0; z-index: 4; display: flex; align-items: center; gap: 4px; min-height: 48px; margin: 0 -18px 12px; padding: 0 8px 0 18px; background: var(--bg); border-bottom: 1px solid var(--line); }
+body.wide.split-full .split-head { margin: 0 -32px 16px; padding: 0 16px 0 32px; }
+body:not(.wide) .split-head { margin: 0 -14px 12px; padding: 0 6px 0 14px; }
+.split-head .split-title { flex: 1; min-width: 0; margin: 0; font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.split-head .split-back { font-size: 20px; line-height: 1; margin-left: -8px; }
+.split-head .icon-btn svg { width: 16px; height: 16px; }
+body:not(.wide) .split-head .split-size { display: none; }
+#split .tools-page { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
 .skd-head { display: flex; align-items: center; gap: 6px; min-height: 44px; padding: 0 8px 0 14px; border-bottom: 1px solid var(--line); flex: none; }
 .skd-title { flex: 1; font-size: 14.5px; }
 .skd-title::first-letter { color: var(--accent); }
@@ -1189,7 +1208,7 @@ body.viewer .preview pre, body.viewer .preview .pv-edit, body.viewer .preview .d
 .sk-row { position: relative; } .sk-row.done { opacity: 0.6; }
 .sk-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--warn, #ffb547); flex: none; }
 .sk-top { display: flex; align-items: center; gap: 8px; margin: -4px 0 10px; } .sk-top b { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-#tool.sk-over { outline: 2px dashed var(--accent); outline-offset: -6px; }
+#tool.sk-over, #split.sk-over { outline: 2px dashed var(--accent); outline-offset: -6px; }
 #tool.sk-over::before, .sk-dock.sk-over .skd-body::before { content: 'Drop for Sidekick to read'; position: sticky; top: 0; z-index: 5; display: block; margin: 0 0 8px; padding: 8px; border-radius: 10px; text-align: center; font-size: 12.5px; font-weight: 600; color: #fff; background: var(--accent); }
 .sk-msg.me:has(.sk-sent-file) { display: flex; flex-wrap: wrap; gap: 6px; }
 .sk-sent-file { display: inline-flex; align-items: center; gap: 5px; font-size: 12.5px; }
@@ -2707,8 +2726,8 @@ button.hq-entry:hover { background: var(--card-hover); }
   .ag-step.act { flex-wrap: wrap; }
   .ag-step-act { width: 100%; padding-left: 26px; }
 }
-#tool .linkish { background: none; border: 0; padding: 0; color: var(--accent); font: inherit; font-size: 13px; cursor: pointer; }
-#tool .linkish:hover { text-decoration: underline; }
+#tool .linkish, #split .linkish { background: none; border: 0; padding: 0; color: var(--accent); font: inherit; font-size: 13px; cursor: pointer; }
+#tool .linkish:hover, #split .linkish:hover { text-decoration: underline; }
 #tool .ag-wfs .chip { border: 1px solid var(--line); background: var(--card); color: var(--text); }
 #tool .ag-wfs .chip:hover:not(:disabled) { border-color: var(--accent); }
 

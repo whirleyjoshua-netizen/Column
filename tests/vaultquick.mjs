@@ -60,12 +60,12 @@ const typeIn = async (t) => {
 };
 
 // 1. "/vault …" in a stack, before the vault exists: set it up, and the form opens with what was typed.
-await A.tap(`(document.querySelector('#tabs [data-tab=tools]').click(), document.querySelector('#tool [data-tool=column]'))`);
+await A.tap(`(document.querySelector('#tabs [data-tab=tools]').click(), document.querySelector('#split [data-tool=column]'))`);
 await typeIn('/vault gate code 4471 at Smith job');
 await A.key('Enter');
-ok(await A.until(`!!document.querySelector('#tool input[type=password]')`), '/vault with no vault yet opens vault setup');
-await A.ev(`(() => { const ins = [...document.querySelectorAll('#tool input')]; ins[0].value = 'correct horse battery'; ins[1].value = 'correct horse battery'; document.querySelector('#tool input[type=checkbox]').checked = true; })()`);
-await A.tap(`[...document.querySelectorAll('#tool .btn')].find((b) => b.textContent === 'Set up my vault')`);
+ok(await A.until(`!!document.querySelector('#split input[type=password]')`), '/vault with no vault yet opens vault setup');
+await A.ev(`(() => { const ins = [...document.querySelectorAll('#split input')]; ins[0].value = 'correct horse battery'; ins[1].value = 'correct horse battery'; document.querySelector('#split input[type=checkbox]').checked = true; })()`);
+await A.tap(`[...document.querySelectorAll('#split .btn')].find((b) => b.textContent === 'Set up my vault')`);
 ok(await A.until(`document.querySelector('#sheet h2')?.textContent.startsWith('Save to my vault')`, 15000), 'after setup, the save form opens');
 ok(await A.ev(`(() => { const s = document.querySelector('#sheet'); return s.querySelector('select').value === 'code' && [...s.querySelectorAll('input')].some((i) => i.value === 'Gate code at Smith job') && [...s.querySelectorAll('input')].some((i) => i.value === '4471'); })()`), 'it guessed a Code: name “Gate code at Smith job”, code 4471');
 await A.tap(`document.querySelector('#sheet .primary-btn')`);
@@ -75,7 +75,7 @@ ok(!(await posted('4471')), 'nothing was posted to the stack');
 ok(await A.ev(`![...document.querySelectorAll('.composer textarea')].find((x) => x.offsetParent).value`), 'the typing box was cleared');
 
 // 2. Locked: + → Save to my vault…, with the passphrase box right in the form.
-await A.tap(`[...document.querySelectorAll('#tool .btn')].find((b) => b.textContent.includes('Lock'))`);
+await A.tap(`[...document.querySelectorAll('#split .btn')].find((b) => b.textContent.includes('Lock'))`);
 await typeIn('alarm 9921');
 // (the vault drawer is open over the page; a real click on + is what the button does)
 await A.ev(`[...document.querySelectorAll('.composer .add')].find((b) => b.offsetParent).click()`);
@@ -91,7 +91,7 @@ await A.ev(`document.querySelector('#sheet .vault-quick-lock input').value = 'co
 await A.tap(`document.querySelector('#sheet .primary-btn')`);
 ok(await A.until(`document.querySelector('#sheet').classList.contains('hidden')`, 10000), 'the right passphrase unlocks and saves');
 ok((await vaultItems()).length === 2 && !(await posted('9921')), 'second item in the vault, nothing posted');
-ok(await A.until(`document.querySelector('#tool')?.textContent.includes('Alarm')`), 'the vault is unlocked and shows it');
+ok(await A.until(`document.querySelector('#split')?.textContent.includes('Alarm')`), 'the vault is unlocked and shows it');
 
 // 3. A message already posted in chat: save it, and delete the plain-text original.
 await A.tap(`document.querySelector('[data-tab=chat]')`);

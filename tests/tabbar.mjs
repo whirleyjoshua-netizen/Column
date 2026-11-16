@@ -37,6 +37,7 @@ async function tab(url, port = 9335) {
 
 
 const A = await tab(APP);
+const innerW = 1300;
 await A.until(`!!document.querySelector('#loginLinks a')`);
 const team = 'tb' + Date.now();
 await A.ev(`(() => { document.querySelector('[data-mode=create]').click(); const f = document.querySelector('#loginForm'); f.workspace.value = '${team}'; f.name.value = 'Jo'; f.password.value = 'secret1pad'; f.device.value = 'Jo laptop'; if (f.email) f.email.value = 'jo${team}@t.test'; f.requestSubmit(); })()`);
@@ -91,21 +92,43 @@ await A.click('#tabs [data-tab=work]');
 ok(await A.until(`!document.querySelector('#day').classList.contains('hidden') && document.querySelector('#tool').classList.contains('hidden')`), 'Workspace comes back on Tasks, its first view');
 await A.click('#tabs [data-tab=home]');
 
-// Tools: a tab in Workspace (the owner, 2026-11-16), with the rest. Company HQ, Business card and Signatures are in Settings.
+// Tools (the owner, 2026-11-16): at the far right of Workspace's strip. A tool opens in a split on the right of the page
+// that's showing, with a button to go full size, wherever it's opened from. Company HQ, Business card and Signatures
+// are in Settings → Business, and open in the split too.
 await A.click('#tabs [data-tab=work]');
+await A.click('#workTabs [data-tab=contacts]');
+ok(await A.until(`document.querySelector('#tool h2')?.textContent.includes('Contacts')`), 'Contacts is open');
+ok(await A.ev(`(() => { const s = document.querySelector('#workTabs').getBoundingClientRect(), t = document.querySelector('#workTabs [data-tab=tools]').getBoundingClientRect(), e = document.querySelector('#workTabs .tabs-edit').getBoundingClientRect(); return s.right - t.right < 40 && e.right <= t.left + 1; })()`), 'Tools sits at the far right of the strip, after your pins');
+const split = `(() => { const s = document.querySelector('#split'); if (!s || s.classList.contains('hidden')) return null; const r = s.getBoundingClientRect(), m = document.querySelector('#main').getBoundingClientRect(); return { l: Math.round(r.left), r: Math.round(r.right), w: Math.round(r.width), mr: Math.round(m.right), title: s.querySelector('.split-title')?.textContent || '' }; })()`;
 await A.click('#workTabs [data-tab=tools]');
-ok(await A.until(`!document.querySelector('#tool').classList.contains('hidden') && document.querySelector('#tool h2').textContent.startsWith('Tools')`), 'Workspace → Tools opens');
-const items = (await A.ev(`[...document.querySelectorAll('#tool [data-tool]')].map((b) => b.textContent)`)).join('|');
+ok(await A.until(`(${split})?.title === 'Tools'`), 'Tools opens in a split on the right');
+let sp = await A.ev(split);
+ok(sp && sp.r >= innerW - 1 && sp.w >= 380 && sp.w < 900 && sp.l >= sp.mr - 1, 'the split is on the right, beside the page (the page gets narrower): ' + JSON.stringify(sp));
+ok(await A.ev(`!document.querySelector('#tool').classList.contains('hidden') && document.querySelector('#tool h2').textContent.includes('Contacts')`), 'Contacts stays open on the left');
+const items = (await A.ev(`[...document.querySelectorAll('#split [data-tool]')].map((b) => b.textContent)`)).join('|');
 ok(items.includes('Stacks') && items.includes('Finance') && items.includes('Meeting notes'), 'Stacks, Finance and Meeting notes are in Tools: ' + items);
 ok(!/Sidekick|Contacts|Jobs|Projects|Folders|Docs|News|Campaigns|Company HQ|Business card|Signatures/.test(items), 'Workspace’s tabs, Sidekick, News, HQ, cards and signatures are not');
-await A.ev(`document.querySelector('#tool [data-tool=bills]').click()`);
-ok(await A.until(`document.querySelector('#tool h2').textContent.startsWith('Finance')`), 'Finance opens from Tools');
-ok(await strip() === 'Tasks,Contacts,Projects,Campaigns,Folders & Docs,Automations,Tools*', 'and Tools stays lit: ' + await strip());
+await A.ev(`document.querySelector('#split [data-tool=bills]').click()`);
+ok(await A.until(`(${split})?.title === 'Finance'`), 'Finance opens in the split');
+ok(await A.ev(`document.querySelector('#tool h2').textContent.includes('Contacts')`), 'still beside Contacts');
+ok((await strip()).includes('Tools*'), 'Tools is lit while a tool is open: ' + await strip());
+await A.ev(`document.querySelector('#split .split-size').click()`);
+ok(await A.until(`(${split})?.w > 1000`), 'the full-size button fills the page with it: ' + JSON.stringify(await A.ev(split)));
+await A.ev(`document.querySelector('#split .split-size').click()`);
+ok(await A.until(`(${split})?.w < 900`), 'and again puts it back in the split');
+await A.ev(`document.querySelector('#split .split-back').click()`);
+ok(await A.until(`(${split})?.title === 'Tools'`), '‹ Tools goes back to the list');
+await A.click('#tabs [data-tab=chat]');
+ok(await A.until(`!document.querySelector('#chat').classList.contains('hidden')`) && (await A.ev(split))?.title === 'Tools', 'the split stays open on another page (Chat)');
+ok(!(await strip()), 'and Chat is not in Workspace');
+await A.ev(`document.querySelector('#split .split-close').click()`);
+ok(await A.until(`!(${split})`), '× closes the split');
+await A.click('#tabs [data-tab=work]');
 await A.click('#workTabs [data-tab=tools]');
-ok(await A.until(`document.querySelector('#tool h2').textContent.startsWith('Tools')`), 'tapping Tools again goes back to the list');
-await A.ev(`document.querySelector('#tool [data-tool=column]').click()`);
-ok(await A.until(`!document.querySelector('#panes').classList.contains('hidden') && document.querySelector('#tool').classList.contains('hidden')`), 'Stacks opens from Tools');
-ok(await strip() === 'Tasks,Contacts,Projects,Campaigns,Folders & Docs,Automations,Tools*', 'Stacks is in Workspace → Tools: ' + await strip());
+await A.until(`(${split})?.title === 'Tools'`);
+await A.ev(`document.querySelector('#split [data-tool=column]').click()`);
+ok(await A.until(`!document.querySelector('#panes').classList.contains('hidden') && !(${split})`), 'Stacks opens as the page (the split closes)');
+ok((await strip()).includes('Tools*'), 'Stacks is in Workspace → Tools: ' + await strip());
 ok(await A.until(`document.querySelector('#panes').getBoundingClientRect().top >= document.querySelector('#workTabs').getBoundingClientRect().bottom - 1`, 1500), 'Stacks starts under the strip');
 ok(await A.until(`[...document.querySelectorAll('#panes .chip')].map((c) => c.textContent).join('|') === 'Everything|Files'`), 'Stacks shows Everything and Files before any stack is made');
 
@@ -125,7 +148,8 @@ await A.ev(`[...document.querySelectorAll('#settings .set-tabs button')].find((b
 const biz = await A.ev(`[...document.querySelectorAll('#settings [data-biz]')].map((b) => b.dataset.biz).join()`);
 ok(biz === 'hq,cards,signs', 'Business has Company HQ, Business card and Signatures: ' + biz);
 await A.ev(`document.querySelector('#settings [data-biz=hq] button').click()`);
-ok(await A.until(`document.querySelector('#settings').classList.contains('hidden') && document.querySelector('#tool h2').textContent.startsWith('Company HQ')`), 'Open takes you to Company HQ');
+ok(await A.until(`document.querySelector('#settings').classList.contains('hidden') && (${split})?.title === 'Company HQ'`), 'Open takes you to Company HQ, in the split');
+await A.ev(`document.querySelector('#split .split-close').click()`);
 await A.click('#settingsBtn');
 await A.until(`!document.querySelector('#settings').classList.contains('hidden')`);
 await A.ev(`[...document.querySelectorAll('#settings .set-tabs button')].find((b) => b.textContent === 'General').click()`);
@@ -146,6 +170,10 @@ ok(await A.ev(`(() => { const bs = [...document.querySelectorAll('#tabs button[d
 await A.ev(`document.querySelector('#tabs [data-tab=contacts]').click(); true`);
 ok(await A.until(`!document.querySelector('#tool').classList.contains('hidden') && document.querySelector('#tool h2').textContent.includes('Contacts')`), 'Contacts opens from the drawer');
 ok(await strip() === '', 'no strip on a phone');
+await A.ev(`document.querySelector('#tool h2 button').click(); document.querySelector('#tabs [data-tab=tools]').click(); true`);
+ok(await A.until(`(${split})?.w === innerWidth`, 3000) || (await A.ev(`(() => { const r = document.querySelector('#split').getBoundingClientRect(); return !document.querySelector('#split').classList.contains('hidden') && Math.round(r.width) === innerWidth; })()`)), 'on a phone a tool fills the screen');
+ok(await A.ev(`getComputedStyle(document.querySelector('#split .split-size')).display === 'none'`), 'with no full-size button (it is already)');
+await A.ev(`document.querySelector('#split .split-close').click(); true`);
 await A.ev(`document.querySelector('#tool h2 button').click(); true`);
 ok(await A.ev(`document.documentElement.scrollWidth <= innerWidth`), 'the page itself does not scroll sideways');
 ok(await A.ev(`document.querySelector('#home').scrollWidth <= document.querySelector('#home').clientWidth + 1`), 'Home fits the phone (Get started rows included)');
