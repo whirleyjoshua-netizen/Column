@@ -5242,22 +5242,58 @@
     const said = (list) => list.map((a) => (a.kind === 'wait' ? `wait ${a.amount} ${a.unit}` : a.kind === 'if' ? `if ${a.when.map((c) => '{' + c.field + '}').join(' and ')}: ${said(a.then) || 'nothing'}${a.else?.length ? '; otherwise ' + said(a.else) : ''}` : (AUTO_DO[a.kind] || a.kind).toLowerCase())).join(', ');
     return `${when} → ${said(x.actions)}`;
   }
+  // Ready-made automations, by kind of business (setup's "what kind of business"); the team's own come first. for:
+  // trades, services, sales, office, store, software (any of them, or 'all'). Opening one opens the builder with it.
+  const AUTO_FOR = { trades: 'Trades & field service', services: 'Services & appointments', sales: 'Sales & leads', office: 'Office & money', store: 'Shops', software: 'Software & tech' };
+  const autoT = (text, assignee = '', dueIn = 1, campaign = '') => ({ kind: 'task', text, assignee, dueIn, campaign });
   const AUTO_RECIPES = [
-    { name: 'Quote accepted? Schedule it', why: 'When a customer accepts a quote, make a task to schedule the job', trigger: { kind: 'quote.accepted' }, actions: [{ kind: 'task', text: 'Schedule {record} for {customer} ({amount})', assignee: '', dueIn: 1, campaign: '' }] },
-    { name: 'Job won? Tell the crew', why: 'When a job moves to a stage, post it for the team', trigger: { kind: 'record.stage', to: 'Won' }, actions: [{ kind: 'post', text: '{record} is {stage} 🎉', channelId: 'general' }] },
-    { name: 'Paid? Say thanks', why: 'When a payment comes in, make a task to thank the customer', trigger: { kind: 'payment.received' }, actions: [{ kind: 'task', text: 'Thank {customer} for paying {amount} on {invoice}', assignee: '', dueIn: 0, campaign: '' }] },
-    { name: 'Big spend? Owners hear', why: 'When the business spends over $1,000, the owners hear what on', trigger: { kind: 'money.added', over: 1000, direction: 'out' }, actions: [{ kind: 'notify', text: '{amount} on {category}: {note}', to: ['owners'] }] },
-    { name: 'Customer texted? Follow up', why: 'When a text comes in, whoever’s on the office gets a task to answer it', trigger: { kind: 'text.received' }, actions: [{ kind: 'notify', text: '{contact} texted: {text}', to: ['admins'] }] },
-    { name: 'Signed? Schedule the work', why: 'When a document is signed, make a task to schedule the work', trigger: { kind: 'document.signed' }, actions: [{ kind: 'task', text: 'Schedule the work for {document}', assignee: '', dueIn: 1, campaign: 'same' }] },
-    { name: 'Files in? Tell the campaign', why: 'When files come in on a link, post it in the campaign’s feed', trigger: { kind: 'file.received' }, actions: [{ kind: 'post', text: '{from} sent {file}', channelId: 'same' }] },
-    { name: 'Good call? Follow up', why: 'When a call is logged as Interested, make a follow-up task for whoever made it', trigger: { kind: 'attempt.logged', outcome: 'Interested' }, actions: [{ kind: 'task', text: 'Send {contact} a quote', assignee: 'who', dueIn: 1, campaign: 'same' }] },
-    { name: 'New customer? Onboard them', why: 'When a contact becomes a Customer, the owners hear it’s time to onboard them', trigger: { kind: 'contact.stage', stage: 'customer' }, actions: [{ kind: 'notify', text: '{contact} is a new customer. Time to onboard them.', to: ['owners'] }] },
-    { name: 'Off track? Tell the owners', why: 'When a campaign is checked in at risk or off track, the owners hear why', trigger: { kind: 'campaign.checkin', statuses: ['atRisk', 'offTrack'] }, actions: [{ kind: 'notify', text: '{who} checked in on {campaign}: {note}', to: ['owners'] }] },
-    { name: 'License expiring? Owners hear', why: '30 days before a license or insurance expires, the owners get a note (Licenses & insurance list)', trigger: { kind: 'record.date', days: -30, time: '08:00' }, actions: [{ kind: 'notify', text: '{record} expires {date}. Time to renew.', to: ['owners'] }] },
-    { name: 'Plan renewing? Call them', why: '14 days before a service plan renews, make a task to call the customer', trigger: { kind: 'record.date', days: -14, time: '08:00' }, actions: [{ kind: 'task', text: 'Call about renewing {record} ({date})', assignee: '', dueIn: 3, campaign: '' }] },
-    { name: 'Done? Send the bill', why: 'When a job moves to Done, whoever moved it gets a task to send the invoice', trigger: { kind: 'record.stage', to: 'Done' }, actions: [{ kind: 'task', text: 'Send the invoice for {record}', assignee: 'who', dueIn: 0, campaign: '' }] },
-    { name: 'Monday goals', why: 'Every Monday at 9, ask the team for the week’s goals', trigger: { kind: 'schedule', slots: [{ days: [1], time: '09:00' }] }, actions: [{ kind: 'post', text: 'Good morning! What are your goals for this week?', channelId: 'general' }] },
+    // Trades and field service: quote → booked → done → billed → paid → reviewed.
+    { for: ['trades'], name: 'Quote accepted? Schedule it', why: 'When a customer accepts a quote, make a task to schedule the job', trigger: { kind: 'quote.accepted' }, actions: [autoT('Schedule {record} for {customer} ({amount})')] },
+    { for: ['trades'], name: 'Quote accepted? Book the install', why: 'When a customer accepts a quote, book the install 3 days out and thank them (the email waits for your OK)', trigger: { kind: 'quote.accepted' },
+      actions: [{ kind: 'visit', visit: 'Install', inDays: 3, start: '08:00', length: 240, crew: [] }, { kind: 'email', subject: 'You’re booked: {record}', text: 'Hi {customer},\n\nThanks for going ahead with {record}. We’ve booked the install and will confirm the time the day before.\n\nThank you!' }] },
+    { for: ['trades', 'services'], name: 'Done? Bill it and ask for a review', why: 'When a job moves to Done: the invoice, sent after your OK; three days later, a task to ask for a review', trigger: { kind: 'record.stage', to: 'Done' },
+      actions: [{ kind: 'invoice', send: true }, { kind: 'wait', amount: 3, unit: 'days' }, autoT('Ask {record}’s customer for a review', 'who', 0)] },
+    { for: ['trades', 'services'], name: 'Visit booked? Text the customer', why: 'When a visit is scheduled, text the customer the day and time (after your OK)', trigger: { kind: 'visit.scheduled' },
+      actions: [{ kind: 'text', text: 'Hi! You’re booked for {date} at {time} ({record}). Reply here if that doesn’t work.' }] },
+    { for: ['trades', 'services'], name: 'Visit done? Say thanks', why: 'Two hours after a visit is done, thank the customer by text (after your OK)', trigger: { kind: 'visit.done' },
+      actions: [{ kind: 'wait', amount: 2, unit: 'hours' }, { kind: 'text', text: 'Thanks for having us today for {record}! Any questions, just reply here.' }] },
+    { for: ['trades'], name: 'Big job won? Have Operations plan it', why: 'When a quote over $5,000 is accepted, Operations plans materials, crew and schedule', trigger: { kind: 'quote.accepted' },
+      actions: [{ kind: 'if', when: [{ field: 'amount', op: 'over', value: '5000' }], then: [{ kind: 'agent', agent: 'ops', ask: 'We just won {record} for {customer} ({amount}). Plan it: materials to order, who goes, and a schedule.', wait: false }, { kind: 'notify', text: '{record} ({amount}) is won. Operations is planning it.', to: ['owners'] }], else: [] }] },
+    { for: ['trades'], name: 'License expiring? Owners hear', why: '30 days before a license or insurance expires, the owners get a note (Licenses & insurance list)', trigger: { kind: 'record.date', days: -30, time: '08:00' }, actions: [{ kind: 'notify', text: '{record} expires {date}. Time to renew.', to: ['owners'] }] },
+    { for: ['trades', 'services'], name: 'Plan renewing? Call them', why: '14 days before a service plan renews, make a task to call the customer', trigger: { kind: 'record.date', days: -14, time: '08:00' }, actions: [autoT('Call about renewing {record} ({date})', '', 3)] },
+    { for: ['trades', 'services', 'store'], name: 'Job won? Tell the crew', why: 'When a job moves to Won, post it for the team', trigger: { kind: 'record.stage', to: 'Won' }, actions: [{ kind: 'post', text: '{record} is {stage} 🎉', channelId: 'general' }] },
+    // Services and appointments.
+    { for: ['services'], name: 'New customer? Welcome them', why: 'When a contact becomes a Customer: a welcome email (after your OK) and a task to book their first visit', trigger: { kind: 'contact.stage', stage: 'customer' },
+      actions: [{ kind: 'email', subject: 'Welcome to the family, {contact}', text: 'Hi {contact},\n\nThanks for choosing us. We’ll be in touch to book your first visit.\n\nSee you soon!' }, autoT('Book {contact}’s first visit', '', 1)] },
+    // Sales and leads (everyone).
+    { for: ['all', 'sales'], name: 'New lead? Sales drafts a reply', why: 'When a lead comes in, your Sales agent looks them up and drafts a first reply; you get it as a note', trigger: { kind: 'contact.created', stage: 'lead' },
+      actions: [{ kind: 'agent', agent: 'sales', ask: 'A new lead came in: {contact}. Look them up in Kloomie and draft a short, warm first reply.', wait: true }, { kind: 'notify', text: 'New lead {contact}. Sales says: {answer}', to: ['who', 'owners'] }] },
+    { for: ['all', 'sales'], name: 'Lead gone quiet? Follow up', why: 'Three days after a lead comes in, if they’re still a Lead, whoever added them gets a task to follow up', trigger: { kind: 'contact.created' },
+      actions: [{ kind: 'wait', amount: 3, unit: 'days' }, { kind: 'if', when: [{ field: 'stage', op: 'is', value: 'Lead' }], then: [autoT('Follow up with {contact}', 'who', 0)], else: [] }] },
+    { for: ['sales'], name: 'Good call? Follow up', why: 'When a call is logged as Interested, make a follow-up task for whoever made it', trigger: { kind: 'attempt.logged', outcome: 'Interested' }, actions: [autoT('Send {contact} a quote', 'who', 1, 'same')] },
+    { for: ['all', 'sales'], name: 'Customer texted? Tell the office', why: 'When a text comes in, owners and admins hear who and what', trigger: { kind: 'text.received' }, actions: [{ kind: 'notify', text: '{contact} texted: {text}', to: ['admins'] }] },
+    { for: ['sales', 'office'], name: 'New customer? Onboard them', why: 'When a contact becomes a Customer, the owners hear it’s time to onboard them', trigger: { kind: 'contact.stage', stage: 'customer' }, actions: [{ kind: 'notify', text: '{contact} is a new customer. Time to onboard them.', to: ['owners'] }] },
+    // Office and money (everyone).
+    { for: ['all', 'office'], name: 'Paid? Thank them', why: 'When an invoice is paid in full, thank the customer by email (after your OK) and tell the owners', trigger: { kind: 'invoice.paid' },
+      actions: [{ kind: 'email', subject: 'Thank you for your payment', text: 'Hi {customer},\n\nWe received your payment of {amount} for {invoice}. Thank you!' }, { kind: 'notify', text: '{customer} paid {amount} on {invoice}', to: ['owners'] }] },
+    { for: ['all', 'office'], name: 'Friday recap from your team', why: 'Every Friday at 4, your Chief of Staff writes the week’s recap and posts it in #general', trigger: { kind: 'schedule', slots: [{ days: [5], time: '16:00' }] },
+      actions: [{ kind: 'agent', agent: 'chief', ask: 'Write a short recap of this week for the team: what got done, money in, and what’s next week. Five bullets at most.', wait: true }, { kind: 'post', text: 'This week: {answer}', channelId: 'general' }] },
+    { for: ['office', 'store'], name: 'Big spend? Owners hear', why: 'When the business spends over $1,000, the owners hear what on', trigger: { kind: 'money.added', over: 1000, direction: 'out' }, actions: [{ kind: 'notify', text: '{amount} on {category}: {note}', to: ['owners'] }] },
+    { for: ['office'], name: 'Signed? Schedule the work', why: 'When a document is signed, make a task to schedule the work', trigger: { kind: 'document.signed' }, actions: [autoT('Schedule the work for {document}', '', 1, 'same')] },
+    { for: ['office'], name: 'Files in? Tell the campaign', why: 'When files come in on a link, post it in the campaign’s feed', trigger: { kind: 'file.received' }, actions: [{ kind: 'post', text: '{from} sent {file}', channelId: 'same' }] },
+    { for: ['office', 'software'], name: 'New job? Tell another app', why: 'When a job or record is added, send it to Zapier, Make or your own system (add the address)', trigger: { kind: 'record.created' }, actions: [{ kind: 'webhook', url: '', secretId: null }] },
+    { for: ['all', 'office'], name: 'Off track? Tell the owners', why: 'When a campaign is checked in at risk or off track, the owners hear why', trigger: { kind: 'campaign.checkin', statuses: ['atRisk', 'offTrack'] }, actions: [{ kind: 'notify', text: '{who} checked in on {campaign}: {note}', to: ['owners'] }] },
+    { for: ['all'], name: 'Monday goals', why: 'Every Monday at 9, ask the team for the week’s goals', trigger: { kind: 'schedule', slots: [{ days: [1], time: '09:00' }] }, actions: [{ kind: 'post', text: 'Good morning! What are your goals for this week?', channelId: 'general' }] },
+    // Shops.
+    { for: ['store'], name: 'Big sale? Owners hear', why: 'When money over $500 comes in, the owners hear it', trigger: { kind: 'money.added', over: 500, direction: 'in' }, actions: [{ kind: 'notify', text: '{amount} in: {note}', to: ['owners'] }] },
+    { for: ['store', 'services'], name: 'Paid? Say thanks', why: 'When a payment comes in, make a task to thank the customer', trigger: { kind: 'payment.received' }, actions: [autoT('Thank {customer} for paying {amount} on {invoice}', '', 0)] },
   ];
+  // Which ones show: the team's kind of business and everyone's, or one group, or all of them.
+  const autoRecipeView = { on: null };
+  const autoRecipesFor = (k) => { const mine = AUTO_FOR[S.workspace?.setup?.kind] ? S.workspace.setup.kind : null; return AUTO_RECIPES.filter((r) => (k === 'every' || (!k && !mine) ? true : k ? r.for.includes(k) : r.for.includes('all') || r.for.includes(mine))); };
+  // The steps a ready-made one uses, as short words, for its card.
+  const AUTO_SHORT = { task: 'Task', post: 'Post', campaign: 'Campaign', notify: 'Notify', contact: 'Contact', record: 'Record', create: 'Record', visit: 'Visit', invoice: 'Invoice', text: 'Text', email: 'Email', money: 'Money', doc: 'Doc', vault: 'Vault', webhook: 'Other app', agent: 'AI', wait: 'Wait', if: 'If' };
+  const autoRecipeSteps = (r) => { const out = []; const walk = (l) => l.forEach((y) => { out.push(AUTO_SHORT[y.kind] || y.kind); if (y.kind === 'if') { walk(y.then || []); walk(y.else || []); } }); walk(r.actions); return out.join(' · '); };
   function automationsTool() {
     if (!S.automations || !AUTO_CAT.events) {
       Promise.all([api('GET', '/automations'), autoCatalog()]).then(([x]) => { S.automations = x; renderAutos(); }).catch((e) => toast(e.message));
@@ -5286,7 +5322,9 @@
       h('div', { class: 'contacts-tools' }, h('button', { class: 'btn small primary-btn', onclick: () => autoSheet() }, '+ New automation')),
       all.length ? h('div', { class: 'auto-list' }, all.map(row)) : null,
       h('div', { class: 'any-h camp-goals-h' }, all.length ? 'More ideas' : 'Start from one of these'),
-      h('div', { class: 'auto-recipes' }, AUTO_RECIPES.map((r) => h('button', { class: 'auto-recipe', onclick: () => autoSheet(null, r) }, h('b', {}, r.name), h('small', {}, r.why)))),
+      h('div', { class: 'auto-recipe-for seg-chips', role: 'tablist' }, [[null, S.workspace?.setup?.kind && AUTO_FOR[S.workspace.setup.kind] ? `For you (${AUTO_FOR[S.workspace.setup.kind]})` : 'Suggested'], ...Object.entries(AUTO_FOR), ['every', 'All']].map(([k, label]) =>
+        h('button', { class: 'chip' + (autoRecipeView.on === k ? ' on' : ''), 'data-for': k || 'you', role: 'tab', 'aria-selected': String(autoRecipeView.on === k), onclick: () => { autoRecipeView.on = k; renderAutos(); } }, label))),
+      h('div', { class: 'auto-recipes' }, autoRecipesFor(autoRecipeView.on).map((r) => h('button', { class: 'auto-recipe', onclick: () => autoSheet(null, r) }, h('b', {}, r.name), h('small', {}, r.why), h('small', { class: 'auto-recipe-steps' }, autoRecipeSteps(r))))),
     ];
   }
   // The runs of one that are waiting, each to stop.

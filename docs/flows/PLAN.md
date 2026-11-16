@@ -110,5 +110,14 @@ Each step: server tests that fail on the code before, and real-browser tests (he
     and say so.
   - No AI key: it fails and says so. At most 3 of the maker's assignments run at once.
   - Tests: `tests/flows_agent.mjs` (CI, with a stand-in Claude), plus a check in `flows_builder_ui`.
-- Next: ready-made flows for each trade.
+- Agents as steps are live as a3b4959.
+- Ready-made automations by kind of business are built: 25 of them in `AUTO_RECIPES`, each tagged `for` trades,
+  services, sales, office, store, software or all.
+  - The team's own kind (from setup) and everyone's show first ("For you"), and chips show one group or all.
+  - Each card lists the steps it uses. They use the new steps: book the install, bill and send after an OK, text
+    and email the customer, Sales drafting a reply to a lead, the Chief of Staff's Friday recap, sending to another
+    app.
+  - `tests/flows_recipes_ui.mjs` opens every one and saves it as it is. 22 save; the other 3 need a choice first
+    (a project's date field, another app's address) and say so.
+- Flows is complete except `create_automation` for the agents (so "Plan my business" can draft real automations).
 - New events for the engine round go into `server/flows.js` `EVENTS` and fire through `automate()`.
