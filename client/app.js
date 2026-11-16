@@ -5136,7 +5136,11 @@
     for (const e of c.events) { AUTO_WHEN[e.type] = e.label; AUTO_WORDS[e.type] = e.words; }
     return AUTO_CAT;
   }
-  const AUTO_DO = { task: 'Make a task', post: 'Post in a feed', campaign: 'Start a saved campaign', notify: 'Notify people', contact: 'Change the contact', record: 'Change the job or record', create: 'Add a job or record' };
+  const AUTO_DO = { task: 'Make a task', post: 'Post in a feed', campaign: 'Start a saved campaign', notify: 'Notify people', contact: 'Change the contact', record: 'Change the job or record', create: 'Add a job or record',
+    visit: 'Book a visit on the job', invoice: 'Bill the job (an invoice)', text: 'Text the customer (after an OK)', email: 'Email the customer (after an OK)', money: 'Add money to Finance', doc: 'Write a doc from a template' };
+  // Who may pick which (the server checks the same): billing and messaging customers are for owners and admins, the
+  // business's money for owners.
+  const autoDoOk = (k) => (k === 'money' ? amOwner() : ['invoice', 'text', 'email'].includes(k) ? amAdmin() : true);
   // The fields an automation can set (the server checks the same): plain values, never price lines or files.
   const AUTO_SET_T = ['text', 'number', 'money', 'date', 'select', 'multi', 'checkbox', 'person', 'email', 'phone', 'url'];
   const AUTO_WORDS = {
@@ -5318,11 +5322,16 @@
         ...list.map((a, i) => action(a, i, list, depth)),
         roomForMore() ? h('button', { class: 'btn small auto-add-step', onclick: () => { list.push({ kind: 'notify', text: '', to: [] }); draw(); } }, depth ? '+ Step' : '+ Another step') : null);
       const action = (a, i, list = dr.actions, depth = 0) => {
-        const k = h('select', { class: 'auto-step-kind', 'aria-label': 'What this step does' }, Object.entries(AUTO_DO).map(([v, l]) => opt(v, l, a.kind)), opt('wait', 'Wait…', a.kind), depth < 3 ? opt('if', 'Only if…', a.kind) : null);
+        const k = h('select', { class: 'auto-step-kind', 'aria-label': 'What this step does' }, Object.entries(AUTO_DO).filter(([v]) => autoDoOk(v) || v === a.kind).map(([v, l]) => opt(v, l, a.kind)), opt('wait', 'Wait…', a.kind), depth < 3 ? opt('if', 'Only if…', a.kind) : null);
         k.addEventListener('change', () => {
           list[i] = k.value === 'if' ? { kind: 'if', when: [{ field: fields.includes('stage') ? 'stage' : fields[0], op: 'is', value: '' }], then: [{ kind: 'notify', text: '', to: [] }], else: [] }
             : k.value === 'wait' ? { kind: 'wait', amount: 1, unit: 'days' }
             : k.value === 'record' || k.value === 'create' ? { kind: k.value, projectId: t.projectId || S.projects?.[0]?.id || '', typeId: t.projectId ? t.typeId || '' : '', set: [] }
+            : k.value === 'visit' ? { kind: 'visit', visit: 'Visit', inDays: 1, start: '09:00', length: 60, crew: 'who' }
+            : k.value === 'invoice' ? { kind: 'invoice', send: false }
+            : k.value === 'email' ? { kind: 'email', subject: '', text: a.text || '' }
+            : k.value === 'money' ? { kind: 'money', direction: 'in', amount: '', category: '', note: '' }
+            : k.value === 'doc' ? { kind: 'doc', templateId: DT.list?.[0]?.id || '', title: '' }
             : { kind: k.value, text: a.text || '', to: [], channelId: 'same' };
           draw();
         });
@@ -5387,6 +5396,60 @@
             ...a.set.map(setRow),
             can.length && a.set.length < 10 ? h('button', { class: 'linkish', onclick: () => { a.set.push({ field: (can.find((y) => !a.set.some((z) => z.field === y.id)) || can[0]).id, value: '' }); draw(); } }, '+ Set a field') : null,
             h('small', { class: 'hint' }, a.kind === 'record' ? `Changes the ${(lt?.singular || 'record').toLowerCase()} that set it off, when it’s in this list. On its timeline as this automation.` : `Adds one to ${lt?.name || 'the list'}, named after what set it off unless you set its name, for the same customer and linked back when it can be.`));
+        }
+        // Flows step 3: the rest of the tools. What goes to a customer waits for an OK every time.
+        const okHint = h('small', { class: 'hint' }, 'Waits for an OK every time: owners (and admins, when your team’s rules say so) get it in the bell, read it, and send it or decline. To the job’s customer, or the contact it’s about; never to anyone marked do not contact.');
+        if (a.kind === 'visit') {
+          const kd = h('select', { class: 'auto-visit-kind', 'aria-label': 'What kind of visit' }, VISIT_KINDS.map((v) => opt(v, v, a.visit || 'Visit')));
+          kd.addEventListener('change', () => (a.visit = kd.value));
+          const n = h('input', { type: 'number', min: 0, max: 90, value: a.inDays ?? 0, class: 'auto-visit-days', 'aria-label': 'Days from now' });
+          n.addEventListener('input', () => (a.inDays = Math.max(0, Math.min(90, Math.round(Number(n.value) || 0)))));
+          const at = h('input', { type: 'time', value: a.start || '', class: 'auto-visit-at' });
+          at.addEventListener('change', () => (a.start = at.value || ''));
+          const len = h('select', { class: 'auto-visit-len', 'aria-label': 'How long' }, [[30, '30 min'], [60, '1 hour'], [90, '1½ hours'], [120, '2 hours'], [180, '3 hours'], [240, '4 hours'], [480, 'All day (8 hours)']].map(([v, l]) => opt(String(v), l, String(a.length || 60))));
+          len.addEventListener('change', () => (a.length = Number(len.value)));
+          const crewV = a.crew === 'who' ? 'who' : Array.isArray(a.crew) && a.crew[0] ? a.crew[0] : '';
+          const crew = h('select', { class: 'auto-visit-crew', 'aria-label': 'Who goes' }, opt('who', 'Whoever set it off', crewV), opt('', 'Me (who made this)', crewV), people.map((m) => opt(m.id, m.name, crewV)));
+          crew.addEventListener('change', () => (a.crew = crew.value === 'who' ? 'who' : crew.value ? [crew.value] : []));
+          f.push(h('div', { class: 'row2' }, h('label', {}, 'Visit', kd), h('label', {}, 'In (days)', n)), h('div', { class: 'row2' }, h('label', {}, 'At', at), h('label', {}, 'For', len)), h('label', {}, 'Who goes', crew),
+            h('small', { class: 'hint' }, 'On the job that set it off, on their calendar and the team schedule. 0 days is today; no time makes it an all-day visit.'));
+        }
+        if (a.kind === 'invoice') {
+          const cb = h('input', { type: 'checkbox', checked: !!a.send, class: 'auto-inv-send' });
+          cb.addEventListener('change', () => { a.send = cb.checked; draw(); });
+          f.push(h('label', { class: 'pick' }, cb, 'Send it to the customer too (after an OK)'),
+            h('small', { class: 'hint' }, a.send ? 'Makes the invoice from the job’s price lines, then asks for an OK to send it. Once OK’d the customer gets their link and the job moves to Invoiced.' : 'Makes the invoice from the job’s price lines as a draft, for you to check and send.'));
+        }
+        if (a.kind === 'text') f.push(h('label', {}, 'Text', text('Hi {customer}, we’re on our way for {record}')), okHint, h('small', { class: 'hint' }, 'From your team’s Twilio number (Settings → Texting).'));
+        if (a.kind === 'email') {
+          const sub = h('input', { value: a.subject || '', placeholder: '{record} is done', class: 'auto-email-sub' });
+          sub.addEventListener('input', () => (a.subject = sub.value));
+          const body = h('textarea', { rows: 4, placeholder: 'Hi,\n\nThanks for choosing us for {record}…', class: 'auto-email-body' }, a.text || '');
+          body.addEventListener('input', () => (a.text = body.value));
+          f.push(h('label', {}, 'Subject', sub), h('label', {}, 'Message', body), okHint);
+        }
+        if (a.kind === 'money') {
+          const dir = h('select', { class: 'auto-money-dir' }, opt('in', 'Money in', a.direction || 'in'), opt('out', 'Money out', a.direction || 'in'));
+          dir.addEventListener('change', () => (a.direction = dir.value));
+          const amt = h('input', { type: 'number', min: 0, step: '0.01', value: a.amount ?? '', placeholder: '{amount}', class: 'auto-money-amt', 'aria-label': 'Amount' });
+          amt.addEventListener('input', () => (a.amount = amt.value));
+          const cat = h('input', { value: a.category || '', placeholder: 'Jobs', class: 'auto-money-cat' });
+          cat.addEventListener('input', () => (a.category = cat.value));
+          const note = h('input', { value: a.note || '', placeholder: '{record}', class: 'auto-money-note' });
+          note.addEventListener('input', () => (a.note = note.value));
+          f.push(h('div', { class: 'row2' }, h('label', {}, 'Which', dir), h('label', {}, 'Amount ($)', amt)), h('div', { class: 'row2' }, h('label', {}, 'Category', cat), h('label', {}, 'Note', note)),
+            h('small', { class: 'hint' }, 'Into the business’s Finance, dated the day it runs. Leave the amount empty to use the {amount} of what set it off.'));
+        }
+        if (a.kind === 'doc') {
+          if (!DT.list && !DT.loading) DT.loading = api('GET', '/doc-templates').then((l) => { DT.list = l; if (box.isConnected) draw(); }).catch(() => {}).finally(() => (DT.loading = null));
+          const tpls = DT.list || [];
+          if (!a.templateId && tpls[0]) a.templateId = tpls[0].id;
+          const sel = h('select', { class: 'auto-doc-tpl', 'aria-label': 'Template' }, tpls.length ? tpls.map((y) => opt(y.id, y.name, a.templateId)) : opt('', DT.list ? 'No doc templates yet' : 'Loading…', ''));
+          sel.addEventListener('change', () => (a.templateId = sel.value));
+          const title = h('input', { value: a.title || '', placeholder: 'Work order: {record}', class: 'auto-doc-title' });
+          title.addEventListener('input', () => (a.title = title.value));
+          f.push(h('label', {}, 'Template', sel), h('label', {}, 'Title', title),
+            h('small', { class: 'hint' }, tpls.length || !DT.list ? 'A new doc from the template, for the whole team, by this automation.' : 'Save a doc as a template first (open a doc, ⋯ → Save as a team template).'));
         }
         if (a.kind === 'wait') {
           const n = h('input', { type: 'number', min: 1, max: 999, value: a.amount ?? 1, class: 'auto-wait-n', 'aria-label': 'How long' });
@@ -8981,7 +9044,7 @@
       }
     };
     const waiting = x.status === 'pending';
-    const mine = x.byId === S.me?.memberId;
+    const mine = x.byId === S.me?.memberId && !x.flow;
     const takeBack = async () => { try { RU.data = { ...RU.data, ...(await api('DELETE', '/approvals/' + x.id)) }; closeSheet(); toast('Request taken back'); } catch (e) { toast(e.message); } };
     sheet(waiting ? `${x.by} needs an OK` : 'Request', [
       h('p', {}, h('b', {}, x.summary)),

@@ -68,7 +68,7 @@ try {
   await A.tap(`[...document.querySelectorAll('#tool button')].find((b) => b.textContent === '+ New automation')`);
   ok(await A.until(`document.querySelectorAll('#sheet .auto-kind optgroup').length >= 8`), 'what sets it off is grouped by tool');
   const groups = await A.ev(`[...document.querySelectorAll('#sheet .auto-kind optgroup')].map((g) => g.label).join(', ')`);
-  ok(/Jobs & projects/.test(groups) && /Invoices & Finance/.test(groups) && /Map/.test(groups) && /Texts/.test(groups), `including ${groups}`);
+  ok(/Projects/.test(groups) && /Invoices & Finance/.test(groups) && /Map/.test(groups) && /Texts/.test(groups), `including ${groups}`);
   await A.pick(`document.querySelector('#sheet .auto-kind')`, 'record.stage');
   ok(await A.until(`!!document.querySelector('#sheet .auto-proj')`), 'a record event asks which project');
   await A.pick(`document.querySelector('#sheet .auto-proj')`, p.id);

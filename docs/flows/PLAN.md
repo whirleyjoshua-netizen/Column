@@ -49,6 +49,23 @@ Each step: server tests that fail on the code before, and real-browser tests (he
 
 - Step 1 is live as 1ff6ba8.
 - Step 2 (if/otherwise, waits in `db.flowWaits`, waiting runs listed and stopped) is in the commit after it.
-- Flows then pauses: the owner put the Jobs & projects engine round (see the team's engine plan) first. Steps 3–5
-  come after it.
+- Step 2 is live as 744c922. Flows then paused for the Jobs & projects engine round (79e51ad), which handed back.
+- Step 3 (actions in every tool) is built:
+  - New steps: book a visit on the job, bill the job (an invoice, optionally sent), text the customer, email the
+    customer, add money to the business's Finance, and write a doc from a team doc template.
+  - Each one runs through the app's own route as the automation's maker (`flowCall` → `replayAs(..., flow)`), so the
+    same permissions and team rules apply. Records, money and docs show the automation's name.
+  - Texts, emails and sending an invoice always wait for an OK (`RULES.ask`, an approval with `flow` set), even
+    when an owner made the automation. The automation's maker can OK it too.
+  - An OK sends the request through the same route, once. The OK also covers the team's invoice rule (`covers`), so
+    nobody is asked twice.
+  - Nobody marked do not contact, or unsubscribed, gets anything; the run log says why.
+  - What an automation does, and what an OK'd send does, sets nothing off. `FLOWING` (an AsyncLocalStorage) replaces
+    the old counter, so this holds across every await.
+  - Only owners and admins can bill or message customers from an automation, and only owners can add money. This is
+    checked when it's saved and again by the routes when it runs.
+  - New route: `POST /api/contacts/:id/email`.
+  - Tests: `tests/flows_actions.mjs` (CI) and `tests/flows_actions_ui.mjs` (Chrome: build it in the editor, move a
+    job, OK the email and the invoice from Home, at phone width too).
+- Next: step 4 (vault drop, sealed flow secrets), then step 5 (agents as steps, the visual editor, trade templates).
 - New events for the engine round go into `server/flows.js` `EVENTS` and fire through `automate()`.

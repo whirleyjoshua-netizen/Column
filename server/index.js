@@ -11,6 +11,7 @@ import zlib from 'node:zlib';
 import { helpDocs } from './helpdocs.js';
 import { sitePages } from './sitepages.js';
 import { pipeline } from 'node:stream/promises';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 import { createZip, streamZip, zipSize } from './zip.js';
@@ -3096,11 +3097,13 @@ function dueSlots(x, now) {
 // every run is logged. No AI here: the same thing happens every time.
 // What can set one off is FL.EVENTS (server/flows.js): every tool, one list, also what the app's editor shows.
 const AUTO_TRIGGERS = FL.EVENTS.map((e) => e.type);
-// record: change the job or record it's about; create: add one (to any list its maker can see).
-const AUTO_ACTIONS = ['task', 'post', 'campaign', 'notify', 'contact', 'record', 'create'];
+// record: change the job or record it's about; create: add one (to any list its maker can see). Flows step 3: book a
+// visit, make (and send) an invoice, text or email the customer, add the business's money, write a doc from a template.
+const AUTO_ACTIONS = ['task', 'post', 'campaign', 'notify', 'contact', 'record', 'create', 'visit', 'invoice', 'text', 'email', 'money', 'doc'];
 const AUTO_RUNS = 30;
 const AUTO_MAX = 50;
-let automating = 0;
+// Set while an automation's own work runs, through every await of the routes it calls: what it does sets nothing off.
+const FLOWING = new AsyncLocalStorage();
 const publicAutomation = ({ wsId, recent, ran, dateRan, ...x }) => ({ ...x, waiting: Object.values(db.flowWaits || {}).filter((w) => w.autoId === x.id).length });
 function applyAutomation(x, body, ws) {
   if (body.name !== undefined) x.name = cleanText(body.name, 80) || 'Automation';
@@ -3156,6 +3159,8 @@ function applyAutomation(x, body, ws) {
       if ((a.kind === 'task' || a.kind === 'post' || a.kind === 'notify') && !a.text) throw badRequest('Write what it should say.');
       if (a.kind === 'notify' && !a.to.length) throw badRequest('Pick who to notify.');
       if (a.kind === 'contact' && !a.stage && !a.tag) throw badRequest('Pick a stage or a tag for the contact.');
+      if (a.kind === 'text' && !a.text) throw badRequest('Write the text.');
+      if (a.kind === 'email' && (!a.subject || !a.text)) throw badRequest('Write the email’s subject and message.');
     }
     // Runs waiting in the old steps would go on from the wrong place: they're dropped.
     if (x.actions && JSON.stringify(x.actions) !== JSON.stringify(list)) {
@@ -3180,6 +3185,27 @@ function cleanAction(a, ws, who) {
     const lt = typeOfP(p, a.typeId);
     if (!lt) throw badRequest('Pick which list.');
     return { kind, projectId: p.id, typeId: lt.id, set: PJ.autoSetClean(ws, lt, a.set) };
+  }
+  // The rest of the tools: its maker has to be allowed to do it (and is checked again when it runs, by the same routes).
+  if (['invoice', 'text', 'email'].includes(kind) && !isAdminId(ws.id, who)) throw badRequest('Only owners and admins can have an automation bill or message customers.');
+  if (kind === 'money' && !isOwnerId(ws.id, who)) throw badRequest('Only owners can have an automation add the business’s money.');
+  if (kind === 'visit') {
+    const crew = a.crew === 'who' ? 'who' : (Array.isArray(a.crew) ? a.crew.map(String) : []).filter((id) => ws.members.some((m) => m.id === id)).slice(0, 20);
+    const len = Math.round(Number(a.length) || 60);
+    return { kind, visit: VISIT_KINDS.includes(a.visit) ? a.visit : 'Visit', inDays: Math.max(0, Math.min(90, Math.round(Number(a.inDays)) || 0)), start: /^([01]\d|2[0-3]):[0-5]\d$/.test(a.start || '') ? a.start : '', length: Math.max(15, Math.min(720, len)), crew };
+  }
+  if (kind === 'invoice') return { kind, send: !!a.send };
+  if (kind === 'text') return { kind, text: cleanText(a.text, 1000) };
+  if (kind === 'email') return { kind, subject: cleanText(a.subject, 200), text: String(a.text ?? '').replace(/\r\n?/g, '\n').trim().slice(0, 5000) };
+  if (kind === 'money') {
+    const n = a.amount === '' || a.amount == null ? null : Number(String(a.amount).replace(/[$,\s]/g, ''));
+    if (n != null && !(n > 0 && n <= 1e9)) throw badRequest('The amount is a number of dollars, like 250, or leave it empty to use the {amount} of what set it off.');
+    return { kind, direction: a.direction === 'in' ? 'in' : 'out', amount: n == null ? null : Math.round(n * 100) / 100, category: cleanText(a.category, 40), note: cleanText(a.note, 200) };
+  }
+  if (kind === 'doc') {
+    const tpl = db.docTemplates[a.templateId];
+    if (!tpl || tpl.wsId !== ws.id) throw badRequest('Pick one of the team’s doc templates.');
+    return { kind, templateId: tpl.id, title: cleanText(a.title, 300) };
   }
   const text = cleanText(a.text, 1000);
   if (kind === 'task') return { kind, text, assignee: /^(who|role:[\w-]+|[\w-]{6,})$/.test(a.assignee || '') ? a.assignee : '', dueIn: a.dueIn === '' || a.dueIn == null ? null : Math.max(0, Math.min(90, Math.round(Number(a.dueIn)) || 0)), campaign: a.campaign === 'same' || (a.campaign && db.campaigns[a.campaign]?.wsId === ws.id) ? a.campaign : '' };
@@ -3220,7 +3246,7 @@ function autoMatches(t, ctx) {
 // maker can still see it, so nothing private goes out to people who can't see it.
 function automate(wsId, kind, ctx = {}) {
   kind = FL.LEGACY[kind] || kind;
-  if (automating || offline(wsId) || !FL.EVENT[kind]) return;
+  if (FLOWING.getStore() || offline(wsId) || !FL.EVENT[kind]) return;
   const priv = !!(ctx.private || ctx.campaign?.private || (ctx.campaign?.parentId && db.campaigns[ctx.campaign.parentId]?.private) || ctx.project?.private);
   for (const x of Object.values(db.automations)) {
     if (x.wsId !== wsId || !x.on || x.trigger.kind !== kind || !autoMatches(x.trigger, ctx)) continue;
@@ -3276,26 +3302,26 @@ function eventFromHook(wsId, type, d, by) {
   }
 }
 function autoLog(x, ok, note) {
-  x.runs = [{ at: Date.now(), ok, note: clipText(note || '', 240) }, ...(x.runs || [])].slice(0, 20);
+  x.runs = [{ at: Date.now(), ok, note: clipText(note || '', 1000) }, ...(x.runs || [])].slice(0, 20);
   if (ok) x.count = (x.count || 0) + 1;
   broadcast(x.wsId, { type: 'automation', automation: publicAutomation(x), forAdmins: true });
 }
 function runAutomation(x, ctx) {
   x.recent = (x.recent || []).filter((at) => at > Date.now() - 3600_000);
-  if (x.recent.length >= AUTO_RUNS) return autoLog(x, false, `Skipped: it already ran ${AUTO_RUNS} times this hour`);
+  if (x.recent.length >= AUTO_RUNS) return Promise.resolve(autoLog(x, false, `Skipped: it already ran ${AUTO_RUNS} times this hour`));
   x.recent.push(Date.now());
   const did = [];
-  automating++;
-  try {
-    const r = execSteps(x, ctx, [], 0, did);
-    if (r.wait) waitFor(x, ctx, r.wait, did);
-    autoLog(x, true, did.filter(Boolean).join(' · ') || 'nothing to do this time');
-  } catch (e) {
-    autoLog(x, false, (did.length ? did.join(' · ') + ' · then ' : '') + e.message);
-  } finally {
-    automating--;
-    save();
-  }
+  return FLOWING.run({ autoId: x.id }, async () => {
+    try {
+      const r = await execSteps(x, ctx, [], 0, did);
+      if (r.wait) waitFor(x, ctx, r.wait, did);
+      autoLog(x, true, did.filter(Boolean).join(' · ') || 'nothing to do this time');
+    } catch (e) {
+      autoLog(x, false, (did.length ? did.join(' · ') + ' · then ' : '') + e.message);
+    } finally {
+      save();
+    }
+  });
 }
 // ---------- Flows, step 2: steps that decide and wait ----------
 // An automation's actions are its steps, and a step can also be "only if…" (with "otherwise") or "wait". Ifs read
@@ -3356,7 +3382,7 @@ function stepList(x, stack) {
   return list;
 }
 // Runs the steps from a place on; an "only if" goes into its yes or no list, then on after it. A wait stops here.
-function execSteps(x, ctx, stack, i, log) {
+async function execSteps(x, ctx, stack, i, log) {
   const list = stepList(x, stack);
   if (!list) return {};
   for (; i < list.length; i++) {
@@ -3365,21 +3391,21 @@ function execSteps(x, ctx, stack, i, log) {
     if (s.kind === 'if') {
       const yes = autoWhen(s.when, ctx, x.wsId);
       log.push(`${yes ? 'Yes' : 'No'}: ${whenText(s.when)}`);
-      const r = execSteps(x, ctx, [...stack, { at: i, key: yes ? 'then' : 'else' }], 0, log);
+      const r = await execSteps(x, ctx, [...stack, { at: i, key: yes ? 'then' : 'else' }], 0, log);
       if (r.wait) return r;
       continue;
     }
-    const did = autoAction(x, s, ctx);
+    const did = await autoAction(x, s, ctx);
     if (did) log.push(did);
   }
   return {};
 }
-function resumeSteps(x, ctx, stack, i, log) {
-  let r = execSteps(x, ctx, stack, i, log);
+async function resumeSteps(x, ctx, stack, i, log) {
+  let r = await execSteps(x, ctx, stack, i, log);
   while (!r.wait && stack.length) {
     const last = stack.at(-1);
     stack = stack.slice(0, -1);
-    r = execSteps(x, ctx, stack, last.at + 1, log);
+    r = await execSteps(x, ctx, stack, last.at + 1, log);
   }
   return r;
 }
@@ -3423,21 +3449,99 @@ function runWaits(now) {
     const mine = (x.trigger.campaignId && x.trigger.campaignId === (ctx.campaign?.parentId || ctx.campaign?.id) && seesCampaign(x.trigger.campaignId, x.memberId)) || (x.trigger.projectId && x.trigger.projectId === ctx.project?.id && PJ.sees(ctx.project, x.memberId));
     if ((priv && !mine) || (ctx.ownersOnly && !isOwnerId(x.wsId, x.memberId))) { autoLog(x, false, 'A waiting run was dropped: what it’s about is private now'); continue; }
     const log = [];
-    automating++;
-    try {
-      const r = resumeSteps(x, ctx, w.stack, w.i, log);
-      if (r.wait) waitFor(x, ctx, r.wait, log);
-      autoLog(x, true, 'After waiting: ' + (log.join(' · ') || 'nothing left to do'));
-    } catch (e) {
-      autoLog(x, false, 'After waiting: ' + (log.length ? log.join(' · ') + ' · then ' : '') + e.message);
-    } finally {
-      automating--;
-    }
+    FLOWING.run({ autoId: x.id }, async () => {
+      try {
+        const r = await resumeSteps(x, ctx, w.stack, w.i, log);
+        if (r.wait) waitFor(x, ctx, r.wait, log);
+        autoLog(x, true, 'After waiting: ' + (log.join(' · ') || 'nothing left to do'));
+      } catch (e) {
+        autoLog(x, false, 'After waiting: ' + (log.length ? log.join(' · ') + ' · then ' : '') + e.message);
+      } finally {
+        save();
+      }
+    });
   }
 }
 
-function autoAction(x, a, ctx) {
+// ---------- Flows, step 3: actions in every tool, through the app's own routes ----------
+// Each runs as a request to the same route the app uses, as the automation's maker (their permissions and the team's
+// rules: something over a limit goes for an OK as theirs), on timelines as the automation. What goes to a customer
+// (a text, an email, sending an invoice) is kept as an approval instead, every time: a person's OK sends it through
+// the same route. What an automation does, and what an OK'd send does, sets nothing off (FLOWING).
+async function flowCall(x, method, p, body = {}) {
   const ws = db.workspaces[x.wsId];
+  if (!memberIn(ws.id, x.memberId)) throw new Error('its maker isn’t on the team any more');
+  const r = await replayAs(ws, x.memberId, null, { method, path: p, body }, null, x);
+  if (r.status === 202 && r.body?.pending) return { pending: true, body: r.body };
+  if (r.status >= 300) throw new Error(cleanText(r.body?.error, 200) || `it couldn’t be done (${r.status})`);
+  return { body: r.body };
+}
+function flowAsk(x, summary, req, covers = []) {
+  const ws = db.workspaces[x.wsId];
+  if (!memberIn(ws.id, x.memberId)) throw new Error('its maker isn’t on the team any more');
+  RULES.ask(ws, { byId: x.memberId, by: `Automation “${x.name}”`, summary, req, flow: x.id, covers });
+  return `Waiting for an OK: ${clipText(summary, 120)}`;
+}
+// Who an event is about, to write to: its contact, or the customer on the job or record it's about.
+function flowContact(ctx, wsId) {
+  const c = ctx.contact?.id && db.contacts[ctx.contact.id];
+  if (c && c.wsId === wsId) return c;
+  const rec = ctx.record?.id && db.records[ctx.record.id];
+  const p = rec && db.projects[rec.projectId];
+  const lt = p && typeOfP(p, rec.typeId);
+  const f = lt?.fields.find((y) => y.type === 'contact' && db.contacts[rec.values[y.id]]?.wsId === wsId);
+  return f ? db.contacts[rec.values[f.id]] : null;
+}
+const contactName = (c) => c.name || c.company || c.email || c.phone || 'the contact';
+const dollars = (n) => '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+async function flowAction(x, a, ctx, ws) {
+  const rec = ctx.record?.id && db.records[ctx.record.id]?.wsId === ws.id ? db.records[ctx.record.id] : null;
+  if (a.kind === 'visit') {
+    if (!rec) return 'No job to book a visit on: it wasn’t about one';
+    const date = addDays(teamDay(ws.id), a.inDays);
+    const start = a.start ? Number(a.start.slice(0, 2)) * 60 + Number(a.start.slice(3)) : null;
+    const memberIds = a.crew === 'who' ? [ws.members.some((m) => m.id === ctx.whoId) ? ctx.whoId : x.memberId] : a.crew.length ? a.crew : [x.memberId];
+    await flowCall(x, 'POST', `/api/records/${rec.id}/visits`, { date, start, end: start == null ? null : Math.min(1440, start + a.length), kind: a.visit, memberIds });
+    return `Booked ${a.visit === 'Visit' ? 'a visit' : 'the ' + a.visit.toLowerCase()} on ${date}${a.start ? ' at ' + a.start : ''}`;
+  }
+  if (a.kind === 'invoice') {
+    if (!rec) return 'No job to bill: it wasn’t about one';
+    const inv = (await flowCall(x, 'POST', `/api/records/${rec.id}/invoices`, {})).body;
+    if (!a.send) return `Made ${inv.number} (a draft)`;
+    if (!(inv.total > 0)) return `Made ${inv.number}, but didn’t ask to send it: its total is $0`;
+    return `Made ${inv.number} · ` + flowAsk(x, `Send ${inv.number} for ${dollars(inv.total / 100)} to ${inv.to?.name || 'the customer'}`, { method: 'POST', path: `/api/invoices/${inv.id}/send`, body: {} }, ['invoice']);
+  }
+  if (a.kind === 'text' || a.kind === 'email') {
+    const c = flowContact(ctx, ws.id);
+    if (!c) return `No one to ${a.kind}: it wasn’t about a contact or a job with a customer`;
+    if (noContact(c)) return `Didn’t ${a.kind} ${contactName(c)}: they asked not to be contacted`;
+    if (a.kind === 'text') {
+      if (!c.phone || !TW.e164(c.phone)) return `Didn’t text ${contactName(c)}: no phone number`;
+      if (!TW.on(ws.id)) throw new Error('texting isn’t connected (Settings → Texting)');
+      const body = autoFill(a.text, ctx, ws.id);
+      return flowAsk(x, `Text ${contactName(c)}: “${clipText(body, 160)}”`, { method: 'POST', path: `/api/contacts/${c.id}/texts`, body: { body } });
+    }
+    if (!EMAIL_RE.test(c.email || '')) return `Didn’t email ${contactName(c)}: no email address`;
+    if (doNotEmail(ws.id).has(emailKey(c.email))) return `Didn’t email ${contactName(c)}: they unsubscribed`;
+    const subject = autoFill(a.subject, ctx, ws.id), body = autoFill(a.text, ctx, ws.id);
+    return flowAsk(x, `Email ${contactName(c)}: ${clipText(subject, 120)}`, { method: 'POST', path: `/api/contacts/${c.id}/email`, body: { subject, body, recordId: rec?.id || null } });
+  }
+  if (a.kind === 'money') {
+    const amount = a.amount ?? (ctx.amount != null ? Number(ctx.amount) : null);
+    if (!(amount > 0)) return 'No money added: there was no amount';
+    const m = (await flowCall(x, 'POST', '/api/money', { kind: a.direction, amount, day: teamDay(ws.id), scope: 'business', category: a.category || ctx.category || '', note: autoFill(a.note || '{record}', ctx, ws.id) })).body;
+    return `Added ${dollars(m.amount / 100)} ${m.kind === 'in' ? 'in' : 'out'} to Finance`;
+  }
+  if (a.kind === 'doc') {
+    if (!db.docTemplates[a.templateId]) throw new Error('its doc template is gone');
+    const it = (await flowCall(x, 'POST', `/api/doc-templates/${a.templateId}/use`, { title: autoFill(a.title, ctx, ws.id) || undefined })).body;
+    return `Wrote the doc “${clipText(it.title || 'Untitled', 60)}”`;
+  }
+}
+
+async function autoAction(x, a, ctx) {
+  const ws = db.workspaces[x.wsId];
+  if (['visit', 'invoice', 'text', 'email', 'money', 'doc'].includes(a.kind)) return flowAction(x, a, ctx, ws);
   const say = autoFill(a.text, ctx, ws.id);
   if (a.kind === 'task') {
     const camp = a.campaign === 'same' ? ctx.campaign : db.campaigns[a.campaign];
@@ -7945,6 +8049,23 @@ async function api(req, res, url) {
     if (m === 'GET' && !b) return send(res, 200, { contacts: contactsOf(ws.id).map(publicContact) });
     if (m === 'GET' && b === 'duplicates') return send(res, 200, { groups: duplicateGroups(ws.id).map((g) => g.sort((p, q) => p.createdAt - q.createdAt).map((x) => x.id)) });
     const body = m === 'DELETE' ? {} : await readJson(req, 20_000_000);
+    // Emailing one contact (what an automation's email sends once it's OK'd): from the person's Gmail or Outlook, or
+    // through Kloomie under the team's name. Not to anyone marked do not contact or unsubscribed. On the job's timeline.
+    if (m === 'POST' && b && c === 'email') {
+      const x = db.contacts[b];
+      if (!x || x.wsId !== ws.id) return send(res, 404, { error: 'That contact is gone.' });
+      if (noContact(x)) return send(res, 400, { error: `${x.name || 'They'} asked not to be contacted.` });
+      const subject = cleanText(body.subject, 200), text = String(body.body ?? '').replace(/\r\n?/g, '\n').trim().slice(0, 5000);
+      if (!subject || !text) return send(res, 400, { error: 'Write the subject and the message.' });
+      try {
+        const out = await agentEmail(ws, auth.memberId, { name: x.name || '', email: x.email, subject, text });
+        const at = body.recordId && PJ.recordAt(String(body.recordId), ws.id, auth.memberId);
+        if (at) PJ.recordActivity(at.rec.id, { kind: 'email', what: 'email sent', note: `Emailed ${x.name || x.email}: ${subject}`, by: auth.member });
+        return send(res, 200, { sent: true, to: x.email, from: out.from });
+      } catch (e) {
+        return send(res, e.status || 502, { error: e.message });
+      }
+    }
     if (m === 'POST' && !b) {
       if (contactsOf(ws.id).length >= CONTACT_MAX) return send(res, 400, { error: `A team can keep up to ${CONTACT_MAX.toLocaleString()} contacts.` });
       const x = applyContact(newContact(ws.id, auth.member), body);
@@ -8048,7 +8169,7 @@ async function api(req, res, url) {
     // A scheduled one can be run now, to try it.
     if (m === 'POST' && c === 'run') {
       if (x.trigger.kind !== 'schedule') return send(res, 400, { error: 'Only scheduled automations can be run by hand.' });
-      runAutomation(x, { date: teamDay(ws.id), who: auth.member, whoId: auth.memberId });
+      await runAutomation(x, { date: teamDay(ws.id), who: auth.member, whoId: auth.memberId });
       return send(res, 200, publicAutomation(x));
     }
     if (m === 'PATCH' && !c) {
@@ -9826,7 +9947,8 @@ function replayPathOk(p) {
   const path = q < 0 ? s : s.slice(0, q), query = q < 0 ? '' : s.slice(q + 1);
   return REPLAY_PATH.test(path) && REPLAY_QUERY.test(query) && new URL(s, 'http://replay').pathname === path;
 }
-async function replayAs(ws, memberId, approvalId, { method, path: p, body }, as = null) {
+// flow: the automation it's for (Flows step 3), named as it on what it does.
+async function replayAs(ws, memberId, approvalId, { method, path: p, body }, as = null, flow = null) {
   if (!replayPathOk(p)) {
     console.error('Refused a replay to an odd address:', String(p).slice(0, 120));
     return { status: 400, body: { error: 'That isn’t an address Kloomie can do that at.' } };
@@ -9834,7 +9956,8 @@ async function replayAs(ws, memberId, approvalId, { method, path: p, body }, as 
   const me = ws.members.find((m) => m.id === memberId);
   const req = Readable.from(body == null ? [] : [Buffer.from(JSON.stringify(body))]);
   Object.assign(req, { method, url: p, headers: { 'content-type': 'application/json' }, socket: { remoteAddress: 'replay' } });
-  req.replay = { token: null, wsId: ws.id, ws, memberId, member: as || me.name, role: me.role, tz: tzOf(ws), approved: approvalId, ...(as ? { agent: true } : {}) };
+  if (!me) return { status: 403, body: { error: 'They aren’t on the team any more.' } };
+  req.replay = { token: null, wsId: ws.id, ws, memberId, member: flow ? flow.name : as || me.name, role: me.role, tz: tzOf(ws), approved: approvalId, ...(as ? { agent: true } : {}), ...(flow ? { flow: flow.id } : {}) };
   const res = new EventEmitter();
   let status = 200, out = '';
   Object.assign(res, { headersSent: false, setHeader() {}, getHeader() {}, writeHead(code) { status = code; this.headersSent = true; return this; }, write(c) { out += c; return true; }, end(c) { if (c) out += c; this.emit('finish'); } });
@@ -10100,7 +10223,12 @@ const STANDUP = standupModule({ db, save, broadcast, rid, cleanText, readJson, s
     hook(ws.id, 'task.created', () => API.apiTask(t), auth.member);
     return t;
   } });
-RULES = rulesModule({ db, save, broadcast, rid, cleanText, readJson, send, notify, replay: replayAs });
+// An automation's send that a person OK'd goes out as the automation, and sets nothing off.
+RULES = rulesModule({ db, save, broadcast, rid, cleanText, readJson, send, notify, replay: (ws, memberId, id, req) => {
+  const ap = db.approvals[id];
+  if (!ap?.flow) return replayAs(ws, memberId, id, req);
+  return FLOWING.run({ autoId: ap.flow }, () => replayAs(ws, memberId, id, req, null, { id: ap.flow, name: db.automations[ap.flow]?.name || 'Automation' }));
+} });
 HQ = hqModule({ db, save, broadcast, rid, cleanText, readJson, send, isAdmin, aiAsk, aiRun, itemFiles, replyJson, enforced: (ws) => RULES.promptLines(ws), writePlaybook, allowLocal: process.env.ALLOW_LOCAL_FETCH === '1' });
 for (const ws of Object.values(db.workspaces)) if (HQ.migrate(ws)) save();
 // Trips logged before mileage went into Finance: keep the rate they were logged at, and add their expense.

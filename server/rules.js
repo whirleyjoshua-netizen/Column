@@ -37,7 +37,8 @@ export function rulesModule({ db, save, broadcast, rid, cleanText, readJson, sen
     const r = rulesOf(ws)[action];
     if (!r || r.level === 'auto') return null;
     if (ACTIONS[action].unit && !(amount > r.over)) return null;
-    if (auth.approved && db.approvals[auth.approved]?.action === action) return null;
+    const ok = auth.approved && db.approvals[auth.approved];
+    if (ok && (ok.action === action || ok.covers?.includes(action))) return null;
     if (canApprove(ws, auth.memberId)) return null;
     if (r.level === 'never') return { status: 403, body: { error: `${ruleText(action, r)} isn’t allowed on this team.` } };
     // F4: the public API can't wait for an OK, so it's refused there (the key's maker can do it in Kloomie, where it
@@ -54,6 +55,17 @@ export function rulesModule({ db, save, broadcast, rid, cleanText, readJson, sen
     news(ws.id);
     const names = ws.members.filter((m) => approverIds(ws).includes(m.id)).map((m) => m.name);
     return { status: 202, body: { pending: true, approval: publicApproval(x), error: `That needs an OK first (${ruleText(action, r).toLowerCase()}). Sent to ${names.join(' and ') || 'the owner'}.` } };
+  }
+
+  // An automation's send to a customer (Flows): always kept for an OK, whoever made it, as theirs. covers: the team
+  // rules the OK also answers (sending an invoice over the limit), so it isn't asked twice.
+  function ask(ws, { byId, by, summary, req, flow, covers = [] }) {
+    const x = { id: rid(), wsId: ws.id, action: 'flow', amount: 0, summary: cleanText(summary, 300), target: null, req, by, byId, flow, covers, at: Date.now(), status: 'pending' };
+    db.approvals[x.id] = x;
+    save();
+    for (const id of approverIds(ws)) notify(ws.id, id, { title: `${by} needs your OK`, text: x.summary, kind: 'approval', go: 'approval:' + x.id });
+    news(ws.id);
+    return x;
   }
 
   // Approving replays the request as the person who asked; it either lands or fails with the reason.
@@ -142,5 +154,5 @@ export function rulesModule({ db, save, broadcast, rid, cleanText, readJson, sen
     return send(res, 405, { error: 'Method not allowed' });
   }
 
-  return { route, hold, rulesOf, promptLines, canApprove, ACTIONS };
+  return { route, hold, ask, rulesOf, promptLines, canApprove, ACTIONS };
 }
