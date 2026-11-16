@@ -8,7 +8,7 @@ const S = (await import('node:path')).resolve(process.argv[2]);
 const DIR = S + '/dk/taskswork';
 FS.rmSync(DIR, { recursive: true, force: true });
 FS.mkdirSync(DIR, { recursive: true });
-const PORT = 4874, APP = `http://127.0.0.1:${PORT}/`, CDP = 9468;
+const PORT = 5142, APP = `http://127.0.0.1:${PORT}/`, CDP = 9468;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let fails = 0;
 const ok = (c, msg) => { console.log((c ? 'PASS ' : 'FAIL ') + msg); if (!c) fails++; };

@@ -8,7 +8,7 @@ const S = (await import('node:path')).resolve(process.argv[2]);
 const DIR = S + '/dk/workload';
 fs.rmSync(DIR, { recursive: true, force: true });
 fs.mkdirSync(DIR, { recursive: true });
-const PORT = 4878, B = `http://127.0.0.1:${PORT}`;
+const PORT = 5144, B = `http://127.0.0.1:${PORT}`;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let fails = 0;
 const ok = (c, msg) => { console.log((c ? 'PASS ' : 'FAIL ') + msg); if (!c) fails++; };

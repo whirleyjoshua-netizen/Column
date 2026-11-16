@@ -5,7 +5,7 @@ const S = (await import('node:path')).resolve(process.argv[2]);
 const DIR = S + '/dk/chataskui';
 FS.rmSync(DIR, { recursive: true, force: true });
 FS.mkdirSync(DIR, { recursive: true });
-const PORT = 4870, APP = `http://127.0.0.1:${PORT}/`;
+const PORT = 5140, APP = `http://127.0.0.1:${PORT}/`;
 FS.rmSync(`${S}/dk/chrome-ca`, { recursive: true, force: true });
 try { (await import('node:child_process')).execSync('pkill -f remote-debugging-port=9464'); await new Promise((r) => setTimeout(r, 500)); } catch {}
 const launch = (port, dir) => spawn('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', ['--headless=new', `--remote-debugging-port=${port}`, `--user-data-dir=${S}/dk/${dir}`, '--no-first-run', '--window-size=1300,900', 'about:blank'], { stdio: 'ignore' });
