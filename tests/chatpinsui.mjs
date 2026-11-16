@@ -98,6 +98,13 @@ try {
   await A.until(`!!document.querySelector('#chat .ch-shelf')`);
   await A.ev(`document.querySelector('#chat .ch-pins .cp[data-kind=stack] .cp-x').click()`);
   ok(await A.until(`!document.querySelector('#chat .ch-pins .cp') && !document.querySelector('#chat .ch-shelf')`), 'unpinning takes the chip off and closes the stack');
+  // A pinned agent: tapping it starts a message to it, in the chat.
+  await api('POST', '/channels/general/pins', { kind: 'agent', id: 'chief' });
+  ok(await A.until(`!!document.querySelector('#chat .ch-pins .cp[data-kind=agent]')`), 'the Chief of Staff is pinned');
+  await A.ev(`document.querySelector('#chat .ch-pins .cp[data-kind=agent] .cp-open').click()`);
+  ok(await A.until(`document.querySelector('#chat .ch-main textarea')?.value.startsWith('@Chief of Staff ') && document.activeElement === document.querySelector('#chat .ch-main textarea')`), 'tapping a pinned agent starts a message to it');
+  await A.ev(`(() => { const ta = document.querySelector('#chat .ch-main textarea'); ta.value = ''; ta.dispatchEvent(new Event('input', { bubbles: true })); document.querySelector('#chat .ch-pins .cp[data-kind=agent] .cp-x').click(); return true; })()`);
+  await A.until(`!document.querySelector('#chat .ch-pins .cp')`);
   await A.ev(`document.querySelector('#chat .ch-pins .cp-add').click()`);
   await A.ev(`[...document.querySelectorAll('#menu button')].find((b) => b.textContent.includes('Henderson job')).click()`);
   await A.until(`!!document.querySelector('#chat .ch-shelf')`);

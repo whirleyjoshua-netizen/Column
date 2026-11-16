@@ -3618,6 +3618,61 @@ function dryRun(x, ctx, ws, stack, out) {
 // ask with the words filled in) and that an automation asked. What it does sets nothing off either (it runs inside
 // FLOWING). With "wait for the answer", the steps after it go on once it's done (up to 30 minutes), with {answer}.
 const agentName = (agent) => (agent === 'team' ? 'Your team' : AGENTS_M.AGENTS[agent]?.name || 'the agent');
+// ---------- an agent pinned to a chat: @mention it there and it answers in the thread ----------
+// It works as whoever asked: their AI key, what they can see, their agents' rules (what waits for their yes). The feed
+// reads the answer, so the agent is told who's in it. Only the asker opens the assignment the answer links to.
+const CHAT_AGENT_CALLS = { chief: ['chief of staff', 'chief'], sales: ['client & sales manager', 'sales manager', 'sales'], ops: ['operations manager', 'operations', 'ops'], marketing: ['marketing manager', 'marketing'] };
+const CHAT_ASK_MS = 30 * 60_000;
+const chatAgentCalled = (text) => Object.keys(CHAT_AGENT_CALLS).filter((k) => CHAT_AGENT_CALLS[k].some((n) => new RegExp(`(^|[\\s(>])@${n.replace(/[.*+?^${}()|[\]\\&]/g, '\\$&')}(?![\\w])`, 'i').test(String(text))));
+function chatAgentSay(ws, agent, rootId, channelId, text) {
+  if (!db.items[rootId]) return null;
+  return addItem({ id: rid(), wsId: ws.id, by: AGENTS[agent].name, memberId: null, device: 'Agent', deviceId: null, createdAt: Date.now(), pinned: false, stackId: null, channelId, parentId: rootId, status: 'ready', type: 'message', text: clipText(text, 4000) });
+}
+function chatAgentAsk(ws, auth, item) {
+  const root = item.parentId ? db.items[item.parentId] : item;
+  if (item.type !== 'message' || !root || root.stackId || root.dirId) return;
+  const channelId = root.channelId || null;
+  const ch = channelId ? ws.channels.find((c) => c.id === channelId) : null;
+  if (channelId && !ch) return;
+  const pins = (ch ? ch.pins : ws.chatPins) || [];
+  const agent = chatAgentCalled(item.text).find((k) => pins.some((p) => p.kind === 'agent' && p.id === k));
+  if (!agent || toolsOf(ws).agents === false) return;
+  if (!aiUse(aiOf(ws.id, auth.memberId))) return chatAgentSay(ws, agent, root.id, channelId, `@${auth.member}, I work on your own AI key. Add one in Settings → AI, then ask me again here.`);
+  const busy = Object.values(db.agentRuns || {}).filter((x) => x.wsId === ws.id && x.memberId === auth.memberId && ['requested', 'planning', 'running'].includes(x.status)).length;
+  if (busy >= 3) return chatAgentSay(ws, agent, root.id, channelId, `@${auth.member}, your team is busy with three assignments. Ask me again when one is done.`);
+  const readers = ws.members.filter((m) => seesFeed(ch, m.id)).map((m) => m.name);
+  const said = String(item.text).trim();
+  const ask = `${said}\n\n(Asked by ${auth.member} in the chat feed #${ch?.name || 'general'}. Your answer is posted there, where everyone in it reads it: ${readers.join(', ')}. Keep it short, and leave out anything they shouldn’t see.)`;
+  const run = AGENTS_M.newRun(ws, auth.memberId, { agent, ask, title: clipText(said.split('\n')[0], 120), page: { kind: 'channel', id: channelId || 'general', label: ch?.name || 'general' } });
+  db.chatAsks ||= {};
+  db.chatAsks[run.id] = { wsId: ws.id, runId: run.id, rootId: root.id, channelId, agent, by: auth.member, at: Date.now() };
+  save();
+  chatAgentSay(ws, agent, root.id, channelId, `${AGENTS[agent].icon} On it.`);
+}
+function chatAskDone(runId, late) {
+  const w = db.chatAsks?.[runId];
+  const run = AGENTS_M.runOf(runId);
+  if (!w) return;
+  if (run && ['requested', 'planning', 'running'].includes(run.status) && !late) return;
+  delete db.chatAsks[runId];
+  const ws = db.workspaces[w.wsId];
+  if (!ws) return save();
+  const waiting = run ? run.parts.flatMap((p) => p.steps).filter((s) => s.status === 'proposed').length : 0;
+  const text = !run ? 'That assignment is gone.'
+    : late ? `I didn’t finish in time, @${w.by}. It’s still in Your team.`
+    : run.status === 'failed' ? `I couldn’t finish that: ${clipText(run.error || 'something went wrong', 300)}`
+    : run.status === 'cancelled' ? 'Stopped.'
+    : agentAnswer(run) || 'Done.';
+  chatAgentSay(ws, w.agent, w.rootId, w.channelId, `${text}${waiting ? `\n\n${waiting} thing${waiting === 1 ? '' : 's'} wait${waiting === 1 ? 's' : ''} for @${w.by}’s yes.` : ''}${run ? `\n[[agent:${run.id}]]` : ''}`);
+  save();
+}
+function chatAsksSweep(now) {
+  for (const w of Object.values(db.chatAsks)) {
+    const run = AGENTS_M.runOf(w.runId);
+    if (!run || !['requested', 'planning', 'running'].includes(run.status)) chatAskDone(w.runId);
+    else if (now - w.at > CHAT_ASK_MS) chatAskDone(w.runId, true);
+  }
+}
 function agentAnswer(run) {
   const said = run.parts.map((p) => p.report).filter(Boolean).join('\n\n') || run.question || '';
   return clipText(said, 2000);
@@ -3988,6 +4043,7 @@ function runSchedules() {
   runAutomationSchedules(now);
   runDateTriggers(now);
   if (Object.keys(db.flowWaits).length) { runWaits(now); ran = true; }
+  if (Object.keys(db.chatAsks || {}).length) chatAsksSweep(now);
   for (const tpl of Object.values(db.templates)) {
     if (offline(tpl.wsId)) continue;
     for (const slot of dueSlots(tpl, now)) {
@@ -9657,7 +9713,7 @@ async function api(req, res, url) {
       const item = addItem(baseItem(auth, { type, text: t, ...where, ...(made ? { title: made.title, blocks: made.blocks, refs: docRefs(made.blocks), v: 0, pinned: true, editedAt: Date.now() } : {}) }));
       if (host) docPageBlock(host, item.id, { add: true, after });
       if (type === 'text') automate(ws.id, 'doc.created', { doc: item.title || docOf(item).title || 'Untitled', who: auth.member, whoId: auth.memberId, campaign: db.campaigns[ws.stacks.find((st) => st.id === topItem(item).stackId)?.campaignId] || null, private: placeAudience(ws, topItem(item)) !== 'team' });
-      if (type === 'message') pinLinked(ws, t);
+      if (type === 'message') { pinLinked(ws, t); chatAgentAsk(ws, auth, item); }
       if (made) {
         pinDocFiles(ws, made.blocks);
         docMentions(ws, item, [], auth);
@@ -10591,7 +10647,9 @@ async function itemFile(ws, memberId, id) {
   if (!it || it.wsId !== ws.id || it.type !== 'file' || !/^image\//.test(it.mime || '') || !canSee({ wsId: ws.id, memberId, role: me?.role }, 'item', it)) throw badRequest('That picture isn’t in Kloomie any more.');
   return { bytes: await fsp.readFile(path.join(FILES_DIR, it.id)), name: it.name, mime: it.mime };
 }
-const AGENTS_M = agentsModule({ autoEvents: FL.EVENTS, sees: (memberId, kind, x) => (kind === 'campaign' ? seesCampaign(x.id, memberId) : canSee({ memberId }, kind, x)), db, save, broadcast, rid, cleanText, readJson, send, notify, replay: replayAs, run: agentLlm, sendEmail: agentEmail, textToDoc, PJ, isAdminId, localNow, tzOf, fmtMinutes, hasAi: (wsId, memberId) => !!aiUse(aiOf(wsId, memberId)), POSTIZ, makeImageItem, itemFile, noContact, describeImages, canPicture: (wsId, memberId) => ['openai', 'gemini'].some((k) => !!aiOf(wsId, memberId).keys?.[k]?.sealed) });
+const AGENTS_M = agentsModule({ autoEvents: FL.EVENTS, sees: (memberId, kind, x) => (kind === 'campaign' ? seesCampaign(x.id, memberId) : canSee({ memberId }, kind, x)), db, save, rid,
+  // Every change to a run goes out as news; one asked in chat is answered there as soon as it's done.
+  broadcast: (wsId, msg) => { broadcast(wsId, msg); if (msg?.type === 'agent' && msg.run?.id && db.chatAsks?.[msg.run.id]) chatAskDone(msg.run.id); }, cleanText, readJson, send, notify, replay: replayAs, run: agentLlm, sendEmail: agentEmail, textToDoc, PJ, isAdminId, localNow, tzOf, fmtMinutes, hasAi: (wsId, memberId) => !!aiUse(aiOf(wsId, memberId)), POSTIZ, makeImageItem, itemFile, noContact, describeImages, canPicture: (wsId, memberId) => ['openai', 'gemini'].some((k) => !!aiOf(wsId, memberId).keys?.[k]?.sealed) });
 const GH = githubModule({ db, save, broadcast, rid, cleanText, readJson, send, seal, unseal, isAdmin, PJ, sees: (p, mid) => PJ.sees(p, mid), publicUrl: PUBLIC_URL });
 // Daily standups on a project (standup.js): a blocker becomes a task for the project lead.
 const STANDUP = standupModule({ db, save, broadcast, rid, cleanText, readJson, send, notify, sees: (p, mid) => PJ.sees(p, mid), teamDay: (wsId) => teamDay(wsId),

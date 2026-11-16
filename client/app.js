@@ -8272,8 +8272,18 @@
     stack: { icon: '🗂️', name: 'Stack', label: (id) => stackById(id)?.name, open: (id) => openShelf(id), full: (id) => showStack(id) },
     doc: { icon: '📄', name: 'Doc', label: (id) => { const d = docById(id); return d && docTitle(d); }, open: (id) => openDocSide(id), full: (id) => goTo('doc:' + id) },
     dir: { icon: '📁', name: 'Folder', label: (id) => dirById(id)?.name, open: (id) => openDirSide(id), full: (id) => openFolder(id) },
-    agent: { icon: '🤖', name: 'Agent', label: () => null, open: (id) => agOpen(id) },
+    // An agent pinned here answers in the chat: tapping it starts a message to it ("@Chief of Staff …").
+    agent: { icon: '🤖', name: 'Agent', label: () => null, open: (id) => chatAskAgent(id), full: (id) => agOpen(id) },
   };
+  function chatAskAgent(id) {
+    const name = CHAT_AGENTS.find((x) => x[0] === id)?.[2];
+    const ta = C.pane?.querySelector('textarea');
+    if (!name || !ta) return agOpen(id);
+    if (!ta.value.includes('@' + name)) ta.value = `@${name} ` + ta.value.replace(/^\s+/, '');
+    ta.focus();
+    ta.setSelectionRange(ta.value.length, ta.value.length);
+    ta.dispatchEvent(new Event('input', { bubbles: true }));
+  }
   const CHAT_AGENTS = [['chief', '🧭', 'Chief of Staff'], ['sales', '🤝', 'Client & Sales Manager'], ['ops', '🛠️', 'Operations Manager'], ['marketing', '📣', 'Marketing Manager']];
   const chatFeedKey = () => viewChannel(C.view || 'chat') || 'general';
   const chatPins = () => (chatFeedKey() === 'general' ? S.workspace?.chatPins : channelById(chatFeedKey())?.pins) || [];
@@ -8295,7 +8305,7 @@
     const k = CHAT_PIN[p.kind];
     const name = chatPinName(p);
     const chip = h('div', { class: 'cp' + (p.locked ? ' locked' : ''), 'data-kind': p.kind, 'data-id': p.id || '' },
-      h('button', { class: 'cp-open', title: p.locked ? 'Pinned by someone in this chat. Only some people here can open it.' : `${k.name}: ${name}`, disabled: p.locked, onclick: () => k.open(p.id) },
+      h('button', { class: 'cp-open', title: p.locked ? 'Pinned by someone in this chat. Only some people here can open it.' : p.kind === 'agent' ? `Ask ${name} here: @mention it and it answers in the thread` : `${k.name}: ${name}`, disabled: p.locked, onclick: () => k.open(p.id) },
         h('span', { class: 'cp-ic' }, p.locked ? '🔒' : p.icon || k.icon), h('span', { class: 'cp-name' }, name)),
       h('button', { class: 'cp-x', title: 'Unpin from this chat', 'aria-label': 'Unpin ' + name, html: I.close, onclick: () => chatUnpin(p) }));
     return chip;
