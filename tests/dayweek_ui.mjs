@@ -49,8 +49,8 @@ try {
   await api('POST', '/entries', { text: 'Crew meeting', date: wed, start: 9 * 60, end: 10 * 60 });
   await api('POST', '/entries', { text: 'Today block', date: today, start: 14 * 60, end: 15 * 60 });
   await A.ev(`document.querySelector('#tabs [data-tab=day]').click(); true`);
-  ok(await A.until(`!!document.querySelector('#day .day-view')`), 'full size: a Day | Week switch');
-  await A.tap(`document.querySelector('#day .day-view [data-view=week]')`);
+  ok(await A.until(`!!document.querySelector('#day .day-modes [data-view=week]')`), 'full size: Week in the view switch');
+  await A.tap(`document.querySelector('#day .day-modes [data-view=week]')`);
   ok(await A.until(`document.querySelectorAll('#day .wk-col').length === 7`), 'Week shows seven days');
   const heads = await A.ev(`[...document.querySelectorAll('#day .wk-dh')].map((x) => x.dataset.date)`);
   ok(heads[0] === sunday && heads[6] === plus(sunday, 6), `Sunday to Saturday of this week (${heads[0]}…${heads[6]})`);
@@ -87,11 +87,11 @@ try {
   await A.tap(`document.querySelector('#day .wk-dh[data-date="${wed}"]')`);
   ok(await A.until(`!document.querySelector('#day .wk-col') && document.querySelector('#day .date-pick').value === '${wed}'`), 'a day’s name opens that day');
   // Narrow: never the week.
-  await A.tap(`document.querySelector('#day .day-view [data-view=week]')`);
+  await A.tap(`document.querySelector('#day .day-modes [data-view=week]')`);
   await A.cmd('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
   await sleep(500);
   ok(await A.until(`!document.querySelector('#day .wk-col') && !!document.querySelector('#day .timeline')`), 'a phone shows one day, even with Week picked');
-  ok(await A.ev(`getComputedStyle(document.querySelector('#day .day-view')).display === 'none'`), 'and no Day | Week switch');
+  ok(await A.ev(`getComputedStyle(document.querySelector('#day .day-modes [data-view=week]')).display === 'none'`), 'and no Week in the switch');
   ok(A.errors.length === 0, 'no script errors' + (A.errors.length ? ': ' + A.errors.join(' | ') : ''));
 } catch (e) { ok(false, 'threw: ' + e.stack); }
 A?.close();

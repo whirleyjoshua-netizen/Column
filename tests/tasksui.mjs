@@ -54,11 +54,11 @@ const g = await api('POST', '/goals', { campaignId: c.id, title: 'Book demos', k
 await api('POST', '/tasks', { text: 'Call Desert Auto', goalId: g.id, due: today });
 ok(await A.until(`!document.querySelector('#home').classList.contains('hidden') && document.querySelector('#home').textContent.includes('Needs you')`), 'the app opens on Home');
 ok(await A.until(`document.querySelector('#home').innerText.includes('Pay the film supplier')`), 'Home lists a task due today, live');
-await A.tap(`document.querySelector('#tabs [data-tab=day]')`);
-await A.tap(`[...document.querySelectorAll('.day-sub button')].find((b) => b.textContent === 'Tasks')`);
+await A.tap(`document.querySelector('#tabs [data-tab=work]')`);
+await A.tap(`[...document.querySelectorAll('.day-modes button')].find((b) => b.textContent === 'List')`);
 await sleep(500);
 await A.cmd('Page.captureScreenshot', {}).then((r) => FS.writeFileSync(process.argv[2] + '/dk/tasks1.png', Buffer.from(r.result.data, 'base64')));
-ok(await A.ev(`[...document.querySelectorAll('#day .seg')].filter((x) => x.offsetParent).length`) === 1, 'only one row of tabs (Schedule | Tasks); the Day | Week switch is for the schedule');
+ok(await A.ev(`[...document.querySelectorAll('#day .seg')].filter((x) => x.offsetParent).length`) === 1, 'only one row of tabs: the view switch');
 await A.tap(`document.querySelector('.task-bar .tb-pick')`);
 await sleep(200);
 await A.cmd('Page.captureScreenshot', {}).then((r) => FS.writeFileSync(process.argv[2] + '/dk/tasks2.png', Buffer.from(r.result.data, 'base64')));

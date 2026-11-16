@@ -3095,6 +3095,16 @@
     D.scrolledFor = null;
     renderDay();
   }
+  // Tasks' views. Week and Day are the schedule (D.sub 'schedule', D.view); List is the task list; Team is everyone.
+  const DAY_MODES = [['week', 'Week'], ['day', 'Day'], ['list', 'List'], ['team', 'Team']];
+  const dayMode = () => (D.sub === 'tasks' ? 'list' : D.sub === 'team' ? 'team' : weekOn() ? 'week' : 'day');
+  function setDayMode(v) {
+    if (v === 'list') return setSub('tasks');
+    if (v === 'team') return setSub('team');
+    D.view = v;
+    store.set('dayView', v);
+    setSub('schedule');
+  }
 
   // ----- the side toolbar's tabs: the same for everyone, so it stays short -----
   // Home, Day, Chat, Agents and Workspace. Workspace groups the everyday tools (Contacts, Projects, Campaigns,
@@ -3103,13 +3113,15 @@
   // Sidekick's panel (the owner, 2026-11-14): one assistant on every page. See "Sidekick, on every page".
   const SKD = { open: false, view: 'home', draft: '', busy: false, noPage: false, here: false };
   const MAIN_TABS = ['chat', 'agents', 'work'];
-  const WORK_TABS = ['contacts', 'projects', 'camps', 'docs', 'automations'];
+  // Tasks (the owner, 2026-11-15): what was Day is Workspace's first tab, and Workspace always opens on it.
+  const WORK_TABS = ['day', 'contacts', 'projects', 'camps', 'docs', 'automations'];
   const BAR_ITEMS = {
     column: { label: 'Stacks', view: true },
     chat: { label: 'Chat', view: true },
     camps: { label: 'Campaigns', view: true },
     agents: { label: 'Agents', ok: () => toolOn('agents'), open: () => agOpen('team') },
-    work: { label: 'Workspace', ok: () => workKeys().length > 0, open: () => openBarItem(workLast()) },
+    work: { label: 'Workspace', ok: () => workKeys().length > 0, open: () => openBarItem('day') },
+    day: { label: 'Tasks', view: true },
     sidekick: { label: 'Sidekick', ok: () => toolOn('sidekick'), open: () => { SK.open = null; openTool('sidekick'); } },
     // Docs and Folders are the same things (a doc is an item, and folders hold items): one tab, a switch between them.
     docs: { label: 'Folders & Docs', ok: () => toolOn('docs') || toolOn('folders'), open: () => openTool(docsSide()), on: () => toolOpen === 'docs' || toolOpen === 'folders' },
@@ -3136,7 +3148,7 @@
   const workOpen = () => {
     if (!$('#projects').classList.contains('hidden')) return 'projects';
     if (toolOpen) return WORK_TABS.find((k) => (BAR_ITEMS[k].on ? BAR_ITEMS[k].on() : toolOpen === k)) || null;
-    return S.tab === 'camps' ? 'camps' : null;
+    return S.tab === 'camps' || S.tab === 'day' ? S.tab : null;
   };
   const TAB_IC = {
     home: svg('<path d="M4 11l8-7 8 7v8a1 1 0 0 1-1 1h-4v-6h-6v6H5a1 1 0 0 1-1-1z"/>'),
@@ -3253,7 +3265,7 @@
     // In the drawer, Workspace's tabs sit under it (at full size they're across the top of the page instead).
     const sub = (k) => { const b = btn(k, BAR_ITEMS[k].label); b.classList.add('tab-sub'); return b; };
     const edit = () => h('button', { class: 'tabs-edit', title: 'Your pins', 'aria-label': 'Your pins', onclick: (e) => { e.stopPropagation(); closeSide(); barSheet(); } }, h('span', { class: 'tab-ic', html: I.edit || '✎' }), h('span', { class: 'tab-l' }, 'Your pins'));
-    $('#tabs').replaceChildren(btn('home', 'Home'), btn('day', 'Day'), ...barKeys().flatMap((k) => (k === 'work' ? [btn(k, BAR_ITEMS[k].label), ...workKeys().map(sub)] : [btn(k, BAR_ITEMS[k].label)])),
+    $('#tabs').replaceChildren(btn('home', 'Home'), ...barKeys().flatMap((k) => (k === 'work' ? [btn(k, BAR_ITEMS[k].label), ...workKeys().map(sub)] : [btn(k, BAR_ITEMS[k].label)])),
       ...(pins.length ? [h('span', { class: 'tabs-sep', 'aria-hidden': 'true' }), ...pins.map(pin)] : []), edit());
     // In a docked column and on a phone, the row across the top is your pins, as tabs (the owner, 2026-11-14), so
     // what you keep going back to is one tap away without opening ☰. Nothing pinned, no row.
@@ -3434,11 +3446,8 @@
     D.title = h('div', { class: 'day-title' });
     D.todayBtn = h('button', { class: 'btn small', onclick: () => goDay(todayKey()) }, 'Today');
     D.scroll = h('div', { class: 'day-scroll' });
-    D.seg = h('div', { class: 'seg day-sub' },
-      h('button', { 'data-sub': 'schedule', onclick: () => setSub('schedule') }, 'Schedule'),
-      h('button', { 'data-sub': 'tasks', onclick: () => setSub('tasks') }, 'Tasks'),
-      h('button', { 'data-sub': 'team', onclick: () => setSub('team') }, 'Team')
-    );
+    // One switch for the view (this device remembers it). Week needs full size; Team is for owners and admins.
+    D.seg = h('div', { class: 'seg day-sub day-modes' }, DAY_MODES.map(([v, l]) => h('button', { 'data-view': v, onclick: () => setDayMode(v) }, l)));
     root.append(
       D.seg,
       D.head = h('div', { class: 'day-head' },
@@ -3446,8 +3455,6 @@
         h('div', { class: 'day-title-wrap' }, D.title, pick),
         D.todayBtn,
         D.nextBtn = h('button', { class: 'icon-btn', 'aria-label': 'Next day', html: I.right, onclick: () => goDay(addDays(D.date, weekOn() ? 7 : 1)) }),
-        // Full size: Day or Week (this device remembers). A narrow window always shows one day.
-        D.viewSeg = h('div', { class: 'seg day-view' }, [['day', 'Day'], ['week', 'Week']].map(([v, l]) => h('button', { 'data-view': v, onclick: () => { D.view = v; store.set('dayView', v); D.scrolledFor = null; renderDay(); } }, l)))
       ),
       D.scroll,
       dayComposer()
@@ -3541,7 +3548,7 @@
     if (S.tab === 'camps') renderCamps();
     if (!D.scroll) buildDay();
     if (D.sub === 'team' && !canTeam()) D.sub = 'schedule';
-    for (const b of D.seg.children) { b.classList.toggle('on', b.dataset.sub === D.sub); if (b.dataset.sub === 'team') b.classList.toggle('hidden', !canTeam()); }
+    for (const b of D.seg.children) { b.classList.toggle('on', b.dataset.view === dayMode()); if (b.dataset.view === 'team') b.classList.toggle('hidden', !canTeam()); }
     D.head.classList.toggle('hidden', D.sub === 'tasks');
     D.input.placeholder = D.sub === 'tasks' ? 'Add a task…' : 'Add to your day… “Call Sam at 3pm”';
     if (D.sub === 'tasks') return renderTasks();
@@ -3552,8 +3559,6 @@
     D.pick.value = k;
     D.todayBtn.classList.toggle('hidden', isToday);
     const week = weekOn();
-    for (const b of D.viewSeg.children) b.classList.toggle('on', b.dataset.view === (week ? 'week' : 'day'));
-    D.viewSeg.classList.toggle('hidden', D.sub !== 'schedule');
     D.prevBtn.ariaLabel = week ? 'Previous week' : 'Previous day';
     D.nextBtn.ariaLabel = week ? 'Next week' : 'Next day';
     if (D.sub === 'team') return renderTeam(k);

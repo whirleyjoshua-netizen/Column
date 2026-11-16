@@ -53,15 +53,17 @@ const names = async () => (await tabs()).map((t) => t.replace('*', '')).join(','
 const strip = () => A.ev(`(() => { const s = document.querySelector('#workTabs'); return s && !s.hidden && getComputedStyle(s).display !== 'none' ? [...s.querySelectorAll('button')].map((b) => b.textContent + (b.classList.contains('on') ? '*' : '')).join(',') : ''; })()`);
 const menuItems = () => A.ev(`[...document.querySelectorAll('#menu button')].map((b) => b.textContent)`);
 
-// The same short toolbar for everyone (2026-11-14): Home, Day, Chat, Agents, Workspace.
-ok(await names() === 'Home,Day,Chat,Agents,Workspace', 'the toolbar is Home, Day, Chat, Agents, Workspace: ' + await names());
+// The same short toolbar for everyone (2026-11-14; Day moved into Workspace as Tasks 2026-11-15): Home, Chat, Agents, Workspace.
+ok(await names() === 'Home,Chat,Agents,Workspace', 'the toolbar is Home, Chat, Agents, Workspace: ' + await names());
 ok(await A.ev(`!!document.querySelector('#tabs .tabs-edit')`), 'a pencil for your pins');
 ok(await strip() === '', 'no Workspace strip until you are in Workspace');
 
 // Workspace: its tabs across the top at full size; it opens where you were last.
 await A.click('#tabs [data-tab=work]');
-ok(await A.until(`!document.querySelector('#tool').classList.contains('hidden') && document.querySelector('#tool h2').textContent.includes('Contacts')`), 'Workspace opens Contacts first (Sidekick is in the header now)');
-ok(await strip() === 'Contacts*,Projects,Campaigns,Folders & Docs,Automations', 'the strip across the top: ' + await strip());
+ok(await A.until(`!document.querySelector('#day').classList.contains('hidden') && document.querySelector('#tool').classList.contains('hidden')`), 'Workspace opens on Tasks');
+ok(await strip() === 'Tasks*,Contacts,Projects,Campaigns,Folders & Docs,Automations', 'the strip across the top: ' + await strip());
+await A.click('#workTabs [data-tab=contacts]');
+ok(await A.until(`!document.querySelector('#tool').classList.contains('hidden') && document.querySelector('#tool h2').textContent.includes('Contacts')`), 'Contacts opens from the strip');
 ok((await tabs()).includes('Workspace*'), 'Workspace is lit in the toolbar');
 ok(await A.ev(`getComputedStyle(document.querySelector('#tabs .tab-sub')).display === 'none'`), 'at full size the sidebar does not repeat the sub-tabs');
 ok(await A.until(`document.querySelector('#tool').getBoundingClientRect().top >= document.querySelector('#workTabs').getBoundingClientRect().bottom - 1`, 1500), 'the tool starts under the strip, not over it');
@@ -71,7 +73,7 @@ ok(await A.ev(`document.querySelector('#projects h2').textContent === 'Projects'
 ok(await A.ev(`document.querySelector('#projects').getBoundingClientRect().top >= document.querySelector('#workTabs').getBoundingClientRect().bottom - 1`), 'Projects starts under the strip');
 await A.click('#workTabs [data-tab=camps]');
 ok(await A.until(`document.querySelector('#projects').classList.contains('hidden') && !document.querySelector('#campsWrap').classList.contains('hidden')`), 'Campaigns opens in Workspace');
-ok(await strip() === 'Contacts,Projects,Campaigns*,Folders & Docs,Automations', 'Campaigns is lit in the strip: ' + await strip());
+ok(await strip() === 'Tasks,Contacts,Projects,Campaigns*,Folders & Docs,Automations', 'Campaigns is lit in the strip: ' + await strip());
 await A.click('#workTabs [data-tab=docs]');
 ok(await A.until(`document.querySelector('#tool h2')?.textContent.startsWith('Folders & Docs') && !document.querySelector('#tool').classList.contains('hidden')`), 'Folders & Docs opens');
 ok(await A.ev(`[...document.querySelectorAll('#tool .df-switch button')].map((b) => b.textContent).join() === 'Docs,Folders'`), 'with a Docs | Folders switch');
@@ -80,11 +82,11 @@ ok(await A.until(`!!document.querySelector('#tool .dir-crumbs') && document.quer
 ok((await strip()).includes('Folders & Docs*'), 'and the strip still marks Folders & Docs');
 await A.click('#workTabs [data-tab=docs]');
 ok(await A.ev(`!document.querySelector('#tool').classList.contains('hidden')`), 'tapping the open tab again keeps it open');
-await A.click('#tabs [data-tab=day]');
-ok(await A.until(`!document.querySelector('#day').classList.contains('hidden') && document.querySelector('#tool').classList.contains('hidden')`), 'Day leaves Workspace');
+await A.click('#tabs [data-tab=chat]');
+ok(await A.until(`!document.querySelector('#chat').classList.contains('hidden') && document.querySelector('#tool').classList.contains('hidden')`), 'Chat leaves Workspace');
 ok(await strip() === '', 'and the strip goes');
 await A.click('#tabs [data-tab=work]');
-ok(await A.until(`!document.querySelector('#tool').classList.contains('hidden') && !!document.querySelector('#tool .dir-crumbs')`), 'Workspace comes back where you were (Folders)');
+ok(await A.until(`!document.querySelector('#day').classList.contains('hidden') && document.querySelector('#tool').classList.contains('hidden')`), 'Workspace comes back on Tasks, its first view');
 await A.click('#tabs [data-tab=home]');
 
 // All tools: the rest. Not Workspace's tabs, not News.
@@ -121,7 +123,7 @@ await sleep(600);
 await A.ev(`document.querySelector('#menuBtn').click(); true`);
 await sleep(400);
 ok(await A.ev(`[...document.querySelectorAll('#tabs button')].every((b) => b.scrollWidth <= b.clientWidth + 1)`), 'no tab label is cut off on a phone');
-ok(await A.ev(`(() => { const bs = [...document.querySelectorAll('#tabs button[data-tab]')].filter((b) => getComputedStyle(b).display !== 'none'); const d = document.querySelector('#side').getBoundingClientRect(); return bs.map((b) => b.dataset.tab).join() === 'home,day,chat,agents,work,contacts,projects,camps,docs,automations' && bs.every((b, i) => { const r = b.getBoundingClientRect(); return r.left >= d.left && r.right <= d.right + 1 && (!i || r.top > bs[i - 1].getBoundingClientRect().top); }); })()`), 'the drawer lists them one under another, Workspace’s tabs under it');
+ok(await A.ev(`(() => { const bs = [...document.querySelectorAll('#tabs button[data-tab]')].filter((b) => getComputedStyle(b).display !== 'none'); const d = document.querySelector('#side').getBoundingClientRect(); return bs.map((b) => b.dataset.tab).join() === 'home,chat,agents,work,day,contacts,projects,camps,docs,automations' && bs.every((b, i) => { const r = b.getBoundingClientRect(); return r.left >= d.left && r.right <= d.right + 1 && (!i || r.top > bs[i - 1].getBoundingClientRect().top); }); })()`), 'the drawer lists them one under another, Workspace’s tabs under it');
 await A.ev(`document.querySelector('#tabs [data-tab=contacts]').click(); true`);
 ok(await A.until(`!document.querySelector('#tool').classList.contains('hidden') && document.querySelector('#tool h2').textContent.includes('Contacts')`), 'Contacts opens from the drawer');
 ok(await strip() === '', 'no strip on a phone');

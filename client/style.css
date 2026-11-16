@@ -2954,3 +2954,6 @@ button.as-count.warn { border-left-color: #ffb547; }
 .ch-panel .sd-up { align-self: flex-start; border: 0; background: none; color: var(--accent); font: inherit; padding: 4px 8px; cursor: pointer; }
 .ch-panel .sd-path { padding: 2px 8px 6px; font-weight: 600; }
 .ch-panel.chat-over { outline: 2px solid var(--accent); outline-offset: -2px; }
+/* Tasks' view switch: Week needs full size */
+body:not(.wide) .day-modes [data-view=week] { display: none; }
+body.wide .day-modes { align-self: flex-start; }
