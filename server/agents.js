@@ -125,48 +125,54 @@ export const LEVELS = ['observe', 'prepare', 'execute', 'automate'];
 export const MISSIONS = {
   grow: {
     name: 'Grow / scale', start: 'Help me grow from ___ to ___ a month by ___',
-    know: ['monthly revenue now and the target', 'by when', 'average job (or order) value', 'where work comes from now', 'capacity: people and hours, and how many jobs a week they can take'],
+    ask: ['monthly revenue now', 'the target a month', 'by when', 'capacity: how many people, and how many jobs a week they can take now'],
+    find: ['average job (or order) value', 'where work comes from now', 'how often leads become jobs'],
     look: 'the pipeline and won work in Projects, campaigns and what has brought in work, the team’s schedule, budgets',
     prepare: ['the math: jobs a week and leads a week the target needs, from the average job and how often leads become jobs', 'a campaign with numeric goals for the extra leads, from the channels that already work', 'the pipeline stages to watch (a project or list if there isn’t one)', 'a weekly schedule with time to sell and time to deliver', 'hiring or subcontracting tasks if capacity falls short of the target', 'a monthly budget for marketing', 'a one-page growth plan doc with the weekly numbers to watch'],
     measure: 'leads a week, quotes sent, close rate, jobs a week, revenue a month against the target',
   },
   leads: {
     name: 'More leads & marketing', start: 'Help me get more ___ customers',
-    know: ['who the ideal customer is', 'the service area', 'what a lead is worth (average job)', 'what has brought in work before', 'a monthly marketing budget'],
+    ask: ['who they want more of (the ideal customer)', 'the service area', 'what they can spend on marketing a month'],
+    find: ['what a lead is worth (average job)', 'what has brought in work before'],
     look: 'contacts and where they came from, past campaigns and what worked, social channels, photos, reviews',
     prepare: ['two or three campaigns with numeric goals (local search, a target segment, reviews and referrals), from what has worked', 'who to reach: a list from Contacts', 'the first emails and posts as drafts', 'tasks to tag where every lead comes from', 'a monthly ads budget', 'a short marketing plan doc'],
     measure: 'leads a week by source, cost per lead, reviews asked and got',
   },
   ops: {
     name: 'Run my operations', start: 'Help me run jobs from first call to paid',
-    know: ['what a job looks like from first call to paid', 'who does what (office, crew)', 'where it breaks or gets slow now'],
+    ask: ['where it breaks or gets slow now'],
+    find: ['what a job looks like from first call to paid (the stages)', 'who does what (office, crew)'],
     look: 'Projects and their stages, overdue and stuck jobs, visits and routes, invoices and sign-offs, docs',
     prepare: ['a project or the stages the work moves through, if missing', 'checklists and a work order template as docs', 'tasks to clear stuck or overdue jobs', 'invoice drafts for finished jobs that aren’t billed', 'automations worth setting up, written in the plan doc', 'a weekly operations rhythm on the schedule'],
     measure: 'jobs by stage, days from sold to done, jobs finished but not billed, overdue tasks',
   },
   time: {
     name: 'Get my time back', start: 'Help me plan my week so I’m not doing everything myself',
-    know: ['what takes the person’s time now', 'what only they can do', 'who could take the rest'],
+    ask: ['what takes their time now', 'what only they can do'],
+    find: ['who on the team could take the rest'],
     look: 'the person’s day and week, their tasks, the team schedule',
     prepare: ['a weekly schedule of focus blocks (selling, delivering, admin, off)', 'tasks moved, dated or handed to teammates', 'a short list of what to stop or automate, in a doc'],
     measure: 'hours a week in each block, tasks handed off, overdue tasks',
   },
   money: {
     name: 'Money', start: 'Help me get paid faster and know my numbers',
-    know: ['monthly revenue and main costs', 'how customers pay now', 'what is owed to the business'],
+    ask: ['the main monthly costs', 'how customers pay now'],
+    find: ['monthly revenue', 'what is owed to the business'],
     look: 'invoices and payments, Finance (money in and out, budgets, bills)',
     prepare: ['invoice drafts for finished jobs not yet billed', 'budgets for the main costs', 'the recurring bills to track', 'tasks to chase what is owed', 'a one-page numbers doc: what comes in, goes out and is owed'],
     measure: 'money in and out a month, owed and how late, budgets used',
   },
   team: {
     name: 'My team', start: 'Help me set up my crew and who does what',
-    know: ['who is on the team and their roles', 'who does what today', 'what should change'],
+    ask: ['what should change'],
+    find: ['who is on the team and their roles', 'who does what today'],
     look: 'the team, the schedule, tasks and who they are for, projects',
     prepare: ['who does what, written as a doc', 'tasks assigned to the right people', 'a weekly team rhythm on the schedule (a planning time, a check-in)', 'roles on campaigns where it helps'],
     measure: 'tasks done on time by person, jobs per crew',
   },
 };
-const missionText = (k) => { const m = MISSIONS[k]; return `${m.name}. Find out first: ${m.know.join('; ')}. Look at: ${m.look}. Prepare: ${m.prepare.join('; ')}. Numbers to watch: ${m.measure}.`; };
+const missionText = (k) => { const m = MISSIONS[k]; return `${m.name}. Ask the person (only they know): ${m.ask.join('; ')}. Find in the team’s records: ${m.find.join('; ')}. Look at: ${m.look}. Prepare: ${m.prepare.join('; ')}. Numbers to watch: ${m.measure}.`; };
 const KEEP_RUNS = 80;
 const PHOTO_MAX = 5_000_000; // what AI models take as a picture
 const MAX_PARTS = 4;
@@ -1329,7 +1335,7 @@ Reply with JSON only: {"summary":"one line on the plan","parts":[{"agent":"chief
   const missionLine = (x, coordinator) => {
     if (!x.mission) return '';
     const book = x.mission === 'auto' ? `The person said what they want help with in their own words. Pick the closest goal (or two) and follow its playbook:\n${Object.keys(MISSIONS).map((k) => '- ' + missionText(k)).join('\n')}` : `Their goal: ${missionText(x.mission)}`;
-    return coordinator ? `${book}\nIf a fact under “Find out first” is missing from the request, Company HQ and the team’s records, reply with one short question asking for the missing ones together (and no parts). Otherwise split the playbook’s “Prepare” list between the specialists whose job each piece is.` : `${book}\nPrepare your part of that list, each piece as its own change, and give the numbers to watch in your report.`;
+    return coordinator ? `${book}\nYou can’t see the team’s records, but the specialists can: leave “Find in the team’s records” to them. If anything under “Ask the person” isn’t in the request or Company HQ, reply with one short question asking for all of it together (and no parts). Otherwise split the playbook’s “Prepare” list between the specialists whose job each piece is.` : `${book}\nPrepare your part of that list, each piece as its own change, and give the numbers to watch in your report.`;
   };
   const pageLine = (pg) => (pg ? `The person is looking at: ${PAGE_KINDS[pg.kind]} “${pg.label}”${pg.id ? ` (id ${pg.id})` : ''}. When they say “this” or “here”, they mean it.` : '');
   function newRun(ws, memberId, { agent, ask, title, workflow = null, scheduled = false, page = null, plan = false, mission = null }) {
