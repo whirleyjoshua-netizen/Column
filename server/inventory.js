@@ -22,7 +22,7 @@ const UNIT_STATUS = ['available', 'out', 'repair', 'lost', 'retired'];
 const UNITS_PER_ITEM = 2000, REVEALS_AN_HOUR = 30;
 const QTY_MAX = 1e7;
 
-export function inventoryModule({ db, save, broadcast, rid, cleanText, readJson, send, isAdmin, recordAt = () => null, taskOk = () => false, onMove = () => {}, seal = (x) => x, unseal = (x) => x, newTag = () => null, labelUrl = (t) => '/a/' + t, labelQr = () => null, projectFor = () => null }) {
+export function inventoryModule({ db, save, broadcast, rid, cleanText, readJson, send, isAdmin, recordAt = () => null, taskOk = () => false, onMove = () => {}, onUnit = () => {}, seal = (x) => x, unseal = (x) => x, newTag = () => null, labelUrl = (t) => '/a/' + t, labelQr = () => null, projectFor = () => null }) {
   db.invItems ||= {};
   db.invPlaces ||= {};
   db.invMoves ||= {};
@@ -234,6 +234,26 @@ export function inventoryModule({ db, save, broadcast, rid, cleanText, readJson,
     return { made, items, skipped, project: p.name };
   }
 
+  // What a job used and has on site: stock used there (net of what came back), with its cost, and the equipment out
+  // at it. Costs only for owners and admins.
+  function jobView(ws, auth, recId) {
+    const admin = isAdmin(auth);
+    const used = new Map();
+    for (const m of Object.values(db.invMoves)) {
+      if (m.wsId !== ws.id || m.jobId !== recId || m.unitId || (m.kind !== 'use' && m.kind !== 'return')) continue;
+      const x = db.invItems[m.itemId];
+      if (!x) continue;
+      const row = used.get(x.id) || { itemId: x.id, name: x.name, unit: x.unit, qty: 0, cost: 0 };
+      row.qty = Math.round((row.qty - m.qty) * 1000) / 1000;
+      row.cost += Math.round(-m.qty * (m.cost || 0));
+      used.set(x.id, row);
+    }
+    const materials = [...used.values()].filter((r) => r.qty !== 0).map((r) => (admin ? r : { ...r, cost: undefined }));
+    const equipment = Object.values(db.invUnits).filter((u) => u.wsId === ws.id && u.jobId === recId && u.status !== 'retired').map((u) => ({ ...publicUnit(u), item: db.invItems[u.itemId]?.name || '' }));
+    return { materials, equipment, ...(admin ? { cost: materials.reduce((n, r) => n + r.cost, 0) } : {}) };
+  }
+  const stockCost = (recId) => { let n = 0; for (const m of Object.values(db.invMoves)) if (m.jobId === recId && !m.unitId && (m.kind === 'use' || m.kind === 'return')) n += Math.round(-m.qty * (m.cost || 0)); return n; };
+
   function trim(wsId) {
     const mine = Object.values(db.invMoves).filter((m) => m.wsId === wsId);
     if (mine.length <= MOVES_KEEP) return;
@@ -259,6 +279,10 @@ export function inventoryModule({ db, save, broadcast, rid, cleanText, readJson,
         save();
         return send(res, 200, { unitId: u.id, itemId: u.itemId });
       }
+      if (b === 'job' && c && m === 'GET') {
+        if (!recordAt(String(c), ws.id, auth.memberId)) throw err('That job is gone, or you can’t see it.', 404);
+        return send(res, 200, jobView(ws, auth, c));
+      }
       if (b === 'import-project' && c && m === 'POST') {
         if (!admin) throw err('Only owners and admins can do that.', 403);
         return send(res, 200, importProject(ws, auth, c));
@@ -271,6 +295,7 @@ export function inventoryModule({ db, save, broadcast, rid, cleanText, readJson,
         if (m === 'POST' && parts[3] === 'act') {
           const mv = unitAct(ws, auth, u, await readJson(req, 10_000));
           save(); news(ws.id);
+          onUnit(ws, mv, u, x);
           return send(res, 200, { unit: publicUnit(u), move: publicMove(mv, admin) });
         }
         // The combo: for anyone on the team, every look logged (who and when, never what), 30 looks an hour each.
@@ -385,5 +410,5 @@ export function inventoryModule({ db, save, broadcast, rid, cleanText, readJson,
     }
   }
 
-  return { route, move, itemsOf, placesOf, total, low, publicItem, unitAct, unitsOf };
+  return { route, move, itemsOf, placesOf, total, low, publicItem, unitAct, unitsOf, stockCost, jobView };
 }

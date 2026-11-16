@@ -3,7 +3,7 @@
 // Each event says which tool it's from, what it's called, the words it fills in ({contact}, {amount}…) and the
 // filters an automation can narrow it with. index.js fires them (automate) from the one place each thing happens.
 
-export const TOOLS = { tasks: 'Tasks', contacts: 'Contacts', campaigns: 'Campaigns', projects: 'Projects', money: 'Invoices & Finance', files: 'Files & signatures', texts: 'Texts', docs: 'Docs', map: 'Map', time: 'Time' };
+export const TOOLS = { tasks: 'Tasks', contacts: 'Contacts', campaigns: 'Campaigns', projects: 'Projects', money: 'Invoices & Finance', files: 'Files & signatures', texts: 'Texts', docs: 'Docs', map: 'Map', time: 'Time', inventory: 'Inventory' };
 
 // filters: campaign (in a campaign), stage (a contact's stage), outcome (a call's), statuses (a check-in's),
 // project (and list), to (a record's stage it moved to), over (an amount at least this, in dollars), date (a
@@ -34,6 +34,11 @@ export const EVENTS = [
   { type: 'text.received', tool: 'texts', label: 'A text comes in', words: ['contact', 'phone', 'text'], filters: [] },
   { type: 'doc.created', tool: 'docs', label: 'A doc is made', words: ['doc', 'who'], filters: [] },
   { type: 'pin.dropped', tool: 'map', label: 'A pin is dropped on the Map (a door knocked, a flyer left)', words: ['pin', 'note', 'campaign', 'who'], filters: ['campaign'] },
+  { type: 'stock.low', tool: 'inventory', label: 'An item runs low (at or under its reorder point)', words: ['item', 'qty', 'place', 'supplier', 'who'], filters: [] },
+  { type: 'stock.used', tool: 'inventory', label: 'Stock is used on a job', words: ['item', 'qty', 'place', 'record', 'who'], filters: ['project'] },
+  { type: 'equipment.out', tool: 'inventory', label: 'Equipment is checked out', words: ['item', 'unit', 'record', 'who'], filters: [] },
+  { type: 'equipment.back', tool: 'inventory', label: 'Equipment is brought back', words: ['item', 'unit', 'place', 'note', 'who'], filters: [] },
+  { type: 'equipment.problem', tool: 'inventory', label: 'A problem is reported on equipment', words: ['item', 'unit', 'note', 'who'], filters: [] },
   { type: 'schedule', tool: 'time', label: 'On a schedule', words: ['date'], filters: [] },
 ];
 export const EVENT = Object.fromEntries(EVENTS.map((e) => [e.type, e]));

@@ -646,7 +646,7 @@
       S.templates = S.templates.filter((y) => y.id !== msg.id);
       renderCamps();
     } else if (msg.type === 'inventory') {
-      if (INVS.data) { clearTimeout(INVS.soon); INVS.soon = setTimeout(() => loadInventory(), 300); }
+      if (INVS.data) { clearTimeout(INVS.soon); INVS.soon = setTimeout(() => { loadInventory(); for (const el of document.querySelectorAll('.inv-job[data-rec]')) invJobFill(el, el.dataset.rec); }, 300); }
     } else if (msg.type === 'msg-templates') {
       TPL.list = null;
       if (toolShown('templates')) renderTool();
@@ -4160,6 +4160,7 @@
       ...stepRows(g && campById(g.campaignId), t, !!taskWaitsOn(t), (ch) => patchTask(t, ch)),
       ...(t.done ? [] : [{ label: '✦ Get help with it…', run: () => toolsMenu(anchor, t) }]),
       { label: 'Write a doc for it…', run: () => docForTask(anchor, t) },
+      ...(toolOn('inventory') && !t.done ? [{ label: 'Use stock for it…', run: () => invForTask(t) }] : []),
       { label: 'Share to chat…', run: () => shareMenu(anchor, linkToken('task', t.id)) },
       { label: 'Delete task', danger: true, run: async () => {
         try {
@@ -5252,17 +5253,18 @@
   }
   const AUTO_DO = { task: 'Make a task', post: 'Post in a feed', campaign: 'Start a saved campaign', notify: 'Notify people', contact: 'Change the contact', record: 'Change the job or record', create: 'Add a job or record',
     visit: 'Book a visit on the job', invoice: 'Bill the job (an invoice)', text: 'Text the customer (after an OK)', email: 'Email the customer (after an OK)', money: 'Add money to Finance', doc: 'Write a doc from a template',
-    vault: 'Put a sealed note in a vault', webhook: 'Send to another app (a web address)', agent: 'Ask your team (AI)' };
+    vault: 'Put a sealed note in a vault', webhook: 'Send to another app (a web address)', agent: 'Ask your team (AI)', stock: 'Use or move stock (Inventory)' };
   const AUTO_KEYS = { list: null };
   // Who may pick which (the server checks the same): billing and messaging customers are for owners and admins, the
   // business's money for owners.
-  const autoDoOk = (k) => (k === 'money' ? amOwner() : ['invoice', 'text', 'email', 'webhook'].includes(k) ? amAdmin() : k === 'agent' ? toolOn('agents') : true);
+  const autoDoOk = (k) => (k === 'money' ? amOwner() : ['invoice', 'text', 'email', 'webhook'].includes(k) ? amAdmin() : k === 'agent' ? toolOn('agents') : k === 'stock' ? toolOn('inventory') : true);
   // The fields an automation can set (the server checks the same): plain values, never price lines or files.
   const AUTO_SET_T = ['text', 'number', 'money', 'date', 'select', 'multi', 'checkbox', 'person', 'email', 'phone', 'url'];
   const AUTO_WORDS = {
     'task.done': ['task', 'campaign', 'who'], 'file.received': ['file', 'from', 'campaign'], 'document.signed': ['document', 'from', 'campaign', 'who'],
     'contact.created': ['contact', 'stage', 'who'], 'contact.stage': ['contact', 'stage', 'who'], 'attempt.logged': ['contact', 'outcome', 'note', 'campaign', 'who'],
     'campaign.done': ['campaign', 'who'], 'campaign.checkin': ['campaign', 'note', 'who'], schedule: ['date'],
+    'stock.low': ['item', 'qty', 'place', 'supplier', 'who'], 'stock.used': ['item', 'qty', 'place', 'record', 'who'], 'equipment.out': ['item', 'unit', 'record', 'who'], 'equipment.back': ['item', 'unit', 'place', 'note', 'who'], 'equipment.problem': ['item', 'unit', 'note', 'who'],
   };
   // Automations live in Workspace → Automations (a tool); redraw it there when they change.
   const renderAutos = () => { if (toolOpen === 'automations') renderTool(); };
@@ -5319,6 +5321,11 @@
     { for: ['office', 'software'], name: 'New job? Tell another app', why: 'When a job or record is added, send it to Zapier, Make or your own system (add the address)', trigger: { kind: 'record.created' }, actions: [{ kind: 'webhook', url: '', secretId: null }] },
     { for: ['all', 'office'], name: 'Off track? Tell the owners', why: 'When a campaign is checked in at risk or off track, the owners hear why', trigger: { kind: 'campaign.checkin', statuses: ['atRisk', 'offTrack'] }, actions: [{ kind: 'notify', text: '{who} checked in on {campaign}: {note}', to: ['owners'] }] },
     { for: ['all'], name: 'Monday goals', why: 'Every Monday at 9, ask the team for the week’s goals', trigger: { kind: 'schedule', slots: [{ days: [1], time: '09:00' }] }, actions: [{ kind: 'post', text: 'Good morning! What are your goals for this week?', channelId: 'general' }] },
+    // Inventory.
+    { for: ['trades', 'services', 'store', 'office'], name: 'Running low? Reorder it', why: 'When an item runs low, the owners hear and whoever’s on the office gets a task to reorder from the supplier', trigger: { kind: 'stock.low' },
+      actions: [{ kind: 'notify', text: '{item} is low: {qty} left. Reorder from {supplier}.', to: ['owners'] }, autoT('Reorder {item} from {supplier}', '', 1)] },
+    { for: ['trades', 'services', 'office'], name: 'Equipment problem? Get it fixed', why: 'When someone reports a problem with a piece of equipment, owners and admins hear and get a task to fix it', trigger: { kind: 'equipment.problem' },
+      actions: [{ kind: 'notify', text: '{who} reported a problem with {unit}: {note}', to: ['admins'] }, autoT('Fix {unit}: {note}', '', 2)] },
     // Shops.
     { for: ['store'], name: 'Big sale? Owners hear', why: 'When money over $500 comes in, the owners hear it', trigger: { kind: 'money.added', over: 500, direction: 'in' }, actions: [{ kind: 'notify', text: '{amount} in: {note}', to: ['owners'] }] },
     { for: ['store', 'services'], name: 'Paid? Say thanks', why: 'When a payment comes in, make a task to thank the customer', trigger: { kind: 'payment.received' }, actions: [autoT('Thank {customer} for paying {amount} on {invoice}', '', 0)] },
@@ -5327,7 +5334,7 @@
   const autoRecipeView = { on: null };
   const autoRecipesFor = (k) => { const mine = AUTO_FOR[S.workspace?.setup?.kind] ? S.workspace.setup.kind : null; return AUTO_RECIPES.filter((r) => (k === 'every' || (!k && !mine) ? true : k ? r.for.includes(k) : r.for.includes('all') || r.for.includes(mine))); };
   // The steps a ready-made one uses, as short words, for its card.
-  const AUTO_SHORT = { task: 'Task', post: 'Post', campaign: 'Campaign', notify: 'Notify', contact: 'Contact', record: 'Record', create: 'Record', visit: 'Visit', invoice: 'Invoice', text: 'Text', email: 'Email', money: 'Money', doc: 'Doc', vault: 'Vault', webhook: 'Other app', agent: 'AI', wait: 'Wait', if: 'If' };
+  const AUTO_SHORT = { task: 'Task', post: 'Post', campaign: 'Campaign', notify: 'Notify', contact: 'Contact', record: 'Record', create: 'Record', visit: 'Visit', invoice: 'Invoice', text: 'Text', email: 'Email', money: 'Money', doc: 'Doc', vault: 'Vault', webhook: 'Other app', agent: 'AI', stock: 'Stock', wait: 'Wait', if: 'If' };
   const autoRecipeSteps = (r) => { const out = []; const walk = (l) => l.forEach((y) => { out.push(AUTO_SHORT[y.kind] || y.kind); if (y.kind === 'if') { walk(y.then || []); walk(y.else || []); } }); walk(r.actions); return out.join(' · '); };
   function automationsTool() {
     if (!S.automations || !AUTO_CAT.events) {
@@ -5385,6 +5392,7 @@
     if (a.kind === 'doc' && !a.templateId) return 'Pick a doc template';
     if ((a.kind === 'record' || a.kind === 'create') && (!a.projectId || !a.typeId)) return 'Pick the project and list';
     if (a.kind === 'webhook' && !/^https?:\/\/\S+$/.test(a.url || '')) return 'Enter the web address';
+    if (a.kind === 'stock' && (!a.itemId || !(Number(a.qty) > 0))) return 'Pick the item and how many';
     if (a.kind === 'if' && (!a.when?.length || a.when.some((c) => !['set', 'empty'].includes(c.op) && !has(c.value)))) return 'Say what it checks';
     return '';
   }
@@ -5573,6 +5581,7 @@
             : k.value === 'vault' ? { kind: 'vault', to: 'maker', title: '', text: '' }
             : k.value === 'webhook' ? { kind: 'webhook', url: '', secretId: null }
             : k.value === 'agent' ? { kind: 'agent', agent: 'team', ask: '', wait: false }
+            : k.value === 'stock' ? { kind: 'stock', act: 'use', itemId: '', qty: 1, from: '', to: '', note: '' }
             : { kind: k.value, text: a.text || '', to: [], channelId: 'same' };
           draw();
         });
@@ -5703,6 +5712,24 @@
           f.push(h('label', {}, 'Ask', who), h('label', {}, 'What to ask', ask), h('label', { class: 'pick' }, cb, 'Wait for the answer, then go on with {answer}'),
             AG.data && !AG.data.ai ? h('small', { class: 'hint err' }, 'Add your AI key (Settings → AI) first: your team works on it.') : null,
             h('small', { class: 'hint' }, `Your own agents, on your AI key, at the level you set for each in Your team: anything important waits for your yes there. They’re told an automation asked.${a.wait ? ' The steps after this wait until it’s done (up to 30 minutes).' : ''}`));
+        }
+        if (a.kind === 'stock') {
+          if (!INVS.data && !INVS.loading) loadInventory().then(() => box.isConnected && draw());
+          const d = INVS.data || { items: [], places: [] };
+          const items = d.items.filter((y) => y.track !== 'units');
+          if (!a.itemId && items[0]) a.itemId = items[0].id;
+          if (!a.from && d.places[0]) a.from = d.places[0].id;
+          if (!a.to && d.places[1]) a.to = d.places[1].id;
+          const act = h('select', { class: 'auto-stock-act' }, opt('use', 'Use it on the job', a.act), opt('move', 'Move it', a.act), amAdmin() ? opt('receive', 'Receive it', a.act) : null);
+          act.addEventListener('change', () => { a.act = act.value; draw(); });
+          const it = h('select', { class: 'auto-stock-item', 'aria-label': 'Item' }, items.length ? items.map((y) => opt(y.id, `${y.name} (${y.unit})`, a.itemId)) : opt('', INVS.data ? 'No items in Inventory yet' : 'Loading…', ''));
+          it.addEventListener('change', () => (a.itemId = it.value));
+          const n = h('input', { type: 'number', min: 0, step: 'any', value: a.qty ?? 1, class: 'auto-stock-qty', 'aria-label': 'How many' });
+          n.addEventListener('input', () => (a.qty = Number(n.value)));
+          const pl = (k, cls) => { const e = h('select', { class: cls }, d.places.map((p) => opt(p.id, p.name, a[k]))); e.addEventListener('change', () => (a[k] = e.value)); return e; };
+          f.push(h('div', { class: 'row2' }, h('label', {}, 'Do', act), h('label', {}, 'How many', n)), h('label', {}, 'Item', it),
+            h('div', { class: 'row2' }, a.act !== 'receive' ? h('label', {}, 'From', pl('from', 'auto-stock-from')) : null, a.act !== 'use' ? h('label', {}, 'To', pl('to', 'auto-stock-to')) : null),
+            h('small', { class: 'hint' }, a.act === 'use' ? 'Comes off that place and onto the job that set it off (with its cost, in what the job cost). Only when it’s about a job.' : 'Every move is in Inventory’s Activity, by this automation.'));
         }
         if (a.kind === 'vault') {
           const to = h('select', { class: 'auto-vault-to', 'aria-label': 'Whose vault' }, opt('maker', 'Mine (who made this)', a.to || 'maker'), opt('who', 'Whoever set it off', a.to || 'maker'), people.map((m) => opt(m.id, m.name, a.to || 'maker')));
@@ -10389,9 +10416,9 @@
     ], null);
   }
   // Receiving, moving, using, bringing back, counting: one form, the right fields for each.
-  function invMoveSheet(x, kind, placeId) {
+  function invMoveSheet(x, kind, placeId, link = {}) {
     const d = INVS.data;
-    const itemSel = x ? null : h('select', { class: 'inv-m-item', 'aria-label': 'Item' }, d.items.map((y) => h('option', { value: y.id }, y.name)));
+    const itemSel = x ? null : h('select', { class: 'inv-m-item', 'aria-label': 'Item' }, d.items.filter((y) => y.track !== 'units').map((y) => h('option', { value: y.id }, `${y.name} (${invQty(y.onHand)} ${y.unit})`)));
     const item = () => x || invItem(itemSel.value);
     const opts = (sel) => d.places.map((p) => h('option', { value: p.id, selected: p.id === sel }, p.name));
     const from = h('select', { class: 'inv-m-from', 'aria-label': 'From' }, opts(placeId));
@@ -10400,7 +10427,12 @@
     const cost = h('input', { type: 'number', min: 0, step: '0.01', class: 'inv-m-cost', placeholder: 'Leave as is' });
     const note = h('input', { class: 'inv-m-note', placeholder: kind === 'adjust' ? 'Why (required)' : 'What for (optional)' });
     const title = { receive: 'Receive stock', move: 'Move stock', use: 'Use stock', return: 'Bring stock back', count: 'Count stock', adjust: 'Adjust stock' }[kind];
+    // Used on a job or for a task: the place with the most of the picked item comes first.
+    const best = () => { const it = item(); if (!it || kind !== 'use' || placeId) return; const top = d.places.slice().sort((p1, p2) => (it.stock[p2.id] || 0) - (it.stock[p1.id] || 0))[0]; if (top) from.value = top.id; };
+    itemSel?.addEventListener('change', best);
+    best();
     const fields = [
+      link.label ? h('p', { class: 'day-hint' }, link.label) : null,
       itemSel ? h('label', {}, 'Item', itemSel) : h('p', {}, h('b', {}, x.name), h('small', { class: 'muted' }, ` · ${invQty(x.onHand)} ${x.unit} on hand`)),
       kind === 'move' || kind === 'use' || kind === 'count' ? h('label', {}, kind === 'count' ? 'At' : 'From', from) : null,
       kind === 'move' || kind === 'receive' || kind === 'return' ? h('label', {}, 'To', to) : null,
@@ -10411,13 +10443,57 @@
     sheet(title, fields, async () => {
       const it = item();
       if (!it) throw new Error('Pick the item.');
-      await api('POST', '/inventory/moves', { kind, itemId: it.id, qty: n.value, from: from.value, to: to.value, note: note.value, ...(cost.value ? { cost: cost.value } : {}) });
+      await api('POST', '/inventory/moves', { kind, itemId: it.id, qty: n.value, from: from.value, to: to.value, note: note.value, ...(cost.value ? { cost: cost.value } : {}), ...(link.jobId ? { jobId: link.jobId } : {}), ...(link.taskId ? { taskId: link.taskId } : {}) });
       toast({ receive: 'Received', move: 'Moved', use: 'Used', return: 'Brought back', count: 'Counted', adjust: 'Adjusted' }[kind]);
       await loadInventory();
     }, title.split(' ')[0]);
     setTimeout(() => n.focus(), 50);
   }
 
+
+  // ---------- Inventory on a job: what it used, what's out at it, and doing either from here ----------
+  // The panel redraws often: it shows what it last knew at once, and refreshes behind.
+  function invJobBox(r, name = '') {
+    const el = h('div', { class: 'pj-back inv-job', 'data-rec': r.id, 'data-name': name }, h('h4', {}, '🧰 Materials & equipment'), h('small', { class: 'muted' }, 'Loading…'));
+    const known = INVS.jobs?.get(r.id);
+    if (known && INVS.data) invJobDraw(el, r.id, known);
+    if (!known || Date.now() - known.at > 5000) invJobFill(el, r.id);
+    return el;
+  }
+  async function invJobFill(el, recId) {
+    let v;
+    try { v = await api('GET', '/inventory/job/' + recId); } catch { return el.remove(); }
+    if (!INVS.data) await loadInventory();
+    (INVS.jobs ||= new Map()).set(recId, { ...v, at: Date.now() });
+    if (el.isConnected || !el.parentNode) invJobDraw(el, recId, v);
+  }
+  function invJobDraw(el, recId, v) {
+    const admin = INVS.data?.canManage;
+    const label = 'On ' + (el.dataset.name || 'this job');
+    const useBtn = h('button', { class: 'btn small inv-job-use', onclick: () => invMoveSheet(null, 'use', null, { jobId: recId, label }) }, 'Use stock');
+    const outBtn = h('button', { class: 'btn small inv-job-out', onclick: () => invPickUnit(recId) }, 'Check out equipment');
+    el.replaceChildren(h('h4', {}, '🧰 Materials & equipment'),
+      v.materials.length ? h('div', { class: 'inv-job-list' }, v.materials.map((m) => h('div', { class: 'inv-job-row' }, h('span', {}, h('b', {}, `${invQty(m.qty)} ${m.unit}`), ' ' + m.name), admin && m.cost != null ? h('small', {}, invMoney(m.cost)) : null))) : null,
+      v.equipment.length ? h('div', { class: 'inv-job-list' }, v.equipment.map((u) => h('button', { class: 'pj-link inv-job-unit', onclick: () => invUnitSheet(u.id) }, `🔧 ${u.name}`, h('small', {}, ` · ${u.item} · ${INV_STATUS[u.status]?.[0] || ''}`)))) : null,
+      !v.materials.length && !v.equipment.length ? h('small', { class: 'muted' }, 'Nothing from Inventory yet.') : null,
+      admin && v.cost ? h('small', { class: 'muted inv-job-cost' }, `Stock used: ${invMoney(v.cost)} (in what the job cost)`) : null,
+      INVS.data?.items.length ? h('div', { class: 'btns' }, INVS.data.items.some((x) => x.track !== 'units') ? useBtn : null, INVS.data.items.some((x) => x.track === 'units' && x.units.available) ? outBtn : null) : null);
+  }
+  // Equipment to take to a job: an available unit, then who's taking it.
+  async function invPickUnit(recId) {
+    const items = INVS.data.items.filter((x) => x.track === 'units' && x.units.available);
+    const lists = await Promise.all(items.map((x) => api('GET', '/inventory/items/' + x.id).then((g) => g.units.filter((u) => u.status === 'available').map((u) => ({ ...u, item: x.name }))).catch(() => [])));
+    const units = lists.flat();
+    if (!units.length) return toast('No equipment is available.');
+    const sel = h('select', { class: 'inv-pick-unit' }, units.map((u) => h('option', { value: u.id }, `${u.name} · ${u.item}${u.placeId ? ' · ' + (invPlace(u.placeId)?.name || '') : ''}`)));
+    sheet('Check out equipment', [h('label', {}, 'Which one', sel)], async () => { const u = units.find((y) => y.id === sel.value); setTimeout(() => invCheckout(u, recId), 50); }, 'Next');
+  }
+  // A task: stock used for it (and on its job, when it has one).
+  async function invForTask(t) {
+    if (!INVS.data) await loadInventory();
+    if (!INVS.data?.items.some((x) => x.track !== 'units')) return toast('Nothing to use yet: add items in Workspace → Tools → Inventory.');
+    invMoveSheet(null, 'use', null, { taskId: t.id, jobId: t.recordId || undefined, label: 'For “' + shortText(t.text, 60) + '”' });
+  }
   // ---------- equipment: one by one ----------
   const INV_STATUS = { available: ['Available', 'green'], out: ['Out', 'blue'], repair: ['In repair', 'amber'], lost: ['Lost', 'rose'], retired: ['Retired', 'gray'] };
   const invWho = (id) => S.workspace.members.find((m) => m.id === id)?.name || 'someone';
@@ -10471,11 +10547,11 @@
     const to = m.to ? ' to ' + (invPlace(m.to)?.name || '?') : '';
     return h('div', { class: 'inv-move k-' + m.kind }, h('span', {}, h('b', {}, m.by), ' ' + (INV_UVERB[m.kind] || m.kind) + (m.kind === 'here' ? ' ' + m.note : to) + (m.toMember ? ' for ' + invWho(m.toMember) : '') + (m.jobId && m.kind === 'checkout' ? ' · for a job' : '') + (m.note && m.kind !== 'here' && m.kind !== 'reveal' ? ` · “${m.note}”` : '')), h('small', {}, ago(m.at)));
   }
-  async function invCheckout(u) {
+  async function invCheckout(u, presetJob = null) {
     const who = h('select', { class: 'inv-co-who' }, S.workspace.members.map((m) => h('option', { value: m.id, selected: m.id === S.me?.memberId }, m.name)));
     await prLoadAll().catch(() => {});
     const jobs = [...PR.records.entries()].flatMap(([pid, list]) => { const p = projById(pid); return p && p.template !== 'assets' ? list.map((r) => ({ id: r.id, name: prType(p, r.typeId) ? recName(prType(p, r.typeId), r) : 'Untitled', p: p.name, at: r.updatedAt || r.createdAt || 0 })) : []; }).sort((a, b) => b.at - a.at).slice(0, 300);
-    const job = h('select', { class: 'inv-co-job' }, h('option', { value: '' }, 'No job'), jobs.map((j) => h('option', { value: j.id }, `${j.name} · ${j.p}`)));
+    const job = h('select', { class: 'inv-co-job' }, h('option', { value: '' }, 'No job'), jobs.map((j) => h('option', { value: j.id, selected: j.id === presetJob }, `${j.name} · ${j.p}`)));
     const note = h('input', { class: 'inv-co-note', placeholder: 'Optional' });
     sheet('Check out', [h('p', {}, h('b', {}, u.name)), h('label', {}, 'Who’s taking it', who), h('label', {}, 'For a job', job), h('label', {}, 'Note', note)], async () => {
       await api('POST', `/inventory/units/${u.id}/act`, { act: 'checkout', memberId: who.value, jobId: job.value || undefined, note: note.value });
@@ -12027,6 +12103,7 @@
       job ? prJobMoney(p, t, r) : null,
       ...richFields.map((f) => prRichBlock(p, t, r, f)),
       t.scan ? assetMoves(p, t, r) : equipmentHere(p, t, r),
+      toolOn('inventory') && !t.scan && p.template !== 'assets' ? invJobBox(r, recName(t, r)) : null,
       prActivity(p, t, r),
       ...back.map(({ o, f, from }) => h('div', { class: 'pj-back' }, h('h4', {}, `${o.name} · ${f.name}`), from.map((x) => h('button', { class: 'pj-link', onclick: () => { PR.type = o.id; PR.view = null; PR.panel = x.id; renderProjects(); } }, recName(o, x), o.fields.find((y) => y.type === 'money') && x.values[o.fields.find((y) => y.type === 'money').id] ? h('small', {}, ' · ' + money(x.values[o.fields.find((y) => y.type === 'money').id])) : null)))),
       h('button', { class: 'btn pj-notes', onclick: notes }, doc ? `📄 ${techDoc ? docTitle(doc) : 'Notes'} · ${docSnippet(doc) ? shortText(docSnippet(doc), 50) : 'open'}` : techDoc ? '📄 ' + techDoc[1] : '📄 Add notes (a doc)'),

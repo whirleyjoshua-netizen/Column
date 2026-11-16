@@ -50,7 +50,7 @@ try {
   await A.ev(`document.querySelector('#tool .auto-recipe-for [data-for=store]').click(); true`);
   ok(await A.until(`${names}.includes('Big sale? Owners hear') && !${names}.includes('Quote accepted? Book the install')`), 'the Shops chip shows a shop’s');
   await A.ev(`document.querySelector('#tool .auto-recipe-for [data-for=every]').click(); true`);
-  ok(await A.until(`${names}.length === 25`), 'All shows all 25');
+  ok(await A.until(`${names}.length === 27`), 'All shows all 27');
 
   // Every one opens in the builder and saves as it is (or says what it needs).
   const all = await A.ev(names);

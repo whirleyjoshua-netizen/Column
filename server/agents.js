@@ -29,7 +29,7 @@ export const AGENTS = {
       'Turns commitments in emails you paste into tasks',
       'Prepares your end-of-day summary and plans the week',
     ],
-    tools: ['find_templates', 'save_template', 'look_at_day', 'list_tasks', 'find_records', 'read_record', 'list_campaigns', 'team_schedule', 'plan_route', 'find_docs', 'read_doc', 'look_at_money', 'set_budget', 'add_bill', 'add_to_company_hq', 'create_automation', 'create_task', 'update_task', 'schedule_time', 'move_time', 'write_doc', 'post_to_chat', 'notify_me'],
+    tools: ['find_templates', 'save_template', 'find_inventory', 'look_at_day', 'list_tasks', 'find_records', 'read_record', 'list_campaigns', 'team_schedule', 'plan_route', 'find_docs', 'read_doc', 'look_at_money', 'set_budget', 'add_bill', 'add_to_company_hq', 'create_automation', 'create_task', 'update_task', 'schedule_time', 'move_time', 'write_doc', 'post_to_chat', 'notify_me'],
     workflows: [
       { key: 'briefing', name: 'Morning briefing', ask: 'Give me my morning briefing: what matters today, what is overdue or at risk, and the first thing I should do. Keep it short.', sched: { days: [1, 2, 3, 4, 5], at: 7 * 60 } },
       { key: 'plan_day', name: 'Plan my day', ask: 'Plan my day today: put my tasks into open time around what is already booked, most important first, with breaks, and tell me what won’t fit and what to move or hand off.' },
@@ -51,7 +51,7 @@ export const AGENTS = {
       'Books customer meetings and prepares a brief beforehand',
       'Finds deals that have gone quiet and plans the next step',
     ],
-    tools: ['find_templates', 'save_template', 'find_records', 'read_record', 'list_projects', 'find_contacts', 'look_at_day', 'list_tasks', 'list_campaigns', 'team_schedule', 'find_docs', 'read_doc', 'create_task', 'update_task', 'save_contact', 'create_record', 'update_record', 'log_note', 'book_visit', 'schedule_time', 'move_time', 'write_doc', 'draft_email', 'post_to_chat', 'notify_me'],
+    tools: ['find_templates', 'save_template', 'find_inventory', 'find_records', 'read_record', 'list_projects', 'find_contacts', 'look_at_day', 'list_tasks', 'list_campaigns', 'team_schedule', 'find_docs', 'read_doc', 'create_task', 'update_task', 'save_contact', 'create_record', 'update_record', 'log_note', 'book_visit', 'schedule_time', 'move_time', 'write_doc', 'draft_email', 'post_to_chat', 'notify_me'],
     workflows: [
       { key: 'lead', name: 'Handle a new lead', ask: 'A new lead came in. Record them (contact and lead or deal), draft my reply, suggest times to meet, and set the follow-up:\n\n', paste: true },
       { key: 'radar', name: 'Follow-up radar', ask: 'Run the follow-up radar: find leads, deals and quotes with no reply or no contact in a while, and set up the next step for each (a task, and a drafted follow-up email where there’s an address).', sched: { days: [1, 3, 5], at: 8 * 60 } },
@@ -73,7 +73,7 @@ export const AGENTS = {
       'Checks project health and says what’s slipping',
       'Closes jobs out with a completion report',
     ],
-    tools: ['find_templates', 'save_template', 'list_projects', 'find_records', 'read_record', 'list_tasks', 'look_at_day', 'team_schedule', 'plan_route', 'find_docs', 'read_doc', 'find_photos', 'look_at_photos', 'create_project', 'create_record', 'update_record', 'log_note', 'book_visit', 'draft_invoice', 'send_invoice', 'send_signoff', 'create_automation', 'create_task', 'update_task', 'schedule_time', 'move_time', 'write_doc', 'draft_email', 'post_to_chat', 'notify_me'],
+    tools: ['find_templates', 'save_template', 'find_inventory', 'use_stock', 'list_projects', 'find_records', 'read_record', 'list_tasks', 'look_at_day', 'team_schedule', 'plan_route', 'find_docs', 'read_doc', 'find_photos', 'look_at_photos', 'create_project', 'create_record', 'update_record', 'log_note', 'book_visit', 'draft_invoice', 'send_invoice', 'send_signoff', 'create_automation', 'create_task', 'update_task', 'schedule_time', 'move_time', 'write_doc', 'draft_email', 'post_to_chat', 'notify_me'],
     workflows: [
       { key: 'kickoff', name: 'Project kickoff', ask: 'We just won this work. Organize it: the job (or project), the tasks in order with who and when, a materials list, visits, and a completion checklist:\n\n', paste: true },
       { key: 'prep', name: 'Job preparation', ask: 'Prepare for the jobs coming up in the next few days: a checklist for each, what to bring or order, and anything missing before we can start.' },
@@ -95,7 +95,7 @@ export const AGENTS = {
       'Wins back past customers and asks happy ones for reviews and referrals',
       'Reports which lead sources and campaigns bring jobs and money, and what to do about it',
     ],
-    tools: ['find_templates', 'save_template', 'marketing_snapshot', 'find_customers', 'list_channels', 'social_posts', 'find_photos', 'look_at_photos', 'list_campaigns', 'find_records', 'read_record', 'find_contacts', 'find_docs', 'read_doc', 'list_tasks', 'look_at_day', 'create_campaign', 'make_list', 'create_task', 'update_task', 'schedule_time', 'write_doc', 'make_image', 'draft_social_post', 'draft_email_campaign', 'post_to_chat', 'notify_me'],
+    tools: ['find_templates', 'save_template', 'find_inventory', 'marketing_snapshot', 'find_customers', 'list_channels', 'social_posts', 'find_photos', 'look_at_photos', 'list_campaigns', 'find_records', 'read_record', 'find_contacts', 'find_docs', 'read_doc', 'list_tasks', 'look_at_day', 'create_campaign', 'make_list', 'create_task', 'update_task', 'schedule_time', 'write_doc', 'make_image', 'draft_social_post', 'draft_email_campaign', 'post_to_chat', 'notify_me'],
     rules: [
       'Ground everything in the business: read the business profile (it comes with these instructions) and marketing_snapshot before planning. Write for their ideal customer, in their voice, about what makes them different. Generic marketing copy is a failure.',
       'Never invent reviews, testimonials, statistics, awards, prices, discounts or offers. Use an offer only if the person or the business profile gave it; otherwise propose one and say it needs their OK.',
@@ -451,6 +451,37 @@ export function agentsModule({ autoEvents = [], sees = () => true, db, save, bro
       },
     },
     // ----- templates: the team's own emails, texts, replies, posts and paperwork, to start from instead of a blank page -----
+    // ----- Inventory: what the business keeps and where -----
+    find_inventory: {
+      kind: 'read', label: (a) => `Looked at inventory${a.q ? ' (' + words(a.q, 40) + ')' : ''}`,
+      description: 'The team’s inventory: items with how many are on hand at each place (warehouse, trucks, sites), which are low (at or under their reorder point), the supplier, and for equipment tracked one by one how many are available, out or in repair. q: words in the name, SKU or category; low: true for only what’s running low.',
+      parameters: { type: 'object', properties: { q: { type: 'string' }, low: { type: 'boolean' } } },
+      async run(cx, a) {
+        const r = await cx.call('GET', '/api/inventory');
+        if (r.status >= 300) return { error: r.body?.error || 'Inventory isn’t on for this team.' };
+        const q = String(a.q || '').toLowerCase();
+        const place = Object.fromEntries((r.body.places || []).map((p) => [p.id, p.name]));
+        const items = r.body.items.filter((x) => (!q || [x.name, x.sku, x.category].some((v) => String(v || '').toLowerCase().includes(q))) && (!a.low || x.low)).slice(0, 40)
+          .map((x) => ({ id: x.id, name: x.name, sku: x.sku || undefined, unit: x.unit, onHand: x.onHand, low: x.low, reorderAt: x.reorderAt ?? undefined, reorderQty: x.reorderQty ?? undefined, supplier: x.supplier || undefined, at: Object.fromEntries(Object.entries(x.stock || {}).filter(([, v]) => v > 0).map(([k, v]) => [place[k] || k, v])), ...(x.track === 'units' ? { equipment: x.units } : {}) }));
+        return { items, places: Object.values(place), note: items.length ? '' : 'Nothing in inventory matches.' };
+      },
+    },
+    use_stock: {
+      kind: 'write', label: (a) => `Used ${a.qty} ${words(a.item, 40)} on ${recTitle(a.record_id) || 'a job'}`,
+      description: 'Record stock used on a job from Inventory (counted items, not equipment): item by name or id, how many, and the place it came from (by name; the place with the most if left out). It comes off that place and shows on the job with its cost.',
+      parameters: { type: 'object', properties: { item: { type: 'string' }, qty: { type: 'number' }, from: { type: 'string' }, record_id: { type: 'string' }, why: { type: 'string' } }, required: ['item', 'qty', 'record_id'] },
+      async run(cx, a) {
+        const at = PJ.recordAt(String(a.record_id || ''), cx.ws.id, cx.memberId);
+        if (!at) throw new Error('No job you can see with that id.');
+        const inv = (await cx.call('GET', '/api/inventory')).body;
+        const name = String(a.item || '').toLowerCase();
+        const x = inv?.items?.find((y) => y.id === a.item) || inv?.items?.find((y) => y.name.toLowerCase() === name) || inv?.items?.find((y) => y.name.toLowerCase().includes(name));
+        if (!x) throw new Error(`No item called ${a.item} in inventory.`);
+        const p = (a.from && inv.places.find((y) => y.name.toLowerCase() === String(a.from).toLowerCase())) || inv.places.slice().sort((p1, p2) => (x.stock[p2.id] || 0) - (x.stock[p1.id] || 0))[0];
+        const r = await cx.call('POST', '/api/inventory/moves', { kind: 'use', itemId: x.id, qty: a.qty, from: p?.id, jobId: at.rec.id, note: a.why || '' });
+        return done(r, { kind: 'record', id: at.rec.id, label: recTitle(at.rec.id) });
+      },
+    },
     find_templates: {
       kind: 'read', label: (a) => `Looked at the team’s templates${a.kind ? ' (' + a.kind + ')' : ''}`,
       description: 'The team’s templates: emails (subject and message), texts, replies and social posts with {words} to fill in, plus their paperwork (doc templates and sign-off forms) by name. kind: email, text, reply, post or paperwork; q: words in the name or when to use it. Check before writing an email, text, reply, post or document, and start from the one that fits.',

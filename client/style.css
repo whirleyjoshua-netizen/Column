@@ -3223,3 +3223,6 @@ body:not(.wide) .wl-row > .wl-stat:not([data-k=open]):not([data-k=overdue]):not(
 .inv-import { display: flex; justify-content: space-between; align-items: center; gap: 10px; border: 1px dashed var(--accent); border-radius: 10px; padding: 10px 12px; margin-bottom: 10px; background: var(--accent-soft); flex-wrap: wrap; }
 .inv-import > span { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1 1 260px; }
 .inv-import small { color: var(--muted); font-size: 12px; }
+.inv-job-list { display: flex; flex-direction: column; gap: 2px; margin: 4px 0; }
+.inv-job-row { display: flex; justify-content: space-between; gap: 8px; font-size: 13px; }
+.inv-job-row small, .inv-job-cost { color: var(--muted); }

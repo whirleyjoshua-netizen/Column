@@ -15,7 +15,7 @@ const METHODS = ['cash', 'check', 'card', 'bank', 'other'];
 const DUE_DAYS = 14;
 const CHECK_MS = Number(process.env.INVOICE_CHECK_MS) || 5 * 60_000;
 
-export function invoicesModule({ jobBack = () => {}, onPaymentGone = () => {}, notifyAdmins = null, db, save, broadcast, rid, hold = null, cleanText, readJson, send, badRequest, escHtml, brandOf, logoUrl, teamDay, offline, seal, unseal, stripeCall, PJ, isAdmin, jobOfRecord, jobLabel, moveJob, addMoney, dropMoneyId, publicUrl, emit = () => {} }) {
+export function invoicesModule({ stockCost = () => 0, jobBack = () => {}, onPaymentGone = () => {}, notifyAdmins = null, db, save, broadcast, rid, hold = null, cleanText, readJson, send, badRequest, escHtml, brandOf, logoUrl, teamDay, offline, seal, unseal, stripeCall, PJ, isAdmin, jobOfRecord, jobLabel, moveJob, addMoney, dropMoneyId, publicUrl, emit = () => {} }) {
   db.invoices ||= {};
   db.payKeys ||= {};
   const money = (c) => ((c || 0) / 100).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
@@ -189,7 +189,9 @@ export function invoicesModule({ jobBack = () => {}, onPaymentGone = () => {}, n
     const price = billed || quoted?.total || (value && rec.values[value.id]) || 0;
     const mf = t.fields.find((f) => f.type === 'materials');
     const mats = ((mf && rec.values[mf.id]?.rows) || []).reduce((n, r) => n + Math.round((r.qty || 0) * (r.cost || 0)), 0);
-    const materials = mats || quoted?.cost || 0;
+    // Stock used on the job from Inventory counts too (at what it cost when it was used).
+    const stock = stockCost(rec.id) || 0;
+    const materials = mats + stock || quoted?.cost || 0;
     // Labor: each done visit's length, times the people on it. Visits with no times don't count.
     let minutes = 0;
     const seen = new Map();
@@ -204,7 +206,7 @@ export function invoicesModule({ jobBack = () => {}, onPaymentGone = () => {}, n
     const rate = ws.laborRate || 0;
     const labor = Math.round((minutes / 60) * rate);
     const cost = materials + labor;
-    return { price, billed, paid, quoted: quoted?.total || 0, materials, hours: Math.round((minutes / 60) * 100) / 100, visits, laborRate: rate, labor, cost, margin: price - cost, marginPct: price ? Math.round(((price - cost) / price) * 1000) / 10 : 0 };
+    return { price, billed, paid, quoted: quoted?.total || 0, materials, fromStock: stock, hours: Math.round((minutes / 60) * 100) / 100, visits, laborRate: rate, labor, cost, margin: price - cost, marginPct: price ? Math.round(((price - cost) / price) * 1000) / 10 : 0 };
   }
 
   // ---------- the app's routes: /api/records/:id/invoices, /api/records/:id/costing, /api/invoices/…, /api/payments/stripe ----------

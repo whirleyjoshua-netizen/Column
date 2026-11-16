@@ -3121,7 +3121,7 @@ const AUTO_TRIGGERS = FL.EVENTS.map((e) => e.type);
 // Step 4: drop a sealed note into a person's vault, and send what happened to another app (a web address, with a key
 // from the team's sealed automation keys).
 // Step 5: ask one of the maker's agents (or the whole team), and maybe wait for the answer ({answer} after it).
-const AUTO_ACTIONS = ['task', 'post', 'campaign', 'notify', 'contact', 'record', 'create', 'visit', 'invoice', 'text', 'email', 'money', 'doc', 'vault', 'webhook', 'agent'];
+const AUTO_ACTIONS = ['task', 'post', 'campaign', 'notify', 'contact', 'record', 'create', 'visit', 'invoice', 'text', 'email', 'money', 'doc', 'vault', 'webhook', 'agent', 'stock'];
 const AGENT_WAIT_MS = 30 * 60_000, AGENT_BUSY = 3;
 const AUTO_RUNS = 30;
 const AUTO_MAX = 50;
@@ -3227,6 +3227,22 @@ function cleanAction(a, ws, who) {
     if (n != null && !(n > 0 && n <= 1e9)) throw badRequest('The amount is a number of dollars, like 250, or leave it empty to use the {amount} of what set it off.');
     return { kind, direction: a.direction === 'in' ? 'in' : 'out', amount: n == null ? null : Math.round(n * 100) / 100, category: cleanText(a.category, 40), note: cleanText(a.note, 200) };
   }
+  // Inventory: use stock on the job it's about, move it, or (owners and admins) receive it.
+  if (kind === 'stock') {
+    if (!toolsOf(ws).inventory) throw badRequest('Inventory is switched off for this team.');
+    const act = ['use', 'move', 'receive'].includes(a.act) ? a.act : 'use';
+    if (act === 'receive' && !isAdminId(ws.id, who)) throw badRequest('Only owners and admins can have an automation receive stock.');
+    const x = db.invItems[a.itemId];
+    if (!x || x.wsId !== ws.id || x.archived) throw badRequest('Pick an item from Inventory.');
+    if (x.track === 'units') throw badRequest(`${x.name} is tracked one by one: an automation can’t use it by count.`);
+    const place = (id) => (id && db.invPlaces[id]?.wsId === ws.id && !db.invPlaces[id].archived ? id : null);
+    const qty = Math.round(Number(a.qty) * 1000) / 1000;
+    if (!(qty > 0 && qty <= 1e7)) throw badRequest('Say how many.');
+    const from = act === 'receive' ? null : place(a.from), to = act === 'use' ? null : place(a.to);
+    if (act !== 'receive' && !from) throw badRequest('Pick where it comes from.');
+    if (act !== 'use' && !to) throw badRequest('Pick where it goes.');
+    return { kind, act, itemId: x.id, qty, from, to, note: cleanText(a.note, 200) };
+  }
   if (kind === 'agent') {
     if (ws.settings?.tools?.agents === false) throw badRequest('Your team (agents) is switched off for this team.');
     const agent = a.agent === 'team' || AGENTS_M.AGENTS[a.agent] ? a.agent : null;
@@ -3271,7 +3287,7 @@ function autoVars(ctx, wsId) {
   return { task: ctx.task?.text, campaign: ctx.campaign?.name, contact: ctx.contact ? ctx.contact.name || ctx.contact.company || ctx.contact.email || ctx.contact.phone : '', file: ctx.file?.name,
     from: ctx.from, who: ctx.who, stage: ctx.stageLabel || (ctx.stage ? stageLabel(ctx.stage) : ''), outcome: ctx.outcome, document: ctx.document, note: ctx.note, date: ctx.date || teamDay(wsId),
     record: ctx.recordName, project: ctx.project?.name, list: ctx.list?.name, customer: ctx.customer, amount: ctx.amount != null ? '$' + Number(ctx.amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '',
-    invoice: ctx.invoice, time: ctx.time, crew: ctx.crew, phone: ctx.phone, text: ctx.text, doc: ctx.doc, pin: ctx.pin, category: ctx.category, status: ctx.status, answer: ctx.answer };
+    invoice: ctx.invoice, time: ctx.time, crew: ctx.crew, phone: ctx.phone, text: ctx.text, doc: ctx.doc, pin: ctx.pin, category: ctx.category, status: ctx.status, answer: ctx.answer, item: ctx.item, qty: ctx.qty, unit: ctx.unitName, place: ctx.place, supplier: ctx.supplier };
 }
 function autoMatches(t, ctx) {
   if (t.campaignId && ctx.campaign?.id !== t.campaignId && ctx.campaign?.parentId !== t.campaignId) return false;
@@ -3477,7 +3493,7 @@ async function resumeSteps(x, ctx, stack, i, log) {
   return r;
 }
 // What a waiting run keeps: what it's about, by id, and the words as they were.
-const CTX_WORDS = ['answer', 'who', 'whoId', 'from', 'stage', 'stageLabel', 'outcome', 'document', 'note', 'date', 'recordName', 'customer', 'amount', 'invoice', 'time', 'crew', 'phone', 'text', 'doc', 'pin', 'category', 'status', 'direction', 'private', 'ownersOnly'];
+const CTX_WORDS = ['answer', 'item', 'qty', 'unitName', 'place', 'supplier', 'who', 'whoId', 'from', 'stage', 'stageLabel', 'outcome', 'document', 'note', 'date', 'recordName', 'customer', 'amount', 'invoice', 'time', 'crew', 'phone', 'text', 'doc', 'pin', 'category', 'status', 'direction', 'private', 'ownersOnly'];
 function ctxSnap(ctx) {
   const out = { ids: { task: ctx.task?.id, campaign: ctx.campaign?.id, contact: ctx.contact?.id || null, contactName: ctx.contact && !ctx.contact.id ? ctx.contact.name || '' : null, file: ctx.file?.id, project: ctx.project?.id, list: ctx.list?.id, record: ctx.record?.id } };
   for (const k of CTX_WORDS) if (ctx[k] !== undefined && ctx[k] !== null) out[k] = ctx[k];
@@ -3574,6 +3590,7 @@ function autoDescribe(x, a, ctx, ws) {
     case 'money': return `Add ${a.amount != null ? dollars(a.amount) : ctx.amount != null ? dollars(ctx.amount) : 'the {amount}'} ${a.direction === 'in' ? 'in' : 'out'} to Finance`;
     case 'doc': return `Write the doc “${fill(a.title) || db.docTemplates[a.templateId]?.name || 'from the template'}”`;
     case 'vault': return `Put a sealed note in ${a.to === 'maker' ? (nameOf(x.memberId) || 'your') + '’s' : a.to === 'who' ? (ctx.who || 'whoever set it off') + '’s' : (nameOf(a.to) || 'someone') + '’s'} vault`;
+    case 'stock': { const it = db.invItems[a.itemId]; return `${{ use: 'Use', move: 'Move', receive: 'Receive' }[a.act]} ${a.qty} ${it?.unit || ''} ${it?.name || 'of an item'}${a.act === 'use' ? ' on ' + (ctx.recordName || 'the job') : ''}`; }
     case 'agent': return `Ask ${agentName(a.agent)}: “${fill(a.ask)}”${a.wait ? ', and wait for the answer ({answer})' : ''}`;
     case 'webhook': { let host = a.url; try { host = new URL(a.url).host; } catch {} return `Send what happened to ${host}${a.secretId ? ', with its key' : ''}`; }
     default: return a.kind;
@@ -3724,6 +3741,13 @@ async function flowAction(x, a, ctx, ws) {
     if (r.status >= 300) throw new Error(`${new URL(a.url).host} said ${r.status}`);
     return `Sent to ${new URL(a.url).host}`;
   }
+  if (a.kind === 'stock') {
+    const item = db.invItems[a.itemId];
+    if (!item || item.archived) throw new Error('its item is gone from Inventory');
+    if (a.act === 'use' && !rec) return `Didn’t use ${item.name}: it wasn’t about a job`;
+    await flowCall(x, 'POST', '/api/inventory/moves', { kind: a.act, itemId: item.id, qty: a.qty, from: a.from, to: a.to, jobId: a.act === 'use' ? rec.id : undefined, note: autoFill(a.note || x.name, ctx, ws.id) });
+    return `${{ use: 'Used', move: 'Moved', receive: 'Received' }[a.act]} ${a.qty} ${item.unit} ${item.name}${a.act === 'use' ? ' on ' + clipText(ctx.recordName || 'the job', 40) : ''}`;
+  }
   if (a.kind === 'doc') {
     if (!db.docTemplates[a.templateId]) throw new Error('its doc template is gone');
     const it = (await flowCall(x, 'POST', `/api/doc-templates/${a.templateId}/use`, { title: autoFill(a.title, ctx, ws.id) || undefined })).body;
@@ -3733,7 +3757,7 @@ async function flowAction(x, a, ctx, ws) {
 
 async function autoAction(x, a, ctx) {
   const ws = db.workspaces[x.wsId];
-  if (['visit', 'invoice', 'text', 'email', 'money', 'doc', 'vault', 'webhook'].includes(a.kind)) return flowAction(x, a, ctx, ws);
+  if (['visit', 'invoice', 'text', 'email', 'money', 'doc', 'vault', 'webhook', 'stock'].includes(a.kind)) return flowAction(x, a, ctx, ws);
   const say = autoFill(a.text, ctx, ws.id);
   if (a.kind === 'task') {
     const camp = a.campaign === 'same' ? ctx.campaign : db.campaigns[a.campaign];
@@ -10601,7 +10625,23 @@ for (const x of Object.values(db.mileage)) {
 }
 
 // Inventory (inventory.js): items, places, stock at each place, and the ledger of every movement.
+// What happens in Inventory reaches automations: running low, used on a job, equipment out, back, or with a problem.
+function invCtx(ws, x, m, more = {}) {
+  const rec = m.jobId && db.records[m.jobId];
+  const p = rec && db.projects[rec.projectId];
+  const lt = p && typeOfP(p, rec.typeId);
+  return { item: x.name, qty: Math.abs(m.qty), place: db.invPlaces[m.from || m.to]?.name || '', supplier: x.supplier || '', who: m.by, whoId: m.byId, note: m.note,
+    ...(rec && lt ? { record: rec, project: p, list: lt, recordName: String(rec.values[lt.primary] ?? ''), private: privateRecord(rec.id) } : {}), ...more };
+}
 const STOCK = inventoryModule({ db, save, broadcast, rid, cleanText, readJson, send, isAdmin,
+  onMove: (ws, m, x, { wasLow, low }) => {
+    if (!wasLow && low) automate(ws.id, 'stock.low', invCtx(ws, x, m, { qty: STOCK.total(x) }));
+    if (m.kind === 'use' && m.jobId) automate(ws.id, 'stock.used', invCtx(ws, x, m));
+  },
+  onUnit: (ws, m, u, x) => {
+    const kind = { checkout: 'equipment.out', return: 'equipment.back', repair: 'equipment.problem' }[m.kind];
+    if (kind) automate(ws.id, kind, invCtx(ws, x, m, { unitName: u.name }));
+  },
   recordAt: (id, wsId, memberId) => PJ.recordAt(id, wsId, memberId),
   taskOk: (auth, id) => { const t = db.tasks[id]; return !!t && t.wsId === auth.ws.id && canSee(auth, 'task', t); },
   seal, unseal,
@@ -10610,7 +10650,7 @@ const STOCK = inventoryModule({ db, save, broadcast, rid, cleanText, readJson, s
   labelUrl: (tag) => `${PUBLIC_URL}/a/${tag}`,
   labelQr: (tag) => 'data:image/svg+xml;base64,' + Buffer.from(qrSvg(`${PUBLIC_URL}/a/${tag}`, { scale: 8 })).toString('base64'),
   projectFor: (pid, wsId, memberId) => { const p = db.projects[pid]; return p && p.wsId === wsId && PJ.sees(p, memberId) ? { p, records: Object.values(db.records).filter((r) => r.projectId === p.id) } : null; } });
-const INV = invoicesModule({ notifyAdmins: (...a) => notifyAdmins(...a), jobBack: (rec) => jobBack(rec), onPaymentGone: (...a) => QB.paymentGone(...a), db, save, broadcast, rid, hold, cleanText, readJson, send, badRequest, escHtml, brandOf, logoUrl, teamDay, offline, seal, unseal, stripeCall: stripe.callWith, PJ, isAdmin, jobOfRecord, jobLabel, moveJob, publicUrl: PUBLIC_URL, emit: (...a) => { PJ.emit(...a); QB.soon(a[0]); try { eventFromHook(a[0], a[1], a[2], a[3]); } catch (e) { alarm('An automation event failed to build', e); } },
+const INV = invoicesModule({ stockCost: (recId) => STOCK.stockCost(recId), notifyAdmins: (...a) => notifyAdmins(...a), jobBack: (rec) => jobBack(rec), onPaymentGone: (...a) => QB.paymentGone(...a), db, save, broadcast, rid, hold, cleanText, readJson, send, badRequest, escHtml, brandOf, logoUrl, teamDay, offline, seal, unseal, stripeCall: stripe.callWith, PJ, isAdmin, jobOfRecord, jobLabel, moveJob, publicUrl: PUBLIC_URL, emit: (...a) => { PJ.emit(...a); QB.soon(a[0]); try { eventFromHook(a[0], a[1], a[2], a[3]); } catch (e) { alarm('An automation event failed to build', e); } },
   // A payment is money in on the business's Finance, under the team's owner.
   addMoney: (ws, { amount, day, note, invoiceId = null }) => {
     const owner = ws.members.find((m) => m.role === 'owner') || ws.members[0];
