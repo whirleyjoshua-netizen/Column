@@ -190,6 +190,11 @@ body.wide .docview, body.wide .projects { right: var(--skd-w); }
 .skd-chips .chip { border: 1px solid var(--line); background: var(--card); color: var(--text); }
 .skd-chips .chip:hover:not(:disabled) { border-color: var(--accent); }
 .skd-team { display: block; margin-top: 16px; }
+.skd-q { margin: 2px 0 8px; font-size: 16px; font-weight: 650; color: var(--text); text-transform: none; letter-spacing: 0; }
+.skd-goals { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; margin: 10px 0 2px; }
+.skd-goal { padding: 9px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); color: var(--text); font: inherit; font-size: 13px; font-weight: 600; text-align: left; cursor: pointer; }
+.skd-goal:hover:not(:disabled), .skd-goal.on { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+.skd-sub { margin: 14px 0 0; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--faint); font-weight: 600; }
 .sk-dock .linkish { background: none; border: 0; padding: 0; color: var(--accent); font: inherit; font-size: 13px; cursor: pointer; }
 .sk-dock .linkish:hover { text-decoration: underline; }
 .sk-dock .ag-back { display: none; } /* the panel's own ‹ goes back */

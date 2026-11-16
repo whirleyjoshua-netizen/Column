@@ -337,6 +337,29 @@ try {
     ok(['draft_invoice', 'send_invoice', 'send_signoff'].every((k) => ag.ops.tools.some((t) => t.key === k)) && ag.chief.tools.some((t) => t.key === 'add_to_company_hq'), 'Operations lists invoices and sign-offs; the Chief of Staff lists Company HQ');
   }
 
+  // ----- How can Kloomie help you? (2026-11-15): a goal picks a playbook: what to find out, look at and prepare -----
+  {
+    const waitRun = async (id) => { let x; for (let i = 0; i < 60; i++) { x = (await ada('GET', '/agents/runs/' + id)).body; if (!['requested', 'planning', 'running'].includes(x.status)) break; await sleep(150); } return x; };
+    let before = asked.length;
+    r = await ada('POST', '/agents/runs', { agent: 'team', ask: 'Help me grow from $20k to $40k a month by June', mission: 'grow' });
+    ok(r.status === 200 && r.body.mission === 'grow' && r.body.asPlan === true, 'a goal is kept on the assignment, and it is a plan (every change waits for a yes)');
+    await waitRun(r.body.id);
+    const coord = asked.slice(before).find((q) => q.sys.includes('You coordinate four specialists'));
+    ok(coord && /monthly revenue/i.test(coord.msgs + coord.sys) && /average job/i.test(coord.msgs + coord.sys) && /capacity/i.test(coord.msgs + coord.sys), 'the coordinator gets the Grow playbook: revenue now and target, average job, capacity');
+    ok(coord && /one short question/i.test(coord.msgs + coord.sys), 'and is told to ask first when a must-know fact is missing');
+    ok(asked.slice(before).some((q) => !q.sys.includes('You coordinate') && /Grow/.test(q.msgs) && /prepare/i.test(q.msgs)), 'the specialists hear the goal and what to prepare');
+    before = asked.length;
+    r = await ada('POST', '/agents/runs', { agent: 'team', ask: 'I want more customers in Henderson', mission: 'auto' });
+    await waitRun(r.body.id);
+    const c2 = asked.slice(before).find((q) => q.sys.includes('You coordinate four specialists'));
+    ok(r.body.asPlan === true && c2 && /More leads/.test(c2.msgs + c2.sys) && /Run my operations/.test(c2.msgs + c2.sys), 'a goal in their own words: the coordinator picks the closest playbook from all six');
+    r = await ada('POST', '/agents/runs', { agent: 'chief', ask: 'follow up more', mission: 'world-domination' });
+    ok(r.status === 200 && !r.body.mission && !r.body.asPlan, 'an unknown goal is ignored (and is no plan)');
+    const ms = (await ada('GET', '/agents')).body.missions;
+    ok(ms?.map((m) => m.key).join() === 'grow,leads,ops,time,money,team' && ms.every((m) => m.name && m.start.includes('Help me')), 'the six goals and their starting sentences come with the agents');
+    await waitRun(r.body.id);
+  }
+
   // ----- Stop, delete, switch off -----
   r = await ada('POST', `/agents/runs/${done1.id}/delete`);
   ok(r.status === 200 && (await ada('GET', '/agents/runs/' + done1.id)).status === 404, 'an assignment can be deleted');

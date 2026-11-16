@@ -118,6 +118,55 @@ export const AGENTS = {
   },
 };
 export const LEVELS = ['observe', 'prepare', 'execute', 'automate'];
+
+// How can Kloomie help you? (the owner, 2026-11-15) Each goal has its playbook: what to find out first (asked as
+// one short question when it isn't in the request, Company HQ or the team's records), what to look at, what to
+// prepare (each piece a draft the person approves: a goal is always a plan), and the numbers to watch.
+export const MISSIONS = {
+  grow: {
+    name: 'Grow / scale', start: 'Help me grow from ___ to ___ a month by ___',
+    know: ['monthly revenue now and the target', 'by when', 'average job (or order) value', 'where work comes from now', 'capacity: people and hours, and how many jobs a week they can take'],
+    look: 'the pipeline and won work in Projects, campaigns and what has brought in work, the team’s schedule, budgets',
+    prepare: ['the math: jobs a week and leads a week the target needs, from the average job and how often leads become jobs', 'a campaign with numeric goals for the extra leads, from the channels that already work', 'the pipeline stages to watch (a project or list if there isn’t one)', 'a weekly schedule with time to sell and time to deliver', 'hiring or subcontracting tasks if capacity falls short of the target', 'a monthly budget for marketing', 'a one-page growth plan doc with the weekly numbers to watch'],
+    measure: 'leads a week, quotes sent, close rate, jobs a week, revenue a month against the target',
+  },
+  leads: {
+    name: 'More leads & marketing', start: 'Help me get more ___ customers',
+    know: ['who the ideal customer is', 'the service area', 'what a lead is worth (average job)', 'what has brought in work before', 'a monthly marketing budget'],
+    look: 'contacts and where they came from, past campaigns and what worked, social channels, photos, reviews',
+    prepare: ['two or three campaigns with numeric goals (local search, a target segment, reviews and referrals), from what has worked', 'who to reach: a list from Contacts', 'the first emails and posts as drafts', 'tasks to tag where every lead comes from', 'a monthly ads budget', 'a short marketing plan doc'],
+    measure: 'leads a week by source, cost per lead, reviews asked and got',
+  },
+  ops: {
+    name: 'Run my operations', start: 'Help me run jobs from first call to paid',
+    know: ['what a job looks like from first call to paid', 'who does what (office, crew)', 'where it breaks or gets slow now'],
+    look: 'Projects and their stages, overdue and stuck jobs, visits and routes, invoices and sign-offs, docs',
+    prepare: ['a project or the stages the work moves through, if missing', 'checklists and a work order template as docs', 'tasks to clear stuck or overdue jobs', 'invoice drafts for finished jobs that aren’t billed', 'automations worth setting up, written in the plan doc', 'a weekly operations rhythm on the schedule'],
+    measure: 'jobs by stage, days from sold to done, jobs finished but not billed, overdue tasks',
+  },
+  time: {
+    name: 'Get my time back', start: 'Help me plan my week so I’m not doing everything myself',
+    know: ['what takes the person’s time now', 'what only they can do', 'who could take the rest'],
+    look: 'the person’s day and week, their tasks, the team schedule',
+    prepare: ['a weekly schedule of focus blocks (selling, delivering, admin, off)', 'tasks moved, dated or handed to teammates', 'a short list of what to stop or automate, in a doc'],
+    measure: 'hours a week in each block, tasks handed off, overdue tasks',
+  },
+  money: {
+    name: 'Money', start: 'Help me get paid faster and know my numbers',
+    know: ['monthly revenue and main costs', 'how customers pay now', 'what is owed to the business'],
+    look: 'invoices and payments, Finance (money in and out, budgets, bills)',
+    prepare: ['invoice drafts for finished jobs not yet billed', 'budgets for the main costs', 'the recurring bills to track', 'tasks to chase what is owed', 'a one-page numbers doc: what comes in, goes out and is owed'],
+    measure: 'money in and out a month, owed and how late, budgets used',
+  },
+  team: {
+    name: 'My team', start: 'Help me set up my crew and who does what',
+    know: ['who is on the team and their roles', 'who does what today', 'what should change'],
+    look: 'the team, the schedule, tasks and who they are for, projects',
+    prepare: ['who does what, written as a doc', 'tasks assigned to the right people', 'a weekly team rhythm on the schedule (a planning time, a check-in)', 'roles on campaigns where it helps'],
+    measure: 'tasks done on time by person, jobs per crew',
+  },
+};
+const missionText = (k) => { const m = MISSIONS[k]; return `${m.name}. Find out first: ${m.know.join('; ')}. Look at: ${m.look}. Prepare: ${m.prepare.join('; ')}. Numbers to watch: ${m.measure}.`; };
 const KEEP_RUNS = 80;
 const PHOTO_MAX = 5_000_000; // what AI models take as a picture
 const MAX_PARTS = 4;
@@ -1144,7 +1193,7 @@ export function agentsModule({ sees = () => true, db, save, broadcast, rid, clea
       }
       return applyStep(x, cx, step, part);
     };
-    const history = [...(part.history || []), { role: 'user', text: !part.reply && (x.parts.length > 1 || part.from) ? handoffContext(x, part) : [part.ask, ...(!part.reply && !(part.history || []).length ? [pageLine(x.page), planLine(x)] : [])].filter(Boolean).join('\n\n') }];
+    const history = [...(part.history || []), { role: 'user', text: !part.reply && (x.parts.length > 1 || part.from) ? handoffContext(x, part) : [part.ask, ...(!part.reply && !(part.history || []).length ? [pageLine(x.page), planLine(x), missionLine(x, false)] : [])].filter(Boolean).join('\n\n') }];
     try {
       const out = await llmRun(ws, x.memberId, { system: systemFor(ws, x.memberId, part.agent, level, prefs, x.agent === 'team') + (a.tools.includes('make_image') && !pics ? '\n\nPictures: there is no OpenAI or Gemini key on this account, so you can’t make pictures. Don’t try; suggest real job photos, and mention once that adding an OpenAI or Gemini key in Settings → AI lets you make them.' : ''), history, tools, exec, task: part.agent === 'sales' ? 'customer' : part.agent === 'ops' ? 'jobs' : 'plan' });
       part.report = cleanText(out, 6000);
@@ -1165,6 +1214,7 @@ export function agentsModule({ sees = () => true, db, save, broadcast, rid, clea
       `The request from the person: ${x.ask}`,
       pageLine(x.page),
       planLine(x),
+      missionLine(x, false),
       part.ask && part.ask !== x.ask ? `Your part: ${part.ask}` : '',
       ...before.map((p) => `What the ${AGENTS[p.agent].name} did:\n${p.steps.filter((s) => s.kind !== 'read').map((s) => `- ${s.label} [${s.status}]${s.changed?.length ? ' ids: ' + s.changed.map((c) => `${c.kind} ${c.id}`).join(', ') : ''}`).join('\n') || '- nothing changed'}\nTheir report: ${p.report || p.error || ''}`),
     ].filter(Boolean).join('\n\n').slice(0, MAX_TURN_CHARS);
@@ -1261,7 +1311,7 @@ export function agentsModule({ sees = () => true, db, save, broadcast, rid, clea
 - marketing: Marketing Manager (reaching many people: marketing plans, campaigns, email campaigns, social and Google posts, pictures, reviews and referrals, what's working)
 Give the request to the one specialist whose job it is. Most requests need only one: planning the person's own day, week or tasks is the Chief of Staff alone; a lead or customer is Sales alone; a job to deliver is Operations alone; posts, campaigns or getting more customers is Marketing alone. Split it (2 or at most 3 assignments, in the order they should happen) only when it clearly needs work from more than one area, like a new customer who needs a quote and a visit booked. Each specialist can also bring in another partway through if it turns out they need to, so don't add one just in case. If the request is too unclear to start, ask one short question instead.
 Reply with JSON only: {"summary":"one line on the plan","parts":[{"agent":"chief|sales|ops|marketing","ask":""}],"question":null}`;
-    const out = await llmRun(ws, x.memberId, { system, history: [{ role: 'user', text: [x.ask, pageLine(x.page), planLine(x)].filter(Boolean).join('\n\n') }], tools: [], exec: () => Promise.reject(new Error('No tools')), task: 'plan' });
+    const out = await llmRun(ws, x.memberId, { system, history: [{ role: 'user', text: [x.ask, pageLine(x.page), planLine(x), missionLine(x, true)].filter(Boolean).join('\n\n') }], tools: [], exec: () => Promise.reject(new Error('No tools')), task: 'plan' });
     let j = {};
     try { j = JSON.parse(String(out).slice(String(out).indexOf('{'), String(out).lastIndexOf('}') + 1)); } catch {}
     if (j.question && !(Array.isArray(j.parts) && j.parts.length)) return { question: cleanText(j.question, 300) };
@@ -1275,10 +1325,17 @@ Reply with JSON only: {"summary":"one line on the plan","parts":[{"agent":"chief
   const cleanPage = (p) => (p && typeof p === 'object' && PAGE_KINDS[p.kind] ? { kind: p.kind, id: cleanText(String(p.id || ''), 60), label: cleanText(String(p.label || ''), 120) } : null);
   // A plan (Plan my business): every change is held as a draft the person approves one by one, at any level.
   const planLine = (x) => (x.asPlan ? 'This is a plan for the person to review: every change you make is held as a draft they approve one by one, so propose the whole plan now (do not ask first), each change separately, and say in your report how the pieces fit together. What the team has filled in under Company HQ (what the business does, its customers, how it works, its goals) comes with these instructions, headed “What the team has told Kloomie about their business”; if that isn’t there, Company HQ is empty: don’t search docs for it, plan from what is set up and say what to fill in first.' : '');
+  // The goal's playbook (or, in their own words, all six to pick from), for the coordinator and each specialist.
+  const missionLine = (x, coordinator) => {
+    if (!x.mission) return '';
+    const book = x.mission === 'auto' ? `The person said what they want help with in their own words. Pick the closest goal (or two) and follow its playbook:\n${Object.keys(MISSIONS).map((k) => '- ' + missionText(k)).join('\n')}` : `Their goal: ${missionText(x.mission)}`;
+    return coordinator ? `${book}\nIf a fact under “Find out first” is missing from the request, Company HQ and the team’s records, reply with one short question asking for the missing ones together (and no parts). Otherwise split the playbook’s “Prepare” list between the specialists whose job each piece is.` : `${book}\nPrepare your part of that list, each piece as its own change, and give the numbers to watch in your report.`;
+  };
   const pageLine = (pg) => (pg ? `The person is looking at: ${PAGE_KINDS[pg.kind]} “${pg.label}”${pg.id ? ` (id ${pg.id})` : ''}. When they say “this” or “here”, they mean it.` : '');
-  function newRun(ws, memberId, { agent, ask, title, workflow = null, scheduled = false, page = null, plan = false }) {
+  function newRun(ws, memberId, { agent, ask, title, workflow = null, scheduled = false, page = null, plan = false, mission = null }) {
+    const goal = MISSIONS[mission] || mission === 'auto' ? mission : null;
     const x = {
-      id: rid(), wsId: ws.id, memberId, agent, page: cleanPage(page), asPlan: !!plan, ask: cleanText(ask, MAX_TURN_CHARS), title: cleanText(title, 120) || cleanText(String(ask).split('\n')[0], 120),
+      id: rid(), wsId: ws.id, memberId, agent, page: cleanPage(page), asPlan: !!plan || !!goal, ...(goal ? { mission: goal } : {}), ask: cleanText(ask, MAX_TURN_CHARS), title: cleanText(title, 120) || cleanText(String(ask).split('\n')[0], 120),
       workflow, scheduled, status: 'requested', createdAt: Date.now(), parts: agent === 'team' ? [] : [{ id: rid(6), agent, ask: cleanText(ask, MAX_TURN_CHARS), status: 'planned', steps: [] }],
     };
     db.agentRuns[x.id] = x;
@@ -1344,7 +1401,7 @@ Reply with JSON only: {"summary":"one line on the plan","parts":[{"agent":"chief
     if (a !== 'agents') return null;
     const m = req.method;
     if (ws.settings?.tools?.agents === false) return send(res, 403, { error: 'Agents are switched off for this team.' });
-    if (m === 'GET' && !b) return send(res, 200, { agents: publicAgents(ws.id, auth.memberId), runs: runsOf(ws.id, auth.memberId).slice(0, 40).map(publicRun), levels: LEVELS, ai: hasAi(ws.id, auth.memberId) });
+    if (m === 'GET' && !b) return send(res, 200, { agents: publicAgents(ws.id, auth.memberId), runs: runsOf(ws.id, auth.memberId).slice(0, 40).map(publicRun), levels: LEVELS, ai: hasAi(ws.id, auth.memberId), missions: Object.entries(MISSIONS).map(([key, m]) => ({ key, name: m.name, start: m.start })) });
     // Settings for one agent: level, instructions, schedules, pause.
     if (b && AGENTS[b] && m === 'PATCH' && !c) {
       const body = await readJson(req, 20_000);
@@ -1377,7 +1434,7 @@ Reply with JSON only: {"summary":"one line on the plan","parts":[{"agent":"chief
       const ask = wf ? wf.ask + (wf.paste ? extra : extra ? `\n\nAlso: ${extra}` : '') : extra;
       if (!ask.trim() || (wf?.paste && !extra)) return send(res, 400, { error: wf?.paste ? 'Paste or describe it first.' : 'Say what you need.' });
       if (runsOf(ws.id, auth.memberId).filter((x) => ['requested', 'planning', 'running'].includes(x.status)).length >= 3) return send(res, 429, { error: 'Your team is busy with three assignments. Wait for one to finish.' });
-      const x = newRun(ws, auth.memberId, { agent, ask, title: wf ? wf.name + (extra && !wf.paste ? '' : '') : body.title, workflow: wf?.key || null, page: body.page, plan: body.plan === true });
+      const x = newRun(ws, auth.memberId, { agent, ask, title: wf ? wf.name + (extra && !wf.paste ? '' : '') : body.title, workflow: wf?.key || null, page: body.page, plan: body.plan === true, mission: typeof body.mission === 'string' ? body.mission : null });
       return send(res, 200, publicRun(x));
     }
     const x = b === 'runs' && c && db.agentRuns[c];

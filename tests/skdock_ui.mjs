@@ -91,7 +91,9 @@ try {
   const main = await A.ev(rect('#main'));
   ok(dock.w >= 380 && dock.r >= (await A.ev('innerWidth')) - 1 && main.r <= dock.l + 1, `at full size it sits on the right, beside the page (${JSON.stringify({ dock, main })})`);
   ok(await A.until(`document.querySelector('#skDock .skd-page')?.textContent.startsWith('Looking at')`), 'it says what you are looking at (your Day)');
-  ok(await A.ev(`[...document.querySelectorAll('#skDock .skd-chips .chip')].map((b) => b.textContent).join('|')`) === '✦ Plan my business|Plan my day|Plan a campaign|Plan my schedule|Plan my budget|Follow-up radar', 'with plans to start from: the team’s and the planners’');
+  ok(await A.until(`document.querySelector('#skDock .skd-q')?.textContent === 'How can Kloomie help you?'`), 'it asks: How can Kloomie help you?');
+  ok(await A.until(`[...document.querySelectorAll('#skDock .skd-goal')].map((b) => b.textContent).join('|') === 'Grow / scale|More leads & marketing|Run my operations|Get my time back|Money|My team'`), 'with six goals to start from');
+  ok(await A.ev(`[...document.querySelectorAll('#skDock .skd-chips .chip')].map((b) => b.textContent).join('|')`) === 'Plan my day|Plan a campaign|Plan my schedule|Plan my budget|Follow-up radar', 'and quick things below');
 
   // Ask: the team does it, and the assignment shows right there.
   await A.tap(`document.querySelector('#skDock .skd-ask')`);
@@ -109,14 +111,27 @@ try {
   await A.tap(`document.querySelector('#skDock .skd-page .linkish')`);
   ok(await A.until(`document.querySelector('#skDock .skd-page').classList.contains('off')`), 'the page can be left out of a question');
 
-  // Plan my business: the whole setup proposed as drafts, nothing changed until you say yes.
+  // A goal: its sentence to finish, then a plan where every change waits for a yes, with the goal's playbook.
   await A.tap(`document.querySelector('#skDock .skd-head [aria-label="Back to Sidekick"]')`).catch(() => {});
-  await A.until(`!!document.querySelector('#skDock .skd-chips')`);
-  await A.tap(`[...document.querySelectorAll('#skDock .skd-chips .chip')].find((b) => b.textContent.includes('Plan my business'))`);
-  ok(await A.until(`document.querySelector('#skDock .ag-run-h')?.textContent.includes('Plan my business')`, 8000), 'Plan my business opens as an assignment in the panel');
+  await A.until(`!!document.querySelector('#skDock .skd-goal')`);
+  await A.tap(`document.querySelector('#skDock .skd-goal[data-goal=grow]')`);
+  ok(await A.until(`document.querySelector('#skDock .skd-ask')?.value.startsWith('Help me grow from ___') && document.querySelector('#skDock .skd-go').textContent === 'Make my plan'`), 'Grow fills in its sentence to finish, and the button says Make my plan');
+  ok(await A.ev(`(() => { const t = document.querySelector('#skDock .skd-ask'); return document.activeElement === t && t.value.slice(t.selectionStart, t.selectionEnd) === '___'; })()`), 'with the first blank selected, ready to type over');
+  await A.key('Enter');
+  ok(await A.until(`[...document.querySelectorAll('.toast')].some((x) => x.textContent.includes('Fill in the blanks'))`), 'it won’t go with blanks left');
+  await A.ev(`(() => { const t = document.querySelector('#skDock .skd-ask'); t.value = 'Help me grow from $20k to $40k a month by June'; t.dispatchEvent(new Event('input')); return true; })()`);
+  await A.tap(`document.querySelector('#skDock .skd-go')`);
+  ok(await A.until(`document.querySelector('#skDock .ag-run-h')?.textContent.includes('Grow / scale')`, 8000), 'it opens as a Grow plan in the panel');
   ok(await A.until(`[...document.querySelectorAll('#skDock .ag-step')].some((x) => x.textContent.includes('Task from the panel')) && !!document.querySelector('#skDock .ag-step .primary-btn, #skDock .ag-note .primary-btn')`, 12000), 'its changes wait for a yes, with buttons to approve');
-  ok(asked.some((a) => a.msgs.includes('plan for the person to review') && a.msgs.includes('Plan my business')), 'the team is told it is a plan to review');
+  ok(asked.some((a) => a.msgs.includes('plan for the person to review') && /average job/i.test(a.msgs)), 'the team gets the Grow playbook');
+  // In their own words: reads like a goal, so it's a plan too.
   await A.tap(`document.querySelector('#skDock .skd-head [aria-label="Back to Sidekick"]')`);
+  await A.until(`!!document.querySelector('#skDock .skd-ask')`);
+  await A.ev(`(() => { const t = document.querySelector('#skDock .skd-ask'); t.focus(); t.value = 'Help me get more storefront customers'; t.dispatchEvent(new Event('input')); return true; })()`);
+  ok(await A.until(`document.querySelector('#skDock .skd-go').textContent === 'Make my plan'`), 'a goal in their own words gets Make my plan too');
+  await A.ev(`(() => { const t = document.querySelector('#skDock .skd-ask'); t.value = 'Sort the photos'; t.dispatchEvent(new Event('input')); return true; })()`);
+  ok(await A.until(`document.querySelector('#skDock .skd-go').textContent === 'Ask'`), 'a quick ask is just Ask');
+  await A.ev(`(() => { const t = document.querySelector('#skDock .skd-ask'); t.value = ''; t.dispatchEvent(new Event('input')); t.blur(); return true; })()`); // a real tap on a tab moves the cursor out too
 
   // It stays beside your work: a tool, Projects.
   await A.click('#tabs [data-tab=contacts]');

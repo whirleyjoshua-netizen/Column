@@ -5651,9 +5651,9 @@
     campaign: ['Start your first campaign', 'A launch, an outreach push, anything with a finish line. Sidekick can plan it with you.', () => { setTab('camps'); openCampaign(null); campaignSheet(); }],
     ai: ['Add your AI key', 'Your agents and Sidekick plan and draft for you, on your own Claude, OpenAI or Gemini key.', () => openSettings('connections', '.ai-sec')],
     hq: ['Tell Kloomie about your business', 'Read your website, or answer a few questions. Every AI feature then sounds like you.', () => openTool('hq')],
-    job: ['Add your first job', 'Put a real job in Jobs: who it’s for, where, and when you’re going.', () => showProjects()],
+    job: ['Add your first job', 'Put a real job in Projects: who it’s for, where, and when you’re going.', () => showProjects()],
     work: ['Add your first piece of work', 'A story, task or bug on your development board.', () => showProjects()],
-    agents: ['Give your agents a first job', 'Try “Plan my week” or “What’s working”. They do the work in your tasks, calendar and jobs.', () => agOpen('team')],
+    agents: ['Tell Kloomie what you want help with', 'Grow, get more leads, run your jobs, get your time back: Sidekick asks what it needs and lays out a plan for your yes.', () => openDock('home')],
   };
   function startSoon() {
     if (!S.start || Date.now() - (HM.startAt || 0) < 5_000) return;
@@ -16625,18 +16625,22 @@
   }
   // A page change (another tab, a job opened) redraws the “looking at” line.
   const dockPageChanged = () => { if (SKD.open && (SKD.view === 'home' || (SKD.view === 'plan' && !SK.open))) renderSkDock(); };
-  // Plan my business: the team proposes the whole setup as drafts to approve one by one (agents.js asPlan).
-  const BUSINESS_ASK = 'Plan my business. Use what you know about it (Company HQ: what we do, our customers, how we work, our goals) and look at what is already set up first, so nothing is added twice. Propose, as separate changes I can approve one by one: the projects to track our work (from a template, or a list of our own) if we don’t have them; the campaigns to bring in work, with goals; a weekly schedule of time blocks for me (selling, doing the work, admin); monthly budgets for our main costs and the recurring bills to track; and the first tasks to get it going. Then write it up as a one-page plan doc, including the automations worth setting up later. Where Company HQ is missing something our own records already show (what we sell, where we work), propose adding it to Company HQ. If you know too little about the business, say what to fill in under Company HQ first and keep the plan short.';
-  async function skdAsk(ask, workflow, agent = 'team', plan = false) {
+  // How can Kloomie help you? A goal (agents.js MISSIONS) gives the team its playbook: what to find out first, what to
+  // look at, what to prepare. Picking one fills in its sentence to finish; one in their own words counts as a goal
+  // when it reads like one. Either way it's a plan: every change waits for a yes.
+  const GOALISH = /\b(help me|grow|scale|more (leads|customers|clients|jobs|sales)|market|run my|operations|get paid|cash ?flow|my team|my crew|hire|my time|organi[sz]e my)\b/i;
+  async function skdAsk(ask, workflow, agent = 'team', plan = false, mission = null) {
     if (SKD.busy) return;
     SKD.busy = true;
     renderSkDock(true);
     try {
       const page = SKD.noPage ? null : skPage();
-      const x = await api('POST', '/agents/runs', { agent, ask, workflow, page, ...(plan ? { plan: true, title: 'Plan my business' } : {}) });
+      const goal = mission && AG.data?.missions?.find((m) => m.key === mission);
+      const x = await api('POST', '/agents/runs', { agent, ask, workflow, page, ...(plan ? { plan: true } : {}), ...(mission ? { mission, title: goal ? goal.name + ': ' + shortText(ask, 80) : shortText(ask, 100) } : {}) });
       if (!AG.data) await loadAgents();
       if (AG.data) agPut(x);
       SKD.draft = '';
+      SKD.mission = null;
       SKD.view = 'run:' + x.id;
     } catch (e) {
       if (/AI key|Settings → AI/.test(e.message)) toast(e.message, { label: 'Open Settings', run: () => openSettings('connections', '.ai') });
@@ -16648,12 +16652,16 @@
   function skdHome(pg) {
     const agentsOk = toolOn('agents');
     const noKey = AG.data && !AG.data.ai;
-    const ta = h('textarea', { class: 'skd-ask', rows: 3, placeholder: pg && !SKD.noPage ? `Ask about ${pg.label}, or anything: plan my week, follow up with quiet customers, organize this job…` : 'What do you need? Plan my week · Follow up with customers who went quiet · Organize a new job · Plan next month’s marketing', 'aria-label': 'Ask Sidekick' });
+    const ta = h('textarea', { class: 'skd-ask', rows: 3, placeholder: pg && !SKD.noPage ? `Ask about ${pg.label}, or tell Kloomie what you want help with` : 'Help me grow from $20k to $40k a month · Help me get more leads · Plan my day', 'aria-label': 'How can Kloomie help you?' });
     ta.value = SKD.draft;
-    ta.addEventListener('input', () => (SKD.draft = ta.value));
-    const go = h('button', { class: 'btn primary-btn skd-go', disabled: SKD.busy || noKey }, SKD.busy ? 'Sending…' : 'Ask');
-    go.addEventListener('click', () => (ta.value.trim() ? skdAsk(ta.value.trim()) : ta.focus()));
+    const goalOf = () => SKD.mission || (GOALISH.test(ta.value) ? 'auto' : null);
+    const go = h('button', { class: 'btn primary-btn skd-go', disabled: SKD.busy || noKey }, SKD.busy ? 'Sending…' : goalOf() ? 'Make my plan' : 'Ask');
+    ta.addEventListener('input', () => { SKD.draft = ta.value; if (!ta.value.trim()) SKD.mission = null; if (!SKD.busy) go.textContent = goalOf() ? 'Make my plan' : 'Ask'; });
+    go.addEventListener('click', () => { const t = ta.value.trim(); if (!t || /_{3}/.test(t)) return (ta.focus(), t && toast('Fill in the blanks first.')); const g = goalOf(); skdAsk(t, null, 'team', !!g, g); });
     ta.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); go.click(); } });
+    // A goal fills in its sentence; the first blank is selected, ready to type over.
+    const pickGoal = (m) => { SKD.mission = m.key; SKD.draft = m.start; renderSkDock(true); const t = $('#skDock .skd-ask'); if (t) { t.focus(); const i = t.value.indexOf('___'); if (i >= 0) t.setSelectionRange(i, i + 3); } };
+    const goals = agentsOk && AG.data?.missions ? h('div', { class: 'skd-goals' }, AG.data.missions.map((m) => h('button', { class: 'skd-goal' + (SKD.mission === m.key ? ' on' : ''), 'data-goal': m.key, disabled: SKD.busy || noKey, onclick: () => pickGoal(m) }, m.name))) : null;
     const chip = (label, run, on = true) => (on ? h('button', { class: 'chip', disabled: SKD.busy, onclick: run }, label) : null);
     const plan = (kind) => () => { SKD.view = 'plan'; SK.open = null; skStart(kind); };
     // Waiting for a yes first, then what you've worked on lately: assignments and plans together, newest first.
@@ -16665,9 +16673,11 @@
     ].sort((a, b) => b.at - a.at).slice(0, 12);
     return [
       noKey ? h('div', { class: 'ag-nokey' }, h('span', {}, 'Sidekick works on your own AI key. Add one first.'), h('button', { class: 'btn small primary-btn', onclick: () => openSettings('connections', '.ai') }, 'Add a key')) : null,
-      agentsOk ? h('div', { class: 'ag-box skd-box' }, ta, h('div', { class: 'ag-box-f' }, h('small', { class: 'day-hint' }, 'Your team does the work, and asks before anything important'), go)) : null,
+      agentsOk ? h('h3', { class: 'skd-q' }, 'How can Kloomie help you?') : null,
+      agentsOk ? h('div', { class: 'ag-box skd-box' }, ta, h('div', { class: 'ag-box-f' }, h('small', { class: 'day-hint' }, 'A goal becomes a plan: Kloomie asks what it needs, then you approve each piece'), go)) : null,
+      goals,
+      h('div', { class: 'skd-sub' }, 'Quick'),
       h('div', { class: 'skd-chips' },
-        chip('✦ Plan my business', () => skdAsk(BUSINESS_ASK, null, 'team', true), agentsOk),
         chip('Plan my day', () => skdAsk('', 'plan_day', 'chief'), agentsOk),
         chip('Plan a campaign', plan('campaign'), toolOn('sidekick')),
         chip('Plan my schedule', plan('schedule'), toolOn('sidekick')),
