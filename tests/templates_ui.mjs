@@ -47,15 +47,16 @@ try {
   await A.ev(`localStorage.setItem('column.token', JSON.stringify(${JSON.stringify(auth.token)})); location.reload(); true`).catch(() => {});
   ok(await A.until(`!document.querySelector('#app').classList.contains('hidden') && !!document.querySelector('#tabs [data-tab=work]')`, 15000), 'Ada is in');
   // Workspace → Tools → Templates.
-  await A.ev(`(document.querySelector('#tabs [data-tab=tools]') || document.querySelector('#workTabs [data-tab=tools]'))?.click(); true`);
-  if (!(await A.until(`!!document.querySelector('#tool [data-tool=templates]')`, 4000))) await A.ev(`document.querySelector('#tabs [data-tab=work]').click(); true`), await A.until(`!!document.querySelector('[data-tab=tools]')`), await A.ev(`document.querySelector('[data-tab=tools]').click(); true`);
-  ok(await A.until(`!!document.querySelector('#tool [data-tool=templates]')`), 'Templates is in Workspace → Tools');
-  await A.ev(`document.querySelector('#tool [data-tool=templates]').click(); true`);
-  ok(await A.until(`document.querySelector('#tool h2')?.textContent.startsWith('Templates') && document.querySelector('#tool').textContent.includes('None yet')`), 'it opens, empty to start');
-  ok(await A.ev(`[...document.querySelectorAll('#tool .tpl-kinds button')].map((b) => b.textContent).join('|')`) === 'All|Email|Text message|Reply|Social post|Paperwork', 'with kinds: email, text, reply, social post and paperwork');
-  ok(await A.ev(`!!document.querySelector('#tool [data-doc-tpl]') && document.querySelector('#tool').textContent.includes('Work order')`), 'the team’s doc templates show as paperwork');
+  await A.ev(`document.querySelector('#tabs [data-tab=work]').click(); true`);
+  await A.until(`!!document.querySelector('[data-tab=tools]')`);
+  await A.ev(`document.querySelector('[data-tab=tools]').click(); true`);
+  ok(await A.until(`!!document.querySelector('#split [data-tool=templates]')`), 'Templates is in Workspace → Tools');
+  await A.ev(`document.querySelector('#split [data-tool=templates]').click(); true`);
+  ok(await A.until(`document.querySelector('#split h2')?.textContent.startsWith('Templates') && document.querySelector('#split').textContent.includes('None yet')`), 'it opens, empty to start');
+  ok(await A.ev(`[...document.querySelectorAll('#split .tpl-kinds button')].map((b) => b.textContent).join('|')`) === 'All|Email|Text message|Reply|Social post|Paperwork', 'with kinds: email, text, reply, social post and paperwork');
+  ok(await A.ev(`!!document.querySelector('#split [data-doc-tpl]') && document.querySelector('#split').textContent.includes('Work order')`), 'the team’s doc templates show as paperwork');
   // Make an email template, with a word from the chips.
-  await A.ev(`[...document.querySelectorAll('#tool button')].find((b) => b.textContent === '+ New template').click(); true`);
+  await A.ev(`[...document.querySelectorAll('#split button')].find((b) => b.textContent === '+ New template').click(); true`);
   await A.until(`!!document.querySelector('#sheet .tpl-text')`);
   ok(await A.ev(`!document.querySelector('#sheet .tpl-subject').closest('label').hidden`), 'an email has a subject');
   await A.ev(`(() => { const s = document.querySelector('#sheet'); s.querySelector('.tpl-name').value = 'Quote follow-up'; s.querySelector('.tpl-when').value = 'A quote with no answer'; s.querySelector('.tpl-subject').value = 'Your quote for {record}'; const b = s.querySelector('.tpl-text'); b.value = 'Hi '; b.focus(); b.setSelectionRange(3, 3); return true; })()`);
@@ -66,34 +67,35 @@ try {
   ok(await A.ev(`document.querySelector('#sheet .tpl-subject').closest('label').hidden`), 'a text has no subject');
   await A.pick(`document.querySelector('#sheet .tpl-k')`, 'email');
   await A.ev(`document.querySelector('#sheet .primary-btn').click(); true`);
-  ok(await A.until(`[...document.querySelectorAll('#tool .tpl-card b')].some((b) => b.textContent === 'Quote follow-up')`), 'it’s in the library');
+  ok(await A.until(`[...document.querySelectorAll('#split .tpl-card b')].some((b) => b.textContent === 'Quote follow-up')`), 'it’s in the library');
   const saved = (await api('GET', '/msg-templates')).find((x) => x.name === 'Quote follow-up');
   ok(saved && saved.subject === 'Your quote for {record}' && saved.body === 'Hi {customer}, checking in on {record}.', 'saved with its subject and words');
   // Kinds and search.
-  await A.ev(`document.querySelector('#tool .tpl-kinds [data-kind=post]').click(); true`);
-  ok(await A.until(`!document.querySelector('#tool .tpl-card[data-tpl]')`), 'Social post shows none of the emails');
-  await A.ev(`document.querySelector('#tool .tpl-kinds [data-kind=all]').click(); true`);
-  await A.ev(`(() => { const q = document.querySelector('#tool .tpl-q'); q.value = 'nothing like it'; q.dispatchEvent(new Event('input')); return true; })()`);
-  ok(await A.until(`document.querySelector('#tool').textContent.includes('No templates match')`), 'search narrows it');
-  await A.ev(`(() => { const q = document.querySelector('#tool .tpl-q'); q.value = ''; q.dispatchEvent(new Event('input')); q.blur(); return true; })()`);
+  await A.ev(`document.querySelector('#split .tpl-kinds [data-kind=post]').click(); true`);
+  ok(await A.until(`!document.querySelector('#split .tpl-card[data-tpl]')`), 'Social post shows none of the emails');
+  await A.ev(`document.querySelector('#split .tpl-kinds [data-kind=all]').click(); true`);
+  await A.ev(`(() => { const q = document.querySelector('#split .tpl-q'); q.value = 'nothing like it'; q.dispatchEvent(new Event('input')); return true; })()`);
+  ok(await A.until(`document.querySelector('#split').textContent.includes('No templates match')`), 'search narrows it');
+  await A.ev(`(() => { const q = document.querySelector('#split .tpl-q'); q.value = ''; q.dispatchEvent(new Event('input')); q.blur(); return true; })()`);
   // Edit.
-  await A.until(`!!document.querySelector('#tool .tpl-card[data-tpl]')`);
-  await A.ev(`document.querySelector('#tool .tpl-card[data-tpl]').click(); true`);
+  await A.until(`!!document.querySelector('#split .tpl-card[data-tpl]')`);
+  await A.ev(`document.querySelector('#split .tpl-card[data-tpl]').click(); true`);
   await A.until(`document.querySelector('#sheet .tpl-name')?.value === 'Quote follow-up'`);
   await A.ev(`(() => { document.querySelector('#sheet .tpl-when').value = 'After a quote goes quiet'; document.querySelector('#sheet .primary-btn').click(); return true; })()`);
-  ok(await A.until(`document.querySelector('#tool').textContent.includes('After a quote goes quiet')`), 'editing it saves');
+  ok(await A.until(`document.querySelector('#split').textContent.includes('After a quote goes quiet')`), 'editing it saves');
   // Import from a file.
   const fp = S + '/dk/thanks-reply.txt';
   FS.writeFileSync(fp, 'Thanks so much for the review, {customer}!');
   await A.cmd('DOM.enable');
   const { root } = (await A.cmd('DOM.getDocument', { depth: -1, pierce: true })).result;
-  const { nodeId } = (await A.cmd('DOM.querySelector', { nodeId: root.nodeId, selector: '#tool input[type=file]' })).result;
+  const { nodeId } = (await A.cmd('DOM.querySelector', { nodeId: root.nodeId, selector: '#split input[type=file]' })).result;
   await A.cmd('DOM.setFileInputFiles', { nodeId, files: [fp] });
   ok(await A.until(`document.querySelector('#sheet .tpl-name')?.value === 'thanks-reply' && document.querySelector('#sheet .tpl-text').value.includes('{customer}')`), 'importing a file fills a new template with its words');
   await A.pick(`document.querySelector('#sheet .tpl-k')`, 'reply');
   await A.ev(`document.querySelector('#sheet .primary-btn').click(); true`);
-  ok(await A.until(`[...document.querySelectorAll('#tool .tpl-card b')].some((b) => b.textContent === 'thanks-reply')`), 'and saves it as a reply');
+  ok(await A.until(`[...document.querySelectorAll('#split .tpl-card b')].some((b) => b.textContent === 'thanks-reply')`), 'and saves it as a reply');
   // An automation's email step starts from a template.
+  await A.ev(`document.querySelector('#split [aria-label=Close], #split .icon-btn[aria-label^=Close]')?.click(); true`);
   await A.ev(`document.querySelector('#tabs [data-tab=automations]').click(); true`);
   await A.until(`[...document.querySelectorAll('#tool button')].some((b) => b.textContent === '+ New automation')`, 8000);
   await A.ev(`[...document.querySelectorAll('#tool button')].find((b) => b.textContent === '+ New automation').click(); true`);
