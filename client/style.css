@@ -3034,3 +3034,27 @@ button.as-count.warn { border-left-color: #ffb547; }
 /* Tasks' view switch: Week needs full size */
 body:not(.wide) .day-modes [data-view=week] { display: none; }
 body.wide .day-modes { align-self: flex-start; }
+/* Tasks: the month */
+.month { display: flex; flex-direction: column; min-height: 100%; padding: 0 8px 12px; }
+.mo-head { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); font-size: 11.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .03em; padding: 6px 0 4px; }
+.mo-head div { padding: 0 6px; }
+.mo-grid { flex: 1; display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); grid-auto-rows: minmax(96px, 1fr); border-top: 1px solid var(--line); border-left: 1px solid var(--line); }
+.mo-cell { min-width: 0; display: flex; flex-direction: column; gap: 2px; padding: 4px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); cursor: pointer; background: var(--panel); }
+.mo-cell.wkend { background: var(--bg); }
+.mo-cell.out .mo-num { color: var(--muted); opacity: .6; }
+.mo-cell.over { outline: 2px solid var(--accent); outline-offset: -2px; }
+.mo-num { align-self: flex-start; min-width: 24px; height: 24px; padding: 0 6px; border: 0; border-radius: 12px; background: none; color: var(--text); font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; }
+.mo-num:hover { background: var(--bg); }
+.mo-cell.today .mo-num { background: var(--accent); color: #fff; }
+.mo-chip { display: flex; gap: 4px; align-items: baseline; width: 100%; text-align: left; padding: 2px 6px; border: 0; border-radius: 5px; background: var(--bg); color: var(--text); font: inherit; font-size: 11.5px; cursor: pointer; overflow: hidden; }
+.mo-cell.wkend .mo-chip { background: var(--panel); }
+.mo-chip .mo-x { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.mo-chip .mo-t { flex: none; color: var(--muted); font-variant-numeric: tabular-nums; }
+.mo-chip.task { background: var(--accent-soft); }
+.mo-chip.done { text-decoration: line-through; color: var(--muted); }
+.mo-chip[draggable=true] { cursor: grab; }
+.mo-more { align-self: flex-start; border: 0; background: none; color: var(--accent); font: inherit; font-size: 11.5px; padding: 0 6px; cursor: pointer; }
+body:not(.wide) .month { padding: 0 2px 8px; }
+body:not(.wide) .mo-grid { grid-auto-rows: minmax(64px, 1fr); }
+body:not(.wide) .mo-chip { padding: 1px 3px; font-size: 10px; }
+body:not(.wide) .mo-chip .mo-t { display: none; }

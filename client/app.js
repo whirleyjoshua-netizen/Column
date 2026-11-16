@@ -3096,8 +3096,8 @@
     renderDay();
   }
   // Tasks' views. Week and Day are the schedule (D.sub 'schedule', D.view); List is the task list; Team is everyone.
-  const DAY_MODES = [['week', 'Week'], ['day', 'Day'], ['list', 'List'], ['team', 'Team']];
-  const dayMode = () => (D.sub === 'tasks' ? 'list' : D.sub === 'team' ? 'team' : weekOn() ? 'week' : 'day');
+  const DAY_MODES = [['month', 'Month'], ['week', 'Week'], ['day', 'Day'], ['list', 'List'], ['team', 'Team']];
+  const dayMode = () => (D.sub === 'tasks' ? 'list' : D.sub === 'team' ? 'team' : monthOn() ? 'month' : weekOn() ? 'week' : 'day');
   function setDayMode(v) {
     if (v === 'list') return setSub('tasks');
     if (v === 'team') return setSub('team');
@@ -3458,10 +3458,10 @@
     root.append(
       D.seg,
       D.head = h('div', { class: 'day-head' },
-        D.prevBtn = h('button', { class: 'icon-btn', 'aria-label': 'Previous day', html: I.left, onclick: () => goDay(addDays(D.date, weekOn() ? -7 : -1)) }),
+        D.prevBtn = h('button', { class: 'icon-btn', 'aria-label': 'Previous day', html: I.left, onclick: () => goDay(dayStep(-1)) }),
         h('div', { class: 'day-title-wrap' }, D.title, pick),
         D.todayBtn,
-        D.nextBtn = h('button', { class: 'icon-btn', 'aria-label': 'Next day', html: I.right, onclick: () => goDay(addDays(D.date, weekOn() ? 7 : 1)) }),
+        D.nextBtn = h('button', { class: 'icon-btn', 'aria-label': 'Next day', html: I.right, onclick: () => goDay(dayStep(1)) }),
       ),
       D.scroll,
       dayComposer()
@@ -3566,8 +3566,10 @@
     D.pick.value = k;
     D.todayBtn.classList.toggle('hidden', isToday);
     const week = weekOn();
-    D.prevBtn.ariaLabel = week ? 'Previous week' : 'Previous day';
-    D.nextBtn.ariaLabel = week ? 'Next week' : 'Next day';
+    const unit = monthOn() ? 'month' : week ? 'week' : 'day';
+    D.prevBtn.ariaLabel = 'Previous ' + unit;
+    D.nextBtn.ariaLabel = 'Next ' + unit;
+    if (monthOn()) return renderMonth(k);
     if (D.sub === 'team') return renderTeam(k);
     if (week) return renderWeek(k);
 
@@ -3669,6 +3671,69 @@
       const target = isToday ? nowMin() - 60 : first ? first.start - 30 : 8 * 60;
       D.scroll.scrollTop = tl.offsetTop + y(Math.max(h0 * 60, target)) - 8;
     } else D.scroll.scrollTop = keep;
+  }
+
+  // ----- the month: whole weeks, Sunday first, each day with what's on it -----
+  const monthOn = () => D.view === 'month' && D.sub === 'schedule';
+  // The arrows: a day, a week or a month (the same day of the month, or its last day).
+  function dayStep(dir) {
+    if (weekOn()) return addDays(D.date, 7 * dir);
+    if (!monthOn()) return addDays(D.date, dir);
+    const d = keyDate(D.date);
+    const to = new Date(d.getFullYear(), d.getMonth() + dir, 1);
+    to.setDate(Math.min(d.getDate(), new Date(to.getFullYear(), to.getMonth() + 1, 0).getDate()));
+    return dayKey(to);
+  }
+  const MO = { drag: null };
+  function renderMonth(k) {
+    const d0 = keyDate(k);
+    const first = dayKey(new Date(d0.getFullYear(), d0.getMonth(), 1));
+    const last = dayKey(new Date(d0.getFullYear(), d0.getMonth() + 1, 0));
+    const today = todayKey();
+    const start = weekStart(first);
+    const days = [];
+    for (let d = start; d <= last || days.length % 7; d = addDays(d, 1)) days.push(d);
+    D.title.replaceChildren(h('b', {}, d0.toLocaleDateString(undefined, { month: 'long' })), ' ', h('span', {}, String(d0.getFullYear())));
+    D.todayBtn.classList.toggle('hidden', today >= first && today <= last);
+    const openDay = (d) => { D.view = 'day'; store.set('dayView', 'day'); goDay(d); };
+    const move = (d) => {
+      const x = MO.drag;
+      MO.drag = null;
+      if (!x || x.from === d) return;
+      if (x.task) return patchTask(x.task, { due: d });
+      patchEntry(x.entry, { date: d });
+    };
+    const chip = (x) => {
+      const b = h('button', { class: 'mo-chip' + (x.task ? ' task' : '') + (x.done ? ' done' : '') + (x.color ? ' c-' + x.color : ''), title: x.text, onclick: (ev) => { ev.stopPropagation(); x.open(); } },
+        x.start != null ? h('span', { class: 'mo-t' }, fmtTime(x.start)) : null, h('span', { class: 'mo-x' }, x.text));
+      if (x.move) {
+        b.draggable = true;
+        b.addEventListener('dragstart', (ev) => { MO.drag = x.move; ev.dataTransfer.effectAllowed = 'move'; ev.dataTransfer.setData('text/plain', x.text); });
+        b.addEventListener('dragend', () => { document.querySelectorAll('.mo-cell.over').forEach((c) => c.classList.remove('over')); });
+      }
+      return b;
+    };
+    const cells = days.map((d) => {
+      const entries = entriesOn(d).sort((a, b) => (a.start ?? 9999) - (b.start ?? 9999) || a.createdAt - b.createdAt);
+      const due = S.tasks.filter((t) => !t.done && forMe(t) && t.due === d && !entries.some((e) => e.taskId === t.id));
+      const list = [
+        ...entries.map((e) => ({ text: e.text, start: e.start, done: e.done, color: e.start != null && e.end != null ? e.color || 'violet' : null, open: () => openSheet(e), move: !e.repeat && !e.visitId ? { entry: e, from: d } : null })),
+        ...due.map((t) => ({ text: t.text, task: true, open: () => openSheet({ text: t.text, taskId: t.id, date: d }), move: { task: t, from: d } })),
+        ...billsDueOn(d).map((b) => ({ text: '💵 ' + b.name, open: () => openTool('bills') })),
+      ];
+      const kd = keyDate(d);
+      const cell = h('div', { class: 'mo-cell' + (d === today ? ' today' : '') + (d < first || d > last ? ' out' : '') + (kd.getDay() === 0 || kd.getDay() === 6 ? ' wkend' : ''), 'data-date': d },
+        h('button', { class: 'mo-num', title: 'Open ' + dayName(d), onclick: (ev) => { ev.stopPropagation(); openDay(d); } }, String(kd.getDate())),
+        ...list.slice(0, 3).map(chip),
+        list.length > 3 ? h('button', { class: 'mo-more', onclick: (ev) => { ev.stopPropagation(); openDay(d); } }, `+${list.length - 3} more`) : null);
+      cell.addEventListener('click', () => openSheet({ date: d }));
+      cell.addEventListener('dragover', (ev) => { if (!MO.drag) return; ev.preventDefault(); cell.classList.add('over'); });
+      cell.addEventListener('dragleave', () => cell.classList.remove('over'));
+      cell.addEventListener('drop', (ev) => { ev.preventDefault(); cell.classList.remove('over'); move(d); });
+      return cell;
+    });
+    const names = Array.from({ length: 7 }, (_, i) => keyDate(addDays(start, i)).toLocaleDateString(undefined, { weekday: 'short' }));
+    D.scroll.replaceChildren(h('div', { class: 'month' }, h('div', { class: 'mo-head' }, names.map((n) => h('div', {}, n))), h('div', { class: 'mo-grid', style: `--weeks:${days.length / 7}` }, cells)));
   }
 
   // ----- the week (full size): seven days side by side on one timeline, Sunday first -----
