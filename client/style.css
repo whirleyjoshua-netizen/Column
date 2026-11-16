@@ -278,6 +278,18 @@ body.wide .dv-tree.folded { width: 44px; padding: 10px 4px; align-items: center;
 .fin-dash { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 20px; align-items: start; margin-top: 4px; }
 .fin-col { min-width: 0; padding: 14px 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); }
 .fin-col > h3:first-child { margin-top: 0; }
+/* Full size: grids instead of one long column. */
+body.wide #settings:not(.hidden) { display: grid; grid-template-columns: repeat(auto-fill, minmax(440px, 1fr)); column-gap: 32px; align-content: start; align-items: start; }
+body.wide #settings > h2, body.wide #settings > .set-tabs, body.wide #settings > .auto-moved { grid-column: 1 / -1; }
+body.wide #settings .set-tabs { max-width: 720px; }
+body.wide #tool .ag-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 10px; }
+body.wide #tool .ag-runs { display: grid; grid-template-columns: repeat(auto-fill, minmax(420px, 1fr)); gap: 6px 12px; }
+/* Docs side by side, unless one is opened to show the pages inside it (then the tree reads top to bottom). */
+body.wide #tool .docs-list:not(:has(.doc-arrow.open)) { display: grid; grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); gap: 0 20px; }
+body.wide #tool .docs-list > :not(.doc-row) { grid-column: 1 / -1; }
+body.wide #tool .dir-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 0 16px; }
+body.wide #tool .auto-recipes { grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }
+body.wide #tool .auto-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(460px, 1fr)); gap: 8px 14px; }
 /* The desktop app: the window is dragged by the top of the toolbar; on a Mac its buttons sit above it. */
 body.desktop #side .side-top { -webkit-app-region: drag; }
 body.desktop #side .side-top button { -webkit-app-region: no-drag; }
@@ -286,9 +298,10 @@ body.desktop.platform-darwin #side .side-top { padding-top: 34px; }
 body.wide .docview, body.wide .projects { left: var(--side-w); }
 body.wide.platform-darwin .dv-bar, body.wide.platform-darwin .pj-head, body.wide.platform-darwin .pj-top { padding-left: 16px; }
 /* Settings and tools fill the page beside the sidebar, with the writing kept to a readable width. */
-body.wide .settings:not(.side) { padding-left: max(24px, calc((100% - 920px) / 2)); padding-right: max(24px, calc((100% - 920px) / 2)); }
-/* Tools that are tables or dashboards (Contacts, Finance) use the width, up to a comfortable 1400px. */
-body.wide .settings.tool.wide-tool:not(.side) { padding-left: max(24px, calc((100% - 1400px) / 2)); padding-right: max(24px, calc((100% - 1400px) / 2)); }
+/* Settings and tools use the page at full size (the owner, 2026-11-16): no middle column; long text keeps a readable
+   line, and lists become grids where that reads better. */
+body.wide .settings:not(.side) { padding: 22px 32px 40px; }
+body.wide .settings:not(.side) p, body.wide .settings:not(.side) .day-hint { max-width: 900px; }
 
 .chips { display: flex; gap: 4px; padding: 7px 8px; overflow-x: auto; scrollbar-width: none; flex: none; border-bottom: 1px solid var(--line); }
 .chips::-webkit-scrollbar { display: none; }
@@ -1353,6 +1366,7 @@ body.viewer .preview pre, body.viewer .preview .pv-edit, body.viewer .preview .d
 /* Home */
 .home-wrap { flex: 1; min-height: 0; overflow-y: auto; }
 .home { max-width: 1180px; margin: 0 auto; padding: 18px 16px 40px; }
+body.wide .home { max-width: none; padding: 22px 32px 40px; }
 .home-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
 .home-top h1 { font-size: 24px; font-weight: 700; letter-spacing: -0.02em; margin: 0 0 4px; }
 .home-sub { margin: 0; color: var(--muted); font-size: 13.5px; }
