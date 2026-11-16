@@ -5217,11 +5217,11 @@
   }
   const AUTO_DO = { task: 'Make a task', post: 'Post in a feed', campaign: 'Start a saved campaign', notify: 'Notify people', contact: 'Change the contact', record: 'Change the job or record', create: 'Add a job or record',
     visit: 'Book a visit on the job', invoice: 'Bill the job (an invoice)', text: 'Text the customer (after an OK)', email: 'Email the customer (after an OK)', money: 'Add money to Finance', doc: 'Write a doc from a template',
-    vault: 'Put a sealed note in a vault', webhook: 'Send to another app (a web address)' };
+    vault: 'Put a sealed note in a vault', webhook: 'Send to another app (a web address)', agent: 'Ask your team (AI)' };
   const AUTO_KEYS = { list: null };
   // Who may pick which (the server checks the same): billing and messaging customers are for owners and admins, the
   // business's money for owners.
-  const autoDoOk = (k) => (k === 'money' ? amOwner() : ['invoice', 'text', 'email', 'webhook'].includes(k) ? amAdmin() : true);
+  const autoDoOk = (k) => (k === 'money' ? amOwner() : ['invoice', 'text', 'email', 'webhook'].includes(k) ? amAdmin() : k === 'agent' ? toolOn('agents') : true);
   // The fields an automation can set (the server checks the same): plain values, never price lines or files.
   const AUTO_SET_T = ['text', 'number', 'money', 'date', 'select', 'multi', 'checkbox', 'person', 'email', 'phone', 'url'];
   const AUTO_WORDS = {
@@ -5448,7 +5448,8 @@
       }
       const words = (AUTO_WORDS[t.kind] || []).map((w) => `{${w}}`).join(' ');
       // A step: an action, a wait, or "only if" with its own steps (and "otherwise"), in the list it's in.
-      const fields = ['amount', ...(AUTO_WORDS[t.kind] || [])].filter((v, n, all) => all.indexOf(v) === n);
+      const answers = allSteps(dr.actions).some((y) => y.kind === 'agent' && y.wait);
+      const fields = ['amount', ...(AUTO_WORDS[t.kind] || []), ...(answers ? ['answer'] : [])].filter((v, n, all) => all.indexOf(v) === n);
       const countSteps = (list) => list.reduce((n, s) => n + 1 + (s.kind === 'if' ? countSteps(s.then || []) + countSteps(s.else || []) : 0), 0);
       const roomForMore = () => countSteps(dr.actions) < 20;
       const newStep = () => ({ kind: 'notify', text: '', to: [] });
@@ -5498,6 +5499,7 @@
             : k.value === 'doc' ? { kind: 'doc', templateId: DT.list?.[0]?.id || '', title: '' }
             : k.value === 'vault' ? { kind: 'vault', to: 'maker', title: '', text: '' }
             : k.value === 'webhook' ? { kind: 'webhook', url: '', secretId: null }
+            : k.value === 'agent' ? { kind: 'agent', agent: 'team', ask: '', wait: false }
             : { kind: k.value, text: a.text || '', to: [], channelId: 'same' };
           draw();
         });
@@ -5617,6 +5619,18 @@
           f.push(h('label', {}, 'Template', sel), h('label', {}, 'Title', title),
             h('small', { class: 'hint' }, tpls.length || !DT.list ? 'A new doc from the template, for the whole team, by this automation.' : 'Save a doc as a template first (open a doc, ⋯ → Save as a team template).'));
         }
+        if (a.kind === 'agent') {
+          if (!AG.data && !AG.loading) { AG.loading = true; api('GET', '/agents').then((d) => { AG.data = d; if (box.isConnected) draw(); }).catch(() => {}).finally(() => (AG.loading = false)); }
+          const who = h('select', { class: 'auto-agent-who', 'aria-label': 'Who to ask' }, opt('team', 'Your team (the Chief of Staff hands it out)', a.agent), Object.entries(AG.data?.agents || {}).map(([key, y]) => opt(key, `${y.icon || ''} ${y.name}`.trim(), a.agent)));
+          who.addEventListener('change', () => (a.agent = who.value));
+          const ask = h('textarea', { rows: 3, placeholder: 'A new lead came in: {contact}. Look them up and draft a first reply.', class: 'auto-agent-ask' }, a.ask || '');
+          ask.addEventListener('input', () => (a.ask = ask.value));
+          const cb = h('input', { type: 'checkbox', checked: !!a.wait, class: 'auto-agent-wait' });
+          cb.addEventListener('change', () => { a.wait = cb.checked; draw(); });
+          f.push(h('label', {}, 'Ask', who), h('label', {}, 'What to ask', ask), h('label', { class: 'pick' }, cb, 'Wait for the answer, then go on with {answer}'),
+            AG.data && !AG.data.ai ? h('small', { class: 'hint err' }, 'Add your AI key (Settings → AI) first: your team works on it.') : null,
+            h('small', { class: 'hint' }, `Your own agents, on your AI key, at the level you set for each in Your team: anything important waits for your yes there. They’re told an automation asked.${a.wait ? ' The steps after this wait until it’s done (up to 30 minutes).' : ''}`));
+        }
         if (a.kind === 'vault') {
           const to = h('select', { class: 'auto-vault-to', 'aria-label': 'Whose vault' }, opt('maker', 'Mine (who made this)', a.to || 'maker'), opt('who', 'Whoever set it off', a.to || 'maker'), people.map((m) => opt(m.id, m.name, a.to || 'maker')));
           to.addEventListener('change', () => (a.to = to.value));
@@ -5726,7 +5740,7 @@
         h('div', { class: 'auto-canvas' },
           h('div', { class: 'auto-step auto-trigger' + (B.lit ? ' lit' : '') }, h('div', { class: 'auto-step-h' }, 'When'), h('label', {}, '', kind), ...only),
           h('div', { class: 'auto-step auto-flow' }, h('div', { class: 'auto-step-h' }, 'Then'), stepList(dr.actions, 0))),
-        words ? h('div', { class: 'auto-words' }, h('span', {}, 'Words that fill themselves in:'), (AUTO_WORDS[t.kind] || []).map((w) => h('button', { class: 'auto-word', title: `Put {${w}} where the cursor is`, onmousedown: (e) => e.preventDefault(), onclick: () => putWord(w) }, `{${w}}`))) : null);
+        words || answers ? h('div', { class: 'auto-words' }, h('span', {}, 'Words that fill themselves in:'), [...(AUTO_WORDS[t.kind] || []), ...(answers ? ['answer'] : [])].map((w) => h('button', { class: 'auto-word', title: `Put {${w}} where the cursor is`, onmousedown: (e) => e.preventDefault(), onclick: () => putWord(w) }, `{${w}}`))) : null);
     };
     draw();
     sheet(x ? `Automation · ${x.name}` : recipe ? recipe.name : 'New automation', [box], async () => {

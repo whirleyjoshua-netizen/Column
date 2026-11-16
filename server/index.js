@@ -3101,7 +3101,9 @@ const AUTO_TRIGGERS = FL.EVENTS.map((e) => e.type);
 // visit, make (and send) an invoice, text or email the customer, add the business's money, write a doc from a template.
 // Step 4: drop a sealed note into a person's vault, and send what happened to another app (a web address, with a key
 // from the team's sealed automation keys).
-const AUTO_ACTIONS = ['task', 'post', 'campaign', 'notify', 'contact', 'record', 'create', 'visit', 'invoice', 'text', 'email', 'money', 'doc', 'vault', 'webhook'];
+// Step 5: ask one of the maker's agents (or the whole team), and maybe wait for the answer ({answer} after it).
+const AUTO_ACTIONS = ['task', 'post', 'campaign', 'notify', 'contact', 'record', 'create', 'visit', 'invoice', 'text', 'email', 'money', 'doc', 'vault', 'webhook', 'agent'];
+const AGENT_WAIT_MS = 30 * 60_000, AGENT_BUSY = 3;
 const AUTO_RUNS = 30;
 const AUTO_MAX = 50;
 // Set while an automation's own work runs, through every await of the routes it calls: what it does sets nothing off.
@@ -3163,6 +3165,7 @@ function applyAutomation(x, body, ws) {
       if (a.kind === 'contact' && !a.stage && !a.tag) throw badRequest('Pick a stage or a tag for the contact.');
       if (a.kind === 'text' && !a.text) throw badRequest('Write the text.');
       if (a.kind === 'vault' && !a.text) throw badRequest('Write what goes in the vault.');
+      if (a.kind === 'agent' && !a.ask) throw badRequest('Write what to ask.');
       if (a.kind === 'email' && (!a.subject || !a.text)) throw badRequest('Write the email’s subject and message.');
     }
     // Runs waiting in the old steps would go on from the wrong place: they're dropped.
@@ -3205,6 +3208,12 @@ function cleanAction(a, ws, who) {
     if (n != null && !(n > 0 && n <= 1e9)) throw badRequest('The amount is a number of dollars, like 250, or leave it empty to use the {amount} of what set it off.');
     return { kind, direction: a.direction === 'in' ? 'in' : 'out', amount: n == null ? null : Math.round(n * 100) / 100, category: cleanText(a.category, 40), note: cleanText(a.note, 200) };
   }
+  if (kind === 'agent') {
+    if (ws.settings?.tools?.agents === false) throw badRequest('Your team (agents) is switched off for this team.');
+    const agent = a.agent === 'team' || AGENTS_M.AGENTS[a.agent] ? a.agent : null;
+    if (!agent) throw badRequest('Pick who to ask.');
+    return { kind, agent, ask: String(a.ask ?? '').replace(/\r\n?/g, '\n').trim().slice(0, 2000), wait: !!a.wait };
+  }
   if (kind === 'vault') {
     const to = a.to === 'who' || a.to === 'maker' ? a.to : ws.members.some((m) => m.id === a.to) ? a.to : 'maker';
     return { kind, to, title: cleanText(a.title, 120), text: String(a.text ?? '').replace(/\r\n?/g, '\n').trim().slice(0, 5000) };
@@ -3243,7 +3252,7 @@ function autoVars(ctx, wsId) {
   return { task: ctx.task?.text, campaign: ctx.campaign?.name, contact: ctx.contact ? ctx.contact.name || ctx.contact.company || ctx.contact.email || ctx.contact.phone : '', file: ctx.file?.name,
     from: ctx.from, who: ctx.who, stage: ctx.stageLabel || (ctx.stage ? stageLabel(ctx.stage) : ''), outcome: ctx.outcome, document: ctx.document, note: ctx.note, date: ctx.date || teamDay(wsId),
     record: ctx.recordName, project: ctx.project?.name, list: ctx.list?.name, customer: ctx.customer, amount: ctx.amount != null ? '$' + Number(ctx.amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '',
-    invoice: ctx.invoice, time: ctx.time, crew: ctx.crew, phone: ctx.phone, text: ctx.text, doc: ctx.doc, pin: ctx.pin, category: ctx.category, status: ctx.status };
+    invoice: ctx.invoice, time: ctx.time, crew: ctx.crew, phone: ctx.phone, text: ctx.text, doc: ctx.doc, pin: ctx.pin, category: ctx.category, status: ctx.status, answer: ctx.answer };
 }
 function autoMatches(t, ctx) {
   if (t.campaignId && ctx.campaign?.id !== t.campaignId && ctx.campaign?.parentId !== t.campaignId) return false;
@@ -3421,6 +3430,12 @@ async function execSteps(x, ctx, stack, i, log) {
     const s = list[i];
     log.path?.push(stepAt(stack, i));
     if (s.kind === 'wait') return { wait: { stack, i: i + 1, ms: s.amount * WAIT_UNITS[s.unit], label: `${s.amount} ${s.amount === 1 ? s.unit.slice(0, -1) : s.unit}` } };
+    if (s.kind === 'agent') {
+      const r = agentStep(x, s, ctx);
+      log.push(r.said);
+      if (s.wait && r.runId) return { wait: { stack, i: i + 1, ms: AGENT_WAIT_MS, label: `for ${r.name}’s answer`, agentRun: r.runId } };
+      continue;
+    }
     if (s.kind === 'if') {
       const yes = autoWhen(s.when, ctx, x.wsId);
       log.push(`${yes ? 'Yes' : 'No'}: ${whenText(s.when)}`);
@@ -3443,7 +3458,7 @@ async function resumeSteps(x, ctx, stack, i, log) {
   return r;
 }
 // What a waiting run keeps: what it's about, by id, and the words as they were.
-const CTX_WORDS = ['who', 'whoId', 'from', 'stage', 'stageLabel', 'outcome', 'document', 'note', 'date', 'recordName', 'customer', 'amount', 'invoice', 'time', 'crew', 'phone', 'text', 'doc', 'pin', 'category', 'status', 'direction', 'private', 'ownersOnly'];
+const CTX_WORDS = ['answer', 'who', 'whoId', 'from', 'stage', 'stageLabel', 'outcome', 'document', 'note', 'date', 'recordName', 'customer', 'amount', 'invoice', 'time', 'crew', 'phone', 'text', 'doc', 'pin', 'category', 'status', 'direction', 'private', 'ownersOnly'];
 function ctxSnap(ctx) {
   const out = { ids: { task: ctx.task?.id, campaign: ctx.campaign?.id, contact: ctx.contact?.id || null, contactName: ctx.contact && !ctx.contact.id ? ctx.contact.name || '' : null, file: ctx.file?.id, project: ctx.project?.id, list: ctx.list?.id, record: ctx.record?.id } };
   for (const k of CTX_WORDS) if (ctx[k] !== undefined && ctx[k] !== null) out[k] = ctx[k];
@@ -3461,7 +3476,7 @@ function waitFor(x, ctx, w, log) {
   const mine = Object.values(db.flowWaits).filter((y) => y.autoId === x.id).length;
   const team = Object.values(db.flowWaits).filter((y) => y.wsId === x.wsId).length;
   if (mine >= WAITS_PER || team >= WAITS_TEAM) return log.push(`didn’t wait: ${mine >= WAITS_PER ? `${WAITS_PER} runs of it are already waiting` : 'the team has too many runs waiting'}`), false;
-  const y = { id: rid(), wsId: x.wsId, autoId: x.id, stack: w.stack, i: w.i, at: Date.now() + w.ms * FLOW_SCALE, startedAt: Date.now(), ctx: ctxSnap(ctx), about: autoAbout(ctx) };
+  const y = { id: rid(), wsId: x.wsId, autoId: x.id, stack: w.stack, i: w.i, at: Date.now() + w.ms * FLOW_SCALE, startedAt: Date.now(), ctx: ctxSnap(ctx), about: autoAbout(ctx), ...(w.agentRun ? { agentRun: w.agentRun } : {}) };
   db.flowWaits[y.id] = y;
   log.push(`waits ${w.label}`);
   return true;
@@ -3471,18 +3486,22 @@ const autoAbout = (ctx) => clipText([ctx.recordName, ctx.contact?.name, ctx.task
 const publicWait = ({ wsId, ctx, stack, i, ...w }) => w;
 function runWaits(now) {
   for (const w of Object.values(db.flowWaits)) {
-    if (w.at > now) continue;
+    const run = w.agentRun ? AGENTS_M.runOf(w.agentRun) : null;
+    const answered = !!w.agentRun && (!run || !['requested', 'planning', 'running'].includes(run.status));
+    if (w.at > now && !answered) continue;
     delete db.flowWaits[w.id];
     const x = db.automations[w.autoId];
     if (!x) continue;
     if (!x.on || offline(x.wsId)) { autoLog(x, false, `A run waiting since ${new Date(w.startedAt).toISOString().slice(0, 10)} was dropped: it was off`); continue; }
     const ctx = ctxBack(w.ctx);
+    if (w.agentRun) ctx.answer = answered && run ? agentAnswer(run) : '';
     // Still allowed? Something may have become private while it waited.
     const priv = !!(ctx.private || ctx.campaign?.private || ctx.project?.private);
     const mine = (x.trigger.campaignId && x.trigger.campaignId === (ctx.campaign?.parentId || ctx.campaign?.id) && seesCampaign(x.trigger.campaignId, x.memberId)) || (x.trigger.projectId && x.trigger.projectId === ctx.project?.id && PJ.sees(ctx.project, x.memberId));
     if ((priv && !mine) || (ctx.ownersOnly && !isOwnerId(x.wsId, x.memberId))) { autoLog(x, false, 'A waiting run was dropped: what it’s about is private now'); continue; }
     const log = [];
     log.path = [];
+    if (w.agentRun) log.push(answered ? (ctx.answer ? 'Got the answer' : 'The agent finished with no answer') : 'The agent didn’t answer in 30 minutes; went on without it');
     FLOWING.run({ autoId: x.id }, async () => {
       try {
         const r = await resumeSteps(x, ctx, w.stack, w.i, log);
@@ -3536,6 +3555,7 @@ function autoDescribe(x, a, ctx, ws) {
     case 'money': return `Add ${a.amount != null ? dollars(a.amount) : ctx.amount != null ? dollars(ctx.amount) : 'the {amount}'} ${a.direction === 'in' ? 'in' : 'out'} to Finance`;
     case 'doc': return `Write the doc “${fill(a.title) || db.docTemplates[a.templateId]?.name || 'from the template'}”`;
     case 'vault': return `Put a sealed note in ${a.to === 'maker' ? (nameOf(x.memberId) || 'your') + '’s' : a.to === 'who' ? (ctx.who || 'whoever set it off') + '’s' : (nameOf(a.to) || 'someone') + '’s'} vault`;
+    case 'agent': return `Ask ${agentName(a.agent)}: “${fill(a.ask)}”${a.wait ? ', and wait for the answer ({answer})' : ''}`;
     case 'webhook': { let host = a.url; try { host = new URL(a.url).host; } catch {} return `Send what happened to ${host}${a.secretId ? ', with its key' : ''}`; }
     default: return a.kind;
   }
@@ -3554,6 +3574,31 @@ function dryRun(x, ctx, ws, stack, out) {
     out.push({ at, said: autoDescribe(x, s, ctx, ws) });
   }
   return out;
+}
+
+// ---------- Flows, step 5: one of the maker's agents as a step ----------
+// The maker's own agent (or their whole team), on the maker's AI key, at the level the maker set for it: what it
+// would change follows that (important things always wait for their yes in Your team). It's told what happened (the
+// ask with the words filled in) and that an automation asked. What it does sets nothing off either (it runs inside
+// FLOWING). With "wait for the answer", the steps after it go on once it's done (up to 30 minutes), with {answer}.
+const agentName = (agent) => (agent === 'team' ? 'Your team' : AGENTS_M.AGENTS[agent]?.name || 'the agent');
+function agentAnswer(run) {
+  const said = run.parts.map((p) => p.report).filter(Boolean).join('\n\n') || run.question || '';
+  return clipText(said, 2000);
+}
+function agentStep(x, a, ctx) {
+  const ws = db.workspaces[x.wsId];
+  const name = agentName(a.agent);
+  if (!memberIn(ws.id, x.memberId)) throw new Error('its maker isn’t on the team any more');
+  if (ws.settings?.tools?.agents === false) throw new Error('Your team (agents) is switched off');
+  if (!aiUse(aiOf(ws.id, x.memberId))) throw new Error(`${memberIn(ws.id, x.memberId).name} has no AI key set (Settings → AI), so ${name} can’t work`);
+  const busy = Object.values(db.agentRuns || {}).filter((r) => r.wsId === ws.id && r.memberId === x.memberId && ['requested', 'planning', 'running'].includes(r.status)).length;
+  if (busy >= AGENT_BUSY) return { said: `Didn’t ask ${name}: ${busy} assignments are already running` };
+  const ask = autoFill(a.ask, ctx, ws.id);
+  const event = FL.EVENT[x.trigger.kind]?.label || 'something happened';
+  const run = AGENTS_M.newRun(ws, x.memberId, { agent: a.agent, ask: `${ask}\n\n(Asked by the automation “${x.name}”, when: ${event.toLowerCase()}.)`, title: `${x.name}: ${clipText(ask.split('\n')[0], 80)}` });
+  run.byFlow = x.name;
+  return { said: `Asked ${name}${a.wait ? ', waiting for the answer' : ''}`, runId: run.id, name };
 }
 
 // ---------- Flows, step 3: actions in every tool, through the app's own routes ----------

@@ -1534,5 +1534,5 @@ Reply with JSON only: {"summary":"one line on the plan","parts":[{"agent":"chief
     }
     return send(res, 405, { error: 'Method not allowed' });
   }
-  return { route, AGENTS, prefsOf, tick };
+  return { route, AGENTS, prefsOf, tick, newRun, runOf: (id) => db.agentRuns[id] || null };
 }

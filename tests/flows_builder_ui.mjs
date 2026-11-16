@@ -57,6 +57,12 @@ try {
   await A.fill(`document.querySelector('#sheet .auto-edit input')`, 'Sort leads');
   const top = `document.querySelector('#sheet .auto-flow > .auto-steps')`;
   const acts = (list) => `[...${list}.children].filter((x) => x.classList.contains('auto-act'))`;
+  // Asking your team: who, what, and waiting adds {answer} to the words (and to what "Only if" can check).
+  await A.pick(`${acts(top)}[0].querySelector('.auto-step-kind')`, 'agent');
+  ok(await A.until(`!!document.querySelector('#sheet .auto-agent-who') && [...document.querySelector('#sheet .auto-agent-who').options].length >= 5`), '“Ask your team” lists Your team and each agent');
+  ok(await A.ev(`![...document.querySelectorAll('#sheet .auto-word')].some((b) => b.textContent === '{answer}')`), 'no {answer} until it waits');
+  await A.ev(`(() => { const c = document.querySelector('#sheet .auto-agent-wait'); c.checked = true; c.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
+  ok(await A.until(`[...document.querySelectorAll('#sheet .auto-word')].some((b) => b.textContent === '{answer}')`), 'waiting for the answer adds {answer} to the words');
   // Step 1: a task, empty → marked red.
   await A.pick(`${acts(top)}[0].querySelector('.auto-step-kind')`, 'task');
   ok(await A.until(`${acts(top)}[0].classList.contains('bad') && /1 step needs something/.test(document.querySelector('#sheet .auto-probs')?.textContent || '')`), 'an empty step is marked red, and the bar counts it');

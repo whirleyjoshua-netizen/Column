@@ -98,6 +98,17 @@ Each step: server tests that fail on the code before, and real-browser tests (he
     nothing.
   - Each run keeps the way it went (`run.path`: "0", "1.then.0"…), and "Show a past run" lights it on the canvas.
   - Tests: `tests/flows_builder.mjs` (CI) and `tests/flows_builder_ui.mjs` (Chrome).
-- Next, the rest of step 5: agents as steps (in agents.js, after checking with column-91) and ready-made flows for
-  each trade.
+- The visual builder is live as 3e6e5b7.
+- Agents as steps (step 5) are built:
+  - "Ask your team (AI)" asks the maker's own agent, or their whole team, on the maker's AI key, through
+    `AGENTS_M.newRun`. It works at the level the maker set for that agent, so anything important waits for their yes
+    in Your team.
+  - The agent is told what happened (the ask, with the words filled in) and that an automation asked. Its work runs
+    inside `FLOWING`, so it sets no automation off.
+  - With "wait for the answer", the run waits (`flowWaits` with `agentRun`) until the assignment is done, up to 30
+    minutes. The steps after it then get `{answer}`, the agents' reports. If it takes longer they go on without it
+    and say so.
+  - No AI key: it fails and says so. At most 3 of the maker's assignments run at once.
+  - Tests: `tests/flows_agent.mjs` (CI, with a stand-in Claude), plus a check in `flows_builder_ui`.
+- Next: ready-made flows for each trade.
 - New events for the engine round go into `server/flows.js` `EVENTS` and fire through `automate()`.
