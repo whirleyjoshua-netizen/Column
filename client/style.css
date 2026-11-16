@@ -3062,3 +3062,44 @@ body:not(.wide) .month { padding: 0 2px 8px; }
 body:not(.wide) .mo-grid { grid-auto-rows: minmax(64px, 1fr); }
 body:not(.wide) .mo-chip { padding: 1px 3px; font-size: 10px; }
 body:not(.wide) .mo-chip .mo-t { display: none; }
+/* Tasks → Team: everyone's week, in numbers */
+.teamload { padding: 8px 12px 16px; display: flex; flex-direction: column; gap: 12px; }
+.wl-sum { display: flex; flex-wrap: wrap; gap: 8px; }
+.wl-sum .wl-stat { flex: 1 1 110px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); align-items: flex-start; }
+.wl-sum .wl-stat b { font-size: 22px; }
+.wl-stat { display: flex; flex-direction: column; align-items: center; min-width: 0; }
+.wl-stat b { font-size: 16px; font-variant-numeric: tabular-nums; }
+.wl-stat small { color: var(--muted); font-size: 11px; white-space: nowrap; }
+.wl-stat.bad b { color: #d4372c; }
+.wl-stat.good b { color: #1f8a4c; }
+.wl-rows { display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); overflow: hidden; }
+.wl-row { display: grid; grid-template-columns: minmax(140px, 1.4fr) minmax(140px, 1.6fr) repeat(7, minmax(52px, .6fr)) minmax(120px, 1fr); align-items: center; gap: 8px; padding: 10px 12px; border: 0; border-bottom: 1px solid var(--line); background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.wl-row:last-child { border-bottom: 0; }
+.wl-row:hover { background: var(--bg); }
+.wl-who { display: flex; align-items: center; gap: 8px; min-width: 0; font-weight: 600; }
+.wl-who span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wl-load small { color: var(--muted); font-size: 11px; }
+.wl-load { min-width: 0; }
+.wl-bar { display: block; width: 100%; height: 8px; border-radius: 4px; background: var(--line); overflow: hidden; margin-bottom: 3px; }
+.wl-bar .wl-fill { display: block; height: 100%; background: var(--accent); border-radius: 4px; }
+.wl-spark { display: grid; grid-template-columns: repeat(7, 1fr); gap: 3px; height: 34px; align-items: end; }
+.wl-sd { position: relative; height: 100%; display: flex; align-items: flex-end; background: var(--bg); border-radius: 3px; }
+.wl-sd i { display: block; width: 100%; background: var(--accent); opacity: .75; border-radius: 3px; min-height: 0; }
+.wl-sd.today { outline: 1px solid var(--accent); }
+.wl-sd em { position: absolute; top: -2px; right: -2px; font-style: normal; font-size: 9px; line-height: 13px; min-width: 13px; text-align: center; border-radius: 7px; background: #f0a020; color: #fff; }
+.wl-vh { margin-top: 8px; }
+.wl-visits { padding: 0 12px 16px; }
+.wl-week { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; margin: 12px 0; }
+.wl-wd { display: flex; flex-direction: column; align-items: center; gap: 2px; font-size: 12px; }
+.wl-wd small { color: var(--muted); }
+.wl-wd.today b { color: var(--accent); }
+.wl-wbar { width: 100%; height: 80px; display: flex; align-items: flex-end; background: var(--bg); border-radius: 6px; overflow: hidden; }
+.wl-wbar i { display: block; width: 100%; background: var(--accent); }
+.wl-due { color: #b06a00 !important; }
+body:not(.wide) .wl-row { grid-template-columns: 1fr repeat(3, auto); grid-template-areas: "who open overdue due" "load load load load"; }
+body:not(.wide) .wl-row > .wl-who { grid-area: who; }
+body:not(.wide) .wl-row > .wl-load { grid-area: load; }
+body:not(.wide) .wl-row > [data-k=open] { grid-area: open; }
+body:not(.wide) .wl-row > [data-k=overdue] { grid-area: overdue; }
+body:not(.wide) .wl-row > [data-k=due] { grid-area: due; }
+body:not(.wide) .wl-row > .wl-stat:not([data-k=open]):not([data-k=overdue]):not([data-k=due]), body:not(.wide) .wl-row > .wl-spark { display: none; }

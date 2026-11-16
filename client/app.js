@@ -3566,7 +3566,7 @@
     D.pick.value = k;
     D.todayBtn.classList.toggle('hidden', isToday);
     const week = weekOn();
-    const unit = monthOn() ? 'month' : week ? 'week' : 'day';
+    const unit = monthOn() ? 'month' : week || D.sub === 'team' ? 'week' : 'day';
     D.prevBtn.ariaLabel = 'Previous ' + unit;
     D.nextBtn.ariaLabel = 'Next ' + unit;
     if (monthOn()) return renderMonth(k);
@@ -3677,7 +3677,7 @@
   const monthOn = () => D.view === 'month' && D.sub === 'schedule';
   // The arrows: a day, a week or a month (the same day of the month, or its last day).
   function dayStep(dir) {
-    if (weekOn()) return addDays(D.date, 7 * dir);
+    if (weekOn() || D.sub === 'team') return addDays(D.date, 7 * dir);
     if (!monthOn()) return addDays(D.date, dir);
     const d = keyDate(D.date);
     const to = new Date(d.getFullYear(), d.getMonth() + dir, 1);
@@ -13280,15 +13280,62 @@
   // The team's schedule (owners and admins): a row for each person, their job visits across the day, and the
   // jobs still waiting for one. Drag a waiting job onto someone's row to book it then; tap a visit to open the job.
   const TS = { data: null, date: null, timer: 0 };
-  const canTeam = () => amAdmin() && toolOn('projects');
+  // Tasks → Team: everyone's load (owners and admins), plus the day's job visits when Projects is on.
+  const canTeam = () => amAdmin();
   const teamSoon = () => { if (D.sub !== 'team' || TS.timer) return; TS.timer = setTimeout(() => { TS.timer = 0; TS.data = null; renderDay(); }, 300); };
+  // The team's week in numbers (GET /workload): what each person is carrying, never what the tasks say.
+  const WL = { week: null, data: null, loading: null, at: 0 };
+  const fmtHrs = (m) => (m ? (m % 60 ? (m / 60).toFixed(1) : String(m / 60)) + ' h' : '0 h');
   function renderTeam(k) {
+    const week = weekStart(k), last = addDays(week, 6), today = todayKey();
+    const fmt = (d, o) => keyDate(d).toLocaleDateString(undefined, o);
+    D.title.replaceChildren(h('b', {}, week <= today && today <= last ? 'This week' : 'Week of'), ' ', h('span', {}, `${fmt(week, { month: 'short', day: 'numeric' })} – ${fmt(last, { month: 'short', day: 'numeric' })}`));
+    D.todayBtn.classList.toggle('hidden', week <= today && today <= last);
+    // Fetched again when the week changes, or when it's more than half a minute old (work moves on).
+    if ((WL.week !== week || Date.now() - WL.at > 30_000) && !WL.loading) {
+      WL.loading = api('GET', '/workload?week=' + week).then((x) => { WL.week = week; WL.data = x; WL.at = Date.now(); }).catch((e) => toast(e.message)).finally(() => { WL.loading = null; if (D.sub === 'team') renderDay(); });
+    }
+    const visitsHost = h('div', { class: 'wl-visits' });
+    if (!WL.data || WL.week !== week) { D.scroll.replaceChildren(h('p', { class: 'day-hint' }, 'Loading the team’s week…')); return; }
+    const people = [...WL.data.people].sort((a, b) => b.open + b.bookedMin / 60 - (a.open + a.bookedMin / 60) || a.name.localeCompare(b.name));
+    const sum = (f) => people.reduce((n, p) => n + p[f], 0);
+    const maxMin = Math.max(40 * 60, ...people.map((p) => p.bookedMin));
+    const maxDay = Math.max(8 * 60, ...people.flatMap((p) => p.perDay.map((x) => x.min)));
+    const stat = (n, label, cls = '') => h('div', { class: 'wl-stat' + (cls && n ? ' ' + cls : ''), 'data-k': label }, h('b', {}, String(n)), h('small', {}, label));
+    const spark = (p) => h('div', { class: 'wl-spark', title: 'Hours booked each day' }, p.perDay.map((x, i) => h('span', { class: 'wl-sd' + (WL.data.days[i] === today ? ' today' : ''), title: `${fmt(WL.data.days[i], { weekday: 'short' })}: ${fmtHrs(x.min)}${x.due ? ` · ${x.due} due` : ''}` },
+      h('i', { style: `height:${Math.round((x.min / maxDay) * 100)}%` }), x.due ? h('em', {}, String(x.due)) : null)));
+    const row = (p) => h('button', { class: 'wl-row', 'data-member': p.id, onclick: () => teamPersonSheet(p) },
+      h('div', { class: 'wl-who' }, avatar(p.id), h('span', {}, p.name)),
+      h('div', { class: 'wl-load', title: `${fmtHrs(p.bookedMin)} booked this week` }, h('div', { class: 'wl-bar' }, h('span', { class: 'wl-fill', style: `width:${Math.max(p.bookedMin ? 2 : 0, Math.min(100, Math.round((p.bookedMin / maxMin) * 100)))}%` })), h('small', {}, fmtHrs(p.bookedMin) + ' booked')),
+      stat(p.open, 'open'), stat(p.overdue, 'overdue', 'bad'), stat(p.dueWeek, 'due'), stat(p.noDate, 'no date'), stat(p.doneWeek, 'done', 'good'), stat(p.visits, 'visits'), stat(p.campaigns, 'campaigns'),
+      spark(p));
+    D.scroll.replaceChildren(h('div', { class: 'teamload' },
+      h('div', { class: 'wl-sum' }, stat(sum('open'), 'open tasks'), stat(sum('overdue'), 'overdue', 'bad'), stat(sum('dueWeek'), 'due this week'), stat(sum('noDate'), 'with no date'), stat(sum('doneWeek'), 'done this week', 'good'), h('div', { class: 'wl-stat' }, h('b', {}, fmtHrs(sum('bookedMin'))), h('small', {}, 'booked'))),
+      h('div', { class: 'wl-rows' }, people.map(row)),
+      h('p', { class: 'day-hint' }, 'Counts only: every task each person has, given to them or their own, private ones included. Tap someone to see their week.')),
+      ...(toolOn('projects') ? [visitsHost] : []));
+    if (toolOn('projects')) teamVisits(k, visitsHost);
+  }
+  function teamPersonSheet(p) {
+    const days = WL.data.days;
+    const maxDay = Math.max(8 * 60, ...p.perDay.map((x) => x.min));
+    sheet(p.name + '’s week', [
+      h('div', { class: 'wl-sum' }, ...[[p.open, 'open'], [p.overdue, 'overdue'], [p.dueWeek, 'due this week'], [p.noDate, 'with no date'], [p.doneWeek, 'done this week']].map(([n, l]) => h('div', { class: 'wl-stat' }, h('b', {}, String(n)), h('small', {}, l)))),
+      h('div', { class: 'wl-week' }, days.map((d, i) => h('div', { class: 'wl-wd' + (d === todayKey() ? ' today' : '') },
+        h('div', { class: 'wl-wbar' }, h('i', { style: `height:${Math.round((p.perDay[i].min / maxDay) * 100)}%` })),
+        h('b', {}, fmtHrs(p.perDay[i].min)), h('small', {}, keyDate(d).toLocaleDateString(undefined, { weekday: 'short' })),
+        p.perDay[i].due ? h('small', { class: 'wl-due' }, `${p.perDay[i].due} due`) : null))),
+      h('p', { class: 'day-hint' }, `${fmtHrs(p.bookedMin)} booked · ${p.visits} job visit${p.visits === 1 ? '' : 's'} · ${p.campaigns} campaign${p.campaigns === 1 ? '' : 's'} they own`),
+    ]);
+  }
+  // The day's job visits, a row per person, and the jobs still waiting for one (Projects on).
+  function teamVisits(k, host) {
     if (!TS.data || TS.date !== k) {
       TS.date = k;
       if (!TS.loading) {
         TS.loading = api('GET', '/schedule?date=' + k).then((x) => { TS.data = x; }).catch((e) => toast(e.message)).finally(() => { TS.loading = null; if (D.sub === 'team') renderDay(); });
       }
-      if (!TS.data || TS.data.date !== k) return D.scroll.replaceChildren(h('p', { class: 'day-hint' }, 'Loading the team’s day…'));
+      if (!TS.data || TS.data.date !== k) return host.replaceChildren(h('p', { class: 'day-hint' }, 'Loading the team’s day…'));
     }
     const { visits, waiting, members } = TS.data;
     const H0 = 6, H1 = 20, span = (H1 - H0) * 60;
@@ -13329,7 +13376,8 @@
       chip.addEventListener('click', () => openJob(w.projectId, w.recordId));
       return chip;
     });
-    D.scroll.replaceChildren(...[
+    host.replaceChildren(...[
+      h('div', { class: 'any-h wl-vh' }, 'Job visits · ' + dayName(k)),
       h('div', { class: 'ts' }, h('div', { class: 'ts-row ts-head' }, h('div', { class: 'ts-name' }), hours), ...rows),
       visits.length ? null : h('p', { class: 'day-hint' }, 'No job visits on this day yet.'),
       h('div', { class: 'anytime tasks ts-waiting' }, h('div', { class: 'any-h' }, `Jobs to schedule · ${waiting.length}`),

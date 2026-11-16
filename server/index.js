@@ -5136,6 +5136,56 @@ function askInChat(ws, auth, x, it, mate, from) {
   const text = `✍️ @${mate.name}, please sign “${x.name.replace(/\.pdf$/i, '')}”.${x.message ? '\n' + x.message : ''}\n[[sign:${x.id}]]`;
   addItem(baseItem({ ...auth, wsId: ws.id }, { type: 'message', text, channelId }));
 }
+// ---------- the team's workload: who's carrying what, in numbers ----------
+// Who a task is for: whoever it's given to, the people in its team role or campaign role, or else whoever made it.
+function taskDoers(ws, t) {
+  if (t.assigneeId) return [t.assigneeId];
+  if (t.roleId) return ws.members.filter((x) => (x.roleIds || []).includes(t.roleId)).map((x) => x.id);
+  if (t.castId) return castRole(taskCamp(t), t.castId)?.memberIds || [];
+  return t.memberId ? [t.memberId] : [];
+}
+// Does a repeating entry fall on day k (the same rules as the app's).
+function entryOn(e, k) {
+  if ((e.skip || []).includes(k)) return false;
+  if (!e.repeat || k < e.date) return k === e.date;
+  const a = new Date(e.date + 'T12:00:00Z'), d = new Date(k + 'T12:00:00Z');
+  if (e.repeat === 'daily') return true;
+  if (e.repeat === 'weekdays') return d.getUTCDay() > 0 && d.getUTCDay() < 6;
+  if (e.repeat === 'weekly') return d.getUTCDay() === a.getUTCDay();
+  if (e.repeat === 'monthly') return d.getUTCDate() === a.getUTCDate();
+  return false;
+}
+function workload(ws, week) {
+  const days = Array.from({ length: 7 }, (_, i) => addDays(week, i));
+  const last = days[6], today = teamDay(ws.id);
+  const by = new Map(ws.members.map((x) => [x.id, { id: x.id, name: x.name, role: x.role, open: 0, overdue: 0, dueWeek: 0, noDate: 0, doneWeek: 0, bookedMin: 0, visits: 0, campaigns: 0, perDay: days.map(() => ({ min: 0, due: 0 })) }]));
+  for (const t of Object.values(db.tasks)) {
+    if (t.wsId !== ws.id || t.skipped) continue;
+    const doneDay = t.done && t.doneAt ? teamDay(ws.id, t.doneAt) : null;
+    for (const id of taskDoers(ws, t)) {
+      const p = by.get(id);
+      if (!p) continue;
+      if (t.done) { if (doneDay >= week && doneDay <= last) p.doneWeek++; continue; }
+      p.open++;
+      if (!t.due) p.noDate++;
+      else if (t.due < today) p.overdue++;
+      if (t.due && t.due >= week && t.due <= last) { p.dueWeek++; p.perDay[days.indexOf(t.due)].due++; }
+    }
+  }
+  const visits = new Map();
+  for (const e of Object.values(db.entries)) {
+    const p = e.wsId === ws.id && by.get(e.memberId);
+    if (!p) continue;
+    days.forEach((k, i) => {
+      if (!entryOn(e, k)) return;
+      if (e.start != null && e.end != null && e.end > e.start) { p.bookedMin += e.end - e.start; p.perDay[i].min += e.end - e.start; }
+      if (e.visitId) (visits.get(p.id) || visits.set(p.id, new Set()).get(p.id)).add(e.visitId);
+    });
+  }
+  for (const [id, set] of visits) by.get(id).visits = set.size;
+  for (const c of Object.values(db.campaigns)) if (c.wsId === ws.id && c.status === 'active' && by.get(c.ownerId)) by.get(c.ownerId).campaigns++;
+  return { week, days, today, people: [...by.values()] };
+}
 const utc = (t) => new Date(t).toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
 const CONSENT = 'I agree to use electronic records and signatures for this document. I can ask the sender for a paper copy instead, and I can download a copy of the signed document.';
 
@@ -7115,6 +7165,14 @@ async function api(req, res, url) {
   }
   // The team's schedule: every job visit on a day, by person (owners and admins see everyone; others, themselves),
   // and jobs still waiting for a visit. Personal entries stay private: only job visits show.
+  // How much each person is carrying, for a week (Tasks → Team). Counts only, never what a task or entry says; every
+  // task counts, private ones too (the owner, 2026-11-15), so the load is real. Owners and admins.
+  if (a === 'workload' && m === 'GET') {
+    if (!isAdmin(auth)) return send(res, 403, { error: 'Owners and admins see the team’s workload.' });
+    const week = new URL(req.url, 'http://x').searchParams.get('week');
+    if (!isDay(week || '')) return send(res, 400, { error: 'Pick a week.' });
+    return send(res, 200, workload(ws, week));
+  }
   if (a === 'schedule' && m === 'GET') {
     const day = new URL(req.url, 'http://x').searchParams.get('date');
     if (!isDay(day || '')) return send(res, 400, { error: 'Pick a day.' });

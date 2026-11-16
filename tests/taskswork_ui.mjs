@@ -1,6 +1,6 @@
 // Tasks in Workspace (the owner, 2026-11-15): Day isn't a main tab any more. It's Tasks, the first of Workspace's tabs,
 // and opening Workspace lands on it. One switch picks the view: Week, Day, List (the task list) and, for owners and
-// admins, Team (with Projects on). A phone has no Week, but still has Month, Day and List.
+// admins, Team. A phone has no Week, but still has Month, Day and List.
 import * as FS from 'node:fs';
 import { spawn } from 'node:child_process';
 import WebSocket from '../server/node_modules/ws/index.js';
@@ -50,7 +50,7 @@ try {
   ok(await A.until(`!document.querySelector('#day').classList.contains('hidden')`), 'opening Workspace lands on Tasks');
   ok(await A.until(`(() => { const b = document.querySelector('#workTabs button'); return b?.dataset.tab === 'day' && b.textContent === 'Tasks' && b.classList.contains('on'); })()`), 'Tasks is Workspace’s first tab, and it’s marked');
   const modes = await A.ev(`[...document.querySelectorAll('#day .day-modes button:not(.hidden)')].map((b) => b.textContent).join(',')`);
-  ok(modes === 'Month,Week,Day,List', 'one switch for the view (Team needs Projects on, for now): ' + modes);
+  ok(modes === 'Month,Week,Day,List,Team', 'one switch for the view: ' + modes);
   await A.tap(`[...document.querySelectorAll('#day .day-modes button')].find((b) => b.textContent === 'List')`);
   ok(await A.until(`document.querySelector('#day').textContent.includes('Order the blinds') && !document.querySelector('#day .wk-col')`), 'List shows the tasks');
   ok(await A.ev(`[...document.querySelectorAll('#day .day-modes button')].find((b) => b.textContent === 'List').classList.contains('on')`), 'and is marked');
@@ -68,7 +68,7 @@ try {
   await A.cmd('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
   await sleep(500);
   const phone = await A.ev(`[...document.querySelectorAll('#day .day-modes button')].filter((b) => b.offsetParent !== null).map((b) => b.textContent).join(',')`);
-  ok(phone === 'Month,Day,List', 'a phone has Month, Day and List: ' + phone);
+  ok(phone === 'Month,Day,List,Team', 'a phone has Month, Day, List and Team: ' + phone);
   ok(await A.ev(`!!document.querySelector('#tabs .tab-sub[data-tab=day]') && document.querySelector('#tabs .tab-sub[data-tab=day]').textContent === 'Tasks'`), 'in the drawer, Tasks sits under Workspace');
   ok(A.errors.length === 0, 'no script errors' + (A.errors.length ? ': ' + A.errors.join(' | ') : ''));
 } catch (e) { ok(false, 'threw: ' + e.stack); }
