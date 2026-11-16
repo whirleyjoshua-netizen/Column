@@ -1,4 +1,4 @@
-// The automation builder in a real browser (headless Chrome): full screen; what sets it off at the top, the steps
+// The automation builder in a real browser (headless Chrome): it fills the page beside the sidebar; what sets it off at the top, the steps
 // under it, "only if" split into Then and Otherwise side by side. A + between steps adds one there; a step dragged by
 // its ⋮⋮ goes into a branch; Move up/Duplicate from its menu; ▾ folds it to one line. A step missing something is
 // marked red and the bar counts them; a word chip puts {contact} where the cursor is. "Test it" lights the way it
@@ -51,7 +51,8 @@ try {
   await A.ev(`document.querySelector('#tabs [data-tab=automations]').click(); true`);
   await A.tap(`[...document.querySelectorAll('#tool button')].find((b) => b.textContent === '+ New automation')`);
   ok(await A.until(`!!document.querySelector('#sheet .sheet.auto-builder .auto-canvas')`), 'the builder opens');
-  ok(await A.ev(`(() => { const r = document.querySelector('#sheet .sheet').getBoundingClientRect(); return r.width >= innerWidth - 2 && r.height >= innerHeight - 2; })()`), 'full screen');
+  ok(await A.ev(`(() => { const r = document.querySelector('#sheet .sheet').getBoundingClientRect(), side = document.querySelector('#side').getBoundingClientRect(); return side.width > 100 && Math.abs(r.left - side.right) <= 2 && r.right >= innerWidth - 2 && r.height >= innerHeight - 2; })()`), 'it fills the page beside the sidebar, like the other pages (the sidebar stays)');
+  ok(await A.ev(`(() => { const b = document.querySelector('#side .side-brand') || document.querySelector('#side'); const r = b.getBoundingClientRect(); const el = document.elementFromPoint(r.left + 10, r.top + 10); return !!el && !!el.closest('#side'); })()`), 'and the sidebar isn’t covered');
   ok(await A.ev(`![...document.querySelector('#sheet .auto-edit').childNodes].some((n) => n.nodeType === 3 && /null|undefined/.test(n.textContent))`), 'no stray “null” in the builder');
   ok(await A.ev(`!!document.querySelector('#sheet .auto-canvas .auto-trigger .auto-kind') && !!document.querySelector('#sheet .auto-canvas .auto-flow .auto-steps .auto-act') && document.querySelector('#sheet .auto-end')?.textContent === 'Done'`), 'what sets it off at the top, then the steps, then Done');
   await A.pick(`document.querySelector('#sheet .auto-kind')`, 'contact.created');
@@ -140,6 +141,21 @@ try {
   await A.pick(`document.querySelector('#sheet .auto-runs')`, '0');
   ok(await A.until(`[...document.querySelectorAll('#sheet .auto-branches > .auto-steps.nested')[1].querySelectorAll('.auto-act')].every((x) => x.classList.contains('lit')) && [...document.querySelectorAll('#sheet .auto-branches > .auto-steps.nested')[0].querySelectorAll('.auto-act')].every((x) => x.classList.contains('dim'))`), 'a past run lights the way it went (Bo: Otherwise)');
 
+  // Beside the sidebar: going somewhere else leaves the builder, unless there's something unsaved.
+  await A.cmd('Emulation.clearDeviceMetricsOverride');
+  await A.fill(`document.querySelector('#sheet .auto-edit input')`, 'Sort leads (changed)');
+  await A.tap(`document.querySelector('#side [data-tab=home], #side button')`);
+  ok(await A.until(`!document.querySelector('#sheet').classList.contains('hidden') && /Save the automation/.test(document.querySelector('#toast, .toast')?.textContent || document.body.textContent)`, 4000), 'with unsaved changes, the sidebar doesn’t throw them away (it says to save or close)');
+  await A.ev(`document.querySelector('#sheet [aria-label=Close]').click(); true`);
+  await A.tap(`[...document.querySelectorAll('#tool .auto-row')].find((r) => r.textContent.includes('Sort leads')).querySelector('.auto-main')`);
+  await A.until(`!!document.querySelector('#sheet .sheet.auto-builder')`);
+  await A.tap(`[...document.querySelectorAll('#side button')].find((b) => b.textContent.trim() === 'Home')`);
+  ok(await A.until(`document.querySelector('#sheet').classList.contains('hidden')`, 4000), 'with nothing changed, the sidebar goes there and the builder closes');
+  await A.ev(`document.querySelector('#tabs [data-tab=automations]')?.click() || [...document.querySelectorAll('#side button')].find((b) => b.textContent.trim() === 'Workspace')?.click(); true`);
+  await A.until(`!!document.querySelector('#tabs [data-tab=automations]')`);
+  await A.ev(`document.querySelector('#tabs [data-tab=automations]').click(); true`);
+  await A.tap(`[...document.querySelectorAll('#tool .auto-row')].find((r) => r.textContent.includes('Sort leads')).querySelector('.auto-main')`);
+  await A.until(`!!document.querySelector('#sheet .sheet.auto-builder')`);
   // A phone.
   await A.cmd('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
   await sleep(500);

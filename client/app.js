@@ -5381,7 +5381,7 @@
     const said = a.text || a.subject || a.title || a.url || '';
     return (AUTO_DO[a.kind] || a.kind) + (said ? ': ' + said : '');
   }
-  // Make or change one, in the builder: the whole automation as a flow, full screen. What sets it off at the top,
+  // Make or change one, in the builder: the whole automation as a flow, filling the page beside the sidebar. What sets it off at the top,
   // then each step under it; "only if" splits into Then and Otherwise side by side. A + between steps adds one there,
   // a step's ⋮⋮ drags it anywhere (into a branch too), ▾ folds it. "Test it" walks it on the last real event (or a
   // made-up one) and lights the way it would go, with what each step would do; a past run lights the way it went.
@@ -5809,7 +5809,19 @@
       renderAutos();
       if (!x) toast(`“${y.name}” is on`);
     }, x ? 'Save' : 'Turn it on');
-    $('#sheet .sheet')?.classList.add('auto-builder');
+    const page = $('#sheet .sheet');
+    page?.classList.add('auto-builder');
+    // It sits beside the sidebar like a page, so the sidebar still goes places: going leaves the builder, unless
+    // something changed and isn't saved yet (then it stays, and says so, rather than losing the work).
+    const was = JSON.stringify(dr);
+    const leave = (e) => {
+      if (!page?.isConnected || $('#sheet').classList.contains('hidden')) return document.removeEventListener('click', leave, true);
+      if (!e.target.closest('#side button, #side a')) return;
+      if (JSON.stringify(dr) !== was) { e.preventDefault(); e.stopPropagation(); return toast('Save the automation, or close it to leave it as it was.'); }
+      document.removeEventListener('click', leave, true);
+      closeSheet();
+    };
+    document.addEventListener('click', leave, true);
   }
 
   // ---------- Home: what needs you, what's on today, how the work is going, and what came in ----------
