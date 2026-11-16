@@ -737,8 +737,7 @@
       S.mail.sends = S.mail.sends.filter((x) => x.id !== msg.id);
       renderCamps();
     } else if (msg.type === 'presence') {
-      S.online = msg.devices;
-      renderDevices();
+      S.online = msg.devices; // who's online shows in Settings → Account (not in the header, the owner 2026-11-16)
       const settings = $('#settings');
       if (!settings.classList.contains('hidden') && !settings.contains(document.activeElement)) renderSettings();
     }
@@ -2199,14 +2198,6 @@
     return u.els[paneKey];
   }
 
-  function renderDevices() {
-    const el = $('#devices');
-    el.innerHTML = '';
-    const others = S.online.filter((d) => d.deviceId !== S.deviceId);
-    others.slice(0, 2).forEach((d) => el.append(h('span', { title: `${d.member} · ${d.device} is online` }, d.device)));
-    if (others.length > 2) el.append(h('span', { title: others.slice(2).map((d) => d.device).join(', ') }, '+' + (others.length - 2)));
-  }
-
   setInterval(() => {
     for (const n of document.querySelectorAll('[data-ago]')) n.textContent = ago(Number(n.dataset.ago));
   }, 30_000);
@@ -3249,6 +3240,25 @@
     b.addEventListener('pointerdown', (e) => { if (e.pointerType === 'mouse') return; stop(); t = setTimeout(() => { b._held = true; fn(); }, 550); });
     for (const ev of ['pointerup', 'pointercancel', 'pointerleave']) b.addEventListener(ev, stop);
   }
+  const PIN_IC = {
+    pin: svg('<path d="M9 4h6l-1 6 3 3v1H7v-1l3-3z"/><path d="M12 14v6"/>'),
+    caret: svg('<path d="m7 10 5 5 5-5"/>'),
+  };
+  const pinOn = (x) => { const [k, id] = pinParts(x.go); return !!PIN_KINDS[k]?.on(id); };
+  // The 📌 drop-down: each pin (marked while it's open; right-click for its menu), then Change your pins….
+  function pinsDrop(anchor) {
+    const ps = pinsShown();
+    openMenu(anchor, [
+      ps.length ? { head: 'Your pins' } : { note: 'Nothing pinned yet. Use 📌 Pin to Workspace in a job’s, project’s, campaign’s, doc’s or feed’s ⋯ menu.' },
+      ...ps.map((x) => {
+        const k = pinParts(x.go)[0];
+        const lab = h('span', { class: 'pin-item', 'data-pin': x.go, title: PIN_KINDS[k].name }, h('span', { class: 'pin-item-ic' }, PIN_KINDS[k].icon), pinLabel(x));
+        lab.addEventListener('contextmenu', (e) => { e.preventDefault(); e.stopPropagation(); pinMenu(x, anchor); });
+        return { label: lab, on: pinOn(x), run: () => openPin(x.go) };
+      }),
+      { label: 'Change your pins…', run: () => barSheet() },
+    ]);
+  }
   function pinMenu(x, anchor) {
     openMenu(anchor, [
       { label: 'Open', run: () => openPin(x.go) },
@@ -3280,8 +3290,10 @@
     const top = $('#topTabs');
     if (top) { top.replaceChildren(...pins.map(pin), ...(pins.length ? [edit()] : [])); top.classList.toggle('has-pins', pins.length > 0); }
     const wbtn = (k) => h('button', { 'data-tab': k }, h('span', { class: 'tab-ic', html: TAB_IC[k] || TAB_IC.docs }), h('span', { class: 'tab-l' }, BAR_ITEMS[k].label));
-    $('#workTabs')?.replaceChildren(...workKeys().filter((k) => k !== 'tools').map(wbtn),
-      ...(pins.length ? [h('span', { class: 'tabs-sep', 'aria-hidden': 'true' }), ...pins.map(pin)] : []), edit(), ...(workKeys().includes('tools') ? [wbtn('tools')] : []));
+    // Your pins (the owner, 2026-11-16): a 📌 drop-down right next to Tools, at the far right, instead of a row of them.
+    const pinsBtn = h('button', { class: 'pins-btn', title: 'Your pins', 'aria-label': 'Your pins', 'aria-haspopup': 'menu', onclick: (e) => { e.stopPropagation(); pinsDrop(e.currentTarget); } },
+      h('span', { class: 'tab-ic', html: PIN_IC.pin }), pins.length ? h('span', { class: 'pins-n' }, String(pins.length)) : null, h('span', { class: 'pins-caret', html: PIN_IC.caret }));
+    $('#workTabs')?.replaceChildren(...workKeys().filter((k) => k !== 'tools').map(wbtn), pinsBtn, ...(workKeys().includes('tools') ? [wbtn('tools')] : []));
     markTabs();
     renderChatSide();
   }
@@ -3299,6 +3311,7 @@
     }
     for (const b of [...tabNavs(), strip].filter(Boolean).flatMap((n) => [...n.children])) {
       if (b.dataset.pin) { const [pk, id] = pinParts(b.dataset.pin); b.classList.toggle('on', !!PIN_KINDS[pk]?.on(id)); continue; }
+      if (b.classList.contains('pins-btn')) { b.classList.toggle('on', pinsShown().some(pinOn)); continue; }
       const k = b.dataset.tab;
       if (!k) continue;
       const it = BAR_ITEMS[k];
@@ -19238,12 +19251,12 @@
       s.append(twoStepSection());
 
       // Account
-      const devices = S.online.filter((d) => d.memberId === S.me.memberId).map((d) => `${d.device}${d.deviceId === S.deviceId ? ' (this)' : ''}`).join(', ');
+      const online = S.online.map((d) => `${d.memberId === S.me.memberId ? 'You' : d.member} on ${d.device}${d.deviceId === S.deviceId ? ' (this one)' : ''}`).join(', ');
       const clearBtn = h('button', { class: 'btn danger', 'data-label': '1' }, 'Clear unpinned items');
       clearBtn.addEventListener('click', () => confirmClick(clearBtn, () => api('POST', '/clear').then(() => toast('Cleared')).catch((e) => toast(e.message))));
       s.append(h('section', {}, h('h3', {}, 'Account'),
         h('p', {}, 'Signed in to ', h('b', {}, ws.name), ` as ${S.me.member} on ${S.me.device}.`),
-        h('p', {}, 'Your devices online: ', devices || '—'),
+        h('p', {}, 'Online now: ', online || '—'),
         h('p', {}, 'To add another computer or phone, open ', h('code', {}, location.origin), S.me.email ? ' and sign in with your email and password.' : ' and sign in with your team, name and password.', ' On a phone, use “Add to Home Screen” to keep it as an app.'),
         h('div', { class: 'btns' },
           h('button', { class: 'btn', onclick: () => copyText(location.origin) }, 'Copy link'),

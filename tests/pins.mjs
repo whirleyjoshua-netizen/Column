@@ -52,7 +52,10 @@ let wsx = await api('POST', '/channels', { name: 'crew' });
 const chan = wsx.channels.find((c) => c.name === 'crew');
 await api('POST', '/stacks', { name: 'Photos' });
 await sleep(1200);
-const pins = () => A.ev(`[...document.querySelectorAll('#workTabs .tab-pin')].map((b) => b.textContent + (b.classList.contains('on') ? '*' : ''))`);
+// Your pins are a 📌 drop-down next to Tools, at the right of Workspace's strip (the owner, 2026-11-16).
+const pins = async () => { const r = await A.ev(`(document.querySelector('#workTabs .pins-btn').click(), [...document.querySelectorAll('#menu .pin-item')].map((x) => x.textContent + (x.closest('button').classList.contains('on') ? '*' : '')))`); await A.ev(`document.querySelector('#menu').classList.add('hidden'); true`); return r; };
+const pinHas = (t) => `(document.querySelector('#workTabs .pins-btn').click(), [...document.querySelectorAll('#menu .pin-item')].some((x) => x.textContent.includes(${JSON.stringify(t)})))`;
+const pickPin = (t) => A.ev(`(document.querySelector('#workTabs .pins-btn').click(), [...document.querySelectorAll('#menu .pin-item')].find((x) => x.textContent.includes(${JSON.stringify(t)})).click(), true)`);
 const menuPick = (re) => A.ev(`(() => { const b = [...document.querySelectorAll('#menu button')].find((x) => ${re}.test(x.textContent)); if (!b) return false; b.click(); return true; })()`);
 
 ok((await api('GET', '/state')).me.pins.length === 0 && (await pins()).length === 0, 'nothing pinned to start, and no divider');
@@ -68,9 +71,9 @@ await A.ev(`[...document.querySelectorAll('#camps *')].find((e) => e.children.le
 ok(await A.until(`!!document.querySelector('[aria-label="Campaign options"]')`), 'campaign opens');
 await A.click('[aria-label="Campaign options"]');
 ok(await menuPick('/Pin to Workspace/'), 'its menu has 📌 Pin to Workspace');
-ok(await A.until(`[...document.querySelectorAll('#workTabs .tab-pin')].some((b) => b.textContent.includes('Spring blinds push'))`), 'the campaign is in Workspace’s top bar (2026-11-16)');
+ok(await A.until(pinHas('Spring blinds push')), 'the campaign is in your pins, the drop-down in Workspace’s top bar');
 ok(await A.ev(`!document.querySelector('#tabs [data-pin]')`), 'and not in the sidebar');
-ok(await A.ev(`!!document.querySelector('#workTabs .tabs-sep')`), 'after a divider');
+ok(await A.ev(`(() => { const p = document.querySelector('#workTabs .pins-btn').getBoundingClientRect(), t = document.querySelector('#workTabs [data-tab=tools]').getBoundingClientRect(); return !document.querySelector('#workTabs .tabs-sep, #workTabs .tab-pin') && p.right <= t.left + 1 && t.left - p.right < 12; })()`), 'no divider and no row of pins: the 📌 drop-down sits right next to Tools');
 await sleep(400);
 ok(JSON.stringify((await api('GET', '/state')).me.pins) === JSON.stringify([{ go: 'camp:' + camp.id, label: 'Spring blinds push' }]), 'saved on the server');
 ok((await pins()).some((x) => x.endsWith('*')), 'lit while that campaign is open');
@@ -86,31 +89,31 @@ await A.ev(`[...document.querySelectorAll('#projects *')].find((e) => e.children
 ok(await A.until(`!!document.querySelector('.pj-panel [aria-label="Record options"]')`), 'the job opens');
 await A.click('.pj-panel [aria-label="Record options"]');
 ok(await menuPick('/Pin to Workspace/'), 'the job’s menu has Pin to Workspace');
-ok(await A.until(`[...document.querySelectorAll('#workTabs .tab-pin')].some((b) => b.textContent.includes('Smith kitchen shades'))`), 'the job is pinned');
+ok(await A.until(pinHas('Smith kitchen shades')), 'the job is pinned');
 
 // Pin a feed from the chat side
 await A.click('#tabs [data-tab=chat]');
 ok(await A.until(`!document.querySelector('#projects:not(.hidden)')`), 'Chat closes Jobs');
 await A.ev(`[...document.querySelectorAll('.ch-row')].find((r) => r.textContent.includes('crew')).querySelector('.ch-more').click()`);
 ok(await menuPick('/Pin to Workspace/'), 'a feed’s menu has Pin to Workspace');
-ok(await A.until(`(${pins.toString().replace(/^\(\) => A\.ev\(`/, '').replace(/`\)$/, '')}).length === 3`), 'three pins now: ' + (await pins()).join(', '));
+ok(await (async () => { for (let i = 0; i < 40; i++) { if ((await pins()).length === 3) return true; await sleep(100); } return false; })(), 'three pins now: ' + (await pins()).join(', '));
 
 // Open each from the bar
 await A.click('#tabs [data-tab=home]');
-await A.ev(`[...document.querySelectorAll('#workTabs .tab-pin')].find((b) => b.textContent.includes('Smith')).click()`);
+await pickPin('Smith');
 ok(await A.until(`!document.querySelector('#projects').classList.contains('hidden') && !!document.querySelector('.pj-panel[data-id="${rec.id}"]')`, 6000), 'the job pin opens the job: ' + await A.ev(`[document.querySelector('#projects').className, document.querySelector('.pj-panel')?.textContent.slice(0, 80), document.querySelector('#projects').textContent.slice(0, 200)].join(' // ')`));
-ok(await A.until(`[...document.querySelectorAll('#workTabs .tab-pin.on')].some((b) => b.textContent.includes('Smith'))`), 'and lights up');
-await A.ev(`[...document.querySelectorAll('#workTabs .tab-pin')].find((b) => b.textContent.includes('crew')).click()`);
+ok((await pins()).some((x) => x.includes('Smith') && x.endsWith('*')) && (await A.ev(`document.querySelector('#workTabs .pins-btn').classList.contains('on')`)), 'and is marked in the drop-down, which lights up');
+await pickPin('crew');
 ok(await A.until(`!document.querySelector('#chat').classList.contains('hidden') && document.querySelector('#projects').classList.contains('hidden') && document.querySelector('.ch-head')?.textContent.includes('crew')`), 'the feed pin opens that feed, closing Jobs');
-await A.ev(`[...document.querySelectorAll('#workTabs .tab-pin')].find((b) => b.textContent.includes('Spring')).click()`);
+await pickPin('Spring');
 ok(await A.until(`!document.querySelector('#campsWrap').classList.contains('hidden') && !!document.querySelector('[aria-label="Campaign options"]')`), 'the campaign pin opens the campaign');
 
 // Live name changes, and gone things leave the bar
 await api('PATCH', '/campaigns/' + camp.id, { name: 'Fall blinds push' });
-ok(await A.until(`[...document.querySelectorAll('#workTabs .tab-pin')].some((b) => b.textContent.includes('Fall blinds push'))`), 'renaming the campaign renames its pin');
+ok(await A.until(pinHas('Fall blinds push')), 'renaming the campaign renames its pin');
 
 // The tabs sheet: pin a stack and the project, reorder, unpin
-await A.click('#workTabs .tabs-edit');
+await A.ev(`(document.querySelector('#workTabs .pins-btn').click(), [...document.querySelectorAll('#menu button')].find((b) => b.textContent === 'Change your pins…').click(), true)`);
 ok(await A.until(`document.querySelectorAll('#sheet .bar-row[data-pin]').length === 3`), 'the Your tabs sheet lists the pins');
 await A.ev(`[...document.querySelectorAll('#sheet button')].find((b) => b.textContent === '+ Pin something').click()`);
 ok(await menuPick('/Photos/'), 'Pin something offers the stack');
@@ -125,17 +128,18 @@ await sleep(400);
 let saved = (await api('GET', '/state')).me.pins.map((x) => x.go.split(':')[0]).join();
 ok(saved === 'camp,stack,rec,proj', 'saved in the new order, feed unpinned: ' + saved);
 ok((await pins()).map((x) => x.replace('*', '')).join('|').includes('Photos'), 'the stack is on the bar');
-await A.ev(`[...document.querySelectorAll('#workTabs .tab-pin')].find((b) => b.textContent.includes('Photos')).click()`);
+await pickPin('Photos');
 ok(await A.until(`!document.querySelector('#panes').classList.contains('hidden') && document.querySelector('#panes .chip.on')?.textContent === 'Photos'`), 'the stack pin opens the stack');
 
 // Right-click a pin: unpin
-await A.ev(`[...document.querySelectorAll('#workTabs .tab-pin')].find((b) => b.textContent.includes('Installs')).dispatchEvent(new MouseEvent('contextmenu', { bubbles: true }))`);
+await A.ev(`(document.querySelector('#workTabs .pins-btn').click(), [...document.querySelectorAll('#menu .pin-item')].find((x) => x.textContent.includes('Installs')).dispatchEvent(new MouseEvent('contextmenu', { bubbles: true })), true)`);
 ok(await menuPick('/^Unpin$/'), 'right-click a pin to unpin it');
-ok(await A.until(`![...document.querySelectorAll('#workTabs .tab-pin')].some((b) => b.textContent.includes('Installs'))`), 'gone from the bar');
+ok(!(await pins()).some((x) => x.includes('Installs')), 'gone from your pins');
 
 // Deleting a pinned campaign takes it off the bar
 await api('DELETE', '/campaigns/' + camp.id);
-ok(await A.until(`![...document.querySelectorAll('#workTabs .tab-pin')].some((b) => b.textContent.includes('blinds push'))`), 'a deleted campaign leaves the bar');
+await sleep(800);
+ok(!(await pins()).some((x) => x.includes('blinds push')), 'a deleted campaign leaves your pins');
 
 // Survives a reload; phone width scrolls rather than squashing
 await A.cmd('Emulation.setDeviceMetricsOverride', { width: 360, height: 760, deviceScaleFactor: 2, mobile: true });

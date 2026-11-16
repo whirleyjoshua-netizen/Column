@@ -58,6 +58,7 @@ const menuItems = () => A.ev(`[...document.querySelectorAll('#menu button')].map
 ok(await names() === 'Home,Chat,Agents,Workspace', 'the toolbar is Home, Chat, Agents, Workspace: ' + await names());
 ok(!(await A.ev(`!!document.querySelector('#tabs .tabs-edit')`)), 'pins are not in the sidebar any more (2026-11-16: they are in Workspace)');
 ok(!(await A.ev(`!!document.querySelector('#toolsBtn')`)), 'no All tools button: Tools is a tab in Workspace');
+ok(!(await A.ev(`!!document.querySelector('.bar #devices, .bar .devices')`)), 'no device tags in the header (2026-11-16: who’s online is in Settings → Account)');
 ok(await strip() === '', 'no Workspace strip until you are in Workspace');
 
 // Workspace: its tabs across the top at full size; it opens where you were last.
@@ -67,7 +68,7 @@ ok(await strip() === 'Tasks*,Contacts,Projects,Campaigns,Folders & Docs,Automati
 await A.click('#workTabs [data-tab=contacts]');
 ok(await A.until(`!document.querySelector('#tool').classList.contains('hidden') && document.querySelector('#tool h2').textContent.includes('Contacts')`), 'Contacts opens from the strip');
 ok((await tabs()).includes('Workspace*'), 'Workspace is lit in the toolbar');
-ok(await A.ev(`!!document.querySelector('#workTabs .tabs-edit')`), 'the strip has a pencil for your pins');
+ok(await A.ev(`!!document.querySelector('#workTabs .pins-btn')`), 'the strip has your pins, as a 📌 drop-down');
 ok(await A.ev(`getComputedStyle(document.querySelector('#tabs .tab-sub')).display === 'none'`), 'at full size the sidebar does not repeat the sub-tabs');
 ok(await A.until(`document.querySelector('#tool').getBoundingClientRect().top >= document.querySelector('#workTabs').getBoundingClientRect().bottom - 1`, 1500), 'the tool starts under the strip, not over it');
 await A.click('#workTabs [data-tab=projects]');
@@ -98,7 +99,7 @@ await A.click('#tabs [data-tab=home]');
 await A.click('#tabs [data-tab=work]');
 await A.click('#workTabs [data-tab=contacts]');
 ok(await A.until(`document.querySelector('#tool h2')?.textContent.includes('Contacts')`), 'Contacts is open');
-ok(await A.ev(`(() => { const s = document.querySelector('#workTabs').getBoundingClientRect(), t = document.querySelector('#workTabs [data-tab=tools]').getBoundingClientRect(), e = document.querySelector('#workTabs .tabs-edit').getBoundingClientRect(); return s.right - t.right < 40 && e.right <= t.left + 1; })()`), 'Tools sits at the far right of the strip, after your pins');
+ok(await A.ev(`(() => { const s = document.querySelector('#workTabs').getBoundingClientRect(), t = document.querySelector('#workTabs [data-tab=tools]').getBoundingClientRect(), e = document.querySelector('#workTabs .pins-btn').getBoundingClientRect(); return s.right - t.right < 40 && e.right <= t.left + 1; })()`), 'Tools sits at the far right of the strip, your pins just before it');
 const split = `(() => { const s = document.querySelector('#split'); if (!s || s.classList.contains('hidden')) return null; const r = s.getBoundingClientRect(), m = document.querySelector('#main').getBoundingClientRect(); return { l: Math.round(r.left), r: Math.round(r.right), w: Math.round(r.width), mr: Math.round(m.right), title: s.querySelector('.split-title')?.textContent || '' }; })()`;
 await A.click('#workTabs [data-tab=tools]');
 ok(await A.until(`(${split})?.title === 'Tools'`), 'Tools opens in a split on the right');
@@ -152,6 +153,8 @@ ok(await A.until(`document.querySelector('#settings').classList.contains('hidden
 await A.ev(`document.querySelector('#split .split-close').click()`);
 await A.click('#settingsBtn');
 await A.until(`!document.querySelector('#settings').classList.contains('hidden')`);
+await A.ev(`[...document.querySelectorAll('#settings .set-tabs button')].find((b) => b.textContent === 'Account').click()`);
+ok(await A.until(`[...document.querySelectorAll('#settings .srow, #settings p')].some((x) => x.textContent.startsWith('Online now'))`), 'Settings → Account says who’s online now');
 await A.ev(`[...document.querySelectorAll('#settings .set-tabs button')].find((b) => b.textContent === 'General').click()`);
 await A.ev(`[...document.querySelectorAll('#settings .srow')].find((r) => r.textContent.startsWith('News on Home')).querySelector('input').click()`);
 ok(await (async () => { for (let i = 0; i < 30; i++) { if (JSON.stringify((await api('GET', '/state')).me.bar) === '["news"]') return true; await sleep(100); } return false; })(), 'turning it on is kept with the account');

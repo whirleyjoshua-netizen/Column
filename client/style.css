@@ -83,11 +83,6 @@ input:focus, textarea:focus, select:focus { border-color: var(--accent); }
 .ws:hover .ws-more { color: var(--text); }
 .live { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); flex: none; transition: background 0.3s; }
 .live.on { background: var(--ok); }
-.devices { display: flex; gap: 3px; }
-.devices span {
-  font-size: 10px; color: var(--muted); background: var(--panel); border: 1px solid var(--line);
-  border-radius: 20px; padding: 1px 7px; max-width: 80px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
 .icon-btn {
   width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center;
   background: none; border: 0; color: var(--muted); flex: none;
@@ -96,7 +91,7 @@ input:focus, textarea:focus, select:focus { border-color: var(--accent); }
 
 /* desktop window chrome */
 body.desktop .bar { -webkit-app-region: drag; }
-body.desktop .bar button, body.desktop .bar .devices, body.desktop .bar .ws { -webkit-app-region: no-drag; }
+body.desktop .bar button, body.desktop .bar .ws { -webkit-app-region: no-drag; }
 body.platform-darwin:not(.wide) .bar { padding-left: 76px; }
 
 .panes { flex: 1; display: flex; min-height: 0; }
@@ -171,7 +166,14 @@ body.wide .work-tabs:not([hidden]) { display: flex; gap: 2px; flex: none; height
 .work-tabs .tabs-edit:hover { opacity: 1; }
 .work-tabs .tabs-edit .tab-l { display: none; }
 .work-tabs .tabs-edit svg { width: 14px; height: 14px; }
-.work-tabs button[data-tab=tools] { margin-left: auto; } /* Tools at the far right (2026-11-16) */
+/* Your pins (📌▾) and Tools, together at the far right (2026-11-16). */
+.work-tabs .pins-btn { margin-left: auto; gap: 3px; padding: 0 8px; }
+.work-tabs .pins-btn .pins-n { font-size: 11.5px; font-weight: 600; color: var(--muted); }
+.work-tabs .pins-btn .pins-caret { display: grid; place-items: center; width: 12px; height: 12px; }
+.work-tabs .pins-btn .pins-caret svg { width: 12px; height: 12px; }
+.work-tabs .pins-btn.on, .work-tabs .pins-btn.on .pins-n { color: var(--accent); }
+#menu .pin-item { display: inline-flex; align-items: center; gap: 8px; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#menu .pin-item-ic { width: 16px; text-align: center; flex: none; }
 /* With the split open the strip is narrower: icons, and the name only on the tab that's open. */
 body.wide.split-on:not(.split-full) .work-tabs button:not(.on) .tab-l, body.wide.split-on:not(.split-full) .work-tabs .tab-pin:not(.on) .tab-pin-name { display: none; }
 body.wide.split-on:not(.split-full) .work-tabs button { padding: 0 9px; }
