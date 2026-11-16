@@ -10334,11 +10334,17 @@
       h('div', { class: 'inv-sum' }, stat('Items', d.items.length), stat('Low stock', d.low.length, d.low.length ? 'inv-warn' : ''), admin ? stat('Stock value', invMoney(d.value || 0)) : null, stat('Places', d.places.length)),
       h('div', { class: 'inv-bar' }, search,
         admin ? h('button', { class: 'btn small primary-btn inv-new', onclick: () => invItemForm(null) }, '+ Item') : null,
-        admin && d.items.length ? h('button', { class: 'btn small inv-receive', onclick: () => invMoveSheet(null, 'receive') }, 'Receive stock') : null),
-      h('div', { class: 'seg seg-sm inv-views', role: 'tablist' }, [['items', 'Items'], ['places', 'Places'], ['activity', 'Activity']].map(([k, l]) => h('button', { class: INVS.view === k ? 'on' : null, 'data-view': k, role: 'tab', 'aria-selected': String(INVS.view === k), onclick: () => setView(k) }, l))),
+        admin && d.items.length ? h('button', { class: 'btn small inv-receive', onclick: () => invMoveSheet(null, 'receive') }, 'Receive stock') : null,
+        h('button', { class: 'icon-btn inv-more', 'aria-label': 'More inventory options', html: I.more, onclick: (e) => openMenu(e.currentTarget, [
+          ...(admin && d.places.length && d.items.some((x) => x.track !== 'units') ? [{ label: 'Count a place…', run: () => invCountSheet() }] : []),
+          ...(admin ? [{ label: 'Import a spreadsheet…', run: () => invImport() }] : []),
+          ...(d.items.length ? [{ label: 'Export a spreadsheet', run: () => invExport() }] : []),
+        ]) })),
+      h('div', { class: 'seg seg-sm inv-views', role: 'tablist' }, [['items', 'Items'], ['reorder', d.low.length ? `Reorder (${d.low.length})` : 'Reorder'], ['places', 'Places'], ['activity', 'Activity']].map(([k, l]) => h('button', { class: INVS.view === k ? 'on' : null, 'data-view': k, role: 'tab', 'aria-selected': String(INVS.view === k), onclick: () => setView(k) }, l))),
     ];
     if (INVS.view === 'places') return [...out, ...invPlacesView(d, admin)];
     if (INVS.view === 'activity') return [...out, ...invActivityView(d)];
+    if (INVS.view === 'reorder') return [...out, ...invReorderView(d, admin)];
     // Items: filtered by where, what kind, and low stock.
     const q = INVS.q.trim().toLowerCase();
     const cats = [...new Set(d.items.map((x) => x.category).filter(Boolean))].sort();
@@ -10451,6 +10457,86 @@
   }
 
 
+
+  // ---------- reorder, counts, spreadsheets ----------
+  // What to order: everything at or under its reorder point, by supplier, with how many to get (its reorder amount,
+  // or enough to get back over the point twice), and for each supplier the order written out to copy, email or turn
+  // into a task. Receiving it is one tap from each line.
+  const invSuggest = (x) => (x.reorderQty > 0 ? x.reorderQty : Math.max(1, Math.ceil(x.reorderAt * 2 - x.onHand)));
+  function invOrderText(sup, list) {
+    const team = S.workspace?.name || '';
+    return `Hi${sup !== 'No supplier' ? ' ' + sup : ''},\n\nCould we order the following, please:\n\n${list.map((x) => `- ${invQty(invSuggest(x))} ${x.unit} ${x.name}${x.sku ? ' (' + x.sku + ')' : ''}`).join('\n')}\n\nThank you,\n${S.me?.member || ''}${team ? '\n' + team : ''}`;
+  }
+  function invReorderView(d, admin) {
+    const low = d.items.filter((x) => x.low);
+    if (!low.length) return [h('p', { class: 'day-hint' }, d.items.some((x) => x.reorderAt != null) ? 'Nothing is running low.' : 'Set a reorder point on items (Edit details) and they show here when they run low, grouped by who you buy them from.')];
+    const groups = new Map();
+    for (const x of low) { const k = x.supplier || 'No supplier'; (groups.get(k) || groups.set(k, []).get(k)).push(x); }
+    return [...groups.entries()].sort(([a], [b]) => (a === 'No supplier') - (b === 'No supplier') || a.localeCompare(b)).map(([sup, list]) => {
+      const est = admin ? list.reduce((n, x) => n + (x.cost != null ? Math.round(invSuggest(x) * x.cost) : 0), 0) : 0;
+      const text = invOrderText(sup, list);
+      return h('div', { class: 'inv-order', 'data-supplier': sup },
+        h('div', { class: 'inv-order-h' }, h('b', {}, sup), admin && est ? h('small', {}, `About ${invMoney(est)}`) : null),
+        h('div', { class: 'inv-order-lines' }, list.map((x) => h('div', { class: 'inv-order-line', 'data-item': x.id },
+          h('span', {}, h('b', {}, x.name), h('small', {}, `${invQty(x.onHand)} ${x.unit} left · reorder at ${invQty(x.reorderAt)}`)),
+          h('span', { class: 'inv-order-qty' }, `Order ${invQty(invSuggest(x))}`),
+          admin && x.track !== 'units' ? h('button', { class: 'btn small inv-order-got', onclick: () => invMoveSheet(x, 'receive') }, 'Received') : null))),
+        h('div', { class: 'btns' },
+          h('button', { class: 'btn small inv-order-copy', onclick: async () => { try { await navigator.clipboard.writeText(text); toast('Order copied'); } catch { sheet('The order', [h('textarea', { rows: 10, readonly: true }, text)], null); } } }, 'Copy the order'),
+          h('a', { class: 'btn small inv-order-email', href: `mailto:?subject=${encodeURIComponent('Order from ' + (S.workspace?.name || 'us'))}&body=${encodeURIComponent(text)}` }, 'Email it'),
+          h('button', { class: 'btn small inv-order-task', onclick: async () => { try { const t = await api('POST', '/tasks', { text: `Order from ${sup}: ${list.map((x) => `${invQty(invSuggest(x))} ${x.name}`).join(', ')}`.slice(0, 500) }); upsertTask?.(t); toast('Task made'); } catch (e) { toast(e.message); } } }, 'Make it a task')));
+    });
+  }
+  // A stock-take at one place: every counted item, its number filled in to change.
+  function invCountSheet(placeId) {
+    const d = INVS.data;
+    const place = h('select', { class: 'inv-c-place' }, d.places.map((p) => h('option', { value: p.id, selected: p.id === placeId }, p.name)));
+    const box = h('div', { class: 'inv-count' });
+    const draw = () => {
+      const items = d.items.filter((x) => x.track !== 'units').sort((a, b) => (b.stock[place.value] || 0) - (a.stock[place.value] || 0) || a.name.localeCompare(b.name));
+      box.replaceChildren(...items.map((x) => h('label', { class: 'inv-count-row', 'data-item': x.id }, h('span', {}, x.name, h('small', {}, ` · now ${invQty(x.stock[place.value] || 0)} ${x.unit}`)), h('input', { type: 'number', min: 0, step: 'any', value: x.stock[place.value] || 0, 'data-item': x.id, class: 'inv-c-qty' }))));
+    };
+    place.addEventListener('change', draw);
+    draw();
+    sheet('Count a place', [h('label', {}, 'Where', place), h('small', { class: 'hint' }, 'Type what’s actually there. Only the ones that changed are saved, each as a count in its history.'), box], async () => {
+      const counts = [...box.querySelectorAll('.inv-c-qty')].map((i) => ({ itemId: i.dataset.item, qty: i.value }));
+      const r = await api('POST', '/inventory/count', { placeId: place.value, counts });
+      toast(r.changed ? `Counted: ${r.changed} changed` : 'Counted: nothing changed');
+      await loadInventory();
+    }, 'Save the count');
+  }
+  // Spreadsheets: in (matched by SKU, then name) and out (what's on hand where; costs only for owners and admins).
+  const INV_COLS = { name: ['name', 'item', 'item name', 'product', 'description'], sku: ['sku', 'part', 'part number', 'part #', 'item number', 'code'], category: ['category', 'type', 'group'], unit: ['unit', 'uom', 'units'], cost: ['cost', 'unit cost', 'cost each'], price: ['price', 'sell price', 'price each'], reorderAt: ['reorder at', 'reorder point', 'min', 'minimum', 'reorder level'], reorderQty: ['reorder qty', 'reorder quantity', 'order qty', 'reorder amount'], supplier: ['supplier', 'vendor'], onHand: ['on hand', 'qty', 'quantity', 'stock', 'count'], place: ['place', 'location', 'where', 'warehouse'], notes: ['notes', 'note'] };
+  function invImport() {
+    const input = h('input', { type: 'file', accept: '.csv,.tsv,.txt', class: 'hidden' });
+    input.addEventListener('change', async () => {
+      const file = input.files[0];
+      if (!file) return;
+      const rows = parseDelimited(await file.text()).filter((r) => r.some((c) => String(c).trim()));
+      if (rows.length < 2) return toast('That file has no rows under its headings.');
+      const head = rows[0].map((c) => String(c).trim().toLowerCase().replace(/\s+/g, ' '));
+      const col = Object.fromEntries(Object.entries(INV_COLS).map(([k, names]) => [k, head.findIndex((c) => names.includes(c))]));
+      if (col.name < 0) return toast('Add a “Name” column (the item’s name) and try again.');
+      const out = rows.slice(1).map((r) => Object.fromEntries(Object.entries(col).filter(([, i]) => i >= 0).map(([k, i]) => [k, String(r[i] ?? '').trim()])));
+      try {
+        const r = await api('POST', '/inventory/import', { rows: out });
+        toast(`Imported: ${r.added} new, ${r.updated} updated${r.counted ? `, ${r.counted} counted` : ''}${r.skipped ? `, ${r.skipped} skipped` : ''}`);
+        await loadInventory();
+      } catch (e) { toast(e.message); }
+      input.remove();
+    });
+    document.body.append(input);
+    input.click();
+  }
+  function invExport() {
+    const d = INVS.data, admin = d.canManage;
+    const esc = (v) => { let t = String(v ?? ''); if (/^[=+\-@\t\r]/.test(t)) t = "'" + t; return /[",\n\r]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t; };
+    const head = ['Name', 'SKU', 'Category', 'Unit', 'On hand', ...d.places.map((p) => p.name), 'Reorder at', 'Reorder qty', 'Supplier', ...(admin ? ['Cost', 'Price', 'Value'] : [])];
+    const rows = d.items.map((x) => [x.name, x.sku, x.category, x.unit, x.onHand, ...d.places.map((p) => x.stock[p.id] || 0), x.reorderAt ?? '', x.reorderQty ?? '', x.supplier, ...(admin ? [x.cost != null ? (x.cost / 100).toFixed(2) : '', x.price != null ? (x.price / 100).toFixed(2) : '', x.value != null ? (x.value / 100).toFixed(2) : ''] : [])]);
+    const csv = [head, ...rows].map((r) => r.map(esc).join(',')).join('\r\n') + '\r\n';
+    const a = h('a', { href: URL.createObjectURL(new Blob(['﻿' + csv], { type: 'text/csv' })), download: `Inventory - ${new Date().toISOString().slice(0, 10)}.csv` });
+    a.click();
+  }
   // ---------- Inventory on a job: what it used, what's out at it, and doing either from here ----------
   // The panel redraws often: it shows what it last knew at once, and refreshes behind.
   function invJobBox(r, name = '') {

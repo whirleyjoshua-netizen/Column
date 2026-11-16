@@ -279,6 +279,61 @@ export function inventoryModule({ db, save, broadcast, rid, cleanText, readJson,
         save();
         return send(res, 200, { unitId: u.id, itemId: u.itemId });
       }
+      // A stock-take at one place: every count given sets that item there; only differences are logged.
+      if (b === 'count' && !c && m === 'POST') {
+        if (!admin) throw err('Only owners and admins count stock.', 403);
+        const body = await readJson(req, 500_000);
+        const place = placeOf(ws, body.placeId);
+        if (!place) throw err('Pick the place you counted.');
+        let changed = 0, same = 0;
+        for (const row of (Array.isArray(body.counts) ? body.counts : []).slice(0, ITEMS_MAX)) {
+          const x = row?.itemId && db.invItems[row.itemId];
+          if (!x || x.wsId !== ws.id || x.archived || x.track === 'units') continue;
+          const n = qty(row.qty);
+          if (!(n >= 0)) continue;
+          if (n === (x.stock[place.id] || 0)) { same++; continue; }
+          move(ws, auth, { kind: 'count', itemId: x.id, qty: n, from: place.id, note: cleanText(body.note, 200) || 'Stock-take' });
+          changed++;
+        }
+        return send(res, 200, { changed, same });
+      }
+      // A spreadsheet of items: matched by SKU, then by name; new ones added; "on hand" counted in at a place (by
+      // name, made if it's new). Equipment tracked one by one isn't counted this way.
+      if (b === 'import' && !c && m === 'POST') {
+        if (!admin) throw err('Only owners and admins import items.', 403);
+        const body = await readJson(req, 5_000_000);
+        const rows = (Array.isArray(body.rows) ? body.rows : []).slice(0, ITEMS_MAX);
+        let added = 0, updated = 0, counted = 0, skipped = 0;
+        const placeByName = (name) => {
+          const nm = cleanText(name, 80);
+          if (!nm) return firstPlace(ws, auth.member);
+          let p = placesOf(ws.id).find((y) => y.name.toLowerCase() === nm.toLowerCase());
+          if (!p && placesOf(ws.id).length < PLACES_MAX) { p = { id: rid(), wsId: ws.id, name: nm, kind: /truck|van/i.test(nm) ? 'truck' : 'warehouse', address: '', memberId: null, createdAt: Date.now(), by: auth.member }; db.invPlaces[p.id] = p; }
+          return p || firstPlace(ws, auth.member);
+        };
+        for (const r of rows) {
+          if (!r || typeof r !== 'object' || !cleanText(r.name, 120)) { skipped++; continue; }
+          const sku = cleanText(r.sku, 60).toLowerCase();
+          let x = (sku && itemsOf(ws.id).find((y) => y.sku && y.sku.toLowerCase() === sku)) || itemsOf(ws.id).find((y) => y.name.toLowerCase() === cleanText(r.name, 120).toLowerCase());
+          const fields = Object.fromEntries(['name', 'sku', 'category', 'unit', 'supplier', 'notes', 'cost', 'price', 'reorderAt', 'reorderQty'].filter((k) => r[k] !== undefined && String(r[k]).trim() !== '').map((k) => [k, r[k]]));
+          try {
+            if (x) { applyItem(x, fields); x.updatedAt = Date.now(); updated++; }
+            else {
+              if (itemsOf(ws.id).length >= ITEMS_MAX) { skipped++; continue; }
+              x = applyItem({ id: rid(), wsId: ws.id, name: '', sku: '', category: '', unit: 'each', supplier: '', notes: '', cost: null, price: null, reorderAt: null, reorderQty: null, stock: {}, track: 'stock', createdAt: Date.now(), updatedAt: Date.now(), by: auth.member }, fields);
+              db.invItems[x.id] = x;
+              added++;
+            }
+          } catch { skipped++; continue; }
+          if (r.onHand !== undefined && String(r.onHand).trim() !== '' && x.track !== 'units') {
+            const n = qty(r.onHand);
+            const p = placeByName(r.place);
+            if (n >= 0 && n !== (x.stock[p.id] || 0)) { move(ws, auth, { kind: 'count', itemId: x.id, qty: n, from: p.id, note: 'From a spreadsheet' }); counted++; }
+          }
+        }
+        save(); news(ws.id);
+        return send(res, 200, { added, updated, counted, skipped });
+      }
       if (b === 'job' && c && m === 'GET') {
         if (!recordAt(String(c), ws.id, auth.memberId)) throw err('That job is gone, or you can’t see it.', 404);
         return send(res, 200, jobView(ws, auth, c));
