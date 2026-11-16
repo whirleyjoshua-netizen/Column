@@ -132,6 +132,7 @@ try {
   ok(await A.until(`!!(${need('Email Dana Ruiz')})`, 12000), 'Home says the automation needs an OK to email Dana');
   await A.tap(need('Email Dana Ruiz'));
   ok(await A.until(`[...document.querySelectorAll('#sheet button')].some((b) => b.textContent === '✓ Approve')`), 'its maker can OK it (it’s the automation asking)');
+  ok(await A.ev(`document.querySelector('#sheet .ap-preview')?.textContent.includes('AC tune-up is done') && document.querySelector('#sheet .ap-preview').textContent.includes('is finished. Thank you!')`), 'the OK shows the email itself: subject and message');
   await A.tap(`[...document.querySelectorAll('#sheet button')].find((b) => b.textContent === '✓ Approve')`);
   let sent = false;
   for (let i = 0; i < 40 && !sent; i++) { sent = mails().some((m) => m.to === 'dana@x.test' && m.subject === 'AC tune-up is done'); if (!sent) await sleep(150); }

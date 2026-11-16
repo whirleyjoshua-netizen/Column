@@ -3521,7 +3521,7 @@ function runWaits(now) {
 // step is walked, waits included (it says it would wait), and nothing is changed, sent or asked for.
 function sampleCtx(t, auth) {
   return { recordName: 'Sample job', record: null, project: t.projectId ? db.projects[t.projectId] : null, contact: { name: 'Sample customer' }, customer: 'Sample customer', amount: t.over != null ? t.over + 50 : 250,
-    stageLabel: t.to || 'Done', stage: t.stage || 'customer', from: t.kind === 'record.stage' ? 'Scheduled' : 'Sample sender', who: auth.member, whoId: auth.memberId, date: teamDay(auth.ws.id), task: { text: 'Sample task' },
+    stageLabel: /^(contact|attempt)\./.test(t.kind) ? stageLabel(t.stage || 'customer') : t.to || 'Done', stage: t.stage || 'customer', from: t.kind === 'record.stage' ? 'Scheduled' : 'Sample sender', who: auth.member, whoId: auth.memberId, date: teamDay(auth.ws.id), task: { text: 'Sample task' },
     campaign: t.campaignId ? db.campaigns[t.campaignId] : { name: 'Sample campaign' }, note: 'Sample note', text: 'Sample text message', file: { name: 'sample.pdf' }, document: 'Sample agreement.pdf',
     doc: 'Sample doc', pin: 'Sample pin', invoice: 'INV-0000', category: 'Jobs', phone: '+1 702 555 0100', crew: auth.member, time: '9:00', outcome: t.outcome || 'Interested', status: t.statuses?.[0] || 'onTrack', direction: t.direction || 'in' };
 }
@@ -3614,10 +3614,11 @@ async function flowCall(x, method, p, body = {}) {
   if (r.status >= 300) throw new Error(cleanText(r.body?.error, 200) || `it couldn’t be done (${r.status})`);
   return { body: r.body };
 }
-function flowAsk(x, summary, req, covers = []) {
+// preview: the words that would go out (an email's subject and message, a text), shown with the OK so it's read first.
+function flowAsk(x, summary, req, covers = [], preview = null) {
   const ws = db.workspaces[x.wsId];
   if (!memberIn(ws.id, x.memberId)) throw new Error('its maker isn’t on the team any more');
-  RULES.ask(ws, { byId: x.memberId, by: `Automation “${x.name}”`, summary, req, flow: x.id, covers });
+  RULES.ask(ws, { byId: x.memberId, by: `Automation “${x.name}”`, summary, req, flow: x.id, covers, preview });
   return `Waiting for an OK: ${clipText(summary, 120)}`;
 }
 // Who an event is about, to write to: its contact, or the customer on the job or record it's about.
@@ -3657,12 +3658,12 @@ async function flowAction(x, a, ctx, ws) {
       if (!c.phone || !TW.e164(c.phone)) return `Didn’t text ${contactName(c)}: no phone number`;
       if (!TW.on(ws.id)) throw new Error('texting isn’t connected (Settings → Texting)');
       const body = autoFill(a.text, ctx, ws.id);
-      return flowAsk(x, `Text ${contactName(c)}: “${clipText(body, 160)}”`, { method: 'POST', path: `/api/contacts/${c.id}/texts`, body: { body } });
+      return flowAsk(x, `Text ${contactName(c)}: “${clipText(body, 160)}”`, { method: 'POST', path: `/api/contacts/${c.id}/texts`, body: { body } }, [], { to: c.phone, body });
     }
     if (!EMAIL_RE.test(c.email || '')) return `Didn’t email ${contactName(c)}: no email address`;
     if (doNotEmail(ws.id).has(emailKey(c.email))) return `Didn’t email ${contactName(c)}: they unsubscribed`;
     const subject = autoFill(a.subject, ctx, ws.id), body = autoFill(a.text, ctx, ws.id);
-    return flowAsk(x, `Email ${contactName(c)}: ${clipText(subject, 120)}`, { method: 'POST', path: `/api/contacts/${c.id}/email`, body: { subject, body, recordId: rec?.id || null } });
+    return flowAsk(x, `Email ${contactName(c)}: ${clipText(subject, 120)}`, { method: 'POST', path: `/api/contacts/${c.id}/email`, body: { subject, body, recordId: rec?.id || null } }, [], { to: c.email, subject, body });
   }
   if (a.kind === 'money') {
     const amount = a.amount ?? (ctx.amount != null ? Number(ctx.amount) : null);

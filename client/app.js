@@ -5767,7 +5767,7 @@
       const problems = every.filter((y) => autoProblem(y)).length;
       const anyOpen = every.some((y) => !B.folded.has(y));
       const pastRuns = (x?.runs || []).filter((r) => r.path?.length);
-      const runSel = h('select', { class: 'auto-runs', 'aria-label': 'Show a past run' }, opt('', 'Show a past run…', B.run), pastRuns.map((r, n) => opt(String(n), `${r.ok ? '✓' : '✕'} Run ${ago(r.at)}`, B.run)));
+      const runSel = h('select', { class: 'auto-runs', 'aria-label': 'Show a past run' }, opt('', 'Show a past run…', B.run), pastRuns.map((r, n) => opt(String(n), `${r.ok ? '✓' : '✕'} ${ago(r.at)} · ${shortText(r.note, 60)}`, B.run)));
       runSel.addEventListener('change', () => {
         const r = pastRuns[Number(runSel.value)];
         if (!r) return clearLit();
@@ -5783,7 +5783,7 @@
         el.dispatchEvent(new Event('input', { bubbles: true }));
         el.focus();
       };
-      box.replaceChildren(
+      box.replaceChildren(...[
         h('label', {}, 'Name', name),
         h('div', { class: 'auto-tools' },
           h('button', { class: 'btn small auto-test-btn', onclick: testIt }, '▶ Test it'),
@@ -5794,7 +5794,7 @@
         h('div', { class: 'auto-canvas' },
           h('div', { class: 'auto-step auto-trigger' + (B.lit ? ' lit' : '') }, h('div', { class: 'auto-step-h' }, 'When'), h('label', {}, '', kind), ...only),
           h('div', { class: 'auto-step auto-flow' }, h('div', { class: 'auto-step-h' }, 'Then'), stepList(dr.actions, 0))),
-        words || answers ? h('div', { class: 'auto-words' }, h('span', {}, 'Words that fill themselves in:'), [...(AUTO_WORDS[t.kind] || []), ...(answers ? ['answer'] : [])].map((w) => h('button', { class: 'auto-word', title: `Put {${w}} where the cursor is`, onmousedown: (e) => e.preventDefault(), onclick: () => putWord(w) }, `{${w}}`))) : null);
+        words || answers ? h('div', { class: 'auto-words' }, h('span', {}, 'Words that fill themselves in:'), [...(AUTO_WORDS[t.kind] || []), ...(answers ? ['answer'] : [])].map((w) => h('button', { class: 'auto-word', title: `Put {${w}} where the cursor is`, onmousedown: (e) => e.preventDefault(), onclick: () => putWord(w) }, `{${w}}`))) : null].filter(Boolean));
     };
     draw();
     sheet(x ? `Automation · ${x.name}` : recipe ? recipe.name : 'New automation', [box], async () => {
@@ -9452,8 +9452,11 @@
     const waiting = x.status === 'pending';
     const mine = x.byId === S.me?.memberId && !x.flow;
     const takeBack = async () => { try { RU.data = { ...RU.data, ...(await api('DELETE', '/approvals/' + x.id)) }; closeSheet(); toast('Request taken back'); } catch (e) { toast(e.message); } };
+    // What an automation would send, word for word, so it's read before it's OK'd.
+    const pv = x.preview ? h('div', { class: 'ap-preview' }, x.preview.to ? h('small', {}, 'To ' + x.preview.to) : null, x.preview.subject ? h('b', {}, x.preview.subject) : null, h('div', { class: 'ap-body' }, x.preview.body || '')) : null;
     sheet(waiting ? `${x.by} needs an OK` : 'Request', [
       h('p', {}, h('b', {}, x.summary)),
+      pv,
       h('p', { class: 'day-hint' }, `${x.by} asked ${ago(x.at)}.${x.decidedBy ? ` ${x.decidedBy} ${x.status === 'failed' ? 'approved it, but it couldn’t be done' : x.status} ${ago(x.decidedAt)}.` : ''}${x.error ? ' ' + x.error : ''}${x.note ? ` “${x.note}”` : ''}`),
       waiting && RU.data.canApprove && !mine ? h('label', {}, 'Note', note) : null,
       waiting && RU.data.canApprove && !mine ? h('div', { class: 'btns' }, h('button', { class: 'btn primary-btn', onclick: () => decide(true) }, '✓ Approve'), h('button', { class: 'btn', onclick: () => decide(false) }, 'Decline')) : null,

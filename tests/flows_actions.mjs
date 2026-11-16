@@ -123,6 +123,7 @@ try {
   // The OKs: the owner who made it is asked too, and can OK it.
   const aps = (await rico('GET', '/approvals')).body.approvals.filter((x) => x.status === 'pending' && x.flow);
   ok(aps.length === 3 && aps.every((x) => x.by === 'Automation “Done → follow through”'), 'three OKs wait, from the automation');
+  ok(aps.find((x) => /^Email/.test(x.summary))?.preview?.body === 'Hi,\n\nAC tune-up is finished.\n\nThanks!' && aps.find((x) => /^Email/.test(x.summary)).preview.subject === 'AC tune-up is done' && aps.find((x) => /^Text/.test(x.summary))?.preview?.body === 'Hi, AC tune-up is done. Thanks from Cool Air!', 'each OK shows the words that would go out (subject and message)');
   const apOf = (re) => aps.find((x) => re.test(x.summary));
   ok((await sam('POST', `/approvals/${apOf(/^Text/).id}/approve`)).status === 403, 'an admin can’t OK when only owners approve');
   r = await rico('POST', `/approvals/${apOf(/^Text/).id}/approve`, {});

@@ -59,8 +59,9 @@ export function rulesModule({ db, save, broadcast, rid, cleanText, readJson, sen
 
   // An automation's send to a customer (Flows): always kept for an OK, whoever made it, as theirs. covers: the team
   // rules the OK also answers (sending an invoice over the limit), so it isn't asked twice.
-  function ask(ws, { byId, by, summary, req, flow, covers = [] }) {
-    const x = { id: rid(), wsId: ws.id, action: 'flow', amount: 0, summary: cleanText(summary, 300), target: null, req, by, byId, flow, covers, at: Date.now(), status: 'pending' };
+  function ask(ws, { byId, by, summary, req, flow, covers = [], preview = null }) {
+    const pv = preview ? { to: cleanText(preview.to, 200), subject: cleanText(preview.subject, 200), body: String(preview.body ?? '').slice(0, 5000) } : null;
+    const x = { id: rid(), wsId: ws.id, action: 'flow', amount: 0, summary: cleanText(summary, 300), target: null, req, by, byId, flow, covers, ...(pv ? { preview: pv } : {}), at: Date.now(), status: 'pending' };
     db.approvals[x.id] = x;
     save();
     for (const id of approverIds(ws)) notify(ws.id, id, { title: `${by} needs your OK`, text: x.summary, kind: 'approval', go: 'approval:' + x.id });

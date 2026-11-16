@@ -52,6 +52,7 @@ try {
   await A.tap(`[...document.querySelectorAll('#tool button')].find((b) => b.textContent === '+ New automation')`);
   ok(await A.until(`!!document.querySelector('#sheet .sheet.auto-builder .auto-canvas')`), 'the builder opens');
   ok(await A.ev(`(() => { const r = document.querySelector('#sheet .sheet').getBoundingClientRect(); return r.width >= innerWidth - 2 && r.height >= innerHeight - 2; })()`), 'full screen');
+  ok(await A.ev(`![...document.querySelector('#sheet .auto-edit').childNodes].some((n) => n.nodeType === 3 && /null|undefined/.test(n.textContent))`), 'no stray “null” in the builder');
   ok(await A.ev(`!!document.querySelector('#sheet .auto-canvas .auto-trigger .auto-kind') && !!document.querySelector('#sheet .auto-canvas .auto-flow .auto-steps .auto-act') && document.querySelector('#sheet .auto-end')?.textContent === 'Done'`), 'what sets it off at the top, then the steps, then Done');
   await A.pick(`document.querySelector('#sheet .auto-kind')`, 'contact.created');
   await A.fill(`document.querySelector('#sheet .auto-edit input')`, 'Sort leads');
@@ -135,6 +136,7 @@ try {
   ok(await A.until(`[...document.querySelectorAll('#tool .auto-row')].some((r) => r.textContent.includes('Make') || r.textContent.includes('Made'))`, 10000), '(it ran for Bo)');
   await A.tap(`[...document.querySelectorAll('#tool .auto-row')].find((r) => r.textContent.includes('Sort leads')).querySelector('.auto-main')`);
   ok(await A.until(`!!document.querySelector('#sheet .auto-runs')`), 'reopened, past runs can be shown');
+  ok(await A.ev(`/Bo Buyer|Made the task/.test([...document.querySelector('#sheet .auto-runs').options][1].textContent)`), 'each past run says what it did, so they can be told apart');
   await A.pick(`document.querySelector('#sheet .auto-runs')`, '0');
   ok(await A.until(`[...document.querySelectorAll('#sheet .auto-branches > .auto-steps.nested')[1].querySelectorAll('.auto-act')].every((x) => x.classList.contains('lit')) && [...document.querySelectorAll('#sheet .auto-branches > .auto-steps.nested')[0].querySelectorAll('.auto-act')].every((x) => x.classList.contains('dim'))`), 'a past run lights the way it went (Bo: Otherwise)');
 

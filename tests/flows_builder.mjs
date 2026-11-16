@@ -47,6 +47,8 @@ try {
   ok(/^No: \{stage\} is Lead$/.test(said['0']) && r.body.steps[0].yes === false, 'the “only if” says no, and why');
   ok(said['0.else.0'] === 'Notify the owners: “Sample customer is in”' && said['1'] === 'Wait 2 days, then go on' && said['2'] === 'Make the task “Call Sample customer”', 'each step says what it would do, with the words filled in');
 
+  r = await rico('POST', '/automations/test', { name: 'Stage', trigger: { kind: 'contact.created' }, actions: [{ kind: 'notify', text: '{contact} ({stage})', to: ['owners'] }] });
+  ok(r.body.steps[0].said === 'Notify the owners: “Sample customer (Customer)”', `a made-up contact has a contact’s stage, not a job’s (${r.body.steps[0].said})`);
   // A real lead comes in: the test uses it.
   const before = await items();
   await rico('POST', '/contacts', { name: 'Ana Lead', stage: 'lead' });
