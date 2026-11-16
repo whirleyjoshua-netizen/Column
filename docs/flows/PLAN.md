@@ -119,5 +119,10 @@ Each step: server tests that fail on the code before, and real-browser tests (he
     app.
   - `tests/flows_recipes_ui.mjs` opens every one and saves it as it is. 22 save; the other 3 need a choice first
     (a project's date field, another app's address) and say so.
-- Flows is complete except `create_automation` for the agents (so "Plan my business" can draft real automations).
+- Ready-made automations are live as 7ae5395.
+- `create_automation` is built: the Chief of Staff and Operations can draft a real automation (Plan my business
+  too). It's marked important, so it always waits for the person's yes. After the yes it's made through
+  `POST /api/automations`, as drafted, and can be undone. It never sends to an outside address, and a trigger that
+  doesn't exist is refused before it's even proposed. Tested in `tests/flows_agent.mjs`.
+- All five Flows steps are built.
 - New events for the engine round go into `server/flows.js` `EVENTS` and fire through `automate()`.

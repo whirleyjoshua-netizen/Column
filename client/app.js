@@ -9955,6 +9955,7 @@
     if (c.kind === 'contact') return openTool('contacts');
     if (c.kind === 'campaign') { closeTool(); return campById(c.id) ? openCampaign(c.id) : setTab('camps'); }
     if (c.kind === 'image') { const it = S.items.find((y) => y.id === c.id); return it ? openPreview(it) : toast('That picture isn’t here any more.'); }
+    if (c.kind === 'automation') { closeTool(); openBarItem('automations'); return api('GET', '/automations').then((l) => { S.automations = l; renderAutos(); const x = l.find((y) => y.id === c.id); x ? autoSheet(x) : toast('That automation is gone.'); }).catch((e) => toast(e.message)); }
   }
   async function agStep(x, ids, what, args) {
     try {

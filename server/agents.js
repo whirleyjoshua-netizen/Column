@@ -29,7 +29,7 @@ export const AGENTS = {
       'Turns commitments in emails you paste into tasks',
       'Prepares your end-of-day summary and plans the week',
     ],
-    tools: ['look_at_day', 'list_tasks', 'find_records', 'read_record', 'list_campaigns', 'team_schedule', 'plan_route', 'find_docs', 'read_doc', 'look_at_money', 'set_budget', 'add_bill', 'add_to_company_hq', 'create_task', 'update_task', 'schedule_time', 'move_time', 'write_doc', 'post_to_chat', 'notify_me'],
+    tools: ['look_at_day', 'list_tasks', 'find_records', 'read_record', 'list_campaigns', 'team_schedule', 'plan_route', 'find_docs', 'read_doc', 'look_at_money', 'set_budget', 'add_bill', 'add_to_company_hq', 'create_automation', 'create_task', 'update_task', 'schedule_time', 'move_time', 'write_doc', 'post_to_chat', 'notify_me'],
     workflows: [
       { key: 'briefing', name: 'Morning briefing', ask: 'Give me my morning briefing: what matters today, what is overdue or at risk, and the first thing I should do. Keep it short.', sched: { days: [1, 2, 3, 4, 5], at: 7 * 60 } },
       { key: 'plan_day', name: 'Plan my day', ask: 'Plan my day today: put my tasks into open time around what is already booked, most important first, with breaks, and tell me what won’t fit and what to move or hand off.' },
@@ -73,7 +73,7 @@ export const AGENTS = {
       'Checks project health and says what’s slipping',
       'Closes jobs out with a completion report',
     ],
-    tools: ['list_projects', 'find_records', 'read_record', 'list_tasks', 'look_at_day', 'team_schedule', 'plan_route', 'find_docs', 'read_doc', 'find_photos', 'look_at_photos', 'create_project', 'create_record', 'update_record', 'log_note', 'book_visit', 'draft_invoice', 'send_invoice', 'send_signoff', 'create_task', 'update_task', 'schedule_time', 'move_time', 'write_doc', 'draft_email', 'post_to_chat', 'notify_me'],
+    tools: ['list_projects', 'find_records', 'read_record', 'list_tasks', 'look_at_day', 'team_schedule', 'plan_route', 'find_docs', 'read_doc', 'find_photos', 'look_at_photos', 'create_project', 'create_record', 'update_record', 'log_note', 'book_visit', 'draft_invoice', 'send_invoice', 'send_signoff', 'create_automation', 'create_task', 'update_task', 'schedule_time', 'move_time', 'write_doc', 'draft_email', 'post_to_chat', 'notify_me'],
     workflows: [
       { key: 'kickoff', name: 'Project kickoff', ask: 'We just won this work. Organize it: the job (or project), the tasks in order with who and when, a materials list, visits, and a completion checklist:\n\n', paste: true },
       { key: 'prep', name: 'Job preparation', ask: 'Prepare for the jobs coming up in the next few days: a checklist for each, what to bring or order, and anything missing before we can start.' },
@@ -144,7 +144,7 @@ export const MISSIONS = {
     ask: ['where it breaks or gets slow now'],
     find: ['what a job looks like from first call to paid (the stages)', 'who does what (office, crew)'],
     look: 'Projects and their stages, overdue and stuck jobs, visits and routes, invoices and sign-offs, docs',
-    prepare: ['a project or the stages the work moves through, if missing', 'checklists and a work order template as docs', 'tasks to clear stuck or overdue jobs', 'invoice drafts for finished jobs that aren’t billed', 'automations worth setting up, written in the plan doc', 'a weekly operations rhythm on the schedule'],
+    prepare: ['a project or the stages the work moves through, if missing', 'checklists and a work order template as docs', 'tasks to clear stuck or overdue jobs', 'invoice drafts for finished jobs that aren’t billed', 'automations worth setting up, each made with create_automation (it waits for their yes)', 'a weekly operations rhythm on the schedule'],
     measure: 'jobs by stage, days from sold to done, jobs finished but not billed, overdue tasks',
   },
   time: {
@@ -178,7 +178,7 @@ const PHOTO_MAX = 5_000_000; // what AI models take as a picture
 const MAX_PARTS = 4;
 const MAX_TURN_CHARS = 30_000;
 
-export function agentsModule({ sees = () => true, db, save, broadcast, rid, cleanText, readJson, send, notify, replay, run: llmRun, sendEmail, textToDoc, PJ, isAdminId, localNow, tzOf, fmtMinutes, hasAi = () => true, POSTIZ = null, makeImageItem, itemFile, noContact = (c) => !!c.dne, canPicture = () => true, describeImages = async () => ({}) }) {
+export function agentsModule({ autoEvents = [], sees = () => true, db, save, broadcast, rid, cleanText, readJson, send, notify, replay, run: llmRun, sendEmail, textToDoc, PJ, isAdminId, localNow, tzOf, fmtMinutes, hasAi = () => true, POSTIZ = null, makeImageItem, itemFile, noContact = (c) => !!c.dne, canPicture = () => true, describeImages = async () => ({}) }) {
   db.agentRuns ||= {};
   db.agentPrefs ||= {};
   // A step that was being approved when the server stopped may or may not have gone out: never run it again
@@ -596,6 +596,27 @@ export function agentsModule({ sees = () => true, db, save, broadcast, rid, clea
         const r = await cx.call('POST', '/api/hq/entries', { kind: a.kind, title: a.title, text: a.text || '', source: 'ai' });
         const id = r.body?.entry?.id;
         return done(r, { kind: 'hq', id, label: a.title }, id ? { undo: { method: 'DELETE', path: `/api/hq/entries/${id}` } } : {});
+      },
+    },
+    // ----- automations (Flows): "when this happens, do that", every time; a new one always waits for a yes -----
+    create_automation: {
+      kind: 'write', important: true, label: (a) => `Automation: ${words(a.name, 60)} (${words(autoEvents.find((e) => e.type === a.trigger?.kind)?.label || a.trigger?.kind, 60)})`,
+      description: 'Set up an automation for the team (owners and admins): when something happens in Kloomie, it does the same steps every time. Always waits for the person’s yes. '
+        + 'trigger.kind is one of: ' + autoEvents.map((e) => e.type).join(', ') + '. Optional trigger filters: to (a job’s stage it moves to, for record.stage), stage (a contact’s, like lead or customer), over (dollars). '
+        + 'steps, in order: {kind:"task", text, assignee:"who"|"", dueIn} · {kind:"post", text, channelId:"general"} · {kind:"notify", text, to:["owners"|"admins"|"who"]} · {kind:"contact", stage, tag} · '
+        + '{kind:"wait", amount, unit:"minutes"|"hours"|"days"} · {kind:"if", when:[{field, op:"is"|"not"|"contains"|"over"|"under"|"set"|"empty", value}], then:[steps], else:[steps]} · '
+        + '{kind:"visit", visit:"Install"|"Service"|"Estimate"|…, inDays, start:"HH:MM", length} · {kind:"invoice", send:true|false} · {kind:"text", text} · {kind:"email", subject, text} · {kind:"agent", agent:"sales"|"ops"|"chief"|"marketing"|"team", ask, wait}. '
+        + 'Texts, emails and sending an invoice wait for an OK each time anyway. Words in {braces} fill themselves in from what happened: {record}, {customer}, {amount}, {contact}, {stage}, {who}, {date}… Keep it to what the business told you or its records show.',
+      parameters: { type: 'object', properties: { name: { type: 'string' }, trigger: { type: 'object' }, steps: { type: 'array', items: { type: 'object' } }, why: { type: 'string' } }, required: ['name', 'trigger', 'steps'] },
+      check(cx, a) {
+        if (!autoEvents.some((e) => e.type === a.trigger?.kind)) throw new Error(`No trigger called ${a.trigger?.kind}. Use one of: ${autoEvents.map((e) => e.type).join(', ')}.`);
+        if (!Array.isArray(a.steps) || !a.steps.length) throw new Error('Give it at least one step.');
+        // Never to an outside address from here: a web address the model wrote is outside text, not the person's choice.
+        if (JSON.stringify(a.steps).includes('"webhook"')) throw new Error('Sending to another app is set up by a person in the builder, not by an agent.');
+      },
+      async run(cx, a) {
+        const r = await cx.call('POST', '/api/automations', { name: String(a.name || '').slice(0, 80), trigger: a.trigger, actions: a.steps });
+        return done(r, { kind: 'automation', id: r.body?.id, label: r.body?.name || a.name }, r.body?.id ? { undo: { method: 'DELETE', path: `/api/automations/${r.body.id}` } } : {});
       },
     },
     book_visit: {
