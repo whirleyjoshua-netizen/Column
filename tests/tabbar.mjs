@@ -128,10 +128,14 @@ await A.click('#tabs [data-tab=work]');
 await A.click('#workTabs [data-tab=tools]');
 await A.until(`(${split})?.title === 'Tools'`);
 await A.ev(`document.querySelector('#split [data-tool=column]').click()`);
-ok(await A.until(`!document.querySelector('#panes').classList.contains('hidden') && !(${split})`), 'Stacks opens as the page (the split closes)');
-ok((await strip()).includes('Tools*'), 'Stacks is in Workspace → Tools: ' + await strip());
-ok(await A.until(`document.querySelector('#panes').getBoundingClientRect().top >= document.querySelector('#workTabs').getBoundingClientRect().bottom - 1`, 1500), 'Stacks starts under the strip');
+ok(await A.until(`(${split})?.title === 'Stacks' && !!document.querySelector('#split #panes') && !document.querySelector('#panes').classList.contains('hidden')`), 'Stacks opens in the split too (2026-11-16), like every tool');
+ok(await A.ev(`!document.querySelector('#day').classList.contains('hidden')`), 'with the page (Tasks) still showing beside it');
+ok(await A.ev(`(() => { const p = document.querySelector('#panes').getBoundingClientRect(), s = document.querySelector('#split').getBoundingClientRect(); return p.left >= s.left - 1 && p.right <= s.right + 1 && p.height > 300; })()`), 'the stacks fill the split');
 ok(await A.until(`[...document.querySelectorAll('#panes .chip')].map((c) => c.textContent).join('|') === 'Everything|Files'`), 'Stacks shows Everything and Files before any stack is made');
+await A.ev(`document.querySelector('#split .split-size').click()`);
+ok(await A.until(`(${split})?.w > 1000 && document.querySelector('#panes').getBoundingClientRect().width > 1000`), 'full size, the stacks fill the page');
+await A.ev(`document.querySelector('#split .split-close').click()`);
+ok(await A.until(`!(${split}) && document.querySelector('#panes').parentElement.id === 'main' && document.querySelector('#panes').classList.contains('hidden')`), '× puts the stacks away (Tasks is still the page)');
 
 // Team switches win
 await api('PATCH', '/workspace', { tools: { projects: false } });

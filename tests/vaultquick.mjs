@@ -64,6 +64,7 @@ await A.tap(`(document.querySelector('#tabs [data-tab=tools]').click(), document
 await typeIn('/vault gate code 4471 at Smith job');
 await A.key('Enter');
 ok(await A.until(`!!document.querySelector('#split input[type=password]')`), '/vault with no vault yet opens vault setup');
+ok(await A.ev(`document.querySelector('#panes').parentElement.id === 'main' && !document.querySelector('#panes').classList.contains('hidden')`), 'the stack it came from moves to the page, with the vault beside it in the split');
 await A.ev(`(() => { const ins = [...document.querySelectorAll('#split input')]; ins[0].value = 'correct horse battery'; ins[1].value = 'correct horse battery'; document.querySelector('#split input[type=checkbox]').checked = true; })()`);
 await A.tap(`[...document.querySelectorAll('#split .btn')].find((b) => b.textContent === 'Set up my vault')`);
 ok(await A.until(`document.querySelector('#sheet h2')?.textContent.startsWith('Save to my vault')`, 15000), 'after setup, the save form opens');

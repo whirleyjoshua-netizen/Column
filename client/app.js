@@ -805,7 +805,7 @@
     if (!it) return toast('That isn’t here any more.');
     if (kind === 'doc' || it.type === 'text') return openDoc(it);
     if (it.type === 'message') return jumpTo(it);
-    setTab('column');
+    openStacks();
     if (it.stackId && stackById(it.stackId)) setPanes([`stack:${it.stackId}`, ...S.panes.slice(1)]);
     if (it.type === 'file' || it.type === 'folder') openPreview(it);
   }
@@ -952,7 +952,7 @@
       for (const x of got) groups.set(x.viaLink + '|' + x.stackId, [...(groups.get(x.viaLink + '|' + x.stackId) || []), x]);
       for (const xs of groups.values()) {
         const st = stackById(xs[0].stackId);
-        toast(`${xs[0].viaLink} sent ${xs.length === 1 ? '“' + xs[0].name + '”' : xs.length + ' files'}${st ? ' to ' + st.name : ''}`, st ? { label: 'Open', run: () => { setTab('column'); setPanes([`stack:${st.id}`, ...S.panes.slice(1)]); } } : undefined);
+        toast(`${xs[0].viaLink} sent ${xs.length === 1 ? '“' + xs[0].name + '”' : xs.length + ' files'}${st ? ' to ' + st.name : ''}`, st ? { label: 'Open', run: () => { openStacks(); setPanes([`stack:${st.id}`, ...S.panes.slice(1)]); } } : undefined);
       }
     }, 1500);
   }
@@ -2002,7 +2002,7 @@
   const plainText = (text) => text.replace(LINK_RE, (_, type, id) => linkName({ type, id })).trim();
 
   function showStack(id) {
-    setTab('column');
+    openStacks();
     const p = [...S.panes];
     p[0] = 'stack:' + id;
     setPanes(p);
@@ -2472,7 +2472,7 @@
   const dropCampaign = () => S.tab === 'camps' && campById(K.open);
   window.addEventListener('dragenter', (e) => {
     if (S.internalDrag || !S.token) return;
-    if (S.tab === 'day' && hasFiles(e.dataTransfer) && !skDropAt(e.target)) setTab('column');
+    if (S.tab === 'day' && hasFiles(e.dataTransfer) && !skDropAt(e.target) && splitOpen !== 'column') openStacks();
     dragDepth++;
     e.preventDefault();
   });
@@ -3220,7 +3220,7 @@
     proj: { icon: '📋', name: 'Project', label: (id) => projById(id)?.name, gone: (id) => !projById(id), open: (id) => openProject(id), on: (id) => !$('#projects').classList.contains('hidden') && PR.open === id && !PR.panel },
     camp: { icon: '🎯', name: 'Campaign', label: (id) => campById(id)?.name, gone: (id) => !campById(id), open: (id) => { closeProjects(); openCampaign(id); }, on: (id) => S.tab === 'camps' && K.open === id },
     chan: { icon: '#', name: 'Chat feed', label: (id) => channelById(id)?.name, gone: (id) => !channelById(id), open: (id) => { closeProjects(); setTab('chat'); openChannel('ch:' + id); }, on: (id) => S.tab === 'chat' && C.view === 'ch:' + id },
-    stack: { icon: '🗂️', name: 'Stack', label: (id) => stackById(id)?.name, gone: (id) => !stackById(id), open: (id) => { closeProjects(); showStack(id); }, on: (id) => S.tab === 'column' && S.panes[0] === 'stack:' + id },
+    stack: { icon: '🗂️', name: 'Stack', label: (id) => stackById(id)?.name, gone: (id) => !stackById(id), open: (id) => { closeProjects(); showStack(id); }, on: (id) => (S.tab === 'column' || splitOpen === 'column') && S.panes[0] === 'stack:' + id },
     doc: { icon: '📄', name: 'Doc', label: (id) => { const d = S.items.find((x) => x.id === id); return d && docTitle(d); }, gone: (id) => !S.items.some((x) => x.id === id), open: (id) => { closeProjects(); goTo('doc:' + id); }, on: () => false },
   };
   const pinParts = (go) => [go.slice(0, go.indexOf(':')), go.slice(go.indexOf(':') + 1)];
@@ -3383,7 +3383,7 @@
     $('#home').classList.toggle('hidden', tab !== 'home');
     if (tab === 'home') renderHome();
     $('#day').classList.toggle('hidden', tab !== 'day');
-    $('#panes').classList.toggle('hidden', tab !== 'column');
+    $('#panes').classList.toggle('hidden', tab !== 'column' && splitOpen !== 'column');
     $('#chat').classList.toggle('hidden', tab !== 'chat');
     $('#campsWrap').classList.toggle('hidden', tab !== 'camps');
     if (tab === 'camps') renderCamps();
@@ -6103,7 +6103,7 @@
     const summary = [needsN ? `${plural(needsN, 'thing')} need${needsN === 1 ? 's' : ''} you` : 'nothing needs you', d.next.length ? `${d.next.length} still on today` : 'your day is clear', d.feeds.reduce((n, f) => n + f.n, 0) ? `${d.feeds.reduce((n, f) => n + f.n, 0)} new in chat` : ''].filter(Boolean).join(' · ');
     const activity = [
       ...d.feeds.map((f) => row(f.at ? '@' : '#', f.at ? 'late' : 'chat', `#${f.name}`, `${f.n} new${f.at ? ' · mentions you' : ''}`, () => { setTab('chat'); openChannel(f.v); })),
-      d.came.length ? row('📥', 'files', `${plural(d.came.length, 'file')} came in`, [...new Set(d.came.map((it) => it.viaLink))].slice(0, 3).join(', '), () => { const st = stackById(d.came[0].stackId); setTab('column'); if (st) setPanes([`stack:${st.id}`, ...S.panes.slice(1)]); }) : null,
+      d.came.length ? row('📥', 'files', `${plural(d.came.length, 'file')} came in`, [...new Set(d.came.map((it) => it.viaLink))].slice(0, 3).join(', '), () => { const st = stackById(d.came[0].stackId); openStacks(); if (st) setPanes([`stack:${st.id}`, ...S.panes.slice(1)]); }) : null,
       ...d.signed.slice(0, 3).map((it) => row('✍', 'files', `Signed: ${shortText(it.name, 50)}`, ago(it.createdAt), () => openPreview(it))),
       ...d.sends.slice(0, 3).map((x) => row('✉', 'chat', `“${shortText(x.subject, 50)}”`, x.status === 'sending' ? `going out · ${x.sent} of ${x.total} sent` : `sent to ${x.sent} · ${ago(x.doneAt)}`, () => openTool('email'))),
     ].filter(Boolean);
@@ -10168,12 +10168,12 @@
   }
 
   // ---------- tools: small apps that open in a drawer, so the tabs stay as they are ----------
-  const TOOLS = { agents: { name: 'Your team', render: agentsTool }, hq: { name: 'Company HQ', render: hqTool }, sidekick: { name: 'Sidekick', render: sidekickTool }, docs: { name: 'Folders & Docs', render: docsTool }, bills: { name: 'Finance', render: financeTool }, contacts: { name: 'Contacts', render: contactsTool }, email: { name: 'Email', render: emailTool }, meetings: { name: 'Meeting notes', render: meetingsTool }, planner: { name: 'Planner', render: plannerTool }, folders: { name: 'Folders & Docs', render: foldersTool }, map: { name: 'Map', render: mapTool }, signs: { name: 'Signatures', render: signsTool }, cards: { name: 'Business card', render: cardTool }, templates: { name: 'Templates', render: () => templatesTool() }, automations: { name: 'Automations', render: () => automationsTool() }, tools: { name: 'Tools', render: toolsPage }, vault: { name: 'Vault', render: vaultTool }, news: { name: 'News', render: () => NEWS.render() } };
+  const TOOLS = { agents: { name: 'Your team', render: agentsTool }, hq: { name: 'Company HQ', render: hqTool }, sidekick: { name: 'Sidekick', render: sidekickTool }, docs: { name: 'Folders & Docs', render: docsTool }, bills: { name: 'Finance', render: financeTool }, contacts: { name: 'Contacts', render: contactsTool }, email: { name: 'Email', render: emailTool }, meetings: { name: 'Meeting notes', render: meetingsTool }, planner: { name: 'Planner', render: plannerTool }, folders: { name: 'Folders & Docs', render: foldersTool }, map: { name: 'Map', render: mapTool }, signs: { name: 'Signatures', render: signsTool }, cards: { name: 'Business card', render: cardTool }, templates: { name: 'Templates', render: () => templatesTool() }, automations: { name: 'Automations', render: () => automationsTool() }, column: { name: 'Stacks', render: () => [stacksInSplit()] }, tools: { name: 'Tools', render: toolsPage }, vault: { name: 'Vault', render: vaultTool }, news: { name: 'News', render: () => NEWS.render() } };
   let toolOpen = null;
   // The split (the owner, 2026-11-16): Tools, and every tool in it or in Settings → Business, opens in a panel on the
   // right of whatever page is showing, wherever it's opened from (a link, Home, Sidekick, Settings), with a button to
   // fill the page and back. On a phone it fills the screen, as tools always have. One at a time; the page stays.
-  const SPLIT_TOOLS = new Set(['tools', 'templates', 'bills', 'email', 'meetings', 'map', 'vault', 'hq', 'cards', 'signs']);
+  const SPLIT_TOOLS = new Set(['tools', 'column', 'templates', 'bills', 'email', 'meetings', 'map', 'vault', 'hq', 'cards', 'signs']);
   let splitOpen = null;
   let splitFull = false;
   const toolShown = (k) => toolOpen === k || splitOpen === k;
@@ -10282,7 +10282,7 @@
     const tight = budgetAlerts().length;
     const waiting = SG.list.filter((x) => x.status === 'sent' || x.status === 'viewed').length;
     const ROWS = {
-      column: { name: 'Stacks', sub: 'Cards, files and links in shared stacks', run: () => { closeSplit(); closeTool(); closeProjects(); setTab('column'); } },
+      column: { name: 'Stacks', sub: 'Cards, files and links in shared stacks', run: () => openStacks() },
       templates: { name: 'Templates', sub: 'Emails, texts, replies, posts and paperwork to reuse, in automations and by your team' },
       bills: { name: 'Finance', sub: [soon ? `${soon} due soon` : '', tight ? `${tight} budget${tight === 1 ? '' : 's'} nearly used` : ''].filter(Boolean).join(' · ') || 'Money in and out, budgets and bills', ok: () => toolOn('bills') },
       email: { name: 'Email', sub: (S.mail?.sends || []).some((x) => x.status === 'sending') ? 'Sending…' : 'Send to your contacts and lists', ok: () => toolOn('email') && mayEmail() },
@@ -10316,12 +10316,24 @@
     markTabs();
   }
   function openSplit(name) {
+    // Another tool from inside Stacks in the split (/vault in a stack, say): the stacks become the page on the left,
+    // and the tool takes the split beside them.
+    if (splitOpen === 'column' && name !== 'column') {
+      splitOpen = null;
+      $('#main').insertBefore($('#panes'), $('#chat'));
+      $('#split').classList.remove('stacks-split');
+      closeTool();
+      closeProjects();
+      setTab('column');
+    }
     if (splitOpen !== name) splitFull = false; // a new tool starts beside the page
     splitOpen = name;
     $('#settings').classList.add('hidden');
     const el = $('#split');
     el.classList.remove('hidden');
     el.classList.toggle('wide-tool', name === 'bills');
+    if (splitOpen !== 'column' && $('#split #panes')) { $('#main').insertBefore($('#panes'), $('#chat')); $('#panes').classList.toggle('hidden', S.tab !== 'column'); }
+    el.classList.toggle('stacks-split', name === 'column');
     document.body.classList.add('split-on');
     document.body.classList.toggle('split-full', splitFull);
     closeSide();
@@ -10329,11 +10341,25 @@
     el.scrollTop = 0;
     markTabs();
   }
+  // Stacks in the split (the owner, 2026-11-16): the stacks themselves (#panes, with their drag and drop, uploads and
+  // live updates) move into the split while it's showing them, and back under the page when it closes.
+  function openStacks() { openSplit('column'); }
+  function stacksInSplit() {
+    const p = $('#panes');
+    p.classList.remove('hidden');
+    return p;
+  }
   function closeSplit() {
     if (!splitOpen) return;
     const was = splitOpen;
     splitOpen = null;
     splitFull = false;
+    if (was === 'column') {
+      const p = $('#panes');
+      $('#main').insertBefore(p, $('#chat'));
+      p.classList.toggle('hidden', S.tab !== 'column');
+      $('#split').classList.remove('stacks-split');
+    }
     if (was === 'map' && !MP.run && toolOpen !== 'map') mapUnwatch();
     $('#split').classList.add('hidden');
     document.body.classList.remove('split-on', 'split-full');
@@ -17198,7 +17224,7 @@
     if (toolOpen && toolOpen !== 'agents' && TOOLS[toolOpen]) return { kind: 'tool', id: toolOpen, label: TOOLS[toolOpen].name };
     if (S.tab === 'camps' && K.open && campById(K.open)) return { kind: 'campaign', id: K.open, label: campById(K.open).name };
     if (S.tab === 'chat' && C.view.startsWith('ch:') && channelById(C.view.slice(3))) return { kind: 'channel', id: C.view.slice(3), label: channelById(C.view.slice(3)).name };
-    if (S.tab === 'column' && S.panes[0]?.startsWith('stack:') && stackById(S.panes[0].slice(6))) return { kind: 'stack', id: S.panes[0].slice(6), label: stackById(S.panes[0].slice(6)).name };
+    if ((S.tab === 'column' || splitOpen === 'column') && S.panes[0]?.startsWith('stack:') && stackById(S.panes[0].slice(6))) return { kind: 'stack', id: S.panes[0].slice(6), label: stackById(S.panes[0].slice(6)).name };
     if (S.tab === 'day') return { kind: 'day', id: D.date, label: dueLabel(D.date) };
     return null;
   }

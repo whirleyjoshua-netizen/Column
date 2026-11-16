@@ -120,7 +120,8 @@ try {
   await A.tap(`document.querySelector('#tabs .tab-sub[data-tab=tools]')`);
   ok(await A.until(`!document.querySelector('#split').classList.contains('hidden') && document.querySelector('#split .split-title').textContent === 'Tools' && Math.round(document.querySelector('#split').getBoundingClientRect().width) === innerWidth`) && await A.until(`!${shown('#side')}`), 'Workspace → Tools opens from the drawer, filling the screen in a column, and the drawer closes');
   await A.tap(`document.querySelector('#split [data-tool=column]')`);
-  ok(await A.until(`!document.querySelector('#panes').classList.contains('hidden') && document.querySelector('#split').classList.contains('hidden')`), 'picking Stacks there opens it: ' + await A.ev(`[document.querySelector('#panes').className, document.querySelector('#split').className].join(' / ')`));
+  ok(await A.until(`!document.querySelector('#panes').classList.contains('hidden') && !!document.querySelector('#split #panes') && document.querySelector('#split .split-title').textContent === 'Stacks'`), 'picking Stacks there opens it, in the split (the whole screen in a column)');
+  await A.ev(`document.querySelector('#split .split-close').click(); true`);
   await A.tap(`document.querySelector('#menuBtn')`);
   await A.until(shown('#side'));
   // Outside the drawer: the strip of page still showing on its right.

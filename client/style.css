@@ -217,6 +217,13 @@ body:not(.wide) .split-head { margin: 0 -14px 12px; padding: 0 6px 0 14px; }
 .split-head .icon-btn svg { width: 16px; height: 16px; }
 body:not(.wide) .split-head .split-size { display: none; }
 #split .tools-page { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
+/* Stacks in the split: the stacks fill it, edge to edge, and scroll inside like the page does. */
+#split.stacks-split:not(.hidden) { display: flex; flex-direction: column; overflow: hidden; padding-bottom: 0; }
+#split.stacks-split .split-head { margin-bottom: 0; }
+#split.stacks-split .split-body { flex: 1; min-height: 0; display: flex; margin: 0 -18px; }
+body.wide.split-full #split.stacks-split .split-body { margin: 0 -32px; }
+body:not(.wide) #split.stacks-split .split-body { margin: 0 -14px; }
+#split.stacks-split .split-body > .panes { flex: 1; min-width: 0; }
 .skd-head { display: flex; align-items: center; gap: 6px; min-height: 44px; padding: 0 8px 0 14px; border-bottom: 1px solid var(--line); flex: none; }
 .skd-title { flex: 1; font-size: 14.5px; }
 .skd-title::first-letter { color: var(--accent); }
