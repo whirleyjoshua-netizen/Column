@@ -2932,3 +2932,20 @@ button.as-count.warn { border-left-color: #ffb547; }
 /* Ask someone in the feed to sign: pick one */
 .ask-picks { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 10px; }
 .ask-pick.on { background: var(--accent, #2563eb); color: #fff; border-color: transparent; }
+/* A pinned doc or folder beside the feed */
+.ch-panel { width: 380px; }
+.ch-panel .shelf-acts { display: flex; align-items: center; gap: 4px; }
+.ch-panel .ch-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ch-panel .sd-grab { cursor: grab; }
+.ch-panel .sd-doc { flex: 1; min-height: 0; overflow-y: auto; padding: 8px 14px 24px; }
+.ch-panel .sd-doc .dk-title { font-size: 20px; }
+.ch-panel .sd-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.ch-panel .shelf-hint { margin: 0; padding: 6px 12px; font-size: 11.5px; color: var(--muted); border-bottom: 1px solid var(--line); }
+.ch-panel .sd-list { flex: 1; overflow-y: auto; padding: 6px; display: flex; flex-direction: column; gap: 2px; }
+.ch-panel .sd-row { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; padding: 7px 8px; border: 0; border-radius: 8px; background: none; color: inherit; font: inherit; cursor: pointer; }
+.ch-panel .sd-row:hover { background: var(--hover, rgba(0,0,0,.05)); }
+.ch-panel .sd-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ch-panel .sd-row small { color: var(--muted); }
+.ch-panel .sd-up { align-self: flex-start; border: 0; background: none; color: var(--accent); font: inherit; padding: 4px 8px; cursor: pointer; }
+.ch-panel .sd-path { padding: 2px 8px 6px; font-weight: 600; }
+.ch-panel.chat-over { outline: 2px solid var(--accent); outline-offset: -2px; }

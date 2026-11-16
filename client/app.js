@@ -1501,6 +1501,7 @@
   function render(force = false) {
     for (const pane of document.querySelectorAll('.pane')) renderPane(pane, force);
     if (toolOpen === 'folders') renderTool();
+    C.panel?.refresh?.();
   }
 
   function renderPane(pane, force) {
@@ -7862,6 +7863,7 @@
     if (C.thread?._view === 'th:' + id) return C.thread.querySelector('textarea')?.focus();
     closeThread();
     closeShelf();
+    closeChatSide();
     const pane = h('section', { class: 'pane chat-pane', 'data-i': 't' });
     pane._view = 'th:' + id;
     pane._cards = new Map();
@@ -7895,8 +7897,8 @@
   // for this person; a pin to something they can't open comes as a locked chip.
   const CHAT_PIN = {
     stack: { icon: '🗂️', name: 'Stack', label: (id) => stackById(id)?.name, open: (id) => openShelf(id), full: (id) => showStack(id) },
-    doc: { icon: '📄', name: 'Doc', label: (id) => { const d = docById(id); return d && docTitle(d); }, open: (id) => goTo('doc:' + id) },
-    dir: { icon: '📁', name: 'Folder', label: (id) => dirById(id)?.name, open: (id) => openFolder(id) },
+    doc: { icon: '📄', name: 'Doc', label: (id) => { const d = docById(id); return d && docTitle(d); }, open: (id) => openDocSide(id), full: (id) => goTo('doc:' + id) },
+    dir: { icon: '📁', name: 'Folder', label: (id) => dirById(id)?.name, open: (id) => openDirSide(id), full: (id) => openFolder(id) },
     agent: { icon: '🤖', name: 'Agent', label: () => null, open: (id) => agOpen(id) },
   };
   const CHAT_AGENTS = [['chief', '🧭', 'Chief of Staff'], ['sales', '🤝', 'Client & Sales Manager'], ['ops', '🛠️', 'Operations Manager'], ['marketing', '📣', 'Marketing Manager']];
@@ -7911,7 +7913,10 @@
     // The open stack was unpinned or deleted, or the feed changed.
     const sid = C.shelf && viewStack(C.shelf._view);
     if (sid && (!stackById(sid) || !pins.some((p) => p.kind === 'stack' && p.id === sid))) closeShelf();
-    C.pinbar.querySelectorAll('.cp').forEach((x) => x.classList.toggle('on', !!sid && x.dataset.kind === 'stack' && x.dataset.id === sid));
+    // The open doc or folder: the same, by its pin.
+    if (C.panel && !pins.some((p) => p.kind === C.panel.kind && p.id === C.panel.pinId && CHAT_PIN[p.kind].label(p.id))) closeChatSide();
+    const on = sid ? 'stack:' + sid : C.panel ? C.panel.kind + ':' + C.panel.pinId : '';
+    C.pinbar.querySelectorAll('.cp').forEach((x) => x.classList.toggle('on', !!on && x.dataset.kind + ':' + x.dataset.id === on));
   }
   function chatPinChip(p) {
     const k = CHAT_PIN[p.kind];
@@ -7960,6 +7965,7 @@
     if (C.shelf?._view === 'stack:' + stackId) return closeShelf();
     closeThread();
     closeShelf();
+    closeChatSide();
     const pane = h('section', { class: 'pane shelf-pane', 'data-i': 's' });
     pane._view = 'stack:' + stackId;
     pane._cards = new Map();
@@ -7985,6 +7991,87 @@
     C.shelfBox = C.shelf = null;
     $('#chat').classList.remove('shelf-open');
     drawChatPins();
+  }
+  // The one side slot beside the feed, for a pinned doc or folder (threads and the pinned stack use it too, and each
+  // closes the others). key says what's open, so its pin can show it and tapping the pin again closes it.
+  function chatSide({ kind, pinId, title, actions = [], body, refresh = null }) {
+    if (C.panel && C.panel.kind === kind && C.panel.pinId === pinId) { closeChatSide(); return null; }
+    closeThread();
+    closeShelf();
+    closeChatSide();
+    const box = h('aside', { class: 'ch-thread ch-panel ch-' + kind },
+      h('div', { class: 'ch-head' }, h('div', { class: 'ch-title' }, title),
+        h('div', { class: 'shelf-acts' }, ...actions, h('button', { class: 'icon-btn th-close', 'aria-label': 'Close', html: I.close, onclick: closeChatSide }))),
+      body);
+    $('#chat').append(box);
+    $('#chat').classList.add('shelf-open');
+    C.panel = { kind, pinId, box, refresh };
+    drawChatPins();
+    return box;
+  }
+  function closeChatSide() {
+    if (!C.panel) return;
+    C.panel.box.remove();
+    C.panel = null;
+    $('#chat').classList.remove('shelf-open');
+    drawChatPins();
+  }
+  // Dragged from a panel, it goes into the chat as a link (chatDropAt, the feed).
+  const sideDrag = (el, it) => {
+    el.draggable = true;
+    el.addEventListener('dragstart', (e) => { S.internalDrag = true; S.dragItem = { it, at: Date.now() }; e.dataTransfer.effectAllowed = 'copy'; e.dataTransfer.setData('text/plain', it.name || docTitle(it) || ''); });
+    el.addEventListener('dragend', () => (S.internalDrag = false));
+    return el;
+  };
+  // A pinned doc beside the feed, to read; Open edits it in full.
+  async function openDocSide(id) {
+    const d = docById(id);
+    if (!d) return;
+    const body = h('div', { class: 'sd-doc' }, h('p', { class: 'day-hint' }, 'Opening…'));
+    const box = chatSide({ kind: 'doc', pinId: id, title: sideDrag(h('span', { class: 'sd-grab', title: 'Drag into the chat to share it' }, (d.icon || '📄') + ' ' + docTitle(d)), d), body,
+      actions: [h('button', { class: 'btn small', title: 'Open the doc to edit it', onclick: () => { closeChatSide(); openDoc(docById(id) || d); } }, 'Open')] });
+    if (!box) return;
+    try {
+      const x = await api('GET', `/items/${id}/doc`);
+      if (C.panel?.box !== box) return;
+      const ed = ColumnDocs.editor({
+        title: x.title, blocks: x.blocks, readOnly: true, toast, menu: openMenu,
+        fileInfo: (fid) => { const f = S.items.find((y) => y.id === fid); return f && f.type === 'file' ? { name: f.name, url: fileUrl(f), image: kind(f) === 'image', size: fmtSize(f.size) } : null; },
+        openFile: (fid) => { const f = S.items.find((y) => y.id === fid); if (f) openPreview(f); },
+        pageInfo: (pid) => { const p = docById(pid); return p ? { title: docTitle(p), icon: p.icon || null, pages: docKidsOf(pid).length } : null; },
+        openPage: (pid) => { const p = docById(pid); if (p) openDoc(p); },
+        refInfo: docRefInfo, openRef: docOpenRef, task: taskById, taskChips: docTaskChips, live: docLiveShow, liveData: docLiveData,
+      });
+      body.replaceChildren(ed.el);
+    } catch (e) { body.replaceChildren(h('p', { class: 'err' }, e.message)); }
+  }
+  // A pinned folder beside the feed: its folders and files, into a subfolder and back. Files drag into the chat;
+  // things from the chat drop in (a copy).
+  function openDirSide(id) {
+    if (!dirById(id)) return;
+    let at = id;
+    const list = h('div', { class: 'sd-list' });
+    const draw = () => {
+      if (!dirById(at)) at = id;
+      const d = dirById(at);
+      const name = (x) => (x.type === 'file' ? x.name : x.type === 'text' ? docTitle(x) : x.type === 'message' ? stripLinks(x.text).split('\n')[0] : x.label || x.name || x.type);
+      const icon = (x) => (x.type === 'text' ? x.icon || '📄' : x.type === 'message' ? '💬' : x.type === 'sealed' ? '🔒' : ({ image: '🖼️', pdf: '📕', video: '🎞️', audio: '🎵', docx: '📝' })[kind(x)] || '📎');
+      const open = (x) => (x.type === 'text' ? openDoc(x) : x.type === 'sealed' ? sealOpen(x) : x.type === 'file' ? openPreview(x) : null);
+      const files = dirItems(at).sort((a, b) => (b.editedAt || b.createdAt) - (a.editedAt || a.createdAt));
+      list.replaceChildren(
+        at !== id ? h('button', { class: 'sd-up', onclick: () => { at = dirById(at)?.parentId || id; draw(); } }, '← ' + (dirById(d.parentId)?.name || 'Back')) : null,
+        at !== id ? h('div', { class: 'sd-path' }, '📁 ' + d.name) : null,
+        ...dirKids(at).map((k) => h('button', { class: 'sd-row sd-dir', onclick: () => { at = k.id; draw(); } }, h('span', { class: 'sd-ic' }, '📁'), h('span', { class: 'sd-name' }, k.name), h('small', {}, String(dirCount(k.id))))),
+        ...files.map((x) => sideDrag(h('button', { class: 'sd-row', onclick: () => open(x) }, h('span', { class: 'sd-ic' }, icon(x)), h('span', { class: 'sd-name' }, name(x)), x.size ? h('small', {}, fmtSize(x.size)) : null), x)),
+        !dirKids(at).length && !files.length ? h('p', { class: 'day-hint' }, 'Nothing in here yet. Drag files or messages from the chat to keep them here.') : null);
+      list._at = at;
+    };
+    const box = chatSide({ kind: 'dir', pinId: id, title: '📁 ' + dirById(id).name, refresh: draw,
+      actions: [h('button', { class: 'btn small', title: 'Open the folder in Folders', onclick: () => { const go = list._at || id; closeChatSide(); openFolder(go); } }, 'Open')],
+      body: h('div', { class: 'sd-body' }, h('p', { class: 'shelf-hint' }, 'Drag files into the chat to share them · drag chat files and messages here to keep them'), list) });
+    if (!box) return;
+    box._list = list;
+    draw();
   }
   // In chat, means it lives in a feed (and isn't already somewhere else).
   const inChat = (it) => it.type === 'message' || !!it.channelId;
@@ -8013,6 +8100,10 @@
     if (!it || S.tab !== 'chat' || !target?.closest) return null;
     const chip = target.closest('.ch-pins .cp:not(.locked)');
     if (chip && (chip.dataset.kind === 'stack' || chip.dataset.kind === 'dir')) return { el: chip, to: chip.dataset.kind === 'stack' ? { stackId: chip.dataset.id } : { dirId: chip.dataset.id } };
+    if (C.panel?.kind === 'dir' && target.closest('.ch-dir')) {
+      const dirId = C.panel.box._list?._at || C.panel.pinId;
+      return it.dirId === dirId ? null : { el: C.panel.box, to: { dirId } };
+    }
     if (C.shelf && target.closest('.ch-shelf')) {
       const sid = viewStack(C.shelf._view);
       return it.stackId === sid && !inChat(it) ? null : { el: C.shelf, to: { stackId: sid } };
