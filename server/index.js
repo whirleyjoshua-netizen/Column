@@ -67,7 +67,7 @@ fs.mkdirSync(FILES_DIR, { recursive: true });
 // Everything lives in memory; save() hands the whole thing to the store a moment later.
 const IMPORT_PATH = path.join(DATA_DIR, 'import-pending.json');
 const store = await openStore({ url: process.env.DATABASE_URL, file: DB_PATH, importFile: IMPORT_PATH });
-let db = { workspaces: {}, tokens: {}, items: {}, entries: {}, tasks: {}, uploads: {}, campaigns: {}, goals: {}, attempts: {}, lists: {}, templates: {}, calendars: {}, ai: {}, pss: {}, sends: {}, bills: {}, meetings: {}, money: {}, budgets: {}, plans: {}, sidekick: {}, vaults: {}, vaultItems: {}, signs: {}, signatures: {}, trips: {}, pins: {}, zones: {}, comments: {}, users: {}, resets: {}, invites: {}, exports: {}, contacts: {}, optouts: {}, unsubs: {}, gcontacts: {}, automations: {}, notices: {}, calfeeds: {}, pushSubs: {}, keys: {}, mileage: {}, trash: {}, docTemplates: {}, flowWaits: {}, vaultDrops: {}, flowSecrets: {} };
+let db = { workspaces: {}, tokens: {}, items: {}, entries: {}, tasks: {}, uploads: {}, campaigns: {}, goals: {}, attempts: {}, lists: {}, templates: {}, msgTemplates: {}, calendars: {}, ai: {}, pss: {}, sends: {}, bills: {}, meetings: {}, money: {}, budgets: {}, plans: {}, sidekick: {}, vaults: {}, vaultItems: {}, signs: {}, signatures: {}, trips: {}, pins: {}, zones: {}, comments: {}, users: {}, resets: {}, invites: {}, exports: {}, contacts: {}, optouts: {}, unsubs: {}, gcontacts: {}, automations: {}, notices: {}, calfeeds: {}, pushSubs: {}, keys: {}, mileage: {}, trash: {}, docTemplates: {}, flowWaits: {}, vaultDrops: {}, flowSecrets: {} };
 const loaded = await store.load();
 if (loaded.db) db = { ...db, ...loaded.db };
 if (loaded.fromFile) console.log(`Moving ${path.basename(loaded.fromFile)} into Postgres.`);
@@ -1580,6 +1580,24 @@ function purgeTrash(which) {
 // folder's or a private campaign's doc can't leak that way). Its to-dos come without their tasks and its pictures stay
 // the team's files. Using one makes a new doc (and its pages) where the person asks.
 const DOC_TEMPLATES_MAX = 100, DOC_TEMPLATE_PAGES = 50;
+// Templates for messages: an email (subject and message), a text, a reply, a social post.
+const MSG_KINDS = ['email', 'text', 'reply', 'post'];
+const MSG_TEMPLATES_MAX = 300;
+const publicMsgTemplate = ({ wsId, ...x }) => x;
+function applyMsgTemplate(x, body) {
+  const kind = body.kind !== undefined ? body.kind : x.kind;
+  if (!MSG_KINDS.includes(kind)) throw badRequest('Pick what kind of template it is: email, text, reply or social post.');
+  x.kind = kind;
+  if (body.name !== undefined) x.name = cleanText(body.name, 80);
+  if (body.when !== undefined) x.when = cleanText(body.when, 300);
+  if (body.subject !== undefined) x.subject = cleanText(body.subject, 200);
+  if (body.body !== undefined) x.body = String(body.body ?? '').replace(/\r\n?/g, '\n').trim().slice(0, kind === 'text' ? 1600 : 20_000);
+  if (kind !== 'email') delete x.subject;
+  if (!x.name) throw badRequest('Give the template a name.');
+  if (!x.body) throw badRequest('Write the template first.');
+  x.updatedAt = Date.now();
+  return x;
+}
 const publicDocTemplate = (x) => ({ id: x.id, name: x.name, about: x.about, icon: x.icon || null, pages: x.pages.length - 1, by: x.by, memberId: x.memberId, createdAt: x.createdAt });
 function saveDocTemplate(ws, auth, it, body) {
   if (placeAudience(ws, topItem(it)) !== 'team') throw Object.assign(new Error('Only a doc the whole team can see can be a team template. Move it out of the private folder or campaign first.'), { status: 403 });
@@ -9879,6 +9897,39 @@ async function api(req, res, url) {
   }
 
   // The team's own doc templates.
+  // ----- Templates (Workspace → Tools → Templates, the owner 2026-11-16): emails, texts, replies and social posts the
+  // team reuses, by hand, in automations and by the AI. Paperwork (doc templates, sign-off forms) keeps its own place.
+  // {words} like {customer} stay as written: an automation fills them in when it runs, the AI fills them in as it writes.
+  if (a === 'msg-templates') {
+    db.msgTemplates ||= {};
+    const mine = () => Object.values(db.msgTemplates).filter((x) => x.wsId === ws.id);
+    if (m === 'GET' && !b) return send(res, 200, mine().sort((x, y) => x.kind.localeCompare(y.kind) || x.name.localeCompare(y.name)).map(publicMsgTemplate));
+    if (m === 'POST' && !b) {
+      if (mine().length >= MSG_TEMPLATES_MAX) return send(res, 400, { error: `A team can keep ${MSG_TEMPLATES_MAX} templates. Delete one first.` });
+      const x = applyMsgTemplate({ id: rid(), wsId: ws.id, memberId: auth.memberId, by: auth.member, createdAt: Date.now() }, await readJson(req, 60_000));
+      db.msgTemplates[x.id] = x;
+      save();
+      broadcast(ws.id, { type: 'msg-templates' });
+      return send(res, 200, publicMsgTemplate(x));
+    }
+    const x = b && db.msgTemplates[b];
+    if (!x || x.wsId !== ws.id) return send(res, 404, { error: 'That template is gone.' });
+    if (m === 'GET' && !c) return send(res, 200, publicMsgTemplate(x));
+    if (x.memberId !== auth.memberId && !isAdmin(auth)) return send(res, 403, { error: 'Only whoever made this template, or an owner or admin, can change it.' });
+    if (m === 'PATCH' && !c) {
+      applyMsgTemplate(x, await readJson(req, 60_000));
+      save();
+      broadcast(ws.id, { type: 'msg-templates' });
+      return send(res, 200, publicMsgTemplate(x));
+    }
+    if (m === 'DELETE' && !c) {
+      delete db.msgTemplates[x.id];
+      save();
+      broadcast(ws.id, { type: 'msg-templates' });
+      return send(res, 200, { ok: true });
+    }
+    return send(res, 405, { error: 'Method not allowed' });
+  }
   if (a === 'doc-templates') {
     if (m === 'GET' && !b) return send(res, 200, Object.values(db.docTemplates).filter((x) => x.wsId === ws.id).sort((x, y) => y.createdAt - x.createdAt).map(publicDocTemplate));
     if (m === 'POST' && !b) {

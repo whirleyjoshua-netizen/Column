@@ -311,6 +311,24 @@ body.wide #tool .docs-list > :not(.doc-row) { grid-column: 1 / -1; }
 body.wide #tool .dir-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 0 16px; }
 body.wide #tool .auto-recipes { grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }
 body.wide #tool .auto-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(460px, 1fr)); gap: 8px 14px; }
+/* Templates (Workspace → Tools). */
+.tpl-bar { display: flex; gap: 8px; align-items: center; margin: 10px 0; flex-wrap: wrap; }
+.tpl-bar .tpl-q { flex: 1; min-width: 180px; }
+.tpl-kinds { margin: 0 0 12px; max-width: 760px; }
+.tpl-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; margin-bottom: 14px; }
+.tpl-card { display: flex; flex-direction: column; gap: 4px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); color: var(--text); font: inherit; text-align: left; cursor: pointer; min-width: 0; }
+.tpl-card:hover:not(.static) { border-color: var(--accent); }
+.tpl-card.static { cursor: default; }
+.tpl-card b { font-size: 14px; }
+.tpl-card small { color: var(--muted); font-size: 12px; }
+.tpl-body { color: var(--muted); font-size: 12.5px; line-height: 1.45; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; white-space: pre-line; }
+.tpl-kind { align-self: flex-start; font-size: 10.5px; font-weight: 650; text-transform: uppercase; letter-spacing: .05em; padding: 2px 7px; border-radius: 999px; background: var(--panel); color: var(--muted); }
+.tpl-kind.k-email { background: #e8efff; color: #2f5bd3; } .tpl-kind.k-text { background: #e6f6ee; color: #1f7a4a; } .tpl-kind.k-reply { background: #f3ecff; color: #6b3fd0; } .tpl-kind.k-post { background: #fff1e6; color: #b5541b; }
+.tpl-h { margin: 8px 0; }
+.tpl-words { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.tpl-words .chip { border: 1px solid var(--line); background: var(--card); color: var(--text); font-size: 12px; }
+.auto-tpl-row { display: flex; align-items: center; gap: 8px; }
+.auto-tpl-row select { flex: 1; }
 /* The desktop app: the window is dragged by the top of the toolbar; on a Mac its buttons sit above it. */
 body.desktop #side .side-top { -webkit-app-region: drag; }
 body.desktop #side .side-top button { -webkit-app-region: no-drag; }

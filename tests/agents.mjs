@@ -53,6 +53,7 @@ const SCRIPTS = {
   'bill garcia': (n) => [[['draft_invoice', { record_id: OPS.job, why: 'Install is done' }], ['send_signoff', { record_id: OPS.job, name: 'Ana Garcia', email: 'ana@garcia.test' }]], 'Drafted the invoice.'][n],
   'send garcia': (n) => [[['send_invoice', { invoice_id: OPS.inv }]], 'Ready to send when you say.'][n],
   'hq fact': (n) => [[['add_to_company_hq', { kind: 'service', title: 'Window blinds', text: 'We measure and install blinds in Las Vegas homes and shops.', why: 'From the jobs' }]], 'Suggested an HQ entry.'][n],
+  'template test': (n) => [[['find_templates', { kind: 'email' }]], [['save_template', { kind: 'reply', name: 'Thanks for the review', when: 'After a customer leaves a review', body: 'Thank you so much, {customer}!' }]], 'Used the quote template and saved a reply.'][n],
   'restart test': (n) => [[['create_task', { text: 'Made before the restart' }]], 'never'][n],
 };
 const ai = http.createServer((req, res) => {
@@ -358,6 +359,27 @@ try {
     const ms = (await ada('GET', '/agents')).body.missions;
     ok(ms?.map((m) => m.key).join() === 'grow,leads,ops,time,money,team' && ms.every((m) => m.name && m.start.includes('Help me')), 'the six goals and their starting sentences come with the agents');
     await waitRun(r.body.id);
+  }
+
+  // ----- Templates (2026-11-16): the team's own wording to start from, and new ones saved -----
+  {
+    await ada('PATCH', '/agents/chief', { level: 'execute' });
+    await ada('POST', '/msg-templates', { kind: 'email', name: 'Quote follow-up', when: 'A quote with no answer', subject: 'Your quote for {record}', body: 'Hi {customer}, checking in on {record}.' });
+    const before = asked.length;
+    r = await ada('POST', '/agents/runs', { agent: 'chief', ask: 'template test please' });
+    let x;
+    for (let i = 0; i < 60; i++) { x = (await ada('GET', '/agents/runs/' + r.body.id)).body; if (!['requested', 'planning', 'running'].includes(x.status)) break; await sleep(150); }
+    const steps = x.parts.flatMap((p) => p.steps);
+    ok(steps.find((s2) => s2.tool === 'find_templates')?.status === 'done' && asked.slice(before).some((q) => q.msgs.includes('Hi {customer}, checking in on {record}.')), 'an agent reads the team’s templates, wording and {words} included');
+    ok(asked.slice(before).some((q) => /The team keeps templates/.test(q.sys)), 'and every agent is told to start from a template that fits');
+    const sv = steps.find((s2) => s2.tool === 'save_template');
+    let tl = (await ada('GET', '/msg-templates')).body;
+    ok(sv?.status === 'done' && tl.some((t2) => t2.kind === 'reply' && t2.name === 'Thanks for the review' && t2.body.includes('{customer}')), 'it can save a new template for the team');
+    await ada('POST', `/agents/runs/${x.id}/steps`, { do: 'undo', id: sv.id });
+    tl = (await ada('GET', '/msg-templates')).body;
+    ok(!tl.some((t2) => t2.name === 'Thanks for the review'), 'and undo removes it');
+    const ag = (await ada('GET', '/agents')).body.agents;
+    ok(['chief', 'sales', 'ops', 'marketing'].every((k) => ag[k].tools.some((t2) => t2.key === 'find_templates')), 'all four specialists have the templates');
   }
 
   // ----- Stop, delete, switch off -----

@@ -10,7 +10,7 @@ mkdir -p "$WORK"
 TESTS="admin agents alerts apiwide assets audit_access audit_agents audit_agents2 audit_agents3 audit_auth audit_batch10
   audit_batch7 audit_billing audit_billing2 audit_critical audit_dates audit_misc audit_money audit_oauth audit_quote
   audit_rules audit_safefetch audit_send audit_signin audit_signoff audit_storage audit_urls billing cards chatlinks chatpins chatsign chatask contacts workload
-  custmsg delteam flows_bus flows_steps flows_actions flows_vault flows_builder flows_agent docs_ask docs_blocks docs_pages docs_wiki dropbox dupnames engine notion_import seo export gcontacts gmail hq hqeval hqlearn invoices leads leadsources marketing news onboard
+  custmsg delteam flows_bus flows_steps flows_actions flows_vault flows_builder flows_agent docs_ask docs_blocks docs_pages docs_wiki dropbox dupnames engine templates notion_import seo export gcontacts gmail hq hqeval hqlearn invoices leads leadsources marketing news onboard
   quickbooks routes rules tech tech2 tech3 tech4 tech5 techai twilio twostep visibility zapier"
 failed=()
 for t in $TESTS; do

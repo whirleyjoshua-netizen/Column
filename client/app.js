@@ -637,8 +637,12 @@
     } else if (msg.type === 'template:remove') {
       S.templates = S.templates.filter((y) => y.id !== msg.id);
       renderCamps();
+    } else if (msg.type === 'msg-templates') {
+      TPL.list = null;
+      if (toolShown('templates')) renderTool();
     } else if (msg.type === 'doc-templates') {
       DT.list = null;
+      TPL.docs = null;
       if (DV.doc) docStarter(DV.doc);
     } else if (msg.type === 'import') {
       notionNews(msg);
@@ -3108,7 +3112,7 @@
   // Tasks (the owner, 2026-11-15): what was Day is Workspace's first tab, and Workspace always opens on it.
   const WORK_TABS = ['day', 'contacts', 'projects', 'camps', 'docs', 'automations', 'tools'];
   // What Workspace → Tools lists. Stacks is a view (S.tab 'column'); the rest open in #tool. While one is open, Tools stays lit.
-  const TOOL_PAGE = ['column', 'bills', 'email', 'meetings', 'map', 'vault'];
+  const TOOL_PAGE = ['column', 'templates', 'bills', 'email', 'meetings', 'map', 'vault'];
   const BAR_ITEMS = {
     column: { label: 'Stacks', view: true },
     chat: { label: 'Chat', view: true },
@@ -3154,6 +3158,7 @@
     camps: svg('<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="4"/><circle cx="12" cy="12" r=".5"/>'),
     agents: svg('<circle cx="9" cy="8" r="3.5"/><path d="M3 20a6 6 0 0 1 12 0"/><path d="M16 4.5a3.5 3.5 0 0 1 0 7M21 20a6 6 0 0 0-4-5.6"/>'),
     work: svg('<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M8 4v5"/>'),
+    templates: svg('<rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/>'),
     automations: svg('<path d="M13 3 5 14h6l-1 7 8-11h-6z"/>'),
     tools: svg('<rect x="4" y="4" width="6" height="6" rx="1.5"/><rect x="14" y="4" width="6" height="6" rx="1.5"/><rect x="4" y="14" width="6" height="6" rx="1.5"/><rect x="14" y="14" width="6" height="6" rx="1.5"/>'),
     sidekick: svg('<path d="M12 3l1.9 5.6L19.5 10l-5.6 1.9L12 17.5l-1.9-5.6L4.5 10l5.6-1.4z"/>'),
@@ -5571,7 +5576,7 @@
         if (a.kind === 'post') {
           const ch = h('select', {}, opt('same', 'The campaign’s own feed', a.channelId || 'same'), opt('general', '#general', a.channelId || 'same'), S.workspace.channels.map((c) => opt(c.id, '#' + c.name, a.channelId || 'same')));
           ch.addEventListener('change', () => (a.channelId = ch.value));
-          f.push(h('label', {}, 'Message', text('{from} sent {file}')), h('label', {}, 'In', ch));
+          f.push(autoTemplatePick(['post', 'reply'], (x) => { a.text = x.body; draw(); }), h('label', {}, 'Message', text('{from} sent {file}')), h('label', {}, 'In', ch));
         }
         if (a.kind === 'campaign') {
           const tpls = S.templates || [];
@@ -5642,13 +5647,13 @@
           f.push(h('label', { class: 'pick' }, cb, 'Send it to the customer too (after an OK)'),
             h('small', { class: 'hint' }, a.send ? 'Makes the invoice from the job’s price lines, then asks for an OK to send it. Once OK’d the customer gets their link and the job moves to Invoiced.' : 'Makes the invoice from the job’s price lines as a draft, for you to check and send.'));
         }
-        if (a.kind === 'text') f.push(h('label', {}, 'Text', text('Hi {customer}, we’re on our way for {record}')), okHint, h('small', { class: 'hint' }, 'From your team’s Twilio number (Settings → Texting).'));
+        if (a.kind === 'text') f.push(autoTemplatePick(['text', 'reply'], (x) => { a.text = x.body.slice(0, 1600); draw(); }), h('label', {}, 'Text', text('Hi {customer}, we’re on our way for {record}')), okHint, h('small', { class: 'hint' }, 'From your team’s Twilio number (Settings → Texting).'));
         if (a.kind === 'email') {
           const sub = h('input', { value: a.subject || '', placeholder: '{record} is done', class: 'auto-email-sub' });
           sub.addEventListener('input', () => (a.subject = sub.value));
           const body = h('textarea', { rows: 4, placeholder: 'Hi,\n\nThanks for choosing us for {record}…', class: 'auto-email-body' }, a.text || '');
           body.addEventListener('input', () => (a.text = body.value));
-          f.push(h('label', {}, 'Subject', sub), h('label', {}, 'Message', body), okHint);
+          f.push(autoTemplatePick(['email', 'reply'], (x) => { a.subject = x.subject || a.subject || ''; a.text = x.body; draw(); }), h('label', {}, 'Subject', sub), h('label', {}, 'Message', body), okHint);
         }
         if (a.kind === 'money') {
           const dir = h('select', { class: 'auto-money-dir' }, opt('in', 'Money in', a.direction || 'in'), opt('out', 'Money out', a.direction || 'in'));
@@ -9770,7 +9775,7 @@
     execute: ['Execute', 'Makes routine changes itself (tasks, time, records, docs). Emails wait for your yes.'],
     automate: ['Automate', 'As Execute, and runs its scheduled workflows on its own.'],
   };
-  const AG_TOOL_NAMES = { look_at_money: 'Budgets and bills', set_budget: 'Budgets', add_bill: 'Bills', draft_invoice: 'Invoice drafts', send_invoice: 'Sending invoices', send_signoff: 'Sign-offs to customers', add_to_company_hq: 'Company HQ', look_at_day: 'Your calendar and day', list_tasks: 'Tasks', list_projects: 'Projects (the setup)', find_records: 'Jobs, leads and deals', read_record: 'A record’s full history', list_campaigns: 'Campaigns', find_contacts: 'Contacts', team_schedule: 'The team’s visits', plan_route: 'Routes', find_docs: 'Docs', read_doc: 'A doc’s text', create_task: 'Make tasks', update_task: 'Reschedule, reassign or finish tasks', schedule_time: 'Put time on your calendar', move_time: 'Move time it put there', save_contact: 'Save contacts', create_project: 'Start projects', create_record: 'Add jobs, leads, deals…', update_record: 'Update records', log_note: 'Log calls and notes', book_visit: 'Book visits', write_doc: 'Write docs', draft_email: 'Draft emails', notify_me: 'Send you a heads-up', marketing_snapshot: 'What’s bringing in work (leads by source, jobs won, campaigns, posts)', find_customers: 'Past and recent customers', list_channels: 'Your social channels', social_posts: 'Your posts in Postiz', create_campaign: 'Start campaigns with goals and tasks', make_list: 'Make lists of people to reach', make_image: 'Make pictures (on your OpenAI or Gemini key)', draft_social_post: 'Draft social and Google posts', draft_email_campaign: 'Draft email campaigns', find_photos: 'Your photos (Folders, Stacks, job photos, chat)', post_to_chat: 'Post in your team’s chat feeds', look_at_photos: 'Look at photos to pick the right ones' };
+  const AG_TOOL_NAMES = { find_templates: 'Templates', save_template: 'Saving templates', look_at_money: 'Budgets and bills', set_budget: 'Budgets', add_bill: 'Bills', draft_invoice: 'Invoice drafts', send_invoice: 'Sending invoices', send_signoff: 'Sign-offs to customers', add_to_company_hq: 'Company HQ', look_at_day: 'Your calendar and day', list_tasks: 'Tasks', list_projects: 'Projects (the setup)', find_records: 'Jobs, leads and deals', read_record: 'A record’s full history', list_campaigns: 'Campaigns', find_contacts: 'Contacts', team_schedule: 'The team’s visits', plan_route: 'Routes', find_docs: 'Docs', read_doc: 'A doc’s text', create_task: 'Make tasks', update_task: 'Reschedule, reassign or finish tasks', schedule_time: 'Put time on your calendar', move_time: 'Move time it put there', save_contact: 'Save contacts', create_project: 'Start projects', create_record: 'Add jobs, leads, deals…', update_record: 'Update records', log_note: 'Log calls and notes', book_visit: 'Book visits', write_doc: 'Write docs', draft_email: 'Draft emails', notify_me: 'Send you a heads-up', marketing_snapshot: 'What’s bringing in work (leads by source, jobs won, campaigns, posts)', find_customers: 'Past and recent customers', list_channels: 'Your social channels', social_posts: 'Your posts in Postiz', create_campaign: 'Start campaigns with goals and tasks', make_list: 'Make lists of people to reach', make_image: 'Make pictures (on your OpenAI or Gemini key)', draft_social_post: 'Draft social and Google posts', draft_email_campaign: 'Draft email campaigns', find_photos: 'Your photos (Folders, Stacks, job photos, chat)', post_to_chat: 'Post in your team’s chat feeds', look_at_photos: 'Look at photos to pick the right ones' };
   const AG_STATUS = { requested: 'Starting', planning: 'Planning', running: 'Working', awaiting: 'Needs your yes', completed: 'Done', failed: 'Didn’t finish', blocked: 'Has a question', cancelled: 'Stopped' };
   const AG_DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
   const agRunning = (x) => ['requested', 'planning', 'running'].includes(x.status);
@@ -10139,16 +10144,113 @@
   }
 
   // ---------- tools: small apps that open in a drawer, so the tabs stay as they are ----------
-  const TOOLS = { agents: { name: 'Your team', render: agentsTool }, hq: { name: 'Company HQ', render: hqTool }, sidekick: { name: 'Sidekick', render: sidekickTool }, docs: { name: 'Folders & Docs', render: docsTool }, bills: { name: 'Finance', render: financeTool }, contacts: { name: 'Contacts', render: contactsTool }, email: { name: 'Email', render: emailTool }, meetings: { name: 'Meeting notes', render: meetingsTool }, planner: { name: 'Planner', render: plannerTool }, folders: { name: 'Folders & Docs', render: foldersTool }, map: { name: 'Map', render: mapTool }, signs: { name: 'Signatures', render: signsTool }, cards: { name: 'Business card', render: cardTool }, automations: { name: 'Automations', render: () => automationsTool() }, tools: { name: 'Tools', render: toolsPage }, vault: { name: 'Vault', render: vaultTool }, news: { name: 'News', render: () => NEWS.render() } };
+  const TOOLS = { agents: { name: 'Your team', render: agentsTool }, hq: { name: 'Company HQ', render: hqTool }, sidekick: { name: 'Sidekick', render: sidekickTool }, docs: { name: 'Folders & Docs', render: docsTool }, bills: { name: 'Finance', render: financeTool }, contacts: { name: 'Contacts', render: contactsTool }, email: { name: 'Email', render: emailTool }, meetings: { name: 'Meeting notes', render: meetingsTool }, planner: { name: 'Planner', render: plannerTool }, folders: { name: 'Folders & Docs', render: foldersTool }, map: { name: 'Map', render: mapTool }, signs: { name: 'Signatures', render: signsTool }, cards: { name: 'Business card', render: cardTool }, templates: { name: 'Templates', render: () => templatesTool() }, automations: { name: 'Automations', render: () => automationsTool() }, tools: { name: 'Tools', render: toolsPage }, vault: { name: 'Vault', render: vaultTool }, news: { name: 'News', render: () => NEWS.render() } };
   let toolOpen = null;
   // The split (the owner, 2026-11-16): Tools, and every tool in it or in Settings → Business, opens in a panel on the
   // right of whatever page is showing, wherever it's opened from (a link, Home, Sidekick, Settings), with a button to
   // fill the page and back. On a phone it fills the screen, as tools always have. One at a time; the page stays.
-  const SPLIT_TOOLS = new Set(['tools', 'bills', 'email', 'meetings', 'map', 'vault', 'hq', 'cards', 'signs']);
+  const SPLIT_TOOLS = new Set(['tools', 'templates', 'bills', 'email', 'meetings', 'map', 'vault', 'hq', 'cards', 'signs']);
   let splitOpen = null;
   let splitFull = false;
   const toolShown = (k) => toolOpen === k || splitOpen === k;
   const toolBox = (k) => (splitOpen === k ? $('#split') : $('#tool'));
+  // ---------- Templates (Workspace → Tools, the owner 2026-11-16) ----------
+  // One library: the team's emails, texts, replies and social posts (server: /api/msg-templates), and its paperwork
+  // (doc templates and sign-off forms, kept where they are and shown here). Automations' message steps start from
+  // one ("Use a template…"), and the AI looks for one before it writes (agents.js find_templates).
+  const TPL = { list: null, docs: null, forms: null, loading: false, kind: store.get('tplKind', 'all'), q: '' };
+  const TPL_KINDS = [['all', 'All'], ['email', 'Email'], ['text', 'Text message'], ['reply', 'Reply'], ['post', 'Social post'], ['paperwork', 'Paperwork']];
+  const TPL_NAME = Object.fromEntries(TPL_KINDS);
+  const TPL_WORDS = ['customer', 'record', 'date', 'amount', 'address', 'who', 'phone'];
+  function loadTemplates() {
+    if (TPL.loading) return TPL.loading;
+    TPL.loading = Promise.all([api('GET', '/msg-templates'), api('GET', '/doc-templates').catch(() => []), api('GET', '/sign-forms').catch(() => [])])
+      .then(([l, d, f]) => { TPL.list = l; TPL.docs = d; TPL.forms = f; }).catch((e) => toast(e.message)).finally(() => { TPL.loading = false; if (toolShown('templates')) renderTool(true); });
+    return TPL.loading;
+  }
+  function templatesTool() {
+    if (!TPL.list || !TPL.docs) { loadTemplates(); return [h('p', { class: 'day-hint' }, 'Loading…')]; }
+    const q = TPL.q.trim().toLowerCase();
+    const hit = (x) => !q || [x.name, x.when, x.about, x.body, x.subject].some((v) => String(v || '').toLowerCase().includes(q));
+    const list = TPL.list.filter((x) => (TPL.kind === 'all' || TPL.kind === x.kind) && hit(x));
+    const search = h('input', { type: 'search', value: TPL.q, placeholder: 'Search templates', 'aria-label': 'Search templates', class: 'tpl-q' });
+    search.addEventListener('input', () => { TPL.q = search.value; const keep = search.selectionStart; renderTool(true); const n = toolBox('templates').querySelector('.tpl-q'); if (n) { n.focus(); n.setSelectionRange(keep, keep); } });
+    const file = h('input', { type: 'file', accept: '.txt,.md,.html,.htm,.docx', hidden: true });
+    file.addEventListener('change', () => file.files[0] && importTemplate(file.files[0]));
+    const card = (x) => h('button', { class: 'tpl-card', 'data-tpl': x.id, onclick: () => msgTemplateSheet(x) },
+      h('span', { class: 'tpl-kind k-' + x.kind }, TPL_NAME[x.kind]),
+      h('b', {}, x.name), x.when ? h('small', {}, x.when) : null,
+      h('span', { class: 'tpl-body' }, (x.subject ? x.subject + ' · ' : '') + x.body.slice(0, 160)));
+    const paper = TPL.kind === 'all' || TPL.kind === 'paperwork';
+    const docs = TPL.docs.filter(hit), forms = TPL.forms.filter(hit);
+    return [
+      h('p', { class: 'day-hint' }, 'Wording your team sends again and again. Use {customer}, {record}, {date} and other words for what changes: automations fill them in when they run, and your AI team fills them in as it writes.'),
+      h('div', { class: 'tpl-bar' }, search,
+        h('button', { class: 'btn small primary-btn', onclick: () => msgTemplateSheet(null, { kind: ['email', 'text', 'reply', 'post'].includes(TPL.kind) ? TPL.kind : 'email' }) }, '+ New template'),
+        h('button', { class: 'btn small', onclick: () => file.click() }, 'Import…'), file),
+      h('div', { class: 'seg seg-sm tpl-kinds', role: 'tablist' }, TPL_KINDS.map(([k, l]) => h('button', { class: TPL.kind === k ? 'on' : null, 'data-kind': k, onclick: () => { TPL.kind = k; store.set('tplKind', k); renderTool(true); } }, l))),
+      TPL.kind !== 'paperwork' ? (list.length ? h('div', { class: 'tpl-grid' }, list.map(card)) : h('p', { class: 'day-hint' }, q ? 'No templates match.' : 'None yet. Make one, import one, or ask Sidekick to write some for you.')) : null,
+      paper && (docs.length || forms.length || TPL.kind === 'paperwork') ? h('h3', { class: 'tpl-h' }, 'Paperwork') : null,
+      paper ? h('div', { class: 'tpl-grid' },
+        docs.map((d) => h('button', { class: 'tpl-card', 'data-doc-tpl': d.id, onclick: () => useDocTemplateHere(d) }, h('span', { class: 'tpl-kind k-doc' }, 'Doc template'), h('b', {}, d.name), d.about ? h('small', {}, d.about) : null, h('span', { class: 'tpl-body' }, 'Tap to make a new doc from it'))),
+        forms.map((f) => h('div', { class: 'tpl-card static' }, h('span', { class: 'tpl-kind k-form' }, 'Sign-off form'), h('b', {}, f.name), h('span', { class: 'tpl-body' }, 'Used on a job’s sign-off field (Projects → the job → its sign-off).'))),
+        !docs.length && !forms.length ? h('p', { class: 'day-hint' }, 'Save any doc as a team template from its ⋯ menu (Save as a team template), or add a form on a job’s sign-off field.') : null) : null,
+    ];
+  }
+  async function useDocTemplateHere(d) {
+    try { const it = await api('POST', `/doc-templates/${d.id}/use`, {}); upsert?.(it); closeTool(); openDoc(it); } catch (e) { toast(e.message); }
+  }
+  async function importTemplate(f) {
+    try {
+      let text = '';
+      if (/\.docx$/i.test(f.name)) text = (await ColumnWord.read(await f.arrayBuffer())).el.innerText;
+      else if (/\.html?$/i.test(f.name)) { const div = document.createElement('div'); div.innerHTML = new DOMParser().parseFromString(await f.text(), 'text/html').body.innerHTML; text = div.innerText; }
+      else text = await f.text();
+      msgTemplateSheet(null, { kind: 'email', name: f.name.replace(/\.[^.]+$/, ''), body: text.trim().slice(0, 20000) });
+    } catch (e) { toast('Couldn’t read that file: ' + e.message); }
+  }
+  function msgTemplateSheet(x, preset = {}) {
+    const v = { kind: 'email', name: '', when: '', subject: '', body: '', ...preset, ...(x || {}) };
+    const kind = h('select', { class: 'tpl-k' }, ['email', 'text', 'reply', 'post'].map((k) => h('option', { value: k, selected: v.kind === k }, TPL_NAME[k])));
+    const name = h('input', { value: v.name, placeholder: 'Quote follow-up', class: 'tpl-name' });
+    const when = h('input', { value: v.when, placeholder: 'When to use it: three days after a quote with no answer', class: 'tpl-when' });
+    const subject = h('input', { value: v.subject || '', placeholder: 'Your quote for {record}', class: 'tpl-subject' });
+    const body = h('textarea', { rows: 9, class: 'tpl-text', placeholder: 'Hi {customer},\n\nJust checking in on the quote for {record}…' });
+    body.value = v.body;
+    const subRow = h('label', {}, 'Subject', subject);
+    const sync = () => { subRow.hidden = kind.value !== 'email'; };
+    kind.addEventListener('change', sync);
+    sync();
+    const insert = (w) => { const at = body.selectionStart ?? body.value.length; body.value = body.value.slice(0, at) + '{' + w + '}' + body.value.slice(body.selectionEnd ?? at); body.focus(); body.setSelectionRange(at + w.length + 2, at + w.length + 2); };
+    const mayEdit = !x || x.memberId === S.me?.memberId || amAdmin();
+    const del = x && mayEdit ? h('button', { class: 'btn small danger', 'data-label': '1' }, 'Delete') : null;
+    del?.addEventListener('click', () => confirmClick(del, async () => { try { await api('DELETE', '/msg-templates/' + x.id); TPL.list = TPL.list.filter((y) => y.id !== x.id); closeSheet(); renderTool(true); } catch (e) { toast(e.message); } }));
+    sheet(x ? 'Edit template' : 'New template', [
+      h('div', { class: 'row2' }, h('label', {}, 'Kind', kind), h('label', {}, 'Name', name)),
+      h('label', {}, 'When to use it', when),
+      subRow,
+      h('label', {}, 'Wording', body),
+      h('div', { class: 'tpl-words' }, h('small', {}, 'Tap to add:'), TPL_WORDS.map((w) => h('button', { class: 'chip', type: 'button', onclick: () => insert(w) }, '{' + w + '}'))),
+      x && !mayEdit ? h('p', { class: 'day-hint' }, 'Only whoever made it, or an owner or admin, can change it.') : null,
+      del,
+    ], mayEdit ? async () => {
+      const out = { kind: kind.value, name: name.value, when: when.value, subject: subject.value, body: body.value };
+      const r = x ? await api('PATCH', '/msg-templates/' + x.id, out) : await api('POST', '/msg-templates', out);
+      TPL.list = [...(TPL.list || []).filter((y) => y.id !== r.id), r];
+      renderTool(true);
+      toast(x ? 'Saved' : 'Template made');
+    } : null, x ? 'Save' : 'Make it');
+  }
+  // Automations: a message step starts from a template, copied in, so the step keeps working if the template changes.
+  function autoTemplatePick(kinds, onPick) {
+    if (!TPL.list) { loadTemplates(); return null; }
+    const fits = TPL.list.filter((x) => kinds.includes(x.kind));
+    if (!fits.length) return h('small', { class: 'hint auto-tpl-none' }, 'Tip: save wording you reuse in Workspace → Tools → Templates, then start from it here.');
+    const sel = h('select', { class: 'auto-tpl', 'aria-label': 'Use a template' }, h('option', { value: '' }, 'Use a template…'), fits.map((x) => h('option', { value: x.id }, `${x.name} (${TPL_NAME[x.kind]})`)));
+    sel.addEventListener('change', () => { const x = fits.find((y) => y.id === sel.value); if (x) onPick(x); });
+    return h('label', { class: 'auto-tpl-row' }, 'Start from', sel);
+  }
+
   // Workspace → Tools (the owner, 2026-11-16, in place of All tools in the sidebar): the tools that aren't a tab of
   // their own. The list and each tool open in the split on the right; ‹ Tools comes back here. Stacks is a page.
   function toolsPage() {
@@ -10157,6 +10259,7 @@
     const waiting = SG.list.filter((x) => x.status === 'sent' || x.status === 'viewed').length;
     const ROWS = {
       column: { name: 'Stacks', sub: 'Cards, files and links in shared stacks', run: () => { closeSplit(); closeTool(); closeProjects(); setTab('column'); } },
+      templates: { name: 'Templates', sub: 'Emails, texts, replies, posts and paperwork to reuse, in automations and by your team' },
       bills: { name: 'Finance', sub: [soon ? `${soon} due soon` : '', tight ? `${tight} budget${tight === 1 ? '' : 's'} nearly used` : ''].filter(Boolean).join(' · ') || 'Money in and out, budgets and bills', ok: () => toolOn('bills') },
       email: { name: 'Email', sub: (S.mail?.sends || []).some((x) => x.status === 'sending') ? 'Sending…' : 'Send to your contacts and lists', ok: () => toolOn('email') && mayEmail() },
       meetings: { name: 'Meeting notes', sub: 'Record a meeting, get notes and tasks', ok: () => toolOn('meetings') },
