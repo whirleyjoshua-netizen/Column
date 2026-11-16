@@ -29,7 +29,7 @@ export const AGENTS = {
       'Turns commitments in emails you paste into tasks',
       'Prepares your end-of-day summary and plans the week',
     ],
-    tools: ['look_at_day', 'list_tasks', 'find_records', 'read_record', 'list_campaigns', 'team_schedule', 'plan_route', 'find_docs', 'read_doc', 'look_at_money', 'set_budget', 'add_bill', 'create_task', 'update_task', 'schedule_time', 'move_time', 'write_doc', 'post_to_chat', 'notify_me'],
+    tools: ['look_at_day', 'list_tasks', 'find_records', 'read_record', 'list_campaigns', 'team_schedule', 'plan_route', 'find_docs', 'read_doc', 'look_at_money', 'set_budget', 'add_bill', 'add_to_company_hq', 'create_task', 'update_task', 'schedule_time', 'move_time', 'write_doc', 'post_to_chat', 'notify_me'],
     workflows: [
       { key: 'briefing', name: 'Morning briefing', ask: 'Give me my morning briefing: what matters today, what is overdue or at risk, and the first thing I should do. Keep it short.', sched: { days: [1, 2, 3, 4, 5], at: 7 * 60 } },
       { key: 'plan_day', name: 'Plan my day', ask: 'Plan my day today: put my tasks into open time around what is already booked, most important first, with breaks, and tell me what won’t fit and what to move or hand off.' },
@@ -73,7 +73,7 @@ export const AGENTS = {
       'Checks project health and says what’s slipping',
       'Closes jobs out with a completion report',
     ],
-    tools: ['list_projects', 'find_records', 'read_record', 'list_tasks', 'look_at_day', 'team_schedule', 'plan_route', 'find_docs', 'read_doc', 'find_photos', 'look_at_photos', 'create_project', 'create_record', 'update_record', 'log_note', 'book_visit', 'create_task', 'update_task', 'schedule_time', 'move_time', 'write_doc', 'draft_email', 'post_to_chat', 'notify_me'],
+    tools: ['list_projects', 'find_records', 'read_record', 'list_tasks', 'look_at_day', 'team_schedule', 'plan_route', 'find_docs', 'read_doc', 'find_photos', 'look_at_photos', 'create_project', 'create_record', 'update_record', 'log_note', 'book_visit', 'draft_invoice', 'send_invoice', 'send_signoff', 'create_task', 'update_task', 'schedule_time', 'move_time', 'write_doc', 'draft_email', 'post_to_chat', 'notify_me'],
     workflows: [
       { key: 'kickoff', name: 'Project kickoff', ask: 'We just won this work. Organize it: the job (or project), the tasks in order with who and when, a materials list, visits, and a completion checklist:\n\n', paste: true },
       { key: 'prep', name: 'Job preparation', ask: 'Prepare for the jobs coming up in the next few days: a checklist for each, what to bring or order, and anything missing before we can start.' },
@@ -499,6 +499,50 @@ export function agentsModule({ sees = () => true, db, save, broadcast, rid, clea
         return done(r, { kind: 'record', id: at.rec.id, label: recTitle(at.rec.id) });
       },
     },
+    // ----- billing and sign-offs on a job (owners and admins see invoices; the routes say so to anyone else) -----
+    draft_invoice: {
+      kind: 'write', label: (a) => `Invoice draft for ${recTitle(a.record_id) || 'a job'}`,
+      description: 'Draft an invoice from a job (its price lines, or its value). It stays a draft until someone sends it; owners and admins only.',
+      parameters: { type: 'object', properties: { record_id: { type: 'string' }, why: { type: 'string' } }, required: ['record_id'] },
+      async run(cx, a) {
+        const at = PJ.recordAt(String(a.record_id || ''), cx.ws.id, cx.memberId);
+        if (!at) throw new Error('No job you can see with that id.');
+        const r = await cx.call('POST', `/api/records/${at.rec.id}/invoices`, {});
+        return done(r, { kind: 'invoice', id: r.body?.id, label: `${r.body?.number || 'Invoice'} · ${recTitle(at.rec.id)}` }, r.body?.id ? { undo: { method: 'POST', path: `/api/invoices/${r.body.id}/void` } } : {});
+      },
+    },
+    send_invoice: {
+      kind: 'write', important: true, label: (a) => { const i = db.invoices?.[a.invoice_id]; return `Send ${i?.number || 'an invoice'}${i?.to?.name ? ' to ' + i.to.name : ''}`; },
+      description: 'Send an invoice to the customer (their own link to read and pay; the job moves to Invoiced). Always waits for the person’s yes, and the team’s rules on invoices still apply.',
+      parameters: { type: 'object', properties: { invoice_id: { type: 'string' }, why: { type: 'string' } }, required: ['invoice_id'] },
+      check(cx, a) { const i = db.invoices?.[a.invoice_id]; if (!i || i.wsId !== cx.ws.id) throw new Error('No invoice with that id.'); if (i.status === 'void') throw new Error('That invoice was voided.'); },
+      async run(cx, a) {
+        const r = await cx.call('POST', `/api/invoices/${a.invoice_id}/send`, {});
+        return done(r, { kind: 'invoice', id: a.invoice_id, label: db.invoices?.[a.invoice_id]?.number || 'Invoice' });
+      },
+    },
+    send_signoff: {
+      kind: 'write', important: true, label: (a) => `Send ${recTitle(a.record_id) || 'a job'}’s sign-off to ${a.name || a.email || 'the customer'}`,
+      description: 'Email the customer the job’s sign-off form to sign online (a completion sign-off, an approval, an agreement). field: the sign-off field’s name when the list has more than one. Always waits for the person’s yes.',
+      parameters: { type: 'object', properties: { record_id: { type: 'string' }, field: { type: 'string' }, name: { type: 'string' }, email: { type: 'string' }, message: { type: 'string' }, why: { type: 'string' } }, required: ['record_id', 'email'] },
+      check(cx, a) { signField(cx, a); if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(a.email || ''))) throw new Error('Give the signer’s email address.'); },
+      async run(cx, a) {
+        const { at, f } = signField(cx, a);
+        const r = await cx.call('POST', `/api/signoff/${at.rec.id}/${f.id}/send`, { name: a.name || '', email: a.email, message: a.message || '' });
+        return done(r, { kind: 'record', id: at.rec.id, label: recTitle(at.rec.id) }, { undo: { method: 'POST', path: `/api/signoff/${at.rec.id}/${f.id}/cancel` } });
+      },
+    },
+    // ----- Company HQ: what every AI in Kloomie follows, so an addition always waits for a yes -----
+    add_to_company_hq: {
+      kind: 'write', important: true, label: (a) => `Company HQ: ${words(a.title || a.text, 80)}`,
+      description: 'Add something true about the business to Company HQ (owners and admins): kind is one of about, service, area, model, different, notwanted, mission, story, value, voice, prefer, avoid, never, vision, goal, ideal, why, objection, culture, process, policy, pricing, rule. Only what the person told you or the team’s own records show; never guess prices or promises. Always waits for the person’s yes.',
+      parameters: { type: 'object', properties: { kind: { type: 'string' }, title: { type: 'string' }, text: { type: 'string' }, why: { type: 'string' } }, required: ['kind', 'title'] },
+      async run(cx, a) {
+        const r = await cx.call('POST', '/api/hq/entries', { kind: a.kind, title: a.title, text: a.text || '', source: 'ai' });
+        const id = r.body?.entry?.id;
+        return done(r, { kind: 'hq', id, label: a.title }, id ? { undo: { method: 'DELETE', path: `/api/hq/entries/${id}` } } : {});
+      },
+    },
     book_visit: {
       kind: 'write', label: (a) => `Booked a ${a.kind || 'visit'} for ${recTitle(a.record_id) || 'a job'} on ${a.date}${a.start ? ' at ' + a.start : ''}`,
       description: 'Book a visit on a job (an estimate, install, service call…): date, times, and who goes (names; the person themselves if left out). It goes on their calendars and the team schedule.',
@@ -916,6 +960,17 @@ export function agentsModule({ sees = () => true, db, save, broadcast, rid, clea
   const taskText = (id) => (seen('task', db.tasks[id]) ? db.tasks[id].text?.slice(0, 80) : undefined);
   const entryText = (id) => (seen('entry', db.entries[id]) ? db.entries[id].text?.slice(0, 80) : undefined);
   const docTitle = (id) => (seen('item', db.items[id]) ? db.items[id].title : undefined);
+  // A job's sign-off field (by name when it has more than one), or why there isn't one.
+  function signField(cx, a) {
+    const at = PJ.recordAt(String(a.record_id || ''), cx.ws.id, cx.memberId);
+    if (!at) throw new Error('No job you can see with that id.');
+    const t = db.projects[at.rec.projectId]?.types.find((x) => x.id === at.rec.typeId);
+    const sigs = (t?.fields || []).filter((f) => f.type === 'signature');
+    if (!sigs.length) throw new Error(`“${recTitle(at.rec.id)}” has no sign-off field to send. Add a Sign-off field to its list first (Projects → the list → + field).`);
+    const f = a.field ? sigs.find((x) => same(x.name, a.field)) : sigs[0];
+    if (!f) throw new Error(`No sign-off field called “${a.field}”. It has: ${sigs.map((x) => x.name).join(', ')}.`);
+    return { at, f };
+  }
   const recTitle = (id) => {
     const r = db.records[id];
     const p = r && db.projects[r.projectId];

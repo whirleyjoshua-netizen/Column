@@ -20,6 +20,7 @@ const ok = (c, msg) => { console.log((c ? 'PASS ' : 'FAIL ') + msg); if (!c) fai
 const asked = [];
 const text = (c) => (typeof c === 'string' ? c : (c || []).map((b) => b.text || (b.type === 'tool_result' ? b.content : '')).join(' '));
 let today = '';
+const OPS = { job: null, inv: null }; // ids the invoice and sign-off scripts use, set as the test goes
 const SCRIPTS = {
   'plan my day': (n, sys, last) => [
     [['look_at_day', {}], ['list_tasks', { which: 'overdue' }]],
@@ -48,6 +49,10 @@ const SCRIPTS = {
     [['set_budget', { category: 'Fuel', limit: 300, scope: 'business', why: 'Trucks run daily' }], ['add_bill', { name: 'Truck lease', amount: 450, due: today, repeat: 'monthly', scope: 'business', why: 'Fixed cost' }]],
     'Planned your money: a fuel budget and the truck lease.',
   ][n],
+  'garcia job': (n) => [[['create_record', { project: 'Jobs', list: 'Jobs', values: { Job: 'Garcia blinds', Value: '1800' } }]], 'Job made.'][n],
+  'bill garcia': (n) => [[['draft_invoice', { record_id: OPS.job, why: 'Install is done' }], ['send_signoff', { record_id: OPS.job, name: 'Ana Garcia', email: 'ana@garcia.test' }]], 'Drafted the invoice.'][n],
+  'send garcia': (n) => [[['send_invoice', { invoice_id: OPS.inv }]], 'Ready to send when you say.'][n],
+  'hq fact': (n) => [[['add_to_company_hq', { kind: 'service', title: 'Window blinds', text: 'We measure and install blinds in Las Vegas homes and shops.', why: 'From the jobs' }]], 'Suggested an HQ entry.'][n],
   'restart test': (n) => [[['create_task', { text: 'Made before the restart' }]], 'never'][n],
 };
 const ai = http.createServer((req, res) => {
@@ -289,6 +294,47 @@ try {
     ok(r.status === 200 && !st.budgets.some((b) => b.category === 'Fuel'), 'so can the budget');
     r = await ada('GET', '/agents');
     ok(r.body.agents.chief.tools.some((t) => t.key === 'set_budget') && r.body.agents.chief.tools.some((t) => t.key === 'add_bill'), 'the Chief of Staff lists the money tools');
+  }
+
+  // ----- Running the business (2026-11-15): invoices, sign-offs and Company HQ, with the right ones waiting for a yes -----
+  {
+    const waitRun = async (id) => { let x; for (let i = 0; i < 60; i++) { x = (await ada('GET', '/agents/runs/' + id)).body; if (!['requested', 'planning', 'running'].includes(x.status)) break; await sleep(150); } return x; };
+    const stepsOf = (x) => x.parts.flatMap((p) => p.steps);
+    await ada('PATCH', '/agents/ops', { level: 'execute' });
+    await ada('POST', '/projects', { template: 'jobs', name: 'Jobs' });
+    await waitRun((await ada('POST', '/agents/runs', { agent: 'ops', ask: 'garcia job please' })).body.id);
+    const st0 = (await ada('GET', '/state')).body;
+    const jobsP = st0.projects.find((p) => p.name === 'Jobs');
+    OPS.job = (await ada('GET', `/projects/${jobsP.id}/records`)).body.find((r2) => Object.values(r2.values || {}).includes('Garcia blinds'))?.id;
+    ok(!!OPS.job, '(setup) a Garcia job to bill');
+    let x = await waitRun((await ada('POST', '/agents/runs', { agent: 'ops', ask: 'bill garcia now' })).body.id);
+    const inv = stepsOf(x).find((s2) => s2.tool === 'draft_invoice');
+    let invs = (await ada('GET', '/invoices')).body;
+    ok(inv?.status === 'done' && invs.some((i2) => i2.recordId === OPS.job && i2.status === 'draft'), 'Operations drafts an invoice from the job (a routine change, done at execute)');
+    OPS.inv = invs.find((i2) => i2.recordId === OPS.job).id;
+    const so = stepsOf(x).find((s2) => s2.tool === 'send_signoff');
+    ok(so && so.status === 'failed' && /sign-off/i.test(so.error || ''), 'a sign-off on a job without a sign-off field fails, saying so: ' + (so?.error || so?.status));
+    x = await waitRun((await ada('POST', '/agents/runs', { agent: 'ops', ask: 'send garcia invoice' })).body.id);
+    const sendSt = stepsOf(x).find((s2) => s2.tool === 'send_invoice');
+    invs = (await ada('GET', '/invoices')).body;
+    ok(sendSt?.status === 'proposed' && invs.find((i2) => i2.id === OPS.inv).status === 'draft', 'sending an invoice always waits for a yes, even at execute');
+    r = await ada('POST', `/agents/runs/${x.id}/steps`, { do: 'skip', id: sendSt.id });
+    r = await ada('POST', `/agents/runs/${(await ada('GET', '/agents')).body.runs.find((y) => y.ask.includes('bill garcia')).id}/steps`, { do: 'undo', id: inv.id });
+    invs = (await ada('GET', '/invoices')).body;
+    ok(invs.find((i2) => i2.id === OPS.inv).status === 'void', 'undoing the draft voids it');
+    // Company HQ: an addition always waits for a yes; approved, it's in HQ; undone, it's gone.
+    x = await waitRun((await ada('POST', '/agents/runs', { agent: 'chief', ask: 'hq fact please' })).body.id);
+    const hq = stepsOf(x).find((s2) => s2.tool === 'add_to_company_hq');
+    let h1 = (await ada('GET', '/hq')).body;
+    ok(hq?.status === 'proposed' && !h1.entries.some((e2) => e2.title === 'Window blinds'), 'adding to Company HQ waits for a yes, even at execute');
+    await ada('POST', `/agents/runs/${x.id}/steps`, { do: 'approve', id: hq.id });
+    h1 = (await ada('GET', '/hq')).body;
+    ok(h1.entries.some((e2) => e2.kind === 'service' && e2.title === 'Window blinds' && e2.status === 'approved'), 'approved, it is in Company HQ as a service');
+    await ada('POST', `/agents/runs/${x.id}/steps`, { do: 'undo', id: hq.id });
+    h1 = (await ada('GET', '/hq')).body;
+    ok(!h1.entries.some((e2) => e2.title === 'Window blinds'), 'and undo takes it out again');
+    const ag = (await ada('GET', '/agents')).body.agents;
+    ok(['draft_invoice', 'send_invoice', 'send_signoff'].every((k) => ag.ops.tools.some((t) => t.key === k)) && ag.chief.tools.some((t) => t.key === 'add_to_company_hq'), 'Operations lists invoices and sign-offs; the Chief of Staff lists Company HQ');
   }
 
   // ----- Stop, delete, switch off -----
