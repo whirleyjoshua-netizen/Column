@@ -645,6 +645,8 @@
     } else if (msg.type === 'template:remove') {
       S.templates = S.templates.filter((y) => y.id !== msg.id);
       renderCamps();
+    } else if (msg.type === 'inventory') {
+      if (INVS.data) { clearTimeout(INVS.soon); INVS.soon = setTimeout(() => loadInventory(), 300); }
     } else if (msg.type === 'msg-templates') {
       TPL.list = null;
       if (toolShown('templates')) renderTool();
@@ -3122,7 +3124,7 @@
   // Tasks (the owner, 2026-11-15): what was Day is Workspace's first tab, and Workspace always opens on it.
   const WORK_TABS = ['day', 'contacts', 'projects', 'camps', 'docs', 'automations', 'tools'];
   // What Workspace → Tools lists. Stacks is a view (S.tab 'column'); the rest open in #tool. While one is open, Tools stays lit.
-  const TOOL_PAGE = ['column', 'templates', 'bills', 'email', 'meetings', 'map', 'vault'];
+  const TOOL_PAGE = ['column', 'templates', 'inventory', 'bills', 'email', 'meetings', 'map', 'vault'];
   const BAR_ITEMS = {
     column: { label: 'Stacks', view: true },
     chat: { label: 'Chat', view: true },
@@ -10168,12 +10170,12 @@
   }
 
   // ---------- tools: small apps that open in a drawer, so the tabs stay as they are ----------
-  const TOOLS = { agents: { name: 'Your team', render: agentsTool }, hq: { name: 'Company HQ', render: hqTool }, sidekick: { name: 'Sidekick', render: sidekickTool }, docs: { name: 'Folders & Docs', render: docsTool }, bills: { name: 'Finance', render: financeTool }, contacts: { name: 'Contacts', render: contactsTool }, email: { name: 'Email', render: emailTool }, meetings: { name: 'Meeting notes', render: meetingsTool }, planner: { name: 'Planner', render: plannerTool }, folders: { name: 'Folders & Docs', render: foldersTool }, map: { name: 'Map', render: mapTool }, signs: { name: 'Signatures', render: signsTool }, cards: { name: 'Business card', render: cardTool }, templates: { name: 'Templates', render: () => templatesTool() }, automations: { name: 'Automations', render: () => automationsTool() }, column: { name: 'Stacks', render: () => [stacksInSplit()] }, tools: { name: 'Tools', render: toolsPage }, vault: { name: 'Vault', render: vaultTool }, news: { name: 'News', render: () => NEWS.render() } };
+  const TOOLS = { agents: { name: 'Your team', render: agentsTool }, hq: { name: 'Company HQ', render: hqTool }, sidekick: { name: 'Sidekick', render: sidekickTool }, docs: { name: 'Folders & Docs', render: docsTool }, bills: { name: 'Finance', render: financeTool }, contacts: { name: 'Contacts', render: contactsTool }, email: { name: 'Email', render: emailTool }, meetings: { name: 'Meeting notes', render: meetingsTool }, planner: { name: 'Planner', render: plannerTool }, folders: { name: 'Folders & Docs', render: foldersTool }, map: { name: 'Map', render: mapTool }, signs: { name: 'Signatures', render: signsTool }, cards: { name: 'Business card', render: cardTool }, templates: { name: 'Templates', render: () => templatesTool() }, inventory: { name: 'Inventory', render: () => inventoryTool() }, automations: { name: 'Automations', render: () => automationsTool() }, column: { name: 'Stacks', render: () => [stacksInSplit()] }, tools: { name: 'Tools', render: toolsPage }, vault: { name: 'Vault', render: vaultTool }, news: { name: 'News', render: () => NEWS.render() } };
   let toolOpen = null;
   // The split (the owner, 2026-11-16): Tools, and every tool in it or in Settings → Business, opens in a panel on the
   // right of whatever page is showing, wherever it's opened from (a link, Home, Sidekick, Settings), with a button to
   // fill the page and back. On a phone it fills the screen, as tools always have. One at a time; the page stays.
-  const SPLIT_TOOLS = new Set(['tools', 'column', 'templates', 'bills', 'email', 'meetings', 'map', 'vault', 'hq', 'cards', 'signs']);
+  const SPLIT_TOOLS = new Set(['tools', 'column', 'templates', 'inventory', 'bills', 'email', 'meetings', 'map', 'vault', 'hq', 'cards', 'signs']);
   let splitOpen = null;
   let splitFull = false;
   const toolShown = (k) => toolOpen === k || splitOpen === k;
@@ -10277,6 +10279,180 @@
 
   // Workspace → Tools (the owner, 2026-11-16, in place of All tools in the sidebar): the tools that aren't a tab of
   // their own. The list and each tool open in the split on the right; ‹ Tools comes back here. Stacks is a page.
+
+  // ---------- Inventory (Tools): what the business keeps, where it is, and every move ----------
+  // Items with how many are at each place (warehouse, trucks, sites), low stock against each one's reorder point, the
+  // stock's value (owners and admins), and the ledger: received, moved, used on a job, returned, adjusted, counted.
+  // Everyone records what they move, use or bring back; owners and admins manage items and places and fix the counts.
+  const INVS = { data: null, loading: null, view: store.get('invView', 'items'), q: '', place: '', cat: '', low: false, moves: null };
+  const INV_KIND = { warehouse: ['🏬', 'Warehouse'], truck: ['🚚', 'Truck'], site: ['📍', 'Job site'], other: ['📦', 'Other'] };
+  const INV_VERB = { receive: 'received', move: 'moved', use: 'used', return: 'brought back', adjust: 'adjusted', count: 'counted' };
+  const invQty = (n) => (Math.round(Number(n) * 1000) / 1000).toLocaleString(undefined, { maximumFractionDigits: 3 });
+  const invMoney = (c) => (c == null ? '' : (c / 100).toLocaleString(undefined, { style: 'currency', currency: 'USD', minimumFractionDigits: c % 100 ? 2 : 0 }));
+  function loadInventory() {
+    if (INVS.loading) return INVS.loading;
+    INVS.loading = api('GET', '/inventory').then((d) => { INVS.data = d; INVS.moves = null; renderTool(true); }).catch((e) => toast(e.message)).finally(() => (INVS.loading = null));
+    return INVS.loading;
+  }
+  const invPlace = (id) => INVS.data?.places.find((p) => p.id === id);
+  const invItem = (id) => INVS.data?.items.find((x) => x.id === id);
+  function inventoryTool() {
+    if (!INVS.data) { loadInventory(); return [h('p', { class: 'day-hint' }, 'Loading…')]; }
+    const d = INVS.data, admin = d.canManage;
+    const setView = (v) => { INVS.view = v; store.set('invView', v); renderTool(true); };
+    const stat = (label, val, cls = '') => h('div', { class: 'inv-stat ' + cls }, h('b', {}, val), h('small', {}, label));
+    const search = h('input', { type: 'search', value: INVS.q, placeholder: 'Search items, SKUs, categories', 'aria-label': 'Search inventory', class: 'inv-q' });
+    search.addEventListener('input', () => { INVS.q = search.value; const keep = search.selectionStart; renderTool(true); const n = toolBox('inventory')?.querySelector('.inv-q'); if (n) { n.focus(); n.setSelectionRange(keep, keep); } });
+    const out = [
+      h('div', { class: 'inv-sum' }, stat('Items', d.items.length), stat('Low stock', d.low.length, d.low.length ? 'inv-warn' : ''), admin ? stat('Stock value', invMoney(d.value || 0)) : null, stat('Places', d.places.length)),
+      h('div', { class: 'inv-bar' }, search,
+        admin ? h('button', { class: 'btn small primary-btn inv-new', onclick: () => invItemForm(null) }, '+ Item') : null,
+        admin && d.items.length ? h('button', { class: 'btn small inv-receive', onclick: () => invMoveSheet(null, 'receive') }, 'Receive stock') : null),
+      h('div', { class: 'seg seg-sm inv-views', role: 'tablist' }, [['items', 'Items'], ['places', 'Places'], ['activity', 'Activity']].map(([k, l]) => h('button', { class: INVS.view === k ? 'on' : null, 'data-view': k, role: 'tab', 'aria-selected': String(INVS.view === k), onclick: () => setView(k) }, l))),
+    ];
+    if (INVS.view === 'places') return [...out, ...invPlacesView(d, admin)];
+    if (INVS.view === 'activity') return [...out, ...invActivityView(d)];
+    // Items: filtered by where, what kind, and low stock.
+    const q = INVS.q.trim().toLowerCase();
+    const cats = [...new Set(d.items.map((x) => x.category).filter(Boolean))].sort();
+    const at = (x) => (INVS.place ? x.stock[INVS.place] || 0 : x.onHand);
+    const list = d.items.filter((x) => (!q || [x.name, x.sku, x.category, x.supplier].some((v) => String(v || '').toLowerCase().includes(q))) && (!INVS.cat || x.category === INVS.cat) && (!INVS.low || x.low) && (!INVS.place || x.stock[INVS.place] > 0));
+    const placeSel = h('select', { class: 'inv-f-place', 'aria-label': 'Where' }, h('option', { value: '' }, 'Everywhere'), d.places.map((p) => h('option', { value: p.id, selected: INVS.place === p.id }, p.name)));
+    placeSel.addEventListener('change', () => { INVS.place = placeSel.value; renderTool(true); });
+    const catSel = cats.length ? h('select', { class: 'inv-f-cat', 'aria-label': 'Category' }, h('option', { value: '' }, 'All categories'), cats.map((c) => h('option', { value: c, selected: INVS.cat === c }, c))) : null;
+    catSel?.addEventListener('change', () => { INVS.cat = catSel.value; renderTool(true); });
+    const row = (x) => h('button', { class: 'inv-row' + (x.low ? ' low' : ''), 'data-item': x.id, onclick: () => invItemSheet(x.id) },
+      h('span', { class: 'inv-name' }, h('b', {}, x.name), h('small', {}, [x.sku, x.category].filter(Boolean).join(' · '))),
+      h('span', { class: 'inv-qty' }, h('span', { class: 'inv-qty-n' }, h('b', {}, invQty(at(x))), ' ' + x.unit, x.low ? h('span', { class: 'inv-low' }, 'Low') : null),
+        !INVS.place && Object.values(x.stock).filter((v) => v > 0).length > 1 ? h('small', {}, Object.entries(x.stock).filter(([, v]) => v > 0).map(([p, v]) => `${invPlace(p)?.name || '?'} ${invQty(v)}`).join(' · ')) : null),
+      admin ? h('span', { class: 'inv-val' }, x.value != null ? invMoney(INVS.place ? Math.round(at(x) * x.cost) : x.value) : '') : null);
+    return [...out,
+      h('div', { class: 'inv-filters' }, placeSel, catSel, h('button', { class: 'chip inv-f-low' + (INVS.low ? ' on' : ''), 'aria-pressed': String(INVS.low), onclick: () => { INVS.low = !INVS.low; renderTool(true); } }, `Low stock${d.low.length ? ` (${d.low.length})` : ''}`)),
+      list.length ? h('div', { class: 'inv-list' }, list.map(row))
+        : h('p', { class: 'day-hint' }, d.items.length ? 'Nothing matches.' : admin ? 'Nothing here yet. Add the things you keep: parts, materials, supplies. Say how many you have and where, and set a reorder point to hear when it’s running low.' : 'Nothing in inventory yet. An owner or admin adds the items.')];
+  }
+  function invPlacesView(d, admin) {
+    const card = (p) => {
+      const here = d.items.filter((x) => x.stock[p.id] > 0);
+      const val = admin ? here.reduce((n, x) => n + (x.cost != null ? Math.round(x.stock[p.id] * x.cost) : 0), 0) : null;
+      const who = p.memberId && S.workspace.members.find((m) => m.id === p.memberId);
+      return h('div', { class: 'inv-place', 'data-place': p.id },
+        h('button', { class: 'inv-place-main', onclick: () => { INVS.place = p.id; INVS.view = 'items'; store.set('invView', 'items'); renderTool(true); } },
+          h('span', { class: 'inv-place-ic' }, INV_KIND[p.kind]?.[0] || '📦'), h('b', {}, p.name),
+          h('small', {}, [INV_KIND[p.kind]?.[1], who ? who.name + '’s' : '', p.address].filter(Boolean).join(' · ')),
+          h('small', {}, `${here.length} ${here.length === 1 ? 'item' : 'items'}${admin && val ? ' · ' + invMoney(val) : ''}`)),
+        admin ? h('button', { class: 'icon-btn', 'aria-label': 'Edit ' + p.name, html: I.more, onclick: () => invPlaceForm(p) }) : null);
+    };
+    return [
+      h('div', { class: 'inv-places' }, d.places.map(card), admin ? h('button', { class: 'inv-place inv-place-new', onclick: () => invPlaceForm(null) }, '+ Place', h('small', {}, 'A warehouse, a truck, a job site')) : null),
+      !d.places.length ? h('p', { class: 'day-hint' }, 'Places are where stock sits. The first one, Main storage, is made with your first item.') : null,
+    ];
+  }
+  function invMoveLine(m, withItem = true) {
+    const x = invItem(m.itemId);
+    const unit = x?.unit || '';
+    const where = m.kind === 'move' ? `${invPlace(m.from)?.name || '?'} → ${invPlace(m.to)?.name || '?'}` : m.to ? 'to ' + (invPlace(m.to)?.name || '?') : m.from ? 'at ' + (invPlace(m.from)?.name || '?') : '';
+    const n = m.kind === 'count' ? `${invQty(m.counted)} (${m.qty >= 0 ? '+' : ''}${invQty(m.qty)})` : invQty(Math.abs(m.qty));
+    return h('div', { class: 'inv-move k-' + m.kind },
+      h('span', {}, h('b', {}, m.by), ` ${INV_VERB[m.kind] || m.kind} ${n} ${unit}`, withItem ? h('b', {}, ' ' + (x?.name || 'an item')) : null, where ? ' ' + where : '', m.jobId ? ' · for a job' : '', m.note ? ` · “${m.note}”` : ''),
+      h('small', {}, ago(m.at)));
+  }
+  function invActivityView(d) {
+    if (!INVS.moves) { api('GET', '/inventory/moves?limit=200').then((l) => { INVS.moves = l; renderTool(true); }).catch((e) => toast(e.message)); return [h('p', { class: 'day-hint' }, 'Loading…')]; }
+    return INVS.moves.length ? [h('div', { class: 'inv-moves' }, INVS.moves.map((m) => invMoveLine(m)))] : [h('p', { class: 'day-hint' }, 'Nothing has moved yet.')];
+  }
+  // One item: where it is, what to do with it, its details, and its history.
+  async function invItemSheet(id) {
+    let got;
+    try { got = await api('GET', '/inventory/items/' + id); } catch (e) { return toast(e.message); }
+    const x = got.item, admin = INVS.data?.canManage;
+    const places = INVS.data.places;
+    const act = (kind, p) => h('button', { class: 'btn small inv-act', 'data-act': kind, onclick: () => invMoveSheet(x, kind, p?.id) }, { use: 'Use', move: 'Move', count: 'Count', return: 'Bring back', receive: 'Receive' }[kind]);
+    const rows = places.filter((p) => (x.stock[p.id] || 0) > 0 || admin).map((p) => h('div', { class: 'inv-at', 'data-place': p.id },
+      h('span', {}, h('b', {}, p.name), h('small', {}, `${invQty(x.stock[p.id] || 0)} ${x.unit}`)),
+      h('span', { class: 'inv-at-acts' }, (x.stock[p.id] || 0) > 0 ? act('use', p) : null, (x.stock[p.id] || 0) > 0 && places.length > 1 ? act('move', p) : null, admin ? act('count', p) : null)));
+    sheet(x.name, [
+      h('p', { class: 'day-hint' }, [x.sku && 'SKU ' + x.sku, x.category, x.supplier && 'from ' + x.supplier].filter(Boolean).join(' · ') || 'No details yet.'),
+      h('div', { class: 'inv-sum' }, h('div', { class: 'inv-stat' + (x.low ? ' inv-warn' : '') }, h('b', {}, `${invQty(x.onHand)} ${x.unit}`), h('small', {}, x.low ? `On hand · low (reorder at ${invQty(x.reorderAt)})` : x.reorderAt != null ? `On hand · reorder at ${invQty(x.reorderAt)}` : 'On hand')),
+        admin && x.cost != null ? h('div', { class: 'inv-stat' }, h('b', {}, invMoney(x.value)), h('small', {}, `Value · ${invMoney(x.cost)} each`)) : null,
+        admin && x.price != null ? h('div', { class: 'inv-stat' }, h('b', {}, invMoney(x.price)), h('small', {}, 'Price')) : null),
+      h('div', { class: 'inv-ats' }, rows.length ? rows : h('p', { class: 'day-hint' }, 'None on hand.')),
+      h('div', { class: 'btns inv-item-acts' }, admin ? act('receive') : null, act('return'), admin ? h('button', { class: 'btn small', onclick: () => invItemForm(x) }, 'Edit details') : null),
+      x.notes ? h('p', { class: 'inv-notes' }, x.notes) : null,
+      h('h3', { class: 'inv-h' }, 'History'),
+      got.moves.length ? h('div', { class: 'inv-moves' }, got.moves.map((m) => invMoveLine(m, false))) : h('p', { class: 'day-hint' }, 'Nothing yet.'),
+    ], null);
+  }
+  // Receiving, moving, using, bringing back, counting: one form, the right fields for each.
+  function invMoveSheet(x, kind, placeId) {
+    const d = INVS.data;
+    const itemSel = x ? null : h('select', { class: 'inv-m-item', 'aria-label': 'Item' }, d.items.map((y) => h('option', { value: y.id }, y.name)));
+    const item = () => x || invItem(itemSel.value);
+    const opts = (sel) => d.places.map((p) => h('option', { value: p.id, selected: p.id === sel }, p.name));
+    const from = h('select', { class: 'inv-m-from', 'aria-label': 'From' }, opts(placeId));
+    const to = h('select', { class: 'inv-m-to', 'aria-label': 'To' }, opts(kind === 'move' ? d.places.find((p) => p.id !== placeId)?.id : placeId));
+    const n = h('input', { type: 'number', min: 0, step: 'any', class: 'inv-m-qty', 'aria-label': 'How many', placeholder: kind === 'count' ? 'How many are there' : 'How many' });
+    const cost = h('input', { type: 'number', min: 0, step: '0.01', class: 'inv-m-cost', placeholder: 'Leave as is' });
+    const note = h('input', { class: 'inv-m-note', placeholder: kind === 'adjust' ? 'Why (required)' : 'What for (optional)' });
+    const title = { receive: 'Receive stock', move: 'Move stock', use: 'Use stock', return: 'Bring stock back', count: 'Count stock', adjust: 'Adjust stock' }[kind];
+    const fields = [
+      itemSel ? h('label', {}, 'Item', itemSel) : h('p', {}, h('b', {}, x.name), h('small', { class: 'muted' }, ` · ${invQty(x.onHand)} ${x.unit} on hand`)),
+      kind === 'move' || kind === 'use' || kind === 'count' ? h('label', {}, kind === 'count' ? 'At' : 'From', from) : null,
+      kind === 'move' || kind === 'receive' || kind === 'return' ? h('label', {}, 'To', to) : null,
+      h('label', {}, kind === 'count' ? 'Counted' : 'How many', n),
+      kind === 'receive' && d.canManage ? h('label', {}, 'Cost each ($)', cost) : null,
+      h('label', {}, 'Note', note),
+    ];
+    sheet(title, fields, async () => {
+      const it = item();
+      if (!it) throw new Error('Pick the item.');
+      await api('POST', '/inventory/moves', { kind, itemId: it.id, qty: n.value, from: from.value, to: to.value, note: note.value, ...(cost.value ? { cost: cost.value } : {}) });
+      toast({ receive: 'Received', move: 'Moved', use: 'Used', return: 'Brought back', count: 'Counted', adjust: 'Adjusted' }[kind]);
+      await loadInventory();
+    }, title.split(' ')[0]);
+    setTimeout(() => n.focus(), 50);
+  }
+  function invItemForm(x) {
+    const v = x || { unit: 'each' };
+    const inp = (k, ph, type = 'text') => { const e = h('input', { type, value: v[k] ?? '', placeholder: ph, class: 'inv-f-' + k, ...(type === 'number' ? { min: 0, step: 'any' } : {}) }); return e; };
+    const money = (k) => h('input', { type: 'number', min: 0, step: '0.01', value: v[k] != null ? (v[k] / 100).toFixed(2) : '', class: 'inv-f-' + k, placeholder: '0.00' });
+    const f = { name: inp('name', '16x25 air filter'), sku: inp('sku', 'FLT-1625'), category: inp('category', 'Filters'), unit: inp('unit', 'each, box, ft…'), cost: money('cost'), price: money('price'), reorderAt: inp('reorderAt', 'e.g. 10', 'number'), reorderQty: inp('reorderQty', 'e.g. 40', 'number'), supplier: inp('supplier', 'Who you buy it from'), onHand: inp('onHand', '0', 'number') };
+    const notes = h('textarea', { rows: 2, class: 'inv-f-notes', placeholder: 'Anything to know' }, v.notes || '');
+    const place = h('select', { class: 'inv-f-place' }, INVS.data.places.map((p) => h('option', { value: p.id }, p.name)));
+    const del = x ? h('button', { class: 'btn small danger', 'data-label': '1' }, 'Delete') : null;
+    del?.addEventListener('click', () => confirmClick(del, async () => { try { await api('DELETE', '/inventory/items/' + x.id); closeSheet(); await loadInventory(); } catch (e) { toast(e.message); } }));
+    sheet(x ? 'Edit item' : 'New item', [
+      h('label', {}, 'Name', f.name),
+      h('div', { class: 'row2' }, h('label', {}, 'SKU or part number', f.sku), h('label', {}, 'Category', f.category)),
+      h('div', { class: 'row2' }, h('label', {}, 'Unit', f.unit), h('label', {}, 'Supplier', f.supplier)),
+      h('div', { class: 'row2' }, h('label', {}, 'Cost each ($)', f.cost), h('label', {}, 'Price each ($)', f.price)),
+      h('div', { class: 'row2' }, h('label', {}, 'Reorder at', f.reorderAt), h('label', {}, 'Reorder how many', f.reorderQty)),
+      x ? null : h('div', { class: 'row2' }, h('label', {}, 'On hand now', f.onHand), INVS.data.places.length ? h('label', {}, 'At', place) : h('small', { class: 'hint' }, 'It goes in Main storage; add trucks and other places under Places.')),
+      h('label', {}, 'Notes', notes),
+      h('small', { class: 'hint' }, 'Only owners and admins see costs, prices and value. Below the reorder point it shows as low stock.'),
+      del,
+    ], async () => {
+      const body = Object.fromEntries(Object.entries(f).filter(([k]) => k !== 'onHand' || !x).map(([k, e]) => [k, e.value]));
+      body.notes = notes.value;
+      if (!x) body.placeId = place.value || undefined;
+      await api(x ? 'PATCH' : 'POST', x ? '/inventory/items/' + x.id : '/inventory/items', body);
+      toast(x ? 'Saved' : 'Added');
+      await loadInventory();
+    }, x ? 'Save' : 'Add it');
+  }
+  function invPlaceForm(p) {
+    const name = h('input', { value: p?.name || '', placeholder: 'Truck 2', class: 'inv-p-name' });
+    const kind = h('select', { class: 'inv-p-kind' }, Object.entries(INV_KIND).map(([k, [ic, l]]) => h('option', { value: k, selected: (p?.kind || 'truck') === k }, `${ic} ${l}`)));
+    const who = h('select', { class: 'inv-p-who' }, h('option', { value: '' }, 'Nobody in particular'), S.workspace.members.map((m) => h('option', { value: m.id, selected: p?.memberId === m.id }, m.name)));
+    const address = h('input', { value: p?.address || '', placeholder: 'Address (optional)', class: 'inv-p-address' });
+    const del = p ? h('button', { class: 'btn small danger', 'data-label': '1' }, 'Delete') : null;
+    del?.addEventListener('click', () => confirmClick(del, async () => { try { await api('DELETE', '/inventory/places/' + p.id); closeSheet(); await loadInventory(); } catch (e) { toast(e.message); } }));
+    sheet(p ? 'Edit place' : 'New place', [h('label', {}, 'Name', name), h('div', { class: 'row2' }, h('label', {}, 'Kind', kind), h('label', {}, 'Whose (a truck’s driver)', who)), h('label', {}, 'Address', address), del], async () => {
+      await api(p ? 'PATCH' : 'POST', p ? '/inventory/places/' + p.id : '/inventory/places', { name: name.value, kind: kind.value, memberId: who.value || null, address: address.value });
+      toast(p ? 'Saved' : 'Added');
+      await loadInventory();
+    }, p ? 'Save' : 'Add it');
+  }
   function toolsPage() {
     const soon = billsSoon().length;
     const tight = budgetAlerts().length;
@@ -10284,6 +10460,7 @@
     const ROWS = {
       column: { name: 'Stacks', sub: 'Cards, files and links in shared stacks', run: () => openStacks() },
       templates: { name: 'Templates', sub: 'Emails, texts, replies, posts and paperwork to reuse, in automations and by your team' },
+      inventory: { name: 'Inventory', sub: INVS.data?.low.length ? `${INVS.data.low.length} low on stock` : 'Parts, materials and equipment: what you have and where', ok: () => toolOn('inventory') },
       bills: { name: 'Finance', sub: [soon ? `${soon} due soon` : '', tight ? `${tight} budget${tight === 1 ? '' : 's'} nearly used` : ''].filter(Boolean).join(' · ') || 'Money in and out, budgets and bills', ok: () => toolOn('bills') },
       email: { name: 'Email', sub: (S.mail?.sends || []).some((x) => x.status === 'sending') ? 'Sending…' : 'Send to your contacts and lists', ok: () => toolOn('email') && mayEmail() },
       meetings: { name: 'Meeting notes', sub: 'Record a meeting, get notes and tasks', ok: () => toolOn('meetings') },
@@ -19295,7 +19472,7 @@
         // The tools the team uses. Switched off, a tool leaves everyone's Tools menu; nothing in it is deleted.
         const TOOL_ROWS = [['agents', 'Agents', 'Your team: Chief of Staff, Sales, Operations and Marketing'], ['sidekick', 'Sidekick', 'Plans campaigns with you'], ['docs', 'Docs', 'Write and share pages'], ['contacts', 'Contacts', 'Your customers and leads (owners and admins)'],
           ['email', 'Email', 'Campaign email from Outlook or Gmail'], ['folders', 'Folders', 'Files in folders'], ['signs', 'Signatures', 'Send PDFs to be signed'], ['bills', 'Finance', 'Bills, money in and out, budgets'],
-          ['meetings', 'Meeting notes', 'Record a call, get the notes'], ['map', 'Map', 'Pins, routes and canvassing runs'], ['vault', 'Vault', 'Codes and logins, locked on your device'], ['projects', 'Projects', 'Trades, software, client work and team projects'], ['cards', 'Business cards', 'Everyone’s own card to share by link, text, QR code or NFC'], ['news', 'News', 'Each person’s own news, if they turn it on in their tabs']];
+          ['meetings', 'Meeting notes', 'Record a call, get the notes'], ['map', 'Map', 'Pins, routes and canvassing runs'], ['vault', 'Vault', 'Codes and logins, locked on your device'], ['projects', 'Projects', 'Trades, software, client work and team projects'], ['cards', 'Business cards', 'Everyone’s own card to share by link, text, QR code or NFC'], ['news', 'News', 'Each person’s own news, if they turn it on in their tabs'], ['inventory', 'Inventory', 'Parts, materials and equipment: stock at each place, used on jobs, low-stock alerts']];
         const tools = ws.tools || {};
         s.append(h('section', { class: 'tools-sec' }, h('h3', {}, 'Tools'),
           h('p', { class: 'day-hint' }, 'Turn on what your team uses. A tool you turn off leaves everyone’s Tools menu; nothing in it is deleted.'),

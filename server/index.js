@@ -22,6 +22,7 @@ import { PdfError, stampPdf, addCertificate, pageCount, writeDoc, writeForm } fr
 import { routesOn, dayRoute, driveDistance } from './routes.js';
 import { projectsModule } from './projects.js';
 import { invoicesModule } from './invoices.js';
+import { inventoryModule } from './inventory.js';
 import { publicApiModule } from './publicapi.js';
 import { quickbooksModule } from './quickbooks.js';
 import { twoStepModule } from './twostep.js';
@@ -565,12 +566,12 @@ const BAR_KEYS = ['column', 'chat', 'camps', 'agents', 'sidekick', 'docs', 'proj
 // A private campaign's feed and stack are hidden from people outside it, and so is a feed you weren't invited to.
 // The tools a team uses, which owners and admins switch on and off (Settings → Team). A new team starts with
 // a simple set; a team from before switches keeps everything but Projects, which is parked.
-const TOOL_KEYS = ['agents', 'sidekick', 'docs', 'contacts', 'email', 'folders', 'signs', 'bills', 'meetings', 'map', 'vault', 'projects', 'cards', 'news'];
+const TOOL_KEYS = ['agents', 'sidekick', 'docs', 'contacts', 'email', 'folders', 'signs', 'bills', 'meetings', 'map', 'vault', 'projects', 'cards', 'news', 'inventory'];
 const SETUP_KINDS = ['trades', 'services', 'store', 'software', 'other'];
-const NEW_TEAM_TOOLS = ['agents', 'sidekick', 'docs', 'contacts', 'email', 'folders', 'signs', 'cards', 'news'];
+const NEW_TEAM_TOOLS = ['agents', 'sidekick', 'docs', 'contacts', 'email', 'folders', 'signs', 'cards', 'news', 'inventory'];
 // Agents, business cards and News came later: on for teams that haven't switched them off. (News is still each
 // person's own to turn on, in their tabs.)
-const LATER_TOOLS = ['agents', 'cards', 'news'];
+const LATER_TOOLS = ['agents', 'cards', 'news', 'inventory'];
 const toolsOf = (ws) => Object.fromEntries(TOOL_KEYS.map((k) => [k, ws.settings?.tools ? (LATER_TOOLS.includes(k) ? ws.settings.tools[k] !== false : ws.settings.tools[k] === true) : k !== 'projects']));
 const publicWorkspace = (ws, memberId) => ({
   tools: toolsOf(ws),
@@ -7085,6 +7086,11 @@ async function api(req, res, url) {
     const out = await INV.route(req, res, parts, auth, ws);
     if (out !== null) return;
   }
+  if (a === 'inventory') {
+    if (!toolsOf(ws).inventory) return send(res, 403, { error: 'Inventory is switched off for this team (Settings → Tools).' });
+    const out = await STOCK.route(req, res, parts, auth, ws);
+    if (out !== null) return;
+  }
   if (a === 'postiz') {
     const out = await POSTIZ.route(req, res, parts, auth, ws);
     if (out !== null) return;
@@ -10594,6 +10600,10 @@ for (const x of Object.values(db.mileage)) {
   save();
 }
 
+// Inventory (inventory.js): items, places, stock at each place, and the ledger of every movement.
+const STOCK = inventoryModule({ db, save, broadcast, rid, cleanText, readJson, send, isAdmin,
+  recordAt: (id, wsId, memberId) => PJ.recordAt(id, wsId, memberId),
+  taskOk: (auth, id) => { const t = db.tasks[id]; return !!t && t.wsId === auth.ws.id && canSee(auth, 'task', t); } });
 const INV = invoicesModule({ notifyAdmins: (...a) => notifyAdmins(...a), jobBack: (rec) => jobBack(rec), onPaymentGone: (...a) => QB.paymentGone(...a), db, save, broadcast, rid, hold, cleanText, readJson, send, badRequest, escHtml, brandOf, logoUrl, teamDay, offline, seal, unseal, stripeCall: stripe.callWith, PJ, isAdmin, jobOfRecord, jobLabel, moveJob, publicUrl: PUBLIC_URL, emit: (...a) => { PJ.emit(...a); QB.soon(a[0]); try { eventFromHook(a[0], a[1], a[2], a[3]); } catch (e) { alarm('An automation event failed to build', e); } },
   // A payment is money in on the business's Finance, under the team's owner.
   addMoney: (ws, { amount, day, note, invoiceId = null }) => {
