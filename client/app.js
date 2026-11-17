@@ -6193,6 +6193,7 @@
 
   function openCampaign(id) {
     K.open = id;
+    if (id) closeProjects(); // from a job's page (its campaigns, + Campaign): the campaign shows, not the job over it
     store.set('campOpen', id);
     if (S.tab !== 'camps') setTab('camps');
     else renderCamps();
@@ -6271,10 +6272,11 @@
     return t.slots.map((x) => `${days(x.days)} ${hhmm(x.time)}`).join(', ');
   }
   const canEditTemplate = (t) => t.ownerId === S.me?.memberId || amAdmin();
-  async function runTemplate(t, cast) {
-    if (!cast && t.campaign?.cast?.length) return crewSheet(t, (picked) => runTemplate(t, picked));
+  // recordId: run it for a job (2026-11-17); its tasks are the job's.
+  async function runTemplate(t, cast, recordId) {
+    if (!cast && t.campaign?.cast?.length) return crewSheet(t, (picked) => runTemplate(t, picked, recordId));
     try {
-      const c = await api('POST', `/templates/${t.id}/run`, { date: todayKey(), ...(cast ? { cast } : {}) });
+      const c = await api('POST', `/templates/${t.id}/run`, { date: todayKey(), ...(cast ? { cast } : {}), ...(recordId ? { recordId } : {}) });
       if (!campById(c.id)) S.campaigns.push(c);
       openCampaign(c.id);
     } catch (e) {
@@ -6354,6 +6356,12 @@
     };
   }
 
+  // The job a campaign is for (2026-11-17): its name when that project is loaded, and a way there either way.
+  function campJobPill(c) {
+    const at = recEverywhere(c.recordId);
+    const t = at && prType(at.p, at.r.typeId);
+    return h('button', { class: 'pill pill-btn camp-job', title: 'The job this campaign is for', onclick: () => openRecord(c.recordId) }, '📋 ' + (t ? 'For ' + recName(t, at.r) : 'Its job'));
+  }
   function campaignView(c) {
     const p = campProgress(c);
     const goals = goalsOf(c.id);
@@ -6386,6 +6394,7 @@
         h('b', { class: 'camp-name' }, c.name),
         h('button', { class: 'icon-btn', 'aria-label': 'Campaign options', html: I.more, onclick: (e) => campaignMenu(e.currentTarget, c) })),
       h('div', { class: 'camp-meta' },
+        c.recordId ? campJobPill(c) : null,
         parentOf(c) ? h('button', { class: 'pill pill-btn', title: 'The main campaign this one serves', onclick: () => openCampaign(c.parentId) }, '↑ Part of ' + parentOf(c).name) : null,
         campById(c.follows) ? h('button', { class: 'pill pill-btn', title: 'In a series: this one comes after it', onclick: () => openCampaign(c.follows) }, '← After ' + campById(c.follows).name) : null,
         S.campaigns.filter((x) => x.follows === c.id).map((x) => h('button', { class: 'pill pill-btn', title: 'In a series: this comes next', onclick: () => openCampaign(x.id) }, 'Next: ' + x.name + ' →')),
@@ -12296,6 +12305,7 @@
   function prActivity(p, t, r) {
     const log = prLog(r);
     const tasks = S.tasks.filter((x) => x.recordId === r.id).sort((a, b) => (a.done - b.done) || (a.due || '9').localeCompare(b.due || '9'));
+    const camps = (S.campaigns || []).filter((c) => c.recordId === r.id);
     const docs = docsMentioning(['record:' + r.id]);
     const del = async (e) => { const y = await prCall('DELETE', `/records/${r.id}/log/${e.id}`); if (y) { PR.logs.set(r.id, y); renderProjects(); } };
     const mine = (e) => ['call', 'email', 'meeting', 'note'].includes(e.kind) && (e.memberId === S.me?.memberId || amAdmin());
@@ -12303,8 +12313,11 @@
       h('div', { class: 'pj-act-btns' },
         [['call', '☏ Log a call'], ['email', '✉ Email'], ['meeting', '👥 Meeting'], ['note', '📝 Note']].map(([k, label]) => h('button', { class: 'btn small', onclick: () => prLogSheet(p, t, r, k) }, label)),
         h('button', { class: 'btn small', onclick: () => prTaskSheet(p, t, r) }, '+ Task'),
+        h('button', { class: 'btn small pj-camp-btn', title: 'Start a campaign for this job: its steps and tasks are the job’s', onclick: (e) => prCampMenu(e.currentTarget, t, r) }, '+ Campaign'),
         h('button', { class: 'btn small pj-ai-btn', title: 'Sidekick reads the record and its history, and suggests what to do next', onclick: () => prNextStep(r) }, '✦ Next step')),
       prAiCard(p, t, r),
+      camps.length ? h('div', { class: 'pj-tasks pj-camps' }, h('h4', {}, 'Campaigns'), camps.map((c) => h('button', { class: 'pj-link pj-camp', 'data-camp': c.id, onclick: () => openCampaign(c.id) },
+        h('span', {}, c.name), h('small', {}, [Math.round(campProgress(c) * 100) + '%', c.status === 'done' ? 'finished' : c.status === 'paused' ? 'paused' : ''].filter(Boolean).join(' · '))))) : null,
       tasks.length ? h('div', { class: 'pj-tasks' }, h('h4', {}, 'Tasks'), tasks.map((x) => h('div', { class: 'pj-task' + (x.done ? ' done' : '') },
         h('button', { class: 'check' + (x.done ? ' on' : ''), html: I.check, 'aria-label': x.done ? 'Not done' : 'Done', onclick: () => patchTask(x, { done: !x.done }).then(renderProjects) }),
         h('span', {}, x.text), x.due ? h('small', { class: isOverdue(x) ? 'late' : null }, dueLabel(x.due)) : null, x.assigneeId ? avatar(x.assigneeId) : null))) : null,
@@ -12314,6 +12327,21 @@
           : log.map((e) => { const [said, body] = prLogLine(e); return h('div', { class: 'pj-tl pj-tl-' + e.kind },
             h('span', { class: 'pj-tl-ic' }, ACT_IC[e.kind] || '•'),
             h('div', { class: 'pj-tl-main' }, h('div', {}, said, h('small', { class: 'pj-tl-at', title: new Date(e.at).toLocaleString() }, ' · ' + ago(e.at)), mine(e) ? h('button', { class: 'linkish', onclick: () => del(e) }, 'Remove') : null), body ? h('div', { class: 'pj-tl-body' }, body) : null)); })));
+  }
+  // + Campaign on a job: one of the saved campaigns, run for it, or a new one for it.
+  function prCampMenu(anchor, t, r) {
+    const tpls = S.templates || [];
+    openMenu(anchor, [
+      tpls.length ? { head: 'Start a saved campaign' } : null,
+      ...tpls.map((x) => ({ label: x.name, run: () => runTemplate(x, null, r.id) })),
+      { label: 'New campaign for this job', run: async () => {
+        try {
+          const c = await api('POST', '/campaigns', { name: recName(t, r).slice(0, 80) || 'Job', recordId: r.id });
+          if (!campById(c.id)) S.campaigns.push(c);
+          openCampaign(c.id);
+        } catch (e) { toast(e.message); }
+      } },
+    ].filter(Boolean));
   }
   function prLogSheet(p, t, r, kind) {
     let k = kind, outcome = null;

@@ -1337,6 +1337,8 @@ function applyTask(t, body) {
   if (body.dueAfter !== undefined) t.dueAfter = body.dueAfter === null || body.dueAfter === '' ? null : Math.max(0, Math.min(365, Math.round(Number(body.dueAfter)) || 0));
   // The project record it's about (a follow-up with a contact, a step on a deal).
   if (body.recordId !== undefined) t.recordId = body.recordId && db.records?.[body.recordId]?.wsId === t.wsId ? body.recordId : null;
+  // A task in a job's campaign is that job's task (2026-11-17), unless it was given none on purpose (null).
+  else if (t.recordId === undefined && db.records?.[taskCamp(t)?.recordId]) t.recordId = taskCamp(t).recordId;
   // The doc it was made in, when it's a to-do there.
   if (body.docId !== undefined) t.docId = body.docId && db.items[body.docId]?.wsId === t.wsId && db.items[body.docId].type === 'text' ? body.docId : null;
   // Files attached to it, like the finished list a "Provide a list of…" task asked for. Items in the same team.
@@ -2577,6 +2579,8 @@ function applyCampaign(c, body, ws, auth) {
     c.budget = v === '' || Number(v) === 0 ? null : cents(v, 'the budget, like 2,000');
   }
   if (body.status !== undefined && ['active', 'paused', 'done'].includes(body.status)) c.status = body.status;
+  // The job it's for (the owner, 2026-11-17): one in the team that this person can see; its tasks are the job's.
+  if (body.recordId !== undefined) c.recordId = body.recordId && PJ.recordAt(String(body.recordId), ws.id, auth.memberId) ? String(body.recordId) : null;
   if (body.lastReportAt !== undefined) c.lastReportAt = Number(body.lastReportAt) || null;
   if (body.outcomes !== undefined) {
     const list = labelList(body.outcomes, 12);
@@ -2933,6 +2937,18 @@ function createCampaign(ws, owner, body, extra = {}) {
   broadcast(ws.id, { type: 'workspace' });
   return c;
 }
+// A campaign given its job: its tasks that aren't about a job yet become this job's (not ones given none on purpose).
+function campTasksToJob(c) {
+  for (const t of Object.values(db.tasks)) {
+    if (taskCamp(t)?.id !== c.id || t.recordId === null || (t.recordId && db.records[t.recordId])) continue;
+    t.recordId = c.recordId;
+    broadcast(c.wsId, { type: 'task', task: publicTask(t) });
+  }
+}
+// A job deleted: its campaigns stay, with no job.
+function campsOffJob(rec) {
+  for (const c of Object.values(db.campaigns)) if (c.recordId === rec.id) { c.recordId = null; broadcast(c.wsId, { type: 'campaign', campaign: publicCampaign(c) }); }
+}
 // Repeat runs share a name, so their feeds get -2, -3…
 function freeChannelName(ws, raw) {
   for (let i = 1; ; i++) {
@@ -3019,10 +3035,12 @@ function applyTemplate(t, body, ws) {
 
 // Makes a new campaign from a saved one. date: its start day; time: set for scheduled runs.
 // cast: who plays each of the main campaign's roles this time ({ roleId: [memberIds] }); otherwise the saved crew.
-function runTemplate(tpl, { date, time, by, cast }) {
+// recordId: the job it's for (2026-11-17), when whoever starts it (or the owner, for a scheduled run) can see it.
+function runTemplate(tpl, { date, time, by, cast, recordId }) {
   const ws = db.workspaces[tpl.wsId];
   const ownerM = ws.members.find((m) => m.id === tpl.ownerId) || ws.members.find((m) => m.role === 'owner');
   const owner = { memberId: ownerM.id, member: ownerM.name };
+  const job = recordId && PJ.recordAt(String(recordId), ws.id, by || owner.memberId) ? String(recordId) : null;
   const label = new Date(date + 'T12:00:00Z').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' });
   // who handed it out: whoever started it, or nobody for a scheduled run
   const make = (snap, name, start, extra) => {
@@ -3030,7 +3048,7 @@ function runTemplate(tpl, { date, time, by, cast }) {
     const c = createCampaign(ws, owner, {
       name, brief: k.brief, color: k.color, outcomes: k.outcomes, methods: k.methods, private: k.private, memberIds: k.memberIds, inOrder: !!k.inOrder,
       cast: (k.cast || []).map((r) => (snap === tpl && cast && Array.isArray(cast[r.id]) ? { ...r, memberIds: cast[r.id] } : r)),
-      start, end: k.days != null ? addDays(start, k.days) : null, ...extra,
+      start, end: k.days != null ? addDays(start, k.days) : null, ...extra, ...(job ? { recordId: job } : {}),
       ...(k.followUps ? { followUps: k.followUps } : {}),
     }, { templateId: tpl.id, assignedBy: by || null });
     fillCampaign(ws, owner, c, snap, start, by);
@@ -3810,6 +3828,8 @@ async function flowAction(x, a, ctx, ws) {
   }
 }
 
+// The job that set an automation off, when its maker can still see it (a waiting run's ctx may not have one).
+const autoJob = (x, ctx) => { const id = ctx.record?.id; return id && PJ.recordAt(id, x.wsId, x.memberId) ? id : null; };
 async function autoAction(x, a, ctx) {
   const ws = db.workspaces[x.wsId];
   if (['visit', 'invoice', 'text', 'email', 'money', 'doc', 'vault', 'webhook', 'stock'].includes(a.kind)) return flowAction(x, a, ctx, ws);
@@ -3820,7 +3840,7 @@ async function autoAction(x, a, ctx) {
     const who = a.assignee === 'who' ? (ws.members.some((m) => m.id === ctx.whoId) ? { assigneeId: ctx.whoId } : {})
       : a.assignee.startsWith('role:') ? { roleId: a.assignee.slice(5) } : a.assignee ? { assigneeId: a.assignee } : {};
     const t = applyTask({ id: rid(), wsId: ws.id, by: x.name, memberId: x.memberId, createdAt: Date.now(), text: '', done: false, doneAt: null, due: null, priority: 0, goalId: null, assigneeId: null },
-      { text: say, due: a.dueIn != null ? addDays(teamDay(ws.id), a.dueIn) : null, goalId: g?.id || null, ...who });
+      { text: say, due: a.dueIn != null ? addDays(teamDay(ws.id), a.dueIn) : null, goalId: g?.id || null, ...who, ...(autoJob(x, ctx) ? { recordId: autoJob(x, ctx) } : {}) });
     if (t.assigneeId || t.roleId) t.assignedBy = x.memberId;
     db.tasks[t.id] = t;
     broadcast(ws.id, { type: 'task', task: publicTask(t) });
@@ -3835,8 +3855,8 @@ async function autoAction(x, a, ctx) {
   if (a.kind === 'campaign') {
     const tpl = db.templates[a.templateId];
     if (!tpl) throw new Error('its saved campaign is gone');
-    const c = runTemplate(tpl, { date: teamDay(ws.id), by: x.memberId });
-    return `Started “${c.name}”`;
+    const c = runTemplate(tpl, { date: teamDay(ws.id), by: x.memberId, recordId: autoJob(x, ctx) });
+    return `Started “${c.name}”${c.recordId ? ` for ${clipText(ctx.recordName || 'the job', 60)}` : ''}`;
   }
   if (a.kind === 'notify') {
     const ids = new Set();
@@ -7450,6 +7470,7 @@ async function api(req, res, url) {
       const next = applyCampaign({ ...c, memberIds: [...c.memberIds] }, body, ws, auth);
       if (next.assigneeId !== c.assigneeId) next.assignedBy = next.assigneeId ? auth.memberId : null;
       db.campaigns[c.id] = next;
+      if (next.recordId && next.recordId !== c.recordId) campTasksToJob(next);
       if (body.name !== undefined) {
         const st = ws.stacks.find((x) => x.id === c.stackId);
         if (st) st.name = next.name.slice(0, 40);
@@ -8807,8 +8828,8 @@ async function api(req, res, url) {
     const t = b && db.templates[b];
     if (!t || t.wsId !== ws.id || !seesTemplate(t, auth.memberId)) return send(res, 404, { error: 'Not found' });
     if (c === 'run' && m === 'POST') {
-      const { date, tz, cast } = await readJson(req);
-      const camp = runTemplate(t, { date: isDay(date) ? date : localNow(validTz(tz || t.tz), Date.now()).date, by: auth.memberId, cast: cast && typeof cast === 'object' ? cast : null });
+      const { date, tz, cast, recordId } = await readJson(req);
+      const camp = runTemplate(t, { date: isDay(date) ? date : localNow(validTz(tz || t.tz), Date.now()).date, by: auth.memberId, cast: cast && typeof cast === 'object' ? cast : null, recordId: recordId || null });
       return send(res, 200, publicCampaign(camp));
     }
     if (c) return send(res, 404, { error: 'Not found' });
@@ -10406,7 +10427,7 @@ async function replayAs(ws, memberId, approvalId, { method, path: p, body }, as 
 }
 const hold = (...a) => RULES.hold(...a);
 const PJ = projectsModule({ onEvent: (...a) => recordEvent(...a), canSeeItem: (auth, it) => canSee(auth, 'item', it), seal, unseal, db, save, broadcast, rid, hold, cleanText, isDay, readJson, send, badRequest, isOwnerId, escHtml, brandOf, logoUrl, teamDay, offline, allowLocalHooks: process.env.ALLOW_LOCAL_WEBHOOKS === '1', qrSvg, publicUrl: PUBLIC_URL,
-  onRecordGone: (rec) => { dropVisits(rec); INV.dropFor(rec); },
+  onRecordGone: (rec) => { dropVisits(rec); INV.dropFor(rec); campsOffJob(rec); },
   onRecordNews: (rec) => { jobChanged(rec); if (rec.share || rec.qbo?.estId) QB.soon(rec.wsId); },
   // A follow-up from a record's timeline: a task for whoever logged it, about the record.
   makeTask: (ws, auth, { text, due, recordId }) => {

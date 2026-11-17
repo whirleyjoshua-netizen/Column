@@ -93,6 +93,12 @@ await sleep(400);
 await A.tap(`[...document.querySelectorAll('#projects .pj-qbar .btn')].find((b) => b.textContent.includes('Make a job from this quote'))`);
 ok(await A.until(`document.querySelector('#projects .pj-panel .pj-title')?.value === 'Library glazing' && [...document.querySelectorAll('#projects .pj-panel .pj-frow')].some((r) => r.textContent.includes('Value') && r.textContent.includes('$2,305')) && [...document.querySelectorAll('#projects .pj-panel .pj-frow')].some((r) => r.textContent.includes('Address') && r.textContent.includes('12 Main St'))`), 'a job made from the quote: its value, the client’s address');
 ok(await A.ev(`[...document.querySelectorAll('#projects .pj-panel .pj-frow')].some((r) => r.textContent.includes('Status') && r.textContent.includes('Scheduled'))`), 'starting Scheduled');
+// A campaign for the job (2026-11-17): + Campaign on the job starts one for it; each shows the other.
+await A.tap(`[...document.querySelectorAll('#projects .pj-panel .pj-act-btns .btn')].find((b) => b.textContent === '+ Campaign')`);
+await A.tap(`[...document.querySelectorAll('#menu button')].find((b) => b.textContent === 'New campaign for this job')`);
+ok(await A.until(`!document.querySelector('#camps').classList.contains('hidden') && document.querySelector('#projects').classList.contains('hidden') && document.querySelector('#camps .camp-name')?.textContent === 'Library glazing' && document.querySelector('#camps .camp-job')?.textContent === '📋 For Library glazing'`), '+ Campaign on a job starts a campaign for it, which says which job it’s for');
+await A.tap(`document.querySelector('#camps .camp-job')`);
+ok(await A.until(`document.querySelector('#projects .pj-panel .pj-title')?.value === 'Library glazing' && [...document.querySelectorAll('#projects .pj-panel .pj-camp')].some((x) => x.textContent.startsWith('Library glazing'))`), 'and the job lists its campaign');
 // ready-made list and templates
 await A.tap(`document.querySelector('#projects .pj-panel [aria-label="Close"]')`);
 await A.tap(`document.querySelector('#projects .pj-top [aria-label="All projects"]')`);
