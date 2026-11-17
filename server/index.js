@@ -2578,7 +2578,7 @@ function applyCampaign(c, body, ws, auth) {
     const v = String(body.budget ?? '').replace(/[$,\s]/g, '');
     c.budget = v === '' || Number(v) === 0 ? null : cents(v, 'the budget, like 2,000');
   }
-  if (body.status !== undefined && ['active', 'paused', 'done'].includes(body.status)) c.status = body.status;
+  if (body.status !== undefined && ['active', 'paused', 'done'].includes(body.status)) { c.status = body.status; c.doneBySteps = false; }
   // The job it's for (the owner, 2026-11-17): one in the team that this person can see; its tasks are the job's.
   if (body.recordId !== undefined) c.recordId = body.recordId && PJ.recordAt(String(body.recordId), ws.id, auth.memberId) ? String(body.recordId) : null;
   if (body.lastReportAt !== undefined) c.lastReportAt = Number(body.lastReportAt) || null;
@@ -2640,6 +2640,9 @@ function applyGoal(g, body, c) {
   if (body.order !== undefined) g.order = Number(body.order) || 0;
   // The goals it waits for: none of its tasks can be ticked off until those are met.
   if (body.blockedBy !== undefined) g.blockedBy = blockerList(db.goals, g, body.blockedBy, 'goal');
+  // The job's stage it finishes (2026-11-17), by name so a saved campaign works for any job with that stage. The job
+  // can't move to it, or past it, while this step has open tasks; finishing them moves the job there.
+  if (body.stage !== undefined) { g.stage = body.stage ? String(body.stage).trim().slice(0, 60) || null : null; g.staged = false; }
   if (!g.title) throw badRequest('Give the goal a name.');
   return g;
 }
@@ -2767,6 +2770,7 @@ function toolDone(taskId, { by, byId, note, file } = {}) {
     broadcast(t.wsId, { type: 'task', task: publicTask(t) });
     if (t.submitted) broadcast(t.wsId, { type: 'signoff', task: publicTask(t), by: by || 'Kloomie' });
     opened(by || 'Kloomie', byId || null);
+    jobSteps(t.wsId, by || 'Kloomie', byId || null);
   } else broadcast(t.wsId, { type: 'task', task: publicTask(t) });
   save();
 }
@@ -2980,7 +2984,7 @@ function snapshotCampaign(c, main = c) {
     },
     lists: lists.map((l) => ({ ref: l.id, name: l.name, kind: l.kind, agenda: !!l.agenda, columns: l.columns, rows: l.rows.map((r) => ({ cells: r.cells, section: r.section, mins: r.mins })) })),
     goals: Object.values(db.goals).filter((g) => g.campaignId === c.id).sort((a, b) => (a.order || 0) - (b.order || 0)).map((g) => ({
-      ref: g.id, blockedBy: g.blockedBy || [], title: g.title, kind: g.kind, target: g.target, counts: g.counts, methods: g.methods || null, order: g.order, dueIn: rel(g.due),
+      ref: g.id, blockedBy: g.blockedBy || [], title: g.title, kind: g.kind, target: g.target, counts: g.counts, methods: g.methods || null, order: g.order, dueIn: rel(g.due), stage: g.stage || null,
       // Follow-ups were for that run's people, so they stay behind.
       tasks: Object.values(db.tasks).filter((t) => t.goalId === g.id && !t.followUp).sort((a, b) => a.createdAt - b.createdAt).map((t) => ({
         ref: t.id, blockedBy: t.blockedBy || [], dueAfter: t.dueAfter ?? null, castId: t.castId || null, signoff: t.signoff || null, action: t.action || null,
@@ -3081,7 +3085,7 @@ function fillCampaign(ws, owner, c, snap, date, by) {
   }
   for (const sg of snap.goals) {
     const g = applyGoal({ id: rid(), wsId: ws.id, campaignId: c.id, by: owner.member, createdAt: Date.now(), title: '', due: null, kind: 'tasks', target: 10, counts: null, order: 0 },
-      { title: sg.title, kind: sg.kind, target: sg.target, counts: sg.counts, methods: sg.methods, order: sg.order, due: due(sg.dueIn) }, c);
+      { title: sg.title, kind: sg.kind, target: sg.target, counts: sg.counts, methods: sg.methods, order: sg.order, due: due(sg.dueIn), stage: sg.stage || null }, c);
     db.goals[g.id] = g;
     made.set(sg.ref, g);
     broadcast(ws.id, { type: 'goal', goal: publicGoal(g) });
@@ -3355,9 +3359,95 @@ const typeOfP = (p, id) => p?.types.find((t) => t.id === id) || null;
 const whoByName = (wsId, name) => { const ms = (db.workspaces[wsId]?.members || []).filter((m) => m.name === name); return ms.length === 1 ? ms[0].id : null; };
 const wantsEvent = (wsId, kind) => Object.values(db.automations).some((x) => x.wsId === wsId && x.on && x.trigger.kind === kind);
 // A record's stage: its status or stage choice (or its first choice field), as a label.
+const stageFieldOf = (t) => t?.fields.find((x) => x.type === 'select' && ['status', 'stage'].includes(x.key)) || t?.fields.find((x) => x.type === 'select') || null;
 function recordStage(p, t, rec) {
-  const f = t.fields.find((x) => x.type === 'select' && ['status', 'stage'].includes(x.key)) || t.fields.find((x) => x.type === 'select');
+  const f = stageFieldOf(t);
   return f ? f.choices?.find((c) => c.id === rec.values[f.id])?.label || '' : '';
+}
+
+// ----- a job moves on when its work is done (the owner, 2026-11-17) -----
+// A step in a job's campaign can name the job stage it finishes (g.stage). Every way a person, the API or an
+// automation changes a job comes through stageGate: moving forward to a stage, or past it, while a step for it still
+// has open tasks is refused, naming the steps. An owner or admin can move it anyway with a reason, which goes on the
+// job's timeline. Moves that are the work itself happening (a visit done, a customer's answer, a sign-off, GitHub)
+// aren't held. jobSteps runs after anything changes steps: a step finished moves its job to the furthest stage with
+// nothing open before it, and a job's campaign is finished when all its steps are (back on when one is reopened;
+// one finished by hand is left alone). Moving back is always fine.
+const stageAt = (f, label) => f.choices.findIndex((c) => c.label.toLowerCase() === String(label || '').toLowerCase());
+// A step is finished when it's skipped or met; a task step needs at least one task, so a new empty one isn't done.
+const stepFinished = (g) => g.skipped || (g.kind === 'tasks' ? tasksInOrder(g).length > 0 && goalMet(g) : goalMet(g));
+function openStepsUpTo(rec, f, to) {
+  const out = [];
+  for (const c of Object.values(db.campaigns)) {
+    if (c.recordId !== rec.id) continue;
+    for (const g of goalsInOrder(c)) { const i = g.stage ? stageAt(f, g.stage) : -1; if (i >= 0 && i <= to && !goalMet(g)) out.push(g); }
+  }
+  return out;
+}
+function stageGate(rec, before, auth, override) {
+  const p = db.projects[rec.projectId];
+  const f = stageFieldOf(p && typeOfP(p, rec.typeId));
+  if (!f) return null;
+  const idx = (id) => f.choices.findIndex((c) => c.id === id);
+  const from = idx(before[f.id]), to = idx(rec.values[f.id]);
+  if (to < 0 || to <= from) return null;
+  const open = openStepsUpTo(rec, f, to);
+  if (!open.length) return null;
+  const names = open.map((g) => `“${clipText(g.title, 60)}”`).join(', ');
+  const steps = open.map((g) => ({ id: g.id, title: g.title, campaignId: g.campaignId, stage: g.stage, open: tasksInOrder(g).filter((x) => !stepDone(x)).length }));
+  if (override != null) {
+    if (!auth || !isAdmin(auth)) return { status: 403, error: 'Only an owner or admin can move a job on with work still open.', steps };
+    const why = cleanText(String(override), 300).trim();
+    if (!why) return { status: 400, error: 'Say why it can move on with work still open.', steps };
+    PJ.recordActivity(rec.id, { kind: 'override', note: `Moved to ${f.choices[to].label} with ${names} still open: ${why}`, by: auth.member });
+    return null;
+  }
+  const one = open.length === 1;
+  return { status: 409, error: `${names} ${one ? 'isn’t' : 'aren’t'} done yet, so this can’t move to ${f.choices[to].label}. Finish ${one ? 'its' : 'their'} tasks first${auth && isAdmin(auth) ? ', or move it on anyway with a reason' : ''}.`, steps };
+}
+function jobSteps(wsId, by, byId) {
+  let changed = false;
+  for (const c of Object.values(db.campaigns)) {
+    if (c.wsId !== wsId || !c.recordId) continue;
+    const rec = db.records[c.recordId];
+    if (!rec) continue;
+    const p = db.projects[rec.projectId];
+    const f = stageFieldOf(p && typeOfP(p, rec.typeId));
+    const goals = goalsInOrder(c);
+    let fresh = null;
+    for (const g of goals) {
+      const m = stepFinished(g);
+      if (m && g.stage && !g.staged) { g.staged = true; fresh ||= g; changed = true; }
+      else if (!m && g.staged) { g.staged = false; changed = true; }
+    }
+    if (fresh && f) {
+      const at = f.choices.findIndex((x) => x.id === rec.values[f.id]);
+      let to = -1;
+      for (const x of Object.values(db.campaigns)) if (x.recordId === rec.id) for (const g of goalsInOrder(x)) {
+        const i = g.stage && stepFinished(g) ? stageAt(f, g.stage) : -1;
+        if (i > to && !openStepsUpTo(rec, f, i).length) to = i;
+      }
+      if (to > at) {
+        PJ.recordActivity(rec.id, { kind: 'change', field: f.name, from: f.choices[at]?.label || '', to: f.choices[to].label, note: `“${clipText(fresh.title, 60)}” is done`, by: 'Kloomie' });
+        rec.values[f.id] = f.choices[to].id;
+        rec.updatedAt = Date.now();
+        PJ.recordNews(rec, 'record.updated', 'Kloomie');
+      }
+    }
+    const all = goals.length > 0 && goals.every(stepFinished);
+    if (all && c.status === 'active') {
+      Object.assign(c, { status: 'done', doneBySteps: true });
+      changed = true;
+      broadcast(wsId, { type: 'campaign', campaign: publicCampaign(c) });
+      automate(wsId, 'campaign.done', { campaign: c, who: by, whoId: byId });
+      for (const n of Object.values(db.campaigns)) if (n.follows === c.id && n.status !== 'done') broadcast(wsId, { type: 'nextup', campaign: publicCampaign(n), after: c.name, by });
+    } else if (!all && c.status === 'done' && c.doneBySteps) {
+      Object.assign(c, { status: 'active', doneBySteps: false });
+      changed = true;
+      broadcast(wsId, { type: 'campaign', campaign: publicCampaign(c) });
+    }
+  }
+  if (changed) save();
 }
 // Every change to a record comes here (from Projects' one place for record news). A move to another stage is told
 // whatever made it (the app, the API, a customer's answer, an import), by comparing with the stage last told.
@@ -6997,7 +7087,7 @@ async function api(req, res, url) {
   if (!auth) return send(res, 401, { error: 'Not signed in' });
   const { ws } = auth;
   // Work this change opens up: whoever it's for hears they're up, once the change is made.
-  if (m !== 'GET' && HANDOFF_ROUTES.has(a)) { const opened = openings(ws, auth.tz); res.once('finish', () => opened(auth.member, auth.memberId)); }
+  if (m !== 'GET' && HANDOFF_ROUTES.has(a)) { const opened = openings(ws, auth.tz); res.once('finish', () => { opened(auth.member, auth.memberId); jobSteps(ws.id, auth.member, auth.memberId); }); }
   if (ws.deleteAt && m !== 'GET' && (a === 'texting' || a === 'lead-capture' || a === 'dropbox' || (a === 'contacts' && parts[2] === 'texts'))) {
     return send(res, 423, { error: 'This team is being deleted. Cancel the deletion in Settings to use it again.' });
   }
@@ -10427,7 +10517,7 @@ async function replayAs(ws, memberId, approvalId, { method, path: p, body }, as 
 }
 const hold = (...a) => RULES.hold(...a);
 const PJ = projectsModule({ onEvent: (...a) => recordEvent(...a), canSeeItem: (auth, it) => canSee(auth, 'item', it), seal, unseal, db, save, broadcast, rid, hold, cleanText, isDay, readJson, send, badRequest, isOwnerId, escHtml, brandOf, logoUrl, teamDay, offline, allowLocalHooks: process.env.ALLOW_LOCAL_WEBHOOKS === '1', qrSvg, publicUrl: PUBLIC_URL,
-  onRecordGone: (rec) => { dropVisits(rec); INV.dropFor(rec); campsOffJob(rec); },
+  onRecordGone: (rec) => { dropVisits(rec); INV.dropFor(rec); campsOffJob(rec); }, stageGate: (...a) => stageGate(...a),
   onRecordNews: (rec) => { jobChanged(rec); if (rec.share || rec.qbo?.estId) QB.soon(rec.wsId); },
   // A follow-up from a record's timeline: a task for whoever logged it, about the record.
   makeTask: (ws, auth, { text, due, recordId }) => {

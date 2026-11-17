@@ -333,7 +333,7 @@ export const TEMPLATES = {
   },
 };
 
-export function projectsModule({ onEvent = null, canSeeItem = () => true, seal = (x) => x, unseal = (x) => x, db, save, broadcast, rid, hold = null, cleanText, isDay, readJson, send, badRequest, isOwnerId, escHtml, brandOf, logoUrl, teamDay, offline, makeTask, onRecords, onRecordGone, onRecordNews, allowLocalHooks = false, qrSvg = null, publicUrl = '' }) {
+export function projectsModule({ onEvent = null, canSeeItem = () => true, seal = (x) => x, unseal = (x) => x, db, save, broadcast, rid, hold = null, cleanText, isDay, readJson, send, badRequest, isOwnerId, escHtml, brandOf, logoUrl, teamDay, offline, makeTask, onRecords, onRecordGone, onRecordNews, stageGate = null, allowLocalHooks = false, qrSvg = null, publicUrl = '' }) {
   const bad = (msg) => badRequest(msg);
   db.projects ||= {};
   db.records ||= {};
@@ -1549,6 +1549,9 @@ export function projectsModule({ onEvent = null, canSeeItem = () => true, seal =
           rec.values = before;
           return send(res, 400, { error: 'The customer accepted this quote, so its lines can’t change. Make a new quote for the changes.' });
         }
+        // A job can't move on past steps with open work (an owner or admin can, with body.override: the reason).
+        const gate = stageGate?.(rec, before, auth, body.override);
+        if (gate) { rec.values = before; return send(res, gate.status, { error: gate.error, steps: gate.steps }); }
         techAfter(ws, p, t, rec, before, auth);
         logChanges(ws, p, t, rec, before, auth.member);
         if (body.docId !== undefined) rec.docId = db.items[body.docId]?.wsId === ws.id && db.items[body.docId].type === 'text' && canSeeItem(auth, db.items[body.docId]) ? body.docId : null;
@@ -1960,6 +1963,7 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
           const before = { ...rec.values };
           applyValues(ws, p, t, rec, fields, { addChoices: true });
           if (quoteLocked(t, rec, before)) { rec.values = before; throw bad('The customer accepted this quote, so its lines can’t change.'); }
+          { const gate = stageGate?.(rec, before, null); if (gate) { rec.values = before; return send(res, gate.status, { error: gate.error, steps: gate.steps }); } }
           logChanges(ws, p, t, rec, before, auth.member);
           rec.updatedAt = Date.now();
           recordNews(rec, 'record.updated', auth.member);
@@ -1995,6 +1999,7 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
       const before = { ...rec.values };
       applyValues(ws, p, t, rec, inFields(t, body.fields), { addChoices: true });
       if (quoteLocked(t, rec, before)) { rec.values = before; throw bad('The customer accepted this quote, so its lines can’t change.'); }
+      { const gate = stageGate?.(rec, before, null); if (gate) { rec.values = before; return send(res, gate.status, { error: gate.error, steps: gate.steps }); } }
       logChanges(ws, p, t, rec, before, auth.member);
       if (body.external_id !== undefined) rec.extId = body.external_id ? cleanText(body.external_id, 200) : null;
       rec.updatedAt = Date.now();
@@ -2304,6 +2309,8 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
   function autoUpdate(ws, p, t, rec, values, who) {
     const before = { ...rec.values };
     applyValues(ws, p, t, rec, values, { addChoices: false });
+    const gate = stageGate?.(rec, before, null);
+    if (gate) { rec.values = before; throw Object.assign(new Error(gate.error), { status: gate.status }); }
     techAfter(ws, p, t, rec, before, { member: who.name, memberId: who.memberId });
     logChanges(ws, p, t, rec, before, who.name);
     rec.updatedAt = Date.now();

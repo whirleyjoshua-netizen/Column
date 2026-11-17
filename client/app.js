@@ -6477,6 +6477,7 @@
         h('b', { class: 'goal-title', onclick: fold }, g.title),
         closed ? h('small', { class: 'goal-mini' }, pg.label) : null,
         stepTag(g),
+        g.stage && c.recordId ? h('span', { class: 'list-chip goal-stage', title: `Finishing this moves the job to ${g.stage}. The job can’t move there, or past it, while this has open tasks.` }, '→ ' + g.stage) : null,
         waits ? h('button', { class: 'list-chip wait-chip', title: 'Opens when ' + gBlockers.map((x) => `“${x.title}”`).join(' and ') + ' is met', onclick: () => showStep(waits) }, '⏳ ' + shortText(waits.title, 22) + (gBlockers.length > 1 ? ` +${gBlockers.length - 1}` : '')) : null,
         g.due ? h('span', { class: 'due' + (g.due < todayKey() && pg.frac < 1 ? ' late' : '') }, dueLabel(g.due)) : null,
         h('button', { class: 't-btn', 'aria-label': 'Goal options', html: I.more, onclick: (e) => goalOptions(e.currentTarget, c, g) })),
@@ -7880,14 +7881,27 @@
       ...(owner || amAdmin() ? [{ label: 'Delete campaign and everything in it', danger: true, run: () => api('DELETE', '/campaigns/' + c.id).then(() => openCampaign(null)).catch((e) => toast(e.message)) }] : []),
     ]);
   }
+  // Which of the job's stages a step finishes: the job's own stages when its project is loaded, or typed in.
+  function goalStageMenu(anchor, c, g) {
+    const set = (stage) => api('PATCH', '/goals/' + g.id, { stage }).catch((e) => toast(e.message));
+    const at = recEverywhere(c.recordId);
+    const t = at && prType(at.p, at.r.typeId);
+    const f = t && (t.fields.find((x) => x.type === 'select' && ['status', 'stage'].includes(x.key)) || t.fields.find((x) => x.type === 'select'));
+    if (!f) {
+      const box = h('input', { value: g.stage || '', placeholder: 'Measured' });
+      return sheet('The job stage it finishes', [h('p', {}, 'Finishing this step moves the job to this stage, and the job can’t move there while the step has open tasks.'), box], () => set(box.value.trim() || null));
+    }
+    openMenu(anchor, [{ head: 'Finishing it moves the job to' }, ...f.choices.map((x) => ({ label: x.label, on: g.stage === x.label, run: () => set(x.label) })), g.stage ? { label: 'No stage', run: () => set(null) } : null].filter(Boolean));
+  }
   function goalOptions(anchor, c, g) {
     openMenu(anchor, [
       { label: 'Plan it out…', run: () => planSheet(c, g) },
       { label: 'Edit goal…', run: () => goalSheet(c, g) },
       { label: g.blockedBy?.length ? `Waits for ${plural(g.blockedBy.length, 'goal')}…` : 'Waits for…', run: () => waitsSheet(g, true) },
+      c.recordId ? { label: g.stage ? `Finishes the job’s stage: ${g.stage}…` : 'Finishes the job’s stage…', run: () => goalStageMenu(anchor, c, g) } : null,
       ...stepRows(c, g, !!goalWaitsOn(g), (ch) => api('PATCH', '/goals/' + g.id, ch).catch((e) => toast(e.message))),
       { label: 'Delete goal and its tasks', danger: true, run: () => api('DELETE', '/goals/' + g.id).catch((e) => toast(e.message)) },
-    ]);
+    ].filter(Boolean));
   }
 
   // ----- sheets: campaign details, goal, outcomes, report -----
@@ -11063,10 +11077,25 @@
     try {
       return await api(method, path, body);
     } catch (e) {
+      if (e.status === 409 && e.data?.steps?.length && method === 'PATCH') { stageHeld(path, body, e); return null; }
       toast(e.message);
       return null;
     }
   };
+  // A job held back by its campaign's open steps (2026-11-17): what's open, a way there, and for owners and admins
+  // a way to move it on anyway, with a reason that goes on the job's timeline.
+  function stageHeld(path, body, e) {
+    const why = h('textarea', { rows: 2, placeholder: 'Why it can move on anyway (it goes on the job’s timeline)' });
+    const steps = h('div', { class: 'pj-held' }, e.data.steps.map((g) => h('button', { type: 'button', class: 'pj-link', onclick: () => { closeSheet(); openCampaign(g.campaignId); } },
+      `${g.title} · ${g.open ? plural(g.open, 'task') + ' open' : 'not done'}`)));
+    if (!amAdmin()) return sheet('Not yet', [h('p', {}, e.message), steps], null);
+    sheet('Not yet', [h('p', {}, e.message), steps, h('label', {}, 'Move it on anyway', why)], async () => {
+      const y = await api('PATCH', path, { ...body, override: why.value });
+      prUpsertRecord(y);
+      PR.logs.delete(y.id);
+      renderProjects();
+    }, 'Move on anyway');
+  }
   function prUpsertProject(p) {
     S.projects = [...(S.projects || []).filter((x) => x.id !== p.id), p];
   }
@@ -12298,11 +12327,12 @@
     }
     return PR.logs.get(r.id);
   }
-  const ACT_IC = { created: '✦', change: '↻', call: '☏', email: '✉', meeting: '👥', note: '📝', task: '✓', quote: '🧾', sign: '✍️', move: '📍', reveal: '🔒' };
+  const ACT_IC = { override: '⚑', created: '✦', change: '↻', call: '☏', email: '✉', meeting: '👥', note: '📝', task: '✓', quote: '🧾', sign: '✍️', move: '📍', reveal: '🔒' };
   function prLogLine(e) {
     const who = h('b', {}, e.by || 'Someone');
     const said = {
       created: [who, ' added this'],
+      override: [who, ' moved it on with work still open'],
       change: [who, ` changed ${e.field}: `, h('s', {}, e.from || 'empty'), ' → ', h('b', {}, e.to || 'empty')],
       move: [who, ' moved it', e.from ? [' from ', h('s', {}, e.from)] : null, ' to ', h('b', {}, e.to || 'a spot on the map')],
       reveal: [who, ` looked at the ${String(e.what || 'locked field').toLowerCase()}`],

@@ -99,6 +99,25 @@ await A.tap(`[...document.querySelectorAll('#menu button')].find((b) => b.textCo
 ok(await A.until(`!document.querySelector('#camps').classList.contains('hidden') && document.querySelector('#projects').classList.contains('hidden') && document.querySelector('#camps .camp-name')?.textContent === 'Library glazing' && document.querySelector('#camps .camp-job')?.textContent === '📋 For Library glazing'`), '+ Campaign on a job starts a campaign for it, which says which job it’s for');
 await A.tap(`document.querySelector('#camps .camp-job')`);
 ok(await A.until(`document.querySelector('#projects .pj-panel .pj-title')?.value === 'Library glazing' && [...document.querySelectorAll('#projects .pj-panel .pj-camp')].some((x) => x.textContent.startsWith('Library glazing'))`), 'and the job lists its campaign');
+// A step that finishes the job's next stage holds the job until it's done; an owner can move it on with a reason.
+{
+  const st = await api('GET', '/state');
+  const camp = st.campaigns.find((c) => c.name === 'Library glazing');
+  const recs = await api('GET', `/projects/${bq.id}/records`);
+  const jobR = recs.find((x) => x.id === camp.recordId);
+  const jt = (await api('GET', '/state')).projects.find((x) => x.id === bq.id).types.find((x) => x.id === jobR.typeId);
+  const sf = jt.fields.find((f) => f.key === 'status');
+  const next = sf.choices[sf.choices.findIndex((c) => c.id === jobR.values[sf.id]) + 1];
+  const g = await api('POST', '/goals', { campaignId: camp.id, title: 'Glaze it', kind: 'tasks', stage: next.label });
+  await api('POST', '/tasks', { text: 'Tint the windows', goalId: g.id });
+  await sleep(400);
+  await A.tap(field('Status'));
+  await A.tap(`[...document.querySelectorAll('#menu button')].find((b) => b.textContent === ${JSON.stringify(next.label)})`);
+  ok(await A.until(`!document.querySelector('#sheet').classList.contains('hidden') && document.querySelector('#sheet').textContent.includes('“Glaze it” isn’t done yet') && [...document.querySelectorAll('#sheet .pj-held .pj-link')].some((b) => b.textContent.startsWith('Glaze it · 1 task open'))`), 'moving the job past an open step says what’s open');
+  await A.ev(`document.querySelector('#sheet textarea').value = 'Customer tinted them'; [...document.querySelectorAll('#sheet button')].find((b) => b.textContent === 'Move on anyway').click(); true`);
+  ok(await A.until(`document.querySelector('#sheet').classList.contains('hidden') && [...document.querySelectorAll('#projects .pj-panel .pj-frow')].some((r) => r.textContent.includes('Status') && r.textContent.includes(${JSON.stringify(next.label)}))`), 'an owner moves it on anyway, with a reason');
+  ok(await A.until(`[...document.querySelectorAll('#projects .pj-tl')].some((x) => x.textContent.includes('moved it on with work still open') && x.textContent.includes('Customer tinted them'))`), 'and the reason is on the job’s timeline');
+}
 // ready-made list and templates
 await A.tap(`document.querySelector('#projects .pj-panel [aria-label="Close"]')`);
 await A.tap(`document.querySelector('#projects .pj-top [aria-label="All projects"]')`);
