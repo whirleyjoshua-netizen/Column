@@ -3385,7 +3385,9 @@
     $('#home').classList.toggle('hidden', tab !== 'home');
     if (tab === 'home') renderHome();
     $('#day').classList.toggle('hidden', tab !== 'day');
+    const panesWere = $('#panes').classList.contains('hidden');
     $('#panes').classList.toggle('hidden', tab !== 'column' && splitOpen !== 'column');
+    if (panesWere && tab === 'column') keepPanesScroll($('#panes'), true);
     $('#chat').classList.toggle('hidden', tab !== 'chat');
     $('#campsWrap').classList.toggle('hidden', tab !== 'camps');
     if (tab === 'camps') renderCamps();
@@ -10815,8 +10817,20 @@
   function openStacks() { openSplit('column'); }
   function stacksInSplit() {
     const p = $('#panes');
+    keepPanesScroll(p, !$('#split').contains(p) || p.classList.contains('hidden'));
     p.classList.remove('hidden');
     return p;
+  }
+  // Moving or showing the stacks resets where each list was scrolled. Opening them lands at the bottom, where the
+  // newest cards come in (the owner, 2026-11-17); a redraw while they're open keeps each list where it was.
+  function keepPanesScroll(p, toBottom) {
+    const at = [...p.querySelectorAll('.pane')].filter((pane) => pane._list).map((pane) => {
+      const l = pane._list;
+      return [pane, toBottom || l.scrollHeight - l.scrollTop - l.clientHeight < 60, l.scrollTop];
+    });
+    const put = () => { for (const [pane, bottom, top] of at) pane._list.scrollTop = bottom && newestAtBottom(pane._view) ? pane._list.scrollHeight : top; };
+    put();
+    requestAnimationFrame(put);
   }
   function closeSplit() {
     if (!splitOpen) return;
@@ -10825,6 +10839,7 @@
     splitFull = false;
     if (was === 'column') {
       const p = $('#panes');
+      keepPanesScroll(p, false);
       $('#main').insertBefore(p, $('#chat'));
       p.classList.toggle('hidden', S.tab !== 'column');
       $('#split').classList.remove('stacks-split');
