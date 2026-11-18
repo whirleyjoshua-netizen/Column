@@ -1194,6 +1194,7 @@ function jobBack(rec) {
   PJ.recordNews(rec, 'record.updated', 'Kloomie');
 }
 function visitNews(rec) {
+  stepsSoon(rec.wsId);
   broadcast(rec.wsId, { type: 'visits', recordId: rec.id, projectId: rec.projectId, visits: visitsOf(rec.id) });
 }
 // One visit's entries made to match: date, times, what kind, a note, who's going (copies made or removed), done.
@@ -2533,7 +2534,7 @@ const budgetSpent = (c) => [c, ...subsOf(c)].reduce((n, x) => n + (campMoney(x.i
 const publicCampaign = ({ wsId, ...c }) => ({ ...c, followUps: followUpsOf(c), money: campMoney(c.id), ...(c.budget ? { budgetSpent: budgetSpent(c) } : {}) });
 // A money goal fills from Finance: money in tagged to it, less money out.
 const goalSaved = (id) => Object.values(db.money).reduce((n, x) => (x.goalId === id ? n + (x.kind === 'in' ? x.amount : -x.amount) : n), 0);
-const publicGoal = ({ wsId, ...g }) => (g.kind === 'money' ? { ...g, saved: goalSaved(g.id) } : g);
+const publicGoal = ({ wsId, needKey, ...g }) => { if (g.needs?.length) g = { ...g, needs: needsOf(g) }; return g.kind === 'money' ? { ...g, saved: goalSaved(g.id) } : g; };
 const publicAttempt = ({ wsId, ...x }) => x;
 const publicList = ({ wsId, ...l }) => l;
 const isDate = (v) => v === null || isDay(v);
@@ -2643,6 +2644,7 @@ function applyGoal(g, body, c) {
   // The job's stage it finishes (2026-11-17), by name so a saved campaign works for any job with that stage. The job
   // can't move to it, or past it, while this step has open tasks; finishing them moves the job there.
   if (body.stage !== undefined) { g.stage = body.stage ? String(body.stage).trim().slice(0, 60) || null : null; g.staged = false; }
+  if (body.needs !== undefined) g.needs = cleanNeeds(body.needs, c?.wsId, g.needs || []);
   if (!g.title) throw badRequest('Give the goal a name.');
   return g;
 }
@@ -2664,9 +2666,66 @@ function goalMet(g) {
     const n = Object.values(db.attempts).filter((x) => x.campaignId === g.campaignId && (!g.counts?.length || g.counts.includes(x.outcome)) && (!g.methods?.length || g.methods.includes(x.method))).length;
     return n >= g.target;
   }
-  return tasksInOrder(g).every((t) => t.done || t.skipped);
+  return tasksInOrder(g).every((t) => t.done || t.skipped) && needsMet(g);
 }
 const stepDone = (t) => t.done || t.skipped;
+// ----- what a step needs (Phase 4 of the job plan, 2026-11-18) -----
+// Besides its tasks, a step can list what it needs: materials (an item and how many, used on the job for this step),
+// equipment (one of an item checked out to the job), a visit of a kind, done, or a field on the job filled in (a
+// signature, photos, a file: by the field's name, so a saved campaign works for any job). Each is ticked off by
+// what really happens. Once met, materials, equipment and visits stay met (seen), so old stock moves trimmed away or
+// gear brought back don't reopen a step; a field is checked live. An owner or admin can tick one by hand (got).
+// A step on a campaign for a job isn't finished until they're all met; without a job they don't hold it up.
+const NEED_KINDS = ['stock', 'equipment', 'visit', 'field'];
+function cleanNeeds(list, wsId, old = []) {
+  if (!Array.isArray(list)) throw badRequest('What a step needs is a list.');
+  return list.slice(0, 30).map((n) => {
+    const kind = NEED_KINDS.includes(n?.kind) ? n.kind : null;
+    if (!kind) throw badRequest('Each need is materials, equipment, a visit or a field on the job.');
+    const id = typeof n.id === 'string' && /^[\w-]{1,24}$/.test(n.id) ? n.id : rid(8);
+    const was = old.find((o) => o.id === id && o.kind === kind);
+    const out = { id, kind, got: was?.got || null, seen: was?.seen || null };
+    if (kind === 'stock' || kind === 'equipment') {
+      const x = db.invItems[n.itemId];
+      if (!x || x.wsId !== wsId) throw badRequest('That item isn’t in your inventory.');
+      if (was && was.itemId !== x.id) out.seen = null;
+      out.itemId = x.id;
+      if (kind === 'stock') {
+        const q = Number(n.qty);
+        if (!(q > 0 && q <= 1_000_000)) throw badRequest('How many is a number above 0.');
+        if (was && was.qty !== q) out.seen = null;
+        out.qty = Math.round(q * 1000) / 1000;
+      }
+    }
+    if (kind === 'visit') { if (!VISIT_KINDS.includes(n.visit)) throw badRequest('Pick a kind of visit.'); if (was && was.visit !== n.visit) out.seen = null; out.visit = n.visit; }
+    if (kind === 'field') { out.field = cleanText(String(n.field || ''), 80).trim(); if (!out.field) throw badRequest('Pick a field on the job.'); out.seen = null; }
+    return out;
+  });
+}
+const filledIn = (v) => v != null && v !== '' && v !== false && !(Array.isArray(v) && !v.length) && !(typeof v === 'object' && !Array.isArray(v) && !Object.keys(v).length);
+const jobOfGoal = (g) => { const c = db.campaigns[g.campaignId]; return (c?.recordId && db.records[c.recordId]) || null; };
+// Each need with whether it's met: live (what's there now), have (materials used so far) and met (live, seen or got).
+function needsOf(g) {
+  if (!g.needs?.length) return [];
+  const rec = jobOfGoal(g);
+  const p = rec && db.projects[rec.projectId], t = p && typeOfP(p, rec.typeId);
+  const moves = rec && g.needs.some((n) => n.kind !== 'field' && n.kind !== 'visit') ? Object.values(db.invMoves).filter((m) => m.jobId === rec.id) : [];
+  const visits = rec && g.needs.some((n) => n.kind === 'visit') ? visitsOf(rec.id) : [];
+  return g.needs.map((n) => {
+    let live = false, have;
+    if (rec && n.kind === 'stock') {
+      have = 0;
+      for (const m of moves) if (m.goalId === g.id && m.itemId === n.itemId && !m.unitId && (m.kind === 'use' || m.kind === 'return')) have -= m.qty;
+      have = Math.round(have * 1000) / 1000;
+      live = have >= n.qty;
+    } else if (rec && n.kind === 'equipment') live = moves.some((m) => m.itemId === n.itemId && m.unitId && m.kind === 'checkout');
+    else if (rec && n.kind === 'visit') live = visits.some((v) => v.kind === n.visit && v.done);
+    else if (rec && n.kind === 'field') { const f = t?.fields.find((x) => x.name.toLowerCase() === n.field.toLowerCase()); live = !!f && filledIn(rec.values[f.id]); }
+    const it = n.itemId && db.invItems[n.itemId];
+    return { ...n, ...(it ? { item: it.name, unit: it.unit } : {}), ...(have !== undefined ? { have } : {}), live, met: live || !!n.got || (n.kind !== 'field' && !!n.seen) };
+  });
+}
+const needsMet = (g) => !g.needs?.length || !jobOfGoal(g) || needsOf(g).every((n) => n.met);
 // Everything a goal is waiting on: the unmet goal above it (in order), then the goals it was set to wait for.
 function goalBlockers(g) {
   const c = db.campaigns[g.campaignId];
@@ -2986,7 +3045,7 @@ function snapshotCampaign(c, main = c) {
     },
     lists: lists.map((l) => ({ ref: l.id, name: l.name, kind: l.kind, agenda: !!l.agenda, columns: l.columns, rows: l.rows.map((r) => ({ cells: r.cells, section: r.section, mins: r.mins })) })),
     goals: Object.values(db.goals).filter((g) => g.campaignId === c.id).sort((a, b) => (a.order || 0) - (b.order || 0)).map((g) => ({
-      ref: g.id, blockedBy: g.blockedBy || [], title: g.title, kind: g.kind, target: g.target, counts: g.counts, methods: g.methods || null, order: g.order, dueIn: rel(g.due), stage: g.stage || null,
+      ref: g.id, blockedBy: g.blockedBy || [], title: g.title, kind: g.kind, target: g.target, counts: g.counts, methods: g.methods || null, order: g.order, dueIn: rel(g.due), stage: g.stage || null, needs: (g.needs || []).map(({ got, seen, ...n }) => n),
       // Follow-ups were for that run's people, so they stay behind.
       tasks: Object.values(db.tasks).filter((t) => t.goalId === g.id && !t.followUp).sort((a, b) => a.createdAt - b.createdAt).map((t) => ({
         ref: t.id, blockedBy: t.blockedBy || [], dueAfter: t.dueAfter ?? null, castId: t.castId || null, signoff: t.signoff || null, action: t.action || null,
@@ -3087,7 +3146,9 @@ function fillCampaign(ws, owner, c, snap, date, by) {
   }
   for (const sg of snap.goals) {
     const g = applyGoal({ id: rid(), wsId: ws.id, campaignId: c.id, by: owner.member, createdAt: Date.now(), title: '', due: null, kind: 'tasks', target: 10, counts: null, order: 0 },
-      { title: sg.title, kind: sg.kind, target: sg.target, counts: sg.counts, methods: sg.methods, order: sg.order, due: due(sg.dueIn), stage: sg.stage || null }, c);
+      { title: sg.title, kind: sg.kind, target: sg.target, counts: sg.counts, methods: sg.methods, order: sg.order, due: due(sg.dueIn), stage: sg.stage || null,
+        // What it needs comes too, without what's been met; items from another team's inventory are left off.
+        needs: (sg.needs || []).filter((n) => !n.itemId || db.invItems[n.itemId]?.wsId === ws.id).map(({ id, ...n }) => n) }, c);
     db.goals[g.id] = g;
     made.set(sg.ref, g);
     broadcast(ws.id, { type: 'goal', goal: publicGoal(g) });
@@ -3411,7 +3472,7 @@ function stageGate(rec, before, auth, override, flow = null) {
   const open = openStepsUpTo(rec, f, to);
   if (!open.length) return null;
   const names = open.map((g) => `“${clipText(g.title, 60)}”`).join(', ');
-  const steps = open.map((g) => ({ id: g.id, title: g.title, campaignId: g.campaignId, stage: g.stage, open: tasksInOrder(g).filter((x) => !stepDone(x)).length }));
+  const steps = open.map((g) => ({ id: g.id, title: g.title, campaignId: g.campaignId, stage: g.stage, open: tasksInOrder(g).filter((x) => !stepDone(x)).length, needs: needsOf(g).filter((n) => !n.met).length }));
   if (override != null) {
     if (!auth || !isAdmin(auth)) return { status: 403, error: 'Only an owner or admin can move a job on with work still open.', steps };
     const why = cleanText(String(override), 300).trim();
@@ -3424,9 +3485,42 @@ function stageGate(rec, before, auth, override, flow = null) {
   if (flow) PJ.recordActivity(rec.id, { kind: 'held', note: `Tried to move it to ${f.choices[to].label}: ${names} ${one ? 'isn’t' : 'aren’t'} done yet`, by: flow.name, auto: true });
   automate(rec.wsId, 'record.held', { record: rec, project: p, list: lt, recordName: String(rec.values[lt.primary] ?? ''), stageLabel: f.choices[to].label, goal: open[0], campaign: db.campaigns[open[0].campaignId],
     who: auth?.member || flow?.name || 'The API', whoId: auth?.memberId || null, private: !!p.private });
-  return { status: 409, error: `${names} ${one ? 'isn’t' : 'aren’t'} done yet, so this can’t move to ${f.choices[to].label}. Finish ${one ? 'its' : 'their'} tasks first${auth && isAdmin(auth) ? ', or move it on anyway with a reason' : ''}.`, steps };
+  return { status: 409, error: `${names} ${one ? 'isn’t' : 'aren’t'} done yet, so this can’t move to ${f.choices[to].label}. Finish what’s left on ${one ? 'it' : 'them'} first${auth && isAdmin(auth) ? ', or move it on anyway with a reason' : ''}.`, steps };
 }
+// Stock used, gear checked out, a visit done or a job's field filled in can finish a step: look again.
+// A person's change: once, soon (many changes in one moment, one look). An automation's change: right away, inside
+// its run (column-02, 2026-11-18), so the run is the first to see what it finished and the loop guard keeps that
+// from setting off more automations; a person's look coming after it then finds nothing new to announce.
+const STEPS_SOON = new Set();
+// One look at a time (a look's own changes come back here): asked again meanwhile, it looks once more after. But an
+// automation set off by a person's look that changes things looks right then, as the automation, before the person's
+// look reaches the steps it finished, so those don't set off automations as if the person had finished them.
+let stepsBusy = 0, stepsAgain = false, busyFlowing = false;
 function jobSteps(wsId, by, byId) {
+  const flowing = !!FLOWING.getStore();
+  if (stepsBusy && !(flowing && !busyFlowing && stepsBusy < 3)) {
+    // Looked at again after this look, as whoever started it: say so when it's an automation's change that waits.
+    if (flowing && !busyFlowing) console.warn(`Job steps: an automation's change (${FLOWING.getStore()?.autoId}) is looked at after the look it came from (too deep)`);
+    stepsAgain = true;
+    return;
+  }
+  const was = busyFlowing;
+  stepsBusy++; busyFlowing = flowing;
+  try {
+    jobStepsOnce(wsId, by, byId);
+    for (let i = 0; i < 5 && stepsAgain && stepsBusy === 1; i++) { stepsAgain = false; jobStepsOnce(wsId, 'Kloomie', null); }
+  } catch (e) { alarm('Checking job steps failed', e); }
+  finally { stepsBusy--; busyFlowing = was; }
+}
+const stepsNow = (wsId) => jobSteps(wsId, 'Kloomie', null);
+function stepsSoon(wsId) {
+  if (!wsId) return;
+  if (FLOWING.getStore()) return stepsNow(wsId);
+  if (STEPS_SOON.has(wsId)) return;
+  STEPS_SOON.add(wsId);
+  setImmediate(() => { STEPS_SOON.delete(wsId); stepsNow(wsId); });
+}
+function jobStepsOnce(wsId, by, byId) {
   let changed = false;
   // Each step's finished-or-not, kept (g.finished), so "a step is finished" goes off once, when it becomes so. One
   // pass over the team's steps and tasks. A step seen for the first time is only noted.
@@ -3435,7 +3529,14 @@ function jobSteps(wsId, by, byId) {
   for (const t of Object.values(db.tasks)) if (t.wsId === wsId && t.goalId) { if (!tasksOf.has(t.goalId)) tasksOf.set(t.goalId, []); tasksOf.get(t.goalId).push(t); }
   for (const [cid, gs] of camps) for (const g of gs) {
     const ts = tasksOf.get(g.id) || [];
-    const m = !!(g.skipped || (g.kind === 'count' ? goalMet(g) : (g.kind !== 'tasks' || ts.length > 0) && ts.every(stepDone)));
+    // What it needs: a need met for the first time is kept (seen); any change is sent to whoever's looking.
+    if (g.needs?.length) {
+      const ns = needsOf(g);
+      for (const n of g.needs) if (n.kind !== 'field' && !n.seen && ns.find((x) => x.id === n.id)?.live) { n.seen = Date.now(); changed = true; }
+      const key = needsOf(g).map((n) => (n.met ? 1 : 0) + ':' + (n.have ?? '')).join(',');
+      if (key !== g.needKey) { g.needKey = key; changed = true; broadcast(wsId, { type: 'goal', goal: publicGoal(g) }); }
+    }
+    const m = !!(g.skipped || (g.kind === 'count' ? goalMet(g) : (g.kind !== 'tasks' || ts.length > 0) && ts.every(stepDone) && needsMet(g)));
     if (g.finished === undefined) { g.finished = m; changed = true; continue; }
     if (g.finished === m) continue;
     g.finished = m;
@@ -3487,6 +3588,7 @@ function jobSteps(wsId, by, byId) {
 // Every change to a record comes here (from Projects' one place for record news). A move to another stage is told
 // whatever made it (the app, the API, a customer's answer, an import), by comparing with the stage last told.
 function recordEvent(rec, type, by, more = {}) {
+  stepsSoon(rec.wsId);
   const p = db.projects[rec.projectId];
   const t = p && typeOfP(p, rec.typeId);
   if (!p || !t) return;
@@ -3976,7 +4078,7 @@ async function flowAction(x, a, ctx, ws) {
     const item = db.invItems[a.itemId];
     if (!item || item.archived) throw new Error('its item is gone from Inventory');
     if (a.act === 'use' && !rec) return `Didn’t use ${item.name}: it wasn’t about a job`;
-    await flowCall(x, 'POST', '/api/inventory/moves', { kind: a.act, itemId: item.id, qty: a.qty, from: a.from, to: a.to, jobId: a.act === 'use' ? rec.id : undefined, note: autoFill(a.note || x.name, ctx, ws.id) });
+    await flowCall(x, 'POST', '/api/inventory/moves', { kind: a.act, itemId: item.id, qty: a.qty, from: a.from, to: a.to, jobId: a.act === 'use' ? rec.id : undefined, goalId: a.act === 'use' ? ctx.goal?.id : undefined, note: autoFill(a.note || x.name, ctx, ws.id) });
     return `${{ use: 'Used', move: 'Moved', receive: 'Received' }[a.act]} ${a.qty} ${item.unit} ${item.name}${a.act === 'use' ? ' on ' + clipText(ctx.recordName || 'the job', 40) : ''}`;
   }
   if (a.kind === 'doc') {
@@ -9032,7 +9134,10 @@ async function api(req, res, url) {
       const body = await readJson(req, 50_000);
       const camp = db.campaigns[g.campaignId];
       if ((body.skipped !== undefined || body.unlocked !== undefined) && !passesSteps(camp, auth)) return send(res, 403, { error: 'Only an owner can skip or unlock a step.' });
+      if (body.got !== undefined && !passesSteps(camp, auth)) return send(res, 403, { error: 'Only the campaign’s owner or an admin can tick off what a step needs by hand.' });
       const next = applyGoal({ ...g }, body, camp);
+      // { got: { <need id>: true | false } }: ticked by hand ("we got it another way"), or unticked.
+      if (body.got && typeof body.got === 'object') next.needs = (next.needs || []).map((n) => (body.got[n.id] === undefined ? n : { ...n, got: body.got[n.id] ? { by: auth.member, at: Date.now() } : null }));
       if (body.skipped !== undefined) next.skipped = !!body.skipped;
       if (body.unlocked !== undefined) next.unlocked = !!body.unlocked;
       db.goals[g.id] = next;
@@ -10877,10 +10982,12 @@ function invCtx(ws, x, m, more = {}) {
 }
 const STOCK = inventoryModule({ db, save, broadcast, rid, cleanText, readJson, send, isAdmin,
   onMove: (ws, m, x, { wasLow, low }) => {
+    if (m.jobId) stepsSoon(ws.id);
     if (!wasLow && low) automate(ws.id, 'stock.low', invCtx(ws, x, m, { qty: STOCK.total(x) }));
     if (m.kind === 'use' && m.jobId) automate(ws.id, 'stock.used', invCtx(ws, x, m));
   },
   onUnit: (ws, m, u, x) => {
+    if (m.jobId) stepsSoon(ws.id);
     const kind = { checkout: 'equipment.out', return: 'equipment.back', repair: 'equipment.problem' }[m.kind];
     if (kind) automate(ws.id, kind, invCtx(ws, x, m, { unitName: u.name }));
   },

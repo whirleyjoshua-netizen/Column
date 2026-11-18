@@ -4965,7 +4965,8 @@
   const placed = (key, base) => (a, b) => (a[key] != null) !== (b[key] != null) ? (a[key] != null ? -1 : 1) : a[key] != null && a[key] !== b[key] ? a[key] - b[key] : base(a, b);
   const byDueMade = (a, b) => ((a.due || '9') < (b.due || '9') ? -1 : (a.due || '9') > (b.due || '9') ? 1 : a.createdAt - b.createdAt);
   const tasksInOrder = (gid) => tasksOf(gid).sort(placed('order', byDueMade));
-  const goalMet = (g) => !!g.skipped || (g.kind === 'count' ? goalProgress(g).n >= g.target : tasksOf(g.id).every((t) => t.done || t.skipped));
+  // Met: its tasks done (or its count reached) and, on a job's campaign, everything it needs got (worked out by the server).
+  const goalMet = (g) => !!g.skipped || ((g.kind === 'count' ? goalProgress(g).n >= g.target : tasksOf(g.id).every((t) => t.done || t.skipped)) && (!g.needs?.length || !campById(g.campaignId)?.recordId || g.needs.every((n) => n.met)));
   const stepDone = (t) => t.done || t.skipped;
   function goalBlockers(g) {
     if (g.unlocked) return [];
@@ -6482,7 +6483,8 @@
         waits ? h('button', { class: 'list-chip wait-chip', title: 'Opens when ' + gBlockers.map((x) => `“${x.title}”`).join(' and ') + ' is met', onclick: () => showStep(waits) }, '⏳ ' + shortText(waits.title, 22) + (gBlockers.length > 1 ? ` +${gBlockers.length - 1}` : '')) : null,
         g.due ? h('span', { class: 'due' + (g.due < todayKey() && pg.frac < 1 ? ' late' : '') }, dueLabel(g.due)) : null,
         h('button', { class: 't-btn', 'aria-label': 'Goal options', html: I.more, onclick: (e) => goalOptions(e.currentTarget, c, g) })),
-      closed ? null : h('div', { class: 'goal-prog' }, bar(pg.frac, c.color), h('span', {}, pg.label)));
+      closed ? null : h('div', { class: 'goal-prog' }, bar(pg.frac, c.color), h('span', {}, pg.label)),
+      closed ? null : needsRow(c, g));
     if (!closed) {
       if (tasks.length) el.append(h('div', { class: 'goal-tasks' }, tasks.flatMap((t) => {
         const l = listOfTask(t);
@@ -7894,12 +7896,76 @@
     }
     openMenu(anchor, [{ head: 'Finishing it moves the job to' }, ...f.choices.map((x) => ({ label: x.label, on: g.stage === x.label, run: () => set(x.label) })), g.stage ? { label: 'No stage', run: () => set(null) } : null].filter(Boolean));
   }
+  // ----- what a step needs (job plan Phase 4, 2026-11-18) -----
+  // Materials, equipment, a visit or a field on the job, each ticked off by the server from what happens on the job.
+  const NEED_IC = { stock: '📦', equipment: '🧰', visit: '🗓', field: '✍️' };
+  const needLabel = (n) => (n.kind === 'stock' ? `${n.have != null ? invQty(n.have) + ' of ' : ''}${invQty(n.qty)} ${n.unit || ''} ${n.item || 'of an item'}`.replace(/\s+/g, ' ')
+    : n.kind === 'equipment' ? `${n.item || 'Equipment'} on the job` : n.kind === 'visit' ? `${n.visit} visit done` : `${n.field} filled in`);
+  function needsRow(c, g) {
+    if (!g.needs?.length) return null;
+    return h('div', { class: 'goal-needs' }, h('small', { class: 'goal-needs-h' }, 'Needs'), ...g.needs.map((n) => h('button', {
+      class: 'list-chip need-chip' + (n.met ? ' met' : ''), 'data-need': n.id,
+      title: n.met ? (n.got && !n.live ? `Ticked off by ${n.got.by}` : 'Got it') : c.recordId ? 'Still needed: this step isn’t finished until it’s got' : 'Counts once this campaign is for a job',
+      onclick: (e) => { e.stopPropagation(); needMenu(e.currentTarget, c, g, n); } }, (n.met ? '✓ ' : NEED_IC[n.kind] + ' ') + needLabel(n))));
+  }
+  function needMenu(anchor, c, g, n) {
+    const at = c.recordId && recEverywhere(c.recordId);
+    const got = (on) => api('PATCH', '/goals/' + g.id, { got: { [n.id]: on } }).catch((e) => toast(e.message));
+    const rows = [{ head: needLabel(n) }];
+    if (!c.recordId) rows.push({ note: 'This counts once the campaign is for a job.' });
+    else if (!n.met) {
+      if (n.kind === 'stock' && toolOn('inventory')) rows.push({ label: 'Use stock for it…', run: async () => { if (!INVS.data) await loadInventory(); invMoveSheet(INVS.data?.items.find((y) => y.id === n.itemId) || null, 'use', null, { jobId: c.recordId, goalId: g.id, label: `For “${shortText(g.title, 60)}”` }); } });
+      if (n.kind === 'equipment') rows.push({ note: `Check out ${n.item ? 'a ' + n.item : 'one'} to the job in Inventory, or scan its label.` });
+      if (n.kind === 'visit') rows.push({ label: `Book the ${n.visit.toLowerCase()} visit…`, run: async () => { if (!at?.p) await prLoadAll(); const j = recEverywhere(c.recordId); if (!j?.p) return toast('That job isn’t here any more.'); visitSheet(j.p, prType(j.p, j.r.typeId), j.r, null, { kind: n.visit }); } });
+      if (n.kind === 'field' || n.kind === 'visit') rows.push({ label: 'Open the job', run: () => prLoadAll().then(() => openRecord(c.recordId)) });
+    }
+    if (c.recordId && canPass(c)) rows.push(n.got ? { label: 'Untick it (it was ticked off by hand)', run: () => got(false) } : !n.met ? { label: 'Tick it off by hand (got it another way)', run: () => got(true) } : null);
+    rows.push({ label: 'Change what it needs…', run: () => needsSheet(c, g) });
+    openMenu(anchor, rows.filter(Boolean));
+  }
+  async function needsSheet(c, g) {
+    if (toolOn('inventory') && !INVS.data) await loadInventory()?.catch?.(() => {});
+    const items = INVS.data?.items || [];
+    const list = (g.needs || []).map(({ id, kind, itemId, qty, visit, field, item, unit }) => ({ id, kind, itemId, qty, visit, field, item, unit }));
+    const at = c.recordId && recEverywhere(c.recordId);
+    const fields = at?.p ? (prType(at.p, at.r.typeId)?.fields || []).filter((f) => !['status', 'stage'].includes(f.key)).map((f) => f.name) : [];
+    const rowsEl = h('div', { class: 'need-rows' });
+    const draw = () => rowsEl.replaceChildren(...(list.length ? list.map((n, i) => h('div', { class: 'need-row' }, h('span', {}, NEED_IC[n.kind] + ' ' + needLabel({ ...n, have: null })),
+      h('button', { type: 'button', class: 't-btn', 'aria-label': 'Remove', html: I.close, onclick: () => { list.splice(i, 1); draw(); } }))) : [h('p', { class: 'day-hint' }, 'Nothing yet.')]));
+    const kind = h('select', { class: 'need-kind', 'aria-label': 'What it needs' }, [['stock', 'Materials'], ['equipment', 'Equipment'], ['visit', 'A visit'], ['field', 'A field on the job']].map(([v, l]) => h('option', { value: v }, l)));
+    const item = h('select', { class: 'need-item', 'aria-label': 'Item' });
+    const qty = h('input', { type: 'number', min: 0, step: 'any', class: 'need-qty', placeholder: 'How many', 'aria-label': 'How many' });
+    const visit = h('select', { class: 'need-visit', 'aria-label': 'Kind of visit' }, VISIT_KINDS.map((k) => h('option', { value: k }, k)));
+    const field = h('input', { class: 'need-field', placeholder: 'Customer sign-off', list: 'needFields', 'aria-label': 'Field on the job' });
+    const shape = () => {
+      const k = kind.value;
+      item.replaceChildren(...items.filter((x) => (k === 'equipment') === (x.track === 'units')).map((x) => h('option', { value: x.id }, x.name)));
+      item.hidden = !(k === 'stock' || k === 'equipment'); qty.hidden = k !== 'stock'; visit.hidden = k !== 'visit'; field.hidden = k !== 'field';
+    };
+    kind.addEventListener('change', shape);
+    shape();
+    const add = h('button', { type: 'button', class: 'btn small need-add', onclick: () => {
+      const k = kind.value, x = items.find((y) => y.id === item.value);
+      if ((k === 'stock' || k === 'equipment') && !x) return toast(items.length ? 'Pick an item.' : 'Add items in Tools → Inventory first.');
+      if (k === 'stock' && !(Number(qty.value) > 0)) return toast('How many?');
+      if (k === 'field' && !field.value.trim()) return toast('Which field on the job?');
+      list.push({ kind: k, ...(x ? { itemId: x.id, item: x.name, unit: x.unit } : {}), ...(k === 'stock' ? { qty: Number(qty.value) } : {}), ...(k === 'visit' ? { visit: visit.value } : {}), ...(k === 'field' ? { field: field.value.trim() } : {}) });
+      qty.value = ''; field.value = '';
+      draw();
+    } }, '+ Add');
+    draw();
+    sheet(`What “${shortText(g.title, 40)}” needs`, [
+      h('p', { class: 'day-hint' }, c.recordId ? 'Each is ticked off by what happens on the job: stock used for this step, gear checked out to the job, the visit done, the field filled in. The step isn’t finished, and the job doesn’t move on, until they all are.' : 'These count once the campaign is for a job.'),
+      rowsEl, h('div', { class: 'need-add-row' }, kind, item, qty, visit, field, add), h('datalist', { id: 'needFields' }, fields.map((n) => h('option', { value: n }))),
+    ], () => api('PATCH', '/goals/' + g.id, { needs: list.map(({ item: _i, unit: _u, ...n }) => n) }));
+  }
   function goalOptions(anchor, c, g) {
     openMenu(anchor, [
       { label: 'Plan it out…', run: () => planSheet(c, g) },
       { label: 'Edit goal…', run: () => goalSheet(c, g) },
       { label: g.blockedBy?.length ? `Waits for ${plural(g.blockedBy.length, 'goal')}…` : 'Waits for…', run: () => waitsSheet(g, true) },
       c.recordId ? { label: g.stage ? `Finishes the job’s stage: ${g.stage}…` : 'Finishes the job’s stage…', run: () => goalStageMenu(anchor, c, g) } : null,
+      { label: g.needs?.length ? `What it needs (${g.needs.length})…` : 'What it needs (materials, a visit, a sign-off)…', run: () => needsSheet(c, g) },
       ...stepRows(c, g, !!goalWaitsOn(g), (ch) => api('PATCH', '/goals/' + g.id, ch).catch((e) => toast(e.message))),
       { label: 'Delete goal and its tasks', danger: true, run: () => api('DELETE', '/goals/' + g.id).catch((e) => toast(e.message)) },
     ].filter(Boolean));
@@ -10485,7 +10551,7 @@
     sheet(title, fields, async () => {
       const it = item();
       if (!it) throw new Error('Pick the item.');
-      await api('POST', '/inventory/moves', { kind, itemId: it.id, qty: n.value, from: from.value, to: to.value, note: note.value, ...(cost.value ? { cost: cost.value } : {}), ...(link.jobId ? { jobId: link.jobId } : {}), ...(link.taskId ? { taskId: link.taskId } : {}) });
+      await api('POST', '/inventory/moves', { kind, itemId: it.id, qty: n.value, from: from.value, to: to.value, note: note.value, ...(cost.value ? { cost: cost.value } : {}), ...(link.jobId ? { jobId: link.jobId } : {}), ...(link.taskId ? { taskId: link.taskId } : {}), ...(link.goalId ? { goalId: link.goalId } : {}) });
       toast({ receive: 'Received', move: 'Moved', use: 'Used', return: 'Brought back', count: 'Counted', adjust: 'Adjusted' }[kind]);
       await loadInventory();
     }, title.split(' ')[0]);
