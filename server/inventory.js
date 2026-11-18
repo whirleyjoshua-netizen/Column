@@ -86,6 +86,13 @@ export function inventoryModule({ db, save, broadcast, rid, cleanText, readJson,
   }
   const placeOf = (ws, id) => { const p = id && db.invPlaces[id]; return p && p.wsId === ws.id && !p.archived ? p : null; };
 
+  // Which step of a job's work a move was for (with column-a9's job steps, 2026-11-18): its task's step, or one
+  // named on it, only when that step is on a campaign for this same job. Anything else is dropped, never trusted.
+  function stepOf(ws, recId, goalId) {
+    const g = goalId && db.goals?.[goalId];
+    const c = g && db.campaigns?.[g.campaignId];
+    return g && g.wsId === ws.id && c && c.wsId === ws.id && c.recordId === recId ? g.id : null;
+  }
   // One movement: checked, applied to the stock, written in the ledger. Returns the move.
   function move(ws, auth, b) {
     const kind = MOVE_KINDS.includes(b.kind) ? b.kind : null;
@@ -106,6 +113,7 @@ export function inventoryModule({ db, save, broadcast, rid, cleanText, readJson,
     if (b.jobId && !job) throw err('That job is gone, or you can’t see it.', 404);
     const task = b.taskId && taskOk(auth, b.taskId) ? b.taskId : null;
     if (b.taskId && !task) throw err('That task is gone, or you can’t see it.', 404);
+    const goal = job ? stepOf(ws, job.rec.id, task ? db.tasks[task]?.goalId : b.goalId) : null;
     let delta = 0, place = null, counted = null;
     if (kind === 'receive' || kind === 'return') { place = to || firstPlace(ws, auth.member); x.stock[place.id] = at(place) + n; delta = n; }
     else if (kind === 'use') { place = from; if (!place) throw err('Pick where it came from.'); if (at(place) < n) throw err(`Only ${at(place)} ${x.unit} at ${place.name}.`); x.stock[place.id] = at(place) - n; delta = -n; }
@@ -124,7 +132,7 @@ export function inventoryModule({ db, save, broadcast, rid, cleanText, readJson,
       id: rid(), n: ++seq, wsId: ws.id, at: Date.now(), by: auth.member, byId: auth.memberId, itemId: x.id, kind, qty: kind === 'move' ? n : delta, ...(counted != null ? { counted } : {}),
       from: kind === 'move' ? from.id : kind === 'use' ? place.id : (kind === 'adjust' || kind === 'count') ? place.id : null,
       to: kind === 'move' ? to.id : (kind === 'receive' || kind === 'return') ? place.id : null,
-      jobId: job ? job.rec.id : null, taskId: task, note, cost: x.cost ?? null,
+      jobId: job ? job.rec.id : null, taskId: task, ...(goal ? { goalId: goal } : {}), note, cost: x.cost ?? null,
     };
     db.invMoves[m.id] = m;
     trim(ws.id);
@@ -238,11 +246,14 @@ export function inventoryModule({ db, save, broadcast, rid, cleanText, readJson,
   // at it. Costs only for owners and admins.
   function jobView(ws, auth, recId) {
     const admin = isAdmin(auth);
-    const used = new Map();
+    const used = new Map(), steps = new Map();
     for (const m of Object.values(db.invMoves)) {
       if (m.wsId !== ws.id || m.jobId !== recId || m.unitId || (m.kind !== 'use' && m.kind !== 'return')) continue;
       const x = db.invItems[m.itemId];
       if (!x) continue;
+      const g = (m.goalId && db.goals?.[m.goalId]) || null; // a step deleted since counts as not for a step
+      const sk = g ? g.id : null;
+      steps.set(sk, (steps.get(sk) || 0) + Math.round(-m.qty * (m.cost || 0)));
       const row = used.get(x.id) || { itemId: x.id, name: x.name, unit: x.unit, qty: 0, cost: 0 };
       row.qty = Math.round((row.qty - m.qty) * 1000) / 1000;
       row.cost += Math.round(-m.qty * (m.cost || 0));
@@ -250,7 +261,9 @@ export function inventoryModule({ db, save, broadcast, rid, cleanText, readJson,
     }
     const materials = [...used.values()].filter((r) => r.qty !== 0).map((r) => (admin ? r : { ...r, cost: undefined }));
     const equipment = Object.values(db.invUnits).filter((u) => u.wsId === ws.id && u.jobId === recId && u.status !== 'retired').map((u) => ({ ...publicUnit(u), item: db.invItems[u.itemId]?.name || '' }));
-    return { materials, equipment, ...(admin ? { cost: materials.reduce((n, r) => n + r.cost, 0) } : {}) };
+    // What each step of the job's work cost in stock (not for a step: goalId null).
+    const bySteps = [...steps.entries()].map(([goalId, cost]) => ({ goalId, title: goalId ? db.goals[goalId].title || '' : '', ...(admin ? { cost } : {}) }));
+    return { materials, equipment, bySteps, ...(admin ? { cost: materials.reduce((n, r) => n + r.cost, 0) } : {}) };
   }
   const stockCost = (recId) => { let n = 0; for (const m of Object.values(db.invMoves)) if (m.jobId === recId && !m.unitId && (m.kind === 'use' || m.kind === 'return')) n += Math.round(-m.qty * (m.cost || 0)); return n; };
 
