@@ -23,7 +23,7 @@ const hook = http.createServer(async (req, res) => {
   let raw = ''; for await (const c of req) raw += c;
   got.push({ path: req.url, key: req.headers['idempotency-key'] || null, body: JSON.parse(raw || '{}') });
   const n = got.filter((x) => x.path === req.url).length;
-  res.writeHead(req.url === '/flaky' ? (n === 1 ? 500 : 200) : req.url === '/down' ? 503 : req.url === '/bad' ? 400 : 200); res.end('{}');
+  res.writeHead(req.url === '/flaky' || req.url === '/flaky2' ? (n === 1 ? 500 : 200) : req.url === '/down' ? 503 : req.url === '/bad' ? 400 : 200); res.end('{}');
 });
 await new Promise((r) => hook.listen(HPORT, '127.0.0.1', r));
 const srv = spawn('node', ['index.js'], { cwd: new URL('../server', import.meta.url).pathname, env: { ...process.env, PORT: String(PORT), PUBLIC_URL: B, DATA_DIR: DIR, MAIL_OUTBOX: '1', RESEND_API_KEY: '', DATABASE_URL: '', STRIPE_SECRET_KEY: '', STRIPE_PRICE: '', SKIP_SETUP: '1', ALLOW_LOCAL_WEBHOOKS: '1', FLOW_TIME_SCALE: '0.001', SCHEDULE_TICK_MS: '150' }, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -132,6 +132,12 @@ try {
   await sleep(1500);
   ok(got.filter((x) => x.path === '/down').length === 4, 'and it’s not tried again after that');
   ok((await runsOf('Down')).length === 1 && !(await runsOf('Down'))[0].ok, 'one run, failed: ' + JSON.stringify(await runsOf('Down')));
+
+  // A run that waited first, then hits an app that's down, is tried again too.
+  await auto(rico, 'Waited', { kind: 'campaign.started', projectId: p.id }, [{ kind: 'wait', amount: 1, unit: 'minutes' }, { kind: 'webhook', url: H + '/flaky2' }]);
+  await rico('POST', '/campaigns', { name: 'Waited run', recordId: job.id });
+  ok(await until(async () => got.filter((x) => x.path === '/flaky2').length === 2, 8000), 'a run that waited, then found its app down, is tried again: ' + got.filter((x) => x.path === '/flaky2').length);
+  ok(await until(async () => (await runsOf('Waited'))[0]?.ok), 'and finishes: ' + JSON.stringify(await runsOf('Waited')));
 
   await auto(rico, 'Bad', { kind: 'campaign.started', projectId: p.id }, [{ kind: 'webhook', url: H + '/bad' }]);
   await rico('POST', '/campaigns', { name: 'Bad run', recordId: job.id });

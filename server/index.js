@@ -3709,14 +3709,16 @@ function runWaits(now) {
     log.path = [];
     if (w.agentRun) log.push(answered ? (ctx.answer ? 'Got the answer' : 'The agent finished with no answer') : 'The agent didn’t answer in 30 minutes; went on without it');
     const lead = w.retry ? `Tried again (${w.retry} of ${RETRY_MS.length}): ` : 'After waiting: ';
-    FLOWING.run({ autoId: x.id, runId: w.runId || rid(12) }, async () => {
+    const runId = w.runId || rid(12);
+    FLOWING.run({ autoId: x.id, runId }, async () => {
       try {
         const r = await resumeSteps(x, ctx, w.stack, w.i, log);
         if (r.wait) waitFor(x, ctx, r.wait, log);
         autoLog(x, true, lead + (log.join(' · ') || 'nothing left to do'), log.path, w.runId || null);
       } catch (e) {
-        const again = w.retry ? retryLater(x, ctx, e, w.retry, w.runId) : '';
-        autoLog(x, false, lead + (log.length ? log.join(' · ') + ' · then ' : '') + e.message + again, log.path, w.runId || null);
+        // Any run can be tried again from a failed step: one that waited first too.
+        const again = retryLater(x, ctx, e, w.retry || 0, runId);
+        autoLog(x, false, lead + (log.length ? log.join(' · ') + ' · then ' : '') + e.message + again, log.path, again || w.runId ? runId : null);
         if (!again) autoStopped(x, e, w.retry || 0);
       } finally {
         save();
