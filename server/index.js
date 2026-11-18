@@ -2764,7 +2764,7 @@ function toolDone(taskId, { by, byId, note, file } = {}) {
     if (t.signoff) Object.assign(t, { submitted: { by: by || 'Kloomie', byId: byId || null, at: Date.now() }, returned: null });
     else {
       Object.assign(t, { done: true, doneAt: Date.now(), doneBy: by || 'Kloomie', submitted: null, returned: null });
-      setImmediate(() => automate(t.wsId, 'task.done', { task: t, campaign: taskCamp(t), who: by, whoId: byId }));
+      setImmediate(() => automate(t.wsId, 'task.done', { task: t, campaign: taskCamp(t), who: by, whoId: byId, private: privateTask(t) }));
     }
     syncEntries(t);
     broadcast(t.wsId, { type: 'task', task: publicTask(t) });
@@ -2939,6 +2939,8 @@ function createCampaign(ws, owner, body, extra = {}) {
   save();
   broadcast(ws.id, { type: 'campaign', campaign: publicCampaign(c) });
   broadcast(ws.id, { type: 'workspace' });
+  // After its steps are in (a saved campaign's come right after this), for "a campaign is started".
+  setImmediate(() => db.campaigns[c.id] && automate(ws.id, 'campaign.started', { campaign: db.campaigns[c.id], who: owner.member, whoId: owner.memberId }));
   return c;
 }
 // A campaign given its job: its tasks that aren't about a job yet become this job's (not ones given none on purpose).
@@ -3306,7 +3308,7 @@ function autoFill(text, ctx, wsId) {
 }
 // The words an event fills in, by name (what {…} in an action and "only if" read).
 function autoVars(ctx, wsId) {
-  return { task: ctx.task?.text, campaign: ctx.campaign?.name, contact: ctx.contact ? ctx.contact.name || ctx.contact.company || ctx.contact.email || ctx.contact.phone : '', file: ctx.file?.name,
+  return { task: ctx.task?.text, step: ctx.goal?.title, campaign: ctx.campaign?.name, contact: ctx.contact ? ctx.contact.name || ctx.contact.company || ctx.contact.email || ctx.contact.phone : '', file: ctx.file?.name,
     from: ctx.from, who: ctx.who, stage: ctx.stageLabel || (ctx.stage ? stageLabel(ctx.stage) : ''), outcome: ctx.outcome, document: ctx.document, note: ctx.note, date: ctx.date || teamDay(wsId),
     record: ctx.recordName, project: ctx.project?.name, list: ctx.list?.name, customer: ctx.customer, amount: ctx.amount != null ? '$' + Number(ctx.amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '',
     invoice: ctx.invoice, time: ctx.time, crew: ctx.crew, phone: ctx.phone, text: ctx.text, doc: ctx.doc, pin: ctx.pin, category: ctx.category, status: ctx.status, answer: ctx.answer, item: ctx.item, qty: ctx.qty, unit: ctx.unitName, place: ctx.place, supplier: ctx.supplier };
@@ -3344,15 +3346,30 @@ function automate(wsId, kind, ctx = {}) {
   const priv = !!(ctx.private || ctx.campaign?.private || (ctx.campaign?.parentId && db.campaigns[ctx.campaign.parentId]?.private) || ctx.project?.private);
   if (!priv && !ctx.ownersOnly) rememberEvent(wsId, kind, ctx);
   for (const x of Object.values(db.automations)) {
-    if (x.wsId !== wsId || !x.on || x.trigger.kind !== kind || !autoMatches(x.trigger, ctx)) continue;
+    if (x.wsId !== wsId || !x.on || x.trigger.kind !== kind) continue;
+    const cx = withJob(x, ctx);
+    if (!autoMatches(x.trigger, cx)) continue;
     if (ctx.ownersOnly && !isOwnerId(wsId, x.memberId)) continue;
     if (priv) {
-      const mine = (x.trigger.campaignId && x.trigger.campaignId === (ctx.campaign?.parentId || ctx.campaign?.id) && seesCampaign(x.trigger.campaignId, x.memberId))
-        || (x.trigger.projectId && x.trigger.projectId === ctx.project?.id && PJ.sees(ctx.project, x.memberId));
+      const mine = (x.trigger.campaignId && x.trigger.campaignId === (cx.campaign?.parentId || cx.campaign?.id) && seesCampaign(x.trigger.campaignId, x.memberId))
+        || (x.trigger.projectId && x.trigger.projectId === cx.project?.id && PJ.sees(cx.project, x.memberId));
       if (!mine) continue;
     }
-    runAutomation(x, ctx);
+    runAutomation(x, cx);
   }
+}
+// A task's or a campaign's event, for one automation: with its step ({step}), and with the job its campaign is for
+// ({record}, and the project and list a filter checks), only when this automation's maker can see that job. Done
+// for each automation, never once for the event, so a job never reaches someone who can't see it.
+function withJob(x, ctx) {
+  const t = ctx.task;
+  const goal = ctx.goal || (t?.goalId && db.goals[t.goalId]) || null;
+  const out = goal && !ctx.goal ? { ...ctx, goal } : ctx;
+  if (ctx.record) return out;
+  const id = t?.recordId || ctx.campaign?.recordId || (t && taskCamp(t)?.recordId);
+  const at = id && PJ.recordAt(id, x.wsId, x.memberId);
+  if (!at?.t) return out;
+  return { ...out, record: at.rec, project: at.p, list: at.t, recordName: String(at.rec.values[at.t.primary] ?? '') };
 }
 const typeOfP = (p, id) => p?.types.find((t) => t.id === id) || null;
 // Who did it, from the name a record's news carries: only when one person on the team has that name.
@@ -3384,7 +3401,7 @@ function openStepsUpTo(rec, f, to) {
   }
   return out;
 }
-function stageGate(rec, before, auth, override) {
+function stageGate(rec, before, auth, override, flow = null) {
   const p = db.projects[rec.projectId];
   const f = stageFieldOf(p && typeOfP(p, rec.typeId));
   if (!f) return null;
@@ -3403,10 +3420,28 @@ function stageGate(rec, before, auth, override) {
     return null;
   }
   const one = open.length === 1;
+  const lt = typeOfP(p, rec.typeId);
+  if (flow) PJ.recordActivity(rec.id, { kind: 'held', note: `Tried to move it to ${f.choices[to].label}: ${names} ${one ? 'isn’t' : 'aren’t'} done yet`, by: flow.name, auto: true });
+  automate(rec.wsId, 'record.held', { record: rec, project: p, list: lt, recordName: String(rec.values[lt.primary] ?? ''), stageLabel: f.choices[to].label, goal: open[0], campaign: db.campaigns[open[0].campaignId],
+    who: auth?.member || flow?.name || 'The API', whoId: auth?.memberId || null, private: !!p.private });
   return { status: 409, error: `${names} ${one ? 'isn’t' : 'aren’t'} done yet, so this can’t move to ${f.choices[to].label}. Finish ${one ? 'its' : 'their'} tasks first${auth && isAdmin(auth) ? ', or move it on anyway with a reason' : ''}.`, steps };
 }
 function jobSteps(wsId, by, byId) {
   let changed = false;
+  // Each step's finished-or-not, kept (g.finished), so "a step is finished" goes off once, when it becomes so. One
+  // pass over the team's steps and tasks. A step seen for the first time is only noted.
+  const camps = new Map(), tasksOf = new Map();
+  for (const g of Object.values(db.goals)) { const c = db.campaigns[g.campaignId]; if (c?.wsId === wsId) { if (!camps.has(c.id)) camps.set(c.id, []); camps.get(c.id).push(g); } }
+  for (const t of Object.values(db.tasks)) if (t.wsId === wsId && t.goalId) { if (!tasksOf.has(t.goalId)) tasksOf.set(t.goalId, []); tasksOf.get(t.goalId).push(t); }
+  for (const [cid, gs] of camps) for (const g of gs) {
+    const ts = tasksOf.get(g.id) || [];
+    const m = !!(g.skipped || (g.kind === 'count' ? goalMet(g) : (g.kind !== 'tasks' || ts.length > 0) && ts.every(stepDone)));
+    if (g.finished === undefined) { g.finished = m; changed = true; continue; }
+    if (g.finished === m) continue;
+    g.finished = m;
+    changed = true;
+    if (m) automate(wsId, 'step.done', { goal: g, campaign: db.campaigns[cid], who: by, whoId: byId });
+  }
   for (const c of Object.values(db.campaigns)) {
     if (c.wsId !== wsId || !c.recordId) continue;
     const rec = db.records[c.recordId];
@@ -3483,8 +3518,12 @@ function eventFromHook(wsId, type, d, by) {
   }
 }
 // path: where in the steps it went ("0", "1.then.0"…), so the builder can light up the way a run took.
-function autoLog(x, ok, note, path = null) {
-  x.runs = [{ at: Date.now(), ok, note: clipText(note || '', 1000), ...(path?.length ? { path: path.slice(0, 60) } : {}) }, ...(x.runs || [])].slice(0, 20);
+// runId: a run tried again is the same run; its note goes on (the latest end kept).
+function autoLog(x, ok, note, path = null, runId = null) {
+  const was = runId && (x.runs || []).find((y) => y.runId === runId);
+  if (was) note = was.note + ' · ' + note;
+  if (note && note.length > 1000) note = '…' + note.slice(-999);
+  x.runs = [{ at: Date.now(), ok, note: clipText(note || '', 1000), ...(path?.length ? { path: path.slice(0, 60) } : {}), ...(runId ? { runId } : {}) }, ...(x.runs || []).filter((y) => !runId || y.runId !== runId)].slice(0, 20);
   if (ok) x.count = (x.count || 0) + 1;
   broadcast(x.wsId, { type: 'automation', automation: publicAutomation(x), forAdmins: true });
 }
@@ -3494,17 +3533,38 @@ function runAutomation(x, ctx) {
   x.recent.push(Date.now());
   const did = [];
   did.path = [];
-  return FLOWING.run({ autoId: x.id }, async () => {
+  const runId = rid(12);
+  return FLOWING.run({ autoId: x.id, runId }, async () => {
     try {
       const r = await execSteps(x, ctx, [], 0, did);
       if (r.wait) waitFor(x, ctx, r.wait, did);
       autoLog(x, true, did.filter(Boolean).join(' · ') || 'nothing to do this time', did.path);
     } catch (e) {
-      autoLog(x, false, (did.length ? did.join(' · ') + ' · then ' : '') + e.message, did.path);
+      const again = retryLater(x, ctx, e, 0, runId);
+      autoLog(x, false, (did.length ? did.join(' · ') + ' · then ' : '') + e.message + again, did.path, again ? runId : null);
+      if (!again) autoStopped(x, e, 0);
     } finally {
       save();
     }
   });
+}
+// A step that failed on an outside call (another app down or slow to answer, its server's error) is tried again,
+// from that step: the ones before it already ran (a post, a text sent, money added) and aren't done twice. 1, 5,
+// then 30 minutes later; kept with the waiting runs, so it survives a restart. Anything else (a 400, a job held back,
+// its maker gone) isn't tried again. e.retry is set where the outside call is made.
+const RETRY_MS = [60_000, 5 * 60_000, 30 * 60_000];
+function retryLater(x, ctx, e, tries, runId) {
+  if (!e?.retry || !e.at || tries >= RETRY_MS.length) return '';
+  if (Object.values(db.flowWaits).filter((y) => y.wsId === x.wsId).length >= WAITS_TEAM) return '';
+  const ms = RETRY_MS[tries];
+  const y = { id: rid(), wsId: x.wsId, autoId: x.id, stack: e.at.stack, i: e.at.i, at: Date.now() + ms * FLOW_SCALE, startedAt: Date.now(), ctx: ctxSnap(ctx), about: autoAbout(ctx), retry: tries + 1, runId };
+  db.flowWaits[y.id] = y;
+  return ` · will try again in ${ms / 60_000} minute${ms === 60_000 ? '' : 's'}`;
+}
+// It stopped for good: its maker hears (once while unread, however many times it happens).
+function autoStopped(x, e, tries) {
+  if (Object.values(db.notices).some((n) => n.wsId === x.wsId && n.memberId === x.memberId && n.key === 'autofail:' + x.id && !n.read)) return;
+  notify(x.wsId, x.memberId, { title: x.name, text: `This automation stopped${tries ? ` after trying ${tries + 1} times` : ''}: ${clipText(String(e.message).replace(/[.\s]+$/, ''), 200)}. Its runs are in Workspace → Automations.`, go: 'auto:' + x.id, key: 'autofail:' + x.id });
 }
 // ---------- Flows, step 2: steps that decide and wait ----------
 // An automation's actions are its steps, and a step can also be "only if…" (with "otherwise") or "wait". Ifs read
@@ -3586,7 +3646,10 @@ async function execSteps(x, ctx, stack, i, log) {
       if (r.wait) return r;
       continue;
     }
-    const did = await autoAction(x, s, ctx);
+    const store = FLOWING.getStore();
+    if (store) store.step = stepAt(stack, i);
+    let did;
+    try { did = await autoAction(x, s, ctx); } catch (e) { e.at ??= { stack, i }; throw e; }
     if (did) log.push(did);
   }
   return {};
@@ -3603,14 +3666,14 @@ async function resumeSteps(x, ctx, stack, i, log) {
 // What a waiting run keeps: what it's about, by id, and the words as they were.
 const CTX_WORDS = ['answer', 'item', 'qty', 'unitName', 'place', 'supplier', 'who', 'whoId', 'from', 'stage', 'stageLabel', 'outcome', 'document', 'note', 'date', 'recordName', 'customer', 'amount', 'invoice', 'time', 'crew', 'phone', 'text', 'doc', 'pin', 'category', 'status', 'direction', 'private', 'ownersOnly'];
 function ctxSnap(ctx) {
-  const out = { ids: { task: ctx.task?.id, campaign: ctx.campaign?.id, contact: ctx.contact?.id || null, contactName: ctx.contact && !ctx.contact.id ? ctx.contact.name || '' : null, file: ctx.file?.id, project: ctx.project?.id, list: ctx.list?.id, record: ctx.record?.id } };
+  const out = { ids: { task: ctx.task?.id, goal: ctx.goal?.id, campaign: ctx.campaign?.id, contact: ctx.contact?.id || null, contactName: ctx.contact && !ctx.contact.id ? ctx.contact.name || '' : null, file: ctx.file?.id, project: ctx.project?.id, list: ctx.list?.id, record: ctx.record?.id } };
   for (const k of CTX_WORDS) if (ctx[k] !== undefined && ctx[k] !== null) out[k] = ctx[k];
   return JSON.parse(JSON.stringify(out));
 }
 function ctxBack(s) {
   const { ids = {}, ...words } = s;
   const p = ids.project && db.projects[ids.project];
-  return { ...words, task: ids.task ? db.tasks[ids.task] : undefined, campaign: ids.campaign ? db.campaigns[ids.campaign] : undefined,
+  return { ...words, task: ids.task ? db.tasks[ids.task] : undefined, goal: ids.goal ? db.goals[ids.goal] : undefined, campaign: ids.campaign ? db.campaigns[ids.campaign] : undefined,
     contact: ids.contact ? db.contacts[ids.contact] : ids.contactName != null ? { name: ids.contactName } : undefined,
     file: ids.file ? db.items[ids.file] : undefined, project: p || undefined, list: p && ids.list ? typeOfP(p, ids.list) || undefined : undefined,
     record: ids.record && db.records[ids.record]?.projectId === p?.id ? db.records[ids.record] : undefined };
@@ -3645,13 +3708,16 @@ function runWaits(now) {
     const log = [];
     log.path = [];
     if (w.agentRun) log.push(answered ? (ctx.answer ? 'Got the answer' : 'The agent finished with no answer') : 'The agent didn’t answer in 30 minutes; went on without it');
-    FLOWING.run({ autoId: x.id }, async () => {
+    const lead = w.retry ? `Tried again (${w.retry} of ${RETRY_MS.length}): ` : 'After waiting: ';
+    FLOWING.run({ autoId: x.id, runId: w.runId || rid(12) }, async () => {
       try {
         const r = await resumeSteps(x, ctx, w.stack, w.i, log);
         if (r.wait) waitFor(x, ctx, r.wait, log);
-        autoLog(x, true, 'After waiting: ' + (log.join(' · ') || 'nothing left to do'), log.path);
+        autoLog(x, true, lead + (log.join(' · ') || 'nothing left to do'), log.path, w.runId || null);
       } catch (e) {
-        autoLog(x, false, 'After waiting: ' + (log.length ? log.join(' · ') + ' · then ' : '') + e.message, log.path);
+        const again = w.retry ? retryLater(x, ctx, e, w.retry, w.runId) : '';
+        autoLog(x, false, lead + (log.length ? log.join(' · ') + ' · then ' : '') + e.message + again, log.path, w.runId || null);
+        if (!again) autoStopped(x, e, w.retry || 0);
       } finally {
         save();
       }
@@ -3810,7 +3876,7 @@ async function flowCall(x, method, p, body = {}) {
   if (!memberIn(ws.id, x.memberId)) throw new Error('its maker isn’t on the team any more');
   const r = await replayAs(ws, x.memberId, null, { method, path: p, body }, null, x);
   if (r.status === 202 && r.body?.pending) return { pending: true, body: r.body };
-  if (r.status >= 300) throw new Error(cleanText(r.body?.error, 200) || `it couldn’t be done (${r.status})`);
+  if (r.status >= 300) throw Object.assign(new Error(cleanText(r.body?.error, 200) || `it couldn’t be done (${r.status})`), { status: r.status, retry: r.status >= 500 });
   return { body: r.body };
 }
 // preview: the words that would go out (an email's subject and message, a text), shown with the OK so it's read first.
@@ -3897,11 +3963,11 @@ async function flowAction(x, a, ctx, ws) {
     let r;
     try {
       r = await safeFetch(a.url, { method: 'POST', allowLocal: process.env.ALLOW_LOCAL_WEBHOOKS === '1', httpsOnly: process.env.ALLOW_LOCAL_WEBHOOKS !== '1', timeout: 10_000, maxBytes: 16_000, truncate: true,
-        headers: { 'Content-Type': 'application/json', 'User-Agent': 'Kloomie-Automations/1', ...(sec ? { Authorization: 'Bearer ' + unseal(sec.sealed).v } : {}) }, body });
+        headers: { 'Content-Type': 'application/json', 'User-Agent': 'Kloomie-Automations/1', 'Idempotency-Key': idemKey(x), ...(sec ? { Authorization: 'Bearer ' + unseal(sec.sealed).v } : {}) }, body });
     } catch (e) {
-      throw new Error(`${new URL(a.url).host} couldn’t be reached (${e.code === 'BLOCKED' ? 'that address isn’t allowed' : clipText(e.message, 80)})`);
+      throw Object.assign(new Error(`${new URL(a.url).host} couldn’t be reached (${e.code === 'BLOCKED' ? 'that address isn’t allowed' : clipText(e.message, 80)})`), { retry: e.code !== 'BLOCKED' });
     }
-    if (r.status >= 300) throw new Error(`${new URL(a.url).host} said ${r.status}`);
+    if (r.status >= 300) throw Object.assign(new Error(`${new URL(a.url).host} said ${r.status}`), { retry: r.status >= 500 || r.status === 429 });
     return `Sent to ${new URL(a.url).host}`;
   }
   if (a.kind === 'stock') {
@@ -3918,6 +3984,8 @@ async function flowAction(x, a, ctx, ws) {
   }
 }
 
+// The same on every try of a run's step, so the app it goes to can tell a retry from a new one.
+const idemKey = (x) => { const s = FLOWING.getStore(); return `${x.id}.${s?.runId || rid(12)}.${s?.step ?? 0}`; };
 // The job that set an automation off, when its maker can still see it (a waiting run's ctx may not have one).
 const autoJob = (x, ctx) => { const id = ctx.record?.id; return id && PJ.recordAt(id, x.wsId, x.memberId) ? id : null; };
 async function autoAction(x, a, ctx) {
@@ -7487,7 +7555,7 @@ async function api(req, res, url) {
         signNews = { type: 'signoff', task: null, by: auth.member };
       } else if (body.done && !t.done) {
         next.doneBy = auth.member;
-        setImmediate(() => db.tasks[next.id]?.done && automate(ws.id, 'task.done', { task: next, campaign: taskCamp(next), who: auth.member, whoId: auth.memberId }));
+        setImmediate(() => db.tasks[next.id]?.done && automate(ws.id, 'task.done', { task: next, campaign: taskCamp(next), who: auth.member, whoId: auth.memberId, private: privateTask(next) }));
         setImmediate(() => db.tasks[next.id]?.done && hook(ws.id, 'task.done', () => API.apiTask(db.tasks[next.id]), auth.member));
         next.updatedAt = Date.now();
         if (next.signoff) next.approved = { by: auth.member, at: Date.now() };
@@ -7497,7 +7565,10 @@ async function api(req, res, url) {
         next.returned = { note: cleanText(body.sendBack, 500), by: auth.member, at: Date.now() };
         next.submitted = null;
         signNews = { type: 'returned', task: null, by: auth.member, note: next.returned.note };
-      } else if (body.done === false && t.done) next.approved = null;
+      } else if (body.done === false && t.done) {
+        next.approved = null;
+        setImmediate(() => db.tasks[next.id] && !db.tasks[next.id].done && automate(ws.id, 'task.reopened', { task: db.tasks[next.id], campaign: taskCamp(next), who: auth.member, whoId: auth.memberId, private: privateTask(next) }));
+      }
       // Who handed it over, so the new assignee can be told.
       if (next.assigneeId !== t.assigneeId || next.roleId !== t.roleId || next.castId !== t.castId) next.assignedBy = next.assigneeId || next.roleId || next.castId ? auth.memberId : null;
       db.tasks[t.id] = next;

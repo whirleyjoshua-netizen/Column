@@ -9,15 +9,19 @@ export const TOOLS = { tasks: 'Tasks', contacts: 'Contacts', campaigns: 'Campaig
 // project (and list), to (a record's stage it moved to), over (an amount at least this, in dollars), date (a
 // record's date field, and how many days before or after it).
 export const EVENTS = [
-  { type: 'task.created', tool: 'tasks', label: 'A task is made', words: ['task', 'campaign', 'who'], filters: ['campaign'] },
-  { type: 'task.done', tool: 'tasks', label: 'A task or step is done', words: ['task', 'campaign', 'who'], filters: ['campaign'] },
+  { type: 'task.created', tool: 'tasks', label: 'A task is made', words: ['task', 'step', 'campaign', 'record', 'who'], filters: ['campaign', 'project'] },
+  { type: 'task.done', tool: 'tasks', label: 'A task is done', words: ['task', 'step', 'campaign', 'record', 'who'], filters: ['campaign', 'project'] },
+  { type: 'task.reopened', tool: 'tasks', label: 'A task is reopened (ticked back to not done)', words: ['task', 'step', 'campaign', 'record', 'who'], filters: ['campaign', 'project'] },
   { type: 'contact.created', tool: 'contacts', label: 'A contact is added (by hand, a lead form, a card, a text…)', words: ['contact', 'stage', 'who'], filters: ['stage'] },
   { type: 'contact.stage', tool: 'contacts', label: 'A contact’s stage changes', words: ['contact', 'stage', 'who'], filters: ['stage'] },
   { type: 'attempt.logged', tool: 'campaigns', label: 'A call or email is logged', words: ['contact', 'outcome', 'note', 'campaign', 'who'], filters: ['campaign', 'outcome'] },
-  { type: 'campaign.done', tool: 'campaigns', label: 'A campaign is marked finished', words: ['campaign', 'who'], filters: ['campaign'] },
+  { type: 'campaign.started', tool: 'campaigns', label: 'A campaign is started (new, from a saved one, or for a job)', words: ['campaign', 'record', 'who'], filters: ['project'] },
+  { type: 'step.done', tool: 'campaigns', label: 'A step in a campaign is finished (its tasks done, or skipped)', words: ['step', 'campaign', 'record', 'who'], filters: ['campaign', 'project'] },
+  { type: 'campaign.done', tool: 'campaigns', label: 'A campaign is finished (by hand, or when all its steps are)', words: ['campaign', 'record', 'who'], filters: ['campaign', 'project'] },
   { type: 'campaign.checkin', tool: 'campaigns', label: 'Someone checks in on a campaign', words: ['campaign', 'note', 'who'], filters: ['campaign', 'statuses'] },
   { type: 'record.created', tool: 'projects', label: 'A job or record is added', words: ['record', 'project', 'list', 'who'], filters: ['project'] },
   { type: 'record.stage', tool: 'projects', label: 'A job or record moves to a stage', words: ['record', 'project', 'list', 'stage', 'from', 'who'], filters: ['project', 'to'] },
+  { type: 'record.held', tool: 'projects', label: 'A job is held back from a stage (a step for it isn’t done)', words: ['record', 'project', 'list', 'stage', 'step', 'who'], filters: ['project', 'to'] },
   { type: 'record.date', tool: 'projects', label: 'A date on a job or record comes up (days before, on or after it)', words: ['record', 'project', 'list', 'stage', 'date'], filters: ['project', 'date'] },
   { type: 'record.deleted', tool: 'projects', label: 'A job or record is deleted', words: ['record', 'project', 'list', 'who'], filters: ['project'] },
   { type: 'quote.accepted', tool: 'projects', label: 'A customer accepts a quote', words: ['record', 'project', 'customer', 'amount'], filters: ['project'] },

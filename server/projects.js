@@ -571,18 +571,19 @@ export function projectsModule({ onEvent = null, canSeeItem = () => true, seal =
     return f.mode === 'area' ? `${rows.length} area${rows.length === 1 ? '' : 's'}, ${Math.round(sq)} ${sqUnit}` : `${count} opening${count === 1 ? '' : 's'}`;
   }
   // Fields that changed between two sets of values, each logged.
-  function logChanges(ws, p, t, rec, before, by) {
+  // more: what goes on each line too ({ auto: true }: an automation's).
+  function logChanges(ws, p, t, rec, before, by, more = {}) {
     for (const f of t.fields) {
       if (f.type === 'autonumber') continue;
       const a = JSON.stringify(before[f.id] ?? null), b = JSON.stringify(rec.values[f.id] ?? null);
       if (a === b) continue;
       // A locked field: only that it changed, never what it was or is.
-      if (f.type === 'secret') { logTo(rec, { kind: 'change', field: f.name, from: '', to: rec.values[f.id] ? 'a new one (hidden)' : 'cleared', by }); continue; }
+      if (f.type === 'secret') { logTo(rec, { kind: 'change', field: f.name, from: '', to: rec.values[f.id] ? 'a new one (hidden)' : 'cleared', by, ...more }); continue; }
       const from = words(ws, p, f, before[f.id]), to = words(ws, p, f, rec.values[f.id]);
       // A move: each one kept (not merged with the last), with the spot, for where the item has been.
       const loc = f.type === 'location' && rec.values[f.id];
-      if (loc && (from !== to || loc.lat !== before[f.id]?.lat || loc.lng !== before[f.id]?.lng)) logTo(rec, { kind: 'move', field: f.name, from, to, by, ...(Number.isFinite(loc.lat) ? { lat: loc.lat, lng: loc.lng } : {}) });
-      else if (from !== to) logTo(rec, { kind: 'change', field: f.name, from, to, by });
+      if (loc && (from !== to || loc.lat !== before[f.id]?.lat || loc.lng !== before[f.id]?.lng)) logTo(rec, { kind: 'move', field: f.name, from, to, by, ...more, ...(Number.isFinite(loc.lat) ? { lat: loc.lat, lng: loc.lng } : {}) });
+      else if (from !== to) logTo(rec, { kind: 'change', field: f.name, from, to, by, ...more });
     }
   }
   // Activity from elsewhere: a call logged from a campaign's list, a task made or done.
@@ -2309,10 +2310,10 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
   function autoUpdate(ws, p, t, rec, values, who) {
     const before = { ...rec.values };
     applyValues(ws, p, t, rec, values, { addChoices: false });
-    const gate = stageGate?.(rec, before, null);
+    const gate = stageGate?.(rec, before, null, undefined, who);
     if (gate) { rec.values = before; throw Object.assign(new Error(gate.error), { status: gate.status }); }
     techAfter(ws, p, t, rec, before, { member: who.name, memberId: who.memberId });
-    logChanges(ws, p, t, rec, before, who.name);
+    logChanges(ws, p, t, rec, before, who.name, { auto: true });
     rec.updatedAt = Date.now();
     recordNews(rec, 'record.updated', who.name);
   }

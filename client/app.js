@@ -799,6 +799,7 @@
     if (kind === 'contact') return openContactById(id);
     if (kind === 'approval') return approvalSheet(id);
     if (kind === 'vault') return openTool('vault');
+    if (kind === 'auto') { openBarItem('automations'); return api('GET', '/automations').then((l) => { S.automations = l; renderAutos(); const x = l.find((y) => y.id === id); x ? autoSheet(x) : toast('That automation is gone.'); }).catch((e) => toast(e.message)); }
     if (kind === 'card') return openTool('cards');
     if (kind === 'asset') return openAsset(id);
     if (kind === 'agent') return AG.data ? agOpen('run:' + id) : (AG.view = 'run:' + id, openTool('agents'));
@@ -5263,7 +5264,7 @@
   // The fields an automation can set (the server checks the same): plain values, never price lines or files.
   const AUTO_SET_T = ['text', 'number', 'money', 'date', 'select', 'multi', 'checkbox', 'person', 'email', 'phone', 'url'];
   const AUTO_WORDS = {
-    'task.done': ['task', 'campaign', 'who'], 'file.received': ['file', 'from', 'campaign'], 'document.signed': ['document', 'from', 'campaign', 'who'],
+    'task.done': ['task', 'step', 'campaign', 'record', 'who'], 'file.received': ['file', 'from', 'campaign'], 'document.signed': ['document', 'from', 'campaign', 'who'],
     'contact.created': ['contact', 'stage', 'who'], 'contact.stage': ['contact', 'stage', 'who'], 'attempt.logged': ['contact', 'outcome', 'note', 'campaign', 'who'],
     'campaign.done': ['campaign', 'who'], 'campaign.checkin': ['campaign', 'note', 'who'], schedule: ['date'],
     'stock.low': ['item', 'qty', 'place', 'supplier', 'who'], 'stock.used': ['item', 'qty', 'place', 'record', 'who'], 'equipment.out': ['item', 'unit', 'record', 'who'], 'equipment.back': ['item', 'unit', 'place', 'note', 'who'], 'equipment.problem': ['item', 'unit', 'note', 'who'],
@@ -12327,11 +12328,13 @@
     }
     return PR.logs.get(r.id);
   }
-  const ACT_IC = { override: '⚑', created: '✦', change: '↻', call: '☏', email: '✉', meeting: '👥', note: '📝', task: '✓', quote: '🧾', sign: '✍️', move: '📍', reveal: '🔒' };
+  const ACT_IC = { held: '⏸', override: '⚑', created: '✦', change: '↻', call: '☏', email: '✉', meeting: '👥', note: '📝', task: '✓', quote: '🧾', sign: '✍️', move: '📍', reveal: '🔒' };
   function prLogLine(e) {
-    const who = h('b', {}, e.by || 'Someone');
+    // An automation's own lines say so (the owner, 2026-11-17: which action moved a job on, or was held back).
+    const who = e.auto ? h('b', { class: 'pj-tl-auto', title: 'An automation' }, `⚙ The automation “${e.by || 'Automation'}”`) : h('b', {}, e.by || 'Someone');
     const said = {
       created: [who, ' added this'],
+      held: [who, ' was held back'],
       override: [who, ' moved it on with work still open'],
       change: [who, ` changed ${e.field}: `, h('s', {}, e.from || 'empty'), ' → ', h('b', {}, e.to || 'empty')],
       move: [who, ' moved it', e.from ? [' from ', h('s', {}, e.from)] : null, ' to ', h('b', {}, e.to || 'a spot on the map')],
