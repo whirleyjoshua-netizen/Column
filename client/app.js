@@ -10564,30 +10564,68 @@
   // What to order: everything at or under its reorder point, by supplier, with how many to get (its reorder amount,
   // or enough to get back over the point twice), and for each supplier the order written out to copy, email or turn
   // into a task. Receiving it is one tap from each line.
-  const invSuggest = (x) => (x.reorderQty > 0 ? x.reorderQty : Math.max(1, Math.ceil(x.reorderAt * 2 - x.onHand)));
+  const invSuggest = (x) => Math.max(0, (x.reorderQty > 0 ? x.reorderQty : Math.max(1, Math.ceil(x.reorderAt * 2 - x.onHand))) - (x.onOrder || 0));
   function invOrderText(sup, list) {
     const team = S.workspace?.name || '';
     return `Hi${sup !== 'No supplier' ? ' ' + sup : ''},\n\nCould we order the following, please:\n\n${list.map((x) => `- ${invQty(invSuggest(x))} ${x.unit} ${x.name}${x.sku ? ' (' + x.sku + ')' : ''}`).join('\n')}\n\nThank you,\n${S.me?.member || ''}${team ? '\n' + team : ''}`;
   }
   function invReorderView(d, admin) {
+    const open = (d.orders || []).filter((o) => o.status === 'open');
+    const out = open.length ? [h('h3', { class: 'inv-sub' }, 'On order'), ...open.map((o) => invOrderBox(o, admin))] : [];
     const low = d.items.filter((x) => x.low);
-    if (!low.length) return [h('p', { class: 'day-hint' }, d.items.some((x) => x.reorderAt != null) ? 'Nothing is running low.' : 'Set a reorder point on items (Edit details) and they show here when they run low, grouped by who you buy them from.')];
+    if (!low.length) return [...out, h('p', { class: 'day-hint' }, d.items.some((x) => x.reorderAt != null) ? 'Nothing is running low.' : 'Set a reorder point on items (Edit details) and they show here when they run low, grouped by who you buy them from.')];
+    if (open.length) out.push(h('h3', { class: 'inv-sub' }, 'Running low'));
     const groups = new Map();
     for (const x of low) { const k = x.supplier || 'No supplier'; (groups.get(k) || groups.set(k, []).get(k)).push(x); }
-    return [...groups.entries()].sort(([a], [b]) => (a === 'No supplier') - (b === 'No supplier') || a.localeCompare(b)).map(([sup, list]) => {
-      const est = admin ? list.reduce((n, x) => n + (x.cost != null ? Math.round(invSuggest(x) * x.cost) : 0), 0) : 0;
-      const text = invOrderText(sup, list);
+    return [...out, ...[...groups.entries()].sort(([a], [b]) => (a === 'No supplier') - (b === 'No supplier') || a.localeCompare(b)).map(([sup, list]) => {
+      const need = list.filter((x) => invSuggest(x) > 0);
+      const est = admin ? need.reduce((n, x) => n + (x.cost != null ? Math.round(invSuggest(x) * x.cost) : 0), 0) : 0;
+      const text = invOrderText(sup, need);
       return h('div', { class: 'inv-order', 'data-supplier': sup },
         h('div', { class: 'inv-order-h' }, h('b', {}, sup), admin && est ? h('small', {}, `About ${invMoney(est)}`) : null),
         h('div', { class: 'inv-order-lines' }, list.map((x) => h('div', { class: 'inv-order-line', 'data-item': x.id },
-          h('span', {}, h('b', {}, x.name), h('small', {}, `${invQty(x.onHand)} ${x.unit} left · reorder at ${invQty(x.reorderAt)}`)),
-          h('span', { class: 'inv-order-qty' }, `Order ${invQty(invSuggest(x))}`),
-          admin && x.track !== 'units' ? h('button', { class: 'btn small inv-order-got', onclick: () => invMoveSheet(x, 'receive') }, 'Received') : null))),
-        h('div', { class: 'btns' },
+          h('span', {}, h('b', {}, x.name), h('small', {}, `${invQty(x.onHand)} ${x.unit} left · reorder at ${invQty(x.reorderAt)}${x.onOrder ? ` · ${invQty(x.onOrder)} on order` : ''}`)),
+          h('span', { class: 'inv-order-qty' }, invSuggest(x) > 0 ? `Order ${invQty(invSuggest(x))}` : 'On order'),
+          admin && x.track !== 'units' && !x.onOrder ? h('button', { class: 'btn small inv-order-got', onclick: () => invMoveSheet(x, 'receive') }, 'Received') : null))),
+        need.length ? h('div', { class: 'btns' },
+          admin && need.every((x) => x.track !== 'units') ? h('button', { class: 'btn small primary-btn inv-order-place', onclick: () => invPlaceSheet(sup, need) }, 'Place the order…') : null,
           h('button', { class: 'btn small inv-order-copy', onclick: async () => { try { await navigator.clipboard.writeText(text); toast('Order copied'); } catch { sheet('The order', [h('textarea', { rows: 10, readonly: true }, text)], null); } } }, 'Copy the order'),
           h('a', { class: 'btn small inv-order-email', href: `mailto:?subject=${encodeURIComponent('Order from ' + (S.workspace?.name || 'us'))}&body=${encodeURIComponent(text)}` }, 'Email it'),
-          h('button', { class: 'btn small inv-order-task', onclick: async () => { try { const t = await api('POST', '/tasks', { text: `Order from ${sup}: ${list.map((x) => `${invQty(invSuggest(x))} ${x.name}`).join(', ')}`.slice(0, 500) }); upsertTask?.(t); toast('Task made'); } catch (e) { toast(e.message); } } }, 'Make it a task')));
-    });
+          h('button', { class: 'btn small inv-order-task', onclick: async () => { try { const t = await api('POST', '/tasks', { text: `Order from ${sup}: ${need.map((x) => `${invQty(invSuggest(x))} ${x.name}`).join(', ')}`.slice(0, 500) }); upsertTask?.(t); toast('Task made'); } catch (e) { toast(e.message); } } }, 'Make it a task')) : null);
+    })];
+  }
+  // Placing an order: the suggested amounts, changeable, kept on the list until it comes in.
+  function invPlaceSheet(sup, list) {
+    const rows = list.map((x) => h('label', { class: 'inv-count-row', 'data-item': x.id }, h('span', {}, x.name, h('small', {}, ` · ${x.unit}`)), h('input', { type: 'number', min: 0, step: 'any', value: invSuggest(x), 'data-item': x.id, class: 'inv-p-qty' })));
+    const note = h('input', { class: 'inv-p-note', placeholder: 'PO number, or a note (optional)' });
+    sheet(`Order from ${sup}`, [h('div', { class: 'inv-count' }, rows), h('label', {}, 'Note', note), h('small', { class: 'hint' }, 'It stays under On order until it comes in. Receive it all at once, or as it arrives.')], async () => {
+      const lines = rows.map((r) => ({ itemId: r.dataset.item, qty: r.querySelector('input').value }));
+      const o = await api('POST', '/inventory/orders', { supplier: sup === 'No supplier' ? '' : sup, note: note.value, lines });
+      toast(`Order ${o.number} placed`);
+      await loadInventory();
+    }, 'Place the order');
+  }
+  function invOrderBox(o, admin) {
+    const est = admin ? o.lines.reduce((n, l) => n + (l.cost != null ? Math.round(l.qty * l.cost) : 0), 0) : 0;
+    return h('div', { class: 'inv-order inv-po', 'data-order': o.id },
+      h('div', { class: 'inv-order-h' }, h('b', {}, `Order ${o.number}${o.supplier ? ' · ' + o.supplier : ''}`), h('small', {}, [o.note, new Date(o.at).toLocaleDateString(), admin && est ? invMoney(est) : ''].filter(Boolean).join(' · '))),
+      h('div', { class: 'inv-order-lines' }, o.lines.map((l) => h('div', { class: 'inv-order-line', 'data-item': l.itemId },
+        h('span', {}, h('b', {}, l.name || 'An item'), h('small', {}, l.got ? `${invQty(l.got)} of ${invQty(l.qty)} in` : `${invQty(l.qty)} ${l.unit} ordered`)),
+        h('span', { class: 'inv-order-qty' }, l.got >= l.qty ? 'In' : `${invQty(l.qty - l.got)} to come`)))),
+      admin ? h('div', { class: 'btns' },
+        h('button', { class: 'btn small primary-btn inv-po-receive', onclick: () => invReceiveSheet(o) }, 'Receive…'),
+        h('button', { class: 'btn small inv-po-cancel', onclick: async () => { try { await api('POST', `/inventory/orders/${o.id}/cancel`, {}); toast(`Order ${o.number} cancelled`); await loadInventory(); } catch (e) { toast(e.message); } } }, 'Cancel the order')) : null);
+  }
+  // What came in: everything still to come filled in, changeable, into one place.
+  function invReceiveSheet(o) {
+    const d = INVS.data;
+    const place = h('select', { class: 'inv-r-place' }, d.places.map((p) => h('option', { value: p.id }, p.name)));
+    const rows = o.lines.filter((l) => l.got < l.qty).map((l) => h('label', { class: 'inv-count-row', 'data-item': l.itemId }, h('span', {}, l.name, h('small', {}, ` · ${invQty(l.qty - l.got)} to come`)), h('input', { type: 'number', min: 0, step: 'any', max: l.qty - l.got, value: l.qty - l.got, 'data-item': l.itemId, class: 'inv-r-qty' })));
+    sheet(`Receive order ${o.number}`, [h('label', {}, 'Into', place), h('div', { class: 'inv-count' }, rows), h('small', { class: 'hint' }, 'Change a number if only part of it came. The rest stays on order.')], async () => {
+      const r = await api('POST', `/inventory/orders/${o.id}/receive`, { placeId: place.value, lines: rows.map((x) => ({ itemId: x.dataset.item, qty: x.querySelector('input').value })) });
+      toast(r.status === 'received' ? `Order ${o.number} is in` : `Received part of order ${o.number}`);
+      await loadInventory();
+    }, 'Receive');
   }
   // A stock-take at one place: every counted item, its number filled in to change.
   function invCountSheet(placeId) {

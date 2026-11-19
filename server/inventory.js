@@ -27,6 +27,7 @@ export function inventoryModule({ db, save, broadcast, rid, cleanText, readJson,
   db.invPlaces ||= {};
   db.invMoves ||= {};
   db.invUnits ||= {};
+  db.invOrders ||= {};
   // Moves made in the same millisecond keep their order: each gets the next number.
   let seq = Object.values(db.invMoves).reduce((n, m) => Math.max(n, m.n || 0), 0);
   const newest = (p, q) => q.at - p.at || (q.n || 0) - (p.n || 0);
@@ -45,16 +46,70 @@ export function inventoryModule({ db, save, broadcast, rid, cleanText, readJson,
   const low = (x) => x.reorderAt != null && total(x) <= x.reorderAt;
   const err = (msg, status = 400) => Object.assign(new Error(msg), { status });
   const news = (wsId) => broadcast(wsId, { type: 'inventory' });
+  // How many of an item are on order: what's still to come on its open orders.
+  const onOrder = (itemId) => { let n = 0; for (const o of Object.values(db.invOrders)) if (o.status === 'open') for (const l of o.lines) if (l.itemId === itemId) n += l.qty - l.got; return Math.round(n * 1000) / 1000; };
 
   // What a person sees: costs, prices and value only for owners and admins.
   const publicItem = (x, admin) => {
     const { wsId, cost, price, ...rest } = x;
     const units = x.track === 'units' ? { stock: unitStock(x), units: unitCounts(x) } : {};
-    return { ...rest, track: x.track || 'stock', ...units, onHand: total(x), low: low(x), ...(admin ? { cost, price, value: x.cost != null ? Math.round(owned(x) * x.cost) : null } : {}) };
+    return { ...rest, track: x.track || 'stock', ...units, onHand: total(x), low: low(x), onOrder: x.track === 'units' ? 0 : onOrder(x.id), ...(admin ? { cost, price, value: x.cost != null ? Math.round(owned(x) * x.cost) : null } : {}) };
   };
   const publicUnit = ({ wsId, secret, ...u }) => ({ ...u, hasCombo: !!secret, url: u.tag ? labelUrl(u.tag) : null });
   const publicPlace = ({ wsId, ...x }) => x;
   const publicMove = ({ wsId, cost, ...x }, admin) => ({ ...x, ...(admin ? { cost } : {}) });
+  const publicOrder = ({ wsId, ...o }, admin) => ({ ...o, lines: o.lines.map((l) => ({ ...l, name: db.invItems[l.itemId]?.name || '', unit: db.invItems[l.itemId]?.unit || '', ...(admin ? {} : { cost: undefined }) })) });
+
+  // ---------- supplier orders: placed, received (all at once or as it comes), or cancelled ----------
+  // Each receive is a 'receive' move linked to the order (orderId), at the order's cost when it has one.
+  const ORDERS_KEEP = 300;
+  function placeOrder(ws, auth, b) {
+    if (!isAdmin(auth)) throw err('Only owners and admins place orders.', 403);
+    const lines = [];
+    for (const l of Array.isArray(b.lines) ? b.lines.slice(0, 200) : []) {
+      const x = l && db.invItems[l.itemId];
+      if (!x || x.wsId !== ws.id || x.archived) throw err('Something on the order is gone.', 404);
+      if (x.track === 'units') throw err(`${x.name} is tracked one by one: add each one when it comes in.`);
+      const n = qty(l.qty);
+      if (!n) continue;
+      if (!(n > 0 && n <= QTY_MAX)) throw err(`Enter how many ${x.name}.`);
+      const c = cents(l.cost);
+      if (c === undefined) throw err('A cost is a number of dollars, like 12.50.');
+      lines.push({ itemId: x.id, qty: n, got: 0, cost: c ?? x.cost ?? null });
+    }
+    if (!lines.length) throw err('Put something on the order.');
+    const job = b.jobId ? recordAt(String(b.jobId), ws.id, auth.memberId) : null;
+    const number = Object.values(db.invOrders).reduce((n, o) => (o.wsId === ws.id ? Math.max(n, o.number || 0) : n), 0) + 1;
+    const o = { id: rid(), wsId: ws.id, number, supplier: cleanText(b.supplier, 120) || '', note: cleanText(b.note, 300), status: 'open', lines, by: auth.member, byId: auth.memberId, at: Date.now(), jobId: job ? job.rec.id : null, ...(job && stepOf(ws, job.rec.id, b.goalId) ? { goalId: b.goalId } : {}) };
+    db.invOrders[o.id] = o;
+    const mine = Object.values(db.invOrders).filter((y) => y.wsId === ws.id && y.status !== 'open').sort((p, q) => p.at - q.at);
+    for (const y of mine.slice(0, Math.max(0, mine.length - ORDERS_KEEP))) delete db.invOrders[y.id];
+    save(); news(ws.id);
+    return o;
+  }
+  function receiveOrder(ws, auth, o, b) {
+    if (!isAdmin(auth)) throw err('Only owners and admins receive orders.', 403);
+    if (o.status !== 'open') throw err(o.status === 'cancelled' ? 'That order was cancelled.' : 'That order is already in.');
+    const place = placeOf(ws, b.placeId) || firstPlace(ws, auth.member);
+    const want = b.all ? o.lines.map((l) => ({ itemId: l.itemId, qty: l.qty - l.got })) : Array.isArray(b.lines) ? b.lines : [];
+    const plan = [];
+    for (const w of want) {
+      const l = o.lines.find((y) => y.itemId === w?.itemId);
+      const n = qty(w?.qty);
+      if (!l || !n) continue;
+      if (!(n > 0) || n > Math.round((l.qty - l.got) * 1000) / 1000) throw err(`Only ${Math.round((l.qty - l.got) * 1000) / 1000} of ${db.invItems[l.itemId]?.name || 'that'} are still to come.`);
+      plan.push([l, n]);
+    }
+    if (!plan.length) throw err('Say how many came in.');
+    for (const [l, n] of plan) {
+      const mv = move(ws, auth, { kind: 'receive', itemId: l.itemId, qty: n, to: place.id, cost: l.cost != null ? (l.cost / 100).toFixed(2) : undefined, note: `Order ${o.number}${o.supplier ? ' from ' + o.supplier : ''}` });
+      mv.orderId = o.id;
+      l.got = Math.round((l.got + n) * 1000) / 1000;
+    }
+    if (o.lines.every((l) => l.got >= l.qty)) Object.assign(o, { status: 'received', receivedAt: Date.now() });
+    save(); news(ws.id);
+    return o;
+  }
 
   function applyItem(x, b) {
     if (b.name !== undefined) x.name = cleanText(b.name, 120) || x.name || '';
@@ -282,7 +337,7 @@ export function inventoryModule({ db, save, broadcast, rid, cleanText, readJson,
     try {
       if (m === 'GET' && !b) {
         const items = itemsOf(ws.id).sort((p, q) => p.name.localeCompare(q.name));
-        return send(res, 200, { items: items.map((x) => publicItem(x, admin)), places: placesOf(ws.id).map(publicPlace), canManage: admin, low: items.filter(low).map((x) => x.id), movedIn: [...new Set(Object.values(db.invUnits).filter((u) => u.wsId === ws.id && u.fromRecord).map((u) => db.records[u.fromRecord]?.projectId).filter(Boolean))], value: admin ? items.reduce((n, x) => n + (x.cost != null ? Math.round(total(x) * x.cost) : 0), 0) : null });
+        return send(res, 200, { items: items.map((x) => publicItem(x, admin)), places: placesOf(ws.id).map(publicPlace), canManage: admin, low: items.filter(low).map((x) => x.id), orders: Object.values(db.invOrders).filter((o) => o.wsId === ws.id).sort((p, q) => (p.status === 'open') === (q.status === 'open') ? q.at - p.at : p.status === 'open' ? -1 : 1).slice(0, 60).map((o) => publicOrder(o, admin)), movedIn: [...new Set(Object.values(db.invUnits).filter((u) => u.wsId === ws.id && u.fromRecord).map((u) => db.records[u.fromRecord]?.projectId).filter(Boolean))], value: admin ? items.reduce((n, x) => n + (x.cost != null ? Math.round(total(x) * x.cost) : 0), 0) : null });
       }
       // A scanned label: the unit it's on (marked seen, by whom and when). Anyone else's label: not found.
       if (b === 'scan' && c && m === 'POST') {
@@ -462,6 +517,20 @@ export function inventoryModule({ db, save, broadcast, rid, cleanText, readJson,
           return send(res, 200, { ok: true });
         }
       }
+      if (b === 'orders') {
+        if (m === 'POST' && !c) return send(res, 200, publicOrder(placeOrder(ws, auth, await readJson(req, 100_000)), admin));
+        const o = c && db.invOrders[c];
+        if (!o || o.wsId !== ws.id) throw err('That order is gone.', 404);
+        const act = parts[3];
+        if (m === 'POST' && act === 'receive') return send(res, 200, publicOrder(receiveOrder(ws, auth, o, await readJson(req, 100_000)), admin));
+        if (m === 'POST' && act === 'cancel') {
+          if (!admin) throw err('Only owners and admins cancel orders.', 403);
+          if (o.status !== 'open') throw err('Only an open order can be cancelled.');
+          Object.assign(o, { status: 'cancelled', cancelledAt: Date.now(), cancelledBy: auth.member });
+          save(); news(ws.id);
+          return send(res, 200, publicOrder(o, admin));
+        }
+      }
       if (b === 'moves') {
         if (m === 'POST' && !c) return send(res, 200, publicMove(move(ws, auth, await readJson(req, 10_000)), admin));
         if (m === 'GET' && !c) {
@@ -478,5 +547,5 @@ export function inventoryModule({ db, save, broadcast, rid, cleanText, readJson,
     }
   }
 
-  return { route, move, itemsOf, placesOf, total, low, publicItem, unitAct, unitsOf, stockCost, jobView };
+  return { route, move, itemsOf, placesOf, total, low, publicItem, unitAct, unitsOf, stockCost, jobView, onOrder };
 }

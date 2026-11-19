@@ -3250,3 +3250,5 @@ body:not(.wide) .wl-row > .wl-stat:not([data-k=open]):not([data-k=overdue]):not(
 .inv-count { display: flex; flex-direction: column; gap: 2px; max-height: 50vh; overflow: auto; }
 .inv-count-row { display: grid !important; grid-template-columns: minmax(0, 1fr) 90px; align-items: center; gap: 8px; padding: 4px 0; border-bottom: 1px solid var(--line); color: var(--text) !important; font-size: 13px !important; }
 .inv-count-row small { color: var(--muted); }
+.inv-sub { font-size: 13px; font-weight: 600; color: var(--muted); margin: 10px 2px 6px; }
+.inv-po { border-color: var(--accent, var(--line)); }
