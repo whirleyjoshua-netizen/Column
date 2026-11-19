@@ -3712,7 +3712,10 @@ body:not(.wide) .app-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); ga
 .app-st.st-ready { color: #0e7490; }
 .app-st.st-soon i, .app-st.st-na i { background: none; border: 1.5px solid currentColor; }
 .app-detail { display: flex; flex-direction: column; gap: 16px; max-width: 840px; }
-.app-back { align-self: flex-start; }
+.app-bar { position: sticky; top: 0; z-index: 3; display: flex; align-items: center; gap: 12px; margin: -12px 0 0; padding: 12px 0; background: var(--bg); border-bottom: 1px solid var(--line); }
+.app-back, .app-back-end { font-size: 15px; font-weight: 600; padding: 8px 16px; }
+.app-bar-t { font-size: 15px; color: var(--muted); }
+.app-back-end { align-self: flex-start; margin-top: 8px; }
 .app-detail-top { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
 .app-detail-top .app-logo { width: 64px; height: 64px; border: 1px solid var(--line); background: var(--card); }
 .app-detail-top .app-logo.mono { border: 0; font-size: 26px; }

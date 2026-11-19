@@ -79,6 +79,25 @@ try {
   ok(await A.until(`!!document.querySelector('#apps .app-detail .ai-sec')`), 'Claude opens the AI keys');
   await A.ev(`document.querySelector('#apps .app-back').click(); true`);
 
+  // Back to the library (the owner, 2026-11-19: "there needs to be a back button"): a bar that names the app and stays
+  // on screen while you scroll, another at the bottom, Esc, and you land where you were in the list.
+  await A.until(`document.querySelectorAll('#apps .app-tile').length >= 60`);
+  await A.ev(`document.querySelector('#apps').scrollTop = 700; true`);
+  const listAt = await A.ev(`document.querySelector('#apps').scrollTop`);
+  await A.ev(`document.querySelector('#apps .app-tile[data-app=zapier]').click(); true`);
+  ok(await A.until(`!!document.querySelector('#apps .app-detail .int-sec')`), 'Zapier opens');
+  ok(await A.ev(`(() => { const b = document.querySelector('#apps .app-bar'); return !!b && b.querySelector('.app-back')?.textContent.includes('All apps') && b.textContent.includes('Zapier') && document.querySelector('#apps').scrollTop === 0; })()`), 'it opens at the top, with a back bar naming the app');
+  await A.ev(`(() => { const r = document.querySelector('#apps'); r.scrollTop = r.scrollHeight; return true; })()`);
+  await sleep(100);
+  ok(await A.ev(`(() => { const r = document.querySelector('#apps'), b = document.querySelector('#apps .app-bar .app-back')?.getBoundingClientRect(), t = r.getBoundingClientRect(); return !!b && r.scrollTop > 100 && b.top >= t.top - 1 && b.bottom <= t.top + 90; })()`), 'scrolled down, the back button is still on screen: ' + await A.ev(`document.querySelector('#apps').scrollTop`));
+  ok(await A.ev(`!!document.querySelector('#apps .app-back-end')`), 'and there’s another at the bottom');
+  await A.ev(`document.querySelector('#apps .app-back').click(); true`);
+  ok(await A.until(`!document.querySelector('#apps .app-detail') && Math.abs(document.querySelector('#apps').scrollTop - ${listAt}) < 5`), 'back lands where you were in the list: ' + await A.ev(`document.querySelector('#apps').scrollTop`) + ' vs ' + listAt);
+  await A.ev(`document.querySelector('#apps .app-tile[data-app=stripe]').click(); true`);
+  await A.until(`!!document.querySelector('#apps .app-detail')`);
+  await A.ev(`document.activeElement?.blur(); document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); true`);
+  ok(await A.until(`!document.querySelector('#apps .app-detail') && document.querySelectorAll('#apps .app-tile').length >= 60`), 'Esc goes back too');
+
   // Not built yet: says so, and points to Zapier.
   await A.ev(`document.querySelector('#apps .app-tile[data-app=slack]').click(); true`);
   ok(await A.until(`document.querySelector('#apps .app-detail')?.textContent.includes('isn’t built yet')`), 'Slack says Kloomie doesn’t connect to it yet');

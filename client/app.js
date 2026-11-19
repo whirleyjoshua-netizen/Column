@@ -9911,7 +9911,7 @@
   const APP_AT = { '.ai-sec': 'claude', '.ai': 'claude', '.cal-sec': 'google-calendar', '.qbo-sec': 'quickbooks', '.pay-sec': 'stripe', '.tw-sec': 'twilio', '.pz-sec': 'postiz', '.gc-sec': 'google-contacts', '.lead-sec': { tab: 'dev' }, '.int-sec': { tab: 'dev' }, '.tools-sec': { tab: 'tools' } };
   function appTile(a) {
     const st = appState(a);
-    return h('button', { class: 'app-tile', 'data-app': a.id, 'data-state': st, onclick: () => { APPS.open = a.id; renderApps(true); $('#apps').scrollTop = 0; } },
+    return h('button', { class: 'app-tile', 'data-app': a.id, 'data-state': st, onclick: () => { APPS.listTop = $('#apps').scrollTop; APPS.open = a.id; renderApps(true); $('#apps').scrollTop = 0; } },
       appLogo(a), h('b', { class: 'app-name' }, a.name), a.live ? h('span', { class: 'app-blurb' }, a.blurb) : null,
       h('span', { class: 'app-st st-' + st }, h('i'), APP_ST[st](a)));
   }
@@ -9941,9 +9941,22 @@
       [['all', 'All'], ...APP_CATS].map(([k, label]) => h('button', { class: APPS.cat === k ? 'on' : null, 'aria-pressed': String(APPS.cat === k), onclick: () => { APPS.cat = k; renderApps(true); } }, label)));
     return [chips, appsList()];
   }
+  // Back to the list of apps, where you were in it.
+  function appsBack() {
+    APPS.open = null;
+    renderApps(true);
+    $('#apps').scrollTop = APPS.listTop || 0;
+  }
+  // Esc on an app's page goes back too, unless something else has it (a pop-up, a box being typed in).
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape' || e.defaultPrevented || S.tab !== 'apps' || !APPS.open || APPS.tab !== 'apps') return;
+    if (e.target.closest?.('input, textarea, select, [contenteditable]') || !$('#sheet')?.classList.contains('hidden') || sideOpen()) return;
+    appsBack();
+  });
   function appDetail(a) {
     const st = appState(a);
-    const back = h('button', { class: 'btn app-back', onclick: () => { APPS.open = null; renderApps(true); } }, '‹ All apps');
+    // Back to the library: a bar that stays on screen while you scroll, and again at the bottom (the owner, 2026-11-19).
+    const back = h('div', { class: 'app-bar' }, h('button', { class: 'btn app-back', onclick: appsBack }, '‹ All apps'), h('span', { class: 'app-bar-t' }, a.name));
     const top = h('div', { class: 'app-detail-top' }, appLogo(a), h('div', { class: 'app-detail-t' }, h('h1', {}, a.name), h('p', {}, a.blurb)), h('span', { class: 'app-st st-' + st }, h('i'), APP_ST[st](a)));
     const does = h('div', { class: 'app-card' }, h('h2', {}, a.live ? 'What it does' : 'What it would do'), h('ul', { class: 'app-does' }, (a.does || APP_WOULD[a.cat]).map((x) => h('li', {}, x))));
     let main;
@@ -9960,7 +9973,8 @@
     } else {
       main = h('div', { class: 'app-card app-conn' }, ...a.sec());
     }
-    return h('div', { class: 'app-detail', 'data-app': a.id }, back, top, does, main);
+    return h('div', { class: 'app-detail', 'data-app': a.id }, back, top, does, main,
+      h('button', { class: 'btn app-back-end', onclick: appsBack }, '‹ Back to all apps'));
   }
   function toolsTiles() {
     const tools = S.workspace?.tools || {};
