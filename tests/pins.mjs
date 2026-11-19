@@ -93,7 +93,7 @@ ok(await A.until(pinHas('Smith kitchen shades')), 'the job is pinned');
 
 // Pin a feed from the chat side
 await A.click('#tabs [data-tab=tools]'); await A.until(`!!document.querySelector('#menu [data-tool=chat]')`); await A.click('#menu [data-tool=chat]');
-ok(await A.until(`!document.querySelector('#projects:not(.hidden)')`), 'Chat closes Jobs');
+ok(await A.until(`!!document.querySelector('#split #chat:not(.hidden)')`), 'Chat opens in the split (from Tools, 2026-11-20)');
 await A.ev(`[...document.querySelectorAll('.ch-row')].find((r) => r.textContent.includes('crew')).querySelector('.ch-more').click()`);
 ok(await menuPick('/Pin to Workspace/'), 'a feed’s menu has Pin to Workspace');
 ok(await (async () => { for (let i = 0; i < 40; i++) { if ((await pins()).length === 3) return true; await sleep(100); } return false; })(), 'three pins now: ' + (await pins()).join(', '));

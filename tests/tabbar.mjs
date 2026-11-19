@@ -54,8 +54,8 @@ const names = async () => (await tabs()).map((t) => t.replace('*', '')).join(','
 const strip = () => A.ev(`(() => { const s = document.querySelector('#workTabs'); return s && !s.hidden && getComputedStyle(s).display !== 'none' ? [...s.querySelectorAll('button[data-tab]')].map((b) => b.textContent + (b.classList.contains('on') ? '*' : '')).join(',') : ''; })()`);
 const menuItems = () => A.ev(`[...document.querySelectorAll('#menu button')].map((b) => b.textContent)`);
 
-// The same short toolbar for everyone (2026-11-14; Day moved into Workspace as Tasks 2026-11-15): Home, Chat, Agents, Workspace.
-ok(await names() === 'Home,Chat,Agents,Workspace', 'the toolbar is Home, Chat, Agents, Workspace: ' + await names());
+// The same short toolbar for everyone (2026-11-14; Day moved into Workspace as Tasks 2026-11-15; Chat into Tools 2026-11-20): Home, Agents, Workspace.
+ok(await names() === 'Home,Agents,Workspace', 'the toolbar is Home, Agents, Workspace (Chat is in Tools): ' + await names());
 ok(!(await A.ev(`!!document.querySelector('#tabs .tabs-edit')`)), 'pins are not in the sidebar any more (2026-11-16: they are in Workspace)');
 ok(!(await A.ev(`!!document.querySelector('#toolsBtn')`)), 'no All tools button: Tools is a tab in Workspace');
 ok(!(await A.ev(`!!document.querySelector('.bar #devices, .bar .devices')`)), 'no device tags in the header (2026-11-16: who’s online is in Settings → Account)');
