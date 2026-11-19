@@ -61,12 +61,14 @@ export function companycamModule({ db, save, broadcast, rid, cleanText, readJson
   async function syncProjects(ws, c) {
     const tok = unseal(c.token).t;
     for (let page = 1; page <= 10; page++) {
-      const list = await cc(tok, 'GET', `/projects?per_page=100&page=${page}&status=active`);
+      // A token CompanyCam stopped accepting (revoked, expired): the tile says to connect again.
+      const list = await cc(tok, 'GET', `/projects?per_page=100&page=${page}&status=active`).catch((e) => { if (e.auth) c.needsReconnect = true; throw e; });
       const arr = Array.isArray(list) ? list : [];
       for (const x of arr) upsertProject(ws, c, x);
       if (arr.length < 100) break;
     }
     c.error = null;
+    c.needsReconnect = false;
   }
 
   // ---------- photos ----------
@@ -108,7 +110,7 @@ export function companycamModule({ db, save, broadcast, rid, cleanText, readJson
     if (!isAdmin(auth)) return { connected: true };
     const projects = Object.entries(c.projects).map(([id, p]) => ({ id, name: p.name, address: p.address, recordId: p.recordId || null, how: p.how || null }));
     const waiting = projects.filter((p) => !p.recordId).slice(0, 200).map((p) => ({ ...p, candidates: matchJob(ws, c.projects[p.id]).candidates.map((j) => ({ id: j.id, name: j.name, address: j.address })) }));
-    return { jobs: jobsOf(ws).slice(0, 500).map((j) => ({ id: j.id, name: j.name, address: j.address })), connected: true, account: c.account, by: c.by, at: c.at, error: c.error || null, lastEventAt: c.lastEventAt || null, linked: projects.filter((p) => p.recordId).length, projects: projects.length, waiting, photos: Object.keys(db.ccPhotos).filter((k) => k.startsWith(ws.id + ':')).length };
+    return { jobs: jobsOf(ws).slice(0, 500).map((j) => ({ id: j.id, name: j.name, address: j.address })), connected: true, needsReconnect: !!c.needsReconnect, account: c.account, by: c.by, at: c.at, error: c.error || null, lastEventAt: c.lastEventAt || null, linked: projects.filter((p) => p.recordId).length, projects: projects.length, waiting, photos: Object.keys(db.ccPhotos).filter((k) => k.startsWith(ws.id + ':')).length };
   }
 
   // ---------- the app's routes: /api/companycam ----------
@@ -192,7 +194,7 @@ export function companycamModule({ db, save, broadcast, rid, cleanText, readJson
         broadcast(ws.id, { type: 'companycam', forAdmins: true });
       } else if (ev === 'photo.created') {
         // A photo on a project Kloomie hasn't heard of yet: learn the project first.
-        if (x.project_id && !c.projects[String(x.project_id)]) { const pr = await cc(unseal(c.token).t, 'GET', `/projects/${encodeURIComponent(x.project_id)}`).catch(() => null); if (pr) upsertProject(ws, c, pr); }
+        if (x.project_id && !c.projects[String(x.project_id)]) { const pr = await cc(unseal(c.token).t, 'GET', `/projects/${encodeURIComponent(x.project_id)}`).catch((e) => { if (e.auth) { c.needsReconnect = true; c.error = e.message; } return null; }); if (pr) upsertProject(ws, c, pr); }
         await takePhoto(ws, c, x);
       }
     } catch (e) {

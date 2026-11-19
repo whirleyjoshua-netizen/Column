@@ -11956,6 +11956,7 @@ const APPS_REG = integrationsModule({ db, save, send, readJson, rid, cleanText, 
   cal('gmail', 'Gmail', 'google', true);
   cal('outlook', 'Outlook & Microsoft 365', 'microsoft');
   cal('apple-calendar', 'Apple Calendar', 'apple');
+  APPS_REG.register({ id: 'companycam', name: 'CompanyCam', scope: 'team', auth: 'key', status: (ws) => { const c = db.companycam?.[ws.id]; return c && { account: c.account, by: c.by, byId: by(ws, c.by), lastSync: c.lastEventAt || null, error: c.error || null, needsReconnect: !!c.needsReconnect }; } });
   APPS_REG.register({ id: 'twilio', name: 'Twilio', scope: 'team', auth: 'key', status: (ws) => { const c = db.twilio?.[ws.id]; return c && { account: c.account, by: c.by, byId: by(ws, c.by), error: c.error || null }; } });
   const cloud = (id, name, k) => APPS_REG.register({ id, name, scope: 'person', auth: 'oauth', ready: true, configured: () => !!cloudPickers()[k], status: () => null });
   cloud('google-drive', 'Google Drive', 'google');

@@ -5626,6 +5626,10 @@
     'google-contacts': { shows: 'Everyone comes into Contacts.', r: ['New lead? Sales drafts a reply', 'Lead gone quiet? Follow up', APP_LOST] },
     leads: { shows: 'Leads land in Contacts as Leads, and on Home.', r: ['New lead? Sales drafts a reply', 'Lead gone quiet? Follow up'] },
     postiz: { shows: 'Posts the Marketing Manager drafts wait for your OK, then go out through Postiz.', r: ['Friday recap from your team', APP_LOST] },
+    companycam: { shows: 'Photos your crew takes land in the job’s Photos.', r: [
+      { name: 'Photo on a job? Tell the team', why: 'When a CompanyCam photo lands on a job, post it in #general', trigger: { kind: 'companycam.photo' }, actions: [{ kind: 'post', text: 'New photo on {record} from {who}', channelId: 'general' }] },
+      { name: 'New project with no job? Link it', why: 'When CompanyCam makes a project that matches no job, the office gets a task to link it', trigger: { kind: 'companycam.project' }, actions: [{ kind: 'if', when: [{ field: 'record', op: 'empty' }], then: [{ kind: 'task', text: 'Link the CompanyCam project “{text}” ({note}) to its job: Apps & Integrations → CompanyCam', assignee: '' }], else: [] }] },
+      APP_LOST] },
     github: { shows: 'Pushes, merges and releases show on Home (Code) and move work items on software boards.', r: [
       { name: 'Merged? Tell the team', why: 'When a pull request is merged, post it in #general', trigger: { kind: 'github.merged' }, actions: [{ kind: 'post', text: 'Merged in {repo}: {text} {url}', channelId: 'general' }] },
       { name: 'Released? Tell everyone', why: 'When a release is published, post it in #general', trigger: { kind: 'github.released' }, actions: [{ kind: 'post', text: '{repo} {version} is out: {text} {url}', channelId: 'general' }] },
@@ -15953,7 +15957,7 @@
       sec.append(...[
         h('p', {}, `✓ Connected to ${x.account}, by ${x.by}. ${x.linked} of ${plural(x.projects, 'project')} matched to jobs; ${plural(x.photos, 'photo')} brought in so far.`),
         h('p', { class: 'day-hint' }, 'New photos on a matched project go into that job’s Photos. Projects match jobs by street address; when it isn’t clear, pick the job below and its latest photos come in.'),
-        x.error ? h('p', { class: 'err' }, x.error) : null,
+        x.needsReconnect ? h('p', { class: 'err' }, 'CompanyCam stopped accepting the token. Make a new one in CompanyCam (Settings → Integrations → Access tokens), then Disconnect and connect again.') : x.error ? h('p', { class: 'err' }, x.error) : null,
         x.waiting.length ? h('h4', {}, `Waiting for a job · ${x.waiting.length}`) : null,
         x.waiting.length ? h('div', { class: 'cc-list' }, x.waiting.slice(0, 50).map(row)) : null,
         h('div', { class: 'btns' }, sync, off),

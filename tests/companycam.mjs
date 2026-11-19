@@ -25,11 +25,12 @@ const projects = [
 ];
 const photosOf = { 102: [1, 2].map((n) => ({ id: 5000 + n, project_id: 102, creator_name: 'Taylor', captured_at: 1795000000 + n, uris: [{ type: 'web', uri: `${CCB}/img/${5000 + n}.jpg`, url: `${CCB}/img/${5000 + n}.jpg` }] })) };
 const hooks = [], deleted = [];
+let revoked = false;
 const fake = http.createServer((req, res) => {
   let b = ''; req.on('data', (c) => (b += c)); req.on('end', () => {
     const j = (code, x) => { res.writeHead(code, { 'content-type': 'application/json' }); res.end(JSON.stringify(x)); };
     if (req.url.startsWith('/img/')) { res.writeHead(200, { 'content-type': 'image/jpeg' }); return res.end(JPEG); }
-    if (req.headers.authorization !== 'Bearer ' + TOKEN) return j(401, { errors: ['bad token'] });
+    if (req.headers.authorization !== 'Bearer ' + TOKEN || (revoked && req.method === 'GET')) return j(401, { errors: ['bad token'] });
     const u = new URL(req.url, CCB);
     if (u.pathname === '/v2/company') return j(200, { id: 9, name: 'Desert Shade Co' });
     if (u.pathname === '/v2/webhooks' && req.method === 'POST') { const x = JSON.parse(b); hooks.push(x); return j(201, { id: 77, ...x }); }
@@ -113,6 +114,13 @@ try {
   await deliver({ event_type: 'project.created', payload: { id: 104, name: 'Smith garage', address: { street_address_1: '12 Elm St', city: 'Mesa' } } });
   const st = (await ada('GET', '/companycam')).body;
   ok(st.projects === 4 && st.linked === 3, 'a new project at a job’s address is matched as it arrives');
+
+  // A token CompanyCam stops accepting: the tile (and the registry) say to connect again.
+  revoked = true;
+  r = await ada('POST', '/companycam/sync');
+  ok(r.body?.needsReconnect === true, 'a revoked token: the tile says to connect again');
+  revoked = false;
+  ok((await ada('POST', '/companycam/sync')).body?.needsReconnect === false, 'and a good one clears it');
 
   // Disconnecting.
   r = await ada('DELETE', '/companycam');
