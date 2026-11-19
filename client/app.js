@@ -813,6 +813,7 @@
     if (kind === 'approval') return approvalSheet(id);
     if (kind === 'vault') return openTool('vault');
     if (kind === 'mycard') return showMyCard();
+    if (kind === 'invreq') { INVS.view = 'requests'; INVS.req = id; openTool('inventory'); return loadInventory(); }
     if (kind === 'auto') { openBarItem('automations'); return api('GET', '/automations').then((l) => { S.automations = l; renderAutos(); const x = l.find((y) => y.id === id); x ? autoSheet(x) : toast('That automation is gone.'); }).catch((e) => toast(e.message)); }
     if (kind === 'card') return openTool('cards');
     if (kind === 'asset') return openAsset(id);
@@ -11059,17 +11060,19 @@
       h('div', { class: 'inv-bar' }, search,
         admin ? h('button', { class: 'btn small primary-btn inv-new', onclick: () => invItemForm(null) }, '+ Item') : null,
         admin && d.items.length ? h('button', { class: 'btn small inv-receive', onclick: () => invMoveSheet(null, 'receive') }, 'Receive stock') : null,
+        h('button', { class: 'btn small inv-ask' + (admin ? '' : ' primary-btn'), onclick: () => invRequestSheet() }, 'Request items'),
         h('button', { class: 'icon-btn inv-more', 'aria-label': 'More inventory options', html: I.more, onclick: (e) => openMenu(e.currentTarget, [
           ...(admin && d.places.length && d.items.some((x) => x.track !== 'units') ? [{ label: 'Count a place…', run: () => invCountSheet() }] : []),
           ...(d.items.length || d.places.length ? [{ label: 'Print QR labels…', run: () => invLabelPicker() }] : []),
           ...(admin ? [{ label: 'Import a spreadsheet…', run: () => invImport() }] : []),
           ...(d.items.length ? [{ label: 'Export a spreadsheet', run: () => invExport() }] : []),
         ]) })),
-      h('div', { class: 'seg seg-sm inv-views', role: 'tablist' }, [['items', 'Items'], ['reorder', d.low.length ? `Reorder (${d.low.length})` : 'Reorder'], ['places', 'Places'], ['activity', 'Activity']].map(([k, l]) => h('button', { class: INVS.view === k ? 'on' : null, 'data-view': k, role: 'tab', 'aria-selected': String(INVS.view === k), onclick: () => setView(k) }, l))),
+      h('div', { class: 'seg seg-sm inv-views', role: 'tablist' }, [['items', 'Items'], ['requests', invReqTab(d, admin)], ['reorder', d.low.length ? `Reorder (${d.low.length})` : 'Reorder'], ['places', 'Places'], ['activity', 'Activity']].map(([k, l]) => h('button', { class: INVS.view === k ? 'on' : null, 'data-view': k, role: 'tab', 'aria-selected': String(INVS.view === k), onclick: () => setView(k) }, l))),
     ];
     if (INVS.view === 'places') return [...out, ...invPlacesView(d, admin)];
     if (INVS.view === 'activity') return [...out, ...invActivityView(d)];
     if (INVS.view === 'reorder') return [...out, ...invReorderView(d, admin)];
+    if (INVS.view === 'requests') return [...out, ...invRequestsView(d, admin)];
     // Items: filtered by where, what kind, and low stock.
     const q = INVS.q.trim().toLowerCase();
     const cats = [...new Set(d.items.map((x) => x.category).filter(Boolean))].sort();
@@ -11140,7 +11143,7 @@
         admin && x.cost != null ? h('div', { class: 'inv-stat' }, h('b', {}, invMoney(x.value)), h('small', {}, `Value · ${invMoney(x.cost)} each`)) : null,
         admin && x.price != null ? h('div', { class: 'inv-stat' }, h('b', {}, invMoney(x.price)), h('small', {}, 'Price')) : null),
       h('div', { class: 'inv-ats' }, rows.length ? rows : h('p', { class: 'day-hint' }, 'None on hand.')),
-      h('div', { class: 'btns inv-item-acts' }, admin ? act('receive') : null, act('return'), h('button', { class: 'btn small inv-item-label', onclick: () => invPrintFor({ items: [x.id] }) }, 'Print QR label'), admin ? h('button', { class: 'btn small', onclick: () => invItemForm(x) }, 'Edit details') : null),
+      h('div', { class: 'btns inv-item-acts' }, admin ? act('receive') : null, act('return'), h('button', { class: 'btn small inv-item-ask', onclick: () => invRequestSheet(x) }, 'Request some'), h('button', { class: 'btn small inv-item-label', onclick: () => invPrintFor({ items: [x.id] }) }, 'Print QR label'), admin ? h('button', { class: 'btn small', onclick: () => invItemForm(x) }, 'Edit details') : null),
       x.notes ? h('p', { class: 'inv-notes' }, x.notes) : null,
       h('h3', { class: 'inv-h' }, 'History'),
       got.moves.length ? h('div', { class: 'inv-moves' }, got.moves.map((m) => invMoveLine(m, false))) : h('p', { class: 'day-hint' }, 'Nothing yet.'),
@@ -11183,6 +11186,126 @@
 
 
 
+
+  // ---------- asking for stock (2026-11-20) ----------
+  // Anyone asks: items in Inventory or not, how many, for a job and a day if they like. Owners and admins (or whoever
+  // they pick) hear it, and it can post in a feed they pick; they approve, decline, hand it out or order it.
+  const REQ_WORD = { open: 'Waiting', approved: 'Approved', declined: 'Declined', handed: 'Handed out', cancelled: 'Cancelled' };
+  const invReqOpen = (r) => r.status === 'open' || r.status === 'approved';
+  const invReqTab = (d, admin) => { const n = (d.requests || []).filter((r) => admin ? r.status === 'open' : invReqOpen(r)).length; return `${admin ? 'Requests' : 'My requests'}${n ? ` (${n})` : ''}`; };
+  function invRequestSheet(item) {
+    const d = INVS.data;
+    const stock = d.items;
+    const rows = [];
+    const box = h('div', { class: 'inv-req-lines' });
+    const addRow = (x) => {
+      const row = { pick: h('select', { class: 'inv-r-item', 'aria-label': 'What' }, h('option', { value: '' }, 'Something not in Inventory…'), stock.map((y) => h('option', { value: y.id, selected: x?.id === y.id }, `${y.name}${y.sku ? ' · ' + y.sku : ''}`))),
+        name: h('input', { class: 'inv-r-name', placeholder: 'What you need', maxlength: 120 }), qty: h('input', { type: 'number', min: 0, step: 'any', class: 'inv-r-qty', placeholder: 'How many', value: x ? 1 : '' }) };
+      if (!x && stock.length) row.pick.value = stock[0].id;
+      const shape = () => { row.name.hidden = !!row.pick.value; };
+      row.pick.addEventListener('change', shape);
+      shape();
+      row.el = h('div', { class: 'inv-req-line' }, row.pick, row.name, row.qty, h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Remove', html: I.close, onclick: () => { rows.splice(rows.indexOf(row), 1); row.el.remove(); } }));
+      rows.push(row);
+      box.append(row.el);
+    };
+    addRow(item);
+    const jobs = [];
+    for (const p of S.projects || []) if (!p.archived) for (const t of p.types) if (t.trade || t.key === 'jobs') for (const r of prRecs(p.id).filter((y) => y.typeId === t.id)) jobs.push([r.id, recName(t, r)]);
+    const job = h('select', { class: 'inv-r-job' }, h('option', { value: '' }, 'Not for a job'), jobs.map(([id, n]) => h('option', { value: id }, n)));
+    const needBy = h('input', { type: 'date', class: 'inv-r-by' });
+    const note = h('textarea', { rows: 2, class: 'inv-r-note', placeholder: 'Anything to know (optional)' });
+    sheet('Request items', [
+      h('p', { class: 'day-hint' }, d.canManage ? 'A request for you or your team to hand out or order.' : 'It goes to whoever looks after stock. You’ll hear when it’s approved and handed out.'),
+      box, h('button', { type: 'button', class: 'btn small inv-r-add', onclick: () => addRow(null) }, '+ Another item'),
+      h('div', { class: 'row2' }, h('label', {}, 'For a job', job), h('label', {}, 'Needed by', needBy)),
+      h('label', {}, 'Note', note),
+    ], async () => {
+      const lines = rows.map((r) => (r.pick.value ? { itemId: r.pick.value, qty: r.qty.value } : { name: r.name.value, qty: r.qty.value }));
+      const r = await api('POST', '/inventory/requests', { lines, jobId: job.value || null, needBy: needBy.value || null, note: note.value });
+      toast(`Request ${r.number} sent`);
+      INVS.view = 'requests'; store.set('invView', 'requests');
+      await loadInventory();
+    }, 'Send the request');
+  }
+  function invRequestsView(d, admin) {
+    const list = d.requests || [];
+    const lineText = (l) => `${invQty(l.qty)} ${l.unit} ${l.name}${l.itemId ? '' : ' (not in Inventory)'}`;
+    const card = (r) => h('div', { class: 'inv-order inv-req' + (INVS.req === r.id ? ' lit' : ''), 'data-req': r.id },
+      h('div', { class: 'inv-order-h' }, h('b', {}, `Request ${r.number}${admin ? ' · ' + r.by : ''}`), h('span', { class: 'pill inv-req-st st-' + r.status }, REQ_WORD[r.status] || r.status)),
+      h('div', { class: 'inv-order-lines' }, r.lines.map((l) => h('div', { class: 'inv-order-line' }, h('span', {}, h('b', {}, l.name), h('small', {}, lineText(l))),
+        l.itemId && admin ? h('small', { class: 'inv-order-qty' }, `${invQty(invItem(l.itemId)?.onHand ?? 0)} on hand`) : null))),
+      h('small', { class: 'day-hint' }, [ago(r.at), r.jobName && 'for ' + r.jobName, r.needBy && 'needed by ' + dueLabel(r.needBy), r.note && `“${r.note}”`].filter(Boolean).join(' · ')),
+      r.decidedBy ? h('small', { class: 'day-hint' }, `${REQ_WORD[r.status] === 'Declined' ? 'Declined' : 'Approved'} by ${r.decidedBy}${r.decision ? `: “${r.decision}”` : ''}`) : null,
+      r.handedBy ? h('small', { class: 'day-hint' }, `Handed out by ${r.handedBy}${r.from ? ' from ' + r.from : ''}${r.to ? ' onto ' + r.to : ''}`) : null,
+      h('div', { class: 'btns' },
+        admin && r.status === 'open' ? h('button', { class: 'btn small primary-btn inv-req-ok', onclick: () => invDecide(r, 'approved') }, 'Approve') : null,
+        admin && invReqOpen(r) && r.lines.some((l) => l.itemId && invItem(l.itemId)?.track !== 'units') ? h('button', { class: 'btn small inv-req-hand', onclick: () => invHandOut(r) }, 'Hand it out…') : null,
+        admin && invReqOpen(r) ? h('button', { class: 'btn small inv-req-order', onclick: () => invOrderFor(r) }, 'Order it…') : null,
+        admin && r.status === 'open' ? h('button', { class: 'btn small inv-req-no', onclick: () => invDecide(r, 'declined') }, 'Decline…') : null,
+        invReqOpen(r) && (!admin || r.byId === S.me?.memberId) ? h('button', { class: 'btn small inv-req-cancel', onclick: async () => { try { await api('POST', `/inventory/requests/${r.id}/cancel`, {}); toast('Cancelled'); await loadInventory(); } catch (e) { toast(e.message); } } }, 'Cancel it') : null));
+    const set = d.requestSettings;
+    const where = admin && set ? h('div', { class: 'inv-req-where' }, h('small', {}, 'Requests go to ' + (set.requestTo.length ? set.requestTo.map(memberName).join(', ') : 'owners and admins') + (set.requestFeed ? ` and #${channelById(set.requestFeed)?.name || 'a feed'}` : '')), h('button', { class: 'linkish inv-req-set', onclick: () => invRequestWhere() }, 'Change…')) : null;
+    const open = list.filter(invReqOpen), done = list.filter((r) => !invReqOpen(r));
+    return [where,
+      list.length ? null : h('p', { class: 'day-hint' }, admin ? 'Nothing asked for yet. When someone on the team needs stock, they tap Request items and it lands here.' : 'You haven’t asked for anything yet. Tap Request items for what you need.'),
+      ...open.map(card),
+      done.length ? h('details', { class: 'bill-paid' }, h('summary', {}, `Closed · ${done.length}`), done.map(card)) : null];
+  }
+  function invDecide(r, status) {
+    const note = h('input', { class: 'inv-req-why', placeholder: status === 'declined' ? 'Why (they’ll see it)' : 'A note for them (optional)', maxlength: 300 });
+    const go = async () => { const y = await api('POST', `/inventory/requests/${r.id}/decide`, { status, note: note.value }); toast(status === 'approved' ? `Request ${y.number} approved` : `Request ${y.number} declined`); await loadInventory(); };
+    if (status === 'approved') return go().catch((e) => toast(e.message));
+    sheet(`Decline request ${r.number}`, [h('p', { class: 'day-hint' }, `${r.by} hears it, with what you write.`), note], go, 'Decline');
+  }
+  // Hand it out: from a place, used (handed to them, on their job if it's for one) or moved onto a place of theirs.
+  function invHandOut(r) {
+    const d = INVS.data;
+    const first = r.lines.find((l) => l.itemId && invItem(l.itemId));
+    const best = first ? d.places.slice().sort((a, b) => (invItem(first.itemId).stock[b.id] || 0) - (invItem(first.itemId).stock[a.id] || 0))[0] : d.places[0];
+    const from = h('select', { class: 'inv-h-from' }, d.places.map((p) => h('option', { value: p.id, selected: p.id === best?.id }, p.name)));
+    const theirs = d.places.find((p) => p.memberId === r.byId);
+    const to = h('select', { class: 'inv-h-to' }, h('option', { value: '' }, `Hand it to ${r.by}${r.jobName ? ' (used on ' + r.jobName + ')' : ''}`), d.places.map((p) => h('option', { value: p.id, selected: p.id === theirs?.id }, `Onto ${p.name}`)));
+    const skipped = r.lines.filter((l) => !l.itemId || invItem(l.itemId)?.track === 'units');
+    sheet(`Hand out request ${r.number}`, [
+      h('label', {}, 'From', from), h('label', {}, 'To', to),
+      skipped.length ? h('small', { class: 'hint' }, `Not taken off the shelf here: ${skipped.map((l) => l.name).join(', ')} (${skipped.some((l) => !l.itemId) ? 'not in Inventory' : 'equipment is checked out one by one'}).`) : null,
+    ], async () => {
+      const y = await api('POST', `/inventory/requests/${r.id}/fulfill`, { placeId: from.value, to: to.value || null });
+      toast(`Request ${y.number} handed out`);
+      await loadInventory();
+    }, 'Hand it out');
+  }
+  // Order it: the supplier order with these items (the first supplier among them); what's not in Inventory is noted.
+  function invOrderFor(r) {
+    const items = r.lines.filter((l) => l.itemId && invItem(l.itemId) && invItem(l.itemId).track !== 'units').map((l) => ({ ...invItem(l.itemId), reorderQty: l.qty, onOrder: 0 }));
+    if (!items.length) return toast('None of it is in Inventory to order. Add the items first, or order it yourself.');
+    invPlaceSheet(items[0].supplier || 'No supplier', items, { label: `For request ${r.number} from ${r.by}` });
+  }
+  // Where requests go: who hears them (none ticked: owners and admins) and a feed to post them in.
+  function invRequestWhere() {
+    const d = INVS.data, set = d.requestSettings || { requestTo: [], requestFeed: null };
+    const picks = S.workspace.members.map((m) => { const cb = h('input', { type: 'checkbox', value: m.id }); cb.checked = set.requestTo.includes(m.id); return h('label', { class: 'pick' }, cb, `${m.name}${['owner', 'admin'].includes(m.role) ? ' · ' + m.role : ''}`); });
+    const feed = h('select', { class: 'inv-req-feed' }, h('option', { value: '' }, 'No feed: just tell them'), (S.workspace.channels || []).map((c) => h('option', { value: c.id, selected: c.id === set.requestFeed }, '#' + c.name)));
+    const make = h('button', { type: 'button', class: 'btn small inv-req-mkfeed', onclick: async () => {
+      try {
+        const admins = S.workspace.members.filter((m) => ['owner', 'admin'].includes(m.role) && m.id !== S.me?.memberId).map((m) => m.id);
+        const w = await wsCall('POST', '/channels', { name: 'inventory', memberIds: admins });
+        const ch = (w?.channels || S.workspace.channels || []).find((c) => c.name === 'inventory');
+        if (ch) { feed.append(h('option', { value: ch.id }, '#' + ch.name)); feed.value = ch.id; make.remove(); toast('#inventory made, just for owners and admins'); }
+      } catch (e) { toast(e.message); }
+    } }, 'Make a private #inventory feed for owners and admins');
+    sheet('Where requests go', [
+      h('p', { class: 'day-hint' }, 'Who hears a request (a notification on their phone and in the bell). None ticked: every owner and admin.'),
+      h('div', { class: 'picks' }, picks),
+      h('label', {}, 'Also post each one in', feed),
+      (S.workspace.channels || []).some((c) => c.name === 'inventory') ? null : make,
+    ], async () => {
+      await api('PATCH', '/inventory/settings', { requestTo: picks.map((l) => l.firstChild).filter((cb) => cb.checked).map((cb) => cb.value), requestFeed: feed.value || null });
+      toast('Saved');
+      await loadInventory();
+    });
+  }
   // ---------- reorder, counts, spreadsheets ----------
   // What to order: everything at or under its reorder point, by supplier, with how many to get (its reorder amount,
   // or enough to get back over the point twice), and for each supplier the order written out to copy, email or turn

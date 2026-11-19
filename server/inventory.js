@@ -24,12 +24,13 @@ const UNIT_STATUS = ['available', 'out', 'repair', 'lost', 'retired'];
 const UNITS_PER_ITEM = 2000, REVEALS_AN_HOUR = 30;
 const QTY_MAX = 1e7;
 
-export function inventoryModule({ db, save, broadcast, rid, cleanText, readJson, send, isAdmin, recordAt = () => null, taskOk = () => false, onMove = () => {}, onUnit = () => {}, seal = (x) => x, unseal = (x) => x, newTag = () => null, labelUrl = (t) => '/a/' + t, labelQr = () => null, projectFor = () => null }) {
+export function inventoryModule({ db, save, broadcast, rid, cleanText, readJson, send, isAdmin, recordAt = () => null, onRequest = () => {}, feedOk = () => false, memberOk = () => false, taskOk = () => false, onMove = () => {}, onUnit = () => {}, seal = (x) => x, unseal = (x) => x, newTag = () => null, labelUrl = (t) => '/a/' + t, labelQr = () => null, projectFor = () => null }) {
   db.invItems ||= {};
   db.invPlaces ||= {};
   db.invMoves ||= {};
   db.invUnits ||= {};
   db.invOrders ||= {};
+  db.invRequests ||= {};
   // Moves made in the same millisecond keep their order: each gets the next number.
   let seq = Object.values(db.invMoves).reduce((n, m) => Math.max(n, m.n || 0), 0);
   const newest = (p, q) => q.at - p.at || (q.n || 0) - (p.n || 0);
@@ -61,6 +62,60 @@ export function inventoryModule({ db, save, broadcast, rid, cleanText, readJson,
   const publicPlace = ({ wsId, ...x }) => x;
   const publicMove = ({ wsId, cost, ...x }, admin) => ({ ...x, ...(admin ? { cost } : {}) });
   const publicOrder = ({ wsId, ...o }, admin) => ({ ...o, lines: o.lines.map((l) => ({ ...l, name: db.invItems[l.itemId]?.name || '', unit: db.invItems[l.itemId]?.unit || '', ...(admin ? {} : { cost: undefined }) })) });
+
+  // ---------- asking for stock (2026-11-20): anyone asks; owners and admins decide, hand it out or order it ----------
+  // A line is an item in Inventory (itemId) or something that isn't (a name). Where requests go is the admin's pick
+  // (ws.settings.inventory: requestTo, people; requestFeed, a feed); onRequest tells them, and tells whoever asked.
+  const REQ_STATUS = ['open', 'approved', 'declined', 'handed', 'cancelled'];
+  const REQ_KEEP = 300;
+  const reqLine = (l) => { const x = l.itemId && db.invItems[l.itemId]; return { ...l, name: x ? x.name : l.name, unit: x ? x.unit : l.unit || 'each' }; };
+  const publicRequest = ({ wsId, ...r }) => ({ ...r, lines: r.lines.map(reqLine) });
+  const invSettings = (ws) => ({ requestTo: [], requestFeed: null, ...(ws.settings?.inventory || {}) });
+  function askFor(ws, auth, b) {
+    const lines = [];
+    for (const l of Array.isArray(b.lines) ? b.lines.slice(0, 50) : []) {
+      const n = qty(l?.qty);
+      if (!(n > 0 && n <= QTY_MAX)) continue;
+      if (l.itemId) {
+        const x = db.invItems[l.itemId];
+        if (!x || x.wsId !== ws.id || x.archived) throw err('Something on the request is gone.', 404);
+        lines.push({ itemId: x.id, qty: n });
+      } else {
+        const name = cleanText(l.name, 120);
+        if (name) lines.push({ itemId: null, name, unit: cleanText(l.unit, 20) || 'each', qty: n });
+      }
+    }
+    if (!lines.length) throw err('Say what you need, and how many.');
+    const job = b.jobId ? recordAt(String(b.jobId), ws.id, auth.memberId) : null;
+    const needBy = /^\d{4}-\d{2}-\d{2}$/.test(String(b.needBy || '')) ? b.needBy : null;
+    const number = Object.values(db.invRequests).reduce((n, r) => (r.wsId === ws.id ? Math.max(n, r.number || 0) : n), 0) + 1;
+    const r = { id: rid(), wsId: ws.id, number, by: auth.member, byId: auth.memberId, at: Date.now(), status: 'open', lines, note: cleanText(b.note, 500), jobId: job ? job.rec.id : null, jobName: job ? job.name || '' : '', needBy };
+    db.invRequests[r.id] = r;
+    const done = Object.values(db.invRequests).filter((y) => y.wsId === ws.id && !['open', 'approved'].includes(y.status)).sort((p, q) => p.at - q.at);
+    for (const y of done.slice(0, Math.max(0, done.length - REQ_KEEP))) delete db.invRequests[y.id];
+    save(); news(ws.id);
+    onRequest(ws, auth, r, 'new');
+    return r;
+  }
+  function handOut(ws, auth, r, b) {
+    if (!isAdmin(auth)) throw err('Only owners and admins hand out stock.', 403);
+    if (!['open', 'approved'].includes(r.status)) throw err(r.status === 'handed' ? 'That was handed out already.' : 'That request is closed.');
+    const from = placeOf(ws, b.placeId), to = b.to ? placeOf(ws, b.to) : null;
+    if (!from) throw err('Pick where it comes from.');
+    if (to && to.id === from.id) throw err('That’s the same place.');
+    const moves = [];
+    for (const l of r.lines) {
+      const x = l.itemId && db.invItems[l.itemId];
+      if (!x || x.archived || x.track === 'units') continue; // equipment goes out one by one (check it out); the rest isn't in Inventory
+      const m = move(ws, auth, { kind: to ? 'move' : 'use', itemId: x.id, qty: l.qty, from: from.id, to: to?.id, jobId: !to && r.jobId ? r.jobId : undefined, note: `Request ${r.number} for ${r.by}` });
+      m.requestId = r.id;
+      moves.push(m.id);
+    }
+    Object.assign(r, { status: 'handed', handedAt: Date.now(), handedBy: auth.member, moves, to: to ? to.name : null, from: from.name });
+    save(); news(ws.id);
+    onRequest(ws, auth, r, 'handed');
+    return r;
+  }
 
   // ---------- supplier orders: placed, received (all at once or as it comes), or cancelled ----------
   // Each receive is a 'receive' move linked to the order (orderId), at the order's cost when it has one.
@@ -339,7 +394,7 @@ export function inventoryModule({ db, save, broadcast, rid, cleanText, readJson,
     try {
       if (m === 'GET' && !b) {
         const items = itemsOf(ws.id).sort((p, q) => p.name.localeCompare(q.name));
-        return send(res, 200, { items: items.map((x) => publicItem(x, admin)), places: placesOf(ws.id).map(publicPlace), canManage: admin, low: items.filter(low).map((x) => x.id), orders: Object.values(db.invOrders).filter((o) => o.wsId === ws.id).sort((p, q) => (p.status === 'open') === (q.status === 'open') ? q.at - p.at : p.status === 'open' ? -1 : 1).slice(0, 60).map((o) => publicOrder(o, admin)), movedIn: [...new Set(Object.values(db.invUnits).filter((u) => u.wsId === ws.id && u.fromRecord).map((u) => db.records[u.fromRecord]?.projectId).filter(Boolean))], value: admin ? items.reduce((n, x) => n + (x.cost != null ? Math.round(total(x) * x.cost) : 0), 0) : null });
+        return send(res, 200, { items: items.map((x) => publicItem(x, admin)), places: placesOf(ws.id).map(publicPlace), canManage: admin, low: items.filter(low).map((x) => x.id), requests: Object.values(db.invRequests).filter((r) => r.wsId === ws.id && (admin || r.byId === auth.memberId)).sort((p, q) => (['open', 'approved'].includes(p.status) === ['open', 'approved'].includes(q.status) ? q.at - p.at : ['open', 'approved'].includes(p.status) ? -1 : 1)).slice(0, 80).map(publicRequest), ...(admin ? { requestSettings: invSettings(ws) } : {}), orders: Object.values(db.invOrders).filter((o) => o.wsId === ws.id).sort((p, q) => (p.status === 'open') === (q.status === 'open') ? q.at - p.at : p.status === 'open' ? -1 : 1).slice(0, 60).map((o) => publicOrder(o, admin)), movedIn: [...new Set(Object.values(db.invUnits).filter((u) => u.wsId === ws.id && u.fromRecord).map((u) => db.records[u.fromRecord]?.projectId).filter(Boolean))], value: admin ? items.reduce((n, x) => n + (x.cost != null ? Math.round(total(x) * x.cost) : 0), 0) : null });
       }
       // A scanned label: a unit (marked seen, by whom and when), an item or a place. Anyone else's label: not found.
       if (b === 'scan' && c && m === 'POST') {
@@ -539,6 +594,45 @@ export function inventoryModule({ db, save, broadcast, rid, cleanText, readJson,
           save(); news(ws.id);
           return send(res, 200, { ok: true });
         }
+      }
+      if (b === 'requests') {
+        if (m === 'POST' && !c) return send(res, 200, publicRequest(askFor(ws, auth, await readJson(req, 50_000))));
+        const r = c && db.invRequests[c];
+        // Someone else's request isn't there for a member (it's theirs, or owners' and admins').
+        if (!r || r.wsId !== ws.id || (!admin && r.byId !== auth.memberId)) throw err('That request is gone.', 404);
+        const act = parts[3];
+        const body = m === 'POST' ? await readJson(req, 10_000) : {};
+        if (m === 'POST' && act === 'decide') {
+          if (!admin) throw err('Only owners and admins decide requests.', 403);
+          if (r.status !== 'open') throw err('That request was decided already.');
+          if (!['approved', 'declined'].includes(body.status)) throw err('Approve it or decline it.');
+          Object.assign(r, { status: body.status, decidedBy: auth.member, decidedAt: Date.now(), decision: cleanText(body.note, 300) });
+          save(); news(ws.id);
+          onRequest(ws, auth, r, body.status);
+          return send(res, 200, publicRequest(r));
+        }
+        if (m === 'POST' && act === 'fulfill') return send(res, 200, publicRequest(handOut(ws, auth, r, body)));
+        if (m === 'POST' && act === 'cancel') {
+          if (!['open', 'approved'].includes(r.status)) throw err('That request is closed already.');
+          Object.assign(r, { status: 'cancelled', cancelledBy: auth.member, cancelledAt: Date.now() });
+          save(); news(ws.id);
+          if (r.byId !== auth.memberId) onRequest(ws, auth, r, 'cancelled');
+          return send(res, 200, publicRequest(r));
+        }
+      }
+      // Where requests go (owners and admins): the people who hear them (none picked: owners and admins), and a feed.
+      if (b === 'settings' && !c && m === 'PATCH') {
+        if (!admin) throw err('Only owners and admins choose where requests go.', 403);
+        const body = await readJson(req, 10_000);
+        const next = invSettings(ws);
+        if (body.requestTo !== undefined) next.requestTo = (Array.isArray(body.requestTo) ? body.requestTo : []).filter((id) => memberOk(ws, id)).slice(0, 50);
+        if (body.requestFeed !== undefined) {
+          if (body.requestFeed && !feedOk(ws, body.requestFeed)) throw err('That feed is gone.');
+          next.requestFeed = body.requestFeed || null;
+        }
+        ws.settings.inventory = next;
+        save(); news(ws.id);
+        return send(res, 200, next);
       }
       if (b === 'orders') {
         if (m === 'POST' && !c) return send(res, 200, publicOrder(placeOrder(ws, auth, await readJson(req, 100_000)), admin));

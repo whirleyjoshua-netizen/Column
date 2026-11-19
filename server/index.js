@@ -11688,7 +11688,26 @@ function invCtx(ws, x, m, more = {}) {
   return { item: x.name, qty: Math.abs(m.qty), place: db.invPlaces[m.from || m.to]?.name || '', supplier: x.supplier || '', who: m.by, whoId: m.byId, note: m.note,
     ...(rec && lt ? { record: rec, project: p, list: lt, recordName: String(rec.values[lt.primary] ?? ''), private: privateRecord(rec.id) } : {}), ...more };
 }
-const STOCK = inventoryModule({ db, save, broadcast, rid, cleanText, readJson, send, isAdmin,
+// Asking for stock (2026-11-20): who hears a request (the admin's pick, else owners and admins) and the feed it posts
+// in; whoever asked hears what happened to it.
+function invRequestNews(ws, auth, r, ev) {
+  const what = r.lines.map((l) => { const x = l.itemId && db.invItems[l.itemId]; return `${l.qty} ${x ? x.unit : l.unit || 'each'} ${x ? x.name : l.name}`; }).join(', ');
+  const go = 'invreq:' + r.id;
+  if (ev === 'new') {
+    const set = ws.settings.inventory || {};
+    const picked = (set.requestTo || []).filter((id) => memberIn(ws.id, id));
+    const to = (picked.length ? picked : ws.members.filter((m) => ADMIN_ROLES.includes(m.role)).map((m) => m.id)).filter((id) => id !== r.byId);
+    const more = [r.jobName && 'for ' + r.jobName, r.needBy && 'needed by ' + r.needBy, r.note && `“${r.note}”`].filter(Boolean).join(' · ');
+    for (const id of to) notify(ws.id, id, { title: `${r.by} asked for stock`, text: what + (more ? ' · ' + more : ''), go, kind: 'invreq' });
+    const ch = set.requestFeed && ws.channels.find((c) => c.id === set.requestFeed);
+    if (ch) addItem(baseItem({ ...auth, wsId: ws.id }, { type: 'message', text: `📦 Request ${r.number} from ${r.by}: ${what}${more ? '\n' + more : ''}\nOpen it in Inventory → Requests.`, channelId: ch.id }));
+    automate(ws.id, 'stock.requested', { request: r.number, items: what, who: r.by, whoId: r.byId, note: r.note || '', record: r.jobId ? db.records[r.jobId] || null : null });
+    return;
+  }
+  const said = { approved: `${auth.member} approved your request`, declined: `${auth.member} declined your request`, handed: r.to ? `Your stock is on ${r.to}` : `${auth.member} handed out your stock`, cancelled: `${auth.member} cancelled your request` }[ev];
+  if (said && r.byId !== auth.memberId) notify(ws.id, r.byId, { title: said, text: `Request ${r.number}: ${what}${r.decision ? ' · “' + r.decision + '”' : ''}${ev === 'handed' && r.from ? ` · from ${r.from}` : ''}`, go, kind: 'invreq' });
+}
+const STOCK = inventoryModule({ db, save, broadcast, rid, cleanText, readJson, send, isAdmin, onRequest: invRequestNews, feedOk: (ws, id) => ws.channels.some((c) => c.id === id), memberOk: (ws, id) => ws.members.some((m) => m.id === id),
   onMove: (ws, m, x, { wasLow, low }) => {
     if (m.jobId) stepsSoon(ws.id);
     if (!wasLow && low) automate(ws.id, 'stock.low', invCtx(ws, x, m, { qty: STOCK.total(x) }));

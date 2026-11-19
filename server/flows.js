@@ -38,6 +38,7 @@ export const EVENTS = [
   { type: 'text.received', tool: 'texts', label: 'A text comes in', words: ['contact', 'phone', 'text'], filters: [] },
   { type: 'doc.created', tool: 'docs', label: 'A doc is made', words: ['doc', 'who'], filters: [] },
   { type: 'pin.dropped', tool: 'map', label: 'A pin is dropped on the Map (a door knocked, a flyer left)', words: ['pin', 'note', 'campaign', 'who'], filters: ['campaign'] },
+  { type: 'stock.requested', tool: 'inventory', label: 'Someone asks for stock', words: ['items', 'who', 'note', 'request'], filters: [] },
   { type: 'stock.low', tool: 'inventory', label: 'An item runs low (at or under its reorder point)', words: ['item', 'qty', 'place', 'supplier', 'who'], filters: [] },
   { type: 'stock.used', tool: 'inventory', label: 'Stock is used on a job', words: ['item', 'qty', 'place', 'record', 'who'], filters: ['project'] },
   { type: 'equipment.out', tool: 'inventory', label: 'Equipment is checked out', words: ['item', 'unit', 'record', 'who'], filters: [] },
