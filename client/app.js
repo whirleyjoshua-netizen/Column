@@ -12675,7 +12675,7 @@
   // Contacts, Companies and Deals with a pipeline board. Records load when a project opens and stay in step
   // with everyone through the socket.
   const PR = { open: null, type: null, view: null, q: '', records: new Map(), panel: null, loading: null, newing: null };
-  const WP = { open: false, id: null, timer: null }; // the workspace profile sheet (profileSheet)
+  const WP = { open: false, id: null, timer: null, pick: null, made: null, proofs: [] }; // the workspace profile (profileSheet)
   // The New project page at full size (see pjNewPage): its saved templates, the trade families, and whether it's redrawing itself.
   const pjWide = () => document.body.classList.contains('wide');
   const PJN = { own: null, trades: null, redraw: false };
@@ -12823,6 +12823,8 @@
   }
   async function profileSheet() {
     WP.open = true;
+    WP.pick = null;
+    WP.made = null;
     sheetOrPage(S.workspace.name, [h('div', { class: 'wp' }, h('p', { class: 'day-hint' }, 'Loading…'))]);
     try {
       const y = await api('GET', '/profile');
@@ -12830,6 +12832,7 @@
       PR.records.set(y.project.id, y.records);
       WP.id = y.project.id;
       if (!S.automations && amAdmin()) S.automations = await api('GET', '/automations').catch(() => null);
+      WP.proofs = await api('GET', '/profile/proofs').catch(() => []);
     } catch (e) {
       $('#sheet .wp')?.replaceChildren(h('p', { class: 'err' }, e.message));
       return;
@@ -12860,8 +12863,15 @@
       if (n == null) return h('span', { class: 'wp-left' }, 'No expiry');
       return h('span', { class: 'wp-left ' + (n < 0 ? 'bad' : n <= 30 ? 'warn' : n <= 60 ? 'soon' : 'ok') }, n < 0 ? `Lapsed ${-n} day${n === -1 ? '' : 's'} ago` : n === 0 ? 'Expires today' : `${n} day${n === 1 ? '' : 's'} left`);
     };
-    const row = (r) => h('div', { class: 'wp-row', 'data-id': r.id },
-      h('div', { class: 'wp-main' }, cell(r, F.name, 'wp-name', 'Name it'), cell(r, F.kind, 'wp-kind', 'Kind'), cell(r, F.number, 'wp-num', 'Number')),
+    const tick = (r) => {
+      if (!WP.pick) return null;
+      const c = h('input', { type: 'checkbox', class: 'wp-tick', 'aria-label': 'Send this one' });
+      c.checked = WP.pick.has(r.id);
+      c.addEventListener('change', () => { c.checked ? WP.pick.add(r.id) : WP.pick.delete(r.id); pfDraw(); });
+      return c;
+    };
+    const row = (r) => h('div', { class: 'wp-row' + (WP.pick ? ' picking' + (WP.pick.has(r.id) ? ' on' : '') : ''), 'data-id': r.id },
+      h('div', { class: 'wp-main' }, tick(r), cell(r, F.name, 'wp-name', 'Name it'), cell(r, F.kind, 'wp-kind', 'Kind'), cell(r, F.number, 'wp-num', 'Number')),
       h('div', { class: 'wp-sub' }, cell(r, F.expires, 'wp-exp', 'Expires…'), left(r), cell(r, F.files, 'wp-files', '📎 Add a copy'),
         h('button', { class: 'btn small wp-more', onclick: () => { closeSheet(); openRecord(r.id); } }, 'All details')));
     // Adding one: its name, kind and expiry; copies go on with 📎 once it's in.
@@ -12882,15 +12892,18 @@
     const warned = (S.automations || []).some((x) => x.trigger?.kind === 'record.date' && x.trigger.projectId === p.id && x.trigger.typeId === t.id);
     const recipe = AUTO_RECIPES.find((x) => x.profile);
     const admin = amAdmin();
+    const proof = proofBar(p, t, F, recs);
     const biz = h('section', { class: 'wp-sec wp-biz' },
         b.logo ? h('img', { class: 'brand-logo', src: b.logo, alt: '' }) : h('span', { class: 'wp-logo' }, (S.workspace.name || '?').slice(0, 1).toUpperCase()),
         h('div', {}, h('b', {}, S.workspace.name), h('small', {}, `${S.workspace.members.length} ${S.workspace.members.length === 1 ? 'person' : 'people'}${b.mission ? ' · ' + shortText(b.mission, 90) : ''}`)),
         h('button', { class: 'btn small', onclick: () => { closeSheet(); openSettings('business'); } }, 'Business details'));
     const ins = h('section', { class: 'wp-sec wp-ins' },
-        h('h3', {}, '🪪 Insurance & licenses'),
-        h('p', { class: 'day-hint' }, 'Your licenses, insurance, bonds and certifications, with a copy of each, for the whole team. Upload the COI or license so it’s ready when a customer or GC asks.'),
+        h('div', { class: 'wp-h' }, h('h3', {}, '🪪 Insurance & licenses'),
+          recs.length && !WP.pick && !WP.made ? h('button', { class: 'btn small primary-btn wp-send', onclick: () => { const today = dayKey(new Date()); WP.pick = new Set(recs.filter((r) => !(F.expires && r.values[F.expires.id] && r.values[F.expires.id] < today)).map((r) => r.id)); pfDraw(); } }, '📤 Send proof') : null),
+        h('p', { class: 'day-hint' }, WP.pick ? 'Tick what to send. They get a page with these and a copy of each, nothing else.' : 'Your licenses, insurance, bonds and certifications, with a copy of each, for the whole team. Upload the COI or license so it’s ready when a customer or GC asks.'),
+        proof.top,
         recs.length ? h('div', { class: 'wp-list' }, recs.map(row)) : h('p', { class: 'wp-none' }, 'Nothing yet. Add your contractor license and insurance below.'),
-        h('div', { class: 'wp-add' }, nm, kind, exp, add),
+        WP.pick ? null : h('div', { class: 'wp-add' }, nm, kind, exp, add),
         warned ? h('p', { class: 'day-hint wp-warn-on' }, '🔔 The owners hear 30 days before anything here expires.')
           : admin && recipe ? h('button', { class: 'btn small wp-warn', onclick: () => { closeSheet(); autoSheet(null, { ...recipe, trigger: { ...recipe.trigger, projectId: p.id, typeId: t.id, fieldId: F.expires?.id } }); } }, '🔔 Warn the owners 30 days before something expires') : null);
     const rules = h('section', { class: 'wp-sec wp-rules' },
@@ -12902,8 +12915,53 @@
           toolOn('hq') ? h('button', { class: 'wp-link', onclick: () => { closeSheet(); openTool('hq'); } }, h('b', {}, 'Company rules & approvals'), h('small', {}, 'What needs an OK, in Company HQ')) : null)
           : h('p', { class: 'day-hint' }, 'Your team’s owners and admins set who sees what and the rules.'));
     // As a page: Insurance & licenses on the left, the business and its rules beside it. As a pop-up: one column.
-    if (box.closest('.page-view')) box.replaceChildren(h('div', { class: 'cb-grid wp-grid' }, h('div', { class: 'cb-main' }, ins), h('aside', { class: 'wp-aside' }, biz, rules)));
-    else box.replaceChildren(biz, ins, rules);
+    if (box.closest('.page-view')) box.replaceChildren(h('div', { class: 'cb-grid wp-grid' }, h('div', { class: 'cb-main' }, ins, proof.links), h('aside', { class: 'wp-aside' }, biz, rules)));
+    else box.replaceChildren(biz, ins, proof.links, rules);
+  }
+  // Send proof (step 2): pick the items, how long the link works and who it's for; then the link to copy, email or
+  // text. The link is shown once (Kloomie keeps only its hash). Below: the links sent, how often each was opened, and
+  // Turn off.
+  function proofBar(p, t, F, recs) {
+    let top = null;
+    if (WP.made) {
+      const x = WP.made;
+      const link = h('input', { class: 'wp-link-url', readonly: '', value: x.url, 'aria-label': 'Proof link' });
+      link.addEventListener('focus', () => link.select());
+      const say = `Here’s proof of our licenses and insurance (${x.names.join(', ')}): ${x.url}`;
+      const subject = `${S.workspace.name}: licenses & insurance`;
+      top = h('div', { class: 'wp-made' },
+        h('b', {}, '✓ Link ready'), h('small', {}, `Shows ${x.names.join(', ')}${x.expiresAt ? ` until ${new Date(x.expiresAt).toLocaleDateString()}` : ''}. Copy it now: it isn’t shown again (you can always make another).`),
+        link,
+        h('div', { class: 'wp-made-acts' },
+          h('button', { class: 'btn small primary-btn', onclick: async () => { try { await navigator.clipboard.writeText(x.url); toast('Link copied'); } catch { link.select(); toast('Press ⌘C to copy'); } } }, 'Copy link'),
+          h('a', { class: 'btn small', href: `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(say)}` }, 'Email'),
+          h('a', { class: 'btn small', href: `sms:?&body=${encodeURIComponent(say)}` }, 'Text'),
+          h('button', { class: 'btn small', onclick: () => { WP.made = null; pfDraw(); } }, 'Done')));
+    } else if (WP.pick) {
+      const days = h('select', { class: 'wp-days', 'aria-label': 'How long the link works' }, [[7, '7 days'], [30, '30 days'], [90, '90 days'], [0, 'Until I turn it off']].map(([v, l]) => h('option', { value: v, selected: v === 30 }, l)));
+      const to = h('input', { class: 'wp-to', placeholder: 'Who it’s for (optional), e.g. Desert Ridge GC', 'aria-label': 'Who it’s for' });
+      const make = h('button', { class: 'btn small primary-btn wp-make', disabled: !WP.pick.size }, WP.pick.size ? `Make link (${WP.pick.size})` : 'Tick at least one');
+      make.addEventListener('click', async () => {
+        make.disabled = true;
+        try {
+          WP.made = await api('POST', '/profile/proofs', { recordIds: [...WP.pick], days: Number(days.value), to: to.value });
+          WP.pick = null;
+          WP.proofs = [WP.made, ...WP.proofs.filter((y) => y.id !== WP.made.id)];
+          pfDraw();
+        } catch (e) { toast(e.message); make.disabled = false; }
+      });
+      top = h('div', { class: 'wp-pickbar' }, h('label', {}, 'Link works for', days), h('label', { class: 'wp-to-l' }, 'For', to),
+        h('div', { class: 'wp-made-acts' }, make, h('button', { class: 'btn small', onclick: () => { WP.pick = null; pfDraw(); } }, 'Cancel')));
+    }
+    const sent = (WP.proofs || []).filter((x) => x.live);
+    const off = async (x, b) => { b.disabled = true; try { const y = await api('DELETE', '/profile/proofs/' + x.id); WP.proofs = WP.proofs.map((z) => (z.id === y.id ? y : z)); pfDraw(); } catch (e) { toast(e.message); b.disabled = false; } };
+    const mayOff = (x) => x.memberId === S.me.memberId || amAdmin();
+    const links = sent.length ? h('section', { class: 'wp-sec wp-proofs' }, h('h3', {}, 'Proof links sent'),
+      h('div', { class: 'wp-list' }, sent.map((x) => h('div', { class: 'wp-proof', 'data-id': x.id },
+        h('div', {}, h('b', {}, x.to || x.names.join(', ') || 'Proof link'),
+          h('small', {}, [x.to ? x.names.join(', ') : '', `by ${x.by}`, x.views ? `opened ${plural(x.views, 'time')}` : 'not opened yet', x.expiresAt ? `until ${new Date(x.expiresAt).toLocaleDateString()}` : 'no end date'].filter(Boolean).join(' · '))),
+        mayOff(x) ? h('button', { class: 'btn small danger wp-off', onclick: (e) => off(x, e.currentTarget) }, 'Turn off') : null)))) : null;
+    return { top, links };
   }
   function projectsHome() {
     const all = boardsOnly().sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));

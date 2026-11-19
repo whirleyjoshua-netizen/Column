@@ -71,7 +71,7 @@ fs.mkdirSync(FILES_DIR, { recursive: true });
 // Everything lives in memory; save() hands the whole thing to the store a moment later.
 const IMPORT_PATH = path.join(DATA_DIR, 'import-pending.json');
 const store = await openStore({ url: process.env.DATABASE_URL, file: DB_PATH, importFile: IMPORT_PATH });
-let db = { workspaces: {}, tokens: {}, items: {}, entries: {}, tasks: {}, uploads: {}, campaigns: {}, goals: {}, attempts: {}, lists: {}, templates: {}, msgTemplates: {}, calendars: {}, ai: {}, pss: {}, sends: {}, bills: {}, meetings: {}, money: {}, budgets: {}, plans: {}, sidekick: {}, vaults: {}, vaultItems: {}, signs: {}, signatures: {}, trips: {}, pins: {}, zones: {}, comments: {}, users: {}, resets: {}, invites: {}, exports: {}, contacts: {}, optouts: {}, unsubs: {}, gcontacts: {}, automations: {}, notices: {}, calfeeds: {}, pushSubs: {}, keys: {}, mileage: {}, trash: {}, docTemplates: {}, flowWaits: {}, vaultDrops: {}, flowSecrets: {}, contactGroups: {} };
+let db = { workspaces: {}, tokens: {}, items: {}, entries: {}, tasks: {}, uploads: {}, campaigns: {}, goals: {}, attempts: {}, lists: {}, templates: {}, msgTemplates: {}, calendars: {}, ai: {}, pss: {}, sends: {}, bills: {}, meetings: {}, money: {}, budgets: {}, plans: {}, sidekick: {}, vaults: {}, vaultItems: {}, signs: {}, signatures: {}, trips: {}, pins: {}, zones: {}, comments: {}, users: {}, resets: {}, invites: {}, exports: {}, contacts: {}, optouts: {}, unsubs: {}, gcontacts: {}, automations: {}, notices: {}, calfeeds: {}, pushSubs: {}, keys: {}, mileage: {}, trash: {}, docTemplates: {}, flowWaits: {}, vaultDrops: {}, flowSecrets: {}, contactGroups: {}, proofs: {} };
 const loaded = await store.load();
 if (loaded.db) db = { ...db, ...loaded.db };
 if (loaded.fromFile) console.log(`Moving ${path.basename(loaded.fromFile)} into Postgres.`);
@@ -2095,6 +2095,97 @@ function fmtBytes(n) {
   let i = 0;
   while (n >= 1024 && i < u.length - 1) (n /= 1024), i++;
   return (i && n < 10 ? n.toFixed(1) : Math.round(n)) + ' ' + u[i];
+}
+
+// ---------- proof links: /proof/<token> shows a customer or GC the business's licenses & insurance ----------
+// Made from the workspace profile's Send proof, only when someone presses it (the owner, 2026-11-19): just the items
+// picked, read-only, with a copy of each. The token is kept as a hash and shown once, when the link is made. A link
+// expires (7, 30 or 90 days, or never) and can be turned off by whoever made it or an owner/admin. It always shows
+// the items as they are now: one taken out of the profile drops off; a renewed copy replaces the old one.
+// At most 50 live links a team, and 20 made an hour by one person.
+const PROOF_DAYS = [7, 30, 90, 0];
+const PROOF_LIVE = 50, PROOF_HOUR = 20;
+const proofHash = (t) => crypto.createHash('sha256').update(String(t)).digest('hex');
+const liveProof = (x) => !!x && !x.offAt && (!x.expiresAt || x.expiresAt > Date.now());
+function proofByToken(token) {
+  if (!/^[\w-]{20,64}$/.test(token || '')) return null;
+  const hash = proofHash(token);
+  const x = Object.values(db.proofs).find((y) => y.hash === hash);
+  return liveProof(x) && !offline(x.wsId) ? x : null;
+}
+// The profile's Insurance & licenses list (never made here: no profile, nothing to show).
+function proofList(wsId) {
+  const p = Object.values(db.projects).find((y) => y.wsId === wsId && PJ.isProfile(y));
+  const t = p && (p.types.find((y) => y.key === 'licenses') || p.types[0]);
+  return t ? { p, t, f: (k) => t.fields.find((x) => x.key === k) } : null;
+}
+// Each record still in the list, as plain words, with its copies (files of the team, ready to read).
+function proofItems(x) {
+  const L = proofList(x.wsId);
+  if (!L) return [];
+  return x.recordIds.map((id) => db.records[id]).filter((r) => r && r.projectId === L.p.id && r.typeId === L.t.id).map((r) => {
+    const v = (k) => (L.f(k) ? r.values[L.f(k).id] : undefined);
+    const kf = L.f('kind');
+    const files = (Array.isArray(v('files')) ? v('files') : []).map((id) => db.items[id]).filter((it) => it && it.wsId === x.wsId && it.type === 'file' && it.status === 'ready');
+    return { id: r.id, name: String(v('name') || PJ.recName(L.p, r) || 'Untitled'), kind: kf?.choices?.find((c) => c.id === v('kind'))?.label || '', number: v('number') ? String(v('number')) : '', expires: typeof v('expires') === 'string' ? v('expires') : null, files };
+  });
+}
+const publicProof = (x) => ({ id: x.id, by: x.by, memberId: x.memberId, createdAt: x.createdAt, expiresAt: x.expiresAt, offAt: x.offAt || null, live: liveProof(x), names: proofItems(x).map((i) => i.name), recordIds: x.recordIds, views: x.views || 0, lastAt: x.lastAt || null, to: x.to || '' });
+async function proofApi(req, res, ws, auth, id) {
+  const m = req.method;
+  if (m === 'GET' && !id) return send(res, 200, Object.values(db.proofs).filter((x) => x.wsId === ws.id).sort((a, b) => b.createdAt - a.createdAt).slice(0, 100).map(publicProof));
+  if (m === 'POST' && !id) {
+    const body = await readJson(req, 20_000);
+    const L = proofList(ws.id);
+    const ids = [...new Set((Array.isArray(body.recordIds) ? body.recordIds : []).map(String))].filter((r) => L && db.records[r]?.projectId === L.p.id && db.records[r].typeId === L.t.id).slice(0, 30);
+    if (!ids.length) return send(res, 400, { error: 'Pick at least one license or policy to send.' });
+    const now = Date.now();
+    const mine = Object.values(db.proofs).filter((x) => x.wsId === ws.id);
+    if (mine.filter(liveProof).length >= PROOF_LIVE) return send(res, 429, { error: `Your team has ${PROOF_LIVE} proof links on. Turn some off first.` });
+    if (mine.filter((x) => x.memberId === auth.memberId && x.createdAt > now - 3600_000).length >= PROOF_HOUR) return send(res, 429, { error: 'That’s a lot of proof links in an hour. Please wait a bit.' });
+    const days = PROOF_DAYS.includes(Number(body.days)) ? Number(body.days) : 30;
+    const token = crypto.randomBytes(24).toString('base64url');
+    const x = { id: rid(), wsId: ws.id, hash: proofHash(token), recordIds: ids, memberId: auth.memberId, by: auth.member, createdAt: now, expiresAt: days ? now + days * 864e5 : null, to: cleanText(body.to, 120), views: 0 };
+    db.proofs[x.id] = x;
+    save();
+    return send(res, 200, { ...publicProof(x), url: `${PUBLIC_URL}/proof/${token}` });
+  }
+  const x = id && db.proofs[id];
+  if (!x || x.wsId !== ws.id) return send(res, 404, { error: 'That link is gone.' });
+  if (m === 'DELETE') {
+    if (x.memberId !== auth.memberId && !isAdminId(ws.id, auth.memberId)) return send(res, 403, { error: 'Only whoever made the link and team admins can turn it off.' });
+    x.offAt ||= Date.now();
+    save();
+    return send(res, 200, publicProof(x));
+  }
+  return send(res, 405, { error: 'Method not allowed' });
+}
+const proofDay = (d) => new Date(d + 'T12:00:00Z').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
+function serveProof(req, res, url) {
+  const [, token, part, fid] = url.pathname.split('/').filter(Boolean);
+  for (const [k, v] of Object.entries({ 'X-Robots-Tag': 'noindex', 'Referrer-Policy': 'no-referrer', 'Cache-Control': 'no-store' })) res.setHeader(k, v);
+  const x = proofByToken(token);
+  if (!x) return sharePage(res, 404, '<h1>Link not available</h1><p>This proof link has expired or was turned off. Ask whoever sent it for a new one.</p>');
+  const ws = db.workspaces[x.wsId];
+  const items = proofItems(x);
+  // A copy: only one of the files on the items this link shows.
+  if (part === 'f') {
+    const it = items.flatMap((i) => i.files).find((f) => f.id === fid);
+    return it ? serveFile(req, res, path.join(FILES_DIR, it.id), { name: it.name, mime: it.mime, download: url.searchParams.has('dl'), cache: 'no-store' }) : sharePage(res, 404, '<h1>Not found</h1>');
+  }
+  if (part) return sharePage(res, 404, '<h1>Not found</h1>');
+  if (req.method === 'GET') { x.views = (x.views || 0) + 1; x.lastAt = Date.now(); save(); }
+  const today = new Date().toISOString().slice(0, 10);
+  const row = (i) => {
+    const gone = i.expires && i.expires < today;
+    const when = i.expires ? `<span class="${gone ? 'bad' : 'ok'}">${gone ? 'Expired' : 'Expires'} ${escHtml(proofDay(i.expires))}</span>` : '';
+    const copies = i.files.map((f) => `<a class="copy" href="/proof/${escHtml(token)}/f/${escHtml(f.id)}">📎 ${escHtml(f.name)}</a>`).join('');
+    return `<li><b>${escHtml(i.name)}</b>${i.kind ? `<small>${escHtml(i.kind)}</small>` : ''}<div class="meta">${i.number ? `<span>No. ${escHtml(i.number)}</span>` : ''}${when}</div>${copies ? `<div class="copies">${copies}</div>` : '<div class="meta"><span>No copy attached</span></div>'}</li>`;
+  };
+  const body = `<style>main{text-align:left}ul{list-style:none;padding:0;margin:14px 0 0;display:flex;flex-direction:column;gap:10px}li{border:1px solid #e6e6ec;border-radius:12px;padding:12px 14px}li small{display:block;color:var(--muted);font-size:12.5px}.meta{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:13px;color:var(--muted);margin-top:4px}.ok{color:#1f8a4c}.bad{color:#c62828;font-weight:600}.copies{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}.copy{font-size:13px;color:var(--accent);text-decoration:none;border:1px solid #e6e6ec;border-radius:8px;padding:4px 10px}h1,.sub{text-align:center}</style>
+<h1>${escHtml(ws.name)}</h1><p class="sub">Licenses &amp; insurance, sent by ${escHtml(x.by || ws.name)}${x.expiresAt ? ` · this link works until ${escHtml(proofDay(new Date(x.expiresAt).toISOString().slice(0, 10)))}` : ''}</p>
+${items.length ? `<ul>${items.map(row).join('')}</ul>` : '<p>Nothing to show here any more.</p>'}`;
+  return sharePage(res, 200, body, `${ws.name}: licenses & insurance`, { ...brandOf(ws), team: ws.name });
 }
 
 function serveShare(req, res, url) {
@@ -8125,6 +8216,7 @@ async function api(req, res, url) {
     const out = await APPS_REG.route(req, res, parts, auth, ws);
     if (out !== null) return out;
   }
+  if (a === 'profile' && b === 'proofs') return proofApi(req, res, ws, auth, c);
   if (a === 'projects' || a === 'records' || a === 'integrations' || a === 'project-templates' || a === 'profile') {
     const out = await PJ.route(req, res, parts, auth, ws);
     if (out !== null) return;
@@ -12170,6 +12262,7 @@ async function handleRequest(req, res) {
   if (url.pathname === '/import' && req.method === 'POST') return importData(req, res);
   if (url.pathname === '/stripe/webhook' && req.method === 'POST') return stripeWebhook(req, res).catch((e) => { alarm('A Stripe webhook failed', e); if (!res.headersSent) send(res, 500, 'Error'); });
   if (url.pathname.startsWith('/s/') && (req.method === 'GET' || req.method === 'HEAD')) return serveShare(req, res, url);
+  if (url.pathname.startsWith('/proof/') && (req.method === 'GET' || req.method === 'HEAD')) return serveProof(req, res, url);
   // A quote sent to a customer: they read it and accept or decline.
   if (url.pathname.startsWith('/q/') && (req.method === 'GET' || req.method === 'POST')) return PJ.quotePage(req, res, url);
   // Leads: the team's lead form page, and its lead webhook (leads.js).

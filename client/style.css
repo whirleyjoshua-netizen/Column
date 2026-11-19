@@ -3790,3 +3790,20 @@ body:not(.wide) .tool-grid { grid-template-columns: 1fr; }
 .bk-sec .srow small.ok { color: var(--ok, #15803d); }
 .bk-steps { margin: 0 0 10px 18px; padding: 0; display: grid; gap: 4px; }
 .bk-sec .bk-note { display: block; color: var(--muted); } .bk-sec .bk-share { margin-top: 4px; font-size: 13px; }
+/* Send proof: pick the items, the link once made, and the links sent. */
+.wp-h { display: flex; align-items: center; gap: 8px; justify-content: space-between; }
+.wp-h h3 { margin: 0; }
+.wp-row.picking { cursor: default; }
+.wp-row.picking.on { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.wp-tick { width: 16px; height: 16px; margin: 0 2px 0 0; accent-color: var(--accent); }
+.wp-pickbar, .wp-made { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: flex-end; border: 1px solid var(--accent); background: var(--accent-soft); border-radius: 10px; padding: 10px 12px; margin: 8px 0; }
+.wp-made { flex-direction: column; align-items: stretch; }
+.wp-made small { color: var(--muted); }
+.wp-pickbar label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--muted); }
+.wp-to-l { flex: 1 1 220px; }
+.wp-made-acts { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.wp-made-acts a.btn { text-decoration: none; }
+.wp-link-url { width: 100%; font-family: ui-monospace, monospace; font-size: 12px; }
+.wp-proof { display: flex; align-items: center; gap: 10px; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; background: var(--card); }
+.wp-proof > div { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.wp-proof small { color: var(--muted); }
