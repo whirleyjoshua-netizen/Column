@@ -567,6 +567,8 @@
       PR.visits.set(msg.recordId, msg.visits);
       teamSoon();
       if (PR.panel === msg.recordId) renderProjects();
+    } else if (msg.type === 'presets') {
+      if (SV.list) loadPresets();
     } else if (msg.type === 'task') {
       const was = taskById(msg.task.id);
       upsertTask(msg.task);
@@ -1802,6 +1804,7 @@
     const off = (name) => `${name} is switched off for this team.`;
     return [
       { cmd: 'task', also: ['day', 'todo'], hint: 'Add to your Day', arg: 'what to do', run: (t) => openSheet({ text: t, date: todayKey() }) },
+      { cmd: 'saved', also: ['preset', 'bundle'], hint: 'Make one of the team’s saved tasks or bundles', arg: 'name', run: (t) => pickPresetSheet(t) },
       { cmd: 'doc', hint: 'Start a doc here', arg: 'title', run: (t) => newDoc(destOf(view), { title: t }) },
       { cmd: 'vault', hint: 'Save to your vault, locked', arg: 'code, login, note…', on: toolOn('vault'), off: off('The vault'), keep: true, run: (t, clear) => vaultQuick({ text: t, onSaved: clear }) },
       { cmd: 'sealed', also: ['secret'], hint: 'Send a sealed note (opens with a code)', arg: 'the secret', run: (t) => { sealNote(destOf(view)); setTimeout(() => { const el = $('#sheet textarea'); if (el) el.value = t; }); } },
@@ -3497,8 +3500,14 @@
     D.scroll = h('div', { class: 'day-scroll' });
     // One switch for the view (this device remembers it). Week needs full size; Team is for owners and admins.
     D.seg = h('div', { class: 'seg day-sub day-modes' }, DAY_MODES.map(([v, l]) => h('button', { 'data-view': v, onclick: () => setDayMode(v) }, l)));
+    // Saved tasks and bundles: a shelf to drag from (or tap), shown when the person opens it (this device remembers).
+    D.svBtn = h('button', { class: 'btn small sv-toggle', 'aria-pressed': 'false', onclick: () => { SV.open = !SV.open; store.set('savedOpen', SV.open); renderShelf(); } }, '📋 Saved tasks');
+    D.shelf = h('div', { class: 'sv-shelf hidden' });
+    D.scroll.addEventListener('dragover', (ev) => { if (MO.drag?.preset) ev.preventDefault(); });
+    D.scroll.addEventListener('drop', (ev) => dropPreset(ev));
     root.append(
-      D.seg,
+      h('div', { class: 'day-top' }, D.seg, D.svBtn),
+      D.shelf,
       D.head = h('div', { class: 'day-head' },
         D.prevBtn = h('button', { class: 'icon-btn', 'aria-label': 'Previous day', html: I.left, onclick: () => goDay(dayStep(-1)) }),
         h('div', { class: 'day-title-wrap' }, D.title, pick),
@@ -3596,6 +3605,7 @@
     sendNext();
     if (S.tab === 'camps') renderCamps();
     if (!D.scroll) buildDay();
+    renderShelf();
     if (D.sub === 'team' && !canTeam()) D.sub = 'schedule';
     for (const b of D.seg.children) { b.classList.toggle('on', b.dataset.view === dayMode()); if (b.dataset.view === 'team') b.classList.toggle('hidden', !canTeam()); }
     D.head.classList.toggle('hidden', D.sub === 'tasks');
@@ -3741,6 +3751,7 @@
     const move = (d) => {
       const x = MO.drag;
       MO.drag = null;
+      if (x?.preset) return usePreset(x.preset, { date: d });
       if (!x || x.from === d) return;
       if (x.task) return patchTask(x.task, { due: d });
       patchEntry(x.entry, { date: d });
@@ -3769,13 +3780,150 @@
         ...list.slice(0, 3).map(chip),
         list.length > 3 ? h('button', { class: 'mo-more', onclick: (ev) => { ev.stopPropagation(); openDay(d); } }, `+${list.length - 3} more`) : null);
       cell.addEventListener('click', () => openSheet({ date: d }));
-      cell.addEventListener('dragover', (ev) => { if (!MO.drag) return; ev.preventDefault(); cell.classList.add('over'); });
+      cell.addEventListener('dragover', (ev) => { if (!MO.drag) return; ev.preventDefault(); ev.stopPropagation(); cell.classList.add('over'); });
       cell.addEventListener('dragleave', () => cell.classList.remove('over'));
-      cell.addEventListener('drop', (ev) => { ev.preventDefault(); cell.classList.remove('over'); move(d); });
+      cell.addEventListener('drop', (ev) => { ev.preventDefault(); ev.stopPropagation(); cell.classList.remove('over'); move(d); });
       return cell;
     });
     const names = Array.from({ length: 7 }, (_, i) => keyDate(addDays(start, i)).toLocaleDateString(undefined, { weekday: 'short' }));
     D.scroll.replaceChildren(h('div', { class: 'month' }, h('div', { class: 'mo-head' }, names.map((n) => h('div', {}, n))), h('div', { class: 'mo-grid', style: `--weeks:${days.length / 7}` }, cells)));
+  }
+
+  // ----- saved tasks and bundles (2026-11-19) -----
+  // A saved task is a task without its date; a bundle is saved tasks in order, each waiting for the one before. Drag
+  // one onto a day (Month, Week, Day), onto a person (Team) or the list, or tap it. Automations make them too.
+  const SV = { list: null, open: !!store.get('savedOpen'), loading: false };
+  async function loadPresets() {
+    SV.loading = true;
+    try { SV.list = (await api('GET', '/task-presets')).presets; } catch { SV.list ||= []; }
+    SV.loading = false;
+    renderShelf();
+  }
+  const presetById = (id) => (SV.list || []).find((x) => x.id === id);
+  const presetWho = (x) => (x.assigneeId ? memberName(x.assigneeId) : x.roleId && roleById(x.roleId) ? roleById(x.roleId).name : '');
+  const presetSub = (x) => x.kind === 'bundle' ? plural(x.steps.length, 'task') : [presetWho(x), x.dueIn != null ? (x.dueIn ? `due in ${plural(x.dueIn, 'day')}` : 'due that day') : ''].filter(Boolean).join(' · ');
+  async function usePreset(x, opts = {}) {
+    try {
+      const r = await api('POST', `/task-presets/${x.id}/use`, opts);
+      for (const t of r.tasks) upsertTask(t);
+      toast(r.tasks.length === 1 ? `Added “${shortText(r.tasks[0].text, 50)}”${r.tasks[0].due ? ' for ' + dayName(r.tasks[0].due) : ''}` : `Added ${r.tasks.length} tasks from “${shortText(x.name, 40)}”`);
+      renderDay();
+    } catch (e) { toast(e.message); }
+  }
+  // Dropped on the Tasks page outside a month day: a week's day, a person on Team, the day shown, or the list.
+  function dropPreset(ev) {
+    const x = MO.drag?.preset;
+    MO.drag = null;
+    if (!x) return;
+    ev.preventDefault();
+    const col = ev.target.closest?.('.wk-col[data-date]'), person = ev.target.closest?.('.wl-row[data-member]');
+    if (col) return usePreset(x, { date: col.dataset.date });
+    if (person) return usePreset(x, { assigneeId: person.dataset.member });
+    if (D.sub === 'schedule' && !monthOn() && !weekOn()) return usePreset(x, { date: D.date });
+    usePreset(x, {});
+  }
+  function renderShelf() {
+    if (!D.shelf) return;
+    D.svBtn.classList.toggle('on', SV.open);
+    D.svBtn.setAttribute('aria-pressed', String(SV.open));
+    D.shelf.classList.toggle('hidden', !SV.open);
+    if (!SV.open) return;
+    if (!SV.list) { if (!SV.loading) loadPresets(); D.shelf.replaceChildren(h('small', { class: 'day-hint' }, 'Loading…')); return; }
+    const chip = (x) => {
+      const b = h('button', { class: 'sv-chip' + (x.kind === 'bundle' ? ' bundle' : ''), draggable: 'true', 'data-preset': x.id, title: x.kind === 'bundle' ? x.steps.map((st) => presetById(st.presetId)?.text).filter(Boolean).join(' → ') : x.text, onclick: (ev) => presetMenu(ev.currentTarget, x) },
+        h('span', { class: 'sv-ic' }, x.kind === 'bundle' ? '🧩' : '☐'), h('b', {}, x.name), presetSub(x) ? h('small', {}, presetSub(x)) : null);
+      b.addEventListener('dragstart', (ev) => { MO.drag = { preset: x }; ev.dataTransfer.effectAllowed = 'copy'; ev.dataTransfer.setData('text/plain', x.name); document.body.classList.add('sv-dragging'); });
+      b.addEventListener('dragend', () => { setTimeout(() => { if (MO.drag?.preset) MO.drag = null; }); document.body.classList.remove('sv-dragging'); document.querySelectorAll('.mo-cell.over').forEach((c) => c.classList.remove('over')); });
+      return b;
+    };
+    const tasks = SV.list.filter((x) => x.kind === 'task'), bundles = SV.list.filter((x) => x.kind === 'bundle');
+    D.shelf.replaceChildren(
+      h('div', { class: 'sv-row' },
+        bundles.map(chip), tasks.map(chip),
+        !SV.list.length ? h('small', { class: 'day-hint sv-empty' }, 'Save tasks your team makes again and again, then drag them onto a day or a person.') : null,
+        h('button', { class: 'btn small sv-new', onclick: () => presetSheet(null, 'task') }, '+ Save a task'),
+        tasks.length ? h('button', { class: 'btn small sv-new-bundle', onclick: () => presetSheet(null, 'bundle') }, '+ Bundle') : null));
+  }
+  function presetMenu(anchor, x) {
+    const mine = x.memberId === S.me?.memberId || amAdmin();
+    openMenu(anchor, [
+      { label: 'Add for today', run: () => usePreset(x, { date: todayKey() }) },
+      { label: x.kind === 'bundle' ? 'Start on a day, for someone…' : 'On a day, for someone…', run: () => usePresetSheet(x) },
+      mine ? { label: 'Edit…', run: () => presetSheet(x, x.kind) } : null,
+    ].filter(Boolean));
+  }
+  function usePresetSheet(x) {
+    const date = h('input', { type: 'date', value: todayKey(), class: 'sv-date' });
+    const who = h('select', { class: 'sv-who' }, h('option', { value: '' }, x.kind === 'bundle' ? 'As each one is saved' : presetWho(x) ? `As saved (${presetWho(x)})` : 'Nobody in particular'), (S.workspace?.members || []).map((m) => h('option', { value: m.id }, memberName(m.id))));
+    sheet(x.name, [
+      x.kind === 'bundle' ? h('ol', { class: 'sv-steps-ro' }, x.steps.map((st, i) => h('li', {}, presetById(st.presetId)?.text || '(gone)', i ? h('small', {}, ` · ${st.after ? `due ${plural(st.after, 'day')} after the one before` : 'right after the one before'}`) : null))) : h('p', {}, x.text),
+      h('div', { class: 'row2' }, h('label', {}, x.kind === 'bundle' ? 'The first one is due' : 'Due', date), h('label', {}, 'For', who)),
+    ], () => usePreset(x, { date: date.value || null, assigneeId: who.value || null }), x.kind === 'bundle' ? `Add ${plural(x.steps.length, 'task')}` : 'Add it');
+  }
+  function pickPresetSheet(q = '') {
+    if (!SV.list) { loadPresets().then(() => pickPresetSheet(q)); return; }
+    const w = q.trim().toLowerCase();
+    const list = SV.list.filter((x) => !w || x.name.toLowerCase().includes(w) || (x.text || '').toLowerCase().includes(w));
+    sheet('Saved tasks', [
+      list.length ? h('div', { class: 'sv-pick' }, list.map((x) => h('button', { class: 'sv-chip' + (x.kind === 'bundle' ? ' bundle' : ''), onclick: () => { closeSheet(); usePresetSheet(x); } }, h('span', { class: 'sv-ic' }, x.kind === 'bundle' ? '🧩' : '☐'), h('b', {}, x.name), presetSub(x) ? h('small', {}, presetSub(x)) : null)))
+        : h('p', { class: 'day-hint' }, SV.list.length ? 'None match.' : 'None saved yet.'),
+      h('button', { class: 'btn small', onclick: () => presetSheet(null, 'task', { text: q }) }, '+ Save a task'),
+    ], null);
+  }
+  function presetSheet(x, kind = 'task', start = {}) {
+    const v = { name: '', text: '', assigneeId: null, roleId: null, dueIn: null, priority: 0, repeat: null, signoffId: null, steps: [], ...start, ...(x || {}) };
+    const mayEdit = !x || x.memberId === S.me?.memberId || amAdmin();
+    const name = h('input', { value: x ? v.name : '', placeholder: kind === 'bundle' ? 'New install' : 'Short name (optional)', class: 'sv-name' });
+    const del = x && mayEdit ? h('button', { class: 'btn small danger', 'data-label': '1' }, 'Delete') : null;
+    del?.addEventListener('click', () => confirmClick(del, async () => { try { await api('DELETE', '/task-presets/' + x.id); SV.list = SV.list.filter((y) => y.id !== x.id); closeSheet(); renderShelf(); } catch (e) { toast(e.message); } }));
+    const used = x && (x.used?.automations?.length || x.used?.bundles?.length) ? h('p', { class: 'day-hint sv-used' }, 'Used in ' + [x.used.automations.length ? plural(x.used.automations.length, 'automation') + ` (${x.used.automations.join(', ')})` : '', x.used.bundles.length ? plural(x.used.bundles.length, 'bundle') + ` (${x.used.bundles.join(', ')})` : ''].filter(Boolean).join(' and ') + '. Changing it changes what they make.') : null;
+    const done = (r) => { SV.list = [...(SV.list || []).filter((y) => y.id !== r.id), r].sort((p, q) => p.name.localeCompare(q.name)); if (!SV.open) { SV.open = true; store.set('savedOpen', true); } renderShelf(); toast(x ? 'Saved' : kind === 'bundle' ? 'Bundle saved' : 'Task saved'); };
+    if (kind === 'bundle') {
+      const tasks = (SV.list || []).filter((y) => y.kind === 'task');
+      const steps = v.steps.map((st) => ({ ...st }));
+      if (!steps.length && tasks[0]) steps.push({ presetId: tasks[0].id, after: 0 });
+      const box = h('div', { class: 'sv-steps' });
+      const draw = () => box.replaceChildren(...steps.map((st, i) => {
+        const sel = h('select', { class: 'sv-step-task', 'aria-label': `Task ${i + 1}` }, tasks.map((y) => h('option', { value: y.id, selected: y.id === st.presetId }, y.name)));
+        sel.addEventListener('change', () => { st.presetId = sel.value; });
+        const after = h('input', { type: 'number', min: '0', max: '365', value: String(st.after || 0), class: 'sv-step-after', 'aria-label': 'Days after the one before' });
+        after.addEventListener('input', () => { st.after = Number(after.value) || 0; });
+        return h('div', { class: 'sv-step' }, h('span', { class: 'sv-n' }, String(i + 1)), sel,
+          i ? h('label', { class: 'sv-after' }, 'due', after, 'days after #' + i + ' is done') : h('small', {}, 'first: due on the day you pick'),
+          h('button', { class: 'icon-btn', type: 'button', html: I.close, 'aria-label': 'Take it out', onclick: () => { steps.splice(i, 1); draw(); } }));
+      }), h('button', { class: 'btn small sv-add-step', type: 'button', onclick: () => { steps.push({ presetId: tasks[0]?.id, after: 1 }); draw(); } }, '+ Add a saved task'));
+      draw();
+      return sheet(x ? 'Edit bundle' : 'New bundle', [
+        h('label', {}, 'Name', name),
+        h('p', { class: 'day-hint' }, 'Saved tasks in order. Each one waits for the one before it.'),
+        tasks.length ? box : h('p', { class: 'day-hint' }, 'Save a task or two first.'),
+        used, x && !mayEdit ? h('p', { class: 'day-hint' }, 'Only whoever made it, or an owner or admin, can change it.') : null, del,
+      ], mayEdit ? async () => {
+        const out = { kind: 'bundle', name: name.value, steps: steps.filter((st) => st.presetId) };
+        done(x ? await api('PATCH', '/task-presets/' + x.id, out) : await api('POST', '/task-presets', out));
+      } : null, x ? 'Save' : 'Save bundle');
+    }
+    const text = h('textarea', { rows: 2, class: 'sv-text', placeholder: 'Order the materials for {the job}' });
+    text.value = v.text;
+    const who = h('select', { class: 'sv-who' }, h('option', { value: '' }, 'Nobody in particular'),
+      h('optgroup', { label: 'People' }, (S.workspace?.members || []).map((m) => h('option', { value: m.id, selected: v.assigneeId === m.id }, memberName(m.id)))),
+      (S.workspace?.roles || []).length ? h('optgroup', { label: 'Roles' }, S.workspace.roles.map((r) => h('option', { value: 'role:' + r.id, selected: v.roleId === r.id }, r.name))) : null);
+    const dueIn = h('input', { type: 'number', min: '0', max: '365', value: v.dueIn == null ? '' : String(v.dueIn), placeholder: 'no date', class: 'sv-due' });
+    const prio = h('select', { class: 'sv-prio' }, ['None', 'Low', 'Medium', 'High'].map((l, i) => h('option', { value: String(i), selected: (v.priority || 0) === i }, l)));
+    const rep = h('select', { class: 'sv-repeat' }, [['', 'Doesn’t repeat'], ['daily', 'Every day'], ['weekdays', 'Weekdays'], ['weekly', 'Every week'], ['monthly', 'Every month']].map(([k, l]) => h('option', { value: k, selected: (v.repeat || '') === k }, l)));
+    const sign = h('select', { class: 'sv-sign' }, h('option', { value: '' }, 'No sign-off'), (S.workspace?.members || []).map((m) => h('option', { value: m.id, selected: v.signoffId === m.id }, memberName(m.id))));
+    sheet(x ? 'Edit saved task' : 'Save a task', [
+      h('label', {}, 'The task', text),
+      h('label', {}, 'Name on the shelf', name),
+      h('div', { class: 'row2' }, h('label', {}, 'Usually for', who), h('label', {}, 'Due how many days after it’s made', dueIn)),
+      h('div', { class: 'row2' }, h('label', {}, 'Priority', prio), h('label', {}, 'Repeat', rep)),
+      h('label', {}, 'Signed off by', sign),
+      used, x && !mayEdit ? h('p', { class: 'day-hint' }, 'Only whoever made it, or an owner or admin, can change it.') : null, del,
+    ], mayEdit ? async () => {
+      const w = who.value;
+      const out = { kind: 'task', text: text.value, name: name.value, assigneeId: w && !w.startsWith('role:') ? w : null, roleId: w.startsWith('role:') ? w.slice(5) : null, dueIn: dueIn.value === '' ? null : Number(dueIn.value), priority: Number(prio.value), repeat: rep.value || null, signoffId: sign.value || null };
+      done(x ? await api('PATCH', '/task-presets/' + x.id, out) : await api('POST', '/task-presets', out));
+    } : null, x ? 'Save' : 'Save task');
   }
 
   // ----- the week (full size): seven days side by side on one timeline, Sunday first -----
@@ -4167,6 +4315,7 @@
       ...stepRows(g && campById(g.campaignId), t, !!taskWaitsOn(t), (ch) => patchTask(t, ch)),
       ...(t.done ? [] : [{ label: '✦ Get help with it…', run: () => toolsMenu(anchor, t) }]),
       { label: 'Write a doc for it…', run: () => docForTask(anchor, t) },
+      { label: 'Save as a saved task…', run: () => presetSheet(null, 'task', { text: t.text, assigneeId: t.assigneeId || null, roleId: t.roleId || null, priority: t.priority || 0, repeat: t.repeat || null, signoffId: t.signoff?.memberId || null }) },
       ...(toolOn('inventory') && !t.done ? [{ label: 'Use stock for it…', run: () => invForTask(t) }] : []),
       { label: 'Share to chat…', run: () => shareMenu(anchor, linkToken('task', t.id)) },
       { label: 'Delete task', danger: true, run: async () => {
@@ -5393,7 +5542,8 @@
       return h('div', { class: 'auto-row' + (x.on ? '' : ' off') + (autoFailing(x) ? ' failing' : '') },
         h('button', { class: 'auto-main', onclick: () => autoSheet(x) }, h('b', {}, x.name), h('small', {}, autoSummary(x)),
           h('small', { class: last && !last.ok ? 'err' : 'muted' }, last ? `${last.ok ? 'Ran' : 'Didn’t run'} ${ago(last.at)} · ${last.note}` : 'Hasn’t run yet', x.count ? ` · ${plural(x.count, 'run')} in all` : ''),
-          x.waiting ? h('small', { class: 'auto-waiting' }, `⏳ ${plural(x.waiting, 'run')} waiting`) : null),
+          x.waiting ? h('small', { class: 'auto-waiting' }, `⏳ ${plural(x.waiting, 'run')} waiting`) : null,
+          ...(x.problems || []).map((p) => h('small', { class: 'auto-problem err' }, '⚠ ' + p))),
         h('label', { class: 'toggle', title: x.on ? 'On' : 'Off' }, sw, h('i')),
         h('button', { class: 'icon-btn', 'aria-label': 'Options', html: I.more, onclick: (e) => openMenu(e.currentTarget, [
           { label: 'Edit…', run: () => autoSheet(x) },
@@ -5444,6 +5594,7 @@
   function autoLine(a) {
     if (a.kind === 'wait') return `Wait ${a.amount} ${a.unit}`;
     if (a.kind === 'if') return 'Only if ' + (a.when || []).map((c) => `{${c.field}} ${{ is: 'is', not: 'isn’t', contains: 'has', over: 'is over', under: 'is under', empty: 'is empty', set: 'is filled in' }[c.op] || c.op}${['set', 'empty'].includes(c.op) ? '' : ' ' + (c.value || '…')}`).join(' and ');
+    if (a.kind === 'task' && a.presetId) { const y = presetById(a.presetId); return y?.kind === 'bundle' ? `Make the bundle: ${y.name} (${plural(y.steps.length, 'task')})` : `Make a task: ${y?.name || a.presetName || 'a saved task'}`; }
     const said = a.text || a.subject || a.title || a.url || '';
     return (AUTO_DO[a.kind] || a.kind) + (said ? ': ' + said : '');
   }
@@ -5638,7 +5789,20 @@
           due.addEventListener('input', () => (a.dueIn = due.value === '' ? null : Number(due.value)));
           const camp = h('select', {}, opt('', 'No campaign', a.campaign || ''), opt('same', 'The same campaign', a.campaign || ''), camps.map((c) => opt(c.id, c.name, a.campaign || '')));
           camp.addEventListener('change', () => (a.campaign = camp.value));
-          f.push(h('label', {}, 'Task', text('Schedule the work for {document}')), h('div', { class: 'row2' }, h('label', {}, 'For', who), h('label', {}, 'Due in (days)', due)), h('label', {}, 'Under', camp));
+          // Or one of the team's saved tasks or bundles: it makes what that says, so changing the saved one changes this.
+          if (!SV.list && !SV.loading) loadPresets().then(draw);
+          const saved = SV.list || [];
+          const from = h('select', { class: 'auto-preset', 'aria-label': 'Make it from' }, opt('', 'Write it here', a.presetId || ''),
+            saved.some((y) => y.kind === 'bundle') ? h('optgroup', { label: 'Bundles' }, saved.filter((y) => y.kind === 'bundle').map((y) => opt(y.id, `${y.name} (${plural(y.steps.length, 'task')})`, a.presetId || ''))) : null,
+            saved.some((y) => y.kind === 'task') ? h('optgroup', { label: 'Saved tasks' }, saved.filter((y) => y.kind === 'task').map((y) => opt(y.id, y.name, a.presetId || ''))) : null,
+            a.presetId && !presetById(a.presetId) && SV.list ? opt(a.presetId, `${a.presetName || 'A saved task'} (deleted)`, a.presetId) : null);
+          from.addEventListener('change', () => { if (from.value) { a.presetId = from.value; a.presetName = presetById(from.value)?.name; } else { delete a.presetId; delete a.presetName; } draw(); });
+          const y = a.presetId && presetById(a.presetId);
+          if (a.presetId) who.firstChild.textContent = 'As saved';
+          f.push(h('label', {}, 'Make it from', from));
+          if (a.presetId) f.push(y ? h('p', { class: 'day-hint auto-preset-says' }, y.kind === 'bundle' ? y.steps.map((st) => presetById(st.presetId)?.text).filter(Boolean).join(' → ') : y.text) : h('p', { class: 'err' }, `The saved task “${a.presetName || '?'}” was deleted. Pick another, or write it here.`));
+          else f.push(h('label', {}, 'Task', text('Schedule the work for {document}')), saved.length ? null : h('small', { class: 'hint' }, 'Tip: save tasks you make again and again in Tasks → 📋 Saved tasks, then pick them here.'));
+          f.push(h('div', { class: 'row2' }, h('label', {}, a.presetId && y?.kind === 'bundle' ? 'All of them for' : 'For', who), h('label', {}, a.presetId && y?.kind === 'bundle' ? 'First one due in (days)' : 'Due in (days)', due)), h('label', {}, 'Under', camp));
         }
         if (a.kind === 'post') {
           const ch = h('select', {}, opt('same', 'The campaign’s own feed', a.channelId || 'same'), opt('general', '#general', a.channelId || 'same'), S.workspace.channels.map((c) => opt(c.id, '#' + c.name, a.channelId || 'same')));

@@ -1358,6 +1358,84 @@ function applyTask(t, body) {
   return t;
 }
 
+// Saved tasks and bundles (2026-11-19). A saved task is a task without its date: what it says, who it usually goes
+// to (a person or a team role), how many days after it's made it's due, priority, repeat, who signs it off. A bundle
+// is saved tasks in order: each one after the first waits for the one before and is due `after` days after that's
+// done. The whole team sees and uses them; whoever made one, or an admin, changes it. Automations make tasks from them
+// too (a.presetId), so changing one changes what those automations make.
+const PRESETS_MAX = 300, BUNDLE_MAX = 30;
+const presetsOf = (wsId) => Object.values(db.taskPresets ||= {}).filter((x) => x.wsId === wsId);
+const presetUsers = (x) => ({
+  bundles: presetsOf(x.wsId).filter((y) => y.kind === 'bundle' && y.steps.some((st) => st.presetId === x.id)).map((y) => y.name),
+  automations: Object.values(db.automations).filter((y) => y.wsId === x.wsId && JSON.stringify(y.actions || []).includes(`"presetId":"${x.id}"`)).map((y) => y.name),
+});
+const publicPreset = ({ wsId, ...x }) => ({ ...x, used: presetUsers({ wsId, ...x }) });
+function applyPreset(x, body, ws) {
+  const days = (v) => (v === null || v === '' ? null : Math.max(0, Math.min(365, Math.round(Number(v)) || 0)));
+  if (body.name !== undefined) x.name = cleanText(body.name, 120);
+  if (x.kind === 'task') {
+    if (body.text !== undefined) x.text = cleanText(body.text, 5000);
+    if (!x.text) throw badRequest('Write what the task says.');
+    if (body.assigneeId !== undefined) x.assigneeId = ws.members.some((m) => m.id === body.assigneeId) ? body.assigneeId : null;
+    if (body.roleId !== undefined) x.roleId = (ws.roles || []).some((r) => r.id === body.roleId) ? body.roleId : null;
+    if (body.assigneeId && x.assigneeId) x.roleId = null;
+    else if (body.roleId && x.roleId) x.assigneeId = null;
+    if (body.dueIn !== undefined) x.dueIn = days(body.dueIn);
+    if (body.priority !== undefined) x.priority = Math.max(0, Math.min(3, Math.round(Number(body.priority)) || 0));
+    if (body.repeat !== undefined) x.repeat = REPEATS.includes(body.repeat) ? body.repeat : null;
+    if (body.signoffId !== undefined) x.signoffId = ws.members.some((m) => m.id === body.signoffId) ? body.signoffId : null;
+    x.name ||= clipText(x.text, 120);
+  } else {
+    if (body.steps !== undefined) {
+      const steps = (Array.isArray(body.steps) ? body.steps : []).slice(0, BUNDLE_MAX).map((st) => {
+        const y = db.taskPresets[st?.presetId];
+        if (!y || y.wsId !== ws.id) throw badRequest('One of those saved tasks is gone.');
+        if (y.kind !== 'task') throw badRequest('A bundle holds saved tasks, not other bundles.');
+        return { presetId: y.id, after: days(st.after) ?? 0 };
+      });
+      if (!steps.length) throw badRequest('Put at least one saved task in it.');
+      x.steps = steps;
+    }
+    if (!x.name) throw badRequest('Give the bundle a name.');
+  }
+  x.updatedAt = Date.now();
+  return x;
+}
+// Makes the tasks. who = { member, memberId } (a person, or an automation's maker); opts: date (a day, else each
+// saved task's dueIn from today), assigneeId (one person for all of them), recordId (the job), goalId, by (the
+// name the tasks show as made by). Returns the tasks made.
+function usePreset(ws, who, x, opts = {}) {
+  if (opts.date != null && !isDay(opts.date)) throw badRequest('Bad day.');
+  const today = teamDay(ws.id);
+  const list = x.kind === 'bundle' ? x.steps.map((st) => ({ y: db.taskPresets[st.presetId], after: st.after })).filter((s) => s.y) : [{ y: x, after: 0 }];
+  if (!list.length) throw badRequest('The saved tasks in that bundle are gone.');
+  const made = [];
+  list.forEach(({ y, after }, i) => {
+    const first = i === 0;
+    const due = !first ? null : opts.date || (y.dueIn != null ? addDays(today, y.dueIn) : null);
+    const person = opts.assigneeId && ws.members.some((m) => m.id === opts.assigneeId) ? opts.assigneeId : null;
+    const t = applyTask({ id: rid(), wsId: ws.id, by: opts.by || who.member, memberId: who.memberId, createdAt: Date.now(), text: '', done: false, doneAt: null, due: null, priority: 0, goalId: null, assigneeId: null }, {
+      text: y.text, due, priority: y.priority || 0, repeat: y.repeat || null,
+      ...(person ? { assigneeId: person } : y.assigneeId ? { assigneeId: y.assigneeId } : y.roleId ? { roleId: y.roleId } : {}),
+      ...(y.signoffId ? { signoff: { memberId: y.signoffId } } : {}),
+      ...(opts.goalId ? { goalId: opts.goalId } : {}),
+      ...(opts.recordId ? { recordId: opts.recordId } : {}),
+    });
+    if (!first) { t.blockedBy = [made[i - 1].id]; t.dueAfter = after; }
+    t.preset = x.id;
+    if (t.assigneeId || t.roleId) t.assignedBy = who.memberId;
+    db.tasks[t.id] = t;
+    made.push(t);
+  });
+  for (const t of made) {
+    if (t.recordId) PJ.recordActivity(t.recordId, { kind: 'task', what: 'added', note: t.text, taskId: t.id, by: opts.by || who.member });
+    broadcast(ws.id, { type: 'task', task: publicTask(t) });
+    hook(ws.id, 'task.created', () => API.apiTask(t), opts.by || who.member);
+  }
+  if (made.some((t) => t.goalId && t.assigneeId)) resyncVisibility(ws.id, made.map((t) => t.assigneeId).filter(Boolean));
+  return made;
+}
+
 function contentDisposition(kind, name) {
   const ascii = name.replace(/[^\x20-\x7e]/g, '_').replace(/"/g, "'");
   return `${kind}; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(name)}`;
@@ -3223,7 +3301,9 @@ const AUTO_RUNS = 30;
 const AUTO_MAX = 50;
 // Set while an automation's own work runs, through every await of the routes it calls: what it does sets nothing off.
 const FLOWING = new AsyncLocalStorage();
-const publicAutomation = ({ wsId, recent, ran, dateRan, ...x }) => ({ ...x, waiting: Object.values(db.flowWaits || {}).filter((w) => w.autoId === x.id).length });
+const publicAutomation = ({ wsId, recent, ran, dateRan, ...x }) => ({ ...x, waiting: Object.values(db.flowWaits || {}).filter((w) => w.autoId === x.id).length,
+  // Steps that can't run as they are: a saved task they make from was deleted.
+  problems: stepActions(x.actions || []).filter((a) => a.kind === 'task' && a.presetId && !db.taskPresets?.[a.presetId]).map((a) => `The saved task “${a.presetName || '?'}” was deleted`) });
 function applyAutomation(x, body, ws) {
   if (body.name !== undefined) x.name = cleanText(body.name, 80) || 'Automation';
   if (body.on !== undefined) x.on = !!body.on;
@@ -3275,7 +3355,7 @@ function applyAutomation(x, body, ws) {
     const acts = stepActions(list);
     if (!acts.length) throw badRequest('Add at least one thing for it to do.');
     for (const a of acts) {
-      if ((a.kind === 'task' || a.kind === 'post' || a.kind === 'notify') && !a.text) throw badRequest('Write what it should say.');
+      if ((a.kind === 'task' || a.kind === 'post' || a.kind === 'notify') && !a.text && !a.presetId) throw badRequest('Write what it should say.');
       if (a.kind === 'notify' && !a.to.length) throw badRequest('Pick who to notify.');
       if (a.kind === 'contact' && !a.stage && !a.tag) throw badRequest('Pick a stage or a tag for the contact.');
       if (a.kind === 'text' && !a.text) throw badRequest('Write the text.');
@@ -3366,7 +3446,10 @@ function cleanAction(a, ws, who) {
     return { kind, templateId: tpl.id, title: cleanText(a.title, 300) };
   }
   const text = cleanText(a.text, 1000);
-  if (kind === 'task') return { kind, text, assignee: /^(who|role:[\w-]+|[\w-]{6,})$/.test(a.assignee || '') ? a.assignee : '', dueIn: a.dueIn === '' || a.dueIn == null ? null : Math.max(0, Math.min(90, Math.round(Number(a.dueIn)) || 0)), campaign: a.campaign === 'same' || (a.campaign && db.campaigns[a.campaign]?.wsId === ws.id) ? a.campaign : '' };
+  // From a saved task or bundle (a.presetId): it says and assigns what the saved one does, unless the step picks who.
+  const preset = kind === 'task' && a.presetId ? db.taskPresets?.[a.presetId] : null;
+  if (kind === 'task' && a.presetId && (!preset || preset.wsId !== ws.id)) throw badRequest('That saved task is gone.');
+  if (kind === 'task') return { kind, text, ...(preset ? { presetId: preset.id, presetName: preset.name } : {}), assignee: /^(who|role:[\w-]+|[\w-]{6,})$/.test(a.assignee || '') ? a.assignee : '', dueIn: a.dueIn === '' || a.dueIn == null ? null : Math.max(0, Math.min(90, Math.round(Number(a.dueIn)) || 0)), campaign: a.campaign === 'same' || (a.campaign && db.campaigns[a.campaign]?.wsId === ws.id) ? a.campaign : '' };
   if (kind === 'post') return { kind, text, channelId: a.channelId === 'same' || a.channelId === 'general' || ws.channels.some((c) => c.id === a.channelId) ? a.channelId : 'general' };
   if (kind === 'campaign') return db.templates[a.templateId]?.wsId === ws.id ? { kind, templateId: a.templateId } : null;
   if (kind === 'notify') return { kind, text, to: (Array.isArray(a.to) ? a.to : []).filter((v) => ['owners', 'admins', 'who'].includes(v) || ws.members.some((m) => m.id === v)).slice(0, 20) };
@@ -3865,7 +3948,8 @@ function autoDescribe(x, a, ctx, ws) {
   const c = ['text', 'email'].includes(a.kind) ? flowContact(ctx, ws.id) : null;
   const custName = c ? contactName(c) : ctx.contact?.name || ctx.customer || 'the customer';
   switch (a.kind) {
-    case 'task': return `Make the task “${fill(a.text)}”${a.assignee === 'who' ? ` for ${ctx.who || 'whoever set it off'}` : a.assignee && nameOf(a.assignee) ? ` for ${nameOf(a.assignee)}` : ''}`;
+    case 'task': if (a.presetId) { const y = db.taskPresets?.[a.presetId]; if (!y) return `Make the saved task “${a.presetName || '?'}” (it was deleted)`; return y.kind === 'bundle' ? `Make ${y.steps.length} tasks from the bundle “${y.name}”` : `Make the task “${clipText(y.text, 140)}”${a.assignee === 'who' ? ` for ${ctx.who || 'whoever set it off'}` : a.assignee && nameOf(a.assignee) ? ` for ${nameOf(a.assignee)}` : ''}`; }
+      return `Make the task “${fill(a.text)}”${a.assignee === 'who' ? ` for ${ctx.who || 'whoever set it off'}` : a.assignee && nameOf(a.assignee) ? ` for ${nameOf(a.assignee)}` : ''}`;
     case 'post': return `Post “${fill(a.text)}” in ${a.channelId === 'same' ? 'the campaign’s feed' : '#' + (ws.channels.find((y) => y.id === a.channelId)?.name || 'general')}`;
     case 'notify': return `Notify ${a.to.map((v) => ({ owners: 'the owners', admins: 'owners and admins', who: ctx.who || 'whoever set it off' }[v] || nameOf(v) || 'someone')).join(', ')}: “${fill(a.text)}”`;
     case 'campaign': return `Start the saved campaign “${db.templates[a.templateId]?.name || '?'}”`;
@@ -4107,6 +4191,17 @@ async function autoAction(x, a, ctx) {
   const ws = db.workspaces[x.wsId];
   if (['visit', 'invoice', 'text', 'email', 'money', 'doc', 'vault', 'webhook', 'stock'].includes(a.kind)) return flowAction(x, a, ctx, ws);
   const say = autoFill(a.text, ctx, ws.id);
+  if (a.kind === 'task' && a.presetId) {
+    // A saved task or bundle: made through the same route the app uses, as the automation's maker.
+    const y = db.taskPresets?.[a.presetId];
+    if (!y || y.wsId !== ws.id) throw new Error(`the saved task “${a.presetName || '?'}” was deleted`);
+    const camp = a.campaign === 'same' ? ctx.campaign : db.campaigns[a.campaign];
+    const g = (camp && goalsInOrder(camp)[0]) || ctx.goal || null;
+    const person = a.assignee === 'who' ? ctx.whoId : a.assignee && !a.assignee.startsWith('role:') ? a.assignee : null;
+    const r = await flowCall(x, 'POST', `/api/task-presets/${y.id}/use`, { date: a.dueIn != null ? addDays(teamDay(ws.id), a.dueIn) : null, assigneeId: person && ws.members.some((m) => m.id === person) ? person : null, recordId: autoJob(x, ctx), goalId: g?.id || null });
+    const n = r.body?.tasks?.length || 0;
+    return y.kind === 'bundle' ? `Made ${n} tasks from the bundle “${clipText(y.name, 60)}”` : `Made the task “${clipText(y.text, 60)}”`;
+  }
   if (a.kind === 'task') {
     const camp = a.campaign === 'same' ? ctx.campaign : db.campaigns[a.campaign];
     const g = camp && goalsInOrder(camp)[0];
@@ -7870,6 +7965,49 @@ async function api(req, res, url) {
       broadcast(ws.id, { type: 'entry:remove', id: e.id, forMember: e.memberId });
       pushEntry(e, 'delete');
       return send(res, 200, { ok: true });
+    }
+    return send(res, 405, { error: 'Method not allowed' });
+  }
+
+  if (a === 'task-presets') {
+    db.taskPresets ||= {};
+    if (m === 'GET' && !b) return send(res, 200, { presets: presetsOf(ws.id).sort((p, q) => p.name.localeCompare(q.name)).map(publicPreset) });
+    if (m === 'POST' && !b) {
+      if (presetsOf(ws.id).length >= PRESETS_MAX) return send(res, 400, { error: `A team can keep ${PRESETS_MAX} saved tasks and bundles. Delete one first.` });
+      const body = await readJson(req, 50_000);
+      const kind = body.kind === 'bundle' ? 'bundle' : 'task';
+      const x = applyPreset({ id: rid(), wsId: ws.id, kind, name: '', ...(kind === 'task' ? { text: '', assigneeId: null, roleId: null, dueIn: null, priority: 0, repeat: null, signoffId: null } : { steps: [] }), memberId: auth.memberId, by: auth.member, createdAt: Date.now() }, body, ws);
+      db.taskPresets[x.id] = x;
+      save();
+      broadcast(ws.id, { type: 'presets' });
+      return send(res, 200, publicPreset(x));
+    }
+    const x = b && db.taskPresets[b];
+    if (!x || x.wsId !== ws.id) return send(res, 404, { error: 'That saved task is gone.' });
+    if (m === 'POST' && c === 'use') {
+      const body = await readJson(req, 10_000);
+      const rec = body.recordId && db.records?.[body.recordId];
+      if (body.recordId && (!rec || rec.wsId !== ws.id || !PJ.sees(db.projects[rec.projectId], auth.memberId))) return send(res, 404, { error: 'That job is gone.' });
+      const g = body.goalId && db.goals[body.goalId];
+      if (body.goalId && (!g || g.wsId !== ws.id || !seesCampaign(g.campaignId, auth.memberId))) return send(res, 404, { error: 'That step is gone.' });
+      const made = usePreset(ws, auth, x, { date: body.date ?? null, assigneeId: body.assigneeId || null, recordId: rec?.id || null, goalId: g?.id || null });
+      save();
+      return send(res, 200, { tasks: made.map(publicTask) });
+    }
+    if ((m === 'PATCH' || m === 'DELETE') && !c) {
+      if (x.memberId !== auth.memberId && !isAdmin(auth)) return send(res, 403, { error: `Only ${x.by || 'whoever made it'} or an admin can change it.` });
+      if (m === 'PATCH') {
+        const next = applyPreset({ ...x, steps: x.steps && [...x.steps] }, await readJson(req, 50_000), ws);
+        db.taskPresets[x.id] = next;
+      } else {
+        const used = presetUsers(x);
+        if (used.bundles.length) return send(res, 409, { error: `It’s in the bundle “${used.bundles[0]}”. Take it out of there first.` });
+        if (used.automations.length) return send(res, 409, { error: `The automation “${used.automations[0]}” makes it. Change that first.` });
+        delete db.taskPresets[x.id];
+      }
+      save();
+      broadcast(ws.id, { type: 'presets' });
+      return send(res, 200, m === 'PATCH' ? publicPreset(db.taskPresets[x.id]) : { ok: true });
     }
     return send(res, 405, { error: 'Method not allowed' });
   }
