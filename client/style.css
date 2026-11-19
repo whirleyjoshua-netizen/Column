@@ -3620,3 +3620,9 @@ body.wide .sheet.page-form { border-left: 1px solid var(--line); }
 body.wide.split-full #split.chat-split .split-body { margin: 0 -32px; }
 body:not(.wide) #split.chat-split .split-body { margin: 0 -14px; }
 #split.chat-split #chat { margin-top: 0; }
+/* Finance step 4: estimated vs actual (2026-11-20) */
+.pj-cost-act span, .pj-cost-act b { font-weight: 600; }
+.lr-people { display: flex; flex-direction: column; gap: 6px; margin: 6px 0 10px; }
+.lr-row { display: flex; align-items: center; gap: 10px; }
+.lr-row span { flex: 1; }
+.lr-row input { width: 120px; }

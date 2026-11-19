@@ -15040,10 +15040,14 @@
     const line = (label, val, cls) => h('div', { class: 'pj-cost-row' + (cls ? ' ' + cls : '') }, h('span', {}, label), h('b', { class: 'pj-num' }, val));
     const costBox = cost ? h('div', { class: 'pj-cost' },
       line(cost.billed ? 'Billed' : cost.quoted ? 'Price' : 'Value', money2(cost.price)),
-      line('Materials', money2(cost.materials)),
-      line(cost.laborRate ? `Labor · ${cost.hours} h × ${money2(cost.laborRate)}` : `Labor · ${cost.hours} h`, cost.laborRate ? money2(cost.labor) : '—'),
+      // Finance step 4: the estimate (the price lines' costs) beside what really happened, never mixed.
+      cost.estimatedCost ? line('Estimated cost (price lines)', `${money2(cost.estimatedCost)}${cost.estimatedMargin != null && cost.price ? ` · margin ${cost.estimatedMarginPct}%` : ''}`, 'pj-cost-sub pj-cost-est') : null,
+      line('Materials used', money2(cost.materials)),
+      line(cost.hours ? `Labor · ${cost.hours} h${cost.unpricedHours ? ` (${cost.unpricedHours} h with no rate)` : ''}` : 'Labor', cost.labor || cost.laborRate || Object.keys(cost.rates?.people || {}).length ? money2(cost.labor) : '—'),
       line('Expenses', money2(cost.expenses || 0), 'pj-cost-exp'),
-      line('Margin', cost.price ? `${money2(cost.margin)} · ${cost.marginPct}%` : '—', 'pj-cost-m' + (cost.margin < 0 ? ' neg' : '')),
+      cost.overheadPct ? line(`Overhead · ${cost.overheadPct}%`, money2(cost.overhead), 'pj-cost-oh') : null,
+      line('Actual cost', cost.hasActual ? money2(cost.cost) : '—', 'pj-cost-act'),
+      line('Margin', cost.price && cost.hasActual ? `${money2(cost.margin)} · ${cost.marginPct}%` : cost.price ? 'No actual costs yet' : '—', 'pj-cost-m' + (cost.margin < 0 ? ' neg' : '')),
       cost.committed ? line('On order (not in yet)', money2(cost.committed), 'pj-cost-sub') : null,
       cost.received ? line('Received so far', money2(cost.received), 'pj-cost-sub') : null,
       (cost.entries || []).length ? h('div', { class: 'pj-cost-list' }, cost.entries.slice(0, 8).map((e) => h('button', { type: 'button', class: 'pj-cost-ent', onclick: () => { const y = (S.money || []).find((z) => z.id === e.id); if (y) moneySheet(y); } },
@@ -15052,17 +15056,27 @@
       h('div', { class: 'pj-cost-btns' },
         h('button', { class: 'pj-newrow pj-add-exp', onclick: () => moneySheet(null, 'out', { jobId: r.id }) }, '+ Add an expense'),
         h('button', { class: 'pj-newrow pj-add-in', onclick: () => moneySheet(null, 'in', { jobId: r.id }) }, '+ Money in')),
-      h('button', { class: 'pj-newrow', onclick: () => laborRateSheet(r) }, cost.laborRate ? 'Change the labor rate' : 'Set a labor rate, to count labor'),
-      h('small', { class: 'day-hint' }, 'Labor is the hours on visits marked done, times the people on them. Materials are from the materials list, or the price lines’ costs. Expenses are business money in Finance put on this job.')) : null;
+      h('button', { class: 'pj-newrow pj-rates', onclick: () => laborRateSheet(r) }, cost.laborRate || Object.keys(cost.rates?.people || {}).length ? 'Labor rates & overhead' : 'Set labor rates, to count labor'),
+      h('small', { class: 'day-hint' }, 'The estimate is the price lines’ costs. Actual cost is only what happened: materials used (the materials list and stock), labor (hours on visits marked done, for each person at their rate), expenses put on this job in Finance, and overhead.')) : null;
     return h('div', { class: 'pj-items pj-job-blk' },
       h('div', { class: 'pj-it-h' }, h('b', {}, '💵 Invoices'), h('span', { style: 'flex:1' }), h('button', { class: 'btn small primary-btn', onclick: make }, '+ Make an invoice')),
       list ? (rows.length ? h('div', { class: 'pj-invs' }, rows) : h('p', { class: 'day-hint' }, 'None yet. An invoice starts from the job’s price lines; send it and the customer can pay by card.')) : h('p', { class: 'day-hint' }, 'Loading…'),
       costBox ? h('div', { class: 'pj-it-h' }, h('b', {}, '📊 What this job cost')) : null, costBox);
   }
+  // What an hour costs, for the team and for each person, and overhead on top (Finance step 4). Owners and admins.
   function laborRateSheet(r) {
-    const rate = h('input', { inputmode: 'decimal', value: dollars(PR.costing.get(r.id)?.laborRate || 0) || '', placeholder: '45.00' });
-    sheet('Labor rate', [h('p', { class: 'day-hint' }, 'What an hour of someone’s work costs the business, with wages, taxes and insurance. Only owners and admins see it.'), h('label', {}, 'Per hour, per person ($)', rate)], async () => {
-      await api('PATCH', '/workspace', { laborRate: rate.value });
+    const c = PR.costing.get(r.id) || {};
+    const rt = c.rates || { team: c.laborRate || 0, people: {}, overheadPct: 0 };
+    const team = h('input', { inputmode: 'decimal', value: dollars(rt.team || 0) || '', placeholder: '45.00', class: 'lr-team' });
+    const people = (S.workspace?.members || []).map((m) => ({ m, el: h('input', { inputmode: 'decimal', value: rt.people?.[m.id] ? dollars(rt.people[m.id]) : '', placeholder: 'team rate', class: 'lr-person', 'data-member': m.id }) }));
+    const oh = h('input', { inputmode: 'decimal', value: rt.overheadPct || '', placeholder: '0', class: 'lr-oh' });
+    sheet('Labor rates & overhead', [
+      h('p', { class: 'day-hint' }, 'What an hour of someone’s work costs the business, with wages, taxes and insurance. Only owners and admins see these.'),
+      h('label', {}, 'Team rate, per hour per person ($)', team),
+      h('div', { class: 'lr-people' }, h('small', { class: 'hint' }, 'Anyone whose hour costs something else:'), people.map(({ m, el }) => h('label', { class: 'lr-row' }, h('span', {}, memberName(m.id)), el))),
+      h('label', {}, 'Overhead (% added on top of what a job cost directly: rent, insurance, trucks, software)', oh),
+    ], async () => {
+      await api('PATCH', '/workspace', { laborRate: team.value, laborRates: Object.fromEntries(people.map(({ m, el }) => [m.id, el.value])), overheadPct: oh.value });
       PR.costing.clear();
       if (PR.panel) loadInvoices({ id: PR.panel }, true).then(renderProjects);
     });

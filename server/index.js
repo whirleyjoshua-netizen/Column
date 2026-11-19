@@ -10402,6 +10402,22 @@ async function api(req, res, url) {
       const n = Math.round(Number(String(body.laborRate ?? '').replace(/[$,\s]/g, '')) * 100);
       ws.laborRate = Number.isFinite(n) && n > 0 ? Math.min(n, 1e6) : 0;
     }
+    // Each person's own labor rate (Finance step 4), and overhead: a share added on top of what a job cost directly.
+    if (body.laborRates !== undefined) {
+      if (!isAdmin(auth)) return send(res, 403, { error: 'Only team owners and admins can set labor rates.' });
+      const out = { ...(ws.laborRates || {}) };
+      for (const [id, v] of Object.entries(body.laborRates || {}).slice(0, 500)) {
+        if (!ws.members.some((m) => m.id === id)) continue;
+        const n = Math.round(Number(String(v ?? '').replace(/[$,\s]/g, '')) * 100);
+        if (Number.isFinite(n) && n > 0) out[id] = Math.min(n, 1e6); else delete out[id];
+      }
+      ws.laborRates = out;
+    }
+    if (body.overheadPct !== undefined) {
+      if (!isAdmin(auth)) return send(res, 403, { error: 'Only team owners and admins can set overhead.' });
+      const n = Number(String(body.overheadPct ?? '').replace(/[%\s]/g, ''));
+      ws.overheadPct = Number.isFinite(n) && n > 0 ? Math.min(Math.round(n * 10) / 10, 200) : 0;
+    }
     if (body.tz !== undefined) {
       if (!isAdmin(auth)) return send(res, 403, { error: 'Only team owners and admins can change the team’s time zone.' });
       if (!okTz(body.tz)) return send(res, 400, { error: 'Pick a time zone from the list.' });

@@ -191,9 +191,14 @@ export function invoicesModule({ stockCost = () => 0, jobMoney = () => ({ expens
     const mats = ((mf && rec.values[mf.id]?.rows) || []).reduce((n, r) => n + Math.round((r.qty || 0) * (r.cost || 0)), 0);
     // Stock used on the job from Inventory counts too (at what it cost when it was used).
     const stock = stockCost(rec.id) || 0;
-    const materials = mats + stock || quoted?.cost || 0;
-    // Labor: each done visit's length, times the people on it. Visits with no times don't count.
-    let minutes = 0;
+    // Actual and estimated are kept apart (Finance step 4): what the price lines say things will cost is the
+    // estimate; materials are only what was really used (the materials list and stock), never the estimate.
+    const materials = mats + stock;
+    const estimatedCost = quoted?.cost || 0;
+    // Labor: each done visit's length, for each person on it, at their own rate (or the team's).
+    const rates = ws.laborRates || {};
+    const rate = ws.laborRate || 0;
+    let minutes = 0, labor = 0, unpriced = 0;
     const seen = new Map();
     for (const e of Object.values(db.entries)) if (e.recordId === rec.id && e.visitId) (seen.get(e.visitId) || seen.set(e.visitId, []).get(e.visitId)).push(e);
     let visits = 0;
@@ -201,14 +206,27 @@ export function invoicesModule({ stockCost = () => 0, jobMoney = () => ({ expens
       if (!list.every((e) => e.done)) continue;
       visits++;
       const e = list[0];
-      if (e.start != null && e.end != null && e.end > e.start) minutes += (e.end - e.start) * list.length;
+      if (!(e.start != null && e.end != null && e.end > e.start)) continue;
+      const len = e.end - e.start;
+      for (const x of list) {
+        minutes += len;
+        const r = rates[x.memberId] || rate;
+        if (r) labor += Math.round((len / 60) * r); else unpriced += len;
+      }
     }
-    const rate = ws.laborRate || 0;
-    const labor = Math.round((minutes / 60) * rate);
     // Money from Finance put on this job (receipts, fuel, a sub's bill…), and what's on order for it, not in yet.
     const fin = jobMoney(rec.id);
-    const cost = materials + labor + fin.expenses;
-    return { expenses: fin.expenses, income: fin.income, received: paid + fin.income, committed: fin.committed, entries: fin.entries, price, billed, paid, quoted: quoted?.total || 0, materials, fromStock: stock, hours: Math.round((minutes / 60) * 100) / 100, visits, laborRate: rate, labor, cost, margin: price - cost, marginPct: price ? Math.round(((price - cost) / price) * 1000) / 10 : 0 };
+    const direct = materials + labor + fin.expenses;
+    const overheadPct = ws.overheadPct || 0;
+    const overhead = Math.round((direct * overheadPct) / 100);
+    const cost = direct + overhead;
+    const hasActual = direct > 0;
+    const pct = (n) => (price ? Math.round((n / price) * 1000) / 10 : 0);
+    return { expenses: fin.expenses, income: fin.income, received: paid + fin.income, committed: fin.committed, entries: fin.entries, price, billed, paid,
+      quoted: quoted?.total || 0, materials, fromStock: stock, hours: Math.round((minutes / 60) * 100) / 100, unpricedHours: Math.round((unpriced / 60) * 100) / 100, visits, laborRate: rate, labor, overheadPct, overhead, cost,
+      hasActual, margin: hasActual ? price - cost : null, marginPct: hasActual ? pct(price - cost) : null,
+      estimatedCost, estimatedMargin: estimatedCost ? price - estimatedCost : null, estimatedMarginPct: estimatedCost ? pct(price - estimatedCost) : null,
+      rates: { team: rate, people: rates, overheadPct } };
   }
 
   // ---------- the app's routes: /api/records/:id/invoices, /api/records/:id/costing, /api/invoices/…, /api/payments/stripe ----------
