@@ -42,16 +42,19 @@ try {
   const p = (await rico('POST', '/projects', { template: 'trades', trades: ['hvac', 'pool', 'roofing', 'lawn'] })).body;
   const list = (k) => p.types.find((x) => x.key === k);
   const fk = (tp, k) => tp?.fields.find((f) => f.key === k);
-  const hvac = list('trade_hvac'), plans = list('plans'), gear = list('equipment'), lic = list('licenses');
+  const hvac = list('trade_hvac'), plans = list('plans'), gear = list('equipment');
+  // Licenses & insurance live in the workspace profile now, once for the business (2026-11-19), not on each board.
+  const prof = (await rico('GET', '/profile')).body.project, lic = prof.types.find((x) => x.key === 'licenses');
   ok(hvac && list('trade_pool') && list('trade_roofing') && list('trade_lawn'), 'a trades project has a list for each trade picked');
   ok(plans && fk(plans, 'customer')?.type === 'contact' && fk(plans, 'renews')?.type === 'date' && fk(plans, 'visits')?.type === 'number' && fk(plans, 'status')?.choices.some((c) => c.label === 'Active'), 'and Service plans (customer, visits a year, renews, status) for the repair and recurring trades');
   ok(gear && fk(gear, 'customer')?.type === 'contact' && fk(gear, 'unit')?.type === 'equipment' && fk(gear, 'installed')?.type === 'date' && fk(gear, 'age')?.type === 'formula', 'and Customer equipment (whose, make/model/serial, installed, its age worked out)');
-  ok(lic && fk(lic, 'expires')?.type === 'date' && fk(lic, 'left')?.type === 'formula' && fk(lic, 'kind')?.choices.some((c) => /NSCB/.test(c.label)), 'and Licenses & insurance (Nevada contractor license among the kinds, expiry, days left)');
+  ok(lic && fk(lic, 'expires')?.type === 'date' && fk(lic, 'left')?.type === 'formula' && fk(lic, 'kind')?.choices.some((c) => /NSCB/.test(c.label)), 'Licenses & insurance are in the workspace profile (Nevada contractor license among the kinds, expiry, days left)');
+  ok(!list('licenses'), 'and not a tab on the board');
   ok(fk(hvac, 'entry')?.type === 'secret' && !/gate code/i.test(fk(hvac, 'access')?.hint || ''), 'every job has a sealed gate / lockbox code, and Access notes no longer asks for codes in plain text');
   ok(hvac.views.some((v) => v.kind === 'calendar' && v.start === fk(hvac, 'scheduled').id), 'and a Calendar of jobs by their scheduled day');
   ok(fk(list('trade_roofing'), 'hoa')?.type === 'select' && fk(list('trade_lawn'), 'watering')?.type === 'text' && !fk(hvac, 'hoa'), 'roofing asks about HOA approval, lawn care has the water district’s watering group, HVAC has neither');
   const jobsOnly = (await rico('POST', '/projects', { template: 'trades', trades: ['painting'] })).body;
-  ok(!jobsOnly.types.some((x) => x.key === 'plans') && jobsOnly.types.some((x) => x.key === 'licenses') && fk(jobsOnly.types[0], 'year')?.type === 'number', 'a painter gets no service plans, but licenses and the year the home was built (pre-1978 lead rules)');
+  ok(!jobsOnly.types.some((x) => x.key === 'plans') && !jobsOnly.types.some((x) => x.key === 'licenses') && fk(jobsOnly.types[0], 'year')?.type === 'number', 'a painter gets no service plans (nor a licenses tab), but the year the home was built (pre-1978 lead rules)');
   r = await schema(jobsOnly.id, { op: 'addTypeFrom', key: 'plans' });
   ok(r.status === 200 && r.body.project.types.some((x) => x.key === 'plans'), 'and can add Service plans later, as a ready-made list');
 
@@ -160,10 +163,10 @@ try {
   // ---------- a record's date ----------
   const fDates = await feed('dates');
   const lf = (k) => fk(lic, k).id;
-  r = await rico('POST', '/automations', { name: 'Expiring', trigger: { kind: 'record.date', projectId: p.id, typeId: lic.id, fieldId: lf('expires'), days: -30, time: '00:00' }, actions: [{ kind: 'post', text: '{record} expires {date}', channelId: fDates }] });
+  r = await rico('POST', '/automations', { name: 'Expiring', trigger: { kind: 'record.date', projectId: prof.id, typeId: lic.id, fieldId: lf('expires'), days: -30, time: '00:00' }, actions: [{ kind: 'post', text: '{record} expires {date}', channelId: fDates }] });
   ok(r.status === 200 && r.body.trigger.days === -30, 'an automation can go off 30 days before a record’s date');
-  ok((await rico('POST', '/automations', { name: 'x', trigger: { kind: 'record.date', projectId: p.id, typeId: lic.id, fieldId: lf('number'), days: 0 }, actions: [{ kind: 'post', text: 'x', channelId: fDates }] })).status === 400, 'only on a date field');
-  const mk = (name, exp) => rico('POST', `/projects/${p.id}/records`, { typeId: lic.id, values: { name, [lf('expires')]: exp } });
+  ok((await rico('POST', '/automations', { name: 'x', trigger: { kind: 'record.date', projectId: prof.id, typeId: lic.id, fieldId: lf('number'), days: 0 }, actions: [{ kind: 'post', text: 'x', channelId: fDates }] })).status === 400, 'only on a date field');
+  const mk = (name, exp) => rico('POST', `/projects/${prof.id}/records`, { typeId: lic.id, values: { name, [lf('expires')]: exp } });
   await mk('NSCB C-21', day(30));
   await mk('Liability insurance', day(12));
   await mk('Bond', day(45));
@@ -173,7 +176,7 @@ try {
   let dp = await posts(fDates);
   ok(!dp.some((x) => x.startsWith('Bond')) && !dp.some((x) => x.startsWith('Old card')), 'not for one 45 days out, nor one that’s already expired');
   ok(dp.filter((x) => x.startsWith('NSCB')).length === 1, 'and once per date');
-  const bond = (await recs(p.id)).find((x) => x.values[lic.primary] === 'Bond');
+  const bond = (await recs(prof.id)).find((x) => x.values[lic.primary] === 'Bond');
   await rico('PATCH', `/records/${bond.id}`, { values: { [lf('expires')]: day(20) } });
   ok(await until(async () => (await posts(fDates)).includes(`Bond expires ${day(20)}`)), 'a date changed to inside the window sets it off for the new date');
   r = await rico('POST', '/automations', { name: 'Review ask', trigger: { kind: 'record.date', projectId: p.id, typeId: hvac.id, fieldId: fk(hvac, 'scheduled').id, days: 1, time: '00:00' }, actions: [{ kind: 'post', text: 'Ask {record} for a review', channelId: fDates }] });
