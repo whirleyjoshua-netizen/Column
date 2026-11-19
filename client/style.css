@@ -330,7 +330,7 @@ body.wide #tool .auto-list { display: grid; grid-template-columns: repeat(auto-f
 .tpl-card small { color: var(--muted); font-size: 12px; }
 .tpl-body { color: var(--muted); font-size: 12.5px; line-height: 1.45; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; white-space: pre-line; }
 .tpl-kind { align-self: flex-start; font-size: 10.5px; font-weight: 650; text-transform: uppercase; letter-spacing: .05em; padding: 2px 7px; border-radius: 999px; background: var(--panel); color: var(--muted); }
-.tpl-kind.k-email { background: #e8efff; color: #2f5bd3; } .tpl-kind.k-text { background: #e6f6ee; color: #1f7a4a; } .tpl-kind.k-reply { background: #f3ecff; color: #6b3fd0; } .tpl-kind.k-post { background: #fff1e6; color: #b5541b; }
+.tpl-kind.k-email { background: #e8efff; color: #2f5bd3; } .tpl-kind.k-text { background: #e6f6ee; color: #1f7a4a; } .tpl-kind.k-reply { background: #f3ecff; color: #6b3fd0; } .tpl-kind.k-post { background: #fff1e6; color: #b5541b; } .tpl-kind.k-task { background: #eef1f5; color: #3f4a5a; }
 .tpl-h { margin: 8px 0; }
 .tpl-words { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .tpl-words .chip { border: 1px solid var(--line); background: var(--card); color: var(--text); font-size: 12px; }

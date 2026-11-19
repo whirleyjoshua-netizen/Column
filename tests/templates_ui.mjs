@@ -53,7 +53,7 @@ try {
   ok(await A.until(`!!document.querySelector('#split [data-tool=templates]')`), 'Templates is in Workspace → Tools');
   await A.ev(`document.querySelector('#split [data-tool=templates]').click(); true`);
   ok(await A.until(`document.querySelector('#split h2')?.textContent.startsWith('Templates') && document.querySelector('#split').textContent.includes('None yet')`), 'it opens, empty to start');
-  ok(await A.ev(`[...document.querySelectorAll('#split .tpl-kinds button')].map((b) => b.textContent).join('|')`) === 'All|Email|Text message|Reply|Social post|Paperwork', 'with kinds: email, text, reply, social post and paperwork');
+  ok(await A.ev(`[...document.querySelectorAll('#split .tpl-kinds button')].map((b) => b.textContent).join('|')`) === 'All|Email|Text message|Reply|Social post|Paperwork|Saved tasks', 'with kinds: email, text, reply, social post and paperwork');
   ok(await A.ev(`!!document.querySelector('#split [data-doc-tpl]') && document.querySelector('#split').textContent.includes('Work order')`), 'the team’s doc templates show as paperwork');
   // Make an email template, with a word from the chips.
   await A.ev(`[...document.querySelectorAll('#split button')].find((b) => b.textContent === '+ New template').click(); true`);

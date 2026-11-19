@@ -3798,6 +3798,7 @@
     try { SV.list = (await api('GET', '/task-presets')).presets; } catch { SV.list ||= []; }
     SV.loading = false;
     renderShelf();
+    if (toolBox('templates')?.isConnected) renderTool(true);
   }
   const presetById = (id) => (SV.list || []).find((x) => x.id === id);
   const presetWho = (x) => (x.assigneeId ? memberName(x.assigneeId) : x.roleId && roleById(x.roleId) ? roleById(x.roleId).name : '');
@@ -3877,7 +3878,7 @@
     const del = x && mayEdit ? h('button', { class: 'btn small danger', 'data-label': '1' }, 'Delete') : null;
     del?.addEventListener('click', () => confirmClick(del, async () => { try { await api('DELETE', '/task-presets/' + x.id); SV.list = SV.list.filter((y) => y.id !== x.id); closeSheet(); renderShelf(); } catch (e) { toast(e.message); } }));
     const used = x && (x.used?.automations?.length || x.used?.bundles?.length) ? h('p', { class: 'day-hint sv-used' }, 'Used in ' + [x.used.automations.length ? plural(x.used.automations.length, 'automation') + ` (${x.used.automations.join(', ')})` : '', x.used.bundles.length ? plural(x.used.bundles.length, 'bundle') + ` (${x.used.bundles.join(', ')})` : ''].filter(Boolean).join(' and ') + '. Changing it changes what they make.') : null;
-    const done = (r) => { SV.list = [...(SV.list || []).filter((y) => y.id !== r.id), r].sort((p, q) => p.name.localeCompare(q.name)); if (!SV.open) { SV.open = true; store.set('savedOpen', true); } renderShelf(); toast(x ? 'Saved' : kind === 'bundle' ? 'Bundle saved' : 'Task saved'); };
+    const done = (r) => { SV.list = [...(SV.list || []).filter((y) => y.id !== r.id), r].sort((p, q) => p.name.localeCompare(q.name)); if (!SV.open) { SV.open = true; store.set('savedOpen', true); } renderShelf(); if (toolBox('templates')?.isConnected) renderTool(true); toast(x ? 'Saved' : kind === 'bundle' ? 'Bundle saved' : 'Task saved'); };
     if (kind === 'bundle') {
       const tasks = (SV.list || []).filter((y) => y.kind === 'task');
       const steps = v.steps.map((st) => ({ ...st }));
@@ -10665,7 +10666,7 @@
   // (doc templates and sign-off forms, kept where they are and shown here). Automations' message steps start from
   // one ("Use a template…"), and the AI looks for one before it writes (agents.js find_templates).
   const TPL = { list: null, docs: null, forms: null, loading: false, kind: store.get('tplKind', 'all'), q: '' };
-  const TPL_KINDS = [['all', 'All'], ['email', 'Email'], ['text', 'Text message'], ['reply', 'Reply'], ['post', 'Social post'], ['paperwork', 'Paperwork']];
+  const TPL_KINDS = [['all', 'All'], ['email', 'Email'], ['text', 'Text message'], ['reply', 'Reply'], ['post', 'Social post'], ['paperwork', 'Paperwork'], ['tasks', 'Saved tasks']];
   const TPL_NAME = Object.fromEntries(TPL_KINDS);
   const TPL_WORDS = ['customer', 'record', 'date', 'amount', 'address', 'who', 'phone'];
   function loadTemplates() {
@@ -10695,12 +10696,28 @@
         h('button', { class: 'btn small primary-btn', onclick: () => msgTemplateSheet(null, { kind: ['email', 'text', 'reply', 'post'].includes(TPL.kind) ? TPL.kind : 'email' }) }, '+ New template'),
         h('button', { class: 'btn small', onclick: () => file.click() }, 'Import…'), file),
       h('div', { class: 'seg seg-sm tpl-kinds', role: 'tablist' }, TPL_KINDS.map(([k, l]) => h('button', { class: TPL.kind === k ? 'on' : null, 'data-kind': k, onclick: () => { TPL.kind = k; store.set('tplKind', k); renderTool(true); } }, l))),
-      TPL.kind !== 'paperwork' ? (list.length ? h('div', { class: 'tpl-grid' }, list.map(card)) : h('p', { class: 'day-hint' }, q ? 'No templates match.' : 'None yet. Make one, import one, or ask Sidekick to write some for you.')) : null,
+      !['paperwork', 'tasks'].includes(TPL.kind) ? (list.length ? h('div', { class: 'tpl-grid' }, list.map(card)) : h('p', { class: 'day-hint' }, q ? 'No templates match.' : 'None yet. Make one, import one, or ask Sidekick to write some for you.')) : null,
       paper && (docs.length || forms.length || TPL.kind === 'paperwork') ? h('h3', { class: 'tpl-h' }, 'Paperwork') : null,
       paper ? h('div', { class: 'tpl-grid' },
         docs.map((d) => h('button', { class: 'tpl-card', 'data-doc-tpl': d.id, onclick: () => useDocTemplateHere(d) }, h('span', { class: 'tpl-kind k-doc' }, 'Doc template'), h('b', {}, d.name), d.about ? h('small', {}, d.about) : null, h('span', { class: 'tpl-body' }, 'Tap to make a new doc from it'))),
         forms.map((f) => h('div', { class: 'tpl-card static' }, h('span', { class: 'tpl-kind k-form' }, 'Sign-off form'), h('b', {}, f.name), h('span', { class: 'tpl-body' }, 'Used on a job’s sign-off field (Projects → the job → its sign-off).'))),
         !docs.length && !forms.length ? h('p', { class: 'day-hint' }, 'Save any doc as a team template from its ⋯ menu (Save as a team template), or add a form on a job’s sign-off field.') : null) : null,
+      ...tplSaved(hit),
+    ];
+  }
+  // The team's saved tasks and bundles (kept in Tasks → 📋 Saved tasks), listed here with the rest of what's saved.
+  function tplSaved(hit) {
+    if (TPL.kind !== 'all' && TPL.kind !== 'tasks') return [];
+    if (!SV.list) { if (!SV.loading) loadPresets(); return TPL.kind === 'tasks' ? [h('p', { class: 'day-hint' }, 'Loading…')] : []; }
+    const list = SV.list.filter((x) => hit({ name: x.name, body: x.text || x.steps?.map((st) => presetById(st.presetId)?.text).join(' ') }));
+    if (!list.length && TPL.kind === 'all') return [];
+    return [
+      h('h3', { class: 'tpl-h' }, 'Saved tasks'),
+      h('div', { class: 'tpl-grid' },
+        list.map((x) => h('button', { class: 'tpl-card', 'data-preset': x.id, onclick: (ev) => presetMenu(ev.currentTarget, x) },
+          h('span', { class: 'tpl-kind k-task' }, x.kind === 'bundle' ? 'Bundle' : 'Saved task'), h('b', {}, x.name), presetSub(x) ? h('small', {}, presetSub(x)) : null,
+          h('span', { class: 'tpl-body' }, x.kind === 'bundle' ? x.steps.map((st) => presetById(st.presetId)?.text).filter(Boolean).join(' → ') : x.text))),
+        h('button', { class: 'tpl-card static tpl-new-task', onclick: () => presetSheet(null, 'task') }, h('b', {}, '+ Save a task'), h('span', { class: 'tpl-body' }, 'Then drag it onto a day in Tasks, or make it from an automation.'))),
     ];
   }
   async function useDocTemplateHere(d) {

@@ -7986,8 +7986,8 @@ async function api(req, res, url) {
     if (!x || x.wsId !== ws.id) return send(res, 404, { error: 'That saved task is gone.' });
     if (m === 'POST' && c === 'use') {
       const body = await readJson(req, 10_000);
-      const rec = body.recordId && db.records?.[body.recordId];
-      if (body.recordId && (!rec || rec.wsId !== ws.id || !PJ.sees(db.projects[rec.projectId], auth.memberId))) return send(res, 404, { error: 'That job is gone.' });
+      const rec = body.recordId ? PJ.recordAt(String(body.recordId), ws.id, auth.memberId)?.rec : null;
+      if (body.recordId && !rec) return send(res, 404, { error: 'That job is gone.' });
       const g = body.goalId && db.goals[body.goalId];
       if (body.goalId && (!g || g.wsId !== ws.id || !seesCampaign(g.campaignId, auth.memberId))) return send(res, 404, { error: 'That step is gone.' });
       const made = usePreset(ws, auth, x, { date: body.date ?? null, assigneeId: body.assigneeId || null, recordId: rec?.id || null, goalId: g?.id || null });
