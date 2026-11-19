@@ -79,7 +79,7 @@ try {
   ok(await A.until(`[...document.querySelectorAll('#split .bill-name')].filter((r) => r.textContent.includes('Freight from Acme')).length === 1 && [...document.querySelectorAll('#split .bill-name')].some((r) => r.textContent.includes('split across 2 jobs'))`), 'Finance lists it once, split across 2 jobs');
   ok(A.errors.length === 0, 'no script errors' + (A.errors.length ? ': ' + A.errors.join(' | ') : ''));
 } catch (e) { ok(false, 'threw: ' + e.stack); }
-chrome.kill();
+chrome.kill('SIGKILL');
 srv.kill();
 console.log(fails ? `${fails} failed` : 'all passed');
 process.exit(fails ? 1 : 0);
