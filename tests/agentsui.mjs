@@ -111,7 +111,7 @@ try {
   await A.ev(`localStorage.setItem('column.token', JSON.stringify(${JSON.stringify(auth.token)})); location.reload(); true`).catch(() => {});
   await sleep(1200);
   ok(await A.until(`!document.querySelector('#app').classList.contains('hidden')`), 'Ada is in');
-  ok(await A.until(`[...document.querySelectorAll('#tabs button[data-tab]:not(.tab-sub)')].map((b) => b.textContent).join() === 'Home,Chat,Agents,Workspace'`), 'Agents is on the tab bar');
+  ok(await A.until(`[...document.querySelectorAll('#tabs button[data-tab]:not(.tab-sub)')].map((b) => b.textContent).join() === 'Home,Agents,Workspace,Apps & Integrations'`), 'Agents is on the tab bar: ' + await A.ev(`[...document.querySelectorAll('#tabs button[data-tab]:not(.tab-sub)')].map((b) => b.textContent).join()`));
   await A.click('#tabs [data-tab=agents]');
   ok(await A.until(`document.querySelector('#tool h2')?.textContent.includes('Your team') && document.querySelectorAll('#tool .ag-card').length === 4`), 'the Agents tab opens Your team, with four specialists');
   ok(await A.ev(`[...document.querySelectorAll('#tool .ag-card b')].map((b) => b.textContent).join('|') === 'Chief of Staff|Client & Sales Manager|Operations Manager|Marketing Manager'`), 'Chief of Staff, Client & Sales Manager, Operations Manager, Marketing Manager');
@@ -324,7 +324,7 @@ try {
   await A.click('#tabs [data-tab=agents]');
   ok(await A.until(`!!document.querySelector('#tool .ag-nokey') && [...document.querySelectorAll('#tool .ag-box button')].find((b) => b.textContent === 'Ask your team').disabled`), 'without an AI key: a banner to add one, and asking is off');
   await A.ev(`document.querySelector('#tool .ag-nokey button').click()`);
-  ok(await A.until(`!document.querySelector('#settings').classList.contains('hidden')`), 'the banner opens Settings');
+  ok(await A.until(`!document.querySelector('#apps').classList.contains('hidden') && !!document.querySelector('#apps .app-detail .ai-sec')`), 'the banner opens the AI keys (Apps & Integrations → Claude)');
   await A.ev(`document.querySelector('#settings').classList.add('hidden')`);
   await api('PUT', '/ai/keys/anthropic', { key: 'sk-ant-test-key-1234567890' });
   // Switched off for the team
