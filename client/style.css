@@ -3528,3 +3528,33 @@ body.wide .sheet.page-form { border-left: 1px solid var(--line); }
 .fin-q-st { font-size: 12px; padding: 2px 8px; border-radius: 999px; background: #eef1f5; color: #3f4a5a; }
 .fin-q-st.s-accepted { background: #e6f6ee; color: #1f7a4a; } .fin-q-st.s-declined { background: #fdecec; color: #b42318; } .fin-q-st.s-pending { background: #fff6e0; color: #8a5a00; }
 .fin-tabs { flex-wrap: wrap; }
+
+/* The workspace profile (profileSheet): the business, insurance & licenses with days left, rules & permissions. */
+.wp { display: flex; flex-direction: column; gap: 14px; min-width: min(560px, 100%); }
+.wp-sec h3 { margin: 0 0 4px; }
+.wp-biz { display: flex; gap: 10px; align-items: center; }
+.wp-biz > div { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.wp-biz small { color: var(--muted); }
+.wp-logo { width: 44px; height: 44px; border-radius: 8px; background: var(--accent-soft); color: var(--accent); display: grid; place-items: center; font-weight: 700; font-size: 18px; flex: none; }
+.wp-list { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; }
+.wp-row { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; background: var(--card); display: flex; flex-direction: column; gap: 4px; }
+.wp-main, .wp-sub { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; }
+.wp-cell { border: 0; background: none; color: inherit; padding: 2px 4px; margin: -2px -4px; border-radius: 5px; font: inherit; text-align: left; cursor: pointer; display: inline-flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.wp-cell:hover { background: var(--card-hover); }
+.wp-name { font-weight: 600; }
+.wp-num, .wp-exp { color: var(--muted); font-size: 12.5px; }
+.wp-empty { color: var(--faint); font-weight: 400; }
+.wp-left { font-size: 12px; padding: 1px 7px; border-radius: 10px; background: var(--panel); color: var(--muted); }
+.wp-left.ok { color: var(--ok); }
+.wp-left.soon { color: var(--warn, #b8860b); }
+.wp-left.warn, .wp-left.bad { color: #fff; background: var(--danger); }
+.wp-more { margin-left: auto; font-size: 12px; }
+.wp-none { color: var(--muted); margin: 8px 0; }
+.wp-add { display: flex; flex-wrap: wrap; gap: 6px; }
+.wp-add input:not([type=date]) { flex: 1 1 200px; min-width: 0; }
+.wp-warn, .wp-warn-on { margin-top: 8px; }
+.wp-warn-on { display: block; }
+.wp-links { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 6px; margin-top: 6px; }
+.wp-link { border: 1px solid var(--line); background: var(--card); color: inherit; border-radius: 8px; padding: 8px 10px; text-align: left; display: flex; flex-direction: column; gap: 2px; cursor: pointer; font: inherit; }
+.wp-link:hover { background: var(--card-hover); }
+.wp-link small { color: var(--muted); }

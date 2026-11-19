@@ -3323,7 +3323,9 @@
     const pinsBtn = h('button', { class: 'pins-btn', title: 'Your pins', 'aria-label': 'Your pins', 'aria-haspopup': 'menu', onclick: (e) => { e.stopPropagation(); pinsDrop(e.currentTarget); } },
       h('span', { class: 'tab-ic', html: PIN_IC.pin }), pins.length ? h('span', { class: 'pins-n' }, String(pins.length)) : null, h('span', { class: 'pins-caret', html: PIN_IC.caret }));
     // First, the workspace you're in: its name opens your workspaces (switch, new, join).
-    const wsBtn = S.workspace && h('button', { class: 'ws-switch', title: 'Switch workspace', onclick: (e) => { e.stopPropagation(); teamMenu(e.currentTarget); } }, h('span', { class: 'ws-sw-n' }, S.workspace.name), h('span', { class: 'ws-sw-c', 'aria-hidden': 'true' }, '▾'));
+    // The workspace's name at the start of the strip opens its profile (the owner, 2026-11-19: the header's name
+    // already switches workspaces, and two switchers on top of each other was one too many).
+    const wsBtn = S.workspace && h('button', { class: 'ws-switch', title: 'Workspace profile: insurance & licenses, rules', onclick: (e) => { e.stopPropagation(); profileSheet(); } }, h('span', { class: 'ws-sw-n' }, S.workspace.name), h('span', { class: 'ws-sw-c', 'aria-hidden': 'true' }, '›'));
     $('#workTabs')?.replaceChildren(...(wsBtn ? [wsBtn, h('span', { class: 'ws-sw-sep', 'aria-hidden': 'true' })] : []), ...workKeys().filter((k) => k !== 'tools').map(wbtn), pinsBtn, ...(workKeys().includes('tools') ? [wbtn('tools')] : []));
     markTabs();
     renderChatSide();
@@ -3373,7 +3375,7 @@
       const left = (k, list) => list.filter((x) => !pins.some((y) => y.go === k + ':' + x.id));
       const group = (head, k, list, name) => (left(k, list).length ? [{ head }, ...left(k, list).slice(0, 25).map((x) => opt(k, x.id, name(x)))] : []);
       const items = [
-        ...(toolOn('projects') ? group('Boards', 'proj', S.projects || [], (x) => x.name) : []),
+        ...(toolOn('projects') ? group('Boards', 'proj', boardsOnly(), (x) => x.name) : []),
         ...group('Campaigns', 'camp', (S.campaigns || []).filter((c) => c.status !== 'done'), (x) => x.name),
         ...group('Chat feeds', 'chan', (S.workspace?.channels || []).filter((c) => !c.memberIds || c.ownerId === S.me?.memberId || c.memberIds.includes(S.me?.memberId)), (x) => x.name),
         ...group('Stacks', 'stack', S.workspace?.stacks || [], (x) => x.name),
@@ -5495,7 +5497,7 @@
       actions: [{ kind: 'wait', amount: 2, unit: 'hours' }, { kind: 'text', text: 'Thanks for having us today for {record}! Any questions, just reply here.' }] },
     { for: ['trades'], name: 'Big job won? Have Operations plan it', why: 'When a quote over $5,000 is accepted, Operations plans materials, crew and schedule', trigger: { kind: 'quote.accepted' },
       actions: [{ kind: 'if', when: [{ field: 'amount', op: 'over', value: '5000' }], then: [{ kind: 'agent', agent: 'ops', ask: 'We just won {record} for {customer} ({amount}). Plan it: materials to order, who goes, and a schedule.', wait: false }, { kind: 'notify', text: '{record} ({amount}) is won. Operations is planning it.', to: ['owners'] }], else: [] }] },
-    { for: ['trades'], name: 'License expiring? Owners hear', why: '30 days before a license or insurance expires, the owners get a note (Licenses & insurance list)', trigger: { kind: 'record.date', days: -30, time: '08:00' }, actions: [{ kind: 'notify', text: '{record} expires {date}. Time to renew.', to: ['owners'] }] },
+    { for: ['trades'], profile: true, name: 'License expiring? Owners hear', why: '30 days before a license or insurance expires, the owners get a note (Workspace profile → Insurance & licenses)', trigger: { kind: 'record.date', days: -30, time: '08:00' }, actions: [{ kind: 'notify', text: '{record} expires {date}. Time to renew.', to: ['owners'] }] },
     { for: ['trades', 'services'], name: 'Plan renewing? Call them', why: '14 days before a service plan renews, make a task to call the customer', trigger: { kind: 'record.date', days: -14, time: '08:00' }, actions: [autoT('Call about renewing {record} ({date})', '', 3)] },
     { for: ['trades', 'services', 'store'], name: 'Job won? Tell the crew', why: 'When a job moves to Won, post it for the team', trigger: { kind: 'record.stage', to: 'Won' }, actions: [{ kind: 'post', text: '{record} is {stage} 🎉', channelId: 'general' }] },
     // Services and appointments.
@@ -5614,6 +5616,8 @@
     const box = h('div', { class: 'auto-edit' });
     const opt = (v, label, sel) => h('option', { value: v, selected: v === sel }, label);
     const camps = S.campaigns.filter((c) => c.status !== 'done' || c.id === dr.trigger.campaignId);
+    // The license recipe goes on the workspace profile's Insurance & licenses list.
+    if (!x && recipe?.profile && !dr.trigger.projectId && pfProject()) { const pp = pfProject(), lt = pfList(pp); Object.assign(dr.trigger, { projectId: pp.id, typeId: lt.id, fieldId: pfField(lt, 'expires')?.id }); }
     dr.trigger.kind = { 'file.arrived': 'file.received', 'sign.signed': 'document.signed', 'contact.added': 'contact.created' }[dr.trigger.kind] || dr.trigger.kind;
     if (!AUTO_CAT.events) autoCatalog().then(() => box.isConnected && draw()).catch(() => {});
     const stages = [...new Set((S.contacts || []).map((c) => c.stage).filter(Boolean))];
@@ -11829,6 +11833,7 @@
   // Contacts, Companies and Deals with a pipeline board. Records load when a project opens and stay in step
   // with everyone through the socket.
   const PR = { open: null, type: null, view: null, q: '', records: new Map(), panel: null, loading: null, newing: null };
+  const WP = { open: false, id: null, timer: null }; // the workspace profile sheet (profileSheet)
   // The New project page at full size (see pjNewPage): its saved templates, the trade families, and whether it's redrawing itself.
   const pjWide = () => document.body.classList.contains('wide');
   const PJN = { own: null, trades: null, redraw: false };
@@ -11870,6 +11875,7 @@
   function prUpsertRecord(r) {
     if (!PR.records.has(r.projectId)) return;
     PR.records.set(r.projectId, [...prRecs(r.projectId).filter((x) => x.id !== r.id), r]);
+    if (WP.open && r.projectId === WP.id) pfSoon();
   }
   // Live changes from others, redrawn unless someone's typing in the project.
   let prTimer = null;
@@ -11936,8 +11942,108 @@
     const tNow = $('#projects .pj-panel .pj-title');
     if (typing && tNow && pNow?.dataset.id === typing[0]) { tNow.value = typing[1]; tNow.focus(); tNow.setSelectionRange(typing[2], typing[3]); }
   }
+  // ----- the workspace profile (the owner, 2026-11-19) -----
+  // Opened from the workspace's name at the start of Workspace's tabs (the name in the header switches workspaces).
+  // What the business is, what it must keep current (licenses, insurance, bonds, with copies and days left), and its
+  // rules and who-sees-what. Insurance & licenses are a project's list underneath (template 'profile'), so a value is
+  // edited here the way it is on a board, and its expiry automations are ordinary date automations.
+  const isProfileP = (p) => p?.template === 'profile';
+  const boardsOnly = () => (S.projects || []).filter((p) => !isProfileP(p));
+  const pfProject = () => (S.projects || []).find(isProfileP) || null;
+  const pfList = (p) => p.types.find((t) => t.key === 'licenses') || p.types[0];
+  const pfField = (t, key) => t.fields.find((f) => f.key === key);
+  function pfSoon() {
+    clearTimeout(WP.timer);
+    WP.timer = setTimeout(() => {
+      if (!WP.open || !$('#sheet .wp')) return (WP.open = false);
+      if ($('#sheet .wp')?.contains(document.activeElement) && document.activeElement.matches('input, textarea')) return pfSoon();
+      pfDraw();
+    }, 120);
+  }
+  async function profileSheet() {
+    WP.open = true;
+    sheet(S.workspace.name, [h('div', { class: 'wp' }, h('p', { class: 'day-hint' }, 'Loading…'))]);
+    try {
+      const y = await api('GET', '/profile');
+      prUpsertProject(y.project);
+      PR.records.set(y.project.id, y.records);
+      WP.id = y.project.id;
+      if (!S.automations && amAdmin()) S.automations = await api('GET', '/automations').catch(() => null);
+    } catch (e) {
+      $('#sheet .wp')?.replaceChildren(h('p', { class: 'err' }, e.message));
+      return;
+    }
+    pfDraw();
+  }
+  // Days to go: negative once it's lapsed.
+  const pfDaysLeft = (d) => (d ? Math.round((Date.parse(d + 'T00:00:00') - Date.parse(dayKey(new Date()) + 'T00:00:00')) / 864e5) : null);
+  function pfDraw() {
+    const box = $('#sheet .wp');
+    const p = projById(WP.id);
+    if (!box || !p) return;
+    const t = pfList(p);
+    const F = Object.fromEntries(['name', 'kind', 'number', 'expires', 'files', 'whose'].map((k) => [k, pfField(t, k)]));
+    const recs = prRecs(p.id).filter((r) => r.typeId === t.id)
+      .sort((a, b) => String(F.expires && a.values[F.expires.id] || '9999').localeCompare(String(F.expires && b.values[F.expires.id] || '9999')));
+    const b = S.workspace.brand || {};
+    // A value, edited in place as on a board.
+    const cell = (r, f, cls, empty) => {
+      if (!f) return null;
+      const v = r.values[f.id];
+      const has = v != null && v !== '' && !(Array.isArray(v) && !v.length);
+      const el = h('button', { class: 'wp-cell ' + cls + (has ? '' : ' wp-empty'), title: f.name, onclick: (e) => { e.stopPropagation(); prEdit(e.currentTarget, p, t, r, f); } }, ...(has ? [].concat(prShow(p, f, v, r)) : [empty || f.name]));
+      return el;
+    };
+    const left = (r) => {
+      const n = pfDaysLeft(F.expires && r.values[F.expires.id]);
+      if (n == null) return h('span', { class: 'wp-left' }, 'No expiry');
+      return h('span', { class: 'wp-left ' + (n < 0 ? 'bad' : n <= 30 ? 'warn' : n <= 60 ? 'soon' : 'ok') }, n < 0 ? `Lapsed ${-n} day${n === -1 ? '' : 's'} ago` : n === 0 ? 'Expires today' : `${n} day${n === 1 ? '' : 's'} left`);
+    };
+    const row = (r) => h('div', { class: 'wp-row', 'data-id': r.id },
+      h('div', { class: 'wp-main' }, cell(r, F.name, 'wp-name', 'Name it'), cell(r, F.kind, 'wp-kind', 'Kind'), cell(r, F.number, 'wp-num', 'Number')),
+      h('div', { class: 'wp-sub' }, cell(r, F.expires, 'wp-exp', 'Expires…'), left(r), cell(r, F.files, 'wp-files', '📎 Add a copy'),
+        h('button', { class: 'btn small wp-more', onclick: () => { closeSheet(); openRecord(r.id); } }, 'All details')));
+    // Adding one: its name, kind and expiry; copies go on with 📎 once it's in.
+    const nm = h('input', { placeholder: 'e.g. General liability, Contractor license', 'aria-label': 'Name' });
+    const kind = F.kind ? h('select', { 'aria-label': 'Kind' }, h('option', { value: '' }, 'Kind…'), F.kind.choices.map((c) => h('option', { value: c.id }, c.label))) : null;
+    const exp = h('input', { type: 'date', 'aria-label': 'Expires' });
+    const add = h('button', { class: 'btn primary-btn' }, 'Add');
+    const doAdd = async () => {
+      if (!nm.value.trim()) return nm.focus();
+      add.disabled = true;
+      const values = { [F.name?.id || t.primary]: nm.value.trim(), ...(kind?.value ? { [F.kind.id]: kind.value } : {}), ...(exp.value && F.expires ? { [F.expires.id]: exp.value } : {}) };
+      try { prUpsertRecord(await api('POST', `/projects/${p.id}/records`, { typeId: t.id, values })); nm.value = ''; exp.value = ''; if (kind) kind.value = ''; pfDraw(); } catch (e) { toast(e.message); }
+      add.disabled = false;
+    };
+    add.addEventListener('click', doAdd);
+    nm.addEventListener('keydown', (e) => e.key === 'Enter' && doAdd());
+    // The reminder: a date automation on this list (the recipe, aimed here), or a button to make one.
+    const warned = (S.automations || []).some((x) => x.trigger?.kind === 'record.date' && x.trigger.projectId === p.id && x.trigger.typeId === t.id);
+    const recipe = AUTO_RECIPES.find((x) => x.profile);
+    const admin = amAdmin();
+    box.replaceChildren(
+      h('section', { class: 'wp-sec wp-biz' },
+        b.logo ? h('img', { class: 'brand-logo', src: b.logo, alt: '' }) : h('span', { class: 'wp-logo' }, (S.workspace.name || '?').slice(0, 1).toUpperCase()),
+        h('div', {}, h('b', {}, S.workspace.name), h('small', {}, `${S.workspace.members.length} ${S.workspace.members.length === 1 ? 'person' : 'people'}${b.mission ? ' · ' + shortText(b.mission, 90) : ''}`)),
+        h('button', { class: 'btn small', onclick: () => { closeSheet(); openSettings('business'); } }, 'Business details')),
+      h('section', { class: 'wp-sec' },
+        h('h3', {}, '🪪 Insurance & licenses'),
+        h('p', { class: 'day-hint' }, 'Your licenses, insurance, bonds and certifications, with a copy of each, for the whole team. Upload the COI or license so it’s ready when a customer or GC asks.'),
+        recs.length ? h('div', { class: 'wp-list' }, recs.map(row)) : h('p', { class: 'wp-none' }, 'Nothing yet. Add your contractor license and insurance below.'),
+        h('div', { class: 'wp-add' }, nm, kind, exp, add),
+        warned ? h('p', { class: 'day-hint wp-warn-on' }, '🔔 The owners hear 30 days before anything here expires.')
+          : admin && recipe ? h('button', { class: 'btn small wp-warn', onclick: () => { closeSheet(); autoSheet(null, { ...recipe, trigger: { ...recipe.trigger, projectId: p.id, typeId: t.id, fieldId: F.expires?.id } }); } }, '🔔 Warn the owners 30 days before something expires') : null),
+      h('section', { class: 'wp-sec' },
+        h('h3', {}, 'Rules & permissions'),
+        admin ? h('div', { class: 'wp-links' },
+          h('button', { class: 'wp-link', onclick: () => { closeSheet(); openSettings('team'); } }, h('b', {}, 'People & roles'), h('small', {}, 'Who’s on the team, owners and admins')),
+          h('button', { class: 'wp-link', onclick: () => { closeSheet(); openSettings('team', '.vis-sec'); } }, h('b', {}, 'What members see'), h('small', {}, 'Everything, or only what’s theirs')),
+          h('button', { class: 'wp-link', onclick: () => { closeSheet(); openSettings('team', '.tools-sec'); } }, h('b', {}, 'Tools'), h('small', {}, 'Which tools the team uses')),
+          toolOn('hq') ? h('button', { class: 'wp-link', onclick: () => { closeSheet(); openTool('hq'); } }, h('b', {}, 'Company rules & approvals'), h('small', {}, 'What needs an OK, in Company HQ')) : null)
+          : h('p', { class: 'day-hint' }, 'Your team’s owners and admins set who sees what and the rules.')));
+  }
   function projectsHome() {
-    const all = [...(S.projects || [])].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+    const all = boardsOnly().sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
     const list = all.filter((p) => !p.archived), gone = all.filter((p) => p.archived);
     return [
       h('div', { class: 'pj-head' }, h('button', { class: 'icon-btn', 'aria-label': 'Close Boards', html: I.close, onclick: closeProjects }), h('h2', {}, 'Boards'), h('span', { style: 'flex:1' }), h('button', { class: 'btn pj-use-tpl', onclick: () => newProjectSheet() }, 'Use a template'), h('button', { class: 'btn primary-btn pj-new-board', onclick: (e) => newBlankBoard(e.currentTarget) }, '+ New board')),
@@ -13388,6 +13494,7 @@
     else if (msg.type === 'record:log') { if (PR.logs.has(msg.recordId)) PR.logs.set(msg.recordId, msg.log); }
     else if (msg.type === 'record:remove' && PR.records.has(msg.projectId)) PR.records.set(msg.projectId, prRecs(msg.projectId).filter((x) => x.id !== msg.id));
     if (pinned('proj:' + (msg.project?.id || msg.id)) || pinned('rec:' + msg.record?.id)) renderTabs();
+    if (WP.open && msg.projectId === WP.id) pfSoon();
     prSoon();
   }
 
@@ -13883,7 +13990,7 @@
     if (j) { PR.type = jt.id; PR.view = null; PR.panel = j.id; renderProjects(); toast('Job made from the quote. Set the install date and crew.'); }
   }
   // Ready-made lists a project can add, and saving a project's shape as a template.
-  const READY = [['jobs', '🛠️ Jobs', 'Scheduled to paid, with crews and dates'], ['clients', '🏢 Clients', 'Who you work for'], ['contacts', '👤 Contacts', 'People, with stage and source'], ['deals', '💰 Deals', 'A pipeline with values'], ['companies', '🏢 Companies', 'Businesses'], ['quotes', '🧾 Quotes', 'Numbered quotes customers accept online'], ['bids', '📐 Bids', 'Jobs you bid on'], ['price_list', '🏷️ Price list', 'Your items and prices'], ['plans', '🔁 Service plans', 'Memberships and recurring agreements, with renewals'], ['equipment', '⚙️ Customer equipment', 'Each customer’s units: model, serial, age, warranty'], ['licenses', '🪪 Licenses & insurance', 'What the business keeps current, with days left']];
+  const READY = [['jobs', '🛠️ Jobs', 'Scheduled to paid, with crews and dates'], ['clients', '🏢 Clients', 'Who you work for'], ['contacts', '👤 Contacts', 'People, with stage and source'], ['deals', '💰 Deals', 'A pipeline with values'], ['companies', '🏢 Companies', 'Businesses'], ['quotes', '🧾 Quotes', 'Numbered quotes customers accept online'], ['bids', '📐 Bids', 'Jobs you bid on'], ['price_list', '🏷️ Price list', 'Your items and prices'], ['plans', '🔁 Service plans', 'Memberships and recurring agreements, with renewals'], ['equipment', '⚙️ Customer equipment', 'Each customer’s units: model, serial, age, warranty']];
   function prReadyMenu(anchor, p) {
     const left = READY.filter(([k]) => !p.types.some((t) => t.key === k));
     const trades = p.types.filter((t) => t.trade).map((t) => t.trade);

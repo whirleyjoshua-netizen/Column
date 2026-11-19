@@ -696,6 +696,81 @@ export function projectsModule({ onEvent = null, canSeeItem = () => true, seal =
     const extra = companionTypes(picked).slice(0, Math.max(0, room - picked.length));
     return [...picked.map((k) => typeFrom(tradeType(k), () => null)), ...extra.map((x) => typeFrom(x, () => null))];
   }
+  // The workspace profile (the owner, 2026-11-19): licenses, insurance, bonds and certifications, kept once for the
+  // whole business instead of as a tab on every trades board. It is a project of its own (template 'profile') so its
+  // records, copies, days left and date automations work as any list's do. It is never private (the whole team proves
+  // it), never deleted or archived, and the app doesn't list it with the boards. Made the first time it's asked for.
+  const isProfile = (p) => p?.template === 'profile';
+  function profileOf(ws) {
+    let p = Object.values(db.projects).find((x) => x.wsId === ws.id && isProfile(x));
+    if (p) return p;
+    const now = Date.now();
+    p = { id: rid(), wsId: ws.id, name: 'Workspace profile', icon: '🪪', template: 'profile', types: [typeFrom(COMPANIONS.licenses, () => null)], private: false, memberIds: [], memberId: null, by: 'Kloomie', createdAt: now, updatedAt: now };
+    db.projects[p.id] = p;
+    return p;
+  }
+  const profileList = (p) => p.types.find((t) => t.key === 'licenses') || p.types[0];
+  // Boards made before the move had a Licenses & insurance list of their own: its records (copies and all) move into
+  // the profile, with any fields added to it; automations on it follow; then the list is taken off the board.
+  // A private board's list stays where it is (moving it would show the whole team what only some could see), and so
+  // does one another list links to. Running it again finds nothing left to move.
+  function moveLicensesOut() {
+    let moved = 0, changed = false;
+    for (const src of Object.values(db.projects)) {
+      if (isProfile(src) || src.private) continue;
+      const st = src.types.find((t) => t.key === 'licenses' && t.fields.some((f) => f.key === 'expires'));
+      if (!st || src.types.length === 1) continue;
+      if (src.types.some((t) => t.fields.some((f) => f.type === 'link' && f.target === st.id))) continue;
+      const ws = db.workspaces[src.wsId];
+      if (!ws) continue;
+      const dp = profileOf(ws);
+      const dt = profileList(dp);
+      // Each of the old list's fields, matched to the profile's by key; one the team added is added there too.
+      const fmap = {};
+      for (const f of st.fields) {
+        let to = dt.fields.find((x) => x.key && x.key === f.key && x.type === f.type);
+        if (!to && CALC.has(f.type)) continue; // a formula of their own reads the old list's fields: not carried over
+        if (!to) { to = JSON.parse(JSON.stringify(f)); if (dt.fields.some((x) => x.id === to.id)) to.id = rid(8); dt.fields.push(to); }
+        fmap[f.id] = to;
+      }
+      // Options are kept by id, and each copy of a list has its own: matched by label, added when missing.
+      const choiceTo = (f, to, id) => {
+        const c = f.choices?.find((x) => x.id === id);
+        if (!c || !to.choices) return id;
+        let d = to.choices.find((x) => x.label === c.label);
+        if (!d) { d = { ...c }; if (to.choices.some((x) => x.id === d.id)) d.id = rid(6); to.choices.push(d); }
+        return d.id;
+      };
+      for (const r of Object.values(db.records)) {
+        if (r.projectId !== src.id || r.typeId !== st.id) continue;
+        const values = {};
+        for (const [fid, v] of Object.entries(r.values || {})) {
+          const f = st.fields.find((x) => x.id === fid), to = fmap[fid];
+          if (!f || !to || CALC.has(to.type)) continue;
+          values[to.id] = f.type === 'select' ? choiceTo(f, to, v) : f.type === 'multi' && Array.isArray(v) ? v.map((id) => choiceTo(f, to, id)) : v;
+        }
+        Object.assign(r, { projectId: dp.id, typeId: dt.id, values });
+        moved++;
+      }
+      // Automations pointed at the old list (the "license expiring" recipe) point at the profile's.
+      const repoint = (o) => {
+        if (!o || typeof o !== 'object') return;
+        if (Array.isArray(o)) return o.forEach(repoint);
+        if (o.projectId === src.id && o.typeId === st.id) {
+          Object.assign(o, { projectId: dp.id, typeId: dt.id });
+          if (o.fieldId && fmap[o.fieldId]) o.fieldId = fmap[o.fieldId].id;
+          if (Array.isArray(o.set)) for (const s of o.set) if (s?.fieldId && fmap[s.fieldId]) s.fieldId = fmap[s.fieldId].id;
+        }
+        for (const v of Object.values(o)) repoint(v);
+      };
+      for (const x of Object.values(db.automations || {})) if (x.wsId === src.wsId) { repoint(x.trigger); repoint(x.actions); }
+      src.types = src.types.filter((t) => t !== st);
+      src.updatedAt = dp.updatedAt = Date.now();
+      changed = true;
+    }
+    if (changed) save();
+    return moved;
+  }
   // Lists from definitions, with fresh ids and links pointing at each other.
   function buildTypes(srcTypes) {
     const ids = Object.fromEntries(srcTypes.map((t) => [t.key, rid(8)]));
@@ -1147,6 +1222,7 @@ export function projectsModule({ onEvent = null, canSeeItem = () => true, seal =
       }
       case 'removeType': {
         if (!t) throw bad('That list is gone.');
+        if (isProfile(p) && t === profileList(p)) throw bad('Insurance & licenses is part of the workspace profile: it can’t be removed.');
         if (p.types.length === 1) throw bad('A project needs at least one list.');
         p.types = p.types.filter((x) => x !== t);
         for (const r of Object.values(db.records)) if (r.projectId === p.id && r.typeId === t.id) delete db.records[r.id];
@@ -1318,6 +1394,13 @@ export function projectsModule({ onEvent = null, canSeeItem = () => true, seal =
       broadcast(rec.wsId, { type: 'record', record: publicRecord(rec), projectId: rec.projectId });
       return send(res, 200, { id: rec.id, projectId: p.id, typeId: rec.typeId });
     }
+    // The workspace profile: its project (made the first time), with its records, for anyone on the team.
+    if (a === 'profile' && !b && m === 'GET') {
+      const had = Object.values(db.projects).some((x) => x.wsId === ws.id && isProfile(x));
+      const p = profileOf(ws);
+      if (!had) { save(); broadcast(ws.id, { type: 'project', project: publicProject(p) }); }
+      return send(res, 200, { project: publicProject(p), records: Object.values(db.records).filter((r) => r.projectId === p.id).map(publicRecord) });
+    }
     if (a === 'projects') {
       if (m === 'GET' && !b) return send(res, 200, Object.values(db.projects).filter((p) => p.wsId === ws.id && sees(p, auth.memberId)).map(publicProject));
       if (m === 'POST' && !b) {
@@ -1439,6 +1522,7 @@ export function projectsModule({ onEvent = null, canSeeItem = () => true, seal =
       }
       if (m === 'PATCH' && !c) {
         const body = await readJson(req, 50_000);
+        if (isProfile(p) && (body.private || body.archived)) return send(res, 400, { error: 'The workspace profile is the whole team’s: it can’t be made private or archived.' });
         if (body.name !== undefined) p.name = cleanText(body.name, 80) || p.name;
         if (body.icon !== undefined) p.icon = cleanText(body.icon, 8) || p.icon;
         if (body.private !== undefined || body.memberIds !== undefined) {
@@ -1458,6 +1542,7 @@ export function projectsModule({ onEvent = null, canSeeItem = () => true, seal =
         return send(res, 200, publicProject(p));
       }
       if (m === 'DELETE' && !c) {
+        if (isProfile(p)) return send(res, 400, { error: 'The workspace profile can’t be deleted. Remove what’s in it instead.' });
         if (!canManage(p, auth)) return send(res, 403, { error: 'Only whoever made the project and team admins can delete it.' });
         const n = Object.values(db.records).filter((r) => r.projectId === p.id).length;
         const held = n ? hold?.(ws, auth, 'deleteRecord', { summary: `Delete the project ${p.name} and its ${n} record${n === 1 ? '' : 's'}`, target: { projectId: p.id }, req: { method: 'DELETE', path: req.url, body: null } }) : null;
@@ -2375,5 +2460,5 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
     projectNews(p);
     return { project: p, made, skipped };
   }
-  return { autoSetClean, autoSetValues, autoUpdate, carryOver, dateField, dateOf, recName, importProject, cleanSpec, createRecord, publicRecord, updateRecord, route, v1, keyAuth, makeHook, publicHook, deliver, emit, quoteOf, quotePage, seesMsg, stateFor, sees, recordActivity, recordNews, words, fillFromProject, fromProjectOk, recordStory, priceList, recordAt, itemsTotals, TEMPLATES: Object.fromEntries(Object.entries(TEMPLATES).map(([k, t]) => [k, { name: t.name, icon: t.icon, about: t.about }])) };
+  return { profileOf, moveLicensesOut, isProfile, autoSetClean, autoSetValues, autoUpdate, carryOver, dateField, dateOf, recName, importProject, cleanSpec, createRecord, publicRecord, updateRecord, route, v1, keyAuth, makeHook, publicHook, deliver, emit, quoteOf, quotePage, seesMsg, stateFor, sees, recordActivity, recordNews, words, fillFromProject, fromProjectOk, recordStory, priceList, recordAt, itemsTotals, TEMPLATES: Object.fromEntries(Object.entries(TEMPLATES).map(([k, t]) => [k, { name: t.name, icon: t.icon, about: t.about }])) };
 }

@@ -290,14 +290,14 @@ export const COMPANIONS = {
   ], views: [{ name: 'By expiry', kind: 'table', sortBy: 'expires' }, { name: 'Calendar', kind: 'calendar', start: 'expires' }] },
 };
 // Which of them a trades project gets, from the trades picked: plans for repair, recurring and cleaning work;
-// equipment for repair work and the trades that service a customer's units; licenses for everyone.
+// equipment for repair work and the trades that service a customer's units. Licenses & insurance live in the
+// workspace profile (projects.js profileOf), once for the business, not on each board (the owner, 2026-11-19).
 const UNIT_TRADES = new Set(['pool', 'irrigation', 'security', 'ev', 'garage']);
 export function companionTypes(keys) {
   const fams = new Set(keys.map((k) => TRADES[k]?.family).filter(Boolean));
   return [
     ...(['service', 'recurring', 'cleaning'].some((f) => fams.has(f)) ? [COMPANIONS.plans] : []),
     ...(fams.has('service') || keys.some((k) => UNIT_TRADES.has(k)) ? [COMPANIONS.equipment] : []),
-    COMPANIONS.licenses,
   ];
 }
 

@@ -7951,7 +7951,7 @@ async function api(req, res, url) {
     const out = await STANDUP.route(req, res, parts, auth, ws);
     if (out !== null) return;
   }
-  if (a === 'projects' || a === 'records' || a === 'integrations' || a === 'project-templates') {
+  if (a === 'projects' || a === 'records' || a === 'integrations' || a === 'project-templates' || a === 'profile') {
     const out = await PJ.route(req, res, parts, auth, ws);
     if (out !== null) return;
   }
@@ -12330,6 +12330,7 @@ runAutopay();
 
 migratePeople();
 migrateDay();
+PJ.moveLicensesOut();
 dropCutImports();
 flowsStart();
 server.listen(PORT, '0.0.0.0', () => {
