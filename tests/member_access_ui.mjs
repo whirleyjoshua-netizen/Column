@@ -76,6 +76,16 @@ try {
   ok(await A.until(`!!document.querySelector('#day .day-modes [data-view=team]:not(.hidden)')`, 8000), 'Tasks → Team is there for him');
   const r = await fetch(APP + 'api/inventory', { headers: { authorization: 'Bearer ' + mo.token } });
   ok(r.status === 403, 'and the server refuses Inventory to him, too');
+  // Contacts for members: Mo sees the list, and what the owner adds shows up for him live.
+  await api('POST', '/contacts', { name: 'Dana Fox', phone: '602 555 0101' });
+  await api('PATCH', '/workspace', { memberAccess: { contacts: true } });
+  await A.ev(`location.reload(); true`);
+  await A.until(`!document.querySelector('#app')?.classList.contains('hidden') && !!document.querySelector('#settingsBtn')`, 20000);
+  ok(await A.until(`(${JSON.stringify('')} || true) && [...document.querySelectorAll('#tabs .tab-sub, #workTabs button[data-tab]')].some((b) => b.dataset.tab === 'contacts')`, 8000), 'with Contacts on for members, Mo has a Contacts tab');
+  await A.ev(`[...document.querySelectorAll('#workTabs button[data-tab=contacts], #tabs [data-tab=contacts]')].find((b) => b.offsetParent || true).click(); true`);
+  ok(await A.until(`/Dana Fox/.test(document.querySelector('#tool')?.textContent || '')`, 8000), 'and sees the team’s contacts');
+  await api('POST', '/contacts', { name: 'Lee Park', phone: '602 555 0102' });
+  ok(await A.until(`/Lee Park/.test(document.querySelector('#tool')?.textContent || '')`, 8000), 'a contact the owner adds shows up for him right away');
   await A.cmd('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
   await sleep(300);
   ok(await A.ev(`document.documentElement.scrollWidth <= 391`), 'fits a phone');

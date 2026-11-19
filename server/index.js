@@ -4867,7 +4867,9 @@ function groupNamed(wsId, name, by, make = false) {
   db.contactGroups[g.id] = g;
   return g;
 }
-const groupsNews = (wsId) => broadcast(wsId, { type: 'contact-groups', groups: groupsOf(wsId).map(publicGroup), forAdmins: true });
+// Contacts' live updates go to whoever may have Contacts: owners and admins, and members when it's on for them (2026-11-20).
+const contactsFor = (wsId) => (db.workspaces[wsId] && memberAccessOf(db.workspaces[wsId]).contacts ? {} : { forAdmins: true });
+const groupsNews = (wsId) => broadcast(wsId, { type: 'contact-groups', groups: groupsOf(wsId).map(publicGroup), ...contactsFor(wsId) });
 const emailKey = (v) => String(v || '').trim().toLowerCase();
 const phoneKey = (v) => { const d = String(v || '').replace(/\D/g, '').slice(-10); return d.length >= 7 ? d : ''; };
 const noContact = (x) => !!(x.dne || x.extDne);
@@ -4898,9 +4900,9 @@ const publicContact = (x) => ({
   note: x.note, tags: x.tags, groups: (x.groups || []).filter((id) => db.contactGroups?.[id]), dne: noContact(x), ownDne: !!x.dne, extDne: !!x.extDne, ext: x.ext, via: x.via, owns: ownsOf(x.via), pss: x.ext?.pss || null,
   assignedTo: x.assignedTo || '', lostReason: x.lostReason || '', unsub: x.unsub || null, by: x.by, createdAt: x.createdAt, updatedAt: x.updatedAt,
 });
-const contactNews = (wsId, x) => broadcast(wsId, { type: 'contact', contact: publicContact(x), forAdmins: true });
+const contactNews = (wsId, x) => broadcast(wsId, { type: 'contact', contact: publicContact(x), ...contactsFor(wsId) });
 // Many changed at once (an import, a merge, a sync): owners load them again.
-const contactsNews = (wsId) => broadcast(wsId, { type: 'contacts', forAdmins: true });
+const contactsNews = (wsId) => broadcast(wsId, { type: 'contacts', ...contactsFor(wsId) });
 // Live call lists follow the contacts, a moment after they change.
 const liveSoon = new Map();
 function refreshLiveSoon(wsId) {
@@ -9510,7 +9512,7 @@ async function api(req, res, url) {
       repointContact(ws.id, x.id, null);
       delete db.contacts[x.id];
       save();
-      broadcast(ws.id, { type: 'contact:remove', id: x.id, forAdmins: true });
+      broadcast(ws.id, { type: 'contact:remove', id: x.id, ...contactsFor(ws.id) });
       refreshLiveSoon(ws.id);
       hook(ws.id, 'contact.deleted', () => gone, auth.member);
       return send(res, 200, { ok: true });

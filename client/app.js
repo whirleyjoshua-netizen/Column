@@ -9578,8 +9578,9 @@
   async function loadPss() {
     if (!S.workspace || !amAdmin()) {
       S.pss = S.contacts = S.mail = null;
-      // Members get Email when an owner allows it.
+      // Members get Email when an owner allows it, and Contacts when it's on for members (2026-11-20).
       if (S.workspace && mayEmail()) S.mail = await api('GET', '/mail').catch(() => null);
+      if (S.workspace && toolOn('contacts') && memberMay('contacts')) S.contacts = ctLoaded(await api('GET', '/contacts').catch(() => null)) || null;
       renderCamps();
       renderTool();
       return;
