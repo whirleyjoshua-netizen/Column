@@ -58,7 +58,8 @@ try {
   let c = await cols('#tool .ag-card'); ok(c >= 2, `and the specialists sit side by side (${c} in the first row)`);
   await A.ev(`document.querySelector('#tabs [data-tab=contacts]').click(); true`);
   await A.until(`!!document.querySelector('#tool .ct-table')`);
-  w = await span('#tool .ct-table'); ok(w >= 90, `Contacts spans the page (${w}%)`);
+  // With the Groups list beside the table (2026-11-19), the two together span the page.
+  w = await span('#tool .ct-layout'); ok(w >= 90, `Contacts (groups and table) spans the page (${w}%)`);
   await A.ev(`document.querySelector('#tabs [data-tab=docs]').click(); true`);
   await A.until(`document.querySelectorAll('#tool .doc-row').length >= 3`);
   w = await span('#tool .docs-list'); ok(w >= 90, `Docs spans the page (${w}%)`);
