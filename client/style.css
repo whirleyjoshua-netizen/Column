@@ -3778,3 +3778,10 @@ body:not(.wide) .tool-grid { grid-template-columns: 1fr; }
 .home-card.code .code-sum { margin: 0 0 6px; }
 /* Saved calendar blocks on the shelf (2026-11-20) */
 .sv-chip.block { border-style: dashed; }
+/* CompanyCam tile (2026-11-20) */
+.cc-list { display: flex; flex-direction: column; gap: 6px; margin: 4px 0 10px; }
+.cc-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.cc-name { flex: 1; min-width: 160px; display: flex; flex-direction: column; }
+.cc-name small { color: var(--muted); font-size: 12px; }
+.cc-row select { max-width: 260px; }
+.cc-steps { margin: 4px 0 8px 18px; font-size: 13px; }

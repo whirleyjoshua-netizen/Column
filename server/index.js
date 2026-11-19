@@ -37,6 +37,7 @@ import { hqModule } from './hq.js';
 import { rulesModule } from './rules.js';
 import { standupModule } from './standup.js';
 import { githubModule } from './github.js';
+import { companycamModule } from './companycam.js';
 import { techAiModule } from './techai.js';
 import { describeModule } from './describe.js';
 import { signoffModule } from './signoff.js';
@@ -7854,6 +7855,8 @@ async function api(req, res, url) {
   // Someone signing a document they were sent: the link is their way in, no account.
   // GitHub telling a software project about pull requests, pushes and releases (github.js): signed, no sign-in.
   if (a === 'github' && b === 'app' && c === 'hook' && m === 'POST') return GH.appHook(req, res);
+  // CompanyCam telling the team about a photo or project (companycam.js): signed, no sign-in.
+  if (a === 'companycam' && b === 'hook' && c && m === 'POST') return CC.hook(req, res, c);
   if (a === 'github' && b === 'hook' && c && m === 'POST') return GH.hook(req, res, c);
   if (a === 'public' && b === 'sign') return signApi(req, res, c, d);
   if (a === 'public' && b === 'request') return requestApi(req, res, url, c, d);
@@ -8075,6 +8078,10 @@ async function api(req, res, url) {
   }
   if (a === 'postiz') {
     const out = await POSTIZ.route(req, res, parts, auth, ws);
+    if (out !== null) return;
+  }
+  if (a === 'companycam') {
+    const out = await CC.route(req, res, parts, auth, ws);
     if (out !== null) return;
   }
   if (a === 'agents') {
@@ -11765,6 +11772,35 @@ const AGENTS_M = agentsModule({ autoEvents: FL.EVENTS, sees: (memberId, kind, x)
   // Every change to a run goes out as news; one asked in chat is answered there as soon as it's done.
   broadcast: (wsId, msg) => { broadcast(wsId, msg); if (msg?.type === 'agent' && msg.run?.id && db.chatAsks?.[msg.run.id]) chatAskDone(msg.run.id); }, cleanText, readJson, send, notify, replay: replayAs, run: agentLlm, sendEmail: agentEmail, textToDoc, PJ, isAdminId, localNow, tzOf, fmtMinutes, hasAi: (wsId, memberId) => !!aiUse(aiOf(wsId, memberId)), POSTIZ, makeImageItem, itemFile, noContact, describeImages, canPicture: (wsId, memberId) => ['openai', 'gemini'].some((k) => !!aiOf(wsId, memberId).keys?.[k]?.sealed) });
 const GH = githubModule({ bind: OAUTH_BIND, automate: (...x) => automate(...x), alarm: (...x) => alarm(...x), db, save, broadcast, rid, cleanText, readJson, send, seal, unseal, isAdmin, PJ, sees: (p, mid) => PJ.sees(p, mid), publicUrl: PUBLIC_URL });
+// CompanyCam (companycam.js): jobs with an address to match projects to, and photos onto a job's Photos.
+const ccJobs = (ws) => Object.values(db.records).flatMap((r) => {
+  const p = r.wsId === ws.id && db.projects[r.projectId];
+  const t = p && !p.archived && typeOfP(p, r.typeId);
+  const f = t && t.fields.find((x) => x.key === 'address');
+  const a = f && r.values[f.id];
+  return a && typeof a === 'string' && t.fields.some((x) => x.type === 'files') ? [{ id: r.id, name: String(r.values[t.primary] ?? '') || t.singular || 'Job', address: a }] : [];
+});
+function ccPhoto(ws, c, recordId, { name, mime, buf, ccId, by }) {
+  const rec = db.records[recordId];
+  const p = rec?.wsId === ws.id && db.projects[rec.projectId];
+  const t = p && typeOfP(p, rec.typeId);
+  const f = t && (t.fields.find((x) => x.type === 'files' && x.key === 'photos') || t.fields.find((x) => x.type === 'files'));
+  if (!f || noRoom(ws.id, buf.length)) return null;
+  const item = baseItem({ wsId: ws.id, member: by, memberId: memberIn(ws.id, c.memberId) ? c.memberId : null, device: 'CompanyCam', deviceId: 'companycam' }, { type: 'file', name, size: buf.length, mime, pinned: true, ext: { companycam: ccId } });
+  fs.writeFileSync(path.join(FILES_DIR, item.id), buf);
+  addItem(item);
+  PJ.updateRecord(ws, p, t, rec, { [f.id]: [item.id, ...(rec.values[f.id] || [])] }, 'CompanyCam');
+  save();
+  return item;
+}
+// An event about a job carries the job, the way the app's own events do.
+function ccCtx(ctx) {
+  const rec = ctx.recordId && db.records[ctx.recordId];
+  const p = rec && db.projects[rec.projectId], t = p && typeOfP(p, rec.typeId);
+  const { recordId, ...rest } = ctx;
+  return rec && t ? { ...rest, record: rec, project: p, list: t, recordName: String(rec.values[t.primary] ?? '') } : rest;
+}
+const CC = companycamModule({ db, save, broadcast, rid, cleanText, readJson, send, seal, unseal, isAdmin, safeFetch, publicUrl: PUBLIC_URL, jobsOf: ccJobs, addPhoto: ccPhoto, automate: (w, k, x) => automate(w, k, ccCtx(x)), alarm: (...x) => alarm(...x) });
 // Daily standups on a project (standup.js): a blocker becomes a task for the project lead.
 const STANDUP = standupModule({ db, save, broadcast, rid, cleanText, readJson, send, notify, sees: (p, mid) => PJ.sees(p, mid), teamDay: (wsId) => teamDay(wsId),
   localNow: (ws) => { const n = localNow(tzOf(ws), Date.now()); return { day: n.date, weekday: n.dow, minutes: n.min }; },
@@ -12348,6 +12384,7 @@ async function eraseTeam(ws) {
   const files = teamFiles(wsId);
   await Promise.all(Object.values(db.calendars).filter((x) => x.wsId === wsId).map(revokeCalendar));
   if (db.gcontacts[wsId]) await revokeCalendar({ provider: 'google', tokens: db.gcontacts[wsId].tokens });
+  await CC.forget(wsId).catch(() => {});
   await QB.disconnect(wsId).catch(() => {});
   await TW.disconnect(wsId).catch(() => {});
   for (const sock of sockets.get(wsId) || []) sock.close(4001, 'Team deleted');

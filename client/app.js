@@ -572,6 +572,8 @@
       PR.visits.set(msg.recordId, msg.visits);
       teamSoon();
       if (PR.panel === msg.recordId) renderProjects();
+    } else if (msg.type === 'companycam') {
+      if (S.companycam) api('GET', '/companycam').then((y) => { S.companycam = y; $('#settings .cc-sec, #apps .cc-sec')?.replaceWith(companycamSection()); }).catch(() => {});
     } else if (msg.type === 'presets') {
       if (SV.list) loadPresets();
     } else if (msg.type === 'task') {
@@ -9927,7 +9929,8 @@
     { id: 'stripe', name: 'Stripe', cat: 'finance', logo: 'stripe', live: true, admin: true, blurb: 'Customers pay your invoices by card', does: ['A Pay button on every invoice and quote page', 'Paid invoices mark themselves paid'], sec: () => [paySection()], state: () => (S.payments?.connected ? 'on' : 'off') },
     ...soon('finance', [['xero', 'Xero', 'xero'], ['square', 'Square', 'square'], ['paypal', 'PayPal', 'paypal'], ['shopify', 'Shopify', 'shopify'], ['bill', 'BILL', null, 'B'], ['expensify', 'Expensify', 'expensify']]),
     ...soon('schedule', [['calendly', 'Calendly', 'calendly'], ['caldotcom', 'Cal.com', 'caldotcom'], ['acuity', 'Acuity Scheduling', null, 'A'], ['docusign', 'DocuSign', null, 'D'], ['pandadoc', 'PandaDoc', null, 'P']]),
-    ...soon('field', [['companycam', 'CompanyCam', null, 'C'], ['jobber', 'Jobber', null, 'J'], ['housecall-pro', 'Housecall Pro', null, 'H'], ['servicetitan', 'ServiceTitan', null, 'S'], ['buildertrend', 'Buildertrend', null, 'B'], ['procore', 'Procore', null, 'P'], ['autodesk', 'Autodesk', 'autodesk'], ['bluebeam', 'Bluebeam', null, 'B'], ['google-maps', 'Google Maps', 'googlemaps']]),
+    { id: 'companycam', name: 'CompanyCam', cat: 'field', mono: 'C', live: true, admin: true, blurb: 'Crew photos land on the job', does: ['Photos your crew takes in CompanyCam show up in the job’s Photos', 'Projects match jobs by address; pick the job when it isn’t clear', 'Sign-offs, invoices and your AI team can use them', 'Automations can start when a photo lands'], sec: () => [companycamSection()], state: () => (S.companycam?.connected ? 'on' : 'off') },
+    ...soon('field', [['jobber', 'Jobber', null, 'J'], ['housecall-pro', 'Housecall Pro', null, 'H'], ['servicetitan', 'ServiceTitan', null, 'S'], ['buildertrend', 'Buildertrend', null, 'B'], ['procore', 'Procore', null, 'P'], ['autodesk', 'Autodesk', 'autodesk'], ['bluebeam', 'Bluebeam', null, 'B'], ['google-maps', 'Google Maps', 'googlemaps']]),
     { id: 'postiz', name: 'Postiz', cat: 'marketing', logo: 'postiz', live: true, admin: true, blurb: 'Post to all your social channels', does: ['The Marketing Manager drafts, you approve, Postiz posts or schedules', 'One connection for Facebook, Instagram, LinkedIn, X, Threads, Bluesky and more'], sec: () => [postizSection()], state: () => (S.postiz?.connected ? 'on' : 'off') },
     postizApp('facebook', 'Facebook', 'facebook', 'facebook'),
     postizApp('instagram', 'Instagram', 'instagram', 'instagram'),
@@ -15922,6 +15925,51 @@
     return sec;
   }
   // Text messages through the team's own Twilio account.
+  // CompanyCam (companycam.js): paste a token; Kloomie makes the webhook itself; projects match jobs by address.
+  const CCUI = { all: new Set() };
+  function companycamSection() {
+    const sec = h('section', { class: 'cc-sec' }, h('h3', {}, 'CompanyCam'));
+    const x = S.companycam;
+    if (!x) {
+      api('GET', '/companycam').then((y) => { S.companycam = y; $('#settings .cc-sec, #apps .cc-sec')?.replaceWith(companycamSection()); }).catch(() => {});
+      return sec.append(h('p', { class: 'day-hint' }, 'Loading…')), sec;
+    }
+    const redo = (y) => { S.companycam = y; sec.replaceWith(companycamSection()); };
+    if (x.connected && !amAdmin()) return sec.append(h('p', {}, '✓ Connected. Photos your crew takes in CompanyCam show up in the job’s Photos.')), sec;
+    if (x.connected) {
+      const off = h('button', { class: 'btn small danger', 'data-label': '1' }, 'Disconnect');
+      off.addEventListener('click', () => confirmClick(off, () => api('DELETE', '/companycam').then(redo).catch((e) => toast(e.message))));
+      const sync = h('button', { class: 'btn small', onclick: () => api('POST', '/companycam/sync').then(redo).catch((e) => toast(e.message)) }, 'Check for new projects');
+      const link = (pid, recordId) => api('POST', '/companycam/link', { projectId: pid, recordId }).then((y) => { redo(y); if (y.brought) toast(`Linked: ${plural(y.brought, 'photo')} came in`); else if (recordId) toast('Linked'); }).catch((e) => toast(e.message));
+      // The jobs offered: the likely ones, or every job with an address once "all jobs" is tapped (kept across redraws).
+      const row = (p) => {
+        const allOn = CCUI.all.has(p.id), opts = allOn ? x.jobs || [] : p.candidates;
+        const sel = h('select', { class: 'cc-pick', 'data-project': p.id, 'aria-label': `Job for ${p.name}` }, h('option', { value: '' }, opts.length ? 'Pick the job…' : 'No job matches: pick one…'),
+          opts.map((j) => h('option', { value: j.id }, `${j.name} · ${j.address}`)));
+        const all = allOn ? null : h('button', { type: 'button', class: 'linkish', onclick: () => { CCUI.all.add(p.id); sec.replaceWith(companycamSection()); } }, 'all jobs');
+        sel.addEventListener('change', () => sel.value && link(p.id, sel.value));
+        return h('div', { class: 'cc-row' }, h('span', { class: 'cc-name' }, h('b', {}, p.name || 'Project ' + p.id), h('small', {}, p.address || 'no address')), sel, all);
+      };
+      sec.append(...[
+        h('p', {}, `✓ Connected to ${x.account}, by ${x.by}. ${x.linked} of ${plural(x.projects, 'project')} matched to jobs; ${plural(x.photos, 'photo')} brought in so far.`),
+        h('p', { class: 'day-hint' }, 'New photos on a matched project go into that job’s Photos. Projects match jobs by street address; when it isn’t clear, pick the job below and its latest photos come in.'),
+        x.error ? h('p', { class: 'err' }, x.error) : null,
+        x.waiting.length ? h('h4', {}, `Waiting for a job · ${x.waiting.length}`) : null,
+        x.waiting.length ? h('div', { class: 'cc-list' }, x.waiting.slice(0, 50).map(row)) : null,
+        h('div', { class: 'btns' }, sync, off),
+      ].filter(Boolean));
+      return sec;
+    }
+    const token = h('input', { type: 'password', placeholder: 'CompanyCam access token', autocomplete: 'off', class: 'cc-token' });
+    const go = async () => { try { redo(await api('PUT', '/companycam', { token: token.value })); toast('CompanyCam connected'); } catch (e) { toast(e.message); } };
+    sec.append(
+      h('ol', { class: 'cc-steps' },
+        h('li', {}, 'In CompanyCam, open ', h('b', {}, 'Settings → Integrations → Access tokens'), ' (or app.companycam.com/access_tokens) and make a token. It needs a Pro, Premium or Elite plan.'),
+        h('li', {}, 'Paste it here and tap Connect. Kloomie checks it and sets up the rest itself.')),
+      h('label', {}, 'Access token', token),
+      h('div', { class: 'btns' }, h('button', { class: 'btn small primary-btn cc-go', onclick: go }, 'Connect')));
+    return sec;
+  }
   function textingSection() {
     const sec = h('section', { class: 'tw-sec' }, h('h3', {}, 'Text messages (Twilio)'));
     const x = S.texting;

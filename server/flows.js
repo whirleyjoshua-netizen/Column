@@ -3,7 +3,7 @@
 // Each event says which tool it's from, what it's called, the words it fills in ({contact}, {amount}…) and the
 // filters an automation can narrow it with. index.js fires them (automate) from the one place each thing happens.
 
-export const TOOLS = { tasks: 'Tasks', contacts: 'Contacts', campaigns: 'Campaigns', projects: 'Boards', money: 'Invoices & Finance', files: 'Files & signatures', texts: 'Texts', docs: 'Docs', map: 'Map', time: 'Time', inventory: 'Inventory', github: 'GitHub', apps: 'Apps & Integrations' };
+export const TOOLS = { tasks: 'Tasks', contacts: 'Contacts', campaigns: 'Campaigns', projects: 'Boards', money: 'Invoices & Finance', files: 'Files & signatures', texts: 'Texts', docs: 'Docs', map: 'Map', time: 'Time', inventory: 'Inventory', github: 'GitHub', companycam: 'CompanyCam', apps: 'Apps & Integrations' };
 
 // filters: campaign (in a campaign), stage (a contact's stage), outcome (a call's), statuses (a check-in's),
 // project (and list), to (a record's stage it moved to), over (an amount at least this, in dollars), date (a
@@ -42,6 +42,8 @@ export const EVENTS = [
   { type: 'github.pr_opened', tool: 'github', label: 'A pull request is opened on GitHub', words: ['repo', 'branch', 'text', 'who', 'url'], filters: [] },
   { type: 'github.merged', tool: 'github', label: 'A pull request is merged on GitHub', words: ['repo', 'branch', 'text', 'who', 'url'], filters: [] },
   { type: 'github.released', tool: 'github', label: 'A release is published on GitHub', words: ['repo', 'version', 'text', 'who', 'url'], filters: [] },
+  { type: 'companycam.photo', tool: 'companycam', label: 'A CompanyCam photo lands on a job', words: ['record', 'text', 'note', 'who'], filters: ['project'] },
+  { type: 'companycam.project', tool: 'companycam', label: 'A CompanyCam project is made or changed', words: ['text', 'note', 'record', 'status', 'who'], filters: [] },
   { type: 'pin.dropped', tool: 'map', label: 'A pin is dropped on the Map (a door knocked, a flyer left)', words: ['pin', 'note', 'campaign', 'who'], filters: ['campaign'] },
   { type: 'stock.requested', tool: 'inventory', label: 'Someone asks for stock', words: ['items', 'who', 'note', 'request'], filters: [] },
   { type: 'price.changed', tool: 'inventory', label: 'A price on the price list changes', words: ['item', 'was', 'now', 'quotes', 'who'], filters: [] },
