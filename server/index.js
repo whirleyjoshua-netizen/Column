@@ -2514,7 +2514,7 @@ const READ_ONLY_OK = new Set(['billing', 'exports', 'account', 'auth', 'logout',
 function readOnlyBlock(ws, a, m, b, c) {
   const okHere = READ_ONLY_OK.has(a) && (a !== 'workspace' || b === 'delete') && (a !== 'members' || (b === 'me' && c === 'password') || c === 'reset' || m === 'DELETE');
   if (m === 'GET' || m === 'HEAD' || okHere || !billingOf(ws).readOnly) return null;
-  return billingOf(ws).state === 'ended' ? 'This team’s subscription has ended, so Kloomie is read-only. An owner can subscribe again in Settings → Team → Billing.' : 'This team’s free trial has ended, so Kloomie is read-only. An owner can subscribe in Settings → Team → Billing.';
+  return billingOf(ws).state === 'ended' ? 'This team’s subscription has ended, so Kloomie is read-only. An owner can subscribe again in Settings → Billing.' : 'This team’s free trial has ended, so Kloomie is read-only. An owner can subscribe in Settings → Team → Billing.';
 }
 // The subscription's seats follow the team, a moment after someone joins or leaves.
 const seatTimers = new Map();
@@ -8189,7 +8189,7 @@ async function api(req, res, url) {
   if (a === 'records' && c === 'review-request' && m === 'POST') {
     const at = PJ.recordAt(b, ws.id, auth.memberId);
     if (!at || !jobOfRecord(at.rec)) return send(res, 404, { error: 'That job is gone.' });
-    if (!custMsgsOf(ws).reviewUrl) return send(res, 400, { error: 'Add your review link first, in Settings → General → Customer messages.' });
+    if (!custMsgsOf(ws).reviewUrl) return send(res, 400, { error: 'Add your review link first, in Settings → Team settings → Customer messages.' });
     return send(res, 200, await askReview(ws, at.rec, auth.member));
   }
   {
@@ -9483,7 +9483,7 @@ async function api(req, res, url) {
     // campaigns, with the team's footer, and see only their own sends.
     const owner = isAdmin(auth);
     if (!owner && !ws.settings.memberEmail) return send(res, 403, { error: 'Only team owners and admins can send campaign email. They can let members send it in Settings.' });
-    if (m !== 'GET' && needsConfirm(auth)) return send(res, 403, { error: 'Confirm your email first (Settings → Account), then send campaign email.' });
+    if (m !== 'GET' && needsConfirm(auth)) return send(res, 403, { error: 'Confirm your email first (Settings → Profile & sign-in), then send campaign email.' });
     const conn = mailConn(ws.id, auth.memberId);
     const body = m === 'GET' ? {} : await readJson(req, 2_000_000);
     if (m === 'GET' && !b) {

@@ -161,7 +161,7 @@ ${button ? `<p style="margin:18px 0"><a href="${esc(button.url)}" style="display
       heading: `${team} is ready`,
       lines: [
         `Thanks for starting ${team} on ${appName}.${trialDays ? ` Your free trial runs for ${trialDays} days, with no card needed.` : ''} Three things make the biggest difference in the first week:`,
-        '1. Invite your team, in Settings → Team, so work lands with the right people.',
+        '1. Invite your team, in Settings → Members & invites, so work lands with the right people.',
         '2. Connect your calendar and email, in Apps & Integrations, so your day and your sends live in one place.',
         '3. Start your first campaign, from Campaigns → New, or ask Sidekick to plan one for you.',
         `Home has a Get started list that ticks these off as you go. Questions? Just reply to this email.`,

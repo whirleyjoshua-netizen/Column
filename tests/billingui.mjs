@@ -51,7 +51,7 @@ await sleep(800);
 ok(!(await A.ev(`!!document.querySelector('#billingBar')`)), 'no bar early in the trial');
 await A.ev(`document.querySelector('#settingsBtn').click()`);
 await sleep(400);
-await A.ev(`[...document.querySelectorAll('#settings .set-tabs button')].find((b) => b.textContent.trim() === 'Team').click()`);
+await A.ev(`document.querySelector('#settings .setx-item[data-page=billing]').click()`);
 ok(await A.until(`document.querySelector('#settings .billing-sec')?.textContent.includes('Free trial · 14 days left')`), 'Settings → Team → Billing shows the trial');
 ok(await A.ev(`document.querySelector('#settings .billing-sec').textContent.includes('$15 per person a month · 1 on the team now')`), 'the price and the team size');
 ok(await A.ev(`[...document.querySelectorAll('#settings .billing-sec button')].some((b) => b.textContent === 'Subscribe · $15 a month')`), 'and a Subscribe button with the monthly total');

@@ -58,7 +58,7 @@ try {
   await A.ev(`document.querySelector('#settingsBtn').click(); true`);
   await A.until(`!document.querySelector('#settings').classList.contains('hidden')`);
   ok(!(await A.ev(`[...document.querySelectorAll('#settings [role=tab]')].some((b) => b.textContent.startsWith('Automations'))`)), 'Settings has no Automations tab any more');
-  await A.ev(`[...document.querySelectorAll('#settings [role=tab]')].find((b) => b.textContent === 'Team').click(); true`);
+  await A.ev(`document.querySelector('#settings .setx-item[data-page=teamset]').click(); true`);
   ok(await A.until(`document.querySelector('#settings .auto-moved')?.textContent.includes('Workspace')`), 'Settings → Team says Automations are in Workspace now');
   await A.ev(`document.querySelector('#settings .auto-moved .btn').click(); true`);
   ok(await A.until(`document.querySelector('#tool h2')?.textContent.startsWith('Automations') && document.querySelector('#settings').classList.contains('hidden')`), 'its Open button opens Workspace → Automations');

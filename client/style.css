@@ -311,9 +311,6 @@ body.wide .dv-tree.folded { width: 44px; padding: 10px 4px; align-items: center;
 .fin-col { min-width: 0; padding: 14px 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); }
 .fin-col > h3:first-child { margin-top: 0; }
 /* Full size: grids instead of one long column. */
-body.wide #settings:not(.hidden) { display: grid; grid-template-columns: repeat(auto-fill, minmax(440px, 1fr)); column-gap: 32px; align-content: start; align-items: start; }
-body.wide #settings > h2, body.wide #settings > .set-tabs, body.wide #settings > .auto-moved { grid-column: 1 / -1; }
-body.wide #settings .set-tabs { max-width: 720px; }
 body.wide #tool .ag-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 10px; }
 body.wide #tool .ag-runs { display: grid; grid-template-columns: repeat(auto-fill, minmax(420px, 1fr)); gap: 6px 12px; }
 /* Docs side by side, unless one is opened to show the pages inside it (then the tree reads top to bottom). */
@@ -3817,3 +3814,60 @@ body:not(.wide) .tool-grid { grid-template-columns: 1fr; }
 .ask-saved { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 6px; }
 .ask-chip { max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ask-said { white-space: pre-wrap; background: var(--bg-soft, #f6f7fb); padding: 8px 10px; border-radius: 8px; font-size: 13px; }
+
+/* ---------- Settings, redesigned (2026-11-20): a menu of short pages, one column of cards, rows with dividers ---------- */
+#settings.settings { padding: 0; }
+.setx-top { display: flex; align-items: center; justify-content: space-between; padding: 16px 20px 6px; }
+.setx-top h1 { margin: 0; font-size: 20px; letter-spacing: -.01em; }
+.setx { display: block; }
+.setx-nav { display: flex; flex-direction: column; gap: 14px; padding: 10px 16px 24px; }
+.setx-search { width: 100%; box-sizing: border-box; padding: 9px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--card); font: inherit; font-size: 14px; color: var(--text); }
+.setx-group { display: flex; flex-direction: column; gap: 2px; }
+.setx-group-h { font-size: 11px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--faint); padding: 0 10px 6px; }
+.setx-item { display: flex; align-items: center; gap: 10px; width: 100%; padding: 9px 10px; border: 0; border-radius: 9px; background: none; color: var(--text); font: inherit; font-size: 14px; text-align: left; cursor: pointer; }
+.setx-item:hover { background: var(--card-hover); }
+.setx-item.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.setx-item > span:nth-child(2) { flex: 1; min-width: 0; }
+.setx-ic { width: 22px; text-align: center; font-size: 15px; }
+.setx-chev { color: var(--faint); font-size: 18px; line-height: 1; }
+.setx-legal { padding: 4px 10px; font-size: 12px; color: var(--faint); }
+.setx-legal a { color: inherit; }
+.setx-page { padding: 4px 16px 40px; }
+.setx-head { display: flex; align-items: flex-start; gap: 8px; margin: 6px 0 18px; }
+.setx-head h2 { margin: 0; font-size: 22px; letter-spacing: -.01em; display: block; }
+.setx-head p { margin: 4px 0 0; color: var(--muted); font-size: 14px; }
+.setx-back { margin: 2px 0 0 -6px; }
+/* Phone and narrow: the list of pages, then a page (with ‹ back). */
+body:not(.wide) .setx.list-only .setx-page, body:not(.wide) .setx:not(.list-only) .setx-nav { display: none; }
+body:not(.wide) .setx.list-only .setx-group { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 6px; }
+body:not(.wide) .setx.list-only .setx-group-h { padding: 8px 10px 4px; }
+/* Full size: the menu down the side, the page beside it. */
+body.wide .setx { display: grid; grid-template-columns: 250px minmax(0, 1fr); align-items: start; gap: 8px; padding: 0 12px; }
+body.wide .setx-nav { position: sticky; top: 0; padding: 12px 8px 24px; }
+body.wide .setx-chev { display: none; }
+body.wide .setx-page { padding: 12px 28px 48px; max-width: 780px; }
+body.wide .settings:not(.side) .setx-page p, body.wide .settings:not(.side) .setx-page .day-hint { max-width: none; }
+/* The cards: each section is one, with a clear title; its rows are split by lines. */
+.setx-cards { display: flex; flex-direction: column; gap: 16px; }
+.setx-cards > section { margin: 0; background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 4px 20px 14px; }
+.setx-cards > section > h3 { font-size: 15px; font-weight: 650; text-transform: none; letter-spacing: 0; color: var(--text); margin: 14px 0 6px; }
+.setx-cards > section p, .setx-cards > section .day-hint { font-size: 13.5px; color: var(--muted); line-height: 1.5; margin: 0 0 10px; }
+.setx-cards .srow { padding: 12px 0; gap: 16px; }
+.setx-cards .srow > span { font-size: 14px; }
+.setx-cards .srow small { font-size: 13px; line-height: 1.45; margin-top: 2px; }
+.setx-cards > section > .srow:first-of-type { border-top: 0; }
+.setx-cards > section > .seg { margin: 4px 0 10px; }
+.setx-cards > section > .btns { margin-top: 10px; }
+.setx-cards .stack-row { margin: 6px 0; }
+.setx-cards .picks-h { font-size: 11.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--faint); margin: 16px 0 2px; padding-top: 12px; border-top: 1px solid var(--line); }
+.setx-cards .access-sec .srow { border-bottom: 0; }
+/* What members can use: the switches two or three across. */
+body.wide .setx-cards .access-sec { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 28px; }
+body.wide .setx-cards .access-sec > :not(.srow) { grid-column: 1 / -1; }
+body.wide .setx-cards .access-sec .srow { border-bottom: 1px solid var(--line); }
+/* Danger zone: deleting and leaving, outlined in red. */
+.setx-cards > section.danger-sec { border-color: color-mix(in srgb, var(--danger) 45%, var(--line)); }
+.setx-cards > section.danger-sec > h3 { color: var(--danger); }
+.setx-cards .srow.off-team > span { color: var(--muted); }
+.setx-cards .srow.off-team .toggle { opacity: .45; }
+.off-tag { display: inline-block; margin-left: 8px; padding: 1px 8px; border-radius: 99px; font-size: 11px; font-style: normal; font-weight: 600; color: var(--muted); background: var(--panel); border: 1px solid var(--line); vertical-align: 1px; }

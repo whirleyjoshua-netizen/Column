@@ -52,6 +52,9 @@ try {
   ok(await P.ev(`!document.body.classList.contains('wide') && getComputedStyle(document.querySelector('#menuBtn')).display !== 'none'`), 'the column has the drawer (☰)');
   // Settings → Window → Full size.
   await P.ev(`document.querySelector('#menuBtn').click(); document.querySelector('#settingsBtn').click(); true`);
+  // Settings is a list of pages in a column (2026-11-20); the window switch is under Notifications (this device).
+  await P.until(`!!document.querySelector('#settings .setx-item[data-page=notify]')`);
+  await P.ev(`document.querySelector('#settings .setx-item[data-page=notify]').click(); true`);
   ok(await P.until(`!!document.querySelector('#settings .desk-mode [data-mode=full]')`), 'Settings has the Window switch: Column or Full size');
   await P.ev(`document.querySelector('#settings .desk-mode [data-mode=full]').click(); true`);
   ok(await P.until(`outerWidth >= 720`, 5000), 'Full size makes it a normal, wide window');

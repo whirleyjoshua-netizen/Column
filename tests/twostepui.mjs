@@ -36,8 +36,8 @@ try {
   await A.ev(`(() => { document.querySelector('[data-mode=create]').click(); const f = document.querySelector('#loginForm'); f.workspace.value = '${team}'; f.name.value = 'Jo'; f.password.value = 'secret1pad'; f.device.value = 'Jo laptop'; f.email.value = '${email}'; f.requestSubmit(); })()`);
   ok(await A.until(`!document.querySelector('#app').classList.contains('hidden')`), 'Jo made a team and is in');
   await A.ev(`document.querySelector('#settingsBtn').click()`);
-  await A.until(`!!document.querySelector('#settings [role=tab]')`);
-  await A.ev(`[...document.querySelectorAll('#settings [role=tab]')].find((x) => /Account/.test(x.textContent)).click()`);
+  await A.until(`!!document.querySelector('#settings .setx-item[data-page=profile]')`);
+  await A.ev(`document.querySelector('#settings .setx-item[data-page=profile]').click()`);
   ok(await A.until(`/Turn on/.test(document.querySelector('#settings .ts2-sec')?.textContent || '')`), 'Settings → Account has Two-step sign-in with Turn on');
   // Two-step needs a confirmed email (the code that was emailed) and the password.
   const outbox = DIR + '/outbox';

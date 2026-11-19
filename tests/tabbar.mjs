@@ -152,8 +152,8 @@ ok(!(await A.ev(`!!document.querySelector('#tabs [data-tab=news]')`)), 'News is 
 await A.click('#settingsBtn');
 ok(await A.until(`[...document.querySelectorAll('#settings h3')].some((x) => x.textContent === 'News')`), 'Settings → General has News');
 ok(await A.ev(`[...document.querySelectorAll('#settings h3')].some((x) => x.textContent === 'Pinned')`), 'and Pinned');
-ok(await A.ev(`[...document.querySelectorAll('#settings .set-tabs button')].some((b) => b.textContent === 'Business')`), 'Settings has a Business tab');
-await A.ev(`[...document.querySelectorAll('#settings .set-tabs button')].find((b) => b.textContent === 'Business').click()`);
+ok(await A.ev(`!!document.querySelector('#settings .setx-item[data-page=business]')`), 'Settings has a Business page');
+await A.ev(`document.querySelector('#settings .setx-item[data-page=business]').click()`);
 const biz = await A.ev(`[...document.querySelectorAll('#settings [data-biz]')].map((b) => b.dataset.biz).join()`);
 ok(biz === 'hq,cards,signs', 'Business has Company HQ, Business card and Signatures: ' + biz);
 await A.ev(`document.querySelector('#settings [data-biz=hq] button').click()`);
@@ -161,9 +161,9 @@ ok(await A.until(`document.querySelector('#settings').classList.contains('hidden
 await A.ev(`document.querySelector('#split .split-close').click()`);
 await A.click('#settingsBtn');
 await A.until(`!document.querySelector('#settings').classList.contains('hidden')`);
-await A.ev(`[...document.querySelectorAll('#settings .set-tabs button')].find((b) => b.textContent === 'Account').click()`);
+await A.ev(`document.querySelector('#settings .setx-item[data-page=profile]').click()`);
 ok(await A.until(`[...document.querySelectorAll('#settings .srow, #settings p')].some((x) => x.textContent.startsWith('Online now'))`), 'Settings → Account says who’s online now');
-await A.ev(`[...document.querySelectorAll('#settings .set-tabs button')].find((b) => b.textContent === 'General').click()`);
+await A.ev(`document.querySelector('#settings .setx-item[data-page=prefs]').click()`);
 await A.ev(`[...document.querySelectorAll('#settings .srow')].find((r) => r.textContent.startsWith('News on Home')).querySelector('input').click()`);
 ok(await (async () => { for (let i = 0; i < 30; i++) { if (JSON.stringify((await api('GET', '/state')).me.bar) === '["news"]') return true; await sleep(100); } return false; })(), 'turning it on is kept with the account');
 

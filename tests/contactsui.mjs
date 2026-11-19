@@ -142,10 +142,10 @@ ok(await A.until(`[...document.querySelectorAll('#toasts *')].some((t) => t.text
 // Settings → Team: what members see
 await A.ev(`document.querySelector('#settingsBtn').click()`);
 await sleep(400);
-await A.ev(`[...document.querySelectorAll('#settings .set-tabs button')].find((b) => b.textContent.trim() === 'Team').click()`);
+await A.ev(`document.querySelector('#settings .setx-item[data-page=access]').click()`);
 ok(await A.until(`[...document.querySelectorAll('#settings h3')].some((x) => x.textContent === 'What members see')`), 'Settings → Team has What members see');
 await A.tap(`[...document.querySelectorAll('#settings .vis-sec button')].find((b) => b.textContent === 'Only what’s theirs')`);
-ok(await A.until(`document.querySelector('#settings .vis-sec .on')?.textContent === 'Only what’s theirs' && document.querySelector('#settings .vis-sec .day-hint').textContent.includes('Nothing else reaches their devices')`), 'choosing Only what’s theirs saves and explains it');
+ok(await A.until(`document.querySelector('#settings .vis-sec .on')?.textContent === 'Only what’s theirs' && document.querySelector('#settings .vis-sec .day-hint').textContent.includes('only campaigns, tasks and files that are theirs')`), 'choosing Only what’s theirs saves and explains it');
 // Tools: a new team starts simple; switching one on puts it in the Tools menu
 await appsOpen(A, 'tools'); // Tools is in Apps & Integrations (2026-11-20)
 ok(await A.until(`document.querySelector('#apps .tool-tile[data-tool=map] input')?.checked === false`), 'Map starts off for a new team');

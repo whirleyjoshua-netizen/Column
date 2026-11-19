@@ -111,7 +111,7 @@ export function cardsModule({ db, save, readJson, send, rid, escHtml, brandOf, l
         const next = c ? { ...c, links: [...c.links], taps: [...c.taps] } : { ...draft(ws, auth.memberId, user), id: rid(), wsId: ws.id, memberId: auth.memberId, createdAt: Date.now() };
         delete next.url;
         try { applyCard(next, b); } catch (e) { return send(res, e.status || 400, { error: e.message }); }
-        if (next.on && !confirmed(ws.id, auth.memberId)) return send(res, 403, { error: 'Confirm your email first (Settings → Account), then turn your card on.' });
+        if (next.on && !confirmed(ws.id, auth.memberId)) return send(res, 403, { error: 'Confirm your email first (Settings → Profile & sign-in), then turn your card on.' });
         // Taken between the draft and the save.
         if (fresh && Object.values(db.cards).some((x) => x.handle === next.handle)) next.handle = freeHandle(next.handle);
         db.cards[next.id] = next;

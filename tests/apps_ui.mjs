@@ -126,7 +126,7 @@ try {
   await A.ev(`document.querySelector('#settingsBtn').click(); true`);
   ok(await A.until(`!document.querySelector('#settings').classList.contains('hidden')`), 'Settings opens');
   ok(await A.ev(`![...document.querySelectorAll('#settings .set-tabs button')].some((b) => b.textContent === 'Connections')`), 'Settings has no Connections tab');
-  await A.ev(`[...document.querySelectorAll('#settings .set-tabs button')].find((b) => b.textContent === 'Team').click(); true`);
+  await A.ev(`document.querySelector('#settings .setx-item[data-page=teamset]').click(); true`);
   ok(await A.until(`!!document.querySelector('#settings .apps-moved') && !document.querySelector('#settings .tools-sec')`), 'Team’s Tools moved out, with a pointer');
   await A.ev(`document.querySelector('#settings .apps-moved button').click(); true`);
   ok(await A.until(`document.querySelector('#settings').classList.contains('hidden') && !document.querySelector('#apps').classList.contains('hidden') && !!document.querySelector('#apps .tool-tile')`), 'which opens Apps & Integrations → Tools');

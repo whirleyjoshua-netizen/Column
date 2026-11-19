@@ -50,7 +50,7 @@ try {
   ok(await A.until(`!document.querySelector('#app')?.classList.contains('hidden') && !!document.querySelector('#settingsBtn')`, 15000), 'signed in');
   // Business card is in Settings → Business (2026-11-16).
   await A.tap(`document.querySelector('#settingsBtn')`);
-  await A.tap(`[...document.querySelectorAll('#settings .set-tabs button')].find((b) => b.textContent === 'Business')`);
+  await A.tap(`document.querySelector('#settings .setx-item[data-page=business]')`);
   await A.tap(`document.querySelector('#settings [data-biz=cards] button')`);
   ok(await A.until(`document.querySelector('#split .split-title')?.textContent.startsWith('Business card') && !!document.querySelector('#split .card-status')`), 'Settings → Business → Business card opens the editor');
   ok(await A.ev(`[...document.querySelectorAll('#split label')].find((l) => l.textContent.startsWith('Name'))?.querySelector('input').value === 'Maria Lopez'`), 'filled in from the account');
@@ -88,7 +88,7 @@ try {
   await A.key('Escape');
   await A.until(`!document.querySelector('#myCard')`);
   await A.tap(`document.querySelector('#settingsBtn')`);
-  await A.tap(`[...document.querySelectorAll('#settings .set-tabs button')].find((b) => b.textContent === 'Business')`);
+  await A.tap(`document.querySelector('#settings .setx-item[data-page=business]')`);
   await A.tap(`document.querySelector('#settings [data-biz=cards] button')`);
   await A.until(`!!document.querySelector('#split .card-status')`);
   ok(await A.ev(`document.querySelector('#split .card-link input')?.value === 'Book a time' && document.querySelectorAll('#split .card-link input')[1].value === 'https://cal.com/maria'`), 'the link was kept, made whole');

@@ -49,7 +49,7 @@ ok(st.workspace.tz === await A.ev(`Intl.DateTimeFormat().resolvedOptions().timeZ
 await A.ev(`document.querySelector('[data-open=settings], #settingsBtn, [title=Settings]')?.click()`);
 await sleep(600);
 const tabs = await A.ev(`[...document.querySelectorAll('#settings button, .settings button')].map((b) => b.textContent).slice(0, 12).join('|')`);
-await A.ev(`[...document.querySelectorAll('#settings [role=tab]')].find((b) => b.textContent.trim() === 'Team')?.click()`);
+await A.ev(`document.querySelector('#settings .setx-item[data-page=teamset]')?.click()`);
 await sleep(500);
 const sel = await A.ev(`(() => { const h = [...document.querySelectorAll('h3')].find((x) => x.textContent === 'Time zone'); const s = h?.parentElement.querySelector('select'); return s ? s.value + ' / ' + s.options.length : 'none'; })()`);
 console.log('tabs:', tabs, '| select:', sel);

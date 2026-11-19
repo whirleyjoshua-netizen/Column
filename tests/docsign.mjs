@@ -89,7 +89,7 @@ ok(await A.until(`[...document.querySelectorAll('#tool .doc-row')].find((r) => r
 // a signature: saved once in Settings, added to docs with / → My signature
 await A.ev(`document.querySelector('#settingsBtn').click()`);
 await sleep(400);
-await A.ev(`[...document.querySelectorAll('#settings .set-tabs button')].find((b) => b.textContent.trim() === 'Account').click()`);
+await A.ev(`document.querySelector('#settings .setx-item[data-page=signature]').click()`);
 ok(await A.until(`!!document.querySelector('#settings .sig-sec textarea')`), 'Settings → Account has Signature');
 await A.ev(`(() => { const t = document.querySelector('#settings .sig-sec textarea'); t.value = 'Jo Whirley\\nOwner, Premier Shades\\n(702) 555-0199'; })()`);
 await A.tap(`[...document.querySelectorAll('#settings .sig-sec button')].find((b) => b.textContent === 'Save')`);

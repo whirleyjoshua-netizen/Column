@@ -9614,12 +9614,14 @@
     closeTool();
     const s = $('#settings');
     if (s.classList.toggle('hidden')) return;
+    S.setDeep = false; // a phone opens on the list of pages
     renderSettings();
   });
   // Opens Settings on one of its tabs, scrolled to a section: the AI keys, unless told otherwise.
   function openSettings(tab = 'connections', at = '.ai-sec') {
     if (tab === 'connections' || at === '.tools-sec') return openApps(APP_AT[at]); // their own page since 2026-11-20
-    S.setTab = tab;
+    S.setTab = SET_AT[at] || setPage(tab);
+    S.setDeep = true;
     $('#settings').classList.remove('hidden');
     renderSettings();
     $('#settings ' + at)?.scrollIntoView({ block: 'start' });
@@ -16379,7 +16381,7 @@
     const sec = h('section', { class: 'ts2-sec' }, h('h3', {}, 'Two-step sign-in'));
     const redo = () => sec.replaceWith(twoStepSection());
     api('GET', '/account/two-step').then((x) => {
-      const hint = h('p', { class: 'day-hint' }, 'After your password, Kloomie also asks for a 6-digit code from an app on your phone (Google Authenticator, Microsoft Authenticator, 1Password, Authy…). Someone who learns your password still can’t get in.');
+      const hint = h('p', { class: 'day-hint' }, 'After your password, a 6-digit code from an authenticator app on your phone (Google or Microsoft Authenticator, 1Password, Authy…), so a stolen password isn’t enough.');
       if (!x.on) {
         const go = () => {
           const pw = h('input', { type: 'password', autocomplete: 'current-password', placeholder: 'Your password' });
@@ -17496,7 +17498,7 @@
     const body = [
       h('p', { class: 'day-hint' }, 'In Notion: ', h('b', {}, 'Settings → Export'), ', choose ', h('b', {}, 'Markdown & CSV'), ', include subpages and ', h('b', {}, 'Create folders for subpages'), ', then upload the .zip it gives you here.'),
       h('p', { class: 'day-hint' }, 'Every page becomes a doc, with the pages inside it inside it. Pictures and files come too, and links between pages still work. ',
-        projOn ? 'Databases become projects in Projects, each row a record with its page.' : 'Databases become tables in a doc' + (amAdmin() ? ' (turn on Projects in Settings → Team first to bring them in as projects you can sort, filter and put on a board).' : '.')),
+        projOn ? 'Databases become projects in Projects, each row a record with its page.' : 'Databases become tables in a doc' + (amAdmin() ? ' (turn on Boards in Apps & Integrations → Tools first to bring them in as projects you can sort, filter and put on a board).' : '.')),
       h('label', { class: 'field' }, h('span', {}, 'The export'), file),
       h('label', { class: 'field' }, h('span', {}, 'Who sees it'), who),
       status,
@@ -19509,7 +19511,7 @@
   // What people share back lands in Contacts (cards.js). The edit is kept here while it's being typed, so the
   // tool can redraw without losing it.
   const CD = { card: null, edit: null, loading: false, saving: false };
-  const CARD_OFF = { new: 'Not on yet. Fill it in and turn it on.', off: 'Turned off: nobody can open it.', confirm: 'Confirm your email (Settings → Account) to turn your card on.', tool: 'Business cards are off for your team.', gone: 'Not available.' };
+  const CARD_OFF = { new: 'Not on yet. Fill it in and turn it on.', off: 'Turned off: nobody can open it.', confirm: 'Confirm your email (Settings → Profile & sign-in) to turn your card on.', tool: 'Business cards are off for your team.', gone: 'Not available.' };
   async function loadCard(force) {
     if (CD.loading || (CD.card && !force)) return;
     CD.loading = true;
@@ -22070,7 +22072,7 @@
           return keys.length ? ` From their list: ${keys.map((k) => `{${k}}`).join(' ')}.` : '';
         })() + (lined ? ` {opener} is each person’s own line (${lined} of ${to.length}).` : '')),
         h('div', { class: 'mail-tools' }, openers),
-        SG.mine.email ? h('label', { class: 'pick' }, useSig, 'End with my signature') : h('small', { class: 'day-hint' }, 'Add your signature in Settings → Account to end every email with it.'),
+        SG.mine.email ? h('label', { class: 'pick' }, useSig, 'End with my signature') : h('small', { class: 'day-hint' }, 'Add your signature in Settings → Signature to end every email with it.'),
         h('label', {}, 'Footer: your business and mailing address', footer),
         h('small', { class: 'day-hint' }, amAdmin() ? 'Every email ends with this and the person’s own unsubscribe link.' : 'Every email ends with this and the person’s own unsubscribe link. Team owners set the footer.'),
         h('label', {}, 'Log each email in a campaign', camp),
@@ -22343,40 +22345,93 @@
     return box;
   }
 
-  const SET_TABS = [['general', 'General'], ['team', 'Team'], ['business', 'Business'], ['account', 'Account']]; // Connections moved to Apps & Integrations (2026-11-20)
+  // Settings' pages, in groups down the side: [key, name, icon, what it's for]. Members see their own pages and the team's people.
+  const setPages = (admin, billing) => [
+    ['You', [['profile', 'Profile & sign-in', '👤', 'Your email, password and the devices you’re signed in on.'], ['notify', 'Notifications', '🔔', 'What this device tells you, and how.'], ['prefs', 'Preferences', '🎛️', 'How Kloomie looks and works for you.'], ['signature', 'Signature', '✍️', 'Your email signature, and the one you sign documents with.']]],
+    ['Team', [['members', 'Members & invites', '👥', 'Who’s on the team, their roles, and how new people join.'], ...(admin ? [['access', 'What members can use', '🔐', 'Choose what members see and use. Owners and admins always have everything.']] : []), ['roles', 'Roles', '🏷️', 'The kinds of work people do, so tasks can go to a role.'], ...(admin ? [['teamset', 'Team settings', '🛠️', 'Time zone, clean-up and messages for the whole team.']] : [])]],
+    ['Business', [['business', 'Business', '🏢', 'Your brand, Company HQ, business cards and signatures.'], ...(billing ? [['billing', 'Billing', '💳', 'Your plan, seats and payment.']] : [])]],
+    ['Data', [['data', 'Export & delete', '🗂️', 'Take a copy of your things or the team’s, or leave and delete.']]],
+  ];
+  // Older names (the tabs before 2026-11-20, still in links, Help and saved on devices) → their page now.
+  const SET_OLD = { general: 'prefs', team: 'members', business: 'business', account: 'profile' };
+  const setPage = (k) => SET_OLD[k] || k || 'profile';
+  // Sections some links still point at → the page they're on.
+  const SET_AT = { '.vis-sec': 'access', '.access-sec': 'access', '.inv-sec': 'members', '.billing-sec': 'billing', '.cm-sec': 'teamset', '.sig-sec': 'signature', '.export-sec': 'data' };
+  // What's on each page, for Search settings.
+  const SET_WORDS = {
+    profile: 'email password two-step 2fa authenticator code devices signed in sign out phone computer confirm',
+    notify: 'notifications push reminders alerts desktop window menu bar login downloads test',
+    prefs: 'layout columns newest top news pinned pins stacks folders',
+    signature: 'signature initials draw email',
+    members: 'people invite code join email remove reset password owner admin member',
+    access: 'members see use visibility tabs tools campaigns boards contacts chat stacks inventory finance map vault templates schedule campaign email',
+    roles: 'roles sales installs marketing',
+    teamset: 'time zone auto-clear clear remove items customer messages tools automations apps integrations',
+    business: 'brand culture logo colour color mission values company hq business card signatures',
+    billing: 'billing plan seats payment card trial invoice',
+    data: 'export download zip delete team account leave close',
+  };
+
   function renderSettings() {
     const s = $('#settings');
     const ws = S.workspace;
     s.innerHTML = '';
-    s.append(h('h2', {}, 'Settings', h('button', { class: 'icon-btn', html: I.close, 'aria-label': 'Close', onclick: () => s.classList.add('hidden') })));
-    // Grouped under tabs, so each one stays short.
-    const tabs = SET_TABS.filter(([k]) => k !== 'automations' || amAdmin());
-    const tab = tabs.some(([k]) => k === S.setTab) ? S.setTab : 'general';
-    s.append(h('div', { class: 'seg set-tabs', role: 'tablist' }, tabs.map(([k, label]) =>
-      h('button', { class: tab === k ? 'on' : null, role: 'tab', 'aria-selected': String(tab === k), onclick: () => { S.setTab = k; store.set('setTab', k); renderSettings(); s.scrollTop = 0; } }, label, k === 'automations' && (S.automations || []).some(autoFailing) ? h('span', { class: 'tab-dot', title: 'One didn’t run' }) : null))));
     const me = ws.members.find((x) => x.id === S.me.memberId);
     const owner = me?.role === 'owner';
     const admin = owner || me?.role === 'admin';
+    // The redesign (the owner, 2026-11-20: "too much fine print, empty spaces, no dividers"): a menu of short pages
+    // down the side (a list to tap into on a phone), one column of cards per page, rows split by lines.
+    const bill = billingSection();
+    const pages = setPages(admin, !!bill);
+    const all = pages.flatMap(([, list]) => list);
+    const page = all.some((x) => x[0] === setPage(S.setTab)) ? setPage(S.setTab) : 'profile';
+    const wide = document.body.classList.contains('wide');
+    const listOnly = !wide && S.setList !== false && !S.setDeep;
+    const out = h('div', { class: 'setx-cards' });
+    // Cards for this page only (others aren't even built). w orders them: exports before the danger zone, say.
+    const Q = [];
+    const P = (pg, ...els) => { if (pg !== page) return; for (const el of els) { const x = typeof el === 'function' ? el() : el; if (x) Q.push([x.dataset?.w ? Number(x.dataset.w) : Q.length, x]); } };
+    const W = (w, el) => { if (el && typeof el !== 'function') el.dataset.w = w; return typeof el === 'function' ? () => W(w, el()) : el; };
+    const go = (k) => { S.setTab = k; S.setDeep = true; store.set('setTab', k); renderSettings(); s.querySelector('.setx-page')?.scrollTo(0, 0); s.scrollTop = 0; };
+    const search = h('input', { class: 'setx-search', type: 'search', placeholder: 'Search settings', 'aria-label': 'Search settings' });
+    const nav = h('nav', { class: 'setx-nav set-tabs', 'aria-label': 'Settings' }, search,
+      ...pages.map(([group, list]) => h('div', { class: 'setx-group' }, h('div', { class: 'setx-group-h' }, group),
+        ...list.map(([k, label, ic]) => h('button', { class: 'setx-item' + (k === page && !listOnly ? ' on' : ''), 'data-page': k, 'aria-current': k === page && !listOnly ? 'page' : null, onclick: () => go(k) }, h('span', { class: 'setx-ic', 'aria-hidden': 'true' }, ic), h('span', {}, label), h('span', { class: 'setx-chev', 'aria-hidden': 'true' }, '›'))))),
+      h('p', { class: 'legal-links setx-legal' }, h('a', { href: '/help', target: '_blank' }, 'Help'), ' · ', h('a', { href: '/terms', target: '_blank' }, 'Terms'), ' · ', h('a', { href: '/privacy', target: '_blank' }, 'Privacy')));
+    // Search: the pages whose names or settings match, as you type.
+    search.addEventListener('input', () => {
+      const q = search.value.trim().toLowerCase();
+      for (const b of nav.querySelectorAll('.setx-item')) b.hidden = !!q && !(`${b.textContent} ${SET_WORDS[b.dataset.page] || ''}`.toLowerCase().includes(q));
+      for (const g of nav.querySelectorAll('.setx-group')) g.hidden = ![...g.querySelectorAll('.setx-item')].some((b) => !b.hidden);
+    });
+    search.addEventListener('keydown', (e) => { if (e.key === 'Enter') { const b = [...nav.querySelectorAll('.setx-item')].find((x) => !x.hidden); if (b) b.click(); } });
+    const cur = all.find((x) => x[0] === page);
+    const head = h('div', { class: 'setx-head' }, !wide ? h('button', { class: 'icon-btn setx-back', 'aria-label': 'All settings', html: I.back, onclick: () => { S.setDeep = false; renderSettings(); } }) : null,
+      h('div', {}, h('h2', {}, cur[1]), h('p', {}, cur[3])));
+    s.append(h('div', { class: 'setx-top' }, h('h1', {}, 'Settings'), h('button', { class: 'icon-btn', html: I.close, 'aria-label': 'Close', onclick: () => s.classList.add('hidden') })),
+      h('div', { class: 'setx' + (listOnly ? ' list-only' : '') }, nav, h('div', { class: 'setx-page' }, head, out)));
+    const tab = page;
 
-    if (tab === 'general') {
+
+    {
       // Connections moved to their own page (2026-11-20).
-      s.append(h('section', { class: 'apps-moved' }, h('h3', {}, 'Connections'),
+      P('none', h('section', { class: 'apps-moved' }, h('h3', {}, 'Connections'),
         h('div', { class: 'srow' }, h('span', {}, 'Calendars, email, QuickBooks, Stripe, AI keys and the rest are in Apps & Integrations now', h('small', {}, 'In the sidebar, under Workspace')), h('button', { class: 'btn', onclick: () => openApps() }, 'Open'))));
       // Layout
       const seg = h('div', { class: 'seg' },
         h('button', { class: S.panes.length === 1 ? 'on' : null, onclick: () => { setPanes([S.panes[0] === 'files' ? 'all' : S.panes[0]]); renderSettings(); } }, 'One column'),
         h('button', { class: S.panes.length === 2 ? 'on' : null, onclick: () => { setPanes(['all', 'files']); renderSettings(); } }, 'Split into two')
       );
-      s.append(h('section', {}, h('h3', {}, 'Layout'), seg,
-        h('p', { style: 'margin-top:8px;font-size:11.5px' }, 'Use the tabs at the top of each column to switch what it shows: everything, files, or a stack.'),
-        toggleRow('Newest at the top', 'In Everything, Files and your stacks. Off: the newest is at the bottom, like a chat. Only for you, on all your devices', !!S.me?.feedTop, async (on, input) => {
+      P('prefs', h('section', {}, h('h3', {}, 'Layout'), seg,
+        h('p', {}, 'Each column’s tabs switch between everything, files or a stack.'),
+        toggleRow('Newest at the top', 'In Everything, Files and stacks. Off: newest at the bottom, like a chat. Just for you.', !!S.me?.feedTop, async (on, input) => {
           const was = !!S.me.feedTop;
           S.me.feedTop = on;
           buildPanes();
           try { S.me.feedTop = (await api('PUT', '/account/feed', { newestTop: on })).newestTop; } catch (e) { S.me.feedTop = was; input.checked = was; buildPanes(); toast(e.message); }
         })));
       // News lives on Home, for whoever turns it on (each person's own).
-      if (toolOn('news')) s.append(h('section', {}, h('h3', {}, 'News'),
+      if (toolOn('news')) P('prefs', h('section', {}, h('h3', {}, 'News'),
         toggleRow('News on Home', 'Your top stories on Home, from the topics and sites you pick. Only for you', newsOn(), async (on, input) => {
           const was = S.me.bar;
           const extra = (Array.isArray(was) ? was : []).filter((k) => k !== 'news');
@@ -22386,7 +22441,7 @@
           renderHome();
         }),
         h('div', { class: 'srow' }, h('span', {}, 'Your news', h('small', {}, 'Read it all, pick topics and sources, see what it learned')), h('button', { class: 'btn', onclick: () => { $('#settings').classList.add('hidden'); openTool('news'); } }, 'Open News'))));
-      s.append(h('section', {}, h('h3', {}, 'Pinned'),
+      P('prefs', h('section', {}, h('h3', {}, 'Pinned'),
         h('div', { class: 'srow' }, h('span', {}, pinsMine().length ? pinsMine().map(pinLabel).join(' · ') : 'Nothing pinned', h('small', {}, 'Only you see your pins')), h('button', { class: 'btn', onclick: barSheet }, 'Change'))));
 
       // Stacks
@@ -22407,8 +22462,8 @@
       };
       newInp.addEventListener('keydown', (e) => e.key === 'Enter' && addStack());
       stackSec.append(h('div', { class: 'stack-row' }, newInp, h('button', { class: 'btn', onclick: addStack }, 'Add')));
-      s.append(stackSec);
-      if (amAdmin() && toolOn('projects')) s.append(custMsgSection());
+      P('prefs', stackSec);
+      if (amAdmin() && toolOn('projects')) P('teamset', () => custMsgSection());
 
       // Auto-clear
       const sel = h('select', {},
@@ -22417,7 +22472,7 @@
         )
       );
       sel.addEventListener('change', () => api('PATCH', '/workspace', { expireHours: Number(sel.value) }).catch((e) => toast(e.message)));
-      if (amAdmin()) s.append(h('section', {}, h('h3', {}, 'Auto-clear'),
+      if (amAdmin()) P('teamset', h('section', {}, h('h3', {}, 'Auto-clear'),
         h('div', { class: 'srow' }, h('span', {}, 'Remove items', h('small', {}, 'For the whole team. Pinned items are always kept')), sel)));
 
       // This device
@@ -22470,10 +22525,10 @@
           )
         );
       }
-      s.append(dev);
+      P('notify', dev);
     }
 
-    if (tab === 'team') {
+    {
       // People
       const onlineIds = new Set(S.online.map((d) => d.memberId));
       const peopleCall = (method, path, body) => api(method, path, body).then((w) => { S.workspace = w; renderSettings(); }).catch((e) => toast(e.message));
@@ -22508,23 +22563,23 @@
         ws.inviteCode
           ? h('p', { style: 'margin-top:10px' }, 'Invite code: ', h('code', {}, ws.inviteCode))
           : h('p', { style: 'margin-top:10px' }, 'The old team passphrase works as the invite code.' + (admin ? ' Make a code to replace it.' : '')),
-        h('p', {}, 'New people open ', h('code', {}, location.origin), ', choose ', h('b', {}, 'Join team'), ', and enter the team name and code. Removing someone signs them out; make a new code too if they still know it.'),
+        h('p', {}, 'New people open ', h('code', {}, location.origin), ', choose ', h('b', {}, 'Join team'), ' and enter the team name and this code.'),
         h('div', { class: 'btns' },
           ws.inviteCode ? h('button', { class: 'btn', onclick: () => copyText(inviteText()) }, 'Copy invite') : null,
           admin ? newCode : null)
       );
-      s.append(people);
+      P('members', people);
       if (admin) {
         // What members see: everything, or only what's theirs. Owners and admins always see everything.
         const vis = ws.settings.visibility || 'all';
         const pick = (v) => api('PATCH', '/workspace', { visibility: v }).then((w) => { S.workspace = w; renderSettings(); toast(v === 'own' ? 'Members now see only what’s theirs' : 'Members now see everything'); }, (e) => toast(e.message));
-        s.append(h('section', { class: 'vis-sec' }, h('h3', {}, 'What members see'),
+        P('access', h('section', { class: 'vis-sec' }, h('h3', {}, 'What members see'),
           h('div', { class: 'seg' },
             h('button', { class: vis === 'all' ? 'on' : null, onclick: () => vis !== 'all' && pick('all') }, 'Everything'),
             h('button', { class: vis === 'own' ? 'on' : null, onclick: () => vis !== 'own' && pick('own') }, 'Only what’s theirs')),
           h('p', { class: 'day-hint', style: 'margin-top:8px' }, vis === 'own'
-            ? 'Members see the campaigns they run, belong to or have a task in, the tasks and files that are theirs, and the team’s chat. Nothing else reaches their devices. Owners and admins see everything.'
-            : 'Members see the whole team’s campaigns, tasks and files, except private campaigns and folders they’re not in. Owners and admins see everything.')));
+            ? 'Members see only campaigns, tasks and files that are theirs, plus the team’s chat.'
+            : 'Members see the whole team’s campaigns, tasks and files, except private ones they’re not in.')));
       }
       if (admin) {
         // What members can use (2026-11-20): each Workspace tab and tool, and the team's schedule. Off, the server
@@ -22532,66 +22587,70 @@
         // for the whole team (Apps & Integrations → Tools) is off for everyone either way.
         const acc = ws.memberAccess || {};
         const set = (k, on, input) => api('PATCH', '/workspace', { memberAccess: { [k]: on } }).then((w) => { S.workspace = w; toast(on ? 'Members can use it now' : 'Off for members'); }, (e) => { input.checked = !on; toast(e.message); });
-        const row = (k, name, sub, team = true) => toggleRow(name, team ? sub : `${sub} · off for the whole team (Apps & Integrations → Tools)`, acc[k] !== false, (on, input) => set(k, on, input));
-        s.append(h('section', { class: 'access-sec' }, h('h3', {}, 'What members can use'),
-          h('p', { class: 'day-hint' }, 'Owners and admins always have everything. Switch something off for members and it leaves their Workspace and Tools, Kloomie refuses it to them, and what’s in it stays off their phones and computers.'),
+        // A tool off for the whole team (Apps & Integrations → Tools) is off for everyone: its switch is greyed, with a tag.
+        const row = (k, name, sub, team = true) => {
+          const r = toggleRow(name, sub, team && acc[k] !== false, (on, input) => set(k, on, input));
+          if (!team) { r.classList.add('off-team'); r.querySelector('input').disabled = true; r.querySelector('span').append(h('em', { class: 'off-tag', title: 'Turn it on in Apps & Integrations → Tools' }, 'Off for the team')); }
+          return r;
+        };
+        P('access', h('section', { class: 'access-sec' }, h('h3', {}, 'What members can use'),
+          h('p', { class: 'day-hint' }, 'Off means it leaves their Workspace and Tools, and what’s in it isn’t sent to their devices.'),
           h('div', { class: 'picks-h' }, 'Workspace tabs'),
-          row('camps', 'Campaigns', 'Campaigns and their steps (their own tasks still show in Tasks)'),
-          row('projects', 'Boards', 'Jobs and boards (a job a task links to still opens)', toolOn('projects')),
+          row('camps', 'Campaigns', 'Campaigns and their steps'),
+          row('projects', 'Boards', 'Jobs and boards', toolOn('projects')),
           row('docs', 'Folders & Docs', 'Docs and folders', toolOn('docs') || toolOn('folders')),
-          row('contacts', 'Contacts', 'The team’s customers and contacts: see, add and pick them', toolOn('contacts')),
+          row('contacts', 'Contacts', 'See, add and pick customers', toolOn('contacts')),
           h('div', { class: 'picks-h' }, 'Tools'),
           row('chat', 'Chat', 'Feeds and messages'),
           row('column', 'Stacks', 'Shared stacks of cards and files'),
           row('inventory', 'Inventory', 'Stock, equipment and asking for items', toolOn('inventory')),
-          row('bills', 'Finance', 'Their own money and bills (the business’s is owners’ and admins’ either way)', toolOn('bills')),
+          row('bills', 'Finance', 'Their own money and bills', toolOn('bills')),
           row('meetings', 'Meeting notes', 'Recording meetings', toolOn('meetings')),
           row('map', 'Map', 'Runs, pins and mileage', toolOn('map')),
           row('vault', 'Vault', 'Their own locked codes and logins', toolOn('vault')),
           row('templates', 'Templates', 'The team’s saved emails, texts and replies'),
           h('div', { class: 'picks-h' }, 'The team'),
-          row('teamSchedule', 'See the team’s schedule', 'Tasks → Team: who’s carrying what this week, and the weeks ahead')));
+          row('teamSchedule', 'See the team’s schedule', 'Tasks → Team: who’s carrying what')));
       }
       // Tools moved to Apps & Integrations (2026-11-20); help and older videos still send people here.
-      s.append(h('section', { class: 'apps-moved' }, h('h3', {}, 'Tools'),
-        h('div', { class: 'srow' }, h('span', {}, 'Which tools your team uses is in Apps & Integrations now', h('small', {}, 'Apps & Integrations → Tools')), h('button', { class: 'btn', onclick: () => openApps({ tab: 'tools' }) }, 'Open'))));
-      if (admin) s.append(inviteSection());
-      s.append(rolesSection(peopleCall));
+      if (admin) P('teamset', W(950, h('section', { class: 'moved-sec' }, h('h3', {}, 'Moved to their own pages'),
+        h('div', { class: 'srow apps-moved' }, h('span', {}, 'Tools your team uses', h('small', {}, 'Apps & Integrations → Tools')), h('button', { class: 'btn', onclick: () => openApps({ tab: 'tools' }) }, 'Open')),
+        h('div', { class: 'srow auto-moved' }, h('span', {}, 'Automations', h('small', {}, 'Workspace → Automations')), h('button', { class: 'btn', onclick: () => { s.classList.add('hidden'); openBarItem('automations'); } }, 'Open')))));
+      if (admin) P('members', () => inviteSection());
+      P('roles', () => rolesSection(peopleCall));
       if (amAdmin()) {
-        s.append(h('section', {}, h('h3', {}, 'Campaign email'),
+        P('access', h('section', {}, h('h3', {}, 'Campaign email'),
           toggleRow('Members can send campaign email', 'From their own Outlook or Gmail, to people on lists in their own campaigns. Owners and admins can always send.', !!ws.settings.memberEmail,
             (on) => api('PATCH', '/workspace', { memberEmail: on }).catch((e) => toast(e.message)))));
         // The team's clock: what "today" is for follow-ups, quotes and anything Kloomie dates on its own.
         const zones = Intl.supportedValuesOf?.('timeZone') || [ws.tz];
         const tz = h('select', { onchange: () => api('PATCH', '/workspace', { tz: tz.value }).then(() => toast('Time zone saved'), (e) => toast(e.message)) },
           [...new Set([ws.tz, ...zones])].filter(Boolean).map((z) => h('option', { value: z, selected: z === ws.tz }, z.replace(/_/g, ' '))));
-        s.append(h('section', {}, h('h3', {}, 'Time zone'), h('p', {}, 'Where your team works. Kloomie uses it for “today” when it dates things by itself, like follow-ups and quotes.'), tz));
+        P('teamset', h('section', {}, h('h3', {}, 'Time zone'), h('p', {}, 'What “today” means when Kloomie dates things, like follow-ups.'), tz));
       }
-      s.append(brandSection());
-      const bill = billingSection();
-      if (bill) s.append(bill);
-      if (amOwner()) s.append(exportSection('team'));
-      if (amOwner()) s.append(h('section', {}, h('h3', {}, 'Delete team'),
+      P('business', W(900, () => brandSection()));
+      if (bill) P('billing', bill);
+      if (amOwner()) P('data', () => exportSection('team'));
+      if (amOwner()) P('data', W(1001, h('section', { class: 'danger-sec' }, h('h3', {}, 'Delete team'),
         h('p', {}, 'Erase this team and everything in it, for everyone. You get 7 days to change your mind.'),
-        h('div', { class: 'btns' }, h('button', { class: 'btn danger', onclick: deleteTeamSheet }, 'Delete team…'))));
+        h('div', { class: 'btns' }, h('button', { class: 'btn danger', onclick: deleteTeamSheet }, 'Delete team…')))));
     }
 
     // Automations moved to Workspace (2026-11-14); help and older videos still send people here.
-    if (tab === 'team' && amAdmin()) s.append(h('section', { class: 'auto-moved' }, h('h3', {}, 'Automations'),
-      h('div', { class: 'srow' }, h('span', {}, 'Automations are in Workspace now', h('small', {}, 'Workspace → Automations')), h('button', { class: 'btn', onclick: () => { s.classList.add('hidden'); openBarItem('automations'); } }, 'Open'))));
+    // (Automations' pointer is in the Moved card on Team settings.)
 
     // Business (the owner, 2026-11-16): Company HQ, your business card and signatures, from All tools.
-    if (tab === 'business') {
+    if (page === 'business') {
       const go = (k, run) => () => { s.classList.add('hidden'); run ? run() : openTool(k); };
       const row = (k, name, sub, run) => h('div', { class: 'srow', 'data-biz': k }, h('span', {}, name, h('small', {}, sub)), h('button', { class: 'btn', onclick: go(k, run) }, 'Open'));
       const waiting = SG.list.filter((x) => x.status === 'sent' || x.status === 'viewed').length;
-      s.append(h('section', {}, h('h3', {}, 'Your business'),
+      P('business', h('section', {}, h('h3', {}, 'Your business'),
         row('hq', 'Company HQ', HQ.data && amAdmin() && HQ.data.entries.some((x) => x.status === 'suggested') ? 'Suggestions to review' : 'What Kloomie knows about your business, and the rules it follows'),
         toolOn('cards') ? row('cards', 'Business card', 'Your own card page, QR code and share link') : null,
         toolOn('signs') ? row('signs', 'Signatures', waiting ? `${waiting} waiting to be signed` : 'Send documents to sign and see who signed', () => { SG.filter = null; openTool('signs'); }) : null));
     }
 
-    if (tab === 'account') {
+    if (['profile', 'signature', 'data'].includes(page)) {
       // Your email
       const em = h('section', {}, h('h3', {}, 'Your email'));
       if (!S.me.email) em.append(h('p', { class: 'warn' }, 'Your login doesn’t have an email yet. Add one to sign in with it and reset your password if you forget it.'), h('div', { class: 'btns' }, h('button', { class: 'btn', onclick: () => addEmailSheet(false) }, 'Add email')));
@@ -22604,10 +22663,10 @@
         }
         if (S.me.pendingEmail) em.append(h('p', { class: 'warn' }, `Changing to ${S.me.pendingEmail}: enter the code we sent there. Until then you sign in with ${S.me.email}. `,
           h('a', { href: '#', onclick: (e) => { e.preventDefault(); api('DELETE', '/account/email/change').then((r) => { Object.assign(S.me, r); drawConfirmBar(); renderSettings(); }, (er) => toast(er.message)); } }, 'Cancel the change')));
-        em.append(h('p', { style: 'font-size:11.5px' }, 'Sign in with this email on any device to reach all your teams.'),
+        em.append(h('p', {}, 'Sign in with it on any device to reach all your teams.'),
           h('div', { class: 'btns' }, h('button', { class: 'btn', onclick: changeEmailSheet }, 'Change email')));
       }
-      s.append(em);
+      P('profile', em);
 
       // Your signature: the lines at the end of email you send from Kloomie, and in docs (/ → My signature);
       // your drawn signature and initials for signing PDFs.
@@ -22616,8 +22675,8 @@
       const saveSig = h('button', { class: 'btn', onclick: () => api('PUT', '/signature', { email: sigText.value }).then((r) => { SG.mine = { ...SG.mine, ...r, email: r.email }; toast('Signature saved'); }, (e) => toast(e.message)) }, 'Save');
       const drawn = (k, label) => h('div', { class: 'srow' }, h('span', {}, label, h('small', {}, SG.mine[k] ? 'Saved' : 'Not drawn yet')),
         h('span', { class: 'sig-thumb' }, SG.mine[k] ? h('img', { src: SG.mine[k], alt: label }) : null, h('button', { class: 'btn small', onclick: () => signatureSheet(k, renderSettings) }, SG.mine[k] ? 'Redraw' : 'Draw')));
-      s.append(h('section', { class: 'sig-sec' }, h('h3', {}, 'Signature'),
-        h('p', { class: 'day-hint' }, 'Added to the end of email you send from Kloomie, and to docs with / → My signature. Outlook and Gmail don’t let apps read your email signature, so paste it here once.'),
+      P('signature', h('section', { class: 'sig-sec' }, h('h3', {}, 'Signature'),
+        h('p', { class: 'day-hint' }, 'Added to email you send from Kloomie, and to docs with / → My signature. Paste your Outlook or Gmail one here once.'),
         sigText, h('div', { class: 'btns' }, saveSig),
         drawn('sig', 'Drawn signature'), drawn('ini', 'Initials')));
 
@@ -22633,11 +22692,11 @@
           ...list.map((x) => h('div', { class: 'srow sess-row' },
             h('span', {}, x.device, x.here ? ' (this device)' : '', h('small', {}, `${x.team} · ${x.here ? 'now' : 'last used ' + ago(x.lastSeen)}`)),
             x.here ? null : h('button', { class: 'btn small', onclick: () => api('DELETE', '/account/sessions/' + x.id).then(drawWhere, (e) => toast(e.message)) }, 'Sign out'))),
-          h('p', { style: 'font-size:11.5px' }, 'A device that isn’t used for 30 days is signed out by itself.'),
+          h('p', {}, 'A device unused for 30 days signs out by itself.'),
           others.length ? h('div', { class: 'btns' }, outAll) : null].filter(Boolean));
       };
-      drawWhere();
-      s.append(where);
+      if (page === 'profile') drawWhere();
+      P('profile', where);
 
       // Your password
       const cur = h('input', { type: 'password', placeholder: 'Current password', autocomplete: 'current-password' });
@@ -22652,39 +22711,40 @@
         }
       };
       next.addEventListener('keydown', (e) => e.key === 'Enter' && savePw());
-      s.append(h('section', {}, h('h3', {}, 'Your password'),
+      P('profile', h('section', {}, h('h3', {}, 'Your password'),
         me?.hasPassword ? null : h('p', { class: 'warn' }, 'You don’t have a password yet. Set one so you can sign in on new devices.'),
         me?.hasPassword ? h('div', { class: 'stack-row' }, cur) : null,
         h('div', { class: 'stack-row' }, next, h('button', { class: 'btn', onclick: savePw }, 'Save'))));
 
-      s.append(twoStepSection());
+      P('profile', () => twoStepSection());
 
       // Account
       const online = S.online.map((d) => `${d.memberId === S.me.memberId ? 'You' : d.member} on ${d.device}${d.deviceId === S.deviceId ? ' (this one)' : ''}`).join(', ');
       const clearBtn = h('button', { class: 'btn danger', 'data-label': '1' }, 'Clear unpinned items');
       clearBtn.addEventListener('click', () => confirmClick(clearBtn, () => api('POST', '/clear').then(() => toast('Cleared')).catch((e) => toast(e.message))));
-      s.append(h('section', {}, h('h3', {}, 'Account'),
+      P('profile', h('section', {}, h('h3', {}, 'This device and sign-out'),
         h('p', {}, 'Signed in to ', h('b', {}, ws.name), ` as ${S.me.member} on ${S.me.device}.`),
         h('p', {}, 'Online now: ', online || '—'),
-        h('p', {}, 'To add another computer or phone, open ', h('code', {}, location.origin), S.me.email ? ' and sign in with your email and password.' : ' and sign in with your team, name and password.', ' On a phone, use “Add to Home Screen” to keep it as an app.'),
+        h('p', {}, 'Add a computer or phone: open ', h('code', {}, location.origin), ' and sign in. On a phone, “Add to Home Screen” keeps it as an app.'),
         h('div', { class: 'btns' },
           h('button', { class: 'btn', onclick: () => copyText(location.origin) }, 'Copy link'),
-          clearBtn,
           h('button', { class: 'btn', onclick: () => { api('POST', '/logout').catch(() => {}).finally(signOutLocal); } }, 'Sign out')
         )
       ));
 
-      s.append(exportSection('mine'));
+      P('data', () => exportSection('mine'));
+      P('data', W(1002, h('section', { class: 'danger-sec clear-sec' }, h('h3', {}, 'Clear items'), h('p', {}, 'Remove every unpinned item from Everything and the stacks, for the whole team.'), h('div', { class: 'btns' }, clearBtn))));
 
       // Leaving, and deleting the account
       const alone = ws.members.length === 1;
-      s.append(h('section', {}, h('h3', {}, 'Leave or delete'),
-        h('p', {}, alone ? `You’re the only person in ${ws.name}. To close it, delete the team from the Team tab.` : `Leaving ${ws.name} deletes your private things here: your Day, personal money, vault and private folders. What you shared stays with the team.`),
+      P('data', W(1000, h('section', { class: 'danger-sec' }, h('h3', {}, 'Leave or delete'),
+        h('p', {}, alone ? `You’re the only person in ${ws.name}. To close it, delete the team below.` : `Leaving ${ws.name} deletes your private things here: your Day, personal money, vault and private folders. What you shared stays with the team.`),
         h('div', { class: 'btns' },
           alone ? null : h('button', { class: 'btn danger', onclick: () => goodbyeSheet('leave') }, `Leave ${ws.name}…`),
-          h('button', { class: 'btn danger', onclick: () => goodbyeSheet('delete') }, 'Delete my account…'))));
-      s.append(h('p', { class: 'legal-links' }, h('a', { href: '/help', target: '_blank' }, 'Help'), ' · ', h('a', { href: '/terms', target: '_blank' }, 'Terms of service'), ' · ', h('a', { href: '/privacy', target: '_blank' }, 'Privacy policy')));
+          h('button', { class: 'btn danger', onclick: () => goodbyeSheet('delete') }, 'Delete my account…')))));
     }
+    Q.sort((x, y) => x[0] - y[0]);
+    out.append(...Q.map((x) => x[1]));
   }
 
   // Leave this team, or delete the account and leave every team on it.

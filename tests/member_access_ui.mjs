@@ -59,7 +59,7 @@ try {
   // Rico, in Settings → Team.
   await signIn(a.token);
   await A.tap(`document.querySelector('#settingsBtn')`);
-  await A.tap(`[...document.querySelectorAll('#settings .set-tabs button')].find((b) => b.textContent === 'Team')`);
+  await A.tap(`document.querySelector('#settings .setx-item[data-page=access]')`);
   ok(await A.until(`!!document.querySelector('#settings .access-sec')`), 'Settings → Team has What members can use');
   const flip = (name) => A.ev(`(() => { const r = [...document.querySelectorAll('#settings .access-sec .srow')].find((x) => x.querySelector('span').firstChild.textContent === ${JSON.stringify(name)}); const i = r.querySelector('input'); i.checked = !i.checked; i.dispatchEvent(new Event('change')); return i.checked; })()`);
   ok((await flip('Boards')) === false && (await flip('Inventory')) === false && (await flip('See the team’s schedule')) === true, 'Rico switches Boards and Inventory off for members, and the team schedule on');

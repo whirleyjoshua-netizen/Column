@@ -72,14 +72,18 @@ try {
   w = await span('#tool .auto-recipes'); ok(w >= 90, `Automations spans the page (${w}%)`);
   c = await cols('#tool .auto-recipe'); ok(c >= 4, `with its recipes four or more across (${c})`);
   await A.ev(`document.querySelector('#settingsBtn').click(); true`);
-  await A.until(`!document.querySelector('#settings').classList.contains('hidden') && document.querySelectorAll('#settings > section').length >= 2`);
-  w = await A.ev(`(() => { const ss = [...document.querySelectorAll('#settings > section')]; const m = document.querySelector('#main').getBoundingClientRect(); return Math.round((Math.max(...ss.map((e) => e.getBoundingClientRect().right)) - Math.min(...ss.map((e) => e.getBoundingClientRect().left))) / m.width * 100); })()`); ok(w >= 90, `Settings’ sections span the page (${w}%)`);
-  c = await cols('#settings > section'); ok(c >= 2, `with its sections in columns (${c} in the first row)`);
+  // Settings (redesigned 2026-11-20): the menu of pages down the side, the page's cards in one readable column beside it.
+  await A.until(`!document.querySelector('#settings').classList.contains('hidden') && !!document.querySelector('#settings .setx-nav') && document.querySelectorAll('#settings .setx-cards > section').length >= 2`);
+  w = await span('#settings .setx'); ok(w >= 90, `Settings (menu and page) spans the page (${w}%)`);
+  ok(await A.ev(`document.querySelector('#settings .setx-nav').getBoundingClientRect().right <= document.querySelector('#settings .setx-page').getBoundingClientRect().left + 1`), 'its menu is beside the page');
+  c = await cols('#settings .setx-cards > section'); ok(c === 1, `the page's cards are one column (${c})`);
   ok(await A.ev(`[...document.querySelectorAll('#settings p')].every((p) => p.getBoundingClientRect().width <= 920)`), 'long text stays a readable width');
-  // A phone: one column, as before.
+  // A phone: the list of pages first.
   await A.cmd('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
   await sleep(500);
-  c = await cols('#settings > section'); ok(c === 1, 'a phone keeps one column');
+  await A.ev(`document.querySelector('#settings [aria-label=Close]').click(); document.querySelector('#settingsBtn')?.click(); true`);
+  await A.until(`!!document.querySelector('#settings .setx.list-only')`).catch(() => {});
+  ok(await A.ev(`!!document.querySelector('#settings .setx.list-only') && getComputedStyle(document.querySelector('#settings .setx-page')).display === 'none' && document.querySelectorAll('#settings .setx-item').length >= 6`), 'a phone shows the list of pages first');
   ok(await A.ev(`document.documentElement.scrollWidth <= innerWidth`), 'nothing spills sideways on a phone');
   ok(A.errors.length === 0, 'no script errors' + (A.errors.length ? ': ' + A.errors.join(' | ') : ''));
 } catch (e) { ok(false, 'threw: ' + e.stack); }

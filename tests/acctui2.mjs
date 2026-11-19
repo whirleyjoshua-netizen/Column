@@ -49,7 +49,7 @@ await A.until(`!!document.querySelector('#loginLinks a')`);
 await A.ev(`(() => { const f = document.querySelector('#loginForm'); f.email.value = '${ol}'; f.password.value = 'olivepass1'; f.requestSubmit(); })()`);
 ok(await A.until(`!document.querySelector('#app').classList.contains('hidden')`), 'Olive signs in with her email');
 await A.ev(`document.querySelector('#settingsBtn').click()`);
-await A.ev(`[...document.querySelectorAll('#settings .set-tabs button')].find((b) => b.textContent === 'Team').click()`);
+await A.ev(`document.querySelector('#settings .setx-item[data-page=members]').click()`);
 ok(await A.until(`[...document.querySelectorAll('#settings h3')].some((h) => h.textContent === 'Invite by email')`), 'Settings → Team has Invite by email');
 await A.ev(`(() => { const i = [...document.querySelectorAll('#settings input')].find((x) => x.placeholder.includes('sam@')); i.value = '${pat}'; })()`);
 await A.ev(`[...document.querySelectorAll('#settings .btn')].find((b) => b.textContent === 'Invite').click()`);
@@ -75,7 +75,7 @@ ok(!(await B.ev(`!!document.querySelector('#confirmBar')`)), 'no code to enter: 
 // Where you're signed in, and changing email
 await B.cmd('Emulation.setDeviceMetricsOverride', { width: 1100, height: 760, deviceScaleFactor: 1, mobile: false });
 await B.ev(`document.querySelector('#settingsBtn').click()`);
-await B.ev(`[...document.querySelectorAll('#settings .set-tabs button')].find((b) => b.textContent === 'Account').click()`);
+await B.ev(`document.querySelector('#settings .setx-item[data-page=profile]').click()`);
 ok(await B.until(`document.querySelector('#settings').textContent.includes('Where you’re signed in') && document.querySelector('#settings').textContent.includes('(this device)')`), 'Settings → Account lists where she’s signed in');
 await B.ev(`[...document.querySelectorAll('#settings .btn')].find((b) => b.textContent === 'Change email').click()`);
 await B.ev(`(() => { const s = document.querySelector('#sheet'); s.querySelector('input[type=email]').value = 'pat.n${t}@shop.test'; s.querySelector('input[type=password]').value = 'patpassword'; })()`);

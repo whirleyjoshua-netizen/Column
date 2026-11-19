@@ -67,7 +67,7 @@ await A.tap(`[...document.querySelectorAll('#confirmBar .btn')].find((b) => b.te
 ok(await A.until(`!document.querySelector('#confirmBar') && [...document.querySelectorAll('.toast')].some((x) => x.textContent.includes('Email confirmed'))`), 'entering the code confirms it and the bar goes');
 // Settings shows it
 await A.ev(`document.querySelector('#settingsBtn').click()`);
-await A.ev(`[...document.querySelectorAll('#settings .set-tabs button')].find((b) => b.textContent === 'Account').click()`);
+await A.ev(`document.querySelector('#settings .setx-item[data-page=profile]').click()`);
 ok(await A.until(`document.querySelector('#settings').textContent.includes('${em} · ✓ confirmed')`), 'Settings → Account shows the email, confirmed');
 // Sign out, then forgot password
 await A.ev(`[...document.querySelectorAll('#settings .btn')].find((b) => b.textContent === 'Sign out').click()`);

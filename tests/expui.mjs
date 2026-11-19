@@ -46,7 +46,7 @@ await sleep(1000);
 const token = await A.ev(`JSON.parse(localStorage.getItem('column.token'))`);
 await A.ev(`document.querySelector('[data-open=settings], #settingsBtn, [title=Settings]')?.click()`);
 await sleep(500);
-await A.ev(`[...document.querySelectorAll('#settings [role=tab]')].find((b) => b.textContent.trim() === 'Team')?.click()`);
+await A.ev(`document.querySelector('#settings .setx-item[data-page=data]')?.click()`);
 await sleep(400);
 ok(await A.ev(`[...document.querySelectorAll('h3')].some((x) => x.textContent === 'Export the team')`), 'Settings → Team has Export the team');
 await A.ev(`[...document.querySelectorAll('#settings button')].find((b) => b.textContent === 'Export team').click()`);
@@ -55,7 +55,7 @@ await A.cmd('Page.captureScreenshot', {}).then((r) => FS.writeFileSync(process.a
 const href = await A.ev(`document.querySelector('.export-sec a').href`);
 const res = await fetch(href);
 ok(res.status === 200 && res.headers.get('content-type') === 'application/zip', 'the link downloads the .zip');
-await A.ev(`[...document.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Account')?.click()`);
+await A.ev(`document.querySelector('#settings .setx-item[data-page=data]')?.click()`);
 await sleep(400);
 ok(await A.ev(`[...document.querySelectorAll('h3')].some((x) => x.textContent === 'Export your things')`), 'Settings → Account has Export your things');
 console.log(fails ? fails + ' failed' : 'all passed');

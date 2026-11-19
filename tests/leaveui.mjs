@@ -46,7 +46,7 @@ await sleep(1000);
 const token = await A.ev(`JSON.parse(localStorage.getItem('column.token'))`);
 await A.ev(`document.querySelector('[data-open=settings], #settingsBtn, [title=Settings]')?.click()`);
 await sleep(500);
-await A.ev(`[...document.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Account')?.click()`);
+await A.ev(`document.querySelector('#settings .setx-item[data-page=data]')?.click()`); // Export & delete (2026-11-20)
 await sleep(400);
 const btns = await A.ev(`[...document.querySelectorAll('#settings button')].map((b) => b.textContent).filter((x) => /Leave|Delete my/.test(x)).join('|')`);
 ok(btns === 'Delete my account…', 'alone on a team: no Leave button, just Delete my account (' + btns + ')');
