@@ -764,6 +764,12 @@ export function projectsModule({ onEvent = null, canSeeItem = () => true, seal =
         for (const v of Object.values(o)) repoint(v);
       };
       for (const x of Object.values(db.automations || {})) if (x.wsId === src.wsId) { repoint(x.trigger); repoint(x.actions); }
+      // Runs waiting partway through (a wait step, a retry) keep the list they were about: theirs move too, or they'd
+      // lose the record when they resume (column-02, 2026-11-19).
+      for (const w of Object.values(db.flowWaits || {})) {
+        const ids = w.wsId === src.wsId && w.ctx?.ids;
+        if (ids && ids.project === src.id && ids.list === st.id) Object.assign(ids, { project: dp.id, list: dt.id });
+      }
       src.types = src.types.filter((t) => t !== st);
       src.updatedAt = dp.updatedAt = Date.now();
       changed = true;

@@ -62,8 +62,13 @@ try {
   const plt = privP.types.find((x) => x.key === 'licenses');
   await jo('POST', `/projects/${priv.id}/records`, { typeId: plt.id, values: { [plt.fields.find((f) => f.key === 'name').id]: 'Jo’s own cert' } });
 
-  // Restarted: the move runs.
+  // A run waiting partway through, about the GL policy (written into the stored data while the server is off).
   await stop();
+  const dbf = JSON.parse(fs.readFileSync(DIR + '/db.json', 'utf8'));
+  dbf.flowWaits ||= {};
+  dbf.flowWaits.w1 = { id: 'w1', wsId: oldP.wsId || Object.values(dbf.projects).find((x) => x.id === old.id).wsId, autoId: auto.id, stack: [], i: 0, at: Date.now() + 864e5, startedAt: Date.now(), ctx: { ids: { project: old.id, list: lt.id, record: lic.id } } };
+  fs.writeFileSync(DIR + '/db.json', JSON.stringify(dbf));
+  // Restarted: the move runs.
   await start();
   jo = call(joTok); sam = call(samTok);
   const after = (await jo('GET', '/projects')).body;
@@ -81,6 +86,12 @@ try {
   const autos = (await jo('GET', '/automations')).body;
   const a2 = autos.find((x) => x.id === auto.id);
   ok(a2?.trigger.projectId === pp.id && a2.trigger.typeId === pt.id && a2.trigger.fieldId === PF('expires').id, 'the expiring automation now watches the profile’s Expires');
+
+  await stop();
+  const w1 = JSON.parse(fs.readFileSync(DIR + '/db.json', 'utf8')).flowWaits?.w1;
+  ok(w1?.ctx.ids.project === pp.id && w1.ctx.ids.list === pt.id && w1.ctx.ids.record === lic.id, 'a run waiting partway through now points at the profile, so it still finds the GL policy');
+  await start();
+  jo = call(joTok); sam = call(samTok);
 
   // Again: nothing changes.
   await stop();
