@@ -11097,48 +11097,134 @@
     const from = d.places.filter((q) => q.id !== p.id).sort((a, b) => (x.stock[b.id] || 0) - (x.stock[a.id] || 0))[0];
     invMoveSheet(null, 'move', from.id, { to: p.id, label: `Put away at ${p.name}: pick the item and where it’s coming from.` });
   }
+  // A form as a page (the owner, 2026-11-19: "optimized for desktop as well"): full size beside the sidebar like the
+  // campaign and automation builders, its sections on the left and a live preview on the right; one column on a
+  // phone. The sidebar still goes places; with unsaved changes it stays and says so.
+  function pageSheet(title, sections, aside, onSave, label, dirty, what) {
+    sheet(title, [h('div', { class: 'cb-grid' }, h('div', { class: 'cb-main' }, ...sections.filter(Boolean)), aside)], onSave, label);
+    const page = $('#sheet .sheet');
+    page?.classList.add('page-form');
+    const leave = (e) => {
+      if (!page?.isConnected || $('#sheet').classList.contains('hidden')) return document.removeEventListener('click', leave, true);
+      if (!e.target.closest('#side button, #side a')) return;
+      if (dirty()) { e.preventDefault(); e.stopPropagation(); return toast(`Save the ${what}, or close it to leave it as it was.`); }
+      document.removeEventListener('click', leave, true);
+      closeSheet();
+    };
+    document.addEventListener('click', leave, true);
+    return page;
+  }
+  const pageSec = (title, sub, ...kids) => h('section', { class: 'cb-sec' }, h('h3', {}, title), sub ? h('p', { class: 'day-hint' }, sub) : null, ...kids.filter(Boolean));
+
   function invItemForm(x) {
     const v = x || { unit: 'each' };
+    const admin = INVS.data?.canManage;
     const inp = (k, ph, type = 'text') => { const e = h('input', { type, value: v[k] ?? '', placeholder: ph, class: 'inv-f-' + k, ...(type === 'number' ? { min: 0, step: 'any' } : {}) }); return e; };
     const money = (k) => h('input', { type: 'number', min: 0, step: '0.01', value: v[k] != null ? (v[k] / 100).toFixed(2) : '', class: 'inv-f-' + k, placeholder: '0.00' });
     const f = { name: inp('name', '16x25 air filter'), sku: inp('sku', 'FLT-1625'), category: inp('category', 'Filters'), unit: inp('unit', 'each, box, ft…'), cost: money('cost'), price: money('price'), reorderAt: inp('reorderAt', 'e.g. 10', 'number'), reorderQty: inp('reorderQty', 'e.g. 40', 'number'), supplier: inp('supplier', 'Who you buy it from'), onHand: inp('onHand', '0', 'number') };
-    const notes = h('textarea', { rows: 2, class: 'inv-f-notes', placeholder: 'Anything to know' }, v.notes || '');
-    const place = h('select', { class: 'inv-f-place' }, INVS.data.places.map((p) => h('option', { value: p.id }, p.name)));
+    const notes = h('textarea', { rows: 3, class: 'inv-f-notes', placeholder: 'Anything to know: where it fits, what it replaces, how to handle it' }, v.notes || '');
+    const places = INVS.data.places;
+    const place = h('select', { class: 'inv-f-place' }, places.map((p) => h('option', { value: p.id }, p.name)));
     const track = x ? null : h('select', { class: 'inv-f-track' }, h('option', { value: 'stock' }, 'By count: parts, materials, supplies'), h('option', { value: 'units' }, 'One by one: equipment, each with a serial and a label'));
+    const cats = [...new Set((INVS.data.items || []).map((y) => y.category).filter(Boolean))];
+    const sups = [...new Set((INVS.data.items || []).map((y) => y.supplier).filter(Boolean))];
+    f.category.setAttribute('list', 'invCats'); f.supplier.setAttribute('list', 'invSups');
+    const lists = h('div', { hidden: true }, h('datalist', { id: 'invCats' }, cats.map((c) => h('option', { value: c }))), h('datalist', { id: 'invSups' }, sups.map((c) => h('option', { value: c }))));
     const del = x ? h('button', { class: 'btn small danger', 'data-label': '1' }, 'Delete') : null;
     del?.addEventListener('click', () => confirmClick(del, async () => { try { await api('DELETE', '/inventory/items/' + x.id); closeSheet(); await loadInventory(); } catch (e) { toast(e.message); } }));
-    sheet(x ? 'Edit item' : 'New item', [
-      h('label', {}, 'Name', f.name),
-      track ? h('label', {}, 'Track it', track) : null,
-      h('div', { class: 'row2' }, h('label', {}, 'SKU or part number', f.sku), h('label', {}, 'Category', f.category)),
-      h('div', { class: 'row2' }, h('label', {}, 'Unit', f.unit), h('label', {}, 'Supplier', f.supplier)),
-      h('div', { class: 'row2' }, h('label', {}, 'Cost each ($)', f.cost), h('label', {}, 'Price each ($)', f.price)),
-      h('div', { class: 'row2' }, h('label', {}, 'Reorder at', f.reorderAt), h('label', {}, 'Reorder how many', f.reorderQty)),
-      x ? null : h('div', { class: 'row2' }, h('label', {}, 'On hand now', f.onHand), INVS.data.places.length ? h('label', {}, 'At', place) : h('small', { class: 'hint' }, 'It goes in Main storage; add trucks and other places under Places.')),
-      h('label', {}, 'Notes', notes),
-      h('small', { class: 'hint' }, 'Only owners and admins see costs, prices and value. Below the reorder point it shows as low stock.'),
-      del,
-    ], async () => {
+    const units = () => (track?.value || v.track) === 'units';
+    // The preview: how it'll show in the list, and what the numbers add up to.
+    const aside = h('aside', { class: 'cb-sum inv-f-sum' });
+    const num = (e) => (e.value === '' ? null : Number(e.value));
+    const draw = () => {
+      const n = x ? x.onHand : num(f.onHand) || 0, at = num(f.reorderAt), cost = num(f.cost), price = num(f.price);
+      const unit = f.unit.value.trim() || 'each';
+      const low = at != null && n <= at;
+      const li = (ic, text) => h('li', {}, h('span', { class: 'cb-ic' }, ic), text);
+      aside.replaceChildren(
+        h('div', { class: 'cb-sum-h' }, h('span', {}, units() ? '🧰' : '📦'), h('b', {}, f.name.value.trim() || 'Your item')),
+        h('ul', { class: 'cb-list' },
+          f.sku.value.trim() || f.category.value.trim() ? li('🏷️', [f.sku.value.trim() && 'SKU ' + f.sku.value.trim(), f.category.value.trim()].filter(Boolean).join(' · ')) : null,
+          li('🔢', units() ? 'Counted one by one: add each with its serial, then check them out and back' : `${invQty(n)} ${unit} on hand${!x && places.length ? ' at ' + (places.find((p) => p.id === place.value)?.name || '') : ''}`),
+          !units() ? li(low ? '⚠️' : '🔔', at == null ? 'No reorder point: it won’t show as low' : low ? `Low: at or under ${invQty(at)}, so it’s on the Reorder list` : `Shows as low at ${invQty(at)}${num(f.reorderQty) ? `, then order ${invQty(num(f.reorderQty))}` : ''}`) : null,
+          f.supplier.value.trim() ? li('🚚', 'From ' + f.supplier.value.trim()) : null,
+          admin && cost != null ? li('💵', `${invMoney(Math.round(cost * 100))} each${!units() && n ? ` · ${invMoney(Math.round(cost * 100 * n))} on hand` : ''}`) : null,
+          admin && price != null ? li('🏷️', `Sells for ${invMoney(Math.round(price * 100))}${cost != null && price > cost ? ` · ${Math.round(((price - cost) / price) * 100)}% margin` : ''}`) : null),
+        h('div', { class: 'cb-next' }, h('b', {}, x ? 'Also on it' : 'After it’s added'), h('small', {}, 'Print its QR label for the shelf or bin, use it on jobs, move it between places, and count it.')));
+    };
+    for (const e of [...Object.values(f), place, track].filter(Boolean)) { e.addEventListener('input', draw); e.addEventListener('change', draw); }
+    track?.addEventListener('change', () => { stockSec.hidden = units(); });
+    const was = () => JSON.stringify([...Object.values(f).map((e) => e.value), notes.value, place.value, track?.value]);
+    const start = was();
+    const stockSec = pageSec('Stock', x ? 'Change how many are on hand with Receive, Use, Move or Count on the item, so it’s in its history.' : 'How many you have now, where, and when to reorder.',
+      x ? null : h('div', { class: 'row2' }, h('label', {}, 'On hand now', f.onHand), places.length ? h('label', {}, 'At', place) : h('small', { class: 'hint' }, 'It goes in Main storage; add trucks and other places under Places.')),
+      h('div', { class: 'row2' }, h('label', {}, 'Reorder at', f.reorderAt), h('label', {}, 'Reorder how many', f.reorderQty)));
+    stockSec.hidden = units();
+    draw();
+    pageSheet(x ? `Edit item · ${x.name}` : 'New item', [
+      pageSec('What it is', null,
+        h('label', {}, 'Name', f.name),
+        track ? h('label', {}, 'Track it', track) : null,
+        h('div', { class: 'row2' }, h('label', {}, 'SKU or part number', f.sku), h('label', {}, 'Category', f.category)),
+        h('div', { class: 'row2' }, h('label', {}, 'Unit', f.unit), h('span')),
+        h('label', {}, 'Notes', notes), lists),
+      stockSec,
+      pageSec('Buying and selling', admin ? 'Only owners and admins see costs, prices and value.' : null,
+        h('label', {}, 'Supplier', f.supplier),
+        h('div', { class: 'row2' }, h('label', {}, 'Cost each ($)', f.cost), h('label', {}, 'Price each ($)', f.price))),
+      del ? h('div', { class: 'inv-f-del' }, del) : null,
+    ], aside, async () => {
       const body = Object.fromEntries(Object.entries(f).filter(([k]) => k !== 'onHand' || !x).map(([k, e]) => [k, e.value]));
       body.notes = notes.value;
       if (!x) { body.placeId = place.value || undefined; body.track = track.value; }
       await api(x ? 'PATCH' : 'POST', x ? '/inventory/items/' + x.id : '/inventory/items', body);
       toast(x ? 'Saved' : 'Added');
       await loadInventory();
-    }, x ? 'Save' : 'Add it');
+    }, x ? 'Save' : 'Add it', () => was() !== start, 'item');
+    if (!x) f.name.focus();
   }
   function invPlaceForm(p) {
-    const name = h('input', { value: p?.name || '', placeholder: 'Truck 2', class: 'inv-p-name' });
-    const kind = h('select', { class: 'inv-p-kind' }, Object.entries(INV_KIND).map(([k, [ic, l]]) => h('option', { value: k, selected: (p?.kind || 'truck') === k }, `${ic} ${l}`)));
+    const d = INVS.data;
+    const name = h('input', { value: p?.name || '', placeholder: 'Truck 2, Main warehouse, Smith job site', class: 'inv-p-name' });
+    // The kind as a select (kept for the keyboard and tests) and as cards to tap.
+    const kind = h('select', { class: 'inv-p-kind', hidden: true }, Object.entries(INV_KIND).map(([k, [ic, l]]) => h('option', { value: k, selected: (p?.kind || 'truck') === k }, `${ic} ${l}`)));
+    const KIND_SUB = { warehouse: 'A storeroom, shop or yard', truck: 'A vehicle that carries stock', site: 'Where a job is, while it’s on', other: 'Anywhere else' };
+    const cards = h('div', { class: 'inv-kinds' });
+    const drawCards = () => cards.replaceChildren(...Object.entries(INV_KIND).map(([k, [ic, l]]) => h('button', { type: 'button', class: 'inv-kind' + (kind.value === k ? ' on' : ''), 'aria-pressed': String(kind.value === k), 'data-kind': k, onclick: () => { kind.value = k; drawCards(); draw(); } }, h('span', { class: 'inv-kind-ic' }, ic), h('b', {}, l), h('small', {}, KIND_SUB[k] || ''))));
+    drawCards();
     const who = h('select', { class: 'inv-p-who' }, h('option', { value: '' }, 'Nobody in particular'), S.workspace.members.map((m) => h('option', { value: m.id, selected: p?.memberId === m.id }, m.name)));
     const address = h('input', { value: p?.address || '', placeholder: 'Address (optional)', class: 'inv-p-address' });
     const del = p ? h('button', { class: 'btn small danger', 'data-label': '1' }, 'Delete') : null;
     del?.addEventListener('click', () => confirmClick(del, async () => { try { await api('DELETE', '/inventory/places/' + p.id); closeSheet(); await loadInventory(); } catch (e) { toast(e.message); } }));
-    sheet(p ? 'Edit place' : 'New place', [h('label', {}, 'Name', name), h('div', { class: 'row2' }, h('label', {}, 'Kind', kind), h('label', {}, 'Whose (a truck’s driver)', who)), h('label', {}, 'Address', address), del], async () => {
+    const aside = h('aside', { class: 'cb-sum inv-p-sum' });
+    const draw = () => {
+      const [ic, l] = INV_KIND[kind.value] || ['📦', 'Place'];
+      const here = p ? d.items.filter((x) => (x.stock[p.id] || 0) > 0) : [];
+      const li = (i, text) => h('li', {}, h('span', { class: 'cb-ic' }, i), text);
+      aside.replaceChildren(
+        h('div', { class: 'cb-sum-h' }, h('span', {}, ic), h('b', {}, name.value.trim() || 'Your place')),
+        h('ul', { class: 'cb-list' },
+          li('🏷️', l),
+          who.value ? li('🙋', `${S.workspace.members.find((m) => m.id === who.value)?.name}’s`) : null,
+          address.value.trim() ? li('📍', address.value.trim()) : null,
+          p ? li('📦', here.length ? `${plural(here.length, 'item')} here` : 'Nothing here yet') : null),
+        h('div', { class: 'cb-next' }, h('b', {}, p ? 'Also on it' : 'After it’s added'), h('small', {}, 'Print its QR label, receive or put stock away here, move stock in and out, and count what’s here.')));
+    };
+    for (const e of [name, who, address]) { e.addEventListener('input', draw); e.addEventListener('change', draw); }
+    draw();
+    const was = () => JSON.stringify([name.value, kind.value, who.value, address.value]);
+    const start = was();
+    pageSheet(p ? `Edit place · ${p.name}` : 'New place', [
+      pageSec('What it is', null, h('label', {}, 'Name', name), h('div', { class: 'picks-h' }, 'Kind'), cards, kind),
+      pageSec('Who and where', 'A truck is usually someone’s: its driver sees it as theirs. An address shows on the place and its label.',
+        h('label', {}, 'Whose (a truck’s driver)', who), h('label', {}, 'Address', address)),
+      del ? h('div', { class: 'inv-f-del' }, del) : null,
+    ], aside, async () => {
       await api(p ? 'PATCH' : 'POST', p ? '/inventory/places/' + p.id : '/inventory/places', { name: name.value, kind: kind.value, memberId: who.value || null, address: address.value });
       toast(p ? 'Saved' : 'Added');
       await loadInventory();
-    }, p ? 'Save' : 'Add it');
+    }, p ? 'Save' : 'Add it', () => was() !== start, 'place');
+    if (!p) name.focus();
   }
   function toolsPage() {
     const soon = billsSoon().length;

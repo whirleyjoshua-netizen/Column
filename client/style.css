@@ -3439,3 +3439,14 @@ body.wide .sheet.camp-builder { border-left: 1px solid var(--line); }
 .sheet.camp-builder { padding-bottom: 0; }
 .camp-builder > .btns { margin-top: 14px; padding-bottom: 14px; }
 .cb-add-role, .cb-add-step { align-self: flex-start; }
+/* ---------- forms as pages: full size beside the sidebar (2026-11-19) ---------- */
+.sheet-wrap:has(.page-form) { left: var(--side-w); right: var(--skd-w, 0px); background: transparent; align-items: stretch; animation: none; }
+.sheet.page-form { max-width: none; width: 100%; height: 100%; max-height: 100%; border-radius: 0; border: 0; animation: none; padding-bottom: 0; }
+body.wide .sheet.page-form { border-left: 1px solid var(--line); }
+.page-form > .btns { position: sticky; bottom: 0; background: var(--card); padding: 10px 0 14px; margin-top: 14px; border-top: 1px solid var(--line); z-index: 2; }
+.inv-f-del { display: flex; justify-content: flex-start; }
+.inv-kinds { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+.inv-kind { text-align: left; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: var(--bg, #f6f6f8); display: flex; flex-direction: column; gap: 2px; cursor: pointer; color: var(--text); font: inherit; }
+.inv-kind.on { border-color: var(--accent); background: var(--card); box-shadow: 0 0 0 1px var(--accent) inset; }
+.inv-kind-ic { font-size: 20px; }
+.inv-kind small { color: var(--muted); }

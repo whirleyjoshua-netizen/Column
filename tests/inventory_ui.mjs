@@ -55,7 +55,11 @@ try {
   // An item, with stock and a reorder point.
   await A.tap(`document.querySelector('#split .inv-new')`);
   await A.until(`!!document.querySelector('#sheet .inv-f-name')`);
+  // Desktop (2026-11-19): a page beside the sidebar, sections on the left and a live preview on the right.
+  ok(await A.ev(`(() => { const s = document.querySelector('#sheet .sheet.page-form')?.getBoundingClientRect(); const m = document.querySelector('#sheet .cb-main')?.getBoundingClientRect(), p = document.querySelector('#sheet .inv-f-sum')?.getBoundingClientRect(); return !!s && s.width > innerWidth * 0.6 && s.height >= innerHeight - 2 && p.left >= m.right - 1; })()`), 'New item is a full page on a computer, with a preview beside the form');
   for (const [k, v] of [['name', '16x25 air filter'], ['sku', 'FLT-1625'], ['category', 'Filters'], ['unit', 'each'], ['cost', '6.50'], ['price', '18'], ['reorderAt', '10'], ['reorderQty', '40'], ['supplier', 'Ferguson'], ['onHand', '24']]) await A.fill(`document.querySelector('#sheet .inv-f-${k}')`, v);
+  ok(await A.until(`(() => { const t = document.querySelector('#sheet .inv-f-sum')?.textContent || ''; return t.includes('16x25 air filter') && t.includes('24 each on hand') && t.includes('Shows as low at 10, then order 40') && t.includes('From Ferguson') && t.includes('64% margin'); })()`), 'the preview keeps up: on hand, when it shows as low, the supplier, the margin');
+  { const shot = await A.cmd('Page.captureScreenshot', { format: 'png' }); FS.writeFileSync(DIR + '/item-form-desktop.png', Buffer.from(shot.result.data, 'base64')); }
   await A.tap(`[...document.querySelectorAll('#sheet .btns button')].find((b) => b.textContent === 'Add it')`);
   ok(await A.until(`!!document.querySelector('#split .inv-row[data-item]') && document.querySelector('#split .inv-row .inv-qty-n b').textContent === '24'`), 'the item is listed with 24 on hand');
   ok(await A.ev(`document.querySelector('#split .inv-row .inv-val').textContent === '$156' && [...document.querySelectorAll('#split .inv-stat')].some((s) => s.textContent.includes('$156') && s.textContent.includes('Stock value'))`), 'worth $156, in its row and the summary');
@@ -65,6 +69,7 @@ try {
   ok(await A.until(`[...document.querySelectorAll('#split .inv-place b')].some((b) => b.textContent === 'Main storage')`), 'Places shows Main storage (made with the first item)');
   await A.tap(`document.querySelector('#split .inv-place-new')`);
   await A.until(`!!document.querySelector('#sheet .inv-p-name')`);
+  ok(await A.ev(`!!document.querySelector('#sheet .sheet.page-form') && document.querySelectorAll('#sheet .inv-kind').length === 4`), 'New place is a full page too, the kinds as cards to tap');
   await A.fill(`document.querySelector('#sheet .inv-p-name')`, 'Truck 2');
   await A.pick(`document.querySelector('#sheet .inv-p-kind')`, 'truck');
   await A.tap(`[...document.querySelectorAll('#sheet .btns button')].find((b) => b.textContent === 'Add it')`);
