@@ -50,7 +50,7 @@ const api = async (m, p, body) => (await fetch(APP + 'api' + p, { method: m, hea
 await A.until(`!!document.querySelector('#tabs [data-tab=projects]')`, 10000); await A.ev(`document.querySelector('#tabs [data-tab=projects]').click()`);
 // At full size an empty Projects is the New project list itself (2026-11-19; the sheet stays for narrow windows).
 ok(await A.until(`!!document.querySelector('#projects .pjn.pjn-first')`), 'Projects tab, empty to start');
-ok(await A.ev(`[...document.querySelectorAll('#projects .pjn-group')].map((b) => b.textContent.replace('// ', '')).join('|')`) === 'Construction & Trades|Technology & Software|Creative & Agencies|Business Operations|Draft it with AI', 'it offers the four kinds of work');
+ok(await A.ev(`[...document.querySelectorAll('#projects .pjn-group')].map((b) => b.textContent.replace('// ', '')).join('|')`) === 'Start blank|Construction & Trades|Technology & Software|Creative & Agencies|Business Operations|Draft it with AI', 'it offers a blank board and the four kinds of work');
 await A.tap(`[...document.querySelectorAll('#projects .pjn-row')].find((b) => b.textContent.includes('Sales pipeline'))`);
 ok(await A.until(`document.querySelector('#projects .pjn-detail h3')?.textContent === 'Sales pipeline' && document.querySelector('#projects .pjn-d-group').textContent === 'Business Operations'`), 'Business Operations has Sales pipeline');
 await A.ev(`(() => { const n = document.querySelector('#projects .pjn-name'); n.value = 'Sales'; n.dispatchEvent(new Event('input')); })()`);

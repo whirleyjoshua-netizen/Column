@@ -64,7 +64,7 @@ ok(await strip() === '', 'no Workspace strip until you are in Workspace');
 // Workspace: its tabs across the top at full size; it opens where you were last.
 await A.click('#tabs [data-tab=work]');
 ok(await A.until(`!document.querySelector('#day').classList.contains('hidden') && document.querySelector('#tool').classList.contains('hidden')`), 'Workspace opens on Tasks');
-ok(await strip() === 'Tasks*,Contacts,Projects,Campaigns,Folders & Docs,Automations,Tools', 'the strip across the top: ' + await strip());
+ok(await strip() === 'Tasks*,Contacts,Boards,Campaigns,Folders & Docs,Automations,Tools', 'the strip across the top: ' + await strip());
 await A.click('#workTabs [data-tab=contacts]');
 ok(await A.until(`!document.querySelector('#tool').classList.contains('hidden') && document.querySelector('#tool h2').textContent.includes('Contacts')`), 'Contacts opens from the strip');
 ok((await tabs()).includes('Workspace*'), 'Workspace is lit in the toolbar');
@@ -73,11 +73,11 @@ ok(await A.ev(`getComputedStyle(document.querySelector('#tabs .tab-sub')).displa
 ok(await A.until(`document.querySelector('#tool').getBoundingClientRect().top >= document.querySelector('#workTabs').getBoundingClientRect().bottom - 1`, 1500), 'the tool starts under the strip, not over it');
 await A.click('#workTabs [data-tab=projects]');
 ok(await A.until(`!document.querySelector('#projects').classList.contains('hidden') && document.querySelector('#tool').classList.contains('hidden')`), 'Projects opens (and Contacts closes)');
-ok(await A.ev(`document.querySelector('#projects h2').textContent === 'Projects'`), 'Jobs is called Projects now');
+ok(await A.ev(`document.querySelector('#projects h2').textContent === 'Boards'`), 'Jobs is called Boards now');
 ok(await A.ev(`document.querySelector('#projects').getBoundingClientRect().top >= document.querySelector('#workTabs').getBoundingClientRect().bottom - 1`), 'Projects starts under the strip');
 await A.click('#workTabs [data-tab=camps]');
 ok(await A.until(`document.querySelector('#projects').classList.contains('hidden') && !document.querySelector('#campsWrap').classList.contains('hidden')`), 'Campaigns opens in Workspace');
-ok(await strip() === 'Tasks,Contacts,Projects,Campaigns*,Folders & Docs,Automations,Tools', 'Campaigns is lit in the strip: ' + await strip());
+ok(await strip() === 'Tasks,Contacts,Boards,Campaigns*,Folders & Docs,Automations,Tools', 'Campaigns is lit in the strip: ' + await strip());
 await A.click('#workTabs [data-tab=docs]');
 ok(await A.until(`document.querySelector('#tool h2')?.textContent.startsWith('Folders & Docs') && !document.querySelector('#tool').classList.contains('hidden')`), 'Folders & Docs opens');
 ok(await A.ev(`[...document.querySelectorAll('#tool .df-switch button')].map((b) => b.textContent).join() === 'Docs,Folders'`), 'with a Docs | Folders switch');

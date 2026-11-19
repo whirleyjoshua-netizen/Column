@@ -73,7 +73,7 @@ try {
   await A.ev(`document.querySelector('#chat .link-btn').click()`);
   ok(await A.until(`!!document.querySelector('.picker .pk-q')`), 'the link picker opens');
   ok(await A.until(`[...document.querySelectorAll('.picker .mh')].map((x) => x.textContent).includes('Jobs & records')`, 8000), 'it has Jobs & records');
-  ok(await A.ev(`[...document.querySelectorAll('.picker .mh')].map((x) => x.textContent).includes('Docs') && [...document.querySelectorAll('.picker .mh')].map((x) => x.textContent).includes('Projects')`), 'and Docs and Projects');
+  ok(await A.ev(`[...document.querySelectorAll('.picker .mh')].map((x) => x.textContent).includes('Docs') && [...document.querySelectorAll('.picker .mh')].map((x) => x.textContent).includes('Boards')`), 'and Docs and Boards');
   await A.ev(`(() => { const q = document.querySelector('.picker .pk-q'); q.value = 'henderson'; q.dispatchEvent(new Event('input')); return true; })()`);
   ok(await A.until(`[...document.querySelectorAll('.picker .pk-row')].some((r) => r.textContent.includes('Henderson shades'))`), 'searching finds the job');
   await A.ev(`[...document.querySelectorAll('.picker .pk-row')].find((r) => r.textContent.includes('Henderson shades')).click()`);

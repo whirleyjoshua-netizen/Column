@@ -327,6 +327,16 @@ export const TEMPLATES = {
       ], views: [{ name: 'Board', kind: 'board', groupBy: 'status' }, { name: 'All equipment', kind: 'table', sortBy: 'number' }] },
     ],
   },
+  // A board to start from: jobs in columns, each with its customer (from Contacts, or new); columns and details are
+  // changed where they are (2026-11-19).
+  board: {
+    name: 'Board', icon: '🗂️', about: 'Jobs in columns, each with its customer; rename, add or move any column',
+    types: [{ key: 'jobs', name: 'Jobs', singular: 'Job', icon: '🧰', primary: 'name', fields: [
+      { key: 'name', name: 'Job', type: 'text' },
+      { key: 'customer', name: 'Customer', type: 'contact' },
+      { key: 'stage', name: 'Stage', type: 'select', choices: [choice('New', 'gray'), choice('Scheduled', 'blue'), choice('In progress', 'amber'), choice('Done', 'green')] },
+    ], views: [{ name: 'Board', kind: 'board', groupBy: 'stage' }, { name: 'All jobs', kind: 'table' }] }],
+  },
   blank: {
     name: 'Blank', icon: '📁', about: 'One list to shape as you like',
     types: [{ key: 'items', name: 'Items', singular: 'Item', icon: '📄', primary: 'name', fields: [{ key: 'name', name: 'Name', type: 'text' }, { key: 'status', name: 'Status', type: 'select', choices: [choice('To do', 'gray'), choice('Doing', 'blue'), choice('Done', 'green')] }], views: [{ name: 'All', kind: 'table' }, { name: 'Board', kind: 'board', groupBy: 'status' }] }],

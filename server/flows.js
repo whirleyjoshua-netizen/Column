@@ -3,7 +3,7 @@
 // Each event says which tool it's from, what it's called, the words it fills in ({contact}, {amount}…) and the
 // filters an automation can narrow it with. index.js fires them (automate) from the one place each thing happens.
 
-export const TOOLS = { tasks: 'Tasks', contacts: 'Contacts', campaigns: 'Campaigns', projects: 'Projects', money: 'Invoices & Finance', files: 'Files & signatures', texts: 'Texts', docs: 'Docs', map: 'Map', time: 'Time', inventory: 'Inventory' };
+export const TOOLS = { tasks: 'Tasks', contacts: 'Contacts', campaigns: 'Campaigns', projects: 'Boards', money: 'Invoices & Finance', files: 'Files & signatures', texts: 'Texts', docs: 'Docs', map: 'Map', time: 'Time', inventory: 'Inventory' };
 
 // filters: campaign (in a campaign), stage (a contact's stage), outcome (a call's), statuses (a check-in's),
 // project (and list), to (a record's stage it moved to), over (an amount at least this, in dollars), date (a

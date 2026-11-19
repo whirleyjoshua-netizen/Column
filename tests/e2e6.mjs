@@ -50,8 +50,10 @@ await A.until(`!document.querySelector('#app')?.classList.contains('hidden') && 
 const token = await A.ev(`JSON.parse(localStorage.getItem('column.token'))`);
 const api = async (m, p, body) => (await fetch(APP + 'api' + p, { method: m, headers: { 'content-type': 'application/json', authorization: 'Bearer ' + token }, body: body ? JSON.stringify(body) : undefined })).json();
 await A.until(`!!document.querySelector('#tabs [data-tab=projects]')`, 10000); await A.ev(`document.querySelector('#tabs [data-tab=projects]').click()`);
-await A.tap(`[...document.querySelectorAll('#projects .btn')].find((b) => b.textContent === '+ New project' || b.textContent.startsWith('Start with'))`);
+await A.tap(`[...document.querySelectorAll('#projects .btn')].find((b) => b.textContent === 'Use a template')`);
 // Jobs for a trade business (picked first), named, the kinds of work beside it with "We bid on jobs too" (full size, 2026-11-19).
+await A.until(`!!document.querySelector('#projects .pjn-row')`);
+await A.tap(`[...document.querySelectorAll('#projects .pjn-row')].find((b) => b.textContent.includes('Jobs for a trade business'))`);
 await A.until(`document.querySelector('#projects .pjn-detail h3')?.textContent === 'Jobs for a trade business' && !!document.querySelector('#projects .pjn .pj-trade')`);
 await A.ev(`(() => { const n = document.querySelector('#projects .pjn-name'); n.value = 'Estimating'; n.dispatchEvent(new Event('input')); })()`);
 await A.tap(`document.querySelector('#projects .pj-bids input')`);
@@ -151,7 +153,7 @@ await A.key('Escape');
 ok(await A.until(`!document.querySelector('#projects .pj-panel')`), 'Esc closes the record');
 await A.key('Escape');
 ok(await A.until(`!!document.querySelector('#projects .pj-head')`), 'Esc again goes back to all projects');
-await A.tap(`document.querySelector('#projects [aria-label="Close Projects"]')`);
+await A.tap(`document.querySelector('#projects [aria-label="Close Boards"]')`);
 ok(await A.until(`document.querySelector('#projects').classList.contains('hidden')`), 'the close button closes Projects');
 ok(!A.errors.length, 'no page errors' + (A.errors.length ? ': ' + A.errors.join(' / ') : ''));
 A.close(); chrome.kill();

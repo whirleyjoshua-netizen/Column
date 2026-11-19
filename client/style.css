@@ -3376,3 +3376,27 @@ body:not(.wide) .wl-row > .wl-stat:not([data-k=open]):not([data-k=overdue]):not(
 .wl-wd.over b { color: var(--danger); }
 @media (max-width: 600px) { .fc-grid { grid-template-columns: 110px repeat(var(--n), 70px); } }
 .fc-title { margin-top: 6px; }
+
+/* ---------- Boards: columns edited where they are ---------- */
+.pj-col-edit { cursor: grab; }
+.pj-col-name { cursor: text; border-radius: 5px; padding: 1px 4px; margin: -1px -4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.pj-col-name:hover, .pj-col-name:focus-visible { background: color-mix(in srgb, var(--c) 14%, transparent); outline: none; }
+.pj-col-input { flex: 1; min-width: 0; font: inherit; font-weight: 700; padding: 3px 6px; border: 1px solid var(--accent); border-radius: 6px; background: var(--card); color: var(--text); }
+.pj-col-more { margin-left: auto; border: 0; background: transparent; color: var(--faint); font-size: 16px; line-height: 1; padding: 2px 6px; border-radius: 6px; cursor: pointer; opacity: .55; }
+.pj-col:hover .pj-col-more, .pj-col-more:focus-visible { opacity: 1; }
+.pj-col-more:hover { background: var(--card-hover); color: var(--text); }
+.pj-col-h .pj-col-sum { margin-left: 2px; }
+.pj-col.col-dragging { opacity: .45; }
+.pj-col.col-over-l { box-shadow: -3px 0 0 var(--accent); }
+.pj-col.col-over-r { box-shadow: 3px 0 0 var(--accent); }
+.pj-coladd { flex: none; width: 220px; border: 1px dashed var(--line); border-radius: 12px; padding: 6px; }
+.pj-addcol-btn { width: 100%; text-align: left; padding: 8px 10px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); font-weight: 600; cursor: pointer; }
+.pj-addcol-btn:hover { background: var(--card-hover); color: var(--text); }
+.pj-coladd .pj-col-input { width: 100%; box-sizing: border-box; }
+@media (hover: none) { .pj-col-more { opacity: 1; } .pj-col-edit { cursor: default; } }
+.pj-add-detail { display: block; width: auto; margin: 4px 0 10px; padding: 4px 0; border: 0; background: none; color: var(--accent); font-size: 13px; font-weight: 600; text-align: left; cursor: pointer; }
+.pj-add-detail:hover { text-decoration: underline; }
+.pj-blank-hint { display: flex; align-items: center; gap: 12px; margin: 4px 16px 8px; padding: 9px 12px; border: 1px dashed color-mix(in srgb, var(--accent) 45%, var(--line)); border-radius: 10px; background: var(--accent-soft); font-size: 13px; color: var(--muted); }
+.pj-blank-hint b { color: var(--text); }
+.pj-blank-hint .btn { margin-left: auto; flex: none; }
+.pj-head .pj-use-tpl { margin-right: 2px; }

@@ -69,7 +69,7 @@ try {
   // The new-webhook sheet.
   await A.ev(`[...document.querySelectorAll('#settings .int-sec button')].find((b) => /New webhook/.test(b.textContent)).click()`);
   ok(await A.until(`document.querySelectorAll('.int-events > div').length === 7`), 'a new webhook offers seven groups of events');
-  ok(await A.ev(`[...document.querySelectorAll('.int-events b')].map((b) => b.textContent).join('|')`) === 'Contacts|Tasks|Visits|Invoices|Files & signatures|Text messages|Projects records', 'Contacts, Tasks, Visits, Invoices, Files & signatures, Text messages, Projects records');
+  ok(await A.ev(`[...document.querySelectorAll('.int-events b')].map((b) => b.textContent).join('|')`) === 'Contacts|Tasks|Visits|Invoices|Files & signatures|Text messages|Board records', 'Contacts, Tasks, Visits, Invoices, Files & signatures, Text messages, Projects records');
   await A.ev(`document.querySelector('#sheet [aria-label=Close]')?.click()`);
   ok(await A.until(`/Connect Twilio/.test(document.querySelector('#settings .tw-sec')?.textContent || '')`), 'Connections has Text messages (Twilio) with Connect Twilio');
   ok(await A.until(`/Leads from websites/.test(document.querySelector('#settings .lead-sec')?.textContent || '') && !!document.querySelector('#settings .lead-sec button')`), 'and Leads from websites, funnels & forms, with Turn on');

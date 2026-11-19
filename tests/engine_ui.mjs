@@ -100,7 +100,7 @@ try {
   ok(await A.until(`[...document.querySelectorAll('#projects .pj-calc')].some((e) => e.textContent === '$204.12')`), 'it shows worked out in the table ($189 × 1.08 = $204.12)');
 
   // The automation editor: a record's date, and steps that change and add records.
-  await A.tap(`[...document.querySelectorAll('#projects .pj-top .icon-btn')].find((b) => b.getAttribute('aria-label') === 'Close Projects')`);
+  await A.tap(`[...document.querySelectorAll('#projects .pj-top .icon-btn')].find((b) => b.getAttribute('aria-label') === 'Close Boards')`);
   await A.until(`!!document.querySelector('#tabs [data-tab=automations]')`, 10000); await A.ev(`document.querySelector('#tabs [data-tab=automations]').click(); true`); // in Workspace now (2026-11-14)
   ok(await A.until(`[...document.querySelectorAll('#tool .auto-recipe b')].some((b) => b.textContent === 'License expiring? Owners hear')`), 'there’s a recipe for licenses about to expire');
   await A.tap(`[...document.querySelectorAll('#tool .auto-recipe')].find((b) => b.textContent.includes('License expiring'))`);

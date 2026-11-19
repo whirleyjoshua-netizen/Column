@@ -52,29 +52,29 @@ try {
   ok(await A.until(`!!${P('.pjn.pjn-first')}`), 'with no projects, Projects at full size is the list of kinds, in the page');
   ok(await A.ev(`document.querySelector('#sheet').classList.contains('hidden')`), 'no pop-up sheet');
   await sleep(300); await shot('pjn-empty');
-  ok(await rows() === 'Jobs for a trade business|Software team|Agency client work|UGC|Team projects|Sales pipeline|Equipment & assets|Start blank|Something else? Describe how you work', 'every way to start is one row: ' + await rows());
-  ok(await A.ev(`[...document.querySelectorAll('#projects .pjn-group')].map((g) => g.textContent.replace('// ', '')).join('|')`) === 'Construction & Trades|Technology & Software|Creative & Agencies|Business Operations|Draft it with AI', 'grouped under the four kinds, plus AI');
+  ok(await rows() === 'Blank board|Jobs for a trade business|Software team|Agency client work|UGC|Team projects|Sales pipeline|Equipment & assets|Start blank|Something else? Describe how you work', 'every way to start is one row: ' + await rows());
+  ok(await A.ev(`[...document.querySelectorAll('#projects .pjn-group')].map((g) => g.textContent.replace('// ', '')).join('|')`) === 'Start blank|Construction & Trades|Technology & Software|Creative & Agencies|Business Operations|Draft it with AI', 'a blank board first, then the four kinds, plus AI');
   // One project, then + New project opens the page (not a sheet).
   const sales = await api('POST', '/projects', { template: 'crm', name: 'Sales' });
   await A.ev(`location.reload(); true`).catch(() => {});
   await A.until(`!document.querySelector('#app').classList.contains('hidden') && !!document.querySelector('#tabs [data-tab=projects]')`, 15000);
   await A.ev(`document.querySelector('#tabs [data-tab=projects]').click(); true`);
   ok(await A.until(`!!${P('.pj-grid')}`), 'with a project, Projects lists them as before');
-  await A.tap(`[...document.querySelectorAll('#projects .btn')].find((b) => b.textContent === '+ New project')`);
-  ok(await A.until(`!!${P('.pjn:not(.pjn-first)')} && ${P('.pj-head h2')}.textContent === 'New project'`), '+ New project opens the New project page');
+  await A.tap(`[...document.querySelectorAll('#projects .btn')].find((b) => b.textContent === 'Use a template')`);
+  ok(await A.until(`!!${P('.pjn:not(.pjn-first)')} && ${P('.pj-head h2')}.textContent === 'New board'`), 'Use a template opens the New board page');
   ok(await A.ev(`document.querySelector('#sheet').classList.contains('hidden')`), 'still no sheet');
   ok(await A.until(`document.activeElement?.classList.contains('pjn-q')`), 'the filter has the cursor');
-  ok(await A.ev(`${P('.pjn-row.on')}.textContent.includes('Jobs for a trade business') && ${P('.pjn-detail h3')}.textContent === 'Jobs for a trade business'`), 'the first row is picked, shown beside the list');
+  ok(await A.ev(`${P('.pjn-row.on')}.textContent.includes('Blank board') && ${P('.pjn-detail h3')}.textContent === 'Blank board'`), 'the first row (Blank board) is picked, shown beside the list');
   // Filter and arrows.
   await A.ev(`(() => { const q = ${P('.pjn-q')}; q.value = 'deals'; q.dispatchEvent(new Event('input')); })()`);
   ok(await A.until(`[...document.querySelectorAll('#projects .pjn-row b')].map((b) => b.textContent).join('|') === 'Sales pipeline'`), 'typing filters it (deals → Sales pipeline, by what you get)');
   ok(await A.ev(`${P('.pjn-detail h3')}.textContent === 'Sales pipeline' && document.activeElement?.classList.contains('pjn-q')`), 'the match is picked and typing carries on');
   await A.ev(`(() => { const q = ${P('.pjn-q')}; q.value = ''; q.dispatchEvent(new Event('input')); })()`);
-  await A.until(`document.querySelectorAll('#projects .pjn-row').length === 9`);
+  await A.until(`document.querySelectorAll('#projects .pjn-row').length === 10`);
   await A.cmd('Input.dispatchKeyEvent', { type: 'keyDown', key: 'ArrowDown', code: 'ArrowDown', windowsVirtualKeyCode: 40 });
   ok(await A.until(`${P('.pjn-detail h3')}.textContent === 'Equipment & assets'`), '↓ moves to the next row (Sales pipeline → Equipment & assets)');
   for (let i = 0; i < 8; i++) await A.cmd('Input.dispatchKeyEvent', { type: 'keyDown', key: 'ArrowUp', code: 'ArrowUp', windowsVirtualKeyCode: 38 });
-  ok(await A.until(`${P('.pjn-detail h3')}.textContent === 'Jobs for a trade business'`), '↑ walks back to the top');
+  ok(await A.until(`${P('.pjn-detail h3')}.textContent === 'Blank board'`), '↑ walks back to the top');
   await A.tap(`[...document.querySelectorAll('#projects .pjn-row')].find((b) => b.textContent.includes('Team projects'))`);
   ok(await A.until(`[...document.querySelectorAll('#projects .pjn-d-gets li')].map((x) => x.textContent).join('|') === 'Projects|Tasks|Processes'`), 'Team projects says what you get: Projects, Tasks, Processes');
   await shot('pjn-team');
@@ -87,8 +87,10 @@ try {
   await A.tap(P('.pjn-create'));
   ok(await A.until(`${P('.pj-name')}?.textContent === 'Ops'`), 'Create makes it and opens it');
   // Trades: pick the kinds of work right there.
-  await A.tap(`document.querySelector('#projects .pj-top [aria-label="All projects"]')`);
-  await A.tap(`[...document.querySelectorAll('#projects .btn')].find((b) => b.textContent === '+ New project')`);
+  await A.tap(`document.querySelector('#projects .pj-top [aria-label="All boards"]')`);
+  await A.tap(`[...document.querySelectorAll('#projects .btn')].find((b) => b.textContent === 'Use a template')`);
+  await A.until(`!!${P('.pjn')}`);
+  await A.tap(`[...document.querySelectorAll('#projects .pjn-row')].find((b) => b.textContent.includes('Jobs for a trade business'))`);
   ok(await A.until(`!!${P('.pjn .pj-trade')}`), 'Jobs for a trade business lists the kinds of work in the page');
   await sleep(300); await shot('pjn-trades');
   ok(await A.ev(`${P('.pjn-create')}.disabled`), 'Create waits for a kind of work');
@@ -101,8 +103,8 @@ try {
   await A.tap(P('.pjn-create'));
   ok(await A.until(`${P('.pj-name')}?.textContent === 'Field jobs' && [...document.querySelectorAll('#projects .pj-types button')].some((b) => b.textContent.includes('Quotes'))`, 8000), 'Create makes the jobs project, with quotes');
   // Escape goes back; Describe shows its box in the page.
-  await A.tap(`document.querySelector('#projects .pj-top [aria-label="All projects"]')`);
-  await A.tap(`[...document.querySelectorAll('#projects .btn')].find((b) => b.textContent === '+ New project')`);
+  await A.tap(`document.querySelector('#projects .pj-top [aria-label="All boards"]')`);
+  await A.tap(`[...document.querySelectorAll('#projects .btn')].find((b) => b.textContent === 'Use a template')`);
   await A.until(`!!${P('.pjn')}`);
   await A.tap(`[...document.querySelectorAll('#projects .pjn-row')].find((b) => b.textContent.includes('Describe how you work'))`);
   ok(await A.until(`!!${P('.pjn-detail textarea')} && ${P('.pjn-create')}.textContent.includes('Draft it')`), 'Describe how you work is a box in the page');
@@ -113,7 +115,7 @@ try {
   await A.until(`!document.body.classList.contains('wide')`);
   if (await A.ev(`document.querySelector('#projects').classList.contains('hidden')`)) { await A.ev(`(document.querySelector('[data-tab=projects]') || document.querySelector('#tabs [data-tab=work]')).click(); true`); }
   await A.until(`!document.querySelector('#projects').classList.contains('hidden')`);
-  await A.tap(`[...document.querySelectorAll('#projects .btn')].find((b) => b.textContent === '+ New project')`);
+  await A.tap(`[...document.querySelectorAll('#projects .btn')].find((b) => b.textContent === 'Use a template')`);
   const narrow = await A.until(`!document.querySelector('#sheet').classList.contains('hidden') && document.querySelectorAll('#sheet .pj-kind').length === 4`);
   if (!narrow) console.log('NARROW:', await A.ev(`document.body.className + ' :: ' + document.querySelector('#sheet').className + ' :: ' + document.querySelectorAll('#sheet .pj-kind').length + ' :: ' + !!document.querySelector('#projects .pjn') + ' :: ' + document.querySelector('#projects').className`));
   ok(narrow, 'in a narrow window it’s still the sheet');

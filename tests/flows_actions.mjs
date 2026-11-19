@@ -185,7 +185,7 @@ try {
 
   // Old steps still work as before (a post), and the label for Projects.
   const cat = (await rico('GET', '/automations/catalog')).body;
-  ok(cat.tools.projects === 'Projects', 'the editor calls the tool Projects');
+  ok(cat.tools.projects === 'Boards', 'the editor calls the tool Boards');
 } catch (e) {
   console.log('FAIL threw', e.stack);
   fails++;

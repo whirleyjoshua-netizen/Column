@@ -74,7 +74,7 @@ ok(await A.until(`[...document.querySelectorAll('#projects .pj-frow')].some((r) 
 await A.tap(`[...document.querySelectorAll('#projects .pj-ai-step .btn')].find((b) => b.textContent === 'Log as sent')`);
 ok(await A.until(`[...document.querySelectorAll('#projects .pj-tl')].some((x) => x.textContent.includes('Jo emailed') && x.textContent.includes('Fleet pricing'))`), 'Log as sent puts the email on his timeline');
 // estimate
-await A.tap(`document.querySelector('#projects .pj-top [aria-label="All projects"]')`);
+await A.tap(`document.querySelector('#projects .pj-top [aria-label="All boards"]')`);
 await A.tap(`[...document.querySelectorAll('#projects .pj-card')].find((x) => x.textContent.includes('Estimating'))`);
 await A.tap(`[...document.querySelectorAll('#projects .pj-types button')].find((b) => b.textContent.includes('Bids'))`);
 await A.tap(`[...document.querySelectorAll('#projects .pj-card-r')].find((c) => c.textContent.includes('Library glazing')).querySelector('b')`);
@@ -120,7 +120,7 @@ ok(await A.until(`document.querySelector('#projects .pj-panel .pj-title')?.value
 }
 // ready-made list and templates
 await A.tap(`document.querySelector('#projects .pj-panel [aria-label="Close"]')`);
-await A.tap(`document.querySelector('#projects .pj-top [aria-label="All projects"]')`);
+await A.tap(`document.querySelector('#projects .pj-top [aria-label="All boards"]')`);
 await A.tap(`[...document.querySelectorAll('#projects .pj-card')].find((x) => x.textContent.includes('Sales'))`);
 await A.tap(`document.querySelector('#projects [aria-label="Project options"]')`);
 await A.ev(`[...document.querySelectorAll('#menu button')].find((b) => b.textContent === 'Add a list…').click()`);
@@ -132,10 +132,10 @@ await A.ev(`[...document.querySelectorAll('#menu button')].find((b) => b.textCon
 await A.ev(`document.querySelector('#sheet input').value = 'Sales + pricing'`);
 await A.tap(`document.querySelector('#sheet .primary-btn')`);
 await sleep(400);
-await A.tap(`document.querySelector('#projects .pj-top [aria-label="All projects"]')`);
-await A.tap(`[...document.querySelectorAll('#projects .btn')].find((b) => b.textContent === '+ New project')`);
+await A.tap(`document.querySelector('#projects .pj-top [aria-label="All boards"]')`);
+await A.tap(`[...document.querySelectorAll('#projects .btn')].find((b) => b.textContent === 'Use a template')`);
 ok(await A.until(`[...document.querySelectorAll('#projects .pjn-row')].some((r) => r.textContent.includes('Sales + pricing') && r.previousElementSibling?.textContent.includes('Your templates'))`), 'the saved template is offered for new projects, under Your templates');
-ok(await A.ev(`[...document.querySelectorAll('#projects .pjn-group')].length === 6 && ![...document.querySelectorAll('#projects .pjn-row')].some((b) => /Jobs & Installs|Bids & Quotes/.test(b.textContent))`), 'beside the four kinds of work (Jobs & Installs and Bids & Quotes are folded into Construction & Trades)');
+ok(await A.ev(`[...document.querySelectorAll('#projects .pjn-group')].length === 7 && ![...document.querySelectorAll('#projects .pjn-row')].some((b) => /Jobs & Installs|Bids & Quotes/.test(b.textContent))`), 'beside the four kinds of work (Jobs & Installs and Bids & Quotes are folded into Construction & Trades)');
 await A.tap(`[...document.querySelectorAll('#projects .pjn-row')].find((b) => b.textContent.includes('Sales + pricing'))`);
 await A.until(`document.querySelector('#projects .pjn-detail h3')?.textContent === 'Sales + pricing'`);
 await A.ev(`(() => { const n = document.querySelector('#projects .pjn-name'); n.value = 'Second office'; n.dispatchEvent(new Event('input')); })()`);

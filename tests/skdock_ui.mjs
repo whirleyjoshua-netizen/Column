@@ -168,7 +168,7 @@ try {
 
   // A phone: a sheet from the bottom, over the page.
   await A.cmd('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
-  await A.ev(`document.querySelector('#projects [aria-label="Close Projects"]')?.click(); true`);
+  await A.ev(`document.querySelector('#projects [aria-label="Close Boards"]')?.click(); true`);
   await sleep(300);
   ok(await A.ev(shown('#skBtn')), 'the ✦ button is there on a phone');
   await A.tap(`document.querySelector('#skBtn')`);

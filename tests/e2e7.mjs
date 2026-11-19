@@ -85,7 +85,7 @@ ok(await A.until(`[...document.querySelectorAll('#projects .pj-tl')].some((x) =>
 // a campaign list from the project, a call logged from it
 const c = await api('POST', '/campaigns', { name: 'Call qualified' });
 await api('PATCH', `/records/${ben.id}`, { values: { [F('contacts', 'stage').id]: ch('contacts', 'stage', 'Qualified') } });
-await A.tap(`document.querySelector('#projects [aria-label="Close Projects"]')`);
+await A.tap(`document.querySelector('#projects [aria-label="Close Boards"]')`);
 await A.ev(`document.querySelector('#tabs [data-tab=camps]').click()`);
 await A.tap(`[...document.querySelectorAll('.camp-card')].find((b) => b.textContent.includes('Call qualified'))`);
 await A.until(`[...document.querySelectorAll('#camps button')].some((b) => b.textContent.startsWith('Files'))`);
@@ -126,8 +126,8 @@ ok(await A.until(`[...document.querySelectorAll('#projects .pj-tl')].some((x) =>
 ok(await A.until(`[...document.querySelectorAll('#projects .pj-tasks .pj-link')].some((x) => x.textContent.includes('Weekly'))`), 'and lists the doc that mentions him');
 // Finance pipeline
 await A.tap(`document.querySelector('#projects [aria-label="Close"]')`);
-await A.tap(`document.querySelector('#projects .pj-top [aria-label="All projects"]')`);
-await A.tap(`document.querySelector('#projects [aria-label="Close Projects"]')`);
+await A.tap(`document.querySelector('#projects .pj-top [aria-label="All boards"]')`);
+await A.tap(`document.querySelector('#projects [aria-label="Close Boards"]')`);
 await openTools('Finance');
 ok(await A.until(`[...document.querySelectorAll('#split .pj-fc')].some((x) => x.textContent.includes('Sales · Deals') && x.textContent.includes('$6,200 won') && x.textContent.includes('$12,500'))`), 'Finance shows the pipeline: $12,500 open closing this month, $6,200 won');
 // Full size (2026-11-14): Finance's overview is a dashboard, the month on the left and bills beside it.
