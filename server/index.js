@@ -3646,9 +3646,10 @@ function cleanAction(a, ws, who) {
   return null;
 }
 // {task}, {campaign}, {contact}, {file}, {from}, {who}, {stage}, {outcome}, {document}, {note}, {date} in what it writes.
-function autoFill(text, ctx, wsId) {
+// cap: each word at most that long (what goes to an outside channel, so one long field can't fill the post).
+function autoFill(text, ctx, wsId, cap = 0) {
   const v = autoVars(ctx, wsId);
-  return String(text || '').replace(/\{(\w+)\}/g, (m, k) => (k in v ? String(v[k] ?? '') : m)).trim();
+  return String(text || '').replace(/\{(\w+)\}/g, (m, k) => (k in v ? (cap ? clipText(String(v[k] ?? ''), cap) : String(v[k] ?? '')) : m)).trim();
 }
 // The words an event fills in, by name (what {…} in an action and "only if" read).
 function autoVars(ctx, wsId) {
@@ -4383,7 +4384,7 @@ async function flowAction(x, a, ctx, ws) {
   }
   // Microsoft Teams: the words, filled in, posted to the team's channel. Retried later when Teams is busy or down.
   if (a.kind === 'teams') {
-    const say = autoFill(a.text, ctx, ws.id);
+    const say = autoFill(a.text, ctx, ws.id, 200);
     if (!say.trim()) return 'Nothing to post in Teams';
     try { await TEAMS.post(ws, say, { by: `Automation: ${clipText(x.name, 80)}` }); } catch (e) { throw Object.assign(new Error(e.message), { retry: !!e.retry }); }
     return `Posted in Teams: ${clipText(say, 60)}`;
@@ -12753,6 +12754,7 @@ async function buildExport(x) {
   // Which booking apps were connected (map §1.1): never their tokens or keys.
   data.connectedApps = BOOK.connsOf(ws.id).filter((c) => (c.scope === 'person' && c.memberId === me.id) || (!mineOnly && me.role === 'owner' && c.scope === 'team'))
     .map((c) => ({ app: c.app, scope: c.scope, account: c.account?.name || c.account?.email || null, by: c.by, at: new Date(c.at).toISOString() }));
+  if (!mineOnly && me.role === 'owner') data.connectedApps.push(...TEAMS.exported(ws.id));
   const team = mineOnly
     ? { name: ws.name, you: { id: me.id, name: me.name, role: me.role } }
     : {

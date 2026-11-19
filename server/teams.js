@@ -3,7 +3,9 @@
 // no Microsoft app, no sign-in, no review. Owners and admins connect it; the address is a secret (it carries the
 // flow's signature), so it's sealed and never sent back to anyone. Kloomie only ever posts; nothing comes back in.
 // Who posts: automations made by owners/admins (TEAM_STEPS 'teams', checked when saved and when run), and people
-// (their AI team drafts, they say yes) through POST /api/teams/post. At most 60 posts an hour a team.
+// through POST /api/teams/post (their AI team drafts, they say yes; the route can't tell that from a direct call, so
+// it's limited the same either way): owners and admins only unless an admin lets everyone (c.who, column-f9's
+// review, 2026-11-20), 10 an hour a person. At most 60 posts an hour a team.
 // Health: Teams answering 401/403/404 means the flow was deleted, turned off or its address changed: needsReconnect,
 // cleared by the next good post.
 
@@ -11,6 +13,7 @@
 // connectors (webhook.office.com) still accepted while some keep working.
 const HOSTS = [/\.logic\.azure\.com$/i, /\.api\.powerplatform\.com$/i, /\.webhook\.office\.com$/i];
 const HOUR_MAX = 60;
+const PERSON_MAX = 10; // a person's posts an hour, inside the team's 60
 const TEXT_MAX = 4000;
 
 // A Teams Workflows address, or why it isn't one (exported for its test).
@@ -26,6 +29,8 @@ export function checkTeamsUrl(raw, allowLocal = false) {
 export function teamsModule({ db, save, send, readJson, cleanText, seal, unseal, isAdmin, safeFetch, broadcast, allowLocal = false }) {
   db.teams ||= {}; // wsId -> { url: sealed, host, channel, memberId, by, at, lastPostAt, posts, error, needsReconnect, recent: [times] }
   const conn = (wsId) => db.teams[wsId] || null;
+  const mine = new Map(); // `${wsId}:${memberId}` -> times a person posted (since the server started)
+  const mayPost = (ws, auth) => conn(ws.id)?.who === 'everyone' || isAdmin(auth);
 
   // What a Teams channel shows: an Adaptive Card with the words, as the Workflows template expects. The words are
   // data: a markdown link can't be made out of them ("](" is broken up), so a lead's name can't become a link.
@@ -73,8 +78,9 @@ export function teamsModule({ db, save, send, readJson, cleanText, seal, unseal,
   function state(ws, auth) {
     const c = conn(ws.id);
     if (!c) return { connected: false };
-    if (!isAdmin(auth)) return { connected: true, channel: c.channel || '' };
-    return { connected: true, channel: c.channel || '', host: c.host, by: c.by, at: c.at, lastPostAt: c.lastPostAt || null, posts: c.posts || 0, error: c.error || null, needsReconnect: !!c.needsReconnect };
+    const who = c.who === 'everyone' ? 'everyone' : 'admins';
+    if (!isAdmin(auth)) return { connected: true, channel: c.channel || '', who, canPost: mayPost(ws, auth) };
+    return { connected: true, channel: c.channel || '', who, canPost: true, host: c.host, by: c.by, at: c.at, lastPostAt: c.lastPostAt || null, posts: c.posts || 0, error: c.error || null, needsReconnect: !!c.needsReconnect };
   }
 
   async function route(req, res, parts, auth, ws) {
@@ -85,6 +91,12 @@ export function teamsModule({ db, save, send, readJson, cleanText, seal, unseal,
     // Anyone on the team, when it's connected: what their AI team drafted and they said yes to.
     if (b === 'post' && m === 'POST') {
       const body = await readJson(req, 20_000);
+      if (!conn(ws.id)) return send(res, 400, { error: 'Microsoft Teams isn’t connected. An owner or admin connects it in Apps & Integrations.' });
+      if (!mayPost(ws, auth)) return send(res, 403, { error: 'Only owners and admins can post to the team’s Teams channel. An admin can let everyone in Apps & Integrations → Microsoft Teams.' });
+      const k = `${ws.id}:${auth.memberId}`, now = Date.now();
+      const times = (mine.get(k) || []).filter((x) => x > now - 3600_000);
+      if (times.length >= PERSON_MAX) return send(res, 429, { error: `That’s ${PERSON_MAX} Teams posts from you this hour. Try again later.` });
+      mine.set(k, [...times, now]);
       try { await post(ws, body.text, { by: `From ${auth.member} in Kloomie` }); } catch (e) { return fail(e); }
       return send(res, 200, { ok: true });
     }
@@ -96,13 +108,23 @@ export function teamsModule({ db, save, send, readJson, cleanText, seal, unseal,
       const channel = cleanText(body.channel, 80);
       // A real, harmless post first: if Teams takes it, the address works.
       try { await deliver(u.href, `✓ Kloomie is connected${channel ? ` to ${channel}` : ''}. Automations (and your AI team, after a yes) can post here.`, `Connected by ${auth.member}`); } catch (e) { return fail(e); }
-      db.teams[ws.id] = { url: seal({ u: u.href }), host: u.hostname, channel, memberId: auth.memberId, by: auth.member, at: Date.now(), lastPostAt: Date.now(), posts: 1, error: null, needsReconnect: false, recent: [Date.now()] };
+      db.teams[ws.id] = { url: seal({ u: u.href }), host: u.hostname, channel, memberId: auth.memberId, by: auth.member, at: Date.now(), lastPostAt: Date.now(), posts: 1, error: null, needsReconnect: false, recent: [Date.now()], who: db.teams[ws.id]?.who === 'everyone' ? 'everyone' : 'admins' };
       save();
       broadcast(ws.id, { type: 'teams' });
       return send(res, 200, state(ws, auth));
     }
     if (b === 'test' && m === 'POST') {
       try { await post(ws, 'Test from Kloomie ✓', { by: `Sent by ${auth.member}` }); } catch (e) { return fail(e); }
+      return send(res, 200, state(ws, auth));
+    }
+    // Who can post from Kloomie by hand (and through their AI team): owners and admins, or everyone.
+    if (!b && m === 'PATCH') {
+      const body = await readJson(req, 2_000);
+      const c = conn(ws.id);
+      if (!c) return send(res, 400, { error: 'Connect Microsoft Teams first.' });
+      if (body.who !== undefined) c.who = body.who === 'everyone' ? 'everyone' : 'admins';
+      save();
+      broadcast(ws.id, { type: 'teams' });
       return send(res, 200, state(ws, auth));
     }
     if (!b && m === 'DELETE') {
@@ -117,5 +139,7 @@ export function teamsModule({ db, save, send, readJson, cleanText, seal, unseal,
   // For the registry (integrations.js): from what's stored, no outside calls.
   const describe = { id: 'teams', name: 'Microsoft Teams', scope: 'team', auth: 'webhook',
     status: (ws) => { const c = conn(ws.id); return c && { account: c.channel || c.host, by: c.by, byId: ws.members.some((x) => x.id === c.memberId) ? c.memberId : null, lastSync: c.lastPostAt || null, error: c.error || null, needsReconnect: !!c.needsReconnect }; } };
-  return { route, post, state, describe, connected: (ws) => !!conn(ws.id) };
+  // For an owner's team export: that it was connected, never its address (map §1.1).
+  const exported = (wsId) => { const c = conn(wsId); return c ? [{ app: 'teams', scope: 'team', account: c.channel || c.host, by: c.by, at: new Date(c.at).toISOString() }] : []; };
+  return { route, post, state, describe, exported, connected: (ws) => !!conn(ws.id) };
 }

@@ -16118,17 +16118,20 @@
     }
     // The tile's state and its What now card come from the registry: asked again after a change.
     const redo = (y) => { S.teams = y; sec.replaceWith(teamsSection()); api('GET', '/integrations').then((r) => { APPS.reg = r; renderApps(true); }).catch(() => {}); };
-    if (x.connected && !amAdmin()) return sec.append(h('p', {}, `✓ Connected${x.channel ? ` to ${x.channel}` : ''}. Your AI team can draft posts for it; they go out after your yes.`)), sec;
+    if (x.connected && !amAdmin()) return sec.append(h('p', {}, `✓ Connected${x.channel ? ` to ${x.channel}` : ''}. ${x.canPost ? 'Your AI team can draft posts for it; they go out after your yes.' : 'Automations post there. Owners and admins post from Kloomie by hand.'}`)), sec;
     if (x.connected) {
       const off = h('button', { class: 'btn small danger', 'data-label': '1' }, 'Disconnect');
       off.addEventListener('click', () => confirmClick(off, () => api('DELETE', '/teams').then(redo).catch((e) => toast(e.message))));
       const test = h('button', { class: 'btn small tm-test' }, 'Send a test');
       test.addEventListener('click', async () => { test.disabled = true; try { redo(await api('POST', '/teams/test')); toast('Sent: look in Teams'); } catch (e) { toast(e.message); test.disabled = false; api('GET', '/teams').then(redo).catch(() => {}); } });
+      const who = h('select', { class: 'tm-who', 'aria-label': 'Who can post from Kloomie' }, h('option', { value: 'admins', selected: x.who !== 'everyone' }, 'Owners and admins'), h('option', { value: 'everyone', selected: x.who === 'everyone' }, 'Everyone on the team'));
+      who.addEventListener('change', () => api('PATCH', '/teams', { who: who.value }).then(redo).catch((e) => toast(e.message)));
       sec.append(...[
         h('p', {}, `✓ Connected${x.channel ? ` to ${x.channel}` : ''}, by ${x.by}. ${x.posts ? `${plural(x.posts, 'post')} so far` : 'Nothing posted yet'}${x.lastPostAt ? `, the last ${new Date(x.lastPostAt).toLocaleString()}` : ''}.`),
         x.needsReconnect ? h('p', { class: 'err' }, 'Teams stopped taking posts: the workflow was deleted, turned off or changed. Make it again in Teams (steps below), then Disconnect and paste the new address.')
           : x.error ? h('p', { class: 'err' }, x.error) : null,
         h('p', { class: 'day-hint' }, 'Automations post here with a “Post in Microsoft Teams” step (owners and admins make those). Your AI team can draft a post too; it waits for your yes.'),
+        h('label', {}, 'Who can post from Kloomie by hand (and through their AI team)', who),
         h('div', { class: 'btns' }, test, off),
       ].filter(Boolean));
       return sec;

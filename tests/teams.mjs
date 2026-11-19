@@ -6,7 +6,7 @@
 // waits for a yes; only real Teams addresses are taken.
 import fs from 'node:fs';
 import http from 'node:http';
-import { spawn } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 import { checkTeamsUrl } from '../server/teams.js';
 const S = (await import('node:path')).resolve(process.argv[2] || '.');
 const DIR = S + '/dk/teams';
@@ -46,7 +46,7 @@ try {
   ok(!takes('https://evil.example/hook') && !takes('https://logic.azure.com.evil.example/x') && !takes('http://prod-1.westus.logic.azure.com/x') && !takes('not a url'), 'anything else isn’t (another site, a look-alike, plain http)');
 
   let r = await call()('POST', '/auth', { mode: 'create', workspace: 'Teams ' + t, name: 'Jo', email: `jo${t}@t.test`, password: 'longenough1', device: 'Mac', deviceId: 'd1' });
-  const jo = call(r.body.token), code = r.body.workspace.inviteCode;
+  const joTok = r.body.token, jo = call(joTok), code = r.body.workspace.inviteCode;
   r = await call()('POST', '/auth', { mode: 'join', workspace: 'Teams ' + t, code, name: 'Sam', email: `sam${t}@t.test`, password: 'longenough2', device: 'Mac', deviceId: 'd2' });
   const sam = call(r.body.token);
 
@@ -91,9 +91,28 @@ try {
   ok(got.length === n1 || !got.slice(n1).some((p) => /Order shingles/.test(textOf(p))), 'once Sam is a member again, it doesn’t post' + (runs[0] ? ` (${runs[0].note || runs[0].error || JSON.stringify(runs[0]).slice(0, 120)})` : ''));
 
   // A person's post (what their AI team drafted and they said yes to).
+  // By hand (and through their AI team, which runs as them): owners and admins, unless an admin lets everyone.
+  r = await sam('POST', '/teams/post', { text: 'Anything I like' });
+  ok(r.status === 403 && !got.some((p) => /Anything I like/.test(textOf(p))), 'a member can’t post to the shared channel by default');
+  ok((await sam('GET', '/teams')).body.canPost === false, '(their tile says so)');
+  ok((await sam('PATCH', '/teams', { who: 'everyone' })).status === 403, 'and can’t change who may');
+  r = await jo('PATCH', '/teams', { who: 'everyone' });
+  ok(r.status === 200 && r.body.who === 'everyone', 'an owner lets everyone post');
   r = await sam('POST', '/teams/post', { text: 'Truck 2 is back at the shop.' });
-  ok(r.status === 200 && /Truck 2/.test(textOf(got.at(-1))) && /From Sam in Kloomie/.test(textOf(got.at(-1))), 'a member’s yes posts, saying it’s from them');
+  ok(r.status === 200 && /Truck 2/.test(textOf(got.at(-1))) && /From Sam in Kloomie/.test(textOf(got.at(-1))), 'then a member’s yes posts, saying it’s from them');
   ok((await sam('POST', '/teams/post', { text: '   ' })).status === 400, 'an empty post isn’t sent');
+  const mineCodes = [];
+  for (let i = 0; i < 11; i++) mineCodes.push((await sam('POST', '/teams/post', { text: 'm' + i })).status);
+  ok(mineCodes.filter((c) => c === 200).length <= 10 && mineCodes.at(-1) === 429, `one person posts at most 10 an hour (${mineCodes.slice(-2).join(',')})`);
+
+  // A filled-in word can't take over a post.
+  r = await jo('POST', '/automations', { name: 'Task to Teams', trigger: { kind: 'task.created' }, actions: [{ kind: 'teams', op: 'post', text: 'Task: {task}' }] });
+  const n2 = got.length;
+  await jo('POST', '/tasks', { text: 'X'.repeat(900) });
+  ok(await until(() => got.slice(n2).some((p) => /^Task: X/.test(textOf(p)))), '(setup) a task posts');
+  const long = got.slice(n2).map(textOf).find((x) => /^Task: X/.test(x)) || '';
+  ok((long.match(/X/g) || []).length <= 200, `each filled-in word is cut to 200 characters (${(long.match(/X/g) || []).length})`);
+  await jo('DELETE', '/automations/' + r.body.id);
 
   // Teams refusing the address: Needs attention, then fixed by the next good post.
   mode = 404;
@@ -112,10 +131,19 @@ try {
   const ag = (await sam('GET', '/agents')).body.agents;
   ok(Object.values(ag).every((a) => a.tools.some((x) => x.key === 'draft_teams_post' && x.important)), 'every agent can draft a Teams post, and it waits for a yes');
 
-  // At most 60 posts an hour.
+  // The team's export says Teams was connected, never its address.
+  r = await jo('POST', '/exports', { kind: 'team' });
+  let ex = null;
+  for (let i = 0; i < 60 && !(ex && ex.status !== 'building'); i++) { await sleep(250); ex = (await jo('GET', '/exports')).body.exports.find((y) => y.kind === 'team'); }
+  const zip = DIR + '/team.zip';
+  fs.writeFileSync(zip, Buffer.from(await (await fetch(`${B}/api/exports/${ex.id}/file`, { headers: { authorization: 'Bearer ' + joTok } })).arrayBuffer()));
+  const all = execFileSync('unzip', ['-p', zip]).toString();
+  ok(/"app":\s*"teams"/.test(all) && !all.includes('SECRETSIG'), 'the team export lists Teams as connected, without its address');
+
+  // At most 60 posts an hour for the team (automations, tests and people together).
   const codes = [];
-  for (let i = 0; i < 60; i++) codes.push((await sam('POST', '/teams/post', { text: 'n' + i })).status);
-  ok(codes.includes(429), `at most 60 posts an hour (${codes.filter((c) => c === 200).length} went, then ${codes.at(-1)})`);
+  for (let i = 0; i < 60; i++) codes.push((await jo('POST', '/teams/test')).status);
+  ok(codes.includes(429), `at most 60 posts an hour a team (${codes.filter((c) => c === 200).length} more went, then ${codes.at(-1)})`);
 
   ok((await jo('DELETE', '/teams')).status === 200 && !(await jo('GET', '/teams')).body.connected, 'an owner disconnects it');
   r = await jo('POST', '/automations', { name: 'x', trigger: { kind: 'contact.created' }, actions: [{ kind: 'teams', op: 'post', text: 'hi' }] });
