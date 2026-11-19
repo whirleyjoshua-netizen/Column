@@ -818,6 +818,7 @@
     if (kind === 'approval') return approvalSheet(id);
     if (kind === 'vault') return openTool('vault');
     if (kind === 'mycard') return showMyCard();
+    if (kind === 'app') return openApps(id);
     if (kind === 'invreq') { INVS.view = 'requests'; INVS.req = id; openTool('inventory'); return loadInventory(); }
     if (kind === 'auto') { openBarItem('automations'); return api('GET', '/automations').then((l) => { S.automations = l; renderAutos(); const x = l.find((y) => y.id === id); x ? autoSheet(x) : toast('That automation is gone.'); }).catch((e) => toast(e.message)); }
     if (kind === 'card') return openTool('cards');
@@ -9906,8 +9907,19 @@
     { id: 'gemini', name: 'Gemini', cat: 'ai', logo: 'googlegemini', live: true, blurb: 'Agents, Sidekick and pictures on your key', does: ['Your agents and Sidekick on your own Google key', 'Pictures for posts and flyers'], sec: () => [aiSection()], state: () => (S.ai?.keys?.gemini ? 'on' : 'off') },
   ];
   const appById = (id) => APP_LIST().find((a) => a.id === id);
-  const appState = (a) => (!a.live ? 'soon' : a.state());
-  const APP_ST = { on: () => 'Connected', off: (a) => (a.admin && !amAdmin() ? 'Owners & admins' : 'Connect'), ready: () => 'Ready to use', na: () => 'Not set up here', soon: () => 'Not built yet' };
+  // The server's registry (GET /api/integrations) says each app's state, Needs attention included; until it has
+  // answered, or for an app it doesn't know, the tile's own check stands in.
+  const regOf = (a) => APPS.reg?.apps?.find((x) => x.id === a.id) || null;
+  const appState = (a) => {
+    if (!a.live) return 'soon';
+    const r = regOf(a);
+    return r ? r.state : a.state(); // a Postiz channel isn't in the registry: its tile checks its channel
+  };
+  const APP_ST = { on: () => 'Connected', off: (a) => (a.admin && !amAdmin() ? 'Owners & admins' : 'Connect'), ready: () => 'Ready to use', na: () => 'Not set up here', soon: (a) => (APPS.reg?.wanted?.includes(a.id) ? 'Asked for ✓' : 'Not built yet'), error: () => 'Needs attention', setup: () => 'One more step' };
+  // Not built yet: anyone can say they want it, once (db.appRequests). Owners see how many asked, which says what to build next.
+  async function wantApp(a, on) {
+    try { APPS.reg = await api(on ? 'POST' : 'DELETE', `/integrations/apps/${a.id}/want`, on ? { name: a.name } : undefined); renderApps(true); if (on) toast(`Thanks. We’ll tell the Kloomie team you want ${a.name}.`); } catch (e) { toast(e.message); }
+  }
   // GitHub is set up on each software board.
   // GitHub for the whole team (2026-11-19): connect once, pick repositories; or, before the server has the GitHub
   // App's keys, a software board's own webhook.
@@ -9970,6 +9982,7 @@
     const admin = amAdmin();
     const get = (p, ok = true) => (ok ? api('GET', p).catch(() => null) : null);
     get('/github/app').then((x) => { if (x) { S.ghApp = x; renderApps(); } });
+    get('/integrations').then((x) => { if (x) { APPS.reg = x; renderApps(); } });
     const [cals, feed, ai, pay, qbo, tw, pz, leads, keys, hooks] = await Promise.all([get('/calendars'), get('/calfeed'), get('/ai'), get('/payments/stripe', admin), get('/quickbooks', admin), get('/texting', admin), get('/postiz', admin), get('/lead-capture', admin), get('/integrations/keys', admin), get('/integrations/webhooks', admin)]);
     if (cals) S.cals = cals;
     if (feed) S.calfeed = feed;
@@ -10048,9 +10061,16 @@
     const top = h('div', { class: 'app-detail-top' }, appLogo(a), h('div', { class: 'app-detail-t' }, h('h1', {}, a.name), h('p', {}, a.blurb)), h('span', { class: 'app-st st-' + st }, h('i'), APP_ST[st](a)));
     const does = h('div', { class: 'app-card' }, h('h2', {}, a.live ? 'What it does' : 'What it would do'), h('ul', { class: 'app-does' }, (a.does || APP_WOULD[a.cat]).map((x) => h('li', {}, x))));
     let main;
+    const reg = regOf(a);
+    // What's wrong, and what to do, above the app's own section (owners and admins, or your own connection).
+    const trouble = (st === 'error' || st === 'setup') && reg ? h('div', { class: 'app-card app-trouble', role: 'status' }, h('h2', {}, st === 'error' ? 'Needs attention' : 'One more step'),
+      h('p', {}, reg.setup || reg.error || 'Something went wrong with this connection.'), reg.needsReconnect ? h('p', {}, 'Connect it again below. Nothing already in Kloomie is lost.') : null) : null;
     if (!a.live) {
+      const wanted = APPS.reg?.wanted?.includes(a.id), n = APPS.reg?.wants?.[a.id] || 0;
       main = h('div', { class: 'app-card app-soon' }, h('h2', {}, 'Not built yet'),
         h('p', {}, `A direct connection to ${a.name} isn’t built yet. It’s on the plan.`),
+        h('div', { class: 'btns app-want' }, h('button', { class: 'btn' + (wanted ? '' : ' primary-btn'), 'data-want': a.id, 'aria-pressed': String(!!wanted), onclick: () => wantApp(a, !wanted) }, wanted ? 'Asked for ✓ (undo)' : 'Want this?'),
+          amAdmin() && n ? h('small', { class: 'app-want-n' }, `${n} on your team asked for it`) : null),
         h('p', {}, `In the meantime, if ${a.name} is on Zapier or Make, either one can link it to Kloomie: something new in one can add or change something in the other.`),
         amAdmin() ? h('div', { class: 'btns' }, h('button', { class: 'btn primary-btn', 'data-go': 'zapier', onclick: () => openApps('zapier') }, 'Set up Zapier'), h('button', { class: 'btn', 'data-go': 'make', onclick: () => openApps('make') }, 'Set up Make'))
           : h('p', {}, 'An owner or admin sets these up for the team.'));
@@ -10061,7 +10081,7 @@
     } else {
       main = h('div', { class: 'app-card app-conn' }, ...a.sec());
     }
-    return h('div', { class: 'app-detail', 'data-app': a.id }, back, top, does, main,
+    return h('div', { class: 'app-detail', 'data-app': a.id }, back, top, trouble, does, main,
       h('button', { class: 'btn app-back-end', onclick: appsBack }, '‹ Back to all apps'));
   }
   function toolsTiles() {

@@ -65,8 +65,11 @@ command.
 | **Sidekick / Home brief** | the person's own facts, including integration facts (code activity, today's bookings, new photos, new reviews) | nothing directly; it hands off to agents |
 | **Public API / Zapier / Make** | what the API key's scopes allow (owner/admin-made keys) | same, through `/api/v1`; `hold` rules apply |
 
-Verify before relying on it: that automations re-check the maker's role at run time today (flows-plan.md). If they
-don't, column-02 adds it in the registry step.
+Checked against the code (column-02, 2026-11-19): steps run through the app's own routes as their maker
+(`flowCall` → `replayAs`), so a route that's owner/admin-only refuses a maker who isn't any more. A step that acts
+through a team connection is also checked by kind, when the automation is saved and before each run:
+`TEAM_STEPS` in server/integrations.js (`text` → Twilio, `webhook`, `slack`, `teams`). **Add your new action's kind
+there.**
 
 ### 1.4 Work: three ways an integration shows up beyond its tile
 
@@ -172,8 +175,14 @@ Work item APP-12 ──► branch app-12-login ──► GitHub push (code log, 
   `sec()` and `state()`. Keep the id.
 - **Server module:** `server/<app>.js` exporting `<app>Module({...})`, the way github.js and postiz.js do. Routes
   under `/api/<app>/…`. Incoming webhooks at `/api/<app>/hook/<team token>` with the app's signature checked.
-- **Registry:** until column-02's `server/integrations.js` lands, export a `describe` object from your module with
-  `{ id, scope, auth, configured(), status(ws, memberId) }`. It will register as-is.
+- **Registry (live, server/integrations.js):** export a `describe` object from your module with
+  `{ id, name, scope: 'team'|'person', auth: 'oauth'|'key'|'webhook'|'none', tool?, configured(), status(ws, memberId) }`
+  and add `APPS_REG.register(<MOD>.describe)` in index.js next to the others (after the module is made). `id` is the
+  tile's id in `APP_LIST`. `status` returns `null` when not connected, else `{ account, by, byId, lastSync, error,
+  needsReconnect, setup? }` read from what you store (no outside calls). Set `needsReconnect = true` where your
+  module learns the sign-in or key was refused (a 401), and `false` on the next good call; the registry does the
+  rest: the tile's Needs attention, one notice to `byId`, and `connection.lost`. `tool` (a member-access key) hides
+  the app from members who don't have that tool. GET /api/integrations returns `{ apps, wanted, wants? }`.
 - **Flows:** add your events to `EVENTS` in server/flows.js and `TOOLS` (one key per app). Fire them through
   `automate` from the one place the thing happens. Add actions in the runner next to `slack` / `webhook`.
 - **Agents:** read tools only unless section 1.3 says otherwise. Add the tool name to the right agents' `tools`

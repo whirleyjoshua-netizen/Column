@@ -198,6 +198,7 @@ export function quickbooksModule({ bind, db, save, broadcast, cleanText, readJso
     }
     if (pull || Date.now() - (c.pulledAt || 0) >= PULL) did += await pullPayments(c, ws);
     c.syncedAt = Date.now();
+    c.needsReconnect = false;
     c.error = fails.length ? `${fails.length} thing${fails.length > 1 ? 's' : ''} didn’t copy. ${fails[0].slice(0, 300)}` : null;
     return did;
   }
@@ -356,6 +357,7 @@ export function quickbooksModule({ bind, db, save, broadcast, cleanText, readJso
       try {
         return await run(ws, pull);
       } catch (e) {
+        if (db.qbo[ws.id] === c) c.needsReconnect = !!e.auth;
         if (db.qbo[ws.id] === c) c.error = e.auth ? 'QuickBooks’ sign-in expired, or Kloomie was disconnected in QuickBooks. Connect it again.' : 'Couldn’t reach QuickBooks: ' + String(e.message).slice(0, 300);
         if (!e.auth) console.error('QuickBooks sync failed', e.code ? 'code ' + e.code : '', e.tid ? 'intuit_tid ' + e.tid : '');
         return 0;

@@ -36,12 +36,13 @@ export function dropboxModule({ bind, noRoom = () => null, db, rid, save, send, 
       try {
         j = await tokenCall({ grant_type: 'refresh_token', refresh_token: tok.refresh });
       } catch (e) {
-        if (e.auth) { c.error = 'Dropbox sign-in expired. Connect again.'; save(); throw fail(c.error, 409, { reconnect: true }); }
+        if (e.auth) { c.error = 'Dropbox sign-in expired. Connect again.'; c.needsReconnect = true; save(); throw fail(c.error, 409, { reconnect: true }); }
         throw e;
       }
       tok = { ...tok, access: j.access_token, expires: Date.now() + (j.expires_in - 120) * 1000 };
       c.tokens = seal(tok);
       c.error = null;
+      c.needsReconnect = false;
       save();
     }
     return tok.access;
@@ -49,7 +50,7 @@ export function dropboxModule({ bind, noRoom = () => null, db, rid, save, send, 
   async function rpc(c, endpoint, body) {
     const token = await access(c);
     const r = await fetch(`${API}/2/${endpoint}`, { signal: AbortSignal.timeout(30_000), method: 'POST', headers: { authorization: 'Bearer ' + token, ...(body === undefined ? {} : { 'content-type': 'application/json' }) }, body: body === undefined ? undefined : JSON.stringify(body) });
-    if (r.status === 401) { c.error = 'Dropbox sign-in expired. Connect again.'; save(); throw fail(c.error, 409, { reconnect: true }); }
+    if (r.status === 401) { c.error = 'Dropbox sign-in expired. Connect again.'; c.needsReconnect = true; save(); throw fail(c.error, 409, { reconnect: true }); }
     const j = await r.json().catch(() => null);
     if (!r.ok) {
       const tag = j?.error?.['.tag'] || j?.error_summary || '';

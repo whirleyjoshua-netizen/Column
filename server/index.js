@@ -45,6 +45,7 @@ import { newsModule } from './news.js';
 import { qrSvg } from './qr.js';
 import { agentsModule, AGENTS } from './agents.js';
 import { postizModule } from './postiz.js';
+import { integrationsModule } from './integrations.js';
 import { makeImage } from './images.js';
 import { Readable } from 'node:stream';
 import { EventEmitter } from 'node:events';
@@ -3462,6 +3463,8 @@ function applyAutomation(x, body, ws) {
 function cleanAction(a, ws, who) {
   const kind = AUTO_ACTIONS.includes(a?.kind) ? a.kind : null;
   if (!kind) return null;
+  // Acting through a team connection (texts through Twilio, a webhook…): its maker is an owner or admin (map §1.3).
+  try { APPS_REG.stepAllowed(ws, who, kind, 'save'); } catch (e) { throw badRequest(e.message); }
   // A record changed or added: in a list of a project its maker can see, setting only plain fields.
   if (kind === 'record' || kind === 'create') {
     const p = db.projects[a.projectId];
@@ -3550,7 +3553,7 @@ function autoVars(ctx, wsId) {
   return { task: ctx.task?.text, step: ctx.goal?.title, campaign: ctx.campaign?.name, contact: ctx.contact ? ctx.contact.name || ctx.contact.company || ctx.contact.email || ctx.contact.phone : '', file: ctx.file?.name,
     from: ctx.from, who: ctx.who, stage: ctx.stageLabel || (ctx.stage ? stageLabel(ctx.stage) : ''), outcome: ctx.outcome, document: ctx.document, note: ctx.note, date: ctx.date || teamDay(wsId),
     record: ctx.recordName, project: ctx.project?.name, list: ctx.list?.name, customer: ctx.customer, amount: ctx.amount != null ? '$' + Number(ctx.amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '',
-    invoice: ctx.invoice, time: ctx.time, crew: ctx.crew, phone: ctx.phone, text: ctx.text, doc: ctx.doc, pin: ctx.pin, category: ctx.category, status: ctx.status, answer: ctx.answer, item: ctx.item, was: ctx.was, now: ctx.now, quotes: ctx.quotes != null ? String(ctx.quotes) : undefined, qty: ctx.qty, unit: ctx.unitName, place: ctx.place, supplier: ctx.supplier, repo: ctx.repo, branch: ctx.branch, url: ctx.url, version: ctx.version };
+    invoice: ctx.invoice, time: ctx.time, crew: ctx.crew, phone: ctx.phone, text: ctx.text, doc: ctx.doc, pin: ctx.pin, category: ctx.category, status: ctx.status, answer: ctx.answer, item: ctx.item, was: ctx.was, now: ctx.now, quotes: ctx.quotes != null ? String(ctx.quotes) : undefined, qty: ctx.qty, unit: ctx.unitName, place: ctx.place, supplier: ctx.supplier, repo: ctx.repo, branch: ctx.branch, url: ctx.url, version: ctx.version, app: ctx.app, error: ctx.error };
 }
 function autoMatches(t, ctx) {
   if (t.campaignId && ctx.campaign?.id !== t.campaignId && ctx.campaign?.parentId !== t.campaignId) return false;
@@ -3966,7 +3969,7 @@ async function resumeSteps(x, ctx, stack, i, log) {
   return r;
 }
 // What a waiting run keeps: what it's about, by id, and the words as they were.
-const CTX_WORDS = ['repo', 'branch', 'url', 'version', 'answer', 'item', 'was', 'now', 'quotes', 'qty', 'unitName', 'place', 'supplier', 'who', 'whoId', 'from', 'stage', 'stageLabel', 'outcome', 'document', 'note', 'date', 'recordName', 'customer', 'amount', 'invoice', 'time', 'crew', 'phone', 'text', 'doc', 'pin', 'category', 'status', 'direction', 'private', 'ownersOnly'];
+const CTX_WORDS = ['app', 'error', 'repo', 'branch', 'url', 'version', 'answer', 'item', 'was', 'now', 'quotes', 'qty', 'unitName', 'place', 'supplier', 'who', 'whoId', 'from', 'stage', 'stageLabel', 'outcome', 'document', 'note', 'date', 'recordName', 'customer', 'amount', 'invoice', 'time', 'crew', 'phone', 'text', 'doc', 'pin', 'category', 'status', 'direction', 'private', 'ownersOnly'];
 function ctxSnap(ctx) {
   const out = { ids: { task: ctx.task?.id, goal: ctx.goal?.id, campaign: ctx.campaign?.id, contact: ctx.contact?.id || null, contactName: ctx.contact && !ctx.contact.id ? ctx.contact.name || '' : null, file: ctx.file?.id, project: ctx.project?.id, list: ctx.list?.id, record: ctx.record?.id } };
   for (const k of CTX_WORDS) if (ctx[k] !== undefined && ctx[k] !== null) out[k] = ctx[k];
@@ -4295,6 +4298,8 @@ const idemKey = (x) => { const s = FLOWING.getStore(); return `${x.id}.${s?.runI
 const autoJob = (x, ctx) => { const id = ctx.record?.id; return id && PJ.recordAt(id, x.wsId, x.memberId) ? id : null; };
 async function autoAction(x, a, ctx) {
   const ws = db.workspaces[x.wsId];
+  // Checked again when it runs: a maker who's no longer an owner or admin can't act through a team connection.
+  APPS_REG.stepAllowed(ws, x.memberId, a.kind, 'run');
   if (['visit', 'invoice', 'text', 'email', 'money', 'doc', 'vault', 'webhook', 'stock'].includes(a.kind)) return flowAction(x, a, ctx, ws);
   const say = autoFill(a.text, ctx, ws.id);
   if (a.kind === 'task' && a.presetId) {
@@ -4628,6 +4633,7 @@ async function calToken(conn) {
   return tok.access;
 }
 function calFailed(conn, e) {
+  conn.needsReconnect = !!e.auth;
   conn.error = e.auth ? (calProviders[conn.provider]?.password ? 'Apple stopped accepting the app-specific password. Disconnect, then connect again with a new one.' : 'Sign-in expired. Reconnect this calendar.') : 'Couldn’t reach the calendar: ' + String(e.message || e).slice(0, 200);
   if (!e.auth) console.error(`Calendar ${conn.provider} ${conn.id}:`, e.message);
   save();
@@ -4733,6 +4739,7 @@ async function syncCalendar(conn) {
     }
     conn.lastSync = Date.now();
     conn.error = null;
+    conn.needsReconnect = false;
     save();
     broadcast(conn.wsId, { type: 'calendars', forMember: conn.memberId });
   } catch (e) {
@@ -5285,9 +5292,11 @@ async function syncGc(ws) {
       fillContacts(ws, 'google', people, { announce: !!g.syncedAt });
       g.syncedAt = Date.now();
       g.error = null;
+      g.needsReconnect = false;
       contactsNews(ws.id);
       groupsNews(ws.id);
     } catch (e) {
+      if (db.gcontacts[ws.id] === g) g.needsReconnect = !!e.auth;
       if (db.gcontacts[ws.id] === g) g.error = e.auth ? 'Google’s sign-in expired. Connect it again.' : 'Couldn’t reach Google Contacts: ' + clipText(e.message, 200);
       console.error('Google Contacts sync failed:', e.message);
     } finally {
@@ -8099,6 +8108,10 @@ async function api(req, res, url) {
   if (a === 'projects' && c === 'standup') {
     const out = await STANDUP.route(req, res, parts, auth, ws);
     if (out !== null) return;
+  }
+  if (a === 'integrations' && (!b || b === 'apps')) {
+    const out = await APPS_REG.route(req, res, parts, auth, ws);
+    if (out !== null) return out;
   }
   if (a === 'projects' || a === 'records' || a === 'integrations' || a === 'project-templates' || a === 'profile') {
     const out = await PJ.route(req, res, parts, auth, ws);
@@ -11894,6 +11907,47 @@ const LEADS = leadsModule({ db, save, readJson, send, isAdmin, cleanText, contac
 const TS = twoStepModule({ db, save, seal, unseal, readJson, send, appName: process.env.APP_NAME || 'Kloomie' });
 // QuickBooks Online: invoices and payments into the team's books, payments recorded there back (quickbooks.js).
 const QB = quickbooksModule({ bind: OAUTH_BIND, db, save, broadcast, cleanText, readJson, send, seal, unseal, isAdmin, INV, PJ, publicUrl: PUBLIC_URL, alarm, offline, teamDay });
+// ---------- Apps & Integrations: one registry (integrations.js, docs/INTEGRATIONS-MAP.md) ----------
+// Each app says who connects it (team: owners and admins; person: each their own) and reads its state from where its
+// module keeps it. Statuses come from what's stored (no outside calls), so the page loads in one quick call.
+const APPS_REG = integrationsModule({ db, save, send, readJson, rid, cleanText, isAdmin, isAdminId, memberMay, toolOn: (ws, k) => toolsOf(ws)[k] !== false, notify: (...a) => notify(...a), automate: (...a) => automate(...a), memberName: (ws, id) => ws.members.find((m) => m.id === id)?.name || '' });
+{
+  const by = (ws, name) => ws.members.find((m) => m.name === name)?.id || null; // older stores keep the name only
+  const calOf = (ws, memberId, provider, mail) => Object.values(db.calendars).find((x) => x.wsId === ws.id && x.memberId === memberId && x.provider === provider && (!mail || x.mail));
+  const cal = (id, name, provider, mail) => APPS_REG.register({ id, name, scope: 'person', auth: provider === 'apple' ? 'key' : 'oauth', configured: () => calProviders[provider].configured(),
+    status: (ws, mid) => { const c = calOf(ws, mid, provider, mail); return c && { account: c.account, byId: mid, lastSync: c.lastSync || null, error: c.error || null, needsReconnect: !!c.needsReconnect }; } });
+  cal('google-calendar', 'Google Calendar', 'google');
+  cal('gmail', 'Gmail', 'google', true);
+  cal('outlook', 'Outlook & Microsoft 365', 'microsoft');
+  cal('apple-calendar', 'Apple Calendar', 'apple');
+  APPS_REG.register({ id: 'twilio', name: 'Twilio', scope: 'team', auth: 'key', status: (ws) => { const c = db.twilio?.[ws.id]; return c && { account: c.account, by: c.by, byId: by(ws, c.by), error: c.error || null }; } });
+  const cloud = (id, name, k) => APPS_REG.register({ id, name, scope: 'person', auth: 'oauth', ready: true, configured: () => !!cloudPickers()[k], status: () => null });
+  cloud('google-drive', 'Google Drive', 'google');
+  cloud('onedrive', 'OneDrive', 'onedrive');
+  APPS_REG.register({ id: 'dropbox', name: 'Dropbox', scope: 'person', auth: 'oauth', ready: true, configured: () => { const c = cloudPickers(); return !!(c.dropbox || c.dropboxList); },
+    status: (ws, mid) => { const c = db.dropbox?.[`${ws.id}:${mid}`]; return c && { account: c.account || c.name || null, byId: mid, error: c.error || null, needsReconnect: !!c.needsReconnect }; } });
+  APPS_REG.register({ id: 'notion', name: 'Notion', scope: 'person', auth: 'none', tool: 'docs', ready: true, status: () => null });
+  APPS_REG.register({ id: 'google-contacts', name: 'Google Contacts', scope: 'team', auth: 'oauth', tool: 'contacts', configured: () => calProviders.google.configured(),
+    status: (ws) => { const g = db.gcontacts[ws.id]; return g && { account: g.account, by: g.by, byId: g.memberId, lastSync: g.syncedAt || null, error: g.error || null, needsReconnect: !!g.needsReconnect }; } });
+  APPS_REG.register({ id: 'pss', name: 'PSS admin', scope: 'team', auth: 'key', tool: 'contacts', status: (ws) => { const p = db.pss[ws.id]; return p && { account: (() => { try { return new URL(p.url).host; } catch { return null; } })(), by: p.by, byId: by(ws, p.by), lastSync: p.syncedAt || null, error: p.error || null }; } });
+  APPS_REG.register({ id: 'quickbooks', name: 'QuickBooks', scope: 'team', auth: 'oauth', configured: () => QB.state({ id: '' }).configured,
+    status: (ws) => { const c = db.qbo[ws.id]; return c && { account: c.company || null, by: c.by, byId: c.memberId || by(ws, c.by), lastSync: c.syncedAt || null, error: c.error || null, needsReconnect: !!c.needsReconnect }; } });
+  APPS_REG.register({ id: 'stripe', name: 'Stripe', scope: 'team', auth: 'key', status: (ws) => { const k = db.payKeys[ws.id]; return k && { account: k.account || null, by: k.by, byId: by(ws, k.by) }; } });
+  APPS_REG.register({ id: 'postiz', name: 'Postiz', scope: 'team', auth: 'key', status: (ws) => { const c = ws.postiz; return c && { account: c.org || null, by: c.by, byId: c.memberId || by(ws, c.by), lastSync: c.checkedAt || null, error: c.error || null, needsReconnect: !!c.needsReconnect }; } });
+  APPS_REG.register({ id: 'github', name: 'GitHub', scope: 'team', auth: 'oauth', tool: 'projects', configured: () => true,
+    status: (ws) => { const c = db.githubApp?.[ws.id]; return c && { account: c.account || null, by: c.by, byId: c.memberId || null, lastSync: c.lastEventAt || null, error: c.error || null, needsReconnect: !!c.needsReconnect, ...(c.repos?.length ? {} : { setup: 'Pick the repositories' }) }; } });
+  const keysOf = (ws) => Object.values(db.apiKeys || {}).filter((k) => k.wsId === ws.id);
+  const hooksOf = (ws) => Object.values(db.webhooks || {}).filter((h) => h.wsId === ws.id);
+  APPS_REG.register({ id: 'zapier', name: 'Zapier', scope: 'team', auth: 'key', status: (ws) => (keysOf(ws).length ? { by: keysOf(ws)[0].by } : null) });
+  APPS_REG.register({ id: 'make', name: 'Make', scope: 'team', auth: 'key', status: (ws) => (keysOf(ws).length || hooksOf(ws).length ? {} : null) });
+  APPS_REG.register({ id: 'api', name: 'API & webhooks', scope: 'team', auth: 'key', status: (ws) => (keysOf(ws).length || hooksOf(ws).length ? {} : null) });
+  APPS_REG.register({ id: 'leads', name: 'Website lead forms', scope: 'team', auth: 'webhook', status: (ws) => (ws.leadCapture?.on ? {} : null) });
+  const ai = (id, name, k) => APPS_REG.register({ id, name, scope: 'person', auth: 'key', status: (ws, mid) => (db.ai[`${ws.id}:${mid}`]?.keys?.[k] ? { byId: mid } : null) });
+  ai('claude', 'Claude', 'anthropic');
+  ai('openai', 'OpenAI', 'openai');
+  ai('gemini', 'Gemini', 'gemini');
+}
+setInterval(() => { try { APPS_REG.watch(); } catch (e) { alarm('Checking connections failed', e); } }, Number(process.env.CONN_WATCH_MS) || 5 * 60_000).unref?.();
 // The public API for Contacts, Tasks, Visits and Invoices, and webhooks apps subscribe to (publicapi.js).
 const API = publicApiModule({ canSee: (...a) => canSee(...a), privateTask: (t) => privateTask(t), readOnlyMsg: (ws) => readOnlyBlock(ws, 'v1', 'POST'), db, save, broadcast, rid, cleanText, readJson, send, badRequest, PJ, INV, isAdmin, teamDay, EVENTS: HOOK_EVENTS, EMAIL_RE,
   publicContact, contactsOf, newContact, applyContact, contactNews, refreshLiveSoon, automate, CONTACT_MAX, emailKey, phoneKey,
@@ -12391,6 +12445,7 @@ async function removeMember(ws, m, { removed = false } = {}) {
   for (const x of Object.values(db.pushSubs)) if (theirs(x)) delete db.pushSubs[x.id];
   delete db.signatures[sigKey(wsId, id)];
   delete db.ai[`${wsId}:${id}`];
+  APPS_REG.forget(wsId, id); // their Want this? asks and their connections' health
   for (const x of Object.values(db.sidekick)) if (theirs(x)) {
     for (const f of x.files || []) fsp.rm(skPath(f), { force: true }).catch(() => {});
     delete db.sidekick[x.id];

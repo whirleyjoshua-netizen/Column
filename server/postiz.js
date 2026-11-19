@@ -91,8 +91,10 @@ export function postizModule({ bind, db, save, broadcast, cleanText, readJson, s
       const list = await call(c, 'GET', '/integrations');
       c.channels = (Array.isArray(list) ? list : []).slice(0, 60).map(channelOf);
       c.error = null;
+      c.needsReconnect = false;
     } catch (e) {
       c.error = e.message;
+      c.needsReconnect = !!e.auth; // the key was refused: connect again (Apps & Integrations shows Needs attention)
       if (!e.auth) throw e;
     } finally {
       c.checkedAt = Date.now();

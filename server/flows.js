@@ -3,7 +3,7 @@
 // Each event says which tool it's from, what it's called, the words it fills in ({contact}, {amount}…) and the
 // filters an automation can narrow it with. index.js fires them (automate) from the one place each thing happens.
 
-export const TOOLS = { tasks: 'Tasks', contacts: 'Contacts', campaigns: 'Campaigns', projects: 'Boards', money: 'Invoices & Finance', files: 'Files & signatures', texts: 'Texts', docs: 'Docs', map: 'Map', time: 'Time', inventory: 'Inventory', github: 'GitHub' };
+export const TOOLS = { tasks: 'Tasks', contacts: 'Contacts', campaigns: 'Campaigns', projects: 'Boards', money: 'Invoices & Finance', files: 'Files & signatures', texts: 'Texts', docs: 'Docs', map: 'Map', time: 'Time', inventory: 'Inventory', github: 'GitHub', apps: 'Apps & Integrations' };
 
 // filters: campaign (in a campaign), stage (a contact's stage), outcome (a call's), statuses (a check-in's),
 // project (and list), to (a record's stage it moved to), over (an amount at least this, in dollars), date (a
@@ -37,6 +37,7 @@ export const EVENTS = [
   { type: 'document.signed', tool: 'files', label: 'A document is signed', words: ['document', 'from', 'campaign', 'who'], filters: ['campaign'] },
   { type: 'text.received', tool: 'texts', label: 'A text comes in', words: ['contact', 'phone', 'text'], filters: [] },
   { type: 'doc.created', tool: 'docs', label: 'A doc is made', words: ['doc', 'who'], filters: [] },
+  { type: 'connection.lost', tool: 'apps', label: 'A connected app needs connecting again (its sign-in expired or was removed)', words: ['app', 'error', 'who'], filters: [] },
   { type: 'github.pushed', tool: 'github', label: 'Code is pushed to a connected GitHub repository', words: ['repo', 'branch', 'text', 'who', 'url', 'qty'], filters: [] },
   { type: 'github.pr_opened', tool: 'github', label: 'A pull request is opened on GitHub', words: ['repo', 'branch', 'text', 'who', 'url'], filters: [] },
   { type: 'github.merged', tool: 'github', label: 'A pull request is merged on GitHub', words: ['repo', 'branch', 'text', 'who', 'url'], filters: [] },
