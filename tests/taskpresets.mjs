@@ -110,6 +110,17 @@ try {
   ok((await ben('DELETE', '/task-presets/' + order.id)).status === 200, 'then Ben’s task can go');
   ok((await cy('POST', `/task-presets/${order.id}/use`, {})).status === 404, 'and can’t be used');
 
+  // A calendar block (2026-11-20): time on your own calendar.
+  r = await ada('POST', '/task-presets', { kind: 'block', text: 'Standup', start: 450, minutes: 15, repeat: 'weekdays' });
+  ok(r.status === 200 && r.body.kind === 'block' && r.body.start === 450 && r.body.minutes === 15 && r.body.repeat === 'weekdays' && r.body.name === 'Standup', 'Ada saves a calendar block: Standup, 7:30, 15 minutes, weekdays');
+  const standup = r.body;
+  ok((await ada('POST', '/task-presets', { kind: 'block', text: '' })).status === 400, 'a block has to say what it is');
+  r = await cy('POST', `/task-presets/${standup.id}/use`, { date: plus(today, 1) });
+  const ent = r.body?.entries?.[0];
+  ok(r.status === 200 && ent && ent.text === 'Standup' && ent.date === plus(today, 1) && ent.start === 450 && ent.end === 465 && ent.repeat === 'weekdays' && !r.body.tasks.length, 'Cy drops it on tomorrow: it’s on his calendar, 7:30–7:45, every weekday');
+  ok((await cy('GET', '/state')).body.entries.some((e) => e.id === ent.id) && !(await ada('GET', '/state')).body.entries.some((e) => e.id === ent.id), 'on Cy’s calendar, not Ada’s');
+  ok((await ada('POST', '/automations', { name: 'Blocky', trigger: { kind: 'contact.created' }, actions: [{ kind: 'task', presetId: standup.id }] })).status === 400, 'an automation can’t make a calendar block (calendars are each person’s own)');
+
   // Another team sees none of it.
   const other = call((await call()('POST', '/auth', { mode: 'create', workspace: 'Other ' + t, name: 'Zed', email: `zed${t}@t.test`, password: 'longenough4', device: 'Mac', deviceId: 'd4' })).body.token);
   ok((await other('GET', '/task-presets')).body.presets.length === 0, 'another team sees none');

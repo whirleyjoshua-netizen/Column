@@ -109,6 +109,21 @@ try {
   const first = two.find((x) => !x.blockedBy?.length), second = two.find((x) => x.blockedBy?.length);
   ok(two.length === 2 && first?.due === day(20) && first.assigneeId === benId && second?.blockedBy[0] === first.id && second.dueAfter === 3, 'two tasks: the first on the 20th, the second waiting for it, both Ben’s');
 
+  // A calendar block: saved, then dropped on a day of the month.
+  await A.tap(`document.querySelector('#day .sv-new-block')`);
+  ok(await A.until(`!!document.querySelector('#sheet .sv-start')`), 'the calendar block sheet opens');
+  await A.ev(`(() => { const s = document.querySelector('#sheet'); s.querySelector('.sv-text').value = 'Shop day'; s.querySelector('.sv-start').value = '08:00'; s.querySelector('.sv-len').value = '240'; return true; })()`);
+  await A.tap(`document.querySelector('#sheet .primary-btn')`);
+  ok(await A.until(`[...document.querySelectorAll('#day .sv-chip.block')].some((c) => c.textContent.includes('Shop day') && c.textContent.includes('240 min'))`), 'it’s on the shelf: Shop day, 8:00, 240 min');
+  const blk = (await api('GET', '/task-presets')).presets.find((x) => x.kind === 'block');
+  await A.tap(`[...document.querySelectorAll('#day .day-modes button')].find((b) => b.textContent === 'Month')`);
+  await A.until(`document.querySelectorAll('#day .mo-cell').length >= 28`);
+  await A.ev(drag(`document.querySelector('#day .sv-chip[data-preset="${blk.id}"]')`, cell(22)));
+  let ent = null;
+  for (let i = 0; i < 30 && !ent; i++) { await sleep(150); ent = (await api('GET', '/state')).entries.find((e) => e.text === 'Shop day'); }
+  ok(ent && ent.date === day(22) && ent.start === 480 && ent.end === 720, 'dropped on the 22nd: 8:00–12:00 on Ada’s calendar');
+  ok(await A.until(`${cell(22)}.textContent.includes('Shop day')`), 'and it shows on that day');
+
   // The automation builder: "Make a task" from the bundle.
   const pick = (sel, value) => A.ev(`(() => { const s = ${sel}; s.value = ${JSON.stringify(value)}; s.dispatchEvent(new Event('change', { bubbles: true })); return s.value === ${JSON.stringify(value)}; })()`);
   await A.ev(`document.querySelector('#tabs [data-tab=automations]').click(); true`);
@@ -134,14 +149,14 @@ try {
   await A.ev(`document.querySelector('#menu [data-tool=templates]').click(); true`);
   ok(await A.until(`[...document.querySelectorAll('#split .tpl-kinds button')].some((b) => b.textContent === 'Saved tasks')`), 'Templates has a “Saved tasks” kind');
   await A.ev(`[...document.querySelectorAll('#split .tpl-kinds button')].find((b) => b.textContent === 'Saved tasks').click(); true`);
-  ok(await A.until(`document.querySelectorAll('#split .tpl-card[data-preset]').length === 3 && [...document.querySelectorAll('#split .tpl-card[data-preset]')].some((c) => c.textContent.includes('Bundle') && c.textContent.includes('Book the install → Order the materials'))`), 'listing the saved tasks and the bundle, in order');
+  ok(await A.until(`document.querySelectorAll('#split .tpl-card[data-preset]').length === 4 && [...document.querySelectorAll('#split .tpl-card[data-preset]')].some((c) => c.textContent.includes('Bundle') && c.textContent.includes('Book the install → Order the materials'))`), 'listing the saved tasks and the bundle, in order');
   await A.ev(`[...document.querySelectorAll('#split .tpl-kinds button')].find((b) => b.textContent === 'All').click(); true`);
 
   // Remembered open.
   await A.ev(`location.reload(); true`);
   ok(await A.until(`!document.querySelector('#app').classList.contains('hidden')`, 15000), 'reloaded');
   await A.ev(`document.querySelector('#tabs [data-tab=work]').click(); true`);
-  ok(await A.until(`!document.querySelector('#day .sv-shelf').classList.contains('hidden') && document.querySelectorAll('#day .sv-chip').length === 3`), 'this device remembers the shelf open');
+  ok(await A.until(`!document.querySelector('#day .sv-shelf').classList.contains('hidden') && document.querySelectorAll('#day .sv-chip').length === 4`), 'this device remembers the shelf open');
   ok(A.errors.length === 0, 'no script errors' + (A.errors.length ? ': ' + A.errors.join(' | ') : ''));
 } catch (e) { ok(false, 'threw: ' + e.stack); }
 A?.close();

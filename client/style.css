@@ -3762,3 +3762,5 @@ body:not(.wide) .tool-grid { grid-template-columns: 1fr; }
 .home-card.code .code-row { text-decoration: none; color: inherit; text-align: left; justify-content: flex-start; }
 .home-card.code .code-row .need-text { flex: 1; text-align: left; }
 .home-card.code .code-sum { margin: 0 0 6px; }
+/* Saved calendar blocks on the shelf (2026-11-20) */
+.sv-chip.block { border-style: dashed; }

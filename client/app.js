@@ -3863,11 +3863,14 @@
   }
   const presetById = (id) => (SV.list || []).find((x) => x.id === id);
   const presetWho = (x) => (x.assigneeId ? memberName(x.assigneeId) : x.roleId && roleById(x.roleId) ? roleById(x.roleId).name : '');
-  const presetSub = (x) => x.kind === 'bundle' ? plural(x.steps.length, 'task') : [presetWho(x), x.dueIn != null ? (x.dueIn ? `due in ${plural(x.dueIn, 'day')}` : 'due that day') : ''].filter(Boolean).join(' · ');
+  const REP_L = { daily: 'every day', weekdays: 'weekdays', weekly: 'every week', monthly: 'every month' };
+  const presetSub = (x) => x.kind === 'block' ? [x.start != null ? fmtTime(x.start) : 'any time', x.start != null ? `${x.minutes || 60} min` : '', REP_L[x.repeat] || ''].filter(Boolean).join(' · ') : x.kind === 'bundle' ? plural(x.steps.length, 'task') : [presetWho(x), x.dueIn != null ? (x.dueIn ? `due in ${plural(x.dueIn, 'day')}` : 'due that day') : ''].filter(Boolean).join(' · ');
   async function usePreset(x, opts = {}) {
     try {
       const r = await api('POST', `/task-presets/${x.id}/use`, opts);
       for (const t of r.tasks) upsertTask(t);
+      // A calendar block goes on your own calendar.
+      if (r.entries?.length) { for (const e of r.entries) upsertEntry(e); toast(`Added “${shortText(r.entries[0].text, 50)}” to ${dayName(r.entries[0].date)}${r.entries[0].repeat ? ', repeating' : ''}`); return renderDay(); }
       toast(r.tasks.length === 1 ? `Added “${shortText(r.tasks[0].text, 50)}”${r.tasks[0].due ? ' for ' + dayName(r.tasks[0].due) : ''}` : `Added ${r.tasks.length} tasks from “${shortText(x.name, 40)}”`);
       renderDay();
     } catch (e) { toast(e.message); }
@@ -3880,7 +3883,7 @@
     ev.preventDefault();
     const col = ev.target.closest?.('.wk-col[data-date]'), person = ev.target.closest?.('.wl-row[data-member]');
     if (col) return usePreset(x, { date: col.dataset.date });
-    if (person) return usePreset(x, { assigneeId: person.dataset.member });
+    if (person && x.kind !== 'block') return usePreset(x, { assigneeId: person.dataset.member });
     if (D.sub === 'schedule' && !monthOn() && !weekOn()) return usePreset(x, { date: D.date });
     usePreset(x, {});
   }
@@ -3892,30 +3895,32 @@
     if (!SV.open) return;
     if (!SV.list) { if (!SV.loading) loadPresets(); D.shelf.replaceChildren(h('small', { class: 'day-hint' }, 'Loading…')); return; }
     const chip = (x) => {
-      const b = h('button', { class: 'sv-chip' + (x.kind === 'bundle' ? ' bundle' : ''), draggable: 'true', 'data-preset': x.id, title: x.kind === 'bundle' ? x.steps.map((st) => presetById(st.presetId)?.text).filter(Boolean).join(' → ') : x.text, onclick: (ev) => presetMenu(ev.currentTarget, x) },
-        h('span', { class: 'sv-ic' }, x.kind === 'bundle' ? '🧩' : '☐'), h('b', {}, x.name), presetSub(x) ? h('small', {}, presetSub(x)) : null);
+      const b = h('button', { class: 'sv-chip' + (x.kind === 'bundle' ? ' bundle' : x.kind === 'block' ? ' block' + (x.color ? ' c-' + x.color : '') : ''), draggable: 'true', 'data-preset': x.id, title: x.kind === 'bundle' ? x.steps.map((st) => presetById(st.presetId)?.text).filter(Boolean).join(' → ') : x.text, onclick: (ev) => presetMenu(ev.currentTarget, x) },
+        h('span', { class: 'sv-ic' }, x.kind === 'bundle' ? '🧩' : x.kind === 'block' ? '🗓' : '☐'), h('b', {}, x.name), presetSub(x) ? h('small', {}, presetSub(x)) : null);
       b.addEventListener('dragstart', (ev) => { MO.drag = { preset: x }; ev.dataTransfer.effectAllowed = 'copy'; ev.dataTransfer.setData('text/plain', x.name); document.body.classList.add('sv-dragging'); });
       b.addEventListener('dragend', () => { setTimeout(() => { if (MO.drag?.preset) MO.drag = null; }); document.body.classList.remove('sv-dragging'); document.querySelectorAll('.mo-cell.over').forEach((c) => c.classList.remove('over')); });
       return b;
     };
-    const tasks = SV.list.filter((x) => x.kind === 'task'), bundles = SV.list.filter((x) => x.kind === 'bundle');
+    const tasks = SV.list.filter((x) => x.kind === 'task'), bundles = SV.list.filter((x) => x.kind === 'bundle'), blocks = SV.list.filter((x) => x.kind === 'block');
     D.shelf.replaceChildren(
       h('div', { class: 'sv-row' },
-        bundles.map(chip), tasks.map(chip),
+        blocks.map(chip), bundles.map(chip), tasks.map(chip),
         !SV.list.length ? h('small', { class: 'day-hint sv-empty' }, 'Save tasks your team makes again and again, then drag them onto a day or a person.') : null,
         h('button', { class: 'btn small sv-new', onclick: () => presetSheet(null, 'task') }, '+ Save a task'),
-        tasks.length ? h('button', { class: 'btn small sv-new-bundle', onclick: () => presetSheet(null, 'bundle') }, '+ Bundle') : null));
+        tasks.length ? h('button', { class: 'btn small sv-new-bundle', onclick: () => presetSheet(null, 'bundle') }, '+ Bundle') : null,
+        h('button', { class: 'btn small sv-new-block', onclick: () => presetSheet(null, 'block') }, '+ Calendar block')));
   }
   function presetMenu(anchor, x) {
     const mine = x.memberId === S.me?.memberId || amAdmin();
     openMenu(anchor, [
       { label: 'Add for today', run: () => usePreset(x, { date: todayKey() }) },
-      { label: x.kind === 'bundle' ? 'Start on a day, for someone…' : 'On a day, for someone…', run: () => usePresetSheet(x) },
+      { label: x.kind === 'block' ? 'On a day…' : x.kind === 'bundle' ? 'Start on a day, for someone…' : 'On a day, for someone…', run: () => usePresetSheet(x) },
       mine ? { label: 'Edit…', run: () => presetSheet(x, x.kind) } : null,
     ].filter(Boolean));
   }
   function usePresetSheet(x) {
     const date = h('input', { type: 'date', value: todayKey(), class: 'sv-date' });
+    if (x.kind === 'block') return sheet(x.name, [h('p', {}, x.text, h('small', { class: 'muted' }, ' · ' + presetSub(x))), h('label', {}, x.repeat ? 'Starting' : 'Day', date)], () => usePreset(x, { date: date.value || null }), 'Add to my calendar');
     const who = h('select', { class: 'sv-who' }, h('option', { value: '' }, x.kind === 'bundle' ? 'As each one is saved' : presetWho(x) ? `As saved (${presetWho(x)})` : 'Nobody in particular'), (S.workspace?.members || []).map((m) => h('option', { value: m.id }, memberName(m.id))));
     sheet(x.name, [
       x.kind === 'bundle' ? h('ol', { class: 'sv-steps-ro' }, x.steps.map((st, i) => h('li', {}, presetById(st.presetId)?.text || '(gone)', i ? h('small', {}, ` · ${st.after ? `due ${plural(st.after, 'day')} after the one before` : 'right after the one before'}`) : null))) : h('p', {}, x.text),
@@ -3940,6 +3945,25 @@
     del?.addEventListener('click', () => confirmClick(del, async () => { try { await api('DELETE', '/task-presets/' + x.id); SV.list = SV.list.filter((y) => y.id !== x.id); closeSheet(); renderShelf(); } catch (e) { toast(e.message); } }));
     const used = x && (x.used?.automations?.length || x.used?.bundles?.length) ? h('p', { class: 'day-hint sv-used' }, 'Used in ' + [x.used.automations.length ? plural(x.used.automations.length, 'automation') + ` (${x.used.automations.join(', ')})` : '', x.used.bundles.length ? plural(x.used.bundles.length, 'bundle') + ` (${x.used.bundles.join(', ')})` : ''].filter(Boolean).join(' and ') + '. Changing it changes what they make.') : null;
     const done = (r) => { SV.list = [...(SV.list || []).filter((y) => y.id !== r.id), r].sort((p, q) => p.name.localeCompare(q.name)); if (!SV.open) { SV.open = true; store.set('savedOpen', true); } renderShelf(); if (toolBox('templates')?.isConnected) renderTool(true); toast(x ? 'Saved' : kind === 'bundle' ? 'Bundle saved' : 'Task saved'); };
+    if (kind === 'block') {
+      const text = h('input', { value: v.text, placeholder: 'Standup, shop day, deep work…', class: 'sv-text' });
+      const hh = (m) => (m == null ? '' : `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`);
+      const at = h('input', { type: 'time', value: hh(v.start), class: 'sv-start' });
+      const len = h('input', { type: 'number', min: '5', max: '1440', step: '5', value: String(v.minutes || 60), class: 'sv-len' });
+      const rep2 = h('select', { class: 'sv-repeat' }, [['', 'Just once'], ['daily', 'Every day'], ['weekdays', 'Weekdays'], ['weekly', 'Every week'], ['monthly', 'Every month']].map(([k, l]) => h('option', { value: k, selected: (v.repeat || '') === k }, l)));
+      return sheet(x ? 'Edit calendar block' : 'Save a calendar block', [
+        h('label', {}, 'What it is', text),
+        h('label', {}, 'Name on the shelf', name),
+        h('div', { class: 'row2' }, h('label', {}, 'Starts at (leave empty for any time)', at), h('label', {}, 'How long (minutes)', len)),
+        h('label', {}, 'Repeat', rep2),
+        h('p', { class: 'day-hint' }, 'Drop it on a day and it goes on your own calendar (and your connected calendar). Anyone on the team can use it on theirs.'),
+        used, x && !mayEdit ? h('p', { class: 'day-hint' }, 'Only whoever made it, or an owner or admin, can change it.') : null, del,
+      ], mayEdit ? async () => {
+        const [H, M] = (at.value || '').split(':').map(Number);
+        const out = { kind: 'block', text: text.value, name: name.value, start: at.value ? H * 60 + M : null, minutes: Number(len.value) || 60, repeat: rep2.value || null };
+        done(x ? await api('PATCH', '/task-presets/' + x.id, out) : await api('POST', '/task-presets', out));
+      } : null, x ? 'Save' : 'Save block');
+    }
     if (kind === 'bundle') {
       const tasks = (SV.list || []).filter((y) => y.kind === 'task');
       const steps = v.steps.map((st) => ({ ...st }));
@@ -11290,7 +11314,7 @@
       h('h3', { class: 'tpl-h' }, 'Saved tasks'),
       h('div', { class: 'tpl-grid' },
         list.map((x) => h('button', { class: 'tpl-card', 'data-preset': x.id, onclick: (ev) => presetMenu(ev.currentTarget, x) },
-          h('span', { class: 'tpl-kind k-task' }, x.kind === 'bundle' ? 'Bundle' : 'Saved task'), h('b', {}, x.name), presetSub(x) ? h('small', {}, presetSub(x)) : null,
+          h('span', { class: 'tpl-kind k-task' }, x.kind === 'bundle' ? 'Bundle' : x.kind === 'block' ? 'Calendar block' : 'Saved task'), h('b', {}, x.name), presetSub(x) ? h('small', {}, presetSub(x)) : null,
           h('span', { class: 'tpl-body' }, x.kind === 'bundle' ? x.steps.map((st) => presetById(st.presetId)?.text).filter(Boolean).join(' → ') : x.text))),
         h('button', { class: 'tpl-card static tpl-new-task', onclick: () => presetSheet(null, 'task') }, h('b', {}, '+ Save a task'), h('span', { class: 'tpl-body' }, 'Then drag it onto a day in Tasks, or make it from an automation.'))),
     ];

@@ -1428,6 +1428,16 @@ function applyPreset(x, body, ws) {
     if (body.repeat !== undefined) x.repeat = REPEATS.includes(body.repeat) ? body.repeat : null;
     if (body.signoffId !== undefined) x.signoffId = ws.members.some((m) => m.id === body.signoffId) ? body.signoffId : null;
     x.name ||= clipText(x.text, 120);
+  } else if (x.kind === 'block') {
+    // A calendar block (2026-11-20): time on your own calendar, like a standup or a shop day.
+    if (body.text !== undefined) x.text = cleanText(body.text, 500);
+    if (!x.text) throw badRequest('Write what the block is for.');
+    if (body.start !== undefined) { const n = body.start === null || body.start === '' ? null : Math.round(Number(body.start)); x.start = Number.isFinite(n) && n >= 0 && n <= 1439 ? n : null; }
+    if (body.minutes !== undefined) { const n = Math.round(Number(body.minutes)); x.minutes = Number.isFinite(n) && n >= 5 ? Math.min(n, 1440) : 60; }
+    if (x.start != null && x.start + (x.minutes || 60) > 1440) x.minutes = 1440 - x.start;
+    if (body.repeat !== undefined) x.repeat = REPEATS.includes(body.repeat) ? body.repeat : null;
+    if (body.color !== undefined) x.color = COLORS.includes(body.color) ? body.color : null;
+    x.name ||= clipText(x.text, 120);
   } else {
     if (body.steps !== undefined) {
       const steps = (Array.isArray(body.steps) ? body.steps : []).slice(0, BUNDLE_MAX).map((st) => {
@@ -1450,6 +1460,16 @@ function applyPreset(x, body, ws) {
 function usePreset(ws, who, x, opts = {}) {
   if (opts.date != null && !isDay(opts.date)) throw badRequest('Bad day.');
   const today = teamDay(ws.id);
+  // A calendar block goes on the calendar of whoever uses it (calendars are each person's own).
+  if (x.kind === 'block') {
+    const e = applyEntry({ id: rid(), wsId: ws.id, memberId: who.memberId, by: who.member, deviceId: who.deviceId || null, createdAt: Date.now(), text: '', date: null, start: null, end: null, done: false, color: null, taskId: null },
+      { text: x.text, date: opts.date || today, start: x.start ?? null, end: x.start != null ? x.start + (x.minutes || 60) : null, repeat: x.repeat || null, color: x.color || null });
+    e.preset = x.id;
+    db.entries[e.id] = e;
+    broadcast(ws.id, { type: 'entry', entry: publicEntry(e) });
+    pushEntry(e.id, 'save');
+    return [e];
+  }
   const list = x.kind === 'bundle' ? x.steps.map((st) => ({ y: db.taskPresets[st.presetId], after: st.after })).filter((s) => s.y) : [{ y: x, after: 0 }];
   if (!list.length) throw badRequest('The saved tasks in that bundle are gone.');
   const made = [];
@@ -3512,6 +3532,7 @@ function cleanAction(a, ws, who) {
   // From a saved task or bundle (a.presetId): it says and assigns what the saved one does, unless the step picks who.
   const preset = kind === 'task' && a.presetId ? db.taskPresets?.[a.presetId] : null;
   if (kind === 'task' && a.presetId && (!preset || preset.wsId !== ws.id)) throw badRequest('That saved task is gone.');
+  if (kind === 'task' && preset?.kind === 'block') throw badRequest('A calendar block goes on someone’s own calendar, so an automation can’t make it. Pick a saved task or bundle.');
   if (kind === 'task') return { kind, text, ...(preset ? { presetId: preset.id, presetName: preset.name } : {}), assignee: /^(who|role:[\w-]+|[\w-]{6,})$/.test(a.assignee || '') ? a.assignee : '', dueIn: a.dueIn === '' || a.dueIn == null ? null : Math.max(0, Math.min(90, Math.round(Number(a.dueIn)) || 0)), campaign: a.campaign === 'same' || (a.campaign && db.campaigns[a.campaign]?.wsId === ws.id) ? a.campaign : '' };
   if (kind === 'post') return { kind, text, channelId: a.channelId === 'same' || a.channelId === 'general' || ws.channels.some((c) => c.id === a.channelId) ? a.channelId : 'general' };
   if (kind === 'campaign') return db.templates[a.templateId]?.wsId === ws.id ? { kind, templateId: a.templateId } : null;
@@ -8230,8 +8251,8 @@ async function api(req, res, url) {
     if (m === 'POST' && !b) {
       if (presetsOf(ws.id).length >= PRESETS_MAX) return send(res, 400, { error: `A team can keep ${PRESETS_MAX} saved tasks and bundles. Delete one first.` });
       const body = await readJson(req, 50_000);
-      const kind = body.kind === 'bundle' ? 'bundle' : 'task';
-      const x = applyPreset({ id: rid(), wsId: ws.id, kind, name: '', ...(kind === 'task' ? { text: '', assigneeId: null, roleId: null, dueIn: null, priority: 0, repeat: null, signoffId: null } : { steps: [] }), memberId: auth.memberId, by: auth.member, createdAt: Date.now() }, body, ws);
+      const kind = ['bundle', 'block'].includes(body.kind) ? body.kind : 'task';
+      const x = applyPreset({ id: rid(), wsId: ws.id, kind, name: '', ...(kind === 'task' ? { text: '', assigneeId: null, roleId: null, dueIn: null, priority: 0, repeat: null, signoffId: null } : kind === 'block' ? { text: '', start: null, minutes: 60, repeat: null, color: null } : { steps: [] }), memberId: auth.memberId, by: auth.member, createdAt: Date.now() }, body, ws);
       db.taskPresets[x.id] = x;
       save();
       broadcast(ws.id, { type: 'presets' });
@@ -8247,7 +8268,7 @@ async function api(req, res, url) {
       if (body.goalId && (!g || g.wsId !== ws.id || !seesCampaign(g.campaignId, auth.memberId))) return send(res, 404, { error: 'That step is gone.' });
       const made = usePreset(ws, auth, x, { date: body.date ?? null, assigneeId: body.assigneeId || null, recordId: rec?.id || null, goalId: g?.id || null });
       save();
-      return send(res, 200, { tasks: made.map(publicTask) });
+      return send(res, 200, x.kind === 'block' ? { tasks: [], entries: made.map(publicEntry) } : { tasks: made.map(publicTask) });
     }
     if ((m === 'PATCH' || m === 'DELETE') && !c) {
       if (x.memberId !== auth.memberId && !isAdmin(auth)) return send(res, 403, { error: `Only ${x.by || 'whoever made it'} or an admin can change it.` });
