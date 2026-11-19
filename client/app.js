@@ -572,6 +572,8 @@
       PR.visits.set(msg.recordId, msg.visits);
       teamSoon();
       if (PR.panel === msg.recordId) renderProjects();
+    } else if (msg.type === 'teams') {
+      if (S.teams) api('GET', '/teams').then((y) => { S.teams = y; $('#settings .tm-sec, #apps .tm-sec')?.replaceWith(teamsSection()); }).catch(() => {});
     } else if (msg.type === 'companycam') {
       if (S.companycam) api('GET', '/companycam').then((y) => { S.companycam = y; $('#settings .cc-sec, #apps .cc-sec')?.replaceWith(companycamSection()); }).catch(() => {});
     } else if (msg.type === 'presets') {
@@ -5540,11 +5542,11 @@
   }
   const AUTO_DO = { task: 'Make a task', post: 'Post in a feed', campaign: 'Start a saved campaign', notify: 'Notify people', contact: 'Change the contact', record: 'Change the job or record', create: 'Add a job or record',
     visit: 'Book a visit on the job', invoice: 'Bill the job (an invoice)', text: 'Text the customer (after an OK)', email: 'Email the customer (after an OK)', money: 'Add money to Finance', doc: 'Write a doc from a template',
-    vault: 'Put a sealed note in a vault', webhook: 'Send to another app (a web address)', agent: 'Ask your team (AI)', stock: 'Use or move stock (Inventory)' };
+    vault: 'Put a sealed note in a vault', webhook: 'Send to another app (a web address)', agent: 'Ask your team (AI)', stock: 'Use or move stock (Inventory)', teams: 'Post in Microsoft Teams' };
   const AUTO_KEYS = { list: null };
   // Who may pick which (the server checks the same): billing and messaging customers are for owners and admins, the
   // business's money for owners.
-  const autoDoOk = (k) => (k === 'money' ? amAdmin() : ['invoice', 'text', 'email', 'webhook'].includes(k) ? amAdmin() : k === 'agent' ? toolOn('agents') : k === 'stock' ? toolOn('inventory') : true);
+  const autoDoOk = (k) => (k === 'money' ? amAdmin() : ['invoice', 'text', 'email', 'webhook', 'teams'].includes(k) ? amAdmin() : k === 'agent' ? toolOn('agents') : k === 'stock' ? toolOn('inventory') : true);
   // The fields an automation can set (the server checks the same): plain values, never price lines or files.
   const AUTO_SET_T = ['text', 'number', 'money', 'date', 'select', 'multi', 'checkbox', 'person', 'email', 'phone', 'url'];
   const AUTO_WORDS = {
@@ -5634,6 +5636,12 @@
     'google-contacts': { shows: 'Everyone comes into Contacts.', r: ['New lead? Sales drafts a reply', 'Lead gone quiet? Follow up', APP_LOST] },
     leads: { shows: 'Leads land in Contacts as Leads, and on Home.', r: ['New lead? Sales drafts a reply', 'Lead gone quiet? Follow up'] },
     postiz: { shows: 'Posts the Marketing Manager drafts wait for your OK, then go out through Postiz.', r: ['Friday recap from your team', APP_LOST] },
+    teams: { shows: 'Posts go to the Teams channel you connected; the tile says when Teams last took one.', r: [
+      { name: 'New lead? Tell Teams', why: 'When a lead comes in, post it in your Teams channel', trigger: { kind: 'contact.created', stage: 'lead' }, actions: [{ kind: 'teams', op: 'post', text: 'New lead: {contact}. Added by {who}.' }] },
+      { name: 'Job won? Tell Teams', why: 'When a job moves to Won, post it in Teams', trigger: { kind: 'record.stage', to: 'Won' }, actions: [{ kind: 'teams', op: 'post', text: '🎉 {record} is {stage}!' }] },
+      { name: 'Paid? Tell Teams', why: 'When an invoice is paid in full, post it in Teams', trigger: { kind: 'invoice.paid' }, actions: [{ kind: 'teams', op: 'post', text: '💵 {customer} paid {invoice} ({amount}).' }] },
+      { name: 'Job held up? Ask Teams for an OK', why: 'When a job is held back from a stage because a step isn’t done, post it in Teams so someone sorts it', trigger: { kind: 'record.held' }, actions: [{ kind: 'teams', op: 'post', text: '⚠️ {record} can’t move to {stage} yet: {step} isn’t done. Who can sort it?' }] },
+      APP_LOST] },
     companycam: { shows: 'Photos your crew takes land in the job’s Photos.', r: [
       { name: 'Photo on a job? Tell the team', why: 'When a CompanyCam photo lands on a job, post it in #general', trigger: { kind: 'companycam.photo' }, actions: [{ kind: 'post', text: 'New photo on {record} from {who}', channelId: 'general' }] },
       { name: 'New project with no job? Link it', why: 'When CompanyCam makes a project that matches no job, the office gets a task to link it', trigger: { kind: 'companycam.project' }, actions: [{ kind: 'if', when: [{ field: 'record', op: 'empty' }], then: [{ kind: 'task', text: 'Link the CompanyCam project “{text}” ({note}) to its job: Apps & Integrations → CompanyCam', assignee: '' }], else: [] }] },
@@ -5725,7 +5733,7 @@
   // What a step still needs before it can be saved (the server checks the same), for the builder's red marks.
   function autoProblem(a) {
     const has = (v) => String(v ?? '').trim() !== '';
-    if (['task', 'post', 'notify', 'text', 'vault'].includes(a.kind) && !has(a.text)) return 'Write what it should say';
+    if (['task', 'post', 'notify', 'text', 'vault', 'teams'].includes(a.kind) && !has(a.text)) return 'Write what it should say';
     if (a.kind === 'notify' && !a.to?.length) return 'Pick who to notify';
     if (a.kind === 'contact' && !has(a.stage) && !has(a.tag)) return 'Pick a stage or a tag';
     if (a.kind === 'email' && (!has(a.subject) || !has(a.text))) return 'Write the subject and the message';
@@ -5924,6 +5932,7 @@
             : k.value === 'doc' ? { kind: 'doc', templateId: DT.list?.[0]?.id || '', title: '' }
             : k.value === 'vault' ? { kind: 'vault', to: 'maker', title: '', text: '' }
             : k.value === 'webhook' ? { kind: 'webhook', url: '', secretId: null }
+            : k.value === 'teams' ? { kind: 'teams', op: 'post', text: a.text || '' }
             : k.value === 'agent' ? { kind: 'agent', agent: 'team', ask: '', wait: false }
             : k.value === 'stock' ? { kind: 'stock', act: 'use', itemId: '', qty: 1, from: '', to: '', note: '' }
             : { kind: k.value, text: a.text || '', to: [], channelId: 'same' };
@@ -6097,6 +6106,12 @@
           body.addEventListener('input', () => (a.text = body.value));
           f.push(h('label', {}, 'Whose vault', to), h('label', {}, 'Title', title), h('label', {}, 'Note', body),
             h('small', { class: 'hint' }, 'Sealed to their vault before it’s saved: nobody, Kloomie included, can read it after that. It waits until they next unlock their vault, then it’s theirs. The run log only says it was left.'));
+        }
+        if (a.kind === 'teams') {
+          const body = h('textarea', { rows: 3, placeholder: 'New lead: {contact}. Say hi!', class: 'auto-teams-text' }, a.text || '');
+          body.addEventListener('input', () => (a.text = body.value));
+          f.push(h('label', {}, 'Post', body), h('small', { class: 'hint' }, S.teams?.connected === false ? 'Microsoft Teams isn’t connected yet: Apps & Integrations → Microsoft Teams.' : 'Goes to the Teams channel your team connected, with {words} filled in. Only owners and admins can have an automation post there.'));
+          if (!S.teams) api('GET', '/teams').then((y) => { S.teams = y; }).catch(() => {});
         }
         if (a.kind === 'webhook') {
           if (!AUTO_KEYS.list && !AUTO_KEYS.loading) AUTO_KEYS.loading = api('GET', '/automations/secrets').then((l) => { AUTO_KEYS.list = l; if (box.isConnected) draw(); }).catch(() => {}).finally(() => (AUTO_KEYS.loading = null));
@@ -9946,7 +9961,8 @@
     calApp('outlook', 'Outlook & Microsoft 365', null, 'microsoft', false, 'Your Outlook calendar and email', ['Your meetings show up in your Day, both ways', 'Campaign emails can go out from your Outlook address'], 'O'),
     calApp('apple-calendar', 'Apple Calendar', 'apple', 'apple', false, 'iCloud calendars in your Day', ['Your iCloud calendars show up in your Day', 'Or put your Day in your iPhone’s calendar with a link']),
     { id: 'twilio', name: 'Twilio', cat: 'comms', mono: 'T', live: true, admin: true, blurb: 'Text customers from your own number', does: ['On my way, visit reminders and review requests by text', 'Replies come back onto the contact; STOP is respected'], sec: () => [textingSection()], state: () => (S.texting?.connected ? 'on' : 'off') },
-    ...soon('comms', [['slack', 'Slack', null, 'S'], ['teams', 'Microsoft Teams', null, 'T'], ['discord', 'Discord', 'discord'], ['zoom', 'Zoom', 'zoom'], ['google-meet', 'Google Meet', 'googlemeet'], ['sendgrid', 'SendGrid', null, 'S']]),
+    { id: 'teams', name: 'Microsoft Teams', cat: 'comms', mono: 'T', live: true, admin: true, blurb: 'Post to a Teams channel', does: ['Automations post to your Teams channel: new leads, jobs won, invoices paid', 'Your AI team can draft a post; it waits for your yes', 'No Microsoft app to install: paste one address from Teams'], sec: () => [teamsSection()], state: () => (S.teams?.connected ? (S.teams.needsReconnect || S.teams.error ? 'error' : 'on') : 'off') },
+    ...soon('comms', [['slack', 'Slack', null, 'S'], ['discord', 'Discord', 'discord'], ['zoom', 'Zoom', 'zoom'], ['google-meet', 'Google Meet', 'googlemeet'], ['sendgrid', 'SendGrid', null, 'S']]),
     cloudApp('google-drive', 'Google Drive', 'googledrive', () => !!S.cloud?.google),
     cloudApp('onedrive', 'OneDrive', null, () => !!S.cloud?.onedrive, 'O'),
     cloudApp('dropbox', 'Dropbox', 'dropbox', () => !!(S.cloud?.dropbox || S.cloud?.dropboxList)),
@@ -16091,6 +16107,48 @@
     return sec;
   }
   // Text messages through the team's own Twilio account.
+  // Microsoft Teams (teams.js): paste the address of a Teams Workflows flow; a real post checks it; Test and Disconnect.
+  // Nothing comes back from Teams, so there's no webhook to wait for.
+  function teamsSection() {
+    const sec = h('section', { class: 'tm-sec' }, h('h3', {}, 'Microsoft Teams'));
+    const x = S.teams;
+    if (!x) {
+      api('GET', '/teams').then((y) => { S.teams = y; $('#settings .tm-sec, #apps .tm-sec')?.replaceWith(teamsSection()); }).catch(() => {});
+      return sec.append(h('p', { class: 'day-hint' }, 'Loading…')), sec;
+    }
+    // The tile's state and its What now card come from the registry: asked again after a change.
+    const redo = (y) => { S.teams = y; sec.replaceWith(teamsSection()); api('GET', '/integrations').then((r) => { APPS.reg = r; renderApps(true); }).catch(() => {}); };
+    if (x.connected && !amAdmin()) return sec.append(h('p', {}, `✓ Connected${x.channel ? ` to ${x.channel}` : ''}. Your AI team can draft posts for it; they go out after your yes.`)), sec;
+    if (x.connected) {
+      const off = h('button', { class: 'btn small danger', 'data-label': '1' }, 'Disconnect');
+      off.addEventListener('click', () => confirmClick(off, () => api('DELETE', '/teams').then(redo).catch((e) => toast(e.message))));
+      const test = h('button', { class: 'btn small tm-test' }, 'Send a test');
+      test.addEventListener('click', async () => { test.disabled = true; try { redo(await api('POST', '/teams/test')); toast('Sent: look in Teams'); } catch (e) { toast(e.message); test.disabled = false; api('GET', '/teams').then(redo).catch(() => {}); } });
+      sec.append(...[
+        h('p', {}, `✓ Connected${x.channel ? ` to ${x.channel}` : ''}, by ${x.by}. ${x.posts ? `${plural(x.posts, 'post')} so far` : 'Nothing posted yet'}${x.lastPostAt ? `, the last ${new Date(x.lastPostAt).toLocaleString()}` : ''}.`),
+        x.needsReconnect ? h('p', { class: 'err' }, 'Teams stopped taking posts: the workflow was deleted, turned off or changed. Make it again in Teams (steps below), then Disconnect and paste the new address.')
+          : x.error ? h('p', { class: 'err' }, x.error) : null,
+        h('p', { class: 'day-hint' }, 'Automations post here with a “Post in Microsoft Teams” step (owners and admins make those). Your AI team can draft a post too; it waits for your yes.'),
+        h('div', { class: 'btns' }, test, off),
+      ].filter(Boolean));
+      return sec;
+    }
+    if (!amAdmin()) return sec.append(h('p', { class: 'day-hint' }, 'Not connected. An owner or admin connects Microsoft Teams here.')), sec;
+    const url = h('input', { type: 'password', placeholder: 'https://…logic.azure.com/… or …powerplatform.com/…', autocomplete: 'off', class: 'tm-url', inputmode: 'url' });
+    const chan = h('input', { placeholder: 'e.g. Office › Jobs', class: 'tm-chan' });
+    const go = h('button', { class: 'btn small primary-btn tm-go' }, 'Connect and send a test');
+    go.addEventListener('click', async () => { go.disabled = true; try { redo(await api('PUT', '/teams', { url: url.value, channel: chan.value })); toast('Microsoft Teams connected: look for the test post'); } catch (e) { toast(e.message); go.disabled = false; } });
+    sec.append(
+      h('ol', { class: 'cc-steps tm-steps' },
+        h('li', {}, 'In Teams, go to the channel to post in, open its ', h('b', {}, '⋯ menu → Workflows'), '.'),
+        h('li', {}, 'Pick ', h('b', {}, '“Post to a channel when a webhook request is received”'), ', name it Kloomie, and click through (Next, then Add workflow).'),
+        h('li', {}, 'Teams shows a web address. ', h('b', {}, 'Copy it'), ' and paste it below. It’s like a key, so Kloomie keeps it sealed.'),
+        h('li', {}, 'Tap ', h('b', {}, 'Connect'), ': Kloomie posts a short hello in the channel to check it works.')),
+      h('label', {}, 'Workflow address', url),
+      h('label', {}, 'Channel (so you remember which)', chan),
+      h('div', { class: 'btns' }, go));
+    return sec;
+  }
   // CompanyCam (companycam.js): paste a token; Kloomie makes the webhook itself; projects match jobs by address.
   const CCUI = { all: new Set() };
   function companycamSection() {

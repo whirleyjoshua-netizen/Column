@@ -29,7 +29,7 @@ export const AGENTS = {
       'Turns commitments in emails you paste into tasks',
       'Prepares your end-of-day summary and plans the week',
     ],
-    tools: ['find_templates', 'code_activity', 'save_template', 'find_inventory', 'look_at_day', 'find_bookings', 'list_tasks', 'find_records', 'read_record', 'list_campaigns', 'team_schedule', 'plan_route', 'find_docs', 'read_doc', 'look_at_money', 'set_budget', 'add_bill', 'add_to_company_hq', 'create_automation', 'create_task', 'update_task', 'schedule_time', 'move_time', 'write_doc', 'post_to_chat', 'notify_me'],
+    tools: ['find_templates', 'code_activity', 'save_template', 'find_inventory', 'look_at_day', 'find_bookings', 'list_tasks', 'find_records', 'read_record', 'list_campaigns', 'team_schedule', 'plan_route', 'find_docs', 'read_doc', 'look_at_money', 'set_budget', 'add_bill', 'add_to_company_hq', 'create_automation', 'create_task', 'update_task', 'schedule_time', 'move_time', 'write_doc', 'post_to_chat', 'draft_teams_post', 'notify_me'],
     workflows: [
       { key: 'briefing', name: 'Morning briefing', ask: 'Give me my morning briefing: what matters today, what is overdue or at risk, and the first thing I should do. Keep it short.', sched: { days: [1, 2, 3, 4, 5], at: 7 * 60 } },
       { key: 'plan_day', name: 'Plan my day', ask: 'Plan my day today: put my tasks into open time around what is already booked, most important first, with breaks, and tell me what won’t fit and what to move or hand off.' },
@@ -51,7 +51,7 @@ export const AGENTS = {
       'Books customer meetings and prepares a brief beforehand',
       'Finds deals that have gone quiet and plans the next step',
     ],
-    tools: ['find_templates', 'save_template', 'find_inventory', 'find_records', 'read_record', 'list_projects', 'find_contacts', 'look_at_day', 'find_bookings', 'list_tasks', 'list_campaigns', 'team_schedule', 'find_docs', 'read_doc', 'create_task', 'update_task', 'save_contact', 'create_record', 'update_record', 'log_note', 'book_visit', 'schedule_time', 'move_time', 'write_doc', 'draft_email', 'post_to_chat', 'notify_me'],
+    tools: ['find_templates', 'save_template', 'find_inventory', 'find_records', 'read_record', 'list_projects', 'find_contacts', 'look_at_day', 'find_bookings', 'list_tasks', 'list_campaigns', 'team_schedule', 'find_docs', 'read_doc', 'create_task', 'update_task', 'save_contact', 'create_record', 'update_record', 'log_note', 'book_visit', 'schedule_time', 'move_time', 'write_doc', 'draft_email', 'post_to_chat', 'draft_teams_post', 'notify_me'],
     workflows: [
       { key: 'lead', name: 'Handle a new lead', ask: 'A new lead came in. Record them (contact and lead or deal), draft my reply, suggest times to meet, and set the follow-up:\n\n', paste: true },
       { key: 'radar', name: 'Follow-up radar', ask: 'Run the follow-up radar: find leads, deals and quotes with no reply or no contact in a while, and anyone who booked a time in the last few days (find_bookings, new), and set up the next step for each (a task, and a drafted follow-up email where there’s an address).', sched: { days: [1, 3, 5], at: 8 * 60 } },
@@ -73,7 +73,7 @@ export const AGENTS = {
       'Checks project health and says what’s slipping',
       'Closes jobs out with a completion report',
     ],
-    tools: ['find_templates', 'code_activity', 'save_template', 'find_inventory', 'use_stock', 'list_projects', 'find_records', 'read_record', 'list_tasks', 'look_at_day', 'team_schedule', 'plan_route', 'find_docs', 'read_doc', 'find_photos', 'look_at_photos', 'create_project', 'create_record', 'update_record', 'log_note', 'book_visit', 'draft_invoice', 'send_invoice', 'send_signoff', 'create_automation', 'create_task', 'update_task', 'schedule_time', 'move_time', 'write_doc', 'draft_email', 'post_to_chat', 'notify_me'],
+    tools: ['find_templates', 'code_activity', 'save_template', 'find_inventory', 'use_stock', 'list_projects', 'find_records', 'read_record', 'list_tasks', 'look_at_day', 'team_schedule', 'plan_route', 'find_docs', 'read_doc', 'find_photos', 'look_at_photos', 'create_project', 'create_record', 'update_record', 'log_note', 'book_visit', 'draft_invoice', 'send_invoice', 'send_signoff', 'create_automation', 'create_task', 'update_task', 'schedule_time', 'move_time', 'write_doc', 'draft_email', 'post_to_chat', 'draft_teams_post', 'notify_me'],
     workflows: [
       { key: 'kickoff', name: 'Project kickoff', ask: 'We just won this work. Organize it: the job (or project), the tasks in order with who and when, a materials list, visits, and a completion checklist:\n\n', paste: true },
       { key: 'prep', name: 'Job preparation', ask: 'Prepare for the jobs coming up in the next few days: a checklist for each, what to bring or order, and anything missing before we can start.' },
@@ -95,7 +95,7 @@ export const AGENTS = {
       'Wins back past customers and asks happy ones for reviews and referrals',
       'Reports which lead sources and campaigns bring jobs and money, and what to do about it',
     ],
-    tools: ['find_templates', 'save_template', 'find_inventory', 'marketing_snapshot', 'find_customers', 'list_channels', 'social_posts', 'find_photos', 'look_at_photos', 'list_campaigns', 'find_records', 'read_record', 'find_contacts', 'find_docs', 'read_doc', 'list_tasks', 'look_at_day', 'create_campaign', 'make_list', 'create_task', 'update_task', 'schedule_time', 'write_doc', 'make_image', 'draft_social_post', 'draft_email_campaign', 'post_to_chat', 'notify_me'],
+    tools: ['find_templates', 'save_template', 'find_inventory', 'marketing_snapshot', 'find_customers', 'list_channels', 'social_posts', 'find_photos', 'look_at_photos', 'list_campaigns', 'find_records', 'read_record', 'find_contacts', 'find_docs', 'read_doc', 'list_tasks', 'look_at_day', 'create_campaign', 'make_list', 'create_task', 'update_task', 'schedule_time', 'write_doc', 'make_image', 'draft_social_post', 'draft_email_campaign', 'post_to_chat', 'draft_teams_post', 'notify_me'],
     rules: [
       'Ground everything in the business: read the business profile (it comes with these instructions) and marketing_snapshot before planning. Write for their ideal customer, in their voice, about what makes them different. Generic marketing copy is a failure.',
       'Never invent reviews, testimonials, statistics, awards, prices, discounts or offers. Use an offer only if the person or the business profile gave it; otherwise propose one and say it needs their OK.',
@@ -740,6 +740,23 @@ export function agentsModule({ autoEvents = [], sees = () => true, db, save, bro
       },
     },
 
+    // Microsoft Teams (teams.js): a post for the team's Teams channel. It's a shared channel, so it always waits for the
+    // person's yes (map §1.3); then it goes out through the same route the app uses, as them.
+    draft_teams_post: {
+      kind: 'write', important: true, label: (a) => `Post in Microsoft Teams: ${words(a.text, 90)}`,
+      description: 'Draft a message for the team’s Microsoft Teams channel (when the team has connected Teams in Apps & Integrations). It is never posted until the person reads it and says yes. Plain words; no [placeholders].',
+      parameters: { type: 'object', properties: { text: { type: 'string' }, why: { type: 'string' } }, required: ['text'] },
+      check(cx, a) {
+        if (!String(a.text || '').trim()) throw new Error('The post has no words.');
+        if (String(a.text).length > 4000) throw new Error('That’s too long for one Teams post; keep it under 4,000 characters.');
+        if (/\[[^\]]{2,60}\]/.test(a.text)) throw new Error('The post still has a [placeholder] in it. Write it without one.');
+      },
+      async run(cx, a) {
+        const r = await cx.call('POST', '/api/teams/post', { text: String(a.text).trim() });
+        if (r.status !== 200) throw new Error(r.body?.error || 'Teams didn’t take it.');
+        return { ok: true, result: { done: true }, changed: [{ kind: 'post', label: 'Microsoft Teams' }] };
+      },
+    },
     post_to_chat: {
       kind: 'write', important: true, label: (a) => `Post in #${a.feed || 'general'}: ${words(a.text, 90)}`,
       description: 'Post a message in one of the team’s chat feeds: share a plan, a heads-up, or what you made so the team sees it. It waits for the person’s yes. feed: a feed’s name (general if left out). Links to the docs, jobs, campaigns and tasks you made in this assignment are added under it automatically, so don’t paste ids.',
@@ -1618,7 +1635,7 @@ Reply with JSON only: {"summary":"one line on the plan","parts":[{"agent":"chief
         if (body.do === 'approve' && s.status === 'proposed') {
           s.status = 'sending';
           // What the person may change in a draft before saying yes.
-          const EDIT = { draft_email: ['to_name', 'to_email', 'subject', 'body'], draft_social_post: ['text', 'when', 'link', 'cta', 'image_id', 'channels'], draft_email_campaign: ['subject', 'body', 'contact_ids'], post_to_chat: ['text', 'feed'] }[s.tool] || [];
+          const EDIT = { draft_email: ['to_name', 'to_email', 'subject', 'body'], draft_social_post: ['text', 'when', 'link', 'cta', 'image_id', 'channels'], draft_email_campaign: ['subject', 'body', 'contact_ids'], post_to_chat: ['text', 'feed'], draft_teams_post: ['text'] }[s.tool] || [];
           if (body.args && ids.length === 1) for (const k of EDIT) {
             const v = body.args[k];
             if (typeof v === 'string') s.args[k] = v.slice(0, 20_000);

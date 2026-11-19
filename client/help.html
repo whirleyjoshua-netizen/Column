@@ -371,6 +371,14 @@
     <li><b>Automations</b> can start when <b>a CompanyCam photo lands on a job</b> ({record}, {who} took it, {text} the CompanyCam project) or <b>a CompanyCam project is made or changed</b>.</li>
     <li>Only owners and admins see the connection’s details; everyone else sees that it’s connected. <b>Disconnect</b> removes Kloomie’s webhook in CompanyCam; photos already on jobs stay.</li>
   </ul>
+  <h3 id="teams">Microsoft Teams</h3>
+  <p>Kloomie can post to a channel in your Microsoft Teams. There’s no Microsoft app to install. An owner or admin opens <span class="path">Apps &amp; Integrations → Microsoft Teams</span> and follows the steps: in Teams, open the channel’s <b>⋯ → Workflows</b>, pick <b>“Post to a channel when a webhook request is received”</b>, and copy the web address it shows. Paste it, name the channel, and tap <b>Connect and send a test</b>. Kloomie posts a short hello in the channel to check it works.</p>
+  <ul>
+    <li><b>Automations</b> post with a <b>Post in Microsoft Teams</b> step, with {words} filled in: “New lead: {contact}”, “{record} is {stage}”, “{customer} paid {invoice}”. Ready-made ones are offered right after you connect. Only owners and admins can have an automation post there, and if whoever made one stops being an owner or admin, it stops posting.</li>
+    <li><b>Your AI team</b> can draft a Teams post; it never goes out until you read it and say yes.</li>
+    <li>The address works like a key, so Kloomie keeps it sealed and never shows it again. Everyone else on the team sees only that Teams is connected.</li>
+    <li>If the workflow is deleted or turned off in Teams, the tile says <b>Needs attention</b> and whoever connected it gets a notice: make the workflow again, then <b>Disconnect</b> and paste the new address. <b>Send a test</b> checks it any time. At most 60 posts an hour go out.</li>
+  </ul>
   <h2 id="connect">Email and calendars</h2>
   <h3>Calendar</h3>
   <p>Go to <span class="path">Apps & Integrations → your calendar</span> and click <b>Connect Google Calendar</b>, <b>Connect Outlook</b> or <b>Connect Apple Calendar</b>. Choose which calendars show in your Day, and which calendar the blocks you make in Kloomie go onto. Only you see your calendar’s events.</p>

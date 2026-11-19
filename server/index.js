@@ -38,6 +38,7 @@ import { rulesModule } from './rules.js';
 import { standupModule } from './standup.js';
 import { githubModule } from './github.js';
 import { companycamModule } from './companycam.js';
+import { teamsModule } from './teams.js';
 import { techAiModule } from './techai.js';
 import { describeModule } from './describe.js';
 import { signoffModule } from './signoff.js';
@@ -3459,7 +3460,7 @@ const AUTO_TRIGGERS = FL.EVENTS.map((e) => e.type);
 // Step 4: drop a sealed note into a person's vault, and send what happened to another app (a web address, with a key
 // from the team's sealed automation keys).
 // Step 5: ask one of the maker's agents (or the whole team), and maybe wait for the answer ({answer} after it).
-const AUTO_ACTIONS = ['task', 'post', 'campaign', 'notify', 'contact', 'record', 'create', 'visit', 'invoice', 'text', 'email', 'money', 'doc', 'vault', 'webhook', 'agent', 'stock'];
+const AUTO_ACTIONS = ['task', 'post', 'campaign', 'notify', 'contact', 'record', 'create', 'visit', 'invoice', 'text', 'email', 'money', 'doc', 'vault', 'webhook', 'agent', 'stock', 'teams'];
 const AGENT_WAIT_MS = 30 * 60_000, AGENT_BUSY = 3;
 const AUTO_RUNS = 30;
 const AUTO_MAX = 50;
@@ -3618,6 +3619,14 @@ function cleanAction(a, ws, who) {
     const sec = a.secretId ? db.flowSecrets[a.secretId] : null;
     if (a.secretId && (!sec || sec.wsId !== ws.id)) throw badRequest('That key is gone.');
     return { kind, url: u.href, secretId: sec?.id || null };
+  }
+  // Microsoft Teams: words to post in the team's channel ({words} filled in when it runs). Owners and admins only
+  // (TEAM_STEPS, checked by stepAllowed); the team has to have connected Teams.
+  if (kind === 'teams') {
+    if (!TEAMS.connected(ws)) throw badRequest('Connect Microsoft Teams first (Apps & Integrations → Microsoft Teams).');
+    const text = String(a.text ?? '').replace(/\r\n?/g, '\n').trim().slice(0, 2000);
+    if (!text) throw badRequest('Write what to post in Teams.');
+    return { kind, op: 'post', text };
   }
   if (kind === 'doc') {
     const tpl = db.docTemplates[a.templateId];
@@ -4167,6 +4176,7 @@ function autoDescribe(x, a, ctx, ws) {
     case 'vault': return `Put a sealed note in ${a.to === 'maker' ? (nameOf(x.memberId) || 'your') + '’s' : a.to === 'who' ? (ctx.who || 'whoever set it off') + '’s' : (nameOf(a.to) || 'someone') + '’s'} vault`;
     case 'stock': { const it = db.invItems[a.itemId]; return `${{ use: 'Use', move: 'Move', receive: 'Receive' }[a.act]} ${a.qty} ${it?.unit || ''} ${it?.name || 'of an item'}${a.act === 'use' ? ' on ' + (ctx.recordName || 'the job') : ''}`; }
     case 'agent': return `Ask ${agentName(a.agent)}: “${fill(a.ask)}”${a.wait ? ', and wait for the answer ({answer})' : ''}`;
+    case 'teams': return `Post in Microsoft Teams: ${clipText(a.text, 60)}`;
     case 'webhook': { let host = a.url; try { host = new URL(a.url).host; } catch {} return `Send what happened to ${host}${a.secretId ? ', with its key' : ''}`; }
     default: return a.kind;
   }
@@ -4371,6 +4381,13 @@ async function flowAction(x, a, ctx, ws) {
     if (r.status >= 300) throw Object.assign(new Error(`${new URL(a.url).host} said ${r.status}`), { retry: r.status >= 500 || r.status === 429 });
     return `Sent to ${new URL(a.url).host}`;
   }
+  // Microsoft Teams: the words, filled in, posted to the team's channel. Retried later when Teams is busy or down.
+  if (a.kind === 'teams') {
+    const say = autoFill(a.text, ctx, ws.id);
+    if (!say.trim()) return 'Nothing to post in Teams';
+    try { await TEAMS.post(ws, say, { by: `Automation: ${clipText(x.name, 80)}` }); } catch (e) { throw Object.assign(new Error(e.message), { retry: !!e.retry }); }
+    return `Posted in Teams: ${clipText(say, 60)}`;
+  }
   if (a.kind === 'stock') {
     const item = db.invItems[a.itemId];
     if (!item || item.archived) throw new Error('its item is gone from Inventory');
@@ -4393,7 +4410,7 @@ async function autoAction(x, a, ctx) {
   const ws = db.workspaces[x.wsId];
   // Checked again when it runs: a maker who's no longer an owner or admin can't act through a team connection.
   APPS_REG.stepAllowed(ws, x.memberId, a.kind, 'run');
-  if (['visit', 'invoice', 'text', 'email', 'money', 'doc', 'vault', 'webhook', 'stock'].includes(a.kind)) return flowAction(x, a, ctx, ws);
+  if (['visit', 'invoice', 'text', 'email', 'money', 'doc', 'vault', 'webhook', 'stock', 'teams'].includes(a.kind)) return flowAction(x, a, ctx, ws);
   const say = autoFill(a.text, ctx, ws.id);
   if (a.kind === 'task' && a.presetId) {
     // A saved task or bundle: made through the same route the app uses, as the automation's maker.
@@ -8176,6 +8193,7 @@ async function api(req, res, url) {
     const out = await POSTIZ.route(req, res, parts, auth, ws);
     if (out !== null) return;
   }
+  if (a === 'teams') return TEAMS.route(req, res, parts, auth, ws);
   if (a === 'companycam') {
     const out = await CC.route(req, res, parts, auth, ws);
     if (out !== null) return;
@@ -11922,6 +11940,8 @@ function ccCtx(ctx) {
   const { recordId, ...rest } = ctx;
   return rec && t ? { ...rest, record: rec, project: p, list: t, recordName: String(rec.values[t.primary] ?? '') } : rest;
 }
+// Microsoft Teams (teams.js): a Teams Workflows address the team pastes; automations and people (after a yes) post to it.
+const TEAMS = teamsModule({ db, save, send, readJson, cleanText, seal, unseal, isAdmin, safeFetch, broadcast, allowLocal: process.env.ALLOW_LOCAL_WEBHOOKS === '1' });
 const CC = companycamModule({ db, save, broadcast, rid, cleanText, readJson, send, seal, unseal, isAdmin, safeFetch, publicUrl: PUBLIC_URL, jobsOf: ccJobs, addPhoto: ccPhoto, automate: (w, k, x) => automate(w, k, ccCtx(x)), alarm: (...x) => alarm(...x) });
 // Daily standups on a project (standup.js): a blocker becomes a task for the project lead.
 const STANDUP = standupModule({ db, save, broadcast, rid, cleanText, readJson, send, notify, sees: (p, mid) => PJ.sees(p, mid), teamDay: (wsId) => teamDay(wsId),
@@ -12079,6 +12099,7 @@ const APPS_REG = integrationsModule({ db, save, send, readJson, rid, cleanText, 
   cal('outlook', 'Outlook & Microsoft 365', 'microsoft');
   cal('apple-calendar', 'Apple Calendar', 'apple');
   APPS_REG.register({ id: 'companycam', name: 'CompanyCam', scope: 'team', auth: 'key', status: (ws) => { const c = db.companycam?.[ws.id]; return c && { account: c.account, by: c.by, byId: by(ws, c.by), lastSync: c.lastEventAt || null, error: c.error || null, needsReconnect: !!c.needsReconnect }; } });
+  APPS_REG.register(TEAMS.describe);
   APPS_REG.register({ id: 'twilio', name: 'Twilio', scope: 'team', auth: 'key', status: (ws) => { const c = db.twilio?.[ws.id]; return c && { account: c.account, by: c.by, byId: by(ws, c.by), error: c.error || null }; } });
   const cloud = (id, name, k) => APPS_REG.register({ id, name, scope: 'person', auth: 'oauth', ready: true, configured: () => !!cloudPickers()[k], status: () => null });
   cloud('google-drive', 'Google Drive', 'google');
