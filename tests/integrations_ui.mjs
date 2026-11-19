@@ -63,6 +63,16 @@ try {
   await openPage();
   ok(await A.until(`document.querySelector('#apps .app-tile[data-app=postiz]')?.dataset.state === 'on'`), 'the Postiz tile says Connected');
 
+  // What now: ready-made automations for it, on in one tap.
+  await A.tap(`document.querySelector('#apps .app-tile[data-app=postiz]')`);
+  ok(await A.until(`!!document.querySelector('#apps .app-now [data-recipe]')`), 'its page has What now, with automations to turn on');
+  const rname = 'App needs connecting again? Owners hear';
+  await A.tap(`[...document.querySelectorAll('#apps .app-now [data-recipe]')].find((b) => b.dataset.recipe === ${JSON.stringify(rname)})`);
+  ok(await A.until(`[...document.querySelectorAll('#apps .app-now [data-recipe]')].find((b) => b.dataset.recipe === ${JSON.stringify(rname)})?.textContent === 'On ✓'`), 'one tap turns it on');
+  const autos = await api('GET', '/automations');
+  ok(autos.some((x) => x.name === rname && x.on !== false && x.trigger.kind === 'connection.lost'), 'it’s a real automation, on connection.lost');
+  await A.tap(`document.querySelector('#apps .app-back')`);
+
   // It breaks: the tile says Needs attention, and its page says what's wrong.
   accept = false;
   await api('POST', '/postiz/refresh');

@@ -5611,6 +5611,49 @@
     { for: ['store'], name: 'Big sale? Owners hear', why: 'When money over $500 comes in, the owners hear it', trigger: { kind: 'money.added', over: 500, direction: 'in' }, actions: [{ kind: 'notify', text: '{amount} in: {note}', to: ['owners'] }] },
     { for: ['store', 'services'], name: 'Paid? Say thanks', why: 'When a payment comes in, make a task to thank the customer', trigger: { kind: 'payment.received' }, actions: [autoT('Thank {customer} for paying {amount} on {invoice}', '', 0)] },
   ];
+  // "What now" after connecting an app (docs/INTEGRATIONS-MAP.md §1.4, §4.4): two or three automations it makes
+  // useful, switched on in one tap (or opened in the builder first), and where its data shows up. By name from the
+  // recipes above, or the app's own.
+  const APP_LOST = { name: 'App needs connecting again? Owners hear', why: 'When a connected app’s sign-in expires or is removed, the owners get a note saying which and why', trigger: { kind: 'connection.lost' }, actions: [{ kind: 'notify', text: '{app} needs connecting again: {error}', to: ['owners'] }] };
+  const APP_RECIPES = {
+    twilio: { shows: 'Texts show on the contact, and replies come back there.', r: ['Visit booked? Text the customer', 'Customer texted? Tell the office', 'Visit done? Say thanks'] },
+    stripe: { shows: 'A Pay button on every invoice and quote page; payments land in Finance.', r: ['Paid? Thank them', 'Done? Bill it and ask for a review'] },
+    quickbooks: { shows: 'Invoices show “In QuickBooks”; payments recorded there come back to the job.', r: ['Paid? Thank them', 'Done? Bill it and ask for a review', APP_LOST] },
+    gmail: { shows: 'Campaign emails go out from your address.', r: ['Paid? Thank them', 'New customer? Welcome them'] },
+    outlook: { shows: 'Your meetings show in your Day; campaign emails can go out from your address.', r: ['Paid? Thank them', 'New customer? Welcome them'] },
+    'google-contacts': { shows: 'Everyone comes into Contacts.', r: ['New lead? Sales drafts a reply', 'Lead gone quiet? Follow up', APP_LOST] },
+    leads: { shows: 'Leads land in Contacts as Leads, and on Home.', r: ['New lead? Sales drafts a reply', 'Lead gone quiet? Follow up'] },
+    postiz: { shows: 'Posts the Marketing Manager drafts wait for your OK, then go out through Postiz.', r: ['Friday recap from your team', APP_LOST] },
+    github: { shows: 'Pushes, merges and releases show on Home (Code) and move work items on software boards.', r: [
+      { name: 'Merged? Tell the team', why: 'When a pull request is merged, post it in #general', trigger: { kind: 'github.merged' }, actions: [{ kind: 'post', text: 'Merged in {repo}: {text} {url}', channelId: 'general' }] },
+      { name: 'Released? Tell everyone', why: 'When a release is published, post it in #general', trigger: { kind: 'github.released' }, actions: [{ kind: 'post', text: '{repo} {version} is out: {text} {url}', channelId: 'general' }] },
+      APP_LOST] },
+  };
+  const appRecipes = (a) => (APP_RECIPES[a.id]?.r || []).map((x) => (typeof x === 'string' ? AUTO_RECIPES.find((y) => y.name === x) : x)).filter(Boolean);
+  // One tap: the recipe as it is, through the same route the builder saves with.
+  async function recipeOn(r, btn) {
+    btn.disabled = true;
+    try {
+      await api('POST', '/automations', { name: r.name, trigger: r.trigger, actions: r.actions });
+      S.automations = await api('GET', '/automations').catch(() => S.automations);
+      toast(`“${r.name}” is on. Change it any time in Automations.`);
+      renderApps(true);
+    } catch (e) { btn.disabled = false; toast(e.message); }
+  }
+  function whatNowCard(a) {
+    const list = appRecipes(a);
+    if (!list.length || !amAdmin()) return null;
+    if (!S.automations && !APPS.autosAsked) { APPS.autosAsked = true; api('GET', '/automations').then((l) => { S.automations = l; renderApps(true); }, () => {}); }
+    const have = new Set((S.automations || []).map((x) => x.name));
+    return h('div', { class: 'app-card app-now' }, h('h2', {}, 'What now'),
+      APP_RECIPES[a.id].shows ? h('p', { class: 'app-now-shows' }, APP_RECIPES[a.id].shows) : null,
+      h('p', {}, 'Ready-made automations that put it to work. Turn one on, or open it to change it first.'),
+      h('ul', { class: 'app-now-list' }, list.map((r) => {
+        const on = have.has(r.name);
+        const btn = h('button', { class: 'btn small' + (on ? '' : ' primary-btn'), 'data-recipe': r.name, disabled: on || null, onclick: (e) => recipeOn(r, e.currentTarget) }, on ? 'On ✓' : 'Turn on');
+        return h('li', {}, h('span', {}, h('b', {}, r.name), h('small', {}, r.why)), h('span', { class: 'btns' }, on ? null : h('button', { class: 'btn small', onclick: () => autoSheet(null, r) }, 'Edit first'), btn));
+      })));
+  }
   // Which ones show: the team's kind of business and everyone's, or one group, or all of them.
   const autoRecipeView = { on: null };
   const autoRecipesFor = (k) => { const mine = AUTO_FOR[S.workspace?.setup?.kind] ? S.workspace.setup.kind : null; return AUTO_RECIPES.filter((r) => (k === 'every' || (!k && !mine) ? true : k ? r.for.includes(k) : r.for.includes('all') || r.for.includes(mine))); };
@@ -10081,7 +10124,7 @@
     } else {
       main = h('div', { class: 'app-card app-conn' }, ...a.sec());
     }
-    return h('div', { class: 'app-detail', 'data-app': a.id }, back, top, trouble, does, main,
+    return h('div', { class: 'app-detail', 'data-app': a.id }, back, top, trouble, does, main, st === 'on' ? whatNowCard(a) : null,
       h('button', { class: 'btn app-back-end', onclick: appsBack }, '‹ Back to all apps'));
   }
   function toolsTiles() {
