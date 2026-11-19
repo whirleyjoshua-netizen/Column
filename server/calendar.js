@@ -60,11 +60,18 @@ const google = {
     scope: 'openid email ' + CONTACTS_READ, access_type: 'offline', prompt: 'consent',
   }),
   // Everyone in the account's Google Contacts ("My contacts"), a page at a time.
+  // Each comes with the names of its labels (the account's own groups, like "Vendors"), for Kloomie's contact groups.
   async people(token) {
     const out = [];
     let page = '';
+    const labels = new Map();
+    try {
+      const d = await call(G('https://people.googleapis.com/v1/contactGroups?') + new URLSearchParams({ pageSize: '1000', groupFields: 'name,groupType' }), { token });
+      for (const g of d?.contactGroups || []) if (g.groupType === 'USER_CONTACT_GROUP' && g.name) labels.set(g.resourceName, g.formattedName || g.name);
+    } catch (e) { if (e.auth) throw e; }
     for (let i = 0; i < 30; i++) {
-      const d = await call(G('https://people.googleapis.com/v1/people/me/connections?') + new URLSearchParams({ personFields: 'names,emailAddresses,phoneNumbers,addresses,organizations,metadata', pageSize: '1000', ...(page ? { pageToken: page } : {}) }), { token });
+      const d = await call(G('https://people.googleapis.com/v1/people/me/connections?') + new URLSearchParams({ personFields: 'names,emailAddresses,phoneNumbers,addresses,organizations,metadata,memberships', pageSize: '1000', ...(page ? { pageToken: page } : {}) }), { token });
+      for (const p of d?.connections || []) p.labels = (p.memberships || []).map((m) => labels.get(m.contactGroupMembership?.contactGroupResourceName)).filter(Boolean);
       out.push(...(d?.connections || []));
       page = d?.nextPageToken;
       if (!page) return out;

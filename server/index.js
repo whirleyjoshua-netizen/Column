@@ -68,7 +68,7 @@ fs.mkdirSync(FILES_DIR, { recursive: true });
 // Everything lives in memory; save() hands the whole thing to the store a moment later.
 const IMPORT_PATH = path.join(DATA_DIR, 'import-pending.json');
 const store = await openStore({ url: process.env.DATABASE_URL, file: DB_PATH, importFile: IMPORT_PATH });
-let db = { workspaces: {}, tokens: {}, items: {}, entries: {}, tasks: {}, uploads: {}, campaigns: {}, goals: {}, attempts: {}, lists: {}, templates: {}, msgTemplates: {}, calendars: {}, ai: {}, pss: {}, sends: {}, bills: {}, meetings: {}, money: {}, budgets: {}, plans: {}, sidekick: {}, vaults: {}, vaultItems: {}, signs: {}, signatures: {}, trips: {}, pins: {}, zones: {}, comments: {}, users: {}, resets: {}, invites: {}, exports: {}, contacts: {}, optouts: {}, unsubs: {}, gcontacts: {}, automations: {}, notices: {}, calfeeds: {}, pushSubs: {}, keys: {}, mileage: {}, trash: {}, docTemplates: {}, flowWaits: {}, vaultDrops: {}, flowSecrets: {} };
+let db = { workspaces: {}, tokens: {}, items: {}, entries: {}, tasks: {}, uploads: {}, campaigns: {}, goals: {}, attempts: {}, lists: {}, templates: {}, msgTemplates: {}, calendars: {}, ai: {}, pss: {}, sends: {}, bills: {}, meetings: {}, money: {}, budgets: {}, plans: {}, sidekick: {}, vaults: {}, vaultItems: {}, signs: {}, signatures: {}, trips: {}, pins: {}, zones: {}, comments: {}, users: {}, resets: {}, invites: {}, exports: {}, contacts: {}, optouts: {}, unsubs: {}, gcontacts: {}, automations: {}, notices: {}, calfeeds: {}, pushSubs: {}, keys: {}, mileage: {}, trash: {}, docTemplates: {}, flowWaits: {}, vaultDrops: {}, flowSecrets: {}, contactGroups: {} };
 const loaded = await store.load();
 if (loaded.db) db = { ...db, ...loaded.db };
 if (loaded.fromFile) console.log(`Moving ${path.basename(loaded.fromFile)} into Postgres.`);
@@ -4840,12 +4840,28 @@ const ownsOf = (src) => CONNECTOR_OWNS[src] || [];
 // Where a connector's new people say they came from, when it doesn't say itself.
 const CONNECTOR_SOURCE = { google: 'Google Contacts' };
 const contactsOf = (wsId) => Object.values(db.contacts).filter((x) => x.wsId === wsId);
+// Groups the team sorts people into beyond sales: vendors, inspectors, a lawyer, partners, mentors. A person can be in
+// several; deleting a group never deletes anyone (2026-11-19).
+const GROUP_MAX = 100;
+const groupsOf = (wsId) => Object.values(db.contactGroups ||= {}).filter((g) => g.wsId === wsId).sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+const publicGroup = (g) => ({ id: g.id, name: g.name, icon: g.icon || '', by: g.by, createdAt: g.createdAt });
+function groupNamed(wsId, name, by, make = false) {
+  const nm = cleanText(name, 40).replace(/\s+/g, ' ');
+  if (!nm) return null;
+  const had = groupsOf(wsId).find((g) => g.name.toLowerCase() === nm.toLowerCase());
+  if (had || !make) return had || null;
+  if (groupsOf(wsId).length >= GROUP_MAX) return null;
+  const g = { id: rid(), wsId, name: nm, icon: '', by, createdAt: Date.now() };
+  db.contactGroups[g.id] = g;
+  return g;
+}
+const groupsNews = (wsId) => broadcast(wsId, { type: 'contact-groups', groups: groupsOf(wsId).map(publicGroup), forAdmins: true });
 const emailKey = (v) => String(v || '').trim().toLowerCase();
 const phoneKey = (v) => { const d = String(v || '').replace(/\D/g, '').slice(-10); return d.length >= 7 ? d : ''; };
 const noContact = (x) => !!(x.dne || x.extDne);
 const contactByLead = (wsId, leadId) => leadId && contactsOf(wsId).find((x) => x.ext?.pss === leadId);
 function newContact(wsId, by) {
-  return { id: rid(), wsId, name: '', company: '', email: '', phone: '', address: '', city: '', source: '', stage: '', note: '', tags: [], dne: false, ext: {}, via: null, by, createdAt: Date.now(), updatedAt: Date.now() };
+  return { id: rid(), wsId, name: '', company: '', email: '', phone: '', address: '', city: '', source: '', stage: '', note: '', tags: [], groups: [], dne: false, ext: {}, via: null, by, createdAt: Date.now(), updatedAt: Date.now() };
 }
 // What a person typed or imported. A connector's contact keeps its details; the rest can change.
 function applyContact(x, v) {
@@ -4856,12 +4872,18 @@ function applyContact(x, v) {
   if (v.email !== undefined && !x.via) x.email = emailKey(x.email) && EMAIL_RE.test(x.email) ? x.email : '';
   if (v.tags !== undefined) x.tags = [...new Set((Array.isArray(v.tags) ? v.tags : String(v.tags || '').split(/[;,]/)).map((t) => cleanText(t, 40)).filter(Boolean))].slice(0, 20);
   if (v.dne !== undefined) x.dne = !!v.dne;
+  // Groups by id (the team's own), or by name from a spreadsheet (made if new).
+  if (v.groups !== undefined) x.groups = [...new Set((Array.isArray(v.groups) ? v.groups : []).map(String))].filter((id) => db.contactGroups?.[id]?.wsId === x.wsId).slice(0, 30);
+  if (v.groupNames !== undefined) {
+    const names = (Array.isArray(v.groupNames) ? v.groupNames : String(v.groupNames || '').split(/[;,]/)).map((t) => String(t).trim()).filter(Boolean).slice(0, 10);
+    x.groups = [...new Set([...(x.groups || []), ...names.map((nm) => groupNamed(x.wsId, nm, v.by || x.by, true)?.id).filter(Boolean)])].slice(0, 30);
+  }
   x.updatedAt = Date.now();
   return x;
 }
 const publicContact = (x) => ({
   id: x.id, name: x.name, company: x.company, email: x.email, phone: x.phone, address: x.address, city: x.city, source: x.source, stage: x.stage,
-  note: x.note, tags: x.tags, dne: noContact(x), ownDne: !!x.dne, extDne: !!x.extDne, ext: x.ext, via: x.via, owns: ownsOf(x.via), pss: x.ext?.pss || null,
+  note: x.note, tags: x.tags, groups: (x.groups || []).filter((id) => db.contactGroups?.[id]), dne: noContact(x), ownDne: !!x.dne, extDne: !!x.extDne, ext: x.ext, via: x.via, owns: ownsOf(x.via), pss: x.ext?.pss || null,
   assignedTo: x.assignedTo || '', lostReason: x.lostReason || '', unsub: x.unsub || null, by: x.by, createdAt: x.createdAt, updatedAt: x.updatedAt,
 });
 const contactNews = (wsId, x) => broadcast(wsId, { type: 'contact', contact: publicContact(x), forAdmins: true });
@@ -4939,6 +4961,7 @@ function mergeContacts(keep, others) {
     for (const k of Object.keys(CONTACT_LEN)) if (k !== 'note' && !keep[k] && y[k]) keep[k] = y[k];
     if (y.note && !keep.note.includes(y.note)) keep.note = [keep.note, y.note].filter(Boolean).join('\n\n').slice(0, CONTACT_LEN.note);
     keep.tags = [...new Set([...keep.tags, ...(y.tags || [])])].slice(0, 20);
+    keep.groups = [...new Set([...(keep.groups || []), ...(y.groups || [])])].slice(0, 30);
     keep.ext = { ...y.ext, ...keep.ext };
     for (const k of ['dne', 'extDne', 'assignedTo', 'lostReason', 'unsub']) if (y[k] && !keep[k]) keep[k] = y[k];
     keep.createdAt = Math.min(keep.createdAt, y.createdAt);
@@ -4983,6 +5006,9 @@ function fillContacts(ws, src, people, { announce = false } = {}) {
     const wasStage = x.stage;
     // A contact typed in first keeps its own details, filled where empty.
     for (const k of ownsOf(src)) if (x.via === src ? true : !x[k]) x[k] = String(p[k] ?? '').slice(0, CONTACT_LEN[k]);
+    // A Google label (Vendors, Family…) puts them in the group of that name, made if new. Only ever adds: a group
+    // set in Kloomie stays.
+    if (p.labels?.length) x.groups = [...new Set([...(x.groups || []), ...p.labels.map((nm) => groupNamed(ws.id, nm, CONNECTOR_SOURCE[src] || src, true)?.id).filter(Boolean)])].slice(0, 30);
     if (x.via === src) x.createdAt = p.createdAt || x.createdAt;
     Object.assign(x, { extDne: !!p.dne, unsub: p.unsub || null, assignedTo: p.assignedTo || '', lostReason: p.lostReason || '', stageChangedAt: p.stageChangedAt || null });
     if (x.stage && wasStage && x.stage !== wasStage) news.push(['contact.stage', x]);
@@ -5103,6 +5129,7 @@ function applyLive(v) {
     sources: pick(v?.sources, Boolean),
     days: LIVE_DAYS.includes(Number(v?.days)) ? Number(v.days) : 0,
     need: ['phone', 'email'].includes(v?.need) ? v.need : null,
+    groups: pick(v?.groups, (x) => !!db.contactGroups?.[x]),
   };
 }
 function liveMatch(f, x, now) {
@@ -5111,7 +5138,8 @@ function liveMatch(f, x, now) {
     && (!f.sources.length || f.sources.some((s) => sameText(s, x.source)))
     && (!f.days || (x.createdAt || 0) >= now - f.days * 864e5)
     && (f.need !== 'phone' || !!x.phone)
-    && (f.need !== 'email' || (!!x.email && !x.dne));
+    && (f.need !== 'email' || (!!x.email && !x.dne))
+    && (!f.groups?.length || f.groups.some((g) => (x.groups || []).includes(g)));
 }
 // Rows are keyed by the lead, so calls logged against one, and its tracker stage, stay with it across syncs.
 const leadRowId = (id) => 'L' + crypto.createHash('sha256').update(id).digest('base64url').slice(0, 11);
@@ -5195,6 +5223,7 @@ function gcPerson(p) {
     company: cleanText(org?.name, 200), email: cleanText(e?.value, 200).toLowerCase(), phone: cleanText(ph?.value, 60),
     address: cleanText([ad?.streetAddress, ad?.extendedAddress].filter(Boolean).join(', ') || String(ad?.formattedValue || '').split('\n')[0], 300),
     city: cleanText(ad?.city, 100),
+    labels: (p.labels || []).map((x) => cleanText(x, 40)).filter(Boolean).slice(0, 10),
   };
 }
 const gcState = (ws) => {
@@ -5222,6 +5251,7 @@ async function syncGc(ws) {
       g.syncedAt = Date.now();
       g.error = null;
       contactsNews(ws.id);
+      groupsNews(ws.id);
     } catch (e) {
       if (db.gcontacts[ws.id] === g) g.error = e.auth ? 'Google’s sign-in expired. Connect it again.' : 'Couldn’t reach Google Contacts: ' + clipText(e.message, 200);
       console.error('Google Contacts sync failed:', e.message);
@@ -9261,9 +9291,62 @@ async function api(req, res, url) {
   }
 
   // Contacts. Owners only.
+  // Contact groups: owners and admins, like Contacts. POST makes one (or gives back the one with that name), PATCH
+  // renames it or changes its emoji, DELETE takes it off everyone, /add and /remove put people in or take them out.
+  if (a === 'contact-groups') {
+    if (!isAdmin(auth)) return send(res, 403, { error: 'Only team owners and admins can see Contacts.' });
+    if (m === 'GET' && !b) return send(res, 200, { groups: groupsOf(ws.id).map(publicGroup) });
+    const body = m === 'DELETE' ? {} : await readJson(req, 2_000_000);
+    if (m === 'POST' && !b) {
+      if (!cleanText(body.name, 40)) return send(res, 400, { error: 'Give the group a name.' });
+      if (!groupNamed(ws.id, body.name) && groupsOf(ws.id).length >= GROUP_MAX) return send(res, 400, { error: `A team can have ${GROUP_MAX} groups.` });
+      const g = groupNamed(ws.id, body.name, auth.member, true);
+      if (body.icon !== undefined) g.icon = cleanText(body.icon, 8);
+      save();
+      groupsNews(ws.id);
+      return send(res, 200, publicGroup(g));
+    }
+    const g = b && db.contactGroups[b];
+    if (!g || g.wsId !== ws.id) return send(res, 404, { error: 'That group is gone.' });
+    if (m === 'PATCH' && !c) {
+      if (body.name !== undefined) {
+        const nm = cleanText(body.name, 40).replace(/\s+/g, ' ');
+        if (!nm) return send(res, 400, { error: 'Give the group a name.' });
+        const other = groupNamed(ws.id, nm);
+        if (other && other.id !== g.id) return send(res, 400, { error: `There’s already a group called ${other.name}.` });
+        g.name = nm;
+      }
+      if (body.icon !== undefined) g.icon = cleanText(body.icon, 8);
+      save();
+      groupsNews(ws.id);
+      return send(res, 200, publicGroup(g));
+    }
+    if (m === 'DELETE' && !c) {
+      delete db.contactGroups[g.id];
+      for (const x of contactsOf(ws.id)) if (x.groups?.includes(g.id)) x.groups = x.groups.filter((id) => id !== g.id);
+      save();
+      groupsNews(ws.id);
+      contactsNews(ws.id);
+      return send(res, 200, { ok: true });
+    }
+    if (m === 'POST' && (c === 'add' || c === 'remove')) {
+      let n = 0;
+      for (const id of [...new Set(Array.isArray(body.ids) ? body.ids : [])].slice(0, CONTACT_MAX)) {
+        const x = db.contacts[id];
+        if (!x || x.wsId !== ws.id) continue;
+        const has = (x.groups || []).includes(g.id);
+        if (c === 'add' && !has && (x.groups || []).length < 30) { x.groups = [...(x.groups || []), g.id]; n++; }
+        if (c === 'remove' && has) { x.groups = x.groups.filter((y) => y !== g.id); n++; }
+      }
+      save();
+      contactsNews(ws.id);
+      return send(res, 200, { changed: n });
+    }
+    return send(res, 404, { error: 'Not found' });
+  }
   if (a === 'contacts') {
     if (!isAdmin(auth)) return send(res, 403, { error: 'Only team owners and admins can see Contacts.' });
-    if (m === 'GET' && !b) return send(res, 200, { contacts: contactsOf(ws.id).map(publicContact) });
+    if (m === 'GET' && !b) return send(res, 200, { contacts: contactsOf(ws.id).map(publicContact), groups: groupsOf(ws.id).map(publicGroup) });
     if (m === 'GET' && b === 'duplicates') return send(res, 200, { groups: duplicateGroups(ws.id).map((g) => g.sort((p, q) => p.createdAt - q.createdAt).map((x) => x.id)) });
     const body = m === 'DELETE' ? {} : await readJson(req, 20_000_000);
     // Emailing one contact (what an automation's email sends once it's OK'd): from the person's Gmail or Outlook, or
@@ -9290,6 +9373,7 @@ async function api(req, res, url) {
       db.contacts[x.id] = x;
       save();
       contactNews(ws.id, x);
+      if (body.groupNames) groupsNews(ws.id);
       refreshLiveSoon(ws.id);
       automate(ws.id, 'contact.added', { contact: x, stage: x.stage, who: auth.member, whoId: auth.memberId });
       hook(ws.id, 'contact.created', () => API.apiContact(x), auth.member);
@@ -9308,13 +9392,14 @@ async function api(req, res, url) {
       all.forEach(index);
       let added = 0, updated = 0, skipped = 0, count = all.length;
       for (const r of rows) {
-        const y = applyContact(newContact(ws.id, auth.member), { ...(r && typeof r === 'object' ? r : {}), source: r?.source || body.source || 'Import', tags: [...(Array.isArray(r?.tags) ? r.tags : String(r?.tags || '').split(/[;,]/)), ...(body.tags || [])] });
+        const y = applyContact(newContact(ws.id, auth.member), { ...(r && typeof r === 'object' ? r : {}), source: r?.source || body.source || 'Import', tags: [...(Array.isArray(r?.tags) ? r.tags : String(r?.tags || '').split(/[;,]/)), ...(body.tags || [])] , groups: undefined, groupNames: [...(Array.isArray(r?.groups) ? r.groups : String(r?.groups || '').split(/[;,]/)), ...(body.groups || [])] });
         if (!y.name && !y.email && !y.phone && !y.company) { skipped++; continue; }
         const x = (emailKey(y.email) && byEmail.get(emailKey(y.email))) || (phoneKey(y.phone) && byPhone.get(phoneKey(y.phone)));
         if (x) {
           const fill = Object.fromEntries(Object.keys(CONTACT_LEN).filter((k) => k !== 'source' && !x[k] && y[k]).map((k) => [k, y[k]]));
           const tags = [...new Set([...x.tags, ...y.tags])];
-          if (Object.keys(fill).length || tags.length !== x.tags.length) { applyContact(x, { ...fill, tags }); updated++; } else skipped++;
+          const groups = [...new Set([...(x.groups || []), ...(y.groups || [])])];
+          if (Object.keys(fill).length || tags.length !== x.tags.length || groups.length !== (x.groups || []).length) { applyContact(x, { ...fill, tags, groups }); updated++; } else skipped++;
           continue;
         }
         if (count >= CONTACT_MAX) { skipped++; continue; }
@@ -9326,6 +9411,7 @@ async function api(req, res, url) {
       }
       save();
       contactsNews(ws.id);
+      groupsNews(ws.id);
       refreshLiveSoon(ws.id);
       return send(res, 200, { added, updated, skipped });
     }
@@ -9346,6 +9432,7 @@ async function api(req, res, url) {
       const wasStage = x.stage;
       applyContact(x, body);
       if (!x.name && !x.email && !x.phone && !x.company) return send(res, 400, { error: 'Keep a name, company, email or phone number.' });
+      if (body.groupNames) groupsNews(ws.id);
       save();
       contactNews(ws.id, x);
       if (x.stage !== wasStage && x.stage) automate(ws.id, 'contact.stage', { contact: x, stage: x.stage, who: auth.member, whoId: auth.memberId });
@@ -12287,7 +12374,7 @@ async function buildExport(x) {
       const rows = (l.rows || []).map((row) => Object.fromEntries([...l.columns.map((c, i) => [c || `Column ${i + 1}`, row.cells?.[i] ?? '']), ['stage', row.stage ?? ''], ['note', row.note ?? '']]));
       sheet(`Lists/${fileName(l.name, 'List')}`, rows);
     }
-    sheet('Contacts', data.contacts.map((y) => ({ name: y.name, company: y.company, email: y.email, phone: y.phone, address: y.address, city: y.city, source: y.source, stage: y.stage, tags: y.tags, note: y.note, doNotContact: noContact(y) ? 'yes' : '', createdAt: y.createdAt })));
+    sheet('Contacts', data.contacts.map((y) => ({ name: y.name, company: y.company, email: y.email, phone: y.phone, address: y.address, city: y.city, source: y.source, stage: y.stage, tags: y.tags, groups: (y.groups || []).map((id) => db.contactGroups?.[id]?.name).filter(Boolean), note: y.note, doNotContact: noContact(y) ? 'yes' : '', createdAt: y.createdAt })));
     for (const p of data.projects) for (const t of p.types || []) {
       const rows = data.records.filter((y) => y.projectId === p.id && y.typeId === t.id).map((y) => Object.fromEntries([['created', new Date(y.createdAt).toISOString()], ...t.fields.map((f) => [f.name, typeof y.values?.[f.id] === 'object' && y.values?.[f.id] !== null ? JSON.stringify(y.values[f.id]) : y.values?.[f.id] ?? ''])]));
       sheet(`Projects/${fileName(p.name, 'Project')}/${fileName(t.name, 'List')}`, rows);

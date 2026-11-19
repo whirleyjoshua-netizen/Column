@@ -93,7 +93,10 @@ ok(await A.until(`document.querySelector('#sheet textarea')?.value === 'Met at t
 await A.ev(`[...document.querySelectorAll('#sheet label.pick')].find((l) => l.textContent.includes('Do not contact')).querySelector('input').click()`);
 await A.tap(`document.querySelector('#sheet .primary-btn')`);
 ok(await A.until(`[...document.querySelectorAll('#tool .contact-row')].find((r) => r.textContent.includes('Robin Diaz'))?.querySelector('.dne')`), 'marked do not contact');
-ok(await A.ev(`[...document.querySelectorAll('#tool .contact-row')].find((r) => r.textContent.includes('Robin Diaz')).querySelector('input[type=checkbox]').disabled`), 'and can’t be picked for email');
+// They can still be selected (to put in a group, 2026-11-19), but Email leaves them out.
+await A.ev(`(() => { const c = [...document.querySelectorAll('#tool .contact-row')].find((r) => r.textContent.includes('Robin Diaz')).querySelector('input[type=checkbox]'); c.click(); })()`);
+ok(await A.until(`!document.querySelector('#tool .contacts-act').classList.contains('hidden') && !!document.querySelector('#tool .ct-to-group') && ![...document.querySelectorAll('#tool .contacts-act button')].some((b) => /^Email/.test(b.textContent))`), 'and can’t be picked for email (selected alone, there’s no Email, only Add to group)');
+await A.ev(`[...document.querySelectorAll('#tool .contacts-act button')].find((b) => b.textContent === 'Clear').click(); true`);
 // Full size (2026-11-14): a table with columns you can sort by.
 ok(await A.until(`[...document.querySelectorAll('#tool .ct-th button')].map((b) => b.textContent.replace(/[↑↓]/g, '').trim()).join('|') === 'Name|Company|Stage|Phone|Email|City|Source'`), 'at full size Contacts is a table: Name, Company, Stage, Phone, Email, City, Source');
 const names = () => A.ev(`[...document.querySelectorAll('#tool .contact-row .contact-name')].map((b) => b.textContent)`);

@@ -743,6 +743,9 @@
       if (HQ.data || toolShown('hq')) loadHq();
     } else if (msg.type === 'pss' || msg.type === 'contacts' || msg.type === 'gcontacts') {
       loadPss();
+    } else if (msg.type === 'contact-groups') {
+      S.cgroups = msg.groups || [];
+      renderTool();
     } else if ((msg.type === 'contact' || msg.type === 'contact:remove') && S.contacts) {
       S.contacts = S.contacts.filter((x) => x.id !== (msg.contact?.id || msg.id));
       if (msg.contact) S.contacts.push(msg.contact);
@@ -9541,7 +9544,7 @@
       return;
     }
     try {
-      [S.pss, S.contacts, S.mail, S.gc, S.automations] = await Promise.all([api('GET', '/pss'), api('GET', '/contacts').then((r) => r.contacts), api('GET', '/mail'), api('GET', '/gcontacts').catch(() => null), api('GET', '/automations').catch(() => [])]);
+      [S.pss, S.contacts, S.mail, S.gc, S.automations] = await Promise.all([api('GET', '/pss'), api('GET', '/contacts').then(ctLoaded), api('GET', '/mail'), api('GET', '/gcontacts').catch(() => null), api('GET', '/automations').catch(() => [])]);
       renderCamps();
       renderTool();
     } catch {
@@ -9722,7 +9725,12 @@
   }
   // ---------- Contacts: the team's people (owners only) ----------
   // Typed in, imported from a spreadsheet, or filled by PSS. Tick people to email them; tap one to change it.
-  const CT = { q: '', stage: '', picked: new Set(), sort: store.get('ctSort', null) };
+  const CT = { q: '', stage: '', group: store.get('ctGroup', ''), picked: new Set(), sort: store.get('ctSort', null) };
+  // Contacts come with the team's groups (vendors, inspectors, a lawyer…); keep both.
+  const ctLoaded = (r) => { if (r?.groups) S.cgroups = r.groups; return r?.contacts; };
+  const cgroups = () => S.cgroups || [];
+  const cgroupById = (id) => cgroups().find((g) => g.id === id);
+  const cgLabel = (g) => `${g.icon ? g.icon + ' ' : ''}${g.name}`;
   const contactName = (x) => x.name || x.company || x.email || x.phone || 'No name';
   const ctPhone = (v) => { const d = String(v || '').replace(/\D/g, '').slice(-10); return d.length >= 7 ? d : ''; };
   // The same person twice: the same email or phone. PSS's people are never put together with each other.
@@ -9761,13 +9769,20 @@
       const n = CT.picked.size;
       bar.classList.toggle('hidden', !n);
       bar.replaceChildren(h('span', {}, `${n} selected`), h('button', { class: 'link', onclick: () => { CT.picked.clear(); show(); } }, 'Clear'),
-        h('button', { class: 'btn small primary-btn', onclick: () => { const ps = all.filter((x) => CT.picked.has(x.id)); CT.picked.clear(); emailTo(ps.map((x) => ({ email: x.email, name: x.name, contactId: x.id }))); } }, `Email ${n}`));
+        h('button', { class: 'btn small ct-to-group', onclick: (e) => ctGroupMenu(e.currentTarget, [...CT.picked]) }, 'Add to group…'),
+        CT.group && CT.group !== 'none' && cgroupById(CT.group) ? h('button', { class: 'btn small ct-out-group', onclick: async () => { try { const ids = [...CT.picked]; await api('POST', `/contact-groups/${CT.group}/remove`, { ids }); S.contacts = S.contacts.map((y) => (ids.includes(y.id) ? { ...y, groups: (y.groups || []).filter((g) => g !== CT.group) } : y)); CT.picked.clear(); toast(`Taken out of ${cgroupById(CT.group).name}`); renderTool(); } catch (er) { toast(er.message); } } }, `Remove from ${cgroupById(CT.group).name}`) : null,
+        (() => {
+          // Only people with an email who haven't asked not to be contacted are emailed; the rest are just selected.
+          const ps = all.filter((x) => CT.picked.has(x.id) && MAIL_RE.test((x.email || '').trim()) && !x.dne && !no.has(x.email.toLowerCase()));
+          return ps.length ? h('button', { class: 'btn small primary-btn', onclick: () => { CT.picked.clear(); emailTo(ps.map((x) => ({ email: x.email, name: x.name, contactId: x.id }))); } }, `Email ${ps.length}`) : null;
+        })());
     };
     const show = () => {
       CT.q = q.value;
       CT.stage = stage?.value || '';
       const n = q.value.trim().toLowerCase();
-      const hits = all.filter((x) => (!CT.stage || x.stage === CT.stage) && (!n || [x.name, x.company, x.phone, x.email, x.city, x.address, ...(x.tags || [])].some((v) => (v || '').toLowerCase().includes(n))));
+      const inGroup = (x) => !CT.group || (CT.group === 'none' ? !(x.groups || []).length : (x.groups || []).includes(CT.group));
+      const hits = all.filter((x) => inGroup(x) && (!CT.stage || x.stage === CT.stage) && (!n || [x.name, x.company, x.phone, x.email, x.city, x.address, ...(x.tags || []), ...(x.groups || []).map((id) => cgroupById(id)?.name)].some((v) => (v || '').toLowerCase().includes(n))));
       count.textContent = hits.length === all.length ? plural(all.length, 'contact') : `${hits.length.toLocaleString()} of ${all.length.toLocaleString()}`;
       // Full size: a table, sortable by any column (this device remembers). Narrow: one card per person.
       const wide = document.body.classList.contains('wide');
@@ -9777,14 +9792,14 @@
       const head = wide ? h('div', { class: 'ct-th' }, h('span'), COLS.map(([k, l]) => h('button', { class: CT.sort?.key === k ? 'on' : null, onclick: () => { CT.sort = CT.sort?.key === k ? { key: k, dir: -CT.sort.dir } : { key: k, dir: 1 }; store.set('ctSort', CT.sort); show(); } }, l, CT.sort?.key === k ? (CT.sort.dir > 0 ? ' ↑' : ' ↓') : ''))) : null;
       box.replaceChildren(...(head ? [head] : []), ...hits.slice(0, wide ? 500 : 150).map((x) => {
         const can = MAIL_RE.test(x.email.trim()) && !x.dne && !no.has(x.email.toLowerCase());
-        const cb = h('input', { type: 'checkbox', checked: CT.picked.has(x.id), disabled: !can, title: can ? 'Select to email' : x.email ? 'Do not contact' : 'No email address', 'aria-label': 'Select ' + contactName(x) });
+        const cb = h('input', { type: 'checkbox', checked: CT.picked.has(x.id), title: can ? 'Select' : x.email ? 'Select (do not contact: not emailed)' : 'Select (no email address)', 'aria-label': 'Select ' + contactName(x) });
         cb.addEventListener('change', () => { if (cb.checked) CT.picked.add(x.id); else CT.picked.delete(x.id); act(); });
         const badges = [x.stage && !wide ? h('span', { class: 'lead-stage' }, stageLabel(x.stage)) : null,
           x.dne ? h('span', { class: 'lead-stage dne', title: x.extDne ? 'Unsubscribed in PSS' : 'Marked do not contact' }, 'Do not contact') : null,
           vaultLinked('contact', x.id) || vaultLinked('contact', x.pss) ? h('button', { class: 'link vault-tag', title: 'In your vault', onclick: () => openVaultFor('contact', vaultLinked('contact', x.id) ? x.id : x.pss) }, '🔒') : null];
         if (wide) return h('div', { class: 'contact contact-row ct-tr' }, cb,
           h('div', { class: 'ct-td ct-name' }, h('button', { class: 'link contact-name', title: 'Open', onclick: () => contactSheet(x) }, h('b', {}, contactName(x))), ...badges.filter(Boolean),
-            (x.tags || []).length ? h('small', {}, (x.tags || []).map((t) => '#' + t).join(' ')) : null),
+            ctGroupChips(x), (x.tags || []).length ? h('small', {}, (x.tags || []).map((t) => '#' + t).join(' ')) : null),
           h('div', { class: 'ct-td' }, COLS[1][2](x)),
           h('div', { class: 'ct-td' }, x.stage ? h('span', { class: 'lead-stage' }, stageLabel(x.stage)) : ''),
           h('div', { class: 'ct-td' }, x.phone ? h('a', { href: 'tel:' + x.phone.replace(/[^\d+]/g, '') }, x.phone) : ''),
@@ -9795,6 +9810,7 @@
           h('div', { class: 'contact-main' },
             h('div', { class: 'contact-top' }, h('button', { class: 'link contact-name', title: 'Open', onclick: () => contactSheet(x) }, h('b', {}, contactName(x))),
               x.stage ? h('span', { class: 'lead-stage' }, stageLabel(x.stage)) : null,
+              ctGroupChips(x),
               x.dne ? h('span', { class: 'lead-stage dne', title: x.extDne ? 'Unsubscribed in PSS' : 'Marked do not contact' }, 'Do not contact') : null,
               vaultLinked('contact', x.id) || vaultLinked('contact', x.pss) ? h('button', { class: 'link vault-tag', title: 'In your vault', onclick: () => openVaultFor('contact', vaultLinked('contact', x.id) ? x.id : x.pss) }, h('span', { class: 'vault-ic', html: I.lock }), vaultLinked('contact', x.id) || vaultLinked('contact', x.pss)) : null),
             h('small', {}, [x.name && x.company, x.address, x.city, x.source, x.assignedTo ? '→ ' + x.assignedTo : '', ...(x.tags || []).map((t) => '#' + t)].filter(Boolean).join(' · ')),
@@ -9807,7 +9823,64 @@
     q.addEventListener('input', show);
     stage?.addEventListener('change', show);
     show();
-    return [tools, h('div', { class: 'contacts-bar' }, q, stage), count, box, bar];
+    const main = [tools, h('div', { class: 'contacts-bar' }, q, stage), count, box, bar];
+    return document.body.classList.contains('wide') ? [h('div', { class: 'ct-layout' }, ctGroupsRail(all, false), h('div', { class: 'ct-main' }, ...main))] : [ctGroupsRail(all, true), ...main];
+  }
+  // ----- contact groups: vendors, inspectors, a lawyer, partners, mentors… (2026-11-19) -----
+  const CG_START = [['🧾', 'Customers'], ['🚚', 'Vendors & suppliers'], ['🛠️', 'Subcontractors'], ['🔍', 'Inspectors'], ['🤝', 'Partners'], ['🧭', 'Mentors & advisors'], ['⚖️', 'Legal & accounting'], ['🏠', 'Personal']];
+  const ctGroupChips = (x) => ((x.groups || []).length ? h('span', { class: 'ct-gchips' }, (x.groups || []).map((id) => cgroupById(id)).filter(Boolean).map((g) => h('span', { class: 'ct-gchip' }, cgLabel(g)))) : null);
+  const ctPick = (g) => { CT.group = g; CT.picked.clear(); store.set('ctGroup', g); renderTool(); };
+  async function ctNewGroup(name, icon, then) {
+    try {
+      const g = await api('POST', '/contact-groups', { name, ...(icon ? { icon } : {}) });
+      S.cgroups = [...cgroups().filter((y) => y.id !== g.id), g].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+      if (then) await then(g); else ctPick(g.id);
+      return g;
+    } catch (e) { toast(e.message); }
+  }
+  function ctNewGroupSheet(then) {
+    const name = h('input', { maxlength: 40, placeholder: 'Inspectors' });
+    const icon = h('input', { maxlength: 8, placeholder: '🔍', class: 'ct-gicon-in' });
+    const left = CG_START.filter(([, nm]) => !cgroups().some((g) => g.name.toLowerCase() === nm.toLowerCase()));
+    sheet('New group', [h('div', { class: 'row2' }, h('label', {}, 'Name', name), h('label', {}, 'Emoji', icon)),
+      left.length ? h('div', {}, h('small', { class: 'hint' }, 'Or one of these'), h('div', { class: 'ct-gstart' }, left.map(([ic, nm]) => h('button', { type: 'button', class: 'chip', onclick: () => { name.value = nm; icon.value = ic; } }, `${ic} ${nm}`)))) : null], async () => {
+      if (!name.value.trim()) throw new Error('Give the group a name.');
+      await ctNewGroup(name.value.trim(), icon.value.trim(), then);
+    }, 'Make the group');
+    setTimeout(() => name.focus(), 50);
+  }
+  function ctGroupMenu(anchor, ids) {
+    const put = async (g) => {
+      await api('POST', `/contact-groups/${g.id}/add`, { ids });
+      S.contacts = S.contacts.map((y) => (ids.includes(y.id) && !(y.groups || []).includes(g.id) ? { ...y, groups: [...(y.groups || []), g.id] } : y));
+      CT.picked.clear();
+      toast(`${ids.length === 1 ? '1 person' : ids.length + ' people'} in ${g.name}`);
+      renderTool();
+    };
+    openMenu(anchor, [{ head: 'Add to group' }, ...cgroups().map((g) => ({ label: cgLabel(g), run: () => put(g).catch((e) => toast(e.message)) })), { label: '+ New group…', run: () => ctNewGroupSheet(put) }]);
+  }
+  function ctGroupOptions(anchor, g) {
+    openMenu(anchor, [{ head: cgLabel(g) },
+      { label: 'Rename…', run: () => { const i = h('input', { value: g.name, maxlength: 40 }); const ic = h('input', { value: g.icon || '', maxlength: 8, class: 'ct-gicon-in' }); sheet('Rename group', [h('div', { class: 'row2' }, h('label', {}, 'Name', i), h('label', {}, 'Emoji', ic))], async () => { const y = await api('PATCH', '/contact-groups/' + g.id, { name: i.value, icon: ic.value }); S.cgroups = cgroups().map((z) => (z.id === y.id ? y : z)); renderTool(); }, 'Save'); } },
+      { head: '' },
+      { label: 'Delete group', danger: true, run: async () => { try { await api('DELETE', '/contact-groups/' + g.id); S.cgroups = cgroups().filter((z) => z.id !== g.id); S.contacts = S.contacts.map((y) => ({ ...y, groups: (y.groups || []).filter((z) => z !== g.id) })); if (CT.group === g.id) CT.group = ''; toast(`${g.name} deleted. Nobody in it was deleted.`); renderTool(); } catch (e) { toast(e.message); } } },
+    ]);
+  }
+  // At full size a list down the side; narrow, chips across the top.
+  function ctGroupsRail(all, chips) {
+    const n = (g) => all.filter((x) => (x.groups || []).includes(g.id)).length;
+    const none = all.filter((x) => !(x.groups || []).length).length;
+    if (CT.group && CT.group !== 'none' && !cgroupById(CT.group)) CT.group = '';
+    const item = (key, label, count, g) => h('div', { class: 'ct-gitem' + (CT.group === key ? ' on' : ''), 'data-group': key },
+      h('button', { class: 'ct-gbtn', onclick: () => ctPick(key), 'aria-pressed': String(CT.group === key) }, h('span', {}, label), h('small', {}, String(count))),
+      g && (!chips || CT.group === key) ? h('button', { class: 'ct-gmore', 'aria-label': `${g.name}: options`, onclick: (e) => ctGroupOptions(e.currentTarget, g) }, '⋯') : null);
+    return h('nav', { class: chips ? 'ct-gchipsbar' : 'ct-rail', 'aria-label': 'Contact groups' },
+      chips ? null : h('div', { class: 'ct-rail-h' }, 'Groups'),
+      item('', 'All', all.length),
+      ...cgroups().map((g) => item(g.id, cgLabel(g), n(g), g)),
+      cgroups().length ? item('none', 'In no group', none) : null,
+      h('button', { class: 'ct-gnew', onclick: () => ctNewGroupSheet() }, '+ New group'),
+      !chips && !cgroups().length ? h('small', { class: 'ct-rail-hint' }, 'Sort people beyond sales: vendors, inspectors, your lawyer, partners, mentors.') : null);
   }
   // One contact, new or to change. A connector's own details are changed there (PSS, Google).
   function contactSheet(x) {
@@ -9820,6 +9893,13 @@
       return h('label', {}, label, f[k]);
     };
     const tags = h('input', { value: (x?.tags || []).join(', '), placeholder: 'customer, referral' });
+    // Groups: tap to put them in or take them out; + New group makes one on the spot. A new contact starts in the
+    // group being looked at.
+    const inGroups = new Set(x ? x.groups || [] : CT.group && CT.group !== 'none' ? [CT.group] : []);
+    const gbox = h('div', { class: 'ct-gpick' });
+    const gdraw = () => gbox.replaceChildren(...cgroups().map((g) => h('button', { type: 'button', class: 'chip' + (inGroups.has(g.id) ? ' on' : ''), 'aria-pressed': String(inGroups.has(g.id)), onclick: () => { inGroups.has(g.id) ? inGroups.delete(g.id) : inGroups.add(g.id); gdraw(); } }, cgLabel(g))),
+      h('button', { type: 'button', class: 'chip ct-gpick-new', onclick: () => { const i = h('input', { class: 'ct-gpick-in', placeholder: 'New group', maxlength: 40 }); let once = false; const go = async () => { if (once) return; once = true; const nm = i.value.trim(); if (!nm) return gdraw(); i.disabled = true; const g = await ctNewGroup(nm, '', async () => {}); if (g) inGroups.add(g.id); gdraw(); }; i.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); go(); } if (e.key === 'Escape') { e.preventDefault(); gdraw(); } }); i.addEventListener('blur', go, { once: true }); gbox.lastChild.replaceWith(i); i.focus(); } }, '+ New group'));
+    gdraw();
     const dne = h('input', { type: 'checkbox', checked: !!x?.ownDne });
     const del = x && !from ? h('button', { class: 'btn small danger', 'data-label': '1' }, 'Delete') : null;
     del?.addEventListener('click', () => confirmClick(del, async () => {
@@ -9838,6 +9918,7 @@
       field('company', 'Company'),
       h('div', { class: 'row2' }, field('phone', 'Phone', { type: 'tel' }), field('email', 'Email', { type: 'email' })),
       h('div', { class: 'row2' }, field('address', 'Address'), field('city', 'City')),
+      h('div', { class: 'ct-groups-f' }, h('span', { class: 'ct-groups-l' }, 'Groups'), gbox),
       h('div', { class: 'row2' }, field('source', 'Source', { placeholder: 'Referral' }), h('label', {}, 'Tags', tags)),
       field('note', 'Note', { rows: 3 }),
       h('label', { class: 'pick' }, dne, 'Do not contact', h('small', {}, ' Never emailed, and left off call lists’ email.')),
@@ -9847,7 +9928,7 @@
       x ? h('div', { class: 'btns' }, shareBtn(linkToken('contact', x.id)), del) : null,
     ].filter(Boolean), async () => {
       const body = Object.fromEntries(Object.entries(f).filter(([, el]) => !el.disabled).map(([k, el]) => [k, el.value]));
-      Object.assign(body, { tags: tags.value, dne: dne.checked });
+      Object.assign(body, { tags: tags.value, dne: dne.checked, groups: [...inGroups].filter((id) => cgroupById(id)) });
       const y = x ? await api('PATCH', '/contacts/' + x.id, body) : await api('POST', '/contacts', body);
       S.contacts = [...(S.contacts || []).filter((z) => z.id !== y.id), y];
       renderTool();
@@ -9882,7 +9963,7 @@
     return wrap;
   }
   async function openContactById(id) {
-    if (!S.contacts) S.contacts = (await api('GET', '/contacts').catch(() => ({ contacts: [] }))).contacts;
+    if (!S.contacts) S.contacts = ctLoaded(await api('GET', '/contacts').catch(() => ({ contacts: [] })));
     const x = S.contacts.find((y) => y.id === id);
     return x ? contactSheet(x) : toast('That contact isn’t here any more.');
   }
@@ -9895,7 +9976,7 @@
     sheet(`Duplicates · ${groups.length}`, [h('p', { class: 'day-hint' }, 'The same email or phone number more than once. Merging keeps the oldest, fills in what it’s missing from the others, and keeps every note, tag and logged call.'), h('div', { class: 'dupes' }, rows.map((r) => r.el))], async () => {
       let n = 0;
       for (const r of rows) if (r.cb.checked) { await api('POST', '/contacts/merge', { ids: r.g.map((x) => x.id) }); n++; }
-      S.contacts = (await api('GET', '/contacts')).contacts;
+      S.contacts = ctLoaded(await api('GET', '/contacts'));
       renderTool();
       toast(n ? `Merged ${plural(n, 'duplicate')}` : 'Nothing merged');
     }, 'Merge');
@@ -9921,7 +10002,7 @@
   const IMPORT_FIELDS = [
     ['name', 'Name', /^(full )?name$|^contact( name)?$|^customer( name)?$/i], ['first', 'First name', /first|given/i], ['last', 'Last name', /last|surname|family/i],
     ['company', 'Company', /company|business|organi[sz]ation|account/i], ['email', 'Email', /e-?mail/i], ['phone', 'Phone', /phone|mobile|cell|tel/i],
-    ['address', 'Address', /address|street/i], ['city', 'City', /city|town/i], ['tags', 'Tags', /tags?|labels?|groups?/i], ['note', 'Note', /notes?|comments?|description/i], ['source', 'Source', /source|lead source|origin/i],
+    ['address', 'Address', /address|street/i], ['city', 'City', /city|town/i], ['groups', 'Groups', /groups?|categor(y|ies)|labels?|type of contact|relationship/i], ['tags', 'Tags', /tags?/i], ['note', 'Note', /notes?|comments?|description/i], ['source', 'Source', /source|lead source|origin/i],
   ];
   function importSheet(raw, name) {
     const head = raw[0], body = raw.slice(1);
@@ -9938,7 +10019,7 @@
     const sum = h('p', { class: 'day-hint' });
     const read = () => body.map((r) => {
       const v = (k) => (Number(sel[k].value) >= 0 ? String(r[Number(sel[k].value)] || '').trim() : '');
-      return { name: v('name') || [v('first'), v('last')].filter(Boolean).join(' '), company: v('company'), email: v('email'), phone: v('phone'), address: v('address'), city: v('city'), tags: v('tags'), note: v('note'), source: v('source') };
+      return { name: v('name') || [v('first'), v('last')].filter(Boolean).join(' '), company: v('company'), email: v('email'), phone: v('phone'), address: v('address'), city: v('city'), groups: v('groups'), tags: v('tags'), note: v('note'), source: v('source') };
     }).filter((x) => x.name || x.company || x.email || x.phone);
     const update = () => {
       const rows = read();
@@ -9954,7 +10035,7 @@
       const rows = read();
       if (!rows.length) throw new Error('Pick the columns with names, emails or phone numbers.');
       const r = await api('POST', '/contacts/import', { rows, tags: tag.value.split(',').map((t) => t.trim()).filter(Boolean), source: 'Import' });
-      S.contacts = (await api('GET', '/contacts')).contacts;
+      S.contacts = ctLoaded(await api('GET', '/contacts'));
       renderTool();
       toast([r.added && `${r.added.toLocaleString()} added`, r.updated && `${r.updated.toLocaleString()} filled in`, r.skipped && `${r.skipped.toLocaleString()} already here`].filter(Boolean).join(' · ') || 'Nothing new');
     }, 'Import');
@@ -9965,32 +10046,35 @@
     const same = (a, b) => a.trim().toLowerCase() === b.trim().toLowerCase();
     return (!f.stages.length || f.stages.includes(x.stage)) && (!f.cities.length || f.cities.some((c) => same(c, x.city)))
       && (!f.sources.length || f.sources.some((v) => same(v, x.source))) && (!f.days || (x.createdAt || 0) >= now - f.days * 864e5)
-      && (f.need !== 'phone' || !!x.phone) && (f.need !== 'email' || (!!x.email && !x.dne));
+      && (f.need !== 'phone' || !!x.phone) && (f.need !== 'email' || (!!x.email && !x.dne))
+      && (!f.groups?.length || f.groups.some((g) => (x.groups || []).includes(g)));
   }
   // With onPick, the filter is handed back instead of saved as a list (the Planner keeps it until it's a campaign).
   function liveSheet(c, l, onPick) {
     const all = S.contacts || [];
-    const f = l?.live || { stages: [], cities: [], sources: [], days: 0, need: null };
+    const f = l?.live || { stages: [], cities: [], sources: [], days: 0, need: null, groups: [] };
     const name = h('input', { value: l?.name || '', placeholder: 'Quoted, not sold' });
     const byCount = (key) => [...all.reduce((m, x) => (x[key] ? m.set(x[key], (m.get(x[key]) || 0) + 1) : m), new Map())].sort((a, b) => b[1] - a[1]);
     const stages = stagesIn(all).map((v) => ({ v, cb: h('input', { type: 'checkbox', checked: f.stages.includes(v) }) }));
     const one = (key, any, picked) => h('select', {}, h('option', { value: '' }, any), byCount(key).map(([v, n]) => h('option', { value: v, selected: picked.some((x) => x.toLowerCase() === v.toLowerCase()) }, `${v} · ${n}`)));
     const city = one('city', 'Any city', f.cities), source = one('source', 'Any source', f.sources);
+    const group = h('select', {}, h('option', { value: '' }, 'Any group'), cgroups().map((g) => h('option', { value: g.id, selected: (f.groups || []).includes(g.id) }, `${cgLabel(g)} · ${all.filter((x) => (x.groups || []).includes(g.id)).length}`)));
     const days = h('select', {}, LIVE_DAYS.map(([v, t]) => h('option', { value: v, selected: f.days === v }, t)));
     const need = h('select', {}, [['', 'Anyone'], ['phone', 'Has a phone number'], ['email', 'Can be emailed']].map(([v, t]) => h('option', { value: v, selected: (f.need || '') === v }, t)));
     const count = h('p', { class: 'day-hint live-count' });
-    const read = () => ({ stages: stages.filter((x) => x.cb.checked).map((x) => x.v), cities: city.value ? [city.value] : [], sources: source.value ? [source.value] : [], days: Number(days.value), need: need.value || null });
+    const read = () => ({ stages: stages.filter((x) => x.cb.checked).map((x) => x.v), cities: city.value ? [city.value] : [], sources: source.value ? [source.value] : [], days: Number(days.value), need: need.value || null , groups: group.value ? [group.value] : [] });
     const update = () => {
       const n = all.filter((x) => liveMatch(read(), x, Date.now())).length;
       count.textContent = `${n.toLocaleString()} contact${n === 1 ? '' : 's'} right now. New matches join by themselves; anyone who stops matching leaves.`;
     };
-    for (const el of [city, source, days, need, ...stages.map((x) => x.cb)]) el.addEventListener('change', update);
+    for (const el of [city, source, days, need, group, ...stages.map((x) => x.cb)]) el.addEventListener('change', update);
     update();
     sheet(l ? 'Who’s on this list' : 'Call list from Contacts', [
       h('label', {}, 'Name', name),
       stages.length ? h('div', { class: 'live-field' }, 'Stage', h('div', { class: 'live-stages' }, stages.map((x) => h('label', { class: 'pick' }, x.cb, stageLabel(x.v))))) : null,
       h('div', { class: 'row2' }, h('label', {}, 'City', city), h('label', {}, 'Source', source)),
       h('div', { class: 'row2' }, h('label', {}, 'Added', days), h('label', {}, 'Who', need)),
+      cgroups().length ? h('label', {}, 'Group', group) : null,
       count,
       l || onPick ? null : h('p', { class: 'day-hint' }, 'Everyone in this campaign will see these contacts.'),
     ], async () => {
@@ -14295,25 +14379,30 @@
   }
   // Pick someone from Contacts, or add them there.
   async function pickContact(done) {
-    if (!S.contacts) S.contacts = (await api('GET', '/contacts').catch(() => null))?.contacts || null;
+    if (!S.contacts) S.contacts = ctLoaded(await api('GET', '/contacts').catch(() => null)) || null;
     if (!S.contacts) return toast('Only owners and admins can pick from Contacts. Ask one to set the customer.');
     const q = h('input', { type: 'search', placeholder: 'Search name, company, phone, address', 'aria-label': 'Search contacts' });
     const list = h('div', { class: 'pj-pick' });
+    // The team's groups narrow it down: Inspectors, Vendors…
+    let grp = '';
+    const gbar = h('div', { class: 'ct-gpick pj-pick-groups' });
+    const gdraw = () => gbar.replaceChildren(...(cgroups().length ? [['', 'Everyone'], ...cgroups().map((g) => [g.id, cgLabel(g)])].map(([id, label]) => h('button', { type: 'button', class: 'chip' + (grp === id ? ' on' : ''), 'aria-pressed': String(grp === id), onclick: () => { grp = id; gdraw(); draw(); } }, label)) : []));
     const draw = () => {
       const n = q.value.trim().toLowerCase();
-      const hits = S.contacts.filter((x) => !n || [x.name, x.company, x.phone, x.email, x.address, x.city].some((v) => (v || '').toLowerCase().includes(n))).slice(0, 40);
+      const hits = S.contacts.filter((x) => (!grp || (x.groups || []).includes(grp)) && (!n || [x.name, x.company, x.phone, x.email, x.address, x.city].some((v) => (v || '').toLowerCase().includes(n)))).slice(0, 40);
       list.replaceChildren(...hits.map((x) => h('button', { type: 'button', class: 'pj-pick-row', onclick: () => { closeSheet(); done(x); } }, h('b', {}, contactName(x)), h('small', {}, [x.company !== contactName(x) ? x.company : '', x.phone, [x.address, x.city].filter(Boolean).join(', ')].filter(Boolean).join(' · ')))),
-        h('button', { type: 'button', class: 'pj-pick-row new', onclick: () => newContactFor(q.value, done) }, `+ New contact${q.value.trim() ? ` “${q.value.trim()}”` : ''}`));
+        h('button', { type: 'button', class: 'pj-pick-row new', onclick: () => newContactFor(q.value, done, grp) }, `+ New contact${q.value.trim() ? ` “${q.value.trim()}”` : ''}`));
     };
     q.addEventListener('input', draw);
+    gdraw();
     draw();
-    sheet('Customer', [q, list]);
+    sheet('Customer', [q, gbar, list]);
     setTimeout(() => q.focus(), 50);
   }
-  function newContactFor(name, done) {
+  function newContactFor(name, done, group = '') {
     const f = { name: h('input', { value: name.trim(), placeholder: 'Pat Lee' }), phone: h('input', { type: 'tel' }), email: h('input', { type: 'email' }), address: h('input'), city: h('input') };
     sheet('New contact', [h('label', {}, 'Name', f.name), h('div', { class: 'row2' }, h('label', {}, 'Phone', f.phone), h('label', {}, 'Email', f.email)), h('div', { class: 'row2' }, h('label', {}, 'Address', f.address), h('label', {}, 'City', f.city))], async () => {
-      const y = await api('POST', '/contacts', Object.fromEntries(Object.entries(f).map(([k, el]) => [k, el.value])));
+      const y = await api('POST', '/contacts', { ...Object.fromEntries(Object.entries(f).map(([k, el]) => [k, el.value])), ...(group ? { groups: [group] } : {}) });
       S.contacts = [...(S.contacts || []).filter((z) => z.id !== y.id), y];
       done(y);
     }, 'Add');

@@ -17,7 +17,7 @@ const ok = (c, msg) => { console.log((c ? 'PASS ' : 'FAIL ') + msg); if (!c) fai
 let grantContacts = false;
 let people = [
   { resourceName: 'people/c1', names: [{ displayName: 'Ana Ruiz' }], emailAddresses: [{ value: 'ANA@shop.test' }], phoneNumbers: [{ value: '555-0101' }] },
-  { resourceName: 'people/c2', names: [{ givenName: 'Ben', familyName: 'Ito' }], organizations: [{ name: 'Acme Gym' }], phoneNumbers: [{ value: '555-0102', metadata: { primary: true } }],
+  { resourceName: 'people/c2', names: [{ givenName: 'Ben', familyName: 'Ito' }], organizations: [{ name: 'Acme Gym' }], memberships: [{ contactGroupMembership: { contactGroupResourceName: 'contactGroups/v1' } }, { contactGroupMembership: { contactGroupResourceName: 'contactGroups/myContacts' } }], phoneNumbers: [{ value: '555-0102', metadata: { primary: true } }],
     addresses: [{ streetAddress: '12 Elm St', city: 'Mesa', metadata: { primary: true } }] },
   { resourceName: 'people/c3' },
 ];
@@ -30,6 +30,7 @@ const fake = http.createServer(async (req, res) => {
   res.setHeader('content-type', 'application/json');
   if (url.pathname === '/token') return res.end(JSON.stringify({ access_token: 'at', refresh_token: 'rt', expires_in: 3600, scope: 'openid email' + (grantContacts ? ' https://www.googleapis.com/auth/contacts.readonly' : '') }));
   if (url.pathname === '/v1/userinfo') return res.end(JSON.stringify({ email: 'jo@gmail.com' }));
+  if (url.pathname === '/v1/contactGroups') return res.end(JSON.stringify({ contactGroups: [{ resourceName: 'contactGroups/v1', name: 'Vendors', groupType: 'USER_CONTACT_GROUP' }, { resourceName: 'contactGroups/myContacts', name: 'myContacts', formattedName: 'My Contacts', groupType: 'SYSTEM_CONTACT_GROUP' }] }));
   if (url.pathname === '/v1/people/me/connections') {
     if (req.headers.authorization !== 'Bearer at') { res.writeHead(401); return res.end('{}'); }
     return res.end(JSON.stringify(url.searchParams.get('pageToken') === 'p2' ? { connections: page2 } : { connections: people, nextPageToken: 'p2' }));
@@ -79,6 +80,8 @@ try {
   const ben = all.find((x) => x.ext?.google === 'people/c2');
   ok(ben && ben.name === 'Ben Ito' && ben.company === 'Acme Gym' && ben.address === '12 Elm St' && ben.city === 'Mesa' && ben.source === 'Google Contacts' && ben.via === 'google', 'a new person comes in with company and address, from “Google Contacts”');
   ok(all.some((x) => x.email === 'cara@diaz.test'), 'the second page of contacts comes in too');
+  const groups = (await jo('GET', '/contacts')).body.groups;
+  ok(groups.map((g) => g.name).join() === 'Vendors' && ben.groups.join() === groups[0].id, 'Ben’s Google label Vendors makes the Vendors group with him in it (Google’s own My Contacts isn’t a group)');
 
   // Google's details are changed in Google; the team's are kept.
   r = await jo('PATCH', '/contacts/' + ben.id, { name: 'Benny', stage: 'customer', tags: 'gym' });

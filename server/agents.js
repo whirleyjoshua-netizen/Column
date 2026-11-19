@@ -342,14 +342,19 @@ export function agentsModule({ autoEvents = [], sees = () => true, db, save, bro
     },
     find_contacts: {
       kind: 'read', label: (a) => (a.query ? `Looked up “${words(a.query, 40)}” in Contacts` : 'Looked through Contacts'),
-      description: 'Customers and prospects in Contacts, by name, email, phone or company. Owners and admins only.',
-      parameters: { type: 'object', properties: { query: { type: 'string' } } },
+      description: 'People in Contacts (customers, prospects, and the team’s groups like vendors, inspectors, a lawyer, partners, mentors), by name, email, phone or company, and/or by group. Owners and admins only.',
+      parameters: { type: 'object', properties: { query: { type: 'string' }, group: { type: 'string', description: 'a group’s name, e.g. Inspectors or Vendors' } } },
       async run(cx, a) {
         const r = await cx.call('GET', '/api/contacts');
         if (r.status !== 200) throw new Error(r.body?.error || 'Contacts aren’t open to this person.');
         const q = String(a.query || '').toLowerCase();
-        const list = r.body.contacts.filter((c) => !q || [c.name, c.email, c.phone, c.company].some((v) => String(v || '').toLowerCase().includes(q)));
-        return { count: list.length, contacts: list.slice(0, 30).map((c) => ({ id: c.id, name: c.name, email: c.email, phone: c.phone, company: c.company, tags: c.tags, doNotContact: c.dne || undefined })) };
+        const groups = r.body.groups || [];
+        const gname = new Map(groups.map((g) => [g.id, g.name]));
+        const want = String(a.group || '').trim().toLowerCase().replace(/s$/, '');
+        const g = want ? groups.find((x) => x.name.toLowerCase().replace(/s$/, '') === want) || groups.find((x) => x.name.toLowerCase().includes(want)) : null;
+        if (want && !g) return { count: 0, contacts: [], groups: groups.map((x) => x.name), note: `No group called “${a.group}”.` };
+        const list = r.body.contacts.filter((c) => (!g || (c.groups || []).includes(g.id)) && (!q || [c.name, c.email, c.phone, c.company].some((v) => String(v || '').toLowerCase().includes(q))));
+        return { count: list.length, ...(g ? { group: g.name } : {}), groups: groups.map((x) => x.name), contacts: list.slice(0, 30).map((c) => ({ id: c.id, name: c.name, email: c.email, phone: c.phone, company: c.company, tags: c.tags, groups: (c.groups || []).map((id) => gname.get(id)).filter(Boolean), doNotContact: c.dne || undefined })) };
       },
     },
     team_schedule: {
@@ -556,11 +561,12 @@ export function agentsModule({ autoEvents = [], sees = () => true, db, save, bro
     },
     save_contact: {
       kind: 'write', label: (a) => `Contact: ${words(a.name, 80)}${a.email ? ` <${a.email}>` : ''}`,
-      description: 'Add a customer or prospect to Contacts (owners and admins), or fill in details on one that exists (same email).',
-      parameters: { type: 'object', properties: { name: { type: 'string' }, email: { type: 'string' }, phone: { type: 'string' }, company: { type: 'string' }, address: { type: 'string' }, notes: { type: 'string' }, why: { type: 'string' } }, required: ['name'] },
+      description: 'Add someone to Contacts (owners and admins): a customer, a prospect, or anyone the team keeps, in a group like Vendors or Inspectors; or fill in details on one that exists (same email).',
+      parameters: { type: 'object', properties: { name: { type: 'string' }, email: { type: 'string' }, phone: { type: 'string' }, company: { type: 'string' }, address: { type: 'string' }, notes: { type: 'string' }, group: { type: 'string', description: 'a group to put them in (Vendors, Inspectors…); made if the team doesn’t have it' }, why: { type: 'string' } }, required: ['name'] },
       async run(cx, a) {
         const body = Object.fromEntries(['name', 'email', 'phone', 'company', 'address'].filter((k) => a[k]).map((k) => [k, String(a[k])]));
         if (a.notes) body.note = String(a.notes);
+        if (a.group) body.groupNames = [String(a.group)];
         const have = a.email && Object.values(db.contacts).find((c) => c.wsId === cx.ws.id && same(c.email, a.email));
         const r = have ? await cx.call('PATCH', '/api/contacts/' + have.id, body) : await cx.call('POST', '/api/contacts', body);
         const c = r.body;

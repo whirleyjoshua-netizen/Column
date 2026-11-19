@@ -3561,3 +3561,46 @@ body.wide .sheet.page-form { border-left: 1px solid var(--line); }
 /* Finance step 3: one price list (2026-11-20) */
 .pj-price-now { display: block; margin-top: 2px; border: 0; background: none; padding: 0; color: #8a5a00; font: inherit; font-size: 11.5px; cursor: pointer; text-decoration: underline; }
 .fin-q-chg { font-size: 12px; color: #8a5a00; white-space: nowrap; }
+
+/* ---------- Contacts: groups (vendors, inspectors, a lawyer, partners, mentors…) ---------- */
+.ct-layout { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 20px; align-items: start; }
+.ct-rail { position: sticky; top: 0; display: flex; flex-direction: column; gap: 2px; padding: 4px 0; }
+.ct-rail-h { font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--faint); padding: 2px 10px 6px; }
+.ct-gitem { display: flex; align-items: center; border-radius: 8px; }
+.ct-gitem:hover { background: var(--card-hover); }
+.ct-gitem.on { background: var(--accent-soft); }
+.ct-gbtn { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; padding: 7px 10px; border: 0; background: none; color: var(--text); text-align: left; cursor: pointer; font-size: 13.5px; }
+.ct-gbtn span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ct-gbtn small { color: var(--muted); font-size: 12px; }
+.ct-gitem.on .ct-gbtn { color: var(--accent); font-weight: 600; }
+.ct-gmore { border: 0; background: none; color: var(--faint); padding: 4px 8px; border-radius: 6px; cursor: pointer; opacity: 0; }
+.ct-gitem:hover .ct-gmore, .ct-gmore:focus-visible { opacity: 1; }
+.ct-gmore:hover { color: var(--text); background: var(--card); }
+.ct-gnew { margin-top: 6px; padding: 7px 10px; border: 1px dashed var(--line); border-radius: 8px; background: none; color: var(--muted); text-align: left; cursor: pointer; font-weight: 600; font-size: 13px; }
+.ct-gnew:hover { color: var(--text); border-color: var(--accent); }
+.ct-rail-hint { color: var(--faint); padding: 8px 10px; line-height: 1.4; }
+.ct-gchipsbar { display: flex; gap: 6px; overflow-x: auto; padding: 2px 0 10px; scrollbar-width: none; }
+.ct-gchipsbar::-webkit-scrollbar { display: none; }
+.ct-gchipsbar .ct-gitem { flex: none; border: 1px solid var(--line); border-radius: 99px; background: var(--card); }
+.ct-gchipsbar .ct-gitem.on { border-color: transparent; }
+.ct-gchipsbar .ct-gbtn { padding: 5px 12px; font-size: 13px; }
+.ct-gchipsbar .ct-gbtn span { overflow: visible; }
+.ct-gchipsbar .ct-gnew { flex: none; margin: 0; padding: 5px 12px; border-radius: 99px; white-space: nowrap; }
+.ct-gchips { display: inline-flex; flex-wrap: wrap; gap: 4px; margin-left: 4px; }
+.ct-gchip { font-size: 11px; padding: 1px 7px; border-radius: 99px; background: var(--panel); border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }
+.ct-groups-f { display: flex; flex-direction: column; gap: 6px; }
+.ct-groups-l { font-size: 13px; color: var(--muted); }
+.ct-gpick { display: flex; flex-wrap: wrap; gap: 6px; }
+.ct-gpick .chip { border: 1px solid var(--line); }
+.ct-gpick .chip.on { border-color: transparent; }
+.ct-gpick-new { border-style: dashed !important; }
+.ct-gpick-in { width: 160px; padding: 4px 10px; border-radius: 99px; }
+.ct-gstart { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.ct-gstart .chip { border: 1px solid var(--line); }
+.ct-gicon-in { text-align: center; }
+.pj-pick-groups { margin: 8px 0 4px; }
+/* At full size a person's groups wrap under their name instead of being cut off. */
+.ct-name:has(.ct-gchips) { flex-wrap: wrap; white-space: normal; row-gap: 3px; padding: 6px 0; }
+.ct-name .ct-gchips { margin-left: 0; }
+.ct-name .contact-name { white-space: nowrap; }
+.ct-gchipsbar .ct-gmore { opacity: 1; padding: 2px 10px 2px 0; }
