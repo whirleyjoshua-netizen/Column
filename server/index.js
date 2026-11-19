@@ -45,6 +45,7 @@ import { cardsModule } from './cards.js';
 import { newsModule } from './news.js';
 import { qrSvg } from './qr.js';
 import { agentsModule, AGENTS } from './agents.js';
+import { bookingsModule } from './bookings.js';
 import { postizModule } from './postiz.js';
 import { integrationsModule } from './integrations.js';
 import { makeImage } from './images.js';
@@ -3554,7 +3555,7 @@ function autoVars(ctx, wsId) {
   return { task: ctx.task?.text, step: ctx.goal?.title, campaign: ctx.campaign?.name, contact: ctx.contact ? ctx.contact.name || ctx.contact.company || ctx.contact.email || ctx.contact.phone : '', file: ctx.file?.name,
     from: ctx.from, who: ctx.who, stage: ctx.stageLabel || (ctx.stage ? stageLabel(ctx.stage) : ''), outcome: ctx.outcome, document: ctx.document, note: ctx.note, date: ctx.date || teamDay(wsId),
     record: ctx.recordName, project: ctx.project?.name, list: ctx.list?.name, customer: ctx.customer, amount: ctx.amount != null ? '$' + Number(ctx.amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '',
-    invoice: ctx.invoice, time: ctx.time, crew: ctx.crew, phone: ctx.phone, text: ctx.text, doc: ctx.doc, pin: ctx.pin, category: ctx.category, status: ctx.status, answer: ctx.answer, item: ctx.item, was: ctx.was, now: ctx.now, quotes: ctx.quotes != null ? String(ctx.quotes) : undefined, qty: ctx.qty, unit: ctx.unitName, place: ctx.place, supplier: ctx.supplier, repo: ctx.repo, branch: ctx.branch, url: ctx.url, version: ctx.version, app: ctx.app, error: ctx.error };
+    invoice: ctx.invoice, time: ctx.time, crew: ctx.crew, phone: ctx.phone, text: ctx.text, doc: ctx.doc, pin: ctx.pin, category: ctx.category, status: ctx.status, answer: ctx.answer, item: ctx.item, was: ctx.was, now: ctx.now, quotes: ctx.quotes != null ? String(ctx.quotes) : undefined, qty: ctx.qty, unit: ctx.unitName, place: ctx.place, supplier: ctx.supplier, repo: ctx.repo, branch: ctx.branch, url: ctx.url, version: ctx.version, app: ctx.app, error: ctx.error, booking: ctx.booking };
 }
 function autoMatches(t, ctx) {
   if (t.campaignId && ctx.campaign?.id !== t.campaignId && ctx.campaign?.parentId !== t.campaignId) return false;
@@ -3970,7 +3971,7 @@ async function resumeSteps(x, ctx, stack, i, log) {
   return r;
 }
 // What a waiting run keeps: what it's about, by id, and the words as they were.
-const CTX_WORDS = ['app', 'error', 'repo', 'branch', 'url', 'version', 'answer', 'item', 'was', 'now', 'quotes', 'qty', 'unitName', 'place', 'supplier', 'who', 'whoId', 'from', 'stage', 'stageLabel', 'outcome', 'document', 'note', 'date', 'recordName', 'customer', 'amount', 'invoice', 'time', 'crew', 'phone', 'text', 'doc', 'pin', 'category', 'status', 'direction', 'private', 'ownersOnly'];
+const CTX_WORDS = ['booking', 'app', 'error', 'repo', 'branch', 'url', 'version', 'answer', 'item', 'was', 'now', 'quotes', 'qty', 'unitName', 'place', 'supplier', 'who', 'whoId', 'from', 'stage', 'stageLabel', 'outcome', 'document', 'note', 'date', 'recordName', 'customer', 'amount', 'invoice', 'time', 'crew', 'phone', 'text', 'doc', 'pin', 'category', 'status', 'direction', 'private', 'ownersOnly'];
 function ctxSnap(ctx) {
   const out = { ids: { task: ctx.task?.id, goal: ctx.goal?.id, campaign: ctx.campaign?.id, contact: ctx.contact?.id || null, contactName: ctx.contact && !ctx.contact.id ? ctx.contact.name || '' : null, file: ctx.file?.id, project: ctx.project?.id, list: ctx.list?.id, record: ctx.record?.id } };
   for (const k of CTX_WORDS) if (ctx[k] !== undefined && ctx[k] !== null) out[k] = ctx[k];
@@ -7858,6 +7859,8 @@ async function api(req, res, url) {
   // CompanyCam telling the team about a photo or project (companycam.js): signed, no sign-in.
   if (a === 'companycam' && b === 'hook' && c && m === 'POST') return CC.hook(req, res, c);
   if (a === 'github' && b === 'hook' && c && m === 'POST') return GH.hook(req, res, c);
+  // Calendly and Cal.com telling the team about a booking (bookings.js): signed, no sign-in.
+  if ((a === 'calendly' || a === 'calcom') && b === 'hook' && c && m === 'POST') return BOOK.hook(req, res, a, c);
   if (a === 'public' && b === 'sign') return signApi(req, res, c, d);
   if (a === 'public' && b === 'request') return requestApi(req, res, url, c, d);
 
@@ -8076,6 +8079,8 @@ async function api(req, res, url) {
     const out = await STOCK.route(req, res, parts, auth, ws);
     if (out !== null) return;
   }
+  if (a === 'calendly' || a === 'calcom') return BOOK.route(req, res, parts, auth, ws);
+  if (a === 'bookings' && m === 'GET' && !b) return send(res, 200, { bookings: BOOK.list(ws, auth, Object.fromEntries(url.searchParams)) });
   if (a === 'postiz') {
     const out = await POSTIZ.route(req, res, parts, auth, ws);
     if (out !== null) return;
@@ -11724,6 +11729,31 @@ async function agentEmail(ws, memberId, { name, email, subject, text }) {
 }
 // Postiz (postiz.js): social posting through the team's own Postiz account.
 const POSTIZ = postizModule({ bind: OAUTH_BIND, db, save, broadcast, cleanText, readJson, send, seal, unseal, isAdmin, rid, alarm, allowLocal: process.env.ALLOW_LOCAL_WEBHOOKS === '1', cloudUrl: process.env.POSTIZ_URL || undefined });
+// Calendly and Cal.com (bookings.js): bookings land on contacts, and on a job's visits or the host's day.
+const visitKindFor = (title) => VISIT_KINDS.find((k) => k !== 'Visit' && new RegExp(`\\b${k}\\b`, 'i').test(title)) || 'Visit';
+const contactField = (rec) => { const p = db.projects[rec.projectId]; return typeOfP(p, rec.typeId)?.fields.find((f) => f.type === 'contact') || null; };
+const BOOK = bookingsModule({ bind: OAUTH_BIND, db, save, broadcast, cleanText, readJson, send, seal, unseal, isAdmin, rid, alarm, allowLocal: process.env.ALLOW_LOCAL_WEBHOOKS === '1', publicUrl: PUBLIC_URL,
+  contactsOf, newContact, applyContact, emailKey, phoneKey, contactNews, CONTACT_MAX, automate: (...a) => automate(...a), notify: (wsId, memberId, n) => memberId && notify(wsId, memberId, n), userOf, tzOf, localNow,
+  privateRecord: (id) => privateRecord(id),
+  // The contact's job on a board the host can see (column-f9's review), else none: then it goes on their day.
+  jobFor: (ws, contactId, memberId) => Object.values(db.records).filter((r) => r.wsId === ws.id && !db.projects[r.projectId]?.archived && memberId && PJ.sees(db.projects[r.projectId], memberId) && (() => { const f = contactField(r); return f && r.values[f.id] === contactId; })())
+    .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))[0] || null,
+  recCtx: (id) => { const rec = db.records[id], p = rec && db.projects[rec.projectId], lt = p && typeOfP(p, rec.typeId); return rec && lt ? { record: rec, project: p, list: lt, recordName: String(rec.values[lt.primary] ?? '') } : null; },
+  bookVisit: (ws, rec, o) => { const by = ws.members.find((m) => m.id === o.memberId); if (!by) return null; return setVisit(ws, { member: by.name, memberId: by.id, deviceId: null }, rec, rid(), { kind: visitKindFor(o.title), date: o.date, start: o.start, end: o.end, memberIds: [by.id], note: o.note }); },
+  moveVisit: (ws, recordId, visitId, slot) => { const list = visitEntries(visitId), rec = db.records[recordId]; if (!list.length || !rec) return null; const by = ws.members.find((m) => m.id === list[0].memberId); setVisit(ws, { member: by?.name || 'Kloomie', memberId: by?.id || null, deviceId: null }, rec, visitId, slot, list); return true; },
+  cancelVisit: (ws, recordId, visitId, by) => { const list = visitEntries(visitId), rec = db.records[recordId]; if (list.length && rec) dropVisit(ws, rec, list, by); },
+  addEntry: (ws, memberId, o) => {
+    if (!ws.members.some((m) => m.id === memberId)) return null;
+    const e = applyEntry({ id: rid(), wsId: ws.id, memberId, by: 'Booking', deviceId: null, createdAt: Date.now(), text: '', date: null, start: null, end: null, done: false, color: 'blue', taskId: null }, { text: o.text, date: o.date, start: o.start, end: o.end });
+    e.booking = o.booking;
+    db.entries[e.id] = e;
+    broadcast(ws.id, { type: 'entry', entry: publicEntry(e) });
+    pushEntry(e.id, 'save');
+    return e;
+  },
+  moveEntry: (id, slot) => { const e = db.entries[id]; if (!e) return false; applyEntry(e, slot); broadcast(e.wsId, { type: 'entry', entry: publicEntry(e) }); pushEntry(e.id, 'save'); return true; },
+  dropEntry: (id) => { const e = db.entries[id]; if (!e) return; dropEntry(e); pushEntry(e, 'delete'); },
+});
 // A picture made on the person's OpenAI or Gemini key (images.js), kept in Kloomie as a file.
 async function makeImageItem(ws, memberId, { prompt, shape, name, by }) {
   const ai = aiOf(ws.id, memberId);
@@ -11963,6 +11993,11 @@ const APPS_REG = integrationsModule({ db, save, send, readJson, rid, cleanText, 
   cloud('onedrive', 'OneDrive', 'onedrive');
   APPS_REG.register({ id: 'dropbox', name: 'Dropbox', scope: 'person', auth: 'oauth', ready: true, configured: () => { const c = cloudPickers(); return !!(c.dropbox || c.dropboxList); },
     status: (ws, mid) => { const c = db.dropbox?.[`${ws.id}:${mid}`]; return c && { account: c.account || c.name || null, byId: mid, error: c.error || null, needsReconnect: !!c.needsReconnect }; } });
+  // Calendly and Cal.com (bookings.js): the team's booking page (the tile's id) and each person's own.
+  APPS_REG.register({ id: 'calendly', name: 'Calendly', scope: 'team', auth: 'oauth', configured: () => BOOK.calendlyOn(), status: BOOK.regStatus('calendly', 'team') });
+  APPS_REG.register({ id: 'calendly-me', name: 'Calendly (your own)', scope: 'person', auth: 'oauth', configured: () => BOOK.calendlyOn(), status: BOOK.regStatus('calendly', 'person') });
+  APPS_REG.register({ id: 'caldotcom', name: 'Cal.com', scope: 'team', auth: 'key', status: BOOK.regStatus('calcom', 'team') });
+  APPS_REG.register({ id: 'caldotcom-me', name: 'Cal.com (your own)', scope: 'person', auth: 'key', status: BOOK.regStatus('calcom', 'person') });
   APPS_REG.register({ id: 'notion', name: 'Notion', scope: 'person', auth: 'none', tool: 'docs', ready: true, status: () => null });
   APPS_REG.register({ id: 'google-contacts', name: 'Google Contacts', scope: 'team', auth: 'oauth', tool: 'contacts', configured: () => calProviders.google.configured(),
     status: (ws) => { const g = db.gcontacts[ws.id]; return g && { account: g.account, by: g.by, byId: g.memberId, lastSync: g.syncedAt || null, error: g.error || null, needsReconnect: !!g.needsReconnect }; } });
@@ -12190,6 +12225,8 @@ async function handleRequest(req, res) {
   if (url.pathname === '/dropbox/done' && (req.method === 'GET' || req.method === 'HEAD')) return DBX.donePage(req, res, url);
   if (url.pathname === '/oauth/dropbox/callback') return DBX.callback(req, res, url).catch((e) => { alarm('Connecting Dropbox failed', e); if (!res.headersSent) send(res, 500, 'Something went wrong connecting Dropbox.'); });
   if (url.pathname === '/postiz/done' && (req.method === 'GET' || req.method === 'HEAD')) return POSTIZ.donePage(req, res, url);
+  if (url.pathname === '/oauth/calendly/callback') return BOOK.callback(req, res, url).catch((e) => { alarm('Connecting Calendly failed', e); if (!res.headersSent) send(res, 500, 'Something went wrong'); });
+  if (url.pathname === '/calendly/done') return BOOK.donePage(req, res, url);
   if (url.pathname === '/oauth/postiz/callback') return POSTIZ.callback(req, res, url).catch((e) => { alarm('Connecting Postiz failed', e); if (!res.headersSent) send(res, 500, 'Something went wrong connecting Postiz.'); });
   if (url.pathname === '/github/done' && (req.method === 'GET' || req.method === 'HEAD')) return GH.appDonePage(req, res, url);
   if (url.pathname === '/oauth/github/callback') return GH.appCallback(req, res, url).catch((e) => { alarm('Connecting GitHub failed', e); if (!res.headersSent) send(res, 500, 'Something went wrong connecting GitHub.'); });
@@ -12388,6 +12425,7 @@ async function eraseTeam(ws) {
   await CC.forget(wsId).catch(() => {});
   await QB.disconnect(wsId).catch(() => {});
   await TW.disconnect(wsId).catch(() => {});
+  await BOOK.teamGone(wsId).catch(() => {});
   for (const sock of sockets.get(wsId) || []) sock.close(4001, 'Team deleted');
   sockets.delete(wsId);
   let n = 0;
@@ -12421,6 +12459,7 @@ async function removeMember(ws, m, { removed = false } = {}) {
   if (removed && ws.inviteCode) ws.inviteCode = newInviteCode();
   await Promise.all(Object.values(db.calendars).filter(theirs).map(async (conn) => { await revokeCalendar(conn); disconnectCalendar(conn); }));
   DBX.forget(wsId, id);
+  await BOOK.memberGone(wsId, id).catch(() => {});
   CARDS.forgetMember(wsId, id);
   for (const n of Object.values(db.notices)) if (theirs(n)) delete db.notices[n.id];
   // Google Contacts reads their Google account, so it goes with them; its people stay.
@@ -12587,6 +12626,8 @@ async function buildExport(x) {
     projectTemplates: () => !mineOnly,
     webhooks: () => !mineOnly && me.role === 'owner',
     contacts: () => !mineOnly && me.role === 'owner',
+    // Bookings (bookings.js): one's own, and the team's for an owner's team export.
+    bookings: (y) => y.memberId === me.id || (!mineOnly && me.role === 'owner' && y.scope === 'team'),
   };
   const data = {};
   for (const [coll, ok] of Object.entries(sees)) data[coll] = Object.values(db[coll] || {}).filter((y) => inWs(y) && ok(y) && made(y));
@@ -12595,6 +12636,9 @@ async function buildExport(x) {
   const sig = db.signatures[sigKey(ws.id, me.id)];
   if (sig) data.signatures = [sig];
   if (!mineOnly && me.role === 'owner' && db.pss[ws.id]) data.pss = { dne: db.pss[ws.id].dne || [] };
+  // Which booking apps were connected (map §1.1): never their tokens or keys.
+  data.connectedApps = BOOK.connsOf(ws.id).filter((c) => (c.scope === 'person' && c.memberId === me.id) || (!mineOnly && me.role === 'owner' && c.scope === 'team'))
+    .map((c) => ({ app: c.app, scope: c.scope, account: c.account?.name || c.account?.email || null, by: c.by, at: new Date(c.at).toISOString() }));
   const team = mineOnly
     ? { name: ws.name, you: { id: me.id, name: me.name, role: me.role } }
     : {

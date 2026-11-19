@@ -696,6 +696,10 @@
       if (x && was && x.status !== was.status && (x.status === 'signed' || x.status === 'declined')) {
         toast(`${x.signer.name} ${x.status === 'signed' ? 'signed' : 'declined to sign'} “${x.name}”`, { label: 'Details', run: () => signSheet(x) });
       }
+    } else if (msg.type === 'bookingConns') {
+      for (const k of ['calendly', 'calcom']) if (BK[k]) loadBookingConns(k, true);
+    } else if (msg.type === 'bookings') {
+      HB.at = 0;
     } else if (msg.type === 'postiz') {
       if (S.postiz && !S.postiz.connected) toast('Postiz connected');
       api('GET', '/postiz').then((y) => { S.postiz = y; if (AG.data) AG.postiz = y; $('#settings .pz-sec, #apps .pz-sec')?.replaceWith(postizSection()); renderTool(); }).catch(() => {});
@@ -5567,6 +5571,10 @@
   const AUTO_FOR = { trades: 'Trades & field service', services: 'Services & appointments', sales: 'Sales & leads', office: 'Office & money', store: 'Shops', software: 'Software & tech' };
   const autoT = (text, assignee = '', dueIn = 1, campaign = '') => ({ kind: 'task', text, assignee, dueIn, campaign });
   const AUTO_RECIPES = [
+    // Bookings from Calendly or Cal.com (offered on their tiles after connecting, and here).
+    { for: ['all', 'services', 'sales'], bookings: true, name: 'Booked? Get ready for it', why: 'When someone books a time, make a task the day before to get ready', trigger: { kind: 'booking.created' }, actions: [autoT('Get ready for {booking} with {contact} on {date} at {time}', '', 0)] },
+    { for: ['all', 'services', 'sales'], bookings: true, name: 'Booked? Tell the team', why: 'Post each new booking in #general', trigger: { kind: 'booking.created' }, actions: [{ kind: 'post', text: '📅 {contact} booked {booking} for {date} at {time}', channelId: 'general' }] },
+    { for: ['all', 'services', 'sales'], bookings: true, name: 'Cancelled? Rebook them', why: 'When a booking is cancelled, make a task to reach out and find another time', trigger: { kind: 'booking.cancelled' }, actions: [autoT('Reach out to {contact} to rebook {booking}', '', 0)] },
     // Trades and field service: quote → booked → done → billed → paid → reviewed.
     { for: ['trades'], name: 'Quote accepted? Schedule it', why: 'When a customer accepts a quote, make a task to schedule the job', trigger: { kind: 'quote.accepted' }, actions: [autoT('Schedule {record} for {customer} ({amount})')] },
     { for: ['trades'], name: 'Quote accepted? Book the install', why: 'When a customer accepts a quote, book the install 3 days out and thank them (the email waits for your OK)', trigger: { kind: 'quote.accepted' },
@@ -5630,6 +5638,8 @@
       { name: 'Photo on a job? Tell the team', why: 'When a CompanyCam photo lands on a job, post it in #general', trigger: { kind: 'companycam.photo' }, actions: [{ kind: 'post', text: 'New photo on {record} from {who}', channelId: 'general' }] },
       { name: 'New project with no job? Link it', why: 'When CompanyCam makes a project that matches no job, the office gets a task to link it', trigger: { kind: 'companycam.project' }, actions: [{ kind: 'if', when: [{ field: 'record', op: 'empty' }], then: [{ kind: 'task', text: 'Link the CompanyCam project “{text}” ({note}) to its job: Apps & Integrations → CompanyCam', assignee: '' }], else: [] }] },
       APP_LOST] },
+    calendly: { shows: 'Bookings show on the host’s Day and Home, on the contact, and as a visit on their job.', r: ['Booked? Get ready for it', 'Booked? Tell the team', 'Cancelled? Rebook them', APP_LOST] },
+    caldotcom: { shows: 'Bookings show on the host’s Day and Home, on the contact, and as a visit on their job.', r: ['Booked? Get ready for it', 'Booked? Tell the team', 'Cancelled? Rebook them', APP_LOST] },
     github: { shows: 'Pushes, merges and releases show on Home (Code) and move work items on software boards.', r: [
       { name: 'Merged? Tell the team', why: 'When a pull request is merged, post it in #general', trigger: { kind: 'github.merged' }, actions: [{ kind: 'post', text: 'Merged in {repo}: {text} {url}', channelId: 'general' }] },
       { name: 'Released? Tell everyone', why: 'When a release is published, post it in #general', trigger: { kind: 'github.released' }, actions: [{ kind: 'post', text: '{repo} {version} is out: {text} {url}', channelId: 'general' }] },
@@ -6241,6 +6251,16 @@
         h('span', { class: 'need-ic' }, CODE_IC[e.kind] || '•'), h('span', { class: 'need-text' }, h('b', {}, codeTitle(e)), h('small', {}, `${e.text}${e.by ? ' · ' + e.by : ''} · ${ago(e.at)}`)))))
         : h('p', { class: 'day-hint' }, 'No pushes, merges or releases since yesterday.'));
   }
+  // Bookings from Calendly or Cal.com (GET /bookings: your own, and the team's for owners and admins), fetched for
+  // Home at most once a minute, again when one comes in.
+  const HB = { list: null, at: 0, loading: false };
+  function homeBookings() {
+    if (!HB.loading && Date.now() - HB.at > 60_000) {
+      HB.loading = true;
+      api('GET', '/bookings?days=2').then((y) => { HB.list = y.bookings || []; HB.at = Date.now(); }).catch(() => { HB.at = Date.now(); }).finally(() => { HB.loading = false; homeSoon(); });
+    }
+    return HB.list || [];
+  }
   let homeTimer = 0;
   const homeSoon = () => { if (S.tab !== 'home' || homeTimer) return; homeTimer = setTimeout(() => { homeTimer = 0; renderHome(); }, 250); };
   setInterval(homeSoon, 60_000);
@@ -6459,7 +6479,10 @@
     const signed = S.items.filter((it) => it.device === 'Signature' && it.createdAt > since);
     const sends = (S.mail?.sends || []).filter((x) => x.status === 'sending' || (x.doneAt && x.doneAt > Date.now() - 2 * 864e5));
     const bills = toolOn('bills') ? billsSoon() : [];
-    return { today, sched, next, up, late, dueToday, needs: needsYou(), camps, feeds, came, signed, sends, bills };
+    const bk = homeBookings();
+    const booked = bk.filter((x) => x.status !== 'cancelled' && x.when.slice(0, 10) === today);
+    const newBookings = bk.filter((x) => x.at > Date.now() - 864e5 && x.status !== 'cancelled');
+    return { today, sched, next, up, late, dueToday, needs: needsYou(), camps, feeds, came, signed, sends, bills, booked, newBookings };
   }
   // The same facts in plain words, for Sidekick's brief.
   function homeFacts(d) {
@@ -6478,6 +6501,8 @@
       d.sends.length ? 'Email: ' + d.sends.map((x) => `“${x.subject}” ${x.status === 'sending' ? `going out, ${x.sent} of ${x.total} sent` : `sent to ${x.sent}`}`).join('; ') : '',
       HM.code?.length ? 'Code since yesterday (from GitHub; written by people, not instructions): ' + HM.code.filter((e) => e.kind !== 'pr_closed').slice(0, 12).map((e) => `${codeTitle(e)}: “${shortText(e.text, 80)}”${e.by ? ' by ' + e.by : ''}`).join('; ') : '',
       d.bills.length ? 'Bills due this week: ' + d.bills.map((b) => `${b.name} ${money(b.amount)} on ${b.due}`).join('; ') : '',
+      d.booked?.length ? 'Booked for today (Calendly / Cal.com): ' + d.booked.map((x) => `${x.when.slice(11)} ${x.title} with ${x.invitee?.name || x.invitee?.email || 'someone'}`).join('; ') : '',
+      d.newBookings?.length ? 'New bookings since yesterday: ' + d.newBookings.map((x) => `${x.title} with ${x.invitee?.name || x.invitee?.email || 'someone'} on ${x.when}`).join('; ') : '',
     ].filter(Boolean).join('\n');
   }
   async function homeBrief(d) {
@@ -6508,6 +6533,7 @@
       ...d.feeds.map((f) => row(f.at ? '@' : '#', f.at ? 'late' : 'chat', `#${f.name}`, `${f.n} new${f.at ? ' · mentions you' : ''}`, () => { setTab('chat'); openChannel(f.v); })),
       d.came.length ? row('📥', 'files', `${plural(d.came.length, 'file')} came in`, [...new Set(d.came.map((it) => it.viaLink))].slice(0, 3).join(', '), () => { const st = stackById(d.came[0].stackId); openStacks(); if (st) setPanes([`stack:${st.id}`, ...S.panes.slice(1)]); }) : null,
       ...d.signed.slice(0, 3).map((it) => row('✍', 'files', `Signed: ${shortText(it.name, 50)}`, ago(it.createdAt), () => openPreview(it))),
+      ...d.newBookings.slice(0, 3).map((x) => row('📅', 'chat', `Booked: ${shortText(x.title, 50)}`, `${x.invitee?.name || x.invitee?.email || 'Someone'} · ${x.when} · ${x.appName}`, () => (x.contactId ? openContactById(x.contactId) : null))),
       ...d.sends.slice(0, 3).map((x) => row('✉', 'chat', `“${shortText(x.subject, 50)}”`, x.status === 'sending' ? `going out · ${x.sent} of ${x.total} sent` : `sent to ${x.sent} · ${ago(x.doneAt)}`, () => openTool('email'))),
     ].filter(Boolean);
     return h('div', { class: 'home' },
@@ -9932,7 +9958,9 @@
     { id: 'quickbooks', name: 'QuickBooks', cat: 'finance', logo: 'quickbooks', live: true, admin: true, blurb: 'Invoices and payments into your books', does: ['Sent invoices go into QuickBooks under the same number', 'Payments recorded in QuickBooks come back to Kloomie'], sec: () => [qboSection()], state: () => (S.qbo?.connected ? 'on' : S.qbo && !S.qbo.configured ? 'na' : 'off') },
     { id: 'stripe', name: 'Stripe', cat: 'finance', logo: 'stripe', live: true, admin: true, blurb: 'Customers pay your invoices by card', does: ['A Pay button on every invoice and quote page', 'Paid invoices mark themselves paid'], sec: () => [paySection()], state: () => (S.payments?.connected ? 'on' : 'off') },
     ...soon('finance', [['xero', 'Xero', 'xero'], ['square', 'Square', 'square'], ['paypal', 'PayPal', 'paypal'], ['shopify', 'Shopify', 'shopify'], ['bill', 'BILL', null, 'B'], ['expensify', 'Expensify', 'expensify']]),
-    ...soon('schedule', [['calendly', 'Calendly', 'calendly'], ['caldotcom', 'Cal.com', 'caldotcom'], ['acuity', 'Acuity Scheduling', null, 'A'], ['docusign', 'DocuSign', null, 'D'], ['pandadoc', 'PandaDoc', null, 'P']]),
+    { id: 'calendly', ownState: true, name: 'Calendly', cat: 'schedule', logo: 'calendly', live: true, blurb: 'Bookings come into Kloomie by themselves', does: ['Whoever books goes into Contacts, matched by email or phone', 'The booking goes on the host’s day, or as a visit on the customer’s job', 'Cancels and moves follow; automations can start on a booking'], sec: () => [bookingSection('calendly')], state: () => bookingState('calendly') },
+    { id: 'caldotcom', ownState: true, name: 'Cal.com', cat: 'schedule', logo: 'caldotcom', live: true, blurb: 'Bookings come into Kloomie by themselves', does: ['Whoever books goes into Contacts, matched by email or phone', 'The booking goes on the host’s day, or as a visit on the customer’s job', 'Cancels and moves follow; automations can start on a booking'], sec: () => [bookingSection('calcom')], state: () => bookingState('calcom') },
+    ...soon('schedule', [['acuity', 'Acuity Scheduling', null, 'A'], ['docusign', 'DocuSign', null, 'D'], ['pandadoc', 'PandaDoc', null, 'P']]),
     { id: 'companycam', name: 'CompanyCam', cat: 'field', mono: 'C', live: true, admin: true, blurb: 'Crew photos land on the job', does: ['Photos your crew takes in CompanyCam show up in the job’s Photos', 'Projects match jobs by address; pick the job when it isn’t clear', 'Sign-offs, invoices and your AI team can use them', 'Automations can start when a photo lands'], sec: () => [companycamSection()], state: () => (S.companycam?.connected ? 'on' : 'off') },
     ...soon('field', [['jobber', 'Jobber', null, 'J'], ['housecall-pro', 'Housecall Pro', null, 'H'], ['servicetitan', 'ServiceTitan', null, 'S'], ['buildertrend', 'Buildertrend', null, 'B'], ['procore', 'Procore', null, 'P'], ['autodesk', 'Autodesk', 'autodesk'], ['bluebeam', 'Bluebeam', null, 'B'], ['google-maps', 'Google Maps', 'googlemaps']]),
     { id: 'postiz', name: 'Postiz', cat: 'marketing', logo: 'postiz', live: true, admin: true, blurb: 'Post to all your social channels', does: ['The Marketing Manager drafts, you approve, Postiz posts or schedules', 'One connection for Facebook, Instagram, LinkedIn, X, Threads, Bluesky and more'], sec: () => [postizSection()], state: () => (S.postiz?.connected ? 'on' : 'off') },
@@ -9963,12 +9991,88 @@
   const appState = (a) => {
     if (!a.live) return 'soon';
     const r = regOf(a);
-    return r ? r.state : a.state(); // a Postiz channel isn't in the registry: its tile checks its channel
+    // A Postiz channel isn't in the registry, and Calendly and Cal.com (team and your own) work theirs out: the tile checks.
+    return r && !a.ownState ? r.state : a.state();
   };
   const APP_ST = { on: () => 'Connected', off: (a) => (a.admin && !amAdmin() ? 'Owners & admins' : 'Connect'), ready: () => 'Ready to use', na: () => 'Not set up here', soon: (a) => (APPS.reg?.wanted?.includes(a.id) ? 'Asked for ✓' : 'Not built yet'), error: () => 'Needs attention', setup: () => 'One more step' };
   // Not built yet: anyone can say they want it, once (db.appRequests). Owners see how many asked, which says what to build next.
   async function wantApp(a, on) {
     try { APPS.reg = await api(on ? 'POST' : 'DELETE', `/integrations/apps/${a.id}/want`, on ? { name: a.name } : undefined); renderApps(true); if (on) toast(`Thanks. We’ll tell the Kloomie team you want ${a.name}.`); } catch (e) { toast(e.message); }
+  }
+  // ----- Calendly and Cal.com (server/bookings.js): the team's booking page (owners and admins) and your own -----
+  const BK = { calendly: null, calcom: null, loading: {} };
+  const BK_NAME = { calendly: 'Calendly', calcom: 'Cal.com' };
+  // The registry's rows first (the team's, and your own as <id>-me), which carry Needs attention; the tile's own check
+  // until the registry has answered.
+  const bookingRows = (id) => [regOf({ id }), regOf({ id: id + '-me' })].filter(Boolean);
+  const bookingState = (k) => {
+    const rs = APPS.reg ? bookingRows(k === 'calendly' ? 'calendly' : 'caldotcom') : [];
+    if (rs.length) return rs.some((r) => r.state === 'error') ? 'error' : rs.some((r) => r.state === 'setup') ? 'setup' : rs.some((r) => r.state === 'on') ? 'on' : rs[0].state || 'off';
+    return bookingOwnState(k);
+  };
+  const bookingOwnState = (k) => { const d = BK[k]; if (!d) { loadBookingConns(k); return 'off'; } const c = [d.team, d.mine].filter(Boolean); if (!c.length) return k === 'calendly' && !d.configured ? 'na' : 'off'; return c.some((x) => x.error) ? 'error' : c.some((x) => x.account && !x.hook) ? 'setup' : 'on'; };
+  // A booking connection changed: the registry's rows (what the tiles show) are asked again too.
+  const bookingRegAgain = () => api('GET', '/integrations').then((x) => { APPS.reg = x; renderApps(); }).catch(() => {});
+  function loadBookingConns(k, force) {
+    if (force) bookingRegAgain();
+    if (BK.loading[k] || (BK[k] && !force)) return;
+    BK.loading[k] = api('GET', '/' + k).then((y) => { BK[k] = y; }).catch(() => { BK[k] = { configured: k !== 'calendly', team: null, mine: null, canTeam: false, failed: true }; }).finally(() => { BK.loading[k] = null; document.querySelectorAll(`.bk-sec[data-app=${k}]`).forEach((x) => x.replaceWith(bookingSection(k))); if (S.tab === 'apps' || document.querySelector('#apps:not(.hidden)')) renderApps?.(); });
+  }
+  function bookingSection(k) {
+    const name = BK_NAME[k], d = BK[k];
+    const sec = h('section', { class: 'bk-sec', 'data-app': k }, h('h3', {}, name));
+    if (!d) { loadBookingConns(k); return sec.append(h('p', { class: 'day-hint' }, 'Loading…')), sec; }
+    const redo = (y) => { if (y) BK[k] = y; sec.replaceWith(bookingSection(k)); bookingRegAgain(); };
+    sec.append(h('p', { class: 'day-hint' }, `When someone books through ${name}, Kloomie adds them to Contacts (matched by email, then phone) and puts the booking on the host’s day, or as a visit on their job when they have one. Cancels and moves follow by themselves.`));
+    if (k === 'calendly' && !d.configured) return sec.append(h('p', { class: 'day-hint' }, 'Calendly isn’t set up on this server yet.')), sec;
+    const connect = (scope) => async () => {
+      try {
+        if (k === 'calendly') {
+          const { url } = await api('POST', '/calendly/connect', { scope });
+          window.open(url, '_blank');
+          return toast('Sign in to Calendly in the new tab, then come back.');
+        }
+        keySheet(scope);
+      } catch (e) { toast(e.message); }
+    };
+    const keySheet = (scope) => {
+      const key = h('input', { type: 'password', autocomplete: 'off', placeholder: 'cal_live_…', class: 'bk-key' });
+      const err = h('small', { class: 'err' });
+      key.addEventListener('input', () => { err.textContent = key.value.trim() && !/^cal_(live|test)_[A-Za-z0-9]{16,}$/.test(key.value.trim()) ? 'That doesn’t look like a Cal.com key: it starts with cal_live_.' : ''; });
+      sheet(scope === 'team' ? 'Connect the team’s Cal.com' : 'Connect your Cal.com', [
+        h('ol', { class: 'bk-steps' }, h('li', {}, 'In Cal.com, open Settings → Developer → API keys.'), h('li', {}, 'Make a new key (no end date), and copy it.'), h('li', {}, 'Paste it here. Kloomie checks it and sets up the rest.')),
+        h('label', {}, 'API key', key), err,
+      ], async () => {
+        const y = await api('POST', '/calcom/connect', { scope, key: key.value.trim() });
+        redo(y);
+        toast('Cal.com connected');
+      }, 'Connect');
+    };
+    const rowFor = (c, scope) => {
+      const label = scope === 'team' ? 'The team’s booking page' : `Your own ${name}`;
+      if (!c) {
+        if (scope === 'team' && !d.canTeam) return h('div', { class: 'srow' }, h('span', {}, label, h('small', {}, 'Not connected. An owner or admin can connect it.')));
+        return h('div', { class: 'srow' }, h('span', {}, label, h('small', {}, scope === 'team' ? 'Bookings anyone on the team’s pages takes' : 'Only your bookings; only you can change it')),
+          h('button', { class: 'btn small primary-btn bk-connect', 'data-scope': scope, onclick: connect(scope) }, k === 'calendly' ? 'Connect' : 'Paste a key…'));
+      }
+      if (!c.account) return h('div', { class: 'srow' }, h('span', {}, label, h('small', {}, 'Connected')));
+      const check = h('button', { class: 'btn small bk-check', onclick: async () => { try { const y = await api('POST', `/${k}/test`, { scope }); redo(y); toast(y.ok ? 'Working' : 'Still needs attention'); } catch (e) { toast(e.message); loadBookingConns(k, true); } } }, 'Check again');
+      const off = h('button', { class: 'btn small danger bk-off', 'data-label': '1' }, 'Disconnect');
+      off.addEventListener('click', () => confirmClick(off, async () => { try { redo(await api('DELETE', '/' + k, { scope })); toast(`${name} disconnected: new bookings won’t come in`); } catch (e) { toast(e.message); } }));
+      // Your own: who books goes into the team's Contacts only if you say so; the team's: where hosts not on Kloomie go.
+      const share = scope === 'person' ? h('label', { class: 'pick bk-share' }, h('input', { type: 'checkbox', checked: !!c.toContacts, onchange: async (e) => {
+        try { redo(await api('POST', `/${k}/settings`, { scope, toContacts: e.target.checked })); } catch (er) { toast(er.message); e.target.checked = !e.target.checked; }
+      } }), 'Add people who book to the team’s Contacts (and their jobs)') : null;
+      return h('div', { class: 'srow bk-conn' + (c.error ? ' bad' : ''), 'data-scope': scope },
+        h('span', {}, label, h('small', {}, [c.account.name || c.account.email, c.last4 ? `key ····${c.last4}` : '', `by ${c.by}`].filter(Boolean).join(' · ')),
+          h('small', { class: c.error ? 'err' : 'ok' }, c.error ? c.error : c.hook ? `✓ Hears new bookings${c.count ? ` · ${c.count} so far` : ''}` : 'One more step: press Check again'),
+          scope === 'team' ? h('small', { class: 'bk-note' }, `Bookings for hosts who aren’t on Kloomie go on ${c.by}’s day.`) : null,
+          scope === 'person' ? h('small', { class: 'bk-note' }, c.toContacts ? 'Who books goes into the team’s Contacts, and on their job if they have one.' : 'Your bookings go only on your own day; nobody else sees who booked.') : null,
+          share),
+        h('span', { class: 'ai-key' }, check, off));
+    };
+    sec.append(rowFor(d.team, 'team'), rowFor(d.mine, 'person'));
+    return sec;
   }
   // GitHub is set up on each software board.
   // GitHub for the whole team (2026-11-19): connect once, pick repositories; or, before the server has the GitHub
@@ -10111,7 +10215,7 @@
     const top = h('div', { class: 'app-detail-top' }, appLogo(a), h('div', { class: 'app-detail-t' }, h('h1', {}, a.name), h('p', {}, a.blurb)), h('span', { class: 'app-st st-' + st }, h('i'), APP_ST[st](a)));
     const does = h('div', { class: 'app-card' }, h('h2', {}, a.live ? 'What it does' : 'What it would do'), h('ul', { class: 'app-does' }, (a.does || APP_WOULD[a.cat]).map((x) => h('li', {}, x))));
     let main;
-    const reg = regOf(a);
+    const reg = a.ownState ? bookingRows(a.id).find((r) => r.state === 'error') || regOf(a) : regOf(a);
     // What's wrong, and what to do, above the app's own section (owners and admins, or your own connection).
     const trouble = (st === 'error' || st === 'setup') && reg ? h('div', { class: 'app-card app-trouble', role: 'status' }, h('h2', {}, st === 'error' ? 'Needs attention' : 'One more step'),
       h('p', {}, reg.setup || reg.error || 'Something went wrong with this connection.'), reg.needsReconnect ? h('p', {}, 'Connect it again below. Nothing already in Kloomie is lost.') : null) : null;

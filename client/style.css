@@ -3785,3 +3785,8 @@ body:not(.wide) .tool-grid { grid-template-columns: 1fr; }
 .cc-name small { color: var(--muted); font-size: 12px; }
 .cc-row select { max-width: 260px; }
 .cc-steps { margin: 4px 0 8px 18px; font-size: 13px; }
+/* Calendly and Cal.com tiles (bookings.js). */
+.bk-sec .srow.bad small.err { color: var(--danger); }
+.bk-sec .srow small.ok { color: var(--ok, #15803d); }
+.bk-steps { margin: 0 0 10px 18px; padding: 0; display: grid; gap: 4px; }
+.bk-sec .bk-note { display: block; color: var(--muted); } .bk-sec .bk-share { margin-top: 4px; font-size: 13px; }
