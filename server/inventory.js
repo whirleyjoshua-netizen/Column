@@ -24,7 +24,7 @@ const UNIT_STATUS = ['available', 'out', 'repair', 'lost', 'retired'];
 const UNITS_PER_ITEM = 2000, REVEALS_AN_HOUR = 30;
 const QTY_MAX = 1e7;
 
-export function inventoryModule({ db, save, broadcast, rid, cleanText, readJson, send, isAdmin, recordAt = () => null, onRequest = () => {}, feedOk = () => false, memberOk = () => false, taskOk = () => false, onMove = () => {}, onUnit = () => {}, seal = (x) => x, unseal = (x) => x, newTag = () => null, labelUrl = (t) => '/a/' + t, labelQr = () => null, projectFor = () => null }) {
+export function inventoryModule({ db, save, broadcast, rid, cleanText, readJson, send, isAdmin, recordAt = () => null, onRequest = () => {}, onPrice = () => {}, feedOk = () => false, memberOk = () => false, taskOk = () => false, onMove = () => {}, onUnit = () => {}, seal = (x) => x, unseal = (x) => x, newTag = () => null, labelUrl = (t) => '/a/' + t, labelQr = () => null, projectFor = () => null }) {
   db.invItems ||= {};
   db.invPlaces ||= {};
   db.invMoves ||= {};
@@ -457,13 +457,14 @@ export function inventoryModule({ db, save, broadcast, rid, cleanText, readJson,
           if (!p && placesOf(ws.id).length < PLACES_MAX) { p = { id: rid(), wsId: ws.id, name: nm, kind: /truck|van/i.test(nm) ? 'truck' : 'warehouse', address: '', memberId: null, createdAt: Date.now(), by: auth.member }; db.invPlaces[p.id] = p; }
           return p || firstPlace(ws, auth.member);
         };
+        const priced = []; // items whose price this file changed, for price.changed (one event each, the first 50)
         for (const r of rows) {
           if (!r || typeof r !== 'object' || !cleanText(r.name, 120)) { skipped++; continue; }
           const sku = cleanText(r.sku, 60).toLowerCase();
           let x = (sku && itemsOf(ws.id).find((y) => y.sku && y.sku.toLowerCase() === sku)) || itemsOf(ws.id).find((y) => y.name.toLowerCase() === cleanText(r.name, 120).toLowerCase());
           const fields = Object.fromEntries(['name', 'sku', 'category', 'unit', 'supplier', 'notes', 'cost', 'price', 'reorderAt', 'reorderQty'].filter((k) => r[k] !== undefined && String(r[k]).trim() !== '').map((k) => [k, r[k]]));
           try {
-            if (x) { applyItem(x, fields); x.updatedAt = Date.now(); updated++; }
+            if (x) { const was = x.price ?? null; applyItem(x, fields); x.updatedAt = Date.now(); updated++; if ((x.price ?? null) !== was) priced.push({ id: 'inv:' + x.id, name: x.name, was, now: x.price ?? null }); }
             else {
               if (itemsOf(ws.id).length >= ITEMS_MAX) { skipped++; continue; }
               x = applyItem({ id: rid(), wsId: ws.id, name: '', sku: '', category: '', unit: 'each', supplier: '', notes: '', cost: null, price: null, reorderAt: null, reorderQty: null, stock: {}, track: 'stock', createdAt: Date.now(), updatedAt: Date.now(), by: auth.member }, fields);
@@ -478,6 +479,7 @@ export function inventoryModule({ db, save, broadcast, rid, cleanText, readJson,
           }
         }
         save(); news(ws.id);
+        for (const c of priced.slice(0, 50)) onPrice(ws, auth, c);
         return send(res, 200, { added, updated, counted, skipped });
       }
       if (b === 'job' && c && m === 'GET') {
@@ -561,10 +563,13 @@ export function inventoryModule({ db, save, broadcast, rid, cleanText, readJson,
         if (!admin) throw err('Only owners and admins change items.', 403);
         if (m === 'PATCH') {
           const body = await readJson(req, 20_000);
+          const was = x.price ?? null;
           applyItem(x, body);
           if (x.sku && itemsOf(ws.id).some((y) => y.id !== x.id && y.sku && y.sku.toLowerCase() === x.sku.toLowerCase())) throw err(`Another item already has the SKU ${x.sku}.`);
           x.updatedAt = Date.now();
           save(); news(ws.id);
+          // Its price changed (not its cost): automations hear it (price.changed), once per change.
+          if ((x.price ?? null) !== was) onPrice(ws, auth, { id: 'inv:' + x.id, name: x.name, was, now: x.price ?? null });
           return send(res, 200, publicItem(x, admin));
         }
         // Deleting: an item with history is archived (its history stays); one never moved goes.

@@ -343,7 +343,7 @@ export const TEMPLATES = {
   },
 };
 
-export function projectsModule({ onEvent = null, canSeeItem = () => true, seal = (x) => x, unseal = (x) => x, db, save, broadcast, rid, hold = null, cleanText, isDay, readJson, send, badRequest, isOwnerId, escHtml, brandOf, logoUrl, teamDay, offline, makeTask, onRecords, onRecordGone, onRecordNews, stageGate = null, allowLocalHooks = false, qrSvg = null, publicUrl = '' }) {
+export function projectsModule({ onEvent = null, onPrice = () => {}, canSeeItem = () => true, seal = (x) => x, unseal = (x) => x, db, save, broadcast, rid, hold = null, cleanText, isDay, readJson, send, badRequest, isOwnerId, escHtml, brandOf, logoUrl, teamDay, offline, makeTask, onRecords, onRecordGone, onRecordNews, stageGate = null, allowLocalHooks = false, qrSvg = null, publicUrl = '' }) {
   const bad = (msg) => badRequest(msg);
   db.projects ||= {};
   db.records ||= {};
@@ -583,6 +583,11 @@ export function projectsModule({ onEvent = null, canSeeItem = () => true, seal =
   // Fields that changed between two sets of values, each logged.
   // more: what goes on each line too ({ auto: true }: an automation's).
   function logChanges(ws, p, t, rec, before, by, more = {}) {
+    // A price list item's price changed (Finance step 3): automations hear it (price.changed). Every edit comes here.
+    if (t.key === 'price_list') {
+      const pf = fieldOf(t, 'price');
+      if (pf && (before[pf.id] ?? null) !== (rec.values[pf.id] ?? null)) onPrice(ws, { member: by }, { id: rec.id, name: String(rec.values[t.primary] ?? '') || 'An item', was: before[pf.id] ?? null, now: rec.values[pf.id] ?? null });
+    }
     for (const f of t.fields) {
       if (f.type === 'autonumber') continue;
       const a = JSON.stringify(before[f.id] ?? null), b = JSON.stringify(rec.values[f.id] ?? null);

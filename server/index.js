@@ -3529,7 +3529,7 @@ function autoVars(ctx, wsId) {
   return { task: ctx.task?.text, step: ctx.goal?.title, campaign: ctx.campaign?.name, contact: ctx.contact ? ctx.contact.name || ctx.contact.company || ctx.contact.email || ctx.contact.phone : '', file: ctx.file?.name,
     from: ctx.from, who: ctx.who, stage: ctx.stageLabel || (ctx.stage ? stageLabel(ctx.stage) : ''), outcome: ctx.outcome, document: ctx.document, note: ctx.note, date: ctx.date || teamDay(wsId),
     record: ctx.recordName, project: ctx.project?.name, list: ctx.list?.name, customer: ctx.customer, amount: ctx.amount != null ? '$' + Number(ctx.amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '',
-    invoice: ctx.invoice, time: ctx.time, crew: ctx.crew, phone: ctx.phone, text: ctx.text, doc: ctx.doc, pin: ctx.pin, category: ctx.category, status: ctx.status, answer: ctx.answer, item: ctx.item, qty: ctx.qty, unit: ctx.unitName, place: ctx.place, supplier: ctx.supplier };
+    invoice: ctx.invoice, time: ctx.time, crew: ctx.crew, phone: ctx.phone, text: ctx.text, doc: ctx.doc, pin: ctx.pin, category: ctx.category, status: ctx.status, answer: ctx.answer, item: ctx.item, was: ctx.was, now: ctx.now, quotes: ctx.quotes != null ? String(ctx.quotes) : undefined, qty: ctx.qty, unit: ctx.unitName, place: ctx.place, supplier: ctx.supplier };
 }
 function autoMatches(t, ctx) {
   if (t.campaignId && ctx.campaign?.id !== t.campaignId && ctx.campaign?.parentId !== t.campaignId) return false;
@@ -3945,7 +3945,7 @@ async function resumeSteps(x, ctx, stack, i, log) {
   return r;
 }
 // What a waiting run keeps: what it's about, by id, and the words as they were.
-const CTX_WORDS = ['answer', 'item', 'qty', 'unitName', 'place', 'supplier', 'who', 'whoId', 'from', 'stage', 'stageLabel', 'outcome', 'document', 'note', 'date', 'recordName', 'customer', 'amount', 'invoice', 'time', 'crew', 'phone', 'text', 'doc', 'pin', 'category', 'status', 'direction', 'private', 'ownersOnly'];
+const CTX_WORDS = ['answer', 'item', 'was', 'now', 'quotes', 'qty', 'unitName', 'place', 'supplier', 'who', 'whoId', 'from', 'stage', 'stageLabel', 'outcome', 'document', 'note', 'date', 'recordName', 'customer', 'amount', 'invoice', 'time', 'crew', 'phone', 'text', 'doc', 'pin', 'category', 'status', 'direction', 'private', 'ownersOnly'];
 function ctxSnap(ctx) {
   const out = { ids: { task: ctx.task?.id, goal: ctx.goal?.id, campaign: ctx.campaign?.id, contact: ctx.contact?.id || null, contactName: ctx.contact && !ctx.contact.id ? ctx.contact.name || '' : null, file: ctx.file?.id, project: ctx.project?.id, list: ctx.list?.id, record: ctx.record?.id } };
   for (const k of CTX_WORDS) if (ctx[k] !== undefined && ctx[k] !== null) out[k] = ctx[k];
@@ -4015,7 +4015,7 @@ function sampleCtx(t, auth) {
   return { recordName: 'Sample job', record: null, project: t.projectId ? db.projects[t.projectId] : null, contact: { name: 'Sample customer' }, customer: 'Sample customer', amount: t.over != null ? t.over + 50 : 250,
     stageLabel: /^(contact|attempt)\./.test(t.kind) ? stageLabel(t.stage || 'customer') : t.to || 'Done', stage: t.stage || 'customer', from: t.kind === 'record.stage' ? 'Scheduled' : 'Sample sender', who: auth.member, whoId: auth.memberId, date: teamDay(auth.ws.id), task: { text: 'Sample task' },
     campaign: t.campaignId ? db.campaigns[t.campaignId] : { name: 'Sample campaign' }, note: 'Sample note', text: 'Sample text message', file: { name: 'sample.pdf' }, document: 'Sample agreement.pdf',
-    doc: 'Sample doc', pin: 'Sample pin', invoice: 'INV-0000', category: 'Jobs', phone: '+1 702 555 0100', crew: auth.member, time: '9:00', outcome: t.outcome || 'Interested', status: t.statuses?.[0] || 'onTrack', direction: t.direction || 'in' };
+    doc: 'Sample doc', pin: 'Sample pin', invoice: 'INV-0000', category: 'Jobs', phone: '+1 702 555 0100', crew: auth.member, time: '9:00', outcome: t.outcome || 'Interested', status: t.statuses?.[0] || 'onTrack', direction: t.direction || 'in', ...(t.kind === 'price.changed' ? { item: 'Sample item', was: '$100.00', now: '$110.00', quotes: 2 } : {}) };
 }
 function testCtx(x, auth) {
   for (const e of lastEvents.get(x.wsId + ':' + x.trigger.kind) || []) {
@@ -5631,6 +5631,18 @@ function priceNow(from, wsId) {
   const p = r && r.wsId === wsId && db.projects[r.projectId];
   const x = p && PJ.priceList(p).find((y) => y.id === r.id);
   return x ? { price: x.price ?? null, cost: x.cost ?? null } : null;
+}
+// A price on the team's price list changed (an Inventory item's, or a price list item's): automations hear it, with how
+// many waiting quotes use it (they're flagged in Finance → Quotes).
+function priceChanged(ws, who, x) {
+  let quotes = 0;
+  for (const rec of Object.values(db.records)) {
+    if (rec.wsId !== ws.id || !rec.share || rec.answer) continue;
+    const q = PJ.quoteOf(rec);
+    if (q?.status === 'pending' && (q.lines?.rows || []).some((r) => r.from === x.id)) quotes++;
+  }
+  const d = (c) => (c == null ? '' : '$' + (c / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
+  automate(ws.id, 'price.changed', { item: x.name, was: d(x.was), now: d(x.now), quotes, who: who?.member || '', whoId: who?.memberId || null });
 }
 const pricesChanged = (rows, wsId) => (rows || []).flatMap((row) => { const now = row.from && priceNow(row.from, wsId); return now && now.price != null && now.price !== row.price ? [{ id: row.id, desc: row.desc, was: row.price, now: now.price }] : []; });
 // A job's money from Finance (step 1): its share of each business entry put on it (payments on its invoices are
@@ -11469,7 +11481,7 @@ async function replayAs(ws, memberId, approvalId, { method, path: p, body }, as 
   return { status, body: parsed };
 }
 const hold = (...a) => RULES.hold(...a);
-const PJ = projectsModule({ onEvent: (...a) => recordEvent(...a), canSeeItem: (auth, it) => canSee(auth, 'item', it), seal, unseal, db, save, broadcast, rid, hold, cleanText, isDay, readJson, send, badRequest, isOwnerId, escHtml, brandOf, logoUrl, teamDay, offline, allowLocalHooks: process.env.ALLOW_LOCAL_WEBHOOKS === '1', qrSvg, publicUrl: PUBLIC_URL,
+const PJ = projectsModule({ onEvent: (...a) => recordEvent(...a), onPrice: (...a) => priceChanged(...a), canSeeItem: (auth, it) => canSee(auth, 'item', it), seal, unseal, db, save, broadcast, rid, hold, cleanText, isDay, readJson, send, badRequest, isOwnerId, escHtml, brandOf, logoUrl, teamDay, offline, allowLocalHooks: process.env.ALLOW_LOCAL_WEBHOOKS === '1', qrSvg, publicUrl: PUBLIC_URL,
   onRecordGone: (rec) => { dropVisits(rec); INV.dropFor(rec); campsOffJob(rec); }, stageGate: (...a) => stageGate(...a),
   onRecordNews: (rec) => { jobChanged(rec); if (rec.share || rec.qbo?.estId) QB.soon(rec.wsId); },
   // A follow-up from a record's timeline: a task for whoever logged it, about the record.
@@ -11776,7 +11788,7 @@ function invRequestNews(ws, auth, r, ev) {
   const said = { approved: `${auth.member} approved your request`, declined: `${auth.member} declined your request`, handed: r.to ? `Your stock is on ${r.to}` : `${auth.member} handed out your stock`, cancelled: `${auth.member} cancelled your request` }[ev];
   if (said && r.byId !== auth.memberId) notify(ws.id, r.byId, { title: said, text: `Request ${r.number}: ${what}${r.decision ? ' · “' + r.decision + '”' : ''}${ev === 'handed' && r.from ? ` · from ${r.from}` : ''}`, go, kind: 'invreq' });
 }
-const STOCK = inventoryModule({ db, save, broadcast, rid, cleanText, readJson, send, isAdmin, onRequest: invRequestNews, feedOk: (ws, id) => ws.channels.some((c) => c.id === id), memberOk: (ws, id) => ws.members.some((m) => m.id === id),
+const STOCK = inventoryModule({ db, save, broadcast, rid, cleanText, readJson, send, isAdmin, onRequest: invRequestNews, onPrice: (...a) => priceChanged(...a), feedOk: (ws, id) => ws.channels.some((c) => c.id === id), memberOk: (ws, id) => ws.members.some((m) => m.id === id),
   onMove: (ws, m, x, { wasLow, low }) => {
     if (m.jobId) stepsSoon(ws.id);
     if (!wasLow && low) automate(ws.id, 'stock.low', invCtx(ws, x, m, { qty: STOCK.total(x) }));
