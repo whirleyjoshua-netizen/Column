@@ -42,6 +42,11 @@ try {
   ok((await mo('POST', '/inventory/places', { name: 'Truck 2' })).status === 403, 'members can’t add places');
   const truck = (await rico('POST', '/inventory/places', { name: 'Truck 2', kind: 'truck' })).body;
   const wire = (await rico('POST', '/inventory/items', { name: 'Thermostat wire', unit: 'ft', cost: '0.40', reorderAt: 50 })).body;
+  // A refused change leaves the item as it was (nothing half-applied waits for the next save).
+  ok((await rico('PATCH', '/inventory/items/' + wire.id, { name: 'Renamed', sku: 'FLT-1625' })).status === 400 && (await rico('PATCH', '/inventory/items/' + wire.id, { name: 'Renamed again', price: 'lots' })).status === 400, 'a taken SKU or a bad price is refused');
+  inv = (await rico('GET', '/inventory')).body;
+  const w0 = inv.items.find((x) => x.id === wire.id);
+  ok(w0.name === 'Thermostat wire' && !w0.sku && w0.price == null, `and the item is unchanged (${w0.name}, ${w0.sku || 'no SKU'})`);
 
   // What a member sees: no costs.
   inv = (await mo('GET', '/inventory')).body;

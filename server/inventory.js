@@ -168,7 +168,9 @@ export function inventoryModule({ db, save, broadcast, rid, cleanText, readJson,
     return o;
   }
 
-  function applyItem(x, b) {
+  // Changes are made on a copy and kept only if all of them are good (a refused change leaves the item as it was).
+  function applyItem(item, b) {
+    const x = { ...item };
     if (b.name !== undefined) x.name = cleanText(b.name, 120) || x.name || '';
     if (!x.name) throw err('Name the item.');
     if (b.sku !== undefined) x.sku = cleanText(b.sku, 60);
@@ -178,7 +180,8 @@ export function inventoryModule({ db, save, broadcast, rid, cleanText, readJson,
     if (b.notes !== undefined) x.notes = String(b.notes ?? '').replace(/\r\n?/g, '\n').trim().slice(0, 2000);
     for (const k of ['cost', 'price']) if (b[k] !== undefined) { const c = cents(b[k]); if (c === undefined) throw err(`The ${k} is a number of dollars, like 12.50.`); x[k] = c; }
     for (const k of ['reorderAt', 'reorderQty']) if (b[k] !== undefined) { if (b[k] === '' || b[k] == null) x[k] = null; else { const n = qty(b[k]); if (!(n >= 0 && n <= QTY_MAX)) throw err('Reorder numbers are 0 or more.'); x[k] = n; } }
-    return x;
+    if (x.sku && itemsOf(x.wsId).some((y) => y.id !== x.id && y.sku && y.sku.toLowerCase() === x.sku.toLowerCase())) throw err(`Another item already has the SKU ${x.sku}.`);
+    return Object.assign(item, x);
   }
   function applyPlace(p, b, ws) {
     if (b.name !== undefined) p.name = cleanText(b.name, 80) || p.name || '';
@@ -539,7 +542,6 @@ export function inventoryModule({ db, save, broadcast, rid, cleanText, readJson,
           if (itemsOf(ws.id).length >= ITEMS_MAX) throw err(`A team can keep ${ITEMS_MAX.toLocaleString()} items.`);
           const body = await readJson(req, 20_000);
           const x = applyItem({ id: rid(), wsId: ws.id, name: '', sku: '', category: '', unit: 'each', supplier: '', notes: '', cost: null, price: null, reorderAt: null, reorderQty: null, stock: {}, track: body.track === 'units' ? 'units' : 'stock', createdAt: Date.now(), updatedAt: Date.now(), by: auth.member }, body);
-          if (x.sku && itemsOf(ws.id).some((y) => y.sku && y.sku.toLowerCase() === x.sku.toLowerCase())) throw err(`Another item already has the SKU ${x.sku}.`);
           db.invItems[x.id] = x;
           // Starting stock, if it came with some: received into a place.
           const start = qty(body.onHand);
@@ -565,7 +567,6 @@ export function inventoryModule({ db, save, broadcast, rid, cleanText, readJson,
           const body = await readJson(req, 20_000);
           const was = x.price ?? null;
           applyItem(x, body);
-          if (x.sku && itemsOf(ws.id).some((y) => y.id !== x.id && y.sku && y.sku.toLowerCase() === x.sku.toLowerCase())) throw err(`Another item already has the SKU ${x.sku}.`);
           x.updatedAt = Date.now();
           save(); news(ws.id);
           // Its price changed (not its cost): automations hear it (price.changed), once per change.
