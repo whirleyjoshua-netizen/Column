@@ -5,6 +5,15 @@ import fs from 'node:fs';
 import http from 'node:http';
 import { spawn } from 'node:child_process';
 import WebSocket from '../server/node_modules/ws/index.js';
+// Apps & Integrations has the connections (out of Settings since 2026-11-20).
+const appsOpen = async (A, id) => {
+  await A.ev(`document.querySelector('#settings').classList.add('hidden'); document.querySelector('#tabs [data-tab=apps]').click(); true`);
+  await A.until(`!!document.querySelector('#apps .apps-tabs')`);
+  await A.ev(`[...document.querySelectorAll('#apps .apps-tabs button')].find((b) => b.textContent === ${JSON.stringify(id === 'dev' ? 'Developers' : id === 'tools' ? 'Tools' : 'Apps')}).click(); true`);
+  if (id === 'dev' || id === 'tools') return;
+  await A.until(`!!document.querySelector('#apps .app-tile[data-app="${id}"]')`);
+  await A.ev(`document.querySelector('#apps .app-tile[data-app="${id}"]').click(); true`);
+};
 const S = (await import('node:path')).resolve(process.argv[2]);
 const DIR = S + '/dk/qboui';
 fs.rmSync(DIR, { recursive: true, force: true });
@@ -49,30 +58,30 @@ try {
   ok(await A.until(`!document.querySelector('#app').classList.contains('hidden')`), 'Jo signed in');
   const tok = await A.ev(`JSON.parse(localStorage.getItem('column.token'))`);
   const api = async (m, p, body) => (await fetch(APP + 'api' + p, { method: m, headers: { 'content-type': 'application/json', authorization: 'Bearer ' + tok }, body: body ? JSON.stringify(body) : undefined })).json();
-  const openConn = async () => {
-    await A.ev(`document.querySelector('#settingsBtn').click()`);
-    await A.until(`!!document.querySelector('#settings [role=tab]')`);
-    await A.ev(`[...document.querySelectorAll('#settings [role=tab]')].find((x) => /Connections/.test(x.textContent)).click()`);
-  };
+  const openConn = () => appsOpen(A, 'quickbooks');
   await openConn();
-  ok(await A.until(`!!document.querySelector('#settings .qbo-sec h3') && /Connect QuickBooks/.test(document.querySelector('#settings .qbo-sec').textContent)`), 'Connections shows QuickBooks with a Connect button');
-  ok(!(await A.ev(`document.querySelector('#settings .qbo-sec').textContent.includes('null')`)), 'no stray “null” in it');
+  ok(await A.until(`!!document.querySelector('#apps .qbo-sec h3') && /Connect QuickBooks/.test(document.querySelector('#apps .qbo-sec').textContent)`), 'Connections shows QuickBooks with a Connect button');
+  ok(!(await A.ev(`document.querySelector('#apps .qbo-sec').textContent.includes('null')`)), 'no stray “null” in it');
 
   // Connected (through the stand-in Intuit), the section says so live.
   const { url } = await api('POST', '/quickbooks/connect');
   const st = new URL(url).searchParams.get('state');
   await fetch(`${APP}oauth/quickbooks/callback?code=x&state=${st}&realmId=R1`);
-  ok(await A.until(`/Connected to Blinds & Co/.test(document.querySelector('#settings .qbo-sec')?.textContent || '')`), 'the section shows it’s connected to Blinds & Co, without reloading');
-  ok(await A.ev(`[...document.querySelectorAll('#settings .qbo-sec button')].map((b) => b.textContent).join('|')`) === 'Sync now|Copy earlier ones too|Disconnect', 'with Sync now, Copy earlier ones too and Disconnect');
-  ok(!(await A.ev(`document.querySelector('#settings .qbo-sec').textContent.includes('null')`)), 'still no stray “null”');
+  ok(await A.until(`/Connected to Blinds & Co/.test(document.querySelector('#apps .qbo-sec')?.textContent || '')`), 'the section shows it’s connected to Blinds & Co, without reloading');
+  ok(await A.ev(`[...document.querySelectorAll('#apps .qbo-sec button')].map((b) => b.textContent).join('|')`) === 'Sync now|Copy earlier ones too|Disconnect', 'with Sync now, Copy earlier ones too and Disconnect');
+  ok(!(await A.ev(`document.querySelector('#apps .qbo-sec').textContent.includes('null')`)), 'still no stray “null”');
 
   // The new-webhook sheet.
-  await A.ev(`[...document.querySelectorAll('#settings .int-sec button')].find((b) => /New webhook/.test(b.textContent)).click()`);
+  await appsOpen(A, 'dev');
+  await A.until(`[...document.querySelectorAll('#apps .int-sec button')].some((b) => /New webhook/.test(b.textContent))`);
+  await A.ev(`[...document.querySelectorAll('#apps .int-sec button')].find((b) => /New webhook/.test(b.textContent)).click()`);
   ok(await A.until(`document.querySelectorAll('.int-events > div').length === 7`), 'a new webhook offers seven groups of events');
   ok(await A.ev(`[...document.querySelectorAll('.int-events b')].map((b) => b.textContent).join('|')`) === 'Contacts|Tasks|Visits|Invoices|Files & signatures|Text messages|Board records', 'Contacts, Tasks, Visits, Invoices, Files & signatures, Text messages, Projects records');
   await A.ev(`document.querySelector('#sheet [aria-label=Close]')?.click()`);
-  ok(await A.until(`/Connect Twilio/.test(document.querySelector('#settings .tw-sec')?.textContent || '')`), 'Connections has Text messages (Twilio) with Connect Twilio');
-  ok(await A.until(`/Leads from websites/.test(document.querySelector('#settings .lead-sec')?.textContent || '') && !!document.querySelector('#settings .lead-sec button')`), 'and Leads from websites, funnels & forms, with Turn on');
+  await appsOpen(A, 'twilio');
+  ok(await A.until(`/Connect Twilio/.test(document.querySelector('#apps .tw-sec')?.textContent || '')`), 'Connections has Text messages (Twilio) with Connect Twilio');
+  await appsOpen(A, 'dev');
+  ok(await A.until(`/Leads from websites/.test(document.querySelector('#apps .lead-sec')?.textContent || '') && !!document.querySelector('#apps .lead-sec button')`), 'and Leads from websites, funnels & forms, with Turn on');
   ok(!A.errors.length, 'no errors on the page' + (A.errors.length ? ': ' + A.errors[0] : ''));
   A.close();
 } catch (e) {

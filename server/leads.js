@@ -260,7 +260,7 @@ ${f('name', 'Your name', 'text', 'required autocomplete="name"')}${f('phone', 'P
     if (req.method === 'OPTIONS') { res.writeHead(204, cors); return res.end(); }
     if (req.method !== 'POST') return send(res, 405, { error: 'POST a lead here.' }, cors);
     const ws = byKey(url.pathname.split('/')[3]);
-    if (!ws) return send(res, 404, { error: 'This lead address isn’t taking leads. Check it in Kloomie → Settings → Connections.' }, cors);
+    if (!ws) return send(res, 404, { error: 'This lead address isn’t taking leads. Check it in Kloomie → Apps & Integrations.' }, cors);
     if (!allowed(ws, clientIp(req))) return send(res, 429, { error: 'Too many leads from here. Wait a while and try again.' }, cors);
     const type = String(req.headers['content-type'] || '');
     let raw;

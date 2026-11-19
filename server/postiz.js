@@ -1,5 +1,5 @@
 // Postiz: social posting through the team's own Postiz account (postiz.com, or one they host themselves).
-// An owner or admin pastes a Postiz API key in Settings → Connections; Kloomie then sees the channels they've
+// An owner or admin pastes a Postiz API key in Apps & Integrations; Kloomie then sees the channels they've
 // linked in Postiz (Facebook, Instagram, LinkedIn, Google Business Profile, X, Threads, Bluesky, Mastodon…)
 // and can post to them: the Marketing Manager drafts, the person approves, Postiz publishes or schedules.
 // The key is kept encrypted and never sent back to the app. Kloomie pays nothing; the team pays Postiz.
@@ -124,7 +124,7 @@ export function postizModule({ bind, db, save, broadcast, cleanText, readJson, s
   // One post to one or more channels: now, at a time, or as a draft in Postiz. Returns Postiz's post ids.
   async function post(ws, { channels, text, image, when, link, cta }) {
     const c = conn(ws);
-    if (!c) throw Object.assign(new Error('Connect Postiz in Settings → Connections first.'), { status: 400 });
+    if (!c) throw Object.assign(new Error('Connect Postiz in Apps & Integrations first.'), { status: 400 });
     if (!channels.length) throw Object.assign(new Error('Pick at least one channel.'), { status: 400 });
     for (const ch of channels) {
       const k = POSTIZ_KINDS[ch.kind];
@@ -160,7 +160,7 @@ export function postizModule({ bind, db, save, broadcast, cleanText, readJson, s
   // code never sits in a page that could pass it on; /postiz/done says how it went.
   const DONE = {
     connected: ['Postiz connected', 'Your Marketing Manager can now post to the channels in your Postiz. You can close this window.'],
-    expired: ['Link expired', 'Start again from Kloomie → Settings → Connections → Social posts.'],
+    expired: ['Link expired', 'Start again from Kloomie → Apps & Integrations → Postiz.'],
     denied: ['Not connected', 'Postiz access wasn’t granted. You can close this window.'],
     role: ['Not connected', 'Only team owners and admins can connect Postiz.'],
     failed: ['Not connected', 'Something went wrong talking to Postiz. Try again in a minute.'],

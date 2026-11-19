@@ -69,7 +69,7 @@ export const IMAGE_PROVIDERS = Object.keys(providers);
 // keys: { openai?: key, gemini?: key }, prefer: the provider the team uses for writing, if it makes pictures.
 export async function makeImage(keys, prompt, { shape = 'square', prefer } = {}) {
   const order = [prefer, 'openai', 'gemini'].filter((p, i, a) => providers[p] && keys[p] && a.indexOf(p) === i);
-  if (!order.length) throw fail('Pictures need an OpenAI or Google Gemini key (Claude doesn’t make pictures). Add one in Settings → AI.', 400);
+  if (!order.length) throw fail('Pictures need an OpenAI or Google Gemini key (Claude doesn’t make pictures). Add one in Apps & Integrations → AI.', 400);
   const provider = order[0];
   const key = keys[provider];
   const tag = provider + ':' + key.slice(-6);

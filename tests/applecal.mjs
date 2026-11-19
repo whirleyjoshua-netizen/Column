@@ -2,6 +2,15 @@ import * as FS from 'node:fs';
 import { execSync } from 'node:child_process';
 import WebSocket from '../server/node_modules/ws/index.js';
 import { spawn } from 'node:child_process';
+// Apps & Integrations has the connections (out of Settings since 2026-11-20).
+const appsOpen = async (A, id) => {
+  await A.ev(`document.querySelector('#settings').classList.add('hidden'); document.querySelector('#tabs [data-tab=apps]').click(); true`);
+  await A.until(`!!document.querySelector('#apps .apps-tabs')`);
+  await A.ev(`[...document.querySelectorAll('#apps .apps-tabs button')].find((b) => b.textContent === ${JSON.stringify(id === 'dev' ? 'Developers' : id === 'tools' ? 'Tools' : 'Apps')}).click(); true`);
+  if (id === 'dev' || id === 'tools') return;
+  await A.until(`!!document.querySelector('#apps .app-tile[data-app="${id}"]')`);
+  await A.ev(`document.querySelector('#apps .app-tile[data-app="${id}"]').click(); true`);
+};
 const S = process.argv[2];
 const APP = 'http://127.0.0.1:4797/';
 const launch = (port, dir) => spawn('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', ['--headless=new', `--remote-debugging-port=${port}`, `--user-data-dir=${S}/dk/${dir}`, '--no-first-run', '--window-size=1300,900', 'about:blank'], { stdio: 'ignore' });
@@ -52,18 +61,17 @@ const store = async () => (await fetch(FAKE + '/_store')).json();
 const entries = async () => (await JA('GET', '/state')).entries || [];
 const waitFor = async (fn, ms = 10000) => { const end = Date.now() + ms; while (Date.now() < end) { const v = await fn(); if (v) return v; await sleep(250); } return null; };
 
-// 1. Settings → Connections → Connect Apple Calendar
-await A.tap(`document.querySelector('#settingsBtn')`);
-await A.tap(`[...document.querySelectorAll('#settings .set-tabs button')].find((b) => b.textContent.includes('Connections'))`);
-ok(await A.until(`[...document.querySelectorAll('#settings .cal-add .btn')].some((b) => b.textContent === 'Connect Apple Calendar')`), 'Settings has Connect Apple Calendar');
-await A.tap(`[...document.querySelectorAll('#settings .cal-add .btn')].find((b) => b.textContent === 'Connect Apple Calendar')`);
+// 1. Apps & Integrations → Apple Calendar → Connect Apple Calendar
+await appsOpen(A, 'apple-calendar');
+ok(await A.until(`[...document.querySelectorAll('#apps .cal-add .btn')].some((b) => b.textContent === 'Connect Apple Calendar')`), 'Apple Calendar has Connect Apple Calendar');
+await A.tap(`[...document.querySelectorAll('#apps .cal-add .btn')].find((b) => b.textContent === 'Connect Apple Calendar')`);
 ok(await A.until(`document.querySelector('#sheet h2')?.textContent.includes('Connect Apple Calendar') && document.querySelector('#sheet .apple-steps')?.textContent.includes('App-Specific Passwords')`), 'the sheet explains making an app-specific password');
 await A.ev(`(() => { const ins = document.querySelectorAll('#sheet input'); ins[0].value = 'jo@icloud.com'; ins[1].value = 'my-real-apple-password'; })()`);
 await A.tap(`document.querySelector('#sheet .primary-btn')`);
 ok(await A.until(`document.querySelector('#sheet .err')?.textContent.includes('app-specific password')`, 8000), 'a wrong password is refused, pointing at app-specific passwords');
 await A.ev(`document.querySelectorAll('#sheet input')[1].value = 'abcd-efgh-ijkl-mnop'`);
 await A.tap(`document.querySelector('#sheet .primary-btn')`);
-ok(await A.until(`document.querySelector('#sheet').classList.contains('hidden') && document.querySelector('#settings .cal-sec')?.textContent.includes('Apple Calendar · jo@icloud.com')`, 10000), 'connected: “Apple Calendar · jo@icloud.com” in Settings');
+ok(await A.until(`document.querySelector('#sheet').classList.contains('hidden') && document.querySelector('#apps .cal-sec')?.textContent.includes('Apple Calendar · jo@icloud.com')`, 10000), 'connected: “Apple Calendar · jo@icloud.com” in Settings');
 const conns = (await JA('GET', '/calendars')).connections;
 const conn = conns.find((x) => x.provider === 'apple');
 ok(conn && conn.calendars.map((c) => c.name).join(',') === 'Work,Family' && !JSON.stringify(conns).includes('abcd'), 'it lists Work and Family (not Reminders), and never sends the password back');
@@ -95,10 +103,10 @@ await JA('POST', `/calendars/${conn.id}/sync`);
 ok((await entries()).some((e) => e.text === 'Dentist (moved)') && !(await entries()).some((e) => e.text === 'Dentist & cleaning'), 'a change made in Apple Calendar comes through on sync');
 
 // 4. The subscribe link
-await A.until(`!!document.querySelector('#settings .cal-feed')`);
-await A.tap(`[...document.querySelectorAll('#settings .cal-feed .btn')].find((b) => b.textContent === 'Make my calendar link')`);
-ok(await A.until(`(document.querySelector('#settings .cal-feed a.btn')?.getAttribute('href') || '').startsWith('webcal://')`), 'Make my calendar link → Add to Apple Calendar (a webcal:// link)');
-ok(await A.ev(`decodeURIComponent([...document.querySelectorAll('#settings .cal-feed a.btn')][1].href).includes('calendar.google.com/calendar/r?cid=webcal://')`), 'and Add to Google Calendar');
+await A.until(`!!document.querySelector('#apps .cal-feed')`);
+await A.tap(`[...document.querySelectorAll('#apps .cal-feed .btn')].find((b) => b.textContent === 'Make my calendar link')`);
+ok(await A.until(`(document.querySelector('#apps .cal-feed a.btn')?.getAttribute('href') || '').startsWith('webcal://')`), 'Make my calendar link → Add to Apple Calendar (a webcal:// link)');
+ok(await A.ev(`decodeURIComponent([...document.querySelectorAll('#apps .cal-feed a.btn')][1].href).includes('calendar.google.com/calendar/r?cid=webcal://')`), 'and Add to Google Calendar');
 const feed = (await JA('GET', '/calfeed')).url;
 await JA('POST', '/entries', { text: 'Measure windows\nbring the ladder', date: tomorrow, start: 9 * 60, end: 10 * 60 });
 await JA('POST', '/entries', { text: 'Truck check', date: tomorrow, start: 7 * 60, end: 7 * 60 + 30, repeat: 'weekdays' });
@@ -110,7 +118,7 @@ ok(ics.includes('SUMMARY:Measure windows') && ics.includes('DESCRIPTION:bring th
 ok(ics.includes('SUMMARY:Truck check') && ics.includes('RRULE:FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR'), 'a weekdays block repeats there too');
 ok(new RegExp('SUMMARY:Invoices day\\r\\n(?:DESCRIPTION:[^\\r]*\\r\\n)?DTSTART;VALUE=DATE:').test(ics), 'an all-day item is all-day');
 ok(!ics.includes('Dentist') && !ics.includes('Crew standup'), 'events that came from iCloud aren’t sent back out in the feed');
-const newLink = `[...document.querySelectorAll('#settings .cal-feed .btn')].find((b) => b.dataset.label)`;
+const newLink = `[...document.querySelectorAll('#apps .cal-feed .btn')].find((b) => b.dataset.label)`;
 await A.tap(newLink);
 await sleep(200);
 await A.tap(newLink);

@@ -6,6 +6,15 @@ import fs from 'node:fs';
 import http from 'node:http';
 import { spawn } from 'node:child_process';
 import WebSocket from '../server/node_modules/ws/index.js';
+// Apps & Integrations has the connections (out of Settings since 2026-11-20).
+const appsOpen = async (A, id) => {
+  await A.ev(`document.querySelector('#settings').classList.add('hidden'); document.querySelector('#tabs [data-tab=apps]').click(); true`);
+  await A.until(`!!document.querySelector('#apps .apps-tabs')`);
+  await A.ev(`[...document.querySelectorAll('#apps .apps-tabs button')].find((b) => b.textContent === ${JSON.stringify(id === 'dev' ? 'Developers' : id === 'tools' ? 'Tools' : 'Apps')}).click(); true`);
+  if (id === 'dev' || id === 'tools') return;
+  await A.until(`!!document.querySelector('#apps .app-tile[data-app="${id}"]')`);
+  await A.ev(`document.querySelector('#apps .app-tile[data-app="${id}"]').click(); true`);
+};
 const S = (await import('node:path')).resolve(process.argv[2] || '.');
 const DIR = S + '/dk/leadsourcesui';
 fs.rmSync(DIR, { recursive: true, force: true });
@@ -58,10 +67,8 @@ try {
   const tok = await A.ev(`JSON.parse(localStorage.getItem('column.token'))`);
   const api = async (m, p, body) => (await fetch(APP + 'api' + p, { method: m, headers: { 'content-type': 'application/json', authorization: 'Bearer ' + tok }, body: body ? JSON.stringify(body) : undefined })).json();
 
-  // Settings → Connections → turn on, pick a tool.
-  await A.ev(`document.querySelector('#settingsBtn').click()`);
-  await A.until(`[...document.querySelectorAll('#settings .set-tabs button')].some((b) => b.textContent.startsWith('Connections'))`);
-  await A.ev(`[...document.querySelectorAll('#settings .set-tabs button')].find((b) => b.textContent.startsWith('Connections')).click()`);
+  // Apps & Integrations → Developers → turn on, pick a tool.
+  await appsOpen(A, 'dev');
   ok(await A.until(`!!document.querySelector('.lead-sec') && [...document.querySelectorAll('.lead-sec button')].some((b) => b.textContent === 'Turn on')`), 'Settings → Connections has Leads from websites, funnels & forms');
   await A.ev(`[...document.querySelectorAll('.lead-sec button')].find((b) => b.textContent === 'Turn on').click()`);
   ok(await A.until(`!!document.querySelector('.lead-sec select[aria-label="Connect a website or tool"]')`), 'turned on, it asks which website or tool to connect');
@@ -97,8 +104,7 @@ try {
   W.close();
 
   // Recent leads and the test.
-  await A.ev(`document.querySelector('#settingsBtn').click()`);
-  await A.ev(`document.querySelector('#settingsBtn').click()`);
+  await appsOpen(A, 'dev');
   await A.until(`!!document.querySelector('.lead-log')`);
   ok(await A.until(`[...document.querySelectorAll('.lead-entry')].some((e) => e.innerText.includes('Gus Hale') && e.innerText.includes('Website'))`), 'Recent leads shows Gus, from the website');
   await A.ev(`[...document.querySelectorAll('.lead-sec button')].find((b) => b.textContent === 'Send a test lead').click()`);

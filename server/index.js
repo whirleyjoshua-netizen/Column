@@ -4095,7 +4095,7 @@ function chatAgentAsk(ws, auth, item) {
   const pins = (ch ? ch.pins : ws.chatPins) || [];
   const agent = chatAgentCalled(item.text).find((k) => pins.some((p) => p.kind === 'agent' && p.id === k));
   if (!agent || toolsOf(ws).agents === false) return;
-  if (!aiUse(aiOf(ws.id, auth.memberId))) return chatAgentSay(ws, agent, root.id, channelId, `@${auth.member}, I work on your own AI key. Add one in Settings → AI, then ask me again here.`);
+  if (!aiUse(aiOf(ws.id, auth.memberId))) return chatAgentSay(ws, agent, root.id, channelId, `@${auth.member}, I work on your own AI key. Add one in Apps & Integrations → AI, then ask me again here.`);
   const busy = Object.values(db.agentRuns || {}).filter((x) => x.wsId === ws.id && x.memberId === auth.memberId && ['requested', 'planning', 'running'].includes(x.status)).length;
   if (busy >= 3) return chatAgentSay(ws, agent, root.id, channelId, `@${auth.member}, your team is busy with three assignments. Ask me again when one is done.`);
   const readers = ws.members.filter((m) => seesFeed(ch, m.id)).map((m) => m.name);
@@ -4140,7 +4140,7 @@ function agentStep(x, a, ctx) {
   const name = agentName(a.agent);
   if (!memberIn(ws.id, x.memberId)) throw new Error('its maker isn’t on the team any more');
   if (ws.settings?.tools?.agents === false) throw new Error('Your team (agents) is switched off');
-  if (!aiUse(aiOf(ws.id, x.memberId))) throw new Error(`${memberIn(ws.id, x.memberId).name} has no AI key set (Settings → AI), so ${name} can’t work`);
+  if (!aiUse(aiOf(ws.id, x.memberId))) throw new Error(`${memberIn(ws.id, x.memberId).name} has no AI key set (Apps & Integrations → AI), so ${name} can’t work`);
   const busy = Object.values(db.agentRuns || {}).filter((r) => r.wsId === ws.id && r.memberId === x.memberId && ['requested', 'planning', 'running'].includes(r.status)).length;
   if (busy >= AGENT_BUSY) return { said: `Didn’t ask ${name}: ${busy} assignments are already running` };
   const ask = autoFill(a.ask, ctx, ws.id);
@@ -4819,7 +4819,7 @@ function feedIcs(x) {
 function feedPage(req, res, url) {
   const x = db.calfeeds[(url.pathname.split('/')[2] || '').replace(/\.ics$/i, '')];
   const body = x && feedIcs(x);
-  if (!body) return send(res, 404, 'This calendar link was turned off or replaced. Make a new one in Kloomie → Settings → Connections → Calendars.');
+  if (!body) return send(res, 404, 'This calendar link was turned off or replaced. Make a new one in Kloomie → Apps & Integrations → your calendar.');
   res.writeHead(200, { 'Content-Type': 'text/calendar; charset=utf-8', 'Cache-Control': 'private, max-age=300', 'X-Robots-Tag': 'noindex', 'Referrer-Policy': 'no-referrer' });
   res.end(req.method === 'HEAD' ? undefined : body);
 }
@@ -6675,7 +6675,7 @@ function aiUse(ai) {
 async function aiAsk(ws, memberId, system, prompt, task = 'general') {
   const ai = aiOf(ws.id, memberId);
   const use = aiUse(ai);
-  if (!use) throw Object.assign(new Error('Add your AI key in Settings → AI to use this.'), { status: 400 });
+  if (!use) throw Object.assign(new Error('Add your AI key in Apps & Integrations → AI to use this.'), { status: 400 });
   try {
     return await complete(llms[use.provider], { key: unseal(ai.keys[use.provider].sealed).key, model: use.model, system: system + brandPrompt(ws, task), prompt });
   } catch (e) {
@@ -6816,7 +6816,7 @@ async function transcribe(ai, file) {
     if (!r.ok) throw Object.assign(new Error(d?.error?.message || r.statusText), { status: r.status });
     return (d.candidates?.[0]?.content?.parts || []).map((p) => p.text || '').join('');
   }
-  throw badRequest('Transcribing needs an OpenAI or Gemini key. Add one in Settings → AI.');
+  throw badRequest('Transcribing needs an OpenAI or Gemini key. Add one in Apps & Integrations → AI.');
 }
 // Notes, decisions and next steps from the transcript, tied to the campaigns, goals and contacts it mentions.
 async function draftMeeting(ws, x) {
@@ -6923,7 +6923,7 @@ function taskBrief(ws, auth, t) {
 async function homeBrief(ws, auth, body) {
   const ai = aiOf(ws.id, auth.memberId);
   const use = aiUse(ai);
-  if (!use) throw Object.assign(new Error('Add your AI key in Settings → AI to get a brief.'), { status: 400 });
+  if (!use) throw Object.assign(new Error('Add your AI key in Apps & Integrations → AI to get a brief.'), { status: 400 });
   const facts = cleanText(body.facts, 12_000);
   if (!facts) throw badRequest('Nothing to brief on yet.');
   const system = 'You write a short brief for one person on a small business team, from facts about their day in Kloomie, their work app. Three to five short sentences of plain text: no list, no greeting, no sign-off. Lead with what most needs them, then what is on today, then anything else worth knowing. Name people, campaigns and tasks as given. Never add anything that is not in the facts, and do not repeat numbers that do not matter.';
@@ -6944,7 +6944,7 @@ async function aiTask(ws, auth, t, body) {
   if (!tool) throw badRequest('Unknown tool');
   const ai = aiOf(ws.id, auth.memberId);
   const use = aiUse(ai);
-  if (!use) throw Object.assign(new Error('Add your AI key in Settings → AI to use this.'), { status: 400 });
+  if (!use) throw Object.assign(new Error('Add your AI key in Apps & Integrations → AI to use this.'), { status: 400 });
   const today = isDay(body.today) ? body.today : dayIn(auth.tz);
   const extra = cleanText(body.ask, 2000);
   const prompt = [`Today is ${today}.`, taskBrief(ws, auth, t), extra ? `What they asked for: ${extra}` : ''].filter(Boolean).join('\n\n');
@@ -7157,7 +7157,7 @@ async function aiEstimate(ws, auth, body) {
   const { rec, p, t } = at;
   const ai = aiOf(ws.id, auth.memberId);
   const use = aiUse(ai);
-  if (!use) throw Object.assign(new Error('Add your AI key in Settings → AI to use this.'), { status: 400 });
+  if (!use) throw Object.assign(new Error('Add your AI key in Apps & Integrations → AI to use this.'), { status: 400 });
   const list = PJ.priceList(p);
   const files = [];
   let room = 14 * 1024 * 1024;
@@ -7580,7 +7580,7 @@ const SK_SYSTEM = (kind, built) => [
 async function skTurn(ws, auth, x, today, say) {
   const ai = aiOf(ws.id, auth.memberId);
   const use = aiUse(ai);
-  if (!use) throw Object.assign(new Error('Add your AI key in Settings → AI to use Sidekick.'), { status: 400 });
+  if (!use) throw Object.assign(new Error('Add your AI key in Apps & Integrations → AI to use Sidekick.'), { status: 400 });
   const cardLine = (c) => `[${c.state}] ${c.type}: ${c.name || c.title || c.text || c.category || ''}${c.type === 'goal' && c.target ? ' · target ' + c.target : ''}${c.type === 'block' ? ` · ${c.date} ${c.start}-${c.end}${c.repeat ? ' ' + c.repeat : ''}` : ''}${c.type === 'budget' ? ` · $${c.limit} a month, ${c.scope}` : ''}${c.type === 'bill' ? ` · $${c.amount} ${c.repeat} from ${c.due}, ${c.scope}` : ''}`;
   const history = x.messages.slice(-30).map((m) => ({ role: m.role, text: m.role === 'assistant' ? JSON.stringify({ reply: m.text, cards: (m.cards || []).map(cardLine) }) : m.text }));
   history.push({ role: 'user', text: `${say}\n\n(Context, not from the person)\n${skContext(ws, auth, x, today)}` });
@@ -11338,7 +11338,7 @@ async function api(req, res, url) {
 // so devices that stay open (like the desktop app in the tray) pick up updates.
 let clientVer = { key: '', hash: '' };
 function clientVersion() {
-  const files = ['index.html', 'app.js', 'style.css', 'pdfkit.js', 'wordkit.js', 'dockit.js', 'news.js', 'news.css'].map((f) => path.join(CLIENT_DIR, f));
+  const files = ['index.html', 'app.js', 'style.css', 'pdfkit.js', 'wordkit.js', 'dockit.js', 'news.js', 'news.css', 'applogos.js'].map((f) => path.join(CLIENT_DIR, f));
   const key = files.map((f) => fs.statSync(f, { throwIfNoEntry: false })?.mtimeMs || 0).join(':');
   if (key !== clientVer.key) {
     const h = crypto.createHash('sha256');
@@ -11465,7 +11465,7 @@ const PJ = projectsModule({ onEvent: (...a) => recordEvent(...a), canSeeItem: (a
 async function aiRun(ws, memberId, system, history, task = 'general') {
   const ai = aiOf(ws.id, memberId);
   const use = aiUse(ai);
-  if (!use) throw Object.assign(new Error('Add your AI key in Settings → AI to use this.'), { status: 400 });
+  if (!use) throw Object.assign(new Error('Add your AI key in Apps & Integrations → AI to use this.'), { status: 400 });
   let out;
   try {
     out = await llms[use.provider].run({ key: unseal(ai.keys[use.provider].sealed).key, model: use.model, system: system + brandPrompt(ws, task), history, tools: [], web: false, exec: () => Promise.reject(new Error('No tools')) });
@@ -11585,7 +11585,7 @@ function SIGNOFF_MAIL(ws, memberId, to, msg) {
 async function agentLlm(ws, memberId, { system, history, tools, exec, task }) {
   const ai = aiOf(ws.id, memberId);
   const use = aiUse(ai);
-  if (!use) throw Object.assign(new Error('Add your AI key in Settings → AI to use your agents.'), { status: 400 });
+  if (!use) throw Object.assign(new Error('Add your AI key in Apps & Integrations → AI to use your agents.'), { status: 400 });
   let out;
   try {
     out = await llms[use.provider].run({ key: unseal(ai.keys[use.provider].sealed).key, model: use.model, system: system + brandPrompt(ws, task), history, tools, web: false, exec });
@@ -11656,7 +11656,7 @@ async function makeImageItem(ws, memberId, { prompt, shape, name, by }) {
 async function describeImages(ws, memberId, items) {
   const ai = aiOf(ws.id, memberId);
   const use = aiUse(ai);
-  if (!use) throw Object.assign(new Error('Add your AI key in Settings → AI to look at photos.'), { status: 400 });
+  if (!use) throw Object.assign(new Error('Add your AI key in Apps & Integrations → AI to look at photos.'), { status: 400 });
   const files = [];
   for (const it of items) files.push({ name: it.name, mime: it.mime, data: (await fsp.readFile(path.join(FILES_DIR, it.id))).toString('base64') });
   const system = 'You describe a small business’s own photos so its Marketing Manager can pick ones for social posts. For each photo, in order: what it shows in one or two plain, specific sentences (the room, the product, the finish, the setting); whether it looks like a before, after, in-progress, detail or team shot; and how good it is to post (light, focus, clutter). Flag anything that shouldn’t be posted: a readable address or house number, a car plate, people’s faces, personal photos or papers, a customer’s name. Don’t guess at things you can’t see. Reply with JSON only: {"photos":[{"n":1,"text":""}]}';

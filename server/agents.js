@@ -898,7 +898,7 @@ export function agentsModule({ autoEvents = [], sees = () => true, db, save, bro
       parameters: { type: 'object', properties: {} },
       async run(cx) {
         if (!isAdminId(cx.ws.id, cx.memberId)) return { connected: false, note: 'Only owners and admins post to the company’s social accounts. Draft the post as text instead; an owner or admin can post it.' };
-        if (!POSTIZ?.connected(cx.ws)) return { connected: false, note: 'Postiz isn’t connected. Draft posts anyway: the person can copy them, or an owner can connect Postiz in Settings → Connections.' };
+        if (!POSTIZ?.connected(cx.ws)) return { connected: false, note: 'Postiz isn’t connected. Draft posts anyway: the person can copy them, or an owner can connect Postiz in Apps & Integrations.' };
         const p = POSTIZ.pub(cx.ws);
         if (!p.checkedAt || Date.now() - p.checkedAt > 10 * 60_000) await POSTIZ.refresh(cx.ws).catch(() => {});
         const q = POSTIZ.pub(cx.ws);
@@ -985,7 +985,7 @@ export function agentsModule({ autoEvents = [], sees = () => true, db, save, bro
         if (a.link && !/^https:\/\//.test(a.link)) throw new Error('A link must start with https://');
       },
       async run(cx, a) {
-        if (!POSTIZ?.connected(cx.ws)) throw new Error('Postiz isn’t connected, so this can’t be posted from Kloomie. Copy it, or ask an owner to connect Postiz in Settings → Connections.');
+        if (!POSTIZ?.connected(cx.ws)) throw new Error('Postiz isn’t connected, so this can’t be posted from Kloomie. Copy it, or ask an owner to connect Postiz in Apps & Integrations.');
         const channels = POSTIZ.pick(cx.ws, a.channels);
         if (!channels.length) throw new Error(`None of those channels are connected in Postiz. Connected: ${POSTIZ.usable(cx.ws).map((x) => `${x.name} (${x.kindName})`).join(', ') || 'none'}.`);
         let when = a.when || 'now';
@@ -1286,7 +1286,7 @@ export function agentsModule({ autoEvents = [], sees = () => true, db, save, bro
     };
     const history = [...(part.history || []), { role: 'user', text: !part.reply && (x.parts.length > 1 || part.from) ? handoffContext(x, part) : [part.ask, ...(!part.reply && !(part.history || []).length ? [pageLine(x.page), planLine(x), missionLine(x, false)] : [])].filter(Boolean).join('\n\n') }];
     try {
-      const out = await llmRun(ws, x.memberId, { system: systemFor(ws, x.memberId, part.agent, level, prefs, x.agent === 'team') + (a.tools.includes('make_image') && !pics ? '\n\nPictures: there is no OpenAI or Gemini key on this account, so you can’t make pictures. Don’t try; suggest real job photos, and mention once that adding an OpenAI or Gemini key in Settings → AI lets you make them.' : ''), history, tools, exec, task: part.agent === 'sales' ? 'customer' : part.agent === 'ops' ? 'jobs' : 'plan' });
+      const out = await llmRun(ws, x.memberId, { system: systemFor(ws, x.memberId, part.agent, level, prefs, x.agent === 'team') + (a.tools.includes('make_image') && !pics ? '\n\nPictures: there is no OpenAI or Gemini key on this account, so you can’t make pictures. Don’t try; suggest real job photos, and mention once that adding an OpenAI or Gemini key in Apps & Integrations → AI lets you make them.' : ''), history, tools, exec, task: part.agent === 'sales' ? 'customer' : part.agent === 'ops' ? 'jobs' : 'plan' });
       part.report = cleanText(out, 6000);
       part.history = [...history, { role: 'assistant', text: part.report }].slice(-12);
       part.status = x.status === 'cancelled' ? 'cancelled' : part.steps.some((s) => ['proposed', 'held'].includes(s.status)) ? 'awaiting' : 'completed';

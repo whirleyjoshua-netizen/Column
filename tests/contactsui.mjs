@@ -3,6 +3,15 @@ import http from 'node:http';
 import crypto from 'node:crypto';
 import WebSocket from '../server/node_modules/ws/index.js';
 import { spawn } from 'node:child_process';
+// Apps & Integrations has the connections (out of Settings since 2026-11-20).
+const appsOpen = async (A, id) => {
+  await A.ev(`document.querySelector('#settings').classList.add('hidden'); document.querySelector('#tabs [data-tab=apps]').click(); true`);
+  await A.until(`!!document.querySelector('#apps .apps-tabs')`);
+  await A.ev(`[...document.querySelectorAll('#apps .apps-tabs button')].find((b) => b.textContent === ${JSON.stringify(id === 'dev' ? 'Developers' : id === 'tools' ? 'Tools' : 'Apps')}).click(); true`);
+  if (id === 'dev' || id === 'tools') return;
+  await A.until(`!!document.querySelector('#apps .app-tile[data-app="${id}"]')`);
+  await A.ev(`document.querySelector('#apps .app-tile[data-app="${id}"]').click(); true`);
+};
 const S = process.argv[2];
 const APP = 'http://127.0.0.1:4797/';
 const chrome = spawn('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', ['--headless=new', '--remote-debugging-port=9334', `--user-data-dir=${S}/dk/chrome2`, '--no-first-run', '--window-size=1200,900', 'about:blank'], { stdio: 'ignore' });
@@ -138,8 +147,9 @@ ok(await A.until(`[...document.querySelectorAll('#settings h3')].some((x) => x.t
 await A.tap(`[...document.querySelectorAll('#settings .vis-sec button')].find((b) => b.textContent === 'Only what’s theirs')`);
 ok(await A.until(`document.querySelector('#settings .vis-sec .on')?.textContent === 'Only what’s theirs' && document.querySelector('#settings .vis-sec .day-hint').textContent.includes('Nothing else reaches their devices')`), 'choosing Only what’s theirs saves and explains it');
 // Tools: a new team starts simple; switching one on puts it in the Tools menu
-ok(await A.ev(`[...document.querySelectorAll('#settings .tools-sec .srow')].find((r) => r.textContent.startsWith('Map'))?.querySelector('input').checked === false`), 'Map starts off for a new team');
-await A.ev(`[...document.querySelectorAll('#settings .tools-sec .srow')].find((r) => r.textContent.startsWith('Map')).querySelector('input').click()`);
+await appsOpen(A, 'tools'); // Tools is in Apps & Integrations (2026-11-20)
+ok(await A.until(`document.querySelector('#apps .tool-tile[data-tool=map] input')?.checked === false`), 'Map starts off for a new team');
+await A.ev(`document.querySelector('#apps .tool-tile[data-tool=map] input').click()`);
 await sleep(600);
 await A.ev(`document.querySelector('#settings').classList.add('hidden'); document.querySelector('#tabs [data-tab=tools]').click()`);
 ok(await A.until(`!!document.querySelector('#menu [data-tool=map]')`), 'switched on, Map is in Workspace → Tools');

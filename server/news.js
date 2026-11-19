@@ -413,7 +413,7 @@ export function newsModule({ db, save, readJson, send, rid, toolOn, aiAsk, reply
     const mk = `${ws.id}:${auth.memberId}`;
     let isFree = false;
     if (!own && houseAsk) {
-      const yours = 'or add your own AI key in Settings → AI for as many as you like.';
+      const yours = 'or add your own AI key in Apps & Integrations → AI for as many as you like.';
       if ((F.m[mk] || 0) >= FREE.person) throw Object.assign(new Error(`That’s your ${FREE.person} free briefs for today. More tomorrow, ${yours}`), { status: 429 });
       if ((F.ws[ws.id] || 0) >= FREE.team) throw Object.assign(new Error(`Your team has used today’s free briefs. More tomorrow, ${yours}`), { status: 429 });
       if (F.total >= FREE.total) throw Object.assign(new Error(`Free briefs are all used for today. Try again tomorrow, ${yours}`), { status: 429 });

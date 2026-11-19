@@ -10,7 +10,7 @@ import path from 'node:path';
 const SLUGS = {
   start: 'getting-started', team: 'team-and-roles', home: 'home-and-day', kinds: 'project-kinds', signoff: 'sign-offs',
   cards: 'business-cards', formulas: 'formulas-and-calendars', assets: 'equipment-tracking', jobs: 'jobs-for-trades',
-  connect: 'email-and-calendars', docs: 'docs-and-e-signatures', agents: 'ai-agents', hq: 'company-hq',
+  apps: 'apps-and-integrations', connect: 'email-and-calendars', docs: 'docs-and-e-signatures', agents: 'ai-agents', hq: 'company-hq',
   sidekick: 'ai-and-sidekick', security: 'two-step-sign-in', data: 'your-data',
 };
 const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');

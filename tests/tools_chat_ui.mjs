@@ -47,7 +47,7 @@ try {
   await A.until(`location.href.startsWith(${JSON.stringify(APP)}) && document.readyState === 'complete'`, 15000);
   await A.ev(`localStorage.setItem('column.token', ${JSON.stringify(JSON.stringify(a.token))}); location.reload(); true`);
   ok(await A.until(`!document.querySelector('#app')?.classList.contains('hidden') && !!document.querySelector('#settingsBtn')`, 20000), 'signed in');
-  ok(await A.ev(`!document.querySelector('#tabs [data-tab=chat]') && [...document.querySelectorAll('#tabs > button[data-tab]:not(.tab-sub)')].map((b) => b.dataset.tab).join() === 'home,agents,work'`), 'Chat isn’t a sidebar tab: Home, Agents, Workspace');
+  ok(await A.ev(`!document.querySelector('#tabs [data-tab=chat]') && [...document.querySelectorAll('#tabs > button[data-tab]:not(.tab-sub)')].map((b) => b.dataset.tab).join() === 'home,agents,work,apps'`), 'Chat isn’t a sidebar tab: Home, Agents, Workspace, Apps & Integrations');
 
   // Tools: names only; a description on hover.
   await A.ev(`document.querySelector('#tabs [data-tab=tools]').click(); true`);

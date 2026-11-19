@@ -546,6 +546,7 @@
       if (chatOn()) openChannel(C.view);
       else renderChatSide();
       if (!$('#settings').classList.contains('hidden')) renderSettings();
+      renderApps();
       if (toolOpen === 'folders' || (toolOpen && !toolOn(toolOpen))) renderTool();
     } else if (msg.type === 'entry') {
       upsertEntry(msg.entry);
@@ -566,7 +567,7 @@
       toast(`💵 ${msg.name || 'A customer'} paid ${msg.number} · ${money(msg.amount)}`, { label: 'Open', run: () => openJob(msg.projectId, msg.recordId) });
     } else if (msg.type === 'payments') {
       S.payments = msg.payments;
-      $('#settings .pay-sec')?.replaceWith(paySection());
+      $('#settings .pay-sec, #apps .pay-sec')?.replaceWith(paySection());
     } else if (msg.type === 'visits') {
       PR.visits.set(msg.recordId, msg.visits);
       teamSoon();
@@ -695,7 +696,7 @@
       }
     } else if (msg.type === 'postiz') {
       if (S.postiz && !S.postiz.connected) toast('Postiz connected');
-      api('GET', '/postiz').then((y) => { S.postiz = y; if (AG.data) AG.postiz = y; $('#settings .pz-sec')?.replaceWith(postizSection()); renderTool(); }).catch(() => {});
+      api('GET', '/postiz').then((y) => { S.postiz = y; if (AG.data) AG.postiz = y; $('#settings .pz-sec, #apps .pz-sec')?.replaceWith(postizSection()); renderTool(); }).catch(() => {});
     } else if (msg.type === 'agent' || msg.type === 'agent:remove') {
       agNews(msg);
     } else if (msg.type === 'sidekick' || msg.type === 'sidekick:remove') {
@@ -730,12 +731,12 @@
       renderDay();
       renderTool();
     } else if (msg.type === 'texting') {
-      if (S.texting) api('GET', '/texting').then((y) => { S.texting = y; $('#settings .tw-sec')?.replaceWith(textingSection()); }).catch(() => {});
+      if (S.texting) api('GET', '/texting').then((y) => { S.texting = y; $('#settings .tw-sec, #apps .tw-sec')?.replaceWith(textingSection()); }).catch(() => {});
     } else if (msg.type === 'text') {
       const box = document.querySelector(`.tw-thread[data-contact="${msg.text.contactId}"]`);
       if (box) box.dispatchEvent(new CustomEvent('text', { detail: msg.text }));
     } else if (msg.type === 'quickbooks') {
-      if (S.qbo) api('GET', '/quickbooks').then((y) => { S.qbo = y; $('#settings .qbo-sec')?.replaceWith(qboSection()); }).catch(() => {});
+      if (S.qbo) api('GET', '/quickbooks').then((y) => { S.qbo = y; $('#settings .qbo-sec, #apps .qbo-sec')?.replaceWith(qboSection()); }).catch(() => {});
     } else if (msg.type === 'github') {
       if (GH.p?.id === msg.projectId && $('#sheet:not(.hidden) .gh-sheet')) githubSheet(GH.p);
     } else if (msg.type === 'standup') {
@@ -3140,7 +3141,7 @@
   // Sidekick's panel (the owner, 2026-11-14): one assistant on every page. See "Sidekick, on every page".
   const SKD = { open: false, view: 'home', draft: '', busy: false, noPage: false, here: false };
   // Chat moved into Tools (the owner, 2026-11-20): it opens in the split beside the page, like Stacks.
-  const MAIN_TABS = ['agents', 'work'];
+  const MAIN_TABS = ['agents', 'work', 'apps'];
   // Tasks (the owner, 2026-11-15): what was Day is Workspace's first tab, and Workspace always opens on it.
   const WORK_TABS = ['day', 'contacts', 'projects', 'camps', 'docs', 'automations', 'tools'];
   // What Workspace → Tools lists. Stacks is a view (S.tab 'column'); the rest open in #tool. While one is open, Tools stays lit.
@@ -3152,6 +3153,8 @@
     agents: { label: 'Agents', ok: () => toolOn('agents'), open: () => agOpen('team') },
     work: { label: 'Workspace', ok: () => workKeys().length > 0, open: () => openBarItem('day') },
     day: { label: 'Tasks', view: true },
+    // Apps & Integrations (the owner, 2026-11-20): its own page, out of Settings.
+    apps: { label: 'Apps & Integrations', view: true },
     sidekick: { label: 'Sidekick', ok: () => toolOn('sidekick'), open: () => { SK.open = null; openTool('sidekick'); } },
     // Docs and Folders are the same things (a doc is an item, and folders hold items): one tab, a switch between them.
     docs: { label: 'Folders & Docs', ok: () => (toolOn('docs') || toolOn('folders')) && memberMay('docs'), open: () => openTool(docsSide()), on: () => toolOpen === 'docs' || toolOpen === 'folders' },
@@ -3192,6 +3195,9 @@
     work: svg('<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M8 4v5"/>'),
     templates: svg('<rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/>'),
     automations: svg('<path d="M13 3 5 14h6l-1 7 8-11h-6z"/>'),
+    apps: svg('<path d="M9 3v5M15 3v5M6 8h12v3a6 6 0 0 1-12 0z"/><path d="M12 17v4"/>'),
+    cards: svg('<rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="11" r="2"/><path d="M6 16a3 3 0 0 1 6 0M14 10h4M14 14h3"/>'),
+    inventory: svg('<path d="m12 3 8 4.5v9L12 21l-8-4.5v-9z"/><path d="m4 7.5 8 4.5 8-4.5M12 12v9"/>'),
     tools: svg('<rect x="4" y="4" width="6" height="6" rx="1.5"/><rect x="14" y="4" width="6" height="6" rx="1.5"/><rect x="4" y="14" width="6" height="6" rx="1.5"/><rect x="14" y="14" width="6" height="6" rx="1.5"/>'),
     sidekick: svg('<path d="M12 3l1.9 5.6L19.5 10l-5.6 1.9L12 17.5l-1.9-5.6L4.5 10l5.6-1.4z"/>'),
     docs: svg('<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h6"/>'),
@@ -3443,6 +3449,8 @@
     $('#home').classList.toggle('hidden', tab !== 'home');
     if (tab === 'home') renderHome();
     $('#day').classList.toggle('hidden', tab !== 'day');
+    $('#apps').classList.toggle('hidden', tab !== 'apps');
+    if (tab === 'apps') { ensureLogos(); renderApps(true); loadApps(); }
     const panesWere = $('#panes').classList.contains('hidden');
     $('#panes').classList.toggle('hidden', tab !== 'column' && splitOpen !== 'column');
     if (panesWere && tab === 'column') keepPanesScroll($('#panes'), true);
@@ -4433,7 +4441,7 @@
       try {
         result = await api('POST', '/ai/task', { taskId: t.id, tool, ask: ask.value, today: todayKey() });
       } catch (e) {
-        if (/Settings → AI/.test(e.message)) toast(e.message, { label: 'Open Settings', run: () => { closeSheet(); openSettings(); } });
+        if (/Apps & Integrations → AI/.test(e.message)) toast(e.message, { label: 'Add an AI key', run: () => { closeSheet(); openSettings(); } });
         throw e;
       } finally {
         go.disabled = false;
@@ -5971,7 +5979,7 @@
           const cb = h('input', { type: 'checkbox', checked: !!a.wait, class: 'auto-agent-wait' });
           cb.addEventListener('change', () => { a.wait = cb.checked; draw(); });
           f.push(h('label', {}, 'Ask', who), h('label', {}, 'What to ask', ask), h('label', { class: 'pick' }, cb, 'Wait for the answer, then go on with {answer}'),
-            AG.data && !AG.data.ai ? h('small', { class: 'hint err' }, 'Add your AI key (Settings → AI) first: your team works on it.') : null,
+            AG.data && !AG.data.ai ? h('small', { class: 'hint err' }, 'Add your AI key (Apps & Integrations → AI) first: your team works on it.') : null,
             h('small', { class: 'hint' }, `Your own agents, on your AI key, at the level you set for each in Your team: anything important waits for your yes there. They’re told an automation asked.${a.wait ? ' The steps after this wait until it’s done (up to 30 minutes).' : ''}`));
         }
         if (a.kind === 'stock') {
@@ -6243,7 +6251,7 @@
           wrap.replaceChildren(...(ready.length ? ready.map(([k]) => h('button', { class: 'btn', onclick: async () => {
             if (k === 'apple') { await finishSetup(true); return openSettings('connections', '.cal-sec'); }
             try { const { url } = await api('POST', '/calendars/connect', { provider: k, tz: myTz(), mail: k !== 'apple' }); window.open(url, '_blank'); toast('Finish signing in in the new tab. Your calendar shows up in your Day.'); } catch (e) { toast(e.message); }
-          } }, 'Connect ' + CAL_NAMES[k])) : [h('p', { class: 'day-hint' }, 'You can put your Kloomie Day in your phone’s calendar from Settings → Connections.')]));
+          } }, 'Connect ' + CAL_NAMES[k])) : [h('p', { class: 'day-hint' }, 'You can put your Kloomie Day in your phone’s calendar from Apps & Integrations.')]));
         }).catch(() => wrap.replaceChildren());
         return [
           h('h2', {}, 'Bring in your calendar'),
@@ -8475,7 +8483,7 @@
         skBox.replaceChildren(
           h('p', { class: 'day-hint' }, c ? 'Talk about this campaign: what to add, change or fix. Sidekick proposes it as cards; you keep what you like.' : 'Describe the campaign and Sidekick plans it with you: steps and their tasks, who does what, prospect lists, scripts and budgets.'),
           ask, h('button', { type: 'button', class: 'btn primary-btn cb-sk-go', disabled: SK.busy, onclick: go }, SK.busy ? 'Thinking…' : 'Plan it with Sidekick'),
-          h('small', { class: 'hint' }, 'It uses your team’s AI key (Settings → AI).'));
+          h('small', { class: 'hint' }, 'It uses your team’s AI key (Apps & Integrations → AI).'));
         return;
       }
       const cards = skCards(x);
@@ -9452,6 +9460,7 @@
   });
   // Opens Settings on one of its tabs, scrolled to a section: the AI keys, unless told otherwise.
   function openSettings(tab = 'connections', at = '.ai-sec') {
+    if (tab === 'connections' || at === '.tools-sec') return openApps(APP_AT[at]); // their own page since 2026-11-20
     S.setTab = tab;
     $('#settings').classList.remove('hidden');
     renderSettings();
@@ -9473,7 +9482,7 @@
     } catch {
       return;
     }
-    $('#settings .ai-sec')?.replaceWith(aiSection());
+    $('#settings .ai-sec, #apps .ai-sec')?.replaceWith(aiSection());
   }
   // Runs a smart button: shows it working, and points to Settings when there's no key yet.
   async function aiRun(btn, path, body) {
@@ -9483,7 +9492,7 @@
     try {
       return await api('POST', '/ai/' + path, body);
     } catch (e) {
-      if (/Settings → AI/.test(e.message)) toast(e.message, { label: 'Open Settings', run: () => { closeSheet(); openSettings(); } });
+      if (/Apps & Integrations → AI/.test(e.message)) toast(e.message, { label: 'Add an AI key', run: () => { closeSheet(); openSettings(); } });
       else toast(e.message);
       return null;
     } finally {
@@ -9592,10 +9601,10 @@
     } catch {
       return;
     }
-    const sec = $('#settings .pss-sec');
+    const sec = $('#settings .pss-sec, #apps .pss-sec');
     if (sec && !(S.pss?.connected || S.pss?.available)) sec.remove();
     else if (sec && !sec.contains(document.activeElement)) sec.replaceWith(pssSection());
-    $('#settings .gc-sec')?.replaceWith(gcSection());
+    $('#settings .gc-sec, #apps .gc-sec')?.replaceWith(gcSection());
   }
   // Connecting other apps: API keys (each shown once) and webhooks (with their deliveries).
   const INT = { keys: null, hooks: null };
@@ -9765,6 +9774,233 @@
             : 'Logged against a contact, they show up on that lead in PSS'))));
     return sec;
   }
+  // ---------- Apps & Integrations (the owner, 2026-11-20) ----------
+  // Its own tab in the sidebar, out of Settings: every app Kloomie connects to, or will, as big tiles with their logos,
+  // grouped by kind, the ones you've connected first. A tile opens the same section Apps & Integrations had (those
+  // sections refresh themselves in #settings or #apps). An app Kloomie doesn't connect to yet says so plainly and points
+  // to Zapier and Make. Tools (which tools the team uses) and Developers (API keys, webhooks, lead forms) are tabs here.
+  // The plan for building the rest: docs/INTEGRATIONS-PLAN.md.
+  // The tools the team uses. Switched off, a tool leaves everyone's Tools menu; nothing in it is deleted.
+  const TOOL_ROWS = [['agents', 'Agents', 'Your team: Chief of Staff, Sales, Operations and Marketing'], ['sidekick', 'Sidekick', 'Plans campaigns with you'], ['docs', 'Docs', 'Write and share pages'], ['contacts', 'Contacts', 'Your customers and leads (owners and admins)'],
+          ['email', 'Email', 'Campaign email from Outlook or Gmail'], ['folders', 'Folders', 'Files in folders'], ['signs', 'Signatures', 'Send PDFs to be signed'], ['bills', 'Finance', 'Bills, money in and out, budgets'],
+          ['meetings', 'Meeting notes', 'Record a call, get the notes'], ['map', 'Map', 'Pins, routes and canvassing runs'], ['vault', 'Vault', 'Codes and logins, locked on your device'], ['projects', 'Boards', 'Jobs in columns: trades, software, client work and team projects'], ['cards', 'Business cards', 'Everyone’s own card to share by link, text, QR code or NFC'], ['news', 'News', 'Each person’s own news, if they turn it on in their tabs'], ['inventory', 'Inventory', 'Parts, materials and equipment: stock at each place, used on jobs, low-stock alerts']];
+  const APPS = { tab: store.get('appsTab', 'apps'), open: null, q: '', cat: 'all', loading: false, leads: null };
+  const ZAPIER_INVITE = 'https://zapier.com/developer/public-invite/249576/3ce3c0fb9bd4e67c0b2ba97a95b5fdf1/';
+  const APP_CATS = [['comms', 'Email & calendar'], ['storage', 'Files & docs'], ['crm', 'CRM & sales'], ['finance', 'Money & payments'], ['schedule', 'Scheduling & signatures'], ['field', 'Field service & trades'], ['marketing', 'Marketing & social'], ['dev', 'Software & dev'], ['people', 'HR & payroll'], ['auto', 'Forms & automation'], ['ai', 'AI']];
+  // What a direct connection would do, for the apps that aren't built yet (docs/INTEGRATIONS-PLAN.md has the detail).
+  const APP_WOULD = {
+    comms: ['Messages and meetings linked to the right job, contact and campaign'],
+    storage: ['Pick its files into any stack, and keep links to them on jobs'],
+    crm: ['Contacts, companies and deals kept the same in both places'],
+    finance: ['Invoices, payments and expenses kept in step with Kloomie'],
+    schedule: ['Bookings land as visits and tasks; signed papers come back to the job'],
+    field: ['Jobs, photos and schedules brought into your boards'],
+    marketing: ['Posts, ads and results tied to your campaigns'],
+    dev: ['Issues and releases tied to work items on software boards'],
+    people: ['Your team, hours and time off kept in step with Kloomie'],
+    auto: ['Form answers become contacts, tasks or jobs'],
+    ai: ['Drafts and plans on your own key'],
+  };
+  const calConn = (p, mail) => (S.cals?.connections || []).some((c) => c.provider === p && (!mail || c.mail));
+  const calState = (p, mail) => (calConn(p, mail) ? 'on' : S.cals && !S.cals.providers?.[p] ? 'na' : 'off');
+  const pzChannel = (word) => (S.postiz?.channels || []).some((c) => `${c.kindName || ''} ${c.kind || ''}`.toLowerCase().includes(word));
+  const postizApp = (id, name, logo, word, mono) => ({ id, name, cat: 'marketing', logo, mono, live: true, admin: true, blurb: 'Post through Postiz', does: [`Drafts from Sidekick and the Marketing Manager go to your ${name} once you approve`, 'Posting runs through your own Postiz account'], sec: () => [postizSection()], state: () => (S.postiz?.connected && pzChannel(word) ? 'on' : 'off') });
+  const calApp = (id, name, logo, p, mail, blurb, does, mono) => ({ id, name, cat: 'comms', logo, mono, live: true, blurb, does, sec: () => [calendarSection()], state: () => calState(p, mail) });
+  const cloudApp = (id, name, logo, on, mono) => ({ id, name, cat: 'storage', logo, mono, live: true, blurb: `Add files from ${name} to any stack`, does: [`In any stack, + → From ${name}…`, `Kloomie copies the file in. It never changes anything in your ${name}.`], sec: () => [h('section', {}, h('h3', {}, `Using ${name}`), h('p', {}, on() ? `It’s ready. In any stack or feed, tap + and choose From ${name}…` : `${name} isn’t set up on this server yet.`))], state: () => (on() ? 'ready' : 'na') });
+  const soon = (cat, list) => list.map(([id, name, logo, mono]) => ({ id, name, cat, logo, mono, live: false, blurb: APP_WOULD[cat][0] }));
+  const APP_LIST = () => [
+    calApp('google-calendar', 'Google Calendar', 'googlecalendar', 'google', false, 'Your Google Calendar in your Day', ['Your meetings show up in your Day', 'Blocks you add in Kloomie go to your calendar, and changes follow both ways']),
+    calApp('gmail', 'Gmail', 'gmail', 'google', true, 'Send campaign email from your Gmail', ['Campaign emails go out from your own Gmail address', 'Connect Google and allow “Send email on your behalf”']),
+    calApp('outlook', 'Outlook & Microsoft 365', null, 'microsoft', false, 'Your Outlook calendar and email', ['Your meetings show up in your Day, both ways', 'Campaign emails can go out from your Outlook address'], 'O'),
+    calApp('apple-calendar', 'Apple Calendar', 'apple', 'apple', false, 'iCloud calendars in your Day', ['Your iCloud calendars show up in your Day', 'Or put your Day in your iPhone’s calendar with a link']),
+    { id: 'twilio', name: 'Twilio', cat: 'comms', mono: 'T', live: true, admin: true, blurb: 'Text customers from your own number', does: ['On my way, visit reminders and review requests by text', 'Replies come back onto the contact; STOP is respected'], sec: () => [textingSection()], state: () => (S.texting?.connected ? 'on' : 'off') },
+    ...soon('comms', [['slack', 'Slack', null, 'S'], ['teams', 'Microsoft Teams', null, 'T'], ['discord', 'Discord', 'discord'], ['zoom', 'Zoom', 'zoom'], ['google-meet', 'Google Meet', 'googlemeet'], ['sendgrid', 'SendGrid', null, 'S']]),
+    cloudApp('google-drive', 'Google Drive', 'googledrive', () => !!S.cloud?.google),
+    cloudApp('onedrive', 'OneDrive', null, () => !!S.cloud?.onedrive, 'O'),
+    cloudApp('dropbox', 'Dropbox', 'dropbox', () => !!(S.cloud?.dropbox || S.cloud?.dropboxList)),
+    { id: 'notion', name: 'Notion', cat: 'storage', logo: 'notion', live: true, blurb: 'Bring your Notion pages into Docs', does: ['A Notion export (.zip) becomes docs, with sub-pages, tables and files', 'One time, to move over; Notion isn’t changed'], sec: () => [h('section', {}, h('h3', {}, 'Import from Notion'), h('p', {}, 'In Notion, export your workspace as Markdown & CSV, then bring the .zip in here.'), h('div', { class: 'btns' }, h('button', { class: 'btn primary-btn', onclick: notionSheet }, 'Import from Notion…')))], state: () => 'ready' },
+    ...soon('storage', [['sharepoint', 'SharePoint', null, 'S'], ['box', 'Box', 'box']]),
+    { id: 'google-contacts', name: 'Google Contacts', cat: 'crm', logo: 'google', live: true, admin: true, blurb: 'Your Google contacts in Contacts', does: ['Everyone in a Google account’s contacts comes into Contacts', 'Kept current; Kloomie never changes your Google contacts'], sec: () => [gcSection()], state: () => (S.gc?.connected ? 'on' : S.gc && !S.gc.configured ? 'na' : 'off') },
+    ...(S.pss?.connected || S.pss?.available ? [{ id: 'pss', name: 'PSS admin', cat: 'crm', mono: 'P', live: true, admin: true, blurb: 'Premier Shade Solutions’ admin', does: ['Customers and jobs from the PSS admin'], sec: () => [pssSection()], state: () => (S.pss?.connected ? 'on' : 'off') }] : []),
+    ...soon('crm', [['hubspot', 'HubSpot', 'hubspot'], ['salesforce', 'Salesforce', null, 'S'], ['pipedrive', 'Pipedrive', null, 'P'], ['zoho', 'Zoho CRM', 'zoho'], ['apollo', 'Apollo', null, 'A'], ['linkedin', 'LinkedIn Sales', null, 'in'], ['intercom', 'Intercom', 'intercom'], ['zendesk', 'Zendesk', 'zendesk']]),
+    { id: 'quickbooks', name: 'QuickBooks', cat: 'finance', logo: 'quickbooks', live: true, admin: true, blurb: 'Invoices and payments into your books', does: ['Sent invoices go into QuickBooks under the same number', 'Payments recorded in QuickBooks come back to Kloomie'], sec: () => [qboSection()], state: () => (S.qbo?.connected ? 'on' : S.qbo && !S.qbo.configured ? 'na' : 'off') },
+    { id: 'stripe', name: 'Stripe', cat: 'finance', logo: 'stripe', live: true, admin: true, blurb: 'Customers pay your invoices by card', does: ['A Pay button on every invoice and quote page', 'Paid invoices mark themselves paid'], sec: () => [paySection()], state: () => (S.payments?.connected ? 'on' : 'off') },
+    ...soon('finance', [['xero', 'Xero', 'xero'], ['square', 'Square', 'square'], ['paypal', 'PayPal', 'paypal'], ['shopify', 'Shopify', 'shopify'], ['bill', 'BILL', null, 'B'], ['expensify', 'Expensify', 'expensify']]),
+    ...soon('schedule', [['calendly', 'Calendly', 'calendly'], ['caldotcom', 'Cal.com', 'caldotcom'], ['acuity', 'Acuity Scheduling', null, 'A'], ['docusign', 'DocuSign', null, 'D'], ['pandadoc', 'PandaDoc', null, 'P']]),
+    ...soon('field', [['companycam', 'CompanyCam', null, 'C'], ['jobber', 'Jobber', null, 'J'], ['housecall-pro', 'Housecall Pro', null, 'H'], ['servicetitan', 'ServiceTitan', null, 'S'], ['buildertrend', 'Buildertrend', null, 'B'], ['procore', 'Procore', null, 'P'], ['autodesk', 'Autodesk', 'autodesk'], ['bluebeam', 'Bluebeam', null, 'B'], ['google-maps', 'Google Maps', 'googlemaps']]),
+    { id: 'postiz', name: 'Postiz', cat: 'marketing', logo: 'postiz', live: true, admin: true, blurb: 'Post to all your social channels', does: ['The Marketing Manager drafts, you approve, Postiz posts or schedules', 'One connection for Facebook, Instagram, LinkedIn, X, Threads, Bluesky and more'], sec: () => [postizSection()], state: () => (S.postiz?.connected ? 'on' : 'off') },
+    postizApp('facebook', 'Facebook', 'facebook', 'facebook'),
+    postizApp('instagram', 'Instagram', 'instagram', 'instagram'),
+    postizApp('linkedin', 'LinkedIn', null, 'linkedin', 'in'),
+    postizApp('x', 'X', 'x', 'x'),
+    postizApp('threads', 'Threads', 'threads', 'threads'),
+    postizApp('bluesky', 'Bluesky', 'bluesky', 'bluesky'),
+    postizApp('google-business', 'Google Business Profile', null, 'google', 'G'),
+    ...soon('marketing', [['mailchimp', 'Mailchimp', 'mailchimp'], ['canva', 'Canva', null, 'C'], ['figma', 'Figma', 'figma'], ['adobe', 'Adobe', null, 'A'], ['tiktok', 'TikTok', 'tiktok'], ['youtube', 'YouTube', 'youtube'], ['buffer', 'Buffer', 'buffer'], ['sprout', 'Sprout Social', null, 'S'], ['google-analytics', 'Google Analytics', 'googleanalytics'], ['google-ads', 'Google Ads', 'googleads'], ['search-console', 'Search Console', 'googlesearchconsole'], ['semrush', 'Semrush', 'semrush'], ['ahrefs', 'Ahrefs', null, 'A']]),
+    { id: 'github', name: 'GitHub', cat: 'dev', logo: 'github', live: true, admin: true, blurb: 'Pull requests move your work items', does: ['A work item’s key in a branch, pull request or commit ties the code to it', 'Opening, merging and releasing move the card for you'], sec: () => [githubPicker()], state: () => 'ready' },
+    ...soon('dev', [['gitlab', 'GitLab', 'gitlab'], ['bitbucket', 'Bitbucket', 'bitbucket'], ['jira', 'Jira', 'jira'], ['linear', 'Linear', 'linear'], ['sentry', 'Sentry', 'sentry'], ['datadog', 'Datadog', 'datadog'], ['pagerduty', 'PagerDuty', 'pagerduty'], ['vercel', 'Vercel', 'vercel'], ['supabase', 'Supabase', 'supabase']]),
+    ...soon('people', [['gusto', 'Gusto', 'gusto'], ['rippling', 'Rippling', null, 'R'], ['bamboohr', 'BambooHR', null, 'B'], ['deel', 'Deel', null, 'D'], ['workday', 'Workday', null, 'W'], ['deputy', 'Deputy', null, 'D'], ['wheniwork', 'When I Work', 'wheniwork'], ['homebase', 'Homebase', null, 'H']]),
+    { id: 'zapier', name: 'Zapier', cat: 'auto', logo: 'zapier', live: true, admin: true, blurb: 'Connect Kloomie to thousands of apps', does: ['A new contact, task, job or invoice in Kloomie can start a Zap, and a Zap can add them', 'Sign in to Kloomie’s Zapier app with an API key made here'], sec: () => [h('section', {}, h('h3', {}, 'Kloomie on Zapier'), h('p', {}, 'Open Kloomie’s app on Zapier, then sign in with an API key from below.'), h('div', { class: 'btns' }, h('a', { class: 'btn primary-btn', href: ZAPIER_INVITE, target: '_blank', rel: 'noopener' }, 'Open Kloomie on Zapier'))), intSection()], state: () => (INT.keys?.length ? 'on' : 'off') },
+    { id: 'make', name: 'Make', cat: 'auto', logo: 'make', live: true, admin: true, blurb: 'Build scenarios on Kloomie’s API', does: ['Make’s HTTP and webhook modules read and write your contacts, tasks, jobs and invoices', 'Webhooks tell Make the moment something happens'], sec: () => [intSection()], state: () => (INT.keys?.length || INT.hooks?.length ? 'on' : 'off') },
+    { id: 'api', name: 'API & webhooks', cat: 'auto', mono: '{ }', live: true, admin: true, blurb: 'Your website or your own code', does: ['API keys that read and write what you pick', 'Webhooks that tell your system when something happens'], sec: () => [intSection()], state: () => (INT.keys?.length || INT.hooks?.length ? 'on' : 'off') },
+    { id: 'leads', name: 'Website lead forms', cat: 'auto', mono: 'L', live: true, admin: true, blurb: 'Leads from your site into Contacts', does: ['A form to link to or put on your website', 'An address any form builder or lead service can send to'], sec: () => [leadSection()], state: () => (APPS.leads?.on ? 'on' : 'off') },
+    ...soon('auto', [['typeform', 'Typeform', 'typeform'], ['google-forms', 'Google Forms', 'googleforms'], ['jotform', 'Jotform', null, 'J'], ['airtable', 'Airtable', 'airtable']]),
+    { id: 'claude', name: 'Claude', cat: 'ai', logo: 'claude', live: true, blurb: 'Agents and Sidekick on your Claude key', does: ['Your agents and Sidekick plan and draft on your own key', 'Anthropic bills you for what you use'], sec: () => [aiSection()], state: () => (S.ai?.keys?.anthropic ? 'on' : 'off') },
+    { id: 'openai', name: 'OpenAI', cat: 'ai', mono: 'O', live: true, blurb: 'Agents, Sidekick and pictures on your key', does: ['Your agents and Sidekick on your own OpenAI key', 'Pictures for posts and flyers'], sec: () => [aiSection()], state: () => (S.ai?.keys?.openai ? 'on' : 'off') },
+    { id: 'gemini', name: 'Gemini', cat: 'ai', logo: 'googlegemini', live: true, blurb: 'Agents, Sidekick and pictures on your key', does: ['Your agents and Sidekick on your own Google key', 'Pictures for posts and flyers'], sec: () => [aiSection()], state: () => (S.ai?.keys?.gemini ? 'on' : 'off') },
+  ];
+  const appById = (id) => APP_LIST().find((a) => a.id === id);
+  const appState = (a) => (!a.live ? 'soon' : a.state());
+  const APP_ST = { on: () => 'Connected', off: (a) => (a.admin && !amAdmin() ? 'Owners & admins' : 'Connect'), ready: () => 'Ready to use', na: () => 'Not set up here', soon: () => 'Not built yet' };
+  // GitHub is set up on each software board.
+  function githubPicker() {
+    const boards = (S.projects || []).filter(isTech);
+    return h('section', {}, h('h3', {}, 'Pick a software board'),
+      boards.length ? h('div', { class: 'btns' }, boards.map((p) => h('button', { class: 'btn', onclick: () => githubSheet(p) }, p.name)))
+        : h('p', {}, 'GitHub connects to a software board. Make one first: Workspace → Boards → New board → Technology & software.'));
+  }
+  // Logos come from client/applogos.js, loaded the first time the page opens; a lettered tile until then, or for good.
+  let logosAsked = false;
+  function ensureLogos() {
+    if (window.APP_LOGOS || logosAsked) return;
+    logosAsked = true;
+    document.head.append(h('script', { src: '/applogos.js', onload: () => renderApps() }));
+  }
+  const MONO_COLORS = ['#5b5bd6', '#0e7490', '#b45309', '#be185d', '#15803d', '#7c3aed', '#1d4ed8', '#c2410c', '#0f766e', '#9333ea'];
+  function appLogo(a) {
+    const l = a.logo && window.APP_LOGOS?.[a.logo];
+    if (l) {
+      const n = parseInt(l.h, 16);
+      const dark = 0.299 * (n >> 16) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255) < 60; // near black: the text colour, so it shows in dark mode
+      return h('span', { class: 'app-logo', html: `<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="${dark ? 'currentColor' : '#' + l.h}" d="${l.d}"/></svg>` });
+    }
+    const i = [...a.name].reduce((s, c) => s + c.charCodeAt(0), 0) % MONO_COLORS.length;
+    return h('span', { class: 'app-logo mono', style: `background:${MONO_COLORS[i]}`, 'aria-hidden': 'true' }, a.mono || a.name[0]);
+  }
+  async function loadApps() {
+    if (APPS.loading || !S.workspace) return;
+    APPS.loading = true;
+    const admin = amAdmin();
+    const get = (p, ok = true) => (ok ? api('GET', p).catch(() => null) : null);
+    const [cals, feed, ai, pay, qbo, tw, pz, leads, keys, hooks] = await Promise.all([get('/calendars'), get('/calfeed'), get('/ai'), get('/payments/stripe', admin), get('/quickbooks', admin), get('/texting', admin), get('/postiz', admin), get('/lead-capture', admin), get('/integrations/keys', admin), get('/integrations/webhooks', admin)]);
+    if (cals) S.cals = cals;
+    if (feed) S.calfeed = feed;
+    if (ai) S.ai = ai;
+    if (pay) S.payments = pay;
+    if (qbo) S.qbo = qbo;
+    if (tw) S.texting = tw;
+    if (pz) S.postiz = pz;
+    APPS.leads = leads;
+    if (keys) INT.keys = keys;
+    if (hooks) INT.hooks = hooks;
+    APPS.loading = false;
+    renderApps();
+  }
+  // From anywhere: the page, or one app on it, or one of its tabs.
+  function openApps(to) {
+    $('#settings').classList.add('hidden');
+    closeTool();
+    closeProjects();
+    if (typeof to === 'string') { APPS.tab = 'apps'; APPS.open = to; }
+    else if (to?.tab) { APPS.tab = to.tab; APPS.open = null; }
+    if (S.tab === 'apps') renderApps(true);
+    else setTab('apps');
+    $('#apps').scrollTop = 0;
+  }
+  // Where Apps & Integrations links used to land.
+  const APP_AT = { '.ai-sec': 'claude', '.ai': 'claude', '.cal-sec': 'google-calendar', '.qbo-sec': 'quickbooks', '.pay-sec': 'stripe', '.tw-sec': 'twilio', '.pz-sec': 'postiz', '.gc-sec': 'google-contacts', '.lead-sec': { tab: 'dev' }, '.int-sec': { tab: 'dev' }, '.tools-sec': { tab: 'tools' } };
+  function appTile(a) {
+    const st = appState(a);
+    return h('button', { class: 'app-tile', 'data-app': a.id, 'data-state': st, onclick: () => { APPS.open = a.id; renderApps(true); $('#apps').scrollTop = 0; } },
+      appLogo(a), h('b', { class: 'app-name' }, a.name), a.live ? h('span', { class: 'app-blurb' }, a.blurb) : null,
+      h('span', { class: 'app-st st-' + st }, h('i'), APP_ST[st](a)));
+  }
+  function appsList() {
+    const q = APPS.q.trim().toLowerCase();
+    const all = APP_LIST();
+    const hit = (a) => !q || `${a.name} ${a.blurb} ${a.id}`.toLowerCase().includes(q);
+    const on = all.filter((a) => appState(a) === 'on');
+    const out = [];
+    if (!q && APPS.cat === 'all') {
+      out.push(h('section', { class: 'apps-connected' },
+        h('h2', {}, 'Connected', h('small', {}, `${on.length} connected`)),
+        on.length ? h('div', { class: 'app-grid' }, on.map(appTile)) : h('p', { class: 'apps-empty' }, 'Nothing connected yet. A good start: your calendar, then QuickBooks or Stripe.')));
+    }
+    for (const [k, label] of APP_CATS) {
+      if (APPS.cat !== 'all' && APPS.cat !== k) continue;
+      const list = all.filter((a) => a.cat === k && hit(a));
+      if (!list.length) continue;
+      const live = list.filter((a) => a.live).length;
+      out.push(h('section', { class: 'apps-cat', 'data-cat': k }, h('h2', {}, label, h('small', {}, live ? `${live} ready · ${list.length - live} coming` : `${list.length} coming`)), h('div', { class: 'app-grid' }, list.map(appTile))));
+    }
+    if (out.length === 0) out.push(h('p', { class: 'apps-empty' }, `No apps match “${APPS.q.trim()}”. Zapier and Make reach most others.`));
+    return h('div', { class: 'apps-list' }, ...out);
+  }
+  function appsDirectory() {
+    const chips = h('div', { class: 'apps-chips', role: 'tablist', 'aria-label': 'Kinds of apps' },
+      [['all', 'All'], ...APP_CATS].map(([k, label]) => h('button', { class: APPS.cat === k ? 'on' : null, 'aria-pressed': String(APPS.cat === k), onclick: () => { APPS.cat = k; renderApps(true); } }, label)));
+    return [chips, appsList()];
+  }
+  function appDetail(a) {
+    const st = appState(a);
+    const back = h('button', { class: 'btn app-back', onclick: () => { APPS.open = null; renderApps(true); } }, '‹ All apps');
+    const top = h('div', { class: 'app-detail-top' }, appLogo(a), h('div', { class: 'app-detail-t' }, h('h1', {}, a.name), h('p', {}, a.blurb)), h('span', { class: 'app-st st-' + st }, h('i'), APP_ST[st](a)));
+    const does = h('div', { class: 'app-card' }, h('h2', {}, a.live ? 'What it does' : 'What it would do'), h('ul', { class: 'app-does' }, (a.does || APP_WOULD[a.cat]).map((x) => h('li', {}, x))));
+    let main;
+    if (!a.live) {
+      main = h('div', { class: 'app-card app-soon' }, h('h2', {}, 'Not built yet'),
+        h('p', {}, `A direct connection to ${a.name} isn’t built yet. It’s on the plan.`),
+        h('p', {}, `In the meantime, if ${a.name} is on Zapier or Make, either one can link it to Kloomie: something new in one can add or change something in the other.`),
+        amAdmin() ? h('div', { class: 'btns' }, h('button', { class: 'btn primary-btn', 'data-go': 'zapier', onclick: () => openApps('zapier') }, 'Set up Zapier'), h('button', { class: 'btn', 'data-go': 'make', onclick: () => openApps('make') }, 'Set up Make'))
+          : h('p', {}, 'An owner or admin sets these up for the team.'));
+    } else if (a.admin && !amAdmin()) {
+      main = h('div', { class: 'app-card' }, h('p', {}, `An owner or admin connects ${a.name} for the team.`));
+    } else if (st === 'na') {
+      main = h('div', { class: 'app-card' }, h('h2', {}, 'Not switched on yet'), h('p', {}, `Kloomie’s ${a.name} connection is built, but it isn’t switched on for this server yet. It will show a Connect button here once it is.`));
+    } else {
+      main = h('div', { class: 'app-card app-conn' }, ...a.sec());
+    }
+    return h('div', { class: 'app-detail', 'data-app': a.id }, back, top, does, main);
+  }
+  function toolsTiles() {
+    const tools = S.workspace?.tools || {};
+    const admin = amAdmin();
+    return [h('p', { class: 'apps-lead' }, admin ? 'Turn on the tools your team uses. Turning one off hides it for everyone; nothing in it is deleted.' : 'The tools your team uses. Owners and admins turn them on and off.'),
+      h('div', { class: 'tool-grid' }, TOOL_ROWS.map(([k, name, sub]) => {
+        const input = h('input', { type: 'checkbox', 'aria-label': name });
+        input.checked = tools[k] !== false;
+        input.disabled = !admin;
+        input.addEventListener('change', () => api('PATCH', '/workspace', { tools: { [k]: input.checked } }).then((w) => { S.workspace = w; }, (e) => { input.checked = !input.checked; toast(e.message); }));
+        return h('div', { class: 'tool-tile', 'data-tool': k, 'data-on': String(tools[k] !== false) },
+          h('span', { class: 'tool-tile-ic', html: TAB_IC[k] || TAB_IC.tools }),
+          h('span', { class: 'tool-tile-t' }, h('b', {}, name), h('span', {}, sub)),
+          h('label', { class: 'toggle' }, input, h('i')));
+      }))];
+  }
+  function devPane() {
+    if (!amAdmin()) return [h('div', { class: 'app-card' }, h('p', {}, 'Owners and admins set up API keys, webhooks and lead forms.'))];
+    return [h('p', { class: 'apps-lead' }, 'For your website, Zapier, Make or your own code. ', h('a', { href: '/developers', target: '_blank', rel: 'noopener' }, 'Read the API docs')),
+      h('div', { class: 'app-card app-conn' }, intSection()),
+      h('div', { class: 'app-card app-conn' }, leadSection())];
+  }
+  // Holds off while someone types in it (a search, a key, a phone number), so a redraw can't eat what they wrote.
+  function renderApps(force) {
+    const root = $('#apps');
+    if (!root || root.classList.contains('hidden') || !S.workspace) return;
+    if (!force && root.contains(document.activeElement) && document.activeElement.matches('input, textarea, select')) return;
+    const keep = root.scrollTop;
+    const open = APPS.tab === 'apps' && APPS.open && appById(APPS.open);
+    if (!open) APPS.open = null;
+    const q = h('input', { class: 'apps-q', type: 'search', placeholder: 'Search apps…', 'aria-label': 'Search apps', value: APPS.q });
+    q.addEventListener('input', () => { APPS.q = q.value; root.querySelector('.apps-list')?.replaceWith(appsList()); });
+    const tabs = [['apps', 'Apps'], ['tools', 'Tools'], ['dev', 'Developers']];
+    root.replaceChildren(h('div', { class: 'apps-wrap' },
+      h('header', { class: 'apps-head' }, h('div', {}, h('h1', {}, 'Apps & Integrations'), h('p', {}, 'Connect the apps you already use, and pick the tools your team works in.')), APPS.tab === 'apps' && !open ? q : null),
+      h('div', { class: 'apps-tabs', role: 'tablist' }, tabs.map(([k, label]) => h('button', { class: APPS.tab === k ? 'on' : null, role: 'tab', 'aria-selected': String(APPS.tab === k), onclick: () => { APPS.tab = k; APPS.open = null; store.set('appsTab', k); renderApps(true); root.scrollTop = 0; } }, label))),
+      ...[].concat(APPS.tab === 'tools' ? toolsTiles() : APPS.tab === 'dev' ? devPane() : open ? appDetail(open) : appsDirectory())));
+    root.scrollTop = keep;
+  }
+
   // ---------- Contacts: the team's people (owners only) ----------
   // Typed in, imported from a spreadsheet, or filled by PSS. Tick people to email them; tap one to change it.
   const CT = { q: '', stage: '', group: store.get('ctGroup', ''), picked: new Set(), sort: store.get('ctSort', null) };
@@ -10004,7 +10240,7 @@
     };
     box.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) sendIt(); });
     wrap.append(h('small', { class: 'hint' }, 'Texts'), list,
-      S.texting?.connected === false ? h('p', { class: 'day-hint' }, 'Connect Twilio in Settings → Connections to text from Kloomie.') : !x.phone ? h('p', { class: 'day-hint' }, 'Add a phone number to text them.') : h('div', { class: 'tw-send' }, box, h('button', { type: 'button', class: 'btn small primary-btn', onclick: sendIt, disabled: !!x.dne }, 'Send')));
+      S.texting?.connected === false ? h('p', { class: 'day-hint' }, 'Connect Twilio in Apps & Integrations to text from Kloomie.') : !x.phone ? h('p', { class: 'day-hint' }, 'Add a phone number to text them.') : h('div', { class: 'tw-send' }, box, h('button', { type: 'button', class: 'btn small primary-btn', onclick: sendIt, disabled: !!x.dne }, 'Send')));
     return wrap;
   }
   async function openContactById(id) {
@@ -10807,7 +11043,7 @@
     recount();
     return h('div', { class: 'ag-step email post' },
       h('div', { class: 'ag-email-h' }, h('b', {}, '📣 Draft post'), s.why ? h('small', {}, s.why) : null),
-      pz?.connected ? chips : h('p', { class: 'ag-note' }, h('span', {}, 'Postiz isn’t connected, so copy this and post it yourself, or an owner can connect Postiz in Settings → Connections.')),
+      pz?.connected ? chips : h('p', { class: 'ag-note' }, h('span', {}, 'Postiz isn’t connected, so copy this and post it yourself, or an owner can connect Postiz in Apps & Integrations.')),
       body, count, picBox,
       pz?.connected ? h('div', { class: 'ag-when' }, whenSel, at) : null,
       h('div', { class: 'ag-step-act' }, pz?.connected ? go : null,
@@ -14356,7 +14592,7 @@
       const y = await api('POST', '/ai/record', { recordId: r.id, today: todayKey() });
       PR.ai.set(r.id, { ...y, done: {} });
     } catch (e) {
-      PR.ai.set(r.id, { error: e.message, settings: /Settings → AI/.test(e.message) });
+      PR.ai.set(r.id, { error: e.message, settings: /Apps & Integrations → AI/.test(e.message) });
     }
     renderProjects();
   }
@@ -14399,7 +14635,7 @@
         const y = await api('POST', '/ai/estimate', { recordId: r.id, ask: ask.value, today: todayKey() });
         onDone(y);
       } catch (e) {
-        if (/Settings → AI/.test(e.message)) toast(e.message, { label: 'Open Settings', run: () => { closeSheet(); closeProjects(); openSettings(); } });
+        if (/Apps & Integrations → AI/.test(e.message)) toast(e.message, { label: 'Add an AI key', run: () => { closeSheet(); closeProjects(); openSettings(); } });
         throw e;
       } finally {
         go.disabled = false;
@@ -15239,7 +15475,7 @@
 
   // ----- invoices: billing the customer for a job, getting paid, and what the job cost (owners and admins) -----
   // An invoice starts from the job's price lines. Sending it gives the customer a link to read and pay it (by card
-  // when the team's Stripe is connected in Settings → Connections); cash and checks are recorded here.
+  // when the team's Stripe is connected in Apps & Integrations); cash and checks are recorded here.
   PR.invoices = new Map();
   PR.costing = new Map();
   const INV_LABEL = { draft: 'Draft', sent: 'Sent', viewed: 'Viewed', partial: 'Part paid', paid: 'Paid', void: 'Void' };
@@ -15353,7 +15589,7 @@
         invoiceNews(y);
         copyText(invUrl(y));
         closeSheet();
-        toast(S.payments?.connected ? 'Link copied. Send it to your customer: they can pay by card there.' : 'Link copied. Send it to your customer. Connect Stripe in Settings → Connections so they can pay by card.');
+        toast(S.payments?.connected ? 'Link copied. Send it to your customer: they can pay by card there.' : 'Link copied. Send it to your customer. Connect Stripe in Apps & Integrations so they can pay by card.');
       } catch (e) { toast(e.message); }
     };
     const pays = inv.payments.map((x) => h('div', { class: 'pj-inv-pay' }, h('span', {}, `${dueLabel(x.day)} · ${PAY_METHODS.find(([k]) => k === x.method)?.[1] || x.method}${x.note ? ' · ' + x.note : ''}`), h('b', { class: 'pj-num' }, money2(x.amount)),
@@ -15379,7 +15615,7 @@
         inv.status !== 'void' && inv.balance > 0 ? act('Record a payment', async () => { try { await saveIt(); paymentSheet(inv); } catch (e) { toast(e.message); } }) : null,
         inv.id ? shareBtn(linkToken('invoice', inv.id)) : null,
         del),
-      inv.status !== 'void' && !S.payments?.connected ? h('small', { class: 'day-hint' }, 'To take cards on the customer’s page, connect your Stripe account in Settings → Connections.') : null,
+      inv.status !== 'void' && !S.payments?.connected ? h('small', { class: 'day-hint' }, 'To take cards on the customer’s page, connect your Stripe account in Apps & Integrations.') : null,
       inv.qbo?.id ? h('small', { class: 'day-hint' }, inv.qbo.voided ? '✓ Voided in QuickBooks too.' : '✓ In QuickBooks, with its payments.') : inv.qbo?.error ? h('small', { class: 'err' }, 'Not in QuickBooks yet: ' + inv.qbo.error) : null,
     ].filter(Boolean), inv.status === 'void' ? null : async () => { await saveIt(); toast('Invoice saved'); });
   }
@@ -15395,7 +15631,7 @@
       toast(y.status === 'paid' ? `${inv.number} is paid in full` : `${money2(y.balance)} left on ${inv.number}`);
     }, 'Record payment');
   }
-  // Settings → Connections: the team's own Stripe account, so customers can pay invoices by card.
+  // Apps & Integrations: the team's own Stripe account, so customers can pay invoices by card.
   // Leads from the website: a form page of the team's own, to link to or embed, and a lead webhook for other tools.
   // How to connect each kind of website, funnel or form tool: the steps, with this team's own snippet, address or link
   // filled in. "snippet" = the one-line website script, "hook" = the lead webhook, "form" = the form link, "embed" =
@@ -15516,7 +15752,7 @@
     const sec = h('section', { class: 'tw-sec' }, h('h3', {}, 'Text messages (Twilio)'));
     const x = S.texting;
     if (!x) {
-      api('GET', '/texting').then((y) => { S.texting = y; $('#settings .tw-sec')?.replaceWith(textingSection()); }).catch(() => {});
+      api('GET', '/texting').then((y) => { S.texting = y; $('#settings .tw-sec, #apps .tw-sec')?.replaceWith(textingSection()); }).catch(() => {});
       return sec.append(h('p', { class: 'day-hint' }, 'Loading…')), sec;
     }
     const redo = (y) => { S.texting = y; sec.replaceWith(textingSection()); };
@@ -15553,7 +15789,7 @@
     const sec = h('section', { class: 'pz-sec' }, h('h3', {}, 'Social posts (Postiz)'));
     const x = S.postiz;
     if (!x) {
-      api('GET', '/postiz').then((y) => { S.postiz = y; $('#settings .pz-sec')?.replaceWith(postizSection()); }).catch(() => {});
+      api('GET', '/postiz').then((y) => { S.postiz = y; $('#settings .pz-sec, #apps .pz-sec')?.replaceWith(postizSection()); }).catch(() => {});
       return sec.append(h('p', { class: 'day-hint' }, 'Loading…')), sec;
     }
     const redo = (y) => { S.postiz = y; if (AG.data) AG.postiz = y; sec.replaceWith(postizSection()); };
@@ -15601,7 +15837,7 @@
     const sec = h('section', { class: 'qbo-sec' }, h('h3', {}, 'QuickBooks'));
     const x = S.qbo;
     if (!x) {
-      api('GET', '/quickbooks').then((y) => { S.qbo = y; $('#settings .qbo-sec')?.replaceWith(qboSection()); }).catch(() => {});
+      api('GET', '/quickbooks').then((y) => { S.qbo = y; $('#settings .qbo-sec, #apps .qbo-sec')?.replaceWith(qboSection()); }).catch(() => {});
       return sec.append(h('p', { class: 'day-hint' }, 'Loading…')), sec;
     }
     if (!x.configured && !x.connected) return h('section', { class: 'qbo-sec', hidden: true });
@@ -15694,7 +15930,7 @@
     const sec = h('section', { class: 'pay-sec' }, h('h3', {}, 'Card payments (Stripe)'));
     const x = S.payments;
     if (!x) {
-      api('GET', '/payments/stripe').then((y) => { S.payments = y; $('#settings .pay-sec')?.replaceWith(paySection()); }).catch(() => {});
+      api('GET', '/payments/stripe').then((y) => { S.payments = y; $('#settings .pay-sec, #apps .pay-sec')?.replaceWith(paySection()); }).catch(() => {});
       return sec.append(h('p', { class: 'day-hint' }, 'Loading…')), sec;
     }
     const redo = (y) => { S.payments = y; sec.replaceWith(paySection()); };
@@ -17197,7 +17433,7 @@
     try {
       return await api('POST', '/ai/doc', { ...req, itemId: x.id, taskId: x.taskId || null, today: todayKey() });
     } catch (e) {
-      if (/Settings → AI/.test(e.message)) toast(e.message, { label: 'Open Settings', run: () => { closeDoc(); openSettings(); } });
+      if (/Apps & Integrations → AI/.test(e.message)) toast(e.message, { label: 'Add an AI key', run: () => { closeDoc(); openSettings(); } });
       throw e;
     }
   }
@@ -19492,7 +19728,7 @@
       S.sidekick = [x, ...(S.sidekick || []).filter((y) => y.id !== x.id)];
       return x;
     } catch (e) {
-      if (/Settings → AI/.test(e.message)) toast(e.message, { label: 'Open Settings', run: () => { closeTool(); openSettings(); } });
+      if (/Apps & Integrations → AI/.test(e.message)) toast(e.message, { label: 'Add an AI key', run: () => { closeTool(); openSettings(); } });
       else toast(e.message);
       return null;
     } finally {
@@ -19598,7 +19834,7 @@
       SKD.mission = null;
       SKD.view = 'run:' + x.id;
     } catch (e) {
-      if (/AI key|Settings → AI/.test(e.message)) toast(e.message, { label: 'Open Settings', run: () => openSettings('connections', '.ai') });
+      if (/AI key|Apps & Integrations → AI/.test(e.message)) toast(e.message, { label: 'Add an AI key', run: () => openSettings('connections', '.ai') });
       else toast(e.message);
     }
     SKD.busy = false;
@@ -21342,7 +21578,7 @@
     } catch {
       return;
     }
-    const box = $('#settings .cal-sec');
+    const box = $('#settings .cal-sec, #apps .cal-sec');
     if (box) box.replaceWith(calendarSection());
   }
   // ---------- brand & culture: set by team owners and admins; brands the app and guides AI drafts ----------
@@ -21575,7 +21811,7 @@
     return box;
   }
 
-  const SET_TABS = [['general', 'General'], ['team', 'Team'], ['business', 'Business'], ['connections', 'Connections'], ['account', 'Account']];
+  const SET_TABS = [['general', 'General'], ['team', 'Team'], ['business', 'Business'], ['account', 'Account']]; // Connections moved to Apps & Integrations (2026-11-20)
   function renderSettings() {
     const s = $('#settings');
     const ws = S.workspace;
@@ -21591,6 +21827,9 @@
     const admin = owner || me?.role === 'admin';
 
     if (tab === 'general') {
+      // Connections moved to their own page (2026-11-20).
+      s.append(h('section', { class: 'apps-moved' }, h('h3', {}, 'Connections'),
+        h('div', { class: 'srow' }, h('span', {}, 'Calendars, email, QuickBooks, Stripe, AI keys and the rest are in Apps & Integrations now', h('small', {}, 'In the sidebar, under Workspace')), h('button', { class: 'btn', onclick: () => openApps() }, 'Open'))));
       // Layout
       const seg = h('div', { class: 'seg' },
         h('button', { class: S.panes.length === 1 ? 'on' : null, onclick: () => { setPanes([S.panes[0] === 'files' ? 'all' : S.panes[0]]); renderSettings(); } }, 'One column'),
@@ -21702,21 +21941,6 @@
       s.append(dev);
     }
 
-    if (tab === 'connections') {
-      s.append(calendarSection());
-      loadCalendars();
-      s.append(aiSection());
-      loadAi();
-      if (amAdmin()) s.append(paySection());
-      if (amAdmin()) s.append(qboSection());
-      if (amAdmin()) s.append(textingSection());
-      if (amAdmin()) s.append(postizSection());
-      if (amAdmin()) s.append(leadSection());
-      if (amAdmin()) s.append(gcSection());
-      if (amAdmin() && (!S.pss || S.pss.connected || S.pss.available)) s.append(pssSection());
-      if (amAdmin()) s.append(intSection());
-    }
-
     if (tab === 'team') {
       // People
       const onlineIds = new Set(S.online.map((d) => d.memberId));
@@ -21773,10 +21997,10 @@
       if (admin) {
         // What members can use (2026-11-20): each Workspace tab and tool, and the team's schedule. Off, the server
         // refuses it to members and its data stays off their devices; owners and admins keep everything. A tool off
-        // for the whole team (Tools, below) is off for everyone either way.
+        // for the whole team (Apps & Integrations → Tools) is off for everyone either way.
         const acc = ws.memberAccess || {};
         const set = (k, on, input) => api('PATCH', '/workspace', { memberAccess: { [k]: on } }).then((w) => { S.workspace = w; toast(on ? 'Members can use it now' : 'Off for members'); }, (e) => { input.checked = !on; toast(e.message); });
-        const row = (k, name, sub, team = true) => toggleRow(name, team ? sub : `${sub} · off for the whole team (Tools, below)`, acc[k] !== false, (on, input) => set(k, on, input));
+        const row = (k, name, sub, team = true) => toggleRow(name, team ? sub : `${sub} · off for the whole team (Apps & Integrations → Tools)`, acc[k] !== false, (on, input) => set(k, on, input));
         s.append(h('section', { class: 'access-sec' }, h('h3', {}, 'What members can use'),
           h('p', { class: 'day-hint' }, 'Owners and admins always have everything. Switch something off for members and it leaves their Workspace and Tools, Kloomie refuses it to them, and what’s in it stays off their phones and computers.'),
           h('div', { class: 'picks-h' }, 'Workspace tabs'),
@@ -21796,17 +22020,9 @@
           h('div', { class: 'picks-h' }, 'The team'),
           row('teamSchedule', 'See the team’s schedule', 'Tasks → Team: who’s carrying what this week, and the weeks ahead')));
       }
-      if (admin) {
-        // The tools the team uses. Switched off, a tool leaves everyone's Tools menu; nothing in it is deleted.
-        const TOOL_ROWS = [['agents', 'Agents', 'Your team: Chief of Staff, Sales, Operations and Marketing'], ['sidekick', 'Sidekick', 'Plans campaigns with you'], ['docs', 'Docs', 'Write and share pages'], ['contacts', 'Contacts', 'Your customers and leads (owners and admins)'],
-          ['email', 'Email', 'Campaign email from Outlook or Gmail'], ['folders', 'Folders', 'Files in folders'], ['signs', 'Signatures', 'Send PDFs to be signed'], ['bills', 'Finance', 'Bills, money in and out, budgets'],
-          ['meetings', 'Meeting notes', 'Record a call, get the notes'], ['map', 'Map', 'Pins, routes and canvassing runs'], ['vault', 'Vault', 'Codes and logins, locked on your device'], ['projects', 'Boards', 'Jobs in columns: trades, software, client work and team projects'], ['cards', 'Business cards', 'Everyone’s own card to share by link, text, QR code or NFC'], ['news', 'News', 'Each person’s own news, if they turn it on in their tabs'], ['inventory', 'Inventory', 'Parts, materials and equipment: stock at each place, used on jobs, low-stock alerts']];
-        const tools = ws.tools || {};
-        s.append(h('section', { class: 'tools-sec' }, h('h3', {}, 'Tools'),
-          h('p', { class: 'day-hint' }, 'Turn on what your team uses. A tool you turn off leaves everyone’s Tools menu; nothing in it is deleted.'),
-          ...TOOL_ROWS.map(([k, name, sub]) => toggleRow(name, sub, tools[k] !== false, (on, input) =>
-            api('PATCH', '/workspace', { tools: { [k]: on } }).then((w) => { S.workspace = w; }, (e) => { input.checked = !on; toast(e.message); })))));
-      }
+      // Tools moved to Apps & Integrations (2026-11-20); help and older videos still send people here.
+      s.append(h('section', { class: 'apps-moved' }, h('h3', {}, 'Tools'),
+        h('div', { class: 'srow' }, h('span', {}, 'Which tools your team uses is in Apps & Integrations now', h('small', {}, 'Apps & Integrations → Tools')), h('button', { class: 'btn', onclick: () => openApps({ tab: 'tools' }) }, 'Open'))));
       if (admin) s.append(inviteSection());
       s.append(rolesSection(peopleCall));
       if (amAdmin()) {

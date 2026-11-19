@@ -54,8 +54,8 @@ const names = async () => (await tabs()).map((t) => t.replace('*', '')).join(','
 const strip = () => A.ev(`(() => { const s = document.querySelector('#workTabs'); return s && !s.hidden && getComputedStyle(s).display !== 'none' ? [...s.querySelectorAll('button[data-tab]')].map((b) => b.textContent + (b.classList.contains('on') ? '*' : '')).join(',') : ''; })()`);
 const menuItems = () => A.ev(`[...document.querySelectorAll('#menu button')].map((b) => b.textContent)`);
 
-// The same short toolbar for everyone (2026-11-14; Day moved into Workspace as Tasks 2026-11-15; Chat into Tools 2026-11-20): Home, Agents, Workspace.
-ok(await names() === 'Home,Agents,Workspace', 'the toolbar is Home, Agents, Workspace (Chat is in Tools): ' + await names());
+// The same short toolbar for everyone (2026-11-14; Day moved into Workspace as Tasks 2026-11-15; Chat into Tools 2026-11-20; Apps & Integrations 2026-11-20): Home, Agents, Workspace, Apps & Integrations.
+ok(await names() === 'Home,Agents,Workspace,Apps & Integrations', 'the toolbar is Home, Agents, Workspace, Apps & Integrations (Chat is in Tools): ' + await names());
 ok(!(await A.ev(`!!document.querySelector('#tabs .tabs-edit')`)), 'pins are not in the sidebar any more (2026-11-16: they are in Workspace)');
 ok(!(await A.ev(`!!document.querySelector('#toolsBtn')`)), 'no All tools button: Tools is a tab in Workspace');
 ok(!(await A.ev(`!!document.querySelector('.bar #devices, .bar .devices')`)), 'no device tags in the header (2026-11-16: who’s online is in Settings → Account)');
@@ -177,7 +177,7 @@ await sleep(600);
 await A.ev(`document.querySelector('#menuBtn').click(); true`);
 await sleep(400);
 ok(await A.ev(`[...document.querySelectorAll('#tabs button')].every((b) => b.scrollWidth <= b.clientWidth + 1)`), 'no tab label is cut off on a phone');
-ok(await A.ev(`(() => { const bs = [...document.querySelectorAll('#tabs button[data-tab]')].filter((b) => getComputedStyle(b).display !== 'none'); const d = document.querySelector('#side').getBoundingClientRect(); return bs.map((b) => b.dataset.tab).join() === 'home,agents,work,day,contacts,projects,camps,docs,automations,tools' && bs.every((b, i) => { const r = b.getBoundingClientRect(); return r.left >= d.left && r.right <= d.right + 1 && (!i || r.top > bs[i - 1].getBoundingClientRect().top); }); })()`), 'the drawer lists them one under another, Workspace’s tabs under it');
+ok(await A.ev(`(() => { const bs = [...document.querySelectorAll('#tabs button[data-tab]')].filter((b) => getComputedStyle(b).display !== 'none'); const d = document.querySelector('#side').getBoundingClientRect(); return bs.map((b) => b.dataset.tab).join() === 'home,agents,work,day,contacts,projects,camps,docs,automations,tools,apps' && bs.every((b, i) => { const r = b.getBoundingClientRect(); return r.left >= d.left && r.right <= d.right + 1 && (!i || r.top > bs[i - 1].getBoundingClientRect().top); }); })()`), 'the drawer lists them one under another, Workspace’s tabs under it');
 await A.ev(`document.querySelector('#tabs [data-tab=contacts]').click(); true`);
 ok(await A.until(`!document.querySelector('#tool').classList.contains('hidden') && document.querySelector('#tool h2').textContent.includes('Contacts')`), 'Contacts opens from the drawer');
 ok(await strip() === '', 'no strip on a phone');

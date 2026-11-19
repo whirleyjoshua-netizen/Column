@@ -205,9 +205,9 @@ export async function complete(provider, { key, model, system, prompt }) {
 // A provider's error, worded for the person who owns the key.
 export function llmError(e) {
   const s = e.status;
-  if (s === 401 || s === 403 || e instanceof Anthropic.AuthenticationError || e instanceof Anthropic.PermissionDeniedError) return 'Your AI key was rejected. Check it in Settings → AI.';
+  if (s === 401 || s === 403 || e instanceof Anthropic.AuthenticationError || e instanceof Anthropic.PermissionDeniedError) return 'Your AI key was rejected. Check it in Apps & Integrations → AI.';
   if (s === 429 || e instanceof Anthropic.RateLimitError) return 'The provider is rate limiting this key right now. Try again in a minute.';
-  if (s === 404 || e instanceof Anthropic.NotFoundError) return 'That model isn’t available to your key. Pick another in Settings → AI.';
+  if (s === 404 || e instanceof Anthropic.NotFoundError) return 'That model isn’t available to your key. Pick another in Apps & Integrations → AI.';
   if (s === 400 || e instanceof Anthropic.BadRequestError) return 'The provider rejected the request: ' + clip(String(e.message), 300);
   if (e instanceof Anthropic.APIConnectionError) return 'Couldn’t reach the provider.';
   return 'The AI request failed: ' + clip(String(e.message || e), 300);

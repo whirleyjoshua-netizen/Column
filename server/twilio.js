@@ -57,7 +57,7 @@ export function twilioModule({ db, save, broadcast, seal, unseal, readJson, send
   // One text from the team's number. Throws with Twilio's reason when it's refused.
   async function sendText(wsId, contact, body, by, extra = {}) {
     const c = conn(wsId);
-    if (!c || offline(wsId)) throw Object.assign(new Error('Connect Twilio first, in Settings → Connections.'), { status: 400 });
+    if (!c || offline(wsId)) throw Object.assign(new Error('Connect Twilio first, in Apps & Integrations.'), { status: 400 });
     if (contact && noContact(contact)) throw Object.assign(new Error(`${contact.name || 'They'} is marked do not contact.`), { status: 400 });
     const to = e164(contact?.phone || extra.to);
     if (!to) throw Object.assign(new Error('There’s no phone number Kloomie can text.'), { status: 400 });

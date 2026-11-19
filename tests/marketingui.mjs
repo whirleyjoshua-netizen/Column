@@ -2,6 +2,15 @@ import * as FS from 'node:fs';
 import http from 'node:http';
 import { spawn } from 'node:child_process';
 import WebSocket from '../server/node_modules/ws/index.js';
+// Apps & Integrations has the connections (out of Settings since 2026-11-20).
+const appsOpen = async (A, id) => {
+  await A.ev(`document.querySelector('#settings').classList.add('hidden'); document.querySelector('#tabs [data-tab=apps]').click(); true`);
+  await A.until(`!!document.querySelector('#apps .apps-tabs')`);
+  await A.ev(`[...document.querySelectorAll('#apps .apps-tabs button')].find((b) => b.textContent === ${JSON.stringify(id === 'dev' ? 'Developers' : id === 'tools' ? 'Tools' : 'Apps')}).click(); true`);
+  if (id === 'dev' || id === 'tools') return;
+  await A.until(`!!document.querySelector('#apps .app-tile[data-app="${id}"]')`);
+  await A.ev(`document.querySelector('#apps .app-tile[data-app="${id}"]').click(); true`);
+};
 // The Marketing Manager in the browser: connecting Postiz in Settings (a wrong key is refused, the channels show),
 // the fourth agent on Your team, a win-back assignment with a campaign, a picture shown in the steps, a post draft
 // with its channels, picture and time to change before scheduling it, Undo taking it back out of Postiz, an email
@@ -150,19 +159,17 @@ try {
   await sleep(1200);
   ok(await A.until(`!document.querySelector('#app').classList.contains('hidden')`, 20000), 'Ada is in');
 
-  // ----- Postiz in Settings → Connections -----
-  await A.click('#settingsBtn');
-  await A.until(`!!document.querySelector('#settings')`);
-  await A.ev(`(() => { const b = [...document.querySelectorAll('#settings button, #settings [role=tab]')].find((x) => /Connections/.test(x.textContent)); b && b.click(); return true; })()`);
-  ok(await A.until(`!!document.querySelector('#settings .pz-sec input[type=password]')`), 'Settings → Connections has Social posts (Postiz)');
-  ok(await A.ev(`[...document.querySelectorAll('#settings .pz-sec button')].some((b) => b.textContent === 'Connect with Postiz') && !document.querySelector('#settings .pz-sec details').open && document.querySelector('#settings .pz-sec details summary').textContent.includes('API key instead')`), 'with Kloomie’s Postiz app set up: Connect with Postiz first, and an API key tucked underneath');
-  await A.ev(`document.querySelector('#settings .pz-sec details').open = true`);
-  await A.ev(`(() => { document.querySelector('#settings .pz-sec input[type=password]').value = 'pz-wrong-key-999'; [...document.querySelectorAll('#settings .pz-sec button')].find((b) => b.textContent === 'Connect Postiz').click(); return true; })()`);
+  // ----- Postiz in Apps & Integrations -----
+  await appsOpen(A, 'postiz');
+  ok(await A.until(`!!document.querySelector('#apps .pz-sec input[type=password]')`), 'Settings → Connections has Social posts (Postiz)');
+  ok(await A.ev(`[...document.querySelectorAll('#apps .pz-sec button')].some((b) => b.textContent === 'Connect with Postiz') && !document.querySelector('#apps .pz-sec details').open && document.querySelector('#apps .pz-sec details summary').textContent.includes('API key instead')`), 'with Kloomie’s Postiz app set up: Connect with Postiz first, and an API key tucked underneath');
+  await A.ev(`document.querySelector('#apps .pz-sec details').open = true`);
+  await A.ev(`(() => { document.querySelector('#apps .pz-sec input[type=password]').value = 'pz-wrong-key-999'; [...document.querySelectorAll('#apps .pz-sec button')].find((b) => b.textContent === 'Connect Postiz').click(); return true; })()`);
   ok(await A.until(`[...document.querySelectorAll('.toast, #toast')].some((x) => /didn’t accept the API key/.test(x.textContent))`), 'a wrong key is refused, with why');
-  await A.until(`[...document.querySelectorAll('#settings .pz-sec button')].some((b) => b.textContent === 'Connect Postiz' && !b.disabled)`);
-  await A.ev(`(() => { document.querySelector('#settings .pz-sec input[type=password]').value = 'pz-good-key-123'; [...document.querySelectorAll('#settings .pz-sec button')].find((b) => b.textContent === 'Connect Postiz').click(); return true; })()`);
-  ok(await A.until(`document.querySelectorAll('#settings .pz-chan').length === 3`), 'connected: Facebook, Instagram and the Google profile show as channels');
-  ok(await A.ev(`document.querySelector('#settings .pz-sec').textContent.includes('Premier TV (youtube)') && document.querySelector('#settings .pz-sec').textContent.includes('key ending -123')`), 'YouTube is listed as not posted to; the key shows only its end');
+  await A.until(`[...document.querySelectorAll('#apps .pz-sec button')].some((b) => b.textContent === 'Connect Postiz' && !b.disabled)`);
+  await A.ev(`(() => { document.querySelector('#apps .pz-sec input[type=password]').value = 'pz-good-key-123'; [...document.querySelectorAll('#apps .pz-sec button')].find((b) => b.textContent === 'Connect Postiz').click(); return true; })()`);
+  ok(await A.until(`document.querySelectorAll('#apps .pz-chan').length === 3`), 'connected: Facebook, Instagram and the Google profile show as channels');
+  ok(await A.ev(`document.querySelector('#apps .pz-sec').textContent.includes('Premier TV (youtube)') && document.querySelector('#apps .pz-sec').textContent.includes('key ending -123')`), 'YouTube is listed as not posted to; the key shows only its end');
   await shot(A, 'mk-postiz');
   await A.ev(`document.querySelector('#settings').classList.add('hidden')`);
 

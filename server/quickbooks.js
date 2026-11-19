@@ -447,7 +447,7 @@ export function quickbooksModule({ bind, db, save, broadcast, cleanText, readJso
   // with a redirect, never a page, so those never sit in a page that could pass them on; /quickbooks/done says how it went.
   const DONE = {
     connected: ['QuickBooks connected', 'Quotes and invoices you send from Kloomie now go into QuickBooks, with their payments. You can close this window.'],
-    expired: ['Link expired', 'Start again from Kloomie → Settings → Connections.'],
+    expired: ['Link expired', 'Start again from Kloomie → Apps & Integrations.'],
     denied: ['Not connected', 'QuickBooks access wasn’t granted. You can close this window.'],
     role: ['Not connected', 'Only team owners and admins can connect QuickBooks.'],
     company: ['Not connected', 'QuickBooks didn’t say which company. Try again.'],
@@ -500,7 +500,7 @@ export function quickbooksModule({ bind, db, save, broadcast, cleanText, readJso
   // here says which team, so it only explains; that team's next sync finds the access gone and says so in Settings.
   function disconnectedPage(req, res) {
     res.setHeader('X-Robots-Tag', 'noindex');
-    return page(res, 'Kloomie is disconnected from QuickBooks', 'Kloomie can no longer reach that QuickBooks company. Quotes, invoices and payments already copied stay in both places. To connect again, open Kloomie → Settings → Connections → QuickBooks.');
+    return page(res, 'Kloomie is disconnected from QuickBooks', 'Kloomie can no longer reach that QuickBooks company. Quotes, invoices and payments already copied stay in both places. To connect again, open Kloomie → Apps & Integrations → QuickBooks.');
   }
   const escapeHtml = (s) => String(s).replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch]);
 
