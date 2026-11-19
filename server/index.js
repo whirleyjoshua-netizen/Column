@@ -1432,6 +1432,13 @@ function applyPreset(x, body, ws) {
     if (body.repeat !== undefined) x.repeat = REPEATS.includes(body.repeat) ? body.repeat : null;
     if (body.signoffId !== undefined) x.signoffId = ws.members.some((m) => m.id === body.signoffId) ? body.signoffId : null;
     x.name ||= clipText(x.text, 120);
+  } else if (x.kind === 'ask') {
+    // A saved ask for the AI team (2026-11-20): words you send again and again, like "Weekly sales summary".
+    if (body.ask !== undefined) x.ask = cleanText(body.ask, 4000);
+    if (!x.ask) throw badRequest('Write what to ask.');
+    if (body.agent !== undefined) x.agent = ['team', 'chief', 'sales', 'ops', 'marketing'].includes(body.agent) ? body.agent : 'team';
+    x.agent ||= 'team';
+    x.name ||= clipText(x.ask, 60);
   } else if (x.kind === 'visit') {
     // A visit setup (2026-11-20): how a kind of visit usually goes (kind, time, length, crew, a note), picked when
     // booking a visit on a job.
@@ -1477,6 +1484,7 @@ function usePreset(ws, who, x, opts = {}) {
   if (opts.date != null && !isDay(opts.date)) throw badRequest('Bad day.');
   const today = teamDay(ws.id);
   if (x.kind === 'visit') throw badRequest('A visit setup is picked when you book a visit on a job.');
+  if (x.kind === 'ask') throw badRequest('A saved ask is sent from Your team.');
   // A calendar block goes on the calendar of whoever uses it (calendars are each person's own).
   if (x.kind === 'block') {
     const e = applyEntry({ id: rid(), wsId: ws.id, memberId: who.memberId, by: who.member, deviceId: who.deviceId || null, createdAt: Date.now(), text: '', date: null, start: null, end: null, done: false, color: null, taskId: null },
@@ -3650,6 +3658,7 @@ function cleanAction(a, ws, who) {
   // From a saved task or bundle (a.presetId): it says and assigns what the saved one does, unless the step picks who.
   const preset = kind === 'task' && a.presetId ? db.taskPresets?.[a.presetId] : null;
   if (kind === 'task' && a.presetId && (!preset || preset.wsId !== ws.id)) throw badRequest('That saved task is gone.');
+  if (kind === 'task' && preset?.kind === 'ask') throw badRequest('A saved ask goes to your AI team. Use the “Ask your team” step and start it from the saved ask.');
   if (kind === 'task' && preset?.kind === 'visit') throw badRequest('A visit setup books a visit, not a task. Use the “Book a visit” step.');
   if (kind === 'task' && preset?.kind === 'block') throw badRequest('A calendar block goes on someone’s own calendar, so an automation can’t make it. Pick a saved task or bundle.');
   if (kind === 'task') return { kind, text, ...(preset ? { presetId: preset.id, presetName: preset.name } : {}), assignee: /^(who|role:[\w-]+|[\w-]{6,})$/.test(a.assignee || '') ? a.assignee : '', dueIn: a.dueIn === '' || a.dueIn == null ? null : Math.max(0, Math.min(90, Math.round(Number(a.dueIn)) || 0)), campaign: a.campaign === 'same' || (a.campaign && db.campaigns[a.campaign]?.wsId === ws.id) ? a.campaign : '' };
@@ -8401,8 +8410,8 @@ async function api(req, res, url) {
     if (m === 'POST' && !b) {
       if (presetsOf(ws.id).length >= PRESETS_MAX) return send(res, 400, { error: `A team can keep ${PRESETS_MAX} saved tasks and bundles. Delete one first.` });
       const body = await readJson(req, 50_000);
-      const kind = ['bundle', 'block', 'visit'].includes(body.kind) ? body.kind : 'task';
-      const x = applyPreset({ id: rid(), wsId: ws.id, kind, name: '', ...(kind === 'task' ? { text: '', assigneeId: null, roleId: null, dueIn: null, priority: 0, repeat: null, signoffId: null } : kind === 'block' ? { text: '', start: null, minutes: 60, repeat: null, color: null } : kind === 'visit' ? { visit: 'Visit', start: 540, minutes: 60, memberIds: [], note: '', flex: false } : { steps: [] }), memberId: auth.memberId, by: auth.member, createdAt: Date.now() }, body, ws);
+      const kind = ['bundle', 'block', 'visit', 'ask'].includes(body.kind) ? body.kind : 'task';
+      const x = applyPreset({ id: rid(), wsId: ws.id, kind, name: '', ...(kind === 'task' ? { text: '', assigneeId: null, roleId: null, dueIn: null, priority: 0, repeat: null, signoffId: null } : kind === 'block' ? { text: '', start: null, minutes: 60, repeat: null, color: null } : kind === 'visit' ? { visit: 'Visit', start: 540, minutes: 60, memberIds: [], note: '', flex: false } : kind === 'ask' ? { ask: '', agent: 'team' } : { steps: [] }), memberId: auth.memberId, by: auth.member, createdAt: Date.now() }, body, ws);
       db.taskPresets[x.id] = x;
       save();
       broadcast(ws.id, { type: 'presets' });

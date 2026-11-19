@@ -130,6 +130,14 @@ try {
   ok((await cy('POST', `/task-presets/${setup.id}/use`, {})).status === 400, 'it isn’t “used” on its own: it’s picked when booking a visit on a job');
   ok((await ada('POST', '/automations', { name: 'Visity', trigger: { kind: 'contact.created' }, actions: [{ kind: 'task', presetId: setup.id }] })).status === 400, 'and a task step can’t make one');
 
+  // A saved ask for the AI team (2026-11-20).
+  r = await ben('POST', '/task-presets', { kind: 'ask', ask: 'Sum up this week’s sales and what to chase next', agent: 'sales' });
+  ok(r.status === 200 && r.body.kind === 'ask' && r.body.agent === 'sales' && r.body.name.startsWith('Sum up this week'), 'Ben saves an ask for Sales');
+  ok((await ben('POST', '/task-presets', { kind: 'ask', ask: '', agent: 'sales' })).status === 400, 'an ask has to say something');
+  ok((await ben('POST', '/task-presets', { kind: 'ask', ask: 'x', agent: 'nobody' })).body?.agent === 'team', 'an agent that isn’t one goes to the whole team');
+  ok((await cy('GET', '/task-presets')).body.presets.some((x) => x.id === r.body.id), 'the team sees it');
+  ok((await cy('POST', `/task-presets/${r.body.id}/use`, {})).status === 400, 'it’s sent from Your team, not “used” here');
+
   // Another team sees none of it.
   const other = call((await call()('POST', '/auth', { mode: 'create', workspace: 'Other ' + t, name: 'Zed', email: `zed${t}@t.test`, password: 'longenough4', device: 'Mac', deviceId: 'd4' })).body.token);
   ok((await other('GET', '/task-presets')).body.presets.length === 0, 'another team sees none');

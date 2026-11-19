@@ -3922,6 +3922,8 @@
   function presetMenu(anchor, x) {
     const mine = x.memberId === S.me?.memberId || amAdmin();
     // A visit setup is picked when booking a visit on a job; here it can only be removed.
+    if (x.kind === 'ask') return openMenu(anchor, [{ label: 'Send it to your team', run: () => { agOpen(x.agent === 'team' ? 'team' : x.agent); setTimeout(() => agAsk(x.agent || 'team', x.ask)); } },
+      mine ? { label: 'Delete this saved ask', danger: true, run: () => api('DELETE', '/task-presets/' + x.id).then(() => { SV.list = SV.list.filter((y) => y.id !== x.id); if (toolBox('templates')?.isConnected) renderTool(true); }).catch((e) => toast(e.message)) } : null].filter(Boolean));
     if (x.kind === 'visit') return openMenu(anchor, [{ note: 'Pick it when you book a visit on a job (the job → Schedule a visit).' },
       mine ? { label: 'Delete this setup', danger: true, run: () => api('DELETE', '/task-presets/' + x.id).then(() => { SV.list = SV.list.filter((y) => y.id !== x.id); renderShelf(); if (toolBox('templates')?.isConnected) renderTool(true); }).catch((e) => toast(e.message)) } : null].filter(Boolean));
     openMenu(anchor, [
@@ -6076,6 +6078,12 @@
           who.addEventListener('change', () => (a.agent = who.value));
           const ask = h('textarea', { rows: 3, placeholder: 'A new lead came in: {contact}. Look them up and draft a first reply.', class: 'auto-agent-ask' }, a.ask || '');
           ask.addEventListener('input', () => (a.ask = ask.value));
+          // Start from a saved ask (copied in, like a template: the step keeps working if the saved one changes).
+          if (!SV.list && !SV.loading) loadPresets().then(() => box.isConnected && draw());
+          const savedAsks = (SV.list || []).filter((y) => y.kind === 'ask');
+          const fromAsk = savedAsks.length ? h('select', { class: 'auto-ask-from', 'aria-label': 'Start from a saved ask' }, h('option', { value: '' }, 'Start from a saved ask…'), savedAsks.map((y) => h('option', { value: y.id }, y.name))) : null;
+          fromAsk?.addEventListener('change', () => { const y = savedAsks.find((z) => z.id === fromAsk.value); if (y) { a.ask = y.ask; a.agent = y.agent || 'team'; draw(); } });
+          if (fromAsk) f.push(h('label', { class: 'auto-tpl-row' }, 'Start from', fromAsk));
           const cb = h('input', { type: 'checkbox', checked: !!a.wait, class: 'auto-agent-wait' });
           cb.addEventListener('change', () => { a.wait = cb.checked; draw(); });
           f.push(h('label', {}, 'Ask', who), h('label', {}, 'What to ask', ask), h('label', { class: 'pick' }, cb, 'Wait for the answer, then go on with {answer}'),
@@ -11131,7 +11139,25 @@
     const go = h('button', { class: 'btn primary-btn', disabled: AG.busy || !AG.data.ai }, AG.busy ? 'Sending…' : label);
     go.addEventListener('click', () => (ta.value.trim() ? agAsk(agent, ta.value) : ta.focus()));
     ta.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) go.click(); });
-    return h('div', { class: 'ag-box' }, ta, h('div', { class: 'ag-box-f' }, h('small', { class: 'day-hint' }, '⌘↵ to send'), go));
+    // Saved asks (2026-11-20): the team's asks for this agent (or the whole team), one tap to send; and saving this one.
+    if (!SV.list && !SV.loading) loadPresets().then(() => { if (toolOpen === 'agents') renderTool(true); });
+    const asks = (SV.list || []).filter((y) => y.kind === 'ask' && (agent === 'team' || y.agent === agent || y.agent === 'team'));
+    const saveAsk = () => {
+      if (!ta.value.trim()) return ta.focus();
+      const nm = h('input', { value: ta.value.trim().slice(0, 60), class: 'ask-name' });
+      sheet('Save this ask', [h('p', { class: 'day-hint' }, 'Saved for your team to send again in one tap here, and to start an automation’s “Ask your team” step from.'), h('p', { class: 'ask-said' }, ta.value.trim()), h('label', {}, 'Name', nm)], async () => {
+        const y = await api('POST', '/task-presets', { kind: 'ask', ask: ta.value.trim(), agent, name: nm.value });
+        SV.list = [...(SV.list || []).filter((z) => z.id !== y.id), y];
+        toast('Ask saved');
+        renderTool(true);
+      }, 'Save');
+    };
+    const chips = h('div', { class: 'ask-saved' }, asks.map((y) => {
+      const b = h('button', { class: 'chip ask-chip', 'data-preset': y.id, title: y.ask, disabled: AG.busy || !AG.data.ai, onclick: () => agAsk(y.agent || agent, y.ask) }, '☆ ' + y.name);
+      b.addEventListener('contextmenu', (e) => { e.preventDefault(); if (y.memberId === S.me?.memberId || amAdmin()) openMenu(b, [{ label: 'Delete this saved ask', danger: true, run: () => api('DELETE', '/task-presets/' + y.id).then(() => { SV.list = SV.list.filter((z) => z.id !== y.id); renderTool(true); }).catch((er) => toast(er.message)) }]); });
+      return b;
+    }), h('button', { type: 'button', class: 'linkish ask-save', onclick: saveAsk }, '☆ Save this ask'));
+    return h('div', { class: 'ag-box' }, ta, h('div', { class: 'ag-box-f' }, h('small', { class: 'day-hint' }, '⌘↵ to send'), go), chips);
   }
   function agState(k, a) {
     if (a.busy) return h('span', { class: 'ag-state busy' }, 'Working…');
@@ -11507,8 +11533,8 @@
       h('h3', { class: 'tpl-h' }, 'Saved tasks'),
       h('div', { class: 'tpl-grid' },
         list.map((x) => h('button', { class: 'tpl-card', 'data-preset': x.id, onclick: (ev) => presetMenu(ev.currentTarget, x) },
-          h('span', { class: 'tpl-kind k-task' }, x.kind === 'bundle' ? 'Bundle' : x.kind === 'block' ? 'Calendar block' : x.kind === 'visit' ? 'Visit setup' : 'Saved task'), h('b', {}, x.name), presetSub(x) ? h('small', {}, presetSub(x)) : null,
-          h('span', { class: 'tpl-body' }, x.kind === 'bundle' ? x.steps.map((st) => presetById(st.presetId)?.text).filter(Boolean).join(' → ') : x.kind === 'visit' ? x.note || 'Picked when booking a visit on a job' : x.text))),
+          h('span', { class: 'tpl-kind k-task' }, x.kind === 'bundle' ? 'Bundle' : x.kind === 'block' ? 'Calendar block' : x.kind === 'visit' ? 'Visit setup' : x.kind === 'ask' ? 'Saved ask' : 'Saved task'), h('b', {}, x.name), presetSub(x) ? h('small', {}, presetSub(x)) : null,
+          h('span', { class: 'tpl-body' }, x.kind === 'bundle' ? x.steps.map((st) => presetById(st.presetId)?.text).filter(Boolean).join(' → ') : x.kind === 'visit' ? x.note || 'Picked when booking a visit on a job' : x.kind === 'ask' ? x.ask : x.text))),
         h('button', { class: 'tpl-card static tpl-new-task', onclick: () => presetSheet(null, 'task') }, h('b', {}, '+ Save a task'), h('span', { class: 'tpl-body' }, 'Then drag it onto a day in Tasks, or make it from an automation.'))),
     ];
   }

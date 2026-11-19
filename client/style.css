@@ -3813,3 +3813,7 @@ body:not(.wide) .tool-grid { grid-template-columns: 1fr; }
 /* Saved visit setups (2026-11-20) */
 .vs-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 6px; }
 .vs-row select { flex: 1; min-width: 200px; }
+/* Saved asks for your AI team (2026-11-20) */
+.ask-saved { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 6px; }
+.ask-chip { max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ask-said { white-space: pre-wrap; background: var(--bg-soft, #f6f7fb); padding: 8px 10px; border-radius: 8px; font-size: 13px; }
