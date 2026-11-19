@@ -6187,7 +6187,7 @@
     const pushes = ev.filter((e) => e.kind === 'push').reduce((n, e) => n + e.n, 0);
     const sum = [pushes ? plural(pushes, 'commit') : '', ev.filter((e) => e.kind === 'merged').length ? plural(ev.filter((e) => e.kind === 'merged').length, 'merge') : '', ev.filter((e) => e.kind === 'released').length ? plural(ev.filter((e) => e.kind === 'released').length, 'release') : ''].filter(Boolean).join(' · ');
     return card('code', 'Code', ev.length, null,
-      ev.length ? h('div', {}, sum ? h('p', { class: 'day-hint code-sum' }, `Since yesterday: ${sum}`) : null, ev.slice(0, 8).map((e) => h('a', { class: 'need-row code-row', href: e.url, target: '_blank', rel: 'noopener', 'data-kind': e.kind },
+      ev.length ? h('div', {}, sum ? h('p', { class: 'day-hint code-sum' }, `Since yesterday: ${sum}`) : null, ev.slice(0, 8).map((e) => h(e.url ? 'a' : 'div', { class: 'need-row code-row', ...(e.url ? { href: e.url, target: '_blank', rel: 'noopener' } : {}), 'data-kind': e.kind },
         h('span', { class: 'need-ic' }, CODE_IC[e.kind] || '•'), h('span', { class: 'need-text' }, h('b', {}, codeTitle(e)), h('small', {}, `${e.text}${e.by ? ' · ' + e.by : ''} · ${ago(e.at)}`)))))
         : h('p', { class: 'day-hint' }, 'No pushes, merges or releases since yesterday.'));
   }
@@ -9932,7 +9932,7 @@
         h('section', {}, h('h3', {}, 'Who sees code activity'), h('div', { class: 'seg' }, seg('tech', 'People on software boards'), seg('all', 'Everyone'), seg('admins', 'Owners and admins')),
           h('p', { class: 'day-hint' }, 'They see pushes, merges and releases on Home and in Sidekick’s brief. Members’ automations start from GitHub only when Everyone is picked.')),
         h('section', {}, h('h3', {}, 'Software boards'), h('p', {}, 'A board can follow one of these repositories: open it, then GitHub. A work item’s key in a branch or pull request moves its card.'), githubPicker()),
-        h('section', {}, h('h3', {}, 'Disconnect'), h('p', { class: 'day-hint' }, 'Kloomie stops hearing from GitHub and forgets the code activity. To remove Kloomie from GitHub too, uninstall it in GitHub’s settings.'), h('div', { class: 'btns' }, off))];
+        h('section', {}, h('h3', {}, 'Disconnect'), h('p', { class: 'day-hint' }, 'Kloomie stops hearing from GitHub and forgets the code activity. To remove Kloomie from GitHub too, uninstall it in GitHub’s settings. If Kloomie is uninstalled or suspended on GitHub, it disconnects here too; connect again to bring it back.'), h('div', { class: 'btns' }, off))];
     }
     if (g.configured) return [h('section', { class: 'gh-app' }, h('h3', {}, 'Connect GitHub'),
       h('p', {}, 'Sign in to GitHub, then pick the account or organisation and the repositories. Pushes, pull requests and releases then show on Home, in Sidekick’s brief, and on your software boards.'),

@@ -192,6 +192,8 @@ export function githubModule({ db, save, broadcast, rid, cleanText, readJson, se
     const key = env('GITHUB_APP_PRIVATE_KEY').replace(/\\n/g, '\n');
     return head + '.' + crypto.sign('RSA-SHA256', Buffer.from(head), key).toString('base64url');
   }
+  // Plain fetch, not safeFetch: the only hosts are GitHub's own (or GITHUB_API/GITHUB_WEB set by the server's operator
+  // for tests), never an address a team typed, so there's nothing for safeFetch to screen. Every call has a timeout.
   async function gh(path, token, { method = 'GET', body } = {}) {
     const r = await fetch(API() + path, { method, signal: AbortSignal.timeout(15_000), headers: { Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'Kloomie', Authorization: 'Bearer ' + token, ...(body ? { 'Content-Type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined });
     const j = await r.json().catch(() => ({}));
