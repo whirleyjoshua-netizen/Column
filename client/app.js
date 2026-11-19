@@ -2484,7 +2484,7 @@
   // An open Sidekick takes files dropped on it to read.
   const skDropAt = (target) => S.token && SKD.open && SKD.view === 'plan' && SK.open && target?.closest?.('#skDock');
   // An open campaign takes the drop itself: files go to its stack, and lists become call lists.
-  const dropCampaign = () => S.tab === 'camps' && campById(K.open);
+  const dropCampaign = () => campsShown() && campById(K.open);
   window.addEventListener('dragenter', (e) => {
     if (S.internalDrag || !S.token) return;
     if (S.tab === 'day' && hasFiles(e.dataTransfer) && !skDropAt(e.target) && splitOpen !== 'column') openStacks();
@@ -3172,7 +3172,7 @@
   const docsSide = () => (toolOn('folders') && (store.get('docsSide', 'docs') === 'folders' || !toolOn('docs')) ? 'folders' : 'docs');
   // What's open now, if it's one of Workspace's tabs.
   const workOpen = () => {
-    if (!$('#projects').classList.contains('hidden')) return 'projects';
+    if (!$('#projects').classList.contains('hidden') && splitOpen !== 'projects') return 'projects';
     if (toolOpen) return WORK_TABS.find((k) => (BAR_ITEMS[k].on ? BAR_ITEMS[k].on() : toolOpen === k)) || null;
     return S.tab === 'camps' || S.tab === 'day' ? S.tab : S.tab === 'column' ? 'tools' : null;
   };
@@ -3213,6 +3213,7 @@
     // One of Workspace's tabs: it takes the page (whatever else was open closes), and tapping it again keeps it.
     // Tools opens the split on the right and leaves the page as it is; again, from one of its tools, back to the list.
     if (k === 'tools') return toolsDrop(anchor);
+    if (k === 'projects' && splitOpen === 'projects') closeSplit(); // Boards from the tabs takes it back, as the page
     if (WORK_TABS.includes(k)) {
       store.set('workLast', k);
       if (workOpen() === k) return markTabs();
@@ -3236,10 +3237,10 @@
     card: { icon: '🪪', name: 'Business card', label: () => 'My card', gone: () => !toolOn('cards'), open: () => showMyCard(), on: () => !!$('#myCard') },
     rec: { icon: '🛠️', name: 'Job or record', label: (id) => { const at = recEverywhere(id); return at?.p && recName(prType(at.p, at.r.typeId), at.r); }, open: (id) => prLoadAll().then(() => openRecord(id)), on: (id) => !$('#projects').classList.contains('hidden') && PR.panel === id },
     proj: { icon: '📋', name: 'Project', label: (id) => projById(id)?.name, gone: (id) => !projById(id), open: (id) => openProject(id), on: (id) => !$('#projects').classList.contains('hidden') && PR.open === id && !PR.panel },
-    camp: { icon: '🎯', name: 'Campaign', label: (id) => campById(id)?.name, gone: (id) => !campById(id), open: (id) => { closeProjects(); openCampaign(id); }, on: (id) => S.tab === 'camps' && K.open === id },
-    chan: { icon: '#', name: 'Chat feed', label: (id) => channelById(id)?.name, gone: (id) => !channelById(id), open: (id) => { closeProjects(); setTab('chat'); openChannel('ch:' + id); }, on: (id) => chatOn() && C.view === 'ch:' + id },
+    camp: { icon: '🎯', name: 'Campaign', label: (id) => campById(id)?.name, gone: (id) => !campById(id), open: (id) => { closeProjects(); openCampaign(id); }, on: (id) => campsShown() && K.open === id },
+    chan: { icon: '#', name: 'Chat feed', label: (id) => channelById(id)?.name, gone: (id) => !channelById(id), open: (id) => openChat('ch:' + id), on: (id) => chatOn() && C.view === 'ch:' + id },
     stack: { icon: '🗂️', name: 'Stack', label: (id) => stackById(id)?.name, gone: (id) => !stackById(id), open: (id) => { closeProjects(); showStack(id); }, on: (id) => (S.tab === 'column' || splitOpen === 'column') && S.panes[0] === 'stack:' + id },
-    doc: { icon: '📄', name: 'Doc', label: (id) => { const d = S.items.find((x) => x.id === id); return d && docTitle(d); }, gone: (id) => !S.items.some((x) => x.id === id), open: (id) => { closeProjects(); goTo('doc:' + id); }, on: () => false },
+    doc: { icon: '📄', name: 'Doc', label: (id) => { const d = S.items.find((x) => x.id === id); return d && docTitle(d); }, gone: (id) => !S.items.some((x) => x.id === id), open: (id) => { closeProjects(); goTo('doc:' + id); }, on: (id) => DV.doc?.id === id },
   };
   const pinParts = (go) => [go.slice(0, go.indexOf(':')), go.slice(go.indexOf(':') + 1)];
   const pinsMine = () => (S.me?.pins || []).filter((x) => PIN_KINDS[pinParts(x.go)[0]]);
@@ -3262,9 +3263,36 @@
   const pinRow = (go, label) => ({ label: pinned(go) ? 'Unpin from Workspace' : '📌 Pin to Workspace', run: () => togglePin(go, label) });
   function openPin(go) {
     const [k, id] = pinParts(go);
-    PIN_KINDS[k]?.open(id);
-    if (toolOpen) closeTool();
+    const at = pinSplitAt(k);
+    if (at) pinToSplit(at, k, id);
+    else {
+      PIN_KINDS[k]?.open(id);
+      if (toolOpen) closeTool();
+    }
     setTimeout(() => { markTabs(); for (const n of tabNavs()) n.querySelector(`[data-pin="${go}"]`)?.scrollIntoView({ block: 'nearest', inline: 'nearest' }); }, 0);
+  }
+  // At full size (the desktop app, a browser) a pin opens in the split, beside the page you're working on, the way the
+  // tools do (the owner, 2026-11-19). A pin for the page that's showing opens there; on a phone, as the page. A stack
+  // (Stacks) and a feed (Chat) open in the split already, and your card is full screen.
+  const PIN_SPLIT = { rec: 'projects', proj: 'projects', camp: 'camps', doc: 'doc' };
+  // The page on the left: Boards and a doc sit over the tab underneath them.
+  const leftPage = () => (DV.doc && splitOpen !== 'doc' ? 'doc' : !$('#projects').classList.contains('hidden') && splitOpen !== 'projects' ? 'projects' : S.tab);
+  function pinSplitAt(k) {
+    const at = PIN_SPLIT[k];
+    return at && wideMq.matches && leftPage() !== at ? at : null;
+  }
+  function pinToSplit(at, k, id) {
+    if (at === 'doc') {
+      const it = S.items.find((x) => x.id === id);
+      if (!it) return toast('That isn’t here any more.');
+      const loaded = openDoc(it);
+      openSplit('doc');
+      return loaded.then(() => renderSplit());
+    }
+    openSplit(at);
+    if (at === 'camps') { K.open = id; store.set('campOpen', id); renderCamps(); $('#camps').scrollTop = 0; }
+    if (at === 'projects') k === 'rec' ? prLoadAll().then(() => openRecord(id)) : openProject(id);
+    renderSplit();
   }
   // Hold a pin on a phone for its menu (right-click on a computer); the click after a hold doesn't open it.
   function longPress(b, fn) {
@@ -3336,7 +3364,7 @@
   }
   function markTabs() {
     dockPageChanged();
-    const jobs = !$('#projects').classList.contains('hidden');
+    const jobs = !$('#projects').classList.contains('hidden') && splitOpen !== 'projects';
     const work = workOpen();
     // The strip across the top shows while you're in Workspace (at full size; CSS hides it otherwise).
     document.body.classList.toggle('work-on', !!work);
@@ -3352,7 +3380,7 @@
       const k = b.dataset.tab;
       if (!k) continue;
       const it = BAR_ITEMS[k];
-      b.classList.toggle('on', k === 'tools' ? work === 'tools' || !!splitOpen : k === 'work' ? !!work : WORK_TABS.includes(k) ? work === k : it && !it.view ? toolOpen === k : !jobs && !work && k === S.tab);
+      b.classList.toggle('on', k === 'tools' ? work === 'tools' || (!!splitOpen && !SPLIT_PAGES[splitOpen]) : k === 'work' ? !!work : WORK_TABS.includes(k) ? work === k : it && !it.view ? toolOpen === k : !jobs && !work && k === S.tab);
     }
   }
   // Your pins: one job, project, campaign, feed, stack or doc each, after the tabs. Reorder, unpin or add one here.
@@ -3403,6 +3431,7 @@
   function setTab(tab) {
     // Everything that opened the Chat page (links, pins, notifications) opens Chat in the split now.
     if (tab === 'chat') return openChat();
+    if (tab === 'camps' && splitOpen === 'camps') closeSplit(); // Campaigns from the tabs: back from the split, as the page
     S.tab = tab;
     markTabs();
     $('#home').classList.toggle('hidden', tab !== 'home');
@@ -3412,7 +3441,7 @@
     $('#panes').classList.toggle('hidden', tab !== 'column' && splitOpen !== 'column');
     if (panesWere && tab === 'column') keepPanesScroll($('#panes'), true);
     $('#chat').classList.toggle('hidden', splitOpen !== 'chat');
-    $('#campsWrap').classList.toggle('hidden', tab !== 'camps');
+    $('#campsWrap').classList.toggle('hidden', tab !== 'camps' && splitOpen !== 'camps');
     if (tab === 'camps') renderCamps();
     if (tab === 'day') renderDay();
   }
@@ -3617,7 +3646,7 @@
   function renderDay() {
     if (!S.workspace || D.dragging) return;
     sendNext();
-    if (S.tab === 'camps') renderCamps();
+    if (campsShown()) renderCamps();
     if (!D.scroll) buildDay();
     renderShelf();
     if (D.sub === 'team' && !canTeam()) D.sub = 'schedule';
@@ -5376,7 +5405,7 @@
     BOARD.busy = true;
     try { BOARD.data = await api('GET', '/board'); BOARD.at = Date.now(); } catch (e) { BOARD.data ||= { jobs: [], automations: [], connections: [], counts: { jobs: 0, blocked: 0 }, error: e.message }; }
     finally { BOARD.busy = false; }
-    if (S.tab === 'camps' && K.overview && !K.open) renderCamps();
+    if (campsShown() && K.overview && !K.open) renderCamps();
   }
   const BLOCK_IC = { needs: '📦', overdue: '!', signoff: '✓', held: '✋' };
   function boardSection() {
@@ -6420,7 +6449,7 @@
     K.open = id;
     if (id) closeProjects(); // from a job's page (its campaigns, + Campaign): the campaign shows, not the job over it
     store.set('campOpen', id);
-    if (S.tab !== 'camps') setTab('camps');
+    if (!campsShown()) setTab('camps');
     else renderCamps();
     $('#camps').scrollTop = 0;
     markTabs();
@@ -6430,7 +6459,7 @@
   K.overview ??= store.get('campsOverview', false);
   function renderCamps() {
     const root = $('#camps');
-    if (!S.workspace || S.tab !== 'camps' || K.sorting) return;
+    if (!S.workspace || !campsShown() || K.sorting) return;
     if (root.contains(document.activeElement) && document.activeElement.matches('input, textarea, select')) {
       K.stale = true;
       return;
@@ -6441,6 +6470,7 @@
     root.replaceChildren(c ? campaignView(c) : K.overview ? overviewView() : campaignList());
     renderDock();
     root.scrollTop = keep;
+    if (splitOpen === 'camps') renderSplit();
   }
   $('#camps').addEventListener('focusout', () => setTimeout(() => K.stale && renderCamps(), 0));
 
@@ -7729,7 +7759,7 @@
     K.dock = { cid: c.id, ...what };
     K.dockMin = false;
     store.set('dock', K.dock);
-    if (S.tab !== 'camps' || K.open !== c.id) openCampaign(c.id);
+    if (!campsShown() || K.open !== c.id) openCampaign(c.id);
     renderDock(true);
   }
   function dockClose() {
@@ -7750,7 +7780,7 @@
   function renderDock(force) {
     const el = $('#dock');
     const d = K.dock;
-    const c = d && S.tab === 'camps' && K.open === d.cid && campById(d.cid);
+    const c = d && campsShown() && K.open === d.cid && campById(d.cid);
     const it = c && d.type === 'file' && S.items.find((x) => x.id === d.id);
     const l = c && d.type === 'list' && S.lists.find((x) => x.id === d.id);
     const on = !!(it || l);
@@ -8047,7 +8077,7 @@
     const f = t.followUp;
     const l = f.listId && S.lists.find((x) => x.id === f.listId);
     const r = l?.rows.find((x) => x.id === f.rowId);
-    if (K.open !== c.id || S.tab !== 'camps') openCampaign(c.id);
+    if (K.open !== c.id || !campsShown()) openCampaign(c.id);
     if (r) return logRow(c, l, r);
     K.logOpen = c.id;
     K.logFrom[c.id] = 'blank';
@@ -10853,6 +10883,32 @@
   const SPLIT_TOOLS = new Set(['tools', 'chat', 'column', 'templates', 'inventory', 'bills', 'email', 'meetings', 'map', 'vault', 'hq', 'cards', 'signs']);
   let splitOpen = null;
   let splitFull = false;
+  // Pins in the split (the owner, 2026-11-19): a pinned job or board, campaign or doc (a feed opens Chat, in the split). The page itself moves
+  // into the split while it's there (as Stacks does), and back where it lives, closed, when the split closes or another
+  // pin or tool takes it. One place each, so a pin for the page you're on opens there instead (pinSplitAt).
+  const SPLIT_PAGES = { projects: '#projects', camps: '#campsWrap', doc: '#docview' }; // Chat has its own (openChat)
+  const pageSpot = {};
+  function campsShown() { return S.tab === 'camps' || splitOpen === 'camps'; }
+  function pageInSplit(k) {
+    const el = $(SPLIT_PAGES[k]);
+    if (!pageSpot[k]) { pageSpot[k] = document.createComment(k); el.before(pageSpot[k]); }
+    el.classList.remove('hidden');
+    return el;
+  }
+  function pageBack(k) {
+    const el = $(SPLIT_PAGES[k]);
+    if (pageSpot[k]) { if (el) pageSpot[k].replaceWith(el); else pageSpot[k].remove(); delete pageSpot[k]; }
+    if (!el) return;
+    if (k === 'camps') el.classList.toggle('hidden', S.tab !== 'camps');
+    if (k === 'projects') { PR.newing = null; el.classList.add('hidden'); }
+    if (k === 'doc') closeDoc();
+  }
+  function splitPageTitle() {
+    if (splitOpen === 'projects') return (PR.panel && PIN_KINDS.rec.label(PR.panel)) || projById(PR.open)?.name || 'Boards';
+    if (splitOpen === 'camps') return campById(K.open)?.name || 'Campaigns';
+    const it = DV.doc && S.items.find((x) => x.id === DV.doc.id);
+    return (it && docTitle(it)) || 'Doc';
+  }
   const toolShown = (k) => toolOpen === k || splitOpen === k;
   const toolBox = (k) => (splitOpen === k ? $('#split') : $('#tool'));
   // ---------- Templates (Workspace → Tools, the owner 2026-11-16) ----------
@@ -11696,6 +11752,7 @@
       setTab('column');
     }
     if (splitOpen !== name) splitFull = false; // a new tool starts beside the page
+    if (SPLIT_PAGES[splitOpen] && splitOpen !== name) { const was = splitOpen; splitOpen = null; pageBack(was); }
     splitOpen = name;
     $('#settings').classList.add('hidden');
     const el = $('#split');
@@ -11703,8 +11760,9 @@
     el.classList.toggle('wide-tool', name === 'bills');
     if (name !== 'chat' && $('#split #chat')) chatHome();
     if (splitOpen !== 'column' && $('#split #panes')) { $('#main').insertBefore($('#panes'), $('#chat')); $('#panes').classList.toggle('hidden', S.tab !== 'column'); }
-    el.classList.toggle('stacks-split', name === 'column');
+    el.classList.toggle('stacks-split', name === 'column' || !!SPLIT_PAGES[name]);
     el.classList.toggle('chat-split', name === 'chat');
+    el.classList.toggle('page-split', !!SPLIT_PAGES[name]);
     document.body.classList.add('split-on');
     document.body.classList.toggle('split-full', splitFull);
     closeSide();
@@ -11758,6 +11816,7 @@
       $('#split').classList.remove('stacks-split');
     }
     if (was === 'chat') { chatHome(); $('#split').classList.remove('chat-split'); }
+    if (SPLIT_PAGES[was]) { pageBack(was); $('#split').classList.remove('stacks-split', 'page-split'); }
     if (was === 'map' && !MP.run && toolOpen !== 'map') mapUnwatch();
     $('#split').classList.add('hidden');
     document.body.classList.remove('split-on', 'split-full');
@@ -11771,16 +11830,23 @@
   function renderSplit(force) {
     const el = $('#split');
     if (!splitOpen || el.classList.contains('hidden')) return;
-    if (!toolOn(splitOpen)) return closeSplit();
+    const page = SPLIT_PAGES[splitOpen];
+    if (!page && !toolOn(splitOpen)) return closeSplit();
+    const head = (title, back) => h('div', { class: 'split-head' },
+      back ? h('button', { class: 'icon-btn split-back', title: 'Back to Tools', 'aria-label': 'Back to Tools', onclick: (e) => toolsDrop(e.currentTarget) }, '‹') : null,
+      h('h2', { class: 'split-title', title }, title),
+      h('button', { class: 'icon-btn split-size', title: splitFull ? 'Back to the side' : 'Full size', 'aria-label': splitFull ? 'Back to the side' : 'Full size', 'aria-pressed': String(splitFull), onclick: sizeSplit, html: splitFull ? SPLIT_IC.in : SPLIT_IC.out }),
+      h('button', { class: 'icon-btn split-close', title: 'Close', 'aria-label': 'Close', html: I.close, onclick: closeSplit }));
+    // A pinned page draws itself; only the title changes here, so its scroll, its typing and its live feed stay put.
+    if (page) {
+      const body = el.querySelector(':scope > .split-body');
+      if (body && body.firstChild === $(page)) el.querySelector(':scope > .split-head').replaceWith(head(splitPageTitle()));
+      else el.replaceChildren(head(splitPageTitle()), h('div', { class: 'split-body' }, pageInSplit(splitOpen)));
+      return;
+    }
     if (!force && el.contains(document.activeElement) && document.activeElement.matches('input, textarea, select')) return;
     const keep = el.scrollTop;
-    const back = splitOpen !== 'tools' && TOOL_PAGE.includes(splitOpen);
-    el.replaceChildren(
-      h('div', { class: 'split-head' },
-        back ? h('button', { class: 'icon-btn split-back', title: 'Back to Tools', 'aria-label': 'Back to Tools', onclick: (e) => toolsDrop(e.currentTarget) }, '‹') : null,
-        h('h2', { class: 'split-title' }, TOOLS[splitOpen].name),
-        h('button', { class: 'icon-btn split-size', title: splitFull ? 'Back to the side' : 'Full size', 'aria-label': splitFull ? 'Back to the side' : 'Full size', 'aria-pressed': String(splitFull), onclick: sizeSplit, html: splitFull ? SPLIT_IC.in : SPLIT_IC.out }),
-        h('button', { class: 'icon-btn split-close', title: 'Close', 'aria-label': 'Close', html: I.close, onclick: closeSplit })),
+    el.replaceChildren(head(TOOLS[splitOpen].name, splitOpen !== 'tools' && TOOL_PAGE.includes(splitOpen)),
       h('div', { class: 'split-body' }, ...TOOLS[splitOpen].render().filter(Boolean)));
     el.scrollTop = keep;
   }
@@ -12045,6 +12111,7 @@
     markTabs();
   }
   function closeProjects() {
+    if (splitOpen === 'projects') return; // a pinned board beside the page stays until its ✕
     PR.newing = null;
     if ($('#projects').classList.contains('hidden')) return;
     $('#projects').classList.add('hidden');
@@ -12072,6 +12139,7 @@
     if (pNow && panelAt && pNow.dataset.id === panelAt[0]) pNow.scrollTop = panelAt[1];
     const tNow = $('#projects .pj-panel .pj-title');
     if (typing && tNow && pNow?.dataset.id === typing[0]) { tNow.value = typing[1]; tNow.focus(); tNow.setSelectionRange(typing[2], typing[3]); }
+    if (splitOpen === 'projects') renderSplit();
   }
   // ----- the workspace profile (the owner, 2026-11-19) -----
   // Opened from the workspace's name at the start of Workspace's tabs (the name in the header switches workspaces).
@@ -16145,7 +16213,7 @@
 
   function closeDoc(gone) {
     const x = DV.doc;
-    if (!x) return;
+    if (!x) { if (splitOpen === 'doc') closeSplit(); return; }
     if (!gone) docSave(x, true);
     x.ed.destroy();
     DV.doc = null;
@@ -16154,6 +16222,7 @@
     $('#docview')?.replaceChildren();
     // Opened from the library: it's still open underneath, with this doc's new title.
     if (toolOpen === 'docs') renderTool();
+    if (splitOpen === 'doc') closeSplit(); // a doc in the split goes with it
   }
   // From any doc to the library of all of them.
   function docsLibrary() {
