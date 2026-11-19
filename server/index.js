@@ -11243,7 +11243,7 @@ const STOCK = inventoryModule({ db, save, broadcast, rid, cleanText, readJson, s
   taskOk: (auth, id) => { const t = db.tasks[id]; return !!t && t.wsId === auth.ws.id && canSee(auth, 'task', t); },
   seal, unseal,
   // Labels share one set of codes with Equipment & assets records, so a code is never on two things.
-  newTag: () => { const C = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789'; for (;;) { const tag = Array.from(crypto.randomBytes(10), (b) => C[b % C.length]).join(''); if (!Object.values(db.records).some((r) => r.tag === tag) && !Object.values(db.invUnits || {}).some((u) => u.tag === tag)) return tag; } },
+  newTag: () => { const C = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789'; for (;;) { const tag = Array.from(crypto.randomBytes(10), (b) => C[b % C.length]).join(''); if (!Object.values(db.records).some((r) => r.tag === tag) && ![db.invUnits, db.invItems, db.invPlaces].some((m) => Object.values(m || {}).some((y) => y.tag === tag))) return tag; } },
   labelUrl: (tag) => `${PUBLIC_URL}/a/${tag}`,
   labelQr: (tag) => 'data:image/svg+xml;base64,' + Buffer.from(qrSvg(`${PUBLIC_URL}/a/${tag}`, { scale: 8 })).toString('base64'),
   projectFor: (pid, wsId, memberId) => { const p = db.projects[pid]; return p && p.wsId === wsId && PJ.sees(p, memberId) ? { p, records: Object.values(db.records).filter((r) => r.projectId === p.id) } : null; } });

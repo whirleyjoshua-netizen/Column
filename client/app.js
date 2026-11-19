@@ -10487,6 +10487,7 @@
         admin && d.items.length ? h('button', { class: 'btn small inv-receive', onclick: () => invMoveSheet(null, 'receive') }, 'Receive stock') : null,
         h('button', { class: 'icon-btn inv-more', 'aria-label': 'More inventory options', html: I.more, onclick: (e) => openMenu(e.currentTarget, [
           ...(admin && d.places.length && d.items.some((x) => x.track !== 'units') ? [{ label: 'Count a place…', run: () => invCountSheet() }] : []),
+          ...(d.items.length || d.places.length ? [{ label: 'Print QR labels…', run: () => invLabelPicker() }] : []),
           ...(admin ? [{ label: 'Import a spreadsheet…', run: () => invImport() }] : []),
           ...(d.items.length ? [{ label: 'Export a spreadsheet', run: () => invExport() }] : []),
         ]) })),
@@ -10524,7 +10525,7 @@
       const val = admin ? here.reduce((n, x) => n + (x.cost != null ? Math.round(x.stock[p.id] * x.cost) : 0), 0) : null;
       const who = p.memberId && S.workspace.members.find((m) => m.id === p.memberId);
       return h('div', { class: 'inv-place', 'data-place': p.id },
-        h('button', { class: 'inv-place-main', onclick: () => { INVS.place = p.id; INVS.view = 'items'; store.set('invView', 'items'); renderTool(true); } },
+        h('button', { class: 'inv-place-main', onclick: () => invPlaceView(p.id) },
           h('span', { class: 'inv-place-ic' }, INV_KIND[p.kind]?.[0] || '📦'), h('b', {}, p.name),
           h('small', {}, [INV_KIND[p.kind]?.[1], who ? who.name + '’s' : '', p.address].filter(Boolean).join(' · ')),
           h('small', {}, `${here.length} ${here.length === 1 ? 'item' : 'items'}${admin && val ? ' · ' + invMoney(val) : ''}`)),
@@ -10565,7 +10566,7 @@
         admin && x.cost != null ? h('div', { class: 'inv-stat' }, h('b', {}, invMoney(x.value)), h('small', {}, `Value · ${invMoney(x.cost)} each`)) : null,
         admin && x.price != null ? h('div', { class: 'inv-stat' }, h('b', {}, invMoney(x.price)), h('small', {}, 'Price')) : null),
       h('div', { class: 'inv-ats' }, rows.length ? rows : h('p', { class: 'day-hint' }, 'None on hand.')),
-      h('div', { class: 'btns inv-item-acts' }, admin ? act('receive') : null, act('return'), admin ? h('button', { class: 'btn small', onclick: () => invItemForm(x) }, 'Edit details') : null),
+      h('div', { class: 'btns inv-item-acts' }, admin ? act('receive') : null, act('return'), h('button', { class: 'btn small inv-item-label', onclick: () => invPrintFor({ items: [x.id] }) }, 'Print QR label'), admin ? h('button', { class: 'btn small', onclick: () => invItemForm(x) }, 'Edit details') : null),
       x.notes ? h('p', { class: 'inv-notes' }, x.notes) : null,
       h('h3', { class: 'inv-h' }, 'History'),
       got.moves.length ? h('div', { class: 'inv-moves' }, got.moves.map((m) => invMoveLine(m, false))) : h('p', { class: 'day-hint' }, 'Nothing yet.'),
@@ -10578,7 +10579,7 @@
     const item = () => x || invItem(itemSel.value);
     const opts = (sel) => d.places.map((p) => h('option', { value: p.id, selected: p.id === sel }, p.name));
     const from = h('select', { class: 'inv-m-from', 'aria-label': 'From' }, opts(placeId));
-    const to = h('select', { class: 'inv-m-to', 'aria-label': 'To' }, opts(kind === 'move' ? d.places.find((p) => p.id !== placeId)?.id : placeId));
+    const to = h('select', { class: 'inv-m-to', 'aria-label': 'To' }, opts(link.to || (kind === 'move' ? d.places.find((p) => p.id !== placeId)?.id : placeId)));
     const n = h('input', { type: 'number', min: 0, step: 'any', class: 'inv-m-qty', 'aria-label': 'How many', placeholder: kind === 'count' ? 'How many are there' : 'How many' });
     const cost = h('input', { type: 'number', min: 0, step: '0.01', class: 'inv-m-cost', placeholder: 'Leave as is' });
     const note = h('input', { class: 'inv-m-note', placeholder: kind === 'adjust' ? 'Why (required)' : 'What for (optional)' });
@@ -10863,15 +10864,99 @@
     try { r = await api('GET', `/inventory/items/${x.id}/labels`); } catch (e) { return toast(e.message); }
     const labels = ids ? r.labels.filter((l) => ids.includes(l.id)) : r.labels;
     if (!labels.length) return toast('Nothing to label.');
-    const sheetEl = h('div', { id: 'labelSheet', class: 'as-labels' }, labels.map((l) => h('div', { class: 'as-label' }, h('img', { src: l.qr, alt: '' }), h('div', {}, h('b', {}, l.number || ''), h('span', {}, l.name), h('small', {}, `Scan to open in ${S.workspace?.name || 'Kloomie'}`)))));
+    invPrintLabels(labels, 'Put each on its item where it stays dry. A phone’s camera opens it here, for people on your team: check it out, bring it back, note where it is.');
+  }
+  // ---------- QR labels for items and places (2026-11-19) ----------
+  // Two ways to print (column-f9): a Letter sheet of stickers, three across, or one 2×1" label at a time for a
+  // thermal label printer. The page size is set just for the print, then put back.
+  async function invPrintFor(want) {
+    let r;
+    try { r = await api('GET', `/inventory/labels?items=${(want.items || []).join(',')}&places=${(want.places || []).join(',')}`); } catch (e) { return toast(e.message); }
+    if (!r.labels.length) return toast('Nothing to label.');
+    invPrintLabels(r.labels, 'Stick each one on the shelf, bin or item. Scanning it with a phone’s camera opens it in Kloomie, for people on your team: what’s here, use some, move it, count it.');
+  }
+  function invPrintLabels(labels, hint) {
+    let fmt = store.get('labelFmt', 'sheet');
+    const team = S.workspace?.name || 'Kloomie';
+    const one = (l) => h('div', { class: 'as-label' }, h('img', { src: l.qr, alt: '' }), h('div', {}, l.number ? h('b', {}, l.number) : null, h('span', {}, l.name), h('small', {}, `Scan to open in ${team}`)));
+    const sheetEl = h('div', { id: 'labelSheet', class: 'as-labels' }, labels.map(one));
     $('#labelSheet')?.remove();
     document.body.append(sheetEl);
-    sheet(`Print ${labels.length === 1 ? 'a label' : labels.length + ' labels'}`, [
-      h('div', { class: 'as-labels as-preview' }, labels.slice(0, 6).map((l) => h('div', { class: 'as-label' }, h('img', { src: l.qr, alt: '' }), h('div', {}, h('b', {}, l.number || ''), h('span', {}, l.name))))),
+    const preview = h('div', { class: 'as-labels as-preview' });
+    const seg = h('div', { class: 'seg seg-sm inv-lfmt', role: 'tablist' });
+    const draw = () => {
+      sheetEl.classList.toggle('thermal', fmt === 'thermal');
+      preview.classList.toggle('thermal', fmt === 'thermal');
+      preview.replaceChildren(...labels.slice(0, 6).map(one));
+      seg.replaceChildren(...[['sheet', 'Letter sheet'], ['thermal', '2×1" label printer']].map(([k, l]) => h('button', { class: fmt === k ? 'on' : null, role: 'tab', 'aria-selected': String(fmt === k), 'data-fmt': k, onclick: () => { fmt = k; store.set('labelFmt', k); draw(); } }, l)));
+    };
+    draw();
+    sheet(`Print ${labels.length === 1 ? 'a QR label' : labels.length + ' QR labels'}`, [
+      seg,
+      h('small', { class: 'day-hint' }, fmt === 'thermal' ? 'One label per 2×1 inch sticker. Pick your label printer and its 2×1" label size in the print window.' : 'Letter-size sticker paper, three across. Print at 100% (no “fit to page”).'),
+      preview,
       labels.length > 6 ? h('small', { class: 'day-hint' }, `and ${labels.length - 6} more`) : null,
-      h('p', { class: 'day-hint' }, 'Print on sticker paper and put each on its item where it stays dry. A phone’s camera opens it here, for people on your team: check it out, bring it back, note where it is.'),
-    ], () => { window.print(); }, 'Print');
+      h('p', { class: 'day-hint' }, hint),
+    ], () => {
+      const page = h('style', { id: 'labelPage' }, fmt === 'thermal' ? '@page { size: 2in 1in; margin: 0; }' : '@page { size: letter; margin: 0.25in; }');
+      $('#labelPage')?.remove();
+      document.head.append(page);
+      window.print();
+      setTimeout(() => page.remove(), 1000);
+    }, 'Print');
     const watch = setInterval(() => { if (!$('#sheet') || $('#sheet').classList.contains('hidden')) { sheetEl.remove(); clearInterval(watch); } }, 1000);
+  }
+  // Labels for many at once: pick places and items (all of them, or a few).
+  function invLabelPicker() {
+    const d = INVS.data;
+    const box = (kind, x, label, sub) => h('label', { class: 'pick inv-lpick', 'data-kind': kind, 'data-id': x.id }, h('input', { type: 'checkbox' }), h('span', {}, label, sub ? h('small', {}, ' · ' + sub) : null));
+    const places = d.places.map((p) => box('place', p, p.name, INV_KIND[p.kind]?.[1]));
+    const items = d.items.map((x) => box('item', x, x.name, x.sku));
+    const all = (list, on) => list.forEach((l) => { l.querySelector('input').checked = on; });
+    const head = (title, list) => h('div', { class: 'inv-lhead' }, h('b', {}, title), h('button', { class: 'linkish', onclick: () => all(list, !list.every((l) => l.querySelector('input').checked)) }, 'All / none'));
+    sheet('Print QR labels', [
+      h('p', { class: 'day-hint' }, 'A label for each place (a shelf, a bin, a truck) and each item. Things tracked one by one also have their own labels, under the item.'),
+      places.length ? head('Places', places) : null, places.length ? h('div', { class: 'inv-lpicks' }, places) : null,
+      items.length ? head('Items', items) : null, items.length ? h('div', { class: 'inv-lpicks' }, items) : null,
+    ], async () => {
+      const on = (list) => list.filter((l) => l.querySelector('input').checked).map((l) => l.dataset.id);
+      const want = { places: on(places), items: on(items) };
+      if (!want.places.length && !want.items.length) throw new Error('Tick what to label.');
+      setTimeout(() => invPrintFor(want), 0);
+    }, 'Next');
+  }
+  // A place: what's here (and how many), with use, count and put away; its own label. Scanning its label opens this.
+  function invPlaceView(id) {
+    const d = INVS.data, admin = d.canManage;
+    const p = invPlace(id);
+    if (!p) return toast('That place is gone.');
+    const here = d.items.filter((x) => (x.stock[p.id] || 0) > 0).sort((a, b) => a.name.localeCompare(b.name));
+    const who = p.memberId && S.workspace.members.find((m) => m.id === p.memberId);
+    const row = (x) => h('div', { class: 'inv-at', 'data-item': x.id },
+      h('span', {}, h('b', {}, x.name), h('small', {}, `${invQty(x.stock[p.id])} ${x.unit}${x.sku ? ' · ' + x.sku : ''}`)),
+      h('span', { class: 'inv-at-acts' },
+        x.track !== 'units' ? h('button', { class: 'btn small inv-act', 'data-act': 'use', onclick: () => invMoveSheet(x, 'use', p.id) }, 'Use') : null,
+        x.track !== 'units' && d.places.length > 1 ? h('button', { class: 'btn small inv-act', 'data-act': 'move', onclick: () => invMoveSheet(x, 'move', p.id) }, 'Move') : null,
+        h('button', { class: 'btn small', onclick: () => invItemSheet(x.id) }, 'Open')));
+    sheet(`${INV_KIND[p.kind]?.[0] || '📦'} ${p.name}`, [
+      h('p', { class: 'day-hint' }, [INV_KIND[p.kind]?.[1], who ? who.name + '’s' : '', p.address].filter(Boolean).join(' · ') || 'A place'),
+      h('div', { class: 'inv-ats inv-here' }, here.length ? here.map(row) : h('p', { class: 'day-hint' }, 'Nothing here yet.')),
+      h('div', { class: 'btns inv-place-acts' },
+        admin ? h('button', { class: 'btn small inv-p-receive', onclick: () => invMoveSheet(null, 'receive', p.id) }, 'Receive here') : null,
+        d.places.length > 1 && d.items.some((x) => x.track !== 'units') ? h('button', { class: 'btn small inv-p-putaway', onclick: () => invPutAway(p) }, 'Put away here') : null,
+        admin && d.items.some((x) => x.track !== 'units') ? h('button', { class: 'btn small inv-p-count', onclick: () => invCountSheet(p.id) }, 'Count this place') : null,
+        h('button', { class: 'btn small inv-p-label', onclick: () => invPrintFor({ places: [p.id] }) }, 'Print QR label'),
+        h('button', { class: 'btn small', onclick: () => { closeSheet(); INVS.place = p.id; INVS.view = 'items'; store.set('invView', 'items'); renderTool(true); } }, 'Show in the list'),
+        admin ? h('button', { class: 'btn small', onclick: () => invPlaceForm(p) }, 'Edit') : null),
+    ], null);
+  }
+  // Put away: stock moved here from wherever it is (the place with the most of it first).
+  function invPutAway(p) {
+    const d = INVS.data;
+    const x = d.items.filter((y) => y.track !== 'units' && Object.entries(y.stock).some(([k, v]) => k !== p.id && v > 0)).sort((a, b) => a.name.localeCompare(b.name))[0];
+    if (!x) return toast('Nothing elsewhere to bring here.');
+    const from = d.places.filter((q) => q.id !== p.id).sort((a, b) => (x.stock[b.id] || 0) - (x.stock[a.id] || 0))[0];
+    invMoveSheet(null, 'move', from.id, { to: p.id, label: `Put away at ${p.name}: pick the item and where it’s coming from.` });
   }
   function invItemForm(x) {
     const v = x || { unit: 'each' };
@@ -12955,7 +13040,11 @@
   async function openAsset(tag) {
     if (toolOn('inventory')) {
       const u = await api('POST', `/inventory/scan/${encodeURIComponent(tag)}`).catch(() => null);
-      if (u) { openTool('inventory'); await loadInventory(); return invUnitSheet(u.unitId); }
+      if (u) {
+        openTool('inventory');
+        await loadInventory();
+        return u.kind === 'place' ? invPlaceView(u.placeId) : u.kind === 'item' ? invItemSheet(u.itemId) : invUnitSheet(u.unitId);
+      }
     }
     let x;
     try { x = await api('POST', `/records/by-tag/${encodeURIComponent(tag)}`); } catch { return toast('That label isn’t one of this team’s, or you can’t see its project. On more than one team? Switch teams and scan it again.'); }

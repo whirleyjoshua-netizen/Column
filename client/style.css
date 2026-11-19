@@ -3021,7 +3021,20 @@ button.as-count.warn { border-left-color: #ffb547; }
   #labelSheet { display: grid !important; grid-template-columns: repeat(3, 1fr); gap: 0.15in; padding: 0.3in; }
   #labelSheet .as-label { break-inside: avoid; border: 1px solid #999; height: 1.4in; }
   #labelSheet .as-label img { width: 1.1in; height: 1.1in; }
+  /* A 2x1 inch thermal label: one per page, the code on the left. */
+  #labelSheet.thermal { display: block !important; padding: 0; }
+  #labelSheet.thermal .as-label { width: 2in; height: 1in; border: 0; border-radius: 0; padding: 0.06in; gap: 0.06in; break-after: page; page-break-after: always; overflow: hidden; }
+  #labelSheet.thermal .as-label img { width: 0.86in; height: 0.86in; }
+  #labelSheet.thermal .as-label b { font-size: 10pt; }
+  #labelSheet.thermal .as-label span { font-size: 8pt; line-height: 1.15; }
+  #labelSheet.thermal .as-label small { font-size: 5.5pt; }
 }
+.as-preview.thermal { grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); }
+.as-preview.thermal .as-label { aspect-ratio: 2 / 1; border-radius: 4px; }
+.inv-lhead { display: flex; justify-content: space-between; align-items: baseline; margin-top: 10px; }
+.inv-lpicks { display: flex; flex-direction: column; gap: 2px; max-height: 28vh; overflow: auto; border: 1px solid var(--line); border-radius: 8px; padding: 4px 8px; }
+.inv-lpick small { color: var(--muted); }
+.inv-lfmt { margin-bottom: 4px; }
 
 /* ---------- Jobs & projects: the calendar view ---------- */
 .cal { padding: 4px 0 16px; min-width: 0; }

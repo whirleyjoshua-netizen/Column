@@ -16,6 +16,8 @@
 // units. Checking out, returning, moving, reporting a problem and every scan are in the same ledger.
 const ITEMS_MAX = 5000, PLACES_MAX = 200, MOVES_KEEP = 20_000;
 const PLACE_KINDS = ['warehouse', 'truck', 'site', 'other'];
+// What a place's label says it is.
+const PLACE_WORD = { warehouse: 'Warehouse', truck: 'Truck', site: 'Job site', other: 'Place' };
 const MOVE_KINDS = ['receive', 'move', 'use', 'return', 'adjust', 'count'];
 const MEMBER_MOVES = ['move', 'use', 'return'];
 const UNIT_STATUS = ['available', 'out', 'repair', 'lost', 'retired'];
@@ -339,13 +341,34 @@ export function inventoryModule({ db, save, broadcast, rid, cleanText, readJson,
         const items = itemsOf(ws.id).sort((p, q) => p.name.localeCompare(q.name));
         return send(res, 200, { items: items.map((x) => publicItem(x, admin)), places: placesOf(ws.id).map(publicPlace), canManage: admin, low: items.filter(low).map((x) => x.id), orders: Object.values(db.invOrders).filter((o) => o.wsId === ws.id).sort((p, q) => (p.status === 'open') === (q.status === 'open') ? q.at - p.at : p.status === 'open' ? -1 : 1).slice(0, 60).map((o) => publicOrder(o, admin)), movedIn: [...new Set(Object.values(db.invUnits).filter((u) => u.wsId === ws.id && u.fromRecord).map((u) => db.records[u.fromRecord]?.projectId).filter(Boolean))], value: admin ? items.reduce((n, x) => n + (x.cost != null ? Math.round(total(x) * x.cost) : 0), 0) : null });
       }
-      // A scanned label: the unit it's on (marked seen, by whom and when). Anyone else's label: not found.
+      // A scanned label: a unit (marked seen, by whom and when), an item or a place. Anyone else's label: not found.
       if (b === 'scan' && c && m === 'POST') {
-        const u = /^[A-Za-z0-9]{10}$/.test(c) ? Object.values(db.invUnits).find((y) => y.tag === c && y.wsId === ws.id) : null;
-        if (!u) throw err('That label isn’t one of your team’s.', 404);
-        Object.assign(u, { seenAt: Date.now(), seenBy: auth.member });
-        save();
-        return send(res, 200, { unitId: u.id, itemId: u.itemId });
+        const ok = /^[A-Za-z0-9]{10}$/.test(c);
+        const u = ok ? Object.values(db.invUnits).find((y) => y.tag === c && y.wsId === ws.id) : null;
+        if (u) {
+          Object.assign(u, { seenAt: Date.now(), seenBy: auth.member });
+          save();
+          return send(res, 200, { kind: 'unit', unitId: u.id, itemId: u.itemId });
+        }
+        const x = ok ? itemsOf(ws.id).find((y) => y.tag === c) : null;
+        if (x) return send(res, 200, { kind: 'item', itemId: x.id });
+        const p = ok ? placesOf(ws.id).find((y) => y.tag === c) : null;
+        if (p) return send(res, 200, { kind: 'place', placeId: p.id });
+        throw err('That label isn’t one of your team’s.', 404);
+      }
+      // Labels for items and places (2026-11-19): the same tag each time, made the first time it's asked for.
+      if (b === 'labels' && !c && m === 'GET') {
+        const u = new URL(req.url, 'http://x');
+        const ids = (k) => String(u.searchParams.get(k) || '').split(',').filter(Boolean).slice(0, 500);
+        const want = { items: ids('items'), places: ids('places') };
+        if (!want.items.length && !want.places.length) throw err('Pick what to label.');
+        const labels = [];
+        let made = false;
+        const tagOf = (y) => { if (!y.tag) { y.tag = newTag(); made = true; } return y.tag; };
+        for (const id of want.items) { const x = db.invItems[id]; if (!x || x.wsId !== ws.id || x.archived) continue; const tag = tagOf(x); labels.push({ kind: 'item', id: x.id, name: x.name, number: x.sku || '', tag, url: labelUrl(tag), qr: labelQr(tag) }); }
+        for (const id of want.places) { const p = db.invPlaces[id]; if (!p || p.wsId !== ws.id || p.archived) continue; const tag = tagOf(p); labels.push({ kind: 'place', id: p.id, name: p.name, number: PLACE_WORD[p.kind] || 'Place', tag, url: labelUrl(tag), qr: labelQr(tag) }); }
+        if (made) save();
+        return send(res, 200, { labels });
       }
       // A stock-take at one place: every count given sets that item there; only differences are logged.
       if (b === 'count' && !c && m === 'POST') {
