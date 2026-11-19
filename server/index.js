@@ -5575,6 +5575,74 @@ function workload(ws, week) {
   for (const c of Object.values(db.campaigns)) if (c.wsId === ws.id && c.status === 'active' && by.get(c.ownerId)) by.get(c.ownerId).campaigns++;
   return { week, days, today, people: [...by.values()] };
 }
+// ---------- the job board (job plan Phase 5, the owner 2026-11-18) ----------
+// Every job with a campaign still going: its stage, how many of its steps are finished, the next step, and what's in
+// its way: a step whose tasks are done but whose materials, gear, visit or field aren't, tasks overdue, a sign-off
+// waiting, an automation held back from a stage (unless the stage moved since). Visibility travels with the data:
+// only jobs the viewer can see, only the campaigns they can see on them, and an automation's hold (which names steps)
+// only when they see all of the job's campaigns. Owners and admins also get automations whose last run failed and
+// the team's connections that need attention; a member gets only their own.
+const BOARD_JOBS = 300, HELD_DAYS = 30;
+const qtyText = (v) => String(Math.round((v || 0) * 1000) / 1000);
+function needText(n) {
+  if (n.kind === 'stock') return `${qtyText(n.have)} of ${qtyText(n.qty)} ${n.unit || ''} ${n.item || 'an item'}`.replace(/\s+/g, ' ').trim()
+    + (n.ordered ? ` (${qtyText(n.ordered)} on order)` : n.onOrder ? ` (${qtyText(n.onOrder)} on order, not for this step)` : '');
+  if (n.kind === 'equipment') return `${n.item || 'equipment'} checked out to the job`;
+  if (n.kind === 'visit') return `the ${n.visit} visit done`;
+  return `${n.field} filled in`;
+}
+function jobBoard(ws, auth) {
+  const me = auth.memberId, admin = isAdmin(auth), today = teamDay(ws.id);
+  const nameOf = (id) => ws.members.find((x) => x.id === id)?.name || null;
+  const byJob = new Map(), tasksBy = new Map();
+  for (const c of Object.values(db.campaigns)) if (c.wsId === ws.id && c.recordId && c.status !== 'done' && db.records[c.recordId]) (byJob.get(c.recordId) || byJob.set(c.recordId, []).get(c.recordId)).push(c);
+  for (const t of Object.values(db.tasks)) if (t.wsId === ws.id && t.goalId && !t.skipped) (tasksBy.get(t.goalId) || tasksBy.set(t.goalId, []).get(t.goalId)).push(t);
+  const jobs = [];
+  for (const [id, camps] of byJob) {
+    const at = PJ.recordAt(id, ws.id, me);
+    const seen = at ? camps.filter((c) => seesCampaign(c.id, me)) : [];
+    if (!seen.length) continue;
+    const { rec, p, t: lt } = at;
+    const blocked = [];
+    let done = 0, total = 0, next = null;
+    for (const c of seen) for (const g of goalsInOrder(c)) {
+      total++;
+      if (stepFinished(g)) { done++; continue; }
+      next ||= { goalId: g.id, campaignId: c.id, title: g.title, stage: g.stage || null };
+      const ts = tasksBy.get(g.id) || [], open = ts.filter((x) => !stepDone(x));
+      if (g.needs?.length && !open.length && (g.kind !== 'tasks' || ts.length)) {
+        const un = needsOf(g).filter((n) => !n.met);
+        if (un.length) blocked.push({ kind: 'needs', goalId: g.id, campaignId: c.id, text: `“${clipText(g.title, 80)}” needs ${un.map(needText).join(', ')}` });
+      }
+      for (const x of open) {
+        const what = `“${clipText(x.text, 80)}”`;
+        if (x.submitted) blocked.push({ kind: 'signoff', goalId: g.id, campaignId: c.id, taskId: x.id, at: x.submitted.at, text: `${what} is waiting on a sign-off from ${signers(x).map(nameOf).filter(Boolean).join(' or ') || 'the campaign’s owner'}` });
+        else if (x.due && x.due < today) { const who = taskDoers(ws, x).map(nameOf).filter(Boolean); blocked.push({ kind: 'overdue', goalId: g.id, campaignId: c.id, taskId: x.id, due: x.due, text: `${what} was due ${x.due}${who.length ? ` (${who.join(', ')})` : ''}` }); }
+      }
+    }
+    const f = stageFieldOf(lt);
+    if (f && seen.length === camps.length) {
+      const e = (rec.log || []).find((y) => y.kind === 'held' || (y.kind === 'change' && y.field === f.name));
+      if (e?.kind === 'held' && Date.now() - e.at < HELD_DAYS * 864e5) blocked.push({ kind: 'held', at: e.at, text: `${e.by}: ${clipText(e.note, 200)}` });
+    }
+    jobs.push({ id, projectId: p.id, typeId: rec.typeId, ...(p.archived ? { archived: true } : {}), name: String(rec.values[lt.primary] ?? ''), stage: recordStage(p, lt, rec) || null, campaigns: seen.map((c) => c.id), steps: { done, total }, next, blocked, updatedAt: rec.updatedAt || 0 });
+  }
+  jobs.sort((x, y) => (y.blocked.length > 0) - (x.blocked.length > 0) || y.updatedAt - x.updatedAt);
+  const automations = Object.values(db.automations).filter((x) => x.wsId === ws.id && (admin || x.memberId === me) && x.runs?.[0]?.ok === false)
+    .map((x) => ({ id: x.id, name: x.name, on: !!x.on, at: x.runs[0].at, note: clipText(x.runs[0].note || '', 300) })).sort((x, y) => y.at - x.at);
+  const connections = [];
+  const conn = (kind, name, c) => { if (c?.error) connections.push({ kind, name, error: clipText(String(c.error), 300) }); };
+  if (admin) {
+    conn('pss', 'Premier Shade Solutions', db.pss?.[ws.id]);
+    conn('gcontacts', 'Google Contacts', db.gcontacts?.[ws.id]);
+    conn('quickbooks', 'QuickBooks', db.qbo?.[ws.id]);
+    conn('twilio', 'Texting (Twilio)', db.twilio?.[ws.id]);
+    conn('postiz', 'Postiz', ws.postiz);
+  }
+  for (const c of Object.values(db.calendars || {})) if (c.wsId === ws.id && c.memberId === me) conn('calendar', `Calendar (${c.account || c.provider})`, c);
+  const all = jobs.slice(0, BOARD_JOBS);
+  return { jobs: all, counts: { jobs: all.length, blocked: all.filter((x) => x.blocked.length).length }, automations, connections };
+}
 const utc = (t) => new Date(t).toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
 const CONSENT = 'I agree to use electronic records and signatures for this document. I can ask the sender for a paper copy instead, and I can download a copy of the signed document.';
 
@@ -7567,6 +7635,7 @@ async function api(req, res, url) {
     if (!isDay(week || '')) return send(res, 400, { error: 'Pick a week.' });
     return send(res, 200, workload(ws, week));
   }
+  if (a === 'board' && m === 'GET') return send(res, 200, jobBoard(ws, auth));
   if (a === 'schedule' && m === 'GET') {
     const day = new URL(req.url, 'http://x').searchParams.get('date');
     if (!isDay(day || '')) return send(res, 400, { error: 'Pick a day.' });

@@ -5199,6 +5199,41 @@
     }
     return out;
   }
+  // The job board (job plan Phase 5): every job with a campaign going, how far it is, and what's in its way; for owners
+  // and admins also automations whose last run failed and connections that need attention. From GET /board, fetched
+  // when the Overview opens and again (at most every 20 seconds) when the team's work changes.
+  const BOARD = { data: null, at: 0, busy: false };
+  async function loadBoard(force) {
+    if (BOARD.busy || (!force && BOARD.data && Date.now() - BOARD.at < 20_000)) return;
+    BOARD.busy = true;
+    try { BOARD.data = await api('GET', '/board'); BOARD.at = Date.now(); } catch (e) { BOARD.data ||= { jobs: [], automations: [], connections: [], counts: { jobs: 0, blocked: 0 }, error: e.message }; }
+    finally { BOARD.busy = false; }
+    if (S.tab === 'camps' && K.overview && !K.open) renderCamps();
+  }
+  const BLOCK_IC = { needs: '📦', overdue: '!', signoff: '✓', held: '✋' };
+  function boardSection() {
+    const d = BOARD.data;
+    if (!d) { loadBoard(); return h('section', { class: 'job-board' }, h('div', { class: 'any-h camp-goals-h' }, 'Jobs'), h('p', { class: 'day-hint' }, 'Loading…')); }
+    if (Date.now() - BOARD.at > 20_000) setTimeout(() => loadBoard(), 0);
+    const [shown, setShown] = [K.boardAll ? d.jobs : d.jobs.filter((j) => j.blocked.length), (v) => { K.boardAll = v; renderCamps(); }];
+    const openB = (j, b) => (b.taskId && taskById(b.taskId) ? showStep(taskById(b.taskId)) : b.campaignId && campById(b.campaignId) ? openCampaign(b.campaignId) : openRecord(j.id));
+    const jobRow = (j) => h('div', { class: 'job-row' + (j.blocked.length ? ' blocked' : ''), 'data-job': j.id },
+      h('button', { class: 'job-row-h', onclick: () => openRecord(j.id) },
+        h('span', { class: 'lead-name' }, h('b', {}, j.name || 'A job'), h('small', {}, [j.stage, j.next ? 'Next: ' + shortText(j.next.title, 40) : 'Every step finished', j.archived ? 'in an archived project' : ''].filter(Boolean).join(' · '))),
+        h('span', { class: 'lead-prog', title: `${j.steps.done} of ${j.steps.total} steps finished` },
+          h('span', { class: 'lead-bar' }, h('i', { style: `width:${j.steps.total ? Math.round((j.steps.done / j.steps.total) * 100) : 0}%` })), h('small', {}, `${j.steps.done}/${j.steps.total}`))),
+      j.blocked.length ? h('div', { class: 'job-blocks' }, j.blocked.map((b) => h('button', { class: 'need-row job-block ' + b.kind, onclick: () => openB(j, b) }, h('span', { class: 'need-ic' }, BLOCK_IC[b.kind] || '•'), h('span', { class: 'need-text' }, h('small', {}, b.text))))) : null);
+    return h('section', { class: 'job-board' },
+      h('div', { class: 'any-h camp-goals-h job-board-h' }, d.counts.blocked ? `Jobs · ${d.counts.blocked} of ${d.counts.jobs} held up` : `Jobs · ${d.counts.jobs}`,
+        d.jobs.length && d.counts.blocked !== d.jobs.length ? h('button', { class: 'btn small', onclick: () => setShown(!K.boardAll) }, K.boardAll ? 'Only held up' : 'All jobs') : null),
+      d.error ? h('p', { class: 'day-hint' }, d.error)
+        : !d.jobs.length ? h('p', { class: 'day-hint' }, 'No jobs have a campaign going. Start one from a job, and its steps show here.')
+        : shown.length ? shown.slice(0, 60).map(jobRow) : h('p', { class: 'day-hint' }, `Nothing’s holding up your ${plural(d.jobs.length, 'job')}.`),
+      d.automations.length ? h('div', { class: 'any-h camp-goals-h' }, `Automations that failed · ${d.automations.length}`) : null,
+      d.automations.map((x) => h('button', { class: 'need-row auto board-auto', onclick: () => goTo('auto:' + x.id) }, h('span', { class: 'need-ic' }, '⚡'), h('span', { class: 'need-text' }, h('b', {}, x.name + (x.on ? '' : ' (off)')), h('small', {}, `${ago(x.at)} · ${shortText(x.note, 160)}`)))),
+      d.connections.length ? h('div', { class: 'any-h camp-goals-h' }, `Connections that need you · ${d.connections.length}`) : null,
+      d.connections.map((x) => h('button', { class: 'need-row late board-conn', onclick: () => openSettings('connections') }, h('span', { class: 'need-ic' }, '!'), h('span', { class: 'need-text' }, h('b', {}, x.name), h('small', {}, x.error)))));
+  }
   function overviewView() {
     const needs = needsYou();
     const ICON = { sign: '✓', stuck: '⏳', role: '👤', late: '!', nobody: '?', checkin: '🩺', approve: '✋', review: '🎯', learned: '✎', agent: '👥' };
@@ -5231,6 +5266,7 @@
       h('section', { class: 'lead-needs' }, h('div', { class: 'any-h' }, needs.length ? `Needs you · ${needs.length}` : 'Needs you'),
         needs.length ? needs.slice(0, 30).map((n) => h('button', { class: 'need-row ' + n.kind, onclick: n.run }, h('span', { class: 'need-ic' }, ICON[n.kind]), h('span', { class: 'need-text' }, h('b', {}, n.text), h('small', {}, n.sub))))
           : h('p', { class: 'day-hint' }, 'Nothing needs you right now. Nothing stuck, overdue or waiting on your sign-off.')),
+      boardSection(),
       h('div', { class: 'any-h camp-goals-h' }, live.length ? `Running · ${live.length}` : 'Running'),
       live.length ? mains.flatMap((c) => [row(c), ...live.filter((x) => x.parentId === c.id).map((x) => row(x, true))]) : h('p', { class: 'day-hint' }, 'No campaigns running.'),
       feed.length ? h('div', { class: 'any-h camp-goals-h' }, 'Latest check-ins') : null,

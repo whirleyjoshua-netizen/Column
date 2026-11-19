@@ -3260,3 +3260,18 @@ body:not(.wide) .wl-row > .wl-stat:not([data-k=open]):not([data-k=overdue]):not(
 .pj-arch small { color: var(--muted); flex: 1; min-width: 140px; }
 .pj-arch-banner { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 8px 12px; padding: 8px 12px; border-radius: 10px; background: var(--hover, #f3f3f6); font-size: 13px; }
 .pj-arch-banner span { flex: 1; min-width: 180px; }
+/* The job board (Campaigns → Overview): jobs, how far they are, what's holding them up. */
+.job-board-h { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.job-row { border: 1px solid var(--line); border-radius: 10px; margin: 6px 0; overflow: hidden; }
+.job-row.blocked { border-color: color-mix(in srgb, #f5a524 45%, var(--line)); }
+.job-row-h { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; padding: 8px 10px; background: none; border: 0; text-align: left; color: var(--text); cursor: pointer; }
+.job-row-h:hover { background: var(--card-hover); }
+.job-row-h .lead-name { min-width: 0; }
+.job-row-h .lead-prog { display: flex; align-items: center; gap: 6px; flex: 0 0 120px; }
+.job-row-h .lead-bar { flex: 1; }
+.job-blocks { padding: 0 10px 4px; }
+.job-block .need-text small { color: var(--text); }
+.need-row.needs .need-ic, .need-row.held .need-ic { background: color-mix(in srgb, #f5a524 16%, transparent); color: #b7791f; }
+.need-row.overdue .need-ic { background: color-mix(in srgb, var(--danger) 14%, transparent); color: var(--danger); font-weight: 700; }
+.need-row.signoff .need-ic { background: var(--accent-soft); color: var(--accent); }
+.job-row .lead-bar { display: block; } .job-row .lead-bar i { background: var(--accent); }
