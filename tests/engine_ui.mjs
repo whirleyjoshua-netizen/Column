@@ -102,13 +102,13 @@ try {
   // The automation editor: a record's date, and steps that change and add records.
   await A.tap(`[...document.querySelectorAll('#projects .pj-top .icon-btn')].find((b) => b.getAttribute('aria-label') === 'Close Boards')`);
   await A.until(`!!document.querySelector('#tabs [data-tab=automations]')`, 10000); await A.ev(`document.querySelector('#tabs [data-tab=automations]').click(); true`); // in Workspace now (2026-11-14)
+  // Licenses & insurance live in the workspace profile (2026-11-19); the recipe goes straight onto its list.
+  const prof = (await api('GET', '/profile')).project, lic = prof.types.find((x) => x.key === 'licenses');
+  await A.until(`[...document.querySelectorAll('#tool .auto-recipe b')].length > 0`);
   ok(await A.until(`[...document.querySelectorAll('#tool .auto-recipe b')].some((b) => b.textContent === 'License expiring? Owners hear')`), 'there’s a recipe for licenses about to expire');
   await A.tap(`[...document.querySelectorAll('#tool .auto-recipe')].find((b) => b.textContent.includes('License expiring'))`);
   ok(await A.until(`document.querySelector('#sheet .auto-kind')?.value === 'record.date' && !!document.querySelector('#sheet .auto-proj')`), 'it opens on “A date on a job or record comes up”, asking which project');
-  await A.pick(`document.querySelector('#sheet .auto-proj')`, p.id);
-  const lic = p.types.find((x) => x.key === 'licenses');
-  await A.until(`!!document.querySelector('#sheet .auto-list')`);
-  await A.pick(`document.querySelector('#sheet .auto-list')`, lic.id);
+  ok(await A.until(`document.querySelector('#sheet .auto-proj')?.value === ${JSON.stringify(prof.id)} && document.querySelector('#sheet .auto-list')?.value === ${JSON.stringify(lic.id)}`), 'it’s already on the workspace profile’s Insurance & licenses');
   ok(await A.until(`[...document.querySelectorAll('#sheet .auto-datef option')].map((o) => o.textContent).join() === 'Expires' && document.querySelector('#sheet .auto-days').value === '30' && document.querySelector('#sheet .auto-side').value === 'before'`), 'then the list’s date (Expires), 30 days before');
   // A second step: add a task-like record in the same list.
   await A.tap(`[...document.querySelectorAll('#sheet .auto-add-step')].at(-1)`);

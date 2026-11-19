@@ -18,12 +18,12 @@ const fld = (t, k) => t.fields.find((f) => f.key === k);
 // Trades with bidding: the trade lists, then bids, quotes, clients and a price list, links pointing inside the project.
 let r = await jo('POST', '/projects', { template: 'trades', trades: ['blinds', 'hvac'], bids: true });
 let p = r.body;
-ok(r.status === 200 && p.name === 'Jobs' && keys(p) === 'trade_blinds,trade_hvac,plans,equipment,licenses,quotes,bids,clients,price_list', 'trades + "we bid on jobs" (with service plans, customer equipment and licenses): ' + keys(p));
+ok(r.status === 200 && p.name === 'Jobs' && keys(p) === 'trade_blinds,trade_hvac,plans,equipment,quotes,bids,clients,price_list', 'trades + "we bid on jobs" (with service plans and customer equipment): ' + keys(p));
 ok(fld(typ(p, 'quotes'), 'client').target === typ(p, 'clients').id && fld(typ(p, 'quotes'), 'bid').target === typ(p, 'bids').id, 'quotes link to this project’s clients and bids');
 r = await jo('POST', '/projects', { template: 'trades', trades: ['blinds'] });
-ok(keys(r.body) === 'trade_blinds,licenses', 'without it, only the trade lists (and licenses & insurance)');
+ok(keys(r.body) === 'trade_blinds', 'without it, only the trade lists (licenses & insurance are in the workspace profile)');
 r = await jo('POST', '/projects', { template: 'trades', trades: ['blinds'], bids: 'yes' });
-ok(keys(r.body) === 'trade_blinds,licenses', 'only bids: true adds the bid lists');
+ok(keys(r.body) === 'trade_blinds', 'only bids: true adds the bid lists');
 r = await jo('GET', '/project-templates/trades');
 const every = r.body.flatMap((f) => f.trades.map((x) => x.key));
 r = await jo('POST', '/projects', { template: 'trades', trades: every, bids: true });

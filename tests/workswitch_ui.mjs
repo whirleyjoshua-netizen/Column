@@ -46,10 +46,14 @@ try {
   await A.ev(`localStorage.setItem('column.token', JSON.stringify(${JSON.stringify(auth.token)})); location.reload(); true`).catch(() => {});
   ok(await A.until(`!document.querySelector('#app').classList.contains('hidden') && !!document.querySelector('#tabs [data-tab=work]')`, 15000), 'Ada is in');
   await A.tap(`document.querySelector('#tabs [data-tab=work]')`);
-  const sw = `document.querySelector('#workTabs .ws-switch')`;
+  const sw = `document.querySelector('#workTabs .ws-switch')`, hs = `document.querySelector('header.bar .ws')`;
   ok(await A.until(`${sw}?.textContent.includes('Alpha ${t}') && document.querySelector('#workTabs').firstElementChild === ${sw}`), 'Workspace starts with the workspace you’re in');
+  // Its name opens the workspace profile (2026-11-19); the name in the header switches workspaces.
   await A.tap(sw);
-  ok(await A.until(`[...document.querySelectorAll('#menu .mh')].some((x) => x.textContent === 'Workspaces')`), 'its menu lists your workspaces');
+  ok(await A.until(`!!document.querySelector('#sheet .wp .wp-sec')`), 'the strip’s name opens the workspace profile');
+  await A.ev(`document.querySelector('#sheet .sheet h2 .icon-btn')?.click(); true`);
+  await A.tap(hs);
+  ok(await A.until(`[...document.querySelectorAll('#menu .mh')].some((x) => x.textContent === 'Workspaces')`), 'the header’s name lists your workspaces');
   const items = await A.ev(`[...document.querySelectorAll('#menu button')].map((b) => b.textContent).join('|')`);
   ok(items.includes('Alpha ' + t) && items.includes('+ New workspace') && items.includes('Join a workspace'), 'with + New workspace and Join a workspace: ' + items);
   // A new one.
@@ -60,7 +64,7 @@ try {
   ok(await A.until(`!document.querySelector('#app').classList.contains('hidden') && document.querySelector('#wsName')?.textContent === 'Beta ${t}'`, 20000), 'you’re in the new workspace');
   await A.ev(`document.querySelector('#tabs [data-tab=work]').click(); true`);
   await A.until(`!!${sw}`);
-  await A.tap(sw);
+  await A.tap(hs);
   const list = await A.ev(`[...document.querySelectorAll('#menu button')].map((b) => b.textContent).join('|')`);
   ok(list.includes('Alpha ' + t) && list.includes('Beta ' + t), 'both are in the list: ' + list);
   // Join Cy's.
@@ -71,7 +75,7 @@ try {
   // Back to Alpha.
   await A.ev(`document.querySelector('#tabs [data-tab=work]').click(); true`);
   await A.until(`!!${sw}`);
-  await A.tap(sw);
+  await A.tap(hs);
   await A.ev(`[...document.querySelectorAll('#menu button')].find((b) => b.textContent === 'Alpha ${t}').click(); true`);
   ok(await A.until(`!document.querySelector('#app').classList.contains('hidden') && document.querySelector('#wsName')?.textContent === 'Alpha ${t}'`, 20000), 'and switch back to the first');
   ok(A.errors.length === 0, 'no script errors' + (A.errors.length ? ': ' + A.errors.join(' | ') : ''));

@@ -105,7 +105,7 @@ try {
   ok(await A.until(`document.querySelector('#setupWrap h2')?.textContent === 'Switch on your AI team'`, 10000), 'then the AI key');
   let st = await api('GET', '/state');
   ok(st.workspace.tools.projects && st.workspace.tools.map && st.workspace.tools.bills, 'trades switched on Jobs, Map and Finance');
-  ok(st.projects.some((p) => p.template === 'trades' && p.types.filter((t) => t.trade).length === 2 && p.types.some((t) => t.key === 'licenses')), 'and started a Jobs project with the two kinds of work (and licenses & insurance beside them)');
+  ok(st.projects.some((p) => p.template === 'trades' && p.types.filter((t) => t.trade).length === 2 && !p.types.some((t) => t.key === 'licenses')), 'and started a Jobs project with the two kinds of work (licenses & insurance are in the workspace profile, not beside them)');
   ok(st.workspace.setup.solo === true && st.workspace.setup.kind === 'trades' && st.workspace.setup.pending, 'the answers are kept; setup isn’t finished yet');
   await A.ev(`(() => { const c = document.querySelector('#setupWrap'); c.querySelector('select').value = 'anthropic'; c.querySelector('input[type=password]').value = 'sk-ant-test-key-1234567890'; return true; })()`);
   await pick('Save and continue');
