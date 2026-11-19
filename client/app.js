@@ -14389,11 +14389,80 @@
       stat(p.open, 'open'), stat(p.overdue, 'overdue', 'bad'), stat(p.dueWeek, 'due'), stat(p.noDate, 'no date'), stat(p.doneWeek, 'done', 'good'), stat(p.visits, 'visits'), stat(p.campaigns, 'campaigns'),
       spark(p));
     D.scroll.replaceChildren(h('div', { class: 'teamload' },
-      h('div', { class: 'wl-sum' }, stat(sum('open'), 'open tasks'), stat(sum('overdue'), 'overdue', 'bad'), stat(sum('dueWeek'), 'due this week'), stat(sum('noDate'), 'with no date'), stat(sum('doneWeek'), 'done this week', 'good'), h('div', { class: 'wl-stat' }, h('b', {}, fmtHrs(sum('bookedMin'))), h('small', {}, 'booked'))),
+      h('div', { class: 'wl-sum' }, stat(sum('open'), 'open tasks'), stat(sum('overdue'), 'overdue', 'bad'), stat(sum('dueWeek'), 'due this week'), stat(sum('noDate'), 'with no date'), stat(sum('doneWeek'), 'done this week', 'good'), h('div', { class: 'wl-stat' }, h('b', {}, fmtHrs(sum('bookedMin'))), h('small', {}, 'booked')), stat(WL.data.unassigned || 0, 'nobody on', 'warn')),
       h('div', { class: 'wl-rows' }, people.map(row)),
-      h('p', { class: 'day-hint' }, 'Counts only: every task each person has, given to them or their own, private ones included. Tap someone to see their week.')),
+      h('p', { class: 'day-hint' }, 'Counts only: every task each person has, given to them or their own, private ones included. A campaign’s task nobody is on counts as nobody’s. Tap someone to see their week.')),
+      forecastSection(),
       ...(toolOn('projects') ? [visitsHost] : []));
     if (toolOn('projects')) teamVisits(k, visitsHost);
+  }
+  // ----- the weeks ahead (GET /forecast): load by person and week from the real work, what the coming steps need,
+  // and the jobs likely to fall behind. Every number opens into the tasks and visits behind it. -----
+  const FC = { data: null, at: 0, loading: null };
+  const FC_ST = { confirmed: 'Confirmed', estimated: 'Estimated', unassigned: 'Nobody on it', overdue: 'Overdue' };
+  function forecastSection() {
+    if ((!FC.data || Date.now() - FC.at > 30_000) && !FC.loading) {
+      FC.loading = api('GET', '/forecast?weeks=4').then((x) => { FC.data = x; FC.at = Date.now(); }).catch((e) => { FC.data ||= { error: e.message }; }).finally(() => { FC.loading = null; if (D.sub === 'team') renderDay(); });
+    }
+    const d = FC.data;
+    const box = h('section', { class: 'fc' }, h('div', { class: 'any-h fc-title' }, 'Weeks ahead'));
+    if (!d) return box.append(h('p', { class: 'day-hint' }, 'Working out the weeks ahead…')), box;
+    if (d.error) return box.append(h('p', { class: 'day-hint' }, d.error)), box;
+    const wkLabel = (w, i) => i === 0 ? 'This week' : i === 1 ? 'Next week' : keyDate(w).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+    const inWeek = (it, i) => it.day >= d.weeks[i] && it.day <= addDays(d.weeks[i], 6);
+    const cell = (b, onclick, i) => h('button', { class: 'fc-cell' + (b.over ? ' over' : '') + (b.min || b.tasks ? '' : ' none'), 'data-week': i, onclick,
+      title: `${fmtHrs(b.min)} booked · ${b.tasks} task${b.tasks === 1 ? '' : 's'} due (${b.confirmed} confirmed, ${b.estimated} estimated)${b.over ? ' · over a full day somewhere' : ''}` },
+      h('b', {}, fmtHrs(b.min)), h('small', {}, b.tasks ? `${b.tasks} task${b.tasks === 1 ? '' : 's'}${b.estimated ? ` · ${b.estimated} est.` : ''}` : 'no tasks'));
+    const people = d.people.filter((p) => p.weeks.some((w) => w.min || w.tasks) || p.overdue);
+    box.append(
+      h('div', { class: 'fc-grid', style: `--n:${d.weeks.length}` },
+        h('div', { class: 'fc-h' }), ...d.weeks.map((w, i) => h('div', { class: 'fc-h' }, wkLabel(w, i))),
+        ...people.flatMap((p) => [h('div', { class: 'fc-who' }, avatar(p.id), h('span', {}, p.name), p.overdue ? h('small', { class: 'bad' }, `${p.overdue} overdue`) : null),
+          ...p.weeks.map((b, i) => cell(b, () => fcItemsSheet(`${p.name} · ${wkLabel(d.weeks[i], i).toLowerCase()}`, d.items.filter((it) => it.memberIds.includes(p.id) && (inWeek(it, i) || (i === 0 && it.status === 'overdue'))), p, i), i))]),
+        d.unassigned.total ? h('div', { class: 'fc-who fc-nobody' }, h('span', {}, 'Nobody on it'), h('small', {}, `${d.unassigned.total} in all`)) : null,
+        ...(d.unassigned.total ? d.unassigned.perWeek.map((n, i) => h('button', { class: 'fc-cell nobody' + (n ? '' : ' none'), onclick: () => fcItemsSheet('Nobody on it · ' + wkLabel(d.weeks[i], i).toLowerCase(), d.items.filter((it) => !it.memberIds.length && inWeek(it, i))) }, h('b', {}, String(n)), h('small', {}, n === 1 ? 'task' : 'tasks'))) : [])),
+      people.length ? null : h('p', { class: 'day-hint' }, 'Nothing booked or due in the next four weeks.'),
+      h('p', { class: 'day-hint' }, `Confirmed: given to someone, with a due date or a booking. Estimated: no due date, so its step’s date or its campaign’s end. A day over ${fmtHrs(d.capacityMin)} booked is overloaded. Tap a week to see the work behind it.`));
+    if (d.conflicts.length) box.append(h('div', { class: 'any-h fc-sub' }, `Double booked · ${d.conflicts.length}`),
+      ...d.conflicts.map((c) => h('button', { class: 'need-row late fc-conflict', onclick: () => { const v = c.visits.find((x) => x.jobId); if (v) openRecord(v.jobId); } },
+        h('span', { class: 'need-ic' }, '!'), h('span', { class: 'need-text' }, h('b', {}, `${c.name} · ${dayName(c.day)}`), h('small', {}, c.visits.map((v) => `${v.hidden ? 'An appointment' : v.kind} ${fmtTime(v.start)}–${fmtTime(v.end)}`).join(' overlaps '))))));
+    const needRows = [
+      ...d.resources.map((x) => ({ x, kind: 'stock', text: `${x.name}: ${fmtQ(x.need)} ${x.unit} needed`, sub: `${fmtQ(x.onHand)} on hand · ${fmtQ(x.onOrder)} on order${x.short ? ` · ${fmtQ(x.short)} short` : ' · covered'}`, bad: x.short > 0 })),
+      ...d.equipment.map((x) => ({ x, kind: 'gear', text: `${x.name}: ${x.need} needed`, sub: `${x.free} free${x.short ? ` · ${x.short} short` : ' · covered'}`, bad: x.short > 0 })),
+      ...d.visitsToBook.map((x) => ({ x, kind: 'visit', text: `${x.kind} visit to book`, sub: `${x.jobName} · ${x.title}`, bad: true })),
+    ];
+    if (needRows.length) box.append(h('div', { class: 'any-h fc-sub' }, 'What the coming steps need'),
+      ...needRows.map((r) => h('button', { class: 'need-row fc-need ' + (r.bad ? 'late' : 'auto'), 'data-kind': r.kind, onclick: () => (r.kind === 'visit' ? openRecord(r.x.jobId) : fcStepsSheet(r)) },
+        h('span', { class: 'need-ic' }, r.kind === 'stock' ? '📦' : r.kind === 'gear' ? '🔧' : '📅'), h('span', { class: 'need-text' }, h('b', {}, r.text), h('small', {}, r.sub)))));
+    if (d.atRisk.length) box.append(h('div', { class: 'any-h fc-sub' }, `Jobs likely to fall behind · ${d.atRisk.length}`),
+      ...d.atRisk.map((j) => h('div', { class: 'job-row blocked fc-risk', 'data-job': j.jobId },
+        h('button', { class: 'job-row-h', onclick: () => openRecord(j.jobId) }, h('span', { class: 'lead-name' }, h('b', {}, j.name || 'A job'), h('small', {}, [j.stage, `${j.steps.done}/${j.steps.total} steps`].filter(Boolean).join(' · ')))),
+        h('div', { class: 'job-blocks' }, j.reasons.map((r) => h('button', { class: 'need-row job-block ' + (r.kind === 'overdue' || r.kind === 'deadline' ? 'overdue' : r.kind === 'signoff' ? 'signoff' : 'needs'), onclick: () => (r.taskId && taskById(r.taskId) ? showStep(taskById(r.taskId)) : r.campaignId && campById(r.campaignId) ? openCampaign(r.campaignId) : openRecord(j.jobId)) },
+          h('span', { class: 'need-ic' }, r.kind === 'overdue' || r.kind === 'deadline' ? '!' : r.kind === 'unassigned' ? '?' : r.kind === 'signoff' ? '✓' : '📦'), h('span', { class: 'need-text' }, h('small', {}, r.text))))))));
+    return box;
+  }
+  const fmtQ = (n) => String(Math.round((n || 0) * 1000) / 1000);
+  // The work behind a number: by day, each with its job, campaign and step; tap one to open it.
+  function fcItemsSheet(title, list, p = null, wi = null) {
+    const byDay = new Map();
+    for (const it of list.slice().sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : (a.start ?? 9999) - (b.start ?? 9999)))) (byDay.get(it.day) || byDay.set(it.day, []).get(it.day)).push(it);
+    const open = (it) => it.hidden ? null : it.kind === 'visit' ? (it.projectId ? openJob(it.projectId, it.jobId, it.visitId) : openRecord(it.jobId)) : it.taskId && taskById(it.taskId) ? showStep(taskById(it.taskId)) : it.campaignId ? openCampaign(it.campaignId) : it.jobId ? openRecord(it.jobId) : null;
+    const row = (it) => h('button', { class: 'fc-item ' + it.status + (it.hidden ? ' hidden-item' : ''), 'data-task': it.taskId || '', 'data-visit': it.visitId || '', disabled: !!it.hidden, onclick: () => { closeSheet(); open(it); } },
+      h('span', { class: 'pill fc-st ' + it.status }, it.kind === 'visit' ? (it.start != null ? fmtTime(it.start) : 'Visit') : FC_ST[it.status]),
+      h('span', { class: 'fc-it-text' }, h('b', {}, it.hidden ? (it.kind === 'visit' ? 'A visit on a job you can’t see' : 'A task in a campaign you aren’t in') : it.kind === 'visit' ? `${it.text} visit` : it.text),
+        it.hidden ? null : h('small', {}, [it.jobName, it.campaign, it.step, it.status === 'estimated' ? 'date from ' + it.dateFrom : '', it.waiting ? 'waiting on earlier work' : '', !it.memberIds.length ? '' : p ? '' : it.memberIds.map(memberName).join(', ')].filter(Boolean).join(' · '))));
+    const dayB = p && wi != null ? FC.data.days.slice(wi * 7, wi * 7 + 7) : null;
+    sheet(title, [
+      dayB ? h('div', { class: 'wl-week' }, dayB.map((k, i) => { const b = p.days[wi * 7 + i]; return h('div', { class: 'wl-wd' + (k === todayKey() ? ' today' : '') + (b.over ? ' over' : '') }, h('div', { class: 'wl-wbar' }, h('i', { style: `height:${Math.min(100, Math.round((b.min / Math.max(FC.data.capacityMin, ...p.days.map((x) => x.min))) * 100))}%` })), h('b', {}, fmtHrs(b.min)), h('small', {}, keyDate(k).toLocaleDateString(undefined, { weekday: 'short' })), b.tasks ? h('small', { class: 'wl-due' }, `${b.tasks} due`) : null); })) : null,
+      list.length ? h('div', { class: 'fc-items' }, [...byDay].map(([k, l]) => [h('div', { class: 'any-h' }, k < todayKey() ? `${dayName(k)} (overdue)` : dayName(k)), ...l.map(row)]).flat())
+        : h('p', { class: 'day-hint' }, 'Nothing here: no tasks due or visits booked.'),
+    ].filter(Boolean));
+  }
+  function fcStepsSheet(r) {
+    sheet(r.text, [h('p', { class: 'day-hint' }, r.sub),
+      h('div', { class: 'fc-items' }, r.x.steps.map((st) => h('button', { class: 'fc-item', disabled: !!st.hidden, onclick: () => { closeSheet(); if (!st.hidden) openCampaign(st.campaignId); } },
+        h('span', { class: 'pill fc-st' }, st.when ? dueLabel(st.when) : 'No date'),
+        h('span', { class: 'fc-it-text' }, h('b', {}, st.hidden ? 'A step in a campaign you aren’t in' : st.title), st.hidden ? null : h('small', {}, [st.jobName, st.need != null ? `${fmtQ(st.need)} ${r.x.unit || ''} for it` : ''].filter(Boolean).join(' · '))))))]);
   }
   function teamPersonSheet(p) {
     const days = WL.data.days;

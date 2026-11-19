@@ -1303,7 +1303,10 @@ function applyTask(t, body) {
     t.due = body.due;
   }
   if (body.repeat !== undefined) t.repeat = REPEATS.includes(body.repeat) ? body.repeat : null;
+  // Moved into another job's campaign, a task that was its old campaign's job's becomes the new job's (2026-11-18).
+  const wasJob = taskCamp(t)?.recordId || null;
   if (body.goalId !== undefined) t.goalId = body.goalId && db.goals[body.goalId]?.wsId === t.wsId ? body.goalId : null;
+  if (body.goalId !== undefined && body.recordId === undefined && wasJob && t.recordId === wasJob) { const nowJob = taskCamp(t)?.recordId; if (nowJob && db.records[nowJob]) t.recordId = nowJob; }
   // A call list worked as this task. It has to belong to the goal's campaign.
   if (body.listId !== undefined || body.goalId !== undefined) {
     const l = db.lists[body.listId !== undefined ? body.listId : t.listId];
@@ -3009,10 +3012,11 @@ function createCampaign(ws, owner, body, extra = {}) {
   setImmediate(() => db.campaigns[c.id] && automate(ws.id, 'campaign.started', { campaign: db.campaigns[c.id], who: owner.member, whoId: owner.memberId }));
   return c;
 }
-// A campaign given its job: its tasks that aren't about a job yet become this job's (not ones given none on purpose).
-function campTasksToJob(c) {
+// A campaign given its job: its tasks that aren't about a job yet become this job's (not ones given none on purpose),
+// and, when it's moved from another job, the tasks that were that job's go with it (not ones given another on purpose).
+function campTasksToJob(c, was = null) {
   for (const t of Object.values(db.tasks)) {
-    if (taskCamp(t)?.id !== c.id || t.recordId === null || (t.recordId && db.records[t.recordId])) continue;
+    if (taskCamp(t)?.id !== c.id || t.recordId === null || (t.recordId && db.records[t.recordId] && t.recordId !== was)) continue;
     t.recordId = c.recordId;
     broadcast(c.wsId, { type: 'task', task: publicTask(t) });
   }
@@ -5531,6 +5535,9 @@ function taskDoers(ws, t) {
   if (t.assigneeId) return [t.assigneeId];
   if (t.roleId) return ws.members.filter((x) => (x.roleIds || []).includes(t.roleId)).map((x) => x.id);
   if (t.castId) return castRole(taskCamp(t), t.castId)?.memberIds || [];
+  // A campaign's task nobody is on is work nobody is on (the forecast, 2026-11-18), not its maker's: whoever plans a
+  // campaign isn't loaded with all of it. A to-do of one's own is still one's own.
+  if (taskCamp(t)) return [];
   return t.memberId ? [t.memberId] : [];
 }
 // Does a repeating entry fall on day k (the same rules as the app's).
@@ -5548,10 +5555,13 @@ function workload(ws, week) {
   const days = Array.from({ length: 7 }, (_, i) => addDays(week, i));
   const last = days[6], today = teamDay(ws.id);
   const by = new Map(ws.members.map((x) => [x.id, { id: x.id, name: x.name, role: x.role, open: 0, overdue: 0, dueWeek: 0, noDate: 0, doneWeek: 0, bookedMin: 0, visits: 0, campaigns: 0, perDay: days.map(() => ({ min: 0, due: 0 })) }]));
+  let unassigned = 0;
   for (const t of Object.values(db.tasks)) {
     if (t.wsId !== ws.id || t.skipped) continue;
     const doneDay = t.done && t.doneAt ? teamDay(ws.id, t.doneAt) : null;
-    for (const id of taskDoers(ws, t)) {
+    const doers = taskDoers(ws, t);
+    if (!t.done && !doers.length) unassigned++;
+    for (const id of doers) {
       const p = by.get(id);
       if (!p) continue;
       if (t.done) { if (doneDay >= week && doneDay <= last) p.doneWeek++; continue; }
@@ -5573,7 +5583,7 @@ function workload(ws, week) {
   }
   for (const [id, set] of visits) by.get(id).visits = set.size;
   for (const c of Object.values(db.campaigns)) if (c.wsId === ws.id && c.status === 'active' && by.get(c.ownerId)) by.get(c.ownerId).campaigns++;
-  return { week, days, today, people: [...by.values()] };
+  return { week, days, today, people: [...by.values()], unassigned };
 }
 // ---------- the job board (job plan Phase 5, the owner 2026-11-18) ----------
 // Every job with a campaign still going: its stage, how many of its steps are finished, the next step, and what's in
@@ -5642,6 +5652,163 @@ function jobBoard(ws, auth) {
   for (const c of Object.values(db.calendars || {})) if (c.wsId === ws.id && c.memberId === me) conn('calendar', `Calendar (${c.account || c.provider})`, c);
   const all = jobs.slice(0, BOARD_JOBS);
   return { jobs: all, counts: { jobs: all.length, blocked: all.filter((x) => x.blocked.length).length }, automations, connections };
+}
+// ---------- the workload forecast (job plan Phase 5, the owner 2026-11-18) ----------
+// The weeks ahead, from the real work, for Tasks → Team (owners and admins, like the team's week it extends):
+// - each person's load by day and week: tasks by their due date (confirmed), or, with none, their step's date or
+//   their campaign's end (estimated); booked visits and timed appointments in minutes; a day over 8 hours, or full
+//   with tasks still due on it, is overloaded, and timed bookings that overlap are a conflict;
+// - work nobody is on (a campaign's task with no one given it, no role and no campaign role);
+// - what the coming steps need: materials against stock on hand and on order, gear against units free, and visits
+//   a step needs that nobody has booked;
+// - the jobs likely to fall behind, with why: overdue work, short of materials or gear, a visit to book, work nobody
+//   is on, a step or campaign past its date, and whatever the job board says is holding it up.
+// Every count opens into the items behind it (items[]). What the viewer can't see (a private campaign they aren't in,
+// a job they can't see, someone's own appointment) is counted with its day and person, never its words or links.
+const FC_WEEKS = 4, FC_MAX_WEEKS = 12, DAY_MIN = 480;
+const nOf = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
+function forecast(ws, auth, weeks = FC_WEEKS) {
+  const me = auth.memberId, today = teamDay(ws.id);
+  const week0 = addDays(today, -new Date(today + 'T12:00:00Z').getUTCDay());
+  const days = Array.from({ length: weeks * 7 }, (_, i) => addDays(week0, i));
+  const wks = Array.from({ length: weeks }, (_, i) => days[i * 7]);
+  const last = days.at(-1), dayAt = new Map(days.map((d, i) => [d, i]));
+  const nameOf = (id) => ws.members.find((x) => x.id === id)?.name || null;
+  const blank = () => ({ min: 0, tasks: 0, confirmed: 0, estimated: 0, over: false });
+  const by = new Map(ws.members.map((x) => [x.id, { id: x.id, name: x.name, role: x.role, overdue: 0, days: days.map(blank), weeks: wks.map(blank) }]));
+  const items = [], unassigned = { total: 0, perWeek: wks.map(() => 0) };
+  const jobName = (rec) => { const p = db.projects[rec.projectId], lt = typeOfP(p, rec.typeId); return String(rec.values[lt?.primary] ?? ''); };
+  const seen = new Map(); // campaign id -> can the viewer see it
+  const sees = (c) => { if (!seen.has(c.id)) seen.set(c.id, seesCampaign(c.id, me)); return seen.get(c.id); };
+  const recSeen = (id) => !!(id && db.records[id] && PJ.recordAt(id, ws.id, me));
+  const perJob = new Map(); // job id -> { overdue, unassigned, late } from tasks
+  const jobTally = (id) => perJob.get(id) || perJob.set(id, { overdue: 0, unassigned: 0, late: 0 }).get(id);
+
+  // Tasks.
+  for (const t of Object.values(db.tasks)) {
+    if (t.wsId !== ws.id || t.done || t.skipped) continue;
+    const g = db.goals[t.goalId], c = taskCamp(t);
+    let d = t.due || null, from = d ? 'its due date' : null;
+    if (!d && g?.due) { d = g.due; from = 'its step’s date'; }
+    if (!d && c?.end) { d = c.end; from = 'its campaign’s end'; }
+    const doers = taskDoers(ws, t);
+    const status = d && d < today ? 'overdue' : !doers.length ? 'unassigned' : t.due ? 'confirmed' : 'estimated';
+    const job = c?.recordId && db.records[c.recordId] ? db.records[c.recordId] : t.recordId && db.records[t.recordId] ? db.records[t.recordId] : null;
+    if (job && c?.status !== 'done') {
+      const j = jobTally(job.id);
+      if (status === 'overdue') j.overdue++;
+      if (!doers.length) j.unassigned++;
+      if (d && c?.end && d > c.end) j.late++;
+    }
+    if (!doers.length) { unassigned.total++; if (d && dayAt.has(d)) unassigned.perWeek[Math.floor(dayAt.get(d) / 7)]++; }
+    if (!d || (d > last)) continue;
+    for (const id of doers) {
+      const pr = by.get(id);
+      if (!pr) continue;
+      if (status === 'overdue') { pr.overdue++; continue; }
+      const i = dayAt.get(d);
+      if (i == null) continue;
+      for (const b of [pr.days[i], pr.weeks[Math.floor(i / 7)]]) { b.tasks++; if (status === 'confirmed') b.confirmed++; else b.estimated++; }
+    }
+    if (status !== 'overdue' && !dayAt.has(d)) continue;
+    const open = canSee(auth, 'task', t) && (!job || recSeen(job.id)) && (!c || sees(c));
+    items.push(open
+      ? { kind: 'task', taskId: t.id, text: clipText(t.text, 120), status, day: d, dateFrom: from, memberIds: doers, waiting: isWaiting(t) || undefined,
+        goalId: g?.id || null, step: g ? clipText(g.title, 80) : null, campaignId: c?.id || null, campaign: c ? clipText(c.name, 80) : null, jobId: job?.id || null, jobName: job ? jobName(job) : null, projectId: job?.projectId || null }
+      : { kind: 'task', hidden: true, status, day: d, memberIds: doers });
+  }
+
+  // Visits and timed appointments, in minutes, and the bookings that overlap.
+  const timed = new Map(); // memberId|day -> [{ start, end, e }]
+  for (const e of Object.values(db.entries)) {
+    const pr = e.wsId === ws.id && by.get(e.memberId);
+    if (!pr) continue;
+    const span = e.start != null && e.end != null && e.end > e.start ? e.end - e.start : 0;
+    if (!span && !e.visitId) continue;
+    for (const [k, i] of dayAt) {
+      if (k < (e.date || '') && !e.repeat) continue;
+      if (!entryOn(e, k)) continue;
+      pr.days[i].min += span; pr.weeks[Math.floor(i / 7)].min += span;
+      if (span) { const key = e.memberId + '|' + k; (timed.get(key) || timed.set(key, []).get(key)).push(e); }
+    }
+  }
+  const visitItem = new Map();
+  for (const e of Object.values(db.entries)) {
+    if (e.wsId !== ws.id || !e.visitId || !by.has(e.memberId) || !dayAt.has(e.date)) continue;
+    const open = recSeen(e.recordId), key = e.visitId;
+    if (!visitItem.has(key)) {
+      const rec = db.records[e.recordId];
+      visitItem.set(key, open ? { kind: 'visit', visitId: e.visitId, text: e.visit || 'Visit', status: 'confirmed', day: e.date, start: e.start ?? null, end: e.end ?? null, done: !!e.done, memberIds: [], jobId: e.recordId, jobName: rec ? jobName(rec) : null, projectId: rec?.projectId || null }
+        : { kind: 'visit', hidden: true, status: 'confirmed', day: e.date, start: e.start ?? null, end: e.end ?? null, memberIds: [] });
+    }
+    visitItem.get(key).memberIds.push(e.memberId);
+  }
+  items.push(...visitItem.values());
+  const conflicts = [];
+  for (const [key, list] of timed) {
+    const [memberId, k] = key.split('|');
+    list.sort((x, y) => x.start - y.start);
+    const clash = new Set();
+    for (let i = 0; i < list.length; i++) for (let j = i + 1; j < list.length && list[j].start < list[i].end; j++) { clash.add(list[i]); clash.add(list[j]); }
+    if (clash.size) conflicts.push({ memberId, name: nameOf(memberId), day: k, visits: [...clash].map((e) => (e.visitId && recSeen(e.recordId) ? { id: e.visitId, kind: e.visit || 'Visit', start: e.start, end: e.end, jobId: e.recordId } : { hidden: true, start: e.start, end: e.end })) });
+  }
+  for (const pr of by.values()) {
+    pr.days.forEach((b) => { b.over = b.min > DAY_MIN || (b.min >= DAY_MIN && b.tasks > 0); });
+    pr.weeks.forEach((b, i) => { b.over = b.min > 5 * DAY_MIN || pr.days.slice(i * 7, i * 7 + 7).some((x) => x.over); });
+  }
+
+  // What the coming steps need, from the job campaigns still going.
+  const stock = new Map(), gear = new Map(), visitsToBook = [];
+  const jobNeeds = new Map(); // job id -> Set of item ids / visit kinds it's short of
+  for (const c of Object.values(db.campaigns)) {
+    if (c.wsId !== ws.id || c.status === 'done' || !c.recordId || !db.records[c.recordId]) continue;
+    const rec = db.records[c.recordId], open = sees(c) && recSeen(rec.id);
+    for (const g of goalsInOrder(c)) {
+      if (!g.needs?.length || stepFinished(g)) continue;
+      const step = open ? { goalId: g.id, title: clipText(g.title, 80), campaignId: c.id, jobId: rec.id, jobName: jobName(rec), when: g.due || c.end || null } : { hidden: true, when: g.due || c.end || null };
+      for (const n of needsOf(g)) {
+        if (n.met) continue;
+        if (n.kind === 'stock' && db.invItems[n.itemId]) {
+          const x = stock.get(n.itemId) || stock.set(n.itemId, { itemId: n.itemId, name: n.item, unit: n.unit || '', need: 0, steps: [] }).get(n.itemId);
+          const left = Math.max(0, n.qty - (n.have || 0));
+          x.need = Math.round((x.need + left) * 1000) / 1000; x.steps.push({ ...step, need: left });
+          (jobNeeds.get(rec.id) || jobNeeds.set(rec.id, new Set()).get(rec.id)).add('stock:' + n.itemId);
+        } else if (n.kind === 'equipment' && db.invItems[n.itemId]) {
+          const x = gear.get(n.itemId) || gear.set(n.itemId, { itemId: n.itemId, name: n.item, need: 0, steps: [] }).get(n.itemId);
+          x.need++; x.steps.push(step);
+          (jobNeeds.get(rec.id) || jobNeeds.set(rec.id, new Set()).get(rec.id)).add('gear:' + n.itemId);
+        } else if (n.kind === 'visit' && !visitsOf(rec.id).some((v) => !v.done && v.kind === n.visit)) {
+          if (open) visitsToBook.push({ ...step, kind: n.visit });
+          (jobNeeds.get(rec.id) || jobNeeds.set(rec.id, new Set()).get(rec.id)).add('visit:' + n.visit);
+        }
+      }
+    }
+  }
+  const resources = [...stock.values()].map((x) => { const onHand = STOCK.total(db.invItems[x.itemId]), onOrder = STOCK.onOrder(x.itemId); return { ...x, onHand, onOrder, short: Math.max(0, Math.round((x.need - onHand - onOrder) * 1000) / 1000) }; });
+  const equipment = [...gear.values()].map((x) => { const free = STOCK.total(db.invItems[x.itemId]); return { ...x, free, short: Math.max(0, x.need - free) }; });
+  const shortOf = new Set([...resources.filter((x) => x.short > 0).map((x) => 'stock:' + x.itemId), ...equipment.filter((x) => x.short > 0).map((x) => 'gear:' + x.itemId)]);
+
+  // Jobs likely to fall behind: the job board's jobs (what the viewer can see), with the forecast's reasons added.
+  const board = jobBoard(ws, auth);
+  const atRisk = [];
+  for (const j of board.jobs) {
+    const reasons = [], tl = perJob.get(j.id), wants = jobNeeds.get(j.id) || new Set();
+    if (tl?.overdue) reasons.push({ kind: 'overdue', n: tl.overdue, text: nOf(tl.overdue, 'task') + ' overdue' });
+    const short = [...wants].filter((k) => shortOf.has(k));
+    if (short.some((k) => k.startsWith('stock:'))) reasons.push({ kind: 'short', text: 'Short of materials: ' + short.filter((k) => k.startsWith('stock:')).map((k) => db.invItems[k.slice(6)]?.name).join(', ') });
+    if (short.some((k) => k.startsWith('gear:'))) reasons.push({ kind: 'gear', text: 'No free ' + short.filter((k) => k.startsWith('gear:')).map((k) => db.invItems[k.slice(5)]?.name).join(', ') });
+    const book = [...wants].filter((k) => k.startsWith('visit:'));
+    if (book.length) reasons.push({ kind: 'visit', text: 'To book: ' + book.map((k) => k.slice(6) + ' visit').join(', ') });
+    if (tl?.unassigned) reasons.push({ kind: 'unassigned', n: tl.unassigned, text: nOf(tl.unassigned, 'task') + ' nobody is on' });
+    const camps = j.campaigns.map((id) => db.campaigns[id]).filter(Boolean);
+    const pastEnd = camps.filter((c) => c.end && c.end < today);
+    const pastStep = camps.flatMap((c) => goalsInOrder(c).filter((g) => g.due && g.due < today && !stepFinished(g)));
+    if (pastEnd.length || pastStep.length || tl?.late) reasons.push({ kind: 'deadline', text: [pastEnd.length ? `${pastEnd.map((c) => clipText(c.name, 60)).join(', ')} past ${pastEnd.length === 1 ? 'its' : 'their'} end` : '', pastStep.length ? `${nOf(pastStep.length, 'step')} past ${pastStep.length === 1 ? 'its' : 'their'} date` : '', tl?.late ? `${nOf(tl.late, 'task')} due after the campaign ends` : ''].filter(Boolean).join(' · ') });
+    for (const b of j.blocked) if (b.kind === 'signoff' || b.kind === 'held' || (b.kind === 'needs' && !reasons.some((r) => ['short', 'gear', 'visit'].includes(r.kind)))) reasons.push({ kind: b.kind, text: b.text, goalId: b.goalId, taskId: b.taskId, campaignId: b.campaignId });
+    if (reasons.length) atRisk.push({ jobId: j.id, projectId: j.projectId, name: j.name, stage: j.stage, steps: j.steps, reasons });
+  }
+  atRisk.sort((x, y) => y.reasons.length - x.reasons.length);
+  return { from: week0, today, weeks: wks, days, capacityMin: DAY_MIN, people: [...by.values()], unassigned, items: items.sort((x, y) => (x.day < y.day ? -1 : x.day > y.day ? 1 : 0)).slice(0, 3000), conflicts, resources, equipment, visitsToBook, atRisk };
 }
 const utc = (t) => new Date(t).toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
 const CONSENT = 'I agree to use electronic records and signatures for this document. I can ask the sender for a paper copy instead, and I can download a copy of the signed document.';
@@ -7636,6 +7803,11 @@ async function api(req, res, url) {
     return send(res, 200, workload(ws, week));
   }
   if (a === 'board' && m === 'GET') return send(res, 200, jobBoard(ws, auth));
+  if (a === 'forecast' && m === 'GET') {
+    if (!isAdmin(auth)) return send(res, 403, { error: 'Owners and admins see the team’s forecast.' });
+    const n = Math.round(Number(new URL(req.url, 'http://x').searchParams.get('weeks') || FC_WEEKS));
+    return send(res, 200, forecast(ws, auth, Math.max(1, Math.min(FC_MAX_WEEKS, n || FC_WEEKS))));
+  }
   if (a === 'schedule' && m === 'GET') {
     const day = new URL(req.url, 'http://x').searchParams.get('date');
     if (!isDay(day || '')) return send(res, 400, { error: 'Pick a day.' });
@@ -7811,7 +7983,7 @@ async function api(req, res, url) {
       const next = applyCampaign({ ...c, memberIds: [...c.memberIds] }, body, ws, auth);
       if (next.assigneeId !== c.assigneeId) next.assignedBy = next.assigneeId ? auth.memberId : null;
       db.campaigns[c.id] = next;
-      if (next.recordId && next.recordId !== c.recordId) campTasksToJob(next);
+      if (next.recordId && next.recordId !== c.recordId) campTasksToJob(next, c.recordId || null);
       if (body.name !== undefined) {
         const st = ws.stacks.find((x) => x.id === c.stackId);
         if (st) st.name = next.name.slice(0, 40);

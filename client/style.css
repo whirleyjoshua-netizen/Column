@@ -3335,3 +3335,31 @@ body:not(.wide) .wl-row > .wl-stat:not([data-k=open]):not([data-k=overdue]):not(
 .card-quick { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; display: flex; flex-direction: column; gap: 4px; margin: 8px 0; }
 .card-quick small { color: var(--muted); }
 .card-home-steps { margin: 6px 0 10px; padding-left: 20px; line-height: 1.6; }
+/* Tasks → Team → Weeks ahead (the forecast). */
+.fc { margin-top: 18px; }
+.fc-grid { display: grid; grid-template-columns: minmax(120px, 1.3fr) repeat(var(--n), minmax(64px, 1fr)); gap: 4px; align-items: stretch; overflow-x: auto; }
+.fc-h { font-size: 12px; color: var(--muted); padding: 2px 4px; }
+.fc-who { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 13px; }
+.fc-who span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fc-who small { margin-left: auto; }
+.fc-who .bad, .fc-cell.over small { color: var(--danger); }
+.fc-cell { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; background: none; color: var(--text); cursor: pointer; text-align: left; }
+.fc-cell:hover { background: var(--card-hover); }
+.fc-cell small { color: var(--muted); font-size: 11px; }
+.fc-cell.none { opacity: .55; }
+.fc-cell.over { border-color: color-mix(in srgb, var(--danger) 55%, var(--line)); background: color-mix(in srgb, var(--danger) 7%, transparent); }
+.fc-cell.nobody { border-style: dashed; }
+.fc-nobody { color: var(--muted); }
+.fc-sub { margin-top: 14px; }
+.fc-items { display: grid; gap: 4px; }
+.fc-item { display: flex; gap: 10px; align-items: flex-start; width: 100%; text-align: left; background: none; border: 0; border-top: 1px solid var(--line); padding: 7px 2px; color: var(--text); cursor: pointer; }
+.fc-item:disabled { cursor: default; opacity: .7; }
+.fc-it-text { display: flex; flex-direction: column; min-width: 0; }
+.fc-it-text small { color: var(--muted); }
+.fc-st { flex: 0 0 auto; font-size: 11px; }
+.fc-st.estimated { border-style: dashed; }
+.fc-st.unassigned { color: #b7791f; }
+.fc-st.overdue { color: var(--danger); }
+.wl-wd.over b { color: var(--danger); }
+@media (max-width: 600px) { .fc-grid { grid-template-columns: 110px repeat(var(--n), 70px); } }
+.fc-title { margin-top: 6px; }
