@@ -250,6 +250,9 @@
       { label: '+ New workspace', run: () => addTeam('create') },
       { label: 'Join a workspace', run: () => addTeam('join') },
       { label: 'Sign in to another', run: () => addTeam('signin') },
+      // In a docked column or on a phone Workspace's tab strip (whose name opens it) isn't showing: the profile is here.
+      { head: S.workspace.name },
+      { label: '🪪 Workspace profile', run: () => profileSheet() },
     ]);
   }
   function addTeam(mode = 'signin') {
@@ -12159,9 +12162,26 @@
       pfDraw();
     }, 120);
   }
+  // Full size (the desktop app or a browser): a page beside the sidebar, not a pop-up. In a docked column or on a
+  // phone: the pop-up (the owner, 2026-11-19: "keep the column pop up for column and mobile mode"). Going somewhere
+  // from the sidebar or Workspace's tabs leaves the page.
+  function sheetOrPage(title, body, onSave, label) {
+    sheet(title, body, onSave, label);
+    const page = $('#sheet .sheet');
+    if (!pjWide() || !page) return page;
+    page.classList.add('page-form', 'page-view');
+    const leave = (e) => {
+      if (!page.isConnected || $('#sheet').classList.contains('hidden')) return document.removeEventListener('click', leave, true);
+      if (!e.target.closest('#side button, #side a, #workTabs button, header.bar button')) return;
+      document.removeEventListener('click', leave, true);
+      closeSheet();
+    };
+    document.addEventListener('click', leave, true);
+    return page;
+  }
   async function profileSheet() {
     WP.open = true;
-    sheet(S.workspace.name, [h('div', { class: 'wp' }, h('p', { class: 'day-hint' }, 'Loading…'))]);
+    sheetOrPage(S.workspace.name, [h('div', { class: 'wp' }, h('p', { class: 'day-hint' }, 'Loading…'))]);
     try {
       const y = await api('GET', '/profile');
       prUpsertProject(y.project);
@@ -12220,26 +12240,28 @@
     const warned = (S.automations || []).some((x) => x.trigger?.kind === 'record.date' && x.trigger.projectId === p.id && x.trigger.typeId === t.id);
     const recipe = AUTO_RECIPES.find((x) => x.profile);
     const admin = amAdmin();
-    box.replaceChildren(
-      h('section', { class: 'wp-sec wp-biz' },
+    const biz = h('section', { class: 'wp-sec wp-biz' },
         b.logo ? h('img', { class: 'brand-logo', src: b.logo, alt: '' }) : h('span', { class: 'wp-logo' }, (S.workspace.name || '?').slice(0, 1).toUpperCase()),
         h('div', {}, h('b', {}, S.workspace.name), h('small', {}, `${S.workspace.members.length} ${S.workspace.members.length === 1 ? 'person' : 'people'}${b.mission ? ' · ' + shortText(b.mission, 90) : ''}`)),
-        h('button', { class: 'btn small', onclick: () => { closeSheet(); openSettings('business'); } }, 'Business details')),
-      h('section', { class: 'wp-sec' },
+        h('button', { class: 'btn small', onclick: () => { closeSheet(); openSettings('business'); } }, 'Business details'));
+    const ins = h('section', { class: 'wp-sec wp-ins' },
         h('h3', {}, '🪪 Insurance & licenses'),
         h('p', { class: 'day-hint' }, 'Your licenses, insurance, bonds and certifications, with a copy of each, for the whole team. Upload the COI or license so it’s ready when a customer or GC asks.'),
         recs.length ? h('div', { class: 'wp-list' }, recs.map(row)) : h('p', { class: 'wp-none' }, 'Nothing yet. Add your contractor license and insurance below.'),
         h('div', { class: 'wp-add' }, nm, kind, exp, add),
         warned ? h('p', { class: 'day-hint wp-warn-on' }, '🔔 The owners hear 30 days before anything here expires.')
-          : admin && recipe ? h('button', { class: 'btn small wp-warn', onclick: () => { closeSheet(); autoSheet(null, { ...recipe, trigger: { ...recipe.trigger, projectId: p.id, typeId: t.id, fieldId: F.expires?.id } }); } }, '🔔 Warn the owners 30 days before something expires') : null),
-      h('section', { class: 'wp-sec' },
+          : admin && recipe ? h('button', { class: 'btn small wp-warn', onclick: () => { closeSheet(); autoSheet(null, { ...recipe, trigger: { ...recipe.trigger, projectId: p.id, typeId: t.id, fieldId: F.expires?.id } }); } }, '🔔 Warn the owners 30 days before something expires') : null);
+    const rules = h('section', { class: 'wp-sec wp-rules' },
         h('h3', {}, 'Rules & permissions'),
         admin ? h('div', { class: 'wp-links' },
           h('button', { class: 'wp-link', onclick: () => { closeSheet(); openSettings('team'); } }, h('b', {}, 'People & roles'), h('small', {}, 'Who’s on the team, owners and admins')),
           h('button', { class: 'wp-link', onclick: () => { closeSheet(); openSettings('team', '.vis-sec'); } }, h('b', {}, 'What members see'), h('small', {}, 'Everything, or only what’s theirs')),
           h('button', { class: 'wp-link', onclick: () => { closeSheet(); openSettings('team', '.tools-sec'); } }, h('b', {}, 'Tools'), h('small', {}, 'Which tools the team uses')),
           toolOn('hq') ? h('button', { class: 'wp-link', onclick: () => { closeSheet(); openTool('hq'); } }, h('b', {}, 'Company rules & approvals'), h('small', {}, 'What needs an OK, in Company HQ')) : null)
-          : h('p', { class: 'day-hint' }, 'Your team’s owners and admins set who sees what and the rules.')));
+          : h('p', { class: 'day-hint' }, 'Your team’s owners and admins set who sees what and the rules.'));
+    // As a page: Insurance & licenses on the left, the business and its rules beside it. As a pop-up: one column.
+    if (box.closest('.page-view')) box.replaceChildren(h('div', { class: 'cb-grid wp-grid' }, h('div', { class: 'cb-main' }, ins), h('aside', { class: 'wp-aside' }, biz, rules)));
+    else box.replaceChildren(biz, ins, rules);
   }
   function projectsHome() {
     const all = boardsOnly().sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));

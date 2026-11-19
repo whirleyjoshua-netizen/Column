@@ -3626,3 +3626,7 @@ body:not(.wide) #split.chat-split .split-body { margin: 0 -14px; }
 .lr-row { display: flex; align-items: center; gap: 10px; }
 .lr-row span { flex: 1; }
 .lr-row input { width: 120px; }
+/* The profile as a page (full size): wider, Insurance & licenses beside the business and its rules. */
+.page-view .wp { min-width: 0; max-width: 1100px; }
+.wp-aside { display: flex; flex-direction: column; gap: 18px; }
+.wp-aside .wp-links { grid-template-columns: 1fr; }

@@ -50,7 +50,8 @@ try {
   ok(await A.until(`${sw}?.textContent.includes('Alpha ${t}') && document.querySelector('#workTabs').firstElementChild === ${sw}`), 'Workspace starts with the workspace you’re in');
   // Its name opens the workspace profile (2026-11-19); the name in the header switches workspaces.
   await A.tap(sw);
-  ok(await A.until(`!!document.querySelector('#sheet .wp .wp-sec')`), 'the strip’s name opens the workspace profile');
+  ok(await A.until(`!!document.querySelector('#sheet .wp .wp-sec') && (!document.body.classList.contains('wide') || !!document.querySelector('#sheet .sheet.page-view .wp-grid'))`), 'the strip’s name opens the workspace profile (at full size, as a page, not a pop-up)');
+  ok(await A.ev(`document.body.classList.contains('wide')`), '(the test runs at full size)');
   await A.ev(`document.querySelector('#sheet .sheet h2 .icon-btn')?.click(); true`);
   await A.tap(hs);
   ok(await A.until(`[...document.querySelectorAll('#menu .mh')].some((x) => x.textContent === 'Workspaces')`), 'the header’s name lists your workspaces');
