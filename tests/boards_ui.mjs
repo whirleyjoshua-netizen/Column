@@ -100,8 +100,9 @@ try {
   await sleep(300);
   ok(await A.until(`!!${P('.pj-panel .pj-cust.empty')} && [...document.querySelectorAll('#projects .pj-act-btns button')].map((b) => b.textContent).join('|').includes('+ Task|+ Campaign')`), 'the job has a customer to pick, + Task and + Campaign');
   ok(await A.ev(`!document.querySelector('#projects .pj-blank-hint')`), 'the blank-board note goes once a job is on it');
-  await sleep(500);
-  await A.ev(`[...document.querySelectorAll('#projects .pj-cust .linkish')].find((b) => b.textContent === 'Pick a customer').click(); true`);
+  // A real click (2026-11-19: a page-wide .empty style had made this button unclickable).
+  await A.tap(`[...document.querySelectorAll('#projects .pj-cust .linkish')].find((b) => b.textContent === 'Pick a customer')`);
+  ok(await A.until(`!!document.querySelector('#sheet .pj-pick-row.new')`), 'Pick a customer opens Contacts to choose from (a real click)');
   await A.ev(`(() => { const q = document.querySelector('#sheet input[type=search]'); q.value = 'Pat Lee'; q.dispatchEvent(new Event('input')); })()`);
   await A.tap(`document.querySelector('#sheet .pj-pick-row.new')`);
   await A.until(`document.querySelector('#sheet h3, #sheet .sheet-title, #sheet')?.textContent.includes('New contact') && !!document.querySelector('#sheet input[type=tel]')`);
@@ -142,6 +143,16 @@ try {
   await A.until(`!!${P('.pjn')}`);
   await A.cmd('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
   ok(await A.until(`${P('.pj-name')}?.textContent === 'Board 2'`), 'Esc goes back to the blank board');
+  // + Campaign → New campaign for this job; its empty brief takes a real click.
+  await A.tap(`document.querySelector('#projects .pj-top [aria-label="All boards"]')`);
+  await A.tap(`[...document.querySelectorAll('#projects .pj-card')].find((c) => c.querySelector('b')?.textContent.trim() === 'Board')`);
+  await A.tap(`[...document.querySelectorAll('#projects .pj-card-r')].find((c) => c.textContent.includes('Kitchen blinds'))`);
+  await A.tap(P('.pj-camp-btn'));
+  await A.until(`[...document.querySelectorAll('#menu button')].some((b) => b.textContent === 'New campaign for this job')`);
+  await A.ev(`[...document.querySelectorAll('#menu button')].find((b) => b.textContent === 'New campaign for this job').click(); true`);
+  ok(await A.until(`!!document.querySelector('.camp-brief.empty')`, 8000), '+ Campaign makes a campaign for the job, with no brief yet');
+  await A.tap(`document.querySelector('.camp-brief.empty')`);
+  ok(await A.until(`!!document.querySelector('.camp-brief-edit')`), 'clicking the empty brief opens it to write (a real click)');
   ok(A.errors.length === 0, 'no script errors' + (A.errors.length ? ': ' + A.errors.join(' | ') : ''));
 } catch (e) { ok(false, 'threw: ' + e.stack); }
 A?.close();
