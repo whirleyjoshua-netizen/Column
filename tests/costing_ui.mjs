@@ -55,6 +55,10 @@ try {
   const A = await tab(APP);
   await A.until(`location.href.startsWith(${JSON.stringify(APP)}) && document.readyState === 'complete'`, 15000);
   await A.ev(`localStorage.setItem('column.token', ${JSON.stringify(JSON.stringify(a.token))}); location.href = ${JSON.stringify(APP + '?go=rec:')} + ${JSON.stringify(job.id)}; true`);
+  await A.until(`!!document.querySelector('.pj-panel .pj-tab[data-tab=finance]')`, 20000);
+  await A.ev(`document.querySelector('.pj-panel .pj-tab[data-tab=finance]').click(); true`);
+  await A.until(`!!document.querySelector('.pj-panel .pj-subtab[data-fin=cost]')`);
+  await A.ev(`document.querySelector('.pj-panel .pj-subtab[data-fin=cost]').click(); true`);
   ok(await A.until(`!!document.querySelector('.pj-panel .pj-cost-est')`, 20000), 'the job shows its estimated cost from the price lines');
   ok(await A.ev(`document.querySelector('.pj-panel .pj-cost-est').textContent.includes('400.00') && document.querySelector('.pj-panel .pj-cost-est').textContent.includes('60%')`), 'with the estimated margin: $400 · 60%');
   ok(await A.ev(`[...document.querySelectorAll('.pj-panel .pj-cost-row')].some((r) => r.textContent.startsWith('Margin') && r.textContent.includes('No actual costs yet'))`), 'and says there are no actual costs yet, instead of a made-up margin');

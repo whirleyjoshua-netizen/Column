@@ -55,6 +55,10 @@ try {
   const A = await tab(APP);
   await A.until(`location.href.startsWith(${JSON.stringify(APP)}) && document.readyState === 'complete'`, 15000);
   await A.ev(`localStorage.setItem('column.token', ${JSON.stringify(JSON.stringify(a.token))}); location.href = ${JSON.stringify(APP + '?go=rec:')} + ${JSON.stringify(job.id)}; true`);
+  await A.until(`!!document.querySelector('.pj-panel .pj-tab[data-tab=finance]')`, 20000);
+  await A.ev(`document.querySelector('.pj-panel .pj-tab[data-tab=finance]').click(); true`);
+  await A.until(`!!document.querySelector('.pj-panel .pj-subtab[data-fin=quote]')`);
+  await A.ev(`document.querySelector('.pj-panel .pj-subtab[data-fin=quote]').click(); true`);
   ok(await A.until(`!!document.querySelector('.pj-panel .pj-from-list')`, 20000), 'a job on a board with no price list of its own still has “+ From the price list”');
   await A.tap(`document.querySelector('.pj-panel .pj-from-list')`);
   ok(await A.until(`[...document.querySelectorAll('#menu .mh')].map((x) => x.textContent).join('|') === 'Price list|Inventory'`), 'it lists the team’s price list and Inventory together');
@@ -67,6 +71,10 @@ try {
   // The price changes: the line says so, and can take the new price.
   await api('PATCH', '/inventory/items/' + roll.id, { price: '135' });
   await A.ev(`location.href = ${JSON.stringify(APP + '?go=rec:')} + ${JSON.stringify(job.id)}; true`);
+  await A.until(`!!document.querySelector('.pj-panel .pj-tab[data-tab=finance]')`, 20000);
+  await A.ev(`document.querySelector('.pj-panel .pj-tab[data-tab=finance]').click(); true`);
+  await A.until(`!!document.querySelector('.pj-panel .pj-subtab[data-fin=quote]')`);
+  await A.ev(`document.querySelector('.pj-panel .pj-subtab[data-fin=quote]').click(); true`);
   ok(await A.until(`[...document.querySelectorAll('.pj-panel .pj-price-now')].some((b) => b.textContent.includes('135.00'))`, 20000), 'after a price change, the line shows “Price list now $135.00 · use it”');
   await A.ev(`document.querySelector('.pj-panel .pj-price-now').click(); true`);
   let p2 = 0;
