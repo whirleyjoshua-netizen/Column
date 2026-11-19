@@ -192,6 +192,33 @@ CI) now fails on any name declared twice at a file's top level. Search for a nam
 
 ---
 
+## 15. Work history: every change to work is recorded, on every path
+
+Team performance reporting reads the history Kloomie keeps, not the work's current state (job plan Phase 5,
+2026-11-19). That history is only as good as its weakest path: a way of making or changing work that skips it leaves
+a hole nobody notices until a report comes out wrong.
+
+- **Every write to a task goes through `noteWork`.** Anything that creates a task or changes whether it's done, who
+  it's for (person, team role or campaign role), its due date or its sign-off calls `noteWork(t, workOf(before))`
+  (or `noteWork(t, null)` for a new one) just before `db.tasks[id] = t`. Going through `POST /tasks`, `PATCH
+  /tasks/:id` or the public API already does. A new direct write to `db.tasks` must do it too. When Saved tasks
+  added `usePreset`, its tasks were made without it and had no history until `tests/history.mjs` was extended to
+  cover them.
+- **Don't pass who did it: read it.** `actorNow()` knows who's acting. Each request runs with an `ACTOR` store that
+  its sign-in fills in (the app, the public API, or a replay as someone), and an automation's own work runs under
+  `FLOWING`, so it's the automation's, never its maker's. Only override it when the change really belongs to
+  someone else: a step's tool (`via: 'tool'`, as whoever used it) or Kloomie itself (`by: null, via: 'kloomie'`).
+- **Count a thing once, when it ends.** An automation run is tallied on the day it finishes, fails with no try left,
+  or is dropped. A run waiting on a wait step or a retry isn't counted yet. The first version counted at every log
+  line, so one run that waited showed as two. Anything new that counts work (runs, visits, steps) needs the same
+  care.
+- **Steps, visits, jobs.** A step's `startedAt` / `finishedAt` / `finishedById` are kept in `jobStepsOnce`, a visit's
+  `doneAt` / `doneById` in `applyEntry`, and a job's stages in `recordEvent`. Change those through the same places.
+- **History stays on the server.** `hist` (tasks) and `stages` (jobs) are stripped from what goes to the browser
+  (`publicTask`, `publicRecord`). Keep it that way: reports read it on the server, with the reader's visibility.
+
+---
+
 ## Before you push: a short checklist
 - [ ] Every path that can cause this effect calls the same rule (app, API, bulk, import, agent, webhook).
 - [ ] Every place this data turns into text checks who's reading.
@@ -202,4 +229,5 @@ CI) now fails on any name declared twice at a file's top level. Search for a nam
 - [ ] Text goes into pages as text.
 - [ ] Anything that sends, stores or costs has a limit.
 - [ ] Startup code and migrations tested on old data.
+- [ ] Anything that makes or changes a task calls `noteWork`; who did it comes from `actorNow()`.
 - [ ] A test that failed on the old code now passes; `bash tests/ci.sh` passes.
