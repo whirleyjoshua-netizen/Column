@@ -1719,6 +1719,8 @@
   // Owners and admins run the team; only owners delete it, make owners, export all of it and keep the business's money.
   // Tools the team's owners and admins have switched on (Settings → Team).
   const toolOn = (k) => S.workspace?.tools?.[k] !== false;
+  // What members get (2026-11-20): owners and admins switch tabs and tools on or off for members; the server enforces it.
+  const memberMay = (k) => amAdmin() || S.workspace?.memberAccess?.[k] !== false;
   const amAdmin = () => ['owner', 'admin'].includes(S.workspace?.members?.find((m) => m.id === S.me?.memberId)?.role);
   const memberName = (id) => (id === S.me?.memberId ? 'You' : S.workspace?.members?.find((m) => m.id === id)?.name || 'Someone');
 
@@ -1825,8 +1827,8 @@
       { cmd: 'bill', hint: 'A bill to pay, with a reminder', arg: 'Electric 140', on: toolOn('bills'), off: off('Finance'), run: (t) => { const a = moneyArgs(t); billSheet(null, { name: a.rest, amount: a.amount }); } },
       { cmd: 'budget', hint: 'Set a monthly budget', arg: 'Gas 400', on: toolOn('bills'), off: off('Finance'), run: (t) => { const a = moneyArgs(t); budgetSheet(null, a.rest, a.amount); } },
       { cmd: 'finance', also: ['money'], hint: 'Open Finance', on: toolOn('bills'), off: off('Finance'), run: () => openTool('bills') },
-      { cmd: 'contact', hint: 'Add a contact', arg: 'name', on: toolOn('contacts') && amAdmin(), off: toolOn('contacts') ? 'Contacts are for team owners and admins.' : off('Contacts'), run: (t) => { contactSheet(null); fillFirst(t); } },
-      { cmd: 'contacts', hint: 'Open Contacts', on: toolOn('contacts') && amAdmin(), off: toolOn('contacts') ? 'Contacts are for team owners and admins.' : off('Contacts'), run: () => openTool('contacts') },
+      { cmd: 'contact', hint: 'Add a contact', arg: 'name', on: toolOn('contacts') && memberMay('contacts'), off: toolOn('contacts') ? 'Your team’s owners and admins have Contacts off for members.' : off('Contacts'), run: (t) => { contactSheet(null); fillFirst(t); } },
+      { cmd: 'contacts', hint: 'Open Contacts', on: toolOn('contacts') && memberMay('contacts'), off: toolOn('contacts') ? 'Your team’s owners and admins have Contacts off for members.' : off('Contacts'), run: () => openTool('contacts') },
       { cmd: 'campaign', hint: 'Start a campaign', arg: 'name', run: (t) => { campaignSheet(null); fillFirst(t); } },
       { cmd: 'job', also: ['jobs', 'projects', 'boards'], hint: 'Open Boards', on: toolOn('projects'), off: off('Boards'), run: () => showProjects() },
       { cmd: 'meeting', also: ['record'], hint: 'Record a meeting, get the notes', arg: 'what it’s about', on: toolOn('meetings'), off: off('Meeting notes'), run: (t) => askRecord(t) },
@@ -3146,20 +3148,20 @@
   const BAR_ITEMS = {
     column: { label: 'Stacks', view: true },
     chat: { label: 'Chat', view: true },
-    camps: { label: 'Campaigns', view: true },
+    camps: { label: 'Campaigns', view: true, ok: () => memberMay('camps') },
     agents: { label: 'Agents', ok: () => toolOn('agents'), open: () => agOpen('team') },
     work: { label: 'Workspace', ok: () => workKeys().length > 0, open: () => openBarItem('day') },
     day: { label: 'Tasks', view: true },
     sidekick: { label: 'Sidekick', ok: () => toolOn('sidekick'), open: () => { SK.open = null; openTool('sidekick'); } },
     // Docs and Folders are the same things (a doc is an item, and folders hold items): one tab, a switch between them.
-    docs: { label: 'Folders & Docs', ok: () => toolOn('docs') || toolOn('folders'), open: () => openTool(docsSide()), on: () => toolOpen === 'docs' || toolOpen === 'folders' },
-    projects: { label: 'Boards', ok: () => toolOn('projects'), open: () => showProjects() },
+    docs: { label: 'Folders & Docs', ok: () => (toolOn('docs') || toolOn('folders')) && memberMay('docs'), open: () => openTool(docsSide()), on: () => toolOpen === 'docs' || toolOpen === 'folders' },
+    projects: { label: 'Boards', ok: () => toolOn('projects') && memberMay('projects'), open: () => showProjects() },
     // Automations (the owner, 2026-11-14): something you build and watch, so it's in Workspace, not Settings. Owners and admins.
     automations: { label: 'Automations', ok: () => amAdmin() },
     // Tools (the owner, 2026-11-16): at the far right of the strip; it opens the split on the right, beside the page.
     tools: { label: 'Tools', open: () => openTool('tools'), on: () => false },
     bills: { label: 'Finance', ok: () => toolOn('bills') },
-    contacts: { label: 'Contacts', ok: () => toolOn('contacts') && amAdmin() },
+    contacts: { label: 'Contacts', ok: () => toolOn('contacts') && memberMay('contacts') },
     email: { label: 'Email', ok: () => toolOn('email') && mayEmail() },
     folders: { label: 'Folders', ok: () => toolOn('folders') },
     meetings: { label: 'Meetings', ok: () => toolOn('meetings') },
@@ -11836,15 +11838,15 @@
     const tight = budgetAlerts().length;
     const waiting = SG.list.filter((x) => x.status === 'sent' || x.status === 'viewed').length;
     const ROWS = {
-      chat: { name: 'Chat', sub: 'Your team’s feeds and messages', run: () => openChat() },
-      column: { name: 'Stacks', sub: 'Cards, files and links in shared stacks', run: () => openStacks() },
-      templates: { name: 'Templates', sub: 'Emails, texts, replies, posts and paperwork to reuse, in automations and by your team' },
-      inventory: { name: 'Inventory', sub: INVS.data?.low.length ? `${INVS.data.low.length} low on stock` : 'Parts, materials and equipment: what you have and where', ok: () => toolOn('inventory') },
-      bills: { name: 'Finance', sub: [soon ? `${soon} due soon` : '', tight ? `${tight} budget${tight === 1 ? '' : 's'} nearly used` : ''].filter(Boolean).join(' · ') || 'Money in and out, budgets and bills', ok: () => toolOn('bills') },
+      chat: { name: 'Chat', sub: 'Your team’s feeds and messages', run: () => openChat(), ok: () => memberMay('chat') },
+      column: { name: 'Stacks', sub: 'Cards, files and links in shared stacks', run: () => openStacks(), ok: () => memberMay('column') },
+      templates: { name: 'Templates', sub: 'Emails, texts, replies, posts and paperwork to reuse, in automations and by your team', ok: () => memberMay('templates') },
+      inventory: { name: 'Inventory', sub: INVS.data?.low.length ? `${INVS.data.low.length} low on stock` : 'Parts, materials and equipment: what you have and where', ok: () => toolOn('inventory') && memberMay('inventory') },
+      bills: { name: 'Finance', sub: [soon ? `${soon} due soon` : '', tight ? `${tight} budget${tight === 1 ? '' : 's'} nearly used` : ''].filter(Boolean).join(' · ') || 'Money in and out, budgets and bills', ok: () => toolOn('bills') && memberMay('bills') },
       email: { name: 'Email', sub: (S.mail?.sends || []).some((x) => x.status === 'sending') ? 'Sending…' : 'Send to your contacts and lists', ok: () => toolOn('email') && mayEmail() },
-      meetings: { name: 'Meeting notes', sub: 'Record a meeting, get notes and tasks', ok: () => toolOn('meetings') },
-      map: { name: 'Map', sub: MP.run ? (tripById(MP.run.id)?.kind === 'drive' ? 'Tracking mileage' : 'Canvassing run going') : 'Routes, canvassing and mileage', ok: () => toolOn('map'), run: () => openMap() },
-      vault: { name: 'Vault', sub: VK.key ? 'Unlocked' : 'Passwords and secrets, locked', ok: () => toolOn('vault'), run: () => { VK.filter = null; openTool('vault'); } },
+      meetings: { name: 'Meeting notes', sub: 'Record a meeting, get notes and tasks', ok: () => toolOn('meetings') && memberMay('meetings') },
+      map: { name: 'Map', sub: MP.run ? (tripById(MP.run.id)?.kind === 'drive' ? 'Tracking mileage' : 'Canvassing run going') : 'Routes, canvassing and mileage', ok: () => toolOn('map') && memberMay('map'), run: () => openMap() },
+      vault: { name: 'Vault', sub: VK.key ? 'Unlocked' : 'Passwords and secrets, locked', ok: () => toolOn('vault') && memberMay('vault'), run: () => { VK.filter = null; openTool('vault'); } },
     };
     const rows = TOOL_PAGE.filter((k) => !ROWS[k].ok || ROWS[k].ok());
     return { ROWS, rows, note: waiting && toolOn('signs') ? `Company HQ, your business card and signatures are in Settings → Business (${waiting} signature${waiting === 1 ? '' : 's'} waiting).` : 'Company HQ, your business card and signatures are in Settings → Business.' };
@@ -14725,7 +14727,7 @@
   // Pick someone from Contacts, or add them there.
   async function pickContact(done) {
     if (!S.contacts) S.contacts = ctLoaded(await api('GET', '/contacts').catch(() => null)) || null;
-    if (!S.contacts) return toast('Only owners and admins can pick from Contacts. Ask one to set the customer.');
+    if (!S.contacts) return toast('Your team’s owners and admins have Contacts off for members. Ask one to set the customer.');
     const q = h('input', { type: 'search', placeholder: 'Search name, company, phone, address', 'aria-label': 'Search contacts' });
     const list = h('div', { class: 'pj-pick' });
     // The team's groups narrow it down: Inspectors, Vendors…
@@ -15708,7 +15710,7 @@
   // jobs still waiting for one. Drag a waiting job onto someone's row to book it then; tap a visit to open the job.
   const TS = { data: null, date: null, timer: 0 };
   // Tasks → Team: everyone's load (owners and admins), plus the day's job visits when Projects is on.
-  const canTeam = () => amAdmin();
+  const canTeam = () => memberMay('teamSchedule');
   const teamSoon = () => { if (D.sub !== 'team' || TS.timer) return; TS.timer = setTimeout(() => { TS.timer = 0; TS.data = null; renderDay(); }, 300); };
   // The team's week in numbers (GET /workload): what each person is carrying, never what the tasks say.
   const WL = { week: null, data: null, loading: null, at: 0 };
@@ -18911,7 +18913,7 @@
         : 'Tap to share: put your card’s link on an NFC card or sticker (most sellers program it for you). Anyone who taps it with their phone gets your card.') : null,
       c.id ? h('div', { class: 'card-stats' }, [['views', 'Opened'], ['saves', 'Saved you'], ['leads', 'Shared their info']].map(([k, label]) => h('span', {}, h('b', {}, String(c[k] || 0)), label))) : null,
       c.recent?.length ? h('div', {}, h('div', { class: 'any-h' }, 'Shared their info'), h('div', { class: 'card-recent' }, c.recent.slice(0, 8).map((x) =>
-        h(amAdmin() && toolOn('contacts') ? 'button' : 'div', { class: 'card-person', ...(amAdmin() && toolOn('contacts') ? { onclick: () => openContactById(x.contactId) } : {}) }, h('b', {}, x.name), h('small', {}, [x.phone, x.email, new Date(x.at).toLocaleDateString([], { month: 'short', day: 'numeric' })].filter(Boolean).join(' · ')))))) : null,
+        h(memberMay('contacts') && toolOn('contacts') ? 'button' : 'div', { class: 'card-person', ...(memberMay('contacts') && toolOn('contacts') ? { onclick: () => openContactById(x.contactId) } : {}) }, h('b', {}, x.name), h('small', {}, [x.phone, x.email, new Date(x.at).toLocaleDateString([], { month: 'short', day: 'numeric' })].filter(Boolean).join(' · ')))))) : null,
       h('div', { class: 'any-h' }, 'On your card'),
       h('div', { class: 'card-photo' }, c.photo ? h('img', { src: c.photo, alt: '' }) : h('span', {}, (e.name || '?').split(/\s+/).slice(0, 2).map((w) => w[0] || '').join('').toUpperCase()),
         h('div', {}, h('button', { class: 'btn small', onclick: () => (c.id ? photo.click() : toast('Save your card first, then add a photo.')) }, c.photo ? 'Change photo' : 'Add a photo'),
@@ -21763,6 +21765,32 @@
           h('p', { class: 'day-hint', style: 'margin-top:8px' }, vis === 'own'
             ? 'Members see the campaigns they run, belong to or have a task in, the tasks and files that are theirs, and the team’s chat. Nothing else reaches their devices. Owners and admins see everything.'
             : 'Members see the whole team’s campaigns, tasks and files, except private campaigns and folders they’re not in. Owners and admins see everything.')));
+      }
+      if (admin) {
+        // What members can use (2026-11-20): each Workspace tab and tool, and the team's schedule. Off, the server
+        // refuses it to members and its data stays off their devices; owners and admins keep everything. A tool off
+        // for the whole team (Tools, below) is off for everyone either way.
+        const acc = ws.memberAccess || {};
+        const set = (k, on, input) => api('PATCH', '/workspace', { memberAccess: { [k]: on } }).then((w) => { S.workspace = w; toast(on ? 'Members can use it now' : 'Off for members'); }, (e) => { input.checked = !on; toast(e.message); });
+        const row = (k, name, sub, team = true) => toggleRow(name, team ? sub : `${sub} · off for the whole team (Tools, below)`, acc[k] !== false, (on, input) => set(k, on, input));
+        s.append(h('section', { class: 'access-sec' }, h('h3', {}, 'What members can use'),
+          h('p', { class: 'day-hint' }, 'Owners and admins always have everything. Switch something off for members and it leaves their Workspace and Tools, Kloomie refuses it to them, and what’s in it stays off their phones and computers.'),
+          h('div', { class: 'picks-h' }, 'Workspace tabs'),
+          row('camps', 'Campaigns', 'Campaigns and their steps (their own tasks still show in Tasks)'),
+          row('projects', 'Boards', 'Jobs and boards (a job a task links to still opens)', toolOn('projects')),
+          row('docs', 'Folders & Docs', 'Docs and folders', toolOn('docs') || toolOn('folders')),
+          row('contacts', 'Contacts', 'The team’s customers and contacts: see, add and pick them', toolOn('contacts')),
+          h('div', { class: 'picks-h' }, 'Tools'),
+          row('chat', 'Chat', 'Feeds and messages'),
+          row('column', 'Stacks', 'Shared stacks of cards and files'),
+          row('inventory', 'Inventory', 'Stock, equipment and asking for items', toolOn('inventory')),
+          row('bills', 'Finance', 'Their own money and bills (the business’s is owners’ and admins’ either way)', toolOn('bills')),
+          row('meetings', 'Meeting notes', 'Recording meetings', toolOn('meetings')),
+          row('map', 'Map', 'Runs, pins and mileage', toolOn('map')),
+          row('vault', 'Vault', 'Their own locked codes and logins', toolOn('vault')),
+          row('templates', 'Templates', 'The team’s saved emails, texts and replies'),
+          h('div', { class: 'picks-h' }, 'The team'),
+          row('teamSchedule', 'See the team’s schedule', 'Tasks → Team: who’s carrying what this week, and the weeks ahead')));
       }
       if (admin) {
         // The tools the team uses. Switched off, a tool leaves everyone's Tools menu; nothing in it is deleted.

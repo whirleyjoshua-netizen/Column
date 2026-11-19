@@ -287,6 +287,7 @@ function loginFailed(keys) {
 }
 
 async function readJson(req, limit = 1_000_000) {
+  if (req._json !== undefined) return req._json; // read once already (the member check peeks at a new item)
   let size = 0;
   const chunks = [];
   for await (const c of req) {
@@ -294,9 +295,9 @@ async function readJson(req, limit = 1_000_000) {
     if (size > limit) throw Object.assign(new Error('Body too large'), { status: 413 });
     chunks.push(c);
   }
-  if (!chunks.length) return {};
+  if (!chunks.length) return (req._json = {});
   try {
-    return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    return (req._json = JSON.parse(Buffer.concat(chunks).toString('utf8')));
   } catch {
     throw Object.assign(new Error('Invalid JSON'), { status: 400 });
   }
@@ -573,8 +574,19 @@ const NEW_TEAM_TOOLS = ['agents', 'sidekick', 'docs', 'contacts', 'email', 'fold
 // person's own to turn on, in their tabs.)
 const LATER_TOOLS = ['agents', 'cards', 'news', 'inventory'];
 const toolsOf = (ws) => Object.fromEntries(TOOL_KEYS.map((k) => [k, ws.settings?.tools ? (LATER_TOOLS.includes(k) ? ws.settings.tools[k] !== false : ws.settings.tools[k] === true) : k !== 'projects']));
+// What members can see and do (the owner, 2026-11-20): owners and admins switch each Workspace tab and tool on or off
+// for members, and whether members see the team's schedule. Off means the server refuses the tool's routes to a
+// member and keeps its data off their devices (memberMay, MEMBER_ROUTES, the /state filter); owners and admins keep
+// everything. A tool off for the whole team (toolsOf) stays off for everyone.
+const MEMBER_DEFAULTS = { contacts: false, projects: true, camps: true, docs: true, chat: true, column: true, templates: true, inventory: true, bills: true, meetings: true, map: true, vault: true, teamSchedule: false };
+const MEMBER_LABEL = { contacts: 'Contacts', projects: 'Boards', camps: 'Campaigns', docs: 'Folders & Docs', chat: 'Chat', column: 'Stacks', templates: 'Templates', inventory: 'Inventory', bills: 'Finance', meetings: 'Meeting notes', map: 'Map', vault: 'Vault', teamSchedule: 'The team’s schedule' };
+const MEMBER_ROUTES = { contacts: ['contacts', 'contact-groups'], projects: ['projects', 'project-templates'], camps: ['board'], docs: ['docs', 'folders', 'dirs', 'doc-templates'], column: ['stacks'], templates: ['msg-templates'], inventory: ['inventory'], bills: ['money', 'bills', 'budgets', 'finance'], meetings: ['meetings'], map: ['trips', 'pins', 'zones', 'mileage', 'map'], vault: ['vault'], teamSchedule: ['workload', 'forecast'] };
+const memberAccessOf = (ws) => Object.fromEntries(Object.keys(MEMBER_DEFAULTS).map((k) => [k, typeof ws.settings?.memberAccess?.[k] === 'boolean' ? ws.settings.memberAccess[k] : MEMBER_DEFAULTS[k]]));
+const memberMay = (ws, auth, k) => isAdmin(auth) || memberAccessOf(ws)[k] !== false;
+const memberOff = (k) => `Your team’s owners and admins have turned ${MEMBER_LABEL[k]} off for members.`;
 const publicWorkspace = (ws, memberId) => ({
   tools: toolsOf(ws),
+  memberAccess: memberAccessOf(ws),
   billing: publicBilling(ws),
   id: ws.id,
   name: ws.name,
@@ -7814,6 +7826,20 @@ async function api(req, res, url) {
     if (dbx !== null) return;
   }
   if (locked) return send(res, 402, { error: locked, billing: true });
+  if (!isAdmin(auth)) {
+    for (const [k, list] of Object.entries(MEMBER_ROUTES)) if (list.includes(a) && !memberMay(ws, auth, k)) return send(res, 403, { error: memberOff(k) });
+    // Contacts, when members have it: they see, pick and add people. Changing, removing, merging, importing, emailing
+    // and groups stay with owners and admins.
+    if ((a === 'contacts' || a === 'contact-groups') && m !== 'GET' && !(a === 'contacts' && m === 'POST' && !b)) return send(res, 403, { error: 'Only team owners and admins can change or remove contacts.' });
+    // Chat and Stacks share the items routes: no new messages or feeds without Chat, nothing into a stack without Stacks.
+    if (m === 'POST' && (a === 'channels' || a === 'chat-folders') && !memberMay(ws, auth, 'chat')) return send(res, 403, { error: memberOff('chat') });
+    if (m === 'POST' && a === 'campaigns' && !b && !memberMay(ws, auth, 'camps')) return send(res, 403, { error: memberOff('camps') });
+    if (m === 'POST' && a === 'items' && !b) {
+      const peek = await readJson(req, 4_000_000).catch(() => null); // kept on req: the items route reads the same body
+      if (peek?.type === 'message' && !memberMay(ws, auth, 'chat')) return send(res, 403, { error: memberOff('chat') });
+      if (peek?.stackId && !memberMay(ws, auth, 'column')) return send(res, 403, { error: memberOff('column') });
+    }
+  }
 
   // Billing: everyone sees where the team stands; owners subscribe and manage it, on Stripe's own pages.
   if (a === 'billing') {
@@ -8036,8 +8062,10 @@ async function api(req, res, url) {
   }
 
   if (a === 'state' && m === 'GET') {
+    const may = (k) => memberMay(ws, auth, k);
     const items = Object.values(db.items)
       .filter((it) => it.wsId === ws.id && it.status === 'ready' && canSee(auth, 'item', it))
+      .filter((it) => (it.type !== 'message' || may('chat')) && (!it.stackId || may('column')) && (!(it.dirId || it.blocks) || may('docs')))
       .sort((x, y) => x.createdAt - y.createdAt)
       .map(publicItem);
     return send(res, 200, {
@@ -8054,10 +8082,10 @@ async function api(req, res, url) {
       attempts: Object.values(db.attempts).filter((x) => x.wsId === ws.id && canSee(auth, 'attempt', x)).map(publicAttempt),
       lists: Object.values(db.lists).filter((l) => l.wsId === ws.id && canSee(auth, 'list', l)).map(publicList),
       templates: Object.values(db.templates).filter((t) => t.wsId === ws.id && seesTemplate(t, auth.memberId)).map(publicTemplate),
-      bills: Object.values(db.bills).filter((x) => x.wsId === ws.id && seesBill(ws.id, x, auth.memberId)).map(publicBill),
-      money: Object.values(db.money).filter((x) => x.wsId === ws.id && seesBill(ws.id, x, auth.memberId)).map(publicMoney),
-      budgets: Object.values(db.budgets).filter((x) => x.wsId === ws.id && seesBill(ws.id, x, auth.memberId)).map(publicBudget),
-      projects: PJ.stateFor(ws, auth),
+      bills: may('bills') ? Object.values(db.bills).filter((x) => x.wsId === ws.id && seesBill(ws.id, x, auth.memberId)).map(publicBill) : [],
+      money: may('bills') ? Object.values(db.money).filter((x) => x.wsId === ws.id && seesBill(ws.id, x, auth.memberId)).map(publicMoney) : [],
+      budgets: may('bills') ? Object.values(db.budgets).filter((x) => x.wsId === ws.id && seesBill(ws.id, x, auth.memberId)).map(publicBudget) : [],
+      projects: may('projects') ? PJ.stateFor(ws, auth) : [],
       version: clientVersion(),
     });
   }
@@ -8096,14 +8124,14 @@ async function api(req, res, url) {
   // How much each person is carrying, for a week (Tasks → Team). Counts only, never what a task or entry says; every
   // task counts, private ones too (the owner, 2026-11-15), so the load is real. Owners and admins.
   if (a === 'workload' && m === 'GET') {
-    if (!isAdmin(auth)) return send(res, 403, { error: 'Owners and admins see the team’s workload.' });
+    if (!memberMay(ws, auth, 'teamSchedule')) return send(res, 403, { error: memberOff('teamSchedule') });
     const week = new URL(req.url, 'http://x').searchParams.get('week');
     if (!isDay(week || '')) return send(res, 400, { error: 'Pick a week.' });
     return send(res, 200, workload(ws, week));
   }
   if (a === 'board' && m === 'GET') return send(res, 200, jobBoard(ws, auth));
   if (a === 'forecast' && m === 'GET') {
-    if (!isAdmin(auth)) return send(res, 403, { error: 'Owners and admins see the team’s forecast.' });
+    if (!memberMay(ws, auth, 'teamSchedule')) return send(res, 403, { error: memberOff('teamSchedule') });
     const n = Math.round(Number(new URL(req.url, 'http://x').searchParams.get('weeks') || FC_WEEKS));
     return send(res, 200, forecast(ws, auth, Math.max(1, Math.min(FC_MAX_WEEKS, n || FC_WEEKS))));
   }
@@ -9330,7 +9358,7 @@ async function api(req, res, url) {
   // Contact groups: owners and admins, like Contacts. POST makes one (or gives back the one with that name), PATCH
   // renames it or changes its emoji, DELETE takes it off everyone, /add and /remove put people in or take them out.
   if (a === 'contact-groups') {
-    if (!isAdmin(auth)) return send(res, 403, { error: 'Only team owners and admins can see Contacts.' });
+    if (!memberMay(ws, auth, 'contacts')) return send(res, 403, { error: memberOff('contacts') });
     if (m === 'GET' && !b) return send(res, 200, { groups: groupsOf(ws.id).map(publicGroup) });
     const body = m === 'DELETE' ? {} : await readJson(req, 2_000_000);
     if (m === 'POST' && !b) {
@@ -9381,7 +9409,7 @@ async function api(req, res, url) {
     return send(res, 404, { error: 'Not found' });
   }
   if (a === 'contacts') {
-    if (!isAdmin(auth)) return send(res, 403, { error: 'Only team owners and admins can see Contacts.' });
+    if (!memberMay(ws, auth, 'contacts')) return send(res, 403, { error: memberOff('contacts') });
     if (m === 'GET' && !b) return send(res, 200, { contacts: contactsOf(ws.id).map(publicContact), groups: groupsOf(ws.id).map(publicGroup) });
     if (m === 'GET' && b === 'duplicates') return send(res, 200, { groups: duplicateGroups(ws.id).map((g) => g.sort((p, q) => p.createdAt - q.createdAt).map((x) => x.id)) });
     const body = m === 'DELETE' ? {} : await readJson(req, 20_000_000);
@@ -10386,7 +10414,7 @@ async function api(req, res, url) {
   if (a === 'workspace' && m === 'PATCH') {
     const body = await readJson(req);
     const was = ws.settings.visibility || 'all';
-    if ((body.expireHours !== undefined || body.visibility !== undefined || body.tools !== undefined) && !isAdmin(auth)) return send(res, 403, { error: 'Only team owners and admins can change that.' });
+    if ((body.expireHours !== undefined || body.visibility !== undefined || body.tools !== undefined || body.memberAccess !== undefined) && !isAdmin(auth)) return send(res, 403, { error: 'Only team owners and admins can change that.' });
     if (body.tools && typeof body.tools === 'object') {
       const next = toolsOf(ws);
       for (const k of TOOL_KEYS) if (body.tools[k] !== undefined) next[k] = !!body.tools[k];
@@ -10394,6 +10422,12 @@ async function api(req, res, url) {
       ws.settings.tools = next;
       // Finance switched on or off: mileage trips gain or lose their expenses with it.
       if (finWas !== mileMoneyOn(ws)) for (const x of Object.values(db.mileage)) if (x.wsId === ws.id) syncMileMoney(ws, x);
+    }
+    if (body.memberAccess && typeof body.memberAccess === 'object') {
+      const next = memberAccessOf(ws);
+      for (const k of Object.keys(MEMBER_DEFAULTS)) if (typeof body.memberAccess[k] === 'boolean') next[k] = body.memberAccess[k];
+      ws.settings.memberAccess = next;
+      broadcast(ws.id, { type: 'resync' }); // members' devices drop (or pick up) what changed
     }
     if (body.expireHours !== undefined) ws.settings.expireHours = Math.max(0, Number(body.expireHours) || 0);
     if (body.visibility !== undefined) ws.settings.visibility = body.visibility === 'own' ? 'own' : 'all';
