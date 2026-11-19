@@ -112,6 +112,7 @@ try {
 
   // Retries: another app down is tried again from the step that failed, never the ones before it.
   const runsOf = async (name) => (await rico('GET', '/automations')).body.find((x) => x.name === name)?.runs || [];
+  const tallyOf = async (name) => Object.values((await rico('GET', '/automations')).body.find((x) => x.name === name)?.tally || {}).reduce((n, v) => [n[0] + v[0], n[1] + v[1]], [0, 0]).join('/');
   const before = (await posts()).length;
   await auto(rico, 'Flaky', { kind: 'campaign.started', projectId: p.id }, [post('Before the app: {campaign}'), { kind: 'webhook', url: H + '/flaky' }]);
   await rico('POST', '/campaigns', { name: 'Flaky run', recordId: job.id });
@@ -121,6 +122,7 @@ try {
   ok(await until(async () => (await runsOf('Flaky'))[0]?.ok), 'and the run goes on to finish');
   const fr = await runsOf('Flaky');
   ok(fr.length === 1 && /try again/i.test(fr[0].note) && /Sent to/.test(fr[0].note), 'as one run, its note saying it tried again: ' + JSON.stringify(fr));
+  ok((await tallyOf('Flaky')) === '1/0', 'tallied once, as one that went, not once per try (work history): ' + await tallyOf('Flaky'));
   ok((await posts()).filter((x) => x === 'Before the app: Flaky run').length === 1, 'the step before it isn’t done twice');
   ok((await posts()).length >= before + 1, '(posted)');
 
@@ -132,6 +134,7 @@ try {
   await sleep(1500);
   ok(got.filter((x) => x.path === '/down').length === 4, 'and it’s not tried again after that');
   ok((await runsOf('Down')).length === 1 && !(await runsOf('Down'))[0].ok, 'one run, failed: ' + JSON.stringify(await runsOf('Down')));
+  ok(tallyOf('Down') && (await tallyOf('Down')) === '0/1', 'and tallied once, as one that didn’t go (work history): ' + await tallyOf('Down'));
 
   // A run that waited first, then hits an app that's down, is tried again too.
   await auto(rico, 'Waited', { kind: 'campaign.started', projectId: p.id }, [{ kind: 'wait', amount: 1, unit: 'minutes' }, { kind: 'webhook', url: H + '/flaky2' }]);

@@ -1106,7 +1106,11 @@ function applyEntry(e, body) {
   }
   if (body.start !== undefined) e.start = minutes(body.start, 1439);
   if (body.end !== undefined) e.end = minutes(body.end, 1440);
-  if (body.done !== undefined) e.done = !!body.done;
+  if (body.done !== undefined) {
+    // When it was done, and by whom (the work history, 2026-11-19): a visit done is work done.
+    if (!!body.done !== !!e.done) Object.assign(e, body.done ? { doneAt: Date.now(), doneById: actorNow().by } : { doneAt: null, doneById: null });
+    e.done = !!body.done;
+  }
   if (body.color !== undefined) e.color = COLORS.includes(body.color) ? body.color : null;
   // A repeating entry is one series: skip = dates removed from it, doneOn = dates checked off.
   if (body.repeat !== undefined) e.repeat = REPEATS.includes(body.repeat) ? body.repeat : null;
@@ -1294,7 +1298,34 @@ function dropVisits(rec) {
 }
 
 // Tasks: an undated to-do list. Schedule entries can link to one (entry.taskId) and then share its text and done state.
-const publicTask = (t) => ({ ...publicEntry(t), waiting: isWaiting(t) });
+const publicTask = (t) => { const { hist, ...rest } = publicEntry(t); return { ...rest, waiting: isWaiting(t) }; };
+// ----- the work history (job plan Phase 5, the owner 2026-11-19), kept for team performance reporting -----
+// Wherever a task is made or changed, noteWork compares it with how it was (workOf) and keeps: who finished it, as a
+// person (doneById; doneBy stays the name shown), how (doneVia: app, api, agent, automation, tool, kloomie), the due
+// date it had then (doneDue) and the first it was given (firstDue), who approved a signed-off one (approvedById; the
+// one who did the work is who finished it), when it was given to whoever has it now (assignedAt), how often it was
+// reopened, and a short history (hist: given, re-dated, sent for sign-off, sent back, done, reopened) with when, by
+// whom and how. hist stays on the server. Tasks from before 2026-11-19 have none of it: their history starts now.
+const HIST_MAX = 40;
+const workOf = (t) => (t ? { done: !!t.done, who: [t.assigneeId || '', t.roleId || '', t.castId || ''].join('|'), due: t.due || null, sub: t.submitted ? t.submitted.byId || 'x' : null, back: t.returned?.at || null } : null);
+function noteWork(t, was, over = {}) {
+  if (!t) return;
+  const a = { ...actorNow(), ...over }, now = Date.now(), w = workOf(t), ev = [];
+  if (!was) { if (w.due) t.firstDue = w.due; }
+  else if (was.due !== w.due) { if (t.firstDue === undefined) t.firstDue = was.due || w.due; ev.push({ k: 'due', from: was.due, to: w.due }); }
+  if ((was?.who ?? '||') !== w.who) { t.assignedAt = w.who !== '||' ? now : null; ev.push({ k: 'assigned', to: t.assigneeId || null, ...(t.roleId ? { role: t.roleId } : {}), ...(t.castId ? { cast: t.castId } : {}) }); }
+  if (w.sub && w.sub !== was?.sub) ev.push({ k: 'submitted' });
+  if (w.back && w.back !== was?.back) ev.push({ k: 'returned' });
+  if (w.done && !was?.done) {
+    const doer = was?.sub && was.sub !== 'x' ? was.sub : null;
+    Object.assign(t, { doneById: doer || a.by, doneVia: a.via, doneDue: t.due || null, approvedById: doer ? a.by : null });
+    ev.push({ k: 'done', ...(t.due ? { due: t.due } : {}) });
+  } else if (was?.done && !w.done) {
+    Object.assign(t, { reopens: (t.reopens || 0) + 1, doneById: null, doneVia: null, doneDue: null, approvedById: null });
+    ev.push({ k: 'reopened' });
+  }
+  if (ev.length) t.hist = [...(t.hist || []), ...ev.map((e) => ({ at: now, by: a.by, ...(a.via !== 'app' ? { via: a.via } : {}), ...(a.auto ? { auto: a.auto } : {}), ...e }))].slice(-HIST_MAX);
+}
 
 function applyTask(t, body) {
   if (body.text !== undefined) t.text = String(body.text || '').trim().slice(0, 5000);
@@ -1424,6 +1455,7 @@ function usePreset(ws, who, x, opts = {}) {
     if (!first) { t.blockedBy = [made[i - 1].id]; t.dueAfter = after; }
     t.preset = x.id;
     if (t.assigneeId || t.roleId) t.assignedBy = who.memberId;
+    noteWork(t, null);
     db.tasks[t.id] = t;
     made.push(t);
   });
@@ -2868,7 +2900,7 @@ function openings(ws, tz) {
       if (!t || before.has(id) === after.has(id)) continue;
       if (before.has(id) && !t.done) {
         t.openedAt = Date.now();
-        if (t.dueAfter != null) t.due = addDays(dayIn(ws.tz ? tzOf(ws) : validTz(tz)), t.dueAfter);
+        if (t.dueAfter != null) { const was = workOf(t); t.due = addDays(dayIn(ws.tz ? tzOf(ws) : validTz(tz)), t.dueAfter); noteWork(t, was, { by: null, via: 'kloomie' }); }
         changed = true;
         broadcast(ws.id, { type: 'task', task: publicTask(t) });
         broadcast(ws.id, { type: 'handoff', task: publicTask(t), by, byId });
@@ -2906,13 +2938,15 @@ function toolDone(taskId, { by, byId, note, file } = {}) {
   if (!t) return;
   if (file && db.items[file]?.wsId === t.wsId) t.files = [...new Set([...(t.files || []), file])].slice(0, 20);
   if (!t.done && !t.submitted) {
-    const opened = openings(db.workspaces[t.wsId]);
+    const opened = openings(db.workspaces[t.wsId]), was = workOf(t);
     t.doneNote = note ? cleanText(note, 200) : null;
     if (t.signoff) Object.assign(t, { submitted: { by: by || 'Kloomie', byId: byId || null, at: Date.now() }, returned: null });
     else {
       Object.assign(t, { done: true, doneAt: Date.now(), doneBy: by || 'Kloomie', submitted: null, returned: null });
       setImmediate(() => automate(t.wsId, 'task.done', { task: t, campaign: taskCamp(t), who: by, whoId: byId, private: privateTask(t) }));
     }
+    // Done by its tool, as whoever used it (or Kloomie, when nobody did).
+    noteWork(t, was, { by: byId || null, via: 'tool' });
     syncEntries(t);
     broadcast(t.wsId, { type: 'task', task: publicTask(t) });
     if (t.submitted) broadcast(t.wsId, { type: 'signoff', task: publicTask(t), by: by || 'Kloomie' });
@@ -2937,8 +2971,10 @@ const followsUp = (t, x) => t.followUp && !t.done && (x.rowId ? t.followUp.rowId
 function closeFollowUps(c, x) {
   for (const t of Object.values(db.tasks)) {
     if (!followsUp(t, x) || campaignOf('task', t) !== c.id) continue;
+    const was = workOf(t);
     t.done = true;
     t.doneAt = Date.now();
+    noteWork(t, was);
     broadcast(t.wsId, { type: 'task', task: publicTask(t) });
   }
 }
@@ -2963,6 +2999,7 @@ function addFollowUp(c, x, due, day) {
   t.followUp = { attemptId: x.id, listId: x.listId, rowId: x.rowId, contact: x.contact };
   if (x.recordId) t.recordId = x.recordId;
   t.assignedBy = x.memberId; // their own, so no "assigned you" notice
+  noteWork(t, null);
   db.tasks[t.id] = t;
   broadcast(c.wsId, { type: 'task', task: publicTask(t) });
   return t;
@@ -3249,6 +3286,7 @@ function fillCampaign(ws, owner, c, snap, date, by) {
       if (STEP_KINDS.includes(st.action?.kind)) t.action = { kind: st.action.kind };
       if (st.castId && castRole(c, st.castId)) { Object.assign(t, { castId: st.castId, assigneeId: null, roleId: null }); t.assignedBy = by || null; }
       if (st.signoff?.memberId || castRole(c, st.signoff?.castId)) t.signoff = st.signoff;
+      noteWork(t, null);
       db.tasks[t.id] = t;
       made.set(st.ref, t);
     }
@@ -3301,6 +3339,19 @@ const AUTO_RUNS = 30;
 const AUTO_MAX = 50;
 // Set while an automation's own work runs, through every await of the routes it calls: what it does sets nothing off.
 const FLOWING = new AsyncLocalStorage();
+// Who's acting, for the work history (2026-11-19): each request runs with a store its sign-in fills in (the app, the
+// public API, or a replay as someone: an automation's call, an agent, an approval), so whatever a change sets off
+// knows who made it without being told. An automation's own work is the automation's, never its maker's.
+const ACTOR = new AsyncLocalStorage();
+function actorNow() {
+  const f = FLOWING.getStore();
+  if (f) return { by: null, via: 'automation', auto: f.autoId };
+  const a = ACTOR.getStore();
+  if (a?.flow) return { by: null, via: 'automation', auto: a.flow };
+  if (!a?.memberId) return { by: null, via: 'kloomie' };
+  return { by: a.memberId, via: a.agent ? 'agent' : a.api ? 'api' : 'app' };
+}
+const actAs = (fill) => { const a = ACTOR.getStore(); if (a) Object.assign(a, fill); };
 const publicAutomation = ({ wsId, recent, ran, dateRan, ...x }) => ({ ...x, waiting: Object.values(db.flowWaits || {}).filter((w) => w.autoId === x.id).length,
   // Steps that can't run as they are: a saved task they make from was deleted.
   problems: stepActions(x.actions || []).filter((a) => a.kind === 'task' && a.presetId && !db.taskPresets?.[a.presetId]).map((a) => `The saved task “${a.presetName || '?'}” was deleted`) });
@@ -3631,10 +3682,14 @@ function jobStepsOnce(wsId, by, byId) {
       if (key !== g.needKey) { g.needKey = key; changed = true; broadcast(wsId, { type: 'goal', goal: publicGoal(g) }); }
     }
     const m = !!(g.skipped || (g.kind === 'count' ? goalMet(g) : (g.kind !== 'tasks' || ts.length > 0) && ts.every(stepDone) && needsMet(g)));
+    // The work history (2026-11-19): work on a step started when its first task was done.
+    if (!g.startedAt) { const first = ts.reduce((n, x) => (x.done && x.doneAt && (!n || x.doneAt < n) ? x.doneAt : n), 0); if (first) { g.startedAt = first; changed = true; } }
     if (g.finished === undefined) { g.finished = m; changed = true; continue; }
     if (g.finished === m) continue;
     g.finished = m;
     changed = true;
+    if (m) Object.assign(g, { finishedAt: Date.now(), finishedById: byId || actorNow().by || null });
+    else Object.assign(g, { finishedAt: null, finishedById: null, reopens: (g.reopens || 0) + 1 });
     if (m) automate(wsId, 'step.done', { goal: g, campaign: db.campaigns[cid], who: by, whoId: byId });
   }
   for (const c of Object.values(db.campaigns)) {
@@ -3691,6 +3746,11 @@ function recordEvent(rec, type, by, more = {}) {
   if (type === 'record.updated' || type === 'record.created') {
     const was = rec.flowStage;
     rec.flowStage = stage;
+    // The work history (2026-11-19): each stage a job moved to, when, and by whom, kept apart from its timeline.
+    if (stage && (type === 'record.created' || (was !== undefined && was !== stage))) {
+      const a = actorNow();
+      rec.stages = [...(rec.stages || []), { stage, at: Date.now(), by: a.by || base.whoId || null, ...(a.via !== 'app' && !(a.via === 'kloomie' && base.whoId) ? { via: a.via } : {}), ...(a.auto ? { auto: a.auto } : {}) }].slice(-100);
+    }
     if (type === 'record.created') return automate(rec.wsId, 'record.created', base);
     if (stage && was !== undefined && was !== stage) automate(rec.wsId, 'record.stage', { ...base, from: was || 'no stage' });
     return;
@@ -3715,12 +3775,25 @@ function eventFromHook(wsId, type, d, by) {
 }
 // path: where in the steps it went ("0", "1.then.0"…), so the builder can light up the way a run took.
 // runId: a run tried again is the same run; its note goes on (the latest end kept).
-function autoLog(x, ok, note, path = null, runId = null) {
+// Each automation's runs by the team's day, [went, didn't] (the work history, 2026-11-19), beyond its last 20 runs.
+// A run is counted once, on the day it ends: when it finishes, or fails with no try left, or is dropped or stopped
+// while waiting, or is skipped for running too often. One that's waiting (a wait step, or to try again) isn't yet.
+// The last 400 days are kept.
+const TALLY_DAYS = 400;
+function tallyRun(x, ok) {
+  const t = (x.tally ||= {});
+  ((t[teamDay(x.wsId)] ||= [0, 0]))[ok ? 0 : 1]++;
+  const days = Object.keys(t).sort();
+  for (const k of days.slice(0, Math.max(0, days.length - TALLY_DAYS))) delete t[k];
+}
+// ended: this is how the run ended (so it's tallied); left out while it waits to go on or to be tried again.
+function autoLog(x, ok, note, path = null, runId = null, ended = true) {
   const was = runId && (x.runs || []).find((y) => y.runId === runId);
+  if (ended) tallyRun(x, ok);
   if (was) note = was.note + ' · ' + note;
   if (note && note.length > 1000) note = '…' + note.slice(-999);
   x.runs = [{ at: Date.now(), ok, note: clipText(note || '', 1000), ...(path?.length ? { path: path.slice(0, 60) } : {}), ...(runId ? { runId } : {}) }, ...(x.runs || []).filter((y) => !runId || y.runId !== runId)].slice(0, 20);
-  if (ok) x.count = (x.count || 0) + 1;
+  if (ok && ended) x.count = (x.count || 0) + 1; // runs in all, counted once each like the tally (column-02, 2026-11-19)
   broadcast(x.wsId, { type: 'automation', automation: publicAutomation(x), forAdmins: true });
 }
 function runAutomation(x, ctx) {
@@ -3734,10 +3807,10 @@ function runAutomation(x, ctx) {
     try {
       const r = await execSteps(x, ctx, [], 0, did);
       if (r.wait) waitFor(x, ctx, r.wait, did);
-      autoLog(x, true, did.filter(Boolean).join(' · ') || 'nothing to do this time', did.path);
+      autoLog(x, true, did.filter(Boolean).join(' · ') || 'nothing to do this time', did.path, null, !r.wait);
     } catch (e) {
       const again = retryLater(x, ctx, e, 0, runId);
-      autoLog(x, false, (did.length ? did.join(' · ') + ' · then ' : '') + e.message + again, did.path, again ? runId : null);
+      autoLog(x, false, (did.length ? did.join(' · ') + ' · then ' : '') + e.message + again, did.path, again ? runId : null, !again);
       if (!again) autoStopped(x, e, 0);
     } finally {
       save();
@@ -3910,11 +3983,11 @@ function runWaits(now) {
       try {
         const r = await resumeSteps(x, ctx, w.stack, w.i, log);
         if (r.wait) waitFor(x, ctx, r.wait, log);
-        autoLog(x, true, lead + (log.join(' · ') || 'nothing left to do'), log.path, w.runId || null);
+        autoLog(x, true, lead + (log.join(' · ') || 'nothing left to do'), log.path, w.runId || null, !r.wait);
       } catch (e) {
         // Any run can be tried again from a failed step: one that waited first too.
         const again = retryLater(x, ctx, e, w.retry || 0, runId);
-        autoLog(x, false, lead + (log.length ? log.join(' · ') + ' · then ' : '') + e.message + again, log.path, again || w.runId ? runId : null);
+        autoLog(x, false, lead + (log.length ? log.join(' · ') + ' · then ' : '') + e.message + again, log.path, again || w.runId ? runId : null, !again);
         if (!again) autoStopped(x, e, w.retry || 0);
       } finally {
         save();
@@ -4210,6 +4283,7 @@ async function autoAction(x, a, ctx) {
     const t = applyTask({ id: rid(), wsId: ws.id, by: x.name, memberId: x.memberId, createdAt: Date.now(), text: '', done: false, doneAt: null, due: null, priority: 0, goalId: null, assigneeId: null },
       { text: say, due: a.dueIn != null ? addDays(teamDay(ws.id), a.dueIn) : null, goalId: g?.id || null, ...who, ...(autoJob(x, ctx) ? { recordId: autoJob(x, ctx) } : {}) });
     if (t.assigneeId || t.roleId) t.assignedBy = x.memberId;
+    noteWork(t, null);
     db.tasks[t.id] = t;
     broadcast(ws.id, { type: 'task', task: publicTask(t) });
     return `Made the task “${clipText(t.text, 60)}”`;
@@ -6198,12 +6272,15 @@ function syncPinTask(x) {
   const text = `Come back: ${pinLabel(x)}${x.note ? ' · ' + x.note.split('\n')[0].slice(0, 200) : ''}`;
   if (t) {
     if (t.text === text && t.due === x.due && t.done === x.done) return;
+    const was = workOf(t);
     Object.assign(t, { text, due: x.due });
     if (t.done !== x.done) Object.assign(t, { done: x.done, doneAt: x.done ? Date.now() : null });
+    noteWork(t, was);
     broadcast(x.wsId, { type: 'task', task: publicTask(t) });
     return;
   }
   const nt = { id: rid(), wsId: x.wsId, by: x.by, createdAt: Date.now(), text, done: x.done, doneAt: x.done ? Date.now() : null, due: x.due, priority: 0, goalId: null, assigneeId: x.memberId, pinId: x.id };
+  noteWork(nt, null);
   db.tasks[nt.id] = nt;
   x.taskId = nt.id;
   broadcast(x.wsId, { type: 'task', task: publicTask(nt) });
@@ -7595,6 +7672,7 @@ async function api(req, res, url) {
   const auth = authFrom(req, url);
   if (!auth) return send(res, 401, { error: 'Not signed in' });
   const { ws } = auth;
+  actAs({ memberId: auth.memberId, flow: auth.flow || null, agent: !!auth.agent });
   // Work this change opens up: whoever it's for hears they're up, once the change is made.
   if (m !== 'GET' && HANDOFF_ROUTES.has(a)) { const opened = openings(ws, auth.tz); res.once('finish', () => { opened(auth.member, auth.memberId); jobSteps(ws.id, auth.member, auth.memberId); }); }
   if (ws.deleteAt && m !== 'GET' && (a === 'texting' || a === 'lead-capture' || a === 'dropbox' || (a === 'contacts' && parts[2] === 'texts'))) {
@@ -8017,6 +8095,7 @@ async function api(req, res, url) {
       const t = applyTask({ id: rid(), wsId: ws.id, by: auth.member, memberId: auth.memberId, createdAt: Date.now(), text: '', done: false, doneAt: null, due: null, priority: 0, goalId: null, assigneeId: null }, await readJson(req, 50_000));
       if (!canSee(auth, 'task', t)) return send(res, 404, { error: 'Goal not found' });
       if (t.assigneeId || t.roleId || t.castId) t.assignedBy = auth.memberId;
+      noteWork(t, null);
       db.tasks[t.id] = t;
       if (t.recordId) PJ.recordActivity(t.recordId, { kind: 'task', what: 'added', note: t.text, taskId: t.id, by: auth.member });
       save();
@@ -8061,6 +8140,7 @@ async function api(req, res, url) {
       }
       // Who handed it over, so the new assignee can be told.
       if (next.assigneeId !== t.assigneeId || next.roleId !== t.roleId || next.castId !== t.castId) next.assignedBy = next.assigneeId || next.roleId || next.castId ? auth.memberId : null;
+      noteWork(next, workOf(t));
       db.tasks[t.id] = next;
       if (next.recordId && next.done && !t.done) PJ.recordActivity(next.recordId, { kind: 'task', what: 'done', note: next.text, taskId: next.id, by: auth.member });
       // Ticking off a come-back task ticks off its spot on the map.
@@ -11074,7 +11154,7 @@ async function replayAs(ws, memberId, approvalId, { method, path: p, body }, as 
   const res = new EventEmitter();
   let status = 200, out = '';
   Object.assign(res, { headersSent: false, setHeader() {}, getHeader() {}, writeHead(code) { status = code; this.headersSent = true; return this; }, write(c) { out += c; return true; }, end(c) { if (c) out += c; this.emit('finish'); } });
-  await api(req, res, new URL(p, 'http://replay'));
+  await ACTOR.run({}, () => api(req, res, new URL(p, 'http://replay')));
   let parsed = null;
   try { parsed = JSON.parse(out); } catch {}
   return { status, body: parsed };
@@ -11087,6 +11167,7 @@ const PJ = projectsModule({ onEvent: (...a) => recordEvent(...a), canSeeItem: (a
   makeTask: (ws, auth, { text, due, recordId }) => {
     const t = applyTask({ id: rid(), wsId: ws.id, by: auth.member, createdAt: Date.now(), text: '', done: false, doneAt: null, due: null, priority: 0, goalId: null, assigneeId: null }, { text, due, assigneeId: auth.memberId, recordId });
     t.assignedBy = auth.memberId;
+    noteWork(t, null);
     db.tasks[t.id] = t;
     save();
     broadcast(ws.id, { type: 'task', task: publicTask(t) });
@@ -11332,6 +11413,7 @@ const STANDUP = standupModule({ db, save, broadcast, rid, cleanText, readJson, s
   makeTask: (ws, auth, { text, due, assigneeId }) => {
     const t = applyTask({ id: rid(), wsId: ws.id, by: auth.member, createdAt: Date.now(), text: '', done: false, doneAt: null, due: null, priority: 0, goalId: null, assigneeId: null }, { text, due, assigneeId });
     t.assignedBy = auth.memberId;
+    noteWork(t, null);
     db.tasks[t.id] = t;
     save();
     broadcast(ws.id, { type: 'task', task: publicTask(t) });
@@ -11451,7 +11533,7 @@ const QB = quickbooksModule({ bind: OAUTH_BIND, db, save, broadcast, cleanText, 
 // The public API for Contacts, Tasks, Visits and Invoices, and webhooks apps subscribe to (publicapi.js).
 const API = publicApiModule({ canSee: (...a) => canSee(...a), privateTask: (t) => privateTask(t), readOnlyMsg: (ws) => readOnlyBlock(ws, 'v1', 'POST'), db, save, broadcast, rid, cleanText, readJson, send, badRequest, PJ, INV, isAdmin, teamDay, EVENTS: HOOK_EVENTS, EMAIL_RE,
   publicContact, contactsOf, newContact, applyContact, contactNews, refreshLiveSoon, automate, CONTACT_MAX, emailKey, phoneKey,
-  applyTask, publicTask, syncEntries, setVisit, visitEntries, publicVisit, dropVisit, jobOfRecord, jobLabel, jobCustomer: jobCustomerOut, VISIT_KINDS, fmtMinutes });
+  applyTask, publicTask, noteWork, workOf, actAs, syncEntries, setVisit, visitEntries, publicVisit, dropVisit, jobOfRecord, jobLabel, jobCustomer: jobCustomerOut, VISIT_KINDS, fmtMinutes });
 
 // Addresses the app used to live at (OLD_HOSTS, comma-separated) send people on to PUBLIC_URL, so links
 // in old emails, signing requests and quotes keep working. Only pages move: /api/ answers on every address,
@@ -11588,7 +11670,7 @@ async function handleRequest(req, res) {
     res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition, Content-Length, Content-Range');
     if (req.method === 'OPTIONS') return send(res, 204, '');
     try {
-      await api(req, res, url);
+      await ACTOR.run({}, () => api(req, res, url));
     } catch (e) {
       if (!res.headersSent) send(res, e.status || 500, { error: e.status ? e.message : 'Server error' });
       if (!e.status) alarm(`Server error on ${req.method} ${url.pathname.replace(/\/[A-Za-z0-9_-]{12,}/g, '/…')}`, e);
@@ -11954,7 +12036,7 @@ async function removeMember(ws, m, { removed = false } = {}) {
   // Passed on: the business keeps these.
   for (const coll of ['signs', 'meetings', 'pins', 'trips', 'zones', 'money', 'bills', 'budgets']) for (const x of Object.values(db[coll])) if (theirs(x)) hand(x);
   for (const x of Object.values(db.sends)) if (theirs(x) && x.status === 'sending') Object.assign(x, { status: 'paused', error: `${m.name} left the team, so their email can’t send the rest.` });
-  for (const t of Object.values(db.tasks)) if (t.wsId === wsId && t.assigneeId === id) t.assigneeId = null;
+  for (const t of Object.values(db.tasks)) if (t.wsId === wsId && t.assigneeId === id) { const was = workOf(t); t.assigneeId = null; noteWork(t, was, { by: null, via: 'kloomie' }); }
   for (const p of Object.values(db.projects)) {
     if (p.wsId !== wsId) continue;
     if (p.private && p.memberId === id && !(p.memberIds || []).some((x) => x !== id)) {

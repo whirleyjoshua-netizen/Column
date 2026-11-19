@@ -367,7 +367,7 @@ export function projectsModule({ onEvent = null, canSeeItem = () => true, seal =
   // call the customer and find the place, even if they can't open Contacts.
   // What's in a locked field (rec.secrets) never goes out with a record: only that one is set ({ set, at } in values).
   // The job an item is at goes out with its name and project, when that project isn't private.
-  const publicRecord = ({ wsId, log, secrets, flowStage, ...r }) => {
+  const publicRecord = ({ wsId, log, secrets, flowStage, stages, ...r }) => {
     const p = db.projects[r.projectId];
     const t = p?.types.find((x) => x.id === r.typeId);
     if (p && t && t.fields.some((f) => CALC.has(f.type))) r = { ...r, values: { ...r.values, ...calcValues(p, t, { ...r, wsId }) } };

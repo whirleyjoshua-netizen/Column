@@ -198,6 +198,7 @@ export function publicApiModule(deps) {
           { text: body.text ?? body.title, due: dayIn(body.due, 'due'), assigneeId: memberIn(ws, body.assignee_id ?? body.assignee), recordId, ...(body.priority !== undefined ? { priority: body.priority } : {}) });
         if (t.assigneeId) t.assignedBy = auth.memberId;
         t.updatedAt = Date.now();
+        deps.noteWork?.(t, null);
         db.tasks[t.id] = t;
         if (t.recordId) PJ.recordActivity(t.recordId, { kind: 'task', what: 'added', note: t.text, taskId: t.id, by: auth.member });
         save();
@@ -226,6 +227,7 @@ export function publicApiModule(deps) {
       const finished = next.done && !t.done;
       if (finished) next.doneBy = auth.member;
       next.updatedAt = Date.now();
+      deps.noteWork?.(next, deps.workOf(t));
       db.tasks[t.id] = next;
       if (finished && next.recordId) PJ.recordActivity(next.recordId, { kind: 'task', what: 'done', note: next.text, taskId: next.id, by: auth.member });
       deps.syncEntries(next);
@@ -384,6 +386,8 @@ export function publicApiModule(deps) {
     if (a.limited) return send(res, 429, { error: 'Too many requests. The limit is 300 a minute per key.' });
     const [what, ...rest] = parts;
     const { ws, auth, key } = a;
+    // Who's acting, for the work history: the key's person, through the API.
+    deps.actAs?.({ memberId: auth.memberId, api: true });
     if (req.method !== 'GET' && req.method !== 'HEAD') {
       if (ws.deleteAt) return send(res, 423, { error: 'This team is being deleted, so nothing can be changed.' });
       const locked = deps.readOnlyMsg?.(ws);
