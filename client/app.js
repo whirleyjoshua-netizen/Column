@@ -8044,55 +8044,194 @@
   }
 
   // main: a new campaign's main campaign, when it's made as a sub-campaign.
+  // The campaign builder (the owner, 2026-11-19: full size, beside the sidebar like the automation builder, and
+  // covering what a campaign is now): what it is, the job it's for, who's on it and their roles, its steps (each can
+  // finish a job stage), how work runs, what gets logged, money, and who sees it. A summary of what you'll get stays
+  // beside it. The server takes all of it in one go (createCampaign → applyCampaign); steps are added right after.
   function campaignSheet(c, main, focus) {
-    const name = h('input', { value: c?.name || '', placeholder: main ? 'Dealerships' : 'Q4 outreach' });
-    // Part of a bigger campaign. Only main campaigns can be picked, and one with subs of its own can't go under another.
-    const mains = S.campaigns.filter((x) => !x.parentId && x.id !== c?.id && x.status !== 'done');
-    const partOf = h('select', {}, h('option', { value: '' }, 'Nothing: it’s a main campaign'), mains.map((x) => h('option', { value: x.id }, x.name)));
-    partOf.value = main?.id || c?.parentId || '';
-    const after = h('select', {}, h('option', { value: '' }, 'Nothing: it stands on its own'), S.campaigns.filter((x) => x.id !== c?.id && (x.status !== 'done' || x.id === c?.follows)).map((x) => h('option', { value: x.id }, x.name)));
-    after.value = c?.follows || '';
-    const brief = h('textarea', { rows: 4, placeholder: 'What’s the goal? Who’s it for? How will you know it worked?' });
-    brief.value = c?.brief || '';
-    const start = h('input', { type: 'date', value: c?.start || todayKey() });
-    const end = h('input', { type: 'date', value: c?.end || '' });
-    let color = c?.color || COLORS[S.campaigns.length % COLORS.length];
-    const sw = h('div', { class: 'swatches' }, COLORS.map((col) => h('button', { type: 'button', class: `sw c-${col}${col === color ? ' on' : ''}`, 'aria-label': col,
-      onclick: (e) => { color = col; for (const x of sw.children) x.classList.toggle('on', x === e.currentTarget); } })));
+    const isNew = !c;
+    const D = {
+      name: c?.name || '', brief: c?.brief || '', start: c?.start || todayKey(), end: c?.end || '', color: c?.color || COLORS[S.campaigns.length % COLORS.length],
+      parentId: main?.id || c?.parentId || '', follows: c?.follows || '', recordId: c?.recordId || '', assigneeId: c?.assigneeId || '',
+      budget: c?.budget ? String(c.budget / 100) : '', private: !!c?.private, memberIds: [...(c?.memberIds || [])], inOrder: !!c?.inOrder,
+      cast: (c?.cast || []).map((r) => ({ id: r.id, name: r.name, about: r.about || '', memberIds: [...r.memberIds] })),
+      outcomes: (c?.outcomes || ['Reached', 'No answer', 'Not interested', 'Booked']).join('\n'), methods: (c?.methods || ['Call', 'Email', 'Visit']).join('\n'),
+      steps: [], // new campaigns: { title, stage }
+    };
     const owner = !c || c.ownerId === S.me?.memberId;
-    const priv = h('input', { type: 'checkbox' });
-    priv.checked = !!c?.private;
-    const others = S.workspace.members.filter((m) => m.id !== (c?.ownerId || S.me?.memberId));
-    const picks = others.map((m) => {
-      const cb = h('input', { type: 'checkbox', value: m.id });
-      cb.checked = !!c?.memberIds.includes(m.id);
-      return h('label', { class: 'pick' }, cb, m.name);
-    });
-    const people = h('div', { class: 'picks' + (priv.checked ? '' : ' hidden') }, picks.length ? picks : h('small', {}, 'Nobody else on the team yet.'));
-    priv.addEventListener('change', () => people.classList.toggle('hidden', !priv.checked));
-    const who = assigneeSelect(c?.assigneeId);
-    const budget = h('input', { inputmode: 'decimal', placeholder: 'e.g. 2,000', value: c?.budget ? String(c.budget / 100) : '' });
-    sheet(c ? 'Campaign details' : main ? `New sub-campaign of ${main.name}` : 'New campaign', [
+    const mayOrder = !c || canPass(c);
+    const hasSubs = !!(c && subsOf(c).length);
+    // Jobs to pick from: records in the lists that are jobs (a trade's jobs, or a Jobs list), in projects you can see.
+    const jobs = () => {
+      const out = [];
+      for (const p of S.projects || []) {
+        if (p.archived) continue;
+        for (const t of p.types) if (t.trade || t.key === 'jobs') for (const r of prRecs(p.id).filter((x) => x.typeId === t.id)) out.push({ id: r.id, label: recName(t, r), p, t, r });
+      }
+      return out.sort((x, y) => (y.r.updatedAt || 0) - (x.r.updatedAt || 0));
+    };
+    const stagesOf = (recId) => {
+      const at = recId && recEverywhere(recId);
+      const t = at && prType(at.p, at.r.typeId);
+      const f = t && (t.fields.find((x) => x.type === 'select' && ['status', 'stage'].includes(x.key)) || t.fields.find((x) => x.type === 'select'));
+      return f ? f.choices.map((x) => x.label) : [];
+    };
+    const sec = (title, sub, ...kids) => h('section', { class: 'cb-sec' }, h('h3', {}, title), sub ? h('p', { class: 'day-hint' }, sub) : null, ...kids.filter(Boolean));
+    const inp = (k, attrs = {}) => { const e = h(attrs.rows ? 'textarea' : 'input', { ...attrs, value: attrs.rows ? undefined : D[k] }); if (attrs.rows) e.value = D[k]; e.addEventListener('input', () => { D[k] = e.value; drawSum(); }); return e; };
+    const sel = (k, opts) => { const e = h('select', {}, opts.map(([v, l]) => h('option', { value: v }, l))); e.value = D[k]; e.addEventListener('change', () => { D[k] = e.value; drawSteps(); drawSum(); }); return e; };
+    const memberName = (id) => S.workspace.members.find((m) => m.id === id)?.name || '?';
+
+    // ---- start from (new only) ----
+    const tpls = isNew && !main ? (S.templates || []) : [];
+    const jobSel = sel('recordId', [['', 'No job: it stands on its own'], ...jobs().map((j) => [j.id, `${j.label} · ${j.p.name}`])]);
+    const startFrom = tpls.length ? sec('Start from', 'A saved campaign brings its steps, tasks and roles. Or build it here from scratch.',
+      h('div', { class: 'cb-tpls' }, h('button', { type: 'button', class: 'cb-tpl on', disabled: true }, h('b', {}, '✦ From scratch'), h('small', {}, 'Fill it in below')),
+        tpls.slice(0, 12).map((t) => h('button', { type: 'button', class: 'cb-tpl', 'data-tpl': t.id, onclick: () => { closeSheet(); runTemplate(t, null, D.recordId || null); } },
+          h('b', {}, t.name), h('small', {}, [t.campaign?.goals?.length ? plural(t.campaign.goals.length, 'step') : '', t.campaign?.cast?.length ? plural(t.campaign.cast.length, 'role') : ''].filter(Boolean).join(' · ') || 'Saved campaign'))))) : null;
+
+    // ---- the basics ----
+    const sw = h('div', { class: 'swatches' });
+    const drawSw = () => sw.replaceChildren(...COLORS.map((col) => h('button', { type: 'button', class: `sw c-${col}${col === D.color ? ' on' : ''}`, 'aria-label': col, onclick: () => { D.color = col; drawSw(); drawSum(); } })));
+    drawSw();
+    const name = inp('name', { maxlength: 80, placeholder: main ? 'Dealerships' : 'Smith kitchen remodel, Q4 outreach…', class: 'cb-name' });
+    const basics = sec('What it is', null,
       h('label', {}, 'Name', name),
-      h('label', {}, 'Brief', brief),
-      c && subsOf(c).length ? null : h('label', {}, 'Part of', partOf),
-      h('label', {}, 'Comes after (in a series)', after, h('small', { class: 'hint' }, 'When that one is marked finished, whoever runs this one hears it’s up.')),
-      h('div', { class: 'row2' }, h('label', {}, 'Starts', start), h('label', {}, 'Ends (optional)', end)),
-      h('label', {}, 'Budget (optional)', budget, h('small', { class: 'day-hint' }, 'Money out tagged to this campaign in Finance counts against it, sub-campaigns included.')),
-      h('label', {}, 'Color', sw),
-      h('label', {}, 'Responsible', who),
-      owner ? h('label', { class: 'pick' }, priv, 'Private: only people I choose can see it') : (c?.private ? h('small', { class: 'day-hint' }, 'Private. The campaign owner chooses who sees it.') : null),
-      owner ? people : null,
+      h('label', {}, 'Brief', inp('brief', { rows: 5, placeholder: 'What’s the goal? Who’s it for? How will you know it worked?' })),
+      h('div', { class: 'row2' }, h('label', {}, 'Starts', inp('start', { type: 'date' })), h('label', {}, 'Ends (optional)', inp('end', { type: 'date' }))),
+      h('label', {}, 'Color', sw));
+
+    // ---- what it's for ----
+    const mains = S.campaigns.filter((x) => !x.parentId && x.id !== c?.id && x.status !== 'done');
+    const forSec = sec('What it’s for', 'Tie it to a job and its tasks are the job’s, its steps can move the job along, and its needs (materials, equipment, visits) are checked against the job.',
+      h('label', {}, 'The job', jobSel, h('small', { class: 'hint' }, jobs().length ? 'Jobs on your Boards.' : 'No jobs yet. Jobs live on Boards (a trade’s Jobs list).')),
+      hasSubs ? null : h('label', {}, 'Part of', sel('parentId', [['', 'Nothing: it’s a main campaign'], ...mains.map((x) => [x.id, x.name])])),
+      h('label', {}, 'Comes after (in a series)', sel('follows', [['', 'Nothing: it stands on its own'], ...S.campaigns.filter((x) => x.id !== c?.id && (x.status !== 'done' || x.id === c?.follows)).map((x) => [x.id, x.name])]),
+        h('small', { class: 'hint' }, 'When that one is finished, whoever runs this one hears it’s up.')));
+
+    // ---- people and roles ----
+    const who = assigneeSelect(D.assigneeId);
+    who.addEventListener('change', () => { D.assigneeId = who.value; drawSum(); });
+    const castBox = h('div', { class: 'cb-cast' });
+    const drawCast = () => castBox.replaceChildren(...D.cast.map((r, i) => {
+      const n = h('input', { value: r.name, maxlength: 40, placeholder: 'Designer, Installer, Approver…', 'aria-label': 'Role' });
+      n.addEventListener('input', () => { r.name = n.value; drawSum(); });
+      const people = h('div', { class: 'cb-people' }, S.workspace.members.map((m) => {
+        const on = r.memberIds.includes(m.id);
+        return h('button', { type: 'button', class: 'chip' + (on ? ' on' : ''), 'aria-pressed': String(on), onclick: () => { r.memberIds = on ? r.memberIds.filter((x) => x !== m.id) : [...r.memberIds, m.id]; drawCast(); drawSum(); } }, m.id === S.me?.memberId ? `${m.name} (you)` : m.name);
+      }));
+      return h('div', { class: 'cb-role' }, h('div', { class: 'cb-role-h' }, n, h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Remove this role', html: I.close, onclick: () => { D.cast.splice(i, 1); drawCast(); drawSum(); } })), people);
+    }), D.cast.length < 20 ? h('button', { type: 'button', class: 'btn small cb-add-role', onclick: () => { D.cast.push({ name: '', about: '', memberIds: [] }); drawCast(); castBox.querySelectorAll('.cb-role-h input')[D.cast.length - 1]?.focus(); } }, '+ Add a role') : null);
+    drawCast();
+    const others = S.workspace.members.filter((m) => m.id !== (c?.ownerId || S.me?.memberId));
+    const seeBox = h('div', { class: 'cb-people' });
+    const drawSee = () => seeBox.replaceChildren(...(D.private ? (others.length ? others.map((m) => { const on = D.memberIds.includes(m.id); return h('button', { type: 'button', class: 'chip' + (on ? ' on' : ''), 'aria-pressed': String(on), onclick: () => { D.memberIds = on ? D.memberIds.filter((x) => x !== m.id) : [...D.memberIds, m.id]; drawSee(); drawSum(); } }, m.name); }) : [h('small', {}, 'Nobody else on the team yet.')]) : []));
+    drawSee();
+    const priv = h('input', { type: 'checkbox' });
+    priv.checked = D.private;
+    priv.addEventListener('change', () => { D.private = priv.checked; drawSee(); drawSum(); });
+    const peopleSec = sec('Who’s on it', 'One person runs it. Roles are the parts people play (tasks can go to a role, and a saved copy asks who plays each).',
+      h('label', {}, 'Runs it', who),
+      h('div', { class: 'picks-h' }, 'Roles'), castBox,
+      owner ? h('label', { class: 'pick cb-priv' }, priv, 'Private: only people I choose can see it') : (c?.private ? h('small', { class: 'day-hint' }, 'Private. The campaign owner chooses who sees it.') : null),
+      owner ? seeBox : null);
+
+    // ---- steps and how work runs ----
+    const stepsBox = h('div', { class: 'cb-steps' });
+    function drawSteps() {
+      const stages = stagesOf(D.recordId);
+      if (!isNew) {
+        const gs = S.goals.filter((g) => g.campaignId === c.id && !g.archived).sort((x, y) => (x.order || 0) - (y.order || 0) || x.createdAt - y.createdAt);
+        stepsBox.replaceChildren(...(gs.length ? gs.map((g, i) => h('div', { class: 'cb-step' }, h('span', { class: 'cb-n' }, String(i + 1)), h('b', {}, g.title), g.stage ? h('small', {}, `→ ${g.stage}`) : null,
+          h('button', { type: 'button', class: 'btn small', onclick: () => goalSheet(c, g) }, 'Edit'))) : [h('p', { class: 'day-hint' }, 'No steps yet.')]),
+          h('small', { class: 'hint' }, 'Add steps, their tasks and what each needs on the campaign’s page.'));
+        return;
+      }
+      stepsBox.replaceChildren(...D.steps.map((st, i) => {
+        const t = h('input', { value: st.title, maxlength: 200, placeholder: i === 0 ? 'Measure' : i === 1 ? 'Order materials' : 'Install', 'aria-label': `Step ${i + 1}` });
+        t.addEventListener('input', () => { st.title = t.value; drawSum(); });
+        const sg = stages.length ? h('select', { 'aria-label': 'The job stage it finishes' }, h('option', { value: '' }, 'No job stage'), stages.map((x) => h('option', { value: x }, `Finishes: ${x}`))) : null;
+        if (sg) { sg.value = st.stage || ''; sg.addEventListener('change', () => { st.stage = sg.value; drawSum(); }); }
+        return h('div', { class: 'cb-step' }, h('span', { class: 'cb-n' }, String(i + 1)), t, sg,
+          h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Remove this step', html: I.close, onclick: () => { D.steps.splice(i, 1); drawSteps(); drawSum(); } }));
+      }), D.steps.length < 30 ? h('button', { type: 'button', class: 'btn small cb-add-step', onclick: () => { D.steps.push({ title: '', stage: '' }); drawSteps(); stepsBox.querySelectorAll('.cb-step input')[D.steps.length - 1]?.focus(); } }, '+ Add a step') : null,
+        h('small', { class: 'hint' }, stages.length ? 'A step can finish one of the job’s stages: the job can’t move past it while its tasks are open, and finishing them moves the job there.' : 'Steps are the big pieces, done one after another or all at once. Add their tasks once it’s made.'));
+    }
+    drawSteps();
+    const order = h('input', { type: 'checkbox', disabled: !mayOrder });
+    order.checked = D.inOrder;
+    order.addEventListener('change', () => { D.inOrder = order.checked; drawSum(); });
+    const stepsSec = sec('Steps', null, stepsBox,
+      h('label', { class: 'pick' }, order, 'Work it in order: one step at a time, top to bottom', !mayOrder ? h('small', {}, ' (an owner sets this)') : null));
+
+    // ---- logging and money ----
+    const logSec = sec('What gets logged', 'For outreach: each call, email or visit is logged with how it went, and those count toward goals. Leave them as they are if you don’t log outreach.',
+      h('div', { class: 'row2' }, h('label', {}, 'Ways you reach people (one per line)', inp('methods', { rows: 4 })), h('label', {}, 'Outcomes (one per line)', inp('outcomes', { rows: 4 }))),
+      c ? h('button', { type: 'button', class: 'linkish', onclick: () => outcomesSheet(c) }, 'Follow-ups after an outcome…') : null);
+    const moneySec = sec('Money', null,
+      h('label', {}, 'Budget (optional)', inp('budget', { inputmode: 'decimal', placeholder: 'e.g. 2,000', class: 'cb-budget' }), h('small', { class: 'day-hint' }, 'Money out tagged to this campaign in Finance counts against it, sub-campaigns included.')));
+
+    // ---- what you'll get ----
+    const sum = h('aside', { class: 'cb-sum' });
+    function drawSum() {
+      const job = D.recordId && jobs().find((j) => j.id === D.recordId);
+      const roles = D.cast.filter((r) => r.name.trim());
+      const steps = isNew ? D.steps.filter((x) => x.title.trim()) : S.goals.filter((g) => g.campaignId === c.id && !g.archived);
+      const autos = c ? (S.automations || []).filter((x) => x.trigger?.campaignId === c.id || x.trigger?.campaignId === c.parentId) : [];
+      const li = (ic, text) => h('li', {}, h('span', { class: 'cb-ic' }, ic), text);
+      sum.replaceChildren(
+        h('div', { class: `cb-sum-h c-${D.color}` }, h('span', { class: 'cb-dot' }), h('b', {}, D.name.trim() || 'Your campaign')),
+        h('ul', { class: 'cb-list' },
+          li('📅', D.end ? `${D.start || '?'} → ${D.end}` : `From ${D.start || 'today'}`),
+          job ? li('🛠️', `For the job ${job.label}`) : null,
+          li('🙋', D.assigneeId ? `${memberName(D.assigneeId)} runs it` : 'Nobody runs it yet'),
+          roles.length ? li('🎭', roles.map((r) => `${r.name}${r.memberIds.length ? ': ' + r.memberIds.map(memberName).join(', ') : ''}`).join(' · ')) : null,
+          li('🪜', steps.length ? `${plural(steps.length, 'step')}${D.inOrder ? ', in order' : ''}` : 'No steps yet'),
+          D.budget.trim() ? li('💵', `Budget ${D.budget.trim().startsWith('$') ? '' : '$'}${D.budget.trim()}`) : null,
+          li(D.private ? '🔒' : '👥', D.private ? `Private${D.memberIds.length ? ': you and ' + D.memberIds.map(memberName).join(', ') : ': just you'}` : 'The whole team can see it'),
+          c ? li('⚡', autos.length ? plural(autos.length, 'automation') : 'No automations') : null),
+        isNew ? h('div', { class: 'cb-gets' }, h('b', {}, 'It comes with'), h('ul', {}, h('li', {}, 'Its own chat feed and stack for files'), h('li', {}, 'A board of its steps and tasks'), h('li', {}, 'A spot in Campaigns → Overview'), job ? h('li', {}, 'Its tasks on the job, and on the job’s timeline') : null)) : null,
+        h('div', { class: 'cb-next' }, h('b', {}, isNew ? 'After it’s made' : 'Also on its page'),
+          h('small', {}, 'Tasks for each step, what each step needs (materials, equipment, visits), sign-offs, check-ins, and automations that start when it does.')));
+    }
+    drawSum();
+
+    sheet(c ? `Campaign · ${c.name}` : main ? `New sub-campaign of ${main.name}` : 'New campaign', [
+      h('div', { class: 'cb-grid' }, h('div', { class: 'cb-main' }, startFrom, basics, forSec, peopleSec, stepsSec, logSec, moneySec), sum),
     ], async () => {
-      const body = { name: name.value, brief: brief.value, start: start.value || null, end: end.value || null, budget: budget.value.trim() || null, follows: after.value || null, color, assigneeId: who.value || null, ...(c && subsOf(c).length ? {} : { parentId: partOf.value || null }) };
-      if (owner) Object.assign(body, { private: priv.checked, memberIds: picks.map((l) => l.firstChild).filter((cb) => cb.checked).map((cb) => cb.value) });
+      const body = {
+        name: D.name, brief: D.brief, start: D.start || null, end: D.end || null, budget: D.budget.trim() || null, follows: D.follows || null, color: D.color,
+        assigneeId: D.assigneeId || null, recordId: D.recordId || null, cast: D.cast.filter((r) => r.name.trim()),
+        outcomes: D.outcomes.split('\n'), methods: D.methods.split('\n'), ...(hasSubs ? {} : { parentId: D.parentId || null }),
+        ...(mayOrder && (isNew ? D.inOrder : D.inOrder !== !!c.inOrder) ? { inOrder: D.inOrder } : {}),
+      };
+      if (owner) Object.assign(body, { private: D.private, memberIds: D.memberIds });
       const saved = c ? await api('PATCH', '/campaigns/' + c.id, body) : await api('POST', '/campaigns', body);
       const i = S.campaigns.findIndex((x) => x.id === saved.id);
       if (i >= 0) S.campaigns[i] = saved;
       else S.campaigns.push(saved);
+      if (isNew) {
+        for (const [n, st] of D.steps.filter((x) => x.title.trim()).entries()) {
+          try { const g = await api('POST', '/goals', { campaignId: saved.id, title: st.title, kind: 'tasks', order: n, ...(st.stage ? { stage: st.stage } : {}) }); if (!S.goals.some((x) => x.id === g.id)) S.goals.push(g); } catch (e) { toast(e.message); }
+        }
+      }
       openCampaign(saved.id);
-    }, c ? 'Save' : 'Create');
-    if (focus === 'budget') budget.focus();
+    }, c ? 'Save' : 'Make the campaign');
+    // Full size, beside the sidebar like a page (as the automation builder is). The sidebar still goes places; with
+    // unsaved changes it stays and says so.
+    const page = $('#sheet .sheet');
+    page?.classList.add('camp-builder');
+    if (!PR.records.size) prLoadAll().then(() => { if (page?.isConnected) { const v = jobSel.value; jobSel.replaceChildren(h('option', { value: '' }, 'No job: it stands on its own'), ...jobs().map((j) => h('option', { value: j.id }, `${j.label} · ${j.p.name}`))); jobSel.value = v || D.recordId; drawSteps(); drawSum(); } });
+    const was = JSON.stringify(D);
+    const leave = (e) => {
+      if (!page?.isConnected || $('#sheet').classList.contains('hidden')) return document.removeEventListener('click', leave, true);
+      if (!e.target.closest('#side button, #side a')) return;
+      if (JSON.stringify(D) !== was) { e.preventDefault(); e.stopPropagation(); return toast('Save the campaign, or close it to leave it as it was.'); }
+      document.removeEventListener('click', leave, true);
+      closeSheet();
+    };
+    document.addEventListener('click', leave, true);
+    if (focus === 'budget') page?.querySelector('.cb-budget')?.focus();
+    else if (isNew) name.focus();
   }
 
   function goalSheet(c, g) {
