@@ -45,7 +45,7 @@ try {
   ok(await A.until(`!document.querySelector('#app').classList.contains('hidden') && !!document.querySelector('#tabs [data-tab=work]')`, 15000), 'Ada is in');
   const main = await A.ev(`[...document.querySelectorAll('#tabs > button[data-tab]:not(.tab-sub)')].map((b) => b.dataset.tab).join(',')`);
   ok(!main.split(',').includes('day'), 'Day isn’t a main tab any more: ' + main);
-  await A.tap(`document.querySelector('#tabs [data-tab=chat]')`);
+  await A.tap(`document.querySelector('#tabs [data-tab=home]')`);
   await A.tap(`document.querySelector('#tabs [data-tab=work]')`);
   ok(await A.until(`!document.querySelector('#day').classList.contains('hidden')`), 'opening Workspace lands on Tasks');
   ok(await A.until(`(() => { const b = document.querySelector('#workTabs button[data-tab]'); return b?.dataset.tab === 'day' && b.textContent === 'Tasks' && b.classList.contains('on'); })()`), 'Tasks is Workspace’s first tab, and it’s marked');
@@ -58,10 +58,10 @@ try {
   ok(await A.until(`document.querySelectorAll('#day .wk-col').length === 7`), 'Week shows seven days');
   await A.tap(`[...document.querySelectorAll('#day .day-modes button')].find((b) => b.textContent === 'Day')`);
   ok(await A.until(`!document.querySelector('#day .wk-col') && !!document.querySelector('#day .timeline')`), 'Day shows one day');
-  // Another Workspace tab, then back to Workspace from Chat: Tasks again.
+  // Another Workspace tab, then back to Workspace from Home: Tasks again.
   await A.tap(`[...document.querySelectorAll('#workTabs button')].find((b) => b.dataset.tab === 'camps')`);
   ok(await A.until(`document.querySelector('#day').classList.contains('hidden')`), 'Campaigns opens from Workspace');
-  await A.tap(`document.querySelector('#tabs [data-tab=chat]')`);
+  await A.tap(`document.querySelector('#tabs [data-tab=home]')`);
   await A.tap(`document.querySelector('#tabs [data-tab=work]')`);
   ok(await A.until(`!document.querySelector('#day').classList.contains('hidden')`), 'Workspace opens on Tasks every time');
   // A phone: no Week, the rest stay.

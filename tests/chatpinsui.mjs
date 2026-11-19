@@ -65,7 +65,7 @@ const signIn = async (tok) => { await A.until(`location.origin === new URL(${JSO
 try {
   A = await tab(APP);
   await signIn(ada.token);
-  await A.click('#tabs [data-tab=chat]');
+  await A.click('#tabs [data-tab=tools]'); await A.until(`!!document.querySelector('#menu [data-tool=chat]')`); await A.click('#menu [data-tool=chat]');
   ok(await A.until(`document.querySelector('#chat .ch-pins .cp-add')?.textContent.includes('Pin a stack')`), 'an empty chat offers to pin a stack, doc or folder');
   await A.ev(`document.querySelector('#chat .ch-pins .cp-add').click()`);
   ok(await A.until(`[...document.querySelectorAll('#menu .mh')].some((x) => x.textContent === 'Stacks') && [...document.querySelectorAll('#menu .mh')].some((x) => x.textContent === 'Agents')`), 'the pin menu lists stacks and agents');
@@ -86,13 +86,13 @@ try {
   await A.ev(`document.querySelector('#menu').classList.add('hidden')`);
   // Ben sees the pin.
   await signIn(ben.token);
-  await A.click('#tabs [data-tab=chat]');
+  await A.click('#tabs [data-tab=tools]'); await A.until(`!!document.querySelector('#menu [data-tool=chat]')`); await A.click('#menu [data-tool=chat]');
   ok(await A.until(`document.querySelector('#chat .ch-pins .cp[data-kind=stack] .cp-name')?.textContent === 'Henderson job'`), 'Ben sees the pinned stack');
   await A.ev(`document.querySelector('#chat .ch-pins .cp[data-kind=stack] .cp-open').click()`);
   ok(await A.until(`!!document.querySelector('#chat .ch-shelf')`), 'and opens it beside the feed');
   await A.ev(`document.querySelector('#chat .ch-shelf .shelf-acts .btn').click()`);
   ok(await A.until(`document.querySelector('#tabs [data-tab=column]')?.classList.contains('on') || !document.querySelector('#column')?.classList.contains('hidden')`), 'Open takes him to the whole stack');
-  await A.click('#tabs [data-tab=chat]');
+  await A.click('#tabs [data-tab=tools]'); await A.until(`!!document.querySelector('#menu [data-tool=chat]')`); await A.click('#menu [data-tool=chat]');
   await sleep(300);
   await A.ev(`document.querySelector('#chat .ch-pins .cp[data-kind=stack] .cp-open').click()`);
   await A.until(`!!document.querySelector('#chat .ch-shelf')`);

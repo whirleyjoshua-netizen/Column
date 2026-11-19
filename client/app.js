@@ -540,7 +540,7 @@
       S.panes = S.panes.map((v) => (v.startsWith('stack:') && !stackById(v.slice(6)) ? 'files' : v));
       buildPanes();
       if (C.view.startsWith('ch:') && !channelById(viewChannel(C.view))) C.view = 'chat';
-      if (S.tab === 'chat') openChannel(C.view);
+      if (chatOn()) openChannel(C.view);
       else renderChatSide();
       if (!$('#settings').classList.contains('hidden')) renderSettings();
       if (toolOpen === 'folders' || (toolOpen && !toolOn(toolOpen))) renderTool();
@@ -1081,7 +1081,7 @@
     buildPanes();
     renderDay();
     renderCamps();
-    if (S.tab === 'chat') openChannel(C.view);
+    if (chatOn()) openChannel(C.view);
     else renderChatSide();
   }
 
@@ -1441,7 +1441,7 @@
   function composer(pane) {
     const view = pane._view;
     const chan = channelById(viewChannel(view));
-    const ta = h('textarea', { rows: 1, placeholder: viewThread(view) ? 'Reply…' : chan ? `Message #${chan.name}` : view === 'chat' && S.tab === 'chat' ? 'Message #general' : isChatView(view) || view === 'all' ? 'Message…' : 'Paste or type a note…' });
+    const ta = h('textarea', { rows: 1, placeholder: viewThread(view) ? 'Reply…' : chan ? `Message #${chan.name}` : view === 'chat' && chatOn() ? 'Message #general' : isChatView(view) || view === 'all' ? 'Message…' : 'Paste or type a note…' });
     const chat = isChatView(view);
     const links = []; // picked but not sent yet
     const tray = h('div', { class: 'tray hidden' });
@@ -2473,7 +2473,7 @@
   const hasFiles = (dt) => dt && [...dt.types].includes('Files');
   let dragDepth = 0;
   function paneAt(target) {
-    return target?.closest?.('.pane') || (S.tab === 'chat' ? C.pane : document.querySelector('#panes .pane'));
+    return target?.closest?.('.pane') || (chatOn() ? C.pane : document.querySelector('#panes .pane'));
   }
   function clearDropping() {
     document.querySelectorAll('.dropping').forEach((p) => p.classList.remove('dropping'));
@@ -2642,7 +2642,7 @@
     if (!S.token || $('#app').classList.contains('hidden')) return;
     const files = [...(e.clipboardData?.files || [])];
     const inField = e.target.closest?.('input, textarea');
-    const view = S.tab === 'chat' ? C.view : S.panes.find((v) => v !== 'chat') || 'all';
+    const view = chatOn() ? C.view : S.panes.find((v) => v !== 'chat') || 'all';
     if (files.length) {
       e.preventDefault();
       files.forEach((f, i) => {
@@ -2657,7 +2657,7 @@
       if (text?.trim()) setComposer(text.trim());
       return;
     }
-    if (S.tab === 'chat') return;
+    if (chatOn()) return;
     if (text?.trim()) api('POST', '/items', { type: 'text', text, stackId: viewStack(view) }).catch((er) => toast(er.message));
   });
 
@@ -3133,11 +3133,12 @@
   // Company HQ, Business card and Signatures are in Settings → Business. News is on Home (turned on in Settings).
   // Sidekick's panel (the owner, 2026-11-14): one assistant on every page. See "Sidekick, on every page".
   const SKD = { open: false, view: 'home', draft: '', busy: false, noPage: false, here: false };
-  const MAIN_TABS = ['chat', 'agents', 'work'];
+  // Chat moved into Tools (the owner, 2026-11-20): it opens in the split beside the page, like Stacks.
+  const MAIN_TABS = ['agents', 'work'];
   // Tasks (the owner, 2026-11-15): what was Day is Workspace's first tab, and Workspace always opens on it.
   const WORK_TABS = ['day', 'contacts', 'projects', 'camps', 'docs', 'automations', 'tools'];
   // What Workspace → Tools lists. Stacks is a view (S.tab 'column'); the rest open in #tool. While one is open, Tools stays lit.
-  const TOOL_PAGE = ['column', 'templates', 'inventory', 'bills', 'email', 'meetings', 'map', 'vault'];
+  const TOOL_PAGE = ['chat', 'column', 'templates', 'inventory', 'bills', 'email', 'meetings', 'map', 'vault'];
   const BAR_ITEMS = {
     column: { label: 'Stacks', view: true },
     chat: { label: 'Chat', view: true },
@@ -3236,7 +3237,7 @@
     rec: { icon: '🛠️', name: 'Job or record', label: (id) => { const at = recEverywhere(id); return at?.p && recName(prType(at.p, at.r.typeId), at.r); }, open: (id) => prLoadAll().then(() => openRecord(id)), on: (id) => !$('#projects').classList.contains('hidden') && PR.panel === id },
     proj: { icon: '📋', name: 'Project', label: (id) => projById(id)?.name, gone: (id) => !projById(id), open: (id) => openProject(id), on: (id) => !$('#projects').classList.contains('hidden') && PR.open === id && !PR.panel },
     camp: { icon: '🎯', name: 'Campaign', label: (id) => campById(id)?.name, gone: (id) => !campById(id), open: (id) => { closeProjects(); openCampaign(id); }, on: (id) => S.tab === 'camps' && K.open === id },
-    chan: { icon: '#', name: 'Chat feed', label: (id) => channelById(id)?.name, gone: (id) => !channelById(id), open: (id) => { closeProjects(); setTab('chat'); openChannel('ch:' + id); }, on: (id) => S.tab === 'chat' && C.view === 'ch:' + id },
+    chan: { icon: '#', name: 'Chat feed', label: (id) => channelById(id)?.name, gone: (id) => !channelById(id), open: (id) => { closeProjects(); setTab('chat'); openChannel('ch:' + id); }, on: (id) => chatOn() && C.view === 'ch:' + id },
     stack: { icon: '🗂️', name: 'Stack', label: (id) => stackById(id)?.name, gone: (id) => !stackById(id), open: (id) => { closeProjects(); showStack(id); }, on: (id) => (S.tab === 'column' || splitOpen === 'column') && S.panes[0] === 'stack:' + id },
     doc: { icon: '📄', name: 'Doc', label: (id) => { const d = S.items.find((x) => x.id === id); return d && docTitle(d); }, gone: (id) => !S.items.some((x) => x.id === id), open: (id) => { closeProjects(); goTo('doc:' + id); }, on: () => false },
   };
@@ -3397,7 +3398,11 @@
     });
   }
 
+  // Chat showing: in the split (2026-11-20), or the old page if anything still sets it.
+  const chatOn = () => S.tab === 'chat' || splitOpen === 'chat';
   function setTab(tab) {
+    // Everything that opened the Chat page (links, pins, notifications) opens Chat in the split now.
+    if (tab === 'chat') return openChat();
     S.tab = tab;
     markTabs();
     $('#home').classList.toggle('hidden', tab !== 'home');
@@ -3406,11 +3411,10 @@
     const panesWere = $('#panes').classList.contains('hidden');
     $('#panes').classList.toggle('hidden', tab !== 'column' && splitOpen !== 'column');
     if (panesWere && tab === 'column') keepPanesScroll($('#panes'), true);
-    $('#chat').classList.toggle('hidden', tab !== 'chat');
+    $('#chat').classList.toggle('hidden', splitOpen !== 'chat');
     $('#campsWrap').classList.toggle('hidden', tab !== 'camps');
     if (tab === 'camps') renderCamps();
     if (tab === 'day') renderDay();
-    if (tab === 'chat') openChannel(C.view);
   }
   // ---------- the side toolbar ----------
   // When there's room (900px and wider) it's a sidebar, which can fold to icons (this device remembers). In a docked
@@ -8728,7 +8732,7 @@
   }
   const unreadAt = (view) => unreadItems(view).some(mentionsMe);
   function markRead() {
-    if (S.tab !== 'chat' || document.hidden) return;
+    if (!chatOn() || document.hidden) return;
     C.lastRead[C.view] = Date.now();
     store.set('lastRead', C.lastRead);
   }
@@ -8736,7 +8740,7 @@
     markRead();
     renderChatSide();
   }
-  document.addEventListener('visibilitychange', () => S.tab === 'chat' && chatChanged());
+  document.addEventListener('visibilitychange', () => chatOn() && chatChanged());
 
   function buildChat() {
     const root = $('#chat');
@@ -8783,7 +8787,7 @@
   function openThread(id) {
     const root = S.items.find((x) => x.id === id);
     if (!root) return;
-    if (S.tab !== 'chat') setTab('chat');
+    if (!chatOn()) openChat();
     const feed = root.channelId ? 'ch:' + root.channelId : 'chat';
     if (C.view !== feed) openChannel(feed);
     if (C.thread?._view === 'th:' + id) return C.thread.querySelector('textarea')?.focus();
@@ -9033,7 +9037,7 @@
   // feed; the feed takes cards from the open stack, as links.
   function chatDropAt(target) {
     const it = S.internalDrag && S.dragItem?.it;
-    if (!it || S.tab !== 'chat' || !target?.closest) return null;
+    if (!it || !chatOn() || !target?.closest) return null;
     const chip = target.closest('.ch-pins .cp:not(.locked)');
     if (chip && (chip.dataset.kind === 'stack' || chip.dataset.kind === 'dir')) return { el: chip, to: chip.dataset.kind === 'stack' ? { stackId: chip.dataset.id } : { dirId: chip.dataset.id } };
     if (C.panel?.kind === 'dir' && target.closest('.ch-dir')) {
@@ -9356,7 +9360,7 @@
     if (!S.workspace) return;
     drawChatPins();
     const views = ['chat', ...(S.workspace.channels || []).map((c) => 'ch:' + c.id)];
-    const news = views.some((v) => !(S.tab === 'chat' && v === C.view) && unread(v));
+    const news = views.some((v) => !(chatOn() && v === C.view) && unread(v));
     for (const n of tabNavs()) {
       n.querySelector('[data-tab="chat"]')?.classList.toggle('dot', news);
       n.querySelector('[data-tab="home"]')?.classList.toggle('dot', news && !n.querySelector('[data-tab="chat"]'));
@@ -10841,12 +10845,12 @@
   }
 
   // ---------- tools: small apps that open in a drawer, so the tabs stay as they are ----------
-  const TOOLS = { agents: { name: 'Your team', render: agentsTool }, hq: { name: 'Company HQ', render: hqTool }, sidekick: { name: 'Sidekick', render: sidekickTool }, docs: { name: 'Folders & Docs', render: docsTool }, bills: { name: 'Finance', render: financeTool }, contacts: { name: 'Contacts', render: contactsTool }, email: { name: 'Email', render: emailTool }, meetings: { name: 'Meeting notes', render: meetingsTool }, planner: { name: 'Planner', render: plannerTool }, folders: { name: 'Folders & Docs', render: foldersTool }, map: { name: 'Map', render: mapTool }, signs: { name: 'Signatures', render: signsTool }, cards: { name: 'Business card', render: cardTool }, templates: { name: 'Templates', render: () => templatesTool() }, inventory: { name: 'Inventory', render: () => inventoryTool() }, automations: { name: 'Automations', render: () => automationsTool() }, column: { name: 'Stacks', render: () => [stacksInSplit()] }, tools: { name: 'Tools', render: toolsPage }, vault: { name: 'Vault', render: vaultTool }, news: { name: 'News', render: () => NEWS.render() } };
+  const TOOLS = { agents: { name: 'Your team', render: agentsTool }, hq: { name: 'Company HQ', render: hqTool }, sidekick: { name: 'Sidekick', render: sidekickTool }, docs: { name: 'Folders & Docs', render: docsTool }, bills: { name: 'Finance', render: financeTool }, contacts: { name: 'Contacts', render: contactsTool }, email: { name: 'Email', render: emailTool }, meetings: { name: 'Meeting notes', render: meetingsTool }, planner: { name: 'Planner', render: plannerTool }, folders: { name: 'Folders & Docs', render: foldersTool }, map: { name: 'Map', render: mapTool }, signs: { name: 'Signatures', render: signsTool }, cards: { name: 'Business card', render: cardTool }, templates: { name: 'Templates', render: () => templatesTool() }, inventory: { name: 'Inventory', render: () => inventoryTool() }, automations: { name: 'Automations', render: () => automationsTool() }, column: { name: 'Stacks', render: () => [stacksInSplit()] }, chat: { name: 'Chat', render: () => [chatInSplit()] }, tools: { name: 'Tools', render: toolsPage }, vault: { name: 'Vault', render: vaultTool }, news: { name: 'News', render: () => NEWS.render() } };
   let toolOpen = null;
   // The split (the owner, 2026-11-16): Tools, and every tool in it or in Settings → Business, opens in a panel on the
   // right of whatever page is showing, wherever it's opened from (a link, Home, Sidekick, Settings), with a button to
   // fill the page and back. On a phone it fills the screen, as tools always have. One at a time; the page stays.
-  const SPLIT_TOOLS = new Set(['tools', 'column', 'templates', 'inventory', 'bills', 'email', 'meetings', 'map', 'vault', 'hq', 'cards', 'signs']);
+  const SPLIT_TOOLS = new Set(['tools', 'chat', 'column', 'templates', 'inventory', 'bills', 'email', 'meetings', 'map', 'vault', 'hq', 'cards', 'signs']);
   let splitOpen = null;
   let splitFull = false;
   const toolShown = (k) => toolOpen === k || splitOpen === k;
@@ -11600,15 +11604,41 @@
   // Tools to browse: a drop-down list under the Tools tab (the owner, 2026-11-20: "tools… just in a list form in a
   // drop down column when browsing"). Picking one opens it in the split, as before. The page (toolsPage) stays for
   // anything that still opens 'tools' in the split.
+  // A tool's description, only on hover (the owner, 2026-11-20): a bubble beside the row while the pointer is on it.
+  // Touch screens have no hover, so there's nothing to show there; the name says enough.
+  function toolTips() {
+    if (!matchMedia('(hover: hover)').matches) return;
+    const tip = h('div', { class: 'tool-tip', role: 'tooltip', hidden: true });
+    document.body.append(tip);
+    const menu = $('#menu');
+    const gone = new MutationObserver(() => { if (!menu?.isConnected || menu.classList.contains('hidden') || !menu.querySelector('.tool-drop-item')) { tip.remove(); gone.disconnect(); } });
+    if (menu) gone.observe(menu, { attributes: true, childList: true });
+    for (const it of document.querySelectorAll('#menu .tool-drop-item')) {
+      const row = it.closest('button') || it;
+      row.addEventListener('mouseenter', () => {
+        tip.textContent = it.dataset.tip || '';
+        if (!tip.textContent) return;
+        tip.hidden = false;
+        const r = row.getBoundingClientRect(), m = (menu || row).getBoundingClientRect();
+        const w = Math.min(260, innerWidth - 16);
+        tip.style.maxWidth = w + 'px';
+        const right = m.right + 8 + w <= innerWidth;
+        tip.style.left = (right ? m.right + 8 : Math.max(8, m.left - 8 - tip.offsetWidth)) + 'px';
+        tip.style.top = Math.min(innerHeight - tip.offsetHeight - 8, r.top + r.height / 2 - tip.offsetHeight / 2) + 'px';
+      });
+      row.addEventListener('mouseleave', () => { tip.hidden = true; });
+    }
+  }
   function toolsDrop(anchor) {
     const { ROWS, rows, note } = toolRows();
     // From the drawer (it closes as you tap), the list drops from ☰ instead.
     const ok = anchor && anchor.isConnected && anchor.getBoundingClientRect().width > 0 && !(anchor.closest('#side') && !document.body.classList.contains('wide'));
     openMenu(ok ? anchor : $('#menuBtn') || anchor, [
       { head: 'Tools' },
-      ...rows.map((k) => ({ label: h('span', { class: 'tool-drop-item', 'data-tool': k }, h('span', { class: 'tab-ic', html: TAB_IC[k] || TAB_IC.tools }), h('span', { class: 'tool-drop-t' }, ROWS[k].name, h('small', {}, ROWS[k].sub))), on: splitOpen === k, run: () => (ROWS[k].run ? ROWS[k].run() : openTool(k)) })),
+      ...rows.map((k) => ({ label: h('span', { class: 'tool-drop-item', 'data-tool': k, 'data-tip': ROWS[k].sub, 'aria-description': ROWS[k].sub }, h('span', { class: 'tab-ic', html: TAB_IC[k] || TAB_IC.tools }), h('span', { class: 'tool-drop-t' }, ROWS[k].name)), on: splitOpen === k, run: () => (ROWS[k].run ? ROWS[k].run() : openTool(k)) })),
       { note },
     ]);
+    toolTips();
   }
   function toolsPage() {
     const { ROWS, rows, note } = toolRows();
@@ -11623,6 +11653,7 @@
     const tight = budgetAlerts().length;
     const waiting = SG.list.filter((x) => x.status === 'sent' || x.status === 'viewed').length;
     const ROWS = {
+      chat: { name: 'Chat', sub: 'Your team’s feeds and messages', run: () => openChat() },
       column: { name: 'Stacks', sub: 'Cards, files and links in shared stacks', run: () => openStacks() },
       templates: { name: 'Templates', sub: 'Emails, texts, replies, posts and paperwork to reuse, in automations and by your team' },
       inventory: { name: 'Inventory', sub: INVS.data?.low.length ? `${INVS.data.low.length} low on stock` : 'Parts, materials and equipment: what you have and where', ok: () => toolOn('inventory') },
@@ -11670,8 +11701,10 @@
     const el = $('#split');
     el.classList.remove('hidden');
     el.classList.toggle('wide-tool', name === 'bills');
+    if (name !== 'chat' && $('#split #chat')) chatHome();
     if (splitOpen !== 'column' && $('#split #panes')) { $('#main').insertBefore($('#panes'), $('#chat')); $('#panes').classList.toggle('hidden', S.tab !== 'column'); }
     el.classList.toggle('stacks-split', name === 'column');
+    el.classList.toggle('chat-split', name === 'chat');
     document.body.classList.add('split-on');
     document.body.classList.toggle('split-full', splitFull);
     closeSide();
@@ -11682,6 +11715,19 @@
   // Stacks in the split (the owner, 2026-11-16): the stacks themselves (#panes, with their drag and drop, uploads and
   // live updates) move into the split while it's showing them, and back under the page when it closes.
   function openStacks() { openSplit('column'); }
+  // Chat in the split (2026-11-20): #chat moves in while it's showing and back (hidden) when it closes. Opening it
+  // goes to the feed you were on, or the one asked for.
+  function openChat(view) {
+    if (splitOpen !== 'chat') openSplit('chat');
+    openChannel(view || C.view);
+  }
+  function chatInSplit() {
+    const el = $('#chat');
+    keepPanesScroll(el, !$('#split').contains(el) || el.classList.contains('hidden'));
+    el.classList.remove('hidden');
+    return el;
+  }
+  const chatHome = () => { const el = $('#chat'); if ($('#split').contains(el)) { keepPanesScroll(el, false); $('#main').insertBefore(el, $('#campsWrap')); } el.classList.add('hidden'); };
   function stacksInSplit() {
     const p = $('#panes');
     keepPanesScroll(p, !$('#split').contains(p) || p.classList.contains('hidden'));
@@ -11711,6 +11757,7 @@
       p.classList.toggle('hidden', S.tab !== 'column');
       $('#split').classList.remove('stacks-split');
     }
+    if (was === 'chat') { chatHome(); $('#split').classList.remove('chat-split'); }
     if (was === 'map' && !MP.run && toolOpen !== 'map') mapUnwatch();
     $('#split').classList.add('hidden');
     document.body.classList.remove('split-on', 'split-full');
@@ -19181,7 +19228,7 @@
     }
     if (toolOpen && toolOpen !== 'agents' && TOOLS[toolOpen]) return { kind: 'tool', id: toolOpen, label: TOOLS[toolOpen].name };
     if (S.tab === 'camps' && K.open && campById(K.open)) return { kind: 'campaign', id: K.open, label: campById(K.open).name };
-    if (S.tab === 'chat' && C.view.startsWith('ch:') && channelById(C.view.slice(3))) return { kind: 'channel', id: C.view.slice(3), label: channelById(C.view.slice(3)).name };
+    if (chatOn() && C.view.startsWith('ch:') && channelById(C.view.slice(3))) return { kind: 'channel', id: C.view.slice(3), label: channelById(C.view.slice(3)).name };
     if ((S.tab === 'column' || splitOpen === 'column') && S.panes[0]?.startsWith('stack:') && stackById(S.panes[0].slice(6))) return { kind: 'stack', id: S.panes[0].slice(6), label: stackById(S.panes[0].slice(6)).name };
     if (S.tab === 'day') return { kind: 'day', id: D.date, label: dueLabel(D.date) };
     return null;

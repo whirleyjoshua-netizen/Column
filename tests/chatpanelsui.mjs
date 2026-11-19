@@ -63,7 +63,7 @@ const visible = (sel) => `(() => { const e = ${sel}; return !!e && e.offsetParen
 try {
   A = await tab(APP);
   await signIn(ada.token);
-  await A.click('#tabs [data-tab=chat]');
+  await A.click('#tabs [data-tab=tools]'); await A.until(`!!document.querySelector('#menu [data-tool=chat]')`); await A.click('#menu [data-tool=chat]');
   ok(await A.until(`!!document.querySelector('#chat .ch-pins .cp[data-kind=doc]') && !!document.querySelector('#chat .ch-pins .cp[data-kind=dir]')`), 'the doc and folder are pinned to #general');
 
   // The doc, beside the feed.
@@ -77,7 +77,7 @@ try {
   ok(await A.ev(`!${panel}`), 'and closes the panel');
   await A.ev(`closeDoc?.(); true`).catch(() => {});
   await A.ev(`document.querySelector('#docview')?.classList.add('hidden'); true`);
-  await A.click('#tabs [data-tab=chat]');
+  await A.click('#tabs [data-tab=tools]'); await A.until(`!!document.querySelector('#menu [data-tool=chat]')`); await A.click('#menu [data-tool=chat]');
 
   // The folder: browse it.
   await A.ev(`document.querySelector('#chat .ch-pins .cp[data-kind=dir] .cp-open').click()`);

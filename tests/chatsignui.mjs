@@ -77,7 +77,7 @@ try {
   const png = await A.ev(`(() => { const c = document.createElement('canvas'); c.width = 300; c.height = 100; const g = c.getContext('2d'); g.lineWidth = 4; g.beginPath(); g.moveTo(10, 80); g.bezierCurveTo(80, 0, 150, 120, 290, 20); g.stroke(); return c.toDataURL('image/png'); })()`);
   await api('PUT', '/signature', { sig: png });
   await signIn(ada.token);
-  await A.click('#tabs [data-tab=chat]');
+  await A.click('#tabs [data-tab=tools]'); await A.until(`!!document.querySelector('#menu [data-tool=chat]')`); await A.click('#menu [data-tool=chat]');
   await A.ev(`[...document.querySelectorAll('#chat .ch-row')].find((b) => b.textContent.includes('crew')).click()`);
   ok(await A.until(`[...document.querySelectorAll('#chat .chat-pane .card')].some((c) => c.textContent.includes('Work order.pdf'))`), 'the PDF is in #crew');
   await A.ev(`[...document.querySelectorAll('#chat .chat-pane .card')].find((c) => c.textContent.includes('Work order.pdf')).querySelector('[aria-label="Sign it"]').click()`);

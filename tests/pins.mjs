@@ -92,7 +92,7 @@ ok(await menuPick('/Pin to Workspace/'), 'the job’s menu has Pin to Workspace'
 ok(await A.until(pinHas('Smith kitchen shades')), 'the job is pinned');
 
 // Pin a feed from the chat side
-await A.click('#tabs [data-tab=chat]');
+await A.click('#tabs [data-tab=tools]'); await A.until(`!!document.querySelector('#menu [data-tool=chat]')`); await A.click('#menu [data-tool=chat]');
 ok(await A.until(`!document.querySelector('#projects:not(.hidden)')`), 'Chat closes Jobs');
 await A.ev(`[...document.querySelectorAll('.ch-row')].find((r) => r.textContent.includes('crew')).querySelector('.ch-more').click()`);
 ok(await menuPick('/Pin to Workspace/'), 'a feed’s menu has Pin to Workspace');

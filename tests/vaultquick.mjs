@@ -95,7 +95,7 @@ ok((await vaultItems()).length === 2 && !(await posted('9921')), 'second item in
 ok(await A.until(`document.querySelector('#split')?.textContent.includes('Alarm')`), 'the vault is unlocked and shows it');
 
 // 3. A message already posted in chat: save it, and delete the plain-text original.
-await A.tap(`document.querySelector('[data-tab=chat]')`);
+await A.ev(`document.querySelector('#tabs [data-tab=tools]').click(); true`); await A.tap(`document.querySelector('#menu [data-tool=chat]')`);
 await A.until(`[...document.querySelectorAll('.composer textarea')].some((x) => x.offsetParent)`);
 await typeIn('supplier acct 12345678901');
 await A.key('Enter');

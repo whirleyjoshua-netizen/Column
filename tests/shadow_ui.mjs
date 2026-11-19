@@ -52,7 +52,7 @@ try {
   ok(await A.until(`!document.querySelector('#app')?.classList.contains('hidden') && !!document.querySelector('#settingsBtn')`, 20000), 'signed in');
 
   // A chat folder's options are the folder's.
-  await A.tap(`[...document.querySelectorAll('#tabs button[data-tab=chat]')].find((e) => e.offsetParent)`);
+  await A.ev(`document.querySelector('#tabs [data-tab=tools]').click(); true`); await A.tap(`document.querySelector('#menu [data-tool=chat]')`);
   ok(await A.until(`!!document.querySelector('.ch-more[aria-label="Folder options"]')`, 10000), 'the Crews folder is in Chat with its options button');
   await A.tap(`document.querySelector('.ch-more[aria-label="Folder options"]')`);
   const menu = await A.ev(`[...document.querySelectorAll('#menu button, #menu .mh')].map((b) => b.textContent).join(' | ')`);

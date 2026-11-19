@@ -69,11 +69,11 @@ try {
   ok(side.l === 0 && side.w >= 220 && side.w <= 240, `a sidebar on the left when there’s room (${JSON.stringify(side)})`);
   ok(!(await A.ev(shown('#menuBtn'))) && (await A.ev(`document.body.classList.contains('wide')`)), 'no ☰ when the sidebar is there');
   const labels = await A.ev(`[...document.querySelectorAll('#tabs [data-tab]:not(.tab-sub)')].map((b) => b.textContent)`);
-  ok(JSON.stringify(labels) === JSON.stringify(['Home', 'Chat', 'Agents', 'Workspace']), `Home, Chat, Agents and Workspace (Tasks is in Workspace), by name, whatever tabs were saved before (${labels})`);
+  ok(JSON.stringify(labels) === JSON.stringify(['Home', 'Agents', 'Workspace']), `Home, Agents and Workspace (Tasks is in Workspace, Chat is in Tools), by name, whatever tabs were saved before (${labels})`);
   ok(await A.ev(`[...document.querySelectorAll('#tabs [data-tab]')].every((b) => b.querySelector('.tab-ic svg'))`), 'each with an icon');
   ok(await A.ev(shown('#settingsBtn')) && !(await A.ev(`!!document.querySelector('#toolsBtn, #tabs .tabs-edit')`)), 'Settings is in it (All tools and pins are in Workspace now, 2026-11-16)');
-  await A.tap(`document.querySelector('#tabs [data-tab=chat]')`);
-  ok(await A.until(`!document.querySelector('#chat').classList.contains('hidden') && document.querySelector('#tabs [data-tab=chat]').classList.contains('on')`), 'picking Chat opens it and marks it');
+  await A.ev(`document.querySelector('#tabs [data-tab=tools]').click(); true`); await A.tap(`document.querySelector('#menu [data-tool=chat]')`);
+  ok(await A.until(`!document.querySelector('#chat').classList.contains('hidden') && !!document.querySelector('#split.chat-split #chat') && !document.querySelector('#tabs [data-tab=chat]')`), 'Chat is in Tools now: picking it opens it in the split (it’s not a sidebar tab)');
   // Settings fills the page beside the sidebar.
   await A.tap(`document.querySelector('#settingsBtn')`);
   ok(await A.until(`!document.querySelector('#settings').classList.contains('hidden')`), 'Settings opens');
@@ -89,7 +89,7 @@ try {
   // Fold it to icons; this device remembers.
   await A.tap(`document.querySelector('#sideFold')`);
   ok(await A.until(`document.querySelector('#side').getBoundingClientRect().width <= 64`), 'it folds to icons');
-  ok(await A.ev(`getComputedStyle(document.querySelector('#tabs [data-tab=chat] .tab-l')).display === 'none' && document.querySelector('#tabs [data-tab=chat]').title === 'Chat'`), 'folded, names show as tooltips');
+  ok(await A.ev(`getComputedStyle(document.querySelector('#tabs [data-tab=agents] .tab-l')).display === 'none' && document.querySelector('#tabs [data-tab=agents]').title === 'Agents'`), 'folded, names show as tooltips');
   await A.ev(`location.reload(); true`);
   ok(await A.until(`document.querySelectorAll('#tabs [data-tab]').length >= 6 && document.querySelector('#side').getBoundingClientRect().width <= 64`, 20000), 'and stays folded after a reload');
   await A.tap(`document.querySelector('#sideFold')`);
@@ -100,7 +100,7 @@ try {
   ok(await A.until(`!document.body.classList.contains('wide')`), 'a 340px column isn’t wide');
   ok(await A.until(`!${shown('#side')}`, 2000) && (await A.ev(shown('#menuBtn'))), 'the toolbar is hidden, with ☰ in the header');
   await sleep(300);
-  ok(await A.ev(`(() => { document.querySelector('#tabs [data-tab=chat]').focus(); return document.activeElement !== document.querySelector('#tabs [data-tab=chat]'); })()`), 'closed, it can’t be tabbed into');
+  ok(await A.ev(`(() => { document.querySelector('#tabs [data-tab=agents]').focus(); return document.activeElement !== document.querySelector('#tabs [data-tab=agents]'); })()`), 'closed, it can’t be tabbed into');
   // The owner, 2026-11-14: in a column and on a phone, the row across the top is your pins, in the old tab style
   // (the tabs themselves are in ☰). Nothing pinned, no row.
   ok(await A.ev(`document.body.classList.contains('column')`) && !(await A.ev(shown('#topTabs'))), 'a column with nothing pinned has no row across the top');

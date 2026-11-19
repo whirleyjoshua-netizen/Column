@@ -68,7 +68,7 @@ try {
   A = await tab(APP);
   await signIn(ada.token);
   ok(await A.ev(`!document.querySelector('#app').classList.contains('hidden')`), 'Ada is in');
-  await A.click('#tabs [data-tab=chat]');
+  await A.click('#tabs [data-tab=tools]'); await A.until(`!!document.querySelector('#menu [data-tool=chat]')`); await A.click('#menu [data-tool=chat]');
   await A.until(`!!document.querySelector('#chat .link-btn')`);
   await A.ev(`document.querySelector('#chat .link-btn').click()`);
   ok(await A.until(`!!document.querySelector('.picker .pk-q')`), 'the link picker opens');
@@ -93,7 +93,7 @@ try {
   // Ben, and a record he can't open
   await api('POST', '/items', { type: 'message', text: `For me: [[record:${sRec.id}]]` });
   await signIn(ben.token);
-  await A.click('#tabs [data-tab=chat]');
+  await A.click('#tabs [data-tab=tools]'); await A.until(`!!document.querySelector('#menu [data-tool=chat]')`); await A.click('#menu [data-tool=chat]');
   ok(await A.until(`[...document.querySelectorAll('#chat .ln-gone')].some((c) => c.textContent.includes('A record') && c.textContent.includes('can’t open'))`, 8000), 'Ben sees a plain “can’t open” chip for Ada’s private record');
   ok(await A.ev(`!document.querySelector('#chat').textContent.includes('Surprise party')`), 'never its name');
   ok(await A.ev(`[...document.querySelectorAll('#chat .ln-record')].some((c) => c.textContent.includes('Henderson shades'))`), 'and the team’s job opens for him as usual');

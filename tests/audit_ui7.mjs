@@ -75,8 +75,8 @@ try {
   ok(p.status === 200, `(setup) a project with an HTML icon (${p.status})`);
   await A.ev(`location.href = '/'; true`);
   await sleep(500);
-  ok(await A.until(`!document.querySelector('#app').classList.contains('hidden') && !!document.querySelector('button[data-tab=chat]')`), '(setup) the app reloads');
-  await A.tap(`[...document.querySelectorAll('button[data-tab=chat]')].find((e) => e.offsetParent)`);
+  ok(await A.until(`!document.querySelector('#app').classList.contains('hidden') && !!document.querySelector('#tabs [data-tab=tools]')`), '(setup) the app reloads');
+  await A.ev(`document.querySelector('#tabs [data-tab=tools]').click(); true`); await A.tap(`document.querySelector('#menu [data-tool=chat]')`);
   ok(await A.until(`[...document.querySelectorAll('.link-btn')].some((e) => e.offsetParent)`), '(setup) Chat has the link button');
   await A.tap(`[...document.querySelectorAll('.link-btn')].find((e) => e.offsetParent)`);
   ok(await A.until(`!!document.querySelector('.pk-q')`), '(setup) the link picker opens');

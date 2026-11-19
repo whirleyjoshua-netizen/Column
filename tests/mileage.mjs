@@ -230,7 +230,7 @@ await A.ev(`document.querySelector('#sheet h2 .icon-btn').click()`);
 
 // /miles in a chat box
 await A.ev(`document.querySelector('#split .split-close').click()`);
-await A.click('#tabs [data-tab=chat]');
+await A.click('#tabs [data-tab=tools]'); await A.until(`!!document.querySelector('#menu [data-tool=chat]')`); await A.click('#menu [data-tool=chat]');
 await A.until(`!!document.querySelector('#chat textarea')`);
 await A.ev(`(() => { const ta = [...document.querySelectorAll('#chat textarea')].find((x) => x.offsetParent); ta.focus(); return 1; })()`);
 await A.cmd('Input.insertText', { text: '/miles 12 bank run' });

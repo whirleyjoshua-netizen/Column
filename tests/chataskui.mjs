@@ -56,7 +56,7 @@ const crew = (await api('POST', '/channels', { name: 'crew', memberIds: [benId] 
 await api('POST', '/docs/pdf', { name: 'Work order', blocks: [{ t: 'h1', runs: [{ text: 'Work order' }] }, { t: 'p', runs: [{ text: 'Sign below.' }] }], channelId: crew.id });
 let A;
 const signIn = async (tok) => { await A.until(`location.origin === new URL(${JSON.stringify(APP)}).origin`, 20000); await A.ev(`localStorage.setItem('column.token', JSON.stringify(${JSON.stringify(tok)})); location.reload(); true`).catch(() => {}); await sleep(1500); await A.until(`!document.querySelector('#app').classList.contains('hidden')`, 20000); await sleep(600); };
-const openCrew = async () => { await A.click('#tabs [data-tab=chat]'); await A.ev(`[...document.querySelectorAll('#chat .ch-row')].find((b) => b.textContent.includes('crew')).click()`); };
+const openCrew = async () => { await A.click('#tabs [data-tab=tools]'); await A.until(`!!document.querySelector('#menu [data-tool=chat]')`); await A.click('#menu [data-tool=chat]'); await A.ev(`[...document.querySelectorAll('#chat .ch-row')].find((b) => b.textContent.includes('crew')).click()`); };
 const card = `[...document.querySelectorAll('#chat .chat-pane .card')].find((c) => c.textContent.includes('Work order.pdf'))`;
 try {
   A = await tab(APP);

@@ -104,13 +104,13 @@ await A.until(`!!document.querySelector('.slash-pop')`);
 await A.key('Escape');
 ok(await A.ev(`!document.querySelector('.slash-pop')`), 'Escape closes the list');
 // In chat too
-await A.tap(`document.querySelector('[data-tab=chat]')`);
+await A.ev(`document.querySelector('#tabs [data-tab=tools]').click(); true`); await A.tap(`document.querySelector('#menu [data-tool=chat]')`);
 await A.until(`!!(${box})`);
 await run('/spent 12 coffee', 'Add money out', ['12', 'coffee'], 'works in chat: /spent 12 coffee');
 // A tool that's off says so, and nothing is posted
 await JA('PATCH', '/workspace', { tools: { bills: false } });
 await reload();
-await A.tap(`document.querySelector('[data-tab=chat]')`);
+await A.ev(`document.querySelector('#tabs [data-tab=tools]').click(); true`); await A.tap(`document.querySelector('#menu [data-tool=chat]')`);
 await A.until(`!!(${box})`);
 await typeIn('/');
 ok(await A.until(`!!document.querySelector('.slash-pop')`) && !(await A.ev(`document.querySelector('.slash-pop').textContent.includes('/spent')`)), 'Finance off: /spent isn’t listed');
