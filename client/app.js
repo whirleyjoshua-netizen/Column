@@ -799,6 +799,7 @@
     if (kind === 'contact') return openContactById(id);
     if (kind === 'approval') return approvalSheet(id);
     if (kind === 'vault') return openTool('vault');
+    if (kind === 'mycard') return showMyCard();
     if (kind === 'auto') { openBarItem('automations'); return api('GET', '/automations').then((l) => { S.automations = l; renderAutos(); const x = l.find((y) => y.id === id); x ? autoSheet(x) : toast('That automation is gone.'); }).catch((e) => toast(e.message)); }
     if (kind === 'card') return openTool('cards');
     if (kind === 'asset') return openAsset(id);
@@ -1816,7 +1817,7 @@
       { cmd: 'meeting', also: ['record'], hint: 'Record a meeting, get the notes', arg: 'what it’s about', on: toolOn('meetings'), off: off('Meeting notes'), run: (t) => askRecord(t) },
       { cmd: 'sidekick', also: ['ask'], hint: 'Plan it with Sidekick', on: toolOn('sidekick'), off: off('Sidekick'), run: () => { SK.open = null; openTool('sidekick'); } },
       { cmd: 'plan', hint: 'Open the Planner', run: () => openTool('planner') },
-      { cmd: 'card', hint: 'Your business card', on: toolOn('cards'), off: off('Business cards'), run: () => openTool('cards') },
+      { cmd: 'card', hint: 'Show your business card', on: toolOn('cards'), off: off('Business cards'), run: () => showMyCard() },
       { cmd: 'map', hint: 'Open the Map', on: toolOn('map'), off: off('Map'), run: () => openMap() },
       { cmd: 'miles', also: ['mileage', 'drove'], hint: 'Log a drive for mileage', arg: '23 supplies run', on: toolOn('map'), off: off('Map'), run: async (t) => { const a = moneyArgs(t); if (!ML.list) await loadMiles(); mileSheet(null, { purpose: a.rest, meters: a.amount ? Math.round(Number(a.amount) * mlPer()) : 0 }); } },
       { cmd: 'sign', also: ['signature'], hint: 'Open Signatures', on: toolOn('signs'), off: off('Signatures'), run: () => openTool('signs') },
@@ -3219,6 +3220,8 @@
   }
   // ----- pins: one particular job, project, campaign, feed, stack or doc, after the tabs. Only you see yours. -----
   const PIN_KINDS = {
+    // Your own business card, full screen (2026-11-19): one tap in a quick greet.
+    card: { icon: '🪪', name: 'Business card', label: () => 'My card', gone: () => !toolOn('cards'), open: () => showMyCard(), on: () => !!$('#myCard') },
     rec: { icon: '🛠️', name: 'Job or record', label: (id) => { const at = recEverywhere(id); return at?.p && recName(prType(at.p, at.r.typeId), at.r); }, open: (id) => prLoadAll().then(() => openRecord(id)), on: (id) => !$('#projects').classList.contains('hidden') && PR.panel === id },
     proj: { icon: '📋', name: 'Project', label: (id) => projById(id)?.name, gone: (id) => !projById(id), open: (id) => openProject(id), on: (id) => !$('#projects').classList.contains('hidden') && PR.open === id && !PR.panel },
     camp: { icon: '🎯', name: 'Campaign', label: (id) => campById(id)?.name, gone: (id) => !campById(id), open: (id) => { closeProjects(); openCampaign(id); }, on: (id) => S.tab === 'camps' && K.open === id },
@@ -3366,6 +3369,7 @@
         ...group('Campaigns', 'camp', (S.campaigns || []).filter((c) => c.status !== 'done'), (x) => x.name),
         ...group('Chat feeds', 'chan', (S.workspace?.channels || []).filter((c) => !c.memberIds || c.ownerId === S.me?.memberId || c.memberIds.includes(S.me?.memberId)), (x) => x.name),
         ...group('Stacks', 'stack', S.workspace?.stacks || [], (x) => x.name),
+        ...(toolOn('cards') && !pins.some((y) => y.go === 'card:me') ? [{ head: 'Business card' }, opt('card', 'me', 'My card')] : []),
         { note: 'For one job or doc, open it and use 📌 in its ⋯ menu.' },
       ];
       openMenu(e.currentTarget, items);
@@ -17379,6 +17383,55 @@
     img.onerror = () => { URL.revokeObjectURL(url); toast('That photo couldn’t be read. Try a JPEG or PNG.'); };
     img.src = url;
   }
+  // Your card, full screen (2026-11-19): the big QR code to point a camera at, and Share (AirDrop, text) under it.
+  // From your pins, Show my card, /card, or the app's icon (hold it on Android). The screen stays on while it's up.
+  async function showMyCard() {
+    $('#myCard')?.remove();
+    const box = h('div', { id: 'myCard', class: 'mycard', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'My card' });
+    let lock = null;
+    const close = () => { box.remove(); try { lock?.release(); } catch {} document.removeEventListener('keydown', esc); markTabs(); };
+    const esc = (e) => { if (e.key === 'Escape') close(); };
+    document.addEventListener('keydown', esc);
+    const shut = h('button', { class: 'icon-btn mycard-close', 'aria-label': 'Close', html: I.close, onclick: close });
+    box.append(shut, h('p', { class: 'day-hint' }, 'Loading your card…'));
+    document.body.append(box);
+    markTabs();
+    try { lock = await navigator.wakeLock?.request('screen'); } catch {}
+    if (!CD.card) { try { CD.card = await api('GET', '/card'); CD.edit = { ...CD.card, links: CD.card.links.map((l) => ({ label: l.label, url: l.url })) }; } catch (e) { toast(e.message); return close(); } }
+    if (!box.isConnected) return;
+    const c = CD.card;
+    if (!c.id || c.off) {
+      box.replaceChildren(shut, h('div', { class: 'mycard-in' }, h('h2', {}, 'Your card isn’t on yet'), h('p', { class: 'day-hint' }, CARD_OFF[c.off] || ''), h('button', { class: 'btn primary-btn', onclick: () => { close(); openTool('cards'); } }, 'Set up my card')));
+      return;
+    }
+    const role = [c.title, c.company].filter(Boolean).join(' · ');
+    const share = async () => { try { if (navigator.share) await navigator.share({ title: c.name || 'My card', url: c.url }); else copyText(c.url); } catch {} };
+    box.replaceChildren(shut, h('div', { class: 'mycard-in' },
+      h('img', { class: 'mycard-qr', src: c.qr, alt: 'QR code for ' + c.url }),
+      h('h2', {}, c.name || 'My card'), role ? h('p', { class: 'mycard-role' }, role) : null,
+      h('p', { class: 'day-hint' }, 'They point their phone’s camera at the code, and your card opens.'),
+      h('div', { class: 'mycard-btns' },
+        h('button', { class: 'btn primary-btn mycard-share', onclick: share }, navigator.share ? 'Share or text it' : 'Copy link'),
+        navigator.share ? h('button', { class: 'btn', onclick: () => copyText(c.url) }, 'Copy link') : null),
+      h('div', { class: 'mycard-more' },
+        pinned('card:me') ? null : h('button', { class: 'linkish mycard-pin', onclick: () => togglePin('card:me', 'My card').then(() => box.querySelector('.mycard-pin')?.remove()) }, '📌 Pin it, so it’s one tap away'),
+        h('button', { class: 'linkish mycard-home', onclick: () => cardHomeSheet() }, 'Put it on my Home Screen'))));
+  }
+  // Its own icon on the phone, opening straight to the code (/c/<address>/show needs no sign-in, so it works from an
+  // icon outside the app too).
+  function cardHomeSheet() {
+    const c = CD.card;
+    if (!c?.url) return;
+    const url = c.url + '/show';
+    const ios = /iPhone|iPad|iPod/.test(navigator.userAgent);
+    sheet('Put it on your Home Screen', [
+      h('p', { class: 'day-hint' }, 'You get a “My card” icon that opens straight to your QR code and Share. No signing in, no menus.'),
+      h('ol', { class: 'card-home-steps' }, ...(ios
+        ? [h('li', {}, 'Open the page below in Safari.'), h('li', {}, 'Tap Share (the square with the arrow), then Add to Home Screen.'), h('li', {}, 'Tap Add. Keep it on your first screen, or in the Dock.')]
+        : [h('li', {}, 'Open the page below in Chrome.'), h('li', {}, 'Tap ⋮, then Add to Home screen (or Install).'), h('li', {}, 'Tap Add. You can also hold the Kloomie icon and pick Show my card.')])),
+      h('div', { class: 'btns' }, h('a', { class: 'btn primary-btn card-home-open', href: url, target: '_blank', rel: 'noopener' }, 'Open the page'), h('button', { class: 'btn', onclick: () => copyText(url) }, 'Copy its address')),
+    ], null);
+  }
   function cardQrSheet() {
     const c = CD.card;
     sheet('Your card’s QR code', [h('p', { class: 'day-hint' }, 'Hold this up: they point their phone’s camera at it and your card opens. No app needed.'),
@@ -17428,9 +17481,14 @@
         h('label', { class: 'toggle' }, (() => { const t = h('input', { type: 'checkbox' }); t.checked = !!live; t.addEventListener('change', () => saveCard({ on: t.checked })); return t; })(), h('i'))),
       live ? h('div', { class: 'card-share' },
         h('button', { class: 'btn primary-btn', onclick: share }, navigator.share ? 'Share or text it' : 'Copy link'),
-        h('button', { class: 'btn', onclick: cardQrSheet }, 'Show QR code'),
+        h('button', { class: 'btn card-show-btn', onclick: () => showMyCard() }, 'Show my card'),
         h('a', { class: 'btn', href: c.url, target: '_blank', rel: 'noopener' }, 'Open my card'),
         navigator.share ? h('button', { class: 'btn', onclick: () => copyText(c.url) }, 'Copy link') : null, nfc) : null,
+      live ? h('div', { class: 'card-quick' }, h('b', {}, 'Ready in a second'),
+        h('small', {}, 'For a quick hello: your card full screen, its QR code and Share, without going through menus.'),
+        h('div', { class: 'btns' },
+          h('button', { class: 'btn small card-pin', onclick: () => togglePin('card:me', 'My card') }, pinned('card:me') ? 'Unpin from my pins' : '📌 Pin it (one tap in Workspace)'),
+          h('button', { class: 'btn small card-home', onclick: () => cardHomeSheet() }, 'Put it on my Home Screen'))) : null,
       live ? h('p', { class: 'day-hint' }, nfc ? 'Tap to share: hold a blank NFC card or sticker to this phone and choose Write to an NFC tag. Then anyone who taps it with their phone gets your card.'
         : 'Tap to share: put your card’s link on an NFC card or sticker (most sellers program it for you). Anyone who taps it with their phone gets your card.') : null,
       c.id ? h('div', { class: 'card-stats' }, [['views', 'Opened'], ['saves', 'Saved you'], ['leads', 'Shared their info']].map(([k, label]) => h('span', {}, h('b', {}, String(c[k] || 0)), label))) : null,

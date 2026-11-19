@@ -172,15 +172,15 @@ export function cardsModule({ db, save, readJson, send, rid, escHtml, brandOf, l
 
   // ---------- the public card ----------
   const HEAD = { 'X-Robots-Tag': 'noindex', 'Referrer-Policy': 'no-referrer', 'X-Content-Type-Options': 'nosniff' };
-  function page(res, code, c, body) {
+  function page(res, code, c, body, head = '') {
     const ws = c && db.workspaces[c.wsId];
     const brand = ws ? brandOf(ws) : {};
     const accent = /^#[0-9a-f]{6}$/i.test(brand.accent || '') ? brand.accent : '#6b5cf0';
     res.writeHead(code, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', ...HEAD,
-      'Content-Security-Policy': `default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; script-src 'self'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'` });
+      'Content-Security-Policy': `default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; script-src 'self'; connect-src 'self'; manifest-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'` });
     const title = c ? [c.name, c.title && c.company ? `${c.title}, ${c.company}` : c.title || c.company].filter(Boolean).join(' · ') : 'Not available';
     res.end(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escHtml(title)}</title>
-<meta name="theme-color" content="${accent}"><style>:root{color-scheme:light;--accent:${accent}}*{box-sizing:border-box}body{margin:0;font:16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#f3f3f7;color:#16161a}
+<meta name="theme-color" content="${accent}">${head}<style>:root{color-scheme:light;--accent:${accent}}*{box-sizing:border-box}body{margin:0;font:16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#f3f3f7;color:#16161a}
 main{max-width:440px;margin:0 auto;padding:28px 16px 40px}.card{background:#fff;border:1px solid #e4e4ea;border-radius:20px;overflow:hidden;box-shadow:0 6px 24px rgba(20,20,40,.06)}
 .top{background:var(--accent);height:84px;position:relative}.top img.logo{position:absolute;right:14px;top:14px;max-height:34px;max-width:120px;background:#fff;border-radius:8px;padding:4px}
 .who{padding:0 22px 18px;text-align:center}.ph{position:relative;z-index:1;width:104px;height:104px;border-radius:50%;border:4px solid #fff;margin:-52px auto 8px;background:#e9e8f5;display:flex;align-items:center;justify-content:center;font-size:38px;font-weight:700;color:var(--accent);overflow:hidden}
@@ -191,6 +191,7 @@ main{max-width:440px;margin:0 auto;padding:28px 16px 40px}.card{background:#fff;
 .links a small{display:block;font-weight:400;color:#6b6b76}.ask{border-top:1px solid #eee;padding:18px 22px 22px}.ask h2{font-size:17px;margin:0 0 4px}.ask p{color:#6b6b76;margin:0 0 6px;font-size:14px}
 label{display:block;font-size:14px;font-weight:600;margin:10px 0 4px}input,textarea{width:100%;font:inherit;padding:10px 12px;border:1px solid #d6d6de;border-radius:9px}textarea{min-height:76px;resize:vertical}
 button{margin-top:14px;width:100%;font:inherit;font-weight:700;color:#fff;background:var(--accent);border:0;border-radius:10px;padding:12px;cursor:pointer}.share{background:#16161a}.hp{position:absolute;left:-5000px}
+.show{text-align:center;padding:22px 18px 18px}.show img.qr{width:100%;max-width:340px;aspect-ratio:1;background:#fff;border-radius:14px;padding:10px;border:1px solid #e4e4ea}.show h1{margin-top:12px}.show .hint{color:#6b6b76;font-size:14px;margin:8px 0 0}.show .full{display:block;margin-top:12px;color:#6b6b76;font-size:14px}
 .err{color:#b42318;font-weight:600}.ok{color:#067647;font-weight:600}.muted{color:#6b6b76;font-size:13px;text-align:center;margin-top:16px}.muted a{color:inherit}</style></head>
 <body><main>${body}<p class="muted">Made with <a href="${escHtml(publicUrl)}/welcome" rel="noopener">Kloomie</a></p></main>${c ? '<script src="/card.js"></script>' : ''}</body></html>`);
   }
@@ -304,6 +305,28 @@ ${c.links.length ? `<div class="links">${c.links.map((l, i) => `<a href="${escHt
       const file = (slug(c.name) || c.handle) + '.vcf';
       return send(res, 200, await vcard(c), { 'Content-Type': 'text/vcard; charset=utf-8', 'Content-Disposition': `attachment; filename="${file}"`, 'Cache-Control': 'no-store', ...HEAD });
     }
+    // Showing your card in a hurry (2026-11-19): just the big QR code and Share, made to sit on a phone's Home Screen
+    // as its own icon ("My card"), which opens straight here. Not counted as someone opening the card.
+    mm = /^\/c\/([a-z0-9-]+)\/show$/.exec(p);
+    if (mm && req.method === 'GET') {
+      const c = byHandle(mm[1]);
+      if (!c) return notFound(res);
+      const icon = c.photo ? `/c/${c.handle}/photo/${c.photo.id}` : '/icon-192.png';
+      const role = [c.title, c.company].filter(Boolean).join(' · ');
+      const head = `<link rel="manifest" href="/c/${escHtml(c.handle)}/manifest.webmanifest"><link rel="apple-touch-icon" href="${escHtml(icon)}"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-title" content="My card">`;
+      return page(res, 200, c, `<div class="card show" data-card="${escHtml(c.handle)}" data-show="1"><img class="qr" src="/c/${escHtml(c.handle)}/qr.svg" alt="QR code for ${escHtml(c.name || 'this card')}"><h1>${escHtml(c.name || 'Business card')}</h1>${role ? `<p class="role">${escHtml(role)}</p>` : ''}
+<p class="hint">Point your phone’s camera at the code.</p><button type="button" class="share" id="shareBtn" hidden>Share or text it</button><a class="full" href="/c/${escHtml(c.handle)}">See the full card</a></div>`, head);
+    }
+    mm = /^\/c\/([a-z0-9-]+)\/manifest\.webmanifest$/.exec(p);
+    if (mm && req.method === 'GET') {
+      const c = byHandle(mm[1]);
+      if (!c) return send(res, 404, 'Not found');
+      const ws = db.workspaces[c.wsId];
+      const accent = /^#[0-9a-f]{6}$/i.test(brandOf(ws).accent || '') ? brandOf(ws).accent : '#6b5cf0';
+      const icons = c.photo ? [{ src: `/c/${c.handle}/photo/${c.photo.id}`, sizes: '512x512', type: c.photo.mime }] : [{ src: '/icon-192.png', sizes: '192x192', type: 'image/png' }, { src: '/icon-512.png', sizes: '512x512', type: 'image/png' }];
+      const mf = { name: c.name ? `${c.name}’s card` : 'My card', short_name: 'My card', start_url: `/c/${c.handle}/show`, scope: `/c/${c.handle}/`, display: 'standalone', background_color: '#f3f3f7', theme_color: accent, icons };
+      return send(res, 200, JSON.stringify(mf), { 'Content-Type': 'application/manifest+json; charset=utf-8', 'Cache-Control': 'no-store', ...HEAD });
+    }
     mm = /^\/c\/([a-z0-9-]+)\/tap$/.exec(p);
     if (mm && req.method === 'POST') {
       const c = byHandle(mm[1]);
@@ -339,6 +362,7 @@ ${c.links.length ? `<div class="links">${c.links.map((l, i) => `<a href="${escHt
   // The card page's only script: Share (the phone's share sheet, or copy the link) and counting taps on links.
   const JS = `(function(){var c=document.querySelector('[data-card]');if(!c)return;var h=c.getAttribute('data-card');var b=document.getElementById('shareBtn');
 if(b){b.hidden=false;b.addEventListener('click',function(){var u=location.origin+'/c/'+h;if(navigator.share){navigator.share({title:document.title,url:u}).catch(function(){});}else if(navigator.clipboard){navigator.clipboard.writeText(u).then(function(){b.textContent='Link copied';});}});}
+if(c.hasAttribute('data-show')&&navigator.wakeLock){var k=function(){navigator.wakeLock.request('screen').catch(function(){});};k();document.addEventListener('visibilitychange',function(){if(!document.hidden)k();});}
 c.addEventListener('click',function(e){var a=e.target.closest('a[data-tap]');if(!a)return;var i=a.getAttribute('data-tap');if(!/^\\d+$/.test(i))return;try{fetch('/c/'+h+'/tap?i='+i,{method:'POST',keepalive:true});}catch(x){}});})();`;
   function script(req, res) {
     return send(res, 200, JS, { 'Content-Type': 'text/javascript; charset=utf-8', 'Cache-Control': 'public, max-age=3600', ...HEAD });

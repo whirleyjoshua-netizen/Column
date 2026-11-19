@@ -559,7 +559,7 @@ const meAccount = (ws, memberId) => {
   return { email: u?.email || null, emailVerified: !!u?.emailVerified, pendingEmail: u?.pendingEmail || null, mail: mailer.mode !== 'off', bar: mem?.bar || null, pins: mem?.pins || [], stars: mem?.docStars || [], feedTop: !!mem?.feedTop, twoStep: TS.on(u) };
 };
 // What each person keeps on their tab bar after Home and Day (theirs alone, in their order). Null: the usual three.
-const PIN_RE = /^(rec|proj|camp|chan|stack|doc):[A-Za-z0-9_-]{1,64}$/;
+const PIN_RE = /^(rec|proj|camp|chan|stack|doc|card):[A-Za-z0-9_-]{1,64}$/;
 const MAX_PINS = 12;
 const BAR_KEYS = ['column', 'chat', 'camps', 'agents', 'sidekick', 'docs', 'projects', 'bills', 'contacts', 'email', 'folders', 'meetings', 'map', 'signs', 'vault', 'news'];
 
