@@ -10,7 +10,9 @@ const DIR = S + '/dk/camp_builder_ui';
 FS.rmSync(DIR, { recursive: true, force: true });
 FS.mkdirSync(DIR, { recursive: true });
 const PORT = 5234, CDP = 9575, APP = `http://127.0.0.1:${PORT}/`;
-const srv = spawn('node', ['index.js'], { cwd: new URL('../server', import.meta.url).pathname, env: { ...process.env, PORT: String(PORT), PUBLIC_URL: APP.slice(0, -1), DATA_DIR: DIR + '/data', MAIL_OUTBOX: '', RESEND_API_KEY: '', DATABASE_URL: '', STRIPE_SECRET_KEY: '', SKIP_SETUP: '1' }, stdio: 'ignore' });
+const AI_PORT = 5236;
+const fakeAi = spawn('node', [new URL('fakeai.mjs', import.meta.url).pathname, DIR + '/ai.log'], { env: { ...process.env, FAKEAI_PORT: String(AI_PORT) }, stdio: 'ignore' });
+const srv = spawn('node', ['index.js'], { cwd: new URL('../server', import.meta.url).pathname, env: { ...process.env, ANTHROPIC_BASE_URL: `http://127.0.0.1:${AI_PORT}`, PORT: String(PORT), PUBLIC_URL: APP.slice(0, -1), DATA_DIR: DIR + '/data', MAIL_OUTBOX: '', RESEND_API_KEY: '', DATABASE_URL: '', STRIPE_SECRET_KEY: '', SKIP_SETUP: '1' }, stdio: 'ignore' });
 const chrome = spawn('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', ['--headless=new', `--remote-debugging-port=${CDP}`, `--user-data-dir=${DIR}/chrome`, '--no-first-run', '--window-size=1280,900', 'about:blank'], { stdio: 'ignore' });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let fails = 0;
@@ -112,12 +114,48 @@ try {
   await A.cmd('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
   await sleep(400);
   ok(await A.ev(`(() => { const m = document.querySelector('#sheet .cb-main').getBoundingClientRect(), sm = document.querySelector('#sheet .cb-sum').getBoundingClientRect(); return document.documentElement.scrollWidth <= 391 && sm.top >= m.bottom - 1 && [...document.querySelectorAll('#sheet .cb-sec, #sheet .cb-sum')].every((x) => x.getBoundingClientRect().right <= 391 && x.getBoundingClientRect().left >= 0); })()`), 'on a phone: one column (the summary under the form), nothing wider than the screen');
+  await A.cmd('Emulation.clearDeviceMetricsOverride');
+  await A.ev(`document.querySelector('#sheet [aria-label=Close]')?.click(); true`);
+  await A.until(`document.querySelector('#sheet').classList.contains('hidden')`);
+
+  // Sidekick, beside the form (2026-11-19): plan it by talking, then fill in the form or build it all.
+  await api('PUT', '/ai/keys/anthropic', { key: 'test-key-for-the-fake-ai' });
+  await A.ev(`openCampaign && true`).catch(() => {});
+  await A.ev(`document.querySelector('#tabs [data-tab=camps]').click(); true`);
+  await A.until(`[...document.querySelectorAll('#camps button')].some((b) => b.textContent === '← All campaigns' || b.textContent === '+ New' || b.getAttribute('aria-label') === 'All campaigns')`, 5000);
+  await A.ev(`(() => { const b = [...document.querySelectorAll('#camps button')].find((x) => x.getAttribute('aria-label') === 'All campaigns' || x.textContent.includes('All campaigns')); b?.click(); return true; })()`);
+  await A.tap(`[...document.querySelectorAll('#camps button')].find((b) => b.textContent === '+ New')`);
+  await A.until(`!!document.querySelector('#sheet .camp-builder')`);
+  ok(await A.ev(`[...document.querySelectorAll('#sheet .cb-tabs button')].map((b) => b.textContent).join('|') === 'Summary|✦ Sidekick builds it'`), 'beside the form: Summary, or Sidekick builds it');
+  await fill(`document.querySelector('#sheet .cb-budget')`, '900');
+  await A.tap(`document.querySelector('#sheet .cb-tabs [data-side=sk]')`);
+  ok(await A.until(`!!document.querySelector('#sheet .cb-sk-ask') && getComputedStyle(document.querySelector('#sheet .cb-sum')).display === 'none'`), 'the Sidekick tab takes the place of the summary');
+  await fill(`document.querySelector('#sheet .cb-sk-ask')`, 'deep plan please');
+  await A.tap(`document.querySelector('#sheet .cb-sk-go')`);
+  ok(await A.until(`document.querySelectorAll('#sheet .cb-sk .sk-card').length >= 4 && !!document.querySelector('#sheet .camp-builder')`, 15000), 'Sidekick answers with its plan as cards, and the builder stays open');
+  for (const label of ['Campaign', 'Roles', 'Goal']) {
+    await A.tap(`[...document.querySelectorAll('#sheet .cb-sk .sk-card')].find((c) => c.querySelector('.sk-card-h')?.textContent === ${JSON.stringify(label)} && c.querySelector('.primary-btn'))?.querySelector('.primary-btn')`);
+    await A.until(`!document.querySelector('#sheet .cb-sk .sk-thinking')`, 8000);
+  }
+  ok(await A.until(`/3 accepted/.test(document.querySelector('#sheet .cb-sk-ready')?.textContent || '')`, 8000), 'cards accepted right there: 3 accepted');
+  ok(await A.ev(`(() => { const box = document.querySelector('#sheet .cb-sk').getBoundingClientRect(); return [...document.querySelectorAll('#sheet .cb-sk > *')].every((e) => e.getBoundingClientRect().bottom <= box.bottom + 1); })()`), 'everything in the Sidekick panel stays inside it');
+  { const shot = await A.cmd('Page.captureScreenshot', { format: 'png' }); FS.writeFileSync(DIR + '/builder-sidekick.png', Buffer.from(shot.result.data, 'base64')); }
+  await A.tap(`document.querySelector('#sheet .cb-sk-fill')`);
+  ok(await A.until(`document.querySelector('#sheet .cb-name')?.value === 'Gym launch' && [...document.querySelectorAll('#sheet .cb-step input')].some((i) => i.value === 'Flyer') && [...document.querySelectorAll('#sheet .cb-role-h input')].some((i) => i.value === 'Designer') && document.querySelector('#sheet .cb-budget').value === '900'`, 8000), 'Fill in the form: the name, the roles and the steps come into the form, and what was typed there stays');
+  ok(await A.ev(`!document.querySelector('#sheet .cb-sk').hidden && !!document.querySelector('#sheet .cb-sk-build')`), 'with the conversation still beside it');
+  await A.tap(`document.querySelector('#sheet .cb-sk-build')`);
+  let g2 = null, goals2 = [], tasks2 = [];
+  for (let i = 0; i < 80; i++) { const s3 = await api('GET', '/state'); g2 = s3.campaigns.find((x) => x.name === 'Gym launch'); goals2 = g2 ? s3.goals.filter((g) => g.campaignId === g2.id) : []; tasks2 = goals2.length ? s3.tasks.filter((t) => goals2.some((g) => g.id === t.goalId)) : []; if (g2 && g2.budget === 90000 && tasks2.length) break; await sleep(150); }
+  ok(g2 && goals2.some((g) => g.title === 'Flyer') && tasks2.some((t) => t.text === 'Design the flyer'), 'Build it: the campaign, its steps and their tasks');
+  ok(g2?.budget === 90000 && g2.cast?.some((r) => r.name === 'Designer'), 'with what was set in the form on top (the $900 budget) and the roles');
+  ok(await A.until(`!document.querySelector('#sheet .camp-builder') && document.querySelector('#camps')?.textContent.includes('Gym launch')`, 8000), 'and the new campaign opens');
   ok(!A.errors.length, 'no errors in the page' + (A.errors.length ? ': ' + A.errors[0] : ''));
 } catch (e) {
   console.log('FAIL threw', e.stack);
   fails++;
 }
 srv.kill();
+fakeAi.kill();
 chrome.kill('SIGKILL');
 console.log(fails ? `${fails} failed` : 'all passed');
 process.exit(fails ? 1 : 0);

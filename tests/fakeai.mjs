@@ -48,4 +48,4 @@ http.createServer((req, res) => {
     else out = { text: 'ok' };
     res.end(JSON.stringify({ id: 'm', type: 'message', role: 'assistant', model: 'claude-test', content: [{ type: 'text', text: JSON.stringify(out) }], stop_reason: 'end_turn', stop_sequence: null, usage: { input_tokens: 1, output_tokens: 1 } }));
   });
-}).listen(4799);
+}).listen(Number(process.env.FAKEAI_PORT) || 4799);

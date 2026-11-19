@@ -3473,3 +3473,21 @@ body.wide .sheet.page-form { border-left: 1px solid var(--line); }
 .inv-kind.on { border-color: var(--accent); background: var(--card); box-shadow: 0 0 0 1px var(--accent) inset; }
 .inv-kind-ic { font-size: 20px; }
 .inv-kind small { color: var(--muted); }
+/* Sidekick beside the campaign builder's form (2026-11-19). */
+.cb-side { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+@media (min-width: 1000px) { .cb-grid { grid-template-columns: minmax(0, 1fr) 360px; } .cb-side { position: sticky; top: 0; max-height: calc(100vh - 150px); } .cb-side .cb-sum { position: static; } }
+.cb-tabs { align-self: stretch; }
+.cb-tabs button { flex: 1; }
+.cb-sk { border: 1px solid var(--line); border-radius: 12px; padding: 12px; background: var(--card); display: flex; flex-direction: column; gap: 8px; min-height: 0; flex: 1; }
+.cb-sk[hidden] { display: none; }
+.cb-sk .day-hint { margin: 0; }
+.cb-sk-chat { flex: 1; min-height: 160px; max-height: 52vh; overflow-y: auto; padding-right: 2px; }
+.cb-sk .sk-compose { display: flex; gap: 6px; align-items: flex-end; }
+.cb-sk .sk-compose textarea { flex: 1; }
+.cb-sk-ready { flex-wrap: wrap; }
+.cb-side .cb-sum[hidden] { display: none; }
+.cb-sk > * { flex: none; }
+.cb-sk > .cb-sk-chat { flex: 1 1 auto; min-height: 140px; max-height: none; }
+.cb-sk .sk-gaps { max-height: 120px; overflow-y: auto; }
+@media (min-width: 1000px) { .cb-sk { overflow: hidden; } }
+@media (max-width: 999px) { .cb-sk > .cb-sk-chat { max-height: 60vh; } }

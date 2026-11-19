@@ -8213,7 +8213,7 @@
   // covering what a campaign is now): what it is, the job it's for, who's on it and their roles, its steps (each can
   // finish a job stage), how work runs, what gets logged, money, and who sees it. A summary of what you'll get stays
   // beside it. The server takes all of it in one go (createCampaign → applyCampaign); steps are added right after.
-  function campaignSheet(c, main, focus) {
+  function campaignSheet(c, main, focus, seed = null) {
     const isNew = !c;
     const D = {
       name: c?.name || '', brief: c?.brief || '', start: c?.start || todayKey(), end: c?.end || '', color: c?.color || COLORS[S.campaigns.length % COLORS.length],
@@ -8222,6 +8222,7 @@
       cast: (c?.cast || []).map((r) => ({ id: r.id, name: r.name, about: r.about || '', memberIds: [...r.memberIds] })),
       outcomes: (c?.outcomes || ['Reached', 'No answer', 'Not interested', 'Booked']).join('\n'), methods: (c?.methods || ['Call', 'Email', 'Visit']).join('\n'),
       steps: [], // new campaigns: { title, stage }
+      ...(seed || {}),
     };
     const owner = !c || c.ownerId === S.me?.memberId;
     const mayOrder = !c || canPass(c);
@@ -8360,8 +8361,104 @@
     }
     drawSum();
 
+    // ---- Sidekick, beside the form (the owner, 2026-11-19: "add the sidekick build my campaign tab inside of the
+    // campaign builder ... to the right over the tile"). Talk it through; it proposes the campaign, its steps and
+    // tasks, roles, lists and budgets as cards to accept or skip. "Fill in the form" brings the name, dates, roles
+    // and steps here to adjust; "Build it" makes all of it, tasks included, with what's set in the form on top.
+    let side = seed?.sk ? 'sk' : 'sum';
+    let skId = seed?.sk || (c ? skFor(c.id)?.id : null);
+    const skOn = toolOn('sidekick') && !main;
+    const skBox = h('div', { class: 'cb-sk' });
+    const tabs = h('div', { class: 'seg seg-sm cb-tabs', role: 'tablist' });
+    const sideBox = h('div', { class: 'cb-side' }, skOn ? tabs : null, sum, skBox);
+    const drawSide = () => {
+      tabs.replaceChildren(...[['sum', 'Summary'], ['sk', '✦ Sidekick builds it']].map(([k, l]) => h('button', { type: 'button', class: side === k ? 'on' : null, role: 'tab', 'aria-selected': String(side === k), 'data-side': k, onclick: () => { side = k; drawSide(); } }, l)));
+      sum.hidden = side !== 'sum';
+      skBox.hidden = side !== 'sk';
+      if (side === 'sk') drawSk();
+    };
+    const fromPlan = (x) => {
+      const ready = skCards(x).filter((y) => y.state === 'accepted' || y.state === 'new');
+      const camp = ready.find((y) => y.type === 'campaign');
+      const roles = ready.find((y) => y.type === 'roles')?.roles || [];
+      const goals = ready.filter((y) => y.type === 'goal');
+      const next = { ...D, sk: x.id };
+      if (camp) Object.assign(next, { name: camp.name || D.name, brief: camp.brief || D.brief, start: camp.start || D.start, end: camp.end || D.end });
+      for (const r of roles) if (!next.cast.some((z) => sameText(z.name, r.name))) next.cast = [...next.cast, { name: r.name, about: r.about || '', memberIds: [...(r.memberIds || [])] }];
+      if (isNew && goals.length) next.steps = [...D.steps.filter((st) => st.title.trim()), ...goals.filter((g) => !D.steps.some((st) => sameText(st.title, g.title))).map((g) => ({ title: g.title, stage: '' }))];
+      return next;
+    };
+    async function buildWithSk(x) {
+      await skBuild(x);
+      const cid = skById(x.id)?.campaignId;
+      if (!cid) return;
+      // What's set in the form goes on top of what Sidekick made.
+      const body = { recordId: D.recordId || null, color: D.color, ...(D.assigneeId ? { assigneeId: D.assigneeId } : {}), ...(D.budget.trim() ? { budget: D.budget.trim() } : {}), ...(D.parentId ? { parentId: D.parentId } : {}), ...(D.follows ? { follows: D.follows } : {}), ...(D.inOrder ? { inOrder: true } : {}), ...(D.private ? { private: true, memberIds: D.memberIds } : {}) };
+      const extra = D.cast.filter((r) => r.name.trim());
+      try {
+        let saved = await api('PATCH', '/campaigns/' + cid, body);
+        if (extra.length) saved = await api('PATCH', '/campaigns/' + cid, { cast: [...(saved.cast || []), ...extra.filter((r) => !(saved.cast || []).some((z) => sameText(z.name, r.name)))] });
+        const i = S.campaigns.findIndex((y) => y.id === cid);
+        if (i >= 0) S.campaigns[i] = saved; else S.campaigns.push(saved);
+        const have = goalsOf(cid).map((g) => g.title.toLowerCase());
+        for (const st of D.steps.filter((y) => y.title.trim() && !have.includes(y.title.trim().toLowerCase()))) { const g = await api('POST', '/goals', { campaignId: cid, title: st.title, kind: 'tasks', ...(st.stage ? { stage: st.stage } : {}) }); if (!S.goals.some((y) => y.id === g.id)) S.goals.push(g); }
+      } catch (e) { toast(e.message); }
+      closeSheet();
+      setTab('camps');
+      openCampaign(cid);
+    }
+    function drawSk() {
+      const x = skId && skById(skId);
+      if (!x) {
+        const ask = h('textarea', { rows: 6, class: 'cb-sk-ask', placeholder: 'What’s it for, who’s it for, when, how big, what has to happen. Sidekick asks what it needs, then lays out the plan.' });
+        ask.value = [D.name.trim(), D.brief.trim()].filter(Boolean).join('. ');
+        const go = async () => {
+          const y = await skCall('POST', '/sidekick', c ? { campaignId: c.id } : { kind: 'campaign' });
+          if (!y) return;
+          skId = y.id;
+          drawSk();
+          if (ask.value.trim()) await skCall('POST', `/sidekick/${y.id}/say`, { text: ask.value.trim() + (D.recordId ? ` (It’s for the job ${jobs().find((j) => j.id === D.recordId)?.label || ''}.)` : '') });
+        };
+        skBox.replaceChildren(
+          h('p', { class: 'day-hint' }, c ? 'Talk about this campaign: what to add, change or fix. Sidekick proposes it as cards; you keep what you like.' : 'Describe the campaign and Sidekick plans it with you: steps and their tasks, who does what, prospect lists, scripts and budgets.'),
+          ask, h('button', { type: 'button', class: 'btn primary-btn cb-sk-go', disabled: SK.busy, onclick: go }, SK.busy ? 'Thinking…' : 'Plan it with Sidekick'),
+          h('small', { class: 'hint' }, 'It uses your team’s AI key (Settings → AI).'));
+        return;
+      }
+      const cards = skCards(x);
+      const ready = cards.filter((y) => y.state === 'accepted');
+      const set = (cd, state) => skCall('PATCH', `/sidekick/${x.id}/cards/${cd.id}`, { state });
+      const card = (cd) => h('div', { class: `sk-card ${cd.state}` }, h('div', { class: 'sk-card-h' }, SK_LABEL[cd.type]), ...skCardBody(cd, x), cd.why ? h('p', { class: 'sk-why' }, cd.why) : null,
+        h('div', { class: 'sk-card-btns' }, cd.state === 'built' ? h('small', { class: 'plan-ok' }, '✓ Added')
+          : cd.state === 'accepted' ? [h('small', { class: 'plan-ok' }, '✓ Accepted'), h('button', { type: 'button', class: 'linkish', onclick: () => set(cd, 'new') }, 'Undo')]
+          : cd.state === 'skipped' ? [h('small', {}, 'Skipped'), h('button', { type: 'button', class: 'linkish', onclick: () => set(cd, 'new') }, 'Undo')]
+          : [h('button', { type: 'button', class: 'btn small primary-btn', onclick: () => set(cd, 'accepted') }, 'Accept'), h('button', { type: 'button', class: 'btn small', onclick: () => set(cd, 'skipped') }, 'Skip')]));
+      const say = h('textarea', { class: 'sk-say', rows: 2, placeholder: SK.busy ? 'Thinking…' : 'Answer, or ask for changes…', disabled: SK.busy });
+      say.value = SK.draft;
+      say.addEventListener('input', () => (SK.draft = say.value));
+      const send = () => { const text = say.value.trim(); if (!text || SK.busy) return; SK.draft = ''; skCall('POST', `/sidekick/${x.id}/say`, { text }).then((y) => { if (!y) SK.draft = text; }); };
+      say.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } });
+      const chat = h('div', { class: 'sk-chat cb-sk-chat' },
+        x.messages.filter((m) => !(m.role === 'user' && x.messages.indexOf(m) === 0)).map((m) => m.role === 'user'
+          ? h('div', { class: 'sk-msg me' }, m.check ? '✓ Check my plan' : m.text)
+          : h('div', { class: 'sk-msg' }, h('div', { class: 'sk-text' }, m.text), (m.cards || []).length ? h('div', { class: 'sk-cards' }, m.cards.map(card)) : null)),
+        SK.busy ? h('div', { class: 'sk-msg sk-thinking' }, 'Thinking…') : null);
+      const gaps = ready.length && x.kind === 'campaign' ? planGaps(ready) : [];
+      skBox.replaceChildren(chat,
+        gaps.length ? h('div', { class: 'sk-gaps' }, h('b', {}, 'Before you build'), h('ul', {}, gaps.map((g) => h('li', {}, g)))) : null,
+        ready.length ? h('div', { class: 'sk-ready cb-sk-ready' }, h('span', {}, `${ready.length} accepted`),
+          h('button', { type: 'button', class: 'btn small', disabled: SK.busy, onclick: () => skCall('POST', `/sidekick/${x.id}/check`, {}) }, 'Check it'),
+          isNew ? h('button', { type: 'button', class: 'btn small cb-sk-fill', disabled: SK.busy, onclick: () => { closeSheet(); campaignSheet(null, main, null, fromPlan(x)); } }, 'Fill in the form') : null,
+          h('button', { type: 'button', class: 'btn small primary-btn cb-sk-build', disabled: SK.busy, onclick: () => (isNew ? buildWithSk(x) : skBuild(x).then(() => { closeSheet(); openCampaign(c.id); })) }, isNew ? 'Build it' : `Apply ${ready.length}`)) : null,
+        ready.length && isNew ? h('small', { class: 'hint' }, 'Fill in the form brings the name, dates, roles and steps here to adjust. Build it makes everything, each step’s tasks too, with what’s set in the form.') : null,
+        h('div', { class: 'sk-compose' }, say, h('button', { type: 'button', class: 'btn primary-btn', disabled: SK.busy, onclick: send }, 'Send')));
+      chat.scrollTop = chat.scrollHeight;
+    }
+    SK.onChange = () => { if (sideBox.isConnected && side === 'sk') drawSk(); };
+    drawSide();
+
     sheet(c ? `Campaign · ${c.name}` : main ? `New sub-campaign of ${main.name}` : 'New campaign', [
-      h('div', { class: 'cb-grid' }, h('div', { class: 'cb-main' }, startFrom, basics, forSec, peopleSec, stepsSec, logSec, moneySec), sum),
+      h('div', { class: 'cb-grid' }, h('div', { class: 'cb-main' }, startFrom, basics, forSec, peopleSec, stepsSec, logSec, moneySec), sideBox),
     ], async () => {
       const body = {
         name: D.name, brief: D.brief, start: D.start || null, end: D.end || null, budget: D.budget.trim() || null, follows: D.follows || null, color: D.color,
@@ -18794,6 +18891,7 @@
     } finally {
       SK.busy = false;
       renderTool(true);
+      SK.onChange?.();
       if (path.endsWith('/say') || path === '/sidekick') {
         $('#skDock .sk-end')?.scrollIntoView({ block: 'end' });
         $('#skDock .sk-say')?.focus();
