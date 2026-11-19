@@ -20832,7 +20832,7 @@
       const g = x.goalId && goalById(x.goalId), c = x.campaignId && campById(x.campaignId);
       return h('div', { class: 'bill', onclick: () => moneySheet(x) },
         h('span', { class: 'bill-name' }, x.note || x.category || (x.kind === 'in' ? 'Money in' : 'Money out'),
-          h('small', {}, [x.category && x.note ? x.category : null, x.billId ? 'bill' : null, billScope === 'all' && x.scope === 'business' ? 'Business' : null, g ? '→ ' + g.title : c ? '→ ' + c.name : null, moneyJobsLabel(x)].filter(Boolean).join(' · '))),
+          h('small', {}, [x.category && x.note ? x.category : null, x.billId ? 'bill' : null, billScope === 'all' && x.scope === 'business' ? 'Business' : null, g ? '→ ' + g.title : c ? '→ ' + c.name : null, moneyJobsLabel(x), x.receipts?.length ? `📎 ${x.receipts.length}` : null].filter(Boolean).join(' · '))),
         h('span', { class: 'bill-right' }, h('b', { class: x.kind === 'in' ? 'up' : null }, (x.kind === 'in' ? '+' : '−') + money(x.amount))));
     };
     return [
@@ -20884,6 +20884,25 @@
     };
     if (amAdmin()) jobPickList().then((l) => { jobList = l; drawJobs(); });
     drawJobs();
+    // Receipts: photos or PDFs kept with this entry, seen by whoever sees the entry (Finance, 2026-11-20).
+    const waiting = [];
+    const rcBox = h('div', { class: 'rc-box' });
+    const rcUrl = (r) => `/api/money/${x.id}/receipts/${r.id}?t=${encodeURIComponent(S.me?.fileKey || '')}`;
+    const drawRc = () => rcBox.replaceChildren(
+      ...(x?.receipts || []).map((r) => h('span', { class: 'rc-chip' }, h('a', { href: rcUrl(r), target: '_blank', rel: 'noopener' }, (r.mime === 'application/pdf' ? '📄 ' : '🧾 ') + r.name),
+        h('button', { type: 'button', class: 'icon-btn', html: I.close, 'aria-label': 'Remove ' + r.name, onclick: async () => { try { x = await api('DELETE', `/money/${x.id}/receipts/${r.id}`); S.money = [...(S.money || []).filter((z) => z.id !== x.id), x]; drawRc(); } catch (e) { toast(e.message); } } }))),
+      ...waiting.map((f, i) => h('span', { class: 'rc-chip wait' }, '🧾 ' + f.name, h('button', { type: 'button', class: 'icon-btn', html: I.close, 'aria-label': 'Don’t add ' + f.name, onclick: () => { waiting.splice(i, 1); drawRc(); } }))),
+      h('button', { type: 'button', class: 'btn small rc-add', onclick: () => rcPick.click() }, '+ Add a receipt'));
+    const rcPick = h('input', { type: 'file', accept: 'image/*,application/pdf', multiple: true, hidden: true, class: 'rc-input' });
+    rcPick.addEventListener('change', async () => {
+      const fs = [...rcPick.files];
+      rcPick.value = '';
+      if (!x) { waiting.push(...fs); return drawRc(); }
+      for (const f of fs) { try { x = await addReceipt(x, f); } catch (e) { toast(e.message); } }
+      S.money = [...(S.money || []).filter((z) => z.id !== x.id), x];
+      drawRc();
+    });
+    drawRc();
     const del = x ? h('button', { class: 'btn small danger', 'data-label': '1' }, 'Delete') : null;
     del?.addEventListener('click', () => confirmClick(del, async () => {
       await api('DELETE', '/money/' + x.id).catch((e) => toast(e.message));
@@ -20896,6 +20915,7 @@
       h('div', { class: 'row2' }, h('label', {}, 'Category', cat), h('label', {}, 'Kind', scope)),
       h('label', {}, 'Note', note),
       h('label', {}, 'Campaign or goal', tag, h('small', { class: 'hint' }, kind === 'in' ? 'Counts toward what that campaign brought in, or fills that money goal.' : 'Counts as that campaign’s cost.')),
+      h('div', { class: 'mj rc' }, h('span', { class: 'mj-h' }, 'Receipts'), rcBox, rcPick),
       amAdmin() ? h('div', { class: 'mj' }, h('span', { class: 'mj-h' }, 'Job'), jobsBox, h('small', { class: 'hint' }, kind === 'in' ? 'Business money only. Counts as received on the job (payments on its invoices count already).' : 'Business money only. Counts in what the job cost; split it when one purchase covers several jobs.')) : null,
       x?.billId ? h('p', { class: 'day-hint' }, 'Recorded when the bill was marked paid.') : null,
       del,
@@ -20903,7 +20923,8 @@
       const t = tag.value;
       const jobs = jobRows.filter((j) => j.recordId).map((j) => ({ recordId: j.recordId, amount: jobRows.length > 1 && j.amount !== '' ? j.amount : null }));
       const body = { kind, amount: amount.value, day: day.value, category: cat.value, note: note.value, goalId: t.startsWith('g:') ? t.slice(2) : null, campaignId: t.startsWith('c:') ? t.slice(2) : null, ...(mine ? { scope: scope.value } : {}), ...(amAdmin() && (jobs.length || x?.jobs?.length) ? { jobs } : {}) };
-      const y = x ? await api('PATCH', '/money/' + x.id, body) : await api('POST', '/money', { ...body, ...stepRef('pay') });
+      let y = x ? await api('PATCH', '/money/' + x.id, body) : await api('POST', '/money', { ...body, ...stepRef('pay') });
+      for (const f of waiting) { try { y = await addReceipt(y, f); } catch (e) { toast(e.message); } }
       if (!x) stepUsed('pay');
       S.money = [...(S.money || []).filter((z) => z.id !== y.id), y];
       if (!x && y.day.slice(0, 7) !== FIN.month) FIN.month = y.day.slice(0, 7);
@@ -20911,6 +20932,11 @@
       if (PR.panel && (y.jobs || []).some((j) => j.recordId === PR.panel)) loadInvoices({ id: PR.panel }, true).then(() => renderProjects());
       renderTool();
     }, x ? 'Save' : 'Add');
+  }
+  async function addReceipt(x, file) {
+    if (file.size > 8_000_000) throw new Error(`${file.name} is over 8 MB.`);
+    const data = await new Promise((ok, no) => { const fr = new FileReader(); fr.onload = () => ok(fr.result); fr.onerror = () => no(new Error('Couldn’t read ' + file.name)); fr.readAsDataURL(file); });
+    return api('POST', `/money/${x.id}/receipts`, { name: file.name, data });
   }
   // Every job and record to pick from (not equipment lists), newest first.
   async function jobPickList() {

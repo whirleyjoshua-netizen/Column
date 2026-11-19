@@ -332,7 +332,7 @@ function fileKeyOf(token) {
   fileKeys.set(s.fileKey, token);
   return s.fileKey;
 }
-const URL_KEY_OK = /^\/api\/(files\/[\w-]+|news\/img\/[\w-]+|folders\/[\w-]+\/(zip|files\/\d+)|exports\/[\w-]+\/file)$/;
+const URL_KEY_OK = /^\/api\/(files\/[\w-]+|news\/img\/[\w-]+|folders\/[\w-]+\/(zip|files\/\d+)|exports\/[\w-]+\/file|money\/[\w-]+\/receipts\/[\w-]+)$/;
 function urlKey(req, url) {
   const k = url.searchParams.get('t');
   if (!k || k.length > 64 || !['GET', 'HEAD'].includes(req.method) || !(URL_KEY_OK.test(url.pathname) || url.pathname === '/ws')) return null;
@@ -5577,7 +5577,7 @@ function syncMileMoney(ws, x) {
 // goal fills that goal. Budgets are a monthly limit per spending category, personal or business.
 const MONEY_IMPORT = 2000;
 const MONEY_JOBS = 20;
-const publicMoney = ({ wsId, key, flowTold, ...x }) => x;
+const publicMoney = ({ wsId, key, flowTold, receipts, ...x }) => ({ ...x, receipts: (receipts || []).map(publicReceipt) });
 const publicBudget = ({ wsId, ...x }) => x;
 const cents = (v, what = 'the amount') => {
   const n = Math.round(Number(String(v ?? '').replace(/[$,\s]/g, '')) * 100);
@@ -5671,7 +5671,13 @@ function moneyNews(x) {
     automate(x.wsId, 'money.added', { amount: x.amount / 100, category: x.category || '', note: x.note || '', direction: x.kind === 'in' ? 'in' : 'out', who: x.by, ownersOnly: true, ...(at && lt ? { record: at, project: db.projects[at.projectId], list: lt, recordName: String(at.values[lt.primary] ?? '') } : {}) });
   }
 }
+// Receipts on money (Finance, 2026-11-20): photos or PDFs kept apart from the team's files, each one seen by
+// exactly who sees its money entry (seesBill): business money's by owners and admins, personal money's by its owner.
+const RECEIPTS_MAX = 10, RECEIPT_BYTES = 8_000_000;
+const receiptPath = (r) => path.join(FILES_DIR, 'receipt-' + r.id);
+const publicReceipt = ({ id, name, mime, size, at, by }) => ({ id, name, mime, size, at, by });
 function dropMoney(x) {
+  for (const r of x.receipts || []) fsp.rm(receiptPath(r), { force: true }).catch(() => {});
   delete db.money[x.id];
   broadcast(x.wsId, { type: 'money:remove', id: x.id, bill: x });
   moneyTouches(x);
@@ -8657,6 +8663,33 @@ async function api(req, res, url) {
     }
     const x = b && db.money[b];
     if (!x || x.wsId !== ws.id || !seesBill(ws.id, x, auth.memberId)) return send(res, 404, { error: 'Not found' });
+    if (c === 'receipts') {
+      if (m === 'POST' && !d) {
+        if ((x.receipts || []).length >= RECEIPTS_MAX) return send(res, 400, { error: `An entry can keep ${RECEIPTS_MAX} receipts.` });
+        const body = await readJson(req, Math.ceil(RECEIPT_BYTES * 1.4) + 10_000);
+        const buf = Buffer.from(String(body.data || '').replace(/^data:[^,]*,/, ''), 'base64');
+        const mime = imageType(buf) || (buf.subarray(0, 5).toString('latin1') === '%PDF-' ? 'application/pdf' : null);
+        if (!mime) return send(res, 400, { error: 'A receipt is a photo (PNG, JPEG, GIF, WebP) or a PDF.' });
+        if (buf.length > RECEIPT_BYTES) return send(res, 400, { error: 'Keep a receipt under 8 MB.' });
+        const r = { id: rid(), name: cleanText(body.name, 120) || (mime === 'application/pdf' ? 'Receipt.pdf' : 'Receipt'), mime, size: buf.length, at: Date.now(), by: auth.member };
+        await fsp.writeFile(receiptPath(r), buf);
+        (x.receipts ||= []).push(r);
+        save();
+        moneyNews(x);
+        return send(res, 200, publicMoney(x));
+      }
+      const r = d && (x.receipts || []).find((y) => y.id === d);
+      if (!r) return send(res, 404, { error: 'That receipt is gone.' });
+      if ((m === 'GET' || m === 'HEAD') && !parts[4]) return serveFile(req, res, receiptPath(r), { name: r.name, mime: r.mime, download: new URL(req.url, 'http://x').searchParams.has('dl') });
+      if (m === 'DELETE') {
+        x.receipts = x.receipts.filter((y) => y.id !== r.id);
+        fsp.rm(receiptPath(r), { force: true }).catch(() => {});
+        save();
+        moneyNews(x);
+        return send(res, 200, publicMoney(x));
+      }
+      return send(res, 405, { error: 'Method not allowed' });
+    }
     const fromInv = x.invoiceId ? db.invoices[x.invoiceId] : x.category === 'Client payment' && x.by === 'Kloomie' ? Object.values(db.invoices).find((v) => v.wsId === ws.id && v.payments.some((p) => p.moneyId === x.id)) : null;
     if (m === 'PATCH') {
       const body = await readJson(req, 20_000);
@@ -12190,6 +12223,7 @@ function teamFiles(wsId) {
   for (const x of Object.values(db.sidekick)) if (mine(x)) for (const f of x.files || []) files.push(skPath(f));
   for (const x of Object.values(db.uploads)) if (mine(x)) files.push(partPath(x));
   for (const x of Object.values(db.exports)) if (mine(x)) files.push(exportPath(x), exportPath(x) + '.part');
+  for (const x of Object.values(db.money)) if (mine(x)) for (const r of x.receipts || []) files.push(receiptPath(r));
   files.push(...CARDS.files(wsId));
   const logo = db.workspaces[wsId]?.brand?.logo;
   if (logo) files.push(logoPath(logo));
