@@ -48,9 +48,11 @@ try {
   const job2 = await api('POST', `/projects/${p.id}/records`, { typeId: p.types[0].id, values: { job: 'Jones shades' } });
 
   const A = await tab(APP);
+  // The job window is in tabs (2026-11-19): pjT(k, sub) opens tab k (and a Finance sub-tab) first, inside a check.
+  const pjT = (k, sub) => `(document.querySelector('.pj-panel .pj-tab[data-tab=${k}]:not(.on)')?.click() ?? true) && ${sub ? `(document.querySelector('.pj-panel .pj-subtab[data-fin=${sub}]:not(.on)')?.click() ?? true) && ` : ''}`;
   await A.until(`location.href.startsWith(${JSON.stringify(APP)}) && document.readyState === 'complete'`, 15000);
   await A.ev(`localStorage.setItem('column.token', ${JSON.stringify(JSON.stringify(a.token))}); location.href = ${JSON.stringify(APP + '?go=rec:')} + ${JSON.stringify(job.id)}; true`);
-  ok(await A.until(`!!document.querySelector('.pj-panel .pj-add-exp')`, 20000), 'the job’s costs have “+ Add an expense”');
+  ok(await A.until(`${pjT('finance', 'cost')}!!document.querySelector('.pj-panel .pj-add-exp')`, 20000), 'the job’s costs (Finance → Cost) have “+ Add an expense”');
   ok(await A.ev(`[...document.querySelectorAll('.pj-panel .pj-cost-row')].some((r) => r.textContent.startsWith('Expenses'))`), 'and an Expenses line');
   await A.tap(`document.querySelector('.pj-panel .pj-add-exp')`);
   ok(await A.until(`!!document.querySelector('#sheet .mj-job') && document.querySelector('#sheet .mj-job').value === ${JSON.stringify(job.id)}`), 'the expense sheet opens already on this job');

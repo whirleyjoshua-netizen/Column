@@ -108,13 +108,22 @@ try {
   await A.until(`document.querySelector('#sheet h3, #sheet .sheet-title, #sheet')?.textContent.includes('New contact') && !!document.querySelector('#sheet input[type=tel]')`);
   await A.ev(`(() => { const i = document.querySelector('#sheet input[type=tel]'); i.value = '555-0100'; })()`);
   await A.tap(`document.querySelector('#sheet .primary-btn')`);
-  ok(await A.until(`${P('.pj-panel .pj-cust-h b')}?.textContent === 'Pat Lee'`), '+ New contact sets the job’s customer');
+  // The job window is in tabs (2026-11-19): the Overview says who it's for, and its Client tab has the card.
+  ok(await A.until(`${P('.pj-panel .pj-client-line b')}?.textContent === 'Pat Lee'`), '+ New contact sets the job’s customer (on its Overview)');
+  await A.tap(P('.pj-panel .pj-client-line'));
+  ok(await A.until(`${P('.pj-panel .pj-tab.on')}?.dataset.tab === 'client' && ${P('.pj-panel .pj-cust-h b')}?.textContent === 'Pat Lee'`), 'which opens the Client tab, with the customer’s card (a real click)');
+  await A.tap(P('.pj-panel .pj-tab[data-tab=overview]'));
+  await A.until(`!!${P('.pj-panel .pj-add-detail')}`);
   ok((await api('GET', '/contacts')).contacts.some((c) => c.name === 'Pat Lee' && c.phone === '555-0100'), 'and Pat is in Contacts too');
   // + Add a detail.
   await A.tap(P('.pj-add-detail'));
   ok(await A.until(`[...document.querySelectorAll('#menu button')].some((b) => b.textContent.includes('Photos')) && ![...document.querySelectorAll('#menu button')].some((b) => b.textContent.includes('Customer ·'))`), '+ Add a detail offers what jobs need (not Customer, it’s there)');
   await A.ev(`[...document.querySelectorAll('#menu button')].find((b) => b.textContent.includes('Checklist')).click(); true`);
-  ok(await A.until(`document.querySelector('#projects .pj-panel').textContent.includes('Clean up')`), 'Checklist adds a checklist to every job, with steps to start');
+  // The checklist is added to the board first (a toast says so), then the window is drawn again.
+  await A.until(`[...document.querySelectorAll('.toast, #toast')].some((x) => /Checklist added/.test(x.textContent))`, 6000);
+  await sleep(300);
+  await A.tap(P('.pj-panel .pj-tab[data-tab=work]'));
+  ok(await A.until(`document.querySelector('#projects .pj-panel').textContent.includes('Clean up')`), 'Checklist adds a checklist to every job, with steps to start (on its Work tab)');
   await shot('board-job');
   // Delete a column that has a job: its jobs move.
   await menu('Leads', 'Delete column');
@@ -147,6 +156,7 @@ try {
   await A.tap(`document.querySelector('#projects .pj-top [aria-label="All boards"]')`);
   await A.tap(`[...document.querySelectorAll('#projects .pj-card')].find((c) => c.querySelector('b')?.textContent.trim() === 'Board')`);
   await A.tap(`[...document.querySelectorAll('#projects .pj-card-r')].find((c) => c.textContent.includes('Kitchen blinds'))`);
+  if (await A.ev(`!${P('.pj-camp-btn')}`)) { await A.tap(P('.pj-panel .pj-tab[data-tab=overview]')); await A.until(`!!${P('.pj-camp-btn')}`); } // + Campaign is on the Overview
   await A.tap(P('.pj-camp-btn'));
   await A.until(`[...document.querySelectorAll('#menu button')].some((b) => b.textContent === 'New campaign for this job')`);
   await A.ev(`[...document.querySelectorAll('#menu button')].find((b) => b.textContent === 'New campaign for this job').click(); true`);

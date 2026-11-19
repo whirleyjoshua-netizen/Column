@@ -5409,6 +5409,7 @@
     try { BOARD.data = await api('GET', '/board'); BOARD.at = Date.now(); } catch (e) { BOARD.data ||= { jobs: [], automations: [], connections: [], counts: { jobs: 0, blocked: 0 }, error: e.message }; }
     finally { BOARD.busy = false; }
     if (campsShown() && K.overview && !K.open) renderCamps();
+    if (PR.panel) prSoon(); // the job window's Overview shows where its job stands
   }
   const BLOCK_IC = { needs: '📦', overdue: '!', signoff: '✓', held: '✋' };
   function boardSection() {
@@ -13571,6 +13572,9 @@
     return wrap;
   }
   // ----- one record: its fields, what links to it, its notes doc -----
+  // Each record opens on the tab it was last on here (the last 60 kept), a new one on its Overview.
+  PR.tabOf = store.get('pjTabs', {});
+  PR.finTab = store.get('pjFinTab', 'materials');
   function prPanel(p, id) {
     const r = recById(p.id, id);
     if (!r) { PR.panel = null; return null; }
@@ -13610,34 +13614,112 @@
     // A trade job keeps its details first; its price lines, invoices and costing come after them.
     const job = !!t.trade;
     const top = itemFields.length && !job ? fields.filter((f) => ['client', 'status', 'number'].includes(f.key)) : [];
-    return h('aside', { class: 'pj-panel' + (itemFields.length || richFields.length ? ' wide' : ''), 'data-id': r.id },
+    // ----- the window in tabs (the owner, 2026-11-19): Overview, Client, Work, Finance (Materials, Quote, Invoices,
+    // Cost), Files & notes, Activity. A board gets only the tabs it has something for; only the open tab is drawn
+    // (and only it fetches what it shows). Each record reopens on the tab it was on; Finance keeps its sub-tab. -----
+    const camps = (S.campaigns || []).filter((c) => c.recordId === r.id);
+    const jobTasks = S.tasks.filter((x) => x.recordId === r.id);
+    const lateTasks = jobTasks.filter((x) => !x.done && isOverdue(x)).length;
+    const board = BOARD.data?.jobs?.find((x) => x.id === r.id) || null;
+    if (camps.some((c) => c.status !== 'done')) loadBoard();
+    const fin = job ? ['materials', 'quote', ...(amAdmin() ? ['invoices', 'cost'] : [])] : [];
+    const tabs = [
+      { k: 'overview', label: 'Overview', badge: board?.blocked.length ? { n: board.blocked.length, title: 'held up' } : null },
+      custFields.length ? { k: 'client', label: 'Client' } : null,
+      job || camps.length || jobTasks.length || richFields.some((f) => f.type !== 'materials') || custFields.length || t.scan ? { k: 'work', label: 'Work', badge: lateTasks ? { n: lateTasks, title: 'overdue', bad: true } : null } : null,
+      fin.length ? { k: 'finance', label: 'Finance', badge: (() => { const n = (PR.invoices.get(r.id) || []).filter((x) => x.overdue).length; return n ? { n, title: 'overdue', bad: true } : null; })() } : null,
+      { k: 'files', label: 'Files & notes' },
+      { k: 'activity', label: 'Activity' },
+    ].filter(Boolean);
+    const tab = tabs.some((x) => x.k === PR.tabOf[r.id]) ? PR.tabOf[r.id] : 'overview';
+    const fTab = fin.includes(PR.finTab) ? PR.finTab : fin[0];
+    const goTab = (k) => {
+      delete PR.tabOf[r.id];
+      if (k !== 'overview') PR.tabOf[r.id] = k;
+      const ids = Object.keys(PR.tabOf);
+      for (const id of ids.slice(0, Math.max(0, ids.length - 60))) delete PR.tabOf[id];
+      store.set('pjTabs', PR.tabOf);
+      renderProjects();
+    };
+    const tabBar = tabs.length > 2 ? h('div', { class: 'pj-tabs', role: 'tablist' }, tabs.map((x) => h('button', {
+      type: 'button', role: 'tab', class: 'pj-tab' + (x.k === tab ? ' on' : ''), 'data-tab': x.k, 'aria-selected': String(x.k === tab), onclick: () => goTab(x.k) },
+      x.label, x.badge ? h('span', { class: 'pj-tab-n' + (x.badge.bad ? ' bad' : ''), title: `${x.badge.n} ${x.badge.title}` }, String(x.badge.n)) : null))) : null;
+    const BLOCK_IC2 = { needs: '📦', overdue: '!', signoff: '✓', held: '✋' };
+    // Overview: where the job stands, who it's for, its details, and the quick actions.
+    const status = board && board.steps.total ? h('div', { class: 'pj-status' },
+      h('div', { class: 'pj-status-h' }, h('b', {}, board.stage || 'No stage'), h('span', { class: 'lead-prog', title: `${board.steps.done} of ${board.steps.total} steps finished` },
+        h('span', { class: 'lead-bar' }, h('i', { style: `width:${Math.round((board.steps.done / board.steps.total) * 100)}%` })), h('small', {}, `${board.steps.done}/${board.steps.total} steps`)),
+        board.next ? h('button', { class: 'linkish', onclick: () => openCampaign(board.next.campaignId) }, 'Next: ' + shortText(board.next.title, 40)) : h('small', {}, 'Every step finished')),
+      board.blocked.map((b) => h('button', { class: 'need-row job-block ' + b.kind, onclick: () => (b.taskId && taskById(b.taskId) ? showStep(taskById(b.taskId)) : b.campaignId ? openCampaign(b.campaignId) : goTab('activity')) },
+        h('span', { class: 'need-ic' }, BLOCK_IC2[b.kind] || '•'), h('span', { class: 'need-text' }, h('small', {}, b.text))))) : null;
+    const clientLine = (f) => {
+      const id = r.values[f.id], c = id && (r.people?.[id] || (S.contacts || []).find((x) => x.id === id));
+      if (!c) return prCustomer(p, t, r, f);
+      return h('button', { type: 'button', class: 'pj-client-line', onclick: () => goTab('client') }, h('span', { class: 'pj-fic' }, '👤'), h('b', {}, c.name || c.company || 'Customer'),
+        c.phone ? h('small', {}, c.phone) : null, h('span', { style: 'flex:1' }), h('small', { class: 'muted' }, 'Client ›'));
+    };
+    const overview = () => [
+      status,
+      ...custFields.map(clientLine),
+      itemFields.length && !job ? quoteActions(p, t, r) : null,
+      top.length ? h('div', { class: 'pj-fields' }, top.map(fieldRow)) : null,
+      ...(job ? [] : itemFields.map((f) => prItems(p, t, r, f))),
+      h('div', { class: 'pj-fields' }, fields.filter((f) => !top.includes(f)).map(fieldRow)),
+      h('button', { class: 'linkish pj-add-detail', onclick: (e) => prAddDetail(e.currentTarget, p, t) }, '+ Add a detail'),
+      ...back.map(({ o, f, from }) => h('div', { class: 'pj-back' }, h('h4', {}, `${o.name} · ${f.name}`), from.map((x) => h('button', { class: 'pj-link', onclick: () => { PR.type = o.id; PR.view = null; PR.panel = x.id; renderProjects(); } }, recName(o, x), o.fields.find((y) => y.type === 'money') && x.values[o.fields.find((y) => y.type === 'money').id] ? h('small', {}, ' · ' + money(x.values[o.fields.find((y) => y.type === 'money').id])) : null)))),
+      isTech(p) && t.key === 'work' ? prGithub(p, t, r) : null,
+      isTech(p) && t.key === 'releases' ? prReadiness(p, t, r) : null,
+      isTech(p) && t.key === 'features' ? prFeatureTests(p, t, r) : null,
+      prActivity(p, t, r, 'buttons'),
+    ];
+    // Client: who it's for, how to reach them and get there, and their other jobs on this board.
+    const client = () => [
+      ...custFields.map((f) => prCustomer(p, t, r, f)),
+      ...custFields.map((f) => {
+        const id = r.values[f.id];
+        const others = id ? prRecs(p.id).filter((x) => x.id !== r.id && x.values[f.id] === id) : [];
+        return others.length ? h('div', { class: 'pj-back' }, h('h4', {}, `Their other ${(t.name || 'records').toLowerCase()}`), others.slice(0, 12).map((x) => h('button', { class: 'pj-link', onclick: () => { PR.panel = x.id; renderProjects(); } }, recName(prType(p, x.typeId), x)))) : null;
+      }),
+    ];
+    // Work: visits, the campaigns and tasks, the field forms (checklist, measurements, readings, signature, permit),
+    // and the equipment on it.
+    const work = () => [
+      custFields.length ? prVisits(p, t, r) : null,
+      prActivity(p, t, r, 'work'),
+      !camps.length && !jobTasks.length ? h('p', { class: 'day-hint' }, 'No campaign or tasks yet. Start one with + Campaign on the Overview, and its steps show here.') : null,
+      ...richFields.filter((f) => f.type !== 'materials').map((f) => prRichBlock(p, t, r, f)),
+      t.scan ? assetMoves(p, t, r) : equipmentHere(p, t, r),
+    ];
+    // Finance (a job): Materials (the materials list and stock used), Quote (the price lines), Invoices, Cost.
+    const FIN_L = { materials: 'Materials', quote: 'Quote', invoices: 'Invoices', cost: 'Cost' };
+    const finance = () => [
+      h('div', { class: 'pj-subtabs', role: 'tablist' }, fin.map((k) => h('button', { type: 'button', role: 'tab', class: 'pj-subtab' + (k === fTab ? ' on' : ''), 'data-fin': k, 'aria-selected': String(k === fTab),
+        onclick: () => { PR.finTab = k; store.set('pjFinTab', k); renderProjects(); } }, FIN_L[k]))),
+      ...(fTab === 'materials' ? [...richFields.filter((f) => f.type === 'materials').map((f) => prRichBlock(p, t, r, f)), toolOn('inventory') && !t.scan && p.template !== 'assets' ? invJobBox(r, recName(t, r)) : null,
+        !richFields.some((f) => f.type === 'materials') && !toolOn('inventory') ? h('p', { class: 'day-hint' }, 'Add a materials list with + Add a detail, or turn on Inventory to track stock used on the job.') : null] : []),
+      ...(fTab === 'quote' ? (itemFields.length ? itemFields.map((f) => prItems(p, t, r, f)) : [h('p', { class: 'day-hint' }, 'No price lines on this board yet.')]) : []),
+      fTab === 'invoices' ? prJobMoney(p, t, r, 'invoices') : null,
+      fTab === 'cost' ? prJobMoney(p, t, r, 'cost') : null,
+    ];
+    // Files & notes: the notes doc and the docs that mention it. (What links to it from elsewhere is on the Overview.)
+    const files = () => [
+      h('button', { class: 'btn pj-notes', onclick: notes }, doc ? `📄 ${techDoc ? docTitle(doc) : 'Notes'} · ${docSnippet(doc) ? shortText(docSnippet(doc), 50) : 'open'}` : techDoc ? '📄 ' + techDoc[1] : '📄 Add notes (a doc)'),
+      prActivity(p, t, r, 'docs'),
+    ];
+    // Activity: log a call, email, meeting or note, and the timeline.
+    const activity = () => [prActivity(p, t, r, 'buttons'), prActivity(p, t, r, 'timeline')];
+    const body = { overview, client, work, finance, files, activity }[tab]();
+    return h('aside', { class: 'pj-panel' + (itemFields.length || richFields.length ? ' wide' : '') + (tabBar ? ' tabbed' : ''), 'data-id': r.id, 'data-tab': tab },
       h('div', { class: 'pj-panel-h' }, h('small', {}, `${t.icon || ''} ${t.singular || t.name}`), h('span', { style: 'flex:1' }),
         h('button', { class: 'icon-btn', 'aria-label': 'Record options', html: I.more, onclick: (e) => openMenu(e.currentTarget, [pinRow('rec:' + r.id, recName(t, r)), { label: 'Share to chat…', run: () => shareMenu(e.target, linkToken('record', r.id)) }, t.scan ? { label: 'New label (the old one stops working)…', run: async () => { try { await api('POST', `/records/${r.id}/tag`); prLabels(p, t, [r.id]); } catch (er) { toast(er.message); } } } : null, { label: `Delete this ${(t.singular || 'record').toLowerCase()}`, danger: true, run: async () => { if (await prCall('DELETE', '/records/' + r.id)) { PR.records.set(p.id, prRecs(p.id).filter((x) => x.id !== r.id)); PR.panel = null; renderProjects(); } } }].filter(Boolean)) }),
         h('button', { class: 'icon-btn', 'aria-label': 'Close', html: I.close, onclick: () => { PR.panel = null; PR.visit = null; renderProjects(); } })),
       title,
       t.scan ? assetBar(p, t, r) : null,
       custFields.length ? prVisitBar(p, t, r) : null,
-      ...custFields.map((f) => prCustomer(p, t, r, f)),
-      custFields.length ? prVisits(p, t, r) : null,
-      itemFields.length && !job ? quoteActions(p, t, r) : null,
-      top.length ? h('div', { class: 'pj-fields' }, top.map(fieldRow)) : null,
-      ...(job ? [] : itemFields.map((f) => prItems(p, t, r, f))),
-      h('div', { class: 'pj-fields' }, fields.filter((f) => !top.includes(f)).map(fieldRow)),
-      h('button', { class: 'linkish pj-add-detail', onclick: (e) => prAddDetail(e.currentTarget, p, t) }, '+ Add a detail'),
-      isTech(p) && t.key === 'work' ? prGithub(p, t, r) : null,
-      isTech(p) && t.key === 'releases' ? prReadiness(p, t, r) : null,
-      isTech(p) && t.key === 'features' ? prFeatureTests(p, t, r) : null,
-      ...(job ? itemFields.map((f) => prItems(p, t, r, f)) : []),
-      job ? prJobMoney(p, t, r) : null,
-      ...richFields.map((f) => prRichBlock(p, t, r, f)),
-      t.scan ? assetMoves(p, t, r) : equipmentHere(p, t, r),
-      toolOn('inventory') && !t.scan && p.template !== 'assets' ? invJobBox(r, recName(t, r)) : null,
-      prActivity(p, t, r),
-      ...back.map(({ o, f, from }) => h('div', { class: 'pj-back' }, h('h4', {}, `${o.name} · ${f.name}`), from.map((x) => h('button', { class: 'pj-link', onclick: () => { PR.type = o.id; PR.view = null; PR.panel = x.id; renderProjects(); } }, recName(o, x), o.fields.find((y) => y.type === 'money') && x.values[o.fields.find((y) => y.type === 'money').id] ? h('small', {}, ' · ' + money(x.values[o.fields.find((y) => y.type === 'money').id])) : null)))),
-      h('button', { class: 'btn pj-notes', onclick: notes }, doc ? `📄 ${techDoc ? docTitle(doc) : 'Notes'} · ${docSnippet(doc) ? shortText(docSnippet(doc), 50) : 'open'}` : techDoc ? '📄 ' + techDoc[1] : '📄 Add notes (a doc)'),
+      tabBar,
+      h('div', { class: 'pj-tab-body', role: tabBar ? 'tabpanel' : null }, ...body),
       h('small', { class: 'pj-meta' }, `Added by ${r.by} · ${ago(r.createdAt)}${r.updatedAt > r.createdAt + 1000 ? ` · changed ${ago(r.updatedAt)}` : ''}${r.extId ? ` · from another app (${r.extId})` : ''}`));
-  }
-  // + Add a detail on a record: the details jobs usually need, one tap each (for every record in the list), or any field.
+  }  // + Add a detail on a record: the details jobs usually need, one tap each (for every record in the list), or any field.
   const PR_DETAILS = [
     { type: 'contact', name: 'Customer', ic: '👤', about: 'From Contacts, or a new one' },
     { type: 'date', name: 'Scheduled', ic: '📅', about: 'When it’s booked' },
@@ -13750,27 +13832,30 @@
     const body = e.kind === 'task' || e.note ? e.note : '';
     return [said.flat(), body];
   }
-  function prActivity(p, t, r) {
-    const log = prLog(r);
+  // part: one piece for the job window's tabs ('buttons', 'work', 'docs', 'timeline'); all of them when left out.
+  // The timeline is only fetched when it's shown.
+  function prActivity(p, t, r, part = null) {
+    const want = (k) => !part || part === k;
+    const log = want('timeline') ? prLog(r) : null;
     const tasks = S.tasks.filter((x) => x.recordId === r.id).sort((a, b) => (a.done - b.done) || (a.due || '9').localeCompare(b.due || '9'));
     const camps = (S.campaigns || []).filter((c) => c.recordId === r.id);
     const docs = docsMentioning(['record:' + r.id]);
     const del = async (e) => { const y = await prCall('DELETE', `/records/${r.id}/log/${e.id}`); if (y) { PR.logs.set(r.id, y); renderProjects(); } };
     const mine = (e) => ['call', 'email', 'meeting', 'note'].includes(e.kind) && (e.memberId === S.me?.memberId || amAdmin());
-    return h('div', { class: 'pj-act' },
-      h('div', { class: 'pj-act-btns' },
+    return h('div', { class: 'pj-act' + (part ? ' pj-act-' + part : '') },
+      !want('buttons') ? null : h('div', { class: 'pj-act-btns' },
         [['call', '☏ Log a call'], ['email', '✉ Email'], ['meeting', '👥 Meeting'], ['note', '📝 Note']].map(([k, label]) => h('button', { class: 'btn small', onclick: () => prLogSheet(p, t, r, k) }, label)),
         h('button', { class: 'btn small', onclick: () => prTaskSheet(p, t, r) }, '+ Task'),
         h('button', { class: 'btn small pj-camp-btn', title: 'Start a campaign for this job: its steps and tasks are the job’s', onclick: (e) => prCampMenu(e.currentTarget, t, r) }, '+ Campaign'),
         h('button', { class: 'btn small pj-ai-btn', title: 'Sidekick reads the record and its history, and suggests what to do next', onclick: () => prNextStep(r) }, '✦ Next step')),
-      prAiCard(p, t, r),
-      camps.length ? h('div', { class: 'pj-tasks pj-camps' }, h('h4', {}, 'Campaigns'), camps.map((c) => h('button', { class: 'pj-link pj-camp', 'data-camp': c.id, onclick: () => openCampaign(c.id) },
+      want('buttons') ? prAiCard(p, t, r) : null,
+      want('work') && camps.length ? h('div', { class: 'pj-tasks pj-camps' }, h('h4', {}, 'Campaigns'), camps.map((c) => h('button', { class: 'pj-link pj-camp', 'data-camp': c.id, onclick: () => openCampaign(c.id) },
         h('span', {}, c.name), h('small', {}, [Math.round(campProgress(c) * 100) + '%', c.status === 'done' ? 'finished' : c.status === 'paused' ? 'paused' : ''].filter(Boolean).join(' · '))))) : null,
-      tasks.length ? h('div', { class: 'pj-tasks' }, h('h4', {}, 'Tasks'), tasks.map((x) => h('div', { class: 'pj-task' + (x.done ? ' done' : '') },
+      want('work') && tasks.length ? h('div', { class: 'pj-tasks' }, h('h4', {}, 'Tasks'), tasks.map((x) => h('div', { class: 'pj-task' + (x.done ? ' done' : '') },
         h('button', { class: 'check' + (x.done ? ' on' : ''), html: I.check, 'aria-label': x.done ? 'Not done' : 'Done', onclick: () => patchTask(x, { done: !x.done }).then(renderProjects) }),
         h('span', {}, x.text), x.due ? h('small', { class: isOverdue(x) ? 'late' : null }, dueLabel(x.due)) : null, x.assigneeId ? avatar(x.assigneeId) : null))) : null,
-      docs.length ? h('div', { class: 'pj-tasks' }, h('h4', {}, 'Mentioned in'), docs.slice(0, 8).map((d) => h('button', { class: 'pj-link', onclick: () => openDoc(d) }, '📄 ' + docTitle(d)))) : null,
-      h('div', { class: 'pj-timeline' }, h('h4', {}, 'Timeline'),
+      want('docs') && docs.length ? h('div', { class: 'pj-tasks' }, h('h4', {}, 'Mentioned in'), docs.slice(0, 8).map((d) => h('button', { class: 'pj-link', onclick: () => openDoc(d) }, '📄 ' + docTitle(d)))) : null,
+      !want('timeline') ? null : h('div', { class: 'pj-timeline' }, h('h4', {}, 'Timeline'),
         log == null ? h('small', { class: 'day-hint' }, 'Loading…')
           : log.map((e) => { const [said, body] = prLogLine(e); return h('div', { class: 'pj-tl pj-tl-' + e.kind },
             h('span', { class: 'pj-tl-ic' }, ACT_IC[e.kind] || '•'),
@@ -15046,7 +15131,8 @@
     if (INV.open?.id === inv.id) INV.open = inv;
   }
   const INV = { open: null };
-  function prJobMoney(p, t, r) {
+  // part: 'invoices' or 'cost' for the job window's Finance tabs; both when left out.
+  function prJobMoney(p, t, r, part = null) {
     if (!amAdmin()) return null;
     const list = PR.invoices.get(r.id);
     const cost = PR.costing.get(r.id);
@@ -15080,10 +15166,12 @@
         h('button', { class: 'pj-newrow pj-add-in', onclick: () => moneySheet(null, 'in', { jobId: r.id }) }, '+ Money in')),
       h('button', { class: 'pj-newrow pj-rates', onclick: () => laborRateSheet(r) }, cost.laborRate || Object.keys(cost.rates?.people || {}).length ? 'Labor rates & overhead' : 'Set labor rates, to count labor'),
       h('small', { class: 'day-hint' }, 'The estimate is the price lines’ costs. Actual cost is only what happened: materials used (the materials list and stock), labor (hours on visits marked done, for each person at their rate), expenses put on this job in Finance, and overhead.')) : null;
-    return h('div', { class: 'pj-items pj-job-blk' },
+    const invs = part === 'cost' ? [] : [
       h('div', { class: 'pj-it-h' }, h('b', {}, '💵 Invoices'), h('span', { style: 'flex:1' }), h('button', { class: 'btn small primary-btn', onclick: make }, '+ Make an invoice')),
-      list ? (rows.length ? h('div', { class: 'pj-invs' }, rows) : h('p', { class: 'day-hint' }, 'None yet. An invoice starts from the job’s price lines; send it and the customer can pay by card.')) : h('p', { class: 'day-hint' }, 'Loading…'),
-      costBox ? h('div', { class: 'pj-it-h' }, h('b', {}, '📊 What this job cost')) : null, costBox);
+      list ? (rows.length ? h('div', { class: 'pj-invs' }, rows) : h('p', { class: 'day-hint' }, 'None yet. An invoice starts from the job’s price lines; send it and the customer can pay by card.')) : h('p', { class: 'day-hint' }, 'Loading…')];
+    const costs = part === 'invoices' ? [] : costBox ? [h('div', { class: 'pj-it-h' }, h('b', {}, '📊 What this job cost')), costBox]
+      : part === 'cost' ? [h('p', { class: 'day-hint' }, list ? 'Nothing to count yet: add price lines or a materials list, and mark visits done to count labor.' : 'Loading…')] : [];
+    return h('div', { class: 'pj-items pj-job-blk' }, ...invs, ...costs);
   }
   // What an hour costs, for the team and for each person, and overhead on top (Finance step 4). Owners and admins.
   function laborRateSheet(r) {

@@ -51,9 +51,11 @@ try {
   await api('POST', '/tasks', { text: 'Swap filters at Oak St' });
 
   const A = await tab(APP);
+  // The job window is in tabs (2026-11-19): pjT(k) opens tab k first, inside a check (it waits for the window).
+  const pjT = (k, sub) => `(document.querySelector('.pj-panel .pj-tab[data-tab=${k}]:not(.on)')?.click() ?? true) && ${sub ? `(document.querySelector('.pj-panel .pj-subtab[data-fin=${sub}]:not(.on)')?.click() ?? true) && ` : ''}`;
   await A.until(`location.href.startsWith(${JSON.stringify(APP)}) && document.readyState === 'complete'`, 15000);
   await A.ev(`localStorage.setItem('column.token', ${JSON.stringify(JSON.stringify(a.token))}); location.href = ${JSON.stringify(APP + '?go=rec:')} + ${JSON.stringify(job.id)}; true`);
-  ok(await A.until(`!!document.querySelector('.pj-panel .inv-job .inv-job-use')`, 20000), 'the job shows Materials & equipment, with Use stock and Check out equipment');
+  ok(await A.until(`${pjT('finance', 'materials')}!!document.querySelector('.pj-panel .inv-job .inv-job-use')`, 20000), 'the job shows Materials & equipment, with Use stock and Check out equipment');
   ok(await A.ev(`/Nothing from Inventory yet/.test(document.querySelector('.inv-job').textContent) && !!document.querySelector('.inv-job .inv-job-out')`), 'nothing used yet');
   // Use 2 filters on it.
   await A.tap(`document.querySelector('.inv-job .inv-job-use')`);

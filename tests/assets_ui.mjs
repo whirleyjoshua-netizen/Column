@@ -55,6 +55,8 @@ try {
   await api('POST', `/projects/${sites.id}/records`, { typeId: sites.types[0].id, values: { [sites.types[0].primary]: 'Smith build' } });
 
   const A = await tab(APP);
+  // The job window is in tabs (2026-11-19): pjT(k) opens tab k first, inside a check (it waits for the window).
+  const pjT = (k, sub) => `(document.querySelector('.pj-panel .pj-tab[data-tab=${k}]:not(.on)')?.click() ?? true) && ${sub ? `(document.querySelector('.pj-panel .pj-subtab[data-fin=${sub}]:not(.on)')?.click() ?? true) && ` : ''}`;
   await A.until(`location.href.startsWith(${JSON.stringify(APP)}) && document.readyState === 'complete'`, 15000);
   await A.ev(`localStorage.setItem('column.token', ${JSON.stringify(JSON.stringify(a.token))}); true`);
   // Scanning the label: the phone's camera opens /a/<tag>.
@@ -69,7 +71,8 @@ try {
   await A.type('1200 Warm Springs Rd, Henderson');
   await A.tap(`[...document.querySelectorAll('#sheet .btns .primary-btn')].find((b) => b.textContent === 'Save')`);
   ok(await A.until(`document.querySelector('.as-where b')?.textContent === '1200 Warm Springs Rd, Henderson'`), 'typing an address moves it');
-  ok(await A.until(`[...document.querySelectorAll('.as-moves .as-move')].some((m) => m.textContent.includes('1200 Warm Springs Rd, Henderson'))`, 8000), 'the move shows under Where it’s been');
+  ok(await A.until(`${pjT('work')}[...document.querySelectorAll('.as-moves .as-move')].some((m) => m.textContent.includes('1200 Warm Springs Rd, Henderson'))`, 8000), 'the move shows under Where it’s been');
+  await A.until(`${pjT('overview')}!!document.querySelector('.pj-panel .pj-add-detail')`); // back to the details
   // The status, in one tap.
   await A.tap(`[...document.querySelectorAll('.as-status button')].find((b) => b.textContent === 'Deployed')`);
   ok(await A.until(`[...document.querySelectorAll('.as-status button')].find((b) => b.textContent === 'Deployed')?.classList.contains('on')`), 'its status changes in one tap');

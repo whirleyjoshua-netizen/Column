@@ -40,6 +40,8 @@ async function tab(url) {
 
 
 const A = await tab(APP);
+// The job window is in tabs (2026-11-19): pjT(k) opens tab k first, inside a check (it waits for the window).
+const pjT = (k, sub) => `(document.querySelector('.pj-panel .pj-tab[data-tab=${k}]:not(.on)')?.click() ?? true) && ${sub ? `(document.querySelector('.pj-panel .pj-subtab[data-fin=${sub}]:not(.on)')?.click() ?? true) && ` : ''}`;
 await A.until(`!!document.querySelector('#loginLinks a')`);
 await A.ev(`(() => { document.querySelector('[data-mode=create]').click(); const f = document.querySelector('#loginForm'); f.workspace.value = 'ai${Date.now()}'; f.name.value = 'Jo'; f.password.value = 'secret1'; f.device.value = 'A'; if (f.email && f.code !== undefined) { f.email.value = f.name.value.toLowerCase().replace(/[^a-z]/g, '') + f.workspace.value.replace(/[^a-z0-9]/gi, '') + '@t.test'; if (f.password.value.length < 8) f.password.value += 'pad1'; } f.requestSubmit(); })()`);
 ok(await A.until(`!document.querySelector('#app').classList.contains('hidden')`), 'signed in');
@@ -68,11 +70,13 @@ await A.tap(`[...document.querySelectorAll('#projects .pj-act-btns .btn')].find(
 ok(await A.until(`document.querySelector('#projects .pj-ai-read')?.textContent.includes('14 vans')`), 'Next step: Sidekick says where Ben stands');
 ok(await A.ev(`document.querySelectorAll('#projects .pj-ai-step').length`) === 3, 'with three suggested steps');
 await A.tap(`[...document.querySelectorAll('#projects .pj-ai-step .btn')].find((b) => b.textContent === 'Add task')`);
-ok(await A.until(`[...document.querySelectorAll('#projects .pj-ai-step')].some((x) => x.textContent.includes('✓ Task added')) && [...document.querySelectorAll('#projects .pj-task')].some((x) => x.textContent.includes('Send Ben fleet pricing'))`), 'Add task makes the task, on Ben');
+ok(await A.until(`[...document.querySelectorAll('#projects .pj-ai-step')].some((x) => x.textContent.includes('✓ Task added'))`), 'Add task: Sidekick says it’s added');
+ok(await A.until(`${pjT('work')}[...document.querySelectorAll('#projects .pj-task')].some((x) => x.textContent.includes('Send Ben fleet pricing'))`), 'Add task makes the task, on Ben (under Work)');
+ok(await A.until(`${pjT('overview')}!!document.querySelector('#projects .pj-ai-step')`), 'and back on the Overview, Sidekick’s steps are still there');
 await A.tap(`[...document.querySelectorAll('#projects .pj-ai-step .btn')].find((b) => b.textContent === 'Set Stage to Customer')`);
 ok(await A.until(`[...document.querySelectorAll('#projects .pj-frow')].some((r) => r.textContent.includes('Stage') && r.textContent.includes('Customer'))`), 'Set Stage moves him to Customer');
 await A.tap(`[...document.querySelectorAll('#projects .pj-ai-step .btn')].find((b) => b.textContent === 'Log as sent')`);
-ok(await A.until(`[...document.querySelectorAll('#projects .pj-tl')].some((x) => x.textContent.includes('Jo emailed') && x.textContent.includes('Fleet pricing'))`), 'Log as sent puts the email on his timeline');
+ok(await A.until(`${pjT('activity')}[...document.querySelectorAll('#projects .pj-tl')].some((x) => x.textContent.includes('Jo emailed') && x.textContent.includes('Fleet pricing'))`), 'Log as sent puts the email on his timeline');
 // estimate
 await A.tap(`document.querySelector('#projects .pj-top [aria-label="All boards"]')`);
 await A.tap(`[...document.querySelectorAll('#projects .pj-card')].find((x) => x.textContent.includes('Estimating'))`);
@@ -98,7 +102,8 @@ await A.tap(`[...document.querySelectorAll('#projects .pj-panel .pj-act-btns .bt
 await A.tap(`[...document.querySelectorAll('#menu button')].find((b) => b.textContent === 'New campaign for this job')`);
 ok(await A.until(`!document.querySelector('#camps').classList.contains('hidden') && document.querySelector('#projects').classList.contains('hidden') && document.querySelector('#camps .camp-name')?.textContent === 'Library glazing' && document.querySelector('#camps .camp-job')?.textContent === '📋 For Library glazing'`), '+ Campaign on a job starts a campaign for it, which says which job it’s for');
 await A.tap(`document.querySelector('#camps .camp-job')`);
-ok(await A.until(`document.querySelector('#projects .pj-panel .pj-title')?.value === 'Library glazing' && [...document.querySelectorAll('#projects .pj-panel .pj-camp')].some((x) => x.textContent.startsWith('Library glazing'))`), 'and the job lists its campaign');
+ok(await A.until(`${pjT('work')}document.querySelector('#projects .pj-panel .pj-title')?.value === 'Library glazing' && [...document.querySelectorAll('#projects .pj-panel .pj-camp')].some((x) => x.textContent.startsWith('Library glazing'))`), 'and the job lists its campaign');
+await A.until(`${pjT('overview')}!!document.querySelector('.pj-panel .pj-add-detail')`); // back to the details
 // A step that finishes the job's next stage holds the job until it's done; an owner can move it on with a reason.
 {
   const st = await api('GET', '/state');
@@ -116,7 +121,7 @@ ok(await A.until(`document.querySelector('#projects .pj-panel .pj-title')?.value
   ok(await A.until(`!document.querySelector('#sheet').classList.contains('hidden') && document.querySelector('#sheet').textContent.includes('“Glaze it” isn’t done yet') && [...document.querySelectorAll('#sheet .pj-held .pj-link')].some((b) => b.textContent.startsWith('Glaze it · 1 task open'))`), 'moving the job past an open step says what’s open');
   await A.ev(`document.querySelector('#sheet textarea').value = 'Customer tinted them'; [...document.querySelectorAll('#sheet button')].find((b) => b.textContent === 'Move on anyway').click(); true`);
   ok(await A.until(`document.querySelector('#sheet').classList.contains('hidden') && [...document.querySelectorAll('#projects .pj-panel .pj-frow')].some((r) => r.textContent.includes('Status') && r.textContent.includes(${JSON.stringify(next.label)}))`), 'an owner moves it on anyway, with a reason');
-  ok(await A.until(`[...document.querySelectorAll('#projects .pj-tl')].some((x) => x.textContent.includes('moved it on with work still open') && x.textContent.includes('Customer tinted them'))`), 'and the reason is on the job’s timeline');
+  ok(await A.until(`${pjT('activity')}[...document.querySelectorAll('#projects .pj-tl')].some((x) => x.textContent.includes('moved it on with work still open') && x.textContent.includes('Customer tinted them'))`), 'and the reason is on the job’s timeline');
 }
 // ready-made list and templates
 await A.tap(`document.querySelector('#projects .pj-panel [aria-label="Close"]')`);

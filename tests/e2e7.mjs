@@ -39,6 +39,8 @@ async function tab(url) {
 
 
 const A = await tab(APP);
+// The job window is in tabs (2026-11-19): pjT(k) opens tab k first, inside a check (it waits for the window).
+const pjT = (k, sub) => `(document.querySelector('.pj-panel .pj-tab[data-tab=${k}]:not(.on)')?.click() ?? true) && ${sub ? `(document.querySelector('.pj-panel .pj-subtab[data-fin=${sub}]:not(.on)')?.click() ?? true) && ` : ''}`;
 await A.until(`!!document.querySelector('#loginLinks a')`);
 await A.ev(`(() => { document.querySelector('[data-mode=create]').click(); const f = document.querySelector('#loginForm'); f.workspace.value = 'cn${Date.now()}'; f.name.value = 'Jo'; f.password.value = 'secret1'; f.device.value = 'A'; if (f.email && f.code !== undefined) { f.email.value = f.name.value.toLowerCase().replace(/[^a-z]/g, '') + f.workspace.value.replace(/[^a-z0-9]/gi, '') + '@t.test'; if (f.password.value.length < 8) f.password.value += 'pad1'; } f.requestSubmit(); })()`);
 ok(await A.until(`!document.querySelector('#app').classList.contains('hidden')`), 'signed in');
@@ -66,22 +68,23 @@ const openTools = async (label) => { if (WORK[label]) return A.ev(`document.quer
 await openTools('Jobs & projects');
 await A.tap(`[...document.querySelectorAll('#projects .pj-card')].find((x) => x.textContent.includes('Sales'))`);
 await A.tap(`[...document.querySelectorAll('#projects .pj-open')].find((b) => b.textContent === 'Ben Ortiz')`);
-ok(await A.until(`[...document.querySelectorAll('#projects .pj-tl')].some((x) => x.textContent.includes('Jo added this'))`), 'Ben’s panel has a timeline starting with who added him');
+ok(await A.until(`${pjT('activity')}[...document.querySelectorAll('#projects .pj-tl')].some((x) => x.textContent.includes('Jo added this'))`), 'Ben’s panel has a timeline starting with who added him (its Activity tab)');
+await A.until(`${pjT('overview')}!!document.querySelector('.pj-panel .pj-add-detail')`); // back to the details
 // log a call with a follow-up
 await A.tap(`[...document.querySelectorAll('#projects .pj-act-btns .btn')].find((b) => b.textContent.includes('Log a call'))`);
 await A.tap(`[...document.querySelectorAll('#sheet .pj-outs .btn')].find((b) => b.textContent === 'Interested')`);
 ok(await A.ev(`!!document.querySelector('#sheet input[type=date]').value`), '“Interested” suggests a follow-up date');
 await A.ev(`document.querySelector('#sheet textarea').value = 'Wants pricing for 14 vans'`);
 await A.tap(`document.querySelector('#sheet .primary-btn')`);
-const okCall = await A.until(`[...document.querySelectorAll('#projects .pj-tl')].some((x) => x.textContent.includes('Jo called · Interested') && x.textContent.includes('Wants pricing for 14 vans'))`);
+const okCall = await A.until(`${pjT('activity')}[...document.querySelectorAll('#projects .pj-tl')].some((x) => x.textContent.includes('Jo called · Interested') && x.textContent.includes('Wants pricing for 14 vans'))`);
 if (!okCall) console.log('TIMELINE:', await A.ev(`[...document.querySelectorAll('#projects .pj-tl')].map((x) => x.textContent).join(' | ')`));
 ok(okCall, 'the call shows on his timeline');
-ok(await A.until(`[...document.querySelectorAll('#projects .pj-task')].some((x) => x.textContent.includes('Follow up with Ben Ortiz (interested)'))`), 'its follow-up is listed under Tasks');
-ok(await A.until(`[...document.querySelectorAll('#projects .pj-frow')].some((r) => r.textContent.includes('Last contacted') && r.textContent.includes('Today'))`), 'Last contacted is today');
+ok(await A.until(`${pjT('work')}[...document.querySelectorAll('#projects .pj-task')].some((x) => x.textContent.includes('Follow up with Ben Ortiz (interested)'))`), 'its follow-up is listed under Tasks');
+ok(await A.until(`${pjT('overview')}[...document.querySelectorAll('#projects .pj-frow')].some((r) => r.textContent.includes('Last contacted') && r.textContent.includes('Today'))`), 'Last contacted is today');
 // change the stage: logged
 await A.tap(`[...document.querySelectorAll('#projects .pj-panel .pj-frow')].find((r) => r.querySelector('.pj-flabel').textContent.endsWith('Stage')).querySelector('.pj-cell')`);
 await A.tap(`[...document.querySelectorAll('#menu button')].find((b) => b.textContent === 'Customer')`);
-ok(await A.until(`[...document.querySelectorAll('#projects .pj-tl')].some((x) => x.textContent.includes('changed Stage: Qualified → Customer'))`), 'a stage change shows on the timeline');
+ok(await A.until(`${pjT('activity')}[...document.querySelectorAll('#projects .pj-tl')].some((x) => x.textContent.includes('changed Stage: Qualified → Customer'))`), 'a stage change shows on the timeline');
 // a campaign list from the project, a call logged from it
 const c = await api('POST', '/campaigns', { name: 'Call qualified' });
 await api('PATCH', `/records/${ben.id}`, { values: { [F('contacts', 'stage').id]: ch('contacts', 'stage', 'Qualified') } });
@@ -122,8 +125,8 @@ ok(await A.until(`[...document.querySelectorAll('#docview .dk-lv .lv-row')].some
 await A.until(`document.querySelector('.dv-status').textContent === 'Saved'`, 4000);
 await A.tap(`document.querySelector('#docview .dk-ref-record')`);
 ok(await A.until(`!document.querySelector('#projects').classList.contains('hidden') && document.querySelector('#projects .pj-panel .pj-title')?.value === 'Ben Ortiz'`), 'clicking the chip opens Ben in Projects');
-ok(await A.until(`[...document.querySelectorAll('#projects .pj-tl')].some((x) => x.textContent.includes('Jo called · Booked') && x.textContent.includes('Call qualified'))`), 'his timeline has the call logged from the campaign');
-ok(await A.until(`[...document.querySelectorAll('#projects .pj-tasks .pj-link')].some((x) => x.textContent.includes('Weekly'))`), 'and lists the doc that mentions him');
+ok(await A.until(`${pjT('activity')}[...document.querySelectorAll('#projects .pj-tl')].some((x) => x.textContent.includes('Jo called · Booked') && x.textContent.includes('Call qualified'))`), 'his timeline has the call logged from the campaign');
+ok(await A.until(`${pjT('files')}[...document.querySelectorAll('#projects .pj-tasks .pj-link')].some((x) => x.textContent.includes('Weekly'))`), 'and lists the doc that mentions him');
 // Finance pipeline
 await A.tap(`document.querySelector('#projects [aria-label="Close"]')`);
 await A.tap(`document.querySelector('#projects .pj-top [aria-label="All boards"]')`);
