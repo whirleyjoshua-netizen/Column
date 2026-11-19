@@ -288,6 +288,7 @@ export function githubModule({ db, save, broadcast, rid, cleanText, readJson, se
       const c = db.githubApp[wsId];
       const ws = db.workspaces[wsId];
       c.lastEventAt = Date.now();
+      c.needsReconnect = false; // GitHub is still sending: the installation is alive
       if (event === 'installation' && ['deleted', 'suspend'].includes(body.action)) {
         delete db.githubApp[wsId];
         delete db.codeLog[wsId];
@@ -412,7 +413,8 @@ export function githubModule({ db, save, broadcast, rid, cleanText, readJson, se
       return send(res, 200, appState(ws, auth.memberId));
     }
     if (m === 'POST' && c === 'refresh') {
-      try { conn.repos = await listRepos(conn.installationId); conn.error = null; } catch (e) { conn.error = e.message; }
+      // A refused or removed installation (401/403/404) needs connecting again: the registry turns the tile red.
+      try { conn.repos = await listRepos(conn.installationId); conn.error = null; conn.needsReconnect = false; } catch (e) { conn.error = e.message; conn.needsReconnect = /GitHub said (401|403|404)/.test(e.message); }
       save();
       return send(res, 200, appState(ws, auth.memberId));
     }
