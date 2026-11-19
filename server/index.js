@@ -5570,6 +5570,33 @@ const cents = (v, what = 'the amount') => {
   if (!Number.isFinite(n) || n <= 0 || n > 1e11) throw badRequest(`Enter ${what}, like 142.50`);
   return n;
 };
+// ---------- Finance → Reports (step 4b) ----------
+// The tax categories a small business's spending usually goes under (the US Schedule C lines, in plain words). A
+// spending category goes under the one the team picks, or a likely one from its name until they do.
+const TAX_LINES = ['Advertising', 'Car & truck', 'Contract labor', 'Insurance', 'Interest & bank fees', 'Legal & professional', 'Office & software', 'Rent', 'Repairs & maintenance', 'Supplies & materials', 'Taxes & licenses', 'Travel', 'Meals', 'Utilities & phone', 'Wages', 'Other', 'Not deductible'];
+const TAX_GUESS = [[/fuel|gas\b|mileage|vehicle|truck|car\b|parking|toll/i, 'Car & truck'], [/advert|marketing|ads?\b|promo/i, 'Advertising'], [/sub(contract)?|contractor|1099/i, 'Contract labor'], [/insur/i, 'Insurance'], [/bank|fee|interest|stripe|card/i, 'Interest & bank fees'], [/legal|lawyer|account|bookkeep|cpa/i, 'Legal & professional'], [/software|office|subscription|computer|saas/i, 'Office & software'], [/rent|lease|storage/i, 'Rent'], [/repair|maint/i, 'Repairs & maintenance'], [/suppl|material|tools?\b|parts|equipment|inventory/i, 'Supplies & materials'], [/tax|licen|permit/i, 'Taxes & licenses'], [/travel|hotel|flight/i, 'Travel'], [/meal|food|lunch|dinner|restaurant/i, 'Meals'], [/utilit|phone|internet|electric|water/i, 'Utilities & phone'], [/wage|payroll|salar/i, 'Wages'], [/personal|owner draw|transfer/i, 'Not deductible']];
+const taxLineOf = (ws, cat) => ws.finTax?.lines?.[String(cat || '').toLowerCase()] || TAX_GUESS.find(([re]) => re.test(cat || ''))?.[1] || 'Other';
+function financeReport(ws, from, to) {
+  const xs = Object.values(db.money).filter((x) => x.wsId === ws.id && x.scope === 'business' && x.day >= from && x.day <= to);
+  const sum = (list) => list.reduce((n, x) => n + x.amount, 0);
+  const by = (list, key) => { const m = new Map(); for (const x of list) { const k = key(x); m.set(k, (m.get(k) || 0) + x.amount); } return [...m.entries()].map(([name, amount]) => ({ name, amount })).sort((a, b) => b.amount - a.amount); };
+  const ins = xs.filter((x) => x.kind === 'in'), outs = xs.filter((x) => x.kind === 'out');
+  const deductible = outs.filter((x) => taxLineOf(ws, x.category) !== 'Not deductible');
+  const income = sum(ins), expenses = sum(outs), net = income - sum(deductible);
+  const pct = ws.finTax?.pct || 0;
+  let meters = 0, trips = 0;
+  for (const x of Object.values(db.mileage || {})) if (x.wsId === ws.id && x.date >= from && x.date <= to) { meters += x.meters || 0; trips++; }
+  const unit = ws.settings.mileUnit || 'mi';
+  return {
+    from, to, income, expenses, deductible: sum(deductible), net, profit: income - expenses,
+    incomeBy: by(ins, (x) => x.category || 'Uncategorized'),
+    expensesBy: by(outs, (x) => x.category || 'Uncategorized').map((r) => ({ ...r, taxLine: taxLineOf(ws, r.name === 'Uncategorized' ? '' : r.name) })),
+    taxLinesBy: by(outs, (x) => taxLineOf(ws, x.category)),
+    taxPct: pct, setAside: pct && net > 0 ? Math.round((net * pct) / 100) : 0,
+    distance: Math.round((meters / MILE_PER[unit]) * 10) / 10, unit, trips,
+    entries: xs.length, taxLines: TAX_LINES, chosen: ws.finTax?.lines || {},
+  };
+}
 // The team's one price list (Finance step 3): price list records from every board the person sees, then Inventory.
 function priceListFor(ws, auth) {
   const admin = isAdmin(auth), out = [];
@@ -8528,6 +8555,15 @@ async function api(req, res, url) {
   // The team's one price list (Finance step 3): what's on the price lists of the boards this person can see, and
   // Inventory's items, in one list for every job's price lines. What things cost the business is for owners and admins.
   if (a === 'price-list' && m === 'GET' && !b) return send(res, 200, { items: priceListFor(ws, auth) });
+  // Finance → Reports (step 4b): profit and loss for a period, by category and tax category, miles driven, and the
+  // set-aside the team picked. The business's money only; owners and admins.
+  if (a === 'finance' && b === 'report' && m === 'GET') {
+    if (!isAdmin(auth)) return send(res, 403, { error: 'Only team owners and admins see the business’s reports.' });
+    const q = new URL(req.url, 'http://x').searchParams;
+    const from = q.get('from'), to = q.get('to');
+    if (!isDay(from) || !isDay(to) || from > to) return send(res, 400, { error: 'Pick the dates the report covers.' });
+    return send(res, 200, financeReport(ws, from, to));
+  }
   // Finance → Quotes (step 2): every quote the team has sent from a job or a Bids & Quotes list, with where it
   // stands. For owners and admins, like invoices; only the boards they can see.
   if (a === 'quotes' && m === 'GET' && !b) {
@@ -10412,6 +10448,18 @@ async function api(req, res, url) {
         if (Number.isFinite(n) && n > 0) out[id] = Math.min(n, 1e6); else delete out[id];
       }
       ws.laborRates = out;
+    }
+    // Finance → Reports: which tax category each spending category goes under, and the share of profit to set aside.
+    if (body.taxLines !== undefined || body.taxPct !== undefined) {
+      if (!isAdmin(auth)) return send(res, 403, { error: 'Only team owners and admins can set up the business’s reports.' });
+      const t = { lines: { ...(ws.finTax?.lines || {}) }, pct: ws.finTax?.pct || 0 };
+      for (const [cat, line] of Object.entries(body.taxLines || {}).slice(0, 300)) {
+        const k = cleanText(cat, 40).toLowerCase();
+        if (!k) continue;
+        if (TAX_LINES.includes(line)) t.lines[k] = line; else delete t.lines[k];
+      }
+      if (body.taxPct !== undefined) { const n = Number(String(body.taxPct ?? '').replace(/[%\s]/g, '')); t.pct = Number.isFinite(n) && n > 0 ? Math.min(Math.round(n * 10) / 10, 60) : 0; }
+      ws.finTax = t;
     }
     if (body.overheadPct !== undefined) {
       if (!isAdmin(auth)) return send(res, 403, { error: 'Only team owners and admins can set overhead.' });

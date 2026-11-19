@@ -20266,8 +20266,8 @@
     const tab = (k) => { FIN.tab = k; store.set('finTab', k); renderTool(); };
     const scope = (v) => { billScope = v; store.set('billScope', v); renderTool(); };
     return [
-      h('div', { class: 'seg fin-tabs' }, [['overview', 'Overview'], ['flow', 'In & out'], ['bills', 'Bills'], ...(amAdmin() ? [['invoices', 'Invoices'], ['quotes', 'Quotes']] : [])].map(([k, t]) => h('button', { class: FIN.tab === k ? 'on' : null, 'data-fin': k, onclick: () => tab(k) }, t))),
-      ...(FIN.tab === 'invoices' && amAdmin() ? finInvoicesTab() : FIN.tab === 'quotes' && amAdmin() ? finQuotesTab() : [
+      h('div', { class: 'seg fin-tabs' }, [['overview', 'Overview'], ['flow', 'In & out'], ['bills', 'Bills'], ...(amAdmin() ? [['invoices', 'Invoices'], ['quotes', 'Quotes'], ['reports', 'Reports']] : [])].map(([k, t]) => h('button', { class: FIN.tab === k ? 'on' : null, 'data-fin': k, onclick: () => tab(k) }, t))),
+      ...(FIN.tab === 'invoices' && amAdmin() ? finInvoicesTab() : FIN.tab === 'quotes' && amAdmin() ? finQuotesTab() : FIN.tab === 'reports' && amAdmin() ? finReportsTab() : [
       hasBiz ? h('div', { class: 'seg seg-sm' }, [['all', 'All'], ['personal', 'Personal'], ['business', 'Business']].map(([v, t]) => h('button', { class: billScope === v ? 'on' : null, onclick: () => scope(v) }, t))) : null,
       // Full size: the overview is a dashboard, the month (totals, budgets, pipeline) beside the bills coming up.
       ...(FIN.tab === 'bills' ? billsTab() : FIN.tab === 'flow' ? flowTab() : document.body.classList.contains('wide')
@@ -20311,6 +20311,59 @@
         h('span', { class: 'fin-row-t' }, h('b', {}, p.inv.to?.name || p.inv.number), h('small', {}, [p.inv.number, (PAY_METHODS.find(([k]) => k === p.method) || [, p.method])[1], p.day && dueLabel(p.day)].filter(Boolean).join(' · '))),
         h('b', { class: 'pj-num' }, '+' + money2(p.amount))))) : null,
     ];
+  }
+  // ----- Finance step 4b: Reports, profit and loss for a period, by category and tax category, for owners and admins -----
+  const finPeriod = (k) => {
+    const d = new Date(), y = d.getFullYear(), mo = d.getMonth(), q = Math.floor(mo / 3);
+    const ds = (yy, mm, dd) => dayKey(new Date(yy, mm, dd));
+    return { month: [ds(y, mo, 1), ds(y, mo + 1, 0)], lastMonth: [ds(y, mo - 1, 1), ds(y, mo, 0)], quarter: [ds(y, q * 3, 1), ds(y, q * 3 + 3, 0)], lastQuarter: [ds(y, q * 3 - 3, 1), ds(y, q * 3, 0)], year: [ds(y, 0, 1), ds(y, 11, 31)], lastYear: [ds(y - 1, 0, 1), ds(y - 1, 11, 31)] }[k];
+  };
+  const FIN_PERIODS = [['month', 'This month'], ['lastMonth', 'Last month'], ['quarter', 'This quarter'], ['lastQuarter', 'Last quarter'], ['year', 'This year'], ['lastYear', 'Last year']];
+  function finReportsTab() {
+    const pk = FIN.period || 'quarter';
+    const [from, to] = finPeriod(pk);
+    const key = from + '|' + to;
+    if (FIN.reportKey !== key) { FIN.reportKey = key; FIN.report = null; api('GET', `/finance/report?from=${from}&to=${to}`).then((y) => { if (FIN.reportKey === key) { FIN.report = y; renderTool(); } }).catch((e) => toast(e.message)); }
+    const x = FIN.report;
+    const period = h('select', { class: 'fin-period', 'aria-label': 'Period' }, FIN_PERIODS.map(([k, l]) => h('option', { value: k, selected: k === pk }, l)));
+    period.addEventListener('change', () => { FIN.period = period.value; renderTool(); });
+    const head = h('div', { class: 'fin-rep-h' }, period, h('small', { class: 'muted' }, `${dueLabel(from)} – ${dueLabel(to)}`), h('span', { style: 'flex:1' }), x ? h('button', { class: 'btn small fin-csv', onclick: () => finReportCsv(x) }, 'Export for your accountant (CSV)') : null);
+    if (!x) return [head, h('p', { class: 'day-hint' }, 'Loading…')];
+    const refresh = () => { FIN.reportKey = null; renderTool(); };
+    const pct = h('input', { class: 'fin-taxpct', inputmode: 'decimal', value: x.taxPct || '', placeholder: '0', 'aria-label': 'Percent of profit to set aside' });
+    pct.addEventListener('change', () => api('PATCH', '/workspace', { taxPct: pct.value }).then(refresh).catch((e) => toast(e.message)));
+    const table = (rows, cells) => h('div', { class: 'fin-list fin-rep' }, rows.map((r) => h('div', { class: 'fin-row fin-rep-row' }, ...cells(r))));
+    return [
+      head,
+      h('div', { class: 'fin-cards' },
+        finCard('Money in', money2(x.income), x.incomeBy.length === 1 ? '1 category' : `${x.incomeBy.length} categories`),
+        finCard('Money out', money2(x.expenses), x.expenses !== x.deductible ? `${money2(x.deductible)} deductible` : 'all deductible'),
+        finCard('Profit', money2(x.net), 'money in, less what’s deductible', x.net < 0 ? 'warn' : ''),
+        finCard('Set aside for taxes', x.taxPct ? money2(x.setAside) : '—', x.taxPct ? `${x.taxPct}% of profit` : 'pick a % below')),
+      h('label', { class: 'fin-setaside' }, 'Set aside', pct, '% of profit for taxes', h('small', { class: 'hint' }, 'Your own pick (ask your accountant what fits you). It’s a reminder, not a tax calculation.')),
+      x.incomeBy.length ? h('h3', {}, 'Money in') : null,
+      x.incomeBy.length ? table(x.incomeBy, (r) => [h('span', { class: 'fin-row-t' }, r.name), h('b', { class: 'pj-num' }, money2(r.amount))]) : null,
+      x.expensesBy.length ? h('h3', {}, 'Spending, and its tax category') : null,
+      x.expensesBy.length ? table(x.expensesBy, (r) => {
+        const sel = h('select', { class: 'fin-taxline', 'data-cat': r.name, 'aria-label': `Tax category for ${r.name}` }, x.taxLines.map((l) => h('option', { value: l, selected: l === r.taxLine }, l)));
+        sel.addEventListener('change', () => api('PATCH', '/workspace', { taxLines: { [r.name]: sel.value } }).then(refresh).catch((e) => toast(e.message)));
+        return [h('span', { class: 'fin-row-t' }, r.name), sel, h('b', { class: 'pj-num' }, money2(r.amount))];
+      }) : null,
+      x.taxLinesBy.length ? h('h3', {}, 'By tax category') : null,
+      x.taxLinesBy.length ? table(x.taxLinesBy, (r) => [h('span', { class: 'fin-row-t' }, r.name), h('b', { class: 'pj-num' }, money2(r.amount))]) : null,
+      x.trips ? h('p', { class: 'day-hint fin-miles' }, `🚗 ${x.distance.toLocaleString()} ${x.unit} driven on ${plural(x.trips, 'trip')} (in Map → Mileage; logged trips are in Mileage spending above).`) : null,
+      !x.entries ? h('p', { class: 'day-hint' }, 'No business money in these dates yet. Add money in and out, or import a bank statement, under In & out.') : null,
+    ];
+  }
+  function finReportCsv(x) {
+    const esc = (v) => { let t = String(v ?? ''); if (/^[=+\-@\t\r]/.test(t)) t = "'" + t; return /[",\n\r]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t; };
+    const line = Object.fromEntries(x.expensesBy.map((r) => [r.name, r.taxLine]));
+    const xs = (S.money || []).filter((m) => m.scope === 'business' && m.day >= x.from && m.day <= x.to).sort((a, b) => (a.day < b.day ? -1 : 1));
+    const head = ['Date', 'In or out', 'Category', 'Tax category', 'Amount', 'Note', 'Jobs', 'By'];
+    const rows = xs.map((m) => [m.day, m.kind === 'in' ? 'In' : 'Out', m.category || '', m.kind === 'out' ? line[m.category || 'Uncategorized'] || '' : '', ((m.kind === 'in' ? 1 : -1) * m.amount / 100).toFixed(2), m.note || '', moneyJobsLabel(m) || '', m.by || '']);
+    const csv = [head, ...rows].map((r) => r.map(esc).join(',')).join('\r\n') + '\r\n';
+    const a = h('a', { href: URL.createObjectURL(new Blob(['\ufeff' + csv], { type: 'text/csv' })), download: `Business money ${x.from} to ${x.to}.csv` });
+    a.click();
   }
   const Q_LABEL = { pending: 'Waiting', accepted: 'Accepted', declined: 'Declined', expired: 'Expired', withdrawn: 'Withdrawn' };
   function finQuotesTab() {

@@ -9,7 +9,7 @@ WORK="${1:-${RUNNER_TEMP:-/tmp}/kloomie-ci}"
 mkdir -p "$WORK"
 TESTS="admin agents alerts apiwide assets audit_access audit_agents audit_agents2 audit_agents3 audit_auth audit_batch10
   audit_batch7 audit_billing audit_billing2 audit_critical audit_dates audit_misc audit_money audit_oauth audit_quote
-  audit_rules audit_safefetch audit_send audit_signin audit_signoff audit_storage audit_urls billing cards chatlinks chatpins chatsign chatask chatagent contacts workload taskpresets finance_jobs finance_view price_list costing_truth ws_profile
+  audit_rules audit_safefetch audit_send audit_signin audit_signoff audit_storage audit_urls billing cards chatlinks chatpins chatsign chatask chatagent contacts workload taskpresets finance_jobs finance_view price_list costing_truth finance_report ws_profile
   custmsg delteam flows_bus flows_steps flows_actions flows_vault flows_builder flows_agent jobcampaign jobsteps jobflows jobneeds jobboard forecast joblinks history inventory inventory_equipment inventory_links inventory_counts inventory_steps inventory_orders projects_archive cards_show inventory_labels docs_ask docs_blocks docs_pages docs_wiki dropbox dupnames engine templates contact_groups notion_import seo export gcontacts gmail hq hqeval hqlearn invoices leads leadsources marketing news onboard
   quickbooks routes rules tech tech2 tech3 tech4 tech5 techai twilio twostep visibility zapier"
 failed=()

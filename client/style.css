@@ -3649,3 +3649,10 @@ body:not(.wide) #split.chat-split .split-body { margin: 0 -14px; }
 .pj-client-line { display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px 10px; margin-bottom: 8px; border: 1px solid var(--line); border-radius: 10px; background: none; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
 .pj-client-line:hover { background: var(--card-hover); }
 .pj-client-line small { color: var(--muted); }
+/* Finance step 4b: Reports (2026-11-20) */
+.fin-rep-h { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 6px 0; }
+.fin-setaside { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 13px; margin: 0 0 10px; }
+.fin-setaside input { width: 70px; }
+.fin-setaside small { flex-basis: 100%; }
+.fin-rep-row { cursor: default; }
+.fin-rep-row select { max-width: 190px; }
