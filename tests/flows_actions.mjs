@@ -75,7 +75,8 @@ try {
 
   // What's checked when it's saved.
   r = await auto(sam, 'Sam’s money', { kind: 'record.stage', projectId: p.id, to: 'Done' }, [{ kind: 'money', direction: 'in', amount: 50 }]);
-  ok(r.status === 400 && /Only owners/.test(r.body.error), 'only owners can have an automation add the business’s money');
+  ok(r.status === 200, 'an admin can have an automation add the business’s money (Finance step 2, 2026-11-20: business money is for owners and admins)');
+  if (r.body?.id) await sam('DELETE', '/automations/' + r.body.id);
   r = await auto(rico, 'No words', { kind: 'record.stage', projectId: p.id }, [{ kind: 'text', text: '' }]);
   ok(r.status === 400, 'a text with no words is refused');
   r = await auto(rico, 'No subject', { kind: 'record.stage', projectId: p.id }, [{ kind: 'email', subject: '', text: 'hi' }]);

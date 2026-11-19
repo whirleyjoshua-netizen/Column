@@ -100,7 +100,7 @@ try {
   await rico('POST', `/invoices/${inv.id}/payments`, { amount: '100', method: 'cash' });
   ok(await until(async () => (await posts(fMoney)).includes(`Dana Ruiz paid $100.00 on ${inv.number}`)), 'a payment sets off “Paid”');
 
-  // Business money: owners' automations only, and never someone's own money.
+  // Business money: owners' and admins' automations (Finance step 2), and never someone's own money.
   const fFin = await feed('finance');
   await auto(rico, 'Big spend', { kind: 'money.added', over: 500, direction: 'out' }, 'Spent {amount} on {category}: {note}', fFin);
   await auto(sam, 'Sam spend', { kind: 'money.added' }, 'SAM heard {amount}', fFin);
@@ -110,7 +110,7 @@ try {
   await sleep(500);
   const fin = await posts(fFin);
   ok(fin.includes('Spent $800.00 on Tools: Vacuum pump') && !fin.some((x) => x.includes('Tape')), 'business money out over $500 sets off the owner’s automation (and $50 doesn’t)');
-  ok(!fin.some((x) => x.includes('MY OWN')) && !fin.some((x) => x.startsWith('SAM heard $800')), 'someone’s own money never does, and an admin who isn’t an owner doesn’t hear business money');
+  ok(!fin.some((x) => x.includes('MY OWN')) && fin.some((x) => x.startsWith('SAM heard $800')), 'someone’s own money never does; an admin hears business money too (Finance step 2, 2026-11-20)');
 
   // A text in.
   await rico('PUT', '/texting', { sid: SID, token: TOKEN, number: NUM });

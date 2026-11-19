@@ -1,8 +1,8 @@
 // Finance, step 1 (the owner, 2026-11-20): money goes on jobs. A business expense or income entry can be for one job,
 // or split across several (a $500 supplier run for three jobs), each with its share, without copying the money. The
 // job's costing counts its share of expenses, what came in outside invoices, and what's on order from suppliers.
-// Only business money goes on a job. Owners and admins put it there; admins see the business money that's on jobs
-// (they already see what jobs cost), and nothing else of the business's. Members see none of it.
+// Only business money goes on a job. Owners and admins put it there (and see the business's money: step 2).
+// Members see none of it.
 import fs from 'node:fs';
 import { spawn } from 'node:child_process';
 const S = (await import('node:path')).resolve(process.argv[2]);
@@ -76,13 +76,9 @@ try {
   // Who sees what.
   const benMoney = (await ben('GET', '/state')).body.money;
   ok(benMoney.some((x) => x.id === run.id) && benMoney.some((x) => x.id === freight.id), 'Ben (admin) sees the business money that’s on jobs');
-  await ada('POST', '/money', { kind: 'out', amount: '2000', day: today, category: 'Rent', note: 'Shop rent', scope: 'business' });
-  ok(!(await ben('GET', '/state')).body.money.some((x) => x.note === 'Shop rent'), 'but not the rest of the business’s money');
   ok((await cost(ben, smith)).expenses > 0, 'and his costing shows the job’s expenses');
   r = await ben('POST', '/money', { kind: 'out', amount: '35', day: today, category: 'Fuel', note: 'Gas to Lee', scope: 'business', jobs: [{ recordId: lee.id }] });
   ok(r.status === 200 && r.body.scope === 'business', 'Ben can put a business expense on a job');
-  ok((await ben('POST', '/money', { kind: 'out', amount: '35', day: today, scope: 'business' })).body?.scope === 'personal', 'but business money that isn’t on a job stays the owners’');
-  ok((await ben('PATCH', '/money/' + freight.id, { jobs: [] })).status === 400, 'and he can’t take an owner’s entry off its job');
   ok(!(await cy('GET', '/state')).body.money.some((x) => x.scope === 'business'), 'Cy (member) sees none of the business’s money');
   ok((await cy('POST', '/money', { kind: 'out', amount: '5', day: today, scope: 'business', jobs: [{ recordId: smith.id }] })).status === 400, 'and can’t put money on a job');
 } catch (e) {

@@ -553,6 +553,7 @@
       teamSoon();
       renderDay();
     } else if (msg.type === 'invoice') {
+      if (FIN.invoices) { FIN.invoices = null; if (FIN.tab === 'invoices') renderTool(); }
       lkForget('invoice', msg.invoice?.id || msg.id);
       invoiceNews(msg.invoice);
     } else if (msg.type === 'invoice:remove') {
@@ -5455,7 +5456,7 @@
   const AUTO_KEYS = { list: null };
   // Who may pick which (the server checks the same): billing and messaging customers are for owners and admins, the
   // business's money for owners.
-  const autoDoOk = (k) => (k === 'money' ? amOwner() : ['invoice', 'text', 'email', 'webhook'].includes(k) ? amAdmin() : k === 'agent' ? toolOn('agents') : k === 'stock' ? toolOn('inventory') : true);
+  const autoDoOk = (k) => (k === 'money' ? amAdmin() : ['invoice', 'text', 'email', 'webhook'].includes(k) ? amAdmin() : k === 'agent' ? toolOn('agents') : k === 'stock' ? toolOn('inventory') : true);
   // The fields an automation can set (the server checks the same): plain values, never price lines or files.
   const AUTO_SET_T = ['text', 'number', 'money', 'date', 'select', 'multi', 'checkbox', 'person', 'email', 'phone', 'url'];
   const AUTO_WORDS = {
@@ -19399,13 +19400,13 @@
           made.push(y);
         } else if (y.type === 'budget') {
           // In a campaign plan it's the business's; in a budget plan, whichever the card says.
-          const scope = x.kind === 'money' ? (y.scope === 'business' && amOwner() ? 'business' : 'personal') : amOwner() && c ? 'business' : 'personal';
+          const scope = x.kind === 'money' ? (y.scope === 'business' && amAdmin() ? 'business' : 'personal') : amAdmin() && c ? 'business' : 'personal';
           const b = await api('PUT', '/budgets', { scope, category: y.category, limit: y.limit });
           S.budgets = (S.budgets || []).filter((z) => !(z.scope === scope && sameText(z.category, y.category)));
           if (b.id) S.budgets.push(b);
           made.push(y);
         } else if (y.type === 'bill') {
-          const b = await api('POST', '/bills', { name: y.name, amount: y.amount, due: y.due, repeat: y.repeat, autopay: y.autopay, category: y.category, scope: y.scope === 'business' && amOwner() ? 'business' : 'personal', tz: myTz() });
+          const b = await api('POST', '/bills', { name: y.name, amount: y.amount, due: y.due, repeat: y.repeat, autopay: y.autopay, category: y.category, scope: y.scope === 'business' && amAdmin() ? 'business' : 'personal', tz: myTz() });
           S.bills = [...(S.bills || []).filter((z) => z.id !== b.id), b];
           made.push(y);
         } else if (y.type === 'block') {
@@ -19751,7 +19752,7 @@
     const due = h('input', { type: 'date', value: b?.due || todayKey() });
     const repeat = h('select', {}, BILL_REPEATS.map(([v, t]) => h('option', { value: v, selected: (b?.repeat || 'monthly') === v }, t)));
     const mineOrNew = !b || b.memberId === S.me?.memberId;
-    const scope = h('select', { disabled: !mineOrNew || (!amOwner() && b?.scope !== 'business') }, h('option', { value: 'personal' }, 'Personal · only you'), h('option', { value: 'business', selected: b?.scope === 'business' }, 'Business · shared with owners'));
+    const scope = h('select', { disabled: !mineOrNew || (!amAdmin() && b?.scope !== 'business') }, h('option', { value: 'personal' }, 'Personal · only you'), h('option', { value: 'business', selected: b?.scope === 'business' }, 'Business · shared with owners'));
     const autopay = h('input', { type: 'checkbox', checked: !!b?.autopay });
     const note = h('input', { value: b?.note || '', placeholder: 'Account number, how you pay… (optional)' });
     const cat = catInput('out', b?.category || 'Bills');
@@ -19812,16 +19813,79 @@
         h('small', { class: 'bill-tag' + (over ? ' late' : '') }, over ? 'over' : `${Math.round((spent / b.limit) * 100)}% used`)));
   }
   function financeTool() {
-    const hasBiz = [...(S.bills || []), ...(S.money || []), ...(S.budgets || [])].some((x) => x.scope === 'business') || amOwner();
+    const hasBiz = [...(S.bills || []), ...(S.money || []), ...(S.budgets || [])].some((x) => x.scope === 'business') || amAdmin();
+    // Finance is the business's first (step 2): an owner or admin who keeps no personal money here starts on Business.
+    if (amAdmin() && store.get('billScope', null) == null && ![...(S.bills || []), ...(S.money || []), ...(S.budgets || [])].some((x) => x.scope !== 'business' && x.memberId === S.me?.memberId)) billScope = 'business';
     const tab = (k) => { FIN.tab = k; store.set('finTab', k); renderTool(); };
     const scope = (v) => { billScope = v; store.set('billScope', v); renderTool(); };
     return [
-      h('div', { class: 'seg' }, [['overview', 'Overview'], ['flow', 'In & out'], ['bills', 'Bills']].map(([k, t]) => h('button', { class: FIN.tab === k ? 'on' : null, onclick: () => tab(k) }, t))),
+      h('div', { class: 'seg fin-tabs' }, [['overview', 'Overview'], ['flow', 'In & out'], ['bills', 'Bills'], ...(amAdmin() ? [['invoices', 'Invoices'], ['quotes', 'Quotes']] : [])].map(([k, t]) => h('button', { class: FIN.tab === k ? 'on' : null, 'data-fin': k, onclick: () => tab(k) }, t))),
+      ...(FIN.tab === 'invoices' && amAdmin() ? finInvoicesTab() : FIN.tab === 'quotes' && amAdmin() ? finQuotesTab() : [
       hasBiz ? h('div', { class: 'seg seg-sm' }, [['all', 'All'], ['personal', 'Personal'], ['business', 'Business']].map(([v, t]) => h('button', { class: billScope === v ? 'on' : null, onclick: () => scope(v) }, t))) : null,
       // Full size: the overview is a dashboard, the month (totals, budgets, pipeline) beside the bills coming up.
       ...(FIN.tab === 'bills' ? billsTab() : FIN.tab === 'flow' ? flowTab() : document.body.classList.contains('wide')
         ? [h('div', { class: 'fin-dash' }, h('section', { class: 'fin-col' }, ...overviewTab().filter(Boolean)), h('section', { class: 'fin-col' }, h('h3', {}, 'Bills'), ...billsTab().filter(Boolean)))]
         : overviewTab()),
+      ]),
+    ];
+  }
+  // ----- Finance step 2: the business's invoices and quotes in one place (owners and admins) -----
+  const finLoad = (k, path, pick) => {
+    if (FIN[k] || FIN[k + 'Loading']) return;
+    FIN[k + 'Loading'] = true;
+    api('GET', path).then((y) => { FIN[k] = pick(y); }).catch((e) => { FIN[k] = []; toast(e.message); }).finally(() => { FIN[k + 'Loading'] = false; renderTool(); });
+  };
+  const finCard = (label, val, sub, cls) => h('div', { class: 'fin-card' + (cls ? ' ' + cls : '') }, h('small', {}, label), h('b', {}, val), sub ? h('small', {}, sub) : null);
+  const finOpenJob = (id) => id && goTo('rec:' + id);
+  function finInvoicesTab() {
+    finLoad('invoices', '/invoices', (y) => y);
+    if (!FIN.invoices) return [h('p', { class: 'day-hint' }, 'Loading…')];
+    const list = FIN.invoices.filter((x) => x.status !== 'void');
+    const open = list.filter((x) => x.status !== 'draft' && x.balance > 0);
+    const late = open.filter((x) => x.overdue);
+    const ym = todayKey().slice(0, 7);
+    const pays = list.flatMap((x) => (x.payments || []).map((p) => ({ ...p, inv: x }))).sort((a, b) => (b.at || 0) - (a.at || 0));
+    const sum = (xs, f) => xs.reduce((n, x) => n + (f(x) || 0), 0);
+    const f = FIN.invFilter || 'open';
+    const shown = f === 'open' ? open : f === 'late' ? late : f === 'draft' ? list.filter((x) => x.status === 'draft') : f === 'paid' ? list.filter((x) => x.status === 'paid') : FIN.invoices;
+    const row = (x) => h('button', { class: 'fin-row fin-inv', 'data-inv': x.id, onclick: () => invoiceSheet(x) },
+      h('span', { class: 'fin-row-t' }, h('b', {}, x.number), h('small', {}, [x.to?.name, x.title].filter(Boolean).join(' · '))),
+      h('span', { class: 'pj-inv-st s-' + x.status + (x.overdue ? ' late' : '') }, x.overdue ? 'Overdue' : INV_LABEL[x.status]),
+      h('span', { class: 'fin-row-n' }, h('b', { class: 'pj-num' }, money2(x.total)), x.balance && x.status !== 'draft' && x.status !== 'void' ? h('small', {}, `${money2(x.balance)} left${x.due ? ' · due ' + dueLabel(x.due).toLowerCase() : ''}`) : null));
+    return [
+      h('div', { class: 'fin-cards' },
+        finCard('Owed to you', money2(sum(open, (x) => x.balance)), plural(open.length, 'invoice')),
+        finCard('Overdue', money2(sum(late, (x) => x.balance)), late.length ? plural(late.length, 'invoice') : 'none', late.length ? 'warn' : ''),
+        finCard('Paid this month', money2(sum(pays.filter((p) => (p.day || '').startsWith(ym)), (p) => p.amount)), plural(pays.filter((p) => (p.day || '').startsWith(ym)).length, 'payment'))),
+      h('div', { class: 'seg seg-sm fin-inv-f' }, [['open', 'Owed'], ['late', 'Overdue'], ['draft', 'Drafts'], ['paid', 'Paid'], ['all', 'All']].map(([k, l]) => h('button', { class: f === k ? 'on' : null, onclick: () => { FIN.invFilter = k; renderTool(); } }, l))),
+      shown.length ? h('div', { class: 'fin-list' }, shown.map(row)) : h('p', { class: 'day-hint' }, FIN.invoices.length ? 'None here.' : 'No invoices yet. Make one from a job (Boards → the job → 💵 Invoices).'),
+      pays.length ? h('h3', {}, 'Payments') : null,
+      pays.length ? h('div', { class: 'fin-list' }, pays.slice(0, 30).map((p) => h('button', { class: 'fin-row fin-pay', onclick: () => invoiceSheet(p.inv) },
+        h('span', { class: 'fin-row-t' }, h('b', {}, p.inv.to?.name || p.inv.number), h('small', {}, [p.inv.number, (PAY_METHODS.find(([k]) => k === p.method) || [, p.method])[1], p.day && dueLabel(p.day)].filter(Boolean).join(' · '))),
+        h('b', { class: 'pj-num' }, '+' + money2(p.amount))))) : null,
+    ];
+  }
+  const Q_LABEL = { pending: 'Waiting', accepted: 'Accepted', declined: 'Declined', expired: 'Expired', withdrawn: 'Withdrawn' };
+  function finQuotesTab() {
+    finLoad('quotes', '/quotes', (y) => y.quotes);
+    if (!FIN.quotes) return [h('p', { class: 'day-hint' }, 'Loading…')];
+    const qs = FIN.quotes;
+    const by = (k) => qs.filter((x) => x.status === k);
+    const sum = (xs) => xs.reduce((n, x) => n + (x.total || 0), 0);
+    const answered = by('accepted').length + by('declined').length;
+    const f = FIN.qFilter || 'pending';
+    const shown = f === 'all' ? qs : by(f);
+    return [
+      h('div', { class: 'fin-cards' },
+        finCard('Waiting on an answer', money2(sum(by('pending'))), plural(by('pending').length, 'quote')),
+        finCard('Accepted', money2(sum(by('accepted'))), plural(by('accepted').length, 'quote')),
+        finCard('Win rate', answered ? Math.round((by('accepted').length / answered) * 100) + '%' : '—', answered ? `of ${plural(answered, 'answered quote')}` : 'none answered yet')),
+      h('div', { class: 'seg seg-sm fin-q-f' }, [['pending', 'Waiting'], ['accepted', 'Accepted'], ['declined', 'Declined'], ['all', 'All']].map(([k, l]) => h('button', { class: f === k ? 'on' : null, onclick: () => { FIN.qFilter = k; renderTool(); } }, l))),
+      shown.length ? h('div', { class: 'fin-list' }, shown.map((x) => h('button', { class: 'fin-row fin-q', 'data-rec': x.recordId, onclick: () => finOpenJob(x.recordId) },
+        h('span', { class: 'fin-row-t' }, h('b', {}, [x.number, x.title].filter(Boolean).join(' · ')), h('small', {}, [x.customer, x.project, x.sentAt ? 'sent ' + ago(x.sentAt) : null, x.acceptedBy ? 'accepted by ' + x.acceptedBy : null].filter(Boolean).join(' · '))),
+        h('span', { class: 'fin-q-st s-' + x.status }, Q_LABEL[x.status] || x.status),
+        h('b', { class: 'pj-num' }, money2(x.total)))))
+        : h('p', { class: 'day-hint' }, qs.length ? 'None here.' : 'No quotes sent yet. Send one from a job’s price lines, or from Bids & Quotes.'),
     ];
   }
   function monthNav() {
@@ -19996,7 +20060,7 @@
   function budgetSheet(b, category, amount) {
     const cat = catInput('out', b?.category || category || '');
     const limit = h('input', { value: b ? (b.limit / 100).toFixed(0) : amount || '', placeholder: '400', inputmode: 'decimal' });
-    const scope = h('select', { disabled: !!b || !amOwner() }, h('option', { value: 'personal' }, 'Personal'), h('option', { value: 'business', selected: (b?.scope || (billScope === 'business' ? 'business' : 'personal')) === 'business' }, 'Business'));
+    const scope = h('select', { disabled: !!b || !amAdmin() }, h('option', { value: 'personal' }, 'Personal'), h('option', { value: 'business', selected: (b?.scope || (billScope === 'business' ? 'business' : 'personal')) === 'business' }, 'Business'));
     const del = b ? h('button', { class: 'btn small danger', 'data-label': '1' }, 'Remove budget') : null;
     del?.addEventListener('click', () => confirmClick(del, async () => {
       await api('PUT', '/budgets', { scope: b.scope, category: b.category, limit: 0 }).catch((e) => toast(e.message));
@@ -20117,7 +20181,7 @@
     const cOut = pick(find(/debit|withdraw|charge|money out/i));
     const cIn = pick(find(/credit|deposit|money in/i));
     const flip = h('input', { type: 'checkbox' });
-    const scope = h('select', { disabled: !amOwner() }, h('option', { value: 'personal' }, 'Personal · only you'), h('option', { value: 'business', selected: billScope === 'business' }, 'Business · shared with owners'));
+    const scope = h('select', { disabled: !amAdmin() }, h('option', { value: 'personal' }, 'Personal · only you'), h('option', { value: 'business', selected: billScope === 'business' }, 'Business · shared with owners'));
     const preview = h('div', { class: 'stmt-rows' });
     const totals = h('p', { class: 'day-hint' });
     let rows = [];

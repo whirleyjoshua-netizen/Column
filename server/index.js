@@ -3440,7 +3440,7 @@ function cleanAction(a, ws, who) {
   }
   // The rest of the tools: its maker has to be allowed to do it (and is checked again when it runs, by the same routes).
   if (['invoice', 'text', 'email'].includes(kind) && !isAdminId(ws.id, who)) throw badRequest('Only owners and admins can have an automation bill or message customers.');
-  if (kind === 'money' && !isOwnerId(ws.id, who)) throw badRequest('Only owners can have an automation add the business’s money.');
+  if (kind === 'money' && !isAdminId(ws.id, who)) throw badRequest('Only owners and admins can have an automation add the business’s money.');
   if (kind === 'visit') {
     const crew = a.crew === 'who' ? 'who' : (Array.isArray(a.crew) ? a.crew.map(String) : []).filter((id) => ws.members.some((m) => m.id === id)).slice(0, 20);
     const len = Math.round(Number(a.length) || 60);
@@ -3555,7 +3555,7 @@ function automate(wsId, kind, ctx = {}) {
     if (x.wsId !== wsId || !x.on || x.trigger.kind !== kind) continue;
     const cx = withJob(x, ctx);
     if (!autoMatches(x.trigger, cx)) continue;
-    if (ctx.ownersOnly && !isOwnerId(wsId, x.memberId)) continue;
+    if (ctx.ownersOnly && !isAdminId(wsId, x.memberId)) continue;
     if (priv) {
       const mine = (x.trigger.campaignId && x.trigger.campaignId === (cx.campaign?.parentId || cx.campaign?.id) && seesCampaign(x.trigger.campaignId, x.memberId))
         || (x.trigger.projectId && x.trigger.projectId === cx.project?.id && PJ.sees(cx.project, x.memberId));
@@ -3973,7 +3973,7 @@ function runWaits(now) {
     // Still allowed? Something may have become private while it waited.
     const priv = !!(ctx.private || ctx.campaign?.private || ctx.project?.private);
     const mine = (x.trigger.campaignId && x.trigger.campaignId === (ctx.campaign?.parentId || ctx.campaign?.id) && seesCampaign(x.trigger.campaignId, x.memberId)) || (x.trigger.projectId && x.trigger.projectId === ctx.project?.id && PJ.sees(ctx.project, x.memberId));
-    if ((priv && !mine) || (ctx.ownersOnly && !isOwnerId(x.wsId, x.memberId))) { autoLog(x, false, 'A waiting run was dropped: what it’s about is private now'); continue; }
+    if ((priv && !mine) || (ctx.ownersOnly && !isAdminId(x.wsId, x.memberId))) { autoLog(x, false, 'A waiting run was dropped: what it’s about is private now'); continue; }
     const log = [];
     log.path = [];
     if (w.agentRun) log.push(answered ? (ctx.answer ? 'Got the answer' : 'The agent finished with no answer') : 'The agent didn’t answer in 30 minutes; went on without it');
@@ -5322,8 +5322,9 @@ function pushPssSoon(wsId) {
 // themselves paid the day after they're due.
 const BILL_REPEATS = ['once', 'weekly', 'monthly', 'quarterly', 'yearly'];
 const BILL_HISTORY = 60;
-// Business money on a job (Finance step 1, 2026-11-20) is also seen by admins, who already see what jobs cost.
-const seesBill = (wsId, b, memberId) => b.memberId === memberId || (b.scope === 'business' && (isOwnerId(wsId, memberId) || (b.jobs?.length > 0 && isAdminId(wsId, memberId))));
+// The business's money is for its owners and admins (Finance step 2, 2026-11-20: the same rule as invoices and
+// what jobs cost). Personal money is only ever its owner's.
+const seesBill = (wsId, b, memberId) => b.memberId === memberId || (b.scope === 'business' && isAdminId(wsId, memberId));
 const publicBill = ({ wsId, ...b }) => b;
 const validDay = (v) => (isDay(v) ? v : null);
 // The next due date after `due`, keeping the original day of the month (the 31st stays the 31st, or the month's last day).
@@ -5568,7 +5569,7 @@ function moneyTouches(x, ws) {
 function moneyNews(x) {
   broadcast(x.wsId, { type: 'money', money: publicMoney(x), bill: x });
   moneyTouches(x);
-  // New business money (or a customer's payment) is an event, heard only by owners' automations, once.
+  // New business money (or a customer's payment) is an event, heard only by owners' and admins' automations, once.
   if (!x.flowTold && (x.scope === 'business' || x.invoiceId) && Date.now() - x.createdAt < 3600_000) {
     x.flowTold = true;
     // On a job: the job (the first, when it's split) comes with it, so "money added → …" can act on that job.
@@ -5603,7 +5604,6 @@ function applyMoney(x, body, auth) {
       seen.add(at.rec.id);
       list.push({ recordId: at.rec.id, amount: j.amount === '' || j.amount == null ? null : cents(j.amount, 'each job’s share') });
     }
-    if (x.jobs?.length && !list.length && !isOwnerId(auth.ws.id, auth.memberId) && x.memberId !== auth.memberId) throw badRequest('Only an owner can take business money off its jobs.');
     x.jobs = list;
   }
   if (x.jobs?.length) {
@@ -5616,7 +5616,7 @@ function applyMoney(x, body, auth) {
     }
     if (x.jobs.reduce((n, j) => n + j.amount, 0) > x.amount) throw badRequest('The jobs’ shares add up to more than the amount. Change the split too.');
   }
-  if (body.scope !== undefined) x.scope = body.scope === 'business' && (auth.role === 'owner' || (isAdmin(auth) && x.jobs?.length > 0)) ? 'business' : 'personal';
+  if (body.scope !== undefined) x.scope = body.scope === 'business' && isAdmin(auth) ? 'business' : 'personal';
   if (x.jobs?.length && x.scope !== 'business') throw badRequest('Only business money goes on a job. Make it business money first.');
   // A money goal brings its campaign with it. Either has to be one you can see.
   if (body.goalId !== undefined || body.campaignId !== undefined) {
@@ -8473,12 +8473,29 @@ async function api(req, res, url) {
   }
 
   // Finance: money in and out, yours and (for owners) the business's.
+  // Finance → Quotes (step 2): every quote the team has sent from a job or a Bids & Quotes list, with where it
+  // stands. For owners and admins, like invoices; only the boards they can see.
+  if (a === 'quotes' && m === 'GET' && !b) {
+    if (!isAdmin(auth)) return send(res, 403, { error: 'Only team owners and admins see the team’s quotes.' });
+    const out = [];
+    for (const rec of Object.values(db.records)) {
+      if (rec.wsId !== ws.id || (!rec.share && !rec.answer)) continue;
+      const p = db.projects[rec.projectId];
+      if (!p || p.archived || !PJ.sees(p, auth.memberId)) continue;
+      const q = PJ.quoteOf(rec);
+      if (!q) continue;
+      out.push({ recordId: rec.id, projectId: p.id, project: p.name, title: q.title, number: q.number, status: q.status, total: PJ.itemsTotals(q.lines)?.total || 0, customer: q.customer?.name || '', sentAt: q.sentAt, answeredOn: q.answeredOn, acceptedBy: q.acceptedBy, validUntil: q.validUntil });
+      if (out.length >= 1000) break;
+    }
+    out.sort((x, y) => (y.sentAt || 0) - (x.sentAt || 0));
+    return send(res, 200, { quotes: out });
+  }
   if (a === 'money') {
     if (m === 'POST' && b === 'import') {
       const body = await readJson(req, 2_000_000);
       const rows = Array.isArray(body.rows) ? body.rows.slice(0, MONEY_IMPORT) : [];
       if (!rows.length) return send(res, 400, { error: 'There’s nothing to import.' });
-      const scope = body.scope === 'business' && auth.role === 'owner' ? 'business' : 'personal';
+      const scope = body.scope === 'business' && isAdmin(auth) ? 'business' : 'personal';
       const have = new Set(Object.values(db.money).filter((x) => x.wsId === ws.id && x.key).map((x) => x.key));
       const added = [];
       const inFile = new Map(); // G15: how many times each row has come up in this file
@@ -8543,7 +8560,7 @@ async function api(req, res, url) {
   // A monthly budget for one spending category. A limit of 0 removes it.
   if (a === 'budgets' && m === 'PUT') {
     const body = await readJson(req, 20_000);
-    const want = { wsId: ws.id, memberId: auth.memberId, scope: body.scope === 'business' && auth.role === 'owner' ? 'business' : 'personal', category: cleanText(body.category, 40) };
+    const want = { wsId: ws.id, memberId: auth.memberId, scope: body.scope === 'business' && isAdmin(auth) ? 'business' : 'personal', category: cleanText(body.category, 40) };
     if (!want.category) return send(res, 400, { error: 'Pick a category.' });
     const old = Object.values(db.budgets).find((x) => sameBudget(x, want));
     const limit = Math.round(Number(String(body.limit ?? '').replace(/[$,\s]/g, '')) * 100) || 0;
@@ -9702,7 +9719,7 @@ async function api(req, res, url) {
       if (due) x.followTaskId = addFollowUp(c, x, due, today).id;
       if (amount) {
         const money = goalsInOrder(c).filter((g) => g.kind === 'money');
-        const y = applyMoney(newMoney(auth), { kind: 'in', amount: amount / 100, day: today, category: 'Sales', note: x.contact || c.name, scope: auth.role === 'owner' ? 'business' : 'personal', campaignId: c.id, goalId: money.length === 1 ? money[0].id : null }, auth);
+        const y = applyMoney(newMoney(auth), { kind: 'in', amount: amount / 100, day: today, category: 'Sales', note: x.contact || c.name, scope: isAdmin(auth) ? 'business' : 'personal', campaignId: c.id, goalId: money.length === 1 ? money[0].id : null }, auth);
         db.money[y.id] = y;
         moneyNews(y);
         Object.assign(x, { amount, moneyId: y.id });
