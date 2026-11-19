@@ -8,6 +8,7 @@
 //   - a published release marks the release with the same version Released.
 // A card only moves forward, never back, and the team can switch the moving off.
 import crypto from 'node:crypto';
+import { donePage, DONE_HEADERS } from './donepage.js';
 
 const MAX_BODY = 5_000_000;
 const KEEP_PRS = 20;
@@ -326,21 +327,20 @@ export function githubModule({ db, save, broadcast, rid, cleanText, readJson, se
   }
 
   const APP_DONE = {
-    connected: ['GitHub connected', 'Pushes, pull requests and releases from the repositories you picked now show in Kloomie. You can close this window.'],
+    connected: ['GitHub connected', 'Pushes, pull requests and releases from the repositories you picked now show in Kloomie.'],
     expired: ['Link expired', 'Start again from Kloomie → Apps & Integrations → GitHub.'],
-    denied: ['Not connected', 'GitHub access wasn’t granted. You can close this window.'],
+    denied: ['Not connected', 'GitHub access wasn’t granted.'],
     role: ['Not connected', 'Only team owners and admins can connect GitHub.'],
     notyours: ['Not connected', 'That GitHub installation isn’t one your GitHub account can reach. Install Kloomie on your own account or an organisation you belong to.'],
     requested: ['Waiting for an organisation owner', 'GitHub sent the request to an owner of that organisation. Once they approve it, connect again from Kloomie.'],
     failed: ['Not connected', 'Something went wrong talking to GitHub. Try again in a minute.'],
   };
-  const esc2 = (v) => String(v).replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch]);
   function appDonePage(req, res, url) {
     const r = url.searchParams.get('r');
     const [title, msg] = Object.hasOwn(APP_DONE, r || '') ? APP_DONE[r] : APP_DONE.failed;
-    res.setHeader('X-Robots-Tag', 'noindex');
-    res.setHeader('Cache-Control', 'no-store');
-    return send(res, 200, `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${esc2(title)}</title><body style="font:15px system-ui;background:#f6f6f8;color:#17171c;display:grid;place-items:center;min-height:90vh;margin:0;padding:0 16px"><div style="max-width:440px"><h2>${esc2(title)}</h2><p>${esc2(msg)}</p></div></body>`);
+    // Kloomie's own finish page (the owner, 2026-11-20: cleaner): the mark, ✓ or !, what happened, Back to Kloomie.
+    res.writeHead(200, DONE_HEADERS);
+    return res.end(donePage({ title, message: msg, ok: r === 'connected' ? true : r === 'requested' ? 'wait' : false, app: 'GitHub' }));
   }
   const appDone = (res, how) => { res.writeHead(302, { Location: `/github/done?r=${how}`, 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer' }); res.end(); };
   // GitHub comes back here after the install page (with "request user authorization" on): a code, the installation
