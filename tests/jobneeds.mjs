@@ -72,6 +72,16 @@ try {
   const goal = async () => (await rico('GET', '/state')).body.goals.find((x) => x.id === g.id);
   ok(await until(async () => (await goal()).needs[0].have === 15), 'stock used for the step’s task counts for it (stock used on the job for nothing in particular doesn’t)');
   ok(!(await goal()).needs[0].met, '15 of 25 ft: not met yet');
+  // On order (column-02's supplier orders): an open order for this step shows on the need, one for nothing in particular as on order anywhere.
+  r = await rico('POST', '/inventory/orders', { supplier: 'Coastal', lines: [{ itemId: wire.id, qty: 5 }] });
+  ok(r.status === 200, '(setup) an order not for the step: ' + r.status + ' ' + JSON.stringify(r.body).slice(0, 120));
+  let n0 = (await goal()).needs[0];
+  ok(n0.ordered === 0 && n0.onOrder === 5, 'a stock need shows what’s on order anywhere, but none of it for this step: ' + n0.ordered + ' / ' + n0.onOrder);
+  const ord = (await rico('POST', '/inventory/orders', { supplier: 'Coastal', lines: [{ itemId: wire.id, qty: 10 }], jobId: job.id, goalId: g.id })).body;
+  n0 = (await goal()).needs[0];
+  ok(n0.ordered === 10 && n0.onOrder === 15 && !n0.met, 'an order placed for the step shows on its need, and on order isn’t met: ' + n0.ordered + ' / ' + n0.onOrder + ' ' + n0.met);
+  await rico('POST', `/inventory/orders/${ord.id || ord.order?.id}/cancel`);
+  ok((await goal()).needs[0].ordered === 0, 'cancelled, it’s off the need');
   await sam('POST', '/inventory/moves', { kind: 'use', itemId: wire.id, qty: 10, from: truck.id, jobId: job.id, goalId: g.id });
   ok(await until(async () => (await goal()).needs[0].met), 'stock used on the job for the step: 25 of 25 ft, met');
 

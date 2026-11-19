@@ -859,6 +859,7 @@ body.is-dragging, body.is-dragging * { user-select: none; -webkit-user-select: n
 .goal-needs-h { font-size: 11px; color: var(--muted); }
 .need-chip { cursor: pointer; }
 .need-chip.met { color: var(--muted); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--muted) 50%, transparent); }
+.need-chip.ordered { border-style: dashed; }
 .need-rows { display: grid; gap: 4px; margin: 6px 0 10px; }
 .need-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 4px 8px; border: 1px solid var(--line); border-radius: 8px; }
 .need-add-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }

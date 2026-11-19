@@ -2712,17 +2712,24 @@ function needsOf(g) {
   const moves = rec && g.needs.some((n) => n.kind !== 'field' && n.kind !== 'visit') ? Object.values(db.invMoves).filter((m) => m.jobId === rec.id) : [];
   const visits = rec && g.needs.some((n) => n.kind === 'visit') ? visitsOf(rec.id) : [];
   return g.needs.map((n) => {
-    let live = false, have;
+    let live = false, have, ordered, onOrder;
     if (rec && n.kind === 'stock') {
       have = 0;
       for (const m of moves) if (m.goalId === g.id && m.itemId === n.itemId && !m.unitId && (m.kind === 'use' || m.kind === 'return')) have -= m.qty;
       have = Math.round(have * 1000) / 1000;
       live = have >= n.qty;
+      // On order (column-02's supplier orders): what's still to come on open orders placed for this step, and anywhere.
+      if (!live) {
+        ordered = 0;
+        for (const o of Object.values(db.invOrders || {})) if (o.status === 'open' && o.goalId === g.id) for (const l of o.lines) if (l.itemId === n.itemId) ordered += Math.max(0, l.qty - l.got);
+        ordered = Math.round(ordered * 1000) / 1000;
+        onOrder = STOCK.onOrder(n.itemId);
+      }
     } else if (rec && n.kind === 'equipment') live = moves.some((m) => m.itemId === n.itemId && m.unitId && m.kind === 'checkout');
     else if (rec && n.kind === 'visit') live = visits.some((v) => v.kind === n.visit && v.done);
     else if (rec && n.kind === 'field') { const f = t?.fields.find((x) => x.name.toLowerCase() === n.field.toLowerCase()); live = !!f && filledIn(rec.values[f.id]); }
     const it = n.itemId && db.invItems[n.itemId];
-    return { ...n, ...(it ? { item: it.name, unit: it.unit } : {}), ...(have !== undefined ? { have } : {}), live, met: live || !!n.got || (n.kind !== 'field' && !!n.seen) };
+    return { ...n, ...(it ? { item: it.name, unit: it.unit } : {}), ...(have !== undefined ? { have } : {}), ...(ordered !== undefined ? { ordered, onOrder } : {}), live, met: live || !!n.got || (n.kind !== 'field' && !!n.seen) };
   });
 }
 const needsMet = (g) => !g.needs?.length || !jobOfGoal(g) || needsOf(g).every((n) => n.met);

@@ -7904,9 +7904,9 @@
   function needsRow(c, g) {
     if (!g.needs?.length) return null;
     return h('div', { class: 'goal-needs' }, h('small', { class: 'goal-needs-h' }, 'Needs'), ...g.needs.map((n) => h('button', {
-      class: 'list-chip need-chip' + (n.met ? ' met' : ''), 'data-need': n.id,
+      class: 'list-chip need-chip' + (n.met ? ' met' : n.ordered ? ' ordered' : ''), 'data-need': n.id,
       title: n.met ? (n.got && !n.live ? `Ticked off by ${n.got.by}` : 'Got it') : c.recordId ? 'Still needed: this step isn’t finished until it’s got' : 'Counts once this campaign is for a job',
-      onclick: (e) => { e.stopPropagation(); needMenu(e.currentTarget, c, g, n); } }, (n.met ? '✓ ' : NEED_IC[n.kind] + ' ') + needLabel(n))));
+      onclick: (e) => { e.stopPropagation(); needMenu(e.currentTarget, c, g, n); } }, (n.met ? '✓ ' : NEED_IC[n.kind] + ' ') + needLabel(n) + (!n.met && n.ordered ? ` · ${invQty(n.ordered)} on order` : ''))));
   }
   function needMenu(anchor, c, g, n) {
     const at = c.recordId && recEverywhere(c.recordId);
@@ -7914,6 +7914,14 @@
     const rows = [{ head: needLabel(n) }];
     if (!c.recordId) rows.push({ note: 'This counts once the campaign is for a job.' });
     else if (!n.met) {
+      if (n.kind === 'stock' && n.onOrder) rows.push({ note: n.ordered ? `${invQty(n.ordered)} ${n.unit || ''} on order for this step${n.onOrder > n.ordered ? ` (${invQty(n.onOrder)} on order in all)` : ''}.` : `${invQty(n.onOrder)} ${n.unit || ''} on order, not for this step.` });
+      if (n.kind === 'stock' && toolOn('inventory')) rows.push({ label: 'Order it for this step…', run: async () => {
+        if (!INVS.data) await loadInventory();
+        const it = INVS.data?.items.find((y) => y.id === n.itemId);
+        if (!INVS.data?.canManage) return toast('Only an owner or an admin can place an order.');
+        if (!it) return toast('That item isn’t in Inventory any more.');
+        invPlaceSheet(it.supplier || 'No supplier', [it], { jobId: c.recordId, goalId: g.id, qty: Math.max(0, n.qty - (n.have || 0) - (n.ordered || 0)) || n.qty, label: `For “${shortText(g.title, 60)}”` });
+      } });
       if (n.kind === 'stock' && toolOn('inventory')) rows.push({ label: 'Use stock for it…', run: async () => { if (!INVS.data) await loadInventory(); invMoveSheet(INVS.data?.items.find((y) => y.id === n.itemId) || null, 'use', null, { jobId: c.recordId, goalId: g.id, label: `For “${shortText(g.title, 60)}”` }); } });
       if (n.kind === 'equipment') rows.push({ note: `Check out ${n.item ? 'a ' + n.item : 'one'} to the job in Inventory, or scan its label.` });
       if (n.kind === 'visit') rows.push({ label: `Book the ${n.visit.toLowerCase()} visit…`, run: async () => { if (!at?.p) await prLoadAll(); const j = recEverywhere(c.recordId); if (!j?.p) return toast('That job isn’t here any more.'); visitSheet(j.p, prType(j.p, j.r.typeId), j.r, null, { kind: n.visit }); } });
@@ -10595,13 +10603,15 @@
     })];
   }
   // Placing an order: the suggested amounts, changeable, kept on the list until it comes in.
-  function invPlaceSheet(sup, list) {
-    const rows = list.map((x) => h('label', { class: 'inv-count-row', 'data-item': x.id }, h('span', {}, x.name, h('small', {}, ` · ${x.unit}`)), h('input', { type: 'number', min: 0, step: 'any', value: invSuggest(x), 'data-item': x.id, class: 'inv-p-qty' })));
+  // link: { jobId, goalId, qty, label } when it's ordered for a job's step (from the step's needs).
+  function invPlaceSheet(sup, list, link = null) {
+    const rows = list.map((x) => h('label', { class: 'inv-count-row', 'data-item': x.id }, h('span', {}, x.name, h('small', {}, ` · ${x.unit}`)), h('input', { type: 'number', min: 0, step: 'any', value: link?.qty ?? invSuggest(x), 'data-item': x.id, class: 'inv-p-qty' })));
     const note = h('input', { class: 'inv-p-note', placeholder: 'PO number, or a note (optional)' });
-    sheet(`Order from ${sup}`, [h('div', { class: 'inv-count' }, rows), h('label', {}, 'Note', note), h('small', { class: 'hint' }, 'It stays under On order until it comes in. Receive it all at once, or as it arrives.')], async () => {
+    sheet(`Order from ${sup}`, [link?.label ? h('small', { class: 'hint' }, link.label) : null, h('div', { class: 'inv-count' }, rows), h('label', {}, 'Note', note), h('small', { class: 'hint' }, 'It stays under On order until it comes in. Receive it all at once, or as it arrives.')], async () => {
       const lines = rows.map((r) => ({ itemId: r.dataset.item, qty: r.querySelector('input').value }));
-      const o = await api('POST', '/inventory/orders', { supplier: sup === 'No supplier' ? '' : sup, note: note.value, lines });
+      const o = await api('POST', '/inventory/orders', { supplier: sup === 'No supplier' ? '' : sup, note: note.value, lines, ...(link?.jobId ? { jobId: link.jobId, goalId: link.goalId } : {}) });
       toast(`Order ${o.number} placed`);
+      if (link?.goalId) loadState();
       await loadInventory();
     }, 'Place the order');
   }

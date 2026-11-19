@@ -80,6 +80,14 @@ ok(await A.until(`${chips}.length === 3`), 'saved: three chips ' + JSON.stringif
 let got = await api('GET', '/state');
 ok(got.goals.find((x) => x.id === g.id).needs.map((n) => n.kind).join() === 'stock,visit,field', 'and the server has them');
 
+// Ordering it from the chip places an order for the step, and the chip says it's on order.
+await A.ev(`document.querySelector('.goal-needs .need-chip').click()`);
+ok(await menuPick('/Order it for this step/'), 'the materials chip offers Order it for this step…');
+ok(await A.until(`document.querySelector('#sheet .inv-p-qty')?.value === '25'`), 'the order sheet opens with what’s still needed: ' + await A.ev(`document.querySelector('#sheet .inv-p-qty')?.value`));
+await A.ev(`[...document.querySelectorAll('#sheet button')].find((b) => /Place the order/.test(b.textContent)).click()`);
+ok(await A.until(`${chips}[0] === '📦 0 of 25 ft Copper line set · 25 on order'`, 8000), 'placed: the chip says it’s on order: ' + JSON.stringify(await A.ev(chips)));
+const ords = (await api('GET', '/inventory')).orders;
+ok(ords.length === 1 && ords[0].goalId === g.id, 'the order is the step’s: ' + JSON.stringify(ords.map((o) => o.goalId)));
 // Using stock from the chip counts for the step.
 await A.ev(`document.querySelector('.goal-needs .need-chip').click()`);
 ok(await menuPick('/Use stock for it/'), 'the materials chip offers Use stock for it…');
