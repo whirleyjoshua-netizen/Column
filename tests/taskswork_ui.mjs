@@ -50,7 +50,7 @@ try {
   ok(await A.until(`!document.querySelector('#day').classList.contains('hidden')`), 'opening Workspace lands on Tasks');
   ok(await A.until(`(() => { const b = document.querySelector('#workTabs button[data-tab]'); return b?.dataset.tab === 'day' && b.textContent === 'Tasks' && b.classList.contains('on'); })()`), 'Tasks is Workspace’s first tab, and it’s marked');
   const modes = await A.ev(`[...document.querySelectorAll('#day .day-modes button:not(.hidden)')].map((b) => b.textContent).join(',')`);
-  ok(modes === 'Month,Week,Day,List,Team', 'one switch for the view: ' + modes);
+  ok(modes === 'Month,Week,Day,List', 'one switch for the view (Team has its own page now): ' + modes);
   await A.tap(`[...document.querySelectorAll('#day .day-modes button')].find((b) => b.textContent === 'List')`);
   ok(await A.until(`document.querySelector('#day').textContent.includes('Order the blinds') && !document.querySelector('#day .wk-col')`), 'List shows the tasks');
   ok(await A.ev(`[...document.querySelectorAll('#day .day-modes button')].find((b) => b.textContent === 'List').classList.contains('on')`), 'and is marked');
@@ -68,7 +68,7 @@ try {
   await A.cmd('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
   await sleep(500);
   const phone = await A.ev(`[...document.querySelectorAll('#day .day-modes button')].filter((b) => b.offsetParent !== null).map((b) => b.textContent).join(',')`);
-  ok(phone === 'Month,Day,List,Team', 'a phone has Month, Day, List and Team: ' + phone);
+  ok(phone === 'Month,Day,List', 'a phone has Month, Day and List: ' + phone);
   ok(await A.ev(`!!document.querySelector('#tabs .tab-sub[data-tab=day]') && document.querySelector('#tabs .tab-sub[data-tab=day]').textContent === 'Tasks'`), 'in the drawer, Tasks sits under Workspace');
   ok(A.errors.length === 0, 'no script errors' + (A.errors.length ? ': ' + A.errors.join(' | ') : ''));
 } catch (e) { ok(false, 'threw: ' + e.stack); }

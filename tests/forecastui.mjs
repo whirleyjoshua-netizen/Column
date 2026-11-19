@@ -63,16 +63,19 @@ await api('POST', `/records/${job.id}/visits`, { kind: 'Estimate', date: day(1),
 await sleep(600);
 
 await A.tap(`document.querySelector('#tabs [data-tab=work]')`);
-ok(await A.until(`[...document.querySelectorAll('#day .day-modes button:not(.hidden)')].some((b) => b.textContent === 'Team')`), 'the owner has Team');
-await A.tap(`[...document.querySelectorAll('#day .day-modes button')].find((b) => b.textContent === 'Team')`);
-ok(await A.until(`!!document.querySelector('#day .fc-grid')`, 8000), 'Team shows the weeks ahead');
-ok(await A.ev(`[...document.querySelectorAll('#day .fc-h')].map((x) => x.textContent).slice(1, 3).join() === 'This week,Next week'`), 'by week');
+await A.ev(`(document.querySelector('.ws').click(), true)`);
+ok(await A.until(`[...document.querySelectorAll('#menu button')].some((b) => b.textContent === '👥 Team')`), 'the owner has 👥 Team in the workspace menu');
+await A.ev(`([...document.querySelectorAll('#menu button')].find((b) => b.textContent === '👥 Team').click(), true)`);
+await A.until(`!!document.querySelector('#sheet .tm-tab[data-tab=ahead]')`, 8000);
+await A.tap(`document.querySelector('#sheet .tm-tab[data-tab=ahead]')`);
+ok(await A.until(`!!document.querySelector('#sheet .fc-grid')`, 8000), 'the Team page’s Weeks ahead');
+ok(await A.ev(`[...document.querySelectorAll('#sheet .fc-h')].map((x) => x.textContent).slice(1, 3).join() === 'This week,Next week'`), 'by week');
 const wk = await A.ev(`(() => { const d = new Date(Date.now() + 864e5); const s = new Date(d); s.setDate(d.getDate() - d.getDay()); const t = new Date(); t.setDate(t.getDate() - t.getDay()); return Math.round((s - t) / 6048e5); })()`);
-const cellQ = `[...document.querySelectorAll('#day .fc-cell[data-week="${wk}"]')].filter((b) => !b.classList.contains('nobody'))[0]`;
+const cellQ = `[...document.querySelectorAll('#sheet .fc-cell[data-week="${wk}"]')].filter((b) => !b.classList.contains('nobody'))[0]`;
 ok(await A.ev(`${cellQ}.classList.contains('over') && /10 h/.test(${cellQ}.textContent) && /1 task/.test(${cellQ}.textContent) && /1 est/.test(${cellQ}.textContent)`), 'Jo’s week: 10 hours booked, overloaded, a task estimated from its step: ' + await A.ev(`${cellQ}?.textContent`));
-ok(await A.ev(`[...document.querySelectorAll('#day .fc-cell.nobody')][${wk}]?.textContent.startsWith('1')`), 'a row for work nobody is on');
-ok(await A.ev(`/Double booked · 1/.test(document.querySelector('#day .fc').textContent) && /Install .* overlaps Estimate/.test(document.querySelector('#day .fc-conflict').textContent)`), 'the double booking is listed: ' + await A.ev(`document.querySelector('#day .fc-conflict')?.textContent`));
-ok(await A.ev(`[...document.querySelectorAll('#day .fc-risk')].some((r) => /Bill Nye/.test(r.textContent) && /nobody is on/.test(r.textContent))`), 'and the job likely to fall behind, with why');
+ok(await A.ev(`[...document.querySelectorAll('#sheet .fc-cell.nobody')][${wk}]?.textContent.startsWith('1')`), 'a row for work nobody is on');
+ok(await A.ev(`/Double booked · 1/.test(document.querySelector('#sheet .fc').textContent) && /Install .* overlaps Estimate/.test(document.querySelector('#sheet .fc-conflict').textContent)`), 'the double booking is listed: ' + await A.ev(`document.querySelector('#sheet .fc-conflict')?.textContent`));
+ok(await A.ev(`[...document.querySelectorAll('#sheet .fc-risk')].some((r) => /Bill Nye/.test(r.textContent) && /nobody is on/.test(r.textContent))`), 'and the job likely to fall behind, with why');
 await A.tap(cellQ);
 ok(await A.until(`!!document.querySelector('#sheet .fc-item')`), 'a week opens into the work behind it');
 const its = await A.ev(`[...document.querySelectorAll('#sheet .fc-item')].map((x) => x.textContent)`);

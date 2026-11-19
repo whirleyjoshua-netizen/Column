@@ -55,9 +55,13 @@ try {
   await A.ev(`localStorage.setItem('column.token', JSON.stringify(${JSON.stringify(auth.token)})); location.reload(); true`).catch(() => {});
   ok(await A.until(`!document.querySelector('#app').classList.contains('hidden') && !!document.querySelector('#tabs [data-tab=work]')`, 15000), 'Ada is in');
   await A.tap(`document.querySelector('#tabs [data-tab=work]')`);
-  ok(await A.until(`[...document.querySelectorAll('#day .day-modes button:not(.hidden)')].some((b) => b.textContent === 'Team')`), 'the owner has Team, with Projects off');
-  await A.tap(`[...document.querySelectorAll('#day .day-modes button')].find((b) => b.textContent === 'Team')`);
-  const row = `document.querySelector('#day .wl-row[data-member="${benId}"]')`;
+  // Team has its own page (2026-11-20), from the workspace menu, not in Tasks.
+  ok(await A.until(`!!document.querySelector('#day .day-modes')`) && await A.ev(`![...document.querySelectorAll('#day .day-modes button')].some((b) => b.textContent === 'Team')`), 'Tasks has no Team view now');
+  await A.ev(`(document.querySelector('.ws').click(), true)`);
+  ok(await A.until(`[...document.querySelectorAll('#menu button')].some((b) => b.textContent === '👥 Team')`), 'the owner has 👥 Team in the workspace menu');
+  await A.ev(`([...document.querySelectorAll('#menu button')].find((b) => b.textContent === '👥 Team').click(), true)`);
+  ok(await A.until(`document.querySelector('#sheet .tm-tab.on')?.dataset.tab === 'week' && ![...document.querySelectorAll('#sheet .tm-tab')].some((b) => b.dataset.tab === 'visits')`, 8000), 'it opens on This week (no Visits tab with Projects off)');
+  const row = `document.querySelector('#sheet .wl-row[data-member="${benId}"]')`;
   ok(await A.until(`!!${row}`, 8000), 'a row for Ben');
   const stat = (key) => A.ev(`${row}.querySelector('[data-k="${key}"] b').textContent`);
   ok(await stat('open') === '3', 'Ben: 3 open, his own private one included');
@@ -65,26 +69,34 @@ try {
   ok(await stat('no date') === '2', '2 with no date');
   ok(await A.ev(`${row}.querySelector('.wl-load').textContent.includes('3 h booked')`), '3 hours booked');
   ok(await A.ev(`${row}.querySelectorAll('.wl-spark .wl-sd').length === 7`), 'a bar for each day');
-  ok(await A.ev(`document.querySelector('#day .wl-sum').textContent.includes('open tasks')`), 'team totals on top');
-  ok(await A.ev(`!/Secret salary|Late install|Site walk/.test(document.querySelector('#day').textContent)`), 'no task text anywhere, just counts');
+  ok(await A.ev(`document.querySelector('#sheet .wl-sum').textContent.includes('open tasks')`), 'team totals on top');
+  ok(await A.ev(`!/Secret salary|Late install|Site walk/.test(document.querySelector('#sheet').textContent)`), 'no task text anywhere, just counts');
   if (process.env.SHOT) await A.cmd('Page.captureScreenshot', {}).then((r) => FS.writeFileSync(process.env.SHOT, Buffer.from(r.result.data, 'base64')));
   await A.tap(row);
-  ok(await A.until(`document.querySelector('#sheet h2')?.textContent.includes('Ben’s week') && document.querySelectorAll('#sheet .wl-wd').length === 7`), 'tapping Ben shows his week, day by day');
+  ok(await A.until(`/Ben’s week/.test(document.querySelector('#sheet .tm-detail')?.textContent || '') && document.querySelectorAll('#sheet .wl-wd').length === 7`), 'tapping Ben shows his week, day by day, inside the page');
   ok(await A.ev(`!/Secret salary|Late install|Site walk/.test(document.querySelector('#sheet').textContent)`), 'still no task text');
-  await A.ev(`document.querySelector('#sheet').classList.add('hidden'); true`);
-  await A.ev(`document.querySelector('#day [aria-label="Next week"]').click(); true`);
-  ok(await A.until(`document.querySelector('#day .day-title').textContent.startsWith('Week of') && ${row}?.querySelector('[data-k=overdue] b').textContent === '1' && ${row}.querySelector('.wl-load').textContent.includes('0 h')`), 'the arrow moves a week (nothing booked next week)');
+  await A.tap(`document.querySelector('#sheet .tm-back')`);
+  ok(await A.until(`!!${row}`), 'and back to the team');
+  await A.tap(`document.querySelector('#sheet .tm-next')`);
+  ok(await A.until(`document.querySelector('#sheet .tm-when').textContent.startsWith('Week of') && ${row}?.querySelector('[data-k=overdue] b').textContent === '1' && ${row}.querySelector('.wl-load').textContent.includes('0 h')`), 'the arrow moves a week (nothing booked next week)');
   // With Projects on, the day's job visits board is still there, under the numbers.
   await ada('PATCH', '/workspace', { tools: { projects: true } });
   await sleep(1200);
-  await A.tap(`[...document.querySelectorAll('#day .day-modes button')].find((b) => b.textContent === 'Team')`);
-  ok(await A.until(`!!document.querySelector('#day .wl-vh') && document.querySelector('#day .wl-vh').textContent.startsWith('Job visits') && !!document.querySelector('#day .ts')`, 8000), 'with Projects on, the job visits board sits under the numbers');
+  await A.ev(`(document.querySelector('.ws').click(), true)`);
+  await A.until(`[...document.querySelectorAll('#menu button')].some((b) => b.textContent === '👥 Team')`);
+  await A.ev(`([...document.querySelectorAll('#menu button')].find((b) => b.textContent === '👥 Team').click(), true)`);
+  await A.until(`!!document.querySelector('#sheet .tm-tab[data-tab=visits]')`, 8000);
+  await A.tap(`document.querySelector('#sheet .tm-tab[data-tab=visits]')`);
+  ok(await A.until(`!!document.querySelector('#sheet .wl-vh') && document.querySelector('#sheet .wl-vh').textContent.startsWith('Job visits') && !!document.querySelector('#sheet .ts')`, 8000), 'with Projects on, the Team page has the day’s job visits board');
+  await A.tap(`document.querySelector('#sheet .tm-tab[data-tab=week]')`);
   ok(await A.ev(`!!${row}`), 'and the numbers stay');
   // Ben (a member) has no Team.
   await A.ev(`localStorage.setItem('column.token', JSON.stringify(${JSON.stringify(benAuth.token)})); location.reload(); true`).catch(() => {});
   ok(await A.until(`!document.querySelector('#app').classList.contains('hidden')`, 15000), 'Ben is in');
   await A.ev(`document.querySelector('#tabs [data-tab=work]').click(); true`);
-  ok(await A.until(`!!document.querySelector('#day .day-modes') && document.querySelector('#day .day-modes [data-view=team]').classList.contains('hidden')`), 'a member has no Team');
+  await A.until(`!!document.querySelector('.ws')`);
+  await A.ev(`(document.querySelector('.ws').click(), true)`);
+  ok(await A.until(`document.querySelectorAll('#menu button').length > 0`) && await A.ev(`![...document.querySelectorAll('#menu button')].some((b) => b.textContent === '👥 Team')`), 'a member has no Team in the menu');
   ok(A.errors.length === 0, 'no script errors' + (A.errors.length ? ': ' + A.errors.join(' | ') : ''));
 } catch (e) { ok(false, 'threw: ' + e.stack); }
 A?.close();

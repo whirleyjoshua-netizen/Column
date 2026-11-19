@@ -72,8 +72,10 @@ try {
   await signIn(mo.token);
   ok(!(await workTabs()).includes('projects'), 'Mo’s Workspace has no Boards now: ' + await workTabs());
   ok(!(await toolList()).includes('inventory'), 'and no Inventory in Tools');
-  await A.ev(`document.querySelector('#tabs [data-tab=work]').click(); true`);
-  ok(await A.until(`!!document.querySelector('#day .day-modes [data-view=team]:not(.hidden)')`, 8000), 'Tasks → Team is there for him');
+  await A.until(`!!document.querySelector('.ws')`);
+  await A.ev(`(document.querySelector('.ws').click(), true)`);
+  ok(await A.until(`[...document.querySelectorAll('#menu button')].some((b) => b.textContent === '👥 Team')`, 8000), 'the Team page is in his workspace menu');
+  await A.cmd('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
   const r = await fetch(APP + 'api/inventory', { headers: { authorization: 'Bearer ' + mo.token } });
   ok(r.status === 403, 'and the server refuses Inventory to him, too');
   // Contacts for members: Mo sees the list, and what the owner adds shows up for him live.

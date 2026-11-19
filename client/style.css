@@ -3883,3 +3883,11 @@ body.wide .sheet-wrap:not(:has(.auto-builder, .camp-builder, .page-form, .delete
   border-left: 1px solid var(--line); box-shadow: -8px 0 24px rgba(15, 18, 30, 0.08); padding: 16px 20px 28px; animation: side-in 0.16s ease-out;
 }
 @keyframes side-in { from { transform: translateX(24px); opacity: 0; } }
+/* The Team page (2026-11-20): from the workspace menu; This week, Weeks ahead, Visits. */
+.tm { display: grid; gap: 12px; }
+.tm-tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--line); overflow-x: auto; scrollbar-width: none; }
+.tm-tab { flex: 0 0 auto; padding: 8px 12px; border: 0; border-bottom: 2px solid transparent; background: none; color: var(--muted); font: inherit; font-size: 14px; cursor: pointer; }
+.tm-tab.on { color: var(--text); font-weight: 600; border-bottom-color: var(--accent); }
+.tm-nav { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.tm-when { font-size: 15px; }
+.tm-body .teamload, .tm-body .fc { margin-top: 0; }
