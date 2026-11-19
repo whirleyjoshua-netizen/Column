@@ -3873,7 +3873,7 @@
   const presetById = (id) => (SV.list || []).find((x) => x.id === id);
   const presetWho = (x) => (x.assigneeId ? memberName(x.assigneeId) : x.roleId && roleById(x.roleId) ? roleById(x.roleId).name : '');
   const REP_L = { daily: 'every day', weekdays: 'weekdays', weekly: 'every week', monthly: 'every month' };
-  const presetSub = (x) => x.kind === 'block' ? [x.start != null ? fmtTime(x.start) : 'any time', x.start != null ? `${x.minutes || 60} min` : '', REP_L[x.repeat] || ''].filter(Boolean).join(' · ') : x.kind === 'bundle' ? plural(x.steps.length, 'task') : [presetWho(x), x.dueIn != null ? (x.dueIn ? `due in ${plural(x.dueIn, 'day')}` : 'due that day') : ''].filter(Boolean).join(' · ');
+  const presetSub = (x) => x.kind === 'visit' ? [x.visit, x.flex ? 'any time' : x.start != null ? fmtTime(x.start) : '', `${x.minutes || 60} min`, x.memberIds?.length ? x.memberIds.map((id) => memberName(id)).join(', ') : ''].filter(Boolean).join(' · ') : x.kind === 'block' ? [x.start != null ? fmtTime(x.start) : 'any time', x.start != null ? `${x.minutes || 60} min` : '', REP_L[x.repeat] || ''].filter(Boolean).join(' · ') : x.kind === 'bundle' ? plural(x.steps.length, 'task') : [presetWho(x), x.dueIn != null ? (x.dueIn ? `due in ${plural(x.dueIn, 'day')}` : 'due that day') : ''].filter(Boolean).join(' · ');
   async function usePreset(x, opts = {}) {
     try {
       const r = await api('POST', `/task-presets/${x.id}/use`, opts);
@@ -3921,6 +3921,9 @@
   }
   function presetMenu(anchor, x) {
     const mine = x.memberId === S.me?.memberId || amAdmin();
+    // A visit setup is picked when booking a visit on a job; here it can only be removed.
+    if (x.kind === 'visit') return openMenu(anchor, [{ note: 'Pick it when you book a visit on a job (the job → Schedule a visit).' },
+      mine ? { label: 'Delete this setup', danger: true, run: () => api('DELETE', '/task-presets/' + x.id).then(() => { SV.list = SV.list.filter((y) => y.id !== x.id); renderShelf(); if (toolBox('templates')?.isConnected) renderTool(true); }).catch((e) => toast(e.message)) } : null].filter(Boolean));
     openMenu(anchor, [
       { label: 'Add for today', run: () => usePreset(x, { date: todayKey() }) },
       { label: x.kind === 'block' ? 'On a day…' : x.kind === 'bundle' ? 'Start on a day, for someone…' : 'On a day, for someone…', run: () => usePresetSheet(x) },
@@ -11504,8 +11507,8 @@
       h('h3', { class: 'tpl-h' }, 'Saved tasks'),
       h('div', { class: 'tpl-grid' },
         list.map((x) => h('button', { class: 'tpl-card', 'data-preset': x.id, onclick: (ev) => presetMenu(ev.currentTarget, x) },
-          h('span', { class: 'tpl-kind k-task' }, x.kind === 'bundle' ? 'Bundle' : x.kind === 'block' ? 'Calendar block' : 'Saved task'), h('b', {}, x.name), presetSub(x) ? h('small', {}, presetSub(x)) : null,
-          h('span', { class: 'tpl-body' }, x.kind === 'bundle' ? x.steps.map((st) => presetById(st.presetId)?.text).filter(Boolean).join(' → ') : x.text))),
+          h('span', { class: 'tpl-kind k-task' }, x.kind === 'bundle' ? 'Bundle' : x.kind === 'block' ? 'Calendar block' : x.kind === 'visit' ? 'Visit setup' : 'Saved task'), h('b', {}, x.name), presetSub(x) ? h('small', {}, presetSub(x)) : null,
+          h('span', { class: 'tpl-body' }, x.kind === 'bundle' ? x.steps.map((st) => presetById(st.presetId)?.text).filter(Boolean).join(' → ') : x.kind === 'visit' ? x.note || 'Picked when booking a visit on a job' : x.text))),
         h('button', { class: 'tpl-card static tpl-new-task', onclick: () => presetSheet(null, 'task') }, h('b', {}, '+ Save a task'), h('span', { class: 'tpl-body' }, 'Then drag it onto a day in Tasks, or make it from an automation.'))),
     ];
   }
@@ -15717,7 +15720,35 @@
     done?.addEventListener('click', async () => { await api('PATCH', '/visits/' + v.id, { done: !v.done }).catch((e) => toast(e.message)); closeSheet(); });
     // A new visit starts as what that kind of work usually books first: installers measure, remodels estimate, the rest service.
     if (!v && !pre.kind && t.trade) kind.value = ['blinds', 'flooring', 'cabinets', 'windows', 'fencing', 'closets'].includes(t.trade) ? 'Measure' : ['painting', 'drywall', 'concrete', 'remodel', 'insulation', 'roofing', 'solar'].includes(t.trade) ? 'Estimate' : t.trade === 'cleaning' ? 'Cleaning' : 'Service';
+    // Saved visit setups (2026-11-20): start a new visit from one, or save this one as a setup for next time.
+    if (!SV.list && !SV.loading) loadPresets().then(() => { const box = document.querySelector('#sheet .vs-row'); if (box) box.replaceWith(setupRow()); });
+    const fill = (y) => {
+      kind.value = y.visit || 'Visit';
+      if (y.start != null) { start.value = hm(y.start); end.value = hm(y.start + (y.minutes || 60)); }
+      flex.checked = !!y.flex;
+      if (y.memberIds?.length) { going.clear(); y.memberIds.forEach((id) => going.add(id)); crew.querySelectorAll('input[type=checkbox]').forEach((cb, i) => { cb.checked = going.has(S.workspace.members[i]?.id); }); }
+      if (y.note && !note.value) note.value = y.note;
+    };
+    const saveSetup = () => {
+      const nm = h('input', { value: `${kind.value}${start.value ? ' · ' + start.value : ''}`, class: 'vs-name' });
+      const keep = { visit: kind.value, start: fromHm(start.value), minutes: Math.max(15, (fromHm(end.value) ?? 0) - (fromHm(start.value) ?? 0)) || 60, memberIds: [...going], note: note.value, flex: flex.checked };
+      const back = () => visitSheet(p, t, r, v, { kind: keep.visit, start: keep.start, end: keep.start != null ? keep.start + keep.minutes : null, memberIds: keep.memberIds, flex: keep.flex, date: date.value });
+      sheet('Save as a visit setup', [h('p', { class: 'day-hint' }, 'Kind, time, how long, who goes and the note, saved for your team to start any visit from.'), h('label', {}, 'Name', nm)], async () => {
+        const y = await api('POST', '/task-presets', { kind: 'visit', name: nm.value, ...keep });
+        SV.list = [...(SV.list || []).filter((z) => z.id !== y.id), y];
+        toast('Setup saved');
+        setTimeout(back);
+      }, 'Save setup');
+    };
+    const setupRow = () => {
+      const list = (SV.list || []).filter((y) => y.kind === 'visit');
+      if (v) return h('span', { class: 'vs-row' });
+      const sel = h('select', { class: 'vs-pick', 'aria-label': 'Start from a saved setup' }, h('option', { value: '' }, list.length ? 'Start from a saved setup…' : 'No saved setups yet'), list.map((y) => h('option', { value: y.id }, `${y.name} · ${presetSub(y)}`)));
+      sel.addEventListener('change', () => { const y = list.find((z) => z.id === sel.value); if (y) fill(y); });
+      return h('div', { class: 'vs-row' }, list.length ? sel : null, h('button', { type: 'button', class: 'linkish vs-save', onclick: saveSetup }, '+ Save as a setup'));
+    };
     sheet(v ? `${v.kind} · ${recName(t, r)}` : `Schedule a visit · ${recName(t, r)}`, [
+      setupRow(),
       h('div', { class: 'row2' }, h('label', {}, 'What for', kind), h('label', {}, 'Day', date)),
       h('div', { class: 'row2' }, h('label', {}, 'From', start), h('label', {}, 'Until', end)),
       h('label', { class: 'pick' }, flex, 'Any time that day', h('small', {}, ' The time is a guess: the route can move it to save driving.')),

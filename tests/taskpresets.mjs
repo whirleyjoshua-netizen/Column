@@ -121,6 +121,15 @@ try {
   ok((await cy('GET', '/state')).body.entries.some((e) => e.id === ent.id) && !(await ada('GET', '/state')).body.entries.some((e) => e.id === ent.id), 'on Cy’s calendar, not Ada’s');
   ok((await ada('POST', '/automations', { name: 'Blocky', trigger: { kind: 'contact.created' }, actions: [{ kind: 'task', presetId: standup.id }] })).status === 400, 'an automation can’t make a calendar block (calendars are each person’s own)');
 
+  // A visit setup (2026-11-20): how a kind of visit usually goes, picked when booking one on a job.
+  r = await ada('POST', '/task-presets', { kind: 'visit', visit: 'Install', start: 480, minutes: 180, memberIds: [benId, cyId, 'nobody'], note: 'Bring the drill kit', flex: false });
+  ok(r.status === 200 && r.body.kind === 'visit' && r.body.visit === 'Install' && r.body.start === 480 && r.body.minutes === 180 && r.body.memberIds.join() === [benId, cyId].join() && r.body.note === 'Bring the drill kit', 'Ada saves a visit setup: Install, 8:00, 3 hours, Ben and Cy (someone not on the team left out), with a note');
+  ok(r.body.name === 'Install · 8am', `named for what it is when no name is given (${r.body.name})`);
+  const setup = r.body;
+  ok((await ada('POST', '/task-presets', { kind: 'visit', visit: 'Teleport' })).body?.visit === 'Visit', 'a kind of visit that isn’t one becomes a plain Visit');
+  ok((await cy('POST', `/task-presets/${setup.id}/use`, {})).status === 400, 'it isn’t “used” on its own: it’s picked when booking a visit on a job');
+  ok((await ada('POST', '/automations', { name: 'Visity', trigger: { kind: 'contact.created' }, actions: [{ kind: 'task', presetId: setup.id }] })).status === 400, 'and a task step can’t make one');
+
   // Another team sees none of it.
   const other = call((await call()('POST', '/auth', { mode: 'create', workspace: 'Other ' + t, name: 'Zed', email: `zed${t}@t.test`, password: 'longenough4', device: 'Mac', deviceId: 'd4' })).body.token);
   ok((await other('GET', '/task-presets')).body.presets.length === 0, 'another team sees none');

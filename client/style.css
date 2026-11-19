@@ -3810,3 +3810,6 @@ body:not(.wide) .tool-grid { grid-template-columns: 1fr; }
 /* Microsoft Teams tile (teams.js). */
 .tm-sec label { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; }
 .tm-steps li { margin-bottom: 3px; }
+/* Saved visit setups (2026-11-20) */
+.vs-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 6px; }
+.vs-row select { flex: 1; min-width: 200px; }
