@@ -13,12 +13,12 @@ const MAX_BODY = 5_000_000;
 const KEEP_PRS = 20;
 const KEEP_COMMITS = 15;
 
-export function githubModule({ db, save, broadcast, rid, cleanText, readJson, send, seal, unseal, sees, isAdmin, PJ, publicUrl }) {
+export function githubModule({ db, save, broadcast, rid, cleanText, readJson, send, seal, unseal, sees, isAdmin, PJ, publicUrl, bind, automate = () => {}, alarm = () => {} }) {
   const conn = (p) => p.github || null;
   const hookUrl = (p) => `${publicUrl}/api/github/hook/${p.github.token}`;
   const state = (p, withSecret = false) => {
     const g = conn(p);
-    if (!g) return { connected: false };
+    if (!g) return { connected: false, ...(p.githubRepo ? { repo: p.githubRepo, viaApp: true } : {}) };
     return { connected: true, url: hookUrl(p), ...(withSecret ? { secret: unseal(g.secret).secret } : {}), repo: g.repo || null, move: g.move !== false, at: g.at, lastEventAt: g.lastEventAt || null, lastEvent: g.lastEvent || null, events: g.events || 0 };
   };
   const workType = (p) => p.types.find((t) => t.key === 'work' && t.fields.some((f) => f.type === 'autonumber'));
@@ -147,8 +147,17 @@ export function githubModule({ db, save, broadcast, rid, cleanText, readJson, se
       save();
       return send(res, 200, state(p, true));
     }
-    if (m === 'PATCH' && conn(p)) {
+    if (m === 'PATCH') {
       const body = await readJson(req);
+      // Follow a repository through the team's GitHub connection instead of a webhook of its own.
+      if (body.repo !== undefined) {
+        if (body.repo && !followsRepo(ws.id, body.repo)) return send(res, 400, { error: 'Pick one of the repositories your team connected.' });
+        if (body.repo) p.githubRepo = String(body.repo); else delete p.githubRepo;
+        save();
+        broadcast(ws.id, { type: 'github', projectId: p.id });
+        return send(res, 200, state(p, true));
+      }
+      if (!conn(p)) return send(res, 400, { error: 'Connect GitHub first.' });
       if (body.move !== undefined) p.github.move = !!body.move;
       save();
       return send(res, 200, state(p, true));
@@ -160,5 +169,260 @@ export function githubModule({ db, save, broadcast, rid, cleanText, readJson, se
     }
     return send(res, 405, { error: 'Method not allowed' });
   }
-  return { route, hook, itemsIn };
+
+  // ---------- GitHub for the whole team: the Kloomie GitHub App (owner, 2026-11-19) ----------
+  // An owner installs the app on their GitHub account or organisation and picks repositories; GitHub sends Kloomie
+  // pushes, pull requests and releases for those, signed with the app's webhook secret. The callback proves the
+  // installation is one this person can reach on GitHub (their own sign-in lists it), so nobody can attach somebody
+  // else's. No GitHub token is kept: Kloomie asks for a short one as the app when it needs to list repositories.
+  // Kloomie only reads; it never changes code.
+  const env = (k) => process.env[k] || '';
+  const API = () => (env('GITHUB_API') || 'https://api.github.com').replace(/\/$/, '');
+  const WEB = () => (env('GITHUB_WEB') || 'https://github.com').replace(/\/$/, '');
+  const APP_KEYS = ['GITHUB_APP_ID', 'GITHUB_APP_SLUG', 'GITHUB_APP_CLIENT_ID', 'GITHUB_APP_CLIENT_SECRET', 'GITHUB_APP_PRIVATE_KEY', 'GITHUB_APP_WEBHOOK_SECRET'];
+  const configured = () => APP_KEYS.every((k) => env(k));
+  const KEEP_LOG = 300;
+  db.githubApp ||= {}; // wsId -> { installationId, account, accountType, repos, memberId, by, at, who, lastEventAt }
+  db.codeLog ||= {}; // wsId -> [{ id, kind, repo, branch, by, text, url, n, commits, number, version, at }]
+  const appPending = new Map(); // state -> { wsId, memberId, browser, exp }
+  const b64u = (v) => Buffer.from(typeof v === 'string' ? v : JSON.stringify(v)).toString('base64url');
+  function appJwt() {
+    const now = Math.floor(Date.now() / 1000);
+    const head = b64u({ alg: 'RS256', typ: 'JWT' }) + '.' + b64u({ iat: now - 60, exp: now + 540, iss: env('GITHUB_APP_ID') });
+    const key = env('GITHUB_APP_PRIVATE_KEY').replace(/\\n/g, '\n');
+    return head + '.' + crypto.sign('RSA-SHA256', Buffer.from(head), key).toString('base64url');
+  }
+  async function gh(path, token, { method = 'GET', body } = {}) {
+    const r = await fetch(API() + path, { method, signal: AbortSignal.timeout(15_000), headers: { Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'Kloomie', Authorization: 'Bearer ' + token, ...(body ? { 'Content-Type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(`GitHub said ${r.status}${j.message ? ': ' + String(j.message).slice(0, 120) : ''}`);
+    return j;
+  }
+  const instTokens = new Map(); // installationId -> { token, exp }, in memory only
+  async function instToken(id) {
+    const c = instTokens.get(id);
+    if (c && c.exp > Date.now() + 60_000) return c.token;
+    const j = await gh(`/app/installations/${encodeURIComponent(id)}/access_tokens`, appJwt(), { method: 'POST' });
+    instTokens.set(id, { token: j.token, exp: Date.parse(j.expires_at) || Date.now() + 30 * 60_000 });
+    return j.token;
+  }
+  async function listRepos(id) {
+    const tok = await instToken(id);
+    const out = [];
+    for (let page = 1; page <= 10; page++) {
+      const j = await gh(`/installation/repositories?per_page=100&page=${page}`, tok);
+      out.push(...(j.repositories || []).map((x) => cleanText(x.full_name, 140)));
+      if (out.length >= (j.total_count || 0) || !(j.repositories || []).length) break;
+    }
+    return out;
+  }
+  const appOf = (wsId) => db.githubApp[wsId] || null;
+  const roleOf = (ws, memberId) => ws.members.find((x) => x.id === memberId)?.role;
+  // Who reads the code log: owners and admins always; then everyone, or people who can see a software board.
+  function codeOk(ws, memberId) {
+    const c = appOf(ws.id);
+    if (!c) return false;
+    if (['owner', 'admin'].includes(roleOf(ws, memberId))) return true;
+    if (c.who === 'all') return true;
+    if (c.who === 'admins') return false;
+    return Object.values(db.projects).some((p) => p.wsId === ws.id && p.template === 'tech' && sees(p, memberId));
+  }
+  function appState(ws, memberId) {
+    const c = appOf(ws.id);
+    const admin = ['owner', 'admin'].includes(roleOf(ws, memberId));
+    if (!c) return { configured: configured(), connected: false };
+    const see = codeOk(ws, memberId);
+    return { configured: configured(), connected: true, canSee: see, ...(see ? { account: c.account, accountType: c.accountType, repos: c.repos } : {}),
+      ...(admin ? { who: c.who || 'tech', by: c.by, at: c.at, lastEventAt: c.lastEventAt || null, error: c.error || null, manage: `${WEB()}/apps/${env('GITHUB_APP_SLUG')}/installations/new` } : {}) };
+  }
+  function logEntry(event, body) {
+    const repo = cleanText(body.repository?.full_name, 140);
+    if (!repo) return null;
+    const line = (m) => cleanText(String(m || '').split('\n')[0], 200);
+    const web = (u) => (/^https:\/\//.test(String(u || '')) ? cleanText(u, 400) : ''); // links go into pages: web addresses only
+    if (event === 'push') {
+      const commits = body.commits || [];
+      if (body.deleted || !commits.length) return null;
+      return { id: 'push:' + repo + ':' + cleanText(body.after, 64), kind: 'push', repo, branch: cleanText(String(body.ref || '').replace(/^refs\/heads\//, ''), 120), by: cleanText(body.pusher?.name || body.sender?.login, 60),
+        n: commits.length, text: line(body.head_commit?.message || commits.at(-1)?.message), url: web(body.compare),
+        commits: commits.slice(-5).reverse().map((c) => ({ short: String(c.id).slice(0, 7), message: line(c.message), url: web(c.url), by: cleanText(c.author?.username || c.author?.name, 60) })) };
+    }
+    if (event === 'pull_request') {
+      const pr = body.pull_request;
+      if (!pr) return null;
+      const kind = ['opened', 'reopened', 'ready_for_review'].includes(body.action) && !pr.draft ? 'pr_opened' : body.action === 'closed' ? (pr.merged ? 'merged' : 'pr_closed') : null;
+      if (!kind) return null;
+      return { id: `pr:${repo}#${pr.number}:${kind}`, kind, repo, branch: cleanText(pr.head?.ref, 120), by: cleanText((kind === 'merged' ? pr.merged_by?.login : null) || pr.user?.login, 60), number: pr.number, text: cleanText(pr.title, 200), url: web(pr.html_url) };
+    }
+    if (event === 'release' && body.action === 'published' && body.release) {
+      const r = body.release;
+      return { id: `rel:${repo}:${cleanText(r.tag_name, 80)}`, kind: 'released', repo, by: cleanText(r.author?.login || body.sender?.login, 60), version: cleanText(r.tag_name, 80), text: cleanText(r.name || r.tag_name, 200), url: web(r.html_url) };
+    }
+    return null;
+  }
+  const EVENT_OF = { push: 'github.pushed', pr_opened: 'github.pr_opened', merged: 'github.merged', released: 'github.released' };
+
+  // POST /api/github/app/hook: every delivery for every team that installed the app, signed with its secret.
+  async function appHook(req, res) {
+    const chunks = [];
+    let size = 0;
+    for await (const c of req) {
+      size += c.length;
+      if (size > MAX_BODY) return send(res, 413, { error: 'Too large' });
+      chunks.push(c);
+    }
+    if (!configured()) return send(res, 404, { error: 'Not set up' });
+    const raw = Buffer.concat(chunks);
+    const sig = String(req.headers['x-hub-signature-256'] || '');
+    const want = 'sha256=' + crypto.createHmac('sha256', env('GITHUB_APP_WEBHOOK_SECRET')).update(raw).digest('hex');
+    if (sig.length !== want.length || !crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(want))) return send(res, 401, { error: 'Bad signature' });
+    let body;
+    try { body = JSON.parse(raw.toString('utf8')); } catch { return send(res, 400, { error: 'Bad JSON' }); }
+    const event = String(req.headers['x-github-event'] || '');
+    const inst = String(body.installation?.id || '');
+    const teams = Object.keys(db.githubApp).filter((wsId) => db.githubApp[wsId].installationId === inst && db.workspaces[wsId]);
+    let logged = 0;
+    for (const wsId of teams) {
+      const c = db.githubApp[wsId];
+      const ws = db.workspaces[wsId];
+      c.lastEventAt = Date.now();
+      if (event === 'installation' && ['deleted', 'suspend'].includes(body.action)) {
+        delete db.githubApp[wsId];
+        delete db.codeLog[wsId];
+        broadcast(wsId, { type: 'githubapp' });
+        continue;
+      }
+      if (event === 'installation_repositories') {
+        const gone = new Set((body.repositories_removed || []).map((x) => x.full_name));
+        c.repos = [...c.repos.filter((x) => !gone.has(x)), ...(body.repositories_added || []).map((x) => cleanText(x.full_name, 140)).filter((x) => !c.repos.includes(x))];
+        broadcast(wsId, { type: 'githubapp' });
+        continue;
+      }
+      const repoName = body.repository?.full_name;
+      if (repoName && !c.repos.includes(repoName)) continue;
+      // Software boards that follow this repository through the team's connection (not their own webhook).
+      for (const p of Object.values(db.projects)) {
+        if (p.wsId !== wsId || p.githubRepo !== repoName || p.github?.token) continue;
+        const n = event === 'pull_request' ? onPull(ws, p, body) : event === 'push' ? onPush(ws, p, body) : event === 'release' ? onRelease(ws, p, body) : 0;
+        if (n) broadcast(wsId, { type: 'github', projectId: p.id });
+      }
+      const e = logEntry(event, body);
+      if (!e) continue;
+      const log = (db.codeLog[wsId] ||= []);
+      if (log.some((x) => x.id === e.id)) continue; // GitHub retries a delivery: once
+      e.at = Date.now();
+      log.unshift(e);
+      if (log.length > KEEP_LOG) log.length = KEEP_LOG;
+      logged++;
+      broadcast(wsId, { type: 'code' });
+      // Members' automations only when everyone may see code activity; otherwise owners' and admins'.
+      if (EVENT_OF[e.kind]) automate(wsId, EVENT_OF[e.kind], { repo: e.repo, branch: e.branch || '', text: e.text, url: e.url, version: e.version || '', who: e.by, qty: e.n, ownersOnly: c.who !== 'all' });
+    }
+    save();
+    return send(res, 200, { ok: true, event, logged });
+  }
+
+  const APP_DONE = {
+    connected: ['GitHub connected', 'Pushes, pull requests and releases from the repositories you picked now show in Kloomie. You can close this window.'],
+    expired: ['Link expired', 'Start again from Kloomie → Apps & Integrations → GitHub.'],
+    denied: ['Not connected', 'GitHub access wasn’t granted. You can close this window.'],
+    role: ['Not connected', 'Only team owners and admins can connect GitHub.'],
+    notyours: ['Not connected', 'That GitHub installation isn’t one your GitHub account can reach. Install Kloomie on your own account or an organisation you belong to.'],
+    requested: ['Waiting for an organisation owner', 'GitHub sent the request to an owner of that organisation. Once they approve it, connect again from Kloomie.'],
+    failed: ['Not connected', 'Something went wrong talking to GitHub. Try again in a minute.'],
+  };
+  const esc2 = (v) => String(v).replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch]);
+  function appDonePage(req, res, url) {
+    const r = url.searchParams.get('r');
+    const [title, msg] = Object.hasOwn(APP_DONE, r || '') ? APP_DONE[r] : APP_DONE.failed;
+    res.setHeader('X-Robots-Tag', 'noindex');
+    res.setHeader('Cache-Control', 'no-store');
+    return send(res, 200, `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${esc2(title)}</title><body style="font:15px system-ui;background:#f6f6f8;color:#17171c;display:grid;place-items:center;min-height:90vh;margin:0;padding:0 16px"><div style="max-width:440px"><h2>${esc2(title)}</h2><p>${esc2(msg)}</p></div></body>`);
+  }
+  const appDone = (res, how) => { res.writeHead(302, { Location: `/github/done?r=${how}`, 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer' }); res.end(); };
+  // GitHub comes back here after the install page (with "request user authorization" on): a code, the installation
+  // id and our state.
+  async function appCallback(req, res, url) {
+    const st = url.searchParams.get('state') || '';
+    const pend = appPending.get(st);
+    if (!pend || pend.exp < Date.now()) { appPending.delete(st); return send(res, 400, '<!doctype html><meta charset="utf-8"><title>Link expired</title><p>This link expired. Start again from Kloomie → Apps &amp; Integrations → GitHub.</p>'); }
+    const ws = db.workspaces[pend.wsId];
+    const who = ws?.members.find((x) => x.id === pend.memberId);
+    if (who && bind.gate(req, res, url, pend, { what: 'GitHub', team: ws.name, person: who.name })) return;
+    appPending.delete(st);
+    if (url.searchParams.get('error')) return appDone(res, 'denied');
+    if (!who || !['owner', 'admin'].includes(who.role)) return appDone(res, 'role');
+    if (url.searchParams.get('setup_action') === 'request') return appDone(res, 'requested');
+    const inst = String(url.searchParams.get('installation_id') || '');
+    const code = url.searchParams.get('code') || '';
+    if (!/^\d{1,20}$/.test(inst) || !code) return appDone(res, 'failed');
+    try {
+      const r = await fetch(WEB() + '/login/oauth/access_token', { method: 'POST', signal: AbortSignal.timeout(15_000), headers: { Accept: 'application/json', 'Content-Type': 'application/json', 'User-Agent': 'Kloomie' }, body: JSON.stringify({ client_id: env('GITHUB_APP_CLIENT_ID'), client_secret: env('GITHUB_APP_CLIENT_SECRET'), code }) });
+      const tok = (await r.json().catch(() => ({}))).access_token;
+      if (!tok) return appDone(res, 'denied');
+      const mine = await gh('/user/installations?per_page=100', tok);
+      const found = (mine.installations || []).find((x) => String(x.id) === inst);
+      if (!found) return appDone(res, 'notyours');
+      const repos = await listRepos(inst);
+      const old = appOf(ws.id);
+      db.githubApp[ws.id] = { installationId: inst, account: cleanText(found.account?.login, 80), accountType: found.account?.type === 'Organization' ? 'org' : 'user', repos, memberId: who.id, by: who.name, at: Date.now(), who: old?.who || 'tech', lastEventAt: old?.installationId === inst ? old.lastEventAt : null };
+      if (old?.installationId !== inst) delete db.codeLog[ws.id];
+      save();
+      broadcast(ws.id, { type: 'githubapp' });
+      return appDone(res, 'connected');
+    } catch (e) {
+      alarm('Connecting GitHub failed', e);
+      return appDone(res, 'failed');
+    }
+  }
+  // /api/github/app (state, connect, who sees it, refresh, disconnect) and /api/github/code (the log).
+  async function appRoute(req, res, parts, auth, ws) {
+    const [a, b, c] = parts;
+    if (a !== 'github' || !['app', 'code'].includes(b)) return null;
+    const m = req.method;
+    if (b === 'code') {
+      if (m !== 'GET') return send(res, 405, { error: 'Method not allowed' });
+      if (!codeOk(ws, auth.memberId)) return send(res, 403, { error: 'Code activity is for the people your owners chose.' });
+      const url = new URL(req.url, 'http://x');
+      const since = Date.now() - Math.min(90, Math.max(1, Number(url.searchParams.get('days')) || 7)) * 864e5;
+      const repo = url.searchParams.get('repo');
+      return send(res, 200, { events: (db.codeLog[ws.id] || []).filter((e) => e.at >= since && (!repo || e.repo === repo)).slice(0, 200) });
+    }
+    if (m === 'GET' && !c) return send(res, 200, appState(ws, auth.memberId));
+    if (!isAdmin(auth)) return send(res, 403, { error: 'Only team owners and admins connect GitHub.' });
+    if (m === 'POST' && c === 'connect') {
+      if (!configured()) return send(res, 400, { error: 'GitHub isn’t set up on this Kloomie server yet.' });
+      const st = crypto.randomBytes(18).toString('base64url');
+      for (const [k, v] of appPending) if (v.exp < Date.now()) appPending.delete(k);
+      appPending.set(st, { wsId: ws.id, memberId: auth.memberId, browser: bind.start(req, res), exp: Date.now() + 30 * 60_000 });
+      return send(res, 200, { url: `${WEB()}/apps/${encodeURIComponent(env('GITHUB_APP_SLUG'))}/installations/new?` + new URLSearchParams({ state: st }) });
+    }
+    const conn = appOf(ws.id);
+    if (!conn) return send(res, 400, { error: 'Connect GitHub first.' });
+    if (m === 'PATCH' && !c) {
+      const body = await readJson(req);
+      if (body.who !== undefined) {
+        if (!['tech', 'all', 'admins'].includes(body.who)) return send(res, 400, { error: 'Pick who sees code activity.' });
+        conn.who = body.who;
+      }
+      save();
+      broadcast(ws.id, { type: 'githubapp' });
+      return send(res, 200, appState(ws, auth.memberId));
+    }
+    if (m === 'POST' && c === 'refresh') {
+      try { conn.repos = await listRepos(conn.installationId); conn.error = null; } catch (e) { conn.error = e.message; }
+      save();
+      return send(res, 200, appState(ws, auth.memberId));
+    }
+    if (m === 'DELETE' && !c) {
+      delete db.githubApp[ws.id];
+      delete db.codeLog[ws.id];
+      save();
+      broadcast(ws.id, { type: 'githubapp' });
+      return send(res, 200, appState(ws, auth.memberId));
+    }
+    return send(res, 405, { error: 'Method not allowed' });
+  }
+  const followsRepo = (wsId, repo) => !!appOf(wsId)?.repos.includes(repo);
+  return { route, hook, itemsIn, appHook, appCallback, appDonePage, appRoute, codeOk, followsRepo, appConfigured: configured };
 }

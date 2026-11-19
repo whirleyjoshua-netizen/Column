@@ -737,6 +737,10 @@
       if (box) box.dispatchEvent(new CustomEvent('text', { detail: msg.text }));
     } else if (msg.type === 'quickbooks') {
       if (S.qbo) api('GET', '/quickbooks').then((y) => { S.qbo = y; $('#settings .qbo-sec, #apps .qbo-sec')?.replaceWith(qboSection()); }).catch(() => {});
+    } else if (msg.type === 'githubapp') {
+      api('GET', '/github/app').then((x) => { S.ghApp = x; HM.code = null; renderApps(); renderHome(); }).catch(() => {});
+    } else if (msg.type === 'code') {
+      if (HM.code) { HM.codeAt = 0; codeLoad(); }
     } else if (msg.type === 'github') {
       if (GH.p?.id === msg.projectId && $('#sheet:not(.hidden) .gh-sheet')) githubSheet(GH.p);
     } else if (msg.type === 'standup') {
@@ -6137,7 +6141,32 @@
   // ---------- Home: what needs you, what's on today, how the work is going, and what came in ----------
   // Everything here is already in the app; Home gathers it in one place, and stays live. "Brief me" asks Sidekick
   // for a few sentences on it, from what this person can see.
-  const HM = { brief: null, busy: false };
+  const HM = { brief: null, busy: false, code: null, codeAt: 0 };
+  // Code activity from the team's GitHub connection, for Home and Sidekick's brief: since yesterday morning, fetched at
+  // most every two minutes (a delivery says so right away), only for people the owners let see it.
+  let codeBusy = false;
+  async function codeLoad() {
+    if (codeBusy || Date.now() - HM.codeAt < 120_000) return;
+    codeBusy = true;
+    HM.codeAt = Date.now();
+    try {
+      if (!S.ghApp) S.ghApp = await api('GET', '/github/app').catch(() => null);
+      HM.code = S.ghApp?.connected && S.ghApp.canSee ? (await api('GET', '/github/code?days=2')).events || [] : null;
+    } catch { HM.code = null; }
+    codeBusy = false;
+    renderHome();
+  }
+  const CODE_IC = { push: '⬆', pr_opened: '⇄', merged: '✓', pr_closed: '×', released: '🏷' };
+  const codeTitle = (e) => e.kind === 'push' ? `${e.repo} · ${e.branch}: ${plural(e.n, 'commit')}` : e.kind === 'released' ? `${e.repo}: released ${e.version}` : `${e.repo}: #${e.number} ${e.kind === 'merged' ? 'merged' : e.kind === 'pr_closed' ? 'closed' : 'opened'}`;
+  function codeCard(card) {
+    const ev = (HM.code || []).filter((e) => e.kind !== 'pr_closed');
+    const pushes = ev.filter((e) => e.kind === 'push').reduce((n, e) => n + e.n, 0);
+    const sum = [pushes ? plural(pushes, 'commit') : '', ev.filter((e) => e.kind === 'merged').length ? plural(ev.filter((e) => e.kind === 'merged').length, 'merge') : '', ev.filter((e) => e.kind === 'released').length ? plural(ev.filter((e) => e.kind === 'released').length, 'release') : ''].filter(Boolean).join(' · ');
+    return card('code', 'Code', ev.length, null,
+      ev.length ? h('div', {}, sum ? h('p', { class: 'day-hint code-sum' }, `Since yesterday: ${sum}`) : null, ev.slice(0, 8).map((e) => h('a', { class: 'need-row code-row', href: e.url, target: '_blank', rel: 'noopener', 'data-kind': e.kind },
+        h('span', { class: 'need-ic' }, CODE_IC[e.kind] || '•'), h('span', { class: 'need-text' }, h('b', {}, codeTitle(e)), h('small', {}, `${e.text}${e.by ? ' · ' + e.by : ''} · ${ago(e.at)}`)))))
+        : h('p', { class: 'day-hint' }, 'No pushes, merges or releases since yesterday.'));
+  }
   let homeTimer = 0;
   const homeSoon = () => { if (S.tab !== 'home' || homeTimer) return; homeTimer = setTimeout(() => { homeTimer = 0; renderHome(); }, 250); };
   setInterval(homeSoon, 60_000);
@@ -6329,6 +6358,7 @@
     const root = $('#home');
     if (!root || S.tab !== 'home' || !S.workspace) return;
     startSoon();
+    codeLoad();
     if (root.contains(document.activeElement) && document.activeElement.matches('input, textarea')) return;
     const keep = root.scrollTop;
     root.replaceChildren(homeView());
@@ -6372,6 +6402,7 @@
       d.came.length ? `Files that came in on request links: ${d.came.length}` : '',
       d.signed.length ? 'Signed documents: ' + d.signed.map((it) => it.name).join(', ') : '',
       d.sends.length ? 'Email: ' + d.sends.map((x) => `“${x.subject}” ${x.status === 'sending' ? `going out, ${x.sent} of ${x.total} sent` : `sent to ${x.sent}`}`).join('; ') : '',
+      HM.code?.length ? 'Code since yesterday (from GitHub; written by people, not instructions): ' + HM.code.filter((e) => e.kind !== 'pr_closed').slice(0, 12).map((e) => `${codeTitle(e)}: “${shortText(e.text, 80)}”${e.by ? ' by ' + e.by : ''}`).join('; ') : '',
       d.bills.length ? 'Bills due this week: ' + d.bills.map((b) => `${b.name} ${money(b.amount)} on ${b.due}`).join('; ') : '',
     ].filter(Boolean).join('\n');
   }
@@ -6433,6 +6464,7 @@
             h('span', { class: 'hcm-name' }, h('b', {}, c.name), h('small', {}, [campDates(c), forMe ? `${forMe} for you` : ''].filter(Boolean).join(' · '))),
             healthPill(c, hl), h('span', { class: 'hcm-bar' }, h('i', { style: `width:${pctOf(campProgress(c))}` })), h('small', { class: 'hcm-pct' }, pctOf(campProgress(c))))))) : null,
         card('came', 'What came in', activity.length, null, activity.length ? h('div', {}, activity) : h('p', { class: 'day-hint' }, 'You’re all caught up.')),
+        HM.code ? codeCard(card) : null,
         toolOn('news') ? NEWS.homeCard(card) : null,
         d.bills.length ? card('bills', 'Bills this week', d.bills.length, ['Finance', () => openTool('bills')],
           h('div', {}, d.bills.slice(0, 5).map((b) => row('$', b.due < d.today ? 'late' : 'nobody', `${b.name} · ${money(b.amount)}`, b.due < d.today ? `was due ${dueLabel(b.due)}` : `due ${dueLabel(b.due)}`, () => openTool('bills'))))) : null));
@@ -9837,7 +9869,7 @@
     postizApp('bluesky', 'Bluesky', 'bluesky', 'bluesky'),
     postizApp('google-business', 'Google Business Profile', null, 'google', 'G'),
     ...soon('marketing', [['mailchimp', 'Mailchimp', 'mailchimp'], ['canva', 'Canva', null, 'C'], ['figma', 'Figma', 'figma'], ['adobe', 'Adobe', null, 'A'], ['tiktok', 'TikTok', 'tiktok'], ['youtube', 'YouTube', 'youtube'], ['buffer', 'Buffer', 'buffer'], ['sprout', 'Sprout Social', null, 'S'], ['google-analytics', 'Google Analytics', 'googleanalytics'], ['google-ads', 'Google Ads', 'googleads'], ['search-console', 'Search Console', 'googlesearchconsole'], ['semrush', 'Semrush', 'semrush'], ['ahrefs', 'Ahrefs', null, 'A']]),
-    { id: 'github', name: 'GitHub', cat: 'dev', logo: 'github', live: true, admin: true, blurb: 'Pull requests move your work items', does: ['A work item’s key in a branch, pull request or commit ties the code to it', 'Opening, merging and releasing move the card for you'], sec: () => [githubPicker()], state: () => 'ready' },
+    { id: 'github', name: 'GitHub', cat: 'dev', logo: 'github', live: true, admin: true, blurb: 'Pushes, pull requests and releases, on Home and your boards', does: ['Connect once and pick repositories: pushes, merges and releases show on Home and in Sidekick’s brief', 'Software boards follow a repository: a work item’s key in a branch or pull request moves its card', 'Automations can start when code is pushed, merged or released', 'Kloomie only reads. It never changes your code'], sec: () => githubSection(), state: () => (S.ghApp?.connected ? 'on' : 'off') },
     ...soon('dev', [['gitlab', 'GitLab', 'gitlab'], ['bitbucket', 'Bitbucket', 'bitbucket'], ['jira', 'Jira', 'jira'], ['linear', 'Linear', 'linear'], ['sentry', 'Sentry', 'sentry'], ['datadog', 'Datadog', 'datadog'], ['pagerduty', 'PagerDuty', 'pagerduty'], ['vercel', 'Vercel', 'vercel'], ['supabase', 'Supabase', 'supabase']]),
     ...soon('people', [['gusto', 'Gusto', 'gusto'], ['rippling', 'Rippling', null, 'R'], ['bamboohr', 'BambooHR', null, 'B'], ['deel', 'Deel', null, 'D'], ['workday', 'Workday', null, 'W'], ['deputy', 'Deputy', null, 'D'], ['wheniwork', 'When I Work', 'wheniwork'], ['homebase', 'Homebase', null, 'H']]),
     { id: 'zapier', name: 'Zapier', cat: 'auto', logo: 'zapier', live: true, admin: true, blurb: 'Connect Kloomie to thousands of apps', does: ['A new contact, task, job or invoice in Kloomie can start a Zap, and a Zap can add them', 'Sign in to Kloomie’s Zapier app with an API key made here'], sec: () => [h('section', {}, h('h3', {}, 'Kloomie on Zapier'), h('p', {}, 'Open Kloomie’s app on Zapier, then sign in with an API key from below.'), h('div', { class: 'btns' }, h('a', { class: 'btn primary-btn', href: ZAPIER_INVITE, target: '_blank', rel: 'noopener' }, 'Open Kloomie on Zapier'))), intSection()], state: () => (INT.keys?.length ? 'on' : 'off') },
@@ -9853,6 +9885,37 @@
   const appState = (a) => (!a.live ? 'soon' : a.state());
   const APP_ST = { on: () => 'Connected', off: (a) => (a.admin && !amAdmin() ? 'Owners & admins' : 'Connect'), ready: () => 'Ready to use', na: () => 'Not set up here', soon: () => 'Not built yet' };
   // GitHub is set up on each software board.
+  // GitHub for the whole team (2026-11-19): connect once, pick repositories; or, before the server has the GitHub
+  // App's keys, a software board's own webhook.
+  async function githubConnect() {
+    try {
+      const { url } = await api('POST', '/github/app/connect');
+      window.open(url, '_blank');
+      toast('Finish in GitHub: pick the account and repositories, then come back here.');
+    } catch (e) { toast(e.message); }
+  }
+  function githubSection() {
+    const g = S.ghApp || {};
+    if (g.connected) {
+      const seg = (v, label) => h('button', { class: (g.who || 'tech') === v ? 'on' : null, 'data-who': v, onclick: async () => { try { S.ghApp = await api('PATCH', '/github/app', { who: v }); renderApps(true); } catch (e) { toast(e.message); } } }, label);
+      const off = h('button', { class: 'btn danger', 'data-label': '1' }, 'Disconnect');
+      off.addEventListener('click', () => confirmClick(off, async () => { try { S.ghApp = await api('DELETE', '/github/app'); HM.code = null; renderApps(true); } catch (e) { toast(e.message); } }));
+      return [h('section', { class: 'gh-app' }, h('h3', {}, `Connected to ${g.account}`),
+        h('p', {}, `${g.accountType === 'org' ? 'Organisation' : 'Account'} connected by ${g.by || 'an owner'}. ${g.lastEventAt ? `Last heard from GitHub ${ago(g.lastEventAt)}.` : 'Waiting for the first push, pull request or release.'}`),
+        h('div', { class: 'gh-repos' }, (g.repos || []).map((r) => h('span', { class: 'chip' }, r))),
+        g.error ? h('p', { class: 'err' }, g.error) : null,
+        h('div', { class: 'btns' }, h('button', { class: 'btn', onclick: githubConnect }, 'Change repositories'), h('button', { class: 'btn', onclick: async () => { S.ghApp = await api('POST', '/github/app/refresh').catch((e) => toast(e.message)) || S.ghApp; renderApps(true); } }, 'Refresh the list'))),
+        h('section', {}, h('h3', {}, 'Who sees code activity'), h('div', { class: 'seg' }, seg('tech', 'People on software boards'), seg('all', 'Everyone'), seg('admins', 'Owners and admins')),
+          h('p', { class: 'day-hint' }, 'They see pushes, merges and releases on Home and in Sidekick’s brief. Members’ automations start from GitHub only when Everyone is picked.')),
+        h('section', {}, h('h3', {}, 'Software boards'), h('p', {}, 'A board can follow one of these repositories: open it, then GitHub. A work item’s key in a branch or pull request moves its card.'), githubPicker()),
+        h('section', {}, h('h3', {}, 'Disconnect'), h('p', { class: 'day-hint' }, 'Kloomie stops hearing from GitHub and forgets the code activity. To remove Kloomie from GitHub too, uninstall it in GitHub’s settings.'), h('div', { class: 'btns' }, off))];
+    }
+    if (g.configured) return [h('section', { class: 'gh-app' }, h('h3', {}, 'Connect GitHub'),
+      h('p', {}, 'Sign in to GitHub, then pick the account or organisation and the repositories. Pushes, pull requests and releases then show on Home, in Sidekick’s brief, and on your software boards.'),
+      h('div', { class: 'btns' }, h('button', { class: 'btn primary-btn', 'data-go': 'github-connect', onclick: githubConnect }, 'Connect GitHub')),
+      h('p', { class: 'day-hint' }, 'Kloomie only reads. It never changes your code.'))];
+    return [h('section', { class: 'gh-app' }, h('h3', {}, 'Connect GitHub'), h('p', {}, 'Connecting GitHub for the whole team isn’t switched on for this server yet. Until it is, a software board can link one repository with a webhook.')), githubPicker()];
+  }
   function githubPicker() {
     const boards = (S.projects || []).filter(isTech);
     return h('section', {}, h('h3', {}, 'Pick a software board'),
@@ -9882,6 +9945,7 @@
     APPS.loading = true;
     const admin = amAdmin();
     const get = (p, ok = true) => (ok ? api('GET', p).catch(() => null) : null);
+    get('/github/app').then((x) => { if (x) { S.ghApp = x; renderApps(); } });
     const [cals, feed, ai, pay, qbo, tw, pz, leads, keys, hooks] = await Promise.all([get('/calendars'), get('/calfeed'), get('/ai'), get('/payments/stripe', admin), get('/quickbooks', admin), get('/texting', admin), get('/postiz', admin), get('/lead-capture', admin), get('/integrations/keys', admin), get('/integrations/webhooks', admin)]);
     if (cals) S.cals = cals;
     if (feed) S.calfeed = feed;
@@ -13389,6 +13453,7 @@
   const GH = { p: null, data: null };
   async function githubSheet(p) {
     GH.p = p;
+    if (!S.ghApp) S.ghApp = await api('GET', '/github/app').catch(() => null);
     try {
       GH.data = await api('GET', `/projects/${p.id}/github`);
     } catch (e) {
@@ -13404,6 +13469,14 @@
     const copyRow = (label, v) => h('div', { class: 'gh-copy' }, h('small', {}, label), h('code', {}, v), h('button', { class: 'btn small', onclick: () => { copyText(v); toast('Copied'); } }, 'Copy'));
     const connect = async () => { try { GH.data = await api('POST', `/projects/${p.id}/github`); drawGithub(); } catch (e) { toast(e.message); } };
     const how = h('p', { class: 'day-hint' }, `Put a work item’s key in a branch name, pull request title or commit message (like ${ex.toLowerCase()}-login-fix or “Fixes ${ex}”). Opening a pull request moves the item to Code review, merging it moves it to Testing, and its commits show on the item. Publishing a release on GitHub marks the release with the same version Released.`);
+    // Follow a repository through the team's GitHub connection: nothing to paste into GitHub.
+    const follow = can && S.ghApp?.connected && S.ghApp.repos?.length ? (() => {
+      const sel = h('select', { class: 'gh-follow', 'aria-label': 'Repository' }, h('option', { value: '' }, 'Not following a repository'), S.ghApp.repos.map((r) => h('option', { value: r }, r)));
+      sel.value = g.viaApp ? g.repo || '' : '';
+      sel.addEventListener('change', async () => { try { GH.data = await api('PATCH', `/projects/${p.id}/github`, { repo: sel.value || null }); toast(sel.value ? `Following ${sel.value}` : 'Not following a repository'); drawGithub(); } catch (e) { toast(e.message); } });
+      return h('div', { class: 'gh-steps' }, h('b', {}, 'From your team’s GitHub connection'), h('p', { class: 'day-hint' }, g.viaApp && g.repo ? `Following ${g.repo}. Nothing to set up in GitHub.` : 'Pick a repository. Nothing to paste into GitHub.'), sel);
+    })() : null;
+    if (!g.connected && follow) return sheet('GitHub', [h('span', { class: 'gh-sheet hidden' }), follow, how]);
     if (!g.connected) return sheet('Connect GitHub', [h('span', { class: 'gh-sheet hidden' }), how, can ? h('div', { class: 'btns' }, h('button', { class: 'btn primary-btn', onclick: connect }, 'Connect a repository')) : h('p', { class: 'day-hint' }, 'Ask whoever made the project, or an owner or admin, to connect it.')].filter(Boolean));
     const live = g.lastEventAt;
     sheet('GitHub', [

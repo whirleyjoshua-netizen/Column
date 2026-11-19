@@ -3755,3 +3755,10 @@ body:not(.wide) .tool-grid { grid-template-columns: 1fr; }
 .rc-chip { display: inline-flex; align-items: center; gap: 2px; padding: 2px 4px 2px 8px; border: 1px solid var(--line); border-radius: 999px; font-size: 13px; }
 .rc-chip a { color: inherit; text-decoration: none; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rc-chip.wait { border-style: dashed; color: var(--muted); }
+
+/* GitHub: the team connection and the Home Code card */
+.gh-repos { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 12px; }
+.gh-follow { width: 100%; margin-top: 6px; }
+.home-card.code .code-row { text-decoration: none; color: inherit; text-align: left; justify-content: flex-start; }
+.home-card.code .code-row .need-text { flex: 1; text-align: left; }
+.home-card.code .code-sum { margin: 0 0 6px; }

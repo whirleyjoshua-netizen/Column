@@ -3529,7 +3529,7 @@ function autoVars(ctx, wsId) {
   return { task: ctx.task?.text, step: ctx.goal?.title, campaign: ctx.campaign?.name, contact: ctx.contact ? ctx.contact.name || ctx.contact.company || ctx.contact.email || ctx.contact.phone : '', file: ctx.file?.name,
     from: ctx.from, who: ctx.who, stage: ctx.stageLabel || (ctx.stage ? stageLabel(ctx.stage) : ''), outcome: ctx.outcome, document: ctx.document, note: ctx.note, date: ctx.date || teamDay(wsId),
     record: ctx.recordName, project: ctx.project?.name, list: ctx.list?.name, customer: ctx.customer, amount: ctx.amount != null ? '$' + Number(ctx.amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '',
-    invoice: ctx.invoice, time: ctx.time, crew: ctx.crew, phone: ctx.phone, text: ctx.text, doc: ctx.doc, pin: ctx.pin, category: ctx.category, status: ctx.status, answer: ctx.answer, item: ctx.item, was: ctx.was, now: ctx.now, quotes: ctx.quotes != null ? String(ctx.quotes) : undefined, qty: ctx.qty, unit: ctx.unitName, place: ctx.place, supplier: ctx.supplier };
+    invoice: ctx.invoice, time: ctx.time, crew: ctx.crew, phone: ctx.phone, text: ctx.text, doc: ctx.doc, pin: ctx.pin, category: ctx.category, status: ctx.status, answer: ctx.answer, item: ctx.item, was: ctx.was, now: ctx.now, quotes: ctx.quotes != null ? String(ctx.quotes) : undefined, qty: ctx.qty, unit: ctx.unitName, place: ctx.place, supplier: ctx.supplier, repo: ctx.repo, branch: ctx.branch, url: ctx.url, version: ctx.version };
 }
 function autoMatches(t, ctx) {
   if (t.campaignId && ctx.campaign?.id !== t.campaignId && ctx.campaign?.parentId !== t.campaignId) return false;
@@ -3945,7 +3945,7 @@ async function resumeSteps(x, ctx, stack, i, log) {
   return r;
 }
 // What a waiting run keeps: what it's about, by id, and the words as they were.
-const CTX_WORDS = ['answer', 'item', 'was', 'now', 'quotes', 'qty', 'unitName', 'place', 'supplier', 'who', 'whoId', 'from', 'stage', 'stageLabel', 'outcome', 'document', 'note', 'date', 'recordName', 'customer', 'amount', 'invoice', 'time', 'crew', 'phone', 'text', 'doc', 'pin', 'category', 'status', 'direction', 'private', 'ownersOnly'];
+const CTX_WORDS = ['repo', 'branch', 'url', 'version', 'answer', 'item', 'was', 'now', 'quotes', 'qty', 'unitName', 'place', 'supplier', 'who', 'whoId', 'from', 'stage', 'stageLabel', 'outcome', 'document', 'note', 'date', 'recordName', 'customer', 'amount', 'invoice', 'time', 'crew', 'phone', 'text', 'doc', 'pin', 'category', 'status', 'direction', 'private', 'ownersOnly'];
 function ctxSnap(ctx) {
   const out = { ids: { task: ctx.task?.id, goal: ctx.goal?.id, campaign: ctx.campaign?.id, contact: ctx.contact?.id || null, contactName: ctx.contact && !ctx.contact.id ? ctx.contact.name || '' : null, file: ctx.file?.id, project: ctx.project?.id, list: ctx.list?.id, record: ctx.record?.id } };
   for (const k of CTX_WORDS) if (ctx[k] !== undefined && ctx[k] !== null) out[k] = ctx[k];
@@ -7823,6 +7823,7 @@ async function api(req, res, url) {
 
   // Someone signing a document they were sent: the link is their way in, no account.
   // GitHub telling a software project about pull requests, pushes and releases (github.js): signed, no sign-in.
+  if (a === 'github' && b === 'app' && c === 'hook' && m === 'POST') return GH.appHook(req, res);
   if (a === 'github' && b === 'hook' && c && m === 'POST') return GH.hook(req, res, c);
   if (a === 'public' && b === 'sign') return signApi(req, res, c, d);
   if (a === 'public' && b === 'request') return requestApi(req, res, url, c, d);
@@ -8026,6 +8027,8 @@ async function api(req, res, url) {
   {
     const qb = await QB.route(req, res, parts, auth, ws);
     if (qb !== null) return;
+    const gha = await GH.appRoute(req, res, parts, auth, ws);
+    if (gha !== null) return;
     const rules = await RULES.route(req, res, parts, auth, ws);
     if (rules !== null) return;
     const out = await HQ.route(req, res, parts, auth, ws);
@@ -11727,7 +11730,7 @@ async function itemFile(ws, memberId, id) {
 const AGENTS_M = agentsModule({ autoEvents: FL.EVENTS, sees: (memberId, kind, x) => (kind === 'campaign' ? seesCampaign(x.id, memberId) : canSee({ memberId }, kind, x)), db, save, rid,
   // Every change to a run goes out as news; one asked in chat is answered there as soon as it's done.
   broadcast: (wsId, msg) => { broadcast(wsId, msg); if (msg?.type === 'agent' && msg.run?.id && db.chatAsks?.[msg.run.id]) chatAskDone(msg.run.id); }, cleanText, readJson, send, notify, replay: replayAs, run: agentLlm, sendEmail: agentEmail, textToDoc, PJ, isAdminId, localNow, tzOf, fmtMinutes, hasAi: (wsId, memberId) => !!aiUse(aiOf(wsId, memberId)), POSTIZ, makeImageItem, itemFile, noContact, describeImages, canPicture: (wsId, memberId) => ['openai', 'gemini'].some((k) => !!aiOf(wsId, memberId).keys?.[k]?.sealed) });
-const GH = githubModule({ db, save, broadcast, rid, cleanText, readJson, send, seal, unseal, isAdmin, PJ, sees: (p, mid) => PJ.sees(p, mid), publicUrl: PUBLIC_URL });
+const GH = githubModule({ bind: OAUTH_BIND, automate: (...x) => automate(...x), alarm: (...x) => alarm(...x), db, save, broadcast, rid, cleanText, readJson, send, seal, unseal, isAdmin, PJ, sees: (p, mid) => PJ.sees(p, mid), publicUrl: PUBLIC_URL });
 // Daily standups on a project (standup.js): a blocker becomes a task for the project lead.
 const STANDUP = standupModule({ db, save, broadcast, rid, cleanText, readJson, send, notify, sees: (p, mid) => PJ.sees(p, mid), teamDay: (wsId) => teamDay(wsId),
   localNow: (ws) => { const n = localNow(tzOf(ws), Date.now()); return { day: n.date, weekday: n.dow, minutes: n.min }; },
@@ -12076,6 +12079,8 @@ async function handleRequest(req, res) {
   if (url.pathname === '/oauth/dropbox/callback') return DBX.callback(req, res, url).catch((e) => { alarm('Connecting Dropbox failed', e); if (!res.headersSent) send(res, 500, 'Something went wrong connecting Dropbox.'); });
   if (url.pathname === '/postiz/done' && (req.method === 'GET' || req.method === 'HEAD')) return POSTIZ.donePage(req, res, url);
   if (url.pathname === '/oauth/postiz/callback') return POSTIZ.callback(req, res, url).catch((e) => { alarm('Connecting Postiz failed', e); if (!res.headersSent) send(res, 500, 'Something went wrong connecting Postiz.'); });
+  if (url.pathname === '/github/done' && (req.method === 'GET' || req.method === 'HEAD')) return GH.appDonePage(req, res, url);
+  if (url.pathname === '/oauth/github/callback') return GH.appCallback(req, res, url).catch((e) => { alarm('Connecting GitHub failed', e); if (!res.headersSent) send(res, 500, 'Something went wrong connecting GitHub.'); });
   if (url.pathname === '/oauth/quickbooks/callback') return QB.callback(req, res, url).catch((e) => { alarm('Connecting QuickBooks failed', e); if (!res.headersSent) send(res, 500, 'Something went wrong connecting QuickBooks.'); });
   if (url.pathname.startsWith('/oauth/')) return oauthCallback(req, res, url).catch((e) => {
     alarm('Connecting a calendar failed', e);
