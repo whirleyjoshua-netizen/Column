@@ -68,6 +68,7 @@ try {
   await A.until(`document.querySelectorAll('#tool .contact-row').length === 3`);
   await A.tap(`[...document.querySelectorAll('#tool .contact-row')].find((r) => r.textContent.includes('Ivan Inspector')).querySelector('input[type=checkbox]')`);
   ok(await A.until(`!!${T('.ct-to-group')}`), 'selecting someone (no email needed) offers Add to group');
+  ok(await A.ev(`!/null/.test(document.querySelector('#tool .contacts-act').textContent)`), 'the bar has no stray “null” in it');
   await A.tap(T('.ct-to-group'));
   await A.until(`[...document.querySelectorAll('#menu button')].some((b) => b.textContent.includes('Inspectors'))`);
   await A.ev(`[...document.querySelectorAll('#menu button')].find((b) => b.textContent.includes('Inspectors')).click(); true`);
@@ -121,6 +122,24 @@ try {
   await A.tap(`[...document.querySelectorAll('#sheet .pj-pick-groups .chip')].find((b) => b.textContent.includes('Legal'))`);
   ok(await A.until(`[...document.querySelectorAll('#sheet .pj-pick-row:not(.new) b')].map((b) => b.textContent).join() === 'Ana Attorney'`), 'Legal shows only Ana');
   await A.ev(`document.querySelector('#sheet .sheet-close, #sheet [aria-label=Close]')?.click(); true`);
+  // A member with Contacts on (2026-11-20, What members can use): sees the groups and people, can't change them.
+  const st = await api('GET', '/state');
+  const mo = await (await fetch(APP + 'api/auth', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ mode: 'join', workspace: 'Cg ' + t, code: st.workspace.inviteCode, name: 'Mo', email: `mo${t}@t.test`, password: 'longenough2', device: 'Mac', deviceId: 'd2' }) })).json();
+  await api('PATCH', '/workspace', { memberAccess: { contacts: true } });
+  await A.ev(`localStorage.setItem('column.token', JSON.stringify(${JSON.stringify(mo.token)})); location.reload(); true`).catch(() => {});
+  await A.until(`!document.querySelector('#app').classList.contains('hidden') && !!document.querySelector('#tabs [data-tab=contacts]')`, 15000);
+  await A.ev(`document.querySelector('#tabs [data-tab=contacts]').click(); true`);
+  ok(await A.until(`!!${T('.ct-rail')} && (${T('.ct-rail')}.textContent).includes('Legal & accounting') && document.querySelectorAll('#tool .contact-row').length === 4`), 'a member with Contacts sees the groups and the people');
+  ok(await A.ev(`!${T('.ct-gnew')} && !${T('.ct-gmore')}`), 'but no + New group or a group’s ⋯');
+  await A.tap(`[...document.querySelectorAll('#tool .contact-row')].find((r) => r.textContent.includes('Ben Buyer')).querySelector('input[type=checkbox]')`);
+  ok(await A.until(`!document.querySelector('#tool .contacts-act').classList.contains('hidden') && !${T('.ct-to-group')} && !/null/.test(document.querySelector('#tool .contacts-act').textContent)`), 'selecting someone offers no Add to group (and no “null”)');
+  await A.tap(`[...document.querySelectorAll('#tool .contact-name')].find((b) => b.textContent === 'Ana Attorney')`);
+  ok(await A.until(`!!document.querySelector('#sheet input') && document.querySelector('#sheet input').disabled && !document.querySelector('#sheet .sheet > .btns .primary-btn') && !document.querySelector('#sheet .ct-gpick-new') && [...document.querySelectorAll('#sheet .ct-gpick .chip')].map((b) => b.textContent + (b.disabled ? '' : '!')).join() === '⚖️ Legal & accounting'`), 'opening someone shows them without changing them: no Save, groups shown but not editable');
+  await A.ev(`document.querySelector('#sheet [aria-label=Close]').click(); true`);
+  await A.tap(`[...document.querySelectorAll('#tool button')].find((b) => b.textContent === '+ Add')`);
+  ok(await A.until(`!!document.querySelector('#sheet .sheet > .btns .primary-btn') && !document.querySelector('#sheet input').disabled && !document.querySelector('#sheet .ct-gpick-new')`), 'they can add someone new (no + New group)');
+  await A.ev(`document.querySelector('#sheet [aria-label=Close]').click(); true`);
+  await A.ev(`localStorage.setItem('column.token', JSON.stringify(${JSON.stringify(auth.token)})); true`);
   // Narrow: chips across the top.
   await A.cmd('Emulation.setDeviceMetricsOverride', { width: 420, height: 860, deviceScaleFactor: 2, mobile: true });
   await A.ev(`location.reload(); true`).catch(() => {});

@@ -9810,14 +9810,15 @@
     const act = () => {
       const n = CT.picked.size;
       bar.classList.toggle('hidden', !n);
-      bar.replaceChildren(h('span', {}, `${n} selected`), h('button', { class: 'link', onclick: () => { CT.picked.clear(); show(); } }, 'Clear'),
-        h('button', { class: 'btn small ct-to-group', onclick: (e) => ctGroupMenu(e.currentTarget, [...CT.picked]) }, 'Add to group…'),
-        CT.group && CT.group !== 'none' && cgroupById(CT.group) ? h('button', { class: 'btn small ct-out-group', onclick: async () => { try { const ids = [...CT.picked]; await api('POST', `/contact-groups/${CT.group}/remove`, { ids }); S.contacts = S.contacts.map((y) => (ids.includes(y.id) ? { ...y, groups: (y.groups || []).filter((g) => g !== CT.group) } : y)); CT.picked.clear(); toast(`Taken out of ${cgroupById(CT.group).name}`); renderTool(); } catch (er) { toast(er.message); } } }, `Remove from ${cgroupById(CT.group).name}`) : null,
+      // (replaceChildren would print a null as the word "null", so the empty ones are dropped.)
+      bar.replaceChildren(...[h('span', {}, `${n} selected`), h('button', { class: 'link', onclick: () => { CT.picked.clear(); show(); } }, 'Clear'),
+        amAdmin() ? h('button', { class: 'btn small ct-to-group', onclick: (e) => ctGroupMenu(e.currentTarget, [...CT.picked]) }, 'Add to group…') : null,
+        amAdmin() && CT.group && CT.group !== 'none' && cgroupById(CT.group) ? h('button', { class: 'btn small ct-out-group', onclick: async () => { try { const ids = [...CT.picked]; await api('POST', `/contact-groups/${CT.group}/remove`, { ids }); S.contacts = S.contacts.map((y) => (ids.includes(y.id) ? { ...y, groups: (y.groups || []).filter((g) => g !== CT.group) } : y)); CT.picked.clear(); toast(`Taken out of ${cgroupById(CT.group).name}`); renderTool(); } catch (er) { toast(er.message); } } }, `Remove from ${cgroupById(CT.group).name}`) : null,
         (() => {
           // Only people with an email who haven't asked not to be contacted are emailed; the rest are just selected.
           const ps = all.filter((x) => CT.picked.has(x.id) && MAIL_RE.test((x.email || '').trim()) && !x.dne && !no.has(x.email.toLowerCase()));
           return ps.length ? h('button', { class: 'btn small primary-btn', onclick: () => { CT.picked.clear(); emailTo(ps.map((x) => ({ email: x.email, name: x.name, contactId: x.id }))); } }, `Email ${ps.length}`) : null;
-        })());
+        })()].filter(Boolean));
     };
     const show = () => {
       CT.q = q.value;
@@ -9915,13 +9916,13 @@
     if (CT.group && CT.group !== 'none' && !cgroupById(CT.group)) CT.group = '';
     const item = (key, label, count, g) => h('div', { class: 'ct-gitem' + (CT.group === key ? ' on' : ''), 'data-group': key },
       h('button', { class: 'ct-gbtn', onclick: () => ctPick(key), 'aria-pressed': String(CT.group === key) }, h('span', {}, label), h('small', {}, String(count))),
-      g && (!chips || CT.group === key) ? h('button', { class: 'ct-gmore', 'aria-label': `${g.name}: options`, onclick: (e) => ctGroupOptions(e.currentTarget, g) }, '⋯') : null);
+      g && amAdmin() && (!chips || CT.group === key) ? h('button', { class: 'ct-gmore', 'aria-label': `${g.name}: options`, onclick: (e) => ctGroupOptions(e.currentTarget, g) }, '⋯') : null);
     return h('nav', { class: chips ? 'ct-gchipsbar' : 'ct-rail', 'aria-label': 'Contact groups' },
       chips ? null : h('div', { class: 'ct-rail-h' }, 'Groups'),
       item('', 'All', all.length),
       ...cgroups().map((g) => item(g.id, cgLabel(g), n(g), g)),
       cgroups().length ? item('none', 'In no group', none) : null,
-      h('button', { class: 'ct-gnew', onclick: () => ctNewGroupSheet() }, '+ New group'),
+      amAdmin() ? h('button', { class: 'ct-gnew', onclick: () => ctNewGroupSheet() }, '+ New group') : null,
       !chips && !cgroups().length ? h('small', { class: 'ct-rail-hint' }, 'Sort people beyond sales: vendors, inspectors, your lawyer, partners, mentors.') : null);
   }
   // One contact, new or to change. A connector's own details are changed there (PSS, Google).
@@ -9930,7 +9931,7 @@
     const owned = x?.owns || [];
     const f = {};
     const field = (k, label, attrs = {}) => {
-      f[k] = h(k === 'note' ? 'textarea' : 'input', { value: x?.[k] || '', disabled: from && owned.includes(k), ...attrs });
+      f[k] = h(k === 'note' ? 'textarea' : 'input', { value: x?.[k] || '', disabled: (from && owned.includes(k)) || (x && !amAdmin()), ...attrs });
       if (k === 'note') f[k].value = x?.note || '';
       return h('label', {}, label, f[k]);
     };
@@ -9939,11 +9940,13 @@
     // group being looked at.
     const inGroups = new Set(x ? x.groups || [] : CT.group && CT.group !== 'none' ? [CT.group] : []);
     const gbox = h('div', { class: 'ct-gpick' });
-    const gdraw = () => gbox.replaceChildren(...cgroups().map((g) => h('button', { type: 'button', class: 'chip' + (inGroups.has(g.id) ? ' on' : ''), 'aria-pressed': String(inGroups.has(g.id)), onclick: () => { inGroups.has(g.id) ? inGroups.delete(g.id) : inGroups.add(g.id); gdraw(); } }, cgLabel(g))),
-      h('button', { type: 'button', class: 'chip ct-gpick-new', onclick: () => { const i = h('input', { class: 'ct-gpick-in', placeholder: 'New group', maxlength: 40 }); let once = false; const go = async () => { if (once) return; once = true; const nm = i.value.trim(); if (!nm) return gdraw(); i.disabled = true; const g = await ctNewGroup(nm, '', async () => {}); if (g) inGroups.add(g.id); gdraw(); }; i.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); go(); } if (e.key === 'Escape') { e.preventDefault(); gdraw(); } }); i.addEventListener('blur', go, { once: true }); gbox.lastChild.replaceWith(i); i.focus(); } }, '+ New group'));
+    const gdraw = () => gbox.replaceChildren(...[...cgroups().filter((g) => !(x && !amAdmin()) || inGroups.has(g.id)).map((g) => h('button', { type: 'button', class: 'chip' + (inGroups.has(g.id) ? ' on' : ''), 'aria-pressed': String(inGroups.has(g.id)), disabled: !!x && !amAdmin(), onclick: () => { inGroups.has(g.id) ? inGroups.delete(g.id) : inGroups.add(g.id); gdraw(); } }, cgLabel(g))),
+      !amAdmin() ? null : h('button', { type: 'button', class: 'chip ct-gpick-new', onclick: () => { const i = h('input', { class: 'ct-gpick-in', placeholder: 'New group', maxlength: 40 }); let once = false; const go = async () => { if (once) return; once = true; const nm = i.value.trim(); if (!nm) return gdraw(); i.disabled = true; const g = await ctNewGroup(nm, '', async () => {}); if (g) inGroups.add(g.id); gdraw(); }; i.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); go(); } if (e.key === 'Escape') { e.preventDefault(); gdraw(); } }); i.addEventListener('blur', go, { once: true }); gbox.lastChild.replaceWith(i); i.focus(); } }, '+ New group')].filter(Boolean));
     gdraw();
     const dne = h('input', { type: 'checkbox', checked: !!x?.ownDne });
-    const del = x && !from ? h('button', { class: 'btn small danger', 'data-label': '1' }, 'Delete') : null;
+    const del = x && !from && amAdmin() ? h('button', { class: 'btn small danger', 'data-label': '1' }, 'Delete') : null;
+    // A member (with Contacts on) sees someone already here without changing them; they can add new people.
+    const look = !!x && !amAdmin();
     del?.addEventListener('click', () => confirmClick(del, async () => {
       try {
         await api('DELETE', '/contacts/' + x.id);
@@ -9968,7 +9971,7 @@
       x && toolOn('projects') ? contactJobs(x) : null,
       x ? contactTexts(x) : null,
       x ? h('div', { class: 'btns' }, shareBtn(linkToken('contact', x.id)), del) : null,
-    ].filter(Boolean), async () => {
+    ].filter(Boolean), look ? null : async () => {
       const body = Object.fromEntries(Object.entries(f).filter(([, el]) => !el.disabled).map(([k, el]) => [k, el.value]));
       Object.assign(body, { tags: tags.value, dne: dne.checked, groups: [...inGroups].filter((id) => cgroupById(id)) });
       const y = x ? await api('PATCH', '/contacts/' + x.id, body) : await api('POST', '/contacts', body);
