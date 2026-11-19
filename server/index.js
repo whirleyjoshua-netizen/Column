@@ -2887,6 +2887,24 @@ function applyCampaign(c, body, ws, auth) {
   return c;
 }
 
+// What a step hands its people (2026-11-20): a call script or note written right there, a doc, a file, a saved
+// template, or a link. Every task in the step shows them; a saved campaign keeps them. Up to 20, the team's own.
+const RES_KINDS = ['note', 'doc', 'file', 'template', 'link'];
+function cleanResources(wsId, list) {
+  return (Array.isArray(list) ? list : []).slice(0, 20).map((r) => {
+    const id = /^[\w-]{4,24}$/.test(String(r?.id || '')) ? String(r.id) : rid(8);
+    if (r?.kind === 'note') {
+      const text = String(r.text ?? '').replace(/\r\n?/g, '\n').trim().slice(0, 8000), title = cleanText(r.title, 80);
+      return text || title ? { id, kind: 'note', title: title || 'Note', text } : null;
+    }
+    if (r?.kind === 'doc' || r?.kind === 'file') { const it = db.items[String(r.itemId)]; return it && it.wsId === wsId ? { id, kind: r.kind, itemId: it.id } : null; }
+    if (r?.kind === 'template') { const x = db.msgTemplates?.[String(r.tplId)]; return x && x.wsId === wsId ? { id, kind: 'template', tplId: x.id } : null; }
+    if (r?.kind === 'link') {
+      try { const u = new URL(String(r.url || '')); return /^https?:$/.test(u.protocol) ? { id, kind: 'link', url: u.href.slice(0, 1000), title: cleanText(r.title, 80) || u.hostname } : null; } catch { return null; }
+    }
+    return null;
+  }).filter(Boolean);
+}
 function applyGoal(g, body, c) {
   if (body.title !== undefined) g.title = String(body.title || '').trim().slice(0, 200);
   if (body.due !== undefined) {
@@ -2906,6 +2924,7 @@ function applyGoal(g, body, c) {
   // can't move to it, or past it, while this step has open tasks; finishing them moves the job there.
   if (body.stage !== undefined) { g.stage = body.stage ? String(body.stage).trim().slice(0, 60) || null : null; g.staged = false; }
   if (body.needs !== undefined) g.needs = cleanNeeds(body.needs, c?.wsId, g.needs || []);
+  if (body.resources !== undefined) g.resources = cleanResources(c?.wsId || g.wsId, body.resources);
   if (!g.title) throw badRequest('Give the goal a name.');
   return g;
 }
@@ -3319,7 +3338,7 @@ function snapshotCampaign(c, main = c) {
     },
     lists: lists.map((l) => ({ ref: l.id, name: l.name, kind: l.kind, agenda: !!l.agenda, columns: l.columns, rows: l.rows.map((r) => ({ cells: r.cells, section: r.section, mins: r.mins })) })),
     goals: Object.values(db.goals).filter((g) => g.campaignId === c.id).sort((a, b) => (a.order || 0) - (b.order || 0)).map((g) => ({
-      ref: g.id, blockedBy: g.blockedBy || [], title: g.title, kind: g.kind, target: g.target, counts: g.counts, methods: g.methods || null, order: g.order, dueIn: rel(g.due), stage: g.stage || null, needs: (g.needs || []).map(({ got, seen, ...n }) => n),
+      ref: g.id, blockedBy: g.blockedBy || [], resources: g.resources || [], title: g.title, kind: g.kind, target: g.target, counts: g.counts, methods: g.methods || null, order: g.order, dueIn: rel(g.due), stage: g.stage || null, needs: (g.needs || []).map(({ got, seen, ...n }) => n),
       // Follow-ups were for that run's people, so they stay behind.
       tasks: Object.values(db.tasks).filter((t) => t.goalId === g.id && !t.followUp).sort((a, b) => a.createdAt - b.createdAt).map((t) => ({
         ref: t.id, blockedBy: t.blockedBy || [], dueAfter: t.dueAfter ?? null, castId: t.castId || null, signoff: t.signoff || null, action: t.action || null,
@@ -3422,7 +3441,9 @@ function fillCampaign(ws, owner, c, snap, date, by) {
     const g = applyGoal({ id: rid(), wsId: ws.id, campaignId: c.id, by: owner.member, createdAt: Date.now(), title: '', due: null, kind: 'tasks', target: 10, counts: null, order: 0 },
       { title: sg.title, kind: sg.kind, target: sg.target, counts: sg.counts, methods: sg.methods, order: sg.order, due: due(sg.dueIn), stage: sg.stage || null,
         // What it needs comes too, without what's been met; items from another team's inventory are left off.
-        needs: (sg.needs || []).filter((n) => !n.itemId || db.invItems[n.itemId]?.wsId === ws.id).map(({ id, ...n }) => n) }, c);
+        needs: (sg.needs || []).filter((n) => !n.itemId || db.invItems[n.itemId]?.wsId === ws.id).map(({ id, ...n }) => n),
+        // Its script, notes, docs and links come too (another team's docs and templates are left off).
+        resources: sg.resources || [] }, c);
     db.goals[g.id] = g;
     made.set(sg.ref, g);
     broadcast(ws.id, { type: 'goal', goal: publicGoal(g) });
@@ -10071,6 +10092,7 @@ async function api(req, res, url) {
       const camp = db.campaigns[g.campaignId];
       if ((body.skipped !== undefined || body.unlocked !== undefined) && !passesSteps(camp, auth)) return send(res, 403, { error: 'Only an owner can skip or unlock a step.' });
       if (body.got !== undefined && !passesSteps(camp, auth)) return send(res, 403, { error: 'Only the campaign’s owner or an admin can tick off what a step needs by hand.' });
+      if (body.resources !== undefined && !passesSteps(camp, auth)) return send(res, 403, { error: 'Only the campaign’s owner or an admin can change what a step hands its people.' });
       const next = applyGoal({ ...g }, body, camp);
       // { got: { <need id>: true | false } }: ticked by hand ("we got it another way"), or unticked.
       if (body.got && typeof body.got === 'object') next.needs = (next.needs || []).map((n) => (body.got[n.id] === undefined ? n : { ...n, got: body.got[n.id] ? { by: auth.member, at: Date.now() } : null }));

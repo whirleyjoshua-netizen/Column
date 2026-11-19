@@ -110,7 +110,11 @@ ok(await A.until(`[...document.querySelectorAll('#docview .dv-link')].some((x) =
 // the task row in the campaign links back
 await A.tap(`document.querySelector('#docview .dk-ref-campaign')`);
 ok(await A.until(`document.querySelector('#docview').classList.contains('hidden')`), 'clicking the mention leaves the doc for the campaign');
-ok(await A.until(`[...document.querySelectorAll('.task-row')].some((r) => r.textContent.includes('Send fleet pricing PDF today') && r.textContent.includes('Doc'))`, 4000), 'the task in the campaign shows a Doc chip');
+// (2026-11-20: a campaign's task rows are lighter; the task, opened, says which doc it came from.)
+ok(await A.until(`[...document.querySelectorAll('.task-row')].some((r) => r.textContent.includes('Send fleet pricing PDF today'))`, 4000), 'the task is in the campaign');
+// (Folders & Docs is still over the page here, so a real tap would land on it; open the task directly.)
+await A.ev(`[...document.querySelectorAll('#camps .task-row .p-text')].find((r) => r.textContent.includes('Send fleet pricing PDF today')).click(); true`);
+ok(await A.until(`document.querySelector('#sheet .win-doc')?.textContent.includes('Fleet notes')`, 4000), 'opened, it links back to the doc it came from');
 ok(!A.errors.length, 'no page errors' + (A.errors.length ? ': ' + A.errors.join(' / ') : ''));
 A.close(); chrome.kill();
 console.log(fails ? fails + ' failed' : 'all passed');

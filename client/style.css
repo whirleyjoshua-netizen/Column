@@ -3891,3 +3891,38 @@ body.wide .sheet-wrap:not(:has(.auto-builder, .camp-builder, .page-form, .delete
 .tm-nav { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .tm-when { font-size: 15px; }
 .tm-body .teamload, .tm-body .fc { margin-top: 0; }
+
+/* ---------- A step or task, opened (2026-11-20): tabs, details as rows, and what the step hands its people ---------- */
+.win { display: flex; flex-direction: column; gap: 12px; }
+.win-head { display: flex; align-items: center; gap: 10px; }
+.win-title { width: 100%; box-sizing: border-box; font: inherit; font-size: 18px; font-weight: 650; padding: 6px 8px; margin: 0 -8px; border: 1px solid transparent; border-radius: 8px; background: transparent; color: var(--text); }
+.win-title:hover:not([readonly]) { border-color: var(--line); }
+.win-title:focus { outline: none; border-color: var(--accent); background: var(--card); }
+.win-tabs { align-self: flex-start; }
+.win-panels { min-height: 120px; }
+.win-rows .srow { padding: 11px 0; }
+.win-rows .srow > span { font-size: 14px; }
+.win-rows .srow small { font-size: 13px; margin-top: 2px; }
+.win-rows input[type=date] { width: auto; }
+.win-prog { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--muted); margin-bottom: 4px; }
+.win-prog .bar { flex: 1; }
+.win-tasks { display: flex; flex-direction: column; }
+.res-panel .day-hint { font-size: 13.5px; }
+.res-list { display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; margin: 6px 0 10px; background: var(--card); }
+.res-row { display: flex; align-items: center; gap: 4px; padding: 2px 6px 2px 0; border-bottom: 1px solid var(--line); }
+.res-row:last-child { border-bottom: 0; }
+.res-open { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 0; background: none; color: var(--text); text-align: left; cursor: pointer; font: inherit; }
+.res-open:hover { background: var(--card-hover); }
+.res-open b { display: block; font-size: 14px; font-weight: 600; }
+.res-open small { display: block; color: var(--muted); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.res-open > span:last-child { min-width: 0; }
+.res-ic { font-size: 18px; width: 24px; text-align: center; flex: none; }
+.res-adds { display: flex; flex-wrap: wrap; gap: 6px; }
+.res-form { display: flex; flex-direction: column; gap: 10px; }
+.res-form label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
+.res-form textarea { min-height: 160px; line-height: 1.5; }
+.res-read { white-space: pre-wrap; line-height: 1.6; font-size: 15px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); max-height: 60vh; overflow: auto; user-select: text; }
+.res-chip { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.goal-title[role=button] { cursor: pointer; }
+.goal-title[role=button]:hover { text-decoration: underline; text-underline-offset: 3px; }
+.p-text[role=button] { cursor: pointer; }

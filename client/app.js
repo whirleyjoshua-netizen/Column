@@ -4282,8 +4282,10 @@
   }
 
   function taskRow(t, { inCampaign, sort, noCamp } = {}) {
-    const text = h('span', { class: 'p-text', title: 'Click to edit' }, t.report ? h('span', { class: 'is-task', title: 'Report: ticking it asks for your findings', html: I.copy }) : null, t.text);
-    text.addEventListener('click', () => editTaskText(text, t));
+    const text = h('span', { class: 'p-text', role: 'button', tabindex: '0', title: 'Open it' }, t.report ? h('span', { class: 'is-task', title: 'Report: ticking it asks for your findings', html: I.copy }) : null, t.text);
+    // Clicking a task opens it (2026-11-20, the owner: "make it openable"); renaming is in there.
+    text.addEventListener('click', () => taskWindow(t));
+    text.addEventListener('keydown', (e) => { if (e.key === 'Enter') taskWindow(t); });
     const slot = taskSlot(t);
     const btn = (icon, title, fn) => h('button', { class: 't-btn', title, 'aria-label': title, html: icon, onclick: (ev) => { ev.stopPropagation(); fn(ev.currentTarget); } });
     const g = goalById(t.goalId);
@@ -4322,20 +4324,21 @@
       upNow ? h('span', { class: 'step-tag up', title: 'What it was waiting on is done' }, 'You’re up') : null,
       waits ? h('button', { class: 'list-chip wait-chip', title: blockers.map((x) => '⏳ ' + stepName(x) + (stepWho(x) ? ' · ' + stepWho(x) : '')).join('\n') + (waits.hidden ? '' : '\nClick to see it'), onclick: (ev) => { ev.stopPropagation(); waits.hidden ? toast(waitMsg) : showStep(waits); } },
         '⏳ ' + shortText(stepName(waits), 26) + (blockers.length > 1 ? ` +${blockers.length - 1}` : '')) : null,
-      unlocks.length ? h('button', { class: 'list-chip unlock-chip', title: 'Finishing this opens:\n' + unlocks.map((x) => '→ ' + x.text + (stepWho(x) ? ' · ' + stepWho(x) : '')).join('\n'), onclick: (ev) => { ev.stopPropagation(); showStep(unlocks[0]); } },
+      g ? resChip(g) : null,
+      unlocks.length && !inCampaign ? h('button', { class: 'list-chip unlock-chip', title: 'Finishing this opens:\n' + unlocks.map((x) => '→ ' + x.text + (stepWho(x) ? ' · ' + stepWho(x) : '')).join('\n'), onclick: (ev) => { ev.stopPropagation(); showStep(unlocks[0]); } },
         '→ ' + (unlocks.length === 1 ? shortText(unlocks[0].text, 22) : `unlocks ${unlocks.length}`)) : null,
       !t.due && !t.done && waits && t.dueAfter != null ? h('span', { class: 'due', title: 'Its due date is set when it opens' }, t.dueAfter ? `due ${t.dueAfter}d after` : 'due when it opens') : null,
       t.due && !t.done ? h('button', { class: 'due' + (isOverdue(t) ? ' late' : t.due === todayKey() ? ' today' : ''), title: 'Due ' + dayName(t.due) + (t.repeat ? ' · ' + repeatLabel(t.repeat, t.due) : ''), onclick: (ev) => dueMenu(ev.currentTarget, t) },
         t.repeat ? h('span', { class: 'rep', html: I.repeat }) : null, dueLabel(t.due)) : null,
-      slot ? h('button', { class: 'slot', title: 'Show on schedule', onclick: () => { D.sub = 'schedule'; store.set('daySub', 'schedule'); setTab('day'); goDay(slot.e.date); } },
+      slot && !inCampaign ? h('button', { class: 'slot', title: 'Show on schedule', onclick: () => { D.sub = 'schedule'; store.set('daySub', 'schedule'); setTab('day'); goDay(slot.e.date); } },
         slot.label + (slot.more ? ` +${slot.more}` : '')) : null,
       lp ? h('button', { class: 'list-chip' + (lp.of && lp.n === lp.of ? ' full' : ''), title: `${list.name}: ${lp.label} · click to open`, onclick: (ev) => { ev.stopPropagation(); openList(); } },
         h('span', { html: KIND_ICON[list.kind || 'calls'] }), lp.of ? `${lp.n}/${lp.of}` : '') : null,
       taskFiles(t).length ? h('button', { class: 'list-chip file-chip', title: taskFiles(t).map((it) => it.name || 'Note').join(', '), onclick: (ev) => { ev.stopPropagation(); taskFiles(t).length === 1 ? openPreview(taskFiles(t)[0]) : taskFilesMenu(ev.currentTarget, t); } },
         h('span', { html: I.clip }), taskFiles(t).length === 1 ? shortText(taskFiles(t)[0].name || 'Note', 18) : String(taskFiles(t).length)) : null,
-      t.recordId ? h('button', { class: 'list-chip', title: 'Open the record this task is about', onclick: (ev) => { ev.stopPropagation(); prLoadAll().then(() => openRecord(t.recordId)); } }, '↗ ' + (recEverywhere(t.recordId) ? shortText(recName(prType(recEverywhere(t.recordId).p, recEverywhere(t.recordId).r.typeId), recEverywhere(t.recordId).r), 24) : 'Record')) : null,
-      t.docId && S.items.some((x) => x.id === t.docId) ? h('button', { class: 'list-chip', title: `From the doc “${docTitle(S.items.find((x) => x.id === t.docId))}”`, onclick: (ev) => { ev.stopPropagation(); openDoc(S.items.find((x) => x.id === t.docId)); } }, '📄 Doc') : null,
-      t.pinId && pinById(t.pinId) ? h('button', { class: 'list-chip', title: 'Show it on the map', onclick: (ev) => { ev.stopPropagation(); openMap({ pinId: t.pinId }); } }, 'Map') : null,
+      t.recordId && !inCampaign ? h('button', { class: 'list-chip', title: 'Open the record this task is about', onclick: (ev) => { ev.stopPropagation(); prLoadAll().then(() => openRecord(t.recordId)); } }, '↗ ' + (recEverywhere(t.recordId) ? shortText(recName(prType(recEverywhere(t.recordId).p, recEverywhere(t.recordId).r.typeId), recEverywhere(t.recordId).r), 24) : 'Record')) : null,
+      t.docId && !inCampaign && S.items.some((x) => x.id === t.docId) ? h('button', { class: 'list-chip', title: `From the doc “${docTitle(S.items.find((x) => x.id === t.docId))}”`, onclick: (ev) => { ev.stopPropagation(); openDoc(S.items.find((x) => x.id === t.docId)); } }, '📄 Doc') : null,
+      t.pinId && !inCampaign && pinById(t.pinId) ? h('button', { class: 'list-chip', title: 'Show it on the map', onclick: (ev) => { ev.stopPropagation(); openMap({ pinId: t.pinId }); } }, 'Map') : null,
       camp && !inCampaign && !noCamp ? h('button', { class: 'camp-chip c-' + camp.color, title: `${camp.name} · ${g.title}`, onclick: () => openCampaign(camp.id) }, camp.name) : null,
       ...signoffBits(t),
       t.action && !t.done && t.toolRef ? h('span', { class: 'step-tag tool', title: `Started ${dayName(new Date(t.toolRef.at).toLocaleDateString('en-CA'))}` }, t.toolRef.label) : null,
@@ -4345,8 +4348,8 @@
       t.action && !t.done && !waits && !t.submitted ? h('button', { class: 'btn small step-go', title: STEP_KINDS[t.action.kind]?.hint, onclick: (ev) => { ev.stopPropagation(); runStep(t); } }, STEP_KINDS[t.action.kind]?.btn || 'Start') : null,
       t.assigneeId ? avatar(t.assigneeId) : t.roleId ? roleChip(t.roleId) : t.castId ? castChip(t) : null,
       t.followUp && camp && !t.done ? h('button', { class: 'btn small task-log', title: 'Log how the follow-up went', onclick: (ev) => { ev.stopPropagation(); logFollowUp(t, camp); } }, 'Log') : null,
-      t.done || waits || !g ? null : btn(I.spark, 'Tools for this task', (b) => toolsMenu(b, t)),
-      t.done || waits ? null : btn(I.clock, 'Put on schedule', () => openSheet({ text: t.text, taskId: t.id, date: t.due && D.sub === 'tasks' ? t.due : D.date })),
+      t.done || waits || !g || inCampaign ? null : btn(I.spark, 'Tools for this task', (b) => toolsMenu(b, t)),
+      t.done || waits || inCampaign ? null : btn(I.clock, 'Put on schedule', () => openSheet({ text: t.text, taskId: t.id, date: t.due && D.sub === 'tasks' ? t.due : D.date })),
       btn(I.more, 'More', (b) => taskMenu(b, t))
     );
   }
@@ -6902,7 +6905,8 @@
         grip((ev) => sortDrag(ev, el, '.goal', (ids) => saveOrder(S.goals, 'order', ids, '/goals/'))),
         h('button', { class: 't-btn goal-fold', 'aria-label': closed ? 'Show tasks' : 'Hide tasks', 'aria-expanded': String(!closed), html: I.down, onclick: fold }),
         h('span', { class: 'goal-ic', html: g.kind === 'task' || g.kind === 'tasks' || !g.kind ? I.task : I.target }),
-        h('b', { class: 'goal-title', onclick: fold }, g.title),
+        h('b', { class: 'goal-title', role: 'button', tabindex: '0', title: 'Open the step', onclick: () => stepWindow(c, g), onkeydown: (e) => { if (e.key === 'Enter') stepWindow(c, g); } }, g.title),
+        resChip(g, 'goal-res'),
         closed ? h('small', { class: 'goal-mini' }, pg.label) : null,
         stepTag(g),
         g.stage && c.recordId ? h('span', { class: 'list-chip goal-stage', title: `Finishing this moves the job to ${g.stage}. The job can’t move there, or past it, while this has open tasks.` }, '→ ' + g.stage) : null,
@@ -6935,6 +6939,161 @@
       listToGoal(l, g);
     });
     return el;
+  }
+
+  // ----- a step's resources (2026-11-20): what it hands its people. A call script or note written right there, a doc or
+  // file, a saved template, a link. Every task in the step shows them; the owner or an admin changes them. -----
+  const RES_IC = { note: '📝', doc: '📄', file: '📎', template: '✉️', link: '🔗' };
+  const stepRes = (g) => (g?.resources || []);
+  const resItem = (r) => (r.itemId ? S.items.find((x) => x.id === r.itemId) : null);
+  const resTpl = (r) => (r.tplId ? (TPL.list || []).find((x) => x.id === r.tplId) : null);
+  function resName(r) {
+    if (r.kind === 'note' || r.kind === 'link') return r.title;
+    if (r.kind === 'template') return resTpl(r)?.name || 'Template';
+    const it = resItem(r);
+    return it ? (r.kind === 'doc' ? docTitle(it) : it.name || 'File') : r.kind === 'doc' ? 'A doc you can’t open' : 'A file you can’t open';
+  }
+  function resOpen(r) {
+    if (r.kind === 'link') return void window.open(r.url, '_blank', 'noopener');
+    if (r.kind === 'doc' || r.kind === 'file') { const it = resItem(r); if (!it) return toast('You can’t open that one. Ask whoever runs the campaign.'); return r.kind === 'doc' ? openDoc(it) : openPreview(it); }
+    const show = (title, text) => sheet(title, [h('div', { class: 'res-read' }, text), h('div', { class: 'btns' }, h('button', { class: 'btn', onclick: () => { copyText(text); toast('Copied'); } }, 'Copy'))]);
+    if (r.kind === 'note') return show(r.title, r.text);
+    const x = resTpl(r);
+    if (x) return show(x.name, [x.subject ? `Subject: ${x.subject}` : '', x.body].filter(Boolean).join('\n\n'));
+    loadTemplates()?.then?.(() => (resTpl(r) ? resOpen(r) : toast('That template is gone.')));
+  }
+  // The chip on a step and on each of its tasks: the one resource by name, or how many.
+  const resChip = (g, cls = '') => {
+    const rs = stepRes(g);
+    if (!rs.length) return null;
+    if (!TPL.list && rs.some((r) => r.kind === 'template')) loadTemplates();
+    return h('button', { class: 'list-chip res-chip ' + cls, title: rs.map((r) => `${RES_IC[r.kind]} ${resName(r)}`).join('\n'), onclick: (ev) => { ev.stopPropagation(); rs.length === 1 ? resOpen(rs[0]) : openMenu(ev.currentTarget, [{ head: 'From this step' }, ...rs.map((r) => ({ label: `${RES_IC[r.kind]}  ${resName(r)}`, run: () => resOpen(r) }))]); } },
+      `${RES_IC[rs[0].kind]} ${rs.length === 1 ? shortText(resName(rs[0]), 22) : `${rs.length} from the step`}`);
+  };
+  const saveRes = (g, list) => api('PATCH', '/goals/' + g.id, { resources: list }).then((y) => { const i = S.goals.findIndex((x) => x.id === y.id); if (i >= 0) S.goals[i] = y; renderCamps(); return y; });
+  // Write a note or script right on the step (or change one).
+  function resNoteForm(box, g, r, done) {
+    const title = h('input', { value: r?.title || '', placeholder: 'Call script', maxlength: 80, 'aria-label': 'Title' });
+    const text = h('textarea', { rows: 8, maxlength: 8000, placeholder: 'Hi, this is ___ from ___. I’m calling about…', 'aria-label': 'What it says' });
+    text.value = r?.text || '';
+    const save = h('button', { class: 'btn primary-btn small', onclick: async () => {
+      if (!title.value.trim() && !text.value.trim()) return toast('Write something first.');
+      const item = { ...(r || {}), kind: 'note', title: title.value.trim() || 'Note', text: text.value };
+      try { const y = await saveRes(g, r ? stepRes(g).map((x) => (x.id === r.id ? item : x)) : [...stepRes(g), item]); done(y); } catch (e) { toast(e.message); }
+    } }, r ? 'Save' : 'Add to the step');
+    box.replaceChildren(h('div', { class: 'res-form' }, h('label', {}, 'Title', title), h('label', {}, 'What it says', text), h('div', { class: 'btns' }, h('button', { class: 'btn small', onclick: () => done() }, 'Cancel'), h('span', { style: 'flex:1' }), save)));
+    setTimeout(() => (r ? text : title).focus(), 30);
+  }
+  // The Resources tab: the list, and + Note or script, + Doc or file, + Template, + Link (owner/admin).
+  function resPanel(c, g) {
+    const box = h('div', { class: 'res-panel' });
+    const draw = (now = goalById(g.id) || g) => {
+      g = now;
+      const can = canPass(c);
+      const rs = stepRes(g);
+      const add = (kind, label, fn) => h('button', { class: 'btn small res-add', 'data-kind': kind, onclick: fn }, label);
+      const pickItem = (ev) => {
+        const docs = S.items.filter((x) => x.type === 'text' && x.doc).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)).slice(0, 25);
+        const files = S.items.filter((x) => x.type !== 'text' && x.name).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)).slice(0, 15);
+        const put = (it, kind) => saveRes(g, [...stepRes(g), { kind, itemId: it.id }]).then(draw, (e) => toast(e.message));
+        openMenu(ev.currentTarget, [{ label: '+ A new doc…', run: async () => { try { const it = await api('POST', '/items', { type: 'text', doc: { title: `${g.title} · notes`, blocks: [] }, stackId: c.stackId || null }); upsert(it); await put(it, 'doc'); openDoc(it, { fresh: true }); } catch (e) { toast(e.message); } } },
+          docs.length ? { head: 'Docs' } : null, ...docs.map((it) => ({ label: '📄 ' + shortText(docTitle(it), 50), run: () => put(it, 'doc') })),
+          files.length ? { head: 'Files' } : null, ...files.map((it) => ({ label: '📎 ' + shortText(it.name, 50), run: () => put(it, 'file') }))].filter(Boolean));
+      };
+      const pickTpl = async (ev) => {
+        const anchor = ev.currentTarget;
+        if (!TPL.list) await loadTemplates();
+        const list = TPL.list || [];
+        openMenu(anchor, [list.length ? { head: 'Your team’s templates' } : { head: 'No templates yet: save one in Tools → Templates' }, ...list.map((x) => ({ label: `${x.name} · ${TPL_NAME[x.kind] || x.kind}`, run: () => saveRes(g, [...stepRes(g), { kind: 'template', tplId: x.id }]).then(draw, (e) => toast(e.message)) }))]);
+      };
+      const addLink = () => {
+        const url = h('input', { type: 'url', placeholder: 'https://…', 'aria-label': 'Link' }), title = h('input', { placeholder: 'What it is', maxlength: 80, 'aria-label': 'Name' });
+        box.replaceChildren(h('div', { class: 'res-form' }, h('label', {}, 'Link', url), h('label', {}, 'Name', title), h('div', { class: 'btns' }, h('button', { class: 'btn small', onclick: () => draw() }, 'Cancel'), h('span', { style: 'flex:1' }),
+          h('button', { class: 'btn primary-btn small', onclick: () => saveRes(g, [...stepRes(g), { kind: 'link', url: url.value.trim(), title: title.value.trim() }]).then((y) => (stepRes(y).length > rs.length ? draw(y) : toast('That isn’t a web link.')), (e) => toast(e.message)) }, 'Add to the step'))));
+        setTimeout(() => url.focus(), 30);
+      };
+      box.replaceChildren(
+        h('p', { class: 'day-hint' }, rs.length ? 'Everyone with a task in this step sees these on it.' : can ? 'Give everyone in this step what they need: a call script, notes, a doc, a template or a link. Each of its tasks shows them.' : 'Nothing here yet.'),
+        rs.length ? h('div', { class: 'res-list' }, rs.map((r) => h('div', { class: 'res-row', 'data-res': r.kind },
+          h('button', { class: 'res-open', onclick: () => resOpen(r) }, h('span', { class: 'res-ic' }, RES_IC[r.kind]), h('span', {}, h('b', {}, resName(r)), r.kind === 'note' && r.text ? h('small', {}, shortText(r.text.replace(/\s+/g, ' '), 90)) : r.kind === 'link' ? h('small', {}, shortText(r.url, 60)) : null)),
+          can && r.kind === 'note' ? h('button', { class: 't-btn', title: 'Change it', 'aria-label': 'Change ' + resName(r), html: I.edit || '✎', onclick: () => resNoteForm(box, g, r, (y) => draw(y)) }) : null,
+          can ? h('button', { class: 't-btn', title: 'Take it off the step', 'aria-label': 'Remove ' + resName(r), html: I.close, onclick: () => saveRes(g, stepRes(g).filter((x) => x.id !== r.id)).then(draw, (e) => toast(e.message)) }) : null))) : null,
+        can ? h('div', { class: 'res-adds' }, add('note', '+ Note or script', () => resNoteForm(box, g, null, (y) => draw(y))), add('doc', '+ Doc or file', pickItem), add('template', '+ Template', pickTpl), add('link', '+ Link', addLink)) : null);
+    };
+    draw();
+    return box;
+  }
+  // Tabs inside a window: a row of them, and one panel showing.
+  function winTabs(tabs, first) {
+    const panels = h('div', { class: 'win-panels' });
+    const bar = h('div', { class: 'seg seg-sm win-tabs', role: 'tablist' });
+    const show = (k) => {
+      for (const b of bar.children) { const on = b.dataset.k === k; b.classList.toggle('on', on); b.setAttribute('aria-selected', String(on)); }
+      const t = tabs.find((x) => x[0] === k);
+      panels.replaceChildren(typeof t[2] === 'function' ? t[2]() : t[2]);
+    };
+    bar.append(...tabs.map(([k, label]) => h('button', { type: 'button', role: 'tab', 'data-k': k, onclick: () => show(k) }, label)));
+    show(first && tabs.some((x) => x[0] === first) ? first : tabs[0][0]);
+    return [bar, panels];
+  }
+  // A step, opened: its details, what it hands its people, and its tasks. Changes save as you go.
+  function stepWindow(c, g, tab) {
+    const can = canPass(c);
+    const pg = goalProgress(g);
+    const title = h('input', { class: 'win-title', value: g.title, maxlength: 200, 'aria-label': 'Step name' });
+    title.addEventListener('change', () => title.value.trim() && api('PATCH', '/goals/' + g.id, { title: title.value.trim() }).catch((e) => toast(e.message)));
+    const due = h('input', { type: 'date', value: g.due || '', 'aria-label': 'Due' });
+    due.addEventListener('change', () => api('PATCH', '/goals/' + g.id, { due: due.value || null }).catch((e) => toast(e.message)));
+    const blockers = goalBlockers(g);
+    const details = () => h('div', { class: 'win-details' },
+      h('div', { class: 'win-prog' }, bar(pg.frac, c.color), h('span', {}, pg.label)),
+      h('div', { class: 'win-rows' },
+        h('div', { class: 'srow' }, h('span', {}, 'Due'), due),
+        h('div', { class: 'srow' }, h('span', {}, 'Waits for', h('small', {}, blockers.length ? blockers.map((x) => x.title).join(', ') : 'Nothing')), h('button', { class: 'btn small', onclick: () => waitsSheet(g, true) }, 'Change')),
+        c.recordId ? h('div', { class: 'srow' }, h('span', {}, 'Finishes the job’s stage', h('small', {}, g.stage || 'None')), h('button', { class: 'btn small', onclick: (e) => goalStageMenu(e.currentTarget, c, g) }, 'Change')) : null,
+        h('div', { class: 'srow' }, h('span', {}, 'What it needs', h('small', {}, g.needs?.length ? g.needs.map((n) => n.label || n.name || n.kind).join(', ') : 'Nothing')), h('button', { class: 'btn small', onclick: () => needsSheet(c, g) }, 'Change'))),
+      h('div', { class: 'btns' }, h('button', { class: 'btn small', onclick: (e) => goalOptions(e.currentTarget, c, g) }, 'More…')));
+    const tasks = () => { const ts = tasksInOrder(g.id); return h('div', { class: 'win-tasks' }, ts.length ? ts.map((t) => taskRow(t, { inCampaign: true })) : h('p', { class: 'day-hint' }, 'No tasks yet. Add them under the step.')); };
+    const n = stepRes(g).length;
+    sheet(c.name, [h('div', { class: 'win step-win', 'data-goal': g.id }, title, ...winTabs([['details', 'Details', details], ['res', n ? `Resources · ${n}` : 'Resources', () => resPanel(c, g)], ['tasks', `Tasks · ${tasksOf(g.id).length}`, tasks]], tab))]);
+    if (!can) title.readOnly = true;
+  }
+  // A task, opened: what it is, who and when, what it waits on, and what its step hands over.
+  function taskWindow(t, tab) {
+    const g = goalById(t.goalId);
+    const camp = g && campById(g.campaignId);
+    const text = h('input', { class: 'win-title', value: t.text, maxlength: 500, 'aria-label': 'Task' });
+    text.addEventListener('change', () => text.value.trim() && patchTask(t, { text: text.value.trim() }));
+    const due = h('input', { type: 'date', value: t.due || '', 'aria-label': 'Due' });
+    due.addEventListener('change', () => patchTask(taskById(t.id) || t, { due: due.value || null }));
+    const blockers = taskBlockers(t), unlocks = t.done ? [] : unlocksOf(t);
+    const who = t.assigneeId ? memberName(t.assigneeId) : t.roleId ? (S.workspace.roles || []).find((r) => r.id === t.roleId)?.name : t.castId ? castOf(camp || {}).find((r) => r.id === t.castId)?.name : null;
+    const files = taskFiles(t);
+    const details = () => h('div', { class: 'win-details' }, h('div', { class: 'win-rows' },
+      h('div', { class: 'srow' }, h('span', {}, 'Who', h('small', {}, who || 'Nobody yet')), h('button', { class: 'btn small', onclick: (e) => assignMenu(e.currentTarget, taskById(t.id) || t) }, 'Change')),
+      h('div', { class: 'srow' }, h('span', {}, 'Due'), due),
+      h('div', { class: 'srow' }, h('span', {}, 'Priority', h('small', {}, PRIO[t.priority || 0] || 'Normal')), h('button', { class: 'btn small', onclick: (e) => prioMenu(e.currentTarget, taskById(t.id) || t) }, 'Change')),
+      blockers.length ? h('div', { class: 'srow' }, h('span', {}, 'Waits for', h('small', {}, blockers.map(stepName).join(', ')))) : null,
+      unlocks.length ? h('div', { class: 'srow' }, h('span', {}, 'Finishing it opens', h('small', {}, unlocks.map((x) => x.text).join(', ')))) : null,
+      camp ? h('div', { class: 'srow' }, h('span', {}, 'Step', h('small', {}, `${camp.name} · ${g.title}`)), h('button', { class: 'btn small', onclick: () => stepWindow(camp, g) }, 'Open')) : null,
+      t.recordId ? h('div', { class: 'srow' }, h('span', {}, 'Job', h('small', {}, recEverywhere(t.recordId) ? 'Open the record it’s about' : 'A record')), h('button', { class: 'btn small', onclick: () => { closeSheet(); prLoadAll().then(() => openRecord(t.recordId)); } }, 'Open')) : null,
+      t.docId && S.items.some((x) => x.id === t.docId) ? h('div', { class: 'srow win-doc' }, h('span', {}, 'From the doc', h('small', {}, docTitle(S.items.find((x) => x.id === t.docId)))), h('button', { class: 'btn small', onclick: () => { closeSheet(); openDoc(S.items.find((x) => x.id === t.docId)); } }, 'Open')) : null,
+      t.pinId && pinById(t.pinId) ? h('div', { class: 'srow' }, h('span', {}, 'On the map'), h('button', { class: 'btn small', onclick: () => { closeSheet(); openMap({ pinId: t.pinId }); } }, 'Show')) : null,
+      files.length ? h('div', { class: 'srow' }, h('span', {}, 'Files', h('small', {}, files.map((it) => it.name || 'Note').join(', '))), h('button', { class: 'btn small', onclick: (e) => (files.length === 1 ? openPreview(files[0]) : taskFilesMenu(e.currentTarget, t)) }, 'Open')) : null),
+      h('div', { class: 'btns' },
+        g && !t.done ? h('button', { class: 'btn small', onclick: (e) => toolsMenu(e.currentTarget, t) }, '✦ Tools') : null,
+        !t.done ? h('button', { class: 'btn small', onclick: () => { closeSheet(); openSheet({ text: t.text, taskId: t.id, date: t.due || D.date }); } }, 'Put on schedule') : null,
+        h('span', { style: 'flex:1' }),
+        h('button', { class: 'btn small', onclick: (e) => taskMenu(e.currentTarget, t) }, 'More…')));
+    const res = () => {
+      const rs = stepRes(g);
+      if (!rs.length) return h('p', { class: 'day-hint' }, camp ? 'Its step doesn’t hand over anything yet.' + (canPass(camp) ? ' Add a script, notes or a doc on the step.' : '') : 'Tasks in a campaign step show what the step hands over.');
+      return h('div', {}, h('div', { class: 'res-list' }, rs.map((r) => h('div', { class: 'res-row', 'data-res': r.kind }, h('button', { class: 'res-open', onclick: () => resOpen(r) }, h('span', { class: 'res-ic' }, RES_IC[r.kind]), h('span', {}, h('b', {}, resName(r)), r.kind === 'note' && r.text ? h('small', {}, shortText(r.text.replace(/\s+/g, ' '), 90)) : null))))),
+        canPass(camp) ? h('div', { class: 'btns' }, h('button', { class: 'btn small', onclick: () => stepWindow(camp, g, 'res') }, 'Change them on the step')) : null);
+    };
+    const n = stepRes(g).length;
+    sheet(camp ? camp.name : 'Task', [h('div', { class: 'win task-win', 'data-task': t.id }, h('div', { class: 'win-head' }, h('button', { class: 'check' + (t.done ? ' on' : ''), html: I.check, disabled: !!blockers.length, 'aria-label': t.done ? 'Mark not done' : 'Mark done', onclick: () => { patchTask(t, { done: !t.done }); closeSheet(); } }), text),
+      ...winTabs([['details', 'Details', details], ['res', n ? `From the step · ${n}` : 'From the step', res]], tab || (n && !t.done && taskMine(t) ? 'res' : 'details')))]);
   }
 
   // ----- call lists: a spreadsheet of prospects dropped on a campaign -----
