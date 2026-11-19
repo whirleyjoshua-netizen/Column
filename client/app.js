@@ -3197,13 +3197,13 @@
   const newsOn = () => toolOn('news') && Array.isArray(S.me?.bar) && S.me.bar.includes('news');
   // News (news.js): each person's own, a card on Home when they turn it on (Settings → General).
   const NEWS = window.ColumnNews({ h, api, toast, sheet, openMenu, ago, confirmClick, fileKey: () => S.me?.fileKey, redrawHome: () => renderHome(), onBar: newsOn, open: () => openTool('news') });
-  function openBarItem(k) {
+  function openBarItem(k, anchor) {
     const it = BAR_ITEMS[k];
     if (!it) return;
     if (k === 'work' && workOpen()) return markTabs(); // already in it
     // One of Workspace's tabs: it takes the page (whatever else was open closes), and tapping it again keeps it.
     // Tools opens the split on the right and leaves the page as it is; again, from one of its tools, back to the list.
-    if (k === 'tools') { openSplit('tools'); return markTabs(); }
+    if (k === 'tools') return toolsDrop(anchor);
     if (WORK_TABS.includes(k)) {
       store.set('workLast', k);
       if (workOpen() === k) return markTabs();
@@ -3474,7 +3474,7 @@
     if (!b) return;
     // Another tab leaves Workspace: its tool closes (one opened from Settings, like Company HQ, stays).
     if (b.dataset.tab !== 'work' && !WORK_TABS.includes(b.dataset.tab) && toolOpen && workOpen()) closeTool();
-    if (BAR_ITEMS[b.dataset.tab]) return openBarItem(b.dataset.tab);
+    if (BAR_ITEMS[b.dataset.tab]) return openBarItem(b.dataset.tab, b);
     closeProjects();
     setTab(b.dataset.tab);
   };
@@ -11504,7 +11504,28 @@
     }, p ? 'Save' : 'Add it', () => was() !== start, 'place');
     if (!p) name.focus();
   }
+  // Tools to browse: a drop-down list under the Tools tab (the owner, 2026-11-20: "tools… just in a list form in a
+  // drop down column when browsing"). Picking one opens it in the split, as before. The page (toolsPage) stays for
+  // anything that still opens 'tools' in the split.
+  function toolsDrop(anchor) {
+    const { ROWS, rows, note } = toolRows();
+    // From the drawer (it closes as you tap), the list drops from ☰ instead.
+    const ok = anchor && anchor.isConnected && anchor.getBoundingClientRect().width > 0 && !(anchor.closest('#side') && !document.body.classList.contains('wide'));
+    openMenu(ok ? anchor : $('#menuBtn') || anchor, [
+      { head: 'Tools' },
+      ...rows.map((k) => ({ label: h('span', { class: 'tool-drop-item', 'data-tool': k }, h('span', { class: 'tab-ic', html: TAB_IC[k] || TAB_IC.tools }), h('span', { class: 'tool-drop-t' }, ROWS[k].name, h('small', {}, ROWS[k].sub))), on: splitOpen === k, run: () => (ROWS[k].run ? ROWS[k].run() : openTool(k)) })),
+      { note },
+    ]);
+  }
   function toolsPage() {
+    const { ROWS, rows, note } = toolRows();
+    return [
+      h('p', { class: 'muted small' }, note),
+      h('div', { class: 'tools-page' }, rows.map((k) => h('button', { class: 'tools-card', 'data-tool': k, onclick: () => (ROWS[k].run ? ROWS[k].run() : openTool(k)) },
+        h('span', { class: 'tab-ic', html: TAB_IC[k] || TAB_IC.tools }), h('span', { class: 'tool-item' }, ROWS[k].name, h('small', {}, ROWS[k].sub))))),
+    ];
+  }
+  function toolRows() {
     const soon = billsSoon().length;
     const tight = budgetAlerts().length;
     const waiting = SG.list.filter((x) => x.status === 'sent' || x.status === 'viewed').length;
@@ -11519,11 +11540,7 @@
       vault: { name: 'Vault', sub: VK.key ? 'Unlocked' : 'Passwords and secrets, locked', ok: () => toolOn('vault'), run: () => { VK.filter = null; openTool('vault'); } },
     };
     const rows = TOOL_PAGE.filter((k) => !ROWS[k].ok || ROWS[k].ok());
-    return [
-      h('p', { class: 'muted small' }, waiting && toolOn('signs') ? `Company HQ, your business card and signatures are in Settings → Business (${waiting} signature${waiting === 1 ? '' : 's'} waiting).` : 'Company HQ, your business card and signatures are in Settings → Business.'),
-      h('div', { class: 'tools-page' }, rows.map((k) => h('button', { class: 'tools-card', 'data-tool': k, onclick: () => (ROWS[k].run ? ROWS[k].run() : openTool(k)) },
-        h('span', { class: 'tab-ic', html: TAB_IC[k] || TAB_IC.tools }), h('span', { class: 'tool-item' }, ROWS[k].name, h('small', {}, ROWS[k].sub))))),
-    ];
+    return { ROWS, rows, note: waiting && toolOn('signs') ? `Company HQ, your business card and signatures are in Settings → Business (${waiting} signature${waiting === 1 ? '' : 's'} waiting).` : 'Company HQ, your business card and signatures are in Settings → Business.' };
   }
   function openTool(name) {
     if (name === 'sidekick') return openDock('plan');
@@ -11620,7 +11637,7 @@
     const back = splitOpen !== 'tools' && TOOL_PAGE.includes(splitOpen);
     el.replaceChildren(
       h('div', { class: 'split-head' },
-        back ? h('button', { class: 'icon-btn split-back', title: 'Back to Tools', 'aria-label': 'Back to Tools', onclick: () => openSplit('tools') }, '‹') : null,
+        back ? h('button', { class: 'icon-btn split-back', title: 'Back to Tools', 'aria-label': 'Back to Tools', onclick: (e) => toolsDrop(e.currentTarget) }, '‹') : null,
         h('h2', { class: 'split-title' }, TOOLS[splitOpen].name),
         h('button', { class: 'icon-btn split-size', title: splitFull ? 'Back to the side' : 'Full size', 'aria-label': splitFull ? 'Back to the side' : 'Full size', 'aria-pressed': String(splitFull), onclick: sizeSplit, html: splitFull ? SPLIT_IC.in : SPLIT_IC.out }),
         h('button', { class: 'icon-btn split-close', title: 'Close', 'aria-label': 'Close', html: I.close, onclick: closeSplit })),

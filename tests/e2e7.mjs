@@ -62,7 +62,7 @@ await add('deals', { name: 'Showroom', value: 6200, stage: ch('deals', 'stage', 
 await sleep(400);
 // Docs and Projects are in Workspace now (2026-11-14); the rest in Workspace → Tools (2026-11-16).
 const WORK = { Docs: 'docs', 'Jobs & projects': 'projects' };
-const openTools = async (label) => { if (WORK[label]) return A.ev(`document.querySelector('#tabs [data-tab=${WORK[label]}]').click()`); await A.ev(`document.querySelector('#tabs [data-tab=tools]').click()`); await A.tap(`[...document.querySelectorAll('#split [data-tool]')].find((b) => b.textContent.startsWith(${JSON.stringify(label)}))`); };
+const openTools = async (label) => { if (WORK[label]) return A.ev(`document.querySelector('#tabs [data-tab=${WORK[label]}]').click()`); await A.ev(`document.querySelector('#tabs [data-tab=tools]').click()`); await A.tap(`[...document.querySelectorAll('#menu [data-tool]')].find((b) => b.textContent.startsWith(${JSON.stringify(label)}))`); };
 await openTools('Jobs & projects');
 await A.tap(`[...document.querySelectorAll('#projects .pj-card')].find((x) => x.textContent.includes('Sales'))`);
 await A.tap(`[...document.querySelectorAll('#projects .pj-open')].find((b) => b.textContent === 'Ben Ortiz')`);

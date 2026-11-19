@@ -60,7 +60,7 @@ try {
   ok(await A.until(`!document.querySelector('#app')?.classList.contains('hidden') && !!document.querySelector('#settingsBtn')`, 20000), 'signed in');
   await A.until(`!!document.querySelector('#tabs [data-tab=tools]')`, 10000);
   await A.ev(`document.querySelector('#tabs [data-tab=tools]').click(); true`);
-  await A.tap(`document.querySelector('#split [data-tool=inventory]')`);
+  await A.tap(`document.querySelector('#menu [data-tool=inventory]')`);
   ok(await A.until(`!!document.querySelector('#split .inv-import[data-project]')`), 'the Equipment & assets list is offered: Move into Inventory');
   await A.tap(`document.querySelector('#split .inv-import-go')`);
   ok(await A.until(`[...document.querySelectorAll('#split .inv-row b')].some((b) => b.textContent === 'Camera tower') && !document.querySelector('#split .inv-import')`), 'moved: Camera tower is in Inventory, and the offer is gone');

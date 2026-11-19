@@ -118,8 +118,8 @@ try {
   await A.tap(`document.querySelector('#menuBtn')`);
   ok(await A.until(shown('#side')) && (await A.ev(`!document.querySelector('#scrim').hidden && document.querySelector('#menuBtn').getAttribute('aria-expanded') === 'true'`)), '☰ still opens the drawer over the page');
   await A.tap(`document.querySelector('#tabs .tab-sub[data-tab=tools]')`);
-  ok(await A.until(`!document.querySelector('#split').classList.contains('hidden') && document.querySelector('#split .split-title').textContent === 'Tools' && Math.round(document.querySelector('#split').getBoundingClientRect().width) === innerWidth`) && await A.until(`!${shown('#side')}`), 'Workspace → Tools opens from the drawer, filling the screen in a column, and the drawer closes');
-  await A.tap(`document.querySelector('#split [data-tool=column]')`);
+  ok(await A.until(`!document.querySelector('#menu').classList.contains('hidden') && !!document.querySelector('#menu [data-tool=column]') && document.querySelector('#menu').getBoundingClientRect().right <= innerWidth`) && await A.until(`!${shown('#side')}`), 'Workspace → Tools drops its list down from the drawer, filling the screen in a column, and the drawer closes');
+  await A.tap(`document.querySelector('#menu [data-tool=column]')`);
   ok(await A.until(`!document.querySelector('#panes').classList.contains('hidden') && !!document.querySelector('#split #panes') && document.querySelector('#split .split-title').textContent === 'Stacks'`), 'picking Stacks there opens it, in the split (the whole screen in a column)');
   await A.ev(`document.querySelector('#split .split-close').click(); true`);
   await A.tap(`document.querySelector('#menuBtn')`);
@@ -135,8 +135,8 @@ try {
   await A.tap(`document.querySelector('#menuBtn')`);
   await A.until(shown('#side'));
   await A.tap(`document.querySelector('#tabs .tab-sub[data-tab=tools]')`);
-  ok(await A.until(`!document.querySelector('#split').classList.contains('hidden') && document.querySelector('#split .split-title').textContent === 'Tools' && Math.round(document.querySelector('#split').getBoundingClientRect().width) === innerWidth`) && await A.until(`!${shown('#side')}`), 'Workspace → Tools works from the drawer, and picking it closes the drawer');
-  await A.ev(`document.querySelector('#split .split-close')?.click(); true`);
+  ok(await A.until(`!document.querySelector('#menu').classList.contains('hidden') && !!document.querySelector('#menu [data-tool=column]') && document.querySelector('#menu').getBoundingClientRect().right <= innerWidth`) && await A.until(`!${shown('#side')}`), 'Workspace → Tools works from the drawer, and picking it closes the drawer');
+  await A.ev(`document.querySelector('#menu').classList.add('hidden'); document.querySelector('#split .split-close')?.click(); true`);
   // In the drawer, Workspace's tabs sit under Workspace.
   await A.tap(`document.querySelector('#menuBtn')`);
   await A.until(shown('#side'));

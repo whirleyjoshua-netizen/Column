@@ -50,8 +50,8 @@ try {
   await A.ev(`document.querySelector('#tabs [data-tab=work]').click(); true`);
   await A.until(`!!document.querySelector('[data-tab=tools]')`);
   await A.ev(`document.querySelector('[data-tab=tools]').click(); true`);
-  ok(await A.until(`!!document.querySelector('#split [data-tool=templates]')`), 'Templates is in Workspace → Tools');
-  await A.ev(`document.querySelector('#split [data-tool=templates]').click(); true`);
+  ok(await A.until(`!!document.querySelector('#menu [data-tool=templates]')`), 'Templates is in Workspace → Tools');
+  await A.ev(`document.querySelector('#menu [data-tool=templates]').click(); true`);
   ok(await A.until(`document.querySelector('#split h2')?.textContent.startsWith('Templates') && document.querySelector('#split').textContent.includes('None yet')`), 'it opens, empty to start');
   ok(await A.ev(`[...document.querySelectorAll('#split .tpl-kinds button')].map((b) => b.textContent).join('|')`) === 'All|Email|Text message|Reply|Social post|Paperwork|Saved tasks', 'with kinds: email, text, reply, social post and paperwork');
   ok(await A.ev(`!!document.querySelector('#split [data-doc-tpl]') && document.querySelector('#split').textContent.includes('Work order')`), 'the team’s doc templates show as paperwork');

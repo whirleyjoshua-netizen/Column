@@ -50,7 +50,7 @@ try {
   await jo('POST', '/items', { type: 'text', text: 'OLDER NOTE', stackId });
   await sleep(30);
   await jo('POST', '/items', { type: 'text', text: 'NEWER NOTE', stackId });
-  await A.ev(`(document.querySelector('#tabs [data-tab=tools]').click(), document.querySelector('#split [data-tool=column]'))?.click()`);
+  await A.ev(`(document.querySelector('#tabs [data-tab=tools]').click(), document.querySelector('#menu [data-tool=column]'))?.click()`);
   await A.until(`[...document.querySelectorAll('.chip')].some((c) => c.textContent === 'Jobs')`);
   await A.ev(`[...document.querySelectorAll('.chip')].find((c) => c.textContent === 'Jobs').click()`);
   ok(await A.until(`(${ORDER}).includes('NEWER NOTE')`), 'the Jobs stack shows both notes');
@@ -69,7 +69,7 @@ try {
   ok(me.feedTop === true, 'and it’s kept with Jo’s account');
   await A.cmd('Page.reload');
   await A.until(`!document.querySelector('#app').classList.contains('hidden')`);
-  await A.ev(`(document.querySelector('#tabs [data-tab=tools]').click(), document.querySelector('#split [data-tool=column]'))?.click()`);
+  await A.ev(`(document.querySelector('#tabs [data-tab=tools]').click(), document.querySelector('#menu [data-tool=column]'))?.click()`);
   ok(await A.until(`(() => { const t = ${ORDER}; return t.indexOf('NEWER NOTE') >= 0 && t.indexOf('NEWER NOTE') < t.indexOf('OLDER NOTE'); })()`), 'after a reload it’s still newest at the top');
   const r = await jo('PUT', '/account/feed', { newestTop: false });
   ok(r.newestTop === false && (await jo('GET', '/state')).me.feedTop === false, 'turning it off goes back to newest at the bottom');

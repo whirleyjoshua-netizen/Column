@@ -130,8 +130,8 @@ try {
   await A.ev(`document.querySelector('#tabs [data-tab=work]').click(); true`);
   await A.until(`!!document.querySelector('[data-tab=tools]')`);
   await A.ev(`document.querySelector('[data-tab=tools]').click(); true`);
-  await A.until(`!!document.querySelector('#split [data-tool=templates]')`);
-  await A.ev(`document.querySelector('#split [data-tool=templates]').click(); true`);
+  await A.until(`!!document.querySelector('#menu [data-tool=templates]')`);
+  await A.ev(`document.querySelector('#menu [data-tool=templates]').click(); true`);
   ok(await A.until(`[...document.querySelectorAll('#split .tpl-kinds button')].some((b) => b.textContent === 'Saved tasks')`), 'Templates has a “Saved tasks” kind');
   await A.ev(`[...document.querySelectorAll('#split .tpl-kinds button')].find((b) => b.textContent === 'Saved tasks').click(); true`);
   ok(await A.until(`document.querySelectorAll('#split .tpl-card[data-preset]').length === 3 && [...document.querySelectorAll('#split .tpl-card[data-preset]')].some((c) => c.textContent.includes('Bundle') && c.textContent.includes('Book the install → Order the materials'))`), 'listing the saved tasks and the bundle, in order');

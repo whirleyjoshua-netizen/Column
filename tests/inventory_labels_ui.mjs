@@ -52,7 +52,7 @@ try {
   ok(await A.until(`!document.querySelector('#app')?.classList.contains('hidden') && !!document.querySelector('#settingsBtn')`, 20000), 'signed in');
   await A.until(`!!document.querySelector('#tabs [data-tab=tools]')`, 10000);
   await A.ev(`document.querySelector('#tabs [data-tab=tools]').click(); true`);
-  await A.tap(`document.querySelector('#split [data-tool=inventory]')`);
+  await A.tap(`document.querySelector('#menu [data-tool=inventory]')`);
 
   // An item's label.
   await A.tap(`[...document.querySelectorAll('#split .inv-row')].find((r) => r.textContent.includes('16x25 air filter'))`);

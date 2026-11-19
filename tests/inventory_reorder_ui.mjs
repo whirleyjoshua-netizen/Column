@@ -52,7 +52,7 @@ try {
   ok(await A.until(`!document.querySelector('#app')?.classList.contains('hidden') && !!document.querySelector('#settingsBtn')`, 20000), 'signed in');
   await A.until(`!!document.querySelector('#tabs [data-tab=tools]')`, 10000);
   await A.ev(`document.querySelector('#tabs [data-tab=tools]').click(); true`);
-  await A.tap(`document.querySelector('#split [data-tool=inventory]')`);
+  await A.tap(`document.querySelector('#menu [data-tool=inventory]')`);
   ok(await A.until(`document.querySelector('#split .inv-views [data-view=reorder]')?.textContent === 'Reorder (3)'`), 'the Reorder tab says 3 are low');
   await A.tap(`document.querySelector('#split .inv-views [data-view=reorder]')`);
   ok(await A.until(`[...document.querySelectorAll('#split .inv-order')].map((g) => g.dataset.supplier).join() === 'Ferguson,No supplier'`), 'grouped by supplier: Ferguson, then the ones with no supplier (not Johnstone: nothing of theirs is low)');

@@ -3493,3 +3493,8 @@ body.wide .sheet.page-form { border-left: 1px solid var(--line); }
 .cb-sk .sk-gaps { max-height: 120px; overflow-y: auto; }
 @media (min-width: 1000px) { .cb-sk { overflow: hidden; } }
 @media (max-width: 999px) { .cb-sk > .cb-sk-chat { max-height: 60vh; } }
+/* Workspace → Tools: the drop-down list (2026-11-20) */
+#menu .tool-drop-item { display: flex; align-items: flex-start; gap: 10px; min-width: 260px; max-width: 340px; text-align: left; }
+#menu .tool-drop-item .tab-ic { flex: none; margin-top: 1px; color: var(--muted); }
+#menu .tool-drop-t { display: flex; flex-direction: column; gap: 1px; white-space: normal; }
+#menu .tool-drop-t small { color: var(--muted); font-size: 12px; line-height: 1.3; }

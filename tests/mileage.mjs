@@ -164,9 +164,9 @@ await A.ev(`(() => { document.querySelector('[data-mode=signin]').click(); const
 ok(await A.until(`!document.querySelector('#app').classList.contains('hidden')`, 12000), 'Jo is in the app');
 await A.ev(`fetch('/api/workspace', { method: 'PATCH', headers: { authorization: 'Bearer ' + JSON.parse(localStorage.getItem('column.token')), 'content-type': 'application/json' }, body: JSON.stringify({ tools: { map: true, projects: true } }) }).then((r) => r.ok)`);
 await sleep(800);
-await A.ev(`document.querySelector('#tabs [data-tab=tools]').click()`);
+await A.ev(`document.querySelector('#workTabs [data-tab=tools]').click()`);
 await sleep(200);
-await A.ev(`document.querySelector('#split [data-tool=map]').click()`);
+await A.ev(`document.querySelector('#menu [data-tool=map]').click()`);
 ok(await A.until(`[...document.querySelectorAll('#split .map-mode button')].some((b) => b.textContent === 'Mileage')`), 'the Map has a Mileage section');
 await A.ev(`[...document.querySelectorAll('#split .map-mode button')].find((b) => b.textContent === 'Mileage').click()`);
 ok(await A.until(`document.querySelector('#split .ml-big b')?.textContent.endsWith('mi') && document.querySelectorAll('#split .map-row').length === 1`), 'it shows this month’s miles and trips: ' + await A.ev(`document.querySelector('#split .ml-big')?.textContent`));

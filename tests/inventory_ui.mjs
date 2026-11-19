@@ -47,8 +47,8 @@ try {
   ok(await A.until(`!document.querySelector('#app')?.classList.contains('hidden') && !!document.querySelector('#settingsBtn')`, 20000), 'signed in');
   await A.until(`!!document.querySelector('#tabs [data-tab=tools]')`, 10000);
   await A.ev(`document.querySelector('#tabs [data-tab=tools]').click(); true`);
-  ok(await A.until(`!!document.querySelector('#split [data-tool=inventory]')`), 'Workspace → Tools lists Inventory');
-  await A.tap(`document.querySelector('#split [data-tool=inventory]')`);
+  ok(await A.until(`!!document.querySelector('#menu [data-tool=inventory]')`), 'Workspace → Tools lists Inventory');
+  await A.tap(`document.querySelector('#menu [data-tool=inventory]')`);
   ok(await A.until(`document.querySelector('#split .split-title')?.textContent.includes('Inventory') && !!document.querySelector('#split .inv-sum')`), 'it opens in the split, with its summary');
   ok(await A.ev(`/Add the things you keep/.test(document.querySelector('#split').textContent)`), 'empty, it says what to do');
 

@@ -53,7 +53,7 @@ try {
 
   await A.until(`!!document.querySelector('#tabs [data-tab=tools]')`, 10000);
   await A.ev(`document.querySelector('#tabs [data-tab=tools]').click(); true`);
-  await A.tap(`document.querySelector('#split [data-tool=column]')`);
+  await A.tap(`document.querySelector('#menu [data-tool=column]')`);
   ok(await A.until(atEnd, 6000), `Stacks from Tools opens at the bottom, on the newest card (${await A.ev(gap)}px from it)`);
 
   // Scroll up to read, and a new card from another device redraws the split: you stay where you were.
@@ -68,7 +68,7 @@ try {
   await A.ev(`document.querySelector('#tabs [data-tab=day]')?.click(); true`);
   await sleep(300);
   await A.ev(`document.querySelector('#tabs [data-tab=tools]').click(); true`);
-  await A.tap(`document.querySelector('#split [data-tool=column]')`);
+  await A.tap(`document.querySelector('#menu [data-tool=column]')`);
   ok(await A.until(atEnd, 6000), `opened again: at the bottom (${await A.ev(gap)}px from it)`);
   ok(await A.ev(`(() => { const l = ${list}; const c = [...l.querySelectorAll('.card')].find((x) => x.textContent.includes('Card number 41')); const r = c.getBoundingClientRect(), lr = l.getBoundingClientRect(); return r.bottom <= lr.bottom + 2 && r.top >= lr.top; })()`), 'the newest card is in view');
   ok(!A.errors.length, 'no errors in the page' + (A.errors.length ? ': ' + A.errors[0] : ''));
