@@ -3871,3 +3871,15 @@ body.wide .setx-cards .access-sec .srow { border-bottom: 1px solid var(--line); 
 .setx-cards .srow.off-team > span { color: var(--muted); }
 .setx-cards .srow.off-team .toggle { opacity: .45; }
 .off-tag { display: inline-block; margin-left: 8px; padding: 1px 8px; border-radius: 99px; font-size: 11px; font-style: normal; font-weight: 600; color: var(--muted); background: var(--panel); border: 1px solid var(--line); vertical-align: 1px; }
+/* Full size (2026-11-20, the owner: "that window that pops up at the bottom i don't like… split page flow like
+   tools"): every pop-up form opens as a panel on the right, like a tool in the split, and the page beside it stays
+   usable. The builders and new-item pages keep their own full layout; a phone keeps the pop-up from the bottom. */
+body.wide .sheet-wrap:not(:has(.auto-builder, .camp-builder, .page-form, .delete-lock)) {
+  left: auto; right: var(--skd-w, 0px); top: 0; bottom: 0; width: clamp(400px, 38vw, 640px);
+  background: transparent; align-items: stretch; justify-content: stretch; animation: none; pointer-events: none;
+}
+body.wide .sheet-wrap:not(:has(.auto-builder, .camp-builder, .page-form, .delete-lock)) > .sheet {
+  pointer-events: auto; max-width: none; width: 100%; max-height: none; height: 100%; border-radius: 0; border: 0;
+  border-left: 1px solid var(--line); box-shadow: -8px 0 24px rgba(15, 18, 30, 0.08); padding: 16px 20px 28px; animation: side-in 0.16s ease-out;
+}
+@keyframes side-in { from { transform: translateX(24px); opacity: 0; } }
