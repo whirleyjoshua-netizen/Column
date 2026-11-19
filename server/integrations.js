@@ -13,6 +13,8 @@
 // again when it runs (map §1.3); teamStep() says which steps those are.
 
 // Steps that act through a team connection, by kind -> the integration. Builders of new actions (slack, teams) add theirs.
+// Not 'agent': an agent step that reaches a team connection (the Marketing Manager through Postiz) is covered by the
+// agent's own rule that anything leaving Kloomie waits for a yes, and members' read-only agent steps must keep working.
 export const TEAM_STEPS = { text: 'twilio', webhook: 'api', slack: 'slack', teams: 'teams' };
 const WANT_IDS = /^[a-z0-9][a-z0-9-]{0,39}$/;
 const NOTICE_GAP = 6 * 3600_000; // a connection that goes bad again within 6 hours of being fixed isn't told twice
