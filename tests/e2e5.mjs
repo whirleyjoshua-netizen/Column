@@ -48,14 +48,13 @@ await A.until(`!document.querySelector('#app')?.classList.contains('hidden') && 
 const token = await A.ev(`JSON.parse(localStorage.getItem('column.token'))`);
 const api = async (m, p, body) => (await fetch(APP + 'api' + p, { method: m, headers: { 'content-type': 'application/json', authorization: 'Bearer ' + token }, body: body ? JSON.stringify(body) : undefined })).json();
 await A.until(`!!document.querySelector('#tabs [data-tab=projects]')`, 10000); await A.ev(`document.querySelector('#tabs [data-tab=projects]').click()`);
-ok(await A.until(`!!document.querySelector('#projects .pj-empty')`), 'Projects tab, empty to start');
-ok(await A.ev(`[...document.querySelectorAll('#projects .pj-empty .pj-kind b')].map((b) => b.textContent).join('|')`) === 'Construction & Trades|Technology & Software|Creative & Agencies|Business Operations', 'it offers the four kinds of work');
-await A.tap(`[...document.querySelectorAll('#projects .pj-empty .pj-kind')].find((b) => b.textContent.includes('Business Operations'))`);
-ok(await A.until(`!!document.querySelector('#sheet .pj-kind.on')?.textContent.includes('Business Operations') && !document.querySelector('#sheet .pj-ops').hidden`), 'Business Operations opens with its choices');
-await A.tap(`[...document.querySelectorAll('#sheet .pj-ops .pj-tpl')].find((b) => b.textContent.includes('Sales pipeline'))`);
-await A.until(`document.querySelector('#sheet .pj-ops .pj-tpl.on')?.textContent.includes('Sales pipeline')`);
-await A.ev(`document.querySelector('#sheet input').value = 'Sales'`);
-await A.tap(`document.querySelector('#sheet .primary-btn')`);
+// At full size an empty Projects is the New project list itself (2026-11-19; the sheet stays for narrow windows).
+ok(await A.until(`!!document.querySelector('#projects .pjn.pjn-first')`), 'Projects tab, empty to start');
+ok(await A.ev(`[...document.querySelectorAll('#projects .pjn-group')].map((b) => b.textContent.replace('// ', '')).join('|')`) === 'Construction & Trades|Technology & Software|Creative & Agencies|Business Operations|Draft it with AI', 'it offers the four kinds of work');
+await A.tap(`[...document.querySelectorAll('#projects .pjn-row')].find((b) => b.textContent.includes('Sales pipeline'))`);
+ok(await A.until(`document.querySelector('#projects .pjn-detail h3')?.textContent === 'Sales pipeline' && document.querySelector('#projects .pjn-d-group').textContent === 'Business Operations'`), 'Business Operations has Sales pipeline');
+await A.ev(`(() => { const n = document.querySelector('#projects .pjn-name'); n.value = 'Sales'; n.dispatchEvent(new Event('input')); })()`);
+await A.tap(`document.querySelector('#projects .pjn-create')`);
 ok(await A.until(`document.querySelector('#projects .pj-name')?.textContent === 'Sales'`), 'CRM project made and opened');
 ok(await A.ev(`[...document.querySelectorAll('#projects .pj-types button')].map((b) => b.textContent.replace(/\\d+$/, '').trim()).join('|')`) === '👤 Contacts|💰 Deals|🏢 Companies', 'it opens on Contacts, with Deals and Companies');
 // a contact, through its panel

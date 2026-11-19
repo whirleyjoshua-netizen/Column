@@ -11214,7 +11214,10 @@
   // A project holds lists ("types") of records; each list has fields and views. The CRM template makes
   // Contacts, Companies and Deals with a pipeline board. Records load when a project opens and stay in step
   // with everyone through the socket.
-  const PR = { open: null, type: null, view: null, q: '', records: new Map(), panel: null, loading: null };
+  const PR = { open: null, type: null, view: null, q: '', records: new Map(), panel: null, loading: null, newing: null };
+  // The New project page at full size (see pjNewPage): its saved templates, the trade families, and whether it's redrawing itself.
+  const pjWide = () => document.body.classList.contains('wide');
+  const PJN = { own: null, trades: null, redraw: false };
   const projById = (id) => (S.projects || []).find((p) => p.id === id);
   const prType = (p, id) => p?.types.find((t) => t.id === id);
   const prField = (t, id) => t?.fields.find((f) => f.id === id);
@@ -11267,6 +11270,7 @@
   }
   async function openProject(id, typeId) {
     PR.open = id;
+    PR.newing = null;
     const p = projById(id);
     PR.type = typeId || (PR.type && prType(p, PR.type) ? PR.type : p?.types[0]?.id);
     PR.view = prType(p, PR.type)?.views[0]?.id;
@@ -11290,6 +11294,7 @@
     markTabs();
   }
   function closeProjects() {
+    PR.newing = null;
     if ($('#projects').classList.contains('hidden')) return;
     $('#projects').classList.add('hidden');
     markTabs();
@@ -11299,12 +11304,14 @@
     if (!root) return;
     const p = projById(PR.open);
     if (!p) PR.open = null;
+    if (!p && PR.newing && pjWide() && !PJN.redraw && $('#projects .pjn:not(.pjn-first)')) return;
     const keep = $('#projects .pj-body');
     const at = keep ? [keep.scrollLeft, keep.scrollTop] : null;
     // The open record keeps its place too, so ticking a step or saving a field doesn't jump back to the top.
     const panel = $('#projects .pj-panel');
     const panelAt = panel ? [panel.dataset.id, panel.scrollTop] : null;
-    root.replaceChildren(...(p ? projectView(p) : projectsHome()).filter(Boolean));
+    root.replaceChildren(...(p ? projectView(p) : PR.newing && pjWide() ? pjNewPage() : projectsHome()).filter(Boolean));
+    if (!p && PR.newing && pjWide()) pjNewFocus();
     const now = $('#projects .pj-body');
     if (now && at) [now.scrollLeft, now.scrollTop] = at;
     const pNow = $('#projects .pj-panel');
@@ -11319,6 +11326,7 @@
         h('span', { class: 'pj-ic' }, p.icon || '📁'),
         h('b', {}, p.name, p.private ? h('small', { title: 'Private' }, ' 🔒') : null),
         h('small', {}, p.types.map((t) => (PR.records.has(p.id) ? `${prRecs(p.id).filter((r) => r.typeId === t.id).length} ${t.name.toLowerCase()}` : t.name)).join(' · ')))))
+        : pjWide() ? pjNewBody(true)
         : h('div', { class: 'pj-empty' }, h('h3', {}, 'Choose how your team works'), h('p', {}, 'Each starts with the lists, details and stages that kind of work needs. You can change any of it later, or add more projects.'),
           h('div', { class: 'pj-kinds' }, PJ_KINDS.map((x) => pjKindCard(x, false, () => (x.k === 'trades' ? newTradesProject('', false) : newProjectSheet(x.k))))),
           pjDescribeBtn(),
@@ -11366,7 +11374,126 @@
     tradePicker('What kind of work do you do?', async (keys) => { const p = await newJobsProject(keys, { bids: bids.checked, name, private: priv }); if (p) openProject(p.id); },
       { extra: h('label', { class: 'pick pj-bids' }, bids, h('span', {}, 'We bid on jobs too', h('small', {}, 'Adds Bids, Quotes customers accept online, Clients and a Price list'))) });
   }
+  // ----- New project, at full size: a list to scroll (or type to filter, ↑↓ to move), with what you get beside it -----
+  const PJ_GETS = { trades: ['Jobs', 'Clients'], tech: ['Work items', 'Features', 'Sprints', 'Test cases', 'Releases'], creative: ['Projects', 'Deliverables', 'Proposals'], ugc: ['Content', 'Creators', 'Campaigns', 'Payouts'], team: ['Projects', 'Tasks', 'Processes'], crm: ['Contacts', 'Deals', 'Companies'], assets: ['Equipment'], blank: ['Items'] };
+  // The page redraws itself; other redraws (a teammate's change coming in) leave it alone so typing isn't lost.
+  const pjRedraw = () => { PJN.redraw = true; try { renderProjects(); } finally { PJN.redraw = false; } };
+  function pjNewRows() {
+    const kind = (k) => PJ_KINDS.find((x) => x.k === k);
+    const rows = [{ key: 'trades', tpl: 'trades', ic: '🏗️', name: 'Jobs for a trade business', about: 'Jobs, crews, materials, estimates and installs. Pick the kinds of work you do next.', group: kind('trades'), def: 'Jobs' },
+      { key: 'tech', tpl: 'tech', ic: '💻', name: 'Software team', about: kind('tech').sub, group: kind('tech'), def: 'Atlas' }];
+    for (const g of ['creative', 'ops']) for (const [k, ic, nm, about] of PJ_SUBS[g]) rows.push({ key: k, tpl: k, ic, name: nm, about, group: kind(g), def: nm.replace('Agency client work', 'Client work') });
+    for (const x of PJN.own || []) rows.push({ key: 'custom:' + x.id, tpl: 'custom:' + x.id, ic: '⭐', name: x.name, about: x.about || 'Your team’s template', gets: x.lists, group: { k: 'own', c: 'amber', name: 'Your templates' }, def: x.name, own: x });
+    rows.push({ key: 'describe', ic: '✨', name: 'Something else? Describe how you work', about: 'Say what you do and how a job moves along. Sidekick drafts the lists, details and stages, and you look it over before anything is made.', group: { k: 'ai', c: 'blue', name: 'Draft it with AI' } });
+    return rows.map((r) => ({ ...r, gets: r.gets || PJ_GETS[r.key] || [] }));
+  }
+  function pjNewOpen(kind = null) {
+    const first = { trades: 'trades', tech: 'tech', creative: 'creative', ops: 'team' }[kind] || 'trades';
+    PR.newing = { sel: first, q: '', draft: null };
+    PR.open = null;
+    showProjects();
+    pjRedraw();
+    if (!PJN.own) api('GET', '/project-templates').then((list) => { PJN.own = list; if (PR.newing && pjWide()) pjRedraw(); }).catch(() => (PJN.own = []));
+  }
+  function pjNewClose() { PR.newing = null; pjRedraw(); }
+  const pjNewFocus = () => setTimeout(() => { if (!document.activeElement || document.activeElement === document.body) $('#projects .pjn-q')?.focus(); }, 0);
+  function pjNewPage() {
+    return [h('div', { class: 'pj-head' }, h('button', { class: 'icon-btn', 'aria-label': 'Back to Projects', html: I.back || '←', onclick: pjNewClose }), h('h2', {}, 'New project'), h('span', { style: 'flex:1' }), h('small', { class: 'pjn-keys' }, h('kbd', {}, '↑'), h('kbd', {}, '↓'), ' to move · ', h('kbd', {}, 'esc'), ' to go back')),
+      pjNewBody(false)];
+  }
+  function pjNewBody(first) {
+    const N = PR.newing ||= { sel: 'trades', q: '', draft: null };
+    if (first && !PJN.own) { PJN.own = []; api('GET', '/project-templates').then((list) => { PJN.own = list; if (list.length) pjRedraw(); }).catch(() => {}); }
+    const all = pjNewRows();
+    const words = N.q.toLowerCase().split(/\s+/).filter(Boolean);
+    const rows = all.filter((r) => words.every((w) => [r.name, r.about, r.group.name, ...r.gets].join(' ').toLowerCase().includes(w)));
+    if (!rows.some((r) => r.key === N.sel) && rows.length) N.sel = rows[0].key;
+    const sel = all.find((r) => r.key === N.sel) || all[0];
+    const pick = (k, fromSearch) => { if (N.sel === k) return; N.sel = k; N.draft = null; pjRedraw(); const f = fromSearch ? $('#projects .pjn-q') : $(`#projects .pjn-row[data-k="${CSS.escape(k)}"]`); f?.focus(); f?.scrollIntoView?.({ block: 'nearest' }); if (fromSearch) $(`#projects .pjn-row[data-k="${CSS.escape(k)}"]`)?.scrollIntoView({ block: 'nearest' }); };
+    const q = h('input', { class: 'pjn-q', type: 'search', placeholder: 'Filter: jobs, sales, software, gear…', value: N.q, 'aria-label': 'Filter the kinds of project' });
+    q.addEventListener('input', () => { N.q = q.value; const at = q.selectionStart; pjRedraw(); const nq = $('#projects .pjn-q'); nq?.focus(); nq?.setSelectionRange(at, at); });
+    const keys = (e) => {
+      const i = rows.findIndex((r) => r.key === N.sel);
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); const r = rows[Math.max(0, Math.min(rows.length - 1, i + (e.key === 'ArrowDown' ? 1 : -1)))]; if (r) pick(r.key, e.target.classList.contains('pjn-q')); }
+      else if (e.key === 'Enter' && e.target.closest('.pjn-list')) { e.preventDefault(); $('#projects .pjn-detail input:not([type=checkbox]), #projects .pjn-detail textarea, #projects .pjn-detail .pj-trade')?.focus(); }
+      else if (e.key === 'Escape' && !first) { e.preventDefault(); pjNewClose(); }
+    };
+    let n = 0, last = null;
+    const list = h('div', { class: 'pjn-list', role: 'listbox', 'aria-label': 'Kinds of project', onkeydown: keys },
+      rows.length ? rows.flatMap((r) => {
+        const head = r.group.name !== last ? h('div', { class: 'pjn-group' }, h('span', {}, '//'), ' ', r.group.name) : null;
+        last = r.group.name;
+        n++;
+        return [head, h('button', { type: 'button', role: 'option', class: `pjn-row c-${r.group.c}${r.key === sel.key ? ' on' : ''}`, 'aria-selected': String(r.key === sel.key), 'data-k': r.key, tabindex: r.key === sel.key ? '0' : '-1', onclick: () => pick(r.key) },
+          h('span', { class: 'pjn-n' }, String(n).padStart(2, '0')), h('span', { class: 'pjn-ic' }, r.ic),
+          h('span', { class: 'pjn-txt' }, h('b', {}, r.name), h('small', {}, r.about)),
+          h('span', { class: 'pjn-gets' }, r.gets.slice(0, 3).map((g) => h('i', {}, g))), h('span', { class: 'pjn-go', 'aria-hidden': 'true' }, '›'))];
+      }).filter(Boolean) : [h('p', { class: 'pjn-none' }, 'Nothing like that. ', h('button', { class: 'linkish', onclick: () => { N.q = ''; N.sel = 'describe'; pjRedraw(); } }, 'Describe how you work'), ' and Sidekick drafts it.')]);
+    return h('div', { class: 'pjn' + (first ? ' pjn-first' : '') },
+      h('div', { class: 'pjn-left' }, first ? h('div', { class: 'pjn-intro' }, h('h3', {}, 'Choose how your team works'), h('p', {}, 'Each starts with the lists, details and stages that kind of work needs. You can change any of it later, or add more projects.')) : null,
+        h('div', { class: 'pjn-search', onkeydown: keys }, h('span', { 'aria-hidden': 'true' }, '>'), q, h('small', {}, `${rows.length} of ${all.length}`)), list),
+      h('aside', { class: `pjn-detail c-${sel.group.c}`, onkeydown: (e) => { if (e.key === 'Escape' && !first) { e.preventDefault(); pjNewClose(); } } }, pjNewDetail(sel)));
+  }
+  function pjNewDetail(r) {
+    const N = PR.newing;
+    const top = [h('div', { class: 'pjn-d-group' }, r.group.name), h('div', { class: 'pjn-d-head' }, h('span', { class: 'pjn-d-ic' }, r.ic), h('h3', {}, r.name)), h('p', { class: 'pjn-d-about' }, r.about)];
+    const err = h('p', { class: 'err' });
+    const name = h('input', { class: 'pjn-name', maxlength: 80, placeholder: r.def || 'Name', value: N.name || '' });
+    name.addEventListener('input', () => (N.name = name.value));
+    const priv = h('input', { type: 'checkbox', checked: !!N.priv, onchange: () => (N.priv = priv.checked) });
+    const tail = [h('label', {}, 'Name', name), h('label', { class: 'pick' }, priv, 'Private: only me and people I add'), err];
+    const gets = (list) => h('div', { class: 'pjn-d-gets' }, h('div', { class: 'pjn-d-label' }, 'What you get'), h('ul', {}, list.map((g) => h('li', {}, g))));
+    const busy = (b, on, label) => { b.disabled = on; if (label) b.textContent = label; };
+    if (r.key === 'describe') {
+      if (N.draft) return [...top, pjDraftBody(N.draft.said, N.draft.draft, N.draft.questions, () => { N.draft = null; pjRedraw(); })];
+      const box = h('textarea', { rows: 7, maxlength: 3000, placeholder: 'We’re a tow company. Calls come from AAA, police and customers. We dispatch a driver, tow to our yard or a shop, and charge by the mile plus storage per day. We need photos before hookup and a signed release.' });
+      box.value = N.said || '';
+      box.addEventListener('input', () => (N.said = box.value));
+      const go = h('button', { type: 'button', class: 'btn primary-btn pjn-create' }, '✦ Draft it');
+      go.addEventListener('click', async () => {
+        const said = box.value.trim();
+        if (!said) return void (err.textContent = 'Say how your business works first.');
+        err.textContent = '';
+        busy(go, true, 'Drafting…');
+        try { const d = await api('POST', '/project-templates/describe', { text: said }); N.draft = { said, draft: d.draft, questions: d.questions || [] }; pjRedraw(); }
+        catch (e) { err.textContent = e.message; busy(go, false, '✦ Draft it'); }
+      });
+      return [...top, h('label', {}, 'How your business works', box), h('small', { class: 'hint' }, 'Uses your team’s AI key. Nothing is made until you look it over and press Create.'), err, h('div', { class: 'btns' }, go)];
+    }
+    const create = h('button', { type: 'button', class: 'btn primary-btn pjn-create' }, 'Create project');
+    if (r.key === 'trades') {
+      const picked = N.trades ||= new Set();
+      const bids = h('input', { type: 'checkbox', checked: !!N.bids, onchange: () => { N.bids = bids.checked; pjRedraw(); } });
+      const label = () => (picked.size ? `Create project · ${picked.size} kind${picked.size > 1 ? 's' : ''} of work` : 'Pick the work you do first');
+      const box = h('div', { class: 'pj-trades pjn-trades' }, h('small', { class: 'hint' }, 'Loading the kinds of work…'));
+      const draw = (fams) => box.replaceChildren(...fams.map((fm) => h('section', {}, h('h4', {}, fm.name, h('small', {}, fm.about)),
+        h('div', { class: 'pj-trade-row' }, fm.trades.map((x) => h('button', { type: 'button', class: 'pj-trade', 'aria-pressed': String(picked.has(x.key)), onclick: (e) => { picked.has(x.key) ? picked.delete(x.key) : picked.add(x.key); e.currentTarget.setAttribute('aria-pressed', String(picked.has(x.key))); create.disabled = !picked.size; create.textContent = label(); } }, h('span', {}, x.icon), x.name))))));
+      (PJN.trades ||= api('GET', '/project-templates/trades')).then(draw).catch((e) => { PJN.trades = null; box.replaceChildren(h('p', { class: 'err' }, e.message)); });
+      create.disabled = !picked.size;
+      create.textContent = label();
+      create.addEventListener('click', async () => {
+        busy(create, true);
+        const p = await newJobsProject([...picked], { bids: bids.checked, name: name.value.trim(), private: priv.checked });
+        if (p) { N.trades = null; openProject(p.id); } else busy(create, false);
+      });
+      return [...top, gets(N.bids ? ['Jobs', 'Clients', 'Quotes', 'Bids', 'Price list'] : r.gets), h('div', { class: 'pjn-d-label' }, 'What kind of work do you do?'), box,
+        h('label', { class: 'pick pj-bids' }, bids, h('span', {}, 'We bid on jobs too', h('small', {}, 'Adds Bids, Quotes customers accept online, Clients and a Price list'))), ...tail, h('div', { class: 'btns' }, create)];
+    }
+    create.addEventListener('click', async () => {
+      busy(create, true);
+      try {
+        const p = await api('POST', '/projects', { template: r.tpl, name: name.value.trim() || r.def, private: priv.checked });
+        prUpsertProject(p);
+        PR.records.set(p.id, []);
+        openProject(p.id);
+      } catch (e) { err.textContent = e.message; busy(create, false); }
+    });
+    name.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); create.click(); } });
+    const del = r.own && (r.own.memberId === S.me?.memberId || amAdmin()) ? h('button', { type: 'button', class: 'linkish pjn-del', onclick: async () => { try { await api('DELETE', '/project-templates/' + r.own.id); PJN.own = PJN.own.filter((x) => x !== r.own); PR.newing.sel = 'trades'; pjRedraw(); toast('Template deleted'); } catch (e) { toast(e.message); } } }, 'Delete this template') : null;
+    return [...top, gets(r.gets), ...tail, h('div', { class: 'btns' }, del, h('span', { style: 'flex:1' }), create)];
+  }
   function newProjectSheet(kind = null) {
+    if (pjWide()) return pjNewOpen(kind);
     let pick = kind || 'trades';
     const sub = { creative: 'creative', ops: 'team' };
     let own = null;
@@ -11425,6 +11552,10 @@
     sheet('Describe how you work', [h('p', { class: 'day-hint' }, 'Say what you do, how a job (or order, or case) comes in, the steps it goes through, and what you need to write down along the way. Sidekick drafts a project for it, using your team’s AI key.'), box, err, h('div', { class: 'btns' }, h('span', { style: 'flex:1' }), go)]);
   }
   function describePreview(said, draft, questions) {
+    sheet(`${draft.icon || '✨'} Your project, drafted`, [pjDraftBody(said, draft, questions, () => describeProjectSheet(said))]);
+  }
+  // The drafted project to look over: its lists, stages and details, what's worth deciding, then Create. In a sheet or in the New project page.
+  function pjDraftBody(said, draft, questions, back) {
     const name = h('input', { maxlength: 80, value: draft.name || '' });
     const priv = h('input', { type: 'checkbox' });
     const FT = { text: 'Text', number: 'Number', money: 'Money', date: 'Date', select: 'Choice', multi: 'Choices', person: 'Person', email: 'Email', phone: 'Phone', url: 'Link', checkbox: 'Yes/no', link: 'Link to', files: 'Files', contact: 'Customer', checklist: 'Checklist', signature: 'Signature', items: 'Line items' };
@@ -11446,11 +11577,11 @@
         openProject(p.id);
       } catch (e) { err.textContent = e.message; create.disabled = false; }
     });
-    sheet(`${draft.icon || '✨'} Your project, drafted`, [h('p', { class: 'day-hint' }, 'Look it over. Once it’s made, you can rename, add or remove any list, field or stage, and save it as a template for your team.'),
+    return h('div', { class: 'pj-draft-body' }, h('p', { class: 'day-hint' }, 'Look it over. Once it’s made, you can rename, add or remove any list, field or stage, and save it as a template for your team.'),
       h('div', { class: 'pj-draft' }, lists),
       questions.length ? h('div', { class: 'pj-draft-q' }, h('b', {}, 'Worth deciding'), h('ul', {}, questions.map((q) => h('li', {}, q)))) : null,
       h('label', {}, 'Name', name), h('label', { class: 'pick' }, priv, 'Private: only me and people I add'), err,
-      h('div', { class: 'btns' }, h('button', { type: 'button', class: 'btn', onclick: () => describeProjectSheet(said) }, '← Change the description'), h('span', { style: 'flex:1' }), create)]);
+      h('div', { class: 'btns' }, h('button', { type: 'button', class: 'btn', onclick: back }, '← Change the description'), h('span', { style: 'flex:1' }), create));
   }
 
   // ----- one project -----

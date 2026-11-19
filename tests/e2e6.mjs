@@ -51,14 +51,13 @@ const token = await A.ev(`JSON.parse(localStorage.getItem('column.token'))`);
 const api = async (m, p, body) => (await fetch(APP + 'api' + p, { method: m, headers: { 'content-type': 'application/json', authorization: 'Bearer ' + token }, body: body ? JSON.stringify(body) : undefined })).json();
 await A.until(`!!document.querySelector('#tabs [data-tab=projects]')`, 10000); await A.ev(`document.querySelector('#tabs [data-tab=projects]').click()`);
 await A.tap(`[...document.querySelectorAll('#projects .btn')].find((b) => b.textContent === '+ New project' || b.textContent.startsWith('Start with'))`);
-// Construction & Trades (the default card), named, then the trade picker with "We bid on jobs too".
-await A.until(`!!document.querySelector('#sheet .pj-kind.on')?.textContent.includes('Construction & Trades')`);
-await A.ev(`document.querySelector('#sheet input').value = 'Estimating'`);
-await A.tap(`document.querySelector('#sheet .primary-btn')`);
-await A.until(`!!document.querySelector('#sheet .pj-bids input')`);
-await A.tap(`document.querySelector('#sheet .pj-bids input')`);
-await A.tap(`[...document.querySelectorAll('#sheet .pj-trade')].find((b) => b.textContent.includes('Windows and doors'))`);
-await A.tap(`document.querySelector('#sheet .btns .primary-btn')`);
+// Jobs for a trade business (picked first), named, the kinds of work beside it with "We bid on jobs too" (full size, 2026-11-19).
+await A.until(`document.querySelector('#projects .pjn-detail h3')?.textContent === 'Jobs for a trade business' && !!document.querySelector('#projects .pjn .pj-trade')`);
+await A.ev(`(() => { const n = document.querySelector('#projects .pjn-name'); n.value = 'Estimating'; n.dispatchEvent(new Event('input')); })()`);
+await A.tap(`document.querySelector('#projects .pj-bids input')`);
+await A.until(`!!document.querySelector('#projects .pjn .pj-trade')`);
+await A.tap(`[...document.querySelectorAll('#projects .pj-trade')].find((b) => b.textContent.includes('Windows and doors'))`);
+await A.tap(`document.querySelector('#projects .pjn-create')`);
 ok(await A.until(`[...document.querySelectorAll('#projects .pj-types button')].map((b) => b.textContent.replace(/\\d+$/, '').trim()).join('|').endsWith('|🧾 Quotes|📐 Bids|🏢 Clients|🏷️ Price list') && document.querySelector('#projects .pj-name')?.textContent === 'Estimating'`), 'a trades project that bids: its jobs, then Quotes, Bids, Clients, Price list');
 await A.tap(`[...document.querySelectorAll('#projects .pj-types button')].find((b) => b.textContent.includes('Quotes'))`);
 ok(await A.until(`[...document.querySelectorAll('#projects .pj-col-h b')].map((b) => b.textContent).join(',') === 'Draft,Sent,Viewed,Accepted,Declined,Expired'`), 'quotes open as a board by status');
