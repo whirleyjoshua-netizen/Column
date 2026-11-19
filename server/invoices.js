@@ -15,7 +15,7 @@ const METHODS = ['cash', 'check', 'card', 'bank', 'other'];
 const DUE_DAYS = 14;
 const CHECK_MS = Number(process.env.INVOICE_CHECK_MS) || 5 * 60_000;
 
-export function invoicesModule({ stockCost = () => 0, jobBack = () => {}, onPaymentGone = () => {}, notifyAdmins = null, db, save, broadcast, rid, hold = null, cleanText, readJson, send, badRequest, escHtml, brandOf, logoUrl, teamDay, offline, seal, unseal, stripeCall, PJ, isAdmin, jobOfRecord, jobLabel, moveJob, addMoney, dropMoneyId, publicUrl, emit = () => {} }) {
+export function invoicesModule({ stockCost = () => 0, jobMoney = () => ({ expenses: 0, income: 0, committed: 0, entries: [] }), jobBack = () => {}, onPaymentGone = () => {}, notifyAdmins = null, db, save, broadcast, rid, hold = null, cleanText, readJson, send, badRequest, escHtml, brandOf, logoUrl, teamDay, offline, seal, unseal, stripeCall, PJ, isAdmin, jobOfRecord, jobLabel, moveJob, addMoney, dropMoneyId, publicUrl, emit = () => {} }) {
   db.invoices ||= {};
   db.payKeys ||= {};
   const money = (c) => ((c || 0) / 100).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
@@ -205,8 +205,10 @@ export function invoicesModule({ stockCost = () => 0, jobBack = () => {}, onPaym
     }
     const rate = ws.laborRate || 0;
     const labor = Math.round((minutes / 60) * rate);
-    const cost = materials + labor;
-    return { price, billed, paid, quoted: quoted?.total || 0, materials, fromStock: stock, hours: Math.round((minutes / 60) * 100) / 100, visits, laborRate: rate, labor, cost, margin: price - cost, marginPct: price ? Math.round(((price - cost) / price) * 1000) / 10 : 0 };
+    // Money from Finance put on this job (receipts, fuel, a sub's bill…), and what's on order for it, not in yet.
+    const fin = jobMoney(rec.id);
+    const cost = materials + labor + fin.expenses;
+    return { expenses: fin.expenses, income: fin.income, received: paid + fin.income, committed: fin.committed, entries: fin.entries, price, billed, paid, quoted: quoted?.total || 0, materials, fromStock: stock, hours: Math.round((minutes / 60) * 100) / 100, visits, laborRate: rate, labor, cost, margin: price - cost, marginPct: price ? Math.round(((price - cost) / price) * 1000) / 10 : 0 };
   }
 
   // ---------- the app's routes: /api/records/:id/invoices, /api/records/:id/costing, /api/invoices/…, /api/payments/stripe ----------

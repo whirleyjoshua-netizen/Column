@@ -712,6 +712,10 @@
       renderDay();
       renderTool();
     } else if (msg.type === 'money' || msg.type === 'money:remove') {
+      // Money on jobs: their costing is out of date (Finance step 1).
+      const was = (S.money || []).find((x) => x.id === (msg.money?.id || msg.id));
+      const jobs = [...(was?.jobs || []), ...(msg.money?.jobs || [])].map((j) => j.recordId);
+      if (jobs.length) { for (const id of jobs) PR.costing?.delete(id); if (PR.panel && jobs.includes(PR.panel)) loadInvoices({ id: PR.panel }, true).then(() => renderProjects()); }
       S.money = (S.money || []).filter((x) => x.id !== (msg.money?.id || msg.id));
       if (msg.money) S.money.push(msg.money);
       renderDay();
@@ -14715,9 +14719,18 @@
       line(cost.billed ? 'Billed' : cost.quoted ? 'Price' : 'Value', money2(cost.price)),
       line('Materials', money2(cost.materials)),
       line(cost.laborRate ? `Labor · ${cost.hours} h × ${money2(cost.laborRate)}` : `Labor · ${cost.hours} h`, cost.laborRate ? money2(cost.labor) : '—'),
+      line('Expenses', money2(cost.expenses || 0), 'pj-cost-exp'),
       line('Margin', cost.price ? `${money2(cost.margin)} · ${cost.marginPct}%` : '—', 'pj-cost-m' + (cost.margin < 0 ? ' neg' : '')),
+      cost.committed ? line('On order (not in yet)', money2(cost.committed), 'pj-cost-sub') : null,
+      cost.received ? line('Received so far', money2(cost.received), 'pj-cost-sub') : null,
+      (cost.entries || []).length ? h('div', { class: 'pj-cost-list' }, cost.entries.slice(0, 8).map((e) => h('button', { type: 'button', class: 'pj-cost-ent', onclick: () => { const y = (S.money || []).find((z) => z.id === e.id); if (y) moneySheet(y); } },
+        h('span', {}, (e.kind === 'in' ? '↓ ' : '↑ ') + (e.note || e.category || (e.kind === 'in' ? 'Money in' : 'Expense')), h('small', {}, [e.day && dueLabel(e.day), e.split > 1 ? `its share of ${money2(e.amount)} (${e.split} jobs)` : null, e.by].filter(Boolean).join(' · '))),
+        h('b', { class: 'pj-num' }, (e.kind === 'in' ? '+' : '') + money2(e.share))))) : null,
+      h('div', { class: 'pj-cost-btns' },
+        h('button', { class: 'pj-newrow pj-add-exp', onclick: () => moneySheet(null, 'out', { jobId: r.id }) }, '+ Add an expense'),
+        h('button', { class: 'pj-newrow pj-add-in', onclick: () => moneySheet(null, 'in', { jobId: r.id }) }, '+ Money in')),
       h('button', { class: 'pj-newrow', onclick: () => laborRateSheet(r) }, cost.laborRate ? 'Change the labor rate' : 'Set a labor rate, to count labor'),
-      h('small', { class: 'day-hint' }, 'Labor is the hours on visits marked done, times the people on them. Materials are from the materials list, or the price lines’ costs.')) : null;
+      h('small', { class: 'day-hint' }, 'Labor is the hours on visits marked done, times the people on them. Materials are from the materials list, or the price lines’ costs. Expenses are business money in Finance put on this job.')) : null;
     return h('div', { class: 'pj-items pj-job-blk' },
       h('div', { class: 'pj-it-h' }, h('b', {}, '💵 Invoices'), h('span', { style: 'flex:1' }), h('button', { class: 'btn small primary-btn', onclick: make }, '+ Make an invoice')),
       list ? (rows.length ? h('div', { class: 'pj-invs' }, rows) : h('p', { class: 'day-hint' }, 'None yet. An invoice starts from the job’s price lines; send it and the customer can pay by card.')) : h('p', { class: 'day-hint' }, 'Loading…'),
@@ -19889,7 +19902,7 @@
       const g = x.goalId && goalById(x.goalId), c = x.campaignId && campById(x.campaignId);
       return h('div', { class: 'bill', onclick: () => moneySheet(x) },
         h('span', { class: 'bill-name' }, x.note || x.category || (x.kind === 'in' ? 'Money in' : 'Money out'),
-          h('small', {}, [x.category && x.note ? x.category : null, x.billId ? 'bill' : null, billScope === 'all' && x.scope === 'business' ? 'Business' : null, g ? '→ ' + g.title : c ? '→ ' + c.name : null].filter(Boolean).join(' · '))),
+          h('small', {}, [x.category && x.note ? x.category : null, x.billId ? 'bill' : null, billScope === 'all' && x.scope === 'business' ? 'Business' : null, g ? '→ ' + g.title : c ? '→ ' + c.name : null, moneyJobsLabel(x)].filter(Boolean).join(' · '))),
         h('span', { class: 'bill-right' }, h('b', { class: x.kind === 'in' ? 'up' : null }, (x.kind === 'in' ? '+' : '−') + money(x.amount))));
     };
     return [
@@ -19919,8 +19932,28 @@
     const cat = catInput(kind, x?.category);
     const note = h('input', { value: x?.note || preset?.note || '', placeholder: kind === 'in' ? 'Who paid, what for' : 'Where, what for' });
     const mine = !x || x.memberId === S.me?.memberId;
-    const scope = h('select', { disabled: !mine || !amOwner() }, h('option', { value: 'personal' }, 'Personal · only you'), h('option', { value: 'business', selected: (x?.scope || (billScope === 'business' ? 'business' : 'personal')) === 'business' }, 'Business · shared with owners'));
+    const scope = h('select', { disabled: !mine || !amAdmin() }, h('option', { value: 'personal' }, 'Personal · only you'), h('option', { value: 'business', selected: (x?.scope || (billScope === 'business' ? 'business' : 'personal')) === 'business' }, 'Business · shared with owners'));
     const tag = tagSelect(x || preset);
+    // The jobs it's for (Finance step 1): business money only, one job or split across several.
+    const jobRows = (x?.jobs || (preset?.jobId ? [{ recordId: preset.jobId, amount: null }] : [])).map((j) => ({ recordId: j.recordId, amount: j.amount != null && (x?.jobs?.length || 0) > 1 ? (j.amount / 100).toFixed(2) : '' }));
+    if (preset?.jobId) scope.value = 'business';
+    const jobsBox = h('div', { class: 'mj-jobs' });
+    let jobList = null;
+    const drawJobs = () => {
+      const opts = jobList || [];
+      jobsBox.replaceChildren(
+        ...jobRows.map((j, i) => {
+          const sel = h('select', { class: 'mj-job', 'aria-label': 'Job' }, h('option', { value: '' }, jobList ? 'Pick a job' : 'Loading…'), opts.map((o) => h('option', { value: o.id, selected: o.id === j.recordId }, `${o.name} · ${o.p}`)),
+            j.recordId && jobList && !opts.some((o) => o.id === j.recordId) ? h('option', { value: j.recordId, selected: true }, 'A job') : null);
+          sel.addEventListener('change', () => { j.recordId = sel.value; });
+          const share = h('input', { class: 'mj-share', inputmode: 'decimal', value: j.amount, placeholder: jobRows.length > 1 ? 'Even share' : 'All of it', 'aria-label': 'Its share ($)' });
+          share.addEventListener('input', () => { j.amount = share.value; });
+          return h('div', { class: 'mj-row' }, sel, jobRows.length > 1 ? share : null, h('button', { type: 'button', class: 'icon-btn', html: I.close, 'aria-label': 'Take it off this job', onclick: () => { jobRows.splice(i, 1); drawJobs(); } }));
+        }),
+        h('button', { type: 'button', class: 'btn small mj-add', onclick: () => { jobRows.push({ recordId: '', amount: '' }); if (scope.value !== 'business' && amAdmin()) scope.value = 'business'; drawJobs(); } }, jobRows.length ? '+ Split with another job' : '+ Put it on a job'));
+    };
+    if (amAdmin()) jobPickList().then((l) => { jobList = l; drawJobs(); });
+    drawJobs();
     const del = x ? h('button', { class: 'btn small danger', 'data-label': '1' }, 'Delete') : null;
     del?.addEventListener('click', () => confirmClick(del, async () => {
       await api('DELETE', '/money/' + x.id).catch((e) => toast(e.message));
@@ -19933,17 +19966,32 @@
       h('div', { class: 'row2' }, h('label', {}, 'Category', cat), h('label', {}, 'Kind', scope)),
       h('label', {}, 'Note', note),
       h('label', {}, 'Campaign or goal', tag, h('small', { class: 'hint' }, kind === 'in' ? 'Counts toward what that campaign brought in, or fills that money goal.' : 'Counts as that campaign’s cost.')),
+      amAdmin() ? h('div', { class: 'mj' }, h('span', { class: 'mj-h' }, 'Job'), jobsBox, h('small', { class: 'hint' }, kind === 'in' ? 'Business money only. Counts as received on the job (payments on its invoices count already).' : 'Business money only. Counts in what the job cost; split it when one purchase covers several jobs.')) : null,
       x?.billId ? h('p', { class: 'day-hint' }, 'Recorded when the bill was marked paid.') : null,
       del,
     ], async () => {
       const t = tag.value;
-      const body = { kind, amount: amount.value, day: day.value, category: cat.value, note: note.value, goalId: t.startsWith('g:') ? t.slice(2) : null, campaignId: t.startsWith('c:') ? t.slice(2) : null, ...(mine ? { scope: scope.value } : {}) };
+      const jobs = jobRows.filter((j) => j.recordId).map((j) => ({ recordId: j.recordId, amount: jobRows.length > 1 && j.amount !== '' ? j.amount : null }));
+      const body = { kind, amount: amount.value, day: day.value, category: cat.value, note: note.value, goalId: t.startsWith('g:') ? t.slice(2) : null, campaignId: t.startsWith('c:') ? t.slice(2) : null, ...(mine ? { scope: scope.value } : {}), ...(amAdmin() && (jobs.length || x?.jobs?.length) ? { jobs } : {}) };
       const y = x ? await api('PATCH', '/money/' + x.id, body) : await api('POST', '/money', { ...body, ...stepRef('pay') });
       if (!x) stepUsed('pay');
       S.money = [...(S.money || []).filter((z) => z.id !== y.id), y];
       if (!x && y.day.slice(0, 7) !== FIN.month) FIN.month = y.day.slice(0, 7);
+      for (const j of [...(x?.jobs || []), ...(y.jobs || [])]) PR.costing?.delete(j.recordId);
+      if (PR.panel && (y.jobs || []).some((j) => j.recordId === PR.panel)) loadInvoices({ id: PR.panel }, true).then(() => renderProjects());
       renderTool();
     }, x ? 'Save' : 'Add');
+  }
+  // Every job and record to pick from (not equipment lists), newest first.
+  async function jobPickList() {
+    await prLoadAll().catch(() => {});
+    return [...PR.records.entries()].flatMap(([pid, list]) => { const p = projById(pid); return p && p.template !== 'assets' ? list.map((r) => ({ id: r.id, name: prType(p, r.typeId) ? recName(prType(p, r.typeId), r) : 'Untitled', p: p.name, at: r.updatedAt || r.createdAt || 0 })) : []; }).sort((a, b) => b.at - a.at).slice(0, 300);
+  }
+  function moneyJobsLabel(x) {
+    if (!x.jobs?.length) return null;
+    if (x.jobs.length > 1) return `split across ${x.jobs.length} jobs`;
+    for (const [pid, list] of PR.records || []) { const r = list.find((y) => y.id === x.jobs[0].recordId); const p = projById(pid); if (r && p && prType(p, r.typeId)) return '🧰 ' + recName(prType(p, r.typeId), r); }
+    return 'on a job';
   }
   function budgetSheet(b, category, amount) {
     const cat = catInput('out', b?.category || category || '');

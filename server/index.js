@@ -5322,7 +5322,8 @@ function pushPssSoon(wsId) {
 // themselves paid the day after they're due.
 const BILL_REPEATS = ['once', 'weekly', 'monthly', 'quarterly', 'yearly'];
 const BILL_HISTORY = 60;
-const seesBill = (wsId, b, memberId) => b.memberId === memberId || (b.scope === 'business' && isOwnerId(wsId, memberId));
+// Business money on a job (Finance step 1, 2026-11-20) is also seen by admins, who already see what jobs cost.
+const seesBill = (wsId, b, memberId) => b.memberId === memberId || (b.scope === 'business' && (isOwnerId(wsId, memberId) || (b.jobs?.length > 0 && isAdminId(wsId, memberId))));
 const publicBill = ({ wsId, ...b }) => b;
 const validDay = (v) => (isDay(v) ? v : null);
 // The next due date after `due`, keeping the original day of the month (the 31st stays the 31st, or the month's last day).
@@ -5530,6 +5531,7 @@ function syncMileMoney(ws, x) {
 // Tagging one to a campaign counts it as that campaign's cost (out) or earnings (in); tagging it to a money
 // goal fills that goal. Budgets are a monthly limit per spending category, personal or business.
 const MONEY_IMPORT = 2000;
+const MONEY_JOBS = 20;
 const publicMoney = ({ wsId, key, flowTold, ...x }) => x;
 const publicBudget = ({ wsId, ...x }) => x;
 const cents = (v, what = 'the amount') => {
@@ -5537,6 +5539,22 @@ const cents = (v, what = 'the amount') => {
   if (!Number.isFinite(n) || n <= 0 || n > 1e11) throw badRequest(`Enter ${what}, like 142.50`);
   return n;
 };
+// A job's money from Finance (step 1): its share of each business entry put on it (payments on its invoices are
+// counted by the invoices, so they're left out here), and what's on order for it from suppliers and not in yet.
+function jobMoney(recId) {
+  let expenses = 0, income = 0;
+  const entries = [];
+  for (const x of Object.values(db.money)) {
+    const j = x.scope === 'business' && !x.invoiceId && x.jobs?.find((y) => y.recordId === recId);
+    if (!j) continue;
+    if (x.kind === 'out') expenses += j.amount; else income += j.amount;
+    entries.push({ id: x.id, kind: x.kind, share: j.amount, amount: x.amount, split: x.jobs.length, day: x.day, category: x.category, note: x.note, by: x.by });
+  }
+  let committed = 0;
+  for (const o of Object.values(db.invOrders || {})) if (o.jobId === recId && o.status === 'open') for (const l of o.lines) committed += Math.max(0, (l.qty || 0) - (l.got || 0)) * (l.cost || 0);
+  entries.sort((a, b) => (a.day < b.day ? 1 : a.day > b.day ? -1 : 0));
+  return { expenses, income, committed: Math.round(committed), entries: entries.slice(0, 200) };
+}
 // What changing an entry touches: its goal's progress and its campaign's totals.
 function moneyTouches(x, ws) {
   const g = x.goalId && db.goals[x.goalId];
@@ -5553,7 +5571,10 @@ function moneyNews(x) {
   // New business money (or a customer's payment) is an event, heard only by owners' automations, once.
   if (!x.flowTold && (x.scope === 'business' || x.invoiceId) && Date.now() - x.createdAt < 3600_000) {
     x.flowTold = true;
-    automate(x.wsId, 'money.added', { amount: x.amount / 100, category: x.category || '', note: x.note || '', direction: x.kind === 'in' ? 'in' : 'out', who: x.by, ownersOnly: true });
+    // On a job: the job (the first, when it's split) comes with it, so "money added → …" can act on that job.
+    const at = x.jobs?.[0] && db.records[x.jobs[0].recordId];
+    const lt = at && typeOfP(db.projects[at.projectId], at.typeId);
+    automate(x.wsId, 'money.added', { amount: x.amount / 100, category: x.category || '', note: x.note || '', direction: x.kind === 'in' ? 'in' : 'out', who: x.by, ownersOnly: true, ...(at && lt ? { record: at, project: db.projects[at.projectId], list: lt, recordName: String(at.values[lt.primary] ?? '') } : {}) });
   }
 }
 function dropMoney(x) {
@@ -5570,7 +5591,33 @@ function applyMoney(x, body, auth) {
   }
   if (body.category !== undefined) x.category = cleanText(body.category, 40);
   if (body.note !== undefined) x.note = cleanText(body.note, 200);
-  if (body.scope !== undefined) x.scope = body.scope === 'business' && auth.role === 'owner' ? 'business' : 'personal';
+  // The jobs it's for (Finance step 1): one, or split across several, each with its share in cents. A share left
+  // blank gets an even part of what's left. Only business money goes on a job; owners and admins put it there.
+  if (body.jobs !== undefined) {
+    const raw = (Array.isArray(body.jobs) ? body.jobs : []).slice(0, MONEY_JOBS);
+    const seen = new Set(), list = [];
+    for (const j of raw) {
+      const at = PJ.recordAt(String(j?.recordId || ''), auth.ws.id, auth.memberId);
+      if (!at) throw badRequest('That job is gone, or you can’t see it.');
+      if (seen.has(at.rec.id)) continue;
+      seen.add(at.rec.id);
+      list.push({ recordId: at.rec.id, amount: j.amount === '' || j.amount == null ? null : cents(j.amount, 'each job’s share') });
+    }
+    if (x.jobs?.length && !list.length && !isOwnerId(auth.ws.id, auth.memberId) && x.memberId !== auth.memberId) throw badRequest('Only an owner can take business money off its jobs.');
+    x.jobs = list;
+  }
+  if (x.jobs?.length) {
+    const given = x.jobs.filter((j) => j.amount != null).reduce((n, j) => n + j.amount, 0);
+    const open = x.jobs.filter((j) => j.amount == null);
+    if (x.jobs.length === 1 && body.amount !== undefined && body.jobs === undefined) x.jobs[0].amount = x.amount;
+    else if (open.length) {
+      const left = Math.max(0, x.amount - given), each = Math.floor(left / open.length);
+      open.forEach((j, i) => { j.amount = each + (i === 0 ? left - each * open.length : 0); });
+    }
+    if (x.jobs.reduce((n, j) => n + j.amount, 0) > x.amount) throw badRequest('The jobs’ shares add up to more than the amount. Change the split too.');
+  }
+  if (body.scope !== undefined) x.scope = body.scope === 'business' && (auth.role === 'owner' || (isAdmin(auth) && x.jobs?.length > 0)) ? 'business' : 'personal';
+  if (x.jobs?.length && x.scope !== 'business') throw badRequest('Only business money goes on a job. Make it business money first.');
   // A money goal brings its campaign with it. Either has to be one you can see.
   if (body.goalId !== undefined || body.campaignId !== undefined) {
     const g = body.goalId && db.goals[body.goalId];
@@ -11467,7 +11514,7 @@ const STOCK = inventoryModule({ db, save, broadcast, rid, cleanText, readJson, s
   labelUrl: (tag) => `${PUBLIC_URL}/a/${tag}`,
   labelQr: (tag) => 'data:image/svg+xml;base64,' + Buffer.from(qrSvg(`${PUBLIC_URL}/a/${tag}`, { scale: 8 })).toString('base64'),
   projectFor: (pid, wsId, memberId) => { const p = db.projects[pid]; return p && p.wsId === wsId && PJ.sees(p, memberId) ? { p, records: Object.values(db.records).filter((r) => r.projectId === p.id) } : null; } });
-const INV = invoicesModule({ stockCost: (recId) => STOCK.stockCost(recId), notifyAdmins: (...a) => notifyAdmins(...a), jobBack: (rec) => jobBack(rec), onPaymentGone: (...a) => QB.paymentGone(...a), db, save, broadcast, rid, hold, cleanText, readJson, send, badRequest, escHtml, brandOf, logoUrl, teamDay, offline, seal, unseal, stripeCall: stripe.callWith, PJ, isAdmin, jobOfRecord, jobLabel, moveJob, publicUrl: PUBLIC_URL, emit: (...a) => { PJ.emit(...a); QB.soon(a[0]); try { eventFromHook(a[0], a[1], a[2], a[3]); } catch (e) { alarm('An automation event failed to build', e); } },
+const INV = invoicesModule({ stockCost: (recId) => STOCK.stockCost(recId), jobMoney: (recId) => jobMoney(recId), notifyAdmins: (...a) => notifyAdmins(...a), jobBack: (rec) => jobBack(rec), onPaymentGone: (...a) => QB.paymentGone(...a), db, save, broadcast, rid, hold, cleanText, readJson, send, badRequest, escHtml, brandOf, logoUrl, teamDay, offline, seal, unseal, stripeCall: stripe.callWith, PJ, isAdmin, jobOfRecord, jobLabel, moveJob, publicUrl: PUBLIC_URL, emit: (...a) => { PJ.emit(...a); QB.soon(a[0]); try { eventFromHook(a[0], a[1], a[2], a[3]); } catch (e) { alarm('An automation event failed to build', e); } },
   // A payment is money in on the business's Finance, under the team's owner.
   addMoney: (ws, { amount, day, note, invoiceId = null }) => {
     const owner = ws.members.find((m) => m.role === 'owner') || ws.members[0];
