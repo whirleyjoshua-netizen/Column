@@ -981,7 +981,9 @@ export function projectsModule({ onEvent = null, canSeeItem = () => true, seal =
             price: Number.isFinite(price) ? Math.max(-1e10, Math.min(1e10, price)) : 0,
             ...(Number.isFinite(cost) ? { cost: Math.max(0, Math.min(1e10, cost)) } : {}),
             ...(r?.taxable === false ? { taxable: false } : {}),
-            ...(typeof r?.from === 'string' && db.records[r.from]?.projectId === p.id ? { from: r.from } : {}),
+            // Where its price came from (Finance step 3): a price list item on any of the team's boards, or an
+            // Inventory item ('inv:<id>'). The line keeps the price it was given; the source can change later.
+            ...(typeof r?.from === 'string' && (db.records[r.from]?.wsId === p.wsId || (r.from.startsWith('inv:') && db.invItems?.[r.from.slice(4)]?.wsId === p.wsId)) ? { from: r.from } : {}),
           };
         }).filter((r) => r.desc || r.price);
         const tax = Number(v.taxRate ?? v.tax_rate ?? 0);

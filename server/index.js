@@ -5540,6 +5540,28 @@ const cents = (v, what = 'the amount') => {
   if (!Number.isFinite(n) || n <= 0 || n > 1e11) throw badRequest(`Enter ${what}, like 142.50`);
   return n;
 };
+// The team's one price list (Finance step 3): price list records from every board the person sees, then Inventory.
+function priceListFor(ws, auth) {
+  const admin = isAdmin(auth), out = [];
+  for (const p of Object.values(db.projects)) {
+    if (p.wsId !== ws.id || p.archived || !PJ.sees(p, auth.memberId)) continue;
+    for (const x of PJ.priceList(p)) out.push({ id: x.id, source: 'list', board: p.name, name: x.item, description: x.description || '', unit: x.unit || '', price: x.price ?? null, ...(admin ? { cost: x.cost ?? null } : {}) });
+  }
+  if (toolsOf(ws).inventory) for (const x of Object.values(db.invItems || {})) {
+    if (x.wsId !== ws.id || x.archived) continue;
+    out.push({ id: 'inv:' + x.id, source: 'inventory', board: 'Inventory', name: x.name, description: [x.sku, x.supplier].filter(Boolean).join(' · '), unit: x.unit || '', price: x.price ?? null, ...(admin ? { cost: x.cost ?? null } : {}) });
+  }
+  return out.slice(0, 2000);
+}
+// What a price line's source charges now, to flag a quote whose prices changed since it was written.
+function priceNow(from, wsId) {
+  if (from?.startsWith('inv:')) { const x = db.invItems?.[from.slice(4)]; return x && x.wsId === wsId ? { price: x.price ?? null, cost: x.cost ?? null } : null; }
+  const r = db.records[from];
+  const p = r && r.wsId === wsId && db.projects[r.projectId];
+  const x = p && PJ.priceList(p).find((y) => y.id === r.id);
+  return x ? { price: x.price ?? null, cost: x.cost ?? null } : null;
+}
+const pricesChanged = (rows, wsId) => (rows || []).flatMap((row) => { const now = row.from && priceNow(row.from, wsId); return now && now.price != null && now.price !== row.price ? [{ id: row.id, desc: row.desc, was: row.price, now: now.price }] : []; });
 // A job's money from Finance (step 1): its share of each business entry put on it (payments on its invoices are
 // counted by the invoices, so they're left out here), and what's on order for it from suppliers and not in yet.
 function jobMoney(recId) {
@@ -8473,6 +8495,9 @@ async function api(req, res, url) {
   }
 
   // Finance: money in and out, yours and (for owners) the business's.
+  // The team's one price list (Finance step 3): what's on the price lists of the boards this person can see, and
+  // Inventory's items, in one list for every job's price lines. What things cost the business is for owners and admins.
+  if (a === 'price-list' && m === 'GET' && !b) return send(res, 200, { items: priceListFor(ws, auth) });
   // Finance → Quotes (step 2): every quote the team has sent from a job or a Bids & Quotes list, with where it
   // stands. For owners and admins, like invoices; only the boards they can see.
   if (a === 'quotes' && m === 'GET' && !b) {
@@ -8484,7 +8509,7 @@ async function api(req, res, url) {
       if (!p || p.archived || !PJ.sees(p, auth.memberId)) continue;
       const q = PJ.quoteOf(rec);
       if (!q) continue;
-      out.push({ recordId: rec.id, projectId: p.id, project: p.name, title: q.title, number: q.number, status: q.status, total: PJ.itemsTotals(q.lines)?.total || 0, customer: q.customer?.name || '', sentAt: q.sentAt, answeredOn: q.answeredOn, acceptedBy: q.acceptedBy, validUntil: q.validUntil });
+      out.push({ recordId: rec.id, projectId: p.id, project: p.name, title: q.title, number: q.number, status: q.status, total: PJ.itemsTotals(q.lines)?.total || 0, customer: q.customer?.name || '', sentAt: q.sentAt, answeredOn: q.answeredOn, acceptedBy: q.acceptedBy, validUntil: q.validUntil, ...(q.status === 'pending' ? { changed: pricesChanged(q.lines?.rows, ws.id) } : {}) });
       if (out.length >= 1000) break;
     }
     out.sort((x, y) => (y.sentAt || 0) - (x.sentAt || 0));

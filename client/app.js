@@ -14023,6 +14023,13 @@
   const money2 = (c) => (c / 100).toLocaleString(undefined, { style: 'currency', currency: 'USD', minimumFractionDigits: 2 });
   const dollars = (c) => (c == null ? '' : (c / 100).toFixed(c % 100 ? 2 : 0));
   const toCents = (s) => { const n = Number(String(s).replace(/[$,\s]/g, '')); return s === '' || !Number.isFinite(n) ? null : Math.round(n * 100); };
+  // The team's price list, loaded when price lines need it, and again when something on it changes.
+  const PRICES = { list: null, at: 0 };
+  async function loadPrices(force) {
+    if (PRICES.list && !force && Date.now() - PRICES.at < 30_000) return PRICES.list;
+    try { PRICES.list = (await api('GET', '/price-list')).items; PRICES.at = Date.now(); } catch { PRICES.list ||= []; }
+    return PRICES.list;
+  }
   // Line items in a record's panel: lines to type in or pick from the price list, a discount, tax, the total,
   // and (for estimates) what it costs us and the margin. It saves a moment after each change.
   function prItems(p, t, r, f) {
@@ -14047,21 +14054,23 @@
         if (y) { prUpsertRecord(y); r.values = y.values; }
     };
     const priceList = p.types.find((x) => x.key === 'price_list');
-    const fromList = (e) => {
-      const pf = (k) => priceList.fields.find((x) => x.key === k);
-      const items = prRecs(p.id).filter((x) => x.typeId === priceList.id).sort((a, b) => recName(priceList, a).localeCompare(recName(priceList, b)));
-      if (!items.length) return toast('The price list is empty. Add items to it first.');
-      openMenu(e.currentTarget, [{ head: 'From the price list' }, ...items.slice(0, 60).map((x) => ({
-        label: h('span', { class: 'mfile' }, h('span', { class: 'mfile-name' }, recName(priceList, x)), h('small', { class: 'mfile-when' }, pf('price') && x.values[pf('price').id] != null ? money2(x.values[pf('price').id]) : '')),
-        run: () => {
-          const unit = pf('unit') && prText(p, pf('unit'), x.values[pf('unit').id]);
-          v.rows.push({ id: Math.random().toString(36).slice(2, 8), desc: [recName(priceList, x), pf('description') && x.values[pf('description').id]].filter(Boolean).join(' — '), qty: 1, unit: unit || '', price: pf('price') ? x.values[pf('price').id] || 0 : 0, ...(pf('cost') && x.values[pf('cost').id] != null ? { cost: x.values[pf('cost').id] } : {}), from: x.id });
-          if (v.rows.at(-1).cost != null) showCost = true;
-          draw(true);
-          save();
-        },
-      }))]);
+    // The team's one price list (Finance step 3): price list items from every board, and Inventory's items. A line
+    // keeps the price it's given; its source is remembered, so a price that changes later is flagged on the line.
+    const fromList = async (e) => {
+      const anchor = e.currentTarget;
+      const items = await loadPrices();
+      if (!items.length) return toast('Your price list is empty. Add items to a board’s Price list (Bids & Quotes) or to Inventory.');
+      const pick = (x) => {
+        v.rows.push({ id: Math.random().toString(36).slice(2, 8), desc: [x.name, x.source === 'list' ? x.description : ''].filter(Boolean).join(' — '), qty: 1, unit: x.unit || '', price: x.price || 0, ...(x.cost != null ? { cost: x.cost } : {}), from: x.id });
+        if (v.rows.at(-1).cost != null) showCost = true;
+        draw(true);
+        save();
+      };
+      const row = (x) => ({ label: h('span', { class: 'mfile' }, h('span', { class: 'mfile-name' }, x.name), h('small', { class: 'mfile-when' }, [x.price != null ? money2(x.price) + (x.unit ? ' / ' + x.unit : '') : '', x.source === 'list' && x.board !== p.name ? x.board : ''].filter(Boolean).join(' · '))), run: () => pick(x) });
+      const list = items.filter((x) => x.source === 'list'), inv = items.filter((x) => x.source === 'inventory');
+      openMenu(anchor, [...(list.length ? [{ head: 'Price list' }, ...list.slice(0, 80).map(row)] : []), ...(inv.length ? [{ head: 'Inventory' }, ...inv.slice(0, 80).map(row)] : [])]);
     };
+    if (v.rows.some((x) => x.from) && !PRICES.list) loadPrices().then(() => box.isConnected && draw());
     // The drafted lines, with what the AI assumed and wants to know, until they're added or dropped.
     const estBox = () => {
       const drop = () => { est = null; PR.est?.delete(r.id); draw(); };
@@ -14090,8 +14099,10 @@
         return i;
       };
       const amount = (x) => h('td', { class: 'pj-num pj-it-amt' }, money2(Math.round((x.qty || 0) * (x.price || 0))));
+      const nowOf = (x) => x.from && PRICES.list?.find((y) => y.id === x.from);
       const rows = v.rows.map((x, i) => h('tr', {},
-        h('td', {}, inp(x.desc, 'desc', (s) => (x.desc = s), 'What it is')),
+        h('td', {}, inp(x.desc, 'desc', (s) => (x.desc = s), 'What it is'),
+          (() => { const y = nowOf(x); return y && y.price != null && y.price !== x.price ? h('button', { class: 'pj-price-now', title: 'The price list’s price changed since this line was written. Tap to use the new price.', onclick: () => { x.price = y.price; if (y.cost != null && x.cost != null) x.cost = y.cost; draw(); save(); } }, `Price list now ${money2(y.price)} · use it`) : null; })()),
         h('td', {}, inp(x.qty, 'qty', (s) => { const n = Number(s); x.qty = Number.isFinite(n) ? n : 0; amtCell(i); })),
         h('td', {}, inp(x.unit, 'unit', (s) => (x.unit = s), 'unit')),
         h('td', {}, inp(x.price ? dollars(x.price) : '', 'price', (s) => { x.price = toCents(s) || 0; amtCell(i); }, '0.00')),
@@ -14135,7 +14146,7 @@
           tbody)),
         h('div', { class: 'pj-it-add' },
           h('button', { class: 'pj-newrow', onclick: () => { v.rows.push({ id: Math.random().toString(36).slice(2, 8), desc: '', qty: 1, unit: '', price: 0 }); draw(true); } }, '+ Add a line'),
-          priceList && priceList.id !== t.id ? h('button', { class: 'pj-newrow', onclick: fromList }, '+ From the price list') : null,
+          t.key !== 'price_list' ? h('button', { class: 'pj-newrow pj-from-list', onclick: fromList }, '+ From the price list') : null,
           // The panel may have been redrawn while it worked, so the draft is kept with the record and drawn fresh.
           h('button', { class: 'pj-newrow pj-ai-btn', onclick: () => prEstimate(p, t, r, f, (y) => { (PR.est ||= new Map()).set(r.id, y); renderProjects(); }) }, '✦ Draft estimate')),
         ...(est ? [estBox()] : []),
@@ -19990,6 +20001,7 @@
       h('div', { class: 'seg seg-sm fin-q-f' }, [['pending', 'Waiting'], ['accepted', 'Accepted'], ['declined', 'Declined'], ['all', 'All']].map(([k, l]) => h('button', { class: f === k ? 'on' : null, onclick: () => { FIN.qFilter = k; renderTool(); } }, l))),
       shown.length ? h('div', { class: 'fin-list' }, shown.map((x) => h('button', { class: 'fin-row fin-q', 'data-rec': x.recordId, onclick: () => finOpenJob(x.recordId) },
         h('span', { class: 'fin-row-t' }, h('b', {}, [x.number, x.title].filter(Boolean).join(' · ')), h('small', {}, [x.customer, x.project, x.sentAt ? 'sent ' + ago(x.sentAt) : null, x.acceptedBy ? 'accepted by ' + x.acceptedBy : null].filter(Boolean).join(' · '))),
+        x.changed?.length ? h('span', { class: 'fin-q-chg', title: x.changed.map((c) => `${c.desc}: ${money2(c.was)} → ${money2(c.now)}`).join('\n') }, `⚠ ${plural(x.changed.length, 'price')} changed`) : null,
         h('span', { class: 'fin-q-st s-' + x.status }, Q_LABEL[x.status] || x.status),
         h('b', { class: 'pj-num' }, money2(x.total)))))
         : h('p', { class: 'day-hint' }, qs.length ? 'None here.' : 'No quotes sent yet. Send one from a job’s price lines, or from Bids & Quotes.'),
