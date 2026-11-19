@@ -10473,7 +10473,7 @@
     const assetProjects = admin ? (S.projects || []).filter((p) => p.template === 'assets' && !INVS.imported?.has(p.id) && !d.movedIn?.includes(p.id)) : [];
     return [...out,
       ...assetProjects.map((p) => h('div', { class: 'inv-import', 'data-project': p.id }, h('span', {}, h('b', {}, `${p.icon || '📦'} ${p.name}`), h('small', {}, 'Your equipment list in Projects. Move it into Inventory: each item comes with its status, where it is, the job it’s at, its combo and its label (the stickers keep working).')),
-        h('button', { class: 'btn small primary-btn inv-import-go', onclick: async (e) => { e.currentTarget.disabled = true; try { const r = await api('POST', '/inventory/import-project/' + p.id); (INVS.imported ||= new Set()).add(p.id); toast(r.made ? `Moved ${r.made} into Inventory` : 'Already in Inventory'); await loadInventory(); } catch (er) { toast(er.message); e.currentTarget.disabled = false; } } }, 'Move into Inventory'))),
+        h('button', { class: 'btn small primary-btn inv-import-go', onclick: async (e) => { e.currentTarget.disabled = true; try { const r = await api('POST', '/inventory/import-project/' + p.id); (INVS.imported ||= new Set()).add(p.id); const arch = await pjArchive(p, true, 'inventory'); toast((r.made ? `Moved ${r.made} into Inventory` : 'Already in Inventory') + (arch ? `. ${p.name} is archived in Projects (Restore it there any time).` : '')); await loadInventory(); } catch (er) { toast(er.message); e.currentTarget.disabled = false; } } }, 'Move into Inventory'))),
       h('div', { class: 'inv-filters' }, placeSel, catSel, h('button', { class: 'chip inv-f-low' + (INVS.low ? ' on' : ''), 'aria-pressed': String(INVS.low), onclick: () => { INVS.low = !INVS.low; renderTool(true); } }, `Low stock${d.low.length ? ` (${d.low.length})` : ''}`)),
       list.length ? h('div', { class: 'inv-list' }, list.map(row))
         : h('p', { class: 'day-hint' }, d.items.length ? 'Nothing matches.' : admin ? 'Nothing here yet. Add the things you keep: parts, materials, supplies. Say how many you have and where, and set a reorder point to hear when it’s running low.' : 'Nothing in inventory yet. An owner or admin adds the items.')];
@@ -11275,7 +11275,8 @@
     if (pNow && panelAt && pNow.dataset.id === panelAt[0]) pNow.scrollTop = panelAt[1];
   }
   function projectsHome() {
-    const list = [...(S.projects || [])].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+    const all = [...(S.projects || [])].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+    const list = all.filter((p) => !p.archived), gone = all.filter((p) => p.archived);
     return [
       h('div', { class: 'pj-head' }, h('button', { class: 'icon-btn', 'aria-label': 'Close Projects', html: I.close, onclick: closeProjects }), h('h2', {}, 'Projects'), h('span', { style: 'flex:1' }), h('button', { class: 'btn primary-btn', onclick: () => newProjectSheet() }, '+ New project')),
       list.length ? h('div', { class: 'pj-grid' }, list.map((p) => h('button', { class: 'pj-card', onclick: () => openProject(p.id) },
@@ -11286,7 +11287,24 @@
           h('div', { class: 'pj-kinds' }, PJ_KINDS.map((x) => pjKindCard(x, false, () => (x.k === 'trades' ? newTradesProject('', false) : newProjectSheet(x.k))))),
           pjDescribeBtn(),
           h('button', { class: 'linkish', onclick: () => newProjectSheet('ops') }, 'Or start from a blank list')),
-    ];
+      gone.length ? h('details', { class: 'pj-archived' }, h('summary', {}, `Archived (${gone.length})`),
+        h('div', { class: 'pj-arch-list' }, gone.map((p) => h('div', { class: 'pj-arch', 'data-project': p.id },
+          h('button', { class: 'linkish', onclick: () => openProject(p.id) }, `${p.icon || '📁'} ${p.name}`),
+          h('small', {}, pjArchivedLine(p)),
+          h('button', { class: 'btn small pj-restore', onclick: () => pjArchive(p, false) }, 'Restore'))))) : null,
+    ].filter(Boolean);
+  }
+  const pjArchivedLine = (p) => (p.archivedWhy === 'inventory' ? 'Moved into Inventory' : 'Archived') + (p.archivedAt ? ` ${new Date(p.archivedAt).toLocaleDateString()}` : '') + (p.archivedBy ? ` by ${p.archivedBy}` : '');
+  // Archived: off the list, nothing lost; Restore puts it back.
+  async function pjArchive(p, on, why) {
+    try {
+      const y = await api('PATCH', '/projects/' + p.id, { archived: on, ...(why ? { why } : {}) });
+      prUpsertProject(y);
+      if (on && PR.open === p.id && !why) PR.open = null;
+      if ($('#projects') && !$('#projects').classList.contains('hidden')) renderProjects();
+      if (!why) toast(on ? `${p.name} archived. It’s under Archived in Projects.` : `${p.name} is back`);
+      return y;
+    } catch (e) { toast(e.message); }
   }
   // The kinds of work a project can be set up for: each starts with the lists, fields and stages that work needs.
   const PJ_KINDS = [
@@ -11419,6 +11437,7 @@
       { label: p.private ? 'Who can see it…' : 'Make it private…', run: () => prAccess(p) },
       amAdmin() ? { label: 'Connect other apps (API, webhooks)…', run: () => { closeProjects(); openSettings('connections', '.int-sec'); } } : null,
       p.types.length > 1 ? { label: `Delete the ${t.name} list`, danger: true, run: async () => { const y = await prCall('POST', `/projects/${p.id}/schema`, { op: 'removeType', typeId: t.id }); if (y) { prUpsertProject(y.project); PR.records.set(p.id, prRecs(p.id).filter((r) => r.typeId !== t.id)); PR.type = null; renderProjects(); } } } : null,
+      { label: p.archived ? 'Restore project' : 'Archive project', run: () => pjArchive(p, !p.archived) },
       { label: 'Delete project', danger: true, run: async () => { if (await prCall('DELETE', '/projects/' + p.id)) { S.projects = S.projects.filter((x) => x.id !== p.id); PR.open = null; renderProjects(); } } },
     ].filter(Boolean));
     const search = h('input', { type: 'search', class: 'pj-search', value: PR.q, placeholder: `Search ${t.name.toLowerCase()}`, 'aria-label': 'Search' });
@@ -11447,6 +11466,9 @@
           h('button', { class: 'pj-view-add', title: 'Add a view', onclick: (e) => openMenu(e.currentTarget, [{ label: '☰ Table', run: () => prSchema(p, { op: 'addView', typeId: t.id, name: 'Table', kind: 'table' }, true) }, { label: '▥ Board', run: () => prSchema(p, { op: 'addView', typeId: t.id, name: 'Board', kind: 'board' }, true) }, t.fields.some((f) => f.type === 'date') ? { label: '📅 Calendar', run: () => prSchema(p, { op: 'addView', typeId: t.id, name: 'Calendar', kind: 'calendar' }, true) } : null].filter(Boolean)) }, '+')),
         search,
         h('button', { class: 'btn primary-btn', onclick: () => prNew(p, t) }, `+ New ${(t.singular || 'record').toLowerCase()}`)),
+      p.archived ? h('div', { class: 'pj-arch-banner' }, h('span', {}, pjArchivedLine(p) + (p.archivedWhy === 'inventory' ? '. The gear is kept in Inventory now; this is how the list was.' : '. It’s off the Projects list; nothing in it is lost.')),
+        p.archivedWhy === 'inventory' && toolOn('inventory') ? h('button', { class: 'btn small', onclick: () => { closeProjects(); openTool('inventory'); } }, 'Open Inventory') : null,
+        h('button', { class: 'btn small pj-restore', onclick: () => pjArchive(p, false) }, 'Restore')) : null,
       t.scan && PR.loading !== p.id ? assetCounts(p, t, recs) : null,
       h('div', { class: 'pj-main' },
         h('div', { class: 'pj-body' + (v.kind === 'board' ? ' board' : '') }, ...(PR.loading === p.id ? [h('p', { class: 'day-hint' }, 'Loading…')] : prViewBody(p, t, v)).filter(Boolean)),

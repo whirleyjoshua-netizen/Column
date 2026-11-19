@@ -1436,6 +1436,12 @@ export function projectsModule({ onEvent = null, canSeeItem = () => true, seal =
           if (body.private !== undefined) p.private = !!body.private;
           if (Array.isArray(body.memberIds)) p.memberIds = body.memberIds.filter((id) => ws.members.some((x) => x.id === id));
         }
+        // Archived (2026-11-19): off the Projects list, nothing lost, restored any time.
+        if (body.archived !== undefined) {
+          if (!canManage(p, auth)) return send(res, 403, { error: 'Only whoever made the project and team admins can archive it.' });
+          if (body.archived) Object.assign(p, { archived: true, archivedAt: Date.now(), archivedBy: auth.member, archivedWhy: cleanText(body.why, 40) || null });
+          else { delete p.archived; delete p.archivedAt; delete p.archivedBy; delete p.archivedWhy; }
+        }
         projectNews(p);
         // Everyone gets told; those who can't see it any more drop it.
         broadcast(ws.id, { type: 'project:access', id: p.id });

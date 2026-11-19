@@ -109,6 +109,18 @@ try {
   ok(await A.until(`document.querySelectorAll('#sheet .as-preview .as-label img').length === 2 && document.querySelectorAll('#labelSheet .as-label').length === 2`), 'Print labels: a QR label for each, ready to print');
   await A.ev(`document.querySelector('#sheet [aria-label=Close]').click(); true`);
 
+  // The old list is archived, not deleted (2026-11-19): one place for the gear, and Restore puts it back.
+  const proj = (await api('GET', '/state')).projects.find((x) => x.id === ap.id);
+  ok(proj?.archived === true && proj.archivedWhy === 'inventory', 'moving it into Inventory archived the Equipment & assets project');
+  await A.ev(`document.querySelector('#split .split-close')?.click(); document.querySelector('#tabs [data-tab=projects]').click(); true`);
+  ok(await A.until(`!!document.querySelector('#projects .pj-archived') && document.querySelector('#projects .pj-archived summary').textContent === 'Archived (1)' && /Moved into Inventory/.test(document.querySelector('#projects .pj-arch').textContent) && ![...document.querySelectorAll('#projects .pj-card')].some((c) => c.textContent.includes(${JSON.stringify(proj.name)}))`), 'Projects: off the list, under Archived (1), “Moved into Inventory”');
+  await A.ev(`document.querySelector('#projects .pj-archived').open = true; true`);
+  await A.tap(`document.querySelector('#projects .pj-arch .linkish')`);
+  ok(await A.until(`/Moved into Inventory/.test(document.querySelector('#projects .pj-arch-banner')?.textContent || '') && [...document.querySelectorAll('#projects .pj-arch-banner button')].some((b) => b.textContent === 'Open Inventory')`), 'opened, it says the gear is in Inventory now, with Open Inventory and Restore');
+  await A.tap(`document.querySelector('#projects .pj-arch-banner .pj-restore')`);
+  ok(await A.until(`!document.querySelector('#projects .pj-arch-banner')`), 'Restore: back to normal');
+  ok(!(await api('GET', '/state')).projects.find((x) => x.id === ap.id).archived, 'and not archived any more');
+
   await A.cmd('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
   ok(await A.until(`document.documentElement.scrollWidth <= 392`, 4000), 'it fits a phone');
   ok(!A.errors.length, 'no errors in the page' + (A.errors.length ? ': ' + A.errors.join(' | ').slice(0, 300) : ''));
