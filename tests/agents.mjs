@@ -54,6 +54,7 @@ const SCRIPTS = {
   'send garcia': (n) => [[['send_invoice', { invoice_id: OPS.inv }]], 'Ready to send when you say.'][n],
   'hq fact': (n) => [[['add_to_company_hq', { kind: 'service', title: 'Window blinds', text: 'We measure and install blinds in Las Vegas homes and shops.', why: 'From the jobs' }]], 'Suggested an HQ entry.'][n],
   'template test': (n) => [[['find_templates', { kind: 'email' }]], [['save_template', { kind: 'reply', name: 'Thanks for the review', when: 'After a customer leaves a review', body: 'Thank you so much, {customer}!' }]], 'Used the quote template and saved a reply.'][n],
+  'sop test': (n) => [[['read_sops', {}], ['read_sops', { name: 'blind install' }]], 'Followed the SOP.'][n],
   'restart test': (n) => [[['create_task', { text: 'Made before the restart' }]], 'never'][n],
 };
 const ai = http.createServer((req, res) => {
@@ -380,6 +381,23 @@ try {
     ok(!tl.some((t2) => t2.name === 'Thanks for the review'), 'and undo removes it');
     const ag = (await ada('GET', '/agents')).body.agents;
     ok(['chief', 'sales', 'ops', 'marketing'].every((k) => ag[k].tools.some((t2) => t2.key === 'find_templates')), 'all four specialists have the templates');
+  }
+
+  // ----- SOPs (Command Center part 5, 2026-11-20): agents read the team's saved campaigns as their standard way -----
+  {
+    const sc = (await ada('POST', '/campaigns', { name: 'Blind install', brief: 'How we install blinds.' })).body;
+    const sg = (await ada('POST', '/goals', { campaignId: sc.id, title: 'Install day' })).body;
+    await ada('POST', '/tasks', { goalId: sg.id, text: 'Level the brackets', description: 'Laser level, then pencil marks.' });
+    await ada('POST', '/templates', { campaignId: sc.id, name: 'Blind install', tz: 'America/Los_Angeles' });
+    const before = asked.length;
+    r = await ada('POST', '/agents/runs', { agent: 'ops', ask: 'sop test please' });
+    let x;
+    for (let i = 0; i < 60; i++) { x = (await ada('GET', '/agents/runs/' + r.body.id)).body; if (!['requested', 'planning', 'running'].includes(x.status)) break; await sleep(150); }
+    const steps = x.parts.flatMap((p) => p.steps).filter((s2) => s2.tool === 'read_sops');
+    ok(steps.length === 2 && steps.every((s2) => s2.status === 'done'), 'an agent reads the team’s SOPs: ' + steps.map((s2) => s2.status));
+    ok(asked.slice(before).some((q) => q.msgs.includes('Laser level, then pencil marks.') && q.msgs.includes('Install day')), 'one in full, its phases and how-to included');
+    const ag = (await ada('GET', '/agents')).body.agents;
+    ok(['chief', 'sales', 'ops', 'marketing'].every((k) => ag[k].tools.some((t2) => t2.key === 'read_sops')), 'all four specialists can read SOPs');
   }
 
   // ----- Stop, delete, switch off -----

@@ -3515,7 +3515,22 @@ function freeChannelName(ws, raw) {
 const dayKey = (d) => d.toISOString().slice(0, 10);
 const addDays = (key, n) => dayKey(new Date(Date.parse(key + 'T00:00:00Z') + n * 864e5));
 const daysBetween = (a, b) => Math.round((Date.parse(b + 'T00:00:00Z') - Date.parse(a + 'T00:00:00Z')) / 864e5);
-const publicTemplate = ({ wsId, ran, ...t }) => t;
+const publicTemplate = ({ wsId, ran, versions, ...t }) => ({ ...t, version: t.version || 1, reads: t.reads || {}, versions: (versions || [{ v: 1, at: t.createdAt, by: t.by, note: null }]).map(({ snap, ...x }) => x) });
+// SOPs (Command Center part 5, 2026-11-20): a saved campaign is the team's standard way of doing something. It has a
+// version; updating it from a campaign (or going back to an earlier one) makes the next, with a note of what changed.
+// The last few versions keep their copy, so they can be gone back to. Each person's "I've read it" names the version.
+const SOP_KEEP = 10;
+const SNAP_KEYS = ['campaign', 'lists', 'goals', 'subs'];
+const snapOf = (t) => JSON.parse(JSON.stringify(Object.fromEntries(SNAP_KEYS.filter((k) => k in t).map((k) => [k, t[k]]))));
+function sopVersion(t, snap, by, note) {
+  t.versions ||= [{ v: 1, at: t.createdAt, by: t.by, note: null, snap: snapOf(t) }];
+  for (const k of SNAP_KEYS) delete t[k];
+  Object.assign(t, JSON.parse(JSON.stringify(snap)));
+  t.version = (t.version || 1) + 1;
+  t.versions.push({ v: t.version, at: Date.now(), by, note: note ? String(note).trim().slice(0, 300) || null : null, snap: snapOf(t) });
+  t.versions.slice(0, -SOP_KEEP).forEach((x) => delete x.snap);
+  t.updatedAt = Date.now();
+}
 
 // It keeps the lists that are part of how the work is done (question forms, checklists, reference sheets),
 // not the ones that hold its prospects, and a main campaign keeps its sub-campaigns, started as many days in.
@@ -10355,7 +10370,8 @@ async function api(req, res, url) {
       const body = await readJson(req, 50_000);
       const c = db.campaigns[body.campaignId];
       if (!c || c.wsId !== ws.id || !canSee(auth, 'campaign', c)) return send(res, 404, { error: 'Campaign not found' });
-      const t = applyTemplate({ id: rid(), wsId: ws.id, ownerId: auth.memberId, by: auth.member, createdAt: Date.now(), name: body.name || c.name, assigneeId: c.assigneeId || null, tz: validTz(body.tz), slots: [], auto: false, since: Date.now(), ran: [], lastRunAt: null, ...snapshotCampaign(c) }, body, ws);
+      const t = applyTemplate({ id: rid(), wsId: ws.id, ownerId: auth.memberId, by: auth.member, createdAt: Date.now(), version: 1, reads: { [auth.memberId]: { v: 1, at: Date.now() } }, name: body.name || c.name, assigneeId: c.assigneeId || null, tz: validTz(body.tz), slots: [], auto: false, since: Date.now(), ran: [], lastRunAt: null, ...snapshotCampaign(c) }, body, ws);
+      t.versions = [{ v: 1, at: t.createdAt, by: t.by, note: null, snap: snapOf(t) }];
       db.templates[t.id] = t;
       save();
       broadcast(ws.id, { type: 'template', template: publicTemplate(t) });
@@ -10363,6 +10379,36 @@ async function api(req, res, url) {
     }
     const t = b && db.templates[b];
     if (!t || t.wsId !== ws.id || !seesTemplate(t, auth.memberId)) return send(res, 404, { error: 'Not found' });
+    const sopSaved = () => { save(); broadcast(ws.id, { type: 'template', template: publicTemplate(t) }); return send(res, 200, publicTemplate(t)); };
+    // Anyone who sees it says they've read the version in front of them.
+    if (c === 'read' && m === 'POST') {
+      t.reads ||= {};
+      t.reads[auth.memberId] = { v: t.version || 1, at: Date.now() };
+      return sopSaved();
+    }
+    if (['update', 'restore', 'ask'].includes(c) && m === 'POST') {
+      if (t.ownerId !== auth.memberId && !isAdmin(auth)) return send(res, 403, { error: 'Only the person who saved it, or an owner or admin, can change it.' });
+      const body = await readJson(req, 5_000);
+      // Updated from a campaign that did it better (usually one of its own runs).
+      if (c === 'update') {
+        const camp = db.campaigns[body.campaignId];
+        if (!camp || camp.wsId !== ws.id || !canSee(auth, 'campaign', camp)) return send(res, 404, { error: 'Campaign not found' });
+        sopVersion(t, snapshotCampaign(camp), auth.member, body.note);
+        return sopSaved();
+      }
+      if (c === 'restore') {
+        const was = (t.versions || []).find((x) => x.v === Number(body.v));
+        if (!was || was.v === (t.version || 1)) return send(res, 404, { error: 'That version can’t be gone back to.' });
+        if (!was.snap) return send(res, 410, { error: 'That version is too old to go back to.' });
+        sopVersion(t, was.snap, auth.member, `Back to version ${was.v}`);
+        return sopSaved();
+      }
+      // Ask whoever sees it and hasn't read this version (not the one asking).
+      const v = t.version || 1;
+      const who = ws.members.filter((mb) => mb.id !== auth.memberId && seesTemplate(t, mb.id) && (t.reads?.[mb.id]?.v || 0) < v);
+      for (const mb of who) notify(ws.id, mb.id, { kind: 'sop', go: 'sop:' + t.id, title: `Please read “${clipText(t.name, 60)}”`, text: `${auth.member} asked you to read version ${v} of the SOP “${clipText(t.name, 60)}”${t.versions?.at(-1)?.note ? `: ${clipText(t.versions.at(-1).note, 160)}` : ''}.` });
+      return send(res, 200, { asked: who.length });
+    }
     if (c === 'run' && m === 'POST') {
       const { date, tz, cast, recordId } = await readJson(req);
       const camp = runTemplate(t, { date: isDay(date) ? date : localNow(validTz(tz || t.tz), Date.now()).date, by: auth.memberId, cast: cast && typeof cast === 'object' ? cast : null, recordId: recordId || null });

@@ -838,6 +838,7 @@
     if (kind === 'shifts') { if (!canTeam()) return openMyShifts(); TM.tab = 'shifts'; openTeam(); if (/^\d{4}-\d\d-\d\d$/.test(id)) { TM.date = id; teamDraw(); } return; }
     if (kind === 'task') { const t = taskById(id); return t ? (goalById(t.goalId) ? showStep(t) : showTasks()) : showTasks(); }
     if (kind === 'camp') return campById(id) ? openCampaign(id) : setTab('camps');
+    if (kind === 'sop') { setTab('camps'); return setTimeout(() => sopGuide(id), 50); }
     if (kind === 'rec') return openRecord(id);
     if (kind === 'contact') return openContactById(id);
     if (kind === 'approval') return approvalSheet(id);
@@ -6919,7 +6920,7 @@
         h('button', { class: mineOn ? 'on' : '', onclick: () => setMine(true) }, 'Assigned to me')) : null,
       live.length ? live.map(card) : h('p', { class: 'day-hint camp-empty' }, mineOn ? 'Nothing assigned to you right now.' : done.length ? 'Nothing running right now.' : 'A campaign is a project with goals, and goals are made of tasks. Make one for an outreach push, a launch, anything with a finish line.'),
       done.length ? h('details', { class: 'camp-done' }, h('summary', {}, `Finished · ${done.length}`), done.map(card)) : null,
-      tpls.length ? h('div', { class: 'any-h camp-goals-h' }, 'Saved campaigns') : null,
+      tpls.length ? h('div', { class: 'any-h camp-goals-h' }, 'SOPs · saved campaigns', tpls.some((t) => !sopReadMine(t)) ? h('span', { class: 'sop-badge' }, `${tpls.filter((t) => !sopReadMine(t)).length} to read`) : null) : null,
       tpls.map(templateRow));
   }
 
@@ -7399,15 +7400,102 @@
       toast(e.message);
     }
   }
+  // ----- SOPs (Command Center part 5, 2026-11-20): a saved campaign is the team's standard way of doing something:
+  // versioned, read as a guide with "I've read it", updated from a campaign that did it better, started by hand, for a
+  // job or on a schedule. -----
+  const sopV = (t) => t.version || 1;
+  const sopReadMine = (t) => (t.reads?.[S.me?.memberId]?.v || 0) >= sopV(t);
+  const sopReaders = (t) => S.workspace.members.filter((m) => !m.gone);
   function templateRow(t) {
-    return h('div', { class: 'tpl-row' },
-      h('div', { class: 'tpl-main' }, h('b', {}, t.name),
-        h('small', {}, [scheduleText(t), t.assigneeId ? '→ ' + memberName(t.assigneeId) : '', `${t.goals.length} goal${t.goals.length === 1 ? '' : 's'}`, t.subs?.length ? plural(t.subs.length, 'sub-campaign') : ''].filter(Boolean).join(' · '))),
+    const read = sopReadMine(t), n = sopReaders(t).filter((m) => (t.reads?.[m.id]?.v || 0) >= sopV(t)).length;
+    return h('div', { class: 'tpl-row sop-row', 'data-sop': t.id },
+      h('div', { class: 'tpl-main' }, h('b', {}, t.name, h('span', { class: 'sop-v' }, 'v' + sopV(t))),
+        h('small', {}, [scheduleText(t), t.assigneeId ? '→ ' + memberName(t.assigneeId) : '', plural(t.goals.length, 'phase'), t.subs?.length ? plural(t.subs.length, 'sub-campaign') : '', canEditTemplate(t) ? `read by ${n} of ${sopReaders(t).length}` : ''].filter(Boolean).join(' · ')),
+        read ? null : h('small', { class: 'sop-unread' }, t.reads?.[S.me?.memberId] ? `Updated since you read it (v${t.reads[S.me.memberId].v})` : 'You haven’t read it yet')),
+      h('button', { class: 'btn small sop-open', onclick: () => sopGuide(t.id) }, '📖 Read'),
       h('button', { class: 'btn small', onclick: () => runTemplate(t) }, 'Start now'),
-      canEditTemplate(t) ? h('button', { class: 'icon-btn', 'aria-label': 'Saved campaign options', html: I.more, onclick: (e) => openMenu(e.currentTarget, [
+      canEditTemplate(t) ? h('button', { class: 'icon-btn', 'aria-label': 'SOP options', html: I.more, onclick: (e) => openMenu(e.currentTarget, [
         { label: 'Schedule and details…', run: () => templateSheet(t) },
-        { label: 'Delete saved campaign', danger: true, run: () => api('DELETE', '/templates/' + t.id).catch((er) => toast(er.message)) },
+        { label: 'Update from a campaign…', run: () => sopUpdatePick(t, e.currentTarget) },
+        { label: 'Ask the team to read it', run: () => sopAsk(t) },
+        { label: 'Delete SOP', danger: true, run: () => api('DELETE', '/templates/' + t.id).catch((er) => toast(er.message)) },
       ]) }) : null);
+  }
+  const sopAsk = (t) => api('POST', `/templates/${t.id}/ask`, {}).then((r) => toast(r.asked ? `Asked ${plural(r.asked, 'person')} to read version ${sopV(t)}` : 'Everyone has read this version')).catch((e) => toast(e.message));
+  // Push a campaign's way of working back into the SOP: one of its own runs first, then any other.
+  function sopUpdatePick(t, anchor) {
+    const runs = S.campaigns.filter((c) => c.templateId === t.id && !c.parentId).sort((a, b) => (b.start || '').localeCompare(a.start || ''));
+    const others = S.campaigns.filter((c) => c.templateId !== t.id && !c.parentId && c.status !== 'done').slice(0, 12);
+    if (!runs.length && !others.length) return toast('No campaign to update it from yet. Start it, improve that run, then update.');
+    openMenu(anchor, [...(runs.length ? [{ head: 'Its runs' }, ...runs.slice(0, 12).map((c) => ({ label: c.name, run: () => sopUpdateSheet(t, c) }))] : []),
+      ...(others.length ? [{ head: 'Other campaigns' }, ...others.map((c) => ({ label: c.name, run: () => sopUpdateSheet(t, c) }))] : [])]);
+  }
+  function sopUpdateSheet(t, c) {
+    const note = h('textarea', { class: 'sop-note', rows: 3, maxlength: 300, placeholder: 'What changed, for the team (e.g. “Added a walk-through with the customer at the end”)' });
+    const ph = goalsOf(c.id), nTasks = ph.reduce((n, g) => n + tasksOf(g.id).filter((x) => !x.followUp).length, 0);
+    sheet(`Update “${t.name}”`, [
+      h('p', { class: 'day-hint' }, `Version ${sopV(t) + 1} will be how “${c.name}” is set up now: ${plural(ph.length, 'phase')} and ${plural(nTasks, 'task')}, with their how-to, checklists, resources, roles and timing. Its schedule, name and who’s responsible stay. Version ${sopV(t)} is kept, so you can go back.`),
+      h('label', {}, 'What changed', note),
+    ], async () => {
+      const x = await api('POST', `/templates/${t.id}/update`, { campaignId: c.id, note: note.value });
+      upsertTemplate(x);
+      renderCamps();
+      toast(`“${x.name}” is version ${sopV(x)}`, { label: 'Ask the team to read it', run: () => sopAsk(x) });
+    }, 'Update the SOP');
+  }
+  // The guide: the SOP read like a training doc, to print or hand a new hire.
+  function sopGuide(id) {
+    const t = S.templates.find((x) => x.id === id);
+    if (!t) return toast('That SOP is gone.');
+    const k = t.campaign || {};
+    const roleName = (x) => (x.castId ? (k.cast || []).find((r) => r.id === x.castId)?.name : x.roleId ? roleById(x.roleId)?.name : x.assigneeId ? memberName(x.assigneeId) : '') || '';
+    const day = (n) => (n == null ? '' : n === 0 ? 'Day 1' : `Day ${n + 1}`);
+    const refName = new Map(t.goals.map((g) => [g.ref, g.title]));
+    const brief = [['Objective', k.brief], ['Audience', k.audience], ['Strategy', k.strategy]].filter(([, v]) => v);
+    const last = t.versions?.at(-1);
+    const phases = t.goals.map((g, i) => h('section', { class: 'sop-phase' },
+      h('h3', {}, h('span', { class: 'sop-n' }, String(i + 1)), g.title, g.dueIn != null ? h('small', {}, ' · by ' + day(g.dueIn)) : null),
+      g.blockedBy?.length ? h('p', { class: 'sop-after' }, 'Starts after: ' + g.blockedBy.map((r) => refName.get(r)).filter(Boolean).join(', ')) : null,
+      g.resources?.length ? h('div', { class: 'sop-res' }, g.resources.map((r) => h('div', { class: 'sop-r' }, h('b', {}, (RES_IC[r.kind] || '•') + ' ' + (r.title || r.kind)), r.kind === 'note' && r.text ? h('div', { class: 'sop-rtext' }, r.text) : r.url ? h('small', {}, r.url) : null))) : null,
+      h('ol', { class: 'sop-steps' }, g.tasks.filter((x) => !x.parentRef).map((x) => h('li', {},
+        h('b', {}, x.text), roleName(x) ? h('span', { class: 'sop-who' }, roleName(x)) : null, x.signoff ? h('span', { class: 'sop-tag' }, 'needs a sign-off') : null,
+        x.description ? h('div', { class: 'sop-how' }, x.description) : null,
+        x.checklist?.length ? h('ul', { class: 'sop-check' }, x.checklist.map((c2) => h('li', {}, c2))) : null,
+        g.tasks.some((y) => y.parentRef === x.ref) ? h('ul', { class: 'sop-sub' }, g.tasks.filter((y) => y.parentRef === x.ref).map((y) => h('li', {}, y.text))) : null)))));
+    const readers = sopReaders(t);
+    const mine = t.reads?.[S.me?.memberId];
+    const readBtn = sopReadMine(t) ? h('p', { class: 'sop-did' }, `✓ You read version ${sopV(t)}${mine?.at ? ' · ' + ago(mine.at) : ''}`)
+      : h('button', { class: 'btn primary-btn sop-readbtn', onclick: () => api('POST', `/templates/${t.id}/read`, {}).then((x) => { upsertTemplate(x); renderCamps(); sopGuide(t.id); toast('Thanks: marked as read'); }).catch((e) => toast(e.message)) }, `I’ve read version ${sopV(t)}`);
+    const who = canEditTemplate(t) ? h('details', { class: 'sop-who-read' }, h('summary', {}, `Who’s read it · ${readers.filter((m) => (t.reads?.[m.id]?.v || 0) >= sopV(t)).length} of ${readers.length}`),
+      h('ul', {}, readers.map((m) => { const r = t.reads?.[m.id]; return h('li', { class: r && r.v >= sopV(t) ? 'ok' : r ? 'old' : 'no' }, avatar(m.id), h('span', {}, m.name), h('small', {}, r ? (r.v >= sopV(t) ? 'read ' + ago(r.at) : `read v${r.v}, not this one`) : 'not yet')); })),
+      h('button', { class: 'btn small', onclick: () => sopAsk(t) }, 'Ask whoever hasn’t')) : null;
+    const hist = h('details', { class: 'sop-hist' }, h('summary', {}, `Versions · ${sopV(t)}`),
+      h('ul', {}, (t.versions || []).slice().reverse().map((x) => h('li', {}, h('b', {}, 'v' + x.v), h('span', {}, x.note || (x.v === 1 ? 'Saved' : 'Updated')), h('small', {}, [x.by, x.at ? new Date(x.at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : ''].filter(Boolean).join(' · ')),
+        canEditTemplate(t) && x.v !== sopV(t) ? h('button', { class: 'link sop-restore', onclick: (e) => confirmClick(e.currentTarget, () => api('POST', `/templates/${t.id}/restore`, { v: x.v }).then((y) => { upsertTemplate(y); renderCamps(); sopGuide(t.id); toast(`Back to version ${x.v}, as version ${sopV(y)}`); }).catch((er) => toast(er.message))) }, 'Go back to this') : null))));
+    const body = h('div', { class: 'sop-guide' },
+      h('div', { class: 'sop-head' }, h('h2', {}, t.name), h('span', { class: 'sop-v' }, 'Version ' + sopV(t)),
+        h('small', {}, [last?.at ? 'Updated ' + new Date(last.at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : '', last?.by ? 'by ' + last.by : '', scheduleText(t)].filter(Boolean).join(' · '))),
+      last?.note ? h('p', { class: 'sop-changed' }, h('b', {}, 'What changed: '), last.note) : null,
+      brief.length ? h('div', { class: 'sop-brief' }, brief.map(([l, v]) => h('div', {}, h('small', {}, l), h('p', {}, v)))) : null,
+      k.cast?.length ? h('div', { class: 'sop-roles' }, h('small', {}, 'Roles'), h('p', {}, k.cast.map((r) => r.name).join(', '))) : null,
+      ...phases,
+      t.lists?.length ? h('section', { class: 'sop-phase' }, h('h3', {}, 'Forms and checklists'), t.lists.map((l) => h('div', { class: 'sop-list' }, h('b', {}, l.name), h('ul', {}, l.rows.slice(0, 40).map((r) => h('li', {}, r.cells.filter(Boolean).join(' · '))))))) : null,
+      h('div', { class: 'sop-foot' }, readBtn, h('button', { class: 'btn sop-print', onclick: () => sopPrint(body) }, '🖨 Print'), h('button', { class: 'btn', onclick: () => runTemplate(t) }, 'Start it now')),
+      who, hist);
+    sheetOrPage(t.name, [body]);
+  }
+  // Printed on its own: the guide copied into a fresh window, laid out for paper.
+  function sopPrint(el) {
+    const w = window.open('', '_blank');
+    if (!w) return toast('Allow pop-ups to print it.');
+    const copy = el.cloneNode(true);
+    copy.querySelectorAll('.sop-foot, .sop-who-read, .sop-hist, button').forEach((x) => x.remove());
+    w.document.title = el.querySelector('h2')?.textContent || 'SOP';
+    const st = w.document.createElement('style');
+    st.textContent = 'body{font:14px/1.5 system-ui,sans-serif;max-width:720px;margin:32px auto;padding:0 24px;color:#111}h2{margin:0}h3{margin:22px 0 6px;font-size:16px}.sop-v,.sop-head small,.sop-after,.sop-who,.sop-tag{color:#555;font-size:12px;margin-left:6px}.sop-n{display:inline-block;width:22px;height:22px;border-radius:50%;background:#eee;text-align:center;margin-right:6px}.sop-how,.sop-rtext{white-space:pre-wrap;color:#333}.sop-steps>li{margin:8px 0}.sop-brief small,.sop-roles small{text-transform:uppercase;color:#777;font-size:11px}.sop-brief p,.sop-roles p{margin:2px 0 10px}';
+    w.document.head.append(st);
+    w.document.body.append(w.document.importNode(copy, true));
+    setTimeout(() => w.print(), 200);
   }
   async function saveTemplate(c) {
     try {
@@ -9388,7 +9476,8 @@
       { label: c.assigneeId ? `Responsible: ${memberName(c.assigneeId)}…` : 'Assign to…', run: () => assignCampaignMenu(anchor, c) },
       { label: c.budget ? `Budget: ${money(c.budget)}…` : 'Set a budget…', run: () => campaignSheet(c, null, 'budget') },
       { label: castOf(c).length ? 'Add a role…' : 'Add roles (Designer, Caller…)…', run: () => roleSheet(c) },
-      { label: 'Save to run again…', run: () => saveTemplate(c) },
+      ...(() => { const t = S.templates.find((x) => x.id === c.templateId); return t ? [{ label: `📖 Its SOP: ${t.name} (v${sopV(t)})`, run: () => sopGuide(t.id) }, ...(canEditTemplate(t) ? [{ label: 'Update the SOP from this campaign…', run: () => sopUpdateSheet(t, c) }] : [])] : []; })(),
+      { label: 'Save as an SOP (to run again)…', run: () => saveTemplate(c) },
       { label: 'What to log & follow-ups…', run: () => outcomesSheet(c) },
       ...(canPass(c) ? [{ label: c.inOrder ? 'Stop working in order' : 'Work in order (one step at a time)', on: !!c.inOrder, run: () => api('PATCH', '/campaigns/' + c.id, { inOrder: !c.inOrder }).catch((e) => toast(e.message)) }] : []),
       ...(runsIt(c) ? [{ label: 'Check in (how it’s going)…', run: () => checkinSheet(c) }] : []),
