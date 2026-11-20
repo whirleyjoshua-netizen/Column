@@ -1346,6 +1346,25 @@ function noteWork(t, was, over = {}) {
 
 function applyTask(t, body) {
   if (body.text !== undefined) t.text = String(body.text || '').trim().slice(0, 5000);
+  // The task drawer (2026-11-20): a description, In progress, a checklist, and being a subtask of another task.
+  if (body.description !== undefined) t.description = String(body.description || '').replace(/\r\n?/g, '\n').trim().slice(0, 8000) || undefined;
+  if (body.status !== undefined) t.status = body.status === 'doing' ? 'doing' : undefined;
+  if (body.checklist !== undefined) {
+    const was = new Map((t.checklist || []).map((x) => [x.id, x]));
+    t.checklist = (Array.isArray(body.checklist) ? body.checklist : []).slice(0, 50).map((x) => {
+      const text = cleanText(x?.text, 200);
+      if (!text) return null;
+      const id = /^[\w-]{4,24}$/.test(String(x?.id || '')) ? String(x.id) : rid(6);
+      const old = was.get(id);
+      return { id, text, done: !!x?.done, ...(x?.done ? { at: old?.done ? old.at : Date.now(), ...(old?.done && old.by ? { by: old.by } : x?.by ? { by: cleanText(x.by, 60) } : {}) } : {}) };
+    }).filter(Boolean);
+    if (!t.checklist.length) delete t.checklist;
+  }
+  if (body.parentId !== undefined) {
+    const par = body.parentId && db.tasks[body.parentId];
+    // One level deep: a subtask's parent isn't itself a subtask, and never the task itself.
+    t.parentId = par && par.wsId === t.wsId && par.id !== t.id && !par.parentId && !Object.values(db.tasks).some((x) => x.parentId === t.id) ? par.id : undefined;
+  }
   if (body.due !== undefined) {
     if (body.due !== null && !isDay(body.due)) throw badRequest('Bad due date.');
     t.due = body.due;
@@ -3407,6 +3426,7 @@ function snapshotCampaign(c, main = c) {
       // Follow-ups were for that run's people, so they stay behind.
       tasks: Object.values(db.tasks).filter((t) => t.goalId === g.id && !t.followUp).sort((a, b) => a.createdAt - b.createdAt).map((t) => ({
         ref: t.id, blockedBy: t.blockedBy || [], dueAfter: t.dueAfter ?? null, castId: t.castId || null, signoff: t.signoff || null, action: t.action || null,
+        description: t.description || null, checklist: (t.checklist || []).map((x) => x.text), parentRef: t.parentId || null,
         text: t.text, order: t.order ?? null, priority: t.priority, dueIn: rel(t.due), assigneeId: t.assigneeId || null, roleId: t.roleId || null, report: !!t.report,
         listRef: lists.some((l) => l.id === t.listId) ? t.listId : null,
       })),
@@ -3520,6 +3540,9 @@ function fillCampaign(ws, owner, c, snap, date, by) {
       if (STEP_KINDS.includes(st.action?.kind)) t.action = { kind: st.action.kind };
       if (st.castId && castRole(c, st.castId)) { Object.assign(t, { castId: st.castId, assigneeId: null, roleId: null }); t.assignedBy = by || null; }
       if (st.signoff?.memberId || castRole(c, st.signoff?.castId)) t.signoff = st.signoff;
+      // Its description and checklist (unticked) come too; which task it's a subtask of is set once they're all made.
+      if (st.description) t.description = String(st.description).slice(0, 8000);
+      if (st.checklist?.length) t.checklist = st.checklist.slice(0, 50).map((text) => ({ id: rid(6), text: cleanText(text, 200), done: false })).filter((x) => x.text);
       noteWork(t, null);
       db.tasks[t.id] = t;
       made.set(st.ref, t);
@@ -3531,6 +3554,7 @@ function fillCampaign(ws, owner, c, snap, date, by) {
     if (g && sg.blockedBy?.length) g.blockedBy = sg.blockedBy.map((r) => made.get(r)?.id).filter((id) => db.goals[id]);
     for (const st of sg.tasks) {
       const t = made.get(st.ref);
+      if (t && st.parentRef && made.get(st.parentRef)) t.parentId = made.get(st.parentRef).id;
       if (t && st.blockedBy?.length) t.blockedBy = st.blockedBy.map((r) => made.get(r)?.id).filter((id) => db.tasks[id]);
     }
     if (g?.blockedBy?.length) broadcast(ws.id, { type: 'goal', goal: publicGoal(g) });
@@ -8591,14 +8615,44 @@ async function api(req, res, url) {
     }
     const t = b && db.tasks[b];
     if (!t || t.wsId !== ws.id || !canSee(auth, 'task', t)) return send(res, 404, { error: 'Not found' });
+    // Its history (who gave it, re-dated, finished… and how), for whoever can see it (2026-11-20, the task drawer).
+    if (m === 'GET' && c === 'history') return send(res, 200, (t.hist || []).map(({ at, by, k, via, auto, to, from, due, role, cast }) => ({ at, by: ws.members.find((x) => x.id === by)?.name || (by ? 'Someone who left' : null), byId: by || null, k, via, auto, to, from, due, role, cast })));
+    // Comments on a task: anyone who can see it; whoever it's for (and whoever made it) is told, not the writer.
+    if (c === 'comments') {
+      if (m === 'POST' && !d) {
+        const body = await readJson(req, 20_000);
+        const text = String(body.text ?? '').replace(/\r\n?/g, '\n').trim().slice(0, 2000);
+        if (!text) return send(res, 400, { error: 'Write a comment first.' });
+        const cm = { id: rid(8), by: auth.member, memberId: auth.memberId, text, at: Date.now() };
+        t.comments = [...(t.comments || []), cm].slice(-200);
+        save();
+        broadcast(ws.id, { type: 'task', task: publicTask(t) });
+        const tell = new Set([...taskDoers(ws, t), t.memberId].filter((id) => id && id !== auth.memberId && ws.members.some((x) => x.id === id) && seesOwn('task', t, id)));
+        for (const id of tell) notify(ws.id, id, { title: `${auth.member} commented on “${clipText(t.text, 60)}”`, text: clipText(text, 200), taskId: t.id, campaignId: taskCamp(t)?.id || null });
+        return send(res, 200, publicTask(t));
+      }
+      if (m === 'DELETE' && d) {
+        const cm = (t.comments || []).find((x) => x.id === d);
+        if (!cm) return send(res, 404, { error: 'That comment is gone.' });
+        if (cm.memberId !== auth.memberId && !isAdmin(auth)) return send(res, 403, { error: 'Only whoever wrote it, or an admin, can delete a comment.' });
+        t.comments = t.comments.filter((x) => x !== cm);
+        save();
+        broadcast(ws.id, { type: 'task', task: publicTask(t) });
+        return send(res, 200, publicTask(t));
+      }
+      return send(res, 405, { error: 'Method not allowed' });
+    }
     if (m === 'PATCH') {
       const body = await readJson(req, 50_000);
       const camp = db.campaigns[db.goals[t.goalId]?.campaignId];
       if ((body.skipped !== undefined || body.unlocked !== undefined) && !passesSteps(camp, auth)) return send(res, 403, { error: 'Only an owner can skip or unlock a step.' });
+      const openSubs = body.done && !t.done ? Object.values(db.tasks).filter((x) => x.parentId === t.id && !x.done && !x.skipped) : [];
+      if (openSubs.length) return send(res, 409, { error: `Finish its subtasks first: ${openSubs.slice(0, 3).map((x) => `“${clipText(x.text, 50)}”`).join(', ')}${openSubs.length > 3 ? ` and ${openSubs.length - 3} more` : ''}.` });
       const waits = body.done && !t.done && !passesSteps(camp, auth) && taskWaitsOn(t);
       if (waits) return send(res, 409, { error: `This is waiting on “${clipText(waits.title || waits.text, 80)}”. That has to be done first.` });
       if (body.sendBack !== undefined && !(t.submitted && maySignOff(t, auth))) return send(res, 403, { error: 'Only whoever signs it off can send it back.' });
       const next = applyTask({ ...t }, body);
+      if (body.done) delete next.status;
       if (body.skipped !== undefined) next.skipped = !!body.skipped;
       if (body.unlocked !== undefined) next.unlocked = !!body.unlocked;
       if (!canSee(auth, 'task', next)) return send(res, 404, { error: 'Goal not found' });
@@ -8646,6 +8700,8 @@ async function api(req, res, url) {
       return send(res, 200, publicTask(next));
     }
     if (m === 'DELETE') {
+      // Its subtasks stay, as tasks of their own.
+      for (const x of Object.values(db.tasks)) if (x.parentId === t.id) { delete x.parentId; broadcast(ws.id, { type: 'task', task: publicTask(x) }); }
       deleteTask(t);
       save();
       return send(res, 200, { ok: true });

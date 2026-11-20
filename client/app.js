@@ -4448,6 +4448,10 @@
       text,
       stepTag(t),
       upNow ? h('span', { class: 'step-tag up', title: 'What it was waiting on is done' }, 'You’re up') : null,
+      t.status === 'doing' && !t.done ? h('span', { class: 'step-tag doing', title: 'In progress' }, 'In progress') : null,
+      t.parentId && taskById(t.parentId) ? h('span', { class: 'step-tag sub', title: 'A subtask of “' + taskById(t.parentId).text + '”' }, '↳ ' + shortText(taskById(t.parentId).text, 20)) : null,
+      (() => { const ss = S.tasks.filter((x) => x.parentId === t.id); return ss.length ? h('span', { class: 'step-tag subs', title: 'Subtasks done' }, `${ss.filter((x) => x.done).length}/${ss.length} subtasks`) : null; })(),
+      (t.checklist || []).length && !t.done ? h('span', { class: 'step-tag cl', title: 'Checklist' }, `☑ ${(t.checklist || []).filter((x) => x.done).length}/${t.checklist.length}`) : null,
       waits ? h('button', { class: 'list-chip wait-chip', title: blockers.map((x) => '⏳ ' + stepName(x) + (stepWho(x) ? ' · ' + stepWho(x) : '')).join('\n') + (waits.hidden ? '' : '\nClick to see it'), onclick: (ev) => { ev.stopPropagation(); waits.hidden ? toast(waitMsg) : showStep(waits); } },
         '⏳ ' + shortText(stepName(waits), 26) + (blockers.length > 1 ? ` +${blockers.length - 1}` : '')) : null,
       g ? resChip(g) : null,
@@ -6812,6 +6816,8 @@
   }
 
   function openCampaign(id) {
+    // Another campaign opens on its Overview (the tab sticks only while you stay in one campaign).
+    if (id && id !== K.open) K.ctab = 'overview';
     K.open = id;
     if (id) closeProjects(); // from a job's page (its campaigns, + Campaign): the campaign shows, not the job over it
     store.set('campOpen', id);
@@ -6823,7 +6829,7 @@
 
   // Re-render, unless someone is typing in here; then wait until they're done.
   K.overview ??= store.get('campsOverview', false);
-  K.ctab ??= store.get('campTab', 'overview');
+  K.ctab ??= 'overview';
   function renderCamps() {
     const root = $('#camps');
     if (!S.workspace || !campsShown() || K.sorting) return;
@@ -7014,7 +7020,7 @@
     // team; KPIs from the real work; five tabs (Overview, Plan, Work, Resources, Activity); phases (the steps) as
     // connected cards; a Pulse panel down the side at full size. Every part of the old page is in one of the tabs.
     const tab = ['overview', 'plan', 'work', 'resources', 'activity'].includes(K.ctab) ? K.ctab : 'overview';
-    const setTabC = (k) => { K.ctab = k; store.set('campTab', k); renderCamps(); };
+    const setTabC = (k) => { K.ctab = k; renderCamps(); };
     const tasks = campTasks(c), open = tasks.filter((t) => !t.done);
     const phases = goals.filter((g) => !['count', 'money'].includes(g.kind));
     const targets = goals.filter((g) => ['count', 'money'].includes(g.kind));
@@ -7112,7 +7118,7 @@
     const wf = ['all', 'mine', 'open', 'blocked', 'overdue', 'done'].includes(K.wfilter) ? K.wfilter : 'open';
     const workBody = () => {
       const pick = { all: tasks, mine: open.filter(taskMine), open, blocked, overdue, done: tasks.filter((t) => t.done) }[wf];
-      const status = (t) => (t.done ? ['done', 'Done'] : taskBlockers(t).length ? ['wait', 'Waiting'] : t.submitted ? ['sign', 'For sign-off'] : isOverdue(t) ? ['late', 'Overdue'] : ['open', 'Not started']);
+      const status = (t) => (t.done ? ['done', 'Done'] : taskBlockers(t).length ? ['wait', 'Waiting'] : t.submitted ? ['sign', 'For sign-off'] : isOverdue(t) ? ['late', 'Overdue'] : t.status === 'doing' ? ['doing', 'In progress'] : ['open', 'Not started']);
       return h('section', { class: 'cc-card cc-work' },
         h('div', { class: 'cc-wf seg seg-sm' }, [['open', `Open · ${open.length}`], ['mine', `Mine · ${open.filter(taskMine).length}`], ['blocked', `Blocked · ${blocked.length}`], ['overdue', `Overdue · ${overdue.length}`], ['done', `Done · ${tasks.length - open.length}`], ['all', `All · ${tasks.length}`]].map(([k, l]) =>
           h('button', { class: wf === k ? 'on' : null, 'data-wf': k, onclick: () => { K.wfilter = k; renderCamps(); } }, l))),
@@ -7397,43 +7403,123 @@
     draw();
     return box;
   }
-  // A task, opened: what it is, who and when, what it waits on, and what its step hands over.
+  // A task, opened: the task drawer (2026-11-20, part 2 of the Command Center). One scroll: who, due, priority, status;
+  // its description, checklist and subtasks; what it waits for and opens; what its step hands over; its links; comments;
+  // and its history. Changes save as you go; the drawer redraws in place, keeping its scroll.
+  const subtasksOf = (t) => S.tasks.filter((x) => x.parentId === t.id).sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+  const TASK_HIST = { due: 'changed the due date', assigned: 'gave it to', submitted: 'sent it for sign-off', returned: 'sent it back', done: 'finished it', reopened: 'reopened it' };
   function taskWindow(t, tab) {
+    t = taskById(t.id) || t;
     const g = goalById(t.goalId);
     const camp = g && campById(g.campaignId);
+    const redraw = () => { const sc = $('#sheet .sheet')?.scrollTop || 0; taskWindow(taskById(t.id) || t); const el = $('#sheet .sheet'); if (el) el.scrollTop = sc; };
+    const save = async (changes) => { await patchTask(taskById(t.id) || t, changes); redraw(); };
     const text = h('input', { class: 'win-title', value: t.text, maxlength: 500, 'aria-label': 'Task' });
-    text.addEventListener('change', () => text.value.trim() && patchTask(t, { text: text.value.trim() }));
+    text.addEventListener('change', () => text.value.trim() && save({ text: text.value.trim() }));
     const due = h('input', { type: 'date', value: t.due || '', 'aria-label': 'Due' });
-    due.addEventListener('change', () => patchTask(taskById(t.id) || t, { due: due.value || null }));
+    due.addEventListener('change', () => save({ due: due.value || null }));
     const blockers = taskBlockers(t), unlocks = t.done ? [] : unlocksOf(t);
-    const who = t.assigneeId ? memberName(t.assigneeId) : t.roleId ? (S.workspace.roles || []).find((r) => r.id === t.roleId)?.name : t.castId ? castOf(camp || {}).find((r) => r.id === t.castId)?.name : null;
-    const files = taskFiles(t);
-    const details = () => h('div', { class: 'win-details' }, h('div', { class: 'win-rows' },
-      h('div', { class: 'srow' }, h('span', {}, 'Who', h('small', {}, who || 'Nobody yet')), h('button', { class: 'btn small', onclick: (e) => assignMenu(e.currentTarget, taskById(t.id) || t) }, 'Change')),
-      h('div', { class: 'srow' }, h('span', {}, 'Due'), due),
-      h('div', { class: 'srow' }, h('span', {}, 'Priority', h('small', {}, PRIO[t.priority || 0] || 'Normal')), h('button', { class: 'btn small', onclick: (e) => prioMenu(e.currentTarget, taskById(t.id) || t) }, 'Change')),
-      blockers.length ? h('div', { class: 'srow' }, h('span', {}, 'Waits for', h('small', {}, blockers.map(stepName).join(', ')))) : null,
-      unlocks.length ? h('div', { class: 'srow' }, h('span', {}, 'Finishing it opens', h('small', {}, unlocks.map((x) => x.text).join(', ')))) : null,
-      camp ? h('div', { class: 'srow' }, h('span', {}, 'Step', h('small', {}, `${camp.name} · ${g.title}`)), h('button', { class: 'btn small', onclick: () => stepWindow(camp, g) }, 'Open')) : null,
-      t.recordId ? h('div', { class: 'srow' }, h('span', {}, 'Job', h('small', {}, recEverywhere(t.recordId) ? 'Open the record it’s about' : 'A record')), h('button', { class: 'btn small', onclick: () => { closeSheet(); prLoadAll().then(() => openRecord(t.recordId)); } }, 'Open')) : null,
-      t.docId && S.items.some((x) => x.id === t.docId) ? h('div', { class: 'srow win-doc' }, h('span', {}, 'From the doc', h('small', {}, docTitle(S.items.find((x) => x.id === t.docId)))), h('button', { class: 'btn small', onclick: () => { closeSheet(); openDoc(S.items.find((x) => x.id === t.docId)); } }, 'Open')) : null,
-      t.pinId && pinById(t.pinId) ? h('div', { class: 'srow' }, h('span', {}, 'On the map'), h('button', { class: 'btn small', onclick: () => { closeSheet(); openMap({ pinId: t.pinId }); } }, 'Show')) : null,
-      files.length ? h('div', { class: 'srow' }, h('span', {}, 'Files', h('small', {}, files.map((it) => it.name || 'Note').join(', '))), h('button', { class: 'btn small', onclick: (e) => (files.length === 1 ? openPreview(files[0]) : taskFilesMenu(e.currentTarget, t)) }, 'Open')) : null),
-      h('div', { class: 'btns' },
+    const role = t.roleId ? (S.workspace.roles || []).find((r) => r.id === t.roleId)?.name : t.castId ? castOf(camp || {}).find((r) => r.id === t.castId)?.name : null;
+    const files = taskFiles(t), subs = subtasksOf(t), parent = t.parentId && taskById(t.parentId);
+    const row = (label, value, btn) => h('div', { class: 'td-row' }, h('span', { class: 'td-l' }, label), h('span', { class: 'td-v' }, value), btn || null);
+    // Status: Not started, In progress, Done (Waiting or For sign-off when that's where it is).
+    const stState = t.done ? 'done' : t.status === 'doing' ? 'doing' : 'todo';
+    const status = h('div', { class: 'seg seg-sm td-status', role: 'radiogroup', 'aria-label': 'Status' },
+      [['todo', 'Not started'], ['doing', 'In progress'], ['done', 'Done']].map(([k, l]) => h('button', { type: 'button', class: stState === k ? 'on' : null, 'data-st': k, disabled: k !== 'todo' && !!blockers.length && !t.done, onclick: () => {
+        if (k === stState) return;
+        if (k === 'done') return save({ done: true });
+        if (t.done) return save({ done: false, status: k === 'doing' ? 'doing' : null });
+        save({ status: k === 'doing' ? 'doing' : null });
+      } }, l)));
+    // Checklist.
+    const cl = t.checklist || [];
+    const clSave = (list) => save({ checklist: list });
+    const clAdd = h('input', { class: 'td-cl-add', placeholder: '+ Add item', maxlength: 200, 'aria-label': 'Add a checklist item' });
+    clAdd.addEventListener('keydown', (e) => { if (e.key === 'Enter' && clAdd.value.trim()) { e.preventDefault(); clSave([...cl, { text: clAdd.value.trim(), done: false }]).then(() => setTimeout(() => $('#sheet .td-cl-add')?.focus(), 30)); } });
+    const checklist = h('div', { class: 'td-cl' },
+      cl.map((x) => h('div', { class: 'td-cl-item' + (x.done ? ' done' : ''), 'data-item': x.id },
+        h('input', { type: 'checkbox', checked: !!x.done, 'aria-label': x.text, onchange: (e) => clSave(cl.map((y) => (y.id === x.id ? { ...y, done: e.target.checked, by: S.me?.member } : y))) }),
+        h('span', {}, x.text),
+        h('button', { class: 't-btn', 'aria-label': 'Remove ' + x.text, html: I.close, onclick: () => clSave(cl.filter((y) => y.id !== x.id)) }))),
+      clAdd);
+    // Subtasks: tasks of their own, in the same step; the task can't be finished while they're open.
+    const subAdd = h('input', { class: 'td-sub-add', placeholder: '+ Add subtask', maxlength: 500, 'aria-label': 'Add a subtask' });
+    subAdd.addEventListener('keydown', async (e) => {
+      if (e.key !== 'Enter' || !subAdd.value.trim()) return;
+      e.preventDefault();
+      try { upsertTask(await api('POST', '/tasks', { text: subAdd.value.trim(), parentId: t.id, goalId: t.goalId || null, assigneeId: t.assigneeId || null })); redraw(); renderCamps(); setTimeout(() => $('#sheet .td-sub-add')?.focus(), 30); } catch (er) { toast(er.message); }
+    });
+    const subtasks = h('div', { class: 'td-subs' },
+      subs.map((x) => h('div', { class: 'td-sub' + (x.done ? ' done' : ''), 'data-sub': x.id },
+        h('button', { class: 'check' + (x.done ? ' on' : ''), html: I.check, 'aria-label': x.done ? 'Mark not done' : 'Mark done', onclick: async () => { await patchTask(x, { done: !x.done }); redraw(); } }),
+        h('button', { class: 'td-sub-open', onclick: () => taskWindow(x) }, x.text),
+        x.assigneeId ? avatar(x.assigneeId) : null)),
+      t.parentId ? null : subAdd);
+    // Description.
+    const desc = h('textarea', { class: 'td-desc', rows: 3, maxlength: 8000, placeholder: 'Add details: what “done” looks like, links, anything they need to know…', 'aria-label': 'Description' });
+    desc.value = t.description || '';
+    desc.addEventListener('blur', () => { if (desc.value.trim() !== (t.description || '')) save({ description: desc.value }); });
+    // Comments.
+    const cBox = h('textarea', { class: 'td-cbox', rows: 2, maxlength: 2000, placeholder: 'Write a comment…', 'aria-label': 'Write a comment' });
+    const post = h('button', { class: 'btn small primary-btn td-post', onclick: async () => {
+      if (!cBox.value.trim()) return;
+      post.disabled = true;
+      try { upsertTask(await api('POST', `/tasks/${t.id}/comments`, { text: cBox.value })); redraw(); } catch (er) { toast(er.message); post.disabled = false; }
+    } }, 'Comment');
+    const comments = h('div', { class: 'td-comments' },
+      (t.comments || []).map((cm) => h('div', { class: 'td-comment', 'data-comment': cm.id }, avatar(cm.memberId), h('div', {}, h('div', { class: 'td-c-h' }, h('b', {}, cm.by), h('small', {}, ' · ' + ago(cm.at)),
+        cm.memberId === S.me?.memberId || amAdmin() ? h('button', { class: 'linkish td-c-del', onclick: async () => { try { upsertTask(await api('DELETE', `/tasks/${t.id}/comments/${cm.id}`)); redraw(); } catch (er) { toast(er.message); } } }, 'Delete') : null),
+        h('p', {}, cm.text)))),
+      h('div', { class: 'td-cnew' }, cBox, post));
+    // History, fetched when the drawer opens.
+    const hist = h('div', { class: 'td-hist' }, h('small', { class: 'muted' }, 'Loading…'));
+    api('GET', `/tasks/${t.id}/history`).then((list) => {
+      hist.replaceChildren(...(list.length ? list.slice().reverse().slice(0, 30).map((x) => h('div', { class: 'td-h' }, h('b', {}, x.by || 'Kloomie'), ' ', TASK_HIST[x.k] || 'changed it', x.k === 'assigned' ? ' ' + (x.to ? memberName(x.to) : x.role || x.cast ? 'a role' : 'nobody') : '', x.k === 'due' && x.to ? ' to ' + dueLabel(x.to) : '', x.auto ? ' (an automation)' : x.via && x.via !== 'app' ? ` (${x.via})` : '', h('small', {}, ' · ' + ago(x.at))))
+        : [h('small', { class: 'muted' }, 'Nothing yet. Changes from now on show here.')]));
+    }).catch(() => hist.replaceChildren(h('small', { class: 'muted' }, 'History isn’t available.')));
+    const rs = stepRes(g);
+    const sec = (title, ...kids) => h('section', { class: 'td-sec' }, h('div', { class: 'td-sec-h' }, title), ...kids);
+    const n = cl.filter((x) => x.done).length;
+    sheet(camp ? camp.name : 'Task', [h('div', { class: 'win task-win td' + (t.done ? ' is-done' : ''), 'data-task': t.id },
+      parent ? h('button', { class: 'linkish td-parent', onclick: () => taskWindow(parent) }, '↑ Subtask of “' + shortText(parent.text, 50) + '”') : null,
+      h('div', { class: 'win-head' }, h('button', { class: 'check' + (t.done ? ' on' : ''), html: I.check, disabled: !!blockers.length && !t.done, 'aria-label': t.done ? 'Mark not done' : 'Mark done', onclick: () => save({ done: !t.done }) }), text),
+      h('div', { class: 'td-grid' },
+        row('Assignee', t.assigneeId ? [avatar(t.assigneeId), ' ', memberName(t.assigneeId)] : role ? '👥 ' + role : h('small', { class: 'muted' }, 'Nobody yet'), h('button', { class: 'btn small', onclick: (e) => assignMenu(e.currentTarget, taskById(t.id) || t) }, 'Change')),
+        row('Due', due),
+        row('Priority', t.priority ? h('span', { class: 'cc-prio p' + t.priority }, PRIO[t.priority]) : h('small', { class: 'muted' }, 'Normal'), h('button', { class: 'btn small', onclick: (e) => prioMenu(e.currentTarget, taskById(t.id) || t) }, 'Change')),
+        row('Status', h('span', {}, status, blockers.length && !t.done ? h('span', { class: 'cc-status wait td-badge' }, 'Waiting') : t.submitted && !t.done ? h('span', { class: 'cc-status sign td-badge' }, 'For sign-off') : null))),
+      sec('Description', desc),
+      sec(cl.length ? `Checklist · ${n}/${cl.length}` : 'Checklist', checklist),
+      t.parentId ? null : sec(subs.length ? `Subtasks · ${subs.filter((x) => x.done).length}/${subs.length}` : 'Subtasks', subtasks),
+      sec('Dependencies', h('div', { class: 'td-deps' },
+        blockers.length ? blockers.map((x) => h('span', { class: 'td-dep' }, '⏳ ' + shortText(stepName(x), 40))) : h('small', { class: 'muted' }, 'Waits for nothing'),
+        h('button', { class: 'btn small', onclick: () => waitsSheet(taskById(t.id) || t) }, blockers.length ? 'Change' : '+ Waits for…')),
+        unlocks.length ? h('small', { class: 'td-opens' }, 'Finishing it opens: ' + unlocks.map((x) => x.text).join(', ')) : null),
+      rs.length ? sec(`From the step · ${rs.length}`, h('div', { class: 'res-list td-res' }, rs.map((r) => h('div', { class: 'res-row', 'data-res': r.kind }, h('button', { class: 'res-open', onclick: () => resOpen(r) }, h('span', { class: 'res-ic' }, RES_IC[r.kind]), h('span', {}, h('b', {}, resName(r)), r.kind === 'note' && r.text ? h('small', {}, shortText(r.text.replace(/\s+/g, ' '), 90)) : null))))),
+        canPass(camp) ? h('button', { class: 'linkish', onclick: () => stepWindow(camp, g, 'res') }, 'Change them on the step') : null) : null,
+      sec('Linked', h('div', { class: 'win-rows' },
+        camp ? h('div', { class: 'srow' }, h('span', {}, 'Step', h('small', {}, `${camp.name} · ${g.title}`)), h('button', { class: 'btn small', onclick: () => stepWindow(camp, g) }, 'Open')) : null,
+        t.recordId ? h('div', { class: 'srow' }, h('span', {}, 'Job', h('small', {}, recEverywhere(t.recordId) ? 'Open the record it’s about' : 'A record')), h('button', { class: 'btn small', onclick: () => { closeSheet(); prLoadAll().then(() => openRecord(t.recordId)); } }, 'Open')) : null,
+        t.docId && S.items.some((x) => x.id === t.docId) ? h('div', { class: 'srow win-doc' }, h('span', {}, 'From the doc', h('small', {}, docTitle(S.items.find((x) => x.id === t.docId)))), h('button', { class: 'btn small', onclick: () => { closeSheet(); openDoc(S.items.find((x) => x.id === t.docId)); } }, 'Open')) : null,
+        t.pinId && pinById(t.pinId) ? h('div', { class: 'srow' }, h('span', {}, 'On the map'), h('button', { class: 'btn small', onclick: () => { closeSheet(); openMap({ pinId: t.pinId }); } }, 'Show')) : null,
+        files.length ? h('div', { class: 'srow' }, h('span', {}, 'Files', h('small', {}, files.map((it) => it.name || 'Note').join(', '))), h('button', { class: 'btn small', onclick: (e) => (files.length === 1 ? openPreview(files[0]) : taskFilesMenu(e.currentTarget, t)) }, 'Open')) : null,
+        !camp && !t.recordId && !t.docId && !files.length ? h('small', { class: 'muted' }, 'Not linked to anything yet.') : null)),
+      sec(`Comments${t.comments?.length ? ' · ' + t.comments.length : ''}`, comments),
+      sec('Activity', hist),
+      h('div', { class: 'btns td-actions' },
         g && !t.done ? h('button', { class: 'btn small', onclick: (e) => toolsMenu(e.currentTarget, t) }, '✦ Tools') : null,
         !t.done ? h('button', { class: 'btn small', onclick: () => { closeSheet(); openSheet({ text: t.text, taskId: t.id, date: t.due || D.date }); } }, 'Put on schedule') : null,
+        h('button', { class: 'btn small td-dup', onclick: async () => {
+          try { const y = await api('POST', '/tasks', { text: t.text + ' (copy)', goalId: t.goalId || null, assigneeId: t.assigneeId || null, roleId: t.roleId || null, castId: t.castId || null, due: t.due || null, description: t.description || '', checklist: (t.checklist || []).map((x) => ({ text: x.text, done: false })), parentId: t.parentId || null, recordId: t.recordId || null }); upsertTask(y); renderCamps(); renderDay(); taskWindow(y); toast('Duplicated'); } catch (er) { toast(er.message); }
+        } }, 'Duplicate'),
         h('span', { style: 'flex:1' }),
-        h('button', { class: 'btn small', onclick: (e) => taskMenu(e.currentTarget, t) }, 'More…')));
-    const res = () => {
-      const rs = stepRes(g);
-      if (!rs.length) return h('p', { class: 'day-hint' }, camp ? 'Its step doesn’t hand over anything yet.' + (canPass(camp) ? ' Add a script, notes or a doc on the step.' : '') : 'Tasks in a campaign step show what the step hands over.');
-      return h('div', {}, h('div', { class: 'res-list' }, rs.map((r) => h('div', { class: 'res-row', 'data-res': r.kind }, h('button', { class: 'res-open', onclick: () => resOpen(r) }, h('span', { class: 'res-ic' }, RES_IC[r.kind]), h('span', {}, h('b', {}, resName(r)), r.kind === 'note' && r.text ? h('small', {}, shortText(r.text.replace(/\s+/g, ' '), 90)) : null))))),
-        canPass(camp) ? h('div', { class: 'btns' }, h('button', { class: 'btn small', onclick: () => stepWindow(camp, g, 'res') }, 'Change them on the step')) : null);
-    };
-    const n = stepRes(g).length;
-    sheet(camp ? camp.name : 'Task', [h('div', { class: 'win task-win', 'data-task': t.id }, h('div', { class: 'win-head' }, h('button', { class: 'check' + (t.done ? ' on' : ''), html: I.check, disabled: !!blockers.length, 'aria-label': t.done ? 'Mark not done' : 'Mark done', onclick: () => { patchTask(t, { done: !t.done }); closeSheet(); } }), text),
-      ...winTabs([['details', 'Details', details], ['res', n ? `From the step · ${n}` : 'From the step', res]], tab || (n && !t.done && taskMine(t) ? 'res' : 'details')))]);
+        h('button', { class: 'btn small', onclick: (e) => taskMenu(e.currentTarget, t) }, 'More…'),
+        (() => { const del = h('button', { class: 'btn small danger td-del', 'data-label': '1' }, 'Delete'); del.addEventListener('click', () => confirmClick(del, async () => {
+          try { await api('DELETE', '/tasks/' + t.id); S.tasks = S.tasks.filter((x) => x.id !== t.id).map((x) => (x.parentId === t.id ? { ...x, parentId: undefined } : x)); for (const e of S.entries) if (e.taskId === t.id) e.taskId = null; closeSheet(); renderDay(); renderCamps(); toast('Deleted'); } catch (er) { toast(er.message); }
+        })); return del; })()))]);
+    void tab;
   }
+
 
   // ----- call lists: a spreadsheet of prospects dropped on a campaign -----
   // CSV, TSV and Excel files with rows become lists; anything else is just attached. The file stays in the stack.

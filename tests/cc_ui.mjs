@@ -85,6 +85,38 @@ try {
   ok(await A.until(`[...document.querySelectorAll('#camps .cc-tr:not(.cc-th) .cc-tt')].map((x) => x.textContent).join() === 'Email consultation confirmation' && ${T('.cc-status.wait')}`), 'Blocked shows the one waiting task, marked Waiting');
   await A.tap(T('.cc-tr:not(.cc-th)'));
   ok(await A.until(`!!document.querySelector('#sheet .task-win')`), 'a row opens the task beside the page');
+  // The drawer (part 2): who, due, priority, status; description, checklist, subtasks, dependencies, comments, activity.
+  ok(await A.ev(`[...document.querySelectorAll('#sheet .td-row .td-l')].map((x) => x.textContent).join('|') === 'Assignee|Due|Priority|Status' && [...document.querySelectorAll('#sheet .td-sec-h')].map((x) => x.textContent.split(' ·')[0]).join('|').startsWith('Description|Checklist|Subtasks|Dependencies')`), 'the drawer: Assignee, Due, Priority, Status, then Description, Checklist, Subtasks, Dependencies…');
+  ok(await A.ev(`!!document.querySelector('#sheet .td-badge.wait') && document.querySelector('#sheet .td-status [data-st=doing]').disabled && document.querySelector('#sheet .td-dep')?.textContent.includes('Call new leads')`), 'a waiting task says Waiting, can’t be started, and shows what it waits for');
+  await A.ev(`document.querySelector('#sheet [aria-label=Close]').click(); true`);
+  await A.ev(`${T('.cc-wf [data-wf=open]')}.click(); true`);
+  await A.until(`document.querySelectorAll('#camps .cc-tr:not(.cc-th)').length === 9`);
+  await A.tap(`[...document.querySelectorAll('#camps .cc-tr:not(.cc-th)')].find((r) => r.textContent.includes('Measure windows'))`);
+  await A.until(`!!document.querySelector('#sheet .td-status')`);
+  await A.tap(`document.querySelector('#sheet .td-status [data-st=doing]')`);
+  ok(await A.until(`document.querySelector('#sheet .td-status .on')?.dataset.st === 'doing'`), 'In progress is one tap');
+  const st2 = async () => (await api('GET', '/state')).tasks.find((x) => x.text === 'Measure windows');
+  ok((await st2()).status === 'doing', 'and saved');
+  await A.ev(`(() => { const d = document.querySelector('#sheet .td-desc'); d.value = 'Bring the laser measure'; d.dispatchEvent(new Event('blur')); })()`);
+  await A.until(`document.querySelector('#sheet .td-desc')?.value === 'Bring the laser measure'`);
+  for (const item of ['Living room', 'Kitchen']) {
+    await A.until(`!!document.querySelector('#sheet .td-cl-add')`);
+    await A.ev(`(() => { const i = document.querySelector('#sheet .td-cl-add'); i.value = ${JSON.stringify(item)}; i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); })()`);
+    await A.until(`[...document.querySelectorAll('#sheet .td-cl-item span')].some((x) => x.textContent === ${JSON.stringify(item)})`);
+  }
+  await A.tap(`[...document.querySelectorAll('#sheet .td-cl-item')].find((x) => x.textContent.includes('Kitchen')).querySelector('input')`);
+  ok(await A.until(`[...document.querySelectorAll('#sheet .td-sec-h')].some((x) => x.textContent === 'Checklist · 1/2')`), 'a checklist: add items, tick one (1/2)');
+  await A.ev(`(() => { const i = document.querySelector('#sheet .td-sub-add'); i.value = 'Order the laser measure'; i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); })()`);
+  ok(await A.until(`[...document.querySelectorAll('#sheet .td-sub .td-sub-open')].some((x) => x.textContent === 'Order the laser measure')`), 'a subtask, added in the drawer');
+  await A.ev(`(() => { const c = document.querySelector('#sheet .td-cbox'); c.value = 'Customer prefers mornings'; })()`);
+  await A.tap(`document.querySelector('#sheet .td-post')`);
+  ok(await A.until(`[...document.querySelectorAll('#sheet .td-comment p')].some((x) => x.textContent === 'Customer prefers mornings')`), 'a comment, posted in the drawer');
+  ok(await A.until(`!document.querySelector('#sheet .td-hist')?.textContent.includes('Loading')`), 'its activity history loads');
+  const m = await st2();
+  ok(m.description === 'Bring the laser measure' && m.checklist.length === 2 && m.checklist.find((x) => x.text === 'Kitchen').done && m.comments?.length === 1, 'description, checklist and comment are saved');
+  await A.tap(`document.querySelector('#sheet .td-dup')`);
+  ok(await A.until(`document.querySelector('#sheet .win-title')?.value === 'Measure windows (copy)'`), 'Duplicate makes a copy and opens it');
+  ok(await A.until(`(async () => (await (await fetch('/api/state', { headers: { authorization: 'Bearer ' + JSON.parse(localStorage.getItem('column.token')) } })).json()).tasks.find((x) => x.text === 'Measure windows (copy)')?.checklist?.every((x) => !x.done))()`), 'with its checklist, unticked');
   await A.ev(`document.querySelector('#sheet [aria-label=Close]').click(); true`);
   // Plan, Resources, Activity keep the old page's parts.
   await tabTo('plan');

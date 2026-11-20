@@ -76,7 +76,7 @@ try {
   // Clicking a task opens it; rename there.
   await A.tap(`[...document.querySelectorAll('.goal .task-row .p-text')].find((x) => x.textContent.includes('Lopez'))`);
   ok(await A.until(`!!document.querySelector('#sheet .task-win') && !document.querySelector('.goal .task-row input')`), 'clicking a task opens it (not an edit box in the row)');
-  ok(await A.ev(`[...document.querySelectorAll('#sheet .win-tabs button')].map((b) => b.textContent).join('|') === 'Details|From the step · 1' && [...document.querySelectorAll('#sheet .win-rows .srow > span')].some((x) => x.textContent.startsWith('Who') && x.textContent.includes('Sam'))`), 'its Details say who (Sam), with From the step · 1');
+  ok(await A.ev(`[...document.querySelectorAll('#sheet .td-sec-h')].some((x) => x.textContent === 'From the step · 1') && [...document.querySelectorAll('#sheet .td-row')].some((x) => x.textContent.startsWith('Assignee') && x.textContent.includes('Sam'))`), 'the drawer says who (Sam), with From the step · 1');
   await A.ev(`(() => { const i = document.querySelector('#sheet .task-win .win-title'); i.value = 'Call the Lopez family about windows'; i.dispatchEvent(new Event('change')); })()`);
   ok(await (async () => { for (let i = 0; i < 30; i++) { if ((await api('GET', '/state')).tasks.find((x) => x.id === task.id)?.text === 'Call the Lopez family about windows') return true; await sleep(100); } return false; })(), 'renaming it there saves');
   await A.ev(`document.querySelector('#sheet [aria-label=Close]').click(); true`);
@@ -102,7 +102,7 @@ try {
   if (!(await A.ev(`!!document.querySelector('.goal .task-row .p-text')`))) await A.tap(`[...document.querySelectorAll('.camp-card')].find((c) => c.textContent.includes('Fall calls'))`);
   await A.until(`!!document.querySelector('.goal .task-row .p-text')`);
   await A.tap(`[...document.querySelectorAll('.goal .task-row .p-text')].find((x) => x.textContent.includes('Lopez'))`);
-  ok(await A.until(`document.querySelector('#sheet .win-tabs .on')?.textContent.startsWith('From the step') && [...document.querySelectorAll('#sheet .res-row b')].map((b) => b.textContent).join() === 'Call script'`), 'Sam’s task opens on From the step, with the call script');
+  ok(await A.until(`[...document.querySelectorAll('#sheet .td-sec-h')].some((x) => x.textContent.startsWith('From the step')) && [...document.querySelectorAll('#sheet .td-res .res-row b')].map((b) => b.textContent).join() === 'Call script'`), 'Sam’s task drawer shows From the step, with the call script');
   await shot('task-win');
   await A.ev(`document.querySelector('#sheet [aria-label=Close]').click(); true`);
   await A.tap(`document.querySelector('.goal .goal-title')`);
