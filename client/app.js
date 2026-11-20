@@ -13724,6 +13724,9 @@
     const destroy = ed.destroy;
     ed.destroy = () => { set.delete(entry); if (!set.size) WB.eds.delete(board.id); destroy(); wbTell(); };
     wbTell();
+    // Record cards read the boards' records, which load only when a board is opened: load them, then draw the cards
+    // again, or a job card says "not available" after a reload (live check 2026-11-20).
+    if (Object.values(board.items || {}).some((x) => x.ref?.kind === 'record' && !wbCardInfo(x.ref))) prLoadAll().then(() => ed.refresh());
     return ed;
   }
   function boardSelection(board) {
