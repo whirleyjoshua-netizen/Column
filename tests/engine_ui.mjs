@@ -65,7 +65,7 @@ try {
   ok(await A.until(`document.querySelector('#projects .cal-cell[data-day="${month}-15"] .cal-rec')?.textContent === 'Tune-up Smith'`), 'dragging a job to another day moves it there');
   const moved = (await api('GET', `/projects/${p.id}/records`)).find((r) => r.id === tune.id);
   ok(moved.values[F('scheduled').id] === `${month}-15`, 'and saves its new day');
-  await A.tap(`document.querySelector('#projects .cal-cell[data-day="${month}-20"] .cal-add')`);
+  await A.tap(`document.querySelector('#projects .cal-cell[data-day="${month}-20"] .cal-new')`);
   ok(await A.until(`document.querySelector('#projects .pj-panel .pj-title')?.value === ''`), '+ on a day makes a new job, open to name it');
   ok((await api('GET', `/projects/${p.id}/records`)).some((r) => r.values[F('scheduled').id] === `${month}-20`), 'for that day');
   const head = await A.ev(`document.querySelector('#projects .cal-head b').textContent`);

@@ -1,5 +1,5 @@
 // Kloomie for Zapier. Built on Kloomie's public API (/api/v1, see https://app.kloomie.com/developers):
-// - Sign-in is a Kloomie API key, made in Kloomie → Settings → Connections → Connect other apps.
+// - Sign-in is a Kloomie API key, made in Kloomie → Apps & Integrations → Developers.
 // - Triggers are instant: each Zap subscribes its own webhook with the key (REST hooks), and every delivery's
 //   X-Kloomie-Signature is checked against that webhook's secret before the Zap runs.
 // - Actions and searches call the same API. Repeats are safe: contacts can match an existing person, and a payment's
@@ -13,7 +13,7 @@ const dataOf = (res) => (res.data !== undefined ? res.data : res.json);
 const authentication = {
   type: 'custom',
   fields: [
-    { key: 'api_key', label: 'API key', type: 'password', required: true, helpText: 'In Kloomie, go to **Settings → Connections → Connect other apps** and click **New API key** ([how](https://app.kloomie.com/developers#auth)). An owner or admin makes it, and it’s shown once. Choose **Read and write** so actions work.' },
+    { key: 'api_key', label: 'API key', type: 'password', required: true, helpText: 'In Kloomie, go to **Apps & Integrations → Developers** and click **New API key** ([how](https://app.kloomie.com/developers#auth)). An owner or admin makes it, and it’s shown once. Choose **Read and write** so actions work.' },
     { key: 'server', label: 'Kloomie address', type: 'string', required: false, default: 'https://app.kloomie.com', helpText: 'Leave this as it is unless your team runs Kloomie at its own address ([more](https://app.kloomie.com/developers#auth)). It must start with https://.' },
   ],
   test: async (z, bundle) => {

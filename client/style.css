@@ -3050,8 +3050,8 @@ button.as-count.warn { border-left-color: #ffb547; }
 .cal-cell.today .cal-d span { background: var(--accent); color: #fff; border-radius: 999px; padding: 0 6px; }
 .cal-cell.drop { background: var(--accent-soft); }
 .cal-d { display: flex; align-items: center; justify-content: space-between; font-size: 12px; color: var(--muted); }
-.cal-add { border: 0; background: none; color: var(--muted); font-size: 15px; line-height: 1; padding: 0 4px; cursor: pointer; opacity: 0; }
-.cal-cell:hover .cal-add, .cal-add:focus-visible { opacity: 1; }
+.cal-new { border: 0; background: none; color: var(--muted); font-size: 15px; line-height: 1; padding: 0 4px; cursor: pointer; opacity: 0; }
+.cal-cell:hover .cal-new, .cal-new:focus-visible { opacity: 1; }
 .cal-rec { display: block; width: 100%; text-align: left; border: 0; border-left: 3px solid var(--c); background: var(--card); color: var(--text); font-size: 12px; padding: 3px 6px; border-radius: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
 .cal-rec:hover, .cal-rec.on { background: var(--card-hover); }
 .cal-more { border: 0; background: none; color: var(--accent); font-size: 12px; text-align: left; padding: 0 4px; cursor: pointer; }
@@ -3059,7 +3059,7 @@ button.as-count.warn { border-left-color: #ffb547; }
 @media (max-width: 640px) {
   .cal-cell { min-height: 64px; padding: 2px; }
   .cal-rec { font-size: 10px; padding: 2px 3px; border-left-width: 2px; }
-  .cal-add { opacity: 1; }
+  .cal-new { opacity: 1; }
   .cal-dow { padding: 3px 2px; font-size: 10px; text-align: center; }
 }
 /* Formulas and rollups: worked out, so they read as quieter than what people type. */
@@ -3991,6 +3991,9 @@ body:not(.wide) .settings, body:not(.wide) .projects, body:not(.wide) #split, bo
 body:not(.wide) .app-dock { display: flex; position: fixed; left: 0; right: 0; bottom: 0; z-index: 60; height: var(--dock-h); justify-content: space-around; align-items: flex-start;
   padding: 8px 8px calc(8px + env(safe-area-inset-bottom)); background: color-mix(in srgb, var(--bg) 86%, transparent); -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px); border-top: 1px solid var(--line); }
 body:not(.wide).typing .app-dock { display: none; }
+/* Pop-up sheets stop above the dock (live check 2026-11-20: the dock covered the bottom 78px of every sheet, Save included). */
+body:not(.wide) .sheet-wrap { bottom: var(--dock-h); }
+body:not(.wide).typing .sheet-wrap { bottom: 0; }
 .app-ic { width: 48px; height: 48px; border-radius: 13px; display: grid; place-items: center; background: var(--card); border: 1px solid var(--line); color: var(--accent); font-size: 22px; line-height: 1; flex: none; }
 .app-ic svg { width: 24px; height: 24px; }
 .app-l { display: block; max-width: 76px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--text); }
@@ -4028,7 +4031,7 @@ body:not(.wide) .home-dots { display: flex; justify-content: center; align-items
 .home-prev, .home-next { display: none; font-size: 18px; }
 body.column:not(.wide) .home-prev, body.column:not(.wide) .home-next { display: inline-flex; }
 /* Workspace profile, step 3: proof anywhere */
-.wp-check{display:flex;gap:10px;align-items:flex-start;cursor:pointer;margin:6px 0 10px}
+.wp-check,.sheet label.wp-check{flex-direction:row;font-size:inherit;color:inherit;display:flex;gap:10px;align-items:flex-start;cursor:pointer;margin:6px 0 10px}
 .wp-check input{margin-top:3px;flex:none}
 .wp-check span{display:flex;flex-direction:column;gap:2px}
 .wp-check small,.wp-tips{color:var(--muted);font-size:12.5px}

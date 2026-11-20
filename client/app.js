@@ -15571,7 +15571,7 @@
       const key = `${month}-${pad2(d)}`;
       const list = (byDay.get(key) || []).sort((a, b) => recName(t, a).localeCompare(recName(t, b)));
       const el = h('div', { class: 'cal-cell' + (key === today ? ' today' : ''), 'data-day': key },
-        h('div', { class: 'cal-d' }, h('span', {}, d), h('button', { class: 'cal-add', 'aria-label': `New ${(t.singular || 'record').toLowerCase()} on ${shortDay(key)}`, onclick: () => prNew(p, t, { [dF.id]: key }) }, '+')),
+        h('div', { class: 'cal-d' }, h('span', {}, d), h('button', { class: 'cal-new', 'aria-label': `New ${(t.singular || 'record').toLowerCase()} on ${shortDay(key)}`, onclick: () => prNew(p, t, { [dF.id]: key }) }, '+')),
         ...list.slice(0, 4).map(chip),
         list.length > 4 ? h('button', { class: 'cal-more', onclick: () => sheet(shortDay(key), [h('div', { class: 'cal-list' }, list.map(chip))], null) }, `+${list.length - 4} more`) : null);
       el.addEventListener('dragover', (e) => { e.preventDefault(); el.classList.add('drop'); });

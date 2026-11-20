@@ -30,11 +30,11 @@
   <nav><a href="#auth">Keys</a><a href="#contacts">Contacts</a><a href="#tasks">Tasks</a><a href="#visits">Visits</a><a href="#invoices">Invoices</a><a href="#schema">Projects &amp; fields</a><a href="#records">Records</a><a href="#values">Field values</a><a href="#sync">Syncing</a><a href="#errors">Errors &amp; limits</a><a href="#webhooks">Webhooks</a><a href="#subscribe">Subscribing</a></nav>
 
   <h2 id="auth">Keys</h2>
-  <p>A team owner or admin makes an API key in <b>Settings → Connections → Connect other apps</b>. It's shown once. Send it with every request:</p>
+  <p>A team owner or admin makes an API key in <b>Apps &amp; Integrations → Developers</b>. It's shown once. Send it with every request:</p>
   <pre><code>Authorization: Bearer col_…</code></pre>
-  <p>The base address is your Kloomie server followed by <code>/api/v1</code>, for example <code>https://app.kloomie.com/api/v1</code>. A key reaches the team's contacts, tasks, visits and invoices, and every project that isn't private. A key can be <b>read and write</b> or <b>read only</b>. Deleting it in Settings stops it at once. Contacts and invoices need a key made by someone who is still an owner or admin.</p>
+  <p>The base address is your Kloomie server followed by <code>/api/v1</code>, for example <code>https://app.kloomie.com/api/v1</code>. A key reaches the team's contacts, tasks, visits and invoices, and every project that isn't private. A key can be <b>read and write</b> or <b>read only</b>. Deleting it in Apps &amp; Integrations → Developers stops it at once. Contacts and invoices need a key made by someone who is still an owner or admin.</p>
   <pre><code>curl https://app.kloomie.com/api/v1/me -H "Authorization: Bearer $COLUMN_KEY"
-{"team":"Premier","key":"Zapier","write":true,"role":"owner","events":["record.created", …]}</code></pre>
+{"team":"Acme Blinds","key":"Zapier","write":true,"role":"owner","events":["record.created", …]}</code></pre>
   <table>
     <tr><td><span class="m get">GET</span></td><td><code>/members</code></td><td>The team: <code>[{"id", "name", "role"}]</code>. Anywhere a person goes in, send their id or name.</td></tr>
   </table>
@@ -42,7 +42,7 @@
   <p>Contacts, tasks and invoices list the same way: <code>{"data": [ … ], "next_cursor": …}</code>, oldest change first. Page with <code>?limit=</code> (up to 500) and <code>?cursor=</code>, and ask for only what changed with <code>?updated_since=</code> (see <a href="#sync">Syncing</a>). For the latest few, newest first (what a polling trigger wants), use <code>?order=newest&amp;limit=25</code>. Money is in dollars, dates look like <code>2026-11-30</code>, times of day like <code>"09:30"</code>, and moments are ISO times.</p>
 
   <h2 id="contacts">Contacts</h2>
-  <p class="note">Just sending leads from a website or lead service? You don't need an API key: turn on <b>Settings → Connections → Lead form &amp; lead webhook</b> and POST to its lead webhook address (JSON or a form, from a server or straight from a browser) with <code>name</code> (or <code>first_name</code> and <code>last_name</code>), <code>email</code>, <code>phone</code>, <code>company</code>, <code>address</code>, <code>city</code>, <code>message</code> and <code>source</code>. It answers <code>{"ok": true, "contact_id": "…", "added": true}</code>. Other field names and shapes work too: nested JSON, lists of <code>{label, value}</code>, Typeform and Jotform posts, multipart forms. Usual names are matched by what they contain, the team can match the rest in Settings, and anything left over goes in the contact's note. Every lead, and why one was refused, shows in <b>Recent leads</b> there.</p>
+  <p class="note">Just sending leads from a website or lead service? You don't need an API key: turn on <b>Apps &amp; Integrations → Developers → Leads from websites, funnels &amp; forms</b> and POST to its lead webhook address (JSON or a form, from a server or straight from a browser) with <code>name</code> (or <code>first_name</code> and <code>last_name</code>), <code>email</code>, <code>phone</code>, <code>company</code>, <code>address</code>, <code>city</code>, <code>message</code> and <code>source</code>. It answers <code>{"ok": true, "contact_id": "…", "added": true}</code>. Other field names and shapes work too: nested JSON, lists of <code>{label, value}</code>, Typeform and Jotform posts, multipart forms. Usual names are matched by what they contain, the team can match the rest in Apps &amp; Integrations → Developers, and anything left over goes in the contact's note. Every lead, and why one was refused, shows in <b>Recent leads</b> there.</p>
   <p>The team's people: customers, leads, anyone you call or email.</p>
   <table>
     <tr><td><span class="m get">GET</span></td><td><code>/contacts</code></td><td>Contacts. Find someone with <code>?email=</code> or <code>?phone=</code> (however it's written), or filter by <code>?stage=</code> or <code>?tag=</code>.</td></tr>
@@ -169,7 +169,7 @@ GET /projects/$PROJECT/deals/records?updated_since=2026-11-02T00:00:00Z&amp;limi
   <p>Each key can make <b>300 requests a minute</b>. A team can keep 50,000 records.</p>
 
   <h2 id="webhooks">Webhooks</h2>
-  <p>A team owner or admin adds a webhook in Settings with an <code>https://</code> address, or an app subscribes one with its key (<a href="#subscribe">below</a>). Kloomie sends a <code>POST</code> each time one of its events happens:</p>
+  <p>A team owner or admin adds a webhook in Apps &amp; Integrations → Developers with an <code>https://</code> address, or an app subscribes one with its key (<a href="#subscribe">below</a>). Kloomie sends a <code>POST</code> each time one of its events happens:</p>
   <table>
     <tr><th>Event</th><th>When</th><th><code>data</code></th></tr>
     <tr><td><code>contact.created</code> <code>contact.updated</code> <code>contact.deleted</code></td><td>A contact is added (in Kloomie, by import, through the API, or synced in), changed, or deleted</td><td>the contact</td></tr>
@@ -178,7 +178,7 @@ GET /projects/$PROJECT/deals/records?updated_since=2026-11-02T00:00:00Z&amp;limi
     <tr><td><code>invoice.created</code> <code>invoice.sent</code> <code>invoice.paid</code> <code>invoice.voided</code></td><td>An invoice is made, first sent, paid in full, or voided</td><td>the invoice</td></tr>
     <tr><td><code>payment.received</code></td><td>Any payment on an invoice: card, cash, or one recorded through the API</td><td><code>{"invoice_id", "invoice_number", "job_id", "payment", "invoice"}</code></td></tr>
     <tr><td><code>file.received</code></td><td>A customer sends files through a file request link</td><td><code>{"file", "from", "stack", "request_id"}</code></td></tr>
-    <tr><td><code>text.received</code></td><td>A customer texts the team's Twilio number (Settings → Connections → Text messages)</td><td><code>{"id", "from", "body", "contact_id", "contact_name", "received_at"}</code></td></tr>
+    <tr><td><code>text.received</code></td><td>A customer texts the team's Twilio number (Apps &amp; Integrations → Twilio)</td><td><code>{"id", "from", "body", "contact_id", "contact_name", "received_at"}</code></td></tr>
     <tr><td><code>document.signed</code></td><td>Someone signs a document sent for signature</td><td><code>{"id", "document", "signer", "signed_name", "signed_at", "file"}</code></td></tr>
     <tr><td><code>record.created</code> <code>record.updated</code> <code>record.deleted</code></td><td>A Projects record (a job, a deal…) is added, changed or deleted. Only these can be narrowed to one project.</td><td>the record</td></tr>
   </table>
@@ -211,10 +211,10 @@ def from_kloomie(raw_body: bytes, header: str, secret: str) -> bool:
         return False
     want = hmac.new(secret.encode(), f'{parts["t"]}.'.encode() + raw_body, hashlib.sha256).hexdigest()
     return hmac.compare_digest(want, parts["v1"])</code></pre>
-  <p>Answer with any <code>2xx</code> within 10 seconds. Anything else is tried again after 30 seconds, 2 minutes and 8 minutes. After 20 failures in a row the webhook pauses; turn it back on in Settings. The last 20 deliveries show there too. Webhook addresses must be public: private network addresses are refused. Records in private projects are never sent.</p>
+  <p>Answer with any <code>2xx</code> within 10 seconds. Anything else is tried again after 30 seconds, 2 minutes and 8 minutes. After 20 failures in a row the webhook pauses; turn it back on in Apps &amp; Integrations → Developers. The last 20 deliveries show there too. Webhook addresses must be public: private network addresses are refused. Records in private projects are never sent.</p>
 
   <h2 id="subscribe">Subscribing to webhooks from an app</h2>
-  <p>An app that wants to hear about things (like Zapier's instant triggers) can add and remove its own webhooks with its key, without anyone visiting Settings. They show in Settings too, marked as added by an app.</p>
+  <p>An app that wants to hear about things (like Zapier's instant triggers) can add and remove its own webhooks with its key, without anyone visiting Kloomie. They show in Apps &amp; Integrations → Developers too, marked as added by an app.</p>
   <table>
     <tr><td><span class="m post">POST</span></td><td><code>/webhooks</code></td><td><code>{"url": "https://…", "events": ["contact.created"]}</code>, or <code>"event"</code> for one. Returns the webhook and its <code>secret</code>, shown this once. Leave out <code>events</code> for all of them.</td></tr>
     <tr><td><span class="m get">GET</span></td><td><code>/webhooks</code></td><td>The webhooks this key added.</td></tr>

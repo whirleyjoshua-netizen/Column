@@ -2,7 +2,7 @@
 
 A Zapier integration built on Kloomie's public API (`/api/v1`, documented at https://app.kloomie.com/developers).
 
-**Sign-in:** a Kloomie API key (Settings → Connections → Connect other apps → New API key), plus the Kloomie address
+**Sign-in:** a Kloomie API key (Apps & Integrations → Developers → New API key), plus the Kloomie address
 (defaults to https://app.kloomie.com).
 
 **Triggers** (instant: each Zap subscribes its own webhook, and every delivery's `X-Kloomie-Signature` is checked):
