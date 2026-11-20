@@ -26,6 +26,39 @@ const isMap = (v) => v && typeof v === 'object' && !Array.isArray(v);
 
 export class Fenced extends Error {}
 
+// Fields that only say when a background check last ran (a calendar's sync every 3 minutes, PSS, Google Contacts).
+// A record whose only change is one of these isn't sent on its own; it goes with that record's next real change.
+// Otherwise those checks would write every few minutes and the database could never pause when nobody's on.
+export const QUIET = { calendars: ['lastSync'], pss: ['syncedAt', 'tried'], gcontacts: ['syncedAt', 'tried'], lists: ['syncedAt'], qbo: ['tried'] };
+function quietless(coll, rec) {
+  const q = QUIET[coll];
+  if (!q || !isMap(rec)) return rec;
+  const o = { ...rec };
+  for (const k of q) delete o[k];
+  return o;
+}
+// What a write sends: every record that changed since the cache (what was last written, quiet fields left out),
+// and every record that's gone.
+export function planWrite(db, cache) {
+  const seen = new Set();
+  const up = [];
+  for (const [coll, v] of Object.entries(db)) {
+    const entries = isMap(v) ? Object.entries(v) : [[coll, v]];
+    const c = isMap(v) ? coll : '_root';
+    for (const [id, rec] of entries) {
+      const s = JSON.stringify(rec);
+      if (s === undefined) continue;
+      const key = c + '\0' + id;
+      seen.add(key);
+      const cmp = QUIET[c] ? pgSafe(JSON.stringify(quietless(c, rec))) : pgSafe(s);
+      if (cache.get(key) === cmp) continue;
+      const ws = c === 'workspaces' ? id : typeof rec?.wsId === 'string' ? rec.wsId : null;
+      up.push({ key, json: `{"c":${JSON.stringify(c)},"i":${JSON.stringify(id)},"w":${JSON.stringify(ws)},"d":${pgSafe(s)}}`, safe: cmp });
+    }
+  }
+  return { up, gone: [...cache.keys()].filter((k) => !seen.has(k)) };
+}
+
 export async function openStore({ url, file, importFile }) {
   if (!url) return fileStore(file);
   const pool = new pg.Pool({ connectionString: url, max: 2, idleTimeoutMillis: 30_000, connectionTimeoutMillis: 15_000 });
@@ -49,7 +82,7 @@ export async function openStore({ url, file, importFile }) {
     const meta = Object.fromEntries((await pool.query('select key, value from column_meta')).rows.map((r) => [r.key, r.value]));
     const db = {};
     for (const r of rows) {
-      cache.set(r.coll + '\0' + r.id, pgSafe(JSON.stringify(r.data)));
+      cache.set(r.coll + '\0' + r.id, pgSafe(JSON.stringify(quietless(r.coll, r.data))));
       if (r.coll === '_root') db[r.id] = r.data;
       else (db[r.coll] ||= {})[r.id] = r.data;
     }
@@ -65,23 +98,7 @@ export async function openStore({ url, file, importFile }) {
 
   async function write(db) {
     // Worked out right away, so later changes in memory don't mix into this write.
-    const seen = new Set();
-    const up = [];
-    for (const [coll, v] of Object.entries(db)) {
-      const entries = isMap(v) ? Object.entries(v) : [[coll, v]];
-      const c = isMap(v) ? coll : '_root';
-      for (const [id, rec] of entries) {
-        const s = JSON.stringify(rec);
-        if (s === undefined) continue;
-        const key = c + '\0' + id;
-        seen.add(key);
-        const safe = pgSafe(s);
-        if (cache.get(key) === safe) continue;
-        const ws = c === 'workspaces' ? id : typeof rec?.wsId === 'string' ? rec.wsId : null;
-        up.push({ key, json: `{"c":${JSON.stringify(c)},"i":${JSON.stringify(id)},"w":${JSON.stringify(ws)},"d":${safe}}`, safe });
-      }
-    }
-    const gone = [...cache.keys()].filter((k) => !seen.has(k));
+    const { up, gone } = planWrite(db, cache);
     if (!up.length && !gone.length) return { changed: 0, removed: 0 };
 
     const client = await pool.connect();
