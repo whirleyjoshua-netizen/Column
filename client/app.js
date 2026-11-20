@@ -6651,7 +6651,16 @@
     const at = (c) => { const i = order.indexOf(widgetKey(c)); return i < 0 ? 1000 + cards.indexOf(c) : i; };
     for (const c of [...cards].sort((a, b) => at(a) - at(b))) { if (hidden.includes(widgetKey(c))) c.remove(); else grid.append(c); }
     const shown = [...grid.children].filter((c) => c.classList.contains('home-card'));
-    const go = (i) => { const c = shown[Math.max(0, Math.min(shown.length - 1, i))]; if (c) HM.slide = widgetKey(c); if (c) grid.scrollTo({ left: c.offsetLeft - grid.offsetLeft - (grid.clientWidth - c.offsetWidth) / 2, behavior: 'smooth' }); };
+    const go = (i) => {
+      const j = Math.max(0, Math.min(shown.length - 1, i)), c = shown[j];
+      if (!c) return;
+      HM.slide = widgetKey(c);
+      dots.forEach((d, k) => d.classList.toggle('on', k === j));
+      const left = c.offsetLeft - grid.offsetLeft - (grid.clientWidth - c.offsetWidth) / 2;
+      grid.scrollTo({ left, behavior: 'smooth' });
+      // Smooth scrolling can be dropped (scroll snapping, a busy page): land on it anyway.
+      setTimeout(() => { if (grid.isConnected && now() !== j) grid.scrollLeft = left; }, 450);
+    };
     const now = () => { const mid = grid.scrollLeft + grid.clientWidth / 2; let best = 0, d = Infinity; shown.forEach((c, i) => { const x = Math.abs(c.offsetLeft - grid.offsetLeft + c.offsetWidth / 2 - mid); if (x < d) { d = x; best = i; } }); return best; };
     const dots = shown.map((c, i) => h('i', { title: c.querySelector('.hc-h b')?.textContent || '', onclick: () => go(i) }));
     const mark = () => { const i = now(); HM.slide = widgetKey(shown[i] || shown[0]); dots.forEach((d, j) => d.classList.toggle('on', j === i)); };
