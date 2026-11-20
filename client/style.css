@@ -491,6 +491,7 @@ body.wide .settings:not(.side) p, body.wide .settings:not(.side) .day-hint { max
 .preview audio { width: 100%; max-width: 420px; }
 .preview .pv-bar { color: #fff; display: flex; gap: 8px; align-items: center; max-width: 100%; }
 .preview .pv-bar span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.preview .pv-bar .btn { color: var(--text); }
 .preview .docx { background: var(--panel); color: var(--text); padding: 18px 22px; border-radius: 10px; width: 100%; max-width: 820px; max-height: calc(100% - 60px); box-sizing: border-box; overflow: auto; font-size: 14px; line-height: 1.55; white-space: pre-wrap; user-select: text; -webkit-user-select: text; }
 .preview .docx > :first-child { margin-top: 0; }
 .preview .docx p { margin: 0 0 0.5em; }
