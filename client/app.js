@@ -254,6 +254,7 @@
       { head: S.workspace.name },
       { label: '🪪 Workspace profile', run: () => profileSheet() },
       ...(canTeam() ? [{ label: '👥 Team', run: () => openTeam() }] : []),
+      { label: '🕒 My shifts', run: () => openMyShifts() },
     ]);
   }
   function addTeam(mode = 'signin') {
@@ -577,6 +578,8 @@
       if (S.teams) api('GET', '/teams').then((y) => { S.teams = y; $('#settings .tm-sec, #apps .tm-sec')?.replaceWith(teamsSection()); }).catch(() => {});
     } else if (msg.type === 'companycam') {
       if (S.companycam) api('GET', '/companycam').then((y) => { S.companycam = y; $('#settings .cc-sec, #apps .cc-sec')?.replaceWith(companycamSection()); }).catch(() => {});
+    } else if (msg.type === 'shifts') {
+      shiftsStale();
     } else if (msg.type === 'presets') {
       if (SV.list) loadPresets();
     } else if (msg.type === 'task') {
@@ -821,6 +824,7 @@
     closeBell();
     if (kind === 'bell') return openBell();
     if (kind === 'tasks') return showTasks();
+    if (kind === 'shifts') { if (!canTeam()) return openMyShifts(); TM.tab = 'shifts'; openTeam(); if (/^\d{4}-\d\d-\d\d$/.test(id)) { TM.date = id; teamDraw(); } return; }
     if (kind === 'task') { const t = taskById(id); return t ? (goalById(t.goalId) ? showStep(t) : showTasks()) : showTasks(); }
     if (kind === 'camp') return campById(id) ? openCampaign(id) : setTab('camps');
     if (kind === 'rec') return openRecord(id);
@@ -16624,7 +16628,7 @@
   // onto someone to book it). At full size it's a page beside the sidebar (sheetOrPage), else the pop-up. -----
   const canTeam = () => memberMay('teamSchedule');
   const TM = { open: false, tab: store.get('teamTab', 'week'), date: null };
-  const TEAM_TABS = [['week', 'This week'], ['ahead', 'Weeks ahead'], ['visits', 'Visits']];
+  const TEAM_TABS = [['shifts', 'Shifts'], ['week', 'This week'], ['ahead', 'Weeks ahead'], ['visits', 'Visits']];
   function openTeam(tab) {
     if (!canTeam()) return toast('An owner or admin decides who sees the team.');
     if (tab) TM.tab = tab;
@@ -16665,6 +16669,7 @@
         onclick: () => { TM.tab = t; store.set('teamTab', t); teamDraw(); } }, label))),
       ...(nav ? [nav] : []), body);
     if (TM.tab === 'week') body.append(teamWeekView(k));
+    else if (TM.tab === 'shifts') body.append(shiftsView(k));
     else if (TM.tab === 'ahead') body.append(forecastSection());
     else teamVisits(k, body);
   }
@@ -16777,7 +16782,153 @@
         p.perDay[i].due ? h('small', { class: 'wl-due' }, `${p.perDay[i].due} due`) : null))),
       h('p', { class: 'day-hint' }, `${fmtHrs(p.bookedMin)} booked · ${p.visits} job visit${p.visits === 1 ? '' : 's'} · ${p.campaigns} campaign${p.campaigns === 1 ? '' : 's'} they own`),
     ]);
+  }  // ----- Shifts (Team plan step 2, the owner 2026-11-20): build the week's work hours, then Send. Owners and admins
+  // build (a draft until Send); everyone sees their own sent shifts (My shifts), and everyone's when an admin lets
+  // members see the team's schedule. Usual hours and time off sit beside them; the builder warns, never blocks. -----
+  const SHF = { week: null, data: null, loading: null, at: 0 };
+  const SH_WARN = { off: 'On their time off', outside: 'Outside their usual hours', overlap: 'Overlaps another of their shifts' };
+  const SH_STATE = { new: 'Not sent yet', changed: 'Changed since it was sent', gone: 'Removed: goes at the next Send', sent: 'Sent' };
+  const hmOut = (m) => `${pad2(Math.floor(m / 60) % 24)}:${pad2(m % 60)}`;
+  const hmIn = (v) => { const [a, b] = String(v || '').split(':').map(Number); return Number.isInteger(a) && Number.isInteger(b) ? a * 60 + b : null; };
+  const shPaid = (s) => Math.max(0, s.end - s.start - (s.breakMin || 0));
+  const shTimes = (s) => `${fmtTime(s.start)}–${fmtTime(s.end % 1440)}${s.end > 1440 ? ' (next day)' : ''}`;
+  const shiftsStale = () => { SHF.at = 0; if (TM.open && TM.tab === 'shifts' && !TM.detail) teamDraw(); if (MYS.open) myShiftsDraw(); };
+  function shiftsView(k) {
+    const week = weekStart(k);
+    if ((SHF.week !== week || Date.now() - SHF.at > 30_000) && !SHF.loading) {
+      SHF.loading = api('GET', '/shifts?week=' + week).then((x) => { SHF.week = week; SHF.data = x; SHF.at = Date.now(); }).catch((e) => toast(e.message)).finally(() => { SHF.loading = null; teamRedraw(); });
+    }
+    const d = SHF.data;
+    if (!d || SHF.week !== week) return h('p', { class: 'day-hint' }, 'Loading the week’s shifts…');
+    const edit = d.canEdit, today = todayKey();
+    const wd = (k2) => keyDate(k2).toLocaleDateString(undefined, { weekday: 'short' });
+    const chip = (s) => {
+      const warn = (d.warnings?.[s.id] || []).map((w) => SH_WARN[w]);
+      return h('button', { class: 'sh-chip ' + (s.state || 'sent') + (warn.length ? ' warn' : ''), 'data-shift': s.id, disabled: !edit,
+        title: [shTimes(s), s.label, s.note, edit ? SH_STATE[s.state] : '', ...warn].filter(Boolean).join(' · '), onclick: (e) => { e.stopPropagation(); if (edit) shiftSheet(s); } },
+        h('b', {}, shTimes(s)), s.label ? h('small', {}, s.label) : null, warn.length ? h('i', { class: 'sh-warn', 'aria-label': warn.join(', ') }, '!') : null);
+    };
+    const offOn = (mid, day) => (d.avail?.[mid]?.off || []).find((o) => day >= o.from && day <= o.to);
+    const rows = d.people.map((p) => {
+      const tot = d.totals[p.id] || 0, over = tot > d.weekMax;
+      return [
+        h(edit ? 'button' : 'div', { class: 'sh-who', 'data-member': p.id, ...(edit ? { onclick: () => availSheet(p.id), title: 'Usual hours and time off' } : {}) }, avatar(p.id), h('span', {}, p.name), h('small', { class: over ? 'bad' : '' }, fmtHrs(tot) + (over ? ' · over 40' : ''))),
+        ...d.days.map((day) => {
+          const mine = d.shifts.filter((s) => s.memberId === p.id && s.date === day).sort((a, b) => a.start - b.start);
+          const off = edit && offOn(p.id, day);
+          return h(edit ? 'button' : 'div', { class: 'sh-cell' + (day === today ? ' today' : '') + (off ? ' off' : ''), 'data-day': day, 'data-member': p.id, ...(edit ? { onclick: () => shiftSheet({ memberId: p.id, date: day }), 'aria-label': `Add a shift for ${p.name} on ${dayName(day)}` } : {}) },
+            off ? h('small', { class: 'sh-off' }, 'Off' + (off.note ? ': ' + off.note : '')) : null, ...mine.map(chip), edit && !mine.length && !off ? h('span', { class: 'sh-add' }, '+') : null);
+        }),
+      ];
+    });
+    const sendBtn = edit ? h('button', { class: 'btn small primary-btn sh-send', disabled: !d.unsent, onclick: () => {
+      api('POST', '/shifts/send', { week }).then((r) => { toast(r.people ? `Sent: ${r.people} ${r.people === 1 ? 'person was' : 'people were'} told` : 'Nothing new to send'); shiftsStale(); }).catch((e) => toast(e.message));
+    } }, d.unsent ? `Send ${d.unsent} change${d.unsent === 1 ? '' : 's'}` : 'All sent') : null;
+    const copyBtn = edit ? h('button', { class: 'btn small sh-copy', onclick: () => api('POST', '/shifts/copy', { from: addDays(week, -7), to: week }).then((r) => { toast(r.copied ? `Copied ${r.copied} shift${r.copied === 1 ? '' : 's'} from last week` : 'Nothing to copy from last week'); shiftsStale(); }).catch((e) => toast(e.message)) }, 'Copy last week') : null;
+    const presetBtn = edit ? h('button', { class: 'btn small sh-presets', onclick: () => presetsSheet() }, 'Saved shifts') : null;
+    const total = Object.values(d.totals).reduce((n, x) => n + x, 0);
+    return h('div', { class: 'sh' },
+      h('div', { class: 'sh-bar' }, h('span', { class: 'sh-sum' }, `${fmtHrs(total)} scheduled` + (d.over?.length ? ` · ${d.over.length} over 40 h` : '')), h('span', { class: 'grow' }), presetBtn, copyBtn, sendBtn),
+      h('div', { class: 'sh-scroll' }, h('div', { class: 'sh-grid' },
+        h('div', { class: 'sh-h' }), ...d.days.map((day) => h('div', { class: 'sh-h' + (day === today ? ' today' : '') }, h('b', {}, wd(day)), h('small', {}, keyDate(day).getDate()))),
+        ...rows.flat())),
+      h('p', { class: 'day-hint' }, edit
+        ? 'Tap a day to add a shift, a shift to change it, a name for their usual hours and time off. Nobody sees changes until you Send; then each person whose shifts changed is told. ! marks time off, outside usual hours or an overlap.'
+        : 'Shifts as they were sent. Your own are also in 🕒 My shifts.'));
   }
+  // One shift: add or change. Saved shifts fill the times in one tap.
+  function shiftSheet(s) {
+    const d = SHF.data, isNew = !s.id;
+    const who = h('select', { class: 'sh-f-who' }, d.people.map((p) => h('option', { value: p.id, selected: p.id === s.memberId }, p.name)));
+    const day = h('input', { type: 'date', class: 'sh-f-day', value: s.date });
+    const from = h('input', { type: 'time', class: 'sh-f-from', value: hmOut(s.start ?? 480) });
+    const to = h('input', { type: 'time', class: 'sh-f-to', value: hmOut(s.end ?? 960) });
+    const brk = h('input', { type: 'number', class: 'sh-f-break', min: 0, max: 600, step: 5, value: s.breakMin ?? 30 });
+    const label = h('input', { class: 'sh-f-label', maxlength: 60, placeholder: 'e.g. Morning, Shop, On call', value: s.label || '' });
+    const note = h('input', { class: 'sh-f-note', maxlength: 300, placeholder: 'A note for them (optional)', value: s.note || '' });
+    const presets = (d.presets || []).map((p) => h('button', { type: 'button', class: 'chip sh-preset', onclick: () => { from.value = hmOut(p.start); to.value = hmOut(p.end % 1440); brk.value = p.breakMin; label.value = p.label; } }, `${p.label} · ${shTimes(p)}`));
+    const body = () => ({ memberId: who.value, date: day.value, start: hmIn(from.value), end: hmIn(to.value), breakMin: Number(brk.value) || 0, label: label.value, note: note.value });
+    const back = () => { SHF.at = 0; TM.detail = false; teamDraw(); };
+    const save = h('button', { class: 'btn primary-btn sh-save', onclick: () => api(isNew ? 'POST' : 'PATCH', isNew ? '/shifts' : '/shifts/' + s.id, { ...body(), ...(s.state === 'gone' ? { gone: false } : {}) }).then(back).catch((e) => toast(e.message)) }, isNew ? 'Add shift' : s.state === 'gone' ? 'Keep this shift' : 'Save');
+    const del = isNew || s.state === 'gone' ? null : h('button', { class: 'btn danger sh-del', 'data-label': '1', onclick: (e) => confirmClick(e.currentTarget, () => api('DELETE', '/shifts/' + s.id).then(back).catch((er) => toast(er.message))) }, 'Remove');
+    const warn = (d.warnings?.[s.id] || []).map((w) => h('p', { class: 'sh-warn-line' }, '! ' + SH_WARN[w]));
+    teamSheet(isNew ? 'New shift' : 'Shift', [
+      presets.length ? h('div', { class: 'chips sh-presets-row' }, presets) : null,
+      h('label', { class: 'field' }, h('span', {}, 'Who'), who), h('label', { class: 'field' }, h('span', {}, 'Day'), day),
+      h('div', { class: 'row-in' }, h('label', { class: 'field' }, h('span', {}, 'From'), from), h('label', { class: 'field' }, h('span', {}, 'To'), to), h('label', { class: 'field' }, h('span', {}, 'Break (min)'), brk)),
+      h('label', { class: 'field' }, h('span', {}, 'Name'), label), h('label', { class: 'field' }, h('span', {}, 'Note'), note),
+      ...warn, s.state && s.state !== 'new' ? h('p', { class: 'day-hint' }, SH_STATE[s.state] + (s.pub && s.state !== 'sent' ? ` (they have ${dayName(s.pub.date)} ${shTimes(s.pub)})` : '')) : null,
+      h('div', { class: 'btns' }, save, del),
+    ]);
+  }
+  // Saved shifts: a name and hours, to fill a shift in one tap.
+  function presetsSheet() {
+    const list = (SHF.data.presets || []).map((p) => ({ ...p }));
+    const box = h('div', { class: 'sh-plist' });
+    const draw = () => box.replaceChildren(...list.map((p, i) => {
+      const f = h('input', { type: 'time', value: hmOut(p.start), oninput: (e) => (p.start = hmIn(e.target.value)) });
+      const t = h('input', { type: 'time', value: hmOut(p.end % 1440), oninput: (e) => (p.end = hmIn(e.target.value)) });
+      return h('div', { class: 'row-in sh-prow' }, h('input', { class: 'sh-p-label', maxlength: 60, placeholder: 'Name', value: p.label || '', oninput: (e) => (p.label = e.target.value) }), f, t,
+        h('input', { type: 'number', min: 0, max: 600, step: 5, value: p.breakMin || 0, title: 'Break (min)', oninput: (e) => (p.breakMin = Number(e.target.value) || 0) }),
+        h('button', { class: 'icon-btn', 'aria-label': 'Remove', onclick: () => { list.splice(i, 1); draw(); } }, '×'));
+    }), h('button', { class: 'btn small sh-p-add', onclick: () => { list.push({ label: '', start: 480, end: 960, breakMin: 30 }); draw(); } }, '+ Saved shift'));
+    draw();
+    teamSheet('Saved shifts', [h('p', { class: 'day-hint' }, 'Hours your team works often (Morning 7–3, Late 2–10). They fill a new shift in one tap.'), box,
+      h('div', { class: 'btns' }, h('button', { class: 'btn primary-btn sh-p-save', onclick: () => api('PUT', '/shifts/presets', { presets: list }).then(() => { SHF.at = 0; TM.detail = false; teamDraw(); }).catch((e) => toast(e.message)) }, 'Save'))]);
+  }
+  // Usual hours and time off: the person's own (My shifts) or, for owners and admins, anyone's (from the Team page).
+  const SH_DAYS = [0, 1, 2, 3, 4, 5, 6].map((i) => keyDate(addDays('2026-11-22', i)).toLocaleDateString(undefined, { weekday: 'long' }));
+  function availEditor(memberId, done) {
+    const box = h('div', { class: 'shav' }, h('p', { class: 'day-hint' }, 'Loading…'));
+    api('GET', '/availability/' + memberId).then((a) => {
+      const week = (a.week || SH_DAYS.map((_, i) => (i > 0 && i < 6 ? [[480, 1020]] : []))).map((x) => x.map((w) => [...w]));
+      const off = (a.off || []).map((o) => ({ ...o }));
+      const offBox = h('div', { class: 'shav-off' });
+      const drawOff = () => offBox.replaceChildren(...off.map((o, i) => h('div', { class: 'row-in shav-orow' },
+        h('input', { type: 'date', value: o.from, oninput: (e) => (o.from = e.target.value) }), h('input', { type: 'date', value: o.to, oninput: (e) => (o.to = e.target.value) }),
+        h('input', { maxlength: 120, placeholder: 'Why (optional)', value: o.note || '', oninput: (e) => (o.note = e.target.value) }),
+        h('button', { class: 'icon-btn', 'aria-label': 'Remove', onclick: () => { off.splice(i, 1); drawOff(); } }, '×'))),
+        h('button', { class: 'btn small shav-o-add', onclick: () => { off.push({ from: todayKey(), to: todayKey(), note: '' }); drawOff(); } }, '+ Time off'));
+      drawOff();
+      const dayRow = (name, i) => {
+        const w = week[i][0];
+        const on = h('input', { type: 'checkbox', checked: !!w, onchange: (e) => { week[i] = e.target.checked ? [[480, 1020]] : []; box.replaceChildren(...build()); } });
+        return h('div', { class: 'shav-day', 'data-day': i }, h('label', { class: 'shav-dname' }, on, h('span', {}, name)),
+          w ? h('span', { class: 'row-in' }, h('input', { type: 'time', value: hmOut(w[0]), oninput: (e) => (w[0] = hmIn(e.target.value)) }), '–', h('input', { type: 'time', value: hmOut(Math.min(w[1], 1439)), oninput: (e) => (w[1] = hmIn(e.target.value) || 1440) })) : h('small', { class: 'day-hint' }, 'Not working'));
+      };
+      const build = () => [h('div', { class: 'any-h' }, 'Usual hours'), ...SH_DAYS.map(dayRow), h('div', { class: 'any-h' }, 'Time off'), offBox,
+        h('div', { class: 'btns' }, h('button', { class: 'btn primary-btn shav-save', onclick: () => api('PUT', '/availability/' + memberId, { week, off }).then(() => { toast('Saved'); SHF.at = 0; done?.(); }).catch((e) => toast(e.message)) }, 'Save'))];
+      box.replaceChildren(...build());
+    }).catch((e) => box.replaceChildren(h('p', { class: 'err' }, e.message)));
+    return box;
+  }
+  function availSheet(memberId) {
+    const p = SHF.data?.people.find((x) => x.id === memberId);
+    teamSheet(p ? `${p.name}’s hours and time off` : 'Hours and time off', [availEditor(memberId, () => { TM.detail = false; teamDraw(); })]);
+  }
+  // My shifts: what each person was sent, the next four weeks, with their usual hours and time off.
+  const MYS = { open: false, data: null };
+  function openMyShifts() {
+    MYS.open = true;
+    MYS.data = null;
+    sheetOrPage('My shifts', [h('div', { class: 'mys' })]);
+    myShiftsDraw();
+  }
+  function myShiftsDraw() {
+    const box = $('#sheet .mys');
+    if (!box) { MYS.open = false; return; }
+    api('GET', '/shifts/mine?days=28').then((x) => {
+      if (!box.isConnected) return;
+      const byWeek = new Map();
+      for (const s of x.shifts) (byWeek.get(weekStart(s.date)) || byWeek.set(weekStart(s.date), []).get(weekStart(s.date))).push(s);
+      box.replaceChildren(
+        x.shifts.length ? h('div', { class: 'mys-list' }, [...byWeek].map(([wk, l]) => [h('div', { class: 'any-h' }, `Week of ${keyDate(wk).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} · ${fmtHrs(l.reduce((n, s) => n + shPaid(s), 0))}`),
+          ...l.map((s) => h('div', { class: 'mys-row', 'data-shift': s.id }, h('b', {}, dayName(s.date)), h('span', {}, shTimes(s)), h('small', {}, [s.label, s.breakMin ? `${s.breakMin} min break` : '', s.note].filter(Boolean).join(' · '))))]).flat())
+          : h('p', { class: 'day-hint mys-none' }, 'No shifts sent to you for the next four weeks.'),
+        h('details', { class: 'mys-av' }, h('summary', {}, 'My usual hours and time off'), availEditor(S.me.memberId)));
+    }).catch((e) => box.replaceChildren(h('p', { class: 'err' }, e.message)));
+  }
+
   // The day's job visits, a row per person, and the jobs still waiting for one (Projects on).
   function teamVisits(k, host) {
     if (!TS.data || TS.date !== k) {

@@ -64,7 +64,7 @@ ok(await A.ev(`(() => { const t = [...document.querySelectorAll('#menu button')]
 await A.ev(`([...document.querySelectorAll('#menu button')].find((b) => b.textContent === '👥 Team').click(), true)`);
 ok(await A.until(`!!document.querySelector('#sheet .tm .wl-rows')`, 8000), 'the Team page opens on This week');
 ok(await A.ev(`!!document.querySelector('#sheet .sheet.page-view')`), 'as a page beside the sidebar, at full size');
-ok(await A.ev(`[...document.querySelectorAll('#sheet .tm-tab')].map((b) => b.dataset.tab).join()`) === 'week,ahead', 'tabs: This week and Weeks ahead (Visits comes with Boards on)');
+ok(await A.ev(`[...document.querySelectorAll('#sheet .tm-tab')].map((b) => b.dataset.tab).join()`) === 'shifts,week,ahead', 'tabs: Shifts, This week and Weeks ahead (Visits comes with Boards on)');
 // It keeps up while it's open.
 const openQ = `document.querySelector('#sheet .wl-row[data-member="${jo}"] [data-k=open] b')?.textContent`;
 const before = Number(await A.ev(openQ));

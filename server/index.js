@@ -47,6 +47,7 @@ import { newsModule } from './news.js';
 import { qrSvg } from './qr.js';
 import { agentsModule, AGENTS } from './agents.js';
 import { bookingsModule } from './bookings.js';
+import { shiftsModule } from './shifts.js';
 import { postizModule } from './postiz.js';
 import { integrationsModule } from './integrations.js';
 import { makeImage } from './images.js';
@@ -8233,6 +8234,7 @@ async function api(req, res, url) {
     if (out !== null) return;
   }
   if (a === 'calendly' || a === 'calcom') return BOOK.route(req, res, parts, auth, ws);
+  if (a === 'shifts' || a === 'availability') return SHIFTS.route(req, res, parts, auth, ws);
   if (a === 'bookings' && m === 'GET' && !b) return send(res, 200, { bookings: BOOK.list(ws, auth, Object.fromEntries(url.searchParams)) });
   if (a === 'postiz') {
     const out = await POSTIZ.route(req, res, parts, auth, ws);
@@ -11885,6 +11887,8 @@ async function agentEmail(ws, memberId, { name, email, subject, text }) {
 }
 // Postiz (postiz.js): social posting through the team's own Postiz account.
 const POSTIZ = postizModule({ bind: OAUTH_BIND, db, save, broadcast, cleanText, readJson, send, seal, unseal, isAdmin, rid, alarm, allowLocal: process.env.ALLOW_LOCAL_WEBHOOKS === '1', cloudUrl: process.env.POSTIZ_URL || undefined });
+// Work shifts, usual hours and time off (shifts.js): the Team page's Shifts.
+const SHIFTS = shiftsModule({ db, save, broadcast, readJson, send, isAdmin, rid, cleanText, notify: (...a) => notify(...a), memberMay, memberOff, isDay, addDays, teamDay });
 // Calendly and Cal.com (bookings.js): bookings land on contacts, and on a job's visits or the host's day.
 const visitKindFor = (title) => VISIT_KINDS.find((k) => k !== 'Visit' && new RegExp(`\\b${k}\\b`, 'i').test(title)) || 'Visit';
 const contactField = (rec) => { const p = db.projects[rec.projectId]; return typeOfP(p, rec.typeId)?.fields.find((f) => f.type === 'contact') || null; };
@@ -12620,6 +12624,7 @@ async function removeMember(ws, m, { removed = false } = {}) {
   await Promise.all(Object.values(db.calendars).filter(theirs).map(async (conn) => { await revokeCalendar(conn); disconnectCalendar(conn); }));
   DBX.forget(wsId, id);
   await BOOK.memberGone(wsId, id).catch(() => {});
+  SHIFTS.memberGone(wsId, id);
   CARDS.forgetMember(wsId, id);
   for (const n of Object.values(db.notices)) if (theirs(n)) delete db.notices[n.id];
   // Google Contacts reads their Google account, so it goes with them; its people stay.
@@ -12788,6 +12793,9 @@ async function buildExport(x) {
     contacts: () => !mineOnly && me.role === 'owner',
     // Bookings (bookings.js): one's own, and the team's for an owner's team export.
     bookings: (y) => y.memberId === me.id || (!mineOnly && me.role === 'owner' && y.scope === 'team'),
+    // Shifts (shifts.js): one's own, and everyone's in an owner's team export; usual hours and time off likewise.
+    shifts: (y) => y.memberId === me.id || y.pub?.memberId === me.id || (!mineOnly && me.role === 'owner'),
+    availability: (y) => y.memberId === me.id || (!mineOnly && me.role === 'owner'),
   };
   const data = {};
   for (const [coll, ok] of Object.entries(sees)) data[coll] = Object.values(db[coll] || {}).filter((y) => inWs(y) && ok(y) && made(y));

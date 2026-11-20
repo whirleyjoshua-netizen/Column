@@ -34,7 +34,8 @@ try {
   // Ben's load: three given to him (one overdue, one due this week, one with no date), one of his own with no date
   // and a private-sounding name, one done this week, two hours on Wednesday and a repeating 30 minutes every weekday.
   await ada('POST', '/tasks', { text: 'Late thing', assigneeId: benId, due: plus(sunday, -2) });
-  await ada('POST', '/tasks', { text: 'This week thing', assigneeId: benId, due: plus(sunday, 4) });
+  // Saturday: the week's last day, so it's never overdue whatever day the test runs (Thursday was, on a Friday).
+  await ada('POST', '/tasks', { text: 'This week thing', assigneeId: benId, due: plus(sunday, 6) });
   await ada('POST', '/tasks', { text: 'Someday thing', assigneeId: benId });
   await ben('POST', '/tasks', { text: 'Secret salary review', due: null });
   const done = (await ada('POST', '/tasks', { text: 'Finished thing', assigneeId: benId })).body;
@@ -59,7 +60,7 @@ try {
   ok(b.doneWeek === 1, `1 done this week (${b.doneWeek})`);
   ok(b.bookedMin === 120 + 5 * 30, `booked: 2 hours plus the weekday standups (${b.bookedMin} min)`);
   ok(b.perDay.length === 7 && b.perDay[3].min === 150 && b.perDay[0].min === 0, 'split by day: Wednesday has 2.5 hours, Sunday none');
-  ok(b.perDay[4].due === 1, 'and the due task sits on Thursday');
+  ok(b.perDay[6].due === 1, 'and the due task sits on Saturday');
   const a = r.body.people.find((x) => x.name === 'Ada');
   ok(a && a.open === 1, 'Ada is listed with her own task');
   const raw = JSON.stringify(r.body);
