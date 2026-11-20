@@ -86,7 +86,7 @@ try {
   await A.tap(T('.cc-tr:not(.cc-th)'));
   ok(await A.until(`!!document.querySelector('#sheet .task-win')`), 'a row opens the task beside the page');
   // The drawer (part 2): who, due, priority, status; description, checklist, subtasks, dependencies, comments, activity.
-  ok(await A.ev(`[...document.querySelectorAll('#sheet .td-row .td-l')].map((x) => x.textContent).join('|') === 'Assignee|Due|Priority|Status' && [...document.querySelectorAll('#sheet .td-sec-h')].map((x) => x.textContent.split(' ·')[0]).join('|').startsWith('Description|Checklist|Subtasks|Dependencies')`), 'the drawer: Assignee, Due, Priority, Status, then Description, Checklist, Subtasks, Dependencies…');
+  ok(await A.ev(`[...document.querySelectorAll('#sheet .td-row .td-l')].map((x) => x.textContent).join('|') === 'Assignee|Starts|Due|Priority|Status' && [...document.querySelectorAll('#sheet .td-sec-h')].map((x) => x.textContent.split(' ·')[0]).join('|').startsWith('Description|Checklist|Subtasks|Dependencies')`), 'the drawer: Assignee, Starts, Due, Priority, Status, then Description, Checklist, Subtasks, Dependencies…');
   ok(await A.ev(`!!document.querySelector('#sheet .td-badge.wait') && document.querySelector('#sheet .td-status [data-st=doing]').disabled && document.querySelector('#sheet .td-dep')?.textContent.includes('Call new leads')`), 'a waiting task says Waiting, can’t be started, and shows what it waits for');
   await A.ev(`document.querySelector('#sheet [aria-label=Close]').click(); true`);
   await A.ev(`${T('.cc-wf [data-wf=open]')}.click(); true`);

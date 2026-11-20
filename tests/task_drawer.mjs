@@ -78,6 +78,19 @@ try {
   const walk = ts.find((x) => x.text === 'Walk the job'), photos = ts.find((x) => x.text === 'Before photos');
   ok(walk && walk.description === 'With the customer' && walk.checklist?.[0]?.text === 'Photos' && !walk.checklist[0].done, 'a saved campaign’s run keeps the description and the checklist, unticked');
   ok(photos && photos.parentId === walk.id, 'and the subtask, under its new task');
+  // Start dates (Command Center part 4, the timeline): a day or none, never after the due day.
+  const dt = (await maria('POST', '/tasks', { goalId: g.id, text: 'Order the fabric', due: '2026-12-10', startOn: '2026-12-03' })).body;
+  ok(dt.startOn === '2026-12-03' && dt.due === '2026-12-10', 'a task can start on a day and be due on another');
+  r = await maria('PATCH', '/tasks/' + dt.id, { startOn: 'soon' });
+  ok(r.status === 400, 'a start that isn’t a day is refused');
+  r = await maria('PATCH', '/tasks/' + dt.id, { due: '2026-12-01' });
+  ok(r.body.due === '2026-12-01' && r.body.startOn === '2026-12-01', 'moving the due day before the start brings the start with it');
+  r = await maria('PATCH', '/tasks/' + dt.id, { startOn: '2026-12-05', due: '2026-12-08' });
+  ok(r.body.startOn === '2026-12-05' && r.body.due === '2026-12-08', 'both move together (a bar dragged on the timeline)');
+  r = await maria('PATCH', '/tasks/' + dt.id, { startOn: null });
+  ok(r.body.startOn == null, 'and the start can be cleared');
+  r = await olga('PATCH', '/tasks/' + dt.id, { startOn: '2026-12-06' });
+  ok(r.status === 404 || r.status === 403, 'someone from another team can’t move it: ' + r.status);
 } catch (e) { ok(false, e.stack); }
 srv.kill();
 if (fails) console.log(srv.log.split('\n').slice(-10).join('\n'));

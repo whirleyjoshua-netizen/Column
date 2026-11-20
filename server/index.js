@@ -1371,6 +1371,13 @@ function applyTask(t, body) {
     if (body.due !== null && !isDay(body.due)) throw badRequest('Bad due date.');
     t.due = body.due;
   }
+  // A start day (the campaign timeline, Command Center part 4): never after the due day; a due moved before it brings it.
+  if (body.startOn !== undefined) {
+    if (body.startOn !== null && body.startOn !== '' && !isDay(body.startOn)) throw badRequest('Bad start date.');
+    if (body.startOn) t.startOn = body.startOn;
+    else delete t.startOn;
+  }
+  if (t.startOn && t.due && t.startOn > t.due) t.startOn = t.due;
   if (body.repeat !== undefined) t.repeat = REPEATS.includes(body.repeat) ? body.repeat : null;
   // Moved into another job's campaign, a task that was its old campaign's job's becomes the new job's (2026-11-18).
   const wasJob = taskCamp(t)?.recordId || null;
@@ -2899,7 +2906,7 @@ const taskCamp = (t) => db.campaigns[db.goals[t?.goalId]?.campaignId] || null;
 // ahead finishes a phase to see what opens next. Go live puts its tasks and phases back as they were before the test
 // (who they were for, unticked, the history and comments of the test gone), keeps changes to what they say, deletes
 // the tasks its automations made in the test, and empties the log. A sub-campaign runs in its main one's test.
-const TEST_TASK = ['done', 'doneAt', 'doneBy', 'doneById', 'doneVia', 'doneDue', 'approved', 'approvedById', 'submitted', 'returned', 'status', 'assigneeId', 'roleId', 'castId', 'signoff', 'assignedAt', 'assignedBy', 'openedAt', 'due', 'skipped', 'reopens', 'hist', 'firstDue'];
+const TEST_TASK = ['done', 'doneAt', 'doneBy', 'doneById', 'doneVia', 'doneDue', 'approved', 'approvedById', 'submitted', 'returned', 'status', 'assigneeId', 'roleId', 'castId', 'signoff', 'assignedAt', 'assignedBy', 'openedAt', 'due', 'startOn', 'skipped', 'reopens', 'hist', 'firstDue'];
 const TEST_GOAL = ['finished', 'finishedAt', 'finishedById', 'reopens', 'staged', 'skipped'];
 const TEST_HOLDS = ['visit', 'invoice', 'text', 'email', 'money', 'doc', 'vault', 'webhook', 'stock', 'teams'];
 const TEST_LOG = 200;

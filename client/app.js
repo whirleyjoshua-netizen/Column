@@ -6918,6 +6918,250 @@
   // ----- a campaign's board (2026-11-20): its whiteboard in the Plan tab. Sketch the workflow, then Make phases (shapes
   // become phases, arrows become "waits for", and the shapes become live phase cards) or Make tasks (stickies become tasks
   // in a phase). The editor is kept across redraws and destroyed when you leave the board. -----
+  // ----- Command Center part 4 (the owner's brainstorm, 2026-11-20): the campaign's tasks as a list, a board, a
+  // timeline and a calendar. One set of tasks, four ways to see it; every view drags: a card to another column, a bar
+  // along the timeline or by either end, a task onto another day. -----
+  const ccStatus = (t) => (t.done ? ['done', 'Done'] : taskBlockers(t).length ? ['wait', 'Waiting'] : t.submitted ? ['sign', 'For sign-off'] : isOverdue(t) ? ['late', 'Overdue'] : t.status === 'doing' ? ['doing', 'In progress'] : ['open', 'Not started']);
+  const ccWorkView = () => (['list', 'board', 'timeline', 'calendar'].includes(K.wview) ? K.wview : (K.wview = store.get('ccWorkView', 'list')));
+  // A change from a view: shown at once (patchTask puts it in the list before the server answers), saved, drawn again.
+  function ccTaskSet(t, changes) {
+    const p = patchTask(t, changes);
+    renderCamps();
+    p.then(() => renderCamps());
+  }
+  const ccWho = (t) => (t.assigneeId ? memberName(t.assigneeId) : t.roleId ? roleById(t.roleId)?.name || 'A role' : t.castId ? 'A role' : '');
+  function ccCard(t, { phase = true } = {}) {
+    const g = goalById(t.goalId), [sc, sl] = ccStatus(t);
+    const cl = t.checklist?.length ? `☑ ${t.checklist.filter((x) => x.done).length}/${t.checklist.length}` : '';
+    const el = h('div', { class: 'ccb-card' + (t.done ? ' done' : '') + ' s-' + sc, 'data-task': t.id, role: 'button', tabindex: '0', title: t.text,
+      onclick: () => taskWindow(t), onkeydown: (e) => { if (e.key === 'Enter') taskWindow(t); } },
+      h('b', { class: 'ccb-t' }, t.text),
+      phase && g ? h('small', { class: 'ccb-ph' }, g.title) : null,
+      h('div', { class: 'ccb-meta' },
+        t.assigneeId ? avatar(t.assigneeId) : ccWho(t) ? h('small', { class: 'ccb-role' }, ccWho(t)) : null,
+        t.due ? h('small', { class: 'ccb-due' + (isOverdue(t) ? ' late' : '') }, (t.startOn && t.startOn !== t.due ? dueLabel(t.startOn) + ' → ' : '') + dueLabel(t.due)) : null,
+        t.priority ? h('span', { class: 'cc-prio p' + t.priority }, PRIO[t.priority]) : null,
+        cl ? h('small', {}, cl) : null,
+        sc === 'wait' || sc === 'sign' ? h('span', { class: 'cc-status ' + sc }, sl) : null));
+    return el;
+  }
+  // Board: columns by status, phase or person; drag a card across to change it.
+  function ccTaskBoard(c, pick, tasks, phases) {
+    const by = ['status', 'phase', 'person'].includes(K.wgroup) ? K.wgroup : 'status';
+    let cols;
+    if (by === 'status') {
+      // The Done column keeps what's done even under Open, so a card dragged there stays in sight.
+      const list = K.wfilter === 'done' || K.wfilter === 'all' ? pick : [...new Set([...pick, ...tasks.filter((t) => t.done)])];
+      const key = (t) => { const s = ccStatus(t)[0]; return s === 'late' ? (t.status === 'doing' ? 'doing' : 'open') : s; };
+      cols = [['open', 'Not started', { status: null, done: false }], ['doing', 'In progress', { status: 'doing', done: false }], ['wait', 'Waiting', null], ['sign', 'For sign-off', null], ['done', 'Done', { done: true }]]
+        .map(([k, l, set]) => ({ k, label: l, set, list: list.filter((t) => key(t) === k), why: k === 'wait' ? 'A task waits on what it’s set to wait for' : k === 'sign' ? 'A task goes for sign-off when it’s finished' : '' }))
+        .filter((x) => x.k !== 'sign' || x.list.length);
+    } else if (by === 'phase') {
+      cols = phases.map((g) => ({ k: g.id, label: g.title, set: { goalId: g.id }, list: pick.filter((t) => t.goalId === g.id) }));
+    } else {
+      const roles = pick.filter((t) => !t.assigneeId && (t.roleId || t.castId));
+      cols = [{ k: '', label: 'Nobody', set: { assigneeId: null }, list: pick.filter((t) => !t.assigneeId && !t.roleId && !t.castId) },
+        ...S.workspace.members.filter((m) => !m.gone).map((m) => ({ k: m.id, label: m.name, av: m.id, set: { assigneeId: m.id }, list: pick.filter((t) => t.assigneeId === m.id) })),
+        ...(roles.length ? [{ k: 'role', label: 'By role', set: null, list: roles, why: 'Tasks for a role go to whoever has it' }] : [])];
+    }
+    const board = h('div', { class: 'ccb' }, cols.map((col) => h('div', { class: 'ccb-col' + (col.set ? '' : ' nodrop'), 'data-col': col.k, title: col.why || '' },
+      h('div', { class: 'ccb-h' }, col.av ? avatar(col.av) : null, h('b', {}, col.label), h('small', {}, String(col.list.length))),
+      h('div', { class: 'ccb-list' }, col.list.map((t) => {
+        const el = ccCard(t, { phase: by !== 'phase' });
+        el.addEventListener('pointerdown', (ev) => shDrag(ev, el, {
+          over: (x, y) => document.elementFromPoint(x, y)?.closest('.ccb-col:not(.nodrop)'),
+          drop: (x, y) => { const to = document.elementFromPoint(x, y)?.closest('.ccb-col'); return to && to.dataset.col !== col.k ? to.dataset.col : null; },
+          done: (k) => {
+            const to = cols.find((x) => x.k === k);
+            if (!to?.set) return toast(to?.why || 'That column fills itself.');
+            // A task that's waiting (or with its sign-off) moves on by itself; only Done is up to you.
+            if (by === 'status' && (col.k === 'wait' || col.k === 'sign') && k !== 'done') return toast(col.k === 'wait' ? waitText(taskBlockers(t)) + ': it moves on by itself once that’s done.' : 'It’s waiting for its sign-off.');
+            const set = { ...to.set };
+            if (by === 'status' && set.status === null) set.status = '';
+            if (by === 'status' && !t.done && set.done === false) delete set.done;
+            ccTaskSet(t, set);
+          },
+        }));
+        return el;
+      }), col.list.length ? null : h('p', { class: 'ccb-empty' }, col.set ? 'Drop a task here' : 'None')))));
+    const groups = h('div', { class: 'seg seg-sm ccb-by' }, h('small', {}, 'Columns:'), [['status', 'Status'], ['phase', 'Phase'], ['person', 'Person']].map(([k, l]) =>
+      h('button', { class: by === k ? 'on' : null, 'data-by': k, onclick: () => { K.wgroup = k; renderCamps(); } }, l)));
+    return [groups, h('div', { class: 'ccb-scroll' }, board), h('p', { class: 'day-hint' }, 'Drag a card to another column to change it; tap one to open it.')];
+  }
+  // Timeline: a bar for each task from its start to its due day, grouped by phase, with what it waits for drawn as an
+  // arrow. Drag a bar to move it, pull either end to change the start or the due day, drag across an empty row to give a
+  // task its days.
+  function ccTimeline(c, pick, phases) {
+    const today = todayKey();
+    const px = K.wzoom === 'month' ? 14 : 34;
+    const dated = pick.filter((t) => t.due || t.startOn);
+    const ends = [today, ...(c.start ? [c.start] : []), ...(c.end ? [c.end] : []), ...dated.flatMap((t) => [t.startOn || t.due, t.due || t.startOn])].sort();
+    const from = addDays(K.wfrom && K.wfrom < ends[0] ? K.wfrom : ends[0], -3), to = addDays(ends.at(-1) > addDays(today, 21) ? ends.at(-1) : addDays(today, 21), 7);
+    const n = dayGap(from, to) + 1, W = n * px;
+    const xOf = (k) => dayGap(from, k) * px;
+    const days = Array.from({ length: n }, (_, i) => addDays(from, i));
+    const head = h('div', { class: 'cct-row cct-head' }, h('div', { class: 'cct-name' }),
+      h('div', { class: 'cct-lane cct-scale', style: `width:${W}px` },
+        ...days.filter((k, i) => i === 0 || k.endsWith('-01')).map((k) => h('span', { class: 'cct-mon', style: `left:${xOf(k)}px` }, keyDate(k).toLocaleDateString(undefined, { month: 'short', year: k.slice(0, 4) === today.slice(0, 4) ? undefined : 'numeric' }))),
+        ...days.filter((k) => px > 20 || keyDate(k).getDay() === 1).map((k) => h('span', { class: 'cct-day' + (k === today ? ' today' : ''), style: `left:${xOf(k)}px;width:${px > 20 ? px : px * 7}px` }, px > 20 ? String(keyDate(k).getDate()) : keyDate(k).getDate() + ''))));
+    const back = h('div', { class: 'cct-back', style: `width:${W}px;--px:${px}px` },
+      ...days.filter((k) => [0, 6].includes(keyDate(k).getDay())).map((k) => h('span', { class: 'cct-we', style: `left:${xOf(k)}px;width:${px}px` })),
+      c.start ? h('span', { class: 'cct-edge', style: `left:${xOf(c.start)}px`, title: 'Campaign starts' }) : null,
+      c.end ? h('span', { class: 'cct-edge end', style: `left:${xOf(c.end) + px}px`, title: 'Campaign ends' }) : null,
+      h('span', { class: 'cct-today', style: `left:${xOf(today) + px / 2}px`, title: 'Today' }));
+    const dayAt = (lane, x) => addDays(from, Math.max(0, Math.min(n - 1, Math.floor((x - lane.getBoundingClientRect().left) / px))));
+    const bars = new Map();
+    const bar = (t) => {
+      const [sc] = ccStatus(t);
+      const a = t.startOn || t.due, b = t.due || t.startOn;
+      const label = h('span', {}, t.text);
+      const el = h('div', { class: 'cct-bar s-' + sc + (t.done ? ' done' : '') + (a === b ? ' one' : ''), 'data-task': t.id, title: `${t.text}\n${a === b ? dueLabel(b) : dueLabel(a) + ' → ' + dueLabel(b)}${ccWho(t) ? ' · ' + ccWho(t) : ''}`,
+        style: `left:${xOf(a)}px;width:${(dayGap(a, b) + 1) * px}px` },
+        h('span', { class: 'cct-h l' }), t.assigneeId ? avatar(t.assigneeId) : null, label, h('span', { class: 'cct-h r' }));
+      bars.set(t.id, { a, b });
+      el.addEventListener('pointerdown', (ev) => {
+        if (ev.button !== 0) return;
+        ev.preventDefault(); ev.stopPropagation();
+        const mode = ev.target.closest('.cct-h.l') ? 'start' : ev.target.closest('.cct-h.r') ? 'end' : 'move';
+        const x0 = ev.clientX;
+        let moved = false, na = a, nb = b;
+        el.setPointerCapture?.(ev.pointerId);
+        const move = (e) => {
+          if (!moved && Math.abs(e.clientX - x0) < 5) return;
+          moved = true; el.classList.add('dragging'); document.body.classList.add('is-dragging');
+          const d = Math.round((e.clientX - x0) / px);
+          if (mode === 'move') { na = addDays(a, d); nb = addDays(b, d); }
+          else if (mode === 'start') { na = addDays(a, d); if (na > b) na = b; }
+          else { nb = addDays(b, d); if (nb < a) nb = a; }
+          el.style.left = xOf(na) + 'px'; el.style.width = (dayGap(na, nb) + 1) * px + 'px';
+          el.title = na === nb ? dueLabel(nb) : dueLabel(na) + ' → ' + dueLabel(nb);
+          el.classList.toggle('one', na === nb);
+        };
+        const up = (e) => {
+          el.removeEventListener('pointermove', move); el.removeEventListener('pointerup', up); el.removeEventListener('pointercancel', up);
+          document.body.classList.remove('is-dragging'); el.classList.remove('dragging');
+          if (!moved) { if (e.type === 'pointerup') taskWindow(t); return; }
+          if (e.type !== 'pointerup' || (na === a && nb === b)) return void renderCamps();
+          const set = {};
+          if (nb !== (t.due || null)) set.due = nb;
+          const start = na === nb ? null : na;
+          if (start !== (t.startOn || null)) set.startOn = start;
+          if (Object.keys(set).length) ccTaskSet(t, set); else renderCamps();
+        };
+        el.addEventListener('pointermove', move); el.addEventListener('pointerup', up); el.addEventListener('pointercancel', up);
+      });
+      return el;
+    };
+    const taskRow = (t) => {
+      const lane = h('div', { class: 'cct-lane', style: `width:${W}px`, 'data-task': t.id }, t.due || t.startOn ? bar(t) : null);
+      // An empty row: drag across it to give the task its days, or tap a day to make it due then.
+      lane.addEventListener('pointerdown', (ev) => {
+        if (ev.button !== 0 || ev.target !== lane) return;
+        const a = dayAt(lane, ev.clientX), x0 = ev.clientX;
+        let b = a, drew = false;
+        const ghost = h('div', { class: 'cct-bar s-open cct-draw' });
+        lane.setPointerCapture?.(ev.pointerId);
+        const move = (e) => {
+          if (!drew && Math.abs(e.clientX - x0) < 5) return;
+          if (!drew) { drew = true; lane.append(ghost); }
+          b = dayAt(lane, e.clientX);
+          const [x, y] = a < b ? [a, b] : [b, a];
+          ghost.style.left = xOf(x) + 'px'; ghost.style.width = (dayGap(x, y) + 1) * px + 'px';
+        };
+        const up = (e) => {
+          lane.removeEventListener('pointermove', move); lane.removeEventListener('pointerup', up); lane.removeEventListener('pointercancel', up);
+          ghost.remove();
+          if (e.type !== 'pointerup') return;
+          const [x, y] = a < b ? [a, b] : [b, a];
+          if (!drew && (t.due || t.startOn)) return; // a tap beside a bar does nothing
+          ccTaskSet(t, x === y ? { due: y, startOn: null } : { startOn: x, due: y });
+        };
+        lane.addEventListener('pointermove', move); lane.addEventListener('pointerup', up); lane.addEventListener('pointercancel', up);
+      });
+      return h('div', { class: 'cct-row' + (t.done ? ' done' : '') },
+        h('button', { type: 'button', class: 'cct-name cct-task', title: t.text, onclick: () => taskWindow(t) }, h('span', { class: 'cct-dot s-' + ccStatus(t)[0] }), h('span', {}, t.text)), lane);
+    };
+    const groups = [...phases.map((g) => ({ g, list: pick.filter((t) => t.goalId === g.id) })), { g: null, list: pick.filter((t) => !phases.some((g) => g.id === t.goalId)) }].filter((x) => x.list.length);
+    const rows = groups.flatMap(({ g, list }) => {
+      const ds = list.filter((t) => t.due || t.startOn);
+      const a = ds.length ? ds.map((t) => t.startOn || t.due).sort()[0] : null, b = ds.length ? ds.map((t) => t.due || t.startOn).sort().at(-1) : null;
+      const done = list.filter((t) => t.done).length;
+      const sum = h('div', { class: 'cct-row cct-phase' }, h('div', { class: 'cct-name' }, h('b', {}, g ? g.title : 'No phase'), h('small', {}, `${done}/${list.length}`)),
+        h('div', { class: 'cct-lane', style: `width:${W}px` }, a ? h('div', { class: 'cct-sum', style: `left:${xOf(a)}px;width:${(dayGap(a, b) + 1) * px}px;--f:${list.length ? done / list.length : 0}`, title: `${dueLabel(a)} → ${dueLabel(b)}` }) : null));
+      return [sum, ...list.sort((x, y) => (x.startOn || x.due || '9').localeCompare(y.startOn || y.due || '9')).map(taskRow)];
+    });
+    const body = h('div', { class: 'cct-body' }, back, ...rows);
+    // What each task waits for: an arrow from the end of the one before to the start of this one.
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('class', 'cct-links');
+    body.append(svg);
+    const grid = h('div', { class: 'cct', style: `--px:${px}px`, 'data-from': from, 'data-px': px }, head, body);
+    requestAnimationFrame(() => {
+      if (!grid.isConnected) return;
+      const box = body.getBoundingClientRect();
+      svg.setAttribute('width', body.scrollWidth); svg.setAttribute('height', body.scrollHeight);
+      const paths = [];
+      for (const t of pick) for (const id of t.blockedBy || []) {
+        const A = body.querySelector(`.cct-bar[data-task="${id}"]`), B = body.querySelector(`.cct-bar[data-task="${t.id}"]`);
+        if (!A || !B) continue;
+        const ra = A.getBoundingClientRect(), rb = B.getBoundingClientRect();
+        const x1 = ra.right - box.left, y1 = ra.top + ra.height / 2 - box.top, x2 = rb.left - box.left, y2 = rb.top + rb.height / 2 - box.top;
+        const mid = Math.max(x1 + 8, Math.min(x2 - 8, (x1 + x2) / 2));
+        paths.push(`<path class="${x2 < x1 ? 'late' : ''}" d="M${x1} ${y1} H${mid} V${y2} H${x2 - 4}" marker-end="url(#cct-arr)"/>`);
+      }
+      svg.innerHTML = `<defs><marker id="cct-arr" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L8 4L0 8z" fill="currentColor"/></marker></defs>` + paths.join('');
+      // First time in: today in view.
+      const sc = grid.closest('.cct-scroll');
+      if (sc && !sc.dataset.placed) { sc.dataset.placed = '1'; sc.scrollLeft = Math.max(0, xOf(today) - 7 * px); }
+    });
+    const zoom = h('div', { class: 'seg seg-sm cct-zoom' }, h('small', {}, 'Zoom:'), [['week', 'Days'], ['month', 'Weeks']].map(([k, l]) =>
+      h('button', { class: (K.wzoom === 'month' ? 'month' : 'week') === k ? 'on' : null, 'data-zoom': k, onclick: () => { K.wzoom = k; renderCamps(); } }, l)),
+      h('button', { class: 'btn small cct-totoday', onclick: (e) => { const sc = e.currentTarget.closest('.cc-work').querySelector('.cct-scroll'); if (sc) sc.scrollLeft = Math.max(0, xOf(today) - 7 * px); } }, 'Today'));
+    return [zoom, pick.length ? h('div', { class: 'cct-scroll' }, grid) : h('p', { class: 'day-hint' }, 'No tasks here yet.'),
+      h('p', { class: 'day-hint' }, 'Drag a bar to move it, pull either end to change when it starts or is due, drag across an empty row to give a task its days. Arrows show what each task waits for.')];
+  }
+  // Calendar: a month, each task on its due day; drag it to another day, or a task with no date onto one.
+  function ccCalendar(c, pick) {
+    const today = todayKey();
+    const mon = /^\d{4}-\d\d$/.test(K.wmonth || '') ? K.wmonth : (K.wmonth = today.slice(0, 7));
+    const first = keyDate(mon + '-01'), lead = first.getDay();
+    const start = addDays(mon + '-01', -lead);
+    const weeks = Math.ceil((lead + new Date(first.getFullYear(), first.getMonth() + 1, 0).getDate()) / 7);
+    const shift = (t, day) => {
+      if (day === t.due) return;
+      const set = { due: day };
+      if (t.startOn && t.due) set.startOn = addDays(t.startOn, dayGap(t.due, day));
+      ccTaskSet(t, set);
+    };
+    const chip = (t) => {
+      const [sc] = ccStatus(t);
+      const el = h('div', { class: 'ccc-chip s-' + sc + (t.done ? ' done' : ''), 'data-task': t.id, role: 'button', tabindex: '0', title: `${t.text}${ccWho(t) ? ' · ' + ccWho(t) : ''}`,
+        onclick: () => taskWindow(t), onkeydown: (e) => { if (e.key === 'Enter') taskWindow(t); } }, t.assigneeId ? avatar(t.assigneeId) : null, h('span', {}, t.text));
+      el.addEventListener('pointerdown', (ev) => shDrag(ev, el, {
+        over: (x, y) => document.elementFromPoint(x, y)?.closest('.ccc-day'),
+        drop: (x, y) => document.elementFromPoint(x, y)?.closest('.ccc-day')?.dataset.day || null,
+        done: (day) => shift(t, day),
+      }));
+      return el;
+    };
+    const MAX = 4;
+    const cells = Array.from({ length: weeks * 7 }, (_, i) => {
+      const k = addDays(start, i), mine = pick.filter((t) => t.due === k);
+      const cell = h('div', { class: 'ccc-day' + (k.slice(0, 7) !== mon ? ' other' : '') + (k === today ? ' today' : '') + ([0, 6].includes(keyDate(k).getDay()) ? ' we' : ''), 'data-day': k },
+        h('small', { class: 'ccc-n' }, String(keyDate(k).getDate())), ...mine.slice(0, MAX).map(chip),
+        mine.length > MAX ? h('button', { type: 'button', class: 'ccc-more', onclick: (e) => openMenu(e.currentTarget, [{ head: dayName(k) }, ...mine.map((t) => ({ label: t.text, run: () => taskWindow(t) }))]) }, `+${mine.length - MAX} more`) : null);
+      return cell;
+    });
+    const go = (d) => { const x = keyDate(mon + '-01'); x.setMonth(x.getMonth() + d); K.wmonth = dayKey(x).slice(0, 7); renderCamps(); };
+    const nav = h('div', { class: 'ccc-nav' }, h('button', { class: 'icon-btn ccc-prev', 'aria-label': 'Month before', onclick: () => go(-1) }, '‹'),
+      h('b', { class: 'ccc-when' }, first.toLocaleDateString(undefined, { month: 'long', year: 'numeric' })),
+      h('button', { class: 'icon-btn ccc-next', 'aria-label': 'Month after', onclick: () => go(1) }, '›'),
+      mon !== today.slice(0, 7) ? h('button', { class: 'btn small', onclick: () => { K.wmonth = today.slice(0, 7); renderCamps(); } }, 'Today') : null);
+    const undated = pick.filter((t) => !t.due);
+    const tray = undated.length ? h('div', { class: 'ccc-tray' }, h('small', {}, `No due day · ${undated.length} (drag onto a day):`), undated.map(chip)) : null;
+    return [nav, tray, h('div', { class: 'ccc-scroll' }, h('div', { class: 'ccc' }, ...['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((d) => h('div', { class: 'ccc-dow' }, d)), ...cells)),
+      h('p', { class: 'day-hint' }, 'Drag a task to another day to change when it’s due (a task with a start keeps its length); tap one to open it.')].filter(Boolean);
+  }
   function ccBoardDrop() {
     K.cb ||= {};
     if (K.cb.ed) { try { K.cb.ed.destroy(); } catch {} }
@@ -7356,10 +7600,16 @@
     const wf = ['all', 'mine', 'open', 'blocked', 'overdue', 'done'].includes(K.wfilter) ? K.wfilter : 'open';
     const workBody = () => {
       const pick = { all: tasks, mine: open.filter(taskMine), open, blocked, overdue, done: tasks.filter((t) => t.done) }[wf];
-      const status = (t) => (t.done ? ['done', 'Done'] : taskBlockers(t).length ? ['wait', 'Waiting'] : t.submitted ? ['sign', 'For sign-off'] : isOverdue(t) ? ['late', 'Overdue'] : t.status === 'doing' ? ['doing', 'In progress'] : ['open', 'Not started']);
-      return h('section', { class: 'cc-card cc-work' },
-        h('div', { class: 'cc-wf seg seg-sm' }, [['open', `Open · ${open.length}`], ['mine', `Mine · ${open.filter(taskMine).length}`], ['blocked', `Blocked · ${blocked.length}`], ['overdue', `Overdue · ${overdue.length}`], ['done', `Done · ${tasks.length - open.length}`], ['all', `All · ${tasks.length}`]].map(([k, l]) =>
-          h('button', { class: wf === k ? 'on' : null, 'data-wf': k, onclick: () => { K.wfilter = k; renderCamps(); } }, l))),
+      const status = ccStatus;
+      const vw = ccWorkView();
+      const views = h('div', { class: 'seg seg-sm cc-wview', role: 'tablist' }, [['list', '☰ List'], ['board', '▥ Board'], ['timeline', '▤ Timeline'], ['calendar', '▦ Calendar']].map(([k, l]) =>
+        h('button', { class: vw === k ? 'on' : null, role: 'tab', 'aria-selected': String(vw === k), 'data-wv': k, onclick: () => { K.wview = k; store.set('ccWorkView', k); renderCamps(); } }, l)));
+      const filters = h('div', { class: 'cc-wf seg seg-sm' }, [['open', `Open · ${open.length}`], ['mine', `Mine · ${open.filter(taskMine).length}`], ['blocked', `Blocked · ${blocked.length}`], ['overdue', `Overdue · ${overdue.length}`], ['done', `Done · ${tasks.length - open.length}`], ['all', `All · ${tasks.length}`]].map(([k, l]) =>
+        h('button', { class: wf === k ? 'on' : null, 'data-wf': k, onclick: () => { K.wfilter = k; renderCamps(); } }, l)));
+      if (vw !== 'list') return h('section', { class: 'cc-card cc-work cc-work-' + vw }, views, filters,
+        ...(vw === 'board' ? ccTaskBoard(c, pick, tasks, phases) : vw === 'timeline' ? ccTimeline(c, pick, phases) : ccCalendar(c, pick)));
+      return h('section', { class: 'cc-card cc-work' }, views,
+        filters,
         pick.length ? h('div', { class: 'cc-table', role: 'table' },
           h('div', { class: 'cc-tr cc-th', role: 'row' }, ['Task', 'Phase', 'Who', 'Due', 'Priority', 'Status'].map((x) => h('span', { role: 'columnheader' }, x))),
           pick.map((t) => { const [sc, sl] = status(t); const g = goalById(t.goalId); return h('div', { class: 'cc-tr' + (t.done ? ' done' : ''), role: 'row', 'data-task': t.id, tabindex: '0', onclick: () => taskWindow(t), onkeydown: (e) => { if (e.key === 'Enter') taskWindow(t); } },
@@ -7659,6 +7909,9 @@
     text.addEventListener('change', () => text.value.trim() && save({ text: text.value.trim() }));
     const due = h('input', { type: 'date', value: t.due || '', 'aria-label': 'Due' });
     due.addEventListener('change', () => save({ due: due.value || null }));
+    // Starts (the timeline's bar runs from here to the due day).
+    const starts = h('input', { type: 'date', class: 'td-start', value: t.startOn || '', max: t.due || undefined, 'aria-label': 'Starts' });
+    starts.addEventListener('change', () => save({ startOn: starts.value || null }));
     const blockers = taskBlockers(t), unlocks = t.done ? [] : unlocksOf(t);
     const role = t.roleId ? (S.workspace.roles || []).find((r) => r.id === t.roleId)?.name : t.castId ? castOf(camp || {}).find((r) => r.id === t.castId)?.name : null;
     const files = taskFiles(t), subs = subtasksOf(t), parent = t.parentId && taskById(t.parentId);
@@ -7726,6 +7979,7 @@
       h('div', { class: 'win-head' }, h('button', { class: 'check' + (t.done ? ' on' : ''), html: I.check, disabled: !!blockers.length && !t.done, 'aria-label': t.done ? 'Mark not done' : 'Mark done', onclick: () => save({ done: !t.done }) }), text),
       h('div', { class: 'td-grid' },
         row('Assignee', t.assigneeId ? [avatar(t.assigneeId), ' ', memberName(t.assigneeId)] : role ? '👥 ' + role : h('small', { class: 'muted' }, 'Nobody yet'), h('button', { class: 'btn small', onclick: (e) => assignMenu(e.currentTarget, taskById(t.id) || t) }, 'Change')),
+        row('Starts', starts),
         row('Due', due),
         row('Priority', t.priority ? h('span', { class: 'cc-prio p' + t.priority }, PRIO[t.priority]) : h('small', { class: 'muted' }, 'Normal'), h('button', { class: 'btn small', onclick: (e) => prioMenu(e.currentTarget, taskById(t.id) || t) }, 'Change')),
         row('Status', h('span', {}, status, blockers.length && !t.done ? h('span', { class: 'cc-status wait td-badge' }, 'Waiting') : t.submitted && !t.done ? h('span', { class: 'cc-status sign td-badge' }, 'For sign-off') : null))),

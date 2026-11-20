@@ -4486,3 +4486,100 @@ button.sh-h:hover { background: var(--card-hover); }
 .shd-blk.new, .shd-blk.changed { background: color-mix(in srgb, var(--accent) 10%, var(--card)); }
 .shd-blk.gone { z-index: 0; top: auto; bottom: 3px; padding: 1px 8px; justify-content: flex-start; flex-direction: row; gap: 6px; }
 .shd-blk.gone small { display: none; }
+/* Command Center part 4: the campaign's tasks as a board, a timeline and a calendar. */
+.cc-wview { margin-bottom: 10px; flex-wrap: wrap; }
+.ccb-by, .cct-zoom { display: flex; align-items: center; gap: 4px; margin-bottom: 10px; flex-wrap: wrap; }
+.ccb-by > small, .cct-zoom > small { color: var(--muted); margin-right: 4px; }
+.cct-zoom .cct-totoday { margin-left: 8px; }
+.ccb-scroll { overflow-x: auto; max-width: 100%; padding-bottom: 6px; }
+.ccb { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(220px, 1fr); gap: 10px; align-items: start; min-width: min-content; }
+.ccb-col { display: flex; flex-direction: column; gap: 8px; min-height: 120px; padding: 8px; border-radius: 12px; background: var(--panel); border: 1px solid var(--line); transition: background .12s, border-color .12s; }
+.ccb-col.over { border-color: var(--accent); background: var(--accent-soft); }
+.ccb-col.nodrop .ccb-h b { color: var(--muted); }
+.ccb-h { display: flex; align-items: center; gap: 6px; padding: 2px 4px; font-size: 13px; }
+.ccb-h b { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ccb-h small { color: var(--muted); font-size: 12px; background: var(--card); border-radius: 99px; padding: 0 7px; }
+.ccb-list { display: flex; flex-direction: column; gap: 6px; }
+.ccb-empty { margin: 6px 0; text-align: center; font-size: 12px; color: var(--faint); border: 1px dashed var(--line); border-radius: 9px; padding: 12px 6px; }
+.ccb-card { display: grid; gap: 4px; padding: 9px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); cursor: grab; touch-action: none; user-select: none; box-shadow: 0 1px 2px rgb(0 0 0 / .04); }
+.ccb-card:hover { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+.ccb-card.dragging { opacity: .35; }
+.ccb-card.done .ccb-t { text-decoration: line-through; color: var(--muted); }
+.ccb-card.s-late { box-shadow: inset 3px 0 0 var(--danger); }
+.ccb-t { font-size: 13.5px; font-weight: 600; line-height: 1.3; overflow-wrap: anywhere; }
+.ccb-ph { color: var(--muted); font-size: 11.5px; }
+.ccb-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; font-size: 12px; color: var(--muted); }
+.ccb-due.late { color: var(--danger); font-weight: 600; }
+.cct-scroll { overflow: auto; max-width: 100%; max-height: 70vh; border: 1px solid var(--line); border-radius: 12px; background: var(--card); }
+.cct { position: relative; min-width: min-content; }
+.cct-row { display: flex; min-height: 34px; border-bottom: 1px solid var(--line); }
+.cct-name { position: sticky; left: 0; z-index: 3; flex: none; width: 220px; display: flex; align-items: center; gap: 6px; padding: 4px 10px; background: var(--card); border: 0; border-right: 1px solid var(--line); color: var(--text); font: inherit; font-size: 13px; text-align: left; min-width: 0; }
+.cct-name span:last-child, .cct-name b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cct-name small { margin-left: auto; color: var(--muted); font-size: 11.5px; }
+button.cct-task { cursor: pointer; padding-left: 22px; }
+button.cct-task:hover { background: var(--card-hover); }
+.cct-row.done .cct-task span:last-child { text-decoration: line-through; color: var(--muted); }
+.cct-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--faint); }
+.cct-dot.s-doing { background: var(--accent); } .cct-dot.s-done { background: #1f9d63; } .cct-dot.s-late { background: var(--danger); } .cct-dot.s-wait, .cct-dot.s-sign { background: #d97706; }
+.cct-head { position: sticky; top: 0; z-index: 4; min-height: 42px; background: var(--panel); }
+.cct-head .cct-name { background: var(--panel); z-index: 5; }
+.cct-lane { position: relative; flex: none; }
+.cct-scale { height: 42px; }
+.cct-mon { position: absolute; top: 4px; padding-left: 4px; font-size: 11.5px; font-weight: 600; white-space: nowrap; border-left: 1px solid var(--line); }
+.cct-day { position: absolute; bottom: 4px; text-align: center; font-size: 10.5px; color: var(--muted); }
+.cct-day.today { color: var(--accent); font-weight: 700; }
+.cct-body { position: relative; }
+.cct-back { position: absolute; top: 0; bottom: 0; left: 220px; pointer-events: none; background: repeating-linear-gradient(90deg, transparent 0 calc(var(--px) - 1px), color-mix(in srgb, var(--line) 55%, transparent) calc(var(--px) - 1px) var(--px)); }
+.cct-we { position: absolute; top: 0; bottom: 0; background: color-mix(in srgb, var(--panel) 70%, transparent); }
+.cct-today { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--accent); opacity: .7; }
+.cct-edge { position: absolute; top: 0; bottom: 0; border-left: 2px dashed color-mix(in srgb, #1f9d63 60%, transparent); }
+.cct-edge.end { border-color: color-mix(in srgb, var(--danger) 55%, transparent); }
+.cct-phase { background: color-mix(in srgb, var(--panel) 60%, transparent); }
+.cct-phase .cct-name { background: var(--panel); }
+.cct-sum { position: absolute; top: 13px; height: 8px; border-radius: 4px; background: linear-gradient(90deg, var(--accent) calc(var(--f) * 100%), color-mix(in srgb, var(--accent) 25%, transparent) 0); }
+.cct-task + .cct-lane, .cct-row > .cct-lane { cursor: crosshair; }
+.cct-bar { position: absolute; top: 5px; height: 24px; z-index: 1; display: flex; align-items: center; gap: 5px; padding: 0 9px; border-radius: 7px; background: color-mix(in srgb, var(--accent) 20%, var(--card)); border: 1px solid color-mix(in srgb, var(--accent) 55%, transparent); font-size: 12px; white-space: nowrap; overflow: hidden; cursor: grab; touch-action: none; user-select: none; }
+.cct-bar > span:not(.cct-h):not(.av) { overflow: hidden; text-overflow: ellipsis; }
+.cct-bar .av { width: 18px; height: 18px; font-size: 9px; flex: none; }
+.cct-bar.one { padding: 0 4px; justify-content: center; }
+.cct-bar.one > span:not(.cct-h):not(.av) { position: absolute; left: calc(100% + 6px); overflow: visible; color: var(--muted); pointer-events: none; }
+.cct-bar.one { overflow: visible; }
+.cct-bar.s-doing { background: color-mix(in srgb, var(--accent) 40%, var(--card)); }
+.cct-bar.s-late { background: color-mix(in srgb, var(--danger) 18%, var(--card)); border-color: color-mix(in srgb, var(--danger) 60%, transparent); }
+.cct-bar.s-wait, .cct-bar.s-sign { background: repeating-linear-gradient(135deg, color-mix(in srgb, #d97706 16%, var(--card)) 0 6px, var(--card) 6px 12px); border-color: color-mix(in srgb, #d97706 55%, transparent); }
+.cct-bar.done { background: color-mix(in srgb, #1f9d63 16%, var(--card)); border-color: color-mix(in srgb, #1f9d63 45%, transparent); color: var(--muted); }
+.cct-bar.dragging { cursor: grabbing; box-shadow: 0 6px 18px rgb(0 0 0 / .18); z-index: 2; }
+.cct-draw { pointer-events: none; opacity: .7; border-style: dashed; }
+.cct-h { position: absolute; top: 0; bottom: 0; width: 8px; cursor: ew-resize; z-index: 2; }
+.cct-h.l { left: 0; } .cct-h.r { right: 0; }
+.cct-links { position: absolute; left: 0; top: 0; pointer-events: none; z-index: 2; overflow: visible; color: color-mix(in srgb, var(--text) 45%, transparent); }
+.cct-links path { fill: none; stroke: currentColor; stroke-width: 1.4; }
+.cct-links path.late { stroke: var(--danger); }
+.cct-links marker path { stroke: none; }
+.ccc-nav { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.ccc-when { min-width: 150px; text-align: center; }
+.ccc-tray { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 10px; }
+.ccc-tray > small { color: var(--muted); }
+.ccc-tray .ccc-chip { max-width: 220px; }
+.ccc-scroll { overflow-x: auto; max-width: 100%; }
+.ccc { display: grid; grid-template-columns: repeat(7, minmax(96px, 1fr)); border-top: 1px solid var(--line); border-left: 1px solid var(--line); min-width: 680px; }
+.ccc-dow { padding: 6px; font-size: 11.5px; color: var(--muted); text-align: center; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); background: var(--panel); }
+.ccc-day { display: flex; flex-direction: column; gap: 3px; min-height: 96px; padding: 4px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); background: var(--card); min-width: 0; }
+.ccc-day.we { background: color-mix(in srgb, var(--panel) 50%, var(--card)); }
+.ccc-day.other { opacity: .55; }
+.ccc-day.today .ccc-n { background: var(--accent); color: #fff; border-radius: 99px; padding: 0 6px; }
+.ccc-day.over { background: var(--accent-soft); box-shadow: inset 0 0 0 2px var(--accent); }
+.ccc-n { align-self: flex-start; font-size: 11.5px; color: var(--muted); font-weight: 600; }
+.ccc-chip { display: flex; align-items: center; gap: 4px; padding: 3px 6px; border-radius: 6px; font-size: 11.5px; background: color-mix(in srgb, var(--accent) 16%, var(--card)); border-left: 3px solid var(--accent); cursor: grab; touch-action: none; user-select: none; min-width: 0; }
+.ccc-chip > span:not(.av) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ccc-chip .av { width: 16px; height: 16px; font-size: 8px; flex: none; }
+.ccc-chip.s-late { border-left-color: var(--danger); background: color-mix(in srgb, var(--danger) 12%, var(--card)); }
+.ccc-chip.s-wait, .ccc-chip.s-sign { border-left-color: #d97706; }
+.ccc-chip.done { border-left-color: #1f9d63; color: var(--muted); }
+.ccc-chip.done > span:not(.av) { text-decoration: line-through; }
+.ccc-chip.dragging { opacity: .35; }
+.ccc-more { border: 0; background: none; color: var(--accent); font: inherit; font-size: 11.5px; text-align: left; cursor: pointer; padding: 0 4px; }
+@media (max-width: 560px) { .cct-name { width: 140px; } .cct-back { left: 140px; } }
+.ccb { grid-auto-columns: minmax(200px, 1fr); }
+.seg.ccb-by, .seg.cct-zoom { display: inline-flex; width: auto; max-width: 100%; }
+.cc-work-board > .seg.ccb-by, .cc-work-timeline > .seg.cct-zoom { margin-right: auto; }
