@@ -864,7 +864,7 @@ body.is-dragging, body.is-dragging * { user-select: none; -webkit-user-select: n
 .need-chip.met { color: var(--muted); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--muted) 50%, transparent); }
 .need-chip.ordered { border-style: dashed; }
 .need-rows { display: grid; gap: 4px; margin: 6px 0 10px; }
-.need-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 4px 8px; border: 1px solid var(--line); border-radius: 8px; }
+.need-rows .need-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 4px 8px; border: 1px solid var(--line); border-radius: 8px; }
 .need-add-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .need-add-row > * { min-width: 0; }
 .need-add-row .need-qty { width: 90px; }
@@ -2788,8 +2788,7 @@ button.hq-entry:hover { background: var(--card-hover); }
 .tw-send { display: flex; gap: 6px; align-items: flex-end; }
 .tw-send textarea { flex: 1; }
 
-.lead-row { display: flex; flex-direction: column; gap: 4px; margin: 10px 0; }
-.lead-row b { font-size: 13px; }
+.lead-sec .lead-row b { font-size: 13px; }
 
 /* Marketing: post and email-campaign drafts, pictures, Postiz channels */
 .ag-pic { display: block; max-width: 180px; max-height: 180px; margin-top: 6px; border-radius: 8px; border: 1px solid var(--line); cursor: zoom-in; object-fit: cover; }
