@@ -6858,10 +6858,10 @@
   // Re-render, unless someone is typing in here; then wait until they're done.
   K.overview ??= store.get('campsOverview', false);
   K.ctab ??= 'overview';
-  function renderCamps() {
+  function renderCamps(force) {
     const root = $('#camps');
     if (!S.workspace || !campsShown() || K.sorting) return;
-    if (root.contains(document.activeElement) && document.activeElement.matches('input, textarea, select')) {
+    if (!force && root.contains(document.activeElement) && document.activeElement.matches('input, textarea, select')) {
       K.stale = true;
       return;
     }
@@ -6874,7 +6874,15 @@
     root.scrollTop = keep;
     if (splitOpen === 'camps') renderSplit();
   }
-  $('#camps').addEventListener('focusout', () => setTimeout(() => K.stale && renderCamps(), 0));
+  // The held redraw runs once they leave the field, but not while a press is still going: pressing a button takes the
+  // focus first, and redrawing then would drop the click and what was typed (a live check, 2026-11-20). It waits for
+  // the press to end and its click to land.
+  let campPress = false;
+  document.addEventListener('pointerdown', () => { campPress = true; }, true);
+  const campPressEnd = () => { if (!campPress) return; campPress = false; setTimeout(() => K.stale && renderCamps(), 30); };
+  document.addEventListener('pointerup', campPressEnd, true);
+  document.addEventListener('pointercancel', campPressEnd, true);
+  $('#camps').addEventListener('focusout', () => setTimeout(() => K.stale && !campPress && renderCamps(), 0));
 
   function campaignList() {
     // Sub-campaigns sit under their main campaign's card; on their own when the main one isn't shown.
@@ -7685,8 +7693,9 @@
       add.value = '';
       try {
         upsertTask(await api('POST', '/tasks', { ...parseTask(raw), goalId: g.id }));
-        add.focus();
-        K.stale = true;
+        // Your own add shows at once, with the cursor back in this phase's field for the next one.
+        renderCamps(true);
+        $(`#camps .goal[data-id="${g.id}"] .goal-add`)?.focus();
       } catch (er) {
         add.value = raw;
         toast(er.message);
@@ -9200,6 +9209,8 @@
         sugg.classList.toggle('hidden', !found.length);
         return;
       }
+      // No call list (and not picking from Contacts): nothing to suggest, the typed name is logged as is.
+      if (!lists.length) return void sugg.classList.add('hidden');
       const hits = [];
       for (const l of lists) {
         const f = listFields(l), st = rowStatus(l);

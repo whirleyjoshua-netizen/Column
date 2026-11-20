@@ -142,6 +142,36 @@ try {
   // The drawer has Starts.
   await A.tap(T(`.ccc-chip[data-task="${D0.id}"]`));
   ok(await A.until(`!!document.querySelector('.td-start')`), 'the task drawer has a Starts day');
+  // From the live check (column-a9, 2026-11-20): while someone types, work arriving from others holds the page's redraw
+  // until they leave the field. Pressing a button used to redraw it before the click landed, losing what was typed.
+  await A.ev(`document.querySelector('#sheet [aria-label=Close]')?.click(); true`);
+  await A.ev(`${T('.cc-tab[data-ctab=activity]')}.click(); true`);
+  await A.until(`[...document.querySelectorAll('#camps button')].some((b) => b.textContent === 'Log a call or email')`);
+  await A.ev(`[...document.querySelectorAll('#camps button')].find((b) => b.textContent === 'Log a call or email').click(); true`);
+  await A.until(`!!${T('.log-contact')}`);
+  await A.ev(`${T('.log-contact')}.focus(); true`);
+  await A.cmd('Input.insertText', { text: 'Old Town Shades' });
+  await api('POST', '/tasks', { goalId: inst.id, text: 'Someone else’s change' }); // arrives over the socket while typing
+  await sleep(900);
+  ok(await A.ev(`document.activeElement === ${T('.log-contact')} && ${T('.log-contact')}.value === 'Old Town Shades'`), '(still typing, the page waits)');
+  await A.tap(T('.log-outcomes .oc-0'));
+  let att = [];
+  for (let i = 0; i < 30 && !att.length; i++) { await sleep(150); att = (await api('GET', '/state')).attempts.filter((x) => x.campaignId === camp.id); }
+  ok(att.length === 1 && /Old Town Shades/.test(JSON.stringify(att[0])), 'clicking an outcome with the mouse saves the call with its name: ' + JSON.stringify(att.map((x) => x.contact || x.who)));
+  // A task added in a phase shows at once, and the field stays ready for the next.
+  await A.tap(T('.cc-tab[data-ctab=overview]'));
+  const addQ = `document.querySelector('#camps .goal[data-id="${prep.id}"] .goal-add')`;
+  for (let i = 0; i < 10 && !(await A.ev(`!!${addQ}`)); i++) { await A.ev(`document.querySelector('#camps .goal[data-id="${prep.id}"] .goal-head, #camps .goal[data-id="${prep.id}"] .goal-top')?.click(); true`); await sleep(300); }
+  await A.ev(`${addQ}.focus(); true`);
+  await A.cmd('Input.insertText', { text: 'Measure the windows' });
+  await A.ev(`${addQ}.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); true`);
+  ok(await A.until(`document.querySelector('#camps .goal[data-id="${prep.id}"]')?.textContent.includes('Measure the windows')`, 5000), 'a task added in a phase shows right away');
+  ok(await A.ev(`document.activeElement === ${addQ}`), 'and the add field still has the cursor');
+  // The builder's last stage has no stray "null" where Next would be.
+  await A.ev(`${T('.cc-edit')}.click(); true`);
+  await A.until(`!!document.querySelector('.cb-stage[data-stage="3"]')`);
+  await A.ev(`document.querySelector('.cb-stage[data-stage="3"]').click(); true`);
+  ok(await A.until(`!!document.querySelector('.cb-stage-nav .cb-back')`) && !/null/.test(await A.ev(`document.querySelector('.cb-stage-nav').textContent`)), 'the builder’s last stage shows Back and nothing else: ' + await A.ev(`document.querySelector('.cb-stage-nav').textContent`));
   ok(A.errors.length === 0, 'no script errors' + (A.errors.length ? ': ' + A.errors.join(' | ') : ''));
 } catch (e) { ok(false, 'threw: ' + e.stack); }
 chrome.kill(); srv.kill();
