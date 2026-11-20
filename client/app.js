@@ -819,7 +819,7 @@
     try { if (navigator.setAppBadge) n ? navigator.setAppBadge(n) : navigator.clearAppBadge(); } catch {}
     if ($('#bellPop') && !$('#bellPop').classList.contains('hidden')) bellList();
   }
-  const NOTE_ICON = { mention: '@', assigned: '👤', up: '▶', files: '📥', quote: '✓', agent: '👥' };
+  const NOTE_ICON = { mention: '@', assigned: '👤', up: '▶', files: '📥', quote: '✓', agent: '👥', analytics: '📊' };
   // Where a notice (or a push someone tapped) takes you.
   function goTo(go) {
     if (!go) return;
@@ -11813,7 +11813,7 @@
     execute: ['Execute', 'Makes routine changes itself (tasks, time, records, docs). Emails wait for your yes.'],
     automate: ['Automate', 'As Execute, and runs its scheduled workflows on its own.'],
   };
-  const AG_TOOL_NAMES = { find_inventory: 'Inventory (what’s on hand where)', use_stock: 'Use stock on jobs', find_templates: 'Templates', save_template: 'Saving templates', look_at_money: 'Budgets and bills', set_budget: 'Budgets', add_bill: 'Bills', draft_invoice: 'Invoice drafts', send_invoice: 'Sending invoices', send_signoff: 'Sign-offs to customers', add_to_company_hq: 'Company HQ', look_at_day: 'Your calendar and day', list_tasks: 'Tasks', list_projects: 'Projects (the setup)', find_records: 'Jobs, leads and deals', read_record: 'A record’s full history', list_campaigns: 'Campaigns', find_contacts: 'Contacts', team_schedule: 'The team’s visits', plan_route: 'Routes', find_docs: 'Docs', read_doc: 'A doc’s text', create_task: 'Make tasks', update_task: 'Reschedule, reassign or finish tasks', schedule_time: 'Put time on your calendar', move_time: 'Move time it put there', save_contact: 'Save contacts', create_project: 'Start projects', create_record: 'Add jobs, leads, deals…', update_record: 'Update records', log_note: 'Log calls and notes', book_visit: 'Book visits', write_doc: 'Write docs', draft_email: 'Draft emails', notify_me: 'Send you a heads-up', marketing_snapshot: 'What’s bringing in work (leads by source, jobs won, campaigns, posts)', find_customers: 'Past and recent customers', list_channels: 'Your social channels', social_posts: 'Your posts in Postiz', create_campaign: 'Start campaigns with goals and tasks', make_list: 'Make lists of people to reach', make_image: 'Make pictures (on your OpenAI or Gemini key)', draft_social_post: 'Draft social and Google posts', draft_email_campaign: 'Draft email campaigns', find_photos: 'Your photos (Folders, Stacks, job photos, chat)', post_to_chat: 'Post in your team’s chat feeds', draft_teams_post: 'Post in your team’s Microsoft Teams channel', make_proof_link: 'Proof-of-insurance links for customers and GCs', look_at_photos: 'Look at photos to pick the right ones' };
+  const AG_TOOL_NAMES = { business_numbers: 'Your business’s numbers (Analytics)', find_inventory: 'Inventory (what’s on hand where)', use_stock: 'Use stock on jobs', find_templates: 'Templates', save_template: 'Saving templates', look_at_money: 'Budgets and bills', set_budget: 'Budgets', add_bill: 'Bills', draft_invoice: 'Invoice drafts', send_invoice: 'Sending invoices', send_signoff: 'Sign-offs to customers', add_to_company_hq: 'Company HQ', look_at_day: 'Your calendar and day', list_tasks: 'Tasks', list_projects: 'Projects (the setup)', find_records: 'Jobs, leads and deals', read_record: 'A record’s full history', list_campaigns: 'Campaigns', find_contacts: 'Contacts', team_schedule: 'The team’s visits', plan_route: 'Routes', find_docs: 'Docs', read_doc: 'A doc’s text', create_task: 'Make tasks', update_task: 'Reschedule, reassign or finish tasks', schedule_time: 'Put time on your calendar', move_time: 'Move time it put there', save_contact: 'Save contacts', create_project: 'Start projects', create_record: 'Add jobs, leads, deals…', update_record: 'Update records', log_note: 'Log calls and notes', book_visit: 'Book visits', write_doc: 'Write docs', draft_email: 'Draft emails', notify_me: 'Send you a heads-up', marketing_snapshot: 'What’s bringing in work (leads by source, jobs won, campaigns, posts)', find_customers: 'Past and recent customers', list_channels: 'Your social channels', social_posts: 'Your posts in Postiz', create_campaign: 'Start campaigns with goals and tasks', make_list: 'Make lists of people to reach', make_image: 'Make pictures (on your OpenAI or Gemini key)', draft_social_post: 'Draft social and Google posts', draft_email_campaign: 'Draft email campaigns', find_photos: 'Your photos (Folders, Stacks, job photos, chat)', post_to_chat: 'Post in your team’s chat feeds', draft_teams_post: 'Post in your team’s Microsoft Teams channel', make_proof_link: 'Proof-of-insurance links for customers and GCs', look_at_photos: 'Look at photos to pick the right ones' };
   const AG_STATUS = { requested: 'Starting', planning: 'Planning', running: 'Working', awaiting: 'Needs your yes', completed: 'Done', failed: 'Didn’t finish', blocked: 'Has a question', cancelled: 'Stopped' };
   const AG_DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
   const agRunning = (x) => ['requested', 'planning', 'running'].includes(x.status);
@@ -17529,6 +17529,7 @@
   const AN_PRESETS = [['7', 'Last 7 days'], ['30', 'Last 30 days'], ['month', 'This month'], ['lastmonth', 'Last month'], ['quarter', 'This quarter'], ['year', 'This year'], ['365', 'Last 12 months'], ['custom', 'Pick dates…']];
   const AN_OVERVIEW = { business: ['income', 'profit', 'owed', 'winRate'], team: ['tasksDone', 'onTime', 'overdueNow', 'visitsDone'], customers: ['newContacts', 'leads'], marketing: ['attempts', 'sales'] };
   const canAnalytics = () => amAdmin() || memberMay('teamKpis');
+  const AN_PERIOD = { week: 'this week', month: 'this month', quarter: 'this quarter' };
   function anRange() {
     const t = todayKey(), d = keyDate(t), y = d.getFullYear(), mo = d.getMonth();
     const k = (yy, mm, dd) => dayKey(new Date(yy, mm, dd));
@@ -17589,7 +17590,15 @@
       h('span', { class: 'an-label' }, m.label),
       h('b', { class: 'an-value' }, anFmt(m.value, m.unit)),
       h('span', { class: 'an-foot' }, m.now ? h('span', { class: 'an-delta same' }, m.unit === 'money' && m.n ? `${m.n} invoice${m.n === 1 ? '' : 's'} · as of today` : 'As of today') : anDelta(m), m.now ? null : anSpark(m.series)),
-      m.hint ? h('small', { class: 'an-hint' }, m.hint) : null);
+      m.hint ? h('small', { class: 'an-hint' }, m.hint) : null,
+      ...(AN.data?.watches || []).filter((w) => w.metric === m.key).map(anWatchLine));
+  }
+  // A goal or alert under its number: how far along, or whether it's gone off.
+  function anWatchLine(w) {
+    if (w.kind === 'goal') return h('span', { class: 'an-goal' + (w.met ? ' met' : ''), 'data-watch': w.id, title: w.text },
+      h('span', { class: 'an-goal-t' }, `${w.met ? '✓ ' : ''}Goal ${w.lowGood ? 'at most ' : ''}${anFmt(w.value, w.unit)}${w.period ? ' ' + AN_PERIOD[w.period] : ''}${w.pct !== null ? ' · ' + w.pct + '%' : ''}`),
+      w.pct !== null ? h('span', { class: 'an-bar' }, h('span', { style: `width:${w.pct}%` })) : null);
+    return h('span', { class: 'an-alert' + (w.met ? ' on' : ''), 'data-watch': w.id, title: w.text }, `🔔 ${w.met ? 'Gone off: ' : 'Alert '}${w.op} ${anFmt(w.value, w.unit)}${w.period ? ' ' + AN_PERIOD[w.period] : ''}`);
   }
   function anDraw() {
     const box = $('#sheet .an');
@@ -17607,7 +17616,9 @@
       h('input', { type: 'date', class: 'an-to', value: to, min: from, onchange: (e) => { if (e.target.value) { AN.to = e.target.value; anLoad(); } } }));
     const body = h('div', { class: 'an-body', 'data-tab': AN.tab });
     box.replaceChildren(
-      h('div', { class: 'an-top' }, pick, custom, h('span', { class: 'an-when muted small' }, `${fmt(from)} – ${fmt(to)}${D ? ` · against ${fmt(D.prevFrom)} – ${fmt(D.prevTo)}` : ''}`)),
+      h('div', { class: 'an-top' }, pick, custom, h('span', { class: 'an-when muted small' }, `${fmt(from)} – ${fmt(to)}${D ? ` · against ${fmt(D.prevFrom)} – ${fmt(D.prevTo)}` : ''}`),
+        D && (amAdmin() || D.watches?.length) ? h('button', { type: 'button', class: 'btn small an-watch-btn', onclick: () => anWatches() }, `🎯 Goals & alerts${D.watches?.length ? ' (' + D.watches.length + ')' : ''}`) : null),
+      anAskBar(from, to, fmt),
       h('div', { class: 'tm-tabs an-tabs', role: 'tablist' }, tabs.map(([t, label]) => h('button', { type: 'button', role: 'tab', class: 'tm-tab an-tab' + (t === AN.tab ? ' on' : ''), 'data-tab': t, 'aria-selected': String(t === AN.tab), onclick: () => { AN.tab = t; anDraw(); } }, label))),
       body);
     if (!D) return body.append(h('p', { class: 'muted' }, AN.loading ? 'Adding it up…' : 'Nothing to show.'));
@@ -17636,6 +17647,62 @@
       s.campaigns.length ? h('div', { class: 'an-table-wrap' }, h('table', { class: 'an-table' }, h('thead', {}, h('tr', {}, ['Campaign', 'Logged', 'Interested or booked', 'Sales'].map((x) => h('th', {}, x)))),
         h('tbody', {}, s.campaigns.map((c) => h('tr', { tabindex: 0, onclick: () => { closeSheet(); goTo('camp:' + c.id); } }, h('td', {}, c.name), h('td', {}, String(c.attempts)), h('td', {}, String(c.interested)), h('td', {}, anFmt(c.sales, 'money')))))))
         : h('p', { class: 'muted small' }, 'No calls or emails logged in these dates.')));
+  }
+  // Ask your data: a question about these numbers goes to your AI team (Sidekick), who reads them as you.
+  function anAskBar(from, to, fmt) {
+    if (!skdOn()) return h('span', { hidden: true });
+    const go = (q) => {
+      q = String(q || '').trim();
+      if (!q) return;
+      closeSheet();
+      openDock();
+      SKD.noPage = true;
+      skdAsk(`${q}\n\n(Looking at Analytics for ${from} to ${to}.)`);
+    };
+    const input = h('input', { type: 'text', class: 'an-ask-q', placeholder: 'Ask about your numbers… “Why is profit down?”', maxlength: 500, onkeydown: (e) => e.key === 'Enter' && go(input.value) });
+    const ideas = amAdmin() ? ['Why did profit change?', 'Who’s falling behind?', 'Where do our best leads come from?'] : ['Who’s falling behind?', 'How is the team doing on time?'];
+    return h('div', { class: 'an-ask' }, h('div', { class: 'an-ask-row' }, input, h('button', { type: 'button', class: 'btn small primary-btn an-ask-go', onclick: () => go(input.value) }, 'Ask')),
+      h('div', { class: 'an-ask-ideas' }, ideas.map((q) => h('button', { type: 'button', class: 'chip', onclick: () => go(q) }, q))));
+  }
+  // Goals and alerts, inside the page: where each stands, and (owners and admins) add, change or remove one.
+  function anWatches() {
+    const box = $('#sheet .an');
+    if (!box || !AN.data) return;
+    AN.detail = true;
+    const admin = amAdmin();
+    const metrics = Object.values(AN.data.sections).flatMap((s) => s.metrics.map((m) => ({ ...m, sec: s.label })));
+    const list = h('div', { class: 'an-rows' });
+    const draw = (ws) => list.replaceChildren(...(ws.length ? ws.map((w) => h('div', { class: 'an-row an-wrow', 'data-watch': w.id },
+      h('span', { class: 'an-row-t' }, h('b', {}, (w.kind === 'goal' ? '🎯 ' : '🔔 ') + w.text), h('small', {}, `Now ${anFmt(w.current, w.unit)}${w.met ? (w.kind === 'goal' ? ' · reached' : ' · gone off') : ''}`), w.kind === 'goal' && w.pct !== null ? h('span', { class: 'an-bar' }, h('span', { style: `width:${w.pct}%` })) : null),
+      admin ? h('button', { type: 'button', class: 'linkish an-wdel', onclick: () => api('DELETE', '/analytics/watches/' + w.id).then(() => { AN.data.watches = AN.data.watches.filter((x) => x.id !== w.id); draw(AN.data.watches); }, (e) => toast(e.message)) }, 'Remove') : null))
+      : [h('p', { class: 'muted' }, admin ? 'No goals or alerts yet.' : 'Your team hasn’t set any for the numbers you see.')]));
+    draw(AN.data.watches || []);
+    let form = null;
+    if (admin) {
+      const kind = h('select', { class: 'an-wkind' }, h('option', { value: 'goal' }, 'Goal: reach'), h('option', { value: 'alert' }, 'Alert: tell me when'));
+      const metric = h('select', { class: 'an-wmetric' }, metrics.map((m) => h('option', { value: m.key }, `${m.label} (${m.sec})`)));
+      const op = h('select', { class: 'an-wop' }, h('option', { value: 'above' }, 'goes above'), h('option', { value: 'below' }, 'goes below'));
+      const value = h('input', { type: 'number', min: 0, step: 'any', class: 'an-wvalue', placeholder: 'Number' });
+      const unit = h('span', { class: 'muted small an-wunit' });
+      const period = h('select', { class: 'an-wperiod' }, Object.entries(AN_PERIOD).map(([k, l]) => h('option', { value: k, selected: k === 'month' }, l)));
+      const sync = () => {
+        const m = metrics.find((x) => x.key === metric.value);
+        op.hidden = kind.value !== 'alert';
+        period.hidden = !!m?.now;
+        unit.textContent = m?.unit === 'money' ? 'dollars' : m?.unit === 'pct' ? '%' : m?.unit === 'days' ? 'days' : '';
+      };
+      kind.onchange = sync; metric.onchange = sync; sync();
+      form = h('div', { class: 'an-wform' }, h('div', { class: 'picks-h' }, 'Add one'), h('div', { class: 'an-wfields' }, kind, metric, op, value, unit, period,
+        h('button', { type: 'button', class: 'btn small primary-btn an-wsave', onclick: () => {
+          if (value.value === '') return toast('The number to watch for.');
+          api('POST', '/analytics/watches', { kind: kind.value, metric: metric.value, op: kind.value === 'alert' ? op.value : undefined, value: Number(value.value), period: period.value })
+            .then((w) => { AN.data.watches = [...(AN.data.watches || []), w]; value.value = ''; draw(AN.data.watches); toast(w.kind === 'goal' ? 'Goal set' : 'Alert set'); }, (e) => toast(e.message));
+        } }, 'Add')),
+        h('p', { class: 'muted small' }, 'When a goal is reached or an alert goes off, owners and admins get a notification, once a week, month or quarter. To do more (a message to the team, a task), make an automation that starts on it: Workspace → Automations → Analytics.'));
+    }
+    box.replaceChildren(h('div', { class: 'an-detail' },
+      h('div', { class: 'tm-nav' }, h('button', { class: 'btn small an-back', onclick: () => anDraw() }, '‹ Analytics'), h('b', { class: 'tm-when' }, 'Goals & alerts')),
+      list, form));
   }
   // The records behind a number, inside the page with a way back.
   function anDrill(key, member, name) {

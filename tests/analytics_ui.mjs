@@ -75,6 +75,19 @@ await A.tap(card('tasksDone'));
 ok(await A.until(`/Fix gate/.test(document.querySelector('#sheet .an-rows')?.textContent || '')`, 8000), 'tapping it shows the task behind it');
 await A.tap(`document.querySelector('#sheet .an-back')`);
 ok(await A.until(`!!${card('income')}`), 'and back');
+// Goals & alerts (step 5): set a goal, see it on its number.
+ok(await A.ev(`!!document.querySelector('#sheet .an-watch-btn')`), 'owners have Goals & alerts');
+await A.tap(`document.querySelector('#sheet .an-watch-btn')`);
+ok(await A.until(`!!document.querySelector('#sheet .an-wform')`), 'it opens inside the page, with a form');
+await A.ev(`(() => { const f = document.querySelector('#sheet .an-wform'); f.querySelector('.an-wmetric').value = 'income'; f.querySelector('.an-wmetric').dispatchEvent(new Event('change')); f.querySelector('.an-wvalue').value = '1000'; return true; })()`);
+ok(await A.ev(`document.querySelector('#sheet .an-wop').hidden && document.querySelector('#sheet .an-wunit').textContent === 'dollars'`), 'a goal needs no above or below; money is in dollars');
+await A.tap(`document.querySelector('#sheet .an-wsave')`);
+ok(await A.until(`/Money in: \\$1,000 this month/.test(document.querySelector('#sheet .an-wrow')?.textContent || '') && /reached/.test(document.querySelector('#sheet .an-wrow').textContent)`, 8000), 'the goal is listed, already reached: ' + await A.ev(`document.querySelector('#sheet .an-rows')?.textContent`));
+await A.tap(`document.querySelector('#sheet .an-back')`);
+ok(await A.until(`/Goal \\$1,000 this month · 100%/.test(${card('income')}?.querySelector('.an-goal')?.textContent || '') && ${card('income')}.querySelector('.an-goal').classList.contains('met')`), 'and shown on Money in: ' + await A.ev(`${card('income')}?.textContent`));
+ok(await A.ev(`/Goals & alerts \\(1\\)/.test(document.querySelector('#sheet .an-watch-btn').textContent)`), 'the button counts them');
+// Ask your data: the question goes to Sidekick.
+ok(await A.ev(`!!document.querySelector('#sheet .an-ask-q') && document.querySelectorAll('#sheet .an-ask-ideas .chip').length === 3`), 'an Ask box, with ideas');
 // A section: Team, with each person's line.
 await A.tap(`document.querySelector('#sheet .an-tab[data-tab=team]')`);
 ok(await A.until(`!!document.querySelector('#sheet .an-people tr[data-member="${samId}"]')`), 'Team & operations has a line for Sam');
@@ -98,6 +111,10 @@ await sleep(300);
 ok(await A.ev(`document.documentElement.scrollWidth <= 391`), 'fits a phone: ' + await A.ev(`document.documentElement.scrollWidth`));
 await A.cmd('Emulation.clearDeviceMetricsOverride');
 
+await A.tap(`document.querySelector('#sheet .an-tab[data-tab=overview]')`);
+await A.ev(`(() => { const i = document.querySelector('#sheet .an-ask-q'); i.value = 'Why did profit change?'; return true; })()`);
+await A.tap(`document.querySelector('#sheet .an-ask-go')`);
+ok(await A.until(`!document.querySelector('#skDock').hidden`), 'asking opens Sidekick with the question');
 // A member: not until an admin lets them; then Team & operations only.
 const B = await tab(APP);
 await B.until(`location.href.startsWith(${JSON.stringify(APP)}) && document.readyState === 'complete'`, 15000);

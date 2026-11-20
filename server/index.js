@@ -3797,7 +3797,7 @@ function autoVars(ctx, wsId) {
   return { task: ctx.task?.text, done: ctx.task ? (ctx.task.done ? 'yes' : 'no') : '', step: ctx.goal?.title, campaign: ctx.campaign?.name, contact: ctx.contact ? ctx.contact.name || ctx.contact.company || ctx.contact.email || ctx.contact.phone : '', file: ctx.file?.name,
     from: ctx.from, who: ctx.who, stage: ctx.stageLabel || (ctx.stage ? stageLabel(ctx.stage) : ''), outcome: ctx.outcome, document: ctx.document, note: ctx.note, date: ctx.date || teamDay(wsId),
     record: ctx.recordName, project: ctx.project?.name, list: ctx.list?.name, customer: ctx.customer, amount: ctx.amount != null ? '$' + Number(ctx.amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '',
-    invoice: ctx.invoice, time: ctx.time, crew: ctx.crew, phone: ctx.phone, text: ctx.text, doc: ctx.doc, pin: ctx.pin, category: ctx.category, status: ctx.status, answer: ctx.answer, item: ctx.item, was: ctx.was, now: ctx.now, quotes: ctx.quotes != null ? String(ctx.quotes) : undefined, qty: ctx.qty, unit: ctx.unitName, place: ctx.place, supplier: ctx.supplier, repo: ctx.repo, branch: ctx.branch, url: ctx.url, version: ctx.version, app: ctx.app, error: ctx.error, booking: ctx.booking };
+    invoice: ctx.invoice, time: ctx.time, crew: ctx.crew, phone: ctx.phone, text: ctx.text, doc: ctx.doc, pin: ctx.pin, category: ctx.category, status: ctx.status, answer: ctx.answer, item: ctx.item, was: ctx.was, now: ctx.now, quotes: ctx.quotes != null ? String(ctx.quotes) : undefined, qty: ctx.qty, unit: ctx.unitName, place: ctx.place, supplier: ctx.supplier, repo: ctx.repo, branch: ctx.branch, url: ctx.url, version: ctx.version, app: ctx.app, error: ctx.error, booking: ctx.booking, metric: ctx.metric, value: ctx.value, target: ctx.target, period: ctx.period };
 }
 function autoMatches(t, ctx) {
   if (t.campaignId && ctx.campaign?.id !== t.campaignId && ctx.campaign?.parentId !== t.campaignId) return false;
@@ -4214,7 +4214,7 @@ async function resumeSteps(x, ctx, stack, i, log) {
   return r;
 }
 // What a waiting run keeps: what it's about, by id, and the words as they were.
-const CTX_WORDS = ['booking', 'app', 'error', 'repo', 'branch', 'url', 'version', 'answer', 'item', 'was', 'now', 'quotes', 'qty', 'unitName', 'place', 'supplier', 'who', 'whoId', 'from', 'stage', 'stageLabel', 'outcome', 'document', 'note', 'date', 'recordName', 'customer', 'amount', 'invoice', 'time', 'crew', 'phone', 'text', 'doc', 'pin', 'category', 'status', 'direction', 'private', 'ownersOnly'];
+const CTX_WORDS = ['metric', 'value', 'target', 'period', 'booking', 'app', 'error', 'repo', 'branch', 'url', 'version', 'answer', 'item', 'was', 'now', 'quotes', 'qty', 'unitName', 'place', 'supplier', 'who', 'whoId', 'from', 'stage', 'stageLabel', 'outcome', 'document', 'note', 'date', 'recordName', 'customer', 'amount', 'invoice', 'time', 'crew', 'phone', 'text', 'doc', 'pin', 'category', 'status', 'direction', 'private', 'ownersOnly'];
 function ctxSnap(ctx) {
   const out = { ids: { task: ctx.task?.id, goal: ctx.goal?.id, campaign: ctx.campaign?.id, contact: ctx.contact?.id || null, contactName: ctx.contact && !ctx.contact.id ? ctx.contact.name || '' : null, file: ctx.file?.id, project: ctx.project?.id, list: ctx.list?.id, record: ctx.record?.id } };
   for (const k of CTX_WORDS) if (ctx[k] !== undefined && ctx[k] !== null) out[k] = ctx[k];
@@ -4284,7 +4284,7 @@ function sampleCtx(t, auth) {
   return { recordName: 'Sample job', record: null, project: t.projectId ? db.projects[t.projectId] : null, contact: { name: 'Sample customer' }, customer: 'Sample customer', amount: t.over != null ? t.over + 50 : 250,
     stageLabel: /^(contact|attempt)\./.test(t.kind) ? stageLabel(t.stage || 'customer') : t.to || 'Done', stage: t.stage || 'customer', from: t.kind === 'record.stage' ? 'Scheduled' : 'Sample sender', who: auth.member, whoId: auth.memberId, date: teamDay(auth.ws.id), task: { text: 'Sample task' },
     campaign: t.campaignId ? db.campaigns[t.campaignId] : { name: 'Sample campaign' }, note: 'Sample note', text: 'Sample text message', file: { name: 'sample.pdf' }, document: 'Sample agreement.pdf',
-    doc: 'Sample doc', pin: 'Sample pin', invoice: 'INV-0000', category: 'Jobs', phone: '+1 702 555 0100', crew: auth.member, time: '9:00', outcome: t.outcome || 'Interested', status: t.statuses?.[0] || 'onTrack', direction: t.direction || 'in', ...(t.kind === 'price.changed' ? { item: 'Sample item', was: '$100.00', now: '$110.00', quotes: 2 } : {}) };
+    doc: 'Sample doc', pin: 'Sample pin', invoice: 'INV-0000', category: 'Jobs', phone: '+1 702 555 0100', crew: auth.member, time: '9:00', outcome: t.outcome || 'Interested', status: t.statuses?.[0] || 'onTrack', direction: t.direction || 'in', ...(t.kind === 'price.changed' ? { item: 'Sample item', was: '$100.00', now: '$110.00', quotes: 2 } : {}), ...(/^analytics\./.test(t.kind) ? { metric: 'Money in', value: '$21,400', target: '$20,000', period: 'this month' } : {}) };
 }
 function testCtx(x, auth) {
   for (const e of lastEvents.get(x.wsId + ':' + x.trigger.kind) || []) {
@@ -12251,7 +12251,9 @@ const INV = invoicesModule({ proofUrl: (ws) => pagesProof(ws), stockCost: (recId
   },
   dropMoneyId: (id) => { if (db.money[id]) dropMoney(db.money[id]); },
 });
-const ANALYTICS = analyticsModule({ db, send, isAdmin, isDay, addDays, teamDay, memberMay, memberOff, taskDoers, canSee, INV, PJ });
+const ANALYTICS = analyticsModule({ db, save, rid, readJson, cleanText, notifyAdmins: (...a) => notifyAdmins(...a), automate: (...a) => automate(...a), offline, send, isAdmin, isDay, addDays, teamDay, memberMay, memberOff, taskDoers, canSee, INV, PJ });
+// Goals and alerts are checked every 15 minutes (and whenever one is set).
+setInterval(() => { try { ANALYTICS.checkAll(); } catch (e) { alarm('Checking goals and alerts failed', e); } }, Number(process.env.KPI_WATCH_MS) || 15 * 60_000).unref?.();
 // Texting through the team's own Twilio account (twilio.js).
 const notifyAdmins = (wsId, n) => { for (const mb of db.workspaces[wsId]?.members || []) if (isAdminId(wsId, mb.id)) notify(wsId, mb.id, n); };
 const TW = twilioModule({ db, save, broadcast, seal, unseal, readJson, send, isAdmin, rid, cleanText, publicUrl: PUBLIC_URL, contactsOf, phoneKey, noContact, newContact, contactNews, notifyAdmins,
@@ -12969,6 +12971,7 @@ async function buildExport(x) {
     // Shifts (shifts.js): one's own, and everyone's in an owner's team export; usual hours and time off likewise.
     shifts: (y) => y.memberId === me.id || y.pub?.memberId === me.id || (!mineOnly && me.role === 'owner'),
     availability: (y) => y.memberId === me.id || (!mineOnly && me.role === 'owner'),
+    kpiWatches: () => !mineOnly && me.role === 'owner',
   };
   const data = {};
   for (const [coll, ok] of Object.entries(sees)) data[coll] = Object.values(db[coll] || {}).filter((y) => inWs(y) && ok(y) && made(y));

@@ -9,9 +9,14 @@
 // - marketing (owners and admins): calls and emails logged, interested or booked, sales from them, active campaigns.
 // Visibility travels with the data: behind a number, a member sees only their own records (others are counted in
 // `hidden`), and an owner sees only the tasks they could open anyway.
-export const ANALYTICS_LIMITS = { days: 1096, rows: 200, buckets: 60 };
+export const ANALYTICS_LIMITS = { days: 1096, rows: 200, buckets: 60, watches: 30 };
+// Goals and alerts (step 5): a goal is a number to reach in a week, month or quarter (money in $20,000 a month), shown
+// on its card with how far along it is; an alert is a number going above or below a line (overdue tasks above 5).
+// When a goal is reached or an alert goes off, owners and admins are told (the bell) once a period, and the Flows
+// events analytics.goal and analytics.alert fire, for automations made by an owner or admin only.
 
-export function analyticsModule({ db, send, isAdmin, isDay, addDays, teamDay, memberMay, memberOff, taskDoers, canSee, INV, PJ }) {
+export function analyticsModule({ db, save = () => {}, rid = () => Math.random().toString(36).slice(2), readJson, cleanText = (x) => String(x || ''), notifyAdmins = () => {}, automate = () => {}, offline = () => false, send, isAdmin, isDay, addDays, teamDay, memberMay, memberOff, taskDoers, canSee, INV, PJ }) {
+  db.kpiWatches ||= {};
   const dayMs = 864e5;
   const span = (a, b) => Math.round((Date.parse(b + 'T00:00:00Z') - Date.parse(a + 'T00:00:00Z')) / dayMs) + 1;
   const weekDay = (k) => new Date(k + 'T12:00:00Z').getUTCDay();
@@ -218,6 +223,7 @@ export function analyticsModule({ db, send, isAdmin, isDay, addDays, teamDay, me
       out.sections[sec] = s;
     }
     void people;
+    out.watches = watchesOf(ws).filter((w) => out.sections[BY_KEY[w.metric].sec]).map((w) => statusOf(ws, w));
     return out;
   }
 
@@ -243,11 +249,97 @@ export function analyticsModule({ db, send, isAdmin, isDay, addDays, teamDay, me
     return { key, label: m.label, unit: m.unit, from, to, rows, hidden, more: Math.max(0, list.length - hidden - rows.length) };
   }
 
+  // ----- goals and alerts -----
+  const PERIODS = { week: 'this week', month: 'this month', quarter: 'this quarter' };
+  const watchesOf = (ws) => Object.values(db.kpiWatches).filter((w) => w.wsId === ws.id && BY_KEY[w.metric]).sort((a, b) => a.at - b.at);
+  function periodOf(ws, period) {
+    const t = teamDay(ws.id);
+    if (period === 'week') return [addDays(t, -weekDay(t)), t];
+    const [y, m] = t.split('-').map(Number);
+    const first = period === 'quarter' ? m - ((m - 1) % 3) : m;
+    return [`${y}-${String(first).padStart(2, '0')}-01`, t];
+  }
+  const fmt = (v, unit) => (v === null || v === undefined ? '—' : unit === 'money' ? '$' + Math.round(v / 100).toLocaleString('en-US') : unit === 'pct' ? v + '%' : unit === 'days' ? v + ' days' : String(v));
+  function statusOf(ws, w) {
+    const m = BY_KEY[w.metric];
+    let from = null, to = null, current;
+    if (m.now) current = (facts(ws, teamDay(ws.id), teamDay(ws.id)).now[m.rows] || []).reduce((n, x) => n + x.v, 0);
+    else { [from, to] = periodOf(ws, w.period); current = m.calc(facts(ws, from, to).F, from, to); }
+    const met = current === null ? false : w.kind === 'goal' ? (m.lowGood ? current <= w.value : current >= w.value) : w.op === 'above' ? current > w.value : current < w.value;
+    const pct = w.kind === 'goal' && !m.lowGood && w.value > 0 && current !== null ? Math.min(100, Math.round((100 * current) / w.value)) : null;
+    return { id: w.id, metric: w.metric, label: m.label, unit: m.unit, sec: m.sec, kind: w.kind, op: w.op || null, value: w.value, period: m.now ? null : w.period, from, to, current, pct, met, lowGood: !!m.lowGood,
+      text: w.kind === 'goal' ? `${m.label}: ${m.lowGood ? 'at most' : ''} ${fmt(w.value, m.unit)}${m.now ? '' : ' ' + PERIODS[w.period]}`.replace(':  ', ': ') : `${m.label} ${w.op} ${fmt(w.value, m.unit)}${m.now ? '' : ' ' + PERIODS[w.period]}` };
+  }
+  // Goes off once a period (a number "as of today": once each time it crosses), never for a goal to stay low.
+  function check(ws) {
+    if (offline(ws.id)) return;
+    let changed = false;
+    for (const w of watchesOf(ws)) {
+      const st = statusOf(ws, w), m = BY_KEY[w.metric];
+      const key = m.now ? 'on' : st.from;
+      if (!st.met) { if (m.now && w.fired) { w.fired = null; changed = true; } continue; }
+      if (w.fired === key || (w.kind === 'goal' && m.lowGood)) continue;
+      w.fired = key;
+      changed = true;
+      const now = fmt(st.current, m.unit), target = fmt(w.value, m.unit), period = m.now ? '' : PERIODS[w.period];
+      const title = w.kind === 'goal' ? `Goal reached: ${m.label}` : `${m.label} is ${w.op} ${target}`;
+      const text = w.kind === 'goal' ? `${now} ${period}, against a goal of ${target}.` : `It’s ${now}${period ? ' ' + period : ''}.`;
+      notifyAdmins(ws.id, { kind: 'analytics', title, text, go: 'analytics:' + m.sec, key: 'kpi:' + w.id });
+      automate(ws.id, w.kind === 'goal' ? 'analytics.goal' : 'analytics.alert', { ownersOnly: true, metric: m.label, value: now, target, period, note: `${title}. ${text}`, date: teamDay(ws.id) });
+    }
+    if (changed) save();
+  }
+  function checkAll() { const seen = new Set(); for (const w of Object.values(db.kpiWatches)) if (!seen.has(w.wsId) && db.workspaces[w.wsId]) { seen.add(w.wsId); try { check(db.workspaces[w.wsId]); } catch {} } }
+  function cleanWatch(body, w = {}) {
+    const metric = body.metric ?? w.metric, m = BY_KEY[metric];
+    if (!m) return { error: 'Pick a number from Analytics.' };
+    const kind = body.kind ?? w.kind;
+    if (!['goal', 'alert'].includes(kind)) return { error: 'A goal or an alert.' };
+    const op = kind === 'alert' ? body.op ?? w.op : null;
+    if (kind === 'alert' && !['above', 'below'].includes(op)) return { error: 'Above or below?' };
+    const raw = body.value !== undefined ? Number(body.value) : null;
+    if (body.value !== undefined && (!Number.isFinite(raw) || raw < 0 || raw > 1e9)) return { error: 'The number to watch for.' };
+    const value = body.value !== undefined ? (m.unit === 'money' ? Math.round(raw * 100) : m.unit === 'days' ? Math.round(raw * 10) / 10 : Math.round(raw)) : w.value;
+    if (value === undefined || value === null) return { error: 'The number to watch for.' };
+    if (m.unit === 'pct' && value > 100) return { error: 'A share is at most 100%.' };
+    const period = m.now ? null : body.period ?? w.period ?? 'month';
+    if (!m.now && !PERIODS[period]) return { error: 'A week, a month or a quarter.' };
+    return { metric, kind, op, value, period };
+  }
+  async function watchRoute(req, res, parts, auth, ws, secs) {
+    const id = parts[2], m = req.method;
+    if (m === 'GET' && !id) return send(res, 200, watchesOf(ws).filter((w) => secs.includes(BY_KEY[w.metric].sec)).map((w) => statusOf(ws, w)));
+    if (!isAdmin(auth)) return send(res, 403, { error: 'Only team owners and admins set goals and alerts.' });
+    if (m === 'POST' && !id) {
+      if (watchesOf(ws).length >= ANALYTICS_LIMITS.watches) return send(res, 409, { error: `A team can have up to ${ANALYTICS_LIMITS.watches} goals and alerts.` });
+      const v = cleanWatch(await readJson(req));
+      if (v.error) return send(res, 400, v);
+      const w = { id: rid(), wsId: ws.id, ...v, fired: null, by: auth.member, byId: auth.memberId, at: Date.now() };
+      db.kpiWatches[w.id] = w;
+      save();
+      check(ws);
+      return send(res, 200, statusOf(ws, w));
+    }
+    const w = db.kpiWatches[id];
+    if (!w || w.wsId !== ws.id) return send(res, 404, { error: 'That goal or alert is gone.' });
+    if (m === 'PATCH') {
+      const v = cleanWatch(await readJson(req), w);
+      if (v.error) return send(res, 400, v);
+      Object.assign(w, v, { fired: null });
+      save();
+      check(ws);
+      return send(res, 200, statusOf(ws, w));
+    }
+    if (m === 'DELETE') { delete db.kpiWatches[id]; save(); return send(res, 200, { ok: true }); }
+    return send(res, 405, { error: 'Not here.' });
+  }
+
   function route(req, res, parts, auth, ws) {
     const [, b] = parts;
-    if (req.method !== 'GET') return send(res, 405, { error: 'Not here.' });
     const secs = sectionsFor(ws, auth);
     if (!secs.length) return send(res, 403, { error: memberOff('teamKpis') });
+    if (b === 'watches') return watchRoute(req, res, parts, auth, ws, secs);
+    if (req.method !== 'GET') return send(res, 405, { error: 'Not here.' });
     const D = datesOf(req);
     if (D.error) return send(res, 400, { error: D.error });
     if (!b) return send(res, 200, report(ws, auth, D));
@@ -260,5 +352,5 @@ export function analyticsModule({ db, send, isAdmin, isDay, addDays, teamDay, me
     }
     return send(res, 404, { error: 'Not here.' });
   }
-  return { route, report, drill, CATALOG, bucketsOf };
+  return { route, report, drill, CATALOG, bucketsOf, check, checkAll };
 }

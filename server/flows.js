@@ -3,7 +3,7 @@
 // Each event says which tool it's from, what it's called, the words it fills in ({contact}, {amount}…) and the
 // filters an automation can narrow it with. index.js fires them (automate) from the one place each thing happens.
 
-export const TOOLS = { tasks: 'Tasks', contacts: 'Contacts', campaigns: 'Campaigns', projects: 'Boards', money: 'Invoices & Finance', files: 'Files & signatures', texts: 'Texts', docs: 'Docs', map: 'Map', time: 'Time', inventory: 'Inventory', github: 'GitHub', companycam: 'CompanyCam', apps: 'Apps & Integrations', bookings: 'Bookings (Calendly, Cal.com)' };
+export const TOOLS = { tasks: 'Tasks', contacts: 'Contacts', campaigns: 'Campaigns', projects: 'Boards', money: 'Invoices & Finance', files: 'Files & signatures', texts: 'Texts', docs: 'Docs', map: 'Map', time: 'Time', inventory: 'Inventory', analytics: 'Analytics', github: 'GitHub', companycam: 'CompanyCam', apps: 'Apps & Integrations', bookings: 'Bookings (Calendly, Cal.com)' };
 
 // filters: campaign (in a campaign), step (a campaign step, by its name, so a saved campaign's runs match too), stage (a contact's stage), outcome (a call's), statuses (a check-in's),
 // project (and list), to (a record's stage it moved to), over (an amount at least this, in dollars), date (a
@@ -56,6 +56,8 @@ export const EVENTS = [
   { type: 'booking.created', tool: 'bookings', label: 'Someone books a time (Calendly or Cal.com)', words: ['contact', 'booking', 'date', 'time', 'who', 'record'], filters: [] },
   { type: 'booking.cancelled', tool: 'bookings', label: 'A booking is cancelled', words: ['contact', 'booking', 'date', 'time', 'who', 'note', 'record'], filters: [] },
   { type: 'booking.rescheduled', tool: 'bookings', label: 'A booking is moved to another time', words: ['contact', 'booking', 'date', 'time', 'who', 'record'], filters: [] },
+  { type: 'analytics.goal', tool: 'analytics', label: 'A goal in Analytics is reached (owners and admins)', words: ['metric', 'value', 'target', 'period', 'note', 'date'], filters: [] },
+  { type: 'analytics.alert', tool: 'analytics', label: 'An alert in Analytics goes off: a number above or below its line (owners and admins)', words: ['metric', 'value', 'target', 'period', 'note', 'date'], filters: [] },
   { type: 'schedule', tool: 'time', label: 'On a schedule', words: ['date'], filters: [] },
 ];
 export const EVENT = Object.fromEntries(EVENTS.map((e) => [e.type, e]));

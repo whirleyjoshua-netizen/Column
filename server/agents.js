@@ -29,7 +29,7 @@ export const AGENTS = {
       'Turns commitments in emails you paste into tasks',
       'Prepares your end-of-day summary and plans the week',
     ],
-    tools: ['find_templates', 'code_activity', 'save_template', 'find_inventory', 'look_at_day', 'find_bookings', 'list_tasks', 'find_records', 'read_record', 'list_campaigns', 'team_schedule', 'plan_route', 'find_docs', 'read_doc', 'look_at_money', 'set_budget', 'add_bill', 'add_to_company_hq', 'create_automation', 'create_task', 'update_task', 'schedule_time', 'move_time', 'write_doc', 'make_proof_link', 'post_to_chat', 'draft_teams_post', 'notify_me'],
+    tools: ['find_templates', 'business_numbers', 'code_activity', 'save_template', 'find_inventory', 'look_at_day', 'find_bookings', 'list_tasks', 'find_records', 'read_record', 'list_campaigns', 'team_schedule', 'plan_route', 'find_docs', 'read_doc', 'look_at_money', 'set_budget', 'add_bill', 'add_to_company_hq', 'create_automation', 'create_task', 'update_task', 'schedule_time', 'move_time', 'write_doc', 'make_proof_link', 'post_to_chat', 'draft_teams_post', 'notify_me'],
     workflows: [
       { key: 'briefing', name: 'Morning briefing', ask: 'Give me my morning briefing: what matters today, what is overdue or at risk, and the first thing I should do. Keep it short.', sched: { days: [1, 2, 3, 4, 5], at: 7 * 60 } },
       { key: 'plan_day', name: 'Plan my day', ask: 'Plan my day today: put my tasks into open time around what is already booked, most important first, with breaks, and tell me what won’t fit and what to move or hand off.' },
@@ -51,7 +51,7 @@ export const AGENTS = {
       'Books customer meetings and prepares a brief beforehand',
       'Finds deals that have gone quiet and plans the next step',
     ],
-    tools: ['find_templates', 'save_template', 'find_inventory', 'find_records', 'read_record', 'list_projects', 'find_contacts', 'look_at_day', 'find_bookings', 'list_tasks', 'list_campaigns', 'team_schedule', 'find_docs', 'read_doc', 'create_task', 'update_task', 'save_contact', 'create_record', 'update_record', 'log_note', 'book_visit', 'schedule_time', 'move_time', 'write_doc', 'draft_email', 'make_proof_link', 'post_to_chat', 'draft_teams_post', 'notify_me'],
+    tools: ['find_templates', 'business_numbers', 'save_template', 'find_inventory', 'find_records', 'read_record', 'list_projects', 'find_contacts', 'look_at_day', 'find_bookings', 'list_tasks', 'list_campaigns', 'team_schedule', 'find_docs', 'read_doc', 'create_task', 'update_task', 'save_contact', 'create_record', 'update_record', 'log_note', 'book_visit', 'schedule_time', 'move_time', 'write_doc', 'draft_email', 'make_proof_link', 'post_to_chat', 'draft_teams_post', 'notify_me'],
     workflows: [
       { key: 'lead', name: 'Handle a new lead', ask: 'A new lead came in. Record them (contact and lead or deal), draft my reply, suggest times to meet, and set the follow-up:\n\n', paste: true },
       { key: 'radar', name: 'Follow-up radar', ask: 'Run the follow-up radar: find leads, deals and quotes with no reply or no contact in a while, and anyone who booked a time in the last few days (find_bookings, new), and set up the next step for each (a task, and a drafted follow-up email where there’s an address).', sched: { days: [1, 3, 5], at: 8 * 60 } },
@@ -73,7 +73,7 @@ export const AGENTS = {
       'Checks project health and says what’s slipping',
       'Closes jobs out with a completion report',
     ],
-    tools: ['find_templates', 'code_activity', 'save_template', 'find_inventory', 'use_stock', 'list_projects', 'find_records', 'read_record', 'list_tasks', 'look_at_day', 'team_schedule', 'plan_route', 'find_docs', 'read_doc', 'find_photos', 'look_at_photos', 'create_project', 'create_record', 'update_record', 'log_note', 'book_visit', 'draft_invoice', 'send_invoice', 'send_signoff', 'create_automation', 'create_task', 'update_task', 'schedule_time', 'move_time', 'write_doc', 'draft_email', 'make_proof_link', 'post_to_chat', 'draft_teams_post', 'notify_me'],
+    tools: ['find_templates', 'business_numbers', 'code_activity', 'save_template', 'find_inventory', 'use_stock', 'list_projects', 'find_records', 'read_record', 'list_tasks', 'look_at_day', 'team_schedule', 'plan_route', 'find_docs', 'read_doc', 'find_photos', 'look_at_photos', 'create_project', 'create_record', 'update_record', 'log_note', 'book_visit', 'draft_invoice', 'send_invoice', 'send_signoff', 'create_automation', 'create_task', 'update_task', 'schedule_time', 'move_time', 'write_doc', 'draft_email', 'make_proof_link', 'post_to_chat', 'draft_teams_post', 'notify_me'],
     workflows: [
       { key: 'kickoff', name: 'Project kickoff', ask: 'We just won this work. Organize it: the job (or project), the tasks in order with who and when, a materials list, visits, and a completion checklist:\n\n', paste: true },
       { key: 'prep', name: 'Job preparation', ask: 'Prepare for the jobs coming up in the next few days: a checklist for each, what to bring or order, and anything missing before we can start.' },
@@ -95,7 +95,7 @@ export const AGENTS = {
       'Wins back past customers and asks happy ones for reviews and referrals',
       'Reports which lead sources and campaigns bring jobs and money, and what to do about it',
     ],
-    tools: ['find_templates', 'save_template', 'find_inventory', 'marketing_snapshot', 'find_customers', 'list_channels', 'social_posts', 'find_photos', 'look_at_photos', 'list_campaigns', 'find_records', 'read_record', 'find_contacts', 'find_docs', 'read_doc', 'list_tasks', 'look_at_day', 'create_campaign', 'make_list', 'create_task', 'update_task', 'schedule_time', 'write_doc', 'make_image', 'draft_social_post', 'draft_email_campaign', 'post_to_chat', 'draft_teams_post', 'notify_me'],
+    tools: ['find_templates', 'business_numbers', 'save_template', 'find_inventory', 'marketing_snapshot', 'find_customers', 'list_channels', 'social_posts', 'find_photos', 'look_at_photos', 'list_campaigns', 'find_records', 'read_record', 'find_contacts', 'find_docs', 'read_doc', 'list_tasks', 'look_at_day', 'create_campaign', 'make_list', 'create_task', 'update_task', 'schedule_time', 'write_doc', 'make_image', 'draft_social_post', 'draft_email_campaign', 'post_to_chat', 'draft_teams_post', 'notify_me'],
     rules: [
       'Ground everything in the business: read the business profile (it comes with these instructions) and marketing_snapshot before planning. Write for their ideal customer, in their voice, about what makes them different. Generic marketing copy is a failure.',
       'Never invent reviews, testimonials, statistics, awards, prices, discounts or offers. Use an offer only if the person or the business profile gave it; otherwise propose one and say it needs their OK.',
@@ -868,6 +868,36 @@ export function agentsModule({ autoEvents = [], sees = () => true, db, save, bro
       },
     },
     // ---------- marketing ----------
+    // ----- Analytics (Team plan step 5, "Ask your data"): the numbers the person sees in Tools → Analytics -----
+    business_numbers: {
+      kind: 'read', label: (a) => `Looked at the business’s numbers${a.metric ? ' (' + words(String(a.metric), 30) + ')' : ''}`,
+      description: 'The business’s numbers from Analytics, exactly what this person may see there: for dates (from and to as YYYY-MM-DD, or days back, default 30), each against the same length of time just before, with a trend. Business: income, expenses, profit, invoiced, collected, owed (now), overdueInvoices (now), quotesSent, quotesWon, winRate. Team & operations: tasksDone, onTime (%), overdueNow, visitsDone, daysToFinish, reopened, and a line per person. Customers: newContacts, leads, by source. Marketing: attempts (calls and emails logged), interested, sales, campaigns (active). Plus the team’s goals and alerts and where they stand. Give metric (one of those keys) for the records behind that number, and member (a person’s id) to narrow team records to one person. Money is in dollars. Use it for any question about how the business, the team, customers or marketing are doing, and say which dates you looked at. Members only see Team & operations, and only when an admin allows it.',
+      parameters: { type: 'object', properties: { from: { type: 'string' }, to: { type: 'string' }, days: { type: 'number' }, metric: { type: 'string' }, member: { type: 'string' } } },
+      async run(cx, a) {
+        const isDay = (k) => typeof k === 'string' && /^\d{4}-\d\d-\d\d$/.test(k);
+        const shift = (k, n) => new Date(Date.parse(k + 'T00:00:00Z') + n * 864e5).toISOString().slice(0, 10);
+        const to = isDay(a.to) ? a.to : cx.today;
+        const from = isDay(a.from) ? a.from : shift(to, -(Math.max(1, Math.min(1096, Math.round(Number(a.days) || 30))) - 1));
+        const r = await cx.call('GET', `/api/analytics?from=${from}&to=${to}`);
+        if (r.status >= 300) return { error: r.body?.error || 'Analytics isn’t open to this person.' };
+        const D = r.body;
+        const val = (v, unit) => (v === null || v === undefined ? null : unit === 'money' ? Math.round(v) / 100 : v);
+        const out = { from: D.from, to: D.to, comparedWith: `${D.prevFrom} to ${D.prevTo}`, trendBy: (Date.parse(D.to) - Date.parse(D.from)) / 864e5 + 1 > 62 ? 'month' : 'week', sections: {} };
+        for (const [k, sec] of Object.entries(D.sections)) {
+          out.sections[k] = {
+            metrics: sec.metrics.map((m) => ({ key: m.key, label: m.label, unit: m.unit === 'money' ? 'dollars' : m.unit, value: val(m.value, m.unit), ...(m.now ? { asOfToday: true } : { before: val(m.prev, m.unit), trend: (m.series || []).map((x) => val(x, m.unit)) }), ...(m.lowGood ? { lowerIsBetter: true } : {}) })),
+            ...(sec.people ? { people: sec.people } : {}), ...(sec.sources ? { sources: sec.sources } : {}),
+            ...(sec.campaigns ? { campaigns: sec.campaigns.map((c) => ({ ...c, sales: c.sales / 100 })) } : {}),
+          };
+        }
+        out.goalsAndAlerts = (D.watches || []).map((w) => ({ what: w.text, kind: w.kind, now: val(w.current, w.unit), target: val(w.value, w.unit), period: w.period, met: w.met, ...(w.pct !== null ? { percentOfGoal: w.pct } : {}) }));
+        if (a.metric) {
+          const d = await cx.call('GET', `/api/analytics/drill?metric=${encodeURIComponent(a.metric)}&from=${from}&to=${to}${a.member ? '&member=' + encodeURIComponent(a.member) : ''}`);
+          out.records = d.status >= 300 ? { error: d.body?.error } : { metric: d.body.label, rows: d.body.rows.slice(0, 40).map((x) => ({ what: x.label, detail: x.sub, ...(x.amount !== undefined ? { dollars: x.amount / 100 } : {}), day: x.day })), notShown: d.body.hidden || 0, more: d.body.more + Math.max(0, d.body.rows.length - 40) };
+        }
+        return out;
+      },
+    },
     marketing_snapshot: {
       kind: 'read', label: (a) => `Looked at the last ${Number(a.days) > 0 ? Math.round(Number(a.days)) : 90} days of marketing`,
       description: 'What is bringing in work: new leads by source and how many became jobs or deals and how much they were worth (owners and admins), work started by month for the last year (to see seasons), campaigns and their results, email campaigns sent, and posts on social channels.',
