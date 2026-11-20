@@ -54,7 +54,7 @@ const sam = call((await call()('POST', '/auth', { mode: 'join', workspace: team,
 const samId = (await sam('GET', '/state')).me.memberId;
 await A.until(`(window.S?.workspace?.members?.length || document.querySelectorAll('.member').length) >= 0`);
 // The menu: 👥 Team and 🕒 My shifts.
-await A.ev(`(document.querySelector('.ws').click(), true)`);
+await A.ev(`(document.querySelector('#tabs [data-tab=work]').click(), document.querySelector('#workTabs .ws-switch').click(), true)`);
 ok(await A.until(`[...document.querySelectorAll('#menu button')].some((b) => b.textContent === '🕒 My shifts')`), 'the workspace menu has 🕒 My shifts: ' + await A.ev(`[...document.querySelectorAll('#menu button')].map((b) => b.textContent).join(' | ')`));
 await A.ev(`([...document.querySelectorAll('#menu button')].find((b) => b.textContent === '👥 Team').click(), true)`);
 ok(await A.until(`!!document.querySelector('#sheet .tm-tab[data-tab=shifts]')`, 8000), 'the Team page has a Shifts tab');
@@ -95,7 +95,7 @@ await A.tap(`document.querySelector('#sheet .shav-save')`);
 ok(await A.until(`!!document.querySelector('#sheet .sh-grid')`, 8000), 'saved, back on the week');
 ok((await api('GET', '/availability/' + samId)).off.length === 1, 'his time off is saved');
 // My shifts.
-await A.ev(`(document.querySelector('.ws').click(), true)`);
+await A.ev(`(document.querySelector('#tabs [data-tab=work]').click(), document.querySelector('#workTabs .ws-switch').click(), true)`);
 await A.until(`[...document.querySelectorAll('#menu button')].some((b) => b.textContent === '🕒 My shifts')`);
 await A.ev(`([...document.querySelectorAll('#menu button')].find((b) => b.textContent === '🕒 My shifts').click(), true)`);
 ok(await A.until(`!!document.querySelector('#sheet .mys .mys-none')`, 8000), 'My shifts opens: none for Jo');

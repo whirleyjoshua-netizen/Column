@@ -57,7 +57,7 @@ const next = plus(today, 7 - new Date(today + 'T12:00:00Z').getUTCDay()), wed = 
 // Sam works Monday to Friday 8–4 and is off next Wednesday, but has 3 hours booked that day.
 await sam('PUT', '/availability/me', { week: [[], [[480, 960]], [[480, 960]], [[480, 960]], [[480, 960]], [[480, 960]], []], off: [{ from: wed, to: wed, note: 'Dentist' }] });
 await sam('POST', '/entries', { text: 'Site walk', date: wed, start: 540, end: 720 });
-await A.ev(`(document.querySelector('.ws').click(), true)`);
+await A.ev(`(document.querySelector('#tabs [data-tab=work]').click(), document.querySelector('#workTabs .ws-switch').click(), true)`);
 await A.until(`[...document.querySelectorAll('#menu button')].some((b) => b.textContent === '👥 Team')`);
 await A.ev(`([...document.querySelectorAll('#menu button')].find((b) => b.textContent === '👥 Team').click(), true)`);
 ok(await A.until(`!!document.querySelector('#sheet .tm-tab[data-tab=hours]')`, 8000), 'the Team page has an Hours tab');

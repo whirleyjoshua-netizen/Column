@@ -250,12 +250,20 @@
       { label: '+ New workspace', run: () => addTeam('create') },
       { label: 'Join a workspace', run: () => addTeam('join') },
       { label: 'Sign in to another', run: () => addTeam('signin') },
-      // In a docked column or on a phone Workspace's tab strip (whose name opens it) isn't showing: the profile is here.
+      // At full size the profile, Team and My shifts live under the workspace's name at the start of Workspace's tab
+      // strip (the owner, 2026-11-20: they were in the wrong menu). In a docked column or on a phone that strip isn't
+      // showing, so they're here too.
+      ...(document.body.classList.contains('wide') ? [] : wsItems()),
+    ]);
+  }
+  // This workspace: its profile, the Team page (owners and admins) and your shifts.
+  function wsItems() {
+    return [
       { head: S.workspace.name },
       { label: '🪪 Workspace profile', run: () => profileSheet() },
       ...(canTeam() ? [{ label: '👥 Team', run: () => openTeam() }] : []),
       { label: '🕒 My shifts', run: () => openMyShifts() },
-    ]);
+    ];
   }
   function addTeam(mode = 'signin') {
     S.adding = true;
@@ -3396,9 +3404,10 @@
     const pinsBtn = h('button', { class: 'pins-btn', title: 'Your pins', 'aria-label': 'Your pins', 'aria-haspopup': 'menu', onclick: (e) => { e.stopPropagation(); pinsDrop(e.currentTarget); } },
       h('span', { class: 'tab-ic', html: PIN_IC.pin }), pins.length ? h('span', { class: 'pins-n' }, String(pins.length)) : null, h('span', { class: 'pins-caret', html: PIN_IC.caret }));
     // First, the workspace you're in: its name opens your workspaces (switch, new, join).
-    // The workspace's name at the start of the strip opens its profile (the owner, 2026-11-19: the header's name
-    // already switches workspaces, and two switchers on top of each other was one too many).
-    const wsBtn = S.workspace && h('button', { class: 'ws-switch', title: 'Workspace profile: insurance & licenses, rules', onclick: (e) => { e.stopPropagation(); profileSheet(); } }, h('span', { class: 'ws-sw-n' }, S.workspace.name), h('span', { class: 'ws-sw-c', 'aria-hidden': 'true' }, '›'));
+    // The workspace's name at the start of the strip opens this workspace's menu: its profile, Team and My shifts (the
+    // owner, 2026-11-19: the header's name already switches workspaces, and two switchers on top of each other was one
+    // too many; 2026-11-20: Team and My shifts belong here, not with the other workspaces).
+    const wsBtn = S.workspace && h('button', { class: 'ws-switch', title: 'This workspace: profile, team, shifts', 'aria-haspopup': 'menu', onclick: (e) => { e.stopPropagation(); openMenu(e.currentTarget, wsItems()); } }, h('span', { class: 'ws-sw-n' }, S.workspace.name), h('span', { class: 'ws-sw-c', 'aria-hidden': 'true' }, '▾'));
     $('#workTabs')?.replaceChildren(...(wsBtn ? [wsBtn, h('span', { class: 'ws-sw-sep', 'aria-hidden': 'true' })] : []), ...workKeys().filter((k) => k !== 'tools').map(wbtn), pinsBtn, ...(workKeys().includes('tools') ? [wbtn('tools')] : []));
     markTabs();
     renderChatSide();

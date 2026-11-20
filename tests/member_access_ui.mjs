@@ -73,7 +73,7 @@ try {
   ok(!(await workTabs()).includes('projects'), 'Mo’s Workspace has no Boards now: ' + await workTabs());
   ok(!(await toolList()).includes('inventory'), 'and no Inventory in Tools');
   await A.until(`!!document.querySelector('.ws')`);
-  await A.ev(`(document.querySelector('.ws').click(), true)`);
+  await A.ev(`(document.querySelector('#tabs [data-tab=work]').click(), document.querySelector('#workTabs .ws-switch').click(), true)`);
   ok(await A.until(`[...document.querySelectorAll('#menu button')].some((b) => b.textContent === '👥 Team')`, 8000), 'the Team page is in his workspace menu');
   await A.cmd('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
   const r = await fetch(APP + 'api/inventory', { headers: { authorization: 'Bearer ' + mo.token } });

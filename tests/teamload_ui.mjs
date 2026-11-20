@@ -57,7 +57,7 @@ try {
   await A.tap(`document.querySelector('#tabs [data-tab=work]')`);
   // Team has its own page (2026-11-20), from the workspace menu, not in Tasks.
   ok(await A.until(`!!document.querySelector('#day .day-modes')`) && await A.ev(`![...document.querySelectorAll('#day .day-modes button')].some((b) => b.textContent === 'Team')`), 'Tasks has no Team view now');
-  await A.ev(`(document.querySelector('.ws').click(), true)`);
+  await A.ev(`(document.querySelector('#tabs [data-tab=work]').click(), document.querySelector('#workTabs .ws-switch').click(), true)`);
   ok(await A.until(`[...document.querySelectorAll('#menu button')].some((b) => b.textContent === '👥 Team')`), 'the owner has 👥 Team in the workspace menu');
   await A.ev(`([...document.querySelectorAll('#menu button')].find((b) => b.textContent === '👥 Team').click(), true)`);
   ok(await A.until(`document.querySelector('#sheet .tm-tab.on')?.dataset.tab === 'week' && ![...document.querySelectorAll('#sheet .tm-tab')].some((b) => b.dataset.tab === 'visits')`, 8000), 'it opens on This week (no Visits tab with Projects off)');
@@ -82,7 +82,7 @@ try {
   // With Projects on, the day's job visits board is still there, under the numbers.
   await ada('PATCH', '/workspace', { tools: { projects: true } });
   await sleep(1200);
-  await A.ev(`(document.querySelector('.ws').click(), true)`);
+  await A.ev(`(document.querySelector('#tabs [data-tab=work]').click(), document.querySelector('#workTabs .ws-switch').click(), true)`);
   await A.until(`[...document.querySelectorAll('#menu button')].some((b) => b.textContent === '👥 Team')`);
   await A.ev(`([...document.querySelectorAll('#menu button')].find((b) => b.textContent === '👥 Team').click(), true)`);
   await A.until(`!!document.querySelector('#sheet .tm-tab[data-tab=visits]')`, 8000);
@@ -95,7 +95,7 @@ try {
   ok(await A.until(`!document.querySelector('#app').classList.contains('hidden')`, 15000), 'Ben is in');
   await A.ev(`document.querySelector('#tabs [data-tab=work]').click(); true`);
   await A.until(`!!document.querySelector('.ws')`);
-  await A.ev(`(document.querySelector('.ws').click(), true)`);
+  await A.ev(`(document.querySelector('#tabs [data-tab=work]').click(), document.querySelector('#workTabs .ws-switch').click(), true)`);
   ok(await A.until(`document.querySelectorAll('#menu button').length > 0`) && await A.ev(`![...document.querySelectorAll('#menu button')].some((b) => b.textContent === '👥 Team')`), 'a member has no Team in the menu');
   ok(A.errors.length === 0, 'no script errors' + (A.errors.length ? ': ' + A.errors.join(' | ') : ''));
 } catch (e) { ok(false, 'threw: ' + e.stack); }

@@ -48,8 +48,11 @@ try {
   await A.tap(`document.querySelector('#tabs [data-tab=work]')`);
   const sw = `document.querySelector('#workTabs .ws-switch')`, hs = `document.querySelector('header.bar .ws')`;
   ok(await A.until(`${sw}?.textContent.includes('Alpha ${t}') && document.querySelector('#workTabs').firstElementChild === ${sw}`), 'Workspace starts with the workspace you’re in');
-  // Its name opens the workspace profile (2026-11-19); the name in the header switches workspaces.
+  // Its name opens this workspace's menu (2026-11-20): Workspace profile, Team, My shifts; the name in the header
+  // switches workspaces, and at full size has only those.
   await A.tap(sw);
+  ok(await A.until(`[...document.querySelectorAll('#menu button')].map((b) => b.textContent).join('|') === '🪪 Workspace profile|👥 Team|🕒 My shifts'`), 'the strip’s name opens this workspace’s menu: ' + await A.ev(`[...document.querySelectorAll('#menu button')].map((b) => b.textContent).join('|')`));
+  await A.ev(`[...document.querySelectorAll('#menu button')].find((b) => b.textContent === '🪪 Workspace profile').click(); true`);
   ok(await A.until(`!!document.querySelector('#sheet .wp .wp-sec') && (!document.body.classList.contains('wide') || !!document.querySelector('#sheet .sheet.page-view .wp-grid'))`), 'the strip’s name opens the workspace profile (at full size, as a page, not a pop-up)');
   ok(await A.ev(`document.body.classList.contains('wide')`), '(the test runs at full size)');
   // Proof, anywhere (step 3): an owner switches proof on quotes & invoices from the profile.
@@ -61,6 +64,7 @@ try {
   ok(await A.until(`[...document.querySelectorAll('#menu .mh')].some((x) => x.textContent === 'Workspaces')`), 'the header’s name lists your workspaces');
   const items = await A.ev(`[...document.querySelectorAll('#menu button')].map((b) => b.textContent).join('|')`);
   ok(items.includes('Alpha ' + t) && items.includes('+ New workspace') && items.includes('Join a workspace'), 'with + New workspace and Join a workspace: ' + items);
+  ok(!items.includes('👥 Team') && !items.includes('🕒 My shifts') && !items.includes('🪪 Workspace profile'), 'and not Team, My shifts or the profile (they’re under the strip’s name)');
   // A new one.
   await A.ev(`[...document.querySelectorAll('#menu button')].find((b) => b.textContent === '+ New workspace').click(); true`);
   ok(await A.until(`!document.querySelector('#login').classList.contains('hidden') && document.querySelector('#teamField').firstChild.textContent === 'Workspace name'`), 'New workspace asks for its name');

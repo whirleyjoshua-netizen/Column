@@ -58,7 +58,7 @@ await A.until(`!document.querySelector('#app').classList.contains('hidden')`, 15
 await sleep(1500);
 ok(await A.ev(`!document.querySelector('#sheet:not(.hidden) .tm')`), 'so it doesn’t open again by itself');
 // From the workspace menu, at full size: a page.
-await A.ev(`(document.querySelector('.ws').click(), true)`);
+await A.ev(`(document.querySelector('#tabs [data-tab=work]').click(), document.querySelector('#workTabs .ws-switch').click(), true)`);
 ok(await A.until(`[...document.querySelectorAll('#menu button')].some((b) => b.textContent === '👥 Team')`), 'the workspace menu has 👥 Team, under Workspace profile: ' + await A.ev(`[...document.querySelectorAll('#menu button')].map((b) => b.textContent).join(' | ')`));
 ok(await A.ev(`(() => { const t = [...document.querySelectorAll('#menu button')].map((b) => b.textContent); return t.indexOf('👥 Team') === t.indexOf('🪪 Workspace profile') + 1; })()`), 'right under it');
 await A.ev(`([...document.querySelectorAll('#menu button')].find((b) => b.textContent === '👥 Team').click(), true)`);

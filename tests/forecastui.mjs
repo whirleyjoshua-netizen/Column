@@ -63,7 +63,7 @@ await api('POST', `/records/${job.id}/visits`, { kind: 'Estimate', date: day(1),
 await sleep(600);
 
 await A.tap(`document.querySelector('#tabs [data-tab=work]')`);
-await A.ev(`(document.querySelector('.ws').click(), true)`);
+await A.ev(`(document.querySelector('#tabs [data-tab=work]').click(), document.querySelector('#workTabs .ws-switch').click(), true)`);
 ok(await A.until(`[...document.querySelectorAll('#menu button')].some((b) => b.textContent === '👥 Team')`), 'the owner has 👥 Team in the workspace menu');
 await A.ev(`([...document.querySelectorAll('#menu button')].find((b) => b.textContent === '👥 Team').click(), true)`);
 await A.until(`!!document.querySelector('#sheet .tm-tab[data-tab=ahead]')`, 8000);
