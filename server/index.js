@@ -2889,6 +2889,9 @@ const maySignOff = (t, auth) => isAdmin(auth) || taskCamp(t)?.ownerId === auth.m
 function applyCampaign(c, body, ws, auth) {
   if (body.name !== undefined) c.name = String(body.name || '').trim().slice(0, 80);
   if (body.brief !== undefined) c.brief = String(body.brief || '').slice(0, 20_000);
+  // The brief's other parts (2026-11-20, the Command Center): who it's for and how. The brief itself is the objective.
+  if (body.audience !== undefined) c.audience = String(body.audience || '').replace(/\r\n?/g, '\n').trim().slice(0, 2000);
+  if (body.strategy !== undefined) c.strategy = String(body.strategy || '').replace(/\r\n?/g, '\n').trim().slice(0, 4000);
   for (const k of ['start', 'end']) {
     if (body[k] === undefined) continue;
     if (!isDate(body[k] || null)) throw badRequest('Bad date');
@@ -3395,7 +3398,7 @@ function snapshotCampaign(c, main = c) {
   const lists = Object.values(db.lists).filter((l) => l.campaignId === c.id && !l.live && KEPT_LISTS.includes(l.kind)).sort((a, b) => a.createdAt - b.createdAt);
   return {
     campaign: {
-      brief: c.brief, color: c.color, outcomes: c.outcomes, methods: c.methods, followUps: c.followUps, private: c.private, memberIds: c.memberIds, inOrder: !!c.inOrder, cast: castOf(c),
+      brief: c.brief, audience: c.audience || '', strategy: c.strategy || '', color: c.color, outcomes: c.outcomes, methods: c.methods, followUps: c.followUps, private: c.private, memberIds: c.memberIds, inOrder: !!c.inOrder, cast: castOf(c),
       days: c.start && c.end ? daysBetween(c.start, c.end) : null, ...(c === main ? {} : { name: c.name, assigneeId: c.assigneeId || null, startIn: c.start && main.start ? daysBetween(main.start, c.start) : null }),
     },
     lists: lists.map((l) => ({ ref: l.id, name: l.name, kind: l.kind, agenda: !!l.agenda, columns: l.columns, rows: l.rows.map((r) => ({ cells: r.cells, section: r.section, mins: r.mins })) })),
@@ -3466,7 +3469,7 @@ function runTemplate(tpl, { date, time, by, cast, recordId }) {
   const make = (snap, name, start, extra) => {
     const k = snap.campaign;
     const c = createCampaign(ws, owner, {
-      name, brief: k.brief, color: k.color, outcomes: k.outcomes, methods: k.methods, private: k.private, memberIds: k.memberIds, inOrder: !!k.inOrder,
+      name, brief: k.brief, audience: k.audience || '', strategy: k.strategy || '', color: k.color, outcomes: k.outcomes, methods: k.methods, private: k.private, memberIds: k.memberIds, inOrder: !!k.inOrder,
       cast: (k.cast || []).map((r) => (snap === tpl && cast && Array.isArray(cast[r.id]) ? { ...r, memberIds: cast[r.id] } : r)),
       start, end: k.days != null ? addDays(start, k.days) : null, ...extra, ...(job ? { recordId: job } : {}),
       ...(k.followUps ? { followUps: k.followUps } : {}),

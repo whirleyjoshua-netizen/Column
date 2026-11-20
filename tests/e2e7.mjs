@@ -91,6 +91,7 @@ await api('PATCH', `/records/${ben.id}`, { values: { [F('contacts', 'stage').id]
 await A.tap(`document.querySelector('#projects [aria-label="Close Boards"]')`);
 await A.ev(`document.querySelector('#tabs [data-tab=camps]').click()`);
 await A.tap(`[...document.querySelectorAll('.camp-card')].find((b) => b.textContent.includes('Call qualified'))`);
+await A.ev(`document.querySelector('#camps .cc-tab[data-ctab=resources]')?.click(); true`); // Files are under Resources (2026-11-20)
 await A.until(`[...document.querySelectorAll('#camps button')].some((b) => b.textContent.startsWith('Files'))`);
 await A.tap(`[...document.querySelectorAll('#camps button')].find((b) => b.textContent.startsWith('Files'))`);
 await A.tap(`[...document.querySelectorAll('#menu button')].find((b) => b.textContent === '+ Call list from a project…')`);

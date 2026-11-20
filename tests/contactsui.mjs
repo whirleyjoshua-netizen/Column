@@ -129,6 +129,7 @@ await A.tap(`document.querySelector('#tool [aria-label=Close]')`).catch(() => {}
 await A.ev(`document.querySelector('#tabs [data-tab=camps]').click()`);
 await A.until(`[...document.querySelectorAll('.camp-card')].some((b) => b.textContent.includes('Spring calls'))`);
 await A.tap(`[...document.querySelectorAll('.camp-card')].find((b) => b.textContent.includes('Spring calls'))`);
+await A.ev(`document.querySelector('#camps .cc-tab[data-ctab=resources]')?.click(); true`); // Files are under Resources (2026-11-20)
 await A.until(`[...document.querySelectorAll('#camps button')].some((b) => b.textContent.startsWith('Files'))`);
 await A.tap(`[...document.querySelectorAll('#camps button')].find((b) => b.textContent.startsWith('Files'))`);
 ok(await A.until(`[...document.querySelectorAll('#menu button')].some((b) => b.textContent === '+ Call list from Contacts…')`), 'a campaign can make a call list from Contacts, without PSS');

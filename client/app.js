@@ -6823,6 +6823,7 @@
 
   // Re-render, unless someone is typing in here; then wait until they're done.
   K.overview ??= store.get('campsOverview', false);
+  K.ctab ??= store.get('campTab', 'overview');
   function renderCamps() {
     const root = $('#camps');
     if (!S.workspace || !campsShown() || K.sorting) return;
@@ -7009,56 +7010,170 @@
       brief.replaceWith(ta);
       ta.focus();
     });
-    return h('div', { class: 'camp-view' },
-      h('div', { class: 'camp-top' },
-        h('button', { class: 'icon-btn', 'aria-label': 'All campaigns', html: I.back, onclick: () => openCampaign(null) }),
-        h('b', { class: 'camp-name' }, c.name),
+    // ----- the Campaign Command Center (2026-11-20, the owner's brainstorm): a header with health, dates, owner and the
+    // team; KPIs from the real work; five tabs (Overview, Plan, Work, Resources, Activity); phases (the steps) as
+    // connected cards; a Pulse panel down the side at full size. Every part of the old page is in one of the tabs.
+    const tab = ['overview', 'plan', 'work', 'resources', 'activity'].includes(K.ctab) ? K.ctab : 'overview';
+    const setTabC = (k) => { K.ctab = k; store.set('campTab', k); renderCamps(); };
+    const tasks = campTasks(c), open = tasks.filter((t) => !t.done);
+    const phases = goals.filter((g) => !['count', 'money'].includes(g.kind));
+    const targets = goals.filter((g) => ['count', 'money'].includes(g.kind));
+    const blocked = open.filter((t) => taskBlockers(t).length), overdue = open.filter(isOverdue);
+    const hl = campHealth(c);
+    const kpi = (cls, ic, n, label, onclick) => h(onclick ? 'button' : 'div', { class: 'cc-kpi ' + cls, onclick }, h('span', { class: 'cc-kpi-ic', 'aria-hidden': 'true' }, ic), h('span', {}, h('b', {}, n), h('small', {}, label)));
+    const ring = h('span', { class: 'cc-ring', style: `--p:${Math.round(p * 100)}`, 'aria-hidden': 'true' });
+    const head = h('div', { class: 'cc-head' },
+      h('div', { class: 'cc-crumb' }, h('button', { class: 'linkish', onclick: () => openCampaign(null) }, 'Campaigns'), parentOf(c) ? [' › ', h('button', { class: 'linkish', onclick: () => openCampaign(c.parentId) }, parentOf(c).name)] : null, ' › ', h('span', {}, c.name)),
+      h('div', { class: 'cc-title-row' },
+        h('button', { class: 'icon-btn cc-back', 'aria-label': 'All campaigns', html: I.back, onclick: () => openCampaign(null) }),
+        h('h1', { class: 'camp-name cc-name' }, c.name),
+        c.status !== 'active' ? h('span', { class: 'pill' }, c.status === 'done' ? 'Finished' : 'Paused') : healthPill(c, hl, runsIt(c) ? () => checkinSheet(c) : null),
+        campDates(c) ? h('span', { class: 'cc-meta-item' }, '📅 ', campDates(c)) : null,
+        h('button', { class: 'pill pill-btn cc-owner', title: 'Who’s responsible', onclick: (e) => assignCampaignMenu(e.currentTarget, c) }, c.assigneeId ? avatar(c.assigneeId) : null, c.assigneeId ? memberName(c.assigneeId) : 'Assign to…'),
+        h('span', { style: 'flex:1' }),
+        h('button', { class: 'btn primary-btn small cc-add', onclick: (e) => openMenu(e.currentTarget, [{ head: 'Add to the campaign' },
+          { label: '+ A phase', run: () => goalSheet(c) },
+          phases.length ? { label: '+ A task (in a phase)', run: () => openMenu(e.target, [{ head: 'Which phase?' }, ...phases.map((g) => ({ label: g.title, run: () => { K.closed.delete(g.id); setTabC('overview'); setTimeout(() => $(`#camps .goal[data-id="${g.id}"] .goal-add`)?.focus(), 80); } }))]) } : null,
+          { label: '+ A target to reach (calls, money…)', run: () => goalSheet(c) },
+          { label: '+ A sub-campaign', run: () => campaignSheet(null, c) },
+          { label: '✨ Suggest phases and tasks from the brief', run: () => suggestPlan(c, e.target) }].filter(Boolean)) }, '+ Add to campaign'),
         h('button', { class: 'icon-btn', 'aria-label': 'Campaign options', html: I.more, onclick: (e) => campaignMenu(e.currentTarget, c) })),
-      h('div', { class: 'camp-meta' },
+      h('div', { class: 'camp-meta cc-pills' },
         c.recordId ? campJobPill(c) : null,
-        parentOf(c) ? h('button', { class: 'pill pill-btn', title: 'The main campaign this one serves', onclick: () => openCampaign(c.parentId) }, '↑ Part of ' + parentOf(c).name) : null,
         campById(c.follows) ? h('button', { class: 'pill pill-btn', title: 'In a series: this one comes after it', onclick: () => openCampaign(c.follows) }, '← After ' + campById(c.follows).name) : null,
         S.campaigns.filter((x) => x.follows === c.id).map((x) => h('button', { class: 'pill pill-btn', title: 'In a series: this comes next', onclick: () => openCampaign(x.id) }, 'Next: ' + x.name + ' →')),
-        campDates(c) ? h('span', {}, campDates(c)) : null,
-        h('button', { class: 'pill pill-btn', title: 'Who’s responsible', onclick: (e) => assignCampaignMenu(e.currentTarget, c) }, c.assigneeId ? avatar(c.assigneeId) : null, c.assigneeId ? memberName(c.assigneeId) : 'Assign to…'),
-        c.status !== 'active' ? h('span', { class: 'pill' }, c.status === 'done' ? 'Finished' : 'Paused') : null,
-        c.status === 'active' ? healthPill(c, campHealth(c), runsIt(c) ? () => checkinSheet(c) : null) : null,
-        c.inOrder ? h('span', { class: 'pill', title: 'Goals and tasks open one at a time, top to bottom' }, 'In order') : null,
+        c.inOrder ? h('span', { class: 'pill', title: 'Phases and tasks open one at a time, top to bottom' }, 'In order') : null,
         who ? h('span', { class: 'pill', title: who.map(memberName).join(', ') }, h('span', { class: 'is-task', html: I.lock }), `Private · ${who.length}`) : null),
-      castStrip(c),
-      h('div', { class: 'camp-total' }, bar(p, c.color), h('span', {}, Math.round(p * 100) + '%')),
+      h('div', { class: 'cc-kpis' },
+        h('div', { class: 'cc-kpi cc-kpi-main' }, ring, h('span', {}, h('b', {}, Math.round(p * 100) + '%'), h('small', {}, 'Complete'))),
+        kpi('phases', '◆', phases.length, phases.length === 1 ? 'Phase' : 'Phases', () => setTabC('plan')),
+        kpi('tasks', '☑', tasks.length, tasks.length === 1 ? 'Task' : 'Tasks', () => { K.wfilter = 'all'; setTabC('work'); }),
+        kpi('blocked' + (blocked.length ? ' bad' : ''), '⏳', blocked.length, 'Blocked', () => { K.wfilter = 'blocked'; setTabC('work'); }),
+        kpi('overdue' + (overdue.length ? ' bad' : ''), '!', overdue.length, 'Overdue', () => { K.wfilter = 'overdue'; setTabC('work'); }),
+        h('div', { class: 'cc-kpi-bar' }, bar(p, c.color))),
+      h('div', { class: 'cc-tabs', role: 'tablist' }, [['overview', 'Overview'], ['plan', 'Plan'], ['work', 'Work'], ['resources', 'Resources'], ['activity', 'Activity']].map(([k, l]) =>
+        h('button', { class: 'cc-tab' + (tab === k ? ' on' : ''), role: 'tab', 'aria-selected': String(tab === k), 'data-ctab': k, onclick: () => setTabC(k) }, l)),
+        h('span', { style: 'flex:1' }),
+        h('button', { class: 'btn small cc-edit', onclick: () => campaignSheet(c) }, '✎ Edit campaign')));
+    // The brief: objective (the old brief), audience, strategy, and success metrics (targets with live numbers).
+    const field = (k, label, ph) => {
+      const v = k === 'brief' ? c.brief : c[k];
+      const el = h('div', { class: 'cc-bf' + (v ? '' : ' empty'), role: 'button', tabindex: '0', title: 'Click to edit', 'data-field': k, html: v ? linkify(v) : ph });
+      const edit = (e) => {
+        if (e?.target?.closest?.('a')) return;
+        const ta = h('textarea', { class: 'cc-bf-edit', rows: 4 });
+        ta.value = v || '';
+        const done = () => {
+          if (ta.value !== (v || '')) api('PATCH', '/campaigns/' + c.id, { [k]: ta.value }).catch((er) => toast(er.message));
+          c[k] = ta.value;
+          ta.replaceWith(el);
+          renderCamps();
+        };
+        ta.addEventListener('blur', done);
+        ta.addEventListener('keydown', (ev) => { if (ev.key === 'Escape') { ta.value = v || ''; ta.blur(); } });
+        el.replaceWith(ta);
+        ta.focus();
+      };
+      el.addEventListener('click', edit);
+      el.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); edit(); } });
+      return h('div', { class: 'cc-bcol' }, h('div', { class: 'cc-bh' }, label), el);
+    };
+    const metrics = h('div', { class: 'cc-bcol' }, h('div', { class: 'cc-bh' }, 'Success metrics'),
+      targets.length ? h('ul', { class: 'cc-metrics' }, targets.map((g) => { const gp = goalProgress(g); return h('li', { class: gp.frac >= 1 ? 'met' : '' }, h('span', { class: 'cc-met-ic' }, gp.frac >= 1 ? '✓' : '○'), h('span', {}, g.title, h('small', {}, gp.label))); }))
+        : h('button', { class: 'cc-bf empty', onclick: () => goalSheet(c) }, '+ Add a target to reach: calls made, appointments, money…'));
+    const briefCard = h('section', { class: 'cc-card cc-brief' }, h('div', { class: 'cc-card-h' }, h('b', {}, '📄 Campaign brief')),
+      h('div', { class: 'cc-bgrid' }, field('brief', 'Objective', 'What it’s for, and how you’ll know it worked…'), field('audience', 'Audience', 'Who it’s aimed at…'), field('strategy', 'Strategy', 'How you’ll get there…'), metrics));
+    // Phases: the steps, as connected cards; clicking one opens its section below.
+    const phaseCards = phases.length ? h('div', { class: 'cc-phases' }, phases.flatMap((g, i) => {
+      const gp = goalProgress(g), ts = tasksOf(g.id), dn = ts.filter((t) => t.done).length;
+      const waiting = goalBlockers(g).length > 0;
+      const state = gp.frac >= 1 ? 'done' : waiting ? 'waiting' : dn || ts.some((t) => taskMine(t)) ? 'active' : 'open';
+      const card = h('button', { class: `cc-phase ${state}`, 'data-phase': g.id, onclick: () => { K.closed.delete(g.id); store.set('goalsClosed', [...K.closed]); if (tab !== 'overview') setTabC('overview'); else renderCamps(); setTimeout(() => $(`#camps .goal[data-id="${g.id}"]`)?.scrollIntoView({ block: 'start', behavior: 'smooth' }), 60); } },
+        h('div', { class: 'cc-phase-top' }, h('span', { class: 'cc-phase-n' }, String(i + 1)), h('b', {}, g.title), state === 'active' ? h('span', { class: 'cc-tag active' }, 'Active') : state === 'done' ? h('span', { class: 'cc-tag done' }, 'Done') : state === 'waiting' ? h('span', { class: 'cc-tag wait' }, 'Waiting') : null),
+        h('small', {}, `${dn} / ${ts.length} task${ts.length === 1 ? '' : 's'} · ${Math.round(gp.frac * 100)}%`),
+        h('span', { class: 'cc-phase-bar' }, h('i', { style: `width:${Math.round(gp.frac * 100)}%` })));
+      return i ? [h('span', { class: 'cc-arrow', 'aria-hidden': 'true' }, '→'), card] : [card];
+    })) : null;
+    const addRow = h('div', { class: 'goal-btns' },
+      h('button', { class: 'add-goal', onclick: () => goalSheet(c) }, '+ Add a phase'),
+      h('button', { class: 'add-goal ai-btn', title: 'Draft phases and tasks from the brief', onclick: (e) => suggestPlan(c, e.currentTarget) }, '✨ Suggest from the brief'));
+    const moneyCard = c.budget || c.money ? h('section', { class: 'cc-card cc-moneycard' }, h('div', { class: 'cc-card-h' }, h('b', {}, '💵 Money')),
       c.budget ? campBudget(c) : null,
       c.money ? h('div', { class: 'camp-money', onclick: () => { FIN.tab = 'flow'; FIN.campaign = c.id; openTool('bills'); } },
         c.money.spent && !c.budget ? h('span', {}, 'Spent ', h('b', {}, money(c.money.spent))) : null,
         c.money.earned ? h('span', {}, 'Brought in ', h('b', {}, money(c.money.earned))) : null,
-        c.money.spent && c.money.earned ? h('span', { class: c.money.earned >= c.money.spent ? 'up' : 'down' }, c.money.earned >= c.money.spent ? `+${money(c.money.earned - c.money.spent)}` : `−${money(c.money.spent - c.money.earned)}`) : null) : null,
-      brief,
-      h('div', { class: 'camp-links' },
-        ch ? h('button', { class: 'btn small', onclick: () => { setTab('chat'); openChannel('ch:' + ch.id); } }, '# ' + ch.name) : null,
-        st ? h('button', { class: 'btn small', title: 'Open a file, add one, or go to the stack', onclick: (e) => filesMenu(e.currentTarget, c) }, `Files · ${files} ▾`) : null,
-        st ? h('button', { class: 'btn small', title: 'Jot a quick note, or open one', onclick: (e) => notesMenu(e.currentTarget, c) }, `Notes · ${notes} ▾`) : null,
-        h('button', { class: 'btn small' + (K.logOpen === c.id ? ' on' : ''), onclick: () => openLog(c) }, 'Log'),
-        h('button', { class: 'btn small' + (reportDue(c) ? ' sk-nudge' : ''), title: reportDue(c) ? 'It’s been over a week since the last report' : 'Numbers from the log, and what you found, posted to the feed', onclick: () => openReport(c) }, reportDue(c) ? 'Weekly check-in' : 'Write a report'),
-        h('button', { class: 'btn small' + (skFor(c.id)?.nudge ? ' sk-nudge' : ''), title: skFor(c.id)?.nudge?.text || 'Talk this campaign through with Sidekick', onclick: () => sidekickFor(c) }, '✦ Sidekick'),
-        mapFor(c) ? h('button', { class: 'btn small', title: 'Runs and pins on the map', onclick: () => openMap({ campaignId: c.id }) }, `Map · ${mapFor(c)}`) : null,
-        signsFor(c) ? h('button', { class: 'btn small', title: 'Sent for signature', onclick: () => { SG.filter = c.id; openTool('signs'); } }, `Signatures · ${signsFor(c)}`) : null,
-        vaultLinked('campaign', c.id) ? h('button', { class: 'btn small', title: 'In your vault', onclick: () => openVaultFor('campaign', c.id) }, h('span', { class: 'vault-ic', html: I.lock }), `Vault · ${vaultLinked('campaign', c.id)}`) : null),
-      sendBars(c),
-      h('div', { class: 'any-h camp-goals-h' }, 'Log'),
-      logBox(c),
-      subsOf(c).length ? h('div', { class: 'any-h camp-goals-h' }, 'Sub-campaigns') : null,
-      subsOf(c).length ? h('div', { class: 'camp-subs' }, subsOf(c).map((x) => h('button', { class: 'sub-card c-' + x.color + (x.status === 'done' ? ' done' : ''), onclick: () => openCampaign(x.id) },
-        h('div', { class: 'cc-top' }, h('b', {}, x.name), h('span', { class: 'cc-pct' }, Math.round(campProgress(x) * 100) + '%')),
-        bar(campProgress(x), x.color),
-        subLine(x) ? h('div', { class: 'cc-sub' }, subLine(x)) : null)),
-        h('button', { class: 'add-goal', onclick: () => campaignSheet(null, c) }, '+ Add a sub-campaign')) : null,
-      lists.length ? h('div', { class: 'any-h camp-goals-h' }, 'Lists & docs') : null,
-      lists.map((l) => listCard(c, l)),
-      h('div', { class: 'any-h camp-goals-h' }, 'Goals'),
-      goals.map((g) => goalCard(c, g)),
-      h('div', { class: 'goal-btns' },
-        h('button', { class: 'add-goal', onclick: () => goalSheet(c) }, '+ Add a goal'),
-        h('button', { class: 'add-goal ai-btn', title: 'Draft goals and tasks from the brief', onclick: (e) => suggestPlan(c, e.currentTarget) }, '✨ Suggest from the brief')));
+        c.money.spent && c.money.earned ? h('span', { class: c.money.earned >= c.money.spent ? 'up' : 'down' }, c.money.earned >= c.money.spent ? `+${money(c.money.earned - c.money.spent)}` : `−${money(c.money.spent - c.money.earned)}`) : null) : null) : null;
+    const team = h('section', { class: 'cc-card cc-team' }, h('div', { class: 'cc-card-h' }, h('b', {}, '👥 Team and roles')), castStrip(c));
+    const subs = subsOf(c).length ? h('section', { class: 'cc-card' }, h('div', { class: 'cc-card-h' }, h('b', {}, 'Sub-campaigns')),
+      h('div', { class: 'camp-subs' }, subsOf(c).map((x) => h('button', { class: 'sub-card c-' + x.color + (x.status === 'done' ? ' done' : ''), onclick: () => openCampaign(x.id) },
+        h('div', { class: 'cc-top' }, h('b', {}, x.name), h('span', { class: 'cc-pct' }, Math.round(campProgress(x) * 100) + '%')), bar(campProgress(x), x.color), subLine(x) ? h('div', { class: 'cc-sub' }, subLine(x)) : null)),
+        h('button', { class: 'add-goal', onclick: () => campaignSheet(null, c) }, '+ Add a sub-campaign'))) : null;
+    // Work: every task in one list, with quick filters; a task opens beside the page.
+    const wf = ['all', 'mine', 'open', 'blocked', 'overdue', 'done'].includes(K.wfilter) ? K.wfilter : 'open';
+    const workBody = () => {
+      const pick = { all: tasks, mine: open.filter(taskMine), open, blocked, overdue, done: tasks.filter((t) => t.done) }[wf];
+      const status = (t) => (t.done ? ['done', 'Done'] : taskBlockers(t).length ? ['wait', 'Waiting'] : t.submitted ? ['sign', 'For sign-off'] : isOverdue(t) ? ['late', 'Overdue'] : ['open', 'Not started']);
+      return h('section', { class: 'cc-card cc-work' },
+        h('div', { class: 'cc-wf seg seg-sm' }, [['open', `Open · ${open.length}`], ['mine', `Mine · ${open.filter(taskMine).length}`], ['blocked', `Blocked · ${blocked.length}`], ['overdue', `Overdue · ${overdue.length}`], ['done', `Done · ${tasks.length - open.length}`], ['all', `All · ${tasks.length}`]].map(([k, l]) =>
+          h('button', { class: wf === k ? 'on' : null, 'data-wf': k, onclick: () => { K.wfilter = k; renderCamps(); } }, l))),
+        pick.length ? h('div', { class: 'cc-table', role: 'table' },
+          h('div', { class: 'cc-tr cc-th', role: 'row' }, ['Task', 'Phase', 'Who', 'Due', 'Priority', 'Status'].map((x) => h('span', { role: 'columnheader' }, x))),
+          pick.map((t) => { const [sc, sl] = status(t); const g = goalById(t.goalId); return h('div', { class: 'cc-tr' + (t.done ? ' done' : ''), role: 'row', 'data-task': t.id, tabindex: '0', onclick: () => taskWindow(t), onkeydown: (e) => { if (e.key === 'Enter') taskWindow(t); } },
+            h('span', { class: 'cc-tt' }, t.text), h('span', {}, g?.title || ''), h('span', {}, t.assigneeId ? [avatar(t.assigneeId), ' ', memberName(t.assigneeId)] : t.roleId || t.castId ? 'A role' : h('small', { class: 'muted' }, 'Nobody')),
+            h('span', { class: isOverdue(t) ? 'late' : '' }, t.due ? dueLabel(t.due) : ''), h('span', {}, t.priority ? h('span', { class: 'cc-prio p' + t.priority }, PRIO[t.priority]) : ''), h('span', {}, h('span', { class: 'cc-status ' + sc }, sl))); }))
+          : h('p', { class: 'day-hint' }, wf === 'mine' ? 'Nothing open for you here.' : wf === 'blocked' ? 'Nothing is blocked.' : wf === 'overdue' ? 'Nothing is overdue.' : 'No tasks here yet.'));
+    };
+    const resources = () => {
+      const stepRs = phases.filter((g) => stepRes(g).length);
+      return [h('section', { class: 'cc-card' }, h('div', { class: 'cc-card-h' }, h('b', {}, 'Where things are')),
+        h('div', { class: 'camp-links' },
+          ch ? h('button', { class: 'btn small', onclick: () => { setTab('chat'); openChannel('ch:' + ch.id); } }, '# ' + ch.name) : null,
+          st ? h('button', { class: 'btn small', title: 'Open a file, add one, or go to the stack', onclick: (e) => filesMenu(e.currentTarget, c) }, `Files · ${files} ▾`) : null,
+          st ? h('button', { class: 'btn small', title: 'Jot a quick note, or open one', onclick: (e) => notesMenu(e.currentTarget, c) }, `Notes · ${notes} ▾`) : null,
+          mapFor(c) ? h('button', { class: 'btn small', title: 'Runs and pins on the map', onclick: () => openMap({ campaignId: c.id }) }, `Map · ${mapFor(c)}`) : null,
+          signsFor(c) ? h('button', { class: 'btn small', title: 'Sent for signature', onclick: () => { SG.filter = c.id; openTool('signs'); } }, `Signatures · ${signsFor(c)}`) : null,
+          vaultLinked('campaign', c.id) ? h('button', { class: 'btn small', title: 'In your vault', onclick: () => openVaultFor('campaign', c.id) }, h('span', { class: 'vault-ic', html: I.lock }), `Vault · ${vaultLinked('campaign', c.id)}`) : null)),
+        stepRs.length ? h('section', { class: 'cc-card' }, h('div', { class: 'cc-card-h' }, h('b', {}, 'What each phase hands its people')),
+          stepRs.map((g) => h('div', { class: 'cc-res-phase' }, h('small', {}, g.title), h('div', { class: 'res-list' }, stepRes(g).map((r) => h('div', { class: 'res-row', 'data-res': r.kind }, h('button', { class: 'res-open', onclick: () => resOpen(r) }, h('span', { class: 'res-ic' }, RES_IC[r.kind]), h('span', {}, h('b', {}, resName(r)))))))))) : null,
+        h('section', { class: 'cc-card' }, h('div', { class: 'cc-card-h' }, h('b', {}, 'Lists & docs')), lists.length ? lists.map((l) => listCard(c, l)) : h('p', { class: 'day-hint' }, 'Drop a spreadsheet of people on the campaign to make a call list, or add one from Contacts.'))].filter(Boolean);
+    };
+    const activity = () => [
+      h('section', { class: 'cc-card' }, h('div', { class: 'cc-card-h' }, h('b', {}, 'Log'), h('span', { style: 'flex:1' }),
+        h('button', { class: 'btn small' + (K.logOpen === c.id ? ' on' : ''), onclick: () => openLog(c) }, 'Log a call or email'),
+        h('button', { class: 'btn small' + (reportDue(c) ? ' sk-nudge' : ''), title: reportDue(c) ? 'It’s been over a week since the last report' : 'Numbers from the log, and what you found, posted to the feed', onclick: () => openReport(c) }, reportDue(c) ? 'Write a report ·' : 'Write a report')),
+        logBox(c)),
+      (() => { const ev = tasks.filter((t) => t.done && t.doneAt).sort((a, b) => b.doneAt - a.doneAt).slice(0, 25); return ev.length ? h('section', { class: 'cc-card' }, h('div', { class: 'cc-card-h' }, h('b', {}, 'Recently done')),
+        h('div', { class: 'cc-hist' }, ev.map((t) => h('button', { class: 'cc-hist-row', onclick: () => taskWindow(t) }, h('span', {}, t.doneBy ? [h('b', {}, t.doneBy), ' finished '] : 'Finished ', h('i', {}, t.text)), h('small', {}, ago(t.doneAt)))))) : null; })()].filter(Boolean);
+    // Pulse: health, the next milestone, blockers, overdue, the team, and what to do next (each with its button).
+    const nextPhase = phases.find((g) => goalProgress(g).frac < 1);
+    const nextDue = open.filter((t) => t.due).sort((a, b) => a.due.localeCompare(b.due))[0];
+    const nobody = open.filter((t) => !t.assigneeId && !t.roleId && !t.castId);
+    const ideas = [
+      nobody.length ? [`${nobody.length} open task${nobody.length === 1 ? ' has' : 's have'} nobody on ${nobody.length === 1 ? 'it' : 'them'}.`, 'Assign them', () => { K.wfilter = 'open'; setTabC('work'); }] : null,
+      overdue.length ? [`${overdue.length} task${overdue.length === 1 ? ' is' : 's are'} overdue.`, 'See them', () => { K.wfilter = 'overdue'; setTabC('work'); }] : null,
+      phases.find((g) => !tasksOf(g.id).length) ? [`“${phases.find((g) => !tasksOf(g.id).length).title}” has no tasks yet.`, 'Suggest tasks', (e) => suggestPlan(c, e.currentTarget)] : null,
+      !phases.length ? ['There are no phases yet.', 'Suggest a plan', (e) => suggestPlan(c, e.currentTarget)] : null,
+      runsIt(c) && c.status === 'active' && (!hl.said || Date.now() - hl.said.at > 7 * 864e5) ? ['No check-in this week.', 'Check in', () => checkinSheet(c)] : null,
+    ].filter(Boolean);
+    const teamIds = [...new Set([c.ownerId, c.assigneeId, ...(c.memberIds || []), ...castOf(c).flatMap((r) => r.memberIds), ...tasks.map((t) => t.assigneeId)].filter(Boolean))];
+    const pulse = document.body.classList.contains('wide') ? h('aside', { class: 'cc-pulse' }, h('div', { class: 'cc-pulse-h' }, '〰 Campaign pulse'),
+      h('div', { class: 'cc-pulse-health ' + hl.status }, h('b', {}, c.status === 'active' ? HEALTH_L[hl.status] : c.status === 'done' ? 'Finished' : 'Paused'), h('small', {}, hl.why[0] || (hl.status === 'onTrack' ? 'Healthy momentum' : ''))),
+      h('div', { class: 'cc-pulse-row' }, h('span', {}, '📅'), h('span', {}, h('small', {}, 'Next milestone'), h('b', {}, nextDue ? `${dueLabel(nextDue.due)} · ${shortText(nextDue.text, 28)}` : nextPhase ? nextPhase.title : 'None'))),
+      h('button', { class: 'cc-pulse-row', onclick: () => { K.wfilter = 'blocked'; setTabC('work'); } }, h('span', {}, '⏳'), h('span', {}, h('small', {}, 'Blockers'), h('b', {}, String(blocked.length)))),
+      h('button', { class: 'cc-pulse-row', onclick: () => { K.wfilter = 'overdue'; setTabC('work'); } }, h('span', {}, '!'), h('span', {}, h('small', {}, 'Overdue'), h('b', {}, String(overdue.length)))),
+      teamIds.length ? h('div', { class: 'cc-pulse-team' }, h('small', {}, 'Team'), h('div', {}, teamIds.slice(0, 6).map((id) => avatar(id)), teamIds.length > 6 ? h('small', {}, ` +${teamIds.length - 6}`) : null)) : null,
+      h('div', { class: 'cc-pulse-ai' }, h('b', {}, '✦ What to do next'),
+        ideas.length ? ideas.slice(0, 3).map(([text, label, run]) => h('div', { class: 'cc-idea' }, h('p', {}, text), h('button', { class: 'btn small primary-btn', onclick: run }, label))) : h('p', {}, 'Nothing needs you right now.'),
+        h('button', { class: 'btn small' + (skFor(c.id)?.nudge ? ' sk-nudge' : ''), title: skFor(c.id)?.nudge?.text || 'Talk this campaign through with Sidekick', onclick: () => sidekickFor(c) }, '✦ Ask Sidekick'))) : null;
+    const body = {
+      overview: () => [sendBars(c), briefCard, phaseCards, ...goals.map((g) => goalCard(c, g)), addRow, moneyCard, team],
+      plan: () => [phaseCards, h('section', { class: 'cc-card' }, h('div', { class: 'cc-card-h' }, h('b', {}, 'Phases, in order')), h('p', { class: 'day-hint' }, 'Drag a phase by ⋮⋮ to move it. Open one to set what it waits for, the job stage it finishes, what it needs, its resources and automations.'),
+        ...phases.map((g) => goalCard(c, g)), addRow), targets.length ? h('section', { class: 'cc-card' }, h('div', { class: 'cc-card-h' }, h('b', {}, 'Targets')), ...targets.map((g) => goalCard(c, g))) : null, subs, team],
+      work: () => [sendBars(c), workBody()],
+      resources,
+      activity,
+    }[tab]();
+    return h('div', { class: 'camp-view cc' + (pulse ? ' with-pulse' : '') }, h('div', { class: 'cc-main' }, head, h('div', { class: 'cc-body', 'data-tab': tab }, ...body.filter(Boolean))), pulse);
   }
 
   function goalCard(c, g) {

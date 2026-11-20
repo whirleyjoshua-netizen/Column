@@ -152,6 +152,7 @@ try {
     await A.ev(`document.querySelector('#tabs [data-tab=camps]').click(); true`);
     ok(await A.until(`[...document.querySelectorAll('.camp-card')].some((b) => b.textContent.includes('Dock test'))`, 8000), 'the campaign is listed');
     await A.ev(`[...document.querySelectorAll('.camp-card')].find((b) => b.textContent.includes('Dock test')).click(); true`);
+    await A.ev(`document.querySelector('#camps .cc-tab[data-ctab=resources]')?.click(); true`); // Files are under Resources (2026-11-20)
     await A.until(`[...document.querySelectorAll('#camps button')].some((b) => /Files/.test(b.textContent))`, 8000);
     await A.ev(`[...document.querySelectorAll('#camps button')].find((b) => /Files/.test(b.textContent)).click(); true`);
     await A.until(`[...document.querySelectorAll('#menu button')].some((b) => b.textContent.includes('Script.txt'))`);
