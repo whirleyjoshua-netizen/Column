@@ -170,8 +170,12 @@ try {
   await A.cmd('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
   await A.ev(`document.querySelector('#projects [aria-label="Close Boards"]')?.click(); true`);
   await sleep(300);
-  ok(await A.ev(shown('#skBtn')), 'the ✦ button is there on a phone');
-  await A.tap(`document.querySelector('#skBtn')`);
+  // On a phone (2026-11-19) Sidekick is an icon on the menu page (☰), not a button in the header.
+  await A.tap(`document.querySelector('#menuBtn')`);
+  ok(await A.until(shown('#menuPage [data-go="go:sidekick"]')) && !(await A.ev(shown('#skBtn'))), 'on a phone, ✦ Sidekick is on the menu page');
+  await A.tap(`document.querySelector('#menuPage [data-go="go:sidekick"]')`);
+  await A.until(shown('#skDock'));
+  await sleep(300);
   const sheetR = await A.ev(rect('#skDock'));
   ok(await A.until(shown('#skDock')) && sheetR.b >= 843 && sheetR.t > 40 && sheetR.w >= 389, `a sheet from the bottom (${JSON.stringify(sheetR)})`);
   ok(await A.ev(shown('#skScrim')), 'over the page');

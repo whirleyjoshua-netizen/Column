@@ -3603,6 +3603,7 @@
     if (S.tab !== 'menu') MENU.back = S.tab;
     clearCovers();
     setTab('menu');
+    $('#menuPage').scrollTop = 0;
   }
   function appGo(go) {
     const i = go.indexOf(':'), kind = go.slice(0, i), k = go.slice(i + 1);

@@ -2,9 +2,8 @@
 // tabs across the top, and always white.
 // - 900px and wider: a sidebar with labels that opens what you pick, folds to icons (remembered on this device),
 //   and stays put while Settings, a tool or a full-screen view (a doc, Jobs) fills the page beside it.
-// - A docked column (340px): your tabs across the top, as before, and the drawer too. A phone: just the drawer. ☰ opens it; picking something, tapping outside it or
-//   Escape closes it; Workspace → Tools works from it; on a phone a swipe in from the left edge opens it and a swipe back
-//   closes it. Closed, it can't be tabbed into.
+// - A docked column (340px) and a phone (2026-11-19): ☰ opens a menu page of app icons, four apps in a dock at the
+//   bottom, pins on the menu page; the toolbar stays hidden and can't be tabbed into.
 // - White everywhere, even on a computer set to dark mode; nothing spills off a phone's screen.
 import * as FS from 'node:fs';
 import WebSocket from '../server/node_modules/ws/index.js';
@@ -95,75 +94,51 @@ try {
   await A.tap(`document.querySelector('#sideFold')`);
   ok(await A.until(`document.querySelector('#side').getBoundingClientRect().width >= 220`), 'and opens again');
 
-  // A docked column: a hidden drawer.
+  // A docked column (2026-11-19, the owner: "like an iPhone"): no drawer. ☰ opens the menu page of app icons, four
+  // apps sit in a dock at the bottom, and pins are on the menu page. mobile_shell_ui.mjs has the rest.
   await A.cmd('Emulation.setDeviceMetricsOverride', { width: 340, height: 860, deviceScaleFactor: 1, mobile: false });
   ok(await A.until(`!document.body.classList.contains('wide')`), 'a 340px column isn’t wide');
-  ok(await A.until(`!${shown('#side')}`, 2000) && (await A.ev(shown('#menuBtn'))), 'the toolbar is hidden, with ☰ in the header');
+  ok(await A.until(`!${shown('#side')}`, 2000) && (await A.ev(shown('#menuBtn'))) && (await A.ev(shown('#appDock'))), 'the toolbar is hidden, with ☰ in the header and the dock at the bottom');
   await sleep(300);
-  ok(await A.ev(`(() => { document.querySelector('#tabs [data-tab=agents]').focus(); return document.activeElement !== document.querySelector('#tabs [data-tab=agents]'); })()`), 'closed, it can’t be tabbed into');
-  // The owner, 2026-11-14: in a column and on a phone, the row across the top is your pins, in the old tab style
-  // (the tabs themselves are in ☰). Nothing pinned, no row.
-  ok(await A.ev(`document.body.classList.contains('column')`) && !(await A.ev(shown('#topTabs'))), 'a column with nothing pinned has no row across the top');
+  ok(await A.ev(`(() => { document.querySelector('#tabs [data-tab=agents]').focus(); return document.activeElement !== document.querySelector('#tabs [data-tab=agents]'); })()`), 'the hidden toolbar can’t be tabbed into');
+  ok(await A.ev(`document.body.classList.contains('column')`) && !(await A.ev(shown('#topTabs'))), 'no row of tabs across the top');
   const authed = { 'content-type': 'application/json', authorization: 'Bearer ' + a.token };
   const camp = await (await fetch(APP + 'api/campaigns', { method: 'POST', headers: authed, body: JSON.stringify({ name: 'Spring push' }) })).json();
   const campId = camp.campaign?.id || camp.id;
   await fetch(APP + 'api/account/pins', { method: 'PUT', headers: authed, body: JSON.stringify({ pins: [{ go: 'camp:' + campId, label: 'Spring push' }] }) });
   await A.ev(`location.reload(); true`);
-  ok(await A.until(shown('#topTabs'), 20000), 'pin something and your pins run across the top');
-  const top = await A.ev(`[...document.querySelectorAll('#topTabs button')].filter((b) => getComputedStyle(b).display !== 'none').map((b) => b.dataset.pin || b.dataset.tab || b.className)`);
-  ok(top[0] === 'camp:' + campId && !top.some((x) => ['home', 'day', 'chat', 'agents', 'work'].includes(x)), `only pins up there, not the tabs (${top})`);
-  await A.tap(`document.querySelector('#topTabs [data-pin]')`);
-  ok(await A.until(`document.querySelector('#topTabs [data-pin]').classList.contains('on') && !document.querySelector('#tabs [data-pin]')`), 'a pin at the top opens it, and lights up (it is not in the drawer)');
-  ok(!(await A.ev(shown('#side'))), 'without opening the drawer');
+  await A.until(`!document.querySelector('#app').classList.contains('hidden')`, 20000);
+  ok(!(await A.ev(shown('#topTabs'))), 'pinning something doesn’t bring the row back');
   await A.tap(`document.querySelector('#menuBtn')`);
-  ok(await A.until(shown('#side')) && (await A.ev(`!document.querySelector('#scrim').hidden && document.querySelector('#menuBtn').getAttribute('aria-expanded') === 'true'`)), '☰ still opens the drawer over the page');
-  await A.tap(`document.querySelector('#tabs .tab-sub[data-tab=tools]')`);
-  ok(await A.until(`!document.querySelector('#menu').classList.contains('hidden') && !!document.querySelector('#menu [data-tool=column]') && document.querySelector('#menu').getBoundingClientRect().right <= innerWidth`) && await A.until(`!${shown('#side')}`), 'Workspace → Tools drops its list down from the drawer, filling the screen in a column, and the drawer closes');
-  await A.tap(`document.querySelector('#menu [data-tool=column]')`);
-  ok(await A.until(`!document.querySelector('#panes').classList.contains('hidden') && !!document.querySelector('#split #panes') && document.querySelector('#split .split-title').textContent === 'Stacks'`), 'picking Stacks there opens it, in the split (the whole screen in a column)');
+  ok(await A.until(shown('#menuPage')) && !(await A.ev(shown('#side'))), '☰ opens the menu page, not a drawer');
+  ok(await A.ev(`!!document.querySelector('#menuPage [data-go="pin:camp:${campId}"]')`) || await A.ev(`[...document.querySelectorAll('#menuPage [data-go^="pin:"]')].length === 1`), 'the pin is on the menu page');
+  await A.ev(`document.querySelector('#menuPage [data-go^="pin:"]').scrollIntoView({ block: 'center' }); true`);
+  await A.tap(`document.querySelector('#menuPage [data-go^="pin:"]')`);
+  ok(await A.until(`!${shown('#menuPage')} && !document.querySelector('#campsWrap').classList.contains('hidden')`), 'tapping it opens the campaign');
+  await A.tap(`document.querySelector('#menuBtn')`);
+  await A.until(shown('#menuPage'));
+  await A.ev(`document.querySelector('#menuPage [data-go="tool:column"]').scrollIntoView({ block: 'center' }); true`);
+  await A.tap(`document.querySelector('#menuPage [data-go="tool:column"]')`);
+  ok(await A.until(`!document.querySelector('#panes').classList.contains('hidden') && !!document.querySelector('#split #panes') && document.querySelector('#split .split-title').textContent === 'Stacks'`), 'Stacks from the menu opens it, in the split (the whole screen in a column)');
   await A.ev(`document.querySelector('#split .split-close').click(); true`);
   await A.tap(`document.querySelector('#menuBtn')`);
-  await A.until(shown('#side'));
-  // Outside the drawer: the strip of page still showing on its right.
-  for (const type of ['mouseMoved', 'mousePressed', 'mouseReleased']) await A.cmd('Input.dispatchMouseEvent', { type, x: 330, y: 400, button: 'left', buttons: type === 'mousePressed' ? 1 : 0, clickCount: 1 });
-  ok(await A.until(`!${shown('#side')}`), 'tapping outside closes it');
-  await A.tap(`document.querySelector('#menuBtn')`);
-  await A.until(shown('#side'));
-  await A.cmd('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
-  await A.cmd('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
-  ok(await A.until(`!${shown('#side')}`), 'Escape closes it');
-  await A.tap(`document.querySelector('#menuBtn')`);
-  await A.until(shown('#side'));
-  await A.tap(`document.querySelector('#tabs .tab-sub[data-tab=tools]')`);
-  ok(await A.until(`!document.querySelector('#menu').classList.contains('hidden') && !!document.querySelector('#menu [data-tool=column]') && document.querySelector('#menu').getBoundingClientRect().right <= innerWidth`) && await A.until(`!${shown('#side')}`), 'Workspace → Tools works from the drawer, and picking it closes the drawer');
-  await A.ev(`document.querySelector('#menu').classList.add('hidden'); document.querySelector('#split .split-close')?.click(); true`);
-  // In the drawer, Workspace's tabs sit under Workspace.
-  await A.tap(`document.querySelector('#menuBtn')`);
-  await A.until(shown('#side'));
-  ok(await A.ev(shown('#tabs .tab-sub[data-tab=docs]')) && !(await A.ev(shown('#topTabs .tab-sub'))), 'the drawer lists Workspace’s tabs under it (the top row doesn’t)');
-  await A.tap(`document.querySelector('#tabs .tab-sub[data-tab=docs]')`);
-  ok(await A.until(`!document.querySelector('#tool').classList.contains('hidden') && document.querySelector('#tool h2').textContent.startsWith('Folders & Docs')`) && await A.until(`!${shown('#side')}`), 'Folders & Docs opens from there and the drawer closes');
+  await A.until(shown('#menuPage'));
+  await A.ev(`document.querySelector('#menuPage [data-go="tab:docs"]').scrollIntoView({ block: 'center' }); true`);
+  await A.tap(`document.querySelector('#menuPage [data-go="tab:docs"]')`);
+  ok(await A.until(`!document.querySelector('#tool').classList.contains('hidden') && document.querySelector('#tool h2').textContent.startsWith('Folders & Docs')`) && !(await A.ev(shown('#menuPage'))), 'Folders & Docs opens from there');
   await A.ev(`document.querySelector('#tool .icon-btn')?.click(); true`);
   ok(await A.ev(`document.documentElement.scrollWidth <= innerWidth`), 'nothing spills sideways in a column');
 
-  // A phone: the drawer, and a swipe in from the left edge.
+  // A phone: the same, with touch; a swipe from the edge no longer pulls out a drawer.
   await A.cmd('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
   await A.cmd('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 1 });
-  await A.cmd('Emulation.setEmitTouchEventsForMouse', { enabled: true, configuration: 'mobile' });
-  ok(await A.until(`!document.body.classList.contains('column')`, 3000) && (await A.ev(shown('#topTabs [data-pin]'))) && !(await A.ev(shown('#topTabs [data-tab=home]'))), 'a phone has its pins across the top too, and the tabs in the drawer');
-  await A.cmd('Emulation.setEmitTouchEventsForMouse', { enabled: false });
-  await A.tap(`document.querySelector('#tabs [data-tab=home]') && document.querySelector('#menuBtn')`);
-  await A.tap(`document.querySelector('#tabs [data-tab=home]')`);
-  await A.until(`!${shown('#side')}`);
+  ok(await A.until(`!document.body.classList.contains('column')`, 3000) && !(await A.ev(shown('#topTabs'))) && (await A.ev(shown('#appDock'))), 'a phone has the dock and no row across the top');
+  await A.ev(`document.querySelector('#homeBtn').click(); true`);
   await A.swipe(4, 200);
-  ok(await A.until(shown('#side'), 3000), 'a swipe in from the left edge opens it');
-  await A.swipe(250, 60);
-  ok(await A.until(`!${shown('#side')}`, 3000), 'a swipe back closes it');
-  await A.swipe(150, 330);
-  ok(!(await A.ev(shown('#side'))), 'a swipe that doesn’t start at the edge leaves it closed (pages that swipe still can)');
+  ok(!(await A.ev(shown('#side'))), 'a swipe in from the left edge leaves the page alone');
   ok(await A.ev(`document.documentElement.scrollWidth <= innerWidth`), 'nothing spills sideways on a phone');
-  const tapH = await A.ev(`(() => { document.querySelector('#menuBtn').click(); const hs = [...document.querySelectorAll('#tabs button, .side-foot button')].map((b) => b.getBoundingClientRect().height); document.querySelector('#scrim').click(); return Math.min(...hs); })()`);
-  ok(tapH >= 34, `drawer buttons are big enough to tap (${tapH}px)`);
+  const tapH = await A.ev(`(() => { document.querySelector('#menuBtn').click(); const hs = [...document.querySelectorAll('#menuPage .app-tile-btn, #appDock .dock-app')].map((b) => b.getBoundingClientRect().height); return Math.min(...hs); })()`);
+  ok(tapH >= 44, `menu and dock icons are big enough to tap (${tapH}px)`);
 
   // The pages around the app are white too.
   for (const p of ['reset.html', 'request.html', 'sign.html']) {
