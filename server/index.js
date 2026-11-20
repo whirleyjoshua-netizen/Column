@@ -39,6 +39,7 @@ import { standupModule } from './standup.js';
 import { githubModule } from './github.js';
 import { companycamModule } from './companycam.js';
 import { teamsModule } from './teams.js';
+import { whiteboardModule } from './whiteboard.js';
 import { techAiModule } from './techai.js';
 import { describeModule } from './describe.js';
 import { signoffModule } from './signoff.js';
@@ -567,25 +568,25 @@ const meAccount = (ws, memberId) => {
 // What each person keeps on their tab bar after Home and Day (theirs alone, in their order). Null: the usual three.
 const PIN_RE = /^(rec|proj|camp|chan|stack|doc|card):[A-Za-z0-9_-]{1,64}$/;
 const MAX_PINS = 12;
-const BAR_KEYS = ['column', 'chat', 'camps', 'agents', 'sidekick', 'docs', 'projects', 'bills', 'contacts', 'email', 'folders', 'meetings', 'map', 'signs', 'vault', 'news'];
+const BAR_KEYS = ['column', 'chat', 'camps', 'agents', 'sidekick', 'docs', 'projects', 'bills', 'contacts', 'email', 'folders', 'meetings', 'map', 'signs', 'vault', 'news', 'whiteboard'];
 
 // A private campaign's feed and stack are hidden from people outside it, and so is a feed you weren't invited to.
 // The tools a team uses, which owners and admins switch on and off (Settings → Team). A new team starts with
 // a simple set; a team from before switches keeps everything but Projects, which is parked.
-const TOOL_KEYS = ['agents', 'sidekick', 'docs', 'contacts', 'email', 'folders', 'signs', 'bills', 'meetings', 'map', 'vault', 'projects', 'cards', 'news', 'inventory'];
+const TOOL_KEYS = ['agents', 'sidekick', 'docs', 'contacts', 'email', 'folders', 'signs', 'bills', 'meetings', 'map', 'vault', 'projects', 'cards', 'news', 'inventory', 'whiteboard'];
 const SETUP_KINDS = ['trades', 'services', 'store', 'software', 'other'];
-const NEW_TEAM_TOOLS = ['agents', 'sidekick', 'docs', 'contacts', 'email', 'folders', 'signs', 'cards', 'news', 'inventory'];
+const NEW_TEAM_TOOLS = ['agents', 'sidekick', 'docs', 'contacts', 'email', 'folders', 'signs', 'cards', 'news', 'inventory', 'whiteboard'];
 // Agents, business cards and News came later: on for teams that haven't switched them off. (News is still each
 // person's own to turn on, in their tabs.)
-const LATER_TOOLS = ['agents', 'cards', 'news', 'inventory'];
+const LATER_TOOLS = ['agents', 'cards', 'news', 'inventory', 'whiteboard']; // Whiteboard (2026-11-19): on unless switched off
 const toolsOf = (ws) => Object.fromEntries(TOOL_KEYS.map((k) => [k, ws.settings?.tools ? (LATER_TOOLS.includes(k) ? ws.settings.tools[k] !== false : ws.settings.tools[k] === true) : k !== 'projects']));
 // What members can see and do (the owner, 2026-11-20): owners and admins switch each Workspace tab and tool on or off
 // for members, and whether members see the team's schedule. Off means the server refuses the tool's routes to a
 // member and keeps its data off their devices (memberMay, MEMBER_ROUTES, the /state filter); owners and admins keep
 // everything. A tool off for the whole team (toolsOf) stays off for everyone.
-const MEMBER_DEFAULTS = { contacts: false, projects: true, camps: true, docs: true, chat: true, column: true, templates: true, inventory: true, bills: true, meetings: true, map: true, vault: true, teamSchedule: false };
-const MEMBER_LABEL = { contacts: 'Contacts', projects: 'Boards', camps: 'Campaigns', docs: 'Folders & Docs', chat: 'Chat', column: 'Stacks', templates: 'Templates', inventory: 'Inventory', bills: 'Finance', meetings: 'Meeting notes', map: 'Map', vault: 'Vault', teamSchedule: 'The team’s schedule' };
-const MEMBER_ROUTES = { contacts: ['contacts', 'contact-groups'], projects: ['projects', 'project-templates'], camps: ['board'], docs: ['docs', 'folders', 'dirs', 'doc-templates'], column: ['stacks'], templates: ['msg-templates'], inventory: ['inventory'], bills: ['money', 'bills', 'budgets', 'finance'], meetings: ['meetings'], map: ['trips', 'pins', 'zones', 'mileage', 'map'], vault: ['vault'], teamSchedule: ['workload', 'forecast', 'hours'] };
+const MEMBER_DEFAULTS = { contacts: false, projects: true, camps: true, docs: true, chat: true, column: true, templates: true, inventory: true, bills: true, meetings: true, map: true, vault: true, whiteboard: true, teamSchedule: false };
+const MEMBER_LABEL = { contacts: 'Contacts', projects: 'Boards', camps: 'Campaigns', docs: 'Folders & Docs', chat: 'Chat', column: 'Stacks', templates: 'Templates', inventory: 'Inventory', bills: 'Finance', meetings: 'Meeting notes', map: 'Map', vault: 'Vault', whiteboard: 'Whiteboard', teamSchedule: 'The team’s schedule' };
+const MEMBER_ROUTES = { contacts: ['contacts', 'contact-groups'], projects: ['projects', 'project-templates'], camps: ['board'], docs: ['docs', 'folders', 'dirs', 'doc-templates'], column: ['stacks'], templates: ['msg-templates'], inventory: ['inventory'], bills: ['money', 'bills', 'budgets', 'finance'], meetings: ['meetings'], map: ['trips', 'pins', 'zones', 'mileage', 'map'], vault: ['vault'], whiteboard: ['boards'], teamSchedule: ['workload', 'forecast', 'hours'] };
 const memberAccessOf = (ws) => Object.fromEntries(Object.keys(MEMBER_DEFAULTS).map((k) => [k, typeof ws.settings?.memberAccess?.[k] === 'boolean' ? ws.settings.memberAccess[k] : MEMBER_DEFAULTS[k]]));
 const memberMay = (ws, auth, k) => isAdmin(auth) || memberAccessOf(ws)[k] !== false;
 const memberOff = (k) => `Your team’s owners and admins have turned ${MEMBER_LABEL[k]} off for members.`;
@@ -2739,6 +2740,7 @@ async function stripeWebhook(req, res) {
 
 // ---------- realtime ----------
 const sockets = new Map(); // wsId -> Set<socket>
+let WB = null; // the Whiteboard (whiteboard.js), made once its helpers exist; broadcast() asks it who sees a board
 const DELETE_DAYS = 7;
 // A team being deleted (or gone) does nothing on its own: no links, no syncing, no sending.
 const offline = (wsId) => { const w = db.workspaces[wsId]; return !w || !!w.deleteAt; };
@@ -2769,7 +2771,7 @@ function broadcast(wsId, msg) {
   const data = JSON.stringify(msg);
   for (const s of set) if (hide && s.readyState === 1 && (!seesItemDir(inDir, s.meta.memberId) || (msg.type === 'item:update' && !seesOwn('item', inDir, s.meta.memberId)))) s.send(hide);
   const task = msg.task?.id && db.tasks[msg.task.id];
-  const sees = (mid) => seesCampaign(campaignId, mid) && seesFeed(feed, mid) && seesItemDir(inDir, mid) && seesTemplate(msg.template, mid) && seesEntry(msg.entry, mid) && (!msg.forMember || msg.forMember === mid) && (!msg.forAdmins || isAdminId(wsId, mid)) && (!msg.bill || seesBill(wsId, msg.bill, mid)) && (!inDir || seesOwn('item', inDir, mid)) && (!task || seesOwn('task', task, mid)) && PJ.seesMsg(msg, mid);
+  const sees = (mid) => seesCampaign(campaignId, mid) && seesFeed(feed, mid) && seesItemDir(inDir, mid) && seesTemplate(msg.template, mid) && seesEntry(msg.entry, mid) && (!msg.forMember || msg.forMember === mid) && (!msg.forAdmins || isAdminId(wsId, mid)) && (!msg.bill || seesBill(wsId, msg.bill, mid)) && (!inDir || seesOwn('item', inDir, mid)) && (!task || seesOwn('task', task, mid)) && PJ.seesMsg(msg, mid) && (!msg.boardId || !WB || WB.seesMsg(msg, mid));
   const live = (s) => s.readyState === 1 && (!s.meta.token || db.tokens[s.meta.token]) && db.workspaces[wsId]?.members.some((x) => x.id === s.meta.memberId);
   for (const s of set) if (!live(s) && s.readyState === 1) s.close(4001, 'Signed out');
   for (const s of set) if (live(s) && sees(s.meta.memberId)) s.send(data);
@@ -8360,6 +8362,7 @@ async function api(req, res, url) {
     if (out !== null) return;
   }
   if (a === 'teams') return TEAMS.route(req, res, parts, auth, ws);
+  if (a === 'boards') return WB.route(req, res, parts, auth, ws);
   if (a === 'companycam') {
     const out = await CC.route(req, res, parts, auth, ws);
     if (out !== null) return;
@@ -11751,7 +11754,7 @@ async function api(req, res, url) {
 // so devices that stay open (like the desktop app in the tray) pick up updates.
 let clientVer = { key: '', hash: '' };
 function clientVersion() {
-  const files = ['index.html', 'app.js', 'style.css', 'pdfkit.js', 'wordkit.js', 'dockit.js', 'news.js', 'news.css', 'applogos.js'].map((f) => path.join(CLIENT_DIR, f));
+  const files = ['index.html', 'app.js', 'style.css', 'pdfkit.js', 'wordkit.js', 'dockit.js', 'boardkit.js', 'news.js', 'news.css', 'applogos.js'].map((f) => path.join(CLIENT_DIR, f));
   const key = files.map((f) => fs.statSync(f, { throwIfNoEntry: false })?.mtimeMs || 0).join(':');
   if (key !== clientVer.key) {
     const h = crypto.createHash('sha256');
@@ -12152,6 +12155,8 @@ function ccCtx(ctx) {
   return rec && t ? { ...rest, record: rec, project: p, list: t, recordName: String(rec.values[t.primary] ?? '') } : rest;
 }
 // Microsoft Teams (teams.js): a Teams Workflows address the team pastes; automations and people (after a yes) post to it.
+WB = whiteboardModule({ db, save, send, readJson, cleanText, rid, broadcast, sockets, isAdmin, isAdminId, seesCampaign, ownOnly, toolsOf, memberMay });
+setInterval(() => WB.sweep(), 3600_000).unref();
 const TEAMS = teamsModule({ db, save, send, readJson, cleanText, seal, unseal, isAdmin, safeFetch, broadcast, allowLocal: process.env.ALLOW_LOCAL_WEBHOOKS === '1' });
 const CC = companycamModule({ db, save, broadcast, rid, cleanText, readJson, send, seal, unseal, isAdmin, safeFetch, publicUrl: PUBLIC_URL, jobsOf: ccJobs, addPhoto: ccPhoto, automate: (w, k, x) => automate(w, k, ccCtx(x)), alarm: (...x) => alarm(...x) });
 // Daily standups on a project (standup.js): a blocker becomes a task for the project lead.
@@ -12592,6 +12597,7 @@ server.on('upgrade', (req, socket, head) => {
         s.meta.visible = !!msg.visible;
         return;
       }
+      if (msg?.type === 'board:here') return WB.onSocket(s, msg, auth.wsId);
       if (msg?.type !== 'doc:here') return;
       const was = s.meta.doc?.id;
       const id = typeof msg.id === 'string' && db.items[msg.id]?.wsId === auth.wsId && db.items[msg.id].type === 'text' ? msg.id : null;
@@ -12603,6 +12609,7 @@ server.on('upgrade', (req, socket, head) => {
       sockets.get(auth.wsId)?.delete(s);
       presence(auth.wsId);
       if (s.meta.doc) docHere(auth.wsId, s.meta.doc.id);
+      if (s.meta.board) WB.here(auth.wsId, s.meta.board.id);
     });
   });
 });
@@ -12786,6 +12793,7 @@ async function removeMember(ws, m, { removed = false } = {}) {
   DBX.forget(wsId, id);
   await BOOK.memberGone(wsId, id).catch(() => {});
   SHIFTS.memberGone(wsId, id);
+  WB.memberGone(wsId, id, heir?.id);
   CARDS.forgetMember(wsId, id);
   for (const n of Object.values(db.notices)) if (theirs(n)) delete db.notices[n.id];
   // Google Contacts reads their Google account, so it goes with them; its people stay.
@@ -12948,6 +12956,7 @@ async function buildExport(x) {
     sidekick: (y) => y.memberId === me.id,
     agentRuns: (y) => y.memberId === me.id,
     projects: (y) => PJ.sees(y, me.id),
+    boards: (y) => !y.trashedAt && WB.sees(y, me.id),
     records: (y) => PJ.sees(db.projects[y.projectId], me.id),
     projectTemplates: () => !mineOnly,
     webhooks: () => !mineOnly && me.role === 'owner',

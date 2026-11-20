@@ -451,6 +451,7 @@
       if (hadConnection) loadState().catch(() => {}); // catch up on anything missed
       hadConnection = true;
       if (DV.doc) docTell(DV.doc);
+      if (WB.eds.size) wbCatchUp();
       tellVis(true);
     };
     s.onmessage = (e) => { handle(JSON.parse(e.data)); homeSoon(); };
@@ -498,6 +499,8 @@
       prNews(msg);
     } else if (msg.type === 'doc:here') {
       docHereNews(msg);
+    } else if (/^board(:|$)/.test(msg.type)) {
+      wbNews(msg);
     } else if (msg.type === 'comment' || msg.type === 'comment:remove') {
       docCommentNews(msg);
     } else if (msg.type === 'comment:mention') {
@@ -1855,6 +1858,7 @@
       { cmd: 'sidekick', also: ['ask'], hint: 'Plan it with Sidekick', on: toolOn('sidekick'), off: off('Sidekick'), run: () => { SK.open = null; openTool('sidekick'); } },
       { cmd: 'plan', hint: 'Open the Planner', run: () => openTool('planner') },
       { cmd: 'proof', also: ['coi', 'insurance'], hint: 'Send proof of licenses & insurance', arg: 'who it’s for', run: (t) => profileSheet({ send: true, to: t }) },
+      { cmd: 'whiteboard', also: ['wb'], hint: 'Open the Whiteboard', on: wbCan(), off: toolOn('whiteboard') ? 'Your team’s owners and admins have Whiteboard off for members.' : off('Whiteboard'), run: () => openWhiteboards() },
       { cmd: 'card', hint: 'Show your business card', on: toolOn('cards'), off: off('Business cards'), run: () => showMyCard() },
       { cmd: 'map', hint: 'Open the Map', on: toolOn('map'), off: off('Map'), run: () => openMap() },
       { cmd: 'miles', also: ['mileage', 'drove'], hint: 'Log a drive for mileage', arg: '23 supplies run', on: toolOn('map'), off: off('Map'), run: async (t) => { const a = moneyArgs(t); if (!ML.list) await loadMiles(); mileSheet(null, { purpose: a.rest, meters: a.amount ? Math.round(Number(a.amount) * mlPer()) : 0 }); } },
@@ -3165,7 +3169,7 @@
   // Tasks (the owner, 2026-11-15): what was Day is Workspace's first tab, and Workspace always opens on it.
   const WORK_TABS = ['day', 'contacts', 'projects', 'camps', 'docs', 'automations', 'tools'];
   // What Workspace → Tools lists. Stacks is a view (S.tab 'column'); the rest open in #tool. While one is open, Tools stays lit.
-  const TOOL_PAGE = ['chat', 'column', 'templates', 'inventory', 'bills', 'email', 'meetings', 'map', 'vault'];
+  const TOOL_PAGE = ['chat', 'column', 'whiteboard', 'templates', 'inventory', 'bills', 'email', 'meetings', 'map', 'vault'];
   const BAR_ITEMS = {
     column: { label: 'Stacks', view: true },
     chat: { label: 'Chat', view: true },
@@ -3192,6 +3196,7 @@
     signs: { label: 'Signatures', ok: () => toolOn('signs'), open: () => { SG.filter = null; openTool('signs'); } },
     vault: { label: 'Vault', ok: () => toolOn('vault'), open: () => { VK.filter = null; openTool('vault'); } },
     news: { label: 'News', ok: () => toolOn('news') },
+    whiteboard: { label: 'Whiteboard', ok: () => wbCan(), open: () => openWhiteboards() },
   };
   const itemOk = (k) => !BAR_ITEMS[k].ok || BAR_ITEMS[k].ok();
   const workKeys = () => WORK_TABS.filter(itemOk);
@@ -3209,6 +3214,7 @@
     home: svg('<path d="M4 11l8-7 8 7v8a1 1 0 0 1-1 1h-4v-6h-6v6H5a1 1 0 0 1-1-1z"/>'),
     day: svg('<rect x="4" y="5" width="16" height="15" rx="2"/><path d="M4 10h16M9 3v4M15 3v4"/>'),
     column: svg('<path d="m12 3 9 5-9 5-9-5z"/><path d="m3 13 9 5 9-5"/>'),
+    whiteboard: svg('<rect x="3" y="4" width="18" height="13" rx="2"/><path d="M7 9h4M7 12h7M12 17l-3 4M12 17l3 4"/>'),
     chat: svg('<path d="M5 5h14a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H9l-4 3V6a1 1 0 0 1 1-1z"/>'),
     camps: svg('<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="4"/><circle cx="12" cy="12" r=".5"/>'),
     agents: svg('<circle cx="9" cy="8" r="3.5"/><path d="M3 20a6 6 0 0 1 12 0"/><path d="M16 4.5a3.5 3.5 0 0 1 0 7M21 20a6 6 0 0 0-4-5.6"/>'),
@@ -10531,7 +10537,7 @@
   // The tools the team uses. Switched off, a tool leaves everyone's Tools menu; nothing in it is deleted.
   const TOOL_ROWS = [['agents', 'Agents', 'Your team: Chief of Staff, Sales, Operations and Marketing'], ['sidekick', 'Sidekick', 'Plans campaigns with you'], ['docs', 'Docs', 'Write and share pages'], ['contacts', 'Contacts', 'Your customers and leads (owners and admins)'],
           ['email', 'Email', 'Campaign email from Outlook or Gmail'], ['folders', 'Folders', 'Files in folders'], ['signs', 'Signatures', 'Send PDFs to be signed'], ['bills', 'Finance', 'Bills, money in and out, budgets'],
-          ['meetings', 'Meeting notes', 'Record a call, get the notes'], ['map', 'Map', 'Pins, routes and canvassing runs'], ['vault', 'Vault', 'Codes and logins, locked on your device'], ['projects', 'Boards', 'Jobs in columns: trades, software, client work and team projects'], ['cards', 'Business cards', 'Everyone’s own card to share by link, text, QR code or NFC'], ['news', 'News', 'Each person’s own news, if they turn it on in their tabs'], ['inventory', 'Inventory', 'Parts, materials and equipment: stock at each place, used on jobs, low-stock alerts']];
+          ['meetings', 'Meeting notes', 'Record a call, get the notes'], ['map', 'Map', 'Pins, routes and canvassing runs'], ['vault', 'Vault', 'Codes and logins, locked on your device'], ['projects', 'Boards', 'Jobs in columns: trades, software, client work and team projects'], ['cards', 'Business cards', 'Everyone’s own card to share by link, text, QR code or NFC'], ['news', 'News', 'Each person’s own news, if they turn it on in their tabs'], ['inventory', 'Inventory', 'Parts, materials and equipment: stock at each place, used on jobs, low-stock alerts'], ['whiteboard', 'Whiteboard', 'Plan visually together: stickies, shapes, arrows, frames and cards for real work']];
   const APPS = { tab: store.get('appsTab', 'apps'), open: null, q: '', cat: 'all', loading: false, leads: null };
   const ZAPIER_INVITE = 'https://zapier.com/developer/public-invite/249576/3ce3c0fb9bd4e67c0b2ba97a95b5fdf1/';
   const APP_CATS = [['comms', 'Email & calendar'], ['storage', 'Files & docs'], ['crm', 'CRM & sales'], ['finance', 'Money & payments'], ['schedule', 'Scheduling & signatures'], ['field', 'Field service & trades'], ['marketing', 'Marketing & social'], ['dev', 'Software & dev'], ['people', 'HR & payroll'], ['auto', 'Forms & automation'], ['ai', 'AI']];
@@ -11646,7 +11652,7 @@
     execute: ['Execute', 'Makes routine changes itself (tasks, time, records, docs). Emails wait for your yes.'],
     automate: ['Automate', 'As Execute, and runs its scheduled workflows on its own.'],
   };
-  const AG_TOOL_NAMES = { find_inventory: 'Inventory (what’s on hand where)', use_stock: 'Use stock on jobs', find_templates: 'Templates', save_template: 'Saving templates', look_at_money: 'Budgets and bills', set_budget: 'Budgets', add_bill: 'Bills', draft_invoice: 'Invoice drafts', send_invoice: 'Sending invoices', send_signoff: 'Sign-offs to customers', add_to_company_hq: 'Company HQ', look_at_day: 'Your calendar and day', list_tasks: 'Tasks', list_projects: 'Projects (the setup)', find_records: 'Jobs, leads and deals', read_record: 'A record’s full history', list_campaigns: 'Campaigns', find_contacts: 'Contacts', team_schedule: 'The team’s visits', plan_route: 'Routes', find_docs: 'Docs', read_doc: 'A doc’s text', create_task: 'Make tasks', update_task: 'Reschedule, reassign or finish tasks', schedule_time: 'Put time on your calendar', move_time: 'Move time it put there', save_contact: 'Save contacts', create_project: 'Start projects', create_record: 'Add jobs, leads, deals…', update_record: 'Update records', log_note: 'Log calls and notes', book_visit: 'Book visits', write_doc: 'Write docs', draft_email: 'Draft emails', notify_me: 'Send you a heads-up', marketing_snapshot: 'What’s bringing in work (leads by source, jobs won, campaigns, posts)', find_customers: 'Past and recent customers', list_channels: 'Your social channels', social_posts: 'Your posts in Postiz', create_campaign: 'Start campaigns with goals and tasks', make_list: 'Make lists of people to reach', make_image: 'Make pictures (on your OpenAI or Gemini key)', draft_social_post: 'Draft social and Google posts', draft_email_campaign: 'Draft email campaigns', find_photos: 'Your photos (Folders, Stacks, job photos, chat)', post_to_chat: 'Post in your team’s chat feeds', look_at_photos: 'Look at photos to pick the right ones' };
+  const AG_TOOL_NAMES = { find_inventory: 'Inventory (what’s on hand where)', use_stock: 'Use stock on jobs', find_templates: 'Templates', save_template: 'Saving templates', look_at_money: 'Budgets and bills', set_budget: 'Budgets', add_bill: 'Bills', draft_invoice: 'Invoice drafts', send_invoice: 'Sending invoices', send_signoff: 'Sign-offs to customers', add_to_company_hq: 'Company HQ', look_at_day: 'Your calendar and day', list_tasks: 'Tasks', list_projects: 'Projects (the setup)', find_records: 'Jobs, leads and deals', read_record: 'A record’s full history', list_campaigns: 'Campaigns', find_contacts: 'Contacts', team_schedule: 'The team’s visits', plan_route: 'Routes', find_docs: 'Docs', read_doc: 'A doc’s text', create_task: 'Make tasks', update_task: 'Reschedule, reassign or finish tasks', schedule_time: 'Put time on your calendar', move_time: 'Move time it put there', save_contact: 'Save contacts', create_project: 'Start projects', create_record: 'Add jobs, leads, deals…', update_record: 'Update records', log_note: 'Log calls and notes', book_visit: 'Book visits', write_doc: 'Write docs', draft_email: 'Draft emails', notify_me: 'Send you a heads-up', marketing_snapshot: 'What’s bringing in work (leads by source, jobs won, campaigns, posts)', find_customers: 'Past and recent customers', list_channels: 'Your social channels', social_posts: 'Your posts in Postiz', create_campaign: 'Start campaigns with goals and tasks', make_list: 'Make lists of people to reach', make_image: 'Make pictures (on your OpenAI or Gemini key)', draft_social_post: 'Draft social and Google posts', draft_email_campaign: 'Draft email campaigns', find_photos: 'Your photos (Folders, Stacks, job photos, chat)', post_to_chat: 'Post in your team’s chat feeds', draft_teams_post: 'Post in your team’s Microsoft Teams channel', make_proof_link: 'Proof-of-insurance links for customers and GCs', look_at_photos: 'Look at photos to pick the right ones' };
   const AG_STATUS = { requested: 'Starting', planning: 'Planning', running: 'Working', awaiting: 'Needs your yes', completed: 'Done', failed: 'Didn’t finish', blocked: 'Has a question', cancelled: 'Stopped' };
   const AG_DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
   const agRunning = (x) => ['requested', 'planning', 'running'].includes(x.status);
@@ -12937,6 +12943,283 @@
     }, p ? 'Save' : 'Add it', () => was() !== start, 'place');
     if (!p) name.focus();
   }
+  // ----- Whiteboard (2026-11-19): a visual planning board in Tools. The canvas is client/boardkit.js; this is the
+  // list, the page around a board, keeping it live (what others change, who's here), and what a card or file is.
+  // openBoard(id) opens one full page like a doc; boardEditor(board, mount, { campaign }) puts one inside another page
+  // (a campaign's Plan tab, column-91); boardSelection(board) is what's picked on it.
+  const WB = { list: null, trash: [], sid: newId(), eds: new Map(), here: new Map(), page: null };
+  const wbCan = () => toolOn('whiteboard') && memberMay('whiteboard');
+  const WB_TPL = [['blank', 'Blank board', 'Start from nothing'], ['workflow', 'Workflow map', 'Steps from lead to paid, with arrows'], ['brainstorm', 'Campaign brainstorm', 'Goal, who you’re reaching, ideas, next steps'], ['mindmap', 'Mind map', 'One big idea and its branches']];
+  async function wbLoad() {
+    const y = await api('GET', '/boards');
+    WB.list = y.boards;
+    WB.trash = y.trash || [];
+    return WB.list;
+  }
+  function wbView() {
+    const v = $('#wbview') || document.body.appendChild(h('div', { id: 'wbview', class: 'wbview hidden' }));
+    v.classList.remove('hidden');
+    return v;
+  }
+  function wbClose() {
+    if (WB.page) { WB.page.ed.destroy(); WB.page = null; }
+    const v = $('#wbview');
+    v?.classList.add('hidden');
+    v?.replaceChildren();
+    wbTell();
+  }
+  // The list: every board this person can see, and Deleted.
+  async function openWhiteboards() {
+    if (!wbCan()) return toast(toolOn('whiteboard') ? 'Your team’s owners and admins have turned Whiteboard off for members.' : 'Whiteboard is switched off for this team (Apps & Integrations → Tools).');
+    if (WB.page) { WB.page.ed.destroy(); WB.page = null; wbTell(); }
+    const v = wbView();
+    v.replaceChildren(h('p', { class: 'day-hint wb-loading' }, 'Loading…'));
+    try { await wbLoad(); } catch (e) { v.replaceChildren(h('p', { class: 'err' }, e.message)); return; }
+    wbListDraw();
+  }
+  function wbListDraw() {
+    const v = $('#wbview');
+    if (!v || WB.page || v.classList.contains('hidden')) return;
+    const camp = (b) => (b.campaignId ? campById(b.campaignId) : null);
+    const card = (b) => h('button', { class: 'wb-bcard', 'data-board': b.id, onclick: () => openBoard(b.id) },
+      h('span', { class: 'wb-bcard-ic' }, b.campaignId ? '🎯' : b.private ? '🔒' : '🗺️'),
+      h('b', {}, b.name),
+      h('small', {}, [camp(b) ? camp(b).name : b.private ? 'Only you' : 'The team', plural(b.items, 'thing'), `by ${b.by}`, b.updatedAt ? new Date(b.updatedAt).toLocaleDateString() : ''].filter(Boolean).join(' · ')));
+    const restore = async (b, btn) => { btn.disabled = true; try { await api('POST', `/boards/${b.id}/restore`); await wbLoad(); wbListDraw(); toast('Board restored'); } catch (e) { toast(e.message); btn.disabled = false; } };
+    v.replaceChildren(h('div', { class: 'wb-home' },
+      h('div', { class: 'wb-home-head' }, h('button', { class: 'icon-btn', 'aria-label': 'Close Whiteboard', html: I.close, onclick: wbClose }), h('h2', {}, 'Whiteboard'), h('span', { style: 'flex:1' }),
+        h('button', { class: 'btn primary-btn wb-new', onclick: (e) => wbNew(e.currentTarget) }, '+ New board')),
+      h('p', { class: 'day-hint' }, 'Plan it out together: stickies, shapes, arrows, frames, pictures, and cards for real tasks, steps, jobs, contacts and docs. Everyone on the board sees changes as they happen.'),
+      WB.list.length ? h('div', { class: 'wb-grid' }, WB.list.map(card))
+        : h('div', { class: 'wb-start' }, h('h3', {}, 'Start a board'), h('div', { class: 'wb-tpls' }, WB_TPL.map(([k, name, sub]) => h('button', { class: 'wb-tpl', 'data-tpl': k, onclick: () => wbMake({ template: k, name: k === 'blank' ? '' : name }) }, h('b', {}, name), h('small', {}, sub))))),
+      WB.trash.length ? h('details', { class: 'wb-trash' }, h('summary', {}, `Deleted (${WB.trash.length})`), h('p', { class: 'day-hint' }, 'Deleted boards are kept 30 days, then they’re gone.'),
+        WB.trash.map((b) => h('div', { class: 'wb-trash-row' }, h('span', {}, b.name), h('small', {}, b.trashedAt ? new Date(b.trashedAt).toLocaleDateString() : ''), h('button', { class: 'btn small', onclick: (e) => restore(b, e.currentTarget) }, 'Restore')))) : null));
+  }
+  function wbNew(anchor, extra = {}) {
+    openMenu(anchor, [{ head: 'New board' }, ...WB_TPL.map(([k, name, sub]) => ({ label: h('span', { class: 'wb-tpl-row', 'data-tpl': k }, h('b', {}, name), h('small', {}, sub)), run: () => wbMake({ template: k, name: k === 'blank' ? '' : name, ...extra }) })),
+      ...(extra.campaignId ? [] : [{ label: '🔒 Blank, only for me', run: () => wbMake({ template: 'blank', private: true, ...extra }) }])]);
+  }
+  async function wbMake(body) {
+    try {
+      const b = await api('POST', '/boards', body);
+      WB.list = [b, ...(WB.list || []).filter((x) => x.id !== b.id)];
+      if (body.campaignId) return b;
+      openBoard(b.id, b);
+      return b;
+    } catch (e) { toast(e.message); return null; }
+  }
+  // One board, full page: its name, who's here, who sees it, and the canvas.
+  async function openBoard(id, had) {
+    if (!wbCan()) return toast('Whiteboard is switched off for you.');
+    const v = wbView();
+    let b = had && had.items && Array.isArray(had.items) ? had : null;
+    if (!b) {
+      v.replaceChildren(h('p', { class: 'day-hint wb-loading' }, 'Opening…'));
+      try { b = await api('GET', `/boards/${id}`); } catch (e) { toast(e.message); return wbClose(); }
+    }
+    if (WB.page) { WB.page.ed.destroy(); WB.page = null; }
+    const mount = h('div', { class: 'wb-mount' });
+    const bar = h('div', { class: 'wb-bar' });
+    v.replaceChildren(h('div', { class: 'wb-page' }, bar, mount));
+    const ed = boardEditor(b, mount, {});
+    WB.page = { id: b.id, b, ed, bar };
+    wbBarDraw();
+  }
+  function wbBarDraw() {
+    const x = WB.page;
+    if (!x) return;
+    const b = x.b;
+    const mine = b.memberId === S.me?.memberId;
+    const name = h('input', { class: 'wb-name', value: b.name, 'aria-label': 'Board name', maxlength: 120 });
+    name.addEventListener('change', async () => { const v = name.value.trim(); if (!v || v === b.name) return (name.value = b.name); try { Object.assign(b, await api('PATCH', `/boards/${b.id}`, { name: v })); } catch (e) { toast(e.message); name.value = b.name; } });
+    name.addEventListener('keydown', (e) => { if (e.key === 'Enter') name.blur(); });
+    const c = b.campaignId ? campById(b.campaignId) : null;
+    const who = c ? `🎯 ${c.name}` : b.private ? '🔒 Only you' : '👥 The team';
+    const people = (WB.here.get(b.id) || []).filter((p) => p.memberId !== S.me?.memberId);
+    const menu = (e) => openMenu(e.currentTarget, [
+      { label: 'Fit everything on screen', run: () => x.ed.fit() },
+      ...(!c && mine ? [{ label: b.private ? '👥 Share with the team' : '🔒 Make it only mine', run: () => wbPrivate(!b.private) }] : []),
+      ...(mine || amAdmin() ? [{ label: '🗑 Delete board', danger: true, run: () => wbDelete() }] : []),
+      { label: 'Keys: S sticky · T text · R shape · F frame · L arrow · Space+drag to move around · ⇧1 fit', run: () => {} },
+    ]);
+    x.bar.replaceChildren(
+      h('button', { class: 'icon-btn wb-back', 'aria-label': 'All boards', title: 'All boards', html: I.back || '‹', onclick: () => openWhiteboards() }),
+      name,
+      h('span', { class: 'wb-who', title: c ? 'Seen by whoever sees the campaign' : b.private ? 'Only you see it' : 'Everyone on the team sees it' }, who),
+      h('span', { style: 'flex:1' }),
+      people.length ? h('span', { class: 'wb-here', title: 'Here now' }, people.slice(0, 5).map((p) => h('span', { class: 'wb-face', title: p.name, style: `--h:${hueOf(p.memberId)}` }, (p.name || '?').slice(0, 1).toUpperCase())), people.length > 5 ? h('small', {}, `+${people.length - 5}`) : null) : null,
+      h('button', { class: 'icon-btn wb-more', 'aria-label': 'More', title: 'More', onclick: menu }, '⋯'),
+      h('button', { class: 'icon-btn', 'aria-label': 'Close the board', html: I.close, onclick: wbClose }));
+  }
+  async function wbPrivate(on) {
+    const b = WB.page?.b;
+    if (!b) return;
+    try { Object.assign(b, await api('PATCH', `/boards/${b.id}`, { private: on })); toast(on ? 'Only you see this board now' : 'The team sees this board now'); wbBarDraw(); } catch (e) { toast(e.message); }
+  }
+  async function wbDelete() {
+    const b = WB.page?.b;
+    if (!b) return;
+    try { await api('DELETE', `/boards/${b.id}`); toast('Board deleted. It’s in Deleted for 30 days.'); openWhiteboards(); } catch (e) { toast(e.message); }
+  }
+  // What a card stands for, from what this person's app already has (so it never shows more than they can see).
+  function wbCardInfo(ref) {
+    if (!ref) return null;
+    if (ref.kind === 'task') { const t = taskById(ref.id); return t && { icon: t.done ? '✅' : '☑️', title: t.text, sub: [t.due ? dueLabel(t.due) : '', t.assignee || ''].filter(Boolean).join(' · '), status: t.done ? 'Done' : 'To do', done: !!t.done }; }
+    if (ref.kind === 'goal') { const g = goalById(ref.id); const c = g && campById(g.campaignId); return g && { icon: '🎯', title: g.title, sub: c ? c.name : 'Campaign step', status: g.done || g.status === 'done' ? 'Done' : g.status ? String(g.status).replace(/^\w/, (m) => m.toUpperCase()) : 'Open', done: !!(g.done || g.status === 'done') }; }
+    if (ref.kind === 'record') {
+      for (const [pid, list] of PR.records) {
+        const r = list.find((y) => y.id === ref.id);
+        if (!r) continue;
+        const p = projById(pid), t = p?.types.find((y) => y.id === r.typeId);
+        const st = t?.fields.find((f) => f.key === 'status' && f.type === 'select');
+        const stage = st ? st.choices?.find((c2) => c2.id === r.values[st.id])?.label : '';
+        return { icon: p?.icon || '📋', title: (t && String(r.values[t.primary] || '')) || t?.singular || 'Record', sub: p?.name || '', status: stage || '' };
+      }
+      return null;
+    }
+    if (ref.kind === 'contact') { const c = (S.contacts || []).find((y) => y.id === ref.id); return c && { icon: '👤', title: c.name || c.company || c.email || 'Contact', sub: [c.company && c.name ? c.company : '', c.phone || c.email || ''].filter(Boolean).join(' · ') }; }
+    if (ref.kind === 'doc') { const d = docById(ref.id); return d && { icon: d.icon || '📄', title: docTitle(d), sub: 'Doc' }; }
+    return null;
+  }
+  function wbOpenCard(ref) {
+    if (!wbCardInfo(ref)) return toast('That isn’t available to you.');
+    if (ref.kind === 'task') return taskWindow(taskById(ref.id));
+    if (ref.kind === 'goal') { const g = goalById(ref.id); return stepWindow(campById(g.campaignId), g); }
+    if (ref.kind === 'record') return openRecord(ref.id);
+    if (ref.kind === 'contact') return contactSheet((S.contacts || []).find((y) => y.id === ref.id));
+    if (ref.kind === 'doc') return openDoc(docById(ref.id));
+  }
+  function wbFileInfo(id) {
+    const f = S.items.find((y) => y.id === id && y.type === 'file');
+    return f ? { name: f.name, url: fileUrl(f), image: kind(f) === 'image' } : null;
+  }
+  // Pick a picture or file the team has (or upload one).
+  function wbPickFile() {
+    return new Promise((resolve) => {
+      let done = false;
+      const end = (v) => { if (done) return; done = true; closeSheet(); resolve(v); };
+      const q = h('input', { type: 'search', placeholder: 'Find a picture or file', 'aria-label': 'Find a file' });
+      const list = h('div', { class: 'wb-pick-list' });
+      const files = S.items.filter((y) => y.type === 'file' && y.status !== 'uploading').sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+      const draw = () => {
+        const w = q.value.trim().toLowerCase();
+        const got = files.filter((f) => !w || String(f.name || '').toLowerCase().includes(w)).slice(0, 60);
+        list.replaceChildren(...(got.length ? got.map((f) => h('button', { class: 'wb-pick', 'data-id': f.id, onclick: () => end(f.id) }, kind(f) === 'image' ? h('img', { src: fileUrl(f), alt: '' }) : h('span', { class: 'wb-pick-ic' }, '📎'), h('span', {}, f.name))) : [h('p', { class: 'day-hint' }, 'No files yet. Upload one.')]));
+      };
+      const inp = h('input', { type: 'file', multiple: false, hidden: true });
+      inp.addEventListener('change', async () => { const f = inp.files?.[0]; if (!f) return; try { end(await wbUpload(f)); } catch (e) { toast(e.message); } });
+      q.addEventListener('input', draw);
+      sheet('Add a picture or file', [h('button', { class: 'btn primary-btn', type: 'button', onclick: () => inp.click() }, '⬆ Upload from this device'), inp, q, list]);
+      const wrap = $('#sheet');
+      const watch = new MutationObserver(() => { if (wrap.classList.contains('hidden')) { watch.disconnect(); end(null); } });
+      watch.observe(wrap, { attributes: true, attributeFilter: ['class'] });
+      draw();
+      q.focus();
+    });
+  }
+  async function wbUpload(file) {
+    const up = await uploadFile(file, {});
+    if (!up) return null;
+    if (!S.items.some((y) => y.id === up.id)) S.items.push(up);
+    return up.id;
+  }
+  // Pick a real thing for a card: a task, campaign step, job or record, contact or doc.
+  function wbPickCard(opts = {}) {
+    return new Promise((resolve) => {
+      let done = false;
+      const end = (v) => { if (done) return; done = true; closeSheet(); resolve(v); };
+      let tab = opts.campaign ? 'goal' : 'task';
+      const q = h('input', { type: 'search', placeholder: 'Search', 'aria-label': 'Search' });
+      const tabs = h('div', { class: 'wb-pick-tabs', role: 'tablist' });
+      const list = h('div', { class: 'wb-pick-list' });
+      const recs = () => [...PR.records.entries()].flatMap(([pid, rs]) => rs.map((r) => ({ kind: 'record', id: r.id, pid }))).slice(0, 2000);
+      const KINDS = [['task', 'Tasks', () => S.tasks.filter((t) => !t.done || opts.campaign).map((t) => ({ kind: 'task', id: t.id }))],
+        ['goal', 'Campaign steps', () => (S.goals || []).filter((g) => !opts.campaign || g.campaignId === opts.campaign.id).map((g) => ({ kind: 'goal', id: g.id }))],
+        ...(toolOn('projects') && memberMay('projects') ? [['record', 'Jobs & records', recs]] : []),
+        ...(toolOn('contacts') && memberMay('contacts') ? [['contact', 'Contacts', () => (S.contacts || []).map((c) => ({ kind: 'contact', id: c.id }))]] : []),
+        ['doc', 'Docs', () => S.items.filter((y) => y.type === 'text').map((d) => ({ kind: 'doc', id: d.id }))]];
+      const draw = () => {
+        tabs.replaceChildren(...KINDS.map(([k, name]) => h('button', { class: 'chip' + (k === tab ? ' on' : ''), role: 'tab', 'aria-selected': String(k === tab), onclick: () => { tab = k; draw(); } }, name)));
+        const w = q.value.trim().toLowerCase();
+        const all = (KINDS.find((x) => x[0] === tab)?.[2]() || []).map((ref) => ({ ref, c: wbCardInfo(ref) })).filter((x) => x.c && (!w || `${x.c.title} ${x.c.sub || ''}`.toLowerCase().includes(w))).slice(0, 80);
+        list.replaceChildren(...(all.length ? all.map(({ ref, c }) => h('button', { class: 'wb-pick', 'data-id': ref.id, onclick: () => end({ kind: ref.kind, id: ref.id }) }, h('span', { class: 'wb-pick-ic' }, c.icon || '🔗'), h('span', {}, h('b', {}, c.title), c.sub ? h('small', {}, c.sub) : null), c.status ? h('em', {}, c.status) : null)) : [h('p', { class: 'day-hint' }, 'Nothing here.')]));
+      };
+      q.addEventListener('input', draw);
+      sheet('Add a card', [h('p', { class: 'day-hint' }, 'A card shows the real thing as it is now, and opens it.'), tabs, q, list]);
+      const wrap = $('#sheet');
+      const watch = new MutationObserver(() => { if (wrap.classList.contains('hidden')) { watch.disconnect(); end(null); } });
+      watch.observe(wrap, { attributes: true, attributeFilter: ['class'] });
+      if (toolOn('projects') && memberMay('projects')) prLoadAll().then(() => !done && draw()).catch(() => {});
+      draw();
+      q.focus();
+    });
+  }
+  // The canvas, mounted anywhere. It keeps itself up to date with what others change, and says it's here.
+  function boardEditor(board, mount, { campaign = null } = {}) {
+    const set = WB.eds.get(board.id) || new Set();
+    WB.eds.set(board.id, set);
+    let ed;
+    const send = async (ops) => {
+      try { await api('POST', `/boards/${board.id}/ops`, { ops, sid: WB.sid }); }
+      catch (e) {
+        // Out of step (a limit, a deleted board): show it as it really is.
+        toast(e.message);
+        api('GET', `/boards/${board.id}`).then((b) => ed.reset(b), () => {});
+      }
+    };
+    ed = ColumnBoard.editor({
+      board, send,
+      cardInfo: wbCardInfo, openCard: wbOpenCard, fileInfo: wbFileInfo,
+      pickFile: wbPickFile, upload: wbUpload, pickCard: () => wbPickCard({ campaign }),
+      toast, viewKey: 'wbView:' + board.id,
+    });
+    const entry = { ed, board };
+    set.add(entry);
+    mount.append(ed.el);
+    const destroy = ed.destroy;
+    ed.destroy = () => { set.delete(entry); if (!set.size) WB.eds.delete(board.id); destroy(); wbTell(); };
+    wbTell();
+    return ed;
+  }
+  function boardSelection(board) {
+    const set = WB.eds.get(board?.id || board);
+    const first = set && [...set][0];
+    return first ? first.ed.selection() : [];
+  }
+  // Which board this window has open (the full page, or the first one mounted elsewhere).
+  function wbTell() {
+    const id = WB.page?.id || [...WB.eds.keys()][0] || null;
+    if (sock?.readyState === 1) sock.send(JSON.stringify({ type: 'board:here', id }));
+  }
+  function wbNews(msg) {
+    if (msg.type === 'board') {
+      if (msg.sid === WB.sid) return;
+      for (const { ed } of WB.eds.get(msg.id) || []) ed.apply(msg.ops);
+      return;
+    }
+    if (msg.type === 'board:here') {
+      WB.here.set(msg.id, msg.people || []);
+      if (WB.page?.id === msg.id) wbBarDraw();
+      return;
+    }
+    if (msg.type === 'board:gone') {
+      if (WB.list) WB.list = WB.list.filter((b) => b.id !== msg.id);
+      for (const { ed } of [...(WB.eds.get(msg.id) || [])]) if (WB.page?.ed !== ed) ed.el.replaceWith(h('p', { class: 'day-hint wb-gone' }, 'This board was deleted, or its maker made it private.'));
+      if (WB.page?.id === msg.id) { toast('This board was deleted, or made private by whoever made it.'); openWhiteboards(); }
+      else wbListDraw();
+      return;
+    }
+    if (msg.type === 'board:list' && msg.board) {
+      if (WB.list) WB.list = [msg.board, ...WB.list.filter((b) => b.id !== msg.board.id)].sort((a, b) => b.updatedAt - a.updatedAt);
+      if (WB.page?.id === msg.board.id) { Object.assign(WB.page.b, msg.board, { items: WB.page.b.items, links: WB.page.b.links }); wbBarDraw(); }
+      wbListDraw();
+    }
+  }
+  // Back after the connection dropped: each open board, as it is now.
+  function wbCatchUp() {
+    wbTell();
+    for (const [id, set] of WB.eds) api('GET', `/boards/${id}`).then((b) => { for (const { ed } of set) ed.reset(b); }, () => {});
+  }
   // Tools to browse: a drop-down list under the Tools tab (the owner, 2026-11-20: "tools… just in a list form in a
   // drop down column when browsing"). Picking one opens it in the split, as before. The page (toolsPage) stays for
   // anything that still opens 'tools' in the split.
@@ -12991,6 +13274,7 @@
     const ROWS = {
       chat: { name: 'Chat', sub: 'Your team’s feeds and messages', run: () => openChat(), ok: () => memberMay('chat') },
       column: { name: 'Stacks', sub: 'Cards, files and links in shared stacks', run: () => openStacks(), ok: () => memberMay('column') },
+      whiteboard: { name: 'Whiteboard', sub: 'Plan it out together: stickies, shapes, arrows and cards for real work', ok: () => wbCan(), run: () => openWhiteboards() },
       templates: { name: 'Templates', sub: 'Emails, texts, replies, posts and paperwork to reuse, in automations and by your team', ok: () => memberMay('templates') },
       inventory: { name: 'Inventory', sub: INVS.data?.low.length ? `${INVS.data.low.length} low on stock` : 'Parts, materials and equipment: what you have and where', ok: () => toolOn('inventory') && memberMay('inventory') },
       bills: { name: 'Finance', sub: [soon ? `${soon} due soon` : '', tight ? `${tight} budget${tight === 1 ? '' : 's'} nearly used` : ''].filter(Boolean).join(' · ') || 'Money in and out, budgets and bills', ok: () => toolOn('bills') && memberMay('bills') },
@@ -23450,6 +23734,7 @@
           h('div', { class: 'picks-h' }, 'Tools'),
           row('chat', 'Chat', 'Feeds and messages'),
           row('column', 'Stacks', 'Shared stacks of cards and files'),
+          row('whiteboard', 'Whiteboard', 'Planning boards: the team’s, and their own', toolOn('whiteboard')),
           row('inventory', 'Inventory', 'Stock, equipment and asking for items', toolOn('inventory')),
           row('bills', 'Finance', 'Their own money and bills', toolOn('bills')),
           row('meetings', 'Meeting notes', 'Recording meetings', toolOn('meetings')),
