@@ -3450,7 +3450,7 @@
               h('button', { class: 'icon-btn', 'aria-label': 'Move ' + pinLabel(x) + ' right', disabled: i === pins.length - 1, onclick: () => move(1) }, '↓'),
               h('button', { class: 'icon-btn', 'aria-label': 'Unpin ' + pinLabel(x), html: I.close, onclick: () => { pins = pins.filter((y) => y !== x); drawPins(); } })));
         }),
-        pins.length ? null : h('p', { class: 'muted small' }, 'Nothing pinned yet. Use 📌 Pin to Workspace in a job’s, project’s, campaign’s, doc’s or feed’s ⋯ menu, or pick one here.'));
+        pins.length ? '' : h('p', { class: 'muted small' }, 'Nothing pinned yet. Use 📌 Pin to Workspace in a job’s, project’s, campaign’s, doc’s or feed’s ⋯ menu, or pick one here.'));
     };
     drawPins();
     const addPin = (e) => {
@@ -7817,8 +7817,8 @@
         rs.length ? h('div', { class: 'res-list' }, rs.map((r) => h('div', { class: 'res-row', 'data-res': r.kind },
           h('button', { class: 'res-open', onclick: () => resOpen(r) }, h('span', { class: 'res-ic' }, RES_IC[r.kind]), h('span', {}, h('b', {}, resName(r)), r.kind === 'note' && r.text ? h('small', {}, shortText(r.text.replace(/\s+/g, ' '), 90)) : r.kind === 'link' ? h('small', {}, shortText(r.url, 60)) : null)),
           can && r.kind === 'note' ? h('button', { class: 't-btn', title: 'Change it', 'aria-label': 'Change ' + resName(r), html: I.edit || '✎', onclick: () => resNoteForm(box, g, r, (y) => draw(y)) }) : null,
-          can ? h('button', { class: 't-btn', title: 'Take it off the step', 'aria-label': 'Remove ' + resName(r), html: I.close, onclick: () => saveRes(g, stepRes(g).filter((x) => x.id !== r.id)).then(draw, (e) => toast(e.message)) }) : null))) : null,
-        can ? h('div', { class: 'res-adds' }, add('note', '+ Note or script', () => resNoteForm(box, g, null, (y) => draw(y))), add('doc', '+ Doc or file', pickItem), add('template', '+ Template', pickTpl), add('link', '+ Link', addLink)) : null);
+          can ? h('button', { class: 't-btn', title: 'Take it off the step', 'aria-label': 'Remove ' + resName(r), html: I.close, onclick: () => saveRes(g, stepRes(g).filter((x) => x.id !== r.id)).then(draw, (e) => toast(e.message)) }) : null))) : '',
+        can ? h('div', { class: 'res-adds' }, add('note', '+ Note or script', () => resNoteForm(box, g, null, (y) => draw(y))), add('doc', '+ Doc or file', pickItem), add('template', '+ Template', pickTpl), add('link', '+ Link', addLink)) : '');
     };
     draw();
     return box;
@@ -7885,7 +7885,7 @@
         h('p', { class: 'day-hint' }, mine.length ? 'Running for this step:' : 'Nothing runs for this step yet. Start with one of these, or build your own.'),
         mine.length ? h('div', { class: 'res-list' }, mine.map((x) => h('div', { class: 'res-row auto-row-step', 'data-auto': x.id },
           h('button', { class: 'res-open', onclick: () => { closeSheet(); autoSheet(x); } }, h('span', { class: 'res-ic' }, x.on ? '⚡' : '⏸'), h('span', {}, h('b', {}, x.name), h('small', {}, (AUTO_WHEN[x.trigger.kind] || x.trigger.kind) + (x.on ? '' : ' · off')))),
-          h('label', { class: 'toggle', title: x.on ? 'On' : 'Off' }, h('input', { type: 'checkbox', checked: !!x.on, onchange: async (e) => { try { const y = await api('PATCH', '/automations/' + x.id, { on: e.target.checked }); S.automations = S.automations.map((z) => (z.id === y.id ? y : z)); draw(); renderAutos(); } catch (er) { e.target.checked = !e.target.checked; toast(er.message); } } }), h('i'))))) : null,
+          h('label', { class: 'toggle', title: x.on ? 'On' : 'Off' }, h('input', { type: 'checkbox', checked: !!x.on, onchange: async (e) => { try { const y = await api('PATCH', '/automations/' + x.id, { on: e.target.checked }); S.automations = S.automations.map((z) => (z.id === y.id ? y : z)); draw(); renderAutos(); } catch (er) { e.target.checked = !e.target.checked; toast(er.message); } } }), h('i'))))) : '',
         h('div', { class: 'picks-h' }, 'Ready-made'),
         h('div', { class: 'step-recipes' }, stepRecipes(c, g).map((r) => have.has(r.name) ? null : h('button', { class: 'btn small step-recipe', 'data-recipe': r.id, onclick: (e) => make(r, e.currentTarget) }, '+ ' + r.label))),
         h('div', { class: 'btns' }, h('button', { class: 'btn primary-btn small step-auto-new', onclick: () => { closeSheet(); autoSheet(null, { name: `${g.title}: `, trigger: { kind: 'task.opened', campaignId: c.id, step: g.title } }); } }, '+ New automation for this step')));
@@ -9588,7 +9588,7 @@
         return h('button', { type: 'button', class: 'chip' + (on ? ' on' : ''), 'aria-pressed': String(on), onclick: () => { r.memberIds = on ? r.memberIds.filter((x) => x !== m.id) : [...r.memberIds, m.id]; drawCast(); drawSum(); } }, m.id === S.me?.memberId ? `${m.name} (you)` : m.name);
       }));
       return h('div', { class: 'cb-role' }, h('div', { class: 'cb-role-h' }, n, h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Remove this role', html: I.close, onclick: () => { D.cast.splice(i, 1); drawCast(); drawSum(); } })), people);
-    }), D.cast.length < 20 ? h('button', { type: 'button', class: 'btn small cb-add-role', onclick: () => { D.cast.push({ name: '', about: '', memberIds: [] }); drawCast(); castBox.querySelectorAll('.cb-role-h input')[D.cast.length - 1]?.focus(); } }, '+ Add a role') : null);
+    }), D.cast.length < 20 ? h('button', { type: 'button', class: 'btn small cb-add-role', onclick: () => { D.cast.push({ name: '', about: '', memberIds: [] }); drawCast(); castBox.querySelectorAll('.cb-role-h input')[D.cast.length - 1]?.focus(); } }, '+ Add a role') : '');
     drawCast();
     const others = S.workspace.members.filter((m) => m.id !== (c?.ownerId || S.me?.memberId));
     const seeBox = h('div', { class: 'cb-people' });
@@ -9621,7 +9621,7 @@
         if (sg) { sg.value = st.stage || ''; sg.addEventListener('change', () => { st.stage = sg.value; drawSum(); }); }
         return h('div', { class: 'cb-step' }, h('span', { class: 'cb-n' }, String(i + 1)), t, sg,
           h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Remove this step', html: I.close, onclick: () => { D.steps.splice(i, 1); drawSteps(); drawSum(); } }));
-      }), D.steps.length < 30 ? h('button', { type: 'button', class: 'btn small cb-add-step', onclick: () => { D.steps.push({ title: '', stage: '' }); drawSteps(); stepsBox.querySelectorAll('.cb-step input')[D.steps.length - 1]?.focus(); } }, '+ Add a step') : null,
+      }), D.steps.length < 30 ? h('button', { type: 'button', class: 'btn small cb-add-step', onclick: () => { D.steps.push({ title: '', stage: '' }); drawSteps(); stepsBox.querySelectorAll('.cb-step input')[D.steps.length - 1]?.focus(); } }, '+ Add a step') : '',
         h('small', { class: 'hint' }, stages.length ? 'A step can finish one of the job’s stages: the job can’t move past it while its tasks are open, and finishing them moves the job there.' : 'Steps are the big pieces, done one after another or all at once. Add their tasks once it’s made.'));
     }
     drawSteps();
@@ -9680,7 +9680,7 @@
           li(D.private ? '🔒' : '👥', D.private ? `Private${D.memberIds.length ? ': you and ' + D.memberIds.map(memberName).join(', ') : ': just you'}` : 'The whole team can see it'),
           c ? li('⚡', autos.length ? plural(autos.length, 'automation') : 'No automations') : null,
           isNew && !main && D.launch === 'test' ? li('🧪', `Starts as a test run: ${D.testers.map(memberName).join(', ')}`) : null),
-        isNew ? h('div', { class: 'cb-gets' }, h('b', {}, 'It comes with'), h('ul', {}, h('li', {}, 'Its own chat feed and stack for files'), h('li', {}, 'A board of its steps and tasks'), h('li', {}, 'A spot in Campaigns → Overview'), job ? h('li', {}, 'Its tasks on the job, and on the job’s timeline') : null)) : null,
+        isNew ? h('div', { class: 'cb-gets' }, h('b', {}, 'It comes with'), h('ul', {}, h('li', {}, 'Its own chat feed and stack for files'), h('li', {}, 'A board of its steps and tasks'), h('li', {}, 'A spot in Campaigns → Overview'), job ? h('li', {}, 'Its tasks on the job, and on the job’s timeline') : null)) : '',
         h('div', { class: 'cb-next' }, h('b', {}, isNew ? 'After it’s made' : 'Also on its page'),
           h('small', {}, 'Tasks for each step, what each step needs (materials, equipment, visits), sign-offs, check-ins, and automations that start when it does.')));
     }
@@ -9770,12 +9770,12 @@
         SK.busy ? h('div', { class: 'sk-msg sk-thinking' }, 'Thinking…') : null);
       const gaps = ready.length && x.kind === 'campaign' ? planGaps(ready) : [];
       skBox.replaceChildren(chat,
-        gaps.length ? h('div', { class: 'sk-gaps' }, h('b', {}, 'Before you build'), h('ul', {}, gaps.map((g) => h('li', {}, g)))) : null,
+        gaps.length ? h('div', { class: 'sk-gaps' }, h('b', {}, 'Before you build'), h('ul', {}, gaps.map((g) => h('li', {}, g)))) : '',
         ready.length ? h('div', { class: 'sk-ready cb-sk-ready' }, h('span', {}, `${ready.length} accepted`),
           h('button', { type: 'button', class: 'btn small', disabled: SK.busy, onclick: () => skCall('POST', `/sidekick/${x.id}/check`, {}) }, 'Check it'),
           isNew ? h('button', { type: 'button', class: 'btn small cb-sk-fill', disabled: SK.busy, onclick: () => { closeSheet(); campaignSheet(null, main, null, fromPlan(x)); } }, 'Fill in the form') : null,
-          h('button', { type: 'button', class: 'btn small primary-btn cb-sk-build', disabled: SK.busy, onclick: () => (isNew ? buildWithSk(x) : skBuild(x).then(() => { closeSheet(); openCampaign(c.id); })) }, isNew ? 'Build it' : `Apply ${ready.length}`)) : null,
-        ready.length && isNew ? h('small', { class: 'hint' }, 'Fill in the form brings the name, dates, roles and steps here to adjust. Build it makes everything, each step’s tasks too, with what’s set in the form.') : null,
+          h('button', { type: 'button', class: 'btn small primary-btn cb-sk-build', disabled: SK.busy, onclick: () => (isNew ? buildWithSk(x) : skBuild(x).then(() => { closeSheet(); openCampaign(c.id); })) }, isNew ? 'Build it' : `Apply ${ready.length}`)) : '',
+        ready.length && isNew ? h('small', { class: 'hint' }, 'Fill in the form brings the name, dates, roles and steps here to adjust. Build it makes everything, each step’s tasks too, with what’s set in the form.') : '',
         h('div', { class: 'sk-compose' }, say, h('button', { type: 'button', class: 'btn primary-btn', disabled: SK.busy, onclick: send }, 'Send')));
       chat.scrollTop = chat.scrollHeight;
     }
@@ -9793,7 +9793,7 @@
         h('span', { class: 'cb-stage-n' }, i < stage ? '✓' : String(i + 1)), h('span', {}, name)))));
       stageNav.replaceChildren(
         stage > 0 ? h('button', { type: 'button', class: 'btn small cb-back', onclick: () => { stage--; drawStage(); } }, '← ' + STAGES[stage - 1][0]) : h('span'),
-        stage < STAGES.length - 1 ? h('button', { type: 'button', class: 'btn small primary-btn cb-next', onclick: () => { stage++; drawStage(); stagesNav.scrollIntoView?.({ block: 'nearest' }); } }, 'Next: ' + STAGES[stage + 1][0] + ' →') : null);
+        stage < STAGES.length - 1 ? h('button', { type: 'button', class: 'btn small primary-btn cb-next', onclick: () => { stage++; drawStage(); stagesNav.scrollIntoView?.({ block: 'nearest' }); } }, 'Next: ' + STAGES[stage + 1][0] + ' →') : '');
     }
     drawStage();
 
@@ -10329,11 +10329,11 @@
       const open = (x) => (x.type === 'text' ? openDoc(x) : x.type === 'sealed' ? sealOpen(x) : x.type === 'file' ? openPreview(x) : null);
       const files = dirItems(at).sort((a, b) => (b.editedAt || b.createdAt) - (a.editedAt || a.createdAt));
       list.replaceChildren(
-        at !== id ? h('button', { class: 'sd-up', onclick: () => { at = dirById(at)?.parentId || id; draw(); } }, '← ' + (dirById(d.parentId)?.name || 'Back')) : null,
-        at !== id ? h('div', { class: 'sd-path' }, '📁 ' + d.name) : null,
+        at !== id ? h('button', { class: 'sd-up', onclick: () => { at = dirById(at)?.parentId || id; draw(); } }, '← ' + (dirById(d.parentId)?.name || 'Back')) : '',
+        at !== id ? h('div', { class: 'sd-path' }, '📁 ' + d.name) : '',
         ...dirKids(at).map((k) => h('button', { class: 'sd-row sd-dir', onclick: () => { at = k.id; draw(); } }, h('span', { class: 'sd-ic' }, '📁'), h('span', { class: 'sd-name' }, k.name), h('small', {}, String(dirCount(k.id))))),
         ...files.map((x) => sideDrag(h('button', { class: 'sd-row', onclick: () => open(x) }, h('span', { class: 'sd-ic' }, icon(x)), h('span', { class: 'sd-name' }, name(x)), x.size ? h('small', {}, fmtSize(x.size)) : null), x)),
-        !dirKids(at).length && !files.length ? h('p', { class: 'day-hint' }, 'Nothing in here yet. Drag files or messages from the chat to keep them here.') : null);
+        !dirKids(at).length && !files.length ? h('p', { class: 'day-hint' }, 'Nothing in here yet. Drag files or messages from the chat to keep them here.') : '');
       list._at = at;
     };
     const box = chatSide({ kind: 'dir', pinId: id, title: '📁 ' + dirById(id).name, refresh: draw,
@@ -10512,7 +10512,7 @@
     const line = (t) => t.split(/(\[\d+\])/).map((part) => { const n = /^\[(\d+)\]$/.exec(part)?.[1]; const x = n && byN.get(Number(n)); return x ? h('button', { class: 'ask-ref', title: x.title, onclick: open(x) }, n) : part.replace(/\*\*/g, ''); });
     body.replaceChildren(
       h('div', { class: 'ask-a' }, r.answer.split('\n').filter((l) => l.trim()).map((l) => (/^\s*[-*]\s+/.test(l) ? h('p', { class: 'ask-li' }, '• ', ...line(l.replace(/^\s*[-*]\s+/, ''))) : h('p', {}, ...line(l))))),
-      r.sources.length ? h('div', { class: 'ask-src' }, h('h4', {}, 'Sources'), r.sources.map((x) => h('button', { class: 'ask-s', onclick: open(x) }, h('b', {}, x.n), ' ', x.kind === 'doc' ? '📄 ' : '📊 ', x.title))) : null,
+      r.sources.length ? h('div', { class: 'ask-src' }, h('h4', {}, 'Sources'), r.sources.map((x) => h('button', { class: 'ask-s', onclick: open(x) }, h('b', {}, x.n), ' ', x.kind === 'doc' ? '📄 ' : '📊 ', x.title))) : '',
       h('p', { class: 'day-hint' }, 'From what you can see in Kloomie, on your own AI key. Check anything important in its source.'));
   }
   function openPalette() {
@@ -16627,7 +16627,7 @@
           h('div', {}, h('span', {}, 'Discount ', discType, disc), h('span', { class: 'pj-num' }, s2.discount ? '−' + money2(s2.discount) : '')),
           h('div', {}, h('span', {}, 'Tax % ', tax), h('span', { class: 'pj-num' }, s2.tax ? money2(s2.tax) : '')),
           h('div', { class: 'pj-it-total' }, h('span', {}, 'Total'), h('b', { class: 'pj-num' }, money2(s2.total))),
-          s2.cost != null ? h('div', { class: 'pj-it-margin' + (s2.margin < 0 ? ' neg' : '') }, h('span', {}, `Our cost ${money2(s2.cost)}`), h('b', { class: 'pj-num' }, `Margin ${money2(s2.margin)} · ${s2.marginPct}%`)) : null);
+          s2.cost != null ? h('div', { class: 'pj-it-margin' + (s2.margin < 0 ? ' neg' : '') }, h('span', {}, `Our cost ${money2(s2.cost)}`), h('b', { class: 'pj-num' }, `Margin ${money2(s2.margin)} · ${s2.marginPct}%`)) : '');
       };
       // The inputs in the footer are made once; foot() only redraws numbers around them.
       foot();
@@ -17538,7 +17538,7 @@
         try { store.set('leadGuide', k || ''); } catch {}
         if (!g) return;
         const [, label, kind, steps, tip] = g;
-        guide.append(h('ol', {}, steps.map((t) => h('li', {}, t))), pieces[kind](), tip ? h('p', { class: 'day-hint' }, tip) : null);
+        guide.append(h('ol', {}, steps.map((t) => h('li', {}, t))), pieces[kind](), tip ? h('p', { class: 'day-hint' }, tip) : '');
       };
       pick.addEventListener('change', () => showGuide(pick.value));
       pick.value = store.get('leadGuide', '') || '';
@@ -17590,7 +17590,7 @@
         h('h4', {}, 'Connect your website or tool'), pick, guide,
         h('h4', {}, 'Recent leads'), h('p', { class: 'day-hint' }, 'The last 30 that came in, from anywhere, and what Kloomie did with each. Tap one to see every field and where it went.'), logBox, h('div', { class: 'btns' }, testBtn, clearBtn),
         h('h4', {}, 'Match fields'), seen.length ? h('p', { class: 'day-hint' }, 'Field names your forms have sent. Kloomie matches the usual ones by itself; choose where any other one should go. Anything not matched is kept in the contact’s note.') : h('p', { class: 'day-hint' }, 'Once a form has sent a lead, its field names show here so you can choose where each one goes.'),
-        ...mapRows, seen.length ? h('div', { class: 'btns' }, saveMap) : null,
+        ...mapRows, seen.length ? h('div', { class: 'btns' }, saveMap) : '',
         h('h4', {}, 'All your links'), pieces.snippet(), pieces.hook(), pieces.form(), pieces.embed(),
         h('div', { class: 'row2' }, h('label', {}, 'New leads start at stage', stage), h('label', {}, 'And get tags', tags)),
         h('label', {}, 'Kloomie form title', title),
@@ -17848,7 +17848,7 @@
       };
       sec.append(
         h('p', {}, `✓ On since ${new Date(x.since).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}. ${x.backupLeft} backup code${x.backupLeft === 1 ? '' : 's'} left.`),
-        x.backupLeft <= 3 ? h('p', { class: 'warn' }, 'You’re running low on backup codes. Make new ones and keep them somewhere safe.') : null,
+        x.backupLeft <= 3 ? h('p', { class: 'warn' }, 'You’re running low on backup codes. Make new ones and keep them somewhere safe.') : '',
         h('div', { class: 'btns' },
           h('button', { class: 'btn', onclick: () => ask('New backup codes', async (b) => { const y = await api('POST', '/account/two-step/backup', b); redo(); setTimeout(() => backupSheet(y.backup, false)); }, 'Make new codes') }, 'New backup codes'),
           h('button', { class: 'btn danger', onclick: () => ask('Turn off two-step sign-in', async (b) => { await api('DELETE', '/account/two-step', b); toast('Two-step sign-in is off'); redo(); }, 'Turn off') }, 'Turn off')),
@@ -18205,7 +18205,7 @@
           ...p.weeks.map((b, i) => cell(b, () => fcItemsSheet(`${p.name} · ${wkLabel(d.weeks[i], i).toLowerCase()}`, d.items.filter((it) => it.memberIds.includes(p.id) && (inWeek(it, i) || (i === 0 && it.status === 'overdue'))), p, i), i))]),
         d.unassigned.total ? h('div', { class: 'fc-who fc-nobody' }, h('span', {}, 'Nobody on it'), h('small', {}, `${d.unassigned.total} in all`)) : null,
         ...(d.unassigned.total ? d.unassigned.perWeek.map((n, i) => h('button', { class: 'fc-cell nobody' + (n ? '' : ' none'), onclick: () => fcItemsSheet('Nobody on it · ' + wkLabel(d.weeks[i], i).toLowerCase(), d.items.filter((it) => !it.memberIds.length && inWeek(it, i))) }, h('b', {}, String(n)), h('small', {}, n === 1 ? 'task' : 'tasks'))) : [])),
-      people.length ? null : h('p', { class: 'day-hint' }, 'Nothing booked or due in the next four weeks.'),
+      people.length ? '' : h('p', { class: 'day-hint' }, 'Nothing booked or due in the next four weeks.'),
       h('p', { class: 'day-hint' }, `Confirmed: given to someone, with a due date or a booking. Estimated: no due date, so its step’s date or its campaign’s end. A day booked past someone’s hours (their sent shifts, else their usual hours, else ${fmtHrs(d.capacityMin)} a weekday; none on time off) is overloaded. Tap a week to see the work behind it.`));
     if (d.conflicts.length) box.append(h('div', { class: 'any-h fc-sub' }, `Double booked · ${d.conflicts.length}`),
       ...d.conflicts.map((c) => h('button', { class: 'need-row late fc-conflict', onclick: () => { const v = c.visits.find((x) => x.jobId); if (v) openRecord(v.jobId); } },
@@ -20229,8 +20229,8 @@
       if (!editing) {
         const pdfBtn = h('button', { class: 'btn small', title: 'Make a PDF of this document, to sign or send for signature', onclick: (e) => makePdf(e.currentTarget) }, 'Make a PDF');
         bar.replaceChildren(
-          doc ? h('button', { class: 'btn small primary-btn', onclick: () => edit() }, 'Edit') : null,
-          doc ? pdfBtn : null,
+          doc ? h('button', { class: 'btn small primary-btn', onclick: () => edit() }, 'Edit') : '',
+          doc ? pdfBtn : '',
           h('span', { class: 'pdf-gap' }), status);
         return;
       }
@@ -21709,7 +21709,7 @@
       u.addEventListener('input', () => { l.url = u.value; });
       return h('div', { class: 'card-link' }, lb, u, h('button', { class: 'icon-btn', 'aria-label': 'Remove this link', html: I.close, onclick: () => { e.links.splice(i, 1); drawLinks(); } }),
         c.links[i] && c.links[i].url === l.url && c.id ? h('small', {}, `${c.links[i].taps} tap${c.links[i].taps === 1 ? '' : 's'}`) : null);
-    }), e.links.length < 8 ? h('button', { class: 'btn small', onclick: () => { e.links.push({ label: '', url: '' }); drawLinks(); linkRows.querySelectorAll('.card-link input')[e.links.length * 2 - 2]?.focus(); } }, '+ Add a link') : null);
+    }), e.links.length < 8 ? h('button', { class: 'btn small', onclick: () => { e.links.push({ label: '', url: '' }); drawLinks(); linkRows.querySelectorAll('.card-link input')[e.links.length * 2 - 2]?.focus(); } }, '+ Add a link') : '');
     drawLinks();
     const handle = h('input', { maxlength: 30, class: 'card-handle' });
     handle.value = e.handle;
@@ -23959,7 +23959,7 @@
         const cb = h('input', { type: 'checkbox', checked: picked.has(x.id) });
         cb.addEventListener('change', () => { if (cb.checked) picked.add(x.id); else picked.delete(x.id); label(); });
         return h('label', { class: 'pick contact-pick' }, cb, h('span', {}, h('b', {}, x.name || x.email), h('small', {}, ` · ${x.email} · ${stageLabel(x.stage)}`)));
-      }), xs.length > 300 ? h('p', { class: 'day-hint' }, `Showing 300 of ${xs.length}. “Select all” takes all ${xs.length}.`) : null);
+      }), xs.length > 300 ? h('p', { class: 'day-hint' }, `Showing 300 of ${xs.length}. “Select all” takes all ${xs.length}.`) : '');
     };
     allBox.addEventListener('change', () => { for (const x of hits()) allBox.checked ? picked.add(x.id) : picked.delete(x.id); show(); label(); });
     q.addEventListener('input', show);
@@ -24592,7 +24592,7 @@
           toggleRow('Always on top', 'Keep the window above other windows', S.desktopCfg.alwaysOnTop, (on) => { S.desktopCfg.alwaysOnTop = on; desktop.setConfig({ alwaysOnTop: on }); }),
           toggleRow('Auto-save incoming files', 'Copy everything that arrives into Downloads/Kloomie', S.desktopCfg.autoSave, (on) => { S.desktopCfg.autoSave = on; desktop.setConfig({ autoSave: on }); }),
           toggleRow('Open at login', null, S.desktopCfg.openAtLogin, (on) => { S.desktopCfg.openAtLogin = on; desktop.setConfig({ openAtLogin: on }); }),
-          desktop.setNext && desktop.platform === 'darwin' ? toggleRow('Next event in menu bar', 'Show what’s on now or next beside the menu-bar icon', S.desktopCfg.trayNext !== false, (on) => { S.desktopCfg.trayNext = on; desktop.setConfig({ trayNext: on }); }) : null,
+          desktop.setNext && desktop.platform === 'darwin' ? toggleRow('Next event in menu bar', 'Show what’s on now or next beside the menu-bar icon', S.desktopCfg.trayNext !== false, (on) => { S.desktopCfg.trayNext = on; desktop.setConfig({ trayNext: on }); }) : '',
           h('div', { class: 'srow' }, h('span', {}, 'Show / hide', h('small', {}, desktop.platform === 'darwin' ? '⌘ ⇧ Space, or the menu bar icon' : 'Ctrl + Shift + Space, or the tray icon'))),
           h('div', { class: 'btns', style: 'margin-top:8px' },
             h('button', { class: 'btn', onclick: () => desktop.openFolder() }, 'Open Downloads/Kloomie'),
