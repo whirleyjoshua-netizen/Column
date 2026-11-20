@@ -64,6 +64,8 @@
     <div class="main" id="main">
     <header class="bar">
       <button class="icon-btn menu-btn" id="menuBtn" title="Menu" aria-label="Open the menu" aria-expanded="false" aria-controls="side"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
+      <!-- Phone and docked column (2026-11-19): Home, away from Home; the gear opens Settings. -->
+      <button class="icon-btn home-btn" id="homeBtn" title="Home" aria-label="Home"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11 12 4l9 7"/><path d="M5 10v10h14V10"/></svg></button>
       <div class="ws" title="Switch workspace" role="button">
         <span class="live" id="liveDot"></span>
         <img id="wsLogo" class="ws-logo hidden" alt="">
@@ -76,6 +78,7 @@
         <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9a6 6 0 0 1 12 0c0 5 2 6.5 2 6.5H4S6 14 6 9"/><path d="M10 19a2 2 0 0 0 4 0"/></svg>
         <span class="bell-n hidden" id="bellN"></span>
       </button>
+      <button class="icon-btn gear-btn" id="gearBtn" title="Settings" aria-label="Settings"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></button>
 
     </header>
     <!-- In a docked column or on a phone, your pins run across the top as tabs (the tabs themselves are in ☰). -->
@@ -83,6 +86,10 @@
     <!-- Workspace's tabs (Sidekick, Contacts, Projects, Campaigns, Folders & Docs) across the top, at full size. -->
     <nav class="work-tabs" id="workTabs" aria-label="Workspace" hidden></nav>
     <section id="home" class="home-wrap"></section>
+    <!-- The menu page on a phone or in a docked column: every page and tool as an app icon (not a drawer). -->
+    <section id="menuPage" class="menu-page hidden" aria-label="Menu"></section>
+    <!-- The dock: four apps you pick, at the bottom, like a phone’s. -->
+    <nav id="appDock" class="app-dock" aria-label="Your apps"></nav>
     <section id="day" class="day hidden"></section>
     <!-- Apps & Integrations: every app Kloomie connects to, the team's tools, and the API (its own tab, 2026-11-20). -->
     <section id="apps" class="apps-page hidden" aria-label="Apps & Integrations"></section>

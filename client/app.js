@@ -3395,6 +3395,7 @@
   }
   function markTabs() {
     dockPageChanged();
+    setTimeout(shellMark);
     const jobs = !$('#projects').classList.contains('hidden') && splitOpen !== 'projects';
     const work = workOpen();
     // The strip across the top shows while you're in Workspace (at full size; CSS hides it otherwise).
@@ -3469,6 +3470,8 @@
     if (tab === 'home') renderHome();
     $('#day').classList.toggle('hidden', tab !== 'day');
     $('#apps').classList.toggle('hidden', tab !== 'apps');
+    $('#menuPage').classList.toggle('hidden', tab !== 'menu');
+    if (tab === 'menu') renderMenuPage();
     if (tab === 'apps') { ensureLogos(); renderApps(true); loadApps(); }
     const panesWere = $('#panes').classList.contains('hidden');
     $('#panes').classList.toggle('hidden', tab !== 'column' && splitOpen !== 'column');
@@ -3477,6 +3480,7 @@
     $('#campsWrap').classList.toggle('hidden', tab !== 'camps' && splitOpen !== 'camps');
     if (tab === 'camps') renderCamps();
     if (tab === 'day') renderDay();
+    setTimeout(shellMark);
   }
   // ---------- the side toolbar ----------
   // When there's room (900px and wider) it's a sidebar, which can fold to icons (this device remembers). In a docked
@@ -3497,6 +3501,8 @@
     $('#sideFold').setAttribute('aria-pressed', SIDE.folded ? 'true' : 'false');
     $('#sideFold').title = $('#sideFold').ariaLabel = SIDE.folded ? 'Open the sidebar' : 'Fold the sidebar';
     if (wide) closeSide();
+    if (wide && S.tab === 'menu') setTab('home'); // the menu page is the phone's; full size has the sidebar
+    if (S.workspace) { setTimeout(shellMark); if (S.tab === 'home') setTimeout(renderHome); }
     if (S.tab === 'day' && D.scroll) { D.scrolledFor = null; renderDay(); } // a Week shows only at full size
     setTimeout(() => { if (toolOpen) renderTool(true); }); // tools lay out for the width (Contacts is a table at full size); later, as this also runs while the app starts
   }
@@ -3516,7 +3522,8 @@
     $('#scrim').hidden = true;
     $('#menuBtn').setAttribute('aria-expanded', 'false');
   }
-  $('#menuBtn').addEventListener('click', (e) => (sideOpen() ? closeSide() : openSide(e.detail === 0)));
+  // On a phone or in a docked column ☰ goes to the menu page (the owner, 2026-11-19: "not a drop down"), and back.
+  $('#menuBtn').addEventListener('click', (e) => (!wideMq.matches ? (S.tab === 'menu' ? goHome(MENU.back) : openMenuPage()) : sideOpen() ? closeSide() : openSide(e.detail === 0)));
   $('#sideClose').addEventListener('click', closeSide);
   $('#scrim').addEventListener('click', closeSide);
   $('#sideFold').addEventListener('click', () => { SIDE.folded = !SIDE.folded; store.set('sideFolded', SIDE.folded); sideLayout(); });
@@ -3528,7 +3535,8 @@
     let sw = null;
     document.addEventListener('touchstart', (e) => {
       const t = e.touches[0];
-      if (wideMq.matches || e.touches.length !== 1) return (sw = null);
+      // The swipe from the edge opened the drawer; the menu page replaced it, and Home's widgets swipe sideways.
+      if (wideMq.matches || e.touches.length !== 1 || !sideOpen()) return (sw = null);
       // From the very edge to open; anywhere on the open drawer to close.
       sw = sideOpen() ? { x: t.clientX, y: t.clientY, close: true } : t.clientX <= 22 ? { x: t.clientX, y: t.clientY } : null;
     }, { passive: true });
@@ -3557,6 +3565,118 @@
   $('#tabs').addEventListener('click', onTabClick);
   $('#topTabs').addEventListener('click', onTabClick);
   $('#workTabs').addEventListener('click', onTabClick);
+
+  // ---------- the phone and docked-column shell (the owner, 2026-11-19) ----------
+  // Home is a row of widgets you swipe through; four apps you pick sit in a dock at the bottom; ☰ opens a menu page of
+  // app icons (every page and tool, the same ones the sidebar offers, by the same rules); the gear opens Settings.
+  // Full size keeps its sidebar.
+  const MENU = { back: 'home' };
+  const narrowNow = () => !wideMq.matches;
+  const HELP_IC = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6V14"/><path d="M12 17.5h.01"/></svg>';
+  // Everything the menu page and the dock can open, in sections. Only what this person may use.
+  function appSections() {
+    const tab = (k) => ({ go: 'tab:' + k, name: BAR_ITEMS[k].label, ic: TAB_IC[k] || TAB_IC.docs });
+    const { ROWS, rows } = toolRows();
+    return [
+      ['Workspace', WORK_TABS.filter((k) => k !== 'tools' && itemOk(k)).map(tab)],
+      ['Tools', rows.map((k) => ({ go: 'tool:' + k, name: ROWS[k].name, ic: TAB_IC[k] || TAB_IC.tools }))],
+      ['More', [itemOk('agents') ? tab('agents') : null, toolOn('sidekick') ? { go: 'go:sidekick', name: 'Sidekick', ic: TAB_IC.sidekick } : null, tab('apps'),
+        { go: 'go:settings', name: 'Settings', ic: $('#gearBtn').innerHTML }, { go: 'go:help', name: 'Help', ic: HELP_IC }].filter(Boolean)],
+      ['Pinned', pinsShown().map((x) => ({ go: 'pin:' + x.go, name: pinLabel(x) || PIN_KINDS[pinParts(x.go)[0]].name, emoji: PIN_KINDS[pinParts(x.go)[0]].icon }))],
+    ];
+  }
+  const appIndex = () => new Map(appSections().flatMap(([, list]) => list).map((x) => [x.go, x]));
+  const appIcon = (x) => h('span', { class: 'app-ic', ...(x.emoji ? {} : { html: x.ic }) }, x.emoji || null);
+  // Close whatever covers the page (a tool, a board, a doc, the split, Settings).
+  function clearCovers() {
+    $('#settings').classList.add('hidden');
+    if (toolOpen) closeTool();
+    if (!$('#projects').classList.contains('hidden')) closeProjects();
+    if (splitOpen) closeSplit();
+    if ($('#docview') && !$('#docview').classList.contains('hidden')) closeDoc();
+  }
+  function goHome(to) {
+    clearCovers();
+    setTab(to && to !== 'menu' && to !== 'home' && (BAR_ITEMS[to]?.view || to === 'apps') ? to : 'home');
+  }
+  function openMenuPage() {
+    if (S.tab !== 'menu') MENU.back = S.tab;
+    clearCovers();
+    setTab('menu');
+  }
+  function appGo(go) {
+    const i = go.indexOf(':'), kind = go.slice(0, i), k = go.slice(i + 1);
+    $('#settings').classList.add('hidden');
+    if (S.tab === 'menu') setTab('home'); // what opens next sits over Home, so closing it lands there
+    if (kind === 'tab') { if (k === 'apps') return openApps(); clearCovers(); return openBarItem(k); }
+    if (kind === 'tool') { const { ROWS } = toolRows(); if (toolOpen !== k) clearCovers(); return ROWS[k]?.run ? ROWS[k].run() : openTool(k); }
+    if (kind === 'pin') return openPin(k);
+    if (k === 'settings') return openSettingsPage();
+    if (k === 'sidekick') return openTool('sidekick');
+    if (k === 'help') return window.open('/help', '_blank', 'noopener');
+  }
+  function appOn(go) {
+    const i = go.indexOf(':'), kind = go.slice(0, i), k = go.slice(i + 1);
+    const covered = toolOpen || splitOpen || !$('#projects').classList.contains('hidden') || !$('#settings').classList.contains('hidden');
+    if (kind === 'tab') return k === 'projects' ? !$('#projects').classList.contains('hidden') : BAR_ITEMS[k]?.view || k === 'apps' ? S.tab === k && !covered : toolOpen === k;
+    if (kind === 'tool') return toolOpen === k || splitOpen === k || (k === 'column' && S.tab === 'column' && !covered);
+    if (kind === 'pin') { const [pk, id] = pinParts(k); return !!PIN_KINDS[pk]?.on(id); }
+    return false;
+  }
+  function renderMenuPage() {
+    const root = $('#menuPage');
+    if (!root || S.tab !== 'menu') return;
+    const tile = (x) => h('button', { class: 'app-tile-btn', 'data-go': x.go, onclick: () => appGo(x.go) }, appIcon(x), h('span', { class: 'app-l' }, x.name));
+    root.replaceChildren(h('div', { class: 'menu-wrap' },
+      ...appSections().filter(([, list]) => list.length).map(([name, list]) => h('section', { class: 'menu-sec' }, h('h2', {}, name), h('div', { class: 'menu-grid' }, list.map(tile)))),
+      h('div', { class: 'menu-foot' }, h('button', { class: 'btn dock-edit', onclick: dockSheet }, 'Edit the dock'), h('button', { class: 'btn', onclick: () => barSheet() }, 'Your pins'))));
+  }
+  // The dock: four apps, chosen per device (a phone's dock is that phone's). Something gone is filled from the defaults.
+  const DOCK_DEFAULT = ['tab:day', 'tool:chat', 'tab:contacts', 'tab:projects'];
+  function dockKeys() {
+    const all = appIndex();
+    const saved = store.get('dock', null);
+    const out = (Array.isArray(saved) ? saved : DOCK_DEFAULT).filter((g) => all.has(g)).slice(0, 4);
+    for (const g of [...DOCK_DEFAULT, ...all.keys()]) { if (out.length >= 4) break; if (all.has(g) && !out.includes(g) && !g.startsWith('go:')) out.push(g); }
+    return out;
+  }
+  function renderAppDock() {
+    const nav = $('#appDock');
+    if (!nav) return;
+    const all = appIndex();
+    nav.replaceChildren(...dockKeys().map((g) => { const x = all.get(g); return h('button', { class: 'dock-app' + (appOn(g) ? ' on' : ''), 'data-go': g, title: x.name, onclick: () => appGo(g) }, appIcon(x), h('span', { class: 'app-l' }, x.name)); }));
+    longPress(nav, () => dockSheet());
+  }
+  function dockSheet() {
+    const sections = appSections();
+    const now = dockKeys();
+    const picks = now.map((g) => {
+      const sel = h('select', { class: 'dock-pick' }, sections.filter(([, l]) => l.length).map(([name, list]) => h('optgroup', { label: name }, list.filter((x) => !x.go.startsWith('go:')).map((x) => h('option', { value: x.go }, x.name)))));
+      sel.value = g;
+      return sel;
+    });
+    sheet('Your dock', [h('p', { class: 'day-hint' }, 'The four apps at the bottom of the screen, left to right. This phone or window remembers them.'), ...picks.map((s, i) => h('label', { class: 'dock-slot' }, h('span', {}, String(i + 1)), s))], () => {
+      store.set('dock', picks.map((s) => s.value));
+      renderAppDock();
+    });
+  }
+  function openSettingsPage() {
+    clearCovers();
+    $('#settingsBtn').click();
+  }
+  // Mark where you are: the dock's lit app, and Home up top when you're away from it.
+  function shellMark() {
+    if (!narrowNow()) return;
+    renderAppDock();
+    const away = S.tab !== 'home' || toolOpen || splitOpen || !$('#projects').classList.contains('hidden') || !$('#settings').classList.contains('hidden');
+    document.body.classList.toggle('not-home', !!away);
+  }
+  $('#homeBtn').addEventListener('click', () => goHome());
+  $('#gearBtn').addEventListener('click', () => ($('#settings').classList.contains('hidden') ? openSettingsPage() : ($('#settings').classList.add('hidden'), shellMark())));
+  // While typing, the dock steps aside for the keyboard.
+  const typingEl = (el) => el && el.matches?.('textarea, select, [contenteditable=""], [contenteditable="true"], input:not([type=checkbox]):not([type=radio]):not([type=button]):not([type=submit]):not([type=range]):not([type=file]):not([type=color])');
+  document.addEventListener('focusin', (e) => { if (typingEl(e.target)) document.body.classList.add('typing'); });
+  document.addEventListener('focusout', () => setTimeout(() => document.body.classList.toggle('typing', typingEl(document.activeElement)), 50));
 
   function goDay(k) {
     D.date = k;
@@ -6500,8 +6620,57 @@
     if (root.contains(document.activeElement) && document.activeElement.matches('input, textarea')) return;
     const keep = root.scrollTop;
     root.replaceChildren(homeView());
+    homeWidgets(root);
     root.scrollTop = keep;
   }
+  // Home's cards are widgets (the owner, 2026-11-19): each person picks which show and in what order (this device
+  // remembers). On a phone or in a docked column they sit side by side, one at a time, swiped through, with dots (and
+  // arrows, for a mouse); at full size they're the grid they always were.
+  const widgetKey = (card) => card.classList[1] || '';
+  const widgetPrefs = () => { const w = store.get('homeWidgets', null); return { hidden: Array.isArray(w?.hidden) ? w.hidden : [], order: Array.isArray(w?.order) ? w.order : [] }; };
+  function homeWidgets(root) {
+    const grid = root.querySelector('.home-grid');
+    if (!grid) return;
+    const { hidden, order } = widgetPrefs();
+    const cards = [...grid.children].filter((c) => c.classList.contains('home-card'));
+    const at = (c) => { const i = order.indexOf(widgetKey(c)); return i < 0 ? 1000 + cards.indexOf(c) : i; };
+    for (const c of [...cards].sort((a, b) => at(a) - at(b))) { if (hidden.includes(widgetKey(c))) c.remove(); else grid.append(c); }
+    const shown = [...grid.children].filter((c) => c.classList.contains('home-card'));
+    const go = (i) => { const c = shown[Math.max(0, Math.min(shown.length - 1, i))]; if (c) HM.slide = widgetKey(c); if (c) grid.scrollTo({ left: c.offsetLeft - grid.offsetLeft - (grid.clientWidth - c.offsetWidth) / 2, behavior: 'smooth' }); };
+    const now = () => { const mid = grid.scrollLeft + grid.clientWidth / 2; let best = 0, d = Infinity; shown.forEach((c, i) => { const x = Math.abs(c.offsetLeft - grid.offsetLeft + c.offsetWidth / 2 - mid); if (x < d) { d = x; best = i; } }); return best; };
+    const dots = shown.map((c, i) => h('i', { title: c.querySelector('.hc-h b')?.textContent || '', onclick: () => go(i) }));
+    const mark = () => { const i = now(); HM.slide = widgetKey(shown[i] || shown[0]); dots.forEach((d, j) => d.classList.toggle('on', j === i)); };
+    grid.after(h('div', { class: 'home-dots' }, h('button', { class: 'icon-btn home-prev', 'aria-label': 'Previous widget', onclick: () => go(now() - 1) }, '‹'), ...dots, h('button', { class: 'icon-btn home-next', 'aria-label': 'Next widget', onclick: () => go(now() + 1) }, '›')));
+    grid.addEventListener('scroll', () => requestAnimationFrame(mark), { passive: true });
+    // Back on the widget you were on after a redraw (new data comes in all the time).
+    const was = shown.findIndex((c) => widgetKey(c) === HM.slide);
+    if (was > 0) { const c = shown[was]; grid.scrollLeft = c.offsetLeft - grid.offsetLeft - (grid.clientWidth - c.offsetWidth) / 2; }
+    mark();
+  }
+  function widgetsSheet() {
+    const root = $('#home');
+    const { hidden, order } = widgetPrefs();
+    // Every widget Home could show right now, in the order it would show them.
+    const all = [...root.querySelectorAll('.home-grid > .home-card')].map((c) => ({ k: widgetKey(c), name: c.querySelector('.hc-h b, h2, b')?.textContent?.trim() || widgetKey(c) }));
+    for (const k of hidden) if (!all.some((x) => x.k === k)) all.push({ k, name: WIDGET_NAMES[k] || k });
+    all.sort((a, b) => { const ia = order.indexOf(a.k), ib = order.indexOf(b.k); return (ia < 0 ? 1000 : ia) - (ib < 0 ? 1000 : ib); });
+    const list = h('div', { class: 'widget-list' });
+    const draw = () => list.replaceChildren(...all.map((x, i) => {
+      const box = h('input', { type: 'checkbox' });
+      box.checked = !x.off && !hidden.includes(x.k) || x.on;
+      box.addEventListener('change', () => { x.on = box.checked; x.off = !box.checked; });
+      const move = (d) => { const j = i + d; if (j < 0 || j >= all.length) return; [all[i], all[j]] = [all[j], all[i]]; draw(); };
+      return h('div', { class: 'widget-row', 'data-w': x.k }, h('label', { class: 'pick' }, box, x.name),
+        h('button', { class: 'icon-btn', 'aria-label': 'Move up', disabled: i === 0, onclick: () => move(-1) }, '↑'), h('button', { class: 'icon-btn', 'aria-label': 'Move down', disabled: i === all.length - 1, onclick: () => move(1) }, '↓'));
+    }));
+    draw();
+    sheet('Home widgets', [h('p', { class: 'day-hint' }, 'Pick which widgets Home shows, and their order. This phone or computer remembers.'), list], () => {
+      const off = all.filter((x) => x.off || (!x.on && hidden.includes(x.k))).map((x) => x.k);
+      store.set('homeWidgets', { hidden: off, order: all.map((x) => x.k) });
+      renderHome();
+    });
+  }
+  const WIDGET_NAMES = { start: 'Get started', notes: 'For you', needs: 'Needs you', today: 'Today', steps: 'Your steps', camps: 'Your campaigns', came: 'What came in', code: 'Code', news: 'News', bills: 'Bills this week' };
   function homeData() {
     const me = S.me?.memberId;
     const today = todayKey();
@@ -6584,7 +6753,8 @@
       h('div', { class: 'home-top' },
         h('div', {}, h('h1', {}, `${hr < 12 ? 'Good morning' : hr < 18 ? 'Good afternoon' : 'Good evening'}, ${first}`),
           h('p', { class: 'home-sub' }, new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' }) + ' · ' + summary)),
-        toolOn('sidekick') ? h('button', { class: 'btn small home-brief-btn', disabled: HM.busy, onclick: () => homeBrief(d) }, HM.busy ? 'Thinking…' : HM.brief ? '✦ Brief me again' : '✦ Brief me') : null),
+        h('div', { class: 'home-top-btns' }, toolOn('sidekick') ? h('button', { class: 'btn small home-brief-btn', disabled: HM.busy, onclick: () => homeBrief(d) }, HM.busy ? 'Thinking…' : HM.brief ? '✦ Brief me again' : '✦ Brief me') : null,
+          h('button', { class: 'btn small widgets-edit', title: 'Pick and order Home’s widgets', onclick: widgetsSheet }, 'Edit widgets'))),
       HM.brief ? h('div', { class: 'home-brief' }, h('p', {}, HM.brief.text), h('small', {}, `Sidekick · ${ago(HM.brief.at)}`)) : null,
       h('div', { class: 'home-grid' },
         startCard(card),
@@ -9824,6 +9994,7 @@
     closeSide();
     closeTool();
     const s = $('#settings');
+    setTimeout(shellMark);
     if (s.classList.toggle('hidden')) return;
     S.setDeep = false; // a phone opens on the list of pages
     renderSettings();

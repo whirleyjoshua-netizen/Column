@@ -3977,3 +3977,54 @@ button.sh-cell:hover { border-color: var(--accent); }
 .shav label.shav-dname { display: flex; flex-direction: row; align-items: center; gap: 8px; margin: 0; }
 .shav label.shav-dname input { width: auto; margin: 0; }
 .shav label.shav-dname span { display: inline; }
+
+/* ---------- The phone and docked-column shell (2026-11-19): Home's widgets, the menu page, the dock ---------- */
+.home-btn, .gear-btn { display: none; }
+body:not(.wide) .gear-btn { display: inline-flex; }
+body:not(.wide).not-home .home-btn { display: inline-flex; }
+body:not(.wide) #skBtn { display: none; }
+body:not(.wide) #topTabs { display: none !important; }
+body:not(.wide) { --dock-h: calc(78px + env(safe-area-inset-bottom)); }
+body:not(.wide).typing { --dock-h: 0px; }
+body:not(.wide) .main { padding-bottom: var(--dock-h); }
+body:not(.wide) .settings, body:not(.wide) .projects, body:not(.wide) #split, body:not(.wide) .docview { bottom: var(--dock-h); }
+.app-dock { display: none; }
+body:not(.wide) .app-dock { display: flex; position: fixed; left: 0; right: 0; bottom: 0; z-index: 60; height: var(--dock-h); justify-content: space-around; align-items: flex-start;
+  padding: 8px 8px calc(8px + env(safe-area-inset-bottom)); background: color-mix(in srgb, var(--bg) 86%, transparent); -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px); border-top: 1px solid var(--line); }
+body:not(.wide).typing .app-dock { display: none; }
+.app-ic { width: 48px; height: 48px; border-radius: 13px; display: grid; place-items: center; background: var(--card); border: 1px solid var(--line); color: var(--accent); font-size: 22px; line-height: 1; flex: none; }
+.app-ic svg { width: 24px; height: 24px; }
+.app-l { display: block; max-width: 76px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--text); }
+.dock-app, .app-tile-btn { display: flex; flex-direction: column; align-items: center; gap: 5px; background: none; border: 0; padding: 0; min-width: 0; color: inherit; cursor: pointer; }
+.dock-app { width: 72px; gap: 4px; }
+.dock-app .app-ic { width: 44px; height: 44px; border-radius: 12px; }
+.dock-app .app-ic svg { width: 22px; height: 22px; }
+.dock-app .app-l { line-height: 14px; }
+.dock-app.on .app-ic { background: var(--accent); color: #fff; border-color: transparent; }
+.dock-app.on .app-l { font-weight: 600; }
+.menu-page { flex: 1; min-height: 0; overflow-y: auto; }
+.menu-page.hidden { display: none; }
+.menu-wrap { max-width: 560px; margin: 0 auto; padding: 8px 16px 28px; }
+.menu-sec h2 { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin: 18px 0 12px; }
+.menu-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 18px 8px; }
+.app-tile-btn .app-ic { width: 60px; height: 60px; border-radius: 16px; }
+.app-tile-btn .app-ic svg { width: 28px; height: 28px; }
+.app-tile-btn .app-l { font-size: 12px; text-align: center; white-space: normal; line-height: 1.25; max-height: 2.5em; }
+.app-tile-btn:active .app-ic, .dock-app:active .app-ic { transform: scale(0.94); }
+.menu-foot { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 26px; }
+.dock-slot { display: flex; align-items: center; gap: 10px; margin: 8px 0; }
+.dock-slot span { width: 22px; height: 22px; border-radius: 50%; background: var(--panel); display: grid; place-items: center; font-size: 12px; color: var(--muted); }
+.dock-slot select { flex: 1; }
+.home-top-btns { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.widget-row { display: flex; align-items: center; gap: 6px; padding: 6px 0; border-bottom: 1px solid var(--line); }
+.widget-row .pick { flex: 1; }
+/* Home's widgets side by side on a phone or in a docked column: one big widget at a time, swiped through. */
+.home-dots { display: none; }
+body:not(.wide) .home-grid { display: flex; overflow-x: auto; overflow-y: hidden; scroll-snap-type: x mandatory; gap: 12px; padding: 2px 16px 6px; margin: 0 -16px; scrollbar-width: none; overscroll-behavior-x: contain; align-items: stretch; }
+body:not(.wide) .home-grid::-webkit-scrollbar { display: none; }
+body:not(.wide) .home-grid > .home-card { flex: 0 0 86%; scroll-snap-align: center; height: calc(100dvh - var(--dock-h) - 236px); min-height: 260px; overflow-y: auto; padding: 14px 16px; border-radius: 18px; }
+body:not(.wide) .home-dots { display: flex; justify-content: center; align-items: center; gap: 7px; margin: 10px 0 0; }
+.home-dots i { width: 7px; height: 7px; border-radius: 50%; background: var(--line); cursor: pointer; transition: width 0.15s; }
+.home-dots i.on { background: var(--accent); width: 18px; border-radius: 4px; }
+.home-prev, .home-next { display: none; font-size: 18px; }
+body.column:not(.wide) .home-prev, body.column:not(.wide) .home-next { display: inline-flex; }
