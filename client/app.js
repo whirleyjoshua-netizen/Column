@@ -21089,7 +21089,7 @@
     const unit = h('select', {}, [['mi', 'per mile'], ['km', 'per kilometre']].map(([k, l]) => h('option', { value: k, selected: ML.unit === k }, l)));
     const fin = h('input', { type: 'checkbox', checked: S.workspace?.settings?.mileFinance !== false });
     sheet('Mileage rate', [h('p', { class: 'day-hint' }, 'What the team pays people back, or claims, for each mile driven for work. Use your tax authority’s standard rate if you claim it (in the US, the IRS sets one each year). A new rate counts from now on; trips already logged keep theirs.'), h('div', { class: 'row2' }, h('label', {}, 'Rate ($)', rate), h('label', {}, 'For each', unit)),
-      toolOn('bills') ? h('label', { class: 'check' }, fin, ' Put each trip in Finance as a business expense (category Mileage)') : null], async () => {
+      toolOn('bills') ? h('label', { class: 'pick' }, fin, ' Put each trip in Finance as a business expense (category Mileage)') : null], async () => {
       S.workspace = await api('PATCH', '/workspace', { mileRate: Math.round(Number(rate.value) * 100), mileUnit: unit.value, ...(toolOn('bills') ? { mileFinance: fin.checked } : {}) });
       ML.list = null;
       renderTool(true);
@@ -21130,7 +21130,7 @@
       h('div', { class: 'row2' }, h('label', {}, 'Day', date), h('label', {}, ML.unit === 'km' ? 'Kilometres' : 'Miles', dist)),
       h('label', {}, 'From', from),
       h('label', {}, 'To', to),
-      h('label', { class: 'check' }, round, ' Round trip (there and back)'),
+      h('label', { class: 'pick' }, round, ' Round trip (there and back)'),
       h('div', { class: 'ml-calc' }, calc, showTrip),
       note,
       h('label', {}, 'What for', purpose),

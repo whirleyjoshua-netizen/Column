@@ -89,7 +89,7 @@ export function inventoryModule({ db, save, broadcast, rid, cleanText, readJson,
     const job = b.jobId ? recordAt(String(b.jobId), ws.id, auth.memberId) : null;
     const needBy = /^\d{4}-\d{2}-\d{2}$/.test(String(b.needBy || '')) ? b.needBy : null;
     const number = Object.values(db.invRequests).reduce((n, r) => (r.wsId === ws.id ? Math.max(n, r.number || 0) : n), 0) + 1;
-    const r = { id: rid(), wsId: ws.id, number, by: auth.member, byId: auth.memberId, at: Date.now(), status: 'open', lines, note: cleanText(b.note, 500), jobId: job ? job.rec.id : null, jobName: job ? job.name || '' : '', needBy };
+    const r = { id: rid(), wsId: ws.id, number, by: auth.member, byId: auth.memberId, at: Date.now(), status: 'open', lines, note: cleanText(b.note, 500), jobId: job ? job.rec.id : null, jobName: job ? String(job.rec.values[job.t?.primary] ?? '') : '', needBy };
     db.invRequests[r.id] = r;
     const done = Object.values(db.invRequests).filter((y) => y.wsId === ws.id && !['open', 'approved'].includes(y.status)).sort((p, q) => p.at - q.at);
     for (const y of done.slice(0, Math.max(0, done.length - REQ_KEEP))) delete db.invRequests[y.id];

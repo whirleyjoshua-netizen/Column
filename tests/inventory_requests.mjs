@@ -84,6 +84,12 @@ ok((await bells(mo)).some((n) => /approved/i.test(n.title)) && (await bells(mo))
   r = await mo('POST', `/inventory/requests/${q3.id}/cancel`, {});
   ok(r.status === 200 && r.body.status === 'cancelled', 'Mo cancels his own');
 
+  // For a job (the live check of 2026-11-20 found the job's name missing from the card): the request carries its name.
+  const pj = (await rico('POST', '/projects', { template: 'trades', trades: ['hvac'] })).body;
+  const smith = (await rico('POST', `/projects/${pj.id}/records`, { typeId: pj.types[0].id, values: { job: 'Smith AC swap' } })).body;
+  r = await mo('POST', '/inventory/requests', { lines: [{ itemId: flt.id, qty: 2 }], jobId: smith.id });
+  ok(r.status === 200 && r.body.jobId === smith.id && r.body.jobName === 'Smith AC swap', `a request for a job says which job (${JSON.stringify({ jobId: r.body.jobId, jobName: r.body.jobName })})`);
+
   // Another team can't see or touch them.
   r = await call()('POST', '/auth', { mode: 'create', workspace: 'Else ' + t, name: 'Zed', email: `zed${t}@t.test`, password: 'longenough9', device: 'Mac', deviceId: 'd9' });
   const zed = call(r.body.token);
