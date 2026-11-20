@@ -160,9 +160,10 @@ try {
   await A.tap(P('.pj-camp-btn'));
   await A.until(`[...document.querySelectorAll('#menu button')].some((b) => b.textContent === 'New campaign for this job')`);
   await A.ev(`[...document.querySelectorAll('#menu button')].find((b) => b.textContent === 'New campaign for this job').click(); true`);
-  ok(await A.until(`!!document.querySelector('.camp-brief.empty')`, 8000), '+ Campaign makes a campaign for the job, with no brief yet');
-  await A.tap(`document.querySelector('.camp-brief.empty')`);
-  ok(await A.until(`!!document.querySelector('.camp-brief-edit')`), 'clicking the empty brief opens it to write (a real click)');
+  // The brief is the Command Center's Objective (2026-11-20, part 1), on the campaign's Overview.
+  ok(await A.until(`!!document.querySelector('#camps .cc-bf.empty[data-field=brief]')`, 8000), '+ Campaign makes a campaign for the job, with no brief yet');
+  await A.tap(`document.querySelector('#camps .cc-bf.empty[data-field=brief]')`);
+  ok(await A.until(`!!document.querySelector('#camps .cc-bf-edit')`), 'clicking the empty brief opens it to write (a real click)');
   ok(A.errors.length === 0, 'no script errors' + (A.errors.length ? ': ' + A.errors.join(' | ') : ''));
 } catch (e) { ok(false, 'threw: ' + e.stack); }
 A?.close();
