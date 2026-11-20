@@ -1854,6 +1854,7 @@
       { cmd: 'meeting', also: ['record'], hint: 'Record a meeting, get the notes', arg: 'what it’s about', on: toolOn('meetings'), off: off('Meeting notes'), run: (t) => askRecord(t) },
       { cmd: 'sidekick', also: ['ask'], hint: 'Plan it with Sidekick', on: toolOn('sidekick'), off: off('Sidekick'), run: () => { SK.open = null; openTool('sidekick'); } },
       { cmd: 'plan', hint: 'Open the Planner', run: () => openTool('planner') },
+      { cmd: 'proof', also: ['coi', 'insurance'], hint: 'Send proof of licenses & insurance', arg: 'who it’s for', run: (t) => profileSheet({ send: true, to: t }) },
       { cmd: 'card', hint: 'Show your business card', on: toolOn('cards'), off: off('Business cards'), run: () => showMyCard() },
       { cmd: 'map', hint: 'Open the Map', on: toolOn('map'), off: off('Map'), run: () => openMap() },
       { cmd: 'miles', also: ['mileage', 'drove'], hint: 'Log a drive for mileage', arg: '23 supplies run', on: toolOn('map'), off: off('Map'), run: async (t) => { const a = moneyArgs(t); if (!ML.list) await loadMiles(); mileSheet(null, { purpose: a.rest, meters: a.amount ? Math.round(Number(a.amount) * mlPer()) : 0 }); } },
@@ -6180,13 +6181,16 @@
           f.push(h('label', { class: 'pick' }, cb, 'Send it to the customer too (after an OK)'),
             h('small', { class: 'hint' }, a.send ? 'Makes the invoice from the job’s price lines, then asks for an OK to send it. Once OK’d the customer gets their link and the job moves to Invoiced.' : 'Makes the invoice from the job’s price lines as a draft, for you to check and send.'));
         }
-        if (a.kind === 'text') f.push(autoTemplatePick(['text', 'reply'], (x) => { a.text = x.body.slice(0, 1600); draw(); }), h('label', {}, 'Text', text('Hi {customer}, we’re on our way for {record}')), okHint, h('small', { class: 'hint' }, 'From your team’s Twilio number (Settings → Texting).'));
+        // Attach proof of insurance: {proof} becomes a link to what's current in the workspace profile, one per customer.
+        const proofBtn = (key, sep) => (/\{proof\}/.test(a[key] || '') ? h('small', { class: 'hint auto-proof-on' }, '🪪 {proof} is a link to your current licenses & insurance (workspace profile).')
+          : h('button', { type: 'button', class: 'btn small auto-proof', onclick: () => { a[key] = String(a[key] || '').trimEnd() + sep + '{proof}'; draw(); } }, '🪪 Attach proof of insurance'));
+        if (a.kind === 'text') f.push(autoTemplatePick(['text', 'reply'], (x) => { a.text = x.body.slice(0, 1600); draw(); }), h('label', {}, 'Text', text('Hi {customer}, we’re on our way for {record}')), proofBtn('text', ' Our licenses & insurance: '), okHint, h('small', { class: 'hint' }, 'From your team’s Twilio number (Settings → Texting).'));
         if (a.kind === 'email') {
           const sub = h('input', { value: a.subject || '', placeholder: '{record} is done', class: 'auto-email-sub' });
           sub.addEventListener('input', () => (a.subject = sub.value));
           const body = h('textarea', { rows: 4, placeholder: 'Hi,\n\nThanks for choosing us for {record}…', class: 'auto-email-body' }, a.text || '');
           body.addEventListener('input', () => (a.text = body.value));
-          f.push(autoTemplatePick(['email', 'reply'], (x) => { a.subject = x.subject || a.subject || ''; a.text = x.body; draw(); }), h('label', {}, 'Subject', sub), h('label', {}, 'Message', body), okHint);
+          f.push(autoTemplatePick(['email', 'reply'], (x) => { a.subject = x.subject || a.subject || ''; a.text = x.body; draw(); }), h('label', {}, 'Subject', sub), h('label', {}, 'Message', body), proofBtn('text', '\n\nOur licenses & insurance: '), okHint);
         }
         if (a.kind === 'money') {
           const dir = h('select', { class: 'auto-money-dir' }, opt('in', 'Money in', a.direction || 'in'), opt('out', 'Money out', a.direction || 'in'));
@@ -13105,7 +13109,7 @@
   // Contacts, Companies and Deals with a pipeline board. Records load when a project opens and stay in step
   // with everyone through the socket.
   const PR = { open: null, type: null, view: null, q: '', records: new Map(), panel: null, loading: null, newing: null };
-  const WP = { open: false, id: null, timer: null, pick: null, made: null, proofs: [] }; // the workspace profile (profileSheet)
+  const WP = { open: false, id: null, timer: null, pick: null, made: null, proofs: [], to: '', onPages: false }; // the workspace profile (profileSheet)
   // The New project page at full size (see pjNewPage): its saved templates, the trade families, and whether it's redrawing itself.
   const pjWide = () => document.body.classList.contains('wide');
   const PJN = { own: null, trades: null, redraw: false };
@@ -13251,10 +13255,12 @@
     document.addEventListener('click', leave, true);
     return page;
   }
-  async function profileSheet() {
+  // opts.send: straight to Send proof with what's current ticked (/proof), opts.to: who it's for.
+  async function profileSheet(opts = {}) {
     WP.open = true;
     WP.pick = null;
     WP.made = null;
+    WP.to = opts.to || '';
     sheetOrPage(S.workspace.name, [h('div', { class: 'wp' }, h('p', { class: 'day-hint' }, 'Loading…'))]);
     try {
       const y = await api('GET', '/profile');
@@ -13263,11 +13269,18 @@
       WP.id = y.project.id;
       if (!S.automations && amAdmin()) S.automations = await api('GET', '/automations').catch(() => null);
       WP.proofs = await api('GET', '/profile/proofs').catch(() => []);
+      WP.onPages = !!(await api('GET', '/profile/settings').catch(() => null))?.onPages;
     } catch (e) {
       $('#sheet .wp')?.replaceChildren(h('p', { class: 'err' }, e.message));
       return;
     }
+    if (opts.send) WP.pick = new Set(pfCurrent(projById(WP.id)).map((r) => r.id));
     pfDraw();
+  }
+  // What's in the profile and not expired: what Send proof ticks to start with.
+  function pfCurrent(p) {
+    const t = pfList(p), ef = pfField(t, 'expires'), today = dayKey(new Date());
+    return prRecs(p.id).filter((r) => r.typeId === t.id && !(ef && r.values[ef.id] && r.values[ef.id] < today));
   }
   // Days to go: negative once it's lapsed.
   const pfDaysLeft = (d) => (d ? Math.round((Date.parse(d + 'T00:00:00') - Date.parse(dayKey(new Date()) + 'T00:00:00')) / 864e5) : null);
@@ -13329,7 +13342,7 @@
         h('button', { class: 'btn small', onclick: () => { closeSheet(); openSettings('business'); } }, 'Business details'));
     const ins = h('section', { class: 'wp-sec wp-ins' },
         h('div', { class: 'wp-h' }, h('h3', {}, '🪪 Insurance & licenses'),
-          recs.length && !WP.pick && !WP.made ? h('button', { class: 'btn small primary-btn wp-send', onclick: () => { const today = dayKey(new Date()); WP.pick = new Set(recs.filter((r) => !(F.expires && r.values[F.expires.id] && r.values[F.expires.id] < today)).map((r) => r.id)); pfDraw(); } }, '📤 Send proof') : null),
+          recs.length && !WP.pick && !WP.made ? h('button', { class: 'btn small primary-btn wp-send', onclick: () => { WP.pick = new Set(pfCurrent(p).map((r) => r.id)); pfDraw(); } }, '📤 Send proof') : null),
         h('p', { class: 'day-hint' }, WP.pick ? 'Tick what to send. They get a page with these and a copy of each, nothing else.' : 'Your licenses, insurance, bonds and certifications, with a copy of each, for the whole team. Upload the COI or license so it’s ready when a customer or GC asks.'),
         proof.top,
         recs.length ? h('div', { class: 'wp-list' }, recs.map(row)) : h('p', { class: 'wp-none' }, 'Nothing yet. Add your contractor license and insurance below.'),
@@ -13344,9 +13357,24 @@
           h('button', { class: 'wp-link', onclick: () => { closeSheet(); openSettings('team', '.tools-sec'); } }, h('b', {}, 'Tools'), h('small', {}, 'Which tools the team uses')),
           toolOn('hq') ? h('button', { class: 'wp-link', onclick: () => { closeSheet(); openTool('hq'); } }, h('b', {}, 'Company rules & approvals'), h('small', {}, 'What needs an OK, in Company HQ')) : null)
           : h('p', { class: 'day-hint' }, 'Your team’s owners and admins set who sees what and the rules.'));
+    // Proof anywhere (step 3): on quote and invoice pages (owners/admins switch it), {proof} in automations, /proof, the AI team.
+    const onPages = h('input', { type: 'checkbox', class: 'wp-onpages', disabled: !admin });
+    onPages.checked = WP.onPages;
+    onPages.addEventListener('change', async () => {
+      onPages.disabled = true;
+      try { WP.onPages = (await api('PATCH', '/profile/settings', { onPages: onPages.checked })).onPages; WP.proofs = await api('GET', '/profile/proofs').catch(() => WP.proofs); toast(WP.onPages ? 'Quotes and invoices now link your licenses & insurance' : 'Quotes and invoices no longer link them'); } catch (e) { toast(e.message); }
+      pfDraw();
+    });
+    const use = h('section', { class: 'wp-sec wp-use' },
+        h('h3', {}, 'Proof, anywhere'),
+        h('label', { class: 'wp-check' }, onPages, h('span', {}, h('b', {}, 'Show on quotes & invoices'), h('small', {}, admin ? 'Customers see “🪪 Our licenses & insurance” on the quote and invoice pages you send: what’s current, never what’s expired.' : 'Owners and admins switch this.'))),
+        h('ul', { class: 'wp-tips' },
+          h('li', {}, h('b', {}, 'Automations: '), 'write ', h('code', {}, '{proof}'), ' in an email, text or Teams post and it becomes a link for that customer.'),
+          h('li', {}, h('b', {}, 'Chat: '), 'type ', h('code', {}, '/proof'), ' (and who it’s for) to make a link.'),
+          h('li', {}, h('b', {}, 'Your AI team: '), 'ask it to send proof of insurance; it makes the link after your yes.')));
     // As a page: Insurance & licenses on the left, the business and its rules beside it. As a pop-up: one column.
-    if (box.closest('.page-view')) box.replaceChildren(h('div', { class: 'cb-grid wp-grid' }, h('div', { class: 'cb-main' }, ins, proof.links), h('aside', { class: 'wp-aside' }, biz, rules)));
-    else box.replaceChildren(biz, ins, proof.links, rules);
+    if (box.closest('.page-view')) box.replaceChildren(h('div', { class: 'cb-grid wp-grid' }, h('div', { class: 'cb-main' }, ins, proof.links), h('aside', { class: 'wp-aside' }, biz, use, rules)));
+    else box.replaceChildren(biz, ins, proof.links, use, rules);
   }
   // Send proof (step 2): pick the items, how long the link works and who it's for; then the link to copy, email or
   // text. The link is shown once (Kloomie keeps only its hash). Below: the links sent, how often each was opened, and
@@ -13369,13 +13397,15 @@
           h('button', { class: 'btn small', onclick: () => { WP.made = null; pfDraw(); } }, 'Done')));
     } else if (WP.pick) {
       const days = h('select', { class: 'wp-days', 'aria-label': 'How long the link works' }, [[7, '7 days'], [30, '30 days'], [90, '90 days'], [0, 'Until I turn it off']].map(([v, l]) => h('option', { value: v, selected: v === 30 }, l)));
-      const to = h('input', { class: 'wp-to', placeholder: 'Who it’s for (optional), e.g. Desert Ridge GC', 'aria-label': 'Who it’s for' });
+      const to = h('input', { class: 'wp-to', placeholder: 'Who it’s for (optional), e.g. Desert Ridge GC', 'aria-label': 'Who it’s for', value: WP.to || '' });
+      to.addEventListener('input', () => { WP.to = to.value; });
       const make = h('button', { class: 'btn small primary-btn wp-make', disabled: !WP.pick.size }, WP.pick.size ? `Make link (${WP.pick.size})` : 'Tick at least one');
       make.addEventListener('click', async () => {
         make.disabled = true;
         try {
           WP.made = await api('POST', '/profile/proofs', { recordIds: [...WP.pick], days: Number(days.value), to: to.value });
           WP.pick = null;
+          WP.to = '';
           WP.proofs = [WP.made, ...WP.proofs.filter((y) => y.id !== WP.made.id)];
           pfDraw();
         } catch (e) { toast(e.message); make.disabled = false; }
@@ -13388,8 +13418,8 @@
     const mayOff = (x) => x.memberId === S.me.memberId || amAdmin();
     const links = sent.length ? h('section', { class: 'wp-sec wp-proofs' }, h('h3', {}, 'Proof links sent'),
       h('div', { class: 'wp-list' }, sent.map((x) => h('div', { class: 'wp-proof', 'data-id': x.id },
-        h('div', {}, h('b', {}, x.to || x.names.join(', ') || 'Proof link'),
-          h('small', {}, [x.to ? x.names.join(', ') : '', `by ${x.by}`, x.views ? `opened ${plural(x.views, 'time')}` : 'not opened yet', x.expiresAt ? `until ${new Date(x.expiresAt).toLocaleDateString()}` : 'no end date'].filter(Boolean).join(' · '))),
+        h('div', {}, h('b', {}, x.pages ? 'Quote & invoice pages' : x.to || x.names.join(', ') || 'Proof link'),
+          h('small', {}, [x.to || x.pages ? (x.all ? 'Everything current' : x.names.join(', ')) : '', x.pages ? '' : x.auto ? 'by an automation' : `by ${x.by}`, x.views ? `opened ${plural(x.views, 'time')}` : 'not opened yet', x.expiresAt ? `until ${new Date(x.expiresAt).toLocaleDateString()}` : 'no end date'].filter(Boolean).join(' · '))),
         mayOff(x) ? h('button', { class: 'btn small danger wp-off', onclick: (e) => off(x, e.currentTarget) }, 'Turn off') : null)))) : null;
     return { top, links };
   }

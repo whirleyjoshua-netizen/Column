@@ -29,7 +29,7 @@ export const AGENTS = {
       'Turns commitments in emails you paste into tasks',
       'Prepares your end-of-day summary and plans the week',
     ],
-    tools: ['find_templates', 'code_activity', 'save_template', 'find_inventory', 'look_at_day', 'find_bookings', 'list_tasks', 'find_records', 'read_record', 'list_campaigns', 'team_schedule', 'plan_route', 'find_docs', 'read_doc', 'look_at_money', 'set_budget', 'add_bill', 'add_to_company_hq', 'create_automation', 'create_task', 'update_task', 'schedule_time', 'move_time', 'write_doc', 'post_to_chat', 'draft_teams_post', 'notify_me'],
+    tools: ['find_templates', 'code_activity', 'save_template', 'find_inventory', 'look_at_day', 'find_bookings', 'list_tasks', 'find_records', 'read_record', 'list_campaigns', 'team_schedule', 'plan_route', 'find_docs', 'read_doc', 'look_at_money', 'set_budget', 'add_bill', 'add_to_company_hq', 'create_automation', 'create_task', 'update_task', 'schedule_time', 'move_time', 'write_doc', 'make_proof_link', 'post_to_chat', 'draft_teams_post', 'notify_me'],
     workflows: [
       { key: 'briefing', name: 'Morning briefing', ask: 'Give me my morning briefing: what matters today, what is overdue or at risk, and the first thing I should do. Keep it short.', sched: { days: [1, 2, 3, 4, 5], at: 7 * 60 } },
       { key: 'plan_day', name: 'Plan my day', ask: 'Plan my day today: put my tasks into open time around what is already booked, most important first, with breaks, and tell me what won’t fit and what to move or hand off.' },
@@ -51,7 +51,7 @@ export const AGENTS = {
       'Books customer meetings and prepares a brief beforehand',
       'Finds deals that have gone quiet and plans the next step',
     ],
-    tools: ['find_templates', 'save_template', 'find_inventory', 'find_records', 'read_record', 'list_projects', 'find_contacts', 'look_at_day', 'find_bookings', 'list_tasks', 'list_campaigns', 'team_schedule', 'find_docs', 'read_doc', 'create_task', 'update_task', 'save_contact', 'create_record', 'update_record', 'log_note', 'book_visit', 'schedule_time', 'move_time', 'write_doc', 'draft_email', 'post_to_chat', 'draft_teams_post', 'notify_me'],
+    tools: ['find_templates', 'save_template', 'find_inventory', 'find_records', 'read_record', 'list_projects', 'find_contacts', 'look_at_day', 'find_bookings', 'list_tasks', 'list_campaigns', 'team_schedule', 'find_docs', 'read_doc', 'create_task', 'update_task', 'save_contact', 'create_record', 'update_record', 'log_note', 'book_visit', 'schedule_time', 'move_time', 'write_doc', 'draft_email', 'make_proof_link', 'post_to_chat', 'draft_teams_post', 'notify_me'],
     workflows: [
       { key: 'lead', name: 'Handle a new lead', ask: 'A new lead came in. Record them (contact and lead or deal), draft my reply, suggest times to meet, and set the follow-up:\n\n', paste: true },
       { key: 'radar', name: 'Follow-up radar', ask: 'Run the follow-up radar: find leads, deals and quotes with no reply or no contact in a while, and anyone who booked a time in the last few days (find_bookings, new), and set up the next step for each (a task, and a drafted follow-up email where there’s an address).', sched: { days: [1, 3, 5], at: 8 * 60 } },
@@ -73,7 +73,7 @@ export const AGENTS = {
       'Checks project health and says what’s slipping',
       'Closes jobs out with a completion report',
     ],
-    tools: ['find_templates', 'code_activity', 'save_template', 'find_inventory', 'use_stock', 'list_projects', 'find_records', 'read_record', 'list_tasks', 'look_at_day', 'team_schedule', 'plan_route', 'find_docs', 'read_doc', 'find_photos', 'look_at_photos', 'create_project', 'create_record', 'update_record', 'log_note', 'book_visit', 'draft_invoice', 'send_invoice', 'send_signoff', 'create_automation', 'create_task', 'update_task', 'schedule_time', 'move_time', 'write_doc', 'draft_email', 'post_to_chat', 'draft_teams_post', 'notify_me'],
+    tools: ['find_templates', 'code_activity', 'save_template', 'find_inventory', 'use_stock', 'list_projects', 'find_records', 'read_record', 'list_tasks', 'look_at_day', 'team_schedule', 'plan_route', 'find_docs', 'read_doc', 'find_photos', 'look_at_photos', 'create_project', 'create_record', 'update_record', 'log_note', 'book_visit', 'draft_invoice', 'send_invoice', 'send_signoff', 'create_automation', 'create_task', 'update_task', 'schedule_time', 'move_time', 'write_doc', 'draft_email', 'make_proof_link', 'post_to_chat', 'draft_teams_post', 'notify_me'],
     workflows: [
       { key: 'kickoff', name: 'Project kickoff', ask: 'We just won this work. Organize it: the job (or project), the tasks in order with who and when, a materials list, visits, and a completion checklist:\n\n', paste: true },
       { key: 'prep', name: 'Job preparation', ask: 'Prepare for the jobs coming up in the next few days: a checklist for each, what to bring or order, and anything missing before we can start.' },
@@ -755,6 +755,19 @@ export function agentsModule({ autoEvents = [], sees = () => true, db, save, bro
         const r = await cx.call('POST', '/api/teams/post', { text: String(a.text).trim() });
         if (r.status !== 200) throw new Error(r.body?.error || 'Teams didn’t take it.');
         return { ok: true, result: { done: true }, changed: [{ kind: 'post', label: 'Microsoft Teams' }] };
+      },
+    },
+    // Proof of licenses & insurance (the workspace profile, step 3): a link to what's current in the profile, for a
+    // customer or GC. Someone outside opens it, so it waits for the person's yes; it's made as them, through the same
+    // route Send proof uses. Put the link in an email draft to send it.
+    make_proof_link: {
+      kind: 'write', important: true, label: (a) => `Make a proof-of-insurance link${a.to ? ' for ' + words(a.to, 60) : ''}`,
+      description: 'Make a link to the team’s current licenses and insurance (from the workspace profile), with a copy of each, for a customer or general contractor who asked for proof or a COI. It waits for the person’s yes. to: who it’s for. days: 7, 30 or 90 (30 if left out). Then put the link in a draft_email to send it.',
+      parameters: { type: 'object', properties: { to: { type: 'string' }, days: { type: 'number', enum: [7, 30, 90] }, why: { type: 'string' } } },
+      async run(cx, a) {
+        const r = await cx.call('POST', '/api/profile/proofs', { all: true, days: [7, 30, 90].includes(Number(a.days)) ? Number(a.days) : 30, to: String(a.to || '').slice(0, 120) });
+        if (r.status !== 200) throw new Error(r.body?.error || 'The proof link wasn’t made.');
+        return { ok: true, result: { url: r.body.url, shows: r.body.names, until: r.body.expiresAt ? new Date(r.body.expiresAt).toISOString().slice(0, 10) : null }, changed: [{ kind: 'proof', label: 'Proof link' + (a.to ? ' for ' + words(a.to, 40) : '') }] };
       },
     },
     post_to_chat: {

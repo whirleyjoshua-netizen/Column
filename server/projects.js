@@ -343,7 +343,7 @@ export const TEMPLATES = {
   },
 };
 
-export function projectsModule({ onEvent = null, onPrice = () => {}, canSeeItem = () => true, seal = (x) => x, unseal = (x) => x, db, save, broadcast, rid, hold = null, cleanText, isDay, readJson, send, badRequest, isOwnerId, escHtml, brandOf, logoUrl, teamDay, offline, makeTask, onRecords, onRecordGone, onRecordNews, stageGate = null, allowLocalHooks = false, qrSvg = null, publicUrl = '' }) {
+export function projectsModule({ proofUrl = () => null, onEvent = null, onPrice = () => {}, canSeeItem = () => true, seal = (x) => x, unseal = (x) => x, db, save, broadcast, rid, hold = null, cleanText, isDay, readJson, send, badRequest, isOwnerId, escHtml, brandOf, logoUrl, teamDay, offline, makeTask, onRecords, onRecordGone, onRecordNews, stageGate = null, allowLocalHooks = false, qrSvg = null, publicUrl = '' }) {
   const bad = (msg) => badRequest(msg);
   db.projects ||= {};
   db.records ||= {};
@@ -1887,8 +1887,10 @@ export function projectsModule({ onEvent = null, onPrice = () => {}, canSeeItem 
       <table><thead><tr><th>Description</th><th class="n">Qty</th><th class="n">Price</th><th class="n">Amount</th></tr></thead><tbody>${lines || '<tr><td colspan="4" class="muted">No items yet.</td></tr>'}</tbody></table>
       <div class="sums"><div><span>Subtotal</span><span>${money(tot.subtotal)}</span></div>${tot.discount ? `<div><span>Discount${data.discount?.type === 'percent' ? ` (${data.discount.value}%)` : ''}</span><span>−${money(tot.discount)}</span></div>` : ''}${data.taxRate ? `<div><span>Tax (${data.taxRate}%)</span><span>${money(tot.tax)}</span></div>` : ''}<div class="total"><span>Total</span><span>${money(tot.total)}</span></div></div>
       ${v('terms') ? `<div class="terms"><small>Terms</small><p>${escHtml(v('terms')).replace(/\n/g, '<br>')}</p></div>` : ''}
-      ${answer}`;
+      ${answer}${proofLine(ws)}`;
   }
+  // Our licenses & insurance, when the team shows them on its quotes (the workspace profile, step 3).
+  const proofLine = (ws) => { const u = proofUrl(ws); return u ? `<p class="proof" style="text-align:center;margin-top:22px;font-size:14px"><a href="${escHtml(u)}" rel="noopener">🪪 Our licenses &amp; insurance</a></p>` : ''; };
   function quoteHtml(res, code, ws, body) {
     const accent = ws ? brandOf(ws).accent : null;
     res.writeHead(code, { 'Content-Type': 'text/html; charset=utf-8', 'Content-Security-Policy': "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; form-action 'self'" });

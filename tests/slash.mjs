@@ -87,6 +87,7 @@ await run('/income 1,200 Smith job', 'Add money in', ['1200', 'Smith job'], '/in
 await run('/contact Pat Lee', 'New contact', ['Pat Lee'], '/contact Pat Lee → new contact');
 await run('/campaign Spring push', '', ['Spring push'], '/campaign Spring push → campaign form');
 await run('/task call Bob back', '', ['call Bob back'], '/task call Bob back → Day form');
+await run('/proof Desert Ridge GC', '', ['Desert Ridge GC'], '/proof Desert Ridge GC → Send proof in the workspace profile, for Desert Ridge GC');
 // /doc makes the doc right here
 await typeIn('/doc Smith quote');
 await A.ev(`document.querySelector('.slash-pop')?.remove()`);

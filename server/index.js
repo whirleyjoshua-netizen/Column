@@ -2126,8 +2126,14 @@ function fmtBytes(n) {
 // expires (7, 30 or 90 days, or never) and can be turned off by whoever made it or an owner/admin. It always shows
 // the items as they are now: one taken out of the profile drops off; a renewed copy replaces the old one.
 // At most 50 live links a team, and 20 made an hour by one person.
+// Step 3 (attach proof anywhere in the flow): a link can be "everything current" (all: what's in the profile and not
+// expired, when it's opened), as /proof and the AI team make it. Kloomie makes some by itself: {proof} in an
+// automation's words (one per customer or job, key 'auto:…', 30 days, reused while it has a week left) and the one
+// quote and invoice pages link when an owner/admin turns that on (key 'pages', no end date). Those keep their token
+// sealed (tok) so the same link can be handed out again; at most 300 live and 60 made an hour a team; only owners
+// and admins turn them off.
 const PROOF_DAYS = [7, 30, 90, 0];
-const PROOF_LIVE = 50, PROOF_HOUR = 20;
+const PROOF_LIVE = 50, PROOF_HOUR = 20, PROOF_AUTO = 300, PROOF_AUTO_HOUR = 60;
 const proofHash = (t) => crypto.createHash('sha256').update(String(t)).digest('hex');
 const liveProof = (x) => !!x && !x.offAt && (!x.expiresAt || x.expiresAt > Date.now());
 function proofByToken(token) {
@@ -2142,46 +2148,99 @@ function proofList(wsId) {
   const t = p && (p.types.find((y) => y.key === 'licenses') || p.types[0]);
   return t ? { p, t, f: (k) => t.fields.find((x) => x.key === k) } : null;
 }
+// What's in the profile now and not expired (on the team's clock).
+function proofCurrent(wsId) {
+  const L = proofList(wsId);
+  if (!L) return [];
+  const ef = L.f('expires'), today = teamDay(wsId);
+  return Object.values(db.records).filter((r) => r.projectId === L.p.id && r.typeId === L.t.id && !(ef && typeof r.values[ef.id] === 'string' && r.values[ef.id] < today)).map((r) => r.id);
+}
 // Each record still in the list, as plain words, with its copies (files of the team, ready to read).
 function proofItems(x) {
   const L = proofList(x.wsId);
   if (!L) return [];
-  return x.recordIds.map((id) => db.records[id]).filter((r) => r && r.projectId === L.p.id && r.typeId === L.t.id).map((r) => {
+  return (x.all ? proofCurrent(x.wsId) : x.recordIds).map((id) => db.records[id]).filter((r) => r && r.projectId === L.p.id && r.typeId === L.t.id).map((r) => {
     const v = (k) => (L.f(k) ? r.values[L.f(k).id] : undefined);
     const kf = L.f('kind');
     const files = (Array.isArray(v('files')) ? v('files') : []).map((id) => db.items[id]).filter((it) => it && it.wsId === x.wsId && it.type === 'file' && it.status === 'ready');
     return { id: r.id, name: String(v('name') || PJ.recName(L.p, r) || 'Untitled'), kind: kf?.choices?.find((c) => c.id === v('kind'))?.label || '', number: v('number') ? String(v('number')) : '', expires: typeof v('expires') === 'string' ? v('expires') : null, files };
   });
 }
-const publicProof = (x) => ({ id: x.id, by: x.by, memberId: x.memberId, createdAt: x.createdAt, expiresAt: x.expiresAt, offAt: x.offAt || null, live: liveProof(x), names: proofItems(x).map((i) => i.name), recordIds: x.recordIds, views: x.views || 0, lastAt: x.lastAt || null, to: x.to || '' });
+const publicProof = (x) => ({ id: x.id, by: x.by, memberId: x.memberId, createdAt: x.createdAt, expiresAt: x.expiresAt, offAt: x.offAt || null, live: liveProof(x), names: proofItems(x).map((i) => i.name), recordIds: x.recordIds, all: !!x.all, auto: !!x.key, pages: x.key === 'pages', views: x.views || 0, lastAt: x.lastAt || null, to: x.to || '' });
+// One rule for every way a link is made (Send proof, /proof, the AI team, automations, quote and invoice pages).
+// who: { memberId, by } (memberId null when Kloomie makes it). key: Kloomie's own, reused while it has a week left.
+function makeProof(ws, who, { recordIds, all = false, days = 30, to = '', key = null }) {
+  const now = Date.now();
+  const mine = Object.values(db.proofs).filter((x) => x.wsId === ws.id);
+  if (key) {
+    const had = mine.find((x) => x.key === key && x.tok && liveProof(x) && (!x.expiresAt || x.expiresAt > now + 7 * 864e5));
+    if (had) return { x: had, url: `${PUBLIC_URL}/proof/${unseal(had.tok).t}` };
+  }
+  const L = proofList(ws.id);
+  const ids = all ? [] : [...new Set((Array.isArray(recordIds) ? recordIds : []).map(String))].filter((r) => L && db.records[r]?.projectId === L.p.id && db.records[r].typeId === L.t.id).slice(0, 30);
+  if (all ? !proofCurrent(ws.id).length : !ids.length) throw Object.assign(new Error(all ? 'Nothing current in the workspace profile to send. Add your licenses and insurance there first.' : 'Pick at least one license or policy to send.'), { status: 400 });
+  if (key) {
+    if (mine.filter((x) => x.key && liveProof(x)).length >= PROOF_AUTO || mine.filter((x) => x.key && x.createdAt > now - 3600_000).length >= PROOF_AUTO_HOUR) throw Object.assign(new Error('Too many proof links made by Kloomie just now.'), { status: 429 });
+  } else {
+    if (mine.filter((x) => !x.key && liveProof(x)).length >= PROOF_LIVE) throw Object.assign(new Error(`Your team has ${PROOF_LIVE} proof links on. Turn some off first.`), { status: 429 });
+    if (mine.filter((x) => x.memberId === who.memberId && !x.key && x.createdAt > now - 3600_000).length >= PROOF_HOUR) throw Object.assign(new Error('That’s a lot of proof links in an hour. Please wait a bit.'), { status: 429 });
+  }
+  const d = PROOF_DAYS.includes(Number(days)) ? Number(days) : 30;
+  const token = crypto.randomBytes(24).toString('base64url');
+  const x = { id: rid(), wsId: ws.id, hash: proofHash(token), recordIds: ids, ...(all ? { all: true } : {}), memberId: who.memberId || null, by: who.by, createdAt: now, expiresAt: d ? now + d * 864e5 : null, to: cleanText(to, 120), views: 0, ...(key ? { key, tok: seal({ t: token }) } : {}) };
+  db.proofs[x.id] = x;
+  save();
+  return { x, url: `${PUBLIC_URL}/proof/${token}` };
+}
+// {proof} in an automation's words: one link per customer or job (what the run is about), or the team's.
+function autoProof(ctx, wsId) {
+  const ws = db.workspaces[wsId];
+  const key = 'auto:' + (ctx.record?.id ? 'r' + ctx.record.id : ctx.contact?.id ? 'c' + ctx.contact.id : 'team');
+  try {
+    return makeProof(ws, { memberId: null, by: 'Automation' }, { all: true, days: 30, key, to: ctx.contact?.name || ctx.recordName || '' }).url;
+  } catch (e) {
+    if (e.status !== 400) console.error('Proof link for an automation:', e.message);
+    return '';
+  }
+}
+// The link quote and invoice pages show, when an owner or admin turned that on (and there's something current).
+function pagesProof(ws) {
+  if (!ws?.proofOnPages) return null;
+  try { return makeProof(ws, { memberId: null, by: ws.name }, { all: true, days: 0, key: 'pages' }).url; } catch { return null; }
+}
 async function proofApi(req, res, ws, auth, id) {
   const m = req.method;
   if (m === 'GET' && !id) return send(res, 200, Object.values(db.proofs).filter((x) => x.wsId === ws.id).sort((a, b) => b.createdAt - a.createdAt).slice(0, 100).map(publicProof));
   if (m === 'POST' && !id) {
     const body = await readJson(req, 20_000);
-    const L = proofList(ws.id);
-    const ids = [...new Set((Array.isArray(body.recordIds) ? body.recordIds : []).map(String))].filter((r) => L && db.records[r]?.projectId === L.p.id && db.records[r].typeId === L.t.id).slice(0, 30);
-    if (!ids.length) return send(res, 400, { error: 'Pick at least one license or policy to send.' });
-    const now = Date.now();
-    const mine = Object.values(db.proofs).filter((x) => x.wsId === ws.id);
-    if (mine.filter(liveProof).length >= PROOF_LIVE) return send(res, 429, { error: `Your team has ${PROOF_LIVE} proof links on. Turn some off first.` });
-    if (mine.filter((x) => x.memberId === auth.memberId && x.createdAt > now - 3600_000).length >= PROOF_HOUR) return send(res, 429, { error: 'That’s a lot of proof links in an hour. Please wait a bit.' });
-    const days = PROOF_DAYS.includes(Number(body.days)) ? Number(body.days) : 30;
-    const token = crypto.randomBytes(24).toString('base64url');
-    const x = { id: rid(), wsId: ws.id, hash: proofHash(token), recordIds: ids, memberId: auth.memberId, by: auth.member, createdAt: now, expiresAt: days ? now + days * 864e5 : null, to: cleanText(body.to, 120), views: 0 };
-    db.proofs[x.id] = x;
-    save();
-    return send(res, 200, { ...publicProof(x), url: `${PUBLIC_URL}/proof/${token}` });
+    let made;
+    try { made = makeProof(ws, { memberId: auth.memberId, by: auth.member }, { recordIds: body.recordIds, all: body.all === true, days: body.days, to: body.to }); } catch (e) { return send(res, e.status || 400, { error: e.message }); }
+    return send(res, 200, { ...publicProof(made.x), url: made.url });
   }
   const x = id && db.proofs[id];
   if (!x || x.wsId !== ws.id) return send(res, 404, { error: 'That link is gone.' });
   if (m === 'DELETE') {
-    if (x.memberId !== auth.memberId && !isAdminId(ws.id, auth.memberId)) return send(res, 403, { error: 'Only whoever made the link and team admins can turn it off.' });
+    if ((x.key || x.memberId !== auth.memberId) && !isAdminId(ws.id, auth.memberId)) return send(res, 403, { error: 'Only whoever made the link and team admins can turn it off.' });
     x.offAt ||= Date.now();
     save();
     return send(res, 200, publicProof(x));
   }
   return send(res, 405, { error: 'Method not allowed' });
+}
+// The profile's settings: proof on quote and invoice pages (owners and admins change it).
+async function profileSettings(req, res, ws, auth) {
+  if (req.method === 'GET') return send(res, 200, { onPages: !!ws.proofOnPages });
+  if (req.method !== 'PATCH') return send(res, 405, { error: 'Method not allowed' });
+  if (!isAdminId(ws.id, auth.memberId)) return send(res, 403, { error: 'Only owners and admins can change the workspace profile’s settings.' });
+  const body = await readJson(req, 2_000);
+  if (body.onPages !== undefined) {
+    ws.proofOnPages = body.onPages === true;
+    // Off: the pages' link goes off with it, so a quote someone kept doesn't still open it.
+    if (!ws.proofOnPages) for (const x of Object.values(db.proofs)) if (x.wsId === ws.id && x.key === 'pages' && liveProof(x)) x.offAt = Date.now();
+  }
+  save();
+  broadcast(ws.id, { type: 'profile' });
+  return send(res, 200, { onPages: !!ws.proofOnPages });
 }
 const proofDay = (d) => new Date(d + 'T12:00:00Z').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
 function serveProof(req, res, url) {
@@ -3695,10 +3754,11 @@ function cleanAction(a, ws, who) {
   if (kind === 'contact') return { kind, stage: cleanText(a.stage, 40), tag: cleanText(a.tag, 40) };
   return null;
 }
-// {task}, {campaign}, {contact}, {file}, {from}, {who}, {stage}, {outcome}, {document}, {note}, {date} in what it writes.
+// {task}, {campaign}, {contact}, {file}, {from}, {who}, {stage}, {outcome}, {document}, {note}, {date}, {proof} in what it writes.
 // cap: each word at most that long (what goes to an outside channel, so one long field can't fill the post).
 function autoFill(text, ctx, wsId, cap = 0) {
   const v = autoVars(ctx, wsId);
+  if (/\{proof\}/.test(text || '')) v.proof = autoProof(ctx, wsId); // made only when the words ask for it
   return String(text || '').replace(/\{(\w+)\}/g, (m, k) => (k in v ? (cap ? clipText(String(v[k] ?? ''), cap) : String(v[k] ?? '')) : m)).trim();
 }
 // The words an event fills in, by name (what {…} in an action and "only if" read).
@@ -8289,6 +8349,7 @@ async function api(req, res, url) {
     const out = await APPS_REG.route(req, res, parts, auth, ws);
     if (out !== null) return out;
   }
+  if (a === 'profile' && b === 'settings') return profileSettings(req, res, ws, auth);
   if (a === 'profile' && b === 'proofs') return proofApi(req, res, ws, auth, c);
   if (a === 'projects' || a === 'records' || a === 'integrations' || a === 'project-templates' || a === 'profile') {
     const out = await PJ.route(req, res, parts, auth, ws);
@@ -11696,7 +11757,7 @@ async function replayAs(ws, memberId, approvalId, { method, path: p, body }, as 
   return { status, body: parsed };
 }
 const hold = (...a) => RULES.hold(...a);
-const PJ = projectsModule({ onEvent: (...a) => recordEvent(...a), onPrice: (...a) => priceChanged(...a), canSeeItem: (auth, it) => canSee(auth, 'item', it), seal, unseal, db, save, broadcast, rid, hold, cleanText, isDay, readJson, send, badRequest, isOwnerId, escHtml, brandOf, logoUrl, teamDay, offline, allowLocalHooks: process.env.ALLOW_LOCAL_WEBHOOKS === '1', qrSvg, publicUrl: PUBLIC_URL,
+const PJ = projectsModule({ proofUrl: (ws) => pagesProof(ws), onEvent: (...a) => recordEvent(...a), onPrice: (...a) => priceChanged(...a), canSeeItem: (auth, it) => canSee(auth, 'item', it), seal, unseal, db, save, broadcast, rid, hold, cleanText, isDay, readJson, send, badRequest, isOwnerId, escHtml, brandOf, logoUrl, teamDay, offline, allowLocalHooks: process.env.ALLOW_LOCAL_WEBHOOKS === '1', qrSvg, publicUrl: PUBLIC_URL,
   onRecordGone: (rec) => { dropVisits(rec); INV.dropFor(rec); campsOffJob(rec); }, stageGate: (...a) => stageGate(...a),
   onRecordNews: (rec) => { jobChanged(rec); if (rec.share || rec.qbo?.estId) QB.soon(rec.wsId); },
   // A follow-up from a record's timeline: a task for whoever logged it, about the record.
@@ -12080,7 +12141,7 @@ const STOCK = inventoryModule({ db, save, broadcast, rid, cleanText, readJson, s
   labelUrl: (tag) => `${PUBLIC_URL}/a/${tag}`,
   labelQr: (tag) => 'data:image/svg+xml;base64,' + Buffer.from(qrSvg(`${PUBLIC_URL}/a/${tag}`, { scale: 8 })).toString('base64'),
   projectFor: (pid, wsId, memberId) => { const p = db.projects[pid]; return p && p.wsId === wsId && PJ.sees(p, memberId) ? { p, records: Object.values(db.records).filter((r) => r.projectId === p.id) } : null; } });
-const INV = invoicesModule({ stockCost: (recId) => STOCK.stockCost(recId), jobMoney: (recId) => jobMoney(recId), notifyAdmins: (...a) => notifyAdmins(...a), jobBack: (rec) => jobBack(rec), onPaymentGone: (...a) => QB.paymentGone(...a), db, save, broadcast, rid, hold, cleanText, readJson, send, badRequest, escHtml, brandOf, logoUrl, teamDay, offline, seal, unseal, stripeCall: stripe.callWith, PJ, isAdmin, jobOfRecord, jobLabel, moveJob, publicUrl: PUBLIC_URL, emit: (...a) => { PJ.emit(...a); QB.soon(a[0]); try { eventFromHook(a[0], a[1], a[2], a[3]); } catch (e) { alarm('An automation event failed to build', e); } },
+const INV = invoicesModule({ proofUrl: (ws) => pagesProof(ws), stockCost: (recId) => STOCK.stockCost(recId), jobMoney: (recId) => jobMoney(recId), notifyAdmins: (...a) => notifyAdmins(...a), jobBack: (rec) => jobBack(rec), onPaymentGone: (...a) => QB.paymentGone(...a), db, save, broadcast, rid, hold, cleanText, readJson, send, badRequest, escHtml, brandOf, logoUrl, teamDay, offline, seal, unseal, stripeCall: stripe.callWith, PJ, isAdmin, jobOfRecord, jobLabel, moveJob, publicUrl: PUBLIC_URL, emit: (...a) => { PJ.emit(...a); QB.soon(a[0]); try { eventFromHook(a[0], a[1], a[2], a[3]); } catch (e) { alarm('An automation event failed to build', e); } },
   // A payment is money in on the business's Finance, under the team's owner.
   addMoney: (ws, { amount, day, note, invoiceId = null }) => {
     const owner = ws.members.find((m) => m.role === 'owner') || ws.members[0];

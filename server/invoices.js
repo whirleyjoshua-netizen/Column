@@ -15,7 +15,7 @@ const METHODS = ['cash', 'check', 'card', 'bank', 'other'];
 const DUE_DAYS = 14;
 const CHECK_MS = Number(process.env.INVOICE_CHECK_MS) || 5 * 60_000;
 
-export function invoicesModule({ stockCost = () => 0, jobMoney = () => ({ expenses: 0, income: 0, committed: 0, entries: [] }), jobBack = () => {}, onPaymentGone = () => {}, notifyAdmins = null, db, save, broadcast, rid, hold = null, cleanText, readJson, send, badRequest, escHtml, brandOf, logoUrl, teamDay, offline, seal, unseal, stripeCall, PJ, isAdmin, jobOfRecord, jobLabel, moveJob, addMoney, dropMoneyId, publicUrl, emit = () => {} }) {
+export function invoicesModule({ proofUrl = () => null, stockCost = () => 0, jobMoney = () => ({ expenses: 0, income: 0, committed: 0, entries: [] }), jobBack = () => {}, onPaymentGone = () => {}, notifyAdmins = null, db, save, broadcast, rid, hold = null, cleanText, readJson, send, badRequest, escHtml, brandOf, logoUrl, teamDay, offline, seal, unseal, stripeCall, PJ, isAdmin, jobOfRecord, jobLabel, moveJob, addMoney, dropMoneyId, publicUrl, emit = () => {} }) {
   db.invoices ||= {};
   db.payKeys ||= {};
   const money = (c) => ((c || 0) / 100).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
@@ -445,7 +445,7 @@ export function invoicesModule({ stockCost = () => 0, jobMoney = () => ({ expens
       <table><thead><tr><th>Description</th><th class="n">Qty</th><th class="n">Price</th><th class="n">Amount</th></tr></thead><tbody>${lines || '<tr><td colspan="4" class="muted">No lines.</td></tr>'}</tbody></table>
       <div class="sums"><div><span>Subtotal</span><span>${money(tot.subtotal)}</span></div>${tot.discount ? `<div><span>Discount</span><span>−${money(tot.discount)}</span></div>` : ''}${inv.lines.taxRate ? `<div><span>Tax (${inv.lines.taxRate}%)</span><span>${money(tot.tax)}</span></div>` : ''}<div class="total"><span>Total</span><span>${money(tot.total)}</span></div>${paidRows}${inv.payments.length ? `<div class="total"><span>Balance</span><span>${money(tot.balance)}</span></div>` : ''}</div>
       ${inv.note ? `<div class="terms"><small>Note</small><p>${escHtml(inv.note).replace(/\n/g, '<br>')}</p></div>` : ''}
-      ${state}`;
+      ${state}${(() => { const u = proofUrl(ws); return u ? `<p class="proof" style="text-align:center;margin-top:22px;font-size:14px"><a href="${escHtml(u)}" rel="noopener">🪪 Our licenses &amp; insurance</a></p>` : ''; })()}`;
   }
   function html(res, code, ws, inner) {
     const accent = ws ? brandOf(ws).accent : null;

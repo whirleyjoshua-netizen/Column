@@ -4028,3 +4028,11 @@ body:not(.wide) .home-dots { display: flex; justify-content: center; align-items
 .home-dots i.on { background: var(--accent); width: 18px; border-radius: 4px; }
 .home-prev, .home-next { display: none; font-size: 18px; }
 body.column:not(.wide) .home-prev, body.column:not(.wide) .home-next { display: inline-flex; }
+/* Workspace profile, step 3: proof anywhere */
+.wp-check{display:flex;gap:10px;align-items:flex-start;cursor:pointer;margin:6px 0 10px}
+.wp-check input{margin-top:3px;flex:none}
+.wp-check span{display:flex;flex-direction:column;gap:2px}
+.wp-check small,.wp-tips{color:var(--muted);font-size:12.5px}
+.wp-tips{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:4px}
+.wp-tips code{font-size:12px;background:var(--hover,rgba(0,0,0,.06));border-radius:4px;padding:0 4px}
+.auto-proof{align-self:flex-start;margin-top:2px}

@@ -52,6 +52,10 @@ try {
   await A.tap(sw);
   ok(await A.until(`!!document.querySelector('#sheet .wp .wp-sec') && (!document.body.classList.contains('wide') || !!document.querySelector('#sheet .sheet.page-view .wp-grid'))`), 'the strip’s name opens the workspace profile (at full size, as a page, not a pop-up)');
   ok(await A.ev(`document.body.classList.contains('wide')`), '(the test runs at full size)');
+  // Proof, anywhere (step 3): an owner switches proof on quotes & invoices from the profile.
+  ok(await A.until(`!!document.querySelector('#sheet .wp-use .wp-onpages') && !document.querySelector('#sheet .wp-use .wp-onpages').checked && document.querySelector('#sheet .wp-use').textContent.includes('{proof}')`), 'the profile has Proof, anywhere: quotes & invoices (off), {proof}, /proof');
+  await A.tap(`document.querySelector('#sheet .wp-use .wp-onpages')`);
+  ok(await A.until(`document.querySelector('#sheet .wp-use .wp-onpages')?.checked === true`) && (await api(auth.token)('GET', '/profile/settings')).onPages === true, 'an owner turns it on');
   await A.ev(`document.querySelector('#sheet .sheet h2 .icon-btn')?.click(); true`);
   await A.tap(hs);
   ok(await A.until(`[...document.querySelectorAll('#menu .mh')].some((x) => x.textContent === 'Workspaces')`), 'the header’s name lists your workspaces');
