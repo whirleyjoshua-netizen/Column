@@ -657,7 +657,8 @@ window.ColumnBoard = (() => {
     });
 
     // ----- keys -----
-    canvas.addEventListener('keydown', (e) => {
+    // On the whole board, so the keys still work after a click on a color, a tool or the zoom bar.
+    root.addEventListener('keydown', (e) => {
       if (editing || e.target.isContentEditable || /INPUT|TEXTAREA|SELECT/.test(e.target.tagName)) return;
       const mod = e.metaKey || e.ctrlKey;
       const k = e.key;
@@ -686,8 +687,10 @@ window.ColumnBoard = (() => {
       const key = { v: 'select', s: 'sticky', n: 'sticky', t: 'text', r: 'shape', f: 'frame', l: 'arrow' }[k.toLowerCase()];
       if (key) { e.preventDefault(); pickTool(key); }
     });
-    canvas.addEventListener('keyup', (e) => { if (e.key === ' ') { space = false; root.classList.remove('can-pan'); } });
-    canvas.addEventListener('blur', () => { space = false; root.classList.remove('can-pan'); });
+    root.addEventListener('keyup', (e) => { if (e.key === ' ') { space = false; root.classList.remove('can-pan'); } });
+    root.addEventListener('focusout', (e) => { if (!root.contains(e.relatedTarget)) { space = false; root.classList.remove('can-pan'); } });
+    // The board's own buttons don't take the focus from it (a color button is redrawn the moment it's clicked).
+    for (const bar of [selbar, toolbar, zoombar]) bar.addEventListener('mousedown', (e) => { if (!editing) e.preventDefault(); });
 
     // ----- start -----
     const narrow = () => root.classList.toggle('narrow', root.offsetWidth < 640);

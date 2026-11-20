@@ -66,6 +66,7 @@ try {
   await A.tap(`document.querySelector('.wb-tpl[data-tpl=workflow]')`);
   ok(await A.until(`document.querySelectorAll('#wbview .wb-item').length === 8 && document.querySelectorAll('#wbview g.wb-link').length === 4`), 'Workflow map opens with its steps and arrows');
   ok(await A.ev(`document.querySelector('.wb-name').value === 'Workflow map' && !!document.querySelector('#wbview .wb-tools [data-tool=sticky]')`), 'the board has its name and the tools');
+  ok(!(await A.ev(`document.querySelector('.wb-bar').textContent`)).includes('null'), 'its top bar has no stray “null” when nobody else is here');
   const boardId = (await get('/boards', ada.token)).boards[0].id;
 
   // A sticky: S, then click where it goes, then write.
@@ -116,6 +117,11 @@ try {
   await A.tap(sticky);
   await A.tap(`document.querySelector('.wb-selbar .wb-sw.c-blue')`);
   ok(await Bn.until(`${sticky}.classList.contains('c-blue')`), 'Ada makes it blue; Ben sees it');
+  // Keys still work after clicking a color (focus was on the color button).
+  await A.key('z', 'KeyZ', META, '');
+  ok(await Bn.until(`!${sticky}.classList.contains('c-blue')`), '⌘Z right after picking a color undoes it');
+  await A.key('z', 'KeyZ', META | 8, '');
+  ok(await Bn.until(`${sticky}.classList.contains('c-blue')`), 'and redo brings it back');
 
   // A card for a real task.
   await A.tap(`document.querySelector('.wb-tool[data-tool=card]')`);

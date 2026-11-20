@@ -13200,14 +13200,14 @@
       ...(mine || amAdmin() ? [{ label: '🗑 Delete board', danger: true, run: () => wbDelete() }] : []),
       { label: 'Keys: S sticky · T text · R shape · F frame · L arrow · Space+drag to move around · ⇧1 fit', run: () => {} },
     ]);
-    x.bar.replaceChildren(
+    x.bar.replaceChildren(...[
       h('button', { class: 'icon-btn wb-back', 'aria-label': 'All boards', title: 'All boards', html: I.back || '‹', onclick: () => openWhiteboards() }),
       name,
       h('span', { class: 'wb-who', title: c ? 'Seen by whoever sees the campaign' : b.private ? 'Only you see it' : 'Everyone on the team sees it' }, who),
       h('span', { style: 'flex:1' }),
       people.length ? h('span', { class: 'wb-here', title: 'Here now' }, people.slice(0, 5).map((p) => h('span', { class: 'wb-face', title: p.name, style: `--h:${hueOf(p.memberId)}` }, (p.name || '?').slice(0, 1).toUpperCase())), people.length > 5 ? h('small', {}, `+${people.length - 5}`) : null) : null,
       h('button', { class: 'icon-btn wb-more', 'aria-label': 'More', title: 'More', onclick: menu }, '⋯'),
-      h('button', { class: 'icon-btn', 'aria-label': 'Close the board', html: I.close, onclick: wbClose }));
+      h('button', { class: 'icon-btn', 'aria-label': 'Close the board', html: I.close, onclick: wbClose })].filter(Boolean)); // nobody else here: no faces (replaceChildren would write null)
   }
   async function wbPrivate(on) {
     const b = WB.page?.b;
