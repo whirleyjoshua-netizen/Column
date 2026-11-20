@@ -126,7 +126,7 @@ window.ColumnBoard = (() => {
       if (!r.width) return;
       if (!bb) return setView({ x: r.width / 2, y: r.height / 2, z: 1 });
       // Room for the tools on the left (along the bottom on a phone) and the zoom bar.
-      const narrowNow = r.width < 640, padL = narrowNow ? 24 : 84, padR = 40, padT = 50, padB = narrowNow ? 150 : 80;
+      const narrowNow = r.width < 640, padL = narrowNow ? 24 : 108, padR = 40, padT = 50, padB = narrowNow ? 150 : 80;
       const z = Math.max(MIN_Z, Math.min(1.5, Math.min((r.width - padL - padR) / bb.w, (r.height - padT - padB) / bb.h)));
       setView({ x: padL + (r.width - padL - padR) / 2 - (bb.x + bb.w / 2) * z, y: padT + (r.height - padT - padB) / 2 - (bb.y + bb.h / 2) * z, z });
     }
@@ -174,7 +174,11 @@ window.ColumnBoard = (() => {
     function edge(a, b) {
       const cx = a.x + a.w / 2, cy = a.y + a.h / 2, dx = b.x + b.w / 2 - cx, dy = b.y + b.h / 2 - cy;
       if (!dx && !dy) return { x: cx, y: cy };
-      const s = Math.min(Math.abs((a.w / 2) / (dx || 1e-9)), Math.abs((a.h / 2) / (dy || 1e-9)));
+      const rw = a.w / 2, rh = a.h / 2;
+      // Where the line leaves the thing's own outline: an oval's curve, a diamond's sides, else the box.
+      const s = a.kind === 'shape' && a.shape === 'ellipse' ? 1 / Math.hypot(dx / rw, dy / rh)
+        : a.kind === 'shape' && a.shape === 'diamond' ? 1 / (Math.abs(dx) / rw + Math.abs(dy) / rh)
+        : Math.min(Math.abs(rw / (dx || 1e-9)), Math.abs(rh / (dy || 1e-9)));
       return { x: cx + dx * Math.min(1, s), y: cy + dy * Math.min(1, s) };
     }
     let linkFrame = 0;
@@ -408,18 +412,24 @@ window.ColumnBoard = (() => {
       if (['sticky', 'text', 'shape', 'frame'].includes(kind)) setTimeout(() => startEdit(id, true));
       return id;
     }
+    // Cards and pictures go in the middle of the view, a step down and right of any already there, so they don't stack.
+    function freeSpot(at) {
+      let p = { ...at };
+      for (let i = 0; i < 20 && [...items.values()].some((x) => Math.abs(x.x + x.w / 2 - p.x) < 12 && Math.abs(x.y + x.h / 2 - p.y) < 12); i++) p = { x: p.x + 28, y: p.y + 28 };
+      return p;
+    }
     async function addFile(file) {
       try {
         const got = file ? await o.upload(file) : await o.pickFile();
         if (!got) return;
         const f = o.fileInfo(got);
-        add('file', middle(), { fileId: got, ...(f && !f.image ? { h: 90 } : {}) });
+        add('file', freeSpot(middle()), { fileId: got, ...(f && !f.image ? { h: 90 } : {}) });
       } catch (e) { if (e) o.toast(e.message || String(e)); }
     }
     async function addCard() {
       try {
         const ref = await o.pickCard();
-        if (ref) add('card', middle(), { ref });
+        if (ref) add('card', freeSpot(middle()), { ref });
       } catch (e) { if (e) o.toast(e.message || String(e)); }
     }
     // The frame a thing sits in: the top one under its middle.
@@ -444,6 +454,8 @@ window.ColumnBoard = (() => {
       writable(t);
       n.classList.add('editing');
       t.focus();
+      // A click that's still finishing can take the focus back; try once more so typing goes into it, not to shortcuts.
+      setTimeout(() => { if (editing === id && document.activeElement !== t) t.focus(); }, 60);
       const r = document.createRange();
       r.selectNodeContents(t);
       if (!fresh) r.collapse(false);
@@ -469,6 +481,8 @@ window.ColumnBoard = (() => {
       if (t) t.removeAttribute('contenteditable');
       n?.classList.remove('editing');
       const words = (t?.innerText || '').replace(/\n$/, '').slice(0, 4000);
+      // A text box left empty is taken away again, not left behind invisible.
+      if (x && x.kind === 'text' && !words.trim() && !(x.text || '').trim()) { change([{ op: 'del', item: id }], { wait: 0 }); select([]); placeSelbar(); return; }
       if (x && words !== (x.text || '')) change([{ op: 'put', item: { id, text: words } }], { wait: 0 });
       else if (x) draw(id);
       placeSelbar();
@@ -616,7 +630,14 @@ window.ColumnBoard = (() => {
         x.w = d.w; x.h = d.h;
         change([{ op: 'put', item: { id: d.id, ...now } }], { wait: 0 });
       } else if (d.kind === 'box') box.style.display = 'none';
-      else if (d.kind === 'place') add(tool, d.at);
+      else if (d.kind === 'place') {
+        // A frame dragged out takes the size of the drag; a click drops one of the usual size.
+        const w = toWorld(e.clientX, e.clientY);
+        if (tool === 'frame' && Math.abs(e.clientX - d.sx) > 20 && Math.abs(e.clientY - d.sy) > 20) {
+          const x0 = Math.min(d.at.x, w.x), y0 = Math.min(d.at.y, w.y), fw = Math.round(Math.abs(w.x - d.at.x)), fh = Math.round(Math.abs(w.y - d.at.y));
+          add('frame', { x: x0 + fw / 2, y: y0 + fh / 2 }, { x: Math.round(x0), y: Math.round(y0), w: Math.max(80, fw), h: Math.max(60, fh) });
+        } else add(tool, d.at);
+      }
       else if (d.kind === 'link') {
         temp.style.display = 'none';
         const under = document.elementFromPoint(e.clientX, e.clientY)?.closest?.('.wb-item');

@@ -269,6 +269,11 @@ try {
   // ----- Plan my business (2026-11-14): money tools, and a plan where every change waits for a yes -----
   {
     await ada('PATCH', '/agents/chief', { level: 'execute' });
+    // This month's money, business and personal (live check 2026-11-20: an agent called the business part the total).
+    const mday = (await ada('GET', '/state')).body.today || new Date().toISOString().slice(0, 10);
+    await ada('POST', '/money', { kind: 'out', amount: 45, day: mday, category: 'Gas', scope: 'business' });
+    await ada('POST', '/money', { kind: 'out', amount: 62.4, day: mday, category: 'Home Depot', scope: 'personal' });
+    const askedBefore = asked.length;
     r = await ada('POST', '/agents/runs', { agent: 'chief', ask: 'money plan for the business', plan: true });
     ok(r.status === 200 && r.body.asPlan === true, 'a plan run is marked as a plan');
     let x;
@@ -276,6 +281,7 @@ try {
     const steps = x.parts.flatMap((p) => p.steps);
     const read = steps.find((st) => st.tool === 'look_at_money');
     ok(read && read.status === 'done', 'it can look at budgets and bills');
+    ok(asked.slice(askedBefore).map((q) => q.msgs.replace(/\\"/g, '"')).some((m) => m.includes('"thisMonth"') && m.includes('"total":{"in":0,"out":107.4}') && m.includes('"business":{"in":0,"out":45}')), 'and this month’s money in and out: business, personal and the total of both');
     ok(asked.some((q) => q.msgs.includes('plan for the person to review') && q.msgs.includes('Company HQ is empty')), 'a plan tells the agents where Company HQ is, and that no HQ section means it is empty (live, 2026-11-15, they went looking for it in docs)');
     const bud = steps.find((st) => st.tool === 'set_budget'), bill = steps.find((st) => st.tool === 'add_bill');
     ok(x.status === 'awaiting' && bud?.status === 'proposed' && bill?.status === 'proposed', 'even at execute, a plan only proposes: the budget and the bill wait for a yes');

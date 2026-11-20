@@ -1458,6 +1458,9 @@ body.wide .home { max-width: none; padding: 22px 32px 40px; }
 .hcm-bar i { position: absolute; inset: 0 auto 0 0; border-radius: 99px; background: var(--c); }
 .need-row.chat .need-ic, .need-row.files .need-ic { background: var(--accent-soft); color: var(--accent); }
 @media (max-width: 860px) { .home-grid { grid-template-columns: 1fr; } .home-camp { grid-template-columns: minmax(0, 1fr) auto; } .hcm-bar, .hcm-pct { display: none; } }
+/* The card can be narrow at any screen width (Sidekick docked beside Home): it drops the bar when it has no room (live check 2026-11-20). */
+div:has(> .home-camp) { container-type: inline-size; }
+@container (max-width: 420px) { .home-camp { grid-template-columns: minmax(0, 1fr) auto; } .hcm-bar, .hcm-pct { display: none; } }
 /* Automations */
 .auto-list { display: flex; flex-direction: column; gap: 6px; margin: 10px 0 14px; }
 .auto-row { display: flex; align-items: center; gap: 8px; border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; background: var(--card); }
@@ -2049,6 +2052,8 @@ body.platform-darwin .pj-head, body.platform-darwin .pj-top { padding-left: 80px
 .pj-views { display: flex; align-items: center; gap: 2px; flex: 1; min-width: 0; overflow-x: auto; }
 .pj-views button { border: 0; background: none; padding: 5px 9px; border-radius: 6px; color: var(--muted); white-space: nowrap; font-size: 13px; }
 .pj-views button.on { color: var(--text); box-shadow: inset 0 -2px 0 var(--accent); border-radius: 0; }
+/* On a phone or docked column the view tabs get a row of their own, so the "+ New job" button can't sit over them (live check 2026-11-20). */
+body:not(.wide) .pj-bar .pj-views { flex: 1 1 100%; }
 .pj-search { width: 200px; max-width: 40vw; background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; }
 .pj-main { flex: 1; min-height: 0; display: flex; position: relative; }
 .pj-body { flex: 1; min-width: 0; overflow: auto; padding: 0 12px 30px; }
@@ -2769,6 +2774,12 @@ button.hq-entry:hover { background: var(--card-hover); }
 .ag-email-h { display: flex; flex-direction: column; }
 .ag-email-h small { color: var(--muted); font-size: 12px; }
 .ag-report { white-space: pre-wrap; font-size: 14px; line-height: 1.5; margin-top: 8px; padding: 10px 12px; border-radius: 10px; background: var(--panel); border: 1px solid var(--line); }
+/* Agents write Markdown: the report is drawn as headings, lists and bold (renderText), not pre-wrapped text (live check 2026-11-20). */
+.ag-report.md { white-space: normal; }
+.ag-report.md p, .ag-report.md ul, .ag-report.md ol { margin: 0 0 6px; }
+.ag-report.md h2, .ag-report.md h3, .ag-report.md h4, .ag-report.md h5 { font-size: 14.5px; margin: 8px 0 4px; }
+.ag-report.md ul, .ag-report.md ol { padding-left: 20px; }
+.ag-report.md > div > :last-child { margin-bottom: 0; }
 .ag-q { margin: 12px 0; padding: 10px 12px; border-radius: 10px; background: var(--accent-soft); }
 @media (max-width: 520px) {
   .ag-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); }
@@ -3983,7 +3994,8 @@ button.sh-cell:hover { border-color: var(--accent); }
 body:not(.wide) .gear-btn { display: inline-flex; }
 body:not(.wide).not-home .home-btn { display: inline-flex; }
 body:not(.wide) #skBtn { display: none; }
-body:not(.wide) #topTabs { display: none !important; }
+body:not(.wide) #topTabs:not(.has-pins) { display: none !important; }
+/* Pins show across the top on a phone too (live check 2026-11-20: the phone shell hid them, though the pins sheet promises them there). */
 body:not(.wide) { --dock-h: calc(78px + env(safe-area-inset-bottom)); }
 body:not(.wide).typing { --dock-h: 0px; }
 body:not(.wide) .main { padding-bottom: var(--dock-h); }

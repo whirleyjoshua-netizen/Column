@@ -4417,7 +4417,7 @@ function testCtx(x, auth) {
     if (ctx.campaign?.id && !seesCampaign(ctx.campaign.id, auth.memberId)) continue;
     return { ctx, about: `The last time: ${autoAbout(ctx) || FL.EVENT[x.trigger.kind].label.toLowerCase()} (${new Date(e.at).toISOString().slice(11, 16)} UTC)`, sample: false };
   }
-  return { ctx: sampleCtx(x.trigger, auth), about: 'A made-up example (nothing like this has happened since Kloomie last started)', sample: true };
+  return { ctx: sampleCtx(x.trigger, auth), about: 'A made-up example with sample words (there’s no recent real one to test with)', sample: true };
 }
 function autoDescribe(x, a, ctx, ws) {
   const fill = (v) => clipText(autoFill(v, ctx, ws.id), 140);
@@ -11448,6 +11448,15 @@ async function api(req, res, url) {
       // The editors with it open apply the same changes; the cards just show the new text.
       broadcast(ws.id, { type: 'doc', id: it.id, item: { id: it.id }, v: it.v, ops, order, title, sid: cleanText(body.sid, 40) });
       broadcast(ws.id, { type: 'item:update', item: publicItem(it) });
+      // Renamed: the docs it's a page inside show its new name in their preview (live check 2026-11-20: "[Page: Untitled]").
+      if (title !== undefined && title !== now.title) {
+        for (const par of Object.values(db.items)) {
+          if (par.wsId !== ws.id || par.type !== 'text' || !par.blocks?.some((b) => b.type === 'page' && b.docId === it.id)) continue;
+          par.text = docText(par.title, par.blocks);
+          broadcast(ws.id, { type: 'item:update', item: publicItem(par) });
+        }
+        save();
+      }
       return send(res, 200, { v: it.v, editedAt: it.editedAt });
     }
     if (c === 'react' && m === 'POST' && it.type === 'message') {

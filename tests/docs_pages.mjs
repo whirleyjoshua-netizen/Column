@@ -49,6 +49,9 @@ try {
   await rico('DELETE', `/items/${r.body.id}`);
   await rico('DELETE', `/trash/${r.body.id}`);
   ok((await rico('GET', '/state')).body.items.find((x) => x.id === A.id).text.includes('[Page: Safety]'), 'the doc’s text names the page inside (search and Sidekick read it)');
+  await rico('PATCH', `/items/${Bp.id}/doc`, { ops: [], title: 'Safety rules', v: (await rico('GET', `/items/${Bp.id}/doc`)).body.v });
+  ok((await rico('GET', '/state')).body.items.find((x) => x.id === A.id).text.includes('[Page: Safety rules]'), 'renamed, the page’s new name shows in the doc’s text too (live check 2026-11-20)');
+  await rico('PATCH', `/items/${Bp.id}/doc`, { ops: [], title: 'Safety', v: (await rico('GET', `/items/${Bp.id}/doc`)).body.v });
 
   // Pages go 8 deep at most.
   let top = Cp, made = 3;

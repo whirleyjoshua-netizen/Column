@@ -40,6 +40,8 @@ try {
   ok(r.status === 200 && r.body.id === null && r.body.off === 'new' && r.body.handle === 'maria-b-lopez-b' && r.body.email === `maria${t}@t.test` && r.body.company === 'Card ' + t, 'no card yet: a draft from the account (name, email, team) with a free address');
   r = await maria('PUT', '/card', { on: true, name: 'Maria <b>Lopez</b>', handle: 'maria' });
   ok(r.status === 403 && /Confirm your email/.test(r.body.error), 'a card can’t go on before the email is confirmed');
+  r = await maria('GET', '/card');
+  ok(r.body.id && r.body.on === false && r.body.handle === 'maria' && /Lopez/.test(r.body.name), 'but what she typed is kept, off, so it isn’t lost (live check 2026-11-20)');
   ok((await confirm(maria, `maria${t}@t.test`)) === 200, 'Maria confirms her email');
   r = await maria('PUT', '/card', { on: true, handle: 'maria', links: [{ label: 'Bad', url: 'javascript:alert(1)' }] });
   ok(r.status === 400, 'a link must be a web address, email or phone link (javascript: refused)');
@@ -47,7 +49,7 @@ try {
   ok(r.status === 409 && /reserved/.test(r.body.error), 'reserved addresses are refused');
   r = await maria('PUT', '/card', { on: true, handle: 'maria', name: 'Maria <b>Lopez</b>', title: 'Owner', company: 'Desert Tint', phone: '(602) 555-0142', email: 'maria@deserttint.test', about: 'Window tint for cars\nand homes.',
     links: [{ label: 'Book a time', url: 'cal.com/maria' }, { label: 'Reviews', url: 'https://g.page/desert-tint' }, { url: 'mailto:quotes@deserttint.test' }] });
-  ok(r.status === 201 && r.body.url === B + '/c/maria' && r.body.links.length === 3 && r.body.links[0].url === 'https://cal.com/maria' && r.body.links[2].label === 'quotes@deserttint.test' && r.body.off === null && r.body.qr.startsWith('data:image/svg+xml;base64,'), 'saved and on: its address, links made whole, a QR code for the owner');
+  ok(r.status === 200 && r.body.url === B + '/c/maria' && r.body.links.length === 3 && r.body.links[0].url === 'https://cal.com/maria' && r.body.links[2].label === 'quotes@deserttint.test' && r.body.off === null && r.body.qr.startsWith('data:image/svg+xml;base64,'), 'saved and on: its address, links made whole, a QR code for the owner');
   ok((await sam('PUT', '/card', { handle: 'maria' })).status === 409, 'someone else can’t take the same address');
   ok((await sam('GET', '/card')).body.handle === 'sam-reed', 'each person has their own card');
 

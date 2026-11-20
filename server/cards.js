@@ -111,11 +111,14 @@ export function cardsModule({ db, save, readJson, send, rid, escHtml, brandOf, l
         const next = c ? { ...c, links: [...c.links], taps: [...c.taps] } : { ...draft(ws, auth.memberId, user), id: rid(), wsId: ws.id, memberId: auth.memberId, createdAt: Date.now() };
         delete next.url;
         try { applyCard(next, b); } catch (e) { return send(res, e.status || 400, { error: e.message }); }
-        if (next.on && !confirmed(ws.id, auth.memberId)) return send(res, 403, { error: 'Confirm your email first (Settings → Profile & sign-in), then turn your card on.' });
+        // Not confirmed yet: what they typed is still kept (off), so it isn't lost (live check 2026-11-20).
+        const refuse = next.on && !confirmed(ws.id, auth.memberId);
+        if (refuse) next.on = false;
         // Taken between the draft and the save.
         if (fresh && Object.values(db.cards).some((x) => x.handle === next.handle)) next.handle = freeHandle(next.handle);
         db.cards[next.id] = next;
         save();
+        if (refuse) return send(res, 403, { error: 'Confirm your email first (Settings → Profile & sign-in), then turn your card on. What you typed is saved.', card: forOwner(next) });
         return send(res, fresh ? 201 : 200, forOwner(next));
       }
       if (m === 'DELETE') {

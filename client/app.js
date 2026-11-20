@@ -195,7 +195,7 @@
     setTimeout(() => {
       btn.classList.remove('confirm');
       if (prev != null) btn.textContent = prev;
-    }, 2500);
+    }, 5000); // 5s (live check 2026-11-20: at 2.5s a second click that came a little late silently started over)
   }
 
   // ---------- api ----------
@@ -747,6 +747,8 @@
       if (jobs.length) { for (const id of jobs) PR.costing?.delete(id); if (PR.panel && jobs.includes(PR.panel)) loadInvoices({ id: PR.panel }, true).then(() => renderProjects()); }
       S.money = (S.money || []).filter((x) => x.id !== (msg.money?.id || msg.id));
       if (msg.money) S.money.push(msg.money);
+      // Finance → Reports is worked out on the server: ask again (live check 2026-11-20: it stayed stale until reload).
+      FIN.reportKey = null;
       renderDay();
       renderTool();
     } else if (msg.type === 'budget' || msg.type === 'budget:remove') {
@@ -2466,6 +2468,8 @@
   }
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
+      // An open menu closes by itself first, not the page under it (live check 2026-11-20: Esc on a member's menu closed Settings).
+      if (!$('#menu').classList.contains('hidden')) return hideMenu();
       if (!$('#sheet').classList.contains('hidden')) closeSheet();
       else if (pdfStop()) return;
       else if (!$('#preview').classList.contains('hidden') && !VIEW_ID) { if (!wordGuard()) { $('#preview').classList.add('hidden'); $('#preview').innerHTML = ''; } }
@@ -4021,10 +4025,12 @@
   const presetWho = (x) => (x.assigneeId ? memberName(x.assigneeId) : x.roleId && roleById(x.roleId) ? roleById(x.roleId).name : '');
   const REP_L = { daily: 'every day', weekdays: 'weekdays', weekly: 'every week', monthly: 'every month' };
   const presetSub = (x) => x.kind === 'visit' ? [x.visit, x.flex ? 'any time' : x.start != null ? fmtTime(x.start) : '', `${x.minutes || 60} min`, x.memberIds?.length ? x.memberIds.map((id) => memberName(id)).join(', ') : ''].filter(Boolean).join(' · ') : x.kind === 'block' ? [x.start != null ? fmtTime(x.start) : 'any time', x.start != null ? `${x.minutes || 60} min` : '', REP_L[x.repeat] || ''].filter(Boolean).join(' · ') : x.kind === 'bundle' ? plural(x.steps.length, 'task') : [presetWho(x), x.dueIn != null ? (x.dueIn ? `due in ${plural(x.dueIn, 'day')}` : 'due that day') : ''].filter(Boolean).join(' · ');
-  async function usePreset(x, opts = {}) {
+  async function usePreset(x, opts = {}, at = null) {
     try {
       const r = await api('POST', `/task-presets/${x.id}/use`, opts);
       for (const t of r.tasks) upsertTask(t);
+      if (at != null && r.tasks[0] && opts.date) await scheduleTask(r.tasks[0], opts.date, at);
+      if (at != null && r.entries?.[0] && r.entries[0].start == null) upsertEntry(await api('PATCH', '/entries/' + r.entries[0].id, { start: at, end: Math.min(at + 60, 1440) }));
       // A calendar block goes on your own calendar.
       if (r.entries?.length) { for (const e of r.entries) upsertEntry(e); toast(`Added “${shortText(r.entries[0].text, 50)}” to ${dayName(r.entries[0].date)}${r.entries[0].repeat ? ', repeating' : ''}`); return renderDay(); }
       toast(r.tasks.length === 1 ? `Added “${shortText(r.tasks[0].text, 50)}”${r.tasks[0].due ? ' for ' + dayName(r.tasks[0].due) : ''}` : `Added ${r.tasks.length} tasks from “${shortText(x.name, 40)}”`);
@@ -4040,7 +4046,12 @@
     const col = ev.target.closest?.('.wk-col[data-date]'), person = ev.target.closest?.('.wl-row[data-member]');
     if (col) return usePreset(x, { date: col.dataset.date });
     if (person && x.kind !== 'block') return usePreset(x, { assigneeId: person.dataset.member });
-    if (D.sub === 'schedule' && !monthOn() && !weekOn()) return usePreset(x, { date: D.date });
+    if (D.sub === 'schedule' && !monthOn() && !weekOn()) {
+      // Dropped on an hour of the day's timeline: the task gets that time too, as a dragged task does (live check 2026-11-20).
+      const tl = D.scroll.querySelector('.timeline'), r = tl?.getBoundingClientRect();
+      const at = r && ev.clientY >= r.top && ev.clientY <= r.bottom && ev.clientX >= r.left && ev.clientX <= r.right ? clamp(snap(ev.clientY - r.top) + tl._h0 * 60, 0, 1425) : null;
+      return usePreset(x, { date: D.date }, at);
+    }
     usePreset(x, {});
   }
   function renderShelf() {
@@ -6146,7 +6157,7 @@
         if (a.kind === 'notify') {
           a.to ||= [];
           const pick = (v, label) => { const cb = h('input', { type: 'checkbox', checked: a.to.includes(v) }); cb.addEventListener('change', () => (a.to = cb.checked ? [...a.to, v] : a.to.filter((y) => y !== v))); return h('label', { class: 'pick' }, cb, label); };
-          f.push(h('label', {}, 'Note', text('{contact} is a new customer')), h('div', { class: 'picks' }, pick('owners', 'Owners'), pick('admins', 'Owners and admins'), pick('who', 'Whoever set it off'), ['task.created', 'task.opened', 'task.done', 'task.reopened', 'step.done'].includes(dr.trigger.kind) ? pick('doers', 'Whoever the task is for') : null, people.map((m) => pick(m.id, m.name))), h('small', { class: 'hint' }, 'It lands on their Home, with a pop-up if they’re on.'));
+          f.push(h('label', {}, 'Note', text((() => { const w = AUTO_WORDS[t.kind] || []; return w.includes('contact') ? '{contact} is a new customer' : w.length ? `Heads up: {${w[0]}}${w[1] ? ` · {${w[1]}}` : ''}` : 'What to tell them'; })())), h('div', { class: 'picks' }, pick('owners', 'Owners'), pick('admins', 'Owners and admins'), pick('who', 'Whoever set it off'), ['task.created', 'task.opened', 'task.done', 'task.reopened', 'step.done'].includes(dr.trigger.kind) ? pick('doers', 'Whoever the task is for') : null, people.map((m) => pick(m.id, m.name))), h('small', { class: 'hint' }, 'It lands on their Home, with a pop-up if they’re on.'));
         }
         if (a.kind === 'contact') {
           const st = h('input', { value: a.stage ? stageLabel(a.stage) : '', placeholder: 'Customer', list: 'autoStages' });
@@ -11193,13 +11204,24 @@
   const calState = (p, mail) => (calConn(p, mail) ? 'on' : S.cals && !S.cals.providers?.[p] ? 'na' : 'off');
   const pzChannel = (word) => (S.postiz?.channels || []).some((c) => `${c.kindName || ''} ${c.kind || ''}`.toLowerCase().includes(word));
   const postizApp = (id, name, logo, word, mono) => ({ id, name, cat: 'marketing', logo, mono, live: true, admin: true, blurb: 'Post through Postiz', does: [`Drafts from Sidekick and the Marketing Manager go to your ${name} once you approve`, 'Posting runs through your own Postiz account'], sec: () => [postizSection()], state: () => (S.postiz?.connected && pzChannel(word) ? 'on' : 'off') });
-  const calApp = (id, name, logo, p, mail, blurb, does, mono) => ({ id, name, cat: 'comms', logo, mono, live: true, blurb, does, sec: () => [calendarSection()], state: () => calState(p, mail) });
+  // Sending email from Gmail or Outlook is the same sign-in with "send email" allowed; its button sits on those apps'
+  // pages too, not only in the Email tool (live check 2026-11-20: the Gmail page showed only the calendar card).
+  const mailConnectSection = (p, label) => {
+    const on = calConn(p, true);
+    return h('section', { class: 'mail-conn-sec' }, h('h3', {}, 'Sending email'),
+      h('p', { class: 'day-hint' }, on ? `Campaign email goes out from your ${label} address. Write one in the Email tool.` : `Connect ${label} and allow “Send email on your behalf”, and campaign email goes out from your own address.`),
+      h('div', { class: 'btns' }, on ? (toolOn('email') ? h('button', { class: 'btn', onclick: () => openTool('email') }, 'Open the Email tool') : null)
+        : h('button', { class: 'btn primary-btn', onclick: async () => {
+          try { const { url } = await api('POST', '/calendars/connect', { provider: p, tz: myTz(), mail: true }); window.open(url, '_blank'); toast('Finish signing in in your browser. This updates when it’s done.'); } catch (e) { toast(e.message); }
+        } }, `Connect ${label} for email`)));
+  };
+  const calApp = (id, name, logo, p, mail, blurb, does, mono, mailLabel) => ({ id, name, cat: 'comms', logo, mono, live: true, blurb, does, sec: () => [...(mailLabel ? [mailConnectSection(p, mailLabel)] : []), calendarSection()], state: () => calState(p, mail) });
   const cloudApp = (id, name, logo, on, mono) => ({ id, name, cat: 'storage', logo, mono, live: true, blurb: `Add files from ${name} to any stack`, does: [`In any stack, + → From ${name}…`, `Kloomie copies the file in. It never changes anything in your ${name}.`], sec: () => [h('section', {}, h('h3', {}, `Using ${name}`), h('p', {}, on() ? `It’s ready. In any stack or feed, tap + and choose From ${name}…` : `${name} isn’t set up on this server yet.`))], state: () => (on() ? 'ready' : 'na') });
   const soon = (cat, list) => list.map(([id, name, logo, mono]) => ({ id, name, cat, logo, mono, live: false, blurb: APP_WOULD[cat][0] }));
   const APP_LIST = () => [
     calApp('google-calendar', 'Google Calendar', 'googlecalendar', 'google', false, 'Your Google Calendar in your Day', ['Your meetings show up in your Day', 'Blocks you add in Kloomie go to your calendar, and changes follow both ways']),
-    calApp('gmail', 'Gmail', 'gmail', 'google', true, 'Send campaign email from your Gmail', ['Campaign emails go out from your own Gmail address', 'Connect Google and allow “Send email on your behalf”']),
-    calApp('outlook', 'Outlook & Microsoft 365', null, 'microsoft', false, 'Your Outlook calendar and email', ['Your meetings show up in your Day, both ways', 'Campaign emails can go out from your Outlook address'], 'O'),
+    calApp('gmail', 'Gmail', 'gmail', 'google', true, 'Send campaign email from your Gmail', ['Campaign emails go out from your own Gmail address', 'Connect Google and allow “Send email on your behalf”'], undefined, 'Gmail'),
+    calApp('outlook', 'Outlook & Microsoft 365', null, 'microsoft', false, 'Your Outlook calendar and email', ['Your meetings show up in your Day, both ways', 'Campaign emails can go out from your Outlook address'], 'O', 'Outlook'),
     calApp('apple-calendar', 'Apple Calendar', 'apple', 'apple', false, 'iCloud calendars in your Day', ['Your iCloud calendars show up in your Day', 'Or put your Day in your iPhone’s calendar with a link']),
     { id: 'twilio', name: 'Twilio', cat: 'comms', mono: 'T', live: true, admin: true, blurb: 'Text customers from your own number', does: ['On my way, visit reminders and review requests by text', 'Replies come back onto the contact; STOP is respected'], sec: () => [textingSection()], state: () => (S.texting?.connected ? 'on' : 'off') },
     { id: 'teams', name: 'Microsoft Teams', cat: 'comms', mono: 'T', live: true, admin: true, blurb: 'Post to a Teams channel', does: ['Automations post to your Teams channel: new leads, jobs won, invoices paid', 'Your AI team can draft a post; it waits for your yes', 'No Microsoft app to install: paste one address from Teams'], sec: () => [teamsSection()], state: () => (S.teams?.connected ? (S.teams.needsReconnect || S.teams.error ? 'error' : 'on') : 'off') },
@@ -11529,7 +11551,7 @@
     const tabs = [['apps', 'Apps'], ['tools', 'Tools'], ['dev', 'Developers']];
     root.replaceChildren(h('div', { class: 'apps-wrap' },
       h('header', { class: 'apps-head' }, h('div', {}, h('h1', {}, 'Apps & Integrations'), h('p', {}, 'Connect the apps you already use, and pick the tools your team works in.')), APPS.tab === 'apps' && !open ? q : null),
-      h('div', { class: 'apps-tabs', role: 'tablist' }, tabs.map(([k, label]) => h('button', { class: APPS.tab === k ? 'on' : null, role: 'tab', 'aria-selected': String(APPS.tab === k), onclick: () => { APPS.tab = k; APPS.open = null; store.set('appsTab', k); renderApps(true); root.scrollTop = 0; } }, label))),
+      h('div', { class: 'apps-tabs', role: 'tablist' }, tabs.map(([k, label]) => h('button', { class: APPS.tab === k ? 'on' : null, role: 'tab', 'aria-selected': String(APPS.tab === k), onclick: () => { APPS.tab = k; APPS.open = null; store.set('appsTab', k); if (k === 'dev') { INT.keys = null; INT.hooks = null; } renderApps(true); root.scrollTop = 0; } }, label))),
       ...[].concat(APPS.tab === 'tools' ? toolsTiles() : APPS.tab === 'dev' ? devPane() : open ? appDetail(open) : appsDirectory())));
     root.scrollTop = keep;
   }
@@ -12664,7 +12686,7 @@
       ...x.parts.filter((p) => p.status !== 'planned' || agRunning(x)).map((p) => h('section', { class: 'ag-part' },
         h('div', { class: 'ag-part-h' }, h('span', { class: 'ag-ic sm' }, d.agents[p.agent].icon), h('b', {}, p.reply ? 'You asked: ' + p.ask.slice(0, 120) : d.agents[p.agent].name), p.from ? h('small', {}, 'from the ' + d.agents[p.from].name) : null, p.status === 'planned' ? h('small', {}, 'up next') : null),
         p.steps.length ? h('div', { class: 'ag-steps' }, p.steps.map((s) => agStepRow(x, s))) : null,
-        p.report ? h('div', { class: 'ag-report' }, p.report) : null,
+        p.report ? h('div', { class: 'ag-report md' }, renderText(p.report)) : null,
         p.error ? h('p', { class: 'ag-err' }, p.error) : null)),
       x.question ? h('div', { class: 'ag-q' }, h('b', {}, '❓ ' + x.question)) : null,
       x.error && !x.parts.some((p) => p.error) ? h('p', { class: 'ag-err' }, x.error) : null,
@@ -12744,7 +12766,7 @@
         h('button', { class: 'btn small primary-btn', onclick: () => msgTemplateSheet(null, { kind: ['email', 'text', 'reply', 'post'].includes(TPL.kind) ? TPL.kind : 'email' }) }, '+ New template'),
         h('button', { class: 'btn small', onclick: () => file.click() }, 'Import…'), file),
       h('div', { class: 'seg seg-sm tpl-kinds', role: 'tablist' }, TPL_KINDS.map(([k, l]) => h('button', { class: TPL.kind === k ? 'on' : null, 'data-kind': k, onclick: () => { TPL.kind = k; store.set('tplKind', k); renderTool(true); } }, l))),
-      !['paperwork', 'tasks'].includes(TPL.kind) ? (list.length ? h('div', { class: 'tpl-grid' }, list.map(card)) : h('p', { class: 'day-hint' }, q ? 'No templates match.' : 'None yet. Make one, import one, or ask Sidekick to write some for you.')) : null,
+      !['paperwork', 'tasks'].includes(TPL.kind) ? (list.length ? h('div', { class: 'tpl-grid' }, list.map(card)) : h('p', { class: 'day-hint' }, q ? 'No templates match.' : TPL.kind === 'all' && (docs.length || forms.length) ? 'None yet for email, texts or posts (your paperwork is below). Make one, import one, or ask Sidekick to write some for you.' : 'None yet. Make one, import one, or ask Sidekick to write some for you.')) : null,
       paper && (docs.length || forms.length || TPL.kind === 'paperwork') ? h('h3', { class: 'tpl-h' }, 'Paperwork') : null,
       paper ? h('div', { class: 'tpl-grid' },
         docs.map((d) => h('button', { class: 'tpl-card', 'data-doc-tpl': d.id, onclick: () => useDocTemplateHere(d) }, h('span', { class: 'tpl-kind k-doc' }, 'Doc template'), h('b', {}, d.name), d.about ? h('small', {}, d.about) : null, h('span', { class: 'tpl-body' }, 'Tap to make a new doc from it'))),
@@ -12792,7 +12814,11 @@
     const sync = () => { subRow.hidden = kind.value !== 'email'; };
     kind.addEventListener('change', sync);
     sync();
-    const insert = (w) => { const at = body.selectionStart ?? body.value.length; body.value = body.value.slice(0, at) + '{' + w + '}' + body.value.slice(body.selectionEnd ?? at); body.focus(); body.setSelectionRange(at + w.length + 2, at + w.length + 2); };
+    // A chip goes into the field you were last in, Subject or Wording (live check 2026-11-20: always Wording).
+    let lastField = body;
+    subject.addEventListener('focus', () => (lastField = subject));
+    body.addEventListener('focus', () => (lastField = body));
+    const insert = (w) => { const el = lastField === subject && !subRow.hidden ? subject : body; const at = el.selectionStart ?? el.value.length; el.value = el.value.slice(0, at) + '{' + w + '}' + el.value.slice(el.selectionEnd ?? at); el.focus(); const to = at + w.length + 2; el.setSelectionRange(to, to); };
     const mayEdit = !x || x.memberId === S.me?.memberId || amAdmin();
     const del = x && mayEdit ? h('button', { class: 'btn small danger', 'data-label': '1' }, 'Delete') : null;
     del?.addEventListener('click', () => confirmClick(del, async () => { try { await api('DELETE', '/msg-templates/' + x.id); TPL.list = TPL.list.filter((y) => y.id !== x.id); closeSheet(); renderTool(true); } catch (e) { toast(e.message); } }));
@@ -13693,6 +13719,7 @@
   async function wbDelete() {
     const b = WB.page?.b;
     if (!b) return;
+    WB.goneByMe = b.id; // its board:gone news needn't tell this person again
     try { await api('DELETE', `/boards/${b.id}`); toast('Board deleted. It’s in Deleted for 30 days.'); openWhiteboards(); } catch (e) { toast(e.message); }
   }
   // What a card stands for, from what this person's app already has (so it never shows more than they can see).
@@ -13842,7 +13869,7 @@
     if (msg.type === 'board:gone') {
       if (WB.list) WB.list = WB.list.filter((b) => b.id !== msg.id);
       for (const { ed } of [...(WB.eds.get(msg.id) || [])]) if (WB.page?.ed !== ed) ed.el.replaceWith(h('p', { class: 'day-hint wb-gone' }, 'This board was deleted, or its maker made it private.'));
-      if (WB.page?.id === msg.id) { toast('This board was deleted, or made private by whoever made it.'); openWhiteboards(); }
+      if (WB.page?.id === msg.id) { if (WB.goneByMe !== msg.id) toast('This board was deleted, or made private by whoever made it.'); openWhiteboards(); }
       else wbListDraw();
       return;
     }
@@ -24144,7 +24171,7 @@
     const subject = h('input', { value: M.subject, placeholder: 'Subject', 'aria-label': 'Subject', maxlength: 200 });
     const body = h('textarea', { rows: 8, placeholder: 'Hi {first name},\n\n…', 'aria-label': 'Message' });
     body.value = M.body;
-    const footer = h('textarea', { rows: 2, placeholder: 'Premier Shade Solutions\n123 Main St, Henderson, NV 89002', 'aria-label': 'Footer' });
+    const footer = h('textarea', { rows: 2, placeholder: (S.workspace?.name || 'Your business') + '\n123 Main St, Your Town, ST 00000', 'aria-label': 'Footer' });
     footer.value = m.footer || '';
     if (!amAdmin()) footer.readOnly = true;
     const camp = h('select', { 'aria-label': 'Log it in' }, h('option', { value: '' }, 'Don’t log it'), S.campaigns.filter((c) => c.status !== 'done' && (amAdmin() || myCampaign(c))).map((c) => h('option', { value: c.id, selected: c.id === M.campaignId }, c.name)));
@@ -24160,7 +24187,7 @@
       preview.textContent = `To: ${r ? (r.name ? `${r.name} <${r.email}>` : r.email) : '—'}\nSubject: ${mergeText(subject.value, r)}\n\n${mergeText(body.value, r).trim()}${useSig.checked && SG.mine.email ? '\n\n' + SG.mine.email : ''}\n\n--\n${footer.value.trim() || '(your business and mailing address)'}\nDon’t want these emails? Unsubscribe: (their own link)`;
       sendBtn.textContent = M.armed ? `Yes, send ${to.length} now` : `Send to ${to.length}`;
       sendBtn.disabled = !to.length;
-      warn.textContent = M.armed ? `${to.length} emails go out from ${m.from}, one every few seconds. You can stop it.` : '';
+      warn.textContent = M.armed ? `${to.length === 1 ? "1 email goes" : to.length + " emails go"} out from ${m.from}, one every few seconds. You can stop it.` : '';
     };
     for (const el of [subject, body, footer]) el.addEventListener('input', () => { M.armed = false; update(); });
     camp.addEventListener('change', update);
@@ -24249,6 +24276,19 @@
           const keys = [...new Set(to.flatMap((r) => Object.keys(r.fields || {}).filter((k) => r.fields[k])))].slice(0, 6);
           return keys.length ? ` From their list: ${keys.map((k) => `{${k}}`).join(' ')}.` : '';
         })() + (lined ? ` {opener} is each person’s own line (${lined} of ${to.length}).` : '')),
+        (() => {
+          // A {word} Kloomie doesn't know comes out blank (live check 2026-11-20: {first} sent "Hi ,"): say so as they type.
+          const known = new Set(['first name', 'name', 'opener', ...to.flatMap((r) => Object.keys(r.fields || {}))]);
+          const unk = h('small', { class: 'err mail-unknown' });
+          const check = () => {
+            const bad = [...new Set([...`${subject.value}\n${body.value}`.matchAll(/\{([^{}\n]{1,40})\}/g)].map((m) => m[1]).filter((k) => !known.has(mergeKey(k))))];
+            unk.textContent = bad.length ? `${bad.map((k) => `{${k}}`).join(' ')} ${bad.length === 1 ? 'isn’t a word Kloomie fills in, so it comes out blank' : 'aren’t words Kloomie fills in, so they come out blank'}. Did you mean {first name}?` : '';
+          };
+          subject.addEventListener('input', check);
+          body.addEventListener('input', check);
+          check();
+          return unk;
+        })(),
         h('div', { class: 'mail-tools' }, openers),
         SG.mine.email ? h('label', { class: 'pick' }, useSig, 'End with my signature') : h('small', { class: 'day-hint' }, 'Add your signature in Settings → Signature to end every email with it.'),
         h('label', {}, 'Footer: your business and mailing address', footer),

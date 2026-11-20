@@ -451,7 +451,7 @@ export function agentsModule({ autoEvents = [], sees = () => true, db, save, bro
     // ----- money: budgets and bills (Finance), for planning the business -----
     look_at_money: {
       kind: 'read', label: () => 'Looked at budgets and bills',
-      description: 'The person’s monthly budgets and the bills they track in Finance (business ones too, for an owner): category and monthly limit; bill name, amount, how often and next due date. Look before proposing budgets or bills, so you don’t add one twice.',
+      description: 'The person’s monthly budgets and the bills they track in Finance (business ones too, for an owner): category and monthly limit; bill name, amount, how often and next due date; and thisMonth, the money in and out logged this month, business and personal apart and as a total (use total when asked what came in or went out). Look before proposing budgets or bills, so you don’t add one twice.',
       parameters: { type: 'object', properties: {} },
       async run(cx) {
         const owner = cx.ws.members.find((mb) => mb.id === cx.memberId)?.role === 'owner';
@@ -460,6 +460,22 @@ export function agentsModule({ autoEvents = [], sees = () => true, db, save, bro
         return {
           budgets: Object.values(db.budgets || {}).filter(mine).map((b) => ({ category: b.category, perMonth: dollars(b.limit), scope: b.scope })),
           bills: Object.values(db.bills || {}).filter((b) => mine(b) && !b.stopped).map((b) => ({ name: b.name, amount: dollars(b.amount), repeat: b.repeat, due: b.due, scope: b.scope, autopay: !!b.autopay })).slice(0, 60),
+          // What came in and went out this month, business and personal apart and together, the way Finance's
+          // Overview adds it up (live check 2026-11-20: asked for "money out this month", an agent gave the business
+          // part only as the total).
+          thisMonth: (() => {
+            const month = cx.today.slice(0, 7);
+            const sum = { business: { in: 0, out: 0 }, personal: { in: 0, out: 0 } };
+            const cats = {};
+            for (const x of Object.values(db.money || {})) {
+              if (!mine(x) || !x.day || x.day.slice(0, 7) !== month) continue;
+              const s = x.scope === 'business' ? 'business' : 'personal';
+              sum[s][x.kind === 'in' ? 'in' : 'out'] += x.amount || 0;
+              if (x.kind !== 'in') cats[x.category || 'Other'] = (cats[x.category || 'Other'] || 0) + (x.amount || 0);
+            }
+            const d = (o) => ({ in: dollars(o.in), out: dollars(o.out) });
+            return { month, business: d(sum.business), personal: d(sum.personal), total: d({ in: sum.business.in + sum.personal.in, out: sum.business.out + sum.personal.out }), outByCategory: Object.fromEntries(Object.entries(cats).sort((a, b) => b[1] - a[1]).slice(0, 20).map(([k, v]) => [k, dollars(v)])) };
+          })(),
           canUseBusiness: owner,
         };
       },
