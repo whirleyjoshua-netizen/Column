@@ -49,6 +49,7 @@ import { qrSvg } from './qr.js';
 import { agentsModule, AGENTS } from './agents.js';
 import { bookingsModule } from './bookings.js';
 import { shiftsModule } from './shifts.js';
+import { analyticsModule } from './analytics.js';
 import { postizModule } from './postiz.js';
 import { integrationsModule } from './integrations.js';
 import { makeImage } from './images.js';
@@ -584,8 +585,8 @@ const toolsOf = (ws) => Object.fromEntries(TOOL_KEYS.map((k) => [k, ws.settings?
 // for members, and whether members see the team's schedule. Off means the server refuses the tool's routes to a
 // member and keeps its data off their devices (memberMay, MEMBER_ROUTES, the /state filter); owners and admins keep
 // everything. A tool off for the whole team (toolsOf) stays off for everyone.
-const MEMBER_DEFAULTS = { contacts: false, projects: true, camps: true, docs: true, chat: true, column: true, templates: true, inventory: true, bills: true, meetings: true, map: true, vault: true, whiteboard: true, teamSchedule: false };
-const MEMBER_LABEL = { contacts: 'Contacts', projects: 'Boards', camps: 'Campaigns', docs: 'Folders & Docs', chat: 'Chat', column: 'Stacks', templates: 'Templates', inventory: 'Inventory', bills: 'Finance', meetings: 'Meeting notes', map: 'Map', vault: 'Vault', whiteboard: 'Whiteboard', teamSchedule: 'The team’s schedule' };
+const MEMBER_DEFAULTS = { contacts: false, projects: true, camps: true, docs: true, chat: true, column: true, templates: true, inventory: true, bills: true, meetings: true, map: true, vault: true, whiteboard: true, teamSchedule: false, teamKpis: false };
+const MEMBER_LABEL = { contacts: 'Contacts', projects: 'Boards', camps: 'Campaigns', docs: 'Folders & Docs', chat: 'Chat', column: 'Stacks', templates: 'Templates', inventory: 'Inventory', bills: 'Finance', meetings: 'Meeting notes', map: 'Map', vault: 'Vault', whiteboard: 'Whiteboard', teamSchedule: 'The team’s schedule', teamKpis: 'The team’s numbers (Analytics)' };
 const MEMBER_ROUTES = { contacts: ['contacts', 'contact-groups'], projects: ['projects', 'project-templates'], camps: ['board'], docs: ['docs', 'folders', 'dirs', 'doc-templates'], column: ['stacks'], templates: ['msg-templates'], inventory: ['inventory'], bills: ['money', 'bills', 'budgets', 'finance'], meetings: ['meetings'], map: ['trips', 'pins', 'zones', 'mileage', 'map'], vault: ['vault'], whiteboard: ['boards'], teamSchedule: ['workload', 'forecast', 'hours'] };
 const memberAccessOf = (ws) => Object.fromEntries(Object.keys(MEMBER_DEFAULTS).map((k) => [k, typeof ws.settings?.memberAccess?.[k] === 'boolean' ? ws.settings.memberAccess[k] : MEMBER_DEFAULTS[k]]));
 const memberMay = (ws, auth, k) => isAdmin(auth) || memberAccessOf(ws)[k] !== false;
@@ -8356,6 +8357,7 @@ async function api(req, res, url) {
   }
   if (a === 'calendly' || a === 'calcom') return BOOK.route(req, res, parts, auth, ws);
   if (a === 'shifts' || a === 'availability') return SHIFTS.route(req, res, parts, auth, ws);
+  if (a === 'analytics') return ANALYTICS.route(req, res, parts, auth, ws);
   if (a === 'bookings' && m === 'GET' && !b) return send(res, 200, { bookings: BOOK.list(ws, auth, Object.fromEntries(url.searchParams)) });
   if (a === 'postiz') {
     const out = await POSTIZ.route(req, res, parts, auth, ws);
@@ -12249,6 +12251,7 @@ const INV = invoicesModule({ proofUrl: (ws) => pagesProof(ws), stockCost: (recId
   },
   dropMoneyId: (id) => { if (db.money[id]) dropMoney(db.money[id]); },
 });
+const ANALYTICS = analyticsModule({ db, send, isAdmin, isDay, addDays, teamDay, memberMay, memberOff, taskDoers, canSee, INV, PJ });
 // Texting through the team's own Twilio account (twilio.js).
 const notifyAdmins = (wsId, n) => { for (const mb of db.workspaces[wsId]?.members || []) if (isAdminId(wsId, mb.id)) notify(wsId, mb.id, n); };
 const TW = twilioModule({ db, save, broadcast, seal, unseal, readJson, send, isAdmin, rid, cleanText, publicUrl: PUBLIC_URL, contactsOf, phoneKey, noContact, newContact, contactNews, notifyAdmins,

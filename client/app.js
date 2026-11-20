@@ -834,6 +834,8 @@
     if (kind === 'contact') return openContactById(id);
     if (kind === 'approval') return approvalSheet(id);
     if (kind === 'vault') return openTool('vault');
+    if (kind === 'money') return openTool('bills');
+    if (kind === 'analytics') return openAnalytics(id || undefined);
     if (kind === 'mycard') return showMyCard();
     if (kind === 'app') return openApps(id);
     if (kind === 'invreq') { INVS.view = 'requests'; INVS.req = id; openTool('inventory'); return loadInventory(); }
@@ -3169,7 +3171,7 @@
   // Tasks (the owner, 2026-11-15): what was Day is Workspace's first tab, and Workspace always opens on it.
   const WORK_TABS = ['day', 'contacts', 'projects', 'camps', 'docs', 'automations', 'tools'];
   // What Workspace → Tools lists. Stacks is a view (S.tab 'column'); the rest open in #tool. While one is open, Tools stays lit.
-  const TOOL_PAGE = ['chat', 'column', 'whiteboard', 'templates', 'inventory', 'bills', 'email', 'meetings', 'map', 'vault'];
+  const TOOL_PAGE = ['chat', 'column', 'whiteboard', 'templates', 'inventory', 'bills', 'analytics', 'email', 'meetings', 'map', 'vault'];
   const BAR_ITEMS = {
     column: { label: 'Stacks', view: true },
     chat: { label: 'Chat', view: true },
@@ -3224,6 +3226,7 @@
     apps: svg('<path d="M9 3v5M15 3v5M6 8h12v3a6 6 0 0 1-12 0z"/><path d="M12 17v4"/>'),
     cards: svg('<rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="11" r="2"/><path d="M6 16a3 3 0 0 1 6 0M14 10h4M14 14h3"/>'),
     inventory: svg('<path d="m12 3 8 4.5v9L12 21l-8-4.5v-9z"/><path d="m4 7.5 8 4.5 8-4.5M12 12v9"/>'),
+    analytics: svg('<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>'),
     tools: svg('<rect x="4" y="4" width="6" height="6" rx="1.5"/><rect x="14" y="4" width="6" height="6" rx="1.5"/><rect x="4" y="14" width="6" height="6" rx="1.5"/><rect x="14" y="14" width="6" height="6" rx="1.5"/>'),
     sidekick: svg('<path d="M12 3l1.9 5.6L19.5 10l-5.6 1.9L12 17.5l-1.9-5.6L4.5 10l5.6-1.4z"/>'),
     docs: svg('<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h6"/>'),
@@ -13436,6 +13439,7 @@
       templates: { name: 'Templates', sub: 'Emails, texts, replies, posts and paperwork to reuse, in automations and by your team', ok: () => memberMay('templates') },
       inventory: { name: 'Inventory', sub: INVS.data?.low.length ? `${INVS.data.low.length} low on stock` : 'Parts, materials and equipment: what you have and where', ok: () => toolOn('inventory') && memberMay('inventory') },
       bills: { name: 'Finance', sub: [soon ? `${soon} due soon` : '', tight ? `${tight} budget${tight === 1 ? '' : 's'} nearly used` : ''].filter(Boolean).join(' · ') || 'Money in and out, budgets and bills', ok: () => toolOn('bills') && memberMay('bills') },
+      analytics: { name: 'Analytics', sub: amAdmin() ? 'Your business’s numbers: money, team, customers and marketing' : 'Your team’s numbers', run: () => openAnalytics(), ok: () => canAnalytics() },
       email: { name: 'Email', sub: (S.mail?.sends || []).some((x) => x.status === 'sending') ? 'Sending…' : 'Send to your contacts and lists', ok: () => toolOn('email') && mayEmail() },
       meetings: { name: 'Meeting notes', sub: 'Record a meeting, get notes and tasks', ok: () => toolOn('meetings') && memberMay('meetings') },
       map: { name: 'Map', sub: MP.run ? (tripById(MP.run.id)?.kind === 'drive' ? 'Tracking mileage' : 'Canvassing run going') : 'Routes, canvassing and mileage', ok: () => toolOn('map') && memberMay('map'), run: () => openMap() },
@@ -17517,6 +17521,144 @@
   // and members when an admin lets them (Settings → Team → What members can use → See the team’s schedule). Tabs:
   // This week (the team's week in numbers), Weeks ahead (the forecast) and Visits (the day's job visits, drag a job
   // onto someone to book it). At full size it's a page beside the sidebar (sheetOrPage), else the pop-up. -----
+  // ----- Analytics (Team plan step 4, the owner 2026-11-20): the business's numbers from Kloomie's own data -----
+  // Tools → Analytics. An Overview and a tab for each section the person may see (owners and admins all four; a member
+  // Team & operations, when an admin turns on "See the team's numbers"). Each number is against the same length of time
+  // before, with its trend; tapping one shows the records behind it inside the page.
+  const AN = { open: false, preset: store.get('anPreset', '30'), from: null, to: null, tab: 'overview', data: null, key: '', loading: false, detail: false };
+  const AN_PRESETS = [['7', 'Last 7 days'], ['30', 'Last 30 days'], ['month', 'This month'], ['lastmonth', 'Last month'], ['quarter', 'This quarter'], ['year', 'This year'], ['365', 'Last 12 months'], ['custom', 'Pick dates…']];
+  const AN_OVERVIEW = { business: ['income', 'profit', 'owed', 'winRate'], team: ['tasksDone', 'onTime', 'overdueNow', 'visitsDone'], customers: ['newContacts', 'leads'], marketing: ['attempts', 'sales'] };
+  const canAnalytics = () => amAdmin() || memberMay('teamKpis');
+  function anRange() {
+    const t = todayKey(), d = keyDate(t), y = d.getFullYear(), mo = d.getMonth();
+    const k = (yy, mm, dd) => dayKey(new Date(yy, mm, dd));
+    switch (AN.preset) {
+      case '7': return [addDays(t, -6), t];
+      case 'month': return [k(y, mo, 1), t];
+      case 'lastmonth': return [k(y, mo - 1, 1), k(y, mo, 0)];
+      case 'quarter': return [k(y, mo - (mo % 3), 1), t];
+      case 'year': return [k(y, 0, 1), t];
+      case '365': return [addDays(t, -364), t];
+      case 'custom': return [AN.from || addDays(t, -29), AN.to || t];
+      default: return [addDays(t, -29), t];
+    }
+  }
+  function openAnalytics(tab) {
+    if (!canAnalytics()) return toast('An owner or admin decides who sees the team’s numbers.');
+    if (tab) AN.tab = tab;
+    AN.open = true;
+    AN.detail = false;
+    sheetOrPage('Analytics', [h('div', { class: 'an' })]);
+    anLoad();
+  }
+  function anLoad(force) {
+    const [from, to] = anRange();
+    const key = from + '|' + to;
+    if (!force && AN.data && AN.key === key) return anDraw();
+    AN.key = key;
+    AN.loading = true;
+    anDraw();
+    api('GET', `/analytics?from=${from}&to=${to}`).then((d) => { if (AN.key !== key) return; AN.data = d; AN.loading = false; anDraw(); }, (e) => { AN.loading = false; toast(e.message); anDraw(); });
+  }
+  function anFmt(v, unit) {
+    if (v === null || v === undefined) return '—';
+    if (unit === 'money') return (v < 0 ? '−' : '') + '$' + Math.round(Math.abs(v) / 100).toLocaleString();
+    if (unit === 'pct') return v + '%';
+    if (unit === 'days') return v < 1 ? 'Under a day' : v + (v === 1 ? ' day' : ' days');
+    return Number(v).toLocaleString();
+  }
+  // The change against the dates before: up or down, good or bad (spending, overdue and reopened are better lower).
+  function anDelta(m) {
+    if (m.now || m.value === null || m.prev === null || m.prev === undefined) return null;
+    const diff = m.value - m.prev;
+    if (!diff) return h('span', { class: 'an-delta same' }, 'Same as before');
+    const good = m.lowGood ? diff < 0 : diff > 0;
+    const text = m.unit === 'pct' ? `${Math.abs(diff)} pts` : m.prev ? `${Math.round((Math.abs(diff) / Math.abs(m.prev)) * 100)}%` : anFmt(Math.abs(diff), m.unit);
+    return h('span', { class: 'an-delta ' + (good ? 'good' : 'bad'), title: 'Before: ' + anFmt(m.prev, m.unit) }, (diff > 0 ? '▲ ' : '▼ ') + text);
+  }
+  function anSpark(series) {
+    if (!series || series.length < 2) return null;
+    const vals = series.map((x) => x ?? 0), max = Math.max(0, ...vals), min = Math.min(0, ...vals), H = 28, W = 120;
+    const span = max - min || 1, bw = W / vals.length;
+    const zero = H - ((0 - min) / span) * H;
+    const bars = vals.map((v, i) => { const y = H - ((Math.max(v, 0) - min) / span) * H, y2 = H - ((Math.min(v, 0) - min) / span) * H; return `<rect x="${(i * bw + 1).toFixed(1)}" y="${y.toFixed(1)}" width="${Math.max(1, bw - 2).toFixed(1)}" height="${Math.max(v ? 1 : 0, y2 - y).toFixed(1)}" rx="1"${v < 0 ? ' class="neg"' : ''}/>`; }).join('');
+    return h('span', { class: 'an-spark', html: `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true">${bars}<line x1="0" x2="${W}" y1="${zero.toFixed(1)}" y2="${zero.toFixed(1)}"/></svg>` });
+  }
+  function anCard(m) {
+    return h('button', { type: 'button', class: 'an-card', 'data-metric': m.key, onclick: () => anDrill(m.key) },
+      h('span', { class: 'an-label' }, m.label),
+      h('b', { class: 'an-value' }, anFmt(m.value, m.unit)),
+      h('span', { class: 'an-foot' }, m.now ? h('span', { class: 'an-delta same' }, m.unit === 'money' && m.n ? `${m.n} invoice${m.n === 1 ? '' : 's'} · as of today` : 'As of today') : anDelta(m), m.now ? null : anSpark(m.series)),
+      m.hint ? h('small', { class: 'an-hint' }, m.hint) : null);
+  }
+  function anDraw() {
+    const box = $('#sheet .an');
+    if (!box) { AN.open = false; return; }
+    AN.detail = false;
+    const D = AN.data, secs = D ? Object.keys(D.sections) : [];
+    const tabs = [['overview', 'Overview'], ...secs.map((k) => [k, D.sections[k].label])];
+    if (!tabs.some(([k]) => k === AN.tab)) AN.tab = 'overview';
+    const [from, to] = anRange();
+    const fmt = (k) => keyDate(k).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: keyDate(k).getFullYear() === new Date().getFullYear() ? undefined : 'numeric' });
+    const pick = h('select', { class: 'an-preset', 'aria-label': 'Dates', onchange: (e) => { AN.preset = e.target.value; if (AN.preset === 'custom') { AN.from = from; AN.to = to; } store.set('anPreset', AN.preset); anLoad(); } },
+      AN_PRESETS.map(([k, l]) => h('option', { value: k, selected: k === AN.preset }, l)));
+    const custom = AN.preset !== 'custom' ? null : h('span', { class: 'an-custom' },
+      h('input', { type: 'date', class: 'an-from', value: from, max: to, onchange: (e) => { if (e.target.value) { AN.from = e.target.value; anLoad(); } } }), '–',
+      h('input', { type: 'date', class: 'an-to', value: to, min: from, onchange: (e) => { if (e.target.value) { AN.to = e.target.value; anLoad(); } } }));
+    const body = h('div', { class: 'an-body', 'data-tab': AN.tab });
+    box.replaceChildren(
+      h('div', { class: 'an-top' }, pick, custom, h('span', { class: 'an-when muted small' }, `${fmt(from)} – ${fmt(to)}${D ? ` · against ${fmt(D.prevFrom)} – ${fmt(D.prevTo)}` : ''}`)),
+      h('div', { class: 'tm-tabs an-tabs', role: 'tablist' }, tabs.map(([t, label]) => h('button', { type: 'button', role: 'tab', class: 'tm-tab an-tab' + (t === AN.tab ? ' on' : ''), 'data-tab': t, 'aria-selected': String(t === AN.tab), onclick: () => { AN.tab = t; anDraw(); } }, label))),
+      body);
+    if (!D) return body.append(h('p', { class: 'muted' }, AN.loading ? 'Adding it up…' : 'Nothing to show.'));
+    if (AN.loading) body.classList.add('loading');
+    if (AN.tab === 'overview') {
+      for (const k of secs) {
+        const s = D.sections[k], keys = AN_OVERVIEW[k] || [];
+        body.append(h('section', { class: 'an-sec', 'data-sec': k },
+          h('div', { class: 'an-sec-h' }, h('h3', {}, s.label), h('button', { class: 'linkish', onclick: () => { AN.tab = k; anDraw(); } }, 'See all ›')),
+          h('div', { class: 'an-grid' }, s.metrics.filter((m) => keys.includes(m.key)).map(anCard))));
+      }
+      if (!amAdmin()) body.append(h('p', { class: 'muted small' }, 'Money, customers and marketing are for owners and admins.'));
+      return;
+    }
+    const s = D.sections[AN.tab];
+    body.append(h('div', { class: 'an-grid' }, s.metrics.map(anCard)));
+    if (s.people) body.append(h('section', { class: 'an-sec' }, h('h3', {}, 'By person'),
+      h('div', { class: 'an-table-wrap' }, h('table', { class: 'an-table an-people' },
+        h('thead', {}, h('tr', {}, ['Person', 'Tasks done', 'On time', 'Overdue now', 'Visits', 'Days to finish', 'Reopened'].map((x) => h('th', {}, x)))),
+        h('tbody', {}, s.people.map((p) => h('tr', { 'data-member': p.id, tabindex: 0, onclick: () => anDrill('tasksDone', p.id, p.name), onkeydown: (e) => e.key === 'Enter' && anDrill('tasksDone', p.id, p.name) },
+          h('td', {}, p.name), h('td', {}, String(p.done)), h('td', {}, anFmt(p.onTime, 'pct')), h('td', { class: p.overdue ? 'bad' : '' }, String(p.overdue)), h('td', {}, String(p.visits)), h('td', {}, anFmt(p.daysToFinish, 'days')), h('td', {}, String(p.reopened)))))))));
+    if (s.sources) body.append(h('section', { class: 'an-sec' }, h('h3', {}, 'Where new contacts came from'),
+      s.sources.length ? h('div', { class: 'an-bars' }, s.sources.map((x) => h('div', { class: 'an-bar-row' }, h('span', {}, x.name), h('span', { class: 'an-bar' }, h('span', { style: `width:${Math.round((100 * x.n) / s.sources[0].n)}%` })), h('b', {}, String(x.n)))))
+        : h('p', { class: 'muted small' }, 'No new contacts in these dates.')));
+    if (s.campaigns) body.append(h('section', { class: 'an-sec' }, h('h3', {}, 'By campaign'),
+      s.campaigns.length ? h('div', { class: 'an-table-wrap' }, h('table', { class: 'an-table' }, h('thead', {}, h('tr', {}, ['Campaign', 'Logged', 'Interested or booked', 'Sales'].map((x) => h('th', {}, x)))),
+        h('tbody', {}, s.campaigns.map((c) => h('tr', { tabindex: 0, onclick: () => { closeSheet(); goTo('camp:' + c.id); } }, h('td', {}, c.name), h('td', {}, String(c.attempts)), h('td', {}, String(c.interested)), h('td', {}, anFmt(c.sales, 'money')))))))
+        : h('p', { class: 'muted small' }, 'No calls or emails logged in these dates.')));
+  }
+  // The records behind a number, inside the page with a way back.
+  function anDrill(key, member, name) {
+    const box = $('#sheet .an');
+    if (!box) return;
+    const [from, to] = anRange();
+    AN.detail = true;
+    const list = h('div', { class: 'an-rows' }, h('p', { class: 'muted' }, 'Loading…'));
+    const m = Object.values(AN.data?.sections || {}).flatMap((s) => s.metrics).find((x) => x.key === key);
+    box.replaceChildren(h('div', { class: 'an-detail' },
+      h('div', { class: 'tm-nav' }, h('button', { class: 'btn small an-back', onclick: () => anDraw() }, '‹ Analytics'), h('b', { class: 'tm-when' }, `${m?.label || 'Records'}${name ? ' · ' + name : ''}`)),
+      list));
+    api('GET', `/analytics/drill?metric=${encodeURIComponent(key)}&from=${from}&to=${to}${member ? '&member=' + encodeURIComponent(member) : ''}`).then((d) => {
+      if (!list.isConnected) return;
+      list.replaceChildren(...[
+        ...(d.rows.length ? d.rows.map((r) => h('button', { type: 'button', class: 'an-row', disabled: !r.go, onclick: () => { if (!r.go) return; closeSheet(); goTo(r.go); } },
+          h('span', { class: 'an-row-t' }, h('b', {}, r.label), r.sub ? h('small', {}, r.sub.replace(/\d{4}-\d\d-\d\d/g, (k) => keyDate(k).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }))) : null), r.amount !== undefined ? h('span', { class: 'an-row-n' }, anFmt(r.amount, 'money')) : null))
+          : [h('p', { class: 'muted' }, 'Nothing here for these dates.')]),
+        d.hidden ? h('p', { class: 'muted small an-hidden' }, `${d.hidden} more ${d.hidden === 1 ? 'is' : 'are'} someone else’s, counted but not shown.`) : null,
+        d.more ? h('p', { class: 'muted small' }, `And ${d.more} more.`) : null].filter(Boolean));
+    }, (e) => list.replaceChildren(h('p', { class: 'muted' }, e.message)));
+  }
+
   const canTeam = () => memberMay('teamSchedule');
   const TM = { open: false, tab: store.get('teamTab', 'week'), date: null };
   const TEAM_TABS = [['shifts', 'Shifts'], ['hours', 'Hours'], ['week', 'This week'], ['ahead', 'Weeks ahead'], ['visits', 'Visits']];
@@ -17559,6 +17701,7 @@
       h('div', { class: 'tm-tabs', role: 'tablist' }, tabs.map(([t, label]) => h('button', { type: 'button', role: 'tab', class: 'tm-tab' + (t === TM.tab ? ' on' : ''), 'data-tab': t, 'aria-selected': String(t === TM.tab),
         onclick: () => { TM.tab = t; store.set('teamTab', t); teamDraw(); } }, label))),
       ...(nav ? [nav] : []), body);
+    if (canAnalytics()) box.querySelector('.tm-tabs').append(h('button', { type: 'button', class: 'linkish tm-kpis', onclick: () => { closeSheet(); openAnalytics('team'); } }, '📊 Team numbers ›'));
     if (TM.tab === 'week') body.append(teamWeekView(k));
     else if (TM.tab === 'shifts') body.append(shiftsView(k));
     else if (TM.tab === 'hours') body.append(hoursView(k));
@@ -23900,7 +24043,8 @@
           row('vault', 'Vault', 'Their own locked codes and logins', toolOn('vault')),
           row('templates', 'Templates', 'The team’s saved emails, texts and replies'),
           h('div', { class: 'picks-h' }, 'The team'),
-          row('teamSchedule', 'See the team’s schedule', 'The Team page (workspace menu): who’s carrying what this week, the weeks ahead and the day’s visits')));
+          row('teamSchedule', 'See the team’s schedule', 'The Team page (workspace menu): who’s carrying what this week, the weeks ahead and the day’s visits'),
+          row('teamKpis', 'See the team’s numbers', 'Tools → Analytics → Team & operations: tasks done, on time, overdue and visits, for everyone. Never money, customers or marketing')));
       }
       // Tools moved to Apps & Integrations (2026-11-20); help and older videos still send people here.
       if (admin) P('teamset', W(950, h('section', { class: 'moved-sec' }, h('h3', {}, 'Moved to their own pages'),
