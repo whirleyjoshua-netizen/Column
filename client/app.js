@@ -6846,6 +6846,7 @@
     K.stale = false;
     const keep = root.scrollTop;
     const c = campById(K.open);
+    if (!c) ccBoardDrop();
     root.replaceChildren(c ? campaignView(c) : K.overview ? overviewView() : campaignList());
     renderDock();
     root.scrollTop = keep;
@@ -6892,6 +6893,151 @@
       tpls.map(templateRow));
   }
 
+  // ----- a campaign's board (2026-11-20): its whiteboard in the Plan tab. Sketch the workflow, then Make phases (shapes
+  // become phases, arrows become "waits for", and the shapes become live phase cards) or Make tasks (stickies become tasks
+  // in a phase). The editor is kept across redraws and destroyed when you leave the board. -----
+  function ccBoardDrop() {
+    K.cb ||= {};
+    if (K.cb.ed) { try { K.cb.ed.destroy(); } catch {} }
+    Object.assign(K.cb, { campId: null, board: null, none: false, ed: null, mount: null, loading: false });
+  }
+  async function ccBoardLoad(c) {
+    K.cb.loading = true;
+    try {
+      const { boards } = await api('GET', '/boards?campaign=' + encodeURIComponent(c.id));
+      if (K.cb.campId !== c.id) return;
+      if (boards.length) K.cb.board = await api('GET', '/boards/' + boards[0].id);
+      else K.cb.none = true;
+    } catch (e) { toast(e.message); K.cb.none = true; }
+    K.cb.loading = false;
+    if (K.cb.campId === c.id) renderCamps();
+  }
+  async function ccBoardStart(c, template) {
+    try {
+      const b = await wbMake({ template, campaignId: c.id });
+      K.cb.board = b.items ? b : await api('GET', '/boards/' + b.id);
+      K.cb.none = false;
+      renderCamps();
+    } catch (e) { toast(e.message); }
+  }
+  // The order to make phases in: follow the arrows between them; otherwise left to right, top to bottom.
+  function ccFlowOrder(items, links) {
+    const ids = new Set(items.map((x) => x.id));
+    const into = new Map(items.map((x) => [x.id, 0]));
+    const next = new Map(items.map((x) => [x.id, []]));
+    for (const l of links) if (ids.has(l.from) && ids.has(l.to) && l.from !== l.to) { next.get(l.from).push(l.to); into.set(l.to, into.get(l.to) + 1); }
+    const pos = (a, b) => (Math.abs(a.x - b.x) > 40 ? a.x - b.x : a.y - b.y);
+    const byId = new Map(items.map((x) => [x.id, x]));
+    let ready = items.filter((x) => !into.get(x.id)).sort(pos);
+    const out = [];
+    while (ready.length) {
+      const x = ready.shift();
+      out.push(x);
+      for (const n of next.get(x.id)) { into.set(n, into.get(n) - 1); if (!into.get(n)) ready = [...ready, byId.get(n)].sort(pos); }
+    }
+    // Anything in a loop goes last, in place order.
+    return [...out, ...items.filter((x) => !out.includes(x)).sort(pos)];
+  }
+  // Board items keep their kind, so a shape or sticky becomes a card by a new card in its place (same spot, size and
+  // frame), with its arrows drawn again to the card, in one undoable change.
+  function ccToCards(ed, pairs) {
+    const items = new Map(ed.items().map((x) => [x.id, x]));
+    const nid = new Map();
+    const ops = [];
+    for (const [id, ref] of pairs) {
+      const x = items.get(id);
+      if (!x) continue;
+      const n = ('c' + Math.random().toString(36).slice(2) + Date.now().toString(36)).slice(0, 24);
+      nid.set(id, n);
+      ops.push({ op: 'put', item: { id: n, kind: 'card', x: x.x, y: x.y, w: Math.max(x.w || 200, 180), h: Math.max(x.h || 90, 80), ref, ...(x.parentId ? { parentId: x.parentId } : {}), ...(x.z != null ? { z: x.z } : {}) } });
+    }
+    for (const l of ed.links()) {
+      if (!nid.has(l.from) && !nid.has(l.to)) continue;
+      ops.push({ op: 'put', link: { id: ('l' + Math.random().toString(36).slice(2) + Date.now().toString(36)).slice(0, 24), from: nid.get(l.from) || l.from, to: nid.get(l.to) || l.to, ...(l.label ? { label: l.label } : {}) } });
+    }
+    for (const id of nid.keys()) ops.push({ op: 'del', item: id });
+    if (ops.length) ed.change(ops);
+  }
+  async function ccMakePhases(c, btn) {
+    const ed = K.cb.ed;
+    if (!ed) return;
+    const items = ed.items(), links = ed.links(), sel = new Set(ed.selection());
+    const fit = (x) => !x.ref && String(x.text || '').trim() && (sel.size ? sel.has(x.id) && ['shape', 'sticky', 'text', 'frame'].includes(x.kind) : x.kind === 'shape');
+    const pick = items.filter(fit);
+    if (!pick.length) return toast(sel.size ? 'Select shapes or stickies with words in them.' : 'Draw shapes with the phase names in them (or select stickies), then Make phases.');
+    btn.disabled = true;
+    const made = new Map();
+    try {
+      for (const x of ccFlowOrder(pick, links)) {
+        const g = await api('POST', '/goals', { campaignId: c.id, title: String(x.text).trim().slice(0, 200) });
+        if (!S.goals.some((y) => y.id === g.id)) S.goals.push(g);
+        made.set(x.id, g);
+      }
+      // An arrow from one to another: the second waits for the first.
+      for (const l of links) {
+        const a = made.get(l.from), b = made.get(l.to);
+        if (!a || !b || a === b) continue;
+        const now = goalById(b.id) || b;
+        const y = await api('PATCH', '/goals/' + b.id, { blockedBy: [...new Set([...(now.blockedBy || []), a.id])] });
+        const i = S.goals.findIndex((z) => z.id === y.id); if (i >= 0) S.goals[i] = y;
+      }
+      // The shapes become live phase cards, where they are, so the arrows stay.
+      ccToCards(ed, [...made].map(([id, g]) => [id, { kind: 'goal', id: g.id }]));
+      ed.refresh?.();
+      toast(`Made ${made.size} phase${made.size === 1 ? '' : 's'}${links.some((l) => made.has(l.from) && made.has(l.to)) ? ', with what waits for what' : ''}`);
+      renderCamps();
+    } catch (e) { toast(e.message); }
+    btn.disabled = false;
+  }
+  function ccMakeTasks(c, btn, phases) {
+    const ed = K.cb.ed;
+    if (!ed) return;
+    const sel = new Set(ed.selection());
+    const pick = ed.items().filter((x) => sel.has(x.id) && !x.ref && String(x.text || '').trim() && ['sticky', 'text', 'shape'].includes(x.kind));
+    if (!pick.length) return toast('Select the stickies to turn into tasks first.');
+    const go = async (g) => {
+      btn.disabled = true;
+      const ops = [];
+      try {
+        for (const x of pick.sort((a, b) => a.y - b.y || a.x - b.x)) {
+          const t = await api('POST', '/tasks', { goalId: g.id, text: String(x.text).trim().slice(0, 500) });
+          upsertTask(t);
+          ops.push([x.id, { kind: 'task', id: t.id }]);
+        }
+        ccToCards(ed, ops);
+        ed.refresh?.();
+        toast(`Made ${ops.length} task${ops.length === 1 ? '' : 's'} in “${g.title}”`);
+        renderCamps();
+      } catch (e) { toast(e.message); }
+      btn.disabled = false;
+    };
+    if (!phases.length) return toast('Make a phase first (draw shapes and Make phases, or + Add a phase).');
+    openMenu(btn, [{ head: `Make ${pick.length} task${pick.length === 1 ? '' : 's'} in…` }, ...phases.map((g) => ({ label: g.title, run: () => go(g) }))]);
+  }
+  function ccBoardView(c, phases) {
+    K.cb ||= {};
+    if (K.cb.campId !== c.id) { ccBoardDrop(); K.cb.campId = c.id; }
+    if (!K.cb.board && !K.cb.none && !K.cb.loading) ccBoardLoad(c);
+    if (K.cb.loading || (!K.cb.board && !K.cb.none)) return h('section', { class: 'cc-card' }, h('p', { class: 'day-hint' }, 'Loading the board…'));
+    if (!K.cb.board) return h('section', { class: 'cc-card cc-board-empty' }, h('div', { class: 'cc-card-h' }, h('b', {}, '🗺️ Sketch this campaign on a board')),
+      h('p', { class: 'day-hint' }, 'Map how the work flows with shapes and arrows, brainstorm with stickies, then turn them into phases and tasks. Whoever sees the campaign sees its board.'),
+      h('div', { class: 'cc-board-starts' },
+        h('button', { class: 'btn primary-btn small', 'data-tpl': 'workflow', onclick: () => ccBoardStart(c, 'workflow') }, 'Workflow map'),
+        h('button', { class: 'btn small', 'data-tpl': 'brainstorm', onclick: () => ccBoardStart(c, 'brainstorm') }, 'Campaign brainstorm'),
+        h('button', { class: 'btn small', 'data-tpl': 'mindmap', onclick: () => ccBoardStart(c, 'mindmap') }, 'Mind map'),
+        h('button', { class: 'btn small', 'data-tpl': 'blank', onclick: () => ccBoardStart(c, 'blank') }, 'Blank')));
+    if (!K.cb.mount) {
+      K.cb.mount = h('div', { class: 'cc-board' });
+      K.cb.ed = boardEditor(K.cb.board, K.cb.mount, { campaign: c });
+    } else K.cb.ed?.refresh?.();
+    const mk = h('button', { class: 'btn small primary-btn cc-mkphases', title: 'Selected shapes or stickies, or every shape with words in it, become phases in flow order; arrows between them become “waits for”', onclick: (e) => ccMakePhases(c, e.currentTarget) }, '◆ Make phases');
+    const mt = h('button', { class: 'btn small cc-mktasks', title: 'The selected stickies become tasks in a phase', onclick: (e) => ccMakeTasks(c, e.currentTarget, phases) }, '☑ Make tasks in…');
+    return h('section', { class: 'cc-card cc-boardwrap' },
+      h('div', { class: 'cc-card-h' }, h('b', {}, '🗺️ ' + (K.cb.board.name || 'Board')), h('span', { style: 'flex:1' }), mk, mt,
+        h('button', { class: 'btn small', title: 'Open the board full page', onclick: () => { const id = K.cb.board.id; ccBoardDrop(); openBoard(id); } }, '⤢ Full page')),
+      h('small', { class: 'hint' }, 'Draw a shape for each phase and join them with arrows, then Make phases. Select stickies and Make tasks in… a phase. Cards show the real phases and tasks.'),
+      K.cb.mount);
+  }
   // ----- saved campaigns: run again by hand or on a weekly schedule -----
   const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
   const hhmm = (t) => fmtTime(Number(t.slice(0, 2)) * 60 + Number(t.slice(3)));
@@ -7177,10 +7323,13 @@
       h('div', { class: 'cc-pulse-ai' }, h('b', {}, '✦ What to do next'),
         ideas.length ? ideas.slice(0, 3).map(([text, label, run]) => h('div', { class: 'cc-idea' }, h('p', {}, text), h('button', { class: 'btn small primary-btn', onclick: run }, label))) : h('p', {}, 'Nothing needs you right now.'),
         h('button', { class: 'btn small' + (skFor(c.id)?.nudge ? ' sk-nudge' : ''), title: skFor(c.id)?.nudge?.text || 'Talk this campaign through with Sidekick', onclick: () => sidekickFor(c) }, '✦ Ask Sidekick'))) : null;
+    // Plan: the phases as a list, or the campaign's whiteboard (2026-11-20) to sketch them and turn shapes into phases.
+    const planSwitch = toolOn('whiteboard') ? h('div', { class: 'seg seg-sm cc-planswitch' }, [['phases', 'Phases'], ['board', 'Board']].map(([k, l]) => h('button', { class: (K.planView === 'board' ? 'board' : 'phases') === k ? 'on' : null, 'data-pv': k, onclick: () => { K.planView = k; renderCamps(); } }, l))) : null;
+    if (!(tab === 'plan' && K.planView === 'board' && toolOn('whiteboard'))) ccBoardDrop();
     const body = {
       overview: () => [sendBars(c), briefCard, phaseCards, ...goals.map((g) => goalCard(c, g)), addRow, moneyCard, team],
-      plan: () => [phaseCards, h('section', { class: 'cc-card' }, h('div', { class: 'cc-card-h' }, h('b', {}, 'Phases, in order')), h('p', { class: 'day-hint' }, 'Drag a phase by ⋮⋮ to move it. Open one to set what it waits for, the job stage it finishes, what it needs, its resources and automations.'),
-        ...phases.map((g) => goalCard(c, g)), addRow), targets.length ? h('section', { class: 'cc-card' }, h('div', { class: 'cc-card-h' }, h('b', {}, 'Targets')), ...targets.map((g) => goalCard(c, g))) : null, subs, team],
+      plan: () => (K.planView === 'board' && toolOn('whiteboard') ? [planSwitch, ccBoardView(c, phases)] : [planSwitch, phaseCards, h('section', { class: 'cc-card' }, h('div', { class: 'cc-card-h' }, h('b', {}, 'Phases, in order')), h('p', { class: 'day-hint' }, 'Drag a phase by ⋮⋮ to move it. Open one to set what it waits for, the job stage it finishes, what it needs, its resources and automations.'),
+        ...phases.map((g) => goalCard(c, g)), addRow), targets.length ? h('section', { class: 'cc-card' }, h('div', { class: 'cc-card-h' }, h('b', {}, 'Targets')), ...targets.map((g) => goalCard(c, g))) : null, subs, team]),
       work: () => [sendBars(c), workBody()],
       resources,
       activity,

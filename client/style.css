@@ -4345,3 +4345,11 @@ body:not(.wide) .wbview { bottom: var(--dock-h); }
 .wb-pick small { color: var(--muted); font-size: 12px; }
 .wb-pick em { font-style: normal; font-size: 11px; color: var(--muted); }
 @media (max-width: 700px) { .wb-who { display: none; } .wb-name { max-width: 50vw; } }
+
+/* ---------- A campaign's board, in its Plan tab (2026-11-20) ---------- */
+.cc-planswitch { align-self: flex-start; }
+.cc-boardwrap { display: flex; flex-direction: column; gap: 8px; }
+.cc-boardwrap .cc-card-h { flex-wrap: wrap; margin-bottom: 0; }
+.cc-board { position: relative; height: max(460px, calc(100vh - 380px)); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--bg); }
+.cc-board-starts { display: flex; flex-wrap: wrap; gap: 8px; }
+body:not(.wide) .cc-board { height: 70vh; }
