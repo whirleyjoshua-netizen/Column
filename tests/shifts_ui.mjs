@@ -58,7 +58,7 @@ await A.ev(`(document.querySelector('.ws').click(), true)`);
 ok(await A.until(`[...document.querySelectorAll('#menu button')].some((b) => b.textContent === '🕒 My shifts')`), 'the workspace menu has 🕒 My shifts: ' + await A.ev(`[...document.querySelectorAll('#menu button')].map((b) => b.textContent).join(' | ')`));
 await A.ev(`([...document.querySelectorAll('#menu button')].find((b) => b.textContent === '👥 Team').click(), true)`);
 ok(await A.until(`!!document.querySelector('#sheet .tm-tab[data-tab=shifts]')`, 8000), 'the Team page has a Shifts tab');
-ok(await A.ev(`[...document.querySelectorAll('#sheet .tm-tab')].map((b) => b.dataset.tab).join()`) === 'shifts,week,ahead', 'first among the tabs');
+ok(await A.ev(`[...document.querySelectorAll('#sheet .tm-tab')].map((b) => b.dataset.tab).join()`) === 'shifts,hours,week,ahead', 'first among the tabs');
 await A.tap(`document.querySelector('#sheet .tm-tab[data-tab=shifts]')`);
 ok(await A.until(`!!document.querySelector('#sheet .sh-grid .sh-who[data-member="${samId}"]')`, 8000), 'the week: a row for Sam');
 // Next week, so nothing is in the past.

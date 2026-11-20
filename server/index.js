@@ -585,7 +585,7 @@ const toolsOf = (ws) => Object.fromEntries(TOOL_KEYS.map((k) => [k, ws.settings?
 // everything. A tool off for the whole team (toolsOf) stays off for everyone.
 const MEMBER_DEFAULTS = { contacts: false, projects: true, camps: true, docs: true, chat: true, column: true, templates: true, inventory: true, bills: true, meetings: true, map: true, vault: true, teamSchedule: false };
 const MEMBER_LABEL = { contacts: 'Contacts', projects: 'Boards', camps: 'Campaigns', docs: 'Folders & Docs', chat: 'Chat', column: 'Stacks', templates: 'Templates', inventory: 'Inventory', bills: 'Finance', meetings: 'Meeting notes', map: 'Map', vault: 'Vault', teamSchedule: 'The team’s schedule' };
-const MEMBER_ROUTES = { contacts: ['contacts', 'contact-groups'], projects: ['projects', 'project-templates'], camps: ['board'], docs: ['docs', 'folders', 'dirs', 'doc-templates'], column: ['stacks'], templates: ['msg-templates'], inventory: ['inventory'], bills: ['money', 'bills', 'budgets', 'finance'], meetings: ['meetings'], map: ['trips', 'pins', 'zones', 'mileage', 'map'], vault: ['vault'], teamSchedule: ['workload', 'forecast'] };
+const MEMBER_ROUTES = { contacts: ['contacts', 'contact-groups'], projects: ['projects', 'project-templates'], camps: ['board'], docs: ['docs', 'folders', 'dirs', 'doc-templates'], column: ['stacks'], templates: ['msg-templates'], inventory: ['inventory'], bills: ['money', 'bills', 'budgets', 'finance'], meetings: ['meetings'], map: ['trips', 'pins', 'zones', 'mileage', 'map'], vault: ['vault'], teamSchedule: ['workload', 'forecast', 'hours'] };
 const memberAccessOf = (ws) => Object.fromEntries(Object.keys(MEMBER_DEFAULTS).map((k) => [k, typeof ws.settings?.memberAccess?.[k] === 'boolean' ? ws.settings.memberAccess[k] : MEMBER_DEFAULTS[k]]));
 const memberMay = (ws, auth, k) => isAdmin(auth) || memberAccessOf(ws)[k] !== false;
 const memberOff = (k) => `Your team’s owners and admins have turned ${MEMBER_LABEL[k]} off for members.`;
@@ -6169,6 +6169,26 @@ function workload(ws, week) {
   for (const c of Object.values(db.campaigns)) if (c.wsId === ws.id && c.status === 'active' && by.get(c.ownerId)) by.get(c.ownerId).campaigns++;
   return { week, days, today, people: [...by.values()], unassigned };
 }
+// ---------- the hours calculator (Team plan step 3, the owner 2026-11-20) ----------
+// For a week: the hours each person and the team have (sent shifts, else usual hours, else an assumed 8-hour weekday;
+// time off is none), against the hours already booked (job visits and timed appointments), and what's free. Days
+// booked past someone's hours are listed as short. Tasks have no length, so they're counted, not turned into hours.
+// Counts only, like the team's week; owners and admins, and members an admin lets see the team's schedule.
+function hoursWeek(ws, week) {
+  const wl = workload(ws, week);
+  const caps = SHIFTS.capacity(ws, wl.days);
+  const people = wl.people.map((p) => {
+    const cap = caps.get(p.id) || [];
+    const days = wl.days.map((k, i) => ({ day: k, cap: cap[i]?.min ?? 0, from: cap[i]?.from || 'assumed', note: cap[i]?.note || null, booked: p.perDay[i].min, due: p.perDay[i].due }));
+    const available = cap.reduce((n, c) => n + (c?.week ?? 0), 0);
+    const from = [...new Set(cap.map((c) => c?.from).filter((f) => f && f !== 'off'))];
+    return { id: p.id, name: p.name, role: p.role, available, booked: p.bookedMin, free: Math.max(0, available - p.bookedMin), over: Math.max(0, p.bookedMin - available), dueWeek: p.dueWeek, offDays: cap.filter((c) => c?.from === 'off').length, from: from.length === 1 ? from[0] : from.length ? 'mixed' : 'off', days };
+  });
+  const short = [];
+  for (const p of people) for (const d of p.days) if (d.booked > d.cap) short.push({ memberId: p.id, name: p.name, day: d.day, cap: d.cap, booked: d.booked, from: d.from });
+  const sum = (f) => people.reduce((n, p) => n + p[f], 0);
+  return { week: wl.week, days: wl.days, today: wl.today, people, totals: { available: sum('available'), booked: sum('booked'), free: sum('free'), over: sum('over'), dueWeek: sum('dueWeek') }, short, unassigned: wl.unassigned };
+}
 // ---------- the job board (job plan Phase 5, the owner 2026-11-18) ----------
 // Every job with a campaign still going: its stage, how many of its steps are finished, the next step, and what's in
 // its way: a step whose tasks are done but whose materials, gear, visit or field aren't, tasks overdue, a sign-off
@@ -6336,9 +6356,13 @@ function forecast(ws, auth, weeks = FC_WEEKS) {
     for (let i = 0; i < list.length; i++) for (let j = i + 1; j < list.length && list[j].start < list[i].end; j++) { clash.add(list[i]); clash.add(list[j]); }
     if (clash.size) conflicts.push({ memberId, name: nameOf(memberId), day: k, visits: [...clash].map((e) => (e.visitId && recSeen(e.recordId) ? { id: e.visitId, kind: e.visit || 'Visit', start: e.start, end: e.end, jobId: e.recordId } : { hidden: true, start: e.start, end: e.end })) });
   }
+  // Overloaded against each person's own hours (Team plan step 3): their sent shifts, else their usual hours, else a
+  // full 8-hour day; time off is 0, so anything booked on it is too much.
+  const caps = SHIFTS.capacity(ws, days);
   for (const pr of by.values()) {
-    pr.days.forEach((b) => { b.over = b.min > DAY_MIN || (b.min >= DAY_MIN && b.tasks > 0); });
-    pr.weeks.forEach((b, i) => { b.over = b.min > 5 * DAY_MIN || pr.days.slice(i * 7, i * 7 + 7).some((x) => x.over); });
+    const cap = caps.get(pr.id) || [];
+    pr.days.forEach((b, i) => { const c = cap[i] || { min: DAY_MIN, from: 'assumed' }; b.cap = c.min; b.capFrom = c.from; b.over = b.min > c.min || (c.min > 0 && b.min >= c.min && b.tasks > 0); });
+    pr.weeks.forEach((b, i) => { b.cap = cap.slice(i * 7, i * 7 + 7).reduce((n, c) => n + (c?.week ?? 0), 0); b.over = b.min > b.cap || pr.days.slice(i * 7, i * 7 + 7).some((x) => x.over); });
   }
 
   // What the coming steps need, from the job campaigns still going.
@@ -8426,6 +8450,15 @@ async function api(req, res, url) {
     const week = new URL(req.url, 'http://x').searchParams.get('week');
     if (!isDay(week || '')) return send(res, 400, { error: 'Pick a week.' });
     return send(res, 200, workload(ws, week));
+  }
+  if (a === 'hours' && m === 'GET') {
+    if (!memberMay(ws, auth, 'teamSchedule')) return send(res, 403, { error: memberOff('teamSchedule') });
+    const week = new URL(req.url, 'http://x').searchParams.get('week');
+    if (!isDay(week || '')) return send(res, 400, { error: 'Pick a week.' });
+    const out = hoursWeek(ws, addDays(week, -new Date(week + 'T12:00:00Z').getUTCDay()));
+    // Why someone is off is between them and the owners and admins.
+    if (!isAdmin(auth)) for (const p of out.people) if (p.id !== auth.memberId) for (const d of p.days) d.note = null;
+    return send(res, 200, out);
   }
   if (a === 'board' && m === 'GET') return send(res, 200, jobBoard(ws, auth));
   if (a === 'forecast' && m === 'GET') {

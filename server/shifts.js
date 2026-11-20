@@ -306,5 +306,35 @@ export function shiftsModule(deps) {
     }
     return out;
   }
-  return { route, memberGone, sentMinutes, week, mine, warnings, availOf };
+  // Each person's working minutes on each day (Team plan step 3): the hours calculator and the forecast's capacity.
+  // Time off → 0. Else, in a week where they have sent shifts, those shifts' paid time (0 on a day without one). Else
+  // their usual hours for that weekday. Else the old assumption: a full 8-hour day ('assumed'), which counts towards a
+  // week only Monday to Friday. Sent shifts only: a draft hasn't reached anyone yet.
+  const ASSUMED = 480;
+  function capacity(ws, days) {
+    const out = new Map(); // memberId → [{ min, from, off, week }]
+    if (!days.length) return out;
+    const weeks = [...new Set(days.map(weekOf))];
+    const lo = weeks[0], hi = addDays(weeks.at(-1), 6);
+    const sent = new Map(), shiftWeeks = new Set();
+    for (const s of Object.values(db.shifts)) {
+      if (s.wsId !== ws.id || !s.pub || s.pub.date < lo || s.pub.date > hi) continue;
+      const k = s.pub.memberId + '|' + s.pub.date;
+      sent.set(k, (sent.get(k) || 0) + paid(s.pub));
+      shiftWeeks.add(s.pub.memberId + '|' + weekOf(s.pub.date));
+    }
+    for (const m of ws.members) {
+      const av = availOf(ws.id, m.id), usual = av?.week?.some((d) => d.length) ? av.week : null;
+      out.set(m.id, days.map((k) => {
+        const wd = new Date(k + 'T12:00:00Z').getUTCDay(), weekday = wd > 0 && wd < 6;
+        const off = av?.off?.find((o) => k >= o.from && k <= o.to) || null;
+        if (off) return { min: 0, from: 'off', note: off.note || null, week: 0 };
+        if (shiftWeeks.has(m.id + '|' + weekOf(k))) { const n = sent.get(m.id + '|' + k) || 0; return { min: n, from: 'shift', week: n }; }
+        if (usual) { const n = usual[wd].reduce((t, [a, b]) => t + (b - a), 0); return { min: n, from: 'usual', week: n }; }
+        return { min: ASSUMED, from: 'assumed', week: weekday ? ASSUMED : 0 };
+      }));
+    }
+    return out;
+  }
+  return { route, memberGone, sentMinutes, capacity, week, mine, warnings, availOf };
 }

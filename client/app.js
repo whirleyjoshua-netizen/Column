@@ -16991,7 +16991,7 @@
   // onto someone to book it). At full size it's a page beside the sidebar (sheetOrPage), else the pop-up. -----
   const canTeam = () => memberMay('teamSchedule');
   const TM = { open: false, tab: store.get('teamTab', 'week'), date: null };
-  const TEAM_TABS = [['shifts', 'Shifts'], ['week', 'This week'], ['ahead', 'Weeks ahead'], ['visits', 'Visits']];
+  const TEAM_TABS = [['shifts', 'Shifts'], ['hours', 'Hours'], ['week', 'This week'], ['ahead', 'Weeks ahead'], ['visits', 'Visits']];
   function openTeam(tab) {
     if (!canTeam()) return toast('An owner or admin decides who sees the team.');
     if (tab) TM.tab = tab;
@@ -17033,11 +17033,12 @@
       ...(nav ? [nav] : []), body);
     if (TM.tab === 'week') body.append(teamWeekView(k));
     else if (TM.tab === 'shifts') body.append(shiftsView(k));
+    else if (TM.tab === 'hours') body.append(hoursView(k));
     else if (TM.tab === 'ahead') body.append(forecastSection());
     else teamVisits(k, body);
   }
   // Work changed while the Team page is open: its numbers are asked for again (a moment later, once for many changes).
-  const teamSoon = () => { if (!TM.open || TS.timer) return; TS.timer = setTimeout(() => { TS.timer = 0; TS.data = null; WL.at = 0; FC.at = 0; if (!TM.detail) teamDraw(); }, 300); };
+  const teamSoon = () => { if (!TM.open || TS.timer) return; TS.timer = setTimeout(() => { TS.timer = 0; TS.data = null; WL.at = 0; FC.at = 0; HRS.at = 0; if (!TM.detail) teamDraw(); }, 300); };
   // The team's week in numbers (GET /workload): what each person is carrying, never what the tasks say.
   const WL = { week: null, data: null, loading: null, at: 0 };
   const fmtHrs = (m) => (m ? (m % 60 ? (m / 60).toFixed(1) : String(m / 60)) + ' h' : '0 h');
@@ -17081,7 +17082,7 @@
     const wkLabel = (w, i) => i === 0 ? 'This week' : i === 1 ? 'Next week' : keyDate(w).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
     const inWeek = (it, i) => it.day >= d.weeks[i] && it.day <= addDays(d.weeks[i], 6);
     const cell = (b, onclick, i) => h('button', { class: 'fc-cell' + (b.over ? ' over' : '') + (b.min || b.tasks ? '' : ' none'), 'data-week': i, onclick,
-      title: `${fmtHrs(b.min)} booked · ${b.tasks} task${b.tasks === 1 ? '' : 's'} due (${b.confirmed} confirmed, ${b.estimated} estimated)${b.over ? ' · over a full day somewhere' : ''}` },
+      title: `${fmtHrs(b.min)} booked · ${b.tasks} task${b.tasks === 1 ? '' : 's'} due (${b.confirmed} confirmed, ${b.estimated} estimated)${b.cap != null ? ` · ${fmtHrs(b.cap)} to work` : ''}${b.over ? ' · past their hours somewhere' : ''}` },
       h('b', {}, fmtHrs(b.min)), h('small', {}, b.tasks ? `${b.tasks} task${b.tasks === 1 ? '' : 's'}${b.estimated ? ` · ${b.estimated} est.` : ''}` : 'no tasks'));
     const people = d.people.filter((p) => p.weeks.some((w) => w.min || w.tasks) || p.overdue);
     box.append(
@@ -17092,7 +17093,7 @@
         d.unassigned.total ? h('div', { class: 'fc-who fc-nobody' }, h('span', {}, 'Nobody on it'), h('small', {}, `${d.unassigned.total} in all`)) : null,
         ...(d.unassigned.total ? d.unassigned.perWeek.map((n, i) => h('button', { class: 'fc-cell nobody' + (n ? '' : ' none'), onclick: () => fcItemsSheet('Nobody on it · ' + wkLabel(d.weeks[i], i).toLowerCase(), d.items.filter((it) => !it.memberIds.length && inWeek(it, i))) }, h('b', {}, String(n)), h('small', {}, n === 1 ? 'task' : 'tasks'))) : [])),
       people.length ? null : h('p', { class: 'day-hint' }, 'Nothing booked or due in the next four weeks.'),
-      h('p', { class: 'day-hint' }, `Confirmed: given to someone, with a due date or a booking. Estimated: no due date, so its step’s date or its campaign’s end. A day over ${fmtHrs(d.capacityMin)} booked is overloaded. Tap a week to see the work behind it.`));
+      h('p', { class: 'day-hint' }, `Confirmed: given to someone, with a due date or a booking. Estimated: no due date, so its step’s date or its campaign’s end. A day booked past someone’s hours (their sent shifts, else their usual hours, else ${fmtHrs(d.capacityMin)} a weekday; none on time off) is overloaded. Tap a week to see the work behind it.`));
     if (d.conflicts.length) box.append(h('div', { class: 'any-h fc-sub' }, `Double booked · ${d.conflicts.length}`),
       ...d.conflicts.map((c) => h('button', { class: 'need-row late fc-conflict', onclick: () => { const v = c.visits.find((x) => x.jobId); if (v) openRecord(v.jobId); } },
         h('span', { class: 'need-ic' }, '!'), h('span', { class: 'need-text' }, h('b', {}, `${c.name} · ${dayName(c.day)}`), h('small', {}, c.visits.map((v) => `${v.hidden ? 'An appointment' : v.kind} ${fmtTime(v.start)}–${fmtTime(v.end)}`).join(' overlaps '))))));
@@ -17145,7 +17146,50 @@
         p.perDay[i].due ? h('small', { class: 'wl-due' }, `${p.perDay[i].due} due`) : null))),
       h('p', { class: 'day-hint' }, `${fmtHrs(p.bookedMin)} booked · ${p.visits} job visit${p.visits === 1 ? '' : 's'} · ${p.campaigns} campaign${p.campaigns === 1 ? '' : 's'} they own`),
     ]);
-  }  // ----- Shifts (Team plan step 2, the owner 2026-11-20): build the week's work hours, then Send. Owners and admins
+  }  // ----- Hours (Team plan step 3): for a week, the hours each person has (sent shifts, else usual hours, else an
+  // assumed 8-hour weekday; none on time off) against what's booked, and what's free. -----
+  const HRS = { week: null, data: null, loading: null, at: 0 };
+  const HR_FROM = { shift: 'their sent shifts', usual: 'their usual hours', assumed: 'assumed: 8 h a weekday', off: 'time off', mixed: 'shifts and usual hours' };
+  function hoursView(k) {
+    const week = weekStart(k), today = todayKey();
+    if ((HRS.week !== week || Date.now() - HRS.at > 30_000) && !HRS.loading) {
+      HRS.loading = api('GET', '/hours?week=' + week).then((x) => { HRS.week = week; HRS.data = x; HRS.at = Date.now(); }).catch((e) => toast(e.message)).finally(() => { HRS.loading = null; teamRedraw(); });
+    }
+    const d = HRS.data;
+    if (!d || HRS.week !== week) return h('p', { class: 'day-hint' }, 'Working out the week’s hours…');
+    const T = d.totals;
+    const stat = (v, label, cls = '') => h('div', { class: 'wl-stat' + (cls ? ' ' + cls : ''), 'data-k': label }, h('b', {}, v), h('small', {}, label));
+    const max = Math.max(1, ...d.people.map((p) => Math.max(p.available, p.booked)));
+    const row = (p) => h('button', { class: 'hr-row' + (p.over ? ' over' : ''), 'data-member': p.id, onclick: () => hoursPersonSheet(p) },
+      h('div', { class: 'wl-who' }, avatar(p.id), h('span', {}, p.name)),
+      h('div', { class: 'hr-bar', title: `${fmtHrs(p.booked)} booked of ${fmtHrs(p.available)}` },
+        h('span', { class: 'hr-cap', style: `width:${Math.round((p.available / max) * 100)}%` }),
+        h('span', { class: 'hr-fill', style: `width:${Math.round((Math.min(p.booked, Math.max(p.available, p.booked)) / max) * 100)}%` })),
+      h('div', { class: 'hr-nums' }, h('b', {}, p.over ? `${fmtHrs(p.over)} over` : `${fmtHrs(p.free)} free`), h('small', {}, `${fmtHrs(p.booked)} of ${fmtHrs(p.available)}${p.offDays ? ` · ${p.offDays} day${p.offDays === 1 ? '' : 's'} off` : ''}`)),
+      h('small', { class: 'hr-from hr-' + p.from }, HR_FROM[p.from] || ''));
+    const people = [...d.people].sort((a, b) => b.over - a.over || a.free - b.free || a.name.localeCompare(b.name));
+    return h('div', { class: 'hr' },
+      h('div', { class: 'wl-sum' }, stat(fmtHrs(T.available), 'the team has'), stat(fmtHrs(T.booked), 'booked'), stat(fmtHrs(T.free), 'free', 'good'), stat(fmtHrs(T.over), 'over', T.over ? 'bad' : ''), stat(String(T.dueWeek), 'tasks due')),
+      h('div', { class: 'hr-rows' }, people.map(row)),
+      d.short.length ? h('div', { class: 'hr-short' }, h('div', { class: 'any-h' }, `Booked past their hours · ${d.short.length}`),
+        ...d.short.map((x) => h('button', { class: 'need-row late hr-srow', 'data-member': x.memberId, 'data-day': x.day, onclick: () => hoursPersonSheet(d.people.find((p) => p.id === x.memberId)) },
+          h('span', { class: 'need-ic' }, '!'), h('span', { class: 'need-text' }, h('b', {}, `${x.name} · ${dayName(x.day)}`), h('small', {}, `${fmtHrs(x.booked)} booked, ${x.from === 'off' ? 'on time off' : `${fmtHrs(x.cap)} to work (${HR_FROM[x.from]})`}`))))) : null,
+      h('p', { class: 'day-hint' }, 'Hours come from each person’s sent shifts that week, else their usual hours, else an assumed 8-hour weekday; time off is none. Booked is job visits and timed appointments. Tasks have no length, so they’re counted, not added in. Weeks ahead uses the same hours.'));
+  }
+  function hoursPersonSheet(p) {
+    if (!p) return;
+    const max = Math.max(60, ...p.days.map((x) => Math.max(x.cap, x.booked)));
+    teamSheet(`${p.name}’s hours`, [
+      h('div', { class: 'wl-sum' }, ...[[fmtHrs(p.available), 'to work'], [fmtHrs(p.booked), 'booked'], [p.over ? fmtHrs(p.over) : fmtHrs(p.free), p.over ? 'over' : 'free']].map(([n, l]) => h('div', { class: 'wl-stat' }, h('b', {}, n), h('small', {}, l)))),
+      h('div', { class: 'hr-days' }, p.days.map((x) => h('div', { class: 'hr-day' + (x.day === todayKey() ? ' today' : '') + (x.booked > x.cap ? ' over' : '') + ' hr-' + x.from, 'data-day': x.day },
+        h('small', {}, keyDate(x.day).toLocaleDateString(undefined, { weekday: 'short' })),
+        h('div', { class: 'hr-dbar' }, h('span', { class: 'hr-dcap', style: `height:${Math.round((x.cap / max) * 100)}%` }), h('span', { class: 'hr-dfill', style: `height:${Math.round((x.booked / max) * 100)}%` })),
+        h('b', {}, x.from === 'off' ? 'Off' : fmtHrs(x.cap)), h('small', {}, x.booked ? fmtHrs(x.booked) + ' booked' : x.from === 'off' && x.note ? x.note : ' '), x.due ? h('small', { class: 'wl-due' }, `${x.due} due`) : null))),
+      h('p', { class: 'day-hint' }, `From ${HR_FROM[p.from] || 'their hours'}. The bar's outline is what they work that day, the fill what's booked.`),
+      amAdmin() ? h('div', { class: 'btns' }, h('button', { class: 'btn small', onclick: () => availSheet(p.id, p.name) }, 'Usual hours and time off')) : null,
+    ]);
+  }
+  // ----- Shifts (Team plan step 2, the owner 2026-11-20): build the week's work hours, then Send. Owners and admins
   // build (a draft until Send); everyone sees their own sent shifts (My shifts), and everyone's when an admin lets
   // members see the team's schedule. Usual hours and time off sit beside them; the builder warns, never blocks. -----
   const SHF = { week: null, data: null, loading: null, at: 0 };
@@ -17155,7 +17199,7 @@
   const hmIn = (v) => { const [a, b] = String(v || '').split(':').map(Number); return Number.isInteger(a) && Number.isInteger(b) ? a * 60 + b : null; };
   const shPaid = (s) => Math.max(0, s.end - s.start - (s.breakMin || 0));
   const shTimes = (s) => `${fmtTime(s.start)}–${fmtTime(s.end % 1440)}${s.end > 1440 ? ' (next day)' : ''}`;
-  const shiftsStale = () => { SHF.at = 0; if (TM.open && TM.tab === 'shifts' && !TM.detail) teamDraw(); if (MYS.open) myShiftsDraw(); };
+  const shiftsStale = () => { SHF.at = 0; HRS.at = 0; FC.at = 0; if (TM.open && TM.tab === 'shifts' && !TM.detail) teamDraw(); if (MYS.open) myShiftsDraw(); };
   function shiftsView(k) {
     const week = weekStart(k);
     if ((SHF.week !== week || Date.now() - SHF.at > 30_000) && !SHF.loading) {
@@ -17265,9 +17309,8 @@
     }).catch((e) => box.replaceChildren(h('p', { class: 'err' }, e.message)));
     return box;
   }
-  function availSheet(memberId) {
-    const p = SHF.data?.people.find((x) => x.id === memberId);
-    teamSheet(p ? `${p.name}’s hours and time off` : 'Hours and time off', [availEditor(memberId, () => { TM.detail = false; teamDraw(); })]);
+  function availSheet(memberId, name = SHF.data?.people.find((x) => x.id === memberId)?.name) {
+    teamSheet(name ? `${name}’s hours and time off` : 'Hours and time off', [availEditor(memberId, () => { TM.detail = false; teamDraw(); })]);
   }
   // My shifts: what each person was sent, the next four weeks, with their usual hours and time off.
   const MYS = { open: false, data: null };
