@@ -4444,3 +4444,45 @@ body:not(.wide) .cc-board { height: 70vh; }
 .cb-launch-opt { display: flex; gap: 10px; align-items: flex-start; padding: 10px; border: 1px solid var(--line); border-radius: 10px; cursor: pointer; }
 .cb-launch-opt small { display: block; color: var(--muted); font-weight: 400; }
 .cb-launch-opt:has(input:checked) { border-color: var(--accent); }
+/* Shifts, Day view: a timeline like the visits board (the owner, 2026-11-20). */
+.sh-views { display: inline-flex; border: 1px solid var(--line); border-radius: 9px; overflow: hidden; }
+.sh-view { border: 0; background: none; color: var(--muted); font: inherit; font-size: 13px; padding: 5px 12px; cursor: pointer; }
+.sh-view.on { background: var(--accent-soft); color: var(--text); font-weight: 600; }
+button.sh-h { border: 0; background: none; font: inherit; cursor: pointer; border-radius: 8px; }
+button.sh-h:hover { background: var(--card-hover); }
+.sh-cell.over { border-color: var(--accent); background: var(--accent-soft); }
+.sh-chip.dragging, .shd-preset.dragging { opacity: .35; }
+.sh-ghost { position: fixed; left: 0; top: 0; z-index: 1000; pointer-events: none; box-shadow: 0 8px 24px rgb(0 0 0 / .2); opacity: .95; }
+.shd-board { min-width: 720px; margin: 0; }
+.shd-board .ts-row { grid-template-columns: 160px minmax(0, 1fr); }
+.shd-board .ts-lane { background: repeating-linear-gradient(90deg, transparent 0, transparent calc(100% / var(--hrs) - 1px), var(--line) calc(100% / var(--hrs) - 1px), var(--line) calc(100% / var(--hrs))); }
+.shd-board .ts-name.sh-who { border-radius: 0; font-size: 13px; }
+.shd-row { min-height: 58px; }
+.shd-lane { touch-action: pan-y; cursor: crosshair; }
+.shd-lane.over { background-color: var(--accent-soft); }
+.shd-lane.off { background-color: color-mix(in srgb, var(--panel) 70%, transparent); background-image: repeating-linear-gradient(135deg, transparent 0 6px, color-mix(in srgb, var(--line) 60%, transparent) 6px 12px); }
+.shd-offnote { position: absolute; left: 8px; bottom: 3px; font-size: 11px; color: var(--muted); pointer-events: none; }
+.shd-usual { position: absolute; top: 4px; bottom: 4px; border-radius: 8px; background: color-mix(in srgb, #22c55e 12%, transparent); border: 1px dashed color-mix(in srgb, #22c55e 45%, transparent); }
+.shd-blk { position: absolute; top: 6px; bottom: 6px; justify-content: center; overflow: hidden; padding: 3px 12px; touch-action: none; cursor: grab; user-select: none; z-index: 1; }
+.shd-blk.sent { background: color-mix(in srgb, var(--accent) 22%, var(--panel)); border-left: 3px solid var(--accent); }
+.shd-blk b, .shd-blk small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.shd-blk.dragging { cursor: grabbing; box-shadow: 0 6px 18px rgb(0 0 0 / .18); z-index: 3; opacity: .9; }
+.shd-blk.gone { cursor: pointer; }
+.shd-blk.overnight { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.shd-h { position: absolute; top: 0; bottom: 0; width: 9px; cursor: ew-resize; z-index: 2; }
+.shd-h.l { left: 0; } .shd-h.r { right: 0; }
+.shd-h::after { content: ''; position: absolute; top: 30%; bottom: 30%; left: 3px; width: 3px; border-radius: 2px; background: color-mix(in srgb, var(--text) 30%, transparent); opacity: 0; transition: opacity .15s; }
+.shd-blk:hover .shd-h::after { opacity: 1; }
+.shd-draw { pointer-events: none; opacity: .8; }
+.shd-cover { min-height: 30px; background: var(--panel); }
+.shd-cov { position: relative; }
+.shd-slot { position: absolute; top: 4px; bottom: 4px; display: flex; align-items: center; justify-content: center; font-size: 10.5px; color: var(--text); background: color-mix(in srgb, var(--accent) calc(var(--f) * 45%), transparent); border-right: 1px solid var(--panel); }
+.shd-slot.gap { background: color-mix(in srgb, var(--danger) 22%, transparent); }
+.shd-gaps { margin: 0; color: var(--danger); font-size: 13.5px; }
+.shd-tray { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.shd-tray > small { color: var(--muted); }
+.shd-preset { cursor: grab; touch-action: none; }
+@media (max-width: 560px) { .shd-board .ts-row { grid-template-columns: 96px minmax(0, 1fr); } }
+.shd-blk.new, .shd-blk.changed { background: color-mix(in srgb, var(--accent) 10%, var(--card)); }
+.shd-blk.gone { z-index: 0; top: auto; bottom: 3px; padding: 1px 8px; justify-content: flex-start; flex-direction: row; gap: 6px; }
+.shd-blk.gone small { display: none; }

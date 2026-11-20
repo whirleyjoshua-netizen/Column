@@ -17875,12 +17875,14 @@
     const k = TM.date || todayKey(), today = todayKey();
     const week = weekStart(k), last = addDays(week, 6);
     const fmt = (d, o) => keyDate(d).toLocaleDateString(undefined, o);
-    const go = (n) => { TM.date = TM.tab === 'visits' ? addDays(k, n) : addDays(k, 7 * n); teamDraw(); };
-    const here = TM.tab === 'visits' ? k === today : week <= today && today <= last;
+    // Visits, and Shifts in its Day view, go a day at a time; the rest a week.
+    const daily = TM.tab === 'visits' || (TM.tab === 'shifts' && shView() === 'day');
+    const go = (n) => { TM.date = daily ? addDays(k, n) : addDays(k, 7 * n); teamDraw(); };
+    const here = daily ? k === today : week <= today && today <= last;
     const nav = TM.tab === 'ahead' ? null : h('div', { class: 'tm-nav' },
-      h('button', { class: 'icon-btn tm-prev', 'aria-label': TM.tab === 'visits' ? 'Day before' : 'Week before', onclick: () => go(-1) }, '‹'),
-      h('b', { class: 'tm-when' }, TM.tab === 'visits' ? dayName(k) : `${here ? 'This week' : 'Week of'} ${fmt(week, { month: 'short', day: 'numeric' })} – ${fmt(last, { month: 'short', day: 'numeric' })}`),
-      h('button', { class: 'icon-btn tm-next', 'aria-label': TM.tab === 'visits' ? 'Day after' : 'Week after', onclick: () => go(1) }, '›'),
+      h('button', { class: 'icon-btn tm-prev', 'aria-label': daily ? 'Day before' : 'Week before', onclick: () => go(-1) }, '‹'),
+      h('b', { class: 'tm-when' }, daily ? dayName(k) : `${here ? 'This week' : 'Week of'} ${fmt(week, { month: 'short', day: 'numeric' })} – ${fmt(last, { month: 'short', day: 'numeric' })}`),
+      h('button', { class: 'icon-btn tm-next', 'aria-label': daily ? 'Day after' : 'Week after', onclick: () => go(1) }, '›'),
       here ? null : h('button', { class: 'btn small tm-today', onclick: () => { TM.date = today; teamDraw(); } }, 'Today'));
     const body = h('div', { class: 'tm-body', 'data-tab': TM.tab });
     box.replaceChildren(
@@ -18068,9 +18070,20 @@
     const wd = (k2) => keyDate(k2).toLocaleDateString(undefined, { weekday: 'short' });
     const chip = (s) => {
       const warn = (d.warnings?.[s.id] || []).map((w) => SH_WARN[w]);
-      return h('button', { class: 'sh-chip ' + (s.state || 'sent') + (warn.length ? ' warn' : ''), 'data-shift': s.id, disabled: !edit,
+      const el = h('button', { class: 'sh-chip ' + (s.state || 'sent') + (warn.length ? ' warn' : ''), 'data-shift': s.id, disabled: !edit,
         title: [shTimes(s), s.label, s.note, edit ? SH_STATE[s.state] : '', ...warn].filter(Boolean).join(' · '), onclick: (e) => { e.stopPropagation(); if (edit) shiftSheet(s); } },
         h('b', {}, shTimes(s)), s.label ? h('small', {}, s.label) : null, warn.length ? h('i', { class: 'sh-warn', 'aria-label': warn.join(', ') }, '!') : null);
+      // Dragged to another day or person (the owner, 2026-11-20: drag and drop like the visits board).
+      if (edit && s.state !== 'gone') el.addEventListener('pointerdown', (ev) => shDrag(ev, el, {
+        drop: (x, y) => {
+          const cell = document.elementFromPoint(x, y)?.closest('.sh-cell');
+          if (!cell || (cell.dataset.member === s.memberId && cell.dataset.day === s.date)) return null;
+          return { memberId: cell.dataset.member, date: cell.dataset.day };
+        },
+        over: (x, y) => document.elementFromPoint(x, y)?.closest('.sh-cell'),
+        done: (patch) => shMove(s, patch),
+      }));
+      return el;
     };
     const offOn = (mid, day) => (d.avail?.[mid]?.off || []).find((o) => day >= o.from && day <= o.to);
     const rows = d.people.map((p) => {
@@ -18091,13 +18104,203 @@
     const copyBtn = edit ? h('button', { class: 'btn small sh-copy', onclick: () => api('POST', '/shifts/copy', { from: addDays(week, -7), to: week }).then((r) => { toast(r.copied ? `Copied ${r.copied} shift${r.copied === 1 ? '' : 's'} from last week` : 'Nothing to copy from last week'); shiftsStale(); }).catch((e) => toast(e.message)) }, 'Copy last week') : null;
     const presetBtn = edit ? h('button', { class: 'btn small sh-presets', onclick: () => presetsSheet() }, 'Saved shifts') : null;
     const total = Object.values(d.totals).reduce((n, x) => n + x, 0);
+    const views = h('div', { class: 'seg sh-views', role: 'tablist' }, [['day', 'Day'], ['week', 'Week']].map(([v, l]) => h('button', { type: 'button', role: 'tab', class: 'sh-view' + (shView() === v ? ' on' : ''), 'data-view': v, 'aria-selected': String(shView() === v),
+      onclick: () => { store.set('shView', v); teamDraw(); } }, l)));
+    const bar = h('div', { class: 'sh-bar' }, views, h('span', { class: 'sh-sum' }, `${fmtHrs(total)} scheduled this week` + (d.over?.length ? ` · ${d.over.length} over 40 h` : '')), h('span', { class: 'grow' }), presetBtn, copyBtn, sendBtn);
+    if (shView() === 'day') return shiftsDay(k, d, bar);
     return h('div', { class: 'sh' },
-      h('div', { class: 'sh-bar' }, h('span', { class: 'sh-sum' }, `${fmtHrs(total)} scheduled` + (d.over?.length ? ` · ${d.over.length} over 40 h` : '')), h('span', { class: 'grow' }), presetBtn, copyBtn, sendBtn),
+      bar,
       h('div', { class: 'sh-scroll' }, h('div', { class: 'sh-grid' },
-        h('div', { class: 'sh-h' }), ...d.days.map((day) => h('div', { class: 'sh-h' + (day === today ? ' today' : '') }, h('b', {}, wd(day)), h('small', {}, keyDate(day).getDate()))),
+        h('div', { class: 'sh-h' }), ...d.days.map((day) => h('button', { type: 'button', class: 'sh-h' + (day === today ? ' today' : ''), 'data-day': day, title: 'Open this day on the timeline', onclick: () => { TM.date = day; store.set('shView', 'day'); teamDraw(); } }, h('b', {}, wd(day)), h('small', {}, keyDate(day).getDate()))),
         ...rows.flat())),
       h('p', { class: 'day-hint' }, edit
-        ? 'Tap a day to add a shift, a shift to change it, a name for their usual hours and time off. Nobody sees changes until you Send; then each person whose shifts changed is told. ! marks time off, outside usual hours or an overlap.'
+        ? 'Tap a day to add a shift, a shift to change it, a name for their usual hours and time off; drag a shift to another day or person. Tap a day’s name to open it on the timeline. Nobody sees changes until you Send; then each person whose shifts changed is told. ! marks time off, outside usual hours or an overlap.'
+        : 'Shifts as they were sent. Your own are also in 🕒 My shifts.'));
+  }
+  const shView = () => (store.get('shView', 'day') === 'week' ? 'week' : 'day');
+  // A shift changed by dragging: shown at once, then saved (and the week asked for again, for its warnings and totals).
+  function shMove(s, patch) {
+    const before = { ...s };
+    Object.assign(s, patch);
+    teamDraw();
+    api('PATCH', '/shifts/' + s.id, patch).then(() => shiftsStale()).catch((e) => { Object.assign(s, before); toast(e.message); shiftsStale(); });
+  }
+  // Pick up an element and drop it somewhere (a shift chip onto another day, a saved shift onto someone's row). Mouse,
+  // pen and touch; a press that doesn't move is left as a tap.
+  function shDrag(ev, el, { drop, over, done }) {
+    if (ev.button !== 0) return;
+    const x0 = ev.clientX, y0 = ev.clientY;
+    let ghost = null, lit = null;
+    const move = (e) => {
+      if (!ghost && Math.hypot(e.clientX - x0, e.clientY - y0) < 6) return;
+      e.preventDefault();
+      if (!ghost) { ghost = el.cloneNode(true); ghost.classList.add('sh-ghost'); ghost.style.width = el.offsetWidth + 'px'; document.body.append(ghost); el.classList.add('dragging'); document.body.classList.add('is-dragging'); }
+      ghost.style.transform = `translate(${e.clientX - 16}px, ${e.clientY - 12}px)`;
+      const o = over?.(e.clientX, e.clientY) || null;
+      if (o !== lit) { lit?.classList.remove('over'); lit = o; lit?.classList.add('over'); }
+    };
+    const end = (e) => {
+      removeEventListener('pointermove', move); removeEventListener('pointerup', end); removeEventListener('pointercancel', end);
+      if (!ghost) return;
+      ghost.remove(); el.classList.remove('dragging'); lit?.classList.remove('over'); document.body.classList.remove('is-dragging');
+      const eat = (c) => { c.stopPropagation(); c.preventDefault(); };
+      addEventListener('click', eat, { capture: true, once: true });
+      setTimeout(() => removeEventListener('click', eat, { capture: true }), 100);
+      const to = e.type === 'pointerup' ? drop(e.clientX, e.clientY) : null;
+      if (to) done(to);
+    };
+    addEventListener('pointermove', move, { passive: false }); addEventListener('pointerup', end); addEventListener('pointercancel', end);
+  }
+  // The day on a timeline, like the visits board (the owner, 2026-11-20): a row for each person across the hours, each
+  // shift a block to drag to another time or person and stretch from either end, a stretch dragged on an empty row is a
+  // new shift, their usual hours show behind, and the strip on top counts who's on so the gaps stand out.
+  const SH_SNAP = 15;
+  function shiftsDay(k, d, bar) {
+    const edit = d.canEdit;
+    const wday = keyDate(k).getDay();
+    const live = d.shifts.filter((s) => s.date === k);
+    const on = live.filter((s) => s.state !== 'gone');
+    const usualOf = (mid) => d.avail?.[mid]?.week?.[wday] || [];
+    const offOn = (mid) => (d.avail?.[mid]?.off || []).find((o) => k >= o.from && k <= o.to);
+    // The hours shown: 6am to 10pm, wider for any shift or usual hours outside them.
+    let H0 = 6, H1 = 22;
+    for (const s of live) { H0 = Math.min(H0, Math.floor(s.start / 60)); H1 = Math.max(H1, Math.ceil(Math.min(s.end, 1440) / 60)); }
+    for (const p of d.people) for (const [a, b] of usualOf(p.id)) { H0 = Math.min(H0, Math.floor(a / 60)); H1 = Math.max(H1, Math.ceil(b / 60)); }
+    const lo = H0 * 60, span = (H1 - H0) * 60;
+    const pct = (m) => (Math.max(0, Math.min(span, m - lo)) / span) * 100;
+    const place = (el, a, b) => { el.style.left = pct(a) + '%'; el.style.width = `max(28px, ${pct(Math.min(b, 1440)) - pct(a)}%)`; };
+    const snap = (m) => Math.round(m / SH_SNAP) * SH_SNAP;
+    const minAt = (lane, x) => { const r = lane.getBoundingClientRect(); return lo + ((x - r.left) / r.width) * span; };
+    const grid = `--hrs:${H1 - H0}`;
+    const hours = h('div', { class: 'ts-hours' }, Array.from({ length: H1 - H0 + 1 }, (_, i) => h('span', { style: `left:${(i / (H1 - H0)) * 100}%` }, (H1 - H0 > 14 ? i % 2 : 0) ? '' : fmtTime(((H0 + i) % 24) * 60))));
+    // Who's on, every half hour; a half hour with nobody between the day's first start and last finish is a gap.
+    const slots = [], first = on.length ? Math.min(...on.map((s) => s.start)) : null, lastEnd = on.length ? Math.max(...on.map((s) => Math.min(s.end, 1440))) : null;
+    for (let m = lo; m < H1 * 60; m += 30) slots.push({ m, n: new Set(on.filter((s) => s.start < m + 30 && Math.min(s.end, 1440) > m).map((s) => s.memberId)).size });
+    const most = Math.max(1, ...slots.map((x) => x.n));
+    const gaps = [];
+    for (const x of slots) if (first != null && x.n === 0 && x.m >= first && x.m < lastEnd) { const g = gaps.at(-1); if (g && g.to === x.m) g.to = x.m + 30; else gaps.push({ from: x.m, to: x.m + 30 }); }
+    const cover = h('div', { class: 'ts-row shd-cover' }, h('div', { class: 'ts-name' }, h('small', {}, 'Who’s on')),
+      h('div', { class: 'shd-cov' }, slots.map((x) => h('span', { class: 'shd-slot' + (gaps.some((g) => x.m >= g.from && x.m < g.to) ? ' gap' : ''), style: `left:${pct(x.m)}%;width:${pct(x.m + 30) - pct(x.m)}%;--f:${x.n / most}`, title: `${fmtTime(x.m)}: ${x.n ? plural(x.n, 'person') : 'nobody'} on` }, x.n ? String(x.n) : ''))));
+    const block = (s) => {
+      const warn = (d.warnings?.[s.id] || []).map((w) => SH_WARN[w]);
+      const t = h('b', {}, shTimes(s));
+      const el = h('div', { class: 'shd-blk sh-chip ' + (s.state || 'sent') + (warn.length ? ' warn' : '') + (s.end > 1440 ? ' overnight' : ''), 'data-shift': s.id, role: 'button', tabindex: '0',
+        title: [shTimes(s), s.label, s.note, edit ? SH_STATE[s.state] : '', ...warn].filter(Boolean).join(' · '),
+        onkeydown: (e) => { if (edit && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); shiftSheet(s); } } },
+        edit && s.state !== 'gone' ? h('span', { class: 'shd-h l', 'aria-hidden': 'true' }) : null, t,
+        h('small', {}, [s.label, fmtHrs(shPaid(s)) + (s.breakMin ? ` · ${s.breakMin} min break` : '')].filter(Boolean).join(' · ')),
+        warn.length ? h('i', { class: 'sh-warn', 'aria-label': warn.join(', ') }, '!') : null,
+        edit && s.state !== 'gone' ? h('span', { class: 'shd-h r', 'aria-hidden': 'true' }) : null);
+      place(el, s.start, s.end);
+      if (!edit) return el;
+      el.addEventListener('pointerdown', (ev) => {
+        if (ev.button !== 0) return;
+        if (s.state === 'gone') return void el.addEventListener('pointerup', () => shiftSheet(s), { once: true });
+        ev.preventDefault();
+        const mode = ev.target.closest('.shd-h.l') ? 'start' : ev.target.closest('.shd-h.r') ? 'end' : 'move';
+        const lane = el.parentElement, x0 = ev.clientX, y0 = ev.clientY;
+        const len = s.end - s.start;
+        let moved = false, nx = { start: s.start, end: s.end, memberId: s.memberId }, row = null;
+        el.setPointerCapture?.(ev.pointerId);
+        const move = (e) => {
+          if (!moved && Math.hypot(e.clientX - x0, e.clientY - y0) < 5) return;
+          moved = true;
+          el.classList.add('dragging');
+          document.body.classList.add('is-dragging');
+          const dm = snap(((e.clientX - x0) / lane.getBoundingClientRect().width) * span);
+          if (mode === 'move') {
+            const st = Math.max(0, Math.min(1440 - SH_SNAP, s.start + dm));
+            nx = { ...nx, start: st, end: st + len };
+            const r = document.elementsFromPoint(e.clientX, e.clientY).find((x) => x.classList.contains('shd-lane'));
+            if (r && r !== row) { row?.classList.remove('over'); row = r; row.classList.add('over'); }
+            if (r) nx.memberId = r.dataset.member;
+            const top = (r || lane).getBoundingClientRect().top - lane.getBoundingClientRect().top;
+            el.style.transform = `translateY(${top}px)`;
+          } else if (mode === 'start') nx = { ...nx, start: Math.max(0, Math.min(s.end - SH_SNAP, s.start + dm)) };
+          else nx = { ...nx, end: Math.max(s.start + SH_SNAP, Math.min(s.start + 1440, s.end + dm)) };
+          place(el, nx.start, nx.end);
+          t.textContent = shTimes(nx);
+        };
+        const up = (e) => {
+          el.removeEventListener('pointermove', move); el.removeEventListener('pointerup', up); el.removeEventListener('pointercancel', up);
+          document.body.classList.remove('is-dragging');
+          row?.classList.remove('over');
+          if (!moved) { if (e.type === 'pointerup') shiftSheet(s); return; }
+          if (e.type !== 'pointerup') return void teamDraw();
+          const patch = {};
+          if (nx.start !== s.start) patch.start = nx.start;
+          if (nx.end !== s.end) patch.end = nx.end;
+          if (nx.memberId !== s.memberId) patch.memberId = nx.memberId;
+          if (!Object.keys(patch).length) return void teamDraw();
+          if ('start' in patch || 'end' in patch) { patch.start = nx.start; patch.end = nx.end; if ((s.breakMin || 0) >= nx.end - nx.start) patch.breakMin = 0; }
+          shMove(s, patch);
+        };
+        el.addEventListener('pointermove', move); el.addEventListener('pointerup', up); el.addEventListener('pointercancel', up);
+      });
+      return el;
+    };
+    const rows = d.people.map((p) => {
+      const mine = live.filter((s) => s.memberId === p.id).sort((a, b) => a.start - b.start);
+      const off = offOn(p.id);
+      const paid = mine.filter((s) => s.state !== 'gone').reduce((n, s) => n + shPaid(s), 0);
+      const lane = h('div', { class: 'ts-lane shd-lane' + (off ? ' off' : ''), 'data-member': p.id, style: grid },
+        ...usualOf(p.id).map(([a, b]) => { const u = h('span', { class: 'shd-usual', title: `Usual hours ${fmtTime(a)}–${fmtTime(b % 1440)}` }); place(u, a, b); return u; }),
+        off ? h('small', { class: 'shd-offnote' }, 'Time off' + (off.note ? ': ' + off.note : '')) : null,
+        ...mine.map(block));
+      if (edit) {
+        // Drag across an empty stretch to draw a shift; a tap adds one there (8 hours, change it in the sheet).
+        lane.addEventListener('pointerdown', (ev) => {
+          if (ev.button !== 0 || ev.target !== lane && !ev.target.matches('.shd-usual, .shd-offnote')) return;
+          const a = snap(minAt(lane, ev.clientX));
+          const x0 = ev.clientX;
+          if (ev.pointerType === 'touch') {
+            const tap = (e) => { lane.removeEventListener('pointerup', tap); if (Math.abs(e.clientX - x0) < 8) shiftSheet({ memberId: p.id, date: k, start: Math.max(0, Math.min(1440 - 60, a)), end: Math.min(a + 480, a + 1440) }); };
+            return lane.addEventListener('pointerup', tap);
+          }
+          ev.preventDefault();
+          const ghost = h('div', { class: 'shd-blk sh-chip new shd-draw' }, h('b', {}, ''));
+          let b = a, drew = false;
+          lane.setPointerCapture?.(ev.pointerId);
+          const move = (e) => {
+            if (!drew && Math.abs(e.clientX - x0) < 5) return;
+            if (!drew) { drew = true; lane.append(ghost); }
+            b = snap(minAt(lane, e.clientX));
+            const [x, y] = [Math.min(a, b), Math.max(a, b, Math.min(a, b) + SH_SNAP)];
+            place(ghost, x, y);
+            ghost.firstChild.textContent = shTimes({ start: x, end: y });
+          };
+          const up = (e) => {
+            lane.removeEventListener('pointermove', move); lane.removeEventListener('pointerup', up); lane.removeEventListener('pointercancel', up);
+            if (e.type !== 'pointerup') return void ghost.remove();
+            if (!drew) return shiftSheet({ memberId: p.id, date: k, start: Math.max(0, Math.min(1439, a)), end: a + 480 });
+            const start = Math.max(0, Math.min(a, b)), end = Math.max(a, b, start + SH_SNAP);
+            api('POST', '/shifts', { memberId: p.id, date: k, start, end: Math.min(end, 1440), breakMin: end - start > 300 ? 30 : 0 }).then(() => shiftsStale()).catch((er) => { ghost.remove(); toast(er.message); });
+          };
+          lane.addEventListener('pointermove', move); lane.addEventListener('pointerup', up); lane.addEventListener('pointercancel', up);
+        });
+      }
+      return h('div', { class: 'ts-row shd-row' },
+        h(edit ? 'button' : 'div', { class: 'ts-name sh-who', 'data-member': p.id, ...(edit ? { type: 'button', onclick: () => availSheet(p.id), title: 'Usual hours and time off' } : {}) },
+          avatar(p.id), h('span', {}, p.name), h('small', {}, paid ? fmtHrs(paid) : off ? 'off' : 'free')),
+        lane);
+    });
+    // Saved shifts, to drop on someone's row for this day.
+    const tray = edit && d.presets?.length ? h('div', { class: 'shd-tray' }, h('small', {}, 'Drag onto someone:'), d.presets.map((pr) => {
+      const c = h('button', { type: 'button', class: 'chip sh-preset shd-preset', 'data-preset': pr.id, title: 'Drag onto someone’s row, or tap to pick who' }, `${pr.label} · ${shTimes(pr)}`);
+      c.addEventListener('click', () => shiftSheet({ date: k, start: pr.start, end: pr.end, breakMin: pr.breakMin, label: pr.label }));
+      c.addEventListener('pointerdown', (ev) => shDrag(ev, c, {
+        over: (x, y) => document.elementFromPoint(x, y)?.closest('.shd-lane'),
+        drop: (x, y) => document.elementFromPoint(x, y)?.closest('.shd-lane')?.dataset.member || null,
+        done: (memberId) => api('POST', '/shifts', { memberId, date: k, start: pr.start, end: pr.end, breakMin: pr.breakMin, label: pr.label }).then(() => shiftsStale()).catch((e) => toast(e.message)),
+      }));
+      return c;
+    })) : null;
+    const gapLine = gaps.length ? h('p', { class: 'shd-gaps' }, '⚠ Nobody on ' + gaps.map((g) => `${fmtTime(g.from)}–${fmtTime(g.to)}`).join(', ')) : null;
+    return h('div', { class: 'sh shd' }, bar, tray,
+      h('div', { class: 'sh-scroll' }, h('div', { class: 'ts shd-board', style: grid, 'data-lo': lo, 'data-span': span }, h('div', { class: 'ts-row ts-head' }, h('div', { class: 'ts-name' }), hours), cover, ...rows)),
+      gapLine,
+      h('p', { class: 'day-hint' }, edit
+        ? 'Drag a shift to move it to another time or person, pull either end to change its hours, drag across an empty row to draw a new one (or tap it). Tap a shift to change the break, name or note. The faint band is their usual hours. Nobody sees changes until you Send.'
         : 'Shifts as they were sent. Your own are also in 🕒 My shifts.'));
   }
   // One shift: add or change. Saved shifts fill the times in one tap.

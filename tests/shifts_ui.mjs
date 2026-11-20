@@ -60,6 +60,8 @@ await A.ev(`([...document.querySelectorAll('#menu button')].find((b) => b.textCo
 ok(await A.until(`!!document.querySelector('#sheet .tm-tab[data-tab=shifts]')`, 8000), 'the Team page has a Shifts tab');
 ok(await A.ev(`[...document.querySelectorAll('#sheet .tm-tab')].map((b) => b.dataset.tab).join()`) === 'shifts,hours,week,ahead', 'first among the tabs');
 await A.tap(`document.querySelector('#sheet .tm-tab[data-tab=shifts]')`);
+ok(await A.until(`!!document.querySelector('#sheet .shd-board') && document.querySelector('#sheet .sh-view.on')?.dataset.view === 'day'`, 8000), 'Shifts opens on the Day timeline');
+await A.tap(`document.querySelector('#sheet .sh-view[data-view=week]')`);
 ok(await A.until(`!!document.querySelector('#sheet .sh-grid .sh-who[data-member="${samId}"]')`, 8000), 'the week: a row for Sam');
 // Next week, so nothing is in the past.
 await A.tap(`document.querySelector('#sheet .tm-next')`);
@@ -94,6 +96,50 @@ await A.tap(`document.querySelector('#sheet .shav-o-add')`);
 await A.tap(`document.querySelector('#sheet .shav-save')`);
 ok(await A.until(`!!document.querySelector('#sheet .sh-grid')`, 8000), 'saved, back on the week');
 ok((await api('GET', '/availability/' + samId)).off.length === 1, 'his time off is saved');
+// The Day view (the owner, 2026-11-20: like the visits board, drag and drop, stretch each block).
+await A.tap(`document.querySelector('#sheet button.sh-h[data-day="${mon}"]')`);
+ok(await A.until(`!!document.querySelector('#sheet .shd-board .shd-lane[data-member="${samId}"]') && document.querySelector('#sheet .tm-when').textContent.length > 0`, 8000), 'a day’s name opens it on the timeline, a row for each person');
+ok(await A.ev(`document.querySelector('#sheet .sh-view.on').dataset.view === 'day' && !!document.querySelector('#sheet .shd-lane[data-member="${samId}"] .shd-blk.gone')`), 'Sam’s removed shift shows there, crossed out');
+const joId = (await api("GET", "/state")).me.memberId;
+const at = async (mid, minute, dy = 0) => A.ev(`(() => { const b = document.querySelector('#sheet .shd-board'), l = b.querySelector('.shd-lane[data-member="${mid}"]'); l.scrollIntoView({ block: 'center' }); const r = l.getBoundingClientRect(); return [r.left + ((${minute} - Number(b.dataset.lo)) / Number(b.dataset.span)) * r.width, r.top + r.height / 2 + ${dy}]; })()`);
+const drag = async ([x1, y1], [x2, y2]) => {
+  await A.cmd('Input.dispatchMouseEvent', { type: 'mouseMoved', x: x1, y: y1 });
+  await A.cmd('Input.dispatchMouseEvent', { type: 'mousePressed', x: x1, y: y1, button: 'left', buttons: 1, clickCount: 1 });
+  for (let i = 1; i <= 8; i++) { await A.cmd('Input.dispatchMouseEvent', { type: 'mouseMoved', x: x1 + ((x2 - x1) * i) / 8, y: y1 + ((y2 - y1) * i) / 8, button: 'left', buttons: 1 }); await sleep(20); }
+  await A.cmd('Input.dispatchMouseEvent', { type: 'mouseReleased', x: x2, y: y2, button: 'left', buttons: 0, clickCount: 1 });
+  await sleep(300);
+};
+const monShifts = async (mid) => (await api('GET', '/shifts?week=' + mon)).shifts.filter((x) => x.date === mon && x.memberId === mid && x.state !== 'gone');
+await drag(await at(joId, 540), await at(joId, 780));
+let js = [];
+for (let i = 0; i < 30 && js.length !== 1; i++) { await sleep(150); js = await monShifts(joId); }
+ok(js.length === 1 && js[0].start === 540 && js[0].end === 780, 'dragging across Jo’s empty row draws a 9am–1pm shift: ' + JSON.stringify(js.map((x) => [x.start, x.end])));
+const blk = `document.querySelector('#sheet .shd-lane[data-member="${joId}"] .shd-blk[data-shift="${js[0]?.id}"]')`;
+ok(await A.until(`!!${blk} && /9am–1pm/.test(${blk}.textContent)`, 8000), 'it shows as a block: ' + await A.ev(`${blk}?.textContent`));
+// Pull the right end out to 3pm.
+const rEnd = await A.ev(`(() => { const r = ${blk}.querySelector('.shd-h.r').getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; })()`);
+const [x15] = await at(joId, 900);
+await drag(rEnd, [x15, rEnd[1]]);
+let one;
+for (let i = 0; i < 30; i++) { await sleep(150); one = (await monShifts(joId))[0]; if (one?.end === 900) break; }
+ok(one?.start === 540 && one?.end === 900, 'pulling its end out makes it 9am–3pm: ' + JSON.stringify([one?.start, one?.end]));
+ok(await A.until(`/9am–3pm/.test(${blk}?.textContent || '')`, 8000), 'and the block says so');
+// Move it an hour later and onto Sam's row.
+const mid0 = await A.ev(`(() => { const r = ${blk}.getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; })()`);
+const [, ySam] = await at(samId, 600);
+const [xa] = await at(joId, 600), [xb] = await at(joId, 660);
+await drag(mid0, [mid0[0] + (xb - xa), ySam]);
+let sams = [];
+for (let i = 0; i < 30; i++) { await sleep(150); sams = await monShifts(samId); if (sams.length) break; }
+ok(sams.length === 1 && sams[0].start === 600 && sams[0].end === 960 && !(await monShifts(joId)).length, 'dragged down and along, it’s Sam’s 10am–4pm: ' + JSON.stringify(sams.map((x) => [x.start, x.end])));
+// Who's on: a short morning shift for Jo leaves a gap before Sam starts.
+await drag(await at(joId, 420), await at(joId, 480));
+ok(await A.until(`/Nobody on 8(:00)?am–10(:00)?am/.test(document.querySelector('#sheet .shd-gaps')?.textContent || '')`, 8000), 'the gap shows: ' + await A.ev(`document.querySelector('#sheet .shd-gaps')?.textContent`));
+ok(await A.ev(`[...document.querySelectorAll('#sheet .shd-slot.gap')].length === 4`), 'four empty half hours in the Who’s on strip');
+// A tap on a block opens it.
+await A.tap(`document.querySelector('#sheet .shd-lane[data-member="${samId}"] .shd-blk:not(.gone)')`);
+ok(await A.until(`!!document.querySelector('#sheet .tm-detail .sh-save') && document.querySelector('#sheet .sh-f-from').value === '10:00'`), 'tapping a block opens the shift');
+await A.ev(`document.querySelector('#sheet .tm-back, #sheet .tm-detail .icon-btn')?.click(); true`);
 // My shifts.
 await A.ev(`(document.querySelector('#tabs [data-tab=work]').click(), document.querySelector('#workTabs .ws-switch').click(), true)`);
 await A.until(`[...document.querySelectorAll('#menu button')].some((b) => b.textContent === '🕒 My shifts')`);
@@ -106,9 +152,9 @@ await sleep(400);
 await A.ev(`(document.querySelector('.ws')?.click(), true)`);
 if (await A.until(`[...document.querySelectorAll('#menu button')].some((b) => b.textContent === '👥 Team')`, 4000)) {
   await A.ev(`([...document.querySelectorAll('#menu button')].find((b) => b.textContent === '👥 Team').click(), true)`);
-  await A.until(`!!document.querySelector('#sheet .sh-grid')`, 8000);
+  await A.until(`!!document.querySelector('#sheet .sh-scroll')`, 8000);
   ok(await A.ev(`document.documentElement.scrollWidth <= 391`), 'on a phone the page doesn’t scroll sideways: ' + await A.ev(`document.documentElement.scrollWidth`));
-  ok(await A.ev(`document.querySelector('#sheet .sh-scroll').scrollWidth > document.querySelector('#sheet .sh-scroll').clientWidth`), 'the week scrolls inside it');
+  ok(await A.ev(`document.querySelector('#sheet .sh-scroll').scrollWidth > document.querySelector('#sheet .sh-scroll').clientWidth`), 'the day scrolls inside it');
 } else ok(true, '(the phone header has no workspace menu)');
 await A.cmd('Emulation.clearDeviceMetricsOverride');
 ok(!A.errors.length, 'no errors: ' + A.errors.join(' | '));
