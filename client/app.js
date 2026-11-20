@@ -5873,6 +5873,15 @@
         sel.addEventListener('change', () => (t.campaignId = sel.value || null));
         only.push(h('label', {}, 'In', sel));
       }
+      // One step, by name (a saved campaign's next run has steps with the same names), 2026-11-20.
+      if (fl.includes('step')) {
+        const names = () => [...new Set(S.goals.filter((g) => !t.campaignId || g.campaignId === t.campaignId).map((g) => g.title))].slice(0, 200);
+        const dl = h('datalist', { id: 'autoSteps' }, names().map((n) => h('option', { value: n })));
+        const st = h('input', { class: 'auto-step-name', value: t.step || '', placeholder: 'Any step', list: 'autoSteps', 'aria-label': 'Step' });
+        st.addEventListener('focus', () => dl.replaceChildren(...names().map((n) => h('option', { value: n }))));
+        st.addEventListener('input', () => (t.step = st.value.trim() || null));
+        only.push(h('label', {}, 'Step', st), dl);
+      }
       if (t.kind === 'contact.stage' || t.kind === 'contact.created') {
         const st = h('input', { value: t.stage ? stageLabel(t.stage) : '', placeholder: t.kind === 'contact.stage' ? 'Customer' : 'Any stage', list: 'autoStages' });
         st.addEventListener('input', () => (t.stage = st.value.trim().toLowerCase().replace(/\s+/g, '_') || null));
@@ -5991,7 +6000,7 @@
         if (a.kind === 'notify') {
           a.to ||= [];
           const pick = (v, label) => { const cb = h('input', { type: 'checkbox', checked: a.to.includes(v) }); cb.addEventListener('change', () => (a.to = cb.checked ? [...a.to, v] : a.to.filter((y) => y !== v))); return h('label', { class: 'pick' }, cb, label); };
-          f.push(h('label', {}, 'Note', text('{contact} is a new customer')), h('div', { class: 'picks' }, pick('owners', 'Owners'), pick('admins', 'Owners and admins'), pick('who', 'Whoever set it off'), people.map((m) => pick(m.id, m.name))), h('small', { class: 'hint' }, 'It lands on their Home, with a pop-up if they’re on.'));
+          f.push(h('label', {}, 'Note', text('{contact} is a new customer')), h('div', { class: 'picks' }, pick('owners', 'Owners'), pick('admins', 'Owners and admins'), pick('who', 'Whoever set it off'), ['task.created', 'task.opened', 'task.done', 'task.reopened', 'step.done'].includes(dr.trigger.kind) ? pick('doers', 'Whoever the task is for') : null, people.map((m) => pick(m.id, m.name))), h('small', { class: 'hint' }, 'It lands on their Home, with a pop-up if they’re on.'));
         }
         if (a.kind === 'contact') {
           const st = h('input', { value: a.stage ? stageLabel(a.stage) : '', placeholder: 'Customer', list: 'autoStages' });
@@ -7059,8 +7068,44 @@
       h('div', { class: 'btns' }, h('button', { class: 'btn small', onclick: (e) => goalOptions(e.currentTarget, c, g) }, 'More…')));
     const tasks = () => { const ts = tasksInOrder(g.id); return h('div', { class: 'win-tasks' }, ts.length ? ts.map((t) => taskRow(t, { inCampaign: true })) : h('p', { class: 'day-hint' }, 'No tasks yet. Add them under the step.')); };
     const n = stepRes(g).length;
-    sheet(c.name, [h('div', { class: 'win step-win', 'data-goal': g.id }, title, ...winTabs([['details', 'Details', details], ['res', n ? `Resources · ${n}` : 'Resources', () => resPanel(c, g)], ['tasks', `Tasks · ${tasksOf(g.id).length}`, tasks]], tab))]);
+    const na = stepAutos(c, g).length;
+    sheet(c.name, [h('div', { class: 'win step-win', 'data-goal': g.id }, title, ...winTabs([['details', 'Details', details], ['res', n ? `Resources · ${n}` : 'Resources', () => resPanel(c, g)], ['tasks', `Tasks · ${tasksOf(g.id).length}`, tasks], ...(amAdmin() ? [['autos', na ? `Automations · ${na}` : 'Automations', () => stepAutoPanel(c, g)]] : [])], tab))]);
     if (!can) title.readOnly = true;
+  }
+  // A step's automations (2026-11-20): the ones narrowed to this step (its name, in this campaign or any campaign),
+  // ready-made ones in a tap, and + New automation already pointed at this step. Owners and admins.
+  const stepAutos = (c, g) => (S.automations || []).filter((x) => x.trigger?.step && x.trigger.step.trim().toLowerCase() === g.title.trim().toLowerCase() && (!x.trigger.campaignId || x.trigger.campaignId === c.id || x.trigger.campaignId === c.parentId));
+  const stepRecipes = (c, g) => {
+    const on = (kind) => ({ kind, campaignId: c.id, step: g.title });
+    return [
+      { id: 'opens', label: 'Tell whoever it’s for when their task opens', name: `${g.title}: tell them when it opens`, trigger: on('task.opened'), actions: [{ kind: 'notify', text: 'Your turn: {task} ({step})', to: ['doers'] }] },
+      { id: 'nudge', label: 'Remind them if a task isn’t done 2 days after it opens', name: `${g.title}: remind after 2 days`, trigger: on('task.opened'), actions: [{ kind: 'wait', amount: 2, unit: 'days' }, { kind: 'if', when: [{ field: 'done', op: 'is', value: 'no' }], then: [{ kind: 'notify', text: 'Still open: {task} ({step})', to: ['doers'] }], else: [] }] },
+      { id: 'feed', label: 'Post in the campaign’s feed when the step is finished', name: `${g.title}: post when finished`, trigger: on('step.done'), actions: [{ kind: 'post', text: '✅ {step} is finished ({campaign})', channelId: 'same' }] },
+      { id: 'owner', label: 'Tell the owners when a task here is done', name: `${g.title}: tell the owners`, trigger: on('task.done'), actions: [{ kind: 'notify', text: '{who} finished {task} ({step})', to: ['owners'] }] },
+    ];
+  };
+  function stepAutoPanel(c, g) {
+    const box = h('div', { class: 'auto-panel' });
+    const draw = () => {
+      const mine = stepAutos(c, g);
+      const have = new Set(mine.map((x) => x.name));
+      const make = async (r, b) => {
+        b.disabled = true;
+        try { const x = await api('POST', '/automations', { name: r.name, on: true, trigger: r.trigger, actions: r.actions }); S.automations = [...(S.automations || []).filter((y) => y.id !== x.id), x]; toast('Automation on'); draw(); renderAutos(); }
+        catch (e) { toast(e.message); b.disabled = false; }
+      };
+      box.replaceChildren(
+        h('p', { class: 'day-hint' }, mine.length ? 'Running for this step:' : 'Nothing runs for this step yet. Start with one of these, or build your own.'),
+        mine.length ? h('div', { class: 'res-list' }, mine.map((x) => h('div', { class: 'res-row auto-row-step', 'data-auto': x.id },
+          h('button', { class: 'res-open', onclick: () => { closeSheet(); autoSheet(x); } }, h('span', { class: 'res-ic' }, x.on ? '⚡' : '⏸'), h('span', {}, h('b', {}, x.name), h('small', {}, (AUTO_WHEN[x.trigger.kind] || x.trigger.kind) + (x.on ? '' : ' · off')))),
+          h('label', { class: 'toggle', title: x.on ? 'On' : 'Off' }, h('input', { type: 'checkbox', checked: !!x.on, onchange: async (e) => { try { const y = await api('PATCH', '/automations/' + x.id, { on: e.target.checked }); S.automations = S.automations.map((z) => (z.id === y.id ? y : z)); draw(); renderAutos(); } catch (er) { e.target.checked = !e.target.checked; toast(er.message); } } }), h('i'))))) : null,
+        h('div', { class: 'picks-h' }, 'Ready-made'),
+        h('div', { class: 'step-recipes' }, stepRecipes(c, g).map((r) => have.has(r.name) ? null : h('button', { class: 'btn small step-recipe', 'data-recipe': r.id, onclick: (e) => make(r, e.currentTarget) }, '+ ' + r.label))),
+        h('div', { class: 'btns' }, h('button', { class: 'btn primary-btn small step-auto-new', onclick: () => { closeSheet(); autoSheet(null, { name: `${g.title}: `, trigger: { kind: 'task.opened', campaignId: c.id, step: g.title } }); } }, '+ New automation for this step')));
+    };
+    if (!S.automations) api('GET', '/automations').then((list) => { S.automations = list; if (box.isConnected) draw(); }).catch(() => {});
+    draw();
+    return box;
   }
   // A task, opened: what it is, who and when, what it waits on, and what its step hands over.
   function taskWindow(t, tab) {
@@ -8559,6 +8604,7 @@
   function goalOptions(anchor, c, g) {
     openMenu(anchor, [
       { label: 'Plan it out…', run: () => planSheet(c, g) },
+      amAdmin() ? { label: 'Automations for this step…', run: () => stepWindow(c, g, 'autos') } : null,
       { label: 'Edit goal…', run: () => goalSheet(c, g) },
       { label: g.blockedBy?.length ? `Waits for ${plural(g.blockedBy.length, 'goal')}…` : 'Waits for…', run: () => waitsSheet(g, true) },
       c.recordId ? { label: g.stage ? `Finishes the job’s stage: ${g.stage}…` : 'Finishes the job’s stage…', run: () => goalStageMenu(anchor, c, g) } : null,

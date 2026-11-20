@@ -3072,6 +3072,8 @@ function openings(ws, tz) {
         changed = true;
         broadcast(ws.id, { type: 'task', task: publicTask(t) });
         broadcast(ws.id, { type: 'handoff', task: publicTask(t), by, byId });
+        // Automations can start here: "when a task in this step opens, tell whoever it's for" (2026-11-20).
+        setImmediate(() => db.tasks[t.id] && !db.tasks[t.id].done && automate(ws.id, 'task.opened', { task: db.tasks[t.id], campaign: taskCamp(t), who: by, whoId: byId, private: privateTask(t) }));
       } else broadcast(ws.id, { type: 'task', task: publicTask(t) });
     }
     if (changed) save();
@@ -3547,6 +3549,8 @@ function applyAutomation(x, body, ws) {
       to: allow.has('to') ? cleanText(t.to, 40) || null : null,
       over: allow.has('over') && Number.isFinite(over) && over > 0 ? Math.round(over * 100) / 100 : null,
       direction: allow.has('direction') && ['in', 'out'].includes(t.direction) ? t.direction : null,
+      // One step of a campaign, by name (2026-11-20): a saved campaign's next run has new steps with the same names.
+      step: allow.has('step') ? cleanText(t.step, 200) || null : null,
     };
     // On a schedule: weekdays and times, in the team's time zone (the same slots saved campaigns use).
     if (t.kind === 'schedule') {
@@ -3686,7 +3690,8 @@ function cleanAction(a, ws, who) {
   if (kind === 'task') return { kind, text, ...(preset ? { presetId: preset.id, presetName: preset.name } : {}), assignee: /^(who|role:[\w-]+|[\w-]{6,})$/.test(a.assignee || '') ? a.assignee : '', dueIn: a.dueIn === '' || a.dueIn == null ? null : Math.max(0, Math.min(90, Math.round(Number(a.dueIn)) || 0)), campaign: a.campaign === 'same' || (a.campaign && db.campaigns[a.campaign]?.wsId === ws.id) ? a.campaign : '' };
   if (kind === 'post') return { kind, text, channelId: a.channelId === 'same' || a.channelId === 'general' || ws.channels.some((c) => c.id === a.channelId) ? a.channelId : 'general' };
   if (kind === 'campaign') return db.templates[a.templateId]?.wsId === ws.id ? { kind, templateId: a.templateId } : null;
-  if (kind === 'notify') return { kind, text, to: (Array.isArray(a.to) ? a.to : []).filter((v) => ['owners', 'admins', 'who'].includes(v) || ws.members.some((m) => m.id === v)).slice(0, 20) };
+  // 'doers': whoever the task (or step's tasks) is for: its person, or everyone in its team or campaign role (2026-11-20).
+  if (kind === 'notify') return { kind, text, to: (Array.isArray(a.to) ? a.to : []).filter((v) => ['owners', 'admins', 'who', 'doers'].includes(v) || ws.members.some((m) => m.id === v)).slice(0, 20) };
   if (kind === 'contact') return { kind, stage: cleanText(a.stage, 40), tag: cleanText(a.tag, 40) };
   return null;
 }
@@ -3698,7 +3703,8 @@ function autoFill(text, ctx, wsId, cap = 0) {
 }
 // The words an event fills in, by name (what {…} in an action and "only if" read).
 function autoVars(ctx, wsId) {
-  return { task: ctx.task?.text, step: ctx.goal?.title, campaign: ctx.campaign?.name, contact: ctx.contact ? ctx.contact.name || ctx.contact.company || ctx.contact.email || ctx.contact.phone : '', file: ctx.file?.name,
+  // {done}: whether the task is done now (yes/no), for "wait 2 days, then only if it isn't, remind them".
+  return { task: ctx.task?.text, done: ctx.task ? (ctx.task.done ? 'yes' : 'no') : '', step: ctx.goal?.title, campaign: ctx.campaign?.name, contact: ctx.contact ? ctx.contact.name || ctx.contact.company || ctx.contact.email || ctx.contact.phone : '', file: ctx.file?.name,
     from: ctx.from, who: ctx.who, stage: ctx.stageLabel || (ctx.stage ? stageLabel(ctx.stage) : ''), outcome: ctx.outcome, document: ctx.document, note: ctx.note, date: ctx.date || teamDay(wsId),
     record: ctx.recordName, project: ctx.project?.name, list: ctx.list?.name, customer: ctx.customer, amount: ctx.amount != null ? '$' + Number(ctx.amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '',
     invoice: ctx.invoice, time: ctx.time, crew: ctx.crew, phone: ctx.phone, text: ctx.text, doc: ctx.doc, pin: ctx.pin, category: ctx.category, status: ctx.status, answer: ctx.answer, item: ctx.item, was: ctx.was, now: ctx.now, quotes: ctx.quotes != null ? String(ctx.quotes) : undefined, qty: ctx.qty, unit: ctx.unitName, place: ctx.place, supplier: ctx.supplier, repo: ctx.repo, branch: ctx.branch, url: ctx.url, version: ctx.version, app: ctx.app, error: ctx.error, booking: ctx.booking };
@@ -3714,6 +3720,7 @@ function autoMatches(t, ctx) {
   if (t.stage && !sameText(ctx.stage, t.stage)) return false;
   if (t.outcome && ctx.outcome !== t.outcome) return false;
   if (t.statuses?.length && !t.statuses.includes(ctx.status)) return false;
+  if (t.step && !sameText(ctx.goal?.title, t.step)) return false;
   return true;
 }
 // The bus: everything that happens in a tool comes through here once. Automations hear it; (webhooks hear their own
@@ -4208,7 +4215,7 @@ function autoDescribe(x, a, ctx, ws) {
     case 'task': if (a.presetId) { const y = db.taskPresets?.[a.presetId]; if (!y) return `Make the saved task “${a.presetName || '?'}” (it was deleted)`; return y.kind === 'bundle' ? `Make ${y.steps.length} tasks from the bundle “${y.name}”` : `Make the task “${clipText(y.text, 140)}”${a.assignee === 'who' ? ` for ${ctx.who || 'whoever set it off'}` : a.assignee && nameOf(a.assignee) ? ` for ${nameOf(a.assignee)}` : ''}`; }
       return `Make the task “${fill(a.text)}”${a.assignee === 'who' ? ` for ${ctx.who || 'whoever set it off'}` : a.assignee && nameOf(a.assignee) ? ` for ${nameOf(a.assignee)}` : ''}`;
     case 'post': return `Post “${fill(a.text)}” in ${a.channelId === 'same' ? 'the campaign’s feed' : '#' + (ws.channels.find((y) => y.id === a.channelId)?.name || 'general')}`;
-    case 'notify': return `Notify ${a.to.map((v) => ({ owners: 'the owners', admins: 'owners and admins', who: ctx.who || 'whoever set it off' }[v] || nameOf(v) || 'someone')).join(', ')}: “${fill(a.text)}”`;
+    case 'notify': return `Notify ${a.to.map((v) => ({ owners: 'the owners', admins: 'owners and admins', who: ctx.who || 'whoever set it off', doers: 'whoever the task is for' }[v] || nameOf(v) || 'someone')).join(', ')}: “${fill(a.text)}”`;
     case 'campaign': return `Start the saved campaign “${db.templates[a.templateId]?.name || '?'}”`;
     case 'contact': return `Change ${ctx.contact?.name || 'the contact'}: ${[a.stage && 'stage ' + a.stage, a.tag && 'tag ' + a.tag].filter(Boolean).join(', ')}`;
     case 'record': return `Change ${ctx.recordName || 'the job or record'} in ${db.projects[a.projectId]?.name || 'its project'}`;
@@ -4500,6 +4507,7 @@ async function autoAction(x, a, ctx) {
       if (v === 'owners') ws.members.filter((m) => m.role === 'owner').forEach((m) => ids.add(m.id));
       else if (v === 'admins') ws.members.filter((m) => ['owner', 'admin'].includes(m.role)).forEach((m) => ids.add(m.id));
       else if (v === 'who') { if (ctx.whoId && ws.members.some((m) => m.id === ctx.whoId)) ids.add(ctx.whoId); }
+      else if (v === 'doers') { const ts = ctx.task ? [ctx.task] : ctx.goal ? Object.values(db.tasks).filter((t) => t.goalId === ctx.goal.id) : []; for (const t of ts) for (const id of taskDoers(ws, t)) if (ws.members.some((m) => m.id === id)) ids.add(id); }
       else if (ws.members.some((m) => m.id === v)) ids.add(v);
     }
     for (const id of ids) notify(ws.id, id, { title: x.name, text: say, campaignId: ctx.campaign?.id || null, taskId: ctx.task?.id || null });

@@ -58,7 +58,7 @@ try {
   ok(await A.ev(`(() => { const r = [...document.querySelectorAll('.goal .task-row')].find((x) => x.textContent.includes('Lopez')); return r && !r.querySelector('[aria-label="Tools for this task"]') && !r.querySelector('[aria-label="Put on schedule"]'); })()`), 'campaign task rows are lighter (tools and scheduling are inside the task)');
   // Clicking the step opens it.
   await A.tap(`document.querySelector('.goal .goal-title')`);
-  ok(await A.until(`!!document.querySelector('#sheet .step-win') && [...document.querySelectorAll('#sheet .win-tabs button')].map((b) => b.textContent).join('|') === 'Details|Resources|Tasks · 1'`), 'clicking the step opens it: Details, Resources, Tasks');
+  ok(await A.until(`!!document.querySelector('#sheet .step-win') && [...document.querySelectorAll('#sheet .win-tabs button')].map((b) => b.textContent).join('|') === 'Details|Resources|Tasks · 1|Automations'`), 'clicking the step opens it: Details, Resources, Tasks (and Automations for an owner)');
   ok(await A.ev(`document.querySelector('#sheet .win-title').value === 'Call last year’s customers' && !!document.querySelector('#sheet .win-rows input[type=date]')`), 'with its name and due date to change there');
   await A.tap(`[...document.querySelectorAll('#sheet .win-tabs button')].find((b) => b.textContent.startsWith('Resources'))`);
   ok(await A.until(`[...document.querySelectorAll('#sheet .res-add')].map((b) => b.textContent).join('|') === '+ Note or script|+ Doc or file|+ Template|+ Link'`), 'Resources: + Note or script, + Doc or file, + Template, + Link');
@@ -80,6 +80,20 @@ try {
   await A.ev(`(() => { const i = document.querySelector('#sheet .task-win .win-title'); i.value = 'Call the Lopez family about windows'; i.dispatchEvent(new Event('change')); })()`);
   ok(await (async () => { for (let i = 0; i < 30; i++) { if ((await api('GET', '/state')).tasks.find((x) => x.id === task.id)?.text === 'Call the Lopez family about windows') return true; await sleep(100); } return false; })(), 'renaming it there saves');
   await A.ev(`document.querySelector('#sheet [aria-label=Close]').click(); true`);
+  // The step's Automations (owners and admins): ready-made ones in a tap, and + New pointed at this step.
+  await A.tap(`document.querySelector('.goal .goal-title')`);
+  await A.until(`!!document.querySelector('#sheet .step-win')`);
+  ok(await A.ev(`[...document.querySelectorAll('#sheet .win-tabs button')].some((b) => b.textContent === 'Automations')`), 'Ada’s step has an Automations tab');
+  await A.tap(`[...document.querySelectorAll('#sheet .win-tabs button')].find((b) => b.textContent.startsWith('Automations'))`);
+  ok(await A.until(`document.querySelectorAll('#sheet .step-recipe').length === 4`), 'with four ready-made ones');
+  await A.tap(`document.querySelector('#sheet .step-recipe[data-recipe=opens]')`);
+  ok(await A.until(`[...document.querySelectorAll('#sheet .auto-row-step b')].some((b) => b.textContent.includes('tell them when it opens')) && !document.querySelector('#sheet .step-recipe[data-recipe=opens]')`), 'one tap turns on “tell whoever it’s for when their task opens”');
+  const made = (await api('GET', '/automations')).find((x) => x.name.includes('tell them when it opens'));
+  ok(made && made.on && made.trigger.kind === 'task.opened' && made.trigger.step === 'Call last year’s customers' && made.trigger.campaignId === camp.id && made.actions[0].to.join() === 'doers', 'it’s on: when a task in this step (of this campaign) opens, notify whoever it’s for');
+  await A.tap(`document.querySelector('#sheet .step-auto-new')`);
+  ok(await A.until(`document.querySelector('.auto-step-name')?.value === 'Call last year’s customers'`, 8000), '+ New automation for this step opens the builder with the step filled in');
+  await shot('step-autos');
+  await A.ev(`document.querySelector('#sheet [aria-label=Close], .auto-close, [aria-label="Close"]')?.click(); true`);
   // Sam, the member: his task opens on what the step hands over; he can read it, not change it.
   await A.ev(`localStorage.setItem('column.token', JSON.stringify(${JSON.stringify(sam.token)})); location.reload(); true`).catch(() => {});
   await A.until(`!document.querySelector('#app').classList.contains('hidden') && !!document.querySelector('[data-tab=camps]')`, 15000);
