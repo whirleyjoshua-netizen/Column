@@ -4419,3 +4419,28 @@ body:not(.wide) .cc-board { height: 70vh; }
 .an-wfields { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .an-wfields select, .an-wfields input { width: auto; }
 .an-wfields .an-wvalue { width: 120px; }
+
+/* ---------- A campaign's test run (2026-11-20) ---------- */
+.cc-test { border: 1px dashed var(--amber, #d97706); background: color-mix(in srgb, var(--amber, #d97706) 9%, var(--card)); border-radius: 12px; padding: 10px 12px; margin: 10px 0 4px; display: flex; flex-direction: column; gap: 8px; }
+.cc-test-h { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.cc-test-sub { color: var(--muted); font-size: 13px; }
+.cc-testpill, .step-tag.test { background: var(--amber, #d97706); color: #fff; font-weight: 700; letter-spacing: .04em; }
+.tr-log { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; max-height: 320px; overflow: auto; }
+.tr-log-row { display: flex; gap: 8px; align-items: flex-start; padding: 6px 8px; border-radius: 8px; background: var(--card); border: 1px solid var(--line); }
+.tr-log-row small { display: block; color: var(--muted); }
+.tr-what { overflow-wrap: anywhere; }
+.tr-rules { margin: 0 0 8px; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; }
+
+/* ---------- The campaign builder in four stages (2026-11-20) ---------- */
+.cb-main > [hidden] { display: none !important; }
+.cb-stages { list-style: none; margin: 0 0 4px; padding: 0; display: flex; gap: 6px; flex-wrap: wrap; position: sticky; top: 0; z-index: 2; background: var(--card); padding-bottom: 6px; }
+.cb-stages li { flex: 1 1 140px; }
+.cb-stage { width: 100%; display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--muted); font: inherit; font-weight: 600; cursor: pointer; text-align: left; }
+.cb-stage.on { border-color: var(--accent); color: var(--text); background: color-mix(in srgb, var(--accent) 10%, var(--card)); }
+.cb-stage.past { color: var(--text); }
+.cb-stage-n { width: 22px; height: 22px; flex: none; border-radius: 50%; display: grid; place-items: center; font-size: 12px; background: var(--line); }
+.cb-stage.on .cb-stage-n { background: var(--accent); color: #fff; }
+.cb-stage-nav { display: flex; justify-content: space-between; gap: 8px; margin-top: 4px; }
+.cb-launch-opt { display: flex; gap: 10px; align-items: flex-start; padding: 10px; border: 1px solid var(--line); border-radius: 10px; cursor: pointer; }
+.cb-launch-opt small { display: block; color: var(--muted); font-weight: 400; }
+.cb-launch-opt:has(input:checked) { border-color: var(--accent); }

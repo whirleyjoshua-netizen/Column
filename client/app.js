@@ -4457,6 +4457,7 @@
       text,
       stepTag(t),
       upNow ? h('span', { class: 'step-tag up', title: 'What it was waiting on is done' }, 'You’re up') : null,
+      t.test ? h('span', { class: 'step-tag test', title: 'Part of a test run: only testers get it, and Go live puts it back' }, 'TEST') : null,
       t.status === 'doing' && !t.done ? h('span', { class: 'step-tag doing', title: 'In progress' }, 'In progress') : null,
       t.parentId && taskById(t.parentId) ? h('span', { class: 'step-tag sub', title: 'A subtask of “' + taskById(t.parentId).text + '”' }, '↳ ' + shortText(taskById(t.parentId).text, 20)) : null,
       (() => { const ss = S.tasks.filter((x) => x.parentId === t.id); return ss.length ? h('span', { class: 'step-tag subs', title: 'Subtasks done' }, `${ss.filter((x) => x.done).length}/${ss.length} subtasks`) : null; })(),
@@ -7050,6 +7051,68 @@
       h('small', { class: 'hint' }, 'Draw a shape for each phase and join them with arrows, then Make phases. Select stickies and Make tasks in… a phase. Cards show the real phases and tasks.'),
       K.cb.mount);
   }
+  // ----- a campaign's test run (2026-11-20, the sandbox): start it with testers; while it runs a banner says so, with
+  // Skip ahead (finish a phase to see what opens next), the test log (what its automations would have sent or done),
+  // and Go live (everything goes back to how it was before the test, and the campaign runs for real). -----
+  function testSheet(c, after) {
+    const picked = new Set([S.me?.memberId]);
+    const box = h('div', { class: 'cb-people tr-testers' });
+    const draw = () => box.replaceChildren(...S.workspace.members.map((m) => {
+      const on = picked.has(m.id);
+      return h('button', { type: 'button', class: 'chip' + (on ? ' on' : ''), 'aria-pressed': String(on), 'data-id': m.id, onclick: () => { if (on && picked.size > 1) picked.delete(m.id); else picked.add(m.id); draw(); } }, m.id === S.me?.memberId ? 'Me' : m.name);
+    }));
+    draw();
+    sheet(`Test run · ${c.name}`, [
+      h('p', { class: 'day-hint' }, 'Run it for real before it goes to the team. While it’s a test:'),
+      h('ul', { class: 'tr-rules' },
+        h('li', {}, 'Its tasks go only to the testers, marked TEST. Each person or role on a task is matched to a tester.'),
+        h('li', {}, 'Only testers are told anything about it.'),
+        h('li', {}, 'What its automations would send or change (emails, texts, Teams posts, invoices, money, stock, visits, other apps) and moving its job’s stage are written in the test log instead.'),
+        h('li', {}, 'You can still change its phases and tasks, and Skip ahead finishes a phase to see what opens next.'),
+        h('li', {}, 'Go live puts its tasks back as they were (who they’re for, unticked, the test’s comments gone), keeps what you changed, and removes tasks its automations made in the test.')),
+      h('div', { class: 'picks-h' }, 'Testers'), box,
+      h('small', { class: 'hint' }, 'Emails and texts you send yourself from the campaign still go out.'),
+    ], async () => {
+      const saved = await api('POST', `/campaigns/${c.id}/test`, { testers: [...picked] });
+      const i = S.campaigns.findIndex((x) => x.id === saved.id); if (i >= 0) S.campaigns[i] = saved;
+      toast('Test run started');
+      renderCamps();
+      after?.();
+    }, 'Start the test run');
+  }
+  const TEST_IC = { start: '🧪', skip: '⏭️', email: '✉️', text: '💬', teams: '👥', webhook: '🔗', invoice: '🧾', money: '💵', stock: '📦', visit: '📅', doc: '📄', vault: '🔒', agent: '🤖', job: '🛠️' };
+  function testBar(c, phases) {
+    const T = c.test;
+    if (!T) return null;
+    if (T.inMain) return h('div', { class: 'cc-test' }, h('b', {}, '🧪 Test run'), h('span', {}, ` · part of ${parentOf(c)?.name || 'its main campaign'}’s test. Its tasks go to ${T.testers.map(memberName).join(', ')}.`));
+    const may = runsIt(c);
+    const call = async (path, body) => {
+      try {
+        const saved = await api('POST', `/campaigns/${c.id}/test${path}`, body || {});
+        const i = S.campaigns.findIndex((x) => x.id === saved.id);
+        // What its automations log can come over the socket before this answer: keep the longer log.
+        if (i >= 0) S.campaigns[i] = saved.test && (S.campaigns[i].test?.log?.length || 0) > saved.test.log.length ? { ...saved, test: S.campaigns[i].test } : saved;
+        renderCamps();
+        return saved;
+      } catch (e) { toast(e.message); return null; }
+    };
+    const open = phases.filter((g) => tasksOf(g.id).some((t) => !t.done && !t.skipped));
+    const log = T.log || [];
+    const held = log.filter((x) => !['start', 'skip'].includes(x.kind)).length;
+    const list = K.testLog ? h('ol', { class: 'tr-log' }, [...log].reverse().map((x) => h('li', { class: 'tr-log-row k-' + x.kind },
+      h('span', { class: 'tr-ic', 'aria-hidden': 'true' }, TEST_IC[x.kind] || '•'),
+      h('span', {}, h('span', { class: 'tr-what' }, x.text), h('small', {}, [x.by, ago(x.at)].filter(Boolean).join(' · '))))),
+      log.length ? null : h('li', { class: 'day-hint' }, 'Nothing yet.')) : null;
+    return h('div', { class: 'cc-test' },
+      h('div', { class: 'cc-test-h' },
+        h('b', {}, '🧪 Test run'),
+        h('span', { class: 'cc-test-sub' }, `Tasks go to ${T.testers.map(memberName).join(', ')}. ${held ? plural(held, 'thing') + ' logged instead of sent or done.' : 'Nothing goes out: it’s logged here.'}`),
+        h('span', { style: 'flex:1' }),
+        h('button', { class: 'btn small tr-logbtn', 'aria-expanded': String(!!K.testLog), onclick: () => { K.testLog = !K.testLog; renderCamps(); } }, `Test log (${log.length})`),
+        may && open.length ? h('button', { class: 'btn small tr-skip', onclick: (e) => openMenu(e.currentTarget, [{ head: 'Finish a phase’s tasks, to see what opens next' }, ...open.map((g) => ({ label: g.title, run: () => call('/skip', { goalId: g.id }).then((x) => x && toast(x.test?.log?.at(-1)?.text || 'Skipped ahead')) }))]) }, '⏭ Skip ahead') : null,
+        may ? h('button', { class: 'btn small primary-btn tr-live', title: 'End the test: its tasks go back as they were, to the people they’re for, and it runs for real', onclick: (e) => confirmClick(e.currentTarget, () => call('/end').then((x) => { if (!x) return; K.testLog = false; toast(`It’s live${x.removed ? `. Removed ${plural(x.removed, 'task')} its automations made in the test` : ''}`); })) }, '🚀 Go live') : null),
+      list);
+  }
   // ----- saved campaigns: run again by hand or on a weekly schedule -----
   const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
   const hhmm = (t) => fmtTime(Number(t.slice(0, 2)) * 60 + Number(t.slice(3)));
@@ -7197,10 +7260,12 @@
       h('div', { class: 'cc-title-row' },
         h('button', { class: 'icon-btn cc-back', 'aria-label': 'All campaigns', html: I.back, onclick: () => openCampaign(null) }),
         h('h1', { class: 'camp-name cc-name' }, c.name),
+        c.test ? h('span', { class: 'pill cc-testpill' }, 'TEST') : null,
         c.status !== 'active' ? h('span', { class: 'pill' }, c.status === 'done' ? 'Finished' : 'Paused') : healthPill(c, hl, runsIt(c) ? () => checkinSheet(c) : null),
         campDates(c) ? h('span', { class: 'cc-meta-item' }, '📅 ', campDates(c)) : null,
         h('button', { class: 'pill pill-btn cc-owner', title: 'Who’s responsible', onclick: (e) => assignCampaignMenu(e.currentTarget, c) }, c.assigneeId ? avatar(c.assigneeId) : null, c.assigneeId ? memberName(c.assigneeId) : 'Assign to…'),
         h('span', { style: 'flex:1' }),
+        !c.test && runsIt(c) && c.status !== 'done' ? h('button', { class: 'btn small cc-testbtn', title: 'Run it for real with testers first: nothing goes out, and Go live puts it back', onclick: () => testSheet(c) }, '🧪 Test run') : null,
         h('button', { class: 'btn primary-btn small cc-add', onclick: (e) => openMenu(e.currentTarget, [{ head: 'Add to the campaign' },
           { label: '+ A phase', run: () => goalSheet(c) },
           phases.length ? { label: '+ A task (in a phase)', run: () => openMenu(e.target, [{ head: 'Which phase?' }, ...phases.map((g) => ({ label: g.title, run: () => { K.closed.delete(g.id); setTabC('overview'); setTimeout(() => $(`#camps .goal[data-id="${g.id}"] .goal-add`)?.focus(), 80); } }))]) } : null,
@@ -7346,7 +7411,7 @@
       resources,
       activity,
     }[tab]();
-    return h('div', { class: 'camp-view cc' + (pulse ? ' with-pulse' : '') }, h('div', { class: 'cc-main' }, head, h('div', { class: 'cc-body', 'data-tab': tab }, ...body.filter(Boolean))), pulse);
+    return h('div', { class: 'camp-view cc' + (pulse ? ' with-pulse' : '') }, h('div', { class: 'cc-main' }, head, testBar(c, phases), h('div', { class: 'cc-body', 'data-tab': tab }, ...body.filter(Boolean))), pulse);
   }
 
   function goalCard(c, g) {
@@ -9189,7 +9254,7 @@
   function campaignSheet(c, main, focus, seed = null) {
     const isNew = !c;
     const D = {
-      name: c?.name || '', brief: c?.brief || '', start: c?.start || todayKey(), end: c?.end || '', color: c?.color || COLORS[S.campaigns.length % COLORS.length],
+      name: c?.name || '', brief: c?.brief || '', audience: c?.audience || '', strategy: c?.strategy || '', launch: 'live', testers: [S.me?.memberId], board: false, start: c?.start || todayKey(), end: c?.end || '', color: c?.color || COLORS[S.campaigns.length % COLORS.length],
       parentId: main?.id || c?.parentId || '', follows: c?.follows || '', recordId: c?.recordId || '', assigneeId: c?.assigneeId || '',
       budget: c?.budget ? String(c.budget / 100) : '', private: !!c?.private, memberIds: [...(c?.memberIds || [])], inOrder: !!c?.inOrder,
       cast: (c?.cast || []).map((r) => ({ id: r.id, name: r.name, about: r.about || '', memberIds: [...r.memberIds] })),
@@ -9235,7 +9300,8 @@
     const name = inp('name', { maxlength: 80, placeholder: main ? 'Dealerships' : 'Smith kitchen remodel, Q4 outreach…', class: 'cb-name' });
     const basics = sec('What it is', null,
       h('label', {}, 'Name', name),
-      h('label', {}, 'Brief', inp('brief', { rows: 5, placeholder: 'What’s the goal? Who’s it for? How will you know it worked?' })),
+      h('label', {}, 'Objective', inp('brief', { rows: 4, placeholder: 'What’s the goal, and how will you know it worked?' })),
+      h('div', { class: 'row2' }, h('label', {}, 'Audience', inp('audience', { rows: 3, placeholder: 'Who it’s aimed at…' })), h('label', {}, 'Strategy', inp('strategy', { rows: 3, placeholder: 'How you’ll get there…' }))),
       h('div', { class: 'row2' }, h('label', {}, 'Starts', inp('start', { type: 'date' })), h('label', {}, 'Ends (optional)', inp('end', { type: 'date' }))),
       h('label', {}, 'Color', sw));
 
@@ -9309,6 +9375,28 @@
     const moneySec = sec('Money', null,
       h('label', {}, 'Budget (optional)', inp('budget', { inputmode: 'decimal', placeholder: 'e.g. 2,000', class: 'cb-budget' }), h('small', { class: 'day-hint' }, 'Money out tagged to this campaign in Finance counts against it, sub-campaigns included.')));
 
+    // ---- launch (new only): live now, or a test run first (the sandbox, 2026-11-20) ----
+    const boardPick = h('input', { type: 'checkbox' });
+    boardPick.checked = D.board;
+    boardPick.addEventListener('change', () => { D.board = boardPick.checked; });
+    const boardOpt = isNew && toolOn('whiteboard') ? h('label', { class: 'pick cb-board-pick' }, boardPick, 'Sketch it on a board after it’s made (Plan → Board: shapes become phases, stickies become tasks)') : null;
+    const testersBox = h('div', { class: 'cb-people cb-testers' });
+    const drawTesters = () => testersBox.replaceChildren(...(D.launch === 'test' ? S.workspace.members.map((m) => {
+      const on = D.testers.includes(m.id);
+      return h('button', { type: 'button', class: 'chip' + (on ? ' on' : ''), 'aria-pressed': String(on), onclick: () => { D.testers = on ? (D.testers.length > 1 ? D.testers.filter((x) => x !== m.id) : D.testers) : [...D.testers, m.id]; drawTesters(); drawSum(); } }, m.id === S.me?.memberId ? 'Me' : m.name);
+    }) : []));
+    const launchOpt = (v, title, sub) => {
+      const r = h('input', { type: 'radio', name: 'cb-launch', value: v });
+      r.checked = D.launch === v;
+      r.addEventListener('change', () => { D.launch = v; drawTesters(); drawSum(); });
+      return h('label', { class: 'cb-launch-opt', 'data-launch': v }, r, h('span', {}, h('b', {}, title), h('small', {}, sub)));
+    };
+    drawTesters();
+    const launchSec = isNew && !main ? sec('Launch', null,
+      launchOpt('live', 'Go live now', 'Its tasks go to the people they’re for, and its automations send for real.'),
+      launchOpt('test', '🧪 Start with a test run', 'Its tasks go only to the testers you pick, and what its automations would send is logged instead. Go live when it works.'),
+      testersBox) : null;
+
     // ---- what you'll get ----
     const sum = h('aside', { class: 'cb-sum' });
     function drawSum() {
@@ -9327,7 +9415,8 @@
           li('🪜', steps.length ? `${plural(steps.length, 'step')}${D.inOrder ? ', in order' : ''}` : 'No steps yet'),
           D.budget.trim() ? li('💵', `Budget ${D.budget.trim().startsWith('$') ? '' : '$'}${D.budget.trim()}`) : null,
           li(D.private ? '🔒' : '👥', D.private ? `Private${D.memberIds.length ? ': you and ' + D.memberIds.map(memberName).join(', ') : ': just you'}` : 'The whole team can see it'),
-          c ? li('⚡', autos.length ? plural(autos.length, 'automation') : 'No automations') : null),
+          c ? li('⚡', autos.length ? plural(autos.length, 'automation') : 'No automations') : null,
+          isNew && !main && D.launch === 'test' ? li('🧪', `Starts as a test run: ${D.testers.map(memberName).join(', ')}`) : null),
         isNew ? h('div', { class: 'cb-gets' }, h('b', {}, 'It comes with'), h('ul', {}, h('li', {}, 'Its own chat feed and stack for files'), h('li', {}, 'A board of its steps and tasks'), h('li', {}, 'A spot in Campaigns → Overview'), job ? h('li', {}, 'Its tasks on the job, and on the job’s timeline') : null)) : null,
         h('div', { class: 'cb-next' }, h('b', {}, isNew ? 'After it’s made' : 'Also on its page'),
           h('small', {}, 'Tasks for each step, what each step needs (materials, equipment, visits), sign-offs, check-ins, and automations that start when it does.')));
@@ -9430,11 +9519,26 @@
     SK.onChange = () => { if (sideBox.isConnected && side === 'sk') drawSk(); };
     drawSide();
 
+    // ---- four stages (Command Center part 3, 2026-11-20): one at a time, with Back and Next; any can be opened ----
+    const STAGES = [['Foundation', [startFrom, basics, forSec]], ['Structure', [stepsSec, boardOpt]], ['Execution', [peopleSec, logSec]], ['Resources & launch', [moneySec, launchSec]]];
+    let stage = 0;
+    const stagesNav = h('ol', { class: 'cb-stages' });
+    const stageNav = h('div', { class: 'cb-stage-nav' });
+    function drawStage() {
+      STAGES.forEach(([, secs], i) => secs.forEach((x) => x && (x.hidden = i !== stage)));
+      stagesNav.replaceChildren(...STAGES.map(([name], i) => h('li', {}, h('button', { type: 'button', class: 'cb-stage' + (i === stage ? ' on' : i < stage ? ' past' : ''), 'data-stage': String(i), 'aria-current': i === stage ? 'step' : null, onclick: () => { stage = i; drawStage(); } },
+        h('span', { class: 'cb-stage-n' }, i < stage ? '✓' : String(i + 1)), h('span', {}, name)))));
+      stageNav.replaceChildren(
+        stage > 0 ? h('button', { type: 'button', class: 'btn small cb-back', onclick: () => { stage--; drawStage(); } }, '← ' + STAGES[stage - 1][0]) : h('span'),
+        stage < STAGES.length - 1 ? h('button', { type: 'button', class: 'btn small primary-btn cb-next', onclick: () => { stage++; drawStage(); stagesNav.scrollIntoView?.({ block: 'nearest' }); } }, 'Next: ' + STAGES[stage + 1][0] + ' →') : null);
+    }
+    drawStage();
+
     sheet(c ? `Campaign · ${c.name}` : main ? `New sub-campaign of ${main.name}` : 'New campaign', [
-      h('div', { class: 'cb-grid' }, h('div', { class: 'cb-main' }, startFrom, basics, forSec, peopleSec, stepsSec, logSec, moneySec), sideBox),
+      h('div', { class: 'cb-grid' }, h('div', { class: 'cb-main' }, stagesNav, ...STAGES.flatMap(([, secs]) => secs.filter(Boolean)), stageNav), sideBox),
     ], async () => {
       const body = {
-        name: D.name, brief: D.brief, start: D.start || null, end: D.end || null, budget: D.budget.trim() || null, follows: D.follows || null, color: D.color,
+        name: D.name, brief: D.brief, audience: D.audience, strategy: D.strategy, start: D.start || null, end: D.end || null, budget: D.budget.trim() || null, follows: D.follows || null, color: D.color,
         assigneeId: D.assigneeId || null, recordId: D.recordId || null, cast: D.cast.filter((r) => r.name.trim()),
         outcomes: D.outcomes.split('\n'), methods: D.methods.split('\n'), ...(hasSubs ? {} : { parentId: D.parentId || null }),
         ...(mayOrder && (isNew ? D.inOrder : D.inOrder !== !!c.inOrder) ? { inOrder: D.inOrder } : {}),
@@ -9448,8 +9552,14 @@
         for (const [n, st] of D.steps.filter((x) => x.title.trim()).entries()) {
           try { const g = await api('POST', '/goals', { campaignId: saved.id, title: st.title, kind: 'tasks', order: n, ...(st.stage ? { stage: st.stage } : {}) }); if (!S.goals.some((x) => x.id === g.id)) S.goals.push(g); } catch (e) { toast(e.message); }
         }
+        if (D.launch === 'test' && !main) {
+          try { const y = await api('POST', `/campaigns/${saved.id}/test`, { testers: D.testers }); const j = S.campaigns.findIndex((x) => x.id === y.id); if (j >= 0) S.campaigns[j] = y; } catch (e) { toast(e.message); }
+        }
+        if (D.board) { K.ctab = 'plan'; K.planView = 'board'; }
       }
+      const tabNow = K.ctab;
       openCampaign(saved.id);
+      if (isNew && D.board) { K.ctab = tabNow; renderCamps(); }
     }, c ? 'Save' : 'Make the campaign');
     // Full size, beside the sidebar like a page (as the automation builder is). The sidebar still goes places; with
     // unsaved changes it stays and says so.

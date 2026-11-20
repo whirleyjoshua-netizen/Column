@@ -1317,7 +1317,7 @@ function dropVisits(rec) {
 }
 
 // Tasks: an undated to-do list. Schedule entries can link to one (entry.taskId) and then share its text and done state.
-const publicTask = (t) => { const { hist, ...rest } = publicEntry(t); return { ...rest, waiting: isWaiting(t) }; };
+const publicTask = (t) => { const { hist, testMade, ...rest } = publicEntry(t); return { ...rest, waiting: isWaiting(t), ...(testOf(taskCamp(t)) ? { test: true } : {}) }; };
 // ----- the work history (job plan Phase 5, the owner 2026-11-19), kept for team performance reporting -----
 // Wherever a task is made or changed, noteWork compares it with how it was (workOf) and keeps: who finished it, as a
 // person (doneById; doneBy stays the name shown), how (doneVia: app, api, agent, automation, tool, kloomie), the due
@@ -1424,6 +1424,7 @@ function applyTask(t, body) {
     t.doneAt = t.done ? Date.now() : null;
   }
   if (!t.text) throw badRequest('Write something first.');
+  testAssign(t);
   return t;
 }
 
@@ -2874,7 +2875,7 @@ function campMoney(id) {
 }
 // A campaign's budget (cents) is measured against what's been spent on it and on its sub-campaigns.
 const budgetSpent = (c) => [c, ...subsOf(c)].reduce((n, x) => n + (campMoney(x.id)?.spent || 0), 0);
-const publicCampaign = ({ wsId, ...c }) => ({ ...c, followUps: followUpsOf(c), money: campMoney(c.id), ...(c.budget ? { budgetSpent: budgetSpent(c) } : {}) });
+const publicCampaign = ({ wsId, test, ...c }) => ({ ...c, test: test ? { by: test.by, startedAt: test.startedAt, testers: test.testers, log: test.log || [] } : db.campaigns[c.parentId]?.test ? { inMain: true, testers: db.campaigns[c.parentId].test.testers, log: [] } : null, followUps: followUpsOf(c), money: campMoney(c.id), ...(c.budget ? { budgetSpent: budgetSpent(c) } : {}) });
 // A money goal fills from Finance: money in tagged to it, less money out.
 const goalSaved = (id) => Object.values(db.money).reduce((n, x) => (x.goalId === id ? n + (x.kind === 'in' ? x.amount : -x.amount) : n), 0);
 const publicGoal = ({ wsId, needKey, ...g }) => { if (g.needs?.length) g = { ...g, needs: needsOf(g) }; return g.kind === 'money' ? { ...g, saved: goalSaved(g.id) } : g; };
@@ -2890,6 +2891,103 @@ const subsOf = (c) => Object.values(db.campaigns).filter((x) => x.parentId === c
 const castOf = (c) => c?.cast || [];
 const castRole = (c, id) => (id ? castOf(c).find((r) => r.id === id) : null);
 const taskCamp = (t) => db.campaigns[db.goals[t?.goalId]?.campaignId] || null;
+// ----- A campaign's test run (the sandbox, 2026-11-20) -----
+// Run a campaign for real before it goes to the team: its tasks go only to the testers (each person, team role or
+// campaign role on a task is matched to a tester, the same one every time), only testers are told anything about it,
+// and what its automations would do outside Kloomie or to real records (emails, texts, Teams posts, webhooks,
+// invoices, money, stock, visits, docs, agents) and moving its job's stage are written to its test log instead. Skip
+// ahead finishes a phase to see what opens next. Go live puts its tasks and phases back as they were before the test
+// (who they were for, unticked, the history and comments of the test gone), keeps changes to what they say, deletes
+// the tasks its automations made in the test, and empties the log. A sub-campaign runs in its main one's test.
+const TEST_TASK = ['done', 'doneAt', 'doneBy', 'doneById', 'doneVia', 'doneDue', 'approved', 'approvedById', 'submitted', 'returned', 'status', 'assigneeId', 'roleId', 'castId', 'signoff', 'assignedAt', 'assignedBy', 'openedAt', 'due', 'skipped', 'reopens', 'hist', 'firstDue'];
+const TEST_GOAL = ['finished', 'finishedAt', 'finishedById', 'reopens', 'staged', 'skipped'];
+const TEST_HOLDS = ['visit', 'invoice', 'text', 'email', 'money', 'doc', 'vault', 'webhook', 'stock', 'teams'];
+const TEST_LOG = 200;
+const testOf = (c) => (c?.test ? c : c?.parentId && db.campaigns[c.parentId]?.test ? db.campaigns[c.parentId] : null);
+const inCamp = (c, x) => !!x && (x.id === c.id || x.parentId === c.id);
+const campTasks = (c) => Object.values(db.tasks).filter((t) => t.wsId === c.wsId && inCamp(c, taskCamp(t)));
+const campGoalsAll = (c) => Object.values(db.goals).filter((g) => g.wsId === c.wsId && inCamp(c, db.campaigns[g.campaignId]));
+const testKeep = (x, keys) => Object.fromEntries(keys.filter((k) => x[k] !== undefined).map((k) => [k, structuredClone(x[k])]));
+const putBack = (x, keys, was) => { for (const k of keys) if (k in was) x[k] = was[k]; else delete x[k]; };
+// A task in a test run goes to a tester (called wherever a task is made or changed, from applyTask).
+function testAssign(t) {
+  const tc = testOf(taskCamp(t));
+  if (!tc) return;
+  const T = tc.test;
+  const pick = (key) => (T.map[key] ||= T.testers[Object.keys(T.map).length % T.testers.length]);
+  if (!(t.id in T.tasks) && t.testMade === undefined) { const v = actorNow().via; t.testMade = t.followUp || !['app', 'api'].includes(v) ? 'auto' : 'hand'; }
+  if (!(t.assigneeId && T.testers.includes(t.assigneeId))) {
+    const key = t.assigneeId || (t.roleId ? 'r:' + t.roleId : t.castId ? 'c:' + t.castId : null);
+    if (key) { t.assigneeId = pick(key); t.roleId = null; t.castId = null; }
+  }
+  if (t.signoff && !(t.signoff.memberId && T.testers.includes(t.signoff.memberId))) t.signoff = { memberId: pick(t.signoff.memberId || 'c:' + t.signoff.castId) };
+}
+function testLog(tc, kind, text, by = null) {
+  const T = tc.test;
+  T.log = [...(T.log || []), { id: rid(6), at: Date.now(), kind, text: clipText(text, 600), by }].slice(-TEST_LOG);
+  broadcast(tc.wsId, { type: 'campaign', campaign: publicCampaign(tc) });
+}
+// What an automation's step would have done, written down instead.
+function testHeld(tc, x, a, ctx, ws) {
+  const who = () => { const c = flowContact(ctx, ws.id); return c ? contactName(c) : 'no one (it wasn’t about a contact)'; };
+  const fill = (s, n) => clipText(autoFill(s || '', ctx, ws.id, n), 300);
+  const what = a.kind === 'email' ? `Email to ${who()}: “${fill(a.subject)}”, ${fill(a.text)}`
+    : a.kind === 'text' ? `Text to ${who()}: ${fill(a.text)}`
+    : a.kind === 'teams' ? `Post in Teams: ${fill(a.text, 200)}`
+    : a.kind === 'webhook' ? `Send what happened to ${(() => { try { return new URL(a.url).host; } catch { return 'another app'; } })()}`
+    : a.kind === 'invoice' ? `Make an invoice for the job${a.send ? ' and ask to send it' : ''}`
+    : a.kind === 'money' ? `Add ${a.amount ? dollars(a.amount / 100) + ' ' : ''}money ${a.direction === 'in' ? 'in' : 'out'} to Finance`
+    : a.kind === 'stock' ? `${{ use: 'Use', move: 'Move', receive: 'Receive' }[a.act] || 'Change'} ${a.qty || ''} ${db.invItems[a.itemId]?.name || 'stock'}`.replace(/\s+/g, ' ')
+    : a.kind === 'visit' ? `Book ${a.visit === 'Visit' ? 'a visit' : 'the ' + String(a.visit || 'visit').toLowerCase()}`
+    : a.kind === 'doc' ? 'Write a doc from a template'
+    : a.kind === 'vault' ? 'Put a sealed note in a vault'
+    : a.kind;
+  testLog(tc, a.kind, what, `Automation “${clipText(x.name, 60)}”`);
+  return `Test run, logged and not done: ${clipText(what, 120)}`;
+}
+function testStart(ws, c, auth, ids) {
+  const testers = [...new Set((Array.isArray(ids) ? ids : []).filter((id) => typeof id === 'string' && memberIn(ws.id, id)))].slice(0, 20);
+  if (!testers.length) testers.push(auth.memberId);
+  const tasks = campTasks(c);
+  const before = new Set(tasks.flatMap((t) => taskDoers(ws, t)));
+  c.test = { by: auth.memberId, startedAt: Date.now(), testers, map: {}, log: [], status: c.status, doneBySteps: !!c.doneBySteps,
+    tasks: Object.fromEntries(tasks.map((t) => [t.id, { ...testKeep(t, TEST_TASK), checklist: (t.checklist || []).map((x) => ({ ...x })) }])),
+    goals: Object.fromEntries(campGoalsAll(c).map((g) => [g.id, testKeep(g, TEST_GOAL)])) };
+  for (const t of tasks) { testAssign(t); broadcast(ws.id, { type: 'task', task: publicTask(t) }); }
+  testLog(c, 'start', `Test run started. Tasks go to ${testers.map((id) => memberIn(ws.id, id)?.name || '?').join(', ')}.`, auth.member);
+  resyncVisibility(ws.id, [...before, ...testers]);
+}
+function testEnd(ws, c, auth) {
+  const T = c.test;
+  if (!T) return { removed: 0 };
+  const during = new Set(campTasks(c).flatMap((t) => taskDoers(ws, t)));
+  let removed = 0;
+  for (const t of campTasks(c)) {
+    const was = T.tasks[t.id];
+    if (!was && t.testMade === 'auto') { deleteTask(t); removed++; continue; }
+    if (was) putBack(t, TEST_TASK, was);
+    else for (const k of ['done', 'doneAt', 'doneBy', 'doneById', 'doneVia', 'doneDue', 'approved', 'approvedById', 'submitted', 'returned', 'status', 'openedAt', 'hist', 'reopens']) delete t[k];
+    t.done = !!t.done;
+    if (t.checklist) {
+      const old = new Map((was?.checklist || []).map((x) => [x.id, x]));
+      t.checklist = t.checklist.map((x) => { const o = old.get(x.id); return o?.done ? { ...x, done: true, at: o.at, ...(o.by ? { by: o.by } : {}) } : { id: x.id, text: x.text, done: false }; });
+    }
+    if (t.comments) { t.comments = t.comments.filter((x) => x.at < T.startedAt); if (!t.comments.length) delete t.comments; }
+    delete t.testMade;
+    broadcast(ws.id, { type: 'task', task: publicTask(t) });
+  }
+  for (const g of campGoalsAll(c)) {
+    if (T.goals[g.id]) putBack(g, TEST_GOAL, T.goals[g.id]);
+    else for (const k of TEST_GOAL) delete g[k];
+    broadcast(ws.id, { type: 'goal', goal: publicGoal(g) });
+  }
+  c.status = T.status === 'done' ? 'active' : T.status;
+  c.doneBySteps = false;
+  delete c.test;
+  broadcast(ws.id, { type: 'campaign', campaign: publicCampaign(c) });
+  resyncVisibility(ws.id, [...during, ...campTasks(c).flatMap((t) => taskDoers(ws, t))]);
+  return { removed };
+}
 const inCast = (c, castId, memberId) => !!castRole(c, castId)?.memberIds.includes(memberId);
 function castList(v, ws) {
   const out = [];
@@ -3993,7 +4091,8 @@ function jobStepsOnce(wsId, by, byId) {
         const i = g.stage && stepFinished(g) ? stageAt(f, g.stage) : -1;
         if (i > to && !openStepsUpTo(rec, f, i).length) to = i;
       }
-      if (to > at) {
+      if (to > at && testOf(c)) testLog(testOf(c), 'job', `Move the job to “${f.choices[to].label}” (“${clipText(fresh.title, 60)}” is done)`, 'Kloomie');
+      else if (to > at) {
         PJ.recordActivity(rec.id, { kind: 'change', field: f.name, from: f.choices[at]?.label || '', to: f.choices[to].label, note: `“${clipText(fresh.title, 60)}” is done`, by: 'Kloomie' });
         rec.values[f.id] = f.choices[to].id;
         rec.updatedAt = Date.now();
@@ -4184,6 +4283,8 @@ async function execSteps(x, ctx, stack, i, log) {
     log.path?.push(stepAt(stack, i));
     if (s.kind === 'wait') return { wait: { stack, i: i + 1, ms: s.amount * WAIT_UNITS[s.unit], label: `${s.amount} ${s.amount === 1 ? s.unit.slice(0, -1) : s.unit}` } };
     if (s.kind === 'agent') {
+      const inTest = testOf(ctx.campaign?.id ? db.campaigns[ctx.campaign.id] : taskCamp(ctx.task?.id ? db.tasks[ctx.task.id] : null));
+      if (inTest) { log.push(`Test run, logged and not done: ask ${agentName(s.agent)}`); testLog(inTest, 'agent', `Ask ${agentName(s.agent)}: ${clipText(autoFill(s.ask || '', ctx, x.wsId), 300)}`, `Automation “${clipText(x.name, 60)}”`); continue; }
       const r = agentStep(x, s, ctx);
       log.push(r.said);
       if (s.wait && r.runId) return { wait: { stack, i: i + 1, ms: AGENT_WAIT_MS, label: `for ${r.name}’s answer`, agentRun: r.runId } };
@@ -4453,6 +4554,8 @@ function flowContact(ctx, wsId) {
 const contactName = (c) => c.name || c.company || c.email || c.phone || 'the contact';
 const dollars = (n) => '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 async function flowAction(x, a, ctx, ws) {
+  const inTest = TEST_HOLDS.includes(a.kind) && testOf(ctx.campaign?.id ? db.campaigns[ctx.campaign.id] : taskCamp(ctx.task?.id ? db.tasks[ctx.task.id] : null));
+  if (inTest) return testHeld(inTest, x, a, ctx, ws);
   const rec = ctx.record?.id && db.records[ctx.record.id]?.wsId === ws.id ? db.records[ctx.record.id] : null;
   if (a.kind === 'visit') {
     if (!rec) return 'No job to book a visit on: it wasn’t about one';
@@ -4600,8 +4703,11 @@ async function autoAction(x, a, ctx) {
       else if (v === 'doers') { const ts = ctx.task ? [ctx.task] : ctx.goal ? Object.values(db.tasks).filter((t) => t.goalId === ctx.goal.id) : []; for (const t of ts) for (const id of taskDoers(ws, t)) if (ws.members.some((m) => m.id === id)) ids.add(id); }
       else if (ws.members.some((m) => m.id === v)) ids.add(v);
     }
-    for (const id of ids) notify(ws.id, id, { title: x.name, text: say, campaignId: ctx.campaign?.id || null, taskId: ctx.task?.id || null });
-    return `Notified ${ids.size} ${ids.size === 1 ? 'person' : 'people'}`;
+    let told = 0;
+    for (const id of ids) if (notify(ws.id, id, { title: x.name, text: say, campaignId: ctx.campaign?.id || null, taskId: ctx.task?.id || null })) told++;
+    // In a test run only testers are told (2026-11-20).
+    const held = ids.size - told;
+    return `Notified ${told} ${told === 1 ? 'person' : 'people'}${held ? ` (${held} not told: it’s a test run)` : ''}`;
   }
   // The job or record it's about, changed; or one added. As its maker: only where they can still see, and through
   // the same path as a person's edit (applied, on the record's timeline as the automation, announced).
@@ -4643,6 +4749,8 @@ const publicNotice = ({ wsId, ...n }) => n;
 // `key` folds repeats into one (three files from the same link → "3 files"), while it's unread and recent.
 function notify(wsId, memberId, { title, text, campaignId = null, taskId = null, kind = null, go = null, key = null, more = null }) {
   if (!memberIn(wsId, memberId)) return null;
+  const inTest = testOf(campaignId ? db.campaigns[campaignId] : taskId ? taskCamp(db.tasks[taskId]) : null);
+  if (inTest && !inTest.test.testers.includes(memberId)) return null;
   const mine = Object.values(db.notices).filter((y) => y.wsId === wsId && y.memberId === memberId).sort((p, q) => q.at - p.at);
   let n = key && mine.find((y) => y.key === key && !y.read && Date.now() - y.at < 10 * 60_000);
   if (n) {
@@ -8731,6 +8839,37 @@ async function api(req, res, url) {
       automate(ws.id, 'campaign.checkin', { campaign: c, status: body.status, note: c.checkins.at(-1).note, who: auth.member, whoId: auth.memberId });
       save();
       broadcast(ws.id, { type: 'campaign', campaign: publicCampaign(c) });
+      return send(res, 200, publicCampaign(c));
+    }
+    // The test run: start it, skip a phase ahead, go live (2026-11-20).
+    if (parts[2] === 'test' && m === 'POST') {
+      if (c.ownerId !== auth.memberId && c.assigneeId !== auth.memberId && !isAdmin(auth)) return send(res, 403, { error: 'Only whoever runs this campaign, or an admin, can test it.' });
+      const body = await readJson(req, 10_000);
+      if (!parts[3]) {
+        if (c.test || testOf(c)) return send(res, 409, { error: c.test ? 'It’s already in a test run.' : 'Its main campaign is in a test run.' });
+        if (c.parentId && c.status === 'done') return send(res, 409, { error: 'It’s finished. Open it again first.' });
+        testStart(ws, c, auth, body.testers);
+      } else if (parts[3] === 'skip') {
+        if (!c.test) return send(res, 409, { error: 'Start a test run first.' });
+        const g = db.goals[body.goalId];
+        if (!g || !inCamp(c, db.campaigns[g.campaignId])) return send(res, 404, { error: 'That phase isn’t in this campaign.' });
+        // Subtasks first, then in order; each as whoever it's for would finish it (a sign-off by its signer).
+        const open = tasksInOrder(g).filter((t) => !stepDone(t)).sort((p, q) => (p.parentId ? 0 : 1) - (q.parentId ? 0 : 1));
+        let n = 0;
+        for (const t of open) {
+          const as = memberIn(ws.id, t.assigneeId) ? t.assigneeId : auth.memberId;
+          let r = await replayAs(ws, as, null, { method: 'PATCH', path: `/api/tasks/${t.id}`, body: { done: true } });
+          if (r.status < 300 && !db.tasks[t.id]?.done && db.tasks[t.id]?.signoff?.memberId) r = await replayAs(ws, db.tasks[t.id].signoff.memberId, null, { method: 'PATCH', path: `/api/tasks/${t.id}`, body: { done: true } });
+          if (db.tasks[t.id]?.done) n++;
+        }
+        testLog(c, 'skip', `Skipped ahead: finished ${n} task${n === 1 ? '' : 's'} in “${clipText(g.title, 80)}”${n < open.length ? ` (${open.length - n} couldn’t be finished)` : ''}.`, auth.member);
+      } else if (parts[3] === 'end') {
+        if (!c.test) return send(res, 409, { error: 'It isn’t in a test run.' });
+        const { removed } = testEnd(ws, c, auth);
+        save();
+        return send(res, 200, { ...publicCampaign(c), removed });
+      } else return send(res, 404, { error: 'Not found' });
+      save();
       return send(res, 200, publicCampaign(c));
     }
     // Keep me posted: hear when its steps get done and when someone checks in, without being on it.
