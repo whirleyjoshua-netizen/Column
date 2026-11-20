@@ -1741,6 +1741,8 @@ export function projectsModule({ proofUrl = () => null, onEvent = null, onPrice 
         if (!k || k.wsId !== ws.id) return send(res, 404, { error: 'That key is gone.' });
         if (m === 'DELETE') {
           delete db.apiKeys[k.id];
+          // The webhooks it subscribed stop too (as when its maker leaves): an app whose key is gone hears nothing more.
+          for (const h of Object.values(db.webhooks)) if (h.wsId === ws.id && h.keyId === k.id) delete db.webhooks[h.id];
           save();
           return send(res, 200, { ok: true });
         }

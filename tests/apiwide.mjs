@@ -146,6 +146,15 @@ try {
   await jo('POST', `/projects/${p.id}/records`, { typeId: tp.id, values: { job: 'Second job' } });
   ok(await until(() => got.some((g) => g.body.type === 'record.created')), 'record.created still comes through');
   ok(!got.some((g) => g.body.type === 'contact.deleted'), 'events nobody asked for aren’t sent');
+  // Deleting a key stops the webhooks it subscribed, as removing its maker does (live check 2026-11-20: they kept
+  // sending the team's tasks to the app after its key was deleted).
+  const zap = (await jo('GET', '/integrations/keys')).body.find((k) => k.name === 'Zapier');
+  ok((await jo('DELETE', '/integrations/keys/' + zap.id)).status === 200, 'an owner deletes the Zapier key');
+  ok(!(await jo('GET', '/integrations/webhooks')).body.some((h) => h.keyId === zap.id), 'the webhooks that key added are gone too');
+  const before = got.length;
+  await jo('POST', '/tasks', { text: 'After the key was deleted' });
+  await sleep(800);
+  ok(!got.slice(before).some((g) => g.body.type === 'task.created'), 'and nothing more is sent to them');
 } catch (e) {
   ok(false, 'threw: ' + e.stack);
   console.log(srv.log.slice(-3000));
