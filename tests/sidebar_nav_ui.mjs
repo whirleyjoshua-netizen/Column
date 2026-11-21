@@ -64,6 +64,14 @@ await A.tap(`document.querySelector('#tabs [data-tab=agents]')`);
 await A.until(agentsUp);
 await A.tap(`document.querySelector('#tabs [data-tab=agents]')`);
 ok(await A.until(`document.querySelector('#tool').classList.contains('hidden')`, 2000), 'Agents again closes it, as before');
+// Home's Today → Open Day opens today's Day, even when Tasks was last on Week (it opened Week).
+await A.tap(`document.querySelector('#tabs [data-tab=work]')`);
+await A.until(`!!document.querySelector('#day:not(.hidden)')`);
+await A.ev(`(() => { const b = [...document.querySelectorAll('#day button')].find((x) => x.textContent.trim() === 'Week'); b && b.click(); return !!b; })()`);
+await A.tap(`document.querySelector('#tabs [data-tab=home]')`);
+await A.until(`!document.querySelector('#home').classList.contains('hidden')`);
+await A.tap(`[...document.querySelectorAll('#home button')].find((x) => x.textContent.trim() === 'Open Day')`);
+ok(await A.until(`[...document.querySelectorAll('#day button.on')].some((x) => x.textContent.trim() === 'Day')`, 3000), 'Open Day lands on Day, not Week: ' + (await A.ev(`[...document.querySelectorAll('#day button.on')].map((x) => x.textContent.trim()).join()`)));
 ok(!A.errors.length, 'no errors: ' + A.errors.join(' | '));
 } catch (e) { ok(false, 'threw ' + e.message); }
 console.log(fails ? fails + ' FAILED' : 'ALL PASS');

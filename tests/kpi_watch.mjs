@@ -84,6 +84,9 @@ try {
   await rico('POST', '/tasks', { text: 'Late two', due: '2020-01-02' });
   ok(await until(async () => (await rico('GET', '/state')).body.notices.some((n) => n.title === 'Overdue now is above 1')), 'the alert goes off: overdue above 1');
   ok(await until(async () => (await rico('GET', '/state')).body.notices.some((n) => n.title === 'Overdue heads-up' && n.go === 'analytics:team')), 'the automation’s notice opens Analytics → Team: ' + JSON.stringify((await rico('GET', '/state')).body.notices.find((n) => n.title === 'Overdue heads-up')));
+  // "Test it" on it after one went off doesn't say nothing has happened: owners-only events aren't kept as examples.
+  r = await rico('POST', '/automations/test', { name: 't', trigger: { kind: 'analytics.alert' }, actions: [{ kind: 'notify', text: '{metric} is {value}', to: ['owners'] }] });
+  ok(r.status === 200 && r.body.sample && /made-up example/.test(r.body.about) && !/nothing like this has happened/.test(r.body.about), 'Test it doesn’t claim nothing happened: ' + r.body?.about);
   // The same for a notice about a contact: it opens the contact.
   await rico('POST', '/automations', { name: 'New contact heads-up', trigger: { kind: 'contact.added' }, actions: [{ kind: 'notify', text: '{contact} was added', to: ['owners'] }] });
   const dana = (await rico('POST', '/contacts', { name: 'Dana Notice' })).body;

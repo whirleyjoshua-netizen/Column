@@ -838,7 +838,8 @@
     if (kind === 'bell') return openBell();
     if (kind === 'tasks') return showTasks();
     if (kind === 'shifts') { if (!canTeam()) return openMyShifts(); TM.tab = 'shifts'; openTeam(); if (/^\d{4}-\d\d-\d\d$/.test(id)) { TM.date = id; teamDraw(); } return; }
-    if (kind === 'task') { const t = taskById(id); return t ? (goalById(t.goalId) ? showStep(t) : showTasks()) : showTasks(); }
+    // A task link opens the task (its drawer) over its list, not only the list (live check 2026-11-20).
+    if (kind === 'task') { const t = taskById(id); if (!t) return showTasks(); if (goalById(t.goalId)) return showStep(t); showTasks(); return taskWindow(t); }
     if (kind === 'camp') return campById(id) ? openCampaign(id) : setTab('camps');
     if (kind === 'sop') { setTab('camps'); return setTimeout(() => sopGuide(id), 50); }
     if (kind === 'rec') return openRecord(id);
@@ -3823,6 +3824,8 @@
     return out;
   }
 
+  // Home's Today card opens today's Day, not whichever view (Week, Month, List) Tasks was last on (live check 2026-11-20).
+  function homeOpenDay(k) { D.sub = 'schedule'; store.set('daySub', 'schedule'); D.view = 'day'; store.set('dayView', 'day'); setTab('day'); goDay(k); }
   function renderDay() {
     if (!S.workspace || D.dragging) return;
     sendNext();
@@ -6818,8 +6821,8 @@
           needsN ? h('div', {}, d.late.length ? row('!', 'late', `${plural(d.late.length, 'of your tasks')} overdue`, d.late.slice(0, 3).map((t) => shortText(t.text, 30)).join(' · '), () => (d.late.length === 1 && d.late[0].goalId ? showStep(d.late[0]) : showTasks())) : null,
             d.needs.slice(0, 12).map((n) => row(ICON[n.kind], n.kind, n.text, n.sub, n.run)))
             : h('p', { class: 'day-hint' }, 'Nothing needs you right now: no sign-offs waiting, nothing stuck or overdue.')),
-        card('today', 'Today', d.next.length, ['Open Day', () => { D.sub = 'schedule'; store.set('daySub', 'schedule'); setTab('day'); goDay(d.today); }],
-          d.sched.length ? h('div', { class: 'home-sched' }, d.sched.slice(0, 8).map((e) => h('button', { class: 'hs-row' + (e.done ? ' done' : '') + (d.next.includes(e) ? '' : ' past'), onclick: () => { D.sub = 'schedule'; setTab('day'); goDay(d.today); } },
+        card('today', 'Today', d.next.length, ['Open Day', () => homeOpenDay(d.today)],
+          d.sched.length ? h('div', { class: 'home-sched' }, d.sched.slice(0, 8).map((e) => h('button', { class: 'hs-row' + (e.done ? ' done' : '') + (d.next.includes(e) ? '' : ' past'), onclick: () => homeOpenDay(d.today) },
             h('span', { class: 'hs-t' }, e.start != null ? fmtTime(e.start) : 'Anytime'), h('span', {}, e.text))))
             : h('p', { class: 'day-hint' }, 'Nothing on your schedule today.')),
         card('steps', 'Your steps', steps.length, ['All tasks', showTasks],
@@ -12786,7 +12789,7 @@
     if (c.kind === 'record') { closeTool(); return prLoadAll().then(() => openRecord(c.id)); }
     if (c.kind === 'project') { closeTool(); return openProject(c.id); }
     if (c.kind === 'doc') { closeTool(); return goTo('doc:' + c.id); }
-    if (c.kind === 'contact') return openTool('contacts');
+    if (c.kind === 'contact') { closeTool(); return openContactById(c.id); }
     if (c.kind === 'campaign') { closeTool(); return campById(c.id) ? openCampaign(c.id) : setTab('camps'); }
     if (c.kind === 'image') { const it = S.items.find((y) => y.id === c.id); return it ? openPreview(it) : toast('That picture isn’t here any more.'); }
     if (c.kind === 'automation') { closeTool(); openBarItem('automations'); return api('GET', '/automations').then((l) => { S.automations = l; renderAutos(); const x = l.find((y) => y.id === c.id); x ? autoSheet(x) : toast('That automation is gone.'); }).catch((e) => toast(e.message)); }

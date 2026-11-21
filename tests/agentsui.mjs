@@ -236,9 +236,13 @@ try {
   await openRun(null, 'Handle a new lead');
   await A.ev(`[...document.querySelectorAll('#tool .ag-step.act')].find((s) => s.textContent.includes('Follow up with Maria')).querySelector('button.linkish').click()`);
   ok(await A.until(`!document.querySelector('#day').classList.contains('hidden') && document.querySelector('#day').textContent.includes('Follow up with Maria Lopez')`), 'Open on a task goes to it in the Day');
+  // …and opens the task itself, not only the list (live check 2026-11-20).
+  ok(await A.until(`[...document.querySelectorAll('#sheet input, #sheet textarea')].some((x) => x.value === 'Follow up with Maria Lopez')`), 'Open on a task opens the task');
+  await A.key('Escape');
   await openRun(null, 'Handle a new lead');
   await A.ev(`[...document.querySelectorAll('#tool .ag-step.act')].find((s) => s.textContent.includes('Contact: Maria')).querySelector('button.linkish').click()`);
-  ok(await A.until(`document.querySelector('#tool h2')?.textContent.includes('Contacts') && document.querySelector('#tool').textContent.includes('Maria Lopez')`), 'Open on a contact opens Contacts');
+  ok(await A.until(`[...document.querySelectorAll('#sheet input')].some((x) => x.value === 'Maria Lopez')`), 'Open on a contact opens that contact');
+  await A.key('Escape');
   // Reply
   await openRun(null, 'Plan my day please');
   await A.ev(`(() => { const t = [...document.querySelectorAll('#tool .ag-box textarea')].pop(); t.value = 'more please'; return true; })()`);
