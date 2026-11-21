@@ -77,10 +77,17 @@ try {
   await sleep(1200);
   ok((await rico('GET', '/state')).body.notices.filter((n) => /Goal reached/.test(n.title)).length === 1 && (await rico('GET', '/state')).body.tasks.filter((x) => /^Celebrate/.test(x.text)).length === 1, 'once a period, not again with more money');
 
-  // The alert: two overdue tasks.
+  // The alert: two overdue tasks. An automation that tells people about it opens Analytics too (live check 2026-11-20:
+  // a Notify step's notice opened nothing unless it was about a task or a campaign).
+  await rico('POST', '/automations', { name: 'Overdue heads-up', trigger: { kind: 'analytics.alert' }, actions: [{ kind: 'notify', text: '{metric} is {value}', to: ['owners'] }] });
   await rico('POST', '/tasks', { text: 'Late one', due: '2020-01-01' });
   await rico('POST', '/tasks', { text: 'Late two', due: '2020-01-02' });
   ok(await until(async () => (await rico('GET', '/state')).body.notices.some((n) => n.title === 'Overdue now is above 1')), 'the alert goes off: overdue above 1');
+  ok(await until(async () => (await rico('GET', '/state')).body.notices.some((n) => n.title === 'Overdue heads-up' && n.go === 'analytics:team')), 'the automation’s notice opens Analytics → Team: ' + JSON.stringify((await rico('GET', '/state')).body.notices.find((n) => n.title === 'Overdue heads-up')));
+  // The same for a notice about a contact: it opens the contact.
+  await rico('POST', '/automations', { name: 'New contact heads-up', trigger: { kind: 'contact.added' }, actions: [{ kind: 'notify', text: '{contact} was added', to: ['owners'] }] });
+  const dana = (await rico('POST', '/contacts', { name: 'Dana Notice' })).body;
+  ok(await until(async () => (await rico('GET', '/state')).body.notices.some((n) => n.title === 'New contact heads-up' && n.go === 'contact:' + dana.id)), 'a notice about a contact opens the contact: ' + JSON.stringify((await rico('GET', '/state')).body.notices.find((n) => n.title === 'New contact heads-up')));
 
   // Members who may see the team's numbers see the team's goals and alerts, not the money ones.
   await rico('PATCH', '/workspace', { memberAccess: { teamKpis: true } });

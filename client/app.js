@@ -6811,7 +6811,7 @@
         startCard(card),
         notes.length ? card('notes wide', 'For you', notes.length, ['Clear all', () => clearNote(null)],
           h('div', {}, notes.slice(0, 8).map((n) => h('div', { class: 'note-row' },
-            h('button', { class: 'need-row auto', onclick: () => (n.taskId && taskById(n.taskId) ? showStep(taskById(n.taskId)) : n.campaignId && campById(n.campaignId) ? openCampaign(n.campaignId) : null) },
+            h('button', { class: 'need-row auto', onclick: () => (n.go ? goTo(n.go) : n.taskId && taskById(n.taskId) ? showStep(taskById(n.taskId)) : n.campaignId && campById(n.campaignId) ? openCampaign(n.campaignId) : null) },
               h('span', { class: 'need-ic' }, '⚙'), h('span', { class: 'need-text' }, h('b', {}, n.text), h('small', {}, `${n.title} · ${ago(n.at)}`))),
             h('button', { class: 'icon-btn', 'aria-label': 'Clear', html: I.close, onclick: () => clearNote(n) }))))) : null,
         card('needs' + (needsN ? ' wide' : ''), 'Needs you', needsN, d.needs.length ? ['Overview', () => { K.overview = true; store.set('campsOverview', true); setTab('camps'); openCampaign(null); }] : null,

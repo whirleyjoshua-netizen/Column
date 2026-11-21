@@ -4779,7 +4779,10 @@ async function autoAction(x, a, ctx) {
       else if (ws.members.some((m) => m.id === v)) ids.add(v);
     }
     let told = 0;
-    for (const id of ids) if (notify(ws.id, id, { title: x.name, text: say, campaignId: ctx.campaign?.id || null, taskId: ctx.task?.id || null })) told++;
+    // What it's about opens from the notice: a task or campaign as before, else the contact, the job or the place it
+    // came from (Analytics) (live check 2026-11-20: these opened nothing).
+    const go = ctx.task || ctx.campaign ? null : typeof ctx.go === 'string' ? ctx.go : ctx.contact?.id && db.contacts[ctx.contact.id]?.wsId === ws.id ? 'contact:' + ctx.contact.id : ctx.record?.id && db.records[ctx.record.id] ? 'rec:' + ctx.record.id : null;
+    for (const id of ids) if (notify(ws.id, id, { title: x.name, text: say, campaignId: ctx.campaign?.id || null, taskId: ctx.task?.id || null, go })) told++;
     // In a test run only testers are told (2026-11-20).
     const held = ids.size - told;
     return `Notified ${told} ${told === 1 ? 'person' : 'people'}${held ? ` (${held} not told: it’s a test run)` : ''}`;

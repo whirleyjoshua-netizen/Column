@@ -285,7 +285,7 @@ export function analyticsModule({ db, save = () => {}, rid = () => Math.random()
       const title = w.kind === 'goal' ? `Goal reached: ${m.label}` : `${m.label} is ${w.op} ${target}`;
       const text = w.kind === 'goal' ? `${now} ${period}, against a goal of ${target}.` : `It’s ${now}${period ? ' ' + period : ''}.`;
       notifyAdmins(ws.id, { kind: 'analytics', title, text, go: 'analytics:' + m.sec, key: 'kpi:' + w.id });
-      automate(ws.id, w.kind === 'goal' ? 'analytics.goal' : 'analytics.alert', { ownersOnly: true, metric: m.label, value: now, target, period, note: `${title}. ${text}`, date: teamDay(ws.id) });
+      automate(ws.id, w.kind === 'goal' ? 'analytics.goal' : 'analytics.alert', { ownersOnly: true, go: 'analytics:' + m.sec, metric: m.label, value: now, target, period, note: `${title}. ${text}`, date: teamDay(ws.id) });
     }
     if (changed) save();
   }
