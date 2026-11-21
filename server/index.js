@@ -1426,13 +1426,64 @@ function applyTask(t, body) {
   // Where it sits when dragged: order within its goal, dayOrder on the Tasks list. null = not placed by hand.
   for (const k of ['order', 'dayOrder']) if (body[k] !== undefined) t[k] = body[k] === null || !Number.isFinite(Number(body[k])) ? null : Number(body[k]);
   if (body.priority !== undefined) t.priority = Math.max(0, Math.min(3, Math.round(Number(body.priority)) || 0));
+  // A work order (Command Center part 5, 2026-11-20): a number, materials, and maybe the customer's signature. Its steps
+  // are the checklist and its instructions the description.
+  if (body.wo !== undefined) {
+    if (body.wo === null) delete t.wo;
+    else {
+      const was = t.wo || null, w = body.wo && typeof body.wo === 'object' ? body.wo : {};
+      t.wo = { no: was?.no || woNumber(t.wsId), at: was?.at || Date.now(), sign: w.sign !== undefined ? !!w.sign : !!was?.sign,
+        materials: w.materials !== undefined ? woMaterials(t.wsId, w.materials) : was?.materials || [], ...(was?.signed ? { signed: was.signed } : {}) };
+    }
+  }
+  if (body.woSign !== undefined) {
+    if (!t.wo) throw badRequest('Make it a work order first.');
+    if (body.woSign === null) {
+      if (t.done) throw Object.assign(new Error('A finished work order keeps its signature.'), { status: 409 });
+      const { signed, ...rest } = t.wo;
+      t.wo = rest;
+    } else {
+      const name = cleanText(body.woSign?.name, 80);
+      if (!name) throw badRequest('Write the name of whoever is signing.');
+      const img = String(body.woSign?.img || '');
+      const m = /^data:image\/png;base64,([A-Za-z0-9+/]+={0,2})$/.exec(img);
+      const bytes = m ? Buffer.from(m[1], 'base64') : null;
+      if (!bytes || bytes.length < 60 || bytes.length > 120_000 || bytes.readUInt32BE(0) !== 0x89504e47) throw badRequest('That signature didn’t come through. Sign again.');
+      const who = actorNow().by;
+      t.wo = { ...t.wo, signed: { name, img, at: Date.now(), by: db.workspaces[t.wsId]?.members.find((x) => x.id === who)?.name || null } };
+    }
+  }
   if (body.done !== undefined) {
+    // Not finished until every step is ticked and, when it needs one, the customer has signed (on every path).
+    if (body.done && !t.done && t.wo) {
+      const open = (t.checklist || []).filter((x) => !x.done);
+      if (open.length) throw Object.assign(new Error(`Tick every step of the work order first: ${open.slice(0, 3).map((x) => `“${clipText(x.text, 40)}”`).join(', ')}${open.length > 3 ? ` and ${open.length - 3} more` : ''}.`), { status: 409 });
+      if (t.wo.sign && !t.wo.signed) throw Object.assign(new Error('The customer hasn’t signed the work order yet.'), { status: 409 });
+    }
     t.done = !!body.done;
     t.doneAt = t.done ? Date.now() : null;
   }
   if (!t.text) throw badRequest('Write something first.');
   testAssign(t);
   return t;
+}
+// Work order numbers, per team: WO-1001, WO-1002…
+function woNumber(wsId) {
+  const ws = db.workspaces[wsId];
+  ws.woSeq = Math.max(1000, ws.woSeq || 1000) + 1;
+  return 'WO-' + ws.woSeq;
+}
+// Materials: an Inventory item of this team (its name and unit) or a typed line; how many; used or not.
+function woMaterials(wsId, list) {
+  return (Array.isArray(list) ? list : []).slice(0, 50).map((x) => {
+    const item = x?.itemId ? db.invItems?.[x.itemId] : null;
+    if (x?.itemId && !(item && item.wsId === wsId && !item.archived)) return null;
+    const name = item ? item.name : cleanText(x?.name, 120);
+    if (!name) return null;
+    const qty = Number(x?.qty);
+    return { id: /^[\w-]{4,24}$/.test(String(x?.id || '')) ? String(x.id) : rid(6), ...(item ? { itemId: item.id } : {}), name, qty: Number.isFinite(qty) && qty > 0 ? Math.min(100000, Math.round(qty * 1000) / 1000) : 1,
+      unit: item ? item.unit || '' : cleanText(x?.unit, 20) || '', used: !!x?.used };
+  }).filter(Boolean);
 }
 
 // Saved tasks and bundles (2026-11-19). A saved task is a task without its date: what it says, who it usually goes
@@ -2906,7 +2957,7 @@ const taskCamp = (t) => db.campaigns[db.goals[t?.goalId]?.campaignId] || null;
 // ahead finishes a phase to see what opens next. Go live puts its tasks and phases back as they were before the test
 // (who they were for, unticked, the history and comments of the test gone), keeps changes to what they say, deletes
 // the tasks its automations made in the test, and empties the log. A sub-campaign runs in its main one's test.
-const TEST_TASK = ['done', 'doneAt', 'doneBy', 'doneById', 'doneVia', 'doneDue', 'approved', 'approvedById', 'submitted', 'returned', 'status', 'assigneeId', 'roleId', 'castId', 'signoff', 'assignedAt', 'assignedBy', 'openedAt', 'due', 'startOn', 'skipped', 'reopens', 'hist', 'firstDue'];
+const TEST_TASK = ['done', 'doneAt', 'doneBy', 'doneById', 'doneVia', 'doneDue', 'approved', 'approvedById', 'submitted', 'returned', 'status', 'assigneeId', 'roleId', 'castId', 'signoff', 'assignedAt', 'assignedBy', 'openedAt', 'due', 'startOn', 'wo', 'skipped', 'reopens', 'hist', 'firstDue'];
 const TEST_GOAL = ['finished', 'finishedAt', 'finishedById', 'reopens', 'staged', 'skipped'];
 const TEST_HOLDS = ['visit', 'invoice', 'text', 'email', 'money', 'doc', 'vault', 'webhook', 'stock', 'teams'];
 const TEST_LOG = 200;
@@ -3550,6 +3601,7 @@ function snapshotCampaign(c, main = c) {
       tasks: Object.values(db.tasks).filter((t) => t.goalId === g.id && !t.followUp).sort((a, b) => a.createdAt - b.createdAt).map((t) => ({
         ref: t.id, blockedBy: t.blockedBy || [], dueAfter: t.dueAfter ?? null, castId: t.castId || null, signoff: t.signoff || null, action: t.action || null,
         description: t.description || null, checklist: (t.checklist || []).map((x) => x.text), parentRef: t.parentId || null,
+        wo: t.wo ? { sign: !!t.wo.sign, materials: t.wo.materials.map(({ itemId, name, qty, unit }) => ({ itemId, name, qty, unit })) } : null,
         text: t.text, order: t.order ?? null, priority: t.priority, dueIn: rel(t.due), assigneeId: t.assigneeId || null, roleId: t.roleId || null, report: !!t.report,
         listRef: lists.some((l) => l.id === t.listId) ? t.listId : null,
       })),
@@ -3663,6 +3715,7 @@ function fillCampaign(ws, owner, c, snap, date, by) {
       if (STEP_KINDS.includes(st.action?.kind)) t.action = { kind: st.action.kind };
       if (st.castId && castRole(c, st.castId)) { Object.assign(t, { castId: st.castId, assigneeId: null, roleId: null }); t.assignedBy = by || null; }
       if (st.signoff?.memberId || castRole(c, st.signoff?.castId)) t.signoff = st.signoff;
+      if (st.wo) applyTask(t, { wo: st.wo });
       // Its description and checklist (unticked) come too; which task it's a subtask of is set once they're all made.
       if (st.description) t.description = String(st.description).slice(0, 8000);
       if (st.checklist?.length) t.checklist = st.checklist.slice(0, 50).map((text) => ({ id: rid(6), text: cleanText(text, 200), done: false })).filter((x) => x.text);

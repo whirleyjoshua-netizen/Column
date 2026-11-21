@@ -6961,6 +6961,7 @@
         t.assigneeId ? avatar(t.assigneeId) : ccWho(t) ? h('small', { class: 'ccb-role' }, ccWho(t)) : null,
         t.due ? h('small', { class: 'ccb-due' + (isOverdue(t) ? ' late' : '') }, (t.startOn && t.startOn !== t.due ? dueLabel(t.startOn) + ' → ' : '') + dueLabel(t.due)) : null,
         t.priority ? h('span', { class: 'cc-prio p' + t.priority }, PRIO[t.priority]) : null,
+        t.wo ? h('span', { class: 'wo-chip', title: 'Work order' }, t.wo.no + (t.wo.sign && t.wo.signed ? ' ✓' : '')) : null,
         cl ? h('small', {}, cl) : null,
         sc === 'wait' || sc === 'sign' ? h('span', { class: 'cc-status ' + sc }, sl) : null));
     return el;
@@ -7720,7 +7721,7 @@
         pick.length ? h('div', { class: 'cc-table', role: 'table' },
           h('div', { class: 'cc-tr cc-th', role: 'row' }, ['Task', 'Phase', 'Who', 'Due', 'Priority', 'Status'].map((x) => h('span', { role: 'columnheader' }, x))),
           pick.map((t) => { const [sc, sl] = status(t); const g = goalById(t.goalId); return h('div', { class: 'cc-tr' + (t.done ? ' done' : ''), role: 'row', 'data-task': t.id, tabindex: '0', onclick: () => taskWindow(t), onkeydown: (e) => { if (e.key === 'Enter') taskWindow(t); } },
-            h('span', { class: 'cc-tt' }, t.text), h('span', {}, g?.title || ''), h('span', {}, t.assigneeId ? [avatar(t.assigneeId), ' ', memberName(t.assigneeId)] : t.roleId || t.castId ? 'A role' : h('small', { class: 'muted' }, 'Nobody')),
+            h('span', { class: 'cc-tt' }, t.text, t.wo ? h('span', { class: 'wo-chip' }, t.wo.no) : null), h('span', {}, g?.title || ''), h('span', {}, t.assigneeId ? [avatar(t.assigneeId), ' ', memberName(t.assigneeId)] : t.roleId || t.castId ? 'A role' : h('small', { class: 'muted' }, 'Nobody')),
             h('span', { class: isOverdue(t) ? 'late' : '' }, t.due ? dueLabel(t.due) : ''), h('span', {}, t.priority ? h('span', { class: 'cc-prio p' + t.priority }, PRIO[t.priority]) : ''), h('span', {}, h('span', { class: 'cc-status ' + sc }, sl))); }))
           : h('p', { class: 'day-hint' }, wf === 'mine' ? 'Nothing open for you here.' : wf === 'blocked' ? 'Nothing is blocked.' : wf === 'overdue' ? 'Nothing is overdue.' : 'No tasks here yet.'));
     };
@@ -8082,6 +8083,7 @@
     const rs = stepRes(g);
     const sec = (title, ...kids) => h('section', { class: 'td-sec' }, h('div', { class: 'td-sec-h' }, title), ...kids);
     const n = cl.filter((x) => x.done).length;
+    const woSec = t.wo ? woSection(t, save, redraw) : null;
     sheet(camp ? camp.name : 'Task', [h('div', { class: 'win task-win td' + (t.done ? ' is-done' : ''), 'data-task': t.id },
       parent ? h('button', { class: 'linkish td-parent', onclick: () => taskWindow(parent) }, '↑ Subtask of “' + shortText(parent.text, 50) + '”') : null,
       h('div', { class: 'win-head' }, h('button', { class: 'check' + (t.done ? ' on' : ''), html: I.check, disabled: !!blockers.length && !t.done, 'aria-label': t.done ? 'Mark not done' : 'Mark done', onclick: () => save({ done: !t.done }) }), text),
@@ -8091,8 +8093,9 @@
         row('Due', due),
         row('Priority', t.priority ? h('span', { class: 'cc-prio p' + t.priority }, PRIO[t.priority]) : h('small', { class: 'muted' }, 'Normal'), h('button', { class: 'btn small', onclick: (e) => prioMenu(e.currentTarget, taskById(t.id) || t) }, 'Change')),
         row('Status', h('span', {}, status, blockers.length && !t.done ? h('span', { class: 'cc-status wait td-badge' }, 'Waiting') : t.submitted && !t.done ? h('span', { class: 'cc-status sign td-badge' }, 'For sign-off') : null))),
-      sec('Description', desc),
-      sec(cl.length ? `Checklist · ${n}/${cl.length}` : 'Checklist', checklist),
+      woSec,
+      sec(t.wo ? 'Instructions' : 'Description', desc),
+      sec(t.wo ? (cl.length ? `Steps · ${n}/${cl.length}` : 'Steps') : cl.length ? `Checklist · ${n}/${cl.length}` : 'Checklist', checklist),
       t.parentId ? null : sec(subs.length ? `Subtasks · ${subs.filter((x) => x.done).length}/${subs.length}` : 'Subtasks', subtasks),
       sec('Dependencies', h('div', { class: 'td-deps' },
         blockers.length ? blockers.map((x) => h('span', { class: 'td-dep' }, '⏳ ' + shortText(stepName(x), 40))) : h('small', { class: 'muted' }, 'Waits for nothing'),
@@ -8111,6 +8114,7 @@
       sec('Activity', hist),
       h('div', { class: 'btns td-actions' },
         g && !t.done ? h('button', { class: 'btn small', onclick: (e) => toolsMenu(e.currentTarget, t) }, '✦ Tools') : null,
+        t.wo ? null : h('button', { class: 'btn small td-mkwo', title: 'Steps, instructions, materials and the customer’s sign-off, printable', onclick: () => save({ wo: { sign: !!t.recordId } }) }, '📋 Make it a work order'),
         !t.done ? h('button', { class: 'btn small', onclick: () => { closeSheet(); openSheet({ text: t.text, taskId: t.id, date: t.due || D.date }); } }, 'Put on schedule') : null,
         h('button', { class: 'btn small td-dup', onclick: async () => {
           try { const y = await api('POST', '/tasks', { text: t.text + ' (copy)', goalId: t.goalId || null, assigneeId: t.assigneeId || null, roleId: t.roleId || null, castId: t.castId || null, due: t.due || null, description: t.description || '', checklist: (t.checklist || []).map((x) => ({ text: x.text, done: false })), parentId: t.parentId || null, recordId: t.recordId || null }); upsertTask(y); renderCamps(); renderDay(); taskWindow(y); toast('Duplicated'); } catch (er) { toast(er.message); }
@@ -8123,6 +8127,98 @@
     void tab;
   }
 
+  // ----- Work orders (Command Center part 5, 2026-11-20): a task made a work order has a number, its steps (the
+  // checklist) and instructions (the description), materials (from Inventory or typed, ticked off as used, taking them
+  // out of stock), and the customer's signature when it needs one. It can't be finished until all of that is done. -----
+  let WOI = null; // Inventory, for picking materials and taking them from stock
+  const woInv = (fresh) => (WOI && !fresh ? Promise.resolve(WOI) : api('GET', '/inventory').then((d) => (WOI = d)).catch(() => (WOI = { items: [], places: [] })));
+  function woSection(t, save, redraw) {
+    const w = t.wo, mats = w.materials || [];
+    const cl = t.checklist || [];
+    const setMats = (list) => save({ wo: { materials: list } });
+    // Ticking an Inventory item takes it out of stock (from the place that has the most), for this job and task.
+    const useIt = async (m, on) => {
+      if (on && m.itemId) {
+        const inv = await woInv(true);
+        const it = inv.items.find((x) => x.id === m.itemId);
+        const places = Object.entries(it?.stock || {}).filter(([, q]) => q >= m.qty).sort((a, b) => b[1] - a[1]);
+        if (it && it.track !== 'units' && places.length) {
+          try { await api('POST', '/inventory/moves', { kind: 'use', itemId: m.itemId, qty: m.qty, from: places[0][0], jobId: t.recordId || undefined, taskId: t.id, note: `${w.no}: ${shortText(t.text, 60)}` }); toast(`Took ${m.qty} ${m.unit || ''} ${m.name} from ${inv.places.find((p) => p.id === places[0][0])?.name || 'stock'}`.replace(/\s+/g, ' ')); }
+          catch (e) { toast(e.message); }
+        } else toast(it ? `Not enough ${m.name} in one place to take from stock; marked used.` : `${m.name} isn’t in Inventory any more; marked used.`);
+      }
+      setMats(mats.map((x) => (x.id === m.id ? { ...x, used: on } : x)));
+    };
+    const rows = mats.map((m) => h('div', { class: 'wo-m' + (m.used ? ' used' : ''), 'data-mat': m.id },
+      h('input', { type: 'checkbox', checked: !!m.used, 'aria-label': 'Used ' + m.name, onchange: (e) => useIt(m, e.target.checked) }),
+      h('span', { class: 'wo-m-n' }, m.name, m.itemId ? h('small', { title: 'From Inventory' }, ' · stock') : null),
+      h('input', { type: 'number', class: 'wo-m-q', min: 0, step: 'any', value: m.qty, disabled: !!m.used, 'aria-label': 'How many ' + m.name, onchange: (e) => setMats(mats.map((x) => (x.id === m.id ? { ...x, qty: Number(e.target.value) || 1 } : x))) }),
+      h('small', { class: 'wo-m-u' }, m.unit || ''),
+      m.used ? null : h('button', { class: 't-btn', 'aria-label': 'Remove ' + m.name, html: I.close, onclick: () => setMats(mats.filter((x) => x.id !== m.id)) })));
+    const list = h('datalist', { id: 'wo-items-' + t.id });
+    woInv().then((inv) => list.replaceChildren(...inv.items.filter((x) => !x.archived).map((x) => h('option', { value: x.name }))));
+    const addName = h('input', { class: 'wo-add-n', placeholder: '+ Material (from Inventory, or type it)', list: list.id, maxlength: 120, 'aria-label': 'Add a material' });
+    const addQty = h('input', { type: 'number', class: 'wo-add-q', min: 0, step: 'any', value: 1, 'aria-label': 'How many' });
+    const add = () => {
+      const nm = addName.value.trim();
+      if (!nm) return;
+      const it = (WOI?.items || []).find((x) => x.name.toLowerCase() === nm.toLowerCase());
+      setMats([...mats, it ? { itemId: it.id, qty: Number(addQty.value) || 1 } : { name: nm, qty: Number(addQty.value) || 1 }]).then(() => setTimeout(() => $('#sheet .wo-add-n')?.focus(), 50));
+    };
+    addName.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); add(); } });
+    addQty.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); add(); } });
+    // The customer's sign-off.
+    let signBox = null;
+    if (w.signed) signBox = h('div', { class: 'wo-signed' }, h('img', { src: w.signed.img, alt: 'Signature of ' + w.signed.name }),
+      h('div', {}, h('b', {}, '✓ Signed by ' + w.signed.name), h('small', {}, [new Date(w.signed.at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }), w.signed.by ? 'handed over by ' + w.signed.by : ''].filter(Boolean).join(' · ')),
+        t.done ? null : h('button', { class: 'linkish wo-unsign', onclick: () => save({ woSign: null }) }, 'Sign again')));
+    else if (w.sign) {
+      const pad = signPad();
+      const who = h('input', { class: 'wo-signer', placeholder: 'Their name', maxlength: 80, 'aria-label': 'Name of who is signing', value: woCustomer(t) || '' });
+      signBox = h('div', { class: 'wo-sign' }, h('small', {}, 'Hand it to the customer to sign once the work is done:'), pad.pad, h('div', { class: 'wo-sign-row' }, who,
+        h('button', { class: 'btn small', onclick: () => pad.clear() }, 'Clear'),
+        h('button', { class: 'btn small primary-btn wo-sign-save', onclick: () => { if (!pad.inked()) return toast('Sign in the box first.'); if (!who.value.trim()) return toast('Write their name.'); save({ woSign: { name: who.value.trim(), img: pad.data() } }); } }, 'Save signature')));
+    }
+    const signOpt = h('label', { class: 'pick wo-sign-opt' }, h('input', { type: 'checkbox', checked: !!w.sign, disabled: !!w.signed, onchange: (e) => save({ wo: { sign: e.target.checked } }) }), 'Needs the customer’s signature');
+    const used = mats.filter((m) => m.used).length;
+    const left = [cl.some((x) => !x.done) ? `${cl.filter((x) => !x.done).length} step${cl.filter((x) => !x.done).length === 1 ? '' : 's'} to tick` : '', w.sign && !w.signed ? 'the customer’s signature' : ''].filter(Boolean);
+    return h('section', { class: 'td-sec wo' },
+      h('div', { class: 'td-sec-h wo-h' }, h('span', {}, '📋 Work order ', h('b', { class: 'wo-no' }, w.no)), h('span', { style: 'flex:1' }),
+        h('button', { class: 'btn small wo-print', onclick: () => woPrint(taskById(t.id) || t) }, '🖨 Print'),
+        h('button', { class: 'linkish wo-off', onclick: (e) => confirmClick(e.currentTarget, () => save({ wo: null })) }, 'Not a work order')),
+      h('p', { class: 'wo-sum' + (left.length && !t.done ? ' todo' : '') }, t.done ? 'Finished.' : left.length ? 'Before it can be finished: ' + left.join(' and ') + '.' : 'Ready to finish.',
+        mats.length ? ` Materials: ${used}/${mats.length} used.` : ''),
+      h('div', { class: 'wo-mats' }, rows, mats.some((m) => !m.used) || !t.done ? h('div', { class: 'wo-add' }, addName, addQty, list, h('button', { class: 'btn small', onclick: add }, 'Add')) : null),
+      signOpt, signBox);
+  }
+  // The customer on the job, to fill in who's signing.
+  function woCustomer(t) {
+    const j = t.recordId && recEverywhere(t.recordId);
+    if (!j?.p) return '';
+    const ty = prType(j.p, j.r.typeId);
+    return custOfJob(ty, j.r)?.name || '';
+  }
+  // The printed work order: number, job, who, instructions, steps to tick, materials, and the signature.
+  function woPrint(t) {
+    const w = t.wo, j = t.recordId && recEverywhere(t.recordId);
+    const ty = j?.p && prType(j.p, j.r.typeId);
+    const addrF = ty?.fields.find((x) => x.key === 'address');
+    const job = j?.p ? recName(ty, j.r) : '', addr = addrF ? j.r.values[addrF.id] || '' : '', cust = woCustomer(t);
+    const camp = goalById(t.goalId) && campById(goalById(t.goalId).campaignId);
+    const e = (x) => String(x ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+    const win = window.open('', '_blank');
+    if (!win) return toast('Allow pop-ups to print it.');
+    const row = (l, v) => (v ? `<tr><th>${e(l)}</th><td>${e(v)}</td></tr>` : '');
+    win.document.title = `${w.no} · ${t.text}`;
+    win.document.body.innerHTML = `<style>body{font:14px/1.5 system-ui,sans-serif;max-width:760px;margin:28px auto;padding:0 24px;color:#111}h1{font-size:20px;margin:0}header{display:flex;justify-content:space-between;align-items:baseline;border-bottom:2px solid #111;padding-bottom:8px;margin-bottom:14px}table{border-collapse:collapse;width:100%}th{text-align:left;color:#555;font-weight:500;width:130px;vertical-align:top;padding:3px 0}td{padding:3px 0}h2{font-size:14px;text-transform:uppercase;letter-spacing:.05em;color:#555;margin:20px 0 6px}.box{white-space:pre-wrap;border:1px solid #ccc;border-radius:6px;padding:8px 10px}ol,ul{margin:0;padding-left:20px}li{margin:4px 0}.m td,.m th{border-bottom:1px solid #eee;padding:5px 4px}.sig{display:flex;gap:30px;margin-top:10px}.sig div{flex:1;border-top:1px solid #111;padding-top:4px;color:#555;font-size:12px}.sig img{max-height:70px;display:block}</style>
+      <header><h1>${e(S.workspace.name)} · Work order</h1><b>${e(w.no)}</b></header>
+      <table>${row('Job', job)}${row('Customer', cust)}${row('Address', addr)}${row('Task', t.text)}${row('Campaign', camp?.name)}${row('Assigned to', t.assigneeId ? memberName(t.assigneeId) : '')}${row('Due', t.due ? dayName(t.due) : '')}${row('Status', t.done ? 'Finished' + (t.doneBy ? ' by ' + t.doneBy : '') : 'Open')}</table>
+      ${t.description ? `<h2>Instructions</h2><div class="box">${e(t.description)}</div>` : ''}
+      ${(t.checklist || []).length ? `<h2>Steps</h2><ul style="list-style:none;padding:0">${t.checklist.map((x) => `<li>${x.done ? '☑' : '☐'} ${e(x.text)}${x.done && x.by ? ` <small style="color:#777">· ${e(x.by)}</small>` : ''}</li>`).join('')}</ul>` : ''}
+      ${w.materials.length ? `<h2>Materials</h2><table class="m"><tr><th>Item</th><th>Qty</th><th>Used</th></tr>${w.materials.map((m) => `<tr><td>${e(m.name)}</td><td>${e(m.qty)} ${e(m.unit)}</td><td>${m.used ? '✓' : ''}</td></tr>`).join('')}</table>` : ''}
+      <h2>Sign-off</h2><div class="sig"><div>${w.signed ? `<img src="${e(w.signed.img)}" alt="">` : '<br><br>'}Customer${w.signed ? ': ' + e(w.signed.name) + ' · ' + e(new Date(w.signed.at).toLocaleString()) : ''}</div><div><br><br>Technician${t.assigneeId ? ': ' + e(memberName(t.assigneeId)) : ''}</div></div>`;
+    setTimeout(() => win.print(), 250);
+  }
 
   // ----- call lists: a spreadsheet of prospects dropped on a campaign -----
   // CSV, TSV and Excel files with rows become lists; anything else is just attached. The file stays in the stack.

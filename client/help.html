@@ -202,6 +202,16 @@
     <li><b>Duplicate</b> (with its checklist unticked), <b>Delete</b>, ✦ Tools and Put on schedule.</li>
   </ul>
   <p>A saved campaign keeps its tasks’ descriptions, checklists (unticked) and subtasks.</p>
+  <h3>Work orders</h3>
+  <p>Any task can be a work order for the person doing the job: open it and tap <b>📋 Make it a work order</b>. It gets a number (<b>WO-1001</b>, then WO-1002…), shown on its card and row.</p>
+  <ul>
+    <li><b>Instructions and steps:</b> the task’s description becomes its <b>Instructions</b> and its checklist its <b>Steps</b>.</li>
+    <li><b>Materials:</b> add what the job takes, picked from Inventory (or typed) with how many. Ticking an Inventory item as used takes it out of stock, from the place that has enough, logged against the job and the task. Typed ones are just ticked.</li>
+    <li><b>The customer’s sign-off:</b> with <b>Needs the customer’s signature</b> on (it starts on for a task on a job), hand over the phone or tablet: they sign on the pad and you write their name. It keeps who signed, when and who handed it over.</li>
+    <li><b>Can’t be finished early:</b> a work order can’t be marked done until every step is ticked and, when it needs one, the customer has signed. That holds everywhere, the public API and automations included.</li>
+    <li><b>🖨 Print</b> makes a paper work order: your company, the number, the job, customer and address, who it’s for, the instructions, the steps with what’s ticked, the materials and the signature.</li>
+    <li>A saved campaign (SOP) keeps each work order’s setup (its materials and whether it needs a signature), so every run gets its own numbered work orders, nothing used or signed yet.</li>
+  </ul>
   <h3>SOPs: your standard way of doing it</h3>
   <p>A campaign you save (its <b>⋯ → Save as an SOP</b>) becomes one of your team’s SOPs, listed under <b>SOPs · saved campaigns</b> at the bottom of Campaigns. Start one by hand (<b>Start now</b>), for a job (the job’s <b>+ Campaign</b>), on a weekly schedule, or from an automation. Each run is a new campaign.</p>
   <ul>
