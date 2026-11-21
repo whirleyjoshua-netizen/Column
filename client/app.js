@@ -3582,6 +3582,8 @@
     if (!b) return;
     // Another tab leaves Workspace: its tool closes (one opened from Settings, like Company HQ, stays).
     if (b.dataset.tab !== 'work' && !WORK_TABS.includes(b.dataset.tab) && toolOpen && workOpen()) closeTool();
+    // A tool the sidebar itself opened (Agents) closes when you pick another place there; it was left on top (2026-11-20).
+    if (toolOpen && toolOpen !== b.dataset.tab && BAR_ITEMS[toolOpen] && !BAR_ITEMS[toolOpen].view && !WORK_TABS.includes(toolOpen)) closeTool();
     if (BAR_ITEMS[b.dataset.tab]) return openBarItem(b.dataset.tab, b);
     closeProjects();
     setTab(b.dataset.tab);
