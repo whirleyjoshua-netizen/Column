@@ -3485,9 +3485,12 @@
 
   // Chat showing: in the split (2026-11-20), or the old page if anything still sets it.
   const chatOn = () => S.tab === 'chat' || splitOpen === 'chat';
+  // The pages you've been on, for the browser's Back (navBack, near the end).
+  const NAVB = { tabs: [], going: false, armed: false, skip: false };
   function setTab(tab) {
     // Everything that opened the Chat page (links, pins, notifications) opens Chat in the split now.
     if (tab === 'chat') return openChat();
+    if (S.tab && tab !== S.tab && !NAVB.going) { NAVB.tabs.push(S.tab); if (NAVB.tabs.length > 30) NAVB.tabs.shift(); }
     if (tab === 'camps' && splitOpen === 'camps') closeSplit(); // Campaigns from the tabs: back from the split, as the page
     S.tab = tab;
     markTabs();
@@ -6421,6 +6424,7 @@
     // It sits beside the sidebar like a page, so the sidebar still goes places: going leaves the builder, unless
     // something changed and isn't saved yet (then it stays, and says so, rather than losing the work).
     const was = JSON.stringify(dr);
+    if (page) page._keep = () => JSON.stringify(dr) !== was && 'Save the automation, or close it to leave it as it was.'; // nor does the browser's Back
     const leave = (e) => {
       if (!page?.isConnected || $('#sheet').classList.contains('hidden')) return document.removeEventListener('click', leave, true);
       if (!e.target.closest('#side button, #side a')) return;
@@ -10203,6 +10207,7 @@
     page?.classList.add('camp-builder');
     if (!PR.records.size) prLoadAll().then(() => { if (page?.isConnected) { const v = jobSel.value; jobSel.replaceChildren(h('option', { value: '' }, 'No job: it stands on its own'), ...jobs().map((j) => h('option', { value: j.id }, `${j.label} · ${j.p.name}`))); jobSel.value = v || D.recordId; drawSteps(); drawSum(); } });
     const was = JSON.stringify(D);
+    if (page) page._keep = () => JSON.stringify(D) !== was && 'Save the campaign, or close it to leave it as it was.'; // nor does the browser's Back
     const leave = (e) => {
       if (!page?.isConnected || $('#sheet').classList.contains('hidden')) return document.removeEventListener('click', leave, true);
       if (!e.target.closest('#side button, #side a')) return;
@@ -13743,6 +13748,7 @@
     sheet(title, [h('div', { class: 'cb-grid' }, h('div', { class: 'cb-main' }, ...sections.filter(Boolean)), aside)], onSave, label);
     const page = $('#sheet .sheet');
     page?.classList.add('page-form');
+    if (page) page._keep = () => dirty() && `Save the ${what}, or close it to leave it as it was.`; // the browser's Back doesn't throw it away
     const leave = (e) => {
       if (!page?.isConnected || $('#sheet').classList.contains('hidden')) return document.removeEventListener('click', leave, true);
       if (!e.target.closest('#side button, #side a')) return;
@@ -25248,6 +25254,64 @@
     }, leave ? 'Leave the team' : 'Delete my account');
     $('#sheet .primary-btn').classList.add('danger-fill');
   }
+
+  // ---------- the browser's Back ----------
+  // Back (and Android's back gesture) steps back through Kloomie (the owner, 2026-11-20), where before it left the app.
+  // Kloomie keeps one step in the browser's history while anything is open or you're away from Home; Back uses it up
+  // and does one step back here: what's on top closes (a menu, a viewer, a pop-up, the drawer, Sidekick, Settings, the
+  // split, a doc, a board, a tool), or a page goes back a level with its own back button, or to the page before. Then,
+  // unless that's Home with nothing open, the step is put back. At Home Back leaves, as before.
+  const NAV_BACK = 'button.cc-back, button.wb-back, button.ag-back, button.an-back, button.app-back, button.trash-back, button.tm-back, button.cb-back, button.plan-back, button.setx-back, [data-back], button[aria-label="Close doc"], button[aria-label="All boards"], button[aria-label="Back to Boards"], button[aria-label="All plans"], button[aria-label="Back to Sidekick"]';
+  const navSeen = (el) => !!el && !el.classList.contains('hidden') && !el.hidden && el.getClientRects().length > 0;
+  const navPress = (root, sel = NAV_BACK) => { const b = root && [...root.querySelectorAll(sel)].find((x) => navSeen(x) && !x.disabled); if (!b) return false; b.click(); return true; };
+  const navOpen = (sel) => navSeen($(sel));
+  function navAtRoot() {
+    if ($('#app').classList.contains('hidden')) return true; // signed out: nothing to step through
+    return S.tab === 'home' && !toolOpen && !splitOpen && !palette && !sideOpen() && !(SKD.open && !dockWide())
+      && !['#menu', '#sheet', '#preview', '#myCard', '#settings', '#projects', '#docview', '#wbview'].some(navOpen);
+  }
+  function navStep() {
+    if (navOpen('#menu')) return hideMenu();
+    if (palette) return closePalette();
+    if (navOpen('#myCard')) return navPress($('#myCard'), '.mycard-close');
+    if (navOpen('#preview')) return navPress($('#preview'), ':scope > button.close') || $('#preview').classList.add('hidden');
+    if (navOpen('#sheet')) {
+      const why = $('#sheet .sheet')?._keep?.();
+      if (why) return toast(why);
+      return navPress($('#sheet')) || closeSheet();
+    }
+    if (sideOpen()) return closeSide();
+    if (SKD.open && !dockWide()) return navPress($('#skDock')) || closeDock();
+    if (navOpen('#settings')) return navPress($('#settings')) || ($('#settings').classList.add('hidden'), shellMark());
+    if (navOpen('#wbview')) return navPress($('#wbview'));
+    if (splitOpen) return navPress($('#split')) || closeSplit();
+    if (navOpen('#docview')) return closeDoc();
+    if (navOpen('#projects')) return navPress($('#projects'), '.pj-panel-h button[aria-label="Close"]') || navPress($('#projects')) || closeProjects();
+    if (toolOpen) return navPress($('#tool')) || closeTool();
+    const page = $({ home: '#home', day: '#day', apps: '#apps', camps: '#campsWrap', column: '#panes', menu: '#menuPage' }[S.tab] || '#home');
+    if (navPress(page)) return;
+    if (S.tab === 'menu') return goHome(MENU.back);
+    let to = NAVB.tabs.pop();
+    while (to && (to === S.tab || to === 'menu' || to === 'chat')) to = NAVB.tabs.pop();
+    NAVB.going = true;
+    try { setTab(to || 'home'); } finally { NAVB.going = false; }
+  }
+  // After anything you do: a step to go back to while you're away from Home, none left over once you're back.
+  function navArm() {
+    if (NAVB.skip) return;
+    const root = navAtRoot();
+    if (!root && !NAVB.armed) { history.pushState({ kloomieBack: 1 }, ''); NAVB.armed = true; }
+    else if (root && NAVB.armed && history.state?.kloomieBack) { NAVB.skip = true; history.back(); }
+  }
+  const navLater = () => { setTimeout(navArm, 0); setTimeout(navArm, 600); };
+  for (const ev of ['click', 'keyup', 'touchend', 'change']) document.addEventListener(ev, navLater, true);
+  addEventListener('popstate', (e) => {
+    if (NAVB.skip) { NAVB.skip = false; NAVB.armed = !!e.state?.kloomieBack; return navLater(); }
+    if (e.state?.kloomieBack) { NAVB.armed = true; return; } // Forward, back onto the step
+    NAVB.armed = false;
+    try { navStep(); } catch (err) { console.error(err); }
+    navLater();
+  });
 
   // ---------- boot ----------
   if (desktop) desktop.onConfig?.((cfg) => (S.desktopCfg = cfg));
