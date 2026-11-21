@@ -14673,7 +14673,7 @@
     const all = boardsOnly().sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
     const list = all.filter((p) => !p.archived), gone = all.filter((p) => p.archived);
     return [
-      h('div', { class: 'pj-head' }, h('button', { class: 'icon-btn', 'aria-label': 'Close Boards', html: I.close, onclick: closeProjects }), h('h2', {}, 'Boards'), h('span', { style: 'flex:1' }), h('button', { class: 'btn pj-use-tpl', onclick: () => newProjectSheet() }, 'Use a template'), h('button', { class: 'btn primary-btn pj-new-board', onclick: (e) => newBlankBoard(e.currentTarget) }, '+ New board')),
+      h('div', { class: 'pj-head' }, h('button', { class: 'icon-btn pj-close', 'aria-label': 'Close Boards', html: I.close, onclick: closeProjects }), h('h2', {}, 'Boards'), h('span', { style: 'flex:1' }), h('button', { class: 'btn pj-use-tpl', onclick: () => newProjectSheet() }, 'Use a template'), h('button', { class: 'btn primary-btn pj-new-board', onclick: (e) => newBlankBoard(e.currentTarget) }, '+ New board')),
       list.length ? h('div', { class: 'pj-grid' }, list.map((p) => h('button', { class: 'pj-card', onclick: () => openProject(p.id) },
         h('span', { class: 'pj-ic' }, p.icon || '📁'),
         h('b', {}, p.name, p.private ? h('small', { title: 'Private' }, ' 🔒') : null),
@@ -14976,7 +14976,7 @@
       amAdmin() ? { label: 'Connect other apps (API, webhooks)…', run: () => { closeProjects(); openSettings('connections', '.int-sec'); } } : null,
       p.types.length > 1 ? { label: `Delete the ${t.name} list`, danger: true, run: async () => { const y = await prCall('POST', `/projects/${p.id}/schema`, { op: 'removeType', typeId: t.id }); if (y) { prUpsertProject(y.project); PR.records.set(p.id, prRecs(p.id).filter((r) => r.typeId !== t.id)); PR.type = null; renderProjects(); } } } : null,
       { label: p.archived ? 'Restore board' : 'Archive board', run: () => pjArchive(p, !p.archived) },
-      { label: 'Delete project', danger: true, run: async () => { if (await prCall('DELETE', '/projects/' + p.id)) { S.projects = S.projects.filter((x) => x.id !== p.id); PR.open = null; renderProjects(); } } },
+      { label: 'Delete board', danger: true, run: async () => { if (await prCall('DELETE', '/projects/' + p.id)) { S.projects = S.projects.filter((x) => x.id !== p.id); PR.open = null; renderProjects(); } } },
     ].filter(Boolean));
     const search = h('input', { type: 'search', class: 'pj-search', value: PR.q, placeholder: `Search ${t.name.toLowerCase()}`, 'aria-label': 'Search' });
     search.addEventListener('input', () => { PR.q = search.value; const b = $('#projects .pj-body'); if (b) b.replaceChildren(...prViewBody(p, t, v).filter(Boolean)); });
@@ -14997,7 +14997,7 @@
         isTech(p) ? h('div', { class: 'pj-tools' }, h('button', { class: 'btn small', onclick: () => planFeatureSheet(p) }, '✦ Plan a feature'), h('button', { class: 'btn small', onclick: () => standupSheet(p) }, '☀️ Standup'), h('button', { class: 'btn small', onclick: () => techDocsSheet(p) }, '📚 Docs'), h('button', { class: 'btn small', onclick: () => githubSheet(p) }, '🐙 GitHub'),
           t.key === 'tests' ? h('button', { class: 'btn small', onclick: async () => { try { const o = await api('POST', `/projects/${p.id}/test-run`, {}); PR.records.set(p.id, await api('GET', `/projects/${p.id}/records`)); renderProjects(); toast(`New test run: ${plural(o.reset, 'test')} to run`); } catch (e) { toast(e.message); } } }, '🧪 New test run') : null) : null,
         h('button', { class: 'icon-btn', 'aria-label': 'Project options', html: I.more, onclick: more }),
-        h('button', { class: 'icon-btn', 'aria-label': 'Close Boards', html: I.close, onclick: closeProjects })),
+        h('button', { class: 'icon-btn pj-close', 'aria-label': 'Close Boards', html: I.close, onclick: closeProjects })),
       h('div', { class: 'pj-bar' },
         h('div', { class: 'pj-views' }, t.views.map((x) => h('button', { class: x.id === v.id ? 'on' : null, onclick: () => { PR.view = x.id; renderProjects(); }, oncontextmenu: (e) => { e.preventDefault(); viewMenu(e, x); } }, { board: '▥ ', timeline: '▤ ', sprint: '🏃 ', calendar: '📅 ' }[x.kind] || '☰ ', x.name)),
           h('button', { class: 'pj-view-more', title: 'This view', 'aria-label': 'View options', onclick: (e) => viewMenu(e, v) }, '⌄'),

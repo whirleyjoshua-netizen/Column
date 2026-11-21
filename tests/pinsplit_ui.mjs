@@ -75,6 +75,11 @@ try {
   // The board pin: the same page, a different board view, in the split.
   await pick('Installs');
   ok(await A.until(inSplit('#projects') + ` && !document.querySelector('#split .pj-panel')`, 6000) && (await title()).includes('Installs'), 'the board pin opens the board in the split: ' + await title());
+  // The split has its own Close; the board's own ✕ did nothing there (column-a9's live check, 2026-11-20), and stacked a second ✕.
+  const boardsX = `[...document.querySelectorAll('#split #projects [aria-label="Close Boards"]')].filter((b) => b.offsetParent).length`;
+  ok(await A.ev(boardsX) === 0, 'a board in the split shows no ✕ of its own, only the split’s Close');
+  await A.ev(`document.querySelector('#split #projects [aria-label="All boards"]').click(); true`);
+  ok(await A.until(`!!document.querySelector('#split #projects .pj-head')`, 6000) && await A.ev(boardsX) === 0, 'nor does the Boards list it goes back to');
 
   // Another pin takes the split's place; the job goes back where it lives, closed.
   await pick('Spring');

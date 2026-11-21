@@ -217,6 +217,7 @@ body:not(.wide) .split-head { margin: 0 -14px 12px; padding: 0 6px 0 14px; }
 .split-head .icon-btn svg { width: 16px; height: 16px; }
 body:not(.wide) .split-head .split-size { display: none; }
 #split .tools-page { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
+#split #projects .pj-close { display: none; } /* the split has its own Close; closeProjects keeps a pinned board there */
 /* Stacks in the split: the stacks fill it, edge to edge, and scroll inside like the page does. */
 #split.stacks-split:not(.hidden) { display: flex; flex-direction: column; overflow: hidden; padding-bottom: 0; }
 #split.stacks-split .split-head { margin-bottom: 0; }
