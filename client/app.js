@@ -6157,7 +6157,7 @@
         if (a.kind === 'notify') {
           a.to ||= [];
           const pick = (v, label) => { const cb = h('input', { type: 'checkbox', checked: a.to.includes(v) }); cb.addEventListener('change', () => (a.to = cb.checked ? [...a.to, v] : a.to.filter((y) => y !== v))); return h('label', { class: 'pick' }, cb, label); };
-          f.push(h('label', {}, 'Note', text((() => { const w = AUTO_WORDS[t.kind] || []; return w.includes('contact') ? '{contact} is a new customer' : w.length ? `Heads up: {${w[0]}}${w[1] ? ` · {${w[1]}}` : ''}` : 'What to tell them'; })())), h('div', { class: 'picks' }, pick('owners', 'Owners'), pick('admins', 'Owners and admins'), pick('who', 'Whoever set it off'), ['task.created', 'task.opened', 'task.done', 'task.reopened', 'step.done'].includes(dr.trigger.kind) ? pick('doers', 'Whoever the task is for') : null, people.map((m) => pick(m.id, m.name))), h('small', { class: 'hint' }, 'It lands on their Home, with a pop-up if they’re on.'));
+          f.push(h('label', {}, 'Note', text((() => { const w = AUTO_WORDS[t.kind] || []; return w.length ? `Heads up: {${w[0]}}${w[1] ? ` · {${w[1]}}` : ''}` : 'What to tell them'; })())), h('div', { class: 'picks' }, pick('owners', 'Owners'), pick('admins', 'Owners and admins'), pick('who', 'Whoever set it off'), ['task.created', 'task.opened', 'task.done', 'task.reopened', 'step.done'].includes(dr.trigger.kind) ? pick('doers', 'Whoever the task is for') : null, people.map((m) => pick(m.id, m.name))), h('small', { class: 'hint' }, 'It lands on their Home, with a pop-up if they’re on.'));
         }
         if (a.kind === 'contact') {
           const st = h('input', { value: a.stage ? stageLabel(a.stage) : '', placeholder: 'Customer', list: 'autoStages' });
