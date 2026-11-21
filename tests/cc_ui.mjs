@@ -67,7 +67,7 @@ try {
   ok(await A.ev(`${T('.cc-name')}.textContent === 'New Client Onboarding' && !!${T('.cc-title-row .health')} && ${T('.cc-owner')}.textContent.includes('You') && ${T('.cc-crumb')}.textContent.startsWith('Campaigns')`), 'header: name, health, owner, breadcrumb');
   ok(await kpi('phases') === '4' && await kpi('tasks') === '10' && await kpi('blocked') === '1' && await kpi('overdue') === '1', `KPIs from the real work: 4 phases, 10 tasks, 1 blocked, 1 overdue (${await kpi('phases')}/${await kpi('tasks')}/${await kpi('blocked')}/${await kpi('overdue')})`);
   ok(await A.ev(`${T('.cc-kpi.overdue')}.classList.contains('bad') && ${T('.cc-kpi.blocked')}.classList.contains('bad')`), 'blocked and overdue are flagged');
-  ok(await A.ev(`[...document.querySelectorAll('#camps .cc-tab')].map((b) => b.textContent).join('|')`) === 'Overview|Plan|Work|Resources|Activity', 'five tabs: Overview, Plan, Work, Resources, Activity');
+  ok(await A.ev(`[...document.querySelectorAll('#camps .cc-tab')].map((b) => b.textContent).join('|')`) === 'Overview|Plan|Work|Resources|Activity|Report', 'six tabs: Overview, Plan, Work, Resources, Activity, Report');
   // The brief, in four parts.
   ok(await A.ev(`[...document.querySelectorAll('#camps .cc-bh')].map((x) => x.textContent).join('|')`) === 'Objective|Audience|Strategy|Success metrics', 'the brief: Objective, Audience, Strategy, Success metrics');
   ok(await A.ev(`${T('.cc-bf[data-field=brief]')}.textContent.includes('installed customers') && ${T('.cc-bf[data-field=audience]')}.textContent === 'New valley homeowners' && ${T('.cc-metrics')}.textContent.includes('Consultations booked') && ${T('.cc-metrics')}.textContent.includes('0 / 20')`), 'filled from the campaign; a target (0 / 20) is a success metric');

@@ -172,6 +172,19 @@ try {
   await A.until(`!!document.querySelector('.cb-stage[data-stage="3"]')`);
   await A.ev(`document.querySelector('.cb-stage[data-stage="3"]').click(); true`);
   ok(await A.until(`!!document.querySelector('.cb-stage-nav .cb-back')`) && !/null/.test(await A.ev(`document.querySelector('.cb-stage-nav').textContent`)), 'the builder’s last stage shows Back and nothing else: ' + await A.ev(`document.querySelector('.cb-stage-nav').textContent`));
+  // The drawer's "waits for" chip opens what it waits for (a live check, 2026-11-20).
+  await A.ev(`document.querySelector('#sheet [aria-label=Close]')?.click(); true`);
+  const X0 = await api('POST', '/tasks', { goalId: inst.id, text: 'Pick up the brackets' });
+  const Y0 = await api('POST', '/tasks', { goalId: inst.id, text: 'Mount the brackets', blockedBy: [X0.id] });
+  await A.tap(T('.cc-tab[data-ctab=work]'));
+  await A.until(`!!${T('.cc-wview [data-wv=list]')}`);
+  await A.tap(T('.cc-wview [data-wv=list]'));
+  await A.tap(T('.cc-wf [data-wf=all]'));
+  await A.until(`!!${T(`.cc-tr[data-task="${Y0.id}"]`)}`, 8000);
+  for (let i = 0; i < 4 && !(await A.ev(`document.querySelector('#sheet .td')?.dataset.task === ${JSON.stringify(Y0.id)}`)); i++) { await A.ev(`${T(`.cc-tr[data-task="${Y0.id}"]`)}.click(); true`); await sleep(400); }
+  ok(await A.until(`document.querySelector('#sheet button.td-dep')?.textContent.includes('Pick up the brackets')`), 'a waiting task’s drawer shows what it waits for, as a button');
+  await A.tap(`document.querySelector('#sheet button.td-dep')`);
+  ok(await A.until(`document.querySelector('#sheet .td')?.dataset.task === ${JSON.stringify(X0.id)}`), 'clicking it opens that task');
   ok(A.errors.length === 0, 'no script errors' + (A.errors.length ? ': ' + A.errors.join(' | ') : ''));
 } catch (e) { ok(false, 'threw: ' + e.stack); }
 chrome.kill(); srv.kill();

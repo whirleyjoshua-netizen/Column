@@ -7183,6 +7183,160 @@
     return [nav, tray, h('div', { class: 'ccc-scroll' }, h('div', { class: 'ccc' }, ...['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((d) => h('div', { class: 'ccc-dow' }, d)), ...cells)),
       h('p', { class: 'day-hint' }, 'Drag a task to another day to change when it’s due (a task with a start keeps its length); tap one to open it.')].filter(Boolean);
   }
+  // ----- Command Center part 5 (the owner's brainstorm, 2026-11-20): what the work itself says. How fast it's going and
+  // when it will finish at that pace, how long each phase took against its plan and against earlier runs of the same SOP,
+  // who's finishing what, what's gone quiet, and a report of all of it to print. Worked out from the tasks, no AI. -----
+  const STALL_DAYS = 3;
+  const dayOfMs = (ms) => (ms ? dayKey(new Date(ms)) : null);
+  const touchedAt = (t) => Math.max(t.createdAt || 0, t.updatedAt || 0, t.assignedAt || 0, t.openedAt || 0, ...(t.comments || []).map((x) => x.at || 0), ...(t.checklist || []).map((x) => x.at || 0));
+  function campInsights(c) {
+    const today = todayKey();
+    const tasks = campTasks(c), open = tasks.filter((t) => !t.done), done = tasks.filter((t) => t.done && t.doneAt);
+    const created = (t) => dayOfMs(t.createdAt) || c.start || today;
+    const start = c.start || tasks.map(created).sort()[0] || today;
+    // Pace: tasks finished a day, over the last two weeks (or since it started, if sooner).
+    const win = Math.max(1, Math.min(14, dayGap(start, today) + 1));
+    const recent = done.filter((t) => dayGap(dayOfMs(t.doneAt), today) < win).length;
+    const pace = recent / win;
+    let forecast = null, forecastWhy = '';
+    if (!tasks.length) forecastWhy = 'No tasks yet.';
+    else if (!open.length) { forecast = done.map((t) => dayOfMs(t.doneAt)).sort().at(-1) || today; forecastWhy = 'Every task is done.'; }
+    else if (pace > 0) { forecast = addDays(today, Math.ceil(open.length / pace)); forecastWhy = `At ${pace >= 1 ? Math.round(pace * 10) / 10 : Math.round(pace * 7 * 10) / 10} task${pace === 1 ? '' : 's'} a ${pace >= 1 ? 'day' : 'week'}, the ${open.length} left take until then.`; }
+    else forecastWhy = `Nothing finished in the last ${win} day${win === 1 ? '' : 's'}, so there’s no pace to go by.`;
+    const late = forecast && c.end && open.length ? dayGap(c.end, forecast) : null;
+    // Phases: when work began and ended, against the day it was due and how long earlier runs of the SOP took.
+    const runs = c.templateId ? S.campaigns.filter((x) => x.id !== c.id && x.templateId === c.templateId) : [];
+    const span = (g) => {
+      const ts = tasksOf(g.id);
+      if (!ts.length) return null;
+      const began = ts.map((t) => dayOfMs(t.openedAt || t.assignedAt || t.createdAt)).filter(Boolean).sort()[0] || start;
+      const all = ts.every((t) => t.done || t.skipped);
+      const ended = all ? ts.map((t) => dayOfMs(t.doneAt)).filter(Boolean).sort().at(-1) || today : null;
+      return { began, ended, days: dayGap(began, ended || today) + 1, all };
+    };
+    const phases = goalsOf(c.id).filter((g) => !['count', 'money'].includes(g.kind)).map((g) => {
+      const sp = span(g), ts = tasksOf(g.id);
+      const usual = runs.map((r) => goalsOf(r.id).find((y) => y.title === g.title)).filter(Boolean).map(span).filter((x) => x?.all).map((x) => x.days);
+      return { g, ...sp, n: ts.length, doneN: ts.filter((t) => t.done).length, due: g.due || null, lateBy: sp && g.due ? dayGap(g.due, sp.ended || (today > g.due ? today : g.due)) : null,
+        usual: usual.length ? Math.round(usual.reduce((a, b) => a + b, 0) / usual.length * 10) / 10 : null, usualN: usual.length };
+    });
+    // People: what each has finished and has open, how long a task takes them, and how often on time.
+    const ids = [...new Set(tasks.map((t) => t.assigneeId).filter(Boolean))];
+    const people = ids.map((id) => {
+      const mine = tasks.filter((t) => t.assigneeId === id), fin = mine.filter((t) => t.done && t.doneAt);
+      const took = fin.map((t) => (t.doneAt - (t.assignedAt || t.createdAt || t.doneAt)) / 864e5).filter((x) => x >= 0);
+      const dated = fin.filter((t) => t.due);
+      return { id, done: fin.length, open: mine.filter((t) => !t.done).length, overdue: mine.filter((t) => !t.done && isOverdue(t)).length,
+        avg: took.length ? Math.round(took.reduce((a, b) => a + b, 0) / took.length * 10) / 10 : null, onTime: dated.length ? Math.round((dated.filter((t) => dayOfMs(t.doneAt) <= t.due).length / dated.length) * 100) : null };
+    }).sort((a, b) => b.done - a.done || b.open - a.open);
+    // Gone quiet: open, not waiting on anything, untouched for STALL_DAYS days or more.
+    const stalls = open.filter((t) => !taskBlockers(t).length && touchedAt(t) && (Date.now() - touchedAt(t)) / 864e5 >= STALL_DAYS)
+      .map((t) => ({ t, days: Math.floor((Date.now() - touchedAt(t)) / 864e5) })).sort((a, b) => b.days - a.days);
+    // Burn-up: tasks there and tasks done, each day from the start to today.
+    const last = today < start ? start : today;
+    const nDays = Math.min(366, dayGap(start, last) + 1);
+    const series = Array.from({ length: nDays }, (_, i) => { const d = addDays(start, i); return { d, total: tasks.filter((t) => created(t) <= d).length, done: done.filter((t) => dayOfMs(t.doneAt) <= d).length }; });
+    const dated = done.filter((t) => t.due);
+    return { today, tasks, open, done, start, pace, win, forecast, forecastWhy, late, phases, people, stalls, series, runs: runs.length,
+      onTime: dated.length ? Math.round((dated.filter((t) => dayOfMs(t.doneAt) <= t.due).length / dated.length) * 100) : null,
+      calls: attemptsIn(c.id) };
+  }
+  // A nudge: a comment on the task, which tells whoever it's for.
+  async function ccNudge(t) {
+    const who = t.assigneeId ? memberName(t.assigneeId).split(' ')[0] : null;
+    try { upsertTask(await api('POST', `/tasks/${t.id}/comments`, { text: `${who ? who + ', any' : 'Any'} news on this? It hasn’t moved in a few days.` })); toast(who ? `Nudged ${who}` : 'Left a nudge on it'); renderCamps(); }
+    catch (e) { toast(e.message); }
+  }
+  const ccDay = (k) => keyDate(k).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  // The burn-up chart: tasks there (scope) and tasks done, by day, with the end date marked; hover for a day's numbers.
+  function ccBurnup(ins, c) {
+    const s = ins.series;
+    if (s.length < 2) return h('p', { class: 'day-hint' }, 'The chart fills in after a day or two of work.');
+    const W = 640, H = 200, L = 34, R = 12, T = 12, B = 26;
+    const max = Math.max(1, ...s.map((x) => x.total));
+    const ends = c.end && c.end > s.at(-1).d ? dayGap(s[0].d, c.end) : s.length - 1;
+    const X = (i) => L + (i / Math.max(1, ends)) * (W - L - R), Y = (v) => T + (1 - v / max) * (H - T - B);
+    const path = (k) => s.map((x, i) => `${i ? 'L' : 'M'}${X(i).toFixed(1)} ${Y(x[k]).toFixed(1)}`).join(' ');
+    const ticks = [0, Math.round(max / 2), max].filter((v, i, a) => a.indexOf(v) === i);
+    const ns = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(ns, 'svg');
+    svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('class', 'ccr-chart'); svg.setAttribute('role', 'img');
+    svg.setAttribute('aria-label', `Burn-up: ${s.at(-1).done} of ${s.at(-1).total} tasks done by ${ccDay(s.at(-1).d)}`);
+    const endX = c.end ? X(dayGap(s[0].d, c.end)) : null;
+    svg.innerHTML = ticks.map((v) => `<line class="ccr-grid" x1="${L}" x2="${W - R}" y1="${Y(v)}" y2="${Y(v)}"/><text class="ccr-ax" x="${L - 6}" y="${Y(v) + 3}" text-anchor="end">${v}</text>`).join('')
+      + `<text class="ccr-ax" x="${L}" y="${H - 8}">${ccDay(s[0].d)}</text><text class="ccr-ax" x="${X(s.length - 1)}" y="${H - 8}" text-anchor="${endX && endX > X(s.length - 1) + 60 ? 'middle' : 'end'}">${ccDay(s.at(-1).d)}</text>`
+      + (endX != null && endX >= L ? `<line class="ccr-end" x1="${endX}" x2="${endX}" y1="${T}" y2="${H - B}"/><text class="ccr-ax" x="${Math.min(endX, W - R)}" y="${T + 8}" text-anchor="end">Ends ${ccDay(c.end)}</text>` : '')
+      + `<path class="ccr-total" d="${path('total')}"/><path class="ccr-done" d="${path('done')}"/>`
+      + `<circle class="ccr-dot" cx="${X(s.length - 1)}" cy="${Y(s.at(-1).done)}" r="4"/>`
+      + `<line class="ccr-hair" y1="${T}" y2="${H - B}" x1="-10" x2="-10"/><rect class="ccr-hit" x="${L}" y="${T}" width="${W - L - R}" height="${H - T - B}"/>`;
+    const tip = h('div', { class: 'ccr-tip', hidden: true });
+    const box = h('div', { class: 'ccr-chartbox' }, svg, tip);
+    const hit = svg.querySelector('.ccr-hit'), hair = svg.querySelector('.ccr-hair');
+    hit.addEventListener('pointermove', (e) => {
+      const r = svg.getBoundingClientRect();
+      const vx = ((e.clientX - r.left) / r.width) * W;
+      const i = Math.max(0, Math.min(s.length - 1, Math.round(((vx - L) / (W - L - R)) * Math.max(1, ends))));
+      hair.setAttribute('x1', X(i)); hair.setAttribute('x2', X(i));
+      tip.hidden = false;
+      tip.replaceChildren(h('b', {}, ccDay(s[i].d)), h('span', {}, `${s[i].done} done`), h('span', {}, `${s[i].total} tasks`));
+      tip.style.left = Math.min(r.width - 120, Math.max(0, (X(i) / W) * r.width + 10)) + 'px';
+    });
+    hit.addEventListener('pointerleave', () => { tip.hidden = true; hair.setAttribute('x1', -10); hair.setAttribute('x2', -10); });
+    return h('div', {}, h('div', { class: 'ccr-legend' }, h('span', { class: 'k done' }, 'Done'), h('span', { class: 'k total' }, 'All tasks'), c.end ? h('span', { class: 'k end' }, 'End date') : null), box);
+  }
+  // The Report tab: the numbers, the chart, phases, people, what's gone quiet, money and calls; Print for paper.
+  function ccReport(c) {
+    const ins = campInsights(c);
+    const pct = ins.tasks.length ? Math.round((ins.done.length / ins.tasks.length) * 100) : 0;
+    const stat = (n, l, cls = '') => h('div', { class: 'ccr-stat ' + cls }, h('b', {}, n), h('small', {}, l));
+    const fc = ins.forecast ? (ins.open.length ? ccDay(ins.forecast) : 'Done ' + ccDay(ins.forecast)) : '—';
+    const top = h('section', { class: 'cc-card ccr-top' },
+      h('div', { class: 'ccr-stats' }, stat(pct + '%', `${ins.done.length} of ${ins.tasks.length} tasks done`), stat(fc, ins.open.length ? 'Forecast finish' : 'Finished', ins.late > 0 ? 'bad' : ins.late != null ? 'good' : ''),
+        stat(ins.onTime != null ? ins.onTime + '%' : '—', 'Finished on time'), stat(String(ins.open.filter(isOverdue).length), 'Overdue now', ins.open.some(isOverdue) ? 'bad' : ''), stat(String(ins.stalls.length), `Quiet ${STALL_DAYS}+ days`, ins.stalls.length ? 'warn' : '')),
+      h('p', { class: 'ccr-why' }, ins.forecastWhy, ins.late != null && ins.open.length ? (ins.late > 0 ? ` That’s ${plural(ins.late, 'day')} after the end date (${ccDay(c.end)}).` : ins.late < 0 ? ` That’s ${plural(-ins.late, 'day')} before the end date.` : ' That’s the end date.') : ''));
+    const chart = h('section', { class: 'cc-card' }, h('div', { class: 'cc-card-h' }, h('b', {}, 'Progress over time')), ccBurnup(ins, c));
+    const usualTxt = (p) => (p.usual != null ? `${p.usual} d (${plural(p.usualN, 'run')})` : '—');
+    const phases = ins.phases.length ? h('section', { class: 'cc-card' }, h('div', { class: 'cc-card-h' }, h('b', {}, 'Phases'), ins.runs ? h('small', { class: 'muted' }, ` · against ${plural(ins.runs, 'earlier run')} of its SOP`) : null),
+      h('table', { class: 'ccr-table ccr-phases' }, h('thead', {}, h('tr', {}, ['Phase', 'Done', 'Started', 'Finished', 'Days', 'Due', ...(ins.runs ? ['Usually'] : [])].map((x) => h('th', {}, x)))),
+        h('tbody', {}, ins.phases.map((p) => h('tr', { class: p.lateBy > 0 ? 'late' : '' }, h('td', {}, p.g.title), h('td', {}, `${p.doneN}/${p.n}`), h('td', {}, p.began ? ccDay(p.began) : '—'), h('td', {}, p.ended ? ccDay(p.ended) : p.n ? 'Open' : '—'),
+          h('td', { class: p.usual != null && p.days > p.usual * 1.25 ? 'slow' : '' }, p.days ? String(p.days) : '—'), h('td', {}, p.due ? ccDay(p.due) + (p.lateBy > 0 ? ` · ${p.lateBy} d late` : '') : '—'), ...(ins.runs ? [h('td', {}, usualTxt(p))] : []))))))
+      : null;
+    const people = ins.people.length ? h('section', { class: 'cc-card' }, h('div', { class: 'cc-card-h' }, h('b', {}, 'People')),
+      h('table', { class: 'ccr-table' }, h('thead', {}, h('tr', {}, ['Person', 'Done', 'Open', 'Overdue', 'Days per task', 'On time'].map((x) => h('th', {}, x)))),
+        h('tbody', {}, ins.people.map((p) => h('tr', {}, h('td', {}, avatar(p.id), ' ', memberName(p.id)), h('td', {}, String(p.done)), h('td', {}, String(p.open)), h('td', { class: p.overdue ? 'late' : '' }, String(p.overdue)), h('td', {}, p.avg != null ? String(p.avg) : '—'), h('td', {}, p.onTime != null ? p.onTime + '%' : '—'))))))
+      : null;
+    const quiet = h('section', { class: 'cc-card' }, h('div', { class: 'cc-card-h' }, h('b', {}, `Gone quiet · ${ins.stalls.length}`)),
+      ins.stalls.length ? h('div', { class: 'ccr-stalls' }, ins.stalls.slice(0, 12).map(({ t, days }) => h('div', { class: 'ccr-stall', 'data-task': t.id },
+        h('button', { class: 'linkish', onclick: () => taskWindow(t) }, t.text), h('small', {}, `${ccWho(t) || 'Nobody'} · untouched ${plural(days, 'day')}`),
+        h('button', { class: 'btn small ccr-nudge', onclick: () => (t.assigneeId ? ccNudge(t) : taskWindow(t)) }, t.assigneeId ? 'Nudge' : 'Assign')))) : h('p', { class: 'day-hint' }, `Every open task has moved in the last ${STALL_DAYS} days, or is waiting on something.`));
+    const byOutcome = {};
+    for (const a of ins.calls) byOutcome[a.outcome] = (byOutcome[a.outcome] || 0) + 1;
+    const calls = ins.calls.length ? h('section', { class: 'cc-card' }, h('div', { class: 'cc-card-h' }, h('b', {}, `Calls and emails logged · ${ins.calls.length}`)),
+      h('table', { class: 'ccr-table' }, h('tbody', {}, Object.entries(byOutcome).sort((a, b) => b[1] - a[1]).map(([o, n]) => h('tr', {}, h('td', {}, o), h('td', {}, String(n)), h('td', {}, Math.round((n / ins.calls.length) * 100) + '%')))))) : null;
+    const moneyBox = c.budget || c.money ? h('section', { class: 'cc-card' }, h('div', { class: 'cc-card-h' }, h('b', {}, 'Money')),
+      h('div', { class: 'ccr-stats' }, c.budget ? stat(money(c.budget), 'Budget') : null, c.money?.spent ? stat(money(c.money.spent), 'Spent', c.budget && c.money.spent > c.budget ? 'bad' : '') : null, c.money?.earned ? stat(money(c.money.earned), 'Brought in', 'good') : null)) : null;
+    const bar2 = h('div', { class: 'ccr-bar' }, h('small', { class: 'muted' }, `Worked out from the tasks as of ${ccDay(ins.today)}.`), h('span', { style: 'flex:1' }),
+      h('button', { class: 'btn small', onclick: () => openReport(c) }, 'Write a report to the feed'),
+      h('button', { class: 'btn small ccr-print', onclick: (e) => ccReportPrint(c, e.currentTarget.closest('.cc-body')) }, '🖨 Print'));
+    return [bar2, top, chart, phases, people, quiet, moneyBox, calls].filter(Boolean);
+  }
+  function ccReportPrint(c, body) {
+    const w = window.open('', '_blank');
+    if (!w) return toast('Allow pop-ups to print it.');
+    const copy = body.cloneNode(true);
+    copy.querySelectorAll('button:not(.linkish), .ccr-tip, .ccr-bar').forEach((x) => x.remove());
+    copy.querySelectorAll('button.linkish').forEach((b) => b.replaceWith(document.createTextNode(b.textContent)));
+    w.document.title = `${c.name} · report`;
+    const st = w.document.createElement('style');
+    st.textContent = 'body{font:13px/1.45 system-ui,sans-serif;max-width:820px;margin:24px auto;padding:0 24px;color:#111}h1{font-size:20px;margin:0 0 2px}.cc-card{border:1px solid #ddd;border-radius:8px;padding:10px 12px;margin:10px 0;break-inside:avoid}.cc-card-h{font-weight:600;margin-bottom:6px}.ccr-stats{display:flex;flex-wrap:wrap;gap:18px}.ccr-stat b{display:block;font-size:18px}.ccr-stat small,.muted,small{color:#666}table{border-collapse:collapse;width:100%}th,td{text-align:left;padding:4px 6px;border-bottom:1px solid #eee}.ccr-chart{width:100%;height:auto}.ccr-grid{stroke:#e5e5e5}.ccr-ax{font-size:10px;fill:#666}.ccr-total{fill:none;stroke:#999;stroke-width:2;stroke-dasharray:4 3}.ccr-done{fill:none;stroke:#4f46e5;stroke-width:2}.ccr-dot{fill:#4f46e5}.ccr-end{stroke:#c00;stroke-dasharray:3 3}.ccr-hit,.ccr-hair{display:none}.ccr-legend .k{margin-right:14px}.av{display:none}';
+    w.document.head.append(st);
+    const hd = w.document.createElement('div');
+    hd.innerHTML = `<h1></h1><small></small>`;
+    hd.querySelector('h1').textContent = c.name;
+    hd.querySelector('small').textContent = `${S.workspace.name} · campaign report · ${new Date().toLocaleDateString()}`;
+    w.document.body.append(hd, w.document.importNode(copy, true));
+    setTimeout(() => w.print(), 250);
+  }
   function ccBoardDrop() {
     K.cb ||= {};
     if (K.cb.ed) { try { K.cb.ed.destroy(); } catch {} }
@@ -7607,7 +7761,7 @@
     // ----- the Campaign Command Center (2026-11-20, the owner's brainstorm): a header with health, dates, owner and the
     // team; KPIs from the real work; five tabs (Overview, Plan, Work, Resources, Activity); phases (the steps) as
     // connected cards; a Pulse panel down the side at full size. Every part of the old page is in one of the tabs.
-    const tab = ['overview', 'plan', 'work', 'resources', 'activity'].includes(K.ctab) ? K.ctab : 'overview';
+    const tab = ['overview', 'plan', 'work', 'resources', 'activity', 'report'].includes(K.ctab) ? K.ctab : 'overview';
     const setTabC = (k) => { K.ctab = k; renderCamps(); };
     const tasks = campTasks(c), open = tasks.filter((t) => !t.done);
     const phases = goals.filter((g) => !['count', 'money'].includes(g.kind));
@@ -7647,7 +7801,7 @@
         kpi('blocked' + (blocked.length ? ' bad' : ''), '⏳', blocked.length, 'Blocked', () => { K.wfilter = 'blocked'; setTabC('work'); }),
         kpi('overdue' + (overdue.length ? ' bad' : ''), '!', overdue.length, 'Overdue', () => { K.wfilter = 'overdue'; setTabC('work'); }),
         h('div', { class: 'cc-kpi-bar' }, bar(p, c.color))),
-      h('div', { class: 'cc-tabs', role: 'tablist' }, [['overview', 'Overview'], ['plan', 'Plan'], ['work', 'Work'], ['resources', 'Resources'], ['activity', 'Activity']].map(([k, l]) =>
+      h('div', { class: 'cc-tabs', role: 'tablist' }, [['overview', 'Overview'], ['plan', 'Plan'], ['work', 'Work'], ['resources', 'Resources'], ['activity', 'Activity'], ['report', 'Report']].map(([k, l]) =>
         h('button', { class: 'cc-tab' + (tab === k ? ' on' : ''), role: 'tab', 'aria-selected': String(tab === k), 'data-ctab': k, onclick: () => setTabC(k) }, l)),
         h('span', { style: 'flex:1' }),
         h('button', { class: 'btn small cc-edit', onclick: () => campaignSheet(c) }, '✎ Edit campaign')));
@@ -7750,7 +7904,11 @@
     const nextPhase = phases.find((g) => goalProgress(g).frac < 1);
     const nextDue = open.filter((t) => t.due).sort((a, b) => a.due.localeCompare(b.due))[0];
     const nobody = open.filter((t) => !t.assigneeId && !t.roleId && !t.castId);
+    const ins = campInsights(c);
+    const quiet = ins.stalls.find((x) => x.t.assigneeId);
     const ideas = [
+      quiet ? [`“${shortText(quiet.t.text, 50)}” hasn’t moved in ${plural(quiet.days, 'day')} (${memberName(quiet.t.assigneeId)}).`, 'Nudge', () => ccNudge(quiet.t)] : null,
+      ins.late > 0 && c.status === 'active' ? [`At this pace it finishes ${ccDay(ins.forecast)}, ${plural(ins.late, 'day')} after the end date.`, 'See the report', () => setTabC('report')] : null,
       nobody.length ? [`${nobody.length} open task${nobody.length === 1 ? ' has' : 's have'} nobody on ${nobody.length === 1 ? 'it' : 'them'}.`, 'Assign them', () => { K.wfilter = 'open'; setTabC('work'); }] : null,
       overdue.length ? [`${overdue.length} task${overdue.length === 1 ? ' is' : 's are'} overdue.`, 'See them', () => { K.wfilter = 'overdue'; setTabC('work'); }] : null,
       phases.find((g) => !tasksOf(g.id).length) ? [`“${phases.find((g) => !tasksOf(g.id).length).title}” has no tasks yet.`, 'Suggest tasks', (e) => suggestPlan(c, e.currentTarget)] : null,
@@ -7763,6 +7921,8 @@
       h('div', { class: 'cc-pulse-row' }, h('span', {}, '📅'), h('span', {}, h('small', {}, 'Next milestone'), h('b', {}, nextDue ? `${dueLabel(nextDue.due)} · ${shortText(nextDue.text, 28)}` : nextPhase ? nextPhase.title : 'None'))),
       h('button', { class: 'cc-pulse-row', onclick: () => { K.wfilter = 'blocked'; setTabC('work'); } }, h('span', {}, '⏳'), h('span', {}, h('small', {}, 'Blockers'), h('b', {}, String(blocked.length)))),
       h('button', { class: 'cc-pulse-row', onclick: () => { K.wfilter = 'overdue'; setTabC('work'); } }, h('span', {}, '!'), h('span', {}, h('small', {}, 'Overdue'), h('b', {}, String(overdue.length)))),
+      h('button', { class: 'cc-pulse-row cc-pulse-fc' + (ins.late > 0 ? ' bad' : ''), title: ins.forecastWhy, onclick: () => setTabC('report') }, h('span', {}, '🏁'), h('span', {}, h('small', {}, open.length ? 'Forecast finish' : 'Finished'), h('b', {}, ins.forecast ? ccDay(ins.forecast) + (ins.late > 0 ? ` · ${ins.late} d late` : '') : '—'))),
+      ins.stalls.length ? h('button', { class: 'cc-pulse-row cc-pulse-quiet', onclick: () => setTabC('report') }, h('span', {}, '💤'), h('span', {}, h('small', {}, `Quiet ${STALL_DAYS}+ days`), h('b', {}, String(ins.stalls.length)))) : null,
       teamIds.length ? h('div', { class: 'cc-pulse-team' }, h('small', {}, 'Team'), h('div', {}, teamIds.slice(0, 6).map((id) => avatar(id)), teamIds.length > 6 ? h('small', {}, ` +${teamIds.length - 6}`) : null)) : null,
       h('div', { class: 'cc-pulse-ai' }, h('b', {}, '✦ What to do next'),
         ideas.length ? ideas.slice(0, 3).map(([text, label, run]) => h('div', { class: 'cc-idea' }, h('p', {}, text), h('button', { class: 'btn small primary-btn', onclick: run }, label))) : h('p', {}, 'Nothing needs you right now.'),
@@ -7777,6 +7937,7 @@
       work: () => [sendBars(c), workBody()],
       resources,
       activity,
+      report: () => ccReport(c),
     }[tab]();
     return h('div', { class: 'camp-view cc' + (pulse ? ' with-pulse' : '') }, h('div', { class: 'cc-main' }, head, testBar(c, phases), h('div', { class: 'cc-body', 'data-tab': tab }, ...body.filter(Boolean))), pulse);
   }
@@ -8098,7 +8259,7 @@
       sec(t.wo ? (cl.length ? `Steps · ${n}/${cl.length}` : 'Steps') : cl.length ? `Checklist · ${n}/${cl.length}` : 'Checklist', checklist),
       t.parentId ? null : sec(subs.length ? `Subtasks · ${subs.filter((x) => x.done).length}/${subs.length}` : 'Subtasks', subtasks),
       sec('Dependencies', h('div', { class: 'td-deps' },
-        blockers.length ? blockers.map((x) => h('span', { class: 'td-dep' }, '⏳ ' + shortText(stepName(x), 40))) : h('small', { class: 'muted' }, 'Waits for nothing'),
+        blockers.length ? blockers.map((x) => h('button', { type: 'button', class: 'td-dep', title: x.hidden ? 'In a campaign you can’t see' : 'Open it', onclick: () => (x.hidden ? toast('It’s in a campaign you can’t see.') : x.campaignId && !x.goalId ? stepWindow(campById(x.campaignId), x) : taskWindow(x)) }, '⏳ ' + shortText(stepName(x), 40))) : h('small', { class: 'muted' }, 'Waits for nothing'),
         h('button', { class: 'btn small', onclick: () => waitsSheet(taskById(t.id) || t) }, blockers.length ? 'Change' : '+ Waits for…')),
         unlocks.length ? h('small', { class: 'td-opens' }, 'Finishing it opens: ' + unlocks.map((x) => x.text).join(', ')) : null),
       rs.length ? sec(`From the step · ${rs.length}`, h('div', { class: 'res-list td-res' }, rs.map((r) => h('div', { class: 'res-row', 'data-res': r.kind }, h('button', { class: 'res-open', onclick: () => resOpen(r) }, h('span', { class: 'res-ic' }, RES_IC[r.kind]), h('span', {}, h('b', {}, resName(r)), r.kind === 'note' && r.text ? h('small', {}, shortText(r.text.replace(/\s+/g, ' '), 90)) : null))))),
