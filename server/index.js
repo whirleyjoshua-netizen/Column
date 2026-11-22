@@ -46,7 +46,7 @@ import { signoffModule } from './signoff.js';
 import { cardsModule } from './cards.js';
 import { newsModule } from './news.js';
 import { qrSvg } from './qr.js';
-import { agentsModule, AGENTS } from './agents.js';
+import { agentsModule, AGENTS, AGENT_LIST, agentDef } from './agents.js';
 import { bookingsModule } from './bookings.js';
 import { shiftsModule } from './shifts.js';
 import { analyticsModule } from './analytics.js';
@@ -600,6 +600,7 @@ function offWhy(ws, memberId, k) {
 }
 const publicWorkspace = (ws, memberId) => ({
   tools: toolsOf(ws),
+  agentList: AGENT_LIST,
   memberAccess: memberAccessOf(ws),
   billing: publicBilling(ws),
   id: ws.id,
@@ -1524,7 +1525,7 @@ function applyPreset(x, body, ws) {
     // A saved ask for the AI team (2026-11-20): words you send again and again, like "Weekly sales summary".
     if (body.ask !== undefined) x.ask = cleanText(body.ask, 4000);
     if (!x.ask) throw badRequest('Write what to ask.');
-    if (body.agent !== undefined) x.agent = ['team', 'chief', 'sales', 'ops', 'marketing'].includes(body.agent) ? body.agent : 'team';
+    if (body.agent !== undefined) x.agent = agentDef(body.agent) ? body.agent : 'team';
     x.agent ||= 'team';
     x.name ||= clipText(x.ask, 60);
   } else if (x.kind === 'visit') {
@@ -3917,7 +3918,7 @@ function cleanAction(a, ws, who) {
   }
   if (kind === 'agent') {
     if (ws.settings?.tools?.agents === false) throw badRequest('Your team (agents) is switched off for this team.');
-    const agent = a.agent === 'team' || AGENTS_M.AGENTS[a.agent] ? a.agent : null;
+    const agent = a.agent === 'team' || agentDef(a.agent) ? a.agent : null;
     if (!agent) throw badRequest('Pick who to ask.');
     return { kind, agent, ask: String(a.ask ?? '').replace(/\r\n?/g, '\n').trim().slice(0, 2000), wait: !!a.wait };
   }
@@ -4528,11 +4529,11 @@ function dryRun(x, ctx, ws, stack, out) {
 // would change follows that (important things always wait for their yes in Your team). It's told what happened (the
 // ask with the words filled in) and that an automation asked. What it does sets nothing off either (it runs inside
 // FLOWING). With "wait for the answer", the steps after it go on once it's done (up to 30 minutes), with {answer}.
-const agentName = (agent) => (agent === 'team' ? 'Your team' : AGENTS_M.AGENTS[agent]?.name || 'the agent');
+const agentName = (agent) => (agent === 'team' ? 'Your team' : agentDef(agent)?.name || 'the agent');
 // ---------- an agent pinned to a chat: @mention it there and it answers in the thread ----------
 // It works as whoever asked: their AI key, what they can see, their agents' rules (what waits for their yes). The feed
 // reads the answer, so the agent is told who's in it. Only the asker opens the assignment the answer links to.
-const CHAT_AGENT_CALLS = { chief: ['chief of staff', 'chief'], sales: ['client & sales manager', 'sales manager', 'sales'], ops: ['operations manager', 'operations', 'ops'], marketing: ['marketing manager', 'marketing'] };
+const CHAT_AGENT_CALLS = Object.fromEntries(AGENT_LIST.map(({ key }) => [key, AGENTS[key].calls]));
 const CHAT_ASK_MS = 30 * 60_000;
 const chatAgentCalled = (text) => Object.keys(CHAT_AGENT_CALLS).filter((k) => CHAT_AGENT_CALLS[k].some((n) => new RegExp(`(^|[\\s(>])@${n.replace(/[.*+?^${}()|[\]\\&]/g, '\\$&')}(?![\\w])`, 'i').test(String(text))));
 function chatAgentSay(ws, agent, rootId, channelId, text) {

@@ -145,7 +145,7 @@ try {
   ok(await A.ev(`document.querySelector('#tool .ag-runs').textContent.includes('Plan my day please')`), 'recent activity lists the assignment');
   await A.ev(`[...document.querySelectorAll('#tool .ag-card')][1].click()`);
   ok(await A.until(`document.querySelector('#tool .ag-prof-h b')?.textContent === 'Client & Sales Manager'`), 'a specialist’s profile');
-  ok(await A.ev(`[...document.querySelectorAll('#tool .ag-tabs button')].map((b) => b.textContent).join() === 'Overview,Work,Schedules,Settings' && document.querySelector('#tool .ag-tools').textContent.includes('Always asks you first')`), 'with overview (what it can use, and what it always asks first), work, schedules and settings');
+  ok(await A.ev(`[...document.querySelectorAll('#tool .ag-tabs button')].map((b) => b.textContent).join() === 'Overview,Work,Connections,Schedules,Settings' && document.querySelector('#tool .ag-tools').textContent.includes('Always asks you first')`), 'with overview (what it can use, and what it always asks first), work, schedules and settings');
   await shot(A, 'ag-profile');
   await A.ev(`[...document.querySelectorAll('#tool .ag-wfs .chip')].find((b) => b.textContent === 'Handle a new lead…').click()`);
   ok(await A.until(`!document.querySelector('#sheet').classList.contains('hidden') && document.querySelector('#sheet h2').textContent === 'Handle a new lead'`), 'a paste-in workflow asks for the email');
@@ -282,7 +282,7 @@ try {
   await A.ev(`[...document.querySelectorAll('#tool .ag-card')][2].click()`);
   await A.until(`document.querySelector('#tool .ag-prof-h b')?.textContent === 'Operations Manager'`);
   await A.ev(`[...document.querySelectorAll('#tool .ag-tabs button')].find((b) => b.textContent === 'Settings').click()`);
-  await A.ev(`(() => { const t = document.querySelector('#tool .ag-tab-body textarea'); t.value = 'Order fabric 10 days ahead.'; return true; })()`);
+  await A.ev(`(() => { const t = document.querySelector('#tool .ag-ins'); t.value = 'Order fabric 10 days ahead.'; return true; })()`);
   await A.ev(`[...document.querySelectorAll('#tool .ag-tab-body button')].find((b) => b.textContent === 'Save instructions').click()`);
   await sleep(400);
   ok((await api('GET', '/agents')).agents.ops.instructions === 'Order fabric 10 days ahead.', 'standing instructions save');

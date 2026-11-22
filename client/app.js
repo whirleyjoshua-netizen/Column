@@ -10541,7 +10541,7 @@
     agent: { icon: '🤖', name: 'Agent', label: () => null, open: (id) => chatAskAgent(id), full: (id) => agOpen(id) },
   };
   function chatAskAgent(id) {
-    const name = CHAT_AGENTS.find((x) => x[0] === id)?.[2];
+    const name = agentList().find((x) => x.key === id)?.name;
     const ta = C.pane?.querySelector('textarea');
     if (!name || !ta) return agOpen(id);
     if (!ta.value.includes('@' + name)) ta.value = `@${name} ` + ta.value.replace(/^\s+/, '');
@@ -10549,7 +10549,7 @@
     ta.setSelectionRange(ta.value.length, ta.value.length);
     ta.dispatchEvent(new Event('input', { bubbles: true }));
   }
-  const CHAT_AGENTS = [['chief', '🧭', 'Chief of Staff'], ['sales', '🤝', 'Client & Sales Manager'], ['ops', '🛠️', 'Operations Manager'], ['marketing', '📣', 'Marketing Manager']];
+  const agentList = () => S.workspace?.agentList || []; // the server's one list of agents
   const chatFeedKey = () => viewChannel(C.view || 'chat') || 'general';
   const chatPins = () => (chatFeedKey() === 'general' ? S.workspace?.chatPins : channelById(chatFeedKey())?.pins) || [];
   const chatPinName = (p) => (p.locked ? 'Private' : CHAT_PIN[p.kind]?.label(p.id) || p.label || CHAT_PIN[p.kind]?.name);
@@ -10601,7 +10601,7 @@
       ...sec('Stacks', (S.workspace.stacks || []).map((st) => row('stack', st.id, '🗂️ ' + st.name))),
       ...sec('Docs', docs.map((d) => row('doc', d.id, (d.icon || '📄') + ' ' + docTitle(d)))),
       ...(toolOn('folders') ? sec('Folders', dirs().filter((d) => !d.parentId).map((d) => row('dir', d.id, '📁 ' + d.name))) : []),
-      ...(toolOn('agents') ? sec('Agents', CHAT_AGENTS.map(([id, ic, n]) => row('agent', id, ic + ' ' + n))) : []),
+      ...(toolOn('agents') ? sec('Agents', agentList().map((x) => row('agent', x.key, x.icon + ' ' + x.name))) : []),
     ];
     openMenu(anchor, rows.length ? rows : [{ note: 'Make a stack, doc or folder first.' }]);
   }
@@ -12568,14 +12568,14 @@
   // ---------- Your team: three agents you hand work to (agents.js on the server) ----------
   // The team page asks the coordinator; each agent has a profile (overview, its work, schedules, settings); an
   // assignment shows every step it took, with Approve, Skip and Undo, and you can reply to carry it on.
-  const AG = { data: null, view: 'team', tab: 'overview', busy: false, draft: '', loading: false };
+  const AG = { data: null, view: 'team', tab: 'overview', busy: false, draft: '', loading: false, typed: {}, apps: null, saving: false, seq: 0 };
   const AG_LEVELS = {
     observe: ['Observe', 'Reads and reports. Changes nothing; tells you what it would do.'],
     prepare: ['Prepare', 'Drafts everything. Every change waits for your yes.'],
     execute: ['Execute', 'Makes routine changes itself (tasks, time, records, docs). Emails wait for your yes.'],
     automate: ['Automate', 'As Execute, and runs its scheduled workflows on its own.'],
   };
-  const AG_TOOL_NAMES = { business_numbers: 'Your business’s numbers (Analytics)', find_inventory: 'Inventory (what’s on hand where)', use_stock: 'Use stock on jobs', find_templates: 'Templates', save_template: 'Saving templates', look_at_money: 'Budgets and bills', set_budget: 'Budgets', add_bill: 'Bills', draft_invoice: 'Invoice drafts', send_invoice: 'Sending invoices', send_signoff: 'Sign-offs to customers', add_to_company_hq: 'Company HQ', look_at_day: 'Your calendar and day', list_tasks: 'Tasks', list_projects: 'Projects (the setup)', find_records: 'Jobs, leads and deals', read_record: 'A record’s full history', list_campaigns: 'Campaigns', find_contacts: 'Contacts', team_schedule: 'The team’s visits', plan_route: 'Routes', find_docs: 'Docs', read_doc: 'A doc’s text', create_task: 'Make tasks', update_task: 'Reschedule, reassign or finish tasks', schedule_time: 'Put time on your calendar', move_time: 'Move time it put there', save_contact: 'Save contacts', create_project: 'Start projects', create_record: 'Add jobs, leads, deals…', update_record: 'Update records', log_note: 'Log calls and notes', book_visit: 'Book visits', write_doc: 'Write docs', draft_email: 'Draft emails', notify_me: 'Send you a heads-up', marketing_snapshot: 'What’s bringing in work (leads by source, jobs won, campaigns, posts)', find_customers: 'Past and recent customers', list_channels: 'Your social channels', social_posts: 'Your posts in Postiz', create_campaign: 'Start campaigns with goals and tasks', make_list: 'Make lists of people to reach', make_image: 'Make pictures (on your OpenAI or Gemini key)', draft_social_post: 'Draft social and Google posts', draft_email_campaign: 'Draft email campaigns', find_photos: 'Your photos (Folders, Stacks, job photos, chat)', post_to_chat: 'Post in your team’s chat feeds', draft_teams_post: 'Post in your team’s Microsoft Teams channel', make_proof_link: 'Proof-of-insurance links for customers and GCs', look_at_photos: 'Look at photos to pick the right ones' };
+  const AG_MODES = { off: 'Off', read: 'Read', act: 'Read + act' };
   const AG_STATUS = { requested: 'Starting', planning: 'Planning', running: 'Working', awaiting: 'Needs your yes', completed: 'Done', failed: 'Didn’t finish', blocked: 'Has a question', cancelled: 'Stopped' };
   const AG_DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
   const agRunning = (x) => ['requested', 'planning', 'running'].includes(x.status);
@@ -12592,7 +12592,12 @@
   async function loadAgents() {
     if (AG.loading || !toolOn('agents')) return;
     AG.loading = true;
-    try { AG.data = await api('GET', '/agents'); AG.postiz = await api('GET', '/postiz').catch(() => null); } catch {}
+    try {
+      AG.data = await api('GET', '/agents');
+      AG.postiz = await api('GET', '/postiz').catch(() => null);
+      const reg = await api('GET', '/integrations').catch(() => null);
+      AG.apps = reg && Object.fromEntries(reg.apps.map((x) => [x.id, x.state]));
+    } catch {}
     AG.loading = false;
     renderTool();
     renderHome();
@@ -12606,7 +12611,7 @@
       if (agPut(msg.run) !== msg.run) return;
       if (was && agRunning(was) && !agRunning(msg.run) && !(toolOpen === 'agents' && AG.view === 'run:' + msg.run.id) && !(SKD.open && SKD.view === 'run:' + msg.run.id)) toast(`${msg.run.agent === 'team' ? 'Your team' : AG.data.agents[msg.run.agent]?.name}: ${msg.run.title} · ${AG_STATUS[msg.run.status].toLowerCase()}`, { label: 'Show', run: () => agOpen('run:' + msg.run.id) });
       // The stats and busy flags come with the agents; fetch them again when something finishes.
-      if (was && agRunning(was) !== agRunning(msg.run)) api('GET', '/agents').then((d) => { AG.data.agents = d.agents; renderTool(); }).catch(() => {});
+      if (was && agRunning(was) !== agRunning(msg.run)) agRefresh();
     }
     if (toolOpen === 'agents') renderTool(AG.view.startsWith('run:'));
     else if (SKD.open) renderSkDock(SKD.view.startsWith('run:'));
@@ -12694,7 +12699,7 @@
       h('div', { class: 'ag-sec-h' }, h('b', {}, 'Your specialists'), h('small', {}, busy ? `${busy} working` : `${Object.keys(d.agents).length} ready`)),
       h('div', { class: 'ag-cards' }, Object.entries(d.agents).map(([k, a]) => h('button', { class: 'ag-card', onclick: () => agOpen(k, 'overview') },
         h('span', { class: 'ag-ic' }, a.icon),
-        h('span', { class: 'ag-card-t' }, h('b', {}, a.name), h('small', {}, a.tags)),
+        h('span', { class: 'ag-card-t' }, h('b', {}, a.name), h('small', {}, a.tags), agEdited(a) ? h('small', { class: 'ag-edited' }, 'Edited by you') : null),
         h('span', { class: 'ag-card-r' }, agState(k, a), h('small', { class: 'ag-lvl' }, AG_LEVELS[a.level][0]))))),
       waiting.length ? h('section', { class: 'ag-waiting' }, h('div', { class: 'ag-sec-h' }, h('b', {}, 'Waiting for your yes')), waiting.map((x) => agRunRow(x, `${agSteps(x).filter((s) => s.status === 'proposed').length} to approve`))) : null,
       h('div', { class: 'ag-sec-h' }, h('b', {}, 'Recent activity')),
@@ -12715,23 +12720,25 @@
     }, 'Hand it over');
   }
   function agProfile(k, a) {
-    const tabs = [['overview', 'Overview'], ['work', 'Work'], ['schedules', 'Schedules'], ['settings', 'Settings']];
+    const tabs = [['overview', 'Overview'], ['work', 'Work'], ['connections', 'Connections'], ['schedules', 'Schedules'], ['settings', 'Settings']];
     const mine = AG.data.runs.filter((x) => x.parts.some((p) => p.agent === k));
     const body = {
       overview: () => [
-        h('p', {}, a.purpose),
-        h('div', { class: 'ag-sub' }, 'What it does'),
-        h('ul', { class: 'ag-duties' }, a.duties.map((x) => h('li', {}, x))),
+        a.job.edited ? [h('div', { class: 'ag-sub' }, 'Its job, as you wrote it'), h('p', { class: 'ag-job-said' }, a.job.text)]
+          : [h('p', {}, a.purpose), h('div', { class: 'ag-sub' }, 'What it does'), h('ul', { class: 'ag-duties' }, a.duties.map((x) => h('li', {}, x)))],
+        h('button', { class: 'linkish ag-edit-job', onclick: () => agOpen(k, 'settings') }, 'Edit its job'),
         h('div', { class: 'ag-sub' }, 'What it can use'),
+        h('button', { class: 'linkish ag-edit-conn', onclick: () => agOpen(k, 'connections') }, 'Change its connections'),
         h('div', { class: 'ag-tools' },
-          h('div', {}, h('small', {}, 'Reads'), h('p', {}, a.tools.filter((t) => t.kind === 'read').map((t) => AG_TOOL_NAMES[t.key]).join(' · '))),
-          h('div', {}, h('small', {}, a.level === 'observe' ? 'Would do (only suggests at Observe)' : a.level === 'prepare' ? 'Prepares (you approve each)' : 'Does'), h('p', {}, a.tools.filter((t) => t.kind === 'write' && !t.important).map((t) => AG_TOOL_NAMES[t.key]).join(' · '))),
-          a.tools.some((t) => t.important) ? h('div', {}, h('small', {}, 'Always asks you first'), h('p', {}, a.tools.filter((t) => t.important).map((t) => AG_TOOL_NAMES[t.key] + ' (it never sends without you)').join(' · '))) : null,
+          h('div', {}, h('small', {}, 'Reads'), h('p', {}, a.tools.filter((t) => t.kind === 'read').map((t) => t.name).join(' · ') || 'Nothing')),
+          h('div', {}, h('small', {}, a.level === 'observe' ? 'Would do (only suggests at Observe)' : a.level === 'prepare' ? 'Prepares (you approve each)' : 'Does'), h('p', {}, a.tools.filter((t) => t.kind === 'write' && !t.important).map((t) => t.name).join(' · ') || 'Nothing')),
+          a.tools.some((t) => t.important) ? h('div', {}, h('small', {}, 'Always asks you first'), h('p', {}, a.tools.filter((t) => t.important).map((t) => t.name).join(' · '))) : null,
           h('div', {}, h('small', {}, 'Never'), h('p', {}, 'Deletes anything, or sees more than you can see. Your team’s rules (Company HQ) still apply to it.'))),
         h('div', { class: 'ag-sub' }, 'This week'),
         h('div', { class: 'ag-stats' }, [[a.stats.week, 'assignments'], [a.stats.done, 'things done'], [a.stats.approved, 'approved'], [a.stats.skipped, 'skipped'], [a.stats.undone, 'undone']].map(([n, l]) => h('span', {}, h('b', {}, String(n)), h('small', {}, l)))),
       ],
       work: () => (mine.length ? [h('div', { class: 'ag-runs' }, mine.slice(0, 30).map((x) => agRunRow(x)))] : [h('p', { class: 'day-hint' }, 'No assignments yet. Use a workflow above, or ask it something.')]),
+      connections: () => agConnections(k, a),
       schedules: () => agSchedules(k, a),
       settings: () => agSettings(k, a),
     }[AG.tab] || (() => []);
@@ -12742,17 +12749,55 @@
       h('div', { class: 'ag-wfs' }, a.workflows.map((wf) => h('button', { class: 'chip', disabled: !AG.data.ai || AG.busy, onclick: () => (wf.paste ? agPaste(k, wf) : agAsk(k, '', wf.key)) }, wf.name + (wf.paste ? '…' : '')))),
       agBox(k, `Ask the ${a.name} anything in its area`, 'Hand it over'),
       h('div', { class: 'ag-tabs', role: 'tablist' }, tabs.map(([t, l]) => h('button', { class: AG.tab === t ? 'on' : '', role: 'tab', 'aria-selected': String(AG.tab === t), onclick: () => { AG.tab = t; renderTool(true); } }, l))),
-      h('div', { class: 'ag-tab-body' }, ...body()),
+      h('div', { class: 'ag-tab-body' }, ...body().flat()),
     ];
+  }
+  // The agents again (stats, busy flags), unless one was saved meanwhile: an older copy never replaces what was just set.
+  function agRefresh() {
+    const seq = AG.seq;
+    api('GET', '/agents').then((d) => { if (seq !== AG.seq) return agRefresh(); AG.data.agents = d.agents; renderTool(); }).catch(() => {});
   }
   async function agSave(k, body, msg) {
     try {
+      AG.seq++;
       AG.data.agents[k] = await api('PATCH', '/agents/' + k, body);
+      AG.seq++;
       if (msg) toast(msg);
       renderTool(true);
+      return true;
     } catch (e) {
       toast(e.message);
+      return false;
     }
+  }
+  const agEdited = (a) => a.job.edited || a.connections.some((c) => c.mode !== c.original);
+  // Connections: each one Off, Read or Read + act, saved as it's picked; only the choices that do something show.
+  function agConnections(k, a) {
+    const app = (c) => {
+      if (!c.app || AG.apps?.[c.app.id] !== 'off') return null;
+      return h('small', { class: 'ag-conn-app' }, `${c.app.name} isn’t connected. `,
+        amAdmin() ? h('button', { class: 'linkish', onclick: () => openApps(c.app.id) }, 'Connect') : 'An owner or admin can connect it.');
+    };
+    const set = async (c, mode) => {
+      if (AG.saving || c.mode === mode) return;
+      AG.saving = true;
+      await agSave(k, { connections: { [c.key]: mode } });
+      AG.saving = false;
+      document.querySelector(`#tool [data-conn="${c.key}"] [data-mode="${mode}"]`)?.focus({ preventScroll: true });
+    };
+    return [
+      h('p', { class: 'day-hint' }, `What the ${a.name} may use, for you only. It never gets more than you have. Turning one off also stops drafts waiting on it. Other agents keep their own connections.`),
+      ...a.connections.map((c) => h('div', { class: 'ag-conn' + (c.mode === 'off' ? ' off' : ''), 'data-conn': c.key },
+        h('div', { class: 'ag-conn-t' }, h('b', { id: `ag-conn-${c.key}` }, c.name),
+          c.mode !== 'off' ? h('small', {}, c.can.join(' · ')) : null,
+          c.note && c.mode !== 'off' ? h('small', {}, c.note) : null,
+          c.blocked.map((w) => h('small', { class: 'ag-conn-no' }, w)),
+          c.mode !== 'off' ? app(c) : null),
+        h('div', { class: 'ag-modes', role: 'radiogroup', 'aria-labelledby': `ag-conn-${c.key}` }, c.modes.map((m) => h('button', {
+          class: 'ag-mode' + (c.mode === m ? ' on' : ''), role: 'radio', 'aria-checked': String(c.mode === m), 'data-mode': m, onclick: () => set(c, m),
+        }, m === 'act' && !c.modes.includes('read') ? 'On' : AG_MODES[m]))))),
+      a.connections.some((c) => c.mode !== c.original) ? h('button', { class: 'btn small ag-conn-reset', onclick: () => agSave(k, { connections: null }, 'Connections are back to the original') }, 'Reset connections to original') : null,
+    ];
   }
   function agSchedules(k, a) {
     const can = a.workflows.filter((w) => !w.paste);
@@ -12775,16 +12820,45 @@
       h('label', { class: 'ag-pause' }, (() => { const c = h('input', { type: 'checkbox', checked: a.paused }); c.addEventListener('change', () => agSave(k, { paused: c.checked }, c.checked ? 'Paused' : 'Running again')); return c; })(), h('span', {}, 'Pause all of its schedules')),
     ];
   }
+  // What's typed and not saved yet outlives a redraw (a level tapped, an assignment finishing), per agent and box.
+  function agTyped(k, what, saved, props) {
+    const key = `${S.workspace?.id}:${S.me?.memberId}:${k}:${what}`;
+    const ta = h('textarea', props);
+    ta.value = AG.typed[key] ?? saved;
+    ta.addEventListener('input', () => { if (ta.value === saved) delete AG.typed[key]; else AG.typed[key] = ta.value; });
+    return { ta, clear: () => delete AG.typed[key] };
+  }
   function agSettings(k, a) {
-    const ins = h('textarea', { rows: 5, placeholder: `Anything the ${a.name} should always do or know. e.g. ${{ chief: 'Keep Friday afternoons free. I do estimates in the mornings.', sales: 'Always offer a free in-home measure. Follow up after 3 days, then 7.', ops: 'Every install gets a photo of the finished windows. Order fabric 10 days ahead.' }[k]}` });
-    ins.value = a.instructions || '';
+    const job = agTyped(k, 'job', a.job.text, { class: 'ag-job', rows: 12, maxlength: 6000, 'aria-label': `The ${a.name}’s job` });
+    const ins = agTyped(k, 'instructions', a.instructions || '', { class: 'ag-ins', rows: 5, maxlength: 3000, 'aria-label': 'Standing instructions', placeholder: `Anything the ${a.name} should always do or know. e.g. ${a.example}` });
+    const saveBox = async (box, body, msg) => {
+      const typed = box.ta.value;
+      box.clear();
+      if (await agSave(k, body, msg)) return;
+      box.ta.value = typed;
+      box.ta.dispatchEvent(new Event('input'));
+    };
+    const reset = () => sheet('Reset to the original job?', [h('p', { class: 'muted' }, `The job you wrote for the ${a.name} goes, and Kloomie’s original comes back. Its connections, instructions and schedules stay.`)], async () => {
+      AG.data.agents[k] = await api('PATCH', '/agents/' + k, { job: null });
+      job.clear();
+      toast('The original job is back');
+      renderTool(true);
+    }, 'Reset');
     return [
+      h('div', { class: 'ag-sub' }, 'Its job'),
+      h('p', { class: 'day-hint' }, 'The prompt it works from. Change it however you like; it’s only for you.'),
+      job.ta,
+      h('div', { class: 'ag-job-btns' },
+        h('button', { class: 'btn small primary-btn ag-job-save', onclick: () => saveBox(job, { job: job.ta.value }, 'Job saved') }, 'Save job'),
+        a.job.edited ? h('button', { class: 'btn small ag-job-reset', onclick: reset }, 'Reset to original') : null),
+      h('details', { class: 'ag-rules' }, h('summary', {}, 'Kloomie’s rules, always on'),
+        h('ul', {}, [...(AG.data.rules || []), ...a.keep].map((r) => h('li', {}, r)))),
+      h('div', { class: 'ag-sub' }, 'Standing instructions'),
+      h('p', { class: 'day-hint' }, 'Extra notes on top of its job, for you and this agent. Your business profile in Company HQ applies to every agent already.'),
+      ins.ta,
+      h('button', { class: 'btn small ag-ins-save', onclick: () => saveBox(ins, { instructions: ins.ta.value }, 'Saved') }, 'Save instructions'),
       h('div', { class: 'ag-sub' }, 'How far it may go'),
       h('div', { class: 'ag-levels', role: 'radiogroup' }, Object.entries(AG_LEVELS).map(([lv, [name, about]]) => h('button', { class: 'ag-level' + (a.level === lv ? ' on' : ''), role: 'radio', 'aria-checked': String(a.level === lv), onclick: () => agSave(k, { level: lv }) }, h('b', {}, name + (lv === 'execute' ? ' (recommended)' : '')), h('small', {}, about)))),
-      h('div', { class: 'ag-sub' }, 'Standing instructions'),
-      h('p', { class: 'day-hint' }, 'Only for you and this agent. Your business profile in Company HQ applies to every agent already.'),
-      ins,
-      h('button', { class: 'btn small', onclick: () => agSave(k, { instructions: ins.value }, 'Saved') }, 'Save instructions'),
     ];
   }
   // Where a changed thing lives in the app.
@@ -12808,12 +12882,13 @@
       else if (what === 'undo') toast('Undone');
       renderTool(true);
       renderHome();
-      api('GET', '/agents').then((d) => { AG.data.agents = d.agents; renderTool(); }).catch(() => {});
+      agRefresh();
     } catch (e) {
       toast(e.message);
     }
   }
   const AG_ICON = { done: '✓', proposed: '○', held: '⏳', suggested: '💡', failed: '⚠', undone: '↺', skipped: '–' };
+  const agStopped = (s) => (s.error ? h('small', { class: 'ag-err ag-stopped' }, s.error) : null); // a draft its connection stopped
   function agStepRow(x, s) {
     if (s.kind === 'read') return h('div', { class: 'ag-step read' + (s.status === 'failed' ? ' failed' : '') }, h('span', { class: 'ag-step-ic' }, s.status === 'failed' ? '⚠' : '·'), h('span', {}, s.label, s.error ? h('small', {}, s.error) : null));
     if (s.kind === 'handoff') return h('div', { class: 'ag-step handoff' }, h('span', { class: 'ag-step-ic' }, '→'), h('span', {}, s.label));
@@ -12829,6 +12904,7 @@
       body.value = s.args.body || '';
       return h('div', { class: 'ag-step email' },
         h('div', { class: 'ag-email-h' }, h('b', {}, '✉ Draft email'), s.why ? h('small', {}, s.why) : null),
+        agStopped(s),
         h('label', {}, 'To ' + (s.args.to_name ? `(${s.args.to_name})` : ''), to), h('label', {}, 'Subject', sub), body,
         h('div', { class: 'ag-step-act' },
           h('button', { class: 'btn small primary-btn', onclick: (e) => { e.currentTarget.disabled = true; agStep(x, [s.id], 'approve', { to_email: to.value, subject: sub.value, body: body.value }); } }, 'Send'),
@@ -12838,6 +12914,7 @@
     return h('div', { class: 'ag-step act s-' + s.status },
       h('span', { class: 'ag-step-ic' }, AG_ICON[s.status] || '·'),
       h('span', { class: 'ag-step-t' }, h('span', {}, s.label), s.why ? h('small', {}, s.why) : null,
+        s.status === 'proposed' ? agStopped(s) : null,
         s.status === 'held' ? h('small', { class: 'ag-held' }, s.error || 'Waiting for an owner’s OK') : s.status === 'failed' || (s.error && s.status === 'done') ? h('small', { class: 'ag-err' }, s.error) : null,
         s.status === 'suggested' ? h('small', {}, 'Suggestion only (Observe)') : null,
         pic ? h('img', { class: 'ag-pic', src: fileUrl(pic), alt: s.label, loading: 'lazy', onclick: () => openPreview(pic) }) : null),
@@ -12882,6 +12959,7 @@
     showAt();
     recount();
     return h('div', { class: 'ag-step email post' },
+      agStopped(s),
       h('div', { class: 'ag-email-h' }, h('b', {}, '📣 Draft post'), s.why ? h('small', {}, s.why) : null),
       pz?.connected ? chips : h('p', { class: 'ag-note' }, h('span', {}, 'Postiz isn’t connected, so copy this and post it yourself, or an owner can connect Postiz in Apps & Integrations.')),
       body, count, picBox,
@@ -12898,6 +12976,7 @@
     const body = h('textarea', { rows: 5, 'aria-label': 'Message' });
     body.value = s.args.text || '';
     return h('div', { class: 'ag-step email' },
+      agStopped(s),
       h('div', { class: 'ag-email-h' }, h('b', {}, '💬 Message for the team'), s.why ? h('small', {}, s.why) : null, h('small', {}, 'Links to what this assignment made are added under it.')),
       h('label', {}, 'Post in', sel), body,
       h('div', { class: 'ag-step-act' },
@@ -12921,6 +13000,7 @@
     go.onclick = () => { go.disabled = true; agStep(x, [s.id], 'approve', { subject: sub.value, body: body.value, contact_ids: ids }); };
     draw();
     return h('div', { class: 'ag-step email' },
+      agStopped(s),
       h('div', { class: 'ag-email-h' }, h('b', {}, '✉ Draft email campaign'), s.why ? h('small', {}, s.why) : null, h('small', {}, 'From your Gmail or Outlook, with your footer and an unsubscribe link. People marked do not contact are left out. {First name} becomes each person’s first name.')),
       h('label', {}, 'To', who), h('label', {}, 'Subject', sub), body,
       h('div', { class: 'ag-step-act' }, go, h('button', { class: 'btn small', onclick: () => copyText(`${sub.value}\n\n${body.value}`) }, 'Copy'), h('button', { class: 'btn small', onclick: () => agStep(x, [s.id], 'skip') }, 'Don’t send')));
