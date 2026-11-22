@@ -2254,7 +2254,7 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
   const stateFor = (ws, auth) => Object.values(db.projects).filter((p) => p.wsId === ws.id && sees(p, auth.memberId)).map(publicProject);
 
   // A record told in words, for the AI: its fields, what links to it, its timeline and open tasks.
-  function recordStory(rec, ws) {
+  function recordStory(rec, ws, sees1 = null) { // sees1(kind, x): the reader's sight of the tasks and logged attempts it quotes
     const p = db.projects[rec.projectId];
     const t = p && typeOf(p, rec.typeId);
     if (!t) return '';
@@ -2271,9 +2271,10 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
       const from = Object.values(db.records).filter((x) => x.typeId === o.id && (x.values[f.id] || []).includes(rec.id));
       if (from.length) lines.push(`${o.name} linked to it: ${from.slice(0, 10).map((x) => `${recName(p, x)} (${o.fields.filter((y) => ['select', 'money', 'date', 'items'].includes(y.type) && x.values[y.id] != null).map((y) => `${y.name.toLowerCase()} ${words(ws, p, y, x.values[y.id])}`).join(', ')})`).join('; ')}`);
     }
-    const log = (rec.log || []).slice(0, 30).map((e) => `- ${teamDay(rec.wsId, e.at)} ${e.by || ''}: ${e.kind}${e.outcome ? ' (' + e.outcome + ')' : ''}${e.what ? ' ' + e.what : ''}${e.field ? ` ${e.field} ${e.from || 'empty'} → ${e.to || 'empty'}` : ''}${e.note ? ': ' + e.note.slice(0, 300) : ''}${e.campaign ? ` [campaign ${e.campaign}]` : ''}`);
+    const shown = (kind, x) => !sees1 || (!!x && sees1(kind, x)); // a timeline line about one that's gone is left out too: whose it was can't be told
+    const log = (rec.log || []).filter((e) => (!e.taskId || shown('task', db.tasks[e.taskId])) && (!e.attemptId || shown('attempt', db.attempts[e.attemptId]))).slice(0, 30).map((e) => `- ${teamDay(rec.wsId, e.at)} ${e.by || ''}: ${e.kind}${e.outcome ? ' (' + e.outcome + ')' : ''}${e.what ? ' ' + e.what : ''}${e.field ? ` ${e.field} ${e.from || 'empty'} → ${e.to || 'empty'}` : ''}${e.note ? ': ' + e.note.slice(0, 300) : ''}${e.campaign ? ` [campaign ${e.campaign}]` : ''}`);
     if (log.length) lines.push(`Timeline, newest first:\n${log.join('\n')}`);
-    const tasks = Object.values(db.tasks).filter((x) => x.recordId === rec.id && !x.done);
+    const tasks = Object.values(db.tasks).filter((x) => x.recordId === rec.id && !x.done && shown('task', x));
     if (tasks.length) lines.push(`Open tasks: ${tasks.map((x) => x.text + (x.due ? ` (due ${x.due})` : '')).join('; ')}`);
     return lines.join('\n');
   }

@@ -103,6 +103,7 @@ const t = Date.now();
 const auth = await (await fetch(APP + 'api/auth', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ mode: 'create', workspace: 'Premier ' + t, name: 'Ada', email: `ada${t}@t.test`, password: 'longenough1', device: 'Mac', deviceId: 'd1' }) })).json();
 const api = async (m, p, body) => (await fetch(APP + 'api' + p, { method: m, headers: { 'content-type': 'application/json', authorization: 'Bearer ' + auth.token }, body: body ? JSON.stringify(body) : undefined })).json();
 await api('PUT', '/ai/keys/anthropic', { key: 'sk-ant-test-key-1234567890' });
+await api('PATCH', '/workspace', { tools: { projects: true } }); // agents follow the team's tool switches
 const shot = async (A, n) => { if (!SHOTS) return; await sleep(600); const r = await A.cmd('Page.captureScreenshot', { format: 'png' }); FS.writeFileSync(`${SHOTS}/${n}.png`, Buffer.from(r.result.data, 'base64')); };
 let A;
 try {

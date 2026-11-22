@@ -591,6 +591,13 @@ const MEMBER_ROUTES = { contacts: ['contacts', 'contact-groups'], projects: ['pr
 const memberAccessOf = (ws) => Object.fromEntries(Object.keys(MEMBER_DEFAULTS).map((k) => [k, typeof ws.settings?.memberAccess?.[k] === 'boolean' ? ws.settings.memberAccess[k] : MEMBER_DEFAULTS[k]]));
 const memberMay = (ws, auth, k) => isAdmin(auth) || memberAccessOf(ws)[k] !== false;
 const memberOff = (k) => `Your team’s owners and admins have turned ${MEMBER_LABEL[k]} off for members.`;
+// Why this person can't use a tool, or null: off for the whole team, or off for members. Doors that aren't a route
+// (the agents' tools) ask this, so they follow the same two rules.
+function offWhy(ws, memberId, k) {
+  if (TOOL_KEYS.includes(k) && !toolsOf(ws)[k]) return `${MEMBER_LABEL[k] || { email: 'Email' }[k] || k} is switched off for this team (Apps & Integrations → Tools).`;
+  if (Object.hasOwn(MEMBER_DEFAULTS, k) && !memberMay(ws, { memberId, role: ws.members.find((m) => m.id === memberId)?.role }, k)) return memberOff(k);
+  return null;
+}
 const publicWorkspace = (ws, memberId) => ({
   tools: toolsOf(ws),
   memberAccess: memberAccessOf(ws),
@@ -12381,7 +12388,7 @@ async function itemFile(ws, memberId, id) {
   if (!it || it.wsId !== ws.id || it.type !== 'file' || !/^image\//.test(it.mime || '') || !canSee({ wsId: ws.id, memberId, role: me?.role }, 'item', it)) throw badRequest('That picture isn’t in Kloomie any more.');
   return { bytes: await fsp.readFile(path.join(FILES_DIR, it.id)), name: it.name, mime: it.mime };
 }
-const AGENTS_M = agentsModule({ autoEvents: FL.EVENTS, sees: (memberId, kind, x) => (kind === 'campaign' ? seesCampaign(x.id, memberId) : canSee({ memberId }, kind, x)), db, save, rid,
+const AGENTS_M = agentsModule({ autoEvents: FL.EVENTS, offWhy, sees: (memberId, kind, x) => (kind === 'campaign' ? seesCampaign(x.id, memberId) : canSee({ memberId }, kind, x)), db, save, rid,
   // Every change to a run goes out as news; one asked in chat is answered there as soon as it's done.
   broadcast: (wsId, msg) => { broadcast(wsId, msg); if (msg?.type === 'agent' && msg.run?.id && db.chatAsks?.[msg.run.id]) chatAskDone(msg.run.id); }, cleanText, readJson, send, notify, replay: replayAs, run: agentLlm, sendEmail: agentEmail, textToDoc, PJ, isAdminId, localNow, tzOf, fmtMinutes, hasAi: (wsId, memberId) => !!aiUse(aiOf(wsId, memberId)), POSTIZ, makeImageItem, itemFile, noContact, describeImages, canPicture: (wsId, memberId) => ['openai', 'gemini'].some((k) => !!aiOf(wsId, memberId).keys?.[k]?.sealed) });
 const GH = githubModule({ bind: OAUTH_BIND, automate: (...x) => automate(...x), alarm: (...x) => alarm(...x), db, save, broadcast, rid, cleanText, readJson, send, seal, unseal, isAdmin, PJ, sees: (p, mid) => PJ.sees(p, mid), publicUrl: PUBLIC_URL });

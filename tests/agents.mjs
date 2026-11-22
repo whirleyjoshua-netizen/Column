@@ -101,7 +101,7 @@ try {
   const ben = call((await call()('POST', '/auth', { mode: 'join', workspace: 'Premier ' + t, code, name: 'Ben', email: `ben${t}@t.test`, password: 'longenough2', device: 'Mac', deviceId: 'd2' })).body.token);
   await ada('PUT', '/ai/keys/anthropic', { key: 'sk-ant-test-key-1234567890' });
   await ben('PUT', '/ai/keys/anthropic', { key: 'sk-ant-test-key-0987654321' });
-  await ada('PATCH', '/workspace', { tools: { projects: true } });
+  await ada('PATCH', '/workspace', { tools: { projects: true, bills: true } }); // agents follow the team's tool switches
   const st = (await ada('GET', '/state')).body;
   today = new Date().toLocaleDateString('en-CA'); // the team's clock is this machine's when no time zone is sent
   const wait = async (tok, id) => { for (let i = 0; i < 80; i++) { const x = (await tok('GET', '/agents/runs/' + id)).body; if (x && !['requested', 'planning', 'running'].includes(x.status)) return x; await sleep(100); } return (await tok('GET', '/agents/runs/' + id)).body; };

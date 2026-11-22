@@ -117,6 +117,21 @@ export const AGENTS = {
     ],
   },
 };
+// What else a tool needs besides the person's own sight of things: the team's tool switches and what members may use
+// (toolsOf and memberMay, asked through offWhy). An agent is another door, and the tools that read db directly never
+// pass the routes' gate, so every tool is checked here: when offered, when called, and again when a draft is approved.
+export const NEEDS = {
+  list_projects: ['projects'], find_records: ['projects'], read_record: ['projects'], create_project: ['projects'],
+  create_record: ['projects'], update_record: ['projects'], log_note: ['projects'], book_visit: ['projects'],
+  send_signoff: ['projects'], draft_invoice: ['projects'],
+  find_contacts: ['contacts'], find_customers: ['contacts'], save_contact: ['contacts'],
+  list_campaigns: ['camps'], read_sops: ['camps'], marketing_snapshot: ['camps'], create_campaign: ['camps'], make_list: ['camps', 'contacts'],
+  find_docs: ['docs'], read_doc: ['docs'], write_doc: ['docs'],
+  find_templates: ['templates'], save_template: ['templates'],
+  look_at_money: ['bills'], set_budget: ['bills'], add_bill: ['bills'],
+  find_inventory: ['inventory'], use_stock: ['inventory', 'projects'],
+  post_to_chat: ['chat'], draft_email_campaign: ['email', 'contacts'],
+};
 export const LEVELS = ['observe', 'prepare', 'execute', 'automate'];
 
 // How can Kloomie help you? (the owner, 2026-11-15) Each goal has its playbook: what to find out first (asked as
@@ -178,7 +193,7 @@ const PHOTO_MAX = 5_000_000; // what AI models take as a picture
 const MAX_PARTS = 4;
 const MAX_TURN_CHARS = 30_000;
 
-export function agentsModule({ autoEvents = [], sees = () => true, db, save, broadcast, rid, cleanText, readJson, send, notify, replay, run: llmRun, sendEmail, textToDoc, PJ, isAdminId, localNow, tzOf, fmtMinutes, hasAi = () => true, POSTIZ = null, makeImageItem, itemFile, noContact = (c) => !!c.dne, canPicture = () => true, describeImages = async () => ({}) }) {
+export function agentsModule({ autoEvents = [], sees = () => true, offWhy = () => null, db, save, broadcast, rid, cleanText, readJson, send, notify, replay, run: llmRun, sendEmail, textToDoc, PJ, isAdminId, localNow, tzOf, fmtMinutes, hasAi = () => true, POSTIZ = null, makeImageItem, itemFile, noContact = (c) => !!c.dne, canPicture = () => true, describeImages = async () => ({}) }) {
   db.agentRuns ||= {};
   db.agentPrefs ||= {};
   // A step that was being approved when the server stopped may or may not have gone out: never run it again
@@ -192,6 +207,7 @@ export function agentsModule({ autoEvents = [], sees = () => true, db, save, bro
     x.error = 'Kloomie restarted while this was running. Ask again to finish it.';
     x.finishedAt = Date.now();
   }
+  const barred = (ws, memberId, name) => (NEEDS[name] || []).map((k) => offWhy(ws, memberId, k)).find(Boolean) || null;
   const prefKey = (wsId, memberId) => `${wsId}:${memberId}`;
   // Each person's own settings for each agent: how far it may go, standing instructions, and when it runs.
   function prefsOf(wsId, memberId) {
@@ -210,6 +226,9 @@ export function agentsModule({ autoEvents = [], sees = () => true, db, save, bro
   const publicRun = ({ wsId, history, ...x }) => x;
   const runsOf = (wsId, memberId) => Object.values(db.agentRuns).filter((x) => x.wsId === wsId && x.memberId === memberId).sort((a, b) => b.createdAt - a.createdAt);
 
+  // The company's social accounts are for owners and admins, on every path: drafting, approving and undoing.
+  const socialOnly = (cx) => { if (!isAdminId(cx.ws.id, cx.memberId)) throw new Error('Only owners and admins post to the company’s social accounts.'); };
+
   // ---------- reading: what the person can see, from the same view the app loads for them ----------
   const hm = (m) => (m == null ? '' : fmtMinutes(m));
   const parseTime = (s) => {
@@ -226,21 +245,21 @@ export function agentsModule({ autoEvents = [], sees = () => true, db, save, bro
   const addDays = (d, n) => new Date(Date.parse(d + 'T12:00:00Z') + n * 864e5).toISOString().slice(0, 10);
   const nameOf = (ws, id) => memberOf(ws, id)?.name || null;
   const words = (s, n = 300) => cleanText(String(s ?? '').replace(/\s+/g, ' '), n);
-  const fieldWords = (ws, p, t, f, v) => {
+  const fieldWords = (ws, memberId, f, v) => {
     if (v == null || v === '') return null;
     if (f.type === 'select') return f.choices?.find((c) => c.id === v)?.label || null;
     if (f.type === 'multi') return (v || []).map((id) => f.choices?.find((c) => c.id === id)?.label).filter(Boolean).join(', ') || null;
     if (f.type === 'person') return nameOf(ws, v);
     if (f.type === 'money') return '$' + (Number(v) / 100).toLocaleString('en-US');
     if (f.type === 'contact') { const c = db.contacts[v]; return c ? [c.name, c.email, c.phone].filter(Boolean).join(' · ') : null; }
-    if (f.type === 'link') return (v || []).map((id) => db.records[id]).filter(Boolean).map((r) => String(r.values[db.projects[r.projectId]?.types.find((x) => x.id === r.typeId)?.primary] ?? '')).join(', ') || null;
+    if (f.type === 'link') return (v || []).map((id) => db.records[id]).filter((r) => r?.wsId === ws.id && PJ.sees(db.projects[r.projectId], memberId)).map((r) => String(r.values[db.projects[r.projectId]?.types.find((x) => x.id === r.typeId)?.primary] ?? '')).join(', ') || null;
     if (f.type === 'checkbox') return v ? 'yes' : 'no';
     if (f.type === 'checklist') return (v.items || []).map((x) => (x.done ? '☑ ' : '☐ ') + x.text).join('; ') || null;
     if (f.type === 'location') return v.address ? words(v.address, 200) : null;
     if (['items', 'files', 'signature', 'measure', 'equipment', 'materials', 'readings', 'permit', 'secret', 'job'].includes(f.type)) return null;
     return words(v, 200);
   };
-  const recLine = (ws, r, extra = 6) => {
+  const recLine = (ws, memberId, r, extra = 6) => {
     const p = db.projects[r.projectId];
     const t = p?.types.find((x) => x.id === r.typeId);
     if (!t) return null;
@@ -248,7 +267,7 @@ export function agentsModule({ autoEvents = [], sees = () => true, db, save, bro
     let n = 0;
     for (const f of t.fields) {
       if (f.id === t.primary || n >= extra) continue;
-      const w = fieldWords(ws, p, t, f, r.values[f.id]);
+      const w = fieldWords(ws, memberId, f, r.values[f.id]);
       if (w) { out[f.name] = w; n++; }
     }
     const last = (r.log || [])[0];
@@ -327,7 +346,7 @@ export function agentsModule({ autoEvents = [], sees = () => true, db, save, bro
           if (!t || (a.list && !same(t.name, a.list) && !same(t.singular, a.list))) continue;
           if (a.status && !t.fields.some((f) => f.type === 'select' && same(f.choices?.find((c) => c.id === r.values[f.id])?.label, a.status))) continue;
           if (quiet && ((r.log || [])[0]?.at || r.createdAt) > quiet) continue;
-          const line = recLine(cx.ws, r);
+          const line = recLine(cx.ws, cx.memberId, r);
           if (q && !JSON.stringify(line).toLowerCase().includes(q)) continue;
           out.push(line);
           if (out.length >= 50) break;
@@ -342,7 +361,7 @@ export function agentsModule({ autoEvents = [], sees = () => true, db, save, bro
       async run(cx, a) {
         const at = PJ.recordAt(String(a.id), cx.ws.id, cx.memberId);
         if (!at) throw new Error('No record with that id that you can see.');
-        return { id: at.rec.id, about: PJ.recordStory(at.rec, cx.ws) };
+        return { id: at.rec.id, about: PJ.recordStory(at.rec, cx.ws, (kind, v) => sees(cx.memberId, kind, v)) };
       },
     },
     list_campaigns: {
@@ -565,7 +584,7 @@ export function agentsModule({ autoEvents = [], sees = () => true, db, save, bro
       parameters: { type: 'object', properties: { id: { type: 'string' }, due: { type: ['string', 'null'] }, done: { type: 'boolean' }, assignee: { type: 'string' }, priority: { type: 'number' }, text: { type: 'string' }, why: { type: 'string' } }, required: ['id'] },
       async run(cx, a) {
         const t = db.tasks[a.id];
-        if (!t || t.wsId !== cx.ws.id) throw new Error('No task with that id.');
+        if (!t || t.wsId !== cx.ws.id || !sees(cx.memberId, 'task', t)) throw new Error('No task with that id.');
         const body = {};
         if (a.due !== undefined) body.due = isDay(a.due) ? a.due : null;
         if (a.done !== undefined) body.done = !!a.done;
@@ -677,7 +696,7 @@ export function agentsModule({ autoEvents = [], sees = () => true, db, save, bro
       },
     },
     send_invoice: {
-      kind: 'write', important: true, label: (a) => { const i = db.invoices?.[a.invoice_id]; return `Send ${i?.number || 'an invoice'}${i?.to?.name ? ' to ' + i.to.name : ''}`; },
+      kind: 'write', important: true, label: (a, cx) => { const x = db.invoices?.[a.invoice_id]; const i = x && x.wsId === cx.ws.id && isAdminId(cx.ws.id, cx.memberId) ? x : null; return `Send ${i?.number || 'an invoice'}${i?.to?.name ? ' to ' + i.to.name : ''}`; },
       description: 'Send an invoice to the customer (their own link to read and pay; the job moves to Invoiced). Always waits for the person’s yes, and the team’s rules on invoices still apply.',
       parameters: { type: 'object', properties: { invoice_id: { type: 'string' }, why: { type: 'string' } }, required: ['invoice_id'] },
       check(cx, a) { const i = db.invoices?.[a.invoice_id]; if (!i || i.wsId !== cx.ws.id) throw new Error('No invoice with that id.'); if (i.status === 'void') throw new Error('That invoice was voided.'); },
@@ -758,9 +777,9 @@ export function agentsModule({ autoEvents = [], sees = () => true, db, save, bro
       parameters: { type: 'object', properties: { to_name: { type: 'string' }, to_email: { type: 'string' }, subject: { type: 'string' }, body: { type: 'string' }, record_id: { type: 'string' }, why: { type: 'string' } }, required: ['to_email', 'subject', 'body'] },
       async run(cx, a) {
         const out = await sendEmail(cx.ws, cx.memberId, { name: a.to_name || '', email: a.to_email, subject: a.subject, text: a.body });
-        const logAt = a.record_id && PJ.recordAt(String(a.record_id), cx.ws.id, cx.memberId);
+        const logAt = a.record_id && jobsOpen(cx) && PJ.recordAt(String(a.record_id), cx.ws.id, cx.memberId);
         if (logAt) await cx.call('POST', `/api/records/${logAt.rec.id}/log`, { kind: 'email', note: `Emailed ${a.to_name || a.to_email}: ${a.subject}` });
-        return { ok: true, result: { sent: true, from: out.from }, changed: a.record_id ? [{ kind: 'record', id: a.record_id, label: recTitle(a.record_id) }] : [] };
+        return { ok: true, result: { sent: true, from: out.from }, changed: logAt ? [{ kind: 'record', id: logAt.rec.id, label: recTitle(logAt.rec.id) }] : [] };
       },
     },
     notify_me: {
@@ -842,13 +861,13 @@ export function agentsModule({ autoEvents = [], sees = () => true, db, save, bro
       async run(cx, a) {
         const s = await cx.state();
         const onJob = new Map(); // photo id → the record it's on
-        for (const r of Object.values(db.records)) {
+        for (const r of jobsOpen(cx) ? Object.values(db.records) : []) {
           if (r.wsId !== cx.ws.id || !db.projects[r.projectId] || !PJ.sees(db.projects[r.projectId], cx.memberId)) continue;
           const t = typeOfRec(r);
           for (const f of t?.fields || []) if (f.type === 'files') for (const id of r.values[f.id] || []) onJob.set(id, r);
         }
         const dirName = (id) => { const names = []; for (let d = (cx.ws.dirs || []).find((x) => x.id === id), i = 0; d && i < 10; d = (cx.ws.dirs || []).find((x) => x.id === d.parentId), i++) names.unshift(d.name); return names.join(' / '); };
-        const jobRec = a.job ? (db.records[a.job]?.wsId === cx.ws.id ? db.records[a.job] : Object.values(db.records).find((r) => r.wsId === cx.ws.id && same(recTitle(r.id), a.job))) : null;
+        const jobRec = a.job && jobsOpen(cx) ? (PJ.recordAt(String(a.job), cx.ws.id, cx.memberId)?.rec || Object.values(db.records).find((r) => r.wsId === cx.ws.id && PJ.sees(db.projects[r.projectId], cx.memberId) && same(recTitle(r.id), a.job))) : null;
         if (a.job && !jobRec) throw new Error(`No job or record called ${a.job}.`);
         const q = String(a.query || '').toLowerCase();
         const since = Number(a.days) > 0 ? Date.now() - Number(a.days) * 864e5 : 0;
@@ -941,19 +960,20 @@ export function agentsModule({ autoEvents = [], sees = () => true, db, save, bro
         const s = await cx.state();
         const out = { days };
         // Records the person can see, with whether they count as won and what they're worth.
-        const recs = Object.values(db.records).filter((r) => r.wsId === cx.ws.id && db.projects[r.projectId] && PJ.sees(db.projects[r.projectId], cx.memberId));
+        const recs = !jobsOpen(cx) ? [] : Object.values(db.records).filter((r) => r.wsId === cx.ws.id && db.projects[r.projectId] && PJ.sees(db.projects[r.projectId], cx.memberId));
         const won = (r) => { const t = typeOfRec(r); return !!t?.fields.some((f) => f.type === 'select' && WON.test(f.choices?.find((c) => c.id === r.values[f.id])?.label || '')); };
         const worth = (r) => { const t = typeOfRec(r); const f = t?.fields.find((x) => x.type === 'money' && r.values[x.id] != null); return f ? r.values[f.id] / 100 : 0; };
         const months = {};
         for (const r of recs) if (r.createdAt > Date.now() - 365 * 864e5) { const k = new Date(r.createdAt).toISOString().slice(0, 7); months[k] = (months[k] || 0) + 1; }
         out.workStartedByMonth = Object.fromEntries(Object.entries(months).sort());
-        if (isAdminId(cx.ws.id, cx.memberId)) {
+        const admin = isAdminId(cx.ws.id, cx.memberId);
+        if (admin && !offWhy(cx.ws, cx.memberId, 'contacts')) {
           const bySource = {};
           const links = contactRecords(cx.ws.id);
           for (const c of Object.values(db.contacts)) {
             if (c.wsId !== cx.ws.id || (c.createdAt || 0) < since) continue;
             const src = c.source || 'Not recorded';
-            const mine = (links.get(c.id) || []).filter((r) => db.projects[r.projectId] && PJ.sees(db.projects[r.projectId], cx.memberId));
+            const mine = (links.get(c.id) || []).filter((r) => jobsOpen(cx) && db.projects[r.projectId] && PJ.sees(db.projects[r.projectId], cx.memberId));
             const g = (bySource[src] ||= { leads: 0, becameWork: 0, won: 0, wonValue: 0 });
             g.leads++;
             if (mine.length) g.becameWork++;
@@ -962,7 +982,7 @@ export function agentsModule({ autoEvents = [], sees = () => true, db, save, bro
           }
           out.leadsBySource = bySource;
           out.contacts = { total: Object.values(db.contacts).filter((c) => c.wsId === cx.ws.id).length, doNotContact: Object.values(db.contacts).filter((c) => c.wsId === cx.ws.id && noContact(c)).length };
-        } else out.leadsBySource = 'Only owners and admins can see Contacts.';
+        } else out.leadsBySource = admin ? 'Contacts is switched off for this team.' : 'Only owners and admins can see Contacts.';
         const wonRecent = recs.filter((r) => (r.updatedAt || r.createdAt) > since && won(r));
         out.won = { count: wonRecent.length, value: Math.round(wonRecent.reduce((n, r) => n + worth(r), 0)), byList: wonRecent.reduce((m, r) => { const n = typeOfRec(r)?.name || '?'; m[n] = (m[n] || 0) + 1; return m; }, {}) };
         out.campaigns = s.campaigns.filter((c) => c.status !== 'done' || (c.end && Date.parse(c.end) > since)).slice(0, 20).map((c) => {
@@ -971,8 +991,9 @@ export function agentsModule({ autoEvents = [], sees = () => true, db, save, bro
           return { id: c.id, name: c.name, status: c.status, start: c.start, end: c.end, goals: s.goals.filter((g) => g.campaignId === c.id).map((g) => `${g.title}${g.kind === 'count' ? ` (target ${g.target})` : ''}`).slice(0, 6), logged: tries.length, outcomes };
         });
         const sends = Object.values(db.sends).filter((x) => x.wsId === cx.ws.id && x.createdAt > since && (isAdminId(cx.ws.id, cx.memberId) || x.memberId === cx.memberId));
-        out.emailCampaigns = sends.slice(-15).map((x) => ({ subject: x.subject, when: new Date(x.createdAt).toISOString().slice(0, 10), to: x.to.length, sent: x.to.filter((r) => r.status === 'sent').length, campaign: db.campaigns[x.campaignId]?.name || null }));
-        if (POSTIZ?.connected(cx.ws)) {
+        out.emailCampaigns = sends.slice(-15).map((x) => ({ subject: x.subject, when: new Date(x.createdAt).toISOString().slice(0, 10), to: x.to.length, sent: x.to.filter((r) => r.status === 'sent').length, campaign: (db.campaigns[x.campaignId] && sees(cx.memberId, 'campaign', db.campaigns[x.campaignId]) && db.campaigns[x.campaignId].name) || null }));
+        if (!admin) out.posts = 'Only owners and admins see the company’s social posts.';
+        else if (POSTIZ?.connected(cx.ws)) {
           try {
             const p = await POSTIZ.posts(cx.ws, since, Date.now() + 30 * 864e5);
             out.posts = { published: p.filter((x) => x.state === 'PUBLISHED').length, scheduled: p.filter((x) => x.state === 'QUEUE').length, failed: p.filter((x) => x.state === 'ERROR').map((x) => `${x.channel}: ${x.error}`).slice(0, 5) };
@@ -992,7 +1013,7 @@ export function agentsModule({ autoEvents = [], sees = () => true, db, save, bro
         const who = a.who || 'all';
         const m = (n, d) => Date.now() - (Number(n) > 0 ? Number(n) : d) * 30.4 * 864e5;
         const links = contactRecords(cx.ws.id);
-        const seen = (r) => db.projects[r.projectId] && PJ.sees(db.projects[r.projectId], cx.memberId);
+        const seen = (r) => jobsOpen(cx) && db.projects[r.projectId] && PJ.sees(db.projects[r.projectId], cx.memberId);
         const jobs = new Map([...links].map(([id, list]) => [id, list.filter(seen).sort((p, q) => jobDate(q) - jobDate(p))[0]]).filter(([, r]) => r)); // contact id → their latest job or deal they can see
         const out = [];
         for (const c of Object.values(db.contacts)) {
@@ -1095,6 +1116,7 @@ export function agentsModule({ autoEvents = [], sees = () => true, db, save, bro
         if (!String(a.text || '').trim()) throw new Error('The post has no words.');
         if (/\[[^\]]{2,60}\]/.test(a.text)) throw new Error('The post still has a [placeholder] in it (like a photo note or a link to fill in). Write it without one; say what photo to add in your report instead.');
         if (POSTIZ?.connected(cx.ws)) {
+          socialOnly(cx);
           const chs = POSTIZ.pick(cx.ws, a.channels);
           if (!chs.length) throw new Error(`None of those channels are connected. Connected: ${POSTIZ.usable(cx.ws).map((x) => `${x.name} (${x.kindName})`).join(', ') || 'none'}.`);
           const needs = chs.filter((x) => x.kind.startsWith('instagram'));
@@ -1106,6 +1128,7 @@ export function agentsModule({ autoEvents = [], sees = () => true, db, save, bro
         if (a.link && !/^https:\/\//.test(a.link)) throw new Error('A link must start with https://');
       },
       async run(cx, a) {
+        socialOnly(cx);
         if (!POSTIZ?.connected(cx.ws)) throw new Error('Postiz isn’t connected, so this can’t be posted from Kloomie. Copy it, or ask an owner to connect Postiz in Apps & Integrations.');
         const channels = POSTIZ.pick(cx.ws, a.channels);
         if (!channels.length) throw new Error(`None of those channels are connected in Postiz. Connected: ${POSTIZ.usable(cx.ws).map((x) => `${x.name} (${x.kindName})`).join(', ') || 'none'}.`);
@@ -1158,7 +1181,7 @@ export function agentsModule({ autoEvents = [], sees = () => true, db, save, bro
   // Marketing helpers: a record's list, what counts as won, campaigns by id or name, local times on the team's clock.
   const WON = /\b(won|paid|complete|completed|done|installed|invoiced|accepted|closed won|customer)\b/i;
   const typeOfRec = (r) => db.projects[r.projectId]?.types.find((t) => t.id === r.typeId);
-  const campName = (v) => (db.campaigns[v]?.name || v || '').toString().slice(0, 60);
+  const campName = (v) => ((db.campaigns[v] ? (seen('campaign', db.campaigns[v]) ? db.campaigns[v].name : '') : v) || '').toString().slice(0, 60);
   function campOf(cx, v, quiet) {
     const all = Object.values(db.campaigns).filter((c) => c.wsId === cx.ws.id && sees(cx.memberId, 'campaign', c));
     const c = all.find((x) => x.id === v) || all.find((x) => same(x.name, v));
@@ -1212,8 +1235,9 @@ export function agentsModule({ autoEvents = [], sees = () => true, db, save, bro
     return guess - off;
   }
   const same = (x, y) => String(x ?? '').trim().toLowerCase() === String(y ?? '').trim().toLowerCase() && String(x ?? '').trim() !== '';
+  const jobsOpen = (cx) => !offWhy(cx.ws, cx.memberId, 'projects');
   const mineTask = (cx, t) => t.assigneeId === cx.memberId || (!t.assigneeId && !t.roleId && t.memberId === cx.memberId) || (t.roleId && (memberOf(cx.ws, cx.memberId)?.roleIds || []).includes(t.roleId));
-  const taskLine = (cx, t) => ({ id: t.id, task: t.text.slice(0, 200), due: t.due || null, priority: t.priority || undefined, for: t.assigneeId ? nameOf(cx.ws, t.assigneeId) : t.roleId ? (cx.ws.roles || []).find((r) => r.id === t.roleId)?.name : undefined, campaign: t.goalId ? db.campaigns[db.goals[t.goalId]?.campaignId]?.name : undefined, about: t.recordId ? recTitle(t.recordId) : undefined, waitingOn: t.blockedBy?.length ? true : undefined });
+  const taskLine = (cx, t) => ({ id: t.id, task: t.text.slice(0, 200), due: t.due || null, priority: t.priority || undefined, for: t.assigneeId ? nameOf(cx.ws, t.assigneeId) : t.roleId ? (cx.ws.roles || []).find((r) => r.id === t.roleId)?.name : undefined, campaign: t.goalId ? db.campaigns[db.goals[t.goalId]?.campaignId]?.name : undefined, about: t.recordId && jobsOpen(cx) && PJ.recordAt(t.recordId, cx.ws.id, cx.memberId) ? recTitle(t.recordId) : undefined, waitingOn: t.blockedBy?.length ? true : undefined });
   // F10: while a step's label is made (safeLabel), only what the person can see is named.
   let labelCx = null;
   const seen = (kind, x) => !!x && (!labelCx || (x.wsId === labelCx.ws.id && sees(labelCx.memberId, kind, x)));
@@ -1239,7 +1263,7 @@ export function agentsModule({ autoEvents = [], sees = () => true, db, save, bro
     return t ? String(r.values[t.primary] ?? '') || 'Untitled' : null;
   };
   // A list's name for one of its records (Deals → deal), for step labels.
-  const singularOf = (project, list) => { const t = Object.values(db.projects).filter((p) => same(p.name, project)).flatMap((p) => p.types).find((x) => same(x.name, list) || same(x.singular, list)); return (t?.singular || list || 'record').toLowerCase(); };
+  const singularOf = (project, list) => { const t = Object.values(db.projects).filter((p) => same(p.name, project) && (!labelCx || (p.wsId === labelCx.ws.id && PJ.sees(p, labelCx.memberId)))).flatMap((p) => p.types).find((x) => same(x.name, list) || same(x.singular, list)); return (t?.singular || list || 'record').toLowerCase(); };
   const primaryOf = (a) => { const v = a.values || {}; return v.Name || v.Title || v.name || v.title || Object.values(v).find((x) => typeof x === 'string') || ''; };
   function who(cx, name) {
     if (!name) return {};
@@ -1274,10 +1298,10 @@ export function agentsModule({ autoEvents = [], sees = () => true, db, save, bro
       else if (f.type === 'date') { if (isDay(v)) out[f.id] = v; else bad.push(k); }
       else if (f.type === 'contact') {
         // Members can't look in Contacts, so their agent can't either: only an owner's or admin's finds one by name.
-        const c = isAdminId(cx.ws.id, cx.memberId) ? Object.values(db.contacts).find((x) => x.wsId === cx.ws.id && (same(x.name, v) || same(x.email, v) || x.id === v)) : null;
+        const c = isAdminId(cx.ws.id, cx.memberId) && !offWhy(cx.ws, cx.memberId, 'contacts') ? Object.values(db.contacts).find((x) => x.wsId === cx.ws.id && (same(x.name, v) || same(x.email, v) || x.id === v)) : null;
         if (c) out[f.id] = c.id; else bad.push(`${k} (${isAdminId(cx.ws.id, cx.memberId) ? 'save the contact first' : 'only owners and admins pick contacts'})`);
       }
-      else if (f.type === 'link') out[f.id] = (Array.isArray(v) ? v : [v]).map((x) => (db.records[x]?.wsId === cx.ws.id ? x : Object.values(db.records).find((r) => r.typeId === f.target && (same(recTitle(r.id), x) || Object.values(r.values).some((y) => typeof y === 'string' && y.includes('@') && same(y, x))))?.id)).filter(Boolean);
+      else if (f.type === 'link') out[f.id] = (Array.isArray(v) ? v : [v]).map((x) => (PJ.recordAt(String(x), cx.ws.id, cx.memberId) ? x : Object.values(db.records).find((r) => r.typeId === f.target && r.wsId === cx.ws.id && PJ.sees(db.projects[r.projectId], cx.memberId) && (same(recTitle(r.id), x) || Object.values(r.values).some((y) => typeof y === 'string' && y.includes('@') && same(y, x))))?.id)).filter(Boolean);
       else if (f.type === 'checklist') out[f.id] = { items: (Array.isArray(v) ? v : String(v).split('\n')).map((x) => (typeof x === 'object' ? { text: cleanText(x.text, 300), done: !!x.done } : { text: cleanText(String(x).replace(/^[-*\s[\]x]+/i, ''), 300) })).filter((x) => x.text).slice(0, 60) };
       else out[f.id] = String(v).slice(0, 8000);
     }
@@ -1304,6 +1328,7 @@ export function agentsModule({ autoEvents = [], sees = () => true, db, save, bro
       execute: 'Make routine changes yourself (tasks, calendar time, records, notes, docs). Emails are drafted for the person to approve; nothing is ever sent without them.',
       automate: 'Make routine changes yourself (tasks, calendar time, records, notes, docs). Emails are drafted for the person to approve; nothing is ever sent without them.',
     }[level];
+    const shut = [...new Set(a.tools.map((k) => barred(ws, memberId, k)).filter(Boolean))];
     const team = ws.members.map((m) => `${m.name}${m.id === memberId ? ' (the person you work for)' : ''}${m.role === 'owner' ? ', owner' : m.role === 'admin' ? ', admin' : ''}${(m.roleIds || []).length ? ': ' + m.roleIds.map((id) => (ws.roles || []).find((r) => r.id === id)?.name).filter(Boolean).join(', ') : ''}`).join('; ');
     return [
       `You are the ${a.name} for ${me?.name || 'the owner'} at ${ws.name}, inside Kloomie, their work app. ${a.purpose}`,
@@ -1312,6 +1337,7 @@ export function agentsModule({ autoEvents = [], sees = () => true, db, save, bro
       `The team: ${team}.`,
       `How you work: look before you act (read the day, tasks, records you need), then do the work with your tools so it lands in Kloomie as real tasks, calendar time, records and docs, not just advice. Don’t duplicate: check whether a task, record or contact already exists before making one. Use names exactly as the tools give them. Never invent facts, prices, customers or commitments; where something is missing, say so in your report or ask. ${allowed} You can’t delete anything.`,
       coordinated ? 'You are one of the specialists on this request (Chief of Staff, Client & Sales Manager, Operations Manager, Marketing Manager). Do your part only; use hand_off if another specialist must do something that is theirs.' : 'If part of the request belongs to another specialist (time and priorities: chief; individual customers and sales: sales; delivery, jobs and logistics: ops; marketing, campaigns, posts and reviews: marketing), use hand_off for that part.',
+      shut.length ? `Not open to ${me?.name || 'the person'}, so not to you:\n${shut.map((w) => '- ' + w).join('\n')}\nDon’t work around these; if the request needs one, say so in your report.` : '',
       a.rules ? `How you do this job well:\n${a.rules.map((r) => '- ' + r).join('\n')}` : '',
       prefs.instructions ? `Standing instructions from ${me?.name || 'the person'} for you:\n${prefs.instructions}` : '',
       'The team keeps templates (find_templates): its own emails, texts, replies, social posts and paperwork. Before writing one of those, look for a template that fits and start from it, filling in the details; when the person will send the same thing again and again, offer to save it as a template (save_template).',
@@ -1351,7 +1377,7 @@ export function agentsModule({ autoEvents = [], sees = () => true, db, save, bro
     news(x);
     // No picture key: no picture tool, so it doesn't try (and it's told why, below).
     const pics = canPicture(ws.id, x.memberId);
-    const tools = a.tools.filter((k) => k !== 'make_image' || pics).map((k) => ({ name: k, description: TOOLS[k].description, parameters: TOOLS[k].parameters }));
+    const tools = a.tools.filter((k) => !barred(ws, x.memberId, k) && (k !== 'make_image' || pics)).map((k) => ({ name: k, description: TOOLS[k].description, parameters: TOOLS[k].parameters }));
     if (x.parts.length < MAX_PARTS) tools.push({ name: 'hand_off', ...HANDOFF });
     const exec = async (name, args) => {
       if (x.status === 'cancelled') throw Object.assign(new Error('The person stopped this assignment.'), { stop: true });
@@ -1368,6 +1394,13 @@ export function agentsModule({ autoEvents = [], sees = () => true, db, save, bro
       }
       const tool = a.tools.includes(name) && TOOLS[name];
       if (!tool) throw new Error('Not one of your tools.');
+      const no = barred(ws, x.memberId, name);
+      if (no) {
+        // Refused before its label is made, so nothing the person can't see is named.
+        part.steps.push({ id: rid(6), tool: name, kind: tool.kind, label: cleanText(`Not allowed: ${name.replace(/_/g, ' ')}`, 200), status: 'failed', error: no, at: Date.now() });
+        news(x);
+        throw new Error(no);
+      }
       const step = { id: rid(6), tool: name, kind: tool.kind, label: cleanText(safeLabel(tool, args, cx), 200), why: cleanText(args.why, 300), at: Date.now() };
       if (tool.kind === 'read') {
         part.steps.push(step);
@@ -1437,6 +1470,8 @@ export function agentsModule({ autoEvents = [], sees = () => true, db, save, bro
   async function applyStep(x, cx, step, part) {
     const tool = TOOLS[step.tool];
     try {
+      const no = barred(cx.ws, cx.memberId, step.tool);
+      if (no) throw new Error(no);
       tool.check?.(cx, step.args || {});
       const out = await tool.run(cx, step.args || {}, part);
       if (out.held) {
@@ -1725,7 +1760,7 @@ Reply with JSON only: {"summary":"one line on the plan","parts":[{"agent":"chief
         } else if (body.do === 'skip' && s.status === 'proposed') s.status = 'skipped';
         else if (body.do === 'undo' && s.status === 'done' && s.undo?.postiz) {
           // A scheduled post comes out of Postiz before it goes.
-          try { for (const id of s.undo.postiz) await POSTIZ.remove(cx.ws, id); s.status = 'undone'; s.undoneAt = Date.now(); s.error = null; } catch (e) { s.error = cleanText(e.message, 300); }
+          try { socialOnly(cx); for (const id of s.undo.postiz) await POSTIZ.remove(cx.ws, id); s.status = 'undone'; s.undoneAt = Date.now(); s.error = null; } catch (e) { s.error = cleanText(e.message, 300); }
         } else if (body.do === 'undo' && s.status === 'done' && s.undo) {
           const r = await cx.call(s.undo.method, s.undo.path, s.undo.body);
           if (r.status === 202 && r.body?.pending) s.error = cleanText(r.body.error, 300);
