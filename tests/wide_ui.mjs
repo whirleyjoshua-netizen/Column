@@ -63,7 +63,8 @@ try {
   await A.ev(`document.querySelector('#tabs [data-tab=docs]').click(); true`);
   await A.until(`document.querySelectorAll('#tool .doc-row').length >= 3`);
   w = await span('#tool .docs-list'); ok(w >= 90, `Docs spans the page (${w}%)`);
-  c = await cols('#tool .doc-row'); ok(c >= 2, `with docs side by side (${c} in the first row)`);
+  // One doc a line, in columns, since 2026-11-22 (two uneven columns of docs looked untidy; Icons is the grid).
+  c = await cols('#tool .doc-row'); ok(c === 1, `one doc a line (${c} in the first row)`);
   await A.ev(`document.querySelector('#tool .df-switch [data-df=folders]').click(); true`);
   await A.until(`!!document.querySelector('#tool .dir-crumbs')`);
   w = await span('#tool .dir-body'); ok(w >= 90, `Folders spans the page (${w}%)`);

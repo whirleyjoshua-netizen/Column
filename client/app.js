@@ -84,6 +84,8 @@
     trash: svg('<path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/>'),
     close: svg('<path d="M6 6l12 12M18 6L6 18"/>'),
     folder: svg('<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>'),
+    rows: svg('<path d="M8 6h13M8 12h13M8 18h13M3.5 6h.01M3.5 12h.01M3.5 18h.01"/>'),
+    tiles: svg('<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>'),
     music: svg('<path d="M9 18V5l11-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="17" cy="16" r="3"/>'),
     left: svg('<path d="M15 18l-6-6 6-6"/>'),
     right: svg('<path d="M9 18l6-6-6-6"/>'),
@@ -14545,6 +14547,29 @@
       h('button', { class: 'icon-btn', html: I.more, title: 'Folder options', 'aria-label': 'Folder options', onclick: (e) => { e.stopPropagation(); dirMenu(d, e.currentTarget, row); } }));
     return row;
   }
+  // Folders in Icons (2026-11-22): a big folder with its name under it. Cards still drag onto it (it has data-dir).
+  function dirTile(d) {
+    const n = dirCount(d.id), kids = dirKids(d.id).length;
+    const el = h('div', { class: 'dir-tile', 'data-dir': d.id, tabindex: '0', role: 'button', title: d.name, onclick: (e) => !e.target.closest('input, button') && openFolder(d.id), onkeydown: (e) => e.key === 'Enter' && e.target === el && openFolder(d.id) },
+      h('span', { class: 'dir-tile-ic', html: I.folder }),
+      h('span', { class: 'dir-name' }, d.name),
+      h('small', {}, [n ? plural(n, 'thing') : kids ? null : 'Empty', kids ? plural(kids, 'folder') : null, !d.parentId && d.private ? 'only me' : null].filter(Boolean).join(' · ')),
+      h('button', { class: 'icon-btn small dir-tile-more', html: I.more, title: 'Folder options', 'aria-label': 'Folder options', onclick: (e) => { e.stopPropagation(); dirMenu(d, e.currentTarget, el); } }));
+    return el;
+  }
+  // What's in a folder, in Icons: a picture's own thumbnail, or a big icon for its kind, with the name under it.
+  const FILE_IC = { image: '🖼️', video: '🎬', audio: '🎵', pdf: '📕', docx: '📘', textfile: '📄', file: '📎', link: '🔗', message: '💬', note: '🗒️', sealed: '🔒' };
+  function fileTile(it) {
+    const k = kind(it);
+    const name = it.type === 'text' ? docTitle(it) : it.name || it.label || shortText(it.text || '', 60) || 'Untitled';
+    const go = () => (it.type === 'text' ? openDoc(it) : it.type === 'sealed' ? sealOpen(it) : openPreview(it));
+    const el = h('div', { class: 'dir-file', 'data-id': it.id, draggable: 'true', tabindex: '0', role: 'button', title: name, onclick: go, onkeydown: (e) => e.key === 'Enter' && e.target === el && go() },
+      h('span', { class: 'dir-file-ic' + (k === 'image' ? ' pic' : '') }, k === 'image' ? h('img', { src: fileUrl(it), alt: '', loading: 'lazy' }) : it.type === 'text' ? (it.icon || h('span', { html: I.doc })) : FILE_IC[k] || '📎'),
+      h('span', { class: 'dir-name' }, name),
+      h('small', {}, ago(it.editedAt || it.createdAt)));
+    wireDrag(el, it);
+    return el;
+  }
   function dirUploads(files) {
     const id = FD.open;
     if (!id || !files.length) return;
@@ -14567,10 +14592,11 @@
       const by = { new: (a, b) => (b.editedAt || b.createdAt) - (a.editedAt || a.createdAt), name: (a, b) => (a.name || a.text || '').localeCompare(b.name || b.text || ''), type: (a, b) => kind(a).localeCompare(kind(b)) || (a.name || '').localeCompare(b.name || '') }[FD.sort];
       const sub = q ? dirFlat().filter(({ d }) => d.name.toLowerCase().includes(q) && (!scope || scope.has(d.id))).map(({ d }) => d) : dirKids(id);
       const ups = id ? [...S.uploads.values()].filter((u) => u.dirId === id) : [];
+      const tiles = DK.view === 'icons';
       body.replaceChildren(...[
-        ...sub.map(dirRow),
+        ...(tiles ? (sub.length || items.length ? [h('div', { class: 'dir-tiles' }, ...sub.map(dirTile), ...[...items].sort(by).map(fileTile))] : []) : sub.map(dirRow)),
         ...ups.map((u) => h('p', { class: 'day-hint' }, `Uploading ${u.name}…`)),
-        items.length ? h('div', { class: 'list dir-list' }, [...items].sort(by).map((it) => {
+        items.length && !tiles ? h('div', { class: 'list dir-list' }, [...items].sort(by).map((it) => {
           const el = cardEl(it);
           if (q && it.dirId !== id) el.querySelector('.sub')?.append(' · in ', dirById(it.dirId)?.name || '');
           return el;
@@ -14586,7 +14612,7 @@
     draw();
     return [
       crumbs,
-      h('div', { class: 'dir-tools' }, search, sorts),
+      h('div', { class: 'dir-tools' }, search, sorts, dkViewSeg()),
       h('div', { class: 'dir-view', 'data-dir': id || null }, body),
       h('div', { class: 'btns dir-foot' },
         h('button', { class: 'add-goal', onclick: () => newFolder(id) }, id ? '+ Folder inside' : '+ New folder'),
@@ -19900,7 +19926,12 @@
   const SIGN_BADGE = { sent: 'Waiting for signature', viewed: 'Opened by signer', signed: 'Signed', expired: 'Signing link expired', declined: 'Signer declined' };
   const docSign = (x) => SG.list.find((y) => y.docId === x.id && SIGN_BADGE[y.status]);
   // The Docs tool: every doc you can see, newest first.
-  const DK = { q: '', open: new Set(), trash: false };
+  // view: List (a line each, in columns) or Icons (a grid of big icons), for Docs and Folders alike; sort: edited or name.
+  // This device remembers both (the owner, 2026-11-22: "like in a traditional pc docs folder").
+  const DK = { q: '', open: new Set(), trash: false, view: store.get('docsView', 'list') === 'icons' ? 'icons' : 'list', sort: store.get('docsSort', 'edited') === 'name' ? 'name' : 'edited' };
+  // The List / Icons switch, shared by Docs and Folders.
+  const dkViewSeg = () => h('div', { class: 'seg dk-view', role: 'group', 'aria-label': 'View' }, [['list', 'List', I.rows], ['icons', 'Icons', I.tiles]].map(([k, l, ic]) =>
+    h('button', { type: 'button', class: DK.view === k ? 'on' : null, 'data-view': k, title: l, 'aria-label': l, 'aria-pressed': String(DK.view === k), html: ic, onclick: () => { if (DK.view === k) return; DK.view = k; store.set('docsView', k); renderTool(true); } })));
   // Docs: starred and recent first, then every doc where it's kept (a folder or a stack), with the pages inside each
   // one under it. Search looks in every page; the trash keeps deleted docs for 30 days.
   function docsTool() {
@@ -19919,30 +19950,48 @@
         docCanEdit(x) ? { label: '🗑 Move to trash', run: () => docTrash(x) } : null,
       ].filter(Boolean));
     };
-    // One doc's row; in the tree, an arrow opens the pages inside it.
+    // One doc's line in List: name, pages inside, when it was edited, in columns that line up. In the tree, an arrow
+    // opens the pages inside it. What's in the doc shows when you hover, not under every line.
     const docRow = (x, { lvl = 0, tree = false } = {}) => {
       const sg = docSign(x);
       const inside = kids.get(x.id) || [];
       const open = DK.open.has(x.id);
-      const sub = tree ? (inside.length ? plural(inside.length, 'page') + ' inside' : '') : pathLine(x);
-      const row = h('div', { class: 'bill doc-row' + (tree ? ' doc-tree' : ''), style: `--in:${lvl}`, 'data-doc': x.id, onclick: () => openDoc(x) },
-        tree ? (inside.length ? h('button', { class: 'doc-arrow' + (open ? ' open' : ''), 'aria-label': open ? 'Hide the pages inside' : 'Show the pages inside', 'aria-expanded': String(open), onclick: (e) => { e.stopPropagation(); if (open) DK.open.delete(x.id); else DK.open.add(x.id); draw(); } }) : h('span', { class: 'doc-arrow none', 'aria-hidden': 'true' })) : null,
+      const sub = tree ? '' : pathLine(x);
+      const row = h('div', { class: 'bill doc-row' + (tree ? ' doc-tree' : ''), style: `--in:${lvl}`, 'data-doc': x.id, title: docSnippet(x) || '', onclick: () => openDoc(x) },
+        tree && inside.length ? h('button', { class: 'doc-arrow' + (open ? ' open' : ''), 'aria-label': open ? 'Hide the pages inside' : 'Show the pages inside', 'aria-expanded': String(open), onclick: (e) => { e.stopPropagation(); if (open) DK.open.delete(x.id); else DK.open.add(x.id); draw(); } }) : h('span', { class: 'doc-arrow-sp' }),
+        h('span', { class: 'doc-glyph', 'aria-hidden': 'true', html: x.icon ? '' : I.doc }),
         h('span', { class: 'bill-name' }, h('span', { class: 'doc-t' }, docStarred(x.id) ? h('span', { class: 'doc-star', title: 'Starred' }, '★ ') : null, x.icon ? h('span', { class: 'doc-ic', 'aria-hidden': 'true' }, x.icon + ' ') : null, docTitle(x)),
-          h('small', {}, [sub, docSnippet(x)].filter(Boolean).join(' · '))),
-        h('span', { class: 'bill-right' }, sg ? h('button', { class: `doc-sign s-${sg.status}`, title: `Sent to ${sg.signer.name}`, onclick: (e) => { e.stopPropagation(); openTool('signs'); } }, SIGN_BADGE[sg.status]) : null,
+          sub ? h('small', {}, sub) : null),
+        h('span', { class: 'doc-pages' }, inside.length ? plural(inside.length, 'page') : ''),
+        h('span', { class: 'bill-right doc-when' }, sg ? h('button', { class: `doc-sign s-${sg.status}`, title: `Sent to ${sg.signer.name}`, onclick: (e) => { e.stopPropagation(); openTool('signs'); } }, SIGN_BADGE[sg.status]) : null,
           h('small', {}, ago(x.editedAt || x.createdAt))),
         h('span', { class: 'doc-acts' },
           docCanEdit(x) ? h('button', { class: 'icon-btn small doc-add', title: 'Add a page inside', 'aria-label': 'Add a page inside ' + docTitle(x), onclick: (e) => { e.stopPropagation(); docAddPageInside(x); } }, '+') : null,
           h('button', { class: 'icon-btn small doc-more', title: 'More', 'aria-label': 'More for ' + docTitle(x), html: I.more, onclick: (e) => rowMenu(e, x) })));
-      return tree && open ? [row, ...inside.flatMap((k) => docRow(k, { lvl: lvl + 1, tree: true }))] : [row];
+      return tree && open ? [row, ...sorted(inside).flatMap((k) => docRow(k, { lvl: lvl + 1, tree: true }))] : [row];
     };
+    // One doc in Icons: a big page (or its own emoji) with the name under it; a number on it for the pages inside.
+    const docTile = (x) => {
+      const sg = docSign(x);
+      const inside = kids.get(x.id) || [];
+      return [h('div', { class: 'doc-row doc-tile', 'data-doc': x.id, title: [docTitle(x), docSnippet(x)].filter(Boolean).join('\n'), tabindex: '0', role: 'button', onclick: () => openDoc(x), onkeydown: (e) => e.key === 'Enter' && e.target === e.currentTarget && openDoc(x) },
+        h('span', { class: 'doc-tile-ic', ...(x.icon ? {} : { html: I.doc }) }, x.icon || null, inside.length ? h('span', { class: 'doc-tile-n', title: plural(inside.length, 'page') + ' inside' }, String(inside.length)) : null),
+        h('span', { class: 'doc-t' }, docStarred(x.id) ? h('span', { class: 'doc-star', title: 'Starred' }, '★ ') : null, docTitle(x)),
+        h('small', {}, sg ? SIGN_BADGE[sg.status] : ago(x.editedAt || x.createdAt)),
+        h('button', { class: 'icon-btn small doc-more', title: 'More', 'aria-label': 'More for ' + docTitle(x), html: I.more, onclick: (e) => rowMenu(e, x) }))];
+    };
+    const sorted = (docs) => (DK.sort === 'name' ? [...docs].sort((a, b) => docTitle(a).localeCompare(docTitle(b), undefined, { numeric: true, sensitivity: 'base' })) : docs);
+    const icons = () => DK.view === 'icons';
+    // A section: its docs as lines, or as a grid of tiles.
+    const section = (docs, tree) => (icons() ? [h('div', { class: 'doc-tiles' }, sorted(docs).flatMap(docTile))] : sorted(docs).flatMap((x) => docRow(x, { tree })));
     const head = (t) => h('h4', { class: 'docs-h' }, t);
     const draw = () => {
       if (DK.trash) return drawTrash();
+      list.className = 'docs-list ' + (icons() ? 'dk-icons' : 'dk-list');
       const s = DK.q.trim().toLowerCase();
       if (s) {
         const hits = all.filter((x) => x.text.toLowerCase().includes(s) || docTitle(x).toLowerCase().includes(s)).slice(0, 200);
-        return list.replaceChildren(...(hits.length ? hits.flatMap((x) => docRow(x)) : [h('p', { class: 'day-hint' }, 'No doc has that in it.')]));
+        return list.replaceChildren(...(hits.length ? section(hits, false) : [h('p', { class: 'day-hint' }, 'No doc has that in it.')]));
       }
       if (!all.length) return list.replaceChildren(h('p', { class: 'day-hint' }, 'No docs yet. Start one: a plan, a script, meeting notes, a process to follow. Pages can go inside pages, like a handbook.'));
       const stars = (S.me?.stars || []).map(docById).filter(Boolean);
@@ -19954,11 +20003,12 @@
         (groups.get(key) || groups.set(key, []).get(key)).push(x);
       }
       list.replaceChildren(
-        ...(stars.length ? [head('Starred'), ...stars.flatMap((x) => docRow(x))] : []),
-        ...(all.length > 6 ? [head('Recent'), ...all.slice(0, 5).flatMap((x) => docRow(x))] : []),
-        ...[...groups.entries()].sort((a, b) => a[0].localeCompare(b[0])).flatMap(([where, docs]) => [head(where), ...docs.flatMap((x) => docRow(x, { tree: true }))]));
+        ...(stars.length ? [head('Starred'), ...section(stars, false)] : []),
+        ...(all.length > 6 && DK.sort === 'edited' ? [head('Recent'), ...(icons() ? [h('div', { class: 'doc-tiles' }, all.slice(0, 5).flatMap(docTile))] : all.slice(0, 5).flatMap((x) => docRow(x)))] : []),
+        ...[...groups.entries()].sort((a, b) => a[0].localeCompare(b[0])).flatMap(([where, docs]) => [head(where), ...section(docs, true)]));
     };
     const drawTrash = async () => {
+      list.className = 'docs-list dk-list';
       list.replaceChildren(h('p', { class: 'day-hint dv-loading' }, 'Opening the trash…'));
       let rows;
       try { rows = await api('GET', '/trash'); } catch (e) { return list.replaceChildren(h('p', { class: 'day-hint' }, e.message)); }
@@ -19972,13 +20022,24 @@
             h('button', { class: 'btn small danger trash-gone', 'data-label': '1', onclick: (ev) => { ev.stopPropagation(); confirmClick(ev.currentTarget, async () => { try { await api('DELETE', '/trash/' + e.id); toast('Deleted for good'); draw(); } catch (er) { toast(er.message); } }); } }, 'Delete for good'))))
           : [h('p', { class: 'day-hint' }, 'The trash is empty.')]));
     };
+    // Under the search, how they're sorted (the List / Icons switch is beside Trash). In List the sort is the column headings, as on
+    // a computer (Name, Pages, Edited); in Icons it's Name or Edited.
+    const setSort = (k) => { if (DK.sort === k) return; DK.sort = k; store.set('docsSort', k); renderTool(true); };
+    const docsBar = () => h('div', { class: 'dk-bar' },
+      icons() ? h('div', { class: 'seg dir-sort dk-sort' }, [['edited', 'Edited'], ['name', 'Name']].map(([k, l]) => h('button', { type: 'button', class: DK.sort === k ? 'on' : null, 'data-sort': k, onclick: () => setSort(k) }, l)))
+        : h('div', { class: 'dk-cols' },
+          h('button', { type: 'button', class: 'dk-col-name' + (DK.sort === 'name' ? ' on' : ''), 'data-sort': 'name', 'aria-pressed': String(DK.sort === 'name'), onclick: () => setSort('name') }, 'Name', DK.sort === 'name' ? ' ↓' : ''),
+          h('span', { class: 'dk-col-pages' }, 'Pages'),
+          h('button', { type: 'button', class: 'dk-col-when' + (DK.sort === 'edited' ? ' on' : ''), 'data-sort': 'edited', 'aria-pressed': String(DK.sort === 'edited'), onclick: () => setSort('edited') }, 'Edited', DK.sort === 'edited' ? ' ↓' : '')));
     draw();
     return [
       h('div', { class: 'dir-tools' },
         DK.trash ? h('button', { class: 'btn small', onclick: () => { DK.trash = false; renderTool(); } }, '← All docs') : h('input', { type: 'search', class: 'dir-search', value: DK.q, placeholder: 'Search docs', 'aria-label': 'Search docs', oninput: (e) => { DK.q = e.target.value; draw(); } }),
         DK.trash ? h('b', { class: 'docs-trash-h' }, 'Trash') : h('button', { class: 'btn primary-btn', onclick: () => newDoc() }, '+ New doc'),
         DK.trash ? null : h('button', { class: 'btn small docs-import', title: 'Bring in pages from Notion', onclick: notionSheet }, 'Import'),
-        DK.trash ? null : h('button', { class: 'btn small docs-trash', title: 'Deleted docs, for 30 days', onclick: () => { DK.trash = true; renderTool(); } }, '🗑 Trash')),
+        DK.trash ? null : h('button', { class: 'btn small docs-trash', title: 'Deleted docs, for 30 days', onclick: () => { DK.trash = true; renderTool(); } }, '🗑 Trash'),
+        DK.trash ? null : dkViewSeg()),
+      DK.trash ? null : docsBar(),
       list,
     ];
   }
