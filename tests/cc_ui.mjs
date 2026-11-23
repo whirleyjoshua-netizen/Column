@@ -120,12 +120,14 @@ try {
   await A.ev(`document.querySelector('#sheet [aria-label=Close]').click(); true`);
   // Plan, Resources, Activity keep the old page's parts.
   await tabTo('plan');
-  ok(await A.ev(`document.querySelectorAll('#camps .cc-body .goal').length === 5 && [...document.querySelectorAll('#camps .cc-card-h b')].some((x) => x.textContent === 'Targets') && !!${T('.cc-team')}`), 'Plan: the phases in order, the targets, and the team and roles');
+  ok(await A.ev(`!!${T('.cc-planner')} && document.querySelectorAll('#camps .cc-ptile.phase').length === 4`), 'Plan: the planner, with the four phases (since 2026-11-22; the target and the team are on Overview)');
   await tabTo('resources');
   ok(await A.ev(`[...document.querySelectorAll('#camps button')].some((b) => b.textContent.startsWith('Files')) && [...document.querySelectorAll('#camps button')].some((b) => b.textContent.startsWith('Notes')) && [...document.querySelectorAll('#camps button')].some((b) => b.textContent.startsWith('#'))`), 'Resources: the feed, Files and Notes');
   await tabTo('activity');
   ok(await A.ev(`[...document.querySelectorAll('#camps button')].some((b) => b.textContent === 'Log a call or email') && [...document.querySelectorAll('#camps button')].some((b) => b.textContent.startsWith('Write a report')) && [...document.querySelectorAll('#camps .cc-hist-row')].some((x) => x.textContent.includes('Pull last month’s leads'))`), 'Activity: the log, Write a report, and what was recently done');
-  // Pulse.
+  // Pulse: from its button (2026-11-22).
+  await A.ev(`${T('.cc-pulse-btn')}.click(); true`);
+  await A.until(`!!document.querySelector('#camps .cc-pulse')`);
   ok(await A.ev(`${T('.cc-pulse')}.textContent.includes('Blockers') && [...document.querySelectorAll('#camps .cc-idea p')].some((p) => p.textContent.includes('nobody on them'))`), 'Pulse: blockers, overdue, and what to do next');
   await A.ev(`[...document.querySelectorAll('#camps .cc-idea')].find((x) => x.textContent.includes('nobody on them')).querySelector('button').click(); true`);
   ok(await A.until(`${T('.cc-body')}?.dataset.tab === 'work'`), '“Assign them” takes you to the work');

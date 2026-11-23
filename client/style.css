@@ -4778,3 +4778,94 @@ button.cct-task:hover { background: var(--card-hover); }
 }
 button.td-dep { border: 0; font: inherit; font-size: 12.5px; cursor: pointer; }
 button.td-dep:hover { background: color-mix(in srgb, #4ea1ff 24%, transparent); }
+
+/* ---------- The campaign page, simpler (the owner, 2026-11-22: "too busy"). ----------
+   The numbers are one thin line; the Pulse opens beside the page from its button; Plan is three columns (saved things,
+   the plan as a tree of tiles, a task's panel); tasks are small rounded tiles with their status down the left edge. */
+.camp-view.cc .cc-kpis { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 18px; background: none; border: 0; border-radius: 0; padding: 2px 0 0; grid-template-columns: none; }
+.camp-view.cc .cc-kpi { display: inline-flex; align-items: baseline; gap: 5px; padding: 0; border: 0; background: none; }
+.camp-view.cc .cc-kpi b { display: inline; font-size: 14px; font-weight: 700; line-height: 1.4; }
+.camp-view.cc .cc-kpi small { display: inline; font-size: 13px; }
+.camp-view.cc button.cc-kpi:hover small { color: var(--text); text-decoration: underline; }
+.camp-view.cc .cc-kpi-bar { flex: 1 1 120px; max-width: 220px; padding: 0; align-self: center; }
+.cc-pulse-btn { position: relative; display: inline-flex; align-items: center; gap: 6px; }
+.cc-pulse-btn.on { border-color: var(--accent); color: var(--accent); }
+.cc-pulse-n { min-width: 17px; height: 17px; padding: 0 5px; border-radius: 9px; background: var(--accent); color: #fff; font-size: 11px; font-weight: 700; line-height: 17px; text-align: center; }
+.camp-view.cc > .cc-pulse { position: fixed; top: 0; right: 0; bottom: 0; z-index: 60; width: min(340px, 100vw); overflow-y: auto; border-radius: 0; border: 0; border-left: 1px solid var(--line); box-shadow: -10px 0 30px rgb(0 0 0 / .12); padding: 16px; animation: ccPulseIn .16s ease-out; }
+@keyframes ccPulseIn { from { transform: translateX(24px); opacity: 0; } to { transform: none; opacity: 1; } }
+.cc-pulse-h { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+/* Plan: three columns. */
+.cc-planner { display: grid; grid-template-columns: 220px minmax(0, 1fr) 320px; gap: 0; align-items: start; border: 1px solid var(--line); border-radius: 14px; background: var(--card); min-height: 420px; }
+.cc-plib { align-self: stretch; border-right: 1px solid var(--line); padding: 14px 12px; display: flex; flex-direction: column; gap: 16px; }
+.cc-lib-sec h4 { display: flex; align-items: center; justify-content: space-between; margin: 0 0 6px; font-size: 11.5px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); font-weight: 650; }
+.cc-lib-new { border: 0; background: none; color: var(--muted); font-size: 16px; line-height: 1; padding: 2px 6px; border-radius: 6px; cursor: pointer; }
+.cc-lib-new:hover { background: var(--card-hover); color: var(--text); }
+.cc-lib-item { width: 100%; display: flex; align-items: flex-start; gap: 8px; padding: 6px 8px; border: 0; border-radius: 8px; background: none; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+.cc-lib-item:hover { background: var(--card-hover); }
+.cc-lib-item[draggable=true] { cursor: grab; }
+.cc-lib-ic { flex: none; width: 18px; text-align: center; }
+.cc-lib-t { min-width: 0; font-size: 13px; line-height: 1.3; overflow-wrap: anywhere; }
+.cc-lib-t small { display: block; color: var(--muted); font-size: 11.5px; }
+.cc-lib-empty { display: block; color: var(--muted); font-size: 12px; padding: 2px 8px; }
+.cc-ptree { padding: 16px 18px 20px; display: flex; flex-direction: column; gap: 18px; min-width: 0; }
+.cc-pt-phase { border-radius: 14px; }
+.cc-pt-phase.over { outline: 2px dashed var(--accent); outline-offset: 4px; background: var(--accent-soft); }
+.cc-ptile.phase { width: min(100%, 360px); display: flex; align-items: flex-start; gap: 10px; padding: 12px 12px 12px 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel, var(--card)); color: var(--text); font: inherit; text-align: left; cursor: pointer; box-shadow: 0 1px 2px rgb(0 0 0 / .05); }
+.cc-ptile.phase:hover { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+.cc-ptile.phase.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.cc-ptile.phase.done .cc-pt-n { background: color-mix(in srgb, #1f9d63 18%, transparent); color: #1f9d63; }
+.cc-pt-n { flex: none; width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; font-size: 12.5px; font-weight: 700; background: var(--accent-soft); color: var(--accent); }
+.cc-pt-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.cc-pt-body b { font-size: 15px; line-height: 1.3; }
+.cc-pt-body small { color: var(--muted); font-size: 12px; }
+.cc-pt-open { flex: none; opacity: .55; width: 26px; height: 26px; }
+.cc-pt-open svg { width: 16px; height: 16px; }
+.cc-ptile.phase:hover .cc-pt-open, .cc-pt-open:focus-visible { opacity: 1; }
+/* The line from a phase down to its tasks, and a short one across to each. */
+.cc-pt-kids { margin-left: 26px; padding: 6px 0 0 20px; border-left: 2px solid var(--line); display: flex; flex-direction: column; gap: 6px; }
+.cc-pt-kids.sub { margin-left: 18px; padding-top: 6px; }
+.cc-pt-node { position: relative; }
+.cc-pt-node::before { content: ''; position: absolute; left: -20px; top: 18px; width: 16px; border-top: 2px solid var(--line); }
+.cc-pt-kids.sub > .cc-pt-node::before { top: 16px; }
+.cc-ttile { width: min(100%, 340px); min-height: 36px; display: flex; align-items: center; gap: 8px; padding: 7px 10px 7px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel, var(--card)); color: var(--text); font: inherit; font-size: 13.5px; text-align: left; cursor: pointer; box-shadow: inset 3px 0 0 var(--tt, var(--line)), 0 1px 2px rgb(0 0 0 / .04); }
+.cc-ttile:hover { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+.cc-ttile.on { border-color: var(--accent); box-shadow: inset 3px 0 0 var(--tt, var(--accent)), 0 0 0 1px var(--accent); }
+.cc-pt-kids.sub .cc-ttile { width: min(100%, 300px); min-height: 32px; font-size: 13px; }
+.cc-tt-dot { flex: none; width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--tt, var(--faint, #bbb)); }
+.cc-ttile.done .cc-tt-dot { background: var(--tt); }
+.cc-tt-t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cc-ttile.done .cc-tt-t { color: var(--muted); text-decoration: line-through; }
+.cc-tt-meta { flex: none; display: inline-flex; align-items: center; gap: 6px; }
+.cc-tt-meta small { color: var(--muted); font-size: 11.5px; }
+.cc-tt-meta small.late { color: var(--danger); font-weight: 600; }
+.s-open { --tt: #b8b8c4; } .s-doing { --tt: #4ea1ff; } .s-done { --tt: #1f9d63; } .s-late { --tt: var(--danger); } .s-wait { --tt: #e5a50a; } .s-sign { --tt: #8b7cff; }
+.cc-pt-add { border: 1px dashed var(--line); background: none; color: var(--muted); border-radius: 10px; padding: 6px 12px; font: inherit; font-size: 13px; cursor: pointer; }
+.cc-pt-add:hover { color: var(--accent); border-color: var(--accent); }
+.cc-pt-foot { margin-top: 4px; }
+.cc-ppanel { align-self: stretch; border-left: 1px solid var(--line); padding: 14px 16px; display: flex; flex-direction: column; gap: 12px; }
+.cc-ppanel h3 { margin: 0; font-size: 16px; }
+.cc-ppanel h3 small { color: var(--muted); font-weight: 500; font-size: 13px; }
+.cc-pp-h { display: flex; align-items: center; justify-content: space-between; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+.cc-pp-f { display: flex; flex-direction: column; gap: 5px; font-size: 12.5px; color: var(--muted); }
+.cc-pp-f input, .cc-pp-f select { font-size: 14px; color: var(--text); }
+.cc-pp-name { font-weight: 600; }
+.cc-pp-subs { display: flex; flex-direction: column; gap: 5px; }
+.cc-pp-subs .cc-ttile { width: 100%; }
+.cc-pp-wait { color: #b07d00; }
+.cc-pp-more { align-self: flex-start; padding: 0; font-size: 13px; text-align: left; }
+.cc-pp-hint { color: var(--muted); font-size: 12px; }
+.cc-pp-foot { margin-top: 6px; padding-top: 12px; border-top: 1px solid var(--line); display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.cc-pp-foot .btn { justify-content: center; }
+/* Phone and narrow: one column, the plan first, the panel under it, the saved things last. */
+body:not(.wide) .cc-planner, .split .cc-planner { grid-template-columns: minmax(0, 1fr); }
+body:not(.wide) .cc-plib, .split .cc-plib { order: 3; border-right: 0; border-top: 1px solid var(--line); }
+body:not(.wide) .cc-ppanel, .split .cc-ppanel { order: 2; border-left: 0; border-top: 1px solid var(--line); }
+body:not(.wide) .cc-ptree, .split .cc-ptree { padding: 12px; }
+@media (max-width: 1250px) { body.wide .cc-planner { grid-template-columns: 190px minmax(0, 1fr) 280px; } }
+/* The same tiles on Overview's phases and Work's board. */
+.camp-view.cc .goal .task-row { border: 1px solid var(--line); border-radius: 10px; background: var(--card); padding: 6px 10px 6px 12px; margin: 5px 0; box-shadow: inset 3px 0 0 var(--tt, #b8b8c4); }
+.camp-view.cc .goal .task-row.done { --tt: #1f9d63; }
+.camp-view.cc .goal .task-row.waiting { --tt: #e5a50a; }
+.camp-view.cc .goal .task-row:hover { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+.camp-view.cc .ccb-card { box-shadow: inset 3px 0 0 var(--tt, #b8b8c4), 0 1px 2px rgb(0 0 0 / .04); padding-left: 12px; }
+.camp-view.cc .goal { border-radius: 14px; padding: 12px 12px 8px; }

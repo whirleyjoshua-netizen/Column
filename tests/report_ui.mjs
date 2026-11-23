@@ -82,6 +82,9 @@ try {
   await A.until(`!!${card}`, 8000);
   await A.tap(card);
   // The pulse: the forecast, 9 days after the end date, and what's gone quiet.
+  // It opens from its button since 2026-11-22.
+  await A.until(`!!document.querySelector('#camps .cc-pulse-btn')`, 8000);
+  await A.ev(`document.querySelector('#camps .cc-pulse-btn').click(); true`);
   const fcDay = dk(Date.now() + 11 * DAY);
   const fcLabel = await A.ev(`new Date(${JSON.stringify(fcDay)} + 'T12:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' })`);
   ok(await A.until(`(document.querySelector('#camps .cc-pulse-fc')?.textContent || '').includes(${JSON.stringify(fcLabel)}) && /9 d late/.test(document.querySelector('#camps .cc-pulse-fc').textContent)`, 8000), 'the pulse forecasts the finish at this pace: ' + await A.ev(`document.querySelector('#camps .cc-pulse-fc')?.textContent`));
@@ -108,13 +111,13 @@ try {
   for (let i = 0; i < 30 && !n.length; i++) { await sleep(150); n = (await api('GET', '/state')).tasks.find((x) => x.id === quietOne.id).comments || []; }
   ok(n.length === 1 && /Sam, any news on this/.test(n[0].text), 'Nudge leaves Sam a comment: ' + n[0]?.text);
   ok(await A.until(`document.querySelectorAll('#camps .ccr-stall').length === 2`), 'and it isn’t quiet any more');
-  // In a narrow place (the split, or beside one): the pulse goes under the page instead of squeezing it (a live check).
+  // In a narrow place (the split, or beside one) the page keeps its width: the pulse opens over it from its button
+  // since 2026-11-22, so nothing squeezes it.
   await A.ev(`document.querySelector('#camps').style.flex = '0 0 600px'; true`);
   await sleep(200);
-  ok(await A.ev(`getComputedStyle(document.querySelector('#camps .camp-view.cc')).display === 'block' && document.querySelector('#camps .cc-main').getBoundingClientRect().width > 500 && getComputedStyle(document.querySelector('#camps .cc-pulse')).position === 'static'`), 'at 600px wide the page keeps its width and the pulse sits under it: ' + await A.ev(`Math.round(document.querySelector('#camps .cc-main').getBoundingClientRect().width)`));
+  ok(await A.ev(`getComputedStyle(document.querySelector('#camps .camp-view.cc')).display === 'block' && document.querySelector('#camps .cc-main').getBoundingClientRect().width > 500 && !document.querySelector('#camps .cc-pulse')`), 'at 600px wide the page keeps its width, no pulse squeezing it');
   await A.ev(`document.querySelector('#camps').style.flex = ''; true`);
   await sleep(200);
-  ok(await A.ev(`getComputedStyle(document.querySelector('#camps .camp-view.cc')).display === 'grid'`), 'and beside it again when there’s room');
   // Print.
   await A.ev(`(() => { window.__opened = null; const real = window.open; window.open = (...a) => { const w = real.apply(window, a); if (w) w.print = () => {}; window.__opened = w; return w; }; return true; })()`);
   await A.tap(R('.ccr-print'));

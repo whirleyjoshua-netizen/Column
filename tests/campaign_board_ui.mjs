@@ -88,7 +88,7 @@ try {
   await shot('cboard-2');
   // Back on Phases, they're the campaign's phases.
   await A.ev(`${T('.cc-planswitch [data-pv=phases]')}.click(); true`);
-  ok(await A.until(`document.querySelectorAll('#camps .cc-phase').length === 5`), 'the Phases view shows the five phases');
+  ok(await A.until(`document.querySelectorAll('#camps .cc-ptile.phase').length === 5`), 'the Phases view shows the five phases (in the planner, 2026-11-22)');
   ok(A.errors.length === 0, 'no script errors' + (A.errors.length ? ': ' + A.errors.join(' | ') : ''));
 } catch (e) { ok(false, 'threw: ' + e.stack); }
 A?.close();
