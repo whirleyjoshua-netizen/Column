@@ -5712,6 +5712,7 @@
     'campaign.done': 'A campaign is marked finished', 'campaign.checkin': 'Someone checks in on a campaign', schedule: 'On a schedule',
   };
   const AUTO_CAT = { events: null, tools: {} };
+  const autoWhenLabel = (k) => AUTO_WHEN[k] || AUTO_CAT.events?.find((e) => e.type === k)?.label.replace(/ \(.*\)$/, '') || 'When something happens';
   const autoFilters = (kind) => AUTO_CAT.events?.find((e) => e.type === kind)?.filters || [];
   async function autoCatalog() {
     if (AUTO_CAT.events) return AUTO_CAT;
@@ -6048,6 +6049,15 @@
         st.addEventListener('focus', () => dl.replaceChildren(...names().map((n) => h('option', { value: n }))));
         st.addEventListener('input', () => (t.step = st.value.trim() || null));
         only.push(h('label', {}, 'Step', st), dl);
+      }
+      // One task in that step (2026-11-23): by its name; one picked on the plan also keeps its id, so a rename keeps it.
+      if (fl.includes('task')) {
+        const names = () => [...new Set(S.tasks.filter((x) => { const g = goalById(x.goalId); return g && (!t.campaignId || g.campaignId === t.campaignId) && (!t.step || g.title.trim().toLowerCase() === t.step.trim().toLowerCase()); }).map((x) => x.text))].slice(0, 200);
+        const dl = h('datalist', { id: 'autoTasks' });
+        const tk = h('input', { class: 'auto-task-name', value: (t.taskId && taskById(t.taskId)?.text) || t.task || '', placeholder: 'Any task', list: 'autoTasks', 'aria-label': 'Task' });
+        tk.addEventListener('focus', () => dl.replaceChildren(...names().map((n) => h('option', { value: n }))));
+        tk.addEventListener('input', () => { t.task = tk.value.trim() || null; if (!t.task || (t.taskId && taskById(t.taskId)?.text.trim().toLowerCase() !== t.task.toLowerCase())) t.taskId = null; });
+        only.push(h('label', {}, 'Task', tk), dl, h('small', { class: 'hint' }, 'One task in the step, by its name. Leave it empty for every task in the step.'));
       }
       if (t.kind === 'contact.stage' || t.kind === 'contact.created') {
         const st = h('input', { value: t.stage ? stageLabel(t.stage) : '', placeholder: t.kind === 'contact.stage' ? 'Customer' : 'Any stage', list: 'autoStages' });
@@ -7963,13 +7973,143 @@
   // plan as a tree of tiles, each phase with its tasks hanging under it on a line and subtasks under those. Right: the
   // task picked, to change in place, or Add task for the phase picked; Add tool and Add automation under it (not built
   // yet: they say so).
+  // Automations right from the plan (2026-11-23): for one phase, or one task in it. A task's automation is narrowed
+  // to it by its id (so renaming it keeps it) and its name in its step (so a saved campaign's next run gets it too).
+  const PA_TASK_KINDS = ['task.opened', 'task.done', 'task.reopened'];
+  const paSame = (a, b) => String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
+  const paInCamp = (x, c) => !x.trigger?.campaignId || x.trigger.campaignId === c.id || x.trigger.campaignId === c.parentId;
+  const autosHere = (c, g, t) => (S.automations || []).filter((x) => x.trigger?.step && paSame(x.trigger.step, g.title) && paInCamp(x, c)
+    && (t ? x.trigger.taskId === t.id || (x.trigger.task && paSame(x.trigger.task, t.text)) : !x.trigger.task && !x.trigger.taskId));
+  const paTrigger = (kind, c, g, t) => ({ kind, campaignId: c.id, step: g.title, ...(t ? { task: t.text, taskId: t.id } : {}) });
+  async function paSave(body) {
+    const x = await api('POST', '/automations', { on: true, ...body });
+    S.automations = [...(S.automations || []).filter((y) => y.id !== x.id), x];
+    renderAutos?.();
+    return x;
+  }
+  // An automation you have, copied onto a phase or a task (dragged from Autos, or picked in the panel). A copy, so the
+  // one you had keeps running where it did.
+  async function copyAutoTo(x, g, t) {
+    const c = g && campById(g.campaignId);
+    if (!c) return;
+    if (t && !PA_TASK_KINDS.includes(x.trigger?.kind)) return toast('That one starts on something other than a task, so it can’t go on one task. Open it to change it.');
+    if (!t && ![...PA_TASK_KINDS, 'task.created', 'step.done'].includes(x.trigger?.kind)) return toast('That one starts on something other than a task or a phase. Open it to change it.');
+    try {
+      await paSave({ name: shortText(`${x.name} · ${t ? t.text : g.title}`, 80), trigger: { ...x.trigger, ...paTrigger(x.trigger.kind, c, g, t) }, actions: x.actions });
+      toast(`Copied onto ${t ? '“' + shortText(t.text, 40) + '”' : g.title}`);
+      renderCamps(true);
+    } catch (e) { toast(e.message); }
+  }
+  function paRecipes(c, g, t) {
+    if (!t) return stepRecipes(c, g);
+    const on = (kind) => paTrigger(kind, c, g, t), nm = (s) => shortText(`${t.text}: ${s}`, 80);
+    return [
+      { id: 't-opens', label: 'Tell whoever it’s for when it opens', name: nm('tell them when it opens'), trigger: on('task.opened'), actions: [{ kind: 'notify', text: 'Your turn: {task} ({step})', to: ['doers'] }] },
+      { id: 't-nudge', label: 'Remind them if it isn’t done 2 days after it opens', name: nm('remind after 2 days'), trigger: on('task.opened'), actions: [{ kind: 'wait', amount: 2, unit: 'days' }, { kind: 'if', when: [{ field: 'done', op: 'is', value: 'no' }], then: [{ kind: 'notify', text: 'Still open: {task} ({step})', to: ['doers'] }], else: [] }] },
+      { id: 't-owners', label: 'Tell the owners when it’s done', name: nm('tell the owners'), trigger: on('task.done'), actions: [{ kind: 'notify', text: '{who} finished {task} ({step})', to: ['owners'] }] },
+      { id: 't-feed', label: 'Post in the campaign’s feed when it’s done', name: nm('post when done'), trigger: on('task.done'), actions: [{ kind: 'post', text: '✅ {task} is done ({campaign})', channelId: 'same' }] },
+    ];
+  }
+  function ccAutoPanel(c, g, t, back) {
+    const box = h('aside', { class: 'cc-ppanel cc-pauto', 'data-for': t ? 'task' : 'phase' });
+    const what = t ? `“${shortText(t.text, 60)}”` : g.title;
+    const opt = (v, l, s) => h('option', { value: v, selected: v === s }, l);
+    const draw = () => {
+      const here = autosHere(c, g, t);
+      const names = new Set(here.map((x) => x.name));
+      const forTasks = t ? 0 : (S.automations || []).filter((x) => x.trigger?.step && paSame(x.trigger.step, g.title) && paInCamp(x, c) && (x.trigger.task || x.trigger.taskId)).length;
+      const make = async (r, b) => { b.disabled = true; try { await paSave({ name: r.name, trigger: r.trigger, actions: r.actions }); toast('Automation on'); renderCamps(true); } catch (e) { toast(e.message); b.disabled = false; } };
+      // Build one here: when, then, what it says.
+      const kinds = t ? [['task.done', 'It’s done'], ['task.opened', 'It opens (what it waits for is done)'], ['task.reopened', 'It’s ticked back to not done']]
+        : [['task.done', 'A task here is done'], ['task.opened', 'A task here opens'], ['step.done', 'The phase is finished']];
+      const when = h('select', { class: 'pa-when', 'aria-label': 'When' }, kinds.map(([v, l]) => opt(v, l, 'task.done')));
+      const members = (S.workspace.members || []).filter((m) => !m.gone);
+      const then = h('select', { class: 'pa-then', 'aria-label': 'Then' }, opt('doers', 'Tell whoever it’s for'), opt('owners', 'Tell the owners'), h('optgroup', { label: 'Tell someone' }, members.map((m) => opt('m:' + m.id, 'Tell ' + m.name))), opt('post', 'Post in the campaign’s feed'), opt('task', 'Make a task'));
+      const say = h('input', { class: 'pa-say', maxlength: 1000, 'aria-label': 'What it says' });
+      const forWho = h('select', { class: 'pa-for', 'aria-label': 'Task for' }, opt('', 'Nobody yet'), opt('who', 'Whoever set it off'), members.map((m) => opt(m.id, m.name)));
+      const wait = h('select', { class: 'pa-wait', 'aria-label': 'Wait' }, opt('0', 'Right away'), opt('1', 'After 1 day'), opt('2', 'After 2 days'), opt('7', 'After a week'));
+      const forRow = h('label', { class: 'cc-pp-f pa-for-row' }, 'For', forWho);
+      const onlyOpen = h('small', { class: 'cc-pp-hint pa-only' }, 'Only if it still isn’t done by then.');
+      const sayFor = () => {
+        const k = when.value, v = then.value, subj = k === 'step.done' ? '{step}' : '{task}';
+        return v === 'task' ? `Follow up: ${subj}` : v === 'post' ? (k === 'step.done' ? '✅ {step} is finished ({campaign})' : `✅ ${subj} is done ({campaign})`)
+          : k === 'task.opened' ? `Your turn: ${subj} ({step})` : k === 'task.reopened' ? `Reopened: ${subj} ({step})` : k === 'step.done' ? '{step} is finished ({campaign})' : `{who} finished ${subj} ({step})`;
+      };
+      let typed = false;
+      say.addEventListener('input', () => (typed = !!say.value.trim()));
+      const sync = () => {
+        const doers = then.querySelector('option[value=doers]');
+        doers.disabled = when.value === 'step.done';
+        if (doers.disabled && then.value === 'doers') then.value = 'owners';
+        forRow.hidden = then.value !== 'task';
+        onlyOpen.hidden = !(when.value === 'task.opened' && wait.value !== '0');
+        if (!typed) say.value = sayFor();
+      };
+      [when, then, wait].forEach((s) => s.addEventListener('change', sync));
+      const draft = () => {
+        const text = say.value.trim(), v = then.value;
+        let act = v === 'post' ? { kind: 'post', text, channelId: 'same' } : v === 'task' ? { kind: 'task', text, assignee: forWho.value, dueIn: null, campaign: '' }
+          : { kind: 'notify', text, to: [v.startsWith('m:') ? v.slice(2) : v] };
+        const days = Number(wait.value);
+        const acts = !days ? [act] : when.value === 'task.opened' ? [{ kind: 'wait', amount: days, unit: 'days' }, { kind: 'if', when: [{ field: 'done', op: 'is', value: 'no' }], then: [act], else: [] }] : [{ kind: 'wait', amount: days, unit: 'days' }, act];
+        const low1 = (x) => x.charAt(0).toLowerCase() + x.slice(1);
+        const wl = low1(kinds.find(([k]) => k === when.value)[1].replace(/ \(.*\)$/, '')), tl = low1(then.selectedOptions[0].textContent);
+        return { name: shortText(`${t ? t.text : g.title}: ${wl}, ${tl}`, 80), trigger: paTrigger(when.value, c, g, t), actions: acts };
+      };
+      const saveBtn = h('button', { type: 'button', class: 'btn primary-btn pa-save', onclick: async (e) => {
+        if (!say.value.trim()) return say.focus();
+        e.currentTarget.disabled = true;
+        try { await paSave(draft()); toast('Automation on'); renderCamps(true); } catch (er) { toast(er.message); e.currentTarget.disabled = false; }
+      } }, 'Turn it on');
+      // Use one you have: a copy, pointed here.
+      const ok = t ? PA_TASK_KINDS : [...PA_TASK_KINDS, 'task.created', 'step.done'];
+      const mine = (S.automations || []).filter((x) => ok.includes(x.trigger?.kind) && !here.includes(x));
+      const pickOne = h('select', { class: 'pa-copy', 'aria-label': 'One you have' }, opt('', mine.length ? 'Pick one you have…' : 'None to copy yet'), mine.slice(0, 60).map((x) => opt(x.id, x.name)));
+      box.replaceChildren(
+        h('div', { class: 'cc-pp-h' }, h('small', {}, t ? g.title : 'Phase'), h('button', { class: 'icon-btn small pa-back', 'aria-label': 'Back', html: I.close, onclick: back })),
+        h('h3', {}, '⚡ Automations', h('small', {}, ' for ' + what)),
+        h('div', { class: 'pa-sec pa-here' }, h('h4', {}, 'Running here'),
+          here.length ? here.map((x) => h('div', { class: 'pa-row', 'data-auto': x.id },
+            h('button', { type: 'button', class: 'pa-open', title: 'Open it in the full builder', onclick: () => autoSheet(x) }, h('span', {}, x.on ? '⚡' : '⏸'), h('span', {}, x.name, h('small', {}, autoWhenLabel(x.trigger.kind) + (x.on ? '' : ' · off')))),
+            h('label', { class: 'toggle', title: x.on ? 'On' : 'Off' }, h('input', { type: 'checkbox', checked: !!x.on, 'aria-label': 'On', onchange: async (e) => { try { const y = await api('PATCH', '/automations/' + x.id, { on: e.target.checked }); S.automations = S.automations.map((z) => (z.id === y.id ? y : z)); renderCamps(true); renderAutos?.(); } catch (er) { e.target.checked = !e.target.checked; toast(er.message); } } }), h('i'))))
+            : h('small', { class: 'cc-pp-hint' }, `Nothing runs for ${t ? 'this task' : 'this phase'} yet.`),
+          forTasks ? h('small', { class: 'cc-pp-hint pa-fortasks' }, `And ${plural(forTasks, 'automation')} for single tasks here: pick a task to see ${forTasks === 1 ? 'it' : 'them'}.`) : null),
+        h('div', { class: 'pa-sec' }, h('h4', {}, 'Ready-made'),
+          h('div', { class: 'pa-recipes' }, paRecipes(c, g, t).map((r) => names.has(r.name) ? null : h('button', { type: 'button', class: 'btn small pa-recipe', 'data-recipe': r.id, onclick: (e) => make(r, e.currentTarget) }, '+ ' + r.label)))),
+        h('div', { class: 'pa-sec pa-build' }, h('h4', {}, 'Build one here'),
+          h('label', { class: 'cc-pp-f' }, 'When', when),
+          h('label', { class: 'cc-pp-f' }, 'Then', then),
+          forRow,
+          h('label', { class: 'cc-pp-f' }, 'It says', say),
+          h('small', { class: 'cc-pp-hint' }, 'Fills in: {task} {step} {campaign} {who}'),
+          h('label', { class: 'cc-pp-f' }, 'When to', wait), onlyOpen,
+          h('div', { class: 'btns' }, saveBtn, h('button', { type: 'button', class: 'link pa-full', onclick: () => autoSheet(null, draft()) }, 'More steps: open the full builder →'))),
+        h('div', { class: 'pa-sec' }, h('h4', {}, 'Use one you have'),
+          h('div', { class: 'row2' }, pickOne, h('button', { type: 'button', class: 'btn small pa-copy-go', disabled: !mine.length, onclick: () => { const x = mine.find((y) => y.id === pickOne.value); if (!x) return pickOne.focus(); copyAutoTo(x, g, t); } }, 'Copy here')),
+          h('small', { class: 'cc-pp-hint' }, `A copy, so the one you have keeps running where it did. Or drag one from Autos onto a ${t ? 'task' : 'phase'}.`)));
+      sync();
+    };
+    if (!S.automations) api('GET', '/automations').then((r) => { S.automations = r; if (box.isConnected) draw(); }).catch(() => {});
+    if (!AUTO_CAT.events) autoCatalog().then(() => box.isConnected && draw()).catch(() => {});
+    draw();
+    return box;
+  }
   function ccTile(t, sel) {
     const [sc, sl] = ccStatus(t);
-    return h('button', { type: 'button', class: `cc-ttile s-${sc}${t.done ? ' done' : ''}${sel === t.id ? ' on' : ''}`, 'data-task': t.id, title: t.text,
-      onclick: () => { K.psel = { ...K.psel, task: t.id, goal: t.goalId || K.psel?.goal }; renderCamps(true); } },
+    const g = goalById(t.goalId), c = g && campById(g.campaignId);
+    const na = c && S.automations ? autosHere(c, g, t).length : 0;
+    const b = h('button', { type: 'button', class: `cc-ttile s-${sc}${t.done ? ' done' : ''}${sel === t.id ? ' on' : ''}`, 'data-task': t.id, title: t.text,
+      onclick: () => { K.psel = { ...K.psel, task: t.id, goal: t.goalId || K.psel?.goal, autos: false }; renderCamps(true); } },
       h('span', { class: 'cc-tt-dot', title: sl, 'aria-label': sl }),
       h('span', { class: 'cc-tt-t' }, t.text),
-      h('span', { class: 'cc-tt-meta' }, t.due ? h('small', { class: isOverdue(t) ? 'late' : '' }, dueLabel(t.due)) : null, t.assigneeId ? avatar(t.assigneeId) : null));
+      h('span', { class: 'cc-tt-meta' }, na ? h('small', { class: 'cc-auto-n', title: plural(na, 'automation') }, '⚡' + na) : null, t.due ? h('small', { class: isOverdue(t) ? 'late' : '' }, dueLabel(t.due)) : null, t.assigneeId ? avatar(t.assigneeId) : null));
+    // An automation dragged from Autos onto a task: a copy for that task.
+    if (c) {
+      b.addEventListener('dragover', (e) => { if (K.pdrag?.auto) { e.preventDefault(); e.stopPropagation(); b.classList.add('over'); } });
+      b.addEventListener('dragleave', () => b.classList.remove('over'));
+      b.addEventListener('drop', (e) => { const x = K.pdrag?.auto; if (!x) return; e.preventDefault(); e.stopPropagation(); K.pdrag = null; b.classList.remove('over'); copyAutoTo(x, g, t); });
+    }
+    return b;
   }
   function ccPlanner(c, phases) {
     if (!K.psel || K.psel.c !== c.id) K.psel = { c: c.id, goal: phases[0]?.id || null, task: null };
@@ -7978,12 +8118,13 @@
     let task = sel.task && taskById(sel.task);
     if (task && goalById(task.goalId)?.campaignId !== c.id) task = null;
     if (!task) sel.task = null;
-    const phase = goalById(task?.goalId) || goalById(sel.goal);
+    const phase = goalById(task?.goalId) || goalById(sel.goal), phaseNow = phase;
     const redraw = () => renderCamps(true);
     // Left: what's saved.
     if (!SV.list && !SV.loading) loadPresets().then(() => renderCamps());
     if (!S.automations && amAdmin() && !K.autoAsk) { K.autoAsk = true; api('GET', '/automations').then((r) => { S.automations = r; renderCamps(); }).catch(() => {}); }
-    const into = async (x) => {
+    const into = async (x, phase = phaseNow) => {
+      if (x.auto) return phase ? copyAutoTo(x.auto, phase, null) : toast('Add a phase first.');
       if (!phase) return toast('Add a phase first, then put things in it.');
       try {
         const r = await api('POST', `/task-presets/${x.id}/use`, { goalId: phase.id });
@@ -8007,7 +8148,7 @@
       libSec('Saved flows', [...bundles.map((x) => libItem('🧩', x.name, plural(x.steps.length, 'task'), () => into(x), x)), ...sops.map((t) => libItem('📖', t.name, 'SOP · ' + plural(t.goals.length, 'phase'), () => sopGuide(t.id)))],
         SV.list ? 'Bundles of saved tasks and your SOPs show here.' : 'Loading…', ['Make a bundle', () => presetSheet(null, 'bundle')]),
       libSec('Tasks', saved.map((x) => libItem('☐', x.name, presetSub(x), () => into(x), x)), SV.list ? 'Tasks you save show here.' : 'Loading…', ['Save a task', () => presetSheet(null, 'task')]),
-      amAdmin() ? libSec('Autos', autos.slice(0, 12).map((x) => libItem('⚡', x.name, x.trigger?.campaignId === c.id ? 'This campaign' : x.on === false ? 'Off' : '', () => autoSheet(x))), S.automations ? 'Automations show here.' : 'Loading…',
+      amAdmin() ? libSec('Autos', autos.slice(0, 12).map((x) => libItem('⚡', x.name, x.trigger?.campaignId === c.id ? 'This campaign' : x.on === false ? 'Off' : '', () => autoSheet(x), { auto: x })), S.automations ? 'Automations show here.' : 'Loading…',
         ['New automation', () => autoSheet(null, { name: `${c.name}: `, trigger: { kind: 'task.done', campaignId: c.id } })]) : null);
     // Middle: the tree.
     const pick = (g) => { K.psel = { c: c.id, goal: g.id, task: null }; K.pfocus = true; redraw(); };
@@ -8021,7 +8162,7 @@
         const gp = goalProgress(g), dn = roots.filter((t) => t.done).length;
         const tile = h('button', { type: 'button', class: 'cc-ptile phase' + (phase?.id === g.id && !task ? ' on' : '') + (gp.frac >= 1 ? ' done' : '') + (goalBlockers(g).length ? ' waiting' : ''), 'data-phase': g.id, onclick: () => pick(g) },
           h('span', { class: 'cc-pt-n' }, String(i + 1)),
-          h('span', { class: 'cc-pt-body' }, h('b', {}, g.title), h('small', {}, `${dn} of ${plural(roots.length, 'task')}${goalBlockers(g).length ? ' · waiting' : ''}`), h('span', { class: 'cc-phase-bar' }, h('i', { style: `width:${Math.round(gp.frac * 100)}%` }))),
+          h('span', { class: 'cc-pt-body' }, h('b', {}, g.title), h('small', {}, `${dn} of ${plural(roots.length, 'task')}${goalBlockers(g).length ? ' · waiting' : ''}`, S.automations && autosHere(c, g, null).length ? h('span', { class: 'cc-auto-n', title: plural(autosHere(c, g, null).length, 'automation') }, ' · ⚡' + autosHere(c, g, null).length) : null), h('span', { class: 'cc-phase-bar' }, h('i', { style: `width:${Math.round(gp.frac * 100)}%` }))),
           h('span', { class: 'icon-btn small cc-pt-open', role: 'button', tabindex: '0', title: 'What it waits for, its job stage, resources and automations', 'aria-label': 'Phase settings for ' + g.title, html: I.more, onclick: (e) => { e.stopPropagation(); stepWindow(c, g); } }));
         const wrap = h('div', { class: 'cc-pt-phase', 'data-id': g.id },
           tile,
@@ -8029,7 +8170,7 @@
         // Drop something saved on a phase: it goes in that phase.
         wrap.addEventListener('dragover', (e) => { if (K.pdrag) { e.preventDefault(); wrap.classList.add('over'); } });
         wrap.addEventListener('dragleave', () => wrap.classList.remove('over'));
-        wrap.addEventListener('drop', (e) => { const x = K.pdrag; K.pdrag = null; wrap.classList.remove('over'); if (!x) return; e.preventDefault(); K.psel = { c: c.id, goal: g.id, task: null }; into(x); });
+        wrap.addEventListener('drop', (e) => { const x = K.pdrag; K.pdrag = null; wrap.classList.remove('over'); if (!x) return; e.preventDefault(); K.psel = { c: c.id, goal: g.id, task: null }; into(x, g); });
         return wrap;
       }) : h('p', { class: 'day-hint' }, 'No phases yet. A phase is a stage of the work, like “Call past customers” then “Book installs”.'),
       h('div', { class: 'goal-btns cc-pt-foot' },
@@ -8040,9 +8181,11 @@
     const whoSel = (v) => h('select', { class: 'cc-pp-who', 'aria-label': 'Who' }, h('option', { value: '' }, 'Nobody yet'), members.map((m) => h('option', { value: m.id, selected: v === m.id }, m.name)));
     const foot = h('div', { class: 'cc-pp-foot' },
       h('button', { type: 'button', class: 'btn cc-pp-tool', onclick: () => toast('Coming soon: put a tool on this step (a form, a checklist, the map…).') }, '🧰 Add tool'),
-      h('button', { type: 'button', class: 'btn cc-pp-auto', onclick: () => toast('Coming soon: an automation for this step, right from here.') }, '⚡ Add automation'));
+      phase && amAdmin() ? h('button', { type: 'button', class: 'btn cc-pp-auto', title: task ? 'Automations for this task' : 'Automations for this phase', onclick: () => { K.psel = { ...sel, autos: true }; redraw(); } }, '⚡ Add automation') : null);
     let panel;
-    if (task) {
+    if (sel.autos && phase && amAdmin()) {
+      panel = ccAutoPanel(c, phase, task, () => { K.psel = { ...sel, autos: false }; redraw(); });
+    } else if (task) {
       const t = task;
       const name = h('input', { class: 'cc-pp-name', value: t.text, maxlength: 500, 'aria-label': 'Task' });
       name.addEventListener('change', () => name.value.trim() && name.value.trim() !== t.text && ccTaskSet(t, { text: name.value.trim() }));
@@ -8312,7 +8455,7 @@
       box.replaceChildren(
         h('p', { class: 'day-hint' }, mine.length ? 'Running for this step:' : 'Nothing runs for this step yet. Start with one of these, or build your own.'),
         mine.length ? h('div', { class: 'res-list' }, mine.map((x) => h('div', { class: 'res-row auto-row-step', 'data-auto': x.id },
-          h('button', { class: 'res-open', onclick: () => { closeSheet(); autoSheet(x); } }, h('span', { class: 'res-ic' }, x.on ? '⚡' : '⏸'), h('span', {}, h('b', {}, x.name), h('small', {}, (AUTO_WHEN[x.trigger.kind] || x.trigger.kind) + (x.on ? '' : ' · off')))),
+          h('button', { class: 'res-open', onclick: () => { closeSheet(); autoSheet(x); } }, h('span', { class: 'res-ic' }, x.on ? '⚡' : '⏸'), h('span', {}, h('b', {}, x.name), h('small', {}, autoWhenLabel(x.trigger.kind) + (x.on ? '' : ' · off')))),
           h('label', { class: 'toggle', title: x.on ? 'On' : 'Off' }, h('input', { type: 'checkbox', checked: !!x.on, onchange: async (e) => { try { const y = await api('PATCH', '/automations/' + x.id, { on: e.target.checked }); S.automations = S.automations.map((z) => (z.id === y.id ? y : z)); draw(); renderAutos(); } catch (er) { e.target.checked = !e.target.checked; toast(er.message); } } }), h('i'))))) : '',
         h('div', { class: 'picks-h' }, 'Ready-made'),
         h('div', { class: 'step-recipes' }, stepRecipes(c, g).map((r) => have.has(r.name) ? null : h('button', { class: 'btn small step-recipe', 'data-recipe': r.id, onclick: (e) => make(r, e.currentTarget) }, '+ ' + r.label))),

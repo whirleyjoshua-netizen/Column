@@ -4856,6 +4856,20 @@ button.td-dep:hover { background: color-mix(in srgb, #4ea1ff 24%, transparent); 
 .cc-pp-hint { color: var(--muted); font-size: 12px; }
 .cc-pp-foot { margin-top: 6px; padding-top: 12px; border-top: 1px solid var(--line); display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .cc-pp-foot .btn { justify-content: center; }
+/* Automations right from the plan (2026-11-23): for a phase or one task. */
+.cc-pauto .pa-sec { display: flex; flex-direction: column; gap: 7px; padding-top: 10px; border-top: 1px solid var(--line); }
+.cc-pauto .pa-sec h4 { margin: 0; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.cc-pauto .pa-row { display: flex; align-items: center; gap: 8px; }
+.cc-pauto .pa-open { flex: 1; min-width: 0; display: flex; gap: 8px; align-items: flex-start; text-align: left; background: none; border: 1px solid var(--line); border-radius: 10px; padding: 7px 10px; font: inherit; font-size: 13px; color: var(--text); cursor: pointer; }
+.cc-pauto .pa-open:hover { border-color: var(--accent); }
+.cc-pauto .pa-open small { display: block; color: var(--muted); font-size: 11.5px; }
+.cc-pauto .pa-recipes { display: flex; flex-direction: column; gap: 6px; }
+.cc-pauto .pa-recipe { justify-content: flex-start; text-align: left; white-space: normal; }
+.cc-pauto .pa-full { padding: 0; font-size: 13px; }
+.cc-pauto .row2 { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
+.cc-pauto [hidden] { display: none; }
+.cc-auto-n { color: var(--accent); font-weight: 600; }
+.cc-ttile.over { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
 /* Phone and narrow: one column, the plan first, the panel under it, the saved things last. */
 body:not(.wide) .cc-planner, .split .cc-planner { grid-template-columns: minmax(0, 1fr); }
 body:not(.wide) .cc-plib, .split .cc-plib { order: 3; border-right: 0; border-top: 1px solid var(--line); }

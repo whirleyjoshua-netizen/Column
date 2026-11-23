@@ -5,14 +5,14 @@
 
 export const TOOLS = { tasks: 'Tasks', contacts: 'Contacts', campaigns: 'Campaigns', projects: 'Boards', money: 'Invoices & Finance', files: 'Files & signatures', texts: 'Texts', docs: 'Docs', map: 'Map', time: 'Time', inventory: 'Inventory', analytics: 'Analytics', github: 'GitHub', companycam: 'CompanyCam', apps: 'Apps & Integrations', bookings: 'Bookings (Calendly, Cal.com)' };
 
-// filters: campaign (in a campaign), step (a campaign step, by its name, so a saved campaign's runs match too), stage (a contact's stage), outcome (a call's), statuses (a check-in's),
+// filters: campaign (in a campaign), step (a campaign step, by its name, so a saved campaign's runs match too), task (one task in that step, by its id or its name), stage (a contact's stage), outcome (a call's), statuses (a check-in's),
 // project (and list), to (a record's stage it moved to), over (an amount at least this, in dollars), date (a
 // record's date field, and how many days before or after it).
 export const EVENTS = [
   { type: 'task.created', tool: 'tasks', label: 'A task is made', words: ['task', 'done', 'step', 'campaign', 'record', 'who'], filters: ['campaign', 'step', 'project'] },
-  { type: 'task.opened', tool: 'tasks', label: 'A task opens (what it waited for is done, so it can be worked)', words: ['task', 'done', 'step', 'campaign', 'record', 'who'], filters: ['campaign', 'step', 'project'] },
-  { type: 'task.done', tool: 'tasks', label: 'A task is done', words: ['task', 'step', 'campaign', 'record', 'who'], filters: ['campaign', 'step', 'project'] },
-  { type: 'task.reopened', tool: 'tasks', label: 'A task is reopened (ticked back to not done)', words: ['task', 'done', 'step', 'campaign', 'record', 'who'], filters: ['campaign', 'step', 'project'] },
+  { type: 'task.opened', tool: 'tasks', label: 'A task opens (what it waited for is done, so it can be worked)', words: ['task', 'done', 'step', 'campaign', 'record', 'who'], filters: ['campaign', 'step', 'task', 'project'] },
+  { type: 'task.done', tool: 'tasks', label: 'A task is done', words: ['task', 'step', 'campaign', 'record', 'who'], filters: ['campaign', 'step', 'task', 'project'] },
+  { type: 'task.reopened', tool: 'tasks', label: 'A task is reopened (ticked back to not done)', words: ['task', 'done', 'step', 'campaign', 'record', 'who'], filters: ['campaign', 'step', 'task', 'project'] },
   { type: 'contact.created', tool: 'contacts', label: 'A contact is added (by hand, a lead form, a card, a text…)', words: ['contact', 'stage', 'who'], filters: ['stage'] },
   { type: 'contact.stage', tool: 'contacts', label: 'A contact’s stage changes', words: ['contact', 'stage', 'who'], filters: ['stage'] },
   { type: 'attempt.logged', tool: 'campaigns', label: 'A call or email is logged', words: ['contact', 'outcome', 'note', 'campaign', 'who'], filters: ['campaign', 'outcome'] },

@@ -3822,6 +3822,17 @@ function applyAutomation(x, body, ws) {
       // One step of a campaign, by name (2026-11-20): a saved campaign's next run has new steps with the same names.
       step: allow.has('step') ? cleanText(t.step, 200) || null : null,
     };
+    // One task (2026-11-23, from the campaign planner): its id, so it still matches once renamed, and its name in its
+    // step, so the task of the same name in a saved campaign's next run matches too. Only a task its maker can see.
+    if (allow.has('task') && (t.taskId || t.task)) {
+      const tk = t.taskId && db.tasks[t.taskId];
+      const mine = tk && tk.wsId === ws.id && canSee({ memberId: x.memberId }, 'task', tk) ? tk : null;
+      const g = mine && db.goals[mine.goalId];
+      x.trigger.task = cleanText(mine ? mine.text : t.task, 500) || null;
+      x.trigger.taskId = mine?.id || null;
+      if (g && !x.trigger.step) x.trigger.step = clipText(g.title, 200);
+      if (!x.trigger.step) x.trigger.task = x.trigger.taskId = null;
+    }
     // On a schedule: weekdays and times, in the team's time zone (the same slots saved campaigns use).
     if (t.kind === 'schedule') {
       const slots = slotList(t.slots);
@@ -3993,6 +4004,7 @@ function autoMatches(t, ctx) {
   if (t.outcome && ctx.outcome !== t.outcome) return false;
   if (t.statuses?.length && !t.statuses.includes(ctx.status)) return false;
   if (t.step && !sameText(ctx.goal?.title, t.step)) return false;
+  if ((t.task || t.taskId) && !(ctx.task && (ctx.task.id === t.taskId || sameText(ctx.task.text, t.task)))) return false;
   return true;
 }
 // The bus: everything that happens in a tool comes through here once. Automations hear it; (webhooks hear their own
