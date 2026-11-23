@@ -4869,3 +4869,23 @@ body:not(.wide) .cc-ptree, .split .cc-ptree { padding: 12px; }
 .camp-view.cc .goal .task-row:hover { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
 .camp-view.cc .ccb-card { box-shadow: inset 3px 0 0 var(--tt, #b8b8c4), 0 1px 2px rgb(0 0 0 / .04); padding-left: 12px; }
 .camp-view.cc .goal { border-radius: 14px; padding: 12px 12px 8px; }
+
+/* ---------- Build your own agent (agent builder step 3) ---------- */
+.ag-new { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; padding: 10px 11px; border: 1px dashed var(--line); border-radius: 10px; background: transparent; color: var(--text); font: inherit; cursor: pointer; }
+.ag-new:hover { background: var(--card-hover); }
+.ag-new .ag-ic { background: transparent; border: 1px dashed var(--line); color: var(--accent); }
+.ag-new .ag-card-t small { color: var(--muted); font-size: 12px; }
+.ag-build-off { margin: 4px 0; }
+.ag-describe { width: 100%; box-sizing: border-box; resize: vertical; font: inherit; }
+.ag-b-row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+.ag-b-icon { flex: none; width: 52px; text-align: center; font-size: 20px; }
+.ag-b-name { flex: 1; min-width: 0; }
+.ag-b-job { margin-top: 0; }
+.ag-job, .ag-b-job { display: block; width: 100%; box-sizing: border-box; resize: vertical; font: inherit; }
+.ag-wf { display: flex; gap: 6px; align-items: flex-start; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.ag-wf-f { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.ag-wf-f input, .ag-wf-f textarea { width: 100%; box-sizing: border-box; font: inherit; }
+.ag-wf-add { margin: 8px 0 2px; }
+.ag-b-foot { margin-top: 18px; }
+.ag-box-f .ag-test { margin-left: auto; }
+.ag-box-f .ag-test + .btn { margin-left: 0; }

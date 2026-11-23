@@ -585,8 +585,8 @@ const toolsOf = (ws) => Object.fromEntries(TOOL_KEYS.map((k) => [k, ws.settings?
 // for members, and whether members see the team's schedule. Off means the server refuses the tool's routes to a
 // member and keeps its data off their devices (memberMay, MEMBER_ROUTES, the /state filter); owners and admins keep
 // everything. A tool off for the whole team (toolsOf) stays off for everyone.
-const MEMBER_DEFAULTS = { contacts: false, projects: true, camps: true, docs: true, chat: true, column: true, templates: true, inventory: true, bills: true, meetings: true, map: true, vault: true, whiteboard: true, teamSchedule: false, teamKpis: false };
-const MEMBER_LABEL = { contacts: 'Contacts', projects: 'Boards', camps: 'Campaigns', docs: 'Folders & Docs', chat: 'Chat', column: 'Stacks', templates: 'Templates', inventory: 'Inventory', bills: 'Finance', meetings: 'Meeting notes', map: 'Map', vault: 'Vault', whiteboard: 'Whiteboard', teamSchedule: 'The team’s schedule', teamKpis: 'The team’s numbers (Analytics)' };
+const MEMBER_DEFAULTS = { contacts: false, projects: true, camps: true, docs: true, chat: true, column: true, templates: true, inventory: true, bills: true, meetings: true, map: true, vault: true, whiteboard: true, teamSchedule: false, teamKpis: false, agentBuild: true };
+const MEMBER_LABEL = { contacts: 'Contacts', projects: 'Boards', camps: 'Campaigns', docs: 'Folders & Docs', chat: 'Chat', column: 'Stacks', templates: 'Templates', inventory: 'Inventory', bills: 'Finance', meetings: 'Meeting notes', map: 'Map', vault: 'Vault', whiteboard: 'Whiteboard', teamSchedule: 'The team’s schedule', teamKpis: 'The team’s numbers (Analytics)', agentBuild: 'Building your own agents' };
 const MEMBER_ROUTES = { contacts: ['contacts', 'contact-groups'], projects: ['projects', 'project-templates', 'records'], camps: ['board'], docs: ['docs', 'folders', 'dirs', 'doc-templates'], column: ['stacks'], templates: ['msg-templates'], inventory: ['inventory'], bills: ['money', 'bills', 'budgets', 'finance'], meetings: ['meetings'], map: ['trips', 'pins', 'zones', 'mileage', 'map'], vault: ['vault'], whiteboard: ['boards'], teamSchedule: ['workload', 'forecast', 'hours'] };
 const memberAccessOf = (ws) => Object.fromEntries(Object.keys(MEMBER_DEFAULTS).map((k) => [k, typeof ws.settings?.memberAccess?.[k] === 'boolean' ? ws.settings.memberAccess[k] : MEMBER_DEFAULTS[k]]));
 const memberMay = (ws, auth, k) => isAdmin(auth) || memberAccessOf(ws)[k] !== false;
@@ -600,7 +600,7 @@ function offWhy(ws, memberId, k) {
 }
 const publicWorkspace = (ws, memberId) => ({
   tools: toolsOf(ws),
-  agentList: AGENT_LIST,
+  agentList: AGENTS_M.listFor(ws.id, memberId), // the built-ins, then this person's own agents
   memberAccess: memberAccessOf(ws),
   billing: publicBilling(ws),
   id: ws.id,
@@ -1525,7 +1525,7 @@ function applyPreset(x, body, ws) {
     // A saved ask for the AI team (2026-11-20): words you send again and again, like "Weekly sales summary".
     if (body.ask !== undefined) x.ask = cleanText(body.ask, 4000);
     if (!x.ask) throw badRequest('Write what to ask.');
-    if (body.agent !== undefined) x.agent = agentDef(body.agent) ? body.agent : 'team';
+    if (body.agent !== undefined) x.agent = AGENTS_M.agentOk(ws.id, x.memberId, body.agent) ? body.agent : 'team';
     x.agent ||= 'team';
     x.name ||= clipText(x.ask, 60);
   } else if (x.kind === 'visit') {
@@ -3918,7 +3918,8 @@ function cleanAction(a, ws, who) {
   }
   if (kind === 'agent') {
     if (ws.settings?.tools?.agents === false) throw badRequest('Your team (agents) is switched off for this team.');
-    const agent = a.agent === 'team' || agentDef(a.agent) ? a.agent : null;
+    // One of the maker's own agents is theirs to use here; never someone else's.
+    const agent = a.agent === 'team' || AGENTS_M.agentOk(ws.id, who, a.agent) ? a.agent : null;
     if (!agent) throw badRequest('Pick who to ask.');
     return { kind, agent, ask: String(a.ask ?? '').replace(/\r\n?/g, '\n').trim().slice(0, 2000), wait: !!a.wait };
   }
@@ -4367,7 +4368,7 @@ async function execSteps(x, ctx, stack, i, log) {
     if (s.kind === 'wait') return { wait: { stack, i: i + 1, ms: s.amount * WAIT_UNITS[s.unit], label: `${s.amount} ${s.amount === 1 ? s.unit.slice(0, -1) : s.unit}` } };
     if (s.kind === 'agent') {
       const inTest = testOf(ctx.campaign?.id ? db.campaigns[ctx.campaign.id] : taskCamp(ctx.task?.id ? db.tasks[ctx.task.id] : null));
-      if (inTest) { log.push(`Test run, logged and not done: ask ${agentName(s.agent)}`); testLog(inTest, 'agent', `Ask ${agentName(s.agent)}: ${clipText(autoFill(s.ask || '', ctx, x.wsId), 300)}`, `Automation “${clipText(x.name, 60)}”`); continue; }
+      if (inTest) { log.push(`Test run, logged and not done: ask ${agentName(s.agent, x)}`); testLog(inTest, 'agent', `Ask ${agentName(s.agent, x)}: ${clipText(autoFill(s.ask || '', ctx, x.wsId), 300)}`, `Automation “${clipText(x.name, 60)}”`); continue; }
       const r = agentStep(x, s, ctx);
       log.push(r.said);
       if (s.wait && r.runId) return { wait: { stack, i: i + 1, ms: AGENT_WAIT_MS, label: `for ${r.name}’s answer`, agentRun: r.runId } };
@@ -4502,7 +4503,7 @@ function autoDescribe(x, a, ctx, ws) {
     case 'doc': return `Write the doc “${fill(a.title) || db.docTemplates[a.templateId]?.name || 'from the template'}”`;
     case 'vault': return `Put a sealed note in ${a.to === 'maker' ? (nameOf(x.memberId) || 'your') + '’s' : a.to === 'who' ? (ctx.who || 'whoever set it off') + '’s' : (nameOf(a.to) || 'someone') + '’s'} vault`;
     case 'stock': { const it = db.invItems[a.itemId]; return `${{ use: 'Use', move: 'Move', receive: 'Receive' }[a.act]} ${a.qty} ${it?.unit || ''} ${it?.name || 'of an item'}${a.act === 'use' ? ' on ' + (ctx.recordName || 'the job') : ''}`; }
-    case 'agent': return `Ask ${agentName(a.agent)}: “${fill(a.ask)}”${a.wait ? ', and wait for the answer ({answer})' : ''}`;
+    case 'agent': return `Ask ${agentName(a.agent, x)}: “${fill(a.ask)}”${a.wait ? ', and wait for the answer ({answer})' : ''}`;
     case 'teams': return `Post in Microsoft Teams: ${clipText(a.text, 60)}`;
     case 'webhook': { let host = a.url; try { host = new URL(a.url).host; } catch {} return `Send what happened to ${host}${a.secretId ? ', with its key' : ''}`; }
     default: return a.kind;
@@ -4529,7 +4530,8 @@ function dryRun(x, ctx, ws, stack, out) {
 // would change follows that (important things always wait for their yes in Your team). It's told what happened (the
 // ask with the words filled in) and that an automation asked. What it does sets nothing off either (it runs inside
 // FLOWING). With "wait for the answer", the steps after it go on once it's done (up to 30 minutes), with {answer}.
-const agentName = (agent) => (agent === 'team' ? 'Your team' : agentDef(agent)?.name || 'the agent');
+// x: the automation, whose maker's own agents have names for it too.
+const agentName = (agent, x) => (agent === 'team' ? 'Your team' : (x ? AGENTS_M.agentOk(x.wsId, x.memberId, agent) && AGENTS_M.agentLabel(x.wsId, x.memberId, agent) : agentDef(agent)?.name) || 'the agent');
 // ---------- an agent pinned to a chat: @mention it there and it answers in the thread ----------
 // It works as whoever asked: their AI key, what they can see, their agents' rules (what waits for their yes). The feed
 // reads the answer, so the agent is told who's in it. Only the asker opens the assignment the answer links to.
@@ -4591,8 +4593,9 @@ function agentAnswer(run) {
 }
 function agentStep(x, a, ctx) {
   const ws = db.workspaces[x.wsId];
-  const name = agentName(a.agent);
+  const name = agentName(a.agent, x);
   if (!memberIn(ws.id, x.memberId)) throw new Error('its maker isn’t on the team any more');
+  if (a.agent !== 'team' && !AGENTS_M.agentOk(ws.id, x.memberId, a.agent)) throw new Error('the agent it asks was deleted');
   if (ws.settings?.tools?.agents === false) throw new Error('Your team (agents) is switched off');
   if (!aiUse(aiOf(ws.id, x.memberId))) throw new Error(`${memberIn(ws.id, x.memberId).name} has no AI key set (Apps & Integrations → AI), so ${name} can’t work`);
   const busy = Object.values(db.agentRuns || {}).filter((r) => r.wsId === ws.id && r.memberId === x.memberId && ['requested', 'planning', 'running'].includes(r.status)).length;
@@ -13134,6 +13137,7 @@ async function removeMember(ws, m, { removed = false } = {}) {
   for (const x of Object.values(db.plans)) if (theirs(x)) delete db.plans[x.id];
   for (const x of Object.values(db.agentRuns || {})) if (theirs(x)) delete db.agentRuns[x.id];
   delete (db.agentPrefs || {})[`${wsId}:${id}`];
+  for (const x of Object.values(db.myAgents || {})) if (theirs(x)) delete db.myAgents[x.id]; // the agents they built
   NEWS.forget(wsId, id);
   for (const x of Object.values(db.exports)) if (theirs(x)) dropExport(x);
   // Passed on: the business keeps these.
@@ -13225,6 +13229,7 @@ async function buildExport(x) {
     plans: (y) => y.memberId === me.id,
     sidekick: (y) => y.memberId === me.id,
     agentRuns: (y) => y.memberId === me.id,
+    myAgents: (y) => y.memberId === me.id,
     projects: (y) => PJ.sees(y, me.id),
     boards: (y) => !y.trashedAt && WB.sees(y, me.id),
     records: (y) => PJ.sees(db.projects[y.projectId], me.id),
