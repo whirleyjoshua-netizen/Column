@@ -58,6 +58,7 @@ try {
   ok(await A.until(`!document.querySelector('#app')?.classList.contains('hidden') && !!document.querySelector('#settingsBtn')`, 20000), 'signed in');
   await A.ev(`document.querySelector('#tabs [data-tab=docs]').click()`);
   await A.tap(menuBtn('Docs'));
+  await sleep(700); await A.ev(`document.querySelector('#docview:not(.hidden) .dv-lib')?.click(); true`); // a computer lands on a doc: All docs is the list
   await A.until(`!!document.querySelector('.docs-import')`);
   await A.tap(`document.querySelector('.docs-import')`);
   ok(await A.until(`document.querySelector('#sheet .sheet h2')?.textContent.includes('Import from Notion') && document.querySelector('#sheet .day-hint')?.textContent.includes('Markdown & CSV')`), 'Import opens, saying how to export from Notion');

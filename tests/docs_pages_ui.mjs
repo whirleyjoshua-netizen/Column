@@ -54,7 +54,7 @@ try {
   await A.until(`location.href.startsWith(${JSON.stringify(APP)}) && document.readyState === 'complete'`, 15000);
   await A.ev(`localStorage.setItem('column.token', ${JSON.stringify(JSON.stringify(a.token))}); location.reload(); true`);
   ok(await A.until(`!document.querySelector('#app')?.classList.contains('hidden') && !!document.querySelector('#settingsBtn')`, 20000), 'signed in');
-  const openDocs = async () => { await A.ev(`document.querySelector('#tabs [data-tab=docs]').click()`); await A.tap(menuBtn('Docs')); return A.until(`!!(${row('Handbook')})`); };
+  const openDocs = async () => { await A.ev(`document.querySelector('#tabs [data-tab=docs]').click()`); await A.tap(menuBtn('Docs')); await sleep(700); await A.ev(`document.querySelector('#docview:not(.hidden) .dv-lib')?.click(); true`); return A.until(`!!(${row('Handbook')})`); }; // a computer lands on a doc: All docs is the list
   ok(await openDocs(), 'Docs lists the handbook');
 
   // "/page" in the handbook makes a page inside it and opens it.

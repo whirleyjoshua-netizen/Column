@@ -3199,7 +3199,7 @@
     apps: { label: 'Apps & Integrations', view: true },
     sidekick: { label: 'Sidekick', ok: () => toolOn('sidekick'), open: () => { SK.open = null; openTool('sidekick'); } },
     // Docs and Folders are the same things (a doc is an item, and folders hold items): one tab, a switch between them.
-    docs: { label: 'Folders & Docs', ok: () => (toolOn('docs') || toolOn('folders')) && memberMay('docs'), open: () => openTool(docsSide()), on: () => toolOpen === 'docs' || toolOpen === 'folders' },
+    docs: { label: 'Folders & Docs', ok: () => (toolOn('docs') || toolOn('folders')) && memberMay('docs'), open: () => docsHome(), on: () => toolOpen === 'docs' || toolOpen === 'folders' },
     projects: { label: 'Boards', ok: () => toolOn('projects') && memberMay('projects'), open: () => showProjects() },
     // Automations (the owner, 2026-11-14): something you build and watch, so it's in Workspace, not Settings. Owners and admins.
     automations: { label: 'Automations', ok: () => amAdmin() },
@@ -19535,6 +19535,7 @@
       onBlock: (id) => { x.block = id; docTellSoon(x); },
     });
     DV.doc = x;
+    store.set('docLast', x.id); // the Folders & Docs tab comes back to it
     view.replaceChildren(
       h('div', { class: 'dv-bar' }),
       h('div', { class: 'dv-body' },
@@ -19799,6 +19800,19 @@
     // Opened from the library: it's still open underneath, with this doc's new title.
     if (toolOpen === 'docs') renderTool();
     if (splitOpen === 'doc') closeSplit(); // a doc in the split goes with it
+  }
+  // The Folders & Docs tab (the owner, 2026-11-22: the list first was "an extra page"). On a computer it lands on a doc
+  // itself, with the Pages tree (Starred, Recent, All docs…) beside it: the last doc you had open, or the newest. The list
+  // is underneath, so Back and All docs go to it. A phone has no Pages tree, and a team with no docs has nothing to open:
+  // both get the list.
+  function docsHome() {
+    const side = docsSide();
+    openTool(side);
+    if (side !== 'docs' || DV.doc || !document.body.classList.contains('wide')) return;
+    const live = (d) => d && d.type === 'text' && !d.trashed;
+    const last = docById(store.get('docLast', null));
+    const doc = live(last) ? last : S.items.filter(live).sort((a, b) => (b.editedAt || b.createdAt) - (a.editedAt || a.createdAt))[0];
+    if (doc) openDoc(doc);
   }
   // From any doc to the library of all of them.
   function docsLibrary() {
