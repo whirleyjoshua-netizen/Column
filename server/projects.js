@@ -343,7 +343,7 @@ export const TEMPLATES = {
   },
 };
 
-export function projectsModule({ proofUrl = () => null, onEvent = null, onPrice = () => {}, canSeeItem = () => true, seal = (x) => x, unseal = (x) => x, db, save, broadcast, rid, hold = null, cleanText, isDay, readJson, send, badRequest, isOwnerId, escHtml, brandOf, logoUrl, teamDay, offline, makeTask, onRecords, onRecordGone, onRecordNews, stageGate = null, allowLocalHooks = false, qrSvg = null, publicUrl = '' }) {
+export function projectsModule({ seesLinked = () => true, proofUrl = () => null, onEvent = null, onPrice = () => {}, canSeeItem = () => true, seal = (x) => x, unseal = (x) => x, db, save, broadcast, rid, hold = null, cleanText, isDay, readJson, send, badRequest, isOwnerId, escHtml, brandOf, logoUrl, teamDay, offline, makeTask, onRecords, onRecordGone, onRecordNews, stageGate = null, allowLocalHooks = false, qrSvg = null, publicUrl = '' }) {
   const bad = (msg) => badRequest(msg);
   db.projects ||= {};
   db.records ||= {};
@@ -543,8 +543,17 @@ export function projectsModule({ proofUrl = () => null, onEvent = null, onPrice 
       last.at = e.at;
       if (last.from === last.to) rec.log.shift();
     } else rec.log = [e, ...(rec.log || [])].slice(0, 300);
-    broadcast(rec.wsId, { type: 'record:log', recordId: rec.id, projectId: rec.projectId, log: (rec.log || []).slice(0, 50) });
+    logNews(rec);
     return e;
+  }
+  // A record's timeline as one person may read it: a line about a task or a logged call they can't see (a private
+  // campaign's) is left out, and so is one whose task or call is gone, since whose it was can't be told. On every path:
+  // the route, what's sent live, the public API and recordStory.
+  const logFor = (rec, memberId) => (rec.log || []).filter((e) => (!e.taskId || (db.tasks[e.taskId] && seesLinked('task', db.tasks[e.taskId], memberId))) && (!e.attemptId || (db.attempts[e.attemptId] && seesLinked('attempt', db.attempts[e.attemptId], memberId))));
+  // Live, each person who sees the project gets their own copy.
+  function logNews(rec) {
+    const ws = db.workspaces[rec.wsId];
+    for (const mb of ws?.members || []) broadcast(rec.wsId, { type: 'record:log', recordId: rec.id, projectId: rec.projectId, log: logFor(rec, mb.id).slice(0, 50), forMember: mb.id });
   }
   // A value as words, for the timeline.
   function words(ws, p, f, v) {
@@ -1680,7 +1689,7 @@ export function projectsModule({ proofUrl = () => null, onEvent = null, onPrice 
         recordGone(rec, auth.member);
         return send(res, 200, { ok: true });
       }
-      if (c === 'log' && m === 'GET') return send(res, 200, rec.log || []);
+      if (c === 'log' && m === 'GET') return send(res, 200, logFor(rec, auth.memberId));
       // Logging a call, email, meeting or note on the record; a follow-up date makes a task.
       if (c === 'log' && m === 'POST') {
         const body = await readJson(req, 20_000);
@@ -1694,15 +1703,15 @@ export function projectsModule({ proofUrl = () => null, onEvent = null, onPrice 
           if (task) e.taskId = task.id;
         }
         save();
-        return send(res, 200, rec.log);
+        return send(res, 200, logFor(rec, auth.memberId));
       }
       if (c === 'log' && m === 'DELETE' && d) {
-        const e = (rec.log || []).find((x) => x.id === d);
+        const e = logFor(rec, auth.memberId).find((x) => x.id === d);
         if (!e || !ACTS.includes(e.kind) || (e.memberId !== auth.memberId && !['owner', 'admin'].includes(auth.role))) return send(res, 403, { error: 'You can only remove calls and notes you logged.' });
         rec.log = rec.log.filter((x) => x !== e);
         save();
-        broadcast(rec.wsId, { type: 'record:log', recordId: rec.id, projectId: rec.projectId, log: rec.log.slice(0, 50) });
-        return send(res, 200, rec.log);
+        logNews(rec);
+        return send(res, 200, logFor(rec, auth.memberId));
       }
       // Sending a quote: a link of its own for the customer. Making it marks a draft as sent.
       if (c === 'share' && t.fields.some((f) => f.type === 'items')) {
@@ -2097,7 +2106,7 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
     const rec = rid_ && db.records[rid_];
     if (!rec || rec.projectId !== p.id || rec.typeId !== t.id) return send(res, 404, { error: 'No record with that id in this list.' });
     if (sub2 === 'timeline') {
-      if (m === 'GET') return send(res, 200, { timeline: (rec.log || []).map(({ memberId, ...e }) => ({ ...e, at: new Date(e.at).toISOString() })) });
+      if (m === 'GET') return send(res, 200, { timeline: logFor(rec, auth.memberId).map(({ memberId, ...e }) => ({ ...e, at: new Date(e.at).toISOString() })) });
       if (m === 'POST') {
         write();
         const body = await readJson(req, 20_000);
@@ -2254,7 +2263,7 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
   const stateFor = (ws, auth) => Object.values(db.projects).filter((p) => p.wsId === ws.id && sees(p, auth.memberId)).map(publicProject);
 
   // A record told in words, for the AI: its fields, what links to it, its timeline and open tasks.
-  function recordStory(rec, ws, sees1 = null) { // sees1(kind, x): the reader's sight of the tasks and logged attempts it quotes
+  function recordStory(rec, ws, sees1 = null) { // sees1(kind, x): the reader's sight of the tasks and logged attempts it quotes (every caller passes it)
     const p = db.projects[rec.projectId];
     const t = p && typeOf(p, rec.typeId);
     if (!t) return '';

@@ -587,7 +587,7 @@ const toolsOf = (ws) => Object.fromEntries(TOOL_KEYS.map((k) => [k, ws.settings?
 // everything. A tool off for the whole team (toolsOf) stays off for everyone.
 const MEMBER_DEFAULTS = { contacts: false, projects: true, camps: true, docs: true, chat: true, column: true, templates: true, inventory: true, bills: true, meetings: true, map: true, vault: true, whiteboard: true, teamSchedule: false, teamKpis: false };
 const MEMBER_LABEL = { contacts: 'Contacts', projects: 'Boards', camps: 'Campaigns', docs: 'Folders & Docs', chat: 'Chat', column: 'Stacks', templates: 'Templates', inventory: 'Inventory', bills: 'Finance', meetings: 'Meeting notes', map: 'Map', vault: 'Vault', whiteboard: 'Whiteboard', teamSchedule: 'The team’s schedule', teamKpis: 'The team’s numbers (Analytics)' };
-const MEMBER_ROUTES = { contacts: ['contacts', 'contact-groups'], projects: ['projects', 'project-templates'], camps: ['board'], docs: ['docs', 'folders', 'dirs', 'doc-templates'], column: ['stacks'], templates: ['msg-templates'], inventory: ['inventory'], bills: ['money', 'bills', 'budgets', 'finance'], meetings: ['meetings'], map: ['trips', 'pins', 'zones', 'mileage', 'map'], vault: ['vault'], whiteboard: ['boards'], teamSchedule: ['workload', 'forecast', 'hours'] };
+const MEMBER_ROUTES = { contacts: ['contacts', 'contact-groups'], projects: ['projects', 'project-templates', 'records'], camps: ['board'], docs: ['docs', 'folders', 'dirs', 'doc-templates'], column: ['stacks'], templates: ['msg-templates'], inventory: ['inventory'], bills: ['money', 'bills', 'budgets', 'finance'], meetings: ['meetings'], map: ['trips', 'pins', 'zones', 'mileage', 'map'], vault: ['vault'], whiteboard: ['boards'], teamSchedule: ['workload', 'forecast', 'hours'] };
 const memberAccessOf = (ws) => Object.fromEntries(Object.keys(MEMBER_DEFAULTS).map((k) => [k, typeof ws.settings?.memberAccess?.[k] === 'boolean' ? ws.settings.memberAccess[k] : MEMBER_DEFAULTS[k]]));
 const memberMay = (ws, auth, k) => isAdmin(auth) || memberAccessOf(ws)[k] !== false;
 const memberOff = (k) => `Your team’s owners and admins have turned ${MEMBER_LABEL[k]} off for members.`;
@@ -7583,7 +7583,7 @@ function askSources(ws, auth, q, n = 8) {
   }
   for (const r of Object.values(db.records)) {
     if (r.wsId !== ws.id) continue;
-    const story = PJ.recordStory(r, ws);
+    const story = PJ.recordStory(r, ws, (kind, x) => canSee(auth, kind, x));
     const s = story && score('', story);
     if (!s || !PJ.recordAt(r.id, ws.id, auth.memberId)) continue;
     out.push({ kind: 'record', id: r.id, title: story.split('\n')[0].replace(/^A .*? in the project “[^”]*”: /, '').replace(/\.$/, '') || 'A record', text: story, s });
@@ -7643,7 +7643,7 @@ async function aiRecord(ws, auth, body) {
   const prompt = [
     `Today is ${today} (${new Date(today + 'T12:00:00Z').toLocaleDateString('en-US', { weekday: 'long', timeZone: 'UTC' })}). The person asking is ${auth.member}.`,
     teamLine(ws, auth.memberId),
-    PJ.recordStory(rec, ws),
+    PJ.recordStory(rec, ws, (kind, x) => canSee(auth, kind, x)),
     doc ? `Their notes on it:\n${clipText(doc.text, 3000)}` : '',
     selects.length ? `Fields with options (for a stage change): ${selects.map((f) => `${f.name}: ${f.choices.map((c) => c.label).join(', ')}`).join('; ')}` : '',
     body.ask ? `They ask: ${cleanText(body.ask, 1000)}` : '',
@@ -7697,7 +7697,7 @@ async function aiEstimate(ws, auth, body) {
     }
   }
   const prompt = [
-    PJ.recordStory(rec, ws),
+    PJ.recordStory(rec, ws, (kind, x) => canSee(auth, kind, x)),
     files.length ? `Attached: ${files.map((f) => f.name).join('; ')}. Read them for sizes, counts and conditions.` : 'Nothing is attached; work from the scope and notes.',
     list.length ? `The price list (use these items, by id, wherever one fits):\n${list.map((x) => `- [${x.id}] ${x.item}${x.description ? ' — ' + x.description : ''} · per ${x.unit || 'each'} · $${((x.price || 0) / 100).toFixed(2)}`).join('\n')}` : 'There is no price list; price lines at typical rates and say so in the assumptions.',
     body.ask ? `They ask: ${cleanText(body.ask, 1000)}` : '',
@@ -12119,7 +12119,7 @@ async function replayAs(ws, memberId, approvalId, { method, path: p, body }, as 
   return { status, body: parsed };
 }
 const hold = (...a) => RULES.hold(...a);
-const PJ = projectsModule({ proofUrl: (ws) => pagesProof(ws), onEvent: (...a) => recordEvent(...a), onPrice: (...a) => priceChanged(...a), canSeeItem: (auth, it) => canSee(auth, 'item', it), seal, unseal, db, save, broadcast, rid, hold, cleanText, isDay, readJson, send, badRequest, isOwnerId, escHtml, brandOf, logoUrl, teamDay, offline, allowLocalHooks: process.env.ALLOW_LOCAL_WEBHOOKS === '1', qrSvg, publicUrl: PUBLIC_URL,
+const PJ = projectsModule({ seesLinked: (kind, x, memberId) => canSee({ memberId }, kind, x), proofUrl: (ws) => pagesProof(ws), onEvent: (...a) => recordEvent(...a), onPrice: (...a) => priceChanged(...a), canSeeItem: (auth, it) => canSee(auth, 'item', it), seal, unseal, db, save, broadcast, rid, hold, cleanText, isDay, readJson, send, badRequest, isOwnerId, escHtml, brandOf, logoUrl, teamDay, offline, allowLocalHooks: process.env.ALLOW_LOCAL_WEBHOOKS === '1', qrSvg, publicUrl: PUBLIC_URL,
   onRecordGone: (rec) => { dropVisits(rec); INV.dropFor(rec); campsOffJob(rec); }, stageGate: (...a) => stageGate(...a),
   onRecordNews: (rec) => { jobChanged(rec); if (rec.share || rec.qbo?.estId) QB.soon(rec.wsId); },
   // A follow-up from a record's timeline: a task for whoever logged it, about the record.
