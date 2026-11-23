@@ -8094,20 +8094,73 @@
     draw();
     return box;
   }
+  // Tools right from the plan (2026-11-23): a task's tool (what it's done with: an email, a signature, a payment,
+  // files, a call list, a meeting; it ticks itself off when that's done) and its checklist; a phase's resources, what
+  // it needs, and a tool for each of its tasks in one list.
+  const TOOL_IC = { email: '✉️', sign: '✍️', pay: '💵', files: '📥', calls: '📞', meeting: '🎙' };
+  function ccToolPanel(c, g, t, back, toPhase) {
+    // Its own redraw: the page holds back while a box has focus (the checklist's), and this should show at once.
+    const again = () => { if (document.activeElement?.matches('.pt-cl-add')) K.pfocusCl = true; renderCamps(true); };
+    const ptSet = (x, ch) => { const p = patchTask(x, ch); again(); p.then(again, again); };
+    const box = h('aside', { class: 'cc-ppanel cc-ptools', 'data-for': t ? 'task' : 'phase' });
+    const head = (title) => [h('div', { class: 'cc-pp-h' }, h('small', {}, t ? g.title : 'Phase'), h('button', { class: 'icon-btn small pt-back', 'aria-label': 'Back', html: I.close, onclick: back })), h('h3', {}, '🧰 Tools', h('small', {}, ' for ' + title))];
+    const toolSel = (x) => {
+      const s = h('select', { class: 'pt-kind', 'aria-label': 'Tool for ' + x.text }, h('option', { value: '' }, 'No tool: tick it by hand'), Object.entries(STEP_KINDS).map(([k, v]) => h('option', { value: k, selected: x.action?.kind === k }, `${TOOL_IC[k]} ${v.label}`)));
+      s.addEventListener('change', () => ptSet(x, { action: s.value ? { kind: s.value } : null }));
+      return s;
+    };
+    if (t) {
+      t = taskById(t.id) || t;
+      const k = t.action?.kind;
+      const waits = taskBlockers(t).length;
+      const cl = t.checklist || [];
+      const add = h('input', { class: 'pt-cl-add', placeholder: '+ Add an item', maxlength: 200, 'aria-label': 'Add a checklist item' });
+      add.addEventListener('keydown', (e) => { if (e.key === 'Enter' && add.value.trim()) { e.preventDefault(); const v = add.value.trim(); add.value = ''; K.pfocusCl = true; ptSet(t, { checklist: [...cl, { text: v, done: false }] }); } });
+      const rs = stepRes(g);
+      box.replaceChildren(...head(`“${shortText(t.text, 60)}”`),
+        h('div', { class: 'pa-sec pt-tool' }, h('h4', {}, 'Done with a tool'),
+          h('div', { class: 'pt-kinds', role: 'radiogroup', 'aria-label': 'Done with a tool' },
+            [['', { label: 'No tool', hint: 'Tick it by hand' }], ...Object.entries(STEP_KINDS)].map(([kk, v]) => h('button', { type: 'button', role: 'radio', 'aria-checked': String((k || '') === kk), class: 'pt-k' + ((k || '') === kk ? ' on' : ''), 'data-kind': kk || 'none', disabled: t.done, onclick: () => (k || '') !== kk && ptSet(t, { action: kk ? { kind: kk } : null }) },
+              h('span', { class: 'pt-k-ic', 'aria-hidden': 'true' }, kk ? TOOL_IC[kk] : '✋'), h('span', {}, h('b', {}, v.label), h('small', {}, v.hint))))),
+          k && !t.done ? (waits ? h('small', { class: 'cc-pp-wait' }, 'It can start once what it waits for is done.') : t.submitted ? h('small', { class: 'cc-pp-hint' }, 'Sent for sign-off.')
+            : h('button', { type: 'button', class: 'btn primary-btn pt-start', onclick: () => runStep(t) }, `${TOOL_IC[k]} ${STEP_KINDS[k].btn}`)) : null,
+          t.toolRef && !t.done ? h('small', { class: 'cc-pp-hint pt-started' }, t.toolRef.label) : null),
+        h('div', { class: 'pa-sec pt-cl' }, h('h4', {}, 'Checklist', cl.length ? h('small', {}, ` ${cl.filter((x) => x.done).length} of ${cl.length}`) : null),
+          cl.map((x, i) => h('label', { class: 'pt-cl-item' + (x.done ? ' done' : '') }, h('input', { type: 'checkbox', checked: !!x.done, 'aria-label': x.text, onchange: (e) => ptSet(t, { checklist: cl.map((y, j) => (j === i ? { ...y, done: e.target.checked } : y)) }) }), h('span', {}, x.text),
+            h('button', { type: 'button', class: 'icon-btn small pt-cl-x', 'aria-label': 'Remove ' + x.text, html: I.close, onclick: (e) => { e.preventDefault(); ptSet(t, { checklist: cl.filter((_, j) => j !== i) }); } }))),
+          add),
+        h('div', { class: 'pa-sec' }, h('h4', {}, 'From its phase'),
+          h('small', { class: 'cc-pp-hint' }, rs.length ? `${plural(rs.length, 'resource')} on ${g.title}: ${rs.slice(0, 3).map(resName).join(', ')}` : `Nothing on ${g.title} yet: a call script, a doc, a template or a link.`),
+          h('button', { type: 'button', class: 'link pt-phase', onclick: toPhase }, `Tools for ${shortText(g.title, 40)} →`)));
+      if (K.pfocusCl) { K.pfocusCl = false; setTimeout(() => box.querySelector('.pt-cl-add')?.focus()); }
+      return box;
+    }
+    const roots = tasksInOrder(g.id).filter((x) => !x.parentId || !taskById(x.parentId));
+    const needs = g.needs || [];
+    box.replaceChildren(...head(g.title),
+      h('div', { class: 'pa-sec pt-res' }, h('h4', {}, 'Resources'), resPanel(c, g)),
+      h('div', { class: 'pa-sec pt-needs' }, h('h4', {}, 'What it needs'),
+        h('small', { class: 'cc-pp-hint' }, needs.length ? needs.map((n) => n.label || n.name || n.item || n.kind).join(', ') : 'Nothing yet: materials, gear, a visit, a field filled in on the job.'),
+        canPass(c) ? h('button', { type: 'button', class: 'btn small pt-needs-go', onclick: () => needsSheet(c, g) }, needs.length ? 'Change' : '+ Add what it needs') : null),
+      h('div', { class: 'pa-sec pt-each' }, h('h4', {}, 'A tool for each task'),
+        roots.length ? roots.map((x) => h('label', { class: 'cc-pp-f pt-row', 'data-task': x.id }, shortText(x.text, 60), toolSel(x))) : h('small', { class: 'cc-pp-hint' }, 'No tasks here yet.'),
+        h('small', { class: 'cc-pp-hint' }, 'A task with a tool ticks itself off when that’s done: the email goes out, it’s signed, the payment is logged…')));
+    return box;
+  }
   function ccTile(t, sel) {
     const [sc, sl] = ccStatus(t);
     const g = goalById(t.goalId), c = g && campById(g.campaignId);
     const na = c && S.automations ? autosHere(c, g, t).length : 0;
     const b = h('button', { type: 'button', class: `cc-ttile s-${sc}${t.done ? ' done' : ''}${sel === t.id ? ' on' : ''}`, 'data-task': t.id, title: t.text,
-      onclick: () => { K.psel = { ...K.psel, task: t.id, goal: t.goalId || K.psel?.goal, autos: false }; renderCamps(true); } },
+      onclick: () => { K.psel = { ...K.psel, task: t.id, goal: t.goalId || K.psel?.goal, autos: false, tools: false }; renderCamps(true); } },
       h('span', { class: 'cc-tt-dot', title: sl, 'aria-label': sl }),
       h('span', { class: 'cc-tt-t' }, t.text),
-      h('span', { class: 'cc-tt-meta' }, na ? h('small', { class: 'cc-auto-n', title: plural(na, 'automation') }, '⚡' + na) : null, t.due ? h('small', { class: isOverdue(t) ? 'late' : '' }, dueLabel(t.due)) : null, t.assigneeId ? avatar(t.assigneeId) : null));
+      h('span', { class: 'cc-tt-meta' }, t.action && STEP_KINDS[t.action.kind] ? h('small', { class: 'cc-tool-ic', title: 'Done with: ' + STEP_KINDS[t.action.kind].label }, TOOL_IC[t.action.kind]) : null, na ? h('small', { class: 'cc-auto-n', title: plural(na, 'automation') }, '⚡' + na) : null, t.due ? h('small', { class: isOverdue(t) ? 'late' : '' }, dueLabel(t.due)) : null, t.assigneeId ? avatar(t.assigneeId) : null));
     // An automation dragged from Autos onto a task: a copy for that task.
     if (c) {
       b.addEventListener('dragover', (e) => { if (K.pdrag?.auto) { e.preventDefault(); e.stopPropagation(); b.classList.add('over'); } });
       b.addEventListener('dragleave', () => b.classList.remove('over'));
-      b.addEventListener('drop', (e) => { const x = K.pdrag?.auto; if (!x) return; e.preventDefault(); e.stopPropagation(); K.pdrag = null; b.classList.remove('over'); copyAutoTo(x, g, t); });
+      b.addEventListener('drop', (e) => { const x = K.pdrag?.auto; if (!x) return; e.preventDefault(); e.stopPropagation(); K.pdrag = null; S.internalDrag = false; clearDropping(); b.classList.remove('over'); copyAutoTo(x, g, t); });
     }
     return b;
   }
@@ -8135,7 +8188,9 @@
     };
     const libItem = (ic, name, sub, run, drag) => {
       const b = h('button', { type: 'button', class: 'cc-lib-item', draggable: drag ? 'true' : null, title: sub || name, onclick: run }, h('span', { class: 'cc-lib-ic', 'aria-hidden': 'true' }, ic), h('span', { class: 'cc-lib-t' }, name, sub ? h('small', {}, sub) : null));
-      if (drag) b.addEventListener('dragstart', (e) => { K.pdrag = drag; e.dataTransfer.effectAllowed = 'copy'; e.dataTransfer.setData('text/plain', name); });
+      // Marked as dragged inside Kloomie, so the page doesn't take it for files from the computer (and outline itself).
+      if (drag) b.addEventListener('dragstart', (e) => { K.pdrag = drag; S.internalDrag = true; e.dataTransfer.effectAllowed = 'copy'; e.dataTransfer.setData('text/plain', name); });
+      if (drag) b.addEventListener('dragend', () => { K.pdrag = null; S.internalDrag = false; clearDropping(); });
       return b;
     };
     const list = SV.list || [];
@@ -8180,10 +8235,12 @@
     const members = (S.workspace.members || []).filter((m) => !m.gone);
     const whoSel = (v) => h('select', { class: 'cc-pp-who', 'aria-label': 'Who' }, h('option', { value: '' }, 'Nobody yet'), members.map((m) => h('option', { value: m.id, selected: v === m.id }, m.name)));
     const foot = h('div', { class: 'cc-pp-foot' },
-      h('button', { type: 'button', class: 'btn cc-pp-tool', onclick: () => toast('Coming soon: put a tool on this step (a form, a checklist, the map…).') }, '🧰 Add tool'),
-      phase && amAdmin() ? h('button', { type: 'button', class: 'btn cc-pp-auto', title: task ? 'Automations for this task' : 'Automations for this phase', onclick: () => { K.psel = { ...sel, autos: true }; redraw(); } }, '⚡ Add automation') : null);
+      phase ? h('button', { type: 'button', class: 'btn cc-pp-tool', title: task ? 'What this task is done with, and its checklist' : 'Resources, what it needs, and a tool for each task', onclick: () => { K.psel = { ...sel, tools: true, autos: false }; redraw(); } }, '🧰 Add tool') : null,
+      phase && amAdmin() ? h('button', { type: 'button', class: 'btn cc-pp-auto', title: task ? 'Automations for this task' : 'Automations for this phase', onclick: () => { K.psel = { ...sel, autos: true, tools: false }; redraw(); } }, '⚡ Add automation') : null);
     let panel;
-    if (sel.autos && phase && amAdmin()) {
+    if (sel.tools && phase) {
+      panel = ccToolPanel(c, phase, task, () => { K.psel = { ...sel, tools: false }; redraw(); }, () => { K.psel = { c: c.id, goal: phase.id, task: null, tools: true }; redraw(); });
+    } else if (sel.autos && phase && amAdmin()) {
       panel = ccAutoPanel(c, phase, task, () => { K.psel = { ...sel, autos: false }; redraw(); });
     } else if (task) {
       const t = task;

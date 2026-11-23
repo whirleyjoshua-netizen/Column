@@ -1,7 +1,7 @@
 // The campaign page, simpler (the owner, 2026-11-22, with a sketch): "too busy". The Pulse is a button that opens it,
 // not a panel down the side all the time; the KPIs are one thin line; Plan is three columns: what's saved on the left
 // (saved flows, tasks, automations), the plan as a tree of tiles in the middle (a phase, its tasks under it on a line,
-// subtasks under those), and a task's panel on the right (or Add task), with Add tool and Add automation under it.
+// subtasks under those), and a task's panel on the right (or Add task), with Add tool and Add automation under it (both work: tests/plan_tools_ui.mjs, tests/plan_autos_ui.mjs).
 import * as FS from 'node:fs';
 import { spawn } from 'node:child_process';
 import WebSocket from '../server/node_modules/ws/index.js';
@@ -98,7 +98,8 @@ try {
   ok(await A.until(`(async () => (await (await fetch('/api/state', { headers: { authorization: 'Bearer ' + JSON.parse(localStorage.getItem('column.token')) } })).json()).tasks.find((x) => x.text === 'Call the Diaz family')?.done === true)()`, 5000), 'and Done from the panel');
   ok(await A.ev(`['Add tool', 'Add automation'].every((x) => [...document.querySelectorAll('#camps .cc-ppanel .cc-pp-foot button')].some((b) => b.textContent.includes(x)))`), 'Add tool and Add automation under it');
   await A.tap(`[...document.querySelectorAll('#camps .cc-ppanel .cc-pp-foot button')].find((b) => b.textContent.includes('Add tool'))`);
-  ok(await A.until(`[...document.querySelectorAll('#toasts .toast')].some((x) => /coming soon/i.test(x.textContent))`, 2000), 'Add tool says it’s coming soon (for now)');
+  ok(await A.until(`!!${T('.cc-ptools')}`, 2000), 'Add tool opens the task’s tools (tests/plan_tools_ui.mjs has the rest)');
+  await A.tap(T('.cc-ptools .pt-back'));
   // A phase: Add task.
   await A.tap(`document.querySelectorAll('#camps .cc-ptile.phase')[1]`);
   ok(await A.until(`${T('.cc-ppanel h3')}?.textContent.startsWith('Add task') && ${T('.cc-ptile.phase.on')}?.textContent.includes('Book installs')`), 'a phase opens Add task for it');

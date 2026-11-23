@@ -4870,11 +4870,33 @@ button.td-dep:hover { background: color-mix(in srgb, #4ea1ff 24%, transparent); 
 .cc-pauto [hidden] { display: none; }
 .cc-auto-n { color: var(--accent); font-weight: 600; }
 .cc-ttile.over { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+/* Tools right from the plan (2026-11-23): a task's tool and checklist; a phase's resources, needs, a tool per task. */
+.cc-ptools .pa-sec { display: flex; flex-direction: column; gap: 7px; padding-top: 10px; border-top: 1px solid var(--line); }
+.cc-ptools .pa-sec h4 { margin: 0; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.cc-ptools .pa-sec h4 small { text-transform: none; letter-spacing: 0; font-weight: 500; }
+.pt-kinds { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.pt-k { display: flex; gap: 8px; align-items: flex-start; text-align: left; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; background: none; color: var(--text); font: inherit; font-size: 13px; cursor: pointer; }
+.pt-k:hover:not(:disabled) { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+.pt-k.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); background: color-mix(in srgb, var(--accent) 7%, transparent); }
+.pt-k:disabled { opacity: .6; cursor: default; }
+.pt-k small { display: block; color: var(--muted); font-size: 11.5px; line-height: 1.3; margin-top: 2px; }
+.pt-k-ic { font-size: 16px; line-height: 1.2; }
+.pt-cl-item { display: flex; align-items: center; gap: 8px; font-size: 13.5px; }
+.pt-cl-item span { flex: 1; min-width: 0; }
+.pt-cl-item.done span { text-decoration: line-through; color: var(--muted); }
+.pt-cl-x { opacity: .5; }
+.pt-cl-item:hover .pt-cl-x { opacity: 1; }
+.pt-phase { align-self: flex-start; padding: 0; font-size: 13px; }
+.pt-start { align-self: flex-start; }
+.cc-tool-ic { font-size: 12px; }
 /* Phone and narrow: one column, the plan first, the panel under it, the saved things last. */
 body:not(.wide) .cc-planner, .split .cc-planner { grid-template-columns: minmax(0, 1fr); }
 body:not(.wide) .cc-plib, .split .cc-plib { order: 3; border-right: 0; border-top: 1px solid var(--line); }
 body:not(.wide) .cc-ppanel, .split .cc-ppanel { order: 2; border-left: 0; border-top: 1px solid var(--line); }
 body:not(.wide) .cc-ptree, .split .cc-ptree { padding: 12px; }
+/* A tool open beside the page (Email from a task's tool, say): the tree and the panel side by side, saved things under. */
+body.wide.split-on:not(.split-full) #camps .cc-planner { grid-template-columns: minmax(0, 1fr) minmax(260px, 300px); }
+body.wide.split-on:not(.split-full) #camps .cc-plib { order: 3; grid-column: 1 / -1; border-right: 0; border-top: 1px solid var(--line); }
 @media (max-width: 1250px) { body.wide .cc-planner { grid-template-columns: 190px minmax(0, 1fr) 280px; } }
 /* The same tiles on Overview's phases and Work's board. */
 .camp-view.cc .goal .task-row { border: 1px solid var(--line); border-radius: 10px; background: var(--card); padding: 6px 10px 6px 12px; margin: 5px 0; box-shadow: inset 3px 0 0 var(--tt, #b8b8c4); }

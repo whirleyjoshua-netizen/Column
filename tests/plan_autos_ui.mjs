@@ -129,6 +129,7 @@ try {
   for (let i = 0; i < 30 && !list.some((x) => x.trigger.task === 'Send quotes'); i++) { await sleep(150); list = await autosNow(); }
   const dropped = list.find((x) => x.trigger.task === 'Send quotes');
   ok(dropped && dropped.trigger.step === 'Book installs' && dropped.trigger.taskId, 'an automation dragged from Autos onto a task is copied for that task');
+  ok(await A.ev(`!document.querySelector('#camps').classList.contains('dropping')`), 'and the page isn’t left outlined as if files were coming in (found in the browser check)');
   // A saved task dragged onto a phase goes into that phase, not the one picked.
   await drag(lib('Order samples'), `document.querySelectorAll('#camps .cc-pt-phase')[2]`);
   const kids = (i) => `[...document.querySelectorAll('#camps .cc-ptree .cc-pt-phase')[${i}].querySelectorAll(':scope > .cc-pt-kids > .cc-pt-node > .cc-ttile')].map((x) => x.querySelector('.cc-tt-t').textContent)`;
