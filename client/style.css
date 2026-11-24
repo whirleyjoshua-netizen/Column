@@ -4898,6 +4898,24 @@ body:not(.wide) .cc-ptree, .split .cc-ptree { padding: 12px; }
 body.wide.split-on:not(.split-full) #camps .cc-planner { grid-template-columns: minmax(0, 1fr) minmax(260px, 300px); }
 body.wide.split-on:not(.split-full) #camps .cc-plib { order: 3; grid-column: 1 / -1; border-right: 0; border-top: 1px solid var(--line); }
 @media (max-width: 1250px) { body.wide .cc-planner { grid-template-columns: 190px minmax(0, 1fr) 280px; } }
+/* Overview in the Plan's look (2026-11-23): the brief in the left column (a bit wider, it's writing), the same tree,
+   and At a glance on the right until a phase or task is picked. Narrow: the brief first, then the plan, then the panel. */
+body.wide .cc-planner.cc-ov { grid-template-columns: 260px minmax(0, 1fr) 320px; }
+@media (max-width: 1250px) { body.wide .cc-planner.cc-ov { grid-template-columns: 220px minmax(0, 1fr) 280px; } }
+.cc-obrief .cc-lib-sec { display: flex; flex-direction: column; }
+.cc-obrief .cc-bf { font-size: 13.5px; }
+.cc-obrief .cc-bf-edit { min-height: 80px; }
+.cc-oidle .cc-lib-sec { display: flex; flex-direction: column; gap: 8px; }
+.cc-oidle .cc-lib-sec .goal { margin: 0; }
+.cc-oidle .camp-subs { display: flex; flex-direction: column; gap: 8px; }
+.cc-oidle .camp-money { flex-wrap: wrap; }
+.cc-o-prog { display: grid; grid-template-columns: auto 1fr; align-items: baseline; gap: 4px 8px; }
+.cc-o-prog b { font-size: 22px; }
+.cc-o-prog small { color: var(--muted); }
+.cc-o-prog > :last-child { grid-column: 1 / -1; }
+.cc-pp-addh { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+body:not(.wide) .cc-ov .cc-obrief, .split .cc-ov .cc-obrief { order: -1; border-top: 0; border-bottom: 1px solid var(--line); }
+body.wide.split-on:not(.split-full) #camps .cc-ov .cc-obrief { order: -1; border-top: 0; border-bottom: 1px solid var(--line); }
 /* The same tiles on Overview's phases and Work's board. */
 .camp-view.cc .goal .task-row { border: 1px solid var(--line); border-radius: 10px; background: var(--card); padding: 6px 10px 6px 12px; margin: 5px 0; box-shadow: inset 3px 0 0 var(--tt, #b8b8c4); }
 .camp-view.cc .goal .task-row.done { --tt: #1f9d63; }

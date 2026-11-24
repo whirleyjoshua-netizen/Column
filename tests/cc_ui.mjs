@@ -69,15 +69,15 @@ try {
   ok(await A.ev(`${T('.cc-kpi.overdue')}.classList.contains('bad') && ${T('.cc-kpi.blocked')}.classList.contains('bad')`), 'blocked and overdue are flagged');
   ok(await A.ev(`[...document.querySelectorAll('#camps .cc-tab')].map((b) => b.textContent).join('|')`) === 'Overview|Plan|Work|Resources|Activity|Report', 'six tabs: Overview, Plan, Work, Resources, Activity, Report');
   // The brief, in four parts.
-  ok(await A.ev(`[...document.querySelectorAll('#camps .cc-bh')].map((x) => x.textContent).join('|')`) === 'Objective|Audience|Strategy|Success metrics', 'the brief: Objective, Audience, Strategy, Success metrics');
+  ok(await A.ev(`[...document.querySelectorAll('#camps .cc-obrief h4')].map((x) => x.textContent).join('|')`) === 'Objective|Audience|Strategy|Success metrics', 'the brief, down the left: Objective, Audience, Strategy, Success metrics');
   ok(await A.ev(`${T('.cc-bf[data-field=brief]')}.textContent.includes('installed customers') && ${T('.cc-bf[data-field=audience]')}.textContent === 'New valley homeowners' && ${T('.cc-metrics')}.textContent.includes('Consultations booked') && ${T('.cc-metrics')}.textContent.includes('0 / 20')`), 'filled from the campaign; a target (0 / 20) is a success metric');
   await A.tap(T('.cc-bf[data-field=audience]'));
   await A.until(`document.activeElement?.classList.contains('cc-bf-edit')`);
   await A.ev(`(() => { const ta = document.activeElement; ta.value = 'New valley homeowners and landlords'; ta.blur(); })()`);
   ok(await (async () => { for (let i = 0; i < 30; i++) { if ((await api('GET', '/state')).campaigns.find((x) => x.id === camp.id)?.audience === 'New valley homeowners and landlords') return true; await sleep(100); } return false; })(), 'Audience is edited in place and saved');
-  // Phases as connected cards.
-  ok(await A.ev(`document.querySelectorAll('#camps .cc-phase').length === 4 && document.querySelectorAll('#camps .cc-arrow').length === 3 && ${T('.cc-phase')}.classList.contains('active') && ${T('.cc-phase small')}.textContent.startsWith('1 / 4 tasks')`), 'four phase cards, joined by arrows; the first is active, 1 / 4 tasks');
-  ok(await A.ev(`document.querySelectorAll('#camps .cc-body > .goal').length === 5`), 'each phase (and the target) has its section of tasks below');
+  // Phases as the Plan's tree of tiles (2026-11-23); the target on the right, under At a glance.
+  ok(await A.ev(`document.querySelectorAll('#camps .cc-ov .cc-ptile.phase').length === 4 && ${T('.cc-ov .cc-ptile.phase small')}.textContent.startsWith('1 of 4 tasks') && document.querySelectorAll('#camps .cc-ov .cc-pt-phase')[0].querySelectorAll('.cc-ttile').length === 4`), 'four phase tiles, each with its tasks under it; the first: 1 of 4 tasks');
+  ok(await A.ev(`document.querySelectorAll('#camps .cc-oidle .goal').length === 1 && ${T('.cc-oidle .goal')}.textContent.includes('Consultations booked')`), 'the target sits in At a glance, with its numbers');
   // Work: one table, with filters; a row opens the task.
   await tabTo('work');
   ok(await A.ev(`document.querySelectorAll('#camps .cc-tr:not(.cc-th)').length === 9`), 'Work lists the 9 open tasks');

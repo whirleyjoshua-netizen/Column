@@ -158,15 +158,15 @@ try {
   let att = [];
   for (let i = 0; i < 30 && !att.length; i++) { await sleep(150); att = (await api('GET', '/state')).attempts.filter((x) => x.campaignId === camp.id); }
   ok(att.length === 1 && /Old Town Shades/.test(JSON.stringify(att[0])), 'clicking an outcome with the mouse saves the call with its name: ' + JSON.stringify(att.map((x) => x.contact || x.who)));
-  // A task added in a phase shows at once, and the field stays ready for the next.
+  // A task added in a phase (Overview's Add task, picked from its tile) shows at once, and the field stays ready.
   await A.tap(T('.cc-tab[data-ctab=overview]'));
-  const addQ = `document.querySelector('#camps .goal[data-id="${prep.id}"] .goal-add')`;
-  for (let i = 0; i < 10 && !(await A.ev(`!!${addQ}`)); i++) { await A.ev(`document.querySelector('#camps .goal[data-id="${prep.id}"] .goal-head, #camps .goal[data-id="${prep.id}"] .goal-top')?.click(); true`); await sleep(300); }
-  await A.ev(`${addQ}.focus(); true`);
+  const addQ = `document.querySelector('#camps .cc-ov .cc-ppanel .cc-pp-name')`;
+  await A.tap(`document.querySelector('#camps .cc-ov .cc-ptile.phase[data-phase="${prep.id}"]')`);
+  await A.until(`document.activeElement === ${addQ}`);
   await A.cmd('Input.insertText', { text: 'Measure the windows' });
   await A.ev(`${addQ}.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); true`);
-  ok(await A.until(`document.querySelector('#camps .goal[data-id="${prep.id}"]')?.textContent.includes('Measure the windows')`, 5000), 'a task added in a phase shows right away');
-  ok(await A.ev(`document.activeElement === ${addQ}`), 'and the add field still has the cursor');
+  ok(await A.until(`document.querySelector('#camps .cc-ov .cc-pt-phase[data-id="${prep.id}"]')?.textContent.includes('Measure the windows')`, 5000), 'a task added in a phase shows right away');
+  ok(await A.until(`document.activeElement === ${addQ} && !${addQ}.value`, 3000), 'and the add field still has the cursor');
   // The builder's last stage has no stray "null" where Next would be.
   await A.ev(`${T('.cc-edit')}.click(); true`);
   await A.until(`!!document.querySelector('.cb-stage[data-stage="3"]')`);

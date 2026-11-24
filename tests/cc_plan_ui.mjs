@@ -113,16 +113,34 @@ try {
   await A.tap(`[...document.querySelectorAll('#camps .cc-plib .cc-lib-item')].find((b) => b.textContent.includes('Tell me when a call is done'))`);
   ok(await A.until(`!!document.querySelector('#sheet .sheet.auto-builder')`, 3000), 'an automation opens it');
   await A.ev(`document.querySelector('#sheet [aria-label=Close]').click(); true`);
-  // The new tiles on Overview too.
+  // Overview in the Plan's look (the owner, 2026-11-23): the brief on the left, the same tree, At a glance on the right.
   await tabTo('overview');
-  ok(await A.until(`document.querySelectorAll('#camps .cc-phase').length === 3`), 'Overview: the phase tiles');
-  ok(await A.ev(`(() => { const r = document.querySelector('#camps .goal .task-row'); const cs = getComputedStyle(r); return parseFloat(cs.borderRadius) >= 8 && parseFloat(cs.borderTopWidth) >= 1; })()`), 'its tasks as tiles too');
+  const okids = (i) => kids(i).replace('.cc-ptree', '.cc-ov .cc-ptree');
+  ok(await A.until(`!!${T('.cc-planner.cc-ov')} && document.querySelectorAll('#camps .cc-ov .cc-ptile.phase').length === 3 && !${T('.cc-phases')} && !${T('.cc-body > .goal')}`), 'Overview: the same three columns and phase tiles as Plan (no strip of cards, no old phase sections)');
+  ok(await A.ev(`[...document.querySelectorAll('#camps .cc-obrief h4')].map((x) => x.textContent).join('|') === 'Objective|Audience|Strategy|Success metrics' && !!${T('.cc-obrief .cc-bf[data-field=brief]')}`), 'the brief down the left: Objective, Audience, Strategy, Success metrics');
+  ok(await A.ev(`!!${T('.cc-ov .cc-oidle')} && ${T('.cc-oidle h3')}.textContent === 'At a glance' && ${T('.cc-oidle')}.textContent.includes('Team and roles')`), 'At a glance on the right until something is picked');
+  ok(await A.ev(`${okids(2)}.includes('Order samples')`), 'the tree has the same tasks as Plan');
+  await A.tap(`[...document.querySelectorAll('#camps .cc-ov .cc-ttile')].find((x) => x.textContent.includes('Order samples'))`);
+  ok(await A.until(`${T('.cc-ov .cc-ppanel .cc-pp-name')}?.value === 'Order samples' && !${T('.cc-oidle')}`), 'a task picked opens on the right, to change there as on Plan');
+  await A.tap(T('.cc-ov .cc-ppanel [aria-label="Close the task"]'));
+  ok(await A.until(`!!${T('.cc-oidle')}`), 'closing it goes back to At a glance');
+  await A.tap(`document.querySelectorAll('#camps .cc-ov .cc-ptile.phase')[0]`);
+  ok(await A.until(`document.activeElement?.classList.contains('cc-pp-name') && ${T('.cc-ov .cc-pp-addh')}?.textContent.includes('Add task')`), 'a phase picked opens Add task, ready to type');
+  await A.cmd('Input.insertText', { text: 'Added from Overview' });
+  await A.ev(`document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); true`);
+  ok(await A.until(`${okids(0)}.includes('Added from Overview')`, 5000), 'and adds it under the phase at once');
+  await A.tap(T('.cc-ov [aria-label="Back to the overview"]'));
+  ok(await A.until(`!!${T('.cc-oidle')}`), '× goes back to At a glance');
+  ok(await A.ev(`(() => { const r = document.querySelector('#camps .cc-ov .cc-ttile'); const cs = getComputedStyle(r); return parseFloat(cs.borderRadius) >= 8 && parseFloat(cs.borderTopWidth) >= 1; })()`), 'its tasks as tiles');
   // A phone: nothing sideways; the plan stacks.
   await A.cmd('Emulation.setDeviceMetricsOverride', { width: 400, height: 860, deviceScaleFactor: 2, mobile: true });
   await sleep(300);
   await tabTo('plan');
   await sleep(300);
   ok(await A.ev(`document.documentElement.scrollWidth <= innerWidth && !!${T('.cc-ptree .cc-ttile')}`), 'on a phone the plan fits, nothing sideways');
+  await tabTo('overview');
+  await sleep(300);
+  ok(await A.ev(`document.documentElement.scrollWidth <= innerWidth && ${T('.cc-ov')}.firstElementChild && getComputedStyle(${T('.cc-obrief')}).order === '-1'`), 'on a phone Overview fits too, the brief first');
   ok(A.errors.length === 0, 'no script errors' + (A.errors.length ? ': ' + A.errors.join(' | ') : ''));
 } catch (e) { ok(false, 'threw: ' + e.stack); }
 A?.close();
