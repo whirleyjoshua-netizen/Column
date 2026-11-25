@@ -19,6 +19,7 @@ let srv = spawn('node', ['index.js'], { cwd: new URL('../server', import.meta.ur
 srv.log = ''; srv.stdout.on('data', (d) => (srv.log += d)); srv.stderr.on('data', (d) => (srv.log += d));
 const up = async () => { for (let i = 0; i < 100; i++) { try { if ((await fetch(B + '/api/health')).ok) return; } catch {} await sleep(150); } };
 await up();
+if (!(await fetch(B + '/api/health').then((x) => x.ok, () => false))) { console.log('FAIL the server didn’t start\n' + srv.log.slice(-2000)); process.exit(1); }
 const call = (tok) => async (m, p, body) => {
   const r = await fetch(B + '/api' + p, { method: m, headers: { 'content-type': 'application/json', ...(tok ? { authorization: 'Bearer ' + tok } : {}) }, body: body ? JSON.stringify(body) : undefined });
   return { status: r.status, body: await r.json().catch(() => null) };
@@ -58,7 +59,8 @@ try {
   const flow = (await rico('POST', '/job-flows', { name: 'Trash can cleaning, individual', icon: '🗑️', list: { projectId: p.id, typeId: tp.id }, steps })).body;
   r = await rico('POST', `/job-flows/${flow?.id}/publish`);
   ok(r.status === 200, '(setup) the flow is published: ' + r.status + ' ' + (r.body?.error || ''));
-  const sid = (kind) => r.body?.version?.body?.steps.find((s) => s.kind === kind)?.id;
+  const published = r.body;
+  const sid = (kind) => published?.version?.body?.steps.find((s) => s.kind === kind)?.id;
 
   // Start a job.
   r = await rico('POST', '/jobs', { flowId: flow?.id, values: { job: 'Dana · 3 cans', price: { rows: [{ desc: 'Can clean', qty: 3, price: '25' }] } }, key: 'k-dana-1' });
@@ -110,6 +112,9 @@ try {
   const payId = (r.body?.payments || r.body?.invoice?.payments || []).at(-1)?.id;
   const stepPosts = async (name) => (await posts()).filter((s) => s.startsWith(`STEP ${name} done`)).length;
   ok(await until(async () => (await stepPosts('Collect payment')) === 1), 'step.done went off once for Collect payment');
+  await rico('PATCH', '/records/' + job.id, { values: { access: 'Side gate' } });
+  await sleep(500);
+  ok((await stepPosts('Collect payment')) === 1, 'a harmless second write after it finished fires nothing more (same cycle)');
   await rico('DELETE', `/invoices/${inv.id}/payments/${payId}`);
   ok(await at('payment'), 'taking the payment off reopens Collect payment');
   await rico('POST', `/invoices/${inv.id}/payments`, { amount: '75', method: 'cash' });
@@ -157,6 +162,71 @@ try {
   r = await rico('POST', `/jobs/${old.id}/flow`, { flowId: flow.id, replace: true });
   ok(r.status === 200, 'an owner replaces it explicitly');
   ok((await sam('POST', `/jobs/${job2.id}/flow`, { flowId: flow.id, replace: true })).status === 403, 'a member can’t attach or replace flows');
+
+  // A Tasks step; voiding an invoice; several invoices; what a member sees (flow 2).
+  const st2 = (await rico('GET', '/state')).body;
+  r = await call()('POST', '/auth', { mode: 'join', workspace: 'Bins ' + t, code: st2.workspace.inviteCode, name: 'Kim Lo', email: `kim${t}@t.test`, password: 'longenough4', device: 'Mac', deviceId: 'd4' });
+  const kimId = (await rico('GET', '/state')).body.workspace.members.find((m) => m.name === 'Kim Lo').id;
+  const flow2 = (await rico('POST', '/job-flows', { name: 'Tasks and money', list: { projectId: p.id, typeId: tp.id }, steps: [
+    { kind: 'tasks', name: 'Get ready', settings: { tasks: ['Load the truck', 'Rinse the bins'] } },
+    { kind: 'invoice', name: 'Send invoice' },
+    { kind: 'payment', name: 'Collect payment' },
+    { kind: 'custom', name: 'Wave goodbye', who: { type: 'anyone' }, settings: { text: 'Smile at the customer.' } },
+  ] })).body;
+  const pub2 = (await rico('POST', `/job-flows/${flow2?.id}/publish`)).body;
+  const sid2 = (kind) => pub2?.version?.body?.steps.find((s) => s.kind === kind)?.id;
+  const job3 = (await rico('POST', '/jobs', { flowId: flow2?.id, values: { job: 'Tasks job', customer: danaId, price: { rows: [{ desc: 'Can clean', qty: 2, price: '25' }] } } })).body?.job;
+  const run3 = async () => (await rico('GET', `/jobs/${job3?.id}/run`)).body?.run;
+  x = await run3();
+  const tstep = x?.steps?.find((s) => s.kind === 'tasks');
+  ok(tstep?.tasks?.length === 2 && x.current?.kind === 'tasks', 'a Tasks step makes its two tasks when the job starts, and is current');
+  const tids = (tstep?.tasks || []).map((y) => y.id);
+  await rico('PATCH', `/tasks/${tids[0]}`, { done: true });
+  await sleep(400);
+  ok((await run3())?.current?.kind === 'tasks', 'one task done: the step is still open');
+  await rico('PATCH', `/tasks/${tids[1]}`, { done: true });
+  ok(await until(async () => (await run3())?.current?.kind === 'invoice'), 'both done: the Tasks step finishes');
+  const i3 = (await rico('POST', `/records/${job3.id}/invoices`, { jobStep: sid2('invoice') })).body;
+  const inv3 = i3?.invoice || i3;
+  await rico('POST', `/invoices/${inv3?.id}/send`);
+  ok(await until(async () => (await run3())?.current?.kind === 'payment'), 'the invoice sent finishes Send invoice');
+  r = await rico('POST', `/invoices/${inv3?.id}/void`);
+  ok(r.status === 200, '(setup) the sent invoice is voided: ' + r.status);
+  ok(await until(async () => (await run3())?.current?.kind === 'invoice'), 'voiding it reopens Send invoice');
+  const i3b = (await rico('POST', `/records/${job3.id}/invoices`, { jobStep: sid2('invoice') })).body;
+  await rico('POST', `/invoices/${(i3b?.invoice || i3b)?.id}/send`);
+  ok(await until(async () => (await run3())?.current?.kind === 'payment'), 'a replacement invoice, sent, finishes it again');
+
+  // What a member sees in a run: no invoice numbers or money, only tasks they may see, the instructions, what's missing.
+  r = await sam('GET', `/jobs/${job3.id}/run`);
+  const seenBySam = JSON.stringify(r.body || {});
+  ok(r.status === 200 && !!r.body?.run, 'a member who can see the job can open its run');
+  ok(!/INV-\d/.test(seenBySam) && !/"(total|balance|amount|paid)"/.test(seenBySam) && !seenBySam.includes('50.00'), 'and gets no invoice numbers, totals or balances');
+  ok(r.body?.run?.steps?.find((s) => s.kind === 'custom')?.text === 'Smile at the customer.', 'the step’s instructions are there');
+  ok(typeof r.body?.run?.current?.missing === 'string' && r.body.run.current.missing.length > 0, 'and what the current step is waiting for, in words');
+  const job5 = (await rico('POST', '/jobs', { flowId: flow2.id, values: { job: 'Private tasks job' } })).body?.job;
+  const t5 = (await rico('GET', `/jobs/${job5?.id}/run`)).body?.run?.steps?.find((s) => s.kind === 'tasks')?.tasks || [];
+  await rico('PATCH', `/tasks/${t5[0]?.id}`, { assigneeId: kimId });
+  await rico('PATCH', `/tasks/${t5[1]?.id}`, { assigneeId: kimId });
+  await rico('PATCH', '/workspace', { visibility: 'own' });
+  r = await sam('GET', `/jobs/${job5?.id}/run`);
+  const samTasks = r.body?.run?.steps?.find((s) => s.kind === 'tasks');
+  ok(!JSON.stringify(samTasks || {}).includes('Load the truck') && samTasks?.more === 2, 'with “members see only theirs”, a member doesn’t see Kim’s tasks in the run, just that there are 2 more');
+  await rico('PATCH', '/workspace', { visibility: 'all' });
+
+  // Several invoices, none made from the step: the payment step waits for all of them.
+  const job4 = (await rico('POST', '/jobs', { flowId: flow2.id, values: { job: 'Two invoices', customer: danaId, price: { rows: [{ desc: 'Can clean', qty: 1, price: '25' }] } } })).body?.job;
+  await rico('POST', `/jobs/${job4?.id}/steps/${sid2('tasks')}/skip`, { reason: 'Nothing to get ready' });
+  const ia = (await rico('POST', `/records/${job4?.id}/invoices`)).body, ib = (await rico('POST', `/records/${job4?.id}/invoices`)).body;
+  const A = ia?.invoice || ia, Bv = ib?.invoice || ib;
+  await rico('POST', `/invoices/${A?.id}/send`); await rico('POST', `/invoices/${Bv?.id}/send`);
+  const run4 = async () => (await rico('GET', `/jobs/${job4?.id}/run`)).body?.run;
+  ok(await until(async () => (await run4())?.current?.kind === 'payment'), 'invoices sent (not made from the step) finish Send invoice');
+  await rico('POST', `/invoices/${A?.id}/payments`, { amount: '25', method: 'cash' });
+  await sleep(500);
+  ok((await run4())?.current?.kind === 'payment', 'one of two paid: Collect payment is still open');
+  await rico('POST', `/invoices/${Bv?.id}/payments`, { amount: '25', method: 'cash' });
+  ok(await until(async () => (await run4())?.current?.kind === 'custom'), 'both paid: it finishes');
 
   // Versions: publishing v2 doesn't change a running job.
   await rico('PATCH', `/job-flows/${flow.id}`, { steps: [...steps.slice(0, 7), { kind: 'custom', name: 'Photo of the bins', settings: { text: 'Take one photo.' } }] });

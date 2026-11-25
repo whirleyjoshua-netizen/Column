@@ -87,8 +87,9 @@ Goal per step (existing fields, plus):
   behavior exactly (every campaign on the job counts).
 - **Custom steps.** The Done route only records `g.marked`; the sweep decides. A custom step with a checklist stays
   unfinished after Done until its checklist is all ticked.
-- **Which invoice.** Making an invoice from the run's Invoice step binds it (`g.invoiceId`, set once, by the
-  invoice route when the request names the step). The invoice step is met by its bound invoice being sent, viewed,
+- **Which invoice.** Making an invoice from the run's Invoice step binds it (`g.invoiceId`, set by the invoice
+  route when the request names the step and the step has no bound invoice, or its bound one is void: a replacement
+  invoice for a voided one takes its place). The invoice step is met by its bound invoice being sent, viewed,
   partial or paid; with none bound, by any non-void invoice for the job created after the run started. The payment
   step reads the flow's invoice step's bound invoice (paid); with none, at least one non-void invoice for the job
   created after the run started, and every such one paid. An invoice from before the run never counts, so an old paid

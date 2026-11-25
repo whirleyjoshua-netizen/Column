@@ -1,5 +1,5 @@
-Run on main a9f0ebb + these tests only (no implementation), 2026-11-24.
-Command per file: node tests/<file>.mjs .   (from the repo root; each test starts its own server on its own port and data folder)
+Run on main a9f0ebb + these tests only (no implementation), 2026-11-24, after the checkpoint 2 review fixes.
+Command per file: node tests/<file>.mjs .   (repo root; each test starts its own server, port and data folder; a server that doesn't start is now an explicit FAIL)
 
 === tests/jobflows_defs.mjs (exit 1)
 FAIL an owner makes a flow, a draft with no version yet: 404 {"error":"Unknown endpoint"}
@@ -68,7 +68,7 @@ PASS the campaign routes can’t open it
 PASS or change it
 PASS or add a step to it
 PASS or save it as a saved campaign
-FAIL or make it a parent
+FAIL or make it a parent (404, no such campaign): 200 
 PASS or delete it
 FAIL threw: TypeError: Cannot read properties of undefined (reading 'id')
 3 FAILED

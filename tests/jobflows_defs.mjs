@@ -15,6 +15,7 @@ const ok = (c, msg) => { console.log((c ? 'PASS ' : 'FAIL ') + msg); if (!c) fai
 const srv = spawn('node', ['index.js'], { cwd: new URL('../server', import.meta.url).pathname, env: { ...process.env, PORT: String(PORT), PUBLIC_URL: B, DATA_DIR: DIR, MAIL_OUTBOX: '1', RESEND_API_KEY: '', DATABASE_URL: '', STRIPE_SECRET_KEY: '', STRIPE_PRICE: '', SKIP_SETUP: '1' }, stdio: ['ignore', 'pipe', 'pipe'] });
 srv.log = ''; srv.stdout.on('data', (d) => (srv.log += d)); srv.stderr.on('data', (d) => (srv.log += d));
 for (let i = 0; i < 100; i++) { try { if ((await fetch(B + '/api/health')).ok) break; } catch {} await sleep(150); }
+if (!(await fetch(B + '/api/health').then((x) => x.ok, () => false))) { console.log('FAIL the server didn’t start\n' + srv.log.slice(-2000)); process.exit(1); }
 const call = (tok) => async (m, p, body) => {
   const r = await fetch(B + '/api' + p, { method: m, headers: { 'content-type': 'application/json', ...(tok ? { authorization: 'Bearer ' + tok } : {}) }, body: body ? JSON.stringify(body) : undefined });
   return { status: r.status, body: await r.json().catch(() => null) };
@@ -73,6 +74,8 @@ try {
   ok(ver1?.body?.steps?.length === 4 && ver1.body.steps.find((s) => s.kind === 'custom')?.name === 'Bins back by the house', 'version 1 still has its 4 steps as published');
   r = await rico('PATCH', `/job-flows/${flow.id}/versions/${v1}`, { steps: [] });
   ok(r.status === 404 || r.status === 405, 'no route changes a version: ' + r.status);
+  r = await rico('GET', `/job-flows/${flow.id}/versions`);
+  ok((r.body?.versions || []).find((v) => v.id === v1)?.body?.steps?.length === 4, 'and version 1 is unchanged after the attempt');
   r = await rico('POST', `/job-flows/${flow.id}/publish`);
   ok(r.status === 200 && r.body.version?.n === 2 && r.body.activeVersionId !== v1, 'publishing again makes version 2');
   ok(JSON.stringify(r.body.version.body.steps.slice(0, 4).map((s) => s.id)) === JSON.stringify(stepIds), 'versions of one flow keep their step ids');

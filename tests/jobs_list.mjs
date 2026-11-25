@@ -15,6 +15,7 @@ const ok = (c, msg) => { console.log((c ? 'PASS ' : 'FAIL ') + msg); if (!c) fai
 const srv = spawn('node', ['index.js'], { cwd: new URL('../server', import.meta.url).pathname, env: { ...process.env, PORT: String(PORT), PUBLIC_URL: B, DATA_DIR: DIR, MAIL_OUTBOX: '1', RESEND_API_KEY: '', DATABASE_URL: '', STRIPE_SECRET_KEY: '', STRIPE_PRICE: '', SKIP_SETUP: '1' }, stdio: ['ignore', 'pipe', 'pipe'] });
 srv.log = ''; srv.stdout.on('data', (d) => (srv.log += d)); srv.stderr.on('data', (d) => (srv.log += d));
 for (let i = 0; i < 100; i++) { try { if ((await fetch(B + '/api/health')).ok) break; } catch {} await sleep(150); }
+if (!(await fetch(B + '/api/health').then((x) => x.ok, () => false))) { console.log('FAIL the server didn’t start\n' + srv.log.slice(-2000)); process.exit(1); }
 const call = (tok) => async (m, p, body) => {
   const r = await fetch(B + '/api' + p, { method: m, headers: { 'content-type': 'application/json', ...(tok ? { authorization: 'Bearer ' + tok } : {}) }, body: body ? JSON.stringify(body) : undefined });
   return { status: r.status, body: await r.json().catch(() => null) };
@@ -92,6 +93,27 @@ try {
   const sr = (await sam('GET', `/jobs/${run.id}/run`)).body?.run;
   const fix = sr?.steps?.find((s) => s.name === 'Fix it');
   ok((await sam('POST', `/jobs/${run.id}/steps/${sr?.steps?.[0]?.id}/skip`, { reason: 'x' })).status === 403, 'a member can’t skip a step that isn’t skippable for them');
+  await rico('POST', `/jobs/${run.id}/steps/${sr?.steps?.[0]?.id}/skip`, { reason: 'Walk-in' });
+  r = await sam('POST', `/jobs/${run.id}/steps/${fix?.id}/done`);
+  ok(r.status === 200, 'a member who may edit the job does a step that’s for anyone: ' + r.status + ' ' + (r.body?.error || ''));
+  // A step for a role: someone in the role may, someone outside it may not.
+  const st3 = (await rico('GET', '/state')).body;
+  r = await call()('POST', '/auth', { mode: 'join', workspace: 'Shades ' + t, code: st3.workspace.inviteCode, name: 'Kim Lo', email: `kim${t}@t.test`, password: 'longenough4', device: 'Mac', deviceId: 'd4' });
+  const kim = call(r.body.token);
+  const samM = (await rico('GET', '/state')).body.workspace.members.find((m) => m.name === 'Sam Reed').id;
+  const role = (await rico('POST', '/roles', { name: 'Installers', memberIds: [samM] })).body;
+  const roleId = role?.id ?? role?.role?.id;
+  const rflow = (await rico('POST', '/job-flows', { name: 'Install', list: { projectId: hv.id, typeId: ht.id }, steps: [{ kind: 'custom', name: 'Install it', who: { type: 'role', id: roleId } }] })).body;
+  ok(!!rflow?.id, '(setup) a flow with a step for Installers');
+  ok((await rico('POST', '/job-flows', { name: 'Bad role', list: { projectId: hv.id, typeId: ht.id }, steps: [{ kind: 'custom', name: 'X', who: { type: 'role', id: 'made-up' } }] })).status === 400, 'a step for a role the team doesn’t have is refused');
+  await rico('POST', `/job-flows/${rflow?.id}/publish`);
+  const rj = (await rico('POST', '/jobs', { flowId: rflow?.id, values: { job: 'Install job' } })).body?.job;
+  const rs = (await rico('GET', `/jobs/${rj?.id}/run`)).body?.run?.steps?.[0]?.id;
+  ok((await kim('POST', `/jobs/${rj?.id}/steps/${rs}/done`)).status === 403, 'Kim, not an Installer, can’t do it');
+  ok((await sam('POST', `/jobs/${rj?.id}/steps/${rs}/done`)).status === 200, 'Sam, an Installer, can');
+  const aj = (await rico('POST', '/jobs', { flowId: aflow?.id, values: { job: 'Admins job' } })).body?.job;
+  const as = (await rico('GET', `/jobs/${aj?.id}/run`)).body?.run?.steps?.[0]?.id;
+  ok((await sam('POST', `/jobs/${aj?.id}/steps/${as}/done`)).status === 200, 'a step with no who set is for anyone who may edit the job');
   await rico('PATCH', '/workspace', { memberAccess: { projects: false } });
   ok((await sam('GET', '/jobs')).status === 403, 'with Boards off for members, a member gets no jobs list');
   ok((await sam('POST', `/jobs/${run.id}/steps/${fix?.id}/done`)).status === 403, 'and can’t act on a step, even one for anyone');

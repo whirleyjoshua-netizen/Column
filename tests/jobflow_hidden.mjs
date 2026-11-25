@@ -15,6 +15,7 @@ const ok = (c, msg) => { console.log((c ? 'PASS ' : 'FAIL ') + msg); if (!c) fai
 const srv = spawn('node', ['index.js'], { cwd: new URL('../server', import.meta.url).pathname, env: { ...process.env, PORT: String(PORT), PUBLIC_URL: B, DATA_DIR: DIR, MAIL_OUTBOX: '1', RESEND_API_KEY: '', DATABASE_URL: '', STRIPE_SECRET_KEY: '', STRIPE_PRICE: '', SKIP_SETUP: '1' }, stdio: ['ignore', 'pipe', 'pipe'] });
 srv.log = ''; srv.stdout.on('data', (d) => (srv.log += d)); srv.stderr.on('data', (d) => (srv.log += d));
 for (let i = 0; i < 100; i++) { try { if ((await fetch(B + '/api/health')).ok) break; } catch {} await sleep(150); }
+if (!(await fetch(B + '/api/health').then((x) => x.ok, () => false))) { console.log('FAIL the server didn’t start\n' + srv.log.slice(-2000)); process.exit(1); }
 const call = (tok) => async (m, p, body) => {
   const r = await fetch(B + '/api' + p, { method: m, headers: { 'content-type': 'application/json', ...(tok ? { authorization: 'Bearer ' + tok } : {}) }, body: body ? JSON.stringify(body) : undefined });
   return { status: r.status, body: await r.json().catch(() => null) };
@@ -36,7 +37,9 @@ try {
   const job = r.body?.job, runId = r.body?.run?.id;
   ok(!!job?.id && !!runId, '(setup) a job on a flow, with its run');
   const camp = (await rico('POST', '/campaigns', { name: 'Warranty offer', recordId: job?.id })).body;
-  await rico('POST', '/goals', { campaignId: camp.id, title: 'Offer it', kind: 'tasks' });
+  const og = (await rico('POST', '/goals', { campaignId: camp.id, title: 'Offer it', kind: 'tasks' })).body;
+  const ot = (await rico('POST', '/tasks', { text: 'Call about the warranty', goalId: og.id })).body;
+  await rico('POST', '/automations', { name: 'flow done', trigger: { kind: 'job.flow.done' }, actions: [{ kind: 'post', text: 'JOB.FLOW.DONE {record}', channelId: 'general' }] });
 
   st = (await rico('GET', '/state')).body;
   ok(!st.campaigns.some((c) => c.id === runId || c.kind === 'job'), 'the run isn’t in the app’s campaigns');
@@ -47,7 +50,8 @@ try {
   ok((await rico('PATCH', `/campaigns/${runId}`, { name: 'Renamed' })).status === 404, 'or change it');
   ok((await rico('POST', '/goals', { campaignId: runId, title: 'Sneaked in', kind: 'tasks' })).status === 404, 'or add a step to it');
   ok((await rico('POST', '/templates', { campaignId: runId, name: 'From a run' })).status === 404, 'or save it as a saved campaign');
-  ok((await rico('POST', '/campaigns', { name: 'Child', parentId: runId })).status >= 400, 'or make it a parent');
+  r = await rico('POST', '/campaigns', { name: 'Child', parentId: runId });
+  ok(r.status === 404 && /campaign/i.test(r.body?.error || ''), 'or make it a parent (404, no such campaign): ' + r.status + ' ' + (r.body?.error || ''));
   ok((await rico('DELETE', `/campaigns/${runId}`)).status === 404, 'or delete it');
   ok((await rico('GET', `/jobs/${job.id}/run`)).body?.run?.id === runId, 'it’s still there, through the job');
 
@@ -55,11 +59,13 @@ try {
   ok(!JSON.stringify(r.body || {}).includes(runId), 'the old job board doesn’t show the run');
 
   await rico('POST', `/jobs/${job.id}/steps/${(await rico('GET', `/jobs/${job.id}/run`)).body?.run?.steps?.[0]?.id}/done`);
+  await rico('PATCH', `/tasks/${ot.id}`, { done: true });
   await sleep(800);
   const all = await posts();
   ok(all.some((s) => s === 'CAMPAIGN.STARTED Warranty offer'), 'the ordinary campaign set off campaign.started');
   ok(!all.some((s) => s.startsWith('CAMPAIGN.STARTED') && s !== 'CAMPAIGN.STARTED Warranty offer'), 'starting the run set off no campaign.started');
-  ok(!all.some((s) => s.startsWith('CAMPAIGN.DONE')), 'finishing the run set off no campaign.done');
+  ok(all.filter((s) => s.startsWith('CAMPAIGN.DONE')).length === 1 && all.includes('CAMPAIGN.DONE Warranty offer'), 'the ordinary campaign finishing set off campaign.done; the run finishing didn’t');
+  ok(all.filter((s) => s.startsWith('JOB.FLOW.DONE')).length === 1, 'the run finishing set off job.flow.done, once');
   ok((await rico('GET', `/jobs/${job.id}/run`)).body?.run?.status === 'done', 'the run is done');
 
   // Deleting the job takes its run with it.
