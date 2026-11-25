@@ -42,8 +42,10 @@ Publish validation (400 with a plain message; a draft may be saved in any state)
   step. Invoice steps stay by hand (an owner or admin makes and sends it after acceptance).
 - `auto` billing: exactly one `invoice` step, no `quote` step. That one step runs by itself (§1.4).
 - `hand` billing: no `quote` step (any number of invoice steps, as in Phase 1).
-- `quote`, `invoice` and `payment` steps must have `who = { type: 'admins' }` (400 otherwise); the builder shows
-  "Owners and admins" and doesn't offer a choice. The server checks it again on every action (§4), so an old draft
+- `quote`, `invoice` and `payment` steps are for owners and admins: a step that names nobody is saved as
+  `who = { type: 'admins' }` (so Phase 1 drafts, tests and ready-made flows, which leave `who` out, keep working);
+  a step that names anyone else (anyone, a role, a member) is 400. The builder shows "Owners and admins" and
+  doesn't offer a choice. The server checks it again on every action (§4), so an old draft
   can't get round it.
 - Every `items[].itemId` is a live (not archived) item of the team; an itemId appears once.
 - `dueDays` sets the due date of every invoice made from the run (by hand from the step, or automatically):
@@ -231,4 +233,23 @@ costing_truth, finance_view, finance_jobs, invoices, quickbooks.
    (§1.4, step 5).
 3. **The invoice exception.** Only an invoice whose lines match the accepted lines (`priceKey`) keeps the quote step
    met; an invoice made from changed lines doesn't, and the way forward is void and requote, or Skip (§1.3).
+
+## 9. Checkpoint 2 (failing tests) notes
+- `tests/jobitems.mjs` (5251) and `tests/jobflow_money.mjs` (5252), with logs of the run on `jobflows`:
+  `phase2-checkpoint2-items.log` (30 fail), `phase2-checkpoint2-money.log` (81 fail; the passes are setup and
+  "nothing happens" checks that are only meaningful once the code exists).
+- `priceKey` is exported from `server/jobflows.js` as a pure function and checked directly (each commercial field
+  changes the key; row ids, cost, `from`, and `taxable: true` vs unset don't).
+- Settled while writing them (amendments to the contract above):
+  1. Money steps that name nobody default to admins; naming anyone else is 400 (§1.2).
+  2. **Accepted lines are already locked** on every path (audit G3: "The customer accepted this quote, so its lines
+     can't change"). So "lines changed after acceptance" can only come from a requote, which clears the answer;
+     the `priceKey` comparison in §1.3 stays as the rule (and guards the invoice exception), and the test asserts
+     the lock (400, step still met) rather than an edit.
+  3. Sharing, accepting and declining a quote **don't write the job's stage** when the job is on an active run
+     (today `setStatus` would put "Sent"/"Accepted" into a trade job's stage select; the run owns the stage).
+  4. A test-only hook `JOBFLOWS_FAIL_SEND` (outside production, like `JOBFLOWS_FAIL_STEP`) makes the automatic
+     send throw after the invoice is made, to test a restart between making and sending.
+  5. The sweep that sends a `made` invoice after a restart is the ordinary one: any change to the job (the test
+     PATCHes the record) or a run route runs it.
 

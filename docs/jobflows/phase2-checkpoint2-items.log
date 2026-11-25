@@ -1,0 +1,39 @@
+FAIL an owner adds an item (price and cost in cents, taxable by default): 404 Unknown endpoint
+FAIL an item can be untaxed, and cost is optional (null)
+FAIL refused: no name
+FAIL refused: a name over 120
+FAIL refused: a negative price
+FAIL refused: a price over the limit
+FAIL refused: a price that isn’t whole cents
+FAIL refused: a unit over 20
+FAIL an Inventory link must be an item of this team
+FAIL a member gets 403 on GET /job-items: 404
+FAIL a member gets 403 on POST /job-items: 404
+FAIL a member gets 403 on PATCH /job-items/:id: 404
+FAIL a member gets 403 on POST /job-items/:id/archive: 404
+FAIL a member gets 403 on POST /job-items/:id/restore: 404
+FAIL a member gets 403 on POST /job-items/import: 404
+FAIL another team sees none of them and can’t change one (404)
+FAIL PATCH changes only what it names
+FAIL a bad PATCH changes nothing
+FAIL archive
+FAIL archived items are still listed for admins (marked)
+PASS there is no hard delete
+FAIL restore
+FAIL the owner’s price list starts with the business Items, as item:<id>, with cost: {"id":"pyln6j3KfMuanNCW","source":"list","board":"Estimating","name":"Window film","description":"","unit":"sq ft","price":1200,"cost":300}
+PASS and the board price list is still there after them
+PASS a member’s price list has no Items
+FAIL import copies the named rows and counts the one with no name: {"error":"Unknown endpoint"}
+FAIL the copy keeps name, price, cost and unit, taxable by default, and remembers where it came from
+FAIL a missing price imports as $0
+FAIL importing again adds nothing, and a source changed since isn’t re-copied (a snapshot, not a sync): {"error":"Unknown endpoint"}
+PASS an admin can’t import from a board they can’t see (404): 404
+FAIL an admin reads Items
+PASS another team can’t import our board
+PASS description, unit, cost, taxable, name, archive and the same price fire nothing: []
+FAIL a price change fires price.changed with the one waiting quote: []
+FAIL Finance → Quotes flags the waiting quote whose item price changed (priceNow reads item:<id>)
+PASS the member’s Jobs list carries no item price
+PASS the server starts again
+FAIL Items are kept across a restart: 0
+30 FAILED
