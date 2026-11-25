@@ -92,6 +92,7 @@ try {
   ok(await A.until(`(${statOf('Forecast finish')}?.textContent || '').includes(${JSON.stringify(fcLabel)}) && ${statOf('Forecast finish')}.classList.contains('bad') && /9 days after the end date/.test(document.querySelector('#camps .ccr-why').textContent)`, 8000), 'the pulse forecasts the finish at this pace: ' + await A.ev(`document.querySelector('#camps .cc-pulse-fc')?.textContent`));
   ok(await A.ev(`${statOf('Quiet 3+ days')}?.querySelector('b').textContent === '3'`), 'and how many tasks have gone quiet: ' + await A.ev(`${statOf('Quiet 3+ days')}?.textContent`));
   ok(await A.ev(`[...document.querySelectorAll('#camps .cc-idea p')].some((p) => p.textContent.includes('Install 1') && p.textContent.includes('hasn’t moved in 6 days (Sam)'))`), 'What to do next: the quietest task, with Nudge');
+  ok(await A.ev(`![...document.querySelectorAll('#camps .cc-idea p')].some((p) => p.textContent.includes('At this pace'))`), 'and not the late forecast again (the numbers right above show it)');
   // The report, on the same Progress tab.
   const R = (q) => `document.querySelector('#camps .cc-body ${q}')`;
   ok(await A.until(`!!${R('.ccr-top')}`), 'the report is on Progress');

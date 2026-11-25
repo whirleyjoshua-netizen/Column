@@ -77,15 +77,25 @@ try {
   ok(await A.until(`[...document.querySelectorAll('#camps .ccp-log button')].find((b) => b.textContent === 'Log a call or email')?.classList.contains('on')`), 'Log a call or email opens the log');
   await A.tap(`[...document.querySelectorAll('#camps .ccp-log button')].find((b) => b.textContent === 'Log a call or email')`);
   ok(await A.ev(`${T('.ccp-report')}.textContent.includes('Calls and emails logged')`), 'the report keeps calls and emails logged');
+  ok(await A.ev(`[...document.querySelectorAll('#camps .cc-body button')].filter((b) => b.textContent.startsWith('Write a report')).length === 1`), 'one Write a report on the page, not two');
   // Print: only the report (no buttons, no log, no ideas).
   await A.ev(`(() => { window.__printed = null; window.open = () => { const doc = document.implementation.createHTMLDocument('p'); window.__printed = doc; return { document: doc, print() {} }; }; return true; })()`);
   await A.tap(T('.ccr-print'));
   ok(await A.until(`!!window.__printed?.querySelector('.ccr-top')`), 'Print makes a copy of the report');
   ok(await A.ev(`(() => { const d = window.__printed; return !d.querySelector('button') && !d.querySelector('textarea') && !d.querySelector('.cc-pulse-ai') && !d.querySelector('.ccp-log'); })()`), 'with no buttons, no log, no ideas');
+  ok(await A.ev(`!/Team/.test(window.__printed.body.textContent)`), 'and no empty Team label (faces don’t print)');
   // An idea goes where it says: overdue → Work with the Overdue chip.
   await A.tap(`[...document.querySelectorAll('#camps .cc-pulse-ai .cc-idea')].find((x) => x.textContent.includes('overdue')).querySelector('button')`);
   ok(await A.until(`${T('.cc-body')}?.dataset.tab === 'work' && ${T('.cc-chip[data-chip=overdue]')}.classList.contains('on')`), '“See them” goes to Work with Overdue on');
   await A.tap(T('.cc-chip[data-chip=all]'));
+  // Logging started from Plan (a form from Lists & docs) opens the log on Progress, where it is.
+  await api('POST', '/lists', { campaignId: camp.id, kind: 'form', name: 'Intake form', columns: ['Name', 'Notes'], rows: [{ cells: ['Ana', ''] }] });
+  await tabTo('progress'); await tabTo('plan');
+  await A.tap(`[...document.querySelectorAll('#camps .cc-where button')].find((b) => b.textContent.startsWith('Lists & docs'))`);
+  await A.until(`[...document.querySelectorAll('#menu button')].some((b) => b.textContent.includes('Intake form'))`);
+  await A.tap(`[...document.querySelectorAll('#menu button')].find((b) => b.textContent.includes('Intake form'))`);
+  ok(await A.until(`${T('.cc-body')}?.dataset.tab === 'progress' && [...document.querySelectorAll('#camps .ccp-log button')].find((b) => b.textContent === 'Log a call or email')?.classList.contains('on')`), 'logging started from Plan opens the log on Progress');
+  await A.tap(`[...document.querySelectorAll('#camps .ccp-log button')].find((b) => b.textContent === 'Log a call or email')`);
   // The tab sticks within a campaign.
   await tabTo('progress');
   await tabTo('plan'); await tabTo('progress');

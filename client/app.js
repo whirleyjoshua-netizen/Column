@@ -7498,7 +7498,7 @@
     const moneyBox = c.budget || c.money ? h('section', { class: 'cc-card' }, h('div', { class: 'cc-card-h' }, h('b', {}, 'Money')),
       h('div', { class: 'ccr-stats' }, c.budget ? stat(money(c.budget), 'Budget') : null, c.money?.spent ? stat(money(c.money.spent), 'Spent', c.budget && c.money.spent > c.budget ? 'bad' : '') : null, c.money?.earned ? stat(money(c.money.earned), 'Brought in', 'good') : null)) : null;
     const bar2 = h('div', { class: 'ccr-bar' }, h('small', { class: 'muted' }, `Worked out from the tasks as of ${ccDay(ins.today)}.`), h('span', { style: 'flex:1' }),
-      h('button', { class: 'btn small', onclick: () => openReport(c) }, 'Write a report to the feed'),
+      h('button', { class: 'btn small' + (reportDue(c) ? ' sk-nudge' : ''), title: reportDue(c) ? 'It’s been over a week since the last report' : 'Numbers from the log, and what you found, posted to the feed', onclick: () => openReport(c) }, reportDue(c) ? 'Write a report to the feed ·' : 'Write a report to the feed'),
       h('button', { class: 'btn small ccr-print', onclick: (e) => ccReportPrint(c, e.currentTarget.closest('.cc-body')) }, '🖨 Print'));
     // Progress, top to bottom (2026-11-25): the bar, how it's going, the numbers, what to do next, the report, the log.
     return [bar2, parts.health, top, parts.ideas, h('div', { class: 'ccp-report' }, ...[chart, phases, people, quiet, moneyBox, calls].filter(Boolean)), parts.log].filter(Boolean);
@@ -7510,6 +7510,7 @@
     const copy = document.createElement('div');
     for (const sel of ['.ccp-health', '.ccr-top', '.ccp-report']) { const el = body.querySelector(sel); if (el) copy.append(el.cloneNode(true)); }
     copy.querySelectorAll('button:not(.linkish), .ccr-tip, .ccr-bar, textarea, input').forEach((x) => x.remove());
+    copy.querySelectorAll('.ccp-h-team').forEach((x) => x.closest('.ccp-h-item')?.remove());
     copy.querySelectorAll('button.linkish').forEach((b) => b.replaceWith(document.createTextNode(b.textContent)));
     w.document.title = `${c.name} · report`;
     const st = w.document.createElement('style');
@@ -8062,8 +8063,7 @@
     // The log and what was recently done (2026-11-25: Activity, at the bottom of Progress).
     const logPart = () => h('div', { class: 'ccp-log' },
       h('section', { class: 'cc-card' }, h('div', { class: 'cc-card-h' }, h('b', {}, 'Log'), h('span', { style: 'flex:1' }),
-        h('button', { class: 'btn small' + (K.logOpen === c.id ? ' on' : ''), onclick: () => openLog(c) }, 'Log a call or email'),
-        h('button', { class: 'btn small' + (reportDue(c) ? ' sk-nudge' : ''), title: reportDue(c) ? 'It’s been over a week since the last report' : 'Numbers from the log, and what you found, posted to the feed', onclick: () => openReport(c) }, reportDue(c) ? 'Write a report ·' : 'Write a report')),
+        h('button', { class: 'btn small' + (K.logOpen === c.id ? ' on' : ''), onclick: () => openLog(c) }, 'Log a call or email')),
         logBox(c)),
       (() => { const ev = tasks.filter((t) => t.done && t.doneAt).sort((a, b) => b.doneAt - a.doneAt).slice(0, 25); return ev.length ? h('section', { class: 'cc-card' }, h('div', { class: 'cc-card-h' }, h('b', {}, 'Recently done')),
         h('div', { class: 'cc-hist' }, ev.map((t) => h('button', { class: 'cc-hist-row', onclick: () => taskWindow(t) }, h('span', {}, t.doneBy ? [h('b', {}, t.doneBy), ' finished '] : 'Finished ', h('i', {}, t.text)), h('small', {}, ago(t.doneAt)))))) : null; })());
@@ -8075,7 +8075,6 @@
     const quiet = ins.stalls.find((x) => x.t.assigneeId);
     const ideas = [
       quiet ? [`“${shortText(quiet.t.text, 50)}” hasn’t moved in ${plural(quiet.days, 'day')} (${memberName(quiet.t.assigneeId)}).`, 'Nudge', () => ccNudge(quiet.t)] : null,
-      ins.late > 0 && c.status === 'active' ? [`At this pace it finishes ${ccDay(ins.forecast)}, ${plural(ins.late, 'day')} after the end date.`, 'See why', () => $('#camps .ccr-top')?.scrollIntoView({ block: 'center', behavior: 'smooth' })] : null,
       nobody.length ? [`${nobody.length} open task${nobody.length === 1 ? ' has' : 's have'} nobody on ${nobody.length === 1 ? 'it' : 'them'}.`, 'Assign them', () => { K.wfilter = 'all'; setTabC('work'); }] : null,
       overdue.length ? [`${overdue.length} task${overdue.length === 1 ? ' is' : 's are'} overdue.`, 'See them', () => { K.wfilter = 'overdue'; setTabC('work'); }] : null,
       phases.find((g) => !tasksOf(g.id).length) ? [`“${phases.find((g) => !tasksOf(g.id).length).title}” has no tasks yet.`, 'Suggest tasks', (e) => suggestPlan(c, e.currentTarget)] : null,
@@ -9917,8 +9916,15 @@
       { label: file ? 'Remove (the file stays)' : 'Remove', danger: true, run: () => api('DELETE', '/lists/' + l.id).catch((e) => toast(e.message)) },
     ].filter(Boolean));
   }
+  // The log lives on Progress (2026-11-25): starting it from Plan or Work (a list, a note, a follow-up) goes there.
+  function ccToLog(c) {
+    if (K.open !== c.id || ccTabOf(K.ctab) === 'progress') return;
+    K.ctab = 'progress'; K.planView = null;
+    setTimeout(() => $('#camps .ccp-log')?.scrollIntoView({ block: 'start', behavior: 'smooth' }), 60);
+  }
   function logRow(c, l, r) {
     K.logOpen = c.id;
+    ccToLog(c);
     K.logFrom[c.id] = l.id;
     K.pick = { listId: l.id, rowId: r.id };
     renderCamps();
@@ -10024,6 +10030,7 @@
   function addToNote(c, text) {
     K.noteDraft[c.id] = [K.noteDraft[c.id], text].filter(Boolean).join(' · ');
     K.logOpen = c.id;
+    ccToLog(c);
     const inp = $('#camps .log-note');
     if (inp) inp.value = K.noteDraft[c.id];
     else renderCamps();
@@ -10335,6 +10342,7 @@
     if (K.open !== c.id || !campsShown()) openCampaign(c.id);
     if (r) return logRow(c, l, r);
     K.logOpen = c.id;
+    ccToLog(c);
     K.logFrom[c.id] = 'blank';
     K.pick = null;
     renderCamps();
@@ -10355,6 +10363,7 @@
 
   function openLog(c, { ask = false } = {}) {
     K.logOpen = ask || K.logOpen !== c.id ? c.id : null;
+    if (K.logOpen) ccToLog(c);
     if (ask) K.askOpen = true;
     if (!K.logOpen) K.book = null;
     renderCamps();
