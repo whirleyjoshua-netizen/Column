@@ -51,7 +51,7 @@ export function signoffModule(d) {
       customer: c ? c.name || c.company || '' : '', customer_email: c?.email || '', customer_phone: c?.phone || '',
       address: (addr && String(at.rec.values[addr.id])) || (c ? [c.address, c.city].filter(Boolean).join(', ') : ''),
       job: recName(at), record: recName(at), project: at.p.name, company: ws.name, team: ws.name, date: day,
-      total: totals ? money(totals.total) : val && !(items && !view?.prices) ? PJ.words(ws, at.p, val, at.rec.values[val.id], view) : '',
+      total: totals ? money(totals.total) : val ? PJ.words(ws, at.p, val, at.rec.values[val.id], view) : '',
     };
     const rows = items ? at.rec.values[items.id].rows.map((r) => ({ desc: r.desc || r.name || '', qty: r.qty ?? '', price: view?.prices ? money(r.price || 0) : '', total: view?.prices ? money(Math.round((r.qty || 0) * (r.price || 0))) : '' })) : [];
     return { out, rows, totals, view };

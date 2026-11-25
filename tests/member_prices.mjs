@@ -291,6 +291,17 @@ try {
   const ownerJob = ((await rico('GET', `/projects/${jp.id}/records`)).body || []).find((x) => x.id === samJob?.id);
   ok(ownerJob?.values[jfid('price')]?.rows?.[0]?.price === 432177, 'the job got the default line with its price (the owner sees it)');
   ok(!leaks(r.body) && !leaks(((await sam('GET', `/projects/${jp.id}/records`)).body || []).find((x) => x.id === samJob?.id)), 'and the member who started it sees no price');
+  // A sign-off form on that job: a member's leaves the line prices and their total out, but keeps the Value (not a price).
+  await rico('POST', `/projects/${jp.id}/schema`, { typeId: jtp.id, op: 'addField', name: 'Sign-off', type: 'signature' });
+  await rico('POST', `/projects/${jp.id}/schema`, { typeId: jtp.id, op: 'addField', name: 'Value', type: 'money' });
+  const jtp2 = ((await rico('GET', '/projects')).body.find((x) => x.id === jp.id)).types.find((x) => x.id === jtp.id);
+  const sigF = jtp2.fields.find((f) => f.name === 'Sign-off'), valF = jtp2.fields.find((f) => f.name === 'Value');
+  ok(valF?.key === 'value', '(setup) the Value field’s key is value: ' + valF?.key);
+  await rico('PATCH', `/records/${samJob?.id}`, { values: { [valF?.id]: 9000 } });
+  const ownerForm = (await rico('GET', `/signoff/${samJob?.id}/${sigF?.id}/preview`)).body;
+  ok(leaks(ownerForm), 'the owner’s sign-off form has the line prices');
+  const samForm = (await sam('GET', `/signoff/${samJob?.id}/${sigF?.id}/preview`)).body;
+  ok(samForm && !leaks(samForm) && JSON.stringify(samForm.rows || []).includes('9,000'), 'a member’s has no line prices or their total, and keeps the Value: ' + JSON.stringify(samForm?.rows || null).slice(0, 200));
 
   // 7. The export: a member's own export has no prices; the owner's team export does.
   await sam('PATCH', `/records/${samPlain.id}`, { values: { terms: 'mine' } });
