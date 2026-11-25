@@ -8627,7 +8627,9 @@
     t = taskById(t.id) || t;
     const g = goalById(t.goalId);
     const camp = g && campById(g.campaignId);
-    const redraw = () => { const sc = $('#sheet .sheet')?.scrollTop || 0; taskWindow(taskById(t.id) || t); const el = $('#sheet .sheet'); if (el) el.scrollTop = sc; };
+    // Only while it's still open on this task: a save that answers after the window was closed (or another opened)
+    // drew it open again (2026-11-25).
+    const redraw = () => { if (!$(`#sheet:not(.hidden) .task-win[data-task="${t.id}"]`)) return; const sc = $('#sheet .sheet')?.scrollTop || 0; taskWindow(taskById(t.id) || t); const el = $('#sheet .sheet'); if (el) el.scrollTop = sc; };
     const save = async (changes) => { await patchTask(taskById(t.id) || t, changes); redraw(); };
     const text = h('input', { class: 'win-title', value: t.text, maxlength: 500, 'aria-label': 'Task' });
     text.addEventListener('change', () => text.value.trim() && save({ text: text.value.trim() }));

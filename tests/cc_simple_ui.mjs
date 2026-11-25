@@ -158,6 +158,17 @@ try {
   await A.until(`[...document.querySelectorAll('#menu button')].some((b) => b.textContent.includes('Install checklist'))`);
   await A.tap(`[...document.querySelectorAll('#menu button')].find((b) => b.textContent.includes('Install checklist'))`);
   ok(await A.until(`!!${T('.cc-listopen .clist.open')} && ${T('.cc-listopen')}.textContent.includes('Install checklist')`), 'a checklist opens on Plan, open, as it did on Resources');
+  // Closing the whole task right after a change keeps it closed (its save used to redraw it open again).
+  await A.tap(`${rowOf('Call the Lee family')}.querySelector('.cc-row-name')`);
+  await A.until(`${T('.cc-td .cc-pp-name')}?.value === 'Call the Lee family'`);
+  await A.tap(T('.cc-td .cc-td-full'));
+  await A.until(`!!document.querySelector('#sheet .task-win')`);
+  await A.ev(`(() => { const i = document.querySelector('#sheet .task-win .win-title'); i.value = 'Call the Lee family today'; i.dispatchEvent(new Event('change')); document.querySelector('#sheet [aria-label=Close]').click(); return true; })()`);
+  await sleep(1200);
+  ok(await A.ev(`document.querySelector('#sheet').classList.contains('hidden') && !document.querySelector('#sheet .task-win')`), 'a task closed right after a change stays closed');
+  await api('PATCH', '/tasks/' + (await taskApi('Call the Lee family today')).id, { text: 'Call the Lee family' });
+  await tabTo('work'); await tabTo('plan');
+  await A.until(`!!${rowOf('Call the Lee family')}`);
   // The whiteboard is still a button away (it becomes the Sketch tab later).
   ok(await A.until(`!!${T('.cc-sketch-btn')}`), 'a Sketch button on Plan');
   await A.tap(T('.cc-sketch-btn'));
