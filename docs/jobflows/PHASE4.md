@@ -226,6 +226,7 @@ Approved by ChatGPT with two safeguards, now in §5b: a round's boundary is fixe
   `state.workspace.stacks` lists a job's stack only for those who see the job.
 - **Map**: `GET /api/map/jobs?from&to&undated` → `{ points: [{ kind, id, name, address, lat, lng, stage?, flow?, next?,
   scheduled? }], more, missing, off? }`.
+  Points in order of Scheduled day, then name, then id (plain string order); clients after jobs, by name, then id.
 - **Tasks from a bundle**: `settings.bundleId` → the version's `settings.tasks` and `settings.bundleFrom { id, name }`.
 - **Campaign step**: `settings.templateId` → the version's `settings.template` and `settings.templateFrom { id, name }`;
   the run view's step gets `campaign: { id, name, status }` once one is made.

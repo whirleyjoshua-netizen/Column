@@ -133,7 +133,8 @@ try {
   ok(r.status === 200 && need(r.body, pw.id)?.need === 1 && need(r.body, pw.id)?.got === 0 && need(r.body, lad.id)?.need === 2 && need(r.body, lad.id)?.got === 0, 'the sheet lists what the step needs: washer 0 of 1, ladder 0 of 2 (the ladder out before the run doesn’t count): ' + JSON.stringify(r.body?.items));
   ok(need(r.body, lad.id)?.free?.length === 2 && !need(r.body, lad.id).free.some((u) => u.id === l1.id), 'and only the free ladders to pick');
   ok(r.status === 200 && Array.isArray(r.body?.items) && !/cost|value|40000|15000/.test(JSON.stringify(r.body)), 'no costs on the sheet');
-  ok(Array.isArray(r.body?.out) && Array.isArray(r.body?.notes) && need(r.body, pw.id)?.name === 'Pressure washer' && need(r.body, pw.id)?.free?.every((u) => u.id && u.name), 'the sheet’s shape: items (itemId, name, need, got, free [{ id, name }]), out, notes');
+  const keys = (o) => Object.keys(o || {}).sort().join();
+  ok(keys(r.body) === 'items,notes,out' && Array.isArray(r.body.out) && Array.isArray(r.body.notes) && r.body.items.length === 2 && r.body.items.every((x) => keys(x) === 'free,got,itemId,name,need' && x.free.every((u) => keys(u) === 'id,name')) && need(r.body, pw.id)?.name === 'Pressure washer', 'the sheet’s exact shape: { items: [{ itemId, name, need, got, free: [{ id, name }] }], out, notes }: ' + JSON.stringify(r.body?.items?.[0]));
   // Gear for another job doesn't count.
   const other = await bareJob('Other job');
   await inv(l2, { act: 'checkout', jobId: other.id });
@@ -166,12 +167,12 @@ try {
   ok(await until(async () => (await stateOf(j1.id, 'Gear out')) === 'done'), 'a ladder checked out to the job by hand counts: 2 of 2, the check-out is done');
   const run1b = await runOf(j1.id);
   ok(/^Gear out: /.test(run1b?.gearLine || '') && /Pressure washer/.test(run1b.gearLine) && /Ladder ×3/.test(run1b.gearLine), 'the run card’s gear line: ' + run1b?.gearLine);
-  ok(!!run1b?.gearLine && !/"cost"|"value"/.test(JSON.stringify(run1b)), 'no costs on the run');
+  ok(!!run1b?.gearLine && !/"cost"|"value"|"price"/.test(JSON.stringify(run1b)), 'no costs on the run');
   // Check-in waits while anything is out on the job (the ladder from before the run too).
   await done(j1.id, F1.sid('Work'));
   await sleep(300);
   r = await gearAt(j1.id, sIn);
-  ok((r.body?.out || []).every((u) => u.unitId && u.name && u.item && u.memberId) && (r.body?.out || []).some((u) => u.unitId === l3.id && u.item === 'Ladder'), 'each thing out: unitId, name, item, who has it');
+  ok((r.body?.out || []).length > 0 && (r.body?.out || []).every((u) => Object.keys(u).sort().join() === 'item,memberId,name,unitId') && (r.body?.out || []).some((u) => u.unitId === l3.id && u.item === 'Ladder'), 'each thing out: unitId, name, item, who has it');
   ok(r.status === 200 && r.body?.out?.length === 4 && (await stateOf(j1.id, 'Gear in')) === 'current', 'check-in lists the 4 out on the job (one from before the run) and waits: ' + r.body?.out?.length);
   // Returning the gear doesn't reopen the check-out.
   r = await gearDo(j1.id, sIn, { act: 'return', unitId: pw2.id });

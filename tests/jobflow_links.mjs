@@ -219,7 +219,7 @@ try {
   ok(!ids(r.body).includes(m6.id) && r.body?.missing >= 1, 'a failed lookup leaves the point out, counted as missing');
   ok((geo.get('21 shared st') || 0) === 1, 'a shared address (however it’s spaced) is looked up once: ' + JSON.stringify([...geo]));
   const cpt = (r.body?.points || []).find((x) => x.kind === 'client');
-  ok(!!cpt && cpt.name === 'Lone Client' && cpt.address === '11 Lonely Rd' && typeof cpt.lat === 'number' && !('scheduled' in cpt) && !('stage' in cpt) && !/lone@x/.test(JSON.stringify(cpt)), 'a client point: name, address, lat, lng, no job fields and no email: ' + JSON.stringify(cpt));
+  ok(!!cpt && cpt.name === 'Lone Client' && cpt.address === '11 Lonely Rd' && typeof cpt.lat === 'number' && typeof cpt.lng === 'number' && !('scheduled' in cpt) && !('stage' in cpt) && !/lone@x/.test(JSON.stringify(cpt)), 'a client point: name, address, lat, lng, no job fields and no email: ' + JSON.stringify(cpt));
   ok((r.body?.points || []).some((x) => x.kind === 'client' && x.id === (lone.id ?? lone.contact?.id)) && !(r.body?.points || []).some((x) => x.kind === 'client' && x.id === danaId), 'owners see clients with an address and no job among the points');
   const before = geoCalls();
   await map(rico);
@@ -260,7 +260,10 @@ try {
     const bst = (await bo('GET', '/state')).body;
     await bo('PATCH', '/workspace', { tools: { ...bst.workspace.tools, projects: true, map: true } });
     const bp = (await bo('POST', '/projects', { template: 'trades', trades: ['cleaning'] })).body;
-    for (let i = 0; i < 205; i++) await bo('POST', `/projects/${bp.id}/records`, { typeId: bp.types[0].id, values: { job: 'Big ' + String(i).padStart(3, '0'), address: `${100 + i} Big St`, scheduled: day(1 + (i % 20)) } });
+    // Two jobs on the same day with the same name: the last tie-breaker is the id.
+    const tw = [];
+    for (let i = 0; i < 2; i++) tw.push((await bo('POST', `/projects/${bp.id}/records`, { typeId: bp.types[0].id, values: { job: 'Aaa twin', address: `${90 + i} Twin St`, scheduled: day(1) } })).body?.id);
+    for (let i = 0; i < 203; i++) await bo('POST', `/projects/${bp.id}/records`, { typeId: bp.types[0].id, values: { job: 'Big ' + String(i).padStart(3, '0'), address: `${100 + i} Big St`, scheduled: day(1 + (i % 20)) } });
     geo.clear();
     const b1 = (await bo('GET', '/map/jobs')).body;
     const lookups = geoCalls();
@@ -271,8 +274,11 @@ try {
     const days = (b1?.points || []).map((x) => x.scheduled);
     ok(days.length === 200 && days.every((d, i) => !i || days[i - 1] <= d), 'in Scheduled-day order');
     const keyOf = (x) => x.scheduled + '|' + x.name;
-    ok(b1?.points?.length === 200 && b1.points.every((x, i, a) => !i || keyOf(a[i - 1]) < keyOf(x)), 'and by name within a day');
-    const all = Array.from({ length: 205 }, (_, i) => ({ scheduled: day(1 + (i % 20)), name: 'Big ' + String(i).padStart(3, '0') })).sort((a, b) => keyOf(a) < keyOf(b) ? -1 : 1).slice(0, 200).map((x) => x.name);
+    const keyId = (x) => keyOf(x) + '|' + x.id;
+    ok(b1?.points?.length === 200 && b1.points.every((x, i, a) => !i || keyId(a[i - 1]) < keyId(x)), 'and by name, then id, within a day');
+    const twins = (b1?.points || []).filter((x) => x.name === 'Aaa twin').map((x) => x.id);
+    ok(twins.length === 2 && JSON.stringify(twins) === JSON.stringify([...tw].sort()) && b1.points[0].name === 'Aaa twin', 'same day and name: by id: ' + JSON.stringify(twins));
+    const all = [{ scheduled: day(1), name: 'Aaa twin' }, { scheduled: day(1), name: 'Aaa twin' }, ...Array.from({ length: 203 }, (_, i) => ({ scheduled: day(1 + (i % 20)), name: 'Big ' + String(i).padStart(3, '0') }))].sort((a, b) => (keyOf(a) < keyOf(b) ? -1 : keyOf(a) > keyOf(b) ? 1 : 0)).slice(0, 200).map((x) => x.name);
     ok(JSON.stringify((b1?.points || []).map((x) => x.name)) === JSON.stringify(all), 'exactly the first 200 by Scheduled day then name (ties within a day broken by name)');
   }
 
@@ -294,7 +300,7 @@ try {
   const tpl = (await rico('POST', '/templates', { campaignId: src.id, name: 'Deep clean' })).body;
   ok(!!tpl?.id, '(setup) a saved campaign');
   const FC = await flowOf('With a campaign', { steps: [C, { kind: 'campaign', name: 'Run playbook', settings: { templateId: tpl.id } }, D('After')] });
-  ok(FC.status === 200 && FC.step('Run playbook')?.settings?.templateFrom?.id === tpl.id && FC.step('Run playbook')?.settings?.template && FC.step('Run playbook')?.who?.type === 'admins', 'a Campaign step publishes with the saved campaign copied in, for owners and admins: ' + FC.error);
+  ok(FC.status === 200 && FC.step('Run playbook')?.settings?.templateFrom?.id === tpl.id && FC.step('Run playbook')?.settings?.templateFrom?.name === 'Deep clean' && FC.step('Run playbook')?.settings?.template && FC.step('Run playbook')?.who?.type === 'admins', 'a Campaign step publishes with the saved campaign copied in, for owners and admins: ' + FC.error);
   ok((await flowOf('Campaign for anyone', { steps: [C, { kind: 'campaign', name: 'X', settings: { templateId: tpl.id }, who: { type: 'member', id: samId } }] })).status === 400, 'a Campaign step for a member is refused');
   ok((await flowOf('Campaign missing', { steps: [C, { kind: 'campaign', name: 'X', settings: { templateId: 'nope' } }] })).status === 400, 'a Campaign step with no saved campaign is refused');
   await rico('PATCH', '/templates/' + tpl.id, { name: 'Renamed playbook' });
@@ -304,7 +310,7 @@ try {
   const camps = async () => Object.values((await rico('GET', '/state')).body.campaigns || []).filter((x) => !!jc?.id && x.recordId === jc.id && x.kind !== 'job');
   let cl = await camps();
   ok(cl.length === 1 && cl[0].id === sc?.id && /Deep clean · Campaign job/.test(cl[0].name), 'one campaign, linked to the job, named from the snapshot (not the rename): ' + JSON.stringify(cl.map((x) => x.name)));
-  ok(sc?.status === 'active' && sc?.name === cl[0]?.name && (await stateOf(jc?.id, 'Run playbook')) === 'current', 'the step shows the campaign (active) and waits for it');
+  ok(Object.keys(sc || {}).sort().join() === 'id,name,status' && sc?.status === 'active' && sc?.name === cl[0]?.name && (await stateOf(jc?.id, 'Run playbook')) === 'current', 'the step shows the campaign (active) and waits for it');
   // A restart right after it was made: the marker and the campaign are both there, nothing repeats.
   await stop();
   ok(await start(), 'restarted after the campaign was made');
