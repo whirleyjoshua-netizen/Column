@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn, execSync } from 'node:child_process';
 import http from 'node:http';
+import './cookiejar.mjs'; // connecting Gmail finishes in the browser that started it
 const S = path.resolve(process.argv[2] || '.');
 const DIR = S + '/dk/customer_sends';
 const OUTBOX = DIR + '/outbox';
@@ -41,9 +42,24 @@ const fake = http.createServer(async (req, res) => {
   out(404, { message: 'nope' });
 });
 await new Promise((r) => fake.listen(F_PORT, '127.0.0.1', r));
+// A stand-in for Google (as tests/gmail.mjs), so a teammate can email a signing link from their own Gmail.
+const G_PORT = 5260, gsent = [];
+const gfake = http.createServer(async (req, res) => {
+  let body = '';
+  for await (const c of req) body += c;
+  const url = new URL(req.url, 'http://x');
+  res.setHeader('content-type', 'application/json');
+  if (url.pathname === '/token') return res.end(JSON.stringify({ access_token: 'at', refresh_token: 'rt', expires_in: 3600, scope: 'openid email https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/gmail.send' }));
+  if (url.pathname === '/v1/userinfo') return res.end(JSON.stringify({ email: 'rico@gmail.com' }));
+  if (url.pathname.endsWith('/calendarList')) return res.end(JSON.stringify({ items: [{ id: 'primary', summary: 'Rico', primary: true, accessRole: 'owner' }] }));
+  if (url.pathname.endsWith('/events')) return res.end(JSON.stringify({ items: [] }));
+  if (url.pathname === '/gmail/v1/users/me/messages/send') { gsent.push(Buffer.from(JSON.parse(body).raw, 'base64url').toString()); return res.end(JSON.stringify({ id: 'm' + gsent.length })); }
+  res.writeHead(404); res.end('{}');
+});
+await new Promise((r) => gfake.listen(G_PORT, '127.0.0.1', r));
 const texts = (digits) => TW.sent.filter((m) => String(m.To || '').replace(/\D/g, '').endsWith(digits));
 
-const base = { ...process.env, PORT: String(PORT), PUBLIC_URL: B, DATA_DIR: DIR, RESEND_API_KEY: '', DATABASE_URL: '', STRIPE_SECRET_KEY: '', STRIPE_PRICE: '', SKIP_SETUP: '1', NODE_ENV: 'test', CUSTMSG_TICK_MS: '300', REVIEW_DELAY_MS: '0', JOBFLOWS_DAY_MS: '2000', TWILIO_API: F, SEND_TICKET_MS: String(TICKET_MS), SENDS_TEST_AGENT: '1' };
+const base = { ...process.env, PORT: String(PORT), PUBLIC_URL: B, DATA_DIR: DIR, RESEND_API_KEY: '', DATABASE_URL: '', STRIPE_SECRET_KEY: '', STRIPE_PRICE: '', SKIP_SETUP: '1', NODE_ENV: 'test', CUSTMSG_TICK_MS: '300', REVIEW_DELAY_MS: '0', JOBFLOWS_DAY_MS: '2000', TWILIO_API: F, SEND_TICKET_MS: String(TICKET_MS), SEND_TICKET_KEEP_MS: '9000', SENDS_TEST_AGENT: '1', GOOGLE_CLIENT_ID: 'cid', GOOGLE_CLIENT_SECRET: 'cs', GOOGLE_API: `http://127.0.0.1:${G_PORT}` };
 try { execSync(`lsof -ti tcp:${PORT} -sTCP:LISTEN | xargs kill 2>/dev/null`); await sleep(300); } catch {}
 let srv;
 const start = async (extra = { MAIL_OUTBOX: '1' }) => {
@@ -59,24 +75,37 @@ const call = (tok) => async (m, p, body) => {
   return r ? { status: r.status, body: await r.json().catch(() => null) } : { status: 0, body: null };
 };
 
-// §1: every provider call is accounted for. SENDS.md lists, per server file, how many calls of each sender it has;
-// a new call anywhere (or one gone) fails this until the list says which way it's covered.
+// §1: every provider call is accounted for. SENDS.md lists, per server file, how many calls of each sender it has and
+// how each is covered; a new call anywhere (or one gone) fails this until the list says which way it's covered. The
+// categories are fixed: ticket (a person confirmed it), auto step (a Job Flow step set to "Send by itself"), team switch
+// (a Customer messages switch an owner turned on, which says it sends by itself), approval (an agent's draft the person
+// accepted, the Flows hold, the Mail tool's review), own action (a receipt for what the customer just did), internal
+// (to the team, never a customer). It's a text count, not a parser: SENDS.md says so, and lists each route in §1.
 {
-  const SENDERS = { 'mailer.customerEmail(': 'mailer.customerEmail', 'sendText(': 'sendText', '.sendMail(': 'sendMail' };
+  const SENDERS = ['mailer.customerEmail(', 'tellCustomer(', 'flowTell(', 'twilioText(', 'sendText(', '.sendMail(', 'SIGNOFF_MAIL(', 'emailCustomer(', 'emailSignLink(', 'agentEmail('];
+  const CATS = ['ticket', 'auto step', 'team switch', 'approval', 'own action', 'internal'];
   const doc = fs.existsSync(S + '/docs/jobflows/SENDS.md') ? fs.readFileSync(S + '/docs/jobflows/SENDS.md', 'utf8') : '';
   ok(!!doc, 'docs/jobflows/SENDS.md lists every call that emails or texts a customer');
-  const listed = {};
-  for (const m of doc.matchAll(/^\|\s*`server\/([\w.]+)`\s*\|\s*`([\w.]+)`\s*\|\s*(\d+)\s*\|\s*(ticket|auto step|approval|own action)\b/gm)) listed[`${m[1]} ${m[2]}`] = Number(m[3]);
+  const listed = {}, badCat = [];
+  for (const m of doc.matchAll(/^\|\s*`server\/([\w.]+)`\s*\|\s*`([\w.]+\()`\s*\|\s*(\d+)\s*\|\s*([^|]+?)\s*\|/gm)) {
+    listed[`${m[1]} ${m[2]}`] = (listed[`${m[1]} ${m[2]}`] || 0) + Number(m[3]);
+    for (const c of m[4].split(/\s*,\s*/)) if (!CATS.includes(c)) badCat.push(`${m[1]} ${m[2]}: ${c}`);
+  }
   const found = {};
+  const defn = (l, name) => new RegExp(`^\\s*(async\\s+)?(function\\s+)?${name.replace(/[.(]/g, (x) => '\\' + x)}[^)]*\\)\\s*\\{`).test(l) || new RegExp(`^\\s*(const|let)?\\s*${name.replace(/[.(]/g, '').replace(/^\./, '')}\\s*[:=]`).test(l);
   for (const f of fs.readdirSync(S + '/server').filter((x) => x.endsWith('.js'))) {
-    const src = fs.readFileSync(S + '/server/' + f, 'utf8').split('\n').filter((l) => !/^\s*\/\//.test(l) && !/^\s*(async\s+)?function\s/.test(l) && !/^\s*async\s+\w+\(.*\)\s*\{\s*$/.test(l)).join('\n');
-    for (const [needle, name] of Object.entries(SENDERS)) {
-      const n = src.split(needle).length - 1;
+    const lines = fs.readFileSync(S + '/server/' + f, 'utf8').split('\n').filter((l) => !/^\s*\/\//.test(l));
+    for (const name of SENDERS) {
+      const n = lines.filter((l) => !defn(l, name)).reduce((k, l) => k + l.split(name).length - 1, 0);
       if (n) found[`${f} ${name}`] = n;
     }
   }
-  const diff = [...new Set([...Object.keys(found), ...Object.keys(listed)])].filter((k) => found[k] !== listed[k]).map((k) => `${k}: code ${found[k] || 0}, listed ${listed[k] || 0}`);
-  ok(Object.keys(found).length > 0 && !diff.length, 'each provider call in the server is listed with how it’s covered (ticket, auto step, approval, own action): ' + diff.join('; '));
+  const diff = [...new Set([...Object.keys(found), ...Object.keys(listed)])].filter((k) => found[k] !== listed[k]).map((k) => `${k} code ${found[k] || 0}, listed ${listed[k] || 0}`);
+  ok(Object.keys(found).length >= 8 && !diff.length, 'each provider call in the server is listed with how it’s covered: ' + diff.join('; '));
+  ok(!badCat.length, 'only the fixed categories are used: ' + badCat.join('; '));
+  const routes = ['POST /jobs/:id/quote/send', 'POST /visits/:id/on-my-way', 'POST /visits/:id/remind', 'POST /records/:id/review-request', 'POST /contacts/:id/texts', 'POST /signoff/:r/:f/send', 'POST /signoff/:r/:f/remind', 'POST /signs/:id/email', 'POST /profile/proofs'];
+  ok(routes.every((x) => doc.includes(x)), 'SENDS.md names every route in §1: ' + routes.filter((x) => !doc.includes(x)).join(', '));
+  ok(/not a parser|text count/i.test(doc), 'and says the check is a text count');
 }
 
 if (!(await start())) { console.log('FAIL the server didn’t start\n' + srv.log.slice(-2000)); process.exit(1); }
@@ -104,7 +133,7 @@ try {
   const flowOf = async (name, body) => {
     const f = (await rico('POST', '/job-flows', { name, list, ...body })).body;
     const pub = await rico('POST', `/job-flows/${f?.id}/publish`);
-    return { id: f?.id, status: pub.status, error: pub.body?.error || '' };
+    return { id: f?.id, status: pub.status, error: pub.body?.error || '', version: pub.body?.version, sid: (nm) => pub.body?.version?.body?.steps?.find((x) => x.name === nm)?.id };
   };
   const job = async (flowId, contact) => (await rico('POST', '/jobs', { flowId, ...(contact ? { contactId: contact.id } : {}), values: { job: 'J' + Math.random().toString(36).slice(2, 7) } })).body?.job;
   const runOf = async (id, who = rico) => (await who('GET', `/jobs/${id}/run`)).body?.run;
@@ -230,9 +259,9 @@ try {
   // An API key can't send without the two calls (and keys don't reach the app's send routes at all).
   const key = (await rico('POST', '/integrations/keys', { name: 'Zap' })).body?.token;
   r = await call(key)('POST', `/visits/${ve2?.id}/remind`);
-  ok(r.status !== 200 && mails(ed.email, 'visit-reminder').length === 1, 'an API key on a send route: nothing sent (' + r.status + ')');
+  ok(r.status === 401 && mails(ed.email, 'visit-reminder').length === 1 && !texts('5550104').length, 'an API key on a send route: 401, nothing sent (' + r.status + ')');
   r = await call(key)('POST', `/visits/${ve2?.id}/remind`, { confirm: tkE });
-  ok(r.status !== 200 && mails(ed.email, 'visit-reminder').length === 1, 'and a replayed ticket through a key sends nothing');
+  ok(r.status === 401 && mails(ed.email, 'visit-reminder').length === 1, 'and a replayed ticket through a key: 401, nothing sent');
   // An agent (working as Rico, without his OK) gets the preview, and can't confirm it itself.
   r = await rico('POST', '/test/agent-call', { method: 'POST', path: `/api/visits/${ve2?.id}/remind`, body: {} });
   const agTk = r.body?.body?.confirm;
@@ -243,6 +272,74 @@ try {
   ok(r.status === 409, 'nor can its ticket be used by the person (it was made for the agent’s call)');
   await sleep(200);
   ok(mails(ed.email, 'visit-reminder').length === 1, 'nothing sent by the agent');
+
+  // An agent can't use a ticket a person was given either.
+  r = await rico('POST', `/visits/${ve2?.id}/remind`);
+  const humanTk = r.body?.confirm;
+  r = await rico('POST', '/test/agent-call', { method: 'POST', path: `/api/visits/${ve2?.id}/remind`, body: { confirm: humanTk } });
+  ok([403, 409].includes(r.body?.status) && mails(ed.email, 'visit-reminder').length === 1, 'an agent with the person’s ticket: refused, nothing sent (' + r.body?.status + ')');
+  // Another team's person, with this team's ticket, on their own visit.
+  const ot = (await call()('POST', '/auth', { mode: 'create', workspace: 'Other ' + t, name: 'Olga Pine', email: `olga${t}@t.test`, password: 'longenough9', device: 'Mac', deviceId: 'd9' })).body?.token;
+  const olga = call(ot);
+  await olga('PATCH', '/workspace', { tools: { projects: true, contacts: true } });
+  const op = (await olga('POST', '/projects', { template: 'trades', trades: ['cleaning'] })).body;
+  const oc = (await olga('POST', '/contacts', { name: 'Otto Cust', email: `otto${t}@x.test` })).body;
+  const orec = (await olga('POST', `/projects/${op?.id}/records`, { typeId: op?.types?.[0]?.id, values: { job: 'Other job', customer: oc?.id ?? oc?.contact?.id } })).body;
+  const ov = (await olga('POST', `/records/${orec?.id}/visits`, { kind: 'Service', date: later, start: 600, end: 660, memberIds: [] })).body;
+  r = await rico('POST', `/visits/${ve2?.id}/remind`);
+  r = await olga('POST', `/visits/${ov?.id}/remind`, { confirm: r.body?.confirm });
+  ok(r.status === 409 && !mails(`otto${t}@x.test`).length, 'another team’s ticket: 409, nothing sent');
+  // Tickets are kept in the data: one made before a restart still works after it (within its time).
+  r = await rico('POST', `/contacts/${ed.id}/texts`, { body: 'Across a restart.' });
+  const tkRs = r.body?.confirm;
+  await stop();
+  ok(await start(), '(setup) restarted');
+  rico = call(ricoTok); sam = call(samTok); ada = call(adaTok);
+  r = await rico('POST', `/contacts/${ed.id}/texts`, { body: 'Across a restart.', confirm: tkRs });
+  ok(r.status === 200 && texts('5550104').length === 1, 'a ticket made before a restart still sends once after it');
+  ok((await rico('POST', `/contacts/${ed.id}/texts`, { body: 'Across a restart.', confirm: tkRs })).status === 409 && texts('5550104').length === 1, 'and stays used');
+  // At most 200 open tickets a team: the oldest go first. Old tickets are trimmed (after SEND_TICKET_KEEP_MS here, a day in production).
+  const firstTk = (await rico('POST', `/contacts/${ed.id}/texts`, { body: 'Ticket 0' })).body?.confirm;
+  for (let i = 1; i <= 205; i++) await rico('POST', `/contacts/${ed.id}/texts`, { body: 'Ticket ' + i });
+  let cnt = (await rico('GET', '/test/send-tickets')).body;
+  ok(cnt?.open <= 200, 'no more than 200 open tickets for the team: ' + JSON.stringify(cnt));
+  ok((await rico('POST', `/contacts/${ed.id}/texts`, { body: 'Ticket 0', confirm: firstTk })).status === 409, 'the oldest was dropped: 409');
+  await sleep(9500);
+  await rico('POST', `/contacts/${ed.id}/texts`, { body: 'One more' });
+  cnt = (await rico('GET', '/test/send-tickets')).body;
+  ok(cnt?.total <= 2, 'tickets past their keeping time are trimmed: ' + JSON.stringify(cnt));
+  ok(texts('5550104').length === 1, 'none of those previews sent anything');
+  // The signing link from the person's own Gmail (POST /signs/:id/email).
+  const ob = DIR + '/outbox';
+  const vcode = mails(`rico${t}@t.test`).map((m) => (m.subject || '') + ' ' + (m.text || '')).join(' ').match(/\d{3}[ -]?\d{3}/)?.[0];
+  await rico('POST', '/account/verify', { code: vcode });
+  const { url: gUrl } = (await rico('POST', '/calendars/connect', { provider: 'google', tz, mail: true })).body || {};
+  if (gUrl) await fetch(`${B}/oauth/google/callback?code=c&state=${new URL(gUrl).searchParams.get('state')}`);
+  ok((await rico('GET', '/mail')).body?.via === 'Gmail', '(setup) Rico connects Gmail');
+  const pend = ((await rico('GET', '/signs')).body || []).find((x) => ['sent', 'viewed'].includes(x.status));
+  r = await rico('POST', `/signs/${pend?.id}/email`);
+  ok(r.status === 428 && !!r.body?.preview?.email && !gsent.length, 'Email the signing link from Gmail: 428 with a preview, nothing sent');
+  const tkG = r.body?.confirm;
+  r = await rico('POST', `/signs/${pend?.id}/email`, { confirm: tkG });
+  ok(r.status === 200 && gsent.length === 1, 'with the ticket it goes from Gmail, once');
+  ok((await rico('POST', `/signs/${pend?.id}/email`, { confirm: tkG })).status === 409 && gsent.length === 1, 'replayed: 409, not again');
+  // Send proof makes a link and emails nobody: no ticket, nothing sent.
+  const before = mails().length;
+  r = await rico('POST', '/profile/proofs', { all: true, days: 7, to: 'A GC' });
+  ok(r.status !== 428 && mails().length === before && gsent.length === 1, 'Send proof makes a link and emails nobody (' + r.status + ')');
+  // A receipt for the customer's own act (own action): the signed copy, once, only after they sign.
+  if (sigF) {
+    const ivy = await person();
+    const jv = await job(FB.id, ivy);
+    ok(!mails(ivy.email).length, 'no signed copy before they sign');
+    const PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+    r = await rico('POST', `/signoff/${jv?.id}/${sigF.id}/sign`, { consent: true, name: ivy.name, email: ivy.email, sig: PNG });
+    ok(r.status === 200, '(setup) the customer signs in person');
+    ok(await until(async () => mails(ivy.email, 'signed-copy').length === 1) || gsent.some((m) => m.includes(ivy.email)), 'their signed copy is emailed once, with no ticket');
+    r = await rico('POST', `/signoff/${jv?.id}/${sigF.id}/sign`, { consent: true, name: ivy.name, email: ivy.email, sig: PNG });
+    await sleep(500);
+    ok(r.status === 409 && mails(ivy.email, 'signed-copy').length <= 1, 'signing again is refused and sends no second copy');
+  }
 
   // ---------- §2, automatic steps ----------
   const FA = await flowOf('Ask first', { steps: [C, BK, { kind: 'remind', name: 'Remind' }, DO] }); // no setting: ask
@@ -346,12 +443,117 @@ try {
   ok(r.status === 200, 'Don’t send');
   await sleep(2500);
   ok(!mails(fi.email, 'quote-follow-up').length && !(await stepOf(jf?.id, 'Quote'))?.pending, 'declined: never sent, never asked again for that link');
+
+  // A version with no send setting stays without one (it isn't filled in as "ask" or "auto" at publish): read as ask
+  // at the moment it's due, as every version published before Phase 3b is.
+  ok(FA.version && FA.version.body.steps.find((x) => x.kind === 'remind')?.settings?.send === undefined, 'a version with no send setting is kept without one (as older versions are)');
+
+  // The waiting message's words changed before Send (the visit moved to the afternoon): 409 with the new preview and a new key.
+  const gus = await person();
+  const jg = await job(FA.id, gus);
+  const vg = await visit(jg?.id, tomorrow);
+  ok(await until(async () => !!(await stepOf(jg?.id, 'Remind'))?.pending), '(setup) a reminder waiting');
+  s = await stepOf(jg?.id, 'Remind');
+  const oldKey = s?.pending?.key, oldText = s?.pending?.preview?.text;
+  await rico('PATCH', `/visits/${vg?.id}`, { start: 900, end: 960 });
+  r = await rico('POST', `/jobs/${jg?.id}/steps/${s?.id}/message`, { action: 'send', key: oldKey });
+  s = await stepOf(jg?.id, 'Remind');
+  ok(r.status === 409 && !!s?.pending?.key && s.pending.key !== oldKey && s.pending.preview?.text !== oldText, 'the words changed since it was shown: 409, a new preview and key');
+  ok(!mails(gus.email).length, 'nothing sent');
+  r = await rico('POST', `/jobs/${jg?.id}/steps/${s?.id}/message`, { action: 'send', key: s?.pending?.key });
+  ok(r.status === 200 && mails(gus.email, 'visit-reminder').length === 1 && /3:00|3 ?pm|15:00/i.test(JSON.stringify(mails(gus.email, 'visit-reminder')[0])), 'Send with the new key sends the new words');
+
+  // Unsure (the provider threw): counted as done, "may not have gone", the waiting message cleared, never sent again.
+  const hal = await person();
+  const jh = await job(FA.id, hal);
+  await visit(jh?.id, tomorrow);
+  ok(await until(async () => !!(await stepOf(jh?.id, 'Remind'))?.pending), '(setup) a reminder waiting');
+  const pk = (await stepOf(jh?.id, 'Remind'))?.pending?.key, psid = (await stepOf(jh?.id, 'Remind'))?.id;
+  await stop();
+  ok(await start({ MAIL_OUTBOX: '1', JOBFLOWS_MAIL_THROW: '1' }), '(setup) restarted with the provider throwing');
+  rico = call(ricoTok);
+  await rico('POST', `/jobs/${jh?.id}/steps/${psid}/message`, { action: 'send', key: pk });
+  s = await stepOf(jh?.id, 'Remind');
+  ok(s?.state === 'done' && s.sent?.unsure === true && !s.pending, 'Send that may have gone: done, unsure, the waiting message cleared: ' + JSON.stringify({ state: s?.state, sent: s?.sent }));
+  await stop();
+  ok(await start(), '(setup) restarted, the provider working');
+  rico = call(ricoTok); sam = call(samTok); ada = call(adaTok);
+  await sleep(1000);
+  ok(!mails(hal.email).length && !(await stepOf(jh?.id, 'Remind'))?.pending, 'never sent again, never asked again');
+
+  // The automatic invoice's email and payment reminders: ask first unless set to send by itself.
+  const FI = await flowOf('Billed, ask', { billing: 'auto', items: [{ itemId: can?.id, qty: 1 }], steps: [C, DO, { kind: 'invoice', name: 'Inv', settings: { email: true } }, { kind: 'payment', name: 'Pay', settings: { reminders: [1, 3] } }] });
+  const FIA = await flowOf('Billed, auto', { billing: 'auto', items: [{ itemId: can?.id, qty: 1 }], steps: [C, DO, { kind: 'invoice', name: 'Inv', settings: { email: true, send: 'auto' } }, { kind: 'payment', name: 'Pay', settings: { reminders: [1], send: 'auto' } }] });
+  ok(FI.status === 200 && FIA.status === 200, '(setup) auto-billing flows, asking and sending by themselves: ' + FI.error + FIA.error);
+  const invsOf = async (id) => { const b = (await rico('GET', `/records/${id}/invoices`)).body; return Array.isArray(b) ? b : []; };
+  const daysAgo = (k) => dayIn(Date.now() - k * 864e5);
+  const ian = await person();
+  const ji = await job(FIA.id, ian);
+  await rico('POST', `/jobs/${ji?.id}/steps/${FIA.sid('Do it')}/done`);
+  ok(await until(async () => mails(ian.email, 'invoice').length === 1), '"Send by itself": the invoice is emailed by itself');
+  await rico('PATCH', `/invoices/${(await invsOf(ji?.id))[0]?.id}`, { due: daysAgo(1) });
+  ok(await until(async () => mails(ian.email, 'payment-reminder').length === 1), 'and its payment reminder too');
+  const jo = await person();
+  const jj = await job(FI.id, jo);
+  await rico('POST', `/jobs/${jj?.id}/steps/${FI.sid('Do it')}/done`);
+  ok(await until(async () => (await stepOf(jj?.id, 'Inv'))?.pending?.kind === 'invoice'), 'no setting: the invoice is made and sent (a link), its email waits for an OK');
+  await sleep(700);
+  ok(!mails(jo.email, 'invoice').length, 'not emailed while it waits');
+  let inv = (await invsOf(jj?.id))[0];
+  await rico('PATCH', `/invoices/${inv?.id}`, { due: daysAgo(1) });
+  ok(await until(async () => (await stepOf(jj?.id, 'Pay'))?.pending?.kind === 'payReminder'), 'its first payment reminder waits too: two waiting messages, on two steps, side by side');
+  ok((await stepOf(jj?.id, 'Inv'))?.pending?.kind === 'invoice', 'the invoice’s email is still waiting (one doesn’t replace the other)');
+  const payKey = (await stepOf(jj?.id, 'Pay'))?.pending?.key;
+  await rico('PATCH', `/invoices/${inv?.id}`, { due: daysAgo(3) });
+  await sleep(900);
+  ok((await stepOf(jj?.id, 'Pay'))?.pending?.key === payKey, 'the 3-day reminder comes due while the 1-day one waits: it waits its turn, the waiting one isn’t replaced');
+  r = await rico('POST', `/jobs/${jj?.id}/steps/${(await stepOf(jj?.id, 'Inv'))?.id}/message`, { action: 'send', key: (await stepOf(jj?.id, 'Inv'))?.pending?.key });
+  ok(r.status === 200 && mails(jo.email, 'invoice').length === 1, 'Send the invoice’s email: it goes once');
+  r = await rico('POST', `/jobs/${jj?.id}/steps/${(await stepOf(jj?.id, 'Pay'))?.id}/message`, { action: 'skip', key: payKey });
+  ok(r.status === 200, 'Don’t send the 1-day reminder');
+  ok(await until(async () => { const x = (await stepOf(jj?.id, 'Pay'))?.pending; return !!x && x.key !== payKey; }), 'then the 3-day one asks');
+  await sleep(600);
+  ok(!mails(jo.email, 'payment-reminder').length, 'nothing sent for either yet');
+  // Too late: the invoice is paid while a reminder waits.
+  await rico('POST', `/invoices/${inv?.id}/payments`, { amount: '25', method: 'cash' });
+  ok(await until(async () => !(await stepOf(jj?.id, 'Pay'))?.pending), 'paid in full: the waiting reminder is dropped');
+  await sleep(600);
+  ok(!mails(jo.email, 'payment-reminder').length && /not sent/i.test(JSON.stringify((await rico('GET', `/records/${jj?.id}/log`)).body)), 'never sent, and the timeline says why');
+  // Too late: the invoice is voided while its email waits.
+  const kay = await person();
+  const jk = await job(FI.id, kay);
+  await rico('POST', `/jobs/${jk?.id}/steps/${FI.sid('Do it')}/done`);
+  ok(await until(async () => (await stepOf(jk?.id, 'Inv'))?.pending?.kind === 'invoice'), '(setup) an invoice email waiting');
+  const kInv = (await invsOf(jk?.id))[0];
+  const kKey = (await stepOf(jk?.id, 'Inv'))?.pending?.key;
+  await rico('POST', `/invoices/${kInv?.id}/void`);
+  r = await rico('POST', `/jobs/${jk?.id}/steps/${(await stepOf(jk?.id, 'Inv'))?.id}/message`, { action: 'send', key: kKey });
+  ok(r.status === 409 && !mails(kay.email).some((m) => m.tag === 'invoice' && JSON.stringify(m).includes(kInv?.number)), 'the voided invoice’s email: too late, never sent');
+  // Too late: the quote is answered while its follow-up waits.
+  const lou = await person();
+  const jl = await job(FF.id, lou);
+  r = await rico('POST', `/jobs/${jl?.id}/quote/send`);
+  r = await rico('POST', `/jobs/${jl?.id}/quote/send`, { confirm: r.body?.confirm });
+  const ltok = String(r.body?.url || '').split('/q/')[1];
+  ok(await until(async () => (await stepOf(jl?.id, 'Quote'))?.pending?.kind === 'quoteFollow', 9000), '(setup) a follow-up waiting');
+  const lv = (await (await fetch(`${B}/q/${ltok}`)).text()).match(/name="v" value="([^"]+)"/)?.[1] || '';
+  await fetch(`${B}/q/${ltok}/accept`, { method: 'POST', body: new URLSearchParams({ name: lou.name, v: lv }), redirect: 'manual' });
+  ok(await until(async () => !(await stepOf(jl?.id, 'Quote'))?.pending), 'the customer accepts: the waiting follow-up is dropped');
+  ok(!mails(lou.email, 'quote-follow-up').length, 'never sent');
+
+  // The team's own switches (Settings → Customer messages) say they send by themselves: turning one on is that choice.
+  await rico('PATCH', '/workspace', { custMsgs: { reminders: true, reviews: false, reviewUrl: 'https://g.page/r/team' } });
+  const mo = await person();
+  const jm = (await rico('POST', `/projects/${p.id}/records`, { typeId: tp.id, values: { job: 'Plain job', customer: mo.id } })).body;
+  await rico('POST', `/records/${jm?.id}/visits`, { kind: 'Service', date: tomorrow, start: 600, end: 660, memberIds: [samId] });
+  ok(await until(async () => mails(mo.email, 'visit-reminder').length === 1), 'a team switch the owner turned on (“Visit reminders: email customers the day before”) sends by itself, as it says');
 } catch (e) {
   console.log('FAIL threw: ' + (e.stack || e.message));
   fails++;
 } finally {
   if (srv.exitCode === null) srv.kill();
   fake.close();
+  gfake.close();
 }
 console.log(fails ? `${fails} FAILED` : 'ALL PASS');
 process.exit(fails ? 1 : 0);

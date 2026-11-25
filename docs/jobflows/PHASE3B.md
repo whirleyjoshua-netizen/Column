@@ -149,3 +149,36 @@ editable message wording (still later).
 6. **Quote details**: §3. 0 days = no expiry; issued quotes snapshot their look; own terms beat defaults; the total
    always shows; invoices expose nothing extra.
 
+
+## 7. Checkpoint 2 review (ChatGPT), and what changed
+
+Decisions that tighten §1–§3 (each has tests in round 2 of `customer_sends.mjs` / `quote_look.mjs`):
+
+1. **The categories in `docs/jobflows/SENDS.md` are fixed**: `ticket` (§1), `auto step` (a Job Flow message set to
+   "Send by itself", §2), `team switch`, `approval`, `own action`, `internal`. The test fails on any other.
+   - **team switch**: Settings → Customer messages ("Visit reminders: email customers the day before a visit",
+     "Review requests: ask for a review an hour after a job is paid"). They're off until an owner turns one on, and
+     the switch says it sends by itself, so turning it on is the same choice as a step's "Send by itself". The settings
+     row will say "🤖 Sends by itself" so that's plain. (Jobs on a flow never get these, as in Phase 3.)
+   - **approval**: an agent's draft the person accepted (the replay carries `personOk`, set only by the accept path,
+     never by the agent; it bypasses no rules), the Flows hold, the Mail tool's own review.
+   - **own action**: only a receipt for what the customer themself just did. Today that's one: the signed copy after a
+     customer signs. Tested: none before signing, exactly one after, signing again sends no second.
+   - **internal**: to the team, never a customer (the Twilio "texting works" test to the owner's own number).
+2. **The inventory counts every sender the contract names and its wrappers**: `mailer.customerEmail`,
+   `tellCustomer`, `flowTell`, `twilioText`, `sendText`, `.sendMail`, `SIGNOFF_MAIL`, `emailCustomer`,
+   `emailSignLink`, `agentEmail`. It's a text count, not a parser (SENDS.md says so); a new call style is caught by
+   review, which SENDS.md asks for.
+3. **Tickets** are kept in the data (they survive a restart), are trimmed after a day, at most 200 open per team
+   (the oldest go first). An agent can't confirm any ticket, including one a person was given; a person can't use one
+   made for an agent's call. Another team's ticket is refused.
+4. **Send proof** (`POST /profile/proofs`) makes a link and emails nobody, so it isn't a send; if it ever emails,
+   it joins the inventory as a `ticket` route.
+5. **Acceptance mode is part of an issued quote's look** (snapshotted with the rest); the logo and accent follow
+   Brand live; the business signature is snapshotted and its file stays served for the quotes that show it.
+   Expired accepts answer 409. Removing the business signature means later quotes show no "Prepared by".
+6. **Test-only routes** (refused in production and unless their switch is on): `POST /api/test/agent-call` and
+   `GET /api/test/send-tickets` (`SENDS_TEST_AGENT=1`), `POST /api/test/backdate-quote` (`QUOTE_TEST_BACKDATE=1`).
+   `SEND_TICKET_MS` and `SEND_TICKET_KEEP_MS` only shorten times outside production; production is 10 minutes and a day.
+7. **Existing suites that assumed messages send by themselves** (`jobflow_auto.mjs`, the Phase 3 UI checks) set
+   `send: 'auto'` where they mean it, since missing now means ask.

@@ -34,6 +34,8 @@ function png(w, h, ink, noise = false) {
   return 'data:image/png;base64,' + b.toString('base64');
 }
 const SIG = png(240, 80, true), BLANK = png(240, 80, false), HUGE = png(190, 150, false, true);
+const JPG = 'data:image/jpeg;base64,' + Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10]), Buffer.from('JFIF\0'), Buffer.alloc(200, 7), Buffer.from([0xff, 0xd9])]).toString('base64');
+const SIG2 = png(200, 70, true);
 const NOT_PNG = 'data:image/png;base64,' + Buffer.from('GIF89a not a png at all').toString('base64');
 
 const base = { ...process.env, PORT: String(PORT), PUBLIC_URL: B, DATA_DIR: DIR, RESEND_API_KEY: '', DATABASE_URL: '', STRIPE_SECRET_KEY: '', STRIPE_PRICE: '', SKIP_SETUP: '1', NODE_ENV: 'test', MAIL_OUTBOX: '1', CUSTMSG_TICK_MS: '300', QUOTE_TEST_BACKDATE: '1' };
@@ -71,17 +73,26 @@ try {
     ['accepting some other way', { accept: 'fax' }],
     ['a website that isn’t http(s)', { business: { website: 'javascript:alert(1)' } }],
   ]) ok((await rico('PATCH', '/docs-settings', body)).status === 400, 'refused: ' + why);
+  ok((await rico('PATCH', '/docs-settings', { validDays: 365 })).status === 200, 'valid for 365 days is allowed');
   r = await rico('PATCH', '/docs-settings', { business: { name: 'Acme Cleaning LLC', address: '1 Main St, Reno NV', phone: '(775) 555-0100', email: 'office@acme.test', website: 'https://acme.test', license: 'NV-12345' }, validDays: 14, terms: 'Net 30. Thanks for your business.', footer: 'Acme is licensed and insured.', showPrices: true });
   ok(r.status === 200 && r.body?.business?.license === 'NV-12345' && r.body.validDays === 14, 'saved');
   // The business signature: drawn or uploaded, PNG or JPEG, up to 200 KB, with a name and title.
   ok((await rico('PUT', '/docs-settings/signature', { image: NOT_PNG, name: 'Rico V.', title: 'Owner' })).status === 400, 'a signature that isn’t a PNG or JPEG is refused');
   ok((await rico('PUT', '/docs-settings/signature', { image: 'data:image/png;base64,' + Buffer.alloc(210_000, 1).toString('base64'), name: 'Rico V.' })).status === 400, 'one over 200 KB is refused');
   ok((await sam('PUT', '/docs-settings/signature', { image: SIG, name: 'Sam' })).status === 403, 'members can’t set it');
+  ok((await rico('PUT', '/docs-settings/signature', { image: SIG, name: '', title: 'Owner' })).status === 400, 'a signature needs the name of who signs');
+  r = await rico('PUT', '/docs-settings/signature', { image: JPG, name: 'Rico V.', title: 'Owner' });
+  ok(r.status === 200 && (await fetch(B + r.body?.signature?.url)).headers.get('content-type') === 'image/jpeg', 'a JPEG signature is fine too');
   r = await rico('PUT', '/docs-settings/signature', { image: SIG, name: 'Rico V.', title: 'Owner' });
   const sigUrl = r.body?.signature?.url;
   ok(r.status === 200 && /^\/brand\/[\w-]+$/.test(sigUrl || ''), 'the business signature is kept, served from Kloomie: ' + sigUrl);
   const sigImg = sigUrl ? await fetch(B + sigUrl) : null;
   ok(sigImg?.status === 200 && sigImg.headers.get('content-type') === 'image/png', 'and it loads as a PNG');
+
+  // The logo and accent colour (Brand) show on quotes, and follow Brand live.
+  const logo = (await rico('PUT', '/brand/logo', { data: SIG })).body;
+  await rico('PATCH', '/brand', { accent: '#123456' });
+  const logoUrl = (await rico('GET', '/state')).body?.workspace?.brand?.logo;
 
   // ---------- a job quote ----------
   const p = (await rico('POST', '/projects', { template: 'trades', trades: ['cleaning'] })).body;
@@ -103,6 +114,10 @@ try {
   const issued = new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
   ok(h.includes('Issued') && h.includes('Valid until'), 'Issued and Valid until (Issued + 14 days)');
   ok(h.includes('Acme Cleaning LLC') && h.includes('1 Main St, Reno NV') && h.includes('(775) 555-0100') && h.includes('office@acme.test') && h.includes('NV-12345'), 'the business details are at the top');
+  const long = (ms, tz) => new Date(ms).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric', timeZone: tz });
+  const zones = ['UTC', Intl.DateTimeFormat().resolvedOptions().timeZone];
+  ok(zones.some((z) => h.includes('Issued ' + long(Date.now(), z)) && h.includes('Valid until ' + long(Date.now() + 14 * 864e5, z))), 'Issued today, Valid until 14 days on');
+  ok(!!logoUrl && h.includes(logoUrl) && h.includes('--accent:#123456'), 'the team’s logo and accent colour: ' + logoUrl);
   ok(h.includes('Prepared for') && h.includes('Dana Ruiz') && h.includes('9 Elm St'), 'Prepared for: the client’s name and address');
   ok(!h.includes(`dana${t}@x.test`) && !h.includes('555-0111'), 'not the client’s email or phone (the team hasn’t turned that on)');
   ok(h.includes('Prepared by') && h.includes('Rico V.') && h.includes('Owner') && !!sigUrl && h.includes(sigUrl), 'Prepared by: the business signature, name and title');
@@ -115,24 +130,31 @@ try {
   ok(!/Accepted by/.test((await page(url1)).html), 'type mode: no name, not accepted');
   r = await answer(tok1, { name: 'Dana Ruiz', v: vOf(h) });
   pg = await page(url1);
+  const acceptedAt = Date.now();
   ok(r.status === 303 && /Accepted by[^<]*Dana Ruiz/.test(pg.html), 'type mode: the typed name accepts it');
   let step = (await rico('GET', `/jobs/${j1?.id}/run`)).body?.run?.steps?.find((s) => s.name === 'Quote');
-  ok(step?.answer?.method === 'typed' && step.answer.name === 'Dana Ruiz', 'the answer records how: typed: ' + JSON.stringify(step?.answer));
+  ok(step?.answer?.method === 'typed' && step.answer.name === 'Dana Ruiz' && step.answer.act === 'accept' && Math.abs(step.answer.at - acceptedAt) < 5000 && step.answer.total === 6000 && step.answer.lines?.rows?.length === 2 && !step.answer.signature, 'the answer records what was accepted and how: accept, typed, the name, when, the lines and total: ' + String(JSON.stringify(step?.answer)).slice(0, 200));
+  ok(/Accepted by[^<]*Dana Ruiz/.test(pg.html) && /typed/i.test(pg.html), 'the accepted page says who and how (typed)');
   ok(!(await sam('GET', `/jobs/${j1?.id}/run`)).body?.run?.steps?.find((s) => s.name === 'Quote')?.answer?.method, 'members don’t see the answer’s details');
 
   // The issued quote keeps its look; a New quote takes the current one.
   const j2 = await mkJob();
   r = await sendQuote(j2?.id);
   const url2 = r.body?.url;
+  r = await rico('PUT', '/docs-settings/signature', { image: SIG2, name: 'Rico Vega', title: 'President' });
+  const sigUrl2 = r.body?.signature?.url;
+  await rico('PATCH', '/brand', { accent: '#abcdef' });
   await rico('PATCH', '/docs-settings', { business: { name: 'Acme Pro Cleaning', address: '2 New Rd', phone: '(775) 555-0200', email: 'hi@acme.test', website: 'https://acme.test', license: 'NV-99999' }, terms: 'Due on receipt.', footer: 'New footer.', showPrices: false });
   pg = await page(url2);
   ok(pg.html.includes('Acme Cleaning LLC') && pg.html.includes('Net 30.') && pg.html.includes('Acme is licensed and insured.') && !pg.html.includes('Acme Pro Cleaning') && pg.html.includes('$25.00'), 'an issued quote keeps the details, terms, footer and prices it was sent with');
+  ok(!!sigUrl && pg.html.includes(sigUrl) && pg.html.includes('Owner') && !pg.html.includes('President') && (await fetch(B + sigUrl)).status === 200, 'and the business signature it was sent with (still served)');
+  ok(pg.html.includes('--accent:#abcdef'), 'the accent colour follows Brand live, even on an issued quote');
   ok(/Q-1002/.test(pg.html), 'and its own number, Q-1002');
   await rico('POST', `/jobs/${j2?.id}/requote`);
   r = await sendQuote(j2?.id);
   const url3 = r.body?.url;
   pg = await page(url3);
-  ok(url3 && url3 !== url2 && pg.html.includes('Acme Pro Cleaning') && pg.html.includes('Due on receipt.') && pg.html.includes('New footer.'), 'a New quote takes the current settings');
+  ok(url3 && url3 !== url2 && pg.html.includes('Acme Pro Cleaning') && pg.html.includes('Due on receipt.') && pg.html.includes('New footer.') && !!sigUrl2 && pg.html.includes(sigUrl2) && pg.html.includes('President'), 'a New quote takes the current settings and signature');
   // Hidden prices: description and quantity only; the total always shows.
   ok(!pg.html.includes('$25.00') && !pg.html.includes('$10.00') && !pg.html.includes('$50.00') && pg.html.includes('$60.00') && pg.html.includes('Can clean'), 'prices hidden: no line prices or amounts, the total still shows');
   ok(/Q-1003/.test(pg.html), 'a New quote gets the next number');
@@ -143,7 +165,8 @@ try {
   ok((await rico('POST', `/test/backdate-quote`, { recordId: j3?.id, days: 20 })).status === 200, '(setup) the quote was issued 20 days ago');
   pg = await page(r.body?.url);
   ok(/expired/i.test(pg.html) && !vOf(pg.html), 'past Valid until (14 days): it says it expired, no accept form');
-  await answer(tok3, { name: 'Dana Ruiz', v: 'x' });
+  r = await answer(tok3, { name: 'Dana Ruiz', v: 'x' });
+  ok(r.status === 409, 'accepting an expired quote: 409 (' + r.status + ')');
   ok(!(await rico('GET', `/jobs/${j3?.id}/run`)).body?.run?.steps?.find((s) => s.name === 'Quote')?.answer, 'and an accept is refused');
   await rico('PATCH', '/docs-settings', { validDays: 0 });
   const j4 = await mkJob();
@@ -152,8 +175,11 @@ try {
   pg = await page(r.body?.url);
   ok(!/expired/i.test(pg.html) && !pg.html.includes('Valid until') && !!vOf(pg.html), '0 days: no Valid until, never expires (issued 400 days ago, still open)');
 
+  const url4 = r.body?.url;
   // ---------- draw mode ----------
   await rico('PATCH', '/docs-settings', { accept: 'draw', showPrices: true });
+  pg = await page(url4);
+  ok(!/<canvas/.test(pg.html) && /Type your full name/i.test(pg.html), 'a quote issued in type mode stays type mode (how to accept is part of its look)');
   const j5 = await mkJob();
   r = await sendQuote(j5?.id);
   const url5 = r.body?.url, tok5 = url5?.split('/q/')[1];
@@ -172,7 +198,7 @@ try {
   pg = await page(url5);
   ok(r.status === 303 && /Accepted/.test(pg.html), 'draw mode: a drawing accepts it, a typed name is optional');
   step = (await rico('GET', `/jobs/${j5?.id}/run`)).body?.run?.steps?.find((s) => s.name === 'Quote');
-  ok(step?.answer?.method === 'drawn' && !!step.answer.signature, 'the answer records how: drawn, with the drawing: ' + step?.answer?.method);
+  ok(step?.answer?.method === 'drawn' && !!step.answer.signature && step.answer.act === 'accept' && step.answer.total === 6000 && !!step.answer.at && step.answer.lines?.rows?.length === 2, 'the answer records how: drawn, with the drawing, the lines and total: ' + step?.answer?.method);
   const shown = pg.html.match(/src="(\/q\/[^"]+\/signature[^"]*)"/)?.[1];
   const si = shown && await fetch(B + shown);
   ok(!!shown && si.status === 200 && si.headers.get('content-type') === 'image/png', 'the accepted page shows the customer’s drawing, served from Kloomie');
@@ -187,6 +213,25 @@ try {
   const b1 = (await page(`${B}/q/${qs1?.share?.token}`)).html, b2 = (await page(`${B}/q/${qs2?.share?.token}`)).html;
   ok(b1.includes('Half up front.') && !b1.includes('Due on receipt.'), 'a quote’s own terms beat the default');
   ok(b2.includes('Due on receipt.') && b2.includes('Acme Pro Cleaning'), 'one without its own terms shows the default, and the business details');
+
+  // The lines fingerprint (audit G3) holds in both modes: lines changed after the page loaded can't be accepted.
+  const FI = (k) => T.quotes.fields.find((x) => x.key === k);
+  for (const mode of ['draw', 'type']) {
+    await rico('PATCH', '/docs-settings', { accept: mode });
+    const qq = (await rico('POST', `/projects/${bp.id}/records`, { typeId: T.quotes.id, values: { title: 'G3 ' + mode, valid_until: '2099-12-31', items: { rows: [{ desc: 'Film', qty: 10, price: 400 }] } } })).body;
+    const sh = (await rico('POST', `/records/${qq.id}/share`, { hours: 0 })).body;
+    const old = vOf((await page(`${B}/q/${sh?.share?.token}`)).html);
+    await rico('PATCH', `/records/${qq.id}`, { values: { [FI('items').id]: { rows: [{ desc: 'Film', qty: 10, price: 550 }] } } });
+    r = await answer(sh?.share?.token, { name: 'Maria', v: old, sig: SIG });
+    ok(r.status === 409 && !/Accepted/.test((await page(`${B}/q/${sh?.share?.token}`)).html), `${mode} mode: lines changed after the page loaded: 409, not accepted`);
+    r = await answer(sh?.share?.token, { name: 'Maria', v: vOf((await page(`${B}/q/${sh?.share?.token}`)).html), sig: SIG });
+    ok(r.status === 303 && /Accepted/.test((await page(`${B}/q/${sh?.share?.token}`)).html), `${mode} mode: what's on the page now can be accepted`);
+  }
+  // Removing the business signature: new quotes go out without one.
+  ok((await rico('DELETE', '/docs-settings/signature')).status === 200 && !(await rico('GET', '/docs-settings')).body?.signature, 'the business signature can be removed');
+  const j7 = await mkJob();
+  pg = await page((await sendQuote(j7?.id)).body?.url);
+  ok(!pg.html.includes('Prepared by') && !pg.html.includes('/brand/' + (sigUrl2 || 'x').split('/').pop()), 'a quote sent after that has no Prepared by');
 
   // ---------- the invoice page ----------
   const inv = (await rico('POST', `/records/${j1?.id}/invoices`)).body;

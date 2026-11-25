@@ -227,6 +227,15 @@ try {
   await A.tap(`document.querySelector('#projects .jb-auto [data-act=msg-send]')`);
   ok(await A.until(`document.querySelector('#projects .jb-auto')?.dataset.msg === 'sent' && /Sent by email/.test(document.querySelector('#projects .jb-auto').textContent)`, 8000) && await A.ev(`!document.querySelector('#projects .jb-detail [data-act=next]')`), 'Send: it goes, the card says “Sent by email”');
   ok(mailsTo(`mo${t}@x.test`).length === 1, 'once');
+  const nell = await api('POST', '/contacts', { name: 'Nell Nope', email: `nell${t}@x.test` });
+  const nj = await api('POST', '/jobs', { flowId: rf.id, contactId: (nell.contact || nell).id, values: { job: 'Nell thanks' } });
+  await openJobIn(nj.job.id);
+  await A.tap(`[...document.querySelectorAll('#projects .jb-step')].find((x) => x.textContent.includes('Ask for a review'))`);
+  await A.until(`document.querySelector('#projects .jb-auto')?.dataset.msg === 'pending'`, 8000);
+  await A.tap(`document.querySelector('#projects .jb-auto [data-act=msg-skip]')`);
+  ok(await A.until(`document.querySelector('#projects .jb-step[data-state=skipped]')?.textContent.includes('Ask for a review') || /Not sent/.test(document.querySelector('#projects .jb-detail')?.textContent || '')`, 8000), 'Don’t send: the step is skipped, “Not sent”');
+  await sleep(600);
+  ok(!mailsTo(`nell${t}@x.test`).length, 'and nothing went');
   // On my way for one kind of visit: Next opens that visit, not an earlier one of another kind.
   const of = await api('POST', '/job-flows', { name: 'Install day', list: { projectId: p.id, typeId: tp.id }, steps: [{ kind: 'client', name: 'Client' }, { kind: 'omw', name: 'Heading over', settings: { visitKind: 'Install' } }] });
   await api('POST', `/job-flows/${of.id}/publish`);
@@ -263,7 +272,12 @@ try {
   await openJobIn(sq.job.id);
   await A.until(`document.querySelector('#projects .jb-step[data-state=current]')?.textContent.includes('Send the quote') && !!document.querySelector('#projects .jb-detail [data-act=next]')`, 8000);
   await A.tap(`document.querySelector('#projects .jb-detail [data-act=next]')`);
-  ok(await A.until(`!!document.querySelector('#sheet .send-ok') && /Your quote from/.test(document.querySelector('#sheet .send-ok').textContent)`), 'Send the quote: the confirm sheet shows the subject');
+  ok(await A.until(`!!document.querySelector('#sheet .send-ok') && /Your quote from/.test(document.querySelector('#sheet .send-ok').textContent) && /Send to Dana Ruiz by email/.test(document.querySelector('#sheet .send-ok').textContent) && /look it over and accept it online/.test(document.querySelector('#sheet .send-ok').textContent)`), 'Send the quote: the confirm sheet shows who, the subject and the words');
+  await A.tap(btnText('#sheet .send-ok', 'Cancel'));
+  await sleep(600);
+  ok(!mailsTo(dana.email).some((m) => m.tag === 'quote-sent'), 'Cancel: not sent');
+  await A.tap(`document.querySelector('#projects .jb-detail [data-act=next]')`);
+  await A.until(`!!document.querySelector('#sheet .send-ok')`);
   await A.tap(btnText('#sheet .send-ok', 'Send'));
   ok(await until(() => mailsTo(dana.email).some((m) => m.tag === 'quote-sent')), 'and Send sends it');
   // Settings → Quotes & invoices.
@@ -272,6 +286,10 @@ try {
   await A.ev(`document.querySelector('#settings .setx-item[data-page=docs]').click(); true`);
   ok(await A.until(`document.querySelector('#settings .setx-item.on')?.dataset.page === 'docs' && !!document.querySelector('#settings [data-doc=business-name]') && !!document.querySelector('#settings [data-doc=validDays]') && !!document.querySelector('#settings [data-doc=showPrices]') && !!document.querySelector('#settings [data-doc=accept]') && !!document.querySelector('#settings .doc-sig canvas')`), 'Settings → Quotes & invoices: business details, valid for, show prices, how customers accept, and a pad to draw the business signature');
   await A.type(`document.querySelector('#settings [data-doc=business-name]')`, 'Jobs Test Cleaning');
+  await A.ev(`(() => { const c = document.querySelector('#settings .doc-sig canvas'); c.scrollIntoView({ block: 'center' }); const r = c.getBoundingClientRect(); const at = (type, x, y) => c.dispatchEvent(new PointerEvent(type, { bubbles: true, clientX: r.left + x, clientY: r.top + y, pointerId: 1, buttons: 1 })); at('pointerdown', 10, 30); for (let x = 12; x < 180; x += 6) at('pointermove', x, 30 + Math.cos(x / 9) * 12); at('pointerup', 180, 30); return true; })()`);
+  await A.type(`document.querySelector('#settings [data-doc=sig-name]')`, 'Ada Owner');
+  await A.tap(btnText('#settings .doc-sig', 'Save signature'));
+  ok(await until(async () => { const d = await api('GET', '/docs-settings'); return /^\/brand\//.test(d.signature?.url || '') && d.signature?.name === 'Ada Owner'; }), 'the business signature is drawn and saved, with a name');
   await A.ev(`(() => { const s = document.querySelector('#settings [data-doc=accept]'); s.value = 'draw'; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
   await A.tap(btnText('#settings', 'Save'));
   ok(await until(async () => { const d = await api('GET', '/docs-settings'); return d.business?.name === 'Jobs Test Cleaning' && d.accept === 'draw'; }), 'saved: the business name, and customers draw to accept');
@@ -286,6 +304,7 @@ try {
   await Q.ev(`document.querySelector('form.accept button[type=submit], form.accept button').click(); true`);
   ok(await Q.until(`/Accepted/.test(document.body.textContent) && !!document.querySelector('img[src*="/signature"]')`, 8000), 'drawn and accepted: the page shows the signature');
   await Q.close?.();
+  ok(!A.errors.length && !Q.errors.length, 'no errors in the page: ' + [...A.errors, ...Q.errors].join(' | ').slice(0, 300));
   await A.ev(`document.querySelector('#sheet [aria-label=Close]')?.click(); true`);
   await shot('8-auto');
   await A.ev(`document.querySelector('#workTabs [data-tab=jobs]').click(); true`);
