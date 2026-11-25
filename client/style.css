@@ -5150,3 +5150,18 @@ body:not(.wide) .cc-row, .split .cc-row { grid-template-columns: 22px minmax(0, 
 body:not(.wide) .cc-row-who, body:not(.wide) .cc-row-status, .split .cc-row-who, .split .cc-row-status { display: none; }
 body:not(.wide) .cc-phase-bar { display: none; }
 body:not(.wide) .cc-phases { padding: 12px 10px; }
+
+/* Progress (2026-11-25): how it's going in one band; what to do next as its own card. */
+.ccp-health { display: flex; flex-wrap: wrap; align-items: stretch; gap: 10px 28px; padding: 14px 16px; border-left: 4px solid #1f9d63; }
+.ccp-health.atRisk { border-left-color: #e5a50a; }
+.ccp-health.offTrack { border-left-color: var(--danger); }
+.ccp-health.done, .ccp-health.paused { border-left-color: var(--muted); }
+.ccp-h-state, .ccp-h-item { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.ccp-h-state { flex: 1 1 220px; }
+.ccp-health small { color: var(--muted); font-size: 12px; }
+.ccp-h-state b { font-size: 18px; }
+.ccp-h-state span { color: var(--muted); font-size: 13px; }
+.ccp-h-item b { font-size: 14px; }
+.ccp-h-team { display: flex; align-items: center; gap: 2px; }
+.cc-card.cc-pulse-ai { margin-top: 0; }
+.ccp-report, .ccp-log { display: flex; flex-direction: column; gap: 14px; }
