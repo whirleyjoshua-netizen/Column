@@ -5771,7 +5771,7 @@
     pop._close = close;
     const draw = () => {
       const q = st.q.trim().toLowerCase();
-      const shown = items.filter((x) => (st.g === 'all' || x.g === st.g) && (!q || x.label.toLowerCase().includes(q) || (x.hint || '').toLowerCase().includes(q)));
+      const shown = items.filter((x) => (st.g === 'all' || x.g === st.g) && (!q || (x.find || x.label).toLowerCase().includes(q) || (x.hint || '').toLowerCase().includes(q)));
       chips?.replaceChildren(...groups.filter(([k]) => k === 'all' || items.some((x) => x.g === k)).map(([k, l]) =>
         h('button', { type: 'button', class: 'ap-chip' + (st.g === k ? ' on' : ''), 'data-g': k, role: 'tab', 'aria-selected': String(st.g === k), onclick: () => { st.g = k; draw(); } }, l)));
       list.replaceChildren(...(shown.length ? shown.map((x) => h('button', { type: 'button', class: `ap-item lk-${x.c}` + (x.key === active ? ' on' : ''), 'data-key': x.key, role: 'option', 'aria-selected': String(x.key === active), onclick: () => { close(); onPick(x.key); } },
@@ -5791,7 +5791,7 @@
     search.focus();
   }
   // The picker's lists: what can set one off (grouped by tool, from the catalog), and what a step can do.
-  const autoWhenItems = (only = null) => (AUTO_CAT.events ? AUTO_CAT.events.map((e) => ({ key: e.type, label: e.label.replace(/ \(.*\)$/, ''), hint: AUTO_CAT.tools[e.tool] || '', g: e.tool, ...autoWhenLook(e.type) }))
+  const autoWhenItems = (only = null) => (AUTO_CAT.events ? AUTO_CAT.events.map((e) => ({ key: e.type, label: e.label.replace(/ \(.*\)$/, ''), find: e.label, hint: AUTO_CAT.tools[e.tool] || '', g: e.tool, ...autoWhenLook(e.type) }))
     : Object.entries(AUTO_WHEN).map(([type, label]) => ({ key: type, label, g: 'x', ...autoWhenLook(type) }))).filter((x) => !only || only.includes(x.key));
   const autoWhenGroups = () => (AUTO_CAT.events ? [['all', 'All'], ...Object.entries(AUTO_CAT.tools)] : null);
   const autoDoItems = (cur, depth = 0) => AUTO_ORDER.filter((k) => (k === 'wait' || (k === 'if' ? depth < 3 : AUTO_DO[k] && (autoDoOk(k) || k === cur)))).map((k) => ({ key: k, label: k === 'wait' ? 'Wait a while' : k === 'if' ? 'Only if… (check something first)' : AUTO_DO[k], ...autoLook(k) }));
@@ -6031,7 +6031,7 @@
     const stages = [...new Set((S.contacts || []).map((c) => c.stage).filter(Boolean))];
     const outcomes = [...new Set(S.campaigns.flatMap((c) => c.outcomes || []))];
     const people = S.workspace.members;
-    const B = { sel: 'trigger', tab: 'set', panel: null, lit: null, would: null, test: null, run: '', focus: null, reg: null, drag: null };
+    const B = { sel: 'trigger', shown: 'trigger', tab: 'set', panel: null, lit: null, would: null, test: null, run: '', focus: null, reg: null, drag: null };
     // Typing doesn't redraw, so the red marks and the count follow it here.
     const marks = () => {
       let n = 0;
@@ -6536,6 +6536,7 @@
             h('div', { class: 'auto-step auto-flow' }, h('div', { class: 'auto-step-h' }, 'THEN'), flow),
             wordList.length ? h('div', { class: 'ab-pill' }, `Words like ${wordList.slice(0, 2).map((w) => `{${w}}`).join(' and ')} fill in by themselves from what set it off`) : null),
           panel)].filter(Boolean));
+      if (B.sel !== B.shown) { B.shown = B.sel; if (matchMedia('(max-width: 900px)').matches) panel.scrollIntoView({ block: 'start' }); }
     };
     draw();
     sheet(x ? `Automation · ${x.name}` : recipe ? recipe.name : 'New automation', [box], async () => {
@@ -8163,7 +8164,7 @@
       const when = paRadio('pa-when', 'When', kinds.map(([v, l]) => [v, l, ...WL[v]]), 'task.done');
       const members = (S.workspace.members || []).filter((m) => !m.gone);
       const then = paRadio('pa-then', 'Then', [['doers', 'Tell whoever it’s for', '🔔', 'purple'], ['owners', 'Tell the owners', '👑', 'purple'], ['someone', 'Tell someone', '👤', 'pink'], ['post', 'Post in the campaign’s feed', '💬', 'teal'], ['task', 'Make a task', '✅', 'purple']], 'doers');
-      const who = h('select', { class: 'pa-who', 'aria-label': 'Who to tell' }, members.map((m) => opt(m.id, m.name, S.me?.id)));
+      const who = h('select', { class: 'pa-who', 'aria-label': 'Who to tell' }, members.map((m) => opt(m.id, m.name, S.me?.memberId)));
       const whoRow = h('label', { class: 'cc-pp-f pa-who-row' }, 'Who', who);
       const say = h('input', { class: 'pa-say', maxlength: 1000, 'aria-label': 'What it says' });
       const forWho = h('select', { class: 'pa-for', 'aria-label': 'Task for' }, opt('', 'Nobody yet'), opt('who', 'Whoever set it off'), members.map((m) => opt(m.id, m.name)));
@@ -8226,7 +8227,7 @@
               h('small', { class: 'cc-pp-hint' }, 'Fills in: {task} {step} {campaign} {who}'),
               h('div', { class: 'cc-pp-f' }, h('span', {}, 'When to'), wait), onlyOpen)),
           h('div', { class: 'btns' }, saveBtn)),
-        h('details', { class: 'pa-sec pa-adv' }, h('summary', {}, 'Advanced settings'),
+        h('details', { class: 'pa-sec pa-adv', open: K.paAdv || null, ontoggle: (e) => (K.paAdv = e.currentTarget.open) }, h('summary', {}, 'Advanced settings'),
           h('h4', {}, 'Use one you have'),
           h('div', { class: 'row2' }, pickOne, h('button', { type: 'button', class: 'btn small pa-copy-go', disabled: !mine.length, onclick: () => { const x = mine.find((y) => y.id === pickOne.value); if (!x) return pickOne.focus(); copyAutoTo(x, g, t); } }, 'Copy here')),
           h('small', { class: 'cc-pp-hint' }, `A copy, so the one you have keeps running where it did.${t ? '' : ' Or use + From saved on the phase.'}`),

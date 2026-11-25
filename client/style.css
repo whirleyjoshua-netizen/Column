@@ -1913,7 +1913,7 @@ body.wide .sheet.auto-builder { border-left: 1px solid var(--line); }
 .auto-test.err { border-color: var(--danger); background: none; color: var(--danger); }
 /* the canvas and, beside it, the settings of what's picked */
 .ab-main { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 12px; align-items: start; }
-@media (max-width: 900px) { .ab-main { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 900px) { .ab-main { grid-template-columns: minmax(0, 1fr); } .ab-panel { position: static; margin-bottom: 45vh; scroll-margin-top: 8px; } }
 .auto-builder .auto-canvas { display: flex; flex-direction: column; align-items: center; gap: 0; padding: 14px 10px 18px; border: 1px solid var(--line); border-radius: 12px; overflow-x: auto; min-height: 340px;
   background: var(--bg) radial-gradient(var(--line) 1px, transparent 1px) 0 0 / 18px 18px; }
 .auto-when-h, .auto-builder .auto-flow > .auto-step-h { font-size: 12px; font-weight: 750; letter-spacing: .08em; color: var(--text); margin: 0 0 6px; }
@@ -4914,6 +4914,8 @@ button.td-dep:hover { background: color-mix(in srgb, #4ea1ff 24%, transparent); 
 .cc-pauto .pa-adv > summary { cursor: pointer; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; font-weight: 600; }
 .cc-pauto .pa-adv[open] > summary { margin-bottom: 4px; }
 .cc-pauto .pa-adv:not([open]) { gap: 0; }
+.cc-pauto .pa-adv h4 { margin-top: 6px; }
+.cc-pauto .pa-adv .pa-full { align-self: flex-start; padding: 0; font-size: 13px; }
 .cc-auto-n { color: var(--accent); font-weight: 600; }
 .cc-ttile.over { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
 /* Tools right from the plan (2026-11-23): a task's tool and checklist; a phase's resources, needs, a tool per task. */

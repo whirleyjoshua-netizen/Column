@@ -65,6 +65,9 @@ try {
   ok(await A.until(`!!document.querySelector('.ap-pop') && document.querySelectorAll('.ap-pop .ap-item').length > 10 && document.querySelectorAll('.ap-pop .ap-chip').length > 2 && !!document.querySelector('.ap-pop .ap-item.on[data-key="task.done"] .ap-on')`), 'Change opens the picker: a list with chips, the one it is now marked Active');
   await A.fill(`document.querySelector('.ap-pop .ap-search')`, 'contact');
   ok(await A.until(`[...document.querySelectorAll('.ap-pop .ap-item')].every((x) => /contact/i.test(x.textContent)) && document.querySelectorAll('.ap-pop .ap-item').length >= 2`), 'searching narrows the list');
+  await A.fill(`document.querySelector('.ap-pop .ap-search')`, 'lead form');
+  ok(await A.until(`!!document.querySelector('.ap-pop .ap-item[data-key="contact.created"]')`), 'searching finds words in the brackets too (lead form → A contact is added)');
+  await A.fill(`document.querySelector('.ap-pop .ap-search')`, 'contact');
   await A.tap(`document.querySelector('.ap-pop .ap-item[data-key="contact.created"]')`);
   ok(await A.until(`!document.querySelector('.ap-pop') && /contact is added/i.test(document.querySelector('#sheet .auto-trigger .an-say').textContent)`), 'picked: the node says it in a sentence');
   await A.fill(`document.querySelector('#sheet .auto-name')`, 'Sort leads');
@@ -187,6 +190,9 @@ try {
   ok(await A.until(`(() => { const p = document.querySelector('.ap-pop.ap-sheet'); if (!p) return false; const r = p.getBoundingClientRect(); return r.left >= 0 && r.right <= 391 && r.bottom <= innerHeight + 1; })()`), 'the picker is a sheet at the bottom on a phone');
   await A.ev(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); true`);
   ok(await A.until(`!document.querySelector('.ap-pop')`), 'and Esc closes it');
+  await A.ev(`scrollTo(0, 0); document.querySelector('#sheet .sheet').scrollTop = 0; true`);
+  await A.tap(`document.querySelector('#sheet .auto-flow .auto-act .an-b')`);
+  ok(await A.until(`(() => { const r = document.querySelector('#sheet .ab-panel').getBoundingClientRect(); return r.top >= -2 && r.top < innerHeight / 2; })()`), 'on a phone, tapping a node brings its settings into view: ' + await A.ev(`JSON.stringify([document.querySelector('#sheet .ab-panel').getBoundingClientRect().top, document.querySelector('#sheet .ab-panel').getBoundingClientRect().height, innerHeight, document.querySelector('#sheet .ab-ph b').textContent])`));
   ok(!A.errors.length, 'no errors in the page' + (A.errors.length ? ': ' + A.errors.join(' | ').slice(0, 300) : ''));
 } catch (e) {
   ok(false, 'threw: ' + e.stack);

@@ -96,6 +96,7 @@ try {
   await A.tap(T('.cc-pauto .pa-when .pa-opt[data-v="task.opened"]'));
   await A.tap(T('.cc-pauto .pa-then .pa-opt[data-v="someone"]'));
   ok(await A.until(`${T('.cc-pauto .pa-then .pa-opt[data-v="someone"]')}?.getAttribute('aria-checked') === 'true' && !!${T('.cc-pauto .pa-who')}?.checkVisibility()`), '“Tell someone” asks who');
+  ok(await A.ev(`[...${T('.cc-pauto .pa-who')}.options].find((o) => o.defaultSelected)?.value === ${JSON.stringify(me)}`), '“Tell someone” starts on you');
   await A.pick(T('.cc-pauto .pa-who'), me);
   await A.tap(T('.cc-pauto .pa-wait .pa-opt[data-v="2"]'));
   ok(await A.ev(`${T('.cc-pauto .pa-say')}.value === 'Your turn: {task} ({step})' && !${T('.cc-pauto .pa-only')}.hidden`), 'it fills in what it says, and says it only goes if it isn’t done by then');
@@ -123,6 +124,7 @@ try {
   await A.tap(T('.cc-pauto .pa-adv > summary'));
   await A.pick(T('.cc-pauto .pa-copy'), au.id);
   await A.tap(T('.cc-pauto .pa-copy-go'));
+  ok(await A.until(`${T('.cc-pauto .pa-here .pa-row')} && ${T('.cc-pauto .pa-adv')}?.open === true`), 'Advanced settings stays open when the panel redraws');
   for (let i = 0; i < 30 && !list.some((x) => x.trigger.step === 'Book installs'); i++) { await sleep(150); list = await autosNow(); }
   const copy = list.find((x) => x.trigger.step === 'Book installs');
   ok(copy && copy.id !== au.id && !copy.trigger.task && copy.trigger.campaignId === camp.id && list.find((x) => x.id === au.id)?.trigger.step == null, 'Copy here makes a copy for the phase; the one you had is left as it was');
