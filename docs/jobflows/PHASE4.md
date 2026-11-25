@@ -122,21 +122,40 @@ gear; the steps only point at it.
 
 | kind | Menu name | Done when (server) | Who (default) |
 | --- | --- | --- | --- |
-| `gearOut` | Gear check-out | for each listed item, at least that many **different** units of it were checked out **to this job** since the run started (from the unit ledger: `checkout` entries with this job's id) | anyone on the job (the crew) |
-| `gearIn` | Gear check-in | **nothing is still out on this job**: no unit with status `out` and this job's id | anyone on the job |
+| `gearOut` | Gear check-out | for each listed item, at least that many **different** units of it were checked out **to this job** within the step's round (below), from the unit ledger (`checkout` entries with this job's id) | anyone on the job (the crew) |
+| `gearIn` | Gear check-in | its check-out (the nearest `gearOut` before it) is done, **and nothing is still out on this job** (no unit with status `out` and this job's id) | anyone on the job |
 
-- **Why check-out reads the ledger, not "out right now"**: so that checking the gear back in at the end doesn't
-  un-tick the check-out step. Once the job had its gear, that step stays done (an owner can reopen it, as any step).
-  Gear checked out before the run started doesn't count (the same rule as an old acceptance, PHASE2 §1.3).
+**Rounds, for jobs with more than one visit's gear.** Check-out and check-in steps pair up in order, like this:
+Check-out A → … → Check-in A → … → Check-out B → … → Check-in B.
+- A check-out's round starts when the run started, or, if a check-in comes before it, when the latest earlier
+  check-in step was done (its `finishedAt`). Only checkouts in that round count, so the ladder that went out for
+  visit A doesn't tick off visit B's check-out; it has to go out again.
+- A check-in belongs to the nearest check-out before it, and isn't done until that check-out is done (so it can't
+  tick off early, before anything has gone out). It's about the whole job: anything still out on the job, from this
+  round or checked out by hand, keeps it waiting.
+- Both boundaries (the run's start, a step's `finishedAt`) are kept in the data, so a restart doesn't change which
+  checkouts count.
+
+- **Why check-out reads the ledger, not "out right now"**: so that checking the gear back in doesn't un-tick the
+  check-out step. Once the job had its gear, that step stays done (an owner can reopen it, as any step).
+- **Counting, exactly**: only `checkout` ledger entries with this job's id inside the round count; a unit counts
+  once however many checkout entries it has (out, back, out again is one unit); a checkout to another job never
+  counts; a checkout before the round never counts, even if that unit is still out; returning a unit never removes
+  its checkout from the ledger.
 - **Check-in counts only what's out on the job**: a unit reported in repair or lost while on the job doesn't hold the
   step up (it's not "out" any more); the step notes it ("Ladder #2 reported lost"). A flow with nothing checked out
   passes its check-in step straight away.
 - **Settings**: `gearOut.settings.items = [{ itemId, qty }]` (1–10 entries, qty 1–20, each an Inventory item of the
   team tracked by unit, no item twice). `gearIn` has no settings: it's about whatever is out on the job, from this
   step or checked out by hand.
-- **Publish rules**: the Inventory tool on; items exist, are the team's and tracked by unit; a `gearIn` step needs a
-  `gearOut` step before it (a check-in with nothing to check in first is refused); several check-outs are allowed
-  (gear for different visits), and at most one check-in after each check-out.
+- **Publish rules**: the Inventory tool on; items exist, are the team's and tracked by unit; the steps must pair in
+  order: a `gearIn` needs a `gearOut` before it with no other `gearIn` between them; a `gearOut` may come without a
+  check-in (gear that stays at the site); two check-outs in a row without a check-in between are refused (make it one
+  step with both items).
+- **Changes outside the flow**: Inventory's routes stay the only way gear moves. A unit returned in Inventory or by a
+  label scan counts for check-in; a unit checked out to the job by hand counts for the round's check-out and keeps
+  check-in waiting until it's back; a unit taken by someone else after the sheet opened is refused by the existing
+  `checkout` ("It's already out"), and the sheet refreshes what's free.
 - **Next**:
   - Gear check-out opens a sheet listing what the step needs ("Pressure washer: 1 of 1 out · Ladder: 0 of 2"), and
     for each still needed, an available unit to pick (or scan its label), who's taking it (you by default), for this
@@ -149,7 +168,8 @@ gear; the steps only point at it.
 - **Permissions**: Inventory's own rules (everyone may check out and return; marking lost or retired is owners' and
   admins'); costs are never shown on these steps.
 - **A deleted job with gear still out**: the units stay out with the person who has them, the job link cleared, and
-  Inventory shows them as "out with Sam" (nothing is lost track of).
+  Inventory shows them as "out with Sam" (nothing is lost track of). The ledger's checkout entries keep the job's id
+  and stay as history; they aren't edited or removed.
 
 ## 6. Permissions
 Flow building: owners and admins (as all flow editing). `campaign` steps: owners and admins. Job stack: anyone who
@@ -161,7 +181,7 @@ item rules. Map: members see only the jobs they can see. Pins: as today plus the
 | Test (port) | Covers |
 | --- | --- |
 | `jobflow_links.mjs` (5255) | round 1 additions: two concurrent start/attach requests make one stack; a member who sees the job reaches its stack, and a stack id doesn't get anyone past the job's visibility; deleting the job, its list (a type) and its project each trash the stack's items; a member who loses access to a job sees its pin locked at once (and after a live update); the map looks up a shared address once per window, truncation is deterministic with `more`, a failing or slow lookup leaves the point out as `missing`, range defaults and 400s; a campaign linked to a job doesn't move its stage through its own steps or automations; two lines for one Inventory item take at most what's there; a bundle or saved campaign edited or deleted after publishing doesn't change the version; a restart right after the campaign is made or the stock is used shows both the marker and the change, and nothing repeats. And: stack: made once at start/attach with `stack: true` and from the job page; a file in it is seen by whoever sees the job and **not** by a member who can't see the job's private project — through state, the item routes, search, a chat pin, a share link, export and the public API; "members see only theirs" mode; deleting the job trashes its stack's items. Map: a stand-in Mapbox (as tests/routes.mjs); jobs and clients with addresses, members only their visible jobs and no client contact details, 200-address cap, nothing stored (a restart re-geocodes), off without a token. Tasks from a bundle. Campaign step: made once when current, linked to the job, done when the campaign is done, a deleted campaign reopens it and a new one is made next time, the job's stage not moved by it, members can't be its who. Chat pin: label and next step for those who see the job, locked for others, gone with the job. Inventory: use moves once when the work step is met, short stock noted not blocked, reopen and redo doesn't use twice, publish needs a real place |
-| `jobflow_gear.mjs` (5258) | publish rules (tool off, an item not tracked by unit, another team's item, a check-in with no check-out before it, item twice, qty 0 or 21); check-out done only with enough different units checked out to this job after the run started (one unit twice doesn't count as two; gear checked out before the run doesn't count; gear for another job doesn't count); returning the gear doesn't reopen check-out; check-in waits while anything is out on the job, done when all is back; a unit lost or in repair doesn't hold check-in and is noted; not enough units free → waits with the reason; a member (crew) can check out and in through the steps; the run card's gear line; a deleted job leaves its gear out with the person, job link cleared; costs never in these steps |
+| `jobflow_gear.mjs` (5258) | publish rules (tool off, an item not tracked by unit, another team's item, a check-in with no check-out before it, item twice, qty 0 or 21); check-out done only with enough different units checked out to this job after the run started (one unit checked out twice, or out, back and out again, counts as one; gear checked out before the run doesn't count even if still out; gear for another job doesn't count); two rounds: visit A's checkout doesn't tick visit B's check-out, check-in B waits for check-out B; check-in can't tick before its check-out is done; a unit returned in Inventory counts, one checked out by hand counts and keeps check-in waiting; a unit taken between the sheet opening and the checkout is refused and the shortage refreshed; a restart keeps the round boundaries; returning the gear doesn't reopen check-out; check-in waits while anything is out on the job, done when all is back; a unit lost or in repair doesn't hold check-in and is noted; not enough units free → waits with the reason; a member (crew) can check out and in through the steps; the run card's gear line; a deleted job leaves its gear out with the person, job link cleared, its ledger entries intact; costs never in these steps |
 | `jobs_ui.mjs` (Chrome) | with the client: Gear check-out and check-in sheets from Next, Files on the job, the builder's new settings, the Campaign step on the run card, Pin to a chat, the Map's Jobs layer |
 
 Existing suites that must stay green: everything in PHASE3 §7, plus stacks/items suites, chatpins, routes,
@@ -187,7 +207,9 @@ stock automatically on reopen; recurring work; moving old jobs onto flows.
 
 ### Owner addition: Gear check-out / check-in (§5b)
 Added after round 2's approval, at the owner's request ("Gear Check out and Gear Check in, make sure it makes sense").
-Check-out reads the unit ledger (gear went out to this job since the run started) so checking it back in doesn't
-undo it; check-in is "nothing still out on this job"; a check-in needs a check-out before it; Next uses the existing
-check-out and return; Inventory stays the one home.
+Check-out reads the unit ledger (gear went out to this job within its round) so checking it back in doesn't undo it;
+check-in is "its check-out done and nothing still out on this job"; steps pair in order as rounds (a check-out's round
+starts at the run's start or the previous check-in's finish); counting rules spelled out; outside changes go through
+Inventory's routes; deleted jobs keep their ledger history. (ChatGPT's review of the addition: multiple pairs,
+counting, outside changes, history.)
 
