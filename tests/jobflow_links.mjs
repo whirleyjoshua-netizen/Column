@@ -77,6 +77,9 @@ try {
   await rico('PATCH', '/workspace', { tools: { ...st.workspace.tools, projects: true, inventory: true, map: true } });
   st = (await rico('GET', '/state')).body;
   const samId = st.workspace.members.find((m) => m.name === 'Sam Reed').id;
+  r = await call()('POST', '/auth', { mode: 'join', workspace: 'Links ' + t, code: st.workspace.inviteCode, name: 'Ann Cole', email: `ann${t}@t.test`, password: 'longenough5', device: 'Mac', deviceId: 'd5' });
+  const ann = call(r.body.token);
+  await rico('PATCH', '/members/' + (await rico('GET', '/state')).body.workspace.members.find((m) => m.name === 'Ann Cole').id, { role: 'admin' });
   const p = (await rico('POST', '/projects', { template: 'trades', trades: ['cleaning'] })).body;
   const tp = p.types[0];
   const list = { projectId: p.id, typeId: tp.id };
@@ -118,6 +121,9 @@ try {
   r = await rico('POST', `/jobs/${jb.id}/flow`, { flowId: FS.id });
   ok(r.status === 200 && (await stacksOf(rico)).filter((x) => x.recordId === jb.id).length === 1, 'attaching a stack flow to a job that has one keeps the one');
   ok((await sam('POST', `/jobs/${jb.id}/stack`)).status === 403, 'members can’t make a job’s stack');
+  const ja = await bareJob('Admin stack');
+  r = await ann('POST', `/jobs/${ja.id}/stack`);
+  ok(r.status === 200 && r.body?.stack?.recordId === ja.id, 'an admin can');
   // A file in it: Sam sees it (he sees the job); a private board's job stack he never reaches.
   const note = (await rico('POST', '/items', { type: 'text', text: 'JOBNOTE-SMITH gate code is on the fridge', stackId: sid1 })).body;
   ok(!!note?.id && note.stackId === sid1, '(setup) a note in the job’s stack');
@@ -177,13 +183,13 @@ try {
   const gs2 = (await rico('POST', `/jobs/${gone2.id}/stack`)).body?.stack?.id;
   const gn2 = (await rico('POST', '/items', { type: 'text', text: 'JOBNOTE-GONE2', stackId: gs2 })).body;
   r = await rico('POST', `/projects/${pt.id}/schema`, { op: 'removeType', typeId: pt.types[0].id });
-  ok(!!gs2 && !(await itemsOf(rico)).some((x) => x.id === gn2?.id), 'deleting its list: the stack’s note goes too (' + r.status + ')');
+  ok(!!gs2 && !(await itemsOf(rico)).some((x) => x.id === gn2?.id) && !(await stacksOf(rico)).some((x) => x.id === gs2), 'deleting its list: the stack and its note go too (' + r.status + ')');
   const pd = (await rico('POST', '/projects', { template: 'trades', trades: ['hvac'], name: 'Board to delete' })).body;
   const gone3 = await bareJob('Board job', {}, pd, pd.types[0]);
   const gs3 = (await rico('POST', `/jobs/${gone3.id}/stack`)).body?.stack?.id;
   const gn3 = (await rico('POST', '/items', { type: 'text', text: 'JOBNOTE-GONE3', stackId: gs3 })).body;
   await rico('DELETE', `/projects/${pd.id}`);
-  ok(!!gs3 && !(await itemsOf(rico)).some((x) => x.id === gn3?.id), 'deleting its board: the stack’s note goes too');
+  ok(!!gs3 && !(await itemsOf(rico)).some((x) => x.id === gn3?.id) && !(await stacksOf(rico)).some((x) => x.id === gs3), 'deleting its board: the stack and its note go too');
   await rico('DELETE', `/projects/${pp.id}/records/${pj.id}`);
   ok((await fetch(`${B}/s/${shared.token}`)).status >= 400, 'a share link to a deleted job’s file stops working');
   ok(!!psid && !((await crewOf(rico))?.pins || []).some((x) => x.id === psid), 'and its stack’s chat pin is gone');
@@ -206,8 +212,14 @@ try {
   const ids = (b) => (b?.points || []).map((x) => x.id);
   ok(r.status === 200 && ids(r.body).includes(m1.id) && ids(r.body).includes(m2.id) && ids(r.body).includes(m3.id), 'the map: jobs with an address (their own, or their client’s): ' + r.status + ' ' + JSON.stringify(ids(r.body)));
   ok(ids(r.body).length > 0 && !ids(r.body).includes(m4.id) && !ids(r.body).includes(m5.id), 'by default today to 30 days ahead, no undated jobs');
+  const pt1 = (r.body?.points || []).find((x) => x.id === m1.id);
+  ok(pt1?.kind === 'job' && pt1.name === 'Map job 1' && pt1.address === '21 Shared St' && typeof pt1.lat === 'number' && typeof pt1.lng === 'number' && pt1.scheduled === day(2) && 'stage' in pt1, 'a job point: kind, id, name, address, lat, lng, scheduled, stage: ' + JSON.stringify(pt1));
+  ok((r.body?.points || []).find((x) => x.id === m3.id)?.address === '10 Client Way', 'a job with no address of its own is at its client’s');
+  ok(typeof r.body?.more === 'number' && typeof r.body?.missing === 'number' && !r.body?.off, 'more and missing are counts; off only without a token');
   ok(!ids(r.body).includes(m6.id) && r.body?.missing >= 1, 'a failed lookup leaves the point out, counted as missing');
   ok((geo.get('21 shared st') || 0) === 1, 'a shared address (however it’s spaced) is looked up once: ' + JSON.stringify([...geo]));
+  const cpt = (r.body?.points || []).find((x) => x.kind === 'client');
+  ok(!!cpt && cpt.name === 'Lone Client' && cpt.address === '11 Lonely Rd' && typeof cpt.lat === 'number' && !('scheduled' in cpt) && !('stage' in cpt) && !/lone@x/.test(JSON.stringify(cpt)), 'a client point: name, address, lat, lng, no job fields and no email: ' + JSON.stringify(cpt));
   ok((r.body?.points || []).some((x) => x.kind === 'client' && x.id === (lone.id ?? lone.contact?.id)) && !(r.body?.points || []).some((x) => x.kind === 'client' && x.id === danaId), 'owners see clients with an address and no job among the points');
   const before = geoCalls();
   await map(rico);
@@ -258,6 +270,10 @@ try {
     ok(ids(b1).length === 200 && JSON.stringify(ids(b1)) === JSON.stringify(ids(b2)), 'the same 200 every time (Scheduled day, then name)');
     const days = (b1?.points || []).map((x) => x.scheduled);
     ok(days.length === 200 && days.every((d, i) => !i || days[i - 1] <= d), 'in Scheduled-day order');
+    const keyOf = (x) => x.scheduled + '|' + x.name;
+    ok(b1?.points?.length === 200 && b1.points.every((x, i, a) => !i || keyOf(a[i - 1]) < keyOf(x)), 'and by name within a day');
+    const all = Array.from({ length: 205 }, (_, i) => ({ scheduled: day(1 + (i % 20)), name: 'Big ' + String(i).padStart(3, '0') })).sort((a, b) => keyOf(a) < keyOf(b) ? -1 : 1).slice(0, 200).map((x) => x.name);
+    ok(JSON.stringify((b1?.points || []).map((x) => x.name)) === JSON.stringify(all), 'exactly the first 200 by Scheduled day then name (ties within a day broken by name)');
   }
 
   // ---------- 3. Tasks from a bundle; the Campaign step ----------
@@ -265,7 +281,7 @@ try {
   const pre2 = (await rico('POST', '/task-presets', { text: 'Load the truck' })).body;
   const bundle = (await rico('POST', '/task-presets', { kind: 'bundle', name: 'Prep', steps: [{ presetId: pre1.id }, { presetId: pre2.id }] })).body;
   const FT = await flowOf('From a bundle', { steps: [C, { kind: 'tasks', name: 'Prep tasks', settings: { bundleId: bundle.id } }] });
-  ok(FT.status === 200 && JSON.stringify(FT.step('Prep tasks')?.settings?.tasks) === JSON.stringify(['Call to confirm', 'Load the truck']) && FT.step('Prep tasks')?.settings?.bundleFrom?.id === bundle.id, 'a Tasks step from a bundle copies its tasks into the version: ' + FT.error + ' ' + JSON.stringify(FT.step('Prep tasks')?.settings));
+  ok(FT.status === 200 && JSON.stringify(FT.step('Prep tasks')?.settings?.tasks) === JSON.stringify(['Call to confirm', 'Load the truck']) && FT.step('Prep tasks')?.settings?.bundleFrom?.id === bundle.id && FT.step('Prep tasks')?.settings?.bundleFrom?.name === 'Prep', 'a Tasks step from a bundle copies its tasks into the version: ' + FT.error + ' ' + JSON.stringify(FT.step('Prep tasks')?.settings));
   await rico('PATCH', '/task-presets/' + pre2.id, { text: 'Load the van' });
   await rico('DELETE', '/task-presets/' + bundle.id);
   const jt = (await rico('POST', '/jobs', { flowId: FT.id, values: { job: 'Bundle job' } })).body?.job;
@@ -288,7 +304,7 @@ try {
   const camps = async () => Object.values((await rico('GET', '/state')).body.campaigns || []).filter((x) => !!jc?.id && x.recordId === jc.id && x.kind !== 'job');
   let cl = await camps();
   ok(cl.length === 1 && cl[0].id === sc?.id && /Deep clean · Campaign job/.test(cl[0].name), 'one campaign, linked to the job, named from the snapshot (not the rename): ' + JSON.stringify(cl.map((x) => x.name)));
-  ok(sc?.status !== 'done' && (await stateOf(jc?.id, 'Run playbook')) === 'current', 'the step waits for the campaign');
+  ok(sc?.status === 'active' && sc?.name === cl[0]?.name && (await stateOf(jc?.id, 'Run playbook')) === 'current', 'the step shows the campaign (active) and waits for it');
   // A restart right after it was made: the marker and the campaign are both there, nothing repeats.
   await stop();
   ok(await start(), 'restarted after the campaign was made');
@@ -306,7 +322,8 @@ try {
   ok((await camps()).length === 1, 'still one campaign on the job');
   await rico('PATCH', '/campaigns/' + sc?.id, { status: 'done' });
   ok(await until(async () => (await stateOf(jc?.id, 'Run playbook')) === 'done'), 'the campaign done: the step is done');
-  ok(!!stage0 && (await stageOf(jc?.id)) === stage0, 'the job’s stage isn’t moved by the campaign: ' + stage0 + ' → ' + (await stageOf(jc?.id)));
+  ok(await until(async () => (await itemsOf(rico)).some((x) => x.type === 'message' && x.text === 'CAMPDONE')), 'it’s an ordinary campaign: its campaign.done automation ran');
+  ok(!!stage0 && (await stageOf(jc?.id)) === stage0, 'completing the linked campaign (and its campaign.done event) doesn’t move the job’s stage: ' + stage0 + ' → ' + (await stageOf(jc?.id)));
 
   // ---------- 4. The job in chat ----------
   const FP = await flowOf('Pinnable', { steps: [C, D('Measure up')] });
@@ -316,6 +333,11 @@ try {
   await until(async () => (await stateOf(jp?.id, 'Measure up')) === 'current');
   pins = (await crewOf(sam))?.pins || [];
   const jpin = pins.find((x) => x.kind === 'job');
+  ok(jpin?.icon === '🧰', 'with the flow’s icon: ' + jpin?.icon);
+  const jnf = await bareJob('No flow job');
+  await rico('POST', `/channels/${crew.id}/pins`, { kind: 'job', id: jnf.id });
+  const nfpin = ((await crewOf(sam))?.pins || []).find((x) => x.id === jnf.id);
+  ok(nfpin?.label === 'No flow job' && nfpin.icon === '🛠️' && nfpin.next == null, 'a job on no flow: 🛠️ and no next step: ' + JSON.stringify(nfpin));
   ok(jpin && !jpin.locked && jpin.id === jp?.id && jpin.label === 'Pinned job' && jpin.next === 'Measure up', 'Sam, who sees it, gets its name and next step: ' + JSON.stringify(jpin));
   r = await sam('POST', `/channels/${crew.id}/pins`, { kind: 'job', id: m7.id });
   ok(r.status === 404 || r.status === 403, 'pinning needs the pinner to see the job');
@@ -343,6 +365,9 @@ try {
   ok(!!fItem?.id && !!fItem2?.id && !!sItem?.id, '(setup) Items linked to Inventory');
   const W = { kind: 'work', name: 'Do it', settings: { useStock: true, fromPlace: truck.id } };
   ok((await flowOf('Bad place', { steps: [C, { ...W, settings: { useStock: true, fromPlace: 'nope' } }] })).status === 400, 'publishing a stock step with a place that isn’t there is refused');
+  await rico('PATCH', '/workspace', { tools: { ...st.workspace.tools, projects: true, inventory: false, map: true } });
+  ok((await flowOf('Stock, tool off', { steps: [C, W] })).status === 400, 'publishing a stock step with the Inventory tool off is refused');
+  await rico('PATCH', '/workspace', { tools: { ...st.workspace.tools, projects: true, inventory: true, map: true } });
   const FU = await flowOf('Uses stock', { items: [{ itemId: fItem.id, qty: 2 }, { itemId: fItem2.id, qty: 2 }, { itemId: sItem.id, qty: 1 }], steps: [C, W, D('Wrap up')] });
   ok(FU.status === 200, '(setup) a flow that uses stock: ' + FU.error);
   const ju = (await rico('POST', '/jobs', { flowId: FU.id, contactId: danaId, values: { job: 'Stock job' } })).body?.job;
@@ -355,11 +380,15 @@ try {
   await until(async () => (await usesOf()).length > 0);
   let uses = await usesOf();
   ok(uses.length === 1 && uses[0].itemId === filter.id && Math.abs(uses[0].qty) === 3 && (await stockAt(filter.id)) === 0, 'two lines for one Filter (2 + 2) are one move, capped at the 3 there: ' + JSON.stringify(uses.map((m) => [m.itemId, m.qty])));
-  ok(/:/.test(uses[0]?.key || ''), 'the move carries the run:step:cycle key');
+  const ur = await runOf(ju?.id);
+  const ust = ur?.steps?.find((x) => x.name === 'Do it');
+  ok(!!ur && uses[0]?.key === `${ur.id}:${ust?.goalId}:${ust?.cycle}`, 'the move carries the run:step:cycle key: ' + uses[0]?.key);
+  ok(JSON.stringify(ust?.stock?.used) === JSON.stringify([{ itemId: filter.id, name: 'Filter', qty: 3 }]), 'the step shows what was used, added up and capped: ' + JSON.stringify(ust?.stock?.used));
   const stockStep = await stepOf(ju?.id, 'Do it');
   ok((stockStep?.stock?.notes || []).some((n) => /Short 1 × Filter at Truck 1/.test(n)) && (stockStep?.stock?.notes || []).some((n) => /Units differ: each vs box/.test(n)), 'the shortfall and the unit mismatch are noted, not blocking: ' + JSON.stringify(stockStep?.stock?.notes));
   ok((await stockAt(soap.id)) === 10, 'soap (box vs each) isn’t touched');
-  ok(!JSON.stringify(await stepOf(ju?.id, 'Do it', sam)).match(/"cost"/), 'members see the used note, no costs');
+  const samStock = (await stepOf(ju?.id, 'Do it', sam))?.stock;
+  ok(!!samStock && Object.keys(samStock).sort().join() === 'notes,used' && samStock.used.every((u) => Object.keys(u).sort().join() === 'itemId,name,qty') && !/cost|price|value/i.test(JSON.stringify(samStock)), 'members see what was used (itemId, name, qty) and the notes, no cost or price');
   // A restart right after: both halves are there, nothing repeats.
   await stop();
   ok(await start(), 'restarted after the stock was used');

@@ -132,7 +132,8 @@ try {
   const need = (g, id) => g?.items?.find((x) => x.itemId === id);
   ok(r.status === 200 && need(r.body, pw.id)?.need === 1 && need(r.body, pw.id)?.got === 0 && need(r.body, lad.id)?.need === 2 && need(r.body, lad.id)?.got === 0, 'the sheet lists what the step needs: washer 0 of 1, ladder 0 of 2 (the ladder out before the run doesn’t count): ' + JSON.stringify(r.body?.items));
   ok(need(r.body, lad.id)?.free?.length === 2 && !need(r.body, lad.id).free.some((u) => u.id === l1.id), 'and only the free ladders to pick');
-  ok(!/cost|value|40000|15000/.test(JSON.stringify(r.body)), 'no costs on the sheet');
+  ok(r.status === 200 && Array.isArray(r.body?.items) && !/cost|value|40000|15000/.test(JSON.stringify(r.body)), 'no costs on the sheet');
+  ok(Array.isArray(r.body?.out) && Array.isArray(r.body?.notes) && need(r.body, pw.id)?.name === 'Pressure washer' && need(r.body, pw.id)?.free?.every((u) => u.id && u.name), 'the sheet’s shape: items (itemId, name, need, got, free [{ id, name }]), out, notes');
   // Gear for another job doesn't count.
   const other = await bareJob('Other job');
   await inv(l2, { act: 'checkout', jobId: other.id });
@@ -149,7 +150,7 @@ try {
   // A unit taken between the sheet opening and the checkout is refused, and the shortage refreshed.
   const sheet = (await gearAt(j1.id, sOut)).body;
   const free = need(sheet, lad.id)?.free || [];
-  ok(free.length === 0, 'no ladders free now (l1 out before, l2 on another job, l3 counted): ' + JSON.stringify(free));
+  ok(!!need(sheet, lad.id) && free.length === 0, 'no ladders free now (l1 out before, l2 on another job, l3 counted): ' + JSON.stringify(free));
   await inv(l2, { act: 'return', placeId: main.id });
   const sheet2 = (await gearAt(j1.id, sOut)).body;
   ok(need(sheet2, lad.id)?.free?.some((u) => u.id === l2.id), 'l2 back in the yard: it’s free on the sheet');
@@ -165,13 +166,18 @@ try {
   ok(await until(async () => (await stateOf(j1.id, 'Gear out')) === 'done'), 'a ladder checked out to the job by hand counts: 2 of 2, the check-out is done');
   const run1b = await runOf(j1.id);
   ok(/^Gear out: /.test(run1b?.gearLine || '') && /Pressure washer/.test(run1b.gearLine) && /Ladder ×3/.test(run1b.gearLine), 'the run card’s gear line: ' + run1b?.gearLine);
-  ok(!/"cost"|"value"/.test(JSON.stringify(run1b)), 'no costs on the run');
+  ok(!!run1b?.gearLine && !/"cost"|"value"/.test(JSON.stringify(run1b)), 'no costs on the run');
   // Check-in waits while anything is out on the job (the ladder from before the run too).
   await done(j1.id, F1.sid('Work'));
   await sleep(300);
   r = await gearAt(j1.id, sIn);
+  ok((r.body?.out || []).every((u) => u.unitId && u.name && u.item && u.memberId) && (r.body?.out || []).some((u) => u.unitId === l3.id && u.item === 'Ladder'), 'each thing out: unitId, name, item, who has it');
   ok(r.status === 200 && r.body?.out?.length === 4 && (await stateOf(j1.id, 'Gear in')) === 'current', 'check-in lists the 4 out on the job (one from before the run) and waits: ' + r.body?.out?.length);
   // Returning the gear doesn't reopen the check-out.
+  r = await gearDo(j1.id, sIn, { act: 'return', unitId: pw2.id });
+  ok([400, 409].includes(r.status), 'checking in a unit that isn’t out on this job is refused: ' + r.status);
+  r = await gearDo(j1.id, sIn, { act: 'return', unitId: pw1.id, placeId: 'nowhere' });
+  ok([400, 404].includes(r.status) && (await rico('GET', '/inventory/units/' + pw1.id)).body?.unit?.status === 'out', 'or to a place that isn’t there: ' + r.status);
   r = await gearDo(j1.id, sIn, { act: 'return', unitId: pw1.id });
   ok(r.status === 200 && (await rico('GET', '/inventory/units/' + pw1.id)).body?.unit?.placeId === main.id, 'check in through the flow: back to where it came from by default');
   r = await gearDo(j1.id, sIn, { act: 'return', unitId: l3.id, placeId: truck.id });
@@ -182,15 +188,16 @@ try {
   await inv(l1, { act: 'lost' });
   ok(await until(async () => (await stateOf(j1.id, 'Gear in')) === 'done'), 'a ladder returned in Inventory and one reported lost: nothing out, check-in done');
   ok(((await stepOf(j1.id, 'Gear in'))?.gear?.notes || []).some((n) => /Ladder.*lost/i.test(n)), 'and the lost one is noted: ' + JSON.stringify((await stepOf(j1.id, 'Gear in'))?.gear?.notes));
-  ok((await runOf(j1.id))?.gearLine == null, 'no gear line when nothing is out');
+  ok((await runOf(j1.id))?.gearLine === null, 'no gear line when nothing is out');
   await backAll();
 
   // 3. A check-in can't tick before its check-out (nothing out on the job yet).
   const j0 = await bareJob('Empty yard');
   await attach(j0.id, F1.id);
-  await done(j0.id, F1.sid('Work')).catch(() => {});
+  r = await done(j0.id, sIn);
+  ok(r.status === 409, 'Done on a check-in is refused: it finishes by itself: ' + r.status);
   await sleep(400);
-  ok((await stateOf(j0.id, 'Gear in')) !== 'done', 'with nothing out, check-in still waits for its check-out');
+  ok((await stateOf(j0.id, 'Gear out')) === 'current' && (await stateOf(j0.id, 'Gear in')) === 'waiting', 'with nothing out at all, check-in still isn’t done while its check-out isn’t: ' + (await stateOf(j0.id, 'Gear in')));
   // Its check-out skipped with a reason, and nothing out: check-in passes.
   await rico('POST', `/jobs/${j0.id}/steps/${F1.sid('Gear out')}/skip`, { reason: 'Customer has their own' });
   ok(await until(async () => (await stateOf(j0.id, 'Gear in')) === 'done'), 'its check-out skipped and nothing out: check-in passes');
@@ -201,7 +208,7 @@ try {
   const A = F2.sid('Out A'), IA = F2.sid('In A'), OB = F2.sid('Out B'), IB = F2.sid('In B');
   r = await gearDo(j2.id, OB, { act: 'checkout', unitId: l1.id });
   ok(r.status === 409, 'round B’s check-out through the flow before check-in A is done: 409: ' + r.status + ' ' + (r.body?.error || ''));
-  ok((await rico('GET', '/inventory/units/' + l1.id)).body?.unit?.status === 'available', 'and nothing went out');
+  ok(r.status === 409 && (await rico('GET', '/inventory/units/' + l1.id)).body?.unit?.status === 'available', 'and nothing went out');
   for (const u of [pw1, l1, l2]) { r = await gearDo(j2.id, A, { act: 'checkout', unitId: u.id }, sam); ok(r.status === 200, 'Sam (crew) checks out ' + u.name + ' through the step: ' + r.status + ' ' + (r.body?.error || '')); }
   ok(await until(async () => (await stateOf(j2.id, 'Out A')) === 'done'), 'round A’s check-out is done');
   await done(j2.id, F2.sid('Visit A'));
@@ -230,6 +237,17 @@ try {
   await done(j2.id, F2.sid('Visit B'));
   ok((await stateOf(j2.id, 'In B')) === 'current', 'check-in B waits for check-out B’s ladder');
   void runA;
+
+  // A member who can't see the job: the gear routes don't exist for him.
+  const pp = (await rico('POST', '/projects', { template: 'trades', trades: ['cleaning'], private: true, name: 'Private jobs' })).body;
+  const fp = (await rico('POST', '/job-flows', { name: 'Private gear', list: { projectId: pp.id, typeId: pp.types[0].id }, steps: [OUT([{ itemId: pw.id, qty: 1 }]), IN()] })).body;
+  const fpv = (await rico('POST', `/job-flows/${fp?.id}/publish`)).body;
+  const jpv = (await rico('POST', `/projects/${pp.id}/records`, { typeId: pp.types[0].id, values: { job: 'Private gear job' } })).body;
+  await attach(jpv.id, fp?.id);
+  const fpOut = fpv?.version?.body?.steps?.[0]?.id;
+  ok(!!fpOut && (await gearAt(jpv.id, fpOut)).status === 200, '(setup) a gear job on a private board');
+  ok(!!fpOut && (await gearAt(jpv.id, fpOut)).status === 200 && (await gearAt(jpv.id, fpOut, sam)).status === 404 && (await gearDo(jpv.id, fpOut, { act: 'checkout', unitId: pw2.id }, sam)).status === 404, 'Sam, who can’t see that job, gets 404 from its gear sheet and its check-out');
+  ok(!!fpOut && (await gearAt(jpv.id, fpOut)).status === 200 && (await rico('GET', '/inventory/units/' + pw2.id)).body?.unit?.status === 'available', 'and nothing went out');
 
   // 5. A deleted job with gear still out: the unit stays out with the person, the job link cleared, the ledger kept.
   const j3 = await bareJob('Deleted later');
