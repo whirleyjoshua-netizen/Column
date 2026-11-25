@@ -1,6 +1,7 @@
 // Inventory linked in, in a real browser (headless Chrome): a job shows "Materials & equipment"; stock is used on it
 // and equipment checked out for it right there, and the box updates; a task's menu has "Use stock for it…"; the
 // automation builder has a "Use or move stock" step and Inventory's events; a ready-made "Running low? Reorder it".
+import { autoUI } from './autobuild.mjs';
 import * as FS from 'node:fs';
 import WebSocket from '../server/node_modules/ws/index.js';
 import { spawn } from 'node:child_process';
@@ -96,12 +97,15 @@ try {
   await A.until(`!!document.querySelector('#tabs [data-tab=automations]')`, 10000);
   await A.ev(`document.querySelector('#tabs [data-tab=automations]').click(); true`);
   await A.tap(`[...document.querySelectorAll('#tool button')].find((b) => b.textContent === '+ New automation')`);
-  await A.until(`!!document.querySelector('#sheet .auto-kind')`);
-  ok(await A.ev(`!![...document.querySelectorAll('#sheet .auto-kind optgroup')].find((g) => g.label === 'Inventory' && [...g.children].some((o) => o.value === 'stock.low'))`), 'what sets it off includes Inventory: an item runs low, used on a job, equipment out, back, a problem');
-  await A.pick(`document.querySelector('#sheet .auto-kind')`, 'record.stage');
-  await A.pick(`document.querySelector('#sheet .auto-step-kind')`, 'stock');
+  const B = autoUI(A);
+  await A.tap(`document.querySelector('#sheet .ab-panel .ab-change')`);
+  await A.tap(`[...document.querySelectorAll('.ap-pop .ap-chip')].find((c) => c.textContent === 'Inventory')`);
+  ok(await A.until(`!!document.querySelector('.ap-pop .ap-item[data-key="stock.low"]') && [...document.querySelectorAll('.ap-pop .ap-item')].length >= 5`), 'what sets it off includes Inventory: an item runs low, used on a job, equipment out, back, a problem');
+  await A.tap(`[...document.querySelectorAll('.ap-pop .ap-chip')].find((c) => c.dataset.g === 'all')`);
+  await A.tap(`document.querySelector('.ap-pop .ap-item[data-key="record.stage"]')`);
+  await B.step(B.act(0), 'stock');
   ok(await A.until(`[...(document.querySelector('#sheet .auto-stock-item')?.options || [])].some((o) => o.textContent.startsWith('16x25 air filter'))`), '“Use or move stock” lists counted items (not equipment)');
-  await A.fill(`document.querySelector('#sheet .auto-edit input')`, 'Filters on finished jobs');
+  await A.fill(`document.querySelector('#sheet .auto-name')`, 'Filters on finished jobs');
   await A.fill(`document.querySelector('#sheet .auto-stock-qty')`, '2');
   await A.tap(`[...document.querySelectorAll('#sheet .btns button')].find((b) => b.textContent === 'Turn it on')`);
   ok(await A.until(`[...document.querySelectorAll('#tool .auto-row b')].some((b) => b.textContent === 'Filters on finished jobs')`), 'saved');

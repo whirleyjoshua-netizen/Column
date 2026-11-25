@@ -1,6 +1,7 @@
 // Flows step 2 in a real browser (headless Chrome): an automation built in the editor with "Only if…" (and
 // "Otherwise") and "Wait…"; saved with its nested steps; each new contact goes the right way; the wait shows as a
 // waiting run that can be listed and stopped; it fits a phone. (Waits go 1000× faster here: tests only.)
+import { autoUI } from './autobuild.mjs';
 import * as FS from 'node:fs';
 import WebSocket from '../server/node_modules/ws/index.js';
 import { spawn } from 'node:child_process';
@@ -48,38 +49,33 @@ try {
   ok(await A.until(`!document.querySelector('#app')?.classList.contains('hidden') && !!document.querySelector('#settingsBtn')`, 20000), 'signed in');
   await A.until(`!!document.querySelector('#tabs [data-tab=automations]')`, 10000); await A.ev(`document.querySelector('#tabs [data-tab=automations]').click(); true`); // in Workspace now (2026-11-14)
   await A.tap(`[...document.querySelectorAll('#tool button')].find((b) => b.textContent === '+ New automation')`);
-  await A.until(`!!document.querySelector('#sheet .auto-kind')`);
-  await A.pick(`document.querySelector('#sheet .auto-kind')`, 'contact.created');
-  await A.fill(`document.querySelector('#sheet .auto-edit input')`, 'Sort new contacts');
+  const B = autoUI(A);
+  await B.when('contact.created');
+  await A.fill(`document.querySelector('#sheet .auto-name')`, 'Sort new contacts');
   // Step 1: Only if {stage} is Lead → post; otherwise → post.
-  await A.pick(`document.querySelector('#sheet .auto-step-kind')`, 'if');
+  await B.step(B.act(0), 'if');
   ok(await A.until(`!!document.querySelector('#sheet .auto-if-field') && [...document.querySelectorAll('#sheet .auto-steps-h')].map((x) => x.textContent).join() === 'Then,Otherwise'`), '“Only if…” shows what it checks, and its Then and Otherwise steps');
   await A.pick(`document.querySelector('#sheet .auto-if-field')`, 'stage');
   await A.pick(`document.querySelector('#sheet .auto-if-op')`, 'is');
   await A.fill(`document.querySelector('#sheet .auto-if-val')`, 'Lead');
   // Then: post in #general.
   const thenBox = `[...document.querySelectorAll('#sheet .auto-steps.nested')][0]`;
-  await A.pick(`${thenBox}.querySelector('.auto-step-kind')`, 'post');
-  await A.fill(`${thenBox}.querySelector('.auto-act input')`, 'LEAD {contact}');
-  await A.pick(`[...${thenBox}.querySelectorAll('.auto-act select')][1]`, 'general');
+  await B.step(B.act(0, thenBox), 'post');
+  await A.fill(`document.querySelector('#sheet .ab-body input')`, 'LEAD {contact}');
+  await A.pick(`document.querySelector('#sheet .ab-body select')`, 'general');
   // Otherwise: add a step, a post.
   const elseBox = `[...document.querySelectorAll('#sheet .auto-steps.nested')][1]`;
-  await A.tap(`${elseBox}.querySelector('.auto-add-step')`);
-  await A.pick(`${elseBox}.querySelector('.auto-step-kind')`, 'post');
-  await A.fill(`${elseBox}.querySelector('.auto-act input')`, 'OTHER {contact}');
-  await A.pick(`[...${elseBox}.querySelectorAll('.auto-act select')][1]`, 'general');
+  await B.add('post', elseBox);
+  await A.fill(`document.querySelector('#sheet .ab-body input')`, 'OTHER {contact}');
+  await A.pick(`document.querySelector('#sheet .ab-body select')`, 'general');
   // Step 2: wait 2 days; step 3: post.
-  const top = `[...document.querySelectorAll('#sheet .auto-steps:not(.nested)')][0]`;
-  await A.tap(`[...${top}.children].filter((x) => x.classList.contains('auto-add-step')).at(-1)`);
-  await A.pick(`[...${top}.children].filter((x) => x.classList.contains('auto-act')).at(-1).querySelector('.auto-step-kind')`, 'wait');
+  await B.add('wait');
   ok(await A.until(`!!document.querySelector('#sheet .auto-wait-n')`), '“Wait…” asks how long');
   await A.fill(`document.querySelector('#sheet .auto-wait-n')`, '2');
   await A.pick(`document.querySelector('#sheet .auto-wait-u')`, 'days');
-  await A.tap(`[...${top}.children].filter((x) => x.classList.contains('auto-add-step')).at(-1)`);
-  const last = `[...${top}.children].filter((x) => x.classList.contains('auto-act')).at(-1)`;
-  await A.pick(`${last}.querySelector('.auto-step-kind')`, 'post');
-  await A.fill(`${last}.querySelector('input')`, 'TWO DAYS LATER {contact}');
-  await A.pick(`[...${last}.querySelectorAll('select')][1]`, 'general');
+  await B.add('post');
+  await A.fill(`document.querySelector('#sheet .ab-body input')`, 'TWO DAYS LATER {contact}');
+  await A.pick(`document.querySelector('#sheet .ab-body select')`, 'general');
   await A.tap(`[...document.querySelectorAll('#sheet .btns button')].find((b) => b.textContent === 'Turn it on')`);
   ok(await A.until(`[...document.querySelectorAll('#tool .auto-row b')].some((b) => b.textContent === 'Sort new contacts')`), 'saved');
   const saved = (await api('GET', '/automations')).find((x) => x.name === 'Sort new contacts');

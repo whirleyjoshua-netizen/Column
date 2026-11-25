@@ -1,5 +1,6 @@
 // Saved tasks in Tasks (2026-11-19): a “Saved tasks” shelf to open; save one (or from a task's menu); drag it onto a
 // day of the month; a bundle of saved tasks in order; tap one to start it on a day, for someone. The shelf stays open.
+import { autoUI } from './autobuild.mjs';
 import * as FS from 'node:fs';
 import { spawn } from 'node:child_process';
 import WebSocket from '../server/node_modules/ws/index.js';
@@ -129,12 +130,14 @@ try {
   await A.ev(`document.querySelector('#tabs [data-tab=automations]').click(); true`);
   ok(await A.until(`[...document.querySelectorAll('#tool button')].some((b) => b.textContent === '+ New automation')`, 8000), 'Automations is open');
   await A.ev(`[...document.querySelectorAll('#tool button')].find((b) => b.textContent === '+ New automation').click(); true`);
-  await A.until(`!!document.querySelector('#sheet .auto-kind')`);
-  await pick(`document.querySelector('#sheet .auto-kind')`, 'contact.created');
-  await A.ev(`(() => { const s = document.querySelector('#sheet .auto-edit input'); s.value = 'New customer → install'; s.dispatchEvent(new Event('input', { bubbles: true })); return true; })()`);
-  await pick(`document.querySelector('#sheet .auto-step-kind')`, 'task');
+  const B = autoUI(A);
+  await B.when('contact.created');
+  await A.ev(`(() => { const s = document.querySelector('#sheet .auto-name'); s.value = 'New customer → install'; s.dispatchEvent(new Event('input', { bubbles: true })); return true; })()`);
+  await B.step(B.act(0), 'task');
+  await B.adv();
   ok(await A.until(`!!document.querySelector('#sheet .auto-preset') && [...document.querySelector('#sheet .auto-preset').options].some((o) => o.value === ${JSON.stringify(bundle.id)})`), 'a task step can be made from a saved task or bundle');
   await pick(`document.querySelector('#sheet .auto-preset')`, bundle.id);
+  await B.set();
   ok(await A.until(`document.querySelector('#sheet .auto-preset-says')?.textContent === 'Book the install → Order the materials'`), 'picked, it shows what the bundle makes, in order');
   await A.ev(`[...document.querySelectorAll('#sheet .btns button')].find((b) => b.textContent === 'Turn it on').click(); true`);
   let auto = null;

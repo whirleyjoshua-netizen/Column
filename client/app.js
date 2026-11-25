@@ -6002,6 +6002,18 @@
     const said = a.text || a.subject || a.title || a.url || '';
     return (AUTO_DO[a.kind] || a.kind) + (said ? ': ' + said : '');
   }
+  // What sets it off, as a sentence for its node; and a step's few chips (who, when, where).
+  const autoWhenText = (t) => autoSummary({ trigger: t, actions: [] }).replace(/ → $/, '');
+  function autoChips(a) {
+    const who = (v) => (v === 'who' ? 'Whoever set it off' : v === 'doers' ? 'Whoever it’s for' : v === 'owners' ? 'Owners' : v === 'admins' ? 'Owners and admins'
+      : String(v).startsWith('role:') ? 'Role: ' + ((S.workspace.roles || []).find((r) => 'role:' + r.id === v)?.name || '?') : (S.workspace.members || []).find((m) => m.id === v)?.name || '');
+    const out = [];
+    if (a.kind === 'task') { if (a.assignee) out.push(['👤', who(a.assignee)]); if (a.dueIn != null && a.dueIn !== '') out.push(['📅', Number(a.dueIn) ? `Due in ${plural(Number(a.dueIn), 'day')}` : 'Due the same day']); }
+    if (a.kind === 'notify') (a.to || []).slice(0, 3).forEach((v) => out.push(['🔔', who(v)]));
+    if (a.kind === 'post') out.push(['#', !a.channelId || a.channelId === 'same' ? 'The campaign’s feed' : a.channelId === 'general' ? 'general' : S.workspace.channels.find((c) => c.id === a.channelId)?.name || 'a channel']);
+    if (a.kind === 'email' || a.kind === 'text') out.push(['✋', 'Waits for an OK']);
+    return out.filter(([, l]) => l).map(([i, l]) => h('span', { class: 'an-chip' }, `${i} ${l}`));
+  }
   // Make or change one, in the builder: the whole automation as a flow, filling the page beside the sidebar. What sets it off at the top,
   // then each step under it; "only if" splits into Then and Otherwise side by side. A + between steps adds one there,
   // a step's ⋮⋮ drags it anywhere (into a branch too), ▾ folds it. "Test it" walks it on the last real event (or a
@@ -6019,7 +6031,7 @@
     const stages = [...new Set((S.contacts || []).map((c) => c.stage).filter(Boolean))];
     const outcomes = [...new Set(S.campaigns.flatMap((c) => c.outcomes || []))];
     const people = S.workspace.members;
-    const B = { folded: new WeakSet(), lit: null, would: null, test: null, run: '', focus: null, reg: null, drag: null };
+    const B = { sel: 'trigger', tab: 'set', panel: null, lit: null, would: null, test: null, run: '', focus: null, reg: null, drag: null };
     // Typing doesn't redraw, so the red marks and the count follow it here.
     const marks = () => {
       let n = 0;
@@ -6027,9 +6039,12 @@
         const p = el._step ? autoProblem(el._step) : '';
         if (p) n++;
         el.classList.toggle('bad', !!p);
-        const b = el.querySelector(':scope > .auto-act-h > .auto-bad');
+        const b = el.querySelector(':scope > .an-h .auto-bad');
         if (b) { b.hidden = !p; b.title = p; b.setAttribute('aria-label', p); }
+        if (el._step) { el.querySelector(':scope > .an-b .an-say').textContent = autoLine(el._step); el.querySelector(':scope > .an-b .an-chips')?.replaceChildren(...autoChips(el._step)); }
       }
+      const ts = box.querySelector('.auto-trigger .an-say');
+      if (ts) ts.textContent = autoWhenText(dr.trigger);
       const c = box.querySelector('.auto-probs');
       if (c) { c.hidden = !n; c.textContent = `${n} ${n === 1 ? 'step needs' : 'steps need'} something`; }
     };
@@ -6050,11 +6065,10 @@
     const draw = () => {
       const t = dr.trigger;
       B.reg = { lists: new Map(), nodes: new Map() };
-      const name = h('input', { value: dr.name, placeholder: 'e.g. Signed? Schedule the work' });
+      if (B.sel !== 'trigger' && !allSteps(dr.actions).includes(B.sel)) { B.sel = 'trigger'; B.tab = 'set'; }
+      B.panel = null;
+      const name = h('input', { class: 'auto-name', value: dr.name, placeholder: 'Name it, e.g. Signed? Schedule the work', 'aria-label': 'Name' });
       name.addEventListener('input', () => (dr.name = name.value));
-      const groups = AUTO_CAT.events ? Object.entries(AUTO_CAT.tools).map(([tool, label]) => [label, AUTO_CAT.events.filter((e) => e.tool === tool)]).filter(([, l]) => l.length) : [['', Object.entries(AUTO_WHEN).map(([type, label]) => ({ type, label }))]];
-      const kind = h('select', { class: 'auto-kind', 'aria-label': 'What sets it off' }, groups.map(([label, list]) => (label ? h('optgroup', { label }, list.map((e) => opt(e.type, e.label, t.kind))) : list.map((e) => opt(e.type, e.label, t.kind)))));
-      kind.addEventListener('change', () => { dr.trigger = { kind: kind.value, ...(kind.value === 'schedule' ? { slots: [{ days: [1], time: '09:00' }] } : {}) }; draw(); });
       const only = [];
       const fl = autoFilters(t.kind);
       if (fl.includes('project')) {
@@ -6146,13 +6160,29 @@
         time.addEventListener('change', () => (slot.time = time.value || '09:00'));
         only.push(h('div', { class: 'picks' }, DOWS.map((d, i) => { const cb = h('input', { type: 'checkbox', checked: slot.days.includes(i) }); cb.addEventListener('change', () => (slot.days = cb.checked ? [...slot.days, i].sort() : slot.days.filter((y) => y !== i))); return h('label', { class: 'pick' }, cb, d); })), h('label', {}, 'At', time));
       }
+      const tSet = ['schedule', 'record.date', 'contact.stage'].includes(t.kind) ? only : [];
+      const tAdv = tSet === only ? [] : only;
       const words = (AUTO_WORDS[t.kind] || []).map((w) => `{${w}}`).join(' ');
       // A step: an action, a wait, or "only if" with its own steps (and "otherwise"), in the list it's in.
       const answers = allSteps(dr.actions).some((y) => y.kind === 'agent' && y.wait);
       const fields = ['amount', ...(AUTO_WORDS[t.kind] || []), ...(answers ? ['answer'] : [])].filter((v, n, all) => all.indexOf(v) === n);
       const countSteps = (list) => list.reduce((n, s) => n + 1 + (s.kind === 'if' ? countSteps(s.then || []) + countSteps(s.else || []) : 0), 0);
       const roomForMore = () => countSteps(dr.actions) < 20;
-      const newStep = () => ({ kind: 'notify', text: '', to: [] });
+      const freshStep = (v, a = {}) => (v === 'if' ? { kind: 'if', when: [{ field: fields.includes('stage') ? 'stage' : fields[0], op: 'is', value: '' }], then: [{ kind: 'notify', text: '', to: [] }], else: [] }
+            : v === 'wait' ? { kind: 'wait', amount: 1, unit: 'days' }
+            : v === 'record' || v === 'create' ? { kind: v, projectId: t.projectId || S.projects?.[0]?.id || '', typeId: t.projectId ? t.typeId || '' : '', set: [] }
+            : v === 'visit' ? { kind: 'visit', visit: 'Visit', inDays: 1, start: '09:00', length: 60, crew: 'who' }
+            : v === 'invoice' ? { kind: 'invoice', send: false }
+            : v === 'email' ? { kind: 'email', subject: '', text: a.text || '' }
+            : v === 'money' ? { kind: 'money', direction: 'in', amount: '', category: '', note: '' }
+            : v === 'doc' ? { kind: 'doc', templateId: DT.list?.[0]?.id || '', title: '' }
+            : v === 'vault' ? { kind: 'vault', to: 'maker', title: '', text: '' }
+            : v === 'webhook' ? { kind: 'webhook', url: '', secretId: null }
+            : v === 'teams' ? { kind: 'teams', op: 'post', text: a.text || '' }
+            : v === 'agent' ? { kind: 'agent', agent: 'team', ask: '', wait: false }
+            : v === 'stock' ? { kind: 'stock', act: 'use', itemId: '', qty: 1, from: '', to: '', note: '' }
+            : { kind: v, text: a.text || '', to: [], channelId: 'same' });
+      const addAt = (list, i, depth) => (e) => autoPicker(e.currentTarget, { title: 'Add a step or tool', items: autoDoItems(null, depth), groups: AUTO_GROUPS, onPick: (v) => { const y = freshStep(v); list.splice(i, 0, y); B.sel = y; B.tab = 'set'; draw(); } });
       // Moving a step (dragged by its ⋮⋮) to a place in a list: never into itself, and "only if" 3 deep at most.
       const ifDepth = (y) => (y.kind === 'if' ? 1 + Math.max(0, ...[...(y.then || []), ...(y.else || [])].map(ifDepth)) : 0);
       const holds = (y, list) => y.kind === 'if' && (y.then === list || y.else === list || [...(y.then || []), ...(y.else || [])].some((z) => holds(z, list)));
@@ -6174,7 +6204,7 @@
         el.addEventListener('drop', (e) => { e.preventDefault(); el.classList.remove('over'); moveStep(B.drag || e.dataTransfer.getData('text/plain'), list, i, depth); });
         return el;
       };
-      const ins = (list, i, depth) => dropAt(h('div', { class: 'auto-ins' }, roomForMore() ? h('button', { class: 'auto-ins-btn', title: 'Add a step here', 'aria-label': 'Add a step here', onclick: () => { list.splice(i, 0, newStep()); draw(); } }, '+') : null), list, i, depth);
+      const ins = (list, i, depth) => dropAt(h('div', { class: 'auto-ins' }, roomForMore() ? h('button', { class: 'auto-ins-btn', title: 'Add a step here', 'aria-label': 'Add a step here', onclick: addAt(list, i, depth) }, '+') : null), list, i, depth);
       const stepList = (list, depth, label, pre = '') => {
         B.reg.lists.set(pre, list);
         const kids = [];
@@ -6182,31 +6212,14 @@
         return h('div', { class: 'auto-steps' + (depth ? ' nested' : ''), 'data-list': pre },
           label ? h('div', { class: 'auto-steps-h' }, label) : null,
           ...kids,
-          roomForMore() ? dropAt(h('button', { class: 'btn small auto-add-step', onclick: () => { list.push(newStep()); draw(); } }, depth ? '+ Step' : '+ Another step'), list, list.length, depth) : null,
+          roomForMore() ? dropAt(h('button', { class: 'btn small auto-add-step', onclick: (e) => addAt(list, list.length, depth)(e) }, depth ? '+ Step' : '+ Another step'), list, list.length, depth) : null,
           depth ? null : h('div', { class: 'auto-end' }, 'Done'));
       };
       const action = (a, i, list = dr.actions, depth = 0, at = String(i)) => {
         B.reg.nodes.set(at, { list, i });
-        const k = h('select', { class: 'auto-step-kind', 'aria-label': 'What this step does' }, Object.entries(AUTO_DO).filter(([v]) => autoDoOk(v) || v === a.kind).map(([v, l]) => opt(v, l, a.kind)), opt('wait', 'Wait…', a.kind), depth < 3 ? opt('if', 'Only if…', a.kind) : null);
-        k.addEventListener('change', () => {
-          list[i] = k.value === 'if' ? { kind: 'if', when: [{ field: fields.includes('stage') ? 'stage' : fields[0], op: 'is', value: '' }], then: [{ kind: 'notify', text: '', to: [] }], else: [] }
-            : k.value === 'wait' ? { kind: 'wait', amount: 1, unit: 'days' }
-            : k.value === 'record' || k.value === 'create' ? { kind: k.value, projectId: t.projectId || S.projects?.[0]?.id || '', typeId: t.projectId ? t.typeId || '' : '', set: [] }
-            : k.value === 'visit' ? { kind: 'visit', visit: 'Visit', inDays: 1, start: '09:00', length: 60, crew: 'who' }
-            : k.value === 'invoice' ? { kind: 'invoice', send: false }
-            : k.value === 'email' ? { kind: 'email', subject: '', text: a.text || '' }
-            : k.value === 'money' ? { kind: 'money', direction: 'in', amount: '', category: '', note: '' }
-            : k.value === 'doc' ? { kind: 'doc', templateId: DT.list?.[0]?.id || '', title: '' }
-            : k.value === 'vault' ? { kind: 'vault', to: 'maker', title: '', text: '' }
-            : k.value === 'webhook' ? { kind: 'webhook', url: '', secretId: null }
-            : k.value === 'teams' ? { kind: 'teams', op: 'post', text: a.text || '' }
-            : k.value === 'agent' ? { kind: 'agent', agent: 'team', ask: '', wait: false }
-            : k.value === 'stock' ? { kind: 'stock', act: 'use', itemId: '', qty: 1, from: '', to: '', note: '' }
-            : { kind: k.value, text: a.text || '', to: [], channelId: 'same' };
-          draw();
-        });
+        const setKind = (v) => { list[i] = freshStep(v, a); B.sel = list[i]; B.tab = 'set'; draw(); };
         const text = (ph) => { const el = h('input', { value: a.text || '', placeholder: ph }); el.addEventListener('input', () => (a.text = el.value)); return el; };
-        const f = [];
+        const f = [], adv = [];
         if (a.kind === 'task') {
           const who = h('select', {}, opt('', 'Nobody', a.assignee || ''), opt('who', 'Whoever set it off', a.assignee || ''), people.map((m) => opt(m.id, m.name, a.assignee || '')), (S.workspace.roles || []).map((r) => opt('role:' + r.id, 'Role: ' + r.name, a.assignee || '')));
           who.addEventListener('change', () => (a.assignee = who.value));
@@ -6224,15 +6237,18 @@
           from.addEventListener('change', () => { if (from.value) { a.presetId = from.value; a.presetName = presetById(from.value)?.name; } else { delete a.presetId; delete a.presetName; } draw(); });
           const y = a.presetId && presetById(a.presetId);
           if (a.presetId) who.firstChild.textContent = 'As saved';
-          f.push(h('label', {}, 'Make it from', from));
+          adv.push(h('label', {}, 'Make it from', from));
           if (a.presetId) f.push(y ? h('p', { class: 'day-hint auto-preset-says' }, y.kind === 'bundle' ? y.steps.map((st) => presetById(st.presetId)?.text).filter(Boolean).join(' → ') : y.text) : h('p', { class: 'err' }, `The saved task “${a.presetName || '?'}” was deleted. Pick another, or write it here.`));
-          else f.push(h('label', {}, 'Task', text('Schedule the work for {document}')), saved.length ? null : h('small', { class: 'hint' }, 'Tip: save tasks you make again and again in Tasks → 📋 Saved tasks, then pick them here.'));
-          f.push(h('div', { class: 'row2' }, h('label', {}, a.presetId && y?.kind === 'bundle' ? 'All of them for' : 'For', who), h('label', {}, a.presetId && y?.kind === 'bundle' ? 'First one due in (days)' : 'Due in (days)', due)), h('label', {}, 'Under', camp));
+          else f.push(h('label', {}, 'Task', text('Schedule the work for {document}')));
+          if (!saved.length) adv.push(h('small', { class: 'hint' }, 'Tip: save tasks you make again and again in Tasks → 📋 Saved tasks, then pick them here.'));
+          f.push(h('div', { class: 'row2' }, h('label', {}, a.presetId && y?.kind === 'bundle' ? 'All of them for' : 'For', who), h('label', {}, a.presetId && y?.kind === 'bundle' ? 'First one due in (days)' : 'Due in (days)', due)));
+          adv.push(h('label', {}, 'Under', camp));
         }
         if (a.kind === 'post') {
           const ch = h('select', {}, opt('same', 'The campaign’s own feed', a.channelId || 'same'), opt('general', '#general', a.channelId || 'same'), S.workspace.channels.map((c) => opt(c.id, '#' + c.name, a.channelId || 'same')));
           ch.addEventListener('change', () => (a.channelId = ch.value));
-          f.push(autoTemplatePick(['post', 'reply'], (x) => { a.text = x.body; draw(); }), h('label', {}, 'Message', text('{from} sent {file}')), h('label', {}, 'In', ch));
+          adv.push(autoTemplatePick(['post', 'reply'], (x) => { a.text = x.body; draw(); }));
+          f.push(h('label', {}, 'Message', text('{from} sent {file}')), h('label', {}, 'In', ch));
         }
         if (a.kind === 'campaign') {
           const tpls = S.templates || [];
@@ -6294,7 +6310,8 @@
           const crewV = a.crew === 'who' ? 'who' : Array.isArray(a.crew) && a.crew[0] ? a.crew[0] : '';
           const crew = h('select', { class: 'auto-visit-crew', 'aria-label': 'Who goes' }, opt('who', 'Whoever set it off', crewV), opt('', 'Me (who made this)', crewV), people.map((m) => opt(m.id, m.name, crewV)));
           crew.addEventListener('change', () => (a.crew = crew.value === 'who' ? 'who' : crew.value ? [crew.value] : []));
-          f.push(h('div', { class: 'row2' }, h('label', {}, 'Visit', kd), h('label', {}, 'In (days)', n)), h('div', { class: 'row2' }, h('label', {}, 'At', at), h('label', {}, 'For', len)), h('label', {}, 'Who goes', crew),
+          f.push(h('div', { class: 'row2' }, h('label', {}, 'Visit', kd), h('label', {}, 'In (days)', n)), h('label', {}, 'At', at));
+          adv.push(h('div', { class: 'row2' }, h('label', {}, 'For', len), h('label', {}, 'Who goes', crew)),
             h('small', { class: 'hint' }, 'On the job that set it off, on their calendar and the team schedule. 0 days is today; no time makes it an all-day visit.'));
         }
         if (a.kind === 'invoice') {
@@ -6306,13 +6323,17 @@
         // Attach proof of insurance: {proof} becomes a link to what's current in the workspace profile, one per customer.
         const proofBtn = (key, sep) => (/\{proof\}/.test(a[key] || '') ? h('small', { class: 'hint auto-proof-on' }, '🪪 {proof} is a link to your current licenses & insurance (workspace profile).')
           : h('button', { type: 'button', class: 'btn small auto-proof', onclick: () => { a[key] = String(a[key] || '').trimEnd() + sep + '{proof}'; draw(); } }, '🪪 Attach proof of insurance'));
-        if (a.kind === 'text') f.push(autoTemplatePick(['text', 'reply'], (x) => { a.text = x.body.slice(0, 1600); draw(); }), h('label', {}, 'Text', text('Hi {customer}, we’re on our way for {record}')), proofBtn('text', ' Our licenses & insurance: '), okHint, h('small', { class: 'hint' }, 'From your team’s Twilio number (Settings → Texting).'));
+        if (a.kind === 'text') {
+          f.push(h('label', {}, 'Text', text('Hi {customer}, we’re on our way for {record}')), okHint);
+          adv.push(autoTemplatePick(['text', 'reply'], (x) => { a.text = x.body.slice(0, 1600); draw(); }), proofBtn('text', ' Our licenses & insurance: '), h('small', { class: 'hint' }, 'From your team’s Twilio number (Settings → Texting).'));
+        }
         if (a.kind === 'email') {
           const sub = h('input', { value: a.subject || '', placeholder: '{record} is done', class: 'auto-email-sub' });
           sub.addEventListener('input', () => (a.subject = sub.value));
           const body = h('textarea', { rows: 4, placeholder: 'Hi,\n\nThanks for choosing us for {record}…', class: 'auto-email-body' }, a.text || '');
           body.addEventListener('input', () => (a.text = body.value));
-          f.push(autoTemplatePick(['email', 'reply'], (x) => { a.subject = x.subject || a.subject || ''; a.text = x.body; draw(); }), h('label', {}, 'Subject', sub), h('label', {}, 'Message', body), proofBtn('text', '\n\nOur licenses & insurance: '), okHint);
+          f.push(h('label', {}, 'Subject', sub), h('label', {}, 'Message', body), okHint);
+          adv.push(autoTemplatePick(['email', 'reply'], (x) => { a.subject = x.subject || a.subject || ''; a.text = x.body; draw(); }), proofBtn('text', '\n\nOur licenses & insurance: '));
         }
         if (a.kind === 'money') {
           const dir = h('select', { class: 'auto-money-dir' }, opt('in', 'Money in', a.direction || 'in'), opt('out', 'Money out', a.direction || 'in'));
@@ -6323,7 +6344,8 @@
           cat.addEventListener('input', () => (a.category = cat.value));
           const note = h('input', { value: a.note || '', placeholder: '{record}', class: 'auto-money-note' });
           note.addEventListener('input', () => (a.note = note.value));
-          f.push(h('div', { class: 'row2' }, h('label', {}, 'Which', dir), h('label', {}, 'Amount ($)', amt)), h('div', { class: 'row2' }, h('label', {}, 'Category', cat), h('label', {}, 'Note', note)),
+          adv.push(h('div', { class: 'row2' }, h('label', {}, 'Category', cat), h('label', {}, 'Note', note)));
+          f.push(h('div', { class: 'row2' }, h('label', {}, 'Which', dir), h('label', {}, 'Amount ($)', amt)),
             h('small', { class: 'hint' }, 'Into the business’s Finance, dated the day it runs. Leave the amount empty to use the {amount} of what set it off.'));
         }
         if (a.kind === 'doc') {
@@ -6348,12 +6370,13 @@
           const savedAsks = (SV.list || []).filter((y) => y.kind === 'ask');
           const fromAsk = savedAsks.length ? h('select', { class: 'auto-ask-from', 'aria-label': 'Start from a saved ask' }, h('option', { value: '' }, 'Start from a saved ask…'), savedAsks.map((y) => h('option', { value: y.id }, y.name))) : null;
           fromAsk?.addEventListener('change', () => { const y = savedAsks.find((z) => z.id === fromAsk.value); if (y) { a.ask = y.ask; a.agent = y.agent || 'team'; draw(); } });
-          if (fromAsk) f.push(h('label', { class: 'auto-tpl-row' }, 'Start from', fromAsk));
+          if (fromAsk) adv.push(h('label', { class: 'auto-tpl-row' }, 'Start from', fromAsk));
           const cb = h('input', { type: 'checkbox', checked: !!a.wait, class: 'auto-agent-wait' });
           cb.addEventListener('change', () => { a.wait = cb.checked; draw(); });
           f.push(h('label', {}, 'Ask', who), h('label', {}, 'What to ask', ask), h('label', { class: 'pick' }, cb, 'Wait for the answer, then go on with {answer}'),
             AG.data && !AG.data.ai ? h('small', { class: 'hint err' }, 'Add your AI key (Apps & Integrations → AI) first: your team works on it.') : null,
-            h('small', { class: 'hint' }, `Your own agents, on your AI key, at the level you set for each in Your team: anything important waits for your yes there. They’re told an automation asked.${a.wait ? ' The steps after this wait until it’s done (up to 30 minutes).' : ''}`));
+            null);
+          adv.push(h('small', { class: 'hint' }, `Your own agents, on your AI key, at the level you set for each in Your team: anything important waits for your yes there. They’re told an automation asked.${a.wait ? ' The steps after this wait until it’s done (up to 30 minutes).' : ''}`));
         }
         if (a.kind === 'stock') {
           if (!INVS.data && !INVS.loading) loadInventory().then(() => box.isConnected && draw());
@@ -6410,7 +6433,8 @@
           });
           adding.append(h('div', { class: 'row2' }, kn, kv), save, h('small', { class: 'hint' }, 'Sealed on Kloomie’s server and never shown again (only its last four). Sent as “Authorization: Bearer …”.'));
           ks.addEventListener('change', () => { if (ks.value === '+') { adding.hidden = false; kn.focus(); } else { adding.hidden = true; a.secretId = ks.value || null; } });
-          f.push(h('label', {}, 'Address', url), h('label', {}, 'Key', ks), adding,
+          f.push(h('label', {}, 'Address', url));
+          adv.push(h('label', {}, 'Key', ks), adding,
             h('small', { class: 'hint' }, 'Sends what happened ({record}, {amount}, {customer}… whatever this one fills in) as JSON, every time it runs. Only public https addresses; it gives up after 10 seconds.'));
         }
         if (a.kind === 'wait') {
@@ -6436,7 +6460,6 @@
         }
         const branches = a.kind === 'if' ? h('div', { class: 'auto-branches' }, stepList(a.then ||= [], depth + 1, 'Then', at + '.then.'), stepList(a.else ||= [], depth + 1, 'Otherwise', at + '.else.')) : null;
         const prob = autoProblem(a);
-        const folded = B.folded.has(a);
         const grip = h('span', { class: 'auto-grip', draggable: 'true', title: 'Drag to move' }, '⋮⋮');
         grip.addEventListener('dragstart', (e) => { B.drag = at; e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', at); });
         grip.addEventListener('dragend', () => (B.drag = null));
@@ -6446,20 +6469,23 @@
           i < list.length - 1 ? { label: 'Move down', run: () => { list.splice(i + 1, 0, list.splice(i, 1)[0]); draw(); } } : null,
         ].filter(Boolean);
         const would = B.would?.get(at);
-        const node = h('div', { class: 'auto-act' + (a.kind === 'if' ? ' auto-if' : a.kind === 'wait' ? ' auto-wait' : '') + (prob ? ' bad' : '') + (B.lit ? (B.lit.has(at) ? ' lit' : ' dim') : '') + (folded ? ' folded' : ''), 'data-at': at },
-          h('div', { class: 'auto-act-h' }, grip, h('b', {}, `${i + 1}.`), k, h('span', { class: 'auto-bad', title: prob, 'aria-label': prob, hidden: !prob }, '!'),
-            h('button', { class: 'icon-btn auto-fold', 'aria-label': folded ? 'Unfold this step' : 'Fold this step', title: folded ? 'Unfold' : 'Fold', onclick: () => { folded ? B.folded.delete(a) : B.folded.add(a); draw(); } }, folded ? '▸' : '▾'),
+        const look = autoLook(a.kind), isSel = B.sel === a;
+        const role = a.kind === 'if' ? 'ONLY IF' : a.kind === 'wait' ? 'WAIT' : 'ACTION';
+        const step = depth ? role : `${i + 2}. ${role}`;
+        const node = h('div', { class: 'auto-act an ' + (a.kind === 'if' ? 'an-if auto-if' : a.kind === 'wait' ? 'an-wait auto-wait' : 'an-do') + (prob ? ' bad' : '') + (B.lit ? (B.lit.has(at) ? ' lit' : ' dim') : '') + (isSel ? ' sel' : ''), 'data-at': at },
+          h('div', { class: 'an-h' }, grip, h('i', { class: 'an-dot' }), h('span', { class: 'an-n' }, step), h('span', { class: 'auto-bad', title: prob, 'aria-label': prob, hidden: !prob }, '!'),
             h('button', { class: 'icon-btn auto-more', 'aria-label': 'Step options', html: I.more, onclick: (e) => openMenu(e.currentTarget, menu) }),
-            list.length > 1 || depth ? h('button', { class: 'icon-btn', 'aria-label': 'Remove', html: I.close, onclick: () => { list.splice(i, 1); draw(); } }) : null),
+            list.length > 1 || depth ? h('button', { class: 'icon-btn auto-x', 'aria-label': 'Remove this step', html: I.close, onclick: () => { list.splice(i, 1); draw(); } }) : null),
+          h('button', { type: 'button', class: 'an-b', 'aria-pressed': String(isSel), title: 'Change this step', onclick: () => { if (B.sel !== a) { B.sel = a; B.tab = 'set'; draw(); } } },
+            h('span', { class: `an-ic lk-${look.c}`, 'aria-hidden': 'true' }, look.ic), h('span', { class: 'an-txt' }, h('span', { class: 'an-say' }, autoLine(a)), h('span', { class: 'an-chips' }, autoChips(a)))),
           would ? h('div', { class: 'auto-would' + (would.yes === false ? ' no' : '') }, would.said) : null,
-          folded ? h('small', { class: 'auto-fold-line' }, autoLine(a)) : null,
-          ...(folded ? [] : f), branches);
+          branches);
+        if (isSel) B.panel = { ic: look.ic, c: look.c, step, what: a.kind === 'wait' ? 'Wait a while' : a.kind === 'if' ? 'Only if…' : AUTO_DO[a.kind] || a.kind, label: 'Change step', change: (btn) => autoPicker(btn, { title: 'Change this step', items: autoDoItems(a.kind, depth), groups: AUTO_GROUPS, active: a.kind, onPick: setKind }), f, adv };
         node._step = a;
         return node;
       };
       const every = allSteps(dr.actions);
       const problems = every.filter((y) => autoProblem(y)).length;
-      const anyOpen = every.some((y) => !B.folded.has(y));
       const pastRuns = (x?.runs || []).filter((r) => r.path?.length);
       const runSel = h('select', { class: 'auto-runs', 'aria-label': 'Show a past run' }, opt('', 'Show a past run…', B.run), pastRuns.map((r, n) => opt(String(n), `${r.ok ? '✓' : '✕'} ${ago(r.at)} · ${shortText(r.note, 60)}`, B.run)));
       runSel.addEventListener('change', () => {
@@ -6477,18 +6503,39 @@
         el.dispatchEvent(new Event('input', { bubbles: true }));
         el.focus();
       };
+      const tl = autoWhenLook(t.kind), tSel = B.sel === 'trigger';
+      const trig = h('div', { class: 'auto-step auto-trigger an an-when' + (B.lit ? ' lit' : '') + (tSel ? ' sel' : '') },
+        h('div', { class: 'an-h' }, h('i', { class: 'an-dot' }), h('span', { class: 'an-n' }, '1. WHEN')),
+        h('button', { type: 'button', class: 'an-b', 'aria-pressed': String(tSel), title: 'Change what sets it off', onclick: () => { if (!tSel) { B.sel = 'trigger'; B.tab = 'set'; draw(); } } },
+          h('span', { class: `an-ic lk-${tl.c}`, 'aria-hidden': 'true' }, tl.ic), h('span', { class: 'an-txt' }, h('span', { class: 'an-say' }, autoWhenText(t)))));
+      if (tSel) B.panel = { ic: tl.ic, c: tl.c, step: '1. When', what: autoWhenLabel(t.kind), label: 'Change event',
+        change: (btn) => autoPicker(btn, { title: 'Change event', items: autoWhenItems(), groups: autoWhenGroups(), active: t.kind, onPick: (v) => { dr.trigger = { kind: v, ...(v === 'schedule' ? { slots: [{ days: [1], time: '09:00' }] } : {}) }; draw(); } }),
+        f: tSet.length ? tSet : [h('p', { class: 'day-hint' }, tAdv.length ? 'That’s all it needs. To narrow it down (one campaign, a stage, an amount…), see Advanced settings.' : 'That’s all it needs.')], adv: tAdv };
+      const flow = stepList(dr.actions, 0);
+      const pn = B.panel;
+      const advN = pn.adv.filter(Boolean).length;
+      if (!advN) B.tab = 'set';
+      const chg = h('button', { type: 'button', class: 'btn small ab-change' }, pn.label);
+      chg.addEventListener('click', () => pn.change(chg));
+      const wordList = [...(AUTO_WORDS[t.kind] || []), ...(answers ? ['answer'] : [])];
+      const panel = h('aside', { class: 'ab-panel', 'aria-label': 'Settings for ' + pn.what },
+        h('div', { class: 'ab-ph' }, h('span', { class: `auto-ic lk-${pn.c}`, 'aria-hidden': 'true' }, pn.ic), h('span', { class: 'ab-pt' }, h('small', {}, pn.step), h('b', {}, pn.what)), chg),
+        advN ? h('div', { class: 'ab-tabs seg', role: 'tablist' }, [['set', 'Settings'], ['adv', 'Advanced settings']].map(([k, l]) =>
+          h('button', { type: 'button', 'data-tab': k, role: 'tab', class: B.tab === k ? 'on' : null, 'aria-selected': String(B.tab === k), onclick: () => { if (B.tab !== k) { B.tab = k; draw(); } } }, l))) : null,
+        h('div', { class: 'ab-body' }, ...(B.tab === 'adv' ? pn.adv : pn.f).filter(Boolean)),
+        wordList.length ? h('div', { class: 'auto-words' }, h('span', {}, 'Fill in by themselves:'), wordList.map((w) => h('button', { class: 'auto-word', title: `Put {${w}} where the cursor is`, onmousedown: (e) => e.preventDefault(), onclick: () => putWord(w) }, `{${w}}`))) : null);
       box.replaceChildren(...[
-        h('label', {}, 'Name', name),
-        h('div', { class: 'auto-tools' },
-          h('button', { class: 'btn small auto-test-btn', onclick: testIt }, '▶ Test it'),
-          every.length ? h('button', { class: 'btn small auto-foldall', onclick: () => { for (const y of every) anyOpen ? B.folded.add(y) : B.folded.delete(y); draw(); } }, anyOpen ? 'Fold all' : 'Unfold all') : null,
+        h('div', { class: 'ab-top' }, name,
+          h('button', { class: 'btn small auto-test-btn', onclick: testIt }, '▶ Test your automation'),
           pastRuns.length ? runSel : null,
           h('span', { class: 'auto-probs', hidden: !problems }, `${problems} ${problems === 1 ? 'step needs' : 'steps need'} something`)),
         B.test ? h('div', { class: 'auto-test' + (B.test.err ? ' err' : '') }, h('span', {}, B.test.err || B.test.about), h('button', { class: 'linkish auto-test-clear', onclick: clearLit }, 'Clear')) : null,
-        h('div', { class: 'auto-canvas' },
-          h('div', { class: 'auto-step auto-trigger' + (B.lit ? ' lit' : '') }, h('div', { class: 'auto-step-h' }, 'When'), h('label', {}, '', kind), ...only),
-          h('div', { class: 'auto-step auto-flow' }, h('div', { class: 'auto-step-h' }, 'Then'), stepList(dr.actions, 0))),
-        words || answers ? h('div', { class: 'auto-words' }, h('span', {}, 'Words that fill themselves in:'), [...(AUTO_WORDS[t.kind] || []), ...(answers ? ['answer'] : [])].map((w) => h('button', { class: 'auto-word', title: `Put {${w}} where the cursor is`, onmousedown: (e) => e.preventDefault(), onclick: () => putWord(w) }, `{${w}}`))) : null].filter(Boolean));
+        h('div', { class: 'ab-main' },
+          h('div', { class: 'auto-canvas' },
+            h('div', { class: 'auto-when-h' }, 'WHEN'), trig,
+            h('div', { class: 'auto-step auto-flow' }, h('div', { class: 'auto-step-h' }, 'THEN'), flow),
+            wordList.length ? h('div', { class: 'ab-pill' }, `Words like ${wordList.slice(0, 2).map((w) => `{${w}}`).join(' and ')} fill in by themselves from what set it off`) : null),
+          panel)].filter(Boolean));
     };
     draw();
     sheet(x ? `Automation · ${x.name}` : recipe ? recipe.name : 'New automation', [box], async () => {

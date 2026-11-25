@@ -3,6 +3,7 @@
 // writes the work order from a doc template. The job moves; what doesn't need an OK is done at once; the OKs wait on
 // Home as the automation's, and its maker (the owner) can OK them: the email goes out once, the invoice is sent. The
 // new steps' editor fits a phone.
+import { autoUI } from './autobuild.mjs';
 import * as FS from 'node:fs';
 import WebSocket from '../server/node_modules/ws/index.js';
 import { spawn } from 'node:child_process';
@@ -62,50 +63,49 @@ try {
   await A.until(`!!document.querySelector('#tabs [data-tab=automations]')`, 10000);
   await A.ev(`document.querySelector('#tabs [data-tab=automations]').click(); true`);
   await A.tap(`[...document.querySelectorAll('#tool button')].find((b) => b.textContent === '+ New automation')`);
-  await A.until(`!!document.querySelector('#sheet .auto-kind')`);
-  await A.pick(`document.querySelector('#sheet .auto-kind')`, 'record.stage');
-  await A.fill(`document.querySelector('#sheet .auto-edit input')`, 'Done → follow through');
+  const B = autoUI(A);
+  await B.when('record.stage');
+  await A.fill(`document.querySelector('#sheet .auto-name')`, 'Done → follow through');
+  await B.adv();
   await A.until(`!!document.querySelector('#sheet .auto-proj')`);
   await A.pick(`document.querySelector('#sheet .auto-proj')`, p.id);
   await A.until(`!!document.querySelector('#sheet .auto-to')`);
   await A.pick(`document.querySelector('#sheet .auto-to')`, 'Done');
-  const top = `[...document.querySelectorAll('#sheet .auto-steps:not(.nested)')][0]`;
-  const lastAct = `[...${top}.children].filter((x) => x.classList.contains('auto-act')).at(-1)`;
-  const addStep = () => A.tap(`[...${top}.children].filter((x) => x.classList.contains('auto-add-step')).at(-1)`);
-  ok(await A.ev(`[...document.querySelector('#sheet .auto-step-kind').options].map((o) => o.value).filter((v) => ['visit', 'invoice', 'text', 'email', 'money', 'doc'].includes(v)).length === 6`), 'the step menu has the new steps: visit, invoice, text, email, money, doc');
+  await B.pick(B.act(0));
+  await A.tap(`document.querySelector('#sheet .ab-panel .ab-change')`);
+  ok(await A.until(`[...document.querySelectorAll('.ap-pop .ap-item')].map((o) => o.dataset.key).filter((v) => ['visit', 'invoice', 'text', 'email', 'money', 'doc'].includes(v)).length === 6`), 'the step picker has the new steps: visit, invoice, text, email, money, doc');
   // 1. Book the install, 2 days out at 9:00 for 1½ hours.
-  await A.pick(`document.querySelector('#sheet .auto-step-kind')`, 'visit');
+  await A.tap(`document.querySelector('.ap-pop .ap-item[data-key="visit"]')`);
   ok(await A.until(`!!document.querySelector('#sheet .auto-visit-kind')`), '“Book a visit” asks which kind, when and who goes');
   await A.pick(`document.querySelector('#sheet .auto-visit-kind')`, 'Install');
   await A.fill(`document.querySelector('#sheet .auto-visit-days')`, '2');
   await A.ev(`(() => { const s = document.querySelector('#sheet .auto-visit-at'); s.value = '09:00'; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
+  await B.adv();
   await A.pick(`document.querySelector('#sheet .auto-visit-len')`, '90');
   await A.pick(`document.querySelector('#sheet .auto-visit-crew')`, '');
   // 2. Bill it, and send it after an OK.
-  await addStep();
-  await A.pick(`${lastAct}.querySelector('.auto-step-kind')`, 'invoice');
+  await B.add('invoice');
   await A.until(`!!document.querySelector('#sheet .auto-inv-send')`);
   await A.check(`document.querySelector('#sheet .auto-inv-send')`);
   ok(await A.until(`[...document.querySelectorAll('#sheet .hint')].some((x) => x.textContent.includes('asks for an OK to send it'))`), 'ticking “send it” says it asks for an OK first');
   // 3. Email the customer.
-  await addStep();
-  await A.pick(`${lastAct}.querySelector('.auto-step-kind')`, 'email');
+  await B.add('email');
   await A.until(`!!document.querySelector('#sheet .auto-email-sub')`);
   await A.fill(`document.querySelector('#sheet .auto-email-sub')`, '{record} is done');
   await A.fill(`document.querySelector('#sheet .auto-email-body')`, 'Hi,\n\n{record} is finished. Thank you!');
   ok(await A.ev(`[...document.querySelectorAll('#sheet .hint')].some((x) => x.textContent.startsWith('Waits for an OK every time'))`), 'the email says it waits for an OK every time');
   // 4. The money in.
-  await addStep();
-  await A.pick(`${lastAct}.querySelector('.auto-step-kind')`, 'money');
+  await B.add('money');
   await A.until(`!!document.querySelector('#sheet .auto-money-amt')`);
   await A.fill(`document.querySelector('#sheet .auto-money-amt')`, '300');
+  await B.adv();
   await A.fill(`document.querySelector('#sheet .auto-money-cat')`, 'Jobs');
   await A.fill(`document.querySelector('#sheet .auto-money-note')`, 'Paid for {record}');
   // 5. The work order.
-  await addStep();
-  await A.pick(`${lastAct}.querySelector('.auto-step-kind')`, 'doc');
+  await B.add('doc');
   ok(await A.until(`[...(document.querySelector('#sheet .auto-doc-tpl')?.options || [])].some((o) => o.textContent === 'Work order')`), '“Write a doc” lists the team’s doc templates');
   await A.fill(`document.querySelector('#sheet .auto-doc-title')`, 'Work order: {record}');
+  await B.pick(B.act(0));
   // At phone width, before saving: it fits.
   await A.cmd('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
   await sleep(400);

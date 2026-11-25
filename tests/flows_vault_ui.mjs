@@ -2,6 +2,7 @@
 // puts a sealed note in its maker's vault and sends what happened to another app with a key added right in the
 // editor. Setting up the vault makes its drop key; a job added while it's unlocked lands as a vault item at once; one
 // added while it's locked waits ("a sealed note is waiting"), and unlocking keeps it. The other app gets the key.
+import { autoUI } from './autobuild.mjs';
 import * as FS from 'node:fs';
 import http from 'node:http';
 import WebSocket from '../server/node_modules/ws/index.js';
@@ -64,19 +65,18 @@ try {
   await A.until(`!!document.querySelector('#tabs [data-tab=automations]')`, 10000);
   await A.ev(`document.querySelector('#tabs [data-tab=automations]').click(); true`);
   await A.tap(`[...document.querySelectorAll('#tool button')].find((b) => b.textContent === '+ New automation')`);
-  await A.until(`!!document.querySelector('#sheet .auto-kind')`);
-  await A.pick(`document.querySelector('#sheet .auto-kind')`, 'record.created');
-  await A.fill(`document.querySelector('#sheet .auto-edit input')`, 'Site codes');
-  await A.pick(`document.querySelector('#sheet .auto-step-kind')`, 'vault');
+  const B = autoUI(A);
+  await B.when('record.created');
+  await A.fill(`document.querySelector('#sheet .auto-name')`, 'Site codes');
+  await B.step(B.act(0), 'vault');
   ok(await A.until(`!!document.querySelector('#sheet .auto-vault-to')`), '“Put a sealed note in a vault” asks whose vault and what goes in it');
   ok(await A.ev(`[...document.querySelectorAll('#sheet .hint')].some((x) => x.textContent.includes('nobody, Kloomie included, can read it'))`), 'and says nobody can read it after');
   await A.fill(`document.querySelector('#sheet .auto-vault-title')`, 'Lockbox for {record}');
   await A.fill(`document.querySelector('#sheet .auto-vault-text')`, 'Lockbox code for {record}: 7310');
-  const top = `[...document.querySelectorAll('#sheet .auto-steps:not(.nested)')][0]`;
-  await A.tap(`[...${top}.children].filter((x) => x.classList.contains('auto-add-step')).at(-1)`);
-  await A.pick(`[...${top}.children].filter((x) => x.classList.contains('auto-act')).at(-1).querySelector('.auto-step-kind')`, 'webhook');
-  ok(await A.until(`!!document.querySelector('#sheet .auto-hook-url')`), '“Send to another app” asks for the address and a key');
+  await B.add('webhook');
+  ok(await A.until(`!!document.querySelector('#sheet .auto-hook-url')`), '“Send to another app” asks for the address (and a key, under Advanced settings)');
   await A.fill(`document.querySelector('#sheet .auto-hook-url')`, `http://127.0.0.1:${H_PORT}/in`);
+  await B.adv();
   await A.until(`[...document.querySelector('#sheet .auto-hook-key').options].some((o) => o.value === '+')`);
   await A.pick(`document.querySelector('#sheet .auto-hook-key')`, '+');
   ok(await A.until(`!document.querySelector('#sheet .auto-key-new').hidden`), '“+ Add a key…” opens the key form right there');
