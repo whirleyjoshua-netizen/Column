@@ -2238,6 +2238,8 @@ body:not(.wide) .pj-bar .pj-views { flex: 1 1 100%; }
 .pj-qnote { color: var(--ok); width: 100%; }
 .pj-auto { color: var(--muted); }
 .pj-items { border: 1px solid var(--line); border-radius: 10px; padding: 10px 10px 12px; background: var(--bg); }
+.pj-ro-lines { margin: 6px 0 4px; padding-left: 18px; }
+.pj-ro-lines li { margin: 2px 0; }
 .pj-it-h { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
 .pj-it-h .pick { font-size: 12px; color: var(--muted); display: flex; gap: 4px; align-items: center; }
 .pj-it-wrap { overflow-x: auto; }

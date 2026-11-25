@@ -16088,7 +16088,11 @@
     return recs.sort((a, b) => { const x = key(a), y = key(b); const d = x < y ? -1 : x > y ? 1 : 0; return v.sort?.dir === 'desc' ? -d : d; });
   }
   // A value as text: for search, export, and showing.
+  // Members don't see prices (docs/jobflows/PRICES.md): the server sends price lines as what and how many
+  // ({ rows, hidden }) and leaves other priced fields empty, named in the record's hiddenFields.
+  const pricesHidden = (r, f) => !!(r?.values?.[f.id]?.hidden || r?.hiddenFields?.includes(f.id));
   function prText(p, f, v) {
+    if (v?.hidden) return `${v.rows?.length || 0} line${v.rows?.length === 1 ? '' : 's'}`;
     if (v == null || v === '') return '';
     if (f.type === 'money') return money(v);
     if (f.type === 'select') return f.choices.find((c) => c.id === v)?.label || '';
@@ -16136,6 +16140,7 @@
   const pjChip = (c) => h('span', { class: 'pj-chip', style: `--c:${PF_COLOR[c.color] || PF_COLOR.gray}` }, c.label);
   // A value as it shows in a cell or card.
   function prShow(p, f, v, r) {
+    if (pricesHidden(r, f) || v?.hidden) return h('span', { class: 'pj-num muted', title: 'Prices are for owners and admins' }, '—');
     if (v == null || v === '' || (Array.isArray(v) && !v.length)) return f.type === 'signature' ? signPending(r, f) : null;
     if (f.type === 'select') { const c = f.choices.find((x) => x.id === v); return c ? pjChip(c) : null; }
     if (f.type === 'multi') return v.map((id) => f.choices.find((x) => x.id === id)).filter(Boolean).map(pjChip);
@@ -16361,7 +16366,7 @@
     const cols = [prField(t, t.primary), ...t.fields.filter((f) => f.id !== t.primary && !f.hidden)];
     const recs = prShown(p, t, v);
     const shown = recs.slice(0, 500);
-    const sum = (f) => recs.reduce((n, r) => n + (f.type === 'items' ? (r.values[f.id] ? itemsTotals(r.values[f.id]).total : 0) : Number(r.values[f.id]) || 0), 0);
+    const sum = (f) => recs.reduce((n, r) => n + (pricesHidden(r, f) ? 0 : f.type === 'items' ? (r.values[f.id] ? itemsTotals(r.values[f.id]).total : 0) : Number(r.values[f.id]) || 0), 0);
     return [h('div', { class: 'pj-table-wrap' }, h('table', { class: 'pj-table' },
       h('thead', {}, h('tr', {}, cols.map((f) => h('th', { class: f.id === t.primary ? 'pj-first' : null }, h('button', { class: 'pj-th', onclick: (e) => prFieldMenu(e, p, t, v, f) }, h('span', { class: 'pj-fic' }, PF_IC[f.type]), f.name, v.sort?.field === f.id ? (v.sort.dir === 'asc' ? ' ↑' : ' ↓') : ''))),
         h('th', { class: 'pj-addcol' }, h('button', { class: 'pj-th', title: 'Add a field', onclick: () => prAddField(p, t) }, '+')))),
@@ -16870,7 +16875,7 @@
     if (!g) return [h('p', { class: 'day-hint' }, 'A board needs a field with options, like Stage.')];
     const recs = prShown(p, t, v);
     const sumF = t.fields.find((f) => f.type === 'money') || t.fields.find((f) => f.type === 'items');
-    const val = (r) => (!sumF ? 0 : sumF.type === 'items' ? (r.values[sumF.id] ? itemsTotals(r.values[sumF.id]).total : 0) : r.values[sumF.id] || 0);
+    const val = (r) => (!sumF || pricesHidden(r, sumF) ? 0 : sumF.type === 'items' ? (r.values[sumF.id] ? itemsTotals(r.values[sumF.id]).total : 0) : r.values[sumF.id] || 0);
     const cardFields = t.fields.filter((f) => f.id !== t.primary && f.id !== g.id && !f.hidden).slice(0, 4);
     const cols = [...(recs.some((r) => !r.values[g.id]) ? [{ id: '', label: `No ${g.name.toLowerCase()}`, color: 'gray' }] : []), ...g.choices];
     const board = h('div', { class: 'pj-board' });
@@ -17680,7 +17685,7 @@
   function pipelineOf(p, t) {
     const g = t.fields.find((f) => f.id === t.views.find((v) => v.kind === 'board')?.groupBy) || t.fields.find((f) => f.type === 'select' && /^(stage|status)$/.test(f.key)) || t.fields.find((f) => f.type === 'select');
     const mf = t.fields.find((f) => f.type === 'money') || t.fields.find((f) => f.type === 'items');
-    const amt = (r) => (!mf || r.values[mf.id] == null ? 0 : mf.type === 'items' ? itemsTotals(r.values[mf.id]).total : r.values[mf.id]);
+    const amt = (r) => (!mf || r.values[mf.id] == null || pricesHidden(r, mf) ? 0 : mf.type === 'items' ? itemsTotals(r.values[mf.id]).total : r.values[mf.id]);
     const recs = prRecs(p.id).filter((r) => r.typeId === t.id);
     const stages = g ? g.choices.map((c) => { const xs = recs.filter((r) => r.values[g.id] === c.id); return { label: c.label, color: c.color, count: xs.length, total: xs.reduce((n, r) => n + amt(r), 0) }; }) : [];
     return { g, mf, amt, recs, stages };
@@ -17807,6 +17812,12 @@
   // Line items in a record's panel: lines to type in or pick from the price list, a discount, tax, the total,
   // and (for estimates) what it costs us and the margin. It saves a moment after each change.
   function prItems(p, t, r, f) {
+    if (!amAdmin()) {
+      const rows = r.values[f.id]?.rows || [];
+      return h('div', { class: 'pj-items pj-items-ro', 'data-field': f.id }, h('div', { class: 'pj-label' }, f.name),
+        rows.length ? h('ul', { class: 'pj-ro-lines' }, rows.map((x) => h('li', {}, h('b', {}, `${x.qty ?? ''}${x.unit ? ' ' + x.unit : ''}`), ' ', x.desc || ''))) : h('p', { class: 'day-hint' }, 'No lines yet.'),
+        h('p', { class: 'day-hint' }, 'Prices are for owners and admins.'));
+    }
     const v = JSON.parse(JSON.stringify(r.values[f.id] || { rows: [], taxRate: 0 }));
     v.rows ||= [];
     const box = h('div', { class: 'pj-items' });
@@ -17937,6 +17948,7 @@
   // The record as saved, after any lines still being typed are saved.
   const prFresh = async (p, r) => { await PR.flush?.get(r.id)?.(); return recById(p.id, r.id) || r; };
   function quoteActions(p, t, r) {
+    if (!amAdmin()) return null; // sending a quote and its link are owners' and admins' (docs/jobflows/PRICES.md)
     const st = prField(t, t.fields.find((f) => f.key === 'status')?.id);
     const status = st && prText(p, st, r.values[st.id]);
     const send = async () => {
