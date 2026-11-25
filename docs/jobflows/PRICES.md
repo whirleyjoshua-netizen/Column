@@ -74,3 +74,30 @@ for the same update. The test fails on today's code.
 - Inventory's own pages (stock prices) are the Inventory tool's, not boards'.
 - What a customer sees on a quote or invoice.
 - Money fields that aren't prices (§1).
+
+## 8. Review round 1 (ChatGPT, chat #7)
+1. **Old timeline entries, fail-closed.** An entry is shown in full to a member only when it is positively not a
+   price: it has a `fieldId` of a field that isn't priced, or (older entries, no `fieldId`) its field name matches
+   exactly one field in the record's list and that field isn't priced. A name that matches nothing (the field was
+   renamed or deleted), more than one field, or a priced one → `{ from: '', to: 'changed' }`. The rule lives in
+   `logFor(rec, memberId)`, which is what both `GET …/log`, the API timeline and the `record:log` broadcast use.
+2. **Automations act as their maker, checked when they run.** An automation's Set step that writes a priced
+   field (today only a Price list's money fields; price lines can't be set by automations at all) can be saved
+   only by an owner or admin, and each run checks its maker's role then (`x.memberId`, as the run already
+   records): a maker who is no longer an owner or admin, or gone, gets that run's Set refused with a note on the
+   automation ("Prices are for owners and admins"), nothing written. Who triggered it doesn't matter: an admin's
+   automation does what the admin set up, whoever's change started it (a value it copies from a field a member
+   can fill is the admin's choice; noted in the builder's help, not blocked). Scheduled runs are the same.
+3. **The customer's link is an accepted exception.** A quote link is a bearer link for the customer and shows
+   the customer's prices to whoever holds it. Members no longer receive it (no `share` in records, no Send quote,
+   share and unshare 403), and links made before this change keep working for the customer. A member who was
+   handed a link outside Kloomie can open it: that is not something the server can tell apart from the
+   customer. The promise is "Kloomie never gives a member prices or the link", not "a member can never see a
+   quote".
+4. **Redaction only at the output.** Stored values and calculation are untouched: `calcValues` works on the full
+   record (formulas and rollups across lists use real prices, as now), and only `publicRecord`, `words`,
+   `recordStory`, `logFor` and the export's `redactValues` remove priced values from what they return. They
+   copy; they never write `rec.values` or anything cached.
+5. **API keys:** already as asked (projects.js `keyAuth`): each request looks up the maker in the team now and
+   uses their role now; a maker no longer on the team makes the key stop working (401). Keys aren't transferable.
+   Tests: a key whose maker is made a member gets redacted records and 403 on priced writes on the next request.
