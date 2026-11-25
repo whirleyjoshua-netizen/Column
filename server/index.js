@@ -2514,6 +2514,9 @@ function jobStackOfItem(x) {
   return st?.recordId ? st : null;
 }
 // A job is gone (or its list, or its board): its stack and the stack's files go as a deleted campaign's do.
+// Everything that goes with a deleted record (one, or its list's or board's): its visits, draft invoices, runs, gear
+// links, campaign links and job stack.
+function recordGoneAll(rec) { dropVisits(rec); INV.dropFor(rec); JF.dropFor(rec); campsOffJob(rec); jobStackGone(rec); }
 function jobStackGone(rec) {
   const ws = db.workspaces[rec.wsId];
   if (!ws) return;
@@ -12421,7 +12424,7 @@ async function replayAs(ws, memberId, approvalId, { method, path: p, body }, as 
 }
 const hold = (...a) => RULES.hold(...a);
 const PJ = projectsModule({ docsOf, bizHtml, inkedPng, jobQuote: (rec) => JF.jobQuote(rec), seesLinked: (kind, x, memberId) => canSee({ memberId }, kind, x), proofUrl: (ws) => pagesProof(ws), onEvent: (...a) => recordEvent(...a), onPrice: (...a) => priceChanged(...a), canSeeItem: (auth, it) => canSee(auth, 'item', it), seal, unseal, db, save, broadcast, rid, hold, cleanText, isDay, readJson, send, badRequest, isOwnerId, escHtml, brandOf, logoUrl, teamDay, offline, allowLocalHooks: process.env.ALLOW_LOCAL_WEBHOOKS === '1', qrSvg, publicUrl: PUBLIC_URL,
-  onRecordGone: (rec) => { dropVisits(rec); INV.dropFor(rec); JF.dropFor(rec); campsOffJob(rec); jobStackGone(rec); }, stageGate: (...a) => stageGate(...a),
+  onRecordGone: (rec) => recordGoneAll(rec), stageGate: (...a) => stageGate(...a),
   onRecordNews: (rec) => { jobChanged(rec); if (rec.share || rec.qbo?.estId) QB.soon(rec.wsId); },
   // A follow-up from a record's timeline: a task for whoever logged it, about the record.
   makeTask: (ws, auth, { text, due, recordId }) => {
@@ -13449,7 +13452,7 @@ async function removeMember(ws, m, { removed = false } = {}) {
   for (const p of Object.values(db.projects)) {
     if (p.wsId !== wsId) continue;
     if (p.private && p.memberId === id && !(p.memberIds || []).some((x) => x !== id)) {
-      for (const x of Object.values(db.records)) if (x.projectId === p.id) delete db.records[x.id];
+      for (const x of Object.values(db.records)) if (x.projectId === p.id) { delete db.records[x.id]; recordGoneAll(x); }
       for (const h of Object.values(db.webhooks)) if (h.projectId === p.id) delete db.webhooks[h.id];
       delete db.projects[p.id];
       continue;

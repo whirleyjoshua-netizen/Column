@@ -212,6 +212,8 @@ try {
   ok(r.status === 409 && (await rico('GET', '/inventory/units/' + l1.id)).body?.unit?.status === 'available', 'and nothing went out');
   for (const u of [pw1, l1, l2]) { r = await gearDo(j2.id, A, { act: 'checkout', unitId: u.id }, sam); ok(r.status === 200, 'Sam (crew) checks out ' + u.name + ' through the step: ' + r.status + ' ' + (r.body?.error || '')); }
   ok(await until(async () => (await stateOf(j2.id, 'Out A')) === 'done'), 'round A’s check-out is done');
+  r = await gearDo(j2.id, A, { act: 'checkout', unitId: pw2.id });
+  ok(r.status === 409 && (await rico('GET', '/inventory/units/' + pw2.id)).body?.unit?.status === 'available', 'a check-out step that’s done and no longer current: 409, nothing goes out');
   await done(j2.id, F2.sid('Visit A'));
   ok((await stateOf(j2.id, 'In A')) === 'current', 'check-in A waits for the gear');
   for (const u of [pw1, l1, l2]) { r = await gearDo(j2.id, IA, { act: 'return', unitId: u.id }, sam); ok(r.status === 200, 'Sam checks in ' + u.name + ': ' + r.status); }
@@ -231,6 +233,10 @@ try {
   // Gear checked out for B, then In B waits for it.
   r = await gearDo(j2.id, OB, { act: 'checkout', unitId: l3.id });
   ok(r.status === 200 && (await until(async () => (await stateOf(j2.id, 'Out B')) === 'done')), 'round B’s ladder goes out: check-out B done');
+  // Reopening round A's check-out once round B has started: it still counts only its own round.
+  await rico('POST', `/jobs/${j2.id}/steps/${A}/reopen`);
+  await sleep(300);
+  ok(need((await gearAt(j2.id, A)).body, lad.id)?.got === 2 && (await stateOf(j2.id, 'Out A')) === 'done', 'check-out A reopened after round B began: still 2 ladders (round B’s isn’t counted), still done');
   await stop();
   ok(await start(), 'restarted again');
   rico = call(ricoTok); sam = call(samTok);

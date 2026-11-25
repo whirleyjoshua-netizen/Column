@@ -211,6 +211,10 @@ try {
   const m5 = await bareJob('Map job undated', { address: '25 Undated Ln' });
   const m6 = await bareJob('Map job fails', { address: '26 FAIL Rd', scheduled: day(5) });
   const m7 = await bareJob('Map job private', { address: '27 Private Pl', scheduled: day(5) }, pp, ptp);
+  // A client whose only job is outside the range: that job isn't on the map, so the client is.
+  const farC = (await rico('POST', '/contacts', { name: 'Far Client', email: 'far@x.test', address: '12 Far Client Rd' })).body;
+  const farId = farC.id ?? farC.contact?.id;
+  await bareJob('Map job far client', { [cf]: farId, scheduled: day(90) });
   geo.clear();
   const map = (who, qs = '') => who('GET', '/map/jobs' + qs);
   r = await map(rico);
@@ -223,8 +227,9 @@ try {
   ok(typeof r.body?.more === 'number' && typeof r.body?.missing === 'number' && !r.body?.off, 'more and missing are counts; off only without a token');
   ok(!ids(r.body).includes(m6.id) && r.body?.missing >= 1, 'a failed lookup leaves the point out, counted as missing');
   ok((geo.get('21 shared st') || 0) === 1, 'a shared address (however it’s spaced) is looked up once: ' + JSON.stringify([...geo]));
-  const cpt = (r.body?.points || []).find((x) => x.kind === 'client');
+  const cpt = (r.body?.points || []).find((x) => x.kind === 'client' && x.id === (lone.id ?? lone.contact?.id));
   ok(!!cpt && cpt.name === 'Lone Client' && cpt.address === '11 Lonely Rd' && typeof cpt.lat === 'number' && typeof cpt.lng === 'number' && !('scheduled' in cpt) && !('stage' in cpt) && !/lone@x/.test(JSON.stringify(cpt)), 'a client point: name, address, lat, lng, no job fields and no email: ' + JSON.stringify(cpt));
+  ok((r.body?.points || []).some((x) => x.kind === 'client' && x.id === farId), 'a client whose only job is outside the range is a point of its own');
   ok((r.body?.points || []).some((x) => x.kind === 'client' && x.id === (lone.id ?? lone.contact?.id)) && !(r.body?.points || []).some((x) => x.kind === 'client' && x.id === danaId), 'owners see clients with an address and no job among the points');
   const before = geoCalls();
   await map(rico);
@@ -232,10 +237,15 @@ try {
   r = await map(rico, `?from=${day(50)}&to=${day(70)}`);
   ok(ids(r.body).includes(m4.id) && !ids(r.body).includes(m1.id), 'a range picks the jobs scheduled in it');
   ok(ids((await map(rico, '?undated=1')).body).includes(m5.id), 'undated=1 adds jobs with no day');
+  ok((await map(rico, `?from=${day(0)}&to=${day(365)}`)).status === 200, '366 days (counting both ends) is allowed');
+  ok((await map(rico, `?from=${day(0)}&to=${day(366)}`)).status === 400, '367 is refused');
   for (const [why, qs] of [['a bad day', '?from=2026-13-40'], ['from after to', `?from=${day(5)}&to=${day(1)}`], ['over 366 days', `?from=${day(0)}&to=${day(400)}`]]) ok((await map(rico, qs)).status === 400, 'the map refuses ' + why);
   r = await map(sam);
   ok(r.status === 200 && !ids(r.body).includes(m7.id) && ids(r.body).includes(m1.id), 'Sam sees only the jobs he can see');
   ok(r.status === 200 && !(r.body?.points || []).some((x) => x.kind === 'client') && !/dana@x\.test|555-0100|lone@x/.test(JSON.stringify(r.body)), 'members get no clients and no client email or phone');
+  await bareJob('Map job concurrent', { address: '30 Concurrent St', scheduled: day(7) });
+  const [c1, c2] = await Promise.all([map(rico), map(sam)]);
+  ok(c1.status === 200 && c2.status === 200 && (geo.get('30 concurrent st') || 0) === 1, 'two requests at once share one lookup of a new address: ' + (geo.get('30 concurrent st') || 0));
   const slowJob = await bareJob('Map job slow', { address: '28 SLOW St', scheduled: day(6) });
   const t0 = Date.now();
   r = await map(rico);

@@ -210,8 +210,12 @@ export function jobFlowsModule(ctx) {
         const all = presetsOf(ws.id);
         const b = all.find((y) => y.id === x.bundleId && y.kind === 'bundle');
         if (!b) throw bad(`The saved bundle for “${st.name}” is gone. Pick another, or write its tasks.`);
-        const texts = (b.steps || []).map((y) => all.find((z) => z.id === y.presetId)).filter(Boolean).map((z) => cleanText(z.text || z.name, 200).trim()).filter(Boolean).slice(0, 20);
+        // Saved tasks are the team's (everyone sees the same list). A bundle missing one of its tasks isn't copied in part.
+        const picked = (b.steps || []).map((y) => all.find((z) => z.id === y.presetId));
+        if (picked.some((z) => !z)) throw bad(`The bundle “${b.name}” uses a saved task that was deleted. Fix the bundle first.`);
+        const texts = picked.map((z) => cleanText(z.text || z.name, 200).trim()).filter(Boolean);
         if (!texts.length) throw bad(`The bundle “${b.name}” has no tasks.`);
+        if (texts.length > 20) throw bad(`The bundle “${b.name}” has ${texts.length} tasks; a Tasks step holds 20.`);
         x.tasks = texts;
         x.bundleFrom = { id: b.id, name: b.name || 'Bundle' };
       }
@@ -416,12 +420,19 @@ export function jobFlowsModule(ctx) {
     for (let j = i - 1; j >= 0; j--) { if (gs[j].step?.kind === 'gearOut') return gs[j]; if (gs[j].step?.kind === 'gearIn') return null; }
     return null;
   }
+  // Where a check-out's round ends: the fixed end of the check-in that closes it, once it has one (else open).
+  function roundEndOf(c, g) {
+    const gs = stepGoals(c), i = gs.indexOf(g);
+    for (let j = i + 1; j < gs.length; j++) { if (gs[j].step?.kind === 'gearIn') return gs[j].roundEnd || null; if (gs[j].step?.kind === 'gearOut') return null; }
+    return null;
+  }
   // Different units of an item checked out to this job within the round, from the ledger (out, back and out is one).
   function gotFor(c, g, rec, itemId) {
     const from = roundStart(c, g);
     if (from == null) return 0;
+    const to = roundEndOf(c, g);
     const seen = new Set();
-    for (const m of Object.values(db.invMoves || {})) if (m.kind === 'checkout' && m.wsId === rec.wsId && m.jobId === rec.id && m.itemId === itemId && m.at >= from) seen.add(m.unitId);
+    for (const m of Object.values(db.invMoves || {})) if (m.kind === 'checkout' && m.wsId === rec.wsId && m.jobId === rec.id && m.itemId === itemId && m.at >= from && (to == null || m.at <= to)) seen.add(m.unitId);
     return seen.size;
   }
   // What a gear step's sheet shows: what's needed (a check-out's), what's out on the job, notes. Never costs.
@@ -1381,7 +1392,7 @@ export function jobFlowsModule(ctx) {
   // ---------- Phase 4: jobs and clients on the map (PHASE4.md §2) ----------
   // Looked up on request: a memory-only cache per team and address for 10 minutes, never written anywhere.
   const MAP_MS = 10 * 60_000, MAP_MAX = 200;
-  const mapCache = new Map();
+  const mapCache = new Map(), mapFlying = new Map(); // done lookups; lookups under way (two requests share one)
   const normAddr = (a) => String(a || '').trim().replace(/\s+/g, ' ').toLowerCase();
   const isDay = (d) => /^\d{4}-\d{2}-\d{2}$/.test(d) && !Number.isNaN(Date.parse(d + 'T12:00:00Z')) && new Date(Date.parse(d + 'T12:00:00Z')).toISOString().slice(0, 10) === d;
   async function mapJobs(ws, auth, qs) {
@@ -1391,7 +1402,7 @@ export function jobFlowsModule(ctx) {
     const to = qs.get('to') || (isDay(from) ? addDays(from, 30) : '');
     if (!isDay(from) || !isDay(to)) return { status: 400, body: { error: 'Give the days as YYYY-MM-DD.' } };
     if (from > to) return { status: 400, body: { error: 'The first day comes after the last.' } };
-    if ((Date.parse(to) - Date.parse(from)) / 864e5 > 366) return { status: 400, body: { error: 'Look at a year at most.' } };
+    if (Math.round((Date.parse(to) - Date.parse(from)) / 864e5) + 1 > 366) return { status: 400, body: { error: 'Look at 366 days at most.' } };
     const undated = qs.get('undated') === '1';
     const admin = isAdmin(auth);
     const jobs = [], clientsOnJobs = new Set();
@@ -1401,10 +1412,9 @@ export function jobFlowsModule(ctx) {
       for (const rec of Object.values(db.records)) {
         if (rec.projectId !== p.id) continue;
         const t = lists.find((x) => x.id === rec.typeId);
-        if (!t) continue;
+        if (!t || !PJ.recordAt(rec.id, ws.id, auth.memberId)) continue; // the job's own visibility, as its stack
         const cf = fieldBy(t, (f) => f.type === 'contact');
         const contact = cf && db.contacts?.[rec.values[cf.id]];
-        if (contact) clientsOnJobs.add(contact.id);
         const af = fieldBy(t, (f) => f.key === 'address');
         const address = String((af && rec.values[af.id]) || (contact?.wsId === ws.id && contact.address) || '').trim();
         if (!address) continue;
@@ -1412,6 +1422,7 @@ export function jobFlowsModule(ctx) {
         const sd = String((df && rec.values[df.id]) || '').slice(0, 10);
         const scheduled = isDay(sd) ? sd : null;
         if (scheduled ? scheduled < from || scheduled > to : !undated) continue;
+        if (contact) clientsOnJobs.add(contact.id); // a client with a job on this map isn't a point of its own
         const sf = fieldBy(t, (f) => f.type === 'select' && ['status', 'stage'].includes(f.key));
         const run = shownRun(rec.id);
         const cur = run?.status === 'active' ? currentGoal(run) : null;
@@ -1437,7 +1448,9 @@ export function jobFlowsModule(ctx) {
         const hit = mapCache.get(ck);
         if (hit) { found.set(a, hit.ll); continue; }
         try {
-          const ll = await geocode(a);
+          let fly = mapFlying.get(ck);
+          if (!fly) { fly = geocode(a).finally(() => mapFlying.delete(ck)); mapFlying.set(ck, fly); }
+          const ll = await fly;
           if (ll === undefined) continue;
           mapCache.set(ck, { at: Date.now(), ll });
           found.set(a, ll);
@@ -1487,7 +1500,11 @@ export function jobFlowsModule(ctx) {
       try {
         campaignFromSnapshot(ws, c.ownerId, snap, { id, name: `${snap.name || 'Campaign'} · ${PJ.recName(db.projects[rec.projectId], rec)}`.slice(0, 80), recordId: rec.id });
         note(rec, `Started the campaign for “${cur.step.name}”`, 'Kloomie');
-      } catch (e) { cur.campaign = was; console.error('A Campaign step couldn’t make its campaign:', e.message); }
+      } catch (e) {
+        // Made but not filled in: it exists, so the marker stays (no second one); not made at all: try again later.
+        if (!db.campaigns[id]) cur.campaign = was;
+        console.error('A Campaign step couldn’t make its campaign:', e.message);
+      }
       changed = true;
       tell(c);
     }
