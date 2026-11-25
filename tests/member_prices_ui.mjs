@@ -49,6 +49,10 @@ try {
   const qT = board.types.find((x) => x.key === 'quotes');
   const itemsF = qT.fields.find((f) => f.key === 'items');
   const quote = await rico('POST', `/projects/${board.id}/records`, { typeId: qT.id, values: { title: 'Ruiz shutters', items: { rows: [{ desc: 'Shutters', qty: 2, unit: 'each', price: 4321.77, cost: 1234.56 }], taxRate: 0 } } });
+  const plT = board.types.find((x) => x.key === 'price_list'), jT = board.types.find((x) => x.key === 'jobs');
+  await rico('POST', `/projects/${board.id}/schema`, { typeId: plT.id, op: 'addField', name: 'Marked up', type: 'formula', expr: '{Price} * 2', format: 'money' });
+  await rico('POST', `/projects/${board.id}/records`, { typeId: plT.id, values: { item: 'Window film', price: 4321.77, cost: 1234.56 } });
+  await rico('POST', `/projects/${board.id}/records`, { typeId: jT.id, values: { job: 'Ruiz install', value: 9000 } });
   const open = async (tok) => {
     const A = await tab(APP);
     await A.until(`location.href.startsWith(${JSON.stringify(APP)}) && document.readyState === 'complete'`, 15000);
@@ -72,6 +76,22 @@ try {
   const card = `[...document.querySelectorAll('#projects .pj-card, #projects tbody tr, #projects [data-id]')].filter((x) => !x.closest('.pj-panel')).find((x) => x.textContent.includes('Ruiz shutters'))`;
   ok(await M.ev(`!!${card} && !/\\$\\s?\\d/.test(${card}.textContent)`), 'the quote on the board shows no amount: ' + (await M.ev(`${card}?.textContent.slice(0, 120)`)));
   ok(await O.ev(`!!${card} && /\\$\\s?[\\d,]+/.test(${card}.textContent)`), 'while the owner’s shows its total: ' + (await O.ev(`${card}?.textContent.slice(0, 120)`)));
+  // The Price list as a table: its price, cost and a formula over the price show —, and so does the column total.
+  const toType = async (X, name) => { await X.tap(`[...document.querySelectorAll('#projects .pj-types button')].find((b) => b.textContent.includes(${JSON.stringify(name)}))`); await X.until(`[...document.querySelectorAll('#projects .pj-types button.on')].some((b) => b.textContent.includes(${JSON.stringify(name)}))`); };
+  const cells = (X) => X.ev(`(() => { const hs = [...document.querySelectorAll('#projects thead th')].map((x) => x.textContent.trim()); const row = [...document.querySelectorAll('#projects tbody tr')].find((r) => r.textContent.includes('Window film')); const foot = [...document.querySelectorAll('#projects tfoot td')]; const at = (n) => hs.findIndex((x) => x.endsWith(n)); return { price: row?.children[at('Price')]?.textContent.trim(), cost: row?.children[at('Our cost')]?.textContent.trim(), marked: row?.children[at('Marked up')]?.textContent.trim(), total: foot[at('Price')]?.textContent.trim() }; })()`);
+  await toType(M, 'Price list');
+  await M.until(`[...document.querySelectorAll('#projects tbody tr')].some((r) => r.textContent.includes('Window film'))`);
+  let c = await cells(M);
+  ok(c.price === '—' && c.cost === '—' && c.marked === '—', 'a member’s Price list: price, cost and the formula over the price show —: ' + JSON.stringify(c));
+  ok(c.total === '—', 'and the Price column’s total shows — too: ' + c.total);
+  ok(await M.ev(`!/4,?321\\.77|8,?643\\.54|1,?234\\.56/.test(document.body.textContent)`), 'still no price anywhere on the page');
+  await toType(O, 'Price list');
+  await O.until(`[...document.querySelectorAll('#projects tbody tr')].some((r) => r.textContent.includes('Window film'))`);
+  c = await cells(O);
+  ok(/4,321\.77/.test(c.price || '') && /1,234\.56/.test(c.cost || '') && /8,643\.54/.test(c.marked || '') && /4,321\.77/.test(c.total || ''), 'the owner’s shows them, and the total: ' + JSON.stringify(c));
+  // A money field that isn't a price (a job's Value) still shows for the member, with its total on the board.
+  await toType(M, 'Jobs');
+  ok(await M.until(`document.querySelector('#projects').textContent.includes('9,000')`), 'a member still sees a job’s Value ($9,000), which isn’t a price');
   ok(M.errors.length === 0 && O.errors.length === 0, 'no errors on the page: ' + [...M.errors, ...O.errors].join(' | ').slice(0, 300));
 } catch (e) {
   ok(false, 'threw: ' + (e.stack || e.message));

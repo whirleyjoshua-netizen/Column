@@ -16377,7 +16377,7 @@
           cell.addEventListener('click', (e) => { if (e.target.closest('a, .pj-link')) return; prEdit(cell, p, t, r, f); });
           return h('td', {}, cell);
         }), h('td', {})))),
-      h('tfoot', {}, h('tr', {}, cols.map((f, i) => h('td', {}, i === 0 ? h('button', { class: 'pj-newrow', onclick: () => prNew(p, t) }, `+ New`) : f.type === 'money' || f.type === 'number' || f.type === 'items' ? h('small', { class: 'pj-num' }, f.type === 'number' ? sum(f).toLocaleString() : money(sum(f))) : '')), h('td', {}))))),
+      h('tfoot', {}, h('tr', {}, cols.map((f, i) => h('td', {}, i === 0 ? h('button', { class: 'pj-newrow', onclick: () => prNew(p, t) }, `+ New`) : f.type === 'money' || f.type === 'number' || f.type === 'items' ? h('small', { class: 'pj-num' }, recs.some((r) => pricesHidden(r, f)) ? '—' : f.type === 'number' ? sum(f).toLocaleString() : money(sum(f))) : '')), h('td', {}))))),
       h('p', { class: 'day-hint pj-count' }, `${recs.length.toLocaleString()} ${recs.length === 1 ? (t.singular || 'record').toLowerCase() : t.name.toLowerCase()}${shown.length < recs.length ? ` · showing the first ${shown.length}, search to narrow it down` : ''}`)];
   }
   // ----- board -----
