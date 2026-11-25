@@ -290,8 +290,8 @@ Where the server differs from, or settles, something above:
 - Workspace → **Jobs**, a tab of its own between Contacts and Boards (`WORK_TABS`), shown when Boards is on for the
   team and the member may use it. It's a tool page (`TOOLS.jobs`, `jobsTool()` in client/app.js, all names `jb…`).
 - **Jobs** (everyone): `GET /api/jobs`; find by job or client, filter by flow or "not on a flow"; each row shows the
-  client, stage, date, the flow and how far along, and a button for the step it's at, which opens the job and runs
-  that step's Next. **+ New job** only when there's a flow you may start.
+  client, stage, date, the flow and how far along, and the step it's at: a button that opens the job and runs that
+  step's Next when you may do it (see round 2 below), otherwise its name. **+ New job** only when there's a flow you may start.
 - **Job Flows** (owners and admins only; members never see the sub-tab): the flows with version, "changes not
   published", list and archived; ⋯ Edit, Start a job on it, Make a copy, Archive / Bring back. **+ New flow**: name,
   job list, and a start (Blank, Service call, Measure then install, Cleaning visit). The starts are built in the
