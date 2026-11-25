@@ -75,7 +75,7 @@ Goal per step (existing fields, plus):
 { kind: 'step', step: <Step copy, frozen>, stage: step.stage, marked: null|{byId, at},
   skipped, skipReason, skippedById, skippedAt }
 ```
-- `goalMet(g)` for `kind:'step'`: `skipped || (stepCondition(g) && tasks done && needsMet(g))`.
+- `goalMet(g)` for `kind:'step'`: `skipped || (stepCondition(g, rec) && tasks done && needsMet(g))`, `rec` being the run's job (§2.1).
 - `jobStepsOnce` gets one change (checkpoint 1, second review): its completion calculation is
   `g.kind === 'step' ? goalMet(g) : <today's expression, unchanged>`. Today's expression doesn't call `goalMet` for
   `tasks` goals, so without this a step with no tasks and no needs would count as finished whatever its condition.
@@ -113,8 +113,9 @@ Goal per step (existing fields, plus):
   opens that screen, and the step finishes only when its condition becomes true on the server.
 - Every write ends with `stepsSoon(wsId)` (the existing sweep). The sweep is the only place a step becomes finished,
   so a webhook, a retry and a click can't finish it three times: `g.finished` changes once, `step.done` fires once.
-- Stage moves still go through `stageGate` on every path. A run's steps count in `openStepsUpTo` like any campaign's,
-  so a person can't drag the stage past an unfinished step; the admin override with a reason stays.
+- Stage moves still go through `stageGate` on every path. When the job has an active run, `openStepsUpTo` counts only
+  that run's goals (§1.5 Stage ownership); without one, every campaign on the job as today. Either way a person can't drag
+  the stage past an unfinished step; the admin override with a reason stays.
 - Order: a later step's condition may already be true (paid before signed). It shows done; the current step is the first
   unfinished, unskipped one.
 

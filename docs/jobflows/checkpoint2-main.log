@@ -1,6 +1,7 @@
 Run on main a9f0ebb + these tests only (no implementation), 2026-11-24.
+Command per file: node tests/<file>.mjs .   (from the repo root; each test starts its own server on its own port and data folder)
 
-=== tests/jobflows_defs.mjs
+=== tests/jobflows_defs.mjs (exit 1)
 FAIL an owner makes a flow, a draft with no version yet: 404 {"error":"Unknown endpoint"}
 FAIL its steps get ids
 FAIL a member can’t make a flow: 404
@@ -14,7 +15,7 @@ FAIL publishing makes version 1: 404 {"error":"Unknown endpoint"}
 FAIL threw: TypeError: Cannot read properties of undefined (reading 'steps')
 11 FAILED
 
-=== tests/jobflow_run.mjs
+=== tests/jobflow_run.mjs (exit 1)
 PASS (setup) automation “Step done” 
 FAIL (setup) automation “Flow done” Pick what sets it off.
 FAIL (setup) the flow is published: 404 Unknown endpoint
@@ -32,7 +33,7 @@ FAIL and the job is Scheduled
 FAIL threw: TypeError: Cannot read properties of undefined (reading 'values')
 14 FAILED
 
-=== tests/jobs_list.mjs
+=== tests/jobs_list.mjs (exit 1)
 FAIL a job with no campaign is listed: 404
 FAIL a job an ordinary campaign drives is listed, marked legacy, with no run
 FAIL a job on a flow shows its flow, steps and current step
@@ -53,12 +54,12 @@ FAIL a member can’t start a job on a flow for owners and admins
 FAIL threw: TypeError: Cannot read properties of undefined (reading 'id')
 11 FAILED
 
-=== tests/jobflow_stage.mjs
+=== tests/jobflow_stage.mjs (exit 1)
 FAIL (setup) a job on the flow
 FAIL threw: TypeError: Cannot read properties of undefined (reading 'id')
 2 FAILED
 
-=== tests/jobflow_hidden.mjs
+=== tests/jobflow_hidden.mjs (exit 1)
 FAIL (setup) a job on a flow, with its run
 PASS the run isn’t in the app’s campaigns
 PASS nor are its steps in the app’s steps
