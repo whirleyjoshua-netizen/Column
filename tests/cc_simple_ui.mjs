@@ -130,6 +130,34 @@ try {
   await tabTo('work'); await tabTo('plan');
   ok(await A.until(`${rowOf('Send quotes')}?.querySelector('.cc-row-check')?.disabled === true`), 'a task that waits cannot be ticked');
   await api('PATCH', '/campaigns/' + camp.id, { inOrder: false });
+  // ----- From the review (2026-11-25) -----
+  // The waits-for title names what it waits for (a whole phase, here).
+  await api('PATCH', '/campaigns/' + camp.id, { inOrder: true });
+  await tabTo('work'); await tabTo('plan');
+  ok(await A.until(`(${rowOf('Send quotes')}?.querySelector('.cc-row-check')?.title || '').includes('Call past customers')`), 'a waiting task says what it waits for: ' + await A.ev(`${rowOf('Send quotes')}?.querySelector('.cc-row-check')?.title`));
+  await api('PATCH', '/campaigns/' + camp.id, { inOrder: false });
+  await tabTo('work'); await tabTo('plan');
+  // A subtask's name opens it in the panel; it doesn't tick it.
+  await A.tap(`${rowOf('Call the Lee family')}.querySelector('.cc-row-name')`);
+  await A.until(`${T('.cc-td .cc-pp-name')}?.value === 'Call the Lee family'`);
+  await A.tap(`[...document.querySelectorAll('#camps .cc-td .cc-td-sub-name')].find((b) => b.textContent === 'Ask about the patio')`);
+  ok(await A.until(`${T('.cc-td .cc-pp-name')}?.value === 'Ask about the patio'`), 'a subtask’s name opens it in the panel');
+  ok(!(await taskApi('Ask about the patio'))?.done, 'and doesn’t tick it');
+  await A.tap(T('.cc-td [aria-label="Close the task"]'));
+  // My tasks keeps a task whose subtask is mine.
+  const sq = await taskApi('Send quotes');
+  await api('POST', '/tasks', { goalId: sq.goalId, text: 'Price the brackets', parentId: sq.id, assigneeId: me });
+  await tabTo('work'); await tabTo('plan');
+  await A.tap(T('.cc-chip[data-chip=mine]'));
+  ok(await A.until(`!!${rowOf('Send quotes')}`), 'My tasks keeps a task whose subtask is mine');
+  await A.tap(T('.cc-chip[data-chip=all]'));
+  // A call list, tracker or checklist opens on Plan from Where things are.
+  await api('POST', '/lists', { campaignId: camp.id, kind: 'checklist', name: 'Install checklist', columns: ['Step'], rows: [{ cells: ['Measure'] }, { cells: ['Order brackets'] }] });
+  await tabTo('work'); await tabTo('plan');
+  await A.tap(`[...document.querySelectorAll('#camps .cc-where button')].find((b) => b.textContent.startsWith('Lists & docs'))`);
+  await A.until(`[...document.querySelectorAll('#menu button')].some((b) => b.textContent.includes('Install checklist'))`);
+  await A.tap(`[...document.querySelectorAll('#menu button')].find((b) => b.textContent.includes('Install checklist'))`);
+  ok(await A.until(`!!${T('.cc-listopen .clist.open')} && ${T('.cc-listopen')}.textContent.includes('Install checklist')`), 'a checklist opens on Plan, open, as it did on Resources');
   // The whiteboard is still a button away (it becomes the Sketch tab later).
   ok(await A.until(`!!${T('.cc-sketch-btn')}`), 'a Sketch button on Plan');
   await A.tap(T('.cc-sketch-btn'));

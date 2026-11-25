@@ -7909,7 +7909,9 @@
           signsFor(c) ? h('button', { class: 'btn small', title: 'Sent for signature', onclick: () => { SG.filter = c.id; openTool('signs'); } }, `Signatures · ${signsFor(c)}`) : null,
           vaultLinked('campaign', c.id) ? h('button', { class: 'btn small', title: 'In your vault', onclick: () => openVaultFor('campaign', c.id) }, h('span', { class: 'vault-ic', html: I.lock }), `Vault · ${vaultLinked('campaign', c.id)}`) : null,
           stepRs.length ? h('button', { class: 'btn small', title: 'What each phase hands its people', onclick: (e) => openMenu(e.currentTarget, [{ head: 'Phase resources' }, ...stepRs.map((g) => ({ label: g.title + ' · ' + stepRes(g).length, run: () => stepWindow(c, g) }))]) }, 'Phase resources · ' + stepRs.reduce((n, g) => n + stepRes(g).length, 0)) : null,
-          h('button', { class: 'btn small', title: 'Call lists and docs for this campaign', onclick: () => sheet('Lists & docs', [lists.length ? h('div', {}, lists.map((l) => listCard(c, l))) : h('p', { class: 'day-hint' }, 'Drop a spreadsheet of people on the campaign to make a call list, or add one from Contacts.')]) }, 'Lists & docs · ' + lists.length)));
+          h('button', { class: 'btn small', title: 'Call lists and docs for this campaign', onclick: (e) => openMenu(e.currentTarget, lists.length
+            ? [{ head: 'Lists & docs' }, ...lists.map((l) => ({ label: l.name + ' · ' + listProgress(l).label, run: () => listOpenFrom(c, l) }))]
+            : [{ note: 'Drop a spreadsheet of people on the campaign to make a call list, or add one from Files ▾.' }]) }, 'Lists & docs · ' + lists.length + ' ▾')));
     };
     const activity = () => [
       h('section', { class: 'cc-card' }, h('div', { class: 'cc-card-h' }, h('b', {}, 'Log'), h('span', { style: 'flex:1' }),
@@ -7969,7 +7971,7 @@
       // Plan (the owner's sketch, 2026-11-22): what's saved on the left, the plan as a tree of tiles, a task's panel on the right.
       plan: () => (K.planView === 'board' && toolOn('whiteboard')
         ? [h('div', { class: 'cc-phases-bar' }, h('button', { class: 'btn small cc-sketch-btn on', title: 'Back to the phases', onclick: () => { K.planView = null; renderCamps(); } }, '← Back to the phases')), ccBoardView(c, phases)]
-        : [sendBars(c), ccPlanner(c, phases, { left: ovBrief(), idle: ovIdle() })]),
+        : [sendBars(c), (() => { const l = lists.find((x) => x.id === K.listOpen); return l ? h('section', { class: 'cc-card cc-listopen' }, listCard(c, l)) : null; })(), ccPlanner(c, phases, { left: ovBrief(), idle: ovIdle() })]),
       work: () => [sendBars(c), workBody()],
       activity,
       report: () => [pulse(), ccReport(c)],
@@ -8216,7 +8218,7 @@
     const na = S.automations && g ? autosHere(c, g, t).length : 0;
     const pick = () => { K.psel = { c: c.id, goal: t.goalId || null, task: t.id }; K.pscroll = true; renderCamps(true); };
     const check = h('input', { type: 'checkbox', class: 'cc-row-check', checked: !!t.done, disabled: !t.done && !!blockers.length, 'aria-label': (t.done ? 'Not done: ' : 'Done: ') + t.text,
-      title: !t.done && blockers.length ? 'Waits for ' + blockers.map((x) => `“${shortText(x.text, 40)}”`).join(', ') : t.done ? 'Done' : 'Mark done' });
+      title: !t.done && blockers.length ? 'Waits for ' + blockers.map((x) => `“${shortText(stepName(x), 40)}”`).join(', ') : t.done ? 'Done' : 'Mark done' });
     check.addEventListener('click', (e) => e.stopPropagation());
     check.addEventListener('change', () => ccTaskSet(t, check.checked ? { done: true } : { done: false }));
     return h('div', { class: `cc-row s-${sc}${t.done ? ' done' : ''}${sel.task === t.id ? ' on' : ''}`, 'data-task': t.id, role: 'button', tabindex: '0', onclick: pick, onkeydown: (e) => { if (e.key === 'Enter' && e.target === e.currentTarget) pick(); } },
@@ -8281,7 +8283,9 @@
     if (!S.automations && amAdmin() && !K.autoAsk) { K.autoAsk = true; api('GET', '/automations').then((r) => { S.automations = r; renderCamps(); }).catch(() => {}); }
     // Middle: the phases.
     const chip = ccChipOf(K.wfilter);
-    const show = chip === 'all' ? null : new Set(ccChipPick(campTasks(c), chip).map((t) => t.id));
+    // A subtask that matches keeps the row of the task it hangs under (rows are top-level tasks).
+    const rootOf = (t) => { let x = t; for (let i = 0; i < 4 && x.parentId && taskById(x.parentId); i++) x = taskById(x.parentId); return x; };
+    const show = chip === 'all' ? null : new Set(ccChipPick(campTasks(c), chip).map((t) => rootOf(t).id));
     const tree = h('div', { class: 'cc-phases' },
       h('div', { class: 'cc-phases-bar' },
         h('button', { class: 'btn small cc-addphase', onclick: () => goalSheet(c) }, '+ Add Phase'),
@@ -8325,7 +8329,7 @@
       const subRow = (x) => {
         const cb = h('input', { type: 'checkbox', checked: !!x.done, disabled: !x.done && !!taskBlockers(x).length, 'aria-label': (x.done ? 'Not done: ' : 'Done: ') + x.text });
         cb.addEventListener('change', () => ccTaskSet(x, { done: cb.checked }));
-        return h('label', { class: 'cc-td-sub' + (x.done ? ' done' : '') }, cb, h('span', {}, x.text));
+        return h('div', { class: 'cc-td-sub' + (x.done ? ' done' : '') }, cb, h('button', { type: 'button', class: 'linkish cc-td-sub-name', title: 'Open it here', onclick: () => { K.psel = { c: c.id, goal: x.goalId || t.goalId || null, task: x.id }; redraw(); } }, x.text));
       };
       const notes = h('textarea', { class: 'cc-td-notes', rows: 4, maxlength: 8000, placeholder: t.wo ? 'Instructions for the work order…' : 'Notes: what “done” looks like, links, anything they need to know…', 'aria-label': 'Notes' });
       notes.value = t.description || '';
@@ -8353,7 +8357,7 @@
         h('label', { class: 'cc-pp-f' }, 'Title', name),
         h('div', { class: 'row2' }, h('label', { class: 'cc-pp-f' }, 'Assignee', who), h('label', { class: 'cc-pp-f' }, 'Due date', due)),
         h('div', { class: 'cc-pp-f' }, h('span', {}, 'Status'), status),
-        blockers.length ? h('small', { class: 'cc-pp-wait' }, 'Waits for ' + blockers.map((x) => `“${shortText(x.text, 40)}”`).join(', ')) : null,
+        blockers.length ? h('small', { class: 'cc-pp-wait' }, 'Waits for ' + blockers.map((x) => `“${shortText(stepName(x), 40)}”`).join(', ')) : null,
         h('div', { class: 'cc-pp-f' }, h('span', {}, 'Subtasks'), subs.length ? h('div', { class: 'cc-td-subs' }, subs.map(subRow)) : null, subAdd),
         h('label', { class: 'cc-pp-f' }, t.wo ? 'Instructions' : 'Notes', notes),
         h('div', { class: 'cc-pp-f' }, h('span', {}, 'Attachments'),
@@ -9368,6 +9372,16 @@
   }
   const draggableKind = (l) => ['calls', 'tracker', 'checklist'].includes(kindOf(l));
 
+  // Open a list the way its card does: a reference in the dock, a form as a log; a call list, tracker or checklist
+  // opens on the campaign's Plan (2026-11-25: Resources folded into Plan).
+  function listOpenFrom(c, l) {
+    const k = kindOf(l);
+    if (k === 'reference') return dockOpen(c, { type: 'list', id: l.id });
+    if (k === 'form') return openLog(c, { ask: true });
+    K.listOpen = l.id; K.runOpen = null; K.planView = null; K.ctab = 'plan';
+    renderCamps();
+    setTimeout(() => $('#camps .cc-listopen')?.scrollIntoView({ block: 'start' }));
+  }
   function listCard(c, l) {
     const k = kindOf(l);
     const p = listProgress(l);
