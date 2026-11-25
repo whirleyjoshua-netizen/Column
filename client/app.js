@@ -11173,6 +11173,8 @@
     dir: { icon: '📁', name: 'Folder', label: (id) => dirById(id)?.name, open: (id) => openDirSide(id), full: (id) => openFolder(id) },
     // An agent pinned here answers in the chat: tapping it starts a message to it ("@Chief of Staff …").
     agent: { icon: '🤖', name: 'Agent', label: () => null, open: (id) => chatAskAgent(id), full: (id) => agOpen(id) },
+    // A job pinned here (PHASE4.md §4): its name and the step it's at; tapping it opens the job.
+    job: { icon: '🛠️', name: 'Job', label: () => null, open: (id) => jbOpenById(id), full: (id) => jbOpenById(id) },
   };
   function chatAskAgent(id) {
     const name = agentList().find((x) => x.key === id)?.name;
@@ -11186,7 +11188,7 @@
   const agentList = () => S.workspace?.agentList || []; // the server's one list of agents
   const chatFeedKey = () => viewChannel(C.view || 'chat') || 'general';
   const chatPins = () => (chatFeedKey() === 'general' ? S.workspace?.chatPins : channelById(chatFeedKey())?.pins) || [];
-  const chatPinName = (p) => (p.locked ? 'Private' : CHAT_PIN[p.kind]?.label(p.id) || p.label || CHAT_PIN[p.kind]?.name);
+  const chatPinName = (p) => (p.locked ? 'Private' : CHAT_PIN[p.kind]?.label(p.id) || (p.kind === 'job' && p.next ? `${p.label} · ${p.next}` : p.label) || CHAT_PIN[p.kind]?.name);
   function drawChatPins() {
     if (!C.pinbar) return;
     const pins = chatPins().filter((p) => CHAT_PIN[p.kind]);
@@ -18521,9 +18523,9 @@
   // flows they run on (owners and admins build them), New job from a flow, and on a job's Overview the step it's at
   // with a Next button that opens the sheet that does it. The server decides every step; this only shows it. -----
   const JB = { tab: store.get('jbTab', 'jobs'), jobs: null, flows: null, items: null, q: '', flow: '', edit: null, loading: false, runs: new Map(), runBusy: new Set(), pick: {} };
-  const JB_KIND = { client: ['👤', 'Add client info'], details: ['📝', 'Add job info'], book: ['🗓', 'Book a visit'], remind: ['🔔', 'Visit reminder'], omw: ['🚗', 'On my way'], work: ['🧰', 'Do the work'], signoff: ['✍️', 'Customer signs off'], quote: ['📨', 'Send the quote'], invoice: ['🧾', 'Send the invoice'], payment: ['💵', 'Collect payment'], review: ['⭐', 'Review request'], tasks: ['☑️', 'Tasks'], custom: ['⭐', 'Your own step'] };
-  const JB_HOW = { remind: 'Kloomie emails (or texts) the customer at 9am the day before the next visit.', omw: 'Done when someone taps On my way on the job’s visit.', review: 'Kloomie asks the customer for a review, a while after the step before it is done.', client: 'Done when a client is on the job.', details: 'Done when the fields you pick are filled in.', book: 'Done when a visit is booked.', work: 'Done when the job’s checklist is ticked (and photos are on it, if you ask for them).', signoff: 'Done when the customer signs.', quote: 'Done when the customer accepts the quote. The accepted quote is the price.', invoice: 'Done when an invoice is sent.', payment: 'Done when the job’s invoices are paid in full.', tasks: 'Done when its tasks are done or skipped.', custom: 'Done when someone taps Done, after its checklist.' };
-  const JB_NEXT = { omw: '🚗 On my way', client: 'Add the client', details: 'Fill in the job', book: 'Book the visit', work: 'Open the checklist', signoff: 'Get it signed', quote: 'Send the quote', invoice: 'Make the invoice', payment: 'Record the payment', tasks: 'See the tasks', custom: 'Done' };
+  const JB_KIND = { client: ['👤', 'Add client info'], details: ['📝', 'Add job info'], book: ['🗓', 'Book a visit'], remind: ['🔔', 'Visit reminder'], omw: ['🚗', 'On my way'], work: ['🧰', 'Do the work'], signoff: ['✍️', 'Customer signs off'], quote: ['📨', 'Send the quote'], invoice: ['🧾', 'Send the invoice'], payment: ['💵', 'Collect payment'], review: ['⭐', 'Review request'], tasks: ['☑️', 'Tasks'], campaign: ['🚀', 'Run a campaign'], gearOut: ['📤', 'Gear check-out'], gearIn: ['📥', 'Gear check-in'], custom: ['⭐', 'Your own step'] };
+  const JB_HOW = { remind: 'Kloomie emails (or texts) the customer at 9am the day before the next visit.', omw: 'Done when someone taps On my way on the job’s visit.', review: 'Kloomie asks the customer for a review, a while after the step before it is done.', client: 'Done when a client is on the job.', details: 'Done when the fields you pick are filled in.', book: 'Done when a visit is booked.', work: 'Done when the job’s checklist is ticked (and photos are on it, if you ask for them).', signoff: 'Done when the customer signs.', quote: 'Done when the customer accepts the quote. The accepted quote is the price.', invoice: 'Done when an invoice is sent.', payment: 'Done when the job’s invoices are paid in full.', tasks: 'Done when its tasks are done or skipped.', campaign: 'Starts a campaign from a saved one, linked to the job, when the job gets here. Done when that campaign is done.', gearOut: 'Done when the gear it lists has gone out to the job (checked out in Inventory).', gearIn: 'Done when everything checked out to the job is back.', custom: 'Done when someone taps Done, after its checklist.' };
+  const JB_NEXT = { omw: '🚗 On my way', client: 'Add the client', details: 'Fill in the job', book: 'Book the visit', work: 'Open the checklist', signoff: 'Get it signed', quote: 'Send the quote', invoice: 'Make the invoice', payment: 'Record the payment', tasks: 'See the tasks', campaign: '🚀 Open the campaign', gearOut: '📤 Check out gear', gearIn: '📥 Check gear in', custom: 'Done' };
   const JB_MONEY = ['quote', 'invoice', 'payment'];
   const JB_AUTO = ['remind', 'review'];
   const JB_STATE = { done: 'done', skipped: 'skipped', current: 'next up', waiting: 'later' };
@@ -18633,7 +18635,76 @@
       case 'invoice': return jbInvoice(r, s);
       case 'payment': return jbPay(r);
       case 'custom': return jbStep(r, s, 'done');
+      case 'gearOut': case 'gearIn': return jbGear(r, s);
+      case 'campaign': return s.campaign ? openCampaign(s.campaign.id) : toast('Its campaign starts when the job gets here.');
     }
+  }
+  // Gear (PHASE4.md §5b): what the step needs and what's out on the job, checked out or back in through Inventory.
+  async function jbGear(r, s) {
+    let places = [];
+    try { places = (await api('GET', '/inventory')).places || []; } catch {}
+    const box = h('div', { class: 'jb-gear' });
+    const members = S.workspace?.members || [];
+    const draw = (g) => {
+      const rows = [];
+      for (const x of g.items || []) {
+        const left = x.need - x.got;
+        const unit = h('select', { 'aria-label': 'Which one', 'data-field': 'unit' }, x.free.map((u) => h('option', { value: u.id }, u.name)));
+        const who = h('select', { 'aria-label': 'Who’s taking it', 'data-field': 'who' }, members.map((m) => h('option', { value: m.id, selected: m.id === S.me?.memberId }, m.name)));
+        rows.push(h('div', { class: 'jb-gear-row', 'data-item': x.itemId },
+          h('b', {}, `${x.name}: ${x.got} of ${x.need} out`),
+          left <= 0 ? h('small', { class: 'muted' }, '✓ Enough out') : !x.free.length ? h('small', { class: 'jb-missing' }, `None available (${left} needed)`) :
+            h('div', { class: 'row2' }, unit, who, h('button', { class: 'btn small primary-btn', 'data-act': 'gear-out', onclick: () => act({ act: 'checkout', unitId: unit.value, memberId: who.value }) }, 'Check out'))));
+      }
+      if (s.kind === 'gearIn' || (g.out || []).length) {
+        rows.push(h('h4', {}, s.kind === 'gearIn' ? 'Out on this job' : 'Out on this job now'));
+        if (!(g.out || []).length) rows.push(h('small', { class: 'muted' }, 'Nothing is out on this job.'));
+        for (const u of g.out || []) {
+          const to = h('select', { 'aria-label': 'Where it goes back to', 'data-field': 'place' }, h('option', { value: '' }, 'Where it came from'), places.map((pl) => h('option', { value: pl.id }, pl.name)));
+          rows.push(h('div', { class: 'jb-gear-row', 'data-unit': u.unitId }, h('b', {}, `${u.name}`), h('small', { class: 'muted' }, `${u.item} · with ${members.find((m) => m.id === u.memberId)?.name || 'someone'}`),
+            s.kind === 'gearIn' ? h('div', { class: 'row2' }, to, h('button', { class: 'btn small primary-btn', 'data-act': 'gear-in', onclick: () => act({ act: 'return', unitId: u.unitId, ...(to.value ? { placeId: to.value } : {}) }) }, 'Check in')) : null));
+        }
+      }
+      for (const n of g.notes || []) rows.push(h('small', { class: 'jb-missing' }, n));
+      box.replaceChildren(...rows);
+    };
+    const act = async (body) => {
+      try {
+        const y = await api('POST', `/jobs/${r.id}/steps/${s.id}/gear`, body);
+        JB.runs.set(r.id, y.run);
+        draw(y.gear);
+        renderProjects();
+      } catch (e) {
+        toast(e.message);
+        const g = await api('GET', `/jobs/${r.id}/steps/${s.id}/gear`).catch(() => null);
+        if (g) draw(g);
+      }
+    };
+    const g = await api('GET', `/jobs/${r.id}/steps/${s.id}/gear`).catch((e) => { toast(e.message); return null; });
+    if (!g) return;
+    draw(g);
+    sheet(s.name, [h('p', { class: 'day-hint' }, s.kind === 'gearOut' ? 'Pick each one going out to this job (or scan its label in Inventory).' : 'Check each one back in. It goes back where it came from unless you pick a place.'), box], null);
+  }
+  // A job's files (PHASE4.md §1): its own stack, opened; an owner or admin makes it the first time.
+  async function jbFiles(r) {
+    if (r.stackId && stackById(r.stackId)) return showStack(r.stackId);
+    if (!amAdmin()) return toast('This job has no files stack yet. An owner or admin can add one.');
+    try { const y = await api('POST', `/jobs/${r.id}/stack`); r.stackId = y.stack.id; setTimeout(() => showStack(y.stack.id), 300); } catch (e) { toast(e.message); }
+  }
+  // Pin the job to a chat (PHASE4.md §4): whoever can see the job there sees its name and the step it's at.
+  function jbPinToChat(r) {
+    const chans = S.workspace?.channels || [];
+    const sel = h('select', { 'aria-label': 'Chat' }, h('option', { value: 'general' }, '# general'), chans.map((c) => h('option', { value: c.id }, '# ' + c.name)));
+    sheet('Pin to a chat', [h('label', {}, 'Chat', sel), h('small', { class: 'muted' }, 'People in the chat who can’t see this job get a locked chip.')], async () => {
+      const y = await api('POST', `/channels/${sel.value}/pins`, { kind: 'job', id: r.id });
+      toast(y.narrower ? 'Pinned. Not everyone in that chat can see this job.' : 'Pinned');
+    }, 'Pin it');
+  }
+  async function jbOpenById(id) {
+    let j = (JB.jobs || []).find((x) => x.id === id);
+    if (!j) { const y = await api('GET', '/jobs').catch(() => null); JB.jobs = y?.jobs || JB.jobs; j = (JB.jobs || []).find((x) => x.id === id); }
+    if (!j) return toast('That job is gone, or you can’t see it.');
+    openJob(j.projectId, j.id);
   }
   // Each message a step sends to the customer by itself: "Send by itself" or "Ask me first" (PHASE3B.md §2). Left
   // unset it asks first, as every flow published before this does.
@@ -18754,7 +18825,7 @@
   // and admins (their routes are theirs alone, whoever the step names).
   // An automatic invoice step has a button only when it waits for a person ($0, its owner can't send, refused);
   // held for an OK it waits for the approval alone (PHASE2.md §1.4).
-  const jbMayNext = (s) => s.state === 'current' && s.mayAct && !JB_AUTO.includes(s.kind) && (!['quote', 'invoice', 'payment'].includes(s.kind) || amAdmin()) && (!s.auto || ['zero', 'owner', 'refused'].includes(s.waiting));
+  const jbMayNext = (s) => s.state === 'current' && s.mayAct && !JB_AUTO.includes(s.kind) && (s.kind !== 'campaign' || !!s.campaign) && (!['quote', 'invoice', 'payment'].includes(s.kind) || amAdmin()) && (!s.auto || ['zero', 'owner', 'refused'].includes(s.waiting));
   const JB_QUOTE = { draft: 'Not sent yet', sent: 'Sent, waiting for the customer', viewed: 'The customer opened it', accepted: 'Accepted', declined: 'Declined', changed: 'The lines changed after it was accepted', stale: 'Answered before this flow started' };
   const JB_WAIT = { approval: 'Waiting for an OK: it sends when an approver says yes.', zero: 'Made, but the total is $0. Fix its lines and send it.', owner: 'Whoever started this job can’t send invoices any more. Make and send it by hand.', refused: 'It couldn’t be sent.' };
   // On a job's Overview: its flow's steps in a row, the one picked (or next up) under it with its button.
@@ -18766,7 +18837,7 @@
       if (!amAdmin()) return null;
       if (!JB.flows) { jbLoad(); return null; }
       const fit = JB.flows.filter((f) => f.version && !f.archived && f.version.body.list.projectId === p.id && f.version.body.list.typeId === t.id);
-      return fit.length ? h('div', { class: 'jb-card jb-none' }, h('small', { class: 'muted' }, 'Not on a job flow.'), h('button', { class: 'btn small', 'data-act': 'put-on', onclick: () => jbPutOn(r, fit) }, 'Put on a flow')) : null;
+      return fit.length ? h('div', { class: 'jb-card jb-none' }, h('small', { class: 'muted' }, 'Not on a job flow.'), h('button', { class: 'btn small', 'data-act': 'put-on', onclick: () => jbPutOn(r, fit) }, 'Put on a flow'), h('button', { class: 'btn small', 'data-act': 'files', onclick: () => jbFiles(r) }, '📁 Files')) : null;
     }
     const cur = run.steps.find((x) => x.state === 'current');
     const pickId = run.steps.some((x) => x.id === JB.pick[r.id]) ? JB.pick[r.id] : cur?.id || run.steps.at(-1)?.id;
@@ -18797,23 +18868,30 @@
         box.addEventListener('change', () => jbStep(r, s, 'check', { item: i, done: box.checked }));
         return h('label', { class: 'pick' }, box, c.text);
       })) : null,
+      s.gear && s.kind === 'gearOut' ? h('div', { class: 'jb-gearsum' }, s.gear.items.map((x) => h('small', { class: x.got >= x.need ? 'muted' : null }, `${x.got >= x.need ? '✓' : '○'} ${x.name}: ${x.got} of ${x.need} out`))) : null,
+      s.gear && s.kind === 'gearIn' ? h('div', { class: 'jb-gearsum' }, s.gear.out.length ? h('small', {}, 'Still out: ' + s.gear.out.map((u) => u.name).join(', ')) : h('small', { class: 'muted' }, 'Nothing out on the job.'), ...s.gear.notes.map((n) => h('small', { class: 'jb-missing' }, n))) : null,
+      s.campaign ? h('small', { class: 'jb-camp', 'data-campaign': s.campaign.status }, `🚀 ${s.campaign.name} · ${s.campaign.status === 'done' ? 'done' : 'going'}`) : null,
+      s.stock && (s.stock.used.length || s.stock.notes.length) ? h('div', { class: 'jb-stock' }, s.stock.used.length ? h('small', {}, 'Used from stock: ' + s.stock.used.map((u) => `${u.qty} × ${u.name}`).join(', ')) : null, ...s.stock.notes.map((n) => h('small', { class: 'jb-missing' }, n))) : null,
       s.kind === 'tasks' && s.tasks ? h('div', { class: 'jb-tasks' }, s.tasks.map((x) => h('small', { class: x.done || x.skipped ? 'muted' : null }, `${x.done ? '✓' : x.skipped ? '–' : '○'} ${x.text}`)), s.more ? h('small', { class: 'muted' }, `and ${s.more} more`) : null) : null,
       h('div', { class: 'jb-acts' },
         jbMayNext(s) ? h('button', { class: 'btn small primary-btn', 'data-act': 'next', onclick: () => jbAction(p, t, r, s) }, s.kind === 'quote' && s.quote?.url ? '🔗 Copy the quote link' : JB_NEXT[s.kind]) : null,
         s.kind === 'quote' && admin && s.quote?.mayRequote && ['declined', 'accepted', 'changed', 'viewed', 'sent', 'stale'].includes(s.quote.status) ? h('button', { class: 'btn small', 'data-act': 'requote', onclick: () => jbRequote(r) }, 'New quote') : null,
         open && (admin || (s.canSkip && s.mayAct)) ? h('button', { class: 'btn small', 'data-act': 'skip', onclick: () => jbSkip(r, s) }, 'Skip') : null,
         !open && admin ? h('button', { class: 'btn small', 'data-act': 'reopen', onclick: () => jbStep(r, s, 'reopen') }, 'Reopen') : null)) : null;
-    const menu = admin ? h('button', { class: 'icon-btn', html: I.more, 'aria-label': 'Flow options', onclick: (e) => {
-      const others = (JB.flows || []).filter((f) => f.id !== run.flowId && f.version && !f.archived && f.version.body.list.projectId === p.id && f.version.body.list.typeId === t.id);
+    const menu = h('button', { class: 'icon-btn', html: I.more, 'aria-label': admin ? 'Flow options' : 'Job options', 'data-act': 'job-menu', onclick: (e) => {
+      const others = admin ? (JB.flows || []).filter((f) => f.id !== run.flowId && f.version && !f.archived && f.version.body.list.projectId === p.id && f.version.body.list.typeId === t.id) : [];
       openMenu(e.currentTarget, [
+        { label: 'Pin to a chat…', run: () => jbPinToChat(r) },
         others.length ? { label: 'Move to another flow…', run: () => jbPutOn(r, others, true) } : null,
-        run.status === 'active' ? { label: 'Take it off this flow…', danger: true, run: () => jbOffFlow(r, run) } : null,
+        admin && run.status === 'active' ? { label: 'Take it off this flow…', danger: true, run: () => jbOffFlow(r, run) } : null,
       ].filter(Boolean));
-    } }) : null;
+    } });
+    const files = r.stackId || admin ? h('button', { class: 'btn small', 'data-act': 'files', title: 'The job’s files: photos, plans, notes', onclick: () => jbFiles(r) }, '📁 Files') : null;
     if (admin && !JB.flows) jbLoad();
     return h('div', { class: 'jb-card', 'data-run': run.id },
       h('div', { class: 'jb-ch' }, h('b', {}, `${run.icon || '🧰'} ${run.flowName}`), h('small', { class: 'muted' }, run.status === 'done' ? '✓ Every step done' : `${run.done} of ${run.total} done`),
-        h('span', { class: 'lead-bar', style: '--c:var(--accent)' }, h('i', { style: `width:${Math.round((run.done / Math.max(1, run.total)) * 100)}%` })), menu),
+        h('span', { class: 'lead-bar', style: '--c:var(--accent)' }, h('i', { style: `width:${Math.round((run.done / Math.max(1, run.total)) * 100)}%` })), files, menu),
+      run.gearLine ? h('small', { class: 'jb-gearline', 'data-gear': '1' }, '🧰 ' + run.gearLine) : null,
       steps, detail);
   }
 
@@ -18846,13 +18924,26 @@
 
   // Job Flows (owners and admins): the flows, a new one (blank or from a ready-made start), and the builder.
   // A draft that differs from the live version in anything a version keeps (billing, default items and due days too).
-  const jbBodyKey = (b) => JSON.stringify({ l: b?.list, w: b?.whoCreates || 'admins', s: b?.steps, b: b?.billing || 'hand', i: b?.items || [], d: b?.dueDays ?? null });
+  // Steps compare without what publishing copies in (a bundle's tasks, a saved campaign), which the draft gets too.
+  const jbStepsKey = (steps) => (steps || []).map((x) => ({ ...x, settings: x.settings && Object.fromEntries(Object.entries(x.settings).filter(([k]) => !['template', 'templateFrom', 'bundleFrom'].includes(k) && !(k === 'tasks' && x.settings.bundleId))) }));
+  const jbBodyKey = (b) => JSON.stringify({ l: b?.list, w: b?.whoCreates || 'admins', s: jbStepsKey(b?.steps), b: b?.billing || 'hand', i: b?.items || [], d: b?.dueDays ?? null, k: !!b?.stack });
   const jbChanged = (f) => !!f.version && jbBodyKey(f.draft) !== jbBodyKey(f.version.body);
   // Items: the business's price list (PHASE2.md §1.1): what a flow's default lines and quotes draw from.
   function jbItemsLoad(force) {
     if (JB.itemsBusy || (JB.items && !force)) return;
     JB.itemsBusy = true;
     api('GET', '/job-items').then((y) => { JB.items = y.items; }).catch((e) => toast(e.message)).finally(() => { JB.itemsBusy = false; jbRender(); });
+  }
+  // Saved bundles and Inventory's places and gear, for the builder (loaded once when a step needs them).
+  function jbPresetsLoad() {
+    if (JB.presets || JB.presetsBusy) return;
+    JB.presetsBusy = true;
+    api('GET', '/task-presets').then((y) => { JB.presets = y.presets || []; }).catch(() => { JB.presets = []; }).finally(() => { JB.presetsBusy = false; jbRender(); });
+  }
+  function jbInvLoad() {
+    if (JB.places || JB.invBusy) return;
+    JB.invBusy = true;
+    api('GET', '/inventory').then((y) => { JB.places = y.places || []; JB.invItems = y.items || []; }).catch(() => { JB.places = []; JB.invItems = []; }).finally(() => { JB.invBusy = false; jbRender(); });
   }
   const jbCents = (v) => { const n = Math.round(Number(String(v ?? '').replace(/[$,\s]/g, '')) * 100); return Number.isFinite(n) ? n : NaN; };
   function jbItemSheet(x) {
@@ -18944,8 +19035,12 @@
   }
   function jbEdit(f) {
     const d = f.draft || f.version?.body;
-    JB.edit = { id: f.id, name: f.name, icon: f.icon || '🧰', list: { ...d.list }, whoCreates: d.whoCreates || 'admins', billing: d.billing || 'hand', items: JSON.parse(JSON.stringify(d.items || [])), dueDays: d.dueDays ?? null, steps: JSON.parse(JSON.stringify(d.steps || [])), err: '' };
+    JB.edit = { id: f.id, name: f.name, icon: f.icon || '🧰', list: { ...d.list }, whoCreates: d.whoCreates || 'admins', stack: !!d.stack, billing: d.billing || 'hand', items: JSON.parse(JSON.stringify(d.items || [])), dueDays: d.dueDays ?? null, steps: JSON.parse(JSON.stringify(d.steps || [])), err: '' };
     JB.tab = 'flows';
+    // What step settings pick from (saved bundles; Inventory's places and gear), loaded fresh as the builder opens.
+    JB.presets = null; JB.places = null; JB.invItems = null;
+    jbPresetsLoad();
+    if (toolOn('inventory')) jbInvLoad();
     if (toolOpen !== 'jobs') openTool('jobs'); else renderTool(true);
   }
   // The builder: name, list, who starts jobs, and the steps (add, rename, reorder, remove, who, stage, settings).
@@ -18983,8 +19078,8 @@
         ...roles.map((r) => h('option', { value: 'role:' + r.id, selected: wv === 'role:' + r.id }, `The ${r.name} role`)), ...members.map((m) => h('option', { value: 'member:' + m.id, selected: wv === 'member:' + m.id }, m.name)));
       wsel.addEventListener('change', () => { const [type, id] = wsel.value.split(':'); s.who = id ? { type, id } : { type }; });
       // Money steps are for owners and admins, whatever else (PHASE2.md §1.2).
-      if (JB_MONEY.includes(s.kind) || JB_AUTO.includes(s.kind)) s.who = { type: 'admins' };
-      const whoEl = JB_AUTO.includes(s.kind) ? h('small', { class: 'muted jb-who-fixed', 'data-field': 'who' }, '🤖 Done by Kloomie') : JB_MONEY.includes(s.kind) ? h('small', { class: 'muted jb-who-fixed', 'data-field': 'who' }, 'For owners and admins') : wsel;
+      if (JB_MONEY.includes(s.kind) || JB_AUTO.includes(s.kind) || s.kind === 'campaign') s.who = { type: 'admins' };
+      const whoEl = JB_AUTO.includes(s.kind) ? h('small', { class: 'muted jb-who-fixed', 'data-field': 'who' }, '🤖 Done by Kloomie') : JB_MONEY.includes(s.kind) || s.kind === 'campaign' ? h('small', { class: 'muted jb-who-fixed', 'data-field': 'who' }, 'For owners and admins') : wsel;
       const skip = h('input', { type: 'checkbox', checked: !!s.canSkip });
       skip.addEventListener('change', () => { s.canSkip = skip.checked; });
       s.settings ||= {};
@@ -19026,12 +19121,45 @@
         extra = h('label', {}, 'Reminders, days after it’s due (up to 3)', rm);
       } else if (s.kind === 'work') {
         const b = h('input', { type: 'checkbox', checked: !!s.settings.photos });
-        b.addEventListener('change', () => { s.settings = b.checked ? { photos: true } : {}; });
-        extra = h('label', { class: 'pick' }, b, 'Needs photos on the job too');
+        b.addEventListener('change', () => { s.settings.photos = b.checked || undefined; });
+        // Stock off Inventory when the work is done (PHASE4.md §5).
+        const inv = toolOn('inventory');
+        const use = h('input', { type: 'checkbox', checked: !!s.settings.useStock, 'data-field': 'useStock' });
+        const pl = h('select', { 'aria-label': 'From which place', 'data-field': 'fromPlace' }, h('option', { value: '' }, 'Pick a place…'), (JB.places || []).map((x) => h('option', { value: x.id, selected: s.settings.fromPlace === x.id }, x.name)));
+        use.addEventListener('change', () => { if (use.checked) { s.settings.useStock = true; s.settings.fromPlace = pl.value; } else { delete s.settings.useStock; delete s.settings.fromPlace; } redraw(); });
+        pl.addEventListener('change', () => { s.settings.fromPlace = pl.value; });
+        if (inv) jbInvLoad();
+        extra = h('div', {}, h('label', { class: 'pick' }, b, 'Needs photos on the job too'),
+          inv ? h('label', { class: 'pick' }, use, 'Use the job’s stock from Inventory when it’s done') : null,
+          inv && s.settings.useStock ? h('label', {}, 'From', pl) : null);
       } else if (s.kind === 'tasks') {
         const ta = h('textarea', { rows: 3, placeholder: 'One task a line', 'data-field': 'tasks' }, (s.settings.tasks || []).join('\n'));
         ta.addEventListener('input', () => { s.settings.tasks = ta.value.split('\n').map((x) => x.trim()).filter(Boolean); });
-        extra = h('label', {}, 'Its tasks (made when a job starts)', ta);
+        // Or a saved bundle, copied in when the flow is published (PHASE4.md §3).
+        jbPresetsLoad();
+        const bundles = (JB.presets || []).filter((x) => x.kind === 'bundle');
+        const bsel = h('select', { 'aria-label': 'Saved bundle', 'data-field': 'bundle' }, h('option', { value: '' }, 'Write the tasks here'), bundles.map((x) => h('option', { value: x.id, selected: s.settings.bundleId === x.id }, `From the bundle “${x.name}”`)));
+        bsel.addEventListener('change', () => { if (bsel.value) s.settings.bundleId = bsel.value; else delete s.settings.bundleId; redraw(); });
+        extra = h('div', {}, bundles.length || s.settings.bundleId ? h('label', {}, 'Its tasks', bsel) : null,
+          s.settings.bundleId ? h('small', { class: 'muted' }, 'The bundle’s tasks are copied in when you publish. Change the bundle later and publish again to pick it up.') : h('label', {}, 'Its tasks (made when a job starts)', ta));
+      } else if (s.kind === 'campaign') {
+        const tpls = S.templates || [];
+        const tsel = h('select', { 'aria-label': 'Saved campaign', 'data-field': 'template' }, h('option', { value: '' }, tpls.length ? 'Pick a saved campaign…' : 'No saved campaigns yet (save one from a campaign’s menu)'), tpls.map((x) => h('option', { value: x.id, selected: s.settings.templateId === x.id }, x.name)));
+        tsel.addEventListener('change', () => { if (tsel.value) s.settings.templateId = tsel.value; else delete s.settings.templateId; });
+        extra = h('div', {}, h('label', {}, 'Starts this saved campaign', tsel), h('small', { class: 'muted' }, 'Copied in when you publish; the campaign is linked to the job and doesn’t move its stage.'));
+      } else if (s.kind === 'gearOut') {
+        jbInvLoad();
+        s.settings.items ||= [];
+        const gear = (JB.invItems || []).filter((x) => x.track === 'units' && !x.archived);
+        const rows = s.settings.items.map((x, k) => {
+          const q = h('input', { type: 'number', min: 1, max: 20, step: 1, value: x.qty, class: 'jb-qty', 'aria-label': 'How many' });
+          q.addEventListener('input', () => { x.qty = Number(q.value); });
+          return h('div', { class: 'jb-defrow', 'data-gear-item': x.itemId }, q, h('span', {}, gear.find((y) => y.id === x.itemId)?.name || 'Gear that was deleted'), h('button', { class: 'icon-btn', html: I.close, 'aria-label': 'Remove', onclick: () => { s.settings.items.splice(k, 1); redraw(); } }));
+        });
+        const add = gear.filter((y) => !s.settings.items.some((x) => x.itemId === y.id));
+        const pick = h('select', { 'aria-label': 'Add gear', 'data-field': 'add-gear' }, h('option', { value: '' }, add.length ? '+ Add gear…' : gear.length ? 'All your gear is in' : 'No gear tracked one by one in Inventory yet'), add.map((y) => h('option', { value: y.id }, y.name)));
+        pick.addEventListener('change', () => { if (pick.value) { s.settings.items.push({ itemId: pick.value, qty: 1 }); redraw(); } });
+        extra = h('div', {}, h('small', { class: 'muted' }, 'The gear going out to the job:'), ...rows, pick);
       } else if (s.kind === 'custom') {
         const tx = h('textarea', { rows: 2, placeholder: 'What to do', 'data-field': 'text' }, s.settings.text || '');
         tx.addEventListener('input', () => { s.settings.text = tx.value; });
@@ -19050,7 +19178,9 @@
         ['remind', 'review', 'quote', 'payment'].includes(s.kind) || (s.kind === 'invoice' && E.billing === 'auto') ? jbSendPick(s) : null,
         h('label', { class: 'pick' }, skip, 'Whoever does it may skip it (with a reason)'));
     };
-    const add = h('button', { class: 'btn', 'data-act': 'add-step', onclick: (e) => openMenu(e.currentTarget, Object.entries(JB_KIND).filter(([k]) => k !== 'quote' || (E.billing === 'quote' && !E.steps.some((x) => x.kind === 'quote'))).map(([k, [ic, l]]) => ({ label: `${ic} ${l}`, run: () => { E.steps.push({ kind: k, name: l, stage: null, who: { type: JB_MONEY.includes(k) || JB_AUTO.includes(k) ? 'admins' : 'anyone' }, canSkip: false, settings: k === 'tasks' ? { tasks: [] } : k === 'review' ? { delayHours: 1 } : {} }); redraw(); } }))) }, '+ Add a step');
+    const add = h('button', { class: 'btn', 'data-act': 'add-step', onclick: (e) => openMenu(e.currentTarget, Object.entries(JB_KIND).filter(([k]) => (k !== 'quote' || (E.billing === 'quote' && !E.steps.some((x) => x.kind === 'quote'))) && (!['gearOut', 'gearIn'].includes(k) || toolOn('inventory'))).map(([k, [ic, l]]) => ({ label: `${ic} ${l}`, run: () => { E.steps.push({ kind: k, name: l, stage: null, who: { type: JB_MONEY.includes(k) || JB_AUTO.includes(k) || k === 'campaign' ? 'admins' : 'anyone' }, canSkip: false, settings: k === 'tasks' ? { tasks: [] } : k === 'review' ? { delayHours: 1 } : k === 'gearOut' ? { items: [] } : {} }); redraw(); } }))) }, '+ Add a step');
+    const stackBox = h('input', { type: 'checkbox', checked: !!E.stack, 'data-field': 'stack' });
+    stackBox.addEventListener('change', () => { E.stack = stackBox.checked; });
     // Billing: by hand, quote first (puts a Send the quote step before the invoice), or automatic.
     const bill = h('select', { 'aria-label': 'Billing', 'data-field': 'billing' }, [['hand', 'By hand: an owner or admin sends the invoice'], ['quote', 'Quote first: the customer accepts a quote, then the invoice'], ['auto', 'Automatic: the invoice sends itself after the work']].map(([k, l]) => h('option', { value: k, selected: E.billing === k }, l)));
     bill.addEventListener('change', () => {
@@ -19079,7 +19209,7 @@
     const addItem = live.filter((x) => !E.items.some((y) => y.itemId === x.id));
     const itemPick = h('select', { 'aria-label': 'Add a default item', 'data-field': 'add-item' }, h('option', { value: '' }, addItem.length ? '+ Add a default item…' : JB.items?.length ? 'Every item is in' : 'No items yet (Jobs → Items)'), addItem.map((x) => h('option', { value: x.id }, `${x.name} · ${money2(x.price)}`)));
     itemPick.addEventListener('change', () => { if (itemPick.value) { E.items.push({ itemId: itemPick.value, qty: 1 }); redraw(); } });
-    const body = () => ({ name: E.name.trim(), icon: E.icon.trim() || '🧰', list: E.list, whoCreates: E.whoCreates, billing: E.billing, items: E.items, dueDays: E.dueDays, steps: E.steps.map((s) => ({ ...(s.id ? { id: s.id } : {}), kind: s.kind, name: s.name, stage: s.stage || null, who: s.who || { type: 'anyone' }, canSkip: !!s.canSkip, settings: s.settings || {} })) });
+    const body = () => ({ name: E.name.trim(), icon: E.icon.trim() || '🧰', list: E.list, whoCreates: E.whoCreates, stack: !!E.stack, billing: E.billing, items: E.items, dueDays: E.dueDays, steps: E.steps.map((s) => ({ ...(s.id ? { id: s.id } : {}), kind: s.kind, name: s.name, stage: s.stage || null, who: s.who || { type: 'anyone' }, canSkip: !!s.canSkip, settings: s.settings || {} })) });
     const keep = (y) => { const i = JB.flows.findIndex((x) => x.id === y.id); if (i >= 0) JB.flows[i] = y; else JB.flows.push(y); };
     const save = async (publish) => {
       try {
@@ -19096,6 +19226,7 @@
         f?.version ? h('small', { class: 'muted' }, `Version ${f.version.n} is live`) : h('small', { class: 'muted' }, 'Not published yet')),
       h('div', { class: 'jb-nameline' }, icon, name),
       h('div', { class: 'row2' }, h('label', {}, 'For the jobs on', list), h('label', {}, 'Who starts jobs on it', who)),
+      h('label', { class: 'pick' }, stackBox, 'Give each job a 📁 Files stack (photos, plans, notes), seen by whoever sees the job'),
       h('div', { class: 'jb-money' }, h('label', {}, 'Billing', bill), h('div', { class: 'row2' }, h('div', {}, h('small', { class: 'muted' }, 'Default items on a new job'), itemRows, itemPick), h('label', {}, 'Invoices due in (days)', due))),
       h('div', { class: 'jb-scards' }, E.steps.map(stepCard)),
       add,
@@ -22731,10 +22862,30 @@
         p.kind === 'back' ? h('button', { class: 'btn small', onclick: () => { MP.map.closePopup(); savePin(p, false, { done: !p.done }); } }, p.done ? 'Not done' : 'Done') : null,
         del));
   }
+  // Jobs and clients (PHASE4.md §2): looked up by the server each time, never kept; a pin opens the job.
+  function mapJobsLoad() {
+    MP.jobBusy = true;
+    api('GET', '/map/jobs' + (MP.jobUndated ? '?undated=1' : '')).then((y) => { MP.jobPts = y; }).catch((e) => { MP.jobPts = { points: [], more: 0, missing: 0 }; toast(e.message); }).finally(() => { MP.jobBusy = false; if (MP.mode === 'jobs') { mapDraw(true); renderTool(true); } });
+  }
+  function drawJobs(fit) {
+    const pts = MP.jobPts?.points || [];
+    const color = (x) => (x.kind === 'client' ? '#8a94a6' : x.next ? '#e8890c' : x.flow ? '#1f9d55' : '#6b5cf0');
+    for (const x of pts) {
+      const m = L.circleMarker([x.lat, x.lng], { radius: x.kind === 'client' ? 6 : 9, color: '#fff', weight: 2, fillColor: color(x), fillOpacity: 1, bubblingMouseEvents: false });
+      m.bindPopup(() => h('div', { class: 'map-pop', 'data-point': x.id },
+        h('small', { class: 'map-kind' }, x.kind === 'client' ? 'Client, no job' : [x.scheduled ? dueLabel(x.scheduled) : 'No day', x.stage].filter(Boolean).join(' · ')),
+        h('b', {}, x.name), h('p', { class: 'map-note' }, x.address),
+        x.next ? h('small', { class: 'map-when' }, `Next: ${x.next}`) : x.flow ? h('small', { class: 'map-when' }, `${x.flow} · done`) : null,
+        x.kind === 'job' ? h('div', { class: 'map-pop-btns' }, h('button', { class: 'btn small primary-btn', onclick: () => { MP.map.closePopup(); jbOpenById(x.id); } }, 'Open the job')) : null), { maxWidth: 260 });
+      m.addTo(MP.group);
+    }
+    if (fit && pts.length) MP.map.fitBounds(pts.map((x) => [x.lat, x.lng]), { padding: [30, 30], maxZoom: 14 });
+  }
   function mapDraw(fit) {
     if (!MP.group) return;
     MP.group.clearLayers();
     MP.live = null;
+    if (MP.mode === 'jobs') return drawJobs(fit);
     if (MP.mode === 'routes') return drawRoute(fit);
     if (MP.mode === 'miles') return drawDrives(fit);
     if (MP.show === 'all' || MP.show === 'done') {
@@ -22986,8 +23137,22 @@
   }
 
   function mapTool() {
-    const modes = h('div', { class: 'seg map-mode' }, [['canvass', 'Canvassing'], ['miles', 'Mileage'], ...(toolOn('projects') ? [['routes', 'Job routes']] : [])].map(([k, l]) => h('button', { class: (MP.mode || 'canvass') === k ? 'on' : '', onclick: () => { MP.mode = k; renderTool(true); mapDraw(true); } }, l)));
+    const modes = h('div', { class: 'seg map-mode' }, [['canvass', 'Canvassing'], ['miles', 'Mileage'], ...(toolOn('projects') ? [['routes', 'Job routes'], ['jobs', 'Jobs']] : [])].map(([k, l]) => h('button', { class: (MP.mode || 'canvass') === k ? 'on' : '', 'data-mode': k, onclick: () => { MP.mode = k; if (k === 'jobs') mapJobsLoad(); renderTool(true); mapDraw(true); } }, l)));
     if (MP.mode === 'miles') return milesPanel(modes);
+    if (MP.mode === 'jobs' && toolOn('projects')) {
+      const box = mapBox();
+      box.classList.remove('ml-map');
+      if (MP.map) setTimeout(() => MP.map.invalidateSize(), 0);
+      if (!MP.jobPts && !MP.jobBusy) mapJobsLoad();
+      const y = MP.jobPts;
+      const und = h('input', { type: 'checkbox', checked: !!MP.jobUndated, 'data-field': 'undated' });
+      und.addEventListener('change', () => { MP.jobUndated = und.checked; mapJobsLoad(); });
+      const jobsN = (y?.points || []).filter((x) => x.kind === 'job').length, clientsN = (y?.points || []).filter((x) => x.kind === 'client').length;
+      return [modes,
+        h('div', { class: 'map-run' }, h('span', { class: 'map-stats', 'data-jobs': jobsN }, !y ? 'Loading jobs…' : y.off ? 'The map isn’t set up yet (MAPBOX_TOKEN).' : `${plural(jobsN, 'job')} in the next 30 days${clientsN ? ` · ${plural(clientsN, 'client')} without a job` : ''}${y.missing ? ` · ${y.missing} couldn’t be found on the map` : ''}${y.more ? ` · ${y.more} more not shown` : ''}`),
+          h('label', { class: 'pick' }, und, 'Jobs with no day too')),
+        box];
+    }
     if (MP.mode === 'routes' && toolOn('projects')) {
       const box = mapBox();
       box.classList.remove('ml-map');

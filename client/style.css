@@ -5165,3 +5165,12 @@ body:not(.wide) .cc-phases { padding: 12px 10px; }
 .ccp-h-team { display: flex; align-items: center; gap: 2px; }
 .cc-card.cc-pulse-ai { margin-top: 0; }
 .ccp-report, .ccp-log { display: flex; flex-direction: column; gap: 14px; }
+
+/* Job Flows Phase 4: gear sheets, the gear line, stock and campaign notes on a step */
+.jb-gear { display: flex; flex-direction: column; gap: 10px; }
+.jb-gear h4 { margin: 8px 0 0; }
+.jb-gear-row { display: flex; flex-direction: column; gap: 4px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; }
+.jb-gear-row .row2 { align-items: center; }
+.jb-gearsum, .jb-stock { display: flex; flex-direction: column; gap: 2px; }
+.jb-gearline { display: block; margin: 2px 0 6px; color: var(--muted); }
+.jb-camp { display: block; }

@@ -50,7 +50,7 @@ try {
   const auth = await (await fetch(APP + 'api/auth', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ mode: 'create', workspace: 'Jobs ' + t, name: 'Rico Vega', email: `r${t}@t.test`, password: 'longenough1', device: 'Mac', deviceId: 'd1' }) })).json();
   const api = async (m, p, body) => (await fetch(APP + 'api' + p, { method: m, headers: { 'content-type': 'application/json', authorization: 'Bearer ' + auth.token }, body: body ? JSON.stringify(body) : undefined })).json();
   const st = await api('GET', '/state');
-  await api('PATCH', '/workspace', { tools: { ...st.workspace.tools, projects: true, contacts: true } });
+  await api('PATCH', '/workspace', { tools: { ...st.workspace.tools, projects: true, contacts: true, inventory: true, map: true } });
   const p = await api('POST', '/projects', { template: 'trades', trades: ['cleaning'] });
   const tp = p.types[0];
   const dc = await api('POST', '/contacts', { name: 'Dana Ruiz', phone: '555-0100', address: '10 A St' });
@@ -354,6 +354,72 @@ try {
   // Next from the list opens the job at its step.
   await A.tap(`document.querySelector('#tool .jb-row[data-job="${made.job.id}"] .jb-next')`);
   ok(await A.until(`!!document.querySelector('#projects .jb-card') && document.querySelector('#projects .pj-tab.on')?.dataset.tab === 'client'`, 8000), 'Next on a job in the list opens it at its step (Add client info → the Client tab), its flow still in sight: ' + await A.ev(`[!!document.querySelector('#projects .jb-card'), document.querySelector('#projects .pj-tab.on')?.dataset.tab, [...document.querySelectorAll('#projects .pj-tab')].map((x) => x.dataset.tab).join(','), document.querySelector('#projects .pj-panel h2, #projects .pj-title')?.textContent].join(' | ')`));
+
+  // Phase 4 (docs/jobflows/PHASE4.md): the builder's new steps and Files setting; a job with its Files and gear steps
+  // (Next opens the gear sheet, Check out, the gear line, Check in); Pin to a chat; the Map's Jobs mode.
+  const washer = await api('POST', '/inventory/items', { name: 'Pressure washer', track: 'units', onHand: 2 });
+  await api('POST', '/task-presets', { kind: 'bundle', name: 'Prep', steps: [{ presetId: (await api('POST', '/task-presets', { text: 'Load the truck' })).id }] });
+  await A.ev(`document.querySelector('#workTabs [data-tab=jobs]').click(); true`);
+  await A.until(`!!document.querySelector('#tool [data-jb=flows]')`);
+  await A.tap(TOOL('[data-jb=flows]'));
+  await A.until(`!!${TOOL('[data-act=new-flow]')}`);
+  await A.tap(TOOL('[data-act=new-flow]'));
+  await A.until(`!document.querySelector('#sheet').classList.contains('hidden')`);
+  await A.type(`document.querySelector('#sheet input')`, 'Pressure wash');
+  await A.pick(`document.querySelector('#sheet select[aria-label="Start from"]')`, 'blank');
+  await A.tap(btnText('#sheet', 'Make it'));
+  ok(await A.until(`document.querySelectorAll('#tool .jb-scard').length === 1`), '(setup) a blank flow in the builder');
+  ok(await A.ev(`!!${TOOL('input[data-field=stack]')}`), 'the builder offers a Files stack for each job');
+  await A.ev(`(() => { const b = ${TOOL('input[data-field=stack]')}; b.checked = true; b.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
+  await A.tap(TOOL('[data-act=add-step]'));
+  ok(await A.ev(`['Gear check-out', 'Gear check-in', 'Run a campaign'].every((l) => [...document.querySelectorAll('#menu button')].some((b) => b.textContent.includes(l)))`), '+ Add a step offers Gear check-out, Gear check-in and Run a campaign');
+  await A.tap(`[...document.querySelectorAll('#menu button')].find((b) => b.textContent.includes('Gear check-out'))`);
+  ok(await A.until(`!!${TOOL('.jb-scard[data-kind=gearOut] select[data-field=add-gear]')} && [...${TOOL('.jb-scard[data-kind=gearOut] select[data-field=add-gear]')}.options].some((o) => o.value === ${JSON.stringify(washer.id)})`), 'a check-out step picks gear tracked one by one from Inventory');
+  await A.pick(TOOL('.jb-scard[data-kind=gearOut] select[data-field=add-gear]'), washer.id);
+  ok(await A.until(`!!${TOOL(`.jb-scard[data-kind=gearOut] [data-gear-item="${washer.id}"]`)}`), 'and lists it with how many');
+  await A.tap(TOOL('[data-act=add-step]'));
+  await A.tap(`[...document.querySelectorAll('#menu button')].find((b) => b.textContent.includes('Gear check-in'))`);
+  await A.tap(TOOL('[data-act=add-step]'));
+  await A.tap(`[...document.querySelectorAll('#menu button')].find((b) => b.textContent.includes('Tasks'))`);
+  ok(await A.until(`!!${TOOL('.jb-scard[data-kind=tasks] select[data-field=bundle]')}`), 'a Tasks step can take a saved bundle');
+  await A.pick(TOOL('.jb-scard[data-kind=tasks] select[data-field=bundle]'), await A.ev(`[...${TOOL('.jb-scard[data-kind=tasks] select[data-field=bundle]')}.options].find((o) => o.textContent.includes('Prep')).value`));
+  await A.tap(TOOL('.jb-scard[data-kind=custom] [aria-label="Remove step"]'));
+  await A.tap(TOOL('[data-act=publish]'));
+  await A.until(`!!${TOOL('[data-act=new-flow]')}`, 8000);
+  const pw = (await api('GET', '/job-flows')).flows.find((f) => f.name === 'Pressure wash');
+  ok(pw?.version?.body?.stack === true && pw.version.body.steps.map((x) => x.kind).join() === 'gearOut,gearIn,tasks' && pw.version.body.steps[0].settings.items[0]?.itemId === washer.id && pw.version.body.steps[2].settings.tasks?.[0] === 'Load the truck', 'published: Files on, check-out (the washer), check-in, and the bundle’s tasks copied in: ' + JSON.stringify(pw?.version?.body?.steps?.map((x) => [x.kind, x.settings])));
+  const gj = await api('POST', '/jobs', { flowId: pw.id, values: { job: 'Deck wash' } });
+  await openJobIn(gj.job.id);
+  ok(await A.until(`document.querySelector('#projects .jb-step[data-state=current]')?.textContent.includes('Gear check-out')`, 8000), '(setup) the job is at Gear check-out');
+  ok(await A.ev(`!!document.querySelector('#projects .jb-card [data-act=files]')`), 'the job card has 📁 Files');
+  await A.tap(`document.querySelector('#projects .jb-detail [data-act=next]')`);
+  ok(await A.until(`!!document.querySelector('#sheet .jb-gear-row[data-item="${washer.id}"]') && document.querySelector('#sheet .jb-gear-row').textContent.includes('0 of 1 out')`), 'Next opens the gear sheet: Pressure washer 0 of 1 out, with one to pick');
+  await A.tap(`document.querySelector('#sheet [data-act=gear-out]')`);
+  ok(await A.until(`document.querySelector('#sheet .jb-gear-row[data-item="${washer.id}"]')?.textContent.includes('1 of 1 out')`), 'Check out: 1 of 1 out');
+  await A.ev(`document.querySelector('#sheet [aria-label=Close]').click(); true`);
+  ok(await A.until(`document.querySelector('#projects .jb-gearline')?.textContent.includes('Gear out: Pressure washer') && document.querySelector('#projects .jb-step[data-state=current]')?.textContent.includes('Gear check-in')`, 8000), 'the card shows the gear out, and check-in is next');
+  await A.tap(`document.querySelector('#projects .jb-detail [data-act=next]')`);
+  ok(await A.until(`!!document.querySelector('#sheet [data-act=gear-in]')`), 'Next on check-in lists what’s out, each with Check in');
+  await A.tap(`document.querySelector('#sheet [data-act=gear-in]')`);
+  ok(await A.until(`document.querySelector('#sheet .jb-gear')?.textContent.includes('Nothing is out on this job')`), 'checked in: nothing out');
+  await A.ev(`document.querySelector('#sheet [aria-label=Close]').click(); true`);
+  ok(await A.until(`!document.querySelector('#projects .jb-gearline') && document.querySelector('#projects .jb-step[data-state=current]')?.textContent.includes('Tasks')`, 8000), 'the gear line goes and the Tasks step is next');
+  await shot('5-gear');
+  await A.tap(`document.querySelector('#projects .jb-card [data-act=files]')`);
+  ok(await A.until(`document.body.classList.contains('split-on')`), '📁 Files opens the job’s stack beside it');
+  // Pin to a chat.
+  await A.tap(`document.querySelector('#projects .jb-card [data-act=job-menu]')`);
+  await A.tap(`[...document.querySelectorAll('#menu button')].find((b) => b.textContent.includes('Pin to a chat'))`);
+  await A.until(`!document.querySelector('#sheet').classList.contains('hidden')`);
+  await A.tap(btnText('#sheet', 'Pin it'));
+  ok(await until(async () => ((await api('GET', '/state')).workspace.chatPins || []).some((x) => x.kind === 'job' && x.id === gj.job.id && x.label === 'Deck wash')), 'Pin to a chat pins the job to # general, with its name');
+  // The Map's Jobs mode (no Mapbox in this test: it says so).
+  await A.ev(`document.querySelector('#workTabs [data-tab=tools]').click(); true`);
+  await sleep(200);
+  await A.ev(`document.querySelector('#menu [data-tool=map]')?.click(); true`);
+  ok(await A.until(`!!document.querySelector('.map-mode [data-mode=jobs]')`), 'the Map has a Jobs section');
+  await A.ev(`document.querySelector('.map-mode [data-mode=jobs]').click(); true`);
+  ok(await A.until(`(document.querySelector('[data-jobs]')?.textContent || '').includes('isn’t set up')`), 'without a Mapbox token it says the map isn’t set up: ' + await A.ev(`document.querySelector('[data-jobs]')?.textContent`));
 
   // As a member (Sam): Jobs, but no Job Flows or builder; New job only from a flow everyone may start; Next only on
   // the step the job is at and only when the step is theirs; never Next on an invoice or a payment; no Reopen, no
