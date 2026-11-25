@@ -1,29 +1,38 @@
 PASS a formula over the line total: 200 
 PASS a rollup of the quote’s total from Jobs: 200 
+PASS a chain of formulas over the price: 200 
 PASS the records are made
 PASS the owner gets the price lines with price and cost
+PASS the owner gets the end of the formula chain
 PASS the owner gets the formula and both rollups
 PASS the owner gets the Price list’s price and cost
 PASS an admin gets the price lines with price and cost
+PASS an admin gets the end of the formula chain
 PASS an admin gets the formula and both rollups
 PASS an admin gets the Price list’s price and cost
-FAIL a member gets the price lines as what and how many only: {"rows":[{"id":"tNlMQvwB","desc":"Shutters","qty":2,"unit":"each","price":432177,"cost":123456},{"id":"Hs2GBwjg","desc":"Trip","qty":1,"unit":"","price":5000}],"taxRate":0}
+FAIL a member gets the price lines as what and how many only: {"rows":[{"id":"zCssG2sh","desc":"Shutters","qty":2,"unit":"each","price":432177,"cost":123456},{"id":"DIP9eYmq","desc":"Trip","qty":1,"unit":"","price":5000}],"taxRate":0}
 FAIL a member: the formula over prices is empty and listed in hiddenFields
 FAIL a member: both rollups (straight and through the formula) are empty and listed
+FAIL a member: every formula in the chain is empty and listed
+PASS a member: a formula that reads no price is still there
 FAIL a member: the Price list’s price and cost are empty and listed
 PASS a member still gets the job’s Value (not a price)
 FAIL a member: no price or cost anywhere in the records
+PASS records for a contact: the admin gets the prices
+FAIL records for a contact: the member gets them redacted
 FAIL the member’s live update has no prices
 PASS the admin’s live update for the same change has them
 FAIL nothing the member’s socket heard carries a price
-PASS the admin’s timeline shows the price lines change with amounts: {"id":"dGp3iw5K","at":1795643585117,"kind":"change","field":"Line items","from":"$8,693.54","to":"$17,337.08","by":"Rico Vega"}
-FAIL the member’s shows it as changed, no amounts: {"id":"dGp3iw5K","at":1795643585117,"kind":"change","field":"Line items","from":"$8,693.54","to":"$17,337.08","by":"Rico Vega"}
+PASS the admin’s timeline shows the price lines change with amounts: {"id":"QRNhV26r","at":1795643818153,"kind":"change","field":"Line items","from":"$8,693.54","to":"$17,337.08","by":"Rico Vega"}
+FAIL the member’s shows it as changed, no amounts: {"id":"QRNhV26r","at":1795643818153,"kind":"change","field":"Line items","from":"$8,693.54","to":"$17,337.08","by":"Rico Vega"}
 PASS a change to another field shows in full for the member
 FAIL nothing in the member’s timeline carries a price
-FAIL nor the timeline’s live updates
-FAIL after the price field is renamed, its old entries still carry no amounts for the member
+FAIL the member’s timeline live updates arrive, with the price change as changed and no amounts
+PASS the admin’s have the amounts
+FAIL after the price field is renamed, its old entry still reads changed for the member
 FAIL older entries with no field id: none carries an amount for the member (a renamed or deleted field reads changed)
 FAIL an entry naming a field that no longer exists reads changed
+FAIL an older entry whose name matches two fields, one a price, reads changed
 PASS an older entry naming a field that is plainly not a price shows in full
 PASS the admin still sees the old entry as it was
 PASS the owner makes the quote link
@@ -31,12 +40,18 @@ FAIL the member’s copy of the quote has no link
 FAIL a member can’t make or remove the quote link (403)
 PASS and the link the owner made is untouched
 PASS the admin hears the answer with its total
-FAIL the member hears it without the total: {"type":"quote:answer","projectId":"rgt6SojBQy91gmgN","recordId":"HgQk5oHpkqeFyFPo","act":"accept","name":"Dana Ruiz","title":"Q-1001 · Ruiz shutters","total":1
+FAIL the member hears it without the total: {"type":"quote:answer","projectId":"jIt-69pggfYfZYEX","recordId":"l4Bf08iM-gqh76zf","act":"accept","name":"Dana Ruiz","title":"Q-1001 · Ruiz shutters","total":1
 FAIL nothing else the member heard about it carries a price
 FAIL a member’s price list is empty
 PASS the owner’s still has the board’s items
-FAIL a member can’t ask the AI for an estimate (403)
-PASS an owner isn’t refused for being an owner
+FAIL a member can’t ask the AI for an estimate (403, nothing sent to the AI)
+PASS the owner gets the estimate: 200 {"rows":[{"desc":"Hinges","qty":4,"unit":"each","price":300}],"assumptions":[],"questions":[],"read":[]}
+PASS next step: what the AI is told for the owner has prices (200)
+PASS ask: what the AI is told for the owner has prices (200)
+PASS agents’ record tools for the owner have prices
+FAIL next step: what the AI is told for a member has no prices (200)
+FAIL ask: what the AI is told for a member has no prices (200)
+FAIL agents’ record tools for a member have no prices
 FAIL a member changing price lines: 403, and nothing in that write saved: 200
 FAIL a member changing a Price list’s price: 403, unchanged: 200
 FAIL a member adding a record with price lines: 403, nothing made
@@ -49,12 +64,16 @@ PASS the owner’s team export has the prices
 FAIL the member’s own export has none
 PASS an admin makes an API key: 200
 PASS while she’s an admin the key gets the prices
+PASS and the API timeline has the amounts
 PASS an admin can save an automation that sets a Price list price: 200 
 PASS a member can’t: 403
-FAIL the next request after she’s made a member: redacted: {"rows":[{"id":"DcwIGOpD","description":"Shutters","qty":2,"unit":"each","price":8643.54,"cost":1234.56,"total":17287.08},{"id":"OrN-9V2A","description":"Trip",
+FAIL the next request after she’s made a member: redacted: {"rows":[{"id":"GnP7fcjX","description":"Shutters","qty":2,"unit":"each","price":8643.54,"cost":1234.56,"total":17287.08},{"id":"EL9VaPkK","description":"Trip",
+FAIL the API timeline through her key: price changes read changed, no amounts
 FAIL and a price write through the key is 403: 200
 FAIL her own app reads are redacted from the next read
-FAIL her automation, run once she’s a member, doesn’t write the price: 7700 3
+FAIL her automation ran on Sam’s change and noted that prices are for owners and admins: {"at":1795643819405,"ok":true,"note":"Changed Trigger","path":["0"]}
+FAIL that run is marked as not done
+FAIL and the price wasn’t written: 7700
 PASS a member made admin sees prices on the next read
 PASS and on the next live update
 FAIL an admin made a member hears no prices on the next live update
@@ -69,4 +88,4 @@ Data: /Users/premiershades/column-jobflows/dk/member_prices/db.json
 
 
 
-32 FAILED
+41 FAILED
