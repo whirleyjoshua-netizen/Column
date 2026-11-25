@@ -1,4 +1,4 @@
-// Chat in Tools (the owner, 2026-11-20: "take chat and move it into tools so that it functions like a tool opening in
+// Chat in Tools (the owner, 2026-11-20; since 2026-11-25 also a sidebar tab, tests/chat_tab_ui.mjs: "take chat and move it into tools so that it functions like a tool opening in
 // the split window ... the description only pop up when a user hovers over the tool item"): Chat isn't a sidebar tab;
 // Tools lists it; it opens in the split beside the page (which stays), works there, goes back when it closes or
 // another tool opens. Tools' rows show names only; a row's description shows beside it on hover.
@@ -47,7 +47,7 @@ try {
   await A.until(`location.href.startsWith(${JSON.stringify(APP)}) && document.readyState === 'complete'`, 15000);
   await A.ev(`localStorage.setItem('column.token', ${JSON.stringify(JSON.stringify(a.token))}); location.reload(); true`);
   ok(await A.until(`!document.querySelector('#app')?.classList.contains('hidden') && !!document.querySelector('#settingsBtn')`, 20000), 'signed in');
-  ok(await A.ev(`!document.querySelector('#tabs [data-tab=chat]') && [...document.querySelectorAll('#tabs > button[data-tab]:not(.tab-sub)')].map((b) => b.dataset.tab).join() === 'home,agents,work,apps'`), 'Chat isn’t a sidebar tab: Home, Agents, Workspace, Apps & Integrations');
+  ok(await A.ev(`[...document.querySelectorAll('#tabs > button[data-tab]:not(.tab-sub)')].map((b) => b.dataset.tab).join() === 'home,chat,agents,work,apps'`), 'the sidebar: Home, Chat (the page; see chat_tab_ui), Agents, Workspace, Apps & Integrations');
 
   // Tools: names only; a description on hover.
   await A.ev(`document.querySelector('#tabs [data-tab=tools]').click(); true`);

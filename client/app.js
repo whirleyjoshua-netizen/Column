@@ -3212,15 +3212,17 @@
   // Company HQ, Business card and Signatures are in Settings → Business. News is on Home (turned on in Settings).
   // Sidekick's panel (the owner, 2026-11-14): one assistant on every page. See "Sidekick, on every page".
   const SKD = { open: false, view: 'home', draft: '', busy: false, noPage: false, here: false };
-  // Chat moved into Tools (the owner, 2026-11-20): it opens in the split beside the page, like Stacks.
-  const MAIN_TABS = ['agents', 'work', 'apps'];
+  // Chat moved into Tools (the owner, 2026-11-20): it opens in the split beside the page, like Stacks. And back in the
+  // sidebar too (the owner, 2026-11-25: "move chat to the main left tab ... still ... open in the split screen through
+  // tools"): the sidebar's Chat is the page, Tools → Chat the split.
+  const MAIN_TABS = ['chat', 'agents', 'work', 'apps'];
   // Tasks (the owner, 2026-11-15): what was Day is Workspace's first tab, and Workspace always opens on it.
   const WORK_TABS = ['day', 'contacts', 'jobs', 'projects', 'camps', 'docs', 'automations', 'tools'];
   // What Workspace → Tools lists. Stacks is a view (S.tab 'column'); the rest open in #tool. While one is open, Tools stays lit.
   const TOOL_PAGE = ['chat', 'column', 'whiteboard', 'templates', 'inventory', 'bills', 'analytics', 'email', 'meetings', 'map', 'vault'];
   const BAR_ITEMS = {
     column: { label: 'Stacks', view: true },
-    chat: { label: 'Chat', view: true },
+    chat: { label: 'Chat', view: true, ok: () => memberMay('chat') },
     camps: { label: 'Campaigns', view: true, ok: () => memberMay('camps') },
     agents: { label: 'Agents', ok: () => toolOn('agents'), open: () => agOpen('team') },
     work: { label: 'Workspace', ok: () => workKeys().length > 0, open: () => openBarItem('day') },
@@ -3315,7 +3317,7 @@
     }
     if (it.view) {
       closeProjects();
-      return setTab(k);
+      return setTab(k, 'page');
     }
     if (toolOpen === k) return closeTool();
     it.open ? it.open() : openTool(k);
@@ -3518,13 +3520,15 @@
     });
   }
 
-  // Chat showing: in the split (2026-11-20), or the old page if anything still sets it.
+  // Chat showing: as the page (the sidebar's Chat) or in the split (Tools → Chat).
   const chatOn = () => S.tab === 'chat' || splitOpen === 'chat';
   // The pages you've been on, for the browser's Back (navBack, near the end).
   const NAVB = { tabs: [], going: false, armed: false, skip: false };
-  function setTab(tab) {
-    // Everything that opened the Chat page (links, pins, notifications) opens Chat in the split now.
-    if (tab === 'chat') return openChat();
+  function setTab(tab, how) {
+    // Links, pins and notifications open Chat in the split beside the page you're on (or on the Chat page, if that's
+    // where you are); the sidebar's Chat (how 'page') makes it the page, taking it back from the split.
+    if (tab === 'chat' && how !== 'page') return openChat();
+    if (tab === 'chat' && splitOpen === 'chat') closeSplit();
     if (S.tab && tab !== S.tab && !NAVB.going) { NAVB.tabs.push(S.tab); if (NAVB.tabs.length > 30) NAVB.tabs.shift(); }
     if (tab === 'camps' && splitOpen === 'camps') closeSplit(); // Campaigns from the tabs: back from the split, as the page
     S.tab = tab;
@@ -3539,7 +3543,8 @@
     const panesWere = $('#panes').classList.contains('hidden');
     $('#panes').classList.toggle('hidden', tab !== 'column' && splitOpen !== 'column');
     if (panesWere && tab === 'column') keepPanesScroll($('#panes'), true);
-    $('#chat').classList.toggle('hidden', splitOpen !== 'chat');
+    $('#chat').classList.toggle('hidden', tab !== 'chat' && splitOpen !== 'chat');
+    if (tab === 'chat') openChannel(C.view);
     $('#campsWrap').classList.toggle('hidden', tab !== 'camps' && splitOpen !== 'camps');
     if (tab === 'camps') renderCamps();
     if (tab === 'day') renderDay();
@@ -15146,6 +15151,7 @@
   }
   function openTool(name) {
     if (name === 'sidekick') return openDock('plan');
+    if (name === 'chat') return openChat(); // the page already, or the split
     if (SPLIT_TOOLS.has(name)) return openSplit(name);
     toolOpen = name;
     $('#settings').classList.add('hidden');
@@ -15198,6 +15204,8 @@
   // Chat in the split (2026-11-20): #chat moves in while it's showing and back (hidden) when it closes. Opening it
   // goes to the feed you were on, or the one asked for.
   function openChat(view) {
+    // Chat is already the page: there's one Chat, so the feed opens right there.
+    if (S.tab === 'chat' && splitOpen !== 'chat') return openChannel(view || C.view);
     if (splitOpen !== 'chat') openSplit('chat');
     openChannel(view || C.view);
   }
@@ -15207,7 +15215,7 @@
     el.classList.remove('hidden');
     return el;
   }
-  const chatHome = () => { const el = $('#chat'); if ($('#split').contains(el)) { keepPanesScroll(el, false); $('#main').insertBefore(el, $('#campsWrap')); } el.classList.add('hidden'); };
+  const chatHome = () => { const el = $('#chat'); if ($('#split').contains(el)) { keepPanesScroll(el, false); $('#main').insertBefore(el, $('#campsWrap')); } el.classList.toggle('hidden', S.tab !== 'chat'); };
   function stacksInSplit() {
     const p = $('#panes');
     keepPanesScroll(p, !$('#split').contains(p) || p.classList.contains('hidden'));
@@ -27100,13 +27108,13 @@
     if (navOpen('#projects')) return navPress($('#projects'), '.pj-panel-h button[aria-label="Close"]') || navPress($('#projects')) || closeProjects();
     if (toolOpen) return navPress($('#tool')) || closeTool();
     if (navPress(document, 'button.cc-pulse-x')) return; // the campaign's Pulse, open beside the page
-    const page = $({ home: '#home', day: '#day', apps: '#apps', camps: '#campsWrap', column: '#panes', menu: '#menuPage' }[S.tab] || '#home');
+    const page = $({ home: '#home', day: '#day', apps: '#apps', camps: '#campsWrap', column: '#panes', menu: '#menuPage', chat: '#chat' }[S.tab] || '#home');
     if (navPress(page)) return;
     if (S.tab === 'menu') return goHome(MENU.back);
     let to = NAVB.tabs.pop();
-    while (to && (to === S.tab || to === 'menu' || to === 'chat')) to = NAVB.tabs.pop();
+    while (to && (to === S.tab || to === 'menu')) to = NAVB.tabs.pop();
     NAVB.going = true;
-    try { setTab(to || 'home'); } finally { NAVB.going = false; }
+    try { setTab(to || 'home', 'page'); } finally { NAVB.going = false; }
   }
   // After anything you do: a step to go back to while you're away from Home, none left over once you're back.
   function navArm() {
