@@ -34,7 +34,7 @@ function png(w, h, ink, noise = false) {
   return 'data:image/png;base64,' + b.toString('base64');
 }
 const SIG = png(240, 80, true), BLANK = png(240, 80, false), HUGE = png(190, 150, false, true);
-const JPG = 'data:image/jpeg;base64,' + Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10]), Buffer.from('JFIF\0'), Buffer.alloc(200, 7), Buffer.from([0xff, 0xd9])]).toString('base64');
+const JPG = 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAASABIAAD/4QBMRXhpZgAATU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAA6ABAAMAAAABAAEAAKACAAQAAAABAAAAEKADAAQAAAABAAAACAAAAAD/7QA4UGhvdG9zaG9wIDMuMAA4QklNBAQAAAAAAAA4QklNBCUAAAAAABDUHYzZjwCyBOmACZjs+EJ+/8AAEQgACAAQAwEiAAIRAQMRAf/EAB8AAAEFAQEBAQEBAAAAAAAAAAABAgMEBQYHCAkKC//EALUQAAIBAwMCBAMFBQQEAAABfQECAwAEEQUSITFBBhNRYQcicRQygZGhCCNCscEVUtHwJDNicoIJChYXGBkaJSYnKCkqNDU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6g4SFhoeIiYqSk5SVlpeYmZqio6Slpqeoqaqys7S1tre4ubrCw8TFxsfIycrS09TV1tfY2drh4uPk5ebn6Onq8fLz9PX29/j5+v/EAB8BAAMBAQEBAQEBAQEAAAAAAAABAgMEBQYHCAkKC//EALURAAIBAgQEAwQHBQQEAAECdwABAgMRBAUhMQYSQVEHYXETIjKBCBRCkaGxwQkjM1LwFWJy0QoWJDThJfEXGBkaJicoKSo1Njc4OTpDREVGR0hJSlNUVVZXWFlaY2RlZmdoaWpzdHV2d3h5eoKDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uLj5OXm5+jp6vLz9PX29/j5+v/bAEMAAgICAgICAwICAwUDAwMFBgUFBQUGCAYGBgYGCAoICAgICAgKCgoKCgoKCgwMDAwMDA4ODg4ODw8PDw8PDw8PD//bAEMBAgICBAQEBwQEBxALCQsQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEP/dAAQAAf/aAAwDAQACEQMRAD8A+c/Cf7L/ANz/AET/AMdr6Z8J/sv/AHP9E/8AHa9e8J/w19M+E+qfhXk8Y+JGba/vT4v6Nvi5nn7v9927/wCZ/9k='; // a real 16×8 JPEG (made with sips)
 const SIG2 = png(200, 70, true);
 const NOT_PNG = 'data:image/png;base64,' + Buffer.from('GIF89a not a png at all').toString('base64');
 
@@ -144,11 +144,13 @@ try {
   r = await rico('PUT', '/docs-settings/signature', { image: SIG2, name: 'Rico Vega', title: 'President' });
   const sigUrl2 = r.body?.signature?.url;
   await rico('PATCH', '/brand', { accent: '#abcdef' });
+  await rico('PUT', '/brand/logo', { data: JPG });
+  const logoUrl2 = (await rico('GET', '/state')).body?.workspace?.brand?.logo;
   await rico('PATCH', '/docs-settings', { business: { name: 'Acme Pro Cleaning', address: '2 New Rd', phone: '(775) 555-0200', email: 'hi@acme.test', website: 'https://acme.test', license: 'NV-99999' }, terms: 'Due on receipt.', footer: 'New footer.', showPrices: false });
   pg = await page(url2);
   ok(pg.html.includes('Acme Cleaning LLC') && pg.html.includes('Net 30.') && pg.html.includes('Acme is licensed and insured.') && !pg.html.includes('Acme Pro Cleaning') && pg.html.includes('$25.00'), 'an issued quote keeps the details, terms, footer and prices it was sent with');
   ok(!!sigUrl && pg.html.includes(sigUrl) && pg.html.includes('Owner') && !pg.html.includes('President') && (await fetch(B + sigUrl)).status === 200, 'and the business signature it was sent with (still served)');
-  ok(pg.html.includes('--accent:#abcdef'), 'the accent colour follows Brand live, even on an issued quote');
+  ok(pg.html.includes('--accent:#abcdef') && !!logoUrl2 && logoUrl2 !== logoUrl && pg.html.includes(logoUrl2) && !pg.html.includes(logoUrl), 'the logo and accent colour follow Brand live, even on an issued quote');
   ok(/Q-1002/.test(pg.html), 'and its own number, Q-1002');
   await rico('POST', `/jobs/${j2?.id}/requote`);
   r = await sendQuote(j2?.id);

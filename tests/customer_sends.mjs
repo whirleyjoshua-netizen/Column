@@ -247,19 +247,20 @@ try {
   ok(r.status === 409 && !!r.body?.preview && !!r.body.confirm && r.body.confirm !== tkX, 'an expired ticket: 409 with a fresh preview');
   ok(mails(ed.email, 'visit-reminder').length === 1, 'nothing sent with it');
   ok((await rico('POST', `/visits/${ve2?.id}/remind`, { confirm: 'made-up-ticket' })).status === 409, 'a made-up ticket: 409');
+  const edT0 = texts('5550104').length; // the reminders above went by text too
   // Permission is checked again at confirm: Ada, an admin when she asked, a member when she confirms.
   r = await ada('POST', `/contacts/${ed.id}/texts`, { body: 'From Ada.' });
   ok(r.status === 428, 'an admin can preview a text');
   const tkA = r.body?.confirm;
   await rico('PATCH', `/members/${adaId}`, { role: 'member' });
   r = await ada('POST', `/contacts/${ed.id}/texts`, { body: 'From Ada.', confirm: tkA });
-  ok(r.status === 403 && !texts('5550104').length, 'demoted before confirming: refused, nothing sent');
+  ok(r.status === 403 && texts('5550104').length === edT0, 'demoted before confirming: refused, nothing sent: ' + r.status + ' ' + texts('5550104').length);
   await rico('PATCH', `/members/${adaId}`, { role: 'admin' });
 
   // An API key can't send without the two calls (and keys don't reach the app's send routes at all).
   const key = (await rico('POST', '/integrations/keys', { name: 'Zap' })).body?.token;
   r = await call(key)('POST', `/visits/${ve2?.id}/remind`);
-  ok(r.status === 401 && mails(ed.email, 'visit-reminder').length === 1 && !texts('5550104').length, 'an API key on a send route: 401, nothing sent (' + r.status + ')');
+  ok(r.status === 401 && mails(ed.email, 'visit-reminder').length === 1 && texts('5550104').length === edT0, 'an API key on a send route: 401, nothing sent (' + r.status + ')');
   r = await call(key)('POST', `/visits/${ve2?.id}/remind`, { confirm: tkE });
   ok(r.status === 401 && mails(ed.email, 'visit-reminder').length === 1, 'and a replayed ticket through a key: 401, nothing sent');
   // An agent (working as Rico, without his OK) gets the preview, and can't confirm it itself.
@@ -285,10 +286,12 @@ try {
   const op = (await olga('POST', '/projects', { template: 'trades', trades: ['cleaning'] })).body;
   const oc = (await olga('POST', '/contacts', { name: 'Otto Cust', email: `otto${t}@x.test` })).body;
   const orec = (await olga('POST', `/projects/${op?.id}/records`, { typeId: op?.types?.[0]?.id, values: { job: 'Other job', customer: oc?.id ?? oc?.contact?.id } })).body;
-  const ov = (await olga('POST', `/records/${orec?.id}/visits`, { kind: 'Service', date: later, start: 600, end: 660, memberIds: [] })).body;
+  const olgaId = (await olga('GET', '/state')).body?.workspace?.members?.[0]?.id;
+  const ov = (await olga('POST', `/records/${orec?.id}/visits`, { kind: 'Service', date: later, start: 600, end: 660, memberIds: [olgaId] })).body;
+  ok(!!ov?.id, '(setup) another team with a visit of its own: ' + JSON.stringify(ov).slice(0, 120));
   r = await rico('POST', `/visits/${ve2?.id}/remind`);
   r = await olga('POST', `/visits/${ov?.id}/remind`, { confirm: r.body?.confirm });
-  ok(r.status === 409 && !mails(`otto${t}@x.test`).length, 'another team’s ticket: 409, nothing sent');
+  ok(r.status === 409 && !mails(`otto${t}@x.test`).length, 'another team’s ticket: 409, nothing sent: ' + r.status + ' ' + JSON.stringify(r.body).slice(0, 120));
   // Tickets are kept in the data: one made before a restart still works after it (within its time).
   r = await rico('POST', `/contacts/${ed.id}/texts`, { body: 'Across a restart.' });
   const tkRs = r.body?.confirm;
@@ -296,19 +299,25 @@ try {
   ok(await start(), '(setup) restarted');
   rico = call(ricoTok); sam = call(samTok); ada = call(adaTok);
   r = await rico('POST', `/contacts/${ed.id}/texts`, { body: 'Across a restart.', confirm: tkRs });
-  ok(r.status === 200 && texts('5550104').length === 1, 'a ticket made before a restart still sends once after it');
-  ok((await rico('POST', `/contacts/${ed.id}/texts`, { body: 'Across a restart.', confirm: tkRs })).status === 409 && texts('5550104').length === 1, 'and stays used');
+  ok(r.status === 200 && texts('5550104').length === edT0 + 1, 'a ticket made before a restart still sends once after it: ' + r.status + ' ' + texts('5550104').length);
+  ok((await rico('POST', `/contacts/${ed.id}/texts`, { body: 'Across a restart.', confirm: tkRs })).status === 409 && texts('5550104').length === edT0 + 1, 'and stays used');
   // At most 200 open tickets a team: the oldest go first. Old tickets are trimmed (after SEND_TICKET_KEEP_MS here, a day in production).
-  const firstTk = (await rico('POST', `/contacts/${ed.id}/texts`, { body: 'Ticket 0' })).body?.confirm;
-  for (let i = 1; i <= 205; i++) await rico('POST', `/contacts/${ed.id}/texts`, { body: 'Ticket ' + i });
+  // Whether a ticket is kept is read from the store (not by using it), so expiry can't stand in for eviction.
+  const kept = async (id) => (await rico('GET', `/test/send-tickets?id=${encodeURIComponent(id || 'x')}`)).body?.has === true;
+  const loopStart = Date.now();
+  const tks = [];
+  for (let i = 0; i <= 205; i++) tks.push((await rico('POST', `/contacts/${ed.id}/texts`, { body: 'Ticket ' + i })).body?.confirm);
+  const loopMs = Date.now() - loopStart;
+  ok(loopMs < 8000, '(setup) 206 previews in ' + loopMs + ' ms, well inside the 9 s keeping time, so none were trimmed for age');
   let cnt = (await rico('GET', '/test/send-tickets')).body;
-  ok(cnt?.open <= 200, 'no more than 200 open tickets for the team: ' + JSON.stringify(cnt));
-  ok((await rico('POST', `/contacts/${ed.id}/texts`, { body: 'Ticket 0', confirm: firstTk })).status === 409, 'the oldest was dropped: 409');
+  ok(cnt?.open === 200, 'exactly 200 open tickets kept for the team: ' + JSON.stringify(cnt));
+  ok(!(await kept(tks[0])) && !(await kept(tks[5])) && (await kept(tks[6])) && (await kept(tks[205])), 'the 6 oldest were dropped to make room, the rest are kept');
+  ok((await rico('POST', `/contacts/${ed.id}/texts`, { body: 'Ticket 0', confirm: tks[0] })).status === 409, 'the oldest can’t be used: 409');
   await sleep(9500);
   await rico('POST', `/contacts/${ed.id}/texts`, { body: 'One more' });
   cnt = (await rico('GET', '/test/send-tickets')).body;
   ok(cnt?.total <= 2, 'tickets past their keeping time are trimmed: ' + JSON.stringify(cnt));
-  ok(texts('5550104').length === 1, 'none of those previews sent anything');
+  ok(texts('5550104').length === edT0 + 1, 'none of those previews sent anything');
   // The signing link from the person's own Gmail (POST /signs/:id/email).
   const ob = DIR + '/outbox';
   const vcode = mails(`rico${t}@t.test`).map((m) => (m.subject || '') + ' ' + (m.text || '')).join(' ').match(/\d{3}[ -]?\d{3}/)?.[0];
@@ -324,9 +333,12 @@ try {
   ok(r.status === 200 && gsent.length === 1, 'with the ticket it goes from Gmail, once');
   ok((await rico('POST', `/signs/${pend?.id}/email`, { confirm: tkG })).status === 409 && gsent.length === 1, 'replayed: 409, not again');
   // Send proof makes a link and emails nobody: no ticket, nothing sent.
+  const prof = (await rico('GET', '/profile')).body?.project, lt = prof?.types?.[0];
+  const PF = (k) => lt?.fields.find((f) => f.key === k)?.id;
+  await rico('POST', `/projects/${prof?.id}/records`, { typeId: lt?.id, values: { [PF('name')]: 'Contractor license', [PF('number')]: '0084512', [PF('expires')]: '2030-01-01' } });
   const before = mails().length;
   r = await rico('POST', '/profile/proofs', { all: true, days: 7, to: 'A GC' });
-  ok(r.status !== 428 && mails().length === before && gsent.length === 1, 'Send proof makes a link and emails nobody (' + r.status + ')');
+  ok(r.status === 200 && String(r.body?.url || '').includes('/proof/') && mails().length === before && gsent.length === 1, 'Send proof makes a link (200) and emails nobody: ' + r.status);
   // A receipt for the customer's own act (own action): the signed copy, once, only after they sign.
   if (sigF) {
     const ivy = await person();
@@ -336,9 +348,11 @@ try {
     r = await rico('POST', `/signoff/${jv?.id}/${sigF.id}/sign`, { consent: true, name: ivy.name, email: ivy.email, sig: PNG });
     ok(r.status === 200, '(setup) the customer signs in person');
     ok(await until(async () => mails(ivy.email, 'signed-copy').length === 1) || gsent.some((m) => m.includes(ivy.email)), 'their signed copy is emailed once, with no ticket');
+    const copies = () => mails(ivy.email, 'signed-copy').length + gsent.filter((m) => m.includes(ivy.email)).length;
+    const once = copies();
     r = await rico('POST', `/signoff/${jv?.id}/${sigF.id}/sign`, { consent: true, name: ivy.name, email: ivy.email, sig: PNG });
     await sleep(500);
-    ok(r.status === 409 && mails(ivy.email, 'signed-copy').length <= 1, 'signing again is refused and sends no second copy');
+    ok(once === 1 && r.status === 409 && copies() === 1, 'signing again is refused and sends no second copy, by Kloomie or Gmail: ' + once + ' → ' + copies());
   }
 
   // ---------- §2, automatic steps ----------
@@ -503,15 +517,16 @@ try {
   await rico('PATCH', `/invoices/${inv?.id}`, { due: daysAgo(1) });
   ok(await until(async () => (await stepOf(jj?.id, 'Pay'))?.pending?.kind === 'payReminder'), 'its first payment reminder waits too: two waiting messages, on two steps, side by side');
   ok((await stepOf(jj?.id, 'Inv'))?.pending?.kind === 'invoice', 'the invoice’s email is still waiting (one doesn’t replace the other)');
-  const payKey = (await stepOf(jj?.id, 'Pay'))?.pending?.key;
+  ok((await stepOf(jj?.id, 'Pay'))?.pending?.day === 1, 'the 1-day reminder is the one waiting');
   await rico('PATCH', `/invoices/${inv?.id}`, { due: daysAgo(3) });
   await sleep(900);
-  ok((await stepOf(jj?.id, 'Pay'))?.pending?.key === payKey, 'the 3-day reminder comes due while the 1-day one waits: it waits its turn, the waiting one isn’t replaced');
+  const payKey = (await stepOf(jj?.id, 'Pay'))?.pending?.key;
+  ok((await stepOf(jj?.id, 'Pay'))?.pending?.day === 1, 'the 3-day reminder comes due while the 1-day one waits: it waits its turn, the waiting one isn’t replaced: ' + JSON.stringify((await stepOf(jj?.id, 'Pay'))?.pending || null).slice(0, 160));
   r = await rico('POST', `/jobs/${jj?.id}/steps/${(await stepOf(jj?.id, 'Inv'))?.id}/message`, { action: 'send', key: (await stepOf(jj?.id, 'Inv'))?.pending?.key });
   ok(r.status === 200 && mails(jo.email, 'invoice').length === 1, 'Send the invoice’s email: it goes once');
   r = await rico('POST', `/jobs/${jj?.id}/steps/${(await stepOf(jj?.id, 'Pay'))?.id}/message`, { action: 'skip', key: payKey });
   ok(r.status === 200, 'Don’t send the 1-day reminder');
-  ok(await until(async () => { const x = (await stepOf(jj?.id, 'Pay'))?.pending; return !!x && x.key !== payKey; }), 'then the 3-day one asks');
+  ok(await until(async () => (await stepOf(jj?.id, 'Pay'))?.pending?.day === 3), 'then the 3-day one asks');
   await sleep(600);
   ok(!mails(jo.email, 'payment-reminder').length, 'nothing sent for either yet');
   // Too late: the invoice is paid while a reminder waits.
@@ -537,8 +552,9 @@ try {
   const ltok = String(r.body?.url || '').split('/q/')[1];
   ok(await until(async () => (await stepOf(jl?.id, 'Quote'))?.pending?.kind === 'quoteFollow', 9000), '(setup) a follow-up waiting');
   const lv = (await (await fetch(`${B}/q/${ltok}`)).text()).match(/name="v" value="([^"]+)"/)?.[1] || '';
-  await fetch(`${B}/q/${ltok}/accept`, { method: 'POST', body: new URLSearchParams({ name: lou.name, v: lv }), redirect: 'manual' });
-  ok(await until(async () => !(await stepOf(jl?.id, 'Quote'))?.pending), 'the customer accepts: the waiting follow-up is dropped');
+  const acc = await fetch(`${B}/q/${ltok}/accept`, { method: 'POST', body: new URLSearchParams({ name: lou.name, v: lv }), redirect: 'manual' });
+  ok(acc.status === 303 && (await stepOf(jl?.id, 'Quote'))?.quote?.status === 'accepted', 'the customer accepts (303, recorded as accepted)');
+  ok(await until(async () => !(await stepOf(jl?.id, 'Quote'))?.pending), 'the waiting follow-up is dropped');
   ok(!mails(lou.email, 'quote-follow-up').length, 'never sent');
 
   // The team's own switches (Settings → Customer messages) say they send by themselves: turning one on is that choice.
@@ -547,6 +563,10 @@ try {
   const jm = (await rico('POST', `/projects/${p.id}/records`, { typeId: tp.id, values: { job: 'Plain job', customer: mo.id } })).body;
   await rico('POST', `/records/${jm?.id}/visits`, { kind: 'Service', date: tomorrow, start: 600, end: 660, memberIds: [samId] });
   ok(await until(async () => mails(mo.email, 'visit-reminder').length === 1), 'a team switch the owner turned on (“Visit reminders: email customers the day before”) sends by itself, as it says');
+  await rico('PATCH', '/workspace', { custMsgs: { reminders: true, reviews: true, reviewUrl: 'https://g.page/r/team' } });
+  const stF = tp.fields.find((f) => f.key === 'status');
+  await rico('PATCH', `/records/${jm?.id}`, { values: { [stF?.id]: stF?.choices.find((x) => x.label === 'Paid')?.id } });
+  ok(await until(async () => mails(mo.email, 'review-request').length === 1), 'and the review switch: the job moves to Paid, the review request goes by itself');
 } catch (e) {
   console.log('FAIL threw: ' + (e.stack || e.message));
   fails++;
