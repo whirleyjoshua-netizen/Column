@@ -218,6 +218,23 @@ try {
   await openJobIn(withMail.job.id);
   await A.tap(`[...document.querySelectorAll('#projects .jb-step')].find((x) => x.textContent.includes('Ask for a review'))`);
   ok(await A.until(`document.querySelector('#projects .jb-auto')?.dataset.msg === 'sent' && /Sent by email/.test(document.querySelector('#projects .jb-auto').textContent)`, 8000) && await A.ev(`!document.querySelector('#projects .jb-detail [data-act=next]')`), 'one it can reach: “Sent by email”, and no button on a step Kloomie does');
+  // On my way for one kind of visit: Next opens that visit, not an earlier one of another kind.
+  const of = await api('POST', '/job-flows', { name: 'Install day', list: { projectId: p.id, typeId: tp.id }, steps: [{ kind: 'client', name: 'Client' }, { kind: 'omw', name: 'Heading over', settings: { visitKind: 'Install' } }] });
+  await api('POST', `/job-flows/${of.id}/publish`);
+  const oj = await api('POST', '/jobs', { flowId: of.id, contactId: dana.id, values: { job: 'Two visits' } });
+  const dayAfter = (n) => new Date(Date.now() + n * 864e5).toLocaleDateString('en-CA');
+  await api('POST', `/records/${oj.job.id}/visits`, { kind: 'Measure', date: dayAfter(1), start: 540, end: 600, memberIds: [st.workspace.members[0].id] });
+  await openJobIn(oj.job.id);
+  await A.until(`!!document.querySelector('#projects .jb-detail [data-act=next]')`, 8000);
+  await A.tap(`document.querySelector('#projects .jb-detail [data-act=next]')`);
+  await sleep(500);
+  ok(await A.ev(`document.querySelector('#sheet').classList.contains('hidden') || !/On my way/.test(document.querySelector('#sheet h2, #sheet .sheet-title')?.textContent || '')`), 'On my way for an Install with only a Measure booked opens no sheet (it says to book the Install)');
+  await api('POST', `/records/${oj.job.id}/visits`, { kind: 'Install', date: dayAfter(2), start: 540, end: 600, memberIds: [st.workspace.members[0].id] });
+  await openJobIn(oj.job.id);
+  await A.until(`!!document.querySelector('#projects .jb-detail [data-act=next]')`, 8000);
+  await A.tap(`document.querySelector('#projects .jb-detail [data-act=next]')`);
+  ok(await A.until(`!document.querySelector('#sheet').classList.contains('hidden') && /On my way · Install/.test(document.querySelector('#sheet').textContent)`), 'with an Install booked too, Next opens On my way for the Install, not the earlier Measure');
+  await A.ev(`document.querySelector('#sheet [aria-label=Close]')?.click(); true`);
   await shot('8-auto');
   await A.ev(`document.querySelector('#workTabs [data-tab=jobs]').click(); true`);
   await A.until(`!!document.querySelector('#tool [data-jb=jobs]')`, 8000);

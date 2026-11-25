@@ -328,6 +328,7 @@ export function jobFlowsModule(ctx) {
       if (g.skipped) Object.assign(out, { skipReason: g.skipReason || '', skippedAt: g.skippedAt || null });
       if (s.kind === 'custom') Object.assign(out, { text: s.settings?.text || '', checklist: (s.settings?.checklist || []).map((text, i) => ({ text, done: !!g.checks?.[i] })), marked: !!g.marked });
       if (s.kind === 'details') out.fields = s.settings?.fields || [];
+      if (['book', 'remind', 'omw'].includes(s.kind) && s.settings?.visitKind) out.visitKind = s.settings.visitKind; // which visit it's about
       if (s.kind === 'quote' && rec) {
         const q = quoteNow(c, rec);
         out.quote = !isAdmin(auth) ? { status: q.status } : {

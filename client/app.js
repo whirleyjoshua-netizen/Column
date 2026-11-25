@@ -18347,7 +18347,14 @@
       case 'book': return visitSheet(p, t, r);
       case 'work': case 'signoff': case 'tasks': return jbTabTo(r, 'work');
       case 'quote': return jbQuote(p, r, s);
-      case 'omw': { await loadVisits(r, true); const today = todayKey(); const v = (PR.visits.get(r.id) || []).find((x) => !x.done && x.date >= today) || (PR.visits.get(r.id) || []).find((x) => !x.done); return v ? omwSheet(p, t, r, v) : toast('Book a visit first.'); }
+      case 'omw': {
+        // The job's next visit of the kind the step is for (the server only counts On my way on that kind).
+        await loadVisits(r, true);
+        const today = todayKey(), kind = (s.visitKind || '').toLowerCase();
+        const fits = (PR.visits.get(r.id) || []).filter((x) => !x.done && (!kind || String(x.kind || '').toLowerCase() === kind));
+        const v = fits.find((x) => x.date >= today) || fits[0];
+        return v ? omwSheet(p, t, r, v) : toast(s.visitKind ? `Book the ${s.visitKind.toLowerCase()} visit first.` : 'Book a visit first.');
+      }
       case 'invoice': return jbInvoice(r, s);
       case 'payment': return jbPay(r);
       case 'custom': return jbStep(r, s, 'done');
@@ -18828,7 +18835,7 @@
         else textCustomer(out.sms);
       } catch (e) { toast(e.message); }
     };
-    sheet(`On my way · ${who}`, [
+    sheet(`On my way · ${v.kind || 'Visit'} · ${who}`, [
       h('label', {}, 'I’ll be there in about', mins),
       c?.dne ? h('p', { class: 'day-hint' }, `${who} is marked do not contact.`) : null,
       h('div', { class: 'btns' },
