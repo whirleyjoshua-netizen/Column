@@ -6899,7 +6899,8 @@
   function renderCamps(force) {
     const root = $('#camps');
     if (!S.workspace || !campsShown() || K.sorting) return;
-    if (!force && root.contains(document.activeElement) && document.activeElement.matches('input, textarea, select')) {
+    // A ticked checkbox keeps focus but isn't typing: draw on (2026-11-25, a row's tick on Plan).
+    if (!force && root.contains(document.activeElement) && document.activeElement.matches('input:not([type=checkbox]):not([type=radio]), textarea, select')) {
       K.stale = true;
       return;
     }
@@ -7825,7 +7826,7 @@
         !c.test && runsIt(c) && c.status !== 'done' ? h('button', { class: 'btn small cc-testbtn', title: 'Run it for real with testers first: nothing goes out, and Go live puts it back', onclick: () => testSheet(c) }, '🧪 Test run') : null,
         h('button', { class: 'btn primary-btn small cc-add', onclick: (e) => openMenu(e.currentTarget, [{ head: 'Add to the campaign' },
           { label: '+ A phase', run: () => goalSheet(c) },
-          phases.length ? { label: '+ A task (in a phase)', run: () => openMenu(e.target, [{ head: 'Which phase?' }, ...phases.map((g) => ({ label: g.title, run: () => { K.osel = { c: c.id, goal: g.id, task: null }; K.pfocus = true; setTabC('overview'); } }))]) } : null,
+          phases.length ? { label: '+ A task (in a phase)', run: () => openMenu(e.target, [{ head: 'Which phase?' }, ...phases.map((g) => ({ label: g.title, run: () => { K.psel = { c: c.id, goal: g.id, task: null }; K.pfocus = true; K.planView = null; setTabC('plan'); } }))]) } : null,
           { label: '+ A target to reach (calls, money…)', run: () => goalSheet(c) },
           { label: '+ A sub-campaign', run: () => campaignSheet(null, c) },
           { label: '✨ Suggest phases and tasks from the brief', run: () => suggestPlan(c, e.target) }].filter(Boolean)) }, '+ Add to campaign'),
@@ -7896,19 +7897,19 @@
             h('span', { class: isOverdue(t) ? 'late' : '' }, t.due ? dueLabel(t.due) : ''), h('span', {}, t.priority ? h('span', { class: 'cc-prio p' + t.priority }, PRIO[t.priority]) : ''), h('span', {}, h('span', { class: 'cc-status ' + sc }, sl))); }))
           : h('p', { class: 'day-hint' }, wf === 'mine' ? 'Nothing open for you here.' : wf === 'blocked' ? 'Nothing is blocked.' : wf === 'overdue' ? 'Nothing is overdue.' : 'No tasks here yet.'));
     };
-    const resources = () => {
+    // Where things are (2026-11-25): the Resources tab, folded under the brief on Plan.
+    const where = () => {
       const stepRs = phases.filter((g) => stepRes(g).length);
-      return [h('section', { class: 'cc-card' }, h('div', { class: 'cc-card-h' }, h('b', {}, 'Where things are')),
+      return h('div', { class: 'cc-where' },
         h('div', { class: 'camp-links' },
           ch ? h('button', { class: 'btn small', onclick: () => { setTab('chat'); openChannel('ch:' + ch.id); } }, '# ' + ch.name) : null,
           st ? h('button', { class: 'btn small', title: 'Open a file, add one, or go to the stack', onclick: (e) => filesMenu(e.currentTarget, c) }, `Files · ${files} ▾`) : null,
           st ? h('button', { class: 'btn small', title: 'Jot a quick note, or open one', onclick: (e) => notesMenu(e.currentTarget, c) }, `Notes · ${notes} ▾`) : null,
           mapFor(c) ? h('button', { class: 'btn small', title: 'Runs and pins on the map', onclick: () => openMap({ campaignId: c.id }) }, `Map · ${mapFor(c)}`) : null,
           signsFor(c) ? h('button', { class: 'btn small', title: 'Sent for signature', onclick: () => { SG.filter = c.id; openTool('signs'); } }, `Signatures · ${signsFor(c)}`) : null,
-          vaultLinked('campaign', c.id) ? h('button', { class: 'btn small', title: 'In your vault', onclick: () => openVaultFor('campaign', c.id) }, h('span', { class: 'vault-ic', html: I.lock }), `Vault · ${vaultLinked('campaign', c.id)}`) : null)),
-        stepRs.length ? h('section', { class: 'cc-card' }, h('div', { class: 'cc-card-h' }, h('b', {}, 'What each phase hands its people')),
-          stepRs.map((g) => h('div', { class: 'cc-res-phase' }, h('small', {}, g.title), h('div', { class: 'res-list' }, stepRes(g).map((r) => h('div', { class: 'res-row', 'data-res': r.kind }, h('button', { class: 'res-open', onclick: () => resOpen(r) }, h('span', { class: 'res-ic' }, RES_IC[r.kind]), h('span', {}, h('b', {}, resName(r)))))))))) : null,
-        h('section', { class: 'cc-card' }, h('div', { class: 'cc-card-h' }, h('b', {}, 'Lists & docs')), lists.length ? lists.map((l) => listCard(c, l)) : h('p', { class: 'day-hint' }, 'Drop a spreadsheet of people on the campaign to make a call list, or add one from Contacts.'))].filter(Boolean);
+          vaultLinked('campaign', c.id) ? h('button', { class: 'btn small', title: 'In your vault', onclick: () => openVaultFor('campaign', c.id) }, h('span', { class: 'vault-ic', html: I.lock }), `Vault · ${vaultLinked('campaign', c.id)}`) : null,
+          stepRs.length ? h('button', { class: 'btn small', title: 'What each phase hands its people', onclick: (e) => openMenu(e.currentTarget, [{ head: 'Phase resources' }, ...stepRs.map((g) => ({ label: g.title + ' · ' + stepRes(g).length, run: () => stepWindow(c, g) }))]) }, 'Phase resources · ' + stepRs.reduce((n, g) => n + stepRes(g).length, 0)) : null,
+          h('button', { class: 'btn small', title: 'Call lists and docs for this campaign', onclick: () => sheet('Lists & docs', [lists.length ? h('div', {}, lists.map((l) => listCard(c, l))) : h('p', { class: 'day-hint' }, 'Drop a spreadsheet of people on the campaign to make a call list, or add one from Contacts.')]) }, 'Lists & docs · ' + lists.length)));
     };
     const activity = () => [
       h('section', { class: 'cc-card' }, h('div', { class: 'cc-card-h' }, h('b', {}, 'Log'), h('span', { style: 'flex:1' }),
@@ -7945,8 +7946,6 @@
       h('div', { class: 'cc-pulse-ai' }, h('b', {}, '✦ What to do next'),
         ideas.length ? ideas.slice(0, 3).map(([text, label, run]) => h('div', { class: 'cc-idea' }, h('p', {}, text), h('button', { class: 'btn small primary-btn', onclick: run }, label))) : h('p', {}, 'Nothing needs you right now.'),
         h('button', { class: 'btn small' + (skFor(c.id)?.nudge ? ' sk-nudge' : ''), title: skFor(c.id)?.nudge?.text || 'Talk this campaign through with Sidekick', onclick: () => sidekickFor(c) }, '✦ Ask Sidekick')));
-    // Plan: the phases as a list, or the campaign's whiteboard (2026-11-20) to sketch them and turn shapes into phases.
-    const planSwitch = toolOn('whiteboard') ? h('div', { class: 'seg seg-sm cc-planswitch' }, [['phases', 'Phases'], ['board', 'Board']].map(([k, l]) => h('button', { class: (K.planView === 'board' ? 'board' : 'phases') === k ? 'on' : null, 'data-pv': k, onclick: () => { K.planView = k; renderCamps(); } }, l))) : null;
     // Overview, in the Plan's look (2026-11-23): the brief down the left, and on the right, until something in the tree
     // is picked, what it's reaching for (targets with their numbers), money, sub-campaigns and the team.
     const ovSec = (title, ...kids) => h('div', { class: 'cc-lib-sec' }, h('h4', {}, title), ...kids);
@@ -7955,7 +7954,8 @@
       ovField('brief', 'Objective', 'What it’s for, and how you’ll know it worked…'),
       ovField('audience', 'Audience', 'Who it’s aimed at…'),
       ovField('strategy', 'Strategy', 'How you’ll get there…'),
-      ovSec('Success metrics', ...[...metrics.childNodes].filter((x) => !x.classList?.contains('cc-bh'))));
+      ovSec('Success metrics', ...[...metrics.childNodes].filter((x) => !x.classList?.contains('cc-bh'))),
+      ovSec('Where things are', where()));
     const ovIdle = () => h('aside', { class: 'cc-ppanel cc-oidle' },
       h('h3', {}, 'At a glance'),
       h('div', { class: 'cc-o-prog' }, h('b', {}, Math.round(p * 100) + '%'), h('small', {}, ` done · ${plural(open.length, 'task')} open${nextPhase ? ' · now: ' + nextPhase.title : ''}`), bar(p, c.color)),
@@ -7966,11 +7966,11 @@
       h('small', { class: 'cc-pp-hint' }, phases.length ? 'Click a phase or a task in the plan to change it here.' : 'Add the first phase, then its tasks go under it.'));
     if (!(tab === 'plan' && K.planView === 'board' && toolOn('whiteboard'))) ccBoardDrop();
     const body = {
-      overview: () => [sendBars(c), ccPlanner(c, phases, { left: ovBrief(), idle: ovIdle() })],
       // Plan (the owner's sketch, 2026-11-22): what's saved on the left, the plan as a tree of tiles, a task's panel on the right.
-      plan: () => (K.planView === 'board' && toolOn('whiteboard') ? [planSwitch, ccBoardView(c, phases)] : [planSwitch, ccPlanner(c, phases)]),
+      plan: () => (K.planView === 'board' && toolOn('whiteboard')
+        ? [h('div', { class: 'cc-phases-bar' }, h('button', { class: 'btn small cc-sketch-btn on', title: 'Back to the phases', onclick: () => { K.planView = null; renderCamps(); } }, '← Back to the phases')), ccBoardView(c, phases)]
+        : [sendBars(c), ccPlanner(c, phases, { left: ovBrief(), idle: ovIdle() })]),
       work: () => [sendBars(c), workBody()],
-      resources,
       activity,
       report: () => [pulse(), ccReport(c)],
     }[tab]();
@@ -8174,96 +8174,139 @@
     }
     return b;
   }
-  // Overview (the owner, 2026-11-23: "the same or similar look as the plan page") is the same three columns: the
-  // brief on the left, the same tree, and on the right what it's reaching for (targets, money, sub-campaigns, the
-  // team) until a phase or a task is picked, which opens there as it does on Plan. ov = { left, idle }.
-  function ccPlanner(c, phases, ov) {
-    const key = ov ? 'osel' : 'psel';
-    if (!K[key] || K[key].c !== c.id) K[key] = { c: c.id, goal: ov ? null : phases[0]?.id || null, task: null };
-    const sel = K[key];
-    if (sel.goal && !phases.some((g) => g.id === sel.goal)) sel.goal = null;
-    if (!ov && !sel.goal) sel.goal = phases[0]?.id || null;
-    let task = sel.task && taskById(sel.task);
-    if (task && goalById(task.goalId)?.campaignId !== c.id) task = null;
-    if (!task) sel.task = null;
-    const phase = goalById(task?.goalId) || goalById(sel.goal), phaseNow = phase;
-    const redraw = () => renderCamps(true);
-    // Left: what's saved.
-    if (!ov && !SV.list && !SV.loading) loadPresets().then(() => renderCamps());
-    if (!S.automations && amAdmin() && !K.autoAsk) { K.autoAsk = true; api('GET', '/automations').then((r) => { S.automations = r; renderCamps(); }).catch(() => {}); }
-    const into = async (x, phase = phaseNow) => {
-      if (x.auto) return phase ? copyAutoTo(x.auto, phase, null) : toast('Add a phase first.');
-      if (!phase) return toast('Add a phase first, then put things in it.');
-      try {
-        const r = await api('POST', `/task-presets/${x.id}/use`, { goalId: phase.id });
-        for (const t of r.tasks) upsertTask(t);
-        toast(r.tasks.length === 1 ? `Added “${shortText(r.tasks[0].text, 50)}” to ${phase.title}` : `Added ${r.tasks.length} tasks to ${phase.title}`);
-        redraw();
-      } catch (e) { toast(e.message); }
-    };
-    const libItem = (ic, name, sub, run, drag) => {
-      const b = h('button', { type: 'button', class: 'cc-lib-item', draggable: drag ? 'true' : null, title: sub || name, onclick: run }, h('span', { class: 'cc-lib-ic', 'aria-hidden': 'true' }, ic), h('span', { class: 'cc-lib-t' }, name, sub ? h('small', {}, sub) : null));
-      // Marked as dragged inside Kloomie, so the page doesn't take it for files from the computer (and outline itself).
-      if (drag) b.addEventListener('dragstart', (e) => { K.pdrag = drag; S.internalDrag = true; e.dataTransfer.effectAllowed = 'copy'; e.dataTransfer.setData('text/plain', name); });
-      if (drag) b.addEventListener('dragend', () => { K.pdrag = null; S.internalDrag = false; clearDropping(); });
-      return b;
-    };
+  // ----- Plan (2026-11-25, the owner's mockup: "simple for users before anything") -----
+  // Three columns, one page: the brief and where things are on the left (ov.left); the phases in the middle as cards,
+  // each with its tasks as rows (tick, name, who, due, status), a box to type the next task in and + From saved; on the
+  // right At a glance (ov.idle) until a task or a phase is picked, which opens there to change in place. The chips under
+  // the header (All, My tasks, Overdue, Blocked) filter the rows; a phase's count always counts the whole phase.
+  // Put something saved into a phase: a bundle's or a saved task's tasks go in; an SOP or an automation opens/copies.
+  async function ccSavedInto(c, x, phase) {
+    if (x.auto) return copyAutoTo(x.auto, phase, null);
+    try {
+      const r = await api('POST', `/task-presets/${x.id}/use`, { goalId: phase.id });
+      for (const t of r.tasks) upsertTask(t);
+      toast(r.tasks.length === 1 ? `Added “${shortText(r.tasks[0].text, 50)}” to ${phase.title}` : `Added ${r.tasks.length} tasks to ${phase.title}`);
+      renderCamps(true);
+    } catch (e) { toast(e.message); }
+  }
+  // + From saved on a phase: what Plan's old left column had (saved flows: bundles and SOPs; saved tasks; automations).
+  async function ccSavedMenu(anchor, c, g) {
+    if (!SV.list) { try { await loadPresets(); } catch (e) { return toast(e.message); } }
+    if (!S.automations && amAdmin()) { try { S.automations = await api('GET', '/automations'); } catch {} }
     const list = SV.list || [];
     const bundles = list.filter((x) => x.kind === 'bundle'), saved = list.filter((x) => x.kind === 'task');
     const sops = S.templates || [];
-    const autos = (S.automations || []).slice().sort((a, b) => (b.trigger?.campaignId === c.id) - (a.trigger?.campaignId === c.id));
-    const libSec = (title, items, empty, add) => h('div', { class: 'cc-lib-sec' }, h('h4', {}, title, add ? h('button', { type: 'button', class: 'cc-lib-new', title: add[0], 'aria-label': add[0], onclick: add[1] }, '+') : null),
-      items.length ? items : h('small', { class: 'cc-lib-empty' }, empty));
-    const lib = ov ? ov.left : h('aside', { class: 'cc-plib' },
-      libSec('Saved flows', [...bundles.map((x) => libItem('🧩', x.name, plural(x.steps.length, 'task'), () => into(x), x)), ...sops.map((t) => libItem('📖', t.name, 'SOP · ' + plural(t.goals.length, 'phase'), () => sopGuide(t.id)))],
-        SV.list ? 'Bundles of saved tasks and your SOPs show here.' : 'Loading…', ['Make a bundle', () => presetSheet(null, 'bundle')]),
-      libSec('Tasks', saved.map((x) => libItem('☐', x.name, presetSub(x), () => into(x), x)), SV.list ? 'Tasks you save show here.' : 'Loading…', ['Save a task', () => presetSheet(null, 'task')]),
-      amAdmin() ? libSec('Autos', autos.slice(0, 12).map((x) => libItem('⚡', x.name, x.trigger?.campaignId === c.id ? 'This campaign' : x.on === false ? 'Off' : '', () => autoSheet(x), { auto: x })), S.automations ? 'Automations show here.' : 'Loading…',
-        ['New automation', () => autoSheet(null, { name: `${c.name}: `, trigger: { kind: 'task.done', campaignId: c.id } })]) : null);
-    // Middle: the tree.
-    const pick = (g) => { K[key] = { c: c.id, goal: g.id, task: null }; K.pfocus = true; redraw(); };
-    const node = (t, depth) => {
-      const subs = depth < 3 ? subtasksOf(t) : [];
-      return h('div', { class: 'cc-pt-node' }, ccTile(t, sel.task, key), subs.length ? h('div', { class: 'cc-pt-kids sub' }, subs.map((x) => node(x, depth + 1))) : null);
-    };
-    const tree = h('div', { class: 'cc-ptree' },
-      phases.length ? phases.map((g, i) => {
-        const roots = tasksInOrder(g.id).filter((t) => !t.parentId || !taskById(t.parentId));
-        const gp = goalProgress(g), dn = roots.filter((t) => t.done).length;
-        const tile = h('button', { type: 'button', class: 'cc-ptile phase' + (phase?.id === g.id && !task ? ' on' : '') + (gp.frac >= 1 ? ' done' : '') + (goalBlockers(g).length ? ' waiting' : ''), 'data-phase': g.id, onclick: () => pick(g) },
-          h('span', { class: 'cc-pt-n' }, String(i + 1)),
-          h('span', { class: 'cc-pt-body' }, h('b', {}, g.title), h('small', {}, `${dn} of ${plural(roots.length, 'task')}${goalBlockers(g).length ? ' · waiting' : ''}`, S.automations && autosHere(c, g, null).length ? h('span', { class: 'cc-auto-n', title: plural(autosHere(c, g, null).length, 'automation') }, ' · ⚡' + autosHere(c, g, null).length) : null), h('span', { class: 'cc-phase-bar' }, h('i', { style: `width:${Math.round(gp.frac * 100)}%` }))),
-          h('span', { class: 'icon-btn small cc-pt-open', role: 'button', tabindex: '0', title: 'What it waits for, its job stage, resources and automations', 'aria-label': 'Phase settings for ' + g.title, html: I.more, onclick: (e) => { e.stopPropagation(); stepWindow(c, g); } }));
-        const wrap = h('div', { class: 'cc-pt-phase', 'data-id': g.id },
-          tile,
-          h('div', { class: 'cc-pt-kids' }, roots.map((t) => node(t, 0)), h('div', { class: 'cc-pt-node' }, h('button', { type: 'button', class: 'cc-pt-add', onclick: () => pick(g) }, '+ Task'))));
-        // Drop something saved on a phase: it goes in that phase.
-        wrap.addEventListener('dragover', (e) => { if (K.pdrag) { e.preventDefault(); wrap.classList.add('over'); } });
-        wrap.addEventListener('dragleave', () => wrap.classList.remove('over'));
-        wrap.addEventListener('drop', (e) => { const x = K.pdrag; K.pdrag = null; wrap.classList.remove('over'); if (!x) return; e.preventDefault(); K[key] = { c: c.id, goal: g.id, task: null }; into(x, g); });
-        return wrap;
-      }) : h('p', { class: 'day-hint' }, 'No phases yet. A phase is a stage of the work, like “Call past customers” then “Book installs”.'),
-      h('div', { class: 'goal-btns cc-pt-foot' },
-        h('button', { class: 'add-goal', onclick: () => goalSheet(c) }, '+ Add a phase'),
-        h('button', { class: 'add-goal ai-btn', title: 'Draft phases and tasks from the brief', onclick: (e) => suggestPlan(c, e.currentTarget) }, '✨ Suggest from the brief')));
-    // Right: the task, or Add task.
+    const autos = amAdmin() ? (S.automations || []).slice().sort((a, b) => (b.trigger?.campaignId === c.id) - (a.trigger?.campaignId === c.id)).slice(0, 12) : [];
+    const rows = [{ head: 'Into ' + g.title }];
+    if (bundles.length || sops.length) rows.push({ head: 'Saved flows' }, ...bundles.map((x) => ({ label: `🧩 ${x.name} · ${plural(x.steps.length, 'task')}`, run: () => ccSavedInto(c, x, g) })), ...sops.map((t) => ({ label: `📖 ${t.name} · SOP`, run: () => sopGuide(t.id) })));
+    if (saved.length) rows.push({ head: 'Tasks' }, ...saved.map((x) => ({ label: '☐ ' + x.name, run: () => ccSavedInto(c, x, g) })));
+    if (autos.length) rows.push({ head: 'Automations (a copy)' }, ...autos.map((x) => ({ label: '⚡ ' + x.name, run: () => ccSavedInto(c, { auto: x }, g) })));
+    if (rows.length === 1) rows.push({ note: 'Nothing saved yet. Save a task or make a bundle and it shows here.' });
+    rows.push({ label: '+ Save a task…', run: () => presetSheet(null, 'task') }, { label: '+ Make a bundle…', run: () => presetSheet(null, 'bundle') });
+    openMenu(anchor, rows);
+  }
+  // One task as a row: tick, name (with its marks and subtasks done/all), who, due, status. A click opens its details.
+  function ccRow(c, t, sel) {
+    const g = goalById(t.goalId);
+    const [sc, sl] = ccStatus(t);
+    const blockers = taskBlockers(t);
+    const subs = subtasksOf(t);
+    const na = S.automations && g ? autosHere(c, g, t).length : 0;
+    const pick = () => { K.psel = { c: c.id, goal: t.goalId || null, task: t.id }; K.pscroll = true; renderCamps(true); };
+    const check = h('input', { type: 'checkbox', class: 'cc-row-check', checked: !!t.done, disabled: !t.done && !!blockers.length, 'aria-label': (t.done ? 'Not done: ' : 'Done: ') + t.text,
+      title: !t.done && blockers.length ? 'Waits for ' + blockers.map((x) => `“${shortText(x.text, 40)}”`).join(', ') : t.done ? 'Done' : 'Mark done' });
+    check.addEventListener('click', (e) => e.stopPropagation());
+    check.addEventListener('change', () => ccTaskSet(t, check.checked ? { done: true } : { done: false }));
+    return h('div', { class: `cc-row s-${sc}${t.done ? ' done' : ''}${sel.task === t.id ? ' on' : ''}`, 'data-task': t.id, role: 'button', tabindex: '0', onclick: pick, onkeydown: (e) => { if (e.key === 'Enter' && e.target === e.currentTarget) pick(); } },
+      check,
+      h('span', { class: 'cc-row-main' },
+        h('span', { class: 'cc-row-name' }, t.text),
+        subs.length ? h('small', { class: 'cc-row-subs', title: 'Subtasks done' }, `${subs.filter((x) => x.done).length}/${subs.length}`) : null,
+        t.wo ? h('span', { class: 'wo-chip' }, t.wo.no) : null,
+        t.test ? h('small', { class: 'step-tag test', title: 'Part of a test run: only testers get it, and Go live puts it back' }, 'TEST') : null,
+        t.action && STEP_KINDS[t.action.kind] ? h('small', { class: 'cc-tool-ic', title: 'Done with: ' + STEP_KINDS[t.action.kind].label }, TOOL_IC[t.action.kind]) : null,
+        na ? h('small', { class: 'cc-auto-n', title: plural(na, 'automation') }, '⚡' + na) : null),
+      h('span', { class: 'cc-row-who' + (ccWho(t) ? '' : ' none') }, t.assigneeId ? avatar(t.assigneeId) : null, ccWho(t) || 'Unassigned'),
+      h('span', { class: 'cc-row-due' + (isOverdue(t) ? ' late' : '') + (t.due ? '' : ' none') }, t.due ? 'Due ' + dueLabel(t.due) : ''),
+      h('span', { class: 'cc-row-status cc-status ' + sc }, sl));
+  }
+  // One phase as a card: its header (fold, name, Phase n (done/all tasks done), a thin bar, ⋯), its rows, and the foot.
+  function ccPhaseCard(c, g, i, sel, show) {
+    const roots = tasksInOrder(g.id).filter((t) => !t.parentId || !taskById(t.parentId));
+    const dn = roots.filter((t) => t.done).length;
+    const rows = show ? roots.filter((t) => show.has(t.id)).sort((a, b) => a.done - b.done) : roots;
+    const closed = K.closed.has(g.id);
+    const fold = (e) => { e.stopPropagation(); if (K.closed.has(g.id)) K.closed.delete(g.id); else K.closed.add(g.id); store.set('goalsClosed', [...K.closed].filter((id) => goalById(id))); renderCamps(true); };
+    const pickPhase = () => { K.psel = { c: c.id, goal: g.id, task: null }; K.pfocus = true; renderCamps(true); };
+    const na = S.automations ? autosHere(c, g, null).length : 0;
+    const waits = goalBlockers(g);
+    const add = h('input', { class: 'cc-phase-add', placeholder: `+ Add task to Phase ${i + 1}…`, maxlength: 500, 'aria-label': 'Add a task to ' + g.title });
+    add.addEventListener('keydown', async (e) => {
+      if (e.key !== 'Enter' || !add.value.trim()) return;
+      e.preventDefault();
+      const raw = add.value;
+      add.value = '';
+      try {
+        upsertTask(await api('POST', '/tasks', { ...parseTask(raw), goalId: g.id }));
+        renderCamps(true);
+        $(`#camps .cc-phase[data-phase="${g.id}"] .cc-phase-add`)?.focus();
+      } catch (er) { add.value = raw; toast(er.message); }
+    });
+    return h('section', { class: 'cc-phase' + (closed ? ' closed' : '') + (sel.goal === g.id && !sel.task ? ' on' : '') + (waits.length ? ' waiting' : ''), 'data-phase': g.id },
+      h('div', { class: 'cc-phase-h', role: 'button', tabindex: '0', onclick: pickPhase, onkeydown: (e) => { if (e.key === 'Enter' && e.target === e.currentTarget) pickPhase(); } },
+        h('button', { type: 'button', class: 't-btn cc-phase-fold', 'aria-label': closed ? 'Show tasks' : 'Hide tasks', 'aria-expanded': String(!closed), html: I.down, onclick: fold }),
+        h('b', { class: 'cc-phase-t' }, g.title),
+        waits.length ? h('small', { class: 'cc-phase-wait', title: 'Opens when ' + waits.map((x) => `“${x.title}”`).join(' and ') + ' is met' }, '⏳ waiting') : null,
+        na ? h('small', { class: 'cc-auto-n', title: plural(na, 'automation') }, '⚡' + na) : null,
+        h('span', { class: 'cc-phase-meta' }, `Phase ${i + 1} (${dn}/${roots.length} tasks done)`),
+        h('span', { class: 'cc-phase-bar' }, bar(roots.length ? dn / roots.length : 0, c.color)),
+        h('button', { type: 'button', class: 'icon-btn small', title: 'What it waits for, its job stage, resources and automations', 'aria-label': 'Phase settings for ' + g.title, html: I.more, onclick: (e) => { e.stopPropagation(); stepWindow(c, g); } })),
+      closed ? null : h('div', { class: 'cc-phase-rows' },
+        rows.map((t) => ccRow(c, t, sel)),
+        roots.length && !rows.length ? h('p', { class: 'cc-phase-empty' }, 'No matching tasks') : null),
+      closed ? null : h('div', { class: 'cc-phase-foot' }, add,
+        h('button', { type: 'button', class: 'btn small cc-phase-saved', title: 'Put saved tasks, a bundle or an automation into this phase', onclick: (e) => ccSavedMenu(e.currentTarget, c, g) }, '+ From saved')));
+  }
+  function ccPlanner(c, phases, ov) {
+    if (!K.psel || K.psel.c !== c.id) K.psel = { c: c.id, goal: null, task: null };
+    const sel = K.psel;
+    if (sel.goal && !phases.some((g) => g.id === sel.goal)) sel.goal = null;
+    let task = sel.task && taskById(sel.task);
+    if (task && goalById(task.goalId)?.campaignId !== c.id) task = null;
+    if (!task) sel.task = null;
+    const phase = goalById(task?.goalId) || goalById(sel.goal);
+    const redraw = () => renderCamps(true);
+    if (!S.automations && amAdmin() && !K.autoAsk) { K.autoAsk = true; api('GET', '/automations').then((r) => { S.automations = r; renderCamps(); }).catch(() => {}); }
+    // Middle: the phases.
+    const chip = ccChipOf(K.wfilter);
+    const show = chip === 'all' ? null : new Set(ccChipPick(campTasks(c), chip).map((t) => t.id));
+    const tree = h('div', { class: 'cc-phases' },
+      h('div', { class: 'cc-phases-bar' },
+        h('button', { class: 'btn small cc-addphase', onclick: () => goalSheet(c) }, '+ Add Phase'),
+        h('button', { class: 'btn small ai-btn', title: 'Draft phases and tasks from the brief', onclick: (e) => suggestPlan(c, e.currentTarget) }, '✨ Suggest from the brief'),
+        h('span', { style: 'flex:1' }),
+        toolOn('whiteboard') ? h('button', { class: 'btn small cc-sketch-btn', title: 'Sketch this campaign on its whiteboard', onclick: () => { K.planView = 'board'; renderCamps(); } }, '🗺️ Sketch') : null),
+      phases.length ? phases.map((g, i) => ccPhaseCard(c, g, i, sel, show)) : h('p', { class: 'day-hint' }, 'No phases yet. A phase is a stage of the work, like “Call past customers” then “Book installs”.'),
+      phases.length ? h('button', { class: 'cc-phase-new', onclick: () => goalSheet(c) }, '+ Add Phase') : null);
+    // Right: the task picked, the phase picked (Add task), or At a glance.
     const members = (S.workspace.members || []).filter((m) => !m.gone);
     const whoSel = (v) => h('select', { class: 'cc-pp-who', 'aria-label': 'Who' }, h('option', { value: '' }, 'Nobody yet'), members.map((m) => h('option', { value: m.id, selected: v === m.id }, m.name)));
-    const foot = h('div', { class: 'cc-pp-foot' },
-      phase ? h('button', { type: 'button', class: 'btn cc-pp-tool', title: task ? 'What this task is done with, and its checklist' : 'Resources, what it needs, and a tool for each task', onclick: () => { K[key] = { ...sel, tools: true, autos: false }; redraw(); } }, '🧰 Add tool') : null,
-      phase && amAdmin() ? h('button', { type: 'button', class: 'btn cc-pp-auto', title: task ? 'Automations for this task' : 'Automations for this phase', onclick: () => { K[key] = { ...sel, autos: true, tools: false }; redraw(); } }, '⚡ Add automation') : null);
+    const foot = (extra) => h('div', { class: 'cc-pp-foot' },
+      phase ? h('button', { type: 'button', class: 'btn cc-pp-tool', title: task ? 'What this task is done with, and its checklist' : 'Resources, what it needs, and a tool for each task', onclick: () => { K.psel = { ...sel, tools: true, autos: false }; redraw(); } }, '🧰 Add tool') : null,
+      phase && amAdmin() ? h('button', { type: 'button', class: 'btn cc-pp-auto', title: task ? 'Automations for this task' : 'Automations for this phase', onclick: () => { K.psel = { ...sel, autos: true, tools: false }; redraw(); } }, '⚡ Add automation') : null,
+      extra);
     let panel;
     if (sel.tools && phase) {
-      panel = ccToolPanel(c, phase, task, () => { K[key] = { ...sel, tools: false }; redraw(); }, () => { K[key] = { c: c.id, goal: phase.id, task: null, tools: true }; redraw(); });
+      panel = ccToolPanel(c, phase, task, () => { K.psel = { ...sel, tools: false }; redraw(); }, () => { K.psel = { c: c.id, goal: phase.id, task: null, tools: true }; redraw(); });
     } else if (sel.autos && phase && amAdmin()) {
-      panel = ccAutoPanel(c, phase, task, () => { K[key] = { ...sel, autos: false }; redraw(); });
+      panel = ccAutoPanel(c, phase, task, () => { K.psel = { ...sel, autos: false }; redraw(); });
     } else if (task) {
       const t = task;
-      const name = h('input', { class: 'cc-pp-name', value: t.text, maxlength: 500, 'aria-label': 'Task' });
+      const name = h('input', { class: 'cc-pp-name', value: t.text, maxlength: 500, 'aria-label': 'Task title' });
       name.addEventListener('change', () => name.value.trim() && name.value.trim() !== t.text && ccTaskSet(t, { text: name.value.trim() }));
       const who = whoSel(t.assigneeId);
       who.addEventListener('change', () => ccTaskSet(t, { assigneeId: who.value || null }));
-      const due = h('input', { type: 'date', class: 'cc-pp-due', value: t.due || '', 'aria-label': 'Due' });
+      const due = h('input', { type: 'date', class: 'cc-pp-due', value: t.due || '', 'aria-label': 'Due date' });
       due.addEventListener('change', () => ccTaskSet(t, { due: due.value || null }));
       const blockers = taskBlockers(t);
       const st = t.done ? 'done' : t.status === 'doing' ? 'doing' : 'todo';
@@ -8277,16 +8320,48 @@
         subAdd.value = '';
         try { upsertTask(await api('POST', '/tasks', { text, parentId: t.id, goalId: t.goalId || null, assigneeId: t.assigneeId || null })); K.pfocusSub = true; redraw(); } catch (er) { subAdd.value = text; toast(er.message); }
       });
-      panel = h('aside', { class: 'cc-ppanel' },
-        h('div', { class: 'cc-pp-h' }, h('small', {}, phase ? phase.title : 'Task'), h('button', { class: 'icon-btn small', 'aria-label': 'Close the task', html: I.close, onclick: () => { K[key] = { ...sel, task: null, goal: ov ? null : sel.goal }; redraw(); } })),
-        h('label', { class: 'cc-pp-f' }, 'Task', name),
-        h('div', { class: 'row2' }, h('label', { class: 'cc-pp-f' }, 'Who', who), h('label', { class: 'cc-pp-f' }, 'Due', due)),
+      const subRow = (x) => {
+        const cb = h('input', { type: 'checkbox', checked: !!x.done, disabled: !x.done && !!taskBlockers(x).length, 'aria-label': (x.done ? 'Not done: ' : 'Done: ') + x.text });
+        cb.addEventListener('change', () => ccTaskSet(x, { done: cb.checked }));
+        return h('label', { class: 'cc-td-sub' + (x.done ? ' done' : '') }, cb, h('span', {}, x.text));
+      };
+      const notes = h('textarea', { class: 'cc-td-notes', rows: 4, maxlength: 8000, placeholder: t.wo ? 'Instructions for the work order…' : 'Notes: what “done” looks like, links, anything they need to know…', 'aria-label': 'Notes' });
+      notes.value = t.description || '';
+      // Saved without drawing the page again: notes show nowhere else on it, and a redraw on blur would eat the click that
+      // caused the blur (a row's tick, a chip).
+      notes.addEventListener('blur', () => { const cur = taskById(t.id) || t; if (notes.value.trim() !== (cur.description || '').trim()) patchTask(cur, { description: notes.value }).catch((er) => toast(er.message)); });
+      const files = taskFiles(t);
+      const pickFile = h('input', { type: 'file', multiple: true, hidden: true });
+      pickFile.addEventListener('change', () => { if (pickFile.files.length) attachToTask(t, [...pickFile.files]).then(redraw); });
+      const drop = h('div', { class: 'cc-td-drop', role: 'button', tabindex: '0', onclick: () => pickFile.click(), onkeydown: (e) => { if (e.key === 'Enter') pickFile.click(); } }, '⇪ Drop files here, or click to add');
+      drop.addEventListener('dragover', (e) => { if (e.dataTransfer?.types?.includes('Files')) { e.preventDefault(); e.stopPropagation(); drop.classList.add('over'); } });
+      drop.addEventListener('dragleave', () => drop.classList.remove('over'));
+      drop.addEventListener('drop', (e) => { drop.classList.remove('over'); const fs = [...(e.dataTransfer?.files || [])]; if (!fs.length) return; e.preventDefault(); e.stopPropagation(); attachToTask(t, fs).then(redraw); });
+      const del = h('button', { type: 'button', class: 'btn danger cc-td-del', 'data-label': '1', onclick: () => confirmClick(del, async () => {
+        try {
+          await api('DELETE', '/tasks/' + t.id);
+          S.tasks = S.tasks.filter((x) => x.id !== t.id).map((x) => (x.parentId === t.id ? { ...x, parentId: undefined } : x));
+          for (const e of S.entries) if (e.taskId === t.id) e.taskId = null;
+          K.psel = { c: c.id, goal: null, task: null };
+          renderDay(); redraw(); toast('Deleted');
+        } catch (er) { toast(er.message); }
+      }) }, 'Delete task');
+      panel = h('aside', { class: 'cc-ppanel cc-td', 'aria-label': 'Task details' },
+        h('div', { class: 'cc-pp-h' }, h('span', {}, h('b', {}, 'Task details'), phase ? h('small', {}, ' · ' + phase.title) : null), h('button', { class: 'icon-btn small', 'aria-label': 'Close the task', html: I.close, onclick: () => { K.psel = { c: c.id, goal: null, task: null }; redraw(); } })),
+        h('label', { class: 'cc-pp-f' }, 'Title', name),
+        h('div', { class: 'row2' }, h('label', { class: 'cc-pp-f' }, 'Assignee', who), h('label', { class: 'cc-pp-f' }, 'Due date', due)),
         h('div', { class: 'cc-pp-f' }, h('span', {}, 'Status'), status),
         blockers.length ? h('small', { class: 'cc-pp-wait' }, 'Waits for ' + blockers.map((x) => `“${shortText(x.text, 40)}”`).join(', ')) : null,
-        h('div', { class: 'cc-pp-f' }, h('span', {}, 'Subtasks'), subs.length ? h('div', { class: 'cc-pp-subs' }, subs.map((x) => ccTile(x, sel.task, key))) : null, subAdd),
-        h('button', { type: 'button', class: 'link cc-pp-more', onclick: () => taskWindow(t) }, 'Open the whole task: notes, files, checklist, what it waits for →'),
-        foot);
+        h('div', { class: 'cc-pp-f' }, h('span', {}, 'Subtasks'), subs.length ? h('div', { class: 'cc-td-subs' }, subs.map(subRow)) : null, subAdd),
+        h('label', { class: 'cc-pp-f' }, t.wo ? 'Instructions' : 'Notes', notes),
+        h('div', { class: 'cc-pp-f' }, h('span', {}, 'Attachments'),
+          files.length ? h('div', { class: 'cc-td-files' }, files.map((it) => h('button', { type: 'button', class: 'pill pill-btn', title: 'Open', onclick: () => openPreview(it) }, '📎 ' + (it.name || 'Note')))) : null,
+          drop, pickFile),
+        foot(h('span', { class: 'cc-td-foot2' },
+          h('button', { type: 'button', class: 'btn cc-td-full', title: 'Comments, checklist, what it waits for, time and more', onclick: () => taskWindow(t) }, 'Open full'),
+          del)));
       if (K.pfocusSub) { K.pfocusSub = false; setTimeout(() => subAdd.isConnected && subAdd.focus()); }
+      if (K.pscroll) { K.pscroll = false; if (!document.body.classList.contains('wide')) setTimeout(() => panel.isConnected && panel.scrollIntoView({ block: 'start' })); }
     } else if (phase) {
       const name = h('input', { class: 'cc-pp-name', placeholder: 'What needs doing?', maxlength: 500, 'aria-label': 'New task' });
       const who = whoSel('');
@@ -8302,19 +8377,17 @@
       };
       name.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); add(); } });
       panel = h('aside', { class: 'cc-ppanel' },
-        h('div', { class: 'cc-pp-addh' }, h('h3', {}, 'Add task', h('small', {}, ' to ' + phase.title)), ov ? h('button', { class: 'icon-btn small', 'aria-label': 'Back to the overview', html: I.close, onclick: () => { K[key] = { c: c.id, goal: null, task: null }; redraw(); } }) : null),
+        h('div', { class: 'cc-pp-addh' }, h('h3', {}, 'Add task', h('small', {}, ' to ' + phase.title)), h('button', { class: 'icon-btn small', 'aria-label': 'Back to at a glance', html: I.close, onclick: () => { K.psel = { c: c.id, goal: null, task: null }; redraw(); } })),
         h('label', { class: 'cc-pp-f' }, 'Task', name),
         h('div', { class: 'row2' }, h('label', { class: 'cc-pp-f' }, 'Who', who), h('label', { class: 'cc-pp-f' }, 'Due', due)),
         h('button', { type: 'button', class: 'btn primary-btn cc-pp-add', onclick: add }, 'Add task'),
-        h('small', { class: 'cc-pp-hint' }, 'Or pick something saved on the left to drop it into this phase. Click a task to change it here.'),
-        foot);
+        h('small', { class: 'cc-pp-hint' }, 'Or use + From saved on the phase. Click a task to change it here.'),
+        foot());
       if (K.pfocus) { K.pfocus = false; setTimeout(() => name.isConnected && name.focus()); }
-    } else if (ov) {
-      panel = ov.idle;
     } else {
-      panel = h('aside', { class: 'cc-ppanel' }, h('h3', {}, 'Start with a phase'), h('p', { class: 'day-hint' }, 'Add the first phase, then its tasks go under it.'), h('button', { class: 'btn primary-btn', onclick: () => goalSheet(c) }, '+ Add a phase'), foot);
+      panel = ov.idle;
     }
-    return h('div', { class: 'cc-planner' + (ov ? ' cc-ov' : '') }, lib, tree, panel);
+    return h('div', { class: 'cc-planner cc-ov' }, ov.left, tree, panel);
   }
 
   function goalCard(c, g) {

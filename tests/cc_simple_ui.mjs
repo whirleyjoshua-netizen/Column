@@ -87,6 +87,74 @@ try {
   await tabTo('report');
   ok(await A.until(`${T('.cc-body')}.textContent.includes('What to do next')`), 'Report has what to do next (from the Pulse)');
   await tabTo('plan');
+  // ----- Task 3: Plan in the owner's mockup -----
+  const phaseEl = (i) => `document.querySelectorAll('#camps .cc-phase')[${i}]`;
+  const rowOf = (text) => `[...document.querySelectorAll('#camps .cc-row')].find((r) => r.querySelector('.cc-row-name')?.textContent === ${JSON.stringify(text)})`;
+  const taskApi = async (text) => (await api('GET', '/state')).tasks.find((x) => x.text === text);
+  ok(await A.until(`document.querySelectorAll('#camps .cc-phase').length === 3`), 'one card per phase');
+  ok(await A.ev(`JSON.stringify([...document.querySelectorAll('#camps .cc-phase .cc-phase-t')].map((e) => e.textContent)) === '["Call past customers","Book installs","Install"]'`), 'phases in order');
+  ok(await A.ev(`(() => { const t = ${phaseEl(0)}.querySelector('.cc-phase-h').textContent; return t.includes('Phase 1') && t.includes('(0/2'); })()`), 'phase 1 says Phase 1 (0/2 tasks done), its subtask not counted');
+  ok(await A.ev(`${rowOf('Call the Lee family')}?.querySelector('.cc-row-subs')?.textContent === '0/1' && !${rowOf('Ask about the patio')}`), 'a subtask shows as 0/1 on its task, not as a row');
+  ok(await A.ev(`${rowOf('Call the Lee family')}.querySelector('.cc-row-due').classList.contains('late') && ${rowOf('Call the Lee family')}.querySelector('.cc-row-status').textContent === 'Overdue'`), 'a late task: red due, Overdue status');
+  ok(await A.ev(`${T('.cc-obrief')}.textContent.includes('Objective') && ${T('.cc-obrief')}.textContent.includes('Book installs') && !!${T('.cc-obrief .cc-where')}`), 'the brief on the left, with where things are');
+  ok(await A.ev(`${T('.cc-planner')}.textContent.includes('At a glance')`), 'nothing picked: At a glance');
+  await A.tap(`${rowOf('Call the Lee family')}.querySelector('.cc-row-name')`);
+  ok(await A.until(`${T('.cc-td .cc-pp-name')}?.value === 'Call the Lee family'`), 'a task opens in Task details');
+  ok(await A.ev(`!!${T('.cc-td textarea.cc-td-notes')} && !!${T('.cc-td .cc-td-drop')} && ['Add tool', 'Open full', 'Delete task'].every((x) => [...document.querySelectorAll('#camps .cc-td button')].some((b) => b.textContent.includes(x)))`), 'details: notes, attachments, Add tool, Open full, Delete task');
+  await A.ev(`(() => { const n = ${T('.cc-td textarea.cc-td-notes')}; n.focus(); n.value = 'Bring brochure'; n.dispatchEvent(new Event('blur')); return true; })()`);
+  let saved1 = false; for (let i = 0; i < 30 && !saved1; i++) { saved1 = (await taskApi('Call the Lee family'))?.description === 'Bring brochure'; if (!saved1) await sleep(150); }
+  ok(saved1, 'notes save to the task');
+  await A.tap(`${rowOf('Call the Diaz family')}.querySelector('.cc-row-check')`);
+  let done1 = false; for (let i = 0; i < 30 && !done1; i++) { done1 = !!(await taskApi('Call the Diaz family'))?.done; if (!done1) await sleep(150); }
+  ok(done1, 'ticking a row finishes the task');
+  ok(await A.until(`${phaseEl(0)}.querySelector('.cc-phase-h').textContent.includes('(1/2')`), 'and the phase count follows');
+  await A.tap(T('.cc-chip[data-chip=mine]'));
+  ok(await A.until(`${phaseEl(0)}.querySelectorAll('.cc-row').length === 1 && !!${rowOf('Call the Lee family')}`), 'My tasks: only mine');
+  ok(await A.ev(`${phaseEl(1)}.textContent.includes('No matching tasks') && ${phaseEl(1)}.querySelector('.cc-phase-h').textContent.includes('(0/1')`), 'a phase with none still shows, its count the whole phase');
+  await A.tap(T('.cc-chip[data-chip=all]'));
+  await A.until(`!!${rowOf('Send quotes')}`);
+  await A.ev(`(() => { const i = ${phaseEl(2)}.querySelector('input.cc-phase-add'); i.focus(); i.value = 'Measure the yard'; i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); return true; })()`);
+  ok(await A.until(`!!${rowOf('Measure the yard')} && ${phaseEl(2)}.contains(${rowOf('Measure the yard')})`), 'typing a task in a phase adds it there');
+  await A.tap(`${phaseEl(1)}.querySelector('.cc-phase-saved')`);
+  ok(await A.until(`(() => { const t = document.querySelector('#menu').textContent; return t.includes('Install day') && t.includes('Order samples'); })()`), '+ From saved lists bundles and saved tasks');
+  await A.tap(`[...document.querySelectorAll('#menu button')].find((b) => b.textContent.includes('Order samples'))`);
+  ok(await A.until(`!!${rowOf('Order samples')} && ${phaseEl(1)}.contains(${rowOf('Order samples')})`), 'picking one puts it in that phase');
+  await A.tap(`${rowOf('Measure the yard')}.querySelector('.cc-row-name')`);
+  await A.until(`${T('.cc-td .cc-pp-name')}?.value === 'Measure the yard'`);
+  await A.tap(T('.cc-td .cc-td-del'));
+  ok(await A.until(`${T('.cc-td .cc-td-del')}?.textContent.includes('again')`), 'Delete asks for a second tap');
+  await A.tap(T('.cc-td .cc-td-del'));
+  ok(await A.until(`!${rowOf('Measure the yard')}`), 'the second tap deletes it');
+  // A waiting task can't be ticked (in order: phase 2 waits for phase 1).
+  await api('PATCH', '/campaigns/' + camp.id, { inOrder: true });
+  await tabTo('work'); await tabTo('plan');
+  ok(await A.until(`${rowOf('Send quotes')}?.querySelector('.cc-row-check')?.disabled === true`), 'a task that waits cannot be ticked');
+  await api('PATCH', '/campaigns/' + camp.id, { inOrder: false });
+  // The whiteboard is still a button away (it becomes the Sketch tab later).
+  ok(await A.until(`!!${T('.cc-sketch-btn')}`), 'a Sketch button on Plan');
+  await A.tap(T('.cc-sketch-btn'));
+  ok(await A.until(`!!${T('.cc-board-empty')} || !!${T('.cc-boardwrap')}`), 'it opens the campaign board');
+  await A.tap(T('.cc-sketch-btn'));
+  ok(await A.until(`!!${T('.cc-phase')}`), 'and back to the phases');
+  // A campaign with no phases.
+  await api('POST', '/campaigns', { name: 'Empty one', brief: 'Nothing yet' });
+  await A.tap(T('.cc-crumb button'));
+  await A.until(`[...document.querySelectorAll('.camp-card')].some((x) => x.textContent.includes('Empty one'))`);
+  await A.tap(`[...document.querySelectorAll('.camp-card')].find((x) => x.textContent.includes('Empty one'))`);
+  ok(await A.until(`${T('.cc-name')}?.textContent === 'Empty one' && !!${T('.cc-addphase')} && ${T('.cc-planner')}.textContent.includes('At a glance')`), 'no phases: + Add Phase and At a glance');
+  await A.tap(T('.cc-crumb button'));
+  await A.until(`!!document.querySelector('.camp-card')`);
+  await A.tap(`[...document.querySelectorAll('.camp-card')].find((x) => x.textContent.includes('Spring Promo'))`);
+  await A.until(`!!${T('.cc-phase')}`);
+  // On a phone: the brief first, then the phases; a task's details open and close.
+  await A.cmd('Emulation.setDeviceMetricsOverride', { width: 420, height: 860, deviceScaleFactor: 2, mobile: true });
+  await sleep(400);
+  ok(await A.ev(`${T('.cc-obrief')}.getBoundingClientRect().top < ${phaseEl(0)}.getBoundingClientRect().top && document.documentElement.scrollWidth <= innerWidth`), 'on a phone: the brief first, nothing sideways');
+  await A.tap(`${rowOf('Call the Lee family')}.querySelector('.cc-row-name')`);
+  ok(await A.until(`(() => { const e = ${T('.cc-td')}; if (!e) return false; const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0; })()`), 'on a phone a task shows its details');
+  await A.tap(T('.cc-td [aria-label="Close the task"]'));
+  ok(await A.until(`!${T('.cc-td')}`), 'and the close button closes them');
+  await A.cmd('Emulation.setDeviceMetricsOverride', { width: 1500, height: 950, deviceScaleFactor: 1, mobile: false });
   ok(A.errors.length === 0, 'no script errors' + (A.errors.length ? ': ' + A.errors.join(' | ') : ''));
 } catch (e) { ok(false, 'threw: ' + e.stack); }
 A?.close();
