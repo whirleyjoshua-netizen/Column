@@ -219,6 +219,11 @@ try {
   s = await stepOf(jq?.id, 'Send quote');
   ok(s?.quote?.status === 'sent' && s.quote.url?.endsWith('/q/' + tok1) && s.state === 'current', 'sending it: status sent, the link, still current');
   ok((await stageOf(jq?.id)) === stage0, 'sending a quote doesn’t change the job’s stage (the run owns it): ' + (await stageOf(jq?.id)));
+  await fetch(`${B}/q/${tok1}`); // the customer opens it
+  s = await stepOf(jq?.id, 'Send quote');
+  ok(s?.quote?.status === 'viewed' && s.state === 'current', 'opening the link: status viewed: ' + s?.quote?.status);
+  ok((await stepOf(jq?.id, 'Send quote', sam))?.quote?.status === 'viewed', 'members see viewed too (status only)');
+  ok((await stageOf(jq?.id)) === stage0, 'opening it doesn’t write the job’s stage');
   const stage1 = await stageOf(jq?.id);
   await answer(tok1, 'decline', { name: 'Dana', reason: 'Too much' });
   ok((await stageOf(jq?.id)) === stage1, 'declining doesn’t write the job’s stage');
@@ -231,6 +236,7 @@ try {
   sh = (await rico('POST', `/records/${jq?.id}/share`, { hours: 0 })).body;
   const tok2 = sh?.share?.token;
   ok(!!tok2 && tok2 !== tok1, 'the next send makes a new link');
+  ok((await stepOf(jq?.id, 'Send quote'))?.quote?.status === 'sent', 'a new quote starts at sent, not viewed');
   await answer(tok2, 'accept', { name: 'Dana', v: await vOf(`${B}/q/${tok2}`) });
   let run = await runOf(jq?.id);
   s = run?.steps?.find((x) => x.name === 'Send quote');

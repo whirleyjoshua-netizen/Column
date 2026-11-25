@@ -187,7 +187,7 @@ export function jobFlowsModule(ctx) {
     const lines = itemsField(t) ? rec.values[itemsField(t).id] : null;
     const a = rec.answer;
     const fresh = a && (a.at || 0) >= c.createdAt;
-    let status = rec.share ? 'sent' : 'draft';
+    let status = rec.share ? (rec.share.viewedAt ? 'viewed' : 'sent') : 'draft';
     let met = false;
     if (a && !fresh) status = 'stale';
     else if (a?.act === 'decline') status = 'declined';
@@ -265,7 +265,7 @@ export function jobFlowsModule(ctx) {
       case 'book': return s.settings?.visitKind ? `No ${s.settings.visitKind} visit booked` : 'No visit booked';
       case 'work': return 'The checklist isn’t all ticked' + (s.settings?.photos ? ', or the after photos are missing' : '');
       case 'signoff': return 'The customer hasn’t signed';
-      case 'quote': { const q = quoteNow(db.campaigns[g.campaignId], rec); return q.status === 'declined' ? 'The customer declined: send a new quote' : q.status === 'changed' ? 'The lines changed after it was accepted: send a new quote' : q.status === 'sent' ? 'Waiting for the customer to accept' : 'Quote not sent yet'; }
+      case 'quote': { const q = quoteNow(db.campaigns[g.campaignId], rec); return q.status === 'declined' ? 'The customer declined: send a new quote' : q.status === 'changed' ? 'The lines changed after it was accepted: send a new quote' : q.status === 'viewed' ? 'The customer opened it: waiting for them to accept' : q.status === 'sent' ? 'Waiting for the customer to accept' : 'Quote not sent yet'; }
       case 'invoice': return 'No invoice sent';
       case 'payment': return 'Not paid yet';
       case 'tasks': { const left = tasksInOrder(g).filter((x) => !x.done && !x.skipped).length; return `${left} task${left === 1 ? '' : 's'} left`; }

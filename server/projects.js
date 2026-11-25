@@ -1863,7 +1863,14 @@ export function projectsModule({ jobQuote = () => null, seesLinked = () => true,
     }
     if (act) return quoteHtml(res, 404, null, '<h1>Not found</h1>');
     // Opening it marks a sent quote viewed.
-    if (status === 'sent' && !jobQuote(rec)?.onRun) {
+    // A job on a Job Flow run: the view is kept on the link (rec.share.viewedAt), never in the job's stage, which the
+    // run owns (PHASE2.md §3).
+    if (jobQuote(rec)?.onRun && !rec.answer && !rec.share.viewedAt) {
+      rec.share.viewedAt = Date.now();
+      logTo(rec, { kind: 'quote', what: 'viewed', by: 'The customer' });
+      rec.updatedAt = Date.now();
+      recordNews(rec, 'record.updated', 'Customer');
+    } else if (status === 'sent' && !jobQuote(rec)?.onRun) {
       setStatus(p, t, rec, 'Viewed');
       logTo(rec, { kind: 'quote', what: 'viewed', by: 'The customer' });
       rec.updatedAt = Date.now();
