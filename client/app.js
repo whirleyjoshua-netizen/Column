@@ -583,6 +583,8 @@
     } else if (msg.type === 'payments') {
       S.payments = msg.payments;
       $('#settings .pay-sec, #apps .pay-sec')?.replaceWith(paySection());
+    } else if (msg.type === 'jobrun') {
+      jbRunNews(msg);
     } else if (msg.type === 'visits') {
       PR.visits.set(msg.recordId, msg.visits);
       teamSoon();
@@ -3185,7 +3187,7 @@
   // Chat moved into Tools (the owner, 2026-11-20): it opens in the split beside the page, like Stacks.
   const MAIN_TABS = ['agents', 'work', 'apps'];
   // Tasks (the owner, 2026-11-15): what was Day is Workspace's first tab, and Workspace always opens on it.
-  const WORK_TABS = ['day', 'contacts', 'projects', 'camps', 'docs', 'automations', 'tools'];
+  const WORK_TABS = ['day', 'contacts', 'jobs', 'projects', 'camps', 'docs', 'automations', 'tools'];
   // What Workspace → Tools lists. Stacks is a view (S.tab 'column'); the rest open in #tool. While one is open, Tools stays lit.
   const TOOL_PAGE = ['chat', 'column', 'whiteboard', 'templates', 'inventory', 'bills', 'analytics', 'email', 'meetings', 'map', 'vault'];
   const BAR_ITEMS = {
@@ -3201,6 +3203,8 @@
     // Docs and Folders are the same things (a doc is an item, and folders hold items): one tab, a switch between them.
     docs: { label: 'Folders & Docs', ok: () => (toolOn('docs') || toolOn('folders')) && memberMay('docs'), open: () => docsHome(), on: () => toolOpen === 'docs' || toolOpen === 'folders' },
     projects: { label: 'Boards', ok: () => toolOn('projects') && memberMay('projects'), open: () => showProjects() },
+    // Jobs (the owner, 2026-11-24): every job and the job flows they run on, a tab of its own beside Boards.
+    jobs: { label: 'Jobs', ok: () => toolOn('projects') && memberMay('projects'), open: () => openTool('jobs') },
     // Automations (the owner, 2026-11-14): something you build and watch, so it's in Workspace, not Settings. Owners and admins.
     automations: { label: 'Automations', ok: () => amAdmin() },
     // Tools (the owner, 2026-11-16): at the far right of the strip; it opens the split on the right, beside the page.
@@ -3249,6 +3253,7 @@
     projects: svg('<rect x="3" y="7" width="18" height="13" rx="2"/><path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M3 13h18"/>'),
     bills: svg('<path d="M12 3v18M16.5 7.5c0-1.7-2-3-4.5-3s-4.5 1.3-4.5 3S9.5 10.5 12 11s4.5 1.3 4.5 3.5-2 3-4.5 3-4.5-1.3-4.5-3"/>'),
     contacts: svg('<circle cx="12" cy="9" r="3.5"/><path d="M5 20a7 7 0 0 1 14 0"/>'),
+    jobs: svg('<rect x="3" y="7" width="18" height="13" rx="2"/><path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M3 12h18"/>'),
     email: svg('<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/>'),
     folders: svg('<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>'),
     meetings: svg('<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/>'),
@@ -13538,7 +13543,7 @@
   }
 
   // ---------- tools: small apps that open in a drawer, so the tabs stay as they are ----------
-  const TOOLS = { agents: { name: 'Your team', render: agentsTool }, hq: { name: 'Company HQ', render: hqTool }, sidekick: { name: 'Sidekick', render: sidekickTool }, docs: { name: 'Folders & Docs', render: docsTool }, bills: { name: 'Finance', render: financeTool }, contacts: { name: 'Contacts', render: contactsTool }, email: { name: 'Email', render: emailTool }, meetings: { name: 'Meeting notes', render: meetingsTool }, planner: { name: 'Planner', render: plannerTool }, folders: { name: 'Folders & Docs', render: foldersTool }, map: { name: 'Map', render: mapTool }, signs: { name: 'Signatures', render: signsTool }, cards: { name: 'Business card', render: cardTool }, templates: { name: 'Templates', render: () => templatesTool() }, inventory: { name: 'Inventory', render: () => inventoryTool() }, automations: { name: 'Automations', render: () => automationsTool() }, column: { name: 'Stacks', render: () => [stacksInSplit()] }, chat: { name: 'Chat', render: () => [chatInSplit()] }, tools: { name: 'Tools', render: toolsPage }, vault: { name: 'Vault', render: vaultTool }, news: { name: 'News', render: () => NEWS.render() } };
+  const TOOLS = { agents: { name: 'Your team', render: agentsTool }, hq: { name: 'Company HQ', render: hqTool }, sidekick: { name: 'Sidekick', render: sidekickTool }, docs: { name: 'Folders & Docs', render: docsTool }, bills: { name: 'Finance', render: financeTool }, contacts: { name: 'Contacts', render: contactsTool }, email: { name: 'Email', render: emailTool }, meetings: { name: 'Meeting notes', render: meetingsTool }, planner: { name: 'Planner', render: plannerTool }, folders: { name: 'Folders & Docs', render: foldersTool }, map: { name: 'Map', render: mapTool }, signs: { name: 'Signatures', render: signsTool }, cards: { name: 'Business card', render: cardTool }, templates: { name: 'Templates', render: () => templatesTool() }, inventory: { name: 'Inventory', render: () => inventoryTool() }, automations: { name: 'Automations', render: () => automationsTool() }, jobs: { name: 'Jobs', render: () => jobsTool() }, column: { name: 'Stacks', render: () => [stacksInSplit()] }, chat: { name: 'Chat', render: () => [chatInSplit()] }, tools: { name: 'Tools', render: toolsPage }, vault: { name: 'Vault', render: vaultTool }, news: { name: 'News', render: () => NEWS.render() } };
   let toolOpen = null;
   // The split (the owner, 2026-11-16): Tools, and every tool in it or in Settings → Business, opens in a panel on the
   // right of whatever page is showing, wherever it's opened from (a link, Home, Sidekick, Settings), with a button to
@@ -16902,6 +16907,7 @@
       title,
       t.scan ? assetBar(p, t, r) : null,
       custFields.length ? prVisitBar(p, t, r) : null,
+      jbRunCard(p, t, r), // a job's flow, above its tabs: where it is stays in sight whichever tab Next opens
       tabBar,
       h('div', { class: 'pj-tab-body', role: tabBar ? 'tabpanel' : null }, ...body),
       h('small', { class: 'pj-meta' }, `Added by ${r.by} · ${ago(r.createdAt)}${r.updatedAt > r.createdAt + 1000 ? ` · changed ${ago(r.updatedAt)}` : ''}${r.extId ? ` · from another app (${r.extId})` : ''}`));
@@ -18235,6 +18241,387 @@
     PR.visit = visitId || null;
     await loadVisits(r, true);
     renderProjects();
+  }
+  // ----- Jobs and Job Flows (docs/jobflows/CONTRACTS.md): Workspace → Jobs. Every job on the team's job lists, the
+  // flows they run on (owners and admins build them), New job from a flow, and on a job's Overview the step it's at
+  // with a Next button that opens the sheet that does it. The server decides every step; this only shows it. -----
+  const JB = { tab: store.get('jbTab', 'jobs'), jobs: null, flows: null, q: '', flow: '', edit: null, loading: false, runs: new Map(), runBusy: new Set(), pick: {} };
+  const JB_KIND = { client: ['👤', 'Add client info'], details: ['📝', 'Add job info'], book: ['🗓', 'Book a visit'], work: ['🧰', 'Do the work'], signoff: ['✍️', 'Customer signs off'], invoice: ['🧾', 'Send the invoice'], payment: ['💵', 'Collect payment'], tasks: ['☑️', 'Tasks'], custom: ['⭐', 'Your own step'] };
+  const JB_HOW = { client: 'Done when a client is on the job.', details: 'Done when the fields you pick are filled in.', book: 'Done when a visit is booked.', work: 'Done when the job’s checklist is ticked (and photos are on it, if you ask for them).', signoff: 'Done when the customer signs.', invoice: 'Done when an invoice is sent.', payment: 'Done when the job’s invoices are paid in full.', tasks: 'Done when its tasks are done or skipped.', custom: 'Done when someone taps Done, after its checklist.' };
+  const JB_NEXT = { client: 'Add the client', details: 'Fill in the job', book: 'Book the visit', work: 'Open the checklist', signoff: 'Get it signed', invoice: 'Make the invoice', payment: 'Record the payment', tasks: 'See the tasks', custom: 'Done' };
+  const JB_STATE = { done: 'done', skipped: 'skipped', current: 'next up', waiting: 'later' };
+  const jbIsJobList = (t) => !!t && (!!t.trade || t.key === 'jobs');
+  const jbLists = () => (S.projects || []).flatMap((p) => (p.types || []).filter(jbIsJobList).map((t) => ({ p, t })));
+  const jbStages = (t) => { const f = (t?.fields || []).find((x) => x.type === 'select' && ['status', 'stage'].includes(x.key)) || (t?.fields || []).find((x) => x.type === 'select'); return f ? f.choices.map((c) => c.label) : []; };
+  const jbStartable = () => (JB.flows || []).filter((f) => f.version && !f.archived && (amAdmin() || f.version.body.whoCreates === 'everyone'));
+  const jbListOf = (f) => { const l = (f.version?.body || f.draft)?.list; const p = l && projById(l.projectId); const t = p && prType(p, l.typeId); return { p, t }; };
+  const jbRender = () => { if (toolOpen === 'jobs') renderTool(); };
+  function jbLoad(force) {
+    if (JB.loading || (!force && JB.jobs && JB.flows)) return;
+    JB.loading = true;
+    Promise.all([api('GET', '/jobs'), api('GET', '/job-flows')]).then(([j, f]) => { JB.jobs = j.jobs; JB.flows = f.flows; }).catch((e) => toast(e.message)).finally(() => { JB.loading = false; jbRender(); if (PR.panel) renderProjects(); });
+  }
+  let jbSoonT = null;
+  const jbSoon = () => { clearTimeout(jbSoonT); jbSoonT = setTimeout(() => { if (toolOpen === 'jobs' && !JB.edit) jbLoad(true); else JB.jobs = null; }, 400); };
+  // A job's run, as the server shows it to you (null: not on a flow). Fetched when its window opens, and again when told.
+  function jbFetchRun(id) {
+    if (JB.runBusy.has(id)) return;
+    JB.runBusy.add(id);
+    api('GET', `/jobs/${id}/run`).then((y) => JB.runs.set(id, y.run || null)).catch(() => JB.runs.set(id, null)).finally(() => { JB.runBusy.delete(id); if (PR.panel === id) renderProjects(); });
+  }
+  const jbRunTimers = new Map();
+  function jbRunNews(msg) {
+    if (JB.runs.has(msg.recordId)) { clearTimeout(jbRunTimers.get(msg.recordId)); jbRunTimers.set(msg.recordId, setTimeout(() => { jbRunTimers.delete(msg.recordId); jbFetchRun(msg.recordId); }, 150)); }
+    jbSoon();
+  }
+  function jobsTool() {
+    if (!JB.jobs || !JB.flows) { jbLoad(); return [h('p', { class: 'day-hint' }, 'Loading…')]; }
+    const admin = amAdmin();
+    if (JB.edit && admin) return jbBuilder();
+    const tab = admin && JB.tab === 'flows' ? 'flows' : 'jobs';
+    const tabs = admin ? h('div', { class: 'seg jb-tabs', role: 'tablist' }, [['jobs', 'Jobs'], ['flows', 'Job Flows']].map(([k, l]) => h('button', { class: tab === k ? 'on' : null, role: 'tab', 'aria-selected': String(tab === k), 'data-jb': k, onclick: () => { JB.tab = k; store.set('jbTab', k); renderTool(true); } }, l))) : null;
+    return [tabs, ...(tab === 'flows' ? jbFlowsList() : jbJobsList())].filter(Boolean);
+  }
+
+  // Jobs: every job, newest change first, with where its flow is and a button for the step it's at.
+  function jbJobsList() {
+    const can = jbStartable();
+    const q = h('input', { type: 'search', class: 'jb-q', placeholder: 'Find a job or a client', value: JB.q, 'aria-label': 'Find a job' });
+    const flowSel = h('select', { class: 'jb-flow-f', 'aria-label': 'Which flow' }, h('option', { value: '' }, 'Every flow'), ...JB.flows.map((f) => h('option', { value: f.id, selected: JB.flow === f.id }, `${f.icon || ''} ${f.name}`.trim())), h('option', { value: 'none', selected: JB.flow === 'none' }, 'Not on a flow'));
+    const box = h('div', { class: 'jb-rows' });
+    const draw = () => {
+      const s = JB.q.trim().toLowerCase();
+      const xs = JB.jobs.filter((j) => (!s || (j.name || '').toLowerCase().includes(s) || (j.client?.name || '').toLowerCase().includes(s)) && (!JB.flow || (JB.flow === 'none' ? !j.run : j.run?.flowId === JB.flow)));
+      box.replaceChildren(...(xs.length ? xs.slice(0, 300).map(jbRow) : [h('p', { class: 'day-hint' }, JB.jobs.length ? 'No job matches.' : can.length ? 'No jobs yet. Start one with + New job.' : amAdmin() ? 'No jobs yet. Build a flow in Job Flows, then start jobs from it.' : 'No jobs yet. Your owners and admins add the flows jobs start from.')]));
+    };
+    q.addEventListener('input', () => { JB.q = q.value; draw(); });
+    flowSel.addEventListener('change', () => { JB.flow = flowSel.value; draw(); });
+    draw();
+    return [h('div', { class: 'jb-bar' }, q, flowSel, can.length ? h('button', { class: 'btn primary-btn', 'data-act': 'new-job', onclick: () => jbNewJob() }, '+ New job') : null), box];
+  }
+  function jbRow(j) {
+    const r = j.run;
+    const sub = [j.client?.name, j.stage, j.scheduled ? String(j.scheduled).slice(0, 10) : null].filter(Boolean).join(' · ');
+    return h('div', { class: 'jb-row', 'data-job': j.id },
+      h('button', { type: 'button', class: 'jb-main', onclick: () => openJob(j.projectId, j.id) }, h('b', {}, j.name || 'Job'), sub ? h('small', {}, sub) : null,
+        r ? h('span', { class: 'jb-prog' }, h('span', { class: 'lead-bar', style: '--c:var(--accent)' }, h('i', { style: `width:${Math.round((r.done / Math.max(1, r.total)) * 100)}%` })), h('small', {}, `${r.flowName} · ${r.done}/${r.total}`))
+          : h('small', { class: 'muted' }, j.legacy ? 'On campaign steps' : 'Not on a flow')),
+      r?.current ? h('button', { type: 'button', class: 'btn small jb-next', 'data-next': j.id, title: 'Open the job at this step', onclick: () => jbGo(j.projectId, j.id) }, `${JB_KIND[r.current.kind]?.[0] || ''} ${r.current.name}`)
+        : r?.status === 'done' ? h('span', { class: 'jb-done' }, '✓ Done') : null);
+  }
+  // Open a job and do the step it's at.
+  async function jbGo(projectId, id) {
+    await openJob(projectId, id);
+    const y = await api('GET', `/jobs/${id}/run`).catch(() => null);
+    JB.runs.set(id, y?.run || null);
+    const at = recEverywhere(id);
+    const s = y?.run?.steps?.find((x) => x.state === 'current');
+    if (at?.p && s) jbAction(at.p, prType(at.p, at.r.typeId), at.r, s);
+    else renderProjects();
+  }
+  // A job's window, on one of its tabs (as clicking the tab does).
+  function jbTabTo(r, k) {
+    delete PR.tabOf[r.id];
+    if (k !== 'overview') PR.tabOf[r.id] = k;
+    store.set('pjTabs', PR.tabOf);
+    renderProjects();
+  }
+  // Next: the sheet or the tab that does the step. Nothing here ticks a step off; the server does when it's done.
+  async function jbAction(p, t, r, s) {
+    switch (s.kind) {
+      case 'client': return jbTabTo(r, 'client');
+      case 'details': jbTabTo(r, 'overview'); return setTimeout(() => $('#projects .pj-fields')?.scrollIntoView({ block: 'center', behavior: 'smooth' }), 80);
+      case 'book': return visitSheet(p, t, r);
+      case 'work': case 'signoff': case 'tasks': return jbTabTo(r, 'work');
+      case 'invoice': return jbInvoice(r, s);
+      case 'payment': return jbPay(r);
+      case 'custom': return jbStep(r, s, 'done');
+    }
+  }
+  async function jbInvoice(r, s) {
+    if (!amAdmin()) return toast('Owners and admins make the invoices.');
+    await loadInvoices(r, true);
+    const draft = (PR.invoices.get(r.id) || []).find((x) => x.status === 'draft');
+    if (draft) return invoiceSheet(draft);
+    await PR.flush?.get(r.id)?.();
+    const inv = await api('POST', `/records/${r.id}/invoices`, { jobStep: s.id }).catch((e) => toast(e.message));
+    if (inv) { invoiceNews(inv); invoiceSheet(inv); }
+  }
+  async function jbPay(r) {
+    if (!amAdmin()) return toast('Owners and admins record payments.');
+    await loadInvoices(r, true);
+    const list = PR.invoices.get(r.id) || [];
+    const owed = list.find((x) => ['sent', 'viewed', 'partial'].includes(x.status));
+    if (owed) return paymentSheet(owed);
+    const draft = list.find((x) => x.status === 'draft');
+    if (draft) { toast('Send the invoice first.'); return invoiceSheet(draft); }
+    toast('There’s no invoice to pay yet.');
+  }
+  // Done, a checklist tick, skip, reopen: the server answers with the run as it's kept.
+  async function jbStep(r, s, what, body) {
+    const y = await api('POST', `/jobs/${r.id}/steps/${s.id}/${what}`, body).catch((e) => toast(e.message));
+    if (!y) return;
+    JB.runs.set(r.id, y.run || null);
+    if (what === 'done' && y.run?.status === 'done') toast('✓ Every step is done');
+    renderProjects();
+    jbSoon();
+  }
+  function jbSkip(r, s) {
+    const why = h('input', { placeholder: 'The customer brought the bins in themselves', maxlength: 300 });
+    sheet(`Skip “${s.name}”`, [h('label', {}, 'Why', why)], async () => {
+      if (!why.value.trim()) throw new Error('Say why it’s being skipped.');
+      const y = await api('POST', `/jobs/${r.id}/steps/${s.id}/skip`, { reason: why.value.trim() });
+      JB.runs.set(r.id, y.run || null);
+      renderProjects();
+      jbSoon();
+    }, 'Skip it');
+    setTimeout(() => why.focus(), 50);
+  }
+  function jbOffFlow(r, run) {
+    const why = h('input', { placeholder: 'Doing this one by hand', maxlength: 300 });
+    sheet(`Take it off “${run.flowName}”`, [h('p', { class: 'day-hint' }, 'The job stays as it is, with its stage, visits and invoices. Its steps stop.'), h('label', {}, 'Why', why)], async () => {
+      if (!why.value.trim()) throw new Error('Say why it’s coming off its flow.');
+      await api('POST', `/jobs/${r.id}/flow/cancel`, { reason: why.value.trim() });
+      JB.runs.set(r.id, null);
+      renderProjects();
+      jbSoon();
+    }, 'Take it off');
+  }
+  function jbPutOn(r, flows, replace) {
+    const sel = h('select', {}, flows.map((f) => h('option', { value: f.id }, `${f.icon || ''} ${f.name}`.trim())));
+    sheet(replace ? 'Move to another flow' : 'Put on a flow', [replace ? h('p', { class: 'day-hint' }, 'Its steps start over on the new flow. What’s already done on the job (a client, a visit, an invoice) counts straight away.') : null, h('label', {}, 'Flow', sel)].filter(Boolean), async () => {
+      const y = await api('POST', `/jobs/${r.id}/flow`, { flowId: sel.value, ...(replace ? { replace: true } : {}) });
+      JB.runs.set(r.id, y.run || null);
+      renderProjects();
+      jbSoon();
+    }, replace ? 'Move it' : 'Put it on');
+  }
+  // On a job's Overview: its flow's steps in a row, the one picked (or next up) under it with its button.
+  function jbRunCard(p, t, r) {
+    if (!jbIsJobList(t)) return null;
+    if (!JB.runs.has(r.id)) { jbFetchRun(r.id); return null; }
+    const run = JB.runs.get(r.id);
+    if (!run) {
+      if (!amAdmin()) return null;
+      if (!JB.flows) { jbLoad(); return null; }
+      const fit = JB.flows.filter((f) => f.version && !f.archived && f.version.body.list.projectId === p.id && f.version.body.list.typeId === t.id);
+      return fit.length ? h('div', { class: 'jb-card jb-none' }, h('small', { class: 'muted' }, 'Not on a job flow.'), h('button', { class: 'btn small', 'data-act': 'put-on', onclick: () => jbPutOn(r, fit) }, 'Put on a flow')) : null;
+    }
+    const cur = run.steps.find((x) => x.state === 'current');
+    const pickId = run.steps.some((x) => x.id === JB.pick[r.id]) ? JB.pick[r.id] : cur?.id || run.steps.at(-1)?.id;
+    const s = run.steps.find((x) => x.id === pickId);
+    const admin = amAdmin();
+    const steps = h('div', { class: 'jb-steps', role: 'list' }, run.steps.map((x, i) => h('button', { type: 'button', role: 'listitem', class: `jb-step s-${x.state}${x.id === pickId ? ' pick' : ''}`, 'data-step': x.id, 'data-state': x.state, title: `${x.name} · ${JB_STATE[x.state]}`, onclick: () => { JB.pick[r.id] = x.id; renderProjects(); } },
+      h('span', { class: 'jb-dot' }, x.state === 'done' ? '✓' : x.state === 'skipped' ? '–' : String(i + 1)), h('span', { class: 'jb-sname' }, x.name))));
+    const whoText = (x) => x.who?.name ? `For ${x.who.name}` : x.who?.fallback || x.who?.type === 'admins' ? 'For owners and admins' : null;
+    const open = s && (s.state === 'current' || s.state === 'waiting');
+    const detail = s ? h('div', { class: 'jb-detail', 'data-detail': s.id },
+      h('div', { class: 'jb-dh' }, h('b', {}, `${JB_KIND[s.kind]?.[0] || ''} ${s.name}`), h('small', { class: 'muted' }, JB_STATE[s.state]), whoText(s) ? h('small', { class: 'muted' }, whoText(s)) : null),
+      s.kind === 'custom' && s.text ? h('p', { class: 'jb-text' }, s.text) : null,
+      s.state === 'skipped' ? h('small', { class: 'muted' }, `Skipped: ${s.skipReason || ''}`) : h('small', { class: 'muted' }, JB_HOW[s.kind]),
+      s.state === 'current' && run.current?.missing ? h('small', { class: 'jb-missing' }, run.current.missing) : null,
+      s.kind === 'custom' && s.checklist?.length ? h('div', { class: 'jb-check' }, s.checklist.map((c, i) => {
+        const box = h('input', { type: 'checkbox', checked: c.done, disabled: !s.mayAct || (c.done && s.state === 'done' && !admin) });
+        box.addEventListener('change', () => jbStep(r, s, 'check', { item: i, done: box.checked }));
+        return h('label', { class: 'pick' }, box, c.text);
+      })) : null,
+      s.kind === 'tasks' && s.tasks ? h('div', { class: 'jb-tasks' }, s.tasks.map((x) => h('small', { class: x.done || x.skipped ? 'muted' : null }, `${x.done ? '✓' : x.skipped ? '–' : '○'} ${x.text}`)), s.more ? h('small', { class: 'muted' }, `and ${s.more} more`) : null) : null,
+      h('div', { class: 'jb-acts' },
+        open && s.mayAct && !(s.kind === 'custom' && s.state !== 'current') ? h('button', { class: 'btn small primary-btn', 'data-act': 'next', onclick: () => jbAction(p, t, r, s) }, JB_NEXT[s.kind]) : null,
+        open && (admin || (s.canSkip && s.mayAct)) ? h('button', { class: 'btn small', 'data-act': 'skip', onclick: () => jbSkip(r, s) }, 'Skip') : null,
+        !open && admin ? h('button', { class: 'btn small', 'data-act': 'reopen', onclick: () => jbStep(r, s, 'reopen') }, 'Reopen') : null)) : null;
+    const menu = admin ? h('button', { class: 'icon-btn', html: I.more, 'aria-label': 'Flow options', onclick: (e) => {
+      const others = (JB.flows || []).filter((f) => f.id !== run.flowId && f.version && !f.archived && f.version.body.list.projectId === p.id && f.version.body.list.typeId === t.id);
+      openMenu(e.currentTarget, [
+        others.length ? { label: 'Move to another flow…', run: () => jbPutOn(r, others, true) } : null,
+        run.status === 'active' ? { label: 'Take it off this flow…', danger: true, run: () => jbOffFlow(r, run) } : null,
+      ].filter(Boolean));
+    } }) : null;
+    if (admin && !JB.flows) jbLoad();
+    return h('div', { class: 'jb-card', 'data-run': run.id },
+      h('div', { class: 'jb-ch' }, h('b', {}, `${run.icon || '🧰'} ${run.flowName}`), h('small', { class: 'muted' }, run.status === 'done' ? '✓ Every step done' : `${run.done} of ${run.total} done`),
+        h('span', { class: 'lead-bar', style: '--c:var(--accent)' }, h('i', { style: `width:${Math.round((run.done / Math.max(1, run.total)) * 100)}%` })), menu),
+      steps, detail);
+  }
+
+  // New job: which flow, what to call it, who it's for. The job and its run start together on the server.
+  function jbNewJob(flowId) {
+    const can = jbStartable();
+    if (!can.length) return toast('There’s no flow to start a job on yet.');
+    const key = 'nj-' + Math.random().toString(36).slice(2) + Date.now().toString(36);
+    const flowSel = h('select', { 'aria-label': 'Flow' }, can.map((f) => h('option', { value: f.id, selected: f.id === (flowId || store.get('jbLastFlow', '')) }, `${f.icon || ''} ${f.name}`.trim())));
+    const name = h('input', { placeholder: 'Dana Ruiz · 3 cans', maxlength: 200 });
+    const contacts = [...(S.contacts || [])].sort((a, b) => (a.name || a.company || '').localeCompare(b.name || b.company || ''));
+    const client = h('select', { 'aria-label': 'Client' }, h('option', { value: '' }, 'No client yet'), ...contacts.map((c) => h('option', { value: c.id }, c.name || c.company || c.email || 'Contact')));
+    const preview = h('ol', { class: 'jb-preview' });
+    const drawPreview = () => { const f = can.find((x) => x.id === flowSel.value); preview.replaceChildren(...(f?.version?.body?.steps || []).map((s) => h('li', {}, `${JB_KIND[s.kind]?.[0] || ''} ${s.name}`))); };
+    flowSel.addEventListener('change', drawPreview);
+    drawPreview();
+    sheet('New job', [h('label', {}, 'Flow', flowSel), h('label', {}, 'Job', name), contacts.length ? h('label', {}, 'Client', client) : null, h('small', { class: 'muted' }, 'Its steps:'), preview].filter(Boolean), async () => {
+      const f = can.find((x) => x.id === flowSel.value);
+      const { p, t } = jbListOf(f);
+      if (!p || !t) throw new Error('That flow’s job list isn’t open to you.');
+      if (!name.value.trim()) throw new Error('Give the job a name.');
+      const y = await api('POST', '/jobs', { flowId: f.id, values: { [t.primary]: name.value.trim() }, ...(client.value ? { contactId: client.value } : {}), key });
+      store.set('jbLastFlow', f.id);
+      JB.runs.set(y.job.id, y.run || null);
+      jbSoon();
+      await openJob(p.id, y.job.id);
+    }, 'Start the job');
+    setTimeout(() => name.focus(), 50);
+  }
+
+  // Job Flows (owners and admins): the flows, a new one (blank or from a ready-made start), and the builder.
+  const jbChanged = (f) => !!f.version && JSON.stringify({ l: f.draft?.list, w: f.draft?.whoCreates, s: f.draft?.steps }) !== JSON.stringify({ l: f.version.body.list, w: f.version.body.whoCreates, s: f.version.body.steps });
+  function jbFlowsList() {
+    const rows = JB.flows.map((f) => {
+      const { p, t } = jbListOf(f);
+      const sub = [f.version ? `Version ${f.version.n} · ${plural(f.version.body.steps.length, 'step')}` : 'Not published yet', jbChanged(f) ? 'changes not published' : null, t ? `${p.name} · ${t.name}` : null, f.archived ? 'Archived' : null].filter(Boolean).join(' · ');
+      return h('div', { class: 'jb-row' + (f.archived ? ' off' : ''), 'data-flow': f.id },
+        h('button', { type: 'button', class: 'jb-main', onclick: () => jbEdit(f) }, h('b', {}, `${f.icon || '🧰'} ${f.name}`), h('small', {}, sub)),
+        h('button', { class: 'icon-btn', html: I.more, 'aria-label': 'Flow options', onclick: (e) => openMenu(e.currentTarget, [
+          { label: 'Edit…', run: () => jbEdit(f) },
+          f.version && !f.archived ? { label: 'Start a job on it…', run: () => jbNewJob(f.id) } : null,
+          { label: 'Make a copy', run: async () => { const y = await api('POST', `/job-flows/${f.id}/copy`).catch((er) => toast(er.message)); if (y) { JB.flows.push(y); jbEdit(y); } } },
+          { label: f.archived ? 'Bring it back' : 'Archive (no new jobs; running ones go on)', run: () => api('POST', `/job-flows/${f.id}/archive`, { archived: !f.archived }).then((y) => { Object.assign(f, y); renderTool(true); }).catch((er) => toast(er.message)) },
+        ].filter(Boolean)) }));
+    });
+    return [
+      h('p', { class: 'day-hint' }, 'A job flow is the steps one kind of job goes through, in order: add the client, book it, do the work, get paid. A job started on a flow shows the step it’s at with a button to do it, and ticks each step off by itself when it’s done.'),
+      h('div', { class: 'jb-bar' }, h('button', { class: 'btn primary-btn', 'data-act': 'new-flow', onclick: () => jbNewFlow() }, '+ New flow')),
+      h('div', { class: 'jb-rows' }, rows.length ? rows : [h('p', { class: 'day-hint' }, 'No flows yet.')]),
+    ];
+  }
+  // Ready-made starts: the steps, and the stage each reaches when the job list has it.
+  const JB_STARTS = {
+    blank: { label: 'Blank (one step to start)', steps: [['custom', 'First step', null, { text: '' }]] },
+    service: { label: 'Service call', steps: [['client'], ['details', null, null, { fields: ['address'] }], ['book', null, 'Scheduled'], ['work', null, 'Done'], ['signoff'], ['invoice', null, 'Invoiced'], ['payment', null, 'Paid']] },
+    install: { label: 'Measure, then install', steps: [['client'], ['book', 'Book the measure', null, { visitKind: 'Measure' }], ['details', null, null, { fields: ['address'] }], ['book', 'Book the install', 'Scheduled', { visitKind: 'Install' }], ['work', null, 'Done'], ['signoff'], ['invoice', null, 'Invoiced'], ['payment', null, 'Paid']] },
+    cleaning: { label: 'Cleaning visit', steps: [['client'], ['details', null, null, { fields: ['address'] }], ['book', null, 'Scheduled'], ['work', 'Clean', 'Done'], ['invoice', null, 'Invoiced'], ['payment', null, 'Paid']] },
+  };
+  function jbStartSteps(key, t) {
+    const stages = jbStages(t).map((x) => x.toLowerCase());
+    const keys = new Set((t?.fields || []).map((f) => f.key));
+    return JB_STARTS[key].steps.map(([kind, name, stage, settings]) => ({ kind, name: name || JB_KIND[kind][1], stage: stage && stages.includes(stage.toLowerCase()) ? jbStages(t)[stages.indexOf(stage.toLowerCase())] : null, who: { type: 'anyone' }, canSkip: false,
+      settings: kind === 'details' ? { fields: (settings?.fields || []).filter((k) => keys.has(k)) } : settings || {} }));
+  }
+  function jbNewFlow() {
+    const lists = jbLists();
+    if (!lists.length) return toast('Make a job board first (Workspace → Boards → a trade’s jobs).');
+    const name = h('input', { placeholder: 'Trash can cleaning, individual', maxlength: 80 });
+    const list = h('select', { 'aria-label': 'Job list' }, lists.map(({ p, t }, i) => h('option', { value: i }, `${p.name} · ${t.name}`)));
+    const start = h('select', { 'aria-label': 'Start from' }, Object.entries(JB_STARTS).map(([k, x]) => h('option', { value: k, selected: k === 'service' }, x.label)));
+    sheet('New job flow', [h('label', {}, 'Name', name), h('label', {}, 'For the jobs on', list), h('label', {}, 'Start from', start), h('small', { class: 'muted' }, 'You can change every step before you publish it.')], async () => {
+      if (!name.value.trim()) throw new Error('Give the flow a name.');
+      const { p, t } = lists[Number(list.value)];
+      const y = await api('POST', '/job-flows', { name: name.value.trim(), list: { projectId: p.id, typeId: t.id }, steps: jbStartSteps(start.value, t) });
+      JB.flows.push(y);
+      jbEdit(y);
+    }, 'Make it');
+    setTimeout(() => name.focus(), 50);
+  }
+  function jbEdit(f) {
+    const d = f.draft || f.version?.body;
+    JB.edit = { id: f.id, name: f.name, icon: f.icon || '🧰', list: { ...d.list }, whoCreates: d.whoCreates || 'admins', steps: JSON.parse(JSON.stringify(d.steps || [])), err: '' };
+    JB.tab = 'flows';
+    if (toolOpen !== 'jobs') openTool('jobs'); else renderTool(true);
+  }
+  // The builder: name, list, who starts jobs, and the steps (add, rename, reorder, remove, who, stage, settings).
+  function jbBuilder() {
+    const E = JB.edit;
+    const f = JB.flows.find((x) => x.id === E.id);
+    const lists = jbLists();
+    const at = lists.find(({ p, t }) => p.id === E.list.projectId && t.id === E.list.typeId);
+    const t = at?.t;
+    const stages = jbStages(t);
+    const redraw = () => renderTool(true);
+    const name = h('input', { class: 'jb-name', value: E.name, maxlength: 80, 'aria-label': 'Flow name' });
+    name.addEventListener('input', () => { E.name = name.value; });
+    const icon = h('input', { class: 'jb-icon', value: E.icon, maxlength: 8, 'aria-label': 'Icon' });
+    icon.addEventListener('input', () => { E.icon = icon.value; });
+    const list = h('select', { 'aria-label': 'Job list' }, lists.map(({ p, t: x }, i) => h('option', { value: i, selected: p.id === E.list.projectId && x.id === E.list.typeId }, `${p.name} · ${x.name}`)));
+    list.addEventListener('change', () => {
+      const n = lists[Number(list.value)];
+      E.list = { projectId: n.p.id, typeId: n.t.id };
+      const ok = jbStages(n.t), keys = new Set(n.t.fields.map((x) => x.key));
+      for (const s of E.steps) { if (s.stage && !ok.includes(s.stage)) s.stage = null; if (s.kind === 'details') s.settings = { fields: (s.settings?.fields || []).filter((k) => keys.has(k)) }; }
+      redraw();
+    });
+    const who = h('select', { 'aria-label': 'Who starts jobs' }, h('option', { value: 'admins', selected: E.whoCreates !== 'everyone' }, 'Owners and admins'), h('option', { value: 'everyone', selected: E.whoCreates === 'everyone' }, 'Everyone on the team'));
+    who.addEventListener('change', () => { E.whoCreates = who.value; });
+    const roles = S.workspace?.roles || [], members = S.workspace?.members || [];
+    const move = (i, by) => { const j = i + by; if (j < 0 || j >= E.steps.length) return; [E.steps[i], E.steps[j]] = [E.steps[j], E.steps[i]]; redraw(); };
+    const stepCard = (s, i) => {
+      const nm = h('input', { value: s.name || '', maxlength: 80, 'aria-label': 'Step name', 'data-field': 'name' });
+      nm.addEventListener('input', () => { s.name = nm.value; });
+      const st = h('select', { 'aria-label': 'Stage it moves the job to', 'data-field': 'stage' }, h('option', { value: '' }, 'No stage change'), ...stages.map((l) => h('option', { value: l, selected: s.stage === l }, `Moves the job to ${l}`)));
+      st.addEventListener('change', () => { s.stage = st.value || null; });
+      const wv = s.who?.type === 'role' || s.who?.type === 'member' ? `${s.who.type}:${s.who.id}` : s.who?.type || 'anyone';
+      const wsel = h('select', { 'aria-label': 'Who does it', 'data-field': 'who' }, h('option', { value: 'anyone', selected: wv === 'anyone' }, 'Anyone on the job'), h('option', { value: 'admins', selected: wv === 'admins' }, 'Owners and admins'),
+        ...roles.map((r) => h('option', { value: 'role:' + r.id, selected: wv === 'role:' + r.id }, `The ${r.name} role`)), ...members.map((m) => h('option', { value: 'member:' + m.id, selected: wv === 'member:' + m.id }, m.name)));
+      wsel.addEventListener('change', () => { const [type, id] = wsel.value.split(':'); s.who = id ? { type, id } : { type }; });
+      const skip = h('input', { type: 'checkbox', checked: !!s.canSkip });
+      skip.addEventListener('change', () => { s.canSkip = skip.checked; });
+      s.settings ||= {};
+      let extra = null;
+      if (s.kind === 'details') {
+        const keys = new Set(s.settings.fields || []);
+        extra = h('div', { class: 'jb-fields' }, h('small', { class: 'muted' }, 'Done when these are filled in (none: a Done button):'), ...(t?.fields || []).filter((x) => x.id !== t.primary && !['autonumber', 'contact', 'items', 'files', 'signature', 'checklist'].includes(x.type)).map((x) => {
+          const b = h('input', { type: 'checkbox', checked: keys.has(x.key) });
+          b.addEventListener('change', () => { const ks = new Set(s.settings.fields || []); b.checked ? ks.add(x.key) : ks.delete(x.key); s.settings.fields = [...ks]; });
+          return h('label', { class: 'pick' }, b, x.name);
+        }));
+      } else if (s.kind === 'book') {
+        const k = h('select', { 'aria-label': 'Kind of visit' }, h('option', { value: '' }, 'Any visit'), ...VISIT_KINDS.map((x) => h('option', { value: x, selected: s.settings.visitKind === x }, x)));
+        k.addEventListener('change', () => { s.settings = k.value ? { visitKind: k.value } : {}; });
+        extra = h('label', {}, 'Kind of visit', k);
+      } else if (s.kind === 'work') {
+        const b = h('input', { type: 'checkbox', checked: !!s.settings.photos });
+        b.addEventListener('change', () => { s.settings = b.checked ? { photos: true } : {}; });
+        extra = h('label', { class: 'pick' }, b, 'Needs photos on the job too');
+      } else if (s.kind === 'tasks') {
+        const ta = h('textarea', { rows: 3, placeholder: 'One task a line', 'data-field': 'tasks' }, (s.settings.tasks || []).join('\n'));
+        ta.addEventListener('input', () => { s.settings.tasks = ta.value.split('\n').map((x) => x.trim()).filter(Boolean); });
+        extra = h('label', {}, 'Its tasks (made when a job starts)', ta);
+      } else if (s.kind === 'custom') {
+        const tx = h('textarea', { rows: 2, placeholder: 'What to do', 'data-field': 'text' }, s.settings.text || '');
+        tx.addEventListener('input', () => { s.settings.text = tx.value; });
+        const cl = h('textarea', { rows: 2, placeholder: 'A checklist, one item a line (optional)', 'data-field': 'checklist' }, (s.settings.checklist || []).join('\n'));
+        cl.addEventListener('input', () => { s.settings.checklist = cl.value.split('\n').map((x) => x.trim()).filter(Boolean); });
+        extra = h('div', {}, h('label', {}, 'What to do', tx), h('label', {}, 'Checklist', cl));
+      }
+      return h('div', { class: 'jb-scard', 'data-i': i, 'data-kind': s.kind },
+        h('div', { class: 'jb-sh' }, h('span', { class: 'jb-dot' }, String(i + 1)), h('span', { class: 'jb-kind' }, `${JB_KIND[s.kind]?.[0]} ${JB_KIND[s.kind]?.[1]}`), h('span', { style: 'flex:1' }),
+          h('button', { class: 'icon-btn', 'aria-label': 'Move up', disabled: i === 0, onclick: () => move(i, -1) }, '↑'),
+          h('button', { class: 'icon-btn', 'aria-label': 'Move down', disabled: i === E.steps.length - 1, onclick: () => move(i, 1) }, '↓'),
+          h('button', { class: 'icon-btn', html: I.close, 'aria-label': 'Remove step', onclick: () => { E.steps.splice(i, 1); redraw(); } })),
+        h('small', { class: 'muted' }, JB_HOW[s.kind]),
+        nm, h('div', { class: 'row2' }, wsel, st), extra, h('label', { class: 'pick' }, skip, 'Whoever does it may skip it (with a reason)'));
+    };
+    const add = h('button', { class: 'btn', 'data-act': 'add-step', onclick: (e) => openMenu(e.currentTarget, Object.entries(JB_KIND).map(([k, [ic, l]]) => ({ label: `${ic} ${l}`, run: () => { E.steps.push({ kind: k, name: l, stage: null, who: { type: 'anyone' }, canSkip: false, settings: k === 'tasks' ? { tasks: [] } : {} }); redraw(); } }))) }, '+ Add a step');
+    const body = () => ({ name: E.name.trim(), icon: E.icon.trim() || '🧰', list: E.list, whoCreates: E.whoCreates, steps: E.steps.map((s) => ({ ...(s.id ? { id: s.id } : {}), kind: s.kind, name: s.name, stage: s.stage || null, who: s.who || { type: 'anyone' }, canSkip: !!s.canSkip, settings: s.settings || {} })) });
+    const keep = (y) => { const i = JB.flows.findIndex((x) => x.id === y.id); if (i >= 0) JB.flows[i] = y; else JB.flows.push(y); };
+    const save = async (publish) => {
+      try {
+        let y = await api('PATCH', `/job-flows/${E.id}`, body());
+        if (publish) y = await api('POST', `/job-flows/${E.id}/publish`);
+        keep(y);
+        toast(publish ? `Published version ${y.version?.n}. New jobs use it; jobs already going keep theirs.` : 'Saved');
+        JB.edit = null;
+        renderTool(true);
+      } catch (e) { E.err = e.message; redraw(); }
+    };
+    return [
+      h('div', { class: 'jb-bh' }, h('button', { class: 'btn small', 'data-act': 'back', onclick: () => { JB.edit = null; renderTool(true); } }, '← Job Flows'), h('span', { style: 'flex:1' }),
+        f?.version ? h('small', { class: 'muted' }, `Version ${f.version.n} is live`) : h('small', { class: 'muted' }, 'Not published yet')),
+      h('div', { class: 'jb-nameline' }, icon, name),
+      h('div', { class: 'row2' }, h('label', {}, 'For the jobs on', list), h('label', {}, 'Who starts jobs on it', who)),
+      h('div', { class: 'jb-scards' }, E.steps.map(stepCard)),
+      add,
+      E.err ? h('p', { class: 'err' }, E.err) : null,
+      h('div', { class: 'jb-save' }, h('button', { class: 'btn', 'data-act': 'save', onclick: () => save(false) }, 'Save draft'), h('button', { class: 'btn primary-btn', 'data-act': 'publish', onclick: () => save(true) }, f?.version ? 'Publish changes' : 'Publish')),
+      h('small', { class: 'muted' }, 'Publishing makes a new version. Jobs already on this flow keep the version they started on.'),
+    ].filter(Boolean);
   }
   // The visit you came from, at the top of the job: when, who, directions, done.
   function prVisitBar(p, t, r) {

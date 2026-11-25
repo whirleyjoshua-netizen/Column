@@ -284,3 +284,39 @@ Where the server differs from, or settles, something above:
 - Unticking a checklist item of a finished step (on a finished run, or a finished step of a going one) would reopen
   it, so it is a reopen: owners and admins only (403 for anyone else). Ticking, and unticking before the step is
   finished, follow the step's `who` as before. (Round 2 review.)
+
+## 10. Client (checkpoint 4)
+
+- Workspace → **Jobs**, a tab of its own between Contacts and Boards (`WORK_TABS`), shown when Boards is on for the
+  team and the member may use it. It's a tool page (`TOOLS.jobs`, `jobsTool()` in client/app.js, all names `jb…`).
+- **Jobs** (everyone): `GET /api/jobs`; find by job or client, filter by flow or "not on a flow"; each row shows the
+  client, stage, date, the flow and how far along, and a button for the step it's at, which opens the job and runs
+  that step's Next. **+ New job** only when there's a flow you may start.
+- **Job Flows** (owners and admins only; members never see the sub-tab): the flows with version, "changes not
+  published", list and archived; ⋯ Edit, Start a job on it, Make a copy, Archive / Bring back. **+ New flow**: name,
+  job list, and a start (Blank, Service call, Measure then install, Cleaning visit). The starts are built in the
+  client and sent as an ordinary draft. A step names a stage only if the list has one by that name, and a details
+  step only fields the list has. This stands in for §6's server-side "Add ready-made flows" for Phase 1; nothing is
+  made automatically.
+- **Builder**: name, icon, list, who starts jobs. Steps: add (menu of the 9 kinds), rename, ↑ ↓, remove, who
+  (anyone, admins, a role, a person), the stage it moves the job to (the list's stages), may-skip, and per-kind
+  settings (details fields, visit kind, photos, tasks, your own step's text and checklist). Save draft = PATCH;
+  Publish = PATCH then publish. The server's checks are the only checks; its error shows in the builder.
+- **New job**: flow (shows its steps), the job's name (the list's primary field), a client from Contacts (if the
+  Contacts tool is on); `POST /api/jobs` with a request key made when the sheet opens, so a double tap makes one job.
+  The job opens.
+- **On a job** (any job on a job list): its flow's card sits **above the job window's tabs**, not inside Overview, so
+  where the job is stays in sight whichever tab Next opens. It shows the steps in a row (done ✓, skipped –, next up,
+  later) and the step picked, or next up: what makes it done, what's missing, who it's for, your own step's checklist
+  and text, a Tasks step's tasks you can see. Buttons: Next (only when you may act), Skip (admins, or the step's
+  person when it may be skipped, with a reason), Reopen (admins, on a done or skipped step). ⋯ for admins: Move to
+  another flow (replace), Take it off this flow (with a reason). A job not on a flow shows "Put on a flow" to admins
+  when a published flow fits its list. The six tabs are unchanged.
+- **Next** opens what does the step and never ticks it off itself: client → the Client tab; details → the Overview's
+  fields; book → the visit sheet; work, sign-off, tasks → the Work tab; invoice → the job's draft invoice, or a new one
+  made with `{ jobStep }`; payment → record a payment on the open invoice (a draft: "Send the invoice first"); your own
+  step → Done. Invoice and payment are owners and admins only, as their routes are.
+- **Live**: `{type:'jobrun'}` refetches that job's run if it's open or cached, and refreshes the Jobs list. The client
+  keeps no copy of the run's logic; every state comes from the server's run view.
+- Tests: `tests/jobs_ui.mjs` (Chrome, ports 5007 / 9567; `SHOTS=<folder>` saves screenshots). `tests/tabbar.mjs`
+  expects Jobs in the strip.

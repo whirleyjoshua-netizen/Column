@@ -4943,3 +4943,55 @@ body.wide.split-on:not(.split-full) #camps .cc-ov .cc-obrief { order: -1; border
 .ag-b-foot { margin-top: 18px; }
 .ag-box-f .ag-test { margin-left: auto; }
 .ag-box-f .ag-test + .btn { margin-left: 0; }
+
+/* Jobs and Job Flows (Workspace → Jobs; docs/jobflows/CONTRACTS.md) */
+.jb-tabs { margin-bottom: 10px; }
+.jb-bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+.jb-bar .jb-q { flex: 1; min-width: 160px; }
+.jb-rows { display: flex; flex-direction: column; gap: 6px; }
+.jb-row { display: flex; align-items: center; gap: 8px; border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; background: var(--card); }
+.jb-row.off { opacity: 0.6; }
+.jb-main { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; background: none; border: 0; padding: 0; color: inherit; text-align: left; cursor: pointer; font: inherit; }
+.jb-main b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+.jb-main small { color: var(--muted); }
+.jb-prog { display: flex; align-items: center; gap: 8px; width: 100%; max-width: 320px; }
+.jb-prog small { white-space: nowrap; }
+.jb-next { white-space: nowrap; max-width: 45%; overflow: hidden; text-overflow: ellipsis; }
+.jb-done { color: var(--ok); font-size: 13px; white-space: nowrap; }
+.jb-card { border: 1px solid var(--line); border-radius: 10px; padding: 10px; margin-bottom: 10px; background: var(--card); }
+.jb-card.jb-none { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 10px; }
+.jb-ch { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.jb-ch .lead-bar { max-width: 140px; }
+.jb-steps { display: flex; gap: 4px; overflow-x: auto; padding-bottom: 4px; }
+.jb-step { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; border: 1px solid var(--line); border-radius: 99px; padding: 3px 10px 3px 3px; background: none; color: inherit; font: inherit; font-size: 12px; cursor: pointer; max-width: 180px; }
+.jb-step .jb-sname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.jb-step.pick { border-color: var(--accent); background: var(--accent-soft); }
+.jb-step.s-waiting { opacity: 0.65; }
+.jb-dot { display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: color-mix(in srgb, var(--muted) 18%, transparent); font-size: 11px; flex: 0 0 auto; }
+.jb-step.s-done .jb-dot { background: var(--ok); color: #fff; }
+.jb-step.s-current .jb-dot { background: var(--accent); color: #fff; }
+.jb-detail { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); }
+.jb-dh { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.jb-text { margin: 2px 0; white-space: pre-wrap; }
+.jb-missing { color: var(--danger); }
+.jb-check, .jb-tasks { display: flex; flex-direction: column; gap: 2px; }
+.jb-acts { display: flex; gap: 6px; margin-top: 4px; flex-wrap: wrap; }
+.jb-preview { margin: 0; padding-left: 20px; font-size: 13px; color: var(--muted); }
+.jb-bh { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.jb-nameline { display: flex; gap: 8px; margin-bottom: 8px; }
+.jb-nameline .jb-icon { width: 52px; text-align: center; }
+.jb-nameline .jb-name { flex: 1; font-weight: 600; }
+.jb-scards { display: flex; flex-direction: column; gap: 8px; margin: 10px 0; }
+.jb-scard { display: flex; flex-direction: column; gap: 6px; border: 1px solid var(--line); border-radius: 10px; padding: 10px; background: var(--card); }
+.jb-sh { display: flex; align-items: center; gap: 6px; }
+.jb-kind { font-weight: 600; font-size: 13px; }
+.jb-fields { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.jb-fields > small { flex-basis: 100%; }
+.jb-save { display: flex; gap: 8px; margin: 10px 0 4px; }
+@media (max-width: 640px) {
+  .jb-row { flex-wrap: wrap; }
+  .jb-next { max-width: 100%; }
+}
+.jb-scard label:not(.pick) { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
+.jb-scard label:not(.pick) > textarea, .jb-scard label:not(.pick) > select, .jb-scard > input { width: 100%; box-sizing: border-box; color: var(--text); }
+.jb-scard label.pick { display: flex; align-items: center; gap: 6px; font-size: 13px; }
