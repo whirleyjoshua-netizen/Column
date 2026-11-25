@@ -484,6 +484,8 @@ export function jobFlowsModule(ctx) {
           if (!mayAct(ws, auth, s)) return send(res, 403, { error: `“${s.name}” is for ${whoNow(ws, s).name || 'owners and admins'}.` });
           const i = Number(body.item);
           if (!Number.isInteger(i) || i < 0 || i >= (s.settings?.checklist || []).length) return send(res, 400, { error: 'That checklist item isn’t there.' });
+          // Unticking an item of a finished step reopens it (and a finished run): that's a reopen, so admins only.
+          if (body.done === false && g.finished && !admin) return send(res, 403, { error: `“${s.name}” is finished. Only owners and admins reopen it.` });
           g.checks = [...(g.checks || [])];
           g.checks[i] = body.done !== false;
           save();

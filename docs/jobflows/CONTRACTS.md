@@ -281,3 +281,6 @@ Where the server differs from, or settles, something above:
   is a transition `active → done`), while `step.done` carries `cycle` / `again`.
 - A PATCH to a flow checks the name and the steps before changing anything.
 
+- Unticking a checklist item of a finished step (on a finished run, or a finished step of a going one) would reopen
+  it, so it is a reopen: owners and admins only (403 for anyone else). Ticking, and unticking before the step is
+  finished, follow the step's `who` as before. (Round 2 review.)

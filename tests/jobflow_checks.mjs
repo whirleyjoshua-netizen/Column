@@ -67,6 +67,25 @@ try {
   ok(r.status === 403, 'on a finished run a member can’t reopen a step: ' + r.status);
   r = await sam('POST', `/jobs/${j1?.id}/steps/${one.sid('Wave')}/skip`, { reason: 'x' });
   ok(r.status === 403 && (await rico('GET', `/jobs/${j1?.id}/run`)).body?.run?.status === 'done', 'or skip one, and the run stays done');
+  // Unticking a checklist item is a reopen: only admins, once the step is finished (on a finished run or a going one).
+  const ck = await mk('Checklist', [{ kind: 'custom', name: 'Pack', who: { type: 'anyone' }, settings: { text: 'Pack up.', checklist: ['Tools', 'Bins'] } }, { kind: 'custom', name: 'Leave', who: { type: 'anyone' }, settings: { text: 'Go.' } }]);
+  const jc = (await rico('POST', '/jobs', { flowId: ck.id, values: { job: 'Checklist' } })).body?.job;
+  const ckUrl = `/jobs/${jc?.id}/steps/${ck.sid('Pack')}`;
+  ok((await sam('POST', ckUrl + '/check', { item: 0, done: true })).status === 200 && (await sam('POST', ckUrl + '/check', { item: 1, done: true })).status === 200, 'a member ticks the checklist of a step that’s theirs');
+  ok((await sam('POST', ckUrl + '/check', { item: 1, done: false })).status === 200, 'and can untick an item while the step isn’t finished');
+  await sam('POST', ckUrl + '/check', { item: 1, done: true });
+  r = await sam('POST', ckUrl + '/done');
+  ok(r.body?.run?.current?.name === 'Leave', '(setup) Pack is done');
+  r = await sam('POST', ckUrl + '/check', { item: 0, done: false });
+  ok(r.status === 403 && (await rico('GET', `/jobs/${jc?.id}/run`)).body?.run?.current?.name === 'Leave', 'once Pack is finished, a member can’t untick it (that would reopen it): ' + r.status);
+  r = await sam('POST', `/jobs/${jc?.id}/steps/${ck.sid('Leave')}/done`);
+  ok(r.body?.run?.status === 'done', '(setup) the run is done');
+  r = await sam('POST', ckUrl + '/check', { item: 0, done: false });
+  ok(r.status === 403 && (await rico('GET', `/jobs/${jc?.id}/run`)).body?.run?.status === 'done', 'on the finished run a member’s untick is refused and the run stays done: ' + r.status);
+  r = await rico('POST', ckUrl + '/check', { item: 0, done: false });
+  ok(r.status === 200 && r.body?.run?.status === 'active' && r.body?.run?.current?.name === 'Pack', 'an admin can untick it, which reopens the step and the run');
+  r = await rico('POST', ckUrl + '/check', { item: 0, done: true });
+  ok(r.status === 200 && r.body?.run?.status === 'done', 'and tick it again, which finishes them again');
   const j1b = (await rico('POST', '/jobs', { flowId: one.id, values: { job: 'Cancel me' } })).body?.job;
   r = await rico('POST', `/jobs/${j1b?.id}/flow/cancel`, { reason: 'Customer cancelled' });
   r = await rico('POST', `/jobs/${j1b?.id}/steps/${one.sid('Wave')}/done`);
