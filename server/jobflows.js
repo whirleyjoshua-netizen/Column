@@ -812,7 +812,8 @@ export function jobFlowsModule(ctx) {
             return send(res, 200, { run: runView(ws, auth, run), outcome: 'declined' });
           }
           if (body.action !== 'send') return send(res, 400, { error: 'Send it, or don’t.' });
-          if (run.status !== 'active' && p.kind !== 'invoice') n.late ||= 'the job’s flow is finished';
+          // Only a finished run's invoice email may still go (§8); a cancelled run sends nothing.
+          if (run.status !== 'active' && !(run.status === 'done' && p.kind === 'invoice')) n.late ||= run.status === 'cancelled' ? 'the job came off its flow' : 'the job’s flow is finished';
           if (n.late) {
             dropPending(run, g, n.late);
             return send(res, 409, { error: `Too late: ${n.late}. It wasn’t sent.`, outcome: 'dropped', run: runView(ws, auth, run) });

@@ -576,6 +576,17 @@ try {
   r = await rico('POST', `/jobs/${jo2?.id}/steps/${oSid}/message`, { action: 'send', key: oKey });
   ok(r.status === 409 && !mails(oli.email, 'invoice').length, 'the Invoice step skipped while its email waits: Send refuses it, nothing goes');
   ok(await until(async () => !(await stepOf(jo2?.id, 'Inv'))?.pending), 'and the waiting email is dropped');
+  // The job taken off its flow while an invoice email waits: Send right away (before the scheduler's next look) sends
+  // nothing, and the waiting email is dropped.
+  const qia = await person();
+  const jq2 = await job(FI.id, qia);
+  await rico('POST', `/jobs/${jq2?.id}/steps/${FI.sid('Do it')}/done`);
+  ok(await until(async () => (await stepOf(jq2?.id, 'Inv'))?.pending?.kind === 'invoice'), '(setup) an invoice email waiting');
+  const qKey = (await stepOf(jq2?.id, 'Inv'))?.pending?.key, qSid = (await stepOf(jq2?.id, 'Inv'))?.id;
+  const [, sentNow] = await Promise.all([rico('POST', `/jobs/${jq2?.id}/flow/cancel`, { reason: 'Handled outside the flow' }), (async () => { await sleep(20); return rico('POST', `/jobs/${jq2?.id}/steps/${qSid}/message`, { action: 'send', key: qKey }); })()]);
+  await sleep(1200);
+  ok(sentNow.status !== 200 && !mails(qia.email, 'invoice').length, 'cancelled while its invoice email waits: Send right after sends nothing (' + sentNow.status + ')');
+  ok(!(await rico('GET', `/jobs/${jq2?.id}/run`)).body?.run?.steps?.find((x) => x.name === 'Inv')?.pending, 'and nothing is left waiting');
   // A payment reminder waiting when the run finishes another way (taken off its flow): dropped, never sendable.
   const pia = await person();
   const jp2 = await job(FI.id, pia);
