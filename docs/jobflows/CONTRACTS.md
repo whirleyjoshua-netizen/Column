@@ -38,7 +38,7 @@ workspace map"; this file is the engineering contract for its Phase 1, agreed in
   whoCreates: 'admins' | 'everyone',   // who may start jobs on it (default admins)
   steps: Step[] (1–30) }
 Step = { id (stable across versions), kind, name (≤80), who, how, doneWhen, canSkip: bool, stage: string|null, settings }
-who  = { type: 'anyone' | 'admins' | 'role' | 'member', id? }      // 'anyone' = anyone who can see the job
+who  = { type: 'anyone' | 'admins' | 'role' | 'member', id? }      // 'anyone' = anyone who may edit the job (§5), not just view it
 how  = 'auto' | 'tap' | 'hand'                                      // derived from kind in Phase 1, shown as a label
 ```
 
@@ -76,8 +76,23 @@ Goal per step (existing fields, plus):
   skipped, skipReason, skippedById, skippedAt }
 ```
 - `goalMet(g)` for `kind:'step'`: `skipped || (stepCondition(g) && tasks done && needsMet(g))`.
-- `jobStepsOnce` needs no new branch: it already sweeps every goal, fires `step.done` once on the change, moves the
-  stage for goals with `g.stage`, and finishes the campaign when all goals are.
+- `jobStepsOnce` gets one change (checkpoint 1, second review): its completion calculation is
+  `g.kind === 'step' ? goalMet(g) : <today's expression, unchanged>`. Today's expression doesn't call `goalMet` for
+  `tasks` goals, so without this a step with no tasks and no needs would count as finished whatever its condition.
+  Every legacy goal kind keeps today's calculation byte for byte. Beyond that the sweep is as it is: fires `step.done`
+  once on the change, moves the stage for goals with `g.stage`, finishes the campaign when all goals are.
+- **Stage ownership.** A job with an active `kind:'job'` run: only the run's goals count, both for moving the stage
+  (the sweep) and for holding it (`openStepsUpTo` in `stageGate`). An ordinary campaign on the same job still runs
+  and finishes its own goals, but neither moves nor holds that job's stage. A job without an active run: today's
+  behavior exactly (every campaign on the job counts).
+- **Custom steps.** The Done route only records `g.marked`; the sweep decides. A custom step with a checklist stays
+  unfinished after Done until its checklist is all ticked.
+- **Which invoice.** Making an invoice from the run's Invoice step binds it (`g.invoiceId`, set once, by the
+  invoice route when the request names the step). The invoice step is met by its bound invoice being sent, viewed,
+  partial or paid; with none bound, by any non-void invoice for the job created after the run started. The payment
+  step reads the flow's invoice step's bound invoice (paid); with none, at least one non-void invoice for the job
+  created after the run started, and every such one paid. An invoice from before the run never counts, so an old paid
+  invoice can't finish a new job's payment step.
 - A job has at most one run with `kind:'job'` and `status:'active'`. An ordinary campaign on the same job is
   allowed and is never mistaken for the run.
 
@@ -204,6 +219,8 @@ mobile. Each step names the family stage it reaches, so the old stage field keep
 | `jobflow_events.mjs` | the same step finished by a payment twice, a retry and a click: one `step.done`, one stage move; void the invoice → step reopens, run back to active, stage does NOT move back; pay again → `step.done` with `cycle: 2, again: true`; a run never fires `campaign.started` / `campaign.done`; `job.flow.done` once |
 | `jobflow_access.mjs` | start-job refused where `POST /projects/:id/records` would be (private project, members switch off, a rules hold); key reuse with another body 409; run response hides invoice totals and unseen tasks from a member; `who` with another team's member refused at publish; a step whose member left → admins only |
 | `jobflow_versions.mjs` | publishing v2 leaves a running v1 job's steps as they were |
+| `jobflow_sweep.mjs` | a step with no tasks and no needs whose invoice isn't paid stays unfinished through every sweep (a task change, a visit, a restart); a custom step marked Done with an unticked checklist stays unfinished; an invoice from before the run doesn't finish the payment step |
+| `jobflow_stage.mjs` | job with an active run + an ordinary campaign with an unfinished goal naming a later stage: the run's steps still move the stage, the ordinary goal doesn't hold a manual move the run allows; the ordinary campaign still finishes on its own; the same setup without a run behaves as today |
 | `jobflow_hidden.mjs` | a run is in no campaign surface (state, broadcast, templates, board, analytics, agents, export, public API campaigns); an ordinary campaign on the same job still is |
 | `jobflow_legacy.mjs` | a job driven by an ordinary campaign progresses exactly as before; `legacy:true` in the list |
 | `jobflow_finance.mjs` | invoice/payment steps follow the real invoice (void after paid reopens the step) |
