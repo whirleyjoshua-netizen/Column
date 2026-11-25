@@ -1,6 +1,6 @@
 # Job Flows — Phase 2 (Money) contracts, checkpoint 1
 
-Status: round 2 for review, 2026-11-25 (round 1 review answered in §8). No code yet. The product spec's build order puts Money second: "Jobs → Items
+Status: round 3 for review, 2026-11-25 (review answers in §8). No code yet. The product spec's build order puts Money second: "Jobs → Items
 for the business, Quotes and Invoices sub-tabs, and the billing choice per flow (quote first, automatic, by hand)".
 Phase 1 (CONTRACTS.md) stays as agreed; this adds to it on branch `jobflows-money` (cut from `jobflows`, so Phase 1
 can ship on its own).
@@ -58,8 +58,14 @@ Publish validation (400 with a plain message; a draft may be saved in any state)
 **The accepted quote is the price.** The quote step is met when all of these hold:
 - `rec.answer.act === 'accept'` and `rec.answer.at` ≥ the run's start (an acceptance from before the run never
   counts), and
-- the job's lines still match what was accepted: `linesKey(job lines) === linesKey(rec.answer.lines)`, **or** the run
-  already has a non-void invoice made after that acceptance (once billed, later line edits don't reopen it).
+- the job's lines still match what was accepted: `priceKey(job lines) === priceKey(rec.answer.lines)`, **or** the run
+  has a non-void invoice, made after that acceptance, whose lines match it: `priceKey(invoice.lines) ===
+  priceKey(rec.answer.lines)` (an invoice billed from the accepted lines keeps the step met when the job's lines are
+  edited later; an invoice with other lines never does).
+
+`priceKey(lines)` is a hash of what the customer sees and pays: each row's `desc, qty, unit, price, taxable` in order,
+plus `taxRate` and `discount`. Row ids, `cost` and `from` are left out (an invoice gets new row ids and drops cost
+and from, so `linesKey` can't compare a job with its invoice).
 
 So an admin who changes the lines after acceptance reopens the quote step (the run card says "The lines changed
 after <name> accepted. Send a new quote."), and the invoice step can't be reached until the new lines are accepted.
@@ -67,7 +73,8 @@ The audited way past it is Skip with a reason (admins), which Phase 1 already re
 
 - Declined: the step stays open and shows "Declined by <name>: <reason>".
 - **New quote** (`POST /api/jobs/:recId/requote`, admins): allowed while the run has no non-void invoice, accepted
-  or not. It writes the old answer to the job's timeline, sets `rec.answer = null`, turns the old link off
+  or not. An invoice made by hand with lines other than the accepted ones doesn't meet the quote step; the way
+  forward is to void it and requote, or an admin's Skip with a reason. It writes the old answer to the job's timeline, sets `rec.answer = null`, turns the old link off
   (`rec.share = null`, so the old token answers "Quote not available"), and the status back to draft. The next
   share makes a new token. After an invoice exists: 409 "Void the invoice first".
 - No Done button on a quote step: the generic Done route answers 400 for it. Only a qualifying acceptance or an
@@ -88,8 +95,10 @@ When the sweep finds it the run's current step (every step before it done or ski
    `save()` **before** trying to send. A step with a bound non-void invoice never gets another, so repeated sweeps,
    reopened earlier steps and a restart between making and sending all find and reuse the same invoice. Voiding it
    (an admin's act) unbinds it, and the next sweep makes exactly one replacement.
-3. **Send.** For a bound invoice in `made`: total $0 → `state = 'zero'`, stays a draft. Otherwise call the same send
-   function the route uses, as the run's owner, with the same rules `hold` (summary, target, and a replayable
+3. **Send.** For a bound invoice in `made`: first check the owner again (every attempt, not only before making):
+   no longer an owner or admin → `state = 'owner'`, the invoice stays bound as a draft, no replacement is made, and
+   admins get the hand button. Total $0 → `state = 'zero'`, stays a draft. Otherwise call the same send function the
+   route uses, as the run's owner, with the same rules `hold` (summary, target, and a replayable
    `POST /api/invoices/:id/send`). Held → `state = 'held'`, stays a draft. Approval replays that send as the owner
    (rules.js already replays as the person who asked); if the owner can't send any more, the approval fails with
    its reason, as any replay does. Sent → `state = 'sent'`, `invoice.sent` once, the step is met as in Phase 1.
@@ -98,6 +107,12 @@ When the sweep finds it the run's current step (every step before it done or ski
    `zero` waits for an admin: edit the invoice's lines (existing invoice PATCH) and press Send, which is the
    existing send route with the same `hold`. Sending by hand from `zero` or `owner` is the ordinary route; nothing
    skips the rules.
+5. **Leaving a waiting state.** The state follows the bound invoice, not the path that sent it: whenever the bound
+   invoice is sent (the sweep, the ordinary send route by hand, or an approval's replay), `onInvoice` sets
+   `g.auto = { state: 'sent', invoiceId: <same> }`. `invoice.sent` goes off once, on the first send, as today (the
+   route already emits it only when `sentAt` was empty). A send that fails (held again, $0, refused) leaves the
+   invoice a draft and the state at its waiting value with the reason. Voiding the bound invoice clears `g.auto`, so
+   the next sweep starts again at step 1.
 
 "Send" means what it means today: the link is made, the job moves to Invoiced, `invoice.sent` goes off. An email or
 text to the customer is Phase 3 (customer messages).
@@ -173,7 +188,7 @@ text to the customer is Phase 3 (customer messages).
 | Test (port) | Covers |
 | --- | --- |
 | `jobitems.mjs` (5251) | CRUD, members 403 on every route, limits and validation, archive/restore, import is a snapshot (twice adds once; a changed source isn't re-copied; no-name rows counted; only from a board the admin sees), `price.changed` only on a price change (not description, unit, cost, taxable, archive) with the waiting-quote count, `/api/price-list` has Items first for admins and none for members, a member gets no item price from any Jobs read, saved across a restart, other teams nothing |
-| `jobflow_money.mjs` (5252) | billing validation at publish (every rule in §1.2, including `who = admins` on quote, invoice and payment, duplicate item ids, more than one invoice step with auto); `dueDays` on a hand-made and an auto-made invoice, null = 14; default lines fill each kind of empty value and leave a filled one, carry no cost, are dropped on a list with no items field; an archived or missing default item makes start and attach 400 with nothing made; a failed start and a failed attach leave the job's lines and runs as they were; the quote step: an acceptance from before the run doesn't count, decline keeps it open, a line change after acceptance reopens it (and the invoice step can't be reached) until the new lines are accepted, but not once an invoice exists; requote before and after acceptance, 409 once invoiced, the old link dead; Done 400 on a quote step; a member can't skip, share or requote it even with `canSkip`; members' run and list responses carry no price, total, cost or link; auto billing: made and sent once when its step comes up, bound, `invoice.sent` once; a restart between making and sending reuses the same invoice; reopening an earlier step makes no second one; voiding makes exactly one replacement; a `hold` keeps it a draft, no retry, approval sends it; $0 waits as a draft, editing it and sending by hand goes through the same hold; an owner made a member, or gone, gets nothing made and the hand button for admins; a Phase 1 version (no billing) behaves exactly as before |
+| `jobflow_money.mjs` (5252) | billing validation at publish (every rule in §1.2, including `who = admins` on quote, invoice and payment, duplicate item ids, more than one invoice step with auto); `dueDays` on a hand-made and an auto-made invoice, null = 14; default lines fill each kind of empty value and leave a filled one, carry no cost, are dropped on a list with no items field; an archived or missing default item makes start and attach 400 with nothing made; a failed start and a failed attach leave the job's lines and runs as they were; the quote step: an acceptance from before the run doesn't count, decline keeps it open, a line change after acceptance reopens it (and the invoice step can't be reached) until the new lines are accepted, but not once an invoice billed from the accepted lines exists; an invoice made by hand from changed lines doesn't meet it; requote before and after acceptance, 409 once invoiced, the old link dead; Done 400 on a quote step; a member can't skip, share or requote it even with `canSkip`; members' run and list responses carry no price, total, cost or link; auto billing: made and sent once when its step comes up, bound, `invoice.sent` once; the state reads `sent` after a send by the sweep, by hand from `zero` or `owner`, and by an approval's replay from `held`, each with the same invoice id and one `invoice.sent`; an owner demoted after the invoice was made but before it sent gets `owner`, the invoice kept and no replacement; a restart between making and sending reuses the same invoice; reopening an earlier step makes no second one; voiding makes exactly one replacement; a `hold` keeps it a draft, no retry, approval sends it; $0 waits as a draft, editing it and sending by hand goes through the same hold; an owner made a member, or gone, gets nothing made and the hand button for admins; a Phase 1 version (no billing) behaves exactly as before |
 | `jobs_ui.mjs` (Chrome) | with the client: Items tab, builder billing choice, quote step Send and status, auto invoice step |
 
 Existing suites that must stay green: everything in CONTRACTS §7, plus price_list, price_changed, audit_quote,
@@ -207,4 +222,13 @@ costing_truth, finance_view, finance_jobs, invoices, quickbooks.
    auto has exactly one invoice step; `dueDays` covers hand and auto invoices, null = 14 by today's date rules.
 8. **Import and price.changed** spelled out: one-time snapshot, changed sources not re-copied, no-name rows counted,
    price defaults to $0; `price.changed` only on a price change, same payload as today, waiting quotes defined.
+
+### Round 2 review, and what changed
+1. **Owner demoted after the invoice was made.** The owner is checked on every send attempt; if they can't send any
+   more, the made invoice stays bound, no replacement, admins get the hand button (§1.4, step 3).
+2. **Leaving waiting states.** Every successful send of the bound invoice, by any path, sets the state to `sent`
+   with the same invoice id; `invoice.sent` once; failures keep the waiting state and reason; void clears it
+   (§1.4, step 5).
+3. **The invoice exception.** Only an invoice whose lines match the accepted lines (`priceKey`) keeps the quote step
+   met; an invoice made from changed lines doesn't, and the way forward is void and requote, or Skip (§1.3).
 
