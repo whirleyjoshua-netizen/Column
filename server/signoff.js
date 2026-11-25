@@ -298,6 +298,14 @@ export function signoffModule(d) {
       const signer = signerOf(body, at);
       if (!signer.email) return send(res, 400, { error: 'Add their email address so the link can reach them.' });
       const r = await render(ws, at, day, auth);
+      // Asks first (PHASE3B.md §1): who it goes to and what it says, before any request is made.
+      if (d.sendGate) {
+        const title = r.title || fileName(r).replace(/\.pdf$/i, '');
+        const note = cleanText(body.message, 2000);
+        const pv = { to: signer.name || signer.email, via: 'email', email: signer.email, subject: `Please sign: ${title}`, text: [`${auth.member} at ${ws.name} sent you “${title}” to sign.`, note].filter(Boolean).join('\n') };
+        const gate = d.sendGate(ws, auth, 'sign-send', `${at.rec.id}:${at.f.id}`, pv, d.sha256(JSON.stringify([signer.email, signer.name, note, title])), body.confirm);
+        if (gate) return send(res, gate.status, gate.body);
+      }
       const kinds = { sig: 'sig', name: 'name', date: 'date', check: 'check' };
       const x = {
         id: rid(), wsId: ws.id, memberId: auth.memberId, by: auth.member, itemId: null, name: fileName(r), title: r.title, signer, message: cleanText(body.message, 2000),
@@ -319,6 +327,12 @@ export function signoffModule(d) {
     const x = pending && db.signs[pending.signId];
     if (e === 'remind') {
       if (!open || !x) return send(res, 400, { error: 'There’s nothing waiting to be signed.' });
+      if (d.sendGate) {
+        const title = x.title || x.name.replace(/\.pdf$/i, '');
+        const pv = { to: x.signer.name || x.signer.email, via: 'email', email: x.signer.email, subject: `Reminder: please sign: ${title}`, text: `A reminder: ${auth.member} at ${ws.name} sent you “${title}” to sign.` };
+        const gate = d.sendGate(ws, auth, 'sign-remind', x.id, pv, d.sha256(JSON.stringify([x.signer.email, x.id])), body.confirm);
+        if (gate) return send(res, gate.status, gate.body);
+      }
       const via = await d.emailSignLink(ws, auth, x, true);
       if (!via) return send(res, 502, { error: 'The reminder didn’t send. Copy the link and send it yourself.' });
       save();

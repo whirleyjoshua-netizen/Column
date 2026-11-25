@@ -45,8 +45,10 @@ const srv = spawn('node', ['index.js'], { cwd: new URL('../server', import.meta.
 srv.log = ''; srv.stdout.on('data', (d) => (srv.log += d)); srv.stderr.on('data', (d) => (srv.log += d));
 for (let i = 0; i < 100; i++) { try { if ((await fetch(B + '/api/health')).ok) break; } catch {} await sleep(150); }
 const call = (tok) => async (m, p, body) => {
-  const r = await fetch(B + '/api' + p, { method: m, headers: { 'content-type': 'application/json', ...(tok ? { authorization: 'Bearer ' + tok } : {}) }, body: body ? JSON.stringify(body) : undefined });
-  return { status: r.status, body: await r.json().catch(() => null) };
+  const go = async (b) => { const r = await fetch(B + '/api' + p, { method: m, headers: { 'content-type': 'application/json', ...(tok ? { authorization: 'Bearer ' + tok } : {}) }, body: b ? JSON.stringify(b) : undefined }); return { status: r.status, body: await r.json().catch(() => null) }; };
+  const r = await go(body);
+  // A message to a customer asks first (docs/jobflows/PHASE3B.md §1): here the person presses Send on the preview.
+  return r.status === 428 && r.body?.confirm ? go({ ...(body || {}), confirm: r.body.confirm }) : r;
 };
 // A text from a customer, as Twilio would send it (signed, or not).
 const inbound = async (path, params, sign = true) => {

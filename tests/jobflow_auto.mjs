@@ -54,8 +54,10 @@ const start = async (extra = { MAIL_OUTBOX: '1' }) => {
 const stop = async () => { if (srv.exitCode === null) srv.kill(); await srv.gone; await sleep(200); };
 if (!(await start())) { console.log('FAIL the server didn’t start\n' + srv.log.slice(-2000)); process.exit(1); }
 const call = (tok) => async (m, p, body) => {
-  const r = await fetch(B + '/api' + p, { method: m, headers: { 'content-type': 'application/json', ...(tok ? { authorization: 'Bearer ' + tok } : {}) }, body: body ? JSON.stringify(body) : undefined }).catch(() => null);
-  return r ? { status: r.status, body: await r.json().catch(() => null) } : { status: 0, body: null };
+  const go = async (b) => { const r = await fetch(B + '/api' + p, { method: m, headers: { 'content-type': 'application/json', ...(tok ? { authorization: 'Bearer ' + tok } : {}) }, body: b ? JSON.stringify(b) : undefined }).catch(() => null); return r ? { status: r.status, body: await r.json().catch(() => null) } : { status: 0, body: null }; };
+  const r = await go(body);
+  // A message a person sends asks first (PHASE3B.md §1): here they press Send on the preview.
+  return r.status === 428 && r.body?.confirm ? go({ ...(body || {}), confirm: r.body.confirm }) : r;
 };
 const t = Date.now();
 try {
@@ -76,7 +78,9 @@ try {
   let n = 0;
   const person = async (extra = {}) => { n++; const c = (await rico('POST', '/contacts', { name: `Cust${n} Ruiz`, email: `cust${n}.${t}@x.test`, address: `${n} A St`, ...extra })).body; return c.id ? c : c.contact; };
   const flowOf = async (name, body) => {
-    const made = await rico('POST', '/job-flows', { name, list, ...body });
+    // Phase 3's steps send by themselves; since Phase 3b that's said on each (PHASE3B.md §2: left out means ask).
+    const auto = (st) => (['remind', 'review', 'quote', 'invoice', 'payment'].includes(st.kind) ? { ...st, settings: { send: 'auto', ...(st.settings || {}) } } : st);
+    const made = await rico('POST', '/job-flows', { name, list, ...body, ...(body.steps ? { steps: body.steps.map(auto) } : {}) });
     const f = made.body;
     const pub = await rico('POST', `/job-flows/${f?.id}/publish`);
     return { id: f?.id, status: pub.status, error: (made.status !== 200 ? `(save ${made.status}: ${f?.error}) ` : '') + (pub.body?.error || ''), sid: (nm) => pub.body?.version?.body?.steps?.find((s) => s.name === nm)?.id };
@@ -286,7 +290,7 @@ try {
   r = await tess('PUT', '/texting', { sid: SID, token: TOKEN, number: '(702) 555-0100' });
   ok(r.status === 200 && r.body?.connected, '(setup) the team connects Twilio: ' + (r.body?.error || ''));
   const p2 = (await tess('POST', '/projects', { template: 'trades', trades: ['cleaning'] })).body;
-  const ff = (await tess('POST', '/job-flows', { name: 'Texted', list: { projectId: p2.id, typeId: p2.types[0].id }, steps: [{ kind: 'review', name: 'Ask', settings: { delayHours: 0, url: 'https://g.page/r/tx' } }] })).body;
+  const ff = (await tess('POST', '/job-flows', { name: 'Texted', list: { projectId: p2.id, typeId: p2.types[0].id }, steps: [{ kind: 'review', name: 'Ask', settings: { delayHours: 0, url: 'https://g.page/r/tx', send: 'auto' } }] })).body;
   await tess('POST', `/job-flows/${ff?.id}/publish`);
   const tc = (await tess('POST', '/contacts', { name: 'Tom Text', phone: '(702) 555-0142' })).body;
   const tj = (await tess('POST', '/jobs', { flowId: ff?.id, contactId: (tc.id ? tc : tc.contact).id, values: { job: 'Texted job' } })).body?.job;

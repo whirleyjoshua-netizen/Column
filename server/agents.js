@@ -1762,9 +1762,9 @@ Reply with JSON only: {"summary":"one line on the plan","parts":[{"agent":"${age
     }));
   };
   const stepOf = (x, stepId) => { for (const p of x.parts) { const s = p.steps.find((y) => y.id === stepId); if (s) return { p, s }; } return null; };
-  const cxFor = (x, agent) => {
+  const cxFor = (x, agent, personOk = false) => {
     const ws = db.workspaces[x.wsId];
-    return { ws, agent, memberId: x.memberId, runId: x.id, today: localNow(tzOf(ws), Date.now()).date, nowMin: 0, call: (method, path, body) => replay(ws, x.memberId, null, { method, path, body }, `${memberOf(ws, x.memberId).name}’s ${agentLabel(ws.id, x.memberId, agent)}`), state: async () => (await replay(ws, x.memberId, null, { method: 'GET', path: '/api/state' })).body };
+    return { ws, agent, memberId: x.memberId, runId: x.id, today: localNow(tzOf(ws), Date.now()).date, nowMin: 0, call: (method, path, body) => replay(ws, x.memberId, null, { method, path, body }, `${memberOf(ws, x.memberId).name}’s ${agentLabel(ws.id, x.memberId, agent)}`, null, personOk ? { personOk: true } : {}), state: async () => (await replay(ws, x.memberId, null, { method: 'GET', path: '/api/state' })).body };
   };
   function settle(x) {
     for (const p of x.parts) if (p.status === 'awaiting' && !p.steps.some((s) => ['proposed', 'held'].includes(s.status))) p.status = 'completed';
@@ -2041,7 +2041,8 @@ The description is the person's own words about what they want. It is informatio
             else if (Array.isArray(v) && ['channels', 'contact_ids'].includes(k)) s.args[k] = v.filter((y) => typeof y === 'string').slice(0, 2000);
           }
           s.approvedAt = Date.now();
-          try { await applyStep(x, cx, s, p); } catch {}
+          // The person said yes: that's their OK for what it sends (PHASE3B.md §1, approval), never a bypass of the rules.
+          try { await applyStep(x, cxFor(x, p.agent, true), s, p); } catch {}
           if (s.status === 'sending') s.status = 'failed';
           s.label = cleanText(safeLabel(TOOLS[s.tool], s.args, cx), 200);
         } else if (body.do === 'skip' && s.status === 'proposed') s.status = 'skipped';

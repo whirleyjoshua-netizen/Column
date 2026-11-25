@@ -343,7 +343,7 @@ export const TEMPLATES = {
   },
 };
 
-export function projectsModule({ jobQuote = () => null, seesLinked = () => true, proofUrl = () => null, onEvent = null, onPrice = () => {}, canSeeItem = () => true, seal = (x) => x, unseal = (x) => x, db, save, broadcast, rid, hold = null, cleanText, isDay, readJson, send, badRequest, isOwnerId, escHtml, brandOf, logoUrl, teamDay, offline, makeTask, onRecords, onRecordGone, onRecordNews, stageGate = null, allowLocalHooks = false, qrSvg = null, publicUrl = '' }) {
+export function projectsModule({ jobQuote = () => null, seesLinked = () => true, proofUrl = () => null, onEvent = null, onPrice = () => {}, canSeeItem = () => true, seal = (x) => x, unseal = (x) => x, db, save, broadcast, rid, hold = null, cleanText, isDay, readJson, send, badRequest, isOwnerId, escHtml, brandOf, logoUrl, teamDay, offline, makeTask, onRecords, onRecordGone, onRecordNews, stageGate = null, allowLocalHooks = false, qrSvg = null, publicUrl = '', docsOf = null, bizHtml = () => '', inkedPng = () => null }) {
   const bad = (msg) => badRequest(msg);
   db.projects ||= {};
   db.records ||= {};
@@ -1817,9 +1817,20 @@ export function projectsModule({ jobQuote = () => null, seesLinked = () => true,
     logTo(rec, { kind: 'quote', what: 'sent', by: auth.member });
     const issued = fieldOf(t, 'issued');
     if (issued?.type === 'date' && !rec.values[issued.id]) rec.values[issued.id] = today(rec.wsId);
+    // A job quote, first sent: its number, dates and look are kept on it (PHASE3B.md §3), so settings changed later
+    // don't change it under the customer. A New quote clears this and takes a fresh one.
+    if (jobQuote(rec)?.onRun && !rec.quoteLook && docsOf) {
+      const ws = db.workspaces[rec.wsId];
+      const d = docsOf(ws);
+      ws.quoteSeq = (ws.quoteSeq || 1000) + 1;
+      const on = today(rec.wsId);
+      rec.quoteLook = { number: `Q-${ws.quoteSeq}`, issued: on, validUntil: d.validDays ? new Date(Date.parse(on + 'T12:00:00Z') + d.validDays * 864e5).toISOString().slice(0, 10) : null, business: { ...d.business }, signature: d.signature ? { id: d.signature.id, name: d.signature.name, title: d.signature.title || '' } : null, terms: d.terms, footer: d.footer, showPrices: d.showPrices, accept: d.accept, showClientContact: d.showClientContact };
+    }
     rec.updatedAt = Date.now();
     return rec;
   }
+  // How a quote looks: a job quote's own snapshot, or (any other quote) the team's settings now.
+  const lookOf = (rec) => rec.quoteLook || (docsOf ? { ...docsOf(db.workspaces[rec.wsId]), number: null, issued: null, validUntil: null, signature: docsOf(db.workspaces[rec.wsId]).signature } : { showPrices: true, accept: 'type' });
   const quoteFor = (token) => {
     const rec = token && Object.values(db.records).find((r) => r.share?.token === token);
     if (!rec || (rec.share.expiresAt && rec.share.expiresAt < Date.now()) || offline(rec.wsId)) return null;
@@ -1829,11 +1840,11 @@ export function projectsModule({ jobQuote = () => null, seesLinked = () => true,
   };
   const money = (c) => (c / 100).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
   const day = (d) => (d ? new Date(d + 'T12:00:00Z').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' }) : '');
-  async function readForm(req) {
+  async function readForm(req, max = 20_000) {
     let body = '';
     for await (const chunk of req) {
       body += chunk;
-      if (body.length > 20_000) break;
+      if (body.length > max) return { tooBig: true };
     }
     return Object.fromEntries(new URLSearchParams(body));
   }
@@ -1846,23 +1857,39 @@ export function projectsModule({ jobQuote = () => null, seesLinked = () => true,
     const { rec, p, t, ws } = q;
     const status = quoteStatus(t, rec);
     const valid = fieldOf(t, 'valid_until');
-    const expired = valid && rec.values[valid.id] && rec.values[valid.id] < today(rec.wsId) && !['accepted', 'declined'].includes(status);
+    const look = lookOf(rec);
+    const until = rec.quoteLook ? rec.quoteLook.validUntil : valid && rec.values[valid.id];
+    const expired = !!until && until < today(rec.wsId) && !['accepted', 'declined'].includes(status);
+    // The customer's drawn signature, once accepted (served from here, never from outside).
+    if (req.method === 'GET' && act === 'signature') {
+      const png = rec.answer?.method === 'drawn' && rec.answer.signature && Buffer.from(String(rec.answer.signature).split(',')[1] || '', 'base64');
+      if (!png?.length) return quoteHtml(res, 404, null, '<h1>Not found</h1>');
+      res.writeHead(200, { 'Content-Type': 'image/png', 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'no-store' });
+      return res.end(png);
+    }
     // An answer, once: accepted (with the name they typed) or declined (with why, if they say).
     if (req.method === 'POST' && (act === 'accept' || act === 'decline')) {
-      const form = await readForm(req);
+      const form = await readForm(req, 300_000);
+      if (form.tooBig) return quoteHtml(res, 413, db.workspaces[rec.wsId], `<h1>That signature is too big</h1><p><a href="/q/${token}">Go back and sign again</a></p>`);
       const name = cleanText(form.name, 120);
       const itemsF = t.fields.find((f) => f.type === 'items');
       const shown = itemsF ? rec.values[itemsF.id] || { rows: [] } : null;
       if (act === 'accept' && itemsF && form.v !== linesKey(shown)) {
         return quoteHtml(res, 409, db.workspaces[rec.wsId], `<h1>This quote changed</h1><p class="muted">It was updated after you opened it, so please look at it again before accepting.</p><p><a href="/q/${token}">See the quote as it is now</a></p>`);
       }
-      if (!['accepted', 'declined'].includes(status) && !(rec.answer && jobQuote(rec)?.onRun) && !expired && (act === 'decline' || name)) {
+      if (expired && act === 'accept') return quoteHtml(res, 409, db.workspaces[rec.wsId], `<h1>This quote has expired</h1><p class="muted">Contact us for an updated one.</p><p><a href="/q/${token}">See the quote</a></p>`);
+      // How the customer accepts (PHASE3B.md §3): type mode needs the typed name; draw mode needs a real drawing (the
+      // name is optional). Both still need the lines they saw (G3, above).
+      const drawn = act === 'accept' && look.accept === 'draw' ? inkedPng(form.sig) : null;
+      if (act === 'accept' && look.accept === 'draw' && !drawn) return quoteHtml(res, 400, db.workspaces[rec.wsId], `<h1>Please sign in the box</h1><p class="muted">Draw your signature to accept the quote.</p><p><a href="/q/${token}">Go back</a></p>`);
+      if (act === 'accept' && look.accept !== 'draw' && !name) return quoteHtml(res, 400, db.workspaces[rec.wsId], `<h1>Please type your name</h1><p class="muted">Type your full name to accept the quote.</p><p><a href="/q/${token}">Go back</a></p>`);
+      if (!['accepted', 'declined'].includes(status) && !(rec.answer && jobQuote(rec)?.onRun) && !expired) {
         if (!jobQuote(rec)?.onRun) setStatus(p, t, rec, act === 'accept' ? 'Accepted' : 'Declined');
         const by = fieldOf(t, 'accepted_by');
         const on = fieldOf(t, 'accepted_on');
         if (by?.type === 'text') rec.values[by.id] = act === 'accept' ? name : `Declined${name ? ' by ' + name : ''}${form.reason ? ': ' + cleanText(form.reason, 500) : ''}`;
         if (on?.type === 'date') rec.values[on.id] = today(rec.wsId);
-        rec.answer = { act, name, reason: cleanText(form.reason, 500), at: Date.now(), ...(act === 'accept' && shown ? { lines: JSON.parse(JSON.stringify(shown)), total: itemsTotals(shown).total } : {}) };
+        rec.answer = { act, name, reason: cleanText(form.reason, 500), at: Date.now(), ...(act === 'accept' ? { method: drawn ? 'drawn' : 'typed', ...(drawn ? { signature: 'data:image/png;base64,' + drawn.toString('base64') } : {}) } : {}), ...(act === 'accept' && shown ? { lines: JSON.parse(JSON.stringify(shown)), total: itemsTotals(shown).total } : {}) };
         logTo(rec, { kind: 'quote', what: act === 'accept' ? 'accepted' : 'declined', by: name || 'The customer', note: rec.answer.reason || '' });
         rec.updatedAt = Date.now();
         const items = t.fields.find((f) => f.type === 'items');
@@ -1888,7 +1915,8 @@ export function projectsModule({ jobQuote = () => null, seesLinked = () => true,
       rec.updatedAt = Date.now();
       recordNews(rec, 'record.updated', 'Customer');
     }
-    return quoteHtml(res, 200, ws, quoteBody(q, token, expired));
+    const nonce = look.accept === 'draw' && !['accepted', 'declined'].includes(status) && !expired && !rec.answer ? crypto.randomBytes(16).toString('base64') : null;
+    return quoteHtml(res, 200, ws, quoteBody(q, token, expired, nonce), nonce);
   }
   // A fingerprint of a quote's lines: the customer accepts exactly what they saw, or not at all.
   const linesKey = (data) => crypto.createHash('sha256').update(JSON.stringify(data || { rows: [] })).digest('hex').slice(0, 24);
@@ -1901,38 +1929,67 @@ export function projectsModule({ jobQuote = () => null, seesLinked = () => true,
     const num = t.fields.find((f) => f.type === 'autonumber');
     return [num && rec.values[num.id], rec.values[t.primary]].filter(Boolean).join(' · ') || t.singular || 'Quote';
   };
-  function quoteBody({ rec, p, t, ws }, token, expired) {
+  function quoteBody({ rec, p, t, ws }, token, expired, nonce = null) {
     const v = (key) => { const f = fieldOf(t, key); return f ? rec.values[f.id] : undefined; };
     const items = t.fields.find((f) => f.type === 'items');
     const data = items ? rec.values[items.id] || { rows: [] } : { rows: [] };
     const tot = itemsTotals(data);
-    // The client, from the linked record.
-    const cf = fieldOf(t, 'client');
-    const client = cf?.type === 'link' && rec.values[cf.id]?.[0] && db.records[rec.values[cf.id][0]];
-    const ct = client && typeOf(p, client.typeId);
-    const cv = (key) => { const f = ct && fieldOf(ct, key); return f && client.values[f.id] != null ? String(client.values[f.id]) : ''; };
+    const look = lookOf(rec);
+    const job = !!rec.quoteLook;
+    // The client: a job's contact, or (Bids & Quotes) the linked client record.
+    let to = null;
+    const cfield = t.fields.find((f) => f.type === 'contact' && rec.values[f.id]);
+    const contact = cfield && db.contacts?.[rec.values[cfield.id]];
+    if (contact) to = { name: contact.name || '', lines: [contact.address, [contact.city, contact.state].filter(Boolean).join(', '), ...(look.showClientContact ? [contact.email, contact.phone] : [])].filter(Boolean) };
+    else {
+      const cf = fieldOf(t, 'client');
+      const client = cf?.type === 'link' && rec.values[cf.id]?.[0] && db.records[rec.values[cf.id][0]];
+      const ct = client && typeOf(p, client.typeId);
+      const cv = (key) => { const f = ct && fieldOf(ct, key); return f && client.values[f.id] != null ? String(client.values[f.id]) : ''; };
+      if (client) to = { name: cv('name') || cv(ct.fields.find((f) => f.id === ct.primary)?.key), lines: [cv('contact'), cv('address'), cv('email'), cv('phone')].filter(Boolean) };
+    }
     const status = quoteStatus(t, rec);
     const brand = brandOf(ws);
-    const lines = data.rows.map((r) => `<tr><td>${escHtml(r.desc)}</td><td class="n">${escHtml(String(r.qty))}${r.unit ? ' ' + escHtml(r.unit) : ''}</td><td class="n">${money(r.price)}</td><td class="n">${money(Math.round(r.qty * r.price))}</td></tr>`).join('');
-    const answer = status === 'accepted' ? `<div class="done ok">✓ Accepted${v('accepted_by') ? ' by ' + escHtml(v('accepted_by')) : ''}${v('accepted_on') ? ' on ' + day(v('accepted_on')) : ''}. Thank you!</div>`
+    const prices = look.showPrices !== false;
+    const lines = data.rows.map((r) => `<tr><td>${escHtml(r.desc)}</td><td class="n">${escHtml(String(r.qty))}${r.unit ? ' ' + escHtml(r.unit) : ''}</td>${prices ? `<td class="n">${money(r.price)}</td><td class="n">${money(Math.round(r.qty * r.price))}</td>` : ''}</tr>`).join('');
+    const a = rec.answer;
+    const acceptedBy = a?.act === 'accept'
+      ? `<div class="done ok">✓ Accepted by ${escHtml(a.name || (a.method === 'drawn' ? 'signature' : 'the customer'))} (${a.method === 'drawn' ? 'signed by drawing' : 'typed name'}) on ${new Date(a.at).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}. Thank you!${a.method === 'drawn' ? `<div class="sig"><small>Accepted by</small><img src="/q/${token}/signature" alt="Signature"></div>` : ''}</div>`
+      : `<div class="done ok">✓ Accepted${v('accepted_by') ? ' by ' + escHtml(v('accepted_by')) : ''}${v('accepted_on') ? ' on ' + day(v('accepted_on')) : ''}. Thank you!</div>`;
+    const draw = look.accept === 'draw';
+    const form = draw
+      ? `<form class="accept" method="post" action="/q/${token}/accept"><input type="hidden" name="v" value="${linesKey(data)}"><input type="hidden" name="sig" value="">
+          <label>Sign here to accept this quote</label><canvas class="pad" width="600" height="180"></canvas>
+          <label>Your name (optional)<input name="name" maxlength="120" autocomplete="name"></label>
+          <button type="submit">Accept quote · ${money(tot.total)}</button><button type="button" class="ghost" data-clear>Clear the signature</button></form>
+          <script nonce="${nonce}">(()=>{const c=document.querySelector('canvas.pad'),x=c.getContext('2d'),f=c.closest('form');let on=false,inked=false;x.lineWidth=2.5;x.lineCap='round';x.strokeStyle='#111';const at=(e)=>{const r=c.getBoundingClientRect();return[(e.clientX-r.left)*c.width/r.width,(e.clientY-r.top)*c.height/r.height]};c.addEventListener('pointerdown',(e)=>{on=true;const[p,q]=at(e);x.beginPath();x.moveTo(p,q)});c.addEventListener('pointermove',(e)=>{if(!on)return;const[p,q]=at(e);x.lineTo(p,q);x.stroke();inked=true});addEventListener('pointerup',()=>{on=false});f.querySelector('[data-clear]').addEventListener('click',()=>{x.clearRect(0,0,c.width,c.height);inked=false});f.addEventListener('submit',(e)=>{if(!inked){e.preventDefault();alert('Please sign in the box.');return}f.sig.value=c.toDataURL('image/png')})})();</script>`
+      : `<form class="accept" method="post" action="/q/${token}/accept"><input type="hidden" name="v" value="${linesKey(data)}"><label>Type your full name to accept this quote<input name="name" required maxlength="120" autocomplete="name"></label><button>Accept quote · ${money(tot.total)}</button></form>`;
+    const answer = status === 'accepted' ? acceptedBy
       : status === 'declined' ? '<div class="done">This quote was declined. Thanks for letting us know.</div>'
-      : expired ? `<div class="done">This quote expired on ${day(v('valid_until'))}. Contact us for an updated one.</div>`
-      : `<form class="accept" method="post" action="/q/${token}/accept"><input type="hidden" name="v" value="${linesKey(data)}"><label>Type your full name to accept this quote<input name="name" required maxlength="120" autocomplete="name"></label><button>Accept quote · ${money(tot.total)}</button></form>
+      : expired ? `<div class="done">This quote expired on ${day(rec.quoteLook ? rec.quoteLook.validUntil : v('valid_until'))}. Contact us for an updated one.</div>`
+      : `${form}
          <details class="decline"><summary>Decline</summary><form method="post" action="/q/${token}/decline"><label>Your name<input name="name" maxlength="120" autocomplete="name"></label><label>Anything we should know? (optional)<textarea name="reason" rows="3" maxlength="500"></textarea></label><button class="ghost">Decline quote</button></form></details>`;
+    const issued = job ? look.issued : v('issued');
+    const validUntil = job ? look.validUntil : v('valid_until');
+    const terms = v('terms') || look.terms || '';
+    const sig = look.signature;
     return `<header>${brand.logo ? `<img class="brand" src="${logoUrl(brand.logo)}" alt="">` : ''}<div><b>${escHtml(ws.name)}</b></div></header>
-      <h1>${escHtml(quoteTitle(t, rec))}</h1>
-      <div class="meta">${v('issued') ? `<span>Issued ${day(v('issued'))}</span>` : ''}${v('valid_until') ? `<span>Valid until ${day(v('valid_until'))}</span>` : ''}</div>
-      ${client ? `<div class="to"><small>Prepared for</small><b>${escHtml(cv('name') || cv(ct.fields.find((f) => f.id === ct.primary)?.key))}</b>${[cv('contact'), cv('address'), cv('email'), cv('phone')].filter(Boolean).map((x) => `<div>${escHtml(x)}</div>`).join('')}</div>` : ''}
-      <table><thead><tr><th>Description</th><th class="n">Qty</th><th class="n">Price</th><th class="n">Amount</th></tr></thead><tbody>${lines || '<tr><td colspan="4" class="muted">No items yet.</td></tr>'}</tbody></table>
-      <div class="sums"><div><span>Subtotal</span><span>${money(tot.subtotal)}</span></div>${tot.discount ? `<div><span>Discount${data.discount?.type === 'percent' ? ` (${data.discount.value}%)` : ''}</span><span>−${money(tot.discount)}</span></div>` : ''}${data.taxRate ? `<div><span>Tax (${data.taxRate}%)</span><span>${money(tot.tax)}</span></div>` : ''}<div class="total"><span>Total</span><span>${money(tot.total)}</span></div></div>
-      ${v('terms') ? `<div class="terms"><small>Terms</small><p>${escHtml(v('terms')).replace(/\n/g, '<br>')}</p></div>` : ''}
-      ${answer}${proofLine(ws)}`;
+      ${bizHtml(look.business, escHtml)}
+      <h1>${escHtml([look.number, quoteTitle(t, rec)].filter(Boolean).join(' · '))}</h1>
+      <div class="meta">${issued ? `<span>Issued ${day(issued)}</span>` : ''}${validUntil ? `<span>Valid until ${day(validUntil)}</span>` : ''}</div>
+      ${to ? `<div class="to"><small>Prepared for</small><b>${escHtml(to.name)}</b>${to.lines.map((x) => `<div>${escHtml(x)}</div>`).join('')}</div>` : ''}
+      <table><thead><tr><th>Description</th><th class="n">Qty</th>${prices ? '<th class="n">Price</th><th class="n">Amount</th>' : ''}</tr></thead><tbody>${lines || `<tr><td colspan="${prices ? 4 : 2}" class="muted">No items yet.</td></tr>`}</tbody></table>
+      <div class="sums">${prices ? `<div><span>Subtotal</span><span>${money(tot.subtotal)}</span></div>${tot.discount ? `<div><span>Discount${data.discount?.type === 'percent' ? ` (${data.discount.value}%)` : ''}</span><span>−${money(tot.discount)}</span></div>` : ''}${data.taxRate ? `<div><span>Tax (${data.taxRate}%)</span><span>${money(tot.tax)}</span></div>` : ''}` : ''}<div class="total"><span>Total</span><span>${money(tot.total)}</span></div></div>
+      ${terms ? `<div class="terms"><small>Terms</small><p>${escHtml(terms).replace(/\n/g, '<br>')}</p></div>` : ''}
+      ${sig ? `<div class="sig"><small>Prepared by</small><img src="/brand/${escHtml(sig.id)}" alt=""><div><b>${escHtml(sig.name)}</b>${sig.title ? `, ${escHtml(sig.title)}` : ''}</div></div>` : ''}
+      ${answer}${look.footer ? `<p class="foot">${escHtml(look.footer)}</p>` : ''}${proofLine(ws)}`;
   }
   // Our licenses & insurance, when the team shows them on its quotes (the workspace profile, step 3).
   const proofLine = (ws) => { const u = proofUrl(ws); return u ? `<p class="proof" style="text-align:center;margin-top:22px;font-size:14px"><a href="${escHtml(u)}" rel="noopener">🪪 Our licenses &amp; insurance</a></p>` : ''; };
-  function quoteHtml(res, code, ws, body) {
+  function quoteHtml(res, code, ws, body, nonce = null) {
     const accent = ws ? brandOf(ws).accent : null;
-    res.writeHead(code, { 'Content-Type': 'text/html; charset=utf-8', 'Content-Security-Policy': "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; form-action 'self'" });
+    // Nothing loads from outside; the signature pad's script runs only by this page's nonce.
+    res.writeHead(code, { 'Content-Type': 'text/html; charset=utf-8', 'Content-Security-Policy': `default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; form-action 'self'${nonce ? `; script-src 'nonce-${nonce}'` : ''}` });
     res.end(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Quote</title><style>
 :root{color-scheme:light;--text:#16161a;--muted:#6b6b76;--line:#e4e4ea;--accent:${accent || '#5b4ee0'};--soft:#f6f6f8}
 *{box-sizing:border-box}body{margin:0;background:var(--soft);color:var(--text);font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;padding:24px 14px}
@@ -1949,6 +2006,9 @@ button{font:inherit;font-weight:700;background:var(--accent);color:#fff;border:0
 .decline{margin-top:12px;color:var(--muted);font-size:13.5px}.decline form{display:flex;flex-direction:column;gap:10px;margin-top:10px}.decline summary{cursor:pointer}
 .done{margin-top:28px;padding:16px;border-radius:12px;background:var(--soft);font-weight:600}.done.ok{background:#e7f8ef;color:#126b3d}.muted{color:var(--muted)}
 footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
+.biz{font-size:13.5px;color:var(--muted);margin:-8px 0 18px}.biz b{color:var(--text)}.biz a{color:inherit}
+.sig{margin-top:22px;font-size:13.5px}.sig small{display:block;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;font-size:11px;margin-bottom:4px}.sig img{max-height:70px;max-width:260px;display:block}
+.pad{width:100%;height:150px;border:1px dashed var(--line);border-radius:10px;background:#fff;touch-action:none}.foot{text-align:center;color:var(--muted);font-size:13px;margin-top:22px}
 </style></head><body><main>${body}</main><footer>Sent with Kloomie</footer></body></html>`);
   }
   // A record's quote as other systems need it (QuickBooks estimates): its number, lines, customer and where it stands.

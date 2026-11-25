@@ -15,7 +15,7 @@ const METHODS = ['cash', 'check', 'card', 'bank', 'other'];
 const DUE_DAYS = 14;
 const CHECK_MS = Number(process.env.INVOICE_CHECK_MS) || 5 * 60_000;
 
-export function invoicesModule({ onInvoice = () => {}, bindInvoice = () => {}, flowDueDays = () => null, proofUrl = () => null, stockCost = () => 0, jobMoney = () => ({ expenses: 0, income: 0, committed: 0, entries: [] }), jobBack = () => {}, onPaymentGone = () => {}, notifyAdmins = null, db, save, broadcast, rid, hold = null, cleanText, readJson, send, badRequest, escHtml, brandOf, logoUrl, teamDay, offline, seal, unseal, stripeCall, PJ, isAdmin, jobOfRecord, jobLabel, moveJob, addMoney, dropMoneyId, publicUrl, emit = () => {} }) {
+export function invoicesModule({ docsOf = null, bizHtml = () => '', onInvoice = () => {}, bindInvoice = () => {}, flowDueDays = () => null, proofUrl = () => null, stockCost = () => 0, jobMoney = () => ({ expenses: 0, income: 0, committed: 0, entries: [] }), jobBack = () => {}, onPaymentGone = () => {}, notifyAdmins = null, db, save, broadcast, rid, hold = null, cleanText, readJson, send, badRequest, escHtml, brandOf, logoUrl, teamDay, offline, seal, unseal, stripeCall, PJ, isAdmin, jobOfRecord, jobLabel, moveJob, addMoney, dropMoneyId, publicUrl, emit = () => {} }) {
   db.invoices ||= {};
   db.payKeys ||= {};
   const money = (c) => ((c || 0) / 100).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
@@ -456,13 +456,14 @@ export function invoicesModule({ onInvoice = () => {}, bindInvoice = () => {}, f
       : `<div class="done">${money(tot.balance)} due${inv.due ? ' by ' + day(inv.due) : ''}. Contact ${escHtml(ws.name)} to pay.</div>`;
     return `${thanks ? '<div class="done ok top">✓ Thank you, your payment went through.</div>' : ''}
       <header>${brand.logo ? `<img class="brand" src="${logoUrl(brand.logo)}" alt="">` : ''}<div><b>${escHtml(ws.name)}</b></div></header>
+      ${docsOf ? bizHtml(docsOf(ws).business, escHtml) : ''}
       <h1>Invoice ${escHtml(inv.number)}</h1>
       <div class="meta"><span>${escHtml(inv.title)}</span>${inv.issued ? `<span>Issued ${day(inv.issued)}</span>` : ''}${inv.due && tot.balance > 0 && inv.status !== 'void' ? `<span class="${overdue(inv) ? 'late' : ''}">Due ${day(inv.due)}</span>` : ''}</div>
       ${inv.to.name || inv.to.address ? `<div class="to"><small>Bill to</small><b>${escHtml(inv.to.name)}</b>${[inv.to.address, inv.to.email, inv.to.phone].filter(Boolean).map((x) => `<div>${escHtml(x)}</div>`).join('')}</div>` : ''}
       <table><thead><tr><th>Description</th><th class="n">Qty</th><th class="n">Price</th><th class="n">Amount</th></tr></thead><tbody>${lines || '<tr><td colspan="4" class="muted">No lines.</td></tr>'}</tbody></table>
       <div class="sums"><div><span>Subtotal</span><span>${money(tot.subtotal)}</span></div>${tot.discount ? `<div><span>Discount</span><span>−${money(tot.discount)}</span></div>` : ''}${inv.lines.taxRate ? `<div><span>Tax (${inv.lines.taxRate}%)</span><span>${money(tot.tax)}</span></div>` : ''}<div class="total"><span>Total</span><span>${money(tot.total)}</span></div>${paidRows}${inv.payments.length ? `<div class="total"><span>Balance</span><span>${money(tot.balance)}</span></div>` : ''}</div>
       ${inv.note ? `<div class="terms"><small>Note</small><p>${escHtml(inv.note).replace(/\n/g, '<br>')}</p></div>` : ''}
-      ${state}${(() => { const u = proofUrl(ws); return u ? `<p class="proof" style="text-align:center;margin-top:22px;font-size:14px"><a href="${escHtml(u)}" rel="noopener">🪪 Our licenses &amp; insurance</a></p>` : ''; })()}`;
+      ${state}${docsOf && docsOf(ws).footer ? `<p class="foot" style="text-align:center;color:var(--muted);font-size:13px;margin-top:22px">${escHtml(docsOf(ws).footer)}</p>` : ''}${(() => { const u = proofUrl(ws); return u ? `<p class="proof" style="text-align:center;margin-top:22px;font-size:14px"><a href="${escHtml(u)}" rel="noopener">🪪 Our licenses &amp; insurance</a></p>` : ''; })()}`;
   }
   function html(res, code, ws, inner) {
     const accent = ws ? brandOf(ws).accent : null;
@@ -472,6 +473,7 @@ export function invoicesModule({ onInvoice = () => {}, bindInvoice = () => {}, f
 *{box-sizing:border-box}body{margin:0;background:var(--soft);color:var(--text);font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;padding:24px 14px}
 main{background:#fff;max-width:760px;margin:0 auto;border-radius:14px;padding:36px 40px;box-shadow:0 10px 40px rgba(0,0,0,.08)}@media(max-width:600px){main{padding:22px 16px}}
 header{display:flex;align-items:center;gap:12px;margin-bottom:22px}.brand{max-height:46px;max-width:160px;border-radius:6px}
+.biz{font-size:13.5px;color:var(--muted);margin:-8px 0 18px}.biz b{color:var(--text)}.biz a{color:inherit}
 h1{font-size:26px;margin:0 0 6px}.meta{display:flex;gap:16px;color:var(--muted);font-size:13.5px;margin-bottom:20px;flex-wrap:wrap}.late{color:#b42318;font-weight:600}
 .to{background:var(--soft);border-radius:10px;padding:12px 14px;margin-bottom:20px;font-size:14px}.to small,.terms small{display:block;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;font-size:11px;margin-bottom:2px}
 table{width:100%;border-collapse:collapse;font-size:14px}th{text-align:left;color:var(--muted);font-weight:600;font-size:12px;border-bottom:2px solid var(--line);padding:8px 6px}td{border-bottom:1px solid var(--line);padding:10px 6px;vertical-align:top}.n{text-align:right;white-space:nowrap}

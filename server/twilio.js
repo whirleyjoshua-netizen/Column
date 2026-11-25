@@ -27,7 +27,7 @@ export function twilioSignature(token, url, params) {
   return crypto.createHmac('sha1', token).update(data).digest('base64');
 }
 
-export function twilioModule({ db, save, broadcast, seal, unseal, readJson, send, isAdmin, rid, cleanText, publicUrl, contactsOf, phoneKey, noContact, newContact, contactNews, notifyAdmins, hook, alarm, offline, teamDay }) {
+export function twilioModule({ db, save, broadcast, seal, unseal, readJson, send, isAdmin, rid, cleanText, publicUrl, contactsOf, phoneKey, noContact, newContact, contactNews, notifyAdmins, hook, alarm, offline, teamDay, sendGate = null }) {
   db.twilio ||= {};
   db.texts ||= {};
   const api = () => env('TWILIO_API') || 'https://api.twilio.com';
@@ -147,6 +147,14 @@ export function twilioModule({ db, save, broadcast, seal, unseal, readJson, send
       if (req.method === 'GET') return send(res, 200, Object.values(db.texts).filter((t) => t.wsId === ws.id && t.contactId === contact.id).sort((x, y) => x.at - y.at).slice(-200).map(publicText));
       if (req.method === 'POST') {
         const body = await readJson(req, 10_000);
+        // Asks first (PHASE3B.md §1): the exact words and number are what's confirmed.
+        const text = cleanText(body.body, 1500).replace(/\s+\n/g, '\n');
+        const to = e164(contact.phone);
+        if (sendGate && conn(ws.id) && to && text && !noContact(contact)) {
+          const digest = crypto.createHash('sha256').update(JSON.stringify([to, text])).digest('hex');
+          const gate = sendGate(ws, auth, 'text', contact.id, { to: contact.name || contact.phone, via: 'text', phone: contact.phone, text }, digest, body.confirm);
+          if (gate) return send(res, gate.status, gate.body);
+        }
         return send(res, 200, publicText(await sendText(ws.id, contact, body.body, auth.member, { what: 'text' })));
       }
       return send(res, 405, { error: 'Method not allowed' });

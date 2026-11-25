@@ -44,6 +44,7 @@ import { whiteboardModule } from './whiteboard.js';
 import { techAiModule } from './techai.js';
 import { describeModule } from './describe.js';
 import { signoffModule } from './signoff.js';
+import { docsOf, cleanDocs, bizHtml, inkedPng } from './docs.js';
 import { cardsModule } from './cards.js';
 import { newsModule } from './news.js';
 import { qrSvg } from './qr.js';
@@ -653,12 +654,14 @@ function imageType(buf) {
 }
 function serveLogo(req, res, url) {
   const id = url.pathname.slice('/brand/'.length);
-  const ws = /^[\w-]{8,40}$/.test(id) && Object.values(db.workspaces).find((x) => x.brand?.logo?.id === id);
+  // A logo, or a business signature (every one a team has had stays served: issued quotes show the one they were sent with).
+  const ws = /^[\w-]{8,40}$/.test(id) && Object.values(db.workspaces).find((x) => x.brand?.logo?.id === id || (x.docsFiles || []).some((f) => f.id === id));
   if (!ws) return send(res, 404, 'Not found');
-  fs.readFile(logoPath(ws.brand.logo), (err, data) => {
+  const file = ws.brand?.logo?.id === id ? ws.brand.logo : ws.docsFiles.find((f) => f.id === id);
+  fs.readFile(logoPath(file), (err, data) => {
     if (err) return send(res, 404, 'Not found');
     // A new upload gets a new id, so this address never changes content.
-    send(res, 200, data, { 'Content-Type': ws.brand.logo.mime, 'Cache-Control': 'public, max-age=31536000, immutable', 'X-Content-Type-Options': 'nosniff' });
+    send(res, 200, data, { 'Content-Type': file.mime, 'Cache-Control': 'public, max-age=31536000, immutable', 'X-Content-Type-Options': 'nosniff' });
   });
 }
 // The short parts go into every AI request.
@@ -6017,6 +6020,60 @@ async function flowTell(ws, rec, c, msg, by) {
   if (out.failed) return { outcome: 'unsure', reason: String(out.failed).slice(0, 200) };
   return { outcome: 'blocked', reason: out.blocked || 'Nothing could be sent.' };
 }
+// ---------- Nothing goes to a customer without an OK (docs/jobflows/PHASE3B.md §1) ----------
+// Every send a person starts is two calls: the first answers 428 with what would go and a one-time ticket; the second,
+// with that ticket, sends. A ticket is bound to the team, the person, the route, the target and the exact message
+// (its digest); it lasts 10 minutes and works once. Checking it, marking it used and handing the message to the sender
+// happen in one synchronous turn, so two confirmations can't both send. A person's OK already given elsewhere (an
+// agent's draft they accepted, an automation the Flows hold let through) needs no ticket.
+const TICKET_TEST = process.env.NODE_ENV !== 'production';
+const TICKET_MS = (TICKET_TEST && Number(process.env.SEND_TICKET_MS)) || 10 * 60_000;
+const TICKET_KEEP_MS = (TICKET_TEST && Number(process.env.SEND_TICKET_KEEP_MS)) || 86_400_000;
+const TICKETS_OPEN_MAX = 200;
+const viaOf = (c, email = true) => { const e = email && emailable(c), t = textable(c); return e && t ? 'both' : e ? 'email' : t ? 'text' : null; };
+// What a message would be, as a person sees it before saying Send. Members never see a customer's email; the phone
+// only where their screen already shows it (On my way).
+function custPreview(c, msg, { admin = false, phone = admin, email = true } = {}) {
+  const via = viaOf(c, email);
+  const body = [...(msg.lines || []), msg.button ? `${msg.button.label}: ${msg.button.url}` : ''].filter(Boolean).join('\n');
+  return {
+    to: c?.name || 'the customer', via,
+    ...(admin && via && via !== 'text' ? { email: c.email } : {}),
+    ...(phone && textable(c) ? { phone: c.phone } : {}),
+    ...(via && via !== 'text' && msg.subject ? { subject: msg.subject } : {}),
+    text: via === 'text' ? msg.text : body,
+    ...(via === 'both' ? { textMessage: msg.text } : {}),
+  };
+}
+const custDigest = (c, msg, email = true) => crypto.createHash('sha256').update(JSON.stringify([viaOf(c, email), email && emailable(c) ? c.email : null, textable(c) ? TW.e164(c.phone) : null, msg.subject || '', msg.lines || [], msg.button || null, msg.text || ''])).digest('hex');
+function trimTickets(wsId) {
+  db.sendTickets ||= {};
+  const now = Date.now();
+  for (const [id, x] of Object.entries(db.sendTickets)) if (now - x.at > TICKET_KEEP_MS) delete db.sendTickets[id];
+  const open = Object.entries(db.sendTickets).filter(([, x]) => x.wsId === wsId && !x.used).sort((a, b) => a[1].at - b[1].at);
+  while (open.length >= TICKETS_OPEN_MAX) delete db.sendTickets[open.shift()[0]];
+}
+// null: go ahead and send (the ticket is now used). Otherwise { status, body } to answer with.
+function sendGate(ws, auth, route, target, preview, digest, confirm) {
+  if (auth.personOk || auth.flow || auth.approved) return null; // a person already said yes (an accepted agent draft, an approved hold, the Flows hold)
+  db.sendTickets ||= {};
+  const fresh = () => {
+    trimTickets(ws.id);
+    const id = crypto.randomBytes(18).toString('base64url');
+    db.sendTickets[id] = { wsId: ws.id, memberId: auth.memberId, route, target: String(target), digest, at: Date.now(), used: null, agent: !!auth.agent };
+    save();
+    return { preview, confirm: id };
+  };
+  if (!confirm) return { status: 428, body: fresh() };
+  if (auth.agent) return { status: 403, body: { error: 'An agent can’t confirm a message to a customer. The person has to.' } };
+  const x = typeof confirm === 'string' && Object.hasOwn(db.sendTickets, confirm) ? db.sendTickets[confirm] : null;
+  const mine = x && x.wsId === ws.id && x.memberId === auth.memberId && x.route === route && x.target === String(target) && !x.agent;
+  if (mine && x.used) return { status: 409, body: { sent: true, error: 'That already went.' } };
+  if (!mine || Date.now() - x.at > TICKET_MS || x.digest !== digest) return { status: 409, body: { error: 'Look at it again before sending.', ...fresh() } };
+  x.used = Date.now();
+  save();
+  return null;
+}
 const money$ = (c) => ((c || 0) / 100).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
 // The fixed wording of each message (no free text from a step reaches a customer in Phase 3).
 const flowMsg = {
@@ -6040,14 +6097,18 @@ const flowMsg = {
     text: `Hi ${firstName(c)}, a reminder from ${ws.name}: invoice ${inv.number} for ${money$(balance)} was due ${longDay(inv.due)}. ${url}`, replyTo: ownerReply(ws), what: 'payment reminder sent' }),
 };
 // On my way: the customer hears who's coming and about when.
-async function onMyWay(ws, auth, rec, v, minutes, send) {
+function omwMsg(ws, auth, rec, v, minutes) {
   const c = jobCustomer(rec);
   const mins = Math.max(5, Math.min(240, Math.round(Number(minutes) || 20)));
   const at = localNow(tzOf(ws), Date.now() + mins * 60_000).min;
   const who = auth.member.split(/\s+/)[0];
   const text = `Hi ${firstName(c)}, it's ${who} from ${ws.name}. I'm on my way and should be there around ${fmtMinutes(Math.round(at / 5) * 5)} (about ${mins} minutes).`;
+  return { c, text, msg: { tag: 'on-my-way', subject: `${who} from ${ws.name} is on the way`, heading: `${who} is on the way`, lines: [`Hi ${firstName(c)},`, `${who} from ${ws.name} is on the way for your ${v.kind.toLowerCase()} and should be there around ${fmtMinutes(Math.round(at / 5) * 5)}, in about ${mins} minutes.`, jobAddress(rec) ? `Address: ${jobAddress(rec)}` : ''].filter(Boolean), text, replyTo: memberReply(ws, auth.memberId), what: 'on my way sent' } };
+}
+async function onMyWay(ws, auth, rec, v, minutes, send) {
+  const { c, text, msg } = omwMsg(ws, auth, rec, v, minutes);
   const out = send
-    ? await tellCustomer(ws, rec, c, { tag: 'on-my-way', subject: `${who} from ${ws.name} is on the way`, heading: `${who} is on the way`, lines: [`Hi ${firstName(c)},`, `${who} from ${ws.name} is on the way for your ${v.kind.toLowerCase()} and should be there around ${fmtMinutes(Math.round(at / 5) * 5)}, in about ${mins} minutes.`, jobAddress(rec) ? `Address: ${jobAddress(rec)}` : ''].filter(Boolean), text, replyTo: memberReply(ws, auth.memberId), by: auth.member, what: 'on my way sent' })
+    ? await tellCustomer(ws, rec, c, { ...msg, by: auth.member })
     : await (async () => {
       const texted = await twilioText(ws, rec, c, text, auth.member, 'on my way sent');
       return { emailed: false, texted, email: emailable(c) ? c.email : null, dne: !!c && noContact(c), sms: !texted && c && !noContact(c) && c.phone ? smsOf(c, text) : null };
@@ -6059,10 +6120,7 @@ async function onMyWay(ws, auth, rec, v, minutes, send) {
 const reminderText = (ws, c, v, rec) => `Hi ${firstName(c)}, this is ${ws.name}: a reminder we're coming ${longDay(v.date)} ${visitTime(v)} for your ${v.kind.toLowerCase()}${jobAddress(rec) ? ' at ' + jobAddress(rec) : ''}. Reply if you need to change it.`;
 async function remindVisit(ws, rec, v, by = 'Kloomie') {
   const c = jobCustomer(rec);
-  const out = await tellCustomer(ws, rec, c, { tag: 'visit-reminder', subject: `Reminder: ${ws.name} is coming ${v.date === dayIn(tzOf(ws), Date.now() + 864e5) ? 'tomorrow' : longDay(v.date)}`, heading: `See you ${longDay(v.date)}`,
-    lines: [`Hi ${firstName(c)},`, `This is a reminder that ${ws.name} is coming ${longDay(v.date)} ${visitTime(v)} for your ${v.kind.toLowerCase()}.`, jobAddress(rec) ? `Address: ${jobAddress(rec)}` : '', 'Need to change it? Just reply to this email.'].filter(Boolean),
-    text: reminderText(ws, c, v, rec), replyTo: ownerReply(ws), by, what: 'visit reminder sent' });
-  return out;
+  return tellCustomer(ws, rec, c, { ...flowMsg.remind(ws, rec, c, v), by });
 }
 const reviewText = (ws, c, url) => `Hi ${firstName(c)}, thanks for choosing ${ws.name}! If you have a minute, a quick review would mean a lot to us: ${url}`;
 async function askReview(ws, rec, by = 'Kloomie') {
@@ -6071,9 +6129,7 @@ async function askReview(ws, rec, by = 'Kloomie') {
   rec.reviewAsked = Date.now();
   rec.reviewDue = null;
   save();
-  return tellCustomer(ws, rec, c, { tag: 'review-request', subject: `Thanks from ${ws.name}`, heading: `Thank you, ${firstName(c)}!`,
-    lines: [`Thanks for choosing ${ws.name}. We hope you're happy with the work.`, 'If you have a minute, a quick review helps a small business like ours more than anything.'],
-    button: { label: 'Leave a review', url: reviewUrl }, text: reviewText(ws, c, reviewUrl), replyTo: ownerReply(ws), by, what: 'review request sent' });
+  return tellCustomer(ws, rec, c, { ...flowMsg.review(ws, rec, c, reviewUrl), by });
 }
 // A job reaching Paid asks for a review an hour later, once, when the team has that turned on. The stage it was at
 // last time is kept on the job, so only a move to Paid counts (not a job that was already paid).
@@ -8580,10 +8636,26 @@ async function api(req, res, url) {
     // On my way, or a reminder sent now: emailed to the customer when asked, and the text for the person's phone.
     if (m === 'POST' && c === 'on-my-way') {
       const body = await readJson(req, 5_000);
-      return send(res, 200, await onMyWay(ws, auth, rec, publicVisit(list), body.minutes, body.email !== false));
+      const v = publicVisit(list);
+      const email = body.email !== false;
+      const { c: cust, msg } = omwMsg(ws, auth, rec, v, body.minutes);
+      // Only when Kloomie itself would send (an email, or a text from the team's number); the phone's own Messages app
+      // needs no ticket.
+      if (viaOf(cust, email)) {
+        const gate = sendGate(ws, auth, 'on-my-way', v.id, custPreview(cust, msg, { admin: isAdmin(auth), phone: true, email }), custDigest(cust, msg, email), body.confirm);
+        if (gate) return send(res, gate.status, gate.body);
+      }
+      return send(res, 200, await onMyWay(ws, auth, rec, v, body.minutes, email));
     }
     if (m === 'POST' && c === 'remind') {
+      const body = await readJson(req, 5_000).catch(() => ({}));
       const v = publicVisit(list);
+      const cust = jobCustomer(rec);
+      if (viaOf(cust)) {
+        const msg = flowMsg.remind(ws, rec, cust, v);
+        const gate = sendGate(ws, auth, 'remind', v.id, custPreview(cust, msg, { admin: isAdmin(auth) }), custDigest(cust, msg), body.confirm);
+        if (gate) return send(res, gate.status, gate.body);
+      }
       const out = await remindVisit(ws, rec, v, auth.member);
       for (const e of list) e.reminded = Date.now();
       save();
@@ -8619,11 +8691,36 @@ async function api(req, res, url) {
       return send(res, e.status || 502, { error: e.message });
     }
   }
+  // Test only (never in production, and only with its switch on): run a call as an agent working for this person, and
+  // count the team's send tickets (PHASE3B.md §7).
+  if (a === 'test' && process.env.NODE_ENV !== 'production' && process.env.SENDS_TEST_AGENT === '1') {
+    if (b === 'agent-call' && m === 'POST') {
+      const body = await readJson(req, 20_000);
+      return send(res, 200, await replayAs(ws, auth.memberId, null, { method: String(body.method || 'GET'), path: String(body.path || ''), body: body.body ?? null }, 'Test agent'));
+    }
+    if (b === 'send-tickets' && m === 'GET') {
+      const all = Object.values(db.sendTickets || {}).filter((x) => x.wsId === ws.id);
+      return send(res, 200, { open: all.filter((x) => !x.used).length, total: all.length });
+    }
+    // Which of these tickets are still kept (by id), in one call.
+    if (b === 'send-tickets' && m === 'POST') {
+      const { ids } = await readJson(req, 50_000);
+      const has = Object.fromEntries((Array.isArray(ids) ? ids : []).slice(0, 500).map((id) => [String(id), Object.hasOwn(db.sendTickets || {}, String(id)) && db.sendTickets[String(id)].wsId === ws.id]));
+      return send(res, 200, { has });
+    }
+  }
   // Asking the customer for a review: emailed now (with the team's review link), and the text for a phone.
   if (a === 'records' && c === 'review-request' && m === 'POST') {
     const at = PJ.recordAt(b, ws.id, auth.memberId);
     if (!at || !jobOfRecord(at.rec)) return send(res, 404, { error: 'That job is gone.' });
     if (!custMsgsOf(ws).reviewUrl) return send(res, 400, { error: 'Add your review link first, in Settings → Team settings → Customer messages.' });
+    const body = await readJson(req, 5_000).catch(() => ({}));
+    const cust = jobCustomer(at.rec);
+    if (viaOf(cust)) {
+      const msg = flowMsg.review(ws, at.rec, cust, custMsgsOf(ws).reviewUrl);
+      const gate = sendGate(ws, auth, 'review', at.rec.id, custPreview(cust, msg, { admin: isAdmin(auth) }), custDigest(cust, msg), body.confirm);
+      if (gate) return send(res, gate.status, gate.body);
+    }
     return send(res, 200, await askReview(ws, at.rec, auth.member));
   }
   {
@@ -9550,6 +9647,12 @@ async function api(req, res, url) {
       const conn = mailConn(ws.id, auth.memberId);
       if (!conn) return send(res, 400, { error: 'Connect Outlook or Gmail in Settings to email it from Kloomie, or copy the link and send it yourself.' });
       if (!open) return send(res, 400, { error: 'This request is closed.' });
+      {
+        const body = await readJson(req, 5_000).catch(() => ({}));
+        const pv = { to: x.signer.name || x.signer.email, via: 'email', email: x.signer.email, subject: `Please sign: ${x.name}`, text: `${x.by} at ${ws.name} sent you “${x.name}” to sign. (From ${conn.account}.)` };
+        const gate = sendGate(ws, auth, 'sign-email', x.id, pv, sha256(JSON.stringify([x.signer.email, x.id, conn.account])), body.confirm);
+        if (gate) return send(res, gate.status, gate.body);
+      }
       const first = x.signer.name.split(/\s+/)[0];
       const until = new Date(x.expiresAt).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
       const text = `Hi ${first},\n\n${x.by} at ${ws.name} sent you “${x.name}” to sign.\n\n${x.message ? x.message + '\n\n' : ''}Read it and sign here:\n${signLink(x)}\n\nThe link works until ${until}.\n`;
@@ -10163,6 +10266,9 @@ async function api(req, res, url) {
       if (noContact(x)) return send(res, 400, { error: `${x.name || 'They'} asked not to be contacted.` });
       const subject = cleanText(body.subject, 200), text = String(body.body ?? '').replace(/\r\n?/g, '\n').trim().slice(0, 5000);
       if (!subject || !text) return send(res, 400, { error: 'Write the subject and the message.' });
+      // An automation's email comes here already OK'd (the Flows hold); anyone else asks first (PHASE3B.md §1).
+      const gate = sendGate(ws, auth, 'contact-email', x.id, { to: x.name || x.email, via: 'email', ...(isAdmin(auth) ? { email: x.email } : {}), subject, text }, sha256(JSON.stringify([x.email, subject, text])), body.confirm);
+      if (gate) return send(res, gate.status, gate.body);
       try {
         const out = await agentEmail(ws, auth.memberId, { name: x.name || '', email: x.email, subject, text });
         const at = body.recordId && PJ.recordAt(String(body.recordId), ws.id, auth.memberId);
@@ -11156,6 +11262,49 @@ async function api(req, res, url) {
     return send(res, 200, publicWorkspace(ws, auth.memberId));
   }
 
+  // Settings → Quotes & invoices (PHASE3B.md §3): owners and admins.
+  if (a === 'docs-settings') {
+    if (!isAdmin(auth)) return send(res, 403, { error: 'Only team owners and admins change how quotes and invoices look.' });
+    const out = () => { const d = docsOf(ws); return { ...d, signature: d.signature ? { url: logoUrl(d.signature), name: d.signature.name, title: d.signature.title || '' } : null }; };
+    if (m === 'GET' && !b) return send(res, 200, out());
+    if (m === 'PATCH' && !b) {
+      try { ws.docs = { ...cleanDocs(docsOf(ws), await readJson(req, 50_000), cleanText), signature: docsOf(ws).signature }; } catch (e) { return send(res, e.status || 400, { error: e.message }); }
+      save();
+      return send(res, 200, out());
+    }
+    if (b === 'signature' && m === 'PUT') {
+      const body = await readJson(req, 400_000);
+      const buf = Buffer.from(String(body.image || '').replace(/^data:image\/(png|jpeg);base64,/, ''), 'base64');
+      const mime = /^data:image\/(png|jpeg);base64,/.test(String(body.image || '')) ? imageType(buf) : null;
+      if (!['image/png', 'image/jpeg'].includes(mime)) return send(res, 400, { error: 'Use a PNG or JPEG image, or draw it.' });
+      if (buf.length > 200_000) return send(res, 400, { error: 'Keep the signature under 200 KB.' });
+      const name = cleanText(body.name, 80).trim();
+      if (!name) return send(res, 400, { error: 'Add the name of who signs (and their title, if you like).' });
+      const f = { id: rid(), mime };
+      await fsp.writeFile(logoPath(f), buf);
+      ws.docsFiles = [...(ws.docsFiles || []), f].slice(-50);
+      ws.docs = { ...docsOf(ws), signature: { ...f, name, title: cleanText(body.title, 80).trim() } };
+      save();
+      return send(res, 200, out());
+    }
+    if (b === 'signature' && m === 'DELETE') {
+      ws.docs = { ...docsOf(ws), signature: null };
+      save();
+      return send(res, 200, out());
+    }
+    return send(res, 405, { error: 'Method not allowed' });
+  }
+  // Test only (never in production): an issued job quote moved back in time, to see it expire.
+  if (a === 'test' && b === 'backdate-quote' && m === 'POST' && process.env.NODE_ENV !== 'production' && process.env.QUOTE_TEST_BACKDATE === '1') {
+    const body = await readJson(req, 2_000);
+    const rec = db.records[body.recordId];
+    if (!rec || rec.wsId !== ws.id || !rec.quoteLook) return send(res, 404, { error: 'No issued quote there.' });
+    const back = (d) => d && new Date(Date.parse(d + 'T12:00:00Z') - Number(body.days || 0) * 864e5).toISOString().slice(0, 10);
+    rec.quoteLook.issued = back(rec.quoteLook.issued);
+    if (rec.quoteLook.validUntil) rec.quoteLook.validUntil = back(rec.quoteLook.validUntil);
+    save();
+    return send(res, 200, { ok: true });
+  }
   if (a === 'brand') {
     if (!isAdmin(auth)) return send(res, 403, { error: 'Only team owners and admins can change the brand.' });
     const old = ws.brand?.logo;
@@ -12198,7 +12347,7 @@ function replayPathOk(p) {
   return REPLAY_PATH.test(path) && REPLAY_QUERY.test(query) && new URL(s, 'http://replay').pathname === path;
 }
 // flow: the automation it's for (Flows step 3), named as it on what it does.
-async function replayAs(ws, memberId, approvalId, { method, path: p, body }, as = null, flow = null) {
+async function replayAs(ws, memberId, approvalId, { method, path: p, body }, as = null, flow = null, opts = {}) {
   if (!replayPathOk(p)) {
     console.error('Refused a replay to an odd address:', String(p).slice(0, 120));
     return { status: 400, body: { error: 'That isn’t an address Kloomie can do that at.' } };
@@ -12207,7 +12356,7 @@ async function replayAs(ws, memberId, approvalId, { method, path: p, body }, as 
   const req = Readable.from(body == null ? [] : [Buffer.from(JSON.stringify(body))]);
   Object.assign(req, { method, url: p, headers: { 'content-type': 'application/json' }, socket: { remoteAddress: 'replay' } });
   if (!me) return { status: 403, body: { error: 'They aren’t on the team any more.' } };
-  req.replay = { token: null, wsId: ws.id, ws, memberId, member: flow ? flow.name : as || me.name, role: me.role, tz: tzOf(ws), approved: approvalId, ...(as ? { agent: true } : {}), ...(flow ? { flow: flow.id } : {}) };
+  req.replay = { token: null, wsId: ws.id, ws, memberId, member: flow ? flow.name : as || me.name, role: me.role, tz: tzOf(ws), approved: approvalId, ...(as ? { agent: true } : {}), ...(opts.personOk ? { personOk: true } : {}), ...(flow ? { flow: flow.id } : {}) };
   const res = new EventEmitter();
   let status = 200, out = '';
   Object.assign(res, { headersSent: false, setHeader() {}, getHeader() {}, writeHead(code) { status = code; this.headersSent = true; return this; }, write(c) { out += c; return true; }, end(c) { if (c) out += c; this.emit('finish'); } });
@@ -12217,7 +12366,7 @@ async function replayAs(ws, memberId, approvalId, { method, path: p, body }, as 
   return { status, body: parsed };
 }
 const hold = (...a) => RULES.hold(...a);
-const PJ = projectsModule({ jobQuote: (rec) => JF.jobQuote(rec), seesLinked: (kind, x, memberId) => canSee({ memberId }, kind, x), proofUrl: (ws) => pagesProof(ws), onEvent: (...a) => recordEvent(...a), onPrice: (...a) => priceChanged(...a), canSeeItem: (auth, it) => canSee(auth, 'item', it), seal, unseal, db, save, broadcast, rid, hold, cleanText, isDay, readJson, send, badRequest, isOwnerId, escHtml, brandOf, logoUrl, teamDay, offline, allowLocalHooks: process.env.ALLOW_LOCAL_WEBHOOKS === '1', qrSvg, publicUrl: PUBLIC_URL,
+const PJ = projectsModule({ docsOf, bizHtml, inkedPng, jobQuote: (rec) => JF.jobQuote(rec), seesLinked: (kind, x, memberId) => canSee({ memberId }, kind, x), proofUrl: (ws) => pagesProof(ws), onEvent: (...a) => recordEvent(...a), onPrice: (...a) => priceChanged(...a), canSeeItem: (auth, it) => canSee(auth, 'item', it), seal, unseal, db, save, broadcast, rid, hold, cleanText, isDay, readJson, send, badRequest, isOwnerId, escHtml, brandOf, logoUrl, teamDay, offline, allowLocalHooks: process.env.ALLOW_LOCAL_WEBHOOKS === '1', qrSvg, publicUrl: PUBLIC_URL,
   onRecordGone: (rec) => { dropVisits(rec); INV.dropFor(rec); JF.dropFor(rec); campsOffJob(rec); }, stageGate: (...a) => stageGate(...a),
   onRecordNews: (rec) => { jobChanged(rec); if (rec.share || rec.qbo?.estId) QB.soon(rec.wsId); },
   // A follow-up from a record's timeline: a task for whoever logged it, about the record.
@@ -12317,7 +12466,7 @@ const DESCRIBE = describeModule({ cleanText, readJson, send, aiAsk, replyJson, P
 const SIGNOFF = signoffModule({
   db, save, broadcast, rid, cleanText, readJson, send, badRequest, PJ, EMAIL_RE, CONSENT, SIGN_DAYS,
   dayIn, okTz, tzOf, utc, sha256, pngData, pdfWork, writeForm, stampPdf, addCertificate, addPdf, canSee, isPdf,
-  signEvent, signLink, signStatus, signNews: (x) => signNews(x),
+  signEvent, signLink, signStatus, signNews: (x) => signNews(x), sendGate: (...a) => sendGate(...a),
   readItem: (it) => fsp.readFile(path.join(FILES_DIR, it.id)),
   async writeSignFiles(x, unsigned, signed) {
     await fsp.writeFile(signPath(x), unsigned);
@@ -12603,8 +12752,8 @@ const STOCK = inventoryModule({ db, save, broadcast, rid, cleanText, readJson, s
   labelUrl: (tag) => `${PUBLIC_URL}/a/${tag}`,
   labelQr: (tag) => 'data:image/svg+xml;base64,' + Buffer.from(qrSvg(`${PUBLIC_URL}/a/${tag}`, { scale: 8 })).toString('base64'),
   projectFor: (pid, wsId, memberId) => { const p = db.projects[pid]; return p && p.wsId === wsId && PJ.sees(p, memberId) ? { p, records: Object.values(db.records).filter((r) => r.projectId === p.id) } : null; } });
-const JF = jobFlowsModule({ db, save, broadcast, rid, cleanText, readJson, send, isAdmin, PJ, toolsOf, goalsInOrder, tasksInOrder, applyTask, publicTask: (t) => publicTask(t), canSeeTask: (auth, t) => canSee(auth, 'task', t), stepsSoon: (w) => stepsSoon(w), sweepNow: (w, by, byId) => jobSteps(w, by, byId), visitsOf: (id) => visitsOf(id), needsMet: (g) => needsMet(g), noteWork: (t, was) => noteWork(t, was), makeInvoice: (...a) => INV.makeFor(...a), sendInvoice: (...a) => INV.sendIt(...a), invoiceTotals: (inv) => INV.totals(inv), invoiceUrl: (inv) => INV.publicInvoice(inv).url, flowTell: (...a) => flowTell(...a), flowReach: (c) => flowReach(c), flowMsg, customerOf: (rec) => jobCustomer(rec), teamClock: (ws) => ({ today: dayIn(tzOf(ws)), tomorrow: dayIn(tzOf(ws), Date.now() + 864e5), min: localNow(tzOf(ws), Date.now()).min }), teamReviewUrl: (ws) => custMsgsOf(ws).reviewUrl || '', saveNow: () => writeNow(), sendable: (ws) => !offline(ws.id) && !billingOf(ws).readOnly, shareRecord: (...a) => PJ.shareRecord(...a), quoteUrlOf: (rec) => (rec.share?.token ? `${PUBLIC_URL}/q/${rec.share.token}` : null), itemsTotals: (v) => PJ.itemsTotals(v), priceChanged: (ws, auth, x) => priceChanged(ws, auth, x), publicUrl: PUBLIC_URL });
-const INV = invoicesModule({ onInvoice: (inv) => { JF.invoiceNews(inv); stepsSoon(inv.wsId); }, flowDueDays: (rec) => JF.dueDaysFor(rec), bindInvoice: (rec, inv, stepId) => JF.bindInvoice(rec, inv, stepId), proofUrl: (ws) => pagesProof(ws), stockCost: (recId) => STOCK.stockCost(recId), jobMoney: (recId) => jobMoney(recId), notifyAdmins: (...a) => notifyAdmins(...a), jobBack: (rec) => jobBack(rec), onPaymentGone: (...a) => QB.paymentGone(...a), db, save, broadcast, rid, hold, cleanText, readJson, send, badRequest, escHtml, brandOf, logoUrl, teamDay, offline, seal, unseal, stripeCall: stripe.callWith, PJ, isAdmin, jobOfRecord, jobLabel, moveJob, publicUrl: PUBLIC_URL, emit: (...a) => { PJ.emit(...a); QB.soon(a[0]); try { eventFromHook(a[0], a[1], a[2], a[3]); } catch (e) { alarm('An automation event failed to build', e); } },
+const JF = jobFlowsModule({ sendGate: (...a) => sendGate(...a), custPreview: (...a) => custPreview(...a), custDigest: (...a) => custDigest(...a), notify: (...a) => notify(...a), notifyAdmins: (...a) => notifyAdmins(...a), db, save, broadcast, rid, cleanText, readJson, send, isAdmin, PJ, toolsOf, goalsInOrder, tasksInOrder, applyTask, publicTask: (t) => publicTask(t), canSeeTask: (auth, t) => canSee(auth, 'task', t), stepsSoon: (w) => stepsSoon(w), sweepNow: (w, by, byId) => jobSteps(w, by, byId), visitsOf: (id) => visitsOf(id), needsMet: (g) => needsMet(g), noteWork: (t, was) => noteWork(t, was), makeInvoice: (...a) => INV.makeFor(...a), sendInvoice: (...a) => INV.sendIt(...a), invoiceTotals: (inv) => INV.totals(inv), invoiceUrl: (inv) => INV.publicInvoice(inv).url, flowTell: (...a) => flowTell(...a), flowReach: (c) => flowReach(c), flowMsg, customerOf: (rec) => jobCustomer(rec), teamClock: (ws) => ({ today: dayIn(tzOf(ws)), tomorrow: dayIn(tzOf(ws), Date.now() + 864e5), min: localNow(tzOf(ws), Date.now()).min }), teamReviewUrl: (ws) => custMsgsOf(ws).reviewUrl || '', saveNow: () => writeNow(), sendable: (ws) => !offline(ws.id) && !billingOf(ws).readOnly, shareRecord: (...a) => PJ.shareRecord(...a), quoteUrlOf: (rec) => (rec.share?.token ? `${PUBLIC_URL}/q/${rec.share.token}` : null), itemsTotals: (v) => PJ.itemsTotals(v), priceChanged: (ws, auth, x) => priceChanged(ws, auth, x), publicUrl: PUBLIC_URL });
+const INV = invoicesModule({ docsOf, bizHtml, onInvoice: (inv) => { JF.invoiceNews(inv); stepsSoon(inv.wsId); }, flowDueDays: (rec) => JF.dueDaysFor(rec), bindInvoice: (rec, inv, stepId) => JF.bindInvoice(rec, inv, stepId), proofUrl: (ws) => pagesProof(ws), stockCost: (recId) => STOCK.stockCost(recId), jobMoney: (recId) => jobMoney(recId), notifyAdmins: (...a) => notifyAdmins(...a), jobBack: (rec) => jobBack(rec), onPaymentGone: (...a) => QB.paymentGone(...a), db, save, broadcast, rid, hold, cleanText, readJson, send, badRequest, escHtml, brandOf, logoUrl, teamDay, offline, seal, unseal, stripeCall: stripe.callWith, PJ, isAdmin, jobOfRecord, jobLabel, moveJob, publicUrl: PUBLIC_URL, emit: (...a) => { PJ.emit(...a); QB.soon(a[0]); try { eventFromHook(a[0], a[1], a[2], a[3]); } catch (e) { alarm('An automation event failed to build', e); } },
   // A payment is money in on the business's Finance, under the team's owner.
   addMoney: (ws, { amount, day, note, invoiceId = null }) => {
     const owner = ws.members.find((m) => m.role === 'owner') || ws.members[0];
@@ -12620,7 +12769,7 @@ const ANALYTICS = analyticsModule({ db, save, rid, readJson, cleanText, notifyAd
 setInterval(() => { try { ANALYTICS.checkAll(); } catch (e) { alarm('Checking goals and alerts failed', e); } }, Number(process.env.KPI_WATCH_MS) || 15 * 60_000).unref?.();
 // Texting through the team's own Twilio account (twilio.js).
 const notifyAdmins = (wsId, n) => { for (const mb of db.workspaces[wsId]?.members || []) if (isAdminId(wsId, mb.id)) notify(wsId, mb.id, n); };
-const TW = twilioModule({ db, save, broadcast, seal, unseal, readJson, send, isAdmin, rid, cleanText, publicUrl: PUBLIC_URL, contactsOf, phoneKey, noContact, newContact, contactNews, notifyAdmins,
+const TW = twilioModule({ sendGate: (...a) => sendGate(...a), db, save, broadcast, seal, unseal, readJson, send, isAdmin, rid, cleanText, publicUrl: PUBLIC_URL, contactsOf, phoneKey, noContact, newContact, contactNews, notifyAdmins,
   hook: (wsId, type, data) => hook(wsId, type, () => (type.startsWith('contact.') ? API.apiContact(data) : data), 'Text message'), alarm, offline, teamDay });
 // Files from Google Drive, OneDrive and Dropbox: the browser opens each one's own file picker, downloads what's picked
 // straight from there and uploads it into the stack like any file, so Kloomie never fetches outside addresses. These
