@@ -23146,7 +23146,7 @@
       if (!MP.jobPts && !MP.jobBusy) mapJobsLoad();
       const y = MP.jobPts;
       const und = h('input', { type: 'checkbox', checked: !!MP.jobUndated, 'data-field': 'undated' });
-      und.addEventListener('change', () => { MP.jobUndated = und.checked; mapJobsLoad(); });
+      und.addEventListener('change', () => { MP.jobUndated = und.checked; MP.jobPts = null; mapJobsLoad(); mapDraw(); renderTool(true); }); // no old points while the new ones load
       const jobsN = (y?.points || []).filter((x) => x.kind === 'job').length, clientsN = (y?.points || []).filter((x) => x.kind === 'client').length;
       return [modes,
         h('div', { class: 'map-run' }, h('span', { class: 'map-stats', 'data-jobs': jobsN }, !y ? 'Loading jobs…' : y.off ? 'The map isn’t set up yet (MAPBOX_TOKEN).' : `${plural(jobsN, 'job')} in the next 30 days${clientsN ? ` · ${plural(clientsN, 'client')} without a job` : ''}${y.missing ? ` · ${y.missing} couldn’t be found on the map` : ''}${y.more ? ` · ${y.more} more not shown` : ''}`),
