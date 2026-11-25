@@ -812,6 +812,7 @@ export function jobFlowsModule(ctx) {
             return send(res, 200, { run: runView(ws, auth, run), outcome: 'declined' });
           }
           if (body.action !== 'send') return send(res, 400, { error: 'Send it, or don’t.' });
+          if (run.status !== 'active' && p.kind !== 'invoice') n.late ||= 'the job’s flow is finished';
           if (n.late) {
             dropPending(run, g, n.late);
             return send(res, 409, { error: `Too late: ${n.late}. It wasn’t sent.`, outcome: 'dropped', run: runView(ws, auth, run) });
@@ -967,6 +968,7 @@ export function jobFlowsModule(ctx) {
       const inv = db.invoices?.[p.invoiceId];
       if (!inv || inv.status === 'void') late = 'the invoice was voided';
       else if (inv.status === 'paid') late = 'the invoice is paid';
+      else if (g.skipped) late = 'the invoice step was skipped';
       else msg = flowMsg.invoice(ws, rec, cust, inv, invoiceUrl(inv), invoiceTotals(inv).total);
     } else if (p.kind === 'payReminder') {
       g.reminded ||= {};
@@ -1019,6 +1021,18 @@ export function jobFlowsModule(ctx) {
     }
   }
 
+  // The automatic invoice, emailed once per invoice, until it's paid or void. The email belongs to the invoice, not
+  // the run: it still goes (or asks) after the run finishes, since a flow can end at its Invoice step.
+  async function invoiceEmail(c, ws, rec) {
+    const ig = stepGoals(c).find((x) => x.step?.kind === 'invoice');
+    const inv = ig && !ig.skipped && ig.step.how === 'auto' && ig.step.settings?.email !== false && ig.invoiceId && db.invoices?.[ig.invoiceId];
+    if (!inv || ig.pending || !inv.sentAt || ['paid', 'void'].includes(inv.status) || ig.invoiceTold?.invoiceId === inv.id) return;
+    const cust = customerOf(rec);
+    if (!flowReach(cust) && askFirst(ig.step)) makePending(c, ig, { kind: 'invoice', invoiceId: inv.id });
+    else if (!flowReach(cust)) await sendOnce(ig, 'invoiceTold', { invoiceId: inv.id }, () => flowTell(ws, rec, cust, flowMsg.invoice(ws, rec, cust, inv, invoiceUrl(inv), invoiceTotals(inv).total), 'Kloomie'));
+    tell(c);
+  }
+
   let msgBusy = false;
   async function autoMessages() {
     if (msgBusy || !flowTell) return;
@@ -1026,9 +1040,16 @@ export function jobFlowsModule(ctx) {
     try {
       for (const c of Object.values(db.campaigns)) {
         if (!isJobRun(c)) continue;
-        // A finished or cancelled run sends nothing more: anything still waiting is too late (or checked, when done).
+        // A cancelled run sends nothing more; a finished one sends nothing but its invoice's email (above). Anything
+        // else still waiting is dropped.
         if (c.status !== 'active') {
-          for (const g of stepGoals(c)) if (g.pending) { if (c.status === 'cancelled') dropPending(c, g, 'the job came off its flow'); else checkPending(c); }
+          for (const g of stepGoals(c)) {
+            if (!g.pending) continue;
+            if (c.status === 'done' && g.pending.kind === 'invoice') checkPending(c);
+            else dropPending(c, g, c.status === 'cancelled' ? 'the job came off its flow' : 'the job’s flow is finished');
+          }
+          const fws = db.workspaces[c.wsId], frec = recOf(c);
+          if (c.status === 'done' && fws && frec && sendable(fws)) await invoiceEmail(c, fws, frec);
           continue;
         }
         const ws = db.workspaces[c.wsId];
@@ -1081,15 +1102,7 @@ export function jobFlowsModule(ctx) {
           else if (!flowReach(cust)) await sendOnce(qg, 'followed', { token: rec.share.token }, () => flowTell(ws, rec, cust, flowMsg.quoteFollow(ws, rec, cust, quoteUrlOf(rec)), 'Kloomie'));
           tell(c);
         }
-        // The automatic invoice, emailed once per invoice, until it's paid or void.
-        const ig = stepGoals(c).find((x) => x.step?.kind === 'invoice');
-        const inv = ig && ig.step.how === 'auto' && ig.step.settings?.email !== false && ig.invoiceId && db.invoices?.[ig.invoiceId];
-        if (inv && !ig.pending && inv.sentAt && !['paid', 'void'].includes(inv.status) && ig.invoiceTold?.invoiceId !== inv.id) {
-          const cust = customerOf(rec);
-          if (!flowReach(cust) && askFirst(ig.step)) makePending(c, ig, { kind: 'invoice', invoiceId: inv.id });
-          else if (!flowReach(cust)) await sendOnce(ig, 'invoiceTold', { invoiceId: inv.id }, () => flowTell(ws, rec, cust, flowMsg.invoice(ws, rec, cust, inv, invoiceUrl(inv), invoiceTotals(inv).total), 'Kloomie'));
-          tell(c);
-        }
+        await invoiceEmail(c, ws, rec);
         // Payment reminders: calendar days past due on the team's clock, from 9am, while a balance remains.
         const pg = stepGoals(c).find((x) => x.step?.kind === 'payment');
         const days = pg?.step.settings?.reminders || [];

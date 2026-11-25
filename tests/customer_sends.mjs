@@ -160,9 +160,12 @@ try {
     await sleep(300);
     ok(mails(dana.email).length === before && texts('5550101').length === tb, `${name}: and nothing was sent`);
     const tk = r.body?.confirm;
+    const shown = r.body?.preview?.text || '';
     r = await who('POST', pth, { ...body, confirm: tk });
     ok(r.status === 200, `${name}: with the ticket, it sends: ` + r.status + ' ' + JSON.stringify(r.body).slice(0, 160));
     ok(mails(dana.email, tag).length === tagBefore + 1, `${name}: the email went, once`);
+    const sentText = mails(dana.email, tag).at(-1)?.text || '';
+    ok(!!shown && shown.split('\n').filter((l) => !/: https?:/.test(l)).every((l) => sentText.includes(l)), `${name}: what went is word for word what was shown (the arrival time included)`);
     const after = mails(dana.email).length, ta = texts('5550101').length;
     r = await who('POST', pth, { ...body, confirm: tk });
     ok(r.status === 409 && r.body?.sent === true, `${name}: the same ticket again: 409, it already went`);
@@ -554,6 +557,39 @@ try {
   await rico('POST', `/invoices/${kInv?.id}/void`);
   r = await rico('POST', `/jobs/${jk?.id}/steps/${(await stepOf(jk?.id, 'Inv'))?.id}/message`, { action: 'send', key: kKey });
   ok(r.status === 409 && !mails(kay.email).some((m) => m.tag === 'invoice' && JSON.stringify(m).includes(kInv?.number)), 'the voided invoice’s email: too late, never sent');
+  // A flow that ends at its Invoice step finishes once the invoice is sent: its email still asks, and can still go.
+  const FE = await flowOf('Ends at invoice', { billing: 'auto', items: [{ itemId: can?.id, qty: 1 }], steps: [C, DO, { kind: 'invoice', name: 'Inv', settings: { email: true } }] });
+  const nia = await person();
+  const jn = await job(FE.id, nia);
+  await rico('POST', `/jobs/${jn?.id}/steps/${FE.sid('Do it')}/done`);
+  ok(await until(async () => (await runOf(jn?.id))?.status === 'done' && (await stepOf(jn?.id, 'Inv'))?.pending?.kind === 'invoice'), 'a flow ending at its Invoice step finishes, and the invoice’s email still waits for an OK (it belongs to the invoice)');
+  r = await rico('POST', `/jobs/${jn?.id}/steps/${(await stepOf(jn?.id, 'Inv'))?.id}/message`, { action: 'send', key: (await stepOf(jn?.id, 'Inv'))?.pending?.key });
+  ok(r.status === 200 && mails(nia.email, 'invoice').length === 1, 'and Send emails it after the run finished');
+  // Everything else waiting is dropped when the run finishes: a follow-up waiting when the job is taken off the flow.
+  // The invoice's email waiting when its step is skipped: dropped, and Send refuses it.
+  const oli = await person();
+  const jo2 = await job(FI.id, oli);
+  await rico('POST', `/jobs/${jo2?.id}/steps/${FI.sid('Do it')}/done`);
+  ok(await until(async () => (await stepOf(jo2?.id, 'Inv'))?.pending?.kind === 'invoice'), '(setup) an invoice email waiting');
+  const oKey = (await stepOf(jo2?.id, 'Inv'))?.pending?.key, oSid = (await stepOf(jo2?.id, 'Inv'))?.id;
+  await rico('POST', `/jobs/${jo2?.id}/steps/${oSid}/skip`, { reason: 'Billed another way' });
+  r = await rico('POST', `/jobs/${jo2?.id}/steps/${oSid}/message`, { action: 'send', key: oKey });
+  ok(r.status === 409 && !mails(oli.email, 'invoice').length, 'the Invoice step skipped while its email waits: Send refuses it, nothing goes');
+  ok(await until(async () => !(await stepOf(jo2?.id, 'Inv'))?.pending), 'and the waiting email is dropped');
+  // A payment reminder waiting when the run finishes another way (taken off its flow): dropped, never sendable.
+  const pia = await person();
+  const jp2 = await job(FI.id, pia);
+  await rico('POST', `/jobs/${jp2?.id}/steps/${FI.sid('Do it')}/done`);
+  await until(async () => (await invsOf(jp2?.id))[0]?.status === 'sent');
+  await rico('POST', `/jobs/${jp2?.id}/steps/${(await stepOf(jp2?.id, 'Inv'))?.id}/message`, { action: 'skip', key: (await stepOf(jp2?.id, 'Inv'))?.pending?.key });
+  await rico('PATCH', `/invoices/${(await invsOf(jp2?.id))[0]?.id}`, { due: daysAgo(1) });
+  ok(await until(async () => (await stepOf(jp2?.id, 'Pay'))?.pending?.kind === 'payReminder'), '(setup) a payment reminder waiting');
+  const pKey = (await stepOf(jp2?.id, 'Pay'))?.pending?.key, pSid = (await stepOf(jp2?.id, 'Pay'))?.id;
+  await rico('POST', `/jobs/${jp2?.id}/flow/cancel`, { reason: 'Handled outside the flow' });
+  r = await rico('POST', `/jobs/${jp2?.id}/steps/${pSid}/message`, { action: 'send', key: pKey });
+  await sleep(800);
+  ok(r.status !== 200 && !mails(pia.email, 'payment-reminder').length, 'the job taken off its flow while a reminder waits: never sent (' + r.status + ')');
+
   // Too late: the quote is answered while its follow-up waits.
   const lou = await person();
   const jl = await job(FF.id, lou);

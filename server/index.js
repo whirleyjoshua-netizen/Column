@@ -6105,8 +6105,9 @@ function omwMsg(ws, auth, rec, v, minutes) {
   const text = `Hi ${firstName(c)}, it's ${who} from ${ws.name}. I'm on my way and should be there around ${fmtMinutes(Math.round(at / 5) * 5)} (about ${mins} minutes).`;
   return { c, text, msg: { tag: 'on-my-way', subject: `${who} from ${ws.name} is on the way`, heading: `${who} is on the way`, lines: [`Hi ${firstName(c)},`, `${who} from ${ws.name} is on the way for your ${v.kind.toLowerCase()} and should be there around ${fmtMinutes(Math.round(at / 5) * 5)}, in about ${mins} minutes.`, jobAddress(rec) ? `Address: ${jobAddress(rec)}` : ''].filter(Boolean), text, replyTo: memberReply(ws, auth.memberId), what: 'on my way sent' } };
 }
-async function onMyWay(ws, auth, rec, v, minutes, send) {
-  const { c, text, msg } = omwMsg(ws, auth, rec, v, minutes);
+// built: the message exactly as it was previewed and confirmed (it holds an arrival time, so it's never made twice).
+async function onMyWay(ws, auth, rec, v, minutes, send, built = omwMsg(ws, auth, rec, v, minutes)) {
+  const { c, text, msg } = built;
   const out = send
     ? await tellCustomer(ws, rec, c, { ...msg, by: auth.member })
     : await (async () => {
@@ -8638,14 +8639,15 @@ async function api(req, res, url) {
       const body = await readJson(req, 5_000);
       const v = publicVisit(list);
       const email = body.email !== false;
-      const { c: cust, msg } = omwMsg(ws, auth, rec, v, body.minutes);
+      const built = omwMsg(ws, auth, rec, v, body.minutes);
+      const { c: cust, msg } = built;
       // Only when Kloomie itself would send (an email, or a text from the team's number); the phone's own Messages app
       // needs no ticket.
       if (viaOf(cust, email)) {
         const gate = sendGate(ws, auth, 'on-my-way', v.id, custPreview(cust, msg, { admin: isAdmin(auth), phone: true, email }), custDigest(cust, msg, email), body.confirm);
         if (gate) return send(res, gate.status, gate.body);
       }
-      return send(res, 200, await onMyWay(ws, auth, rec, v, body.minutes, email));
+      return send(res, 200, await onMyWay(ws, auth, rec, v, body.minutes, email, built));
     }
     if (m === 'POST' && c === 'remind') {
       const body = await readJson(req, 5_000).catch(() => ({}));

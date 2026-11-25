@@ -182,3 +182,16 @@ Decisions that tighten §1–§3 (each has tests in round 2 of `customer_sends.m
    `SEND_TICKET_MS` and `SEND_TICKET_KEEP_MS` only shorten times outside production; production is 10 minutes and a day.
 7. **Existing suites that assumed messages send by themselves** (`jobflow_auto.mjs`, the Phase 3 UI checks) set
    `send: 'auto'` where they mean it, since missing now means ask.
+
+## 8. Server review (ChatGPT), and what changed
+
+- On my way's message (it holds an arrival time) is built once per request and that exact message is what's sent;
+  a preview whose time has since changed fails its digest (409, new preview), never sends different words.
+- **A finished run** sends nothing more, with one exception: **the automatic invoice's email belongs to the invoice**,
+  not the run. A flow can end at its Invoice step (done as soon as the invoice is sent as a link), so the email still
+  goes (send: 'auto') or waits for an OK after the run finishes, until the invoice is paid or voided or its step is
+  skipped. Everything else waiting is dropped when a run finishes or is cancelled, and Send refuses it.
+- A waiting invoice email is too late once its Invoice step is skipped.
+- Show the client's email and phone applies to Bids & Quotes clients too. The drawn-signature reader takes nothing
+  bigger than 1200 × 600, checks every chunk, inflates no more than the header says, and never throws. Every business
+  signature stays served.
