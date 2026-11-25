@@ -179,8 +179,8 @@ try {
   await A.ev(`document.querySelector('#sheet [aria-label=Close]')?.click(); true`);
   const X0 = await api('POST', '/tasks', { goalId: inst.id, text: 'Pick up the brackets' });
   const Y0 = await api('POST', '/tasks', { goalId: inst.id, text: 'Mount the brackets', blockedBy: [X0.id] });
-  await A.tap(T('.cc-tab[data-ctab=work]'));
-  await A.until(`!!${T('.cc-wview-sel')}`);
+  // Right after the builder closes; tap again if the first tap landed while it was still going.
+  for (let i = 0; i < 3 && !(await A.ev(`!!${T('.cc-wview-sel')}`)); i++) { await A.tap(T('.cc-tab[data-ctab=work]')); await A.until(`!!${T('.cc-wview-sel')}`, 4000); }
   await A.pick(T('.cc-wview-sel'), 'list');
   await A.tap(T('.cc-chip[data-chip=all]'));
   await A.until(`!!${T(`.cc-tr[data-task="${Y0.id}"]`)}`, 8000);

@@ -52,6 +52,7 @@ try {
   await api('POST', '/tasks', { goalId: ph[0].id, text: 'Call the Lee family', assigneeId: me, due: plus(today, -3), start: plus(today, -5) });
   await api('POST', '/tasks', { goalId: ph[0].id, text: 'Call the Diaz family', due: plus(today, 4) });
   const pf = await api('POST', '/tasks', { goalId: ph[0].id, text: 'Print flyers' }); await api('PATCH', '/tasks/' + pf.id, { done: true });
+  const os = await api('POST', '/tasks', { goalId: ph[1].id, text: 'Order signs', assigneeId: me }); await api('PATCH', '/tasks/' + os.id, { done: true });
   await api('POST', '/tasks', { goalId: ph[1].id, text: 'Send quotes', due: plus(today, 8) });
   await api('PATCH', '/campaigns/' + camp.id, { inOrder: true });
   A = await tab(APP);
@@ -74,7 +75,7 @@ try {
   ok(await A.ev(`[...${T('select.cc-wview-sel')}.options].map((o) => o.value).join() === 'list,board,timeline,calendar' && ${T('select.cc-wview-sel')}.value === 'list' && !${T('.cc-wf')} && !${T('.cc-wview [data-wv]')}`), 'List, Board, Timeline, Calendar; no filter buttons, no view buttons');
   ok(await A.ev(`${T('label.cc-wview')}.textContent.trim().startsWith('View')`), 'labelled View');
   // All: open, then done (dimmed).
-  ok(JSON.stringify(await A.ev(listRows)) === JSON.stringify(['Call the Lee family', 'Call the Diaz family', 'Send quotes', 'Print flyers*']), 'All: the open tasks, then the done one, dimmed: ' + JSON.stringify(await A.ev(listRows)));
+  ok(JSON.stringify(await A.ev(listRows)) === JSON.stringify(['Call the Lee family', 'Call the Diaz family', 'Send quotes', 'Print flyers*', 'Order signs*']), 'All: the open tasks, then the done one, dimmed: ' + JSON.stringify(await A.ev(listRows)));
   // A chip picked on Plan carries to Work, in every view.
   await tabTo('plan');
   await chip('mine');
@@ -82,8 +83,9 @@ try {
   ok(JSON.stringify(await A.ev(listRows)) === JSON.stringify(['Call the Lee family']), 'My tasks (picked on Plan): only mine on Work');
   await view('board');
   ok(await A.until(`!!${T('.ccb')}`), 'the dropdown switches to Board');
+  ok(await A.until(`document.activeElement === ${T('.cc-wview-sel')}`), 'and keeps the focus, so a keyboard can step on through the views');
   const cards = `[...document.querySelectorAll('#camps .ccb-col')].map((c) => c.dataset.col + ':' + [...c.querySelectorAll('.ccb-card')].map((x) => x.title).join('+')).filter((x) => !x.endsWith(':')).join('|')`;
-  ok(/Call the Lee family/.test(await A.ev(cards)) && /done:Print flyers/.test(await A.ev(cards)) && !/Diaz|Send quotes/.test(await A.ev(cards)), 'Board, My tasks: mine in its column, Done keeps what’s done: ' + await A.ev(cards));
+  ok(/Call the Lee family/.test(await A.ev(cards)) && /done:Order signs/.test(await A.ev(cards)) && !/Diaz|Send quotes|Print flyers/.test(await A.ev(cards)), 'Board, My tasks: mine in its column, and only what I finished in Done: ' + await A.ev(cards));
   await view('timeline');
   ok(await A.until(`!!${T('.cct-bar')}`), 'the dropdown switches to Timeline');
   ok(await A.ev(`[...document.querySelectorAll('#camps .cct-bar')].every((b) => (b.title || b.textContent).includes('Lee'))`), 'Timeline, My tasks: only my bar');
@@ -97,6 +99,9 @@ try {
   await api('PATCH', '/campaigns/' + camp.id, { inOrder: false });
   await tabTo('activity'); await tabTo('work');
   ok(await A.until(`${T('.cc-body')}.textContent.includes('Nothing is blocked.')`), 'nothing blocked says so');
+  await view('timeline');
+  ok(await A.until(`${T('.cc-body')}.textContent.includes('Nothing is blocked.') && !${T('.cc-body')}.textContent.includes('No tasks here yet')`), 'Timeline says it in the chip’s words too');
+  await view('list');
   await chip('all');
   // A view kept from before: the device remembers Board.
   await A.ev(`localStorage.setItem('column.ccWorkView', JSON.stringify('board')); location.reload(); true`).catch(() => {});
