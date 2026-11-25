@@ -9,6 +9,7 @@ import { spawn, execSync } from 'node:child_process';
 import http from 'node:http';
 import './cookiejar.mjs'; // connecting Gmail finishes in the browser that started it
 const S = path.resolve(process.argv[2] || '.');
+const ROOT = new URL('..', import.meta.url).pathname.replace(/\/$/, ''); // the repo (ci.sh passes a scratch folder as S)
 const DIR = S + '/dk/customer_sends';
 const OUTBOX = DIR + '/outbox';
 fs.rmSync(DIR, { recursive: true, force: true });
@@ -84,7 +85,7 @@ const call = (tok) => async (m, p, body) => {
 {
   const SENDERS = ['mailer.customerEmail(', 'tellCustomer(', 'flowTell(', 'twilioText(', 'sendText(', '.sendMail(', 'SIGNOFF_MAIL(', 'emailCustomer(', 'emailSignLink(', 'agentEmail('];
   const CATS = ['ticket', 'auto step', 'team switch', 'approval', 'own action', 'internal'];
-  const doc = fs.existsSync(S + '/docs/jobflows/SENDS.md') ? fs.readFileSync(S + '/docs/jobflows/SENDS.md', 'utf8') : '';
+  const doc = fs.existsSync(ROOT + '/docs/jobflows/SENDS.md') ? fs.readFileSync(ROOT + '/docs/jobflows/SENDS.md', 'utf8') : '';
   ok(!!doc, 'docs/jobflows/SENDS.md lists every call that emails or texts a customer');
   const listed = {}, badCat = [];
   for (const m of doc.matchAll(/^\|\s*`server\/([\w.]+)`\s*\|\s*`([\w.]+\()`\s*\|\s*(\d+)\s*\|\s*([^|]+?)\s*\|/gm)) {
@@ -93,8 +94,8 @@ const call = (tok) => async (m, p, body) => {
   }
   const found = {};
   const defn = (l, name) => new RegExp(`^\\s*(async\\s+)?(function\\s+)?${name.replace(/[.(]/g, (x) => '\\' + x)}[^)]*\\)\\s*\\{`).test(l) || new RegExp(`^\\s*(const|let)?\\s*${name.replace(/[.(]/g, '').replace(/^\./, '')}\\s*[:=]`).test(l);
-  for (const f of fs.readdirSync(S + '/server').filter((x) => x.endsWith('.js'))) {
-    const lines = fs.readFileSync(S + '/server/' + f, 'utf8').split('\n').filter((l) => !/^\s*\/\//.test(l));
+  for (const f of fs.readdirSync(ROOT + '/server').filter((x) => x.endsWith('.js'))) {
+    const lines = fs.readFileSync(ROOT + '/server/' + f, 'utf8').split('\n').filter((l) => !/^\s*\/\//.test(l));
     for (const name of SENDERS) {
       const n = lines.filter((l) => !defn(l, name)).reduce((k, l) => k + l.split(name).length - 1, 0);
       if (n) found[`${f} ${name}`] = n;
