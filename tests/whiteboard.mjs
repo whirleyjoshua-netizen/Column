@@ -64,6 +64,20 @@ try {
     ok(nb.items.length === 0, 'not on a campaign: Phases & tasks starts blank');
     for (const x of [pb, eb, nb]) await jo('DELETE', '/boards/' + x.id); // out of the way of the counts below
   }
+  // A big campaign isn't cut short: 40 phases in a chain, 12 tasks each (over 500 changes), all drawn with every arrow.
+  {
+    const bc = (await jo('POST', '/campaigns', { name: 'Big sketch' })).body;
+    let prev = null;
+    for (let i = 0; i < 40; i++) {
+      const g = (await jo('POST', '/goals', { campaignId: bc.id, title: 'Step ' + (i + 1) })).body;
+      if (prev) await jo('PATCH', '/goals/' + g.id, { blockedBy: [prev.id] });
+      for (let j = 0; j < 12; j++) await jo('POST', '/tasks', { goalId: g.id, text: `Do step ${i + 1}.${j + 1}` });
+      prev = g;
+    }
+    const bb = (await jo('POST', '/boards', { campaignId: bc.id, template: 'phases' })).body;
+    ok(bb.items.filter((x) => x.kind === 'card' && x.ref?.kind === 'goal').length === 40 && bb.items.filter((x) => x.kind === 'card' && x.ref?.kind === 'task').length === 480 && bb.links.length === 39, 'a big campaign (40 phases) is drawn whole, every arrow too: ' + bb.items.length + ' items, ' + bb.links.length + ' arrows');
+    await jo('DELETE', '/boards/' + bb.id);
+  }
   r = await call()('POST', '/auth', { mode: 'create', workspace: 'Other ' + t, name: 'Zed', email: `zed${t}@t.test`, password: 'longenough3', device: 'Mac', deviceId: 'd3' });
   const zed = call(r.body.token);
   const state = (await jo('GET', '/state')).body;

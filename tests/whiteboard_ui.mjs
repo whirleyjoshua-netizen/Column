@@ -1,6 +1,7 @@
 // Whiteboard in a browser (2026-11-19): Tools → Whiteboard, a board from a template, a sticky written in place, two
 // people on one board (who's here, a move and a delete reaching the other), undo, an arrow between two things, a
 // card for a real task, zoom, and the phone layout. Real mouse and keys, as a person uses it.
+import { CHROME, SERVER_DIR } from './chromebin.mjs';
 import * as FS from 'node:fs';
 import { spawn } from 'node:child_process';
 import WebSocket from '../server/node_modules/ws/index.js';
@@ -9,8 +10,8 @@ const DIR = S + '/dk/whiteboard_ui';
 FS.rmSync(DIR, { recursive: true, force: true });
 FS.mkdirSync(DIR, { recursive: true });
 const PORT = 5323, CDP = 9622, APP = `http://127.0.0.1:${PORT}/`;
-const srv = spawn('node', ['index.js'], { cwd: new URL('../server', import.meta.url).pathname, env: { ...process.env, PORT: String(PORT), PUBLIC_URL: APP.slice(0, -1), DATA_DIR: DIR + '/data', MAIL_OUTBOX: '', RESEND_API_KEY: '', DATABASE_URL: '', STRIPE_SECRET_KEY: '', SKIP_SETUP: '1' }, stdio: ['ignore', 'ignore', 'inherit'] });
-const chrome = spawn('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', ['--headless=new', `--remote-debugging-port=${CDP}`, `--user-data-dir=${DIR}/chrome`, '--no-first-run', '--window-size=1400,900', 'about:blank'], { stdio: 'ignore' });
+const srv = spawn('node', ['index.js'], { cwd: SERVER_DIR, env: { ...process.env, PORT: String(PORT), PUBLIC_URL: APP.slice(0, -1), DATA_DIR: DIR + '/data', MAIL_OUTBOX: '', RESEND_API_KEY: '', DATABASE_URL: '', STRIPE_SECRET_KEY: '', SKIP_SETUP: '1' }, stdio: ['ignore', 'ignore', 'inherit'] });
+const chrome = spawn(CHROME, ['--headless=new', `--remote-debugging-port=${CDP}`, `--user-data-dir=${DIR}/chrome`, '--no-first-run', '--window-size=1400,900', 'about:blank'], { stdio: 'ignore' });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let fails = 0;
 const ok = (c, msg) => { console.log((c ? 'PASS ' : 'FAIL ') + msg); if (!c) fails++; };

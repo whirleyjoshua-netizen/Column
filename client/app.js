@@ -7604,7 +7604,7 @@
     for (const x of items) if (x.kind === 'card' && x.ref?.kind === 'goal') { const g = goalById(x.ref.id); if (g?.campaignId === c.id) phaseOf.set(x.id, g); }
     const shapes = items.filter((x) => x.kind === 'shape' && !x.ref && norm(x.text) && inSel(x));
     const stickies = items.filter((x) => x.kind === 'sticky' && !x.ref && norm(x.text) && inSel(x));
-    let newPhases = 0, newTasks = 0, already = 0;
+    let newPhases = 0, newTasks = 0, already = 0, failed = null;
     const cards = [];
     btn.disabled = true;
     try {
@@ -7625,7 +7625,7 @@
         const a = phaseOf.get(l.from), b = phaseOf.get(l.to);
         if (!a || !b || a.id === b.id) continue;
         const now = goalById(b.id) || b;
-        if ((now.blockedBy || []).includes(a.id)) continue;
+        if ((now.blockedBy || []).includes(a.id) || (goalById(a.id)?.blockedBy || []).includes(b.id)) continue;
         const y = await api('PATCH', '/goals/' + b.id, { blockedBy: [...(now.blockedBy || []), a.id] });
         const i = S.goals.findIndex((z) => z.id === y.id); if (i >= 0) S.goals[i] = y;
       }
@@ -7641,12 +7641,17 @@
         cards.push([s.id, { kind: 'task', id: t.id }]);
         newTasks++;
       }
-      if (cards.length) { ccToCards(ed, cards); ed.refresh?.(); }
-      const asPlan = { label: 'View as plan', run: () => { K.ctab = 'plan'; renderCamps(); } };
-      if (newPhases + newTasks) toast(`Added ${plural(newPhases, 'phase')} and ${plural(newTasks, 'task')}${already ? ` · ${already} already there` : ''}`, asPlan);
-      else toast(shapes.length || stickies.length ? 'Nothing new to add: what’s here is in the plan already, or not under a phase.' : 'Nothing new to add. Draw a box for a phase, put stickies under it for its tasks, then Update plan.');
-      renderCamps();
-    } catch (e) { toast(e.message); }
+    } catch (e) { failed = e; }
+    // What it made becomes cards and is said even when something failed halfway (then why it stopped); the rest stays
+    // as drawn, for another Update plan.
+    if (cards.length) { ccToCards(ed, cards); ed.refresh?.(); }
+    const asPlan = { label: 'View as plan', run: () => { K.ctab = 'plan'; renderCamps(); } };
+    const made = [newPhases ? plural(newPhases, 'phase') : '', newTasks ? plural(newTasks, 'task') : ''].filter(Boolean).join(' and ');
+    const said = made ? `Added ${made}${already ? ` · ${already} already there` : ''}` : '';
+    if (failed) toast(said ? `${said}, then stopped: ${failed.message}` : failed.message, said ? asPlan : undefined);
+    else if (said) toast(said, asPlan);
+    else toast(shapes.length || stickies.length ? 'Nothing new to add: what’s here is in the plan already, or not under a phase.' : 'Nothing new to add. Draw a box for a phase, put stickies under it for its tasks, then Update plan.');
+    renderCamps();
     btn.disabled = false;
   }
   function ccMakeTasks(c, btn, phases) {

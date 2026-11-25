@@ -108,6 +108,41 @@ try {
   ok((await api('GET', '/state')).goals.filter((g) => g.campaignId === camp.id).length === 3, 'still three phases');
   await A.tap(`[...document.querySelectorAll('#camps .cc-boardwrap button')].find((b) => b.textContent.includes('View as plan'))`);
   ok(await A.until(`${T('.cc-body')}?.dataset.tab === 'plan' && [...document.querySelectorAll('#camps .cc-phase')].some((p) => p.textContent.includes('Install') && p.textContent.includes('Measure windows'))`), 'View as plan: Install and its tasks on Plan');
+  // From the review: arrows both ways don't make two phases wait for each other; the toast leaves out what's zero.
+  await tabTo('sketch');
+  await A.until(`!!${T('.cc-update-plan')}`, 8000);
+  const [sW, sT] = ['w', 't'].map(id);
+  await api('POST', `/boards/${board.id}/ops`, { ops: [
+    put({ id: sW, kind: 'shape', shape: 'rect', x: 1300, y: 0, w: 240, h: 90, text: 'Wrap up' }),
+    put({ id: sT, kind: 'shape', shape: 'rect', x: 1600, y: 0, w: 240, h: 90, text: 'Thank you' }),
+    lnk(sW, sT), lnk(sT, sW),
+  ] });
+  await A.until(`[...document.querySelectorAll('#camps .cc-board .wb-item.k-shape')].length === 2`, 6000);
+  await A.tap(T('.cc-update-plan'));
+  ok(await A.until(`[...document.querySelectorAll('.toast')].some((t) => /Added 2 phases(?! and)/.test(t.textContent))`, 8000), 'the toast says “Added 2 phases” (no “and 0 tasks”): ' + await A.ev(`[...document.querySelectorAll('.toast')].map((t) => t.textContent).join(' / ')`));
+  const gW = (await api('GET', '/state')).goals.filter((g) => g.campaignId === camp.id);
+  const W1 = gW.find((g) => g.title === 'Wrap up'), T1 = gW.find((g) => g.title === 'Thank you');
+  ok(T1 && W1 && (T1.blockedBy || []).includes(W1.id) && !(W1.blockedBy || []).includes(T1.id), 'arrows both ways: one waits for the other, not each for each');
+  // A failure halfway: what was made is still turned into cards and said; the rest stays to try again.
+  const [sF, kA, kB] = ['f', 'ka', 'kb'].map(id);
+  await api('POST', `/boards/${board.id}/ops`, { ops: [
+    put({ id: sF, kind: 'shape', shape: 'rect', x: 1900, y: 0, w: 240, h: 90, text: 'Follow up' }),
+    put({ id: kA, kind: 'sticky', x: 1910, y: 200, w: 200, h: 120, text: 'Send a survey' }),
+    put({ id: kB, kind: 'sticky', x: 1910, y: 360, w: 200, h: 120, text: 'Post a thank-you' }),
+  ] });
+  await A.until(`[...document.querySelectorAll('#camps .cc-board .wb-item.k-sticky')].some((n) => n.textContent.includes('Post a thank-you'))`, 6000);
+  await A.ev(`(() => { window.__f = window.fetch; let n = 0; window.fetch = (u, o) => (String(u).includes('/api/tasks') && o?.method === 'POST' && ++n === 2 ? Promise.resolve(new Response(JSON.stringify({ error: 'Test: no more tasks' }), { status: 400, headers: { 'content-type': 'application/json' } })) : window.__f(u, o)); return true; })()`);
+  await A.tap(T('.cc-update-plan'));
+  ok(await A.until(`[...document.querySelectorAll('.toast')].some((t) => t.textContent.includes('Added 1 phase and 1 task') && t.textContent.includes('Test: no more tasks'))`, 8000), 'a failure halfway: it says what it added, then why it stopped: ' + await A.ev(`[...document.querySelectorAll('.toast')].map((t) => t.textContent).join(' / ')`));
+  await A.ev(`window.fetch = window.__f; true`);
+  await sleep(800);
+  const bF = await api('GET', '/boards/' + board.id);
+  ok(!bF.items.some((x) => x.id === sF) && !bF.items.some((x) => x.id === kA) && bF.items.some((x) => x.id === kB && x.kind === 'sticky'), 'what it made became cards; the sticky it couldn’t do is still a sticky');
+  await A.tap(T('.cc-update-plan'));
+  let tFU = [];
+  for (let i = 0; i < 30 && tFU.length < 2; i++) { const st3 = await api('GET', '/state'); const fu = st3.goals.find((g) => g.campaignId === camp.id && g.title === 'Follow up'); tFU = st3.tasks.filter((t) => t.goalId === fu?.id); await sleep(150); }
+  ok(tFU.map((t) => t.text).sort().join('|') === 'Post a thank-you|Send a survey', 'Update plan again finishes the job, nothing twice: ' + tFU.map((t) => t.text).join('|'));
+  await tabTo('plan');
   // A narrow screen: no Sketch tab; a stored Sketch tab shows Plan.
   await tabTo('sketch');
   await A.cmd('Emulation.setDeviceMetricsOverride', { width: 820, height: 900, deviceScaleFactor: 1, mobile: false });

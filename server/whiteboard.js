@@ -118,12 +118,15 @@ export function whiteboardModule({ db, save, send, readJson, cleanText, rid, bro
       // tasks as live cards under it (12 at most), and an arrow for each "waits for". An empty campaign gets three boxes
       // to name. Cards only point at things; each viewer's app shows what they may see.
       const byOrder = (a, b2) => (a.order ?? 0) - (b2.order ?? 0) || (a.createdAt || 0) - (b2.createdAt || 0);
-      const phases = Object.values(db.goals).filter((g) => g.campaignId === b.campaignId && !['count', 'money'].includes(g.kind)).sort(byOrder);
+      // 60 phases at most (13 items each stays well inside a board's MAX_ITEMS); tasks grouped once, not per phase.
+      const phases = Object.values(db.goals).filter((g) => g.campaignId === b.campaignId && !['count', 'money'].includes(g.kind)).sort(byOrder).slice(0, 60);
       if (phases.length) {
+        const ids = new Set(phases.map((g) => g.id)), tasksOf = new Map();
+        for (const t of Object.values(db.tasks)) if (ids.has(t.goalId) && !t.parentId) (tasksOf.get(t.goalId) || tasksOf.set(t.goalId, []).get(t.goalId)).push(t);
         const cardOf = new Map();
         phases.forEach((g, i) => {
           cardOf.set(g.id, put({ kind: 'card', x: i * 300, y: 0, w: 240, h: 90, ref: { kind: 'goal', id: g.id }, z: 1 }));
-          Object.values(db.tasks).filter((t) => t.goalId === g.id && !t.parentId).sort(byOrder).slice(0, 12)
+          (tasksOf.get(g.id) || []).sort(byOrder).slice(0, 12)
             .forEach((t, j) => put({ kind: 'card', x: i * 300, y: 130 + j * 100, w: 240, h: 80, ref: { kind: 'task', id: t.id }, z: 1 }));
         });
         for (const g of phases) for (const w of g.blockedBy || []) if (cardOf.has(w) && w !== g.id) link(cardOf.get(w), cardOf.get(g.id));
@@ -161,7 +164,8 @@ export function whiteboardModule({ db, save, send, readJson, cleanText, rid, bro
         link(mid, k);
       });
     }
-    if (ops.length) applyOps(b, ops, { member: by });
+    // In batches: one batch takes at most MAX_OPS changes, and a big campaign's start has more.
+    for (let i = 0; i < ops.length; i += MAX_OPS) applyOps(b, ops.slice(i, i + MAX_OPS), { member: by });
   }
 
   // ----- what goes to the app -----
