@@ -320,3 +320,11 @@ Where the server differs from, or settles, something above:
   keeps no copy of the run's logic; every state comes from the server's run view.
 - Tests: `tests/jobs_ui.mjs` (Chrome, ports 5007 / 9567; `SHOTS=<folder>` saves screenshots). `tests/tabbar.mjs`
   expects Jobs in the strip.
+- Checkpoint 4 review: **Next shows only on the step the job is at** (`state === 'current'`), only when `mayAct`, and
+  on invoice and payment steps only for owners and admins, whatever the step's `who` (`jbMayNext`). The Jobs list's
+  step button follows the same rule for invoice and payment. Picking the step the job is at goes back to following
+  the job (the card moves on as steps finish); picking another step holds it there.
+- `tests/jobs_ui.mjs` also runs as a member: Jobs but no Job Flows sub-tab or builder; New job offers only flows
+  everyone may start; Next and Skip on the member's own step; no Next on a later step, an admins' step or an invoice
+  step (nor its button in the list); no Reopen and no flow menu; the card moves on live when a step is done elsewhere.
+  The six job tabs are checked exactly and in order, under the flow card.

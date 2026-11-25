@@ -18306,7 +18306,7 @@
       h('button', { type: 'button', class: 'jb-main', onclick: () => openJob(j.projectId, j.id) }, h('b', {}, j.name || 'Job'), sub ? h('small', {}, sub) : null,
         r ? h('span', { class: 'jb-prog' }, h('span', { class: 'lead-bar', style: '--c:var(--accent)' }, h('i', { style: `width:${Math.round((r.done / Math.max(1, r.total)) * 100)}%` })), h('small', {}, `${r.flowName} · ${r.done}/${r.total}`))
           : h('small', { class: 'muted' }, j.legacy ? 'On campaign steps' : 'Not on a flow')),
-      r?.current ? h('button', { type: 'button', class: 'btn small jb-next', 'data-next': j.id, title: 'Open the job at this step', onclick: () => jbGo(j.projectId, j.id) }, `${JB_KIND[r.current.kind]?.[0] || ''} ${r.current.name}`)
+      r?.current && (!['invoice', 'payment'].includes(r.current.kind) || amAdmin()) ? h('button', { type: 'button', class: 'btn small jb-next', 'data-next': j.id, title: 'Open the job at this step', onclick: () => jbGo(j.projectId, j.id) }, `${JB_KIND[r.current.kind]?.[0] || ''} ${r.current.name}`)
         : r?.status === 'done' ? h('span', { class: 'jb-done' }, '✓ Done') : null);
   }
   // Open a job and do the step it's at.
@@ -18316,7 +18316,7 @@
     JB.runs.set(id, y?.run || null);
     const at = recEverywhere(id);
     const s = y?.run?.steps?.find((x) => x.state === 'current');
-    if (at?.p && s) jbAction(at.p, prType(at.p, at.r.typeId), at.r, s);
+    if (at?.p && s && jbMayNext(s)) jbAction(at.p, prType(at.p, at.r.typeId), at.r, s);
     else renderProjects();
   }
   // A job's window, on one of its tabs (as clicking the tab does).
@@ -18396,6 +18396,9 @@
       jbSoon();
     }, replace ? 'Move it' : 'Put it on');
   }
+  // Next: only on the step the job is at, only for whoever the step is for, and invoices and payments only for owners
+  // and admins (their routes are theirs alone, whoever the step names).
+  const jbMayNext = (s) => s.state === 'current' && s.mayAct && (!['invoice', 'payment'].includes(s.kind) || amAdmin());
   // On a job's Overview: its flow's steps in a row, the one picked (or next up) under it with its button.
   function jbRunCard(p, t, r) {
     if (!jbIsJobList(t)) return null;
@@ -18411,7 +18414,7 @@
     const pickId = run.steps.some((x) => x.id === JB.pick[r.id]) ? JB.pick[r.id] : cur?.id || run.steps.at(-1)?.id;
     const s = run.steps.find((x) => x.id === pickId);
     const admin = amAdmin();
-    const steps = h('div', { class: 'jb-steps', role: 'list' }, run.steps.map((x, i) => h('button', { type: 'button', role: 'listitem', class: `jb-step s-${x.state}${x.id === pickId ? ' pick' : ''}`, 'data-step': x.id, 'data-state': x.state, title: `${x.name} · ${JB_STATE[x.state]}`, onclick: () => { JB.pick[r.id] = x.id; renderProjects(); } },
+    const steps = h('div', { class: 'jb-steps', role: 'list' }, run.steps.map((x, i) => h('button', { type: 'button', role: 'listitem', class: `jb-step s-${x.state}${x.id === pickId ? ' pick' : ''}`, 'data-step': x.id, 'data-state': x.state, title: `${x.name} · ${JB_STATE[x.state]}`, onclick: () => { JB.pick[r.id] = x.state === 'current' ? null : x.id; renderProjects(); } }, // the step it's at: follow the job again
       h('span', { class: 'jb-dot' }, x.state === 'done' ? '✓' : x.state === 'skipped' ? '–' : String(i + 1)), h('span', { class: 'jb-sname' }, x.name))));
     const whoText = (x) => x.who?.name ? `For ${x.who.name}` : x.who?.fallback || x.who?.type === 'admins' ? 'For owners and admins' : null;
     const open = s && (s.state === 'current' || s.state === 'waiting');
@@ -18427,7 +18430,7 @@
       })) : null,
       s.kind === 'tasks' && s.tasks ? h('div', { class: 'jb-tasks' }, s.tasks.map((x) => h('small', { class: x.done || x.skipped ? 'muted' : null }, `${x.done ? '✓' : x.skipped ? '–' : '○'} ${x.text}`)), s.more ? h('small', { class: 'muted' }, `and ${s.more} more`) : null) : null,
       h('div', { class: 'jb-acts' },
-        open && s.mayAct && !(s.kind === 'custom' && s.state !== 'current') ? h('button', { class: 'btn small primary-btn', 'data-act': 'next', onclick: () => jbAction(p, t, r, s) }, JB_NEXT[s.kind]) : null,
+        jbMayNext(s) ? h('button', { class: 'btn small primary-btn', 'data-act': 'next', onclick: () => jbAction(p, t, r, s) }, JB_NEXT[s.kind]) : null,
         open && (admin || (s.canSkip && s.mayAct)) ? h('button', { class: 'btn small', 'data-act': 'skip', onclick: () => jbSkip(r, s) }, 'Skip') : null,
         !open && admin ? h('button', { class: 'btn small', 'data-act': 'reopen', onclick: () => jbStep(r, s, 'reopen') }, 'Reopen') : null)) : null;
     const menu = admin ? h('button', { class: 'icon-btn', html: I.more, 'aria-label': 'Flow options', onclick: (e) => {

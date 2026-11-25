@@ -56,6 +56,16 @@ try {
     { kind: 'custom', name: 'Bins back', settings: { text: 'Put them by the house.', checklist: ['Bins back'] } }, { kind: 'invoice', name: 'Send invoice' } ] });
   await api('POST', `/job-flows/${flow.id}/publish`);
   const made = await api('POST', '/jobs', { flowId: flow.id, values: { job: 'Lee · 2 cans' } });
+  const samAuth = await (await fetch(APP + 'api/auth', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ mode: 'join', workspace: 'Jobs ' + t, code: st.workspace.inviteCode, name: 'Sam Reed', email: `s${t}@t.test`, password: 'longenough2', device: 'Mac', deviceId: 'd2' }) })).json();
+  const samId = (await api('GET', '/state')).workspace.members.find((m) => m.name === 'Sam Reed').id;
+  const crew = await api('POST', '/job-flows', { name: 'Crew flow', whoCreates: 'everyone', list: { projectId: p.id, typeId: tp.id }, steps: [
+    { kind: 'custom', name: 'Crew check', who: { type: 'member', id: samId }, canSkip: true, settings: { text: 'Check the truck.' } },
+    { kind: 'custom', name: 'Office check', who: { type: 'admins' }, canSkip: true, settings: { text: 'Check the paperwork.' } },
+    { kind: 'invoice', name: 'Bill it', who: { type: 'anyone' } },
+    { kind: 'custom', name: 'Wrap up', who: { type: 'anyone' }, settings: { text: 'Done for the day.' } } ] });
+  const crewPub = await api('POST', `/job-flows/${crew.id}/publish`);
+  const crewSid = (n) => crewPub.version.body.steps.find((x) => x.name === n).id;
+  const crewJob = await api('POST', '/jobs', { flowId: crew.id, values: { job: 'Crew job' } });
   await api('POST', `/projects/${p.id}/records`, { typeId: tp.id, values: { job: 'Old job by hand' } });
 
   A = await tab(APP);
@@ -109,7 +119,10 @@ try {
   ok(await A.until(`!!document.querySelector('#projects .jb-card')`, 8000), 'Start the job opens it, its flow on the Overview');
   ok(await A.until(`document.querySelectorAll('#projects .jb-step').length === 4 && document.querySelector('#projects .jb-step[data-state=done]')?.textContent.includes('Add client info')`), 'its 4 steps in a row, Add client info already done (the client was picked): ' + await A.ev(`[...document.querySelectorAll('#projects .jb-step')].map((x) => x.dataset.state + ':' + x.textContent).join(', ') + ' / dana ' + ${JSON.stringify(!!dana)}`));
   ok(await A.ev(`document.querySelector('#projects .jb-step[data-state=current]')?.textContent.includes('Book it')`), 'Book it is next up');
-  ok(await A.ev(`document.querySelectorAll('#projects .pj-tab').length >= 5`), 'the job window keeps its tabs (Overview, Client, Work, Finance, Files & notes, Activity), its flow above them');
+  await A.tap(`[...document.querySelectorAll('#projects .jb-step')].find((x) => x.textContent.includes('Send invoice'))`);
+  ok(await A.until(`document.querySelector('#projects .jb-detail')?.textContent.includes('Send invoice')`) && await A.ev(`!document.querySelector('#projects .jb-detail [data-act=next]')`), 'a later step, picked, offers no Next even to an owner (only the step the job is at does)');
+  await A.tap(`document.querySelector('#projects .jb-step[data-state=current]')`);
+  ok(await A.ev(`[...document.querySelectorAll('#projects .pj-tab')].map((x) => x.dataset.tab).join() === 'overview,client,work,finance,files,activity' && document.querySelector('#projects .jb-card').compareDocumentPosition(document.querySelector('#projects .pj-tabs')) & Node.DOCUMENT_POSITION_FOLLOWING`), 'the job window keeps its tabs (Overview, Client, Work, Finance, Files & notes, Activity), its flow above them');
   await shot('3-job');
   await A.tap(`document.querySelector('#projects .jb-detail [data-act=next]')`);
   ok(await A.until(`!document.querySelector('#sheet').classList.contains('hidden') && !!document.querySelector('#sheet input[type=date]')`), 'Next on “Book it” opens the visit sheet');
@@ -131,6 +144,39 @@ try {
   // Next from the list opens the job at its step.
   await A.tap(`document.querySelector('#tool .jb-row[data-job="${made.job.id}"] .jb-next')`);
   ok(await A.until(`!!document.querySelector('#projects .jb-card') && document.querySelector('#projects .pj-tab.on')?.dataset.tab === 'client'`, 8000), 'Next on a job in the list opens it at its step (Add client info → the Client tab), its flow still in sight: ' + await A.ev(`[!!document.querySelector('#projects .jb-card'), document.querySelector('#projects .pj-tab.on')?.dataset.tab, [...document.querySelectorAll('#projects .pj-tab')].map((x) => x.dataset.tab).join(','), document.querySelector('#projects .pj-panel h2, #projects .pj-title')?.textContent].join(' | ')`));
+
+  // As a member (Sam): Jobs, but no Job Flows or builder; New job only from a flow everyone may start; Next only on
+  // the step the job is at and only when the step is theirs; never Next on an invoice or a payment; no Reopen, no
+  // flow menu.
+  const asSam = async () => { await A.ev(`localStorage.setItem('column.token', JSON.stringify(${JSON.stringify(samAuth.token)})); location.reload(); true`).catch(() => {}); await A.until(`!document.querySelector('#app').classList.contains('hidden') && !!document.querySelector('[data-tab=work]')`, 15000); };
+  await asSam();
+  await A.ev(`document.querySelector('[data-tab=work]').click(); true`);
+  await A.until(`!!document.querySelector('#workTabs [data-tab=jobs]')`);
+  await A.ev(`document.querySelector('#workTabs [data-tab=jobs]').click(); true`);
+  ok(await A.until(`!!${TOOL(`.jb-row[data-job="${crewJob.job.id}"]`)}`), 'a member sees Jobs');
+  ok(await A.ev(`!document.querySelector('#tool [data-jb]') && !document.querySelector('#tool [data-act=new-flow], #tool .jb-scard, #tool [data-flow]')`), 'but no Job Flows sub-tab and nothing of the builder');
+  await A.tap(TOOL('[data-act=new-job]'));
+  await A.until(`!document.querySelector('#sheet').classList.contains('hidden')`);
+  ok(await A.ev(`[...document.querySelectorAll('#sheet select[aria-label=Flow] option')].map((o) => o.value).join() === ${JSON.stringify(crew.id)}`), 'New job offers only the flow everyone may start (not the owners-and-admins ones)');
+  await A.ev(`document.querySelector('#sheet [aria-label=Close]').click(); true`);
+  await A.tap(TOOL(`.jb-row[data-job="${crewJob.job.id}"] .jb-main`));
+  ok(await A.until(`document.querySelector('#projects .jb-step[data-state=current]')?.textContent.includes('Crew check')`, 8000), '(setup) Sam opens the crew job at Crew check');
+  ok(await A.ev(`!!document.querySelector('#projects .jb-detail [data-act=next]') && !!document.querySelector('#projects .jb-detail [data-act=skip]')`), 'the step for Sam shows him Next and Skip');
+  ok(await A.ev(`!document.querySelector('#projects .jb-card [aria-label="Flow options"]')`), 'and no flow menu (move, take off)');
+  await A.tap(`document.querySelector('#projects .jb-step[data-step="${crewSid('Wrap up')}"]')`);
+  ok(await A.until(`document.querySelector('#projects .jb-detail')?.dataset.detail === ${JSON.stringify(crewSid('Wrap up'))}`) && await A.ev(`!document.querySelector('#projects .jb-detail [data-act=next]')`), 'a later step (anyone’s) never offers Next');
+  await api('POST', `/jobs/${crewJob.job.id}/steps/${crewSid('Crew check')}/done`);
+  ok(await A.until(`document.querySelector('#projects .jb-step[data-state=current]')?.textContent.includes('Office check')`, 8000), 'live: the step done elsewhere moves the card on to Office check');
+  await A.tap(`document.querySelector('#projects .jb-step[data-step="${crewSid('Office check')}"]')`);
+  ok(await A.ev(`!document.querySelector('#projects .jb-detail [data-act=next]') && !document.querySelector('#projects .jb-detail [data-act=skip]')`), 'an owners-and-admins step offers Sam neither Next nor Skip');
+  await A.tap(`document.querySelector('#projects .jb-step[data-step="${crewSid('Crew check')}"]')`);
+  ok(await A.until(`document.querySelector('#projects .jb-detail')?.dataset.detail === ${JSON.stringify(crewSid('Crew check'))}`) && await A.ev(`!document.querySelector('#projects .jb-detail [data-act=reopen]')`), 'a finished step offers Sam no Reopen');
+  await api('POST', `/jobs/${crewJob.job.id}/steps/${crewSid('Office check')}/done`);
+  ok(await A.until(`document.querySelector('#projects .jb-step[data-state=current]')?.textContent.includes('Bill it')`, 8000), '(setup) Bill it is next');
+  await A.tap(`document.querySelector('#projects .jb-step[data-step="${crewSid('Bill it')}"]')`);
+  ok(await A.ev(`!document.querySelector('#projects .jb-detail [data-act=next]')`), 'an invoice step (for anyone) never shows a member Next');
+  await A.ev(`document.querySelector('#workTabs [data-tab=jobs]').click(); true`);
+  ok(await A.until(`!!${TOOL(`.jb-row[data-job="${crewJob.job.id}"]`)}`) && await A.ev(`!${TOOL(`.jb-row[data-job="${crewJob.job.id}"] .jb-next`)}`), 'nor a button for it in the Jobs list');
 
   // A phone: Jobs fits.
   await A.cmd('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
