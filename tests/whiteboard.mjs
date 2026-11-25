@@ -4,6 +4,7 @@
 // last write wins (a change sends only its fields), what's kept is checked (kinds, sizes, text, cards and files only
 // of this team), limits, templates, who's here, delete and restore, the tool and member switches, and the export.
 import fs from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { spawn, execFileSync } from 'node:child_process';
 import WebSocket from '../server/node_modules/ws/index.js';
 const S = (await import('node:path')).resolve(process.argv[2] || '.');
@@ -14,7 +15,7 @@ const PORT = 5322, B = `http://127.0.0.1:${PORT}`;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let fails = 0;
 const ok = (c, msg) => { console.log((c ? 'PASS ' : 'FAIL ') + msg); if (!c) fails++; };
-const srv = spawn('node', ['index.js'], { cwd: new URL('../server', import.meta.url).pathname, env: { ...process.env, PORT: String(PORT), PUBLIC_URL: B, DATA_DIR: DIR, MAIL_OUTBOX: '1', RESEND_API_KEY: '', DATABASE_URL: '' }, stdio: ['ignore', 'ignore', 'inherit'] });
+const srv = spawn('node', ['index.js'], { cwd: fileURLToPath(new URL('../server', import.meta.url)), env: { ...process.env, PORT: String(PORT), PUBLIC_URL: B, DATA_DIR: DIR, MAIL_OUTBOX: '1', RESEND_API_KEY: '', DATABASE_URL: '' }, stdio: ['ignore', 'ignore', 'inherit'] });
 for (let i = 0; i < 100; i++) { try { if ((await fetch(B + '/api/health')).ok) break; } catch {} await sleep(150); }
 const call = (tok) => async (m, p, body) => {
   const r = await fetch(B + '/api' + p, { method: m, headers: { 'content-type': 'application/json', ...(tok ? { authorization: 'Bearer ' + tok } : {}) }, body: body ? JSON.stringify(body) : undefined });
@@ -38,6 +39,31 @@ try {
   const joTok = r.body.token, jo = call(joTok), code = r.body.workspace.inviteCode;
   r = await call()('POST', '/auth', { mode: 'join', workspace: 'WB ' + t, code, name: 'Sam', email: `sam${t}@t.test`, password: 'longenough2', device: 'Mac', deviceId: 'd2' });
   const samTok = r.body.token, sam = call(samTok);
+  // The Phases & tasks start (2026-11-25, campaign Sketch): the campaign's phases as live cards in a row, each one's
+  // top-level tasks under it, an arrow for each "waits for"; an empty campaign gets three boxes to name.
+  {
+    const pc = (await jo('POST', '/campaigns', { name: 'Sketch me' })).body;
+    const A1 = (await jo('POST', '/goals', { campaignId: pc.id, title: 'Call' })).body;
+    const B1 = (await jo('POST', '/goals', { campaignId: pc.id, title: 'Book' })).body;
+    await jo('PATCH', '/goals/' + B1.id, { blockedBy: [A1.id] });
+    const a1 = (await jo('POST', '/tasks', { goalId: A1.id, text: 'Call Lee' })).body;
+    await jo('POST', '/tasks', { goalId: A1.id, text: 'Call Diaz' });
+    await jo('POST', '/tasks', { goalId: A1.id, text: 'Ask about the patio', parentId: a1.id });
+    await jo('POST', '/tasks', { goalId: B1.id, text: 'Send quotes' });
+    const pb = (await jo('POST', '/boards', { campaignId: pc.id, template: 'phases' })).body;
+    const cards = (k) => pb.items.filter((x) => x.kind === 'card' && x.ref?.kind === k);
+    const gA = cards('goal').find((x) => x.ref.id === A1.id), gB = cards('goal').find((x) => x.ref.id === B1.id);
+    ok(cards('goal').length === 2 && gA?.x === 0 && gB?.x === 300 && gA.y === 0, 'Phases & tasks: the phases as live cards in a row, in order');
+    ok(cards('task').length === 3 && cards('task').every((x) => x.y >= 130), 'their top-level tasks as live cards under them (no subtasks): ' + cards('task').length);
+    ok(cards('task').filter((x) => x.x === 0).length === 2 && cards('task').filter((x) => x.x === 300).length === 1, 'each under its own phase');
+    ok(pb.links.length === 1 && pb.links[0].from === gA.id && pb.links[0].to === gB.id, 'an arrow for what waits for what');
+    const ec = (await jo('POST', '/campaigns', { name: 'Empty sketch' })).body;
+    const eb = (await jo('POST', '/boards', { campaignId: ec.id, template: 'phases' })).body;
+    ok(eb.items.filter((x) => x.kind === 'shape').map((x) => x.text).join('|') === 'Phase 1|Phase 2|Phase 3' && eb.links.length === 2 && eb.items.filter((x) => x.kind === 'text').length === 1, 'an empty campaign: three boxes to name, joined, and a line saying what to do');
+    const nb = (await jo('POST', '/boards', { name: 'Loose', template: 'phases' })).body;
+    ok(nb.items.length === 0, 'not on a campaign: Phases & tasks starts blank');
+    for (const x of [pb, eb, nb]) await jo('DELETE', '/boards/' + x.id); // out of the way of the counts below
+  }
   r = await call()('POST', '/auth', { mode: 'create', workspace: 'Other ' + t, name: 'Zed', email: `zed${t}@t.test`, password: 'longenough3', device: 'Mac', deviceId: 'd3' });
   const zed = call(r.body.token);
   const state = (await jo('GET', '/state')).body;

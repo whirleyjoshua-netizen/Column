@@ -11,7 +11,7 @@ const KINDS = ['sticky', 'text', 'shape', 'frame', 'file', 'card'];
 const SHAPES = ['rect', 'ellipse', 'diamond'];
 const REF_KINDS = ['task', 'goal', 'record', 'contact', 'doc'];
 const COLORS = ['yellow', 'pink', 'green', 'blue', 'purple', 'orange', 'gray', 'white'];
-const TEMPLATES = ['blank', 'workflow', 'brainstorm', 'mindmap'];
+const TEMPLATES = ['blank', 'phases', 'workflow', 'brainstorm', 'mindmap'];
 const MAX_ITEMS = 2000, MAX_LINKS = 4000, MAX_OPS = 500, MAX_BOARDS = 300, TEXT_MAX = 4000;
 const TRASH_DAYS = 30;
 const SPAN = 200_000; // how far from the middle anything can sit
@@ -113,7 +113,30 @@ export function whiteboardModule({ db, save, send, readJson, cleanText, rid, bro
     const id = () => rid() + (n++).toString(36);
     const put = (item) => { const x = { id: id(), ...item }; ops.push({ op: 'put', item: x }); return x.id; };
     const link = (from, to, label = '') => ops.push({ op: 'put', link: { id: id(), from, to, label } });
-    if (tpl === 'workflow') {
+    if (tpl === 'phases' && b.campaignId) {
+      // Phases & tasks (2026-11-25, campaign Sketch): the campaign's phases as live cards in a row, each one's top-level
+      // tasks as live cards under it (12 at most), and an arrow for each "waits for". An empty campaign gets three boxes
+      // to name. Cards only point at things; each viewer's app shows what they may see.
+      const byOrder = (a, b2) => (a.order ?? 0) - (b2.order ?? 0) || (a.createdAt || 0) - (b2.createdAt || 0);
+      const phases = Object.values(db.goals).filter((g) => g.campaignId === b.campaignId && !['count', 'money'].includes(g.kind)).sort(byOrder);
+      if (phases.length) {
+        const cardOf = new Map();
+        phases.forEach((g, i) => {
+          cardOf.set(g.id, put({ kind: 'card', x: i * 300, y: 0, w: 240, h: 90, ref: { kind: 'goal', id: g.id }, z: 1 }));
+          Object.values(db.tasks).filter((t) => t.goalId === g.id && !t.parentId).sort(byOrder).slice(0, 12)
+            .forEach((t, j) => put({ kind: 'card', x: i * 300, y: 130 + j * 100, w: 240, h: 80, ref: { kind: 'task', id: t.id }, z: 1 }));
+        });
+        for (const g of phases) for (const w of g.blockedBy || []) if (cardOf.has(w) && w !== g.id) link(cardOf.get(w), cardOf.get(g.id));
+      } else {
+        let prev = null;
+        for (let i = 0; i < 3; i++) {
+          const k = put({ kind: 'shape', shape: 'rect', x: i * 300, y: 0, w: 240, h: 90, text: `Phase ${i + 1}`, color: 'white', z: 1 });
+          if (prev) link(prev, k);
+          prev = k;
+        }
+        put({ kind: 'text', x: -320, y: 0, w: 260, h: 120, text: 'Name each phase in its box. Put a sticky under a phase for each task, then Update plan.', z: 1 });
+      }
+    } else if (tpl === 'workflow') {
       const f = put({ kind: 'frame', x: -80, y: -120, w: 1400, h: 420, text: 'How the work flows', z: 0 });
       const steps = ['Lead comes in', 'Quote it', 'Book the job', 'Do the work', 'Get paid'];
       let prev = null;
