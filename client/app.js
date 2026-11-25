@@ -7996,7 +7996,8 @@
       const vw = ccWorkView();
       // The views behind one dropdown (2026-11-25), kept on this device as before.
       const sel = h('select', { class: 'cc-wview-sel', 'aria-label': 'View' }, [['list', 'List'], ['board', 'Board'], ['timeline', 'Timeline'], ['calendar', 'Calendar']].map(([k, l]) => h('option', { value: k, selected: vw === k }, l)));
-      sel.addEventListener('change', () => { K.wview = sel.value; store.set('ccWorkView', sel.value); renderCamps(); });
+      // Drawn at once: a focused box holds the page's redraw back, and a dropdown keeps the focus after a pick.
+      sel.addEventListener('change', () => { K.wview = sel.value; store.set('ccWorkView', sel.value); sel.blur(); renderCamps(true); });
       const views = h('div', { class: 'cc-wbar' }, h('label', { class: 'cc-wview' }, h('span', {}, 'View'), sel));
       if (vw !== 'list') return h('section', { class: 'cc-card cc-work cc-work-' + vw }, views,
         ...(vw === 'board' ? ccTaskBoard(c, pick, tasks, phases) : vw === 'timeline' ? ccTimeline(c, pick, phases) : ccCalendar(c, pick)));

@@ -65,7 +65,8 @@ try {
   ok(await A.until(`!!${T('.cc-body')}`), 'the campaign opens');
   await A.ev(`document.querySelector('#sheet [aria-label=Close]')?.click(); true`);
   const chip = async (k) => { await A.tap(T(`.cc-chip[data-chip=${k}]`)); await A.until(`${T(`.cc-chip[data-chip=${k}]`)}.classList.contains('on')`); };
-  const view = async (v) => { await A.pick(T('.cc-wview-sel'), v); await sleep(250); };
+  // As a person picks: the dropdown has the focus when it changes (the page holds back its redraw for a focused box).
+  const view = async (v) => { await A.ev(`${T('.cc-wview-sel')}.focus(); true`); await A.pick(T('.cc-wview-sel'), v); await sleep(250); };
   const listRows = `[...document.querySelectorAll('#camps .cc-tr:not(.cc-th)')].map((r) => r.querySelector('.cc-tt').firstChild.textContent + (r.classList.contains('done') ? '*' : ''))`;
   // ----- Work: one dropdown for the view; the chips filter -----
   await tabTo('work');

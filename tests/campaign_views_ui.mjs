@@ -63,7 +63,7 @@ try {
   await A.tap(`document.querySelector('.camp-card')`);
   await A.until(`!!${T('.cc-tab[data-ctab=work]')}`);
   await A.ev(`${T('.cc-tab[data-ctab=work]')}.click(); true`);
-  ok(await A.until(`[...document.querySelectorAll('#camps .cc-wview [data-wv]')].map((b) => b.dataset.wv).join() === 'list,board,timeline,calendar' && !!${T('.cc-table')}`), 'Work has List, Board, Timeline and Calendar, on List');
+  ok(await A.until(`[...(${T('.cc-wview-sel')}?.options || [])].map((o) => o.value).join() === 'list,board,timeline,calendar' && !!${T('.cc-table')}`), 'Work has List, Board, Timeline and Calendar, on List');
   const drag = async ([x1, y1], [x2, y2]) => {
     await A.mouse('mouseMoved', x1, y1); await A.cmd('Input.dispatchMouseEvent', { type: 'mousePressed', x: x1, y: y1, button: 'left', buttons: 1, clickCount: 1 });
     for (let i = 1; i <= 10; i++) { await A.mouse('mouseMoved', x1 + ((x2 - x1) * i) / 10, y1 + ((y2 - y1) * i) / 10); await sleep(20); }
@@ -74,7 +74,7 @@ try {
   const card = (id) => T(`.ccb-card[data-task="${id}"]`);
   const col = (k) => T(`.ccb-col[data-col="${k}"]`);
   // Board, by status.
-  await A.ev(`${T('.cc-wview [data-wv=board]')}.click(); true`);
+  await A.pick(T('.cc-wview-sel'), 'board');
   ok(await A.until(`[...document.querySelectorAll('#camps .ccb-col')].map((c) => c.dataset.col).join() === 'open,doing,wait,done'`), 'Board: Not started, In progress, Waiting, Done: ' + await A.ev(`[...document.querySelectorAll('#camps .ccb-col')].map((c) => c.dataset.col).join()`));
   ok(await A.ev(`!!${col('open')}.querySelector('[data-task="${A0.id}"]') && !!${col('wait')}.querySelector('[data-task="${C0.id}"]')`), 'a task that waits for another is under Waiting');
   await drag(await mid(card(A0.id)), await at(col('doing')));
@@ -98,8 +98,8 @@ try {
   await drag(await mid(card(B0.id)), await at(col(me)));
   ok((await wait(B0.id, (x) => x.assigneeId === me)).assigneeId === me, 'dragged onto Joshua, it’s his');
   // Timeline.
-  await A.ev(`${T('.cc-wview [data-wv=timeline]')}.click(); true`);
-  await A.ev(`${T('.cc-wf [data-wf=all]')}.click(); true`);
+  await A.pick(T('.cc-wview-sel'), 'timeline');
+  await A.ev(`${T('.cc-chip[data-chip=all]')}.click(); true`);
   ok(await A.until(`!!${T(`.cct-bar[data-task="${C0.id}"]`)} && !${T(`.cct-bar[data-task="${B0.id}"]`)}`), 'Timeline: a bar for each dated task, none for one with no days');
   ok(await A.until(`document.querySelectorAll('#camps .cct-links path:not(marker path)').length >= 1`), 'an arrow for what it waits for');
   ok(await A.ev(`[...document.querySelectorAll('#camps .cct-phase .cct-name b')].map((b) => b.textContent).join() === 'Prep,Install'`), 'grouped by phase');
@@ -127,7 +127,7 @@ try {
   ok(b.startOn === plus(today, 2) && b.due === plus(today, 4), 'pulling its start in starts it later: ' + [b.startOn, b.due]);
   await shot('cv-timeline');
   // Calendar.
-  await A.ev(`${T('.cc-wview [data-wv=calendar]')}.click(); true`);
+  await A.pick(T('.cc-wview-sel'), 'calendar');
   const cDue = (await task(C0.id)).due;
   ok(await A.until(`!!${T('.ccc')}`), 'Calendar: the month');
   for (let i = 0; i < 3 && !(await A.ev(`!!${T(`.ccc-day[data-day="${cDue}"]:not(.other)`)}`)); i++) { await A.ev(`${T('.ccc-next')}.click(); true`); await sleep(200); }
@@ -180,9 +180,9 @@ try {
   const X0 = await api('POST', '/tasks', { goalId: inst.id, text: 'Pick up the brackets' });
   const Y0 = await api('POST', '/tasks', { goalId: inst.id, text: 'Mount the brackets', blockedBy: [X0.id] });
   await A.tap(T('.cc-tab[data-ctab=work]'));
-  await A.until(`!!${T('.cc-wview [data-wv=list]')}`);
-  await A.tap(T('.cc-wview [data-wv=list]'));
-  await A.tap(T('.cc-wf [data-wf=all]'));
+  await A.until(`!!${T('.cc-wview-sel')}`);
+  await A.pick(T('.cc-wview-sel'), 'list');
+  await A.tap(T('.cc-chip[data-chip=all]'));
   await A.until(`!!${T(`.cc-tr[data-task="${Y0.id}"]`)}`, 8000);
   for (let i = 0; i < 4 && !(await A.ev(`document.querySelector('#sheet .td')?.dataset.task === ${JSON.stringify(Y0.id)}`)); i++) { await A.ev(`${T(`.cc-tr[data-task="${Y0.id}"]`)}.click(); true`); await sleep(400); }
   ok(await A.until(`document.querySelector('#sheet button.td-dep')?.textContent.includes('Pick up the brackets')`), 'a waiting task’s drawer shows what it waits for, as a button');

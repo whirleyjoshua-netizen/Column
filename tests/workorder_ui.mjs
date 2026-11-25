@@ -59,8 +59,8 @@ try {
   await A.tap(`document.querySelector('.camp-card')`);
   await A.until(`!!document.querySelector('#camps .cc-tab[data-ctab=work]')`);
   await A.tap(`document.querySelector('#camps .cc-tab[data-ctab=work]')`);
-  await A.until(`!!document.querySelector('#camps .cc-wview [data-wv=list]')`);
-  await A.tap(`document.querySelector('#camps .cc-wview [data-wv=list]')`);
+  await A.until(`!!document.querySelector('#camps .cc-wview-sel')`);
+  await A.pick(`document.querySelector('#camps .cc-wview-sel')`, 'list');
   await A.until(`!!document.querySelector('#camps .cc-tr[data-task="${task.id}"]')`);
   await A.tap(`document.querySelector('#camps .cc-tr[data-task="${task.id}"]')`);
   ok(await A.until(`!!document.querySelector('#sheet .td-mkwo')`), 'the task’s drawer has 📋 Make it a work order');
@@ -105,7 +105,7 @@ try {
   await A.tap(`document.querySelector('#sheet .td-status [data-st=done]')`);
   ok((await wait((y) => y.done)).done, 'now Done finishes it');
   await A.ev(`document.querySelector('#sheet [aria-label=Close]')?.click(); true`);
-  await A.tap(`document.querySelector('#camps .cc-wf [data-wf=all]')`);
+  await A.tap(`document.querySelector('#camps .cc-chip[data-chip=all]')`);
   ok(await A.until(`/WO-\\d+/.test(document.querySelector('#camps .cc-tr[data-task="${task.id}"] .wo-chip')?.textContent || '')`), 'its number shows on its row');
   // Print opens a paper work order.
   await A.ev(`(() => { window.__opened = null; const real = window.open; window.open = (...a) => { const w = real.apply(window, a); window.__opened = w; return w; }; return true; })()`);
