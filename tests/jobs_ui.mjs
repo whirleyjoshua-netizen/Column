@@ -144,6 +144,21 @@ try {
   ok(await A.until(`[...document.querySelectorAll('#tool .jb-row')].some((r) => r.textContent.includes('Quoted cleans') && r.textContent.includes('Version 1'))`), 'the quote-first flow publishes: ' + await A.ev(`document.querySelector('#tool .err')?.textContent || ''`));
   const qf = (await api('GET', '/job-flows')).flows.find((f) => f.name === 'Quoted cleans');
   ok(qf?.version?.body?.billing === 'quote' && qf.version.body.items?.[0]?.qty === 2 && qf.version.body.dueDays === 10, 'its version keeps billing, the default item and due days');
+  // Changing only the billing, the default items or the due days is a change not yet published.
+  await A.tap(TOOL(`.jb-row[data-flow="${qf.id}"] .jb-main`));
+  await A.until(`!!${TOOL('input[data-field=dueDays]')}`);
+  await A.type(TOOL('input[data-field=dueDays]'), '20');
+  await A.tap(TOOL('[data-act=save]'));
+  ok(await A.until(`[...document.querySelectorAll('#tool .jb-row')].some((r) => r.textContent.includes('Quoted cleans') && r.textContent.includes('changes not published'))`, 8000), 'a draft that changes only the due days says it has changes not published');
+  await api('PATCH', `/job-flows/${qf.id}`, { dueDays: 10 });
+  // Items: archive and bring back.
+  await A.tap(TOOL('[data-jb=items]'));
+  await A.until(`!!${TOOL(`.jb-row[data-item="${canId}"] [data-act=archive]`)}`);
+  await A.tap(TOOL(`.jb-row[data-item="${canId}"] [data-act=archive]`));
+  ok(await A.until(`!!document.querySelector('#tool .jb-gone .jb-row[data-item="${canId}"] [data-act=restore]')`), 'archiving an item moves it under Archived');
+  await A.ev(`document.querySelector('#tool .jb-gone').open = true; true`);
+  await A.tap(`document.querySelector('#tool .jb-gone .jb-row[data-item="${canId}"] [data-act=restore]')`);
+  ok(await A.until(`!!${TOOL(`.jb-row[data-item="${canId}"] [data-act=archive]`)} && !document.querySelector('#tool .jb-gone')`), 'and bringing it back puts it back');
   const qj = await api('POST', '/jobs', { flowId: qf.id, contactId: dana.id, values: { job: 'Quoted job' } });
   for (const st of qf.version.body.steps.slice(0, qf.version.body.steps.findIndex((x) => x.kind === 'quote'))) if (st.kind !== 'client') await api('POST', `/jobs/${qj.job.id}/steps/${st.id}/skip`, { reason: 'Test: straight to the quote' });
   await A.tap(TOOL('[data-jb=jobs]'));

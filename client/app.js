@@ -18516,7 +18516,9 @@
   }
 
   // Job Flows (owners and admins): the flows, a new one (blank or from a ready-made start), and the builder.
-  const jbChanged = (f) => !!f.version && JSON.stringify({ l: f.draft?.list, w: f.draft?.whoCreates, s: f.draft?.steps }) !== JSON.stringify({ l: f.version.body.list, w: f.version.body.whoCreates, s: f.version.body.steps });
+  // A draft that differs from the live version in anything a version keeps (billing, default items and due days too).
+  const jbBodyKey = (b) => JSON.stringify({ l: b?.list, w: b?.whoCreates || 'admins', s: b?.steps, b: b?.billing || 'hand', i: b?.items || [], d: b?.dueDays ?? null });
+  const jbChanged = (f) => !!f.version && jbBodyKey(f.draft) !== jbBodyKey(f.version.body);
   // Items: the business's price list (PHASE2.md §1.1): what a flow's default lines and quotes draw from.
   function jbItemsLoad(force) {
     if (JB.itemsBusy || (JB.items && !force)) return;
