@@ -73,8 +73,8 @@ only for a going run on a team that's online and not read-only (as today).
   invoice starts its own history.
 
 ### 3.1 Sending, exactly once (round 1, point 1)
-One function, `sendOnce(marker, fn)`, used by every Phase 3 message (steps, follow-ups, invoice emails, payment
-reminders):
+One function, `sendOnce(marker, fn)`, used by every Phase 3 message (steps, the first quote email on Send, follow-ups,
+invoice emails, payment reminders):
 1. Before anything goes out, write the marker as `{ state: 'sending', at }` and **save**.
 2. Call `tellCustomer`. It gives one of three outcomes:
    - **sent**: an email the provider accepted, or a text Twilio accepted → `{ state: 'sent', at, via }`.
@@ -179,4 +179,19 @@ flows (and with it retiring the team switches entirely).
    token send nothing; only a definite block lets a later tap try again (§3.3).
 2. **Deleted runs**: there's no route that deletes a run alone; the test removes one from the data through a
    test-only hook and checks `onFlowSince` still suppresses the team-wide messages (§4, §7).
+
+## 10. Checkpoint 2 (failing tests) notes
+- `tests/jobflow_auto.mjs` (5253); the run on `jobflows-money` is `phase3-checkpoint2.log` (63 fail; the passes are
+  setup, restarts and "nothing happens" checks that only mean something once the code exists).
+- Names the tests settle (additions to §6):
+  - `POST /api/jobs/:id/quote/send` (owners and admins): makes or reuses the share link, emails it once per link
+    (`g.quoteTold`), answers `{ run, url, told: { emailed, texted, reason } }`. Email tags: `quote-sent`,
+    `quote-follow-up`, `invoice`, `payment-reminder`, and today's `visit-reminder` and `review-request`.
+  - A step's `sent` is `{ at, unsure? }`; `note` says "May not have gone: …" when unsure; `waiting` is the reason it
+    waits; a skip by Kloomie has `skippedBy: 'kloomie'` with `skipReason`. The quote step's `followUp` is
+    `{ days, sentAt }`; the payment step's `reminders` is `[{ days, sentAt }]`.
+  - Test-only hooks (outside production): `JOBFLOWS_DAY_MS` (a shorter day for follow-ups and review delays),
+    `JOBFLOWS_MAIL_THROW` (the provider call throws), `JOBFLOWS_CRASH_AFTER_SEND` (the process exits right after a
+    send, before `sent` is saved), `JOBFLOWS_TEST_DROP_RUN` (enables `POST /api/jobs/:id/flow/test-drop`, which
+    removes a job's runs from the data). "Email off" is a server started without any mail setup.
 
