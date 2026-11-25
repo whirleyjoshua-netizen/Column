@@ -18246,10 +18246,11 @@
   // flows they run on (owners and admins build them), New job from a flow, and on a job's Overview the step it's at
   // with a Next button that opens the sheet that does it. The server decides every step; this only shows it. -----
   const JB = { tab: store.get('jbTab', 'jobs'), jobs: null, flows: null, items: null, q: '', flow: '', edit: null, loading: false, runs: new Map(), runBusy: new Set(), pick: {} };
-  const JB_KIND = { client: ['👤', 'Add client info'], details: ['📝', 'Add job info'], book: ['🗓', 'Book a visit'], work: ['🧰', 'Do the work'], signoff: ['✍️', 'Customer signs off'], quote: ['📨', 'Send the quote'], invoice: ['🧾', 'Send the invoice'], payment: ['💵', 'Collect payment'], tasks: ['☑️', 'Tasks'], custom: ['⭐', 'Your own step'] };
-  const JB_HOW = { client: 'Done when a client is on the job.', details: 'Done when the fields you pick are filled in.', book: 'Done when a visit is booked.', work: 'Done when the job’s checklist is ticked (and photos are on it, if you ask for them).', signoff: 'Done when the customer signs.', quote: 'Done when the customer accepts the quote. The accepted quote is the price.', invoice: 'Done when an invoice is sent.', payment: 'Done when the job’s invoices are paid in full.', tasks: 'Done when its tasks are done or skipped.', custom: 'Done when someone taps Done, after its checklist.' };
-  const JB_NEXT = { client: 'Add the client', details: 'Fill in the job', book: 'Book the visit', work: 'Open the checklist', signoff: 'Get it signed', quote: 'Send the quote', invoice: 'Make the invoice', payment: 'Record the payment', tasks: 'See the tasks', custom: 'Done' };
+  const JB_KIND = { client: ['👤', 'Add client info'], details: ['📝', 'Add job info'], book: ['🗓', 'Book a visit'], remind: ['🔔', 'Visit reminder'], omw: ['🚗', 'On my way'], work: ['🧰', 'Do the work'], signoff: ['✍️', 'Customer signs off'], quote: ['📨', 'Send the quote'], invoice: ['🧾', 'Send the invoice'], payment: ['💵', 'Collect payment'], review: ['⭐', 'Review request'], tasks: ['☑️', 'Tasks'], custom: ['⭐', 'Your own step'] };
+  const JB_HOW = { remind: 'Kloomie emails (or texts) the customer at 9am the day before the next visit.', omw: 'Done when someone taps On my way on the job’s visit.', review: 'Kloomie asks the customer for a review, a while after the step before it is done.', client: 'Done when a client is on the job.', details: 'Done when the fields you pick are filled in.', book: 'Done when a visit is booked.', work: 'Done when the job’s checklist is ticked (and photos are on it, if you ask for them).', signoff: 'Done when the customer signs.', quote: 'Done when the customer accepts the quote. The accepted quote is the price.', invoice: 'Done when an invoice is sent.', payment: 'Done when the job’s invoices are paid in full.', tasks: 'Done when its tasks are done or skipped.', custom: 'Done when someone taps Done, after its checklist.' };
+  const JB_NEXT = { omw: '🚗 On my way', client: 'Add the client', details: 'Fill in the job', book: 'Book the visit', work: 'Open the checklist', signoff: 'Get it signed', quote: 'Send the quote', invoice: 'Make the invoice', payment: 'Record the payment', tasks: 'See the tasks', custom: 'Done' };
   const JB_MONEY = ['quote', 'invoice', 'payment'];
+  const JB_AUTO = ['remind', 'review'];
   const JB_STATE = { done: 'done', skipped: 'skipped', current: 'next up', waiting: 'later' };
   const jbIsJobList = (t) => !!t && (!!t.trade || t.key === 'jobs');
   const jbLists = () => (S.projects || []).flatMap((p) => (p.types || []).filter(jbIsJobList).map((t) => ({ p, t })));
@@ -18346,6 +18347,7 @@
       case 'book': return visitSheet(p, t, r);
       case 'work': case 'signoff': case 'tasks': return jbTabTo(r, 'work');
       case 'quote': return jbQuote(p, r, s);
+      case 'omw': { await loadVisits(r, true); const today = todayKey(); const v = (PR.visits.get(r.id) || []).find((x) => !x.done && x.date >= today) || (PR.visits.get(r.id) || []).find((x) => !x.done); return v ? omwSheet(p, t, r, v) : toast('Book a visit first.'); }
       case 'invoice': return jbInvoice(r, s);
       case 'payment': return jbPay(r);
       case 'custom': return jbStep(r, s, 'done');
@@ -18354,13 +18356,16 @@
   // The Quote step: send the job's lines as a quote (the link is copied), copy the link again, or start a new quote.
   async function jbQuote(p, r, s) {
     if (!amAdmin()) return toast('Owners and admins send the quotes.');
-    if (s.quote?.url) { copyText(s.quote.url); return toast('Link copied. Send it to your customer: they accept or decline it there.'); }
+    if (s.quote?.url && s.told && s.told.state !== 'blocked') { copyText(s.quote.url); return toast('Link copied.'); }
     await prFresh(p, r);
-    const y = await api('POST', `/records/${r.id}/share`, {}).catch((e) => toast(e.message));
+    // The link, and the customer emailed (or texted) once per link (PHASE3.md §3.3); the link is copied either way.
+    const y = await api('POST', `/jobs/${r.id}/quote/send`).catch((e) => toast(e.message));
     if (!y) return;
-    prUpsertRecord(y);
-    if (y.share?.token) { copyText(`${location.origin}/q/${y.share.token}`); toast('Link copied. Send it to your customer: they accept or decline it there.'); }
-    jbFetchRun(r.id);
+    if (y.url) copyText(y.url);
+    const told = y.told;
+    toast(!told ? 'Link copied. Send it to your customer: they accept or decline it there.' : told.emailed || told.texted ? `Sent to the customer${told.emailed && told.texted ? ' by email and text' : told.texted ? ' by text' : ' by email'}. The link is copied too.` : `Link copied. Not emailed: ${told.reason || 'it couldn’t be sent'}.`);
+    JB.runs.set(r.id, y.run || null);
+    renderProjects();
   }
   async function jbRequote(r) {
     const y = await api('POST', `/jobs/${r.id}/requote`).catch((e) => toast(e.message));
@@ -18432,7 +18437,7 @@
   // and admins (their routes are theirs alone, whoever the step names).
   // An automatic invoice step has a button only when it waits for a person ($0, its owner can't send, refused);
   // held for an OK it waits for the approval alone (PHASE2.md §1.4).
-  const jbMayNext = (s) => s.state === 'current' && s.mayAct && (!['quote', 'invoice', 'payment'].includes(s.kind) || amAdmin()) && (!s.auto || ['zero', 'owner', 'refused'].includes(s.waiting));
+  const jbMayNext = (s) => s.state === 'current' && s.mayAct && !JB_AUTO.includes(s.kind) && (!['quote', 'invoice', 'payment'].includes(s.kind) || amAdmin()) && (!s.auto || ['zero', 'owner', 'refused'].includes(s.waiting));
   const JB_QUOTE = { draft: 'Not sent yet', sent: 'Sent, waiting for the customer', viewed: 'The customer opened it', accepted: 'Accepted', declined: 'Declined', changed: 'The lines changed after it was accepted', stale: 'Answered before this flow started' };
   const JB_WAIT = { approval: 'Waiting for an OK: it sends when an approver says yes.', zero: 'Made, but the total is $0. Fix its lines and send it.', owner: 'Whoever started this job can’t send invoices any more. Make and send it by hand.', refused: 'It couldn’t be sent.' };
   // On a job's Overview: its flow's steps in a row, the one picked (or next up) under it with its button.
@@ -18461,8 +18466,13 @@
       s.state === 'current' && run.current?.missing ? h('small', { class: 'jb-missing' }, run.current.missing) : null,
       s.kind === 'quote' && s.quote ? h('div', { class: 'jb-quote', 'data-quote': s.quote.status },
         h('small', {}, [JB_QUOTE[s.quote.status] || s.quote.status, s.quote.total != null ? money2(s.quote.total) : null, s.quote.answeredBy ? `by ${s.quote.answeredBy}` : null].filter(Boolean).join(' · ')),
-        s.quote.reason ? h('small', { class: 'muted' }, `“${s.quote.reason}”`) : null) : null,
-      s.auto ? h('small', { class: 'jb-auto', 'data-waiting': s.waiting || '' }, s.waiting ? JB_WAIT[s.waiting] + (s.reason ? ' ' + s.reason : '') : s.state === 'done' ? `Made and sent by itself${s.invoice ? ' (' + s.invoice + ')' : ''}.` : 'Runs by itself when the step before it is done.') : null,
+        s.quote.reason ? h('small', { class: 'muted' }, `“${s.quote.reason}”`) : null,
+        s.told ? h('small', { class: 'jb-told', 'data-told': s.told.state }, s.told.state === 'blocked' ? `Not emailed: ${s.told.reason}` : s.told.state === 'unsure' ? `The email may not have gone: ${s.told.reason || ''}` : s.told.state === 'sent' ? `Sent to the customer${s.told.via === 'text' ? ' by text' : s.told.via === 'both' ? ' by email and text' : ' by email'}` : 'Sending…') : null) : null,
+      JB_AUTO.includes(s.kind) ? h('small', { class: 'jb-auto', 'data-waiting': s.state === 'current' && s.waiting ? 'yes' : '', 'data-msg': s.sent ? (s.sent.unsure ? 'unsure' : 'sent') : s.skippedBy === 'kloomie' ? 'skipped' : s.state },
+        s.skippedBy === 'kloomie' ? `Kloomie skipped it: ${s.skipReason || ''}` : s.sent?.unsure ? s.note || 'May not have gone.' : s.sent ? `Sent${s.sentTo ? (s.sentTo === 'both' ? ' by email and text' : s.sentTo === 'text' ? ' by text' : ' by email') : ''} ${ago(s.sent.at)}.` : s.state === 'current' ? s.waiting || 'Kloomie sends it by itself.' : 'Kloomie sends it by itself when the job gets here.') : null,
+      s.kind === 'quote' && s.followUp ? h('small', { class: 'muted', 'data-followup': s.followUp.sentAt ? 'sent' : '' }, s.followUp.sentAt ? `Follow-up sent ${ago(s.followUp.sentAt)}` : `Follows up after ${plural(s.followUp.days, 'day')} without an answer`) : null,
+      s.kind === 'payment' && s.reminders?.length ? h('small', { class: 'muted', 'data-reminders': s.reminders.filter((x) => x.sentAt).length }, 'Reminders: ' + s.reminders.map((x) => `${plural(x.days, 'day')} late${x.sentAt ? ' ✓' : x.passed ? ' (passed)' : ''}`).join(', ')) : null,
+      s.auto && !JB_AUTO.includes(s.kind) ? h('small', { class: 'jb-auto', 'data-waiting': s.waiting || '' }, s.waiting ? JB_WAIT[s.waiting] + (s.reason ? ' ' + s.reason : '') : s.state === 'done' ? `Made and sent by itself${s.invoice ? ' (' + s.invoice + ')' : ''}.` : 'Runs by itself when the step before it is done.') : null,
       s.kind === 'custom' && s.checklist?.length ? h('div', { class: 'jb-check' }, s.checklist.map((c, i) => {
         const box = h('input', { type: 'checkbox', checked: c.done, disabled: !s.mayAct || (c.done && s.state === 'done' && !admin) });
         box.addEventListener('change', () => jbStep(r, s, 'check', { item: i, done: box.checked }));
@@ -18654,8 +18664,8 @@
         ...roles.map((r) => h('option', { value: 'role:' + r.id, selected: wv === 'role:' + r.id }, `The ${r.name} role`)), ...members.map((m) => h('option', { value: 'member:' + m.id, selected: wv === 'member:' + m.id }, m.name)));
       wsel.addEventListener('change', () => { const [type, id] = wsel.value.split(':'); s.who = id ? { type, id } : { type }; });
       // Money steps are for owners and admins, whatever else (PHASE2.md §1.2).
-      if (JB_MONEY.includes(s.kind)) s.who = { type: 'admins' };
-      const whoEl = JB_MONEY.includes(s.kind) ? h('small', { class: 'muted jb-who-fixed', 'data-field': 'who' }, 'For owners and admins') : wsel;
+      if (JB_MONEY.includes(s.kind) || JB_AUTO.includes(s.kind)) s.who = { type: 'admins' };
+      const whoEl = JB_AUTO.includes(s.kind) ? h('small', { class: 'muted jb-who-fixed', 'data-field': 'who' }, '🤖 Done by Kloomie') : JB_MONEY.includes(s.kind) ? h('small', { class: 'muted jb-who-fixed', 'data-field': 'who' }, 'For owners and admins') : wsel;
       const skip = h('input', { type: 'checkbox', checked: !!s.canSkip });
       skip.addEventListener('change', () => { s.canSkip = skip.checked; });
       s.settings ||= {};
@@ -18671,6 +18681,30 @@
         const k = h('select', { 'aria-label': 'Kind of visit' }, h('option', { value: '' }, 'Any visit'), ...VISIT_KINDS.map((x) => h('option', { value: x, selected: s.settings.visitKind === x }, x)));
         k.addEventListener('change', () => { s.settings = k.value ? { visitKind: k.value } : {}; });
         extra = h('label', {}, 'Kind of visit', k);
+      } else if (s.kind === 'remind' || s.kind === 'omw') {
+        const k = h('select', { 'aria-label': 'Kind of visit', 'data-field': 'visitKind' }, h('option', { value: '' }, 'The next visit, any kind'), ...VISIT_KINDS.map((x) => h('option', { value: x, selected: s.settings.visitKind === x }, x)));
+        k.addEventListener('change', () => { s.settings = k.value ? { visitKind: k.value } : {}; });
+        extra = h('label', {}, 'For which visit', k);
+      } else if (s.kind === 'review') {
+        const d = h('input', { type: 'number', min: 0, max: 168, step: 1, value: s.settings.delayHours ?? 1, 'data-field': 'delayHours' });
+        d.addEventListener('input', () => { s.settings.delayHours = d.value === '' ? undefined : Number(d.value); });
+        const u = h('input', { type: 'url', value: s.settings.url || '', placeholder: 'https://g.page/r/… (blank: the team’s review link)', 'data-field': 'url' });
+        u.addEventListener('input', () => { if (u.value.trim()) s.settings.url = u.value.trim(); else delete s.settings.url; });
+        extra = h('div', { class: 'row2' }, h('label', {}, 'Hours after the step before', d), h('label', {}, 'Review link', u));
+      } else if (s.kind === 'quote') {
+        const em = h('input', { type: 'checkbox', checked: s.settings.email !== false, 'data-field': 'email' });
+        em.addEventListener('change', () => { s.settings.email = em.checked; });
+        const fu = h('input', { type: 'number', min: 0, max: 30, step: 1, value: s.settings.followUpDays || 0, 'data-field': 'followUpDays' });
+        fu.addEventListener('input', () => { s.settings.followUpDays = Number(fu.value) || 0; });
+        extra = h('div', {}, h('label', { class: 'pick' }, em, 'Email the quote to the customer when it’s sent'), h('label', {}, 'Follow up after (days without an answer; 0 = never)', fu));
+      } else if (s.kind === 'invoice' && E.billing === 'auto') {
+        const em = h('input', { type: 'checkbox', checked: s.settings.email !== false, 'data-field': 'email' });
+        em.addEventListener('change', () => { s.settings.email = em.checked; });
+        extra = h('label', { class: 'pick' }, em, 'Email it to the customer, with the pay link');
+      } else if (s.kind === 'payment') {
+        const rm = h('input', { value: (s.settings.reminders || []).join(', '), placeholder: 'e.g. 3, 7, 14 (blank: none)', 'data-field': 'reminders' });
+        rm.addEventListener('input', () => { s.settings.reminders = rm.value.split(/[,\s]+/).filter(Boolean).map(Number); });
+        extra = h('label', {}, 'Reminders, days after it’s due (up to 3)', rm);
       } else if (s.kind === 'work') {
         const b = h('input', { type: 'checkbox', checked: !!s.settings.photos });
         b.addEventListener('change', () => { s.settings = b.checked ? { photos: true } : {}; });
@@ -18695,7 +18729,7 @@
         nm, h('div', { class: 'row2' }, whoEl, st), extra,
         s.kind === 'invoice' && E.billing === 'auto' ? h('small', { class: 'jb-auto' }, 'Automatic: made from the job’s lines and sent by itself when the step before it is done.') : null, h('label', { class: 'pick' }, skip, 'Whoever does it may skip it (with a reason)'));
     };
-    const add = h('button', { class: 'btn', 'data-act': 'add-step', onclick: (e) => openMenu(e.currentTarget, Object.entries(JB_KIND).filter(([k]) => k !== 'quote' || (E.billing === 'quote' && !E.steps.some((x) => x.kind === 'quote'))).map(([k, [ic, l]]) => ({ label: `${ic} ${l}`, run: () => { E.steps.push({ kind: k, name: l, stage: null, who: { type: JB_MONEY.includes(k) ? 'admins' : 'anyone' }, canSkip: false, settings: k === 'tasks' ? { tasks: [] } : {} }); redraw(); } }))) }, '+ Add a step');
+    const add = h('button', { class: 'btn', 'data-act': 'add-step', onclick: (e) => openMenu(e.currentTarget, Object.entries(JB_KIND).filter(([k]) => k !== 'quote' || (E.billing === 'quote' && !E.steps.some((x) => x.kind === 'quote'))).map(([k, [ic, l]]) => ({ label: `${ic} ${l}`, run: () => { E.steps.push({ kind: k, name: l, stage: null, who: { type: JB_MONEY.includes(k) || JB_AUTO.includes(k) ? 'admins' : 'anyone' }, canSkip: false, settings: k === 'tasks' ? { tasks: [] } : k === 'review' ? { delayHours: 1 } : {} }); redraw(); } }))) }, '+ Add a step');
     // Billing: by hand, quote first (puts a Send the quote step before the invoice), or automatic.
     const bill = h('select', { 'aria-label': 'Billing', 'data-field': 'billing' }, [['hand', 'By hand: an owner or admin sends the invoice'], ['quote', 'Quote first: the customer accepts a quote, then the invoice'], ['auto', 'Automatic: the invoice sends itself after the work']].map(([k, l]) => h('option', { value: k, selected: E.billing === k }, l)));
     bill.addEventListener('change', () => {

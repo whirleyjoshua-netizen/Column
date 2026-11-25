@@ -195,3 +195,21 @@ flows (and with it retiring the team switches entirely).
     send, before `sent` is saved), `JOBFLOWS_TEST_DROP_RUN` (enables `POST /api/jobs/:id/flow/test-drop`, which
     removes a job's runs from the data). "Email off" is a server started without any mail setup.
 
+## 11. Client (checkpoint 4)
+- Builder: + Add a step offers Visit reminder 🔔, On my way 🚗 and Review request ⭐. Visit reminder and Review request
+  show "🤖 Done by Kloomie" in place of the who picker (saved for admins; the server ignores who for them). Settings:
+  which visit (reminder, On my way), hours after the step before and the review link (review), Email the quote and
+  Follow up after N days (quote), Email it with the pay link (the automatic invoice), Reminders N days after due
+  (payment).
+- Run card: a step Kloomie does never has a button; it says "Sent by email/text <when>", "May not have gone: …",
+  "Kloomie skipped it: <reason>", or what it waits for. The quote step says whether the customer was sent it
+  ("Sent to the customer by email", "Not emailed: <reason>", "The email may not have gone"), and when the follow-up
+  went; the payment step lists its reminders (✓ sent, passed). On my way's Next opens the On my way sheet for the
+  job's next visit.
+- Send the quote calls `POST /jobs/:id/quote/send`: the link is copied, and the toast says whether the customer was
+  emailed or texted, or why not. Once told, the button copies the link only.
+- tests/jobs_ui.mjs adds: the Review request step in the builder (done by Kloomie, its link), the quote's email and
+  follow-up and the payment step's reminders settings, the menu offering Visit reminder and On my way, version 2 kept
+  with them; a customer Kloomie can't reach shows "Kloomie skipped it" with the reason; one it can shows "Sent by
+  email" with no button. These fail on 2bf9919.
+

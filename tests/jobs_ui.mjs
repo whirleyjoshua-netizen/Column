@@ -17,7 +17,7 @@ const ok = (c, msg) => { console.log((c ? 'PASS ' : 'FAIL ') + msg); if (!c) fai
 try { (await import('node:child_process')).execSync(`pkill -f remote-debugging-port=${CDP}`); await sleep(400); } catch {}
 FS.rmSync(`${S}/dk/chrome-jobsui`, { recursive: true, force: true });
 const chrome = spawn('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', ['--headless=new', `--remote-debugging-port=${CDP}`, `--user-data-dir=${S}/dk/chrome-jobsui`, '--no-first-run', '--window-size=1400,900', 'about:blank'], { stdio: 'ignore' });
-const srv = spawn('node', ['index.js'], { cwd: new URL('../server', import.meta.url).pathname, env: { ...process.env, SKIP_SETUP: '1', PORT: String(PORT), DATA_DIR: DIR, MAIL_OUTBOX: '1', DATABASE_URL: '' }, stdio: ['ignore', 'pipe', 'pipe'] });
+const srv = spawn('node', ['index.js'], { cwd: new URL('../server', import.meta.url).pathname, env: { ...process.env, SKIP_SETUP: '1', PORT: String(PORT), DATA_DIR: DIR, MAIL_OUTBOX: '1', DATABASE_URL: '', CUSTMSG_TICK_MS: '300' }, stdio: ['ignore', 'pipe', 'pipe'] });
 srv.log = ''; srv.stdout.on('data', (d) => (srv.log += d)); srv.stderr.on('data', (d) => (srv.log += d));
 async function tab(url) {
   let t;
@@ -187,6 +187,40 @@ try {
   ok(await A.until(`!!document.querySelector('#tool .fin-q-f')`), 'Quotes in Jobs is the team’s quotes list');
   await A.tap(TOOL('[data-jb=invoices]'));
   ok(await A.until(`[...document.querySelectorAll('#tool .fin-inv')].some((r) => r.textContent.includes('INV-'))`, 8000), 'Invoices in Jobs lists the invoice the flow sent');
+  await A.tap(TOOL('[data-jb=jobs]'));
+
+  // Phase 3 (docs/jobflows/PHASE3.md): steps Kloomie does by itself.
+  await A.tap(TOOL('[data-jb=flows]'));
+  await A.until(`!!${TOOL(`.jb-row[data-flow="${qf.id}"] .jb-main`)}`);
+  await A.tap(TOOL(`.jb-row[data-flow="${qf.id}"] .jb-main`));
+  await A.until(`!!${TOOL('[data-act=add-step]')}`);
+  await A.tap(TOOL('[data-act=add-step]'));
+  await A.tap(`[...document.querySelectorAll('#menu button')].find((b) => b.textContent.includes('Review request'))`);
+  ok(await A.until(`!!${TOOL('.jb-scard[data-kind=review] input[data-field=url]')} && ${TOOL('.jb-scard[data-kind=review] [data-field=who]')}.textContent.includes('Done by Kloomie')`), 'a Review request step: done by Kloomie, with its delay and link');
+  await A.type(TOOL('.jb-scard[data-kind=review] input[data-field=url]'), 'https://g.page/r/ours');
+  await A.type(TOOL('.jb-scard[data-kind=quote] input[data-field=followUpDays]'), '3');
+  ok(await A.ev(`!!${TOOL('.jb-scard[data-kind=quote] input[data-field=email]')}?.checked && !!${TOOL('.jb-scard[data-kind=payment] input[data-field=reminders]')}`), 'the quote step can email and follow up; the payment step takes reminders');
+  await A.tap(TOOL('[data-act=add-step]'));
+  ok(await A.ev(`['Visit reminder', 'On my way'].every((l) => [...document.querySelectorAll('#menu button')].some((b) => b.textContent.includes(l)))`), 'the step menu offers Visit reminder and On my way');
+  await A.ev(`document.body.click(); true`);
+  await A.tap(TOOL('[data-act=publish]'));
+  ok(await A.until(`[...document.querySelectorAll('#tool .jb-row')].some((r) => r.textContent.includes('Quoted cleans') && r.textContent.includes('Version 2'))`), 'it publishes as version 2: ' + await A.ev(`document.querySelector('#tool .err')?.textContent || ''`));
+  const v2 = (await api('GET', '/job-flows')).flows.find((f) => f.name === 'Quoted cleans')?.version?.body;
+  ok(v2?.steps?.find((x) => x.kind === 'review')?.settings?.url === 'https://g.page/r/ours' && v2?.steps?.find((x) => x.kind === 'quote')?.settings?.followUpDays === 3, 'the version keeps the review link and the follow-up');
+  const rf = await api('POST', '/job-flows', { name: 'Thanks', list: { projectId: p.id, typeId: tp.id }, steps: [{ kind: 'client', name: 'Client' }, { kind: 'review', name: 'Ask for a review', settings: { delayHours: 0, url: 'https://g.page/r/ours' } }] });
+  await api('POST', `/job-flows/${rf.id}/publish`);
+  const noMail = await api('POST', '/jobs', { flowId: rf.id, contactId: dana.id, values: { job: 'Dana thanks' } });
+  await openJobIn(noMail.job.id);
+  await A.tap(`[...document.querySelectorAll('#projects .jb-step')].find((x) => x.textContent.includes('Ask for a review'))`);
+  ok(await A.until(`document.querySelector('#projects .jb-auto')?.dataset.msg === 'skipped' && /Kloomie skipped it: .*no email or text number/.test(document.querySelector('#projects .jb-auto').textContent)`, 8000), 'a customer Kloomie can’t reach: “Kloomie skipped it”, saying why');
+  const mailer = await api('POST', '/contacts', { name: 'Mo Mail', email: `mo${t}@x.test` });
+  const withMail = await api('POST', '/jobs', { flowId: rf.id, contactId: (mailer.contact || mailer).id, values: { job: 'Mo thanks' } });
+  await openJobIn(withMail.job.id);
+  await A.tap(`[...document.querySelectorAll('#projects .jb-step')].find((x) => x.textContent.includes('Ask for a review'))`);
+  ok(await A.until(`document.querySelector('#projects .jb-auto')?.dataset.msg === 'sent' && /Sent by email/.test(document.querySelector('#projects .jb-auto').textContent)`, 8000) && await A.ev(`!document.querySelector('#projects .jb-detail [data-act=next]')`), 'one it can reach: “Sent by email”, and no button on a step Kloomie does');
+  await shot('8-auto');
+  await A.ev(`document.querySelector('#workTabs [data-tab=jobs]').click(); true`);
+  await A.until(`!!document.querySelector('#tool [data-jb=jobs]')`, 8000);
   await A.tap(TOOL('[data-jb=jobs]'));
 
   // New job from a flow; it opens on its Overview with its steps.
