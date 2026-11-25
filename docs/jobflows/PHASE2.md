@@ -1,6 +1,6 @@
 # Job Flows — Phase 2 (Money) contracts, checkpoint 1
 
-Status: draft for review, 2026-11-25. No code yet. The product spec's build order puts Money second: "Jobs → Items
+Status: round 2 for review, 2026-11-25 (round 1 review answered in §8). No code yet. The product spec's build order puts Money second: "Jobs → Items
 for the business, Quotes and Invoices sub-tabs, and the billing choice per flow (quote first, automatic, by hand)".
 Phase 1 (CONTRACTS.md) stays as agreed; this adds to it on branch `jobflows-money` (cut from `jobflows`, so Phase 1
 can ship on its own).
@@ -26,88 +26,137 @@ Nothing moves out of a Board, and no price list is deleted.
   fromRecordId: string|null (the board price-list record it was copied from), createdBy, createdAt, updatedAt }
 ```
 - Limit 2,000 a team (archived count). Names need not be unique.
-- Archived items aren't offered for new lines; lines already using one keep their copy.
+- Archived items aren't offered for new lines; lines already using one keep their copy (a line is a copy, never a
+  live link).
 - Never stored in a version: a flow's default items name item ids, and the price is read when the job's lines are
   filled (§2.2).
 
 ### 1.2 Flow Body, new fields (versioned like the rest; a version from Phase 1 reads as the defaults)
 ```
 billing: 'hand' | 'quote' | 'auto'          // default 'hand'
-items:   [{ itemId, qty (0 < qty ≤ 1e6) }]   // ≤ 50, default []
-dueDays: integer 0–120 | null                // invoice due date, days after it's made; null = today's 14
+items:   [{ itemId, qty (0 < qty ≤ 1e6) }]   // ≤ 50, an itemId at most once, default []
+dueDays: integer 0–120 | null                // null = 14, today's default
 ```
 Publish validation (400 with a plain message; a draft may be saved in any state):
-- `quote` billing needs exactly one `quote` step, before the first `invoice` step.
-- `auto` billing needs an `invoice` step; it has no `quote` step.
-- `hand` billing has no `quote` step.
-- Every `items[].itemId` is a live (not archived) item of the team.
-- `invoice` and `payment` steps keep `who = admins` whatever billing is (§4).
+- `quote` billing: exactly one `quote` step and at least one `invoice` step, the quote step before the first invoice
+  step. Invoice steps stay by hand (an owner or admin makes and sends it after acceptance).
+- `auto` billing: exactly one `invoice` step, no `quote` step. That one step runs by itself (§1.4).
+- `hand` billing: no `quote` step (any number of invoice steps, as in Phase 1).
+- `quote`, `invoice` and `payment` steps must have `who = { type: 'admins' }` (400 otherwise); the builder shows
+  "Owners and admins" and doesn't offer a choice. The server checks it again on every action (§4), so an old draft
+  can't get round it.
+- Every `items[].itemId` is a live (not archived) item of the team; an itemId appears once.
+- `dueDays` sets the due date of every invoice made from the run (by hand from the step, or automatically):
+  `issued + dueDays` days, with today's convention (`teamDay` of the team's time zone, then `addDays`). null = 14.
 
 ### 1.3 New step kind: `quote`
 
 | kind | What the worker sees | doneWhen (server-evaluated) | how |
 | --- | --- | --- | --- |
-| `quote` | Send the quote (the job's lines, then the existing share link) | the job has `rec.answer.act === 'accept'` with `rec.answer.at` ≥ the run's start | tap (admins) |
+| `quote` | Send the quote (the job's lines, then the existing share link) | see below | tap (admins) |
 
-- Declined: the step stays open, and shows "Declined by <name>: <reason>".
-- **New quote** (`POST /api/jobs/:recId/requote`, admins, only while the run's quote step is open): writes the old
-  answer to the job's timeline, sets `rec.answer = null`, turns the old link off (`rec.share = null`), and a new
-  share makes a new token. The old link answers "Quote not available".
-- The accepted lines are the job's lines: the customer can only accept when `linesKey(lines) === v` (as today), so
-  at the moment of acceptance the two are identical. Lines changed after acceptance are the admin's change (spec:
-  "an admin can still change a job's lines before its invoice is made") and the invoice uses the job's lines then.
-- `invoice` and `payment` keep their Phase 1 meaning.
+**The accepted quote is the price.** The quote step is met when all of these hold:
+- `rec.answer.act === 'accept'` and `rec.answer.at` ≥ the run's start (an acceptance from before the run never
+  counts), and
+- the job's lines still match what was accepted: `linesKey(job lines) === linesKey(rec.answer.lines)`, **or** the run
+  already has a non-void invoice made after that acceptance (once billed, later line edits don't reopen it).
+
+So an admin who changes the lines after acceptance reopens the quote step (the run card says "The lines changed
+after <name> accepted. Send a new quote."), and the invoice step can't be reached until the new lines are accepted.
+The audited way past it is Skip with a reason (admins), which Phase 1 already records (who, when, why).
+
+- Declined: the step stays open and shows "Declined by <name>: <reason>".
+- **New quote** (`POST /api/jobs/:recId/requote`, admins): allowed while the run has no non-void invoice, accepted
+  or not. It writes the old answer to the job's timeline, sets `rec.answer = null`, turns the old link off
+  (`rec.share = null`, so the old token answers "Quote not available"), and the status back to draft. The next
+  share makes a new token. After an invoice exists: 409 "Void the invoice first".
+- No Done button on a quote step: the generic Done route answers 400 for it. Only a qualifying acceptance or an
+  admin's Skip finishes it.
+- `invoice` and `payment` keep their Phase 1 meaning (the invoice is made from the job's lines, which, with quote
+  billing, are the accepted lines unless the step was skipped).
 
 ### 1.4 `auto` billing: the Invoice step runs by itself
-With `billing: 'auto'`, the flow's (first) `invoice` step has `how: 'auto'`. When the sweep finds it the run's
-current step (every step before it done or skipped) with no bound invoice, or only a voided one:
-1. Make the invoice from the job's lines (`newInvoice`, due `dueDays`), bound to the step (`g.invoiceId`), as the
-   run's owner (`by` = their name), and emit `invoice.created`.
-2. Send it: the same code path as `POST /api/invoices/:id/send`, including the rules `hold`. Held → the invoice
-   stays a draft, and the step shows "Waiting for approval" until the approval sends it.
-3. If it can't send (total $0, or held), it stays a draft bound to the step, and the step shows why and offers the
-   hand button to owners and admins. The sweep never makes a second one for the same cycle: `g.autoCycle` records the
-   cycle it was made in.
+With `billing: 'auto'`, the flow's one `invoice` step has `how: 'auto'`. Its state lives on the goal as
+`g.auto = { state, invoiceId, at }`, `state` one of `made`, `sent`, `held`, `zero`, `owner`.
 
-"Send" here means what it means today: the link is made, the job moves to Invoiced, `invoice.sent` goes off. An
-email or text to the customer is Phase 3 (customer messages).
+When the sweep finds it the run's current step (every step before it done or skipped):
+1. **Owner check.** If the run's owner is no longer an owner or admin of the team (demoted or gone), nothing is
+   made: `state = 'owner'`, and the step offers owners and admins the ordinary hand button (Phase 1's invoice
+   sheet). Nothing is ever made or sent as a member.
+2. **Make, once.** If the step has no bound non-void invoice: make it from the job's lines (`newInvoice`, due per
+   `dueDays`), bind it (`g.invoiceId`), set `g.auto = { state: 'made', invoiceId }`, emit `invoice.created`, and
+   `save()` **before** trying to send. A step with a bound non-void invoice never gets another, so repeated sweeps,
+   reopened earlier steps and a restart between making and sending all find and reuse the same invoice. Voiding it
+   (an admin's act) unbinds it, and the next sweep makes exactly one replacement.
+3. **Send.** For a bound invoice in `made`: total $0 → `state = 'zero'`, stays a draft. Otherwise call the same send
+   function the route uses, as the run's owner, with the same rules `hold` (summary, target, and a replayable
+   `POST /api/invoices/:id/send`). Held → `state = 'held'`, stays a draft. Approval replays that send as the owner
+   (rules.js already replays as the person who asked); if the owner can't send any more, the approval fails with
+   its reason, as any replay does. Sent → `state = 'sent'`, `invoice.sent` once, the step is met as in Phase 1.
+4. **Waiting states never retry by themselves.** `held` waits for the approval; the sweep doesn't send again and
+   no hand button bypasses it (the run card shows "Waiting for approval" and the approval's link, nothing else).
+   `zero` waits for an admin: edit the invoice's lines (existing invoice PATCH) and press Send, which is the
+   existing send route with the same `hold`. Sending by hand from `zero` or `owner` is the ordinary route; nothing
+   skips the rules.
+
+"Send" means what it means today: the link is made, the job moves to Invoiced, `invoice.sent` goes off. An email or
+text to the customer is Phase 3 (customer messages).
 
 ## 2. Transitions
 
 ### 2.1 Items routes (`/api/job-items`)
 - `GET` admins: every item, archived included, with `cost`. Members: 403 (Items is owners and admins, per the spec).
-- `POST` admins: one item. `PATCH /:id` admins: any field; a price change fires the existing `price.changed`
-  automation trigger (with how many waiting quotes use it). `POST /:id/archive`, `POST /:id/restore`. No hard delete.
-- `POST /api/job-items/import { projectId }` admins: copies that board's price list (a board they can see) into
-  Items; a record already copied (`fromRecordId`) is skipped, so running it twice adds nothing. Answers
-  `{ added, skipped }`.
-- `priceListFor()` lists live Items first (`id: 'item:<id>'`, `source: 'items'`, `board: 'Items'`; members never get
-  cost), and `priceNow('item:<id>')` reads the item's price, so Finance → Quotes flags a waiting quote whose item
-  price changed, as it does for board items now.
+- `POST` admins: one item. `PATCH /:id` admins: any field. `POST /:id/archive`, `POST /:id/restore`. No hard delete.
+- `price.changed` fires only when `price` actually changes (not description, unit, cost, taxable, archive), with
+  today's payload: `{ item, was, now, quotes, who, whoId }`. `quotes` counts waiting quotes: records with a live
+  link (`rec.share`), no answer, quote status pending, and a line whose `from` is `item:<id>`. No customer or quote
+  detail goes in the event; automations are owners' and admins' (as today).
+- `POST /api/job-items/import { projectId }` admins: a one-time copy of that board's price list (a board they can
+  see; 404 otherwise). A record already copied (`fromRecordId`) is skipped even if it changed since; it's a
+  snapshot, never a sync. A row with no name is skipped and counted; a missing or unreadable price imports as $0;
+  `taxable` defaults to true. Answers `{ added, skipped, noName }`.
+- `priceListFor()` lists live Items first **for owners and admins only** (`id: 'item:<id>'`, `source: 'items'`,
+  `board: 'Items'`, with cost). Members' `/api/price-list` is unchanged: no Items. `priceNow('item:<id>')` reads the
+  item's price, so Finance → Quotes flags a waiting quote whose item price changed, as for board items now.
 
 ### 2.2 Default lines
 - Starting a job on a flow with `items` (and on attach): if the job's items field is empty, it's filled with one row
-  per default item: `{ desc: name, qty, unit, price, taxable, cost, from: 'item:<id>' }` (`cost` is kept on the row as
-  today; members never see it, as today). A job whose lines aren't empty is left alone.
+  per default item: `{ desc: name, qty, unit, price, taxable, from: 'item:<id>' }`, the list's `taxRate` 0. **No
+  `cost` on the row**: job records reach members who can see the board (today's behavior, §4), so defaults never add
+  cost to them.
+- Empty means: the value is missing, null, not an object, `rows` isn't an array, or no row has a description or a
+  price. Anything else is not empty and is never overwritten.
+- A default item that is archived or gone: start and attach answer 400 "<flow> uses <item>, which was archived.
+  Update the flow and publish it again." Nothing is made. (Publish checks it too, but an item can be archived
+  after publishing.)
 - A job list with no `items` field: the defaults are dropped silently (the invoice falls back to the job's value as
   today); the builder warns at publish ("This list has no line items, so the default items won't be used").
-- Done inside `buildRun` (writes nothing until commit), so a failed start still keeps nothing (§9.1, point 6).
+- Done inside `buildRun` (writes nothing until commit), so a failed start or a failed attach leaves the job's lines
+  as they were and no run (CONTRACTS §9.1, point 6).
 
 ### 2.3 Quote step routes
-- Sending: the existing `POST /api/projects/:p/records/:r/share` (admins only when the job is on a run with an open
-  quote step; it's open to editors today for other lists, and stays so for them).
-- Done is never marked by hand: no Done button on a quote step; Skip with a reason (admins) as for any step.
+- Sending: the existing `POST /api/projects/:p/records/:r/share`. For a job on an active run whose flow has a quote
+  step, share and unshare are owners' and admins' (403 for members); everywhere else it's as today.
+- Done: 400 on a quote step. Skip: admins only, with a reason (members 403, whatever `canSkip` says).
 
 ## 3. Reads
-- The run's step for `quote` carries `quote: { status: 'draft'|'sent'|'viewed'|'accepted'|'declined', total,
-  answeredBy, reason, url }` for admins; members see only `status` (no money, no link).
-- The `invoice` step carries `auto: true` and, when it waits, `waiting: 'approval' | 'zero' | null`.
-- `GET /api/jobs` rows gain `total` (cents, the job's lines) for admins only.
+- The run's step for `quote` carries, for admins, `quote: { status: 'draft'|'sent'|'viewed'|'accepted'|'declined'|
+  'changed', total, answeredBy, reason, url, mayRequote }` ('changed' = accepted, but the lines changed since).
+  Members get only `quote: { status }`.
+- The `invoice` step carries `auto: true` and, for admins, `waiting: 'approval' | 'zero' | 'owner' | null` and the
+  bound invoice's number. Members get `auto: true` only.
+- `GET /api/jobs` rows gain `total` (cents) for admins only.
 
 ## 4. Permissions
 - Items: owners and admins on every route, the public API included (no public Items API in Phase 2).
-- Quote, invoice and payment steps: their buttons are for owners and admins only (Phase 1 already does this for
-  invoice and payment); a member never sees a price, a total, a quote link or cost in any Jobs read.
+- Quote, invoice and payment steps: every action on them (send, requote, skip, invoice, payment) is owners' and
+  admins' on the server, whatever the step's saved `who`.
+- **The price boundary, exactly.** Items and their prices: owners and admins only, on every route. The Jobs reads
+  (`GET /api/jobs`, the run and its steps, the quote step) never give a member a price, total, cost or quote link.
+  What doesn't change in Phase 2: a job record read through the existing board and record routes (and their
+  broadcasts) carries its price lines to anyone who can see that board, as it does now, and the board price list
+  and Inventory in `/api/price-list` stay as they are. Hiding a job's lines from members on the board is a change
+  to boards in general, so it's for the owner to decide, not part of this phase (§8, point 6).
 - `requote` and the auto invoice are checked on the server; the auto invoice runs as the run's owner, and if the
   owner is no longer an admin it waits for an admin to press the hand button (it never sends as a member).
 
@@ -123,8 +172,8 @@ email or text to the customer is Phase 3 (customer messages).
 
 | Test (port) | Covers |
 | --- | --- |
-| `jobitems.mjs` (5251) | CRUD, members 403 on every route, limits and validation, archive/restore, import twice adds once (and only from a board the admin sees), `price.changed` on a price edit, `priceListFor` order and no cost for members, saved across a restart, other teams nothing |
-| `jobflow_money.mjs` (5252) | billing validation at publish (all six rules); default lines fill an empty job and leave a filled one; dropped on a list with no items field; a failed start keeps no lines; the quote step: done only by an acceptance after the run started (an old acceptance doesn't count), decline keeps it open, requote clears the answer and kills the old link, members get no quote money; auto billing: the invoice is made and sent once when its step comes up, bound to the step, `invoice.sent` once; voiding it makes one more (and only one) on the next sweep; a `hold` rule keeps it a draft and approval sends it; a $0 job makes a draft and waits; a run whose owner was made a member waits; reopening the work step doesn't make a second invoice in the same cycle; a Phase 1 version (no billing) behaves exactly as before |
+| `jobitems.mjs` (5251) | CRUD, members 403 on every route, limits and validation, archive/restore, import is a snapshot (twice adds once; a changed source isn't re-copied; no-name rows counted; only from a board the admin sees), `price.changed` only on a price change (not description, unit, cost, taxable, archive) with the waiting-quote count, `/api/price-list` has Items first for admins and none for members, a member gets no item price from any Jobs read, saved across a restart, other teams nothing |
+| `jobflow_money.mjs` (5252) | billing validation at publish (every rule in §1.2, including `who = admins` on quote, invoice and payment, duplicate item ids, more than one invoice step with auto); `dueDays` on a hand-made and an auto-made invoice, null = 14; default lines fill each kind of empty value and leave a filled one, carry no cost, are dropped on a list with no items field; an archived or missing default item makes start and attach 400 with nothing made; a failed start and a failed attach leave the job's lines and runs as they were; the quote step: an acceptance from before the run doesn't count, decline keeps it open, a line change after acceptance reopens it (and the invoice step can't be reached) until the new lines are accepted, but not once an invoice exists; requote before and after acceptance, 409 once invoiced, the old link dead; Done 400 on a quote step; a member can't skip, share or requote it even with `canSkip`; members' run and list responses carry no price, total, cost or link; auto billing: made and sent once when its step comes up, bound, `invoice.sent` once; a restart between making and sending reuses the same invoice; reopening an earlier step makes no second one; voiding makes exactly one replacement; a `hold` keeps it a draft, no retry, approval sends it; $0 waits as a draft, editing it and sending by hand goes through the same hold; an owner made a member, or gone, gets nothing made and the hand button for admins; a Phase 1 version (no billing) behaves exactly as before |
 | `jobs_ui.mjs` (Chrome) | with the client: Items tab, builder billing choice, quote step Send and status, auto invoice step |
 
 Existing suites that must stay green: everything in CONTRACTS §7, plus price_list, price_changed, audit_quote,
@@ -136,3 +185,26 @@ costing_truth, finance_view, finance_jobs, invoices, quickbooks.
 - Emails and texts to the customer, payment reminders, quote follow-ups (Phase 3).
 - Moving board price lists for good, and Move my jobs here (Phase 5).
 - Stock coming off Inventory when paid (Phase 4, Links: "Inventory use").
+
+## 8. Round 1 review (ChatGPT), and what changed
+1. **Accepted lines vs invoice lines.** The accepted quote is the price: a line change after acceptance reopens the
+   quote step until the new lines are accepted, unless an invoice already exists; requote is allowed until an
+   invoice exists, accepted or not; the override is an admin's Skip with a reason (§1.3).
+2. **Quote step permissions.** Publish requires `who = admins` on quote, invoice and payment steps, and the server
+   checks every action on them regardless (§1.2, §2.3, §4). No Done on a quote step.
+3. **Auto invoice lifecycle.** Made and bound and saved before sending; one bound non-void invoice per step is the
+   idempotency rule (restart, reopen, repeated sweeps); void → exactly one replacement; `held` waits for approval
+   with no retry and no bypass; `zero` waits for an admin's edit and the ordinary send (same hold); owner demoted or
+   gone → nothing made, the hand button for admins (§1.4).
+4. **Archived default items.** Start and attach answer 400 naming the item; nothing made (§2.2).
+5. **Empty lines** defined; duplicate item ids refused; 50 defaults; failed attach tested (§1.2, §2.2).
+6. **Member prices.** Items never reach members (Items routes, `/api/price-list`, Jobs reads); default lines carry no
+   cost. One thing I found and am not changing silently: today a member who can see a job board already gets that
+   job's price lines through the board's record routes and broadcasts, cost included when a row has one. That's
+   existing behavior outside Jobs; I'm raising it with the owner as its own fix rather than folding a board-wide
+   visibility change into this phase. The Phase 2 tests assert the Jobs reads and the new Items paths.
+7. **Billing validation** tightened: quote needs an invoice step, invoice steps stay by hand under quote billing;
+   auto has exactly one invoice step; `dueDays` covers hand and auto invoices, null = 14 by today's date rules.
+8. **Import and price.changed** spelled out: one-time snapshot, changed sources not re-copied, no-name rows counted,
+   price defaults to $0; `price.changed` only on a price change, same payload as today, waiting quotes defined.
+
