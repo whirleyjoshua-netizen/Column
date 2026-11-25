@@ -404,7 +404,7 @@ try {
   await shot('4-phone');
   ok(await A.ev(`document.documentElement.scrollWidth <= innerWidth`), 'on a phone nothing scrolls sideways');
   ok(A.errors.length === 0, 'no script errors' + (A.errors.length ? ': ' + A.errors.join(' | ') : ''));
-} catch (e) { ok(false, 'threw: ' + e.stack); }
+} catch (e) { ok(false, 'threw: ' + e.stack); console.log('PAGE ERRORS: ' + JSON.stringify(A?.errors || []).slice(0, 1500)); try { console.log('JOBS ROWS: ' + await A.ev(`[...document.querySelectorAll('#tool .jb-row')].map((r) => r.dataset.job + ':' + r.textContent.slice(0, 40)).join(' | ').slice(0, 1200)`)); console.log('TOOL: ' + await A.ev(`(document.querySelector('#tool')?.innerText || 'no tool').slice(0, 600)`)); } catch (x) { console.log('debug failed ' + x.message); } }
 A?.close();
 srv.kill();
 chrome.kill();

@@ -233,7 +233,7 @@
         go.disabled = true;
         try { const out = await api(method, path, { ...body, confirm: tk }); closeSheet(); resolve(out); }
         catch (e) {
-          if (e.status === 409 && e.data?.confirm) return resolve(await ask(e.data.preview, e.data.confirm, e.data.error));
+          if (e.status === 409 && e.data?.confirm) return ask(e.data.preview, e.data.confirm, e.data.error).then(resolve, reject);
           closeSheet();
           if (e.status === 409 && e.data?.sent) return resolve({ alreadySent: true });
           reject(e);
@@ -18801,7 +18801,7 @@
           h('button', { class: 'icon-btn', html: I.close, 'aria-label': 'Remove step', onclick: () => { E.steps.splice(i, 1); redraw(); } })),
         h('small', { class: 'muted' }, JB_HOW[s.kind]),
         nm, h('div', { class: 'row2' }, whoEl, st), extra,
-        s.kind === 'invoice' && E.billing === 'auto' ? h('small', { class: 'jb-auto' }, 'Automatic: made from the job’s lines and sent by itself when the step before it is done.') : null,
+        s.kind === 'invoice' && E.billing === 'auto' ? h('small', { class: 'jb-auto' }, 'Automatic: made from the job’s lines when the step before it is done, and its link is ready. Whether its email goes by itself or asks you first is set below.') : null,
         ['remind', 'review', 'quote', 'payment'].includes(s.kind) || (s.kind === 'invoice' && E.billing === 'auto') ? jbSendPick(s) : null,
         h('label', { class: 'pick' }, skip, 'Whoever does it may skip it (with a reason)'));
     };

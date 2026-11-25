@@ -1029,8 +1029,9 @@ export function jobFlowsModule(ctx) {
     const inv = ig && !ig.skipped && ig.step.how === 'auto' && ig.step.settings?.email !== false && ig.invoiceId && db.invoices?.[ig.invoiceId];
     if (!inv || ig.pending || !inv.sentAt || ['paid', 'void'].includes(inv.status) || ig.invoiceTold?.invoiceId === inv.id) return;
     const cust = customerOf(rec);
-    if (!flowReach(cust) && askFirst(ig.step)) makePending(c, ig, { kind: 'invoice', invoiceId: inv.id });
-    else if (!flowReach(cust)) await sendOnce(ig, 'invoiceTold', { invoiceId: inv.id }, () => flowTell(ws, rec, cust, flowMsg.invoice(ws, rec, cust, inv, invoiceUrl(inv), invoiceTotals(inv).total), 'Kloomie'));
+    if (flowReach(cust)) return; // can't be reached: nothing to do, and nothing to tell anyone (this runs every tick)
+    if (askFirst(ig.step)) return void makePending(c, ig, { kind: 'invoice', invoiceId: inv.id });
+    await sendOnce(ig, 'invoiceTold', { invoiceId: inv.id }, () => flowTell(ws, rec, cust, flowMsg.invoice(ws, rec, cust, inv, invoiceUrl(inv), invoiceTotals(inv).total), 'Kloomie'));
     tell(c);
   }
 
@@ -1099,9 +1100,9 @@ export function jobFlowsModule(ctx) {
         const fu = qg?.step.settings?.followUpDays || 0;
         if (qg && fu > 0 && !qg.skipped && !qg.pending && rec.share && !rec.answer && !(rec.share.expiresAt && rec.share.expiresAt < Date.now()) && qg.followed?.token !== rec.share.token && Date.now() >= rec.share.createdAt + fu * DAY_MS) {
           const cust = customerOf(rec);
+          // Unreachable: nothing happens and nobody is told (this runs every tick).
           if (!flowReach(cust) && askFirst(qg.step)) makePending(c, qg, { kind: 'quoteFollow', token: rec.share.token });
-          else if (!flowReach(cust)) await sendOnce(qg, 'followed', { token: rec.share.token }, () => flowTell(ws, rec, cust, flowMsg.quoteFollow(ws, rec, cust, quoteUrlOf(rec)), 'Kloomie'));
-          tell(c);
+          else if (!flowReach(cust)) { await sendOnce(qg, 'followed', { token: rec.share.token }, () => flowTell(ws, rec, cust, flowMsg.quoteFollow(ws, rec, cust, quoteUrlOf(rec)), 'Kloomie')); tell(c); }
         }
         await invoiceEmail(c, ws, rec);
         // Payment reminders: calendar days past due on the team's clock, from 9am, while a balance remains.
