@@ -81,10 +81,14 @@ try {
   ok(r.status === 200 && r.body.version?.n === 2 && r.body.activeVersionId !== v1, 'publishing again makes version 2');
   ok(JSON.stringify(r.body.version.body.steps.slice(0, 4).map((s) => s.id)) === JSON.stringify(stepIds), 'versions of one flow keep their step ids');
 
-  // Members see the active version only.
+  // Members see the active version only, of a flow they may start (CONTRACTS.md §5; admins-only flows: jobflow_checks).
+  r = await sam('GET', `/job-flows/${flow.id}`);
+  ok(r.status === 404, 'while only admins start jobs on it, a member doesn’t read it: ' + r.status);
+  await rico('PATCH', `/job-flows/${flow.id}`, { whoCreates: 'everyone' });
+  await rico('POST', `/job-flows/${flow.id}/publish`);
   r = await sam('GET', '/job-flows');
   const seen = (r.body?.flows || []).find((f) => f.id === flow.id);
-  ok(!!seen && !seen.draft && seen.version?.n === 2, 'a member sees the published flow, its active version, no draft');
+  ok(!!seen && !seen.draft && seen.version?.n === 3, 'once everyone may start jobs on it (version 3), a member sees the published flow, its active version, no draft');
   r = await sam('GET', `/job-flows/${flow.id}/versions`);
   ok(r.status === 403, 'a member can’t list old versions: ' + r.status);
   r = await sam('PATCH', `/job-flows/${flow.id}`, { name: 'Mine now' });
@@ -110,7 +114,7 @@ try {
   const again = spawn('node', ['index.js'], { cwd: new URL('../server', import.meta.url).pathname, env: { ...process.env, PORT: String(PORT), PUBLIC_URL: B, DATA_DIR: DIR, MAIL_OUTBOX: '1', RESEND_API_KEY: '', DATABASE_URL: '', STRIPE_SECRET_KEY: '', STRIPE_PRICE: '', SKIP_SETUP: '1' }, stdio: 'ignore' });
   for (let i = 0; i < 100; i++) { try { if ((await fetch(B + '/api/health')).ok) break; } catch {} await sleep(150); }
   r = await rico('GET', `/job-flows/${flow.id}/versions`);
-  ok((r.body?.versions || []).length === 2, 'flows and versions are saved: ' + (r.body?.versions || []).length);
+  ok((r.body?.versions || []).length === 3, 'flows and versions are saved: ' + (r.body?.versions || []).length);
   again.kill();
 } catch (e) {
   console.log('FAIL threw: ' + e.stack);

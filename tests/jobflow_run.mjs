@@ -81,6 +81,9 @@ try {
 
   await rico('PATCH', '/records/' + job.id, { values: { customer: danaId } });
   ok(await until(async () => (await run())?.steps?.[0]?.state === 'done'), 'a client on the job finishes the first step');
+  // The client's address fills the job's, so Add job info is done too and booking is current.
+  x = await run();
+  ok(x?.steps?.[1]?.state === 'done' && x?.current?.kind === 'book' && x?.steps?.slice(2).every((s) => s.state !== 'done'), 'the client’s address filled the job’s: Add job info is done too, Book on schedule is current, nothing after it is done: ' + x?.steps?.map((s) => s.state).join(','));
   await rico('PATCH', '/records/' + job.id, { values: { address: '10 A St' } });
   ok(await at('book'), 'filling its address finishes Add job info; next: book it');
   ok((await run())?.next?.action === 'book-visit', 'Next opens the visit sheet');

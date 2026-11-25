@@ -1198,13 +1198,17 @@ export function projectsModule({ seesLinked = () => true, proofUrl = () => null,
   function newRecord(ws, p, t, auth, values, extId, opts) {
     if (teamRecords(ws.id) >= MAX_RECORDS) throw bad(`A team can keep ${MAX_RECORDS.toLocaleString()} records. Delete some first.`);
     const rec = { id: rid(), wsId: ws.id, projectId: p.id, typeId: t.id, values: {}, extId: extId ? cleanText(extId, 200) : null, by: auth.member, memberId: auth.memberId, createdAt: Date.now(), updatedAt: Date.now(), ...(t.scan ? { tag: newTag() } : {}) };
-    for (const f of t.fields) if (f.type === 'autonumber') rec.values[f.id] = `${f.prefix || ''}${(f.next = (f.next || 1) + 1) - 1}`;
+    // Its number is taken only once the record is kept (below), so a record that fails to be made uses none up.
+    const numbered = t.fields.filter((f) => f.type === 'autonumber');
+    for (const f of numbered) rec.values[f.id] = `${f.prefix || ''}${f.next || 1}`;
     for (const f of t.fields) if (f.default && f.choices?.some((c) => c.id === f.default)) rec.values[f.id] = f.default;
     // A new job starts with its trade's checklist to tick, and the readings it takes, ready to fill in.
     for (const f of t.fields) if (f.type === 'checklist' && f.list?.length) rec.values[f.id] = { items: f.list.map((text) => ({ id: rid(6), text, done: false })) };
     for (const f of t.fields) if (f.type === 'readings' && f.list?.length) rec.values[f.id] = { rows: f.list.map((x) => { const m = /^(.*?)\s+([^\s]*[%°]\w*|psi|ppm|gpm|gpg|A|V|Hz|CFM50|pCi\/L)$/.exec(x); return { id: rid(6), label: m ? m[1] : x, value: '', unit: m ? m[2] : '' }; }) };
-    if (t.fields.some((f) => f.type === 'autonumber')) projectNews(p);
     applyValues(ws, p, t, rec, values, opts);
+    opts?.before?.(rec); // a caller's own part, built against the record before it's kept (a throw keeps nothing)
+    for (const f of numbered) f.next = (f.next || 1) + 1;
+    if (numbered.length) projectNews(p);
     db.records[rec.id] = rec;
     rec.log = [{ id: rid(6), at: rec.createdAt, kind: 'created', by: auth.member }];
     return rec;
@@ -2451,10 +2455,12 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
   // A record made by Kloomie for someone (an AI plan they accepted): made, announced.
   // Job Flows (docs/jobflows/CONTRACTS.md §2): the same checks as POST /projects/:id/records (the rules' OK, the
   // record's own validation), without the news, so the job and its run go out together. A throw writes nothing.
-  function jobRecord(ws, p, t, auth, values, req, body) {
+  // A job made with something built against it (a Job Flow's run): before(rec) runs once the record is ready and before
+  // it's kept; a throw there keeps no record and uses up no number. Nothing is told until announceRecord.
+  function jobRecord(ws, p, t, auth, values, req, body, before) {
     const held = holdDiscount(ws, auth, p, t, null, values, req, body);
     if (held) return { held };
-    return { rec: newRecord(ws, p, t, auth, values, null, { addChoices: false }) };
+    return { rec: newRecord(ws, p, t, auth, values, null, { addChoices: false, before }) };
   }
   const announceRecord = (rec, by) => recordNews(rec, 'record.created', by);
   function createRecord(ws, p, t, auth, values) {

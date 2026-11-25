@@ -174,7 +174,8 @@ export function publicApiModule(deps) {
   function apiTask(t) {
     const ws = db.workspaces[t.wsId];
     const goal = t.goalId && db.goals[t.goalId];
-    const camp = goal && db.campaigns[goal.campaignId];
+    const c = goal && db.campaigns[goal.campaignId];
+    const camp = c && c.kind !== 'job' ? c : null; // a Job Flow run is never a campaign here (CONTRACTS.md §4)
     return { id: t.id, text: t.text, due: t.due || null, done: !!t.done, done_at: iso(t.doneAt), done_by: t.done ? t.doneBy || null : null,
       assignee: memberOut(ws, t.assigneeId), job_id: t.recordId || null, campaign: camp ? { id: camp.id, name: camp.title || camp.name || '' } : null,
       priority: t.priority || 0, created_by: t.by || null, created_at: iso(t.createdAt), updated_at: iso(taskChanged(t)) };

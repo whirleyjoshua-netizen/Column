@@ -224,6 +224,7 @@ main: `docs/jobflows/checkpoint2-main.log`.
 | `jobs_list.mjs` (5247) | campaign-less, legacy, run, generic Jobs list and trade jobs listed; CRM records aren't jobs; private project hidden from members; no client email/phone to members; other teams nothing; start-job = record-create checks (rules OK for a discount, private project, flow for admins only, members switch off); `anyone` needs edit access; a step for a member who left falls back to admins |
 | `jobflow_stage.mjs` (5248) | the run alone moves and holds the stage with an ordinary campaign on the job; the hold names the run's step; a step with no stage doesn't move it; the ordinary campaign finishes on its own; reopen never moves the stage back; a forward move held until met; a job without a run behaves as today |
 | `jobflow_hidden.mjs` (5249) | the run and its steps are not in state; campaign routes can't open, change, add to, template, parent or delete it; not on the old board; no `campaign.started` / `campaign.done` for runs while an ordinary campaign on the same job still fires them; deleting the job removes its run |
+| `jobflow_checks.mjs` (5250) | checkpoint 3 review: a step action's answer is the kept state (last Done answers `done`, reopen `active`); Done/reopen/Done is two `step.done` cycles and two `job.flow.done`; a member can't reopen or skip on a finished run; a cancelled run's steps 404; members read only flows they may start (admins-only and private-list flows 404); a flow for another list can't attach and the run stays; payment waits for a draft too; an ordinary campaign's stage done under a run moves the job when the run is cancelled; a failed start leaves no job, task, event or used job number; a skipped task finishes a Tasks step; a run's task has no campaign in `task.done` or the public API; a failed PATCH changes nothing |
 | `jobs_ui.mjs` (Chrome) | written with the client, after the server is reviewed: Jobs tab, list, builder, New job, stepper + Next opening the right sheet, the six job tabs intact |
 
 Existing suites that must stay green: jobs, jobboard, jobsteps, jobflows, joblinks, jobneeds, jobcampaign,
@@ -255,3 +256,28 @@ Where the server differs from, or settles, something above:
   run's `recordId`, as for any job campaign. New automation trigger `job.flow.done` (project filter).
 - Invoices tell the sweep after every change (`onInvoice` in `news` and `settle`), and an invoice made with
   `{ jobStep }` from the Invoice step is bound to it (`bindInvoice`).
+
+### 9.1 Checkpoint 3 review fixes
+- The sweep runs before the answer: every step action, start, attach and cancel calls `jobSteps` as the person
+  (`sweepNow`) before building the response, so the answer shows the kept status and the events have gone off. (The
+  `HANDOFF_ROUTES` sweep after the response still runs and finds nothing to do.)
+- Members read a flow only if they may start a job on it: published, not archived, `whoCreates: 'everyone'`, and its
+  job list in a project they can see. Otherwise list and `GET /job-flows/:id` leave it out / 404, as for a flow that
+  doesn't exist.
+- Attach and replace check the flow's list against the job (`projectId` and `typeId`): a mismatch is 400 before
+  anything is built or cancelled.
+- Payment without a bound invoice: every non-void invoice made since the run started must be paid, drafts included
+  (§1.5 as written); a draft voided stops counting.
+- Only a campaign that owns the stage updates `g.staged`. A campaign held back while a run owns the stage keeps its
+  done goals unstaged, so they move the job once the run is cancelled (or finishes).
+- Starting a job is atomic: `buildRun` writes nothing, and runs inside `newRecord` (`opts.before`) after the record is
+  built and before anything is kept; the job number is taken, the project told and the record kept only after it. A
+  throw keeps no record, run, goal or task, uses no number and tells nobody. `commitRun` only assigns. Test-only hook:
+  outside production, a step named `JOBFLOWS_FAIL_STEP` makes `buildRun` throw.
+- A run's tasks are never shown under the run as a campaign: `taskCampaign(t)` (null for runs) feeds the task
+  automations (`task.created/opened/done/reopened`) and the AI task brief; agents' task lines and the public API's
+  `campaign` are null for them. Their job (`recordId` / `job_id`) is unchanged.
+- `job.flow.done` goes off each time a run finishes; a run reopened and finished again fires it again (each finish
+  is a transition `active → done`), while `step.done` carries `cycle` / `again`.
+- A PATCH to a flow checks the name and the steps before changing anything.
+

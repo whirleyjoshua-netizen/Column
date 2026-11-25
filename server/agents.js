@@ -1341,7 +1341,9 @@ export function agentsModule({ autoEvents = [], sees = () => true, offWhy = () =
   const same = (x, y) => String(x ?? '').trim().toLowerCase() === String(y ?? '').trim().toLowerCase() && String(x ?? '').trim() !== '';
   const jobsOpen = (cx) => !offWhy(cx.ws, cx.memberId, 'projects') && !cutOff(cx, 'jobs');
   const mineTask = (cx, t) => t.assigneeId === cx.memberId || (!t.assigneeId && !t.roleId && t.memberId === cx.memberId) || (t.roleId && (memberOf(cx.ws, cx.memberId)?.roleIds || []).includes(t.roleId));
-  const taskLine = (cx, t) => ({ id: t.id, task: t.text.slice(0, 200), due: t.due || null, priority: t.priority || undefined, for: t.assigneeId ? nameOf(cx.ws, t.assigneeId) : t.roleId ? (cx.ws.roles || []).find((r) => r.id === t.roleId)?.name : undefined, campaign: t.goalId ? db.campaigns[db.goals[t.goalId]?.campaignId]?.name : undefined, about: t.recordId && jobsOpen(cx) && PJ.recordAt(t.recordId, cx.ws.id, cx.memberId) ? recTitle(t.recordId) : undefined, waitingOn: t.blockedBy?.length ? true : undefined });
+  // A Job Flow run is never named as a campaign: its tasks are the job's (docs/jobflows/CONTRACTS.md §4).
+  const runlessName = (c) => (c && c.kind !== 'job' ? c.name : undefined);
+  const taskLine = (cx, t) => ({ id: t.id, task: t.text.slice(0, 200), due: t.due || null, priority: t.priority || undefined, for: t.assigneeId ? nameOf(cx.ws, t.assigneeId) : t.roleId ? (cx.ws.roles || []).find((r) => r.id === t.roleId)?.name : undefined, campaign: t.goalId ? runlessName(db.campaigns[db.goals[t.goalId]?.campaignId]) : undefined, about: t.recordId && jobsOpen(cx) && PJ.recordAt(t.recordId, cx.ws.id, cx.memberId) ? recTitle(t.recordId) : undefined, waitingOn: t.blockedBy?.length ? true : undefined });
   // F10: while a step's label is made (safeLabel), only what the person can see is named.
   let labelCx = null;
   const seen = (kind, x) => !!x && (!labelCx || (x.wsId === labelCx.ws.id && sees(labelCx.memberId, kind, x)));

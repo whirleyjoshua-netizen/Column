@@ -16,7 +16,9 @@ export const isJobRun = (c) => c?.kind === 'job';
 export const isJobList = (t) => !!t && (t.key === 'jobs' || String(t.key || '').startsWith('trade_'));
 
 export function jobFlowsModule(ctx) {
-  const { db, save, broadcast, rid, cleanText, readJson, send, isAdmin, PJ, toolsOf, goalsInOrder, tasksInOrder, applyTask, publicTask, canSeeTask, stepsSoon, visitsOf, needsMet, noteWork = () => {} } = ctx;
+  const { db, save, broadcast, rid, cleanText, readJson, send, isAdmin, PJ, toolsOf, goalsInOrder, tasksInOrder, applyTask, publicTask, canSeeTask, stepsSoon, sweepNow = (wsId) => stepsSoon(wsId), visitsOf, needsMet, noteWork = () => {} } = ctx;
+  // Test only: a step with this name makes building a run throw, so the failure path can be tested from outside.
+  const FAIL_STEP = process.env.NODE_ENV !== 'production' ? process.env.JOBFLOWS_FAIL_STEP || '' : '';
   db.jobFlows ||= {};
   db.jobFlowVersions ||= {};
   const keys = new Map(); // `${wsId}:${memberId}:${key}` → { sig, recordId, at }
@@ -163,8 +165,8 @@ export function jobFlowsModule(ctx) {
       case 'payment': {
         const ig = stepGoals(c).find((x) => x.step?.kind === 'invoice' && x.invoiceId && db.invoices?.[x.invoiceId]?.status !== 'void');
         if (ig) return db.invoices[ig.invoiceId].status === 'paid';
-        const billed = runInvoices(c, rec).filter((i) => i.status !== 'draft');
-        return billed.length > 0 && billed.every((i) => i.status === 'paid');
+        const all = runInvoices(c, rec); // non-void, made since the run started; a draft is still owed
+        return all.length > 0 && all.every((i) => i.status === 'paid');
       }
       case 'tasks': return tasksInOrder(g).length > 0;
       case 'custom': return !!g.marked && (s.settings?.checklist || []).every((_, i) => !!g.checks?.[i]);
@@ -229,9 +231,9 @@ export function jobFlowsModule(ctx) {
   const summary = (ws, auth, c) => { const v = runView(ws, auth, c); return v && { id: v.id, flowId: v.flowId, flowName: v.flowName, versionN: v.versionN, status: v.status, done: v.done, total: v.total, current: v.current && { stepId: v.current.stepId, name: v.current.name, kind: v.current.kind, action: v.current.action } }; };
   const tell = (c) => broadcast(c.wsId, { type: 'jobrun', recordId: c.recordId, runId: c.id, campaignId: c.id });
 
-  // A run of a flow's version on a job: the campaign and its step goals (a Tasks step's tasks too), all built before
-  // anything is written, so a throw leaves nothing behind.
-  function startRun(ws, auth, rec, flow, version) {
+  // A run of a flow's version on a job: the campaign and its step goals (a Tasks step's tasks too). buildRun writes
+  // nothing, so a throw leaves nothing behind; commitRun only puts what was built in place.
+  function buildRun(ws, auth, rec, flow, version) {
     const now = Date.now();
     const c = {
       id: rid(), wsId: ws.id, kind: 'job', recordId: rec.id, flowId: flow.id, flowName: flow.name, versionId: version.id, versionN: version.n,
@@ -240,22 +242,28 @@ export function jobFlowsModule(ctx) {
     };
     const goals = [], tasks = [];
     version.body.steps.forEach((step, i) => {
+      if (FAIL_STEP && step.name === FAIL_STEP) throw new Error('Job Flows test: the run failed to build');
       const g = { id: rid(), wsId: ws.id, campaignId: c.id, by: auth.member, createdAt: now, title: step.name, due: null, kind: 'step', target: 1, counts: null, order: i + 1, stage: step.stage || null, staged: false, step: copy(step), marked: null, checks: [], needs: [] };
       goals.push(g);
       for (const text of step.kind === 'tasks' ? step.settings?.tasks || [] : []) {
         tasks.push(applyTask({ id: rid(), wsId: ws.id, by: auth.member, memberId: auth.memberId, createdAt: now, text: '', done: false, doneAt: null, due: null, priority: 0, goalId: g.id, assigneeId: null, recordId: rec.id }, { text }));
       }
     });
-    db.campaigns[c.id] = c;
-    for (const g of goals) db.goals[g.id] = g;
-    for (const t of tasks) { db.tasks[t.id] = t; noteWork(t, null); }
-    return { c, tasks };
+    return { c, goals, tasks };
   }
-  function afterStart(ws, c, tasks) {
+  function commitRun(run) {
+    db.campaigns[run.c.id] = run.c;
+    for (const g of run.goals) db.goals[g.id] = g;
+    for (const t of run.tasks) db.tasks[t.id] = t;
+  }
+  // The sweep before the answer, so what a step action answers is what's kept (status, stage, events), as the person.
+  const settle = (ws, auth) => sweepNow(ws.id, auth.member, auth.memberId);
+  function afterStart(ws, auth, c, tasks) {
+    for (const t of tasks) noteWork(t, null);
     save();
     for (const t of tasks) broadcast(ws.id, { type: 'task', task: publicTask(t) });
     tell(c);
-    stepsSoon(ws.id);
+    settle(ws, auth);
   }
   // A job a person may see and act on (its project, the members switch is the route's): null if not.
   function jobAt(ws, auth, id) {
@@ -301,6 +309,15 @@ export function jobFlowsModule(ctx) {
     return out.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
   }
 
+  // A flow a person may read: admins every one; a member only a published, unarchived flow they may start, on a job
+  // list they can see.
+  function mayRead(ws, auth, admin, f) {
+    if (admin) return true;
+    const v = !f.archived && activeVersion(f);
+    if (!v || v.body.whoCreates !== 'everyone') return false;
+    const pr = db.projects[v.body.list?.projectId];
+    return !!(pr && pr.wsId === ws.id && PJ.sees(pr, auth.memberId) && pr.types.some((x) => x.id === v.body.list.typeId));
+  }
   // ---------- routes ----------
   async function route(req, res, parts, auth, ws) {
     const [a, b, c, d, e] = parts;
@@ -311,7 +328,7 @@ export function jobFlowsModule(ctx) {
     try {
       if (a === 'job-flows') {
         if (m === 'GET' && !b) {
-          const flows = Object.values(db.jobFlows).filter((f) => f.wsId === ws.id && (admin || (!f.archived && f.activeVersionId))).sort((x, y) => x.createdAt - y.createdAt);
+          const flows = Object.values(db.jobFlows).filter((f) => f.wsId === ws.id && mayRead(ws, auth, admin, f)).sort((x, y) => x.createdAt - y.createdAt);
           return send(res, 200, { flows: flows.map((f) => publicFlow(f, admin)) });
         }
         if (m === 'POST' && !b) {
@@ -326,7 +343,7 @@ export function jobFlowsModule(ctx) {
           return send(res, 200, publicFlow(flow, true));
         }
         const flow = b && db.jobFlows[b];
-        if (!flow || flow.wsId !== ws.id || (!admin && (flow.archived || !flow.activeVersionId))) return send(res, 404, { error: 'That flow is gone.' });
+        if (!flow || flow.wsId !== ws.id || !mayRead(ws, auth, admin, flow)) return send(res, 404, { error: 'That flow is gone.' });
         if (m === 'GET' && !c) return send(res, 200, publicFlow(flow, admin));
         if (c === 'versions') {
           if (!admin) return send(res, 403, { error: 'Only owners and admins see a flow’s versions.' });
@@ -336,10 +353,11 @@ export function jobFlowsModule(ctx) {
         if (!admin) return send(res, 403, { error: 'Only owners and admins change job flows.' });
         if (m === 'PATCH' && !c) {
           const body = await readJson(req, 100_000);
-          if (body.name !== undefined) { const n = cleanText(body.name, 80).trim(); if (!n) return send(res, 400, { error: 'Give the flow a name.' }); flow.name = n; }
-          if (body.icon !== undefined) flow.icon = cleanText(body.icon, 8) || '🧰';
-          if (body.list !== undefined || body.steps !== undefined || body.whoCreates !== undefined) flow.draft = cleanBody(ws, auth, body, flow);
-          flow.updatedAt = Date.now();
+          // Everything checked first; a request that fails changes nothing.
+          const n = body.name !== undefined ? cleanText(body.name, 80).trim() : flow.name;
+          if (!n) return send(res, 400, { error: 'Give the flow a name.' });
+          const draft = body.list !== undefined || body.steps !== undefined || body.whoCreates !== undefined ? cleanBody(ws, auth, body, flow) : flow.draft;
+          Object.assign(flow, { name: n, icon: body.icon !== undefined ? cleanText(body.icon, 8) || '🧰' : flow.icon, draft, updatedAt: Date.now() });
           save();
           return send(res, 200, publicFlow(flow, true));
         }
@@ -395,15 +413,15 @@ export function jobFlowsModule(ctx) {
           const rec = db.records[x.recordId];
           if (rec) return send(res, 200, { job: PJ.publicRecordOf(rec), run: runView(ws, auth, shownRun(rec.id)) });
         }
-        const made = PJ.jobRecord(ws, p, t, auth, values, req, body);
+        // The run is built against the job before either is kept: a throw keeps neither (nor uses up a job number).
+        let run;
+        const made = PJ.jobRecord(ws, p, t, auth, values, req, body, (rec) => { run = buildRun(ws, auth, rec, flow, version); });
         if (made.held) return send(res, made.held.status, made.held.body);
         const rec = made.rec;
-        let run;
-        try { run = startRun(ws, auth, rec, flow, version); }
-        catch (err) { delete db.records[rec.id]; throw err; }
+        commitRun(run);
         if (key) keys.set(key, { sig, recordId: rec.id, at: Date.now() });
         PJ.announceRecord(rec, auth.member);
-        afterStart(ws, run.c, run.tasks);
+        afterStart(ws, auth, run.c, run.tasks);
         return send(res, 200, { job: PJ.publicRecordOf(rec), run: runView(ws, auth, run.c) });
       }
       const at = jobAt(ws, auth, b);
@@ -416,12 +434,15 @@ export function jobFlowsModule(ctx) {
         const flow = db.jobFlows[body.flowId];
         if (!flow || flow.wsId !== ws.id || !flow.activeVersionId) return send(res, 404, { error: 'That flow is gone.' });
         if (flow.archived) return send(res, 400, { error: 'That flow is archived.' });
+        const version = activeVersion(flow);
+        if (version.body.list?.projectId !== rec.projectId || version.body.list?.typeId !== rec.typeId) return send(res, 400, { error: `“${flow.name}” is for another job list, so it can’t go on this job.` });
         const going = activeRun(rec.id);
         if (going && body.replace !== true) return send(res, 409, { error: `This job is already on “${going.flowName}”. Replace it to start over on another flow.` });
-        const run = startRun(ws, auth, rec, flow, activeVersion(flow));
+        const run = buildRun(ws, auth, rec, flow, version);
+        commitRun(run);
         if (going) { Object.assign(going, { status: 'cancelled', cancelledAt: Date.now(), cancelledBy: auth.memberId }); tell(going); note(rec, `Moved from the flow “${going.flowName}” to “${flow.name}”`, auth.member); }
         else note(rec, `Put on the flow “${flow.name}”`, auth.member);
-        afterStart(ws, run.c, run.tasks);
+        afterStart(ws, auth, run.c, run.tasks);
         return send(res, 200, { run: runView(ws, auth, run.c) });
       }
       if (c === 'flow' && d === 'cancel' && m === 'POST') {
@@ -435,6 +456,7 @@ export function jobFlowsModule(ctx) {
         note(rec, `Taken off the flow “${going.flowName}”: ${why}`, auth.member);
         save();
         tell(going);
+        settle(ws, auth);
         return send(res, 200, { run: runView(ws, auth, going) });
       }
       if (c === 'steps' && d && m === 'POST') {
@@ -454,6 +476,7 @@ export function jobFlowsModule(ctx) {
             save();
           }
           tell(run);
+          settle(ws, auth);
           return send(res, 200, { run: runView(ws, auth, run) });
         }
         if (e === 'check') {
@@ -465,6 +488,7 @@ export function jobFlowsModule(ctx) {
           g.checks[i] = body.done !== false;
           save();
           tell(run);
+          settle(ws, auth);
           return send(res, 200, { run: runView(ws, auth, run) });
         }
         if (e === 'skip') {
@@ -477,6 +501,7 @@ export function jobFlowsModule(ctx) {
             save();
           }
           tell(run);
+          settle(ws, auth);
           return send(res, 200, { run: runView(ws, auth, run) });
         }
         if (e === 'reopen') {
@@ -485,6 +510,7 @@ export function jobFlowsModule(ctx) {
           note(rec, `Reopened “${s.name}”`, auth.member);
           save();
           tell(run);
+          settle(ws, auth);
           return send(res, 200, { run: runView(ws, auth, run) });
         }
       }

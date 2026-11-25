@@ -2961,6 +2961,8 @@ const subsOf = (c) => Object.values(db.campaigns).filter((x) => x.parentId === c
 const castOf = (c) => c?.cast || [];
 const castRole = (c, id) => (id ? castOf(c).find((r) => r.id === id) : null);
 const taskCamp = (t) => db.campaigns[db.goals[t?.goalId]?.campaignId] || null;
+// The campaign a task is shown under: never a Job Flow run (a run's tasks are the job's tasks, CONTRACTS.md §4).
+const taskCampaign = (t) => { const c = taskCamp(t); return c && !isJobRun(c) ? c : null; };
 // ----- A campaign's test run (the sandbox, 2026-11-20) -----
 // Run a campaign for real before it goes to the team: its tasks go only to the testers (each person, team role or
 // campaign role on a task is matched to a tester, the same one every time), only testers are told anything about it,
@@ -3326,7 +3328,7 @@ function openings(ws, tz) {
         broadcast(ws.id, { type: 'task', task: publicTask(t) });
         broadcast(ws.id, { type: 'handoff', task: publicTask(t), by, byId });
         // Automations can start here: "when a task in this step opens, tell whoever it's for" (2026-11-20).
-        setImmediate(() => db.tasks[t.id] && !db.tasks[t.id].done && automate(ws.id, 'task.opened', { task: db.tasks[t.id], campaign: taskCamp(t), who: by, whoId: byId, private: privateTask(t) }));
+        setImmediate(() => db.tasks[t.id] && !db.tasks[t.id].done && automate(ws.id, 'task.opened', { task: db.tasks[t.id], campaign: taskCampaign(t), who: by, whoId: byId, private: privateTask(t) }));
       } else broadcast(ws.id, { type: 'task', task: publicTask(t) });
     }
     if (changed) save();
@@ -3366,7 +3368,7 @@ function toolDone(taskId, { by, byId, note, file } = {}) {
     if (t.signoff) Object.assign(t, { submitted: { by: by || 'Kloomie', byId: byId || null, at: Date.now() }, returned: null });
     else {
       Object.assign(t, { done: true, doneAt: Date.now(), doneBy: by || 'Kloomie', submitted: null, returned: null });
-      setImmediate(() => automate(t.wsId, 'task.done', { task: t, campaign: taskCamp(t), who: by, whoId: byId, private: privateTask(t) }));
+      setImmediate(() => automate(t.wsId, 'task.done', { task: t, campaign: taskCampaign(t), who: by, whoId: byId, private: privateTask(t) }));
     }
     // Done by its tool, as whoever used it (or Kloomie, when nobody did).
     noteWork(t, was, { by: byId || null, via: 'tool' });
@@ -4189,7 +4191,9 @@ function jobStepsOnce(wsId, by, byId) {
     const f = owns ? stageFieldOf(p && typeOfP(p, rec.typeId)) : null;
     const goals = goalsInOrder(c);
     let fresh = null;
-    for (const g of goals) {
+    // Only a campaign that owns the stage keeps track of the stages it has moved (g.staged): one held back while a run
+    // owns the stage still has its done goals to move the job when the run is cancelled or finishes.
+    if (f) for (const g of goals) {
       const m = stepFinished(g);
       if (m && g.stage && !g.staged) { g.staged = true; fresh ||= g; changed = true; }
       else if (!m && g.staged) { g.staged = false; changed = true; }
@@ -4265,7 +4269,7 @@ function eventFromHook(wsId, type, d, by) {
   const at = rec ? { record: rec, project: p, list: lt, recordName: lt ? String(rec.values[lt.primary] ?? '') : '' } : {};
   if (type.startsWith('visit.')) return automate(wsId, type, { ...at, recordName: d.job || at.recordName, date: d.date, time: d.start || '', crew: (d.crew || []).map((m) => m.name).join(', '), who: by, private: privateRecord(d.job_id) });
   if (type === 'text.received') return automate(wsId, type, { contact: db.contacts[d.contact_id] || { name: d.contact_name || d.from }, phone: d.from, text: clipText(d.body, 300), who: 'Text message' });
-  if (type === 'task.created') { const t = db.tasks[d.id]; return t && automate(wsId, type, { task: t, campaign: taskCamp(t), who: by, whoId: t.memberId, private: privateTask(t) }); }
+  if (type === 'task.created') { const t = db.tasks[d.id]; return t && automate(wsId, type, { task: t, campaign: taskCampaign(t), who: by, whoId: t.memberId, private: privateTask(t) }); }
   if (type.startsWith('invoice.') || type === 'payment.received') {
     const inv = d.invoice_id ? db.invoices?.[d.invoice_id] : null;
     return automate(wsId, type, { ...at, invoice: d.number || d.invoice_number, customer: d.customer?.name || inv?.to?.name || '', amount: type === 'payment.received' ? d.payment?.amount : d.total, who: by, private: privateRecord(d.job_id) });
@@ -7461,7 +7465,7 @@ const TASK_TOOLS = {
 const CONTACT_COLS = ['Name', 'Business', 'Phone', 'Email', 'Website', 'City', 'Source'];
 function taskBrief(ws, auth, t) {
   const g = db.goals[t.goalId];
-  const c = g && db.campaigns[g.campaignId];
+  const c = taskCampaign(t);
   const p = c?.parentId && db.campaigns[c.parentId];
   const l = t.listId && db.lists[t.listId];
   const files = (t.files || []).map((id) => db.items[id]).filter(Boolean);
@@ -8901,7 +8905,7 @@ async function api(req, res, url) {
         signNews = { type: 'signoff', task: null, by: auth.member };
       } else if (body.done && !t.done) {
         next.doneBy = auth.member;
-        setImmediate(() => db.tasks[next.id]?.done && automate(ws.id, 'task.done', { task: next, campaign: taskCamp(next), who: auth.member, whoId: auth.memberId, private: privateTask(next) }));
+        setImmediate(() => db.tasks[next.id]?.done && automate(ws.id, 'task.done', { task: next, campaign: taskCampaign(next), who: auth.member, whoId: auth.memberId, private: privateTask(next) }));
         setImmediate(() => db.tasks[next.id]?.done && hook(ws.id, 'task.done', () => API.apiTask(db.tasks[next.id]), auth.member));
         next.updatedAt = Date.now();
         if (next.signoff) next.approved = { by: auth.member, at: Date.now() };
@@ -8913,7 +8917,7 @@ async function api(req, res, url) {
         signNews = { type: 'returned', task: null, by: auth.member, note: next.returned.note };
       } else if (body.done === false && t.done) {
         next.approved = null;
-        setImmediate(() => db.tasks[next.id] && !db.tasks[next.id].done && automate(ws.id, 'task.reopened', { task: db.tasks[next.id], campaign: taskCamp(next), who: auth.member, whoId: auth.memberId, private: privateTask(next) }));
+        setImmediate(() => db.tasks[next.id] && !db.tasks[next.id].done && automate(ws.id, 'task.reopened', { task: db.tasks[next.id], campaign: taskCampaign(next), who: auth.member, whoId: auth.memberId, private: privateTask(next) }));
       }
       // Who handed it over, so the new assignee can be told.
       if (next.assigneeId !== t.assigneeId || next.roleId !== t.roleId || next.castId !== t.castId) next.assignedBy = next.assigneeId || next.roleId || next.castId ? auth.memberId : null;
@@ -12544,7 +12548,7 @@ const STOCK = inventoryModule({ db, save, broadcast, rid, cleanText, readJson, s
   labelUrl: (tag) => `${PUBLIC_URL}/a/${tag}`,
   labelQr: (tag) => 'data:image/svg+xml;base64,' + Buffer.from(qrSvg(`${PUBLIC_URL}/a/${tag}`, { scale: 8 })).toString('base64'),
   projectFor: (pid, wsId, memberId) => { const p = db.projects[pid]; return p && p.wsId === wsId && PJ.sees(p, memberId) ? { p, records: Object.values(db.records).filter((r) => r.projectId === p.id) } : null; } });
-const JF = jobFlowsModule({ db, save, broadcast, rid, cleanText, readJson, send, isAdmin, PJ, toolsOf, goalsInOrder, tasksInOrder, applyTask, publicTask: (t) => publicTask(t), canSeeTask: (auth, t) => canSee(auth, 'task', t), stepsSoon: (w) => stepsSoon(w), visitsOf: (id) => visitsOf(id), needsMet: (g) => needsMet(g), noteWork: (t, was) => noteWork(t, was) });
+const JF = jobFlowsModule({ db, save, broadcast, rid, cleanText, readJson, send, isAdmin, PJ, toolsOf, goalsInOrder, tasksInOrder, applyTask, publicTask: (t) => publicTask(t), canSeeTask: (auth, t) => canSee(auth, 'task', t), stepsSoon: (w) => stepsSoon(w), sweepNow: (w, by, byId) => jobSteps(w, by, byId), visitsOf: (id) => visitsOf(id), needsMet: (g) => needsMet(g), noteWork: (t, was) => noteWork(t, was) });
 const INV = invoicesModule({ onInvoice: (inv) => stepsSoon(inv.wsId), bindInvoice: (rec, inv, stepId) => JF.bindInvoice(rec, inv, stepId), proofUrl: (ws) => pagesProof(ws), stockCost: (recId) => STOCK.stockCost(recId), jobMoney: (recId) => jobMoney(recId), notifyAdmins: (...a) => notifyAdmins(...a), jobBack: (rec) => jobBack(rec), onPaymentGone: (...a) => QB.paymentGone(...a), db, save, broadcast, rid, hold, cleanText, readJson, send, badRequest, escHtml, brandOf, logoUrl, teamDay, offline, seal, unseal, stripeCall: stripe.callWith, PJ, isAdmin, jobOfRecord, jobLabel, moveJob, publicUrl: PUBLIC_URL, emit: (...a) => { PJ.emit(...a); QB.soon(a[0]); try { eventFromHook(a[0], a[1], a[2], a[3]); } catch (e) { alarm('An automation event failed to build', e); } },
   // A payment is money in on the business's Finance, under the team's owner.
   addMoney: (ws, { amount, day, note, invoiceId = null }) => {
