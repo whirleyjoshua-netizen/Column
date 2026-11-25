@@ -39,6 +39,7 @@ try {
   let sam = call(samTok);
   r = await call()('POST', '/auth', { mode: 'create', workspace: 'Other ' + t, name: 'Olga', email: `olga${t}@t.test`, password: 'longenough3', device: 'Mac', deviceId: 'd3' });
   const olga = call(r.body.token);
+  await olga('PATCH', '/workspace', { tools: { ...(await olga('GET', '/state')).body.workspace.tools, projects: true } });
   await rico('PATCH', '/workspace', { tools: { ...st.workspace.tools, projects: true, bills: true } });
 
   // 1. Making, changing, archiving. Owners and admins only.

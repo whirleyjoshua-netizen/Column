@@ -4,22 +4,41 @@
 // one sweep that moves every job (jobSteps in index.js) finishes them, and each step is finished only by what it
 // stands for really being true on the job (a client, its fields, a visit, the checklist, the signature, an invoice
 // sent or paid, its tasks, a Done button). A run is never a campaign to anyone: it lives behind the job.
-export const STEP_KINDS = ['client', 'details', 'book', 'work', 'signoff', 'invoice', 'payment', 'tasks', 'custom'];
-const KIND_NAME = { client: 'Add client info', details: 'Add job info', book: 'Book a visit', work: 'Do the work', signoff: 'Customer signs off', invoice: 'Send the invoice', payment: 'Collect payment', tasks: 'Tasks', custom: 'Step' };
-const HOW = { client: 'tap', details: 'tap', book: 'tap', work: 'tap', signoff: 'tap', invoice: 'hand', payment: 'auto', tasks: 'tap', custom: 'hand' };
-const ACTION = { client: 'pick-client', details: 'edit-fields', book: 'book-visit', work: 'checklist', signoff: 'sign', invoice: 'invoice', payment: 'payment', tasks: 'tasks', custom: 'done' };
+import crypto from 'node:crypto';
+
+export const STEP_KINDS = ['client', 'details', 'book', 'work', 'signoff', 'quote', 'invoice', 'payment', 'tasks', 'custom'];
+// Money steps: for owners and admins whatever a flow says (docs/jobflows/PHASE2.md §1.2, §4).
+const MONEY_KINDS = ['quote', 'invoice', 'payment'];
+const BILLING = ['hand', 'quote', 'auto'];
+const MAX_DEFAULT_ITEMS = 50, MAX_ITEMS = 2000;
+// What a customer sees and pays on a set of price lines, and nothing else: each row's description, quantity, unit,
+// price and whether it's taxed, in order, plus the tax rate and discount. Row ids, cost and where a row came from
+// are left out, so a job's lines and an invoice made from them (new row ids, no cost) compare equal
+// (docs/jobflows/PHASE2.md §1.3).
+export function priceKey(lines) {
+  const rows = (Array.isArray(lines?.rows) ? lines.rows : []).map((r) => [String(r?.desc ?? ''), Number(r?.qty) || 0, String(r?.unit ?? ''), Number(r?.price) || 0, r?.taxable === false ? 0 : 1]);
+  const d = lines?.discount ? [lines.discount.type === 'percent' ? 'percent' : 'amount', Number(lines.discount.value) || 0] : null;
+  return crypto.createHash('sha256').update(JSON.stringify([rows, Number(lines?.taxRate) || 0, d])).digest('hex').slice(0, 32);
+}
+const KIND_NAME = { client: 'Add client info', details: 'Add job info', book: 'Book a visit', work: 'Do the work', signoff: 'Customer signs off', quote: 'Send the quote', invoice: 'Send the invoice', payment: 'Collect payment', tasks: 'Tasks', custom: 'Step' };
+const HOW = { client: 'tap', details: 'tap', book: 'tap', work: 'tap', signoff: 'tap', quote: 'tap', invoice: 'hand', payment: 'auto', tasks: 'tap', custom: 'hand' };
+const ACTION = { client: 'pick-client', details: 'edit-fields', book: 'book-visit', work: 'checklist', signoff: 'sign', quote: 'quote', invoice: 'invoice', payment: 'payment', tasks: 'tasks', custom: 'done' };
 const WHO = ['anyone', 'admins', 'role', 'member'];
 const SENT = ['sent', 'viewed', 'partial', 'paid'];
+const WAITING = { held: 'approval', zero: 'zero', owner: 'owner', refused: 'refused' };
 const MAX_FLOWS = 50, MAX_STEPS = 30, KEY_MS = 10 * 60 * 1000;
 
 export const isJobRun = (c) => c?.kind === 'job';
 export const isJobList = (t) => !!t && (t.key === 'jobs' || String(t.key || '').startsWith('trade_'));
 
 export function jobFlowsModule(ctx) {
-  const { db, save, broadcast, rid, cleanText, readJson, send, isAdmin, PJ, toolsOf, goalsInOrder, tasksInOrder, applyTask, publicTask, canSeeTask, stepsSoon, sweepNow = (wsId) => stepsSoon(wsId), visitsOf, needsMet, noteWork = () => {} } = ctx;
+  const { db, save, broadcast, rid, cleanText, readJson, send, isAdmin, PJ, toolsOf, goalsInOrder, tasksInOrder, applyTask, publicTask, canSeeTask, stepsSoon, sweepNow = (wsId) => stepsSoon(wsId), visitsOf, needsMet, noteWork = () => {}, makeInvoice = null, sendInvoice = null, itemsTotals = () => ({ total: 0 }), priceChanged = () => {}, publicUrl = '' } = ctx;
   // Test only: a step with this name makes building a run throw, so the failure path can be tested from outside.
   const FAIL_STEP = process.env.NODE_ENV !== 'production' ? process.env.JOBFLOWS_FAIL_STEP || '' : '';
+  // Test only: the automatic invoice's send fails after the invoice is made (a crash between the two).
+  const FAIL_SEND = process.env.NODE_ENV !== 'production' && process.env.JOBFLOWS_FAIL_SEND === '1';
   db.jobFlows ||= {};
+  db.jobItems ||= {};
   db.jobFlowVersions ||= {};
   const keys = new Map(); // `${wsId}:${memberId}:${key}` → { sig, recordId, at }
 
@@ -52,7 +71,8 @@ export function jobFlowsModule(ctx) {
       let id = !fresh && typeof s.id === 'string' && known.has(s.id) && !seen.has(s.id) ? s.id : rid(8);
       seen.add(id);
       const name = cleanText(s.name, 80).trim() || KIND_NAME[s.kind];
-      const w = s.who && typeof s.who === 'object' ? s.who : { type: 'anyone' };
+      // A money step that names nobody is for owners and admins; one that names anyone else is refused at publish.
+      const w = s.who && typeof s.who === 'object' ? s.who : { type: MONEY_KINDS.includes(s.kind) ? 'admins' : 'anyone' };
       if (!WHO.includes(w.type)) throw bad('Pick who does each step.');
       const who = { type: w.type };
       if (w.type === 'role') {
@@ -89,11 +109,46 @@ export function jobFlowsModule(ctx) {
     const prev = flow?.draft || {};
     const list = input.list !== undefined ? input.list : prev.list;
     const { t } = listOf(ws, auth, list);
-    return {
+    const pick = (k, dflt) => (input[k] !== undefined ? input[k] : prev[k] !== undefined ? prev[k] : dflt);
+    // Billing, default items and due days are kept as given on a draft (within size limits) and checked at publish.
+    const billing = cleanText(String(pick('billing', 'hand') ?? 'hand'), 20) || 'hand';
+    const items = (Array.isArray(pick('items', [])) ? pick('items', []) : []).slice(0, MAX_DEFAULT_ITEMS + 50).map((x) => ({ itemId: cleanText(String(x?.itemId ?? ''), 40), qty: Number(x?.qty) }));
+    const dd = pick('dueDays', null);
+    const body = {
       list: { projectId: list.projectId, typeId: list.typeId },
-      whoCreates: (input.whoCreates !== undefined ? input.whoCreates : prev.whoCreates) === 'everyone' ? 'everyone' : 'admins',
+      whoCreates: pick('whoCreates', 'admins') === 'everyone' ? 'everyone' : 'admins',
+      billing, items, dueDays: dd === null || dd === '' ? null : Number(dd),
       steps: cleanSteps(ws, t, input.steps !== undefined ? input.steps : prev.steps, knownIds(flow)),
     };
+    // With automatic billing the (one) Invoice step runs by itself.
+    for (const st of body.steps) if (st.kind === 'invoice') st.how = billing === 'auto' ? 'auto' : HOW.invoice;
+    return body;
+  }
+  const billingOf = (body) => body?.billing || 'hand';
+  // The checks a draft must pass to be published (PHASE2.md §1.2).
+  function checkPublish(ws, body) {
+    const b = body.billing;
+    if (!BILLING.includes(b)) throw bad('Pick how jobs on this flow are billed: by hand, quote first, or automatically.');
+    const kinds = body.steps.map((x) => x.kind);
+    const quotes = kinds.filter((k) => k === 'quote').length, invoices = kinds.filter((k) => k === 'invoice').length;
+    if (b === 'quote') {
+      if (quotes !== 1) throw bad('A quote-first flow has one Send the quote step.');
+      if (!invoices) throw bad('A quote-first flow needs an invoice step after the quote.');
+      if (kinds.indexOf('quote') > kinds.indexOf('invoice')) throw bad('The quote comes before the invoice.');
+    } else if (quotes) throw bad('Only a quote-first flow has a quote step. Change its billing to Quote first.');
+    if (b === 'auto' && invoices !== 1) throw bad('An automatic-billing flow has exactly one invoice step.');
+    for (const st of body.steps) if (MONEY_KINDS.includes(st.kind) && st.who?.type !== 'admins') throw bad(`“${st.name}” is for owners and admins: money steps can’t go to anyone else.`);
+    if (body.items.length > MAX_DEFAULT_ITEMS) throw bad(`A flow can have ${MAX_DEFAULT_ITEMS} default items.`);
+    const seen = new Set();
+    for (const x of body.items) {
+      const it = db.jobItems[x.itemId];
+      if (!it || it.wsId !== ws.id) throw bad('One of the default items isn’t on your Items list.');
+      if (it.archived) throw bad(`“${it.name}” was archived. Take it off the default items or restore it.`);
+      if (seen.has(x.itemId)) throw bad(`“${it.name}” is in the default items twice. Change its quantity instead.`);
+      seen.add(x.itemId);
+      if (!(Number.isFinite(x.qty) && x.qty > 0 && x.qty <= 1e6)) throw bad(`Give “${it.name}” a quantity above 0.`);
+    }
+    if (body.dueDays !== null && !(Number.isInteger(body.dueDays) && body.dueDays >= 0 && body.dueDays <= 120)) throw bad('Invoices are due 0 to 120 days after they’re made.');
   }
   const versionsOf = (flow) => Object.values(db.jobFlowVersions).filter((v) => v.flowId === flow.id).sort((a, b) => a.n - b.n);
   const activeVersion = (flow) => (flow?.activeVersionId ? db.jobFlowVersions[flow.activeVersionId] : null);
@@ -124,6 +179,25 @@ export function jobFlowsModule(ctx) {
   const recOf = (c) => { const r = c && db.records[c.recordId]; return r && r.wsId === c.wsId ? r : null; };
   const typeOfRec = (rec) => { const p = db.projects[rec.projectId]; return p && p.types.find((x) => x.id === rec.typeId); };
   const runInvoices = (c, rec) => Object.values(db.invoices || {}).filter((i) => i.recordId === rec.id && i.status !== 'void' && (i.createdAt || 0) >= c.createdAt);
+  const itemsField = (t) => fieldBy(t, (f) => f.type === 'items');
+  const versionOf = (c) => db.jobFlowVersions[c?.versionId] || null;
+  // The quote on a run's job, as the Quote step reads it: the accepted quote is the price (PHASE2.md §1.3).
+  function quoteNow(c, rec) {
+    const t = typeOfRec(rec);
+    const lines = itemsField(t) ? rec.values[itemsField(t).id] : null;
+    const a = rec.answer;
+    const fresh = a && (a.at || 0) >= c.createdAt;
+    let status = rec.share ? 'sent' : 'draft';
+    let met = false;
+    if (a && !fresh) status = 'stale';
+    else if (a?.act === 'decline') status = 'declined';
+    else if (a?.act === 'accept') {
+      const k = priceKey(a.lines);
+      met = priceKey(lines) === k || runInvoices(c, rec).some((i) => (i.createdAt || 0) >= a.at && priceKey(i.lines) === k);
+      status = met ? 'accepted' : 'changed';
+    }
+    return { status, met, lines, answer: fresh ? a : null };
+  }
 
   // What a step stands for, true or not, from the job as it is now. Changes nothing.
   function stepCondition(g, rec) {
@@ -157,6 +231,7 @@ export function jobFlowsModule(ctx) {
         const sig = v(fieldBy(t, (f) => f.type === 'signature'));
         return !!(sig && sig.name && sig.image);
       }
+      case 'quote': return quoteNow(c, rec).met;
       case 'invoice': {
         const bound = g.invoiceId && db.invoices?.[g.invoiceId];
         if (bound && bound.status !== 'void') return SENT.includes(bound.status);
@@ -190,6 +265,7 @@ export function jobFlowsModule(ctx) {
       case 'book': return s.settings?.visitKind ? `No ${s.settings.visitKind} visit booked` : 'No visit booked';
       case 'work': return 'The checklist isn’t all ticked' + (s.settings?.photos ? ', or the after photos are missing' : '');
       case 'signoff': return 'The customer hasn’t signed';
+      case 'quote': { const q = quoteNow(db.campaigns[g.campaignId], rec); return q.status === 'declined' ? 'The customer declined: send a new quote' : q.status === 'changed' ? 'The lines changed after it was accepted: send a new quote' : q.status === 'sent' ? 'Waiting for the customer to accept' : 'Quote not sent yet'; }
       case 'invoice': return 'No invoice sent';
       case 'payment': return 'Not paid yet';
       case 'tasks': { const left = tasksInOrder(g).filter((x) => !x.done && !x.skipped).length; return `${left} task${left === 1 ? '' : 's'} left`; }
@@ -213,6 +289,22 @@ export function jobFlowsModule(ctx) {
       if (g.skipped) Object.assign(out, { skipReason: g.skipReason || '', skippedAt: g.skippedAt || null });
       if (s.kind === 'custom') Object.assign(out, { text: s.settings?.text || '', checklist: (s.settings?.checklist || []).map((text, i) => ({ text, done: !!g.checks?.[i] })), marked: !!g.marked });
       if (s.kind === 'details') out.fields = s.settings?.fields || [];
+      if (s.kind === 'quote' && rec) {
+        const q = quoteNow(c, rec);
+        out.quote = !isAdmin(auth) ? { status: q.status } : {
+          status: q.status, total: itemsTotals(q.lines).total || 0, answeredBy: q.answer?.name || null, reason: q.answer?.reason || '',
+          url: rec.share?.token ? `${publicUrl}/q/${rec.share.token}` : null, mayRequote: c.status !== 'cancelled' && !runInvoices(c, rec).length,
+        };
+      }
+      if (s.kind === 'invoice' && s.how === 'auto') {
+        out.auto = true;
+        if (isAdmin(auth)) {
+          const inv = g.invoiceId && db.invoices?.[g.invoiceId];
+          out.waiting = state === 'done' ? null : WAITING[g.auto?.state] || null;
+          out.invoice = inv && inv.status !== 'void' ? inv.number : null;
+          if (g.auto?.reason) out.reason = g.auto.reason;
+        }
+      }
       if (s.kind === 'tasks') {
         const all = tasksInOrder(g);
         const seen = all.filter((x) => canSeeTask(auth, x));
@@ -241,6 +333,19 @@ export function jobFlowsModule(ctx) {
       brief: '', start: null, end: null, color: 'teal', status: 'active', private: false, memberIds: [], assigneeId: null, outcomes: [], methods: [], cast: [], inOrder: false, channelId: null, stackId: null, lastReportAt: null,
     };
     const goals = [], tasks = [];
+    // The flow's default items: refused if one was archived or is gone; put on the job only if its lines are empty,
+    // when the run is kept (commitRun), never with cost (PHASE2.md §2.2).
+    let lines = null;
+    const defaults = version.body.items || [];
+    if (defaults.length) {
+      const rows = defaults.map((x) => {
+        const it = db.jobItems[x.itemId];
+        if (!it || it.wsId !== ws.id || it.archived) throw bad(`“${flow.name}” uses ${it && it.wsId === ws.id ? `“${it.name}”, which was archived` : 'an item that was deleted'}. Update the flow and publish it again.`);
+        return { id: rid(6), desc: it.name, qty: x.qty, unit: it.unit || '', price: it.price, ...(it.taxable === false ? { taxable: false } : {}), from: 'item:' + it.id };
+      });
+      const f = itemsField(typeOfRec(rec));
+      if (f && linesEmpty(rec.values[f.id])) lines = { fieldId: f.id, value: { rows, taxRate: 0 } };
+    }
     version.body.steps.forEach((step, i) => {
       if (FAIL_STEP && step.name === FAIL_STEP) throw new Error('Job Flows test: the run failed to build');
       const g = { id: rid(), wsId: ws.id, campaignId: c.id, by: auth.member, createdAt: now, title: step.name, due: null, kind: 'step', target: 1, counts: null, order: i + 1, stage: step.stage || null, staged: false, step: copy(step), marked: null, checks: [], needs: [] };
@@ -249,9 +354,12 @@ export function jobFlowsModule(ctx) {
         tasks.push(applyTask({ id: rid(), wsId: ws.id, by: auth.member, memberId: auth.memberId, createdAt: now, text: '', done: false, doneAt: null, due: null, priority: 0, goalId: g.id, assigneeId: null, recordId: rec.id }, { text }));
       }
     });
-    return { c, goals, tasks };
+    return { c, goals, tasks, lines, recordId: rec.id };
   }
+  const linesEmpty = (v) => !v || typeof v !== 'object' || !Array.isArray(v.rows) || !v.rows.some((r) => r && (r.desc || r.price));
   function commitRun(run) {
+    const rec = db.records[run.recordId];
+    if (run.lines && rec) { rec.values[run.lines.fieldId] = run.lines.value; rec.updatedAt = Date.now(); }
     db.campaigns[run.c.id] = run.c;
     for (const g of run.goals) db.goals[g.id] = g;
     for (const t of run.tasks) db.tasks[t.id] = t;
@@ -300,6 +408,7 @@ export function jobFlowsModule(ctx) {
           stage: sf ? sf.choices.find((c) => c.id === rec.values[sf.id])?.label || '' : '',
           scheduled: df ? rec.values[df.id] || null : null,
           run: run ? summary(ws, auth, run) : null,
+          ...(isAdmin(auth) && itemsField(t) ? { total: itemsTotals(rec.values[itemsField(t).id]).total || 0 } : {}),
           legacy: !activeRun(rec.id) && Object.values(db.campaigns).some((c) => !isJobRun(c) && c.recordId === rec.id),
           updatedAt: rec.updatedAt,
         });
@@ -318,14 +427,96 @@ export function jobFlowsModule(ctx) {
     const pr = db.projects[v.body.list?.projectId];
     return !!(pr && pr.wsId === ws.id && PJ.sees(pr, auth.memberId) && pr.types.some((x) => x.id === v.body.list.typeId));
   }
+  // ---------- the business's Items (PHASE2.md §1.1, §2.1) ----------
+  const publicItem = ({ wsId, ...x }) => x;
+  const cents = (v, what, nullable = false) => {
+    if (nullable && (v === null || v === '')) return null;
+    const n = Number(v);
+    if (!Number.isInteger(n) || n < 0 || n > 1e10) throw bad(`${what} is a whole number of cents, from 0 to 100,000,000 dollars.`);
+    return n;
+  };
+  // An item's fields from a request, checked; `x` is the item being changed (or a blank one).
+  function itemFields(ws, body, x) {
+    const out = {};
+    if (body.name !== undefined || !x.id) { out.name = cleanText(String(body.name ?? ''), 200).trim(); if (!out.name) throw bad('Give the item a name.'); if (out.name.length > 120) throw bad('An item’s name is up to 120 characters.'); }
+    if (body.description !== undefined) { out.description = cleanText(String(body.description ?? ''), 1000); if (out.description.length > 500) throw bad('A description is up to 500 characters.'); }
+    if (body.unit !== undefined) { out.unit = cleanText(String(body.unit ?? ''), 40).trim(); if (out.unit.length > 20) throw bad('A unit is up to 20 characters, like each, hour or sq ft.'); }
+    if (body.price !== undefined || !x.id) out.price = cents(body.price ?? 0, 'The price');
+    if (body.cost !== undefined) out.cost = cents(body.cost, 'The cost', true);
+    if (body.taxable !== undefined) out.taxable = body.taxable !== false;
+    if (body.invItemId !== undefined) {
+      const id = body.invItemId ? String(body.invItemId) : null;
+      if (id && db.invItems?.[id]?.wsId !== ws.id) throw bad('That Inventory item isn’t one of your team’s.');
+      out.invItemId = id;
+    }
+    return out;
+  }
+  async function itemsRoute(req, res, parts, auth, ws, admin) {
+    const [, b, c] = parts;
+    const m = req.method;
+    if (!admin) return send(res, 403, { error: 'Only owners and admins see and change Items.' });
+    const mine = () => Object.values(db.jobItems).filter((x) => x.wsId === ws.id);
+    if (m === 'GET' && !b) return send(res, 200, { items: mine().sort((x, y) => x.name.localeCompare(y.name)).map(publicItem) });
+    if (m === 'POST' && !b) {
+      if (mine().length >= MAX_ITEMS) return send(res, 400, { error: `A team can have ${MAX_ITEMS} items.` });
+      const body = await readJson(req, 20_000);
+      const x = { id: rid(), wsId: ws.id, description: '', unit: '', cost: null, taxable: true, invItemId: null, archived: false, fromRecordId: null, createdBy: auth.memberId, createdAt: Date.now(), updatedAt: Date.now() };
+      Object.assign(x, itemFields(ws, body, {}));
+      db.jobItems[x.id] = x;
+      save();
+      return send(res, 200, { item: publicItem(x) });
+    }
+    if (m === 'POST' && b === 'import' && !c) {
+      const body = await readJson(req, 5_000);
+      const p = db.projects[body.projectId];
+      if (!p || p.wsId !== ws.id || !PJ.sees(p, auth.memberId)) return send(res, 404, { error: 'That board is gone.' });
+      const have = new Set(mine().map((x) => x.fromRecordId).filter(Boolean));
+      let added = 0, skipped = 0, noName = 0;
+      for (const r of PJ.priceList(p)) {
+        if (have.has(r.id)) { skipped++; continue; }
+        const name = String(r.item || '').trim().slice(0, 120);
+        if (!name) { noName++; continue; }
+        if (mine().length >= MAX_ITEMS) { skipped++; continue; }
+        const ok = (v) => Number.isInteger(v) && v >= 0 && v <= 1e10;
+        const x = { id: rid(), wsId: ws.id, name, description: String(r.description || '').slice(0, 500), unit: String(r.unit || '').slice(0, 20), price: ok(r.price) ? r.price : 0, cost: ok(r.cost) ? r.cost : null, taxable: true, invItemId: null, archived: false, fromRecordId: r.id, createdBy: auth.memberId, createdAt: Date.now(), updatedAt: Date.now() };
+        db.jobItems[x.id] = x;
+        added++;
+      }
+      save();
+      return send(res, 200, { added, skipped, noName });
+    }
+    const x = b && db.jobItems[b];
+    if (!x || x.wsId !== ws.id) return send(res, 404, { error: 'That item is gone.' });
+    if (m === 'PATCH' && !c) {
+      const body = await readJson(req, 20_000);
+      const was = x.price;
+      Object.assign(x, itemFields(ws, body, x), { updatedAt: Date.now() });
+      save();
+      if (x.price !== was) priceChanged(ws, auth, { id: 'item:' + x.id, name: x.name, was, now: x.price });
+      return send(res, 200, { item: publicItem(x) });
+    }
+    if (m === 'POST' && (c === 'archive' || c === 'restore')) {
+      x.archived = c === 'archive';
+      x.updatedAt = Date.now();
+      save();
+      return send(res, 200, { item: publicItem(x) });
+    }
+    return send(res, 404, { error: 'Unknown endpoint' });
+  }
+  // Live Items for the team's price list (owners and admins only; PHASE2.md §2.1).
+  const priceListItems = (ws) => Object.values(db.jobItems).filter((x) => x.wsId === ws.id && !x.archived).sort((x, y) => x.name.localeCompare(y.name))
+    .map((x) => ({ id: 'item:' + x.id, source: 'items', board: 'Items', name: x.name, description: x.description || '', unit: x.unit || '', price: x.price, cost: x.cost ?? null, ...(x.taxable === false ? { taxable: false } : {}) }));
+  const itemPrice = (id, wsId) => { const x = db.jobItems[id]; return x && x.wsId === wsId ? { price: x.price, cost: x.cost ?? null } : null; };
+
   // ---------- routes ----------
   async function route(req, res, parts, auth, ws) {
     const [a, b, c, d, e] = parts;
-    if (a !== 'jobs' && a !== 'job-flows') return null;
+    if (a !== 'jobs' && a !== 'job-flows' && a !== 'job-items') return null;
     if (!toolsOf(ws).projects) return send(res, 403, { error: 'Boards are switched off for this team (Apps & Integrations → Tools).' });
     const m = req.method;
     const admin = isAdmin(auth);
     try {
+      if (a === 'job-items') return await itemsRoute(req, res, parts, auth, ws, admin);
       if (a === 'job-flows') {
         if (m === 'GET' && !b) {
           const flows = Object.values(db.jobFlows).filter((f) => f.wsId === ws.id && mayRead(ws, auth, admin, f)).sort((x, y) => x.createdAt - y.createdAt);
@@ -356,13 +547,14 @@ export function jobFlowsModule(ctx) {
           // Everything checked first; a request that fails changes nothing.
           const n = body.name !== undefined ? cleanText(body.name, 80).trim() : flow.name;
           if (!n) return send(res, 400, { error: 'Give the flow a name.' });
-          const draft = body.list !== undefined || body.steps !== undefined || body.whoCreates !== undefined ? cleanBody(ws, auth, body, flow) : flow.draft;
+          const draft = ['list', 'steps', 'whoCreates', 'billing', 'items', 'dueDays'].some((k) => body[k] !== undefined) ? cleanBody(ws, auth, body, flow) : flow.draft;
           Object.assign(flow, { name: n, icon: body.icon !== undefined ? cleanText(body.icon, 8) || '🧰' : flow.icon, draft, updatedAt: Date.now() });
           save();
           return send(res, 200, publicFlow(flow, true));
         }
         if (m === 'POST' && c === 'publish') {
           const body = cleanBody(ws, auth, {}, flow); // checked again: the people and roles it names may have changed
+          checkPublish(ws, body);
           const v = { id: rid(), flowId: flow.id, wsId: ws.id, n: versionsOf(flow).length + 1, body: copy(body), publishedAt: Date.now(), publishedBy: auth.memberId };
           db.jobFlowVersions[v.id] = v;
           Object.assign(flow, { draft: body, activeVersionId: v.id, updatedAt: Date.now() });
@@ -440,6 +632,7 @@ export function jobFlowsModule(ctx) {
         if (going && body.replace !== true) return send(res, 409, { error: `This job is already on “${going.flowName}”. Replace it to start over on another flow.` });
         const run = buildRun(ws, auth, rec, flow, version);
         commitRun(run);
+        if (run.lines) PJ.recordNews(rec, 'record.updated', auth.member);
         if (going) { Object.assign(going, { status: 'cancelled', cancelledAt: Date.now(), cancelledBy: auth.memberId }); tell(going); note(rec, `Moved from the flow “${going.flowName}” to “${flow.name}”`, auth.member); }
         else note(rec, `Put on the flow “${flow.name}”`, auth.member);
         afterStart(ws, auth, run.c, run.tasks);
@@ -459,6 +652,27 @@ export function jobFlowsModule(ctx) {
         settle(ws, auth);
         return send(res, 200, { run: runView(ws, auth, going) });
       }
+      // New quote (PHASE2.md §1.3): the last answer goes to the timeline, the old link is turned off, and the quote
+      // step is open again, until the run has an invoice.
+      if (c === 'requote' && m === 'POST' && !d) {
+        if (!admin) return send(res, 403, { error: 'Only owners and admins send a new quote.' });
+        const run = activeRun(rec.id);
+        const g = run && stepGoals(run).find((x) => x.step?.kind === 'quote');
+        if (!g) return send(res, 404, { error: 'This job’s flow has no quote step.' });
+        if (runInvoices(run, rec).length) return send(res, 409, { error: 'This job has an invoice. Void the invoice first to send a new quote.' });
+        const a = rec.answer;
+        if (a) note(rec, `New quote. The last one was ${a.act === 'accept' ? 'accepted' : 'declined'} by ${a.name || 'the customer'}${a.reason ? ': ' + a.reason : ''}`, auth.member);
+        else note(rec, 'New quote', auth.member);
+        rec.answer = null;
+        rec.share = null;
+        if (g.skipped) Object.assign(g, { skipped: false, skipReason: null, skippedById: null, skippedAt: null });
+        rec.updatedAt = Date.now();
+        save();
+        PJ.recordNews(rec, 'record.updated', auth.member);
+        tell(run);
+        settle(ws, auth);
+        return send(res, 200, { run: runView(ws, auth, run) });
+      }
       if (c === 'steps' && d && m === 'POST') {
         // The going run, or a finished one (reopening a step puts it back to going); never a cancelled one.
         const run = activeRun(rec.id) || runsOf(rec.id).filter((x) => x.status === 'done').at(-1) || null;
@@ -468,6 +682,7 @@ export function jobFlowsModule(ctx) {
         const s = g.step;
         const body = await readJson(req, 10_000).catch(() => ({}));
         if (e === 'done') {
+          if (s.kind === 'quote') return send(res, 400, { error: `“${s.name}” finishes when the customer accepts the quote. Skip it with a reason if it was agreed another way.` });
           if (!(s.kind === 'custom' || (s.kind === 'details' && !(s.settings?.fields || []).length))) return send(res, 409, { error: `“${s.name}” finishes by itself when it’s done on the job.` });
           if (!mayAct(ws, auth, s)) return send(res, 403, { error: `“${s.name}” is for ${whoNow(ws, s).name || 'owners and admins'}.` });
           if (!g.marked) {
@@ -494,7 +709,7 @@ export function jobFlowsModule(ctx) {
           return send(res, 200, { run: runView(ws, auth, run) });
         }
         if (e === 'skip') {
-          if (!admin && !(s.canSkip && mayAct(ws, auth, s))) return send(res, 403, { error: `Only owners and admins can skip “${s.name}”.` });
+          if (!admin && (MONEY_KINDS.includes(s.kind) || !(s.canSkip && mayAct(ws, auth, s)))) return send(res, 403, { error: `Only owners and admins can skip “${s.name}”.` });
           const why = cleanText(body.reason, 300).trim();
           if (!why) return send(res, 400, { error: 'Say why it’s being skipped.' });
           if (!g.skipped) {
@@ -531,6 +746,66 @@ export function jobFlowsModule(ctx) {
     const was = g.invoiceId && db.invoices?.[g.invoiceId];
     if (!was || was.status === 'void') g.invoiceId = inv.id;
   }
+  // ---------- automatic billing (PHASE2.md §1.4) ----------
+  // Each going run on an automatic-billing flow whose Invoice step has come up: make its invoice once (as the run's
+  // owner, kept before sending), then send it through the same path as the app, the rules' hold included. Waiting
+  // states (held, $0, owner can't send, refused) never retry by themselves. Answers whether anything changed.
+  function autoBill(wsId) {
+    const ws = db.workspaces[wsId];
+    if (!ws || !makeInvoice || !sendInvoice) return false;
+    let changed = false;
+    const setAuto = (g, a) => { if (JSON.stringify(g.auto || null) !== JSON.stringify(a)) { g.auto = a; changed = true; } };
+    for (const c of Object.values(db.campaigns)) {
+      if (c.wsId !== wsId || !isJobRun(c) || c.status !== 'active' || billingOf(versionOf(c)?.body) !== 'auto') continue;
+      const rec = recOf(c);
+      const g = stepGoals(c).find((x) => x.step?.kind === 'invoice');
+      if (!rec || !g || g.skipped || currentGoal(c)?.id !== g.id) continue;
+      const owner = memberOf(ws, c.ownerId);
+      const ownerOk = !!owner && isAdmin({ role: owner.role });
+      const as = owner && { member: owner.name, memberId: owner.id, role: owner.role, wsId: ws.id };
+      let inv = g.invoiceId && db.invoices?.[g.invoiceId];
+      if (inv && inv.status === 'void') inv = null;
+      if (!inv) {
+        if (g.auto && g.auto.state !== 'owner') setAuto(g, null);
+        if (!ownerOk) { setAuto(g, { state: 'owner', invoiceId: null, at: Date.now() }); continue; }
+        inv = makeInvoice(ws, as, rec, typeOfRec(rec), g.step.id, versionOf(c)?.body?.dueDays ?? null);
+        g.invoiceId = inv.id;
+        setAuto(g, { state: 'made', invoiceId: inv.id, at: Date.now() });
+        save(); // kept before the send: a crash or restart from here finds this invoice and sends it
+      }
+      if (inv.sentAt) { setAuto(g, { state: 'sent', invoiceId: inv.id, at: g.auto?.at || Date.now() }); continue; }
+      if (g.auto?.state !== 'made' || g.auto.invoiceId !== inv.id) continue; // a draft made by hand, or one that waits
+      if (!ownerOk) { setAuto(g, { state: 'owner', invoiceId: inv.id, at: Date.now() }); continue; }
+      if (!(itemsTotals(inv.lines).total > 0)) { setAuto(g, { state: 'zero', invoiceId: inv.id, at: Date.now() }); continue; }
+      if (FAIL_SEND) continue;
+      const out = sendInvoice(ws, as, inv);
+      if (out.status === 200) setAuto(g, { state: 'sent', invoiceId: inv.id, at: Date.now() });
+      else if (out.status === 202) setAuto(g, { state: 'held', invoiceId: inv.id, at: Date.now(), approvalId: out.body?.approval?.id || null });
+      else setAuto(g, { state: 'refused', invoiceId: inv.id, at: Date.now(), reason: String(out.body?.error || 'It couldn’t be sent.').slice(0, 300) });
+      tell(c);
+    }
+    if (changed) save();
+    return changed;
+  }
+  // An invoice changed: an automatic Invoice step follows its bound invoice, whatever sent it (the sweep, the app by
+  // hand, an approval's replay); voiding it lets the next sweep make one replacement.
+  function invoiceNews(inv) {
+    for (const g of Object.values(db.goals)) {
+      if (g.kind !== 'step' || g.step?.kind !== 'invoice' || g.wsId !== inv.wsId || (g.invoiceId !== inv.id && g.auto?.invoiceId !== inv.id)) continue;
+      const c = db.campaigns[g.campaignId];
+      if (!isJobRun(c) || billingOf(versionOf(c)?.body) !== 'auto') continue;
+      if (inv.status === 'void') { g.auto = null; if (g.invoiceId === inv.id) g.invoiceId = null; }
+      else if (inv.sentAt && g.auto?.state !== 'sent') g.auto = { state: 'sent', invoiceId: inv.id, at: Date.now() };
+      else continue;
+      save();
+      tell(c);
+    }
+  }
+  // The due days for an invoice made on a job: its going run's flow's, else none (the invoice's own default).
+  const dueDaysFor = (rec) => { const v = versionOf(activeRun(rec.id))?.body; return Number.isInteger(v?.dueDays) ? v.dueDays : null; };
+  // For the quote link on a job (projects.js): is it on a going run, and does that run have a quote step.
+  const jobQuote = (rec) => { const c = rec && activeRun(rec.id); return c ? { onRun: true, quoteStep: stepGoals(c).some((g) => g.step?.kind === 'quote') } : null; };
+
   // Job deleted: its runs and their steps go; the steps' tasks stay as plain tasks.
   function dropFor(rec) {
     for (const c of runsOf(rec.id)) {
@@ -542,5 +817,5 @@ export function jobFlowsModule(ctx) {
     }
   }
 
-  return { route, stepMet, activeRun, isJobRun, isJobList, runsOf, bindInvoice, dropFor, tell, runView };
+  return { route, stepMet, activeRun, isJobRun, isJobList, runsOf, bindInvoice, dropFor, tell, runView, autoBill, invoiceNews, dueDaysFor, jobQuote, priceListItems, itemPrice };
 }

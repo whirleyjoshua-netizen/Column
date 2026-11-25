@@ -15,7 +15,7 @@ const METHODS = ['cash', 'check', 'card', 'bank', 'other'];
 const DUE_DAYS = 14;
 const CHECK_MS = Number(process.env.INVOICE_CHECK_MS) || 5 * 60_000;
 
-export function invoicesModule({ onInvoice = () => {}, bindInvoice = () => {}, proofUrl = () => null, stockCost = () => 0, jobMoney = () => ({ expenses: 0, income: 0, committed: 0, entries: [] }), jobBack = () => {}, onPaymentGone = () => {}, notifyAdmins = null, db, save, broadcast, rid, hold = null, cleanText, readJson, send, badRequest, escHtml, brandOf, logoUrl, teamDay, offline, seal, unseal, stripeCall, PJ, isAdmin, jobOfRecord, jobLabel, moveJob, addMoney, dropMoneyId, publicUrl, emit = () => {} }) {
+export function invoicesModule({ onInvoice = () => {}, bindInvoice = () => {}, flowDueDays = () => null, proofUrl = () => null, stockCost = () => 0, jobMoney = () => ({ expenses: 0, income: 0, committed: 0, entries: [] }), jobBack = () => {}, onPaymentGone = () => {}, notifyAdmins = null, db, save, broadcast, rid, hold = null, cleanText, readJson, send, badRequest, escHtml, brandOf, logoUrl, teamDay, offline, seal, unseal, stripeCall, PJ, isAdmin, jobOfRecord, jobLabel, moveJob, addMoney, dropMoneyId, publicUrl, emit = () => {} }) {
   db.invoices ||= {};
   db.payKeys ||= {};
   const money = (c) => ((c || 0) / 100).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
@@ -71,14 +71,14 @@ export function invoicesModule({ onInvoice = () => {}, bindInvoice = () => {}, p
     const af = t.fields.find((f) => f.key === 'address');
     return { contactId: c?.id || null, name: c?.name || c?.company || '', email: c?.email || '', phone: c?.phone || '', address: (af && rec.values[af.id]) || [c?.address, c?.city].filter(Boolean).join(', ') };
   }
-  function newInvoice(ws, auth, rec, t) {
+  function newInvoice(ws, auth, rec, t, dueDays = null) {
     const items = t.fields.find((f) => f.type === 'items' && rec.values[f.id]?.rows?.length);
     const value = t.fields.find((f) => f.key === 'value' && f.type === 'money');
     const lines = items ? { rows: rec.values[items.id].rows.map(({ cost, from, ...r }) => ({ ...r, id: rid(6) })), taxRate: rec.values[items.id].taxRate || 0, ...(rec.values[items.id].discount ? { discount: rec.values[items.id].discount } : {}) }
       : { rows: [{ id: rid(6), desc: String(rec.values[t.primary] || t.singular || 'Job'), qty: 1, unit: '', price: (value && rec.values[value.id]) || 0 }], taxRate: 0 };
     ws.invoiceNext ||= 1001;
     const today = teamDay(ws.id);
-    return { id: rid(), wsId: ws.id, recordId: rec.id, projectId: rec.projectId, number: `INV-${ws.invoiceNext++}`, title: jobLabel(rec), status: 'draft', lines, due: addDays(today, DUE_DAYS), issued: today, note: '',
+    return { id: rid(), wsId: ws.id, recordId: rec.id, projectId: rec.projectId, number: `INV-${ws.invoiceNext++}`, title: jobLabel(rec), status: 'draft', lines, due: addDays(today, Number.isInteger(dueDays) ? dueDays : DUE_DAYS), issued: today, note: '',
       to: customerOf(rec, t), token: null, by: auth.member, createdAt: Date.now(), sentAt: null, viewedAt: null, paidAt: null, payments: [], sessions: [] };
   }
   // Where it stands after a payment comes or goes. Paid in full moves the job to Paid.
@@ -232,6 +232,44 @@ export function invoicesModule({ onInvoice = () => {}, bindInvoice = () => {}, p
   }
 
   // ---------- the app's routes: /api/records/:id/invoices, /api/records/:id/costing, /api/invoices/…, /api/payments/stripe ----------
+  // Making an invoice for a job (the app's button, and a Job Flow's automatic Invoice step): numbered, from the job's
+  // lines, bound to the run's step when one is named, kept and told.
+  function makeFor(ws, auth, rec, t, jobStep = null, dueDays = null) {
+    const inv = newInvoice(ws, auth, rec, t, Number.isInteger(dueDays) ? dueDays : flowDueDays(rec));
+    db.invoices[inv.id] = inv;
+    // Made from a job's Invoice step: that step reads this invoice (Job Flows, CONTRACTS.md §1.5).
+    if (jobStep) bindInvoice(rec, inv, jobStep);
+    save();
+    news(inv);
+    emit(ws.id, 'invoice.created', apiInvoice(inv), auth.member);
+    return inv;
+  }
+  // Sending: the customer's link, and the job moves to Invoiced. One path for the app, the API, an approval's replay
+  // and a Job Flow's automatic Invoice step, so the rules' hold is the same for all of them. Answers { status, body }.
+  function sendIt(ws, auth, inv) {
+    if (inv.status === 'void') return { status: 400, body: { error: 'This invoice was voided.' } };
+    if (totals(inv).total <= 0) return { status: 400, body: { error: 'Add what you’re billing for first: the total is $0.' } };
+    if (!inv.sentAt) {
+      const held = hold?.(ws, auth, 'invoice', { amount: totals(inv).total / 100, summary: `Send ${inv.number} for ${money(totals(inv).total)} to ${inv.to.name || 'the customer'}`, target: { invoiceId: inv.id, recordId: inv.recordId }, req: { method: 'POST', path: `/api/invoices/${inv.id}/send`, body: {} } });
+      if (held) return held;
+    }
+    const rec = db.records[inv.recordId];
+    inv.token ||= crypto.randomBytes(18).toString('base64url');
+    const first = !inv.sentAt;
+    if (!inv.sentAt) {
+      inv.sentAt = Date.now();
+      inv.issued = teamDay(ws.id);
+      if (rec) {
+        moveJob(rec, 'Invoiced');
+        PJ.recordActivity(rec.id, { kind: 'quote', what: 'invoice sent', note: `${inv.number} · ${money(totals(inv).total)}${inv.due ? ' · due ' + day(inv.due) : ''}`, by: auth.member });
+      }
+    }
+    settle(inv, auth.member);
+    save();
+    news(inv);
+    if (first) emit(ws.id, 'invoice.sent', apiInvoice(inv), auth.member);
+    return { status: 200, body: publicInvoice(inv) };
+  }
   async function route(req, res, parts, auth, ws) {
     const [a, b, c, d] = parts;
     const m = req.method;
@@ -266,14 +304,7 @@ export function invoicesModule({ onInvoice = () => {}, bindInvoice = () => {}, p
       if (m === 'GET') return send(res, 200, Object.values(db.invoices).filter((x) => x.recordId === rec.id).sort((x, y) => x.createdAt - y.createdAt).map(publicInvoice));
       if (m === 'POST') {
         const body = await readJson(req, 10_000).catch(() => ({}));
-        const inv = newInvoice(ws, auth, rec, j.t);
-        db.invoices[inv.id] = inv;
-        // Made from a job's Invoice step: that step reads this invoice (Job Flows, CONTRACTS.md §1.5).
-        if (body?.jobStep) bindInvoice(rec, inv, String(body.jobStep));
-        save();
-        news(inv);
-        emit(ws.id, 'invoice.created', apiInvoice(inv), auth.member);
-        return send(res, 200, publicInvoice(inv));
+        return send(res, 200, publicInvoice(makeFor(ws, auth, rec, j.t, body?.jobStep ? String(body.jobStep) : null)));
       }
       return send(res, 405, { error: 'Method not allowed' });
     }
@@ -309,27 +340,8 @@ export function invoicesModule({ onInvoice = () => {}, bindInvoice = () => {}, p
     }
     // Sending: the customer's link, and the job moves to Invoiced.
     if (c === 'send' && m === 'POST') {
-      if (inv.status === 'void') return send(res, 400, { error: 'This invoice was voided.' });
-      if (totals(inv).total <= 0) return send(res, 400, { error: 'Add what you’re billing for first: the total is $0.' });
-      if (!inv.sentAt) {
-        const held = hold?.(ws, auth, 'invoice', { amount: totals(inv).total / 100, summary: `Send ${inv.number} for ${money(totals(inv).total)} to ${inv.to.name || 'the customer'}`, target: { invoiceId: inv.id, recordId: inv.recordId }, req: { method: 'POST', path: req.url, body: {} } });
-        if (held) return send(res, held.status, held.body);
-      }
-      inv.token ||= crypto.randomBytes(18).toString('base64url');
-      const first = !inv.sentAt;
-      if (!inv.sentAt) {
-        inv.sentAt = Date.now();
-        inv.issued = teamDay(ws.id);
-        if (rec) {
-          moveJob(rec, 'Invoiced');
-          PJ.recordActivity(rec.id, { kind: 'quote', what: 'invoice sent', note: `${inv.number} · ${money(totals(inv).total)}${inv.due ? ' · due ' + day(inv.due) : ''}`, by: auth.member });
-        }
-      }
-      settle(inv, auth.member);
-      save();
-      news(inv);
-      if (first) emit(ws.id, 'invoice.sent', apiInvoice(inv), auth.member);
-      return send(res, 200, publicInvoice(inv));
+      const out = sendIt(ws, auth, inv);
+      return send(res, out.status, out.body);
     }
     if (c === 'void' && m === 'POST') {
       if (inv.payments.length) return send(res, 400, { error: 'Remove its payments first: a paid invoice can’t be voided.' });
@@ -472,5 +484,5 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
 </style></head><body><main>${inner}</main><footer>Sent with Kloomie</footer></body></html>`);
   }
 
-  return { route, page, dropFor, costing, publicInvoice, apiInvoice, addPayment, removePayment, totals, payInfo, checkAll, STATUSES, METHODS };
+  return { route, page, dropFor, costing, publicInvoice, apiInvoice, addPayment, removePayment, totals, payInfo, checkAll, makeFor, sendIt, STATUSES, METHODS };
 }

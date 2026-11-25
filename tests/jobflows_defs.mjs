@@ -56,8 +56,8 @@ try {
   ok(r.status === 400, 'a flow with no steps is refused: ' + r.status);
   r = await rico('POST', '/job-flows', { name: 'Too long', list, steps: Array.from({ length: 31 }, (_, i) => ({ kind: 'custom', name: 'Step ' + i })) });
   ok(r.status === 400, '31 steps are refused: ' + r.status);
-  r = await rico('POST', '/job-flows', { name: 'Odd step', list, steps: [{ kind: 'quote', name: 'Quote' }] });
-  ok(r.status === 400, 'a step kind not offered yet (quote) is refused: ' + r.status);
+  r = await rico('POST', '/job-flows', { name: 'Odd step', list, steps: [{ kind: 'deposit', name: 'Deposit' }] });
+  ok(r.status === 400, 'a step kind not offered yet (deposit; quote came in Phase 2) is refused: ' + r.status);
   r = await rico('POST', '/job-flows', { name: 'Bad list', list: { projectId: 'nope', typeId: 'nope' }, steps });
   ok(r.status === 400, 'a list that isn’t a job list here is refused: ' + r.status);
   r = await rico('POST', '/job-flows', { name: 'Stranger', list, steps: [{ kind: 'custom', name: 'X', who: { type: 'member', id: 'not-a-member' } }] });

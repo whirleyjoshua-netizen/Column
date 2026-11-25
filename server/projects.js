@@ -343,7 +343,7 @@ export const TEMPLATES = {
   },
 };
 
-export function projectsModule({ seesLinked = () => true, proofUrl = () => null, onEvent = null, onPrice = () => {}, canSeeItem = () => true, seal = (x) => x, unseal = (x) => x, db, save, broadcast, rid, hold = null, cleanText, isDay, readJson, send, badRequest, isOwnerId, escHtml, brandOf, logoUrl, teamDay, offline, makeTask, onRecords, onRecordGone, onRecordNews, stageGate = null, allowLocalHooks = false, qrSvg = null, publicUrl = '' }) {
+export function projectsModule({ jobQuote = () => null, seesLinked = () => true, proofUrl = () => null, onEvent = null, onPrice = () => {}, canSeeItem = () => true, seal = (x) => x, unseal = (x) => x, db, save, broadcast, rid, hold = null, cleanText, isDay, readJson, send, badRequest, isOwnerId, escHtml, brandOf, logoUrl, teamDay, offline, makeTask, onRecords, onRecordGone, onRecordNews, stageGate = null, allowLocalHooks = false, qrSvg = null, publicUrl = '' }) {
   const bad = (msg) => badRequest(msg);
   db.projects ||= {};
   db.records ||= {};
@@ -996,8 +996,9 @@ export function projectsModule({ seesLinked = () => true, proofUrl = () => null,
             ...(Number.isFinite(cost) ? { cost: Math.max(0, Math.min(1e10, cost)) } : {}),
             ...(r?.taxable === false ? { taxable: false } : {}),
             // Where its price came from (Finance step 3): a price list item on any of the team's boards, or an
-            // Inventory item ('inv:<id>'). The line keeps the price it was given; the source can change later.
-            ...(typeof r?.from === 'string' && (db.records[r.from]?.wsId === p.wsId || (r.from.startsWith('inv:') && db.invItems?.[r.from.slice(4)]?.wsId === p.wsId)) ? { from: r.from } : {}),
+            // Inventory item ('inv:<id>'), or one of the business's Items ('item:<id>', Job Flows). The line keeps the
+            // price it was given; the source can change later.
+            ...(typeof r?.from === 'string' && (db.records[r.from]?.wsId === p.wsId || (r.from.startsWith('inv:') && db.invItems?.[r.from.slice(4)]?.wsId === p.wsId) || (r.from.startsWith('item:') && db.jobItems?.[r.from.slice(5)]?.wsId === p.wsId)) ? { from: r.from } : {}),
           };
         }).filter((r) => r.desc || r.price);
         const tax = Number(v.taxRate ?? v.tax_rate ?? 0);
@@ -1719,12 +1720,16 @@ export function projectsModule({ seesLinked = () => true, proofUrl = () => null,
       }
       // Sending a quote: a link of its own for the customer. Making it marks a draft as sent.
       if (c === 'share' && t.fields.some((f) => f.type === 'items')) {
+        // A job on a Job Flow run: the run owns its stage, and a flow with a Quote step keeps sending it for owners
+        // and admins (docs/jobflows/PHASE2.md §2.3).
+        const jq = jobQuote(rec);
+        if (jq?.quoteStep && !['owner', 'admin'].includes(auth.role)) return send(res, 403, { error: 'Only owners and admins send this job’s quote.' });
         if (m === 'POST') {
           const body = await readJson(req, 10_000);
           const hours = Number(body.hours) > 0 ? Math.min(Number(body.hours), 24 * 365) : null;
           rec.share = { token: rec.share?.token || crypto.randomBytes(18).toString('base64url'), createdAt: Date.now(), expiresAt: hours ? Date.now() + hours * 3600_000 : null, by: auth.member };
           const st = quoteStatus(t, rec);
-          if (!st || st === 'draft') setStatus(p, t, rec, 'Sent');
+          if (!jq?.onRun && (!st || st === 'draft')) setStatus(p, t, rec, 'Sent');
           logTo(rec, { kind: 'quote', what: 'sent', by: auth.member });
           const issued = fieldOf(t, 'issued');
           if (issued?.type === 'date' && !rec.values[issued.id]) rec.values[issued.id] = today(rec.wsId);
@@ -1839,8 +1844,8 @@ export function projectsModule({ seesLinked = () => true, proofUrl = () => null,
       if (act === 'accept' && itemsF && form.v !== linesKey(shown)) {
         return quoteHtml(res, 409, db.workspaces[rec.wsId], `<h1>This quote changed</h1><p class="muted">It was updated after you opened it, so please look at it again before accepting.</p><p><a href="/q/${token}">See the quote as it is now</a></p>`);
       }
-      if (!['accepted', 'declined'].includes(status) && !expired && (act === 'decline' || name)) {
-        setStatus(p, t, rec, act === 'accept' ? 'Accepted' : 'Declined');
+      if (!['accepted', 'declined'].includes(status) && !(rec.answer && jobQuote(rec)?.onRun) && !expired && (act === 'decline' || name)) {
+        if (!jobQuote(rec)?.onRun) setStatus(p, t, rec, act === 'accept' ? 'Accepted' : 'Declined');
         const by = fieldOf(t, 'accepted_by');
         const on = fieldOf(t, 'accepted_on');
         if (by?.type === 'text') rec.values[by.id] = act === 'accept' ? name : `Declined${name ? ' by ' + name : ''}${form.reason ? ': ' + cleanText(form.reason, 500) : ''}`;
@@ -1858,7 +1863,7 @@ export function projectsModule({ seesLinked = () => true, proofUrl = () => null,
     }
     if (act) return quoteHtml(res, 404, null, '<h1>Not found</h1>');
     // Opening it marks a sent quote viewed.
-    if (status === 'sent') {
+    if (status === 'sent' && !jobQuote(rec)?.onRun) {
       setStatus(p, t, rec, 'Viewed');
       logTo(rec, { kind: 'quote', what: 'viewed', by: 'The customer' });
       rec.updatedAt = Date.now();

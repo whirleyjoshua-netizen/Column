@@ -205,7 +205,7 @@ try {
   ok(s?.state === 'current' && s.quote?.status === 'draft' && s.quote?.total === 5000 && s.quote?.url === null && s.quote?.mayRequote === true, 'the quote step is current: draft, $50.00, no link yet: ' + JSON.stringify(s?.quote));
   let ms = await stepOf(jq?.id, 'Send quote', sam);
   ok(ms?.quote && Object.keys(ms.quote).join() === 'status' && ms.quote.status === 'draft', 'a member sees only the quote’s status: ' + JSON.stringify(ms?.quote));
-  ok(!/5000|"total"|"url"|\/q\//.test(JSON.stringify(await runOf(jq?.id, sam))), 'the member’s run carries no total or link');
+  ok(!/5000|"url"|\/q\//.test(JSON.stringify(await runOf(jq?.id, sam))), 'the member’s run carries no money or link');
   const ml = (await sam('GET', '/jobs')).body?.jobs?.find((x) => x.id === jq?.id || x.recordId === jq?.id);
   ok(!!ml && ml.total === undefined && !/5000/.test(JSON.stringify(ml)), 'the member’s Jobs list row has no total');
   const al = (await rico('GET', '/jobs')).body?.jobs?.find((x) => x.id === jq?.id || x.recordId === jq?.id);
