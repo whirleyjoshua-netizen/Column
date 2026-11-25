@@ -219,3 +219,26 @@ Inventory's routes; deleted jobs keep their ledger history. (ChatGPT's review of
 counting, outside changes, history.)
 Approved by ChatGPT with two safeguards, now in §5b: a round's boundary is fixed the first time its check-in is done
 (`g.roundEnd`), and the flow's check-out for round B isn't offered until check-in A is done.
+
+## 10. Checkpoint 2: the shapes the tests fix (tests/jobflow_links.mjs 5255, tests/jobflow_gear.mjs 5258)
+- **Stack**: the flow body's `stack: true` (versioned). A job's record carries `stackId`. `POST /api/jobs/:id/stack`
+  → `{ stack: { id, name, recordId } }`, owners and admins, the same stack again if it has one (two at once make one).
+  `state.workspace.stacks` lists a job's stack only for those who see the job.
+- **Map**: `GET /api/map/jobs?from&to&undated` → `{ points: [{ kind, id, name, address, lat, lng, stage?, flow?, next?,
+  scheduled? }], more, missing, off? }`.
+- **Tasks from a bundle**: `settings.bundleId` → the version's `settings.tasks` and `settings.bundleFrom { id, name }`.
+- **Campaign step**: `settings.templateId` → the version's `settings.template` and `settings.templateFrom { id, name }`;
+  the run view's step gets `campaign: { id, name, status }` once one is made.
+- **Job pins**: `{ kind: 'job', id }` → `{ label, icon, next }` for those who see the job, a locked chip otherwise.
+- **Stock**: a work step's `settings { useStock: true, fromPlace }`; the run view's step gets `stock: { used: [{ itemId,
+  name, qty }], notes: [] }`; Inventory `use` moves carry `jobId` and `key = runId:goalId:cycle`. Notes read
+  "Short 1 × Filter at Truck 1" and "Units differ: each vs box" (the Item's unit, then Inventory's).
+- **Gear**: `GET /api/jobs/:id/steps/:sid/gear` → `{ items: [{ itemId, name, need, got, free: [{ id, name }] }], out:
+  [{ unitId, name, item, memberId }], notes }`; `POST` the same with `{ act: 'checkout', unitId, memberId? }` or
+  `{ act: 'return', unitId, placeId? }` (back to where it came from by default) → `{ run, gear }`. A check-out step
+  that isn't current: 409. A unit already out: 409 with a fresh `gear`. The run view: `run.gearLine` ("Gear out:
+  Pressure washer, Ladder ×3", null when nothing's out), each gear step's `gear`, and `current.missing` naming a
+  shortage ("Only 0 Ladders available, 1 needed"). Gear steps are for anyone by default.
+- **Paths with nothing to fix**: search is the app's own filter over state (no search route), so the state checks cover
+  it; the public API has no item or stack endpoint (records only, already under the board's rules); agents act through
+  the same routes (replayAs), which the route checks cover.
