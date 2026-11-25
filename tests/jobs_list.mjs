@@ -29,6 +29,7 @@ try {
   const sam = call(r.body.token);
   r = await call()('POST', '/auth', { mode: 'create', workspace: 'Other ' + t, name: 'Olive Park', email: `olive${t}@t.test`, password: 'longenough3', device: 'Mac', deviceId: 'd3' });
   const olive = call(r.body.token);
+  { const os = (await olive('GET', '/state')).body; await olive('PATCH', '/workspace', { tools: { ...os.workspace.tools, projects: true } }); } // isolation, not the tool switch
   st = (await rico('GET', '/state')).body;
   await rico('PATCH', '/workspace', { tools: { ...st.workspace.tools, projects: true } });
   const dana = (await rico('POST', '/contacts', { name: 'Dana Ruiz', email: 'dana@x.test', phone: '555-0100', address: '10 A St' })).body;
@@ -79,8 +80,9 @@ try {
   ok(r.status === 200, 'a member may start a job on a flow open to everyone: ' + r.status + ' ' + (r.body?.error || ''));
   r = await sam('POST', '/jobs', { flowId: flow.id, values: { job: 'Big discount', price: { rows: [{ desc: 'Unit', qty: 1, price: '500' }], discount: { type: 'percent', value: 50 } } } });
   await rico('PUT', '/rules', { discount: { level: 'approval', over: '10%' } });
+  const asRecord = await sam('POST', `/projects/${hv.id}/records`, { typeId: ht.id, values: { job: 'Big discount R', price: { rows: [{ desc: 'Unit', qty: 1, price: '500' }], discount: { type: 'percent', value: 50 } } } });
   r = await sam('POST', '/jobs', { flowId: flow.id, values: { job: 'Big discount 2', price: { rows: [{ desc: 'Unit', qty: 1, price: '500' }], discount: { type: 'percent', value: 50 } } } });
-  ok(r.status === 403, 'a discount over the rule’s limit needs an OK here too, as it does for a new record: ' + r.status);
+  ok(asRecord.status !== 200 && r.status === asRecord.status && !!r.body?.error === !!asRecord.body?.error, `a discount over the rule’s limit is held here exactly as for a new record (${asRecord.status} → ${r.status})`);
   ok(!(await rico('GET', `/projects/${hv.id}/records`)).body.some((x) => x.values[ht.fields.find((f) => f.key === 'job').id] === 'Big discount 2'), 'and no job was made');
   const pflow = (await rico('POST', '/job-flows', { name: 'Shutters', list: { projectId: priv.id, typeId: priv.types[0].id }, whoCreates: 'everyone', steps: [{ kind: 'custom', name: 'Do it' }] })).body;
   await rico('POST', `/job-flows/${pflow?.id}/publish`);
@@ -102,7 +104,7 @@ try {
   const kim = call(r.body.token);
   const samM = (await rico('GET', '/state')).body.workspace.members.find((m) => m.name === 'Sam Reed').id;
   const role = (await rico('POST', '/roles', { name: 'Installers', memberIds: [samM] })).body;
-  const roleId = role?.id ?? role?.role?.id;
+  const roleId = (role?.roles || []).find((x) => x.name === 'Installers')?.id; // POST /roles answers with the workspace
   const rflow = (await rico('POST', '/job-flows', { name: 'Install', list: { projectId: hv.id, typeId: ht.id }, steps: [{ kind: 'custom', name: 'Install it', who: { type: 'role', id: roleId } }] })).body;
   ok(!!rflow?.id, '(setup) a flow with a step for Installers');
   ok((await rico('POST', '/job-flows', { name: 'Bad role', list: { projectId: hv.id, typeId: ht.id }, steps: [{ kind: 'custom', name: 'X', who: { type: 'role', id: 'made-up' } }] })).status === 400, 'a step for a role the team doesn’t have is refused');

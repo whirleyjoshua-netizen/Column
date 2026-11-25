@@ -15,7 +15,7 @@ const METHODS = ['cash', 'check', 'card', 'bank', 'other'];
 const DUE_DAYS = 14;
 const CHECK_MS = Number(process.env.INVOICE_CHECK_MS) || 5 * 60_000;
 
-export function invoicesModule({ proofUrl = () => null, stockCost = () => 0, jobMoney = () => ({ expenses: 0, income: 0, committed: 0, entries: [] }), jobBack = () => {}, onPaymentGone = () => {}, notifyAdmins = null, db, save, broadcast, rid, hold = null, cleanText, readJson, send, badRequest, escHtml, brandOf, logoUrl, teamDay, offline, seal, unseal, stripeCall, PJ, isAdmin, jobOfRecord, jobLabel, moveJob, addMoney, dropMoneyId, publicUrl, emit = () => {} }) {
+export function invoicesModule({ onInvoice = () => {}, bindInvoice = () => {}, proofUrl = () => null, stockCost = () => 0, jobMoney = () => ({ expenses: 0, income: 0, committed: 0, entries: [] }), jobBack = () => {}, onPaymentGone = () => {}, notifyAdmins = null, db, save, broadcast, rid, hold = null, cleanText, readJson, send, badRequest, escHtml, brandOf, logoUrl, teamDay, offline, seal, unseal, stripeCall, PJ, isAdmin, jobOfRecord, jobLabel, moveJob, addMoney, dropMoneyId, publicUrl, emit = () => {} }) {
   db.invoices ||= {};
   db.payKeys ||= {};
   const money = (c) => ((c || 0) / 100).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
@@ -33,6 +33,7 @@ export function invoicesModule({ proofUrl = () => null, stockCost = () => 0, job
   const news = (inv) => {
     inv.updatedAt = Date.now();
     broadcast(inv.wsId, { type: 'invoice', invoice: publicInvoice(inv), projectId: inv.projectId, forAdmins: true });
+    onInvoice(inv); // a job's flow steps that read invoices look again (Job Flows)
   };
   // An invoice as other apps see it (the API and webhooks): dollars, plain names, ISO times.
   const iso = (t) => (t ? new Date(t).toISOString() : null);
@@ -94,6 +95,7 @@ export function invoicesModule({ proofUrl = () => null, stockCost = () => 0, job
       moveJob(rec, 'Paid');
       PJ.recordActivity(rec.id, { kind: 'quote', what: 'invoice paid', note: `${inv.number} · ${money(total)}`, by: who });
     }
+    onInvoice(inv);
   }
   function removePayment(inv, p, by) {
     inv.payments = inv.payments.filter((x) => x !== p);
@@ -263,8 +265,11 @@ export function invoicesModule({ proofUrl = () => null, stockCost = () => 0, job
       if (c === 'costing' && m === 'GET') return send(res, 200, costing(ws, rec));
       if (m === 'GET') return send(res, 200, Object.values(db.invoices).filter((x) => x.recordId === rec.id).sort((x, y) => x.createdAt - y.createdAt).map(publicInvoice));
       if (m === 'POST') {
+        const body = await readJson(req, 10_000).catch(() => ({}));
         const inv = newInvoice(ws, auth, rec, j.t);
         db.invoices[inv.id] = inv;
+        // Made from a job's Invoice step: that step reads this invoice (Job Flows, CONTRACTS.md §1.5).
+        if (body?.jobStep) bindInvoice(rec, inv, String(body.jobStep));
         save();
         news(inv);
         emit(ws.id, 'invoice.created', apiInvoice(inv), auth.member);

@@ -232,3 +232,26 @@ invoices, finance_jobs, inventory_links, inventory_steps, forecast, history, con
 ## 8. Out of Phase 1
 Business items catalog, quotes, billing modes, automatic invoices, customer messages per step, campaign steps,
 stacks per job, map pins for clients, migration of legacy jobs, recurring work, Clients/Schedule/Overview sub-tabs.
+
+## 9. Implementation notes (checkpoint 3)
+
+Where the server differs from, or settles, something above:
+- Runs are stored with `inOrder: false`. The legacy in-order machinery would lock a later step's tasks; the run's own
+  order (the first unmet, unskipped step is current; Done is refused on any other) is enforced in `server/jobflows.js`.
+- Steps routes act on the going run or, if none, the last finished one, so an owner can reopen a step on a finished
+  run (the sweep then puts the run back to going, as `doneBySteps` campaigns already do). Cancelled runs are never
+  acted on, never swept, and never count toward the stage or the forecast.
+- Hiding is done at the shared doors, not per surface: `canSee(kind 'campaign'|'goal')` is false for a run, so every
+  campaign route, the state, templates and exports refuse or omit it; `broadcast` drops `campaign` / `goal` /
+  `nextup` messages about a run (it travels as `{type:'jobrun', recordId, runId}`); `seesCampaign(run)` follows the
+  job's visibility so the run's tasks reach whoever sees the job, and in "members see only theirs" a run's tasks
+  count as the job's tasks (theirs only). Agents' and whiteboards' campaign checks exclude runs; the old job board, the
+  getting-started card and the workload's campaign counts skip runs.
+- A run as a campaign parent gets exactly the answer a missing campaign gets today (400 "That campaign is gone.").
+- A start-job with a discount over the rules' limit is held exactly as `POST /projects/:id/records` holds it (for an
+  app user that's 202 with an approval request, for an API key 403); the test compares the two routes rather than
+  hard-coding a status.
+- `step.done` for a run carries `run`, `flowId`, `cycle`, `again`; the job/project for automations is found from the
+  run's `recordId`, as for any job campaign. New automation trigger `job.flow.done` (project filter).
+- Invoices tell the sweep after every change (`onInvoice` in `news` and `settle`), and an invoice made with
+  `{ jobStep }` from the Invoice step is bound to it (`bindInvoice`).

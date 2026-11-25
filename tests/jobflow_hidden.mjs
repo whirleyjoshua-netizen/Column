@@ -51,7 +51,8 @@ try {
   ok((await rico('POST', '/goals', { campaignId: runId, title: 'Sneaked in', kind: 'tasks' })).status === 404, 'or add a step to it');
   ok((await rico('POST', '/templates', { campaignId: runId, name: 'From a run' })).status === 404, 'or save it as a saved campaign');
   r = await rico('POST', '/campaigns', { name: 'Child', parentId: runId });
-  ok(r.status === 404 && /campaign/i.test(r.body?.error || ''), 'or make it a parent (404, no such campaign): ' + r.status + ' ' + (r.body?.error || ''));
+  const none = await rico('POST', '/campaigns', { name: 'Child 2', parentId: 'no-such-campaign' });
+  ok(r.status === none.status && r.status === 400 && r.body?.error === none.body?.error, 'or make it a parent (answered exactly as for a campaign that doesn’t exist): ' + r.status + ' ' + (r.body?.error || ''));
   ok((await rico('DELETE', `/campaigns/${runId}`)).status === 404, 'or delete it');
   ok((await rico('GET', `/jobs/${job.id}/run`)).body?.run?.id === runId, 'it’s still there, through the job');
 

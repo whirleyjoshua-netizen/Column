@@ -18,6 +18,7 @@ export const EVENTS = [
   { type: 'attempt.logged', tool: 'campaigns', label: 'A call or email is logged', words: ['contact', 'outcome', 'note', 'campaign', 'who'], filters: ['campaign', 'outcome'] },
   { type: 'campaign.started', tool: 'campaigns', label: 'A campaign is started (new, from a saved one, or for a job)', words: ['campaign', 'record', 'who'], filters: ['project'] },
   { type: 'step.done', tool: 'campaigns', label: 'A step in a campaign is finished (its tasks done, or skipped)', words: ['step', 'campaign', 'record', 'who'], filters: ['campaign', 'step', 'project'] },
+  { type: 'job.flow.done', tool: 'projects', label: 'A job finishes its flow (every step done)', words: ['record', 'project', 'list', 'who'], filters: ['project'] },
   { type: 'campaign.done', tool: 'campaigns', label: 'A campaign is finished (by hand, or when all its steps are)', words: ['campaign', 'record', 'who'], filters: ['campaign', 'project'] },
   { type: 'campaign.checkin', tool: 'campaigns', label: 'Someone checks in on a campaign', words: ['campaign', 'note', 'who'], filters: ['campaign', 'statuses'] },
   { type: 'record.created', tool: 'projects', label: 'A job or record is added', words: ['record', 'project', 'list', 'who'], filters: ['project'] },

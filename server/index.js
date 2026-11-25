@@ -22,6 +22,7 @@ import { PdfError, stampPdf, addCertificate, pageCount, writeDoc, writeForm } fr
 import { routesOn, dayRoute, driveDistance } from './routes.js';
 import { projectsModule } from './projects.js';
 import { invoicesModule } from './invoices.js';
+import { jobFlowsModule, isJobRun } from './jobflows.js';
 import { inventoryModule } from './inventory.js';
 import { publicApiModule } from './publicapi.js';
 import { quickbooksModule } from './quickbooks.js';
@@ -587,7 +588,7 @@ const toolsOf = (ws) => Object.fromEntries(TOOL_KEYS.map((k) => [k, ws.settings?
 // everything. A tool off for the whole team (toolsOf) stays off for everyone.
 const MEMBER_DEFAULTS = { contacts: false, projects: true, camps: true, docs: true, chat: true, column: true, templates: true, inventory: true, bills: true, meetings: true, map: true, vault: true, whiteboard: true, teamSchedule: false, teamKpis: false, agentBuild: true };
 const MEMBER_LABEL = { contacts: 'Contacts', projects: 'Boards', camps: 'Campaigns', docs: 'Folders & Docs', chat: 'Chat', column: 'Stacks', templates: 'Templates', inventory: 'Inventory', bills: 'Finance', meetings: 'Meeting notes', map: 'Map', vault: 'Vault', whiteboard: 'Whiteboard', teamSchedule: 'The team’s schedule', teamKpis: 'The team’s numbers (Analytics)', agentBuild: 'Building your own agents' };
-const MEMBER_ROUTES = { contacts: ['contacts', 'contact-groups'], projects: ['projects', 'project-templates', 'records'], camps: ['board'], docs: ['docs', 'folders', 'dirs', 'doc-templates'], column: ['stacks'], templates: ['msg-templates'], inventory: ['inventory'], bills: ['money', 'bills', 'budgets', 'finance'], meetings: ['meetings'], map: ['trips', 'pins', 'zones', 'mileage', 'map'], vault: ['vault'], whiteboard: ['boards'], teamSchedule: ['workload', 'forecast', 'hours'] };
+const MEMBER_ROUTES = { contacts: ['contacts', 'contact-groups'], projects: ['projects', 'project-templates', 'records', 'jobs', 'job-flows'], camps: ['board'], docs: ['docs', 'folders', 'dirs', 'doc-templates'], column: ['stacks'], templates: ['msg-templates'], inventory: ['inventory'], bills: ['money', 'bills', 'budgets', 'finance'], meetings: ['meetings'], map: ['trips', 'pins', 'zones', 'mileage', 'map'], vault: ['vault'], whiteboard: ['boards'], teamSchedule: ['workload', 'forecast', 'hours'] };
 const memberAccessOf = (ws) => Object.fromEntries(Object.keys(MEMBER_DEFAULTS).map((k) => [k, typeof ws.settings?.memberAccess?.[k] === 'boolean' ? ws.settings.memberAccess[k] : MEMBER_DEFAULTS[k]]));
 const memberMay = (ws, auth, k) => isAdmin(auth) || memberAccessOf(ws)[k] !== false;
 const memberOff = (k) => `Your team’s owners and admins have turned ${MEMBER_LABEL[k]} off for members.`;
@@ -2734,7 +2735,7 @@ function startList(ws, auth) {
   const recs = (tpl) => Object.values(db.records).some((r) => r.wsId === ws.id && db.projects[r.projectId]?.template === tpl);
   const first = tools.projects && setup.kind === 'trades' ? ['job', recs('trades') || recs('jobs')]
     : tools.projects && setup.kind === 'software' ? ['work', recs('tech')]
-    : ['campaign', Object.values(db.campaigns).some((c) => c.wsId === ws.id)];
+    : ['campaign', Object.values(db.campaigns).some((c) => c.wsId === ws.id && !isJobRun(c))];
   const items = [
     ['hq', hq],
     (tools.sidekick || tools.agents) && ['ai', ai],
@@ -2832,6 +2833,7 @@ function broadcast(wsId, msg) {
     return;
   }
   const campaignId = campaignOfMsg(msg);
+  if ((msg.type === 'campaign' || msg.type === 'goal' || msg.type === 'nextup') && isJobRun(db.campaigns[campaignId])) return;
   // An item that just went into someone's private folder disappears for everyone else.
   const hide = (msg.type === 'item:add' || msg.type === 'item:update') && JSON.stringify({ type: 'item:remove', id: msg.item.id });
   const feed = msg.item && db.items[msg.item.id] ? feedOfItem(db.items[msg.item.id]) : null;
@@ -2857,6 +2859,7 @@ const METHODS = ['Call', 'Email'];
 const labelList = (v, max) => [...new Set((Array.isArray(v) ? v : []).map((o) => String(o).trim().slice(0, 40)).filter(Boolean))].slice(0, max);
 function seesCampaign(campaignId, memberId) {
   const c = campaignId && db.campaigns[campaignId];
+  if (isJobRun(c)) return !!PJ.recordAt(c.recordId, c.wsId, memberId); // a Job Flow run: whoever sees its job
   const cast = !!c && castOf(c).some((r) => r.memberIds.includes(memberId));
   if (c && ownOnly(c.wsId, memberId)) return c.ownerId === memberId || c.assigneeId === memberId || c.memberIds.includes(memberId) || cast || taskCamps(c.wsId, memberId).has(c.id);
   return !c || !c.private || c.ownerId === memberId || c.assigneeId === memberId || c.memberIds.includes(memberId) || cast;
@@ -2885,7 +2888,8 @@ function taskCamps(wsId, memberId) {
 }
 function seesOwn(kind, x, memberId) {
   if (!x || !ownOnly(x.wsId, memberId)) return true;
-  if (kind === 'task') return !!campaignOf('task', x) || myTask(x, memberId);
+  // A Job Flow step's task counts as the job's task, not a campaign's: theirs only (CONTRACTS.md §3.1).
+  if (kind === 'task') { const cid = campaignOf('task', x); return (!!cid && !isJobRun(db.campaigns[cid])) || myTask(x, memberId); }
   if (kind === 'item') {
     const top = topItem(x);
     return !!campaignOf('item', x) || !!top.channelId || top.type === 'message' || top.memberId === memberId;
@@ -2914,7 +2918,7 @@ function campaignOf(kind, x) {
 }
 // Each person's Day is their own: entries, and the calendar events pulled into them, are seen only by them.
 const seesEntry = (e, memberId) => !e || e.memberId === memberId;
-const canSee = (auth, kind, x) => seesCampaign(campaignOf(kind, x), auth.memberId) && (kind !== 'item' || (seesFeed(feedOfItem(x), auth.memberId) && seesItemDir(x, auth.memberId))) && (kind !== 'entry' || seesEntry(x, auth.memberId)) && seesOwn(kind, x, auth.memberId);
+const canSee = (auth, kind, x) => !((kind === 'campaign' || kind === 'goal') && isJobRun(db.campaigns[campaignOf(kind, x)])) && seesCampaign(campaignOf(kind, x), auth.memberId) && (kind !== 'item' || (seesFeed(feedOfItem(x), auth.memberId) && seesItemDir(x, auth.memberId))) && (kind !== 'entry' || seesEntry(x, auth.memberId)) && seesOwn(kind, x, auth.memberId);
 function campaignOfMsg(msg) {
   if (msg.item) return campaignOf('item', db.items[msg.item.id]);
   if (msg.task) return campaignOf('task', msg.task);
@@ -3125,7 +3129,7 @@ function applyCampaign(c, body, ws, auth) {
   // Part of a bigger campaign: its progress counts toward the main one's. One level: a sub has no subs of its own.
   if (body.parentId !== undefined) {
     const p = body.parentId && db.campaigns[body.parentId];
-    if (body.parentId && (!p || p.wsId !== ws.id)) throw badRequest('That campaign is gone.');
+    if (body.parentId && (!p || p.wsId !== ws.id || isJobRun(p))) throw badRequest('That campaign is gone.');
     if (p?.id === c.id) throw badRequest('A campaign can’t be part of itself.');
     if (p?.parentId) throw badRequest(`“${p.name}” is itself part of another campaign. Pick the main one.`);
     if (p && subsOf(c).length) throw badRequest('This campaign has sub-campaigns of its own, so it can’t go under another one.');
@@ -3191,6 +3195,7 @@ const tasksInOrder = (g) => Object.values(db.tasks).filter((t) => t.goalId === g
   .sort(placed((a, b) => ((a.due || '9') < (b.due || '9') ? -1 : (a.due || '9') > (b.due || '9') ? 1 : a.createdAt - b.createdAt)));
 function goalMet(g) {
   if (g.skipped) return true;
+  if (g.kind === 'step') return JF.stepMet(g); // a Job Flow step: what it stands for, its tasks, its needs
   if (g.kind === 'count') {
     const n = Object.values(db.attempts).filter((x) => x.campaignId === g.campaignId && (!g.counts?.length || g.counts.includes(x.outcome)) && (!g.methods?.length || g.methods.includes(x.method))).length;
     return n >= g.target;
@@ -3377,7 +3382,7 @@ function toolDone(taskId, { by, byId, note, file } = {}) {
 const listWorked = (l) => l.rows.length > 0 && l.rows.every((r) => Object.values(db.attempts).some((x) => x.listId === l.id && x.rowId === r.id));
 
 const HEALTH = ['onTrack', 'atRisk', 'offTrack'];
-const HANDOFF_ROUTES = new Set(['tasks', 'goals', 'attempts', 'campaigns', 'templates', 'sidekick']);
+const HANDOFF_ROUTES = new Set(['tasks', 'goals', 'attempts', 'campaigns', 'templates', 'sidekick', 'jobs']);
 
 // ----- follow-ups: a logged call or email that comes back as a task a few days later -----
 // Unless a campaign says otherwise, no answer comes back in 2 days and interest in 3.
@@ -4076,8 +4081,9 @@ const stageAt = (f, label) => f.choices.findIndex((c) => c.label.toLowerCase() =
 const stepFinished = (g) => g.skipped || (g.kind === 'tasks' ? tasksInOrder(g).length > 0 && goalMet(g) : goalMet(g));
 function openStepsUpTo(rec, f, to) {
   const out = [];
+  const run = JF.activeRun(rec.id); // a job on a Job Flow: only its run holds its stage (CONTRACTS.md §1.5)
   for (const c of Object.values(db.campaigns)) {
-    if (c.recordId !== rec.id) continue;
+    if (c.recordId !== rec.id || (run ? c !== run : isJobRun(c))) continue;
     for (const g of goalsInOrder(c)) { const i = g.stage ? stageAt(f, g.stage) : -1; if (i >= 0 && i <= to && !goalMet(g)) out.push(g); }
   }
   return out;
@@ -4145,7 +4151,7 @@ function jobStepsOnce(wsId, by, byId) {
   // Each step's finished-or-not, kept (g.finished), so "a step is finished" goes off once, when it becomes so. One
   // pass over the team's steps and tasks. A step seen for the first time is only noted.
   const camps = new Map(), tasksOf = new Map();
-  for (const g of Object.values(db.goals)) { const c = db.campaigns[g.campaignId]; if (c?.wsId === wsId) { if (!camps.has(c.id)) camps.set(c.id, []); camps.get(c.id).push(g); } }
+  for (const g of Object.values(db.goals)) { const c = db.campaigns[g.campaignId]; if (c?.wsId === wsId && !(isJobRun(c) && c.status === 'cancelled')) { if (!camps.has(c.id)) camps.set(c.id, []); camps.get(c.id).push(g); } }
   for (const t of Object.values(db.tasks)) if (t.wsId === wsId && t.goalId) { if (!tasksOf.has(t.goalId)) tasksOf.set(t.goalId, []); tasksOf.get(t.goalId).push(t); }
   for (const [cid, gs] of camps) for (const g of gs) {
     const ts = tasksOf.get(g.id) || [];
@@ -4156,7 +4162,8 @@ function jobStepsOnce(wsId, by, byId) {
       const key = needsOf(g).map((n) => (n.met ? 1 : 0) + ':' + (n.have ?? '')).join(',');
       if (key !== g.needKey) { g.needKey = key; changed = true; broadcast(wsId, { type: 'goal', goal: publicGoal(g) }); }
     }
-    const m = !!(g.skipped || (g.kind === 'count' ? goalMet(g) : (g.kind !== 'tasks' || ts.length > 0) && ts.every(stepDone) && needsMet(g)));
+    // A Job Flow step is finished by what it stands for (goalMet → JF.stepMet), not only by its tasks (CONTRACTS.md §1.5).
+    const m = !!(g.kind === 'step' ? goalMet(g) : g.skipped || (g.kind === 'count' ? goalMet(g) : (g.kind !== 'tasks' || ts.length > 0) && ts.every(stepDone) && needsMet(g)));
     // The work history (2026-11-19): work on a step started when its first task was done.
     if (!g.startedAt) { const first = ts.reduce((n, x) => (x.done && x.doneAt && (!n || x.doneAt < n) ? x.doneAt : n), 0); if (first) { g.startedAt = first; changed = true; } }
     if (g.finished === undefined) { g.finished = m; changed = true; continue; }
@@ -4165,14 +4172,21 @@ function jobStepsOnce(wsId, by, byId) {
     changed = true;
     if (m) Object.assign(g, { finishedAt: Date.now(), finishedById: byId || actorNow().by || null });
     else Object.assign(g, { finishedAt: null, finishedById: null, reopens: (g.reopens || 0) + 1 });
-    if (m) automate(wsId, 'step.done', { goal: g, campaign: db.campaigns[cid], who: by, whoId: byId });
+    const camp = db.campaigns[cid];
+    // A run's step: once per completion cycle (goalId:reopens), with the cycle, so an automation can run only the first time.
+    const run = isJobRun(camp) ? { run: true, flowId: camp.flowId, cycle: (g.reopens || 0) + 1, again: (g.reopens || 0) > 0 } : {};
+    if (m) automate(wsId, 'step.done', { goal: g, campaign: camp, who: by, whoId: byId, ...run });
+    if (isJobRun(camp)) JF.tell(camp);
   }
   for (const c of Object.values(db.campaigns)) {
-    if (c.wsId !== wsId || !c.recordId) continue;
+    if (c.wsId !== wsId || !c.recordId || (isJobRun(c) && c.status === 'cancelled')) continue;
     const rec = db.records[c.recordId];
     if (!rec) continue;
     const p = db.projects[rec.projectId];
-    const f = stageFieldOf(p && typeOfP(p, rec.typeId));
+    // Who moves the job's stage: its going Job Flow run alone, else its ordinary campaigns as before (CONTRACTS.md §1.5).
+    const run = JF.activeRun(rec.id);
+    const owns = run ? c === run : !isJobRun(c);
+    const f = owns ? stageFieldOf(p && typeOfP(p, rec.typeId)) : null;
     const goals = goalsInOrder(c);
     let fresh = null;
     for (const g of goals) {
@@ -4183,7 +4197,7 @@ function jobStepsOnce(wsId, by, byId) {
     if (fresh && f) {
       const at = f.choices.findIndex((x) => x.id === rec.values[f.id]);
       let to = -1;
-      for (const x of Object.values(db.campaigns)) if (x.recordId === rec.id) for (const g of goalsInOrder(x)) {
+      for (const x of run ? [run] : Object.values(db.campaigns).filter((y) => y.recordId === rec.id && !isJobRun(y))) for (const g of goalsInOrder(x)) {
         const i = g.stage && stepFinished(g) ? stageAt(f, g.stage) : -1;
         if (i > to && !openStepsUpTo(rec, f, i).length) to = i;
       }
@@ -4199,13 +4213,21 @@ function jobStepsOnce(wsId, by, byId) {
     if (all && c.status === 'active') {
       Object.assign(c, { status: 'done', doneBySteps: true });
       changed = true;
+      if (isJobRun(c)) {
+        // A run finishing is its own event; campaign automations never see runs (CONTRACTS.md §2.3).
+        const lt = p && typeOfP(p, rec.typeId);
+        automate(wsId, 'job.flow.done', { record: rec, project: p, list: lt, recordName: String(rec.values[lt?.primary] ?? ''), flowName: c.flowName, who: by, whoId: byId, private: !!p?.private });
+        JF.tell(c);
+        continue;
+      }
       broadcast(wsId, { type: 'campaign', campaign: publicCampaign(c) });
       automate(wsId, 'campaign.done', { campaign: c, who: by, whoId: byId });
       for (const n of Object.values(db.campaigns)) if (n.follows === c.id && n.status !== 'done') broadcast(wsId, { type: 'nextup', campaign: publicCampaign(n), after: c.name, by });
     } else if (!all && c.status === 'done' && c.doneBySteps) {
       Object.assign(c, { status: 'active', doneBySteps: false });
       changed = true;
-      broadcast(wsId, { type: 'campaign', campaign: publicCampaign(c) });
+      if (isJobRun(c)) JF.tell(c);
+      else broadcast(wsId, { type: 'campaign', campaign: publicCampaign(c) });
     }
   }
   if (changed) save();
@@ -6402,7 +6424,7 @@ function workload(ws, week) {
     });
   }
   for (const [id, set] of visits) by.get(id).visits = set.size;
-  for (const c of Object.values(db.campaigns)) if (c.wsId === ws.id && c.status === 'active' && by.get(c.ownerId)) by.get(c.ownerId).campaigns++;
+  for (const c of Object.values(db.campaigns)) if (c.wsId === ws.id && c.status === 'active' && !isJobRun(c) && by.get(c.ownerId)) by.get(c.ownerId).campaigns++;
   return { week, days, today, people: [...by.values()], unassigned };
 }
 // ---------- the hours calculator (Team plan step 3, the owner 2026-11-20) ----------
@@ -6445,7 +6467,7 @@ function jobBoard(ws, auth) {
   const me = auth.memberId, admin = isAdmin(auth), today = teamDay(ws.id);
   const nameOf = (id) => ws.members.find((x) => x.id === id)?.name || null;
   const byJob = new Map(), tasksBy = new Map();
-  for (const c of Object.values(db.campaigns)) if (c.wsId === ws.id && c.recordId && c.status !== 'done' && db.records[c.recordId]) (byJob.get(c.recordId) || byJob.set(c.recordId, []).get(c.recordId)).push(c);
+  for (const c of Object.values(db.campaigns)) if (c.wsId === ws.id && c.recordId && c.status !== 'done' && !isJobRun(c) && db.records[c.recordId]) (byJob.get(c.recordId) || byJob.set(c.recordId, []).get(c.recordId)).push(c);
   for (const t of Object.values(db.tasks)) if (t.wsId === ws.id && t.goalId && !t.skipped) (tasksBy.get(t.goalId) || tasksBy.set(t.goalId, []).get(t.goalId)).push(t);
   const jobs = [];
   for (const [id, camps] of byJob) {
@@ -6605,7 +6627,7 @@ function forecast(ws, auth, weeks = FC_WEEKS) {
   const stock = new Map(), gear = new Map(), visitsToBook = [];
   const jobNeeds = new Map(); // job id -> Set of item ids / visit kinds it's short of
   for (const c of Object.values(db.campaigns)) {
-    if (c.wsId !== ws.id || c.status === 'done' || !c.recordId || !db.records[c.recordId]) continue;
+    if (c.wsId !== ws.id || c.status === 'done' || c.status === 'cancelled' || !c.recordId || !db.records[c.recordId]) continue;
     const rec = db.records[c.recordId], open = sees(c) && recSeen(rec.id);
     for (const g of goalsInOrder(c)) {
       if (!g.needs?.length || stepFinished(g)) continue;
@@ -8556,6 +8578,8 @@ async function api(req, res, url) {
     if (out !== null) return;
   }
   {
+    const jf = await JF.route(req, res, parts, auth, ws);
+    if (jf !== null) return;
     const out = await INV.route(req, res, parts, auth, ws);
     if (out !== null) return;
   }
@@ -12135,7 +12159,7 @@ async function replayAs(ws, memberId, approvalId, { method, path: p, body }, as 
 }
 const hold = (...a) => RULES.hold(...a);
 const PJ = projectsModule({ seesLinked: (kind, x, memberId) => canSee({ memberId }, kind, x), proofUrl: (ws) => pagesProof(ws), onEvent: (...a) => recordEvent(...a), onPrice: (...a) => priceChanged(...a), canSeeItem: (auth, it) => canSee(auth, 'item', it), seal, unseal, db, save, broadcast, rid, hold, cleanText, isDay, readJson, send, badRequest, isOwnerId, escHtml, brandOf, logoUrl, teamDay, offline, allowLocalHooks: process.env.ALLOW_LOCAL_WEBHOOKS === '1', qrSvg, publicUrl: PUBLIC_URL,
-  onRecordGone: (rec) => { dropVisits(rec); INV.dropFor(rec); campsOffJob(rec); }, stageGate: (...a) => stageGate(...a),
+  onRecordGone: (rec) => { dropVisits(rec); INV.dropFor(rec); JF.dropFor(rec); campsOffJob(rec); }, stageGate: (...a) => stageGate(...a),
   onRecordNews: (rec) => { jobChanged(rec); if (rec.share || rec.qbo?.estId) QB.soon(rec.wsId); },
   // A follow-up from a record's timeline: a task for whoever logged it, about the record.
   makeTask: (ws, auth, { text, due, recordId }) => {
@@ -12404,7 +12428,7 @@ async function itemFile(ws, memberId, id) {
   if (!it || it.wsId !== ws.id || it.type !== 'file' || !/^image\//.test(it.mime || '') || !canSee({ wsId: ws.id, memberId, role: me?.role }, 'item', it)) throw badRequest('That picture isn’t in Kloomie any more.');
   return { bytes: await fsp.readFile(path.join(FILES_DIR, it.id)), name: it.name, mime: it.mime };
 }
-const AGENTS_M = agentsModule({ autoEvents: FL.EVENTS, offWhy, sees: (memberId, kind, x) => (kind === 'campaign' ? seesCampaign(x.id, memberId) : canSee({ memberId }, kind, x)), db, save, rid,
+const AGENTS_M = agentsModule({ autoEvents: FL.EVENTS, offWhy, sees: (memberId, kind, x) => (kind === 'campaign' ? !isJobRun(x) && seesCampaign(x.id, memberId) : canSee({ memberId }, kind, x)), db, save, rid,
   // Every change to a run goes out as news; one asked in chat is answered there as soon as it's done.
   broadcast: (wsId, msg) => { broadcast(wsId, msg); if (msg?.type === 'agent' && msg.run?.id && db.chatAsks?.[msg.run.id]) chatAskDone(msg.run.id); }, cleanText, readJson, send, notify, replay: replayAs, run: agentLlm, sendEmail: agentEmail, textToDoc, PJ, isAdminId, localNow, tzOf, fmtMinutes, hasAi: (wsId, memberId) => !!aiUse(aiOf(wsId, memberId)), POSTIZ, makeImageItem, itemFile, noContact, describeImages, canPicture: (wsId, memberId) => ['openai', 'gemini'].some((k) => !!aiOf(wsId, memberId).keys?.[k]?.sealed) });
 const GH = githubModule({ bind: OAUTH_BIND, automate: (...x) => automate(...x), alarm: (...x) => alarm(...x), db, save, broadcast, rid, cleanText, readJson, send, seal, unseal, isAdmin, PJ, sees: (p, mid) => PJ.sees(p, mid), publicUrl: PUBLIC_URL });
@@ -12437,7 +12461,7 @@ function ccCtx(ctx) {
   return rec && t ? { ...rest, record: rec, project: p, list: t, recordName: String(rec.values[t.primary] ?? '') } : rest;
 }
 // Microsoft Teams (teams.js): a Teams Workflows address the team pastes; automations and people (after a yes) post to it.
-WB = whiteboardModule({ db, save, send, readJson, cleanText, rid, broadcast, sockets, isAdmin, isAdminId, seesCampaign, ownOnly, toolsOf, memberMay });
+WB = whiteboardModule({ db, save, send, readJson, cleanText, rid, broadcast, sockets, isAdmin, isAdminId, seesCampaign: (id, m) => !isJobRun(db.campaigns[id]) && seesCampaign(id, m), ownOnly, toolsOf, memberMay });
 setInterval(() => WB.sweep(), 3600_000).unref();
 const TEAMS = teamsModule({ db, save, send, readJson, cleanText, seal, unseal, isAdmin, safeFetch, broadcast, allowLocal: process.env.ALLOW_LOCAL_WEBHOOKS === '1' });
 const CC = companycamModule({ db, save, broadcast, rid, cleanText, readJson, send, seal, unseal, isAdmin, safeFetch, publicUrl: PUBLIC_URL, jobsOf: ccJobs, addPhoto: ccPhoto, automate: (w, k, x) => automate(w, k, ccCtx(x)), alarm: (...x) => alarm(...x) });
@@ -12520,7 +12544,8 @@ const STOCK = inventoryModule({ db, save, broadcast, rid, cleanText, readJson, s
   labelUrl: (tag) => `${PUBLIC_URL}/a/${tag}`,
   labelQr: (tag) => 'data:image/svg+xml;base64,' + Buffer.from(qrSvg(`${PUBLIC_URL}/a/${tag}`, { scale: 8 })).toString('base64'),
   projectFor: (pid, wsId, memberId) => { const p = db.projects[pid]; return p && p.wsId === wsId && PJ.sees(p, memberId) ? { p, records: Object.values(db.records).filter((r) => r.projectId === p.id) } : null; } });
-const INV = invoicesModule({ proofUrl: (ws) => pagesProof(ws), stockCost: (recId) => STOCK.stockCost(recId), jobMoney: (recId) => jobMoney(recId), notifyAdmins: (...a) => notifyAdmins(...a), jobBack: (rec) => jobBack(rec), onPaymentGone: (...a) => QB.paymentGone(...a), db, save, broadcast, rid, hold, cleanText, readJson, send, badRequest, escHtml, brandOf, logoUrl, teamDay, offline, seal, unseal, stripeCall: stripe.callWith, PJ, isAdmin, jobOfRecord, jobLabel, moveJob, publicUrl: PUBLIC_URL, emit: (...a) => { PJ.emit(...a); QB.soon(a[0]); try { eventFromHook(a[0], a[1], a[2], a[3]); } catch (e) { alarm('An automation event failed to build', e); } },
+const JF = jobFlowsModule({ db, save, broadcast, rid, cleanText, readJson, send, isAdmin, PJ, toolsOf, goalsInOrder, tasksInOrder, applyTask, publicTask: (t) => publicTask(t), canSeeTask: (auth, t) => canSee(auth, 'task', t), stepsSoon: (w) => stepsSoon(w), visitsOf: (id) => visitsOf(id), needsMet: (g) => needsMet(g), noteWork: (t, was) => noteWork(t, was) });
+const INV = invoicesModule({ onInvoice: (inv) => stepsSoon(inv.wsId), bindInvoice: (rec, inv, stepId) => JF.bindInvoice(rec, inv, stepId), proofUrl: (ws) => pagesProof(ws), stockCost: (recId) => STOCK.stockCost(recId), jobMoney: (recId) => jobMoney(recId), notifyAdmins: (...a) => notifyAdmins(...a), jobBack: (rec) => jobBack(rec), onPaymentGone: (...a) => QB.paymentGone(...a), db, save, broadcast, rid, hold, cleanText, readJson, send, badRequest, escHtml, brandOf, logoUrl, teamDay, offline, seal, unseal, stripeCall: stripe.callWith, PJ, isAdmin, jobOfRecord, jobLabel, moveJob, publicUrl: PUBLIC_URL, emit: (...a) => { PJ.emit(...a); QB.soon(a[0]); try { eventFromHook(a[0], a[1], a[2], a[3]); } catch (e) { alarm('An automation event failed to build', e); } },
   // A payment is money in on the business's Finance, under the team's owner.
   addMoney: (ws, { amount, day, note, invoiceId = null }) => {
     const owner = ws.members.find((m) => m.role === 'owner') || ws.members[0];

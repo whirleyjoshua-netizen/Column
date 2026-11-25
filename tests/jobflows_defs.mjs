@@ -29,6 +29,7 @@ try {
   const sam = call(r.body.token);
   r = await call()('POST', '/auth', { mode: 'create', workspace: 'Other ' + t, name: 'Olive Park', email: `olive${t}@t.test`, password: 'longenough3', device: 'Mac', deviceId: 'd3' });
   const olive = call(r.body.token);
+  { const os = (await olive('GET', '/state')).body; await olive('PATCH', '/workspace', { tools: { ...os.workspace.tools, projects: true } }); } // isolation, not the tool switch
   st = (await rico('GET', '/state')).body;
   await rico('PATCH', '/workspace', { tools: { ...st.workspace.tools, projects: true } });
   const p = (await rico('POST', '/projects', { template: 'trades', trades: ['cleaning'] })).body;

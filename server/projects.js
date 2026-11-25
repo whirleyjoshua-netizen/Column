@@ -2449,6 +2449,14 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
   const dateField = (t, id) => { const f = fieldOf(t, id); return f && (f.type === 'date' || (f.type === 'formula' && f.format === 'date')) ? f : null; };
 
   // A record made by Kloomie for someone (an AI plan they accepted): made, announced.
+  // Job Flows (docs/jobflows/CONTRACTS.md §2): the same checks as POST /projects/:id/records (the rules' OK, the
+  // record's own validation), without the news, so the job and its run go out together. A throw writes nothing.
+  function jobRecord(ws, p, t, auth, values, req, body) {
+    const held = holdDiscount(ws, auth, p, t, null, values, req, body);
+    if (held) return { held };
+    return { rec: newRecord(ws, p, t, auth, values, null, { addChoices: false }) };
+  }
+  const announceRecord = (rec, by) => recordNews(rec, 'record.created', by);
   function createRecord(ws, p, t, auth, values) {
     const rec = newRecord(ws, p, t, auth, values, null, { addChoices: false });
     recordNews(rec, 'record.created', auth.member);
@@ -2487,5 +2495,5 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
     projectNews(p);
     return { project: p, made, skipped };
   }
-  return { profileOf, moveLicensesOut, isProfile, autoSetClean, autoSetValues, autoUpdate, carryOver, dateField, dateOf, recName, importProject, cleanSpec, createRecord, publicRecord, updateRecord, route, v1, keyAuth, makeHook, publicHook, deliver, emit, quoteOf, quotePage, seesMsg, stateFor, sees, recordActivity, recordNews, words, fillFromProject, fromProjectOk, recordStory, priceList, recordAt, itemsTotals, TEMPLATES: Object.fromEntries(Object.entries(TEMPLATES).map(([k, t]) => [k, { name: t.name, icon: t.icon, about: t.about }])) };
+  return { jobRecord, announceRecord, publicRecordOf: (rec) => publicRecord(rec), typeOfP: (p, id) => typeOf(p, id), profileOf, moveLicensesOut, isProfile, autoSetClean, autoSetValues, autoUpdate, carryOver, dateField, dateOf, recName, importProject, cleanSpec, createRecord, publicRecord, updateRecord, route, v1, keyAuth, makeHook, publicHook, deliver, emit, quoteOf, quotePage, seesMsg, stateFor, sees, recordActivity, recordNews, words, fillFromProject, fromProjectOk, recordStory, priceList, recordAt, itemsTotals, TEMPLATES: Object.fromEntries(Object.entries(TEMPLATES).map(([k, t]) => [k, { name: t.name, icon: t.icon, about: t.about }])) };
 }

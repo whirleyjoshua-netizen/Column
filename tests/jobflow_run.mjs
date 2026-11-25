@@ -80,7 +80,7 @@ try {
   ok(r.status === 409, 'Add client info has no Done button: it finishes when a client is on the job: ' + r.status);
 
   await rico('PATCH', '/records/' + job.id, { values: { customer: danaId } });
-  ok(await at('details'), 'a client on the job finishes the first step');
+  ok(await until(async () => (await run())?.steps?.[0]?.state === 'done'), 'a client on the job finishes the first step');
   await rico('PATCH', '/records/' + job.id, { values: { address: '10 A St' } });
   ok(await at('book'), 'filling its address finishes Add job info; next: book it');
   ok((await run())?.next?.action === 'book-visit', 'Next opens the visit sheet');
@@ -201,7 +201,7 @@ try {
   r = await sam('GET', `/jobs/${job3.id}/run`);
   const seenBySam = JSON.stringify(r.body || {});
   ok(r.status === 200 && !!r.body?.run, 'a member who can see the job can open its run');
-  ok(!/INV-\d/.test(seenBySam) && !/"(total|balance|amount|paid)"/.test(seenBySam) && !seenBySam.includes('50.00'), 'and gets no invoice numbers, totals or balances');
+  ok(!/INV-\d/.test(seenBySam) && !/"(balance|amount|paid|subtotal|invoiceId|number)"/.test(seenBySam) && !/\$\d|50\.00|5000/.test(seenBySam), 'and gets no invoice numbers, amounts or balances (the run’s “total” is its count of steps)');
   ok(r.body?.run?.steps?.find((s) => s.kind === 'custom')?.text === 'Smile at the customer.', 'the step’s instructions are there');
   ok(typeof r.body?.run?.current?.missing === 'string' && r.body.run.current.missing.length > 0, 'and what the current step is waiting for, in words');
   const job5 = (await rico('POST', '/jobs', { flowId: flow2.id, values: { job: 'Private tasks job' } })).body?.job;
