@@ -310,6 +310,8 @@ try {
   r = await rico('POST', `/jobs/${jh?.id}/quote/send`);
   ok(r.status === 200 && !!r.body?.url && r.body?.told?.emailed === false && !!r.body?.told?.reason, 'Send the quote with email off: the link is made, and it says it wasn’t emailed: ' + JSON.stringify(r.body?.told));
   ok((await stepOf(jh?.id, 'Quote'))?.quote?.status === 'sent', 'the quote is sent all the same');
+  s = await stepOf(jh?.id, 'Quote');
+  ok(s?.told?.state === 'blocked' && !!s.told.reason && !(await stepOf(jh?.id, 'Quote', sam))?.told, 'the job’s quote step keeps “not emailed” and why, for owners and admins: ' + JSON.stringify(s?.told));
   const ira = await person();
   const ji = await job(FA.id, ira);
   await rico('POST', `/jobs/${ji?.id}/steps/${FA.sid('Do it')}/done`);
@@ -331,6 +333,7 @@ try {
   ok(!mails(hal.email, 'quote-sent').length, 'Send the quote’s email isn’t retried in the background');
   r = await rico('POST', `/jobs/${jh?.id}/quote/send`);
   ok(r.body?.told?.emailed === true && mails(hal.email, 'quote-sent').length === 1, 'a blocked first email lets the next tap try again');
+  ok((await stepOf(jh?.id, 'Quote'))?.told?.state === 'sent', 'and then the step says it was sent');
 
   // 9. In doubt (the provider threw): unsure, counted as done, never retried.
   await stop();

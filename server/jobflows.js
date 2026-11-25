@@ -344,7 +344,11 @@ export function jobFlowsModule(ctx) {
       }
       if (g.skippedBy === 'kloomie') out.skippedBy = 'kloomie';
       if (s.kind === 'quote' && (s.settings?.followUpDays || 0) > 0) out.followUp = { days: s.settings.followUpDays, sentAt: ['sent', 'unsure'].includes(g.followed?.state) ? g.followed.at : null };
-      if (s.kind === 'quote' && isAdmin(auth) && g.quoteTold) out.told = { state: g.quoteTold.state, ...(g.quoteTold.via ? { via: g.quoteTold.via } : {}) };
+      if (s.kind === 'quote' && isAdmin(auth) && rec?.share) {
+        const tk = rec.share.token;
+        if (g.quoteTold?.token === tk) out.told = { state: g.quoteTold.state, ...(g.quoteTold.via ? { via: g.quoteTold.via } : {}), ...(g.quoteTold.reason ? { reason: g.quoteTold.reason } : {}) };
+        else if (g.quoteBlocked?.token === tk) out.told = { state: 'blocked', reason: g.quoteBlocked.reason };
+      }
       if (s.kind === 'payment' && (s.settings?.reminders || []).length) {
         const inv = rec && payInvoices(c, rec)[0];
         const hist = (inv && g.reminded?.[inv.id]) || {};
@@ -723,10 +727,14 @@ export function jobFlowsModule(ctx) {
           else {
             const cust = customerOf(rec);
             const why = flowReach(cust);
-            if (why) told = { emailed: false, texted: false, reason: why };
+            if (why) { told = { emailed: false, texted: false, reason: why }; g.quoteBlocked = { token, reason: why, at: Date.now() }; save(); }
             else {
               const out = await sendOnce(g, 'quoteTold', { token }, () => flowTell(ws, rec, cust, flowMsg.quote(ws, rec, cust, quoteUrlOf(rec), itemsTotals(rec.values[itemsField(typeOfRec(rec))?.id])?.total || 0), auth.member));
               told = { emailed: out.via === 'email' || out.via === 'both', texted: out.via === 'text' || out.via === 'both', ...(out.outcome !== 'sent' ? { reason: out.reason } : {}) };
+              // Not sent for sure: the reason is kept apart from the once-only marker (which is gone, so a later tap
+              // may try again), for the job's quote step to show "Not emailed".
+              if (out.outcome === 'blocked') g.quoteBlocked = { token, reason: out.reason, at: Date.now() }; else delete g.quoteBlocked;
+              save();
             }
           }
         }
