@@ -1946,7 +1946,7 @@ export function projectsModule({ jobQuote = () => null, seesLinked = () => true,
       const client = cf?.type === 'link' && rec.values[cf.id]?.[0] && db.records[rec.values[cf.id][0]];
       const ct = client && typeOf(p, client.typeId);
       const cv = (key) => { const f = ct && fieldOf(ct, key); return f && client.values[f.id] != null ? String(client.values[f.id]) : ''; };
-      if (client) to = { name: cv('name') || cv(ct.fields.find((f) => f.id === ct.primary)?.key), lines: [cv('contact'), cv('address'), cv('email'), cv('phone')].filter(Boolean) };
+      if (client) to = { name: cv('name') || cv(ct.fields.find((f) => f.id === ct.primary)?.key), lines: [cv('contact'), cv('address'), ...(look.showClientContact ? [cv('email'), cv('phone')] : [])].filter(Boolean) };
     }
     const status = quoteStatus(t, rec);
     const brand = brandOf(ws);

@@ -38,6 +38,33 @@ const JPG = 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAASABIAAD/4QBMRXhpZgAATU0A
 const SIG2 = png(200, 70, true);
 const NOT_PNG = 'data:image/png;base64,' + Buffer.from('GIF89a not a png at all').toString('base64');
 
+// The drawn-signature reader, directly (server/docs.js): it never throws, and refuses anything not a small, real,
+// inked PNG of a signature pad's size, however it's malformed.
+{
+  const { inkedPng, PAD_MAX_W, PAD_MAX_H } = await import('../server/docs.js');
+  const bytes = (d) => Buffer.from(d.split(',')[1], 'base64');
+  const url = (b) => 'data:image/png;base64,' + b.toString('base64');
+  ok(!!inkedPng(SIG) && !inkedPng(BLANK), 'a drawing with ink passes; a blank one doesn’t');
+  ok(!inkedPng(png(PAD_MAX_W + 1, 20, true)) && !inkedPng(png(20, PAD_MAX_H + 1, true)) && !!inkedPng(png(PAD_MAX_W, 40, true)), 'wider or taller than a pad (1200 × 600) is refused');
+  const hdrShort = Buffer.from(bytes(SIG)); hdrShort.writeUInt32BE(12, 8); // IHDR says 12 bytes long
+  ok(inkedPng(url(hdrShort)) === null, 'a malformed IHDR: refused, no throw');
+  const longChunk = Buffer.from(bytes(SIG)); longChunk.writeUInt32BE(0x7fffffff, 33); // the IDAT claims 2 GB
+  ok(inkedPng(url(longChunk)) === null, 'a chunk longer than the file: refused, no throw');
+  ok(inkedPng(url(bytes(SIG).subarray(0, 50))) === null, 'a truncated file: refused');
+  const gray = Buffer.from(bytes(SIG)); gray[25] = 0; // colour type: greyscale
+  ok(inkedPng(url(gray)) === null, 'an unsupported colour type: refused');
+  const deep = Buffer.from(bytes(SIG)); deep[24] = 16; // 16-bit
+  ok(inkedPng(url(deep)) === null, 'an unsupported bit depth: refused');
+  // A small file that inflates to far more than its own header says (a decompression bomb): refused without inflating it all.
+  const crcT2 = Array.from({ length: 256 }, (_, n) => { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; return c >>> 0; });
+  const crc2 = (b) => { let c = 0xffffffff; for (const x of b) c = crcT2[(c ^ x) & 255] ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0; };
+  const ch = (t2, d) => { const l = Buffer.alloc(4); l.writeUInt32BE(d.length); const td = Buffer.concat([Buffer.from(t2), d]); const c = Buffer.alloc(4); c.writeUInt32BE(crc2(td)); return Buffer.concat([l, td, c]); };
+  const ih = Buffer.alloc(13); ih.writeUInt32BE(10, 0); ih.writeUInt32BE(10, 4); ih[8] = 8; ih[9] = 6;
+  const bomb = Buffer.concat([bytes(SIG).subarray(0, 8), ch('IHDR', ih), ch('IDAT', zlib.deflateSync(Buffer.alloc(50_000_000))), ch('IEND', Buffer.alloc(0))]);
+  ok(bomb.length < 100_000 && inkedPng(url(bomb)) === null, 'a decompression bomb (' + bomb.length + ' bytes → 50 MB): refused');
+  ok(inkedPng('data:image/png;base64,' + 'A'.repeat(300_000)) === null && inkedPng('nonsense') === null && inkedPng(null) === null, 'junk: refused');
+}
+
 const base = { ...process.env, PORT: String(PORT), PUBLIC_URL: B, DATA_DIR: DIR, RESEND_API_KEY: '', DATABASE_URL: '', STRIPE_SECRET_KEY: '', STRIPE_PRICE: '', SKIP_SETUP: '1', NODE_ENV: 'test', MAIL_OUTBOX: '1', CUSTMSG_TICK_MS: '300', QUOTE_TEST_BACKDATE: '1' };
 try { execSync(`lsof -ti tcp:${PORT} -sTCP:LISTEN | xargs kill 2>/dev/null`); await sleep(300); } catch {}
 const srv = spawn('node', ['index.js'], { cwd: new URL('../server', import.meta.url).pathname, env: base, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -210,11 +237,20 @@ try {
   const bp = (await rico('POST', '/projects', { template: 'bids', name: 'Estimating' })).body;
   const T = Object.fromEntries(bp.types.map((x) => [x.key, x]));
   const q = (await rico('POST', `/projects/${bp.id}/records`, { typeId: T.quotes.id, values: { title: 'Tint', valid_until: '2099-12-31', terms: 'Half up front.', items: { rows: [{ desc: 'Film', qty: 10, price: 400 }] } } })).body;
-  const q2 = (await rico('POST', `/projects/${bp.id}/records`, { typeId: T.quotes.id, values: { title: 'Wrap', valid_until: '2099-12-31', items: { rows: [{ desc: 'Vinyl', qty: 1, price: 900 }] } } })).body;
+  const cl = (await rico('POST', `/projects/${bp.id}/records`, { typeId: T.clients.id, values: { name: 'Pat Lin', email: `pat${t}@x.test`, phone: '(702) 555-0188', address: '3 Oak Ave' } })).body;
+  const q2 = (await rico('POST', `/projects/${bp.id}/records`, { typeId: T.quotes.id, values: { title: 'Wrap', valid_until: '2099-12-31', client: [cl?.id], items: { rows: [{ desc: 'Vinyl', qty: 1, price: 900 }] } } })).body;
   const qs1 = (await rico('POST', `/records/${q.id}/share`, { hours: 0 })).body, qs2 = (await rico('POST', `/records/${q2.id}/share`, { hours: 0 })).body;
   const b1 = (await page(`${B}/q/${qs1?.share?.token}`)).html, b2 = (await page(`${B}/q/${qs2?.share?.token}`)).html;
   ok(b1.includes('Half up front.') && !b1.includes('Due on receipt.'), 'a quote’s own terms beat the default');
   ok(b2.includes('Due on receipt.') && b2.includes('Acme Pro Cleaning'), 'one without its own terms shows the default, and the business details');
+  ok(b2.includes('Pat Lin') && b2.includes('3 Oak Ave') && !b2.includes(`pat${t}@x.test`) && !b2.includes('555-0188'), 'a Bids & Quotes client: name and address, no email or phone while the team hasn’t turned that on');
+  await rico('PATCH', '/docs-settings', { showClientContact: true });
+  const b3 = (await page(`${B}/q/${qs2?.share?.token}`)).html;
+  ok(b3.includes(`pat${t}@x.test`) && b3.includes('555-0188'), 'turned on: the client’s email and phone show');
+  const j8 = await mkJob();
+  const b4 = (await page((await sendQuote(j8?.id)).body?.url)).html;
+  ok(b4.includes(`dana${t}@x.test`) && b4.includes('555-0111'), 'and on a job quote issued after that');
+  await rico('PATCH', '/docs-settings', { showClientContact: false });
 
   // The lines fingerprint (audit G3) holds in both modes: lines changed after the page loaded can't be accepted.
   const FI = (k) => T.quotes.fields.find((x) => x.key === k);

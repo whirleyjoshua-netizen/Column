@@ -11282,7 +11282,8 @@ async function api(req, res, url) {
       if (!name) return send(res, 400, { error: 'Add the name of who signs (and their title, if you like).' });
       const f = { id: rid(), mime };
       await fsp.writeFile(logoPath(f), buf);
-      ws.docsFiles = [...(ws.docsFiles || []), f].slice(-50);
+      // Every signature stays served, so a quote already sent keeps showing the one it was sent with.
+      ws.docsFiles = [...(ws.docsFiles || []), f];
       ws.docs = { ...docsOf(ws), signature: { ...f, name, title: cleanText(body.title, 80).trim() } };
       save();
       return send(res, 200, out());
