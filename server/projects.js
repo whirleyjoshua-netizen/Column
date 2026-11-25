@@ -367,10 +367,85 @@ export function projectsModule({ jobQuote = () => null, seesLinked = () => true,
   // call the customer and find the place, even if they can't open Contacts.
   // What's in a locked field (rec.secrets) never goes out with a record: only that one is set ({ set, at } in values).
   // The job an item is at goes out with its name and project, when that project isn't private.
-  const publicRecord = ({ wsId, log, secrets, flowStage, stages, ...r }) => {
+  // Prices (docs/jobflows/PRICES.md): owners and admins see them, by their role now; members never do, on any path.
+  // A price is a price line (items), a Price list's money, or a formula or rollup that reads one (past calc's 8
+  // levels it counts as one too). Redaction happens only on what goes out: stored values and calc are untouched.
+  const seesPrices = (wsId, memberId) => ['owner', 'admin'].includes(db.workspaces[wsId]?.members.find((m) => m.id === memberId)?.role);
+  const FULL = { prices: true };
+  const viewOf = (wsId, memberId) => (seesPrices(wsId, memberId) ? { prices: true } : null);
+  function isPriced(p, t, f, depth = 0) {
+    if (!f || !t) return false;
+    if (depth > 8) return true;
+    if (f.type === 'items') return true;
+    if (f.type === 'money') return t.key === 'price_list';
+    if (f.type === 'formula') {
+      let ids;
+      try { ids = FX.refs(treeOf(f)); } catch { return true; }
+      for (const id of ids) if (isPriced(p, t, fieldOf(t, id), depth + 1)) return true;
+      return false;
+    }
+    if (f.type === 'rollup') {
+      if (f.fn === 'count' || f.fn === 'checked') return false;
+      const lf = fieldOf(t, f.via);
+      const to = lf?.type === 'link' && typeOf(p, lf.target);
+      return !!to && isPriced(p, to, fieldOf(to, f.of), depth + 1);
+    }
+    return false;
+  }
+  const pricedIds = (p, t) => (p && t ? t.fields.filter((f) => isPriced(p, t, f)).map((f) => f.id) : []);
+  // A copy of the values without prices: price lines keep what and how many; anything else priced is null and named
+  // in hidden. With view.prices, the values as they are.
+  function redactValues(p, t, values, view) {
+    if (view?.prices) return { values, hidden: [] };
+    const ids = pricedIds(p, t);
+    if (!ids.length) return { values, hidden: [] };
+    const out = { ...values }, hidden = [];
+    for (const id of ids) {
+      const f = fieldOf(t, id);
+      if (f.type === 'items') { const x = values[id]; if (x != null) out[id] = { rows: (Array.isArray(x.rows) ? x.rows : []).map((r) => ({ id: r.id, desc: r.desc ?? '', qty: r.qty, unit: r.unit ?? '' })), hidden: true }; }
+      else { out[id] = null; hidden.push(id); }
+    }
+    return { values: out, hidden };
+  }
+  // A timeline entry as this reader may see it: a change to a price reads "changed". An entry is shown in full only
+  // when it's positively not a price: its fieldId is a field that isn't priced, or (older entries, no fieldId) its
+  // field name matches exactly one field of the list and that one isn't priced.
+  function redactEntry(p, t, e) {
+    if (e.kind !== 'change' && e.kind !== 'move') return e;
+    let f = null;
+    if (e.fieldId) f = t && fieldOf(t, e.fieldId);
+    else if (t && e.field) { const m = t.fields.filter((x) => x.name === e.field); f = m.length === 1 ? m[0] : null; }
+    if (f && !isPriced(p, t, f)) return e;
+    return { ...e, from: '', to: 'changed' };
+  }
+  // A write that sets or changes a price, by someone who doesn't see prices: the field's name (the write is refused
+  // whole), else null. Sending a price field empty when it's empty is not a change.
+  const blank = (v) => v == null || v === '' || (typeof v === 'object' && Array.isArray(v.rows) && !v.rows.length);
+  function pricedWrite(wsId, memberId, p, t, values, rec = null) {
+    if (!values || typeof values !== 'object' || seesPrices(wsId, memberId)) return null;
+    for (const [k, v] of Object.entries(values)) {
+      const f = fieldOf(t, k);
+      if (f && isPriced(p, t, f) && !(blank(v) && blank(rec?.values[f.id]))) return f.name;
+    }
+    return null;
+  }
+  const PRICES_403 = { error: 'Prices are for owners and admins.' };
+  // A stored record as a member's export holds it: the same redaction as publicRecord, the timeline included.
+  function rawFor(rec, view) {
+    if (view?.prices) return rec;
+    const p = db.projects[rec.projectId], t = p && typeOf(p, rec.typeId);
+    const { share, answer, ...rest } = rec;
+    return { ...rest, values: redactValues(p, t, rec.values || {}, view).values, log: (rec.log || []).map((e) => redactEntry(p, t, e)), ...(answer ? { answer: { act: answer.act, name: answer.name, reason: answer.reason, at: answer.at, method: answer.method } } : {}) };
+  }
+  const publicRecord = ({ wsId, log, secrets, flowStage, stages, ...r }, view = null) => {
     const p = db.projects[r.projectId];
     const t = p?.types.find((x) => x.id === r.typeId);
     if (p && t && t.fields.some((f) => CALC.has(f.type))) r = { ...r, values: { ...r.values, ...calcValues(p, t, { ...r, wsId }) } };
+    if (!view?.prices) {
+      const { values, hidden } = redactValues(p, t, r.values, view);
+      const { share, answer, ...rest } = r;
+      r = { ...rest, values, ...(hidden.length ? { hiddenFields: hidden } : {}), ...(answer ? { answer: { act: answer.act, name: answer.name, reason: answer.reason, at: answer.at, method: answer.method } } : {}) };
+    }
     const jobIds = (t?.fields || []).filter((f) => f.type === 'job' && r.values[f.id]).map((f) => r.values[f.id]);
     if (jobIds.length) {
       const jobs = {};
@@ -549,15 +624,21 @@ export function projectsModule({ jobQuote = () => null, seesLinked = () => true,
   // A record's timeline as one person may read it: a line about a task or a logged call they can't see (a private
   // campaign's) is left out, and so is one whose task or call is gone, since whose it was can't be told. On every path:
   // the route, what's sent live, the public API and recordStory.
-  const logFor = (rec, memberId) => (rec.log || []).filter((e) => (!e.taskId || (db.tasks[e.taskId] && seesLinked('task', db.tasks[e.taskId], memberId))) && (!e.attemptId || (db.attempts[e.attemptId] && seesLinked('attempt', db.attempts[e.attemptId], memberId))));
+  const logFor = (rec, memberId) => {
+    const out = (rec.log || []).filter((e) => (!e.taskId || (db.tasks[e.taskId] && seesLinked('task', db.tasks[e.taskId], memberId))) && (!e.attemptId || (db.attempts[e.attemptId] && seesLinked('attempt', db.attempts[e.attemptId], memberId))));
+    if (seesPrices(rec.wsId, memberId)) return out;
+    const p = db.projects[rec.projectId], t = p && typeOf(p, rec.typeId);
+    return out.map((e) => redactEntry(p, t, e));
+  };
   // Live, each person who sees the project gets their own copy.
   function logNews(rec) {
     const ws = db.workspaces[rec.wsId];
     for (const mb of ws?.members || []) broadcast(rec.wsId, { type: 'record:log', recordId: rec.id, projectId: rec.projectId, log: logFor(rec, mb.id).slice(0, 50), forMember: mb.id });
   }
   // A value as words, for the timeline.
-  function words(ws, p, f, v) {
+  function words(ws, p, f, v, view = null) {
     if (v == null || v === '') return '';
+    if (!view?.prices) { const t = p?.types.find((x) => x.fields.includes(f)); if (t && isPriced(p, t, f)) return f.type === 'items' ? `${v.rows?.length || 0} line${v.rows?.length === 1 ? '' : 's'}` : 'hidden'; }
     if (f.type === 'money') return '$' + (v / 100).toLocaleString('en-US', { minimumFractionDigits: v % 100 ? 2 : 0 });
     if (f.type === 'select') return f.choices.find((c) => c.id === v)?.label || '';
     if (f.type === 'multi') return v.map((id) => f.choices.find((c) => c.id === id)?.label).filter(Boolean).join(', ');
@@ -602,12 +683,12 @@ export function projectsModule({ jobQuote = () => null, seesLinked = () => true,
       const a = JSON.stringify(before[f.id] ?? null), b = JSON.stringify(rec.values[f.id] ?? null);
       if (a === b) continue;
       // A locked field: only that it changed, never what it was or is.
-      if (f.type === 'secret') { logTo(rec, { kind: 'change', field: f.name, from: '', to: rec.values[f.id] ? 'a new one (hidden)' : 'cleared', by, ...more }); continue; }
-      const from = words(ws, p, f, before[f.id]), to = words(ws, p, f, rec.values[f.id]);
+      if (f.type === 'secret') { logTo(rec, { kind: 'change', field: f.name, fieldId: f.id, from: '', to: rec.values[f.id] ? 'a new one (hidden)' : 'cleared', by, ...more }); continue; }
+      const from = words(ws, p, f, before[f.id], FULL), to = words(ws, p, f, rec.values[f.id], FULL);
       // A move: each one kept (not merged with the last), with the spot, for where the item has been.
       const loc = f.type === 'location' && rec.values[f.id];
-      if (loc && (from !== to || loc.lat !== before[f.id]?.lat || loc.lng !== before[f.id]?.lng)) logTo(rec, { kind: 'move', field: f.name, from, to, by, ...more, ...(Number.isFinite(loc.lat) ? { lat: loc.lat, lng: loc.lng } : {}) });
-      else if (from !== to) logTo(rec, { kind: 'change', field: f.name, from, to, by, ...more });
+      if (loc && (from !== to || loc.lat !== before[f.id]?.lat || loc.lng !== before[f.id]?.lng)) logTo(rec, { kind: 'move', field: f.name, fieldId: f.id, from, to, by, ...more, ...(Number.isFinite(loc.lat) ? { lat: loc.lat, lng: loc.lng } : {}) });
+      else if (from !== to) logTo(rec, { kind: 'change', field: f.name, fieldId: f.id, from, to, by, ...more });
     }
   }
   // Activity from elsewhere: a call logged from a campaign's list, a task made or done.
@@ -1406,7 +1487,7 @@ export function projectsModule({ jobQuote = () => null, seesLinked = () => true,
         const p = db.projects[r.projectId];
         if (!p || !sees(p, auth.memberId)) continue;
         const t = typeOf(p, r.typeId);
-        if (t?.fields.some((f) => f.type === 'contact' && r.values[f.id] === c)) out.push({ ...publicRecord(r), project: p.name, list: t.singular || t.name, icon: t.icon || '' });
+        if (t?.fields.some((f) => f.type === 'contact' && r.values[f.id] === c)) out.push({ ...publicRecord(r, viewOf(ws.id, auth.memberId)), project: p.name, list: t.singular || t.name, icon: t.icon || '' });
       }
       return send(res, 200, out.sort((x, y) => y.createdAt - x.createdAt).slice(0, 100));
     }
@@ -1427,7 +1508,7 @@ export function projectsModule({ jobQuote = () => null, seesLinked = () => true,
       const had = Object.values(db.projects).some((x) => x.wsId === ws.id && isProfile(x));
       const p = profileOf(ws);
       if (!had) { save(); broadcast(ws.id, { type: 'project', project: publicProject(p) }); }
-      return send(res, 200, { project: publicProject(p), records: Object.values(db.records).filter((r) => r.projectId === p.id).map(publicRecord) });
+      return send(res, 200, { project: publicProject(p), records: Object.values(db.records).filter((r) => r.projectId === p.id).map((r) => publicRecord(r, viewOf(ws.id, auth.memberId))) });
     }
     if (a === 'projects') {
       if (m === 'GET' && !b) return send(res, 200, Object.values(db.projects).filter((p) => p.wsId === ws.id && sees(p, auth.memberId)).map(publicProject));
@@ -1448,7 +1529,7 @@ export function projectsModule({ jobQuote = () => null, seesLinked = () => true,
       }
       const p = b && db.projects[b];
       if (!p || p.wsId !== ws.id || !sees(p, auth.memberId)) return send(res, 404, { error: 'That project is gone.' });
-      if (m === 'GET' && c === 'records') return send(res, 200, Object.values(db.records).filter((r) => r.projectId === p.id).map(publicRecord));
+      if (m === 'GET' && c === 'records') return send(res, 200, Object.values(db.records).filter((r) => r.projectId === p.id).map((r) => publicRecord(r, viewOf(ws.id, auth.memberId))));
       // A new test run: tests (all, or one release's) back to Not run.
       if (m === 'POST' && c === 'test-run') {
         const body = await readJson(req);
@@ -1501,11 +1582,12 @@ export function projectsModule({ jobQuote = () => null, seesLinked = () => true,
         const body = await readJson(req, 200_000);
         const t = typeOf(p, body.typeId);
         if (!t) return send(res, 400, { error: 'Pick which list it goes in.' });
+        if (pricedWrite(ws.id, auth.memberId, p, t, body.values)) return send(res, 403, PRICES_403);
         const held = holdDiscount(ws, auth, p, t, null, body.values, req, body);
         if (held) return send(res, held.status, held.body);
         const rec = newRecord(ws, p, t, auth, body.values, body.extId, { addChoices: false });
         recordNews(rec, 'record.created', auth.member);
-        return send(res, 200, publicRecord(rec));
+        return send(res, 200, publicRecord(rec, viewOf(ws.id, auth.memberId)));
       }
       // Rows from a spreadsheet: each matched to a record by external id or a field (email, say), else added.
       if (m === 'POST' && c === 'import') {
@@ -1513,6 +1595,7 @@ export function projectsModule({ jobQuote = () => null, seesLinked = () => true,
         const t = typeOf(p, body.typeId);
         if (!t) return send(res, 400, { error: 'Pick which list to import into.' });
         const rows = Array.isArray(body.rows) ? body.rows.slice(0, 20_000) : [];
+        if (rows.some((row) => pricedWrite(ws.id, auth.memberId, p, t, row))) return send(res, 403, PRICES_403);
         const match = body.match && fieldOf(t, body.match);
         let added = 0, updated = 0;
         const skipped = [];
@@ -1667,10 +1750,11 @@ export function projectsModule({ jobQuote = () => null, seesLinked = () => true,
           recordNews(rec, 'record.updated', auth.member);
         }
         save();
-        return send(res, 200, { moved: left.length, next: next ? publicRecord(next) : null });
+        return send(res, 200, { moved: left.length, next: next ? publicRecord(next, viewOf(ws.id, auth.memberId)) : null });
       }
       if (m === 'PATCH' && !c) {
         const body = await readJson(req, 200_000);
+        if (pricedWrite(ws.id, auth.memberId, p, t, body.values, rec)) return send(res, 403, PRICES_403);
         const held = holdDiscount(ws, auth, p, t, rec, body.values, req, body);
         if (held) return send(res, held.status, held.body);
         const before = { ...rec.values };
@@ -1687,7 +1771,7 @@ export function projectsModule({ jobQuote = () => null, seesLinked = () => true,
         if (body.docId !== undefined) rec.docId = db.items[body.docId]?.wsId === ws.id && db.items[body.docId].type === 'text' && canSeeItem(auth, db.items[body.docId]) ? body.docId : null;
         rec.updatedAt = Date.now();
         recordNews(rec, 'record.updated', auth.member);
-        return send(res, 200, publicRecord(rec));
+        return send(res, 200, publicRecord(rec, viewOf(ws.id, auth.memberId)));
       }
       if (m === 'DELETE' && !c) {
         const held = hold?.(ws, auth, 'deleteRecord', { summary: `Delete ${recName(p, rec)}`, target: { projectId: p.id, recordId: rec.id }, req: { method: 'DELETE', path: req.url, body: null } });
@@ -1721,6 +1805,7 @@ export function projectsModule({ jobQuote = () => null, seesLinked = () => true,
       }
       // Sending a quote: a link of its own for the customer. Making it marks a draft as sent.
       if (c === 'share' && t.fields.some((f) => f.type === 'items')) {
+        if (!seesPrices(ws.id, auth.memberId)) return send(res, 403, { error: 'Only owners and admins send quotes.' });
         // A job on a Job Flow run: the run owns its stage, and a flow with a Quote step keeps sending it for owners
         // and admins (docs/jobflows/PHASE2.md §2.3).
         const jq = jobQuote(rec);
@@ -1732,7 +1817,7 @@ export function projectsModule({ jobQuote = () => null, seesLinked = () => true,
         else return send(res, 405, { error: 'Method not allowed' });
         rec.updatedAt = Date.now();
         recordNews(rec, 'record.updated', auth.member);
-        return send(res, 200, publicRecord(rec));
+        return send(res, 200, publicRecord(rec, viewOf(ws.id, auth.memberId)));
       }
       return send(res, 405, { error: 'Method not allowed' });
     }
@@ -1894,7 +1979,7 @@ export function projectsModule({ jobQuote = () => null, seesLinked = () => true,
         logTo(rec, { kind: 'quote', what: act === 'accept' ? 'accepted' : 'declined', by: name || 'The customer', note: rec.answer.reason || '' });
         rec.updatedAt = Date.now();
         const items = t.fields.find((f) => f.type === 'items');
-        broadcast(rec.wsId, { type: 'quote:answer', projectId: p.id, recordId: rec.id, act, name: name || 'The customer', title: quoteTitle(t, rec), total: items ? itemsTotals(rec.values[items.id]).total : 0 });
+        broadcast(rec.wsId, { type: 'quote:answer', projectId: p.id, recordId: rec.id, act, name: name || 'The customer', title: quoteTitle(t, rec), priced: { total: items ? itemsTotals(rec.values[items.id]).total : 0 } });
         recordNews(rec, 'record.updated', name ? `${name} (customer)` : 'Customer');
         try { onEvent?.(rec, act === 'accept' ? 'quote.accepted' : 'quote.declined', name || 'The customer', { amount: rec.answer.total }); } catch (e) { console.error('Automation event failed:', e.message); }
       }
@@ -2107,9 +2192,13 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
     }
     return v;
   }
-  function outRecord(ws, p, t, r) {
+  function outRecord(ws, p, t, r, view = null) {
     const calc = calcValues(p, t, r);
-    const out = (f) => (CALC.has(f.type) ? (calc[f.id] == null ? null : calcFormat(p, t, f) === 'money' ? calc[f.id] / 100 : calc[f.id]) : outValue(ws, f, r.values[f.id]));
+    const hidden = new Set(view?.prices ? [] : pricedIds(p, t));
+    const out = (f) => {
+      if (hidden.has(f.id)) return f.type === 'items' && r.values[f.id] ? { rows: (r.values[f.id].rows || []).map((x) => ({ id: x.id, description: x.desc ?? '', qty: x.qty, unit: x.unit ?? '' })), hidden: true } : null;
+      return CALC.has(f.type) ? (calc[f.id] == null ? null : calcFormat(p, t, f) === 'money' ? calc[f.id] / 100 : calc[f.id]) : outValue(ws, f, r.values[f.id]);
+    };
     return { id: r.id, external_id: r.extId || null, type: t.key, created_at: new Date(r.createdAt).toISOString(), updated_at: new Date(r.updatedAt).toISOString(),
       fields: Object.fromEntries(t.fields.map((f) => [f.key, out(f)])) };
   }
@@ -2155,26 +2244,28 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
       const start = after ? all.findIndex((r) => `${r.updatedAt}.${r.id}` === after) + 1 : 0;
       const page = all.slice(start, start + limit);
       const last = page.at(-1);
-      return send(res, 200, { records: page.map((r) => outRecord(ws, p, t, r)), next_cursor: start + limit < all.length && last ? `${last.updatedAt}.${last.id}` : null });
+      return send(res, 200, { records: page.map((r) => outRecord(ws, p, t, r, viewOf(ws.id, auth.memberId))), next_cursor: start + limit < all.length && last ? `${last.updatedAt}.${last.id}` : null });
     }
     if (m === 'POST' && !rid_) {
       write();
       const body = await readJson(req, 200_000);
+      if (pricedWrite(ws.id, auth.memberId, p, t, inFields(t, body.fields))) return send(res, 403, PRICES_403);
       { const held = holdDiscount(ws, auth, p, t, null, inFields(t, body.fields), null, null); if (held) return send(res, held.status, held.body); }
       if (body.external_id && Object.values(db.records).some((r) => r.projectId === p.id && r.typeId === t.id && r.extId === String(body.external_id))) return send(res, 409, { error: 'A record with that external_id is already here. Use PUT …/records/external/:id to update it.' });
       const rec = newRecord(ws, p, t, auth, inFields(t, body.fields), body.external_id, { addChoices: true });
       recordNews(rec, 'record.created', auth.member);
-      return send(res, 201, outRecord(ws, p, t, rec));
+      return send(res, 201, outRecord(ws, p, t, rec, viewOf(ws.id, auth.memberId)));
     }
     // Upsert by the outside system's id.
     if (rid_ === 'external' && extra_) {
       const ext = decodeURIComponent(extra_);
       let rec = Object.values(db.records).find((r) => r.projectId === p.id && r.typeId === t.id && r.extId === ext);
-      if (m === 'GET') return rec ? send(res, 200, outRecord(ws, p, t, rec)) : send(res, 404, { error: 'No record with that external_id.' });
+      if (m === 'GET') return rec ? send(res, 200, outRecord(ws, p, t, rec, viewOf(ws.id, auth.memberId))) : send(res, 404, { error: 'No record with that external_id.' });
       if (m === 'PUT') {
         write();
         const body = await readJson(req, 200_000);
         const fields = inFields(t, body.fields);
+        if (pricedWrite(ws.id, auth.memberId, p, t, fields, rec || null)) return send(res, 403, PRICES_403);
         { const held = holdDiscount(ws, auth, p, t, rec || null, fields, null, null); if (held) return send(res, held.status, held.body); }
         if (rec) {
           const before = { ...rec.values };
@@ -2184,11 +2275,11 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
           logChanges(ws, p, t, rec, before, auth.member);
           rec.updatedAt = Date.now();
           recordNews(rec, 'record.updated', auth.member);
-          return send(res, 200, outRecord(ws, p, t, rec));
+          return send(res, 200, outRecord(ws, p, t, rec, viewOf(ws.id, auth.memberId)));
         }
         rec = newRecord(ws, p, t, auth, fields, ext, { addChoices: true });
         recordNews(rec, 'record.created', auth.member);
-        return send(res, 201, outRecord(ws, p, t, rec));
+        return send(res, 201, outRecord(ws, p, t, rec, viewOf(ws.id, auth.memberId)));
       }
       return send(res, 405, { error: 'Use GET or PUT.' });
     }
@@ -2208,10 +2299,11 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
       }
       return send(res, 405, { error: 'Use GET or POST.' });
     }
-    if (m === 'GET') return send(res, 200, outRecord(ws, p, t, rec));
+    if (m === 'GET') return send(res, 200, outRecord(ws, p, t, rec, viewOf(ws.id, auth.memberId)));
     if (m === 'PATCH') {
       write();
       const body = await readJson(req, 200_000);
+      if (pricedWrite(ws.id, auth.memberId, p, t, inFields(t, body.fields), rec)) return send(res, 403, PRICES_403);
       { const held = holdDiscount(ws, auth, p, t, rec, inFields(t, body.fields), null, null); if (held) return send(res, held.status, held.body); }
       const before = { ...rec.values };
       applyValues(ws, p, t, rec, inFields(t, body.fields), { addChoices: true });
@@ -2221,7 +2313,7 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
       if (body.external_id !== undefined) rec.extId = body.external_id ? cleanText(body.external_id, 200) : null;
       rec.updatedAt = Date.now();
       recordNews(rec, 'record.updated', auth.member);
-      return send(res, 200, outRecord(ws, p, t, rec));
+      return send(res, 200, outRecord(ws, p, t, rec, viewOf(ws.id, auth.memberId)));
     }
     if (m === 'DELETE') {
       write();
@@ -2295,7 +2387,7 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
     const ws = db.workspaces[rec.wsId];
     const t = p && typeOf(p, rec.typeId);
     if (!p || !t || !ws || p.private) return; // private projects stay in Kloomie
-    const event = { id: 'evt_' + rid(), type, created_at: new Date().toISOString(), by, project: { id: p.id, name: p.name }, list: t.key, data: outRecord(ws, p, t, rec) };
+    const event = { id: 'evt_' + rid(), type, created_at: new Date().toISOString(), by, project: { id: p.id, name: p.name }, list: t.key, data: outRecord(ws, p, t, rec, FULL) };
     for (const h of hooks) deliver(h, event);
   }
   // Signed like Stripe: X-Kloomie-Signature: t=<seconds>,v1=<hmac of "t.body">. The X-Column-* copies are for receivers set up before the rename. Tried 4 times over ~10 minutes.
@@ -2352,25 +2444,25 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
   const stateFor = (ws, auth) => Object.values(db.projects).filter((p) => p.wsId === ws.id && sees(p, auth.memberId)).map(publicProject);
 
   // A record told in words, for the AI: its fields, what links to it, its timeline and open tasks.
-  function recordStory(rec, ws, sees1 = null) { // sees1(kind, x): the reader's sight of the tasks and logged attempts it quotes (every caller passes it)
+  function recordStory(rec, ws, sees1 = null, view = null) { // sees1(kind, x): the reader's sight of the tasks and logged attempts it quotes (every caller passes it)
     const p = db.projects[rec.projectId];
     const t = p && typeOf(p, rec.typeId);
     if (!t) return '';
     const lines = [`A ${t.singular || t.name} in the project “${p.name}”: ${recName(p, rec)}.`];
     for (const f of t.fields) {
       if (f.id === t.primary || rec.values[f.id] == null) continue;
-      if (f.type === 'items') {
+      if (f.type === 'items' && view?.prices) {
         const v = rec.values[f.id];
         const tt = itemsTotals(v);
         lines.push(`${f.name}: ${v.rows.map((r) => `${r.qty} ${r.unit || ''} ${r.desc} at $${(r.price / 100).toFixed(2)}`).join('; ')}. Total $${(tt.total / 100).toFixed(2)}${tt.cost != null ? `, margin ${tt.marginPct}%` : ''}.`);
-      } else lines.push(`${f.name}: ${words(ws, p, f, rec.values[f.id])}`);
+      } else lines.push(`${f.name}: ${words(ws, p, f, rec.values[f.id], view)}`);
     }
     for (const o of p.types) for (const f of o.fields) if (f.type === 'link' && f.target === t.id) {
       const from = Object.values(db.records).filter((x) => x.typeId === o.id && (x.values[f.id] || []).includes(rec.id));
-      if (from.length) lines.push(`${o.name} linked to it: ${from.slice(0, 10).map((x) => `${recName(p, x)} (${o.fields.filter((y) => ['select', 'money', 'date', 'items'].includes(y.type) && x.values[y.id] != null).map((y) => `${y.name.toLowerCase()} ${words(ws, p, y, x.values[y.id])}`).join(', ')})`).join('; ')}`);
+      if (from.length) lines.push(`${o.name} linked to it: ${from.slice(0, 10).map((x) => `${recName(p, x)} (${o.fields.filter((y) => ['select', 'money', 'date', 'items'].includes(y.type) && x.values[y.id] != null).map((y) => `${y.name.toLowerCase()} ${words(ws, p, y, x.values[y.id], view)}`).join(', ')})`).join('; ')}`);
     }
     const shown = (kind, x) => !sees1 || (!!x && sees1(kind, x)); // a timeline line about one that's gone is left out too: whose it was can't be told
-    const log = (rec.log || []).filter((e) => (!e.taskId || shown('task', db.tasks[e.taskId])) && (!e.attemptId || shown('attempt', db.attempts[e.attemptId]))).slice(0, 30).map((e) => `- ${teamDay(rec.wsId, e.at)} ${e.by || ''}: ${e.kind}${e.outcome ? ' (' + e.outcome + ')' : ''}${e.what ? ' ' + e.what : ''}${e.field ? ` ${e.field} ${e.from || 'empty'} → ${e.to || 'empty'}` : ''}${e.note ? ': ' + e.note.slice(0, 300) : ''}${e.campaign ? ` [campaign ${e.campaign}]` : ''}`);
+    const log = (rec.log || []).filter((e) => (!e.taskId || shown('task', db.tasks[e.taskId])) && (!e.attemptId || shown('attempt', db.attempts[e.attemptId]))).slice(0, 30).map((e) => (view?.prices ? e : redactEntry(p, t, e))).map((e) => `- ${teamDay(rec.wsId, e.at)} ${e.by || ''}: ${e.kind}${e.outcome ? ' (' + e.outcome + ')' : ''}${e.what ? ' ' + e.what : ''}${e.field ? ` ${e.field} ${e.from || 'empty'} → ${e.to || 'empty'}` : ''}${e.note ? ': ' + e.note.slice(0, 300) : ''}${e.campaign ? ` [campaign ${e.campaign}]` : ''}`);
     if (log.length) lines.push(`Timeline, newest first:\n${log.join('\n')}`);
     const tasks = Object.values(db.tasks).filter((x) => x.recordId === rec.id && !x.done && shown('task', x));
     if (tasks.length) lines.push(`Open tasks: ${tasks.map((x) => x.text + (x.due ? ` (due ${x.due})` : '')).join('; ')}`);
@@ -2586,5 +2678,5 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
     projectNews(p);
     return { project: p, made, skipped };
   }
-  return { jobRecord, announceRecord, publicRecordOf: (rec) => publicRecord(rec), typeOfP: (p, id) => typeOf(p, id), profileOf, moveLicensesOut, isProfile, autoSetClean, autoSetValues, autoUpdate, carryOver, dateField, dateOf, recName, importProject, cleanSpec, createRecord, publicRecord, updateRecord, route, v1, keyAuth, makeHook, publicHook, deliver, emit, quoteOf, quotePage, seesMsg, stateFor, sees, recordActivity, recordNews, words, fillFromProject, fromProjectOk, recordStory, priceList, recordAt, itemsTotals, shareRecord, TEMPLATES: Object.fromEntries(Object.entries(TEMPLATES).map(([k, t]) => [k, { name: t.name, icon: t.icon, about: t.about }])) };
+  return { rawFor, seesPrices, viewOf, FULL, isPriced, pricedIds, redactValues, jobRecord, announceRecord, publicRecordOf: (rec, view = null) => publicRecord(rec, view), typeOfP: (p, id) => typeOf(p, id), profileOf, moveLicensesOut, isProfile, autoSetClean, autoSetValues, autoUpdate, carryOver, dateField, dateOf, recName, importProject, cleanSpec, createRecord, publicRecord, updateRecord, route, v1, keyAuth, makeHook, publicHook, deliver, emit, quoteOf, quotePage, seesMsg, stateFor, sees, recordActivity, recordNews, words, fillFromProject, fromProjectOk, recordStory, priceList, recordAt, itemsTotals, shareRecord, TEMPLATES: Object.fromEntries(Object.entries(TEMPLATES).map(([k, t]) => [k, { name: t.name, icon: t.icon, about: t.about }])) };
 }

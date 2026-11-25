@@ -364,8 +364,9 @@ export function agentsModule({ autoEvents = [], sees = () => true, offWhy = () =
     if (!t) return null;
     const out = { id: r.id, project: p.name, list: t.singular || t.name, name: String(r.values[t.primary] ?? '') || 'Untitled' };
     let n = 0;
+    const prices = PJ.seesPrices(ws.id, memberId); // members don't see prices (docs/jobflows/PRICES.md)
     for (const f of t.fields) {
-      if (f.id === t.primary || n >= extra) continue;
+      if (f.id === t.primary || n >= extra || (!prices && PJ.isPriced(p, t, f))) continue;
       const w = fieldWords(ws, memberId, f, r.values[f.id], noPeople);
       if (w) { out[f.name] = w; n++; }
     }
@@ -460,7 +461,7 @@ export function agentsModule({ autoEvents = [], sees = () => true, offWhy = () =
       async run(cx, a) {
         const at = PJ.recordAt(String(a.id), cx.ws.id, cx.memberId);
         if (!at) throw new Error('No record with that id that you can see.');
-        return { id: at.rec.id, about: PJ.recordStory(at.rec, cx.ws, (kind, v) => !(kind === 'task' && cutOff(cx, 'tasks')) && sees(cx.memberId, kind, v)) };
+        return { id: at.rec.id, about: PJ.recordStory(at.rec, cx.ws, (kind, v) => !(kind === 'task' && cutOff(cx, 'tasks')) && sees(cx.memberId, kind, v), PJ.viewOf(cx.ws.id, cx.memberId)) };
       },
     },
     list_campaigns: {

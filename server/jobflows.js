@@ -814,7 +814,7 @@ export function jobFlowsModule(ctx) {
           const x = keys.get(key);
           if (x.sig !== sig) return send(res, 409, { error: 'That request key was used for another job.' });
           const rec = db.records[x.recordId];
-          if (rec) return send(res, 200, { job: PJ.publicRecordOf(rec), run: runView(ws, auth, shownRun(rec.id)) });
+          if (rec) return send(res, 200, { job: PJ.publicRecordOf(rec, PJ.viewOf(ws.id, auth.memberId)), run: runView(ws, auth, shownRun(rec.id)) });
         }
         // The run is built against the job before either is kept: a throw keeps neither (nor uses up a job number).
         let run;
@@ -826,7 +826,7 @@ export function jobFlowsModule(ctx) {
         if (key) keys.set(key, { sig, recordId: rec.id, at: Date.now() });
         PJ.announceRecord(rec, auth.member);
         afterStart(ws, auth, run.c, run.tasks);
-        return send(res, 200, { job: PJ.publicRecordOf(rec), run: runView(ws, auth, run.c) });
+        return send(res, 200, { job: PJ.publicRecordOf(rec, PJ.viewOf(ws.id, auth.memberId)), run: runView(ws, auth, run.c) });
       }
       const at = jobAt(ws, auth, b);
       if (!at) return send(res, 404, { error: 'That job is gone.' });

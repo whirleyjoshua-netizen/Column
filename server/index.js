@@ -2871,13 +2871,24 @@ function broadcast(wsId, msg) {
   const hide = (msg.type === 'item:add' || msg.type === 'item:update') && JSON.stringify({ type: 'item:remove', id: msg.item.id });
   const feed = msg.item && db.items[msg.item.id] ? feedOfItem(db.items[msg.item.id]) : null;
   const inDir = msg.item && db.items[msg.item.id];
-  const data = JSON.stringify(msg);
+  let data = JSON.stringify(msg);
+  // Prices (docs/jobflows/PRICES.md): what goes out carries none; owners and admins get a priced copy: msg.priced's
+  // keys added, or a record rendered again with its prices.
+  let pricedData = null;
+  if (msg.priced) {
+    const { priced, ...base } = msg;
+    data = JSON.stringify(base);
+    pricedData = JSON.stringify({ ...base, ...priced });
+  } else if (msg.type === 'record' && msg.record?.id && db.records[msg.record.id]) {
+    const { hiddenFields, ...rest } = msg.record;
+    pricedData = JSON.stringify({ ...msg, record: { ...rest, ...PJ.publicRecord(db.records[msg.record.id], PJ.FULL) } });
+  }
   for (const s of set) if (hide && s.readyState === 1 && (!seesItemDir(inDir, s.meta.memberId) || (msg.type === 'item:update' && !seesOwn('item', inDir, s.meta.memberId)))) s.send(hide);
   const task = msg.task?.id && db.tasks[msg.task.id];
   const sees = (mid) => seesCampaign(campaignId, mid) && seesFeed(feed, mid) && seesItemDir(inDir, mid) && seesTemplate(msg.template, mid) && seesEntry(msg.entry, mid) && (!msg.forMember || msg.forMember === mid) && (!msg.forAdmins || isAdminId(wsId, mid)) && (!msg.bill || seesBill(wsId, msg.bill, mid)) && (!inDir || seesOwn('item', inDir, mid)) && (!task || seesOwn('task', task, mid)) && PJ.seesMsg(msg, mid) && (!msg.boardId || !WB || WB.seesMsg(msg, mid));
   const live = (s) => s.readyState === 1 && (!s.meta.token || db.tokens[s.meta.token]) && db.workspaces[wsId]?.members.some((x) => x.id === s.meta.memberId);
   for (const s of set) if (!live(s) && s.readyState === 1) s.close(4001, 'Signed out');
-  for (const s of set) if (live(s) && sees(s.meta.memberId)) s.send(data);
+  for (const s of set) if (live(s) && sees(s.meta.memberId)) s.send(pricedData && PJ.seesPrices(wsId, s.meta.memberId) ? pricedData : data);
   try {
     alertsFor(wsId, msg, sees);
   } catch (e) {
@@ -3949,7 +3960,10 @@ function cleanAction(a, ws, who) {
     if (!p || p.wsId !== ws.id || !PJ.sees(p, who)) throw badRequest('That project is gone, or you can’t see it.');
     const lt = typeOfP(p, a.typeId);
     if (!lt) throw badRequest('Pick which list.');
-    return { kind, projectId: p.id, typeId: lt.id, set: PJ.autoSetClean(ws, lt, a.set) };
+    const set = PJ.autoSetClean(ws, lt, a.set);
+    const priced = set.map((x) => lt.fields.find((f) => f.id === x.field)).find((f) => f && PJ.isPriced(p, lt, f));
+    if (priced && !PJ.seesPrices(ws.id, who)) throw badRequest(`Only owners and admins can have an automation set ${priced.name}: prices are for owners and admins.`);
+    return { kind, projectId: p.id, typeId: lt.id, set };
   }
   // The rest of the tools: its maker has to be allowed to do it (and is checked again when it runs, by the same routes).
   if (['invoice', 'text', 'email'].includes(kind) && !isAdminId(ws.id, who)) throw badRequest('Only owners and admins can have an automation bill or message customers.');
@@ -4899,6 +4913,9 @@ async function autoAction(x, a, ctx) {
     if (!memberIn(ws.id, x.memberId) || !PJ.sees(p, x.memberId)) throw new Error(`its maker can’t see ${p.name} any more`);
     const fill = (text) => autoFill(text, ctx, ws.id);
     const src = ctx.record?.id && db.records[ctx.record.id];
+    // Prices (docs/jobflows/PRICES.md §8): the automation acts as its maker, checked now, whoever's change started it.
+    const priced = (a.set || []).map((x) => lt.fields.find((f) => f.id === x.field)).find((f) => f && PJ.isPriced(p, lt, f));
+    if (priced && !PJ.seesPrices(ws.id, x.memberId)) throw new Error(`${ws.members.find((m) => m.id === x.memberId)?.name || 'Its maker'} can’t set ${priced.name}: prices are for owners and admins.`);
     if (a.kind === 'record') {
       if (!src || src.projectId !== p.id || src.typeId !== lt.id) return `Nothing to change: it wasn’t about ${(lt.singular || 'a record').toLowerCase()} in ${p.name}`;
       PJ.autoUpdate(ws, p, lt, src, PJ.autoSetValues(ws, lt, a.set, fill, ctx.whoId), { name: x.name, memberId: x.memberId });
@@ -6290,6 +6307,7 @@ function financeReport(ws, from, to) {
 // The team's one price list (Finance step 3): price list records from every board the person sees, then Inventory.
 function priceListFor(ws, auth) {
   const admin = isAdmin(auth), out = [];
+  if (!PJ.seesPrices(ws.id, auth.memberId)) return out; // members don't see prices (docs/jobflows/PRICES.md)
   // The business's Items (Job Flows, PHASE2.md §2.1) come first, for owners and admins only.
   if (admin) out.push(...JF.priceListItems(ws));
   for (const p of Object.values(db.projects)) {
@@ -7784,7 +7802,7 @@ function askSources(ws, auth, q, n = 8) {
   }
   for (const r of Object.values(db.records)) {
     if (r.wsId !== ws.id) continue;
-    const story = PJ.recordStory(r, ws, (kind, x) => canSee(auth, kind, x));
+    const story = PJ.recordStory(r, ws, (kind, x) => canSee(auth, kind, x), PJ.viewOf(ws.id, auth.memberId));
     const s = story && score('', story);
     if (!s || !PJ.recordAt(r.id, ws.id, auth.memberId)) continue;
     out.push({ kind: 'record', id: r.id, title: story.split('\n')[0].replace(/^A .*? in the project “[^”]*”: /, '').replace(/\.$/, '') || 'A record', text: story, s });
@@ -7844,7 +7862,7 @@ async function aiRecord(ws, auth, body) {
   const prompt = [
     `Today is ${today} (${new Date(today + 'T12:00:00Z').toLocaleDateString('en-US', { weekday: 'long', timeZone: 'UTC' })}). The person asking is ${auth.member}.`,
     teamLine(ws, auth.memberId),
-    PJ.recordStory(rec, ws, (kind, x) => canSee(auth, kind, x)),
+    PJ.recordStory(rec, ws, (kind, x) => canSee(auth, kind, x), PJ.viewOf(ws.id, auth.memberId)),
     doc ? `Their notes on it:\n${clipText(doc.text, 3000)}` : '',
     selects.length ? `Fields with options (for a stage change): ${selects.map((f) => `${f.name}: ${f.choices.map((c) => c.label).join(', ')}`).join('; ')}` : '',
     body.ask ? `They ask: ${cleanText(body.ask, 1000)}` : '',
@@ -7873,6 +7891,7 @@ async function aiRecord(ws, auth, body) {
 // An estimate from the job's scope, its plans and photos (PDFs and pictures go to the AI whole), and the price
 // list. Lines matched to the price list take its price and cost, never the AI's.
 async function aiEstimate(ws, auth, body) {
+  if (!PJ.seesPrices(ws.id, auth.memberId)) throw Object.assign(new Error('Prices are for owners and admins.'), { status: 403 });
   const at = PJ.recordAt(body.recordId, ws.id, auth.memberId);
   if (!at) throw Object.assign(new Error('That record is gone.'), { status: 404 });
   const { rec, p, t } = at;
@@ -7898,7 +7917,7 @@ async function aiEstimate(ws, auth, body) {
     }
   }
   const prompt = [
-    PJ.recordStory(rec, ws, (kind, x) => canSee(auth, kind, x)),
+    PJ.recordStory(rec, ws, (kind, x) => canSee(auth, kind, x), PJ.viewOf(ws.id, auth.memberId)),
     files.length ? `Attached: ${files.map((f) => f.name).join('; ')}. Read them for sizes, counts and conditions.` : 'Nothing is attached; work from the scope and notes.',
     list.length ? `The price list (use these items, by id, wherever one fits):\n${list.map((x) => `- [${x.id}] ${x.item}${x.description ? ' — ' + x.description : ''} · per ${x.unit || 'each'} · $${((x.price || 0) / 100).toFixed(2)}`).join('\n')}` : 'There is no price list; price lines at typical rates and say so in the assumptions.',
     body.ask ? `They ask: ${cleanText(body.ask, 1000)}` : '',
@@ -13551,7 +13570,7 @@ async function buildExport(x) {
   const data = {};
   for (const [coll, ok] of Object.entries(sees)) data[coll] = Object.values(db[coll] || {}).filter((y) => inWs(y) && ok(y) && made(y));
   // Locked fields (lock combos, codes) stay out of exports, even sealed.
-  data.records = data.records.map(({ secrets, ...y }) => y);
+  data.records = data.records.map(({ secrets, ...y }) => PJ.rawFor(y, PJ.viewOf(ws.id, me.id)));
   const sig = db.signatures[sigKey(ws.id, me.id)];
   if (sig) data.signatures = [sig];
   if (!mineOnly && me.role === 'owner' && db.pss[ws.id]) data.pss = { dne: db.pss[ws.id].dne || [] };
