@@ -101,3 +101,15 @@ for the same update. The test fails on today's code.
 5. **API keys:** already as asked (projects.js `keyAuth`): each request looks up the maker in the team now and
    uses their role now; a maker no longer on the team makes the key stop working (401). Keys aren't transferable.
    Tests: a key whose maker is made a member gets redacted records and 403 on priced writes on the next request.
+
+## 9. Review round 2 (tests)
+- **Bulk writes:** there is no bulk-update route today (records change one at a time, by import or through the
+  API); §4's "bulk update" is dropped. Agents write through the same record routes (`cx.call`), so their writes
+  get the same 403, which the agent is told.
+- **Depth:** a formula or rollup is a price if a priced field is reachable within 8 levels; past 8 levels it is
+  treated as a price too (fail-closed: calc gives nothing there anyway).
+- **Server copies tested here:** a member starting a job on a flow with a default line (the line keeps its price
+  for owners; the member sees none). Accepted quote lines and stock use stay covered by jobflow_money and
+  jobflow_links, which run unchanged.
+- **The automation's note** names the maker and the field: "Ada Admin can’t set Price: prices are for owners
+  and admins." The run is marked not done (`ok: false`).

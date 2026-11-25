@@ -96,7 +96,8 @@ try {
   const quoted2F = proj.types.find((x) => x.id === jT.id).fields.find((f) => f.name === 'Quoted twice');
   // A chain six deep over the price (each formula reads the one before), and a formula that reads no price.
   let prev = 'Twice';
-  for (const n of ['T3', 'T4', 'T5', 'T6', 'T7']) { y = await rico('POST', `/projects/${board.id}/schema`, { typeId: qT.id, op: 'addField', name: n, type: 'formula', expr: `{${prev}} * 1`, format: 'money' }); prev = n; }
+  for (const n of ['T3', 'T4', 'T5', 'T6', 'T7', 'T8', 'T9', 'T10']) { y = await rico('POST', `/projects/${board.id}/schema`, { typeId: qT.id, op: 'addField', name: n, type: 'formula', expr: `{${prev}} * 1`, format: 'money' }); prev = n; }
+  // Twice to T9 is eight levels (calc's limit); T10 is the ninth, past it: still a price, fail-closed.
   ok(y.status === 200, 'a chain of formulas over the price: ' + y.status + ' ' + (y.body?.error || ''));
   await rico('POST', `/projects/${board.id}/schema`, { typeId: qT.id, op: 'addField', name: 'Plain', type: 'formula', expr: '2 + 3', format: 'number' });
   await rico('POST', `/projects/${board.id}/schema`, { typeId: qT.id, op: 'addField', name: 'Customer', type: 'contact' });
@@ -104,7 +105,7 @@ try {
   const qF = (n) => proj.types.find((x) => x.id === qT.id).fields.find((f) => f.name === n);
   const dana = (await rico('POST', '/contacts', { name: 'Dana Ruiz', email: 'dana@ruiz.test' })).body;
   const danaId = dana?.id ?? dana?.contact?.id;
-  const lines = (price = PRICE) => ({ rows: [{ desc: 'Shutters', qty: 2, unit: 'each', price, cost: COST }, { desc: 'Trip', qty: 1, price: 50 }], taxRate: 0 });
+  const lines = (price = PRICE) => ({ rows: [{ desc: 'Shutters', qty: 2, unit: 'each', price, cost: COST }, { desc: 'Trip', qty: 1, unit: 'trip', price: 50 }], taxRate: 0 });
   const quote = (await rico('POST', `/projects/${board.id}/records`, { typeId: qT.id, values: { title: 'Ruiz shutters', items: lines(), [qF('Customer').id]: danaId } })).body;
   const job = (await rico('POST', `/projects/${board.id}/records`, { typeId: jT.id, values: { job: 'Ruiz install', value: 9000, quote: [quote.id] } })).body;
   const film = (await rico('POST', `/projects/${board.id}/records`, { typeId: plT.id, values: { item: 'Window film', price: PRICE, cost: COST } })).body;
@@ -118,7 +119,7 @@ try {
     const L = await recs(C);
     const q = find(L, quote.id), j = find(L, job.id), f = find(L, film.id);
     ok(q?.values[F('quotes', 'items').id]?.rows?.[0]?.price != null && q.values[F('quotes', 'items').id].rows[0].cost != null && !q.values[F('quotes', 'items').id].hidden, `${who} gets the price lines with price and cost`);
-    ok(q?.values[qF('T7').id] != null, `${who} gets the end of the formula chain`);
+    ok(q?.values[qF('T9').id] != null, `${who} gets the eighth level of the formula chain`);
     ok(q?.values[twiceF.id] != null && j?.values[quotedF.id] != null && j?.values[quoted2F.id] != null, `${who} gets the formula and both rollups`);
     ok(f?.values[F('price_list', 'price').id] != null && f?.values[F('price_list', 'cost').id] != null, `${who} gets the Price list’s price and cost`);
   }
@@ -128,7 +129,8 @@ try {
     ok(memberLines(q?.values[F('quotes', 'items').id]), `${who} gets the price lines as what and how many only: ` + JSON.stringify(q?.values[F('quotes', 'items').id]).slice(0, 200));
     ok(q?.values[twiceF.id] == null && (q?.hiddenFields || []).includes(twiceF.id), `${who}: the formula over prices is empty and listed in hiddenFields`);
     ok(j?.values[quotedF.id] == null && j?.values[quoted2F.id] == null && (j?.hiddenFields || []).includes(quotedF.id) && (j?.hiddenFields || []).includes(quoted2F.id), `${who}: both rollups (straight and through the formula) are empty and listed`);
-    ok(q?.values[qF('T7').id] == null && ['T3', 'T4', 'T5', 'T6', 'T7'].every((n) => (q?.hiddenFields || []).includes(qF(n).id)), `${who}: every formula in the chain is empty and listed`);
+    ok(q?.values[qF('T9').id] == null && ['T3', 'T4', 'T5', 'T6', 'T7', 'T8', 'T9'].every((n) => (q?.hiddenFields || []).includes(qF(n).id)), `${who}: every formula in the eight-level chain is empty and listed`);
+    ok(q?.values[qF('T10').id] == null && (q?.hiddenFields || []).includes(qF('T10').id), `${who}: the ninth level, past calc’s limit, is treated as a price too (empty and listed)`);
     ok(q?.values[qF('Plain').id] === 5 && !(q?.hiddenFields || []).includes(qF('Plain').id), `${who}: a formula that reads no price is still there`);
     ok(f?.values[F('price_list', 'price').id] == null && f?.values[F('price_list', 'cost').id] == null && (f?.hiddenFields || []).includes(F('price_list', 'price').id) && (f?.hiddenFields || []).includes(F('price_list', 'cost').id), `${who}: the Price list’s price and cost are empty and listed`);
     ok(j?.values[F('jobs', 'value').id] != null, `${who} still gets the job’s Value (not a price)`);
@@ -246,6 +248,8 @@ try {
   ok(r.status === 403 && find(await recs(rico), film.id).values[F('price_list', 'price').id] === filmPrice, 'a member changing a Price list’s price: 403, unchanged: ' + r.status);
   r = await sam('POST', `/projects/${board.id}/records`, { typeId: qT.id, values: { title: 'Sam quote', items: lines(1) } });
   ok(r.status === 403 && !(await recs(rico)).some((x) => x.values[F('quotes', 'title').id] === 'Sam quote'), 'a member adding a record with price lines: 403, nothing made');
+  r = await sam('POST', `/projects/${board.id}/records`, { typeId: plT.id, values: { item: 'Sam priced', price: 1 } });
+  ok(r.status === 403 && !(await recs(rico)).some((x) => x.values[F('price_list', 'item').id] === 'Sam priced'), 'a member adding a Price list item with a price: 403, nothing made');
   r = await sam('POST', `/projects/${board.id}/records`, { typeId: plT.id, values: { item: 'Sam item', cost: 1 } });
   ok(r.status === 403 && !(await recs(rico)).some((x) => x.values[F('price_list', 'item').id] === 'Sam item'), 'or a Price list item with a cost: 403, nothing made');
   r = await sam('POST', `/projects/${board.id}/import`, { typeId: plT.id, rows: [{ [F('price_list', 'item').id]: 'Imported', [F('price_list', 'price').id]: 5 }] });
@@ -256,10 +260,41 @@ try {
   ok(JSON.stringify(qAfter.values[F('quotes', 'items').id]) === JSON.stringify(qBefore.values[F('quotes', 'items').id]) && qAfter.values[F('quotes', 'terms').id] === 'Net 10', 'and the price lines are exactly as they were');
   r = await sam('POST', `/projects/${board.id}/records`, { typeId: qT.id, values: { title: 'Sam plain quote' } });
   ok(r.status === 200 && !leaks(r.body), 'a member can still add a record without prices');
+  const samPlain = r.body;
+
+  // Agents write through the same routes: the owner's agent can change a Price list price, a member's can't.
+  const agentRun = async (C, tools) => {
+    const run = (await C('POST', '/agents/runs', { agent: 'ops', ask: `RUN:${JSON.stringify(tools)}:END` })).body;
+    let x;
+    for (let i = 0; i < 100; i++) { x = (await C('GET', '/agents/runs/' + run?.id)).body; if (x && !['requested', 'planning', 'running'].includes(x.status)) break; await sleep(80); }
+    return x;
+  };
+  const priceOf = async (id) => find(await recs(rico), id)?.values[F('price_list', 'price').id];
+  const filmBefore = await priceOf(film.id);
+  aiSaw = [];
+  await agentRun(sam, [['update_record', { id: film.id, values: { Price: 2, Description: 'agent' } }]]);
+  ok((await priceOf(film.id)) === filmBefore && find(await recs(rico), film.id)?.values[F('price_list', 'description').id] !== 'agent', 'a member’s agent changing a Price list price: nothing saved');
+  ok(aiSaw.some((b) => b.includes('tool_result') && /owners and admins/i.test(b)), 'and the agent is told prices are for owners and admins');
+  await agentRun(rico, [['update_record', { id: film.id, values: { Price: 2 } }]]);
+  ok((await priceOf(film.id)) === 200, 'the owner’s agent can (positive control): ' + (await priceOf(film.id)));
+
+  // What the server copies itself still copies: a member starting a job on a flow with a default line.
+  const jp = (await rico('POST', '/projects', { template: 'trades', trades: ['cleaning'] })).body;
+  const jtp = jp.types[0];
+  const jfid = (k) => jtp.fields.find((f) => f.key === k)?.id;
+  const can = (await rico('POST', '/job-items', { name: 'Can clean', unit: 'each', price: 432177, cost: 123456 })).body?.item;
+  const fl = (await rico('POST', '/job-flows', { name: 'Clean', list: { projectId: jp.id, typeId: jtp.id }, billing: 'hand', whoCreates: 'everyone', items: [{ itemId: can?.id, qty: 1 }], steps: [{ kind: 'client', name: 'Client' }, { kind: 'invoice', name: 'Send invoice' }] })).body;
+  await rico('POST', `/job-flows/${fl?.id}/publish`);
+  r = await sam('POST', '/jobs', { flowId: fl?.id, contactId: danaId, values: { job: 'Sam started' } });
+  const samJob = r.body?.job;
+  ok(r.status === 200 && samJob?.id, 'a member starts a job on the flow: ' + r.status + ' ' + (r.body?.error || ''));
+  const ownerJob = ((await rico('GET', `/projects/${jp.id}/records`)).body || []).find((x) => x.id === samJob?.id);
+  ok(ownerJob?.values[jfid('price')]?.rows?.[0]?.price === 432177, 'the job got the default line with its price (the owner sees it)');
+  ok(!leaks(r.body) && !leaks(((await sam('GET', `/projects/${jp.id}/records`)).body || []).find((x) => x.id === samJob?.id)), 'and the member who started it sees no price');
 
   // 7. The export: a member's own export has no prices; the owner's team export does.
-  await sam('PATCH', `/records/${r.body.id}`, { values: { terms: 'mine' } });
-  await rico('PATCH', `/records/${r.body.id}`, { values: { items: lines() } });
+  await sam('PATCH', `/records/${samPlain.id}`, { values: { terms: 'mine' } });
+  await rico('PATCH', `/records/${samPlain.id}`, { values: { items: lines() } });
   const exportOf = async (C, tok, kind) => {
     await C('POST', '/exports', { kind });
     let x;
@@ -288,6 +323,8 @@ try {
   ok(r.status === 200, 'an admin can save an automation that sets a Price list price: ' + r.status + ' ' + (r.body?.error || ''));
   r = await sam('POST', '/automations', { name: 'Sam reprice', trigger: { kind: 'record.created', projectId: board.id, typeId: plT.id }, actions: [{ kind: 'record', projectId: board.id, typeId: plT.id, set: [{ field: F('price_list', 'price').id, value: '1' }] }] });
   ok(r.status >= 400 && r.status < 500, 'a member can’t: ' + r.status);
+  await sam('POST', `/projects/${board.id}/records`, { typeId: plT.id, values: { item: 'Before' } });
+  ok(await until(async () => (await recs(rico)).find((x) => x.values[F('price_list', 'item').id] === 'Before')?.values[F('price_list', 'price').id] === 7700), 'while she’s an admin, her automation (started by Sam’s change) sets the price (positive control)');
   await rico('PATCH', '/members/' + idOf('Ada Admin'), { role: 'member' });
   vq = await v1Quote();
   ok(vq && vq.fields && vq.fields.items?.hidden === true && !leaks(vq), 'the next request after she’s made a member: redacted: ' + JSON.stringify(vq?.fields?.items).slice(0, 160));
@@ -300,6 +337,7 @@ try {
   await sam('POST', `/projects/${board.id}/records`, { typeId: plT.id, values: { item: 'Trigger' } });
   const autoNote = async () => ((await rico('GET', '/automations')).body?.automations || (await rico('GET', '/automations')).body || []).find?.((x) => x.name === 'Reprice')?.runs?.[0];
   ok(await until(async () => /owners and admins/i.test((await autoNote())?.note || '')), 'her automation ran on Sam’s change and noted that prices are for owners and admins: ' + JSON.stringify(await autoNote()));
+  ok(/Ada Admin/.test((await autoNote())?.note || '') && /\bPrice\b/.test((await autoNote())?.note || ''), 'the note names her (the maker) and the field it couldn’t set');
   ok((await autoNote())?.ok === false, 'that run is marked as not done');
   const trig = (await recs(rico)).find((x) => x.values[F('price_list', 'item').id] === 'Trigger');
   ok(trig && trig.values[F('price_list', 'price').id] == null, 'and the price wasn’t written: ' + JSON.stringify(trig?.values[F('price_list', 'price').id]));
