@@ -2,6 +2,7 @@
 // (Details, Resources, Tasks); the owner writes a call script on the step; the step and each of its tasks show it, and it
 // opens to read; clicking a task opens it (rename there) instead of editing the title; a member's task opens on what the
 // step hands over, which they can read but not change; campaign task rows are lighter.
+import { CHROME, SERVER_DIR } from './chromebin.mjs';
 import * as FS from 'node:fs';
 import { spawn } from 'node:child_process';
 import WebSocket from '../server/node_modules/ws/index.js';
@@ -15,8 +16,8 @@ let fails = 0;
 const ok = (c, msg) => { console.log((c ? 'PASS ' : 'FAIL ') + msg); if (!c) fails++; };
 try { (await import('node:child_process')).execSync(`pkill -f remote-debugging-port=${CDP}`); await sleep(400); } catch {}
 FS.rmSync(`${S}/dk/chrome-stepui`, { recursive: true, force: true });
-const chrome = spawn('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', ['--headless=new', `--remote-debugging-port=${CDP}`, `--user-data-dir=${S}/dk/chrome-stepui`, '--no-first-run', '--window-size=1400,900', 'about:blank'], { stdio: 'ignore' });
-const srv = spawn('node', ['index.js'], { cwd: new URL('../server', import.meta.url).pathname, env: { ...process.env, SKIP_SETUP: '1', PORT: String(PORT), DATA_DIR: DIR, MAIL_OUTBOX: '1', DATABASE_URL: '' }, stdio: ['ignore', 'pipe', 'pipe'] });
+const chrome = spawn(CHROME, ['--headless=new', `--remote-debugging-port=${CDP}`, `--user-data-dir=${S}/dk/chrome-stepui`, '--no-first-run', '--window-size=1400,900', 'about:blank'], { stdio: 'ignore' });
+const srv = spawn('node', ['index.js'], { cwd: SERVER_DIR, env: { ...process.env, SKIP_SETUP: '1', PORT: String(PORT), DATA_DIR: DIR, MAIL_OUTBOX: '1', DATABASE_URL: '' }, stdio: ['ignore', 'pipe', 'pipe'] });
 srv.log = ''; srv.stdout.on('data', (d) => (srv.log += d)); srv.stderr.on('data', (d) => (srv.log += d));
 async function tab(url) {
   let t;
@@ -54,10 +55,10 @@ try {
   await A.until(`!document.querySelector('#app').classList.contains('hidden') && !!document.querySelector('[data-tab=camps]')`, 15000);
   await A.ev(`document.querySelector('[data-tab=camps]').click(); true`);
   await A.tap(`[...document.querySelectorAll('.camp-card')].find((c) => c.textContent.includes('Fall calls'))`);
-  ok(await A.until(`!!document.querySelector('#camps .cc-ov .cc-pt-open')`), 'Ada opens the campaign');
-  ok(await A.ev(`(() => { const r = [...document.querySelectorAll('#camps .cc-ov .cc-ttile')].find((x) => x.textContent.includes('Lopez')); return r && !r.querySelector('[aria-label="Tools for this task"]') && !r.querySelector('[aria-label="Put on schedule"]'); })()`), 'campaign task tiles are light (tools and scheduling are inside the task)');
+  ok(await A.until(`!!document.querySelector('#camps .cc-phase-h [aria-label^="Phase settings"]')`), 'Ada opens the campaign');
+  ok(await A.ev(`(() => { const r = [...document.querySelectorAll('#camps .cc-row')].find((x) => x.textContent.includes('Lopez')); return r && !r.querySelector('[aria-label="Tools for this task"]') && !r.querySelector('[aria-label="Put on schedule"]'); })()`), 'campaign task rows are light (tools and scheduling are inside the task)');
   // Clicking the step opens it.
-  await A.tap(`document.querySelector('#camps .cc-pt-open')`);
+  await A.tap(`document.querySelector('#camps .cc-phase-h [aria-label^="Phase settings"]')`);
   ok(await A.until(`!!document.querySelector('#sheet .step-win') && [...document.querySelectorAll('#sheet .win-tabs button')].map((b) => b.textContent).join('|') === 'Details|Resources|Tasks · 1|Automations'`), 'clicking the step opens it: Details, Resources, Tasks (and Automations for an owner)');
   ok(await A.ev(`document.querySelector('#sheet .win-title').value === 'Call last year’s customers' && !!document.querySelector('#sheet .win-rows input[type=date]')`), 'with its name and due date to change there');
   await A.tap(`[...document.querySelectorAll('#sheet .win-tabs button')].find((b) => b.textContent.startsWith('Resources'))`);
@@ -70,7 +71,7 @@ try {
   await shot('step-win');
   await A.ev(`document.querySelector('#sheet [aria-label=Close]').click(); true`);
   // The task's tools say what its step hands over; the step's tools open the script to read.
-  await A.tap(`[...document.querySelectorAll('#camps .cc-ov .cc-ttile')].find((x) => x.textContent.includes('Lopez'))`);
+  await A.tap(`[...document.querySelectorAll('#camps .cc-row')].find((x) => x.textContent.includes('Lopez')).querySelector('.cc-row-name')`);
   await A.tap(`document.querySelector('#camps .cc-pp-tool')`);
   ok(await A.until(`document.querySelector('#camps .cc-ptools[data-for=task]')?.textContent.includes('Call script')`), 'the task’s tools say its step has 📝 Call script');
   await A.tap(`document.querySelector('#camps .cc-ptools .pt-phase')`);
@@ -79,15 +80,15 @@ try {
   ok(await A.until(`document.querySelector('#sheet .res-read')?.textContent.includes('Ask how the windows are holding up.')`), 'tapping it opens the script to read');
   await A.ev(`document.querySelector('#sheet [aria-label=Close]').click(); true`);
   // Clicking a task opens it; rename there.
-  await A.tap(`[...document.querySelectorAll('#camps .cc-ov .cc-ttile')].find((x) => x.textContent.includes('Lopez'))`);
-  await A.tap(`document.querySelector('#camps .cc-pp-more')`);
+  await A.tap(`[...document.querySelectorAll('#camps .cc-row')].find((x) => x.textContent.includes('Lopez')).querySelector('.cc-row-name')`);
+  await A.tap(`document.querySelector('#camps .cc-td-full')`);
   ok(await A.until(`!!document.querySelector('#sheet .task-win')`), 'a task picked opens whole from its panel');
   ok(await A.ev(`[...document.querySelectorAll('#sheet .td-sec-h')].some((x) => x.textContent === 'From the step · 1') && [...document.querySelectorAll('#sheet .td-row')].some((x) => x.textContent.startsWith('Assignee') && x.textContent.includes('Sam'))`), 'the drawer says who (Sam), with From the step · 1');
   await A.ev(`(() => { const i = document.querySelector('#sheet .task-win .win-title'); i.value = 'Call the Lopez family about windows'; i.dispatchEvent(new Event('change')); })()`);
   ok(await (async () => { for (let i = 0; i < 30; i++) { if ((await api('GET', '/state')).tasks.find((x) => x.id === task.id)?.text === 'Call the Lopez family about windows') return true; await sleep(100); } return false; })(), 'renaming it there saves');
   await A.ev(`document.querySelector('#sheet [aria-label=Close]').click(); true`);
   // The step's Automations (owners and admins): ready-made ones in a tap, and + New pointed at this step.
-  await A.tap(`document.querySelector('#camps .cc-pt-open')`);
+  await A.tap(`document.querySelector('#camps .cc-phase-h [aria-label^="Phase settings"]')`);
   await A.until(`!!document.querySelector('#sheet .step-win')`);
   ok(await A.ev(`[...document.querySelectorAll('#sheet .win-tabs button')].some((b) => b.textContent === 'Automations')`), 'Ada’s step has an Automations tab');
   await A.tap(`[...document.querySelectorAll('#sheet .win-tabs button')].find((b) => b.textContent.startsWith('Automations'))`);
@@ -104,15 +105,15 @@ try {
   await A.ev(`localStorage.setItem('column.token', JSON.stringify(${JSON.stringify(sam.token)})); location.reload(); true`).catch(() => {});
   await A.until(`!document.querySelector('#app').classList.contains('hidden') && !!document.querySelector('[data-tab=camps]')`, 15000);
   await A.ev(`document.querySelector('[data-tab=camps]').click(); true`);
-  await A.until(`!![...document.querySelectorAll('#camps .cc-ov .cc-ttile')].find((x) => x.textContent.includes('Lopez')) || !!document.querySelector('.camp-card')`);
-  if (!(await A.ev(`!![...document.querySelectorAll('#camps .cc-ov .cc-ttile')].find((x) => x.textContent.includes('Lopez'))`))) await A.tap(`[...document.querySelectorAll('.camp-card')].find((c) => c.textContent.includes('Fall calls'))`);
-  await A.until(`!![...document.querySelectorAll('#camps .cc-ov .cc-ttile')].find((x) => x.textContent.includes('Lopez'))`);
-  await A.tap(`[...document.querySelectorAll('#camps .cc-ov .cc-ttile')].find((x) => x.textContent.includes('Lopez'))`);
-  await A.tap(`document.querySelector('#camps .cc-pp-more')`);
+  await A.until(`!![...document.querySelectorAll('#camps .cc-row')].find((x) => x.textContent.includes('Lopez')) || !!document.querySelector('.camp-card')`);
+  if (!(await A.ev(`!![...document.querySelectorAll('#camps .cc-row')].find((x) => x.textContent.includes('Lopez'))`))) await A.tap(`[...document.querySelectorAll('.camp-card')].find((c) => c.textContent.includes('Fall calls'))`);
+  await A.until(`!![...document.querySelectorAll('#camps .cc-row')].find((x) => x.textContent.includes('Lopez'))`);
+  await A.tap(`[...document.querySelectorAll('#camps .cc-row')].find((x) => x.textContent.includes('Lopez')).querySelector('.cc-row-name')`);
+  await A.tap(`document.querySelector('#camps .cc-td-full')`);
   ok(await A.until(`[...document.querySelectorAll('#sheet .td-sec-h')].some((x) => x.textContent.startsWith('From the step')) && [...document.querySelectorAll('#sheet .td-res .res-row b')].map((b) => b.textContent).join() === 'Call script'`), 'Sam’s task drawer shows From the step, with the call script');
   await shot('task-win');
   await A.ev(`document.querySelector('#sheet [aria-label=Close]').click(); true`);
-  await A.tap(`document.querySelector('#camps .cc-pt-open')`);
+  await A.tap(`document.querySelector('#camps .cc-phase-h [aria-label^="Phase settings"]')`);
   await A.until(`!!document.querySelector('#sheet .step-win')`);
   await A.tap(`[...document.querySelectorAll('#sheet .win-tabs button')].find((b) => b.textContent.startsWith('Resources'))`);
   ok(await A.until(`!!document.querySelector('#sheet .res-row') && !document.querySelector('#sheet .res-add') && !document.querySelector('#sheet .res-row [aria-label^=Remove]')`), 'on the step he sees the script but can’t add or remove');

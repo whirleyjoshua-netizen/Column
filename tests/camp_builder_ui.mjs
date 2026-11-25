@@ -2,6 +2,8 @@
 // sure it covers whats need with this evolving platform"): beside the sidebar, not a bottom sheet; the job it's for,
 // who runs it, roles, steps that finish job stages, in order, logging and money in one go; a summary beside it;
 // editing an existing one; fits a phone.
+import { fileURLToPath } from 'node:url';
+import { CHROME, SERVER_DIR } from './chromebin.mjs';
 import * as FS from 'node:fs';
 import WebSocket from '../server/node_modules/ws/index.js';
 import { spawn } from 'node:child_process';
@@ -11,9 +13,9 @@ FS.rmSync(DIR, { recursive: true, force: true });
 FS.mkdirSync(DIR, { recursive: true });
 const PORT = 5234, CDP = 9575, APP = `http://127.0.0.1:${PORT}/`;
 const AI_PORT = 5236;
-const fakeAi = spawn('node', [new URL('fakeai.mjs', import.meta.url).pathname, DIR + '/ai.log'], { env: { ...process.env, FAKEAI_PORT: String(AI_PORT) }, stdio: 'ignore' });
-const srv = spawn('node', ['index.js'], { cwd: new URL('../server', import.meta.url).pathname, env: { ...process.env, ANTHROPIC_BASE_URL: `http://127.0.0.1:${AI_PORT}`, PORT: String(PORT), PUBLIC_URL: APP.slice(0, -1), DATA_DIR: DIR + '/data', MAIL_OUTBOX: '', RESEND_API_KEY: '', DATABASE_URL: '', STRIPE_SECRET_KEY: '', SKIP_SETUP: '1' }, stdio: 'ignore' });
-const chrome = spawn('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', ['--headless=new', `--remote-debugging-port=${CDP}`, `--user-data-dir=${DIR}/chrome`, '--no-first-run', '--window-size=1280,900', 'about:blank'], { stdio: 'ignore' });
+const fakeAi = spawn('node', [fileURLToPath(new URL('fakeai.mjs', import.meta.url)), DIR + '/ai.log'], { env: { ...process.env, FAKEAI_PORT: String(AI_PORT) }, stdio: 'ignore' });
+const srv = spawn('node', ['index.js'], { cwd: SERVER_DIR, env: { ...process.env, ANTHROPIC_BASE_URL: `http://127.0.0.1:${AI_PORT}`, PORT: String(PORT), PUBLIC_URL: APP.slice(0, -1), DATA_DIR: DIR + '/data', MAIL_OUTBOX: '', RESEND_API_KEY: '', DATABASE_URL: '', STRIPE_SECRET_KEY: '', SKIP_SETUP: '1' }, stdio: 'ignore' });
+const chrome = spawn(CHROME, ['--headless=new', `--remote-debugging-port=${CDP}`, `--user-data-dir=${DIR}/chrome`, '--no-first-run', '--window-size=1280,900', 'about:blank'], { stdio: 'ignore' });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let fails = 0;
 const ok = (c, msg) => { console.log((c ? 'PASS ' : 'FAIL ') + msg); if (!c) fails++; };

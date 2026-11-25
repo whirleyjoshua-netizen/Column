@@ -1,6 +1,7 @@
 // A campaign's board (2026-11-20): the Plan tab's Board view starts the campaign's whiteboard from a template; Make
 // phases turns its shapes into phases in flow order, with arrows as "waits for", and the shapes into live phase cards;
 // selected stickies become tasks in a phase (Make tasks in…). The board is the campaign's (seen by whoever sees it).
+import { CHROME, SERVER_DIR } from './chromebin.mjs';
 import * as FS from 'node:fs';
 import { spawn } from 'node:child_process';
 import WebSocket from '../server/node_modules/ws/index.js';
@@ -14,8 +15,8 @@ let fails = 0;
 const ok = (c, msg) => { console.log((c ? 'PASS ' : 'FAIL ') + msg); if (!c) fails++; };
 try { (await import('node:child_process')).execSync(`pkill -f remote-debugging-port=${CDP}`); await sleep(400); } catch {}
 FS.rmSync(`${S}/dk/chrome-cboard`, { recursive: true, force: true });
-const chrome = spawn('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', ['--headless=new', `--remote-debugging-port=${CDP}`, `--user-data-dir=${S}/dk/chrome-cboard`, '--no-first-run', '--window-size=1400,900', 'about:blank'], { stdio: 'ignore' });
-const srv = spawn('node', ['index.js'], { cwd: new URL('../server', import.meta.url).pathname, env: { ...process.env, SKIP_SETUP: '1', PORT: String(PORT), DATA_DIR: DIR, MAIL_OUTBOX: '1', DATABASE_URL: '' }, stdio: ['ignore', 'pipe', 'pipe'] });
+const chrome = spawn(CHROME, ['--headless=new', `--remote-debugging-port=${CDP}`, `--user-data-dir=${S}/dk/chrome-cboard`, '--no-first-run', '--window-size=1400,900', 'about:blank'], { stdio: 'ignore' });
+const srv = spawn('node', ['index.js'], { cwd: SERVER_DIR, env: { ...process.env, SKIP_SETUP: '1', PORT: String(PORT), DATA_DIR: DIR, MAIL_OUTBOX: '1', DATABASE_URL: '' }, stdio: ['ignore', 'pipe', 'pipe'] });
 srv.log = ''; srv.stdout.on('data', (d) => (srv.log += d)); srv.stderr.on('data', (d) => (srv.log += d));
 async function tab(url) {
   let t;
@@ -52,8 +53,8 @@ try {
   await A.tap(`document.querySelector('.camp-card')`);
   await A.until(`!!${T('.cc-tab[data-ctab=plan]')}`);
   await A.ev(`${T('.cc-tab[data-ctab=plan]')}.click(); true`);
-  ok(await A.until(`!!${T('.cc-planswitch [data-pv=board]')}`), 'Plan has a Phases | Board switch');
-  await A.ev(`${T('.cc-planswitch [data-pv=board]')}.click(); true`);
+  ok(await A.until(`!!${T('.cc-sketch-btn')}`), 'Plan has a Sketch button (2026-11-25; it was a Phases | Board switch)');
+  await A.ev(`${T('.cc-sketch-btn')}.click(); true`);
   ok(await A.until(`!!${T('.cc-board-empty')} && [...document.querySelectorAll('#camps .cc-board-starts button')].map((b) => b.textContent).join('|') === 'Workflow map|Campaign brainstorm|Mind map|Blank'`), 'with no board yet: start from Workflow map, Campaign brainstorm, Mind map or Blank');
   await A.tap(T('.cc-board-starts [data-tpl=workflow]'));
   ok(await A.until(`document.querySelectorAll('#camps .cc-board .wb-item.k-shape').length === 5`, 10000), 'the campaign’s board opens in the Plan tab, from the workflow template (5 shapes)');
@@ -87,8 +88,8 @@ try {
   ok((await api('GET', '/boards/' + list[0].id)).items.some((x) => x.kind === 'card' && x.ref?.kind === 'task' && x.ref.id === tk?.id), 'and a live task card on the board');
   await shot('cboard-2');
   // Back on Phases, they're the campaign's phases.
-  await A.ev(`${T('.cc-planswitch [data-pv=phases]')}.click(); true`);
-  ok(await A.until(`document.querySelectorAll('#camps .cc-ptile.phase').length === 5`), 'the Phases view shows the five phases (in the planner, 2026-11-22)');
+  await A.ev(`${T('.cc-sketch-btn')}.click(); true`);
+  ok(await A.until(`document.querySelectorAll('#camps .cc-phase').length === 5`), 'back on the phases: the five phases (as cards, 2026-11-25)');
   ok(A.errors.length === 0, 'no script errors' + (A.errors.length ? ': ' + A.errors.join(' | ') : ''));
 } catch (e) { ok(false, 'threw: ' + e.stack); }
 A?.close();

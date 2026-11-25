@@ -1,3 +1,4 @@
+import { CHROME, SERVER_DIR } from './chromebin.mjs';
 import * as FS from 'node:fs';
 import http from 'node:http';
 import crypto from 'node:crypto';
@@ -14,7 +15,7 @@ const appsOpen = async (A, id) => {
 };
 const S = process.argv[2];
 const APP = 'http://127.0.0.1:4797/';
-const chrome = spawn('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', ['--headless=new', '--remote-debugging-port=9334', `--user-data-dir=${S}/dk/chrome2`, '--no-first-run', '--window-size=1200,900', 'about:blank'], { stdio: 'ignore' });
+const chrome = spawn(CHROME, ['--headless=new', '--remote-debugging-port=9334', `--user-data-dir=${S}/dk/chrome2`, '--no-first-run', '--window-size=1200,900', 'about:blank'], { stdio: 'ignore' });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let fails = 0;
 const ok = (c, msg) => { console.log((c ? 'PASS ' : 'FAIL ') + msg); if (!c) fails++; };
@@ -129,7 +130,7 @@ await A.tap(`document.querySelector('#tool [aria-label=Close]')`).catch(() => {}
 await A.ev(`document.querySelector('#tabs [data-tab=camps]').click()`);
 await A.until(`[...document.querySelectorAll('.camp-card')].some((b) => b.textContent.includes('Spring calls'))`);
 await A.tap(`[...document.querySelectorAll('.camp-card')].find((b) => b.textContent.includes('Spring calls'))`);
-await A.ev(`document.querySelector('#camps .cc-tab[data-ctab=resources]')?.click(); true`); // Files are under Resources (2026-11-20)
+await A.ev(`document.querySelector('#camps .cc-tab[data-ctab=plan]')?.click(); true`); // Files are under the brief on Plan (2026-11-25)
 await A.until(`[...document.querySelectorAll('#camps button')].some((b) => b.textContent.startsWith('Files'))`);
 await A.tap(`[...document.querySelectorAll('#camps button')].find((b) => b.textContent.startsWith('Files'))`);
 ok(await A.until(`[...document.querySelectorAll('#menu button')].some((b) => b.textContent === '+ Call list from Contacts…')`), 'a campaign can make a call list from Contacts, without PSS');

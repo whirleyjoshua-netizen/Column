@@ -1,6 +1,7 @@
 // Command Center part 4 (2026-11-20): the Work tab shows the campaign’s tasks as a List, a Board (columns by status,
 // phase or person; drag a card across to change it), a Timeline (a bar from start to due, dragged or pulled by
 // either end, drawn on an empty row, arrows for what it waits for) and a Calendar (drag a task to another day).
+import { CHROME, SERVER_DIR } from './chromebin.mjs';
 import * as FS from 'node:fs';
 import { spawn } from 'node:child_process';
 import WebSocket from '../server/node_modules/ws/index.js';
@@ -14,8 +15,8 @@ let fails = 0;
 const ok = (c, msg) => { console.log((c ? 'PASS ' : 'FAIL ') + msg); if (!c) fails++; };
 try { (await import('node:child_process')).execSync(`pkill -f remote-debugging-port=${CDP}`); await sleep(400); } catch {}
 FS.rmSync(`${S}/dk/chrome-cviews`, { recursive: true, force: true });
-const chrome = spawn('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', ['--headless=new', `--remote-debugging-port=${CDP}`, `--user-data-dir=${S}/dk/chrome-cviews`, '--no-first-run', '--window-size=1400,900', 'about:blank'], { stdio: 'ignore' });
-const srv = spawn('node', ['index.js'], { cwd: new URL('../server', import.meta.url).pathname, env: { ...process.env, SKIP_SETUP: '1', PORT: String(PORT), DATA_DIR: DIR, MAIL_OUTBOX: '1', DATABASE_URL: '' }, stdio: ['ignore', 'pipe', 'pipe'] });
+const chrome = spawn(CHROME, ['--headless=new', `--remote-debugging-port=${CDP}`, `--user-data-dir=${S}/dk/chrome-cviews`, '--no-first-run', '--window-size=1400,900', 'about:blank'], { stdio: 'ignore' });
+const srv = spawn('node', ['index.js'], { cwd: SERVER_DIR, env: { ...process.env, SKIP_SETUP: '1', PORT: String(PORT), DATA_DIR: DIR, MAIL_OUTBOX: '1', DATABASE_URL: '' }, stdio: ['ignore', 'pipe', 'pipe'] });
 srv.log = ''; srv.stdout.on('data', (d) => (srv.log += d)); srv.stderr.on('data', (d) => (srv.log += d));
 async function tab(url) {
   let t;
@@ -158,17 +159,19 @@ try {
   let att = [];
   for (let i = 0; i < 30 && !att.length; i++) { await sleep(150); att = (await api('GET', '/state')).attempts.filter((x) => x.campaignId === camp.id); }
   ok(att.length === 1 && /Old Town Shades/.test(JSON.stringify(att[0])), 'clicking an outcome with the mouse saves the call with its name: ' + JSON.stringify(att.map((x) => x.contact || x.who)));
-  // A task added in a phase (Overview's Add task, picked from its tile) shows at once, and the field stays ready.
-  await A.tap(T('.cc-tab[data-ctab=overview]'));
+  // A task added in a phase (Plan's Add task, picked from the phase's header) shows at once, and the field stays ready.
+  await A.tap(T('.cc-tab[data-ctab=plan]'));
   const addQ = `document.querySelector('#camps .cc-ov .cc-ppanel .cc-pp-name')`;
-  await A.tap(`document.querySelector('#camps .cc-ov .cc-ptile.phase[data-phase="${prep.id}"]')`);
+  await A.tap(`document.querySelector('#camps .cc-phase[data-phase="${prep.id}"] .cc-phase-t')`);
   await A.until(`document.activeElement === ${addQ}`);
   await A.cmd('Input.insertText', { text: 'Measure the windows' });
   await A.ev(`${addQ}.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); true`);
-  ok(await A.until(`document.querySelector('#camps .cc-ov .cc-pt-phase[data-id="${prep.id}"]')?.textContent.includes('Measure the windows')`, 5000), 'a task added in a phase shows right away');
+  ok(await A.until(`document.querySelector('#camps .cc-phase[data-phase="${prep.id}"]')?.textContent.includes('Measure the windows')`, 5000), 'a task added in a phase shows right away');
   ok(await A.until(`document.activeElement === ${addQ} && !${addQ}.value`, 3000), 'and the add field still has the cursor');
   // The builder's last stage has no stray "null" where Next would be.
-  await A.ev(`${T('.cc-edit')}.click(); true`);
+  await A.ev(`${T('[aria-label="Campaign options"]')}.click(); true`);
+  await A.until(`[...document.querySelectorAll('#menu button')].some((b) => b.textContent.includes('Edit details'))`);
+  await A.ev(`[...document.querySelectorAll('#menu button')].find((b) => b.textContent.includes('Edit details')).click(); true`);
   await A.until(`!!document.querySelector('.cb-stage[data-stage="3"]')`);
   await A.ev(`document.querySelector('.cb-stage[data-stage="3"]').click(); true`);
   ok(await A.until(`!!document.querySelector('.cb-stage-nav .cb-back')`) && !/null/.test(await A.ev(`document.querySelector('.cb-stage-nav').textContent`)), 'the builder’s last stage shows Back and nothing else: ' + await A.ev(`document.querySelector('.cb-stage-nav').textContent`));

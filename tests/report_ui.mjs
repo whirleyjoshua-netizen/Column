@@ -2,6 +2,7 @@
 // forecast finish against the end date, each phase's days against its due day and against earlier runs of its SOP,
 // each person's numbers, what's gone quiet (with Nudge, a comment that tells them), a burn-up chart with a hover, and
 // Print. The pulse shows the forecast and what's quiet. Past days are made by editing the saved data between runs.
+import { CHROME, SERVER_DIR } from './chromebin.mjs';
 import * as FS from 'node:fs';
 import { spawn } from 'node:child_process';
 import WebSocket from '../server/node_modules/ws/index.js';
@@ -15,8 +16,8 @@ let fails = 0;
 const ok = (c, msg) => { console.log((c ? 'PASS ' : 'FAIL ') + msg); if (!c) fails++; };
 try { (await import('node:child_process')).execSync(`pkill -f remote-debugging-port=${CDP}`); await sleep(400); } catch {}
 FS.rmSync(`${S}/dk/chrome-rptui`, { recursive: true, force: true });
-const chrome = spawn('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', ['--headless=new', `--remote-debugging-port=${CDP}`, `--user-data-dir=${S}/dk/chrome-rptui`, '--no-first-run', '--window-size=1400,900', 'about:blank'], { stdio: 'ignore' });
-const startSrv = () => { const p = spawn('node', ['index.js'], { cwd: new URL('../server', import.meta.url).pathname, env: { ...process.env, SKIP_SETUP: '1', PORT: String(PORT), DATA_DIR: DIR, MAIL_OUTBOX: '1', DATABASE_URL: '' }, stdio: ['ignore', 'pipe', 'pipe'] }); p.log = ''; p.stdout.on('data', (d) => (p.log += d)); p.stderr.on('data', (d) => (p.log += d)); return p; };
+const chrome = spawn(CHROME, ['--headless=new', `--remote-debugging-port=${CDP}`, `--user-data-dir=${S}/dk/chrome-rptui`, '--no-first-run', '--window-size=1400,900', 'about:blank'], { stdio: 'ignore' });
+const startSrv = () => { const p = spawn('node', ['index.js'], { cwd: SERVER_DIR, env: { ...process.env, SKIP_SETUP: '1', PORT: String(PORT), DATA_DIR: DIR, MAIL_OUTBOX: '1', DATABASE_URL: '' }, stdio: ['ignore', 'pipe', 'pipe'] }); p.log = ''; p.stdout.on('data', (d) => (p.log += d)); p.stderr.on('data', (d) => (p.log += d)); return p; };
 let srv = startSrv();
 async function tab(url) {
   let t;
@@ -82,9 +83,9 @@ try {
   await A.until(`!!${card}`, 8000);
   await A.tap(card);
   // The pulse: the forecast, 9 days after the end date, and what's gone quiet.
-  // It opens from its button since 2026-11-22.
-  await A.until(`!!document.querySelector('#camps .cc-pulse-btn')`, 8000);
-  await A.ev(`document.querySelector('#camps .cc-pulse-btn').click(); true`);
+  // It heads the Report tab since 2026-11-25.
+  await A.until(`!!document.querySelector('#camps .cc-tab[data-ctab=report]')`, 8000);
+  await A.tap(`document.querySelector('#camps .cc-tab[data-ctab=report]')`);
   const fcDay = dk(Date.now() + 11 * DAY);
   const fcLabel = await A.ev(`new Date(${JSON.stringify(fcDay)} + 'T12:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' })`);
   ok(await A.until(`(document.querySelector('#camps .cc-pulse-fc')?.textContent || '').includes(${JSON.stringify(fcLabel)}) && /9 d late/.test(document.querySelector('#camps .cc-pulse-fc').textContent)`, 8000), 'the pulse forecasts the finish at this pace: ' + await A.ev(`document.querySelector('#camps .cc-pulse-fc')?.textContent`));
@@ -111,11 +112,11 @@ try {
   for (let i = 0; i < 30 && !n.length; i++) { await sleep(150); n = (await api('GET', '/state')).tasks.find((x) => x.id === quietOne.id).comments || []; }
   ok(n.length === 1 && /Sam, any news on this/.test(n[0].text), 'Nudge leaves Sam a comment: ' + n[0]?.text);
   ok(await A.until(`document.querySelectorAll('#camps .ccr-stall').length === 2`), 'and it isn’t quiet any more');
-  // In a narrow place (the split, or beside one) the page keeps its width: the pulse opens over it from its button
-  // since 2026-11-22, so nothing squeezes it.
+  // In a narrow place (the split, or beside one) the page keeps its width: the pulse is part of the Report page
+  // (2026-11-25), so nothing squeezes it.
   await A.ev(`document.querySelector('#camps').style.flex = '0 0 600px'; true`);
   await sleep(200);
-  ok(await A.ev(`getComputedStyle(document.querySelector('#camps .camp-view.cc')).display === 'block' && document.querySelector('#camps .cc-main').getBoundingClientRect().width > 500 && !document.querySelector('#camps .cc-pulse')`), 'at 600px wide the page keeps its width, no pulse squeezing it');
+  ok(await A.ev(`getComputedStyle(document.querySelector('#camps .camp-view.cc')).display === 'block' && document.querySelector('#camps .cc-main').getBoundingClientRect().width > 500 && document.querySelector('#camps .cc-pulse')?.getBoundingClientRect().width > 480`), 'at 600px wide the page keeps its width, the pulse inside it');
   await A.ev(`document.querySelector('#camps').style.flex = ''; true`);
   await sleep(200);
   // Print.
