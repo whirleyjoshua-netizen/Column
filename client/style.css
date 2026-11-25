@@ -5011,3 +5011,22 @@ body.wide.split-on:not(.split-full) #camps .cc-ov .cc-obrief { order: -1; border
 .jb-scard label:not(.pick) { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
 .jb-scard label:not(.pick) > textarea, .jb-scard label:not(.pick) > select, .jb-scard > input { width: 100%; box-sizing: border-box; color: var(--text); }
 .jb-scard label.pick { display: flex; align-items: center; gap: 6px; font-size: 13px; }
+
+/* Phase 3b: check a message before it goes; a message waiting for an OK; Settings → Quotes & invoices */
+.send-ok { display: flex; flex-direction: column; gap: 10px; }
+.send-ok .send-to { margin: 0; font-weight: 600; }
+.send-ok .send-to small { font-weight: 400; color: var(--muted); }
+.send-ok .send-subj { margin: 0; }
+.send-text { white-space: pre-wrap; background: var(--soft, rgba(127,127,127,.08)); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; font-size: 14px; line-height: 1.45; max-height: 40vh; overflow: auto; }
+.jb-pend { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border: 1px solid var(--accent); border-radius: 10px; margin-top: 6px; }
+.jb-pend .send-text { max-height: 160px; font-size: 13px; }
+.jb-pend .btns { margin-top: 2px; }
+.jb-send { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); margin-top: 6px; }
+.docs-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; margin-bottom: 10px; }
+.docs-sec label { display: flex; flex-direction: column; gap: 4px; margin-top: 10px; }
+.docs-sec label.pick { flex-direction: row; align-items: center; gap: 8px; }
+.docs-sec h4 { margin: 18px 0 6px; }
+.doc-sig { display: flex; flex-direction: column; gap: 8px; }
+.doc-sig canvas { width: 100%; max-width: 480px; height: 130px; border: 1px dashed var(--line); border-radius: 10px; background: #fff; touch-action: none; }
+.doc-sig-now { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.doc-sig-now img { max-height: 56px; max-width: 220px; background: #fff; border-radius: 6px; }

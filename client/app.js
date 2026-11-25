@@ -221,6 +221,34 @@
     }
     return data;
   }
+  // ---------- nothing goes to a customer without an OK (docs/jobflows/PHASE3B.md §1) ----------
+  // A send route first answers 428 with what would go and a one-time ticket: this shows it (who, how, the subject and
+  // the words) with Send and Cancel, and only Send calls again with the ticket. Changed in between (409 with a new
+  // preview): it shows the new one. Resolves with the route's answer, or null when the person cancels.
+  function sendOk(method, path, body = {}) {
+    const ask = (pv, tk, note) => new Promise((resolve, reject) => {
+      const via = pv.via === 'both' ? 'email and text' : pv.via === 'text' ? 'text' : 'email';
+      const where = [pv.email, pv.phone].filter(Boolean).join(' · ');
+      const go = h('button', { class: 'btn primary-btn', onclick: async () => {
+        go.disabled = true;
+        try { const out = await api(method, path, { ...body, confirm: tk }); closeSheet(); resolve(out); }
+        catch (e) {
+          if (e.status === 409 && e.data?.confirm) return resolve(await ask(e.data.preview, e.data.confirm, e.data.error));
+          closeSheet();
+          if (e.status === 409 && e.data?.sent) return resolve({ alreadySent: true });
+          reject(e);
+        }
+      } }, 'Send');
+      sheet('Check it before it goes', [h('div', { class: 'send-ok' },
+        note ? h('p', { class: 'day-hint' }, note) : null,
+        h('p', { class: 'send-to' }, `Send to ${pv.to} by ${via}?`, where ? h('small', {}, ` ${where}`) : null),
+        pv.subject ? h('p', { class: 'send-subj' }, h('b', {}, pv.subject)) : null,
+        h('div', { class: 'send-text' }, pv.text || ''),
+        pv.textMessage ? h('p', { class: 'day-hint' }, 'The text says: ' + pv.textMessage) : null,
+        h('div', { class: 'btns' }, go, h('button', { class: 'btn', onclick: () => { closeSheet(); resolve(null); } }, 'Cancel')))]);
+    });
+    return api(method, path, body).catch((e) => { if (e.status === 428 && e.data?.confirm) return ask(e.data.preview, e.data.confirm); throw e; });
+  }
 
   // ---------- teams on this device ----------
   // Each team signed in here keeps its token, so switching is a tap. Switching reloads the page,
@@ -12415,7 +12443,8 @@
     const sendIt = async () => {
       if (!box.value.trim()) return;
       try {
-        const t = await api('POST', `/contacts/${x.id}/texts`, { body: box.value });
+        const t = await sendOk('POST', `/contacts/${x.id}/texts`, { body: box.value });
+        if (!t || t.alreadySent) return;
         box.value = '';
         msgs = [...msgs.filter((y) => y.id !== t.id), t];
         draw(msgs);
@@ -17905,7 +17934,7 @@
     let drawing = false;
     let inked = false;
     const at = (e) => { const b = pad.getBoundingClientRect(); return [((e.clientX - b.left) / b.width) * pad.width, ((e.clientY - b.top) / b.height) * pad.height]; };
-    pad.addEventListener('pointerdown', (e) => { drawing = true; inked = true; pad.setPointerCapture(e.pointerId); g.beginPath(); g.moveTo(...at(e)); });
+    pad.addEventListener('pointerdown', (e) => { drawing = true; inked = true; try { pad.setPointerCapture(e.pointerId); } catch {} g.beginPath(); g.moveTo(...at(e)); });
     pad.addEventListener('pointermove', (e) => { if (!drawing) return; g.lineTo(...at(e)); g.stroke(); });
     pad.addEventListener('pointerup', () => { drawing = false; });
     return { pad, inked: () => inked, data: () => pad.toDataURL('image/png'), clear: () => { g.clearRect(0, 0, pad.width, pad.height); inked = false; } };
@@ -17934,7 +17963,7 @@
     const sent = out ? h('div', { class: 'pj-so-out' }, signPending(r, f), h('span', {}, ` ${so.to?.name || ''}${so.to?.email ? ' · ' + so.to.email : ''}`),
       h('span', { style: 'flex:1' }),
       ['sent', 'viewed'].includes(so.status) ? [
-        h('button', { class: 'btn small', onclick: async () => { try { const y = await api('POST', `/signoff/${r.id}/${f.id}/remind`); toast(y.emailed === 'mailbox' ? 'Reminder sent from your email' : 'Reminder sent'); } catch (e) { toast(e.message); } } }, 'Remind'),
+        h('button', { class: 'btn small', onclick: async () => { try { const y = await sendOk('POST', `/signoff/${r.id}/${f.id}/remind`); if (!y || y.alreadySent) return; toast(y.emailed === 'mailbox' ? 'Reminder sent from your email' : 'Reminder sent'); } catch (e) { toast(e.message); } } }, 'Remind'),
         h('button', { class: 'btn small', onclick: async () => { try { const y = await api('GET', `/signoff/${r.id}/${f.id}/link`); await navigator.clipboard.writeText(y.link); toast('Link copied'); } catch (e) { toast(e.message); } } }, 'Copy link'),
         h('button', { class: 'btn small', onclick: async () => { try { const y = await api('POST', `/signoff/${r.id}/${f.id}/cancel`); prUpsertRecord(y.record); renderProjects(); } catch (e) { toast(e.message); } } }, 'Cancel')] : null) : null;
     const waiting = out && ['sent', 'viewed'].includes(so.status);
@@ -17989,7 +18018,8 @@
       h('label', {}, 'Who signs', name), h('label', {}, 'Their email', email), h('label', {}, 'Message', msg),
       h('button', { type: 'button', class: 'btn small', onclick: () => signPdfOpen(r, f) }, '📄 See what they’ll get'),
     ], async () => {
-      const y = await api('POST', `/signoff/${r.id}/${f.id}/send`, { name: name.value.trim(), email: email.value.trim(), message: msg.value.trim() });
+      const y = await sendOk('POST', `/signoff/${r.id}/${f.id}/send`, { name: name.value.trim(), email: email.value.trim(), message: msg.value.trim() });
+      if (!y || y.alreadySent) return;
       prUpsertRecord(y.record);
       renderProjects();
       if (y.emailed) toast(y.emailed === 'mailbox' ? 'Sent from your email' : `Sent to ${email.value.trim()}`);
@@ -18360,14 +18390,49 @@
       case 'custom': return jbStep(r, s, 'done');
     }
   }
+  // Each message a step sends to the customer by itself: "Send by itself" or "Ask me first" (PHASE3B.md §2). Left
+  // unset it asks first, as every flow published before this does.
+  function jbSendPick(s) {
+    const what = { remind: 'The day-before reminder', review: 'The review request', quote: 'The quote’s follow-up', invoice: 'The invoice’s email', payment: 'Payment reminders' }[s.kind];
+    const sel = h('select', { 'data-field': 'send', 'aria-label': what }, [['ask', '✋ Ask me first'], ['auto', '🤖 Send by itself']].map(([k, l]) => h('option', { value: k, selected: (s.settings.send || 'ask') === k }, l)));
+    sel.addEventListener('change', () => { s.settings.send = sel.value; });
+    return h('label', { class: 'jb-send' }, what, sel);
+  }
+  // A message waiting for an OK (owners and admins): what it says, and Send / Don't send.
+  const JB_PEND = { remind: 'Day-before reminder', review: 'Review request', quoteFollow: 'Quote follow-up', invoice: 'Invoice email', payReminder: 'Payment reminder' };
+  function jbPending(r, s) {
+    const pd = s.pending;
+    const pv = pd.preview || {};
+    const via = pv.via === 'both' ? 'email and text' : pv.via === 'text' ? 'text' : 'email';
+    const act = async (action, btn) => {
+      btn.disabled = true;
+      try {
+        const y = await api('POST', `/jobs/${r.id}/steps/${s.id}/message`, { action, key: pd.key });
+        JB.runs.set(r.id, y.run || null);
+        toast(action === 'skip' ? 'Not sent.' : y.outcome === 'sent' ? `Sent to ${pv.to}` : y.outcome === 'blocked' ? `Not sent: ${y.reason || 'try again later'}` : y.outcome === 'unsure' ? 'It may not have gone.' : 'Done.');
+      } catch (e) {
+        if (e.data?.run) JB.runs.set(r.id, e.data.run);
+        toast(e.message);
+      }
+      renderProjects();
+    };
+    const send = h('button', { class: 'btn small primary-btn', 'data-act': 'msg-send', onclick: (e) => act('send', e.currentTarget) }, 'Send');
+    const skip = h('button', { class: 'btn small', 'data-act': 'msg-skip', onclick: (e) => act('skip', e.currentTarget) }, 'Don’t send');
+    return h('div', { class: 'jb-auto jb-pend', 'data-msg': 'pending' },
+      h('b', {}, `Ready to send: ${JB_PEND[pd.kind] || 'a message'}${pd.day ? ` (${plural(pd.day, 'day')} late)` : ''} to ${pv.to} by ${via}`),
+      pv.subject ? h('small', {}, pv.subject) : null,
+      h('div', { class: 'send-text' }, pv.text || ''),
+      pd.lastTry ? h('small', { class: 'jb-missing' }, `Didn’t go ${ago(pd.lastTry.at)}: ${pd.lastTry.reason}. Send again once that’s fixed.`) : null,
+      h('div', { class: 'btns' }, send, skip));
+  }
   // The Quote step: send the job's lines as a quote (the link is copied), copy the link again, or start a new quote.
   async function jbQuote(p, r, s) {
     if (!amAdmin()) return toast('Owners and admins send the quotes.');
     if (s.quote?.url && s.told && s.told.state !== 'blocked') { copyText(s.quote.url); return toast('Link copied.'); }
     await prFresh(p, r);
     // The link, and the customer emailed (or texted) once per link (PHASE3.md §3.3); the link is copied either way.
-    const y = await api('POST', `/jobs/${r.id}/quote/send`).catch((e) => toast(e.message));
-    if (!y) return;
+    const y = await sendOk('POST', `/jobs/${r.id}/quote/send`).catch((e) => toast(e.message));
+    if (!y || y.alreadySent) return;
     if (y.url) copyText(y.url);
     const told = y.told;
     toast(!told ? 'Link copied. Send it to your customer: they accept or decline it there.' : told.emailed || told.texted ? `Sent to the customer${told.emailed && told.texted ? ' by email and text' : told.texted ? ' by text' : ' by email'}. The link is copied too.` : `Link copied. Not emailed: ${told.reason || 'it couldn’t be sent'}.`);
@@ -18476,7 +18541,8 @@
         h('small', {}, [JB_QUOTE[s.quote.status] || s.quote.status, s.quote.total != null ? money2(s.quote.total) : null, s.quote.answeredBy ? `by ${s.quote.answeredBy}` : null].filter(Boolean).join(' · ')),
         s.quote.reason ? h('small', { class: 'muted' }, `“${s.quote.reason}”`) : null,
         s.told ? h('small', { class: 'jb-told', 'data-told': s.told.state }, s.told.state === 'blocked' ? `Not emailed: ${s.told.reason}` : s.told.state === 'unsure' ? `The email may not have gone: ${s.told.reason || ''}` : s.told.state === 'sent' ? `Sent to the customer${s.told.via === 'text' ? ' by text' : s.told.via === 'both' ? ' by email and text' : ' by email'}` : 'Sending…') : null) : null,
-      JB_AUTO.includes(s.kind) ? h('small', { class: 'jb-auto', 'data-waiting': s.state === 'current' && s.waiting ? 'yes' : '', 'data-msg': s.sent ? (s.sent.unsure ? 'unsure' : 'sent') : s.skippedBy === 'kloomie' ? 'skipped' : s.state },
+      s.pending && admin ? jbPending(r, s) : null,
+      JB_AUTO.includes(s.kind) && !(s.pending && admin) ? h('small', { class: 'jb-auto', 'data-waiting': s.state === 'current' && s.waiting ? 'yes' : '', 'data-msg': s.sent ? (s.sent.unsure ? 'unsure' : 'sent') : s.skippedBy === 'kloomie' ? 'skipped' : s.state },
         s.skippedBy === 'kloomie' ? `Kloomie skipped it: ${s.skipReason || ''}` : s.sent?.unsure ? s.note || 'May not have gone.' : s.sent ? `Sent${s.sentTo ? (s.sentTo === 'both' ? ' by email and text' : s.sentTo === 'text' ? ' by text' : ' by email') : ''} ${ago(s.sent.at)}.` : s.state === 'current' ? s.waiting || 'Kloomie sends it by itself.' : 'Kloomie sends it by itself when the job gets here.') : null,
       s.kind === 'quote' && s.followUp ? h('small', { class: 'muted', 'data-followup': s.followUp.sentAt ? 'sent' : '' }, s.followUp.sentAt ? `Follow-up sent ${ago(s.followUp.sentAt)}` : `Follows up after ${plural(s.followUp.days, 'day')} without an answer`) : null,
       s.kind === 'payment' && s.reminders?.length ? h('small', { class: 'muted', 'data-reminders': s.reminders.filter((x) => x.sentAt).length }, 'Reminders: ' + s.reminders.map((x) => `${plural(x.days, 'day')} late${x.sentAt ? ' ✓' : x.passed ? ' (passed)' : ''}`).join(', ')) : null,
@@ -18735,7 +18801,9 @@
           h('button', { class: 'icon-btn', html: I.close, 'aria-label': 'Remove step', onclick: () => { E.steps.splice(i, 1); redraw(); } })),
         h('small', { class: 'muted' }, JB_HOW[s.kind]),
         nm, h('div', { class: 'row2' }, whoEl, st), extra,
-        s.kind === 'invoice' && E.billing === 'auto' ? h('small', { class: 'jb-auto' }, 'Automatic: made from the job’s lines and sent by itself when the step before it is done.') : null, h('label', { class: 'pick' }, skip, 'Whoever does it may skip it (with a reason)'));
+        s.kind === 'invoice' && E.billing === 'auto' ? h('small', { class: 'jb-auto' }, 'Automatic: made from the job’s lines and sent by itself when the step before it is done.') : null,
+        ['remind', 'review', 'quote', 'payment'].includes(s.kind) || (s.kind === 'invoice' && E.billing === 'auto') ? jbSendPick(s) : null,
+        h('label', { class: 'pick' }, skip, 'Whoever does it may skip it (with a reason)'));
     };
     const add = h('button', { class: 'btn', 'data-act': 'add-step', onclick: (e) => openMenu(e.currentTarget, Object.entries(JB_KIND).filter(([k]) => k !== 'quote' || (E.billing === 'quote' && !E.steps.some((x) => x.kind === 'quote'))).map(([k, [ic, l]]) => ({ label: `${ic} ${l}`, run: () => { E.steps.push({ kind: k, name: l, stage: null, who: { type: JB_MONEY.includes(k) || JB_AUTO.includes(k) ? 'admins' : 'anyone' }, canSkip: false, settings: k === 'tasks' ? { tasks: [] } : k === 'review' ? { delayHours: 1 } : {} }); redraw(); } }))) }, '+ Add a step');
     // Billing: by hand, quote first (puts a Send the quote step before the invoice), or automatic.
@@ -18829,7 +18897,8 @@
     const mins = h('select', {}, [10, 15, 20, 30, 45, 60, 90].map((n) => h('option', { value: n, selected: n === 20 }, `${n} minutes`)));
     const go = async (email) => {
       try {
-        const out = await api('POST', `/visits/${v.id}/on-my-way`, { minutes: Number(mins.value), email });
+        const out = await sendOk('POST', `/visits/${v.id}/on-my-way`, { minutes: Number(mins.value), email });
+        if (!out || out.alreadySent) return;
         closeSheet();
         if (email) custSaid(out, who, 'On my way');
         else if (out.texted) toast(`On my way texted to ${who}`);
@@ -18848,7 +18917,8 @@
   async function remindNow(t, r, v) {
     const c = custOfJob(t, r);
     try {
-      const out = await api('POST', `/visits/${v.id}/remind`);
+      const out = await sendOk('POST', `/visits/${v.id}/remind`);
+      if (!out || out.alreadySent) return;
       custSaid(out, c?.name || 'The customer', 'Reminder');
       if (!out.emailed && out.sms) textCustomer(out.sms);
     } catch (e) { toast(e.message); }
@@ -18857,7 +18927,8 @@
     const c = custOfJob(t, r);
     if (!S.workspace?.custMsgs?.reviewUrl) return amAdmin() ? openSettings('general', '.cm-sec') : toast('Ask an owner to add the team’s review link in Settings.');
     try {
-      const out = await api('POST', `/records/${r.id}/review-request`);
+      const out = await sendOk('POST', `/records/${r.id}/review-request`);
+      if (!out || out.alreadySent) return;
       custSaid(out, c?.name || 'The customer', 'Review request');
       if (!out.emailed && out.sms) textCustomer(out.sms);
     } catch (e) { toast(e.message); }
@@ -23116,8 +23187,8 @@
     mail.addEventListener('click', async () => {
       mail.disabled = true;
       try {
-        upsertSign(await api('POST', `/signs/${x.id}/email`));
-        toast(`Emailed to ${x.signer.email}`);
+        const y = await sendOk('POST', `/signs/${x.id}/email`);
+        if (y && !y.alreadySent) { upsertSign(y); toast(`Emailed to ${x.signer.email}`); }
       } catch (err) {
         toast(err.message);
       }
@@ -26039,7 +26110,7 @@
   const setPages = (admin, billing) => [
     ['You', [['profile', 'Profile & sign-in', '👤', 'Your email, password and the devices you’re signed in on.'], ['notify', 'Notifications', '🔔', 'What this device tells you, and how.'], ['prefs', 'Preferences', '🎛️', 'How Kloomie looks and works for you.'], ['signature', 'Signature', '✍️', 'Your email signature, and the one you sign documents with.']]],
     ['Team', [['members', 'Members & invites', '👥', 'Who’s on the team, their roles, and how new people join.'], ...(admin ? [['access', 'What members can use', '🔐', 'Choose what members see and use. Owners and admins always have everything.']] : []), ['roles', 'Roles', '🏷️', 'The kinds of work people do, so tasks can go to a role.'], ...(admin ? [['teamset', 'Team settings', '🛠️', 'Time zone, clean-up and messages for the whole team.']] : [])]],
-    ['Business', [['business', 'Business', '🏢', 'Your brand, Company HQ, business cards and signatures.'], ...(billing ? [['billing', 'Billing', '💳', 'Your plan, seats and payment.']] : [])]],
+    ['Business', [['business', 'Business', '🏢', 'Your brand, Company HQ, business cards and signatures.'], ...(admin ? [['docs', 'Quotes & invoices', '🧾', 'Business details, your signature, and how quotes look and are accepted.']] : []), ...(billing ? [['billing', 'Billing', '💳', 'Your plan, seats and payment.']] : [])]],
     ['Data', [['data', 'Export & delete', '🗂️', 'Take a copy of your things or the team’s, or leave and delete.']]],
   ];
   // Older names (the tabs before 2026-11-20, still in links, Help and saved on devices) → their page now.
@@ -26058,6 +26129,7 @@
     roles: 'roles sales installs marketing',
     teamset: 'time zone auto-clear clear remove items customer messages tools automations apps integrations',
     business: 'brand culture logo colour color mission values company hq business card signatures',
+    docs: 'quotes invoices business details address phone license signature terms footer valid expiry prices accept',
     billing: 'billing plan seats payment card trial invoice',
     data: 'export download zip delete team account leave close',
   };
@@ -26341,6 +26413,62 @@
         row('hq', 'Company HQ', HQ.data && amAdmin() && HQ.data.entries.some((x) => x.status === 'suggested') ? 'Suggestions to review' : 'What Kloomie knows about your business, and the rules it follows'),
         toolOn('cards') ? row('cards', 'Business card', 'Your own card page, QR code and share link') : null,
         toolOn('signs') ? row('signs', 'Signatures', waiting ? `${waiting} waiting to be signed` : 'Send documents to sign and see who signed', () => { SG.filter = null; openTool('signs'); }) : null));
+    }
+
+    // Quotes & invoices (PHASE3B.md §3, owners and admins): business details, the business signature ("Prepared by"),
+    // how long quotes are valid, default terms and a footer, line prices, and how customers accept.
+    if (page === 'docs' && admin) {
+      const sec = h('section', { class: 'docs-sec' }, h('h3', {}, 'Quotes & invoices'), h('p', { class: 'day-hint' }, 'Loading…'));
+      P('docs', sec);
+      api('GET', '/docs-settings').then((d) => {
+        const inp = (k, v, ph, type = 'text') => h('input', { type, value: v ?? '', placeholder: ph, 'data-doc': k });
+        const b = d.business || {};
+        const f = {
+          name: inp('business-name', b.name, ws.name), address: inp('business-address', b.address, 'Street, city, state'), phone: inp('business-phone', b.phone, 'Phone', 'tel'),
+          email: inp('business-email', b.email, 'Email', 'email'), website: inp('business-website', b.website, 'https://…', 'url'), license: inp('business-license', b.license, 'License number'),
+        };
+        const valid = h('input', { type: 'number', min: 0, max: 365, step: 1, value: d.validDays, 'data-doc': 'validDays' });
+        const terms = h('textarea', { rows: 4, maxlength: 4000, 'data-doc': 'terms', placeholder: 'Payment terms, warranty, what’s included…' }, d.terms || '');
+        const footer = h('input', { type: 'text', maxlength: 300, value: d.footer || '', 'data-doc': 'footer', placeholder: 'A line at the bottom of every quote and invoice' });
+        const prices = h('input', { type: 'checkbox', checked: d.showPrices !== false, 'data-doc': 'showPrices' });
+        const contact = h('input', { type: 'checkbox', checked: !!d.showClientContact, 'data-doc': 'showClientContact' });
+        const accept = h('select', { 'data-doc': 'accept' }, [['type', 'Type their name'], ['draw', 'Draw a signature']].map(([k, l]) => h('option', { value: k, selected: d.accept === k }, l)));
+        const save = h('button', { class: 'btn primary-btn' }, 'Save');
+        save.addEventListener('click', async () => {
+          try {
+            await api('PATCH', '/docs-settings', { business: Object.fromEntries(Object.entries(f).map(([k, x]) => [k, x.value.trim()])), validDays: Number(valid.value || 0), terms: terms.value, footer: footer.value, showPrices: prices.checked, showClientContact: contact.checked, accept: accept.value });
+            toast('Saved');
+          } catch (e) { toast(e.message); }
+        });
+        // The business signature: drawn here, or an image, with who signs.
+        const pad = signPad();
+        const who = h('input', { type: 'text', maxlength: 80, value: d.signature?.name || S.me.member || '', placeholder: 'Who signs', 'data-doc': 'sig-name' });
+        const title = h('input', { type: 'text', maxlength: 80, value: d.signature?.title || '', placeholder: 'Title (Owner, Manager…)', 'data-doc': 'sig-title' });
+        const file = h('input', { type: 'file', accept: 'image/png,image/jpeg', 'aria-label': 'Upload a signature image' });
+        const now = h('div', { class: 'doc-sig-now' });
+        const drawNow = () => now.replaceChildren(...(d.signature ? [h('img', { src: d.signature.url, alt: 'Your business signature' }), h('small', {}, `${d.signature.name}${d.signature.title ? ', ' + d.signature.title : ''}`),
+          h('button', { class: 'btn small', onclick: async () => { try { await api('DELETE', '/docs-settings/signature'); d.signature = null; drawNow(); toast('Signature removed'); } catch (e) { toast(e.message); } } }, 'Remove')] : [h('small', { class: 'muted' }, 'No signature yet: quotes go out without “Prepared by”.')]));
+        drawNow();
+        const putSig = async (image) => {
+          try { const y = await api('PUT', '/docs-settings/signature', { image, name: who.value.trim(), title: title.value.trim() }); d.signature = y.signature; drawNow(); pad.clear(); toast('Signature saved'); }
+          catch (e) { toast(e.message); }
+        };
+        file.addEventListener('change', () => { const x = file.files[0]; if (!x) return; if (x.size > 200_000) return toast('Keep the signature under 200 KB.'); const rd = new FileReader(); rd.onload = () => putSig(rd.result); rd.readAsDataURL(x); });
+        const sigBox = h('div', { class: 'doc-sig' }, now,
+          h('small', { class: 'muted' }, 'Draw it below (a new one replaces the old), or upload an image:'),
+          pad.pad, h('div', { class: 'row2' }, who, title),
+          h('div', { class: 'btns' }, h('button', { class: 'btn', onclick: () => (pad.inked() ? putSig(pad.data()) : toast('Draw the signature first.')) }, 'Save signature'), h('button', { class: 'btn', onclick: () => pad.clear() }, 'Clear'), file));
+        sec.replaceChildren(h('h3', {}, 'Quotes & invoices'),
+          h('p', { class: 'day-hint' }, 'What your customers see on quotes and invoices. Your logo and colour come from Business → brand. A quote keeps the look it was sent with.'),
+          h('h4', {}, 'Business details'), h('div', { class: 'docs-grid' }, f.name, f.address, f.phone, f.email, f.website, f.license),
+          h('label', {}, 'Quotes are valid for (days, 0 = they don’t expire)', valid),
+          h('label', {}, 'Default terms', terms), h('label', {}, 'Footer', footer),
+          h('label', { class: 'pick' }, prices, 'Show each line’s price (the total always shows)'),
+          h('label', { class: 'pick' }, contact, 'Show the client’s email and phone on quotes'),
+          h('label', {}, 'Customers accept by', accept),
+          h('div', { class: 'btns' }, save),
+          h('h4', {}, 'Prepared by (your signature)'), sigBox);
+      }).catch((e) => sec.replaceChildren(h('h3', {}, 'Quotes & invoices'), h('p', { class: 'warn' }, e.message)));
     }
 
     if (['profile', 'signature', 'data'].includes(page)) {
