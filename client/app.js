@@ -7120,6 +7120,7 @@
     if (k === 'blocked') return open.filter((t) => taskBlockers(t).length);
     return [...open, ...tasks.filter((t) => t.done)];
   }
+  const ccEmptyText = (k) => (k === 'mine' ? 'Nothing open for you here.' : k === 'blocked' ? 'Nothing is blocked.' : k === 'overdue' ? 'Nothing is overdue.' : 'No tasks here yet.');
   const ccStatus = (t) => (t.done ? ['done', 'Done'] : taskBlockers(t).length ? ['wait', 'Waiting'] : t.submitted ? ['sign', 'For sign-off'] : isOverdue(t) ? ['late', 'Overdue'] : t.status === 'doing' ? ['doing', 'In progress'] : ['open', 'Not started']);
   const ccWorkView = () => (['list', 'board', 'timeline', 'calendar'].includes(K.wview) ? K.wview : (K.wview = store.get('ccWorkView', 'list')));
   // A change from a view: shown at once (patchTask puts it in the list before the server answers), saved, drawn again.
@@ -7150,8 +7151,10 @@
     const by = ['status', 'phase', 'person'].includes(K.wgroup) ? K.wgroup : 'status';
     let cols;
     if (by === 'status') {
-      // The Done column keeps what's done even under Open, so a card dragged there stays in sight.
-      const list = K.wfilter === 'done' || K.wfilter === 'all' ? pick : [...new Set([...pick, ...tasks.filter((t) => t.done)])];
+      // The Done column keeps what's done whatever the chip, so a card dragged there stays in sight; under My tasks,
+      // only what's yours.
+      const mineOnly = ccChipOf(K.wfilter) === 'mine';
+      const list = [...new Set([...pick, ...tasks.filter((t) => t.done && (!mineOnly || taskMine(t)))])];
       const key = (t) => { const s = ccStatus(t)[0]; return s === 'late' ? (t.status === 'doing' ? 'doing' : 'open') : s; };
       cols = [['open', 'Not started', { status: null, done: false }], ['doing', 'In progress', { status: 'doing', done: false }], ['wait', 'Waiting', null], ['sign', 'For sign-off', null], ['done', 'Done', { done: true }]]
         .map(([k, l, set]) => ({ k, label: l, set, list: list.filter((t) => key(t) === k), why: k === 'wait' ? 'A task waits on what it’s set to wait for' : k === 'sign' ? 'A task goes for sign-off when it’s finished' : '' }))
@@ -7317,7 +7320,7 @@
     const zoom = h('div', { class: 'seg seg-sm cct-zoom' }, h('small', {}, 'Zoom:'), [['week', 'Days'], ['month', 'Weeks']].map(([k, l]) =>
       h('button', { class: (K.wzoom === 'month' ? 'month' : 'week') === k ? 'on' : null, 'data-zoom': k, onclick: () => { K.wzoom = k; renderCamps(); } }, l)),
       h('button', { class: 'btn small cct-totoday', onclick: (e) => { const sc = e.currentTarget.closest('.cc-work').querySelector('.cct-scroll'); if (sc) sc.scrollLeft = Math.max(0, xOf(today) - 7 * px); } }, 'Today'));
-    return [zoom, pick.length ? h('div', { class: 'cct-scroll' }, grid) : h('p', { class: 'day-hint' }, 'No tasks here yet.'),
+    return [zoom, pick.length ? h('div', { class: 'cct-scroll' }, grid) : h('p', { class: 'day-hint' }, ccEmptyText(ccChipOf(K.wfilter))),
       h('p', { class: 'day-hint' }, 'Drag a bar to move it, pull either end to change when it starts or is due, drag across an empty row to give a task its days. Arrows show what each task waits for.')];
   }
   // Calendar: a month, each task on its due day; drag it to another day, or a task with no date onto one.
@@ -8015,26 +8018,27 @@
       h('div', { class: 'camp-subs' }, subsOf(c).map((x) => h('button', { class: 'sub-card c-' + x.color + (x.status === 'done' ? ' done' : ''), onclick: () => openCampaign(x.id) },
         h('div', { class: 'cc-top' }, h('b', {}, x.name), h('span', { class: 'cc-pct' }, Math.round(campProgress(x) * 100) + '%')), bar(campProgress(x), x.color), subLine(x) ? h('div', { class: 'cc-sub' }, subLine(x)) : null)),
         h('button', { class: 'add-goal', onclick: () => campaignSheet(null, c) }, '+ Add a sub-campaign'))) : null;
-    // Work: every task in one list, with quick filters; a task opens beside the page.
-    const wf = ['all', 'mine', 'open', 'blocked', 'overdue', 'done'].includes(K.wfilter) ? K.wfilter : 'open';
+    // Work (2026-11-25): every task, in the view picked from one dropdown; the chips under the header filter it as they
+    // filter Plan (All: open, then done; My tasks, Overdue, Blocked: open only). A task opens beside the page.
+    const wf = ccChipOf(K.wfilter);
     const workBody = () => {
-      const pick = { all: tasks, mine: open.filter(taskMine), open, blocked, overdue, done: tasks.filter((t) => t.done) }[wf];
+      const pick = ccChipPick(tasks, wf);
       const status = ccStatus;
       const vw = ccWorkView();
-      const views = h('div', { class: 'seg seg-sm cc-wview', role: 'tablist' }, [['list', '☰ List'], ['board', '▥ Board'], ['timeline', '▤ Timeline'], ['calendar', '▦ Calendar']].map(([k, l]) =>
-        h('button', { class: vw === k ? 'on' : null, role: 'tab', 'aria-selected': String(vw === k), 'data-wv': k, onclick: () => { K.wview = k; store.set('ccWorkView', k); renderCamps(); } }, l)));
-      const filters = h('div', { class: 'cc-wf seg seg-sm' }, [['open', `Open · ${open.length}`], ['mine', `Mine · ${open.filter(taskMine).length}`], ['blocked', `Blocked · ${blocked.length}`], ['overdue', `Overdue · ${overdue.length}`], ['done', `Done · ${tasks.length - open.length}`], ['all', `All · ${tasks.length}`]].map(([k, l]) =>
-        h('button', { class: wf === k ? 'on' : null, 'data-wf': k, onclick: () => { K.wfilter = k; renderCamps(); } }, l)));
-      if (vw !== 'list') return h('section', { class: 'cc-card cc-work cc-work-' + vw }, views, filters,
+      // The views behind one dropdown (2026-11-25), kept on this device as before.
+      const sel = h('select', { class: 'cc-wview-sel', 'aria-label': 'View' }, [['list', 'List'], ['board', 'Board'], ['timeline', 'Timeline'], ['calendar', 'Calendar']].map(([k, l]) => h('option', { value: k, selected: vw === k }, l)));
+      // Drawn at once: a focused box holds the page's redraw back, and a dropdown keeps the focus after a pick.
+      sel.addEventListener('change', () => { K.wview = sel.value; store.set('ccWorkView', sel.value); sel.blur(); renderCamps(true); $('#camps .cc-wview-sel')?.focus(); });
+      const views = h('div', { class: 'cc-wbar' }, h('label', { class: 'cc-wview' }, h('span', {}, 'View'), sel));
+      if (vw !== 'list') return h('section', { class: 'cc-card cc-work cc-work-' + vw }, views,
         ...(vw === 'board' ? ccTaskBoard(c, pick, tasks, phases) : vw === 'timeline' ? ccTimeline(c, pick, phases) : ccCalendar(c, pick)));
       return h('section', { class: 'cc-card cc-work' }, views,
-        filters,
         pick.length ? h('div', { class: 'cc-table', role: 'table' },
           h('div', { class: 'cc-tr cc-th', role: 'row' }, ['Task', 'Phase', 'Who', 'Due', 'Priority', 'Status'].map((x) => h('span', { role: 'columnheader' }, x))),
           pick.map((t) => { const [sc, sl] = status(t); const g = goalById(t.goalId); return h('div', { class: 'cc-tr' + (t.done ? ' done' : ''), role: 'row', 'data-task': t.id, tabindex: '0', onclick: () => taskWindow(t), onkeydown: (e) => { if (e.key === 'Enter') taskWindow(t); } },
             h('span', { class: 'cc-tt' }, t.text, t.wo ? h('span', { class: 'wo-chip' }, t.wo.no) : null), h('span', {}, g?.title || ''), h('span', {}, t.assigneeId ? [avatar(t.assigneeId), ' ', memberName(t.assigneeId)] : t.roleId || t.castId ? 'A role' : h('small', { class: 'muted' }, 'Nobody')),
             h('span', { class: isOverdue(t) ? 'late' : '' }, t.due ? dueLabel(t.due) : ''), h('span', {}, t.priority ? h('span', { class: 'cc-prio p' + t.priority }, PRIO[t.priority]) : ''), h('span', {}, h('span', { class: 'cc-status ' + sc }, sl))); }))
-          : h('p', { class: 'day-hint' }, wf === 'mine' ? 'Nothing open for you here.' : wf === 'blocked' ? 'Nothing is blocked.' : wf === 'overdue' ? 'Nothing is overdue.' : 'No tasks here yet.'));
+          : h('p', { class: 'day-hint' }, ccEmptyText(wf)));
     };
     // Where things are (2026-11-25): the Resources tab, folded under the brief on Plan.
     const where = () => {

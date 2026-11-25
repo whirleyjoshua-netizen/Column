@@ -78,10 +78,10 @@ try {
   // Phases as cards with their tasks as rows (2026-11-25); the target on the right, under At a glance.
   ok(await A.ev(`document.querySelectorAll('#camps .cc-phase').length === 4 && ${T('.cc-phase .cc-phase-meta')}.textContent === 'Phase 1 (1/4 tasks done)' && document.querySelectorAll('#camps .cc-phase')[0].querySelectorAll('.cc-row').length === 4`), 'four phase cards, each with its tasks as rows; the first: Phase 1 (1/4 tasks done)');
   ok(await A.ev(`document.querySelectorAll('#camps .cc-oidle .goal').length === 1 && ${T('.cc-oidle .goal')}.textContent.includes('Consultations booked')`), 'the target sits in At a glance, with its numbers');
-  // Work: one table, with filters; a row opens the task.
+  // Work: one table, filtered by the chips (2026-11-25); a row opens the task.
   await tabTo('work');
-  ok(await A.ev(`document.querySelectorAll('#camps .cc-tr:not(.cc-th)').length === 9`), 'Work lists the 9 open tasks');
-  await A.ev(`${T('.cc-wf [data-wf=blocked]')}.click(); true`);
+  ok(await A.ev(`document.querySelectorAll('#camps .cc-tr:not(.cc-th)').length === 10 && document.querySelectorAll('#camps .cc-tr.done').length === 1`), 'Work lists all 10 tasks (All: the 9 open, then the done one)');
+  await A.ev(`${T('.cc-chip[data-chip=blocked]')}.click(); true`);
   ok(await A.until(`[...document.querySelectorAll('#camps .cc-tr:not(.cc-th) .cc-tt')].map((x) => x.textContent).join() === 'Email consultation confirmation' && ${T('.cc-status.wait')}`), 'Blocked shows the one waiting task, marked Waiting');
   await A.tap(T('.cc-tr:not(.cc-th)'));
   ok(await A.until(`!!document.querySelector('#sheet .task-win')`), 'a row opens the task beside the page');
@@ -89,8 +89,8 @@ try {
   ok(await A.ev(`[...document.querySelectorAll('#sheet .td-row .td-l')].map((x) => x.textContent).join('|') === 'Assignee|Starts|Due|Priority|Status' && [...document.querySelectorAll('#sheet .td-sec-h')].map((x) => x.textContent.split(' ·')[0]).join('|').startsWith('Description|Checklist|Subtasks|Dependencies')`), 'the drawer: Assignee, Starts, Due, Priority, Status, then Description, Checklist, Subtasks, Dependencies…');
   ok(await A.ev(`!!document.querySelector('#sheet .td-badge.wait') && document.querySelector('#sheet .td-status [data-st=doing]').disabled && document.querySelector('#sheet .td-dep')?.textContent.includes('Call new leads')`), 'a waiting task says Waiting, can’t be started, and shows what it waits for');
   await A.ev(`document.querySelector('#sheet [aria-label=Close]').click(); true`);
-  await A.ev(`${T('.cc-wf [data-wf=open]')}.click(); true`);
-  await A.until(`document.querySelectorAll('#camps .cc-tr:not(.cc-th)').length === 9`);
+  await A.ev(`${T('.cc-chip[data-chip=all]')}.click(); true`);
+  await A.until(`document.querySelectorAll('#camps .cc-tr:not(.cc-th)').length === 10`);
   await A.tap(`[...document.querySelectorAll('#camps .cc-tr:not(.cc-th)')].find((r) => r.textContent.includes('Measure windows'))`);
   await A.until(`!!document.querySelector('#sheet .td-status')`);
   await A.tap(`document.querySelector('#sheet .td-status [data-st=doing]')`);

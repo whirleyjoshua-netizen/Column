@@ -4219,7 +4219,6 @@ body.wide .cc-back { display: none; }
 .cc-tag.wait { background: color-mix(in srgb, #b7791f 15%, transparent); color: #b7791f; }
 .cc-body > .goal { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 10px 14px; }
 .cc-card > .goal { border-top: 1px solid var(--line); border-radius: 0; padding: 10px 0; margin: 0; }
-.cc-wf { margin-bottom: 12px; flex-wrap: wrap; }
 .cc-table { display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
 .cc-tr { display: grid; grid-template-columns: minmax(0, 2.4fr) minmax(0, 1.2fr) minmax(0, 1.2fr) minmax(0, .8fr) minmax(0, .8fr) minmax(0, .9fr); gap: 10px; align-items: center; padding: 9px 12px; border-bottom: 1px solid var(--line); font-size: 13.5px; cursor: pointer; }
 .cc-tr:last-child { border-bottom: 0; }
@@ -4596,7 +4595,9 @@ button.sh-h:hover { background: var(--card-hover); }
 .shd-blk.gone { z-index: 0; top: auto; bottom: 3px; padding: 1px 8px; justify-content: flex-start; flex-direction: row; gap: 6px; }
 .shd-blk.gone small { display: none; }
 /* Command Center part 4: the campaign's tasks as a board, a timeline and a calendar. */
-.cc-wview { margin-bottom: 10px; flex-wrap: wrap; }
+.cc-wbar { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.cc-wview { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; color: var(--muted); }
+.cc-wview-sel { font: inherit; font-size: 13.5px; font-weight: 600; color: var(--text); background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 5px 28px 5px 10px; cursor: pointer; }
 .ccb-by, .cct-zoom { display: flex; align-items: center; gap: 4px; margin-bottom: 10px; flex-wrap: wrap; }
 .ccb-by > small, .cct-zoom > small { color: var(--muted); margin-right: 4px; }
 .cct-zoom .cct-totoday { margin-left: 8px; }
