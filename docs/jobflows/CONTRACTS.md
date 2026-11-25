@@ -85,7 +85,7 @@ Goal per step (existing fields, plus):
 
 | Action | Route | Who | Rules |
 | --- | --- | --- | --- |
-| Start a job | `POST /api/jobs {flowId, values, contactId?, key}` | `whoCreates`, plus `PJ.recordAt` on the list | Uses the flow's active version. Makes the record via `PJ.createRecord` (all its existing checks), then the run and goals, in one synchronous block before `save()`. `key` (client uuid) dedupes a retry for 10 minutes: same key → same job back. |
+| Start a job | `POST /api/jobs {flowId, values, contactId?, key}` | `whoCreates`, plus the existing record-create authorization (amendment C) | Uses the flow's active version. Authorization is the same path as `POST /projects/:id/records`: project in this team and `sees(p)`, `memberMay(ws, auth, 'projects')`, the rules hold (`holdDiscount`), then `newRecord`'s own validation. All checks and the run's goals are built and validated first; only then are the record, run and goals written, in one synchronous block, and side effects (`record.created` news, broadcasts, `campaign`-free events) go out after the whole job exists. A throw before the write leaves nothing. `key`: scoped to team + person, kept 10 minutes in memory; same key + same body → the same job back; same key + different body → 409. |
 | Attach a flow | `POST /api/jobs/:id/flow {flowId, replace?}` | admins | 409 if an active run exists and `replace` isn't true. Replace sets the old run `cancelled` (kept, shown in Activity). Never touches ordinary campaigns. |
 | Done (button) | `POST /api/jobs/:id/steps/:stepId/done` | the step's `who`, or admins | Only `custom`, and `details` with no fields. Idempotent: already marked → 200, nothing changes. Not the current step → 409 (in order). |
 | Skip | `POST /api/jobs/:id/steps/:stepId/skip {reason}` | the step's `who` if `canSkip`; admins always | Reason required (≤300). Timeline entry. Idempotent. |
@@ -101,6 +101,29 @@ Goal per step (existing fields, plus):
   so a person can't drag the stage past an unfinished step; the admin override with a reason stays.
 - Order: a later step's condition may already be true (paid before signed). It shows done; the current step is the first
   unfinished, unskipped one.
+
+### 2.1 Reopening (amendment A, checkpoint 1 review)
+- `stepCondition(g, rec)` is pure: it reads live records and changes nothing. `goalMet(g)` resolves the run's job
+  (`db.records[c.recordId]`, same team) and calls it; no job found → the step is not met (never true by default).
+  `jobStepsOnce()` stays the only writer of `g.finished`.
+- Conditions are live: a voided invoice, a removed visit or signature, an unticked checklist item or a contact
+  taken off the job reopens that step on the next sweep. Needs keep their existing latching (`seen`).
+- When a step reopens: the stepper shows it as current again; a `done` run goes back to `active` (only runs finished
+  by steps, `doneBySteps`, as today); **the job's stage never moves backward automatically**. A person can still move it
+  back by hand; moving it forward again is held by `stageGate` until the step is met.
+
+### 2.2 Completion cycles (amendment B)
+- A step's completion cycle is `goalId:reopens`. `step.done` fires once per cycle: the sweep changes `g.finished`
+  once, so duplicate deliveries (webhook retry, double click, an automation's change) inside one cycle do nothing.
+- A genuine re-completion after a reopen is a new cycle and fires `step.done` again, with `cycle: n` (`reopens + 1`)
+  and `again: true` in the event, so an automation can choose to run only the first time.
+- Anything that must happen once per completion (later: an automatic invoice) keys on `goalId:cycle`.
+
+### 2.3 Run completion and campaign events (amendment D)
+- `step.done` fires for run steps with `run: true`, `flowId`, `cycle`.
+- A run finishing fires a new event `job.flow.done` (the job, the flow, who). It does **not** fire `campaign.done`, and
+  starting a run does not fire `campaign.started`: existing campaign automations never see runs. A campaign
+  automation filter can't pick a run.
 
 ## 3. Reads
 
@@ -127,15 +150,37 @@ legacy: bool } ] }`
   work history, onRecordGone) or exclude runs (state, broadcasts, Campaigns/Command Center/Pulse, templates, agents'
   campaign tools, analytics campaign counts, whiteboard links, exports' campaign list, chat pins, public API
   campaigns, board).
+- `campaignsFor()` returns ordinary campaigns only; runs need an explicit `{ runs: true }`. Added audit targets:
+  campaign detail and deep links (`/c/` style links, `go 'camp:'`), templates (a run can't be saved as one, picked as
+  a parent or source), `campaign.started` / `campaign.done` (not fired for runs, 2.3), follow-ups and next-up,
+  campaign search, filters and counts, public or shared campaign links, broadcasts (runs go as `jobrun`), test runs,
+  and deletion (deleting the job cancels and removes its run, as `campsOffJob` does now; a run can't be deleted on the
+  campaign routes).
 - Tasks of a `tasks` step are real tasks (`goalId` + `recordId`). They show in Tasks as the job's tasks; the client
   treats a task whose goal it doesn't hold as a job task, never as an orphan.
+
+### 3.1 What a run response may show (amendment E)
+- The job itself: `publicRecord` exactly as the record routes send it (records look the same to everyone who can
+  see the project; secrets are already stripped there).
+- Steps: name, kind, state, `how`, who may act (names only), skip reason. Step `settings.text` (custom instructions)
+  is shown to whoever can see the job, as the flow's instructions to its workers; nothing private goes there.
+- Missing pieces: in words ("no visit booked", "invoice not paid") with no amounts for members. Invoice numbers,
+  totals and balances only for owners and admins, as on the invoice routes.
+- Tasks of a `tasks` step: only those the person can see under the existing task rules; others counted as "N more".
+- Flow reads: only the active published version of the person's own team's flows; drafts and older versions are for
+  owners and admins.
 
 ## 5. Permissions (every route, every path)
 
 - Flow write/publish/archive: owners and admins.
 - Jobs list and run: `PJ.recordAt(id, ws, member)` plus `memberMay(ws, auth, 'projects')` (the jobs routes join
   `MEMBER_ROUTES.projects`). A member never gets a contact record through a job beyond what `publicRecord` shows now.
-- Done / skip: the step's `who`; reopen, attach, replace, cancel: admins. Payments and invoices keep their own
+- Done / skip: the step's `who`; reopen, attach, replace, cancel: admins.
+- `who` is validated at publish: a `member` id must be on this team, a `role` id one of the team's roles. At run
+  time a member who has left, or a role that's gone, means only owners and admins may act on that step (shown on the
+  step). `anyone` = anyone who may edit the job (sees the project and has the members switch), not merely view it.
+  Step permission never grants an admin override, a payment, a signature on someone's behalf or a stage-gate override.
+- Copying a flow makes new step ids; versions of one flow keep their step ids. Payments and invoices keep their own
   admin-only routes; the run only reads them.
 - Automations: `step.done` already carries the job; the event gains `run: true` so automations can tell. No new
   automation actions in Phase 1.
@@ -156,7 +201,8 @@ mobile. Each step names the family stage it reaches, so the old stage field keep
 | `jobflows_defs.mjs` | draft edits never change a version; publish makes n+1; copy is an independent draft; archive blocks new jobs, runs go on; validation (no steps, bad list, 31 steps) refused; members can't write |
 | `jobs_list.mjs` | campaign-less jobs listed; trade and generic job lists; private projects hidden; member access switch; no leak via counts or client data |
 | `jobflow_run.mjs` | start job (record + run + goals), key dedupes; current step; conditions from real records (contact, fields, visit, checklist, signature, invoice sent/paid, tasks); in-order Done 409; skip needs reason + canSkip; reopen admins; stage moves only for steps with a stage; stageGate holds a manual jump past an open step |
-| `jobflow_events.mjs` | the same step finished by a payment twice, a retry and a click: one `step.done`, one stage move |
+| `jobflow_events.mjs` | the same step finished by a payment twice, a retry and a click: one `step.done`, one stage move; void the invoice → step reopens, run back to active, stage does NOT move back; pay again → `step.done` with `cycle: 2, again: true`; a run never fires `campaign.started` / `campaign.done`; `job.flow.done` once |
+| `jobflow_access.mjs` | start-job refused where `POST /projects/:id/records` would be (private project, members switch off, a rules hold); key reuse with another body 409; run response hides invoice totals and unseen tasks from a member; `who` with another team's member refused at publish; a step whose member left → admins only |
 | `jobflow_versions.mjs` | publishing v2 leaves a running v1 job's steps as they were |
 | `jobflow_hidden.mjs` | a run is in no campaign surface (state, broadcast, templates, board, analytics, agents, export, public API campaigns); an ordinary campaign on the same job still is |
 | `jobflow_legacy.mjs` | a job driven by an ordinary campaign progresses exactly as before; `legacy:true` in the list |
