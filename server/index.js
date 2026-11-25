@@ -5983,17 +5983,62 @@ const memberReply = (ws, memberId) => { const u = userOf(memberById(ws, memberId
 // What a text would say, and where to: the app opens it in the person's Messages app.
 const smsOf = (c, body) => ({ phone: String(c?.phone || '').replace(/[^\d+]/g, ''), body });
 // One message to a customer: emailed when they have an address (and email works here), and a text to send.
+// It also says why nothing went: `blocked` (stopped before the provider: the daily cap, the team's unconfirmed email,
+// email off; nothing left Kloomie) or `failed` (the provider or Twilio was called and failed: it may have gone).
+// Test only (outside production): JOBFLOWS_MAIL_THROW makes the provider call fail.
+const MAIL_THROW = process.env.NODE_ENV !== 'production' && process.env.JOBFLOWS_MAIL_THROW === '1';
 async function tellCustomer(ws, rec, c, { tag, subject, heading, lines, button, text, replyTo, by, what }) {
-  let emailed = false;
+  let emailed = false, blocked = null, failed = null;
   const held = emailable(c) && mailer.mode !== 'off' ? platformSendBlock(ws) : null;
-  if (held) console.error('Customer email held:', ws.id, held);
+  if (held) { console.error('Customer email held:', ws.id, held); blocked = held; }
+  if (emailable(c) && mailer.mode === 'off') blocked = 'Email isn’t set up on this server.';
   if (emailable(c) && mailer.mode !== 'off' && !held) {
-    emailed = await mailer.customerEmail(c.email, { team: ws.name, replyTo, subject, heading, lines, button, tag }).then(() => true, (e) => (console.error('Customer email failed:', e.message), false));
+    emailed = await (MAIL_THROW ? Promise.reject(new Error('Test: the email provider failed')) : mailer.customerEmail(c.email, { team: ws.name, replyTo, subject, heading, lines, button, tag }))
+      .then(() => true, (e) => { console.error('Customer email failed:', e.message); failed = e.message || 'The email provider failed'; return false; });
   }
   if (emailed) PJ.recordActivity(rec.id, { kind: 'email', what, note: `Emailed ${c.email}`, by });
-  const texted = await twilioText(ws, rec, c, text, by, what);
-  return { emailed, texted, email: emailable(c) ? c.email : null, dne: !!c && noContact(c), sms: !texted && c && !noContact(c) && c.phone ? smsOf(c, text) : null };
+  let texted = false;
+  if (textable(c)) texted = await TW.sendText(ws.id, c, text, by, { recordId: rec?.id, what }).then(() => { if (rec) PJ.recordActivity(rec.id, { kind: 'text', what, note: `Texted ${c.phone}`, by }); return true; }, (e) => { console.error('Customer text failed:', e.message); failed ||= e.message || 'The text failed'; return false; });
+  return { emailed, texted, blocked, failed, email: emailable(c) ? c.email : null, dne: !!c && noContact(c), sms: !texted && c && !noContact(c) && c.phone ? smsOf(c, text) : null };
 }
+// ---------- Job Flows' customer messages (docs/jobflows/PHASE3.md) ----------
+// Who can't be reached at all (a step for them is skipped by Kloomie): no client, do not contact, or no email address
+// and no phone the team's Twilio can text. The phone's Messages app never counts for an automatic message.
+function flowReach(c) {
+  if (!c) return 'No client on the job';
+  if (noContact(c)) return `${c.name || 'The customer'} is marked do not contact`;
+  if (!emailable(c) && !textable(c)) return `${c.name || 'The customer'} has no email or text number`;
+  return null;
+}
+// One message: sent (by email and/or text), blocked (nothing left Kloomie: try again later), or unsure (it may have gone).
+async function flowTell(ws, rec, c, msg, by) {
+  const out = await tellCustomer(ws, rec, c, { ...msg, by });
+  if (out.emailed || out.texted) return { outcome: 'sent', via: out.emailed && out.texted ? 'both' : out.emailed ? 'email' : 'text' };
+  if (out.failed) return { outcome: 'unsure', reason: String(out.failed).slice(0, 200) };
+  return { outcome: 'blocked', reason: out.blocked || 'Nothing could be sent.' };
+}
+const money$ = (c) => ((c || 0) / 100).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
+// The fixed wording of each message (no free text from a step reaches a customer in Phase 3).
+const flowMsg = {
+  remind: (ws, rec, c, v) => ({ tag: 'visit-reminder', subject: `Reminder: ${ws.name} is coming ${v.date === dayIn(tzOf(ws), Date.now() + 864e5) ? 'tomorrow' : longDay(v.date)}`, heading: `See you ${longDay(v.date)}`,
+    lines: [`Hi ${firstName(c)},`, `This is a reminder that ${ws.name} is coming ${longDay(v.date)} ${visitTime(v)} for your ${String(v.kind || 'visit').toLowerCase()}.`, jobAddress(rec) ? `Address: ${jobAddress(rec)}` : '', 'Need to change it? Just reply to this email.'].filter(Boolean),
+    text: reminderText(ws, c, v, rec), replyTo: ownerReply(ws), what: 'visit reminder sent' }),
+  review: (ws, rec, c, url) => ({ tag: 'review-request', subject: `Thanks from ${ws.name}`, heading: `Thank you, ${firstName(c)}!`,
+    lines: [`Thanks for choosing ${ws.name}. We hope you're happy with the work.`, 'If you have a minute, a quick review helps a small business like ours more than anything.'],
+    button: { label: 'Leave a review', url }, text: reviewText(ws, c, url), replyTo: ownerReply(ws), what: 'review request sent' }),
+  quote: (ws, rec, c, url, total) => ({ tag: 'quote-sent', subject: `Your quote from ${ws.name}`, heading: `Your quote, ${firstName(c)}`,
+    lines: [`Hi ${firstName(c)},`, `Here's your quote from ${ws.name}${total ? ` for ${money$(total)}` : ''}. You can look it over and accept it online.`], button: { label: 'See the quote', url },
+    text: `Hi ${firstName(c)}, here's your quote from ${ws.name}: ${url}`, replyTo: ownerReply(ws), what: 'quote emailed' }),
+  quoteFollow: (ws, rec, c, url) => ({ tag: 'quote-follow-up', subject: `Any questions about your quote from ${ws.name}?`, heading: 'Just checking in',
+    lines: [`Hi ${firstName(c)},`, `We wanted to check whether you had any questions about the quote from ${ws.name}. It's ready for you whenever you are.`], button: { label: 'See the quote', url },
+    text: `Hi ${firstName(c)}, just checking in on your quote from ${ws.name}: ${url}`, replyTo: ownerReply(ws), what: 'quote follow-up sent' }),
+  invoice: (ws, rec, c, inv, url, total) => ({ tag: 'invoice', subject: `Invoice ${inv.number} from ${ws.name}`, heading: `Invoice ${inv.number}`,
+    lines: [`Hi ${firstName(c)},`, `Here's your invoice from ${ws.name} for ${money$(total)}${inv.due ? `, due ${longDay(inv.due)}` : ''}.`], button: { label: 'See and pay it', url },
+    text: `Hi ${firstName(c)}, here's your invoice ${inv.number} from ${ws.name} for ${money$(total)}: ${url}`, replyTo: ownerReply(ws), what: 'invoice emailed' }),
+  payReminder: (ws, rec, c, inv, url, balance) => ({ tag: 'payment-reminder', subject: `A reminder about invoice ${inv.number}`, heading: 'A friendly reminder',
+    lines: [`Hi ${firstName(c)},`, `This is a reminder that invoice ${inv.number} from ${ws.name} for ${money$(balance)} was due ${longDay(inv.due)}.`, 'If you’ve already paid, thank you, and please ignore this.'], button: { label: 'See and pay it', url },
+    text: `Hi ${firstName(c)}, a reminder from ${ws.name}: invoice ${inv.number} for ${money$(balance)} was due ${longDay(inv.due)}. ${url}`, replyTo: ownerReply(ws), what: 'payment reminder sent' }),
+};
 // On my way: the customer hears who's coming and about when.
 async function onMyWay(ws, auth, rec, v, minutes, send) {
   const c = jobCustomer(rec);
@@ -6042,14 +6087,17 @@ function jobChanged(rec) {
   if (was === undefined || was === now || now !== 'Paid' || rec.reviewAsked || rec.reviewDue) return;
   const ws = db.workspaces[rec.wsId];
   const cm = custMsgsOf(ws);
+  if (rec.onFlowSince) return; // a job that was ever on a Job Flow follows its flow's steps (PHASE3.md §4)
   if (cm.reviews && cm.reviewUrl && reachable(jobCustomer(rec))) rec.reviewDue = Date.now() + REVIEW_DELAY;
 }
 async function custMsgTick() {
+  await JF.autoMessages().catch((e) => alarm('Job Flow messages failed', e)); // even with email off: skips and waiting reasons
   if (mailer.mode === 'off' && !Object.keys(db.twilio || {}).length) return;
   const now = Date.now();
   // Reviews that are due.
   for (const rec of Object.values(db.records)) {
     if (!rec.reviewDue || rec.reviewDue > now || offline(rec.wsId)) continue;
+    if (rec.onFlowSince) { rec.reviewDue = null; continue; }
     const ws = db.workspaces[rec.wsId];
     if (!custMsgsOf(ws).reviews || !custMsgsOf(ws).reviewUrl) { rec.reviewDue = null; continue; }
     await askReview(ws, rec);
@@ -6063,6 +6111,7 @@ async function custMsgTick() {
     const here = localNow(tzOf(ws), now);
     if (list[0].date !== dayIn(tzOf(ws), now + 864e5) || here.min < REMIND_FROM) continue;
     const rec = db.records[list[0].recordId];
+    if (rec?.onFlowSince) continue; // its flow's Visit reminder step decides (PHASE3.md §4)
     for (const e of visitEntries(visitId)) e.reminded = now;
     save();
     if (rec && reachable(jobCustomer(rec))) await remindVisit(ws, rec, publicVisit(list));
@@ -12554,7 +12603,7 @@ const STOCK = inventoryModule({ db, save, broadcast, rid, cleanText, readJson, s
   labelUrl: (tag) => `${PUBLIC_URL}/a/${tag}`,
   labelQr: (tag) => 'data:image/svg+xml;base64,' + Buffer.from(qrSvg(`${PUBLIC_URL}/a/${tag}`, { scale: 8 })).toString('base64'),
   projectFor: (pid, wsId, memberId) => { const p = db.projects[pid]; return p && p.wsId === wsId && PJ.sees(p, memberId) ? { p, records: Object.values(db.records).filter((r) => r.projectId === p.id) } : null; } });
-const JF = jobFlowsModule({ db, save, broadcast, rid, cleanText, readJson, send, isAdmin, PJ, toolsOf, goalsInOrder, tasksInOrder, applyTask, publicTask: (t) => publicTask(t), canSeeTask: (auth, t) => canSee(auth, 'task', t), stepsSoon: (w) => stepsSoon(w), sweepNow: (w, by, byId) => jobSteps(w, by, byId), visitsOf: (id) => visitsOf(id), needsMet: (g) => needsMet(g), noteWork: (t, was) => noteWork(t, was), makeInvoice: (...a) => INV.makeFor(...a), sendInvoice: (...a) => INV.sendIt(...a), itemsTotals: (v) => PJ.itemsTotals(v), priceChanged: (ws, auth, x) => priceChanged(ws, auth, x), publicUrl: PUBLIC_URL });
+const JF = jobFlowsModule({ db, save, broadcast, rid, cleanText, readJson, send, isAdmin, PJ, toolsOf, goalsInOrder, tasksInOrder, applyTask, publicTask: (t) => publicTask(t), canSeeTask: (auth, t) => canSee(auth, 'task', t), stepsSoon: (w) => stepsSoon(w), sweepNow: (w, by, byId) => jobSteps(w, by, byId), visitsOf: (id) => visitsOf(id), needsMet: (g) => needsMet(g), noteWork: (t, was) => noteWork(t, was), makeInvoice: (...a) => INV.makeFor(...a), sendInvoice: (...a) => INV.sendIt(...a), invoiceTotals: (inv) => INV.totals(inv), invoiceUrl: (inv) => INV.publicInvoice(inv).url, flowTell: (...a) => flowTell(...a), flowReach: (c) => flowReach(c), flowMsg, customerOf: (rec) => jobCustomer(rec), teamClock: (ws) => ({ today: dayIn(tzOf(ws)), tomorrow: dayIn(tzOf(ws), Date.now() + 864e5), min: localNow(tzOf(ws), Date.now()).min }), teamReviewUrl: (ws) => custMsgsOf(ws).reviewUrl || '', saveNow: () => writeNow(), sendable: (ws) => !offline(ws.id) && !billingOf(ws).readOnly, shareRecord: (...a) => PJ.shareRecord(...a), quoteUrlOf: (rec) => (rec.share?.token ? `${PUBLIC_URL}/q/${rec.share.token}` : null), itemsTotals: (v) => PJ.itemsTotals(v), priceChanged: (ws, auth, x) => priceChanged(ws, auth, x), publicUrl: PUBLIC_URL });
 const INV = invoicesModule({ onInvoice: (inv) => { JF.invoiceNews(inv); stepsSoon(inv.wsId); }, flowDueDays: (rec) => JF.dueDaysFor(rec), bindInvoice: (rec, inv, stepId) => JF.bindInvoice(rec, inv, stepId), proofUrl: (ws) => pagesProof(ws), stockCost: (recId) => STOCK.stockCost(recId), jobMoney: (recId) => jobMoney(recId), notifyAdmins: (...a) => notifyAdmins(...a), jobBack: (rec) => jobBack(rec), onPaymentGone: (...a) => QB.paymentGone(...a), db, save, broadcast, rid, hold, cleanText, readJson, send, badRequest, escHtml, brandOf, logoUrl, teamDay, offline, seal, unseal, stripeCall: stripe.callWith, PJ, isAdmin, jobOfRecord, jobLabel, moveJob, publicUrl: PUBLIC_URL, emit: (...a) => { PJ.emit(...a); QB.soon(a[0]); try { eventFromHook(a[0], a[1], a[2], a[3]); } catch (e) { alarm('An automation event failed to build', e); } },
   // A payment is money in on the business's Finance, under the team's owner.
   addMoney: (ws, { amount, day, note, invoiceId = null }) => {

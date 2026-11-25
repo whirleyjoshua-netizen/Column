@@ -6,7 +6,9 @@
 // sent or paid, its tasks, a Done button). A run is never a campaign to anyone: it lives behind the job.
 import crypto from 'node:crypto';
 
-export const STEP_KINDS = ['client', 'details', 'book', 'work', 'signoff', 'quote', 'invoice', 'payment', 'tasks', 'custom'];
+export const STEP_KINDS = ['client', 'details', 'book', 'remind', 'omw', 'work', 'signoff', 'quote', 'invoice', 'payment', 'review', 'tasks', 'custom'];
+// Steps Kloomie does by itself (PHASE3.md §1): who they're for doesn't matter.
+const AUTO_KINDS = ['remind', 'review'];
 // Money steps: for owners and admins whatever a flow says (docs/jobflows/PHASE2.md §1.2, §4).
 const MONEY_KINDS = ['quote', 'invoice', 'payment'];
 const BILLING = ['hand', 'quote', 'auto'];
@@ -20,9 +22,9 @@ export function priceKey(lines) {
   const d = lines?.discount ? [lines.discount.type === 'percent' ? 'percent' : 'amount', Number(lines.discount.value) || 0] : null;
   return crypto.createHash('sha256').update(JSON.stringify([rows, Number(lines?.taxRate) || 0, d])).digest('hex').slice(0, 32);
 }
-const KIND_NAME = { client: 'Add client info', details: 'Add job info', book: 'Book a visit', work: 'Do the work', signoff: 'Customer signs off', quote: 'Send the quote', invoice: 'Send the invoice', payment: 'Collect payment', tasks: 'Tasks', custom: 'Step' };
-const HOW = { client: 'tap', details: 'tap', book: 'tap', work: 'tap', signoff: 'tap', quote: 'tap', invoice: 'hand', payment: 'auto', tasks: 'tap', custom: 'hand' };
-const ACTION = { client: 'pick-client', details: 'edit-fields', book: 'book-visit', work: 'checklist', signoff: 'sign', quote: 'quote', invoice: 'invoice', payment: 'payment', tasks: 'tasks', custom: 'done' };
+const KIND_NAME = { remind: 'Visit reminder', omw: 'On my way', review: 'Review request', client: 'Add client info', details: 'Add job info', book: 'Book a visit', work: 'Do the work', signoff: 'Customer signs off', quote: 'Send the quote', invoice: 'Send the invoice', payment: 'Collect payment', tasks: 'Tasks', custom: 'Step' };
+const HOW = { remind: 'auto', omw: 'tap', review: 'auto', client: 'tap', details: 'tap', book: 'tap', work: 'tap', signoff: 'tap', quote: 'tap', invoice: 'hand', payment: 'auto', tasks: 'tap', custom: 'hand' };
+const ACTION = { remind: 'auto', omw: 'on-my-way', review: 'auto', client: 'pick-client', details: 'edit-fields', book: 'book-visit', work: 'checklist', signoff: 'sign', quote: 'quote', invoice: 'invoice', payment: 'payment', tasks: 'tasks', custom: 'done' };
 const WHO = ['anyone', 'admins', 'role', 'member'];
 const SENT = ['sent', 'viewed', 'partial', 'paid'];
 const WAITING = { held: 'approval', zero: 'zero', owner: 'owner', refused: 'refused' };
@@ -32,11 +34,17 @@ export const isJobRun = (c) => c?.kind === 'job';
 export const isJobList = (t) => !!t && (t.key === 'jobs' || String(t.key || '').startsWith('trade_'));
 
 export function jobFlowsModule(ctx) {
-  const { db, save, broadcast, rid, cleanText, readJson, send, isAdmin, PJ, toolsOf, goalsInOrder, tasksInOrder, applyTask, publicTask, canSeeTask, stepsSoon, sweepNow = (wsId) => stepsSoon(wsId), visitsOf, needsMet, noteWork = () => {}, makeInvoice = null, sendInvoice = null, itemsTotals = () => ({ total: 0 }), priceChanged = () => {}, publicUrl = '' } = ctx;
+  const { db, save, broadcast, rid, cleanText, readJson, send, isAdmin, PJ, toolsOf, goalsInOrder, tasksInOrder, applyTask, publicTask, canSeeTask, stepsSoon, sweepNow = (wsId) => stepsSoon(wsId), visitsOf, needsMet, noteWork = () => {}, invoiceTotals = () => ({ balance: 0, total: 0 }), invoiceUrl = () => null, flowTell = null, flowReach = () => 'No way to reach them', flowMsg = {}, customerOf = () => null, teamClock = () => ({}), teamReviewUrl = () => '', saveNow = async () => {}, sendable = () => true, shareRecord = null, quoteUrlOf = () => null, makeInvoice = null, sendInvoice = null, itemsTotals = () => ({ total: 0 }), priceChanged = () => {}, publicUrl = '' } = ctx;
   // Test only: a step with this name makes building a run throw, so the failure path can be tested from outside.
   const FAIL_STEP = process.env.NODE_ENV !== 'production' ? process.env.JOBFLOWS_FAIL_STEP || '' : '';
   // Test only: the automatic invoice's send fails after the invoice is made (a crash between the two).
   const FAIL_SEND = process.env.NODE_ENV !== 'production' && process.env.JOBFLOWS_FAIL_SEND === '1';
+  // Test only: a shorter day (follow-ups, review delays); the process dies right after a customer message is handed
+  // over (before it's marked sent); a route that removes a job's runs from the data.
+  const TESTING = process.env.NODE_ENV !== 'production';
+  const DAY_MS = (TESTING && Number(process.env.JOBFLOWS_DAY_MS)) || 864e5;
+  const CRASH_AFTER_SEND = TESTING && process.env.JOBFLOWS_CRASH_AFTER_SEND === '1';
+  const TEST_DROP = TESTING && process.env.JOBFLOWS_TEST_DROP_RUN === '1';
   db.jobFlows ||= {};
   db.jobItems ||= {};
   db.jobFlowVersions ||= {};
@@ -97,6 +105,13 @@ export function jobFlowsModule(ctx) {
         settings.tasks = (Array.isArray(st.tasks) ? st.tasks : []).map((x) => cleanText(x, 200).trim()).filter(Boolean).slice(0, 20);
         if (!settings.tasks.length) throw bad(`Give “${name}” at least one task.`);
       }
+      // Phase 3 settings are kept as given on a draft and checked at publish (checkPublish).
+      const raw = (k) => (st[k] === undefined ? undefined : typeof st[k] === 'string' ? cleanText(st[k], 300) : Array.isArray(st[k]) ? st[k].slice(0, 10).map(Number) : st[k]);
+      if (s.kind === 'remind' || s.kind === 'omw') { if (st.visitKind) settings.visitKind = cleanText(st.visitKind, 40); }
+      if (s.kind === 'review') { if (st.delayHours !== undefined) settings.delayHours = Number(st.delayHours); if (st.url) settings.url = raw('url'); }
+      if (s.kind === 'quote') { if (st.email !== undefined) settings.email = st.email !== false; if (st.followUpDays !== undefined) settings.followUpDays = Number(st.followUpDays); }
+      if (s.kind === 'invoice' && st.email !== undefined) settings.email = st.email !== false;
+      if (s.kind === 'payment' && st.reminders !== undefined) settings.reminders = Array.isArray(st.reminders) ? st.reminders.slice(0, 10).map(Number) : [];
       if (s.kind === 'custom') {
         settings.text = cleanText(st.text, 2000);
         settings.checklist = (Array.isArray(st.checklist) ? st.checklist : []).map((x) => cleanText(x, 120).trim()).filter(Boolean).slice(0, 20);
@@ -149,6 +164,18 @@ export function jobFlowsModule(ctx) {
       if (!(Number.isFinite(x.qty) && x.qty > 0 && x.qty <= 1e6)) throw bad(`Give “${it.name}” a quantity above 0.`);
     }
     if (body.dueDays !== null && !(Number.isInteger(body.dueDays) && body.dueDays >= 0 && body.dueDays <= 120)) throw bad('Invoices are due 0 to 120 days after they’re made.');
+    for (const st of body.steps) {
+      const x = st.settings || {};
+      if (st.kind === 'review') {
+        if (x.delayHours !== undefined && !(Number.isInteger(x.delayHours) && x.delayHours >= 0 && x.delayHours <= 168)) throw bad(`“${st.name}” waits 0 to 168 hours.`);
+        if (x.url !== undefined && !/^https:\/\/[^\s]+$/i.test(String(x.url))) throw bad(`“${st.name}”: the review link must start with https://`);
+      }
+      if (st.kind === 'quote' && x.followUpDays !== undefined && !(Number.isInteger(x.followUpDays) && x.followUpDays >= 0 && x.followUpDays <= 30)) throw bad(`“${st.name}” follows up after 0 to 30 days.`);
+      if (st.kind === 'payment' && x.reminders !== undefined) {
+        const r = x.reminders;
+        if (r.length > 3 || !r.every((d, i) => Number.isInteger(d) && d >= 1 && d <= 60 && (i === 0 || d > r[i - 1]))) throw bad(`“${st.name}”: up to 3 reminders, each 1 to 60 days past due, in order.`);
+      }
+    }
   }
   const versionsOf = (flow) => Object.values(db.jobFlowVersions).filter((v) => v.flowId === flow.id).sort((a, b) => a.n - b.n);
   const activeVersion = (flow) => (flow?.activeVersionId ? db.jobFlowVersions[flow.activeVersionId] : null);
@@ -181,6 +208,11 @@ export function jobFlowsModule(ctx) {
   const runInvoices = (c, rec) => Object.values(db.invoices || {}).filter((i) => i.recordId === rec.id && i.status !== 'void' && (i.createdAt || 0) >= c.createdAt);
   const itemsField = (t) => fieldBy(t, (f) => f.type === 'items');
   const versionOf = (c) => db.jobFlowVersions[c?.versionId] || null;
+  // The invoices a run's payment step is about: its invoice step's bound one, else every non-void invoice of the run.
+  function payInvoices(c, rec) {
+    const ig = stepGoals(c).find((x) => x.step?.kind === 'invoice' && x.invoiceId && db.invoices?.[x.invoiceId]?.status !== 'void');
+    return ig ? [db.invoices[ig.invoiceId]] : runInvoices(c, rec).sort((a, b) => a.createdAt - b.createdAt);
+  }
   // The quote on a run's job, as the Quote step reads it: the accepted quote is the price (PHASE2.md §1.3).
   function quoteNow(c, rec) {
     const t = typeOfRec(rec);
@@ -232,6 +264,11 @@ export function jobFlowsModule(ctx) {
         return !!(sig && sig.name && sig.image);
       }
       case 'quote': return quoteNow(c, rec).met;
+      case 'remind': case 'review': return ['sent', 'unsure'].includes(g.msg?.state);
+      case 'omw': {
+        const kind = (s.settings?.visitKind || '').toLowerCase();
+        return Object.values(db.entries || {}).some((e) => e.recordId === rec.id && e.visitId && (e.omw || 0) >= c.createdAt && (!kind || String(e.visit || '').toLowerCase() === kind));
+      }
       case 'invoice': {
         const bound = g.invoiceId && db.invoices?.[g.invoiceId];
         if (bound && bound.status !== 'void') return SENT.includes(bound.status);
@@ -265,6 +302,8 @@ export function jobFlowsModule(ctx) {
       case 'book': return s.settings?.visitKind ? `No ${s.settings.visitKind} visit booked` : 'No visit booked';
       case 'work': return 'The checklist isn’t all ticked' + (s.settings?.photos ? ', or the after photos are missing' : '');
       case 'signoff': return 'The customer hasn’t signed';
+      case 'remind': case 'review': return g.waitReason || 'Kloomie sends it by itself';
+      case 'omw': return 'Nobody has tapped On my way yet';
       case 'quote': { const q = quoteNow(db.campaigns[g.campaignId], rec); return q.status === 'declined' ? 'The customer declined: send a new quote' : q.status === 'changed' ? 'The lines changed after it was accepted: send a new quote' : q.status === 'viewed' ? 'The customer opened it: waiting for them to accept' : q.status === 'sent' ? 'Waiting for the customer to accept' : 'Quote not sent yet'; }
       case 'invoice': return 'No invoice sent';
       case 'payment': return 'Not paid yet';
@@ -295,6 +334,21 @@ export function jobFlowsModule(ctx) {
           status: q.status, total: itemsTotals(q.lines).total || 0, answeredBy: q.answer?.name || null, reason: q.answer?.reason || '',
           url: rec.share?.token ? `${publicUrl}/q/${rec.share.token}` : null, mayRequote: c.status !== 'cancelled' && !runInvoices(c, rec).length,
         };
+      }
+      if (AUTO_KINDS.includes(s.kind)) {
+        out.auto = true;
+        out.sent = ['sent', 'unsure'].includes(g.msg?.state) ? { at: g.msg.at, ...(g.msg.state === 'unsure' ? { unsure: true } : {}) } : null;
+        if (g.msg?.state === 'unsure') out.note = `May not have gone: ${g.msg.reason || 'the email service failed'}`;
+        out.waiting = state === 'current' ? g.waitReason || null : null;
+        if (isAdmin(auth) && g.msg?.via) out.sentTo = g.msg.via;
+      }
+      if (g.skippedBy === 'kloomie') out.skippedBy = 'kloomie';
+      if (s.kind === 'quote' && (s.settings?.followUpDays || 0) > 0) out.followUp = { days: s.settings.followUpDays, sentAt: ['sent', 'unsure'].includes(g.followed?.state) ? g.followed.at : null };
+      if (s.kind === 'quote' && isAdmin(auth) && g.quoteTold) out.told = { state: g.quoteTold.state, ...(g.quoteTold.via ? { via: g.quoteTold.via } : {}) };
+      if (s.kind === 'payment' && (s.settings?.reminders || []).length) {
+        const inv = rec && payInvoices(c, rec)[0];
+        const hist = (inv && g.reminded?.[inv.id]) || {};
+        out.reminders = s.settings.reminders.map((d) => ({ days: d, sentAt: ['sent', 'unsure'].includes(hist[d]?.state) ? hist[d].at : null, ...(hist[d]?.state === 'passed' ? { passed: true } : {}) }));
       }
       if (s.kind === 'invoice' && s.how === 'auto') {
         out.auto = true;
@@ -359,6 +413,7 @@ export function jobFlowsModule(ctx) {
   const linesEmpty = (v) => !v || typeof v !== 'object' || !Array.isArray(v.rows) || !v.rows.some((r) => r && (r.desc || r.price));
   function commitRun(run) {
     const rec = db.records[run.recordId];
+    if (rec && !rec.onFlowSince) rec.onFlowSince = run.c.createdAt; // never cleared: the team-wide messages stay off (PHASE3.md §4)
     if (run.lines && rec) { rec.values[run.lines.fieldId] = run.lines.value; rec.updatedAt = Date.now(); }
     db.campaigns[run.c.id] = run.c;
     for (const g of run.goals) db.goals[g.id] = g;
@@ -652,6 +707,34 @@ export function jobFlowsModule(ctx) {
         settle(ws, auth);
         return send(res, 200, { run: runView(ws, auth, going) });
       }
+      // Send the quote (PHASE3.md §3.3): the link (made, or the live one), and the customer told once per link.
+      if (c === 'quote' && d === 'send' && m === 'POST') {
+        if (!admin) return send(res, 403, { error: 'Only owners and admins send the quote.' });
+        const run = activeRun(rec.id);
+        const g = run && stepGoals(run).find((x) => x.step?.kind === 'quote');
+        if (!g) return send(res, 404, { error: 'This job’s flow has no quote step.' });
+        if (rec.answer) return send(res, 409, { error: 'The customer has answered this quote. Send a new quote to change it.' });
+        const live = rec.share && !(rec.share.expiresAt && rec.share.expiresAt < Date.now());
+        if (!live) { shareRecord(rec, auth); save(); PJ.recordNews(rec, 'record.updated', auth.member); }
+        const token = rec.share.token;
+        let told = null;
+        if (g.step.settings?.email !== false) {
+          if (g.quoteTold?.token === token && ['sending', 'sent', 'unsure'].includes(g.quoteTold.state)) told = { emailed: g.quoteTold.via === 'email' || g.quoteTold.via === 'both', texted: g.quoteTold.via === 'text' || g.quoteTold.via === 'both', already: true };
+          else {
+            const cust = customerOf(rec);
+            const why = flowReach(cust);
+            if (why) told = { emailed: false, texted: false, reason: why };
+            else {
+              const out = await sendOnce(g, 'quoteTold', { token }, () => flowTell(ws, rec, cust, flowMsg.quote(ws, rec, cust, quoteUrlOf(rec), itemsTotals(rec.values[itemsField(typeOfRec(rec))?.id])?.total || 0), auth.member));
+              told = { emailed: out.via === 'email' || out.via === 'both', texted: out.via === 'text' || out.via === 'both', ...(out.outcome !== 'sent' ? { reason: out.reason } : {}) };
+            }
+          }
+        }
+        tell(run);
+        settle(ws, auth);
+        return send(res, 200, { run: runView(ws, auth, run), url: quoteUrlOf(rec), told });
+      }
+      if (TEST_DROP && c === 'flow' && d === 'test-drop' && m === 'POST') { dropFor(rec); save(); return send(res, 200, { ok: true }); }
       // New quote (PHASE2.md §1.3): the last answer goes to the timeline, the old link is turned off, and the quote
       // step is open again, until the run has an invoice.
       if (c === 'requote' && m === 'POST' && !d) {
@@ -709,7 +792,7 @@ export function jobFlowsModule(ctx) {
           return send(res, 200, { run: runView(ws, auth, run) });
         }
         if (e === 'skip') {
-          if (!admin && (MONEY_KINDS.includes(s.kind) || !(s.canSkip && mayAct(ws, auth, s)))) return send(res, 403, { error: `Only owners and admins can skip “${s.name}”.` });
+          if (!admin && (MONEY_KINDS.includes(s.kind) || AUTO_KINDS.includes(s.kind) || !(s.canSkip && mayAct(ws, auth, s)))) return send(res, 403, { error: `Only owners and admins can skip “${s.name}”.` });
           const why = cleanText(body.reason, 300).trim();
           if (!why) return send(res, 400, { error: 'Say why it’s being skipped.' });
           if (!g.skipped) {
@@ -723,7 +806,7 @@ export function jobFlowsModule(ctx) {
         }
         if (e === 'reopen') {
           if (!admin) return send(res, 403, { error: 'Only owners and admins reopen steps.' });
-          Object.assign(g, { skipped: false, skipReason: null, skippedById: null, skippedAt: null, marked: null });
+          Object.assign(g, { skipped: false, skipReason: null, skippedById: null, skippedAt: null, skippedBy: null, marked: null, ...(AUTO_KINDS.includes(s.kind) ? { msg: null, waitReason: null } : {}) });
           note(rec, `Reopened “${s.name}”`, auth.member);
           save();
           tell(run);
@@ -746,6 +829,120 @@ export function jobFlowsModule(ctx) {
     const was = g.invoiceId && db.invoices?.[g.invoiceId];
     if (!was || was.status === 'void') g.invoiceId = inv.id;
   }
+  // ---------- customer messages (PHASE3.md §3) ----------
+  // Every message: the marker saved (and written to disk) before anything goes; sent, or removed when nothing left
+  // Kloomie (blocked: tried again later), or unsure when it may have gone (never sent again by itself).
+  async function sendOnce(holder, key, extra, fn) {
+    holder[key] = { ...extra, state: 'sending', at: Date.now() };
+    save();
+    await saveNow();
+    let out;
+    try { out = await fn(); } catch (e) { out = { outcome: 'unsure', reason: String(e?.message || e).slice(0, 200) }; }
+    if (out.outcome === 'sent' && CRASH_AFTER_SEND) process.exit(1); // test only: died before "sent" was kept
+    if (out.outcome === 'sent') holder[key] = { ...extra, state: 'sent', at: Date.now(), via: out.via };
+    else if (out.outcome === 'unsure') holder[key] = { ...extra, state: 'unsure', at: Date.now(), reason: out.reason };
+    else delete holder[key];
+    save();
+    return out;
+  }
+  // A marker still "sending" at start: the server stopped mid-send. It may have gone: unsure, never sent again.
+  {
+    const fix = (m) => { if (m?.state === 'sending') { m.state = 'unsure'; m.reason = 'The server stopped while sending it'; return true; } return false; };
+    let any = false;
+    for (const g of Object.values(db.goals || {})) {
+      if (g.kind !== 'step') continue;
+      for (const k of ['msg', 'quoteTold', 'followed', 'invoiceTold']) any = fix(g[k]) || any;
+      for (const per of Object.values(g.reminded || {})) for (const m of Object.values(per)) any = fix(m) || any;
+    }
+    if (any) save();
+  }
+  function skipByKloomie(c, g, rec, why) {
+    Object.assign(g, { skipped: true, skipReason: why, skippedBy: 'kloomie', skippedById: null, skippedAt: Date.now(), waitReason: null });
+    note(rec, `Kloomie skipped “${g.step.name}”: ${why}`, 'Kloomie');
+    save();
+    tell(c);
+  }
+  const addDays = (d, n) => new Date(Date.parse(d + 'T12:00:00Z') + n * 864e5).toISOString().slice(0, 10);
+  const NINE = 9 * 60;
+  let msgBusy = false;
+  async function autoMessages() {
+    if (msgBusy || !flowTell) return;
+    msgBusy = true;
+    try {
+      for (const c of Object.values(db.campaigns)) {
+        if (!isJobRun(c) || c.status !== 'active') continue;
+        const ws = db.workspaces[c.wsId];
+        const rec = recOf(c);
+        if (!ws || !rec || !sendable(ws)) continue;
+        const clock = teamClock(ws);
+        const cur = currentGoal(c);
+        const wait = (g, why) => { if (g.waitReason !== why) { g.waitReason = why; save(); tell(c); } };
+        // The current step, when it's one Kloomie does.
+        if (cur && AUTO_KINDS.includes(cur.step.kind) && !cur.msg) {
+          const cust = customerOf(rec);
+          const why = flowReach(cust);
+          if (why) { skipByKloomie(c, cur, rec, why); continue; }
+          let msg = null;
+          if (cur.step.kind === 'remind') {
+            const kind = (cur.step.settings?.visitKind || '').toLowerCase();
+            const v = visitsOf(rec.id).find((x) => !x.done && x.date >= clock.today && (!kind || String(x.kind || '').toLowerCase() === kind));
+            if (!v) { wait(cur, 'No visit booked to remind about'); continue; }
+            if (v.date === clock.today) { skipByKloomie(c, cur, rec, 'The visit is today, so there’s nothing to remind about'); continue; }
+            if (v.date > clock.tomorrow || clock.min < NINE) { wait(cur, `Goes at 9am the day before the visit (${addDays(v.date, -1)})`); continue; }
+            msg = flowMsg.remind(ws, rec, cust, v);
+            cur.msgFor = { visitId: v.id, date: v.date };
+          } else {
+            const url = cur.step.settings?.url || teamReviewUrl(ws);
+            if (!url) { wait(cur, 'Add a review link (on the step, or in Settings → Customer messages)'); continue; }
+            const due = (cur.currentSince || Date.now()) + (cur.step.settings?.delayHours ?? 1) * (DAY_MS / 24);
+            if (Date.now() < due) { wait(cur, `Goes ${cur.step.settings?.delayHours ?? 1} hour(s) after it came up`); continue; }
+            msg = flowMsg.review(ws, rec, cust, url);
+          }
+          const out = await sendOnce(cur, 'msg', {}, () => flowTell(ws, rec, cust, msg, 'Kloomie'));
+          if (out.outcome === 'blocked') wait(cur, out.reason); else { cur.waitReason = null; save(); }
+          tell(c);
+          sweepNow(c.wsId, 'Kloomie', null);
+          continue;
+        }
+        // The quote's follow-up: once per live, unanswered link, while the quote step is open.
+        const qg = stepGoals(c).find((x) => x.step?.kind === 'quote');
+        const fu = qg?.step.settings?.followUpDays || 0;
+        if (qg && fu > 0 && !qg.skipped && rec.share && !rec.answer && !(rec.share.expiresAt && rec.share.expiresAt < Date.now()) && qg.followed?.token !== rec.share.token && Date.now() >= rec.share.createdAt + fu * DAY_MS) {
+          const cust = customerOf(rec);
+          if (!flowReach(cust)) await sendOnce(qg, 'followed', { token: rec.share.token }, () => flowTell(ws, rec, cust, flowMsg.quoteFollow(ws, rec, cust, quoteUrlOf(rec)), 'Kloomie'));
+          tell(c);
+        }
+        // The automatic invoice, emailed once per invoice, until it's paid or void.
+        const ig = stepGoals(c).find((x) => x.step?.kind === 'invoice');
+        const inv = ig && ig.step.how === 'auto' && ig.step.settings?.email !== false && ig.invoiceId && db.invoices?.[ig.invoiceId];
+        if (inv && inv.sentAt && !['paid', 'void'].includes(inv.status) && ig.invoiceTold?.invoiceId !== inv.id) {
+          const cust = customerOf(rec);
+          if (!flowReach(cust)) await sendOnce(ig, 'invoiceTold', { invoiceId: inv.id }, () => flowTell(ws, rec, cust, flowMsg.invoice(ws, rec, cust, inv, invoiceUrl(inv), invoiceTotals(inv).total), 'Kloomie'));
+          tell(c);
+        }
+        // Payment reminders: calendar days past due on the team's clock, from 9am, while a balance remains.
+        const pg = stepGoals(c).find((x) => x.step?.kind === 'payment');
+        const days = pg?.step.settings?.reminders || [];
+        if (pg && days.length && !pg.skipped && clock.min >= NINE) {
+          for (const pi of payInvoices(c, rec)) {
+            if (!pi.due || !['sent', 'viewed', 'partial'].includes(pi.status) || !(invoiceTotals(pi).balance > 0)) continue;
+            const reached = days.filter((d) => addDays(pi.due, d) <= clock.today);
+            if (!reached.length) continue;
+            pg.reminded ||= {};
+            const hist = (pg.reminded[pi.id] ||= {});
+            const last = reached.at(-1);
+            if (hist[last]) continue;
+            for (const d of reached.slice(0, -1)) hist[d] ||= { state: 'passed', at: Date.now() };
+            const cust = customerOf(rec);
+            if (flowReach(cust)) continue;
+            await sendOnce(hist, String(last), {}, () => flowTell(ws, rec, cust, flowMsg.payReminder(ws, rec, cust, pi, invoiceUrl(pi), invoiceTotals(pi).balance), 'Kloomie'));
+            tell(c);
+          }
+        }
+      }
+    } finally { msgBusy = false; }
+  }
+
   // ---------- automatic billing (PHASE2.md §1.4) ----------
   // Each going run on an automatic-billing flow whose Invoice step has come up: make its invoice once (as the run's
   // owner, kept before sending), then send it through the same path as the app, the rules' hold included. Waiting
@@ -754,6 +951,12 @@ export function jobFlowsModule(ctx) {
     const ws = db.workspaces[wsId];
     if (!ws || !makeInvoice || !sendInvoice) return false;
     let changed = false;
+    // When each run's current step came up in this cycle (a Review request's delay counts from then).
+    for (const c of Object.values(db.campaigns)) {
+      if (c.wsId !== wsId || !isJobRun(c) || c.status !== 'active') continue;
+      const cur = currentGoal(c);
+      if (cur && cur.currentCycle !== (cur.reopens || 0)) { cur.currentSince = Date.now(); cur.currentCycle = cur.reopens || 0; changed = true; }
+    }
     const setAuto = (g, a) => { if (JSON.stringify(g.auto || null) !== JSON.stringify(a)) { g.auto = a; changed = true; } };
     for (const c of Object.values(db.campaigns)) {
       if (c.wsId !== wsId || !isJobRun(c) || c.status !== 'active' || billingOf(versionOf(c)?.body) !== 'auto') continue;
@@ -817,5 +1020,5 @@ export function jobFlowsModule(ctx) {
     }
   }
 
-  return { route, stepMet, activeRun, isJobRun, isJobList, runsOf, bindInvoice, dropFor, tell, runView, autoBill, invoiceNews, dueDaysFor, jobQuote, priceListItems, itemPrice };
+  return { route, stepMet, activeRun, isJobRun, isJobList, runsOf, bindInvoice, dropFor, tell, runView, autoBill, autoMessages, invoiceNews, dueDaysFor, jobQuote, priceListItems, itemPrice };
 }

@@ -1726,13 +1726,7 @@ export function projectsModule({ jobQuote = () => null, seesLinked = () => true,
         if (jq?.quoteStep && !['owner', 'admin'].includes(auth.role)) return send(res, 403, { error: 'Only owners and admins send this job’s quote.' });
         if (m === 'POST') {
           const body = await readJson(req, 10_000);
-          const hours = Number(body.hours) > 0 ? Math.min(Number(body.hours), 24 * 365) : null;
-          rec.share = { token: rec.share?.token || crypto.randomBytes(18).toString('base64url'), createdAt: Date.now(), expiresAt: hours ? Date.now() + hours * 3600_000 : null, by: auth.member };
-          const st = quoteStatus(t, rec);
-          if (!jq?.onRun && (!st || st === 'draft')) setStatus(p, t, rec, 'Sent');
-          logTo(rec, { kind: 'quote', what: 'sent', by: auth.member });
-          const issued = fieldOf(t, 'issued');
-          if (issued?.type === 'date' && !rec.values[issued.id]) rec.values[issued.id] = today(rec.wsId);
+          shareRecord(rec, auth, body.hours, p, t);
         } else if (m === 'DELETE') rec.share = null;
         else return send(res, 405, { error: 'Method not allowed' });
         rec.updatedAt = Date.now();
@@ -1807,6 +1801,19 @@ export function projectsModule({ jobQuote = () => null, seesLinked = () => true,
     const f = statusField(t);
     if (!f) return;
     rec.values[f.id] = choiceFor(f, label, true);
+  }
+  // Sending a quote: the record's own link (a token kept across sends), marked sent. Used by the share route and Job
+  // Flows' Send the quote.
+  function shareRecord(rec, auth, hoursIn = null, p = db.projects[rec.projectId], t = p && typeOf(p, rec.typeId)) {
+    const hours = Number(hoursIn) > 0 ? Math.min(Number(hoursIn), 24 * 365) : null;
+    rec.share = { token: rec.share?.token || crypto.randomBytes(18).toString('base64url'), createdAt: Date.now(), expiresAt: hours ? Date.now() + hours * 3600_000 : null, by: auth.member };
+    const st = quoteStatus(t, rec);
+    if (!jobQuote(rec)?.onRun && (!st || st === 'draft')) setStatus(p, t, rec, 'Sent');
+    logTo(rec, { kind: 'quote', what: 'sent', by: auth.member });
+    const issued = fieldOf(t, 'issued');
+    if (issued?.type === 'date' && !rec.values[issued.id]) rec.values[issued.id] = today(rec.wsId);
+    rec.updatedAt = Date.now();
+    return rec;
   }
   const quoteFor = (token) => {
     const rec = token && Object.values(db.records).find((r) => r.share?.token === token);
@@ -2513,5 +2520,5 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
     projectNews(p);
     return { project: p, made, skipped };
   }
-  return { jobRecord, announceRecord, publicRecordOf: (rec) => publicRecord(rec), typeOfP: (p, id) => typeOf(p, id), profileOf, moveLicensesOut, isProfile, autoSetClean, autoSetValues, autoUpdate, carryOver, dateField, dateOf, recName, importProject, cleanSpec, createRecord, publicRecord, updateRecord, route, v1, keyAuth, makeHook, publicHook, deliver, emit, quoteOf, quotePage, seesMsg, stateFor, sees, recordActivity, recordNews, words, fillFromProject, fromProjectOk, recordStory, priceList, recordAt, itemsTotals, TEMPLATES: Object.fromEntries(Object.entries(TEMPLATES).map(([k, t]) => [k, { name: t.name, icon: t.icon, about: t.about }])) };
+  return { jobRecord, announceRecord, publicRecordOf: (rec) => publicRecord(rec), typeOfP: (p, id) => typeOf(p, id), profileOf, moveLicensesOut, isProfile, autoSetClean, autoSetValues, autoUpdate, carryOver, dateField, dateOf, recName, importProject, cleanSpec, createRecord, publicRecord, updateRecord, route, v1, keyAuth, makeHook, publicHook, deliver, emit, quoteOf, quotePage, seesMsg, stateFor, sees, recordActivity, recordNews, words, fillFromProject, fromProjectOk, recordStory, priceList, recordAt, itemsTotals, shareRecord, TEMPLATES: Object.fromEntries(Object.entries(TEMPLATES).map(([k, t]) => [k, { name: t.name, icon: t.icon, about: t.about }])) };
 }
