@@ -897,7 +897,12 @@ export function jobFlowsModule(ctx) {
             const v = visitsOf(rec.id).find((x) => !x.done && x.date >= clock.today && (!kind || String(x.kind || '').toLowerCase() === kind));
             if (!v) { wait(cur, 'No visit booked to remind about'); continue; }
             if (v.date === clock.today) { skipByKloomie(c, cur, rec, 'The visit is today, so there’s nothing to remind about'); continue; }
-            if (v.date > clock.tomorrow || clock.min < NINE) { wait(cur, `Goes at 9am the day before the visit (${addDays(v.date, -1)})`); continue; }
+            if (v.date > clock.tomorrow || clock.min < NINE) {
+              const day = addDays(v.date, -1);
+              const when = day === clock.today ? 'today' : new Date(day + 'T12:00:00Z').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' });
+              wait(cur, `Goes ${when === 'today' ? 'today' : 'on ' + when} at 9am, the day before the visit`);
+              continue;
+            }
             msg = flowMsg.remind(ws, rec, cust, v);
             cur.msgFor = { visitId: v.id, date: v.date };
           } else {

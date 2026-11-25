@@ -229,6 +229,7 @@ try {
   ok((await stageOf(jq?.id)) === stage1, 'declining doesn’t write the job’s stage');
   s = await stepOf(jq?.id, 'Send quote');
   ok(s?.state === 'current' && s.quote?.status === 'declined' && s.quote?.answeredBy === 'Dana' && s.quote?.reason === 'Too much', 'a decline keeps it open, with who and why: ' + JSON.stringify(s?.quote));
+  ok(!/name="v"/.test(await (await fetch(`${B}/q/${tok1}`)).text()), 'the customer’s page after declining shows no Accept form');
   r = await rico('POST', `/jobs/${jq?.id}/requote`);
   ok(r.status === 200 && (await stepOf(jq?.id, 'Send quote'))?.quote?.status === 'draft', 'New quote: back to draft');
   ok((await fetch(`${B}/q/${tok1}`)).status === 404, 'the old link is dead');
@@ -242,6 +243,8 @@ try {
   s = run?.steps?.find((x) => x.name === 'Send quote');
   ok(s?.state === 'done' && s.quote?.status === 'accepted' && run.current?.name === 'Clean', 'accepting it meets the quote step; the job moves on: ' + run?.current?.name);
   ok((await stageOf(jq?.id)) === stage0, 'accepting doesn’t write the job’s stage either');
+  const page = await (await fetch(`${B}/q/${tok2}`)).text();
+  ok(!/name="v"/.test(page) && /accepted/i.test(page), 'the customer’s quote page says it was accepted, with no Accept form left (the job is on a flow, so the answer decides, not its stage)');
   r = await rico('PATCH', '/records/' + jq?.id, { values: { price: { rows: [{ desc: 'Can clean', qty: 5, price: '25' }] } } });
   ok(r.status === 400 && (await stepOf(jq?.id, 'Send quote'))?.state === 'done', 'the accepted lines can’t be edited (G3), and the step stays met');
   r = await rico('POST', `/jobs/${jq?.id}/requote`);

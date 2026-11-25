@@ -1796,7 +1796,12 @@ export function projectsModule({ jobQuote = () => null, seesLinked = () => true,
   // client, accepted_by, accepted_on (the Bids & Quotes template has them all).
   const today = (wsId) => teamDay(wsId);
   const statusField = (t) => { const f = fieldOf(t, 'status'); return f?.type === 'select' ? f : null; };
-  const quoteStatus = (t, rec) => { const f = statusField(t); return f ? (f.choices.find((c) => c.id === rec.values[f.id])?.label || '').toLowerCase() : ''; };
+  // A job on a Job Flow run keeps its quote's state on the record (the answer, the link), never in its stage, which
+  // the run owns; anything else reads its status field.
+  const quoteStatus = (t, rec) => {
+    if (jobQuote(rec)?.onRun) return rec.answer?.act === 'accept' ? 'accepted' : rec.answer?.act === 'decline' ? 'declined' : rec.share?.viewedAt ? 'viewed' : rec.share ? 'sent' : 'draft';
+    const f = statusField(t); return f ? (f.choices.find((c) => c.id === rec.values[f.id])?.label || '').toLowerCase() : '';
+  };
   function setStatus(p, t, rec, label) {
     const f = statusField(t);
     if (!f) return;

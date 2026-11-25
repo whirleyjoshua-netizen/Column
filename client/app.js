@@ -18312,7 +18312,7 @@
   }
   function jbRow(j) {
     const r = j.run;
-    const sub = [j.client?.name, j.stage, j.scheduled ? String(j.scheduled).slice(0, 10) : null, j.total ? money2(j.total) : null].filter(Boolean).join(' · ');
+    const sub = [j.client?.name, j.stage, j.scheduled ? dueLabel(String(j.scheduled).slice(0, 10)) : null, j.total ? money2(j.total) : null].filter(Boolean).join(' · ');
     return h('div', { class: 'jb-row', 'data-job': j.id },
       h('button', { type: 'button', class: 'jb-main', onclick: () => openJob(j.projectId, j.id) }, h('b', {}, j.name || 'Job'), sub ? h('small', {}, sub) : null,
         r ? h('span', { class: 'jb-prog' }, h('span', { class: 'lead-bar', style: '--c:var(--accent)' }, h('i', { style: `width:${Math.round((r.done / Math.max(1, r.total)) * 100)}%` })), h('small', {}, `${r.flowName} · ${r.done}/${r.total}`))
@@ -18470,7 +18470,8 @@
       h('div', { class: 'jb-dh' }, h('b', {}, `${JB_KIND[s.kind]?.[0] || ''} ${s.name}`), h('small', { class: 'muted' }, JB_STATE[s.state]), whoText(s) ? h('small', { class: 'muted' }, whoText(s)) : null),
       s.kind === 'custom' && s.text ? h('p', { class: 'jb-text' }, s.text) : null,
       s.state === 'skipped' ? h('small', { class: 'muted' }, `Skipped: ${s.skipReason || ''}`) : h('small', { class: 'muted' }, JB_HOW[s.kind]),
-      s.state === 'current' && run.current?.missing ? h('small', { class: 'jb-missing' }, run.current.missing) : null,
+      // What it's waiting for (a step Kloomie does says it in its own line below).
+      s.state === 'current' && run.current?.missing && !JB_AUTO.includes(s.kind) ? h('small', { class: 'jb-missing' }, run.current.missing) : null,
       s.kind === 'quote' && s.quote ? h('div', { class: 'jb-quote', 'data-quote': s.quote.status },
         h('small', {}, [JB_QUOTE[s.quote.status] || s.quote.status, s.quote.total != null ? money2(s.quote.total) : null, s.quote.answeredBy ? `by ${s.quote.answeredBy}` : null].filter(Boolean).join(' · ')),
         s.quote.reason ? h('small', { class: 'muted' }, `“${s.quote.reason}”`) : null,

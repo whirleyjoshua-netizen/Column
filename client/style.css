@@ -4973,7 +4973,7 @@ body.wide.split-on:not(.split-full) #camps .cc-ov .cc-obrief { order: -1; border
 .jb-detail { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); }
 .jb-dh { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
 .jb-text { margin: 2px 0; white-space: pre-wrap; }
-.jb-missing { color: var(--danger); }
+.jb-missing { color: var(--muted); font-style: italic; }
 .jb-check, .jb-tasks { display: flex; flex-direction: column; gap: 2px; }
 .jb-acts { display: flex; gap: 6px; margin-top: 4px; flex-wrap: wrap; }
 .jb-preview { margin: 0; padding-left: 20px; font-size: 13px; color: var(--muted); }
@@ -4998,6 +4998,8 @@ body.wide.split-on:not(.split-full) #camps .cc-ov .cc-obrief { order: -1; border
 .jb-quote[data-quote="declined"] small:first-child, .jb-quote[data-quote="changed"] small:first-child { color: var(--danger); }
 .jb-auto { color: var(--muted); }
 .jb-auto[data-waiting]:not([data-waiting=""]) { color: var(--danger); }
+.jb-auto[data-waiting="yes"] { color: var(--muted); } /* a step Kloomie does, waiting its time: not a problem */
+.jb-auto[data-msg="unsure"] { color: var(--danger); }
 .jb-who-fixed { align-self: center; }
 .jb-gone { margin-top: 8px; }
 .jb-gone > summary { cursor: pointer; color: var(--muted); }
