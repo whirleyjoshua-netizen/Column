@@ -181,7 +181,7 @@ flows (and with it retiring the team switches entirely).
    test-only hook and checks `onFlowSince` still suppresses the team-wide messages (§4, §7).
 
 ## 10. Checkpoint 2 (failing tests) notes
-- `tests/jobflow_auto.mjs` (5253); the run on `jobflows-money` is `phase3-checkpoint2.log` (63 fail; the passes are
+- `tests/jobflow_auto.mjs` (5253); the run on `jobflows-money` is `phase3-checkpoint2.log` (67 fail; the passes are
   setup, restarts and "nothing happens" checks that only mean something once the code exists).
 - Names the tests settle (additions to §6):
   - `POST /api/jobs/:id/quote/send` (owners and admins): makes or reuses the share link, emails it once per link

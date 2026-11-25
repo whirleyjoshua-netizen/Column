@@ -5,7 +5,7 @@ FAIL refused at publish: payment reminders not ascending
 FAIL refused at publish: four payment reminders
 FAIL refused at publish: a payment reminder over 60 days
 FAIL refused at publish: a quote follow-up over 30 days
-FAIL a flow with a Visit reminder publishes: That flow is gone.
+FAIL a flow with a Visit reminder publishes: (save 400: “remind” isn’t a step you can add yet.) That flow is gone.
 FAIL nothing is sent while the reminder isn’t the current step
 FAIL the visit booked for tomorrow: the reminder goes (it’s past 9am, team time)
 FAIL and the step is done
@@ -34,6 +34,7 @@ FAIL Send the quote: the link, and the customer emailed: undefined
 FAIL the email has the link
 FAIL Send again for the same link: the same link, no second email
 FAIL a member can’t send it
+FAIL two Send taps at once: one link, one email
 FAIL no answer after a day: one follow-up
 FAIL only one per link
 FAIL the step says the follow-up went
@@ -57,14 +58,20 @@ PASS a job never on a flow still gets the team-wide reminder
 FAIL (test hook) the run is removed from the data
 FAIL both jobs keep onFlowSince
 FAIL a job whose run was cancelled, or removed, gets no team-wide reminder or review request
+PASS (setup) the team connects Twilio: 
+FAIL the review request goes as a text through the team’s Twilio
+FAIL a text alone counts as sent: {}
+FAIL once
 PASS (setup) restarted with email off
 FAIL email off: the reminder waits, saying why: undefined
 FAIL Send the quote with email off: the link is made, and it says it wasn’t emailed: undefined
 FAIL the quote is sent all the same
 PASS the automatic invoice is sent (its link) with email off
+PASS (setup) another job’s invoice is paid in full while its email waits
 PASS (setup) restarted with email on
 FAIL the waiting reminder goes on a later tick
 FAIL the invoice email is retried and goes, with no second invoice
+PASS the invoice paid while its email waited is never emailed, and no other invoice is made
 PASS Send the quote’s email isn’t retried in the background
 FAIL a blocked first email lets the next tap try again
 PASS (setup) restarted with the provider throwing
@@ -78,4 +85,4 @@ FAIL the email went once
 PASS (setup) restarted
 FAIL after the restart the step is unsure (it was mid-send)
 FAIL and the customer got it once, not twice
-63 FAILED
+67 FAILED

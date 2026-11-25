@@ -5,6 +5,7 @@
 // and the job moves on. Jobs that were ever on a flow get none of the team-wide reminders or review requests.
 import fs from 'node:fs';
 import { spawn } from 'node:child_process';
+import http from 'node:http';
 const S = (await import('node:path')).resolve(process.argv[2] || '.');
 const DIR = S + '/dk/jobflow_auto';
 const OUTBOX = DIR + '/outbox';
@@ -21,7 +22,27 @@ const hourIn = (tz) => Number(new Intl.DateTimeFormat('en-US', { timeZone: tz, h
 const tz = ['Pacific/Kiritimati', 'Asia/Tokyo', 'Asia/Kolkata', 'Europe/London', 'America/New_York', 'America/Los_Angeles', 'Pacific/Honolulu', 'Pacific/Pago_Pago'].find((z) => hourIn(z) >= 10 && hourIn(z) <= 21);
 const dayIn = (ms) => new Date(ms).toLocaleDateString('en-CA', { timeZone: tz });
 const DAY = 2000; // JOBFLOWS_DAY_MS: a "day" for follow-ups and review delays
-const base = { ...process.env, PORT: String(PORT), PUBLIC_URL: B, DATA_DIR: DIR, RESEND_API_KEY: '', DATABASE_URL: '', STRIPE_SECRET_KEY: '', STRIPE_PRICE: '', SKIP_SETUP: '1', NODE_ENV: 'test', CUSTMSG_TICK_MS: '300', REVIEW_DELAY_MS: '0', JOBFLOWS_DAY_MS: String(DAY), JOBFLOWS_TEST_DROP_RUN: '1' };
+// A stand-in Twilio (as tests/twilio.mjs), for the team that texts.
+const F_PORT = 5254, F = `http://127.0.0.1:${F_PORT}`;
+const SID = 'AC' + 'a'.repeat(32), TOKEN = 'b'.repeat(32), NUM = '+17025550100';
+const TW = { number: { sid: 'PN1', phone_number: NUM, sms_url: '' }, sent: [] };
+const fake = http.createServer(async (req, res) => {
+  let raw = '';
+  for await (const c of req) raw += c;
+  const u = new URL(req.url, F);
+  const out = (code, j) => { res.writeHead(code, { 'content-type': 'application/json' }); res.end(JSON.stringify(j)); };
+  if (req.headers.authorization !== 'Basic ' + Buffer.from(`${SID}:${TOKEN}`).toString('base64')) return out(401, { code: 20003, message: 'Authenticate' });
+  const b = `/2010-04-01/Accounts/${SID}`;
+  if (u.pathname === b + '.json') return out(200, { sid: SID, friendly_name: 'Texting Co', type: 'Full' });
+  if (u.pathname === b + '/IncomingPhoneNumbers.json') return out(200, { incoming_phone_numbers: u.searchParams.get('PhoneNumber') === NUM ? [TW.number] : [] });
+  if (u.pathname === b + '/IncomingPhoneNumbers/PN1.json') { if (req.method === 'POST') Object.assign(TW.number, { sms_url: Object.fromEntries(new URLSearchParams(raw)).SmsUrl }); return out(200, TW.number); }
+  if (u.pathname === b + '/Messages.json' && req.method === 'POST') { const m = { sid: 'SM' + (TW.sent.length + 1), status: 'queued', ...Object.fromEntries(new URLSearchParams(raw)) }; TW.sent.push(m); return out(201, m); }
+  out(404, { message: 'nope' });
+});
+await new Promise((r) => fake.listen(F_PORT, '127.0.0.1', r));
+const base = { ...process.env, PORT: String(PORT), PUBLIC_URL: B, DATA_DIR: DIR, RESEND_API_KEY: '', DATABASE_URL: '', STRIPE_SECRET_KEY: '', STRIPE_PRICE: '', SKIP_SETUP: '1', NODE_ENV: 'test', CUSTMSG_TICK_MS: '300', REVIEW_DELAY_MS: '0', JOBFLOWS_DAY_MS: String(DAY), JOBFLOWS_TEST_DROP_RUN: '1', TWILIO_API: F };
+// A server left on this test's port by an earlier run would answer instead: stop it first.
+try { (await import('node:child_process')).execSync(`lsof -ti tcp:${PORT} -sTCP:LISTEN | xargs kill 2>/dev/null`); await sleep(300); } catch {}
 let srv;
 const start = async (extra = { MAIL_OUTBOX: '1' }) => {
   srv = spawn('node', ['index.js'], { cwd: new URL('../server', import.meta.url).pathname, env: { ...base, MAIL_OUTBOX: '', ...extra }, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -55,9 +76,10 @@ try {
   let n = 0;
   const person = async (extra = {}) => { n++; const c = (await rico('POST', '/contacts', { name: `Cust${n} Ruiz`, email: `cust${n}.${t}@x.test`, address: `${n} A St`, ...extra })).body; return c.id ? c : c.contact; };
   const flowOf = async (name, body) => {
-    const f = (await rico('POST', '/job-flows', { name, list, ...body })).body;
+    const made = await rico('POST', '/job-flows', { name, list, ...body });
+    const f = made.body;
     const pub = await rico('POST', `/job-flows/${f?.id}/publish`);
-    return { id: f?.id, status: pub.status, error: pub.body?.error || '', sid: (nm) => pub.body?.version?.body?.steps?.find((s) => s.name === nm)?.id };
+    return { id: f?.id, status: pub.status, error: (made.status !== 200 ? `(save ${made.status}: ${f?.error}) ` : '') + (pub.body?.error || ''), sid: (nm) => pub.body?.version?.body?.steps?.find((s) => s.name === nm)?.id };
   };
   const job = async (flowId, contact, who = rico) => (await who('POST', '/jobs', { flowId, ...(contact ? { contactId: contact.id } : {}), values: { job: 'J' + Math.random().toString(36).slice(2, 7) } })).body?.job;
   const runOf = async (id, who = rico) => (await who('GET', `/jobs/${id}/run`)).body?.run;
@@ -164,6 +186,11 @@ try {
   r = await rico('POST', `/jobs/${jq?.id}/quote/send`);
   ok(r.body?.url === url1 && mails(quin.email, 'quote-sent').length === 1, 'Send again for the same link: the same link, no second email');
   ok((await sam('POST', `/jobs/${jq?.id}/quote/send`)).status === 403, 'a member can’t send it');
+  const bea = await person();
+  const jcc = await job(FQ.id, bea);
+  const both = await Promise.all([rico('POST', `/jobs/${jcc?.id}/quote/send`), rico('POST', `/jobs/${jcc?.id}/quote/send`)]);
+  await sleep(300);
+  ok(both.every((x) => x.status === 200) && both[0].body?.url === both[1].body?.url && mails(bea.email, 'quote-sent').length === 1, 'two Send taps at once: one link, one email');
   ok(await until(async () => mails(quin.email, 'quote-follow-up').length === 1, DAY * 3), 'no answer after a day: one follow-up');
   await sleep(DAY * 1.5);
   ok(mails(quin.email, 'quote-follow-up').length === 1, 'only one per link');
@@ -251,6 +278,23 @@ try {
   await sleep(1500);
   ok(!mails(was.email).length && !mails(dropped.email).length, 'a job whose run was cancelled, or removed, gets no team-wide reminder or review request');
 
+  // 7b. A team with Twilio: a customer with a textable phone and no email gets the automatic message as a text.
+  r = await call()('POST', '/auth', { mode: 'create', workspace: 'Texting ' + t, name: 'Tess', email: `tess${t}@t.test`, password: 'longenough1', device: 'Mac', deviceId: 'd9' });
+  const tess = call(r.body.token);
+  const st2 = (await tess('GET', '/state')).body;
+  await tess('PATCH', '/workspace', { tz, tools: { ...st2.workspace.tools, projects: true } });
+  r = await tess('PUT', '/texting', { sid: SID, token: TOKEN, number: '(702) 555-0100' });
+  ok(r.status === 200 && r.body?.connected, '(setup) the team connects Twilio: ' + (r.body?.error || ''));
+  const p2 = (await tess('POST', '/projects', { template: 'trades', trades: ['cleaning'] })).body;
+  const ff = (await tess('POST', '/job-flows', { name: 'Texted', list: { projectId: p2.id, typeId: p2.types[0].id }, steps: [{ kind: 'review', name: 'Ask', settings: { delayHours: 0, url: 'https://g.page/r/tx' } }] })).body;
+  await tess('POST', `/job-flows/${ff?.id}/publish`);
+  const tc = (await tess('POST', '/contacts', { name: 'Tom Text', phone: '(702) 555-0142' })).body;
+  const tj = (await tess('POST', '/jobs', { flowId: ff?.id, contactId: (tc.id ? tc : tc.contact).id, values: { job: 'Texted job' } })).body?.job;
+  ok(await until(async () => TW.sent.some((m) => m.To === '+17025550142' && /g\.page\/r\/tx/.test(m.Body || ''))), 'the review request goes as a text through the team’s Twilio');
+  const ts = (await tess('GET', `/jobs/${tj?.id}/run`)).body?.run?.steps?.[0];
+  ok(ts?.state === 'done' && ts.sentTo === 'text' && !ts.sent?.unsure, 'a text alone counts as sent: ' + JSON.stringify({ state: ts?.state, sentTo: ts?.sentTo }));
+  ok(TW.sent.filter((m) => m.To === '+17025550142').length === 1, 'once');
+
   // 8. Not sent for sure (mail off): waits and retries; Send the quote reports it and doesn't retry by itself.
   await stop();
   ok(await start({}), '(setup) restarted with email off');
@@ -270,11 +314,19 @@ try {
   const ji = await job(FA.id, ira);
   await rico('POST', `/jobs/${ji?.id}/steps/${FA.sid('Do it')}/done`);
   ok(await until(async () => (await invsOf(ji?.id))[0]?.status === 'sent'), 'the automatic invoice is sent (its link) with email off');
+  const pia = await person();
+  const jpa = await job(FA.id, pia);
+  await rico('POST', `/jobs/${jpa?.id}/steps/${FA.sid('Do it')}/done`);
+  await until(async () => (await invsOf(jpa?.id))[0]?.status === 'sent');
+  await rico('POST', `/invoices/${(await invsOf(jpa?.id))[0]?.id}/payments`, { amount: '25', method: 'cash' });
+  ok((await invsOf(jpa?.id))[0]?.status === 'paid', '(setup) another job’s invoice is paid in full while its email waits');
   await stop();
   ok(await start(), '(setup) restarted with email on');
   rico = call(ricoTok); sam = call(samTok);
   ok(await until(async () => mails(gus.email, 'visit-reminder').length === 1), 'the waiting reminder goes on a later tick');
   ok(await until(async () => mails(ira.email, 'invoice').length === 1) && (await invsOf(ji?.id)).length === 1, 'the invoice email is retried and goes, with no second invoice');
+  await sleep(900);
+  ok(!mails(pia.email, 'invoice').length && (await invsOf(jpa?.id)).length === 1, 'the invoice paid while its email waited is never emailed, and no other invoice is made');
   await sleep(800);
   ok(!mails(hal.email, 'quote-sent').length, 'Send the quote’s email isn’t retried in the background');
   r = await rico('POST', `/jobs/${jh?.id}/quote/send`);
@@ -314,6 +366,7 @@ try {
   fails++;
 } finally {
   if (srv.exitCode === null) srv.kill();
+  fake.close();
 }
 console.log(fails ? `${fails} FAILED` : 'ALL PASS');
 process.exit(fails ? 1 : 0);
