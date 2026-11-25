@@ -1,6 +1,6 @@
 # Job Flows — Phase 3 (Steps that run by themselves) contracts, checkpoint 1
 
-Status: draft for review, 2026-11-25. No code yet. The spec's build order: "Steps that run by themselves. Customer
+Status: round 2 for review, 2026-11-25 (round 1 answers in §9). No code yet. The spec's build order: "Steps that run by themselves. Customer
 updates, automatic invoice, payment reminders, review requests and quote follow-ups, all per step; the team-wide
 switches retire." Branch `jobflows-auto`, cut from `jobflows-money` (Phase 2, approved). The automatic invoice itself
 shipped in Phase 2 (PHASE2.md §1.4); Phase 3 adds telling the customer.
@@ -59,7 +59,8 @@ only for a going run on a team that's online and not read-only (as today).
   for work not yet reached.
 - `g.currentSince` is set by the sweep the first time a step becomes current in a cycle (cleared on reopen), so
   `review.delayHours` counts from then.
-- **Can't reach the customer** (no contact on the job, do-not-contact, no email and no Twilio text): the step is
+- **Can't reach the customer** (no contact on the job, do-not-contact, or no valid email address and no phone the
+  team's Twilio can text): the step is
   skipped by Kloomie with the reason ("Dana Ruiz has no email or text number", "Dana Ruiz is marked do not contact",
   "No client on the job"), on the timeline, and the run moves on. A courtesy message never holds a job up. An owner
   can reopen it after fixing the contact.
@@ -67,17 +68,59 @@ only for a going run on a team that's online and not read-only (as today).
   today (booked same day, or the step came up late) → skipped by Kloomie ("The visit is today"); reminded once,
   for the visit it named (`g.sent = { at, visitId, date }`); a visit moved after the reminder doesn't send another.
 - **Review with no link** (step and team both empty): waits ("Add a review link"), never skipped silently.
-- **The email couldn't go** (daily cap, unconfirmed email, mail off) and no text went either: the step waits with
-  that reason and the tick tries again next time; it's met only when something was actually sent.
-- **Exactly once.** `g.sent` (and the per-link / per-invoice / per-day markers below) are written and saved
-  **before** the send starts (`g.sending = true`, then `g.sent` on success, cleared on failure), so a tick that
-  overlaps or a restart never sends twice. A send in flight at a crash is lost, not doubled.
 - Markers: quote follow-up `g.followedFor = <share token>`; invoice email `g.emailedFor = <invoiceId>`; payment
-  reminders `g.reminded = { <invoiceId>: [days…] }`.
+  reminders `g.reminded = { <invoiceId>: [days…] }`. Each is per thing, so a New quote or a void's replacement
+  invoice starts its own history.
+
+### 3.1 Sending, exactly once (round 1, point 1)
+One function, `sendOnce(marker, fn)`, used by every Phase 3 message (steps, follow-ups, invoice emails, payment
+reminders):
+1. Before anything goes out, write the marker as `{ state: 'sending', at }` and **save**.
+2. Call `tellCustomer`. It gives one of three outcomes:
+   - **sent**: an email the provider accepted, or a text Twilio accepted → `{ state: 'sent', at, via }`.
+   - **not sent, for sure**: nothing left Kloomie: email was blocked before the provider (the daily cap,
+     the team's unconfirmed email, mail switched off) and no text was tried → the marker is removed; the step (or the
+     reminder) waits with that reason and the next tick tries again.
+   - **in doubt**: the provider or Twilio was called and failed or timed out (it may have been delivered) →
+     `{ state: 'unsure', at, reason }`. **Never retried by itself.** It counts as sent for moving on (the step is met,
+     the reminder day is used), and the run card says "May not have gone: <reason>". An owner who wants it again
+     reopens the step.
+3. A marker still `sending` when the server starts (a crash mid-send) becomes `unsure` the same way. No second send.
+
+So a customer may, rarely, miss a message; they never get the same one twice.
+
+### 3.2 Texts (round 1, point 3)
+Automatic messages text **only** through the team's connected Twilio number. The phone's-Messages-app fallback
+(`sms` in `tellCustomer`'s answer) is for a person's tap and **never** counts as sent for an automatic message.
+"Unreachable" (skip) means: no client, do-not-contact, or no valid email address and no Twilio-textable phone.
+A valid email that can't be sent right now (cap, unconfirmed team email, mail off) is **not** unreachable: it waits
+and retries (§3.1). With Twilio connected and a textable phone, a text alone counts as sent.
+
+### 3.3 The quote's and the invoice's own state vs telling the customer (round 1, point 2)
+They're separate. Telling the customer never makes, resends or changes a quote or an invoice.
+- **Send the quote** (a person's tap): the link is made (the quote is sent, as in Phase 2) whatever happens to the
+  email. The answer says whether the customer was emailed or texted, or why not; the link is copied either way.
+  There's no background retry of this email (the person has the link in hand); the step shows "Not emailed: <reason>".
+- **Quote follow-up**: only while the link is live and unanswered. Once accepted, declined, turned off or replaced
+  by a New quote, a pending follow-up is dropped. In doubt counts as done for that link.
+- **Invoice email** (automatic billing): once the step's invoice is sent, the tick emails it, retrying "not sent,
+  for sure" until it goes, **stopping** if the invoice is paid in full or voided. A void's replacement gets its own
+  email. Failure never makes another invoice.
+
+### 3.4 Payment reminders (round 1, point 4)
+- `days: n` means the **calendar day** `due + n` on the team's clock, from 9am that day.
+- Sent while the invoice is sent/viewed/partial and its balance is above $0: a partial payment doesn't stop them;
+  paid in full or void does. Never for a draft or a void invoice.
+- For the step's bound invoice (else every non-void run invoice, each with its own history, keyed by invoice id).
+- Missed ticks (the server was down): when several offsets are due at once, only the latest is sent and the earlier
+  ones are marked passed, so the customer gets one reminder, not a burst.
 
 ## 4. The team-wide switches retire for jobs on flows
-- A job that has (or had) a Job Flow run, not cancelled, gets **no** team-wide visit reminder or review request;
-  its flow decides. Jobs not on a flow keep today's behavior until Move my jobs here (Phase 5), when the switches
+- A job that has ever had a Job Flow run gets **no** team-wide visit reminder or review request. This is kept on the
+  job itself (`rec.onFlowSince = <time of its first run>`, set when a run starts or attaches, never cleared), not
+  worked out from runs that exist now, so a finished or cancelled run (or one deleted with its campaign) doesn't
+  drop the job back into the team-wide messages. Taking a job off its flow means it's done by hand: an owner sends
+  its reminder from the visit (🔔 Remind the customer), as anyone can today. Jobs not on a flow keep today's behavior until Move my jobs here (Phase 5), when the switches
   go away for good.
 - Settings → Customer messages says so ("Jobs on a Job Flow follow their flow's steps").
 
@@ -98,7 +141,7 @@ step adds `followUp: { days, sentAt }`; the payment step adds `reminders: [{ day
 
 | Test (port) | Covers |
 | --- | --- |
-| `jobflow_auto.mjs` (5253) | publish rules for the new kinds and settings; `remind`: waits with no visit, sends at/after 9am the day before (team clock), once, done, on the timeline; visit today → skipped by Kloomie; unreachable / do-not-contact / no client → skipped with the reason, the run moves on; not current → nothing sent; `review`: delay counted from becoming current, sends once, no link → waits, step url beats the team's; `omw`: done by a tap on the job's visit after the run started, not by one before; the quote's email on Send and the follow-up once per link after N days (none after an answer, again after New quote); the automatic invoice emailed once per invoice (a void's replacement is emailed too); payment reminders once each, only past due and unpaid, none after paid; a failed email (cap) waits and retries, never doubles; a restart mid-way doesn't send twice; team switches give a job on a flow no reminder or review while a job off flows still gets them; members see states and reasons, no contact details |
+| `jobflow_auto.mjs` (5253) | round 1 additions: a crash after the provider accepted but before `sent` was saved (a test-only `JOBFLOWS_CRASH_AFTER_SEND` exits the process there) → after restart `unsure`, no second send; a definite failure (the daily cap) waits and retries, an ambiguous one (a test-only `JOBFLOWS_MAIL_THROW` makes the provider call throw) is `unsure` and not retried; Send the quote with the email blocked: the link exists, the quote is sent, "not emailed" shown, no retry; the automatic invoice sent while its email is blocked: one invoice, the email retried and then sent, and stopped when the invoice is paid first; no Twilio → the phone fallback never counts, a contact with a phone only is unreachable and skipped; an unconfirmed team email waits, a missing email skips; a partial payment keeps reminders, paid in full stops them; offsets on the team's calendar across midnight; several offsets due at once send one; a job whose run finished or was cancelled still gets no team-wide reminder or review. And: publish rules for the new kinds and settings; `remind`: waits with no visit, sends at/after 9am the day before (team clock), once, done, on the timeline; visit today → skipped by Kloomie; unreachable / do-not-contact / no client → skipped with the reason, the run moves on; not current → nothing sent; `review`: delay counted from becoming current, sends once, no link → waits, step url beats the team's; `omw`: done by a tap on the job's visit after the run started, not by one before; the quote's email on Send and the follow-up once per link after N days (none after an answer, again after New quote); the automatic invoice emailed once per invoice (a void's replacement is emailed too); payment reminders once each, only past due and unpaid, none after paid; a failed email (cap) waits and retries, never doubles; a restart mid-way doesn't send twice; team switches give a job on a flow no reminder or review while a job off flows still gets them; members see states and reasons, no contact details |
 | `jobs_ui.mjs` (Chrome) | with the client: the new steps in the builder (menu, settings), the run card's words for sent / waiting / skipped by Kloomie |
 
 Time is made testable without waiting days: `CUSTMSG_TICK_MS` (exists) for a fast tick, and a test-only
@@ -111,3 +154,17 @@ Existing suites that must stay green: everything in PHASE2 §6, plus custmsg, tw
 Editable message wording; a reminder re-sent when a visit moves; texting without the team's Twilio (the phone's
 Messages app stays a one-tap thing for people, never automatic); deposits; recurring work; moving old jobs onto
 flows (and with it retiring the team switches entirely).
+
+## 9. Round 1 review (ChatGPT), and what changed
+1. **Exactly once**: §3.1. Three outcomes (sent, not sent for sure, in doubt); in doubt and a crash mid-send are
+   `unsure`, never retried by themselves, counted as done; only a failure before the provider retries.
+2. **Quote and invoice state vs notification**: §3.3. Separate; telling never makes or resends a quote or invoice;
+   Send the quote's email isn't retried in the background; the invoice email retries until it goes, stopping at
+   paid or void; follow-ups drop once answered.
+3. **Texts**: §3.2. Automatic texts only through Twilio; the Messages-app fallback never counts; unconfirmed email
+   waits, a missing address with no Twilio-textable phone skips.
+4. **Payment reminders**: §3.4. Calendar days on the team's clock from 9am; continue while a balance remains; never
+   for draft or void; per invoice id; one reminder when several are due at once.
+5. **Jobs that were on a flow**: §4. A durable `rec.onFlowSince`, never cleared; finished, cancelled or deleted runs
+   don't bring back the team-wide messages.
+
