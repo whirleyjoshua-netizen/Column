@@ -98,7 +98,9 @@ try {
   const made = (await api('GET', '/automations')).find((x) => x.name.includes('tell them when it opens'));
   ok(made && made.on && made.trigger.kind === 'task.opened' && made.trigger.step === 'Call last year’s customers' && made.trigger.campaignId === camp.id && made.actions[0].to.join() === 'doers', 'it’s on: when a task in this step (of this campaign) opens, notify whoever it’s for');
   await A.tap(`document.querySelector('#sheet .step-auto-new')`);
-  ok(await A.until(`document.querySelector('.auto-step-name')?.value === 'Call last year’s customers'`, 8000), '+ New automation for this step opens the builder with the step filled in');
+  ok(await A.until(`/(Call last year’s customers)/.test(document.querySelector('#sheet .auto-trigger .an-say')?.textContent || '')`, 8000), '+ New automation for this step opens the builder for that step (its card says so)');
+  await A.tap(`document.querySelector('#sheet .ab-tabs [data-tab=adv]')`);
+  ok(await A.until(`document.querySelector('.auto-step-name')?.value === 'Call last year’s customers'`, 8000), 'with the step filled in (under Advanced settings)');
   await shot('step-autos');
   await A.ev(`document.querySelector('#sheet [aria-label=Close], .auto-close, [aria-label="Close"]')?.click(); true`);
   // Sam, the member: his task opens on what the step hands over; he can read it, not change it.

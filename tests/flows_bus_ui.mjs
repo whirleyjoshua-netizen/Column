@@ -1,6 +1,7 @@
 // Flows step 1 in a real browser (headless Chrome): Settings → Automations draws "what sets it off" from the server's
 // list, grouped by tool; a new one "when a job moves to a stage, in this project, to Won" is made in the editor with
 // its filters; moving a job there posts in the feed; a recipe (Quote accepted) opens filled in; it fits a phone.
+import { autoUI } from './autobuild.mjs';
 import * as FS from 'node:fs';
 import WebSocket from '../server/node_modules/ws/index.js';
 import { spawn } from 'node:child_process';
@@ -66,22 +67,26 @@ try {
   await A.until(`!!document.querySelector('#tabs [data-tab=automations]')`, 10000); await A.ev(`document.querySelector('#tabs [data-tab=automations]').click(); true`); // in Workspace now (2026-11-14)
   ok(await A.until(`[...document.querySelectorAll('#tool .auto-recipe b')].some((b) => b.textContent === 'Quote accepted? Schedule it')`), 'Automations shows recipes from every tool (Quote accepted? Schedule it)');
   await A.tap(`[...document.querySelectorAll('#tool button')].find((b) => b.textContent === '+ New automation')`);
-  ok(await A.until(`document.querySelectorAll('#sheet .auto-kind optgroup').length >= 8`), 'what sets it off is grouped by tool');
-  const groups = await A.ev(`[...document.querySelectorAll('#sheet .auto-kind optgroup')].map((g) => g.label).join(', ')`);
+  const B = autoUI(A);
+  await A.tap(`document.querySelector('#sheet .ab-panel .ab-change')`);
+  ok(await A.until(`document.querySelectorAll('.ap-pop .ap-chip').length >= 9`), 'what sets it off is grouped by tool (a chip each)');
+  const groups = await A.ev(`[...document.querySelectorAll('.ap-pop .ap-chip')].map((g) => g.textContent).join(', ')`);
   ok(/Boards/.test(groups) && /Invoices & Finance/.test(groups) && /Map/.test(groups) && /Texts/.test(groups), `including ${groups}`);
-  await A.pick(`document.querySelector('#sheet .auto-kind')`, 'record.stage');
-  ok(await A.until(`!!document.querySelector('#sheet .auto-proj')`), 'a record event asks which project');
+  await A.tap(`document.querySelector('.ap-pop .ap-item[data-key="record.stage"]')`);
+  await B.adv();
+  ok(await A.until(`!!document.querySelector('#sheet .auto-proj')`), 'a record event asks which project (under Advanced settings)');
+  ok(await A.ev(`document.querySelector('#sheet .auto-proj').closest('label').firstChild.textContent === 'In project'`), 'labeled In project (the campaign one says In campaign)');
   await A.pick(`document.querySelector('#sheet .auto-proj')`, p.id);
   ok(await A.until(`[...document.querySelectorAll('#sheet .auto-to option')].some((o) => o.value === ${JSON.stringify(won.label)})`), 'and which stage, from that project’s own stages');
   await A.pick(`document.querySelector('#sheet .auto-to')`, won.label);
   ok(await A.ev(`document.querySelector('#sheet').textContent.includes('{record}') && document.querySelector('#sheet').textContent.includes('{from}')`), 'it lists the words that fill in for this event');
-  await A.tap(`document.querySelector('#sheet .auto-edit input')`);
+  await A.tap(`document.querySelector('#sheet .auto-name')`);
   await A.type('Deal won');
   // The first action: post in #general.
-  await A.pick(`document.querySelector('#sheet .auto-act select')`, 'post');
-  await A.tap(`document.querySelector('#sheet .auto-act input')`);
+  await B.step(B.act(0), 'post');
+  await A.tap(`document.querySelector('#sheet .ab-body input')`);
   await A.type('{record} is {stage}!');
-  await A.pick(`[...document.querySelectorAll('#sheet .auto-act select')][1]`, 'general');
+  await A.pick(`document.querySelector('#sheet .ab-body select')`, 'general');
   await A.tap(`[...document.querySelectorAll('#sheet .btns button')].find((b) => b.textContent === 'Turn it on')`);
   ok(await A.until(`[...document.querySelectorAll('#tool .auto-row b')].some((b) => b.textContent === 'Deal won') && [...document.querySelectorAll('#tool .auto-row small')].some((s) => s.textContent.includes('in Sales') && s.textContent.includes('to ' + ${JSON.stringify(won.label)}))`), 'it’s on, summed up with its project and stage');
   await api('PATCH', `/records/${rec.id}`, { values: { [stageF.id]: won.id } });
@@ -93,7 +98,7 @@ try {
 
   // A recipe opens filled in.
   await A.tap(`[...document.querySelectorAll('#tool .auto-recipe')].find((b) => b.textContent.includes('Quote accepted'))`);
-  ok(await A.until(`document.querySelector('#sheet .auto-kind')?.value === 'quote.accepted' && [...document.querySelectorAll('#sheet .auto-act input')].some((i) => i.value.includes('{customer}'))`), 'the Quote accepted recipe opens filled in');
+  ok(await A.until(`/quote/i.test(document.querySelector('#sheet .auto-trigger .an-say')?.textContent || '') && [...document.querySelectorAll('#sheet .auto-act .an-say')].some((i) => i.textContent.includes('{customer}'))`), 'the Quote accepted recipe opens filled in');
   await A.cmd('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
   await sleep(500);
   ok(await A.ev(`document.documentElement.scrollWidth <= 392 && document.querySelector('#sheet .sheet').getBoundingClientRect().right <= 391`), 'the editor fits a phone');

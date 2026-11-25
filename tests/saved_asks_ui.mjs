@@ -1,5 +1,6 @@
 // Saved asks for the AI team (2026-11-20): in Your team, “☆ Save this ask” keeps what you typed as a chip to send in
 // one tap; an automation’s Ask your team step can start from it.
+import { autoUI } from './autobuild.mjs';
 import * as FS from 'node:fs';
 import WebSocket from '../server/node_modules/ws/index.js';
 import { spawn } from 'node:child_process';
@@ -63,10 +64,12 @@ try {
   await A.ev(`document.querySelector('#tabs [data-tab=automations]').click(); true`);
   await A.until(`[...document.querySelectorAll('#tool button')].some((b) => b.textContent === '+ New automation')`, 8000);
   await A.ev(`[...document.querySelectorAll('#tool button')].find((b) => b.textContent === '+ New automation').click(); true`);
-  await A.until(`!!document.querySelector('#sheet .auto-step-kind')`);
-  await A.pick(`document.querySelector('#sheet .auto-step-kind')`, 'agent');
-  ok(await A.until(`!!document.querySelector('#sheet .auto-ask-from')`), 'the Ask your team step offers “Start from a saved ask”');
+  const B = autoUI(A);
+  await B.step(B.act(0), 'agent');
+  await B.adv();
+  ok(await A.until(`!!document.querySelector('#sheet .auto-ask-from')`), 'the Ask your team step offers “Start from a saved ask” (under Advanced settings)');
   await A.pick(`document.querySelector('#sheet .auto-ask-from')`, y.id);
+  await B.set();
   ok(await A.until(`document.querySelector('#sheet .auto-agent-ask')?.value.startsWith('Sum up this week')`), 'picking it fills in what to ask');
   ok(A.errors.length === 0, 'no script errors' + (A.errors.length ? ': ' + A.errors.join(' | ') : ''));
 } catch (e) { ok(false, 'threw: ' + e.stack); }

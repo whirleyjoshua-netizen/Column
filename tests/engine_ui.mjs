@@ -2,6 +2,7 @@
 // job dragged to another day moves there, + on a day makes a job for that day, the month goes back and forth; a
 // formula field is added from the table (its fields to tap in), and shows worked out; the automation editor watches
 // a record's date (which list, which date, days before) and its steps change the record and add one; it fits a phone.
+import { autoUI } from './autobuild.mjs';
 import * as FS from 'node:fs';
 import WebSocket from '../server/node_modules/ws/index.js';
 import { spawn } from 'node:child_process';
@@ -107,12 +108,12 @@ try {
   await A.until(`[...document.querySelectorAll('#tool .auto-recipe b')].length > 0`);
   ok(await A.until(`[...document.querySelectorAll('#tool .auto-recipe b')].some((b) => b.textContent === 'License expiring? Owners hear')`), 'there’s a recipe for licenses about to expire');
   await A.tap(`[...document.querySelectorAll('#tool .auto-recipe')].find((b) => b.textContent.includes('License expiring'))`);
-  ok(await A.until(`document.querySelector('#sheet .auto-kind')?.value === 'record.date' && !!document.querySelector('#sheet .auto-proj')`), 'it opens on “A date on a job or record comes up”, asking which project');
+  const B = autoUI(A);
+  ok(await A.until(`/date/i.test(document.querySelector('#sheet .ab-panel .ab-pt b')?.textContent || '') && !!document.querySelector('#sheet .ab-panel .auto-proj')`), 'it opens on “A date on a job or record comes up”, asking which project');
   ok(await A.until(`document.querySelector('#sheet .auto-proj')?.value === ${JSON.stringify(prof.id)} && document.querySelector('#sheet .auto-list')?.value === ${JSON.stringify(lic.id)}`), 'it’s already on the workspace profile’s Insurance & licenses');
   ok(await A.until(`[...document.querySelectorAll('#sheet .auto-datef option')].map((o) => o.textContent).join() === 'Expires' && document.querySelector('#sheet .auto-days').value === '30' && document.querySelector('#sheet .auto-side').value === 'before'`), 'then the list’s date (Expires), 30 days before');
   // A second step: add a task-like record in the same list.
-  await A.tap(`[...document.querySelectorAll('#sheet .auto-add-step')].at(-1)`);
-  await A.pick(`[...document.querySelectorAll('#sheet .auto-step-kind')].at(-1)`, 'record');
+  await B.add('record');
   ok(await A.until(`!!document.querySelector('#sheet .auto-rec-list') && document.querySelector('#sheet .auto-rec-list').value === ${JSON.stringify(lic.id)}`), 'a “Change the job or record” step starts on the trigger’s list');
   await A.tap(`[...document.querySelectorAll('#sheet .linkish')].find((b) => b.textContent === '+ Set a field')`);
   const notes = lic.fields.find((f) => f.key === 'notes');
@@ -123,8 +124,10 @@ try {
   ok(await A.until(`[...document.querySelectorAll('#tool .auto-row small')].some((s) => s.textContent.startsWith('30 days before Expires in'))`), 'it’s saved, and its summary reads “30 days before Expires in …”');
   const saved = (await api('GET', '/automations')).find((x) => x.name === 'License expiring? Owners hear');
   ok(saved?.trigger.typeId === lic.id && saved.trigger.days === -30 && saved.actions[1]?.kind === 'record' && saved.actions[1].set[0]?.field === notes.id, 'with the list, the days and the field it sets');
-  await A.cmd('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
   await A.tap(`[...document.querySelectorAll('#tool .auto-main')].find((b) => b.textContent.includes('License expiring'))`);
+  await A.cmd('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
+  await A.until(`!!document.querySelector('#sheet .sheet.auto-builder')`);
+  await B.pick(B.act(1));
   await A.until(`!!document.querySelector('#sheet .auto-set-row')`);
   await sleep(400);
   ok(await A.ev(`document.documentElement.scrollWidth <= 392 && document.querySelector('#sheet .sheet').getBoundingClientRect().right <= 391`), 'the editor still fits a phone');

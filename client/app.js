@@ -5762,6 +5762,67 @@
   // Who may pick which (the server checks the same): billing and messaging customers are for owners and admins, the
   // business's money for owners.
   const autoDoOk = (k) => (k === 'money' ? amAdmin() : ['invoice', 'text', 'email', 'webhook', 'teams'].includes(k) ? amAdmin() : k === 'agent' ? toolOn('agents') : k === 'stock' ? toolOn('inventory') : true);
+  // How each step and trigger looks (2026-11-25, "smaller nodes, color, simple list"): an icon, a color, and the
+  // group it's listed under in the picker. c: purple teal blue green orange amber red pink gray (.lk-<c> in style.css).
+  const AUTO_LOOK = {
+    notify: { ic: '🔔', c: 'purple', g: 'people' }, post: { ic: '📣', c: 'teal', g: 'people' }, teams: { ic: '🟦', c: 'blue', g: 'people' },
+    task: { ic: '✅', c: 'purple', g: 'work' }, campaign: { ic: '🚀', c: 'orange', g: 'work' }, visit: { ic: '📅', c: 'blue', g: 'work' }, doc: { ic: '📝', c: 'orange', g: 'work' },
+    record: { ic: '✏️', c: 'gray', g: 'work' }, create: { ic: '➕', c: 'green', g: 'work' }, stock: { ic: '📦', c: 'amber', g: 'work' },
+    contact: { ic: '👤', c: 'pink', g: 'customers' }, email: { ic: '📧', c: 'red', g: 'customers' }, text: { ic: '📱', c: 'green', g: 'customers' },
+    invoice: { ic: '💳', c: 'teal', g: 'money' }, money: { ic: '💵', c: 'green', g: 'money' },
+    agent: { ic: '✨', c: 'purple', g: 'ai' }, webhook: { ic: '🔗', c: 'gray', g: 'ai' }, vault: { ic: '🔒', c: 'gray', g: 'ai' },
+    wait: { ic: '⏳', c: 'amber', g: 'flow' }, if: { ic: '🔀', c: 'teal', g: 'flow' },
+  };
+  const AUTO_GROUPS = [['all', 'All'], ['people', 'Tell people'], ['work', 'Work'], ['customers', 'Customers'], ['money', 'Money'], ['ai', 'AI & apps'], ['flow', 'Flow']];
+  // Steps in the order people reach for them most.
+  const AUTO_ORDER = ['notify', 'task', 'post', 'email', 'text', 'wait', 'if', 'contact', 'visit', 'invoice', 'campaign', 'doc', 'agent', 'record', 'create', 'money', 'stock', 'teams', 'webhook', 'vault'];
+  const AUTO_WHEN_LOOK = {
+    task: ['✅', 'orange'], step: ['🏁', 'orange'], campaign: ['🎯', 'orange'], contact: ['👤', 'pink'], attempt: ['📞', 'blue'], file: ['📥', 'teal'], document: ['✍️', 'purple'], doc: ['📝', 'purple'],
+    schedule: ['⏰', 'amber'], record: ['🗂', 'blue'], quote: ['📝', 'green'], invoice: ['💳', 'teal'], payment: ['💵', 'green'], money: ['💵', 'green'], price: ['🏷', 'green'], visit: ['🚚', 'blue'], booking: ['📅', 'blue'],
+    text: ['📱', 'green'], stock: ['📦', 'amber'], equipment: ['🛠', 'amber'], github: ['💻', 'gray'], companycam: ['📷', 'gray'], connection: ['🔌', 'red'], analytics: ['📈', 'teal'], pin: ['📍', 'red'],
+  };
+  const autoWhenLook = (kind) => { const l = AUTO_WHEN_LOOK[String(kind || '').split('.')[0]]; return l ? { ic: l[0], c: l[1] } : { ic: '⚡', c: 'gray' }; };
+  const autoLook = (kind) => AUTO_LOOK[kind] || { ic: '⚡', c: 'gray', g: 'work' };
+  const autoIc = (l) => h('span', { class: `auto-ic lk-${l.c}`, 'aria-hidden': 'true' }, l.ic);
+  // The picker: a search box, chips for each group, and a list with colored icons. items: { key, label, ic, c, g?, hint? }.
+  // Beside the button that opened it (a sheet at the bottom on a phone); Esc, a tap outside or a pick closes it.
+  function autoPicker(anchor, { title, items, groups = null, active = null, onPick }) {
+    document.querySelector('.ap-pop')?._close?.();
+    const st = { q: '', g: 'all' };
+    const search = h('input', { class: 'ap-search', type: 'search', placeholder: 'Search…', 'aria-label': 'Search' });
+    const chips = groups ? h('div', { class: 'ap-chips', role: 'tablist' }) : null;
+    const list = h('div', { class: 'ap-list', role: 'listbox', 'aria-label': title });
+    const pop = h('div', { class: 'ap-pop', role: 'dialog', 'aria-label': title }, h('div', { class: 'ap-title' }, '✨ ' + title), search, chips, list);
+    const outside = (e) => { if (!pop.contains(e.target) && !anchor.contains(e.target)) close(); };
+    const esc = (e) => { if (e.key === 'Escape') { e.stopPropagation(); close(); anchor.focus?.(); } };
+    const close = () => { pop.remove(); document.removeEventListener('pointerdown', outside, true); document.removeEventListener('keydown', esc, true); };
+    pop._close = close;
+    const draw = () => {
+      const q = st.q.trim().toLowerCase();
+      const shown = items.filter((x) => (st.g === 'all' || x.g === st.g) && (!q || (x.find || x.label).toLowerCase().includes(q) || (x.hint || '').toLowerCase().includes(q)));
+      chips?.replaceChildren(...groups.filter(([k]) => k === 'all' || items.some((x) => x.g === k)).map(([k, l]) =>
+        h('button', { type: 'button', class: 'ap-chip' + (st.g === k ? ' on' : ''), 'data-g': k, role: 'tab', 'aria-selected': String(st.g === k), onclick: () => { st.g = k; draw(); } }, l)));
+      list.replaceChildren(...(shown.length ? shown.map((x) => h('button', { type: 'button', class: `ap-item lk-${x.c}` + (x.key === active ? ' on' : ''), 'data-key': x.key, role: 'option', 'aria-selected': String(x.key === active), onclick: () => { close(); onPick(x.key); } },
+        h('span', { class: 'ap-ic', 'aria-hidden': 'true' }, x.ic), h('span', { class: 'ap-label' }, x.label, x.hint ? h('small', {}, x.hint) : null), x.key === active ? h('small', { class: 'ap-on' }, 'Active') : null))
+        : [h('p', { class: 'ap-none' }, 'Nothing matches.')]));
+    };
+    search.addEventListener('input', () => { st.q = search.value; draw(); });
+    draw();
+    document.body.append(pop);
+    const r = anchor.getBoundingClientRect(), w = pop.offsetWidth, ht = pop.offsetHeight;
+    if (innerWidth > 700) {
+      const left = r.right + 8 + w <= innerWidth ? r.right + 8 : r.left - w - 8 >= 8 ? r.left - w - 8 : Math.max(8, innerWidth - w - 8);
+      pop.style.left = left + 'px';
+      pop.style.top = Math.max(8, Math.min(r.top, innerHeight - ht - 8)) + 'px';
+    } else pop.classList.add('ap-sheet');
+    setTimeout(() => { document.addEventListener('pointerdown', outside, true); document.addEventListener('keydown', esc, true); });
+    search.focus();
+  }
+  // The picker's lists: what can set one off (grouped by tool, from the catalog), and what a step can do.
+  const autoWhenItems = (only = null) => (AUTO_CAT.events ? AUTO_CAT.events.map((e) => ({ key: e.type, label: e.label.replace(/ \(.*\)$/, ''), find: e.label, hint: AUTO_CAT.tools[e.tool] || '', g: e.tool, ...autoWhenLook(e.type) }))
+    : Object.entries(AUTO_WHEN).map(([type, label]) => ({ key: type, label, g: 'x', ...autoWhenLook(type) }))).filter((x) => !only || only.includes(x.key));
+  const autoWhenGroups = () => (AUTO_CAT.events ? [['all', 'All'], ...Object.entries(AUTO_CAT.tools)] : null);
+  const autoDoItems = (cur, depth = 0) => AUTO_ORDER.filter((k) => (k === 'wait' || (k === 'if' ? depth < 3 : AUTO_DO[k] && (autoDoOk(k) || k === cur)))).map((k) => ({ key: k, label: k === 'wait' ? 'Wait a while' : k === 'if' ? 'Only if… (check something first)' : AUTO_DO[k], ...autoLook(k) }));
   // The fields an automation can set (the server checks the same): plain values, never price lines or files.
   const AUTO_SET_T = ['text', 'number', 'money', 'date', 'select', 'multi', 'checkbox', 'person', 'email', 'phone', 'url'];
   const AUTO_WORDS = {
@@ -5779,7 +5840,7 @@
     const dateF = t.kind === 'record.date' && projById(t.projectId)?.types.find((y) => y.id === t.typeId)?.fields.find((f) => f.id === t.fieldId);
     const when = t.kind === 'schedule' ? `Every ${t.slots?.[0] ? t.slots[0].days.map((d) => DOWS[d]).join(', ') + ' at ' + hhmm(t.slots[0].time) : '…'}`
       : t.kind === 'record.date' ? `${t.days ? `${plural(Math.abs(t.days), 'day')} ${t.days < 0 ? 'before' : 'after'}` : 'On'} ${dateF ? dateF.name : 'a date'} in ${projById(t.projectId)?.name || 'a project'}`
-      : (AUTO_WHEN[t.kind] || t.kind) + [t.projectId && projById(t.projectId) ? ` in ${projById(t.projectId).name}` : '', t.to ? ` to ${t.to}` : '', t.over ? ` over $${t.over}` : '', t.direction ? (t.direction === 'in' ? ' (money in)' : ' (money out)') : '', t.campaignId && campById(t.campaignId) ? ` in ${campById(t.campaignId).name}` : '', t.stage ? ` to ${stageLabel(t.stage)}` : '', t.outcome ? ` as ${t.outcome}` : '', t.statuses?.length ? ` (${t.statuses.map((v) => HEALTH_L[v]).join(' or ')})` : ''].join('');
+      : (AUTO_WHEN[t.kind] || t.kind).replace(/ \(.*\)$/, '') + [t.projectId && projById(t.projectId) ? ` in ${projById(t.projectId).name}` : '', t.to ? ` to ${t.to}` : '', t.over ? ` over $${t.over}` : '', t.direction ? (t.direction === 'in' ? ' (money in)' : ' (money out)') : '', t.step ? ` (${t.task || (t.taskId && taskById(t.taskId)?.text) ? `“${t.task || taskById(t.taskId).text}” in ` : ''}${t.step})` : '', t.campaignId && campById(t.campaignId) ? ` in ${campById(t.campaignId).name}` : '', t.stage ? ` to ${stageLabel(t.stage)}` : '', t.outcome ? ` as ${t.outcome}` : '', t.statuses?.length ? ` (${t.statuses.map((v) => HEALTH_L[v]).join(' or ')})` : ''].join('');
     const said = (list) => list.map((a) => (a.kind === 'wait' ? `wait ${a.amount} ${a.unit}` : a.kind === 'if' ? `if ${a.when.map((c) => '{' + c.field + '}').join(' and ')}: ${said(a.then) || 'nothing'}${a.else?.length ? '; otherwise ' + said(a.else) : ''}` : (AUTO_DO[a.kind] || a.kind).toLowerCase())).join(', ');
     return `${when} → ${said(x.actions)}`;
   }
@@ -5910,6 +5971,7 @@
       const sw = h('input', { type: 'checkbox', checked: x.on, 'aria-label': x.on ? 'On' : 'Off' });
       sw.addEventListener('change', () => api('PATCH', '/automations/' + x.id, { on: sw.checked }).catch((e) => toast(e.message)));
       return h('div', { class: 'auto-row' + (x.on ? '' : ' off') + (autoFailing(x) ? ' failing' : '') },
+        autoIc(autoWhenLook(x.trigger.kind)),
         h('button', { class: 'auto-main', onclick: () => autoSheet(x) }, h('b', {}, x.name), h('small', {}, autoSummary(x)),
           h('small', { class: last && !last.ok ? 'err' : 'muted' }, last ? `${last.ok ? 'Ran' : 'Didn’t run'} ${ago(last.at)} · ${last.note}` : 'Hasn’t run yet', x.count ? ` · ${plural(x.count, 'run')} in all` : ''),
           x.waiting ? h('small', { class: 'auto-waiting' }, `⏳ ${plural(x.waiting, 'run')} waiting`) : null,
@@ -5930,7 +5992,7 @@
       h('div', { class: 'any-h camp-goals-h' }, all.length ? 'More ideas' : 'Start from one of these'),
       h('div', { class: 'auto-recipe-for seg-chips', role: 'tablist' }, [[null, S.workspace?.setup?.kind && AUTO_FOR[S.workspace.setup.kind] ? `For you (${AUTO_FOR[S.workspace.setup.kind]})` : 'Suggested'], ...Object.entries(AUTO_FOR), ['every', 'All']].map(([k, label]) =>
         h('button', { class: 'chip' + (autoRecipeView.on === k ? ' on' : ''), 'data-for': k || 'you', role: 'tab', 'aria-selected': String(autoRecipeView.on === k), onclick: () => { autoRecipeView.on = k; renderAutos(); } }, label))),
-      h('div', { class: 'auto-recipes' }, autoRecipesFor(autoRecipeView.on).map((r) => h('button', { class: 'auto-recipe', onclick: () => autoSheet(null, r) }, h('b', {}, r.name), h('small', {}, r.why), h('small', { class: 'auto-recipe-steps' }, autoRecipeSteps(r))))),
+      h('div', { class: 'auto-recipes' }, autoRecipesFor(autoRecipeView.on).map((r) => h('button', { class: 'auto-recipe', onclick: () => autoSheet(null, r) }, h('span', { class: 'auto-recipe-h' }, autoIc(autoWhenLook(r.trigger.kind)), h('b', {}, r.name)), h('small', {}, r.why), h('small', { class: 'auto-recipe-steps' }, autoRecipeSteps(r))))),
     ];
   }
   // The runs of one that are waiting, each to stop.
@@ -5965,8 +6027,21 @@
     if (a.kind === 'wait') return `Wait ${a.amount} ${a.unit}`;
     if (a.kind === 'if') return 'Only if ' + (a.when || []).map((c) => `{${c.field}} ${{ is: 'is', not: 'isn’t', contains: 'has', over: 'is over', under: 'is under', empty: 'is empty', set: 'is filled in' }[c.op] || c.op}${['set', 'empty'].includes(c.op) ? '' : ' ' + (c.value || '…')}`).join(' and ');
     if (a.kind === 'task' && a.presetId) { const y = presetById(a.presetId); return y?.kind === 'bundle' ? `Make the bundle: ${y.name} (${plural(y.steps.length, 'task')})` : `Make a task: ${y?.name || a.presetName || 'a saved task'}`; }
-    const said = a.text || a.subject || a.title || a.url || '';
+    const said = a.text || a.subject || a.title || a.ask || a.url || '';
     return (AUTO_DO[a.kind] || a.kind) + (said ? ': ' + said : '');
+  }
+  // What sets it off, as a sentence for its node; and a step's few chips (who, when, where).
+  // (autoSummary says the event plainly: "A contact is added", not "… (by hand, a lead form, a card, a text…)".)
+  const autoWhenText = (t) => autoSummary({ trigger: t, actions: [] }).replace(/ → $/, '');
+  function autoChips(a) {
+    const who = (v) => (v === 'who' ? 'Whoever set it off' : v === 'doers' ? 'Whoever it’s for' : v === 'owners' ? 'Owners' : v === 'admins' ? 'Owners and admins'
+      : String(v).startsWith('role:') ? 'Role: ' + ((S.workspace.roles || []).find((r) => 'role:' + r.id === v)?.name || '?') : (S.workspace.members || []).find((m) => m.id === v)?.name || '');
+    const out = [];
+    if (a.kind === 'task') { if (a.assignee) out.push(['👤', who(a.assignee)]); if (a.dueIn != null && a.dueIn !== '') out.push(['📅', Number(a.dueIn) ? `Due in ${plural(Number(a.dueIn), 'day')}` : 'Due the same day']); }
+    if (a.kind === 'notify') (a.to || []).slice(0, 3).forEach((v) => out.push(['🔔', who(v)]));
+    if (a.kind === 'post') out.push(['#', !a.channelId || a.channelId === 'same' ? 'The campaign’s feed' : a.channelId === 'general' ? 'general' : S.workspace.channels.find((c) => c.id === a.channelId)?.name || 'a channel']);
+    if (a.kind === 'email' || a.kind === 'text') out.push(['✋', 'Waits for an OK']);
+    return out.filter(([, l]) => l).map(([i, l]) => h('span', { class: 'an-chip' }, `${i} ${l}`));
   }
   // Make or change one, in the builder: the whole automation as a flow, filling the page beside the sidebar. What sets it off at the top,
   // then each step under it; "only if" splits into Then and Otherwise side by side. A + between steps adds one there,
@@ -5985,7 +6060,7 @@
     const stages = [...new Set((S.contacts || []).map((c) => c.stage).filter(Boolean))];
     const outcomes = [...new Set(S.campaigns.flatMap((c) => c.outcomes || []))];
     const people = S.workspace.members;
-    const B = { folded: new WeakSet(), lit: null, would: null, test: null, run: '', focus: null, reg: null, drag: null };
+    const B = { sel: 'trigger', shown: 'trigger', tab: 'set', panel: null, lit: null, would: null, test: null, run: '', focus: null, reg: null, drag: null };
     // Typing doesn't redraw, so the red marks and the count follow it here.
     const marks = () => {
       let n = 0;
@@ -5993,9 +6068,12 @@
         const p = el._step ? autoProblem(el._step) : '';
         if (p) n++;
         el.classList.toggle('bad', !!p);
-        const b = el.querySelector(':scope > .auto-act-h > .auto-bad');
+        const b = el.querySelector(':scope > .an-h .auto-bad');
         if (b) { b.hidden = !p; b.title = p; b.setAttribute('aria-label', p); }
+        if (el._step) { el.querySelector(':scope > .an-b .an-say').textContent = autoLine(el._step); el.querySelector(':scope > .an-b .an-chips')?.replaceChildren(...autoChips(el._step)); }
       }
+      const ts = box.querySelector('.auto-trigger .an-say');
+      if (ts) ts.textContent = autoWhenText(dr.trigger);
       const c = box.querySelector('.auto-probs');
       if (c) { c.hidden = !n; c.textContent = `${n} ${n === 1 ? 'step needs' : 'steps need'} something`; }
     };
@@ -6016,18 +6094,17 @@
     const draw = () => {
       const t = dr.trigger;
       B.reg = { lists: new Map(), nodes: new Map() };
-      const name = h('input', { value: dr.name, placeholder: 'e.g. Signed? Schedule the work' });
+      if (B.sel !== 'trigger' && !allSteps(dr.actions).includes(B.sel)) { B.sel = 'trigger'; B.tab = 'set'; }
+      B.panel = null;
+      const name = h('input', { class: 'auto-name', value: dr.name, placeholder: 'Name it, e.g. Signed? Schedule the work', 'aria-label': 'Name' });
       name.addEventListener('input', () => (dr.name = name.value));
-      const groups = AUTO_CAT.events ? Object.entries(AUTO_CAT.tools).map(([tool, label]) => [label, AUTO_CAT.events.filter((e) => e.tool === tool)]).filter(([, l]) => l.length) : [['', Object.entries(AUTO_WHEN).map(([type, label]) => ({ type, label }))]];
-      const kind = h('select', { class: 'auto-kind', 'aria-label': 'What sets it off' }, groups.map(([label, list]) => (label ? h('optgroup', { label }, list.map((e) => opt(e.type, e.label, t.kind))) : list.map((e) => opt(e.type, e.label, t.kind)))));
-      kind.addEventListener('change', () => { dr.trigger = { kind: kind.value, ...(kind.value === 'schedule' ? { slots: [{ days: [1], time: '09:00' }] } : {}) }; draw(); });
       const only = [];
       const fl = autoFilters(t.kind);
       if (fl.includes('project')) {
         const projs = S.projects || [];
         const sel = h('select', { class: 'auto-proj' }, opt('', 'Any project', t.projectId || ''), projs.map((p) => opt(p.id, p.name, t.projectId || '')));
         sel.addEventListener('change', () => { t.projectId = sel.value || null; t.typeId = null; t.to = null; draw(); });
-        only.push(h('label', {}, 'In', sel));
+        only.push(h('label', {}, 'In project', sel));
         const p = projById(t.projectId);
         if (p) {
           const ls = h('select', { class: 'auto-list' }, opt('', 'Any list', t.typeId || ''), p.types.map((y) => opt(y.id, y.name, t.typeId || '')));
@@ -6072,7 +6149,7 @@
       if (fl.includes('campaign')) {
         const sel = h('select', {}, opt('', 'Any campaign', t.campaignId || ''), camps.map((c) => opt(c.id, c.name, t.campaignId || '')));
         sel.addEventListener('change', () => (t.campaignId = sel.value || null));
-        only.push(h('label', {}, 'In', sel));
+        only.push(h('label', {}, 'In campaign', sel));
       }
       // One step, by name (a saved campaign's next run has steps with the same names), 2026-11-20.
       if (fl.includes('step')) {
@@ -6112,13 +6189,29 @@
         time.addEventListener('change', () => (slot.time = time.value || '09:00'));
         only.push(h('div', { class: 'picks' }, DOWS.map((d, i) => { const cb = h('input', { type: 'checkbox', checked: slot.days.includes(i) }); cb.addEventListener('change', () => (slot.days = cb.checked ? [...slot.days, i].sort() : slot.days.filter((y) => y !== i))); return h('label', { class: 'pick' }, cb, d); })), h('label', {}, 'At', time));
       }
+      const tSet = ['schedule', 'record.date', 'contact.stage'].includes(t.kind) ? only : [];
+      const tAdv = tSet === only ? [] : only;
       const words = (AUTO_WORDS[t.kind] || []).map((w) => `{${w}}`).join(' ');
       // A step: an action, a wait, or "only if" with its own steps (and "otherwise"), in the list it's in.
       const answers = allSteps(dr.actions).some((y) => y.kind === 'agent' && y.wait);
       const fields = ['amount', ...(AUTO_WORDS[t.kind] || []), ...(answers ? ['answer'] : [])].filter((v, n, all) => all.indexOf(v) === n);
       const countSteps = (list) => list.reduce((n, s) => n + 1 + (s.kind === 'if' ? countSteps(s.then || []) + countSteps(s.else || []) : 0), 0);
       const roomForMore = () => countSteps(dr.actions) < 20;
-      const newStep = () => ({ kind: 'notify', text: '', to: [] });
+      const freshStep = (v, a = {}) => (v === 'if' ? { kind: 'if', when: [{ field: fields.includes('stage') ? 'stage' : fields[0], op: 'is', value: '' }], then: [{ kind: 'notify', text: '', to: [] }], else: [] }
+            : v === 'wait' ? { kind: 'wait', amount: 1, unit: 'days' }
+            : v === 'record' || v === 'create' ? { kind: v, projectId: t.projectId || S.projects?.[0]?.id || '', typeId: t.projectId ? t.typeId || '' : '', set: [] }
+            : v === 'visit' ? { kind: 'visit', visit: 'Visit', inDays: 1, start: '09:00', length: 60, crew: 'who' }
+            : v === 'invoice' ? { kind: 'invoice', send: false }
+            : v === 'email' ? { kind: 'email', subject: '', text: a.text || '' }
+            : v === 'money' ? { kind: 'money', direction: 'in', amount: '', category: '', note: '' }
+            : v === 'doc' ? { kind: 'doc', templateId: DT.list?.[0]?.id || '', title: '' }
+            : v === 'vault' ? { kind: 'vault', to: 'maker', title: '', text: '' }
+            : v === 'webhook' ? { kind: 'webhook', url: '', secretId: null }
+            : v === 'teams' ? { kind: 'teams', op: 'post', text: a.text || '' }
+            : v === 'agent' ? { kind: 'agent', agent: 'team', ask: '', wait: false }
+            : v === 'stock' ? { kind: 'stock', act: 'use', itemId: '', qty: 1, from: '', to: '', note: '' }
+            : { kind: v, text: a.text || '', to: [], channelId: 'same' });
+      const addAt = (list, i, depth) => (e) => autoPicker(e.currentTarget, { title: 'Add a step or tool', items: autoDoItems(null, depth), groups: AUTO_GROUPS, onPick: (v) => { const y = freshStep(v); list.splice(i, 0, y); B.sel = y; B.tab = 'set'; draw(); } });
       // Moving a step (dragged by its ⋮⋮) to a place in a list: never into itself, and "only if" 3 deep at most.
       const ifDepth = (y) => (y.kind === 'if' ? 1 + Math.max(0, ...[...(y.then || []), ...(y.else || [])].map(ifDepth)) : 0);
       const holds = (y, list) => y.kind === 'if' && (y.then === list || y.else === list || [...(y.then || []), ...(y.else || [])].some((z) => holds(z, list)));
@@ -6140,7 +6233,7 @@
         el.addEventListener('drop', (e) => { e.preventDefault(); el.classList.remove('over'); moveStep(B.drag || e.dataTransfer.getData('text/plain'), list, i, depth); });
         return el;
       };
-      const ins = (list, i, depth) => dropAt(h('div', { class: 'auto-ins' }, roomForMore() ? h('button', { class: 'auto-ins-btn', title: 'Add a step here', 'aria-label': 'Add a step here', onclick: () => { list.splice(i, 0, newStep()); draw(); } }, '+') : null), list, i, depth);
+      const ins = (list, i, depth) => dropAt(h('div', { class: 'auto-ins' }, roomForMore() ? h('button', { class: 'auto-ins-btn', title: 'Add a step here', 'aria-label': 'Add a step here', onclick: addAt(list, i, depth) }, '+') : null), list, i, depth);
       const stepList = (list, depth, label, pre = '') => {
         B.reg.lists.set(pre, list);
         const kids = [];
@@ -6148,31 +6241,14 @@
         return h('div', { class: 'auto-steps' + (depth ? ' nested' : ''), 'data-list': pre },
           label ? h('div', { class: 'auto-steps-h' }, label) : null,
           ...kids,
-          roomForMore() ? dropAt(h('button', { class: 'btn small auto-add-step', onclick: () => { list.push(newStep()); draw(); } }, depth ? '+ Step' : '+ Another step'), list, list.length, depth) : null,
+          roomForMore() ? dropAt(h('button', { class: 'btn small auto-add-step', onclick: (e) => addAt(list, list.length, depth)(e) }, depth ? '+ Step' : '+ Another step'), list, list.length, depth) : null,
           depth ? null : h('div', { class: 'auto-end' }, 'Done'));
       };
       const action = (a, i, list = dr.actions, depth = 0, at = String(i)) => {
         B.reg.nodes.set(at, { list, i });
-        const k = h('select', { class: 'auto-step-kind', 'aria-label': 'What this step does' }, Object.entries(AUTO_DO).filter(([v]) => autoDoOk(v) || v === a.kind).map(([v, l]) => opt(v, l, a.kind)), opt('wait', 'Wait…', a.kind), depth < 3 ? opt('if', 'Only if…', a.kind) : null);
-        k.addEventListener('change', () => {
-          list[i] = k.value === 'if' ? { kind: 'if', when: [{ field: fields.includes('stage') ? 'stage' : fields[0], op: 'is', value: '' }], then: [{ kind: 'notify', text: '', to: [] }], else: [] }
-            : k.value === 'wait' ? { kind: 'wait', amount: 1, unit: 'days' }
-            : k.value === 'record' || k.value === 'create' ? { kind: k.value, projectId: t.projectId || S.projects?.[0]?.id || '', typeId: t.projectId ? t.typeId || '' : '', set: [] }
-            : k.value === 'visit' ? { kind: 'visit', visit: 'Visit', inDays: 1, start: '09:00', length: 60, crew: 'who' }
-            : k.value === 'invoice' ? { kind: 'invoice', send: false }
-            : k.value === 'email' ? { kind: 'email', subject: '', text: a.text || '' }
-            : k.value === 'money' ? { kind: 'money', direction: 'in', amount: '', category: '', note: '' }
-            : k.value === 'doc' ? { kind: 'doc', templateId: DT.list?.[0]?.id || '', title: '' }
-            : k.value === 'vault' ? { kind: 'vault', to: 'maker', title: '', text: '' }
-            : k.value === 'webhook' ? { kind: 'webhook', url: '', secretId: null }
-            : k.value === 'teams' ? { kind: 'teams', op: 'post', text: a.text || '' }
-            : k.value === 'agent' ? { kind: 'agent', agent: 'team', ask: '', wait: false }
-            : k.value === 'stock' ? { kind: 'stock', act: 'use', itemId: '', qty: 1, from: '', to: '', note: '' }
-            : { kind: k.value, text: a.text || '', to: [], channelId: 'same' };
-          draw();
-        });
+        const setKind = (v) => { list[i] = freshStep(v, a); B.sel = list[i]; B.tab = 'set'; draw(); };
         const text = (ph) => { const el = h('input', { value: a.text || '', placeholder: ph }); el.addEventListener('input', () => (a.text = el.value)); return el; };
-        const f = [];
+        const f = [], adv = [];
         if (a.kind === 'task') {
           const who = h('select', {}, opt('', 'Nobody', a.assignee || ''), opt('who', 'Whoever set it off', a.assignee || ''), people.map((m) => opt(m.id, m.name, a.assignee || '')), (S.workspace.roles || []).map((r) => opt('role:' + r.id, 'Role: ' + r.name, a.assignee || '')));
           who.addEventListener('change', () => (a.assignee = who.value));
@@ -6190,15 +6266,18 @@
           from.addEventListener('change', () => { if (from.value) { a.presetId = from.value; a.presetName = presetById(from.value)?.name; } else { delete a.presetId; delete a.presetName; } draw(); });
           const y = a.presetId && presetById(a.presetId);
           if (a.presetId) who.firstChild.textContent = 'As saved';
-          f.push(h('label', {}, 'Make it from', from));
+          adv.push(h('label', {}, 'Make it from', from));
           if (a.presetId) f.push(y ? h('p', { class: 'day-hint auto-preset-says' }, y.kind === 'bundle' ? y.steps.map((st) => presetById(st.presetId)?.text).filter(Boolean).join(' → ') : y.text) : h('p', { class: 'err' }, `The saved task “${a.presetName || '?'}” was deleted. Pick another, or write it here.`));
-          else f.push(h('label', {}, 'Task', text('Schedule the work for {document}')), saved.length ? null : h('small', { class: 'hint' }, 'Tip: save tasks you make again and again in Tasks → 📋 Saved tasks, then pick them here.'));
-          f.push(h('div', { class: 'row2' }, h('label', {}, a.presetId && y?.kind === 'bundle' ? 'All of them for' : 'For', who), h('label', {}, a.presetId && y?.kind === 'bundle' ? 'First one due in (days)' : 'Due in (days)', due)), h('label', {}, 'Under', camp));
+          else f.push(h('label', {}, 'Task', text('Schedule the work for {document}')));
+          if (!saved.length) adv.push(h('small', { class: 'hint' }, 'Tip: save tasks you make again and again in Tasks → 📋 Saved tasks, then pick them here.'));
+          f.push(h('div', { class: 'row2' }, h('label', {}, a.presetId && y?.kind === 'bundle' ? 'All of them for' : 'For', who), h('label', {}, a.presetId && y?.kind === 'bundle' ? 'First one due in (days)' : 'Due in (days)', due)));
+          adv.push(h('label', {}, 'Under', camp));
         }
         if (a.kind === 'post') {
           const ch = h('select', {}, opt('same', 'The campaign’s own feed', a.channelId || 'same'), opt('general', '#general', a.channelId || 'same'), S.workspace.channels.map((c) => opt(c.id, '#' + c.name, a.channelId || 'same')));
           ch.addEventListener('change', () => (a.channelId = ch.value));
-          f.push(autoTemplatePick(['post', 'reply'], (x) => { a.text = x.body; draw(); }), h('label', {}, 'Message', text('{from} sent {file}')), h('label', {}, 'In', ch));
+          adv.push(autoTemplatePick(['post', 'reply'], (x) => { a.text = x.body; draw(); }));
+          f.push(h('label', {}, 'Message', text('{from} sent {file}')), h('label', {}, 'In', ch));
         }
         if (a.kind === 'campaign') {
           const tpls = S.templates || [];
@@ -6260,7 +6339,8 @@
           const crewV = a.crew === 'who' ? 'who' : Array.isArray(a.crew) && a.crew[0] ? a.crew[0] : '';
           const crew = h('select', { class: 'auto-visit-crew', 'aria-label': 'Who goes' }, opt('who', 'Whoever set it off', crewV), opt('', 'Me (who made this)', crewV), people.map((m) => opt(m.id, m.name, crewV)));
           crew.addEventListener('change', () => (a.crew = crew.value === 'who' ? 'who' : crew.value ? [crew.value] : []));
-          f.push(h('div', { class: 'row2' }, h('label', {}, 'Visit', kd), h('label', {}, 'In (days)', n)), h('div', { class: 'row2' }, h('label', {}, 'At', at), h('label', {}, 'For', len)), h('label', {}, 'Who goes', crew),
+          f.push(h('div', { class: 'row2' }, h('label', {}, 'Visit', kd), h('label', {}, 'In (days)', n)), h('label', {}, 'At', at));
+          adv.push(h('div', { class: 'row2' }, h('label', {}, 'For', len), h('label', {}, 'Who goes', crew)),
             h('small', { class: 'hint' }, 'On the job that set it off, on their calendar and the team schedule. 0 days is today; no time makes it an all-day visit.'));
         }
         if (a.kind === 'invoice') {
@@ -6272,13 +6352,17 @@
         // Attach proof of insurance: {proof} becomes a link to what's current in the workspace profile, one per customer.
         const proofBtn = (key, sep) => (/\{proof\}/.test(a[key] || '') ? h('small', { class: 'hint auto-proof-on' }, '🪪 {proof} is a link to your current licenses & insurance (workspace profile).')
           : h('button', { type: 'button', class: 'btn small auto-proof', onclick: () => { a[key] = String(a[key] || '').trimEnd() + sep + '{proof}'; draw(); } }, '🪪 Attach proof of insurance'));
-        if (a.kind === 'text') f.push(autoTemplatePick(['text', 'reply'], (x) => { a.text = x.body.slice(0, 1600); draw(); }), h('label', {}, 'Text', text('Hi {customer}, we’re on our way for {record}')), proofBtn('text', ' Our licenses & insurance: '), okHint, h('small', { class: 'hint' }, 'From your team’s Twilio number (Settings → Texting).'));
+        if (a.kind === 'text') {
+          f.push(h('label', {}, 'Text', text('Hi {customer}, we’re on our way for {record}')), okHint);
+          adv.push(autoTemplatePick(['text', 'reply'], (x) => { a.text = x.body.slice(0, 1600); draw(); }), proofBtn('text', ' Our licenses & insurance: '), h('small', { class: 'hint' }, 'From your team’s Twilio number (Settings → Texting).'));
+        }
         if (a.kind === 'email') {
           const sub = h('input', { value: a.subject || '', placeholder: '{record} is done', class: 'auto-email-sub' });
           sub.addEventListener('input', () => (a.subject = sub.value));
           const body = h('textarea', { rows: 4, placeholder: 'Hi,\n\nThanks for choosing us for {record}…', class: 'auto-email-body' }, a.text || '');
           body.addEventListener('input', () => (a.text = body.value));
-          f.push(autoTemplatePick(['email', 'reply'], (x) => { a.subject = x.subject || a.subject || ''; a.text = x.body; draw(); }), h('label', {}, 'Subject', sub), h('label', {}, 'Message', body), proofBtn('text', '\n\nOur licenses & insurance: '), okHint);
+          f.push(h('label', {}, 'Subject', sub), h('label', {}, 'Message', body), okHint);
+          adv.push(autoTemplatePick(['email', 'reply'], (x) => { a.subject = x.subject || a.subject || ''; a.text = x.body; draw(); }), proofBtn('text', '\n\nOur licenses & insurance: '));
         }
         if (a.kind === 'money') {
           const dir = h('select', { class: 'auto-money-dir' }, opt('in', 'Money in', a.direction || 'in'), opt('out', 'Money out', a.direction || 'in'));
@@ -6289,7 +6373,8 @@
           cat.addEventListener('input', () => (a.category = cat.value));
           const note = h('input', { value: a.note || '', placeholder: '{record}', class: 'auto-money-note' });
           note.addEventListener('input', () => (a.note = note.value));
-          f.push(h('div', { class: 'row2' }, h('label', {}, 'Which', dir), h('label', {}, 'Amount ($)', amt)), h('div', { class: 'row2' }, h('label', {}, 'Category', cat), h('label', {}, 'Note', note)),
+          adv.push(h('div', { class: 'row2' }, h('label', {}, 'Category', cat), h('label', {}, 'Note', note)));
+          f.push(h('div', { class: 'row2' }, h('label', {}, 'Which', dir), h('label', {}, 'Amount ($)', amt)),
             h('small', { class: 'hint' }, 'Into the business’s Finance, dated the day it runs. Leave the amount empty to use the {amount} of what set it off.'));
         }
         if (a.kind === 'doc') {
@@ -6314,7 +6399,7 @@
           const savedAsks = (SV.list || []).filter((y) => y.kind === 'ask');
           const fromAsk = savedAsks.length ? h('select', { class: 'auto-ask-from', 'aria-label': 'Start from a saved ask' }, h('option', { value: '' }, 'Start from a saved ask…'), savedAsks.map((y) => h('option', { value: y.id }, y.name))) : null;
           fromAsk?.addEventListener('change', () => { const y = savedAsks.find((z) => z.id === fromAsk.value); if (y) { a.ask = y.ask; a.agent = y.agent || 'team'; draw(); } });
-          if (fromAsk) f.push(h('label', { class: 'auto-tpl-row' }, 'Start from', fromAsk));
+          if (fromAsk) adv.push(h('label', { class: 'auto-tpl-row' }, 'Start from', fromAsk));
           const cb = h('input', { type: 'checkbox', checked: !!a.wait, class: 'auto-agent-wait' });
           cb.addEventListener('change', () => { a.wait = cb.checked; draw(); });
           f.push(h('label', {}, 'Ask', who), h('label', {}, 'What to ask', ask), h('label', { class: 'pick' }, cb, 'Wait for the answer, then go on with {answer}'),
@@ -6376,7 +6461,8 @@
           });
           adding.append(h('div', { class: 'row2' }, kn, kv), save, h('small', { class: 'hint' }, 'Sealed on Kloomie’s server and never shown again (only its last four). Sent as “Authorization: Bearer …”.'));
           ks.addEventListener('change', () => { if (ks.value === '+') { adding.hidden = false; kn.focus(); } else { adding.hidden = true; a.secretId = ks.value || null; } });
-          f.push(h('label', {}, 'Address', url), h('label', {}, 'Key', ks), adding,
+          f.push(h('label', {}, 'Address', url));
+          adv.push(h('label', {}, 'Key', ks), adding,
             h('small', { class: 'hint' }, 'Sends what happened ({record}, {amount}, {customer}… whatever this one fills in) as JSON, every time it runs. Only public https addresses; it gives up after 10 seconds.'));
         }
         if (a.kind === 'wait') {
@@ -6402,7 +6488,6 @@
         }
         const branches = a.kind === 'if' ? h('div', { class: 'auto-branches' }, stepList(a.then ||= [], depth + 1, 'Then', at + '.then.'), stepList(a.else ||= [], depth + 1, 'Otherwise', at + '.else.')) : null;
         const prob = autoProblem(a);
-        const folded = B.folded.has(a);
         const grip = h('span', { class: 'auto-grip', draggable: 'true', title: 'Drag to move' }, '⋮⋮');
         grip.addEventListener('dragstart', (e) => { B.drag = at; e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', at); });
         grip.addEventListener('dragend', () => (B.drag = null));
@@ -6412,20 +6497,23 @@
           i < list.length - 1 ? { label: 'Move down', run: () => { list.splice(i + 1, 0, list.splice(i, 1)[0]); draw(); } } : null,
         ].filter(Boolean);
         const would = B.would?.get(at);
-        const node = h('div', { class: 'auto-act' + (a.kind === 'if' ? ' auto-if' : a.kind === 'wait' ? ' auto-wait' : '') + (prob ? ' bad' : '') + (B.lit ? (B.lit.has(at) ? ' lit' : ' dim') : '') + (folded ? ' folded' : ''), 'data-at': at },
-          h('div', { class: 'auto-act-h' }, grip, h('b', {}, `${i + 1}.`), k, h('span', { class: 'auto-bad', title: prob, 'aria-label': prob, hidden: !prob }, '!'),
-            h('button', { class: 'icon-btn auto-fold', 'aria-label': folded ? 'Unfold this step' : 'Fold this step', title: folded ? 'Unfold' : 'Fold', onclick: () => { folded ? B.folded.delete(a) : B.folded.add(a); draw(); } }, folded ? '▸' : '▾'),
+        const look = autoLook(a.kind), isSel = B.sel === a;
+        const role = a.kind === 'if' ? 'ONLY IF' : a.kind === 'wait' ? 'WAIT' : 'ACTION';
+        const step = depth ? role : `${i + 2}. ${role}`;
+        const node = h('div', { class: 'auto-act an ' + (a.kind === 'if' ? 'an-if auto-if' : a.kind === 'wait' ? 'an-wait auto-wait' : 'an-do') + (prob ? ' bad' : '') + (B.lit ? (B.lit.has(at) ? ' lit' : ' dim') : '') + (isSel ? ' sel' : ''), 'data-at': at },
+          h('div', { class: 'an-h' }, grip, h('i', { class: 'an-dot' }), h('span', { class: 'an-n' }, step), h('span', { class: 'auto-bad', title: prob, 'aria-label': prob, hidden: !prob }, '!'),
             h('button', { class: 'icon-btn auto-more', 'aria-label': 'Step options', html: I.more, onclick: (e) => openMenu(e.currentTarget, menu) }),
-            list.length > 1 || depth ? h('button', { class: 'icon-btn', 'aria-label': 'Remove', html: I.close, onclick: () => { list.splice(i, 1); draw(); } }) : null),
+            list.length > 1 || depth ? h('button', { class: 'icon-btn auto-x', 'aria-label': 'Remove this step', html: I.close, onclick: () => { list.splice(i, 1); draw(); } }) : null),
+          h('button', { type: 'button', class: 'an-b', 'aria-pressed': String(isSel), title: 'Change this step', onclick: () => { if (B.sel !== a) { B.sel = a; B.tab = 'set'; draw(); } } },
+            h('span', { class: `an-ic lk-${look.c}`, 'aria-hidden': 'true' }, look.ic), h('span', { class: 'an-txt' }, h('span', { class: 'an-say' }, autoLine(a)), h('span', { class: 'an-chips' }, autoChips(a)))),
           would ? h('div', { class: 'auto-would' + (would.yes === false ? ' no' : '') }, would.said) : null,
-          folded ? h('small', { class: 'auto-fold-line' }, autoLine(a)) : null,
-          ...(folded ? [] : f), branches);
+          branches);
+        if (isSel) B.panel = { ic: look.ic, c: look.c, step, what: a.kind === 'wait' ? 'Wait a while' : a.kind === 'if' ? 'Only if…' : AUTO_DO[a.kind] || a.kind, label: 'Change step', change: (btn) => autoPicker(btn, { title: 'Change this step', items: autoDoItems(a.kind, depth), groups: AUTO_GROUPS, active: a.kind, onPick: setKind }), f, adv };
         node._step = a;
         return node;
       };
       const every = allSteps(dr.actions);
       const problems = every.filter((y) => autoProblem(y)).length;
-      const anyOpen = every.some((y) => !B.folded.has(y));
       const pastRuns = (x?.runs || []).filter((r) => r.path?.length);
       const runSel = h('select', { class: 'auto-runs', 'aria-label': 'Show a past run' }, opt('', 'Show a past run…', B.run), pastRuns.map((r, n) => opt(String(n), `${r.ok ? '✓' : '✕'} ${ago(r.at)} · ${shortText(r.note, 60)}`, B.run)));
       runSel.addEventListener('change', () => {
@@ -6443,18 +6531,41 @@
         el.dispatchEvent(new Event('input', { bubbles: true }));
         el.focus();
       };
+      const tl = autoWhenLook(t.kind), tSel = B.sel === 'trigger';
+      const trig = h('div', { class: 'auto-step auto-trigger an an-when' + (B.lit ? ' lit' : '') + (tSel ? ' sel' : '') },
+        h('div', { class: 'an-h' }, h('i', { class: 'an-dot' }), h('span', { class: 'an-n' }, '1. WHEN')),
+        h('button', { type: 'button', class: 'an-b', 'aria-pressed': String(tSel), title: 'Change what sets it off', onclick: () => { if (!tSel) { B.sel = 'trigger'; B.tab = 'set'; draw(); } } },
+          h('span', { class: `an-ic lk-${tl.c}`, 'aria-hidden': 'true' }, tl.ic), h('span', { class: 'an-txt' }, h('span', { class: 'an-say' }, autoWhenText(t)))));
+      if (tSel) B.panel = { ic: tl.ic, c: tl.c, step: '1. When', what: autoWhenLabel(t.kind), label: 'Change event',
+        change: (btn) => autoPicker(btn, { title: 'Change event', items: autoWhenItems(), groups: autoWhenGroups(), active: t.kind, onPick: (v) => { dr.trigger = { kind: v, ...(v === 'schedule' ? { slots: [{ days: [1], time: '09:00' }] } : {}) }; draw(); } }),
+        f: tSet.length ? tSet : [h('p', { class: 'day-hint' }, tAdv.length ? 'That’s all it needs. To narrow it down (one campaign, a stage, an amount…), see Advanced settings.' : 'That’s all it needs.')], adv: tAdv };
+      const flow = stepList(dr.actions, 0);
+      const pn = B.panel;
+      // Advanced shows only when it has something to change (not just a tip).
+      const advN = pn.adv.filter((el) => el?.nodeType === 1 && (el.matches('input, select, textarea, button') || el.querySelector('input, select, textarea, button'))).length;
+      if (!advN) B.tab = 'set';
+      const chg = h('button', { type: 'button', class: 'btn small ab-change' }, pn.label);
+      chg.addEventListener('click', () => pn.change(chg));
+      const wordList = [...(AUTO_WORDS[t.kind] || []), ...(answers ? ['answer'] : [])];
+      const panel = h('aside', { class: 'ab-panel', 'aria-label': 'Settings for ' + pn.what },
+        h('div', { class: 'ab-ph' }, h('span', { class: `auto-ic lk-${pn.c}`, 'aria-hidden': 'true' }, pn.ic), h('span', { class: 'ab-pt' }, h('small', {}, pn.step), h('b', {}, pn.what)), chg),
+        advN ? h('div', { class: 'ab-tabs seg', role: 'tablist' }, [['set', 'Settings'], ['adv', 'Advanced settings']].map(([k, l]) =>
+          h('button', { type: 'button', 'data-tab': k, role: 'tab', class: B.tab === k ? 'on' : null, 'aria-selected': String(B.tab === k), onclick: () => { if (B.tab !== k) { B.tab = k; draw(); } } }, l))) : null,
+        h('div', { class: 'ab-body' }, ...(B.tab === 'adv' ? pn.adv : pn.f).filter(Boolean)),
+        wordList.length ? h('div', { class: 'auto-words' }, h('span', {}, 'Fill in by themselves:'), wordList.map((w) => h('button', { class: 'auto-word', title: `Put {${w}} where the cursor is`, onmousedown: (e) => e.preventDefault(), onclick: () => putWord(w) }, `{${w}}`))) : null);
       box.replaceChildren(...[
-        h('label', {}, 'Name', name),
-        h('div', { class: 'auto-tools' },
-          h('button', { class: 'btn small auto-test-btn', onclick: testIt }, '▶ Test it'),
-          every.length ? h('button', { class: 'btn small auto-foldall', onclick: () => { for (const y of every) anyOpen ? B.folded.add(y) : B.folded.delete(y); draw(); } }, anyOpen ? 'Fold all' : 'Unfold all') : null,
+        h('div', { class: 'ab-top' }, name,
+          h('button', { class: 'btn small auto-test-btn', onclick: testIt }, '▶ Test your automation'),
           pastRuns.length ? runSel : null,
           h('span', { class: 'auto-probs', hidden: !problems }, `${problems} ${problems === 1 ? 'step needs' : 'steps need'} something`)),
         B.test ? h('div', { class: 'auto-test' + (B.test.err ? ' err' : '') }, h('span', {}, B.test.err || B.test.about), h('button', { class: 'linkish auto-test-clear', onclick: clearLit }, 'Clear')) : null,
-        h('div', { class: 'auto-canvas' },
-          h('div', { class: 'auto-step auto-trigger' + (B.lit ? ' lit' : '') }, h('div', { class: 'auto-step-h' }, 'When'), h('label', {}, '', kind), ...only),
-          h('div', { class: 'auto-step auto-flow' }, h('div', { class: 'auto-step-h' }, 'Then'), stepList(dr.actions, 0))),
-        words || answers ? h('div', { class: 'auto-words' }, h('span', {}, 'Words that fill themselves in:'), [...(AUTO_WORDS[t.kind] || []), ...(answers ? ['answer'] : [])].map((w) => h('button', { class: 'auto-word', title: `Put {${w}} where the cursor is`, onmousedown: (e) => e.preventDefault(), onclick: () => putWord(w) }, `{${w}}`))) : null].filter(Boolean));
+        h('div', { class: 'ab-main' },
+          h('div', { class: 'auto-canvas' },
+            h('div', { class: 'auto-when-h' }, 'WHEN'), trig,
+            h('div', { class: 'auto-step auto-flow' }, h('div', { class: 'auto-step-h' }, 'THEN'), flow),
+            wordList.length ? h('div', { class: 'ab-pill' }, `Words like ${wordList.slice(0, 2).map((w) => `{${w}}`).join(' and ')} fill in by themselves from what set it off`) : null),
+          panel)].filter(Boolean));
+      if (B.sel !== B.shown) { B.shown = B.sel; if (matchMedia('(max-width: 900px)').matches) panel.scrollIntoView({ block: 'start' }); }
     };
     draw();
     sheet(x ? `Automation · ${x.name}` : recipe ? recipe.name : 'New automation', [box], async () => {
@@ -8050,6 +8161,22 @@
       { id: 't-feed', label: 'Post in the campaign’s feed when it’s done', name: nm('post when done'), trigger: on('task.done'), actions: [{ kind: 'post', text: '✅ {task} is done ({campaign})', channelId: 'same' }] },
     ];
   }
+  // A short list to tap, one picked (the builder's look on the plan, 2026-11-25). Works like a <select>: .value, a
+  // change event, labelOf(value). items: [value, label, icon?, color?].
+  function paRadio(cls, label, items, init) {
+    const el = h('div', { class: 'pa-opts ' + cls, role: 'radiogroup', 'aria-label': label });
+    let v = init;
+    const btns = items.map(([k, l, ic, c]) => h('button', { type: 'button', role: 'radio', class: 'pa-opt' + (c ? ` lk-${c}` : ''), 'data-v': k,
+      onclick: (e) => { if (e.currentTarget.disabled || v === k) return; el.value = k; el.dispatchEvent(new Event('change')); } },
+    ic ? h('span', { class: 'pa-ic', 'aria-hidden': 'true' }, ic) : null, h('span', {}, l)));
+    Object.defineProperty(el, 'value', { get: () => v, set: (k) => { v = k; for (const b of btns) b.setAttribute('aria-checked', String(b.dataset.v === k)); } });
+    el.labelOf = (k) => items.find(([x]) => x === k)?.[1] || '';
+    el.append(...btns);
+    el.value = init;
+    return el;
+  }
+  // A ready-made one's icon: what it does (its first step that isn't a wait or a check).
+  const recipeLook = (r) => { const ks = []; const walk = (l) => (l || []).forEach((y) => { ks.push(y.kind); if (y.kind === 'if') walk(y.then); }); walk(r.actions); return autoLook(ks.find((k) => k !== 'wait' && k !== 'if')); };
   function ccAutoPanel(c, g, t, back) {
     const box = h('aside', { class: 'cc-ppanel cc-pauto', 'data-for': t ? 'task' : 'phase' });
     const what = t ? `“${shortText(t.text, 60)}”` : g.title;
@@ -8062,12 +8189,15 @@
       // Build one here: when, then, what it says.
       const kinds = t ? [['task.done', 'It’s done'], ['task.opened', 'It opens (what it waits for is done)'], ['task.reopened', 'It’s ticked back to not done']]
         : [['task.done', 'A task here is done'], ['task.opened', 'A task here opens'], ['step.done', 'The phase is finished']];
-      const when = h('select', { class: 'pa-when', 'aria-label': 'When' }, kinds.map(([v, l]) => opt(v, l, 'task.done')));
+      const WL = { 'task.done': ['✅', 'green'], 'task.opened': ['🔓', 'blue'], 'task.reopened': ['↩️', 'amber'], 'step.done': ['🏁', 'orange'] };
+      const when = paRadio('pa-when', 'When', kinds.map(([v, l]) => [v, l, ...WL[v]]), 'task.done');
       const members = (S.workspace.members || []).filter((m) => !m.gone);
-      const then = h('select', { class: 'pa-then', 'aria-label': 'Then' }, opt('doers', 'Tell whoever it’s for'), opt('owners', 'Tell the owners'), h('optgroup', { label: 'Tell someone' }, members.map((m) => opt('m:' + m.id, 'Tell ' + m.name))), opt('post', 'Post in the campaign’s feed'), opt('task', 'Make a task'));
+      const then = paRadio('pa-then', 'Then', [['doers', 'Tell whoever it’s for', '🔔', 'purple'], ['owners', 'Tell the owners', '👑', 'purple'], ['someone', 'Tell someone', '👤', 'pink'], ['post', 'Post in the campaign’s feed', '📣', 'teal'], ['task', 'Make a task', '✅', 'purple']], 'doers');
+      const who = h('select', { class: 'pa-who', 'aria-label': 'Who to tell' }, members.map((m) => opt(m.id, m.name, S.me?.memberId)));
+      const whoRow = h('label', { class: 'cc-pp-f pa-who-row' }, 'Who', who);
       const say = h('input', { class: 'pa-say', maxlength: 1000, 'aria-label': 'What it says' });
       const forWho = h('select', { class: 'pa-for', 'aria-label': 'Task for' }, opt('', 'Nobody yet'), opt('who', 'Whoever set it off'), members.map((m) => opt(m.id, m.name)));
-      const wait = h('select', { class: 'pa-wait', 'aria-label': 'Wait' }, opt('0', 'Right away'), opt('1', 'After 1 day'), opt('2', 'After 2 days'), opt('7', 'After a week'));
+      const wait = paRadio('pa-wait pa-chips', 'When to', [['0', 'Right away'], ['1', 'After 1 day'], ['2', 'After 2 days'], ['7', 'After a week']], '0');
       const forRow = h('label', { class: 'cc-pp-f pa-for-row' }, 'For', forWho);
       const onlyOpen = h('small', { class: 'cc-pp-hint pa-only' }, 'Only if it still isn’t done by then.');
       const sayFor = () => {
@@ -8078,10 +8208,11 @@
       let typed = false;
       say.addEventListener('input', () => (typed = !!say.value.trim()));
       const sync = () => {
-        const doers = then.querySelector('option[value=doers]');
+        const doers = then.querySelector('.pa-opt[data-v=doers]');
         doers.disabled = when.value === 'step.done';
         if (doers.disabled && then.value === 'doers') then.value = 'owners';
         forRow.hidden = then.value !== 'task';
+        whoRow.hidden = then.value !== 'someone';
         onlyOpen.hidden = !(when.value === 'task.opened' && wait.value !== '0');
         if (!typed) say.value = sayFor();
       };
@@ -8089,11 +8220,11 @@
       const draft = () => {
         const text = say.value.trim(), v = then.value;
         let act = v === 'post' ? { kind: 'post', text, channelId: 'same' } : v === 'task' ? { kind: 'task', text, assignee: forWho.value, dueIn: null, campaign: '' }
-          : { kind: 'notify', text, to: [v.startsWith('m:') ? v.slice(2) : v] };
+          : { kind: 'notify', text, to: [v === 'someone' ? who.value : v] };
         const days = Number(wait.value);
         const acts = !days ? [act] : when.value === 'task.opened' ? [{ kind: 'wait', amount: days, unit: 'days' }, { kind: 'if', when: [{ field: 'done', op: 'is', value: 'no' }], then: [act], else: [] }] : [{ kind: 'wait', amount: days, unit: 'days' }, act];
         const low1 = (x) => x.charAt(0).toLowerCase() + x.slice(1);
-        const wl = low1(kinds.find(([k]) => k === when.value)[1].replace(/ \(.*\)$/, '')), tl = low1(then.selectedOptions[0].textContent);
+        const wl = low1(kinds.find(([k]) => k === when.value)[1].replace(/ \(.*\)$/, '')), tl = then.value === 'someone' ? 'tell ' + (who.selectedOptions[0]?.textContent || 'someone') : low1(then.labelOf(then.value));
         return { name: shortText(`${t ? t.text : g.title}: ${wl}, ${tl}`, 80), trigger: paTrigger(when.value, c, g, t), actions: acts };
       };
       const saveBtn = h('button', { type: 'button', class: 'btn primary-btn pa-save', onclick: async (e) => {
@@ -8115,18 +8246,22 @@
             : h('small', { class: 'cc-pp-hint' }, `Nothing runs for ${t ? 'this task' : 'this phase'} yet.`),
           forTasks ? h('small', { class: 'cc-pp-hint pa-fortasks' }, `And ${plural(forTasks, 'automation')} for single tasks here: pick a task to see ${forTasks === 1 ? 'it' : 'them'}.`) : null),
         h('div', { class: 'pa-sec' }, h('h4', {}, 'Ready-made'),
-          h('div', { class: 'pa-recipes' }, paRecipes(c, g, t).map((r) => names.has(r.name) ? null : h('button', { type: 'button', class: 'btn small pa-recipe', 'data-recipe': r.id, onclick: (e) => make(r, e.currentTarget) }, '+ ' + r.label)))),
+          h('div', { class: 'pa-recipes' }, paRecipes(c, g, t).map((r) => names.has(r.name) ? null : h('button', { type: 'button', class: 'pa-recipe', 'data-recipe': r.id, onclick: (e) => make(r, e.currentTarget) }, autoIc(recipeLook(r)), h('span', {}, r.label), h('span', { class: 'pa-plus', 'aria-hidden': 'true' }, '+'))))),
         h('div', { class: 'pa-sec pa-build' }, h('h4', {}, 'Build one here'),
-          h('label', { class: 'cc-pp-f' }, 'When', when),
-          h('label', { class: 'cc-pp-f' }, 'Then', then),
-          forRow,
-          h('label', { class: 'cc-pp-f' }, 'It says', say),
-          h('small', { class: 'cc-pp-hint' }, 'Fills in: {task} {step} {campaign} {who}'),
-          h('label', { class: 'cc-pp-f' }, 'When to', wait), onlyOpen,
-          h('div', { class: 'btns' }, saveBtn, h('button', { type: 'button', class: 'link pa-full', onclick: () => autoSheet(null, draft()) }, 'More steps: open the full builder →'))),
-        h('div', { class: 'pa-sec' }, h('h4', {}, 'Use one you have'),
+          h('div', { class: 'pa-node when' }, h('div', { class: 'pa-nh' }, h('i', { class: 'an-dot' }), 'WHEN'), h('div', { class: 'pa-nb' }, when)),
+          h('div', { class: 'pa-link', 'aria-hidden': 'true' }, h('span', {}, 'THEN')),
+          h('div', { class: 'pa-node then' }, h('div', { class: 'pa-nh' }, h('i', { class: 'an-dot' }), 'THEN'),
+            h('div', { class: 'pa-nb' }, then, whoRow, forRow,
+              h('label', { class: 'cc-pp-f' }, 'It says', say),
+              h('small', { class: 'cc-pp-hint' }, 'Fills in: {task} {step} {campaign} {who}'),
+              h('div', { class: 'cc-pp-f' }, h('span', {}, 'When to'), wait), onlyOpen)),
+          h('div', { class: 'btns' }, saveBtn)),
+        h('details', { class: 'pa-sec pa-adv', open: K.paAdv || null, ontoggle: (e) => (K.paAdv = e.currentTarget.open) }, h('summary', {}, 'Advanced settings'),
+          h('h4', {}, 'Use one you have'),
           h('div', { class: 'row2' }, pickOne, h('button', { type: 'button', class: 'btn small pa-copy-go', disabled: !mine.length, onclick: () => { const x = mine.find((y) => y.id === pickOne.value); if (!x) return pickOne.focus(); copyAutoTo(x, g, t); } }, 'Copy here')),
-          h('small', { class: 'cc-pp-hint' }, `A copy, so the one you have keeps running where it did.${t ? '' : ' Or use + From saved on the phase.'}`)));
+          h('small', { class: 'cc-pp-hint' }, `A copy, so the one you have keeps running where it did.${t ? '' : ' Or use + From saved on the phase.'}`),
+          h('h4', {}, 'More steps'),
+          h('button', { type: 'button', class: 'link pa-full', onclick: () => autoSheet(null, draft()) }, 'Open this one in the full builder →')));
       sync();
     };
     if (!S.automations) api('GET', '/automations').then((r) => { S.automations = r; if (box.isConnected) draw(); }).catch(() => {});
@@ -8639,7 +8774,7 @@
           h('button', { class: 'res-open', onclick: () => { closeSheet(); autoSheet(x); } }, h('span', { class: 'res-ic' }, x.on ? '⚡' : '⏸'), h('span', {}, h('b', {}, x.name), h('small', {}, autoWhenLabel(x.trigger.kind) + (x.on ? '' : ' · off')))),
           h('label', { class: 'toggle', title: x.on ? 'On' : 'Off' }, h('input', { type: 'checkbox', checked: !!x.on, onchange: async (e) => { try { const y = await api('PATCH', '/automations/' + x.id, { on: e.target.checked }); S.automations = S.automations.map((z) => (z.id === y.id ? y : z)); draw(); renderAutos(); } catch (er) { e.target.checked = !e.target.checked; toast(er.message); } } }), h('i'))))) : '',
         h('div', { class: 'picks-h' }, 'Ready-made'),
-        h('div', { class: 'step-recipes' }, stepRecipes(c, g).map((r) => have.has(r.name) ? null : h('button', { class: 'btn small step-recipe', 'data-recipe': r.id, onclick: (e) => make(r, e.currentTarget) }, '+ ' + r.label))),
+        h('div', { class: 'step-recipes' }, stepRecipes(c, g).map((r) => have.has(r.name) ? null : h('button', { class: 'btn small step-recipe', 'data-recipe': r.id, onclick: (e) => make(r, e.currentTarget) }, autoIc(recipeLook(r)), h('span', {}, r.label)))),
         h('div', { class: 'btns' }, h('button', { class: 'btn primary-btn small step-auto-new', onclick: () => { closeSheet(); autoSheet(null, { name: `${g.title}: `, trigger: { kind: 'task.opened', campaignId: c.id, step: g.title } }); } }, '+ New automation for this step')));
     };
     if (!S.automations) api('GET', '/automations').then((list) => { S.automations = list; if (box.isConnected) draw(); }).catch(() => {});
