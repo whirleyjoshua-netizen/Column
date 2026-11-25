@@ -5734,6 +5734,67 @@
   // Who may pick which (the server checks the same): billing and messaging customers are for owners and admins, the
   // business's money for owners.
   const autoDoOk = (k) => (k === 'money' ? amAdmin() : ['invoice', 'text', 'email', 'webhook', 'teams'].includes(k) ? amAdmin() : k === 'agent' ? toolOn('agents') : k === 'stock' ? toolOn('inventory') : true);
+  // How each step and trigger looks (2026-11-25, "smaller nodes, color, simple list"): an icon, a color, and the
+  // group it's listed under in the picker. c: purple teal blue green orange amber red pink gray (.lk-<c> in style.css).
+  const AUTO_LOOK = {
+    notify: { ic: '🔔', c: 'purple', g: 'people' }, post: { ic: '💬', c: 'teal', g: 'people' }, teams: { ic: '🟦', c: 'blue', g: 'people' },
+    task: { ic: '✅', c: 'purple', g: 'work' }, campaign: { ic: '🚀', c: 'orange', g: 'work' }, visit: { ic: '📅', c: 'blue', g: 'work' }, doc: { ic: '📄', c: 'orange', g: 'work' },
+    record: { ic: '✏️', c: 'gray', g: 'work' }, create: { ic: '➕', c: 'green', g: 'work' }, stock: { ic: '📦', c: 'amber', g: 'work' },
+    contact: { ic: '👤', c: 'pink', g: 'customers' }, email: { ic: '✉️', c: 'red', g: 'customers' }, text: { ic: '📱', c: 'green', g: 'customers' },
+    invoice: { ic: '🧾', c: 'teal', g: 'money' }, money: { ic: '💵', c: 'green', g: 'money' },
+    agent: { ic: '✨', c: 'purple', g: 'ai' }, webhook: { ic: '🔗', c: 'gray', g: 'ai' }, vault: { ic: '🔒', c: 'gray', g: 'ai' },
+    wait: { ic: '⏳', c: 'amber', g: 'flow' }, if: { ic: '🔀', c: 'teal', g: 'flow' },
+  };
+  const AUTO_GROUPS = [['all', 'All'], ['people', 'Tell people'], ['work', 'Work'], ['customers', 'Customers'], ['money', 'Money'], ['ai', 'AI & apps'], ['flow', 'Flow']];
+  // Steps in the order people reach for them most.
+  const AUTO_ORDER = ['notify', 'task', 'post', 'email', 'text', 'wait', 'if', 'contact', 'visit', 'invoice', 'campaign', 'doc', 'agent', 'record', 'create', 'money', 'stock', 'teams', 'webhook', 'vault'];
+  const AUTO_WHEN_LOOK = {
+    task: ['✅', 'orange'], step: ['🏁', 'orange'], campaign: ['🎯', 'orange'], contact: ['👤', 'pink'], attempt: ['📞', 'blue'], file: ['📥', 'teal'], document: ['✍️', 'purple'], doc: ['📄', 'purple'],
+    schedule: ['⏰', 'amber'], record: ['🗂', 'blue'], quote: ['📝', 'green'], invoice: ['🧾', 'teal'], payment: ['💵', 'green'], money: ['💵', 'green'], price: ['🏷', 'green'], visit: ['🚚', 'blue'], booking: ['📅', 'blue'],
+    text: ['📱', 'green'], stock: ['📦', 'amber'], equipment: ['🛠', 'amber'], github: ['💻', 'gray'], companycam: ['📷', 'gray'], connection: ['🔌', 'red'], analytics: ['📈', 'teal'], pin: ['📍', 'red'],
+  };
+  const autoWhenLook = (kind) => { const l = AUTO_WHEN_LOOK[String(kind || '').split('.')[0]]; return l ? { ic: l[0], c: l[1] } : { ic: '⚡', c: 'gray' }; };
+  const autoLook = (kind) => AUTO_LOOK[kind] || { ic: '⚡', c: 'gray', g: 'work' };
+  const autoIc = (l) => h('span', { class: `auto-ic lk-${l.c}`, 'aria-hidden': 'true' }, l.ic);
+  // The picker: a search box, chips for each group, and a list with colored icons. items: { key, label, ic, c, g?, hint? }.
+  // Beside the button that opened it (a sheet at the bottom on a phone); Esc, a tap outside or a pick closes it.
+  function autoPicker(anchor, { title, items, groups = null, active = null, onPick }) {
+    document.querySelector('.ap-pop')?._close?.();
+    const st = { q: '', g: 'all' };
+    const search = h('input', { class: 'ap-search', type: 'search', placeholder: 'Search…', 'aria-label': 'Search' });
+    const chips = groups ? h('div', { class: 'ap-chips', role: 'tablist' }) : null;
+    const list = h('div', { class: 'ap-list', role: 'listbox', 'aria-label': title });
+    const pop = h('div', { class: 'ap-pop', role: 'dialog', 'aria-label': title }, h('div', { class: 'ap-title' }, '✨ ' + title), search, chips, list);
+    const outside = (e) => { if (!pop.contains(e.target) && !anchor.contains(e.target)) close(); };
+    const esc = (e) => { if (e.key === 'Escape') { e.stopPropagation(); close(); anchor.focus?.(); } };
+    const close = () => { pop.remove(); document.removeEventListener('pointerdown', outside, true); document.removeEventListener('keydown', esc, true); };
+    pop._close = close;
+    const draw = () => {
+      const q = st.q.trim().toLowerCase();
+      const shown = items.filter((x) => (st.g === 'all' || x.g === st.g) && (!q || x.label.toLowerCase().includes(q) || (x.hint || '').toLowerCase().includes(q)));
+      chips?.replaceChildren(...groups.filter(([k]) => k === 'all' || items.some((x) => x.g === k)).map(([k, l]) =>
+        h('button', { type: 'button', class: 'ap-chip' + (st.g === k ? ' on' : ''), 'data-g': k, role: 'tab', 'aria-selected': String(st.g === k), onclick: () => { st.g = k; draw(); } }, l)));
+      list.replaceChildren(...(shown.length ? shown.map((x) => h('button', { type: 'button', class: `ap-item lk-${x.c}` + (x.key === active ? ' on' : ''), 'data-key': x.key, role: 'option', 'aria-selected': String(x.key === active), onclick: () => { close(); onPick(x.key); } },
+        h('span', { class: 'ap-ic', 'aria-hidden': 'true' }, x.ic), h('span', { class: 'ap-label' }, x.label, x.hint ? h('small', {}, x.hint) : null), x.key === active ? h('small', { class: 'ap-on' }, 'Active') : null))
+        : [h('p', { class: 'ap-none' }, 'Nothing matches.')]));
+    };
+    search.addEventListener('input', () => { st.q = search.value; draw(); });
+    draw();
+    document.body.append(pop);
+    const r = anchor.getBoundingClientRect(), w = pop.offsetWidth, ht = pop.offsetHeight;
+    if (innerWidth > 700) {
+      const left = r.right + 8 + w <= innerWidth ? r.right + 8 : r.left - w - 8 >= 8 ? r.left - w - 8 : Math.max(8, innerWidth - w - 8);
+      pop.style.left = left + 'px';
+      pop.style.top = Math.max(8, Math.min(r.top, innerHeight - ht - 8)) + 'px';
+    } else pop.classList.add('ap-sheet');
+    setTimeout(() => { document.addEventListener('pointerdown', outside, true); document.addEventListener('keydown', esc, true); });
+    search.focus();
+  }
+  // The picker's lists: what can set one off (grouped by tool, from the catalog), and what a step can do.
+  const autoWhenItems = (only = null) => (AUTO_CAT.events ? AUTO_CAT.events.map((e) => ({ key: e.type, label: e.label.replace(/ \(.*\)$/, ''), hint: AUTO_CAT.tools[e.tool] || '', g: e.tool, ...autoWhenLook(e.type) }))
+    : Object.entries(AUTO_WHEN).map(([type, label]) => ({ key: type, label, g: 'x', ...autoWhenLook(type) }))).filter((x) => !only || only.includes(x.key));
+  const autoWhenGroups = () => (AUTO_CAT.events ? [['all', 'All'], ...Object.entries(AUTO_CAT.tools)] : null);
+  const autoDoItems = (cur, depth = 0) => AUTO_ORDER.filter((k) => (k === 'wait' || (k === 'if' ? depth < 3 : AUTO_DO[k] && (autoDoOk(k) || k === cur)))).map((k) => ({ key: k, label: k === 'wait' ? 'Wait a while' : k === 'if' ? 'Only if… (check something first)' : AUTO_DO[k], ...autoLook(k) }));
   // The fields an automation can set (the server checks the same): plain values, never price lines or files.
   const AUTO_SET_T = ['text', 'number', 'money', 'date', 'select', 'multi', 'checkbox', 'person', 'email', 'phone', 'url'];
   const AUTO_WORDS = {
@@ -5882,6 +5943,7 @@
       const sw = h('input', { type: 'checkbox', checked: x.on, 'aria-label': x.on ? 'On' : 'Off' });
       sw.addEventListener('change', () => api('PATCH', '/automations/' + x.id, { on: sw.checked }).catch((e) => toast(e.message)));
       return h('div', { class: 'auto-row' + (x.on ? '' : ' off') + (autoFailing(x) ? ' failing' : '') },
+        autoIc(autoWhenLook(x.trigger.kind)),
         h('button', { class: 'auto-main', onclick: () => autoSheet(x) }, h('b', {}, x.name), h('small', {}, autoSummary(x)),
           h('small', { class: last && !last.ok ? 'err' : 'muted' }, last ? `${last.ok ? 'Ran' : 'Didn’t run'} ${ago(last.at)} · ${last.note}` : 'Hasn’t run yet', x.count ? ` · ${plural(x.count, 'run')} in all` : ''),
           x.waiting ? h('small', { class: 'auto-waiting' }, `⏳ ${plural(x.waiting, 'run')} waiting`) : null,
@@ -5902,7 +5964,7 @@
       h('div', { class: 'any-h camp-goals-h' }, all.length ? 'More ideas' : 'Start from one of these'),
       h('div', { class: 'auto-recipe-for seg-chips', role: 'tablist' }, [[null, S.workspace?.setup?.kind && AUTO_FOR[S.workspace.setup.kind] ? `For you (${AUTO_FOR[S.workspace.setup.kind]})` : 'Suggested'], ...Object.entries(AUTO_FOR), ['every', 'All']].map(([k, label]) =>
         h('button', { class: 'chip' + (autoRecipeView.on === k ? ' on' : ''), 'data-for': k || 'you', role: 'tab', 'aria-selected': String(autoRecipeView.on === k), onclick: () => { autoRecipeView.on = k; renderAutos(); } }, label))),
-      h('div', { class: 'auto-recipes' }, autoRecipesFor(autoRecipeView.on).map((r) => h('button', { class: 'auto-recipe', onclick: () => autoSheet(null, r) }, h('b', {}, r.name), h('small', {}, r.why), h('small', { class: 'auto-recipe-steps' }, autoRecipeSteps(r))))),
+      h('div', { class: 'auto-recipes' }, autoRecipesFor(autoRecipeView.on).map((r) => h('button', { class: 'auto-recipe', onclick: () => autoSheet(null, r) }, h('span', { class: 'auto-recipe-h' }, autoIc(autoWhenLook(r.trigger.kind)), h('b', {}, r.name)), h('small', {}, r.why), h('small', { class: 'auto-recipe-steps' }, autoRecipeSteps(r))))),
     ];
   }
   // The runs of one that are waiting, each to stop.

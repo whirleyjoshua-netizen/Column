@@ -1472,6 +1472,30 @@ div:has(> .home-camp) { container-type: inline-size; }
 .auto-recipe { display: flex; flex-direction: column; gap: 3px; text-align: left; border: 1px dashed var(--line); border-radius: 10px; padding: 10px; background: none; color: var(--text); cursor: pointer; }
 .auto-recipe:hover { background: var(--card-hover); border-style: solid; }
 .auto-recipe small { color: var(--muted); font-size: 12px; }
+/* automation colors (AUTO_LOOK in app.js): --lk is the color, --lk-soft its tint */
+.lk-purple { --lk: #7c4dff; } .lk-teal { --lk: #0f9f9a; } .lk-blue { --lk: #2f7cf6; } .lk-green { --lk: #1f9d55; } .lk-orange { --lk: #f26b1d; }
+.lk-amber { --lk: #d99a06; } .lk-red { --lk: #e5484d; } .lk-pink { --lk: #d6409f; } .lk-gray { --lk: #7a7f8c; }
+[class*='lk-'] { --lk-soft: color-mix(in srgb, var(--lk) 14%, transparent); }
+.auto-ic { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 8px; background: var(--lk-soft); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--lk) 30%, transparent); font-size: 15px; line-height: 1; }
+.auto-recipe-h { display: flex; align-items: center; gap: 8px; }
+.auto-recipe { border-style: solid; }
+/* the picker: search, group chips, a list with colored icons */
+.ap-pop { position: fixed; z-index: 1000; width: 280px; max-height: min(440px, 80vh); display: flex; flex-direction: column; gap: 8px; padding: 10px; background: var(--card); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18); }
+.ap-pop.ap-sheet { left: 0; right: 0; bottom: 0; top: auto; width: auto; max-height: 75vh; border-radius: 14px 14px 0 0; }
+.ap-title { font-weight: 650; font-size: 14px; }
+.ap-search { width: 100%; }
+.ap-chips { display: flex; gap: 4px; overflow-x: auto; flex: none; padding-bottom: 2px; }
+.ap-chip { flex: none; border: 1px solid var(--line); background: var(--panel); color: var(--text); border-radius: 999px; padding: 2px 9px; font: inherit; font-size: 12px; cursor: pointer; white-space: nowrap; }
+.ap-chip.on { background: var(--text); color: var(--bg); border-color: var(--text); }
+.ap-list { display: flex; flex-direction: column; gap: 5px; overflow-y: auto; min-height: 0; }
+.ap-item { display: flex; align-items: center; gap: 9px; text-align: left; border: 1px solid var(--line); border-radius: 9px; padding: 6px 8px; background: var(--card); color: var(--text); font: inherit; font-size: 13.5px; font-weight: 550; cursor: pointer; }
+.ap-item:hover, .ap-item:focus-visible { border-color: var(--lk); background: var(--lk-soft); outline: 0; }
+.ap-item.on { border-color: var(--lk); box-shadow: 0 0 0 2px var(--lk-soft); }
+.ap-ic { flex: none; width: 26px; height: 26px; border-radius: 7px; display: inline-flex; align-items: center; justify-content: center; background: var(--lk-soft); font-size: 14px; }
+.ap-label { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.ap-label small { color: var(--muted); font-size: 11px; font-weight: 400; }
+.ap-on { color: var(--lk); font-size: 11.5px; font-style: italic; }
+.ap-none { color: var(--muted); font-size: 13px; margin: 4px 2px; }
 .auto-recipe .auto-recipe-steps { color: var(--accent); font-size: 11px; font-weight: 600; letter-spacing: 0.02em; margin-top: 2px; }
 .auto-recipe-for { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 10px; }
 .auto-recipe-for .chip { border: 1px solid var(--line); background: var(--panel); color: var(--text); border-radius: 999px; padding: 4px 10px; font-size: 12px; cursor: pointer; }

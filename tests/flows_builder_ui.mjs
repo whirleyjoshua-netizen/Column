@@ -131,6 +131,8 @@ try {
   // Save; a real run; reopen and show it.
   await A.tap(`[...document.querySelectorAll('#sheet .btns button')].find((b) => b.textContent === 'Turn it on')`);
   ok(await A.until(`[...document.querySelectorAll('#tool .auto-row b')].some((b) => b.textContent === 'Sort leads')`), 'saved');
+  ok(await A.ev(`(() => { const r = [...document.querySelectorAll('#tool .auto-row')].find((x) => x.textContent.includes('Sort leads')); const ic = r?.querySelector('.auto-ic'); return !!ic && /lk-\\w+/.test(ic.className) && ic.textContent.trim() === '👤'; })()`), 'its row shows the colored icon of what sets it off (a contact)');
+  ok(await A.ev(`[...document.querySelectorAll('#tool .auto-recipe')].length > 0 && [...document.querySelectorAll('#tool .auto-recipe')].every((x) => x.querySelector('.auto-ic[class*=lk-]'))`), 'and every idea card has one too');
   const saved = (await api('GET', '/automations')).find((x) => x.name === 'Sort leads');
   ok(saved.actions.length === 1 && saved.actions[0].kind === 'if' && saved.actions[0].then[0].text === 'Lead: {contact}' && saved.actions[0].else.map((y) => y.text).join() === 'Email {contact},Call {contact}', 'as built: the “only if”, Then a post, Otherwise two tasks');
   await api('POST', '/contacts', { name: 'Bo Buyer', stage: 'customer' });
