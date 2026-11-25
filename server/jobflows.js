@@ -228,7 +228,7 @@ export function jobFlowsModule(ctx) {
       next: cur ? { stepId: cur.id, action: ACTION[cur.kind] } : null,
     };
   }
-  const summary = (ws, auth, c) => { const v = runView(ws, auth, c); return v && { id: v.id, flowId: v.flowId, flowName: v.flowName, versionN: v.versionN, status: v.status, done: v.done, total: v.total, current: v.current && { stepId: v.current.stepId, name: v.current.name, kind: v.current.kind, action: v.current.action } }; };
+  const summary = (ws, auth, c) => { const v = runView(ws, auth, c); return v && { id: v.id, flowId: v.flowId, flowName: v.flowName, versionN: v.versionN, status: v.status, done: v.done, total: v.total, current: v.current && { stepId: v.current.stepId, name: v.current.name, kind: v.current.kind, action: v.current.action, mayAct: !!v.steps.find((x) => x.id === v.current.stepId)?.mayAct } }; };
   const tell = (c) => broadcast(c.wsId, { type: 'jobrun', recordId: c.recordId, runId: c.id, campaignId: c.id });
 
   // A run of a flow's version on a job: the campaign and its step goals (a Tasks step's tasks too). buildRun writes

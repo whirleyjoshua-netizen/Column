@@ -146,7 +146,7 @@ Goal per step (existing fields, plus):
 ## 3. Reads
 
 `GET /api/jobs?flow=&q=&mine=` → `{ jobs: [ { id, projectId, typeId, name, client: {name}|null, stage, scheduled,
-run: null | { flowId, flowName, versionN, done, total, current: {stepId, name, kind, action}, blocked: [...] },
+run: null | { flowId, flowName, versionN, done, total, current: {stepId, name, kind, action, mayAct}, blocked: [...] },
 legacy: bool } ] }`
 - All job records the person may see (`PJ.recordAt`), with or without a run. Not limited by campaigns.
 - `legacy: true` = an ordinary campaign drives it (shown as it is today, no stepper).
@@ -328,3 +328,9 @@ Where the server differs from, or settles, something above:
   everyone may start; Next and Skip on the member's own step; no Next on a later step, an admins' step or an invoice
   step (nor its button in the list); no Reopen and no flow menu; the card moves on live when a step is done elsewhere.
   The six job tabs are checked exactly and in order, under the flow card.
+- Checkpoint 4, round 2: the Jobs list's `run.current` carries `mayAct` (the step's `who` for the person asking, as
+  in the run view). A row's step button shows only when `jbMayNext` allows it (current, `mayAct`, invoice and payment
+  for owners and admins); anyone else sees "Next: <step>" as text. Opening the Jobs tab shows the list at once and
+  refreshes it behind; a refresh asked for while one is loading runs again after it. `tests/jobflow_checks.mjs` checks
+  `mayAct` in the list as a member and an owner; `tests/jobs_ui.mjs` has a payment step and checks the list as a member
+  for an owners-and-admins step, an invoice step and a payment step.

@@ -3204,7 +3204,7 @@
     docs: { label: 'Folders & Docs', ok: () => (toolOn('docs') || toolOn('folders')) && memberMay('docs'), open: () => docsHome(), on: () => toolOpen === 'docs' || toolOpen === 'folders' },
     projects: { label: 'Boards', ok: () => toolOn('projects') && memberMay('projects'), open: () => showProjects() },
     // Jobs (the owner, 2026-11-24): every job and the job flows they run on, a tab of its own beside Boards.
-    jobs: { label: 'Jobs', ok: () => toolOn('projects') && memberMay('projects'), open: () => openTool('jobs') },
+    jobs: { label: 'Jobs', ok: () => toolOn('projects') && memberMay('projects'), open: () => { if (JB.jobs) jbLoad(true); openTool('jobs'); } }, // shown at once, refreshed behind
     // Automations (the owner, 2026-11-14): something you build and watch, so it's in Workspace, not Settings. Owners and admins.
     automations: { label: 'Automations', ok: () => amAdmin() },
     // Tools (the owner, 2026-11-16): at the far right of the strip; it opens the split on the right, beside the page.
@@ -18256,10 +18256,17 @@
   const jbStartable = () => (JB.flows || []).filter((f) => f.version && !f.archived && (amAdmin() || f.version.body.whoCreates === 'everyone'));
   const jbListOf = (f) => { const l = (f.version?.body || f.draft)?.list; const p = l && projById(l.projectId); const t = p && prType(p, l.typeId); return { p, t }; };
   const jbRender = () => { if (toolOpen === 'jobs') renderTool(); };
+  // A refresh asked for while one is loading runs again after it, so news that came in meanwhile isn't lost.
   function jbLoad(force) {
-    if (JB.loading || (!force && JB.jobs && JB.flows)) return;
+    if (JB.loading) { if (force) JB.again = true; return; }
+    if (!force && JB.jobs && JB.flows) return;
     JB.loading = true;
-    Promise.all([api('GET', '/jobs'), api('GET', '/job-flows')]).then(([j, f]) => { JB.jobs = j.jobs; JB.flows = f.flows; }).catch((e) => toast(e.message)).finally(() => { JB.loading = false; jbRender(); if (PR.panel) renderProjects(); });
+    Promise.all([api('GET', '/jobs'), api('GET', '/job-flows')]).then(([j, f]) => { JB.jobs = j.jobs; JB.flows = f.flows; }).catch((e) => toast(e.message)).finally(() => {
+      JB.loading = false;
+      if (JB.again) { JB.again = false; return jbLoad(true); }
+      jbRender();
+      if (PR.panel) renderProjects();
+    });
   }
   let jbSoonT = null;
   const jbSoon = () => { clearTimeout(jbSoonT); jbSoonT = setTimeout(() => { if (toolOpen === 'jobs' && !JB.edit) jbLoad(true); else JB.jobs = null; }, 400); };
@@ -18306,8 +18313,10 @@
       h('button', { type: 'button', class: 'jb-main', onclick: () => openJob(j.projectId, j.id) }, h('b', {}, j.name || 'Job'), sub ? h('small', {}, sub) : null,
         r ? h('span', { class: 'jb-prog' }, h('span', { class: 'lead-bar', style: '--c:var(--accent)' }, h('i', { style: `width:${Math.round((r.done / Math.max(1, r.total)) * 100)}%` })), h('small', {}, `${r.flowName} · ${r.done}/${r.total}`))
           : h('small', { class: 'muted' }, j.legacy ? 'On campaign steps' : 'Not on a flow')),
-      r?.current && (!['invoice', 'payment'].includes(r.current.kind) || amAdmin()) ? h('button', { type: 'button', class: 'btn small jb-next', 'data-next': j.id, title: 'Open the job at this step', onclick: () => jbGo(j.projectId, j.id) }, `${JB_KIND[r.current.kind]?.[0] || ''} ${r.current.name}`)
-        : r?.status === 'done' ? h('span', { class: 'jb-done' }, '✓ Done') : null);
+      // The step it's at: a button that does it for whoever may (as Next on the job), otherwise only its name.
+      r?.current && jbMayNext({ ...r.current, state: 'current' }) ? h('button', { type: 'button', class: 'btn small jb-next', 'data-next': j.id, title: 'Open the job at this step', onclick: () => jbGo(j.projectId, j.id) }, `${JB_KIND[r.current.kind]?.[0] || ''} ${r.current.name}`)
+        : r?.current ? h('small', { class: 'muted jb-at', 'data-at': j.id }, `Next: ${r.current.name}`)
+          : r?.status === 'done' ? h('span', { class: 'jb-done' }, '✓ Done') : null);
   }
   // Open a job and do the step it's at.
   async function jbGo(projectId, id) {

@@ -101,6 +101,14 @@ try {
   ok(!seen.includes(hidden.id) && (await sam('GET', `/job-flows/${hidden.id}`)).status === 404, 'nor a flow on a private project they can’t see');
   ok((await rico('GET', '/job-flows')).body?.flows?.some((f) => f.id === adminsOnly.id), 'an admin still reads every flow');
 
+  // 2b. The Jobs list says whether you may act on the step a job is at (the step's who), as the job's run does.
+  const lst = await mk('List who', [{ kind: 'custom', name: 'Owners do it', who: { type: 'admins' }, settings: { text: 'x' } }, { kind: 'custom', name: 'Anyone does it', who: { type: 'anyone' }, settings: { text: 'y' } }], { whoCreates: 'everyone' });
+  const jl = (await rico('POST', '/jobs', { flowId: lst.id, values: { job: 'List who' } })).body?.job;
+  const inList = async (who) => (await who('GET', '/jobs')).body?.jobs?.find((x) => x.id === jl?.id)?.run?.current;
+  ok((await inList(sam))?.mayAct === false && (await inList(rico))?.mayAct === true, 'the Jobs list: an owners-and-admins step is not the member’s to act on, and is the owner’s');
+  await rico('POST', `/jobs/${jl?.id}/steps/${lst.sid('Owners do it')}/done`);
+  ok((await inList(sam))?.mayAct === true, 'a step for anyone is the member’s');
+
   // 3. A flow attaches only to a job on its own list.
   const hvacFlow = await mk('HVAC visit', [{ kind: 'custom', name: 'Look', settings: { text: 'Look.' } }], {}, { projectId: other.id, typeId: other.types[0].id });
   const j3 = (await rico('POST', '/jobs', { flowId: one.id, values: { job: 'Mine' } })).body?.job;
