@@ -1,6 +1,6 @@
 # Job Flows — Phase 3 (Steps that run by themselves) contracts, checkpoint 1
 
-Status: round 2 for review, 2026-11-25 (round 1 answers in §9). No code yet. The spec's build order: "Steps that run by themselves. Customer
+Status: round 3 for review, 2026-11-25 (review answers in §9). No code yet. The spec's build order: "Steps that run by themselves. Customer
 updates, automatic invoice, payment reminders, review requests and quote follow-ups, all per step; the team-wide
 switches retire." Branch `jobflows-auto`, cut from `jobflows-money` (Phase 2, approved). The automatic invoice itself
 shipped in Phase 2 (PHASE2.md §1.4); Phase 3 adds telling the customer.
@@ -101,6 +101,10 @@ They're separate. Telling the customer never makes, resends or changes a quote o
 - **Send the quote** (a person's tap): the link is made (the quote is sent, as in Phase 2) whatever happens to the
   email. The answer says whether the customer was emailed or texted, or why not; the link is copied either way.
   There's no background retry of this email (the person has the link in hand); the step shows "Not emailed: <reason>".
+  Its marker is `g.quoteTold = { token, state, at }`, keyed to the share token and saved before the send (§3.1):
+  another Send tap (or a retried request) for the same token while it's `sending`, `sent` or `unsure` emails
+  nothing; a "not sent, for sure" block removes it, so the person's next tap may try again; a New quote's new token
+  starts afresh. The link and the quote's state never depend on it.
 - **Quote follow-up**: only while the link is live and unanswered. Once accepted, declined, turned off or replaced
   by a New quote, a pending follow-up is dropped. In doubt counts as done for that link.
 - **Invoice email** (automatic billing): once the step's invoice is sent, the tick emails it, retrying "not sent,
@@ -118,8 +122,10 @@ They're separate. Telling the customer never makes, resends or changes a quote o
 ## 4. The team-wide switches retire for jobs on flows
 - A job that has ever had a Job Flow run gets **no** team-wide visit reminder or review request. This is kept on the
   job itself (`rec.onFlowSince = <time of its first run>`, set when a run starts or attaches, never cleared), not
-  worked out from runs that exist now, so a finished or cancelled run (or one deleted with its campaign) doesn't
-  drop the job back into the team-wide messages. Taking a job off its flow means it's done by hand: an owner sends
+  worked out from runs that exist now, so a finished or cancelled run doesn't drop the job back into the team-wide
+  messages. A run can't be deleted on its own: campaign routes refuse runs (CONTRACTS §4, `jobflow_hidden`), and a
+  run goes only with its job (`dropFor`), when there's no job left to message. The test also clears the run from the
+  data directly (`JOBFLOWS_TEST_DROP_RUN`, test only) to show the marker alone decides. Taking a job off its flow means it's done by hand: an owner sends
   its reminder from the visit (🔔 Remind the customer), as anyone can today. Jobs not on a flow keep today's behavior until Move my jobs here (Phase 5), when the switches
   go away for good.
 - Settings → Customer messages says so ("Jobs on a Job Flow follow their flow's steps").
@@ -141,7 +147,7 @@ step adds `followUp: { days, sentAt }`; the payment step adds `reminders: [{ day
 
 | Test (port) | Covers |
 | --- | --- |
-| `jobflow_auto.mjs` (5253) | round 1 additions: a crash after the provider accepted but before `sent` was saved (a test-only `JOBFLOWS_CRASH_AFTER_SEND` exits the process there) → after restart `unsure`, no second send; a definite failure (the daily cap) waits and retries, an ambiguous one (a test-only `JOBFLOWS_MAIL_THROW` makes the provider call throw) is `unsure` and not retried; Send the quote with the email blocked: the link exists, the quote is sent, "not emailed" shown, no retry; the automatic invoice sent while its email is blocked: one invoice, the email retried and then sent, and stopped when the invoice is paid first; no Twilio → the phone fallback never counts, a contact with a phone only is unreachable and skipped; an unconfirmed team email waits, a missing email skips; a partial payment keeps reminders, paid in full stops them; offsets on the team's calendar across midnight; several offsets due at once send one; a job whose run finished or was cancelled still gets no team-wide reminder or review. And: publish rules for the new kinds and settings; `remind`: waits with no visit, sends at/after 9am the day before (team clock), once, done, on the timeline; visit today → skipped by Kloomie; unreachable / do-not-contact / no client → skipped with the reason, the run moves on; not current → nothing sent; `review`: delay counted from becoming current, sends once, no link → waits, step url beats the team's; `omw`: done by a tap on the job's visit after the run started, not by one before; the quote's email on Send and the follow-up once per link after N days (none after an answer, again after New quote); the automatic invoice emailed once per invoice (a void's replacement is emailed too); payment reminders once each, only past due and unpaid, none after paid; a failed email (cap) waits and retries, never doubles; a restart mid-way doesn't send twice; team switches give a job on a flow no reminder or review while a job off flows still gets them; members see states and reasons, no contact details |
+| `jobflow_auto.mjs` (5253) | round 1 additions: a crash after the provider accepted but before `sent` was saved (a test-only `JOBFLOWS_CRASH_AFTER_SEND` exits the process there) → after restart `unsure`, no second send; a definite failure (the daily cap) waits and retries, an ambiguous one (a test-only `JOBFLOWS_MAIL_THROW` makes the provider call throw) is `unsure` and not retried; Send the quote with the email blocked: the link exists, the quote is sent, "not emailed" shown, no retry; the automatic invoice sent while its email is blocked: one invoice, the email retried and then sent, and stopped when the invoice is paid first; no Twilio → the phone fallback never counts, a contact with a phone only is unreachable and skipped; an unconfirmed team email waits, a missing email skips; a partial payment keeps reminders, paid in full stops them; offsets on the team's calendar across midnight; several offsets due at once send one; a job whose run finished, was cancelled, or was removed from the data still gets no team-wide reminder or review, and `onFlowSince` stays on it; Send the quote twice for one link emails once, a blocked first email lets the next tap try again. And: publish rules for the new kinds and settings; `remind`: waits with no visit, sends at/after 9am the day before (team clock), once, done, on the timeline; visit today → skipped by Kloomie; unreachable / do-not-contact / no client → skipped with the reason, the run moves on; not current → nothing sent; `review`: delay counted from becoming current, sends once, no link → waits, step url beats the team's; `omw`: done by a tap on the job's visit after the run started, not by one before; the quote's email on Send and the follow-up once per link after N days (none after an answer, again after New quote); the automatic invoice emailed once per invoice (a void's replacement is emailed too); payment reminders once each, only past due and unpaid, none after paid; a failed email (cap) waits and retries, never doubles; a restart mid-way doesn't send twice; team switches give a job on a flow no reminder or review while a job off flows still gets them; members see states and reasons, no contact details |
 | `jobs_ui.mjs` (Chrome) | with the client: the new steps in the builder (menu, settings), the run card's words for sent / waiting / skipped by Kloomie |
 
 Time is made testable without waiting days: `CUSTMSG_TICK_MS` (exists) for a fast tick, and a test-only
@@ -167,4 +173,10 @@ flows (and with it retiring the team switches entirely).
    for draft or void; per invoice id; one reminder when several are due at once.
 5. **Jobs that were on a flow**: §4. A durable `rec.onFlowSince`, never cleared; finished, cancelled or deleted runs
    don't bring back the team-wide messages.
+
+### Round 2 review, and what changed
+1. **The first quote email's marker**: `g.quoteTold`, keyed to the share token, saved first; repeats for the same
+   token send nothing; only a definite block lets a later tap try again (§3.3).
+2. **Deleted runs**: there's no route that deletes a run alone; the test removes one from the data through a
+   test-only hook and checks `onFlowSince` still suppresses the team-wide messages (§4, §7).
 
