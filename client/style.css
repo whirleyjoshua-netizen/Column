@@ -4987,6 +4987,20 @@ body.wide.split-on:not(.split-full) #camps .cc-ov .cc-obrief { order: -1; border
 .jb-kind { font-weight: 600; font-size: 13px; }
 .jb-fields { display: flex; flex-wrap: wrap; gap: 4px 12px; }
 .jb-fields > small { flex-basis: 100%; }
+/* Job Flows Phase 2: money */
+.jb-money { display: flex; flex-direction: column; gap: 8px; border: 1px solid var(--line); border-radius: 10px; padding: 10px; background: var(--card); }
+.jb-defaults { display: flex; flex-direction: column; gap: 4px; margin: 4px 0; }
+.jb-defrow { display: flex; align-items: center; gap: 8px; }
+.jb-defrow > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.jb-qty { width: 72px; }
+.jb-quote { display: flex; flex-direction: column; gap: 2px; padding: 6px 8px; border-radius: 8px; background: var(--soft, rgba(127,127,127,.08)); }
+.jb-quote[data-quote="accepted"] small:first-child { color: var(--ok, #1a8a4a); font-weight: 600; }
+.jb-quote[data-quote="declined"] small:first-child, .jb-quote[data-quote="changed"] small:first-child { color: var(--danger); }
+.jb-auto { color: var(--muted); }
+.jb-auto[data-waiting]:not([data-waiting=""]) { color: var(--danger); }
+.jb-who-fixed { align-self: center; }
+.jb-gone { margin-top: 8px; }
+.jb-gone > summary { cursor: pointer; color: var(--muted); }
 .jb-save { display: flex; gap: 8px; margin: 10px 0 4px; }
 @media (max-width: 640px) {
   .jb-row { flex-wrap: wrap; }

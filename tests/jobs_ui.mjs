@@ -40,6 +40,8 @@ const btnText = (scope, text) => `[...document.querySelectorAll(${JSON.stringify
 // SHOTS=<folder>: screenshots at the main points, to look at.
 const shot = async (name) => { if (!process.env.SHOTS) return; await sleep(500); const r = await A.cmd('Page.captureScreenshot', { format: 'png' }); FS.writeFileSync(`${process.env.SHOTS}/${name}.png`, Buffer.from(r.result.data, 'base64')); };
 const TOOL = (sel) => `document.querySelector('#tool ${sel}')`;
+// Open a job from the Jobs list (Workspace → Jobs), as clicking its row does.
+const openJobIn = async (id) => { await A.ev(`document.querySelector('#workTabs [data-tab=jobs]').click(); true`); await A.until(`!!document.querySelector('#tool [data-jb=jobs]')`); await A.tap(TOOL('[data-jb=jobs]')); await A.until(`!!document.querySelector('#tool .jb-row[data-job="${id}"]')`, 8000); await A.tap(TOOL(`.jb-row[data-job="${id}"] .jb-main`)); await A.until(`!!document.querySelector('#projects .jb-card')`, 8000); };
 try {
   for (let i = 0; i < 100; i++) { try { if ((await fetch(APP + 'api/health')).ok) break; } catch {} await sleep(150); }
   const t = Date.now();
@@ -61,8 +63,8 @@ try {
   const crew = await api('POST', '/job-flows', { name: 'Crew flow', whoCreates: 'everyone', list: { projectId: p.id, typeId: tp.id }, steps: [
     { kind: 'custom', name: 'Crew check', who: { type: 'member', id: samId }, canSkip: true, settings: { text: 'Check the truck.' } },
     { kind: 'custom', name: 'Office check', who: { type: 'admins' }, canSkip: true, settings: { text: 'Check the paperwork.' } },
-    { kind: 'invoice', name: 'Bill it', who: { type: 'anyone' } },
-    { kind: 'payment', name: 'Get paid', who: { type: 'anyone' } },
+    { kind: 'invoice', name: 'Bill it' },
+    { kind: 'payment', name: 'Get paid' },
     { kind: 'custom', name: 'Wrap up', who: { type: 'anyone' }, settings: { text: 'Done for the day.' } } ] });
   const crewPub = await api('POST', `/job-flows/${crew.id}/publish`);
   const crewSid = (n) => crewPub.version.body.steps.find((x) => x.name === n).id;
@@ -106,6 +108,71 @@ try {
   await shot('2-builder');
   await A.tap(TOOL('[data-act=publish]'));
   ok(await A.until(`!!${TOOL('[data-act=new-flow]')} && [...document.querySelectorAll('#tool .jb-row')].some((r) => r.textContent.includes('Bins, monthly') && r.textContent.includes('Version 1 · 7 steps'))`), 'Publish makes version 1 with 7 steps, back on the list');
+
+  // Phase 2 (docs/jobflows/PHASE2.md §5): Items, the builder's billing, the Quote step, the automatic invoice, and
+  // Quotes and Invoices in Jobs.
+  ok(await A.ev(`['jobs', 'quotes', 'invoices', 'items', 'flows'].join() === [...document.querySelectorAll('#tool [data-jb]')].map((b) => b.dataset.jb).join()`), 'an owner’s Jobs has Jobs, Quotes, Invoices, Items and Job Flows');
+  await A.tap(TOOL('[data-jb=items]'));
+  ok(await A.until(`!!${TOOL('[data-act=new-item]')}`), 'Items opens, with + New item');
+  await A.tap(TOOL('[data-act=new-item]'));
+  await A.until(`!document.querySelector('#sheet').classList.contains('hidden')`);
+  await A.type(`document.querySelector('#sheet [data-field=name]')`, 'Can clean');
+  await A.type(`document.querySelector('#sheet [data-field=unit]')`, 'each');
+  await A.type(`document.querySelector('#sheet [data-field=price]')`, '25');
+  await A.tap(btnText('#sheet', 'Add it'));
+  ok(await A.until(`[...document.querySelectorAll('#tool .jb-row[data-item]')].some((r) => r.textContent.includes('Can clean') && r.textContent.includes('$25.00 / each'))`), 'a new item shows on Items with its price and unit');
+  await shot('5-items');
+  await A.tap(TOOL('[data-jb=flows]'));
+  await A.until(`!!${TOOL('[data-act=new-flow]')}`);
+  await A.tap(TOOL('[data-act=new-flow]'));
+  await A.until(`!document.querySelector('#sheet').classList.contains('hidden')`);
+  await A.type(`document.querySelector('#sheet input')`, 'Quoted cleans');
+  await A.pick(`document.querySelector('#sheet select[aria-label="Start from"]')`, 'cleaning');
+  await A.tap(btnText('#sheet', 'Make it'));
+  await A.until(`!!${TOOL('select[data-field=billing]')}`);
+  ok(await A.ev(`[...document.querySelectorAll('#tool .jb-scard[data-kind=invoice] [data-field=who], #tool .jb-scard[data-kind=payment] [data-field=who]')].every((e) => e.tagName === 'SMALL' && e.textContent === 'For owners and admins')`), 'invoice and payment steps say they’re for owners and admins (no choice)');
+  await A.pick(TOOL('select[data-field=billing]'), 'quote');
+  ok(await A.until(`(() => { const ks = [...document.querySelectorAll('#tool .jb-scard')].map((c) => c.dataset.kind); return ks.indexOf('quote') >= 0 && ks.indexOf('quote') === ks.indexOf('invoice') - 1; })()`), 'Quote first puts a Send the quote step just before the invoice');
+  await A.until(`[...document.querySelectorAll('#tool select[data-field=add-item] option')].some((o) => o.textContent.includes('Can clean'))`);
+  const canId = await A.ev(`[...document.querySelectorAll('#tool select[data-field=add-item] option')].find((o) => o.textContent.includes('Can clean')).value`);
+  await A.pick(TOOL('select[data-field=add-item]'), canId);
+  ok(await A.until(`!!${TOOL(`.jb-defrow[data-default="${canId}"]`)}`), 'a default item is added from Items');
+  await A.type(TOOL(`.jb-defrow[data-default="${canId}"] .jb-qty`), '2');
+  await A.type(TOOL('input[data-field=dueDays]'), '10');
+  await shot('6-billing');
+  await A.tap(TOOL('[data-act=publish]'));
+  ok(await A.until(`[...document.querySelectorAll('#tool .jb-row')].some((r) => r.textContent.includes('Quoted cleans') && r.textContent.includes('Version 1'))`), 'the quote-first flow publishes: ' + await A.ev(`document.querySelector('#tool .err')?.textContent || ''`));
+  const qf = (await api('GET', '/job-flows')).flows.find((f) => f.name === 'Quoted cleans');
+  ok(qf?.version?.body?.billing === 'quote' && qf.version.body.items?.[0]?.qty === 2 && qf.version.body.dueDays === 10, 'its version keeps billing, the default item and due days');
+  const qj = await api('POST', '/jobs', { flowId: qf.id, contactId: dana.id, values: { job: 'Quoted job' } });
+  for (const st of qf.version.body.steps.slice(0, qf.version.body.steps.findIndex((x) => x.kind === 'quote'))) if (st.kind !== 'client') await api('POST', `/jobs/${qj.job.id}/steps/${st.id}/skip`, { reason: 'Test: straight to the quote' });
+  await A.tap(TOOL('[data-jb=jobs]'));
+  await A.until(`!!${TOOL(`.jb-row[data-job="${qj.job.id}"]`)}`, 8000);
+  ok(await A.ev(`${TOOL(`.jb-row[data-job="${qj.job.id}"]`)}.textContent.includes('$50.00')`), 'the Jobs list shows an owner the job’s total from its default lines');
+  await A.tap(TOOL(`.jb-row[data-job="${qj.job.id}"] .jb-main`));
+  ok(await A.until(`document.querySelector('#projects .jb-step[data-state=current]')?.textContent.includes('Send the quote')`, 8000), 'the job opens at Send the quote');
+  ok(await A.until(`document.querySelector('#projects .jb-quote')?.dataset.quote === 'draft' && document.querySelector('#projects .jb-quote').textContent.includes('$50.00')`), 'the quote step shows not sent, $50.00');
+  await A.tap(`document.querySelector('#projects .jb-detail [data-act=next]')`);
+  ok(await A.until(`document.querySelector('#projects .jb-quote')?.dataset.quote === 'sent' && document.querySelector('#projects .jb-detail [data-act=next]')?.textContent.includes('Copy the quote link') && !!document.querySelector('#projects .jb-detail [data-act=requote]')`, 8000), 'Send the quote sends it: sent, Copy the quote link, New quote');
+  await shot('7-quote');
+  await A.tap(`document.querySelector('#projects .jb-detail [data-act=requote]')`);
+  ok(await A.until(`document.querySelector('#projects .jb-quote')?.dataset.quote === 'draft'`, 8000), 'New quote: back to not sent');
+  // Automatic billing.
+  const af = await api('POST', '/job-flows', { name: 'Auto bins', list: { projectId: p.id, typeId: tp.id }, billing: 'auto', items: [{ itemId: canId, qty: 1 }], steps: [{ kind: 'client', name: 'Client' }, { kind: 'custom', name: 'Clean', settings: { text: 'Clean.' } }, { kind: 'invoice', name: 'Bill' }] });
+  const afPub = await api('POST', `/job-flows/${af.id}/publish`);
+  const aj = await api('POST', '/jobs', { flowId: af.id, contactId: dana.id, values: { job: 'Auto job' } });
+  await openJobIn(aj.job.id);
+  await A.tap(`document.querySelector('#projects .jb-step[data-step="${afPub.version.body.steps[2].id}"]')`);
+  ok(await A.until(`document.querySelector('#projects .jb-auto')?.textContent.includes('Runs by itself')`) && await A.ev(`!document.querySelector('#projects .jb-detail [data-act=next]')`), 'an automatic invoice step says it runs by itself, with no button');
+  await api('POST', `/jobs/${aj.job.id}/steps/${afPub.version.body.steps[1].id}/done`);
+  ok(await A.until(`document.querySelector('#projects .jb-step[data-state=done][data-step="${afPub.version.body.steps[2].id}"]') && (document.querySelector('#projects .jb-auto')?.textContent || '').includes('Made and sent by itself (INV-')`, 8000), 'Clean done: the invoice is made and sent by itself, and the step says so: ' + JSON.stringify((await api('GET', `/jobs/${aj.job.id}/run`)).run?.steps?.map((x) => [x.name, x.state, x.waiting, x.invoice])) + ' | ' + await A.ev(`document.querySelector('#projects .jb-auto')?.textContent + ' / ' + [...document.querySelectorAll('#projects .jb-step')].map((x) => x.dataset.state).join()`));
+  await A.ev(`document.querySelector('#workTabs [data-tab=jobs]').click(); true`);
+  await A.until(`!!document.querySelector('#tool [data-jb=quotes]')`, 8000);
+  await A.tap(TOOL('[data-jb=quotes]'));
+  ok(await A.until(`!!document.querySelector('#tool .fin-q-f')`), 'Quotes in Jobs is the team’s quotes list');
+  await A.tap(TOOL('[data-jb=invoices]'));
+  ok(await A.until(`[...document.querySelectorAll('#tool .fin-inv')].some((r) => r.textContent.includes('INV-'))`, 8000), 'Invoices in Jobs lists the invoice the flow sent');
+  await A.tap(TOOL('[data-jb=jobs]'));
 
   // New job from a flow; it opens on its Overview with its steps.
   await A.tap(TOOL('[data-jb=jobs]'));
@@ -179,11 +246,11 @@ try {
   await api('POST', `/jobs/${crewJob.job.id}/steps/${crewSid('Office check')}/done`);
   ok(await A.until(`document.querySelector('#projects .jb-step[data-state=current]')?.textContent.includes('Bill it')`, 8000), '(setup) Bill it is next');
   await A.tap(`document.querySelector('#projects .jb-step[data-step="${crewSid('Bill it')}"]')`);
-  ok(await A.ev(`!document.querySelector('#projects .jb-detail [data-act=next]')`), 'an invoice step (for anyone) never shows a member Next');
+  ok(await A.ev(`!document.querySelector('#projects .jb-detail [data-act=next]')`), 'an invoice step never shows a member Next');
   await A.ev(`document.querySelector('#workTabs [data-tab=jobs]').click(); true`);
   ok(await A.until(`${TOOL(`.jb-row[data-job="${crewJob.job.id}"] .jb-at`)}?.textContent === 'Next: Bill it'`) && await A.ev(`!${TOOL(`.jb-row[data-job="${crewJob.job.id}"] .jb-next`)}`), 'nor a button for it in the Jobs list (only its name): ' + await A.ev(`${TOOL(`.jb-row[data-job="${crewJob.job.id}"]`)}?.textContent`));
   await api('POST', `/jobs/${crewJob.job.id}/steps/${crewSid('Bill it')}/skip`, { reason: 'Billed on paper' });
-  ok(await A.until(`${TOOL(`.jb-row[data-job="${crewJob.job.id}"] .jb-at`)}?.textContent === 'Next: Get paid'`, 8000) && await A.ev(`!${TOOL(`.jb-row[data-job="${crewJob.job.id}"] .jb-next`)}`), 'a payment step (for anyone): no button in the Jobs list either');
+  ok(await A.until(`${TOOL(`.jb-row[data-job="${crewJob.job.id}"] .jb-at`)}?.textContent === 'Next: Get paid'`, 8000) && await A.ev(`!${TOOL(`.jb-row[data-job="${crewJob.job.id}"] .jb-next`)}`), 'a payment step: no button in the Jobs list either');
   await A.tap(TOOL(`.jb-row[data-job="${crewJob.job.id}"] .jb-main`));
   ok(await A.until(`document.querySelector('#projects .jb-step[data-state=current]')?.textContent.includes('Get paid')`, 8000) && await A.ev(`!document.querySelector('#projects .jb-detail [data-act=next]')`), 'and no Next on the job');
 

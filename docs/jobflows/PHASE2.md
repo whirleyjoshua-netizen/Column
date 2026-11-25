@@ -260,3 +260,24 @@ costing_truth, finance_view, finance_jobs, invoices, quickbooks.
   step for a role, `dueDays: -1`, and a negative or over-1e6 qty are refused at publish. A fractional qty (1.5
   hours) is allowed: the contract's range is 0 < qty ≤ 1e6, and line quantities are already fractional today.
 
+## 10. Client (checkpoint 4)
+- Jobs: owners and admins get Jobs, Quotes, Invoices, Items, Job Flows. Quotes and Invoices are Finance's own lists
+  (`finQuotesTab`, `finInvoicesTab`), not copies. Items: + New item, edit in a sheet, archive / bring back (archived
+  under a fold), Copy from a board's price list (one-time, says what it copied and skipped). Members see none of these.
+- Jobs list rows show an owner the job's total.
+- Builder: a Billing choice. Quote first puts a Send the quote step just before the first invoice (adding an invoice
+  if there's none); leaving it removes the quote step; Automatic adds an invoice step if there's none and labels it.
+  Default items (picked from live Items, with quantities; a deleted or archived one is named as such) and Invoices due
+  in N days. Money steps show "For owners and admins" in place of the who picker and are saved with who admins;
+  ready-made starts make them for admins too. The quote kind is offered in + Add a step only for a quote-first flow
+  without one.
+- Run card: the quote step shows its status (not sent, sent, opened, accepted, declined, lines changed, answered
+  before the flow), its total and who answered and why (owners and admins; members see the step's words only).
+  Next is Send the quote (copies the link), then Copy the quote link; New quote when the server says `mayRequote`.
+  An automatic invoice step says it runs by itself, or why it waits; it has a button only when it waits for a person
+  ($0, owner, refused), never while held for an OK; once done it says it was made and sent by itself, with the number.
+- tests/jobs_ui.mjs adds the owner's Phase 2 path (the five tabs, a new item, the billing choice putting the quote
+  before the invoice, money steps fixed to admins, a default item and due days kept in the version, the job's total,
+  Send the quote, New quote, the automatic invoice's words before and after, Quotes and Invoices in Jobs). Its crew
+  flow's money steps no longer name anyone (they'd be refused now). The new checks fail on ea1e1f8.
+

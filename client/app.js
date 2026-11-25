@@ -18245,10 +18245,11 @@
   // ----- Jobs and Job Flows (docs/jobflows/CONTRACTS.md): Workspace → Jobs. Every job on the team's job lists, the
   // flows they run on (owners and admins build them), New job from a flow, and on a job's Overview the step it's at
   // with a Next button that opens the sheet that does it. The server decides every step; this only shows it. -----
-  const JB = { tab: store.get('jbTab', 'jobs'), jobs: null, flows: null, q: '', flow: '', edit: null, loading: false, runs: new Map(), runBusy: new Set(), pick: {} };
-  const JB_KIND = { client: ['👤', 'Add client info'], details: ['📝', 'Add job info'], book: ['🗓', 'Book a visit'], work: ['🧰', 'Do the work'], signoff: ['✍️', 'Customer signs off'], invoice: ['🧾', 'Send the invoice'], payment: ['💵', 'Collect payment'], tasks: ['☑️', 'Tasks'], custom: ['⭐', 'Your own step'] };
-  const JB_HOW = { client: 'Done when a client is on the job.', details: 'Done when the fields you pick are filled in.', book: 'Done when a visit is booked.', work: 'Done when the job’s checklist is ticked (and photos are on it, if you ask for them).', signoff: 'Done when the customer signs.', invoice: 'Done when an invoice is sent.', payment: 'Done when the job’s invoices are paid in full.', tasks: 'Done when its tasks are done or skipped.', custom: 'Done when someone taps Done, after its checklist.' };
-  const JB_NEXT = { client: 'Add the client', details: 'Fill in the job', book: 'Book the visit', work: 'Open the checklist', signoff: 'Get it signed', invoice: 'Make the invoice', payment: 'Record the payment', tasks: 'See the tasks', custom: 'Done' };
+  const JB = { tab: store.get('jbTab', 'jobs'), jobs: null, flows: null, items: null, q: '', flow: '', edit: null, loading: false, runs: new Map(), runBusy: new Set(), pick: {} };
+  const JB_KIND = { client: ['👤', 'Add client info'], details: ['📝', 'Add job info'], book: ['🗓', 'Book a visit'], work: ['🧰', 'Do the work'], signoff: ['✍️', 'Customer signs off'], quote: ['📨', 'Send the quote'], invoice: ['🧾', 'Send the invoice'], payment: ['💵', 'Collect payment'], tasks: ['☑️', 'Tasks'], custom: ['⭐', 'Your own step'] };
+  const JB_HOW = { client: 'Done when a client is on the job.', details: 'Done when the fields you pick are filled in.', book: 'Done when a visit is booked.', work: 'Done when the job’s checklist is ticked (and photos are on it, if you ask for them).', signoff: 'Done when the customer signs.', quote: 'Done when the customer accepts the quote. The accepted quote is the price.', invoice: 'Done when an invoice is sent.', payment: 'Done when the job’s invoices are paid in full.', tasks: 'Done when its tasks are done or skipped.', custom: 'Done when someone taps Done, after its checklist.' };
+  const JB_NEXT = { client: 'Add the client', details: 'Fill in the job', book: 'Book the visit', work: 'Open the checklist', signoff: 'Get it signed', quote: 'Send the quote', invoice: 'Make the invoice', payment: 'Record the payment', tasks: 'See the tasks', custom: 'Done' };
+  const JB_MONEY = ['quote', 'invoice', 'payment'];
   const JB_STATE = { done: 'done', skipped: 'skipped', current: 'next up', waiting: 'later' };
   const jbIsJobList = (t) => !!t && (!!t.trade || t.key === 'jobs');
   const jbLists = () => (S.projects || []).flatMap((p) => (p.types || []).filter(jbIsJobList).map((t) => ({ p, t })));
@@ -18285,9 +18286,11 @@
     if (!JB.jobs || !JB.flows) { jbLoad(); return [h('p', { class: 'day-hint' }, 'Loading…')]; }
     const admin = amAdmin();
     if (JB.edit && admin) return jbBuilder();
-    const tab = admin && JB.tab === 'flows' ? 'flows' : 'jobs';
-    const tabs = admin ? h('div', { class: 'seg jb-tabs', role: 'tablist' }, [['jobs', 'Jobs'], ['flows', 'Job Flows']].map(([k, l]) => h('button', { class: tab === k ? 'on' : null, role: 'tab', 'aria-selected': String(tab === k), 'data-jb': k, onclick: () => { JB.tab = k; store.set('jbTab', k); renderTool(true); } }, l))) : null;
-    return [tabs, ...(tab === 'flows' ? jbFlowsList() : jbJobsList())].filter(Boolean);
+    const tab = admin && ['quotes', 'invoices', 'items', 'flows'].includes(JB.tab) ? JB.tab : 'jobs';
+    const tabs = admin ? h('div', { class: 'seg jb-tabs', role: 'tablist' }, [['jobs', 'Jobs'], ['quotes', 'Quotes'], ['invoices', 'Invoices'], ['items', 'Items'], ['flows', 'Job Flows']].map(([k, l]) => h('button', { class: tab === k ? 'on' : null, role: 'tab', 'aria-selected': String(tab === k), 'data-jb': k, onclick: () => { JB.tab = k; store.set('jbTab', k); renderTool(true); } }, l))) : null;
+    // Quotes and Invoices are Finance's lists, here too (PHASE2.md §5); Items is the business's price list.
+    const body = tab === 'flows' ? jbFlowsList() : tab === 'quotes' ? finQuotesTab() : tab === 'invoices' ? finInvoicesTab() : tab === 'items' ? jbItemsTab() : jbJobsList();
+    return [tabs, ...body].filter(Boolean);
   }
 
   // Jobs: every job, newest change first, with where its flow is and a button for the step it's at.
@@ -18308,7 +18311,7 @@
   }
   function jbRow(j) {
     const r = j.run;
-    const sub = [j.client?.name, j.stage, j.scheduled ? String(j.scheduled).slice(0, 10) : null].filter(Boolean).join(' · ');
+    const sub = [j.client?.name, j.stage, j.scheduled ? String(j.scheduled).slice(0, 10) : null, j.total ? money2(j.total) : null].filter(Boolean).join(' · ');
     return h('div', { class: 'jb-row', 'data-job': j.id },
       h('button', { type: 'button', class: 'jb-main', onclick: () => openJob(j.projectId, j.id) }, h('b', {}, j.name || 'Job'), sub ? h('small', {}, sub) : null,
         r ? h('span', { class: 'jb-prog' }, h('span', { class: 'lead-bar', style: '--c:var(--accent)' }, h('i', { style: `width:${Math.round((r.done / Math.max(1, r.total)) * 100)}%` })), h('small', {}, `${r.flowName} · ${r.done}/${r.total}`))
@@ -18342,10 +18345,30 @@
       case 'details': jbTabTo(r, 'overview'); return setTimeout(() => $('#projects .pj-fields')?.scrollIntoView({ block: 'center', behavior: 'smooth' }), 80);
       case 'book': return visitSheet(p, t, r);
       case 'work': case 'signoff': case 'tasks': return jbTabTo(r, 'work');
+      case 'quote': return jbQuote(p, r, s);
       case 'invoice': return jbInvoice(r, s);
       case 'payment': return jbPay(r);
       case 'custom': return jbStep(r, s, 'done');
     }
+  }
+  // The Quote step: send the job's lines as a quote (the link is copied), copy the link again, or start a new quote.
+  async function jbQuote(p, r, s) {
+    if (!amAdmin()) return toast('Owners and admins send the quotes.');
+    if (s.quote?.url) { copyText(s.quote.url); return toast('Link copied. Send it to your customer: they accept or decline it there.'); }
+    await prFresh(p, r);
+    const y = await api('POST', `/records/${r.id}/share`, {}).catch((e) => toast(e.message));
+    if (!y) return;
+    prUpsertRecord(y);
+    if (y.share?.token) { copyText(`${location.origin}/q/${y.share.token}`); toast('Link copied. Send it to your customer: they accept or decline it there.'); }
+    jbFetchRun(r.id);
+  }
+  async function jbRequote(r) {
+    const y = await api('POST', `/jobs/${r.id}/requote`).catch((e) => toast(e.message));
+    if (!y) return;
+    JB.runs.set(r.id, y.run || null);
+    toast('Ready for a new quote: change the lines if you need to, then send it.');
+    renderProjects();
+    jbSoon();
   }
   async function jbInvoice(r, s) {
     if (!amAdmin()) return toast('Owners and admins make the invoices.');
@@ -18407,7 +18430,11 @@
   }
   // Next: only on the step the job is at, only for whoever the step is for, and invoices and payments only for owners
   // and admins (their routes are theirs alone, whoever the step names).
-  const jbMayNext = (s) => s.state === 'current' && s.mayAct && (!['invoice', 'payment'].includes(s.kind) || amAdmin());
+  // An automatic invoice step has a button only when it waits for a person ($0, its owner can't send, refused);
+  // held for an OK it waits for the approval alone (PHASE2.md §1.4).
+  const jbMayNext = (s) => s.state === 'current' && s.mayAct && (!['quote', 'invoice', 'payment'].includes(s.kind) || amAdmin()) && (!s.auto || ['zero', 'owner', 'refused'].includes(s.waiting));
+  const JB_QUOTE = { draft: 'Not sent yet', sent: 'Sent, waiting for the customer', viewed: 'The customer opened it', accepted: 'Accepted', declined: 'Declined', changed: 'The lines changed after it was accepted', stale: 'Answered before this flow started' };
+  const JB_WAIT = { approval: 'Waiting for an OK: it sends when an approver says yes.', zero: 'Made, but the total is $0. Fix its lines and send it.', owner: 'Whoever started this job can’t send invoices any more. Make and send it by hand.', refused: 'It couldn’t be sent.' };
   // On a job's Overview: its flow's steps in a row, the one picked (or next up) under it with its button.
   function jbRunCard(p, t, r) {
     if (!jbIsJobList(t)) return null;
@@ -18432,6 +18459,10 @@
       s.kind === 'custom' && s.text ? h('p', { class: 'jb-text' }, s.text) : null,
       s.state === 'skipped' ? h('small', { class: 'muted' }, `Skipped: ${s.skipReason || ''}`) : h('small', { class: 'muted' }, JB_HOW[s.kind]),
       s.state === 'current' && run.current?.missing ? h('small', { class: 'jb-missing' }, run.current.missing) : null,
+      s.kind === 'quote' && s.quote ? h('div', { class: 'jb-quote', 'data-quote': s.quote.status },
+        h('small', {}, [JB_QUOTE[s.quote.status] || s.quote.status, s.quote.total != null ? money2(s.quote.total) : null, s.quote.answeredBy ? `by ${s.quote.answeredBy}` : null].filter(Boolean).join(' · ')),
+        s.quote.reason ? h('small', { class: 'muted' }, `“${s.quote.reason}”`) : null) : null,
+      s.auto ? h('small', { class: 'jb-auto', 'data-waiting': s.waiting || '' }, s.waiting ? JB_WAIT[s.waiting] + (s.reason ? ' ' + s.reason : '') : s.state === 'done' ? `Made and sent by itself${s.invoice ? ' (' + s.invoice + ')' : ''}.` : 'Runs by itself when the step before it is done.') : null,
       s.kind === 'custom' && s.checklist?.length ? h('div', { class: 'jb-check' }, s.checklist.map((c, i) => {
         const box = h('input', { type: 'checkbox', checked: c.done, disabled: !s.mayAct || (c.done && s.state === 'done' && !admin) });
         box.addEventListener('change', () => jbStep(r, s, 'check', { item: i, done: box.checked }));
@@ -18439,7 +18470,8 @@
       })) : null,
       s.kind === 'tasks' && s.tasks ? h('div', { class: 'jb-tasks' }, s.tasks.map((x) => h('small', { class: x.done || x.skipped ? 'muted' : null }, `${x.done ? '✓' : x.skipped ? '–' : '○'} ${x.text}`)), s.more ? h('small', { class: 'muted' }, `and ${s.more} more`) : null) : null,
       h('div', { class: 'jb-acts' },
-        jbMayNext(s) ? h('button', { class: 'btn small primary-btn', 'data-act': 'next', onclick: () => jbAction(p, t, r, s) }, JB_NEXT[s.kind]) : null,
+        jbMayNext(s) ? h('button', { class: 'btn small primary-btn', 'data-act': 'next', onclick: () => jbAction(p, t, r, s) }, s.kind === 'quote' && s.quote?.url ? '🔗 Copy the quote link' : JB_NEXT[s.kind]) : null,
+        s.kind === 'quote' && admin && s.quote?.mayRequote && ['declined', 'accepted', 'changed', 'viewed', 'sent', 'stale'].includes(s.quote.status) ? h('button', { class: 'btn small', 'data-act': 'requote', onclick: () => jbRequote(r) }, 'New quote') : null,
         open && (admin || (s.canSkip && s.mayAct)) ? h('button', { class: 'btn small', 'data-act': 'skip', onclick: () => jbSkip(r, s) }, 'Skip') : null,
         !open && admin ? h('button', { class: 'btn small', 'data-act': 'reopen', onclick: () => jbStep(r, s, 'reopen') }, 'Reopen') : null)) : null;
     const menu = admin ? h('button', { class: 'icon-btn', html: I.more, 'aria-label': 'Flow options', onclick: (e) => {
@@ -18485,6 +18517,53 @@
 
   // Job Flows (owners and admins): the flows, a new one (blank or from a ready-made start), and the builder.
   const jbChanged = (f) => !!f.version && JSON.stringify({ l: f.draft?.list, w: f.draft?.whoCreates, s: f.draft?.steps }) !== JSON.stringify({ l: f.version.body.list, w: f.version.body.whoCreates, s: f.version.body.steps });
+  // Items: the business's price list (PHASE2.md §1.1): what a flow's default lines and quotes draw from.
+  function jbItemsLoad(force) {
+    if (JB.itemsBusy || (JB.items && !force)) return;
+    JB.itemsBusy = true;
+    api('GET', '/job-items').then((y) => { JB.items = y.items; }).catch((e) => toast(e.message)).finally(() => { JB.itemsBusy = false; jbRender(); });
+  }
+  const jbCents = (v) => { const n = Math.round(Number(String(v ?? '').replace(/[$,\s]/g, '')) * 100); return Number.isFinite(n) ? n : NaN; };
+  function jbItemSheet(x) {
+    const name = h('input', { value: x?.name || '', maxlength: 120, placeholder: 'Can clean', 'data-field': 'name' });
+    const desc = h('input', { value: x?.description || '', maxlength: 500, placeholder: 'Inside and out', 'data-field': 'description' });
+    const unit = h('input', { value: x?.unit || '', maxlength: 20, placeholder: 'each, hour, sq ft', 'data-field': 'unit' });
+    const price = h('input', { value: x ? (x.price / 100).toFixed(2) : '', inputmode: 'decimal', placeholder: '25.00', 'data-field': 'price' });
+    const cost = h('input', { value: x?.cost != null ? (x.cost / 100).toFixed(2) : '', inputmode: 'decimal', placeholder: 'Optional', 'data-field': 'cost' });
+    const tax = h('input', { type: 'checkbox', checked: x ? x.taxable !== false : true });
+    sheet(x ? x.name : 'New item', [h('label', {}, 'Name', name), h('label', {}, 'Description', desc), h('div', { class: 'row2' }, h('label', {}, 'Unit', unit), h('label', {}, 'Price ($)', price)), h('label', {}, 'Our cost ($)', cost), h('label', { class: 'pick' }, tax, 'Taxed')], async () => {
+      const body = { name: name.value.trim(), description: desc.value, unit: unit.value.trim(), price: jbCents(price.value || 0), cost: cost.value.trim() ? jbCents(cost.value) : null, taxable: tax.checked };
+      const y = x ? await api('PATCH', '/job-items/' + x.id, body) : await api('POST', '/job-items', body);
+      JB.items = [...(JB.items || []).filter((z) => z.id !== y.item.id), y.item].sort((a, b) => a.name.localeCompare(b.name));
+      jbRender();
+      toast(x ? 'Saved' : 'Item added');
+    }, x ? 'Save' : 'Add it');
+    setTimeout(() => name.focus(), 50);
+  }
+  function jbImport() {
+    const boards = (S.projects || []).filter((p) => (p.types || []).some((t) => t.key === 'price_list'));
+    if (!boards.length) return toast('None of your boards has a price list.');
+    const sel = h('select', { 'aria-label': 'Board' }, boards.map((p) => h('option', { value: p.id }, p.name)));
+    sheet('Copy from a board’s price list', [h('p', { class: 'day-hint' }, 'A one-time copy into Items. Items already copied are skipped; the board keeps its list.'), h('label', {}, 'Board', sel)], async () => {
+      const y = await api('POST', '/job-items/import', { projectId: sel.value });
+      toast(`${plural(y.added, 'item')} copied${y.skipped ? `, ${y.skipped} already here` : ''}${y.noName ? `, ${y.noName} without a name skipped` : ''}`);
+      jbItemsLoad(true);
+    }, 'Copy them');
+  }
+  function jbItemsTab() {
+    jbItemsLoad();
+    if (!JB.items) return [h('p', { class: 'day-hint' }, 'Loading…')];
+    const live = JB.items.filter((x) => !x.archived), gone = JB.items.filter((x) => x.archived);
+    const row = (x) => h('div', { class: 'jb-row' + (x.archived ? ' off' : ''), 'data-item': x.id },
+      h('button', { type: 'button', class: 'jb-main', onclick: () => jbItemSheet(x) }, h('b', {}, x.name), h('small', {}, [money2(x.price) + (x.unit ? ' / ' + x.unit : ''), x.cost != null ? `cost ${money2(x.cost)}` : null, x.taxable === false ? 'not taxed' : null, x.description].filter(Boolean).join(' · '))),
+      h('button', { class: 'btn small', 'data-act': x.archived ? 'restore' : 'archive', onclick: async () => { const y = await api('POST', `/job-items/${x.id}/${x.archived ? 'restore' : 'archive'}`).catch((e) => toast(e.message)); if (y) { Object.assign(x, y.item); jbRender(); } } }, x.archived ? 'Bring back' : 'Archive'));
+    return [
+      h('p', { class: 'day-hint' }, 'Your price list: services, materials and fees. Flows fill a new job’s lines from it, and quotes and invoices are made from those lines. Only owners and admins see it.'),
+      h('div', { class: 'jb-bar' }, h('button', { class: 'btn primary-btn', 'data-act': 'new-item', onclick: () => jbItemSheet(null) }, '+ New item'), h('button', { class: 'btn', 'data-act': 'import-items', onclick: jbImport }, 'Copy from a board’s price list')),
+      h('div', { class: 'jb-rows' }, live.length ? live.map(row) : [h('p', { class: 'day-hint' }, 'No items yet.')]),
+      gone.length ? h('details', { class: 'jb-gone' }, h('summary', {}, `Archived (${gone.length})`), h('div', { class: 'jb-rows' }, gone.map(row))) : null,
+    ].filter(Boolean);
+  }
   function jbFlowsList() {
     const rows = JB.flows.map((f) => {
       const { p, t } = jbListOf(f);
@@ -18514,7 +18593,7 @@
   function jbStartSteps(key, t) {
     const stages = jbStages(t).map((x) => x.toLowerCase());
     const keys = new Set((t?.fields || []).map((f) => f.key));
-    return JB_STARTS[key].steps.map(([kind, name, stage, settings]) => ({ kind, name: name || JB_KIND[kind][1], stage: stage && stages.includes(stage.toLowerCase()) ? jbStages(t)[stages.indexOf(stage.toLowerCase())] : null, who: { type: 'anyone' }, canSkip: false,
+    return JB_STARTS[key].steps.map(([kind, name, stage, settings]) => ({ kind, name: name || JB_KIND[kind][1], stage: stage && stages.includes(stage.toLowerCase()) ? jbStages(t)[stages.indexOf(stage.toLowerCase())] : null, who: { type: JB_MONEY.includes(kind) ? 'admins' : 'anyone' }, canSkip: false,
       settings: kind === 'details' ? { fields: (settings?.fields || []).filter((k) => keys.has(k)) } : settings || {} }));
   }
   function jbNewFlow() {
@@ -18534,7 +18613,7 @@
   }
   function jbEdit(f) {
     const d = f.draft || f.version?.body;
-    JB.edit = { id: f.id, name: f.name, icon: f.icon || '🧰', list: { ...d.list }, whoCreates: d.whoCreates || 'admins', steps: JSON.parse(JSON.stringify(d.steps || [])), err: '' };
+    JB.edit = { id: f.id, name: f.name, icon: f.icon || '🧰', list: { ...d.list }, whoCreates: d.whoCreates || 'admins', billing: d.billing || 'hand', items: JSON.parse(JSON.stringify(d.items || [])), dueDays: d.dueDays ?? null, steps: JSON.parse(JSON.stringify(d.steps || [])), err: '' };
     JB.tab = 'flows';
     if (toolOpen !== 'jobs') openTool('jobs'); else renderTool(true);
   }
@@ -18572,6 +18651,9 @@
       const wsel = h('select', { 'aria-label': 'Who does it', 'data-field': 'who' }, h('option', { value: 'anyone', selected: wv === 'anyone' }, 'Anyone on the job'), h('option', { value: 'admins', selected: wv === 'admins' }, 'Owners and admins'),
         ...roles.map((r) => h('option', { value: 'role:' + r.id, selected: wv === 'role:' + r.id }, `The ${r.name} role`)), ...members.map((m) => h('option', { value: 'member:' + m.id, selected: wv === 'member:' + m.id }, m.name)));
       wsel.addEventListener('change', () => { const [type, id] = wsel.value.split(':'); s.who = id ? { type, id } : { type }; });
+      // Money steps are for owners and admins, whatever else (PHASE2.md §1.2).
+      if (JB_MONEY.includes(s.kind)) s.who = { type: 'admins' };
+      const whoEl = JB_MONEY.includes(s.kind) ? h('small', { class: 'muted jb-who-fixed', 'data-field': 'who' }, 'For owners and admins') : wsel;
       const skip = h('input', { type: 'checkbox', checked: !!s.canSkip });
       skip.addEventListener('change', () => { s.canSkip = skip.checked; });
       s.settings ||= {};
@@ -18608,10 +18690,39 @@
           h('button', { class: 'icon-btn', 'aria-label': 'Move down', disabled: i === E.steps.length - 1, onclick: () => move(i, 1) }, '↓'),
           h('button', { class: 'icon-btn', html: I.close, 'aria-label': 'Remove step', onclick: () => { E.steps.splice(i, 1); redraw(); } })),
         h('small', { class: 'muted' }, JB_HOW[s.kind]),
-        nm, h('div', { class: 'row2' }, wsel, st), extra, h('label', { class: 'pick' }, skip, 'Whoever does it may skip it (with a reason)'));
+        nm, h('div', { class: 'row2' }, whoEl, st), extra,
+        s.kind === 'invoice' && E.billing === 'auto' ? h('small', { class: 'jb-auto' }, 'Automatic: made from the job’s lines and sent by itself when the step before it is done.') : null, h('label', { class: 'pick' }, skip, 'Whoever does it may skip it (with a reason)'));
     };
-    const add = h('button', { class: 'btn', 'data-act': 'add-step', onclick: (e) => openMenu(e.currentTarget, Object.entries(JB_KIND).map(([k, [ic, l]]) => ({ label: `${ic} ${l}`, run: () => { E.steps.push({ kind: k, name: l, stage: null, who: { type: 'anyone' }, canSkip: false, settings: k === 'tasks' ? { tasks: [] } : {} }); redraw(); } }))) }, '+ Add a step');
-    const body = () => ({ name: E.name.trim(), icon: E.icon.trim() || '🧰', list: E.list, whoCreates: E.whoCreates, steps: E.steps.map((s) => ({ ...(s.id ? { id: s.id } : {}), kind: s.kind, name: s.name, stage: s.stage || null, who: s.who || { type: 'anyone' }, canSkip: !!s.canSkip, settings: s.settings || {} })) });
+    const add = h('button', { class: 'btn', 'data-act': 'add-step', onclick: (e) => openMenu(e.currentTarget, Object.entries(JB_KIND).filter(([k]) => k !== 'quote' || (E.billing === 'quote' && !E.steps.some((x) => x.kind === 'quote'))).map(([k, [ic, l]]) => ({ label: `${ic} ${l}`, run: () => { E.steps.push({ kind: k, name: l, stage: null, who: { type: JB_MONEY.includes(k) ? 'admins' : 'anyone' }, canSkip: false, settings: k === 'tasks' ? { tasks: [] } : {} }); redraw(); } }))) }, '+ Add a step');
+    // Billing: by hand, quote first (puts a Send the quote step before the invoice), or automatic.
+    const bill = h('select', { 'aria-label': 'Billing', 'data-field': 'billing' }, [['hand', 'By hand: an owner or admin sends the invoice'], ['quote', 'Quote first: the customer accepts a quote, then the invoice'], ['auto', 'Automatic: the invoice sends itself after the work']].map(([k, l]) => h('option', { value: k, selected: E.billing === k }, l)));
+    bill.addEventListener('change', () => {
+      E.billing = bill.value;
+      if (E.billing !== 'quote') E.steps = E.steps.filter((x) => x.kind !== 'quote');
+      if (E.billing === 'quote' && !E.steps.some((x) => x.kind === 'quote')) {
+        const at = E.steps.findIndex((x) => x.kind === 'invoice');
+        const q = { kind: 'quote', name: JB_KIND.quote[1], stage: null, who: { type: 'admins' }, canSkip: false, settings: {} };
+        if (at >= 0) E.steps.splice(at, 0, q);
+        else E.steps.push(q, { kind: 'invoice', name: JB_KIND.invoice[1], stage: null, who: { type: 'admins' }, canSkip: false, settings: {} });
+      }
+      if (E.billing === 'auto' && !E.steps.some((x) => x.kind === 'invoice')) E.steps.push({ kind: 'invoice', name: JB_KIND.invoice[1], stage: null, who: { type: 'admins' }, canSkip: false, settings: {} });
+      redraw();
+    });
+    const due = h('input', { type: 'number', min: 0, max: 120, step: 1, value: E.dueDays ?? '', placeholder: '14', 'aria-label': 'Invoices due in days', 'data-field': 'dueDays' });
+    due.addEventListener('input', () => { E.dueDays = due.value === '' ? null : Number(due.value); });
+    // Default items: what a new job's lines start with (from Items).
+    jbItemsLoad();
+    const live = (JB.items || []).filter((x) => !x.archived);
+    const itemRows = h('div', { class: 'jb-defaults' }, E.items.map((x, i) => {
+      const it = (JB.items || []).find((y) => y.id === x.itemId);
+      const qty = h('input', { type: 'number', min: 0, step: 'any', value: x.qty, 'aria-label': 'Quantity', class: 'jb-qty' });
+      qty.addEventListener('input', () => { x.qty = Number(qty.value); });
+      return h('div', { class: 'jb-defrow', 'data-default': x.itemId }, qty, h('span', {}, it ? `${it.name} · ${money2(it.price)}${it.archived ? ' (archived)' : ''}` : 'An item that was deleted'), h('button', { class: 'icon-btn', html: I.close, 'aria-label': 'Remove item', onclick: () => { E.items.splice(i, 1); redraw(); } }));
+    }));
+    const addItem = live.filter((x) => !E.items.some((y) => y.itemId === x.id));
+    const itemPick = h('select', { 'aria-label': 'Add a default item', 'data-field': 'add-item' }, h('option', { value: '' }, addItem.length ? '+ Add a default item…' : JB.items?.length ? 'Every item is in' : 'No items yet (Jobs → Items)'), addItem.map((x) => h('option', { value: x.id }, `${x.name} · ${money2(x.price)}`)));
+    itemPick.addEventListener('change', () => { if (itemPick.value) { E.items.push({ itemId: itemPick.value, qty: 1 }); redraw(); } });
+    const body = () => ({ name: E.name.trim(), icon: E.icon.trim() || '🧰', list: E.list, whoCreates: E.whoCreates, billing: E.billing, items: E.items, dueDays: E.dueDays, steps: E.steps.map((s) => ({ ...(s.id ? { id: s.id } : {}), kind: s.kind, name: s.name, stage: s.stage || null, who: s.who || { type: 'anyone' }, canSkip: !!s.canSkip, settings: s.settings || {} })) });
     const keep = (y) => { const i = JB.flows.findIndex((x) => x.id === y.id); if (i >= 0) JB.flows[i] = y; else JB.flows.push(y); };
     const save = async (publish) => {
       try {
@@ -18628,6 +18739,7 @@
         f?.version ? h('small', { class: 'muted' }, `Version ${f.version.n} is live`) : h('small', { class: 'muted' }, 'Not published yet')),
       h('div', { class: 'jb-nameline' }, icon, name),
       h('div', { class: 'row2' }, h('label', {}, 'For the jobs on', list), h('label', {}, 'Who starts jobs on it', who)),
+      h('div', { class: 'jb-money' }, h('label', {}, 'Billing', bill), h('div', { class: 'row2' }, h('div', {}, h('small', { class: 'muted' }, 'Default items on a new job'), itemRows, itemPick), h('label', {}, 'Invoices due in (days)', due))),
       h('div', { class: 'jb-scards' }, E.steps.map(stepCard)),
       add,
       E.err ? h('p', { class: 'err' }, E.err) : null,
