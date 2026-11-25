@@ -67,7 +67,7 @@ try {
   ok(await A.ev(`${T('.cc-name')}.textContent === 'New Client Onboarding' && !!${T('.cc-title-row .health')} && ${T('.cc-owner')}.textContent.includes('You') && ${T('.cc-crumb')}.textContent.startsWith('Campaigns')`), 'header: name, health, owner, breadcrumb');
   // The numbers left the header for one line of chips (2026-11-25): how complete it is, then All, My tasks, Overdue, Blocked.
   ok(await A.ev(`/^[0-9]+% complete/.test(${T('.cc-chips')}.textContent) && ${T('.cc-chip[data-chip=overdue]')}.classList.contains('bad')`), 'the chips: how complete it is, overdue flagged');
-  ok(await A.ev(`[...document.querySelectorAll('#camps .cc-tab')].map((b) => b.textContent).join('|')`) === 'Plan|Work|Activity|Report', 'four tabs: Plan, Work, Activity, Report');
+  ok(await A.ev(`[...document.querySelectorAll('#camps .cc-tab')].map((b) => b.textContent).join('|')`) === 'Plan|Work|Progress', 'three tabs: Plan, Work, Progress');
   // The brief, in four parts.
   ok(await A.ev(`[...document.querySelectorAll('#camps .cc-obrief h4')].map((x) => x.textContent).join('|')`) === 'Objective|Audience|Strategy|Success metrics|Where things are', 'the brief, down the left: Objective, Audience, Strategy, Success metrics, and where things are');
   ok(await A.ev(`${T('.cc-bf[data-field=brief]')}.textContent.includes('installed customers') && ${T('.cc-bf[data-field=audience]')}.textContent === 'New valley homeowners' && ${T('.cc-metrics')}.textContent.includes('Consultations booked') && ${T('.cc-metrics')}.textContent.includes('0 / 20')`), 'filled from the campaign; a target (0 / 20) is a success metric');
@@ -122,12 +122,11 @@ try {
   await tabTo('plan');
   ok(await A.ev(`!!${T('.cc-planner')} && document.querySelectorAll('#camps .cc-phase').length === 4`), 'Plan: the four phases');
   ok(await A.ev(`[...document.querySelectorAll('#camps button')].some((b) => b.textContent.startsWith('Files')) && [...document.querySelectorAll('#camps button')].some((b) => b.textContent.startsWith('Notes')) && [...document.querySelectorAll('#camps button')].some((b) => b.textContent.startsWith('#'))`), 'under the brief: the feed, Files and Notes');
-  await tabTo('activity');
+  await tabTo('progress');
   ok(await A.ev(`[...document.querySelectorAll('#camps button')].some((b) => b.textContent === 'Log a call or email') && [...document.querySelectorAll('#camps button')].some((b) => b.textContent.startsWith('Write a report')) && [...document.querySelectorAll('#camps .cc-hist-row')].some((x) => x.textContent.includes('Pull last month’s leads'))`), 'Activity: the log, Write a report, and what was recently done');
-  // Pulse: at the top of Report (2026-11-25).
-  await tabTo('report');
-  await A.until(`!!document.querySelector('#camps .cc-pulse')`);
-  ok(await A.ev(`${T('.cc-pulse')}.textContent.includes('Blockers') && [...document.querySelectorAll('#camps .cc-idea p')].some((p) => p.textContent.includes('nobody on them'))`), 'Pulse: blockers, overdue, and what to do next');
+  // How it's going and what to do next head Progress (2026-11-25); blockers are in its numbers.
+  await A.until(`!!document.querySelector('#camps .ccp-health')`);
+  ok(await A.ev(`[...document.querySelectorAll('#camps .ccr-top .ccr-stat small')].some((x) => x.textContent === 'Blocked') && [...document.querySelectorAll('#camps .cc-idea p')].some((p) => p.textContent.includes('nobody on them'))`), 'Progress: blockers, overdue, and what to do next');
   await A.ev(`[...document.querySelectorAll('#camps .cc-idea')].find((x) => x.textContent.includes('nobody on them')).querySelector('button').click(); true`);
   ok(await A.until(`${T('.cc-body')}?.dataset.tab === 'work'`), '“Assign them” takes you to the work');
   // A phone: nothing sideways.

@@ -69,7 +69,7 @@ try {
   ok(await A.until(`!!${T('.cc-body')}`), 'the campaign opens');
   await A.ev(`document.querySelector('#sheet [aria-label=Close]')?.click(); true`);
   // ----- Task 2: the header, tabs and chips -----
-  ok(await A.ev(`JSON.stringify([...document.querySelectorAll('#camps .cc-tab')].map((b) => b.dataset.ctab)) === '["plan","work","activity","report"]'`), 'four tabs: Plan, Work, Activity, Report');
+  ok(await A.ev(`JSON.stringify([...document.querySelectorAll('#camps .cc-tab')].map((b) => b.dataset.ctab)) === '["plan","work","progress"]'`), 'three tabs: Plan, Work, Progress (2026-11-25, stage 3)');
   ok(await A.ev(`${T('.cc-body')}.dataset.tab === 'plan'`), 'it opens on Plan');
   ok(await A.ev(`!${T('.cc-kpis')} && !${T('.cc-pulse-btn')}`), 'no row of numbers, no Pulse button');
   ok(await A.ev(`/^[0-9]+% complete/.test(${T('.cc-chips')}?.textContent.trim() || '')`), 'the chips line starts with how complete it is');
@@ -84,8 +84,8 @@ try {
   await A.tap(T('[aria-label="Campaign options"]'));
   ok(await A.until(`[...document.querySelectorAll('#menu button')].some((b) => b.textContent.includes('Edit details'))`), 'editing the campaign is in ⋯');
   await A.ev(`document.body.click(); true`);
-  await tabTo('report');
-  ok(await A.until(`${T('.cc-body')}.textContent.includes('What to do next')`), 'Report has what to do next (from the Pulse)');
+  await tabTo('progress');
+  ok(await A.until(`${T('.cc-body')}.textContent.includes('What to do next')`), 'Progress has what to do next (from the Pulse)');
   await tabTo('plan');
   // ----- Task 3: Plan in the owner's mockup -----
   const phaseEl = (i) => `document.querySelectorAll('#camps .cc-phase')[${i}]`;

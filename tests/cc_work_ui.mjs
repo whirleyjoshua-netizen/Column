@@ -97,7 +97,7 @@ try {
   await chip('blocked');
   ok(JSON.stringify(await A.ev(listRows)) === JSON.stringify(['Call the Diaz family', 'Send quotes']), 'Blocked: only what waits (in order: Diaz waits for Lee, the next phase for this one): ' + JSON.stringify(await A.ev(listRows)));
   await api('PATCH', '/campaigns/' + camp.id, { inOrder: false });
-  await tabTo('activity'); await tabTo('work');
+  await tabTo('progress'); await tabTo('work');
   ok(await A.until(`${T('.cc-body')}.textContent.includes('Nothing is blocked.')`), 'nothing blocked says so');
   await view('timeline');
   ok(await A.until(`${T('.cc-body')}.textContent.includes('Nothing is blocked.') && !${T('.cc-body')}.textContent.includes('No tasks here yet')`), 'Timeline says it in the chip’s words too');

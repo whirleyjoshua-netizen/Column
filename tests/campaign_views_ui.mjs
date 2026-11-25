@@ -146,7 +146,7 @@ try {
   // From the live check (column-a9, 2026-11-20): while someone types, work arriving from others holds the page's redraw
   // until they leave the field. Pressing a button used to redraw it before the click landed, losing what was typed.
   await A.ev(`document.querySelector('#sheet [aria-label=Close]')?.click(); true`);
-  await A.ev(`${T('.cc-tab[data-ctab=activity]')}.click(); true`);
+  await A.ev(`${T('.cc-tab[data-ctab=progress]')}.click(); true`);
   await A.until(`[...document.querySelectorAll('#camps button')].some((b) => b.textContent === 'Log a call or email')`);
   await A.ev(`[...document.querySelectorAll('#camps button')].find((b) => b.textContent === 'Log a call or email').click(); true`);
   await A.until(`!!${T('.log-contact')}`);

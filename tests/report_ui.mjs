@@ -84,17 +84,17 @@ try {
   await A.tap(card);
   // The pulse: the forecast, 9 days after the end date, and what's gone quiet.
   // It heads the Report tab since 2026-11-25.
-  await A.until(`!!document.querySelector('#camps .cc-tab[data-ctab=report]')`, 8000);
-  await A.tap(`document.querySelector('#camps .cc-tab[data-ctab=report]')`);
+  await A.until(`!!document.querySelector('#camps .cc-tab[data-ctab=progress]')`, 8000);
+  await A.tap(`document.querySelector('#camps .cc-tab[data-ctab=progress]')`);
   const fcDay = dk(Date.now() + 11 * DAY);
   const fcLabel = await A.ev(`new Date(${JSON.stringify(fcDay)} + 'T12:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' })`);
-  ok(await A.until(`(document.querySelector('#camps .cc-pulse-fc')?.textContent || '').includes(${JSON.stringify(fcLabel)}) && /9 d late/.test(document.querySelector('#camps .cc-pulse-fc').textContent)`, 8000), 'the pulse forecasts the finish at this pace: ' + await A.ev(`document.querySelector('#camps .cc-pulse-fc')?.textContent`));
-  ok(await A.ev(`(document.querySelector('#camps .cc-pulse-quiet')?.textContent || '') === '💤Quiet 3+ days3'`), 'and how many tasks have gone quiet: ' + await A.ev(`document.querySelector('#camps .cc-pulse-quiet')?.textContent`));
+  const statOf = (label) => `[...document.querySelectorAll('#camps .ccr-top .ccr-stat')].find((s) => s.querySelector('small')?.textContent === ${JSON.stringify(label)})`;
+  ok(await A.until(`(${statOf('Forecast finish')}?.textContent || '').includes(${JSON.stringify(fcLabel)}) && ${statOf('Forecast finish')}.classList.contains('bad') && /9 days after the end date/.test(document.querySelector('#camps .ccr-why').textContent)`, 8000), 'the pulse forecasts the finish at this pace: ' + await A.ev(`document.querySelector('#camps .cc-pulse-fc')?.textContent`));
+  ok(await A.ev(`${statOf('Quiet 3+ days')}?.querySelector('b').textContent === '3'`), 'and how many tasks have gone quiet: ' + await A.ev(`${statOf('Quiet 3+ days')}?.textContent`));
   ok(await A.ev(`[...document.querySelectorAll('#camps .cc-idea p')].some((p) => p.textContent.includes('Install 1') && p.textContent.includes('hasn’t moved in 6 days (Sam)'))`), 'What to do next: the quietest task, with Nudge');
-  // The Report tab.
-  await A.tap(`document.querySelector('#camps .cc-tab[data-ctab=report]')`);
+  // The report, on the same Progress tab.
   const R = (q) => `document.querySelector('#camps .cc-body ${q}')`;
-  ok(await A.until(`!!${R('.ccr-top')}`), 'Report is a tab');
+  ok(await A.until(`!!${R('.ccr-top')}`), 'the report is on Progress');
   ok(await A.ev(`/50%/.test(${R('.ccr-top')}.textContent) && /3 of 6 tasks done/.test(${R('.ccr-top')}.textContent) && ${R('.ccr-top')}.textContent.includes(${JSON.stringify(fcLabel)}) && /9 days after the end date/.test(${R('.ccr-why')}.textContent)`), 'the numbers: 50%, 3 of 6, the forecast and how late: ' + await A.ev(`${R('.ccr-why')}.textContent`));
   const rows = await A.ev(`[...document.querySelectorAll('#camps .ccr-phases tbody tr')].map((r) => [...r.children].map((c) => c.textContent).join('|'))`);
   ok(/^Prep\|3\/3\|.*\|9\|—\|2 d \(1 run\)$/.test(rows[0]) && /^Install\|0\/3\|.*\|Open\|11\|—\|—$/.test(rows[1]), 'phases: Prep took 9 days against the usual 2 (from 1 earlier run); Install is open: ' + JSON.stringify(rows));
@@ -116,7 +116,7 @@ try {
   // (2026-11-25), so nothing squeezes it.
   await A.ev(`document.querySelector('#camps').style.flex = '0 0 600px'; true`);
   await sleep(200);
-  ok(await A.ev(`getComputedStyle(document.querySelector('#camps .camp-view.cc')).display === 'block' && document.querySelector('#camps .cc-main').getBoundingClientRect().width > 500 && document.querySelector('#camps .cc-pulse')?.getBoundingClientRect().width > 480`), 'at 600px wide the page keeps its width, the pulse inside it');
+  ok(await A.ev(`getComputedStyle(document.querySelector('#camps .camp-view.cc')).display === 'block' && document.querySelector('#camps .cc-main').getBoundingClientRect().width > 500 && document.querySelector('#camps .ccp-health')?.getBoundingClientRect().width > 480`), 'at 600px wide the page keeps its width, how it’s going inside it');
   await A.ev(`document.querySelector('#camps').style.flex = ''; true`);
   await sleep(200);
   // Print.
