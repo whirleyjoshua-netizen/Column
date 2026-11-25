@@ -63,13 +63,14 @@ try {
   // The picker: search, chips, colored rows.
   await A.tap(`${P}.querySelector('.ab-change')`);
   ok(await A.until(`!!document.querySelector('.ap-pop') && document.querySelectorAll('.ap-pop .ap-item').length > 10 && document.querySelectorAll('.ap-pop .ap-chip').length > 2 && !!document.querySelector('.ap-pop .ap-item.on[data-key="task.done"] .ap-on')`), 'Change opens the picker: a list with chips, the one it is now marked Active');
+  ok(await A.ev(`(() => { const c = document.querySelector('.ap-pop .ap-chips'), r = c.getBoundingClientRect(); return c.scrollWidth <= c.clientWidth + 1 && [...c.children].every((x) => { const q = x.getBoundingClientRect(); return q.right <= r.right + 1 && q.bottom <= r.bottom + 1; }); })()`), 'the chips wrap: every one in view, nothing to scroll sideways');
   await A.fill(`document.querySelector('.ap-pop .ap-search')`, 'contact');
   ok(await A.until(`[...document.querySelectorAll('.ap-pop .ap-item')].every((x) => /contact/i.test(x.textContent)) && document.querySelectorAll('.ap-pop .ap-item').length >= 2`), 'searching narrows the list');
   await A.fill(`document.querySelector('.ap-pop .ap-search')`, 'lead form');
   ok(await A.until(`!!document.querySelector('.ap-pop .ap-item[data-key="contact.created"]')`), 'searching finds words in the brackets too (lead form → A contact is added)');
   await A.fill(`document.querySelector('.ap-pop .ap-search')`, 'contact');
   await A.tap(`document.querySelector('.ap-pop .ap-item[data-key="contact.created"]')`);
-  ok(await A.until(`!document.querySelector('.ap-pop') && /contact is added/i.test(document.querySelector('#sheet .auto-trigger .an-say').textContent)`), 'picked: the node says it in a sentence');
+  ok(await A.until(`!document.querySelector('.ap-pop') && document.querySelector('#sheet .auto-trigger .an-say').textContent === 'A contact is added'`), 'picked: the node says it plainly (not the label’s brackets)');
   await A.fill(`document.querySelector('#sheet .auto-name')`, 'Sort leads');
   const top = `document.querySelector('#sheet .auto-flow > .auto-steps')`;
   const acts = (list) => `[...${list}.children].filter((x) => x.classList.contains('auto-act'))`;
@@ -77,8 +78,14 @@ try {
   // Asking your team: who, what, and waiting adds {answer} to the words (and to what "Only if" can check).
   await pickNode(`${acts(top)}[0]`);
   ok(await A.until(`${acts(top)}[0].classList.contains('sel') && /2\\. ACTION/.test(${acts(top)}[0].querySelector('.an-h').textContent)`), 'a step is picked by clicking it');
+  await A.tap(`${P}.querySelector('.ab-change')`);
+  ok(await A.until(`(() => { const ic = (k) => document.querySelector('.ap-pop .ap-item[data-key="' + k + '"] .ap-ic')?.textContent; return ic('email') === '📧' && ic('post') === '📣' && ic('invoice') === '💳' && ic('doc') === '📝'; })()`), 'email, post, invoice and doc use icons that show in color on Windows (✉️ 💬 🧾 📄 come out pale)');
+  await A.ev(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); true`);
+  await A.until(`!document.querySelector('.ap-pop')`);
   await change('agent');
   ok(await A.until(`!!document.querySelector('#sheet .ab-panel .auto-agent-who') && [...document.querySelector('#sheet .auto-agent-who').options].length >= 5`), '“Ask your team” lists Your team and each agent');
+  await A.fill(`document.querySelector('#sheet .auto-agent-ask')`, 'Look up {contact}');
+  ok(await A.until(`/Look up \\{contact\\}/.test(${acts(top)}[0].querySelector('.an-say').textContent)`), 'the Ask your team card says what it asks');
   ok(await A.ev(`![...document.querySelectorAll('#sheet .auto-word')].some((b) => b.textContent === '{answer}')`), 'no {answer} until it waits');
   await A.ev(`(() => { const c = document.querySelector('#sheet .auto-agent-wait'); c.checked = true; c.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
   ok(await A.until(`[...document.querySelectorAll('#sheet .auto-word')].some((b) => b.textContent === '{answer}')`), 'waiting for the answer adds {answer} to the words');
@@ -105,6 +112,8 @@ try {
   const thenL = `document.querySelectorAll('#sheet .auto-branches > .auto-steps.nested')[0]`;
   await pickNode(`${thenL}.querySelector('.auto-act')`);
   await change('post');
+  await sleep(1500); // the team's templates have loaded by now (there are none)
+  ok(await A.ev(`!${P}.querySelector('.ab-tabs [data-tab=adv]')`), 'a post with no templates yet has no Advanced settings (nothing to change there)');
   await A.fill(`${P}.querySelector('.ab-body input')`, 'Lead: {contact}');
   await A.pick(`[...${P}.querySelectorAll('.ab-body select')][0]`, 'general');
   // Drag the task (step 2) into Otherwise.
@@ -137,6 +146,9 @@ try {
   ok(await A.until(`${acts(top)}.length === 1 && document.querySelector('#sheet .auto-trigger').classList.contains('sel')`), 'removing the picked step picks what sets it off again');
 
   // Test it: nothing has happened yet, a made-up customer: Otherwise.
+  await A.ev(`document.querySelector('#sheet .sheet').scrollTop = 0; true`);
+  await sleep(200);
+  ok(await A.ev(`(() => { const b = [...document.querySelectorAll('#sheet .btns button')].find((x) => x.textContent === 'Turn it on'); const r = b.getBoundingClientRect(); return document.querySelector('#sheet .sheet').scrollHeight > innerHeight && r.top >= 0 && r.bottom <= innerHeight + 1; })()`), 'Turn it on stays in view however long the flow');
   await A.tap(`document.querySelector('#sheet .auto-test-btn')`);
   ok(await A.until(`/made-up example/.test(document.querySelector('#sheet .auto-test')?.textContent || '')`), '“Test it” says what it’s testing on');
   ok(await A.ev(`${acts(top)}[0].classList.contains('lit') && [...${elseL}.querySelectorAll('.auto-act')].every((x) => x.classList.contains('lit')) && [...${thenL}.querySelectorAll('.auto-act')].every((x) => x.classList.contains('dim'))`), 'it lights the way it would go (Otherwise), and dims the rest');
@@ -153,6 +165,9 @@ try {
   // Save; a real run; reopen and show it.
   await A.tap(`[...document.querySelectorAll('#sheet .btns button')].find((b) => b.textContent === 'Turn it on')`);
   ok(await A.until(`[...document.querySelectorAll('#tool .auto-row b')].some((b) => b.textContent === 'Sort leads')`), 'saved');
+  await api('POST', '/automations', { name: 'Lee call opens', trigger: { kind: 'task.opened', step: 'Calls', task: 'Call the Lee family' }, actions: [{ kind: 'notify', text: 'Go: {task}', to: ['owners'] }] });
+  ok(await A.until(`[...document.querySelectorAll('#tool .auto-row')].some((r) => r.textContent.includes('Lee call opens') && r.querySelector('.auto-main small').textContent.startsWith('A task opens (“Call the Lee family” in Calls) →'))`), 'one for a single task says which task and phase, without the label’s brackets');
+
   ok(await A.ev(`(() => { const r = [...document.querySelectorAll('#tool .auto-row')].find((x) => x.textContent.includes('Sort leads')); const ic = r?.querySelector('.auto-ic'); return !!ic && /lk-\\w+/.test(ic.className) && ic.textContent.trim() === '👤'; })()`), 'its row shows the colored icon of what sets it off (a contact)');
   ok(await A.ev(`[...document.querySelectorAll('#tool .auto-recipe')].length > 0 && [...document.querySelectorAll('#tool .auto-recipe')].every((x) => x.querySelector('.auto-ic[class*=lk-]'))`), 'and every idea card has one too');
   const saved = (await api('GET', '/automations')).find((x) => x.name === 'Sort leads');

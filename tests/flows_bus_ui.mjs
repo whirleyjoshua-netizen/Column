@@ -75,6 +75,7 @@ try {
   await A.tap(`document.querySelector('.ap-pop .ap-item[data-key="record.stage"]')`);
   await B.adv();
   ok(await A.until(`!!document.querySelector('#sheet .auto-proj')`), 'a record event asks which project (under Advanced settings)');
+  ok(await A.ev(`document.querySelector('#sheet .auto-proj').closest('label').firstChild.textContent === 'In project'`), 'labeled In project (the campaign one says In campaign)');
   await A.pick(`document.querySelector('#sheet .auto-proj')`, p.id);
   ok(await A.until(`[...document.querySelectorAll('#sheet .auto-to option')].some((o) => o.value === ${JSON.stringify(won.label)})`), 'and which stage, from that project’s own stages');
   await A.pick(`document.querySelector('#sheet .auto-to')`, won.label);

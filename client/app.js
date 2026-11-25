@@ -5737,11 +5737,11 @@
   // How each step and trigger looks (2026-11-25, "smaller nodes, color, simple list"): an icon, a color, and the
   // group it's listed under in the picker. c: purple teal blue green orange amber red pink gray (.lk-<c> in style.css).
   const AUTO_LOOK = {
-    notify: { ic: '🔔', c: 'purple', g: 'people' }, post: { ic: '💬', c: 'teal', g: 'people' }, teams: { ic: '🟦', c: 'blue', g: 'people' },
-    task: { ic: '✅', c: 'purple', g: 'work' }, campaign: { ic: '🚀', c: 'orange', g: 'work' }, visit: { ic: '📅', c: 'blue', g: 'work' }, doc: { ic: '📄', c: 'orange', g: 'work' },
+    notify: { ic: '🔔', c: 'purple', g: 'people' }, post: { ic: '📣', c: 'teal', g: 'people' }, teams: { ic: '🟦', c: 'blue', g: 'people' },
+    task: { ic: '✅', c: 'purple', g: 'work' }, campaign: { ic: '🚀', c: 'orange', g: 'work' }, visit: { ic: '📅', c: 'blue', g: 'work' }, doc: { ic: '📝', c: 'orange', g: 'work' },
     record: { ic: '✏️', c: 'gray', g: 'work' }, create: { ic: '➕', c: 'green', g: 'work' }, stock: { ic: '📦', c: 'amber', g: 'work' },
-    contact: { ic: '👤', c: 'pink', g: 'customers' }, email: { ic: '✉️', c: 'red', g: 'customers' }, text: { ic: '📱', c: 'green', g: 'customers' },
-    invoice: { ic: '🧾', c: 'teal', g: 'money' }, money: { ic: '💵', c: 'green', g: 'money' },
+    contact: { ic: '👤', c: 'pink', g: 'customers' }, email: { ic: '📧', c: 'red', g: 'customers' }, text: { ic: '📱', c: 'green', g: 'customers' },
+    invoice: { ic: '💳', c: 'teal', g: 'money' }, money: { ic: '💵', c: 'green', g: 'money' },
     agent: { ic: '✨', c: 'purple', g: 'ai' }, webhook: { ic: '🔗', c: 'gray', g: 'ai' }, vault: { ic: '🔒', c: 'gray', g: 'ai' },
     wait: { ic: '⏳', c: 'amber', g: 'flow' }, if: { ic: '🔀', c: 'teal', g: 'flow' },
   };
@@ -5749,8 +5749,8 @@
   // Steps in the order people reach for them most.
   const AUTO_ORDER = ['notify', 'task', 'post', 'email', 'text', 'wait', 'if', 'contact', 'visit', 'invoice', 'campaign', 'doc', 'agent', 'record', 'create', 'money', 'stock', 'teams', 'webhook', 'vault'];
   const AUTO_WHEN_LOOK = {
-    task: ['✅', 'orange'], step: ['🏁', 'orange'], campaign: ['🎯', 'orange'], contact: ['👤', 'pink'], attempt: ['📞', 'blue'], file: ['📥', 'teal'], document: ['✍️', 'purple'], doc: ['📄', 'purple'],
-    schedule: ['⏰', 'amber'], record: ['🗂', 'blue'], quote: ['📝', 'green'], invoice: ['🧾', 'teal'], payment: ['💵', 'green'], money: ['💵', 'green'], price: ['🏷', 'green'], visit: ['🚚', 'blue'], booking: ['📅', 'blue'],
+    task: ['✅', 'orange'], step: ['🏁', 'orange'], campaign: ['🎯', 'orange'], contact: ['👤', 'pink'], attempt: ['📞', 'blue'], file: ['📥', 'teal'], document: ['✍️', 'purple'], doc: ['📝', 'purple'],
+    schedule: ['⏰', 'amber'], record: ['🗂', 'blue'], quote: ['📝', 'green'], invoice: ['💳', 'teal'], payment: ['💵', 'green'], money: ['💵', 'green'], price: ['🏷', 'green'], visit: ['🚚', 'blue'], booking: ['📅', 'blue'],
     text: ['📱', 'green'], stock: ['📦', 'amber'], equipment: ['🛠', 'amber'], github: ['💻', 'gray'], companycam: ['📷', 'gray'], connection: ['🔌', 'red'], analytics: ['📈', 'teal'], pin: ['📍', 'red'],
   };
   const autoWhenLook = (kind) => { const l = AUTO_WHEN_LOOK[String(kind || '').split('.')[0]]; return l ? { ic: l[0], c: l[1] } : { ic: '⚡', c: 'gray' }; };
@@ -5812,7 +5812,7 @@
     const dateF = t.kind === 'record.date' && projById(t.projectId)?.types.find((y) => y.id === t.typeId)?.fields.find((f) => f.id === t.fieldId);
     const when = t.kind === 'schedule' ? `Every ${t.slots?.[0] ? t.slots[0].days.map((d) => DOWS[d]).join(', ') + ' at ' + hhmm(t.slots[0].time) : '…'}`
       : t.kind === 'record.date' ? `${t.days ? `${plural(Math.abs(t.days), 'day')} ${t.days < 0 ? 'before' : 'after'}` : 'On'} ${dateF ? dateF.name : 'a date'} in ${projById(t.projectId)?.name || 'a project'}`
-      : (AUTO_WHEN[t.kind] || t.kind) + [t.projectId && projById(t.projectId) ? ` in ${projById(t.projectId).name}` : '', t.to ? ` to ${t.to}` : '', t.over ? ` over $${t.over}` : '', t.direction ? (t.direction === 'in' ? ' (money in)' : ' (money out)') : '', t.campaignId && campById(t.campaignId) ? ` in ${campById(t.campaignId).name}` : '', t.stage ? ` to ${stageLabel(t.stage)}` : '', t.outcome ? ` as ${t.outcome}` : '', t.statuses?.length ? ` (${t.statuses.map((v) => HEALTH_L[v]).join(' or ')})` : ''].join('');
+      : (AUTO_WHEN[t.kind] || t.kind).replace(/ \(.*\)$/, '') + [t.projectId && projById(t.projectId) ? ` in ${projById(t.projectId).name}` : '', t.to ? ` to ${t.to}` : '', t.over ? ` over $${t.over}` : '', t.direction ? (t.direction === 'in' ? ' (money in)' : ' (money out)') : '', t.step ? ` (${t.task || (t.taskId && taskById(t.taskId)?.text) ? `“${t.task || taskById(t.taskId).text}” in ` : ''}${t.step})` : '', t.campaignId && campById(t.campaignId) ? ` in ${campById(t.campaignId).name}` : '', t.stage ? ` to ${stageLabel(t.stage)}` : '', t.outcome ? ` as ${t.outcome}` : '', t.statuses?.length ? ` (${t.statuses.map((v) => HEALTH_L[v]).join(' or ')})` : ''].join('');
     const said = (list) => list.map((a) => (a.kind === 'wait' ? `wait ${a.amount} ${a.unit}` : a.kind === 'if' ? `if ${a.when.map((c) => '{' + c.field + '}').join(' and ')}: ${said(a.then) || 'nothing'}${a.else?.length ? '; otherwise ' + said(a.else) : ''}` : (AUTO_DO[a.kind] || a.kind).toLowerCase())).join(', ');
     return `${when} → ${said(x.actions)}`;
   }
@@ -5999,10 +5999,11 @@
     if (a.kind === 'wait') return `Wait ${a.amount} ${a.unit}`;
     if (a.kind === 'if') return 'Only if ' + (a.when || []).map((c) => `{${c.field}} ${{ is: 'is', not: 'isn’t', contains: 'has', over: 'is over', under: 'is under', empty: 'is empty', set: 'is filled in' }[c.op] || c.op}${['set', 'empty'].includes(c.op) ? '' : ' ' + (c.value || '…')}`).join(' and ');
     if (a.kind === 'task' && a.presetId) { const y = presetById(a.presetId); return y?.kind === 'bundle' ? `Make the bundle: ${y.name} (${plural(y.steps.length, 'task')})` : `Make a task: ${y?.name || a.presetName || 'a saved task'}`; }
-    const said = a.text || a.subject || a.title || a.url || '';
+    const said = a.text || a.subject || a.title || a.ask || a.url || '';
     return (AUTO_DO[a.kind] || a.kind) + (said ? ': ' + said : '');
   }
   // What sets it off, as a sentence for its node; and a step's few chips (who, when, where).
+  // (autoSummary says the event plainly: "A contact is added", not "… (by hand, a lead form, a card, a text…)".)
   const autoWhenText = (t) => autoSummary({ trigger: t, actions: [] }).replace(/ → $/, '');
   function autoChips(a) {
     const who = (v) => (v === 'who' ? 'Whoever set it off' : v === 'doers' ? 'Whoever it’s for' : v === 'owners' ? 'Owners' : v === 'admins' ? 'Owners and admins'
@@ -6075,7 +6076,7 @@
         const projs = S.projects || [];
         const sel = h('select', { class: 'auto-proj' }, opt('', 'Any project', t.projectId || ''), projs.map((p) => opt(p.id, p.name, t.projectId || '')));
         sel.addEventListener('change', () => { t.projectId = sel.value || null; t.typeId = null; t.to = null; draw(); });
-        only.push(h('label', {}, 'In', sel));
+        only.push(h('label', {}, 'In project', sel));
         const p = projById(t.projectId);
         if (p) {
           const ls = h('select', { class: 'auto-list' }, opt('', 'Any list', t.typeId || ''), p.types.map((y) => opt(y.id, y.name, t.typeId || '')));
@@ -6120,7 +6121,7 @@
       if (fl.includes('campaign')) {
         const sel = h('select', {}, opt('', 'Any campaign', t.campaignId || ''), camps.map((c) => opt(c.id, c.name, t.campaignId || '')));
         sel.addEventListener('change', () => (t.campaignId = sel.value || null));
-        only.push(h('label', {}, 'In', sel));
+        only.push(h('label', {}, 'In campaign', sel));
       }
       // One step, by name (a saved campaign's next run has steps with the same names), 2026-11-20.
       if (fl.includes('step')) {
@@ -6375,8 +6376,7 @@
           cb.addEventListener('change', () => { a.wait = cb.checked; draw(); });
           f.push(h('label', {}, 'Ask', who), h('label', {}, 'What to ask', ask), h('label', { class: 'pick' }, cb, 'Wait for the answer, then go on with {answer}'),
             AG.data && !AG.data.ai ? h('small', { class: 'hint err' }, 'Add your AI key (Apps & Integrations → AI) first: your team works on it.') : null,
-            null);
-          adv.push(h('small', { class: 'hint' }, `Your own agents, on your AI key, at the level you set for each in Your team: anything important waits for your yes there. They’re told an automation asked.${a.wait ? ' The steps after this wait until it’s done (up to 30 minutes).' : ''}`));
+            h('small', { class: 'hint' }, `Your own agents, on your AI key, at the level you set for each in Your team: anything important waits for your yes there. They’re told an automation asked.${a.wait ? ' The steps after this wait until it’s done (up to 30 minutes).' : ''}`));
         }
         if (a.kind === 'stock') {
           if (!INVS.data && !INVS.loading) loadInventory().then(() => box.isConnected && draw());
@@ -6513,7 +6513,8 @@
         f: tSet.length ? tSet : [h('p', { class: 'day-hint' }, tAdv.length ? 'That’s all it needs. To narrow it down (one campaign, a stage, an amount…), see Advanced settings.' : 'That’s all it needs.')], adv: tAdv };
       const flow = stepList(dr.actions, 0);
       const pn = B.panel;
-      const advN = pn.adv.filter(Boolean).length;
+      // Advanced shows only when it has something to change (not just a tip).
+      const advN = pn.adv.filter((el) => el?.nodeType === 1 && (el.matches('input, select, textarea, button') || el.querySelector('input, select, textarea, button'))).length;
       if (!advN) B.tab = 'set';
       const chg = h('button', { type: 'button', class: 'btn small ab-change' }, pn.label);
       chg.addEventListener('click', () => pn.change(chg));
@@ -8163,7 +8164,7 @@
       const WL = { 'task.done': ['✅', 'green'], 'task.opened': ['🔓', 'blue'], 'task.reopened': ['↩️', 'amber'], 'step.done': ['🏁', 'orange'] };
       const when = paRadio('pa-when', 'When', kinds.map(([v, l]) => [v, l, ...WL[v]]), 'task.done');
       const members = (S.workspace.members || []).filter((m) => !m.gone);
-      const then = paRadio('pa-then', 'Then', [['doers', 'Tell whoever it’s for', '🔔', 'purple'], ['owners', 'Tell the owners', '👑', 'purple'], ['someone', 'Tell someone', '👤', 'pink'], ['post', 'Post in the campaign’s feed', '💬', 'teal'], ['task', 'Make a task', '✅', 'purple']], 'doers');
+      const then = paRadio('pa-then', 'Then', [['doers', 'Tell whoever it’s for', '🔔', 'purple'], ['owners', 'Tell the owners', '👑', 'purple'], ['someone', 'Tell someone', '👤', 'pink'], ['post', 'Post in the campaign’s feed', '📣', 'teal'], ['task', 'Make a task', '✅', 'purple']], 'doers');
       const who = h('select', { class: 'pa-who', 'aria-label': 'Who to tell' }, members.map((m) => opt(m.id, m.name, S.me?.memberId)));
       const whoRow = h('label', { class: 'cc-pp-f pa-who-row' }, 'Who', who);
       const say = h('input', { class: 'pa-say', maxlength: 1000, 'aria-label': 'What it says' });
