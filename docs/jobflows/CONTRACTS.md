@@ -104,6 +104,7 @@ Goal per step (existing fields, plus):
 | Attach a flow | `POST /api/jobs/:id/flow {flowId, replace?}` | admins | 409 if an active run exists and `replace` isn't true. Replace sets the old run `cancelled` (kept, shown in Activity). Never touches ordinary campaigns. |
 | Done (button) | `POST /api/jobs/:id/steps/:stepId/done` | the step's `who`, or admins | Only `custom`, and `details` with no fields. Idempotent: already marked → 200, nothing changes. Not the current step → 409 (in order). |
 | Skip | `POST /api/jobs/:id/steps/:stepId/skip {reason}` | the step's `who` if `canSkip`; admins always | Reason required (≤300). Timeline entry. Idempotent. |
+| Tick a custom step's checklist | `POST /api/jobs/:id/steps/:stepId/check {item, done}` | the step's `who`, or admins | Custom steps only; stored on the goal (`g.checks`). The sweep decides. |
 | Undo skip / reopen | `POST /api/jobs/:id/steps/:stepId/reopen` | admins | Clears `marked` or `skipped`. Live conditions re-evaluate as they are. |
 | Cancel run | `POST /api/jobs/:id/flow/cancel {reason}` | admins | Status `cancelled`; the job stays. |
 
@@ -211,20 +212,20 @@ mobile. Each step names the family stage it reaches, so the old stage field keep
 
 ## 7. Tests (written first, failing on main)
 
-| Test | Asserts |
+The cases ChatGPT asked for are grouped into five files (fewer servers to start; every assertion kept). Run log on
+main: `docs/jobflows/checkpoint2-main.log`.
+
+| Test (port) | Covers |
 | --- | --- |
-| `jobflows_defs.mjs` | draft edits never change a version; publish makes n+1; copy is an independent draft; archive blocks new jobs, runs go on; validation (no steps, bad list, 31 steps) refused; members can't write |
-| `jobs_list.mjs` | campaign-less jobs listed; trade and generic job lists; private projects hidden; member access switch; no leak via counts or client data |
-| `jobflow_run.mjs` | start job (record + run + goals), key dedupes; current step; conditions from real records (contact, fields, visit, checklist, signature, invoice sent/paid, tasks); in-order Done 409; skip needs reason + canSkip; reopen admins; stage moves only for steps with a stage; stageGate holds a manual jump past an open step |
-| `jobflow_events.mjs` | the same step finished by a payment twice, a retry and a click: one `step.done`, one stage move; void the invoice → step reopens, run back to active, stage does NOT move back; pay again → `step.done` with `cycle: 2, again: true`; a run never fires `campaign.started` / `campaign.done`; `job.flow.done` once |
-| `jobflow_access.mjs` | start-job refused where `POST /projects/:id/records` would be (private project, members switch off, a rules hold); key reuse with another body 409; run response hides invoice totals and unseen tasks from a member; `who` with another team's member refused at publish; a step whose member left → admins only |
-| `jobflow_versions.mjs` | publishing v2 leaves a running v1 job's steps as they were |
-| `jobflow_sweep.mjs` | a step with no tasks and no needs whose invoice isn't paid stays unfinished through every sweep (a task change, a visit, a restart); a custom step marked Done with an unticked checklist stays unfinished; an invoice from before the run doesn't finish the payment step |
-| `jobflow_stage.mjs` | job with an active run + an ordinary campaign with an unfinished goal naming a later stage: the run's steps still move the stage, the ordinary goal doesn't hold a manual move the run allows; the ordinary campaign still finishes on its own; the same setup without a run behaves as today |
-| `jobflow_hidden.mjs` | a run is in no campaign surface (state, broadcast, templates, board, analytics, agents, export, public API campaigns); an ordinary campaign on the same job still is |
-| `jobflow_legacy.mjs` | a job driven by an ordinary campaign progresses exactly as before; `legacy:true` in the list |
-| `jobflow_finance.mjs` | invoice/payment steps follow the real invoice (void after paid reopens the step) |
-| `jobs_ui.mjs` (Chrome) | Jobs tab, list, builder (add, reorder, rename, publish), New job, stepper + Next opening the right sheet, existing six job tabs intact |
+| `jobflows_defs.mjs` (5240) | drafts, publish n+1, versions immutable and no route edits one, step ids kept across versions, copy = new ids, archive, validation (no steps, 31 steps, kind not offered, bad list, another team's member), members read the active version only, other teams nothing, saved across a restart |
+| `jobflow_run.mjs` (5241) | start = job + run, key dedupe and 409 on a different body; every Phase 1 condition from real records (client, fields, visit, checklist, signature, invoice sent, invoice paid, custom Done + checklist); live reopen (unticked item, payment removed) and re-finish; `step.done` once per cycle, a second cycle fires again (cycle 2); `job.flow.done` once; skip needs a reason and permission; reopen admins; attach / 409 / replace; an invoice from before the run never counts; v2 doesn't change a v1 job; archived = no new jobs, runs go on; restart keeps runs and fires nothing again |
+| `jobs_list.mjs` (5247) | campaign-less, legacy, run, generic Jobs list and trade jobs listed; CRM records aren't jobs; private project hidden from members; no client email/phone to members; other teams nothing; start-job = record-create checks (rules OK for a discount, private project, flow for admins only, members switch off); `anyone` needs edit access; a step for a member who left falls back to admins |
+| `jobflow_stage.mjs` (5248) | the run alone moves and holds the stage with an ordinary campaign on the job; the hold names the run's step; a step with no stage doesn't move it; the ordinary campaign finishes on its own; reopen never moves the stage back; a forward move held until met; a job without a run behaves as today |
+| `jobflow_hidden.mjs` (5249) | the run and its steps are not in state; campaign routes can't open, change, add to, template, parent or delete it; not on the old board; no `campaign.started` / `campaign.done` for runs while an ordinary campaign on the same job still fires them; deleting the job removes its run |
+| `jobs_ui.mjs` (Chrome) | written with the client, after the server is reviewed: Jobs tab, list, builder, New job, stepper + Next opening the right sheet, the six job tabs intact |
+
+Existing suites that must stay green: jobs, jobboard, jobsteps, jobflows, joblinks, jobneeds, jobcampaign,
+invoices, finance_jobs, inventory_links, inventory_steps, forecast, history, contacts, audit_rules, flows_*.
 
 ## 8. Out of Phase 1
 Business items catalog, quotes, billing modes, automatic invoices, customer messages per step, campaign steps,
