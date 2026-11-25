@@ -2,6 +2,7 @@
 // forecast finish against the end date, each phase's days against its due day and against earlier runs of its SOP,
 // each person's numbers, what's gone quiet (with Nudge, a comment that tells them), a burn-up chart with a hover, and
 // Print. The pulse shows the forecast and what's quiet. Past days are made by editing the saved data between runs.
+import { CHROME, SERVER_DIR } from './chromebin.mjs';
 import * as FS from 'node:fs';
 import { spawn } from 'node:child_process';
 import WebSocket from '../server/node_modules/ws/index.js';
@@ -15,8 +16,8 @@ let fails = 0;
 const ok = (c, msg) => { console.log((c ? 'PASS ' : 'FAIL ') + msg); if (!c) fails++; };
 try { (await import('node:child_process')).execSync(`pkill -f remote-debugging-port=${CDP}`); await sleep(400); } catch {}
 FS.rmSync(`${S}/dk/chrome-rptui`, { recursive: true, force: true });
-const chrome = spawn('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', ['--headless=new', `--remote-debugging-port=${CDP}`, `--user-data-dir=${S}/dk/chrome-rptui`, '--no-first-run', '--window-size=1400,900', 'about:blank'], { stdio: 'ignore' });
-const startSrv = () => { const p = spawn('node', ['index.js'], { cwd: new URL('../server', import.meta.url).pathname, env: { ...process.env, SKIP_SETUP: '1', PORT: String(PORT), DATA_DIR: DIR, MAIL_OUTBOX: '1', DATABASE_URL: '' }, stdio: ['ignore', 'pipe', 'pipe'] }); p.log = ''; p.stdout.on('data', (d) => (p.log += d)); p.stderr.on('data', (d) => (p.log += d)); return p; };
+const chrome = spawn(CHROME, ['--headless=new', `--remote-debugging-port=${CDP}`, `--user-data-dir=${S}/dk/chrome-rptui`, '--no-first-run', '--window-size=1400,900', 'about:blank'], { stdio: 'ignore' });
+const startSrv = () => { const p = spawn('node', ['index.js'], { cwd: SERVER_DIR, env: { ...process.env, SKIP_SETUP: '1', PORT: String(PORT), DATA_DIR: DIR, MAIL_OUTBOX: '1', DATABASE_URL: '' }, stdio: ['ignore', 'pipe', 'pipe'] }); p.log = ''; p.stdout.on('data', (d) => (p.log += d)); p.stderr.on('data', (d) => (p.log += d)); return p; };
 let srv = startSrv();
 async function tab(url) {
   let t;
