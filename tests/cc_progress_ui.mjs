@@ -64,7 +64,7 @@ try {
   ok(await A.until(`!!${T('.cc-body')}`), 'the campaign opens');
   await A.ev(`document.querySelector('#sheet [aria-label=Close]')?.click(); true`);
   // ----- Progress: Activity and Report in one tab, the Pulse at its top -----
-  ok(await A.ev(`[...document.querySelectorAll('#camps .cc-tab')].map((b) => b.dataset.ctab).join() === 'plan,work,progress'`), 'three tabs: Plan, Work, Progress');
+  ok(await A.ev(`[...document.querySelectorAll('#camps .cc-tab')].map((b) => b.dataset.ctab).join() === 'plan,work,progress,sketch'`), 'Plan, Work, Progress (and Sketch on a wide screen)');
   await tabTo('progress');
   const before = (a, b) => `!!${T(a)} && !!${T(b)} && !!(${T(a)}.compareDocumentPosition(${T(b)}) & Node.DOCUMENT_POSITION_FOLLOWING)`;
   ok(await A.until(`${before('.ccr-bar', '.ccp-health')} && ${before('.ccp-health', '.ccr-top')} && ${before('.ccr-top', '.cc-pulse-ai')} && ${before('.cc-pulse-ai', '.ccp-report')} && ${before('.ccp-report', '.ccp-log')}`), 'in order: the bar, how it’s going, the numbers, what to do next, the report, the log');

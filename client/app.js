@@ -7109,8 +7109,10 @@
   // along the timeline or by either end, a task onto another day. -----
   // The campaign's tabs (2026-11-25, simpler): Plan, Work, Progress. Old places land where their parts went: Activity
   // and Report on Progress; Overview, Resources, or anything unknown on Plan. The chips under the header: All (open, then done), My tasks, Overdue, Blocked (open only).
-  const CC_TABS = [['plan', 'Plan'], ['work', 'Work'], ['progress', 'Progress']];
-  const ccTabOf = (k) => (k === 'activity' || k === 'report' ? 'progress' : CC_TABS.some(([x]) => x === k) ? k : 'plan');
+  // Sketch (stage 4): the campaign's whiteboard, when the team has it on and the screen is wide enough to draw.
+  const ccSketchOn = () => toolOn('whiteboard') && document.body.classList.contains('wide');
+  const ccTabs = () => [['plan', 'Plan'], ['work', 'Work'], ['progress', 'Progress'], ...(ccSketchOn() ? [['sketch', 'Sketch']] : [])];
+  const ccTabOf = (k) => (k === 'activity' || k === 'report' ? 'progress' : ccTabs().some(([x]) => x === k) ? k : 'plan');
   const CC_CHIPS = [['all', 'All'], ['mine', 'My tasks'], ['overdue', 'Overdue'], ['blocked', 'Blocked']];
   const ccChipOf = (k) => (CC_CHIPS.some(([x]) => x === k) ? k : 'all');
   function ccChipPick(tasks, k) {
@@ -7585,33 +7587,64 @@
     for (const id of nid.keys()) ops.push({ op: 'del', item: id });
     if (ops.length) ed.change(ops);
   }
-  async function ccMakePhases(c, btn) {
+  // Update plan (2026-11-25, campaign Sketch): the sketch is a draft; this turns what's new on it into the plan, and
+  // nothing twice. Phases: the phase cards already on the board, and boxes with words (a box named like a phase of
+  // this campaign is that phase). Arrows that touch a box handled now become "waits for" (added only if missing), so
+  // an old arrow doesn't bring back a "waits for" taken off on Plan. Stickies: a task in the phase whose box sits above
+  // them (nearest above, the sticky's middle within the box's width), unless that phase has a task by that name; a
+  // sticky under no phase is left alone. What it used becomes live cards. With something selected, only that.
+  async function ccUpdatePlan(c, btn) {
     const ed = K.cb.ed;
     if (!ed) return;
     const items = ed.items(), links = ed.links(), sel = new Set(ed.selection());
-    const fit = (x) => !x.ref && String(x.text || '').trim() && (sel.size ? sel.has(x.id) && ['shape', 'sticky', 'text', 'frame'].includes(x.kind) : x.kind === 'shape');
-    const pick = items.filter(fit);
-    if (!pick.length) return toast(sel.size ? 'Select shapes or stickies with words in them.' : 'Draw shapes with the phase names in them (or select stickies), then Make phases.');
+    const inSel = (x) => !sel.size || sel.has(x.id);
+    const norm = (v) => String(v || '').trim().replace(/\s+/g, ' ').toLowerCase();
+    const campPhases = () => goalsOf(c.id).filter((g) => !['count', 'money'].includes(g.kind));
+    const phaseOf = new Map();
+    for (const x of items) if (x.kind === 'card' && x.ref?.kind === 'goal') { const g = goalById(x.ref.id); if (g?.campaignId === c.id) phaseOf.set(x.id, g); }
+    const shapes = items.filter((x) => x.kind === 'shape' && !x.ref && norm(x.text) && inSel(x));
+    const stickies = items.filter((x) => x.kind === 'sticky' && !x.ref && norm(x.text) && inSel(x));
+    let newPhases = 0, newTasks = 0, already = 0;
+    const cards = [];
     btn.disabled = true;
-    const made = new Map();
     try {
-      for (const x of ccFlowOrder(pick, links)) {
-        const g = await api('POST', '/goals', { campaignId: c.id, title: String(x.text).trim().slice(0, 200) });
-        if (!S.goals.some((y) => y.id === g.id)) S.goals.push(g);
-        made.set(x.id, g);
+      for (const x of ccFlowOrder(shapes, links)) {
+        const same = campPhases().find((g) => norm(g.title) === norm(x.text));
+        if (same) { phaseOf.set(x.id, same); already++; }
+        else {
+          const g = await api('POST', '/goals', { campaignId: c.id, title: String(x.text).trim().slice(0, 200) });
+          if (!S.goals.some((y) => y.id === g.id)) S.goals.push(g);
+          phaseOf.set(x.id, g);
+          newPhases++;
+        }
+        cards.push([x.id, { kind: 'goal', id: phaseOf.get(x.id).id }]);
       }
-      // An arrow from one to another: the second waits for the first.
+      const fresh = new Set(shapes.map((x) => x.id));
       for (const l of links) {
-        const a = made.get(l.from), b = made.get(l.to);
-        if (!a || !b || a === b) continue;
+        if (!fresh.has(l.from) && !fresh.has(l.to)) continue;
+        const a = phaseOf.get(l.from), b = phaseOf.get(l.to);
+        if (!a || !b || a.id === b.id) continue;
         const now = goalById(b.id) || b;
-        const y = await api('PATCH', '/goals/' + b.id, { blockedBy: [...new Set([...(now.blockedBy || []), a.id])] });
+        if ((now.blockedBy || []).includes(a.id)) continue;
+        const y = await api('PATCH', '/goals/' + b.id, { blockedBy: [...(now.blockedBy || []), a.id] });
         const i = S.goals.findIndex((z) => z.id === y.id); if (i >= 0) S.goals[i] = y;
       }
-      // The shapes become live phase cards, where they are, so the arrows stay.
-      ccToCards(ed, [...made].map(([id, g]) => [id, { kind: 'goal', id: g.id }]));
-      ed.refresh?.();
-      toast(`Made ${made.size} phase${made.size === 1 ? '' : 's'}${links.some((l) => made.has(l.from) && made.has(l.to)) ? ', with what waits for what' : ''}`);
+      const boxes = items.filter((x) => phaseOf.has(x.id));
+      for (const s of stickies.sort((a, b) => a.y - b.y || a.x - b.x)) {
+        const mid = s.x + (s.w || 200) / 2;
+        const over = boxes.filter((bx) => mid >= bx.x && mid <= bx.x + (bx.w || 200) && bx.y + (bx.h || 90) <= s.y + 1).sort((a, b) => b.y - a.y)[0];
+        if (!over) continue;
+        const g = phaseOf.get(over.id);
+        if (S.tasks.some((t) => t.goalId === g.id && norm(t.text) === norm(s.text))) { already++; continue; }
+        const t = await api('POST', '/tasks', { goalId: g.id, text: String(s.text).trim().slice(0, 500) });
+        upsertTask(t);
+        cards.push([s.id, { kind: 'task', id: t.id }]);
+        newTasks++;
+      }
+      if (cards.length) { ccToCards(ed, cards); ed.refresh?.(); }
+      const asPlan = { label: 'View as plan', run: () => { K.ctab = 'plan'; renderCamps(); } };
+      if (newPhases + newTasks) toast(`Added ${plural(newPhases, 'phase')} and ${plural(newTasks, 'task')}${already ? ` · ${already} already there` : ''}`, asPlan);
+      else toast(shapes.length || stickies.length ? 'Nothing new to add: what’s here is in the plan already, or not under a phase.' : 'Nothing new to add. Draw a box for a phase, put stickies under it for its tasks, then Update plan.');
       renderCamps();
     } catch (e) { toast(e.message); }
     btn.disabled = false;
@@ -7647,9 +7680,10 @@
     if (!K.cb.board && !K.cb.none && !K.cb.loading) ccBoardLoad(c);
     if (K.cb.loading || (!K.cb.board && !K.cb.none)) return h('section', { class: 'cc-card' }, h('p', { class: 'day-hint' }, 'Loading the board…'));
     if (!K.cb.board) return h('section', { class: 'cc-card cc-board-empty' }, h('div', { class: 'cc-card-h' }, h('b', {}, '🗺️ Sketch this campaign on a board')),
-      h('p', { class: 'day-hint' }, 'Map how the work flows with shapes and arrows, brainstorm with stickies, then turn them into phases and tasks. Whoever sees the campaign sees its board.'),
+      h('p', { class: 'day-hint' }, 'Draw the campaign out: a box for each phase, arrows for what comes first, stickies under a phase for its tasks. Update plan turns it into the plan; nothing is real until then. Whoever sees the campaign sees its board.'),
       h('div', { class: 'cc-board-starts' },
-        h('button', { class: 'btn primary-btn small', 'data-tpl': 'workflow', onclick: () => ccBoardStart(c, 'workflow') }, 'Workflow map'),
+        h('button', { class: 'btn primary-btn small', 'data-tpl': 'phases', title: 'The phases and tasks you have, drawn out to rearrange and add to', onclick: () => ccBoardStart(c, 'phases') }, 'Phases & tasks'),
+        h('button', { class: 'btn small', 'data-tpl': 'workflow', onclick: () => ccBoardStart(c, 'workflow') }, 'Workflow map'),
         h('button', { class: 'btn small', 'data-tpl': 'brainstorm', onclick: () => ccBoardStart(c, 'brainstorm') }, 'Campaign brainstorm'),
         h('button', { class: 'btn small', 'data-tpl': 'mindmap', onclick: () => ccBoardStart(c, 'mindmap') }, 'Mind map'),
         h('button', { class: 'btn small', 'data-tpl': 'blank', onclick: () => ccBoardStart(c, 'blank') }, 'Blank')));
@@ -7657,12 +7691,13 @@
       K.cb.mount = h('div', { class: 'cc-board' });
       K.cb.ed = boardEditor(K.cb.board, K.cb.mount, { campaign: c });
     } else K.cb.ed?.refresh?.();
-    const mk = h('button', { class: 'btn small primary-btn cc-mkphases', title: 'Selected shapes or stickies, or every shape with words in it, become phases in flow order; arrows between them become “waits for”', onclick: (e) => ccMakePhases(c, e.currentTarget) }, '◆ Make phases');
+    const up = h('button', { class: 'btn small primary-btn cc-update-plan', title: 'New boxes become phases (arrows: what waits for what), stickies under a phase become its tasks; nothing twice', onclick: (e) => ccUpdatePlan(c, e.currentTarget) }, '↻ Update plan');
     const mt = h('button', { class: 'btn small cc-mktasks', title: 'The selected stickies become tasks in a phase', onclick: (e) => ccMakeTasks(c, e.currentTarget, phases) }, '☑ Make tasks in…');
     return h('section', { class: 'cc-card cc-boardwrap' },
-      h('div', { class: 'cc-card-h' }, h('b', {}, '🗺️ ' + (K.cb.board.name || 'Board')), h('span', { style: 'flex:1' }), mk, mt,
-        h('button', { class: 'btn small', title: 'Open the board full page', onclick: () => { const id = K.cb.board.id; ccBoardDrop(); openBoard(id); } }, '⤢ Full page')),
-      h('small', { class: 'hint' }, 'Draw a shape for each phase and join them with arrows, then Make phases. Select stickies and Make tasks in… a phase. Cards show the real phases and tasks.'),
+      h('div', { class: 'cc-card-h' }, h('b', {}, '🗺️ ' + (K.cb.board.name || 'Board')), h('span', { style: 'flex:1' }), up, mt,
+        h('button', { class: 'btn small', title: 'Open the board full page', onclick: () => { const id = K.cb.board.id; ccBoardDrop(); openBoard(id); } }, '⤢ Full page'),
+        h('button', { class: 'btn small cc-asplan', onclick: () => { K.ctab = 'plan'; renderCamps(); } }, 'View as plan →')),
+      h('small', { class: 'hint' }, 'A box for each phase, arrows for what comes first, stickies under a phase for its tasks; then Update plan. Cards are the real phases and tasks.'),
       K.cb.mount);
   }
   // ----- a campaign's test run (2026-11-20, the sandbox): start it with testers; while it runs a banner says so, with
@@ -7984,7 +8019,7 @@
         c.inOrder ? h('span', { class: 'pill', title: 'Phases and tasks open one at a time, top to bottom' }, 'In order') : null,
         who ? h('span', { class: 'pill', title: who.map(memberName).join(', ') }, h('span', { class: 'is-task', html: I.lock }), `Private · ${who.length}`) : null),
       chips,
-      h('div', { class: 'cc-tabs', role: 'tablist' }, CC_TABS.map(([k, l]) =>
+      h('div', { class: 'cc-tabs', role: 'tablist' }, ccTabs().map(([k, l]) =>
         h('button', { class: 'cc-tab' + (tab === k ? ' on' : ''), role: 'tab', 'aria-selected': String(tab === k), 'data-ctab': k, onclick: () => setTabC(k) }, l))));
     // The brief: objective (the old brief), audience, strategy, and success metrics (targets with live numbers).
     const field = (k, label, ph) => {
@@ -8110,12 +8145,11 @@
       subs ? ovSec('Sub-campaigns', ...[...subs.childNodes].filter((x) => !x.classList?.contains('cc-card-h'))) : null,
       ovSec('Team and roles', castStrip(c)),
       h('small', { class: 'cc-pp-hint' }, phases.length ? 'Click a phase or a task in the plan to change it here.' : 'Add the first phase, then its tasks go under it.'));
-    if (!(tab === 'plan' && K.planView === 'board' && toolOn('whiteboard'))) ccBoardDrop();
+    if (tab !== 'sketch') ccBoardDrop();
     const body = {
       // Plan (the owner's sketch, 2026-11-22): what's saved on the left, the plan as a tree of tiles, a task's panel on the right.
-      plan: () => (K.planView === 'board' && toolOn('whiteboard')
-        ? [h('div', { class: 'cc-phases-bar' }, h('button', { class: 'btn small cc-sketch-btn on', title: 'Back to the phases', onclick: () => { K.planView = null; renderCamps(); } }, '← Back to the phases')), ccBoardView(c, phases)]
-        : [sendBars(c), (() => { const l = lists.find((x) => x.id === K.listOpen); return l ? h('section', { class: 'cc-card cc-listopen' }, listCard(c, l)) : null; })(), ccPlanner(c, phases, { left: ovBrief(), idle: ovIdle() })]),
+      plan: () => [sendBars(c), (() => { const l = lists.find((x) => x.id === K.listOpen); return l ? h('section', { class: 'cc-card cc-listopen' }, listCard(c, l)) : null; })(), ccPlanner(c, phases, { left: ovBrief(), idle: ovIdle() })],
+      sketch: () => [ccBoardView(c, phases)],
       work: () => [sendBars(c), workBody()],
       progress: () => ccReport(c, { health: healthPart(), ideas: ideasPart(), log: logPart() }),
     }[tab]();
@@ -8457,8 +8491,7 @@
       h('div', { class: 'cc-phases-bar' },
         h('button', { class: 'btn small cc-addphase', onclick: () => goalSheet(c) }, '+ Add Phase'),
         h('button', { class: 'btn small ai-btn', title: 'Draft phases and tasks from the brief', onclick: (e) => suggestPlan(c, e.currentTarget) }, '✨ Suggest from the brief'),
-        h('span', { style: 'flex:1' }),
-        toolOn('whiteboard') ? h('button', { class: 'btn small cc-sketch-btn', title: 'Sketch this campaign on its whiteboard', onclick: () => { K.planView = 'board'; renderCamps(); } }, '🗺️ Sketch') : null),
+      ),
       phases.length ? phases.map((g, i) => ccPhaseCard(c, g, i, sel, show)) : h('p', { class: 'day-hint' }, 'No phases yet. A phase is a stage of the work, like “Call past customers” then “Book installs”.'),
       phases.length ? h('button', { class: 'cc-phase-new', onclick: () => goalSheet(c) }, '+ Add Phase') : null);
     // Right: the task picked, the phase picked (Add task), or At a glance.
@@ -9547,7 +9580,7 @@
     const k = kindOf(l);
     if (k === 'reference') return dockOpen(c, { type: 'list', id: l.id });
     if (k === 'form') return openLog(c, { ask: true });
-    K.listOpen = l.id; K.runOpen = null; K.planView = null; K.ctab = 'plan';
+    K.listOpen = l.id; K.runOpen = null; K.ctab = 'plan';
     renderCamps();
     setTimeout(() => $('#camps .cc-listopen')?.scrollIntoView({ block: 'start' }));
   }
@@ -9919,7 +9952,7 @@
   // The log lives on Progress (2026-11-25): starting it from Plan or Work (a list, a note, a follow-up) goes there.
   function ccToLog(c) {
     if (K.open !== c.id || ccTabOf(K.ctab) === 'progress') return;
-    K.ctab = 'progress'; K.planView = null;
+    K.ctab = 'progress';
     setTimeout(() => $('#camps .ccp-log')?.scrollIntoView({ block: 'start', behavior: 'smooth' }), 60);
   }
   function logRow(c, l, r) {
@@ -10653,7 +10686,7 @@
     const boardPick = h('input', { type: 'checkbox' });
     boardPick.checked = D.board;
     boardPick.addEventListener('change', () => { D.board = boardPick.checked; });
-    const boardOpt = isNew && toolOn('whiteboard') ? h('label', { class: 'pick cb-board-pick' }, boardPick, 'Sketch it on a board after it’s made (Plan → Board: shapes become phases, stickies become tasks)') : null;
+    const boardOpt = isNew && ccSketchOn() ? h('label', { class: 'pick cb-board-pick' }, boardPick, 'Start from a sketch: open it on Sketch with its phases drawn out, to add to and Update plan') : null;
     const testersBox = h('div', { class: 'cb-people cb-testers' });
     const drawTesters = () => testersBox.replaceChildren(...(D.launch === 'test' ? S.workspace.members.map((m) => {
       const on = D.testers.includes(m.id);
@@ -10829,7 +10862,10 @@
         if (D.launch === 'test' && !main) {
           try { const y = await api('POST', `/campaigns/${saved.id}/test`, { testers: D.testers }); const j = S.campaigns.findIndex((x) => x.id === y.id); if (j >= 0) S.campaigns[j] = y; } catch (e) { toast(e.message); }
         }
-        if (D.board) { K.ctab = 'plan'; K.planView = 'board'; }
+        if (D.board && ccSketchOn()) {
+          try { await wbMake({ template: 'phases', campaignId: saved.id }); } catch (e) { toast(e.message); }
+          K.ctab = 'sketch';
+        }
       }
       const tabNow = K.ctab;
       openCampaign(saved.id);

@@ -67,7 +67,7 @@ try {
   ok(await A.ev(`${T('.cc-name')}.textContent === 'New Client Onboarding' && !!${T('.cc-title-row .health')} && ${T('.cc-owner')}.textContent.includes('You') && ${T('.cc-crumb')}.textContent.startsWith('Campaigns')`), 'header: name, health, owner, breadcrumb');
   // The numbers left the header for one line of chips (2026-11-25): how complete it is, then All, My tasks, Overdue, Blocked.
   ok(await A.ev(`/^[0-9]+% complete/.test(${T('.cc-chips')}.textContent) && ${T('.cc-chip[data-chip=overdue]')}.classList.contains('bad')`), 'the chips: how complete it is, overdue flagged');
-  ok(await A.ev(`[...document.querySelectorAll('#camps .cc-tab')].map((b) => b.textContent).join('|')`) === 'Plan|Work|Progress', 'three tabs: Plan, Work, Progress');
+  ok(await A.ev(`[...document.querySelectorAll('#camps .cc-tab')].map((b) => b.textContent).join('|')`) === 'Plan|Work|Progress|Sketch', 'tabs: Plan, Work, Progress, and Sketch on a wide screen');
   // The brief, in four parts.
   ok(await A.ev(`[...document.querySelectorAll('#camps .cc-obrief h4')].map((x) => x.textContent).join('|')`) === 'Objective|Audience|Strategy|Success metrics|Where things are', 'the brief, down the left: Objective, Audience, Strategy, Success metrics, and where things are');
   ok(await A.ev(`${T('.cc-bf[data-field=brief]')}.textContent.includes('installed customers') && ${T('.cc-bf[data-field=audience]')}.textContent === 'New valley homeowners' && ${T('.cc-metrics')}.textContent.includes('Consultations booked') && ${T('.cc-metrics')}.textContent.includes('0 / 20')`), 'filled from the campaign; a target (0 / 20) is a success metric');

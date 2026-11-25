@@ -1,6 +1,6 @@
-// A campaign's board (2026-11-20): the Plan tab's Board view starts the campaign's whiteboard from a template; Make
-// phases turns its shapes into phases in flow order, with arrows as "waits for", and the shapes into live phase cards;
-// selected stickies become tasks in a phase (Make tasks in…). The board is the campaign's (seen by whoever sees it).
+// A campaign's board (2026-11-20; the Sketch tab since 2026-11-25): it starts the campaign's whiteboard from a template;
+// Update plan turns its boxes into phases in flow order, arrows into "waits for", stickies under a box into its tasks,
+// and what it used into live cards; selected stickies go into a phase with Make tasks in…. The board is the campaign's.
 import { CHROME, SERVER_DIR } from './chromebin.mjs';
 import * as FS from 'node:fs';
 import { spawn } from 'node:child_process';
@@ -51,45 +51,50 @@ try {
   // Open Campaigns (again if the first click came before the app was ready).
   for (let i = 0; i < 20 && !(await A.ev(`!!document.querySelector('.camp-card')`)); i++) { await A.ev(`document.querySelector('[data-tab=camps]')?.click(); true`); await sleep(300); }
   await A.tap(`document.querySelector('.camp-card')`);
-  await A.until(`!!${T('.cc-tab[data-ctab=plan]')}`);
-  await A.ev(`${T('.cc-tab[data-ctab=plan]')}.click(); true`);
-  ok(await A.until(`!!${T('.cc-sketch-btn')}`), 'Plan has a Sketch button (2026-11-25; it was a Phases | Board switch)');
-  await A.ev(`${T('.cc-sketch-btn')}.click(); true`);
-  ok(await A.until(`!!${T('.cc-board-empty')} && [...document.querySelectorAll('#camps .cc-board-starts button')].map((b) => b.textContent).join('|') === 'Workflow map|Campaign brainstorm|Mind map|Blank'`), 'with no board yet: start from Workflow map, Campaign brainstorm, Mind map or Blank');
+  await A.until(`!!${T('.cc-tab[data-ctab=sketch]')}`);
+  await A.ev(`${T('.cc-tab[data-ctab=sketch]')}.click(); true`);
+  ok(await A.until(`${T('.cc-body')}?.dataset.tab === 'sketch'`), 'the board is the Sketch tab (2026-11-25, stage 4)');
+  ok(await A.until(`!!${T('.cc-board-empty')} && [...document.querySelectorAll('#camps .cc-board-starts button')].map((b) => b.textContent).join('|') === 'Phases & tasks|Workflow map|Campaign brainstorm|Mind map|Blank'`), 'with no board yet: starts, Phases & tasks first');
   await A.tap(T('.cc-board-starts [data-tpl=workflow]'));
-  ok(await A.until(`document.querySelectorAll('#camps .cc-board .wb-item.k-shape').length === 5`, 10000), 'the campaign’s board opens in the Plan tab, from the workflow template (5 shapes)');
+  ok(await A.until(`document.querySelectorAll('#camps .cc-board .wb-item.k-shape').length === 5`, 10000), 'the campaign’s board opens from the workflow template (5 shapes)');
   const list = (await api('GET', '/boards?campaign=' + camp.id)).boards;
   ok(list.length === 1 && list[0].campaignId === camp.id, 'the board is the campaign’s');
   await shot('cboard-1');
-  // Make phases: every shape, in flow order, with arrows as "waits for".
-  await A.tap(T('.cc-mkphases'));
+  // Update plan: every box, in flow order, with arrows as "waits for"; a sticky under a box is a task in it.
+  await A.tap(T('.cc-update-plan'));
   const goals = async () => (await api('GET', '/state')).goals.filter((g) => g.campaignId === camp.id);
   let gs = [];
   for (let i = 0; i < 50 && gs.length < 5; i++) { gs = await goals(); await sleep(200); }
   for (let i = 0; i < 50; i++) { gs = await goals(); if (gs.filter((g) => g.blockedBy?.length).length >= 4) break; await sleep(200); }
   const byOrder = gs.sort((a, b) => (a.order || 0) - (b.order || 0));
-  ok(byOrder.map((g) => g.title).join('|') === 'Lead comes in|Quote it|Book the job|Do the work|Get paid', 'Make phases makes the five phases, in flow order: ' + byOrder.map((g) => g.title).join('|'));
+  ok(byOrder.map((g) => g.title).join('|') === 'Lead comes in|Quote it|Book the job|Do the work|Get paid', 'Update plan makes the five phases, in flow order: ' + byOrder.map((g) => g.title).join('|'));
   const by = Object.fromEntries(byOrder.map((g) => [g.title, g]));
   ok(by['Quote it'].blockedBy?.join() === by['Lead comes in'].id && by['Get paid'].blockedBy?.join() === by['Do the work'].id && !(by['Lead comes in'].blockedBy || []).length, 'each waits for the one its arrow comes from');
+  let st = await api('GET', '/state');
+  for (let i = 0; i < 30 && !st.tasks.some((x) => x.text === 'Where does it get stuck?'); i++) { await sleep(150); st = await api('GET', '/state'); }
+  ok(st.tasks.find((x) => x.text === 'Who does each step?')?.goalId === by['Lead comes in'].id && st.tasks.find((x) => x.text === 'Where does it get stuck?')?.goalId === by['Quote it'].id, 'the stickies under a box became its tasks');
   await sleep(600);
   const b1 = await api('GET', '/boards/' + list[0].id);
   ok(b1.items.filter((x) => x.kind === 'card' && x.ref?.kind === 'goal').length === 5 && b1.items.filter((x) => x.kind === 'shape').length === 0 && b1.links.length === 4, 'the shapes became live phase cards, and the 4 arrows stayed');
-  ok(await A.until(`document.querySelectorAll('#camps .cc-board .wb-item.k-card').length === 5`), 'the board shows them as cards');
-  // Make tasks: select a sticky, pick a phase.
-  await A.tap(`[...document.querySelectorAll('#camps .cc-board .wb-item.k-sticky')].find((n) => n.textContent.includes('Who does each step?'))`);
+  ok(await A.until(`document.querySelectorAll('#camps .cc-board .wb-item.k-card').length === 7`), 'the board shows them as cards (5 phases, 2 tasks)');
+  // Make tasks in…: a sticky under no phase, picked, into a phase.
+  const kid = 'stk' + Date.now().toString(36);
+  await api('POST', `/boards/${list[0].id}/ops`, { ops: [{ op: 'put', item: { id: kid, kind: 'sticky', x: 2200, y: 900, w: 200, h: 120, text: 'Call the supplier' } }] });
+  await A.until(`[...document.querySelectorAll('#camps .cc-board .wb-item.k-sticky')].some((n) => n.textContent.includes('Call the supplier'))`, 6000);
+  await A.tap(`[...document.querySelectorAll('#camps .cc-board .wb-item.k-sticky')].find((n) => n.textContent.includes('Call the supplier'))`);
   await sleep(300);
   await A.tap(T('.cc-mktasks'));
   ok(await A.until(`[...document.querySelectorAll('#menu button')].some((b) => b.textContent === 'Quote it')`), 'Make tasks in… asks which phase');
   await A.ev(`[...document.querySelectorAll('#menu button')].find((b) => b.textContent === 'Quote it').click(); true`);
   let tk;
-  for (let i = 0; i < 40 && !tk; i++) { tk = (await api('GET', '/state')).tasks.find((x) => x.text === 'Who does each step?'); await sleep(150); }
+  for (let i = 0; i < 40 && !tk; i++) { tk = (await api('GET', '/state')).tasks.find((x) => x.text === 'Call the supplier'); await sleep(150); }
   ok(tk && tk.goalId === by['Quote it'].id, 'the sticky became a task in Quote it');
   await sleep(600);
   ok((await api('GET', '/boards/' + list[0].id)).items.some((x) => x.kind === 'card' && x.ref?.kind === 'task' && x.ref.id === tk?.id), 'and a live task card on the board');
   await shot('cboard-2');
-  // Back on Phases, they're the campaign's phases.
-  await A.ev(`${T('.cc-sketch-btn')}.click(); true`);
-  ok(await A.until(`document.querySelectorAll('#camps .cc-phase').length === 5`), 'back on the phases: the five phases (as cards, 2026-11-25)');
+  // View as plan: they're the campaign's phases.
+  await A.tap(T('.cc-asplan'));
+  ok(await A.until(`${T('.cc-body')}?.dataset.tab === 'plan' && document.querySelectorAll('#camps .cc-phase').length === 5`), 'View as plan: the five phases on Plan');
   ok(A.errors.length === 0, 'no script errors' + (A.errors.length ? ': ' + A.errors.join(' | ') : ''));
 } catch (e) { ok(false, 'threw: ' + e.stack); }
 A?.close();
