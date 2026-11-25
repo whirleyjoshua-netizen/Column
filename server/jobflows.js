@@ -805,6 +805,7 @@ export function jobFlowsModule(ctx) {
         const t = p && p.types.find((x) => x.id === version.body.list.typeId);
         if (!p || p.wsId !== ws.id || !PJ.sees(p, auth.memberId) || !t) return send(res, 404, { error: 'That flow’s job list is gone.' });
         const values = body.values && typeof body.values === 'object' ? { ...body.values } : {};
+        if (PJ.pricedWrite(ws.id, auth.memberId, p, t, values)) return send(res, 403, { error: 'Prices are for owners and admins.' }); // docs/jobflows/PRICES.md §4
         if (body.contactId) { const cf = fieldBy(t, (f) => f.type === 'contact'); if (cf) values[cf.key] = String(body.contactId); }
         // A retry with the same key gives back the same job; the same key for another job is refused.
         const key = body.key ? `${ws.id}:${auth.memberId}:${cleanText(body.key, 100)}` : null;

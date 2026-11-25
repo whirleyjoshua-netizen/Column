@@ -287,6 +287,9 @@ try {
   await rico('POST', `/job-flows/${fl?.id}/publish`);
   r = await sam('POST', '/jobs', { flowId: fl?.id, contactId: danaId, values: { job: 'Sam started' } });
   const samJob = r.body?.job;
+  const before = ((await rico('GET', `/projects/${jp.id}/records`)).body || []).length;
+  const pr = await sam('POST', '/jobs', { flowId: fl?.id, contactId: danaId, values: { job: 'Sam priced job', price: { rows: [{ desc: 'Unit', qty: 1, price: '5' }] } } });
+  ok(pr.status === 403 && ((await rico('GET', `/projects/${jp.id}/records`)).body || []).length === before, 'a member starting a job with price lines: 403, nothing made: ' + pr.status);
   ok(r.status === 200 && samJob?.id, 'a member starts a job on the flow: ' + r.status + ' ' + (r.body?.error || ''));
   const ownerJob = ((await rico('GET', `/projects/${jp.id}/records`)).body || []).find((x) => x.id === samJob?.id);
   ok(ownerJob?.values[jfid('price')]?.rows?.[0]?.price === 432177, 'the job got the default line with its price (the owner sees it)');
