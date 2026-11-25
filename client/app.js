@@ -3212,15 +3212,17 @@
   // Company HQ, Business card and Signatures are in Settings → Business. News is on Home (turned on in Settings).
   // Sidekick's panel (the owner, 2026-11-14): one assistant on every page. See "Sidekick, on every page".
   const SKD = { open: false, view: 'home', draft: '', busy: false, noPage: false, here: false };
-  // Chat moved into Tools (the owner, 2026-11-20): it opens in the split beside the page, like Stacks.
-  const MAIN_TABS = ['agents', 'work', 'apps'];
+  // Chat moved into Tools (the owner, 2026-11-20): it opens in the split beside the page, like Stacks. And back in the
+  // sidebar too (the owner, 2026-11-25: "move chat to the main left tab ... still ... open in the split screen through
+  // tools"): the sidebar's Chat is the page, Tools → Chat the split.
+  const MAIN_TABS = ['chat', 'agents', 'work', 'apps'];
   // Tasks (the owner, 2026-11-15): what was Day is Workspace's first tab, and Workspace always opens on it.
   const WORK_TABS = ['day', 'contacts', 'jobs', 'projects', 'camps', 'docs', 'automations', 'tools'];
   // What Workspace → Tools lists. Stacks is a view (S.tab 'column'); the rest open in #tool. While one is open, Tools stays lit.
   const TOOL_PAGE = ['chat', 'column', 'whiteboard', 'templates', 'inventory', 'bills', 'analytics', 'email', 'meetings', 'map', 'vault'];
   const BAR_ITEMS = {
     column: { label: 'Stacks', view: true },
-    chat: { label: 'Chat', view: true },
+    chat: { label: 'Chat', view: true, ok: () => memberMay('chat') },
     camps: { label: 'Campaigns', view: true, ok: () => memberMay('camps') },
     agents: { label: 'Agents', ok: () => toolOn('agents'), open: () => agOpen('team') },
     work: { label: 'Workspace', ok: () => workKeys().length > 0, open: () => openBarItem('day') },
@@ -3315,7 +3317,7 @@
     }
     if (it.view) {
       closeProjects();
-      return setTab(k);
+      return setTab(k, 'page');
     }
     if (toolOpen === k) return closeTool();
     it.open ? it.open() : openTool(k);
@@ -3518,13 +3520,15 @@
     });
   }
 
-  // Chat showing: in the split (2026-11-20), or the old page if anything still sets it.
+  // Chat showing: as the page (the sidebar's Chat) or in the split (Tools → Chat).
   const chatOn = () => S.tab === 'chat' || splitOpen === 'chat';
   // The pages you've been on, for the browser's Back (navBack, near the end).
   const NAVB = { tabs: [], going: false, armed: false, skip: false };
-  function setTab(tab) {
-    // Everything that opened the Chat page (links, pins, notifications) opens Chat in the split now.
-    if (tab === 'chat') return openChat();
+  function setTab(tab, how) {
+    // Links, pins and notifications open Chat in the split beside the page you're on (or on the Chat page, if that's
+    // where you are); the sidebar's Chat (how 'page') makes it the page, taking it back from the split.
+    if (tab === 'chat' && how !== 'page') return openChat();
+    if (tab === 'chat' && splitOpen === 'chat') closeSplit();
     if (S.tab && tab !== S.tab && !NAVB.going) { NAVB.tabs.push(S.tab); if (NAVB.tabs.length > 30) NAVB.tabs.shift(); }
     if (tab === 'camps' && splitOpen === 'camps') closeSplit(); // Campaigns from the tabs: back from the split, as the page
     S.tab = tab;
@@ -3539,7 +3543,8 @@
     const panesWere = $('#panes').classList.contains('hidden');
     $('#panes').classList.toggle('hidden', tab !== 'column' && splitOpen !== 'column');
     if (panesWere && tab === 'column') keepPanesScroll($('#panes'), true);
-    $('#chat').classList.toggle('hidden', splitOpen !== 'chat');
+    $('#chat').classList.toggle('hidden', tab !== 'chat' && splitOpen !== 'chat');
+    if (tab === 'chat') openChannel(C.view);
     $('#campsWrap').classList.toggle('hidden', tab !== 'camps' && splitOpen !== 'camps');
     if (tab === 'camps') renderCamps();
     if (tab === 'day') renderDay();
@@ -5786,8 +5791,10 @@
   const autoIc = (l) => h('span', { class: `auto-ic lk-${l.c}`, 'aria-hidden': 'true' }, l.ic);
   // The picker: a search box, chips for each group, and a list with colored icons. items: { key, label, ic, c, g?, hint? }.
   // Beside the button that opened it (a sheet at the bottom on a phone); Esc, a tap outside or a pick closes it.
-  function autoPicker(anchor, { title, items, groups = null, active = null, onPick }) {
-    document.querySelector('.ap-pop')?._close?.();
+  function autoPicker(anchor, { title, items, groups = null, active = null, onPick, refocus = null }) {
+    const was = document.querySelector('.ap-pop');
+    if (was && was._anchor === anchor) return was._close(); // its button again: close it
+    was?._close?.();
     const st = { q: '', g: 'all' };
     const search = h('input', { class: 'ap-search', type: 'search', placeholder: 'Search…', 'aria-label': 'Search' });
     const chips = groups ? h('div', { class: 'ap-chips', role: 'tablist' }) : null;
@@ -5795,14 +5802,22 @@
     const pop = h('div', { class: 'ap-pop', role: 'dialog', 'aria-label': title }, h('div', { class: 'ap-title' }, '✨ ' + title), search, chips, list);
     const outside = (e) => { if (!pop.contains(e.target) && !anchor.contains(e.target)) close(); };
     const esc = (e) => { if (e.key === 'Escape') { e.stopPropagation(); close(); anchor.focus?.(); } };
-    const close = () => { pop.remove(); document.removeEventListener('pointerdown', outside, true); document.removeEventListener('keydown', esc, true); };
+    // A scroll under it (the page, the canvas) closes it rather than leave it floating away from its button.
+    const scrolled = (e) => { if (!pop.contains(e.target)) close(); };
+    // On a phone it's a sheet at the bottom: when the keyboard comes up it sits above it, and shrinks to fit.
+    const vv = window.visualViewport;
+    const fit = () => { pop.style.bottom = Math.max(0, innerHeight - vv.height - vv.offsetTop) + 'px'; pop.style.maxHeight = Math.round(vv.height * 0.8) + 'px'; };
+    const close = () => { pop.remove(); document.removeEventListener('pointerdown', outside, true); document.removeEventListener('keydown', esc, true); document.removeEventListener('scroll', scrolled, true); vv?.removeEventListener('resize', fit); vv?.removeEventListener('scroll', fit); };
     pop._close = close;
+    pop._anchor = anchor;
+    // After a pick the page redraws; the keyboard goes back to the button that opened it (or its new self).
+    const back = () => setTimeout(() => (anchor.isConnected ? anchor : refocus?.())?.focus({ preventScroll: true }));
     const draw = () => {
       const q = st.q.trim().toLowerCase();
       const shown = items.filter((x) => (st.g === 'all' || x.g === st.g) && (!q || (x.find || x.label).toLowerCase().includes(q) || (x.hint || '').toLowerCase().includes(q)));
       chips?.replaceChildren(...groups.filter(([k]) => k === 'all' || items.some((x) => x.g === k)).map(([k, l]) =>
         h('button', { type: 'button', class: 'ap-chip' + (st.g === k ? ' on' : ''), 'data-g': k, role: 'tab', 'aria-selected': String(st.g === k), onclick: () => { st.g = k; draw(); } }, l)));
-      list.replaceChildren(...(shown.length ? shown.map((x) => h('button', { type: 'button', class: `ap-item lk-${x.c}` + (x.key === active ? ' on' : ''), 'data-key': x.key, role: 'option', 'aria-selected': String(x.key === active), onclick: () => { close(); onPick(x.key); } },
+      list.replaceChildren(...(shown.length ? shown.map((x) => h('button', { type: 'button', class: `ap-item lk-${x.c}` + (x.key === active ? ' on' : ''), 'data-key': x.key, role: 'option', 'aria-selected': String(x.key === active), onclick: () => { close(); onPick(x.key); back(); } },
         h('span', { class: 'ap-ic', 'aria-hidden': 'true' }, x.ic), h('span', { class: 'ap-label' }, x.label, x.hint ? h('small', {}, x.hint) : null), x.key === active ? h('small', { class: 'ap-on' }, 'Active') : null))
         : [h('p', { class: 'ap-none' }, 'Nothing matches.')]));
     };
@@ -5814,9 +5829,14 @@
       const left = r.right + 8 + w <= innerWidth ? r.right + 8 : r.left - w - 8 >= 8 ? r.left - w - 8 : Math.max(8, innerWidth - w - 8);
       pop.style.left = left + 'px';
       pop.style.top = Math.max(8, Math.min(r.top, innerHeight - ht - 8)) + 'px';
-    } else pop.classList.add('ap-sheet');
-    setTimeout(() => { document.addEventListener('pointerdown', outside, true); document.addEventListener('keydown', esc, true); });
-    search.focus();
+    } else {
+      pop.classList.add('ap-sheet');
+      if (vv) { fit(); vv.addEventListener('resize', fit); vv.addEventListener('scroll', fit); }
+    }
+    const sheetMode = pop.classList.contains('ap-sheet');
+    setTimeout(() => { document.addEventListener('pointerdown', outside, true); document.addEventListener('keydown', esc, true); if (!sheetMode) document.addEventListener('scroll', scrolled, true); });
+    // On a phone the keyboard would cover the list: the search waits to be tapped.
+    if (!sheetMode) search.focus({ preventScroll: true });
   }
   // The picker's lists: what can set one off (grouped by tool, from the catalog), and what a step can do.
   const autoWhenItems = (only = null) => (AUTO_CAT.events ? AUTO_CAT.events.map((e) => ({ key: e.type, label: e.label.replace(/ \(.*\)$/, ''), find: e.label, hint: AUTO_CAT.tools[e.tool] || '', g: e.tool, ...autoWhenLook(e.type) }))
@@ -6090,6 +6110,7 @@
       }
       draw();
     };
+    const panelBtn = () => box.querySelector('.ab-panel .ab-change');
     const clearLit = () => { Object.assign(B, { lit: null, would: null, test: null, run: '' }); draw(); };
     const draw = () => {
       const t = dr.trigger;
@@ -6211,7 +6232,7 @@
             : v === 'agent' ? { kind: 'agent', agent: 'team', ask: '', wait: false }
             : v === 'stock' ? { kind: 'stock', act: 'use', itemId: '', qty: 1, from: '', to: '', note: '' }
             : { kind: v, text: a.text || '', to: [], channelId: 'same' });
-      const addAt = (list, i, depth) => (e) => autoPicker(e.currentTarget, { title: 'Add a step or tool', items: autoDoItems(null, depth), groups: AUTO_GROUPS, onPick: (v) => { const y = freshStep(v); list.splice(i, 0, y); B.sel = y; B.tab = 'set'; draw(); } });
+      const addAt = (list, i, depth) => (e) => autoPicker(e.currentTarget, { title: 'Add a step or tool', items: autoDoItems(null, depth), groups: AUTO_GROUPS, refocus: panelBtn, onPick: (v) => { const y = freshStep(v); list.splice(i, 0, y); B.sel = y; B.tab = 'set'; draw(); } });
       // Moving a step (dragged by its ⋮⋮) to a place in a list: never into itself, and "only if" 3 deep at most.
       const ifDepth = (y) => (y.kind === 'if' ? 1 + Math.max(0, ...[...(y.then || []), ...(y.else || [])].map(ifDepth)) : 0);
       const holds = (y, list) => y.kind === 'if' && (y.then === list || y.else === list || [...(y.then || []), ...(y.else || [])].some((z) => holds(z, list)));
@@ -6508,7 +6529,7 @@
             h('span', { class: `an-ic lk-${look.c}`, 'aria-hidden': 'true' }, look.ic), h('span', { class: 'an-txt' }, h('span', { class: 'an-say' }, autoLine(a)), h('span', { class: 'an-chips' }, autoChips(a)))),
           would ? h('div', { class: 'auto-would' + (would.yes === false ? ' no' : '') }, would.said) : null,
           branches);
-        if (isSel) B.panel = { ic: look.ic, c: look.c, step, what: a.kind === 'wait' ? 'Wait a while' : a.kind === 'if' ? 'Only if…' : AUTO_DO[a.kind] || a.kind, label: 'Change step', change: (btn) => autoPicker(btn, { title: 'Change this step', items: autoDoItems(a.kind, depth), groups: AUTO_GROUPS, active: a.kind, onPick: setKind }), f, adv };
+        if (isSel) B.panel = { ic: look.ic, c: look.c, step, what: a.kind === 'wait' ? 'Wait a while' : a.kind === 'if' ? 'Only if…' : AUTO_DO[a.kind] || a.kind, label: 'Change step', change: (btn) => autoPicker(btn, { title: 'Change this step', items: autoDoItems(a.kind, depth), groups: AUTO_GROUPS, active: a.kind, onPick: setKind, refocus: panelBtn }), f, adv };
         node._step = a;
         return node;
       };
@@ -6537,7 +6558,7 @@
         h('button', { type: 'button', class: 'an-b', 'aria-pressed': String(tSel), title: 'Change what sets it off', onclick: () => { if (!tSel) { B.sel = 'trigger'; B.tab = 'set'; draw(); } } },
           h('span', { class: `an-ic lk-${tl.c}`, 'aria-hidden': 'true' }, tl.ic), h('span', { class: 'an-txt' }, h('span', { class: 'an-say' }, autoWhenText(t)))));
       if (tSel) B.panel = { ic: tl.ic, c: tl.c, step: '1. When', what: autoWhenLabel(t.kind), label: 'Change event',
-        change: (btn) => autoPicker(btn, { title: 'Change event', items: autoWhenItems(), groups: autoWhenGroups(), active: t.kind, onPick: (v) => { dr.trigger = { kind: v, ...(v === 'schedule' ? { slots: [{ days: [1], time: '09:00' }] } : {}) }; draw(); } }),
+        change: (btn) => autoPicker(btn, { title: 'Change event', items: autoWhenItems(), groups: autoWhenGroups(), active: t.kind, refocus: panelBtn, onPick: (v) => { dr.trigger = { kind: v, ...(v === 'schedule' ? { slots: [{ days: [1], time: '09:00' }] } : {}) }; draw(); } }),
         f: tSet.length ? tSet : [h('p', { class: 'day-hint' }, tAdv.length ? 'That’s all it needs. To narrow it down (one campaign, a stage, an amount…), see Advanced settings.' : 'That’s all it needs.')], adv: tAdv };
       const flow = stepList(dr.actions, 0);
       const pn = B.panel;
@@ -7109,8 +7130,10 @@
   // along the timeline or by either end, a task onto another day. -----
   // The campaign's tabs (2026-11-25, simpler): Plan, Work, Progress. Old places land where their parts went: Activity
   // and Report on Progress; Overview, Resources, or anything unknown on Plan. The chips under the header: All (open, then done), My tasks, Overdue, Blocked (open only).
-  const CC_TABS = [['plan', 'Plan'], ['work', 'Work'], ['progress', 'Progress']];
-  const ccTabOf = (k) => (k === 'activity' || k === 'report' ? 'progress' : CC_TABS.some(([x]) => x === k) ? k : 'plan');
+  // Sketch (stage 4): the campaign's whiteboard, when the team has it on and the screen is wide enough to draw.
+  const ccSketchOn = () => toolOn('whiteboard') && document.body.classList.contains('wide');
+  const ccTabs = () => [['plan', 'Plan'], ['work', 'Work'], ['progress', 'Progress'], ...(ccSketchOn() ? [['sketch', 'Sketch']] : [])];
+  const ccTabOf = (k) => (k === 'activity' || k === 'report' ? 'progress' : ccTabs().some(([x]) => x === k) ? k : 'plan');
   const CC_CHIPS = [['all', 'All'], ['mine', 'My tasks'], ['overdue', 'Overdue'], ['blocked', 'Blocked']];
   const ccChipOf = (k) => (CC_CHIPS.some(([x]) => x === k) ? k : 'all');
   function ccChipPick(tasks, k) {
@@ -7585,35 +7608,71 @@
     for (const id of nid.keys()) ops.push({ op: 'del', item: id });
     if (ops.length) ed.change(ops);
   }
-  async function ccMakePhases(c, btn) {
+  // Update plan (2026-11-25, campaign Sketch): the sketch is a draft; this turns what's new on it into the plan, and
+  // nothing twice. Phases: the phase cards already on the board, and boxes with words (a box named like a phase of
+  // this campaign is that phase). Arrows that touch a box handled now become "waits for" (added only if missing), so
+  // an old arrow doesn't bring back a "waits for" taken off on Plan. Stickies: a task in the phase whose box sits above
+  // them (nearest above, the sticky's middle within the box's width), unless that phase has a task by that name; a
+  // sticky under no phase is left alone. What it used becomes live cards. With something selected, only that.
+  async function ccUpdatePlan(c, btn) {
     const ed = K.cb.ed;
     if (!ed) return;
     const items = ed.items(), links = ed.links(), sel = new Set(ed.selection());
-    const fit = (x) => !x.ref && String(x.text || '').trim() && (sel.size ? sel.has(x.id) && ['shape', 'sticky', 'text', 'frame'].includes(x.kind) : x.kind === 'shape');
-    const pick = items.filter(fit);
-    if (!pick.length) return toast(sel.size ? 'Select shapes or stickies with words in them.' : 'Draw shapes with the phase names in them (or select stickies), then Make phases.');
+    const inSel = (x) => !sel.size || sel.has(x.id);
+    const norm = (v) => String(v || '').trim().replace(/\s+/g, ' ').toLowerCase();
+    const campPhases = () => goalsOf(c.id).filter((g) => !['count', 'money'].includes(g.kind));
+    const phaseOf = new Map();
+    for (const x of items) if (x.kind === 'card' && x.ref?.kind === 'goal') { const g = goalById(x.ref.id); if (g?.campaignId === c.id) phaseOf.set(x.id, g); }
+    const shapes = items.filter((x) => x.kind === 'shape' && !x.ref && norm(x.text) && inSel(x));
+    const stickies = items.filter((x) => x.kind === 'sticky' && !x.ref && norm(x.text) && inSel(x));
+    let newPhases = 0, newTasks = 0, already = 0, failed = null;
+    const cards = [];
     btn.disabled = true;
-    const made = new Map();
     try {
-      for (const x of ccFlowOrder(pick, links)) {
-        const g = await api('POST', '/goals', { campaignId: c.id, title: String(x.text).trim().slice(0, 200) });
-        if (!S.goals.some((y) => y.id === g.id)) S.goals.push(g);
-        made.set(x.id, g);
+      for (const x of ccFlowOrder(shapes, links)) {
+        const same = campPhases().find((g) => norm(g.title) === norm(x.text));
+        if (same) { phaseOf.set(x.id, same); already++; }
+        else {
+          const g = await api('POST', '/goals', { campaignId: c.id, title: String(x.text).trim().slice(0, 200) });
+          if (!S.goals.some((y) => y.id === g.id)) S.goals.push(g);
+          phaseOf.set(x.id, g);
+          newPhases++;
+        }
+        cards.push([x.id, { kind: 'goal', id: phaseOf.get(x.id).id }]);
       }
-      // An arrow from one to another: the second waits for the first.
+      const fresh = new Set(shapes.map((x) => x.id));
       for (const l of links) {
-        const a = made.get(l.from), b = made.get(l.to);
-        if (!a || !b || a === b) continue;
+        if (!fresh.has(l.from) && !fresh.has(l.to)) continue;
+        const a = phaseOf.get(l.from), b = phaseOf.get(l.to);
+        if (!a || !b || a.id === b.id) continue;
         const now = goalById(b.id) || b;
-        const y = await api('PATCH', '/goals/' + b.id, { blockedBy: [...new Set([...(now.blockedBy || []), a.id])] });
+        if ((now.blockedBy || []).includes(a.id) || (goalById(a.id)?.blockedBy || []).includes(b.id)) continue;
+        const y = await api('PATCH', '/goals/' + b.id, { blockedBy: [...(now.blockedBy || []), a.id] });
         const i = S.goals.findIndex((z) => z.id === y.id); if (i >= 0) S.goals[i] = y;
       }
-      // The shapes become live phase cards, where they are, so the arrows stay.
-      ccToCards(ed, [...made].map(([id, g]) => [id, { kind: 'goal', id: g.id }]));
-      ed.refresh?.();
-      toast(`Made ${made.size} phase${made.size === 1 ? '' : 's'}${links.some((l) => made.has(l.from) && made.has(l.to)) ? ', with what waits for what' : ''}`);
-      renderCamps();
-    } catch (e) { toast(e.message); }
+      const boxes = items.filter((x) => phaseOf.has(x.id));
+      for (const s of stickies.sort((a, b) => a.y - b.y || a.x - b.x)) {
+        const mid = s.x + (s.w || 200) / 2;
+        const over = boxes.filter((bx) => mid >= bx.x && mid <= bx.x + (bx.w || 200) && bx.y + (bx.h || 90) <= s.y + 1).sort((a, b) => b.y - a.y)[0];
+        if (!over) continue;
+        const g = phaseOf.get(over.id);
+        if (S.tasks.some((t) => t.goalId === g.id && norm(t.text) === norm(s.text))) { already++; continue; }
+        const t = await api('POST', '/tasks', { goalId: g.id, text: String(s.text).trim().slice(0, 500) });
+        upsertTask(t);
+        cards.push([s.id, { kind: 'task', id: t.id }]);
+        newTasks++;
+      }
+    } catch (e) { failed = e; }
+    // What it made becomes cards and is said even when something failed halfway (then why it stopped); the rest stays
+    // as drawn, for another Update plan.
+    if (cards.length) { ccToCards(ed, cards); ed.refresh?.(); }
+    const asPlan = { label: 'View as plan', run: () => { K.ctab = 'plan'; renderCamps(); } };
+    const made = [newPhases ? plural(newPhases, 'phase') : '', newTasks ? plural(newTasks, 'task') : ''].filter(Boolean).join(' and ');
+    const said = made ? `Added ${made}${already ? ` · ${already} already there` : ''}` : '';
+    if (failed) toast(said ? `${said}, then stopped: ${failed.message}` : failed.message, said ? asPlan : undefined);
+    else if (said) toast(said, asPlan);
+    else toast(shapes.length || stickies.length ? 'Nothing new to add: what’s here is in the plan already, or not under a phase.' : 'Nothing new to add. Draw a box for a phase, put stickies under it for its tasks, then Update plan.');
+    renderCamps();
     btn.disabled = false;
   }
   function ccMakeTasks(c, btn, phases) {
@@ -7647,9 +7706,10 @@
     if (!K.cb.board && !K.cb.none && !K.cb.loading) ccBoardLoad(c);
     if (K.cb.loading || (!K.cb.board && !K.cb.none)) return h('section', { class: 'cc-card' }, h('p', { class: 'day-hint' }, 'Loading the board…'));
     if (!K.cb.board) return h('section', { class: 'cc-card cc-board-empty' }, h('div', { class: 'cc-card-h' }, h('b', {}, '🗺️ Sketch this campaign on a board')),
-      h('p', { class: 'day-hint' }, 'Map how the work flows with shapes and arrows, brainstorm with stickies, then turn them into phases and tasks. Whoever sees the campaign sees its board.'),
+      h('p', { class: 'day-hint' }, 'Draw the campaign out: a box for each phase, arrows for what comes first, stickies under a phase for its tasks. Update plan turns it into the plan; nothing is real until then. Whoever sees the campaign sees its board.'),
       h('div', { class: 'cc-board-starts' },
-        h('button', { class: 'btn primary-btn small', 'data-tpl': 'workflow', onclick: () => ccBoardStart(c, 'workflow') }, 'Workflow map'),
+        h('button', { class: 'btn primary-btn small', 'data-tpl': 'phases', title: 'The phases and tasks you have, drawn out to rearrange and add to', onclick: () => ccBoardStart(c, 'phases') }, 'Phases & tasks'),
+        h('button', { class: 'btn small', 'data-tpl': 'workflow', onclick: () => ccBoardStart(c, 'workflow') }, 'Workflow map'),
         h('button', { class: 'btn small', 'data-tpl': 'brainstorm', onclick: () => ccBoardStart(c, 'brainstorm') }, 'Campaign brainstorm'),
         h('button', { class: 'btn small', 'data-tpl': 'mindmap', onclick: () => ccBoardStart(c, 'mindmap') }, 'Mind map'),
         h('button', { class: 'btn small', 'data-tpl': 'blank', onclick: () => ccBoardStart(c, 'blank') }, 'Blank')));
@@ -7657,12 +7717,13 @@
       K.cb.mount = h('div', { class: 'cc-board' });
       K.cb.ed = boardEditor(K.cb.board, K.cb.mount, { campaign: c });
     } else K.cb.ed?.refresh?.();
-    const mk = h('button', { class: 'btn small primary-btn cc-mkphases', title: 'Selected shapes or stickies, or every shape with words in it, become phases in flow order; arrows between them become “waits for”', onclick: (e) => ccMakePhases(c, e.currentTarget) }, '◆ Make phases');
+    const up = h('button', { class: 'btn small primary-btn cc-update-plan', title: 'New boxes become phases (arrows: what waits for what), stickies under a phase become its tasks; nothing twice', onclick: (e) => ccUpdatePlan(c, e.currentTarget) }, '↻ Update plan');
     const mt = h('button', { class: 'btn small cc-mktasks', title: 'The selected stickies become tasks in a phase', onclick: (e) => ccMakeTasks(c, e.currentTarget, phases) }, '☑ Make tasks in…');
     return h('section', { class: 'cc-card cc-boardwrap' },
-      h('div', { class: 'cc-card-h' }, h('b', {}, '🗺️ ' + (K.cb.board.name || 'Board')), h('span', { style: 'flex:1' }), mk, mt,
-        h('button', { class: 'btn small', title: 'Open the board full page', onclick: () => { const id = K.cb.board.id; ccBoardDrop(); openBoard(id); } }, '⤢ Full page')),
-      h('small', { class: 'hint' }, 'Draw a shape for each phase and join them with arrows, then Make phases. Select stickies and Make tasks in… a phase. Cards show the real phases and tasks.'),
+      h('div', { class: 'cc-card-h' }, h('b', {}, '🗺️ ' + (K.cb.board.name || 'Board')), h('span', { style: 'flex:1' }), up, mt,
+        h('button', { class: 'btn small', title: 'Open the board full page', onclick: () => { const id = K.cb.board.id; ccBoardDrop(); openBoard(id); } }, '⤢ Full page'),
+        h('button', { class: 'btn small cc-asplan', onclick: () => { K.ctab = 'plan'; renderCamps(); } }, 'View as plan →')),
+      h('small', { class: 'hint' }, 'A box for each phase, arrows for what comes first, stickies under a phase for its tasks; then Update plan. Cards are the real phases and tasks.'),
       K.cb.mount);
   }
   // ----- a campaign's test run (2026-11-20, the sandbox): start it with testers; while it runs a banner says so, with
@@ -7984,7 +8045,7 @@
         c.inOrder ? h('span', { class: 'pill', title: 'Phases and tasks open one at a time, top to bottom' }, 'In order') : null,
         who ? h('span', { class: 'pill', title: who.map(memberName).join(', ') }, h('span', { class: 'is-task', html: I.lock }), `Private · ${who.length}`) : null),
       chips,
-      h('div', { class: 'cc-tabs', role: 'tablist' }, CC_TABS.map(([k, l]) =>
+      h('div', { class: 'cc-tabs', role: 'tablist' }, ccTabs().map(([k, l]) =>
         h('button', { class: 'cc-tab' + (tab === k ? ' on' : ''), role: 'tab', 'aria-selected': String(tab === k), 'data-ctab': k, onclick: () => setTabC(k) }, l))));
     // The brief: objective (the old brief), audience, strategy, and success metrics (targets with live numbers).
     const field = (k, label, ph) => {
@@ -8110,12 +8171,11 @@
       subs ? ovSec('Sub-campaigns', ...[...subs.childNodes].filter((x) => !x.classList?.contains('cc-card-h'))) : null,
       ovSec('Team and roles', castStrip(c)),
       h('small', { class: 'cc-pp-hint' }, phases.length ? 'Click a phase or a task in the plan to change it here.' : 'Add the first phase, then its tasks go under it.'));
-    if (!(tab === 'plan' && K.planView === 'board' && toolOn('whiteboard'))) ccBoardDrop();
+    if (tab !== 'sketch') ccBoardDrop();
     const body = {
       // Plan (the owner's sketch, 2026-11-22): what's saved on the left, the plan as a tree of tiles, a task's panel on the right.
-      plan: () => (K.planView === 'board' && toolOn('whiteboard')
-        ? [h('div', { class: 'cc-phases-bar' }, h('button', { class: 'btn small cc-sketch-btn on', title: 'Back to the phases', onclick: () => { K.planView = null; renderCamps(); } }, '← Back to the phases')), ccBoardView(c, phases)]
-        : [sendBars(c), (() => { const l = lists.find((x) => x.id === K.listOpen); return l ? h('section', { class: 'cc-card cc-listopen' }, listCard(c, l)) : null; })(), ccPlanner(c, phases, { left: ovBrief(), idle: ovIdle() })]),
+      plan: () => [sendBars(c), (() => { const l = lists.find((x) => x.id === K.listOpen); return l ? h('section', { class: 'cc-card cc-listopen' }, listCard(c, l)) : null; })(), ccPlanner(c, phases, { left: ovBrief(), idle: ovIdle() })],
+      sketch: () => [ccBoardView(c, phases)],
       work: () => [sendBars(c), workBody()],
       progress: () => ccReport(c, { health: healthPart(), ideas: ideasPart(), log: logPart() }),
     }[tab]();
@@ -8173,7 +8233,18 @@
     const btns = items.map(([k, l, ic, c]) => h('button', { type: 'button', role: 'radio', class: 'pa-opt' + (c ? ` lk-${c}` : ''), 'data-v': k,
       onclick: (e) => { if (e.currentTarget.disabled || v === k) return; el.value = k; el.dispatchEvent(new Event('change')); } },
     ic ? h('span', { class: 'pa-ic', 'aria-hidden': 'true' }, ic) : null, h('span', {}, l)));
-    Object.defineProperty(el, 'value', { get: () => v, set: (k) => { v = k; for (const b of btns) b.setAttribute('aria-checked', String(b.dataset.v === k)); } });
+    Object.defineProperty(el, 'value', { get: () => v, set: (k) => { v = k; for (const b of btns) { b.setAttribute('aria-checked', String(b.dataset.v === k)); b.tabIndex = b.dataset.v === k ? 0 : -1; } } });
+    el.addEventListener('keydown', (e) => {
+      const step = { ArrowDown: 1, ArrowRight: 1, ArrowUp: -1, ArrowLeft: -1 }[e.key];
+      if (!step) return;
+      e.preventDefault();
+      const on = btns.filter((b) => !b.disabled);
+      const next = on[(on.findIndex((b) => b.dataset.v === v) + step + on.length) % on.length];
+      if (!next || next.dataset.v === v) return;
+      el.value = next.dataset.v;
+      el.dispatchEvent(new Event('change'));
+      next.focus();
+    });
     el.labelOf = (k) => items.find(([x]) => x === k)?.[1] || '';
     el.append(...btns);
     el.value = init;
@@ -8457,8 +8528,7 @@
       h('div', { class: 'cc-phases-bar' },
         h('button', { class: 'btn small cc-addphase', onclick: () => goalSheet(c) }, '+ Add Phase'),
         h('button', { class: 'btn small ai-btn', title: 'Draft phases and tasks from the brief', onclick: (e) => suggestPlan(c, e.currentTarget) }, '✨ Suggest from the brief'),
-        h('span', { style: 'flex:1' }),
-        toolOn('whiteboard') ? h('button', { class: 'btn small cc-sketch-btn', title: 'Sketch this campaign on its whiteboard', onclick: () => { K.planView = 'board'; renderCamps(); } }, '🗺️ Sketch') : null),
+      ),
       phases.length ? phases.map((g, i) => ccPhaseCard(c, g, i, sel, show)) : h('p', { class: 'day-hint' }, 'No phases yet. A phase is a stage of the work, like “Call past customers” then “Book installs”.'),
       phases.length ? h('button', { class: 'cc-phase-new', onclick: () => goalSheet(c) }, '+ Add Phase') : null);
     // Right: the task picked, the phase picked (Add task), or At a glance.
@@ -9547,7 +9617,7 @@
     const k = kindOf(l);
     if (k === 'reference') return dockOpen(c, { type: 'list', id: l.id });
     if (k === 'form') return openLog(c, { ask: true });
-    K.listOpen = l.id; K.runOpen = null; K.planView = null; K.ctab = 'plan';
+    K.listOpen = l.id; K.runOpen = null; K.ctab = 'plan';
     renderCamps();
     setTimeout(() => $('#camps .cc-listopen')?.scrollIntoView({ block: 'start' }));
   }
@@ -9919,7 +9989,7 @@
   // The log lives on Progress (2026-11-25): starting it from Plan or Work (a list, a note, a follow-up) goes there.
   function ccToLog(c) {
     if (K.open !== c.id || ccTabOf(K.ctab) === 'progress') return;
-    K.ctab = 'progress'; K.planView = null;
+    K.ctab = 'progress';
     setTimeout(() => $('#camps .ccp-log')?.scrollIntoView({ block: 'start', behavior: 'smooth' }), 60);
   }
   function logRow(c, l, r) {
@@ -10653,7 +10723,7 @@
     const boardPick = h('input', { type: 'checkbox' });
     boardPick.checked = D.board;
     boardPick.addEventListener('change', () => { D.board = boardPick.checked; });
-    const boardOpt = isNew && toolOn('whiteboard') ? h('label', { class: 'pick cb-board-pick' }, boardPick, 'Sketch it on a board after it’s made (Plan → Board: shapes become phases, stickies become tasks)') : null;
+    const boardOpt = isNew && ccSketchOn() ? h('label', { class: 'pick cb-board-pick' }, boardPick, 'Start from a sketch: open it on Sketch with its phases drawn out, to add to and Update plan') : null;
     const testersBox = h('div', { class: 'cb-people cb-testers' });
     const drawTesters = () => testersBox.replaceChildren(...(D.launch === 'test' ? S.workspace.members.map((m) => {
       const on = D.testers.includes(m.id);
@@ -10829,7 +10899,10 @@
         if (D.launch === 'test' && !main) {
           try { const y = await api('POST', `/campaigns/${saved.id}/test`, { testers: D.testers }); const j = S.campaigns.findIndex((x) => x.id === y.id); if (j >= 0) S.campaigns[j] = y; } catch (e) { toast(e.message); }
         }
-        if (D.board) { K.ctab = 'plan'; K.planView = 'board'; }
+        if (D.board && ccSketchOn()) {
+          try { await wbMake({ template: 'phases', campaignId: saved.id }); } catch (e) { toast(e.message); }
+          K.ctab = 'sketch';
+        }
       }
       const tabNow = K.ctab;
       openCampaign(saved.id);
@@ -15078,6 +15151,7 @@
   }
   function openTool(name) {
     if (name === 'sidekick') return openDock('plan');
+    if (name === 'chat') return openChat(); // the page already, or the split
     if (SPLIT_TOOLS.has(name)) return openSplit(name);
     toolOpen = name;
     $('#settings').classList.add('hidden');
@@ -15130,6 +15204,8 @@
   // Chat in the split (2026-11-20): #chat moves in while it's showing and back (hidden) when it closes. Opening it
   // goes to the feed you were on, or the one asked for.
   function openChat(view) {
+    // Chat is already the page: there's one Chat, so the feed opens right there.
+    if (S.tab === 'chat' && splitOpen !== 'chat') return openChannel(view || C.view);
     if (splitOpen !== 'chat') openSplit('chat');
     openChannel(view || C.view);
   }
@@ -15139,7 +15215,7 @@
     el.classList.remove('hidden');
     return el;
   }
-  const chatHome = () => { const el = $('#chat'); if ($('#split').contains(el)) { keepPanesScroll(el, false); $('#main').insertBefore(el, $('#campsWrap')); } el.classList.add('hidden'); };
+  const chatHome = () => { const el = $('#chat'); if ($('#split').contains(el)) { keepPanesScroll(el, false); $('#main').insertBefore(el, $('#campsWrap')); } el.classList.toggle('hidden', S.tab !== 'chat'); };
   function stacksInSplit() {
     const p = $('#panes');
     keepPanesScroll(p, !$('#split').contains(p) || p.classList.contains('hidden'));
@@ -27044,13 +27120,13 @@
     if (navOpen('#projects')) return navPress($('#projects'), '.pj-panel-h button[aria-label="Close"]') || navPress($('#projects')) || closeProjects();
     if (toolOpen) return navPress($('#tool')) || closeTool();
     if (navPress(document, 'button.cc-pulse-x')) return; // the campaign's Pulse, open beside the page
-    const page = $({ home: '#home', day: '#day', apps: '#apps', camps: '#campsWrap', column: '#panes', menu: '#menuPage' }[S.tab] || '#home');
+    const page = $({ home: '#home', day: '#day', apps: '#apps', camps: '#campsWrap', column: '#panes', menu: '#menuPage', chat: '#chat' }[S.tab] || '#home');
     if (navPress(page)) return;
     if (S.tab === 'menu') return goHome(MENU.back);
     let to = NAVB.tabs.pop();
-    while (to && (to === S.tab || to === 'menu' || to === 'chat')) to = NAVB.tabs.pop();
+    while (to && (to === S.tab || to === 'menu')) to = NAVB.tabs.pop();
     NAVB.going = true;
-    try { setTab(to || 'home'); } finally { NAVB.going = false; }
+    try { setTab(to || 'home', 'page'); } finally { NAVB.going = false; }
   }
   // After anything you do: a step to go back to while you're away from Home, none left over once you're back.
   function navArm() {

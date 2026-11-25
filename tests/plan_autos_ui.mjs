@@ -93,6 +93,11 @@ try {
   ok(await A.ev(`[...document.querySelectorAll('#camps .cc-pauto .pa-recipe')].every((b) => b.querySelector('.auto-ic[class*=lk-]'))`), 'ready-made ones show a colored icon');
   ok(await A.ev(`!${T('.cc-pauto .pa-copy')}?.checkVisibility() && !${T('.cc-pauto .pa-full')}?.checkVisibility()`), '“Use one you have” and the full builder are tucked under Advanced settings');
   // When it opens, tell me, after 2 days, only if it isn't done.
+  ok(await A.ev(`[...document.querySelectorAll('#camps .cc-pauto .pa-when .pa-opt')].map((b) => b.tabIndex).join() === '0,-1,-1'`), 'the WHEN list is one stop for Tab (the picked one)');
+  await A.ev(`(() => { const b = ${T('.cc-pauto .pa-when .pa-opt[aria-checked=true]')}; b.focus(); b.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true })); return true; })()`);
+  ok(await A.until(`${T('.cc-pauto .pa-when .pa-opt[data-v="task.opened"]')}.getAttribute('aria-checked') === 'true' && document.activeElement === ${T('.cc-pauto .pa-when .pa-opt[data-v="task.opened"]')}`), 'arrow keys move the pick, like a radio group');
+  await A.ev(`(() => { const b = ${T('.cc-pauto .pa-when .pa-opt[aria-checked=true]')}; b.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true })); return true; })()`);
+  await A.until(`${T('.cc-pauto .pa-when .pa-opt[data-v="task.done"]')}.getAttribute('aria-checked') === 'true'`);
   await A.tap(T('.cc-pauto .pa-when .pa-opt[data-v="task.opened"]'));
   await A.tap(T('.cc-pauto .pa-then .pa-opt[data-v="someone"]'));
   ok(await A.until(`${T('.cc-pauto .pa-then .pa-opt[data-v="someone"]')}?.getAttribute('aria-checked') === 'true' && !!${T('.cc-pauto .pa-who')}?.checkVisibility()`), '“Tell someone” asks who');

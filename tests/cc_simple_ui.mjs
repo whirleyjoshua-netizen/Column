@@ -69,7 +69,7 @@ try {
   ok(await A.until(`!!${T('.cc-body')}`), 'the campaign opens');
   await A.ev(`document.querySelector('#sheet [aria-label=Close]')?.click(); true`);
   // ----- Task 2: the header, tabs and chips -----
-  ok(await A.ev(`JSON.stringify([...document.querySelectorAll('#camps .cc-tab')].map((b) => b.dataset.ctab)) === '["plan","work","progress"]'`), 'three tabs: Plan, Work, Progress (2026-11-25, stage 3)');
+  ok(await A.ev(`JSON.stringify([...document.querySelectorAll('#camps .cc-tab')].map((b) => b.dataset.ctab)) === '["plan","work","progress","sketch"]'`), 'Plan, Work, Progress, Sketch (2026-11-25, stage 3)');
   ok(await A.ev(`${T('.cc-body')}.dataset.tab === 'plan'`), 'it opens on Plan');
   ok(await A.ev(`!${T('.cc-kpis')} && !${T('.cc-pulse-btn')}`), 'no row of numbers, no Pulse button');
   ok(await A.ev(`/^[0-9]+% complete/.test(${T('.cc-chips')}?.textContent.trim() || '')`), 'the chips line starts with how complete it is');
@@ -170,10 +170,10 @@ try {
   await tabTo('work'); await tabTo('plan');
   await A.until(`!!${rowOf('Call the Lee family')}`);
   // The whiteboard is still a button away (it becomes the Sketch tab later).
-  ok(await A.until(`!!${T('.cc-sketch-btn')}`), 'a Sketch button on Plan');
-  await A.tap(T('.cc-sketch-btn'));
+  ok(await A.until(`!!${T('.cc-tab[data-ctab=sketch]')}`), 'the whiteboard is the Sketch tab (stage 4)');
+  await tabTo('sketch');
   ok(await A.until(`!!${T('.cc-board-empty')} || !!${T('.cc-boardwrap')}`), 'it opens the campaign board');
-  await A.tap(T('.cc-sketch-btn'));
+  await tabTo('plan');
   ok(await A.until(`!!${T('.cc-phase')}`), 'and back to the phases');
   // A campaign with no phases.
   await api('POST', '/campaigns', { name: 'Empty one', brief: 'Nothing yet' });
