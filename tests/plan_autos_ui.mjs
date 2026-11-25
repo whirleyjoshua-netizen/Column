@@ -88,10 +88,16 @@ try {
   ok(own && own.trigger.kind === 'task.done' && own.trigger.step === 'Call past customers' && own.trigger.task === 'Call the Lee family' && own.on, 'a ready-made one is on for that task alone: ' + JSON.stringify(own?.trigger));
   ok(await A.until(`${T('.cc-pauto .pa-here .pa-row')} && !${T('.cc-pauto .pa-recipe[data-recipe=t-owners]')}`), 'it’s listed under Running here, and gone from Ready-made');
   ok(await A.until(`${tile('Call the Lee family')}.closest('.cc-row').querySelector('.cc-auto-n')?.textContent === '⚡1' && !${tile('Call the Diaz family')}.closest('.cc-row').querySelector('.cc-auto-n')`), 'its row shows ⚡1 (the other task’s doesn’t)');
-  // Build one here: when it opens, tell me, after 2 days, only if it isn't done.
-  await A.pick(T('.cc-pauto .pa-when'), 'task.opened');
-  await A.pick(T('.cc-pauto .pa-then'), 'm:' + me);
-  await A.pick(T('.cc-pauto .pa-wait'), '2');
+  // Build one here, in the builder's look: an orange WHEN and a purple THEN, each a short colored list.
+  ok(await A.ev(`!!${T('.cc-pauto .pa-node.when .pa-when')} && !!${T('.cc-pauto .pa-node.then .pa-then')} && !${T('.cc-pauto .pa-build select.pa-when, .cc-pauto .pa-build select.pa-then')}`), 'Build one here is a WHEN card and a THEN card with lists to tap, not menus');
+  ok(await A.ev(`[...document.querySelectorAll('#camps .cc-pauto .pa-recipe')].every((b) => b.querySelector('.auto-ic[class*=lk-]'))`), 'ready-made ones show a colored icon');
+  ok(await A.ev(`!${T('.cc-pauto .pa-copy')}?.checkVisibility() && !${T('.cc-pauto .pa-full')}?.checkVisibility()`), '“Use one you have” and the full builder are tucked under Advanced settings');
+  // When it opens, tell me, after 2 days, only if it isn't done.
+  await A.tap(T('.cc-pauto .pa-when .pa-opt[data-v="task.opened"]'));
+  await A.tap(T('.cc-pauto .pa-then .pa-opt[data-v="someone"]'));
+  ok(await A.until(`${T('.cc-pauto .pa-then .pa-opt[data-v="someone"]')}?.getAttribute('aria-checked') === 'true' && !!${T('.cc-pauto .pa-who')}?.checkVisibility()`), '“Tell someone” asks who');
+  await A.pick(T('.cc-pauto .pa-who'), me);
+  await A.tap(T('.cc-pauto .pa-wait .pa-opt[data-v="2"]'));
   ok(await A.ev(`${T('.cc-pauto .pa-say')}.value === 'Your turn: {task} ({step})' && !${T('.cc-pauto .pa-only')}.hidden`), 'it fills in what it says, and says it only goes if it isn’t done by then');
   await say('Still not called: {task}');
   await A.tap(T('.cc-pauto .pa-save'));
@@ -112,8 +118,9 @@ try {
   await A.until(`${T('.cc-ppanel h3')}?.textContent.startsWith('Add task')`);
   await A.tap(T('.cc-pp-auto'));
   ok(await A.until(`${T('.cc-pauto')}?.dataset.for === 'phase' && ${T('.cc-pauto h3')}.textContent.includes('Book installs')`), 'on a phase it opens the phase’s automations');
-  await A.pick(T('.cc-pauto .pa-when'), 'step.done');
-  ok(await A.ev(`${T('.cc-pauto .pa-then option[value=doers]')}.disabled && ${T('.cc-pauto .pa-then')}.value !== 'doers'`), '“the phase is finished” can’t go to “whoever it’s for”');
+  await A.tap(T('.cc-pauto .pa-when .pa-opt[data-v="step.done"]'));
+  ok(await A.until(`${T('.cc-pauto .pa-then .pa-opt[data-v=doers]')}.disabled && ${T('.cc-pauto .pa-then .pa-opt[data-v=doers]')}.getAttribute('aria-checked') !== 'true'`), '“the phase is finished” can’t go to “whoever it’s for”');
+  await A.tap(T('.cc-pauto .pa-adv > summary'));
   await A.pick(T('.cc-pauto .pa-copy'), au.id);
   await A.tap(T('.cc-pauto .pa-copy-go'));
   for (let i = 0; i < 30 && !list.some((x) => x.trigger.step === 'Book installs'); i++) { await sleep(150); list = await autosNow(); }
@@ -147,7 +154,8 @@ try {
   await A.tap(T('.cc-pp-auto'));
   await A.until(`!!${T('.cc-pauto .pa-row')}`);
   await A.tap(T(`.cc-pauto .pa-row[data-auto="${built.id}"] .pa-open`));
-  ok(await A.until(`document.querySelector('.auto-task-name')?.value === 'Call the Lee family'`, 4000), 'opened in the full builder, it shows its task');
+  await A.tap(`document.querySelector('#sheet .ab-tabs [data-tab=adv]')`);
+  ok(await A.until(`document.querySelector('.auto-task-name')?.value === 'Call the Lee family'`, 4000), 'opened in the full builder, it shows its task (under Advanced settings)');
   ok(A.errors.length === 0, 'no script errors' + (A.errors.length ? ': ' + A.errors.join(' | ') : ''));
 } catch (e) { ok(false, 'threw: ' + e.stack); }
 A?.close();

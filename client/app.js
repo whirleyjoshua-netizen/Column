@@ -8131,6 +8131,22 @@
       { id: 't-feed', label: 'Post in the campaign’s feed when it’s done', name: nm('post when done'), trigger: on('task.done'), actions: [{ kind: 'post', text: '✅ {task} is done ({campaign})', channelId: 'same' }] },
     ];
   }
+  // A short list to tap, one picked (the builder's look on the plan, 2026-11-25). Works like a <select>: .value, a
+  // change event, labelOf(value). items: [value, label, icon?, color?].
+  function paRadio(cls, label, items, init) {
+    const el = h('div', { class: 'pa-opts ' + cls, role: 'radiogroup', 'aria-label': label });
+    let v = init;
+    const btns = items.map(([k, l, ic, c]) => h('button', { type: 'button', role: 'radio', class: 'pa-opt' + (c ? ` lk-${c}` : ''), 'data-v': k,
+      onclick: (e) => { if (e.currentTarget.disabled || v === k) return; el.value = k; el.dispatchEvent(new Event('change')); } },
+    ic ? h('span', { class: 'pa-ic', 'aria-hidden': 'true' }, ic) : null, h('span', {}, l)));
+    Object.defineProperty(el, 'value', { get: () => v, set: (k) => { v = k; for (const b of btns) b.setAttribute('aria-checked', String(b.dataset.v === k)); } });
+    el.labelOf = (k) => items.find(([x]) => x === k)?.[1] || '';
+    el.append(...btns);
+    el.value = init;
+    return el;
+  }
+  // A ready-made one's icon: what it does (its first step that isn't a wait or a check).
+  const recipeLook = (r) => { const ks = []; const walk = (l) => (l || []).forEach((y) => { ks.push(y.kind); if (y.kind === 'if') walk(y.then); }); walk(r.actions); return autoLook(ks.find((k) => k !== 'wait' && k !== 'if')); };
   function ccAutoPanel(c, g, t, back) {
     const box = h('aside', { class: 'cc-ppanel cc-pauto', 'data-for': t ? 'task' : 'phase' });
     const what = t ? `“${shortText(t.text, 60)}”` : g.title;
@@ -8143,12 +8159,15 @@
       // Build one here: when, then, what it says.
       const kinds = t ? [['task.done', 'It’s done'], ['task.opened', 'It opens (what it waits for is done)'], ['task.reopened', 'It’s ticked back to not done']]
         : [['task.done', 'A task here is done'], ['task.opened', 'A task here opens'], ['step.done', 'The phase is finished']];
-      const when = h('select', { class: 'pa-when', 'aria-label': 'When' }, kinds.map(([v, l]) => opt(v, l, 'task.done')));
+      const WL = { 'task.done': ['✅', 'green'], 'task.opened': ['🔓', 'blue'], 'task.reopened': ['↩️', 'amber'], 'step.done': ['🏁', 'orange'] };
+      const when = paRadio('pa-when', 'When', kinds.map(([v, l]) => [v, l, ...WL[v]]), 'task.done');
       const members = (S.workspace.members || []).filter((m) => !m.gone);
-      const then = h('select', { class: 'pa-then', 'aria-label': 'Then' }, opt('doers', 'Tell whoever it’s for'), opt('owners', 'Tell the owners'), h('optgroup', { label: 'Tell someone' }, members.map((m) => opt('m:' + m.id, 'Tell ' + m.name))), opt('post', 'Post in the campaign’s feed'), opt('task', 'Make a task'));
+      const then = paRadio('pa-then', 'Then', [['doers', 'Tell whoever it’s for', '🔔', 'purple'], ['owners', 'Tell the owners', '👑', 'purple'], ['someone', 'Tell someone', '👤', 'pink'], ['post', 'Post in the campaign’s feed', '💬', 'teal'], ['task', 'Make a task', '✅', 'purple']], 'doers');
+      const who = h('select', { class: 'pa-who', 'aria-label': 'Who to tell' }, members.map((m) => opt(m.id, m.name, S.me?.id)));
+      const whoRow = h('label', { class: 'cc-pp-f pa-who-row' }, 'Who', who);
       const say = h('input', { class: 'pa-say', maxlength: 1000, 'aria-label': 'What it says' });
       const forWho = h('select', { class: 'pa-for', 'aria-label': 'Task for' }, opt('', 'Nobody yet'), opt('who', 'Whoever set it off'), members.map((m) => opt(m.id, m.name)));
-      const wait = h('select', { class: 'pa-wait', 'aria-label': 'Wait' }, opt('0', 'Right away'), opt('1', 'After 1 day'), opt('2', 'After 2 days'), opt('7', 'After a week'));
+      const wait = paRadio('pa-wait pa-chips', 'When to', [['0', 'Right away'], ['1', 'After 1 day'], ['2', 'After 2 days'], ['7', 'After a week']], '0');
       const forRow = h('label', { class: 'cc-pp-f pa-for-row' }, 'For', forWho);
       const onlyOpen = h('small', { class: 'cc-pp-hint pa-only' }, 'Only if it still isn’t done by then.');
       const sayFor = () => {
@@ -8159,10 +8178,11 @@
       let typed = false;
       say.addEventListener('input', () => (typed = !!say.value.trim()));
       const sync = () => {
-        const doers = then.querySelector('option[value=doers]');
+        const doers = then.querySelector('.pa-opt[data-v=doers]');
         doers.disabled = when.value === 'step.done';
         if (doers.disabled && then.value === 'doers') then.value = 'owners';
         forRow.hidden = then.value !== 'task';
+        whoRow.hidden = then.value !== 'someone';
         onlyOpen.hidden = !(when.value === 'task.opened' && wait.value !== '0');
         if (!typed) say.value = sayFor();
       };
@@ -8170,11 +8190,11 @@
       const draft = () => {
         const text = say.value.trim(), v = then.value;
         let act = v === 'post' ? { kind: 'post', text, channelId: 'same' } : v === 'task' ? { kind: 'task', text, assignee: forWho.value, dueIn: null, campaign: '' }
-          : { kind: 'notify', text, to: [v.startsWith('m:') ? v.slice(2) : v] };
+          : { kind: 'notify', text, to: [v === 'someone' ? who.value : v] };
         const days = Number(wait.value);
         const acts = !days ? [act] : when.value === 'task.opened' ? [{ kind: 'wait', amount: days, unit: 'days' }, { kind: 'if', when: [{ field: 'done', op: 'is', value: 'no' }], then: [act], else: [] }] : [{ kind: 'wait', amount: days, unit: 'days' }, act];
         const low1 = (x) => x.charAt(0).toLowerCase() + x.slice(1);
-        const wl = low1(kinds.find(([k]) => k === when.value)[1].replace(/ \(.*\)$/, '')), tl = low1(then.selectedOptions[0].textContent);
+        const wl = low1(kinds.find(([k]) => k === when.value)[1].replace(/ \(.*\)$/, '')), tl = then.value === 'someone' ? 'tell ' + (who.selectedOptions[0]?.textContent || 'someone') : low1(then.labelOf(then.value));
         return { name: shortText(`${t ? t.text : g.title}: ${wl}, ${tl}`, 80), trigger: paTrigger(when.value, c, g, t), actions: acts };
       };
       const saveBtn = h('button', { type: 'button', class: 'btn primary-btn pa-save', onclick: async (e) => {
@@ -8196,18 +8216,22 @@
             : h('small', { class: 'cc-pp-hint' }, `Nothing runs for ${t ? 'this task' : 'this phase'} yet.`),
           forTasks ? h('small', { class: 'cc-pp-hint pa-fortasks' }, `And ${plural(forTasks, 'automation')} for single tasks here: pick a task to see ${forTasks === 1 ? 'it' : 'them'}.`) : null),
         h('div', { class: 'pa-sec' }, h('h4', {}, 'Ready-made'),
-          h('div', { class: 'pa-recipes' }, paRecipes(c, g, t).map((r) => names.has(r.name) ? null : h('button', { type: 'button', class: 'btn small pa-recipe', 'data-recipe': r.id, onclick: (e) => make(r, e.currentTarget) }, '+ ' + r.label)))),
+          h('div', { class: 'pa-recipes' }, paRecipes(c, g, t).map((r) => names.has(r.name) ? null : h('button', { type: 'button', class: 'pa-recipe', 'data-recipe': r.id, onclick: (e) => make(r, e.currentTarget) }, autoIc(recipeLook(r)), h('span', {}, r.label), h('span', { class: 'pa-plus', 'aria-hidden': 'true' }, '+'))))),
         h('div', { class: 'pa-sec pa-build' }, h('h4', {}, 'Build one here'),
-          h('label', { class: 'cc-pp-f' }, 'When', when),
-          h('label', { class: 'cc-pp-f' }, 'Then', then),
-          forRow,
-          h('label', { class: 'cc-pp-f' }, 'It says', say),
-          h('small', { class: 'cc-pp-hint' }, 'Fills in: {task} {step} {campaign} {who}'),
-          h('label', { class: 'cc-pp-f' }, 'When to', wait), onlyOpen,
-          h('div', { class: 'btns' }, saveBtn, h('button', { type: 'button', class: 'link pa-full', onclick: () => autoSheet(null, draft()) }, 'More steps: open the full builder →'))),
-        h('div', { class: 'pa-sec' }, h('h4', {}, 'Use one you have'),
+          h('div', { class: 'pa-node when' }, h('div', { class: 'pa-nh' }, h('i', { class: 'an-dot' }), 'WHEN'), h('div', { class: 'pa-nb' }, when)),
+          h('div', { class: 'pa-link', 'aria-hidden': 'true' }, h('span', {}, 'THEN')),
+          h('div', { class: 'pa-node then' }, h('div', { class: 'pa-nh' }, h('i', { class: 'an-dot' }), 'THEN'),
+            h('div', { class: 'pa-nb' }, then, whoRow, forRow,
+              h('label', { class: 'cc-pp-f' }, 'It says', say),
+              h('small', { class: 'cc-pp-hint' }, 'Fills in: {task} {step} {campaign} {who}'),
+              h('div', { class: 'cc-pp-f' }, h('span', {}, 'When to'), wait), onlyOpen)),
+          h('div', { class: 'btns' }, saveBtn)),
+        h('details', { class: 'pa-sec pa-adv' }, h('summary', {}, 'Advanced settings'),
+          h('h4', {}, 'Use one you have'),
           h('div', { class: 'row2' }, pickOne, h('button', { type: 'button', class: 'btn small pa-copy-go', disabled: !mine.length, onclick: () => { const x = mine.find((y) => y.id === pickOne.value); if (!x) return pickOne.focus(); copyAutoTo(x, g, t); } }, 'Copy here')),
-          h('small', { class: 'cc-pp-hint' }, `A copy, so the one you have keeps running where it did.${t ? '' : ' Or use + From saved on the phase.'}`)));
+          h('small', { class: 'cc-pp-hint' }, `A copy, so the one you have keeps running where it did.${t ? '' : ' Or use + From saved on the phase.'}`),
+          h('h4', {}, 'More steps'),
+          h('button', { type: 'button', class: 'link pa-full', onclick: () => autoSheet(null, draft()) }, 'Open this one in the full builder →')));
       sync();
     };
     if (!S.automations) api('GET', '/automations').then((r) => { S.automations = r; if (box.isConnected) draw(); }).catch(() => {});
@@ -8720,7 +8744,7 @@
           h('button', { class: 'res-open', onclick: () => { closeSheet(); autoSheet(x); } }, h('span', { class: 'res-ic' }, x.on ? '⚡' : '⏸'), h('span', {}, h('b', {}, x.name), h('small', {}, autoWhenLabel(x.trigger.kind) + (x.on ? '' : ' · off')))),
           h('label', { class: 'toggle', title: x.on ? 'On' : 'Off' }, h('input', { type: 'checkbox', checked: !!x.on, onchange: async (e) => { try { const y = await api('PATCH', '/automations/' + x.id, { on: e.target.checked }); S.automations = S.automations.map((z) => (z.id === y.id ? y : z)); draw(); renderAutos(); } catch (er) { e.target.checked = !e.target.checked; toast(er.message); } } }), h('i'))))) : '',
         h('div', { class: 'picks-h' }, 'Ready-made'),
-        h('div', { class: 'step-recipes' }, stepRecipes(c, g).map((r) => have.has(r.name) ? null : h('button', { class: 'btn small step-recipe', 'data-recipe': r.id, onclick: (e) => make(r, e.currentTarget) }, '+ ' + r.label))),
+        h('div', { class: 'step-recipes' }, stepRecipes(c, g).map((r) => have.has(r.name) ? null : h('button', { class: 'btn small step-recipe', 'data-recipe': r.id, onclick: (e) => make(r, e.currentTarget) }, autoIc(recipeLook(r)), h('span', {}, r.label)))),
         h('div', { class: 'btns' }, h('button', { class: 'btn primary-btn small step-auto-new', onclick: () => { closeSheet(); autoSheet(null, { name: `${g.title}: `, trigger: { kind: 'task.opened', campaignId: c.id, step: g.title } }); } }, '+ New automation for this step')));
     };
     if (!S.automations) api('GET', '/automations').then((list) => { S.automations = list; if (box.isConnected) draw(); }).catch(() => {});

@@ -4889,6 +4889,31 @@ button.td-dep:hover { background: color-mix(in srgb, #4ea1ff 24%, transparent); 
 .cc-pauto .pa-full { padding: 0; font-size: 13px; }
 .cc-pauto .row2 { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
 .cc-pauto [hidden] { display: none; }
+/* the builder's look on the plan: colored ready-made rows, an orange WHEN card and a purple THEN card, lists to tap */
+.cc-pauto .pa-recipe { display: flex; align-items: center; gap: 9px; text-align: left; border: 1px solid var(--line); border-radius: 10px; background: var(--card); padding: 6px 8px; font: inherit; font-size: 13px; font-weight: 550; color: var(--text); cursor: pointer; }
+.cc-pauto .pa-recipe > span:nth-child(2) { flex: 1; min-width: 0; }
+.cc-pauto .pa-recipe:hover { border-color: var(--accent); background: var(--card-hover); }
+.cc-pauto .pa-plus { color: var(--muted); font-weight: 700; }
+.cc-pauto .pa-recipe .auto-ic, .step-recipe .auto-ic { width: 24px; height: 24px; font-size: 13px; border-radius: 7px; }
+.step-recipe { display: inline-flex; align-items: center; gap: 6px; }
+.pa-node { border: 1px solid var(--line); border-radius: 11px; background: var(--card); overflow: hidden; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06); }
+.pa-node.when { --hd: #f26b1d; } .pa-node.then { --hd: #5b3fd1; }
+.pa-nh { display: flex; align-items: center; gap: 7px; background: var(--hd); color: #fff; font-size: 11.5px; font-weight: 750; letter-spacing: .07em; padding: 5px 10px; }
+.pa-nb { display: flex; flex-direction: column; gap: 8px; padding: 8px; }
+.pa-link { position: relative; height: 28px; display: flex; justify-content: center; align-items: center; }
+.pa-link::before { content: ''; position: absolute; top: 0; bottom: 0; left: 50%; border-left: 2px dotted color-mix(in srgb, var(--muted) 60%, transparent); }
+.pa-link span { position: relative; font-size: 10.5px; font-weight: 750; letter-spacing: .07em; background: var(--card); border: 1px solid var(--line); border-radius: 999px; padding: 1px 8px; }
+.pa-opts { display: flex; flex-direction: column; gap: 4px; }
+.pa-opt { display: flex; align-items: center; gap: 8px; text-align: left; border: 1px solid var(--line); border-radius: 9px; background: var(--card); padding: 5px 7px; font: inherit; font-size: 13px; color: var(--text); cursor: pointer; }
+.pa-opt:hover:not(:disabled) { border-color: var(--lk, var(--accent)); }
+.pa-opt[aria-checked=true] { border-color: var(--lk, var(--accent)); background: var(--lk-soft, var(--accent-soft)); font-weight: 600; box-shadow: 0 0 0 2px var(--lk-soft, var(--accent-soft)); }
+.pa-opt:disabled { opacity: 0.45; cursor: not-allowed; }
+.pa-ic { flex: none; width: 24px; height: 24px; border-radius: 7px; display: inline-flex; align-items: center; justify-content: center; background: var(--lk-soft); font-size: 13px; }
+.pa-opts.pa-chips { flex-direction: row; flex-wrap: wrap; }
+.pa-chips .pa-opt { border-radius: 999px; padding: 3px 10px; font-size: 12px; }
+.cc-pauto .pa-adv > summary { cursor: pointer; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; font-weight: 600; }
+.cc-pauto .pa-adv[open] > summary { margin-bottom: 4px; }
+.cc-pauto .pa-adv:not([open]) { gap: 0; }
 .cc-auto-n { color: var(--accent); font-weight: 600; }
 .cc-ttile.over { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
 /* Tools right from the plan (2026-11-23): a task's tool and checklist; a phase's resources, needs, a tool per task. */
