@@ -6,7 +6,7 @@
 // sent or paid, its tasks, a Done button). A run is never a campaign to anyone: it lives behind the job.
 import crypto from 'node:crypto';
 
-export const STEP_KINDS = ['client', 'details', 'book', 'remind', 'omw', 'work', 'signoff', 'quote', 'invoice', 'payment', 'review', 'tasks', 'custom'];
+export const STEP_KINDS = ['client', 'details', 'book', 'remind', 'omw', 'work', 'signoff', 'quote', 'invoice', 'payment', 'review', 'tasks', 'campaign', 'gearOut', 'gearIn', 'custom'];
 // Steps Kloomie does by itself (PHASE3.md §1): who they're for doesn't matter.
 const AUTO_KINDS = ['remind', 'review'];
 // Money steps: for owners and admins whatever a flow says (docs/jobflows/PHASE2.md §1.2, §4).
@@ -22,9 +22,9 @@ export function priceKey(lines) {
   const d = lines?.discount ? [lines.discount.type === 'percent' ? 'percent' : 'amount', Number(lines.discount.value) || 0] : null;
   return crypto.createHash('sha256').update(JSON.stringify([rows, Number(lines?.taxRate) || 0, d])).digest('hex').slice(0, 32);
 }
-const KIND_NAME = { remind: 'Visit reminder', omw: 'On my way', review: 'Review request', client: 'Add client info', details: 'Add job info', book: 'Book a visit', work: 'Do the work', signoff: 'Customer signs off', quote: 'Send the quote', invoice: 'Send the invoice', payment: 'Collect payment', tasks: 'Tasks', custom: 'Step' };
-const HOW = { remind: 'auto', omw: 'tap', review: 'auto', client: 'tap', details: 'tap', book: 'tap', work: 'tap', signoff: 'tap', quote: 'tap', invoice: 'hand', payment: 'auto', tasks: 'tap', custom: 'hand' };
-const ACTION = { remind: 'auto', omw: 'on-my-way', review: 'auto', client: 'pick-client', details: 'edit-fields', book: 'book-visit', work: 'checklist', signoff: 'sign', quote: 'quote', invoice: 'invoice', payment: 'payment', tasks: 'tasks', custom: 'done' };
+const KIND_NAME = { remind: 'Visit reminder', omw: 'On my way', review: 'Review request', client: 'Add client info', details: 'Add job info', book: 'Book a visit', work: 'Do the work', signoff: 'Customer signs off', quote: 'Send the quote', invoice: 'Send the invoice', payment: 'Collect payment', tasks: 'Tasks', campaign: 'Run a campaign', gearOut: 'Gear check-out', gearIn: 'Gear check-in', custom: 'Step' };
+const HOW = { remind: 'auto', omw: 'tap', review: 'auto', client: 'tap', details: 'tap', book: 'tap', work: 'tap', signoff: 'tap', quote: 'tap', invoice: 'hand', payment: 'auto', tasks: 'tap', campaign: 'auto', gearOut: 'tap', gearIn: 'tap', custom: 'hand' };
+const ACTION = { remind: 'auto', omw: 'on-my-way', review: 'auto', client: 'pick-client', details: 'edit-fields', book: 'book-visit', work: 'checklist', signoff: 'sign', quote: 'quote', invoice: 'invoice', payment: 'payment', tasks: 'tasks', campaign: 'campaign', gearOut: 'gear-out', gearIn: 'gear-in', custom: 'done' };
 const WHO = ['anyone', 'admins', 'role', 'member'];
 const SENT = ['sent', 'viewed', 'partial', 'paid'];
 const WAITING = { held: 'approval', zero: 'zero', owner: 'owner', refused: 'refused' };
@@ -34,7 +34,7 @@ export const isJobRun = (c) => c?.kind === 'job';
 export const isJobList = (t) => !!t && (t.key === 'jobs' || String(t.key || '').startsWith('trade_'));
 
 export function jobFlowsModule(ctx) {
-  const { db, save, broadcast, rid, cleanText, readJson, send, isAdmin, PJ, toolsOf, goalsInOrder, tasksInOrder, applyTask, publicTask, canSeeTask, stepsSoon, sweepNow = (wsId) => stepsSoon(wsId), visitsOf, needsMet, noteWork = () => {}, invoiceTotals = () => ({ balance: 0, total: 0 }), invoiceUrl = () => null, flowTell = null, flowReach = () => 'No way to reach them', flowMsg = {}, customerOf = () => null, teamClock = () => ({}), teamReviewUrl = () => '', saveNow = async () => {}, sendable = () => true, shareRecord = null, quoteUrlOf = () => null, sendGate = null, custPreview = null, custDigest = null, notifyAdmins = () => {}, notify = () => {}, makeInvoice = null, sendInvoice = null, itemsTotals = () => ({ total: 0 }), priceChanged = () => {}, publicUrl = '' } = ctx;
+  const { db, save, broadcast, rid, cleanText, readJson, send, isAdmin, PJ, toolsOf, goalsInOrder, tasksInOrder, applyTask, publicTask, canSeeTask, stepsSoon, sweepNow = (wsId) => stepsSoon(wsId), visitsOf, needsMet, noteWork = () => {}, invoiceTotals = () => ({ balance: 0, total: 0 }), invoiceUrl = () => null, flowTell = null, flowReach = () => 'No way to reach them', flowMsg = {}, customerOf = () => null, teamClock = () => ({}), teamReviewUrl = () => '', saveNow = async () => {}, sendable = () => true, shareRecord = null, quoteUrlOf = () => null, sendGate = null, custPreview = null, custDigest = null, notifyAdmins = () => {}, notify = () => {}, makeInvoice = null, sendInvoice = null, itemsTotals = () => ({ total: 0 }), priceChanged = () => {}, publicUrl = '', stock = null } = ctx;
   // Test only: a step with this name makes building a run throw, so the failure path can be tested from outside.
   const FAIL_STEP = process.env.NODE_ENV !== 'production' ? process.env.JOBFLOWS_FAIL_STEP || '' : '';
   // Test only: the automatic invoice's send fails after the invoice is made (a crash between the two).
@@ -115,6 +115,8 @@ export function jobFlowsModule(ctx) {
       if (s.kind === 'payment' && st.reminders !== undefined) settings.reminders = Array.isArray(st.reminders) ? st.reminders.slice(0, 10).map(Number) : [];
       // PHASE3B.md §2: each message an automatic step sends is 'auto' or 'ask'; left out (every version before) = ask.
       if (SEND_KINDS.includes(s.kind) && st.send !== undefined) settings.send = typeof st.send === 'string' ? st.send.slice(0, 10) : 'bad';
+      // Phase 4 (PHASE4.md §5b): the gear a check-out needs, kept as given on a draft and checked at publish.
+      if (s.kind === 'gearOut') settings.items = (Array.isArray(st.items) ? st.items : []).slice(0, 20).map((x) => ({ itemId: cleanText(String(x?.itemId ?? ''), 40), qty: Number(x?.qty) }));
       if (s.kind === 'custom') {
         settings.text = cleanText(st.text, 2000);
         settings.checklist = (Array.isArray(st.checklist) ? st.checklist : []).map((x) => cleanText(x, 120).trim()).filter(Boolean).slice(0, 20);
@@ -175,10 +177,34 @@ export function jobFlowsModule(ctx) {
         if (x.url !== undefined && !/^https:\/\/[^\s]+$/i.test(String(x.url))) throw bad(`“${st.name}”: the review link must start with https://`);
       }
       if (st.kind === 'quote' && x.followUpDays !== undefined && !(Number.isInteger(x.followUpDays) && x.followUpDays >= 0 && x.followUpDays <= 30)) throw bad(`“${st.name}” follows up after 0 to 30 days.`);
+      if (st.kind === 'gearOut') {
+        const items = x.items || [];
+        if (!items.length || items.length > 10) throw bad(`“${st.name}” checks out 1 to 10 kinds of gear.`);
+        const seen = new Set();
+        for (const it of items) {
+          const inv = db.invItems?.[it.itemId];
+          if (!inv || inv.wsId !== ws.id || inv.archived) throw bad(`“${st.name}”: one of its gear items isn’t in your Inventory.`);
+          if (inv.track !== 'units') throw bad(`“${st.name}”: ${inv.name} is counted stock, not gear tracked one by one.`);
+          if (seen.has(it.itemId)) throw bad(`“${st.name}” lists ${inv.name} twice. Change how many instead.`);
+          seen.add(it.itemId);
+          if (!(Number.isInteger(it.qty) && it.qty >= 1 && it.qty <= 20)) throw bad(`“${st.name}”: check out 1 to 20 of ${inv.name}.`);
+        }
+      }
       if (st.kind === 'payment' && x.reminders !== undefined) {
         const r = x.reminders;
         if (r.length > 3 || !r.every((d, i) => Number.isInteger(d) && d >= 1 && d <= 60 && (i === 0 || d > r[i - 1]))) throw bad(`“${st.name}”: up to 3 reminders, each 1 to 60 days past due, in order.`);
       }
+    }
+  }
+  // Gear steps pair in order: a check-in needs a check-out before it with no other check-in between; two check-outs
+  // in a row are one step with both (PHASE4.md §5b). Both need the Inventory tool.
+  function checkGear(ws, body) {
+    let open = false;
+    for (const st of body.steps) {
+      if (st.kind !== 'gearOut' && st.kind !== 'gearIn') continue;
+      if (!toolsOf(ws).inventory) throw bad('Gear steps use Inventory. Turn the Inventory tool on first (Apps & Integrations → Tools).');
+      if (st.kind === 'gearOut') { if (open) throw bad(`“${st.name}” comes right after another check-out. Put both in one check-out, or check the gear in between.`); open = true; }
+      else { if (!open) throw bad(`“${st.name}” needs a Gear check-out before it.`); open = false; }
     }
   }
   const versionsOf = (flow) => Object.values(db.jobFlowVersions).filter((v) => v.flowId === flow.id).sort((a, b) => a.n - b.n);
@@ -285,6 +311,16 @@ export function jobFlowsModule(ctx) {
         return all.length > 0 && all.every((i) => i.status === 'paid');
       }
       case 'tasks': return tasksInOrder(g).length > 0;
+      case 'gearOut': {
+        const items = s.settings?.items || [];
+        return items.length > 0 && items.every((x) => gotFor(c, g, rec, x.itemId) >= x.qty);
+      }
+      case 'gearIn': {
+        // Once done it stays done (g.inHeld) until reopened: round B's gear going out doesn't undo check-in A.
+        if (g.inHeld) return true;
+        const out = pairOut(c, g);
+        return !!out && metNow(out) && !unitsOnJob(rec).some((u) => u.status === 'out');
+      }
       case 'custom': return !!g.marked && (s.settings?.checklist || []).every((_, i) => !!g.checks?.[i]);
       default: return false;
     }
@@ -312,10 +348,65 @@ export function jobFlowsModule(ctx) {
       case 'invoice': return 'No invoice sent';
       case 'payment': return 'Not paid yet';
       case 'tasks': { const left = tasksInOrder(g).filter((x) => !x.done && !x.skipped).length; return `${left} task${left === 1 ? '' : 's'} left`; }
+      case 'gearOut': {
+        const c = db.campaigns[g.campaignId];
+        const rows = gearSheet(c, g, rec).items.filter((x) => x.got < x.need);
+        const short = rows.find((x) => x.free.length < x.need - x.got);
+        if (short) return `Only ${short.free.length} ${short.free.length === 1 ? short.name : short.name + 's'} available, ${short.need - short.got} needed`;
+        return 'Gear to check out: ' + rows.map((x) => `${x.name} ${x.got} of ${x.need}`).join(' · ');
+      }
+      case 'gearIn': {
+        const c = db.campaigns[g.campaignId];
+        const out = pairOut(c, g);
+        if (!out || !metNow(out)) return 'Waiting for the gear to go out first';
+        return 'Still out: ' + unitsOnJob(rec).filter((u) => u.status === 'out').map((u) => u.name).join(', ');
+      }
       case 'custom': { const left = (s.settings?.checklist || []).filter((_, i) => !g.checks?.[i]).length; return !g.marked ? 'Waiting for Done' : `${left} checklist item${left === 1 ? '' : 's'} left`; }
       default: return 'Not done';
     }
   }
+  // ---------- gear (PHASE4.md §5b) ----------
+  // Inventory is the one home for gear; these only read its units and their ledger. A check-out's round starts when
+  // the run did, or at the fixed end (g.roundEnd) of the check-in before it; none yet means the round hasn't started.
+  const unitsOnJob = (rec) => Object.values(db.invUnits || {}).filter((u) => u.wsId === rec.wsId && u.jobId === rec.id);
+  function roundStart(c, g) {
+    const gs = stepGoals(c), i = gs.indexOf(g);
+    for (let j = i - 1; j >= 0; j--) if (gs[j].step?.kind === 'gearIn') return gs[j].roundEnd || null;
+    return c.createdAt;
+  }
+  // A check-in's check-out: the nearest one before it (none if another check-in comes first).
+  function pairOut(c, g) {
+    const gs = stepGoals(c), i = gs.indexOf(g);
+    for (let j = i - 1; j >= 0; j--) { if (gs[j].step?.kind === 'gearOut') return gs[j]; if (gs[j].step?.kind === 'gearIn') return null; }
+    return null;
+  }
+  // Different units of an item checked out to this job within the round, from the ledger (out, back and out is one).
+  function gotFor(c, g, rec, itemId) {
+    const from = roundStart(c, g);
+    if (from == null) return 0;
+    const seen = new Set();
+    for (const m of Object.values(db.invMoves || {})) if (m.kind === 'checkout' && m.wsId === rec.wsId && m.jobId === rec.id && m.itemId === itemId && m.at >= from) seen.add(m.unitId);
+    return seen.size;
+  }
+  // What a gear step's sheet shows: what's needed (a check-out's), what's out on the job, notes. Never costs.
+  function gearSheet(c, g, rec) {
+    const byAge = (a, b) => a.createdAt - b.createdAt;
+    const items = g.step.kind !== 'gearOut' ? [] : (g.step.settings?.items || []).map((x) => ({
+      itemId: x.itemId, name: db.invItems?.[x.itemId]?.name || 'Gear that was deleted', need: x.qty, got: gotFor(c, g, rec, x.itemId),
+      free: Object.values(db.invUnits || {}).filter((u) => u.wsId === rec.wsId && u.itemId === x.itemId && u.status === 'available').sort(byAge).map((u) => ({ id: u.id, name: u.name })),
+    }));
+    const on = unitsOnJob(rec).sort(byAge);
+    const out = on.filter((u) => u.status === 'out').map((u) => ({ unitId: u.id, name: u.name, item: db.invItems?.[u.itemId]?.name || '', memberId: u.memberId || null }));
+    const notes = g.step.kind !== 'gearIn' ? [] : on.filter((u) => u.status === 'lost' || u.status === 'repair').map((u) => `${u.name} ${u.status === 'lost' ? 'reported lost' : 'in repair'}`);
+    return { items, out, notes };
+  }
+  // The run card's line: what's out on the job now, by item ("Gear out: Pressure washer, Ladder ×3"), or null.
+  function gearLine(rec) {
+    const n = new Map();
+    for (const u of unitsOnJob(rec)) if (u.status === 'out') { const k = db.invItems?.[u.itemId]?.name || 'Gear'; n.set(k, (n.get(k) || 0) + 1); }
+    return n.size ? 'Gear out: ' + [...n].map(([k, v]) => (v > 1 ? `${k} ×${v}` : k)).join(', ') : null;
+  }
+
   // The run as the job's page shows it, for this person: no invoice numbers or money, only the tasks they may see.
   function runView(ws, auth, c) {
     if (!c) return null;
@@ -372,6 +463,7 @@ export function jobFlowsModule(ctx) {
           if (g.auto?.reason) out.reason = g.auto.reason;
         }
       }
+      if ((s.kind === 'gearOut' || s.kind === 'gearIn') && rec) out.gear = gearSheet(c, g, rec);
       if (s.kind === 'tasks') {
         const all = tasksInOrder(g);
         const seen = all.filter((x) => canSeeTask(auth, x));
@@ -382,7 +474,7 @@ export function jobFlowsModule(ctx) {
     const cur = current && steps.find((x) => x.goalId === current.id);
     return {
       id: c.id, recordId: c.recordId, flowId: c.flowId, flowName: flow?.name || c.flowName || 'Flow', icon: flow?.icon || '', versionId: c.versionId, versionN: c.versionN,
-      status: c.status, startedAt: c.createdAt, done: steps.filter((x) => x.state === 'done' || x.state === 'skipped').length, total: steps.length, steps,
+      status: c.status, startedAt: c.createdAt, gearLine: rec ? gearLine(rec) : null, done: steps.filter((x) => x.state === 'done' || x.state === 'skipped').length, total: steps.length, steps,
       current: cur ? { stepId: cur.id, name: cur.name, kind: cur.kind, action: ACTION[cur.kind], missing: rec ? missing(current, rec) : '' } : null,
       next: cur ? { stepId: cur.id, action: ACTION[cur.kind] } : null,
     };
@@ -623,6 +715,7 @@ export function jobFlowsModule(ctx) {
         if (m === 'POST' && c === 'publish') {
           const body = cleanBody(ws, auth, {}, flow); // checked again: the people and roles it names may have changed
           checkPublish(ws, body);
+          checkGear(ws, body);
           const v = { id: rid(), flowId: flow.id, wsId: ws.id, n: versionsOf(flow).length + 1, body: copy(body), publishedAt: Date.now(), publishedBy: auth.memberId };
           db.jobFlowVersions[v.id] = v;
           Object.assign(flow, { draft: body, activeVersionId: v.id, updatedAt: Date.now() });
@@ -786,6 +879,12 @@ export function jobFlowsModule(ctx) {
         settle(ws, auth);
         return send(res, 200, { run: runView(ws, auth, run) });
       }
+      if (c === 'steps' && d && e === 'gear' && m === 'GET') {
+        const run = activeRun(rec.id) || runsOf(rec.id).filter((x) => x.status === 'done').at(-1) || null;
+        const g = run && stepAt(run, d);
+        if (!g || !['gearOut', 'gearIn'].includes(g.step.kind)) return send(res, 404, { error: 'That isn’t a gear step on this job’s flow.' });
+        return send(res, 200, gearSheet(run, g, rec));
+      }
       if (c === 'steps' && d && m === 'POST') {
         // The going run, or a finished one (reopening a step puts it back to going); never a cancelled one.
         const run = activeRun(rec.id) || runsOf(rec.id).filter((x) => x.status === 'done').at(-1) || null;
@@ -794,6 +893,36 @@ export function jobFlowsModule(ctx) {
         if (!g) return send(res, 404, { error: 'That step isn’t on this job’s flow.' });
         const s = g.step;
         const body = await readJson(req, 10_000).catch(() => ({}));
+        // Gear (PHASE4.md §5b): check a unit out to this job, or back in, through Inventory's own action.
+        if (e === 'gear') {
+          if (!['gearOut', 'gearIn'].includes(s.kind) || !stock) return send(res, 404, { error: 'That isn’t a gear step.' });
+          if (!toolsOf(ws).inventory) return send(res, 403, { error: 'Inventory is switched off for this team.' });
+          if (!mayAct(ws, auth, s)) return send(res, 403, { error: `“${s.name}” is for ${whoNow(ws, s).name || 'owners and admins'}.` });
+          const u = db.invUnits?.[String(body.unitId || '')];
+          if (!u || u.wsId !== ws.id) return send(res, 404, { error: 'That piece of gear is gone.' });
+          const fresh = () => gearSheet(run, g, rec);
+          if (body.act === 'checkout') {
+            if (s.kind !== 'gearOut') return send(res, 400, { error: 'Check gear out on a check-out step.' });
+            if (run.status !== 'active' || currentGoal(run)?.id !== g.id) return send(res, 409, { error: 'Finish the steps before this one first.' });
+            if (!(s.settings?.items || []).some((x) => x.itemId === u.itemId)) return send(res, 400, { error: 'That isn’t gear this step needs.' });
+            if (u.status !== 'available') return send(res, 409, { error: u.status === 'out' ? 'It’s already out. Pick another one.' : `It’s ${u.status === 'repair' ? 'in repair' : u.status}.`, gear: fresh() });
+            stock.unitAct(ws, auth, u, { act: 'checkout', jobId: rec.id, memberId: body.memberId ? String(body.memberId) : undefined });
+          } else if (body.act === 'return') {
+            if (u.status !== 'out' || u.jobId !== rec.id) return send(res, 409, { error: 'That isn’t out on this job.', gear: fresh() });
+            // Back to where it came from, unless a place is named.
+            let placeId = body.placeId ? String(body.placeId) : null;
+            if (!placeId) {
+              const last = Object.values(db.invMoves || {}).filter((x) => x.unitId === u.id && x.kind === 'checkout').sort((a, b) => b.at - a.at || (b.n || 0) - (a.n || 0))[0];
+              placeId = (last?.from && db.invPlaces?.[last.from]?.wsId === ws.id ? last.from : null) || stock.placesOf(ws.id)[0]?.id || null;
+            }
+            stock.unitAct(ws, auth, u, { act: 'return', placeId });
+          } else return send(res, 400, { error: 'Check out or check in.' });
+          save();
+          broadcast(ws.id, { type: 'inventory' });
+          tell(run);
+          settle(ws, auth);
+          return send(res, 200, { run: runView(ws, auth, run), gear: fresh() });
+        }
         // A waiting message (PHASE3B.md §2): Send, or Don't send. Owners and admins; the key must be the one shown.
         if (e === 'message') {
           if (!admin) return send(res, 403, { error: 'Only owners and admins send or hold back messages to customers.' });
@@ -878,7 +1007,8 @@ export function jobFlowsModule(ctx) {
         }
         if (e === 'reopen') {
           if (!admin) return send(res, 403, { error: 'Only owners and admins reopen steps.' });
-          Object.assign(g, { skipped: false, skipReason: null, skippedById: null, skippedAt: null, skippedBy: null, marked: null, ...(AUTO_KINDS.includes(s.kind) ? { msg: null, waitReason: null } : {}) });
+          // A check-in reopened looks at the job again (its round end stays where it was: PHASE4.md §5b).
+          Object.assign(g, { skipped: false, skipReason: null, skippedById: null, skippedAt: null, skippedBy: null, marked: null, ...(AUTO_KINDS.includes(s.kind) ? { msg: null, waitReason: null } : {}), ...(s.kind === 'gearIn' ? { inHeld: false } : {}) });
           note(rec, `Reopened “${s.name}”`, auth.member);
           save();
           tell(run);
@@ -1131,6 +1261,21 @@ export function jobFlowsModule(ctx) {
     } finally { msgBusy = false; }
   }
 
+  // ---------- Phase 4 sweep: what's kept the first time a step is met (PHASE4.md §5, §5b) ----------
+  // A check-in's round end is fixed the first time it's done and never moved. Answers whether anything changed.
+  function linksSweep(wsId) {
+    let changed = false;
+    for (const c of Object.values(db.campaigns)) {
+      if (c.wsId !== wsId || !isJobRun(c) || c.status === 'cancelled' || !recOf(c)) continue;
+      for (const g of stepGoals(c)) {
+        if (g.step?.kind === 'gearIn' && !g.inHeld && !g.skipped && stepMet(g)) { g.inHeld = true; if (!g.roundEnd) g.roundEnd = Date.now(); changed = true; }
+        else if (g.step?.kind === 'gearIn' && g.skipped && !g.roundEnd) { g.roundEnd = Date.now(); changed = true; }
+      }
+    }
+    if (changed) save();
+    return changed;
+  }
+
   // ---------- automatic billing (PHASE2.md §1.4) ----------
   // Each going run on an automatic-billing flow whose Invoice step has come up: make its invoice once (as the run's
   // owner, kept before sending), then send it through the same path as the app, the rules' hold included. Waiting
@@ -1199,6 +1344,9 @@ export function jobFlowsModule(ctx) {
 
   // Job deleted: its runs and their steps go; the steps' tasks stay as plain tasks.
   function dropFor(rec) {
+    // Gear still out on a deleted job stays out with whoever has it; only the job link goes. The ledger keeps the
+    // job's id as history (PHASE4.md §5b).
+    for (const u of Object.values(db.invUnits || {})) if (u.jobId === rec.id) u.jobId = null;
     for (const c of runsOf(rec.id)) {
       for (const g of Object.values(db.goals)) if (g.campaignId === c.id) {
         for (const t of Object.values(db.tasks)) if (t.goalId === g.id) t.goalId = null;
@@ -1208,5 +1356,5 @@ export function jobFlowsModule(ctx) {
     }
   }
 
-  return { route, stepMet, activeRun, isJobRun, isJobList, runsOf, bindInvoice, dropFor, tell, runView, autoBill, autoMessages, invoiceNews, dueDaysFor, jobQuote, priceListItems, itemPrice };
+  return { route, linksSweep, stepMet, activeRun, isJobRun, isJobList, runsOf, bindInvoice, dropFor, tell, runView, autoBill, autoMessages, invoiceNews, dueDaysFor, jobQuote, priceListItems, itemPrice };
 }

@@ -181,7 +181,7 @@ try {
   const gone1 = await bareJob('Delete me');
   const gs1 = (await rico('POST', `/jobs/${gone1.id}/stack`)).body?.stack?.id;
   const gn1 = (await rico('POST', '/items', { type: 'text', text: 'JOBNOTE-GONE1', stackId: gs1 })).body;
-  await rico('DELETE', `/projects/${p.id}/records/${gone1.id}`);
+  await rico('DELETE', `/records/${gone1.id}`);
   ok(!(await itemsOf(rico)).some((x) => x.id === gn1?.id) && !(await stacksOf(rico)).some((x) => x.id === gs1), 'deleting the job: its stack and note are gone from the team (to the trash)');
   const pt = (await rico('POST', '/projects', { template: 'trades', trades: ['hvac'], name: 'Type to delete' })).body;
   const gone2 = await bareJob('Type job', {}, pt, pt.types[0]);
@@ -195,7 +195,7 @@ try {
   const gn3 = (await rico('POST', '/items', { type: 'text', text: 'JOBNOTE-GONE3', stackId: gs3 })).body;
   await rico('DELETE', `/projects/${pd.id}`);
   ok(!!gs3 && !(await itemsOf(rico)).some((x) => x.id === gn3?.id) && !(await stacksOf(rico)).some((x) => x.id === gs3), 'deleting its board: the stack and its note go too');
-  await rico('DELETE', `/projects/${pp.id}/records/${pj.id}`);
+  await rico('DELETE', `/records/${pj.id}`);
   ok((await fetch(`${B}/s/${shared.token}`)).status >= 400, 'a share link to a deleted job’s file stops working');
   ok(!!psid && !((await crewOf(rico))?.pins || []).some((x) => x.id === psid), 'and its stack’s chat pin is gone');
 
@@ -361,7 +361,7 @@ try {
   pins = (await crewOf(sam))?.pins || [];
   ok(!pins.some((x) => x.id === jp?.id) && pins.filter((x) => x.locked).length >= 2, 'Sam loses access to the board: the job pin is locked at once');
   await rico('PATCH', `/projects/${p.id}`, { private: false });
-  await rico('DELETE', `/projects/${p.id}/records/${jp?.id}`);
+  await rico('DELETE', `/records/${jp?.id}`);
   ok(!!jpin && !((await crewOf(rico))?.pins || []).some((x) => x.kind === 'job' && x.id === jp?.id), 'a deleted job’s pin disappears');
 
   // ---------- 5. Inventory use ----------

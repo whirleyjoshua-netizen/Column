@@ -256,7 +256,7 @@ try {
   r = await gearDo(j3.id, F1.sid('Gear out'), { act: 'checkout', unitId: pw2.id, memberId: samId });
   ok(r.status === 200, '(setup) a washer out to Sam on a job');
   const movesBefore = ((await rico('GET', '/inventory/units/' + pw2.id)).body?.moves || []).filter((m) => m.kind === 'checkout' && m.jobId === j3.id).length;
-  r = await rico('DELETE', `/projects/${p.id}/records/${j3.id}`);
+  r = await rico('DELETE', `/records/${j3.id}`);
   ok(r.status === 200, '(setup) the job is deleted');
   const after = (await rico('GET', '/inventory/units/' + pw2.id)).body;
   ok(after?.unit?.status === 'out' && after.unit.memberId === samId && after.unit.jobId === null, 'the washer stays out with Sam, the job link cleared: ' + JSON.stringify({ s: after?.unit?.status, m: after?.unit?.memberId, j: after?.unit?.jobId }));
