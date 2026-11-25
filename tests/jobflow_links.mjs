@@ -120,6 +120,11 @@ try {
   ok(a1.status === 200 && a2.status === 200 && a1.body?.stack?.id === a2.body?.stack?.id && (await stacksOf(rico)).filter((x) => x.recordId === jb.id).length === 1, 'two requests at once make one stack');
   r = await rico('POST', `/jobs/${jb.id}/flow`, { flowId: FS.id });
   ok(r.status === 200 && (await stacksOf(rico)).filter((x) => x.recordId === jb.id).length === 1, 'attaching a stack flow to a job that has one keeps the one');
+  const jn = await bareJob('Attach no stack');
+  ok(!(await recOf(jn.id))?.stackId, '(setup) a bare job with no stack');
+  r = await rico('POST', `/jobs/${jn.id}/flow`, { flowId: FS.id });
+  const jnStacks = (await stacksOf(rico)).filter((x) => x.recordId === jn.id);
+  ok(r.status === 200 && jnStacks.length === 1 && jnStacks[0].name === 'Attach no stack' && (await recOf(jn.id))?.stackId === jnStacks[0].id, 'attaching a stack flow to a job with none makes exactly one, named after it, on the record: ' + JSON.stringify(jnStacks));
   ok((await sam('POST', `/jobs/${jb.id}/stack`)).status === 403, 'members can’t make a job’s stack');
   const ja = await bareJob('Admin stack');
   r = await ann('POST', `/jobs/${ja.id}/stack`);
