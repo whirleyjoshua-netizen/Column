@@ -19,7 +19,7 @@ import { providers as calProviders, ics as ICS } from './calendar.js';
 import { llms, llmError, complete } from './llm.js';
 import { fileText, officeKind } from './extract.js';
 import { PdfError, stampPdf, addCertificate, pageCount, writeDoc, writeForm } from './pdf.js';
-import { routesOn, dayRoute, driveDistance } from './routes.js';
+import { routesOn, dayRoute, driveDistance, geocodeOnce } from './routes.js';
 import { projectsModule } from './projects.js';
 import { invoicesModule } from './invoices.js';
 import { jobFlowsModule, isJobRun } from './jobflows.js';
@@ -613,7 +613,7 @@ const publicWorkspace = (ws, memberId) => ({
   setup: ws.setup || null,
   deleteAt: ws.deleteAt || null,
   deleteBy: ws.deleteAt ? ws.deleteBy : null,
-  stacks: ws.stacks.filter((x) => seesCampaign(x.campaignId, memberId)),
+  stacks: ws.stacks.filter((x) => seesStack(x, memberId)),
   channels: publicChannels(ws, memberId),
   chatPins: publicChatPins(ws, ws.chatPins, memberId),
   chatFolders: ws.chatFolders,
@@ -2500,7 +2500,32 @@ function linkInfo(ws, auth, type, id) {
 
 function validStack(ws, stackId, memberId) {
   const st = stackId && ws.stacks.find((s) => s.id === stackId);
-  return st && seesCampaign(st.campaignId, memberId) ? stackId : null;
+  return st && seesStack(st, memberId) ? stackId : null;
+}
+// A stack is a campaign's (seen with the campaign), a job's (seen by whoever sees the job: PHASE4.md §1), or the team's.
+function seesStack(st, memberId) {
+  if (st?.recordId) { const rec = db.records[st.recordId]; return !!rec && !!PJ.recordAt(rec.id, rec.wsId, memberId); }
+  return seesCampaign(st?.campaignId, memberId);
+}
+// The job stack an item lives in (its top item's), if any.
+function jobStackOfItem(x) {
+  const top = x && topItem(x);
+  const st = top?.stackId && db.workspaces[x.wsId]?.stacks.find((y) => y.id === top.stackId);
+  return st?.recordId ? st : null;
+}
+// A job is gone (or its list, or its board): its stack and the stack's files go as a deleted campaign's do.
+function jobStackGone(rec) {
+  const ws = db.workspaces[rec.wsId];
+  if (!ws) return;
+  const gone = new Set(ws.stacks.filter((x) => x.recordId === rec.id).map((x) => x.id));
+  if (!gone.size) return;
+  for (const it of Object.values(db.items)) if (it.wsId === ws.id && gone.has(topItem(it)?.stackId)) deleteItem(it.id);
+  purgeTrash((e) => e.wsId === ws.id && gone.has(topItem(e.items[0])?.stackId));
+  ws.stacks = ws.stacks.filter((x) => !gone.has(x.id));
+  for (const ch of ws.channels) if (ch.pins) ch.pins = ch.pins.filter((p) => !(p.kind === 'stack' && gone.has(p.id)));
+  if (ws.chatPins) ws.chatPins = ws.chatPins.filter((p) => !(p.kind === 'stack' && gone.has(p.id)));
+  save();
+  broadcast(ws.id, { type: 'workspace' });
 }
 
 // Folders (the Folders tool; "dirs" here, since an uploaded folder is already an item called a folder).
@@ -2608,11 +2633,12 @@ function validChannel(ws, channelId, memberId) {
 // ---------- pinned to a chat: a stack, doc, folder or agent kept at the top of a feed ----------
 // Pins belong to the feed (ws.chatPins for #general), so everyone in it sees them. What each one is, though, is
 // worked out for each reader: a pin to something they can't open is a locked chip with no name or id.
-const CHAT_PIN_KINDS = ['stack', 'doc', 'dir', 'agent'];
+const CHAT_PIN_KINDS = ['stack', 'doc', 'dir', 'agent', 'job'];
 const CHAT_PINS = 8;
 // True or false: whether this person can open what the pin points at. Null: it's gone, for everyone.
 function chatPinSees(ws, p, memberId) {
-  if (p.kind === 'stack') { const st = ws.stacks.find((x) => x.id === p.id); return st ? seesCampaign(st.campaignId, memberId) : null; }
+  if (p.kind === 'stack') { const st = ws.stacks.find((x) => x.id === p.id); return st ? seesStack(st, memberId) : null; }
+  if (p.kind === 'job') { const rec = db.records[p.id]; return rec && rec.wsId === ws.id && JF.isJobRecord(rec) ? !!PJ.recordAt(rec.id, ws.id, memberId) : null; }
   if (p.kind === 'dir') return ws.dirs.some((d) => d.id === p.id) ? seesDir(ws, p.id, memberId) : null;
   if (p.kind === 'doc') { const it = db.items[p.id]; return it && it.wsId === ws.id && it.type === 'text' ? canSee({ memberId, wsId: ws.id }, 'item', it) : null; }
   if (p.kind === 'agent') return Object.hasOwn(AGENTS, p.id) ? true : null;
@@ -2622,6 +2648,7 @@ function chatPinLabel(ws, p) {
   if (p.kind === 'stack') return { label: ws.stacks.find((x) => x.id === p.id)?.name || 'Stack' };
   if (p.kind === 'dir') return { label: ws.dirs.find((d) => d.id === p.id)?.name || 'Folder' };
   if (p.kind === 'doc') { const it = db.items[p.id]; return { label: it.title || docOf(it).title || 'Untitled', icon: it.icon || undefined }; }
+  if (p.kind === 'job') return JF.pinInfo(db.records[p.id]);
   return { label: AGENTS[p.id].name, icon: AGENTS[p.id].icon };
 }
 function publicChatPins(ws, pins, memberId) {
@@ -2895,7 +2922,7 @@ function seesOwn(kind, x, memberId) {
   if (kind === 'task') { const cid = campaignOf('task', x); return (!!cid && !isJobRun(db.campaigns[cid])) || myTask(x, memberId); }
   if (kind === 'item') {
     const top = topItem(x);
-    return !!campaignOf('item', x) || !!top.channelId || top.type === 'message' || top.memberId === memberId;
+    return !!campaignOf('item', x) || !!jobStackOfItem(x) || !!top.channelId || top.type === 'message' || top.memberId === memberId;
   }
   if (kind === 'template') return x.ownerId === memberId;
   return true;
@@ -2921,7 +2948,7 @@ function campaignOf(kind, x) {
 }
 // Each person's Day is their own: entries, and the calendar events pulled into them, are seen only by them.
 const seesEntry = (e, memberId) => !e || e.memberId === memberId;
-const canSee = (auth, kind, x) => !((kind === 'campaign' || kind === 'goal') && isJobRun(db.campaigns[campaignOf(kind, x)])) && seesCampaign(campaignOf(kind, x), auth.memberId) && (kind !== 'item' || (seesFeed(feedOfItem(x), auth.memberId) && seesItemDir(x, auth.memberId))) && (kind !== 'entry' || seesEntry(x, auth.memberId)) && seesOwn(kind, x, auth.memberId);
+const canSee = (auth, kind, x) => !((kind === 'campaign' || kind === 'goal') && isJobRun(db.campaigns[campaignOf(kind, x)])) && seesCampaign(campaignOf(kind, x), auth.memberId) && (kind !== 'item' || (seesFeed(feedOfItem(x), auth.memberId) && seesItemDir(x, auth.memberId) && (!jobStackOfItem(x) || seesStack(jobStackOfItem(x), auth.memberId)))) && (kind !== 'entry' || seesEntry(x, auth.memberId)) && seesOwn(kind, x, auth.memberId);
 function campaignOfMsg(msg) {
   if (msg.item) return campaignOf('item', db.items[msg.item.id]);
   if (msg.task) return campaignOf('task', msg.task);
@@ -3511,6 +3538,7 @@ function deleteTask(t) {
   }
 }
 function deleteCampaign(ws, c) {
+  JF.campaignGone(c); // a Job Flow's Campaign step made it: the step is open again (PHASE4.md §3)
   // What came after it now stands on its own.
   for (const x of Object.values(db.campaigns)) if (x.follows === c.id) {
     x.follows = null;
@@ -3536,7 +3564,7 @@ function deleteCampaign(ws, c) {
 // A campaign gets its own feed (in a "Campaigns" chat folder) and its own stack for files.
 // owner: { memberId, member } of whoever it belongs to. extra: fields set before anyone hears about it.
 function createCampaign(ws, owner, body, extra = {}) {
-  const c = applyCampaign({ id: rid(), wsId: ws.id, ownerId: owner.memberId, by: owner.member, createdAt: Date.now(), name: '', brief: '', start: null, end: null, color: 'violet', status: 'active', private: false, memberIds: [], assigneeId: null, outcomes: [...OUTCOMES], methods: [...METHODS], lastReportAt: null }, body, ws, owner);
+  const c = applyCampaign({ id: extra.id || rid(), wsId: ws.id, ownerId: owner.memberId, by: owner.member, createdAt: Date.now(), name: '', brief: '', start: null, end: null, color: 'violet', status: 'active', private: false, memberIds: [], assigneeId: null, outcomes: [...OUTCOMES], methods: [...METHODS], lastReportAt: null }, body, ws, owner);
   let folder = ws.chatFolders.find((f) => f.campaigns);
   if (!folder) ws.chatFolders.push((folder = { id: rid(8), name: 'Campaigns', campaigns: true }));
   const ch = { id: rid(8), name: freeChannelName(ws, c.name), folderId: folder.id, campaignId: c.id };
@@ -3672,6 +3700,21 @@ function applyTemplate(t, body, ws) {
 // Makes a new campaign from a saved one. date: its start day; time: set for scheduled runs.
 // cast: who plays each of the main campaign's roles this time ({ roleId: [memberIds] }); otherwise the saved crew.
 // recordId: the job it's for (2026-11-17), when whoever starts it (or the owner, for a scheduled run) can see it.
+// A Job Flow's Campaign step (PHASE4.md §3): a campaign from the saved campaign copied into the flow's version, with
+// the id the step chose, linked to the job, in the run owner's name. Synchronous: the step's marker is written in the
+// same turn (§5.1).
+function campaignFromSnapshot(ws, ownerId, snap, { id, name, recordId }) {
+  const ownerM = ws.members.find((m) => m.id === ownerId) || ws.members.find((m) => m.role === 'owner');
+  const owner = { memberId: ownerM.id, member: ownerM.name };
+  const k = snap.campaign || {};
+  const date = dayIn(tzOf(ws));
+  const c = createCampaign(ws, owner, {
+    name, brief: k.brief, audience: k.audience || '', strategy: k.strategy || '', color: k.color, outcomes: k.outcomes, methods: k.methods, private: k.private, memberIds: k.memberIds, inOrder: !!k.inOrder,
+    cast: k.cast || [], start: date, end: k.days != null ? addDays(date, k.days) : null, recordId, ...(k.followUps ? { followUps: k.followUps } : {}),
+  }, { id, templateId: snap.id || null, assignedBy: null, assigneeId: snap.assigneeId || null, recordId });
+  fillCampaign(ws, owner, c, snap, date, null);
+  return c;
+}
 function runTemplate(tpl, { date, time, by, cast, recordId }) {
   const ws = db.workspaces[tpl.wsId];
   const ownerM = ws.members.find((m) => m.id === tpl.ownerId) || ws.members.find((m) => m.role === 'owner');
@@ -9924,6 +9967,12 @@ async function api(req, res, url) {
     return send(res, 405, { error: 'Method not allowed' });
   }
 
+  // Jobs and clients on the map (PHASE4.md §2): looked up on request, never kept.
+  if (a === 'map' && b === 'jobs' && m === 'GET' && !c) {
+    if (!toolsOf(ws).projects || !toolsOf(ws).map) return send(res, 403, { error: 'The Map or Boards are switched off for this team.' });
+    const out = await JF.mapJobs(ws, auth, new URL(req.url, 'http://x').searchParams);
+    return send(res, out.status || 200, out.body);
+  }
   if (a === 'map' && m === 'GET' && !b) {
     const mine = (x) => x.wsId === ws.id && x.memberId === auth.memberId;
     return send(res, 200, {
@@ -11499,7 +11548,7 @@ async function api(req, res, url) {
   }
 
   if (a === 'stacks') {
-    const rq = b && c === 'request' && ws.stacks.find((x) => x.id === b && seesCampaign(x.campaignId, auth.memberId));
+    const rq = b && c === 'request' && ws.stacks.find((x) => x.id === b && seesStack(x, auth.memberId));
     if (c === 'request' && !rq) return send(res, 404, { error: 'Not found' });
     if (rq && m === 'POST') {
       // A link anyone can use to drop files into this stack, no account needed.
@@ -11550,7 +11599,7 @@ async function api(req, res, url) {
     if (m === 'POST' && !d) {
       const body = await readJson(req);
       const kind = String(body.kind || ''), id = String(body.id || '').slice(0, 64);
-      if (!CHAT_PIN_KINDS.includes(kind)) return send(res, 400, { error: 'Stacks, docs, folders and agents can be pinned to a chat.' });
+      if (!CHAT_PIN_KINDS.includes(kind)) return send(res, 400, { error: 'Stacks, docs, folders, agents and jobs can be pinned to a chat.' });
       if (!chatPinSees(ws, { kind, id }, auth.memberId)) return send(res, 404, { error: 'That isn’t there any more.' });
       // Gone things drop off before counting.
       for (let i = list.length - 1; i >= 0; i--) if (chatPinSees(ws, list[i], auth.memberId) === null) list.splice(i, 1);
@@ -12372,7 +12421,7 @@ async function replayAs(ws, memberId, approvalId, { method, path: p, body }, as 
 }
 const hold = (...a) => RULES.hold(...a);
 const PJ = projectsModule({ docsOf, bizHtml, inkedPng, jobQuote: (rec) => JF.jobQuote(rec), seesLinked: (kind, x, memberId) => canSee({ memberId }, kind, x), proofUrl: (ws) => pagesProof(ws), onEvent: (...a) => recordEvent(...a), onPrice: (...a) => priceChanged(...a), canSeeItem: (auth, it) => canSee(auth, 'item', it), seal, unseal, db, save, broadcast, rid, hold, cleanText, isDay, readJson, send, badRequest, isOwnerId, escHtml, brandOf, logoUrl, teamDay, offline, allowLocalHooks: process.env.ALLOW_LOCAL_WEBHOOKS === '1', qrSvg, publicUrl: PUBLIC_URL,
-  onRecordGone: (rec) => { dropVisits(rec); INV.dropFor(rec); JF.dropFor(rec); campsOffJob(rec); }, stageGate: (...a) => stageGate(...a),
+  onRecordGone: (rec) => { dropVisits(rec); INV.dropFor(rec); JF.dropFor(rec); campsOffJob(rec); jobStackGone(rec); }, stageGate: (...a) => stageGate(...a),
   onRecordNews: (rec) => { jobChanged(rec); if (rec.share || rec.qbo?.estId) QB.soon(rec.wsId); },
   // A follow-up from a record's timeline: a task for whoever logged it, about the record.
   makeTask: (ws, auth, { text, due, recordId }) => {
@@ -12757,7 +12806,10 @@ const STOCK = inventoryModule({ db, save, broadcast, rid, cleanText, readJson, s
   labelUrl: (tag) => `${PUBLIC_URL}/a/${tag}`,
   labelQr: (tag) => 'data:image/svg+xml;base64,' + Buffer.from(qrSvg(`${PUBLIC_URL}/a/${tag}`, { scale: 8 })).toString('base64'),
   projectFor: (pid, wsId, memberId) => { const p = db.projects[pid]; return p && p.wsId === wsId && PJ.sees(p, memberId) ? { p, records: Object.values(db.records).filter((r) => r.projectId === p.id) } : null; } });
-const JF = jobFlowsModule({ sendGate: (...a) => sendGate(...a), custPreview: (...a) => custPreview(...a), custDigest: (...a) => custDigest(...a), notify: (...a) => notify(...a), notifyAdmins: (...a) => notifyAdmins(...a), db, save, broadcast, rid, cleanText, readJson, send, isAdmin, PJ, toolsOf, goalsInOrder, tasksInOrder, applyTask, publicTask: (t) => publicTask(t), canSeeTask: (auth, t) => canSee(auth, 'task', t), stepsSoon: (w) => stepsSoon(w), sweepNow: (w, by, byId) => jobSteps(w, by, byId), visitsOf: (id) => visitsOf(id), needsMet: (g) => needsMet(g), noteWork: (t, was) => noteWork(t, was), makeInvoice: (...a) => INV.makeFor(...a), sendInvoice: (...a) => INV.sendIt(...a), invoiceTotals: (inv) => INV.totals(inv), invoiceUrl: (inv) => INV.publicInvoice(inv).url, flowTell: (...a) => flowTell(...a), flowReach: (c) => flowReach(c), flowMsg, customerOf: (rec) => jobCustomer(rec), teamClock: (ws) => ({ today: dayIn(tzOf(ws)), tomorrow: dayIn(tzOf(ws), Date.now() + 864e5), min: localNow(tzOf(ws), Date.now()).min }), teamReviewUrl: (ws) => custMsgsOf(ws).reviewUrl || '', saveNow: () => writeNow(), sendable: (ws) => !offline(ws.id) && !billingOf(ws).readOnly, shareRecord: (...a) => PJ.shareRecord(...a), quoteUrlOf: (rec) => (rec.share?.token ? `${PUBLIC_URL}/q/${rec.share.token}` : null), itemsTotals: (v) => PJ.itemsTotals(v), priceChanged: (ws, auth, x) => priceChanged(ws, auth, x), publicUrl: PUBLIC_URL, stock: STOCK });
+const JF = jobFlowsModule({ sendGate: (...a) => sendGate(...a), custPreview: (...a) => custPreview(...a), custDigest: (...a) => custDigest(...a), notify: (...a) => notify(...a), notifyAdmins: (...a) => notifyAdmins(...a), db, save, broadcast, rid, cleanText, readJson, send, isAdmin, PJ, toolsOf, goalsInOrder, tasksInOrder, applyTask, publicTask: (t) => publicTask(t), canSeeTask: (auth, t) => canSee(auth, 'task', t), stepsSoon: (w) => stepsSoon(w), sweepNow: (w, by, byId) => jobSteps(w, by, byId), visitsOf: (id) => visitsOf(id), needsMet: (g) => needsMet(g), noteWork: (t, was) => noteWork(t, was), makeInvoice: (...a) => INV.makeFor(...a), sendInvoice: (...a) => INV.sendIt(...a), invoiceTotals: (inv) => INV.totals(inv), invoiceUrl: (inv) => INV.publicInvoice(inv).url, flowTell: (...a) => flowTell(...a), flowReach: (c) => flowReach(c), flowMsg, customerOf: (rec) => jobCustomer(rec), teamClock: (ws) => ({ today: dayIn(tzOf(ws)), tomorrow: dayIn(tzOf(ws), Date.now() + 864e5), min: localNow(tzOf(ws), Date.now()).min }), teamReviewUrl: (ws) => custMsgsOf(ws).reviewUrl || '', saveNow: () => writeNow(), sendable: (ws) => !offline(ws.id) && !billingOf(ws).readOnly, shareRecord: (...a) => PJ.shareRecord(...a), quoteUrlOf: (rec) => (rec.share?.token ? `${PUBLIC_URL}/q/${rec.share.token}` : null), itemsTotals: (v) => PJ.itemsTotals(v), priceChanged: (ws, auth, x) => priceChanged(ws, auth, x), publicUrl: PUBLIC_URL, stock: STOCK,
+  geocode: (addr) => (routesOn() ? geocodeOnce(addr, 5000) : Promise.resolve(undefined)), mapsOn: () => routesOn(),
+  presetsOf: (wsId) => presetsOf(wsId), templateFor: (ws, auth, id) => { const t = db.templates[id]; return t && t.wsId === ws.id && seesTemplate(t, auth.memberId) ? t : null; },
+  campaignFromSnapshot: (...a) => campaignFromSnapshot(...a), stockMove: (...a) => STOCK.move(...a) });
 const INV = invoicesModule({ docsOf, bizHtml, onInvoice: (inv) => { JF.invoiceNews(inv); stepsSoon(inv.wsId); }, flowDueDays: (rec) => JF.dueDaysFor(rec), bindInvoice: (rec, inv, stepId) => JF.bindInvoice(rec, inv, stepId), proofUrl: (ws) => pagesProof(ws), stockCost: (recId) => STOCK.stockCost(recId), jobMoney: (recId) => jobMoney(recId), notifyAdmins: (...a) => notifyAdmins(...a), jobBack: (rec) => jobBack(rec), onPaymentGone: (...a) => QB.paymentGone(...a), db, save, broadcast, rid, hold, cleanText, readJson, send, badRequest, escHtml, brandOf, logoUrl, teamDay, offline, seal, unseal, stripeCall: stripe.callWith, PJ, isAdmin, jobOfRecord, jobLabel, moveJob, publicUrl: PUBLIC_URL, emit: (...a) => { PJ.emit(...a); QB.soon(a[0]); try { eventFromHook(a[0], a[1], a[2], a[3]); } catch (e) { alarm('An automation event failed to build', e); } },
   // A payment is money in on the business's Finance, under the team's owner.
   addMoney: (ws, { amount, day, note, invoiceId = null }) => {
@@ -13509,7 +13561,7 @@ async function buildExport(x) {
     : {
         name: ws.name, createdAt: ws.createdAt, tz: tzOf(ws), settings: ws.settings, brand: ws.brand, roles: ws.roles,
         members: ws.members.map((m) => ({ id: m.id, name: m.name, role: m.role, roleIds: m.roleIds || [], createdAt: m.createdAt })),
-        stacks: ws.stacks.filter((st) => seesCampaign(st.campaignId, me.id)), channels: publicChannels(ws, me.id),
+        stacks: ws.stacks.filter((st) => seesStack(st, me.id)), channels: publicChannels(ws, me.id),
         chatFolders: ws.chatFolders, dirs: ws.dirs.filter((d) => seesDir(ws, d.id, me.id)),
       };
 

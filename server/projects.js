@@ -1252,7 +1252,8 @@ export function projectsModule({ jobQuote = () => null, seesLinked = () => true,
         if (isProfile(p) && t === profileList(p)) throw bad('Insurance & licenses is part of the workspace profile: it can’t be removed.');
         if (p.types.length === 1) throw bad('A project needs at least one list.');
         p.types = p.types.filter((x) => x !== t);
-        for (const r of Object.values(db.records)) if (r.projectId === p.id && r.typeId === t.id) delete db.records[r.id];
+        // Each record goes as a deleted one does: its runs, visits, draft invoices and job stack too.
+        for (const r of Object.values(db.records)) if (r.projectId === p.id && r.typeId === t.id) { delete db.records[r.id]; onRecordGone?.(r); }
         // Link fields pointing at it go.
         for (const o of p.types) o.fields = o.fields.filter((f) => !(f.type === 'link' && f.target === t.id));
         return null;
@@ -1574,7 +1575,7 @@ export function projectsModule({ jobQuote = () => null, seesLinked = () => true,
         const n = Object.values(db.records).filter((r) => r.projectId === p.id).length;
         const held = n ? hold?.(ws, auth, 'deleteRecord', { summary: `Delete the project ${p.name} and its ${n} record${n === 1 ? '' : 's'}`, target: { projectId: p.id }, req: { method: 'DELETE', path: req.url, body: null } }) : null;
         if (held) return send(res, held.status, held.body);
-        for (const r of Object.values(db.records)) if (r.projectId === p.id) delete db.records[r.id];
+        for (const r of Object.values(db.records)) if (r.projectId === p.id) { delete db.records[r.id]; onRecordGone?.(r); }
         delete db.projects[p.id];
         for (const h of Object.values(db.webhooks)) if (h.projectId === p.id) delete db.webhooks[h.id];
         save();

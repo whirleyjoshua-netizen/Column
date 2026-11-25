@@ -18,6 +18,16 @@ async function get(path, params) {
   return j;
 }
 
+// One lookup for the Jobs map (PHASE4.md §2): [lng, lat], null when it isn't found; throws when Mapbox fails or
+// takes longer than `ms`. Nothing is kept here (the caller keeps a short memory-only cache).
+export async function geocodeOnce(address, ms = 5000) {
+  const u = new URL(API() + '/search/geocode/v6/forward');
+  for (const [k, v] of Object.entries({ q: address, limit: 1, country: 'us,ca', access_token: TOKEN() })) u.searchParams.set(k, v);
+  const r = await fetch(u, { signal: AbortSignal.timeout(ms) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(`Maps: ${j.message || r.status}`);
+  return j.features?.[0]?.geometry?.coordinates || null;
+}
 // An address to [lng, lat], near the team's base when there is one, or null when it can't be found.
 async function geocode(address, near) {
   const j = await get('/search/geocode/v6/forward', { q: address, limit: 1, country: 'us,ca', ...(near ? { proximity: near.join(',') } : {}) });

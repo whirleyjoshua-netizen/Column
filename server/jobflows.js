@@ -34,7 +34,7 @@ export const isJobRun = (c) => c?.kind === 'job';
 export const isJobList = (t) => !!t && (t.key === 'jobs' || String(t.key || '').startsWith('trade_'));
 
 export function jobFlowsModule(ctx) {
-  const { db, save, broadcast, rid, cleanText, readJson, send, isAdmin, PJ, toolsOf, goalsInOrder, tasksInOrder, applyTask, publicTask, canSeeTask, stepsSoon, sweepNow = (wsId) => stepsSoon(wsId), visitsOf, needsMet, noteWork = () => {}, invoiceTotals = () => ({ balance: 0, total: 0 }), invoiceUrl = () => null, flowTell = null, flowReach = () => 'No way to reach them', flowMsg = {}, customerOf = () => null, teamClock = () => ({}), teamReviewUrl = () => '', saveNow = async () => {}, sendable = () => true, shareRecord = null, quoteUrlOf = () => null, sendGate = null, custPreview = null, custDigest = null, notifyAdmins = () => {}, notify = () => {}, makeInvoice = null, sendInvoice = null, itemsTotals = () => ({ total: 0 }), priceChanged = () => {}, publicUrl = '', stock = null } = ctx;
+  const { db, save, broadcast, rid, cleanText, readJson, send, isAdmin, PJ, toolsOf, goalsInOrder, tasksInOrder, applyTask, publicTask, canSeeTask, stepsSoon, sweepNow = (wsId) => stepsSoon(wsId), visitsOf, needsMet, noteWork = () => {}, invoiceTotals = () => ({ balance: 0, total: 0 }), invoiceUrl = () => null, flowTell = null, flowReach = () => 'No way to reach them', flowMsg = {}, customerOf = () => null, teamClock = () => ({}), teamReviewUrl = () => '', saveNow = async () => {}, sendable = () => true, shareRecord = null, quoteUrlOf = () => null, sendGate = null, custPreview = null, custDigest = null, notifyAdmins = () => {}, notify = () => {}, makeInvoice = null, sendInvoice = null, itemsTotals = () => ({ total: 0 }), priceChanged = () => {}, publicUrl = '', stock = null, geocode = async () => undefined, mapsOn = () => false, presetsOf = () => [], templateFor = () => null, campaignFromSnapshot = null, stockMove = null } = ctx;
   // Test only: a step with this name makes building a run throw, so the failure path can be tested from outside.
   const FAIL_STEP = process.env.NODE_ENV !== 'production' ? process.env.JOBFLOWS_FAIL_STEP || '' : '';
   // Test only: the automatic invoice's send fails after the invoice is made (a crash between the two).
@@ -81,7 +81,7 @@ export function jobFlowsModule(ctx) {
       seen.add(id);
       const name = cleanText(s.name, 80).trim() || KIND_NAME[s.kind];
       // A money step that names nobody is for owners and admins; one that names anyone else is refused at publish.
-      const w = s.who && typeof s.who === 'object' ? s.who : { type: MONEY_KINDS.includes(s.kind) ? 'admins' : 'anyone' };
+      const w = s.who && typeof s.who === 'object' ? s.who : { type: MONEY_KINDS.includes(s.kind) || s.kind === 'campaign' ? 'admins' : 'anyone' };
       if (!WHO.includes(w.type)) throw bad('Pick who does each step.');
       const who = { type: w.type };
       if (w.type === 'role') {
@@ -102,10 +102,15 @@ export function jobFlowsModule(ctx) {
       if (s.kind === 'details' && Array.isArray(st.fields)) settings.fields = st.fields.map(String).filter((k) => t.fields.some((f) => f.key === k)).slice(0, 20);
       if (s.kind === 'book' && st.visitKind) settings.visitKind = cleanText(st.visitKind, 40);
       if (s.kind === 'work' && st.photos) settings.photos = true;
+      // Phase 4: stock used off Inventory when the work is done (checked at publish).
+      if (s.kind === 'work' && st.useStock) { settings.useStock = true; settings.fromPlace = cleanText(String(st.fromPlace ?? ''), 40); }
       if (s.kind === 'tasks') {
         settings.tasks = (Array.isArray(st.tasks) ? st.tasks : []).map((x) => cleanText(x, 200).trim()).filter(Boolean).slice(0, 20);
-        if (!settings.tasks.length) throw bad(`Give “${name}” at least one task.`);
+        // Or a saved bundle's tasks, copied in when the flow is published (PHASE4.md §3).
+        if (st.bundleId) settings.bundleId = cleanText(String(st.bundleId), 40);
+        if (!settings.tasks.length && !settings.bundleId) throw bad(`Give “${name}” at least one task.`);
       }
+      if (s.kind === 'campaign' && st.templateId) settings.templateId = cleanText(String(st.templateId), 40);
       // Phase 3 settings are kept as given on a draft and checked at publish (checkPublish).
       const raw = (k) => (st[k] === undefined ? undefined : typeof st[k] === 'string' ? cleanText(st[k], 300) : Array.isArray(st[k]) ? st[k].slice(0, 10).map(Number) : st[k]);
       if (s.kind === 'remind' || s.kind === 'omw') { if (st.visitKind) settings.visitKind = cleanText(st.visitKind, 40); }
@@ -137,7 +142,7 @@ export function jobFlowsModule(ctx) {
     const body = {
       list: { projectId: list.projectId, typeId: list.typeId },
       whoCreates: pick('whoCreates', 'admins') === 'everyone' ? 'everyone' : 'admins',
-      billing, items, dueDays: dd === null || dd === '' ? null : Number(dd),
+      billing, items, dueDays: dd === null || dd === '' ? null : Number(dd), stack: pick('stack', false) === true,
       steps: cleanSteps(ws, t, input.steps !== undefined ? input.steps : prev.steps, knownIds(flow)),
     };
     // With automatic billing the (one) Invoice step runs by itself.
@@ -193,6 +198,35 @@ export function jobFlowsModule(ctx) {
       if (st.kind === 'payment' && x.reminders !== undefined) {
         const r = x.reminders;
         if (r.length > 3 || !r.every((d, i) => Number.isInteger(d) && d >= 1 && d <= 60 && (i === 0 || d > r[i - 1]))) throw bad(`“${st.name}”: up to 3 reminders, each 1 to 60 days past due, in order.`);
+      }
+    }
+  }
+  // Phase 4 (PHASE4.md §3, §5): what a version copies in when it's published, so a later change to the saved bundle
+  // or campaign doesn't change it, and the checks for stock and Campaign steps.
+  function snapshotSteps(ws, auth, body) {
+    for (const st of body.steps) {
+      const x = st.settings || (st.settings = {});
+      if (st.kind === 'tasks' && x.bundleId) {
+        const all = presetsOf(ws.id);
+        const b = all.find((y) => y.id === x.bundleId && y.kind === 'bundle');
+        if (!b) throw bad(`The saved bundle for “${st.name}” is gone. Pick another, or write its tasks.`);
+        const texts = (b.steps || []).map((y) => all.find((z) => z.id === y.presetId)).filter(Boolean).map((z) => cleanText(z.text || z.name, 200).trim()).filter(Boolean).slice(0, 20);
+        if (!texts.length) throw bad(`The bundle “${b.name}” has no tasks.`);
+        x.tasks = texts;
+        x.bundleFrom = { id: b.id, name: b.name || 'Bundle' };
+      }
+      if (st.kind === 'campaign') {
+        if (st.who?.type !== 'admins') throw bad(`“${st.name}” makes a campaign in an owner’s or admin’s name, so it’s for owners and admins.`);
+        const t = x.templateId && templateFor(ws, auth, x.templateId);
+        if (!t) throw bad(`Pick a saved campaign for “${st.name}”.`);
+        const { wsId, ...snap } = copy(t);
+        x.template = snap;
+        x.templateFrom = { id: t.id, name: t.name };
+      }
+      if (st.kind === 'work' && x.useStock) {
+        if (!toolsOf(ws).inventory) throw bad(`“${st.name}” uses stock from Inventory. Turn the Inventory tool on first (Apps & Integrations → Tools).`);
+        const pl = db.invPlaces?.[x.fromPlace];
+        if (!pl || pl.wsId !== ws.id) throw bad(`Pick the Inventory place “${st.name}” uses stock from.`);
       }
     }
   }
@@ -311,6 +345,7 @@ export function jobFlowsModule(ctx) {
         return all.length > 0 && all.every((i) => i.status === 'paid');
       }
       case 'tasks': return tasksInOrder(g).length > 0;
+      case 'campaign': return g.campaign?.state === 'made' && db.campaigns[g.campaign.id]?.status === 'done';
       case 'gearOut': {
         const items = s.settings?.items || [];
         return items.length > 0 && items.every((x) => gotFor(c, g, rec, x.itemId) >= x.qty);
@@ -348,6 +383,7 @@ export function jobFlowsModule(ctx) {
       case 'invoice': return 'No invoice sent';
       case 'payment': return 'Not paid yet';
       case 'tasks': { const left = tasksInOrder(g).filter((x) => !x.done && !x.skipped).length; return `${left} task${left === 1 ? '' : 's'} left`; }
+      case 'campaign': { const k = g.campaign?.state === 'made' && db.campaigns[g.campaign.id]; return k ? `Waiting for the campaign “${k.name}” to be done` : 'A campaign is made when this step comes up'; }
       case 'gearOut': {
         const c = db.campaigns[g.campaignId];
         const rows = gearSheet(c, g, rec).items.filter((x) => x.got < x.need);
@@ -464,6 +500,8 @@ export function jobFlowsModule(ctx) {
         }
       }
       if ((s.kind === 'gearOut' || s.kind === 'gearIn') && rec) out.gear = gearSheet(c, g, rec);
+      if (s.kind === 'campaign') { const k = g.campaign?.state === 'made' && db.campaigns[g.campaign.id]; if (k) out.campaign = { id: k.id, name: k.name, status: k.status }; }
+      if (s.kind === 'work' && s.settings?.useStock) out.stock = { used: g.stockUsed?.used || [], notes: g.stockUsed?.notes || [] };
       if (s.kind === 'tasks') {
         const all = tasksInOrder(g);
         const seen = all.filter((x) => canSeeTask(auth, x));
@@ -707,7 +745,7 @@ export function jobFlowsModule(ctx) {
           // Everything checked first; a request that fails changes nothing.
           const n = body.name !== undefined ? cleanText(body.name, 80).trim() : flow.name;
           if (!n) return send(res, 400, { error: 'Give the flow a name.' });
-          const draft = ['list', 'steps', 'whoCreates', 'billing', 'items', 'dueDays'].some((k) => body[k] !== undefined) ? cleanBody(ws, auth, body, flow) : flow.draft;
+          const draft = ['list', 'steps', 'whoCreates', 'billing', 'items', 'dueDays', 'stack'].some((k) => body[k] !== undefined) ? cleanBody(ws, auth, body, flow) : flow.draft;
           Object.assign(flow, { name: n, icon: body.icon !== undefined ? cleanText(body.icon, 8) || '🧰' : flow.icon, draft, updatedAt: Date.now() });
           save();
           return send(res, 200, publicFlow(flow, true));
@@ -716,6 +754,7 @@ export function jobFlowsModule(ctx) {
           const body = cleanBody(ws, auth, {}, flow); // checked again: the people and roles it names may have changed
           checkPublish(ws, body);
           checkGear(ws, body);
+          snapshotSteps(ws, auth, body);
           const v = { id: rid(), flowId: flow.id, wsId: ws.id, n: versionsOf(flow).length + 1, body: copy(body), publishedAt: Date.now(), publishedBy: auth.memberId };
           db.jobFlowVersions[v.id] = v;
           Object.assign(flow, { draft: body, activeVersionId: v.id, updatedAt: Date.now() });
@@ -772,6 +811,7 @@ export function jobFlowsModule(ctx) {
         if (made.held) return send(res, made.held.status, made.held.body);
         const rec = made.rec;
         commitRun(run);
+        if (version.body.stack) ensureStack(ws, rec);
         if (key) keys.set(key, { sig, recordId: rec.id, at: Date.now() });
         PJ.announceRecord(rec, auth.member);
         afterStart(ws, auth, run.c, run.tasks);
@@ -781,6 +821,11 @@ export function jobFlowsModule(ctx) {
       if (!at) return send(res, 404, { error: 'That job is gone.' });
       const { rec } = at;
       if (c === 'run' && m === 'GET') return send(res, 200, { run: runView(ws, auth, shownRun(rec.id)) });
+      // A job's stack for its files (PHASE4.md §1): one, made by an owner or admin, flow or not.
+      if (c === 'stack' && m === 'POST' && !d) {
+        if (!admin) return send(res, 403, { error: 'Only owners and admins make a job’s files stack.' });
+        return send(res, 200, { stack: ensureStack(ws, rec) });
+      }
       if (c === 'flow' && m === 'POST' && !d) {
         if (!admin) return send(res, 403, { error: 'Only owners and admins put a job on a flow.' });
         const body = await readJson(req, 10_000);
@@ -793,6 +838,7 @@ export function jobFlowsModule(ctx) {
         if (going && body.replace !== true) return send(res, 409, { error: `This job is already on “${going.flowName}”. Replace it to start over on another flow.` });
         const run = buildRun(ws, auth, rec, flow, version);
         commitRun(run);
+        if (version.body.stack) ensureStack(ws, rec);
         if (run.lines) PJ.recordNews(rec, 'record.updated', auth.member);
         if (going) { Object.assign(going, { status: 'cancelled', cancelledAt: Date.now(), cancelledBy: auth.memberId }); tell(going); note(rec, `Moved from the flow “${going.flowName}” to “${flow.name}”`, auth.member); }
         else note(rec, `Put on the flow “${flow.name}”`, auth.member);
@@ -1261,6 +1307,154 @@ export function jobFlowsModule(ctx) {
     } finally { msgBusy = false; }
   }
 
+  // ---------- Phase 4: a job's stack, the job in chat (PHASE4.md §1, §4) ----------
+  // One stack per job: made in one synchronous turn, so two requests at once get the same one.
+  function ensureStack(ws, rec) {
+    let st = rec.stackId && ws.stacks.find((x) => x.id === rec.stackId);
+    if (!st) st = ws.stacks.find((x) => x.recordId === rec.id);
+    if (!st) {
+      st = { id: rid(8), name: PJ.recName(db.projects[rec.projectId], rec).slice(0, 40), recordId: rec.id };
+      ws.stacks.push(st);
+      broadcast(ws.id, { type: 'workspace' });
+    }
+    if (rec.stackId !== st.id) { rec.stackId = st.id; rec.updatedAt = Date.now(); }
+    save();
+    return { id: st.id, name: st.name, recordId: st.recordId };
+  }
+  const isJobRecord = (rec) => !!rec && isJobList(typeOfRec(rec));
+  // A job pinned to a chat, for someone who sees it: its name, its flow's icon, and the step it's on.
+  function pinInfo(rec) {
+    const run = rec && shownRun(rec.id);
+    const cur = run?.status === 'active' ? currentGoal(run) : null;
+    return { label: PJ.recName(db.projects[rec.projectId], rec), icon: (run && db.jobFlows[run.flowId]?.icon) || '🛠️', next: cur?.step?.name || null };
+  }
+  // A campaign a Campaign step made was deleted: the step is open again and makes a new one next time (§3).
+  function campaignGone(k) {
+    for (const g of Object.values(db.goals)) if (g.kind === 'step' && g.campaign?.id === k.id && g.campaign.state === 'made') { g.campaign = { id: k.id, state: 'deleted', at: Date.now() }; const c = db.campaigns[g.campaignId]; if (c) tell(c); }
+  }
+
+  // ---------- Phase 4: stock used when the work is done (PHASE4.md §5, §5.1) ----------
+  // Start to finish with nothing awaited: the moves and the marker (g.stockUsed) are kept together. Lines for one
+  // Inventory item are added up; the use is capped at what's at the place; what can't be used is noted, never blocking.
+  function useStock(ws, c, g, rec) {
+    const owner = memberOf(ws, c.ownerId) || ws.members.find((x) => x.role === 'owner');
+    const as = { memberId: owner.id, member: owner.name, role: owner.role, wsId: ws.id };
+    const f = itemsField(typeOfRec(rec));
+    const rows = (f && rec.values[f.id]?.rows) || [];
+    const place = db.invPlaces?.[g.step.settings.fromPlace];
+    const key = `${c.id}:${g.id}:${(g.reopens || 0) + 1}`;
+    const notes = [], used = [], moves = [];
+    const sum = new Map();
+    for (const r of rows) {
+      const m = /^item:(.+)$/.exec(String(r?.from || ''));
+      const it = m && db.jobItems[m[1]];
+      if (!it || it.wsId !== ws.id) continue;
+      if (!it.invItemId) { notes.push(`${it.name} isn’t linked to Inventory`); continue; }
+      const x = db.invItems?.[it.invItemId];
+      if (!x || x.wsId !== ws.id || x.archived) { notes.push(`${it.name}: its Inventory item is gone`); continue; }
+      if (x.track === 'units') { notes.push(`${x.name} is checked out one by one, not used up`); continue; }
+      const iu = String(it.unit || '').trim(), xu = String(x.unit || '').trim();
+      if (iu && xu && iu.toLowerCase() !== xu.toLowerCase()) { notes.push(`Units differ: ${iu} vs ${xu}`); continue; }
+      const q = Number(r.qty) || 0;
+      if (q <= 0) continue;
+      const e = sum.get(x.id) || { x, qty: 0 };
+      e.qty += q;
+      sum.set(x.id, e);
+    }
+    for (const { x, qty } of sum.values()) {
+      const have = place && place.wsId === ws.id ? x.stock?.[place.id] || 0 : 0;
+      const n = Math.round(Math.min(qty, have) * 1000) / 1000;
+      if (n < qty) notes.push(`Short ${Math.round((qty - n) * 1000) / 1000} × ${x.name} at ${place?.name || 'the place'}`);
+      if (n <= 0 || !stockMove) continue;
+      try {
+        const mv = stockMove(ws, as, { kind: 'use', itemId: x.id, qty: n, from: place.id, jobId: rec.id, goalId: g.id, note: `Used on the job (${g.step.name})` });
+        mv.key = key;
+        moves.push(mv.id);
+        used.push({ itemId: x.id, name: x.name, qty: n });
+      } catch (e) { notes.push(`${x.name}: ${e.message}`); }
+    }
+    g.stockUsed = { at: Date.now(), key, moves, used, notes };
+    if (used.length || notes.length) note(rec, `Stock for “${g.step.name}”: ${[used.map((u) => `${u.qty} × ${u.name}`).join(', '), ...notes].filter(Boolean).join('; ')}`, 'Kloomie');
+    save();
+  }
+
+  // ---------- Phase 4: jobs and clients on the map (PHASE4.md §2) ----------
+  // Looked up on request: a memory-only cache per team and address for 10 minutes, never written anywhere.
+  const MAP_MS = 10 * 60_000, MAP_MAX = 200;
+  const mapCache = new Map();
+  const normAddr = (a) => String(a || '').trim().replace(/\s+/g, ' ').toLowerCase();
+  const isDay = (d) => /^\d{4}-\d{2}-\d{2}$/.test(d) && !Number.isNaN(Date.parse(d + 'T12:00:00Z')) && new Date(Date.parse(d + 'T12:00:00Z')).toISOString().slice(0, 10) === d;
+  async function mapJobs(ws, auth, qs) {
+    if (!mapsOn()) return { body: { points: [], more: 0, missing: 0, off: true } };
+    const today = teamClock(ws).today;
+    const from = qs.get('from') || today;
+    const to = qs.get('to') || (isDay(from) ? addDays(from, 30) : '');
+    if (!isDay(from) || !isDay(to)) return { status: 400, body: { error: 'Give the days as YYYY-MM-DD.' } };
+    if (from > to) return { status: 400, body: { error: 'The first day comes after the last.' } };
+    if ((Date.parse(to) - Date.parse(from)) / 864e5 > 366) return { status: 400, body: { error: 'Look at a year at most.' } };
+    const undated = qs.get('undated') === '1';
+    const admin = isAdmin(auth);
+    const jobs = [], clientsOnJobs = new Set();
+    for (const p of Object.values(db.projects)) {
+      if (p.wsId !== ws.id || !PJ.sees(p, auth.memberId)) continue;
+      const lists = p.types.filter(isJobList);
+      for (const rec of Object.values(db.records)) {
+        if (rec.projectId !== p.id) continue;
+        const t = lists.find((x) => x.id === rec.typeId);
+        if (!t) continue;
+        const cf = fieldBy(t, (f) => f.type === 'contact');
+        const contact = cf && db.contacts?.[rec.values[cf.id]];
+        if (contact) clientsOnJobs.add(contact.id);
+        const af = fieldBy(t, (f) => f.key === 'address');
+        const address = String((af && rec.values[af.id]) || (contact?.wsId === ws.id && contact.address) || '').trim();
+        if (!address) continue;
+        const df = fieldBy(t, (f) => f.key === 'scheduled');
+        const sd = String((df && rec.values[df.id]) || '').slice(0, 10);
+        const scheduled = isDay(sd) ? sd : null;
+        if (scheduled ? scheduled < from || scheduled > to : !undated) continue;
+        const sf = fieldBy(t, (f) => f.type === 'select' && ['status', 'stage'].includes(f.key));
+        const run = shownRun(rec.id);
+        const cur = run?.status === 'active' ? currentGoal(run) : null;
+        jobs.push({ kind: 'job', id: rec.id, name: PJ.recName(p, rec), address, stage: (sf && sf.choices.find((x) => x.id === rec.values[sf.id])?.label) || null, flow: run?.flowName || null, next: cur?.step?.name || null, scheduled });
+      }
+    }
+    const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+    jobs.sort((a, b) => cmp(a.scheduled || '~', b.scheduled || '~') || cmp(a.name, b.name) || cmp(a.id, b.id));
+    const clients = !admin ? [] : Object.values(db.contacts || {}).filter((x) => x.wsId === ws.id && !x.deletedAt && String(x.address || '').trim() && !clientsOnJobs.has(x.id))
+      .map((x) => ({ kind: 'client', id: x.id, name: x.name || 'Client', address: String(x.address).trim() })).sort((a, b) => cmp(a.name, b.name) || cmp(a.id, b.id));
+    const all = [...jobs, ...clients];
+    const shown = all.slice(0, MAP_MAX);
+    // One lookup per distinct address (at most 200), 10 at a time, 5 seconds each; a failure leaves its points out.
+    const now = Date.now();
+    for (const [k, v] of mapCache) if (now - v.at > MAP_MS) mapCache.delete(k);
+    const want = [...new Set(shown.map((x) => normAddr(x.address)))].slice(0, MAP_MAX);
+    const found = new Map();
+    let i = 0;
+    const worker = async () => {
+      while (i < want.length) {
+        const a = want[i++];
+        const ck = ws.id + '|' + a;
+        const hit = mapCache.get(ck);
+        if (hit) { found.set(a, hit.ll); continue; }
+        try {
+          const ll = await geocode(a);
+          if (ll === undefined) continue;
+          mapCache.set(ck, { at: Date.now(), ll });
+          found.set(a, ll);
+        } catch { /* failed or slow: left out, counted as missing, tried again next time */ }
+      }
+    };
+    await Promise.all(Array.from({ length: 10 }, worker));
+    const points = [];
+    let missing = 0;
+    for (const x of shown) {
+      const ll = found.get(normAddr(x.address));
+      if (!ll) { missing++; continue; }
+      points.push({ ...x, lat: ll[1], lng: ll[0] });
+    }
+    return { body: { points, more: all.length - shown.length, missing } };
+  }
+
   // ---------- Phase 4 sweep: what's kept the first time a step is met (PHASE4.md §5, §5b) ----------
   // A check-in's round end is fixed the first time it's done and never moved. Answers whether anything changed.
   function linksSweep(wsId) {
@@ -1269,8 +1463,33 @@ export function jobFlowsModule(ctx) {
       if (c.wsId !== wsId || !isJobRun(c) || c.status === 'cancelled' || !recOf(c)) continue;
       for (const g of stepGoals(c)) {
         if (g.step?.kind === 'gearIn' && !g.inHeld && !g.skipped && stepMet(g)) { g.inHeld = true; if (!g.roundEnd) g.roundEnd = Date.now(); changed = true; }
+        // Stock: once, the first time the work is done in this run (kept across reopens: §5).
+        if (g.step?.kind === 'work' && g.step.settings?.useStock && !g.stockUsed && !g.skipped && stepMet(g)) { useStock(db.workspaces[wsId], c, g, recOf(c)); changed = true; }
         else if (g.step?.kind === 'gearIn' && g.skipped && !g.roundEnd) { g.roundEnd = Date.now(); changed = true; }
       }
+    }
+    // A Campaign step that's come up makes its campaign: the id chosen, the marker kept and the campaign made in one
+    // synchronous turn (§3, §5.1). Deleted: a new one, with a new id. A marker naming one that never existed (an older
+    // backup): made again with the same id, so there's never two.
+    const ws = db.workspaces[wsId];
+    for (const c of Object.values(db.campaigns)) {
+      if (c.wsId !== wsId || !isJobRun(c) || c.status !== 'active' || !campaignFromSnapshot) continue;
+      const rec = recOf(c);
+      const cur = rec && currentGoal(c);
+      if (!cur || cur.step?.kind !== 'campaign' || cur.skipped) continue;
+      const mk = cur.campaign;
+      if (mk?.state === 'made' && db.campaigns[mk.id]) continue;
+      const snap = cur.step.settings?.template;
+      if (!snap) continue;
+      const id = mk?.state === 'made' ? mk.id : rid();
+      const was = cur.campaign;
+      cur.campaign = { id, state: 'made', at: Date.now() };
+      try {
+        campaignFromSnapshot(ws, c.ownerId, snap, { id, name: `${snap.name || 'Campaign'} · ${PJ.recName(db.projects[rec.projectId], rec)}`.slice(0, 80), recordId: rec.id });
+        note(rec, `Started the campaign for “${cur.step.name}”`, 'Kloomie');
+      } catch (e) { cur.campaign = was; console.error('A Campaign step couldn’t make its campaign:', e.message); }
+      changed = true;
+      tell(c);
     }
     if (changed) save();
     return changed;
@@ -1356,5 +1575,5 @@ export function jobFlowsModule(ctx) {
     }
   }
 
-  return { route, linksSweep, stepMet, activeRun, isJobRun, isJobList, runsOf, bindInvoice, dropFor, tell, runView, autoBill, autoMessages, invoiceNews, dueDaysFor, jobQuote, priceListItems, itemPrice };
+  return { route, linksSweep, mapJobs, pinInfo, isJobRecord, campaignGone, stepMet, activeRun, isJobRun, isJobList, runsOf, bindInvoice, dropFor, tell, runView, autoBill, autoMessages, invoiceNews, dueDaysFor, jobQuote, priceListItems, itemPrice };
 }
