@@ -53,8 +53,8 @@ try {
   await A.tap(`document.querySelector('.camp-card')`);
   await A.until(`!!${T('.cc-tab[data-ctab=plan]')}`);
   await A.ev(`${T('.cc-tab[data-ctab=plan]')}.click(); true`);
-  ok(await A.until(`!!${T('.cc-planswitch [data-pv=board]')}`), 'Plan has a Phases | Board switch');
-  await A.ev(`${T('.cc-planswitch [data-pv=board]')}.click(); true`);
+  ok(await A.until(`!!${T('.cc-sketch-btn')}`), 'Plan has a Sketch button (2026-11-25; it was a Phases | Board switch)');
+  await A.ev(`${T('.cc-sketch-btn')}.click(); true`);
   ok(await A.until(`!!${T('.cc-board-empty')} && [...document.querySelectorAll('#camps .cc-board-starts button')].map((b) => b.textContent).join('|') === 'Workflow map|Campaign brainstorm|Mind map|Blank'`), 'with no board yet: start from Workflow map, Campaign brainstorm, Mind map or Blank');
   await A.tap(T('.cc-board-starts [data-tpl=workflow]'));
   ok(await A.until(`document.querySelectorAll('#camps .cc-board .wb-item.k-shape').length === 5`, 10000), 'the campaign’s board opens in the Plan tab, from the workflow template (5 shapes)');
@@ -88,8 +88,8 @@ try {
   ok((await api('GET', '/boards/' + list[0].id)).items.some((x) => x.kind === 'card' && x.ref?.kind === 'task' && x.ref.id === tk?.id), 'and a live task card on the board');
   await shot('cboard-2');
   // Back on Phases, they're the campaign's phases.
-  await A.ev(`${T('.cc-planswitch [data-pv=phases]')}.click(); true`);
-  ok(await A.until(`document.querySelectorAll('#camps .cc-ptile.phase').length === 5`), 'the Phases view shows the five phases (in the planner, 2026-11-22)');
+  await A.ev(`${T('.cc-sketch-btn')}.click(); true`);
+  ok(await A.until(`document.querySelectorAll('#camps .cc-phase').length === 5`), 'back on the phases: the five phases (as cards, 2026-11-25)');
   ok(A.errors.length === 0, 'no script errors' + (A.errors.length ? ': ' + A.errors.join(' | ') : ''));
 } catch (e) { ok(false, 'threw: ' + e.stack); }
 A?.close();

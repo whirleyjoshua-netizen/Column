@@ -67,11 +67,11 @@ try {
   await A.ev(`document.querySelector('[data-tab=camps]').click(); true`);
   await A.until(`!!document.querySelector('.camp-card')`);
   await A.tap(`document.querySelector('.camp-card')`);
-  await A.until(`!!${T('.cc-kpis')}`);
+  await A.until(`!!${T('.cc-chips')}`);
   await A.ev(`document.querySelector('#sheet [aria-label=Close]')?.click(); true`);
   await tabTo('plan');
   await A.until(`!!${T('.cc-planner')}`);
-  const tile = (txt) => `[...document.querySelectorAll('#camps .cc-ptree .cc-ttile')].find((x) => x.querySelector('.cc-tt-t').textContent === ${JSON.stringify(txt)})`;
+  const tile = (txt) => `[...document.querySelectorAll('#camps .cc-row')].find((x) => x.querySelector('.cc-row-name').textContent === ${JSON.stringify(txt)}).querySelector('.cc-row-name')`;
   const say = (v) => A.ev(`(() => { const i = ${T('.cc-pauto .pa-say')}; i.value = ${JSON.stringify(v)}; i.dispatchEvent(new Event('input', { bubbles: true })); return true; })()`);
 
   // A task: ⚡ Add automation opens its automations in the panel.
@@ -87,7 +87,7 @@ try {
   const own = list.find((x) => x.trigger.taskId === a.id);
   ok(own && own.trigger.kind === 'task.done' && own.trigger.step === 'Call past customers' && own.trigger.task === 'Call the Lee family' && own.on, 'a ready-made one is on for that task alone: ' + JSON.stringify(own?.trigger));
   ok(await A.until(`${T('.cc-pauto .pa-here .pa-row')} && !${T('.cc-pauto .pa-recipe[data-recipe=t-owners]')}`), 'it’s listed under Running here, and gone from Ready-made');
-  ok(await A.until(`${tile('Call the Lee family')}?.querySelector('.cc-auto-n')?.textContent === '⚡1' && !${tile('Call the Diaz family')}.querySelector('.cc-auto-n')`), 'its tile shows ⚡1 (the other task’s doesn’t)');
+  ok(await A.until(`${tile('Call the Lee family')}.closest('.cc-row').querySelector('.cc-auto-n')?.textContent === '⚡1' && !${tile('Call the Diaz family')}.closest('.cc-row').querySelector('.cc-auto-n')`), 'its row shows ⚡1 (the other task’s doesn’t)');
   // Build one here: when it opens, tell me, after 2 days, only if it isn't done.
   await A.pick(T('.cc-pauto .pa-when'), 'task.opened');
   await A.pick(T('.cc-pauto .pa-then'), 'm:' + me);
@@ -98,7 +98,7 @@ try {
   for (let i = 0; i < 30 && list.filter((x) => x.trigger.taskId === a.id).length < 2; i++) { await sleep(150); list = await autosNow(); }
   const built = list.find((x) => x.trigger.taskId === a.id && x.trigger.kind === 'task.opened');
   ok(built && built.actions[0].kind === 'wait' && built.actions[0].amount === 2 && built.actions[1].kind === 'if' && built.actions[1].then[0].to[0] === me && built.actions[1].then[0].text === 'Still not called: {task}', 'Build one here makes it: wait 2 days, then if not done, tell that person: ' + JSON.stringify(built?.actions));
-  ok(await A.until(`${tile('Call the Lee family')}?.querySelector('.cc-auto-n')?.textContent === '⚡2'`), 'the tile now shows ⚡2');
+  ok(await A.until(`${tile('Call the Lee family')}.closest('.cc-row').querySelector('.cc-auto-n')?.textContent === '⚡2'`), 'the row now shows ⚡2');
   // The switch turns one off.
   await A.tap(`${T(`.cc-pauto .pa-row[data-auto="${own.id}"] .toggle`)}`);
   for (let i = 0; i < 30; i++) { list = await autosNow(); if (list.find((x) => x.id === own.id)?.on === false) break; await sleep(150); }
@@ -108,7 +108,7 @@ try {
   ok(await A.until(`${T('.cc-ppanel .cc-pp-name')}?.value === 'Call the Lee family' && !${T('.cc-pauto')}`), 'back goes to the task');
 
   // A phase: its own automations, and a copy of one you have.
-  await A.tap(`document.querySelectorAll('#camps .cc-ptile.phase')[1]`);
+  await A.tap(`document.querySelectorAll('#camps .cc-phase')[1].querySelector('.cc-phase-t')`);
   await A.until(`${T('.cc-ppanel h3')}?.textContent.startsWith('Add task')`);
   await A.tap(T('.cc-pp-auto'));
   ok(await A.until(`${T('.cc-pauto')}?.dataset.for === 'phase' && ${T('.cc-pauto h3')}.textContent.includes('Book installs')`), 'on a phase it opens the phase’s automations');
@@ -119,22 +119,28 @@ try {
   for (let i = 0; i < 30 && !list.some((x) => x.trigger.step === 'Book installs'); i++) { await sleep(150); list = await autosNow(); }
   const copy = list.find((x) => x.trigger.step === 'Book installs');
   ok(copy && copy.id !== au.id && !copy.trigger.task && copy.trigger.campaignId === camp.id && list.find((x) => x.id === au.id)?.trigger.step == null, 'Copy here makes a copy for the phase; the one you had is left as it was');
-  ok(await A.until(`document.querySelectorAll('#camps .cc-ptile.phase')[1].querySelector('.cc-auto-n')?.textContent.includes('⚡1')`), 'the phase tile shows ⚡1');
+  ok(await A.until(`document.querySelectorAll('#camps .cc-phase')[1].querySelector('.cc-phase-h .cc-auto-n')?.textContent.includes('⚡1')`), 'the phase card shows ⚡1');
   ok(await A.ev(`!${T('.cc-pauto .pa-here')}.textContent.includes('Call the Lee')`), 'a task’s automations aren’t listed as the phase’s');
 
-  // Drag from Autos onto a task.
-  const drag = async (fromExpr, toExpr) => A.ev(`(() => { const f = ${fromExpr}, t = ${toExpr}; const dt = new DataTransfer(); f.dispatchEvent(new DragEvent('dragstart', { bubbles: true, dataTransfer: dt })); t.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: dt })); t.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt })); return true; })()`);
-  const lib = (txt) => `[...document.querySelectorAll('#camps .cc-plib .cc-lib-item')].find((b) => b.textContent.includes(${JSON.stringify(txt)}))`;
-  await drag(lib('Tell me when a call is done'), tile('Send quotes'));
+  // One you have, copied onto a task from its panel (dragging from the old Autos column went with it, 2026-11-25).
+  await A.tap(tile('Send quotes'));
+  await A.until(`${T('.cc-ppanel .cc-pp-name')}?.value === 'Send quotes'`);
+  await A.tap(T('.cc-pp-auto'));
+  await A.until(`!!${T('.cc-pauto .pa-copy')}`);
+  const mineId = (await autosNow()).find((x) => x.name === 'Tell me when a call is done')?.id;
+  await A.pick(T('.cc-pauto .pa-copy'), mineId);
+  await A.tap(T('.cc-pauto .pa-copy-go'));
   const sq = st.tasks?.find?.((x) => x.text === 'Send quotes');
   for (let i = 0; i < 30 && !list.some((x) => x.trigger.task === 'Send quotes'); i++) { await sleep(150); list = await autosNow(); }
   const dropped = list.find((x) => x.trigger.task === 'Send quotes');
-  ok(dropped && dropped.trigger.step === 'Book installs' && dropped.trigger.taskId, 'an automation dragged from Autos onto a task is copied for that task');
-  ok(await A.ev(`!document.querySelector('#camps').classList.contains('dropping')`), 'and the page isn’t left outlined as if files were coming in (found in the browser check)');
-  // A saved task dragged onto a phase goes into that phase, not the one picked.
-  await drag(lib('Order samples'), `document.querySelectorAll('#camps .cc-pt-phase')[2]`);
-  const kids = (i) => `[...document.querySelectorAll('#camps .cc-ptree .cc-pt-phase')[${i}].querySelectorAll(':scope > .cc-pt-kids > .cc-pt-node > .cc-ttile')].map((x) => x.querySelector('.cc-tt-t').textContent)`;
-  ok(await A.until(`${kids(2)}.includes('Order samples') && !${kids(1)}.includes('Order samples')`, 5000), 'a saved task dragged onto a phase goes into that phase: ' + JSON.stringify(await A.ev(kids(2))));
+  ok(dropped && dropped.trigger.step === 'Book installs' && dropped.trigger.taskId, 'one you have, copied onto a task from its panel');
+  await A.tap(T('.cc-pauto .pa-back'));
+  // A saved task into a phase from + From saved: that phase, not the one picked.
+  await A.tap(`document.querySelectorAll('#camps .cc-phase')[2].querySelector('.cc-phase-saved')`);
+  await A.until(`[...document.querySelectorAll('#menu button')].some((b) => b.textContent.includes('Order samples'))`);
+  await A.tap(`[...document.querySelectorAll('#menu button')].find((b) => b.textContent.includes('Order samples'))`);
+  const kids = (i) => `[...document.querySelectorAll('#camps .cc-phase')[${i}].querySelectorAll('.cc-row .cc-row-name')].map((x) => x.textContent)`;
+  ok(await A.until(`${kids(2)}.includes('Order samples') && !${kids(1)}.includes('Order samples')`, 5000), 'a saved task from + From saved goes into that phase: ' + JSON.stringify(await A.ev(kids(2))));
 
   // The full builder shows the task.
   await A.tap(tile('Call the Lee family'));

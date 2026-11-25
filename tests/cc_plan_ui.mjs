@@ -1,7 +1,6 @@
-// The campaign page, simpler (the owner, 2026-11-22, with a sketch): "too busy". The Pulse is a button that opens it,
-// not a panel down the side all the time; the KPIs are one thin line; Plan is three columns: what's saved on the left
-// (saved flows, tasks, automations), the plan as a tree of tiles in the middle (a phase, its tasks under it on a line,
-// subtasks under those), and a task's panel on the right (or Add task), with Add tool and Add automation under it (both work: tests/plan_tools_ui.mjs, tests/plan_autos_ui.mjs).
+// The campaign planner (the owner, 2026-11-22, simplified 2026-11-25 to the owner's mockup): three columns: the brief
+// and where things are, the phases as cards with their tasks as rows, and the panel (a task to change in place, Add
+// task for a phase, or At a glance). + From saved on a phase puts saved tasks, bundles and automations into it.
 import { CHROME, SERVER_DIR } from './chromebin.mjs';
 import * as FS from 'node:fs';
 import { spawn } from 'node:child_process';
@@ -66,82 +65,55 @@ try {
   await A.ev(`document.querySelector('[data-tab=camps]').click(); true`);
   await A.until(`!!document.querySelector('.camp-card')`);
   await A.tap(`document.querySelector('.camp-card')`);
-  ok(await A.until(`!!${T('.cc-kpis')}`), 'the campaign opens');
+  ok(await A.until(`!!${T('.cc-chips')}`), 'the campaign opens');
   await A.ev(`document.querySelector('#sheet [aria-label=Close]')?.click(); true`);
-  // The Pulse: a button, not a panel all the time.
-  ok(!(await A.ev(vis('.cc-pulse'))), 'the Pulse isn’t down the side all the time');
+  // No Pulse beside the page (it heads Report since 2026-11-25): the page has the whole width.
+  ok(!(await A.ev(vis('.cc-pulse'))), 'no Pulse down the side');
   ok(await A.ev(`(() => { const m = document.querySelector('#camps .cc-main').getBoundingClientRect(); return m.width > document.querySelector('#camps').getBoundingClientRect().width * 0.9; })()`), 'the page has the whole width');
-  await A.tap(T('.cc-pulse-btn'));
-  ok(await A.until(`${vis('.cc-pulse')} && document.querySelector('.cc-pulse').textContent.includes('Blockers')`), 'Pulse opens it: health, blockers, what to do next');
-  await A.tap(`document.querySelector('.cc-pulse .cc-pulse-x')`);
-  ok(await A.until(`!(${vis('.cc-pulse')})`), 'and × closes it');
-  // The numbers: one thin line.
-  ok(await A.ev(`${T('.cc-kpis')}.getBoundingClientRect().height <= 44 && ${T('.cc-kpi.overdue b')}?.textContent === '1' && ${T('.cc-kpi.overdue')}.classList.contains('bad')`), 'the numbers are one thin line (overdue still flagged)');
-  // Plan: three columns.
+  // Plan: three columns (2026-11-25: the brief, the phases as cards, the panel).
   await tabTo('plan');
   ok(await A.until(`!!${T('.cc-planner')}`), 'Plan is the planner');
-  ok(await A.ev(`(() => { const [l, m, r] = ['.cc-plib', '.cc-ptree', '.cc-ppanel'].map((s) => document.querySelector('#camps ' + s).getBoundingClientRect()); return l.right <= m.left + 1 && m.right <= r.left + 1 && l.width > 150 && r.width > 240; })()`), 'saved things on the left, the plan in the middle, the panel on the right');
-  ok(await A.ev(`['Saved flows', 'Tasks', 'Autos'].every((x) => [...document.querySelectorAll('#camps .cc-plib h4')].some((h) => h.textContent.startsWith(x)))`), 'the left: Saved flows, Tasks, Autos');
-  ok(await A.until(`[...document.querySelectorAll('#camps .cc-plib .cc-lib-item')].map((b) => b.textContent).join('|').includes('Install day') && [...document.querySelectorAll('#camps .cc-plib .cc-lib-item')].some((b) => b.textContent.includes('Order samples')) && [...document.querySelectorAll('#camps .cc-plib .cc-lib-item')].some((b) => b.textContent.includes('Tell me when a call is done'))`), 'with the saved bundle, saved tasks and the automation');
-  // The tree.
-  ok(await A.ev(`document.querySelectorAll('#camps .cc-ptree .cc-ptile.phase').length === 3`), 'each phase a tile');
-  const kids = (i) => `[...document.querySelectorAll('#camps .cc-ptree .cc-pt-phase')[${i}].querySelectorAll(':scope > .cc-pt-kids > .cc-pt-node > .cc-ttile')].map((x) => x.querySelector('.cc-tt-t').textContent)`;
-  ok(JSON.stringify(await A.ev(kids(0))) === JSON.stringify(['Call the Lee family', 'Call the Diaz family']), 'its tasks hang under it: ' + JSON.stringify(await A.ev(kids(0))));
-  ok(await A.ev(`[...document.querySelectorAll('#camps .cc-pt-kids.sub .cc-ttile')].some((x) => x.textContent.includes('Ask about the patio'))`), 'and a subtask under its task');
-  ok(await A.ev(`(() => { const k = document.querySelector('#camps .cc-pt-kids'); return parseFloat(getComputedStyle(k).borderLeftWidth) >= 1.5; })()`), 'joined by a line');
-  ok(await A.ev(`(() => { const t = document.querySelector('#camps .cc-ttile'); const cs = getComputedStyle(t); return parseFloat(cs.borderRadius) >= 8 && parseFloat(cs.borderTopWidth) >= 1 && t.getBoundingClientRect().height <= 64; })()`), 'tasks are small rounded tiles');
+  ok(await A.ev(`(() => { const [l, m, r] = ['.cc-obrief', '.cc-phases', '.cc-ppanel'].map((s) => document.querySelector('#camps ' + s).getBoundingClientRect()); return l.right <= m.left + 1 && m.right <= r.left + 1 && l.width > 150 && r.width > 240; })()`), 'three columns: the brief, the phases, the panel');
+  const rows = (i) => `[...document.querySelectorAll('#camps .cc-phase')[${i}].querySelectorAll('.cc-row .cc-row-name')].map((x) => x.textContent)`;
+  ok(JSON.stringify(await A.ev(rows(0))) === JSON.stringify(['Call the Lee family', 'Call the Diaz family']), 'a phase’s tasks are its rows: ' + JSON.stringify(await A.ev(rows(0))));
+  ok(await A.ev(`(() => { const r = document.querySelector('#camps .cc-row').getBoundingClientRect(); return r.height <= 56; })()`), 'rows are one line');
   // A task in the panel.
-  await A.tap(`[...document.querySelectorAll('#camps .cc-ttile')].find((x) => x.textContent.includes('Call the Diaz family'))`);
-  ok(await A.until(`${T('.cc-ppanel .cc-pp-name')}?.value === 'Call the Diaz family' && ${T('.cc-ttile.on')}?.textContent.includes('Diaz')`), 'a task opens in the panel, its tile marked');
+  await A.tap(`[...document.querySelectorAll('#camps .cc-row')].find((x) => x.textContent.includes('Call the Diaz family')).querySelector('.cc-row-name')`);
+  ok(await A.until(`${T('.cc-ppanel .cc-pp-name')}?.value === 'Call the Diaz family' && ${T('.cc-row.on')}?.textContent.includes('Diaz')`), 'a task opens in the panel, its row marked');
   await A.pick(T('.cc-ppanel .cc-pp-due'), plus(today, 5));
-  ok(await A.until(`(async () => (await (await fetch('/api/state', { headers: { authorization: 'Bearer ' + JSON.parse(localStorage.getItem('column.token')) } })).json()).tasks.find((x) => x.text === 'Call the Diaz family')?.due === ${JSON.stringify(plus(today, 5))})()`, 5000), 'its due day saves from the panel');
+  ok(await A.until(`(async () => (await (await fetch('/api/state', { headers: { authorization: 'Bearer ' + JSON.parse(localStorage.getItem('column.token')) } })).json()).tasks.find((x) => x.text === 'Call the Diaz family')?.due === ${JSON.stringify(plus(today, 5))})()`, 5000), 'its due day changes in place');
   await A.tap(`[...document.querySelectorAll('#camps .cc-ppanel .cc-pp-status button')].find((b) => b.textContent === 'Done')`);
-  ok(await A.until(`(async () => (await (await fetch('/api/state', { headers: { authorization: 'Bearer ' + JSON.parse(localStorage.getItem('column.token')) } })).json()).tasks.find((x) => x.text === 'Call the Diaz family')?.done === true)()`, 5000), 'and Done from the panel');
+  ok(await A.until(`(async () => (await (await fetch('/api/state', { headers: { authorization: 'Bearer ' + JSON.parse(localStorage.getItem('column.token')) } })).json()).tasks.find((x) => x.text === 'Call the Diaz family')?.done === true)()`, 5000), 'and its status');
   ok(await A.ev(`['Add tool', 'Add automation'].every((x) => [...document.querySelectorAll('#camps .cc-ppanel .cc-pp-foot button')].some((b) => b.textContent.includes(x)))`), 'Add tool and Add automation under it');
   await A.tap(`[...document.querySelectorAll('#camps .cc-ppanel .cc-pp-foot button')].find((b) => b.textContent.includes('Add tool'))`);
   ok(await A.until(`!!${T('.cc-ptools')}`, 2000), 'Add tool opens the task’s tools (tests/plan_tools_ui.mjs has the rest)');
   await A.tap(T('.cc-ptools .pt-back'));
   // A phase: Add task.
-  await A.tap(`document.querySelectorAll('#camps .cc-ptile.phase')[1]`);
-  ok(await A.until(`${T('.cc-ppanel h3')}?.textContent.startsWith('Add task') && ${T('.cc-ptile.phase.on')}?.textContent.includes('Book installs')`), 'a phase opens Add task for it');
-  await A.ev(`(() => { const i = ${T('.cc-ppanel .cc-pp-name')}; i.value = 'Measure the windows'; i.dispatchEvent(new Event('input', { bubbles: true })); return true; })()`);
+  await A.tap(`document.querySelectorAll('#camps .cc-phase')[1].querySelector('.cc-phase-t')`);
+  ok(await A.until(`${T('.cc-ppanel h3')}?.textContent.startsWith('Add task') && ${T('.cc-phase.on')}?.textContent.includes('Book installs') && document.activeElement?.classList.contains('cc-pp-name')`), 'a phase opens Add task for it, ready to type');
+  await A.cmd('Input.insertText', { text: 'Measure the windows' });
   await A.tap(T('.cc-ppanel .cc-pp-add'));
-  ok(await A.until(JSON.stringify([]) && `${kids(1)}.includes('Measure the windows')`, 5000), 'Add puts the task under that phase');
-  // From the left: a saved task and a bundle into the phase picked.
-  await A.tap(`document.querySelectorAll('#camps .cc-ptile.phase')[2]`);
-  await A.tap(`[...document.querySelectorAll('#camps .cc-plib .cc-lib-item')].find((b) => b.textContent.includes('Install day'))`);
-  ok(await A.until(`${kids(2)}.includes('Order samples') && ${kids(2)}.includes('Confirm the date')`, 5000), 'a saved bundle drops its tasks into the phase picked: ' + JSON.stringify(await A.ev(kids(2))));
-  await A.tap(`[...document.querySelectorAll('#camps .cc-plib .cc-lib-item')].find((b) => b.textContent.includes('Tell me when a call is done'))`);
-  ok(await A.until(`!!document.querySelector('#sheet .sheet.auto-builder')`, 3000), 'an automation opens it');
-  await A.ev(`document.querySelector('#sheet [aria-label=Close]').click(); true`);
-  // Overview in the Plan's look (the owner, 2026-11-23): the brief on the left, the same tree, At a glance on the right.
-  await tabTo('overview');
-  const okids = (i) => kids(i).replace('.cc-ptree', '.cc-ov .cc-ptree');
-  ok(await A.until(`!!${T('.cc-planner.cc-ov')} && document.querySelectorAll('#camps .cc-ov .cc-ptile.phase').length === 3 && !${T('.cc-phases')} && !${T('.cc-body > .goal')}`), 'Overview: the same three columns and phase tiles as Plan (no strip of cards, no old phase sections)');
-  ok(await A.ev(`[...document.querySelectorAll('#camps .cc-obrief h4')].map((x) => x.textContent).join('|') === 'Objective|Audience|Strategy|Success metrics' && !!${T('.cc-obrief .cc-bf[data-field=brief]')}`), 'the brief down the left: Objective, Audience, Strategy, Success metrics');
-  ok(await A.ev(`!!${T('.cc-ov .cc-oidle')} && ${T('.cc-oidle h3')}.textContent === 'At a glance' && ${T('.cc-oidle')}.textContent.includes('Team and roles')`), 'At a glance on the right until something is picked');
-  ok(await A.ev(`${okids(2)}.includes('Order samples')`), 'the tree has the same tasks as Plan');
-  await A.tap(`[...document.querySelectorAll('#camps .cc-ov .cc-ttile')].find((x) => x.textContent.includes('Order samples'))`);
-  ok(await A.until(`${T('.cc-ov .cc-ppanel .cc-pp-name')}?.value === 'Order samples' && !${T('.cc-oidle')}`), 'a task picked opens on the right, to change there as on Plan');
-  await A.tap(T('.cc-ov .cc-ppanel [aria-label="Close the task"]'));
-  ok(await A.until(`!!${T('.cc-oidle')}`), 'closing it goes back to At a glance');
-  await A.tap(`document.querySelectorAll('#camps .cc-ov .cc-ptile.phase')[0]`);
-  ok(await A.until(`document.activeElement?.classList.contains('cc-pp-name') && ${T('.cc-ov .cc-pp-addh')}?.textContent.includes('Add task')`), 'a phase picked opens Add task, ready to type');
-  await A.cmd('Input.insertText', { text: 'Added from Overview' });
-  await A.ev(`document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); true`);
-  ok(await A.until(`${okids(0)}.includes('Added from Overview')`, 5000), 'and adds it under the phase at once');
-  await A.tap(T('.cc-ov [aria-label="Back to the overview"]'));
-  ok(await A.until(`!!${T('.cc-oidle')}`), '× goes back to At a glance');
-  ok(await A.ev(`(() => { const r = document.querySelector('#camps .cc-ov .cc-ttile'); const cs = getComputedStyle(r); return parseFloat(cs.borderRadius) >= 8 && parseFloat(cs.borderTopWidth) >= 1; })()`), 'its tasks as tiles');
-  // A phone: nothing sideways; the plan stacks.
+  ok(await A.until(`${rows(1)}.includes('Measure the windows')`, 5000), 'Add puts the task in that phase');
+  await A.tap(T('.cc-ppanel [aria-label="Back to at a glance"]'));
+  ok(await A.until(`${T('.cc-ppanel')}?.textContent.includes('At a glance')`), '× goes back to At a glance');
+  // + From saved: a bundle drops its tasks into that phase; an automation is copied onto it.
+  await A.tap(`document.querySelectorAll('#camps .cc-phase')[2].querySelector('.cc-phase-saved')`);
+  await A.until(`[...document.querySelectorAll('#menu button')].some((b) => b.textContent.includes('Install day'))`);
+  await A.tap(`[...document.querySelectorAll('#menu button')].find((b) => b.textContent.includes('Install day'))`);
+  ok(await A.until(`${rows(2)}.includes('Order samples') && ${rows(2)}.includes('Confirm the date')`, 5000), 'a saved bundle drops its tasks into the phase: ' + JSON.stringify(await A.ev(rows(2))));
+  await A.tap(`document.querySelectorAll('#camps .cc-phase')[2].querySelector('.cc-phase-saved')`);
+  await A.until(`[...document.querySelectorAll('#menu button')].some((b) => b.textContent.includes('Tell me when a call is done'))`);
+  await A.tap(`[...document.querySelectorAll('#menu button')].find((b) => b.textContent.includes('Tell me when a call is done'))`);
+  ok(await A.until(`(async () => (await (await fetch('/api/automations', { headers: { authorization: 'Bearer ' + JSON.parse(localStorage.getItem('column.token')) } })).json()).some((x) => x.trigger?.step === 'Install'))()`, 5000), 'an automation from saved is copied onto the phase');
+  // At a glance and the brief.
+  ok(await A.ev(`[...document.querySelectorAll('#camps .cc-obrief h4')].map((x) => x.textContent).join('|') === 'Objective|Audience|Strategy|Success metrics|Where things are' && !!${T('.cc-obrief .cc-bf[data-field=brief]')}`), 'the brief down the left, then where things are');
+  ok(await A.ev(`${T('.cc-oidle h3')}?.textContent === 'At a glance' && ${T('.cc-oidle')}.textContent.includes('Team and roles')`), 'At a glance on the right until something is picked');
+  // A phone: nothing sideways; the plan stacks, the brief first.
   await A.cmd('Emulation.setDeviceMetricsOverride', { width: 400, height: 860, deviceScaleFactor: 2, mobile: true });
   await sleep(300);
   await tabTo('plan');
   await sleep(300);
-  ok(await A.ev(`document.documentElement.scrollWidth <= innerWidth && !!${T('.cc-ptree .cc-ttile')}`), 'on a phone the plan fits, nothing sideways');
-  await tabTo('overview');
-  await sleep(300);
-  ok(await A.ev(`document.documentElement.scrollWidth <= innerWidth && ${T('.cc-ov')}.firstElementChild && getComputedStyle(${T('.cc-obrief')}).order === '-1'`), 'on a phone Overview fits too, the brief first');
+  ok(await A.ev(`document.documentElement.scrollWidth <= innerWidth && !!${T('.cc-phase .cc-row')} && getComputedStyle(${T('.cc-obrief')}).order === '-1'`), 'on a phone the plan fits, nothing sideways, the brief first');
   ok(A.errors.length === 0, 'no script errors' + (A.errors.length ? ': ' + A.errors.join(' | ') : ''));
 } catch (e) { ok(false, 'threw: ' + e.stack); }
 A?.close();

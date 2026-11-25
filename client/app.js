@@ -8096,7 +8096,7 @@
           h('div', { class: 'btns' }, saveBtn, h('button', { type: 'button', class: 'link pa-full', onclick: () => autoSheet(null, draft()) }, 'More steps: open the full builder →'))),
         h('div', { class: 'pa-sec' }, h('h4', {}, 'Use one you have'),
           h('div', { class: 'row2' }, pickOne, h('button', { type: 'button', class: 'btn small pa-copy-go', disabled: !mine.length, onclick: () => { const x = mine.find((y) => y.id === pickOne.value); if (!x) return pickOne.focus(); copyAutoTo(x, g, t); } }, 'Copy here')),
-          h('small', { class: 'cc-pp-hint' }, `A copy, so the one you have keeps running where it did. Or drag one from Autos onto a ${t ? 'task' : 'phase'}.`)));
+          h('small', { class: 'cc-pp-hint' }, `A copy, so the one you have keeps running where it did.${t ? '' : ' Or use + From saved on the phase.'}`)));
       sync();
     };
     if (!S.automations) api('GET', '/automations').then((r) => { S.automations = r; if (box.isConnected) draw(); }).catch(() => {});
@@ -8142,7 +8142,9 @@
         h('div', { class: 'pa-sec' }, h('h4', {}, 'From its phase'),
           h('small', { class: 'cc-pp-hint' }, rs.length ? `${plural(rs.length, 'resource')} on ${g.title}: ${rs.slice(0, 3).map(resName).join(', ')}` : `Nothing on ${g.title} yet: a call script, a doc, a template or a link.`),
           h('button', { type: 'button', class: 'link pt-phase', onclick: toPhase }, `Tools for ${shortText(g.title, 40)} →`)));
-      if (K.pfocusCl) { K.pfocusCl = false; setTimeout(() => box.querySelector('.pt-cl-add')?.focus()); }
+      // The flag clears only once a box on the page has the cursor: a second redraw (the server's answer) before the
+      // timeout would otherwise draw a new box without it (a flaky test, 2026-11-25).
+      if (K.pfocusCl) setTimeout(() => { const i = box.querySelector('.pt-cl-add'); if (i?.isConnected) { i.focus(); K.pfocusCl = false; } });
       return box;
     }
     const roots = tasksInOrder(g.id).filter((x) => !x.parentId || !taskById(x.parentId));
