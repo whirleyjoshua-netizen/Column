@@ -1031,8 +1031,8 @@ export function jobFlowsModule(ctx) {
     const cust = customerOf(rec);
     if (flowReach(cust)) return; // can't be reached: nothing to do, and nothing to tell anyone (this runs every tick)
     if (askFirst(ig.step)) return void makePending(c, ig, { kind: 'invoice', invoiceId: inv.id });
-    await sendOnce(ig, 'invoiceTold', { invoiceId: inv.id }, () => flowTell(ws, rec, cust, flowMsg.invoice(ws, rec, cust, inv, invoiceUrl(inv), invoiceTotals(inv).total), 'Kloomie'));
-    tell(c);
+    const out = await sendOnce(ig, 'invoiceTold', { invoiceId: inv.id }, () => flowTell(ws, rec, cust, flowMsg.invoice(ws, rec, cust, inv, invoiceUrl(inv), invoiceTotals(inv).total), 'Kloomie'));
+    if (out.outcome !== 'blocked') tell(c); // a blocked try changes nothing and is tried again next tick: no news
   }
 
   let msgBusy = false;
@@ -1090,7 +1090,9 @@ export function jobFlowsModule(ctx) {
             msg = flowMsg.review(ws, rec, cust, url);
           }
           const out = await sendOnce(cur, 'msg', {}, () => flowTell(ws, rec, cust, msg, 'Kloomie'));
-          if (out.outcome === 'blocked') wait(cur, out.reason); else { cur.waitReason = null; save(); }
+          // Blocked: the waiting reason says why (and tells, only when it changes); it's tried again next tick.
+          if (out.outcome === 'blocked') { wait(cur, out.reason); continue; }
+          cur.waitReason = null; save();
           tell(c);
           sweepNow(c.wsId, 'Kloomie', null);
           continue;
@@ -1102,7 +1104,7 @@ export function jobFlowsModule(ctx) {
           const cust = customerOf(rec);
           // Unreachable: nothing happens and nobody is told (this runs every tick).
           if (!flowReach(cust) && askFirst(qg.step)) makePending(c, qg, { kind: 'quoteFollow', token: rec.share.token });
-          else if (!flowReach(cust)) { await sendOnce(qg, 'followed', { token: rec.share.token }, () => flowTell(ws, rec, cust, flowMsg.quoteFollow(ws, rec, cust, quoteUrlOf(rec)), 'Kloomie')); tell(c); }
+          else if (!flowReach(cust)) { const out = await sendOnce(qg, 'followed', { token: rec.share.token }, () => flowTell(ws, rec, cust, flowMsg.quoteFollow(ws, rec, cust, quoteUrlOf(rec)), 'Kloomie')); if (out.outcome !== 'blocked') tell(c); }
         }
         await invoiceEmail(c, ws, rec);
         // Payment reminders: calendar days past due on the team's clock, from 9am, while a balance remains.
@@ -1121,8 +1123,8 @@ export function jobFlowsModule(ctx) {
             const cust = customerOf(rec);
             if (flowReach(cust)) continue;
             if (askFirst(pg.step)) { makePending(c, pg, { kind: 'payReminder', invoiceId: pi.id, day: last }); break; }
-            await sendOnce(hist, String(last), {}, () => flowTell(ws, rec, cust, flowMsg.payReminder(ws, rec, cust, pi, invoiceUrl(pi), invoiceTotals(pi).balance), 'Kloomie'));
-            tell(c);
+            const out = await sendOnce(hist, String(last), {}, () => flowTell(ws, rec, cust, flowMsg.payReminder(ws, rec, cust, pi, invoiceUrl(pi), invoiceTotals(pi).balance), 'Kloomie'));
+            if (out.outcome !== 'blocked') tell(c);
           }
         }
       }
