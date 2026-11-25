@@ -59,7 +59,7 @@ const gfake = http.createServer(async (req, res) => {
 await new Promise((r) => gfake.listen(G_PORT, '127.0.0.1', r));
 const texts = (digits) => TW.sent.filter((m) => String(m.To || '').replace(/\D/g, '').endsWith(digits));
 
-const base = { ...process.env, PORT: String(PORT), PUBLIC_URL: B, DATA_DIR: DIR, RESEND_API_KEY: '', DATABASE_URL: '', STRIPE_SECRET_KEY: '', STRIPE_PRICE: '', SKIP_SETUP: '1', NODE_ENV: 'test', CUSTMSG_TICK_MS: '300', REVIEW_DELAY_MS: '0', JOBFLOWS_DAY_MS: '2000', TWILIO_API: F, SEND_TICKET_MS: String(TICKET_MS), SEND_TICKET_KEEP_MS: '9000', SENDS_TEST_AGENT: '1', GOOGLE_CLIENT_ID: 'cid', GOOGLE_CLIENT_SECRET: 'cs', GOOGLE_API: `http://127.0.0.1:${G_PORT}` };
+const base = { ...process.env, PORT: String(PORT), PUBLIC_URL: B, DATA_DIR: DIR, RESEND_API_KEY: '', DATABASE_URL: '', STRIPE_SECRET_KEY: '', STRIPE_PRICE: '', SKIP_SETUP: '1', NODE_ENV: 'test', CUSTMSG_TICK_MS: '300', REVIEW_DELAY_MS: '0', JOBFLOWS_DAY_MS: '2000', TWILIO_API: F, SEND_TICKET_MS: String(TICKET_MS), SEND_TICKET_KEEP_MS: '20000', SENDS_TEST_AGENT: '1', GOOGLE_CLIENT_ID: 'cid', GOOGLE_CLIENT_SECRET: 'cs', GOOGLE_API: `http://127.0.0.1:${G_PORT}` };
 try { execSync(`lsof -ti tcp:${PORT} -sTCP:LISTEN | xargs kill 2>/dev/null`); await sleep(300); } catch {}
 let srv;
 const start = async (extra = { MAIL_OUTBOX: '1' }) => {
@@ -301,23 +301,33 @@ try {
   r = await rico('POST', `/contacts/${ed.id}/texts`, { body: 'Across a restart.', confirm: tkRs });
   ok(r.status === 200 && texts('5550104').length === edT0 + 1, 'a ticket made before a restart still sends once after it: ' + r.status + ' ' + texts('5550104').length);
   ok((await rico('POST', `/contacts/${ed.id}/texts`, { body: 'Across a restart.', confirm: tkRs })).status === 409 && texts('5550104').length === edT0 + 1, 'and stays used');
-  // At most 200 open tickets a team: the oldest go first. Old tickets are trimmed (after SEND_TICKET_KEEP_MS here, a day in production).
-  // Whether a ticket is kept is read from the store (not by using it), so expiry can't stand in for eviction.
-  const kept = async (id) => (await rico('GET', `/test/send-tickets?id=${encodeURIComponent(id || 'x')}`)).body?.has === true;
+  // At most 200 open tickets a team: the oldest go first. Checked in a fresh team with no tickets, and every ticket's
+  // presence read from the store in one call (not by using it), so neither expiry nor older tickets can stand in.
+  const capTok = (await call()('POST', '/auth', { mode: 'create', workspace: 'Cap ' + t, name: 'Cara Cap', email: `cara${t}@t.test`, password: 'longenough8', device: 'Mac', deviceId: 'd8' })).body?.token;
+  const cara = call(capTok);
+  await cara('PATCH', '/workspace', { tz, tools: { projects: true, contacts: true } });
+  const cp = (await cara('POST', '/projects', { template: 'trades', trades: ['cleaning'] })).body;
+  const cc = (await cara('POST', '/contacts', { name: 'Cap Cust', email: `capcust${t}@x.test` })).body;
+  const crec = (await cara('POST', `/projects/${cp?.id}/records`, { typeId: cp?.types?.[0]?.id, values: { job: 'Cap job', customer: cc?.id ?? cc?.contact?.id } })).body;
+  const caraId = (await cara('GET', '/state')).body?.workspace?.members?.[0]?.id;
+  const cv = (await cara('POST', `/records/${crec?.id}/visits`, { kind: 'Service', date: later, start: 600, end: 660, memberIds: [caraId] })).body;
+  const keptAll = async (ids) => (await cara('POST', '/test/send-tickets', { ids })).body?.has || {};
+  ok((await cara('GET', '/test/send-tickets')).body?.total === 0, '(setup) a fresh team with no tickets at all');
   const loopStart = Date.now();
   const tks = [];
-  for (let i = 0; i <= 205; i++) tks.push((await rico('POST', `/contacts/${ed.id}/texts`, { body: 'Ticket ' + i })).body?.confirm);
+  for (let i = 0; i <= 205; i++) tks.push((await cara('POST', `/visits/${cv?.id}/remind`)).body?.confirm);
   const loopMs = Date.now() - loopStart;
-  ok(loopMs < 8000, '(setup) 206 previews in ' + loopMs + ' ms, well inside the 9 s keeping time, so none were trimmed for age');
-  let cnt = (await rico('GET', '/test/send-tickets')).body;
-  ok(cnt?.open === 200, 'exactly 200 open tickets kept for the team: ' + JSON.stringify(cnt));
-  ok(!(await kept(tks[0])) && !(await kept(tks[5])) && (await kept(tks[6])) && (await kept(tks[205])), 'the 6 oldest were dropped to make room, the rest are kept');
-  ok((await rico('POST', `/contacts/${ed.id}/texts`, { body: 'Ticket 0', confirm: tks[0] })).status === 409, 'the oldest can’t be used: 409');
-  await sleep(9500);
-  await rico('POST', `/contacts/${ed.id}/texts`, { body: 'One more' });
-  cnt = (await rico('GET', '/test/send-tickets')).body;
-  ok(cnt?.total <= 2, 'tickets past their keeping time are trimmed: ' + JSON.stringify(cnt));
-  ok(texts('5550104').length === edT0 + 1, 'none of those previews sent anything');
+  ok(tks.every(Boolean) && new Set(tks).size === 206 && loopMs < 10_000, '(setup) 206 previews in ' + loopMs + ' ms, far inside the 20 s keeping time, so none were trimmed for age');
+  let cnt = (await cara('GET', '/test/send-tickets')).body;
+  ok(cnt?.open === 200 && cnt.total === 200, 'exactly 200 tickets kept for the team: ' + JSON.stringify(cnt));
+  const has = await keptAll(tks);
+  ok(tks.slice(0, 6).every((x) => has[x] === false) && tks.slice(6).every((x) => has[x] === true), 'the 6 oldest were dropped to make room, all 200 others are kept');
+  ok((await cara('POST', `/visits/${cv?.id}/remind`, { confirm: tks[0] })).status === 409 && !mails(`capcust${t}@x.test`).length, 'the oldest can’t be used: 409, nothing sent');
+  await sleep(20_500);
+  await cara('POST', `/visits/${cv?.id}/remind`);
+  cnt = (await cara('GET', '/test/send-tickets')).body;
+  ok(cnt?.total === 1, 'tickets past their keeping time are trimmed (only the newest is left): ' + JSON.stringify(cnt));
+  ok(!mails(`capcust${t}@x.test`).length && texts('5550104').length === edT0 + 1, 'none of those previews sent anything');
   // The signing link from the person's own Gmail (POST /signs/:id/email).
   const ob = DIR + '/outbox';
   const vcode = mails(`rico${t}@t.test`).map((m) => (m.subject || '') + ' ' + (m.text || '')).join(' ').match(/\d{3}[ -]?\d{3}/)?.[0];

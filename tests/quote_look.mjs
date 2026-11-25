@@ -240,7 +240,7 @@ try {
   const sent = (await rico('POST', `/invoices/${inv?.id}/send`)).body;
   pg = await page(sent?.url);
   ok(pg.status === 200 && pg.html.includes('Acme Pro Cleaning') && pg.html.includes('NV-99999') && pg.html.includes('New footer.'), 'the invoice page shows the business details and footer');
-  ok(!pg.html.includes(sigUrl) && !pg.html.includes('Prepared by') && !pg.html.includes(`dana${t}@x.test`) && !pg.html.includes('555-0111'), 'and nothing extra: no signature, no customer email or phone');
+  ok(!pg.html.includes(sigUrl) && !(sigUrl2 && pg.html.includes(sigUrl2)) && !pg.html.includes('Prepared by'), 'and nothing extra: no business signature (the customer’s details stay as the invoice showed them before)');
 } catch (e) {
   console.log('FAIL threw: ' + (e.stack || e.message));
   fails++;
