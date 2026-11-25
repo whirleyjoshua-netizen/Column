@@ -36,6 +36,8 @@ async function tab(url) {
   return { ev, until, tap, cmd, pick, type, errors, close: () => ws.close() };
 }
 let A;
+const mailsTo = (to) => { const o = DIR + '/outbox'; return FS.existsSync(o) ? FS.readdirSync(o).map((f) => JSON.parse(FS.readFileSync(o + '/' + f, 'utf8'))).filter((m) => m.to === to) : []; };
+const until = async (f, ms = 8000) => { const end = Date.now() + ms; while (Date.now() < end) { if (await f()) return true; await sleep(150); } return false; };
 const btnText = (scope, text) => `[...document.querySelectorAll(${JSON.stringify(scope + ' button')})].find((b) => b.textContent.trim() === ${JSON.stringify(text)})`;
 // SHOTS=<folder>: screenshots at the main points, to look at.
 const shot = async (name) => { if (!process.env.SHOTS) return; await sleep(500); const r = await A.cmd('Page.captureScreenshot', { format: 'png' }); FS.writeFileSync(`${process.env.SHOTS}/${name}.png`, Buffer.from(r.result.data, 'base64')); };
@@ -168,6 +170,8 @@ try {
   ok(await A.until(`document.querySelector('#projects .jb-step[data-state=current]')?.textContent.includes('Send the quote')`, 8000), 'the job opens at Send the quote');
   ok(await A.until(`document.querySelector('#projects .jb-quote')?.dataset.quote === 'draft' && document.querySelector('#projects .jb-quote').textContent.includes('$50.00')`), 'the quote step shows not sent, $50.00');
   await A.tap(`document.querySelector('#projects .jb-detail [data-act=next]')`);
+  ok(await A.until(`!!document.querySelector('#sheet .send-ok')`), 'Send the quote asks first (Phase 3b)');
+  await A.tap(btnText('#sheet .send-ok', 'Send'));
   ok(await A.until(`document.querySelector('#projects .jb-quote')?.dataset.quote === 'sent' && document.querySelector('#projects .jb-detail [data-act=next]')?.textContent.includes('Copy the quote link') && !!document.querySelector('#projects .jb-detail [data-act=requote]')`, 8000), 'Send the quote sends it: sent, Copy the quote link, New quote');
   await shot('7-quote');
   await A.tap(`document.querySelector('#projects .jb-detail [data-act=requote]')`);
@@ -217,7 +221,12 @@ try {
   const withMail = await api('POST', '/jobs', { flowId: rf.id, contactId: (mailer.contact || mailer).id, values: { job: 'Mo thanks' } });
   await openJobIn(withMail.job.id);
   await A.tap(`[...document.querySelectorAll('#projects .jb-step')].find((x) => x.textContent.includes('Ask for a review'))`);
-  ok(await A.until(`document.querySelector('#projects .jb-auto')?.dataset.msg === 'sent' && /Sent by email/.test(document.querySelector('#projects .jb-auto').textContent)`, 8000) && await A.ev(`!document.querySelector('#projects .jb-detail [data-act=next]')`), 'one it can reach: “Sent by email”, and no button on a step Kloomie does');
+  // Phase 3b: a step with no send setting asks first. The card shows the message with Send / Don't send.
+  ok(await A.until(`document.querySelector('#projects .jb-auto')?.dataset.msg === 'pending' && /Ready to send/.test(document.querySelector('#projects .jb-auto').textContent) && !!document.querySelector('#projects .jb-auto [data-act=msg-send]') && !!document.querySelector('#projects .jb-auto [data-act=msg-skip]')`, 8000), 'a review request with no send setting waits: “Ready to send”, with Send and Don’t send');
+  ok(await A.ev(`/Thanks for choosing/.test(document.querySelector('#projects .jb-auto').textContent)`), 'and shows what it will say');
+  await A.tap(`document.querySelector('#projects .jb-auto [data-act=msg-send]')`);
+  ok(await A.until(`document.querySelector('#projects .jb-auto')?.dataset.msg === 'sent' && /Sent by email/.test(document.querySelector('#projects .jb-auto').textContent)`, 8000) && await A.ev(`!document.querySelector('#projects .jb-detail [data-act=next]')`), 'Send: it goes, the card says “Sent by email”');
+  ok(mailsTo(`mo${t}@x.test`).length === 1, 'once');
   // On my way for one kind of visit: Next opens that visit, not an earlier one of another kind.
   const of = await api('POST', '/job-flows', { name: 'Install day', list: { projectId: p.id, typeId: tp.id }, steps: [{ kind: 'client', name: 'Client' }, { kind: 'omw', name: 'Heading over', settings: { visitKind: 'Install' } }] });
   await api('POST', `/job-flows/${of.id}/publish`);
@@ -234,6 +243,49 @@ try {
   await A.until(`!!document.querySelector('#projects .jb-detail [data-act=next]')`, 8000);
   await A.tap(`document.querySelector('#projects .jb-detail [data-act=next]')`);
   ok(await A.until(`!document.querySelector('#sheet').classList.contains('hidden') && /On my way · Install/.test(document.querySelector('#sheet').textContent)`), 'with an Install booked too, Next opens On my way for the Install, not the earlier Measure');
+  // Phase 3b: Email from On my way asks first, showing who it goes to and the message; Cancel sends nothing.
+  const danaMails = () => mailsTo(dana.email).filter((m) => m.tag === 'on-my-way').length;
+  const omw0 = danaMails();
+  await A.tap(`[...document.querySelectorAll('#sheet button')].find((b) => b.textContent.includes('Email'))`);
+  ok(await A.until(`!!document.querySelector('#sheet .send-ok') && /Send to Dana Ruiz by email/.test(document.querySelector('#sheet .send-ok').textContent) && /on the way/i.test(document.querySelector('#sheet .send-ok').textContent)`), 'Email asks first: “Send to Dana Ruiz by email?” with the message');
+  await A.tap(btnText('#sheet .send-ok', 'Cancel'));
+  await sleep(600);
+  ok(danaMails() === omw0, 'Cancel: nothing sent');
+  await A.tap(`document.querySelector('#projects .jb-detail [data-act=next]')`);
+  await A.until(`/On my way · Install/.test(document.querySelector('#sheet').textContent)`);
+  await A.tap(`[...document.querySelectorAll('#sheet button')].find((b) => b.textContent.includes('Email'))`);
+  await A.until(`!!document.querySelector('#sheet .send-ok')`);
+  await A.tap(btnText('#sheet .send-ok', 'Send'));
+  ok(await A.until(`document.querySelector('#sheet').classList.contains('hidden')`) && await until(() => danaMails() === omw0 + 1), 'Send: it goes, once');
+  // Send the quote asks first too.
+  const sq = await api('POST', '/jobs', { flowId: qf.id, contactId: dana.id, values: { job: 'Dana quote' } });
+  for (const x of qf.version.body.steps.slice(0, qf.version.body.steps.findIndex((y) => y.kind === 'quote'))) if (x.kind !== 'client') await api('POST', `/jobs/${sq.job.id}/steps/${x.id}/skip`, { reason: 'Test: straight to the quote' });
+  await openJobIn(sq.job.id);
+  await A.until(`document.querySelector('#projects .jb-step[data-state=current]')?.textContent.includes('Send the quote') && !!document.querySelector('#projects .jb-detail [data-act=next]')`, 8000);
+  await A.tap(`document.querySelector('#projects .jb-detail [data-act=next]')`);
+  ok(await A.until(`!!document.querySelector('#sheet .send-ok') && /Your quote from/.test(document.querySelector('#sheet .send-ok').textContent)`), 'Send the quote: the confirm sheet shows the subject');
+  await A.tap(btnText('#sheet .send-ok', 'Send'));
+  ok(await until(() => mailsTo(dana.email).some((m) => m.tag === 'quote-sent')), 'and Send sends it');
+  // Settings → Quotes & invoices.
+  await A.ev(`document.querySelector('#settingsBtn').click(); true`);
+  await A.until(`!!document.querySelector('#settings .setx-item[data-page=docs]')`);
+  await A.ev(`document.querySelector('#settings .setx-item[data-page=docs]').click(); true`);
+  ok(await A.until(`document.querySelector('#settings .setx-item.on')?.dataset.page === 'docs' && !!document.querySelector('#settings [data-doc=business-name]') && !!document.querySelector('#settings [data-doc=validDays]') && !!document.querySelector('#settings [data-doc=showPrices]') && !!document.querySelector('#settings [data-doc=accept]') && !!document.querySelector('#settings .doc-sig canvas')`), 'Settings → Quotes & invoices: business details, valid for, show prices, how customers accept, and a pad to draw the business signature');
+  await A.type(`document.querySelector('#settings [data-doc=business-name]')`, 'Jobs Test Cleaning');
+  await A.ev(`(() => { const s = document.querySelector('#settings [data-doc=accept]'); s.value = 'draw'; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
+  await A.tap(btnText('#settings', 'Save'));
+  ok(await until(async () => { const d = await api('GET', '/docs-settings'); return d.business?.name === 'Jobs Test Cleaning' && d.accept === 'draw'; }), 'saved: the business name, and customers draw to accept');
+  // The quote page in draw mode: the customer signs on a pad.
+  const qj2 = await api('POST', '/jobs', { flowId: qf.id, contactId: dana.id, values: { job: 'Dana quote 2' } });
+  for (const x of qf.version.body.steps.slice(0, qf.version.body.steps.findIndex((y) => y.kind === 'quote'))) if (x.kind !== 'client') await api('POST', `/jobs/${qj2.job.id}/steps/${x.id}/skip`, { reason: 'Test: straight to the quote' });
+  let qs = await api('POST', `/jobs/${qj2.job.id}/quote/send`);
+  if (qs.confirm) qs = await api('POST', `/jobs/${qj2.job.id}/quote/send`, { confirm: qs.confirm });
+  const Q = await tab(qs.url);
+  ok(await Q.until(`!!document.querySelector('canvas') && document.body.textContent.includes('Jobs Test Cleaning')`), 'the quote page shows a signature pad and the business name');
+  await Q.ev(`(() => { const c = document.querySelector('canvas'), r = c.getBoundingClientRect(); const at = (type, x, y) => c.dispatchEvent(new PointerEvent(type, { bubbles: true, clientX: r.left + x, clientY: r.top + y, pointerId: 1, buttons: 1 })); at('pointerdown', 10, 30); for (let x = 12; x < 200; x += 6) at('pointermove', x, 30 + Math.sin(x / 10) * 15); at('pointerup', 200, 30); return true; })()`);
+  await Q.ev(`document.querySelector('form.accept button[type=submit], form.accept button').click(); true`);
+  ok(await Q.until(`/Accepted/.test(document.body.textContent) && !!document.querySelector('img[src*="/signature"]')`, 8000), 'drawn and accepted: the page shows the signature');
+  await Q.close?.();
   await A.ev(`document.querySelector('#sheet [aria-label=Close]')?.click(); true`);
   await shot('8-auto');
   await A.ev(`document.querySelector('#workTabs [data-tab=jobs]').click(); true`);
