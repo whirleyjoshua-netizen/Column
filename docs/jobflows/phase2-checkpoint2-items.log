@@ -20,7 +20,7 @@ FAIL archive
 FAIL archived items are still listed for admins (marked)
 PASS there is no hard delete
 FAIL restore
-FAIL the owner’s price list starts with the business Items, as item:<id>, with cost: {"id":"pyln6j3KfMuanNCW","source":"list","board":"Estimating","name":"Window film","description":"","unit":"sq ft","price":1200,"cost":300}
+FAIL the owner’s price list starts with the business Items, as item:<id>, with cost: {"id":"LMY_jy6opE8VACaD","source":"list","board":"Estimating","name":"Window film","description":"","unit":"sq ft","price":1200,"cost":300}
 PASS and the board price list is still there after them
 PASS a member’s price list has no Items
 FAIL import copies the named rows and counts the one with no name: {"error":"Unknown endpoint"}
@@ -35,5 +35,5 @@ FAIL a price change fires price.changed with the one waiting quote: []
 FAIL Finance → Quotes flags the waiting quote whose item price changed (priceNow reads item:<id>)
 PASS the member’s Jobs list carries no item price
 PASS the server starts again
-FAIL Items are kept across a restart: 0
+FAIL Items are kept across a restart (the four made here: Can clean, Trip fee, and two imported), with their ids and prices: 
 30 FAILED

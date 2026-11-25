@@ -1,5 +1,6 @@
 FAIL server/jobflows.js exports priceKey
 FAIL (setup) three items, one archived
+PASS (setup) a Crew role
 FAIL refused at publish: quote billing with no quote step (200 )
 FAIL refused at publish: quote billing with the quote after the invoice (404 That flow is gone.)
 FAIL refused at publish: quote billing with no invoice step (404 That flow is gone.)
@@ -13,13 +14,18 @@ FAIL refused at publish: an unknown billing (200 )
 FAIL refused at publish: a quote step for anyone (404 That flow is gone.)
 FAIL refused at publish: an invoice step for anyone (200 )
 FAIL refused at publish: a payment step for one member (200 )
+FAIL refused at publish: an invoice step for a role (200 )
 FAIL refused at publish: a default item twice (200 )
 FAIL refused at publish: an archived default item (200 )
 FAIL refused at publish: a made-up default item (200 )
 FAIL refused at publish: a default item with qty 0 (200 )
+FAIL refused at publish: a default item with a negative qty (200 )
+FAIL refused at publish: a default item with qty over 1e6 (200 )
 FAIL refused at publish: dueDays over 120 (200 )
+FAIL refused at publish: dueDays below 0 (200 )
 FAIL refused at publish: dueDays that isn’t whole (200 )
 FAIL refused at publish: 51 default items
+PASS a fractional default qty is fine (1.5 hours)
 FAIL an invoice or payment step that names nobody is saved for owners and admins
 FAIL a Phase 1 shaped flow publishes as billing hand, no items, dueDays null
 FAIL a quote flow publishes, its quote step for owners and admins: That flow is gone.
@@ -50,6 +56,7 @@ FAIL or send it
 FAIL or requote it
 FAIL sending it: status sent, the link, still current
 PASS sending a quote doesn’t change the job’s stage (the run owns it): undefined
+PASS declining doesn’t write the job’s stage
 FAIL a decline keeps it open, with who and why: undefined
 FAIL New quote: back to draft
 PASS the old link is dead
@@ -95,4 +102,4 @@ FAIL the next sweep sends the invoice that was made
 FAIL the same invoice, no second one, invoice.sent once
 FAIL Ann was made a member after hers was made: kept as a draft, no replacement, waiting (owner): undefined
 PASS a flow without billing makes no invoice by itself
-81 FAILED
+85 FAILED

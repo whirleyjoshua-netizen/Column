@@ -132,7 +132,8 @@ try {
   ok(await start(), 'the server starts again');
   rico = call(ricoTok); sam = call(samTok);
   items = (await rico('GET', '/job-items')).body?.items || [];
-  ok(items.find((x) => x.id === can?.id)?.price === 2800 && items.length === 4, 'Items are kept across a restart: ' + items.length);
+  const kept = items.map((x) => `${x.name}:${x.price}:${x.archived}`).sort().join('|');
+  ok(kept === ['Bad price:0:false', 'Can clean:2800:false', 'Trip fee:1500:false', 'Window film:1200:false'].join('|') && items.find((x) => x.name === 'Can clean')?.id === can?.id, 'Items are kept across a restart (the four made here: Can clean, Trip fee, and two imported), with their ids and prices: ' + kept);
   void pl2; void mk;
 } catch (e) {
   console.log('FAIL threw: ' + (e.stack || e.message));

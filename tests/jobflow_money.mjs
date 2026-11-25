@@ -91,6 +91,8 @@ try {
     const pub = await rico('POST', `/job-flows/${f?.id}/publish`);
     return { id: f?.id, status: pub.status, error: pub.body?.error || '', version: pub.body?.version, sid: (n) => pub.body?.version?.body?.steps?.find((s) => s.name === n)?.id };
   };
+  const roleId = ((await rico('POST', '/roles', { name: 'Crew', memberIds: [samId] })).body?.roles || []).find((x) => x.name === 'Crew')?.id;
+  ok(!!roleId, '(setup) a Crew role');
   const C = { kind: 'client', name: 'Client' }, W = { kind: 'custom', name: 'Clean', who: { type: 'anyone' }, settings: { text: 'Clean.' } };
   const I = { kind: 'invoice', name: 'Send invoice' }, P = { kind: 'payment', name: 'Collect payment' }, Q = { kind: 'quote', name: 'Send quote' };
 
@@ -109,11 +111,15 @@ try {
     ['a quote step for anyone', { billing: 'quote', steps: [C, { ...Q, who: { type: 'anyone' } }, I] }],
     ['an invoice step for anyone', { steps: [C, { ...I, who: { type: 'anyone' } }] }],
     ['a payment step for one member', { steps: [C, I, { ...P, who: { type: 'member', id: samId } }] }],
+    ['an invoice step for a role', { steps: [C, { ...I, who: { type: 'role', id: roleId } }] }],
     ['a default item twice', { items: [{ itemId: can?.id, qty: 1 }, { itemId: can?.id, qty: 2 }], steps: [C, I] }],
     ['an archived default item', { items: [{ itemId: gone?.id, qty: 1 }], steps: [C, I] }],
     ['a made-up default item', { items: [{ itemId: 'nope', qty: 1 }], steps: [C, I] }],
     ['a default item with qty 0', { items: [{ itemId: can?.id, qty: 0 }], steps: [C, I] }],
+    ['a default item with a negative qty', { items: [{ itemId: can?.id, qty: -2 }], steps: [C, I] }],
+    ['a default item with qty over 1e6', { items: [{ itemId: can?.id, qty: 1e6 + 1 }], steps: [C, I] }],
     ['dueDays over 120', { dueDays: 121, steps: [C, I] }],
+    ['dueDays below 0', { dueDays: -1, steps: [C, I] }],
     ['dueDays that isn’t whole', { dueDays: 1.5, steps: [C, I] }],
   ]) {
     const f = (await rico('POST', '/job-flows', { name: 'Bad: ' + why, list, ...body })).body;
@@ -123,6 +129,7 @@ try {
   const many = [];
   for (let i = 0; i < 51; i++) many.push({ itemId: (await item({ name: 'Bulk ' + i, price: 100 }))?.id, qty: 1 });
   ok((await flowOf({ name: '51 defaults', items: many, steps: [C, I] })).status === 400, 'refused at publish: 51 default items');
+  ok((await flowOf({ name: 'Fractional qty', items: [{ itemId: can?.id, qty: 1.5 }], steps: [C, I] })).status === 200, 'a fractional default qty is fine (1.5 hours)');
   let F = await flowOf({ name: 'Money steps default', steps: [C, I, P] });
   ok(F.status === 200 && F.version?.body?.steps?.filter((s) => ['invoice', 'payment'].includes(s.kind)).every((s) => s.who?.type === 'admins'), 'an invoice or payment step that names nobody is saved for owners and admins');
   ok(F.version?.body?.billing === 'hand' && Array.isArray(F.version?.body?.items) && F.version.body.items.length === 0 && F.version?.body?.dueDays === null, 'a Phase 1 shaped flow publishes as billing hand, no items, dueDays null');
@@ -212,7 +219,9 @@ try {
   s = await stepOf(jq?.id, 'Send quote');
   ok(s?.quote?.status === 'sent' && s.quote.url?.endsWith('/q/' + tok1) && s.state === 'current', 'sending it: status sent, the link, still current');
   ok((await stageOf(jq?.id)) === stage0, 'sending a quote doesn’t change the job’s stage (the run owns it): ' + (await stageOf(jq?.id)));
+  const stage1 = await stageOf(jq?.id);
   await answer(tok1, 'decline', { name: 'Dana', reason: 'Too much' });
+  ok((await stageOf(jq?.id)) === stage1, 'declining doesn’t write the job’s stage');
   s = await stepOf(jq?.id, 'Send quote');
   ok(s?.state === 'current' && s.quote?.status === 'declined' && s.quote?.answeredBy === 'Dana' && s.quote?.reason === 'Too much', 'a decline keeps it open, with who and why: ' + JSON.stringify(s?.quote));
   r = await rico('POST', `/jobs/${jq?.id}/requote`);
