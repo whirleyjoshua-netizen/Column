@@ -5786,8 +5786,10 @@
   const autoIc = (l) => h('span', { class: `auto-ic lk-${l.c}`, 'aria-hidden': 'true' }, l.ic);
   // The picker: a search box, chips for each group, and a list with colored icons. items: { key, label, ic, c, g?, hint? }.
   // Beside the button that opened it (a sheet at the bottom on a phone); Esc, a tap outside or a pick closes it.
-  function autoPicker(anchor, { title, items, groups = null, active = null, onPick }) {
-    document.querySelector('.ap-pop')?._close?.();
+  function autoPicker(anchor, { title, items, groups = null, active = null, onPick, refocus = null }) {
+    const was = document.querySelector('.ap-pop');
+    if (was && was._anchor === anchor) return was._close(); // its button again: close it
+    was?._close?.();
     const st = { q: '', g: 'all' };
     const search = h('input', { class: 'ap-search', type: 'search', placeholder: 'Search…', 'aria-label': 'Search' });
     const chips = groups ? h('div', { class: 'ap-chips', role: 'tablist' }) : null;
@@ -5795,14 +5797,22 @@
     const pop = h('div', { class: 'ap-pop', role: 'dialog', 'aria-label': title }, h('div', { class: 'ap-title' }, '✨ ' + title), search, chips, list);
     const outside = (e) => { if (!pop.contains(e.target) && !anchor.contains(e.target)) close(); };
     const esc = (e) => { if (e.key === 'Escape') { e.stopPropagation(); close(); anchor.focus?.(); } };
-    const close = () => { pop.remove(); document.removeEventListener('pointerdown', outside, true); document.removeEventListener('keydown', esc, true); };
+    // A scroll under it (the page, the canvas) closes it rather than leave it floating away from its button.
+    const scrolled = (e) => { if (!pop.contains(e.target)) close(); };
+    // On a phone it's a sheet at the bottom: when the keyboard comes up it sits above it, and shrinks to fit.
+    const vv = window.visualViewport;
+    const fit = () => { pop.style.bottom = Math.max(0, innerHeight - vv.height - vv.offsetTop) + 'px'; pop.style.maxHeight = Math.round(vv.height * 0.8) + 'px'; };
+    const close = () => { pop.remove(); document.removeEventListener('pointerdown', outside, true); document.removeEventListener('keydown', esc, true); document.removeEventListener('scroll', scrolled, true); vv?.removeEventListener('resize', fit); vv?.removeEventListener('scroll', fit); };
     pop._close = close;
+    pop._anchor = anchor;
+    // After a pick the page redraws; the keyboard goes back to the button that opened it (or its new self).
+    const back = () => setTimeout(() => (anchor.isConnected ? anchor : refocus?.())?.focus({ preventScroll: true }));
     const draw = () => {
       const q = st.q.trim().toLowerCase();
       const shown = items.filter((x) => (st.g === 'all' || x.g === st.g) && (!q || (x.find || x.label).toLowerCase().includes(q) || (x.hint || '').toLowerCase().includes(q)));
       chips?.replaceChildren(...groups.filter(([k]) => k === 'all' || items.some((x) => x.g === k)).map(([k, l]) =>
         h('button', { type: 'button', class: 'ap-chip' + (st.g === k ? ' on' : ''), 'data-g': k, role: 'tab', 'aria-selected': String(st.g === k), onclick: () => { st.g = k; draw(); } }, l)));
-      list.replaceChildren(...(shown.length ? shown.map((x) => h('button', { type: 'button', class: `ap-item lk-${x.c}` + (x.key === active ? ' on' : ''), 'data-key': x.key, role: 'option', 'aria-selected': String(x.key === active), onclick: () => { close(); onPick(x.key); } },
+      list.replaceChildren(...(shown.length ? shown.map((x) => h('button', { type: 'button', class: `ap-item lk-${x.c}` + (x.key === active ? ' on' : ''), 'data-key': x.key, role: 'option', 'aria-selected': String(x.key === active), onclick: () => { close(); onPick(x.key); back(); } },
         h('span', { class: 'ap-ic', 'aria-hidden': 'true' }, x.ic), h('span', { class: 'ap-label' }, x.label, x.hint ? h('small', {}, x.hint) : null), x.key === active ? h('small', { class: 'ap-on' }, 'Active') : null))
         : [h('p', { class: 'ap-none' }, 'Nothing matches.')]));
     };
@@ -5814,9 +5824,14 @@
       const left = r.right + 8 + w <= innerWidth ? r.right + 8 : r.left - w - 8 >= 8 ? r.left - w - 8 : Math.max(8, innerWidth - w - 8);
       pop.style.left = left + 'px';
       pop.style.top = Math.max(8, Math.min(r.top, innerHeight - ht - 8)) + 'px';
-    } else pop.classList.add('ap-sheet');
-    setTimeout(() => { document.addEventListener('pointerdown', outside, true); document.addEventListener('keydown', esc, true); });
-    search.focus();
+    } else {
+      pop.classList.add('ap-sheet');
+      if (vv) { fit(); vv.addEventListener('resize', fit); vv.addEventListener('scroll', fit); }
+    }
+    const sheetMode = pop.classList.contains('ap-sheet');
+    setTimeout(() => { document.addEventListener('pointerdown', outside, true); document.addEventListener('keydown', esc, true); if (!sheetMode) document.addEventListener('scroll', scrolled, true); });
+    // On a phone the keyboard would cover the list: the search waits to be tapped.
+    if (!sheetMode) search.focus({ preventScroll: true });
   }
   // The picker's lists: what can set one off (grouped by tool, from the catalog), and what a step can do.
   const autoWhenItems = (only = null) => (AUTO_CAT.events ? AUTO_CAT.events.map((e) => ({ key: e.type, label: e.label.replace(/ \(.*\)$/, ''), find: e.label, hint: AUTO_CAT.tools[e.tool] || '', g: e.tool, ...autoWhenLook(e.type) }))
@@ -6090,6 +6105,7 @@
       }
       draw();
     };
+    const panelBtn = () => box.querySelector('.ab-panel .ab-change');
     const clearLit = () => { Object.assign(B, { lit: null, would: null, test: null, run: '' }); draw(); };
     const draw = () => {
       const t = dr.trigger;
@@ -6211,7 +6227,7 @@
             : v === 'agent' ? { kind: 'agent', agent: 'team', ask: '', wait: false }
             : v === 'stock' ? { kind: 'stock', act: 'use', itemId: '', qty: 1, from: '', to: '', note: '' }
             : { kind: v, text: a.text || '', to: [], channelId: 'same' });
-      const addAt = (list, i, depth) => (e) => autoPicker(e.currentTarget, { title: 'Add a step or tool', items: autoDoItems(null, depth), groups: AUTO_GROUPS, onPick: (v) => { const y = freshStep(v); list.splice(i, 0, y); B.sel = y; B.tab = 'set'; draw(); } });
+      const addAt = (list, i, depth) => (e) => autoPicker(e.currentTarget, { title: 'Add a step or tool', items: autoDoItems(null, depth), groups: AUTO_GROUPS, refocus: panelBtn, onPick: (v) => { const y = freshStep(v); list.splice(i, 0, y); B.sel = y; B.tab = 'set'; draw(); } });
       // Moving a step (dragged by its ⋮⋮) to a place in a list: never into itself, and "only if" 3 deep at most.
       const ifDepth = (y) => (y.kind === 'if' ? 1 + Math.max(0, ...[...(y.then || []), ...(y.else || [])].map(ifDepth)) : 0);
       const holds = (y, list) => y.kind === 'if' && (y.then === list || y.else === list || [...(y.then || []), ...(y.else || [])].some((z) => holds(z, list)));
@@ -6508,7 +6524,7 @@
             h('span', { class: `an-ic lk-${look.c}`, 'aria-hidden': 'true' }, look.ic), h('span', { class: 'an-txt' }, h('span', { class: 'an-say' }, autoLine(a)), h('span', { class: 'an-chips' }, autoChips(a)))),
           would ? h('div', { class: 'auto-would' + (would.yes === false ? ' no' : '') }, would.said) : null,
           branches);
-        if (isSel) B.panel = { ic: look.ic, c: look.c, step, what: a.kind === 'wait' ? 'Wait a while' : a.kind === 'if' ? 'Only if…' : AUTO_DO[a.kind] || a.kind, label: 'Change step', change: (btn) => autoPicker(btn, { title: 'Change this step', items: autoDoItems(a.kind, depth), groups: AUTO_GROUPS, active: a.kind, onPick: setKind }), f, adv };
+        if (isSel) B.panel = { ic: look.ic, c: look.c, step, what: a.kind === 'wait' ? 'Wait a while' : a.kind === 'if' ? 'Only if…' : AUTO_DO[a.kind] || a.kind, label: 'Change step', change: (btn) => autoPicker(btn, { title: 'Change this step', items: autoDoItems(a.kind, depth), groups: AUTO_GROUPS, active: a.kind, onPick: setKind, refocus: panelBtn }), f, adv };
         node._step = a;
         return node;
       };
@@ -6537,7 +6553,7 @@
         h('button', { type: 'button', class: 'an-b', 'aria-pressed': String(tSel), title: 'Change what sets it off', onclick: () => { if (!tSel) { B.sel = 'trigger'; B.tab = 'set'; draw(); } } },
           h('span', { class: `an-ic lk-${tl.c}`, 'aria-hidden': 'true' }, tl.ic), h('span', { class: 'an-txt' }, h('span', { class: 'an-say' }, autoWhenText(t)))));
       if (tSel) B.panel = { ic: tl.ic, c: tl.c, step: '1. When', what: autoWhenLabel(t.kind), label: 'Change event',
-        change: (btn) => autoPicker(btn, { title: 'Change event', items: autoWhenItems(), groups: autoWhenGroups(), active: t.kind, onPick: (v) => { dr.trigger = { kind: v, ...(v === 'schedule' ? { slots: [{ days: [1], time: '09:00' }] } : {}) }; draw(); } }),
+        change: (btn) => autoPicker(btn, { title: 'Change event', items: autoWhenItems(), groups: autoWhenGroups(), active: t.kind, refocus: panelBtn, onPick: (v) => { dr.trigger = { kind: v, ...(v === 'schedule' ? { slots: [{ days: [1], time: '09:00' }] } : {}) }; draw(); } }),
         f: tSet.length ? tSet : [h('p', { class: 'day-hint' }, tAdv.length ? 'That’s all it needs. To narrow it down (one campaign, a stage, an amount…), see Advanced settings.' : 'That’s all it needs.')], adv: tAdv };
       const flow = stepList(dr.actions, 0);
       const pn = B.panel;
@@ -8212,7 +8228,18 @@
     const btns = items.map(([k, l, ic, c]) => h('button', { type: 'button', role: 'radio', class: 'pa-opt' + (c ? ` lk-${c}` : ''), 'data-v': k,
       onclick: (e) => { if (e.currentTarget.disabled || v === k) return; el.value = k; el.dispatchEvent(new Event('change')); } },
     ic ? h('span', { class: 'pa-ic', 'aria-hidden': 'true' }, ic) : null, h('span', {}, l)));
-    Object.defineProperty(el, 'value', { get: () => v, set: (k) => { v = k; for (const b of btns) b.setAttribute('aria-checked', String(b.dataset.v === k)); } });
+    Object.defineProperty(el, 'value', { get: () => v, set: (k) => { v = k; for (const b of btns) { b.setAttribute('aria-checked', String(b.dataset.v === k)); b.tabIndex = b.dataset.v === k ? 0 : -1; } } });
+    el.addEventListener('keydown', (e) => {
+      const step = { ArrowDown: 1, ArrowRight: 1, ArrowUp: -1, ArrowLeft: -1 }[e.key];
+      if (!step) return;
+      e.preventDefault();
+      const on = btns.filter((b) => !b.disabled);
+      const next = on[(on.findIndex((b) => b.dataset.v === v) + step + on.length) % on.length];
+      if (!next || next.dataset.v === v) return;
+      el.value = next.dataset.v;
+      el.dispatchEvent(new Event('change'));
+      next.focus();
+    });
     el.labelOf = (k) => items.find(([x]) => x === k)?.[1] || '';
     el.append(...btns);
     el.value = init;

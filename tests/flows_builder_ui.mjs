@@ -36,7 +36,14 @@ async function tab(url) {
   };
   const pick = (sel, value) => ev(`(() => { const s = ${sel}; s.value = ${JSON.stringify(value)}; s.dispatchEvent(new Event('change', { bubbles: true })); return s.value === ${JSON.stringify(value)}; })()`);
   const fill = (sel, value) => ev(`(() => { const s = ${sel}; s.value = ${JSON.stringify(value)}; s.dispatchEvent(new Event('input', { bubbles: true })); return true; })()`);
-  return { ev, until, tap, pick, fill, cmd, errors };
+  const touch = async (expr) => {
+    await until(`!!(${expr})`, 8000);
+    const [x, y] = await ev(`(() => { const e = ${expr}; e.scrollIntoView({ block: 'center' }); const r = e.getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; })()`);
+    await cmd('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y }] });
+    await cmd('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    await sleep(250);
+  };
+  return { ev, until, tap, touch, pick, fill, cmd, errors };
 }
 try {
   for (let i = 0; i < 100; i++) { try { if ((await fetch(APP + 'api/health')).ok) break; } catch {} await sleep(150); }
@@ -71,6 +78,15 @@ try {
   await A.fill(`document.querySelector('.ap-pop .ap-search')`, 'contact');
   await A.tap(`document.querySelector('.ap-pop .ap-item[data-key="contact.created"]')`);
   ok(await A.until(`!document.querySelector('.ap-pop') && document.querySelector('#sheet .auto-trigger .an-say').textContent === 'A contact is added'`), 'picked: the node says it plainly (not the label’s brackets)');
+  ok(await A.until(`document.activeElement?.matches('#sheet .ab-panel .ab-change')`), 'after a pick, the keyboard is back on Change (not lost on the page)');
+  await A.tap(`document.querySelector('#sheet .ab-panel .ab-change')`);
+  await A.until(`!!document.querySelector('.ap-pop')`);
+  await A.tap(`document.querySelector('#sheet .ab-panel .ab-change')`);
+  ok(await A.until(`!document.querySelector('.ap-pop')`), 'tapping Change again closes the picker');
+  await A.tap(`document.querySelector('#sheet .ab-panel .ab-change')`);
+  await A.until(`!!document.querySelector('.ap-pop')`);
+  await A.ev(`document.querySelector('#sheet .sheet').dispatchEvent(new Event('scroll')); true`);
+  ok(await A.until(`!document.querySelector('.ap-pop')`), 'the page scrolling under it closes the picker (it doesn’t float off its button)');
   await A.fill(`document.querySelector('#sheet .auto-name')`, 'Sort leads');
   const top = `document.querySelector('#sheet .auto-flow > .auto-steps')`;
   const acts = (list) => `[...${list}.children].filter((x) => x.classList.contains('auto-act'))`;
@@ -205,6 +221,15 @@ try {
   ok(await A.until(`(() => { const p = document.querySelector('.ap-pop.ap-sheet'); if (!p) return false; const r = p.getBoundingClientRect(); return r.left >= 0 && r.right <= 391 && r.bottom <= innerHeight + 1; })()`), 'the picker is a sheet at the bottom on a phone');
   await A.ev(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); true`);
   ok(await A.until(`!document.querySelector('.ap-pop')`), 'and Esc closes it');
+  await A.cmd('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 });
+  await A.touch(`document.querySelector('#sheet .ab-panel .ab-change')`);
+  ok(await A.until(`!!document.querySelector('.ap-pop.ap-sheet') && document.activeElement !== document.querySelector('.ap-pop .ap-search')`), 'on a phone the search box doesn’t grab focus, so the keyboard doesn’t cover the list');
+  ok(await A.ev(`(() => { const p = document.querySelector('.ap-pop'); return getComputedStyle(p).maxHeight.endsWith('px') && p.getBoundingClientRect().top >= 0; })()`), 'and the sheet fits on the screen');
+  await A.touch(`document.querySelector('.ap-pop .ap-item:not(.on)')`);
+  ok(await A.until(`!document.querySelector('.ap-pop')`), 'a finger’s tap picks from the list');
+  await A.touch(`[...document.querySelectorAll('#sheet .auto-flow .auto-act .an-b')].at(-1)`);
+  ok(await A.until(`[...document.querySelectorAll('#sheet .auto-flow .auto-act')].at(-1).classList.contains('sel')`), 'a finger’s tap picks a card');
+  await A.cmd('Emulation.setTouchEmulationEnabled', { enabled: false });
   await A.ev(`scrollTo(0, 0); document.querySelector('#sheet .sheet').scrollTop = 0; true`);
   await A.tap(`document.querySelector('#sheet .auto-flow .auto-act .an-b')`);
   ok(await A.until(`(() => { const r = document.querySelector('#sheet .ab-panel').getBoundingClientRect(); return r.top >= -2 && r.top < innerHeight / 2; })()`), 'on a phone, tapping a node brings its settings into view: ' + await A.ev(`JSON.stringify([document.querySelector('#sheet .ab-panel').getBoundingClientRect().top, document.querySelector('#sheet .ab-panel').getBoundingClientRect().height, innerHeight, document.querySelector('#sheet .ab-ph b').textContent])`));
