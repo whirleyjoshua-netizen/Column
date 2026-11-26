@@ -774,8 +774,9 @@ export function jobFlowsModule(ctx) {
     // Kept first (what a step stands for is read against the kept run), and taken back out whole if anything after
     // fails: the job is then as it was, and reported as not moved.
     const had = { onFlowSince: rec.onFlowSince, lines: run.lines ? { has: Object.hasOwn(rec.values, run.lines.fieldId), v: rec.values[run.lines.fieldId] } : null, updatedAt: rec.updatedAt };
-    commitRun(run);
     try {
+      commitRun(run);
+      if (FAIL_MOVE && PJ.recName(db.projects[rec.projectId], rec) === FAIL_MOVE + ' (keeping)') throw new Error('Job Flows test: the move failed while the run was being kept');
       run.goals.forEach((g, i) => {
         if (g.step.kind === 'tasks' && !(i < upTo)) g.tasksPending = true;
         if (i >= upTo) return;
@@ -803,7 +804,7 @@ export function jobFlowsModule(ctx) {
       if (g?.step.kind === 'remind') { const today = teamClock(ws).today; const kind = (g.step.settings?.visitKind || '').toLowerCase(); const v = visitsOf(rec.id).find((x) => !x.done && x.date > today && (!kind || String(x.kind || '').toLowerCase() === kind)); if (v) makePending(run.c, g, { kind: 'remind', visitId: v.id }); }
       if (g?.step.kind === 'review') makePending(run.c, g, { kind: 'review' });
     } catch (e) { console.error('A moved job’s waiting message couldn’t be made:', e.message); }
-    note(rec, `Moved onto the flow “${flow.name}” at “${last ? 'the end (done)' : steps[at].name}”`, auth.member);
+    try { note(rec, `Moved onto the flow “${flow.name}” at “${last ? 'the end (done)' : steps[at].name}”`, auth.member); } catch (e) { console.error('A moved job’s timeline note couldn’t be written:', e.message); }
     return run;
   }
   // What a step stands for, on the record as it is (the move's own check, before the run is kept).
@@ -827,14 +828,21 @@ export function jobFlowsModule(ctx) {
       if (c.wsId !== wsId || !isJobRun(c) || c.status !== 'active' || !c.moved || c.moved.hold) continue;
       const g = currentGoal(c);
       if (!g?.tasksPending) continue;
-      delete g.tasksPending;
       const ws = db.workspaces[c.wsId];
       const owner = ws && (memberOf(ws, c.ownerId) || ws.members.find((m) => m.role === 'owner'));
-      for (const text of g.step.settings?.tasks || []) {
-        const tk = applyTask({ id: rid(), wsId: c.wsId, by: owner?.name || 'Kloomie', memberId: owner?.id || null, createdAt: Date.now(), text: '', done: false, doneAt: null, due: null, priority: 0, goalId: g.id, assigneeId: null, recordId: c.recordId }, { text });
-        db.tasks[tk.id] = tk;
-        made.push([c, tk]);
-      }
+      // Each of the step's tasks once: one already made (a try that failed partway) isn't made again; the marker comes
+      // off only when they're all there.
+      const have = new Set(Object.values(db.tasks).filter((x) => x.goalId === g.id).map((x) => x.text));
+      try {
+        for (const text of g.step.settings?.tasks || []) {
+          if (have.has(text)) continue;
+          const tk = applyTask({ id: rid(), wsId: c.wsId, by: owner?.name || 'Kloomie', memberId: owner?.id || null, createdAt: Date.now(), text: '', done: false, doneAt: null, due: null, priority: 0, goalId: g.id, assigneeId: null, recordId: c.recordId }, { text });
+          db.tasks[tk.id] = tk;
+          have.add(tk.text);
+          made.push([c, tk]);
+        }
+        delete g.tasksPending;
+      } catch (e) { console.error('A moved job’s tasks couldn’t all be made (tried again on the next look):', e.message); }
     }
     if (!made.length) return false;
     save();
@@ -1006,6 +1014,15 @@ export function jobFlowsModule(ctx) {
           db.jobFlows[flow.id] = flow;
           save();
           return send(res, 200, publicFlow(flow, true));
+        }
+        // The ready-made starts for one job list, as steps for that list (the New flow sheet; PHASE5.md §6).
+        if (m === 'GET' && b === 'starts' && !c) {
+          if (!admin) return send(res, 403, { error: 'Only owners and admins build job flows.' });
+          const sp = new URL(req.url, 'http://x').searchParams;
+          const p = db.projects[sp.get('projectId')];
+          const t = p && p.wsId === ws.id && PJ.sees(p, auth.memberId) && p.types.find((x) => x.id === sp.get('typeId'));
+          if (!t || !isJobList(t)) return send(res, 404, { error: 'That job list is gone.' });
+          return send(res, 200, { starts: Object.keys(STARTS).map((key) => ({ key, label: STARTS[key].label, steps: startSteps(key, t) })), suggested: suggestedStart(t) });
         }
         const flow = b && db.jobFlows[b];
         if (!flow || flow.wsId !== ws.id || !mayRead(ws, auth, admin, flow)) return send(res, 404, { error: 'That flow is gone.' });

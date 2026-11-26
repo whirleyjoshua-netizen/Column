@@ -372,10 +372,14 @@ export function projectsModule({ onTouch = () => {}, jobCurrentWho = () => null,
   };
   const dropVisitors = () => { visitors = null; };
   const memberOf = (wsId, memberId) => db.workspaces[wsId]?.members.find((m) => m.id === memberId);
+  // `p` and `t` are filled in from the record when a caller leaves them out; in an "own" team a record whose project or
+  // list can't be found is not shown (fail-closed).
   function seesJob(rec, memberId, p = db.projects[rec?.projectId], t = p && typeOf(p, rec.typeId)) {
-    if (!rec || !isJobT(t)) return true;
+    if (!rec) return false;
     const ws = db.workspaces[rec.wsId];
     if ((ws?.settings?.visibility || 'all') !== 'own') return true;
+    if (!p || !t) return ['owner', 'admin'].includes(memberOf(rec.wsId, memberId)?.role);
+    if (!isJobT(t)) return true;
     const me = memberOf(rec.wsId, memberId);
     if (!me) return false;
     if (['owner', 'admin'].includes(me.role)) return true;

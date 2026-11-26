@@ -241,11 +241,14 @@ try {
   ok(r.status === 200, '(setup) a flow with two Tasks steps ' + (r.body?.error || ''));
   const g1 = await G.add('G at prep', 'Scheduled');
   const gBreak = await G.add('Breaks on move', 'New');
+  const gBreak2 = await G.add('Breaks on move (keeping)', 'New');
+  const gBreak2Before = JSON.stringify(((await rico('GET', `/projects/${G.p.id}/records`)).body || []).find((x) => x.id === gBreak2.id));
   const gBreakBefore = JSON.stringify(((await rico('GET', `/projects/${G.p.id}/records`)).body || []).find((x) => x.id === gBreak.id));
   r = await rico('POST', '/jobs/move', { projectId: G.p.id, typeId: G.tp.id, flowId: fg.id });
   ok(r.body?.moved === 1 && /failed/i.test((r.body?.skipped || []).find((x) => x.id === gBreak.id)?.why || ''), 'a job whose move fails after its run was kept is reported not moved: ' + JSON.stringify(r.body?.skipped));
   ok(!(await runOf(gBreak.id)) && JSON.stringify(((await rico('GET', `/projects/${G.p.id}/records`)).body || []).find((x) => x.id === gBreak.id)) === gBreakBefore, 'and it’s exactly as it was: no run, the same record');
   ok(!JSON.stringify((await rico('GET', `/records/${gBreak.id}/log`)).body).includes('Moved onto'), 'nothing on its timeline about a move');
+  ok(!(await runOf(gBreak2.id)) && JSON.stringify(((await rico('GET', `/projects/${G.p.id}/records`)).body || []).find((x) => x.id === gBreak2.id)) === gBreak2Before && /failed/i.test((r.body?.skipped || []).find((x) => x.id === gBreak2.id)?.why || ''), 'a failure while the run is being kept: taken back out too (no run, the same record, reported)');
   const gTasks = async () => ((await rico('GET', '/state')).body.tasks || []).filter((x) => x.recordId === g1.id).map((x) => x.text).sort();
   ok((await runOf(g1.id))?.current?.name === 'Prep' && !(await gTasks()).length, 'moved onto Prep: no tasks yet (held)');
   await rico('PATCH', `/records/${g1.id}`, { values: { access: 'Back door' } });

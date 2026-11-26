@@ -83,7 +83,10 @@ try {
   tp = r.body?.project?.types.find((x) => x.id === tp.id) || tp;
   const relF = tp.fields.find((f) => f.name === 'Related');
   r = await schema({ op: 'addType', name: 'Notes' });
-  const notesT = r.body?.project?.types.find((x) => x.name === 'Notes');
+  let notesT = r.body?.project?.types.find((x) => x.name === 'Notes');
+  r = await schema({ typeId: notesT?.id, op: 'addField', name: 'At job', type: 'job' });
+  notesT = r.body?.project?.types.find((x) => x.id === notesT?.id) || notesT;
+  const atJobF = notesT?.fields?.find((f) => f.name === 'At job');
   const olga = (await rico('POST', '/contacts', { name: 'Olga Other', email: 'olga@x.test' })).body;
   const olgaId = olga.id ?? olga.contact?.id;
 
@@ -111,6 +114,7 @@ try {
   const jLater = await start(FL, 'Sam’s step later');
   const jMia = await add(mia, { job: 'Mia made this' });
   const note = (await rico('POST', `/projects/${p.id}/records`, { typeId: notesT?.id, values: {} })).body;
+  const note2 = (await rico('POST', `/projects/${p.id}/records`, { typeId: notesT?.id, values: { [atJobF?.id]: jOther.id } })).body;
   const ov = await rico('POST', `/records/${jOther.id}/visits`, { kind: 'Clean', date: today, start: 600, end: 660, memberIds: [miaId] });
   const ovId = ov.body?.id;
   const stk = (await rico('POST', `/jobs/${jOther.id}/stack`)).body?.stack;
@@ -161,6 +165,16 @@ try {
   ok(pinFor(st)?.locked === true && !('id' in pinFor(st)) && !('label' in pinFor(st)), 'its chat pin is there as a locked chip, with no id or name: ' + JSON.stringify(pinFor(st)));
   const rst = (await rico('GET', '/state')).body;
   ok(pinFor(rst)?.id === jOther.id && !pinFor(rst).locked && JSON.stringify(pinFor(rst)).includes(OTHER), '(control) the owner’s pin is the job, by name');
+  // A record that points at the other job (a Job field): Sam sees the record, not the job's name.
+  const n2 = ((await sam('GET', `/projects/${p.id}/records`)).body || []).find((x) => x.id === note2?.id);
+  const n2o = ((await rico('GET', `/projects/${p.id}/records`)).body || []).find((x) => x.id === note2?.id);
+  ok(n2o?.jobs?.[jOther.id]?.name === OTHER, '(control) the owner sees the Job field’s job by name');
+  ok(n2 && !n2.jobs?.[jOther.id] && !JSON.stringify(n2.jobs || {}).includes(OTHER), 'a record with a Job field pointing at the other job: Sam gets the record, not the job’s name: ' + JSON.stringify(n2?.jobs || null));
+  // Sign-off forms: the other job's isn't his to preview or send; his own is.
+  const sigF = tp.fields.find((f) => f.type === 'signature');
+  ok((await sam('GET', `/signoff/${jOther.id}/${sigF?.id}/preview`)).status === 404, 'the other job’s sign-off form: 404');
+  ok((await sam('POST', `/signoff/${jOther.id}/${sigF?.id}/send`, {})).status === 404, 'and sending it: 404');
+  ok((await sam('GET', `/signoff/${jMade.id}/${sigF?.id}/preview`)).status === 200, '(control) his own job’s preview: 200');
   const myRec = ((await sam('GET', `/projects/${p.id}/records`)).body || []).find((x) => x.id === jPerson.id);
   ok(myRec && !JSON.stringify(myRec).includes(OTHER), 'his job that links to the other: no name for it');
 
