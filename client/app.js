@@ -19248,22 +19248,24 @@
     // The starts for the list picked now: an answer for a list picked before is dropped; until it's here (or if it
     // fails) there's nothing to make from.
     let starts = null, forList = null, ask = 0;
+    const retry = h('button', { type: 'button', class: 'linkish hidden', 'data-act': 'retry-starts', onclick: () => loadStarts() }, 'Try again');
     const loadStarts = async () => {
       const n = ++ask, key = list.value;
+      retry.classList.add('hidden');
       const { p, t } = lists[Number(key)];
       starts = null; forList = null;
       start.disabled = true;
       start.replaceChildren(h('option', { value: '' }, 'Loading…'));
       const y = await api('GET', `/job-flows/starts?projectId=${encodeURIComponent(p.id)}&typeId=${encodeURIComponent(t.id)}`).catch((e) => ({ error: e.message }));
       if (n !== ask) return;
-      if (!y?.starts) { start.replaceChildren(h('option', { value: '' }, 'Couldn’t load the starts')); return toast(y?.error || 'Couldn’t load the ready-made starts. Try again.'); }
+      if (!y?.starts) { start.replaceChildren(h('option', { value: '' }, 'Couldn’t load the starts')); retry.classList.remove('hidden'); return toast(y?.error || 'Couldn’t load the ready-made starts. Try again.'); }
       starts = y.starts; forList = key;
       start.disabled = false;
       start.replaceChildren(...starts.map((x) => h('option', { value: x.key, selected: x.key === (y.suggested || 'service') }, x.label)));
     };
     list.addEventListener('change', loadStarts);
     loadStarts();
-    sheet('New job flow', [h('label', {}, 'Name', name), h('label', {}, 'For the jobs on', list), h('label', {}, 'Start from', start), h('small', { class: 'muted' }, 'You can change every step before you publish it.')], async () => {
+    sheet('New job flow', [h('label', {}, 'Name', name), h('label', {}, 'For the jobs on', list), h('label', {}, 'Start from', start), retry, h('small', { class: 'muted' }, 'You can change every step before you publish it.')], async () => {
       if (!name.value.trim()) throw new Error('Give the flow a name.');
       const { p, t } = lists[Number(list.value)];
       const chosen = forList === list.value && starts?.find((x) => x.key === start.value);

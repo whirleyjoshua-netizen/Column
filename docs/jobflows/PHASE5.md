@@ -107,8 +107,8 @@ visit added, moved, reassigned or removed, a run's step moving, reopening or bei
 changing, a member leaving), `PJ.reseeJob(rec)` works out who sees it now and compares:
 - a member who **lost** it gets `{ type: 'record:gone', id, projectId }` on their sockets; the app drops the job
   everywhere it holds it: the board's records, the Jobs list, Overview and Schedule (refetched), the job's open
-  window or panel (closed, "You no longer have this job"), its run, its stack (dropped from state as Phase 4's
-  `stack:gone` does), its chat pins (shown as gone), and any linked-record names (they show as "a job");
+  window or panel (closed, "You no longer have this job"), its run, its stack (the member's app reloads its
+  state, so the stack goes too; see §10), its chat pins (shown as gone), and any linked-record names (they show as "a job");
 - a member who **gained** it gets the `record` message (and its stack), as if it were new.
 Switching the team between `all` and `own` (or a member's role changing) resyncs each member's whole state, as it
 does for campaigns today, and the app replaces what it held, so nothing loaded before survives the switch. The
@@ -182,6 +182,25 @@ a suggested ready-made start (by the list's trade family; `service` when unsure)
 that can take it away, plus a full resync on `own`/`all` and role changes. §6: the move has no step-entry side
 effects (the landed step's send waits for an OK; no automations, notices, tasks, invoices, stock); one run per job
 under overlapping requests.
+
+## 10. As built (checkpoints 3 and 4, ChatGPT chat #9)
+- `PJ.seesJob(rec, member, p?, t?)` fills in the project and list from the record; in an "own" team a record whose
+  project or list can't be found, or is another team's, goes to owners and admins only. `PJ.seesRec` = sees the project
+  and the job. `viewOf` carries `memberId`, so `words` and a record's Job field name only jobs the reader sees
+  (`jobShown`); with no reader in an "own" team, no name.
+- `reseeJob` runs on every record change (`recordNews`), visit change (`visitNews`), a run's current step changing
+  (`reseeRuns` after each sweep), roles, role and setting changes and a member leaving (`reseeAll`). A job with a files
+  stack: whoever gains or loses it gets `resync` (there is no `stack:gone`; the app loads its state again).
+- Every record read and record-bearing message is listed with its guard in `docs/jobflows/PHASE5-AUDIT.md`; that audit
+  also put the job check on agents' record names, sign-off forms and automations (trigger, waiting runs, date runs).
+- The move: `moveOne` keeps the run and marks its steps inside one try; any failure takes it back out whole (test hook
+  `JOBFLOWS_FAIL_MOVE`). The landed step holds (`c.moved.hold`: no auto invoice, no campaign) until a person's
+  successful change to the job wakes it; a moved job's Tasks steps get their tasks only when the job reaches each
+  (`tasksSweep`, by each task's place in the step). A whole-board move takes at most 2,000 jobs a request and answers
+  `more`; the app repeats with the flow the first request made.
+- Jobs to schedule: a job on a flow is listed when its run is at a Book step, whatever its stage says.
+- `GET /api/job-flows/starts?projectId&typeId` gives the ready-made starts as steps for one list; the New flow sheet
+  uses only that (an older list's answer is dropped; nothing is made until the list's starts are in).
 
 ## 9. Not in Phase 5
 Recurring work (Phase 6). Jobs as its own top tab, Contacts as Clients, Boards without jobs (Phase 7). A client hub
