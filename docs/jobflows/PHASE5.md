@@ -85,7 +85,9 @@ list (`isJobList`) only when it's theirs:
 1. they made it (`rec.memberId`);
 2. a person field on it is them;
 3. they're on one of its visits (any, done or not);
-4. a step of its going run names them (`who: member`), or names a role they have.
+4. the **current** step of its going run names them (`who: member`) or a role they have. Only the current step:
+   a member set on a later step (say the install) doesn't see the job while it's still being quoted or booked, and
+   stops when the step is done and the run moves on (unless 1–3 hold).
 Owners and admins see every job. In a team set to `all`, nothing changes. Records in other lists (CRM, bids,
 anything custom) are unchanged: the setting is about jobs here.
 
@@ -98,9 +100,19 @@ messages (members not allowed the job don't get them, as `seesMsg` does for priv
 job, linked-record names (a job a member can't see shows as "a job" with no name, as private boards do now). The
 test lists each path (§7).
 
-**When it changes.** A job becomes a member's the moment a rule above starts holding (assigned, booked, step
-reached) and stops when none does; the next read and the next broadcast follow. Switching the team between `all`
-and `own` resyncs the members' state, as it does for campaigns today.
+**When it changes, including what's already loaded.** A job becomes a member's the moment a rule above starts
+holding (assigned, booked, step reached) and stops when none does. The server keeps, per job, who saw it last
+(`jobSeers`, in memory, rebuilt on start). After anything that can change it (a record's person field or maker, a
+visit added, moved, reassigned or removed, a run's step moving, reopening or being cancelled, a member's role
+changing, a member leaving), `PJ.reseeJob(rec)` works out who sees it now and compares:
+- a member who **lost** it gets `{ type: 'record:gone', id, projectId }` on their sockets; the app drops the job
+  everywhere it holds it: the board's records, the Jobs list, Overview and Schedule (refetched), the job's open
+  window or panel (closed, "You no longer have this job"), its run, its stack (dropped from state as Phase 4's
+  `stack:gone` does), its chat pins (shown as gone), and any linked-record names (they show as "a job");
+- a member who **gained** it gets the `record` message (and its stack), as if it were new.
+Switching the team between `all` and `own` (or a member's role changing) resyncs each member's whole state, as it
+does for campaigns today, and the app replaces what it held, so nothing loaded before survives the switch. The
+server never relies on the app for the boundary: every read checks again.
 
 ## 6. Move my jobs here
 Jobs → Overview, owners and admins, shows **Move my jobs here** while any job board has jobs not on a flow.
@@ -118,11 +130,22 @@ a suggested ready-made start (by the list's trade family; `service` when unsure)
   step names it, the first step. Every step before that one that isn't already met is marked skipped with the
   reason "Before the move to Job Flows" (who: the mover). A job whose stage is the flow's last stage gets a run with
   every step met or skipped, so it's done.
-- **Nothing reaches a customer because of the move.** A move never sends: steps skipped by the move don't run their
-  automatic sends, and the step a moved job lands on, if it sends by itself (Phase 3b), is held as "Ask me first"
-  for that first time (a pending send, as Phase 3b's ask). No `step.done` or `job.flow.done` events fire for steps
-  the move skips or for jobs the move finishes (automations stay quiet); the job's timeline says "Moved onto the flow
-  “…” at “step”".
+- **The move itself has no side effects beyond the run.** The run is written with `moved: { at, by, stepId }`, and:
+  - steps before the landed step: met ones are recorded met by the move, unmet ones skipped (reason above), with
+    no `step.done`, no automations, no sends, no notices, no tasks made for them;
+  - a job the move finishes: the run is `done` with no `job.flow.done`, no completion automations, no auto invoice;
+  - the **landed step** is `current`, exactly as if the job had just reached it, except that nothing that happens on
+    entering a step runs as part of the move: no customer send (an automatic send there is created as a pending
+    send waiting for an OK, Phase 3b's "Ask me first", whatever the step says, for this first time only), no
+    automation, no notice to whoever the step is for, no Tasks or Campaign step's tasks or campaign made (they're made
+    when someone opens the step, or on the next real change, so the move never creates work in bulk), no auto
+    invoice, no stock use or gear check;
+  - after the move, the job runs normally: the next real change sweeps it as any job.
+  The job's timeline says "Moved onto the flow “…” at “step”".
+- **One run per job, whatever overlaps.** For each job the check (not on a flow, not legacy, right list) and the
+  write happen in one synchronous turn, with no await between them (as `POST /jobs/:id/flow` does), so two move
+  requests that overlap can't both put a job on a flow: the second finds the run and reports it skipped ("already on
+  a flow"). The same holds against `POST /jobs/:id/flow` and starting the job.
 - The job's stage doesn't move (it's what picked the step).
 - Atomic per job, not per request: a job that can't move (gone, now on a flow, another list) is reported and skipped;
   the answer is `{ moved, skipped: [{ id, why }], flowId }`. Up to 2,000 jobs a request.
@@ -144,13 +167,22 @@ a suggested ready-made start (by the list's trade family; `service` when unsure)
 - `tests/jobs_move.mjs` (5266): `GET /jobs/move` counts; moving with a flow and with a start (a flow made and
   published, `fromStart`); each job lands on the step for its stage, steps before it skipped with the reason, met
   ones left met; a job at the last stage is done; legacy jobs and jobs already on a flow untouched; nothing sent
-  (outbox empty), no `step.done` / `job.flow.done` / automation runs, an auto-send step landed on is pending "ask";
-  members 403; `recordIds`; a second move moves nothing; saved across a restart.
+  (outbox empty), no `step.done` / `job.flow.done` / automation runs / notices / tasks / invoices, an auto-send step
+  landed on has a pending send waiting for an OK; the next real change sweeps normally; two overlapping moves (and a
+  move overlapping `POST /jobs/:id/flow`) leave one run per job; members 403; `recordIds`; a second move moves
+  nothing; saved across a restart.
 - `tests/jobs_tab_ui.mjs` (5267/9604): Overview counts open filtered Jobs; Clients list (owner sees balance, member
-  doesn't); Schedule day and week, dragging a job onto a person; Move my jobs here moves a board's jobs.
+  doesn't); Schedule day and week, dragging a job onto a person; Move my jobs here moves a board's jobs; a member
+  with a job open loses it (visit reassigned) and the window closes and it leaves the Jobs list.
 - Existing suites stay green: jobs_list, jobflow_*, jobs_ui, member_access(_ui), visibility, routes, member_prices,
   contacts, schedule-related (teamload_ui, forecast).
 
-## 8. Not in Phase 5
+## 8. Review round 1 (ChatGPT, chat #8)
+§5: only the current step grants sight; `record:gone` and the app dropping a job it already holds, on every change
+that can take it away, plus a full resync on `own`/`all` and role changes. §6: the move has no step-entry side
+effects (the landed step's send waits for an OK; no automations, notices, tasks, invoices, stock); one run per job
+under overlapping requests.
+
+## 9. Not in Phase 5
 Recurring work (Phase 6). Jobs as its own top tab, Contacts as Clients, Boards without jobs (Phase 7). A client hub
 for customers (open question).
