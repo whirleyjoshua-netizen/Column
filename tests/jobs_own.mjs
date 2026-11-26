@@ -176,7 +176,10 @@ try {
   ok(results.t0 !== undefined && !results.t0.includes(OTHER) && /not|gone|can’t|no such|isn’t|no record/i.test(results.t0), 'read_record on the other job: refused, no name: ' + String(results.t0).slice(0, 120));
   ok(results.t1 !== undefined && !results.t1.includes(OTHER) && !results.t1.includes(jOther.id), 'find_records by its name: nothing: ' + String(results.t1).slice(0, 120));
   ok(results.t2 !== undefined && results.t2.includes('Assigned to Sam') && !results.t2.includes(OTHER) && !results.t2.includes(jOther.id), 'read_record on his job that links to it: his job, the link without its name or id: ' + String(results.t2).slice(0, 160));
-  // Ask (the AI's search over what he can see), by the other job's address.
+  // Ask (the AI's search over what he can see): his own job is found (control), the other job's address finds nothing.
+  aiSaw = [];
+  r = await sam('POST', '/ai/ask', { q: 'Assigned to Sam' });
+  ok(r.status === 200 && aiSaw.some((x) => (x.match(/Assigned to Sam/g) || []).length >= 2), '(control) Ask about his own job: the AI is given that job: ' + r.status);
   aiSaw = [];
   r = await sam('POST', '/ai/ask', { q: 'Who is at Other St' });
   ok(r.status === 200 && aiSaw.length > 0 && !aiSaw.some((b) => b.includes(OTHER) || b.includes(jOther.id)), 'Ask (search): what the AI is told has no sign of the other job: ' + r.status);

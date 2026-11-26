@@ -57,12 +57,13 @@ FAIL a contact’s records: not the other job
 FAIL Clients: answers, without the other job’s client
 FAIL state: not the other job’s stack or its note (search reads state)
 FAIL state: the other job’s name and id are nowhere
-FAIL its chat pin is there as a locked chip, with no id or name: {"pid":"G7LdhkfW-BQ","kind":"job","id":"S-wdurbIk4gIWmdS","label":"OTHERJOBXYZ","icon":"🛠️","next":null}
+FAIL its chat pin is there as a locked chip, with no id or name: {"pid":"a1ZOpSaNCuM","kind":"job","id":"rtEKL3lXvngmh_b3","label":"OTHERJOBXYZ","icon":"🛠️","next":null}
 PASS (control) the owner’s pin is the job, by name
 PASS his job that links to the other: no name for it
-FAIL read_record on the other job: refused, no name: {"data":{"id":"S-wdurbIk4gIWmdS","about":"A Cleaning in the project “Jobs”: OTHERJOBXYZ.\nCustomer: Olga Other\nStatus: 
-FAIL find_records by its name: nothing: {"data":{"count":2,"records":[{"id":"S-wdurbIk4gIWmdS","project":"Jobs","list":"Cleaning","name":"OTHERJOBXYZ","Customer
-FAIL read_record on his job that links to it: his job, the link without its name or id: {"data":{"id":"8woS4bs_bmFU8ZpR","about":"A Cleaning in the project “Jobs”: Assigned to Sam.\nStatus: New\nAssigned to: Sam Reed\nChecklist: 0 of 7 done\nRelate
+FAIL read_record on the other job: refused, no name: {"data":{"id":"rtEKL3lXvngmh_b3","about":"A Cleaning in the project “Jobs”: OTHERJOBXYZ.\nCustomer: Olga Other\nStatus: 
+FAIL find_records by its name: nothing: {"data":{"count":2,"records":[{"id":"rtEKL3lXvngmh_b3","project":"Jobs","list":"Cleaning","name":"OTHERJOBXYZ","Customer
+FAIL read_record on his job that links to it: his job, the link without its name or id: {"data":{"id":"1Bjcy9I1OBNSVGrV","about":"A Cleaning in the project “Jobs”: Assigned to Sam.\nStatus: New\nAssigned to: Sam Reed\nChecklist: 0 of 7 done\nRelate
+PASS (control) Ask about his own job: the AI is given that job: 200
 FAIL Ask (search): what the AI is told has no sign of the other job: 200
 FAIL his export: his jobs, not the other (by name or id)
 PASS the API, maker an admin: every job
@@ -142,28 +143,31 @@ PASS (control) a job finishing its flow normally fires job.flow.done
 FAIL board D’s three jobs move: {"error":"That job is gone."}
 FAIL each on its step (the playbook, gear out, the invoice)
 FAIL the work step before the invoice was met (its checklist was done)
-PASS landing on the campaign step started no campaign
+PASS landing on the campaign step started no campaign and made no tasks
 PASS no stock used and no gear checked out (the work step met before the move used none)
 PASS landing on the automatic invoice step made no invoice
 FAIL after a real change, its automatic invoice is drafted as normal
 FAIL and the campaign step starts its campaign as normal
 PASS (control setup) a normal job on board D: 200 
 PASS (control) a normal job reaching the campaign step starts its campaign
+PASS (control) the normal job is at Gear out
+PASS (control) checking gear out on it works: a washer is out: 200 
+PASS (control) and Gear out is done
 PASS (control) its work step done uses the stock
 PASS (control) and its automatic invoice is drafted
 FAIL two steps at Scheduled: it lands on the later one (Book), Prep skipped: 
 FAIL a stage no step names, and no stage: the first step:  
 FAIL recordIds: only those move
-FAIL moving it again moves nothing and says why
+FAIL moving it again moves nothing: “already on a flow”
 PASS a flow that isn’t there: 404
 FAIL a flow for another list: 400
 FAIL mixed recordIds: the good one moves: {"error":"That job is gone."}
-FAIL a deleted record, an id that was never there and another list’s job are each reported skipped
+FAIL a deleted record and an id that was never there: “gone”; another list’s job: “another list”:  |  | 
 FAIL and the other list’s job is untouched
 FAIL with a start: both move: 404 That job is gone.
 FAIL the flow is made from the start, published, for that list
 FAIL the Cleaning visit start’s steps, with a Visit reminder after Book and a Review request at the end: 
-PASS both ask first
+PASS both set to Ask me first (send: ask)
 FAIL with the switches off, no reminder or review steps
 FAIL each job at the step for its stage
 FAIL a start that isn’t one: 400

@@ -190,13 +190,13 @@ try {
   const dInv = await D.add('D at invoice, work done', 'Invoiced', { customer: await contact() });
   await tick(dInv.id);
   await sleep(300);
-  const c0 = await campaignsOf(), s0 = await stockAt(), m0 = await movesOf(), i0 = ((await rico('GET', '/invoices')).body || []).length;
+  const c0 = await campaignsOf(), s0 = await stockAt(), m0 = await movesOf(), i0 = ((await rico('GET', '/invoices')).body || []).length, t0 = await allTasks();
   r = await rico('POST', '/jobs/move', { projectId: D.p.id, typeId: D.tp.id, flowId: fd.id });
   ok(r.body?.moved === 3, 'board D’s three jobs move: ' + JSON.stringify(r.body).slice(0, 160));
   ok((await runOf(dCamp.id))?.current?.name === 'Playbook' && (await runOf(dGear.id))?.current?.name === 'Gear out' && (await runOf(dInv.id))?.current?.name === 'Invoice', 'each on its step (the playbook, gear out, the invoice)');
   ok(stepNamed(await runOf(dInv.id), 'Do it')?.state === 'done', 'the work step before the invoice was met (its checklist was done)');
   await sleep(1500);
-  ok((await campaignsOf()) === c0 && !stepNamed(await runOf(dCamp.id), 'Playbook')?.campaign, 'landing on the campaign step started no campaign');
+  ok((await campaignsOf()) === c0 && !stepNamed(await runOf(dCamp.id), 'Playbook')?.campaign && (await allTasks()) === t0, 'landing on the campaign step started no campaign and made no tasks');
   ok((await stockAt()) === s0 && (await movesOf()) === m0 && (await unitsOut()) === 0, 'no stock used and no gear checked out (the work step met before the move used none)');
   ok(((await rico('GET', '/invoices')).body || []).length === i0 && !(await invsOf(dInv.id)).length, 'landing on the automatic invoice step made no invoice');
   // A real change after the move: the job runs as any job does.
@@ -210,7 +210,12 @@ try {
   ok(!!dN.id, '(control setup) a normal job on board D: ' + dNr.status + ' ' + (dNr.body?.error || ''));
   ok(await until(async () => !!stepNamed(await runOf(dN.id), 'Playbook')?.campaign), '(control) a normal job reaching the campaign step starts its campaign');
   await rico('POST', `/jobs/${dN.id}/steps/${stepNamed(await runOf(dN.id), 'Playbook')?.id}/skip`, { reason: 'control' });
-  await rico('POST', `/jobs/${dN.id}/steps/${stepNamed(await runOf(dN.id), 'Gear out')?.id}/skip`, { reason: 'control' });
+  const gearStep = stepNamed(await runOf(dN.id), 'Gear out');
+  ok(gearStep?.state === 'current', '(control) the normal job is at Gear out');
+  const unit = ((await rico('GET', '/inventory/items/' + washer.id)).body?.units || []).find((u) => u.status === 'available');
+  r = await rico('POST', `/jobs/${dN.id}/steps/${gearStep?.id}/gear`, { act: 'checkout', unitId: unit?.id, memberId: samId });
+  ok(r.status === 200 && (await unitsOut()) === 1, '(control) checking gear out on it works: a washer is out: ' + r.status + ' ' + (r.body?.error || ''));
+  ok(await until(async () => stepNamed(await runOf(dN.id), 'Gear out')?.state === 'done'), '(control) and Gear out is done');
   const sBefore = await stockAt();
   await tick(dN.id);
   ok(await until(async () => (await stockAt()) === sBefore - 2), '(control) its work step done uses the stock');
@@ -224,6 +229,8 @@ try {
   await rico('POST', `/job-flows/${ff.id}/publish`);
   const f1 = await Fb.add('F scheduled', 'Scheduled'), f2 = await Fb.add('F in progress', 'In progress');
   const f3 = (await rico('POST', `/projects/${Fb.p.id}/records`, { typeId: Fb.tp.id, values: { job: 'F no stage', status: null } })).body;
+  const stF = Fb.tp.fields.find((f) => f.key === 'status').id;
+  ok(((await rico('GET', `/projects/${Fb.p.id}/records`)).body || []).find((x) => x.id === f3?.id)?.values?.[stF] == null, '(setup) the no-stage job really has no stage');
   await rico('POST', '/jobs/move', { projectId: Fb.p.id, typeId: Fb.tp.id, flowId: ff.id });
   ok(shape(await runOf(f1.id)) === 'SSCW', 'two steps at Scheduled: it lands on the later one (Book), Prep skipped: ' + shape(await runOf(f1.id)));
   ok(shape(await runOf(f2.id)) === 'CWWW' && shape(await runOf(f3.id)) === 'CWWW', 'a stage no step names, and no stage: the first step: ' + shape(await runOf(f2.id)) + ' ' + shape(await runOf(f3.id)));
@@ -233,7 +240,7 @@ try {
   r = await rico('POST', '/jobs/move', { projectId: A.p.id, typeId: A.tp.id, flowId: fa.id, recordIds: [jI.id] });
   ok(r.body?.moved === 1 && !!(await runOf(jI.id)) && !(await runOf(jJ.id)), 'recordIds: only those move');
   r = await rico('POST', '/jobs/move', { projectId: A.p.id, typeId: A.tp.id, flowId: fa.id, recordIds: [jI.id] });
-  ok(r.status === 200 && r.body?.moved === 0 && r.body?.skipped?.some((x) => x.id === jI.id), 'moving it again moves nothing and says why');
+  ok(r.status === 200 && r.body?.moved === 0 && /already on a flow/i.test(r.body?.skipped?.find((x) => x.id === jI.id)?.why || ''), 'moving it again moves nothing: “already on a flow”');
   ok((await rico('POST', '/jobs/move', { projectId: A.p.id, typeId: A.tp.id, flowId: 'nope' })).status === 404, 'a flow that isn’t there: 404');
   ok((await rico('POST', '/jobs/move', { projectId: A.p.id, typeId: A.tp.id, flowId: ff.id })).status === 400, 'a flow for another list: 400');
   // Some good, some not: the good ones move, the rest are reported.
@@ -243,7 +250,7 @@ try {
   r = await rico('POST', '/jobs/move', { projectId: A.p.id, typeId: A.tp.id, flowId: fa.id, recordIds: [jK.id, gone.id, f1.id, 'nope'] });
   const why = (id) => (r.body?.skipped || []).find((x) => x.id === id)?.why || '';
   ok(r.status === 200 && r.body?.moved === 1 && !!(await runOf(jK.id)), 'mixed recordIds: the good one moves: ' + JSON.stringify(r.body).slice(0, 200));
-  ok(why(gone.id) && why('nope') && why(f1.id), 'a deleted record, an id that was never there and another list’s job are each reported skipped');
+  ok(/gone/i.test(why(gone.id)) && /gone/i.test(why('nope')) && /another list/i.test(why(f1.id)), 'a deleted record and an id that was never there: “gone”; another list’s job: “another list”: ' + [why(gone.id), why('nope'), why(f1.id)].join(' | '));
   ok((await runOf(f1.id))?.flowId === ff.id, 'and the other list’s job is untouched');
 
   // With a ready-made start: a flow is made and published for the list.
@@ -259,7 +266,7 @@ try {
   ok(made && made.version && made.fromStart === 'cleaning' && made.version.body.list.projectId === Bd.p.id, 'the flow is made from the start, published, for that list');
   const kinds = (made?.version?.body?.steps || []).map((x) => x.kind).join();
   ok(kinds === 'client,details,book,remind,work,invoice,payment,review', 'the Cleaning visit start’s steps, with a Visit reminder after Book and a Review request at the end: ' + kinds);
-  ok((made?.version?.body?.steps || []).filter((x) => ['remind', 'review'].includes(x.kind)).every((x) => x.settings?.send !== 'auto'), 'both ask first');
+  ok((made?.version?.body?.steps || []).filter((x) => ['remind', 'review'].includes(x.kind)).every((x) => x.settings?.send === 'ask'), 'both set to Ask me first (send: ask)');
   const Bd2 = await board('Cleaning B2');
   await Bd2.add('B2 one', 'New');
   r = await rico('POST', '/jobs/move', { projectId: Bd2.p.id, typeId: Bd2.tp.id, start: 'cleaning' });
