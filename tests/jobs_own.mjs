@@ -4,6 +4,9 @@
 // Schedule, Map, a contact's records, state (stacks, chat pins, search), agents, the export, the public API, live
 // updates); owners and admins see all; other lists are unchanged. A job that stops being theirs sends `record:gone`
 // to that member only and the next read 404s; one that becomes theirs sends `record`. `all` changes nothing.
+// Not here because they aren't things Kloomie does: a direct GET /api/records/:id (there's no such route; a record is
+// read through its board's list, its timeline, visits and run, all tested), moving a visit to another job, and
+// changing who made a record.
 import fs from 'node:fs';
 import http from 'node:http';
 import { spawn, execFileSync } from 'node:child_process';
@@ -24,6 +27,7 @@ const fake = http.createServer((req, res) => {
     aiSaw.push(b);
     const j = JSON.parse(b || '{}');
     const reply = (content, stop = 'end_turn') => out({ id: 'm', type: 'message', role: 'assistant', model: 'claude-test', content, stop_reason: stop, stop_sequence: null, usage: { input_tokens: 1, output_tokens: 1 } });
+    if (JSON.stringify(j).includes('{\\"answer\\":')) return reply([{ type: 'text', text: JSON.stringify({ answer: 'Nothing.', used: [] }) }]);
     const last = [...(j.messages || [])].reverse().find((m) => m.role === 'user' && typeof m.content === 'string');
     const after = (j.messages || []).slice((j.messages || []).lastIndexOf(last) + 1);
     const script = last?.content.match(/RUN:(.*):END/)?.[1];
@@ -61,11 +65,11 @@ try {
   const ricoTok = r.body.token, rico = call(ricoTok);
   let st = (await rico('GET', '/state')).body;
   const join = async (name, n) => (await call()('POST', '/auth', { mode: 'join', workspace: 'Own ' + t, code: st.workspace.inviteCode, name, email: `${name.split(' ')[0].toLowerCase()}${t}@t.test`, password: 'longenough' + n, device: 'Mac', deviceId: 'd' + n })).body.token;
-  const adaTok = await join('Ada Admin', 2), samTok = await join('Sam Reed', 3), miaTok = await join('Mia Cruz', 4);
-  const ada = call(adaTok), sam = call(samTok), mia = call(miaTok);
+  const adaTok = await join('Ada Admin', 2), samTok = await join('Sam Reed', 3), miaTok = await join('Mia Cruz', 4), kimTok = await join('Kim Lee', 5);
+  const ada = call(adaTok), sam = call(samTok), mia = call(miaTok), kim = call(kimTok);
   st = (await rico('GET', '/state')).body;
   const idOf = (name) => st.workspace.members.find((m) => m.name === name)?.id;
-  const samId = idOf('Sam Reed'), miaId = idOf('Mia Cruz'), adaId = idOf('Ada Admin');
+  const samId = idOf('Sam Reed'), miaId = idOf('Mia Cruz'), adaId = idOf('Ada Admin'), kimId = idOf('Kim Lee');
   await rico('PATCH', '/members/' + adaId, { role: 'admin' });
   await rico('PATCH', '/workspace', { tools: { ...st.workspace.tools, projects: true, column: true, map: true }, memberAccess: { teamSchedule: true } });
   const crew = ((await rico('POST', '/roles', { name: 'Crew', memberIds: [samId] })).body?.roles || []).find((x) => x.name === 'Crew');
@@ -136,7 +140,7 @@ try {
   r = await sam('GET', '/jobs/overview');
   ok(r.status === 200 && !Object.values(r.body?.lists || {}).flat().some((id) => notMine.includes(id)) && (r.body?.lists?.today || []).includes(jVisit.id), 'the Overview: counts over his jobs only');
   r = await sam('GET', '/schedule?date=' + today);
-  ok(r.status === 200 && r.body.members.length === 4 && r.body.visits.some((v) => v.recordId === jVisit.id) && !r.body.visits.some((v) => v.recordId === jOther.id) && !JSON.stringify(r.body).includes(OTHER), 'the day’s schedule (team switch on): everyone’s lanes, but not the other job’s visit');
+  ok(r.status === 200 && r.body.members.length === 5 && r.body.visits.some((v) => v.recordId === jVisit.id) && !r.body.visits.some((v) => v.recordId === jOther.id) && !JSON.stringify(r.body).includes(OTHER), 'the day’s schedule (team switch on): everyone’s lanes, but not the other job’s visit');
   ok(!(r.body?.waiting || []).some((w) => notMine.includes(w.recordId)), 'Jobs to schedule: not the other jobs');
   const sunday = (() => { const d = new Date(today + 'T12:00:00Z'); d.setUTCDate(d.getUTCDate() - d.getUTCDay()); return d.toISOString().slice(0, 10); })();
   r = await sam('GET', '/schedule?week=' + sunday);
@@ -152,7 +156,11 @@ try {
   await rico('PATCH', '/workspace', { memberAccess: { contacts: false } });
   st = (await sam('GET', '/state')).body;
   ok(!st.workspace.stacks.some((x) => x.id === stk?.id) && !JSON.stringify(st).includes('OTHERNOTE'), 'state: not the other job’s stack or its note (search reads state)');
-  ok(!JSON.stringify(st).includes(OTHER), 'state: the other job’s name is nowhere (its chat pin is locked)');
+  ok(!JSON.stringify(st).includes(OTHER) && !JSON.stringify(st).includes(jOther.id), 'state: the other job’s name and id are nowhere');
+  const pinFor = (s2) => (s2.workspace.chatPins || []).find((x) => x.kind === 'job');
+  ok(pinFor(st)?.locked === true && !('id' in pinFor(st)) && !('label' in pinFor(st)), 'its chat pin is there as a locked chip, with no id or name: ' + JSON.stringify(pinFor(st)));
+  const rst = (await rico('GET', '/state')).body;
+  ok(pinFor(rst)?.id === jOther.id && !pinFor(rst).locked && JSON.stringify(pinFor(rst)).includes(OTHER), '(control) the owner’s pin is the job, by name');
   const myRec = ((await sam('GET', `/projects/${p.id}/records`)).body || []).find((x) => x.id === jPerson.id);
   ok(myRec && !JSON.stringify(myRec).includes(OTHER), 'his job that links to the other: no name for it');
 
@@ -162,8 +170,16 @@ try {
   const run = (await sam('POST', '/agents/runs', { agent: 'ops', ask: `RUN:${JSON.stringify([['read_record', { id: jOther.id }], ['find_records', { query: OTHER }], ['read_record', { id: jPerson.id }]])}:END` })).body;
   let x;
   for (let i = 0; i < 100; i++) { x = (await sam('GET', '/agents/runs/' + run?.id)).body; if (x && !['requested', 'planning', 'running'].includes(x.status)) break; await sleep(80); }
-  const toolAnswers = aiSaw.filter((b) => b.includes('tool_result'));
-  ok(toolAnswers.length > 0 && toolAnswers.some((b) => b.includes('Assigned to Sam')) && !toolAnswers.some((b) => b.replace(/RUN:.*?:END/g, '').includes(OTHER)), 'agents’ record tools: his job, never the other’s name');
+  // Each tool's own answer, by its call id (t0 read the other job, t1 find by its name, t2 read his linked job).
+  const results = {};
+  for (const b of aiSaw) for (const m of JSON.parse(b).messages || []) for (const c of Array.isArray(m.content) ? m.content : []) if (c.type === 'tool_result') results[c.tool_use_id] = typeof c.content === 'string' ? c.content : JSON.stringify(c.content);
+  ok(results.t0 !== undefined && !results.t0.includes(OTHER) && /not|gone|can’t|no such|isn’t|no record/i.test(results.t0), 'read_record on the other job: refused, no name: ' + String(results.t0).slice(0, 120));
+  ok(results.t1 !== undefined && !results.t1.includes(OTHER) && !results.t1.includes(jOther.id), 'find_records by its name: nothing: ' + String(results.t1).slice(0, 120));
+  ok(results.t2 !== undefined && results.t2.includes('Assigned to Sam') && !results.t2.includes(OTHER) && !results.t2.includes(jOther.id), 'read_record on his job that links to it: his job, the link without its name or id: ' + String(results.t2).slice(0, 160));
+  // Ask (the AI's search over what he can see), by the other job's address.
+  aiSaw = [];
+  r = await sam('POST', '/ai/ask', { q: 'Who is at Other St' });
+  ok(r.status === 200 && aiSaw.length > 0 && !aiSaw.some((b) => b.includes(OTHER) || b.includes(jOther.id)), 'Ask (search): what the AI is told has no sign of the other job: ' + r.status);
 
   // His own export.
   await sam('POST', '/exports', { kind: 'mine' });
@@ -172,7 +188,7 @@ try {
   const res = await fetch(`${B}/api/exports/${ex?.id}/file`, { headers: { authorization: 'Bearer ' + samTok } });
   fs.writeFileSync(`${DIR}/mine.zip`, Buffer.from(await res.arrayBuffer()));
   const zipText = execFileSync('unzip', ['-Z1', `${DIR}/mine.zip`]).toString().trim().split('\n').map((n) => execFileSync('unzip', ['-p', `${DIR}/mine.zip`, n]).toString()).join('\n');
-  ok(zipText.includes('Sam made this') && !zipText.includes(OTHER), 'his export: his jobs, not the other');
+  ok(zipText.includes('Sam made this') && !zipText.includes(OTHER) && !zipText.includes(jOther.id), 'his export: his jobs, not the other (by name or id)');
 
   // The public API: a key runs as its maker now.
   const key = (await ada('POST', '/integrations/keys', { name: 'Ada key', write: true })).body;
@@ -184,8 +200,9 @@ try {
   await rico('PATCH', '/members/' + adaId, { role: 'admin' });
 
   // Live updates: Sam hears about his jobs, not the other.
-  const S1 = listen(samTok), M1 = listen(miaTok);
-  await S1.ready; await M1.ready;
+  const S1 = listen(samTok), M1 = listen(miaTok), K1 = listen(kimTok), A1 = listen(adaTok);
+  await S1.ready; await M1.ready; await K1.ready; await A1.ready;
+  const clear = () => { for (const h of [S1, M1, K1, A1]) h.heard.length = 0; };
   await rico('PATCH', `/records/${jOther.id}`, { values: { access: 'Side gate' } });
   await rico('PATCH', `/records/${jMade.id}`, { values: { access: 'Front door' } });
   await sleep(500);
@@ -194,16 +211,28 @@ try {
 
   // A job becoming his, and stopping.
   const gone = (h, id) => h.heard.some((m) => m.type === 'record:gone' && m.id === id);
-  S1.heard.length = 0; M1.heard.length = 0;
+  clear();
   await rico('PATCH', `/visits/${ovId}`, { memberIds: [samId] });
   ok(await until(() => heardRec(S1, jOther.id)), 'booked onto its visit: Sam gets the job');
+  ok(!heardRec(K1, jOther.id), 'Kim (nothing to do with it) doesn’t');
   ok((await sam('GET', `/records/${jOther.id}/log`)).status === 200, 'and can read it');
-  S1.heard.length = 0; M1.heard.length = 0;
+  clear();
   await rico('PATCH', `/visits/${ovId}`, { memberIds: [miaId] });
   ok(await until(() => gone(S1, jOther.id)), 'visit given back to Mia: Sam gets record:gone');
-  ok(!gone(M1, jOther.id), 'Mia (on the visit) doesn’t');
+  ok(!gone(M1, jOther.id) && !gone(A1, jOther.id) && !gone(K1, jOther.id), 'Mia (on the visit), the admin and Kim don’t');
   ok((await sam('GET', `/records/${jOther.id}/log`)).status === 404, 'and Sam’s next read 404s');
-  S1.heard.length = 0; M1.heard.length = 0;
+  // A visit added, then removed.
+  clear();
+  const kv = (await rico('POST', `/records/${jMia.id}/visits`, { kind: 'Clean', date: today, start: 900, end: 960, memberIds: [samId] })).body;
+  ok(await until(() => heardRec(S1, jMia.id)) && !heardRec(K1, jMia.id), 'a new visit with Sam on Mia’s job: Sam gets it, Kim doesn’t');
+  ok((await sam('GET', `/records/${jMia.id}/log`)).status === 200, 'and Sam can read it');
+  clear();
+  r = await rico('DELETE', `/visits/${kv?.id}`);
+  ok(r.status === 200, '(the visit is removed) ' + r.status);
+  ok(await until(() => gone(S1, jMia.id)), 'the visit removed: Sam gets record:gone');
+  ok(!gone(M1, jMia.id) && !gone(A1, jMia.id), 'Mia (who made it) and the admin don’t');
+  ok((await sam('GET', `/records/${jMia.id}/log`)).status === 404, 'and Sam’s next read 404s');
+  clear();
   await rico('PATCH', `/records/${jPerson.id}`, { values: { crew: miaId } });
   ok(await until(() => gone(S1, jPerson.id)), 'person field changed to Mia: Sam gets record:gone');
   ok(await until(() => heardRec(M1, jPerson.id)), 'and Mia gets the job');
@@ -216,10 +245,32 @@ try {
   ok(r.status === 200, 'Sam does his step: ' + r.status + ' ' + (r.body?.error || ''));
   ok(await until(() => gone(S1, jLater.id)), 'the run moves on: Sam gets record:gone');
   ok((await sam('GET', `/jobs/${jLater.id}/run`)).status === 404, 'and the next read 404s');
+  // Reopened: his step is current again.
+  S1.heard.length = 0;
+  r = await rico('POST', `/jobs/${jLater.id}/steps/${FL.sid(1)}/reopen`);
+  ok(r.status === 200, '(an admin reopens Sam’s step) ' + r.status + ' ' + (r.body?.error || ''));
+  ok(await until(() => heardRec(S1, jLater.id)), 'his step reopened: Sam gets the job again');
+  ok((await sam('GET', `/jobs/${jLater.id}/run`)).status === 200, 'and can read its run');
+  // Cancelled: the run is gone, so is his step.
+  S1.heard.length = 0;
+  r = await rico('POST', `/jobs/${jStep.id}/flow/cancel`, { reason: 'Customer called it off' });
+  ok(r.status === 200, '(the run on Sam’s step job is cancelled) ' + r.status);
+  ok(await until(() => gone(S1, jStep.id)), 'run cancelled: Sam gets record:gone');
+  ok(!(await recIds(sam)).includes(jStep.id), 'and it’s gone from his next read');
   S1.heard.length = 0;
   await rico('PATCH', '/roles/' + crew?.id, { memberIds: [] });
   ok(await until(() => gone(S1, jRole.id) || S1.heard.some((m) => m.type === 'resync')), 'taken out of the Crew role: Sam loses the Crew job (record:gone or a resync)');
   ok(!(await recIds(sam)).includes(jRole.id), 'and it’s gone from his next read');
+  // A member leaving: their sign-in stops working; nothing of the team's jobs reaches them after.
+  const jKim = await add(kim, { job: 'Kim made this' });
+  ok((await recIds(kim)).includes(jKim?.id), '(Kim sees the job she made)');
+  K1.heard.length = 0;
+  r = await rico('DELETE', '/members/' + kimId);
+  ok(r.status === 200, '(Kim is removed from the team) ' + r.status);
+  ok([401, 403, 404].includes((await kim('GET', `/projects/${p.id}/records`)).status), 'Kim’s next read is refused');
+  await rico('PATCH', `/records/${jKim.id}`, { values: { access: 'After Kim' } });
+  await sleep(300);
+  ok(!heardRec(K1, jKim.id), 'and her socket hears nothing more about it');
 
   // Role and setting changes resync.
   S1.heard.length = 0;
@@ -232,7 +283,13 @@ try {
   await rico('PATCH', '/workspace', { visibility: 'all' });
   ok(await until(() => S1.heard.some((m) => m.type === 'resync')), 'switching to all: his app reloads');
   ids = await recIds(sam);
-  ok([...mine, ...notMine].filter((id) => id !== jRole.id).every((id) => ids.includes(id)) && ids.includes(jRole.id), 'with all, Sam sees every job (nothing else changes)');
+  ok([...mine, ...notMine].every((id) => ids.includes(id)), 'with all, Sam sees every job (nothing else changes)');
+  // And back to own, with his app connected.
+  S1.heard.length = 0;
+  await rico('PATCH', '/workspace', { visibility: 'own' });
+  ok(await until(() => S1.heard.some((m) => m.type === 'resync')), 'switching back to own: his app reloads');
+  ids = await recIds(sam);
+  ok(!ids.includes(jOther.id) && !ids.includes(jPerson.id) && ids.includes(jMade.id), 'and his next read is his jobs only again');
 } catch (e) {
   ok(false, 'threw: ' + (e.stack || e));
 }

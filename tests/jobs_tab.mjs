@@ -53,14 +53,22 @@ try {
   };
   const sk = { canSkip: true };
   const F = await mk('Cleaning', { steps: [{ kind: 'client', name: 'Client', ...sk }, { kind: 'book', name: 'Book', stage: 'Scheduled', ...sk }, { kind: 'work', name: 'Clean', stage: 'Done', ...sk }, { kind: 'invoice', name: 'Invoice', stage: 'Invoiced', ...sk }, { kind: 'payment', name: 'Payment', stage: 'Paid', ...sk }] });
-  const FQ = await mk('Quoted cleaning', { billing: 'quote', steps: [{ kind: 'client', name: 'Client', ...sk }, { kind: 'quote', name: 'Quote', who: { type: 'admins' } }, { kind: 'book', name: 'Book', ...sk }, { kind: 'invoice', name: 'Invoice', who: { type: 'admins' } }, { kind: 'payment', name: 'Payment', who: { type: 'admins' } }] });
+  const FQ = await mk('Quoted cleaning', { billing: 'quote', steps: [{ kind: 'client', name: 'Client', ...sk }, { kind: 'quote', name: 'Quote', who: { type: 'admins' }, settings: { email: false } }, { kind: 'book', name: 'Book', ...sk }, { kind: 'invoice', name: 'Invoice', who: { type: 'admins' } }, { kind: 'payment', name: 'Payment', who: { type: 'admins' } }] });
   const start = async (flow, values) => { const y = await rico('POST', '/jobs', { flowId: flow.id, values }); ok(y.status === 200, `(setup) job “${values.job}” ${y.body?.error || ''}`); return y.body?.job; };
   const skip = (j, flow, kind) => rico('POST', `/jobs/${j.id}/steps/${flow.sid(kind)}/skip`, { reason: 'test' });
   const visit = (j, date, memberIds, start = 540) => rico('POST', `/records/${j.id}/visits`, { kind: 'Clean', date, start, end: start + 60, memberIds });
   const runOf = async (j) => (await rico('GET', `/jobs/${j.id}/run`)).body?.run;
 
   const j1 = await start(F, { job: 'To book', customer: dana });                       // at Book
-  const j2 = await start(FQ, { job: 'To quote', customer: eli });                      // at Quote
+  const lines = (dollars) => ({ rows: [{ desc: 'Clean', qty: 1, price: String(dollars) }] });
+  const j2 = await start(FQ, { job: 'To quote', customer: eli, price: lines(120) });    // at Quote, sent, not answered
+  r = await rico('POST', `/jobs/${j2.id}/quote/send`);
+  ok(r.status === 200, '(setup) the quote is sent: ' + r.status + ' ' + (r.body?.error || ''));
+  const j2b = await start(FQ, { job: 'Quote accepted', customer: eli, price: lines(90) }); // sent and accepted: at Book
+  r = await rico('POST', `/jobs/${j2b.id}/quote/send`);
+  const tok2b = r.body?.share?.token || r.body?.token || (r.body?.url || '').split('/q/')[1];
+  const vOf = async (u) => (await (await fetch(u)).text()).match(/name="v" value="([^"]+)"/)?.[1] || '';
+  await fetch(`${B}/q/${tok2b}/accept`, { method: 'POST', body: new URLSearchParams({ name: 'Eli', v: await vOf(`${B}/q/${tok2b}`) }), redirect: 'manual' });
   const j3 = await start(F, { job: 'Booked today', customer: dana });
   await visit(j3, today, [samId], 540); await visit(j3, today, [samId], 780);         // two visits today: one job
   const j4 = await start(F, { job: 'To invoice', customer: fay });
@@ -72,10 +80,19 @@ try {
   const plain = (vals) => rico('POST', `/projects/${p.id}/records`, { typeId: tp.id, values: vals }).then((y) => y.body);
   const j6 = await plain({ job: 'Plain, today', customer: hal });
   await visit(j6, today, [miaId], 600);                                                 // not on a flow, visit today (Mia's)
-  const j7 = await plain({ job: 'Plain, nothing booked', customer: hal });             // open, no visit ahead
+  const j7 = await plain({ job: 'Plain, nothing booked', customer: hal }); // open, no visit ahead
   const j8 = await plain({ job: 'Plain, booked yesterday', customer: hal });
   await visit(j8, yesterday, [miaId], 600);
-  ok((await runOf(j1))?.current?.kind === 'book' && (await runOf(j2))?.current?.kind === 'quote' && (await runOf(j4))?.current?.kind === 'invoice' && (await runOf(j5))?.current?.kind === 'payment', '(setup) the jobs are at Book, Quote, Invoice and Payment');
+  const j9 = await plain({ job: 'Plain, booked tomorrow', customer: hal });
+  await visit(j9, dayOf(Date.now() + 86400000), [miaId], 600);
+  // Hal's invoices: one sent and unpaid ($100), one sent and paid in full ($30), one still a draft.
+  const invOf = async (j) => { const y = (await rico('POST', `/records/${j.id}/invoices`, {})).body; return y?.invoice || y; };
+  const j10 = await plain({ job: 'Hal billed', customer: hal, price: lines(100) }), j11 = await plain({ job: 'Hal paid', customer: hal, price: lines(30) });
+  const hA = await invOf(j10), hB = await invOf(j11), hC = await invOf(j10);
+  await rico('POST', `/invoices/${hA?.id}/send`); await rico('POST', `/invoices/${hB?.id}/send`);
+  r = await rico('POST', `/invoices/${hB?.id}/payments`, { amount: '30', method: 'cash' });
+  ok(hA?.id && hB?.id && hC?.id && r.status === 200, '(setup) Hal’s three invoices');
+  ok((await runOf(j1))?.current?.kind === 'book' && (await runOf(j2))?.current?.kind === 'quote' && (await runOf(j2b))?.current?.kind === 'book' && (await runOf(j4))?.current?.kind === 'invoice' && (await runOf(j5))?.current?.kind === 'payment', '(setup) the jobs are at Book, Quote, Invoice and Payment');
 
   // 1. Overview.
   r = await rico('GET', '/jobs/overview');
@@ -83,10 +100,13 @@ try {
   const O = r.body || {};
   const L = O.lists || {};
   ok(O.counts?.quote === 1 && L.quote?.join() === j2.id, 'To quote: the job at a Quote step');
-  ok(O.counts?.book === 1 && L.book?.join() === j1.id, 'To book: the job at a Book step');
+  ok(O.counts?.book === 2 && [...(L.book || [])].sort().join() === [j1.id, j2b.id].sort().join(), 'To book: the jobs at a Book step (one after its quote was accepted)');
   ok(O.counts?.today === 2 && [...(L.today || [])].sort().join() === [j3.id, j6.id].sort().join(), 'Booked today: a job with two visits today counts once, a job not on a flow counts too, yesterday’s doesn’t');
   ok(O.counts?.invoice === 1 && L.invoice?.join() === j4.id, 'To invoice: the job at an Invoice step');
   ok(O.counts?.payment === 1 && L.payment?.join() === j5.id, 'Waiting for payment: the job at a Payment step');
+  const steps4 = ['quote', 'book', 'invoice', 'payment'].map((k) => L[k] || []);
+  ok(steps4.flat().length === new Set(steps4.flat()).size, 'a job is in at most one of To quote, To book, To invoice and Waiting for payment');
+  ok(![j6, j7, j8, j9].some((j) => steps4.flat().includes(j.id)) && !(L.today || []).includes(j9.id) && !(L.today || []).includes(j8.id), 'jobs not on a flow are only ever in Booked today (yesterday’s and tomorrow’s visits don’t count)');
   const listed = new Set(((await rico('GET', '/jobs')).body?.jobs || []).map((j) => j.id));
   ok(Object.values(L).flat().every((id) => listed.has(id)), 'every job counted is in the Jobs list');
   ok(!/total|balance|amount|8000|80\.00/.test(JSON.stringify(O)), 'no amounts in the Overview');
@@ -101,9 +121,11 @@ try {
   ok(r.status === 200 && Array.isArray(r.body?.clients), 'Clients answers: ' + r.status + ' ' + (r.body?.error || ''));
   const C = (list, id) => (list || []).find((x) => x.id === id);
   const oc = r.body?.clients || [];
-  ok(C(oc, dana)?.jobs === 2 && C(oc, dana)?.open === 2 && C(oc, eli)?.jobs === 1 && C(oc, fay)?.jobs === 2 && C(oc, hal)?.jobs === 3, 'each client with how many jobs and how many are open');
+  ok(C(oc, dana)?.jobs === 2 && C(oc, dana)?.open === 2 && C(oc, eli)?.jobs === 2 && C(oc, fay)?.jobs === 2 && C(oc, hal)?.jobs === 6, 'each client with how many jobs and how many are open');
   ok(C(oc, gus) && C(oc, gus).jobs === 0, 'a contact in the Clients group is listed for owners, with no jobs');
-  ok(C(oc, fay)?.balance === 8000 && C(oc, fay)?.invoices === 1 && typeof C(oc, dana)?.quotes === 'number', 'owners get each client’s balance owed, unpaid invoices and open quotes');
+  ok(C(oc, fay)?.balance === 8000 && C(oc, fay)?.invoices === 1, 'owners get each client’s balance owed and unpaid invoices');
+  ok(C(oc, hal)?.invoices === 1 && C(oc, hal)?.balance === 10000, 'a paid invoice and a draft don’t count: Hal owes $100 on one invoice: ' + JSON.stringify(C(oc, hal)));
+  ok(C(oc, eli)?.quotes === 1 && C(oc, dana)?.quotes === 0 && C(oc, fay)?.quotes === 0, 'open quotes: sent and not answered (Eli’s accepted one doesn’t count)');
   ok(!C(oc, idOf('Rico Vega')) && oc.every((x) => typeof x.name === 'string'), 'only contacts are listed');
   ok((await ada('GET', '/jobs/clients')).body?.clients?.length === oc.length, 'an admin gets the same list');
   ok((await sam('GET', '/jobs/clients')).status === 403, 'a member with Contacts off gets no Clients');
@@ -142,7 +164,8 @@ try {
   const waiting = (r.body?.waiting || []).map((w) => w.recordId);
   ok(waiting.includes(j1.id), 'Jobs to schedule: the job at a Book step');
   ok(!waiting.includes(j2.id) && !waiting.includes(j4.id) && !waiting.includes(j5.id), 'a flow job not at a Book step isn’t listed (at Quote, Invoice, Payment)');
-  ok(waiting.includes(j7.id) && waiting.includes(j8.id) && !waiting.includes(j6.id), 'jobs not on a flow: open, nothing booked ahead (today’s rule)');
+  ok(waiting.includes(j7.id) && waiting.includes(j8.id), 'jobs not on a flow: open with nothing booked, or only a past visit, are listed');
+  ok(!waiting.includes(j6.id) && !waiting.includes(j9.id), 'a visit today (any time) or later counts as booked ahead: not listed');
 } catch (e) {
   ok(false, 'threw: ' + (e.stack || e));
 }
