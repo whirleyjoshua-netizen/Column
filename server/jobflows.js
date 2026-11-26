@@ -830,17 +830,17 @@ export function jobFlowsModule(ctx) {
       if (!g?.tasksPending) continue;
       const ws = db.workspaces[c.wsId];
       const owner = ws && (memberOf(ws, c.ownerId) || ws.members.find((m) => m.role === 'owner'));
-      // Each of the step's tasks once: one already made (a try that failed partway) isn't made again; the marker comes
-      // off only when they're all there.
-      const have = new Set(Object.values(db.tasks).filter((x) => x.goalId === g.id).map((x) => x.text));
+      // Each of the step's tasks once, by its place in the step (two the same are two): one already made (a try that
+      // failed partway) isn't made again; the marker comes off only when they're all there.
+      g.tasksMade ||= [];
       try {
-        for (const text of g.step.settings?.tasks || []) {
-          if (have.has(text)) continue;
+        (g.step.settings?.tasks || []).forEach((text, i) => {
+          if (g.tasksMade.includes(i)) return;
           const tk = applyTask({ id: rid(), wsId: c.wsId, by: owner?.name || 'Kloomie', memberId: owner?.id || null, createdAt: Date.now(), text: '', done: false, doneAt: null, due: null, priority: 0, goalId: g.id, assigneeId: null, recordId: c.recordId }, { text });
           db.tasks[tk.id] = tk;
-          have.add(tk.text);
+          g.tasksMade.push(i);
           made.push([c, tk]);
-        }
+        });
         delete g.tasksPending;
       } catch (e) { console.error('A moved job’s tasks couldn’t all be made (tried again on the next look):', e.message); }
     }

@@ -9004,11 +9004,10 @@ async function api(req, res, url) {
       if (!j || !PJ.recordAt(rec.id, ws.id, auth.memberId)) continue;
       // A job on a flow waits to be scheduled when its run is at a Book step; one not on a flow by the old rule below.
       const run = JF.activeRun(rec.id);
-      if (run) { const cur = JF.runView(ws, auth, run)?.steps?.find((x) => x.state === 'current'); if (cur?.kind !== 'book') continue; }
-      else if (!j.t.fields.some((f) => f.type === 'contact') || JF.runsOf(rec.id).some((c) => c.status === 'done')) continue;
       const st = j.t.fields.find((f) => f.key === 'status');
       const stage = st?.choices.find((x) => x.id === rec.values[st.id])?.label || '';
-      if (/^(done|installed|complete|paid|invoiced|skipped|claim paid)$/i.test(stage)) continue;
+      if (run) { const cur = JF.runView(ws, auth, run)?.steps?.find((x) => x.state === 'current'); if (cur?.kind !== 'book') continue; } // its run decides, not its stage
+      else if (!j.t.fields.some((f) => f.type === 'contact') || JF.runsOf(rec.id).some((c) => c.status === 'done') || /^(done|installed|complete|paid|invoiced|skipped|claim paid)$/i.test(stage)) continue;
       if (visitsOf(rec.id).some((v) => !v.done && v.date >= today)) continue;
       waiting.push({ recordId: rec.id, projectId: rec.projectId, label: jobLabel(rec), stage, list: j.t.singular || j.t.name, icon: j.t.icon || '' });
     }
