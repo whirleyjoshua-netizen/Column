@@ -10,7 +10,7 @@ const DIR = S + '/dk/jobs_tab_ui';
 FS.rmSync(DIR, { recursive: true, force: true });
 FS.mkdirSync(DIR, { recursive: true });
 const PORT = 5267, CDP = 9604, APP = `http://127.0.0.1:${PORT}/`;
-const srv = spawn('node', ['index.js'], { cwd: new URL('../server', import.meta.url).pathname, env: { ...process.env, PORT: String(PORT), PUBLIC_URL: APP.slice(0, -1), DATA_DIR: DIR + '/data', MAIL_OUTBOX: '1', RESEND_API_KEY: '', DATABASE_URL: '', STRIPE_SECRET_KEY: '', SKIP_SETUP: '1' }, stdio: 'ignore' });
+const srv = spawn('node', ['index.js'], { cwd: new URL('../server', import.meta.url).pathname, env: { ...process.env, PORT: String(PORT), PUBLIC_URL: APP.slice(0, -1), DATA_DIR: DIR + '/data', MAIL_OUTBOX: '1', RESEND_API_KEY: '', DATABASE_URL: '', STRIPE_SECRET_KEY: '', SKIP_SETUP: '1', JOBFLOWS_MOVE_MAX: '1' }, stdio: 'ignore' }); // one job a request: the app has to repeat
 const chrome = spawn('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', ['--headless=new', `--remote-debugging-port=${CDP}`, `--user-data-dir=${DIR}/chrome`, '--no-first-run', '--window-size=1280,900', 'about:blank'], { stdio: 'ignore' });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let fails = 0;
@@ -110,12 +110,17 @@ try {
   // Move my jobs here.
   await A.tap(TOOL('[data-jb=overview]'));
   ok(await A.until(`!!document.querySelector('#tool .jb-move-row[data-move="${tp.id}"]')`), 'Overview offers Move my jobs here for the board');
-  await A.pick(`document.querySelector('#tool .jb-move-row[data-move="${tp.id}"] select')`, 'flow:' + flow.id);
+  // A ready-made start: the first request makes the flow and moves one job; the app repeats with that flow for the rest.
+  await A.pick(`document.querySelector('#tool .jb-move-row[data-move="${tp.id}"] select')`, 'start:cleaning');
   await A.tap(TOOL(`.jb-move-row[data-move="${tp.id}"] [data-act=move-jobs]`));
   const runOf = async (id) => (await rico('GET', `/jobs/${id}/run`))?.run;
   let moved = false;
   for (let i = 0; i < 50 && !moved; i++) { moved = !!(await runOf(plain1.id)) && !!(await runOf(plain2.id)); if (!moved) await sleep(200); }
-  ok(moved && (await runOf(plain1.id))?.current?.name === 'Book' && (await runOf(plain2.id))?.current?.name === 'Client', 'both old jobs move onto the flow, each at the step for its stage');
+  const r1 = await runOf(plain1.id), r2 = await runOf(plain2.id);
+  ok(moved && r1?.flowId && r1.flowId === r2?.flowId && r1.flowId !== flow.id, 'with one job a request, the app repeats: both old jobs end up on the one flow the first request made');
+  ok(r1?.current?.kind === 'book' && r2?.current?.kind === 'client', 'each at the step for its stage');
+  ok(await A.until(`/2 jobs moved/.test(document.querySelector('#toast, .toast')?.textContent || '')`, 5000), 'the app says both moved');
+  ok((await rico('GET', '/job-flows')).flows.filter((f) => f.fromStart === 'cleaning').length === 1, 'and only one flow was made');
   ok(await A.until(`!document.querySelector('#tool .jb-move-row[data-move="${tp.id}"]')`), 'and the board leaves Move my jobs here');
 
   // A member's tabs, and losing a job they have open.

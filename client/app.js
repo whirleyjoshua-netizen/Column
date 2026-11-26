@@ -18645,6 +18645,7 @@
     JB.runs.delete(msg.id); PR.visits?.delete?.(msg.id); PR.logs.delete(msg.id);
     lkForget('record', msg.id);
     JB.ov = null; JB.clients = null; JB.wk = null; TS.data = null;
+    if (TS.drag?.recordId === msg.id) TS.drag = null; // a job being dragged that's no longer theirs can't be dropped
     if (PR.panel === msg.id) { PR.panel = null; toast('You no longer have this job.'); renderProjects(); }
     if (pinned('rec:' + msg.id)) renderTabs();
     jbRender();
@@ -19243,20 +19244,31 @@
     const name = h('input', { placeholder: 'Trash can cleaning, individual', maxlength: 80 });
     const list = h('select', { 'aria-label': 'Job list' }, lists.map(({ p, t }, i) => h('option', { value: i }, `${p.name} · ${t.name}`)));
     // The ready-made starts come from the server, as steps for the list picked (PHASE5.md §6).
-    const start = h('select', { 'aria-label': 'Start from' }, h('option', { value: 'blank' }, 'Loading…'));
-    let starts = [];
+    const start = h('select', { 'aria-label': 'Start from', disabled: true }, h('option', { value: '' }, 'Loading…'));
+    // The starts for the list picked now: an answer for a list picked before is dropped; until it's here (or if it
+    // fails) there's nothing to make from.
+    let starts = null, forList = null, ask = 0;
     const loadStarts = async () => {
-      const { p, t } = lists[Number(list.value)];
-      const y = await api('GET', `/job-flows/starts?projectId=${encodeURIComponent(p.id)}&typeId=${encodeURIComponent(t.id)}`).catch(() => null);
-      starts = y?.starts || [];
-      start.replaceChildren(...starts.map((x) => h('option', { value: x.key, selected: x.key === (y?.suggested || 'service') }, x.label)));
+      const n = ++ask, key = list.value;
+      const { p, t } = lists[Number(key)];
+      starts = null; forList = null;
+      start.disabled = true;
+      start.replaceChildren(h('option', { value: '' }, 'Loading…'));
+      const y = await api('GET', `/job-flows/starts?projectId=${encodeURIComponent(p.id)}&typeId=${encodeURIComponent(t.id)}`).catch((e) => ({ error: e.message }));
+      if (n !== ask) return;
+      if (!y?.starts) { start.replaceChildren(h('option', { value: '' }, 'Couldn’t load the starts')); return toast(y?.error || 'Couldn’t load the ready-made starts. Try again.'); }
+      starts = y.starts; forList = key;
+      start.disabled = false;
+      start.replaceChildren(...starts.map((x) => h('option', { value: x.key, selected: x.key === (y.suggested || 'service') }, x.label)));
     };
     list.addEventListener('change', loadStarts);
     loadStarts();
     sheet('New job flow', [h('label', {}, 'Name', name), h('label', {}, 'For the jobs on', list), h('label', {}, 'Start from', start), h('small', { class: 'muted' }, 'You can change every step before you publish it.')], async () => {
       if (!name.value.trim()) throw new Error('Give the flow a name.');
       const { p, t } = lists[Number(list.value)];
-      const y = await api('POST', '/job-flows', { name: name.value.trim(), list: { projectId: p.id, typeId: t.id }, steps: starts.find((x) => x.key === start.value)?.steps || [{ kind: 'custom', name: 'First step', settings: { text: '' } }] });
+      const chosen = forList === list.value && starts?.find((x) => x.key === start.value);
+      if (!chosen) throw new Error('The ready-made starts for that list haven’t loaded yet. Try again in a moment.');
+      const y = await api('POST', '/job-flows', { name: name.value.trim(), list: { projectId: p.id, typeId: t.id }, steps: chosen.steps });
       JB.flows.push(y);
       jbEdit(y);
     }, 'Make it');
