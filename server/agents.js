@@ -1365,7 +1365,7 @@ export function agentsModule({ autoEvents = [], sees = () => true, offWhy = () =
   const recTitle = (id) => {
     const r = db.records[id];
     const p = r && db.projects[r.projectId];
-    if (labelCx && (!r || r.wsId !== labelCx.ws.id || !PJ.sees(p, labelCx.memberId))) return null;
+    if (labelCx && (!r || r.wsId !== labelCx.ws.id || !PJ.seesRec(r, labelCx.memberId))) return null;
     const t = p?.types.find((x) => x.id === r.typeId);
     return t ? String(r.values[t.primary] ?? '') || 'Untitled' : null;
   };

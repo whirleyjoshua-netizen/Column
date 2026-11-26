@@ -30,6 +30,8 @@ const WHO = ['anyone', 'admins', 'role', 'member'];
 const SENT = ['sent', 'viewed', 'partial', 'paid'];
 const WAITING = { held: 'approval', zero: 'zero', owner: 'owner', refused: 'refused' };
 const MAX_FLOWS = 50, MAX_STEPS = 30, KEY_MS = 10 * 60 * 1000;
+// Jobs one Move my jobs here request moves (a test can make it small to see the rest counted).
+const MOVE_MAX = (process.env.NODE_ENV !== 'production' && Number(process.env.JOBFLOWS_MOVE_MAX)) || 2000;
 
 export const isJobRun = (c) => c?.kind === 'job';
 export const isJobList = (t) => !!t && (t.key === 'jobs' || String(t.key || '').startsWith('trade_'));
@@ -755,10 +757,12 @@ export function jobFlowsModule(ctx) {
   // send it would make by itself asks first, this once. Built and kept in one synchronous turn, so overlapping moves
   // can't give a job two runs.
   const MOVE_REASON = 'Before the move to Job Flows';
+  // Test only: a job with this name makes its move fail after the run is kept, so the rollback can be tested.
+  const FAIL_MOVE = process.env.NODE_ENV !== 'production' ? process.env.JOBFLOWS_FAIL_MOVE || '' : '';
   function moveOne(ws, auth, rec, flow, version) {
     const t = typeOfRec(rec);
     const run = buildRun(ws, auth, rec, flow, version);
-    run.tasks = []; // no tasks made by the move: a Tasks step's tasks are made when the job wakes (wake)
+    run.tasks = []; // no tasks made by the move: a Tasks step's tasks are made when the job gets there awake (tasksSweep)
     const steps = version.body.steps;
     const stage = stageOfRec(t, rec);
     let at = -1;
@@ -767,25 +771,38 @@ export function jobFlowsModule(ctx) {
     if (at < 0) at = 0;
     const upTo = last ? steps.length : at; // the last stage: every step met or skipped, the run done
     const now = Date.now();
-    commitRun(run); // kept first: what a step stands for is read against the kept run
-    run.goals.forEach((g, i) => {
-      if (g.step.kind === 'tasks') g.tasksPending = true;
-      if (i >= upTo) return;
-      const met = stepMetOn(g, rec);
-      if (!met) Object.assign(g, { skipped: true, skipReason: MOVE_REASON, skippedAt: now, skippedBy: auth.memberId });
-      g.finished = true; g.finishedAt = now; g.finishedById = auth.memberId;
-      if (g.step.kind === 'work') g.stockUsed = { moved: true }; // done before the move: no stock taken for it
-      if (g.step.kind === 'gearIn') { g.inHeld = true; g.roundEnd = now; }
-    });
-    run.c.moved = { at: now, by: auth.memberId, stepGoalId: run.goals[Math.min(at, run.goals.length - 1)]?.id || null, hold: !last };
-    if (last) Object.assign(run.c, { status: 'done', doneBySteps: true, doneAt: now });
-    const g = !last && run.goals[at];
-    if (g) {
-      g.askOnce = true;
-      // A send that would go by itself: ready now as a pending send, waiting for an OK.
-      if (g.step.kind === 'remind') { const today = teamClock(ws).today; const kind = (g.step.settings?.visitKind || '').toLowerCase(); const v = visitsOf(rec.id).find((x) => !x.done && x.date > today && (!kind || String(x.kind || '').toLowerCase() === kind)); if (v) makePending(run.c, g, { kind: 'remind', visitId: v.id }); }
-      if (g.step.kind === 'review') makePending(run.c, g, { kind: 'review' });
+    // Kept first (what a step stands for is read against the kept run), and taken back out whole if anything after
+    // fails: the job is then as it was, and reported as not moved.
+    const had = { onFlowSince: rec.onFlowSince, lines: run.lines ? { has: Object.hasOwn(rec.values, run.lines.fieldId), v: rec.values[run.lines.fieldId] } : null, updatedAt: rec.updatedAt };
+    commitRun(run);
+    try {
+      run.goals.forEach((g, i) => {
+        if (g.step.kind === 'tasks' && !(i < upTo)) g.tasksPending = true;
+        if (i >= upTo) return;
+        const met = stepMetOn(g, rec);
+        if (!met) Object.assign(g, { skipped: true, skipReason: MOVE_REASON, skippedAt: now, skippedBy: auth.memberId });
+        g.finished = true; g.finishedAt = now; g.finishedById = auth.memberId;
+        if (g.step.kind === 'work') g.stockUsed = { moved: true }; // done before the move: no stock taken for it
+        if (g.step.kind === 'gearIn') { g.inHeld = true; g.roundEnd = now; }
+      });
+      run.c.moved = { at: now, by: auth.memberId, stepGoalId: last ? null : run.goals[at]?.id || null, hold: !last };
+      if (last) Object.assign(run.c, { status: 'done', doneBySteps: true, doneAt: now });
+      if (!last) run.goals[at].askOnce = true;
+      if (FAIL_MOVE && PJ.recName(db.projects[rec.projectId], rec) === FAIL_MOVE) throw new Error('Job Flows test: the move failed after the run was kept');
+    } catch (e) {
+      delete db.campaigns[run.c.id];
+      for (const g of run.goals) delete db.goals[g.id];
+      rec.onFlowSince = had.onFlowSince;
+      if (!had.onFlowSince) delete rec.onFlowSince;
+      if (had.lines) { if (had.lines.has) rec.values[run.lines.fieldId] = had.lines.v; else delete rec.values[run.lines.fieldId]; rec.updatedAt = had.updatedAt; }
+      throw e;
     }
+    // The move is kept. A send the landed step would make by itself is ready now as a pending send, waiting for an OK.
+    const g = !last && run.goals[at];
+    try {
+      if (g?.step.kind === 'remind') { const today = teamClock(ws).today; const kind = (g.step.settings?.visitKind || '').toLowerCase(); const v = visitsOf(rec.id).find((x) => !x.done && x.date > today && (!kind || String(x.kind || '').toLowerCase() === kind)); if (v) makePending(run.c, g, { kind: 'remind', visitId: v.id }); }
+      if (g?.step.kind === 'review') makePending(run.c, g, { kind: 'review' });
+    } catch (e) { console.error('A moved job’s waiting message couldn’t be made:', e.message); }
     note(rec, `Moved onto the flow “${flow.name}” at “${last ? 'the end (done)' : steps[at].name}”`, auth.member);
     return run;
   }
@@ -797,23 +814,31 @@ export function jobFlowsModule(ctx) {
     const c = recId && activeRun(recId);
     if (!c?.moved?.hold) return false;
     c.moved.hold = false;
-    const ws = db.workspaces[c.wsId];
-    const owner = ws && (memberOf(ws, c.ownerId) || ws.members.find((m) => m.role === 'owner'));
-    const made = [];
-    for (const g of stepGoals(c)) {
-      if (!g.tasksPending) continue;
-      delete g.tasksPending;
-      if (g.skipped || g.finished) continue;
-      for (const text of g.step.settings?.tasks || []) {
-        const tk = applyTask({ id: rid(), wsId: c.wsId, by: owner?.name || 'Kloomie', memberId: owner?.id || null, createdAt: Date.now(), text: '', done: false, doneAt: null, due: null, priority: 0, goalId: g.id, assigneeId: null, recordId: recId }, { text });
-        db.tasks[tk.id] = tk;
-        made.push(tk);
-      }
-    }
     save();
-    for (const tk of made) { noteWork(tk, null); broadcast(c.wsId, { type: 'task', task: publicTask(tk) }); }
     tell(c);
     stepsSoon(c.wsId);
+    return true;
+  }
+  // A moved job's Tasks step gets its tasks when the job, awake, gets to it (each step's when it's reached, never
+  // ahead). Answers whether anything changed.
+  function tasksSweep(wsId) {
+    const made = [];
+    for (const c of Object.values(db.campaigns)) {
+      if (c.wsId !== wsId || !isJobRun(c) || c.status !== 'active' || !c.moved || c.moved.hold) continue;
+      const g = currentGoal(c);
+      if (!g?.tasksPending) continue;
+      delete g.tasksPending;
+      const ws = db.workspaces[c.wsId];
+      const owner = ws && (memberOf(ws, c.ownerId) || ws.members.find((m) => m.role === 'owner'));
+      for (const text of g.step.settings?.tasks || []) {
+        const tk = applyTask({ id: rid(), wsId: c.wsId, by: owner?.name || 'Kloomie', memberId: owner?.id || null, createdAt: Date.now(), text: '', done: false, doneAt: null, due: null, priority: 0, goalId: g.id, assigneeId: null, recordId: c.recordId }, { text });
+        db.tasks[tk.id] = tk;
+        made.push([c, tk]);
+      }
+    }
+    if (!made.length) return false;
+    save();
+    for (const [c, tk] of made) { noteWork(tk, null); broadcast(c.wsId, { type: 'task', task: publicTask(tk) }); tell(c); }
     return true;
   }
   async function moveJobs(ws, auth, body) {
@@ -839,7 +864,16 @@ export function jobFlowsModule(ctx) {
     }
     const version = activeVersion(flow);
     if (version.body.list?.projectId !== p.id || version.body.list?.typeId !== t.id) return { status: 400, body: { error: `“${flow.name}” is for another job list.` } };
-    const ids = Array.isArray(body.recordIds) ? body.recordIds.slice(0, 2000).map(String) : Object.values(db.records).filter((r) => r.projectId === p.id && r.typeId === t.id).map((r) => r.id).slice(0, 2000);
+    // At most MOVE_MAX jobs a request; what's left over is counted in `more`, so the app moves the rest in turn.
+    const eligible = (r) => !activeRun(r.id) && !runsOf(r.id).some((c) => c.status === 'done') && !isLegacy(r);
+    let ids;
+    if (Array.isArray(body.recordIds)) {
+      if (body.recordIds.length > MOVE_MAX) return { status: 400, body: { error: `Move up to ${MOVE_MAX.toLocaleString()} jobs at a time.` } };
+      ids = body.recordIds.map(String);
+    } else {
+      const all = Object.values(db.records).filter((r) => r.projectId === p.id && r.typeId === t.id);
+      ids = [...all.filter(eligible), ...all.filter((r) => !eligible(r))].slice(0, MOVE_MAX).map((r) => r.id);
+    }
     let moved = 0;
     const skipped = [];
     const started = [];
@@ -854,7 +888,8 @@ export function jobFlowsModule(ctx) {
     save();
     for (const run of started) { tell(run.c); const rec = db.records[run.recordId]; if (rec) PJ.reseeJob(rec); }
     if (started.length) settle(ws, auth);
-    return { status: 200, body: { moved, skipped, flowId: flow.id } };
+    const more = Array.isArray(body.recordIds) ? 0 : Object.values(db.records).filter((r) => r.projectId === p.id && r.typeId === t.id && eligible(r)).length;
+    return { status: 200, body: { moved, skipped, flowId: flow.id, more } };
   }
 
   // A flow a person may read: admins every one; a member only a published, unarchived flow they may start, on a job
@@ -1836,5 +1871,5 @@ export function jobFlowsModule(ctx) {
     }
   }
 
-  return { currentWho, reseeRuns, wake, route, linksSweep, mapJobs, pinInfo, isJobRecord, campaignGone, stepMet, activeRun, isJobRun, isJobList, runsOf, bindInvoice, dropFor, tell, runView, autoBill, autoMessages, invoiceNews, dueDaysFor, jobQuote, priceListItems, itemPrice };
+  return { currentWho, reseeRuns, wake, tasksSweep, route, linksSweep, mapJobs, pinInfo, isJobRecord, campaignGone, stepMet, activeRun, isJobRun, isJobList, runsOf, bindInvoice, dropFor, tell, runView, autoBill, autoMessages, invoiceNews, dueDaysFor, jobQuote, priceListItems, itemPrice };
 }

@@ -403,6 +403,8 @@ export function projectsModule({ onTouch = () => {}, jobCurrentWho = () => null,
     jobSeers.set(rec.id, now);
     for (const id of was) if (!now.has(id)) broadcast(rec.wsId, { type: 'record:gone', id: rec.id, projectId: rec.projectId, forMember: id });
     for (const id of now) if (!was.has(id)) broadcast(rec.wsId, { type: 'record', record: publicRecord(rec, viewOf(rec.wsId, id)), forMember: id, gained: true });
+    // The job's files stack is in the app's state: whoever gained or lost the job loads again, so it comes or goes too.
+    if (rec.stackId) for (const id of new Set([...was, ...now])) if (was.has(id) !== now.has(id)) broadcast(rec.wsId, { type: 'resync', forMember: id });
   }
   // A new job's seers, noted without telling anyone (the record's own broadcast already reached them).
   const noteSeers = (rec) => { const p = db.projects[rec.projectId]; if (isJobT(p && typeOf(p, rec.typeId))) jobSeers.set(rec.id, seersNow(rec)); };
@@ -518,7 +520,7 @@ export function projectsModule({ onTouch = () => {}, jobCurrentWho = () => null,
     const jobIds = (t?.fields || []).filter((f) => f.type === 'job' && r.values[f.id]).map((f) => r.values[f.id]);
     if (jobIds.length) {
       const jobs = {};
-      for (const id of jobIds) { const j = jobOk(wsId, p, id); if (j) jobs[id] = j; }
+      for (const id of jobIds) { const j = jobOk(wsId, p, id); if (j && jobShown(id, view)) jobs[id] = j; }
       r = { ...r, jobs };
     }
     const ids = (t?.fields || []).filter((f) => f.type === 'contact' && r.values[f.id]).map((f) => r.values[f.id]);
@@ -535,6 +537,16 @@ export function projectsModule({ onTouch = () => {}, jobCurrentWho = () => null,
     if (!jp || j.wsId !== wsId || (jp.private && jp.id !== p?.id)) return null;
     const jt = jp.types.find((x) => x.id === j.typeId);
     return { name: String(j.values[jt?.primary] ?? '').trim() || jt?.singular || 'Job', project: jp.name, projectId: jp.id, typeId: j.typeId };
+  }
+  // Whether a reader may see the name of the job a record points at (PHASE5.md §5): the reader's own sight (a view
+  // with who's reading), everyone's for a full view (owners' and admins' copies, webhooks), and with no view only in a
+  // team not set to "members see only theirs" (fail-closed: an unknown reader in an "own" team gets no name).
+  function jobShown(id, view) {
+    const j = db.records[id];
+    if (!j) return false;
+    if (view?.memberId) return seesJob(j, view.memberId);
+    if (view?.prices) return true;
+    return (db.workspaces[j.wsId]?.settings?.visibility || 'all') !== 'own' || !isJobT(db.projects[j.projectId] && typeOf(db.projects[j.projectId], j.typeId));
   }
   // A label's tag: random, unique, and new whenever a label is remade (the old one stops working).
   const TAG_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
@@ -725,7 +737,7 @@ export function projectsModule({ onTouch = () => {}, jobCurrentWho = () => null,
     if (f.type === 'signature') return `signed by ${v.name}`;
     if (f.type === 'permit') return [v.status, v.number ? '#' + v.number : '', v.inspection ? 'inspection ' + v.inspection : ''].filter(Boolean).join(' · ');
     if (f.type === 'location') return v.address || (Number.isFinite(v.lat) ? `${v.lat.toFixed(5)}, ${v.lng.toFixed(5)}` : '');
-    if (f.type === 'job') return jobOk(ws.id, p, v)?.name || '';
+    if (f.type === 'job') return jobShown(v, view) ? jobOk(ws.id, p, v)?.name || '' : 'a job';
     if (f.type === 'secret') return v.set ? 'set' : '';
     return String(v).slice(0, 120);
   }

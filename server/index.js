@@ -4104,6 +4104,8 @@ function automate(wsId, kind, ctx = {}) {
     const cx = withJob(x, ctx);
     if (!autoMatches(x.trigger, cx)) continue;
     if (ctx.ownersOnly && !isAdminId(wsId, x.memberId)) continue;
+    // An automation acts as its maker: never on a job its maker can't see (PHASE5.md §5).
+    if (cx.record?.id && db.records[cx.record.id] && !PJ.seesRec(db.records[cx.record.id], x.memberId)) continue;
     if (priv) {
       const mine = (x.trigger.campaignId && x.trigger.campaignId === (cx.campaign?.parentId || cx.campaign?.id) && seesCampaign(x.trigger.campaignId, x.memberId))
         || (x.trigger.projectId && x.trigger.projectId === cx.project?.id && PJ.sees(cx.project, x.memberId));
@@ -4207,6 +4209,8 @@ function jobSteps(wsId, by, byId) {
     if (stepsBusy === 1 && JF.autoBill(wsId)) jobStepsOnce(wsId, by, byId);
     // Phase 4: what's kept the first time a step is met (a check-in's round end, stock used, a campaign made).
     if (stepsBusy === 1 && JF.linksSweep(wsId)) jobStepsOnce(wsId, by, byId);
+    // A moved job's Tasks step gets its tasks when the job reaches it (PHASE5.md §6).
+    if (stepsBusy === 1 && JF.tasksSweep(wsId)) jobStepsOnce(wsId, by, byId);
     // A run's current step moving gives or takes the job from members it names (PHASE5.md §5).
     if (stepsBusy === 1) JF.reseeRuns(wsId);
     for (let i = 0; i < 5 && stepsAgain && stepsBusy === 1; i++) { stepsAgain = false; jobStepsOnce(wsId, 'Kloomie', null); }
@@ -4550,7 +4554,8 @@ function runWaits(now) {
     // Still allowed? Something may have become private while it waited.
     const priv = !!(ctx.private || ctx.campaign?.private || ctx.project?.private);
     const mine = (x.trigger.campaignId && x.trigger.campaignId === (ctx.campaign?.parentId || ctx.campaign?.id) && seesCampaign(x.trigger.campaignId, x.memberId)) || (x.trigger.projectId && x.trigger.projectId === ctx.project?.id && PJ.sees(ctx.project, x.memberId));
-    if ((priv && !mine) || (ctx.ownersOnly && !isAdminId(x.wsId, x.memberId))) { autoLog(x, false, 'A waiting run was dropped: what it’s about is private now'); continue; }
+    const hidden = ctx.record?.id && db.records[ctx.record.id] && !PJ.seesRec(db.records[ctx.record.id], x.memberId); // a job its maker can't see now (PHASE5.md §5)
+    if ((priv && !mine) || hidden || (ctx.ownersOnly && !isAdminId(x.wsId, x.memberId))) { autoLog(x, false, 'A waiting run was dropped: what it’s about is private now'); continue; }
     const log = [];
     log.path = [];
     if (w.agentRun) log.push(answered ? (ctx.answer ? 'Got the answer' : 'The agent finished with no answer') : 'The agent didn’t answer in 30 minutes; went on without it');
@@ -5089,7 +5094,7 @@ function runDateTriggers(now) {
     const today = L.date;
     x.dateRan ||= {};
     for (const rec of Object.values(db.records)) {
-      if (rec.projectId !== p.id || rec.typeId !== lt.id) continue;
+      if (rec.projectId !== p.id || rec.typeId !== lt.id || !PJ.seesJob(rec, x.memberId, p, lt)) continue;
       const d = PJ.dateOf(p, lt, rec, tr.fieldId);
       if (!d || x.dateRan[rec.id] === d) continue;
       const fire = addDays(d, tr.days);

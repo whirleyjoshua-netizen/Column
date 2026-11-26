@@ -17,7 +17,7 @@ let fails = 0;
 const ok = (c, msg) => { console.log((c ? 'PASS ' : 'FAIL ') + msg); if (!c) fails++; };
 const until = async (f, ms = 6000) => { const end = Date.now() + ms; while (Date.now() < end) { if (await f()) return true; await sleep(100); } return false; };
 const mails = () => (fs.existsSync(OUTBOX) ? fs.readdirSync(OUTBOX) : []);
-const env = { ...process.env, PORT: String(PORT), PUBLIC_URL: B, DATA_DIR: DIR, MAIL_OUTBOX: '1', RESEND_API_KEY: '', DATABASE_URL: '', STRIPE_SECRET_KEY: '', STRIPE_PRICE: '', SKIP_SETUP: '1', NODE_ENV: 'test' };
+const env = { ...process.env, PORT: String(PORT), PUBLIC_URL: B, DATA_DIR: DIR, MAIL_OUTBOX: '1', RESEND_API_KEY: '', DATABASE_URL: '', STRIPE_SECRET_KEY: '', STRIPE_PRICE: '', SKIP_SETUP: '1', NODE_ENV: 'test', JOBFLOWS_FAIL_MOVE: 'Breaks on move', JOBFLOWS_MOVE_MAX: '20' };
 let srv;
 const start = async () => {
   srv = spawn('node', ['index.js'], { cwd: new URL('../server', import.meta.url).pathname, env, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -94,6 +94,8 @@ try {
   const movesOf = async () => ((await rico('GET', '/inventory/moves')).body || []).length;
   const mailsBefore = mails().length, postsBefore = (await posts()).length, invoicesBefore = ((await rico('GET', '/invoices')).body || []).length;
   const campaignsBefore = await campaignsOf(), tasksBefore = await allTasks();
+  const recOf = async (id) => ((await rico('GET', `/projects/${A.p.id}/records`)).body || []).find((x) => x.id === id);
+  const legacyBefore = JSON.stringify(await recOf(jLegacy.id)), legacyLog = JSON.stringify((await rico('GET', `/records/${jLegacy.id}/log`)).body);
 
   // GET /jobs/move.
   ok((await sam('GET', '/jobs/move')).status === 403, 'a member can’t see Move my jobs here');
@@ -126,6 +128,7 @@ try {
   ok(shape(R.jInv) === 'DSSSCWW', 'Invoiced: Client met, Book, Remind, Clean skipped, on Wrap up: ' + shape(R.jInv));
   ok(shape(R.jPaid) === 'DSSSSSS' && R.jPaid?.status === 'done', 'Paid (the last stage): Client met, every other step skipped with the reason, the run done: ' + shape(R.jPaid) + ' ' + R.jPaid?.status);
   ok(!R.jLegacy, 'the legacy job has no run');
+  ok(JSON.stringify(await recOf(jLegacy.id)) === legacyBefore && JSON.stringify((await rico('GET', `/records/${jLegacy.id}/log`)).body) === legacyLog, 'and it’s untouched: the same record and timeline');
   ok((await runOf(jOn.id))?.id === onRunBefore?.id && (await runOf(jOn.id))?.current?.name === onRunBefore?.current?.name, 'the job already on the flow is untouched');
   const stageLabel = async (id) => { const rec = ((await rico('GET', `/projects/${A.p.id}/records`)).body || []).find((x) => x.id === id); return A.tp.fields.find((f) => f.key === 'status').choices.find((c) => c.id === rec?.values[A.tp.fields.find((f) => f.key === 'status').id])?.label; };
   const stagesNow = await Promise.all([jNew, jSched, jDone, jProg, jInv, jPaid].map((j) => stageLabel(j.id)));
@@ -152,6 +155,12 @@ try {
   // After the move, the job runs normally.
   await rico('POST', `/records/${jSched.id}/visits`, { kind: 'Clean', date: tomorrow, start: 800, end: 860, memberIds: [samId] });
   ok(await until(async () => (await posts()).some((x) => x.includes('STEP Book done') && x.includes('Scheduled, with client'))), 'the next real change sweeps it as any job (Book done fires its automation)');
+
+  // The job moved at its last stage stays done after a real change: nothing wakes, nothing is billed or sent.
+  const mPaid = mails().length, iPaid = ((await rico('GET', '/invoices')).body || []).length;
+  await rico('PATCH', `/records/${jPaid.id}`, { values: { access: 'Gate' } });
+  await sleep(800);
+  ok((await runOf(jPaid.id))?.status === 'done' && mails().length === mPaid && ((await rico('GET', '/invoices')).body || []).length === iPaid, 'the job moved at its last stage: a real change after keeps it done, sends and bills nothing');
 
   // Positive controls: what the move holds back does happen on a job that gets there normally.
   const fa2 = (await rico('POST', '/job-flows', { name: 'One step on A', list: { projectId: A.p.id, typeId: A.tp.id }, steps: [{ kind: 'custom', name: 'Only step', settings: { text: 'x' } }] })).body;
@@ -220,6 +229,44 @@ try {
   await tick(dN.id);
   ok(await until(async () => (await stockAt()) === sBefore - 2), '(control) its work step done uses the stock');
   ok(await until(async () => (await invsOf(dN.id)).length === 1), '(control) and its automatic invoice is drafted');
+
+  // Two Tasks steps: a moved job gets each one's tasks only when it reaches it, never ahead.
+  const G = await board('Cleaning G');
+  const fg = (await rico('POST', '/job-flows', { name: 'G flow', list: { projectId: G.p.id, typeId: G.tp.id }, steps: [
+    { kind: 'custom', name: 'Start', stage: 'New', settings: { text: 'x' } },
+    { kind: 'tasks', name: 'Prep', stage: 'Scheduled', settings: { tasks: ['Load the van'] } },
+    { kind: 'custom', name: 'Middle', settings: { text: 'x' } },
+    { kind: 'tasks', name: 'Finish', stage: 'Done', settings: { tasks: ['Sweep up'] } }] })).body;
+  r = await rico('POST', `/job-flows/${fg?.id}/publish`);
+  ok(r.status === 200, '(setup) a flow with two Tasks steps ' + (r.body?.error || ''));
+  const g1 = await G.add('G at prep', 'Scheduled');
+  const gBreak = await G.add('Breaks on move', 'New');
+  const gBreakBefore = JSON.stringify(((await rico('GET', `/projects/${G.p.id}/records`)).body || []).find((x) => x.id === gBreak.id));
+  r = await rico('POST', '/jobs/move', { projectId: G.p.id, typeId: G.tp.id, flowId: fg.id });
+  ok(r.body?.moved === 1 && /failed/i.test((r.body?.skipped || []).find((x) => x.id === gBreak.id)?.why || ''), 'a job whose move fails after its run was kept is reported not moved: ' + JSON.stringify(r.body?.skipped));
+  ok(!(await runOf(gBreak.id)) && JSON.stringify(((await rico('GET', `/projects/${G.p.id}/records`)).body || []).find((x) => x.id === gBreak.id)) === gBreakBefore, 'and it’s exactly as it was: no run, the same record');
+  ok(!JSON.stringify((await rico('GET', `/records/${gBreak.id}/log`)).body).includes('Moved onto'), 'nothing on its timeline about a move');
+  const gTasks = async () => ((await rico('GET', '/state')).body.tasks || []).filter((x) => x.recordId === g1.id).map((x) => x.text).sort();
+  ok((await runOf(g1.id))?.current?.name === 'Prep' && !(await gTasks()).length, 'moved onto Prep: no tasks yet (held)');
+  await rico('PATCH', `/records/${g1.id}`, { values: { access: 'Back door' } });
+  ok(await until(async () => (await gTasks()).join() === 'Load the van'), 'woken by a real change: Prep’s tasks are made, not Finish’s: ' + (await gTasks()).join());
+  const prepTask = ((await rico('GET', '/state')).body.tasks || []).find((x) => x.recordId === g1.id && x.text === 'Load the van');
+  await rico('PATCH', `/tasks/${prepTask?.id}`, { done: true });
+  ok(await until(async () => (await runOf(g1.id))?.current?.name === 'Middle'), 'Prep done: on Middle, still no Finish tasks: ' + (await gTasks()).join());
+  ok((await gTasks()).join() === 'Load the van', '(still only Prep’s)');
+  await rico('POST', `/jobs/${g1.id}/steps/${stepNamed(await runOf(g1.id), 'Middle')?.id}/done`);
+  ok(await until(async () => (await gTasks()).join() === 'Load the van,Sweep up'), 'reaching Finish makes its tasks then: ' + (await gTasks()).join());
+
+  // More jobs than one request moves: the rest are counted, and the next request moves them.
+  const H = await board('Cleaning H');
+  for (let i = 0; i < 25; i++) await H.add('H job ' + i, 'New');
+  const fh = (await rico('POST', '/job-flows', { name: 'H flow', list: { projectId: H.p.id, typeId: H.tp.id }, steps: [{ kind: 'custom', name: 'Only', stage: 'New', settings: { text: 'x' } }] })).body;
+  await rico('POST', `/job-flows/${fh.id}/publish`);
+  r = await rico('POST', '/jobs/move', { projectId: H.p.id, typeId: H.tp.id, flowId: fh.id });
+  ok(r.body?.moved === 20 && r.body?.more === 5, 'a request moves at most its limit (20 here) and says 5 are left: ' + JSON.stringify({ moved: r.body?.moved, more: r.body?.more }));
+  r = await rico('POST', '/jobs/move', { projectId: H.p.id, typeId: H.tp.id, flowId: fh.id });
+  ok(r.body?.moved === 5 && r.body?.more === 0, 'the next moves the rest, none left: ' + JSON.stringify({ moved: r.body?.moved, more: r.body?.more }));
+  ok((await rico('POST', '/jobs/move', { projectId: H.p.id, typeId: H.tp.id, flowId: fh.id, recordIds: Array.from({ length: 21 }, (_, i) => 'x' + i) })).status === 400, 'more recordIds than the limit: 400');
 
   // Two steps naming the same stage: the later one; a stage no step names, or none: the first step.
   const Fb = await board('Cleaning F');
