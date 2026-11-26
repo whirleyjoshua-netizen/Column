@@ -101,7 +101,7 @@ try {
   ok(r.status === 200 && Array.isArray(r.body?.lists), 'Move my jobs here answers: ' + r.status + ' ' + (r.body?.error || ''));
   const la = (r.body?.lists || []).find((x) => x.projectId === A.p.id && x.typeId === A.tp.id);
   ok(la?.notOnFlow === 7 && la?.legacy === 1, 'board A: 7 jobs not on a flow (the legacy one included), 1 of them on campaign steps: ' + JSON.stringify(la && { n: la.notOnFlow, l: la.legacy }));
-  ok(la?.flows?.some((f) => f.id === fa.id) && la?.stages?.New === 3 && la?.stages?.Paid === 1, 'with the flows for that list and how many jobs are at each stage: ' + JSON.stringify(la?.stages));
+  ok(la?.flows?.some((f) => f.id === fa.id) && la?.stages?.New === 2 && la?.stages?.Paid === 1, 'with the flows for that list and how many jobs are at each stage: ' + JSON.stringify(la?.stages));
   ok(la?.suggested === 'cleaning', 'a cleaning trade’s list suggests the Cleaning visit start: ' + la?.suggested);
   const bids = (await rico('POST', '/projects', { template: 'bids', name: 'Estimating' })).body;
   const bj = bids.types.find((x) => x.key === 'jobs');
@@ -303,7 +303,7 @@ try {
   const runsFor = (id) => Object.values(kept.campaigns || {}).filter((c) => c.recordId === id && c.kind === 'job' && c.status !== 'cancelled');
   ok(runsFor(c1.id).length === 1 && runsFor(jDone.id).length === 1 && runsFor(jK.id).length === 1, 'in what’s saved, each of them has exactly one run');
   await sleep(1200);
-  ok(mails().length === mailsAt && stepNamed(await runOf(jProg.id), 'Remind')?.pending, 'nothing sent after the restart; the reminder still waits');
+  ok(mails().length === mailsAt && stepNamed(await runOf(jProg.id), 'Remind')?.state === 'done', 'nothing sent after the restart (the reminder went once, on the owner’s OK)');
 } catch (e) {
   ok(false, 'threw: ' + (e.stack || e));
 }

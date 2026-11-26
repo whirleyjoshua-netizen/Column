@@ -164,6 +164,15 @@ try {
   const myRec = ((await sam('GET', `/projects/${p.id}/records`)).body || []).find((x) => x.id === jPerson.id);
   ok(myRec && !JSON.stringify(myRec).includes(OTHER), 'his job that links to the other: no name for it');
 
+  // His own export (before his agent runs below, whose asks name the other job in his own words).
+  await sam('POST', '/exports', { kind: 'mine' });
+  let ex;
+  for (let i = 0; i < 80 && !(ex && ex.status !== 'building'); i++) { ex = ((await sam('GET', '/exports')).body?.exports || []).find((e) => e.kind === 'mine'); if (!ex || ex.status === 'building') await sleep(250); }
+  const res = await fetch(`${B}/api/exports/${ex?.id}/file`, { headers: { authorization: 'Bearer ' + samTok } });
+  fs.writeFileSync(`${DIR}/mine.zip`, Buffer.from(await res.arrayBuffer()));
+  const zipText = execFileSync('unzip', ['-Z1', `${DIR}/mine.zip`]).toString().trim().split('\n').map((n) => execFileSync('unzip', ['-p', `${DIR}/mine.zip`, n]).toString()).join('\n');
+  ok(zipText.includes('Sam made this') && !zipText.includes(OTHER) && !zipText.includes(jOther.id), 'his export: his jobs, not the other (by name or id)');
+
   // Agents work as him.
   await sam('PUT', '/ai/keys/anthropic', { key: 'sk-ant-test-key-1234567890' });
   aiSaw = [];
@@ -182,16 +191,7 @@ try {
   ok(r.status === 200 && aiSaw.some((x) => (x.match(/Assigned to Sam/g) || []).length >= 2), '(control) Ask about his own job: the AI is given that job: ' + r.status);
   aiSaw = [];
   r = await sam('POST', '/ai/ask', { q: 'Who is at Other St' });
-  ok(r.status === 200 && aiSaw.length > 0 && !aiSaw.some((b) => b.includes(OTHER) || b.includes(jOther.id)), 'Ask (search): what the AI is told has no sign of the other job: ' + r.status);
-
-  // His own export.
-  await sam('POST', '/exports', { kind: 'mine' });
-  let ex;
-  for (let i = 0; i < 80 && !(ex && ex.status !== 'building'); i++) { ex = ((await sam('GET', '/exports')).body?.exports || []).find((e) => e.kind === 'mine'); if (!ex || ex.status === 'building') await sleep(250); }
-  const res = await fetch(`${B}/api/exports/${ex?.id}/file`, { headers: { authorization: 'Bearer ' + samTok } });
-  fs.writeFileSync(`${DIR}/mine.zip`, Buffer.from(await res.arrayBuffer()));
-  const zipText = execFileSync('unzip', ['-Z1', `${DIR}/mine.zip`]).toString().trim().split('\n').map((n) => execFileSync('unzip', ['-p', `${DIR}/mine.zip`, n]).toString()).join('\n');
-  ok(zipText.includes('Sam made this') && !zipText.includes(OTHER) && !zipText.includes(jOther.id), 'his export: his jobs, not the other (by name or id)');
+  ok(r.status === 200 && !aiSaw.some((b) => b.includes(OTHER) || b.includes(jOther.id)) && !JSON.stringify(r.body).includes(OTHER), 'Ask (search) by the other job’s address: nothing about it reaches the AI or the answer: ' + r.status + ' ' + JSON.stringify(r.body).slice(0, 120));
 
   // The public API: a key runs as its maker now.
   const key = (await ada('POST', '/integrations/keys', { name: 'Ada key', write: true })).body;
@@ -226,7 +226,7 @@ try {
   ok((await sam('GET', `/records/${jOther.id}/log`)).status === 404, 'and Sam’s next read 404s');
   // A visit added, then removed.
   clear();
-  const kv = (await rico('POST', `/records/${jMia.id}/visits`, { kind: 'Clean', date: today, start: 900, end: 960, memberIds: [samId] })).body;
+  const kv = (await rico('POST', `/records/${jMia.id}/visits`, { kind: 'Cleaning', date: today, start: 900, end: 960, memberIds: [miaId, samId] })).body;
   ok(await until(() => heardRec(S1, jMia.id)) && !heardRec(K1, jMia.id), 'a new visit with Sam on Mia’s job: Sam gets it, Kim doesn’t');
   ok((await sam('GET', `/records/${jMia.id}/log`)).status === 200, 'and Sam can read it');
   clear();

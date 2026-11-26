@@ -56,7 +56,7 @@ try {
   const FQ = await mk('Quoted cleaning', { billing: 'quote', steps: [{ kind: 'client', name: 'Client', ...sk }, { kind: 'quote', name: 'Quote', who: { type: 'admins' }, settings: { email: false } }, { kind: 'book', name: 'Book', ...sk }, { kind: 'invoice', name: 'Invoice', who: { type: 'admins' } }, { kind: 'payment', name: 'Payment', who: { type: 'admins' } }] });
   const start = async (flow, values) => { const y = await rico('POST', '/jobs', { flowId: flow.id, values }); ok(y.status === 200, `(setup) job “${values.job}” ${y.body?.error || ''}`); return y.body?.job; };
   const skip = (j, flow, kind) => rico('POST', `/jobs/${j.id}/steps/${flow.sid(kind)}/skip`, { reason: 'test' });
-  const visit = (j, date, memberIds, start = 540) => rico('POST', `/records/${j.id}/visits`, { kind: 'Clean', date, start, end: start + 60, memberIds });
+  const visit = (j, date, memberIds, start = 540) => rico('POST', `/records/${j.id}/visits`, { kind: 'Service', date, start, end: start + 60, memberIds });
   const runOf = async (j) => (await rico('GET', `/jobs/${j.id}/run`)).body?.run;
 
   const j1 = await start(F, { job: 'To book', customer: dana });                       // at Book
@@ -143,7 +143,7 @@ try {
   const W = r.body || {};
   const di = (W.days || []).indexOf(today);
   const samRow = (W.people || []).find((x) => x.id === samId), miaRow = (W.people || []).find((x) => x.id === miaId);
-  ok(samRow?.cells?.length === 7 && samRow.cells[di]?.length === 2 && samRow.cells[di].every((v) => v.recordId === j3.id && v.kind === 'Clean' && typeof v.start === 'number' && v.label), 'each person, each day: the visits (kind, job, time)');
+  ok(samRow?.cells?.length === 7 && samRow.cells[di]?.length === 2 && samRow.cells[di].every((v) => v.recordId === j3.id && v.kind === 'Service' && typeof v.start === 'number' && v.label), 'each person, each day: the visits (kind, job, time)');
   ok(miaRow?.cells?.[di]?.length === 1 && miaRow.cells[di][0].recordId === j6.id, 'a job not on a flow is on the week too');
   ok((await rico('GET', '/schedule?week=nope')).status === 400, 'a week has to be a date');
 

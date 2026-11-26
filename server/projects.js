@@ -343,7 +343,7 @@ export const TEMPLATES = {
   },
 };
 
-export function projectsModule({ jobQuote = () => null, seesLinked = () => true, proofUrl = () => null, onEvent = null, onPrice = () => {}, canSeeItem = () => true, seal = (x) => x, unseal = (x) => x, db, save, broadcast, rid, hold = null, cleanText, isDay, readJson, send, badRequest, isOwnerId, escHtml, brandOf, logoUrl, teamDay, offline, makeTask, onRecords, onRecordGone, onRecordNews, stageGate = null, allowLocalHooks = false, qrSvg = null, publicUrl = '', docsOf = null, bizHtml = () => '', inkedPng = () => null }) {
+export function projectsModule({ onTouch = () => {}, jobCurrentWho = () => null, jobQuote = () => null, seesLinked = () => true, proofUrl = () => null, onEvent = null, onPrice = () => {}, canSeeItem = () => true, seal = (x) => x, unseal = (x) => x, db, save, broadcast, rid, hold = null, cleanText, isDay, readJson, send, badRequest, isOwnerId, escHtml, brandOf, logoUrl, teamDay, offline, makeTask, onRecords, onRecordGone, onRecordNews, stageGate = null, allowLocalHooks = false, qrSvg = null, publicUrl = '', docsOf = null, bizHtml = () => '', inkedPng = () => null }) {
   const bad = (msg) => badRequest(msg);
   db.projects ||= {};
   db.records ||= {};
@@ -355,10 +355,78 @@ export function projectsModule({ jobQuote = () => null, seesLinked = () => true,
   // A private project is seen by whoever made it and its members; the rest by the whole team.
   const sees = (p, memberId) => !!p && (!p.private || p.memberId === memberId || (p.memberIds || []).includes(memberId));
   const canManage = (p, auth) => p.memberId === auth.memberId || ['owner', 'admin'].includes(auth.role);
-  // For broadcast: a message about a project or its records reaches only those who see the project.
+  // ---------- members see only their own jobs (docs/jobflows/PHASE5.md §5) ----------
+  // In a team set to "members see only theirs", a member sees a record in a job list only when it's theirs: they
+  // made it, a person field is them, they're on one of its visits, or its run's CURRENT step names them or a role
+  // they have. Owners and admins see every job; other lists, and teams set to "all", are unchanged.
+  const isJobT = (t) => !!t && (t.key === 'jobs' || String(t.key || '').startsWith('trade_'));
+  // Who's on each job's visits, built once per turn of the event loop (visits change in many places; a turn is short).
+  let visitors = null;
+  const visitorsOf = (recordId) => {
+    if (!visitors) {
+      visitors = new Map();
+      for (const e of Object.values(db.entries || {})) if (e.visitId && e.recordId && e.memberId) (visitors.get(e.recordId) || visitors.set(e.recordId, new Set()).get(e.recordId)).add(e.memberId);
+      setImmediate(() => { visitors = null; });
+    }
+    return visitors.get(recordId);
+  };
+  const dropVisitors = () => { visitors = null; };
+  const memberOf = (wsId, memberId) => db.workspaces[wsId]?.members.find((m) => m.id === memberId);
+  function seesJob(rec, memberId, p = db.projects[rec?.projectId], t = p && typeOf(p, rec.typeId)) {
+    if (!rec || !isJobT(t)) return true;
+    const ws = db.workspaces[rec.wsId];
+    if ((ws?.settings?.visibility || 'all') !== 'own') return true;
+    const me = memberOf(rec.wsId, memberId);
+    if (!me) return false;
+    if (['owner', 'admin'].includes(me.role)) return true;
+    if (rec.memberId === memberId) return true;
+    if (t.fields.some((f) => f.type === 'person' && rec.values[f.id] === memberId)) return true;
+    if (visitorsOf(rec.id)?.has(memberId)) return true;
+    const who = jobCurrentWho(rec);
+    return !!who && ((who.type === 'member' && who.id === memberId) || (who.type === 'role' && (me.roleIds || []).includes(who.id)));
+  }
+  // Who sees a job now (members only; owners and admins always do), and the change since last time: a member who lost
+  // it gets record:gone, one who gained it gets the record (as new). Called after anything that can change it.
+  const jobSeers = new Map(); // recordId → Set of member ids that saw it when last worked out
+  const seersNow = (rec) => {
+    const ws = db.workspaces[rec.wsId];
+    const p = db.projects[rec.projectId];
+    return new Set((ws?.members || []).filter((m) => !['owner', 'admin'].includes(m.role) && sees(p, m.id) && seesJob(rec, m.id, p)).map((m) => m.id));
+  };
+  function reseeJob(rec) {
+    if (!rec || !db.records[rec.id]) return;
+    const p = db.projects[rec.projectId];
+    if (!isJobT(p && typeOf(p, rec.typeId))) return;
+    dropVisitors();
+    const was = jobSeers.get(rec.id) || new Set();
+    const now = seersNow(rec);
+    jobSeers.set(rec.id, now);
+    for (const id of was) if (!now.has(id)) broadcast(rec.wsId, { type: 'record:gone', id: rec.id, projectId: rec.projectId, forMember: id });
+    for (const id of now) if (!was.has(id)) broadcast(rec.wsId, { type: 'record', record: publicRecord(rec, viewOf(rec.wsId, id)), forMember: id, gained: true });
+  }
+  // A new job's seers, noted without telling anyone (the record's own broadcast already reached them).
+  const noteSeers = (rec) => { const p = db.projects[rec.projectId]; if (isJobT(p && typeOf(p, rec.typeId))) jobSeers.set(rec.id, seersNow(rec)); };
+  // Every job's seers: as the server starts, and after a team-wide change (which resyncs everyone anyway).
+  const reseeAll = (wsId) => {
+    dropVisitors();
+    for (const rec of Object.values(db.records)) {
+      if (wsId && rec.wsId !== wsId) continue;
+      const p = db.projects[rec.projectId];
+      if (isJobT(p && typeOf(p, rec.typeId))) jobSeers.set(rec.id, seersNow(rec));
+    }
+  };
+  // A record someone may see: its project, and (a job) the job.
+  const seesRec = (rec, memberId) => !!rec && sees(db.projects[rec.projectId], memberId) && seesJob(rec, memberId);
+  const reseeWs = (wsId) => { dropVisitors(); for (const rec of Object.values(db.records)) if (rec.wsId === wsId) reseeJob(rec); };
+  // For broadcast: a message about a project or its records reaches only those who see the project, and a job's
+  // record only those who see the job (§5).
   const seesMsg = (msg, memberId) => {
     const id = msg.projectId || msg.project?.id || msg.record?.projectId;
-    return !id || sees(db.projects[id], memberId);
+    if (id && !sees(db.projects[id], memberId)) return false;
+    if (msg.type === 'record:gone') return true;
+    const recId = msg.record?.id || msg.recordId; // a record, its timeline, its visits, its run
+    const rec = recId && db.records[recId];
+    return !rec || seesJob(rec, memberId);
   };
 
   // The GitHub hook's address and secret stay on the server; the app only hears whether it's connected, and to what.
@@ -372,7 +440,8 @@ export function projectsModule({ jobQuote = () => null, seesLinked = () => true,
   // levels it counts as one too). Redaction happens only on what goes out: stored values and calc are untouched.
   const seesPrices = (wsId, memberId) => ['owner', 'admin'].includes(db.workspaces[wsId]?.members.find((m) => m.id === memberId)?.role);
   const FULL = { prices: true };
-  const viewOf = (wsId, memberId) => (seesPrices(wsId, memberId) ? { prices: true } : null);
+  // What a reader may see: prices (owners and admins), and who they are, so linked jobs they can't see stay unnamed.
+  const viewOf = (wsId, memberId) => ({ prices: seesPrices(wsId, memberId), memberId });
   function isPriced(p, t, f, depth = 0) {
     if (!f || !t) return false;
     if (depth > 8) return true;
@@ -644,7 +713,7 @@ export function projectsModule({ jobQuote = () => null, seesLinked = () => true,
     if (f.type === 'multi') return v.map((id) => f.choices.find((c) => c.id === id)?.label).filter(Boolean).join(', ');
     if (f.type === 'person') return ws.members.find((m) => m.id === v)?.name || '';
     if (f.type === 'checkbox') return v ? 'yes' : '';
-    if (f.type === 'link') { const to = p.types.find((t) => t.id === f.target); return v.map((id) => db.records[id] && to ? String(db.records[id].values[to.primary] ?? '') : '').filter(Boolean).join(', '); }
+    if (f.type === 'link') { const to = p.types.find((t) => t.id === f.target); return v.map((id) => db.records[id] && to && (!view?.memberId || seesJob(db.records[id], view.memberId)) ? String(db.records[id].values[to.primary] ?? '') : '').filter(Boolean).join(', '); }
     if (f.type === 'items') return '$' + (itemsTotals(v).total / 100).toLocaleString('en-US', { minimumFractionDigits: 2 });
     if (f.type === 'files') return `${v.length} file${v.length === 1 ? '' : 's'}`;
     if (f.type === 'contact') return db.contacts[v]?.name || db.contacts[v]?.company || '';
@@ -1244,6 +1313,9 @@ export function projectsModule({ jobQuote = () => null, seesLinked = () => true,
     recordsChanged(rec.projectId);
     save();
     broadcast(rec.wsId, { type: 'record', record: publicRecord(rec), projectId: rec.projectId });
+    // Who sees the job may have changed (a person field): members who lost it are told, those who gained it get it.
+    if (jobSeers.has(rec.id)) reseeJob(rec); else noteSeers(rec);
+    if (event === 'record.updated' && by && by !== 'Kloomie') onTouch(rec);
     rollupsFollow(rec);
     hooksFire(rec, event, by);
   }
@@ -1487,6 +1559,7 @@ export function projectsModule({ jobQuote = () => null, seesLinked = () => true,
         const p = db.projects[r.projectId];
         if (!p || !sees(p, auth.memberId)) continue;
         const t = typeOf(p, r.typeId);
+        if (!seesJob(r, auth.memberId, p, t)) continue;
         if (t?.fields.some((f) => f.type === 'contact' && r.values[f.id] === c)) out.push({ ...publicRecord(r, viewOf(ws.id, auth.memberId)), project: p.name, list: t.singular || t.name, icon: t.icon || '' });
       }
       return send(res, 200, out.sort((x, y) => y.createdAt - x.createdAt).slice(0, 100));
@@ -1496,7 +1569,7 @@ export function projectsModule({ jobQuote = () => null, seesLinked = () => true,
     if (a === 'records' && b === 'by-tag' && m === 'POST') {
       const rec = TAG_RE.test(c || '') ? Object.values(db.records).find((r) => r.tag === c && r.wsId === ws.id) : null;
       const p = rec && db.projects[rec.projectId];
-      if (!p || !sees(p, auth.memberId)) return send(res, 404, { error: 'That label isn’t one of your team’s, or you can’t see what it’s on.' });
+      if (!p || !sees(p, auth.memberId) || !seesJob(rec, auth.memberId, p)) return send(res, 404, { error: 'That label isn’t one of your team’s, or you can’t see what it’s on.' });
       rec.seenAt = Date.now();
       rec.seenBy = auth.member;
       save();
@@ -1529,7 +1602,7 @@ export function projectsModule({ jobQuote = () => null, seesLinked = () => true,
       }
       const p = b && db.projects[b];
       if (!p || p.wsId !== ws.id || !sees(p, auth.memberId)) return send(res, 404, { error: 'That project is gone.' });
-      if (m === 'GET' && c === 'records') return send(res, 200, Object.values(db.records).filter((r) => r.projectId === p.id).map((r) => publicRecord(r, viewOf(ws.id, auth.memberId))));
+      if (m === 'GET' && c === 'records') return send(res, 200, Object.values(db.records).filter((r) => r.projectId === p.id && seesJob(r, auth.memberId, p)).map((r) => publicRecord(r, viewOf(ws.id, auth.memberId))));
       // A new test run: tests (all, or one release's) back to Not run.
       if (m === 'POST' && c === 'test-run') {
         const body = await readJson(req);
@@ -1683,7 +1756,7 @@ export function projectsModule({ jobQuote = () => null, seesLinked = () => true,
     if (a === 'records' && b) {
       const rec = db.records[b];
       const p = rec && db.projects[rec.projectId];
-      if (!rec || rec.wsId !== ws.id || !sees(p, auth.memberId)) return send(res, 404, { error: 'That record is gone.' });
+      if (!rec || rec.wsId !== ws.id || !sees(p, auth.memberId) || !seesJob(rec, auth.memberId, p)) return send(res, 404, { error: 'That record is gone.' });
       const t = typeOf(p, rec.typeId);
       // What's in a locked field, for someone allowed: everyone who sees the project, or (when the field says so) only
       // those who manage it. Every look goes on the timeline (who and when, never what), at most 30 an hour each.
@@ -2240,7 +2313,7 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
       const qs = new URL(req.url, 'http://x').searchParams;
       const limit = Math.max(1, Math.min(500, Number(qs.get('limit')) || 100));
       const after = qs.get('cursor') || '';
-      const all = Object.values(db.records).filter((r) => r.projectId === p.id && r.typeId === t.id && r.updatedAt > since).sort((x, y) => x.updatedAt - y.updatedAt || (x.id < y.id ? -1 : 1));
+      const all = Object.values(db.records).filter((r) => r.projectId === p.id && r.typeId === t.id && r.updatedAt > since && seesJob(r, auth.memberId, p, t)).sort((x, y) => x.updatedAt - y.updatedAt || (x.id < y.id ? -1 : 1));
       const start = after ? all.findIndex((r) => `${r.updatedAt}.${r.id}` === after) + 1 : 0;
       const page = all.slice(start, start + limit);
       const last = page.at(-1);
@@ -2260,6 +2333,7 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
     if (rid_ === 'external' && extra_) {
       const ext = decodeURIComponent(extra_);
       let rec = Object.values(db.records).find((r) => r.projectId === p.id && r.typeId === t.id && r.extId === ext);
+      if (rec && !seesJob(rec, auth.memberId, p, t)) return send(res, 404, { error: 'No record with that external_id.' });
       if (m === 'GET') return rec ? send(res, 200, outRecord(ws, p, t, rec, viewOf(ws.id, auth.memberId))) : send(res, 404, { error: 'No record with that external_id.' });
       if (m === 'PUT') {
         write();
@@ -2284,7 +2358,7 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
       return send(res, 405, { error: 'Use GET or PUT.' });
     }
     const rec = rid_ && db.records[rid_];
-    if (!rec || rec.projectId !== p.id || rec.typeId !== t.id) return send(res, 404, { error: 'No record with that id in this list.' });
+    if (!rec || rec.projectId !== p.id || rec.typeId !== t.id || !seesJob(rec, auth.memberId, p, t)) return send(res, 404, { error: 'No record with that id in this list.' });
     if (sub2 === 'timeline') {
       if (m === 'GET') return send(res, 200, { timeline: logFor(rec, auth.memberId).map(({ memberId, ...e }) => ({ ...e, at: new Date(e.at).toISOString() })) });
       if (m === 'POST') {
@@ -2458,7 +2532,7 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
       } else lines.push(`${f.name}: ${words(ws, p, f, rec.values[f.id], view)}`);
     }
     for (const o of p.types) for (const f of o.fields) if (f.type === 'link' && f.target === t.id) {
-      const from = Object.values(db.records).filter((x) => x.typeId === o.id && (x.values[f.id] || []).includes(rec.id));
+      const from = Object.values(db.records).filter((x) => x.typeId === o.id && (x.values[f.id] || []).includes(rec.id) && (!sees1 || sees1('record', x)));
       if (from.length) lines.push(`${o.name} linked to it: ${from.slice(0, 10).map((x) => `${recName(p, x)} (${o.fields.filter((y) => ['select', 'money', 'date', 'items'].includes(y.type) && x.values[y.id] != null).map((y) => `${y.name.toLowerCase()} ${words(ws, p, y, x.values[y.id], view)}`).join(', ')})`).join('; ')}`);
     }
     const shown = (kind, x) => !sees1 || (!!x && sees1(kind, x)); // a timeline line about one that's gone is left out too: whose it was can't be told
@@ -2478,7 +2552,8 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
   const recordAt = (id, wsId, memberId) => {
     const rec = db.records[id];
     const p = rec && db.projects[rec.projectId];
-    return rec && rec.wsId === wsId && sees(p, memberId) ? { rec, p, t: typeOf(p, rec.typeId) } : null;
+    const t = rec && p && typeOf(p, rec.typeId);
+    return rec && rec.wsId === wsId && sees(p, memberId) && seesJob(rec, memberId, p, t) ? { rec, p, t } : null;
   };
 
   // Technology projects made before sprints and the roadmap timeline get them: the Sprints list, the Sprint field
@@ -2678,5 +2753,5 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
     projectNews(p);
     return { project: p, made, skipped };
   }
-  return { pricedWrite, rawFor, seesPrices, viewOf, FULL, isPriced, pricedIds, redactValues, jobRecord, announceRecord, publicRecordOf: (rec, view = null) => publicRecord(rec, view), typeOfP: (p, id) => typeOf(p, id), profileOf, moveLicensesOut, isProfile, autoSetClean, autoSetValues, autoUpdate, carryOver, dateField, dateOf, recName, importProject, cleanSpec, createRecord, publicRecord, updateRecord, route, v1, keyAuth, makeHook, publicHook, deliver, emit, quoteOf, quotePage, seesMsg, stateFor, sees, recordActivity, recordNews, words, fillFromProject, fromProjectOk, recordStory, priceList, recordAt, itemsTotals, shareRecord, TEMPLATES: Object.fromEntries(Object.entries(TEMPLATES).map(([k, t]) => [k, { name: t.name, icon: t.icon, about: t.about }])) };
+  return { seesRec, seesJob, reseeJob, reseeAll, reseeWs, isJobT, pricedWrite, rawFor, seesPrices, viewOf, FULL, isPriced, pricedIds, redactValues, jobRecord, announceRecord, publicRecordOf: (rec, view = null) => publicRecord(rec, view), typeOfP: (p, id) => typeOf(p, id), profileOf, moveLicensesOut, isProfile, autoSetClean, autoSetValues, autoUpdate, carryOver, dateField, dateOf, recName, importProject, cleanSpec, createRecord, publicRecord, updateRecord, route, v1, keyAuth, makeHook, publicHook, deliver, emit, quoteOf, quotePage, seesMsg, stateFor, sees, recordActivity, recordNews, words, fillFromProject, fromProjectOk, recordStory, priceList, recordAt, itemsTotals, shareRecord, TEMPLATES: Object.fromEntries(Object.entries(TEMPLATES).map(([k, t]) => [k, { name: t.name, icon: t.icon, about: t.about }])) };
 }

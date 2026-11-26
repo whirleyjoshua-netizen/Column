@@ -5,6 +5,7 @@
 // stands for really being true on the job (a client, its fields, a visit, the checklist, the signature, an invoice
 // sent or paid, its tasks, a Done button). A run is never a campaign to anyone: it lives behind the job.
 import crypto from 'node:crypto';
+import { TRADES } from './trades.js';
 
 export const STEP_KINDS = ['client', 'details', 'book', 'remind', 'omw', 'work', 'signoff', 'quote', 'invoice', 'payment', 'review', 'tasks', 'campaign', 'gearOut', 'gearIn', 'custom'];
 // Steps Kloomie does by itself (PHASE3.md §1): who they're for doesn't matter.
@@ -34,7 +35,7 @@ export const isJobRun = (c) => c?.kind === 'job';
 export const isJobList = (t) => !!t && (t.key === 'jobs' || String(t.key || '').startsWith('trade_'));
 
 export function jobFlowsModule(ctx) {
-  const { db, save, broadcast, rid, cleanText, readJson, send, isAdmin, PJ, toolsOf, goalsInOrder, tasksInOrder, applyTask, publicTask, canSeeTask, stepsSoon, sweepNow = (wsId) => stepsSoon(wsId), visitsOf, needsMet, noteWork = () => {}, invoiceTotals = () => ({ balance: 0, total: 0 }), invoiceUrl = () => null, flowTell = null, flowReach = () => 'No way to reach them', flowMsg = {}, customerOf = () => null, teamClock = () => ({}), teamReviewUrl = () => '', saveNow = async () => {}, sendable = () => true, shareRecord = null, quoteUrlOf = () => null, sendGate = null, custPreview = null, custDigest = null, notifyAdmins = () => {}, notify = () => {}, makeInvoice = null, sendInvoice = null, itemsTotals = () => ({ total: 0 }), priceChanged = () => {}, publicUrl = '', stock = null, geocode = async () => undefined, mapsOn = () => false, presetsOf = () => [], templateFor = () => null, campaignFromSnapshot = null, stockMove = null } = ctx;
+  const { db, save, broadcast, rid, cleanText, readJson, send, isAdmin, PJ, toolsOf, goalsInOrder, tasksInOrder, applyTask, publicTask, canSeeTask, stepsSoon, sweepNow = (wsId) => stepsSoon(wsId), visitsOf, needsMet, noteWork = () => {}, invoiceTotals = () => ({ balance: 0, total: 0 }), invoiceUrl = () => null, flowTell = null, flowReach = () => 'No way to reach them', flowMsg = {}, customerOf = () => null, teamClock = () => ({}), teamReviewUrl = () => '', saveNow = async () => {}, sendable = () => true, shareRecord = null, quoteUrlOf = () => null, sendGate = null, custPreview = null, custDigest = null, notifyAdmins = () => {}, notify = () => {}, makeInvoice = null, sendInvoice = null, itemsTotals = () => ({ total: 0 }), priceChanged = () => {}, publicUrl = '', stock = null, geocode = async () => undefined, mapsOn = () => false, presetsOf = () => [], templateFor = () => null, campaignFromSnapshot = null, stockMove = null, memberMay = () => true } = ctx;
   // Test only: a step with this name makes building a run throw, so the failure path can be tested from outside.
   const FAIL_STEP = process.env.NODE_ENV !== 'production' ? process.env.JOBFLOWS_FAIL_STEP || '' : '';
   // Test only: the automatic invoice's send fails after the invoice is made (a crash between the two).
@@ -248,7 +249,7 @@ export function jobFlowsModule(ctx) {
   const versionsOf = (flow) => Object.values(db.jobFlowVersions).filter((v) => v.flowId === flow.id).sort((a, b) => a.n - b.n);
   const activeVersion = (flow) => (flow?.activeVersionId ? db.jobFlowVersions[flow.activeVersionId] : null);
   const publicVersion = (v) => v && { id: v.id, n: v.n, body: v.body, publishedAt: v.publishedAt, publishedBy: v.publishedBy };
-  const publicFlow = (flow, admin) => ({ id: flow.id, name: flow.name, icon: flow.icon, archived: !!flow.archived, activeVersionId: flow.activeVersionId, version: publicVersion(activeVersion(flow)), ...(admin ? { draft: flow.draft, createdAt: flow.createdAt, updatedAt: flow.updatedAt } : {}) });
+  const publicFlow = (flow, admin) => ({ id: flow.id, name: flow.name, icon: flow.icon, archived: !!flow.archived, ...(admin && flow.fromStart ? { fromStart: flow.fromStart } : {}), activeVersionId: flow.activeVersionId, version: publicVersion(activeVersion(flow)), ...(admin ? { draft: flow.draft, createdAt: flow.createdAt, updatedAt: flow.updatedAt } : {}) });
   // Who's named on a step now: a person who left or a role that's gone leaves it to owners and admins.
   function whoNow(ws, step) {
     const w = step.who || { type: 'anyone' };
@@ -602,7 +603,7 @@ export function jobFlowsModule(ctx) {
       for (const rec of Object.values(db.records)) {
         if (rec.projectId !== p.id) continue;
         const t = lists.find((x) => x.id === rec.typeId);
-        if (!t) continue;
+        if (!t || !PJ.seesJob(rec, auth.memberId, p, t)) continue;
         const run = shownRun(rec.id);
         if (q.flow && run?.flowId !== q.flow) continue;
         const cf = fieldBy(t, (f) => f.type === 'contact');
@@ -625,6 +626,235 @@ export function jobFlowsModule(ctx) {
       }
     }
     return out.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  }
+
+  // ---------- Jobs → Overview and Clients (PHASE5.md §1–2) ----------
+  // The pipeline in counts, over exactly the jobs the Jobs list gives this person. No amounts, for anyone.
+  const PIPE = ['quote', 'book', 'invoice', 'payment'];
+  function overview(ws, auth) {
+    const today = teamClock(ws).today;
+    const lists = { quote: [], book: [], today: [], invoice: [], payment: [] };
+    for (const j of jobsList(ws, auth)) {
+      const k = j.run?.status === 'active' ? j.run.current?.kind : null;
+      if (PIPE.includes(k)) lists[k].push(j.id);
+      if (visitsOf(j.id).some((v) => v.date === today && !v.done)) lists.today.push(j.id);
+    }
+    return { counts: Object.fromEntries(Object.entries(lists).map(([k, v]) => [k, v.length])), lists };
+  }
+  // Everyone you work for: the clients of the jobs this person sees, and (owners and admins) the team's client groups,
+  // with their jobs; owners and admins also get open quotes, unpaid invoices and the balance owed (members: prices).
+  function clients(ws, auth) {
+    const admin = isAdmin(auth);
+    const by = new Map();
+    const row = (c) => by.get(c.id) || by.set(c.id, { id: c.id, name: c.name || c.company || '', company: c.company || '', jobs: 0, open: 0, last: null, ...(admin ? { quotes: 0, invoices: 0, balance: 0 } : {}) }).get(c.id);
+    const jobsOf = new Map(); // contact id → its job records this person sees
+    for (const p of Object.values(db.projects)) {
+      if (p.wsId !== ws.id || !PJ.sees(p, auth.memberId)) continue;
+      for (const t of p.types.filter(isJobList)) {
+        const cf = fieldBy(t, (f) => f.type === 'contact');
+        if (!cf) continue;
+        for (const rec of Object.values(db.records)) {
+          if (rec.projectId !== p.id || rec.typeId !== t.id || !PJ.seesJob(rec, auth.memberId, p, t)) continue;
+          const c = db.contacts?.[rec.values[cf.id]];
+          if (!c || c.wsId !== ws.id) continue;
+          const r = row(c);
+          r.jobs++;
+          const run = shownRun(rec.id);
+          if (!run || run.status !== 'done') r.open++;
+          if (!r.last || rec.createdAt > r.last) r.last = rec.createdAt;
+          (jobsOf.get(c.id) || jobsOf.set(c.id, []).get(c.id)).push(rec);
+        }
+      }
+    }
+    if (admin) {
+      const groups = new Set(Object.values(db.contactGroups || {}).filter((g) => g.wsId === ws.id && /^(clients|customers)$/i.test(String(g.name || '').trim())).map((g) => g.id));
+      if (groups.size) for (const c of Object.values(db.contacts || {})) if (c.wsId === ws.id && (c.groups || []).some((g) => groups.has(g))) row(c);
+      for (const r of by.values()) {
+        for (const rec of jobsOf.get(r.id) || []) if (rec.share && !(rec.share.expiresAt && rec.share.expiresAt < Date.now()) && !rec.answer) r.quotes++;
+      }
+      for (const inv of Object.values(db.invoices || {})) {
+        if (inv.wsId !== ws.id || !['sent', 'viewed', 'partial'].includes(inv.status)) continue;
+        const r = by.get(inv.to?.contactId);
+        if (!r) continue;
+        const bal = invoiceTotals(inv).balance || 0;
+        if (bal > 0) { r.invoices++; r.balance += bal; }
+      }
+    }
+    return [...by.values()].sort((x, y) => x.name.localeCompare(y.name));
+  }
+
+  // ---------- members see only their own jobs: the run's part (PHASE5.md §5) ----------
+  // Who the job's run's current step is for, or null.
+  function currentWho(rec) {
+    const run = rec && activeRun(rec.id);
+    const g = run && currentGoal(run);
+    return g?.step?.who || null;
+  }
+  // After each sweep: a run whose current step (or status) changed may give or take the job from members.
+  const runMemo = new Map();
+  function reseeRuns(wsId) {
+    for (const c of Object.values(db.campaigns)) {
+      if (c.wsId !== wsId || !isJobRun(c)) continue;
+      const key = `${c.status}:${c.status === 'active' ? currentGoal(c)?.id || '' : ''}`;
+      if (runMemo.get(c.id) === key) continue;
+      const first = !runMemo.has(c.id);
+      runMemo.set(c.id, key);
+      if (!first || Date.now() - (c.createdAt || 0) < 60_000) { const rec = recOf(c); if (rec) PJ.reseeJob(rec); }
+    }
+  }
+
+  // ---------- Move my jobs here (PHASE5.md §6) ----------
+  // The ready-made starts (the app's New flow sheet reads them from here).
+  const STARTS = {
+    blank: { label: 'Blank (one step to start)', steps: [['custom', 'First step', null, { text: '' }]] },
+    service: { label: 'Service call', steps: [['client'], ['details', null, null, { fields: ['address'] }], ['book', null, 'Scheduled'], ['work', null, 'Done'], ['signoff'], ['invoice', null, 'Invoiced'], ['payment', null, 'Paid']] },
+    install: { label: 'Measure, then install', steps: [['client'], ['book', 'Book the measure', null, { visitKind: 'Measure' }], ['details', null, null, { fields: ['address'] }], ['book', 'Book the install', 'Scheduled', { visitKind: 'Install' }], ['work', null, 'Done'], ['signoff'], ['invoice', null, 'Invoiced'], ['payment', null, 'Paid']] },
+    cleaning: { label: 'Cleaning visit', steps: [['client'], ['details', null, null, { fields: ['address'] }], ['book', null, 'Scheduled'], ['work', 'Clean', 'Done'], ['invoice', null, 'Invoiced'], ['payment', null, 'Paid']] },
+  };
+  const startList = () => Object.entries(STARTS).map(([key, x]) => ({ key, label: x.label }));
+  // A start's steps for a list: stages only where the list has them, fields only the list's own.
+  function startSteps(key, t, ws = null) {
+    const stages = stageLabels(t);
+    const keys = new Set((t?.fields || []).map((f) => f.key));
+    const out = STARTS[key].steps.map(([kind, name, stage, settings]) => ({
+      kind, name: name || KIND_NAME[kind], stage: stage ? stages.find((l) => l.toLowerCase() === stage.toLowerCase()) || null : null,
+      who: { type: MONEY_KINDS.includes(kind) ? 'admins' : 'anyone' }, canSkip: false,
+      settings: kind === 'details' ? { fields: (settings?.fields || []).filter((k) => keys.has(k)) } : { ...(settings || {}) },
+    }));
+    // The team's customer-message switches become steps, asking first (the owner: confirm anything to a customer).
+    if (ws?.custMsgs?.reminders) { const i = out.findIndex((x) => x.kind === 'book'); if (i >= 0) out.splice(i + 1, 0, { kind: 'remind', name: KIND_NAME.remind, stage: null, who: { type: 'anyone' }, canSkip: false, settings: { send: 'ask' } }); }
+    if (ws?.custMsgs?.reviews) out.push({ kind: 'review', name: KIND_NAME.review, stage: null, who: { type: 'anyone' }, canSkip: false, settings: { send: 'ask' } });
+    return out;
+  }
+  const suggestedStart = (t) => ({ service: 'service', install: 'install', cleaning: 'cleaning' })[TRADES[t?.trade]?.family] || 'service';
+  const isLegacy = (rec) => !activeRun(rec.id) && Object.values(db.campaigns).some((c) => !isJobRun(c) && c.recordId === rec.id);
+  const stageOfRec = (t, rec) => { const sf = fieldBy(t, (f) => f.type === 'select' && ['status', 'stage'].includes(f.key)); return sf ? sf.choices.find((c) => c.id === rec.values[sf.id])?.label || null : null; };
+  function moveInfo(ws, auth) {
+    const lists = [];
+    for (const p of Object.values(db.projects)) {
+      if (p.wsId !== ws.id || p.archived || !PJ.sees(p, auth.memberId)) continue;
+      for (const t of p.types.filter(isJobList)) {
+        let notOnFlow = 0, legacy = 0;
+        const stages = {};
+        for (const rec of Object.values(db.records)) {
+          if (rec.projectId !== p.id || rec.typeId !== t.id || activeRun(rec.id) || runsOf(rec.id).some((c) => c.status === 'done')) continue;
+          notOnFlow++;
+          if (isLegacy(rec)) legacy++;
+          const st = stageOfRec(t, rec) || '';
+          stages[st] = (stages[st] || 0) + 1;
+        }
+        if (!notOnFlow) continue;
+        const flows = Object.values(db.jobFlows).filter((f) => f.wsId === ws.id && !f.archived && activeVersion(f)?.body.list?.projectId === p.id && activeVersion(f)?.body.list?.typeId === t.id).map((f) => ({ id: f.id, name: f.name, icon: f.icon }));
+        lists.push({ projectId: p.id, typeId: t.id, board: p.name, list: t.name, notOnFlow, legacy, stages, flows, suggested: suggestedStart(t) });
+      }
+    }
+    return { lists, starts: startList() };
+  }
+  // A job moved onto a flow: the run at the step for its stage. Steps before it met or skipped (no events: their kept
+  // finished state is set here), nothing sent, nothing made; the landed step waits for a person (c.moved.hold) and a
+  // send it would make by itself asks first, this once. Built and kept in one synchronous turn, so overlapping moves
+  // can't give a job two runs.
+  const MOVE_REASON = 'Before the move to Job Flows';
+  function moveOne(ws, auth, rec, flow, version) {
+    const t = typeOfRec(rec);
+    const run = buildRun(ws, auth, rec, flow, version);
+    run.tasks = []; // no tasks made by the move: a Tasks step's tasks are made when the job wakes (wake)
+    const steps = version.body.steps;
+    const stage = stageOfRec(t, rec);
+    let at = -1;
+    if (stage) steps.forEach((s, i) => { if (s.stage && s.stage.toLowerCase() === stage.toLowerCase()) at = i; });
+    const last = at >= 0 && at === steps.length - 1;
+    if (at < 0) at = 0;
+    const upTo = last ? steps.length : at; // the last stage: every step met or skipped, the run done
+    const now = Date.now();
+    commitRun(run); // kept first: what a step stands for is read against the kept run
+    run.goals.forEach((g, i) => {
+      if (g.step.kind === 'tasks') g.tasksPending = true;
+      if (i >= upTo) return;
+      const met = stepMetOn(g, rec);
+      if (!met) Object.assign(g, { skipped: true, skipReason: MOVE_REASON, skippedAt: now, skippedBy: auth.memberId });
+      g.finished = true; g.finishedAt = now; g.finishedById = auth.memberId;
+      if (g.step.kind === 'work') g.stockUsed = { moved: true }; // done before the move: no stock taken for it
+      if (g.step.kind === 'gearIn') { g.inHeld = true; g.roundEnd = now; }
+    });
+    run.c.moved = { at: now, by: auth.memberId, stepGoalId: run.goals[Math.min(at, run.goals.length - 1)]?.id || null, hold: !last };
+    if (last) Object.assign(run.c, { status: 'done', doneBySteps: true, doneAt: now });
+    const g = !last && run.goals[at];
+    if (g) {
+      g.askOnce = true;
+      // A send that would go by itself: ready now as a pending send, waiting for an OK.
+      if (g.step.kind === 'remind') { const today = teamClock(ws).today; const kind = (g.step.settings?.visitKind || '').toLowerCase(); const v = visitsOf(rec.id).find((x) => !x.done && x.date > today && (!kind || String(x.kind || '').toLowerCase() === kind)); if (v) makePending(run.c, g, { kind: 'remind', visitId: v.id }); }
+      if (g.step.kind === 'review') makePending(run.c, g, { kind: 'review' });
+    }
+    note(rec, `Moved onto the flow “${flow.name}” at “${last ? 'the end (done)' : steps[at].name}”`, auth.member);
+    return run;
+  }
+  // What a step stands for, on the record as it is (the move's own check, before the run is kept).
+  const stepMetOn = (g, rec) => { try { return stepCondition(g, rec) && needsMet(g); } catch { return false; } };
+  // A moved job wakes on the first real change to it by a person (an edit, a visit, a step action): its landed step
+  // runs as any step does from then on, and its Tasks steps get their tasks.
+  function wake(recId) {
+    const c = recId && activeRun(recId);
+    if (!c?.moved?.hold) return false;
+    c.moved.hold = false;
+    const ws = db.workspaces[c.wsId];
+    const owner = ws && (memberOf(ws, c.ownerId) || ws.members.find((m) => m.role === 'owner'));
+    const made = [];
+    for (const g of stepGoals(c)) {
+      if (!g.tasksPending) continue;
+      delete g.tasksPending;
+      if (g.skipped || g.finished) continue;
+      for (const text of g.step.settings?.tasks || []) {
+        const tk = applyTask({ id: rid(), wsId: c.wsId, by: owner?.name || 'Kloomie', memberId: owner?.id || null, createdAt: Date.now(), text: '', done: false, doneAt: null, due: null, priority: 0, goalId: g.id, assigneeId: null, recordId: recId }, { text });
+        db.tasks[tk.id] = tk;
+        made.push(tk);
+      }
+    }
+    save();
+    for (const tk of made) { noteWork(tk, null); broadcast(c.wsId, { type: 'task', task: publicTask(tk) }); }
+    tell(c);
+    stepsSoon(c.wsId);
+    return true;
+  }
+  async function moveJobs(ws, auth, body) {
+    const p = db.projects[body.projectId];
+    const t = p && p.wsId === ws.id && PJ.sees(p, auth.memberId) && p.types.find((x) => x.id === body.typeId);
+    if (!t || !isJobList(t)) return { status: 404, body: { error: 'That job list is gone.' } };
+    let flow;
+    if (body.start !== undefined) {
+      if (!Object.hasOwn(STARTS, String(body.start)) || body.start === 'blank') return { status: 400, body: { error: 'Pick one of the ready-made starts.' } };
+      if (Object.values(db.jobFlows).filter((f) => f.wsId === ws.id).length >= MAX_FLOWS) return { status: 400, body: { error: `A team can have ${MAX_FLOWS} job flows.` } };
+      const draft = cleanBody(ws, auth, { list: { projectId: p.id, typeId: t.id }, steps: startSteps(body.start, t, ws) }, null);
+      flow = { id: rid(), wsId: ws.id, name: cleanText(t.name, 80) || 'Jobs', icon: t.icon || '🧰', draft, activeVersionId: null, archived: false, fromStart: body.start, createdBy: auth.memberId, createdAt: Date.now(), updatedAt: Date.now() };
+      checkPublish(ws, draft);
+      snapshotSteps(ws, auth, draft);
+      const v = { id: rid(), flowId: flow.id, wsId: ws.id, n: 1, body: copy(draft), publishedAt: Date.now(), publishedBy: auth.memberId };
+      db.jobFlows[flow.id] = flow;
+      db.jobFlowVersions[v.id] = v;
+      flow.activeVersionId = v.id;
+    } else {
+      flow = db.jobFlows[body.flowId];
+      if (!flow || flow.wsId !== ws.id || !flow.activeVersionId) return { status: 404, body: { error: 'That flow is gone.' } };
+      if (flow.archived) return { status: 400, body: { error: 'That flow is archived.' } };
+    }
+    const version = activeVersion(flow);
+    if (version.body.list?.projectId !== p.id || version.body.list?.typeId !== t.id) return { status: 400, body: { error: `“${flow.name}” is for another job list.` } };
+    const ids = Array.isArray(body.recordIds) ? body.recordIds.slice(0, 2000).map(String) : Object.values(db.records).filter((r) => r.projectId === p.id && r.typeId === t.id).map((r) => r.id).slice(0, 2000);
+    let moved = 0;
+    const skipped = [];
+    const started = [];
+    for (const id of ids) {
+      const rec = db.records[id];
+      if (!rec || rec.wsId !== ws.id) { skipped.push({ id, why: 'It’s gone.' }); continue; }
+      if (rec.projectId !== p.id || rec.typeId !== t.id) { skipped.push({ id, why: 'It’s on another list.' }); continue; }
+      if (activeRun(rec.id) || runsOf(rec.id).some((c) => c.status === 'done')) { skipped.push({ id, why: 'It’s already on a flow.' }); continue; }
+      if (isLegacy(rec)) { skipped.push({ id, why: 'It runs on campaign steps; it stays as it is.' }); continue; }
+      try { started.push(moveOne(ws, auth, rec, flow, version)); moved++; } catch (e) { skipped.push({ id, why: e.message || 'It couldn’t move.' }); }
+    }
+    save();
+    for (const run of started) { tell(run.c); const rec = db.records[run.recordId]; if (rec) PJ.reseeJob(rec); }
+    if (started.length) settle(ws, auth);
+    return { status: 200, body: { moved, skipped, flowId: flow.id } };
   }
 
   // A flow a person may read: admins every one; a member only a published, unarchived flow they may start, on a job
@@ -793,6 +1023,17 @@ export function jobFlowsModule(ctx) {
       }
 
       // a === 'jobs'
+      if (m === 'GET' && b === 'overview' && !c) return send(res, 200, overview(ws, auth));
+      if (m === 'GET' && b === 'clients' && !c) {
+        if (!memberMay(ws, auth, 'contacts')) return send(res, 403, { error: 'Your team’s owners and admins have turned Contacts off for members.' });
+        return send(res, 200, { clients: clients(ws, auth) });
+      }
+      if (b === 'move' && !c) {
+        if (!admin) return send(res, 403, { error: 'Only owners and admins move jobs onto flows.' });
+        if (m === 'GET') return send(res, 200, moveInfo(ws, auth));
+        if (m === 'POST') { const out = await moveJobs(ws, auth, await readJson(req, 100_000)); return send(res, out.status, out.body); }
+        return send(res, 405, { error: 'Use GET or POST.' });
+      }
       if (m === 'GET' && !b) { const sp = new URL(req.url, 'http://x').searchParams; return send(res, 200, { jobs: jobsList(ws, auth, { flow: sp.get('flow'), q: sp.get('q') }) }); }
       if (m === 'POST' && !b) {
         const body = await readJson(req, 200_000);
@@ -832,6 +1073,8 @@ export function jobFlowsModule(ctx) {
       const at = jobAt(ws, auth, b);
       if (!at) return send(res, 404, { error: 'That job is gone.' });
       const { rec } = at;
+      // A person's successful change to a moved job wakes it (PHASE5.md §6): its landed step runs as any step from then on.
+      if (m !== 'GET') res.once('finish', () => { if (res.statusCode < 300) wake(rec.id); });
       if (c === 'run' && m === 'GET') return send(res, 200, { run: runView(ws, auth, shownRun(rec.id)) });
       // A job's stack for its files (PHASE4.md §1): one, made by an owner or admin, flow or not.
       if (c === 'stack' && m === 'POST' && !d) {
@@ -1129,7 +1372,7 @@ export function jobFlowsModule(ctx) {
   // waits its turn) for an owner or admin to press Send or Don't send. Its words are rebuilt when it's sent and must be
   // what was shown; when it's too late (the visit day came, the quote was answered, the invoice paid or voided) it's
   // dropped and noted, never sent late.
-  const askFirst = (step) => step?.settings?.send !== 'auto';
+  const askFirst = (step, g = null) => !!g?.askOnce || step?.settings?.send !== 'auto';
   const PENDING_WHAT = { remind: 'Day-before reminder', review: 'Review request', quoteFollow: 'Quote follow-up', invoice: 'Invoice email', payReminder: 'Payment reminder' };
   function pendingNow(c, g, p) {
     const ws = db.workspaces[c.wsId], rec = recOf(c);
@@ -1218,7 +1461,7 @@ export function jobFlowsModule(ctx) {
     if (!inv || ig.pending || !inv.sentAt || ['paid', 'void'].includes(inv.status) || ig.invoiceTold?.invoiceId === inv.id) return;
     const cust = customerOf(rec);
     if (flowReach(cust)) return; // can't be reached: nothing to do, and nothing to tell anyone (this runs every tick)
-    if (askFirst(ig.step)) return void makePending(c, ig, { kind: 'invoice', invoiceId: inv.id });
+    if (askFirst(ig.step, ig)) return void makePending(c, ig, { kind: 'invoice', invoiceId: inv.id });
     const out = await sendOnce(ig, 'invoiceTold', { invoiceId: inv.id }, () => flowTell(ws, rec, cust, flowMsg.invoice(ws, rec, cust, inv, invoiceUrl(inv), invoiceTotals(inv).total), 'Kloomie'));
     if (out.outcome !== 'blocked') tell(c); // a blocked try changes nothing and is tried again next tick: no news
   }
@@ -1266,7 +1509,7 @@ export function jobFlowsModule(ctx) {
               wait(cur, `Goes ${when === 'today' ? 'today' : 'on ' + when} at 9am, the day before the visit`);
               continue;
             }
-            if (askFirst(cur.step)) { makePending(c, cur, { kind: 'remind', visitId: v.id }); continue; }
+            if (askFirst(cur.step, cur)) { makePending(c, cur, { kind: 'remind', visitId: v.id }); continue; }
             msg = flowMsg.remind(ws, rec, cust, v);
             cur.msgFor = { visitId: v.id, date: v.date };
           } else {
@@ -1274,7 +1517,7 @@ export function jobFlowsModule(ctx) {
             if (!url) { wait(cur, 'Add a review link (on the step, or in Settings → Customer messages)'); continue; }
             const due = (cur.currentSince || Date.now()) + (cur.step.settings?.delayHours ?? 1) * (DAY_MS / 24);
             if (Date.now() < due) { wait(cur, `Goes ${cur.step.settings?.delayHours ?? 1} hour(s) after it came up`); continue; }
-            if (askFirst(cur.step)) { makePending(c, cur, { kind: 'review' }); continue; }
+            if (askFirst(cur.step, cur)) { makePending(c, cur, { kind: 'review' }); continue; }
             msg = flowMsg.review(ws, rec, cust, url);
           }
           const out = await sendOnce(cur, 'msg', {}, () => flowTell(ws, rec, cust, msg, 'Kloomie'));
@@ -1291,7 +1534,7 @@ export function jobFlowsModule(ctx) {
         if (qg && fu > 0 && !qg.skipped && !qg.pending && rec.share && !rec.answer && !(rec.share.expiresAt && rec.share.expiresAt < Date.now()) && qg.followed?.token !== rec.share.token && Date.now() >= rec.share.createdAt + fu * DAY_MS) {
           const cust = customerOf(rec);
           // Unreachable: nothing happens and nobody is told (this runs every tick).
-          if (!flowReach(cust) && askFirst(qg.step)) makePending(c, qg, { kind: 'quoteFollow', token: rec.share.token });
+          if (!flowReach(cust) && askFirst(qg.step, qg)) makePending(c, qg, { kind: 'quoteFollow', token: rec.share.token });
           else if (!flowReach(cust)) { const out = await sendOnce(qg, 'followed', { token: rec.share.token }, () => flowTell(ws, rec, cust, flowMsg.quoteFollow(ws, rec, cust, quoteUrlOf(rec)), 'Kloomie')); if (out.outcome !== 'blocked') tell(c); }
         }
         await invoiceEmail(c, ws, rec);
@@ -1310,7 +1553,7 @@ export function jobFlowsModule(ctx) {
             for (const d of reached.slice(0, -1)) hist[d] ||= { state: 'passed', at: Date.now() };
             const cust = customerOf(rec);
             if (flowReach(cust)) continue;
-            if (askFirst(pg.step)) { makePending(c, pg, { kind: 'payReminder', invoiceId: pi.id, day: last }); break; }
+            if (askFirst(pg.step, pg)) { makePending(c, pg, { kind: 'payReminder', invoiceId: pi.id, day: last }); break; }
             const out = await sendOnce(hist, String(last), {}, () => flowTell(ws, rec, cust, flowMsg.payReminder(ws, rec, cust, pi, invoiceUrl(pi), invoiceTotals(pi).balance), 'Kloomie'));
             if (out.outcome !== 'blocked') tell(c);
           }
@@ -1487,7 +1730,7 @@ export function jobFlowsModule(ctx) {
     // backup): made again with the same id, so there's never two.
     const ws = db.workspaces[wsId];
     for (const c of Object.values(db.campaigns)) {
-      if (c.wsId !== wsId || !isJobRun(c) || c.status !== 'active' || !campaignFromSnapshot) continue;
+      if (c.wsId !== wsId || !isJobRun(c) || c.status !== 'active' || c.moved?.hold || !campaignFromSnapshot) continue;
       const rec = recOf(c);
       const cur = rec && currentGoal(c);
       if (!cur || cur.step?.kind !== 'campaign' || cur.skipped) continue;
@@ -1529,7 +1772,7 @@ export function jobFlowsModule(ctx) {
     }
     const setAuto = (g, a) => { if (JSON.stringify(g.auto || null) !== JSON.stringify(a)) { g.auto = a; changed = true; } };
     for (const c of Object.values(db.campaigns)) {
-      if (c.wsId !== wsId || !isJobRun(c) || c.status !== 'active' || billingOf(versionOf(c)?.body) !== 'auto') continue;
+      if (c.wsId !== wsId || !isJobRun(c) || c.status !== 'active' || c.moved?.hold || billingOf(versionOf(c)?.body) !== 'auto') continue;
       const rec = recOf(c);
       const g = stepGoals(c).find((x) => x.step?.kind === 'invoice');
       if (!rec || !g || g.skipped || currentGoal(c)?.id !== g.id) continue;
@@ -1593,5 +1836,5 @@ export function jobFlowsModule(ctx) {
     }
   }
 
-  return { route, linksSweep, mapJobs, pinInfo, isJobRecord, campaignGone, stepMet, activeRun, isJobRun, isJobList, runsOf, bindInvoice, dropFor, tell, runView, autoBill, autoMessages, invoiceNews, dueDaysFor, jobQuote, priceListItems, itemPrice };
+  return { currentWho, reseeRuns, wake, route, linksSweep, mapJobs, pinInfo, isJobRecord, campaignGone, stepMet, activeRun, isJobRun, isJobList, runsOf, bindInvoice, dropFor, tell, runView, autoBill, autoMessages, invoiceNews, dueDaysFor, jobQuote, priceListItems, itemPrice };
 }
