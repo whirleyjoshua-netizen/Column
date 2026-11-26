@@ -128,7 +128,8 @@ try {
   ok(!R.jLegacy, 'the legacy job has no run');
   ok((await runOf(jOn.id))?.id === onRunBefore?.id && (await runOf(jOn.id))?.current?.name === onRunBefore?.current?.name, 'the job already on the flow is untouched');
   const stageLabel = async (id) => { const rec = ((await rico('GET', `/projects/${A.p.id}/records`)).body || []).find((x) => x.id === id); return A.tp.fields.find((f) => f.key === 'status').choices.find((c) => c.id === rec?.values[A.tp.fields.find((f) => f.key === 'status').id])?.label; };
-  ok((await stageLabel(jDone.id)) === 'Done' && (await stageLabel(jNew.id)) === 'New' && (await stageLabel(jPaid.id)) === 'Paid', 'the jobs’ stages don’t move');
+  const stagesNow = await Promise.all([jNew, jSched, jDone, jProg, jInv, jPaid].map((j) => stageLabel(j.id)));
+  ok(stagesNow.join() === 'New,Scheduled,Done,In progress,Invoiced,Paid', 'none of the six moved jobs’ stages move: ' + stagesNow.join());
 
   // No side effects.
   await sleep(1500);
@@ -248,10 +249,22 @@ try {
   // With a ready-made start: a flow is made and published for the list.
   const Bd = await board('Cleaning B');
   const b1 = await Bd.add('B one', 'Scheduled', { customer: await contact() }), b2 = await Bd.add('B two', 'New');
+  // With the team's reminder and review switches on, the made flow gets those steps, asking first.
+  await rico('PATCH', '/workspace', { custMsgs: { reviewUrl: 'https://g.page/r/test-review' } });
+  await rico('PATCH', '/workspace', { custMsgs: { reminders: true, reviews: true } });
   r = await rico('POST', '/jobs/move', { projectId: Bd.p.id, typeId: Bd.tp.id, start: 'cleaning' });
+  await rico('PATCH', '/workspace', { custMsgs: { reminders: false, reviews: false } });
   ok(r.status === 200 && r.body?.moved === 2 && r.body?.flowId, 'with a start: both move: ' + r.status + ' ' + (r.body?.error || ''));
   const made = ((await rico('GET', '/job-flows')).body?.flows || []).find((f) => f.id === r.body?.flowId);
   ok(made && made.version && made.fromStart === 'cleaning' && made.version.body.list.projectId === Bd.p.id, 'the flow is made from the start, published, for that list');
+  const kinds = (made?.version?.body?.steps || []).map((x) => x.kind).join();
+  ok(kinds === 'client,details,book,remind,work,invoice,payment,review', 'the Cleaning visit start’s steps, with a Visit reminder after Book and a Review request at the end: ' + kinds);
+  ok((made?.version?.body?.steps || []).filter((x) => ['remind', 'review'].includes(x.kind)).every((x) => x.settings?.send !== 'auto'), 'both ask first');
+  const Bd2 = await board('Cleaning B2');
+  await Bd2.add('B2 one', 'New');
+  r = await rico('POST', '/jobs/move', { projectId: Bd2.p.id, typeId: Bd2.tp.id, start: 'cleaning' });
+  const made2 = ((await rico('GET', '/job-flows')).body?.flows || []).find((f) => f.id === r.body?.flowId);
+  ok((made2?.version?.body?.steps || []).map((x) => x.kind).join() === 'client,details,book,work,invoice,payment', 'with the switches off, no reminder or review steps');
   ok((await runOf(b1.id))?.current?.kind === 'book' && (await runOf(b2.id))?.flowId === made?.id, 'each job at the step for its stage');
   ok((await rico('POST', '/jobs/move', { projectId: Bd.p.id, typeId: Bd.tp.id, start: 'nonsense' })).status === 400, 'a start that isn’t one: 400');
 
@@ -268,12 +281,20 @@ try {
   const wins = (out[0].body?.moved || 0) + (out[1].body?.moved || 0) + (out[2].status === 200 ? 1 : 0);
   ok(wins === 1, 'two overlapping moves and a put-on-a-flow: exactly one puts the job on the flow: ' + out.map((x) => x.status + ':' + (x.body?.moved ?? x.body?.error ?? '')).join(' | '));
   ok(((await rico('GET', '/jobs')).body?.jobs || []).filter((j) => j.id === c1.id).length === 1, 'and the job is listed once');
+  const c1Run = await runOf(c1.id);
+  ok(c1Run?.flowId === fc.id && !!c1Run?.id, 'on the flow asked for');
+  // Starting a job makes a new record, so it can't race a move for an existing one; a move racing an admin taking the
+  // job off its flow and putting it back is the same check-and-write turn, covered above.
 
   // Saved across a restart, and still quiet.
   const mailsAt = mails().length;
   await stop();
   ok(await start(), 'restarted');
   ok((await runOf(jDone.id))?.current?.name === 'Clean' && (await runOf(jPaid.id))?.status === 'done' && !!(await runOf(b1.id)), 'the moved jobs are still on their flows');
+  ok((await runOf(c1.id))?.id === c1Run?.id, 'the raced job still has its one run (the same one)');
+  const kept = JSON.parse(fs.readFileSync(DIR + '/db.json', 'utf8'));
+  const runsFor = (id) => Object.values(kept.campaigns || {}).filter((c) => c.recordId === id && c.kind === 'job' && c.status !== 'cancelled');
+  ok(runsFor(c1.id).length === 1 && runsFor(jDone.id).length === 1 && runsFor(jK.id).length === 1, 'in what’s saved, each of them has exactly one run');
   await sleep(1200);
   ok(mails().length === mailsAt && stepNamed(await runOf(jProg.id), 'Remind')?.pending, 'nothing sent after the restart; the reminder still waits');
 } catch (e) {
