@@ -19053,8 +19053,6 @@
     // The job's files are its chat's Files now (JOBCHAT.md §4): an older job with a stack and no chat gets its chat,
     // linked to that stack, by the server (or a clear answer if the stack is bound elsewhere).
     return jbOpenChat(r.id, r.chatId, 'files');
-    if (!amAdmin()) return toast('This job has no files stack yet. An owner or admin can add one.');
-    try { const y = await api('POST', `/jobs/${r.id}/stack`); r.stackId = y.stack.id; setTimeout(() => showStack(y.stack.id), 300); } catch (e) { toast(e.message); }
   }
   // Pin the job to a chat (PHASE4.md §4): whoever can see the job there sees its name and the step it's at.
   function jbPinToChat(r) {
