@@ -52,7 +52,7 @@ try {
   await A.ev(`document.querySelector('#settingsBtn').click(); true`);
   ok(await A.until(`!!document.querySelector('#settings .setx-nav')`), 'Settings opens with a menu down the side');
   ok(await A.ev(`[...document.querySelectorAll('#settings .setx-group-h')].map((x) => x.textContent).join('|')`) === 'You|Team|Business|Data', 'grouped: You, Team, Business, Data');
-  ok(await items() === 'profile|notify|prefs|signature|members|access|roles|teamset|business|data', 'an owner has every page: ' + await items());
+  ok(await items() === 'profile|notify|prefs|signature|members|access|roles|teamset|business|website|data', 'an owner has every page: ' + await items());
   ok(await A.ev(`document.querySelector('#settings .setx-item.on')?.dataset.page === 'profile' && document.querySelector('#settings .setx-head h2').textContent === 'Profile & sign-in'`), 'a device that saved the old Account tab opens on Profile & sign-in');
   ok(await heads() === 'Your email|Where you’re signed in|Your password|Two-step sign-in|This device and sign-out', 'Profile & sign-in: ' + await heads());
   ok(await A.ev(`(() => { const cs = [...document.querySelectorAll('#settings .setx-cards > section')]; return cs.length > 2 && cs.every((c) => Math.abs(c.getBoundingClientRect().left - cs[0].getBoundingClientRect().left) < 2) && getComputedStyle(cs[0]).borderTopWidth !== '0px'; })()`), 'its cards are one column, each with a border');
@@ -81,7 +81,7 @@ try {
   await A.until(`!document.querySelector('#app').classList.contains('hidden') && !!document.querySelector('#settingsBtn')`, 15000);
   await A.ev(`document.querySelector('#settingsBtn').click(); true`);
   await A.until(`!!document.querySelector('#settings .setx-nav')`);
-  ok(await items() === 'profile|notify|prefs|signature|members|roles|business|data', 'a member has no What members can use or Team settings: ' + await items());
+  ok(await items() === 'profile|notify|prefs|signature|members|roles|business|data', 'a member has no What members can use, Team settings or Website: ' + await items());
   // A phone: the list first, then a page, ‹ back.
   await A.cmd('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
   await sleep(400);
