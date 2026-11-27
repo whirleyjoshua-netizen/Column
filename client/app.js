@@ -7175,7 +7175,10 @@
   const CC_RTABS = [['view', 'Overview'], ['work', 'Work'], ['progress', 'Progress']];
   const ccVtabOf = (k) => (CC_RTABS.some(([x]) => x === k) ? k : 'view');
   let ccRO = false; // the campaign on the page is being read: its board and timeline don't drag, its tasks open to read
-  const ccReading = (c) => !!c && ccRO && K.open === c.id && K.cedit !== c.id && campsShown();
+  // Who plans it (the server's rule, plansCampaign): whoever runs it and admins. Anyone else reads it wherever its
+  // tasks open, and never sees Edit. A Job Flow run has its own rules.
+  const ccPlans = (c) => !c || c.kind === 'job' || runsIt(c);
+  const ccReading = (c) => !!c && c.kind !== 'job' && (!ccPlans(c) || (ccRO && K.open === c.id && K.cedit !== c.id && campsShown()));
   const ccEditOn = (c, tab) => { K.cedit = c.id; if (tab) K.ctab = tab; renderCamps(true); };
   const ccEditOff = () => { K.cedit = null; renderCamps(true); };
   const ccTabOf = (k) => (k === 'activity' || k === 'report' ? 'progress' : ccTabs().some(([x]) => x === k) ? k : 'plan');
@@ -8026,6 +8029,7 @@
     return h('button', { class: 'pill pill-btn camp-job', title: 'The job this campaign is for', onclick: () => openRecord(c.recordId) }, '📋 ' + (t ? 'For ' + recName(t, at.r) : 'Its job'));
   }
   function campaignView(c) {
+    if (!ccPlans(c)) K.cedit = null;
     ccRO = K.cedit !== c.id;
     const p = campProgress(c);
     const goals = goalsOf(c.id);
@@ -8253,7 +8257,7 @@
         campDates(c) ? h('span', { class: 'cc-meta-item' }, '📅 ', campDates(c)) : null,
         c.assigneeId ? h('span', { class: 'cc-meta-item cc-runner' }, avatar(c.assigneeId), ' ', memberName(c.assigneeId), ' runs it') : null,
         h('span', { style: 'flex:1' }),
-        h('button', { class: 'btn small primary-btn cc-edit', title: 'Change the plan: phases, tasks, who and when', onclick: () => ccEditOn(c) }, '✎ Edit'),
+        ccPlans(c) ? h('button', { class: 'btn small primary-btn cc-edit', title: 'Change the plan: phases, tasks, who and when', onclick: () => ccEditOn(c) }, '✎ Edit') : null,
         h('button', { class: 'icon-btn', 'aria-label': 'Campaign options', html: I.more, onclick: (e) => campaignMenu(e.currentTarget, c) })),
       h('div', { class: 'camp-meta cc-pills' },
         c.recordId ? campJobPill(c) : null,
@@ -8263,11 +8267,12 @@
       h('div', { class: 'cc-tabs', role: 'tablist' }, CC_RTABS.map(([k, l]) =>
         h('button', { class: 'cc-tab' + (tab === k ? ' on' : ''), role: 'tab', 'aria-selected': String(tab === k), 'data-ctab': k, onclick: () => { K.vtab = k; renderCamps(); } }, l))));
   }
-  // Tick a task while reading: only your own, and not while it waits on something.
-  const ccTickable = (t) => taskMine(t) && (t.done || !taskBlockers(t).length);
+  // Tick a task while reading: your own, or one nobody is on yet (the server's rule), not while it waits on something.
+  const ccNobodys = (t) => !t.assigneeId && !t.roleId && !t.castId;
+  const ccTickable = (t) => (taskMine(t) || ccNobodys(t)) && (t.done || !taskBlockers(t).length);
   function ccTick(t, after) {
     const btn = h('button', { class: 'check' + (t.done ? ' on' : ''), html: I.check, disabled: !ccTickable(t), 'aria-label': t.done ? 'Mark not done' : 'Mark done',
-      title: ccTickable(t) ? '' : taskMine(t) ? waitText(taskBlockers(t)) : 'Only whoever it’s for ticks it off' });
+      title: ccTickable(t) ? '' : taskMine(t) || ccNobodys(t) ? waitText(taskBlockers(t)) : 'Only whoever it’s for ticks it off' });
     btn.addEventListener('click', async () => { btn.disabled = true; try { await patchTask(taskById(t.id) || t, { done: !t.done }); } catch (e) { toast(e.message); } renderCamps(true); after?.(); });
     return btn;
   }
@@ -8306,7 +8311,7 @@
   function taskRead(t) {
     t = taskById(t.id) || t;
     const g = goalById(t.goalId), camp = g && campById(g.campaignId);
-    const mine = taskMine(t);
+    const mine = taskMine(t) || ccNobodys(t);
     const redraw = () => { const x = taskById(t.id); if (x && $(`#sheet:not(.hidden) .task-read[data-task="${t.id}"]`)) taskRead(x); };
     const save = async (changes) => { try { await patchTask(taskById(t.id) || t, changes); } catch (e) { toast(e.message); } redraw(); renderCamps(); };
     const blockers = taskBlockers(t), unlocks = t.done ? [] : unlocksOf(t);
@@ -8348,7 +8353,7 @@
         (t.comments || []).map((cm) => h('div', { class: 'td-comment', 'data-comment': cm.id }, avatar(cm.memberId), h('div', {}, h('div', { class: 'td-c-h' }, h('b', {}, cm.by), h('small', {}, ' · ' + ago(cm.at))), h('p', {}, cm.text)))),
         h('div', { class: 'td-cnew' }, cBox, post))),
       h('div', { class: 'btns td-actions' }, h('span', { style: 'flex:1' }),
-        camp ? h('button', { class: 'btn small tr-edit', title: 'Switch the campaign to Edit and open this task there', onclick: () => { ccEditOn(camp); taskWindow(taskById(t.id) || t); } }, '✎ Edit task') : null))]);
+        camp && ccPlans(camp) ? h('button', { class: 'btn small tr-edit', title: 'Switch the campaign to Edit and open this task there', onclick: () => { ccEditOn(camp); taskWindow(taskById(t.id) || t); } }, '✎ Edit task') : null))]);
   }
 
   // ----- Plan: the planner (the owner's sketch, 2026-11-22) -----
