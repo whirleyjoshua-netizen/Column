@@ -75,6 +75,10 @@ try {
   ok(clGoals.length === 1, 'with one list of tasks');
   ok(JSON.stringify(clTasks.map((x) => x.text).sort()) === JSON.stringify(['Check the filter', 'Replace the capacitor', 'Test cooling']), 'its tasks, blank lines left out: ' + JSON.stringify(clTasks.map((x) => x.text)));
   ok(clTasks.every((x) => x.assigneeId === me && x.due === '2030-05-01'), 'each for whoever it’s for (you, unless you pick), due that day');
+  ok(!cl.channelId && !cl.stackId, 'with no feed or stack of its own (2026-11-27)');
+  ok(await A.until(`!!document.querySelector('#camps .cc-name')`) && !(await A.ev(`[...document.querySelectorAll('#camps button')].some((b) => /^(Files|Notes) ·/.test(b.textContent))`)), 'its page has no Files or Notes');
+  await A.ev(`document.querySelector('#camps .cc-edit')?.click(); true`);
+  ok(await A.until(`!!document.querySelector('#camps .cc-planner')`), 'and it opens to edit like any campaign');
   await A.ev(`document.querySelector('#camps .cc-back')?.click(); true`);
   ok(await A.until(`[...document.querySelectorAll('.camp-card')].some((x) => x.textContent.includes('Lee house') && !!x.querySelector('.cc-kind'))`), 'the list marks it a Checklist');
 

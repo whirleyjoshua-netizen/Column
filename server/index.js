@@ -3726,15 +3726,19 @@ function deleteCampaign(ws, c) {
 // owner: { memberId, member } of whoever it belongs to. extra: fields set before anyone hears about it.
 function createCampaign(ws, owner, body, extra = {}) {
   const c = applyCampaign({ id: extra.id || rid(), wsId: ws.id, ownerId: owner.memberId, by: owner.member, createdAt: Date.now(), name: '', brief: '', start: null, end: null, color: 'violet', status: 'active', private: false, memberIds: [], assigneeId: null, outcomes: [...OUTCOMES], methods: [...METHODS], lastReportAt: null }, body, ws, owner);
-  let folder = ws.chatFolders.find((f) => f.campaigns);
-  if (!folder) ws.chatFolders.push((folder = { id: rid(8), name: 'Campaigns', campaigns: true }));
-  const ch = { id: rid(8), name: freeChannelName(ws, c.name), folderId: folder.id, campaignId: c.id };
-  const st = { id: rid(8), name: c.name.slice(0, 40), campaignId: c.id };
-  ws.channels.push(ch);
-  ws.stacks.push(st);
-  linkFeedStack(ws, ch, st); // the stack is the feed's Files (docs/jobflows/JOBCHAT.md §1)
-  c.channelId = ch.id;
-  c.stackId = st.id;
+  // Its own feed and stack, except a Checklist's (the owner, 2026-11-27): one for every job's checklist would pile up,
+  // and a job's chat is where the job is talked about.
+  if (c.type !== 'checklist') {
+    let folder = ws.chatFolders.find((f) => f.campaigns);
+    if (!folder) ws.chatFolders.push((folder = { id: rid(8), name: 'Campaigns', campaigns: true }));
+    const ch = { id: rid(8), name: freeChannelName(ws, c.name), folderId: folder.id, campaignId: c.id };
+    const st = { id: rid(8), name: c.name.slice(0, 40), campaignId: c.id };
+    ws.channels.push(ch);
+    ws.stacks.push(st);
+    linkFeedStack(ws, ch, st); // the stack is the feed's Files (docs/jobflows/JOBCHAT.md §1)
+    c.channelId = ch.id;
+    c.stackId = st.id;
+  }
   c.assignedBy = c.assigneeId ? owner.memberId : null;
   Object.assign(c, extra);
   db.campaigns[c.id] = c;

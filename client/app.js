@@ -8035,7 +8035,7 @@
     const goals = goalsOf(c.id);
     const ch = S.workspace.channels.find((x) => x.id === c.channelId);
     const st = S.workspace.stacks.find((x) => x.id === c.stackId);
-    const files = S.items.filter((it) => it.stackId === c.stackId && (it.type === 'file' || it.type === 'folder')).length;
+    const files = c.stackId ? S.items.filter((it) => it.stackId === c.stackId && (it.type === 'file' || it.type === 'folder')).length : 0;
     const notes = notesOf(c).length;
     const lists = listsOf(c.id).filter((l) => !onGoal(l));
     const who = c.private ? [...new Set([c.ownerId, ...c.memberIds, c.assigneeId].filter(Boolean))] : null;
@@ -9645,6 +9645,7 @@
   }
 
   async function addToCampaign(c, file) {
+    if (!c.stackId) return toast('A checklist has no files of its own: open one of its tasks to add a file to it.');
     let a = null;
     try {
       a = await analyze(file);
@@ -10365,7 +10366,8 @@
   }
 
   // Notes are text cards in the campaign's stack, so they sit in the stack next to its files.
-  const notesOf = (c) => S.items.filter((it) => it.stackId === c.stackId && it.type === 'text' && !it.underId).sort((a, b) => (b.editedAt || b.createdAt) - (a.editedAt || a.createdAt));
+  // A Checklist has no stack (2026-11-27): it has no notes or files of its own, not every loose one.
+  const notesOf = (c) => !c.stackId ? [] : S.items.filter((it) => it.stackId === c.stackId && it.type === 'text' && !it.underId).sort((a, b) => (b.editedAt || b.createdAt) - (a.editedAt || a.createdAt));
   function notesMenu(anchor, c) {
     const notes = notesOf(c);
     openMenu(anchor, [
@@ -10381,7 +10383,7 @@
   }
   // The Files button: the campaign's newest files to open, a way to add one, and the whole stack.
   function filesMenu(anchor, c) {
-    const files = S.items.filter((it) => it.stackId === c.stackId && (it.type === 'file' || it.type === 'folder')).sort((a, b) => (b.editedAt || b.createdAt) - (a.editedAt || a.createdAt));
+    const files = !c.stackId ? [] : S.items.filter((it) => it.stackId === c.stackId && (it.type === 'file' || it.type === 'folder')).sort((a, b) => (b.editedAt || b.createdAt) - (a.editedAt || a.createdAt));
     openMenu(anchor, [
       ...(files.length ? [{ head: 'Recent files' }] : [{ note: 'No files yet. Drop one on this campaign.' }]),
       ...files.slice(0, 8).map((it) => ({
@@ -11342,10 +11344,11 @@
         if (doc) upsert(doc);
       }
       const text = [`📋 Report · ${c.name}`, ...stats, notes.value.trim() ? '\n' + notes.value.trim() : '', linkToken('campaign', c.id), doc ? linkToken('doc', doc.id) : ''].filter(Boolean).join('\n');
-      await api('POST', '/items', { type: 'message', text, channelId: c.channelId });
+      if (c.channelId) await api('POST', '/items', { type: 'message', text, channelId: c.channelId });
       await api('PATCH', '/campaigns/' + c.id, { lastReportAt: Date.now() });
       if (task) await patchTask(task, { done: true }, { reported: true });
-      toast(`Posted to #${S.workspace.channels.find((x) => x.id === c.channelId)?.name || 'feed'}`, { label: 'Show', run: () => { setTab('chat'); openChannel('ch:' + c.channelId); } });
+      if (c.channelId) toast(`Posted to #${S.workspace.channels.find((x) => x.id === c.channelId)?.name || 'feed'}`, { label: 'Show', run: () => { setTab('chat'); openChannel('ch:' + c.channelId); } });
+      else toast(doc ? 'Saved as a doc' : 'Report noted');
     }, 'Post report');
   }
 
