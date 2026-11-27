@@ -75,6 +75,8 @@ try {
   const samTok = r.body.token;
   let sam = call(samTok);
   await rico('PATCH', '/workspace', { tools: { ...st.workspace.tools, projects: true, inventory: true, map: true } });
+  // Jobs here start without a stack (Phase 4's own rules); a chat (and its stack) with every job is JOBCHAT.md's, off here.
+  await rico('PATCH', '/workspace', { jobChats: false });
   st = (await rico('GET', '/state')).body;
   const samId = st.workspace.members.find((m) => m.name === 'Sam Reed').id;
   r = await call()('POST', '/auth', { mode: 'join', workspace: 'Links ' + t, code: st.workspace.inviteCode, name: 'Ann Cole', email: `ann${t}@t.test`, password: 'longenough5', device: 'Mac', deviceId: 'd5' });

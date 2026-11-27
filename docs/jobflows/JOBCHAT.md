@@ -74,7 +74,8 @@ one too. The Stacks page keeps showing every stack as today, so nothing someone 
   follow **Chat** (`chat`), not Stacks (`column`): a feed's stack is the feed's files now, so a team with Stacks off
   for members still shows them a feed's Files (the state filter at index.js 8888 lets a feed's stack through on
   `chat`). With Chat off for members they still see 💬 on a job, and it says Chat is off for members.
-- Feed names are today's slugs (`smith-kitchen-remodel`); a job with no name yet gets `job`, `job-2`…
+- Feed names are today's slugs (`smith-kitchen-remodel`); a job with no name yet gets the name the app shows for it
+  (its list's word, e.g. `cleaning`), or `job` if even that is empty; `-2`, `-3`… on a clash.
 - There's no limit on feeds today; job feeds add one per job, and archived ones don't load (§3).
 - One job, one feed; one feed, one stack (checked on every link).
 
@@ -209,3 +210,32 @@ Added: the automation's job checked by its record and the name it was given; Ask
 someone on the job, nothing for a member who isn't). §8.9 corrected: the app's search is over what it has loaded, so
 "search" for archived chats means Ask.
 - Ask's positive case checks the archived doc is among the sources sent with Mia's question (a stand-in AI, port 5271), and that nothing reaches the AI for Sam. Checkpoint 2 APPROVED (round 3).
+
+## 11. Checkpoint 3: the server (as built)
+- `seesFeed(ch, memberId, ws)` and `seesStack(st, memberId, ws)` take the team, at every caller (state, broadcasts,
+  `canSee`, chat pins, routes, the export, readers of a post): a job's feed fails closed (§8.1); Chat off for members
+  → no feed (§9.1); a stack that names a feed follows it, and a stack whose feed doesn't name it back is for owners and
+  admins only (§8.2). `jobStackOfItem` now means "the stack an item is in, when that stack follows a job or a feed", so
+  `canSee('item')` and the own-team rule treat a feed's files as the feed's.
+- `linkFeedStack` is the one writer; `feedStack` makes a plain feed's stack (`POST /channels/:id/stack`);
+  `feedForStack` gives a team stack its feed (`team: true`, the whole team's); `chatStacksMigrate` once a team at
+  startup (`ws.chatStacks = 1`); `createCampaign` links its two.
+- Found while building: the startup fix-up from when feeds became invite-only ("everyone already on the team keeps the
+  feeds they had") ran on every restart and gave any feed without `memberIds` a frozen member list. It now leaves job
+  feeds and stack feeds (`team`) alone; without that, every job's chat vanished after a restart.
+- Job chats: `jobChatEnsure` (stack, feed in the Jobs folder, job pin, link, `rec.chatId`, one turn); `jobMade` from
+  `recordNews('record.created')` (projects.js `onMade`, before anyone hears of the job), the bulk import, and Move my
+  jobs here; `jobChatFollow` on every record change (name, stack name, finish); `jobChatsDone` in the job sweep;
+  `jobChatsNet` every minute (jobs made since `ws.jobChatsSince` with no chat, while the switch is on);
+  `GET/POST /jobs/:id/chat` in Job Flows' routes (job visibility, then Chat). `reseeJob` resyncs on `chatId` as on
+  `stackId`. Deleting a job deletes its feed and items with its stack, Trash included.
+- Archived: `publicChannels` and the workspace's stacks leave them out; state's items leave out their items
+  (`archivedTest`); a message in one (`addItem`) or Reopen (`POST /channels/:id/reopen`, owners and admins) brings it
+  back with a `resync`.
+- Stacks by id: `PATCH`/`DELETE /stacks/:id` check `seesStack`; a job's, campaign's or invite-only feed's stack can't be
+  deleted (400); a team stack can, as before (its files stay with the team), and its feed goes with it if nothing was
+  said there.
+- Feeds: a job's can't be renamed, given people, left or deleted by hand (400); renaming a feed renames its stack;
+  deleting a feed deletes its stack and its files; making a stack feed invite-only drops `team` (narrower only).
+- jobflow_links.mjs turns `jobChats` off (its jobs start without a stack, Phase 4's rule); jobchat.mjs is in ci.sh.
+  ci.sh passes; jobchat.mjs passes.

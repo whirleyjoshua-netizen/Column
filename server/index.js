@@ -112,7 +112,8 @@ for (const ws of Object.values(db.workspaces)) {
   // Feeds became invite-only: everyone already on the team keeps the feeds they had.
   const owner = ws.members?.find((m) => m.role === 'owner');
   for (const ch of ws.channels) {
-    if (ch.campaignId || ch.memberIds || !owner) continue;
+    // A job's feed follows the job, and a stack's feed is the whole team's (docs/jobflows/JOBCHAT.md): left alone.
+    if (ch.campaignId || ch.recordId || ch.team || ch.memberIds || !owner) continue;
     ch.ownerId = owner.id;
     ch.memberIds = ws.members.filter((m) => m !== owner).map((m) => m.id);
   }
@@ -604,6 +605,7 @@ const publicWorkspace = (ws, memberId) => ({
   tools: toolsOf(ws),
   agentList: AGENTS_M.listFor(ws.id, memberId), // the built-ins, then this person's own agents
   memberAccess: memberAccessOf(ws),
+  jobChats: jobChatsOn(ws),
   billing: publicBilling(ws),
   id: ws.id,
   name: ws.name,
@@ -613,7 +615,7 @@ const publicWorkspace = (ws, memberId) => ({
   setup: ws.setup || null,
   deleteAt: ws.deleteAt || null,
   deleteBy: ws.deleteAt ? ws.deleteBy : null,
-  stacks: ws.stacks.filter((x) => seesStack(x, memberId)),
+  stacks: ws.stacks.filter((x) => !archivedStack(ws, x) && seesStack(x, memberId, ws)),
   channels: publicChannels(ws, memberId),
   chatPins: publicChatPins(ws, ws.chatPins, memberId),
   chatFolders: ws.chatFolders,
@@ -2161,7 +2163,79 @@ function addItem(item) {
   db.items[item.id] = item;
   save();
   if (item.status === 'ready') broadcast(item.wsId, { type: 'item:add', item: publicItem(item) });
+  // A message into an archived job feed takes it out of the archive (docs/jobflows/JOBCHAT.md §3, §8.10).
+  const ch = item.type === 'message' && item.channelId && db.workspaces[item.wsId]?.channels.find((c) => c.id === item.channelId);
+  if (ch?.archived) feedReopen(db.workspaces[item.wsId], ch);
   return item;
+}
+// Out of the archive: everyone reloads, so the feed and its items (left out of state while archived) come back.
+// ch.wasDone stays, so the sweep archives it again only at a new finish.
+function feedReopen(ws, ch) {
+  delete ch.archived;
+  save();
+  broadcast(ws.id, { type: 'resync' });
+}
+
+// ---------- a feed's stack: its Files (docs/jobflows/JOBCHAT.md §1, §8.2) ----------
+// The one writer of ch.stackId / st.channelId. Both in ws, neither bound to anything else, audiences that match:
+// a job's feed ↔ that job's stack; a campaign's feed ↔ that campaign's stack; a plain feed ↔ a stack made for it
+// (an invite-only feed never takes an existing stack); a team-wide feed ↔ a team stack. Anything else: refused,
+// nothing changed (false).
+function linkFeedStack(ws, ch, st) {
+  if (!ws || !ws.channels.includes(ch) || !ws.stacks.includes(st)) return false;
+  if ((ch.stackId && ch.stackId !== st.id) || (st.channelId && st.channelId !== ch.id)) return false;
+  const fits = ch.recordId ? st.recordId === ch.recordId && !st.campaignId
+    : ch.campaignId ? st.campaignId === ch.campaignId && !st.recordId
+    : !st.recordId && !st.campaignId && (ch.team || st.forFeed === ch.id);
+  if (!fits) return false;
+  ch.stackId = st.id;
+  st.channelId = ch.id;
+  return true;
+}
+// A feed's stack, made the first time something goes into its Files: one synchronous turn, so two asking at once
+// get the same one. Null when the feed's link is broken (it names a stack that doesn't name it back): never a second.
+function feedStack(ws, ch) {
+  const have = ch.stackId && ws.stacks.find((x) => x.id === ch.stackId);
+  if (have) return have.channelId === ch.id ? have : null;
+  if (ch.stackId) return null;
+  const st = { id: rid(8), name: String(ch.name).slice(0, 40), forFeed: ch.id, ...(ch.campaignId ? { campaignId: ch.campaignId } : {}), ...(ch.recordId ? { recordId: ch.recordId } : {}) };
+  ws.stacks.push(st);
+  if (!linkFeedStack(ws, ch, st)) { ws.stacks.pop(); return null; }
+  save();
+  broadcast(ws.id, { type: 'workspace' });
+  return st;
+}
+// A chat folder for a kind of feed (Jobs, Stacks), made once.
+function chatFolderFor(ws, kind, name) {
+  let f = ws.chatFolders.find((x) => x[kind]);
+  if (!f) ws.chatFolders.push((f = { id: rid(8), name, [kind]: true }));
+  return f;
+}
+// A team stack with no feed gets a team-wide feed of its own, in the Stacks folder (§2).
+function feedForStack(ws, st) {
+  if (st.channelId || st.recordId || st.campaignId) return null;
+  const ch = { id: rid(8), name: freeChannelName(ws, st.name || 'stack'), folderId: chatFolderFor(ws, 'stacks', 'Stacks').id, team: true };
+  ws.channels.push(ch);
+  if (!linkFeedStack(ws, ch, st)) { ws.channels.pop(); return null; }
+  return ch;
+}
+// Once a team, at startup (§7, §8.7): a campaign's feed and stack linked; a team stack with no feed given one. Each
+// step checks first, the whole team in one turn, saved once with the marker: a restart part-way redoes nothing twice.
+function chatStacksMigrate(ws) {
+  if (ws.chatStacks === 1) return false;
+  ws.chatFolders ||= [];
+  for (const ch of ws.channels) {
+    if (!ch.campaignId || ch.stackId) continue;
+    const st = ws.stacks.find((x) => x.campaignId === ch.campaignId && !x.channelId);
+    if (st) linkFeedStack(ws, ch, st);
+  }
+  for (const st of [...ws.stacks]) {
+    if (st.channelId || st.recordId || st.campaignId) continue;
+    if (ws.channels.some((c) => c.stackId === st.id)) continue; // a feed names it but it doesn't name the feed: left as it is
+    feedForStack(ws, st);
+  }
+  ws.chatStacks = 1;
+  return true;
 }
 
 function baseItem(auth, fields) {
@@ -2503,18 +2577,27 @@ function linkInfo(ws, auth, type, id) {
 
 function validStack(ws, stackId, memberId) {
   const st = stackId && ws.stacks.find((s) => s.id === stackId);
-  return st && seesStack(st, memberId) ? stackId : null;
+  return st && seesStack(st, memberId, ws) ? stackId : null;
 }
 // A stack is a campaign's (seen with the campaign), a job's (seen by whoever sees the job: PHASE4.md §1), or the team's.
-function seesStack(st, memberId) {
-  if (st?.recordId) { const rec = db.records[st.recordId]; return !!rec && !!PJ.recordAt(rec.id, rec.wsId, memberId); }
-  return seesCampaign(st?.campaignId, memberId);
+// A stack that belongs to a feed (its Files, docs/jobflows/JOBCHAT.md §1) is seen only by those who see the feed, and
+// also by its own rule (a job's, a campaign's). A stack that names a feed which doesn't name it back is a broken link:
+// owners and admins only, never wider (§8.2). ws is the stack's team; without it a bound stack is seen by nobody.
+function seesStack(st, memberId, ws) {
+  if (!st) return false;
+  if (st.channelId) {
+    const ch = ws?.channels.find((c) => c.id === st.channelId);
+    if (!ch || ch.stackId !== st.id) return !!ws && isAdminId(ws.id, memberId) && seesCampaign(st.campaignId, memberId);
+    if (!seesFeed(ch, memberId, ws)) return false;
+  }
+  if (st.recordId) { const rec = db.records[st.recordId]; return !!rec && !!PJ.recordAt(rec.id, rec.wsId, memberId); }
+  return seesCampaign(st.campaignId, memberId);
 }
-// The job stack an item lives in (its top item's), if any.
+// The stack an item lives in (its top item's) when that stack follows something: a job's, or a feed's Files.
 function jobStackOfItem(x) {
   const top = x && topItem(x);
   const st = top?.stackId && db.workspaces[x.wsId]?.stacks.find((y) => y.id === top.stackId);
-  return st?.recordId ? st : null;
+  return st?.recordId || st?.channelId ? st : null;
 }
 // A job is gone (or its list, or its board): its stack and the stack's files go as a deleted campaign's do.
 // Everything that goes with a deleted record (one, or its list's or board's): its visits, draft invoices, runs, gear
@@ -2524,10 +2607,13 @@ function jobStackGone(rec) {
   const ws = db.workspaces[rec.wsId];
   if (!ws) return;
   const gone = new Set(ws.stacks.filter((x) => x.recordId === rec.id).map((x) => x.id));
-  if (!gone.size) return;
-  for (const it of Object.values(db.items)) if (it.wsId === ws.id && gone.has(topItem(it)?.stackId)) deleteItem(it.id);
-  purgeTrash((e) => e.wsId === ws.id && gone.has(topItem(e.items[0])?.stackId));
+  // Its chat goes with it too (docs/jobflows/JOBCHAT.md §3, §8.4): the feed, its messages, files and replies, outright.
+  const feeds = new Set(ws.channels.filter((c) => c.recordId === rec.id).map((c) => c.id));
+  if (!gone.size && !feeds.size) return;
+  for (const it of Object.values(db.items)) if (it.wsId === ws.id && (gone.has(topItem(it)?.stackId) || feeds.has(topItem(it)?.channelId))) deleteItem(it.id);
+  purgeTrash((e) => e.wsId === ws.id && (gone.has(topItem(e.items[0])?.stackId) || feeds.has(topItem(e.items[0])?.channelId)));
   ws.stacks = ws.stacks.filter((x) => !gone.has(x.id));
+  ws.channels = ws.channels.filter((c) => !feeds.has(c.id));
   for (const ch of ws.channels) if (ch.pins) ch.pins = ch.pins.filter((p) => !(p.kind === 'stack' && gone.has(p.id)));
   if (ws.chatPins) ws.chatPins = ws.chatPins.filter((p) => !(p.kind === 'stack' && gone.has(p.id)));
   save();
@@ -2619,11 +2705,22 @@ function docHeight(it) {
 const docLevel = (it) => { let n = 1; for (let t = it; t.underId && db.items[t.underId] && n <= DOC_DEPTH + 1; t = db.items[t.underId]) n++; return n; };
 
 // Chat feeds (#channels), optionally grouped into folders. Items with a channelId live only in that feed.
-// A feed is invite-only: its creator and the people they add. A campaign's feed follows the campaign instead.
-// #general (no channelId) is the whole team's.
-function seesFeed(ch, memberId) {
+// A feed is invite-only: its creator and the people they add. A campaign's feed follows the campaign instead, and a
+// job's follows the job (docs/jobflows/JOBCHAT.md §3, §8.1: whoever PJ.recordAt lets see it, failing closed).
+// #general (no channelId) is the whole team's. With Chat off for members (What members can use), a member sees no
+// feed at all (§9.1); #general's messages are filtered by the same switch where state is built.
+// ws is the feed's team: every caller passes it; a job's feed without it is seen by nobody.
+const chatOffFor = (ws, memberId) => !!ws && memberAccessOf(ws).chat === false && !isAdminId(ws.id, memberId);
+function seesFeed(ch, memberId, ws) {
   if (!ch) return true;
+  if (chatOffFor(ws, memberId)) return false;
+  if (ch.recordId) {
+    if (ch.memberIds || ch.campaignId || !ws || !ws.channels.includes(ch)) return false;
+    const rec = db.records[ch.recordId];
+    return !!rec && rec.wsId === ws.id && JF.isJobRecord(rec) && !!PJ.recordAt(rec.id, ws.id, memberId);
+  }
   if (ch.campaignId) return seesCampaign(ch.campaignId, memberId);
+  if (ch.team) return true; // a stack's own feed (§2): the whole team's, as the stack was
   return !ch.memberIds || ch.ownerId === memberId || ch.memberIds.includes(memberId);
 }
 function feedOfItem(it) {
@@ -2634,7 +2731,7 @@ const managesFeed = (ch, auth) => ch.ownerId === auth.memberId || isAdmin(auth);
 const feedMembers = (ws, ch, ids) => [...new Set(Array.isArray(ids) ? ids : [])].filter((id) => id !== ch.ownerId && ws.members.some((m) => m.id === id));
 function validChannel(ws, channelId, memberId) {
   const ch = channelId && ws.channels.find((c) => c.id === channelId);
-  return ch && seesFeed(ch, memberId) ? channelId : null;
+  return ch && seesFeed(ch, memberId, ws) ? channelId : null;
 }
 // ---------- pinned to a chat: a stack, doc, folder or agent kept at the top of a feed ----------
 // Pins belong to the feed (ws.chatPins for #general), so everyone in it sees them. What each one is, though, is
@@ -2643,7 +2740,7 @@ const CHAT_PIN_KINDS = ['stack', 'doc', 'dir', 'agent', 'job'];
 const CHAT_PINS = 8;
 // True or false: whether this person can open what the pin points at. Null: it's gone, for everyone.
 function chatPinSees(ws, p, memberId) {
-  if (p.kind === 'stack') { const st = ws.stacks.find((x) => x.id === p.id); return st ? seesStack(st, memberId) : null; }
+  if (p.kind === 'stack') { const st = ws.stacks.find((x) => x.id === p.id); return st ? seesStack(st, memberId, ws) : null; }
   if (p.kind === 'job') { const rec = db.records[p.id]; return rec && rec.wsId === ws.id && JF.isJobRecord(rec) ? !!PJ.recordAt(rec.id, ws.id, memberId) : null; }
   if (p.kind === 'dir') return ws.dirs.some((d) => d.id === p.id) ? seesDir(ws, p.id, memberId) : null;
   if (p.kind === 'doc') { const it = db.items[p.id]; return it && it.wsId === ws.id && it.type === 'text' ? canSee({ memberId, wsId: ws.id }, 'item', it) : null; }
@@ -2666,13 +2763,24 @@ function publicChatPins(ws, pins, memberId) {
   }
   return out;
 }
-const publicChannels = (ws, memberId) => ws.channels.filter((x) => seesFeed(x, memberId)).map((ch) => (ch.pins ? { ...ch, pins: publicChatPins(ws, ch.pins, memberId) } : ch));
+// Archived job feeds (§3, §8.9) aren't sent with the workspace, nor their stacks or items: GET /jobs/:id/chat has
+// them. Archiving is how it looks, not who sees it: every other read still goes through seesFeed / seesStack.
+const archivedStack = (ws, st) => !!st?.channelId && !!ws.channels.find((c) => c.id === st.channelId && c.stackId === st.id)?.archived;
+// A test for many items at once (state): the archived feeds' ids and their stacks' ids, worked out once.
+function archivedTest(ws) {
+  const chans = new Set(ws.channels.filter((c) => c.archived).map((c) => c.id));
+  if (!chans.size) return () => false;
+  const stacks = new Set(ws.channels.filter((c) => c.archived && c.stackId).map((c) => c.stackId));
+  return (it) => { const top = topItem(it); return chans.has(top.channelId) || (!!top.stackId && stacks.has(top.stackId) && ws.stacks.some((x) => x.id === top.stackId && chans.has(x.channelId))); };
+}
+const publicChannels = (ws, memberId) => ws.channels.filter((x) => !x.archived && seesFeed(x, memberId, ws)).map((ch) => (ch.pins ? { ...ch, pins: publicChatPins(ws, ch.pins, memberId) } : ch));
 
 function validChatFolder(ws, folderId) {
   return folderId && ws.chatFolders.some((f) => f.id === folderId) ? folderId : null;
 }
+const channelSlug = (raw) => String(raw || '').trim().toLowerCase().replace(/^#+/, '').replace(/\s+/g, '-').replace(/[^a-z0-9_-]/g, '').replace(/-{2,}/g, '-').slice(0, 40);
 function channelName(ws, raw, selfId) {
-  const n = String(raw || '').trim().toLowerCase().replace(/^#+/, '').replace(/\s+/g, '-').replace(/[^a-z0-9_-]/g, '').replace(/-{2,}/g, '-').slice(0, 40);
+  const n = channelSlug(raw);
   if (!n) throw badRequest('Name required');
   if (n === 'general' || ws.channels.some((c) => c.name === n && c.id !== selfId)) throw Object.assign(new Error(`#${n} already exists.`), { status: 409 });
   return n;
@@ -2873,6 +2981,7 @@ function broadcast(wsId, msg) {
   // An item that just went into someone's private folder disappears for everyone else.
   const hide = (msg.type === 'item:add' || msg.type === 'item:update') && JSON.stringify({ type: 'item:remove', id: msg.item.id });
   const feed = msg.item && db.items[msg.item.id] ? feedOfItem(db.items[msg.item.id]) : null;
+  const boundSt = msg.item && db.items[msg.item.id] ? jobStackOfItem(db.items[msg.item.id]) : null;
   const inDir = msg.item && db.items[msg.item.id];
   let data = JSON.stringify(msg);
   // Prices (docs/jobflows/PRICES.md): what goes out carries none; owners and admins get a priced copy: msg.priced's
@@ -2888,7 +2997,7 @@ function broadcast(wsId, msg) {
   }
   for (const s of set) if (hide && s.readyState === 1 && (!seesItemDir(inDir, s.meta.memberId) || (msg.type === 'item:update' && !seesOwn('item', inDir, s.meta.memberId)))) s.send(hide);
   const task = msg.task?.id && db.tasks[msg.task.id];
-  const sees = (mid) => seesCampaign(campaignId, mid) && seesFeed(feed, mid) && seesItemDir(inDir, mid) && seesTemplate(msg.template, mid) && seesEntry(msg.entry, mid) && (!msg.forMember || msg.forMember === mid) && (!msg.forAdmins || isAdminId(wsId, mid)) && (!msg.bill || seesBill(wsId, msg.bill, mid)) && (!inDir || seesOwn('item', inDir, mid)) && (!task || seesOwn('task', task, mid)) && PJ.seesMsg(msg, mid) && (!msg.boardId || !WB || WB.seesMsg(msg, mid));
+  const sees = (mid) => seesCampaign(campaignId, mid) && seesFeed(feed, mid, db.workspaces[wsId]) && (!boundSt || seesStack(boundSt, mid, db.workspaces[wsId])) && seesItemDir(inDir, mid) && seesTemplate(msg.template, mid) && seesEntry(msg.entry, mid) && (!msg.forMember || msg.forMember === mid) && (!msg.forAdmins || isAdminId(wsId, mid)) && (!msg.bill || seesBill(wsId, msg.bill, mid)) && (!inDir || seesOwn('item', inDir, mid)) && (!task || seesOwn('task', task, mid)) && PJ.seesMsg(msg, mid) && (!msg.boardId || !WB || WB.seesMsg(msg, mid));
   const live = (s) => s.readyState === 1 && (!s.meta.token || db.tokens[s.meta.token]) && db.workspaces[wsId]?.members.some((x) => x.id === s.meta.memberId);
   for (const s of set) if (!live(s) && s.readyState === 1) s.close(4001, 'Signed out');
   for (const s of set) if (live(s) && sees(s.meta.memberId)) s.send(pricedData && PJ.seesPrices(wsId, s.meta.memberId) ? pricedData : data);
@@ -2965,7 +3074,7 @@ function campaignOf(kind, x) {
 }
 // Each person's Day is their own: entries, and the calendar events pulled into them, are seen only by them.
 const seesEntry = (e, memberId) => !e || e.memberId === memberId;
-const canSee = (auth, kind, x) => kind === 'record' ? PJ.seesRec(x, auth.memberId) : !((kind === 'campaign' || kind === 'goal') && isJobRun(db.campaigns[campaignOf(kind, x)])) && seesCampaign(campaignOf(kind, x), auth.memberId) && (kind !== 'item' || (seesFeed(feedOfItem(x), auth.memberId) && seesItemDir(x, auth.memberId) && (!jobStackOfItem(x) || seesStack(jobStackOfItem(x), auth.memberId)))) && (kind !== 'entry' || seesEntry(x, auth.memberId)) && seesOwn(kind, x, auth.memberId);
+const canSee = (auth, kind, x) => kind === 'record' ? PJ.seesRec(x, auth.memberId) : !((kind === 'campaign' || kind === 'goal') && isJobRun(db.campaigns[campaignOf(kind, x)])) && seesCampaign(campaignOf(kind, x), auth.memberId) && (kind !== 'item' || (seesFeed(feedOfItem(x), auth.memberId, db.workspaces[x.wsId]) && seesItemDir(x, auth.memberId) && (!jobStackOfItem(x) || seesStack(jobStackOfItem(x), auth.memberId, db.workspaces[x.wsId])))) && (kind !== 'entry' || seesEntry(x, auth.memberId)) && seesOwn(kind, x, auth.memberId);
 function campaignOfMsg(msg) {
   if (msg.item) return campaignOf('item', db.items[msg.item.id]);
   if (msg.task) return campaignOf('task', msg.task);
@@ -3588,6 +3697,7 @@ function createCampaign(ws, owner, body, extra = {}) {
   const st = { id: rid(8), name: c.name.slice(0, 40), campaignId: c.id };
   ws.channels.push(ch);
   ws.stacks.push(st);
+  linkFeedStack(ws, ch, st); // the stack is the feed's Files (docs/jobflows/JOBCHAT.md §1)
   c.channelId = ch.id;
   c.stackId = st.id;
   c.assignedBy = c.assigneeId ? owner.memberId : null;
@@ -4213,6 +4323,7 @@ function jobSteps(wsId, by, byId) {
     if (stepsBusy === 1 && JF.tasksSweep(wsId)) jobStepsOnce(wsId, by, byId);
     // A run's current step moving gives or takes the job from members it names (PHASE5.md §5).
     if (stepsBusy === 1) JF.reseeRuns(wsId);
+    if (stepsBusy === 1) jobChatsDone(wsId);
     for (let i = 0; i < 5 && stepsAgain && stepsBusy === 1; i++) { stepsAgain = false; jobStepsOnce(wsId, 'Kloomie', null); }
   } catch (e) { alarm('Checking job steps failed', e); }
   finally { stepsBusy--; busyFlowing = was; }
@@ -4671,7 +4782,7 @@ function chatAgentAsk(ws, auth, item) {
   if (!aiUse(aiOf(ws.id, auth.memberId))) return chatAgentSay(ws, agent, root.id, channelId, `@${auth.member}, I work on your own AI key. Add one in Apps & Integrations → AI, then ask me again here.`);
   const busy = Object.values(db.agentRuns || {}).filter((x) => x.wsId === ws.id && x.memberId === auth.memberId && ['requested', 'planning', 'running'].includes(x.status)).length;
   if (busy >= 3) return chatAgentSay(ws, agent, root.id, channelId, `@${auth.member}, your team is busy with three assignments. Ask me again when one is done.`);
-  const readers = ws.members.filter((m) => seesFeed(ch, m.id)).map((m) => m.name);
+  const readers = ws.members.filter((m) => seesFeed(ch, m.id, ws)).map((m) => m.name);
   const said = String(item.text).trim();
   const ask = `${said}\n\n(Asked by ${auth.member} in the chat feed #${ch?.name || 'general'}. Your answer is posted there, where everyone in it reads it: ${readers.join(', ')}. Keep it short, and leave out anything they shouldn’t see.)`;
   const run = AGENTS_M.newRun(ws, auth.memberId, { agent, ask, title: clipText(said.split('\n')[0], 120), page: { kind: 'channel', id: channelId || 'general', label: ch?.name || 'general' } });
@@ -6210,6 +6321,103 @@ async function askReview(ws, rec, by = 'Kloomie') {
 }
 // A job reaching Paid asks for a review an hour later, once, when the team has that turned on. The stage it was at
 // last time is kept on the job, so only a move to Paid counts (not a job that was already paid).
+// ---------- a chat for every job (docs/jobflows/JOBCHAT.md §3, §8) ----------
+// One feed per job, with the job's stack as its Files and the job pinned; made in one synchronous turn from lookup to
+// save (no await), so two asking at once get the same one, and a feed is never left without its stack or the reverse.
+// Every path calls it; the team switch only decides whether it's made with the job (jobMade) or on demand.
+const jobChatsOn = (ws) => ws.jobChats !== false;
+function feedNameFor(ws, raw, selfId) {
+  const base = String(raw || '').trim();
+  for (let i = 1; i < 500; i++) {
+    try { return channelName(ws, i === 1 ? base || 'job' : `${(base || 'job').slice(0, 34)}-${i}`, selfId); }
+    catch (e) { if (e.status !== 409) return feedNameFor(ws, 'job', selfId); }
+  }
+  return 'job-' + rid(4).toLowerCase();
+}
+const publicFeed = (ch) => ch && { id: ch.id, name: ch.name, recordId: ch.recordId, stackId: ch.stackId || null, folderId: ch.folderId || null, archived: ch.archived || null };
+function jobChatEnsure(ws, rec) {
+  if (!ws || !rec || rec.wsId !== ws.id || !JF.isJobRecord(rec)) return null;
+  const sid = JF.ensureStack(ws, rec).id;
+  const st = ws.stacks.find((x) => x.id === sid);
+  let ch = ws.channels.find((c) => c.recordId === rec.id);
+  if (!ch) {
+    ch = { id: rid(8), name: feedNameFor(ws, PJ.recName(db.projects[rec.projectId], rec)), folderId: chatFolderFor(ws, 'jobs', 'Jobs').id, recordId: rec.id, pins: [{ pid: rid(8), kind: 'job', id: rec.id, by: null, at: Date.now() }] };
+    ws.channels.push(ch);
+  }
+  if (!ch.stackId && st) linkFeedStack(ws, ch, st);
+  rec.chatId = ch.id;
+  save();
+  broadcast(ws.id, { type: 'workspace' });
+  return publicFeed(ch);
+}
+// A job was made (recordNews 'record.created', the bulk import, Move my jobs here).
+function jobMade(rec) {
+  const ws = db.workspaces[rec?.wsId];
+  if (ws && jobChatsOn(ws) && JF.isJobRecord(rec)) jobChatEnsure(ws, rec);
+}
+// The job's chat and what's in it (its feed's items and its stack's), for someone who sees the job.
+function jobChatGet(ws, auth, rec) {
+  const ch = ws.channels.find((c) => c.recordId === rec.id);
+  if (!ch) return { feed: null };
+  const items = Object.values(db.items).filter((it) => {
+    if (it.wsId !== ws.id || it.status !== 'ready') return false;
+    const top = topItem(it);
+    return (top.channelId === ch.id || (!!ch.stackId && !top.channelId && top.stackId === ch.stackId)) && canSee(auth, 'item', it);
+  }).sort((x, y) => x.createdAt - y.createdAt || (x.id < y.id ? -1 : 1)).map(publicItem);
+  return { feed: publicFeed(ch), items };
+}
+// Is the job done: its run (the one shown) done, or, with no run, its stage the list's last.
+function jobDoneNow(rec) {
+  const run = JF.shownRun(rec.id);
+  if (run) return run.status === 'done';
+  const p = db.projects[rec.projectId], t = p && typeOfP(p, rec.typeId), f = t && stageFieldOf(t);
+  return !!f?.choices?.length && rec.values[f.id] === f.choices[f.choices.length - 1].id;
+}
+// Archived once, at the finish (§3, §8.10): ch.wasDone remembers the finish, so Reopen or a message keeps it open until
+// the job leaves done and finishes again.
+function jobChatDone(ws, ch) {
+  const rec = db.records[ch.recordId];
+  if (!rec) return false;
+  const done = jobDoneNow(rec);
+  if (done && !ch.wasDone) { ch.wasDone = true; ch.archived = { at: Date.now() }; return true; }
+  if (!done && ch.wasDone) { ch.wasDone = false; return true; }
+  return false;
+}
+function jobChatsDone(wsId) {
+  const ws = db.workspaces[wsId];
+  if (!ws) return;
+  let changed = false;
+  for (const ch of ws.channels) if (ch.recordId && jobChatDone(ws, ch)) changed = true;
+  if (changed) { save(); broadcast(ws.id, { type: 'workspace' }); }
+}
+// A job changed: its chat's name (and its stack's) follows the job's; a finish archives it.
+function jobChatFollow(rec) {
+  const ws = db.workspaces[rec.wsId];
+  const ch = rec.chatId && ws?.channels.find((c) => c.id === rec.chatId && c.recordId === rec.id);
+  if (!ch) return;
+  const name = PJ.recName(db.projects[rec.projectId], rec);
+  let changed = false;
+  // It keeps its name while that's the job's (or the job's with -2, -3… for a clash).
+  const slug = channelSlug(name) || 'job';
+  const keeps = ch.name === slug || (ch.name.startsWith(slug + '-') && /^\d+$/.test(ch.name.slice(slug.length + 1)));
+  if (!keeps) { const next = feedNameFor(ws, name, ch.id); if (next !== ch.name) { ch.name = next; changed = true; } }
+  const st = ch.stackId && ws.stacks.find((x) => x.id === ch.stackId && x.recordId === rec.id);
+  if (st && st.name !== (name || 'Job').slice(0, 40)) { st.name = (name || 'Job').slice(0, 40); changed = true; }
+  if (jobChatDone(ws, ch)) changed = true;
+  if (changed) { save(); broadcast(ws.id, { type: 'workspace' }); }
+}
+// The safety net (§8.13, §9.2): while the switch is on, any job made since it was turned on that has no chat gets
+// one. A future path that forgets the hook is caught within a minute.
+function jobChatsNet() {
+  for (const rec of Object.values(db.records)) {
+    if (rec.chatId) continue;
+    const ws = db.workspaces[rec.wsId];
+    if (!ws || !jobChatsOn(ws) || !(rec.createdAt >= (ws.jobChatsSince || Infinity))) continue;
+    if (JF.isJobRecord(rec)) jobChatEnsure(ws, rec);
+  }
+}
+setInterval(() => { try { jobChatsNet(); } catch (e) { alarm('Making job chats failed', e); } }, 60_000).unref?.();
+
 function jobChanged(rec) {
   const j = jobOfRecord(rec);
   const st = j?.t.trade && j.t.fields.find((f) => f.key === 'status' && f.type === 'select');
@@ -8883,9 +9091,10 @@ async function api(req, res, url) {
 
   if (a === 'state' && m === 'GET') {
     const may = (k) => memberMay(ws, auth, k);
+    const archived = archivedTest(ws);
     const items = Object.values(db.items)
-      .filter((it) => it.wsId === ws.id && it.status === 'ready' && canSee(auth, 'item', it))
-      .filter((it) => (it.type !== 'message' || may('chat')) && (!it.stackId || may('column')) && (!(it.dirId || it.blocks) || may('docs')))
+      .filter((it) => it.wsId === ws.id && it.status === 'ready' && !archived(it) && canSee(auth, 'item', it))
+      .filter((it) => (it.type !== 'message' || may('chat')) && (!it.stackId || may('column') || (jobStackOfItem(it)?.channelId && may('chat'))) && (!(it.dirId || it.blocks) || may('docs')))
       .sort((x, y) => x.createdAt - y.createdAt)
       .map(publicItem);
     return send(res, 200, {
@@ -11451,7 +11660,7 @@ async function api(req, res, url) {
   if (a === 'workspace' && m === 'PATCH') {
     const body = await readJson(req);
     const was = ws.settings.visibility || 'all';
-    if ((body.expireHours !== undefined || body.visibility !== undefined || body.tools !== undefined || body.memberAccess !== undefined) && !isAdmin(auth)) return send(res, 403, { error: 'Only team owners and admins can change that.' });
+    if ((body.expireHours !== undefined || body.visibility !== undefined || body.tools !== undefined || body.memberAccess !== undefined || body.jobChats !== undefined) && !isAdmin(auth)) return send(res, 403, { error: 'Only team owners and admins can change that.' });
     if (body.tools && typeof body.tools === 'object') {
       const next = toolsOf(ws);
       for (const k of TOOL_KEYS) if (body.tools[k] !== undefined) next[k] = !!body.tools[k];
@@ -11468,6 +11677,8 @@ async function api(req, res, url) {
     }
     if (body.expireHours !== undefined) ws.settings.expireHours = Math.max(0, Number(body.expireHours) || 0);
     if (body.visibility !== undefined) ws.settings.visibility = body.visibility === 'own' ? 'own' : 'all';
+    // Make a chat for each new job (docs/jobflows/JOBCHAT.md §3, §9.2): turning it on starts the safety net from now.
+    if (body.jobChats !== undefined) { const on = !!body.jobChats; if (on && !jobChatsOn(ws)) ws.jobChatsSince = Date.now(); ws.jobChats = on; }
     if (body.memberEmail !== undefined) {
       if (!isAdmin(auth)) return send(res, 403, { error: 'Only team owners and admins can change who sends campaign email.' });
       ws.settings.memberEmail = !!body.memberEmail;
@@ -11608,7 +11819,7 @@ async function api(req, res, url) {
   }
 
   if (a === 'stacks') {
-    const rq = b && c === 'request' && ws.stacks.find((x) => x.id === b && seesStack(x, auth.memberId));
+    const rq = b && c === 'request' && ws.stacks.find((x) => x.id === b && seesStack(x, auth.memberId, ws));
     if (c === 'request' && !rq) return send(res, 404, { error: 'Not found' });
     if (rq && m === 'POST') {
       // A link anyone can use to drop files into this stack, no account needed.
@@ -11631,13 +11842,27 @@ async function api(req, res, url) {
       if (!n) return send(res, 400, { error: 'Name required' });
       const stack = { id: rid(8), name: n };
       ws.stacks.push(stack);
+      feedForStack(ws, stack); // its own team feed, in the Stacks folder (docs/jobflows/JOBCHAT.md §2)
     } else if (m === 'PATCH' && b) {
       const { name } = await readJson(req);
       const s = ws.stacks.find((x) => x.id === b);
-      if (!s || !seesCampaign(s.campaignId, auth.memberId)) return send(res, 404, { error: 'Not found' });
+      if (!s || !seesStack(s, auth.memberId, ws)) return send(res, 404, { error: 'Not found' });
       if (String(name || '').trim()) s.name = String(name).trim().slice(0, 40);
     } else if (m === 'DELETE' && b) {
-      if (ws.stacks.find((x) => x.id === b)?.campaignId) return send(res, 400, { error: 'This stack belongs to a campaign. Delete the campaign instead.' });
+      // Anyone who could reach a stack by its id could delete it, and its files fell back into the team's Stacks:
+      // seen first, and a job's or a feed's stack goes only with its job or feed (JOBCHAT.md §10).
+      const s = ws.stacks.find((x) => x.id === b);
+      if (!s || !seesStack(s, auth.memberId, ws)) return send(res, 404, { error: 'Not found' });
+      if (s.recordId) return send(res, 400, { error: 'This stack belongs to a job. Delete the job instead.' });
+      if (s.campaignId) return send(res, 400, { error: 'This stack belongs to a campaign. Delete the campaign instead.' });
+      const sf = s.channelId && ws.channels.find((x) => x.id === s.channelId && x.stackId === s.id);
+      if (s.channelId && !sf?.team) return send(res, 400, { error: 'This stack is a chat’s files. Delete the chat instead.' });
+      // A team stack's own feed (§2): the stack goes as before (its files stay with the team, in Everything); the
+      // feed goes too if nothing was said in it, or else stays, without its Files.
+      if (sf) {
+        if (Object.values(db.items).some((it) => it.wsId === ws.id && it.channelId === sf.id)) delete sf.stackId;
+        else ws.channels = ws.channels.filter((x) => x.id !== sf.id);
+      }
       ws.stacks = ws.stacks.filter((x) => x.id !== b);
       for (const it of Object.values(db.items)) {
         if (it.wsId === ws.id && it.stackId === b) {
@@ -11653,7 +11878,7 @@ async function api(req, res, url) {
 
   if (a === 'channels' && b && c === 'pins') {
     const ch = b === 'general' ? null : ws.channels.find((x) => x.id === b);
-    if ((b !== 'general' && !ch) || !seesFeed(ch, auth.memberId)) return send(res, 404, { error: 'Not found' });
+    if ((b !== 'general' && !ch) || !seesFeed(ch, auth.memberId, ws)) return send(res, 404, { error: 'Not found' });
     const list = ch ? (ch.pins ||= []) : (ws.chatPins ||= []);
     let narrower = false;
     if (m === 'POST' && !d) {
@@ -11667,7 +11892,7 @@ async function api(req, res, url) {
       if (list.length >= CHAT_PINS) return send(res, 400, { error: `A chat holds ${CHAT_PINS} pins. Take one off first.` });
       list.push({ pid: rid(8), kind, id, by: auth.memberId, at: Date.now() });
       // Not everyone in the feed can open it: they see a locked chip. The person pinning is told.
-      narrower = ws.members.some((x) => seesFeed(ch, x.id) && !chatPinSees(ws, { kind, id }, x.id));
+      narrower = ws.members.some((x) => seesFeed(ch, x.id, ws) && !chatPinSees(ws, { kind, id }, x.id));
     } else if (m === 'DELETE' && d) {
       const i = list.findIndex((p) => p.pid === d);
       if (i < 0) return send(res, 404, { error: 'That pin is gone.' });
@@ -11687,27 +11912,53 @@ async function api(req, res, url) {
       ws.channels.push(ch);
     } else {
       const ch = b && ws.channels.find((x) => x.id === b);
-      if (!ch || !seesFeed(ch, auth.memberId)) return send(res, 404, { error: 'Not found' });
+      if (!ch || !seesFeed(ch, auth.memberId, ws)) return send(res, 404, { error: 'Not found' });
+      if (ch.recordId && ((m === 'POST' && c === 'leave') || (m === 'DELETE' && !c))) return send(res, 400, { error: 'This chat follows its job. Delete the job to delete it.' });
+      if (m === 'POST' && c === 'stack') {
+        // The feed's Files: its stack, made the first time (one turn). A body naming another stack changes nothing.
+        const st = feedStack(ws, ch);
+        if (!st) return send(res, 409, { error: 'This feed’s files are linked to something else. Ask an owner to look.' });
+        return send(res, 200, { stack: { id: st.id, name: st.name, channelId: st.channelId } });
+      }
+      if (m === 'POST' && c === 'reopen') {
+        if (!isAdmin(auth)) return send(res, 403, { error: 'Only owners and admins can reopen a chat.' });
+        if (ch.archived) feedReopen(ws, ch);
+        return send(res, 200, publicWorkspace(ws, auth.memberId));
+      }
       if (m === 'POST' && c === 'leave') {
         if (ch.campaignId || !ch.memberIds?.includes(auth.memberId)) return send(res, 400, { error: 'You can’t leave this feed.' });
         ch.memberIds = ch.memberIds.filter((id) => id !== auth.memberId);
         resync = true;
       } else if (m === 'PATCH' && !c) {
         const body = await readJson(req);
-        if (body.name !== undefined) ch.name = channelName(ws, body.name, ch.id);
+        if (body.memberIds !== undefined && ch.recordId) return send(res, 400, { error: 'This chat follows its job: whoever sees the job is in it.' });
+        if (body.name !== undefined && ch.recordId) return send(res, 400, { error: 'This chat is named after its job. Rename the job instead.' });
+        if (body.name !== undefined) {
+          ch.name = channelName(ws, body.name, ch.id);
+          const st = ch.stackId && !ch.campaignId && ws.stacks.find((x) => x.id === ch.stackId && x.channelId === ch.id);
+          if (st) st.name = ch.name.slice(0, 40); // its Files follow its name
+        }
         if (body.folderId !== undefined) ch.folderId = validChatFolder(ws, body.folderId);
         if (body.memberIds !== undefined) {
           if (ch.campaignId) return send(res, 400, { error: 'This feed follows its campaign. Change who sees the campaign instead.' });
           if (!managesFeed(ch, auth)) return send(res, 403, { error: 'Only the person who made this feed can change who’s in it.' });
+          delete ch.team; // a stack's team feed made invite-only: narrower, never wider
           ch.memberIds = feedMembers(ws, ch, body.memberIds);
           resync = true;
         }
       } else if (m === 'DELETE' && !c) {
         if (ch.campaignId) return send(res, 400, { error: 'This feed belongs to a campaign. Delete the campaign instead.' });
         if (ch.ownerId && !managesFeed(ch, auth)) return send(res, 403, { error: 'Only the person who made this feed can delete it.' });
+        // Its Files go with it (docs/jobflows/JOBCHAT.md §1): the stack and everything in it, Trash included.
+        const fst = ch.stackId && ws.stacks.find((x) => x.id === ch.stackId && x.channelId === ch.id && !x.campaignId && !x.recordId);
         ws.channels = ws.channels.filter((x) => x.id !== b);
-        for (const it of Object.values(db.items)) if (it.wsId === ws.id && it.channelId === b) deleteItem(it.id);
-        purgeTrash((e) => e.wsId === ws.id && e.items[0].channelId === b);
+        for (const it of Object.values(db.items)) if (it.wsId === ws.id && (it.channelId === b || (fst && topItem(it)?.stackId === fst.id))) deleteItem(it.id);
+        purgeTrash((e) => e.wsId === ws.id && (e.items[0].channelId === b || (fst && topItem(e.items[0])?.stackId === fst.id)));
+        if (fst) {
+          ws.stacks = ws.stacks.filter((x) => x.id !== fst.id);
+          for (const f of ws.channels) if (f.pins) f.pins = f.pins.filter((p) => !(p.kind === 'stack' && p.id === fst.id));
+          if (ws.chatPins) ws.chatPins = ws.chatPins.filter((p) => !(p.kind === 'stack' && p.id === fst.id));
+        }
       } else return send(res, 405, { error: 'Method not allowed' });
     }
     save();
@@ -12482,7 +12733,8 @@ async function replayAs(ws, memberId, approvalId, { method, path: p, body }, as 
 const hold = (...a) => RULES.hold(...a);
 const PJ = projectsModule({ jobCurrentWho: (rec) => JF.currentWho(rec), onTouch: (rec) => JF.wake(rec.id), docsOf, bizHtml, inkedPng, jobQuote: (rec) => JF.jobQuote(rec), seesLinked: (kind, x, memberId) => canSee({ memberId }, kind, x), proofUrl: (ws) => pagesProof(ws), onEvent: (...a) => recordEvent(...a), onPrice: (...a) => priceChanged(...a), canSeeItem: (auth, it) => canSee(auth, 'item', it), seal, unseal, db, save, broadcast, rid, hold, cleanText, isDay, readJson, send, badRequest, isOwnerId, escHtml, brandOf, logoUrl, teamDay, offline, allowLocalHooks: process.env.ALLOW_LOCAL_WEBHOOKS === '1', qrSvg, publicUrl: PUBLIC_URL,
   onRecordGone: (rec) => recordGoneAll(rec), stageGate: (...a) => stageGate(...a),
-  onRecordNews: (rec) => { jobChanged(rec); if (rec.share || rec.qbo?.estId) QB.soon(rec.wsId); },
+ onMade: (rec) => jobMade(rec),
+  onRecordNews: (rec) => { jobChanged(rec); jobChatFollow(rec); if (rec.share || rec.qbo?.estId) QB.soon(rec.wsId); },
   // A follow-up from a record's timeline: a task for whoever logged it, about the record.
   makeTask: (ws, auth, { text, due, recordId }) => {
     const t = applyTask({ id: rid(), wsId: ws.id, by: auth.member, createdAt: Date.now(), text: '', done: false, doneAt: null, due: null, priority: 0, goalId: null, assigneeId: null }, { text, due, assigneeId: auth.memberId, recordId });
@@ -12866,7 +13118,7 @@ const STOCK = inventoryModule({ db, save, broadcast, rid, cleanText, readJson, s
   labelUrl: (tag) => `${PUBLIC_URL}/a/${tag}`,
   labelQr: (tag) => 'data:image/svg+xml;base64,' + Buffer.from(qrSvg(`${PUBLIC_URL}/a/${tag}`, { scale: 8 })).toString('base64'),
   projectFor: (pid, wsId, memberId) => { const p = db.projects[pid]; return p && p.wsId === wsId && PJ.sees(p, memberId) ? { p, records: Object.values(db.records).filter((r) => r.projectId === p.id) } : null; } });
-const JF = jobFlowsModule({ memberMay: (ws, auth, k) => memberMay(ws, auth, k), sendGate: (...a) => sendGate(...a), custPreview: (...a) => custPreview(...a), custDigest: (...a) => custDigest(...a), notify: (...a) => notify(...a), notifyAdmins: (...a) => notifyAdmins(...a), db, save, broadcast, rid, cleanText, readJson, send, isAdmin, PJ, toolsOf, goalsInOrder, tasksInOrder, applyTask, publicTask: (t) => publicTask(t), canSeeTask: (auth, t) => canSee(auth, 'task', t), stepsSoon: (w) => stepsSoon(w), sweepNow: (w, by, byId) => jobSteps(w, by, byId), visitsOf: (id) => visitsOf(id), needsMet: (g) => needsMet(g), noteWork: (t, was) => noteWork(t, was), makeInvoice: (...a) => INV.makeFor(...a), sendInvoice: (...a) => INV.sendIt(...a), invoiceTotals: (inv) => INV.totals(inv), invoiceUrl: (inv) => INV.publicInvoice(inv).url, flowTell: (...a) => flowTell(...a), flowReach: (c) => flowReach(c), flowMsg, customerOf: (rec) => jobCustomer(rec), teamClock: (ws) => ({ today: dayIn(tzOf(ws)), tomorrow: dayIn(tzOf(ws), Date.now() + 864e5), min: localNow(tzOf(ws), Date.now()).min }), teamReviewUrl: (ws) => custMsgsOf(ws).reviewUrl || '', saveNow: () => writeNow(), sendable: (ws) => !offline(ws.id) && !billingOf(ws).readOnly, shareRecord: (...a) => PJ.shareRecord(...a), quoteUrlOf: (rec) => (rec.share?.token ? `${PUBLIC_URL}/q/${rec.share.token}` : null), itemsTotals: (v) => PJ.itemsTotals(v), priceChanged: (ws, auth, x) => priceChanged(ws, auth, x), publicUrl: PUBLIC_URL, stock: STOCK,
+const JF = jobFlowsModule({ jobChat: { ensure: (ws, rec) => jobChatEnsure(ws, rec), get: (ws, auth, rec) => jobChatGet(ws, auth, rec), made: (rec) => jobMade(rec) }, memberMay: (ws, auth, k) => memberMay(ws, auth, k), sendGate: (...a) => sendGate(...a), custPreview: (...a) => custPreview(...a), custDigest: (...a) => custDigest(...a), notify: (...a) => notify(...a), notifyAdmins: (...a) => notifyAdmins(...a), db, save, broadcast, rid, cleanText, readJson, send, isAdmin, PJ, toolsOf, goalsInOrder, tasksInOrder, applyTask, publicTask: (t) => publicTask(t), canSeeTask: (auth, t) => canSee(auth, 'task', t), stepsSoon: (w) => stepsSoon(w), sweepNow: (w, by, byId) => jobSteps(w, by, byId), visitsOf: (id) => visitsOf(id), needsMet: (g) => needsMet(g), noteWork: (t, was) => noteWork(t, was), makeInvoice: (...a) => INV.makeFor(...a), sendInvoice: (...a) => INV.sendIt(...a), invoiceTotals: (inv) => INV.totals(inv), invoiceUrl: (inv) => INV.publicInvoice(inv).url, flowTell: (...a) => flowTell(...a), flowReach: (c) => flowReach(c), flowMsg, customerOf: (rec) => jobCustomer(rec), teamClock: (ws) => ({ today: dayIn(tzOf(ws)), tomorrow: dayIn(tzOf(ws), Date.now() + 864e5), min: localNow(tzOf(ws), Date.now()).min }), teamReviewUrl: (ws) => custMsgsOf(ws).reviewUrl || '', saveNow: () => writeNow(), sendable: (ws) => !offline(ws.id) && !billingOf(ws).readOnly, shareRecord: (...a) => PJ.shareRecord(...a), quoteUrlOf: (rec) => (rec.share?.token ? `${PUBLIC_URL}/q/${rec.share.token}` : null), itemsTotals: (v) => PJ.itemsTotals(v), priceChanged: (ws, auth, x) => priceChanged(ws, auth, x), publicUrl: PUBLIC_URL, stock: STOCK,
   geocode: (addr) => (routesOn() ? geocodeOnce(addr, 5000) : Promise.resolve(undefined)), mapsOn: () => routesOn(),
   presetsOf: (wsId) => presetsOf(wsId), templateFor: (ws, auth, id) => { const t = db.templates[id]; return t && t.wsId === ws.id && seesTemplate(t, auth.memberId) ? t : null; },
   campaignFromSnapshot: (...a) => campaignFromSnapshot(...a), stockMove: (...a) => STOCK.move(...a) });
@@ -13621,7 +13873,7 @@ async function buildExport(x) {
     : {
         name: ws.name, createdAt: ws.createdAt, tz: tzOf(ws), settings: ws.settings, brand: ws.brand, roles: ws.roles,
         members: ws.members.map((m) => ({ id: m.id, name: m.name, role: m.role, roleIds: m.roleIds || [], createdAt: m.createdAt })),
-        stacks: ws.stacks.filter((st) => seesStack(st, me.id)), channels: publicChannels(ws, me.id),
+        stacks: ws.stacks.filter((st) => seesStack(st, me.id, ws)), channels: publicChannels(ws, me.id),
         chatFolders: ws.chatFolders, dirs: ws.dirs.filter((d) => seesDir(ws, d.id, me.id)),
       };
 
@@ -13748,6 +14000,8 @@ runAutopay();
 migratePeople();
 migrateDay();
 PJ.moveLicensesOut();
+// Chat and stacks together (docs/jobflows/JOBCHAT.md §7): each team once; the job-chat safety net starts from now.
+{ let changed = false; for (const ws of Object.values(db.workspaces)) { if (chatStacksMigrate(ws)) changed = true; if (ws.jobChatsSince === undefined) { ws.jobChatsSince = Date.now(); changed = true; } } if (changed) save(); }
 PJ.reseeAll(); // who sees each job now, so the first change after a restart tells only those it changes for
 dropCutImports();
 flowsStart();

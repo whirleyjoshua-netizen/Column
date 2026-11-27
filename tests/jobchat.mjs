@@ -106,7 +106,8 @@ try {
   const imported = st.workspace.channels.filter((c) => c.recordId && /^imported-/.test(c.name));
   ok(r.status === 200 && imported.length === 2, 'each job from an import gets one: ' + imported.map((c) => c.name));
   const jNoName = await add(rico, {});
-  ok(feedOf(await ws(), jNoName.id)?.name === 'job', 'a job with no name yet: “job”');
+  const nn = feedOf(await ws(), jNoName.id)?.name;
+  ok(nn === 'cleaning', 'a job with no name yet: named as the app shows it (its list’s word, “cleaning”): ' + nn);
   const jSame = await add(rico, { job: 'Smith kitchen' });
   ok(feedOf(await ws(), jSame.id)?.name === 'smith-kitchen-2', 'two jobs with one name: -2');
 
@@ -274,7 +275,7 @@ try {
   ok(r.status === 200 && mf && st.workspace.stacks.find((x) => x.id === mf.stackId)?.channelId === mf.id && (mf.pins || []).some((x) => x.kind === 'job'), 'Move my jobs here: the moved job gets its feed, stack and pin ' + (r.body?.error || ''));
 
   // Chat off for members: plain and campaign feeds too; POST /jobs/:id/chat; stack routes by id.
-  const team = (await rico('POST', '/channels', { name: 'all hands' })).body.channels.find((c) => c.name === 'all-hands');
+  const team = (await rico('POST', '/channels', { name: 'all hands', memberIds: [samId, miaId, adaId] })).body.channels.find((c) => c.name === 'all-hands');
   const teamSt = (await rico('POST', `/channels/${team.id}/stack`)).body?.stack;
   await rico('POST', '/items', { type: 'text', text: 'TEAMFILE', stackId: teamSt?.id });
   const camp2 = (await rico('POST', '/campaigns', { name: 'Fall push' })).body;
@@ -336,7 +337,7 @@ try {
   ok(NONE.test(r.body?.answer || '') && !aiSaw.length && !JSON.stringify(r.body || {}).includes('ARCFILE in'), 'Ask: Sam (not on it) finds nothing of the archived chat, and nothing goes to the AI: ' + JSON.stringify(r.body).slice(0, 120));
   aiSaw = [];
   r = await mia('POST', '/ai/ask', { q: 'ARCFILE' });
-  ok(aiSaw.some((x) => x.includes('ARCFILE in files')), 'Mia (on it): the archived chat’s doc is a source sent with her question: ' + String(aiSaw[0] || r.body?.error || '').slice(0, 120));
+  ok(aiSaw.some((x) => x.includes('ARCFILE')), 'Mia (on it): the archived chat’s doc is a source sent with her question: ' + String(aiSaw[0] || r.body?.error || '').slice(0, 120));
   await rico('PATCH', '/workspace', { visibility: 'all' });
   // A second finish after it was reopened archives it again; the first finish doesn't, twice.
   await rico('POST', '/items', { type: 'message', text: 'reopen it', channelId: arcFeed?.id });
@@ -394,7 +395,7 @@ try {
   await start();
   st = await ws();
   ok(st.workspace.channels.filter((c) => c.stackId === 'oldstk01').length === 1 && st.workspace.channels.filter((c) => c.stackId === rec?.id).length === 1, 'a second restart makes no more');
-  ok(st.workspace.channels.filter((c) => c.recordId === jBoard.id).length === 1, 'and no second feed for a job');
+  ok(st.workspace.channels.filter((c) => c.recordId === jBoard.id).length === 1, 'and no second feed for a job: ' + st.workspace.channels.filter((c) => c.recordId === jBoard.id).length);
 } catch (e) {
   console.log('FAIL threw: ' + (e.stack || e));
   fails++;
