@@ -137,10 +137,11 @@ jobs_tab_ui, member_access_ui.
    A file dropped into the conversation shows in Chat, Files and All (once in each). Order: `createdAt`, then `id`.
    Replies stay in threads, as today.
 9. **Archive is how it looks, not who sees it.** Archived job feeds and their items are left out of the app's state
-   (workspace and items), and still pass the same `seesFeed` check everywhere else: item routes, search and export
-   include them for people who see the job. `GET /jobs/:id/chat` returns `{ feed, items }` (job visibility and the
-   member Chat switch first). A search hit in one opens the job's chat. A member who loses the job loses its archived
-   chat as well.
+   (workspace and items), and still pass the same `seesFeed` check everywhere else: item routes, Ask (the server's
+   search over docs and records, `askSources` → `canSee`) and export include them for people who see the job.
+   `GET /jobs/:id/chat` returns `{ feed, items }` (job visibility and the member Chat switch first). The app's own
+   search looks through what it has loaded, so archived chats aren't in it (corrected at checkpoint 2: there's no
+   server search route). A member who loses the job loses its archived chat as well.
 10. **Archive and reopen, in order.** Archiving happens once, at the done transition (`job.flow.done`, or the stage
     reaching the last one), recorded as `ch.archived = { at, for: <that transition> }`; the sweep never archives again
     for the same transition. A message posted into it, or Reopen, clears it; it's archived again only at a new done
@@ -202,3 +203,8 @@ pointing at another team's stack); archived items out of the owner's state too, 
 finish archiving again; in the app: All's order, a file dropped into Chat once in each tab, the tab kept after a
 reload, the chat in the split beside the job's row, and a member losing the job mid-drag: nothing of its Files left on
 the page and the drop lands nowhere in it.
+
+### 10.2 Checkpoint 2 review round 2
+Added: the automation's job checked by its record and the name it was given; Ask over an archived chat (found for
+someone on the job, nothing for a member who isn't). §8.9 corrected: the app's search is over what it has loaded, so
+"search" for archived chats means Ask.

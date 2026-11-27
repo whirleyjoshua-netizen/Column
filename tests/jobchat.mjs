@@ -243,6 +243,8 @@ try {
   await until(async () => { const s2 = await ws(); autoJob = s2.workspace.channels.filter((c) => c.recordId && /^auto-job/.test(c.name)); return autoJob.length; }, 6000);
   st = await ws();
   const aj = autoJob?.[0];
+  const ajRec = ((await rico('GET', `/projects/${p.id}/records`)).body || []).find((x) => x.id === aj?.recordId);
+  ok(ajRec && ajRec.values?.[jobF.id] === 'Auto job for Lena Lead', 'the automation made the job (its record, with the name it was given): ' + JSON.stringify(ajRec?.values?.[jobF.id]));
   ok(autoJob?.length === 1 && st.workspace.stacks.filter((x) => x.recordId === aj.recordId).length === 1 && st.workspace.stacks.find((x) => x.recordId === aj.recordId)?.channelId === aj.id && (aj.pins || []).some((x) => x.kind === 'job' && x.id === aj.recordId), 'a job an automation makes gets one feed, one stack, linked, the job pinned');
   // Move my jobs here: a job from before (made while the switch was off) moved onto a flow gets its chat.
   await rico('PATCH', '/workspace', { jobChats: false });
@@ -312,6 +314,12 @@ try {
   ok((await sam('PATCH', `/items/${arcMsg?.id}`, { text: 'x' })).status === 404, 'or change a message in it');
   r = await mia('GET', `/jobs/${jArc.id}/chat`);
   ok(r.status === 200 && JSON.stringify(r.body?.items || []).includes('ARCMSG'), 'Mia (on it) can');
+  // Ask (the server's search over docs and records): an archived chat's doc is found for whoever sees the job only.
+  const NONE = /couldn’t find anything/;
+  r = await sam('POST', '/ai/ask', { q: 'ARCFILE' });
+  ok(NONE.test(r.body?.answer || '') && !JSON.stringify(r.body || {}).includes('ARCFILE in'), 'Ask: Sam (not on it) finds nothing of the archived chat: ' + JSON.stringify(r.body).slice(0, 120));
+  r = await mia('POST', '/ai/ask', { q: 'ARCFILE' });
+  ok(!NONE.test(r.body?.answer || ''), 'Mia (on it) gets past “nothing found” (a source was found): ' + JSON.stringify(r.body).slice(0, 120));
   await rico('PATCH', '/workspace', { visibility: 'all' });
   // A second finish after it was reopened archives it again; the first finish doesn't, twice.
   await rico('POST', '/items', { type: 'message', text: 'reopen it', channelId: arcFeed?.id });
